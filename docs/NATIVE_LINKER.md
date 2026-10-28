@@ -39,7 +39,7 @@ shows a small, well-behaved surface:
 |---|---|
 | Relocations | `R_X86_64_PC32`, `PLT32`, `64`, `32`, `REX_GOTPCRELX` (about 10,000 in all) |
 | Sections | `.text`, `.text.*`, `.rodata`, `.rodata.*` including `.rodata.cst*`, `.data*`, `.bss*`, `.init`/`.fini` (only in `crti.o`/`crtn.o`), notes |
-| Symbols | global, local and weak (about 290 weak), no COMMON, no IFUNC, no TLS |
+| Symbols | global, local and weak (about 290 weak), no COMMON, no IFUNC, no TLS (musl keeps errno in the thread descriptor) |
 | Absent | `.init_array`, `.fini_array`, `.eh_frame`, COMDAT groups |
 
 Our own objects add `.init_array` (global initialisers and the flush hooks),
@@ -476,8 +476,30 @@ application is one function per machine:
   `__global_pointer$` is defined so musl's start code can load `gp`.
   Relocations inside `.debug_*` sections go through the same code.
 
-TLS relocations are rejected rather than guessed, because no `PT_TLS`
-segment is written. The ELF writer emits 32- or 64-bit headers, program
+`SHF_TLS` sections form `.tdata` (in the data segment) and `.tbss` (no file
+or memory space of its own: it is only the template's zeroed tail), and a
+`PT_TLS` program header describes them, aligned to the largest member's
+alignment, so musl's `__init_tls` sets up every thread's block from it.
+`nl_tls.salam` resolves each access model in a static link:
+
+- Local-exec relocations get the variable's offset from the thread pointer:
+  below it on x86 (`offset - align(size)`), above the 16-byte TCB on
+  AArch64, the 8-byte TCB on ARM, and at the pointer itself on RISC-V.
+- Initial-exec relocations (`GOTTPOFF`, `TLS_IE`/`TLS_GOTIE`,
+  `TLSIE_*_GOTTPREL_*`, `TLS_IE32`, `TLS_GOT_HI20`) get a GOT slot that holds
+  that offset, so no instruction is rewritten.
+- General- and local-dynamic relocations (`TLSGD`/`TLSLD`, `TLS_GD`/`LDM`,
+  `TLSGD_*`, `TLS_GD32`/`LDM32`, `TLS_GD_HI20`) get a GOT pair of module 1
+  and the offset in the block (0 for local-dynamic), which musl's static
+  `__tls_get_addr` turns into an address; `DTPOFF`/`LDO` give the offset in
+  the block (minus `0x800` on RISC-V).
+- AArch64 TLS descriptors are relaxed to local-exec the way lld does it:
+  `adrp` and `ldr` become `movz`/`movk` of the offset into `x0`, and the
+  `add` and `blr` become `nop`.
+
+Dynamic (glibc) links that contain thread-local sections fail with a message
+that names `--linker=system`. `tools/bash/native-tls-check.sh` runs both
+models on every Linux target. The ELF writer emits 32- or 64-bit headers, program
 headers, section headers and symbols, keeps the first object's `e_flags`
 (the ARM EABI and float ABI), uses 64 KiB pages on AArch64 and the classic
 `0x08048000` base on i386. ELF common symbols are allocated in `.bss`.

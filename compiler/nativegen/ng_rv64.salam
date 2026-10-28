@@ -1690,9 +1690,9 @@ func rv_compress(g &: Ng, a &: Rv, bpos &: Vector<int>, half &: Vector<int>):
             fixed[i] = true
         end
     end
-    bpos.clear()
     half.clear()
-    bpos.push(0)
+    mut tgt := Vector {} as Vector<int>
+    mut kind := Vector {} as Vector<int>
     repeat n in j:
         w2 := (a.w[j] as i64) & (0xFFFFFFFF as i64)
         op := (w2 & (0x7F as i64)) as int
@@ -1701,7 +1701,45 @@ func rv_compress(g &: Ng, a &: Rv, bpos &: Vector<int>, half &: Vector<int>):
             c = rvc_of(w2)
         end
         half.push(c)
-        bpos.push(bpos[j] + (c >= 0 ? 2 : 4))
+        mut t := 0 - 1
+        mut kd := 0
+        if op == 0x63:
+            bi := (((w2 >> (31 as i64)) & (1 as i64)) << (12 as i64)) | (((w2 >> (7 as i64)) & (1 as i64)) << (11 as i64)) | (((w2 >> (25 as i64)) & (0x3F as i64)) << (5 as i64)) | (((w2 >> (8 as i64)) & (15 as i64)) << (1 as i64))
+            t = j + ((rvc_sx(bi, 13) / (4 as i64)) as int)
+            f3 := ((w2 >> (12 as i64)) & (7 as i64)) as int
+            r1 := ((w2 >> (15 as i64)) & (31 as i64)) as int
+            r2 := ((w2 >> (20 as i64)) & (31 as i64)) as int
+            if not fixed[j] and not g.off_rvc and (f3 == 0 or f3 == 1) and ((r2 == 0 and rvc_creg(r1)) or (r1 == 0 and rvc_creg(r2))):
+                kd = 2
+            end
+        else op == 0x6F:
+            ji := (((w2 >> (31 as i64)) & (1 as i64)) << (20 as i64)) | (((w2 >> (12 as i64)) & (0xFF as i64)) << (12 as i64)) | (((w2 >> (20 as i64)) & (1 as i64)) << (11 as i64)) | (((w2 >> (21 as i64)) & (0x3FF as i64)) << (1 as i64))
+            t = j + ((rvc_sx(ji, 21) / (4 as i64)) as int)
+            if not fixed[j] and not g.off_rvc and ((w2 >> (7 as i64)) & (31 as i64)) == (0 as i64):
+                kd = 1
+            end
+        end
+        tgt.push(t)
+        kind.push(kd)
+    end
+    mut changed := true
+    until changed:
+        changed = false
+        bpos.clear()
+        bpos.push(0)
+        repeat n in j2:
+            bpos.push(bpos[j2] + (half[j2] >= 0 or kind[j2] > 0 ? 2 : 4))
+        end
+        repeat n in j3:
+            if kind[j3] > 0:
+                d0 := (bpos[tgt[j3]] - bpos[j3]) as i64
+                lim := kind[j3] == 1 ? (2048 as i64) : (256 as i64)
+                if d0 < (0 as i64) - lim or d0 >= lim:
+                    kind[j3] = 0
+                    changed = true
+                end
+            end
+        end
     end
     repeat n in k:
         if half[k] >= 0:
@@ -1709,17 +1747,25 @@ func rv_compress(g &: Ng, a &: Rv, bpos &: Vector<int>, half &: Vector<int>):
         end
         w3 := (a.w[k] as i64) & (0xFFFFFFFF as i64)
         op3 := (w3 & (0x7F as i64)) as int
-        if op3 == 0x63:
-            bi := (((w3 >> (31 as i64)) & (1 as i64)) << (12 as i64)) | (((w3 >> (7 as i64)) & (1 as i64)) << (11 as i64)) | (((w3 >> (25 as i64)) & (0x3F as i64)) << (5 as i64)) | (((w3 >> (8 as i64)) & (15 as i64)) << (1 as i64))
-            t := k + ((rvc_sx(bi, 13) / (4 as i64)) as int)
-            d := (bpos[t] - bpos[k]) as i64
+        if tgt[k] < 0:
+            continue
+        end
+        d := (bpos[tgt[k]] - bpos[k]) as i64
+        if kind[k] == 1:
+            half[k] = ((5 << 13) | 1 | ((((d >> (11 as i64)) & (1 as i64)) << (12 as i64)) | (((d >> (4 as i64)) & (1 as i64)) << (11 as i64)) | (((d >> (8 as i64)) & (3 as i64)) << (9 as i64)) | (((d >> (10 as i64)) & (1 as i64)) << (8 as i64)) | (((d >> (6 as i64)) & (1 as i64)) << (7 as i64)) | (((d >> (7 as i64)) & (1 as i64)) << (6 as i64)) | (((d >> (1 as i64)) & (7 as i64)) << (3 as i64)) | (((d >> (5 as i64)) & (1 as i64)) << (2 as i64))) as int)
+        else kind[k] == 2:
+            f3b := ((w3 >> (12 as i64)) & (7 as i64)) as int
+            r1b := ((w3 >> (15 as i64)) & (31 as i64)) as int
+            r2b := ((w3 >> (20 as i64)) & (31 as i64)) as int
+            rs := r2b == 0 ? r1b : r2b
+            half[k] = (((f3b == 0 ? 6 : 7) << 13) | ((rs - 8) << 7) | 1 | ((((d >> (8 as i64)) & (1 as i64)) << (12 as i64)) | (((d >> (3 as i64)) & (3 as i64)) << (10 as i64)) | (((d >> (6 as i64)) & (3 as i64)) << (5 as i64)) | (((d >> (1 as i64)) & (3 as i64)) << (3 as i64)) | (((d >> (5 as i64)) & (1 as i64)) << (2 as i64))) as int)
+        else op3 == 0x63:
             a.w[k] = (rv_benc(d, ((w3 >> (20 as i64)) & (31 as i64)) as int, ((w3 >> (15 as i64)) & (31 as i64)) as int, ((w3 >> (12 as i64)) & (7 as i64)) as int) & (0xFFFFFFFF as i64)) as int
         else op3 == 0x6F:
-            ji := (((w3 >> (31 as i64)) & (1 as i64)) << (20 as i64)) | (((w3 >> (12 as i64)) & (0xFF as i64)) << (12 as i64)) | (((w3 >> (20 as i64)) & (1 as i64)) << (11 as i64)) | (((w3 >> (21 as i64)) & (0x3FF as i64)) << (1 as i64))
-            t2 := k + ((rvc_sx(ji, 21) / (4 as i64)) as int)
-            d2 := (bpos[t2] - bpos[k]) as i64
-            a.w[k] = (rv_jenc(d2, ((w3 >> (7 as i64)) & (31 as i64)) as int) & (0xFFFFFFFF as i64)) as int
+            a.w[k] = (rv_jenc(d, ((w3 >> (7 as i64)) & (31 as i64)) as int) & (0xFFFFFFFF as i64)) as int
         end
     end
+    tgt.free()
+    kind.free()
     fixed.free()
 end

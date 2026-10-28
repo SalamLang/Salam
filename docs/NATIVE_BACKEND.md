@@ -629,6 +629,20 @@ dropped. Inside an innermost loop without calls, a stack slot that is only
 read gets loaded once before the loop into a register the loop does not
 touch and that is not live on entry, and the reloads become uses of that
 register.
+A load of a stack slot that was just stored from a register (or an
+immediate) of the same size, with no write to the slot or the register in
+between and no jump target on the way, becomes a register copy (or a move of
+the immediate). This runs after allocation and again after the encoder's jump
+cleanup, and on x86-64 a copy into a scratch register is folded into the
+next instruction that reads it.
+When the hints of a value are taken, the allocator tries the register of
+any value it is copied to or from that already has one, so phi webs and the
+copies around them tend to land in one register. A `select` whose result
+replaces a loop value (the value dies at the `select` and the result flows
+back into its phi) is emitted with that loop value as the tied operand of the
+`cmov`, so the loop carries it in one register with no copy at the latch. A
+32-bit division fast path leaves its quotient and remainder in `rax` and
+`rdx` on both paths and copies them once after the join.
 Copy-related values that both spill share one stack slot. When vector
 registers run out, the allocator evicts the value whose next use is
 farthest away, so a kernel with sixteen accumulators keeps most of them in
@@ -712,7 +726,7 @@ ret end` at the top of a recursive AST walk) tests that parameter before
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing, and a comma-separated list dumps several functions.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,zins,ndiv,niv,cmp64,adc64,rvc`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,zins,ndiv,niv,cmp64,adc64,rvc`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator.

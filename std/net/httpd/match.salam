@@ -1,0 +1,227 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package httpd
+
+import str
+import mem
+import regex
+
+mut _cfg := Config {}
+
+mut _exact := HashMap {} as HashMap<str, int>
+
+mut _wild_port := Vector {} as Vector<int>
+
+mut _wild_suffix := Vector {} as Vector<str>
+
+mut _wild_site := Vector {} as Vector<int>
+
+mut _default_by_port := HashMap {} as HashMap<str, int>
+
+mut _multi_port := false
+
+mut _only_port := 80
+
+mut _serving := false
+
+func _port_key(port: int): str:
+    ret str.FromInt(port as i64)
+end
+
+func _index_sites(cfg: Config):
+    _exact = HashMap {} as HashMap<str, int>
+    _default_by_port = HashMap {} as HashMap<str, int>
+    _wild_port = Vector {} as Vector<int>
+    _wild_suffix = Vector {} as Vector<str>
+    _wild_site = Vector {} as Vector<int>
+    _multi_port = false
+    if cfg.listens.len() > 0:
+        _only_port = cfg.listens.get(0).port
+    end
+    repeat cfg.listens.len() in li:
+        l := cfg.listens.get(li)
+        if l.port != _only_port: _multi_port = true end
+        s := cfg.sites.get(l.site)
+        names := str.Fields(s.names)
+        repeat names.len() in ni:
+            nm := names.get(ni)
+            if str.StartsWith(nm, "*."):
+                _wild_port.push(l.port)
+                _wild_suffix.push(nm.substr(1, nm.len() - 1))
+                _wild_site.push(l.site)
+            else:
+                _exact.put(_port_key(l.port) + "|" + nm, l.site)
+            end
+        end
+        names.free()
+        pk := _port_key(l.port)
+        if s.is_default or not _default_by_port.has(pk):
+            _default_by_port.put(pk, l.site)
+        end
+    end
+end
+
+func _publish(cfg: Config):
+    _cfg = cfg
+    if cfg.problems.len() == 0:
+        _index_sites(cfg)
+    end
+end
+
+func _normalize_host(raw: str): str:
+    t := str.Trim(raw)
+    h := str.Lower(t)
+    mem.Free(t as void *)
+    if str.StartsWith(h, "["):
+        close := h.indexOf("]")
+        if close > 0:
+            r := h.substr(0, close + 1)
+            mem.Free(h as void *)
+            ret r
+        end
+        ret h
+    end
+    mut end_at := h.len()
+    colon := h.indexOf(":")
+    if colon >= 0: end_at = colon end
+    if end_at > 0 and (h as u8 *)[end_at - 1] as int == 46: end_at -= 1 end
+    r := h.substr(0, end_at)
+    mem.Free(h as void *)
+    ret r
+end
+
+func _lower_pattern(p: str): str:
+    n := p.len()
+    bp := p as u8 *
+    mut sb := str.NewBuilder()
+    mut i := 0
+    until i < n:
+        mut ch := bp[i] as int
+        if ch == 92 and i + 1 < n:
+            piece := p.substr(i, 2)
+            str.BufAppend(sb, piece)
+            mem.Free(piece as void *)
+            i += 2
+        else:
+            if ch >= 65 and ch <= 90: ch += 32 end
+            str.BufAppendChar(sb, ch)
+            i += 1
+        end
+    end
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func _regex_hit(l: Location, path: str): bool:
+    if l.kind == LOC_REGEX:
+        ret regex.MatchStr(l.pattern, path)
+    end
+    pat := _lower_pattern(l.pattern)
+    low := str.Lower(path)
+    hit := regex.MatchStr(pat, low)
+    mem.Free(pat as void *)
+    mem.Free(low as void *)
+    ret hit
+end
+
+@en "SiteFor"
+@fa "سایت برای"
+pub func SiteFor(host: str, port: int): int:
+    h := _normalize_host(host)
+    pk := _port_key(port)
+    key := pk + "|" + h
+    mut found := -1
+    if _exact.has(key):
+        found = _exact.get(key)
+    else:
+        mut best_len := 0
+        repeat _wild_suffix.len() in i:
+            suf := _wild_suffix.get(i)
+            if _wild_port.get(i) == port and h.len() > suf.len() and str.EndsWith(h, suf) and suf.len() > best_len:
+                found = _wild_site.get(i)
+                best_len = suf.len()
+            end
+        end
+        if found < 0 and _default_by_port.has(pk):
+            found = _default_by_port.get(pk)
+        end
+    end
+    mem.Free(key as void *)
+    mem.Free(pk as void *)
+    mem.Free(h as void *)
+    ret found
+end
+
+@en "LocationFor"
+@fa "مسیر برای"
+pub func LocationFor(site: int, path: str): int:
+    s := _cfg.sites.get(site)
+    mut best := -1
+    mut best_len := -1
+    mut best_blocks_regex := false
+    repeat s.loc_count in k:
+        i := s.loc_first + k
+        l := _cfg.locations.get(i)
+        if l.kind == LOC_EXACT:
+            if str.Equals(path, l.pattern): ret i end
+        else l.kind == LOC_PREFIX or l.kind == LOC_NOREGEX:
+            if str.StartsWith(path, l.pattern) and l.pattern.len() > best_len:
+                best = i
+                best_len = l.pattern.len()
+                best_blocks_regex = l.kind == LOC_NOREGEX
+            end
+        end
+    end
+    if best_blocks_regex: ret best end
+    repeat s.loc_count in k:
+        i := s.loc_first + k
+        l := _cfg.locations.get(i)
+        if (l.kind == LOC_REGEX or l.kind == LOC_REGEX_I) and _regex_hit(l, path):
+            ret i
+        end
+    end
+    ret best
+end
+
+@en "SiteCount"
+@fa "شمار سایت ها"
+pub func SiteCount(): int:
+    ret _cfg.sites.len()
+end
+
+@en "SiteNames"
+@fa "نام های سایت"
+pub func SiteNames(site: int): str:
+    ret _cfg.sites.get(site).names
+end
+
+@en "LocationPattern"
+@fa "الگوی مسیر"
+pub func LocationPattern(loc: int): str:
+    ret _cfg.locations.get(loc).pattern
+end
+
+@en "ProblemCount"
+@fa "شمار مشکل ها"
+pub func ProblemCount(): int:
+    ret _cfg.problems.len()
+end
+
+@en "ProblemAt"
+@fa "مشکل شماره"
+pub func ProblemAt(i: int): str:
+    ret _cfg.problems.get(i)
+end

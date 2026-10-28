@@ -600,7 +600,7 @@ func list_sessions(ctx: i64):
     mut items := Vector {} as Vector<str>
     aistore.Lock()
     total := count("SELECT COUNT(*) FROM sessions s WHERE " + where, a)
-    mut rows := aistore.Stmt("SELECT s.id, s.created, s.last_used, s.expires, s.ip, s.agent, s.client, s.client_version, s.token = ?4, u.id, u.name, u.email FROM sessions s JOIN users u ON u.id = s.user_id WHERE " + where + " ORDER BY GREATEST(s.last_used, s.created) DESC LIMIT 50 OFFSET " + n(offset as i64), a)
+    mut rows := aistore.Stmt("SELECT s.id, s.created, s.last_used, s.expires, s.ip, s.agent, s.client, s.client_version, s.token = ?4, u.id, u.name, u.email, s.os, s.os_version, s.arch FROM sessions s JOIN users u ON u.id = s.user_id WHERE " + where + " ORDER BY GREATEST(s.last_used, s.created) DESC LIMIT 50 OFFSET " + n(offset as i64), a)
     until aistore.Next(rows):
         mut m := Vector {} as Vector<str>
         m.push(json.MemberRaw("id", aistore.Text(rows, 0)))
@@ -612,6 +612,9 @@ func list_sessions(ctx: i64):
         m.push(json.Member("client", aistore.Text(rows, 6)))
         m.push(json.Member("client_version", aistore.Text(rows, 7)))
         m.push(json.MemberBool("current", aistore.Text(rows, 8) == "1"))
+        m.push(json.Member("os", aistore.Text(rows, 12)))
+        m.push(json.Member("os_version", aistore.Text(rows, 13)))
+        m.push(json.Member("arch", aistore.Text(rows, 14)))
         mut um := Vector {} as Vector<str>
         um.push(json.MemberRaw("id", aistore.Text(rows, 9)))
         um.push(json.Member("name", aistore.Text(rows, 10)))
@@ -622,6 +625,65 @@ func list_sessions(ctx: i64):
     aistore.Finish(rows)
     aistore.Unlock()
     aiweb.Reply(ctx, 200, `{"sessions": ` + json.Array(items) + `, "total": ` + total + "}")
+end
+
+func platform_item(id: str, total: str): str:
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("id", id))
+    m.push(json.MemberRaw("count", total))
+    ret json.Object(m)
+end
+
+func platforms(ctx: i64):
+    if aiweb.NeedAdmin(ctx) == 0:
+        ret
+    end
+    mut days := http.Query(ctx, "days").to_int()
+    if days < 0 or days > 3650:
+        days = 0
+    end
+    cutoff := days == 0 ? 0 as i64 : aistore.Now() - (days as i64) * 86400
+    since := one(n(cutoff))
+    mut seen := HashMap {} as HashMap<str, str>
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT IF(client = 'agent' AND os != '', os, 'unknown'), COUNT(*) FROM sessions WHERE GREATEST(last_used, created) >= ?1 GROUP BY 1", since)
+    until aistore.Next(rows):
+        seen.put(aistore.Text(rows, 0), aistore.Text(rows, 1))
+    end
+    aistore.Finish(rows)
+    site := count("SELECT COUNT(*) FROM guest_sessions g WHERE g.updated >= ?1 AND g.id NOT IN (SELECT guest_id FROM telegram_guests)", since)
+    linked := count("SELECT COUNT(*) FROM telegram_links WHERE GREATEST(last_seen, created) >= ?1", since)
+    guests := count("SELECT COUNT(*) FROM telegram_guests WHERE GREATEST(last_seen, created) >= ?1", since)
+    mut systems := Vector {} as Vector<str>
+    mut srows := aistore.Stmt("SELECT os, os_version, arch, COUNT(*) FROM sessions WHERE client = 'agent' AND os != '' AND GREATEST(last_used, created) >= ?1 GROUP BY os, os_version, arch ORDER BY COUNT(*) DESC, os, os_version LIMIT 30", since)
+    until aistore.Next(srows):
+        mut m := Vector {} as Vector<str>
+        m.push(json.Member("os", aistore.Text(srows, 0)))
+        m.push(json.Member("version", aistore.Text(srows, 1)))
+        m.push(json.Member("arch", aistore.Text(srows, 2)))
+        m.push(json.MemberRaw("count", aistore.Text(srows, 3)))
+        systems.push(json.Object(m))
+    end
+    aistore.Finish(srows)
+    aistore.Unlock()
+    mut items := Vector {} as Vector<str>
+    mut total := 0 as i64
+    each id in ["windows", "macos", "linux", "other"]:
+        c := seen.has(id) ? seen.get(id).to_int() as i64 : 0 as i64
+        items.push(platform_item(id, n(c)))
+        total += c
+    end
+    tg := linked.to_int() as i64 + guests.to_int() as i64
+    unknown := (seen.has("unknown") ? seen.get("unknown").to_int() as i64 : 0 as i64) + site.to_int() as i64
+    items.push(platform_item("telegram", n(tg)))
+    items.push(platform_item("unknown", n(unknown)))
+    total += tg + unknown
+    mut out := Vector {} as Vector<str>
+    out.push(json.MemberRaw("days", n(days as i64)))
+    out.push(json.MemberRaw("total", n(total)))
+    out.push(json.MemberRaw("platforms", json.Array(items)))
+    out.push(json.MemberRaw("systems", json.Array(systems)))
+    aiweb.Reply(ctx, 200, json.Object(out))
 end
 
 func revoke_session(ctx: i64):
@@ -954,6 +1016,7 @@ pub func Routes(r &: router.Router):
     router.Get(r, "/admin/guests", list_guests)
     router.Get(r, "/admin/guests/:id", get_guest)
     router.Get(r, "/admin/sessions", list_sessions)
+    router.Get(r, "/admin/platforms", platforms)
     router.Delete(r, "/admin/sessions/:id", revoke_session)
     router.Delete(r, "/admin/users/:id/sessions", revoke_user_sessions)
     router.Get(r, "/admin/files", list_files)
@@ -966,7 +1029,7 @@ pub func Routes(r &: router.Router):
     router.Patch(r, "/admin/keys/:id", admin_update_key)
     router.Patch(r, "/admin/users/:id/policy", admin_user_policy)
     router.Get(r, "/admin/telegram", admin_telegram)
-    each path in ["/admin/summary", "/admin/users", "/admin/users/:id/chats", "/admin/chats/:id", "/admin/messages/:id/trace", "/admin/chats/:id/files/:fid", "/admin/files", "/admin/files/:id", "/admin/guests", "/admin/guests/:id", "/admin/sessions", "/admin/sessions/:id", "/admin/users/:id/sessions", "/admin/events", "/admin/apps", "/admin/apps/:id", "/admin/requests", "/admin/keys", "/admin/keys/:id", "/admin/users/:id/policy", "/admin/telegram"]:
+    each path in ["/admin/summary", "/admin/users", "/admin/users/:id/chats", "/admin/chats/:id", "/admin/messages/:id/trace", "/admin/chats/:id/files/:fid", "/admin/files", "/admin/files/:id", "/admin/guests", "/admin/guests/:id", "/admin/sessions", "/admin/platforms", "/admin/sessions/:id", "/admin/users/:id/sessions", "/admin/events", "/admin/apps", "/admin/apps/:id", "/admin/requests", "/admin/keys", "/admin/keys/:id", "/admin/users/:id/policy", "/admin/telegram"]:
         router.Options(r, path, aiweb.Preflight)
     end
 end

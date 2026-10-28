@@ -1,5 +1,7 @@
 package docgen
 
+import str
+
 include at "../ast.salam"
 
 func walk_member(db &: DocDb, a: at.Ast, mid: int, file_idx: int, parent: int, blocks: Vector<CommentBlock>):
@@ -23,6 +25,46 @@ func walk_member(db &: DocDb, a: at.Ast, mid: int, file_idx: int, parent: int, b
     )
     attach_aliases(db, a, mid, midx)
     attach_doc(db, blocks, midx, mn.begin_line as int)
+end
+
+func static_owner(name: str): str:
+    if not str.StartsWith(name, "__"):
+        ret ""
+    end
+    rest := name.substr(2, name.len() - 2)
+    cut := rest.find("__")
+    if cut <= 0:
+        ret ""
+    end
+    ret rest.substr(0, cut)
+end
+
+func find_struct(db: DocDb, name: str): int:
+    mut i := 0
+    until i < db.decls.len():
+        d := db.decls.get(i)
+        if d.kind == DOC_STRUCT and d.parent < 0 and d.name == name:
+            ret i
+        end
+        i += 1
+    end
+    ret 0 - 1
+end
+
+func walk_static(db &: DocDb, a: at.Ast, id: int, file_idx: int, owner_idx: int, owner: str, blocks: Vector<CommentBlock>):
+    n := at.Get(a, id)
+    prefix := "__" + owner + "__"
+    short := n.name.substr(prefix.len(), n.name.len() - prefix.len())
+    sig := str.Replace(func_signature(a, id), "func " + n.name, "static func " + short)
+    midx := db_add_decl(db, DOC_FUNC, short, sig, n.is_pub, n.is_deprecated, file_idx, n.begin_line as int, owner_idx)
+    cnt := at.AliasCount(a, id)
+    mut i := 0
+    until i + 1 < cnt:
+        val := at.Alias(a, id, i + 1)
+        db_add_alias(db, midx, at.Alias(a, id, i), str.StartsWith(val, prefix) ? val.substr(prefix.len(), val.len() - prefix.len()) : val)
+        i += 2
+    end
+    attach_doc(db, blocks, midx, n.begin_line as int)
 end
 
 func walk_top(db &: DocDb, a: at.Ast, id: int, file_idx: int, blocks: Vector<CommentBlock>):
@@ -66,6 +108,14 @@ func walk_top(db &: DocDb, a: at.Ast, id: int, file_idx: int, blocks: Vector<Com
         end
     else:
         ret
+    end
+    if n.kind == at.AST_FUNC_DEF and n.is_static:
+        owner := static_owner(n.name)
+        owner_idx := owner.len() > 0 ? find_struct(db, owner) : 0 - 1
+        if owner_idx >= 0:
+            walk_static(db, a, id, file_idx, owner_idx, owner, blocks)
+            ret
+        end
     end
     idx := db_add_decl(db, kind, n.name, sig, n.is_pub, n.is_deprecated, file_idx, n.begin_line as int, 0 - 1)
     attach_aliases(db, a, id, idx)

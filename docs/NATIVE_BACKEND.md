@@ -274,14 +274,17 @@ with a mask.
 After a function is encoded, every instruction that has an RV64C form
 becomes 2 bytes (`c.addi`, `c.li`, `c.mv`, `c.add`, the register-pair ALU
 ops, `sp`- and register-based loads and stores, `c.lui`, `c.jr`/`c.jalr`,
-`c.addi16sp`, `c.addi4spn`). Branches and jumps stay 4 bytes and are
-re-encoded for the shorter distances, which only shrink, so none goes out of
-range. An instruction with a relocation keeps 4 bytes, as does the `jalr`
+`c.addi16sp`, `c.addi4spn`). A jump becomes `c.j` and a branch comparing a
+register in `x8`-`x15` with zero becomes `c.beqz`/`c.bnez` when the target
+is close enough (2 KiB and 256 bytes): every candidate starts short, any that
+does not reach is made long again, and that repeats until nothing changes,
+since lengthening one can only push others out of reach. The remaining
+branches are re-encoded for the new distances, which only shrink. An instruction with a relocation keeps 4 bytes, as does the `jalr`
 of an `auipc`/`jalr` call pair and everything from an `lr` to its `sc`
 (the spec keeps compressed code out of constrained LR/SC loops). Debug rows,
 variable ranges and CFI move with the code; the CIE's code alignment is 1
 and the object's `e_flags` gain `EF_RISCV_RVC`. The compiler built for
-riscv64 is 15% smaller this way. `SALAM_NG_OFF=rvc` turns it off.
+riscv64 is about 20% smaller this way. `SALAM_NG_OFF=rvc` turns it off.
 
 Built with the built-in linker against a musl sysroot and run under
 qemu-riscv64, the test groups listed for i686 match their expected output

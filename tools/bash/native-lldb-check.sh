@@ -13,7 +13,8 @@
 # When clang and llvm-ar are there at build time it also links mix_arm64, a
 # program that calls into a static archive of two C objects, one with DWARF 4
 # and one with DWARF 5: lldb must stop in both C functions, read their locals
-# and walk back into the Salam caller, so the DWARF of every object is kept.
+# and walk back into the Salam caller, so the DWARF of every object is kept;
+# the archive also has a __thread variable, so the run checks Mach-O TLV too.
 #
 # Usage: tools/bash/native-lldb-check.sh build <salam> <dir>
 #        tools/bash/native-lldb-check.sh run <dir>
@@ -82,6 +83,11 @@ int cadd(int a, int b) {
     int s = a + b;
     return s * 2;
 }
+__thread int tcount = 40;
+int tls_bump(void) {
+    tcount += 2;
+    return tcount;
+}
 SRC
     cat >"$DIR/mix/mixd.c" <<'SRC'
 int cmul(int a, int b) {
@@ -95,6 +101,7 @@ link static "libmix.a"
 extern:
     func cadd(a: int, b: int): int
     func cmul(a: int, b: int): int
+    func tls_bump(): int
 end
 
 noinline func walk(n: int): int:
@@ -103,6 +110,7 @@ end
 
 func main:
     println walk(5)
+    println "tls", tls_bump()
 end
 SRC
     if ! (cd "$DIR/mix" && clang --target=arm64-apple-macos14 -gdwarf-4 -O0 -c mixc.c -o mixc.o &&
@@ -184,6 +192,7 @@ if [ -f "$DIR/mix_arm64" ]; then
     check "$mo" "p = 35" "mix DWARF 5 C local"
     check "$mo" "s = 6" "mix DWARF 4 C local"
     check "$mo" "\`walk(" "mix backtrace into the Salam caller"
+    check "$mo" "tls 42" "mix thread-local from the C archive"
     if [ "$fail" -gt "$f1" ]; then
         cat "$mo"
     fi

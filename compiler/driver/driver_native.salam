@@ -165,6 +165,20 @@ func musl_libdir(root: str): str:
     ret ""
 end
 
+func musl_host(): bool:
+    if SALAM_OS_WINDOWS or SALAM_OS_MAC:
+        ret false
+    end
+    arch := glibc_host_arch()
+    if not os.Exists("/lib/ld-musl-" + arch + ".so.1"):
+        ret false
+    end
+    if str.Equals(arch, "aarch64"):
+        ret not os.Exists("/lib/ld-linux-aarch64.so.1")
+    end
+    ret not os.Exists("/lib64/ld-linux-x86-64.so.2")
+end
+
 func musl_root(o: lv.Options, arch: str): str:
     if str.Len(o.sysroot) > 0 and str.Len(musl_libdir(o.sysroot)) > 0:
         ret o.sysroot
@@ -183,6 +197,9 @@ func musl_root(o: lv.Options, arch: str): str:
         end
     end
     names.free()
+    if str.Len(found) == 0 and musl_host() and str.Equals(arch, glibc_host_arch()) and str.Len(musl_libdir("/usr")) > 0:
+        found = "/usr"
+    end
     ret found
 end
 
@@ -435,6 +452,10 @@ end
 
 func glibc_link_ok(triple: str, o: lv.Options, why &: str): bool:
     arch := glibc_arch(triple)
+    if str.Len(triple) == 0 and musl_host():
+        why = co.Format1(i18.Tr("the built-in linker does not handle target '%s'"), co.ArgStr(arch + "-linux-musl"))
+        ret false
+    end
     if (str.Len(triple) > 0 and not str.Contains(triple, "linux-gnu")) or not (str.Equals(arch, "x86_64") or str.Equals(arch, "aarch64")):
         why = co.Format1(i18.Tr("the built-in linker does not handle target '%s'"), co.ArgStr(triple))
         ret false
@@ -699,7 +720,11 @@ func builtin_link_mode(lgr: lg.Logger, obj: str, exe: str, triple: str, o: lv.Op
         ret 0 - 1
     end
     mut why := ""
-    kind := builtin_pick(triple, o, why)
+    mut tgt := triple
+    if str.Len(tgt) == 0 and musl_host():
+        tgt = glibc_host_arch() + "-linux-musl"
+    end
+    kind := builtin_pick(tgt, o, why)
     if kind == 0:
         if str.Equals(mode, "builtin"):
             lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, why)
@@ -708,7 +733,7 @@ func builtin_link_mode(lgr: lg.Logger, obj: str, exe: str, triple: str, o: lv.Op
         ret 0 - 1
     end
     if kind == 1:
-        ret native_link_builtin(lgr, obj, exe, o, triple)
+        ret native_link_builtin(lgr, obj, exe, o, tgt)
     end
     if kind == 2:
         ret native_link_mingw(lgr, obj, exe, o, triple)

@@ -654,6 +654,16 @@ next instruction that reads it. The same walk on x86-64 tracks which 64-bit
 registers hold equal values after a copy and drops a copy whose registers
 are already equal, such as the second half of `mov r8, rax` followed by
 `mov rax, r8` (one instruction per divisor in `prime_factorization`).
+Before instruction selection on x86, when a two-address operation (`sub`,
+`divsd` and the like overwrite their first operand) reads a value that has
+one or two later pure uses in the same block, and those uses only need
+values that are ready already, they move ahead of it so the value dies at
+the operation and needs no copy. `sum + sign / den` followed by
+`0.0 - sign` negates first and divides `sign` in place (`pi_leibniz` runs
+11% fewer instructions). A later use that is itself tied to the same value
+stays put unless it is commutative with an operand that dies there, or
+takes a constant (`lea` and `imul` with an immediate need no tie), so DCT
+butterflies keep their order.
 When the hints of a value are taken, the allocator tries the register of
 any value it is copied to or from that already has one, so phi webs and the
 copies around them tend to land in one register. A `select` whose result
@@ -745,7 +755,7 @@ ret end` at the top of a recursive AST walk) tests that parameter before
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing, and a comma-separated list dumps several functions.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,loopinl,cpelim,zins,ndiv,niv,cmp64,adc64,rvc`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,loopinl,cpelim,tord,zins,ndiv,niv,cmp64,adc64,rvc`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator.

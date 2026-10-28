@@ -3960,6 +3960,47 @@ func insv_to_ret(g &: Ng, i: int): bool:
     ret false
 end
 
+func insv_to_store(g &: Ng, i: int): int:
+    if g.off_istore:
+        ret 0 - 1
+    end
+    t := g.i_ty[i]
+    mut j := i
+    repeat 160:
+        r := g.i_res[j]
+        if r < 0 or g.v_uses[r] != 1:
+            ret 0 - 1
+        end
+        mut k := g.i_next[j]
+        until k >= 0:
+            op := g.i_op[k]
+            if op == OP_STORE and g.i_a[k] == r:
+                p := g.i_b[k]
+                if (g.i_f[k] & (IF_VOLATILE | IF_ATOMIC)) != 0 or p == r:
+                    ret 0 - 1
+                end
+                pk := g.v_kind[p]
+                if (pk == VK_INS and g.vak[p] == AK_ALLOCA) or pk == VK_ARG:
+                    ret k
+                end
+                ret 0 - 1
+            end
+            if op == OP_INSV and g.i_a[k] == r and g.i_ty[k] == t:
+                break
+            end
+            if op == OP_CALL or op == OP_STORE or op == OP_LOAD or uses_val(g, k, r):
+                ret 0 - 1
+            end
+            k = g.i_next[k]
+        end
+        if k < 0:
+            ret 0 - 1
+        end
+        j = k
+    end
+    ret 0 - 1
+end
+
 func zero_const(g &: Ng, v: int): bool:
     if v < 0:
         ret false
@@ -4021,10 +4062,21 @@ func isel_insv(g &: Ng, i: int):
         base = g.var_[a]
         m = agg_mem(g, a)
     else:
+        sd := insv_to_ret(g, i) ? 0 - 1 : insv_to_store(g, i)
         if insv_to_ret(g, i):
             ak = AK_PTR
             base = g.retp
             m = mem_bi(base, 0 as i64)
+        else sd >= 0 and g.v_kind[g.i_b[sd]] == VK_ARG:
+            ak = AK_PTR
+            base = use_reg(g, g.i_b[sd])
+            m = mem_bi(base, 0 as i64)
+            g.skipi[sd] = true
+        else sd >= 0:
+            ak = AK_FRAME
+            base = g.var_[g.i_b[sd]]
+            m = frame_mem(base, 0 as i64)
+            g.skipi[sd] = true
         else:
             base = new_slot(g, sz, talign(g, t))
             m = frame_mem(base, 0 as i64)
@@ -4639,6 +4691,12 @@ func isel_ins(g &: Ng, i: int, b: int):
         OP_VREDADD:
             if res_used(g, i):
                 isel_vredadd(g, i)
+            end
+            ret
+        end
+        OP_VREDMM:
+            if res_used(g, i):
+                isel_vredmm(g, i)
             end
             ret
         end

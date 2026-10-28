@@ -468,11 +468,13 @@ then goes through:
    loop that only copies elements (`a[k] = b[i]`) becomes `memmove` behind a
    runtime check that a forward copy and `memmove` agree (only from 16
    elements up; shorter copies stay a loop).
-   Innermost loops whose body is one branch-free block are vectorized with
+   Innermost loops whose body is one branch-free block, counting up to a
+   limit with `<` or `<=` (before or after the body), are vectorized with
    SSE2: bytes sixteen lanes at a time, 16-bit integers eight, 32-bit integer
    and `f32` code four, 64-bit and `f64` two. Loads and stores must be
-   contiguous in the counter; a byte loop that also does 32-bit work widens
-   its bytes on load (`movd` and two unpacks) and narrows them with
+   contiguous in the counter; a loop that also does 32-bit work widens its
+   bytes or 16-bit values on load (`movd` or `movsd` and unpacks, then
+   `psrad` when the extension is signed) and narrows bytes with
    `packssdw`/`packuswb` on store. A load from a loop-invariant address (the
    data pointer of a vector passed by reference) is done once before the
    vector loop, behind a runtime check that no store in the loop reaches it. A 32-bit multiply, which SSE2 has no
@@ -486,7 +488,9 @@ then goes through:
    (unsigned 32-bit ones flip the sign bit first; 64-bit ones other than
    equality only on AArch64, since SSE2 needs a long sequence for them)
    and selects (on a per-lane or loop-invariant condition) are supported,
-   and any number of integer add reductions. A loop that stores gets a
+   and any number of integer add reductions and min or max reductions
+   (`m = x > m ? x : m`, or the same as an `if`, either sign; 64-bit ones
+   on AArch64 only), which end in a shuffle-and-select tree. A loop that stores gets a
    runtime check that each stored range is disjoint from every range it
    loads from another base. The vector loop runs while a full vector fits
    and the scalar loop finishes the rest, so the PNG filter scoring and
@@ -601,7 +605,9 @@ to the operand that dies there by inverting the condition, turns
 `(x >> n) | (x << (bits - n))` (also with `^` or `+`) and `rol %cl` for the
 variable form `(x << r) | (x >> (32 - r))` even when the counts are masked
 with `& 31`, builds an `insertvalue` chain that is returned directly in
-the caller's result buffer, copies and clears structs of up to 256 bytes
+the caller's result buffer (or, when the chain is only stored to a local
+or through a pointer argument with no load, store or call in between,
+directly in that memory), copies and clears structs of up to 256 bytes
 with 16-byte SSE moves (larger ones call `memcpy`/`memset`), fuses a
 compare with the branch or select that uses it, and turns `x * k + y` into one
 or two `lea`s. Division by a constant uses a shift or a multiply by the
@@ -693,7 +699,7 @@ ret end` at the top of a recursive AST walk) tests that parameter before
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing, and a comma-separated list dumps several functions.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,zins,ndiv,niv,cmp64,adc64,rvc`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,zins,ndiv,niv,cmp64,adc64,rvc`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator.
@@ -846,7 +852,8 @@ Not there yet:
 - The loop vectorizer needs a loop body that if-conversion can turn into
   one block (a load inside one arm of a branch keeps it scalar) and
   unit-stride accesses. On x86-64 it has no 64-bit multiplies or ordered
-  64-bit compares, and 8- and 16-bit lanes take no reductions. Float
+  64-bit compares, and reductions run in 32- or 64-bit lanes (narrower
+  values are widened first). Float
   reductions are not reordered, since that would change the rounding of the
   result. There is no AVX code path.
 - The built-in linker (see `NATIVE_LINKER.md`) links every supported

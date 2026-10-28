@@ -802,7 +802,17 @@ How the pieces fit:
   stack, that would stop before any of them has a location.
 
 Enums are written as enumeration types, so gdb prints `Blue`, not `2`.
-CodeView/PDB for MSVC debuggers is not written.
+On Windows targets, `-g` also writes CodeView into each object: a
+`.debug$S` section with `S_OBJNAME`, `S_COMPILE3`, one
+`S_GPROC32`/`S_LPROC32` per function, C13 line blocks, file checksums and a
+string table (`ng_cv.salam`). Scalar locals and parameters get `S_LOCAL`
+with built-in type indices (integers, floats, `bool`, and `str` as a char
+pointer) and the same ranges as their DWARF location lists:
+`S_DEFRANGE_REGISTER` for a register, `S_DEFRANGE_REGISTER_REL` for a stack
+slot. A variable that is one constant everywhere becomes `S_CONSTANT`.
+There are no type records, so struct and array locals are in DWARF only.
+The built-in linker turns all of it into a PDB (see `NATIVE_LINKER.md`);
+with the system linker, GNU ld discards it.
 
 `tools/bash/native-gdb-check.sh <salam>` debugs a small program under gdb
 and checks the printed locals, a struct split into pieces, folded
@@ -829,7 +839,8 @@ faster than the LLVM path.
 
 Not there yet:
 
-- `-g` writes DWARF only; there is no CodeView/PDB for MSVC tools.
+- CodeView has no type records, so WinDbg and Visual Studio show scalar
+  locals but not struct or array ones.
 - The loop and SLP vectorizers run on x86-64 and AArch64 (SLP also on
   i686); armhf and RISC-V baselines have no vector unit to use.
 - The loop vectorizer needs a loop body that if-conversion can turn into

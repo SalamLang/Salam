@@ -27,6 +27,7 @@ include lp "../langpack.salam"
 pub const IFCHAIN_CODE := 145
 
 mut g_ic_seen := HashMap {} as HashMap<str, bool>
+mut g_ic_lib := HashMap {} as HashMap<str, bool>
 
 struct IcSeq:
     pub stmt: Vector<int> = Vector {}
@@ -71,6 +72,29 @@ func ic_clear(q &: IcSeq):
     q.last_of_stmt.clear()
     q.tail_else.clear()
     q.labels.clear()
+end
+
+func ic_library_file(file: str): bool:
+    if g_ic_lib.has(file):
+        ret g_ic_lib.get(file)
+    end
+    root := get_stdlib_root()
+    mut lib := false
+    if str.Len(root) > 0 and str.StartsWith(file, root + "/std/"):
+        lib = true
+    else:
+        mut bases := package_bases(root)
+        repeat bases.len() in i:
+            base := bases.get(i)
+            if str.Len(base) > 0 and str.StartsWith(file, base + "/"):
+                lib = true
+                break
+            end
+        end
+        bases.free()
+    end
+    g_ic_lib.put(file, lib)
+    ret lib
 end
 
 func ic_type_ok(ts: str): bool:
@@ -647,19 +671,21 @@ func ic_report(s &: Sema, a &: at.Ast, q &: IcSeq, i: int, j: int, stop: int):
         i18.Tr("group them as '%s %s:' with one label per constant"), co.ArgStr(kw_switch), co.ArgStr(subj)
     )
     if stop >= 0:
-        help = help + " " + co.Format2(
+        help = help + ". " + co.Format2(
             i18.Tr("The run stops at line %d because that test is not a plain comparison of '%s'."), co.ArgInt(at.Get(a, q.cond.get(stop)).begin_line as i64), co.ArgStr(subj)
         )
     end
     mut fx := fix_at(sp)
     if ic_labels_distinct(s, a, q, i, j) and ic_try_fix(s, a, q, i, j, fx):
         fx.rec = 0
+        fx.safe = g_sm_ifchain == 3
+        fx.preferred = g_sm_ifchain == 3
         queue_fix(fx)
     end
     msg := co.Format2(
         i18.Tr("%d consecutive comparisons of '%s' against constants could be a switch"), co.ArgInt((j - i) as i64), co.ArgStr(subj)
     )
-    if g_sm_ifchain >= 2:
+    if g_sm_ifchain == 2:
         serr_help(s, IFCHAIN_CODE, sp, msg, help)
     else:
         swarn_help(s, IFCHAIN_CODE, sp, msg, help)
@@ -720,7 +746,7 @@ func ic_unroll(s &: Sema, a &: at.Ast, q &: IcSeq, st: int): bool:
 end
 
 pub func SemaCheckIfChains(s &: Sema, a &: at.Ast, block: int):
-    if g_sm_ifchain == 0 or s.requal or s.in_pkg or s.in_derive:
+    if g_sm_ifchain == 0 or s.requal or s.in_derive or ic_library_file(s.file):
         ret
     end
     cnt := at.ChildCount(a, block)

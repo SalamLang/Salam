@@ -197,6 +197,26 @@ discardable section, names it through a COFF string table that
 offset inside the merged section and `ADDR64` to the virtual address
 without a base relocation.
 
+When objects carry CodeView (`.debug$S` without `.debug$T`, which is what
+`-g` gives on Windows targets), the PE linker also writes `<name>.pdb`
+next to the executable (`nl_pdb.salam`) and points a debug directory entry
+with an `RSDS` record at it, so WinDbg, Visual Studio and
+`llvm-symbolizer` find functions and lines without the DWARF. The PDB is an
+MSF file with 4 KiB blocks holding:
+- the info stream (GUID, age and a `/names` entry);
+- empty TPI and IPI streams;
+- DBI, with module info, section contributions, a section map, file info
+  and a section header stream;
+- `/names`;
+- one stream per object, with its symbols, their parent and end offsets
+  filled in, and its C13 line and checksum subsections;
+- the globals (`S_PROCREF`), publics (`S_PUB32` with an address map) and
+  symbol record streams.
+
+Relative source names are made absolute with the link directory, as `lld`
+does. The GUID is a hash of the image, taken before the `RSDS` record is
+filled in.
+
 ## Driver integration
 
 A new option `--linker=auto|builtin|system`:

@@ -8,7 +8,10 @@
 # source and functions, and, on i686 (which has no .pdata to unwind with),
 # that .debug_frame has FDEs and each one lies inside .text. Only binutils
 # objdump is needed, since llvm-dwarfdump --verify does not finish on i686
-# PE files linked against the mingw-w64 CRT.
+# PE files linked against the mingw-w64 CRT. With the built-in linker the -g
+# build also gets a PDB: when llvm-pdbutil is there, every part of it must
+# parse, and llvm-symbolizer must find walk's file and line through the PDB
+# alone once the DWARF sections are stripped.
 #
 # Usage: tools/bash/native-windows-debug-check.sh <salam>
 
@@ -46,6 +49,18 @@ func main:
     println walk(5, "hello")
 end
 SRC
+if ! command -v llvm-pdbutil >/dev/null 2>&1; then
+    for llvm_dir in /usr/lib/llvm-*/bin; do
+        if [ -x "$llvm_dir/llvm-pdbutil" ]; then
+            PATH="$llvm_dir:$PATH"
+        fi
+    done
+fi
+pdbutil=$(command -v llvm-pdbutil || true)
+symbolizer=""
+if command -v llvm-objcopy >/dev/null 2>&1 && command -v llvm-readobj >/dev/null 2>&1; then
+    symbolizer=$(command -v llvm-symbolizer || true)
+fi
 fail=0
 pass=0
 bad() {
@@ -105,6 +120,41 @@ for triple in x86_64-w64-windows-gnu i686-w64-windows-gnu; do
             if [ "$n" -eq 0 ] || [ "$out" -ne 0 ]; then
                 bad "$tag (.debug_frame has $n FDEs, $out outside .text)"
                 continue
+            fi
+        fi
+        if [ "$lk" = builtin ] && [ -n "$pdbutil" ]; then
+            if ! [ -s "$d/dbg.pdb" ] || [ -e "$d/plain.pdb" ]; then
+                bad "$tag (-g build has no dbg.pdb, or a plain build wrote one)"
+                continue
+            fi
+            perr=""
+            for part in -summary -modules -files -l -symbols -publics -globals -section-contribs -section-map -section-headers; do
+                if ! "$pdbutil" dump $part "$d/dbg.pdb" >/dev/null 2>"$d/pdb.err"; then
+                    perr="$part: $(head -c 200 "$d/pdb.err")"
+                    break
+                fi
+            done
+            if [ -n "$perr" ]; then
+                bad "$tag (llvm-pdbutil cannot read the PDB, $perr)"
+                continue
+            fi
+            if [ -n "$symbolizer" ]; then
+                mkdir -p "$d/nd"
+                llvm-objcopy --strip-debug "$d/dbg.exe" "$d/nd/dbg.exe" && cp "$d/dbg.pdb" "$d/nd/dbg.pdb"
+                at=$("$pdbutil" dump -symbols "$d/dbg.pdb" | grep -A1 'PROC32 .*`walk`' | sed -n 's/.*addr = 0001:\([0-9]*\).*/\1/p' | head -1)
+                text=$(llvm-readobj --sections "$d/dbg.exe" | grep -A3 'Name: .text ' | sed -n 's/.*VirtualAddress: \(0x[0-9A-F]*\).*/\1/p')
+                if [ -z "$at" ] || [ -z "$text" ]; then
+                    bad "$tag (no S_GPROC32/S_LPROC32 for walk in the PDB)"
+                    continue
+                fi
+                got=$("$symbolizer" --obj="$d/nd/dbg.exe" --relative-address $((text + at + 1)) 2>/dev/null | tr '\n' ' ')
+                case "$got" in
+                    walk*wd.salam:1[2-9]*) ;;
+                    *)
+                        bad "$tag (llvm-symbolizer through the PDB alone gave: $got)"
+                        continue
+                        ;;
+                esac
             fi
         fi
         pass=$((pass + 1))

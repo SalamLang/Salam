@@ -797,7 +797,12 @@ How the pieces fit:
   stack, that would stop before any of them has a location.
 
 Enums are written as enumeration types, so gdb prints `Blue`, not `2`.
-CodeView/PDB for MSVC debuggers is not written.
+On Windows targets, `-g` also writes CodeView into each object: a
+`.debug$S` section with `S_OBJNAME`, `S_COMPILE3`, one
+`S_GPROC32`/`S_LPROC32` per function (no type records), C13 line blocks,
+file checksums and a string table (`ng_cv.salam`). The built-in linker
+turns that into a PDB (see `NATIVE_LINKER.md`); with the system linker,
+GNU ld discards it. Local variables are in DWARF only.
 
 `tools/bash/native-gdb-check.sh <salam>` debugs a small program under gdb
 and checks the printed locals, a struct split into pieces, folded
@@ -824,7 +829,8 @@ faster than the LLVM path.
 
 Not there yet:
 
-- `-g` writes DWARF only; there is no CodeView/PDB for MSVC tools.
+- CodeView has functions and lines but no types or local variables, so
+  WinDbg and Visual Studio show the call stack and source but not values.
 - The loop and SLP vectorizers run on x86-64 and AArch64 (SLP also on
   i686); armhf and RISC-V baselines have no vector unit to use.
 - The loop vectorizer needs a single-block loop body with unit-stride

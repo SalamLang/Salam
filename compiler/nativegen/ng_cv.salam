@@ -1,0 +1,191 @@
+package nativegen
+
+import str
+
+const CV_SYMBOLS := 0xF1
+const CV_LINES := 0xF2
+const CV_STRINGS := 0xF3
+const CV_CHECKSUMS := 0xF4
+
+func cv_put16(v &: Vector<u8>, at: int, x: int):
+    v[at] = (x & 255) as u8
+    v[at + 1] = ((x >> 8) & 255) as u8
+end
+
+func cv_pad4(v &: Vector<u8>):
+    until v.len() % 4 != 0:
+        v.push(0 as u8)
+    end
+end
+
+func cv_sub_begin(v &: Vector<u8>, kind: int): int:
+    vb_le(v, kind as i64, 4)
+    at := v.len()
+    vb_le(v, 0 as i64, 4)
+    ret at
+end
+
+func cv_sub_end(v &: Vector<u8>, at: int):
+    vb_put32(v, at, (v.len() - at - 4) as i64)
+    cv_pad4(v)
+end
+
+func cv_rec_begin(v &: Vector<u8>, kind: int): int:
+    at := v.len()
+    vb_le(v, 0 as i64, 2)
+    vb_le(v, kind as i64, 2)
+    ret at
+end
+
+func cv_rec_end(v &: Vector<u8>, at: int):
+    cv_pad4(v)
+    cv_put16(v, at, v.len() - at - 2)
+end
+
+func cv_secrel(g &: Ng, v &: Vector<u8>, sym: int, add: i64):
+    add_reloc(g, SEC_CVSYM, v.len(), sym, R_CV_SECREL, add)
+    vb_le(v, 0 as i64, 4)
+    add_reloc(g, SEC_CVSYM, v.len(), sym, R_CV_SECTION, 0 as i64)
+    vb_le(v, 0 as i64, 2)
+end
+
+func cv_machine(g &: Ng): int:
+    if g.arch == NG_ARCH_A64: ret 0xF6 end
+    if g.arch == NG_ARCH_X86: ret 0x03 end
+    ret 0xD0
+end
+
+func cv_path(g &: Ng, fmd: int): str:
+    nm := g.md_s1[fmd]
+    d := g.md_s2[fmd]
+    if str.Len(d) == 0 or str.StartsWith(nm, "/") or str.StartsWith(nm, "\\") or str.IndexOf(nm, ":") == 1:
+        ret nm
+    end
+    sep := str.Contains(d, "\\") ? "\\" : "/"
+    if str.EndsWith(d, sep):
+        ret d + nm
+    end
+    ret d + sep + nm
+end
+
+func cv_file_of(g &: Ng, r: int): int:
+    f := g.dl_file[r]
+    ret f < 0 ? 0 - f : f
+end
+
+func cv_fn_secrel(g &: Ng, v &: Vector<u8>, k: int):
+    s := g.df_sym[k]
+    if g.sy_def[s] and g.sy_sec[s] == SEC_TEXT:
+        cv_secrel(g, v, s, (g.df_base[k] - g.sy_off[s]) as i64)
+        ret
+    end
+    cv_secrel(g, v, g.cv_text, g.df_base[k] as i64)
+end
+
+func cv_lines(g &: Ng, v &: Vector<u8>, k: int):
+    base := g.df_base[k]
+    stop := base + g.df_size[k]
+    mut first := 0 - 1
+    mut last := 0 - 1
+    repeat g.dl_off.len() in r:
+        if g.dl_off[r] >= base and g.dl_off[r] < stop:
+            if first < 0:
+                first = r
+            end
+            last = r
+        end
+    end
+    if first < 0:
+        ret
+    end
+    at := cv_sub_begin(v, CV_LINES)
+    cv_fn_secrel(g, v, k)
+    vb_le(v, 0 as i64, 2)
+    vb_le(v, g.df_size[k] as i64, 4)
+    mut r0 := first
+    until r0 <= last:
+        f := cv_file_of(g, r0)
+        mut r1 := r0
+        until r1 + 1 <= last and cv_file_of(g, r1 + 1) == f:
+            r1 += 1
+        end
+        n := r1 - r0 + 1
+        vb_le(v, (8 * (f - 1)) as i64, 4)
+        vb_le(v, n as i64, 4)
+        vb_le(v, (12 + 8 * n) as i64, 4)
+        repeat n in q:
+            r := r0 + q
+            vb_le(v, (g.dl_off[r] - base) as i64, 4)
+            vb_le(v, ((g.dl_line[r] & 0xFFFFFF) as i64) | (0x80000000 as i64), 4)
+        end
+        r0 = r1 + 1
+    end
+    cv_sub_end(v, at)
+end
+
+func cv_emit(g &: Ng, ts: int):
+    g.cv_text = ts
+    mut v := Vector {} as Vector<u8>
+    vb_le(v, 4 as i64, 4)
+    sa := cv_sub_begin(v, CV_SYMBOLS)
+    mut cu := ""
+    repeat g.md_kind.len() in m:
+        if str.Len(cu) == 0 and g.md_kind[m] == 3:
+            cu = cv_path(g, m)
+        end
+    end
+    r1 := cv_rec_begin(v, 0x1101)
+    vb_le(v, 0 as i64, 4)
+    vb_str(v, cu)
+    cv_rec_end(v, r1)
+    r2 := cv_rec_begin(v, 0x113C)
+    vb_le(v, 0 as i64, 4)
+    vb_le(v, cv_machine(g) as i64, 2)
+    repeat 8:
+        vb_le(v, 0 as i64, 2)
+    end
+    vb_str(v, "salam")
+    cv_rec_end(v, r2)
+    repeat g.df_sym.len() in k:
+        spm := g.df_sp[k]
+        s := g.df_sym[k]
+        mut nm := g.md_s1[spm]
+        if str.Len(nm) == 0:
+            nm = tab_str(g.syms, s)
+        end
+        rp := cv_rec_begin(v, g.sy_local[s] ? 0x110F : 0x1110)
+        repeat 3:
+            vb_le(v, 0 as i64, 4)
+        end
+        vb_le(v, g.df_size[k] as i64, 4)
+        vb_le(v, 0 as i64, 4)
+        vb_le(v, g.df_size[k] as i64, 4)
+        vb_le(v, 0 as i64, 4)
+        cv_fn_secrel(g, v, k)
+        v.push(0 as u8)
+        vb_str(v, nm)
+        cv_rec_end(v, rp)
+        re := cv_rec_begin(v, 0x0006)
+        cv_rec_end(v, re)
+    end
+    cv_sub_end(v, sa)
+    repeat g.df_sym.len() in k2:
+        cv_lines(g, v, k2)
+    end
+    mut strs := Vector {} as Vector<u8>
+    strs.push(0 as u8)
+    sc := cv_sub_begin(v, CV_CHECKSUMS)
+    each fmd in g.dfiles:
+        vb_le(v, strs.len() as i64, 4)
+        vb_le(v, 0 as i64, 4)
+        vb_str(strs, cv_path(g, fmd))
+    end
+    cv_sub_end(v, sc)
+    st := cv_sub_begin(v, CV_STRINGS)
+    each b in strs:
+        v.push(b)
+    end
+    cv_sub_end(v, st)
+    strs.free()
+    g.s_cvsym = v
+end

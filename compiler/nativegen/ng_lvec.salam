@@ -55,6 +55,9 @@ func lv_inv(g &: Ng, r &: Lv, v: int): bool:
 end
 
 func lv_lane_of(t: int): int:
+    if t == T_I8:
+        ret 1
+    end
     if t == T_I32 or t == T_F32:
         ret 4
     end
@@ -69,7 +72,9 @@ func lv_vty(t: int, lane: int): int:
     if t == T_I64: ret T_V2I64 end
     if t == T_F32: ret T_V4F32 end
     if t == T_F64: ret T_V2F64 end
+    if t == T_I8: ret T_V16I8 end
     if t == T_I1:
+        if lane == 1: ret T_V16I8 end
         ret lane == 4 ? T_V4I32 : T_V2I64
     end
     ret 0 - 1
@@ -98,6 +103,18 @@ func lv_data_ok(g &: Ng, r &: Lv, v: int): bool:
         ret not is_agg(g, g.v_ty[v]) and not is_vec(g, g.v_ty[v])
     end
     ret lv_cls(r, v) == LV_VEC
+end
+
+func lv_byte_ok(g &: Ng, r &: Lv, v: int): bool:
+    if lv_inv(g, r, v):
+        ret g.v_ty[v] == T_I8
+    end
+    c := lv_cls(r, v)
+    if c == LV_SKIP and g.v_kind[v] == VK_INS and g.i_op[g.v_def[v]] == OP_LOAD and g.v_ty[v] == T_I8:
+        r.cls[v] = LV_VEC
+        ret lv_set_lane(r, 1)
+    end
+    ret c == LV_VEC and g.v_ty[v] == T_I8
 end
 
 func lv_idx_val(g &: Ng, r &: Lv, v: int): bool:
@@ -187,6 +204,13 @@ func lv_classify(g &: Ng, r &: Lv, i: int): bool:
     if res < 0:
         ret false
     end
+    if (op == OP_ADD or op == OP_SUB or op == OP_AND or op == OP_OR or op == OP_XOR) and t == T_I8:
+        if not lv_byte_ok(g, r, g.i_a[i]) or not lv_byte_ok(g, r, g.i_b[i]):
+            ret false
+        end
+        r.cls[res] = LV_VEC
+        ret lv_set_lane(r, 1)
+    end
     if op == OP_ADD or op == OP_SUB or op == OP_AND or op == OP_OR or op == OP_XOR:
         if t == T_I1:
             if op == OP_ADD or op == OP_SUB or lv_cls(r, g.i_a[i]) != LV_VEC:
@@ -232,6 +256,16 @@ func lv_classify(g &: Ng, r &: Lv, i: int): bool:
         r.cls[res] = LV_VEC
         ret lv_set_lane(r, lv_lane_of(t))
     end
+    if op == OP_ICMP and g.v_ty[g.i_a[i]] == T_I8:
+        if g.i_x[i] > CC_UGE or not lv_byte_ok(g, r, g.i_a[i]) or not lv_byte_ok(g, r, g.i_b[i]):
+            ret false
+        end
+        if lv_inv(g, r, g.i_a[i]) and lv_inv(g, r, g.i_b[i]):
+            ret false
+        end
+        r.cls[res] = LV_VEC
+        ret lv_set_lane(r, 1)
+    end
     if op == OP_ICMP:
         opty := g.v_ty[g.i_a[i]]
         p := g.i_x[i]
@@ -243,6 +277,16 @@ func lv_classify(g &: Ng, r &: Lv, i: int): bool:
         end
         r.cls[res] = LV_VEC
         ret lv_set_lane(r, 4)
+    end
+    if op == OP_SELECT and t == T_I8:
+        if g.v_ty[g.i_a[i]] != T_I1 or (lv_cls(r, g.i_a[i]) != LV_VEC and not lv_inv(g, r, g.i_a[i])):
+            ret false
+        end
+        if not lv_byte_ok(g, r, g.i_b[i]) or not lv_byte_ok(g, r, g.i_c[i]):
+            ret false
+        end
+        r.cls[res] = LV_VEC
+        ret lv_set_lane(r, 1)
     end
     if op == OP_SELECT:
         if g.v_ty[g.i_a[i]] != T_I1 or (lv_cls(r, g.i_a[i]) != LV_VEC and not lv_inv(g, r, g.i_a[i])):
@@ -557,10 +601,17 @@ func lv_match(g &: Ng, l &: Lp, mark: int, h: int, r &: Lv): bool:
         ret false
     end
     r.vf = 16 / r.lane
+    if r.lane == 1 and r.reds.len() > 0:
+        ret false
+    end
     each ld in r.loads:
         if g.i_ty[ld] == T_I8:
             lr := g.i_res[ld]
-            if r.lane != 4 or g.v_uses[lr] < 1:
+            if r.lane == 1:
+                if r.cls[lr] != LV_VEC:
+                    ret false
+                end
+            else r.lane != 4 or g.v_uses[lr] < 1:
                 ret false
             end
         end
@@ -687,7 +738,7 @@ func lv_bmask(g &: Ng, r &: Lv, ck: int, c: int, vt: int): int:
             ret r.bc_v[k]
         end
     end
-    et := vt == T_V2I64 ? T_I64 : T_I32
+    et := vt == T_V2I64 ? T_I64 : (vt == T_V16I8 ? T_I8 : T_I32)
     sl := ins_new(g, OP_SELECT, et)
     g.i_a[sl] = c
     g.i_b[sl] = const_int(g, et, 0 - 1 as i64)
@@ -966,7 +1017,7 @@ func lv_transform(g &: Ng, r &: Lv):
             continue
         end
         if op == OP_LOAD:
-            if g.i_ty[i] == T_I8:
+            if g.i_ty[i] == T_I8 and r.lane != 1:
                 continue
             end
             vt3 := lv_vty(g.i_ty[i], r.lane)

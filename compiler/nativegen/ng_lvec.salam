@@ -29,6 +29,11 @@ pub struct Lv:
     pub rnext: Vector<int> = Vector {}
     pub rkind: Vector<int> = Vector {}
     pub vbody: int = 0 - 1
+    pub vhead: int = 0 - 1
+    pub vstart: int = 0 - 1
+    pub viv_t: Vector<int> = Vector {}
+    pub viv_v: Vector<int> = Vector {}
+    pub viv_inc: Vector<int> = Vector {}
     pub lanes_v: Vector<int> = Vector {}
     pub rcmp: Vector<int> = Vector {}
     pub body: Vector<int> = Vector {}
@@ -1045,10 +1050,62 @@ func lv_lanes(g &: Ng, r &: Lv, ck: int, vt: int): int:
     ret nv
 end
 
+func lv_viv(g &: Ng, r &: Lv, ck: int, v: int, vt: int): int:
+    iv := g.i_res[r.ivp]
+    mut ext := 0
+    if v != iv:
+        if g.v_kind[v] != VK_INS or g.i_a[g.v_def[v]] != iv:
+            ret 0 - 1
+        end
+        ext = g.i_op[g.v_def[v]]
+        if ext != OP_SEXT and ext != OP_ZEXT:
+            ret 0 - 1
+        end
+    end
+    repeat r.viv_t.len() in k:
+        if r.viv_t[k] == vt and g.v_ty[r.viv_v[k]] == vt:
+            ret r.viv_v[k]
+        end
+    end
+    et := g.t_elem[vt]
+    mut st := r.vstart
+    if g.v_ty[st] != et:
+        st = lv_emit_before(g, g.b_last[ck], ext == OP_ZEXT ? OP_ZEXT : OP_SEXT, et, st, 0 - 1)
+        g.i_x[g.v_def[st]] = g.v_ty[r.vstart]
+    end
+    init := lv_emit_before(g, g.b_last[ck], OP_ADD, vt, lv_bcast(g, r, ck, st, vt), lv_lanes(g, r, ck, vt))
+    ph := ins_new(g, OP_PHI, vt)
+    pv := new_res(g, ph)
+    mut fp := g.b_first[r.vhead]
+    until fp >= 0 and g.i_op[fp] == OP_PHI:
+        fp = g.i_next[fp]
+    end
+    ins_before(g, fp, ph)
+    step := lv_bcast(g, r, ck, const_int(g, et, r.vf as i64), vt)
+    ni := ins_new(g, OP_ADD, vt)
+    g.i_a[ni] = pv
+    g.i_b[ni] = step
+    nx := new_res(g, ni)
+    r.viv_inc.push(ni)
+    g.i_ps[ph] = g.pool.len()
+    g.i_pcount[ph] = 2
+    g.pool.push(init)
+    g.pool.push(ck)
+    g.pool.push(nx)
+    g.pool.push(r.vbody)
+    r.viv_t.push(vt)
+    r.viv_v.push(pv)
+    ret pv
+end
+
 func lv_vget(g &: Ng, r &: Lv, ck: int, v: int, vt: int): int:
     if v >= 0 and v < r.vmap.len() and r.vmap[v] >= 0:
         m := r.vmap[v]
-        if not is_vec(g, g.v_ty[m]) and lv_idx_data(g, r, v) and r.vbody >= 0:
+        if not is_vec(g, g.v_ty[m]) and lv_idx_data(g, r, v) and r.vbody >= 0 and r.vhead >= 0:
+            vi := lv_viv(g, r, ck, v, vt)
+            if vi >= 0:
+                ret vi
+            end
             bc := ins_new(g, OP_VBCAST, vt)
             g.i_a[bc] = m
             bv := new_res(g, bc)
@@ -1260,6 +1317,8 @@ func lv_transform(g &: Ng, r &: Lv):
     vpool := g.pool.len() - 2
     viv := new_res(g, viv_phi)
     ins_append(g, vh, viv_phi)
+    r.vhead = vh
+    r.vstart = start
     mut vaccs := Vector {} as Vector<int>
     mut vpools := Vector {} as Vector<int>
     repeat r.reds.len() in rk:
@@ -1488,6 +1547,9 @@ func lv_transform(g &: Ng, r &: Lv):
     g.pool[vpool] = vnext
     repeat r.reds.len() in k2:
         g.pool[vpools[k2]] = r.vmap[g.i_res[r.rnext[k2]]]
+    end
+    each vi in r.viv_inc:
+        ins_append(g, vb, vi)
     end
     bj := ins_new(g, OP_BR, T_VOID)
     g.i_b[bj] = vh

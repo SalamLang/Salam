@@ -1,19 +1,24 @@
 use crate::approve::{Approvals, Decision, Policy};
 use crate::config;
 use crate::device::DeviceStore;
+use crate::notify::{self, Kind, Notice};
 use crate::tools::{self, Call, Preview};
 use crate::workspace::Workspace;
 use serde::Serialize;
 use serde_json::json;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::Duration;
 use tauri::{AppHandle, Emitter, Manager};
 
 #[derive(Default)]
 pub struct Status {
     connected: AtomicBool,
+    told_offline: AtomicBool,
+    flips: AtomicU64,
 }
+
+const OFFLINE_GRACE: Duration = Duration::from_secs(20);
 
 impl Status {
     pub fn connected(&self) -> bool {
@@ -39,6 +44,23 @@ fn set_connected(app: &AppHandle, value: bool) {
     let status = app.state::<Status>();
     if status.connected.swap(value, Ordering::Relaxed) != value {
         let _ = app.emit("agent://connection", value);
+        let flip = status.flips.fetch_add(1, Ordering::Relaxed) + 1;
+        if value {
+            if status.told_offline.swap(false, Ordering::Relaxed) {
+                notify::post(app, Notice::new(Kind::Online));
+            }
+            return;
+        }
+        let app = app.clone();
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(OFFLINE_GRACE).await;
+            let status = app.state::<Status>();
+            let still_down = !status.connected() && status.flips.load(Ordering::Relaxed) == flip;
+            if still_down && app.state::<DeviceStore>().secret().is_some() {
+                status.told_offline.store(true, Ordering::Relaxed);
+                notify::post(&app, Notice::new(Kind::Offline));
+            }
+        });
     }
 }
 
@@ -90,6 +112,7 @@ pub async fn run(app: AppHandle) {
             Ok(r) if r.status().as_u16() == 401 => {
                 app.state::<DeviceStore>().clear();
                 set_connected(&app, false);
+                notify::post(&app, Notice::new(Kind::Unlinked));
                 let _ = app.emit("agent://device", ());
             }
             _ => {

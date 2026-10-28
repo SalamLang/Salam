@@ -28,6 +28,8 @@ pub struct Lv:
     pub reds: Vector<int> = Vector {}
     pub rnext: Vector<int> = Vector {}
     pub rkind: Vector<int> = Vector {}
+    pub vbody: int = 0 - 1
+    pub lanes_v: Vector<int> = Vector {}
     pub rcmp: Vector<int> = Vector {}
     pub body: Vector<int> = Vector {}
     pub stores: Vector<int> = Vector {}
@@ -138,9 +140,20 @@ func lv_narrow_load(g &: Ng, r &: Lv, v: int): bool:
     ret lv_cls(r, v) == LV_SKIP and g.v_kind[v] == VK_INS and g.i_op[g.v_def[v]] == OP_LOAD and (g.v_ty[v] == T_I8 or g.v_ty[v] == T_I16)
 end
 
+func lv_idx_data(g &: Ng, r &: Lv, v: int): bool:
+    if g.off_viv or v < 0:
+        ret false
+    end
+    t := g.v_ty[v]
+    ret (t == T_I64 or t == T_I32) and (lv_cls(r, v) == LV_IDX or v == g.i_res[r.ivp])
+end
+
 func lv_data_ok(g &: Ng, r &: Lv, v: int): bool:
     if lv_inv(g, r, v):
         ret not is_agg(g, g.v_ty[v]) and not is_vec(g, g.v_ty[v])
+    end
+    if lv_idx_data(g, r, v):
+        ret lv_set_lane(r, lv_lane_of(g.v_ty[v]))
     end
     if lv_narrow_load(g, r, v) and g.v_ty[v] == T_I16:
         r.cls[v] = LV_VEC
@@ -237,7 +250,10 @@ func lv_classify(g &: Ng, r &: Lv, i: int): bool:
                 ret false
             end
         end
-        sc := lv_cls(r, g.i_a[i])
+        mut sc := lv_cls(r, g.i_a[i])
+        if lv_idx_data(g, r, g.i_a[i]):
+            sc = LV_VEC
+        end
         if (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) != 0 or lv_cls(r, g.i_b[i]) != LV_ADDR or (sc != LV_VEC and sc != LV_NARROW):
             ret false
         end
@@ -901,7 +917,8 @@ func lv_uses_ok(g &: Ng, r &: Lv): bool:
                     end
                 else c == LV_IDX or v == g.i_res[r.ivp] or v == g.i_res[r.ivn]:
                     idx_use := (op == OP_ADDR and k == 1) or op == OP_SEXT or op == OP_ZEXT or op == OP_TRUNC or ((op == OP_ADD or op == OP_SUB) and lv_cls(r, g.i_res[i]) == LV_IDX)
-                    if not idx_use or lv_cls(r, g.i_res[i]) == LV_VEC:
+                    data_use := lv_idx_data(g, r, v) and ((op == OP_STORE and k == 0) or (g.i_res[i] >= 0 and lv_cls(r, g.i_res[i]) == LV_VEC))
+                    if (not idx_use or lv_cls(r, g.i_res[i]) == LV_VEC) and not data_use:
                         ret false
                     end
                 else c == LV_NARROW:
@@ -1015,9 +1032,30 @@ func lv_bmask(g &: Ng, r &: Lv, ck: int, c: int, vt: int): int:
     ret bv
 end
 
+func lv_lanes(g &: Ng, r &: Lv, ck: int, vt: int): int:
+    each lv in r.lanes_v:
+        if g.v_ty[lv] == vt:
+            ret lv
+        end
+    end
+    i := ins_new(g, OP_VLANES, vt)
+    nv := new_res(g, i)
+    ins_before(g, g.b_last[ck], i)
+    r.lanes_v.push(nv)
+    ret nv
+end
+
 func lv_vget(g &: Ng, r &: Lv, ck: int, v: int, vt: int): int:
     if v >= 0 and v < r.vmap.len() and r.vmap[v] >= 0:
-        ret r.vmap[v]
+        m := r.vmap[v]
+        if not is_vec(g, g.v_ty[m]) and lv_idx_data(g, r, v) and r.vbody >= 0:
+            bc := ins_new(g, OP_VBCAST, vt)
+            g.i_a[bc] = m
+            bv := new_res(g, bc)
+            ins_append(g, r.vbody, bc)
+            ret lv_emit(g, r.vbody, OP_ADD, vt, bv, lv_lanes(g, r, ck, vt))
+        end
+        ret m
     end
     ret lv_bcast(g, r, ck, v, vt)
 end
@@ -1139,6 +1177,7 @@ func lv_transform(g &: Ng, r &: Lv):
     ck := new_blk(g)
     vh := new_blk(g)
     vb := new_blk(g)
+    r.vbody = vb
     rb := new_blk(g)
     ckt := ins_new(g, OP_CBR, T_VOID)
     ins_append(g, ck, ckt)
@@ -1277,7 +1316,7 @@ func lv_transform(g &: Ng, r &: Lv):
                 g.i_a[nst] = r.vmap[g.i_a[g.v_def[sv]]]
                 g.i_f[nst] = IF_W8
             else:
-                g.i_a[nst] = r.vmap[sv]
+                g.i_a[nst] = lv_vget(g, r, ck, sv, lv_vty(g.v_ty[sv], r.lane))
             end
             g.i_b[nst] = r.vmap[g.i_b[i]]
             g.i_c[nst] = g.i_c[i]

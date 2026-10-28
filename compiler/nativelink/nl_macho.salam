@@ -13,7 +13,10 @@ const MO_CONST := 6
 const MO_DATA := 7
 const MO_BSS := 8
 const MO_TCONST := 9
-const MO_COUNT := 10
+const MO_TVARS := 10
+const MO_TDATA := 11
+const MO_TBSS := 12
+const MO_COUNT := 13
 const MO_DROP := 0 - 1
 
 pub struct Mo:
@@ -315,6 +318,15 @@ func mo_class(l &: Nl, s: int): int:
     ty := (fl & (255 as i64)) as int
     if str.StartsWith(nm, "__LD,") or str.StartsWith(nm, "__DWARF,"):
         ret MO_DROP
+    end
+    if ty == 0x11:
+        ret MO_TDATA
+    end
+    if ty == 0x12:
+        ret MO_TBSS
+    end
+    if ty == 0x13:
+        ret MO_TVARS
     end
     if ty == 1 or ty == 12:
         ret MO_BSS
@@ -721,13 +733,16 @@ func mo_layout(l &: Nl, t &: Mo):
     pos = t.dc_end
     t.d_start = pos
     mo_place_class(l, t, MO_DATA, pos)
+    mo_place_class(l, t, MO_TVARS, pos)
+    mo_place_class(l, t, MO_TDATA, pos)
     t.d_fend = pos
     mut mem := pos
     repeat l.s_obj.len() in sb:
-        if t.out_k[sb] == MO_BSS:
+        if t.out_k[sb] == MO_BSS or t.out_k[sb] == MO_TBSS:
             l.s_type[sb] = 8
         end
     end
+    mo_place_class(l, t, MO_TBSS, mem)
     mo_place_class(l, t, MO_BSS, mem)
     if t.com_g.len() == 0:
         repeat l.g_name.len() in gc:
@@ -748,6 +763,22 @@ func mo_layout(l &: Nl, t &: Mo):
     if t.d_end == t.d_start:
         t.d_end = t.d_start + t.page
     end
+end
+
+func mo_tls_lo(t &: Mo): i64:
+    if t.size[MO_TDATA] > (0 as i64):
+        ret t.addr[MO_TDATA]
+    end
+    ret t.addr[MO_TBSS]
+end
+
+func mo_tls_target(l &: Nl, t &: Mo, os: int): bool:
+    g := l.os_glob[os]
+    mut s := l.os_sec[os]
+    if g >= 0:
+        s = l.g_state[g] == SY_DEF ? l.g_sec[g] : 0 - 1
+    end
+    ret s >= 0 and (t.out_k[s] == MO_TDATA or t.out_k[s] == MO_TBSS)
 end
 
 func mo_has(l &: Nl, t &: Mo, k: int): bool:
@@ -864,6 +895,10 @@ func mo_relocs(l &: Nl, t &: Mo, buf: u8*):
             a := l.r_add[r]
             sub := l.r_sub[r]
             gimp := mo_imported(l, os)
+            if rt == 0 and t.out_k[s] == MO_TVARS and mo_tls_target(l, t, os):
+                wr64(buf, f, mo_sym(l, os) + a - mo_tls_lo(t))
+                continue
+            end
             if rt == 0:
                 if sub >= 0:
                     v := mo_sym(l, os) - mo_sym(l, sub) + a
@@ -905,6 +940,25 @@ func mo_relocs(l &: Nl, t &: Mo, buf: u8*):
                 tgt = t.addr[MO_STUBS] + mo_stub_size(l) * (t.stub_of.get(gimp) as i64)
             else:
                 tgt = mo_sym(l, os)
+            end
+            if (l.mach == EM_X86_64 and rt == 9) or (l.mach == EM_AARCH64 and (rt == 8 or rt == 9)):
+                if gimp >= 0:
+                    nl_fail(l, "thread-local variable '" + name_of(l, l.g_name[gimp]) + "' from a dylib is not supported in " + l.o_label[l.s_obj[s]])
+                    ret
+                end
+                if l.mach == EM_X86_64:
+                    if f >= (2 as i64) and buf[f - (2 as i64)] == (0x8b as u8):
+                        buf[f - (2 as i64)] = 0x8d as u8
+                    end
+                else rt == 9:
+                    ins0 := rd32(buf, f)
+                    wr32(buf, f, (0x91000000 as i64) | (((tgt + a) & (0xFFF as i64)) << (10 as i64)) | (ins0 & (0x3FF as i64)))
+                    continue
+                else:
+                    pg8 := (page4k(tgt + a) - page4k(pc)) >> (12 as i64)
+                    ins_set(buf, f, (0x60FFFFE0 as i64), ((pg8 & (3 as i64)) << (29 as i64)) | (((pg8 >> (2 as i64)) & (0x7FFFF as i64)) << (5 as i64)))
+                    continue
+                end
             end
             if l.mach == EM_X86_64:
                 bias := rt == 6 ? 1 : (rt == 7 ? 2 : (rt == 8 ? 4 : 0))
@@ -1222,7 +1276,7 @@ func mo_write(l &: Nl, t &: Mo, buf: u8*, out: str):
     tb_le(h, 2 as i64, 4)
     tb_le(h, 0 as i64, 4)
     tb_le(h, 0 as i64, 4)
-    tb_le(h, 0x00200085 as i64, 4)
+    tb_le(h, (mo_has(l, t, MO_TVARS) ? 0x00A00085 : 0x00200085) as i64, 4)
     tb_le(h, 0 as i64, 4)
     mut ncmd := 0
     mo_seg(h, "__PAGEZERO", 0 as i64, t.base, 0 as i64, 0 as i64, 0, 0, 0)
@@ -1257,11 +1311,20 @@ func mo_write(l &: Nl, t &: Mo, buf: u8*, out: str):
     if mo_has(l, t, MO_CONST):
         mo_sect(h, "__const", "__DATA_CONST", t.addr[MO_CONST], t.size[MO_CONST], t.fpos[MO_CONST], t.align[MO_CONST], 0 as i64, 0, 0)
     end
-    nd := mo_count(l, t, [MO_DATA, MO_BSS])
+    nd := mo_count(l, t, [MO_DATA, MO_TVARS, MO_TDATA, MO_TBSS, MO_BSS])
     mo_seg(h, "__DATA", t.base + t.d_start, t.d_end - t.d_start, t.d_start, t.d_fend - t.d_start, 3, nd, 0)
     ncmd += 1
     if mo_has(l, t, MO_DATA):
         mo_sect(h, "__data", "__DATA", t.addr[MO_DATA], t.size[MO_DATA], t.fpos[MO_DATA], t.align[MO_DATA], 0 as i64, 0, 0)
+    end
+    if mo_has(l, t, MO_TVARS):
+        mo_sect(h, "__thread_vars", "__DATA", t.addr[MO_TVARS], t.size[MO_TVARS], t.fpos[MO_TVARS], t.align[MO_TVARS], 0x13 as i64, 0, 0)
+    end
+    if mo_has(l, t, MO_TDATA):
+        mo_sect(h, "__thread_data", "__DATA", t.addr[MO_TDATA], t.size[MO_TDATA], t.fpos[MO_TDATA], t.align[MO_TDATA], 0x11 as i64, 0, 0)
+    end
+    if mo_has(l, t, MO_TBSS):
+        mo_sect(h, "__thread_bss", "__DATA", t.addr[MO_TBSS], t.size[MO_TBSS], 0 as i64, t.align[MO_TBSS], 0x12 as i64, 0, 0)
     end
     if mo_has(l, t, MO_BSS):
         mo_sect(h, "__bss", "__DATA", t.addr[MO_BSS], t.size[MO_BSS], 0 as i64, t.align[MO_BSS], 1 as i64, 0, 0)
@@ -1458,7 +1521,7 @@ func mo_secno(l &: Nl, t &: Mo, s: int): int:
     end
     k := t.out_k[s]
     mut n := 0
-    each kk in [MO_TEXT, MO_STUBS, MO_CSTR, MO_TCONST, MO_EH, MO_GOT, MO_INIT, MO_CONST, MO_DATA, MO_BSS]:
+    each kk in [MO_TEXT, MO_STUBS, MO_CSTR, MO_TCONST, MO_EH, MO_GOT, MO_INIT, MO_CONST, MO_DATA, MO_TVARS, MO_TDATA, MO_TBSS, MO_BSS]:
         if mo_has(l, t, kk):
             n += 1
             if kk == k:

@@ -143,7 +143,7 @@ for arch in $ARCHES; do
         fi
     done
 
-    for f in crtbeginT.o crtend.o libgcc_eh.a; do
+    for f in crtbeginT.o crtend.o libgcc_eh.a Scrt1.o libc.so; do
         found=$(find "$arch-x" -name "$f" -type f ! -path "*/lib32/*" ! -path "*ilp32*" 2>/dev/null | head -1)
         [ -n "$found" ] && cp "$found" "$SR/$f"
     done

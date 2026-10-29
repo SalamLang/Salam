@@ -54,6 +54,31 @@ func to_operands_ready(g &: Ng, pos &: Vector<int>, b: int, u: int, at: int): bo
     ret true
 end
 
+func to_phi_exits(g &: Ng, a: int, b: int): int:
+    if g.off_phix or g.v_kind[a] != VK_INS:
+        ret 0
+    end
+    d := g.v_def[a]
+    hb := g.i_blk[d]
+    if g.i_op[d] != OP_PHI or hb == b:
+        ret 0
+    end
+    mut n := 0
+    each blk in g.b_rpo:
+        mut i := g.b_first[blk]
+        until i >= 0 and g.i_op[i] == OP_PHI:
+            repeat g.i_pcount[i] in k:
+                pb := g.pool[g.i_ps[i] + 2 * k + 1]
+                if g.pool[g.i_ps[i] + 2 * k] == a and pb != b and (pb == hb or (g.b_npred[pb] == 1 and g.b_pred[g.b_ps[pb]] == hb)):
+                    n += 1
+                end
+            end
+            i = g.i_next[i]
+        end
+    end
+    ret n
+end
+
 func to_number(g &: Ng, pos &: Vector<int>, b: int):
     mut n := 0
     mut i := g.b_first[b]
@@ -70,7 +95,9 @@ func to_block(g &: Ng, b: int, pos &: Vector<int>, later &: Vector<int>): bool:
     mut i := g.b_first[b]
     until i >= 0:
         a := g.i_a[i]
-        if to_tied(g.i_op[i]) and a >= 0 and (g.v_kind[a] == VK_INS or g.v_kind[a] == VK_ARG) and a != g.i_b[i]:
+        op0 := g.i_op[i]
+        three := (op0 == OP_ADD or op0 == OP_SUB or op0 == OP_MUL) and g.i_b[i] >= 0 and g.v_kind[g.i_b[i]] == VK_INT
+        if to_tied(op0) and not three and a >= 0 and (g.v_kind[a] == VK_INS or g.v_kind[a] == VK_ARG) and a != g.i_b[i]:
             later.clear()
             mut seen := 0
             mut ok := true
@@ -87,7 +114,7 @@ func to_block(g &: Ng, b: int, pos &: Vector<int>, later &: Vector<int>): bool:
                 end
                 j = g.i_next[j]
             end
-            if ok and later.len() > 0 and seen == g.v_uses[a]:
+            if ok and later.len() > 0 and seen + to_phi_exits(g, a, b) == g.v_uses[a]:
                 each u in later:
                     keep := g.i_op[u]
                     ins_unlink(g, u)

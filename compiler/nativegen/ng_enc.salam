@@ -1139,6 +1139,177 @@ func peephole_round(g &: Ng, refs &: Vector<int>, lpos &: Vector<int>): bool:
     ret changed
 end
 
+func tf_next(g &: Ng, i: int): int:
+    mut j := i + 1
+    until j < g.mc.op.len() and (g.mc.op[j] == M_NOP or g.mc.op[j] == M_COPY):
+        j += 1
+    end
+    ret j < g.mc.op.len() ? j : 0 - 1
+end
+
+func test_fold(g &: Ng):
+    n := g.mc.op.len()
+    repeat n in i:
+        op := g.mc.op[i]
+        r := g.mc.r0[i]
+        if r < 0 or r >= 16:
+            continue
+        end
+        lea := op == M_LEA and g.mc.sz[i] == 8 and g.mc.mk[i] == MK_BI and g.mc.mb[i] == r and g.mc.mi[i] < 0 and g.mc.md[i] >= (0 - 2147483647 as i64) and g.mc.md[i] <= (2147483647 as i64)
+        alu := (op == M_ALU_RI or op == M_ALU_RR) and g.mc.mk[i] == MK_NONE and (g.mc.cc[i] == ALU_ADD or g.mc.cc[i] == ALU_SUB or g.mc.cc[i] == ALU_AND or g.mc.cc[i] == ALU_OR or g.mc.cc[i] == ALU_XOR)
+        if not lea and not alu:
+            continue
+        end
+        j := tf_next(g, i)
+        if j < 0 or g.mc.op[j] != M_TEST_RR or g.mc.mk[j] != MK_NONE or g.mc.r0[j] != r or g.mc.r1[j] != r:
+            continue
+        end
+        tsz := g.mc.sz[j]
+        if (tsz != 4 and tsz != 8) or (alu and g.mc.sz[i] != tsz):
+            continue
+        end
+        k := tf_next(g, j)
+        if k < 0 or g.mc.op[k] != M_JCC:
+            continue
+        end
+        cc := g.mc.cc[k]
+        logic := alu and g.mc.cc[i] != ALU_ADD and g.mc.cc[i] != ALU_SUB
+        if not logic and cc != X_E and cc != X_NE and cc != X_S and cc != X_NS:
+            continue
+        end
+        if not flags_dead_after(g, k):
+            continue
+        end
+        if lea:
+            g.mc.op[i] = M_ALU_RI
+            g.mc.cc[i] = ALU_ADD
+            g.mc.sz[i] = tsz
+            g.mc.imm[i] = g.mc.md[i]
+            g.mc.mk[i] = MK_NONE
+            g.mc.mb[i] = 0 - 1
+            g.mc.md[i] = 0 as i64
+        end
+        g.mc.op[j] = M_NOP
+    end
+end
+
+func reg_dead_after(g &: Ng, i0: int, r: int, lpos &: Vector<int>, uses &: Vector<int>, defs &: Vector<int>): bool:
+    n := g.mc.op.len()
+    mut work := Vector {} as Vector<int>
+    defer work.free()
+    mut seen := Vector {} as Vector<bool>
+    defer seen.free()
+    repeat g.mc.nlabels:
+        seen.push(false)
+    end
+    work.push(i0 + 1)
+    mut steps := 0
+    until work.len() > 0:
+        mut j := work.pop()
+        mut walking := true
+        until walking:
+            if j < 0 or j >= n or steps > 400:
+                ret false
+            end
+            steps += 1
+            op := g.mc.op[j]
+            if op == M_NOP or op == M_COPY:
+                j += 1
+                continue
+            end
+            if op == M_LABEL:
+                if seen[g.mc.tgt[j]]:
+                    walking = false
+                    continue
+                end
+                seen[g.mc.tgt[j]] = true
+                j += 1
+                continue
+            end
+            mi_regs(g, j, uses, defs)
+            each u in uses:
+                if u == r:
+                    ret false
+                end
+            end
+            if op == M_CALL or op == M_CALLR:
+                if is_caller_saved(g, r):
+                    walking = false
+                    continue
+                end
+                j += 1
+                continue
+            end
+            if op == M_RET or op == M_UD2:
+                walking = false
+                continue
+            end
+            mut killed := false
+            each d in defs:
+                if d == r and g.mc.sz[j] >= 4:
+                    killed = true
+                end
+            end
+            if killed:
+                walking = false
+                continue
+            end
+            if op == M_JMP:
+                t := g.mc.tgt[j]
+                if t < 0 or t >= lpos.len() or lpos[t] < 0:
+                    ret false
+                end
+                j = lpos[t]
+                continue
+            end
+            if op == M_JCC:
+                t2 := g.mc.tgt[j]
+                if t2 < 0 or t2 >= lpos.len() or lpos[t2] < 0:
+                    ret false
+                end
+                work.push(lpos[t2])
+            end
+            j += 1
+        end
+    end
+    ret true
+end
+
+func load_test_fold(g &: Ng):
+    mut refs := Vector {} as Vector<int>
+    mut lpos := Vector {} as Vector<int>
+    mut uses := Vector {} as Vector<int>
+    mut defs := Vector {} as Vector<int>
+    jump_refs(g, refs, lpos)
+    n := g.mc.op.len()
+    repeat n in i:
+        if g.mc.op[i] != M_LD or g.mc.mk[i] == MK_NONE or g.mc.mk[i] == MK_GOT:
+            continue
+        end
+        r := g.mc.r0[i]
+        sz := g.mc.sz[i]
+        if r < 0 or r >= 16 or (sz != 4 and sz != 8) or g.mc.mb[i] == r or g.mc.mi[i] == r:
+            continue
+        end
+        j := tf_next(g, i)
+        if j < 0 or g.mc.op[j] != M_TEST_RR or g.mc.mk[j] != MK_NONE or g.mc.r0[j] != r or g.mc.r1[j] != r or g.mc.sz[j] != sz:
+            continue
+        end
+        if not reg_dead_after(g, j, r, lpos, uses, defs):
+            continue
+        end
+        g.mc.op[i] = M_ALU_MI
+        g.mc.cc[i] = ALU_CMP
+        g.mc.imm[i] = 0 as i64
+        g.mc.r0[i] = 0 - 1
+        g.mc.op[j] = M_NOP
+    end
+    refs.free()
+    lpos.free()
+    uses.free()
+    defs.free()
+end
+
 func flags_dead_after(g &: Ng, i: int): bool:
     n := g.mc.op.len()
     mut j := i + 1
@@ -1402,6 +1573,7 @@ func rotate_head(g &: Ng, li: int, body &: Vector<int>, jc &: int, fy &: int): b
     n := g.mc.op.len()
     body.clear()
     mut j := li + 1
+    mut mid := 0
     until j < n:
         op := g.mc.op[j]
         if op == M_NOP or op == M_COPY:
@@ -1409,9 +1581,22 @@ func rotate_head(g &: Ng, li: int, body &: Vector<int>, jc &: int, fy &: int): b
             continue
         end
         if op == M_JCC:
-            break
+            if g.off_mexit or mid > 0:
+                break
+            end
+            mut k2 := j + 1
+            until k2 < n and (g.mc.op[k2] == M_NOP or g.mc.op[k2] == M_COPY):
+                k2 += 1
+            end
+            if k2 >= n or g.mc.op[k2] == M_LABEL or g.mc.op[k2] == M_JMP or g.mc.op[k2] == M_JCC:
+                break
+            end
+            mid += 1
+            body.push(j)
+            j += 1
+            continue
         end
-        if not dup_ok(op) or body.len() >= 4:
+        if not dup_ok(op) or body.len() >= (g.off_mexit ? 4 : 10):
             ret false
         end
         body.push(j)
@@ -1650,6 +1835,12 @@ func encode_function(g &: Ng):
         xor_zero(g)
         if not g.off_dtest:
             dup_test(g)
+            if not g.off_tfold:
+                test_fold(g)
+            end
+            if not g.off_ldcmp:
+                load_test_fold(g)
+            end
         end
     end
     if g.arch == NG_ARCH_X86:

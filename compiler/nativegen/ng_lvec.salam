@@ -26,6 +26,7 @@ pub struct Lv:
     pub rsum64: int = 0 - 1
     pub hpool: int = 0 - 1
     pub hp64: int = 0 - 1
+    pub rinv: Vector<int> = Vector {}
     pub cmp: int = 0 - 1
     pub lim: int = 0 - 1
     pub sle: bool = false
@@ -1545,6 +1546,7 @@ func lv_transform(g &: Ng, r &: Lv):
     ins_append(g, vh, viv_phi)
     r.vhead = vh
     r.vstart = start
+    r.rinv.clear()
     mut vaccs := Vector {} as Vector<int>
     mut vpools := Vector {} as Vector<int>
     repeat r.reds.len() in rk:
@@ -1565,6 +1567,7 @@ func lv_transform(g &: Ng, r &: Lv):
         av := new_res(g, ap)
         ins_append(g, vh, ap)
         vaccs.push(av)
+        r.rinv.push(0 - 1)
         r.vmap[g.i_res[rp]] = av
     end
     viv64 := lv_sext_app(g, vh, viv)
@@ -1703,7 +1706,19 @@ func lv_transform(g &: Ng, r &: Lv):
                 ins_append(g, vb, vs2)
                 continue
             end
-            x := g.i_a[i] == pv ? g.i_b[i] : g.i_a[i]
+            mut x := g.i_a[i] == pv ? g.i_b[i] : g.i_a[i]
+            if not g.off_redinv and not is_flt(g, g.i_ty[i]) and x >= 0 and g.v_kind[x] == VK_INS and g.v_uses[x] == 1 and lv_in(g, r, x):
+                xd := g.v_def[x]
+                if g.i_op[xd] == OP_ADD and g.i_ty[xd] == g.i_ty[i]:
+                    if lv_inv(g, r, g.i_b[xd]) and not lv_inv(g, r, g.i_a[xd]):
+                        r.rinv[red_i] = g.i_b[xd]
+                        x = g.i_a[xd]
+                    else lv_inv(g, r, g.i_a[xd]) and not lv_inv(g, r, g.i_b[xd]):
+                        r.rinv[red_i] = g.i_a[xd]
+                        x = g.i_b[xd]
+                    end
+                end
+            end
             r.vmap[res] = lv_emit(g, vb, is_flt(g, g.i_ty[i]) ? OP_FADD : OP_ADD, vt2, vaccs[red_i], lv_vget(g, r, ck, x, vt2))
             continue
         end
@@ -1737,6 +1752,14 @@ func lv_transform(g &: Ng, r &: Lv):
         if (op == OP_SHL or op == OP_LSHR or op == OP_ASHR) and (not is_cint(g, g.i_b[i]) or (op == OP_ASHR and g.i_ty[i] == T_I64)):
             vts := lv_vty(g.i_ty[i], r.lane)
             xv := lv_vget(g, r, ck, g.i_a[i], vts)
+            if not g.off_vsign and op == OP_ASHR and g.i_ty[i] == T_I64 and is_cint(g, g.i_b[i]) and (g.v_i[g.i_b[i]] & (63 as i64)) == (63 as i64):
+                hi := lv_emit(g, vb, OP_VREV, T_V4I32, xv, 0 - 1)
+                g.i_x[g.v_def[hi]] = 0xF5
+                sg := lv_emit(g, vb, OP_ASHR, T_V4I32, hi, const_int(g, T_I32, 31 as i64))
+                r.vmap[res] = lv_emit(g, vb, OP_BITCAST, vts, sg, 0 - 1)
+                g.i_x[g.v_def[r.vmap[res]]] = T_V4I32
+                continue
+            end
             bits := g.i_ty[i] == T_I64 ? 63 : 31
             mut cm := 0 - 1
             if is_cint(g, g.i_b[i]):
@@ -1835,7 +1858,18 @@ func lv_transform(g &: Ng, r &: Lv):
             acc0.push(hv)
         else:
             init := phi_val_for(g, rp3, pre)
-            acc0.push(lv_emit(g, rb, is_flt(g, g.i_ty[rp3]) ? OP_FADD : OP_ADD, g.i_ty[rp3], init, hv))
+            mut fin := lv_emit(g, rb, is_flt(g, g.i_ty[rp3]) ? OP_FADD : OP_ADD, g.i_ty[rp3], init, hv)
+            if r.rinv[k3] >= 0:
+                rt := g.i_ty[rp3]
+                mut cn := lv_emit(g, rb, OP_SUB, ivt, viv, r.vstart)
+                if ivt != rt:
+                    cn = lv_emit(g, rb, rt == T_I64 ? OP_SEXT : OP_TRUNC, rt, cn, 0 - 1)
+                    g.i_x[g.v_def[cn]] = ivt
+                end
+                ml := lv_emit(g, rb, OP_MUL, rt, cn, lv_hm(r, r.rinv[k3]))
+                fin = lv_emit(g, rb, OP_ADD, rt, fin, ml)
+            end
+            acc0.push(fin)
         end
     end
     mut skip := 0 - 1

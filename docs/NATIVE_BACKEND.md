@@ -494,6 +494,9 @@ then goes through:
    write the lanes just below the address and reverse them with `pshufd`
    (4- and 8-byte elements). `a[lo]` and `a[hi]` on the same buffer need no
    runtime check, since the loop condition keeps the two ranges apart.
+   An integer sum whose addend is `y + c` with `c` the same on every
+   iteration accumulates `y` and adds `c` times the element count once after
+   the vector loop (`flac`'s Rice cost adds `1 + param` per residual).
    The descending index gets its own 64-bit counter in the vector loop, so
    the swap loop is two loads, two shuffles, two stores and the two counters. A 32-bit multiply, which SSE2 has no
    instruction for, is two `pmuludq` (the even lanes, then the odd ones
@@ -505,7 +508,8 @@ then goes through:
    shifts by a constant or a loop-invariant count (the count is masked like
    a scalar shift's and broadcast once before the loop; a 64-bit arithmetic
    shift, which SSE2 lacks, is a logical shift plus `xor` and `sub` with
-   `sign >> count`), the four float operations, compares of any sign
+   `sign >> count`, and a shift by 63 is `pshufd` of the high halves plus
+   `psrad 31`), the four float operations, compares of any sign
    (unsigned 32-bit ones flip the sign bit first; 64-bit ones other than
    equality only on AArch64, since SSE2 needs a long sequence for them)
    and selects (on a per-lane or loop-invariant condition) are supported,
@@ -773,7 +777,7 @@ ret end` at the top of a recursive AST walk) tests that parameter before
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing, and a comma-separated list dumps several functions.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,loopinl,cpelim,tord,vrev,cdown,tfold,mexit,sqself,zins,ndiv,niv,cmp64,adc64,rvc`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,loopinl,cpelim,tord,vrev,cdown,tfold,mexit,sqself,vsign,redinv,zins,ndiv,niv,cmp64,adc64,rvc`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator.

@@ -493,7 +493,12 @@ then goes through:
    runs while `i < (lo0 + hi0 + 1) / 2`, and its loads and stores read and
    write the lanes just below the address and reverse them with `pshufd`
    (4- and 8-byte elements). `a[lo]` and `a[hi]` on the same buffer need no
-   runtime check, since the loop condition keeps the two ranges apart. A 32-bit multiply, which SSE2 has no
+   runtime check, since the loop condition keeps the two ranges apart.
+   An integer sum whose addend is `y + c` with `c` the same on every
+   iteration accumulates `y` and adds `c` times the element count once after
+   the vector loop (`flac`'s Rice cost adds `1 + param` per residual).
+   The descending index gets its own 64-bit counter in the vector loop, so
+   the swap loop is two loads, two shuffles, two stores and the two counters. A 32-bit multiply, which SSE2 has no
    instruction for, is two `pmuludq` (the even lanes, then the odd ones
    shifted down) joined by `pshufd` and `punpckldq`; on AArch64 it is one
    `mul .4s`. A compare that only feeds selects is
@@ -503,7 +508,8 @@ then goes through:
    shifts by a constant or a loop-invariant count (the count is masked like
    a scalar shift's and broadcast once before the loop; a 64-bit arithmetic
    shift, which SSE2 lacks, is a logical shift plus `xor` and `sub` with
-   `sign >> count`), the four float operations, compares of any sign
+   `sign >> count`, and a shift by 63 is `pshufd` of the high halves plus
+   `psrad 31`), the four float operations, compares of any sign
    (unsigned 32-bit ones flip the sign bit first; 64-bit ones other than
    equality only on AArch64, since SSE2 needs a long sequence for them)
    and selects (on a per-lane or loop-invariant condition) are supported,
@@ -660,6 +666,20 @@ next instruction that reads it. The same walk on x86-64 tracks which 64-bit
 registers hold equal values after a copy and drops a copy whose registers
 are already equal, such as the second half of `mov r8, rax` followed by
 `mov rax, r8` (one instruction per divisor in `prime_factorization`).
+A loop whose counter only feeds its own `+ 1` and its `< N` exit test, with
+a constant start and bound, counts down to zero instead, and on x86 a
+`test r, r` right after an `add`, `sub` or `lea` of the same register (or a
+bitwise operation) is dropped when the branch after it only reads the zero
+or sign flag, the `lea` becoming an `add`. `hello_print`'s loop ends in
+`sub ebx, 1` and `jne`. A load into a register that is only tested for zero
+or sign becomes `cmp [mem], 0` when every path from there writes the
+register again before reading it (a bounded walk over both branch targets),
+like the print buffer's `is a terminal` flag. A select between `x` and `x + 1` on an
+unsigned or `>=`/`<=` float compare is `adc r, 0` or `sbb r, -1` on the carry
+flag (`monte_carlo_pi`'s `count += hit`), the way LLVM writes it; NaN leaves
+the carry set, so the float form stays correct for unordered inputs. A multiply of a value by itself squares the
+destination register (`imul r, r` after the copy), so the source dies at the
+copy and the pair coalesces (`pow_mod`'s squaring chain).
 Before instruction selection on x86, when a two-address operation (`sub`,
 `divsd` and the like overwrite their first operand) reads a value that has
 one or two later pure uses in the same block, and those uses only need
@@ -669,7 +689,10 @@ the operation and needs no copy. `sum + sign / den` followed by
 11% fewer instructions). A later use that is itself tied to the same value
 stays put unless it is commutative with an operand that dies there, or
 takes a constant (`lea` and `imul` with an immediate need no tie), so DCT
-butterflies keep their order.
+butterflies keep their order. A loop value that also feeds the phi
+leaving the loop still counts as dying there, since that phi reads the
+header's next definition, and an add, subtract or multiply by a constant is
+never the tied operation (it is three-address already).
 When the hints of a value are taken, the allocator tries the register of
 any value it is copied to or from that already has one, so phi webs and the
 copies around them tend to land in one register. A `select` whose result
@@ -682,7 +705,9 @@ Copy-related values that both spill share one stack slot. When vector
 registers run out, the allocator evicts the value whose next use is
 farthest away, so a kernel with sixteen accumulators keeps most of them in
 registers instead of spilling each one as a temporary arrives. The encoder rotates small loop headers into the latch so
-loops are bottom-tested, copies a short loop test into a branch arm that
+loops are bottom-tested (a header of up to ten instructions with one early
+exit, like `mandelbrot`'s `zx * zx + zy * zy <= 4.0 and iter < max_iter`,
+is copied whole), copies a short loop test into a branch arm that
 would otherwise jump to it, shares one epilogue between a function's returns
 on Linux, zeroes registers with `xor` where the flags are dead (a following `div` or `imul` overwrites them anyway), drops a `test r, r` that repeats the one before a conditional jump, and aligns loop heads to 16 bytes. An innermost loop
 that fits in 64 bytes is placed so it does not straddle a cache line;
@@ -761,7 +786,7 @@ ret end` at the top of a recursive AST walk) tests that parameter before
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing, and a comma-separated list dumps several functions.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,loopinl,cpelim,tord,vrev,zins,ndiv,niv,cmp64,adc64,rvc`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,loopinl,cpelim,tord,vrev,cdown,tfold,mexit,sqself,vsign,redinv,ldcmp,phix,selinc,zins,ndiv,niv,cmp64,adc64,rvc`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator.

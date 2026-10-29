@@ -493,7 +493,9 @@ then goes through:
    runs while `i < (lo0 + hi0 + 1) / 2`, and its loads and stores read and
    write the lanes just below the address and reverse them with `pshufd`
    (4- and 8-byte elements). `a[lo]` and `a[hi]` on the same buffer need no
-   runtime check, since the loop condition keeps the two ranges apart. A 32-bit multiply, which SSE2 has no
+   runtime check, since the loop condition keeps the two ranges apart.
+   The descending index gets its own 64-bit counter in the vector loop, so
+   the swap loop is two loads, two shuffles, two stores and the two counters. A 32-bit multiply, which SSE2 has no
    instruction for, is two `pmuludq` (the even lanes, then the odd ones
    shifted down) joined by `pshufd` and `punpckldq`; on AArch64 it is one
    `mul .4s`. A compare that only feeds selects is
@@ -660,6 +662,12 @@ next instruction that reads it. The same walk on x86-64 tracks which 64-bit
 registers hold equal values after a copy and drops a copy whose registers
 are already equal, such as the second half of `mov r8, rax` followed by
 `mov rax, r8` (one instruction per divisor in `prime_factorization`).
+A loop whose counter only feeds its own `+ 1` and its `< N` exit test, with
+a constant start and bound, counts down to zero instead, and on x86 a
+`test r, r` right after an `add`, `sub` or `lea` of the same register (or a
+bitwise operation) is dropped when the branch after it only reads the zero
+or sign flag, the `lea` becoming an `add`. `hello_print`'s loop ends in
+`sub ebx, 1` and `jne`.
 Before instruction selection on x86, when a two-address operation (`sub`,
 `divsd` and the like overwrite their first operand) reads a value that has
 one or two later pure uses in the same block, and those uses only need
@@ -761,7 +769,7 @@ ret end` at the top of a recursive AST walk) tests that parameter before
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing, and a comma-separated list dumps several functions.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,loopinl,cpelim,tord,vrev,zins,ndiv,niv,cmp64,adc64,rvc`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,loopinl,cpelim,tord,vrev,cdown,tfold,zins,ndiv,niv,cmp64,adc64,rvc`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator.

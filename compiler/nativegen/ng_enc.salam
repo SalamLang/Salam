@@ -1139,6 +1139,60 @@ func peephole_round(g &: Ng, refs &: Vector<int>, lpos &: Vector<int>): bool:
     ret changed
 end
 
+func tf_next(g &: Ng, i: int): int:
+    mut j := i + 1
+    until j < g.mc.op.len() and (g.mc.op[j] == M_NOP or g.mc.op[j] == M_COPY):
+        j += 1
+    end
+    ret j < g.mc.op.len() ? j : 0 - 1
+end
+
+func test_fold(g &: Ng):
+    n := g.mc.op.len()
+    repeat n in i:
+        op := g.mc.op[i]
+        r := g.mc.r0[i]
+        if r < 0 or r >= 16:
+            continue
+        end
+        lea := op == M_LEA and g.mc.sz[i] == 8 and g.mc.mk[i] == MK_BI and g.mc.mb[i] == r and g.mc.mi[i] < 0 and g.mc.md[i] >= (0 - 2147483647 as i64) and g.mc.md[i] <= (2147483647 as i64)
+        alu := (op == M_ALU_RI or op == M_ALU_RR) and g.mc.mk[i] == MK_NONE and (g.mc.cc[i] == ALU_ADD or g.mc.cc[i] == ALU_SUB or g.mc.cc[i] == ALU_AND or g.mc.cc[i] == ALU_OR or g.mc.cc[i] == ALU_XOR)
+        if not lea and not alu:
+            continue
+        end
+        j := tf_next(g, i)
+        if j < 0 or g.mc.op[j] != M_TEST_RR or g.mc.mk[j] != MK_NONE or g.mc.r0[j] != r or g.mc.r1[j] != r:
+            continue
+        end
+        tsz := g.mc.sz[j]
+        if (tsz != 4 and tsz != 8) or (alu and g.mc.sz[i] != tsz):
+            continue
+        end
+        k := tf_next(g, j)
+        if k < 0 or g.mc.op[k] != M_JCC:
+            continue
+        end
+        cc := g.mc.cc[k]
+        logic := alu and g.mc.cc[i] != ALU_ADD and g.mc.cc[i] != ALU_SUB
+        if not logic and cc != X_E and cc != X_NE and cc != X_S and cc != X_NS:
+            continue
+        end
+        if not flags_dead_after(g, k):
+            continue
+        end
+        if lea:
+            g.mc.op[i] = M_ALU_RI
+            g.mc.cc[i] = ALU_ADD
+            g.mc.sz[i] = tsz
+            g.mc.imm[i] = g.mc.md[i]
+            g.mc.mk[i] = MK_NONE
+            g.mc.mb[i] = 0 - 1
+            g.mc.md[i] = 0 as i64
+        end
+        g.mc.op[j] = M_NOP
+    end
+end
+
 func flags_dead_after(g &: Ng, i: int): bool:
     n := g.mc.op.len()
     mut j := i + 1
@@ -1650,6 +1704,9 @@ func encode_function(g &: Ng):
         xor_zero(g)
         if not g.off_dtest:
             dup_test(g)
+            if not g.off_tfold:
+                test_fold(g)
+            end
         end
     end
     if g.arch == NG_ARCH_X86:

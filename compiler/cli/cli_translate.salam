@@ -55,6 +55,7 @@ mut tr_pkg_root := ""
 mut tr_pkg_en := Vector {} as Vector<str>
 mut tr_pkg_fa := Vector {} as Vector<str>
 mut tr_pkg_dir := Vector {} as Vector<str>
+mut tr_core_idx := 0 - 1
 
 struct TrCtx:
     pub target: int = 0
@@ -455,11 +456,15 @@ end
 func tr_resolve_member(std_root: str, targetpack: int, toks: tok.TokenStream, i: int, n: int, from_fa: bool, member_pkg: int, var_pkg: int, alias_pkg: Vector<int>, declared: bool, best_j &: int): str:
     best_j = i
     if member_pkg >= 0:
-        ret tr_member_words(std_root, tr_pkg_dir.get(member_pkg), toks, i, n, from_fa, false, best_j)
+        top := tr_member_words(std_root, tr_pkg_dir.get(member_pkg), toks, i, n, from_fa, false, best_j)
+        if str.Len(top) > 0 or member_pkg != tr_core_idx:
+            ret top
+        end
+        ret tr_member_words(std_root, tr_pkg_dir.get(member_pkg), toks, i, n, from_fa, true, best_j)
     end
     if var_pkg >= 0:
         found := tr_member_words(std_root, tr_pkg_dir.get(var_pkg), toks, i, n, from_fa, true, best_j)
-        if str.Len(found) > 0 and tr_next_is_call(toks, best_j, n):
+        if str.Len(found) > 0 and (tr_next_is_call(toks, best_j, n) or var_pkg == tr_core_idx):
             ret found
         end
     end
@@ -478,6 +483,20 @@ func tr_resolve_member(std_root: str, targetpack: int, toks: tok.TokenStream, i:
                 ret found
             end
         end
+    end
+    best_j = i
+    ret ""
+end
+
+func tr_prelude_word(std_root: str, toks: tok.TokenStream, i: int, n: int, from_fa: bool, best_j &: int): str:
+    best_j = i
+    if tr_core_idx < 0:
+        ret ""
+    end
+    found := tr_member_words(std_root, tr_pkg_dir.get(tr_core_idx), toks, i, n, from_fa, false, best_j)
+    en := from_fa ? found : tok.StreamAt(toks, i).lexeme
+    if str.Len(found) > 0 and (str.Equals(en, "Error") or str.Equals(en, "ErrorKind") or str.Equals(en, "Throws")):
+        ret found
     end
     best_j = i
     ret ""
@@ -706,6 +725,26 @@ func tr_var_packages(toks: tok.TokenStream, n: int, aliases: Vector<str>, alias_
     end
 end
 
+func tr_catch_vars(std_root: str, toks: tok.TokenStream, n: int, from_fa: bool, var_names &: Vector<str>, var_pkgs &: Vector<int>):
+    if tr_core_idx < 0:
+        ret
+    end
+    repeat n in i:
+        k := tok.StreamAt(toks, i).kind
+        if k == tok.TK_KW_CATCH and i + 2 < n and tok.StreamAt(toks, i + 1).kind == tok.TK_IDENT and tok.StreamAt(toks, i + 2).kind == tok.TK_COLON:
+            var_names.push(tok.StreamAt(toks, i + 1).lexeme)
+            var_pkgs.push(tr_core_idx)
+        else k == tok.TK_IDENT and i + 2 < n and tok.StreamAt(toks, i + 1).kind == tok.TK_COLON_ASSIGN and tok.StreamAt(toks, i + 2).kind == tok.TK_IDENT:
+            rhs := tok.StreamAt(toks, i + 2).lexeme
+            mut bj := i + 2
+            if tr_var_package(var_names, var_pkgs, rhs) == tr_core_idx or str.Len(tr_prelude_word(std_root, toks, i + 2, n, from_fa, bj)) > 0:
+                var_names.push(tok.StreamAt(toks, i).lexeme)
+                var_pkgs.push(tr_core_idx)
+            end
+        end
+    end
+end
+
 func tr_var_package(var_names: Vector<str>, var_pkgs: Vector<int>, name: str): int:
     mut found := 0 - 1
     repeat var_names.len() in v:
@@ -865,13 +904,22 @@ func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_root: s
         aliases.push(tr_last_seg(ip))
         alias_pkg.push(tr_pkg_find(std_root, ip, from_fa))
     end
+    tr_core_idx = tr_pkg_find(std_root, from_fa ? "هسته" : "core", from_fa)
+    if tr_core_idx >= 0:
+        aliases.push("")
+        alias_pkg.push(tr_core_idx)
+    end
     mut var_names := Vector {} as Vector<str>
     defer var_names.free()
     mut var_pkgs := Vector {} as Vector<int>
     defer var_pkgs.free()
     tr_var_packages(toks, n, aliases, alias_pkg, var_names, var_pkgs)
+    tr_catch_vars(std_root, toks, n, from_fa, var_names, var_pkgs)
     mut prev_ident := ""
     mut dot_var := ""
+    mut brace_depth := 0
+    mut core_lit_level := 0 - 1
+    mut core_lit_next := false
     mut gaps := Vector {} as Vector<int>
     defer gaps.free()
     tr_compare_gaps(srcpack, sfile, gaps)
@@ -945,6 +993,16 @@ func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_root: s
             i = j
             idx := tr_pkg_find(std_root, imp_path, from_fa)
             lexeme = idx >= 0 ? tr_pkg_target_alias(idx, targetpack) : str.Substr(text, bi, ei - bi)
+        else t.kind == tok.TK_IDENT and core_lit_level >= 0 and brace_depth == core_lit_level and (prev_kind == tok.TK_LBRACE or prev_kind == tok.TK_COMMA) and str.Len(tr_member_words(std_root, tr_pkg_dir.get(tr_core_idx), toks, i, n, from_fa, true, kw_j)) > 0 and tr_next_kind(toks, kw_j, n) == tok.TK_ASSIGN:
+            lexeme = tr_member_words(std_root, tr_pkg_dir.get(tr_core_idx), toks, i, n, from_fa, true, kw_j)
+            ei = tok.StreamAt(toks, kw_j).end_index as int
+            i = kw_j
+        else t.kind == tok.TK_IDENT and prev_kind != tok.TK_DOT and not in_import and not tr_has(names, t.lexeme) and str.Len(tr_prelude_word(std_root, toks, i, n, from_fa, kw_j)) > 0:
+            lexeme = tr_prelude_word(std_root, toks, i, n, from_fa, kw_j)
+            ei = tok.StreamAt(toks, kw_j).end_index as int
+            i = kw_j
+            pending_recv = tr_core_idx
+            core_lit_next = tr_next_kind(toks, kw_j, n) == tok.TK_LBRACE
         else t.kind == tok.TK_IDENT and recv_a >= 0 and alias_pkg.get(recv_a) >= 0:
             last := i + recv_count - 1
             ei = tok.StreamAt(toks, last).end_index as int
@@ -1029,6 +1087,18 @@ func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_root: s
             imp_path = ""
         else t.kind == tok.TK_STMT_END:
             in_import = false
+        end
+        if t.kind == tok.TK_LBRACE:
+            brace_depth += 1
+            if core_lit_next:
+                core_lit_level = brace_depth
+                core_lit_next = false
+            end
+        else t.kind == tok.TK_RBRACE:
+            if brace_depth == core_lit_level:
+                core_lit_level = 0 - 1
+            end
+            brace_depth -= 1
         end
         if t.kind == tok.TK_KW_TYPE:
             alias_rhs = true

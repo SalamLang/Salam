@@ -107,7 +107,13 @@ export type AdminSession = {
   current: boolean;
   user: { id: number; name: string; email: string };
 };
-export type PlatformId = "windows" | "macos" | "linux" | "other" | "telegram" | "unknown";
+export type PlatformId =
+  | "windows"
+  | "macos"
+  | "linux"
+  | "other"
+  | "telegram"
+  | "unknown";
 export type AdminPlatforms = {
   days: number;
   total: number;
@@ -572,8 +578,13 @@ export function setClientVersion(v: string) {
 
 let clientPlatform = { os: "", version: "", arch: "" };
 export function setClientPlatform(os: string, version: string, arch: string) {
-  const plain = (v: string, max: number) => (/^[0-9A-Za-z.+_() -]+$/.test(v) && v.length <= max ? v : "");
-  clientPlatform = { os: ["windows", "macos", "linux", "other"].includes(os) ? os : "", version: plain(version, 64), arch: plain(arch, 16) };
+  const plain = (v: string, max: number) =>
+    /^[0-9A-Za-z.+_() -]+$/.test(v) && v.length <= max ? v : "";
+  clientPlatform = {
+    os: ["windows", "macos", "linux", "other"].includes(os) ? os : "",
+    version: plain(version, 64),
+    arch: plain(arch, 16),
+  };
 }
 
 export function handleUnauthorized(fn: () => void) {
@@ -591,7 +602,8 @@ async function call<T>(
   };
   if (clientVersion) headers["X-Salam-Version"] = clientVersion;
   if (clientPlatform.os) headers["X-Salam-OS"] = clientPlatform.os;
-  if (clientPlatform.version) headers["X-Salam-OS-Version"] = clientPlatform.version;
+  if (clientPlatform.version)
+    headers["X-Salam-OS-Version"] = clientPlatform.version;
   if (clientPlatform.arch) headers["X-Salam-Arch"] = clientPlatform.arch;
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
@@ -816,7 +828,8 @@ export const api = {
       "GET",
       `/admin/sessions?${new URLSearchParams({ ...(q.user ? { user: String(q.user) } : {}), ...(q.client ? { client: q.client } : {}), offset: String(q.offset ?? 0) })}`,
     ),
-  adminPlatforms: (days: number) => call<AdminPlatforms>("GET", `/admin/platforms?days=${days}`),
+  adminPlatforms: (days: number) =>
+    call<AdminPlatforms>("GET", `/admin/platforms?days=${days}`),
   adminGuests: (offset: number) =>
     call<{ guests: AdminGuest[]; total: number }>(
       "GET",

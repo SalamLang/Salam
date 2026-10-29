@@ -1,9 +1,9 @@
-// Salam Programming Language (2024-2026) - packages/opencv native shim
+// Salam Programming Language (2024-2026) - std/opencv native shim
 //
 // A flat, versioned extern "C" ABI bridging Salam's FFI (which can only
 // bind plain C symbols - see SKILL.md section 8) to OpenCV's C++ API
 // (which has had no stable C ABI since OpenCV 4). This header is the single
-// source of truth for that ABI; packages/opencv/opencv.salam's `extern:` block
+// source of truth for that ABI; std/opencv/opencv.salam's `extern:` block
 // must match it function-for-function. See BUILD.md for how to compile
 // this into a library and link it from Salam.
 //

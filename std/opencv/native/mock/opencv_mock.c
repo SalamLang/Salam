@@ -1,9 +1,9 @@
-/* Salam Programming Language (2024-2026) - packages/opencv TEST-ONLY mock shim
+/* Salam Programming Language (2024-2026) - std/opencv TEST-ONLY mock shim
  *
  * This is NOT OpenCV. It is a small, deterministic, dependency-free
  * stand-in for native/opencv_shim.cpp's ABI (opencv_shim.hpp), written in
  * plain C so it builds anywhere with no OpenCV install - its only purpose
- * is to let packages/opencv's *Salam-side* code (linking, memory ownership,
+ * is to let std/opencv's *Salam-side* code (linking, memory ownership,
  * struct plumbing, pixel math at the FFI boundary) be exercised and
  * regression-tested without requiring real OpenCV on every dev machine or
  * CI runner. It implements real, correct logic for the "core" operations

@@ -1,4 +1,4 @@
-// Salam Programming Language (2024-2026) - packages/opencv native shim
+// Salam Programming Language (2024-2026) - std/opencv native shim
 //
 // Implements the ABI declared in opencv_shim.hpp against real OpenCV 4.x.
 // See that header for the ownership/channel-order/error-handling contract

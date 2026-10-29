@@ -466,6 +466,15 @@ then goes through:
    quotient and remainder of the same value share the bias; the SHA-256
    rotations in `std/crypto` are built from such pairs. A counter bounded by a sign-extended 32-bit length is known to fit
    in 32 bits, so `sext(trunc(i))` on the widened counter folds back to `i`.
+   Beyond counters, a web of 32-bit values joined by phis, selects and `nsw`
+   adds, subtracts and multiplies that ends in sign extensions for addressing
+   is computed in 64 bits instead (no signed overflow means the wide result
+   is the extension of the narrow one): values entering the web are extended
+   once where they are defined, constants are re-emitted wide, a compare
+   against a 32-bit value outside the web reads the low half, and the
+   extensions disappear. The web is rewritten only when the extensions it
+   removes outweigh the ones it adds, each weighted by loop depth. `heap_sort`'s
+   `largest`, `2 * i + 1` and `2 * i + 2` lose all their `movsxd`.
    Integer sum loops over an array (`total += v[k]`) get an SSE2 `paddq` or
    `paddd` loop with two accumulators followed by the scalar loop for the
    leftover elements, and a
@@ -752,7 +761,9 @@ ret end` at the top of a recursive AST walk) tests that parameter before
   `i16` and `i64`, clamped `f64` code, calls with eight arguments and a
   struct passed by reference, string building, slicing and UTF-8 walks,
   generic functions and a generic struct over several element types, and
-  lambdas with captures called directly, from a Vector and through `dyn`)
+  lambdas with captures called directly, from a Vector and through `dyn`,
+  and workers on spawned threads that add into a shared total under a
+  `sync` mutex, so the result does not depend on scheduling)
   that are well defined by construction (values are kept small with a prime
   modulus, divisors and shift counts are offset or masked, indices are
   wrapped into range), builds each with the reference backend and the native
@@ -786,7 +797,7 @@ ret end` at the top of a recursive AST walk) tests that parameter before
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing, and a comma-separated list dumps several functions.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,loopinl,cpelim,tord,vrev,cdown,tfold,mexit,sqself,vsign,redinv,ldcmp,phix,selinc,zins,ndiv,niv,cmp64,adc64,rvc`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,loopinl,cpelim,tord,vrev,cdown,tfold,mexit,sqself,vsign,redinv,ldcmp,phix,selinc,wweb,wwdep,wwtr,zins,ndiv,niv,cmp64,adc64,rvc`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator.

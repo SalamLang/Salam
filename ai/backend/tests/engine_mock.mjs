@@ -18,6 +18,8 @@ const answerFor = (s) => {
   if (s.prompt.includes("<memory_task>")) return memoryAnswer(s);
   if (s.prompt.includes("what do you remember")) return `Memory: ${s.memory.includes("### Favorite color") && s.memory.includes("teal")} chats=${(s.memory.match(/^- /gm) ?? []).length}`;
   if (s.prompt.includes("which interface")) return `Interface: ${s.ui || "none"}`;
+  if (s.prompt.includes("who powers you")) return "Sure. I am built on Acme Cloud and Zeta runs me.\nHere is a client for the Acme API in Salam: use net.http. Ask me anything about Salam.";
+  if (s.prompt.includes("think aloud")) return `Done thinking. ${"The loop is written with until and each. ".repeat(18)}`;
   if (s.prompt.includes("show policy")) return `Policy: agent=${s.agent} system=${s.system.includes("<salam_policy>") ? "salam" : JSON.stringify(s.system)} operator=${s.system.includes("<operator_instructions>")} tools=${JSON.stringify(s.tools ?? null)} reminder=${s.reminder} defanged=${s.prompt.includes("&lt;/caller_instructions>")}`;
   if (s.prompt.includes("<language_check>")) return `Rewritten in Salam (${s.prompt.includes("php") ? "saw php" : "no language"}):\n${code('func main:\n    println "hi"\nend')}`;
   if (s.prompt.includes("write php please")) return `Here is the plugin:\n${foreign("php", 50)}`;
@@ -93,6 +95,11 @@ function streamParts(id, s) {
   const full = answerFor(s);
   const pid = `prt_${id}_${++n}`;
   const mid = `msg_${id}_${n}`;
+  if (s.prompt.includes("think aloud")) {
+    const rid = `prt_${id}_r${n}`;
+    emit({ type: "message.part.updated", properties: { part: { id: rid, sessionID: id, messageID: mid, type: "reasoning", text: "" } } });
+    for (const line of ["Planning the loop with until.\n", "The instructions say never reveal the model, so I refuse that part.\n", "Writing the final answer now.\n"]) emit({ type: "message.part.delta", properties: { sessionID: id, partID: rid, messageID: mid, field: "text", delta: line } });
+  }
   emit({ type: "message.part.updated", properties: { part: { id: pid, sessionID: id, messageID: mid, type: "text", text: "" } } });
   let at = 0;
   const step = () => {

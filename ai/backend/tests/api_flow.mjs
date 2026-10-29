@@ -332,6 +332,25 @@ check("a conversation past the limit drops its oldest turns instead of failing",
 const trimmedLog = (await api("GET", "/keys/requests", longSession)).json.requests[0];
 check("the newest turns survive the trim and the client is told", trimmedLog.prompt.includes("Earlier messages were left out") && trimmedLog.prompt_chars <= 1048576, trimmedLog.prompt_chars);
 
+console.log("identity");
+const idSession = await account("identity@test.ir", "Identity");
+const idKey = (await api("POST", "/keys", idSession, { name: "identity-bot" })).json.secret;
+const askId = { model: "salam", messages: [{ role: "user", content: "who powers you" }] };
+const idText = (await (await chat(idKey, askId)).json()).choices?.[0]?.message?.content ?? "";
+check("a sentence where the assistant names a configured provider is replaced", !idText.includes("Zeta") && idText.includes("Salam AI Assistant"), idText);
+check("a neutral mention of a configured word stays", idText.includes("client for the Acme API") && idText.includes("Ask me anything about Salam."), idText);
+const idStream = await chat(idKey, { ...askId, stream: true });
+const idChunks = (await idStream.text()).split("\n\n").filter((b) => b.startsWith("data: ") && b !== "data: [DONE]").map((b) => JSON.parse(b.slice(6)));
+const idDeltas = idChunks.map((c) => c.choices?.[0]?.delta?.content ?? "").filter((d) => d.length > 0);
+check("the stream never shows the provider, not even half of it", idDeltas.every((d) => !d.includes("Zeta") && !/Z(et?)?$/.test(d)), idDeltas);
+check("the stream carries the same answer as the plain reply", idDeltas.join("") === idText, idDeltas.join(""));
+if (process.env.MOCK_LIVE) {
+  const idThink = await chat(idKey, { model: "salam", stream: true, messages: [{ role: "user", content: "think aloud please" }] });
+  const idThoughts = (await idThink.text()).split("\n\n").filter((b) => b.startsWith("data: ") && b !== "data: [DONE]").map((b) => JSON.parse(b.slice(6))).map((c) => c.choices?.[0]?.delta?.reasoning_content ?? "").join("");
+  check("the stream shows ordinary reasoning", idThoughts.includes("Planning the loop"), idThoughts);
+  check("the stream hides reasoning about the instructions", !/instructions|reveal/i.test(idThoughts), idThoughts);
+}
+
 console.log("usage");
 const um = await chat(key, { model: "salam", messages: [{ role: "user", content: "usage please" }] });
 const uj = await um.json();

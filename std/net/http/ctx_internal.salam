@@ -218,8 +218,15 @@ func _scan_crlf(s: str, from: int, lim: int): int:
     p := s as i8 *
     mut i := from
     until i + 1 < lim:
-        if p[i] == (13 as i8) and p[i + 1] == (10 as i8): ret i end
-        i += 1
+        c := p[i + 1]
+        if c == (10 as i8):
+            if p[i] == (13 as i8): ret i end
+            i += 2
+        else c == (13 as i8):
+            i += 1
+        else:
+            i += 2
+        end
     end
     ret 0 - 1
 end
@@ -776,23 +783,7 @@ func _str_of(ptr: void *, n: int): str:
     ret r as str
 end
 
-func _has_transfer_encoding(head: str, head_len: int): bool:
-    mut pos := 0
-    until pos < head_len:
-        line_end := _scan_crlf(head, pos, head_len)
-        if line_end < 0 or line_end >= head_len: break end
-        colon := _scan_byte(head, pos, line_end, 58)
-        if colon >= 0 and colon < line_end:
-            if colon - pos == 17 and _eq_at_fold(head, pos, "transfer-encoding"):
-                ret true
-            end
-        end
-        pos = line_end + 2
-    end
-    ret false
-end
-
-func _bad_content_length(head: str, head_len: int): bool:
+func _bad_framing(head: str, head_len: int): bool:
     mut pos := 0
     mut seen := false
     mut first := 0
@@ -801,6 +792,9 @@ func _bad_content_length(head: str, head_len: int): bool:
         if line_end < 0 or line_end >= head_len: break end
         colon := _scan_byte(head, pos, line_end, 58)
         if colon >= 0 and colon < line_end:
+            if colon - pos == 17 and _eq_at_fold(head, pos, "transfer-encoding"):
+                ret true
+            end
             if colon - pos == 14 and _eq_at_fold(head, pos, "content-length"):
                 raw := head.substr(colon + 1, line_end - colon - 1)
                 t := str.Trim(raw)
@@ -890,10 +884,11 @@ end
 
 // Reads one request. Lengths are tracked explicitly (req_len, pending_len)
 // so bodies may carry NUL bytes; header scanning stops before the body.
-func _read_request(fd: i64, scratch: void *, pending &: str, pending_len &: int, req_len &: int, owned &: bool, oversize &: int): str:
+func _read_request(fd: i64, scratch: void *, pending &: str, pending_len &: int, req_len &: int, head_out &: int, owned &: bool, oversize &: int): str:
     sock := rawsock.FromFd(fd)
     owned = false
     req_len = 0
+    head_out = 0
     if pending_len == 0:
         got := rawsock.RecvBytes(sock, scratch, _RD_CHUNK)
         if got <= 0: ret "" end
@@ -903,6 +898,7 @@ func _read_request(fd: i64, scratch: void *, pending &: str, pending_len &: int,
         head_end := str.IndexFrom(one, "\r\n\r\n", 0)
         if head_end >= 0:
             head_len := head_end + 4
+            head_out = head_len
             mut need := head_len
             vend := one.find(" ")
             if vend > 0 and _has_body_at(one, vend):
@@ -949,6 +945,7 @@ func _read_request(fd: i64, scratch: void *, pending &: str, pending_len &: int,
         head_end = str.IndexFrom(buf, "\r\n\r\n", scan)
     end
     head_len := head_end + 4
+    head_out = head_len
     mut need := head_len
     vend := buf.find(" ")
     if vend > 0 and _has_body_at(buf, vend):
@@ -1260,7 +1257,8 @@ func _conn_step(slot: int, fd: i64, ctx: i64, scratch: void *, pending &: str, p
     mut owned := false
     mut oversize := 0
     mut req_len := 0
-    req := _read_request(fd, scratch, pending, pending_len, req_len, owned, oversize)
+    mut head_len := 0
+    req := _read_request(fd, scratch, pending, pending_len, req_len, head_len, owned, oversize)
     if oversize == 431:
         _net_send_all(fd, "HTTP/1.1 431 Request Header Fields Too Large\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
         ret false
@@ -1270,8 +1268,7 @@ func _conn_step(slot: int, fd: i64, ctx: i64, scratch: void *, pending &: str, p
         ret false
     end
     if req_len == 0: ret false end
-    te_end := str.IndexFrom(req, "\r\n\r\n", 0)
-    if te_end >= 0 and (_has_transfer_encoding(req, te_end + 4) or _bad_content_length(req, te_end + 4)):
+    if head_len > 0 and _bad_framing(req, head_len):
         _net_send_all(fd, "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
         if owned: mem.Free(req as void *) end
         ret false

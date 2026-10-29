@@ -153,12 +153,12 @@ exists, so a subgroup is not mistaken for a folder.
 
 ## Where things live
 
-| Path                                      | What                                              |
-| ----------------------------------------- | ------------------------------------------------- |
-| `~/.salam/pkg/<module>@<version>/`        | downloaded packages (`$SALAM_PKG` moves the root) |
-| `~/.salam/pkg/native/`                    | C libraries built from source                     |
-| `~/.salam/pkg/installed.txt`              | what `salam install` put where                    |
-| `~/.salam/bin/`                           | installed programs (`$SALAM_BIN` moves it)        |
+| Path                               | What                                              |
+| ---------------------------------- | ------------------------------------------------- |
+| `~/.salam/pkg/<module>@<version>/` | downloaded packages (`$SALAM_PKG` moves the root) |
+| `~/.salam/pkg/native/`             | C libraries built from source                     |
+| `~/.salam/pkg/installed.txt`       | what `salam install` put where                    |
+| `~/.salam/bin/`                    | installed programs (`$SALAM_BIN` moves it)        |
 
 ## Environment
 

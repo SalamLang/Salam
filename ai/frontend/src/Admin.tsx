@@ -2318,7 +2318,7 @@ export function NoAccess() {
           <IconShield />
         </div>
         <h3>{t("دسترسی به این بخش ندارید", "You do not have access to this section")}</h3>
-        <p className="muted">{t("این صفحه فقط برای مدیران دستیار سلام است. اگر فکر می‌کنید باید دسترسی داشته باشید، با مدیر سایت تماس بگیرید.", "This page is only for Salam assistant admins. If you think you should have access, contact the site admin.")}</p>
+        <p className="muted">{t("این صفحه فقط برای مدیران دستیار سلام است. اگر فکر می‌کنید باید دسترسی داشته باشید، با مدیر سایت تماس بگیرید.", "This page is only for Salam AI Assistant admins. If you think you should have access, contact the site admin.")}</p>
         <a className="button ghost" href="/">
           {t("بازگشت به گفت‌وگوها", "Back to chats")}
         </a>
@@ -2358,7 +2358,7 @@ export function Admin({ notify }: { notify: (msg: string) => void }) {
     <div className="page">
       <header className="page-head">
         <h2>{t("مدیریت", "Admin")}</h2>
-        <p className="muted">{t("نمای کلی استفاده از دستیار و سرور MCP سلام.", "An overview of how the Salam assistant and MCP server are used.")}</p>
+        <p className="muted">{t("نمای کلی استفاده از دستیار و سرور MCP سلام.", "An overview of how Salam AI Assistant and the MCP server are used.")}</p>
       </header>
       {error && (
         <div className="form-error" role="alert">

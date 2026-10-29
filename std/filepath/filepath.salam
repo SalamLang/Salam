@@ -33,6 +33,17 @@ end
 @fa "جداکننده"
 pub const Separator := "/"
 
+inline func _fp_sep(c: int): bool: ret c == 47 or c == 92 end
+
+inline func _fp_end(c: int): bool: ret c == 0 or c == 47 or c == 92 end
+
+func _fp_put(dst: u8*, at: int, src: u8*, from: int, n: int):
+    repeat n in i:
+        c := src[from + i]
+        dst[at + i] = c as int == 92 ? 47 as u8 : c
+    end
+end
+
 func _fp_cwd(): str:
     buf := mem.Allocate(2048 as u64)
     mut s := ""
@@ -63,7 +74,11 @@ end
 @en "Normalize"
 @fa "نرمال سازی"
 pub func Normalize(p: str): str:
-    ret str.Replace(p, "\\", "/")
+    n := p.len()
+    out := mem.Allocate((n + 1) as u64) as u8*
+    _fp_put(out, 0, p as u8*, 0, n)
+    out[n] = 0 as u8
+    ret out as str
 end
 
 @en "IsAbs"
@@ -81,28 +96,27 @@ end
 @en "Join"
 @fa "پیوند"
 pub func Join(a: str, b: str): str:
-    if a.len() == 0: ret Normalize(b) end
-    if b.len() == 0: ret Normalize(a) end
-    x := Normalize(a)
-    y := Normalize(b)
-    mut out := ""
-    if str.EndsWith(x, "/") and str.StartsWith(y, "/"):
-        tail := y.substr(1, y.len() - 1)
-        out = x.concat(tail)
-        mem.Free(tail as void*)
-    else str.EndsWith(x, "/") or str.StartsWith(y, "/"):
-        out = x.concat(y)
-    else:
-        mut sb := str.NewBuilder()
-        str.BufAppend(sb, x)
-        str.BufAppend(sb, "/")
-        str.BufAppend(sb, y)
-        out = str.BufStr(sb)
-        str.BufFree(sb)
+    na := a.len()
+    nb := b.len()
+    if na == 0: ret Normalize(b) end
+    if nb == 0: ret Normalize(a) end
+    ap := a as u8*
+    bp := b as u8*
+    out := mem.Allocate((na + nb + 2) as u64) as u8*
+    _fp_put(out, 0, ap, 0, na)
+    mut w := na
+    a_sep := _fp_sep(ap[na - 1] as int)
+    b_sep := _fp_sep(bp[0] as int)
+    mut from := 0
+    if a_sep and b_sep:
+        from = 1
+    else not a_sep and not b_sep:
+        out[w] = 47 as u8
+        w += 1
     end
-    mem.Free(x as void*)
-    mem.Free(y as void*)
-    ret out
+    _fp_put(out, w, bp, from, nb - from)
+    out[w + nb - from] = 0 as u8
+    ret out as str
 end
 
 @en "Base"
@@ -176,46 +190,61 @@ end
 @en "Clean"
 @fa "پاک سازی"
 pub func Clean(p: str): str:
-    q := Normalize(p)
-    if q.len() == 0:
-        mem.Free(q as void*)
-        ret str.Clone(".")
+    n := p.len()
+    if n == 0: ret str.Clone(".") end
+    src := p as u8*
+    out := mem.Allocate((n + 2) as u64) as u8*
+    rooted := _fp_sep(src[0] as int)
+    mut r := 0
+    mut w := 0
+    mut dotdot := 0
+    if rooted:
+        out[0] = 47 as u8
+        w = 1
+        r = 1
+        dotdot = 1
     end
-    abs := str.StartsWith(q, "/")
-    parts := q.split("/")
-    kept := Vector {} as Vector<str> defer kept.free()
-    repeat parts.len() in i:
-        seg := parts.get(i)
-        if seg.len() > 0 and seg != ".":
-            if seg == "..":
-                if kept.len() > 0 and kept.last() != "..":
-                    kept.pop()
-                else:
-                    if abs == false:
-                        kept.push(seg)
-                    end
+    until r < n:
+        c := src[r] as int
+        if _fp_sep(c):
+            r += 1
+        else c == 46 and _fp_end(src[r + 1] as int):
+            r += 1
+        else c == 46 and src[r + 1] as int == 46 and _fp_end(src[r + 2] as int):
+            r += 2
+            if w > dotdot:
+                w -= 1
+                until w > dotdot and out[w] as int != 47:
+                    w -= 1
                 end
-            else:
-                kept.push(seg)
+            else not rooted:
+                if w > 0:
+                    out[w] = 47 as u8
+                    w += 1
+                end
+                out[w] = 46 as u8
+                out[w + 1] = 46 as u8
+                w += 2
+                dotdot = w
+            end
+        else:
+            if (rooted and w != 1) or (not rooted and w != 0):
+                out[w] = 47 as u8
+                w += 1
+            end
+            until r < n and not _fp_sep(src[r] as int):
+                out[w] = src[r]
+                w += 1
+                r += 1
             end
         end
     end
-    out := str.Join(kept, "/")
-    repeat parts.len() in i:
-        mem.Free(parts.get(i) as void*)
+    if w == 0:
+        out[0] = 46 as u8
+        w = 1
     end
-    parts.free()
-    mem.Free(q as void*)
-    if abs:
-        rooted := "/".concat(out)
-        mem.Free(out as void*)
-        ret rooted
-    end
-    if out.len() == 0:
-        mem.Free(out as void*)
-        ret str.Clone(".")
-    end
-    ret out
+    out[w] = 0 as u8
+    ret out as str
 end
 
 @en "Abs"

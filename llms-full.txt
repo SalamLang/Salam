@@ -23625,6 +23625,56 @@ The general category of an error. Code decides on the kind; the message is for p
 | `Unsupported` | `` | The input or the request uses something that is not supported. |
 | `Internal` | `` | A fault inside the program itself. |
 
+core-ErrorKind.salam
+
+```salam
+func retryable(e: Error): bool:
+    ret e.is(ErrorKind.Io) or e.is(ErrorKind.Timeout) or e.is(ErrorKind.Unavailable)
+end
+
+func main:
+    kinds := [ErrorKind.Io, ErrorKind.Timeout, ErrorKind.Unavailable, ErrorKind.NotFound, ErrorKind.PermissionDenied, ErrorKind.Internal]
+    each kind in kinds:
+        e := Error.New(kind, "failed")
+        if retryable(e):
+            println e.kind_name() + ": try again"
+        else:
+            println e.kind_name() + ": give up"
+        end
+    end
+end
+```
+
+Output:
+
+```text
+I/O error: try again
+timed out: try again
+unavailable: try again
+not found: give up
+permission denied: give up
+internal error: give up
+```
+
+### `Error`
+
+```salam
+struct Error
+```
+
+The error that `throw` sends and `catch` receives. It holds only text and numbers, so copying it is cheap and safe.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `kind` | `ErrorKind` | The general category, one of `ErrorKind`. |
+| `code` | `str = ""` | A precise code chosen by the package that threw the error, such as `json.trailing_data`; empty when there is none. |
+| `message` | `str = ""` | What went wrong, for a person to read. |
+| `context` | `str = ""` | The explanations added by `wrap`, outermost first, joined with ": ". |
+| `path` | `str = ""` | Where in the data the problem is, such as `$.users[3].age`, or a file path; empty when unknown. |
+| `offset` | `int = -1` | The byte offset of the problem in the input, or -1 when unknown. |
+| `line` | `int = 0` | The line of the problem, counting from 1, or 0 when unknown. |
+| `column` | `int = 0` | The column of the problem, counting from 1, or 0 when unknown. |
+
 core-Error.salam
 
 ```salam
@@ -23669,27 +23719,6 @@ reading the form: expected a digit at $.age (line 2, column 3)
 4 2 3 reading the form
 ```
 
-### `Error`
-
-```salam
-struct Error
-```
-
-The error that `throw` sends and `catch` receives. It holds only text and numbers, so copying it is cheap and safe.
-
-| Name | Type | Description |
-| --- | --- | --- |
-| `kind` | `ErrorKind` | The general category, one of `ErrorKind`. |
-| `code` | `str = ""` | A precise code chosen by the package that threw the error, such as `json.trailing_data`; empty when there is none. |
-| `message` | `str = ""` | What went wrong, for a person to read. |
-| `context` | `str = ""` | The explanations added by `wrap`, outermost first, joined with ": ". |
-| `path` | `str = ""` | Where in the data the problem is, such as `$.users[3].age`, or a file path; empty when unknown. |
-| `offset` | `int = -1` | The byte offset of the problem in the input, or -1 when unknown. |
-| `line` | `int = 0` | The line of the problem, counting from 1, or 0 when unknown. |
-| `column` | `int = 0` | The column of the problem, counting from 1, or 0 when unknown. |
-
-The example for this item is shown with the ones above: core-Error.salam
-
 #### `is`
 
 ```salam
@@ -23698,7 +23727,41 @@ func is(kind: ErrorKind): bool
 
 True when the error is of this kind.
 
-The example for this item is shown with the ones above: core-Error.salam
+core-Error.is.salam
+
+```salam
+func read note(name: str): str throws:
+    if name == "":
+        throw Error.New(ErrorKind.InvalidArgument, "the name is empty")
+    end
+    if name != "notes.txt":
+        throw Error.New(ErrorKind.NotFound, name + " does not exist")
+    end
+    ret "contents of " + name
+end
+
+func main:
+    each name in ["notes.txt", "todo.txt", ""]:
+        try:
+            println read note(name)
+        catch e:
+            if e.is(ErrorKind.NotFound):
+                println "create it first:", e.message
+            else:
+                println "cannot go on:", e.message
+            end
+        end
+    end
+end
+```
+
+Output:
+
+```text
+contents of notes.txt
+create it first: todo.txt does not exist
+cannot go on: the name is empty
+```
 
 #### `wrap`
 
@@ -23708,7 +23771,45 @@ func wrap(message: str): Error
 
 A copy with an explanation added in front of the context. The kind, code and position stay.
 
-The example for this item is shown with the ones above: core-Error.salam
+core-Error.wrap.salam
+
+```salam
+func read port(text: str): int throws:
+    n := text.to_int()
+    if n < 1 or n > 65535:
+        throw Error.New(ErrorKind.OutOfRange, "port " + n + " is not valid")
+    end
+    ret n
+end
+
+func load config(text: str): int throws:
+    try:
+        ret read port(text)
+    catch e:
+        throw e.wrap("reading the port")
+    end
+end
+
+func main:
+    try:
+        println load config("80")
+        println load config("70000")
+    catch e:
+        println e.to_str()
+        println "context:", e.context
+        println "kind:", e.kind_name()
+    end
+end
+```
+
+Output:
+
+```text
+80
+reading the port: port 70000 is not valid
+context: reading the port
+kind: out of range
+```
 
 #### `with_code`
 
@@ -23718,7 +23819,38 @@ func with_code(code: str): Error
 
 A copy with the code set.
 
-The example for this item is shown with the ones above: core-Error.salam
+core-Error.with_code.salam
+
+```salam
+func parse age(text: str): int throws:
+    n := text.to_int()
+    if n < 0 or n > 150:
+        throw Error.New(ErrorKind.OutOfRange, "the age " + n + " is out of range").with_code("age.range")
+    end
+    ret n
+end
+
+func main:
+    each text in ["30", "200"]:
+        try:
+            println "age", parse age(text)
+        catch e:
+            if e.code == "age.range":
+                println "ask again:", e.message
+            end
+            println "code:", e.code
+        end
+    end
+end
+```
+
+Output:
+
+```text
+age 30
+ask again: the age 200 is out of range
+code: age.range
+```
 
 #### `with_path`
 
@@ -23728,7 +23860,34 @@ func with_path(path: str): Error
 
 A copy with the path set.
 
-The example for this item is shown with the ones above: core-Error.salam
+core-Error.with_path.salam
+
+```salam
+func check(user: str, age: int): int throws:
+    if age < 18:
+        throw Error.New(ErrorKind.OutOfRange, "must be at least 18").with_path("$.users[" + user + "].age")
+    end
+    ret age
+end
+
+func main:
+    try:
+        println check("sara", 31)
+        println check("omid", 12)
+    catch e:
+        println e.to_str()
+        println "where:", e.path
+    end
+end
+```
+
+Output:
+
+```text
+31
+must be at least 18 at $.users[omid].age
+where: $.users[omid].age
+```
 
 #### `with_position`
 
@@ -23738,7 +23897,26 @@ func with_position(offset: int, line: int, column: int): Error
 
 A copy with the offset, line and column set.
 
-The example for this item is shown with the ones above: core-Error.salam
+core-Error.with_position.salam
+
+```salam
+func main:
+    text := "name = Sara\nage = ?\n"
+    offset := text.find("?")
+    line start := text.find("age")
+    column := offset - line start + 1
+    e := Error.New(ErrorKind.Syntax, "a number was expected").with_position(offset, 2, column)
+    println e.to_str()
+    println e.offset, e.line, e.column
+end
+```
+
+Output:
+
+```text
+a number was expected (line 2, column 7)
+18 2 7
+```
 
 #### `kind_name`
 
@@ -23748,7 +23926,26 @@ func kind_name(): str
 
 A short English name for the kind, such as "out of range".
 
-The example for this item is shown with the ones above: core-Error.salam
+core-Error.kind_name.salam
+
+```salam
+func main:
+    each kind in [ErrorKind.NotFound, ErrorKind.OutOfRange, ErrorKind.Timeout, ErrorKind.PermissionDenied, ErrorKind.Other]:
+        e := Error.New(kind, "details")
+        println e.kind_name()
+    end
+end
+```
+
+Output:
+
+```text
+not found
+out of range
+timed out
+permission denied
+error
+```
 
 #### `to_str`
 
@@ -23758,7 +23955,107 @@ func to_str(): str
 
 The error as one line: context, message, path and position. `println` uses it too.
 
-The example for this item is shown with the ones above: core-Error.salam
+core-Error.to_str.salam
+
+```salam
+func main:
+    plain := Error.New(ErrorKind.Timeout, "the server did not answer")
+    println plain.to_str()
+    bare := Error.New(ErrorKind.NotFound, "")
+    println bare.to_str()
+    located := Error.New(ErrorKind.Syntax, "a comma is missing").with_path("$.items[2]").with_position(40, 3, 9)
+    println located.to_str()
+    wrapped := located.wrap("reading the order").wrap("handling the request")
+    println wrapped.to_str()
+end
+```
+
+Output:
+
+```text
+the server did not answer
+not found
+a comma is missing at $.items[2] (line 3, column 9)
+handling the request: reading the order: a comma is missing at $.items[2] (line 3, column 9)
+```
+
+#### `New`
+
+```salam
+static func New(kind: ErrorKind, message: str): Error
+```
+
+Makes an error from a kind and a message. This is the usual way to build the error you `throw`.
+
+core-Error.New.salam
+
+```salam
+func find user(id: int): str throws:
+    if id != 1:
+        throw Error.New(ErrorKind.NotFound, "no user with id " + id)
+    end
+    ret "Sara"
+end
+
+func main:
+    each id in [1, 7]:
+        try:
+            println "found", find user(id)
+        catch e:
+            println e.kind_name() + ":", e.message
+        end
+    end
+end
+```
+
+Output:
+
+```text
+found Sara
+not found: no user with id 7
+```
+
+#### `At`
+
+```salam
+static func At(kind: ErrorKind, message: str, offset: int): Error
+```
+
+Like `New`, and also records the byte offset in the input where the problem is.
+
+core-Error.At.salam
+
+```salam
+func digit(text: str, at: int): int throws:
+    c := text.substr(at, 1)
+    if c < "0" or c > "9":
+        throw Error.At(ErrorKind.Syntax, "a digit was expected", at)
+    end
+    ret c.to_int()
+end
+
+func main:
+    text := "12x4"
+    repeat text.len() in i:
+        try:
+            println "digit", digit(text, i)
+        catch e:
+            println e.to_str()
+            println "offset", e.offset
+        end
+    end
+end
+```
+
+Output:
+
+```text
+digit 1
+digit 2
+a digit was expected (offset 2)
+offset 2
+digit 4
+```
 
 ### `Throws`
 
@@ -59888,7 +60185,7 @@ The things people get wrong:
 
 - Line breaks inside a quoted field cannot be read back: `ReadAll` splits the text into lines first. `WriteLine` quotes such a field correctly for other tools, but this reader cuts it in two.
 
-- `FromValue` takes the columns from the keys of the first object, and an object does not keep its key order, so the columns can come out in a different order from the file you read. When the order matters, write the rows yourself with `WriteLine`.
+- `FromValue` takes the columns from the keys of the first object, in the order they were added, so a table read with `ToValue` is written back with its columns in the original order.
 
 ## Guide: totals from a CSV export
 
@@ -60155,8 +60452,8 @@ Ali,Tehran
 ["a", "b,c", "d"]
 plain,"with ""quotes"""
 1 Ali
-age,name
-30,Ali
+name,age
+Ali,30
 2 1,2
 3,4
 ```
@@ -60491,10 +60788,10 @@ Output:
 ```text
 encoded: true
 [database]
-replicas = [{host = "10.0.0.2", weight = 2}, {host = "10.0.0.3", weight = 1}]
-timeout = 30.0
-pool = 8
 url = "postgres://localhost/shop"
+pool = 8
+timeout = 30.0
+replicas = [{host = "10.0.0.2", weight = 2}, {host = "10.0.0.3", weight = 1}]
 timeout is still a float: true
 password written: false
 replicas read back: 2
@@ -60585,8 +60882,8 @@ salam 8080
 title = "salam"
 [server]
 host = "localhost"
-tags = ["a", "b"]
 port = 8080
+tags = ["a", "b"]
 
 false
  false
@@ -62406,6 +62703,7 @@ A dynamic value: null, boolean, whole number, decimal, string, array or object.
 | `s` | `str = ""` | The string value. |
 | `arr` | `Vector` | The elements of an array. |
 | `obj` | `HashMap` | The keys and values of an object. |
+| `order` | `i64 = 0` | An internal handle to the list that remembers the order in which the keys of an object were added. `ObjectSet` and `ObjectDelete` keep it up to date; read the keys in order with `ObjectKeys` instead of using this field. |
 
 encoding-value-Value.salam
 
@@ -62451,8 +62749,8 @@ end
 Output:
 
 ```text
-object{name: string(Narges), height: float(1.68), age: int(34), admin: bool(false), langs: array[string(fa), string(ar)], phone: null}
-6 true ["name", "height", "age", "admin", "langs", "phone"]
+object{name: string(Narges), age: int(34), height: float(1.68), admin: bool(false), phone: null, langs: array[string(fa), string(ar)]}
+6 true ["name", "age", "height", "admin", "phone", "langs"]
 Narges 34 1.68 false
 true 2 ar
 false
@@ -62912,7 +63210,7 @@ It suits tools that take whatever format a user hands them, and one-off migratio
 
 ### What survives a conversion
 
-Everything passes through a `Value`, so comments, key order and formatting are always lost. Beyond that, each format can hold less than JSON:
+Everything passes through a `Value`, so comments and formatting are always lost, while keys keep the order they were read in. Beyond that, each format can hold less than JSON:
 
 | Format | Reading gives | Writing loses |
 | --- | --- | --- |
@@ -63040,10 +63338,10 @@ Output:
 
 ```text
 <?xml version="1.0" encoding="UTF-8"?>
-<root id="1042"><item>tea</item><item>cups</item><customer>Sara</customer><total>39.5</total><paid>true</paid></root>
+<root id="1042"><customer>Sara</customer><item>tea</item><item>cups</item><total>39.5</total><paid>true</paid></root>
 detected: xml
-back: {"item": ["tea", "cups"], "customer": "Sara", "total": "39.5", "paid": "true", "@id": "1042"}
-{"title": "Salam", "pages": "153", "@lang": "fa"}
+back: {"@id": "1042", "customer": "Sara", "item": ["tea", "cups"], "total": "39.5", "paid": "true"}
+{"@lang": "fa", "title": "Salam", "pages": "153"}
 ```
 
 Numbers and booleans are written as their text, so `39.5` and `true` arrive in the XML. The way back shows what XML cannot express: every value returns as a string, and the outer `<root>` or `<book>` is gone, leaving only its contents. When the element names, order or namespaces matter, build the document with encoding/xml directly.
@@ -63121,16 +63419,16 @@ Output:
 ```text
 json yaml xml toml csv
 true 0 2 3 4 5
+name: salam
+port: 8080
 tags:
   - a
   - b
-name: salam
-port: 8080
-tags = ["a", "b"]
 name = "salam"
 port = 8080
+tags = ["a", "b"]
 
-[{"age": "30", "name": "Ali"}]
+[{"name": "Ali", "age": "30"}]
 false
 ```
 
@@ -65077,8 +65375,8 @@ true 5432 false
 <item id="3"><name>book</name></item>
 true false
 false
-object{feature: array[string(search), string(chat)], @env: string(prod), db: object{@port: string(5432), @host: string(localhost)}}
-<root env="prod"><feature>search</feature><feature>chat</feature><db host="localhost" port="5432"/></root>
+object{@env: string(prod), db: object{@host: string(localhost), @port: string(5432)}, feature: array[string(search), string(chat)]}
+<root env="prod"><db host="localhost" port="5432"/><feature>search</feature><feature>chat</feature></root>
 a &lt; b &amp; c &quot;x&quot; <p> & s
 1 a
 3  hello
@@ -76289,6 +76587,7 @@ The router: it sends requests to the right function by method and path.
 | `static_dir` | `str = ""` | The directory of the static files. |
 | `has_static` | `bool = false` | Static files are enabled. |
 | `static_listing` | `bool = false` | Show the contents of directories. |
+| `fallback` | `i64 = 0` | The handler that runs when no route matches. Zero means there is none and the server answers 404. |
 | `idx` | `Vector` | The hash table of the literal routes. |
 | `idx_mask` | `int = 0` | The table size minus one. |
 | `n_literal` | `int = 0` | The number of literal routes. |
@@ -76433,6 +76732,55 @@ func EnableListing(r &: Router)
 For directories with no `index.html`, shows the list of files.
 
 The example for this item is shown with the ones above: net-router-Dispatch.salam
+
+### `SetFallback`
+
+```salam
+func SetFallback(r &: Router, fn: i64)
+```
+
+Sets the handler for every request that no route matches, whatever its method or path; the handler builds the whole response. It is how a server that picks the answer from the `Host` header, such as `net/httpd`, sits behind one router.
+
+net-router-Fallback.salam
+
+```salam
+import net.http
+import net.router
+
+func home(ctx: i64):
+    http.Text(ctx, "home")
+end
+
+func anything_else(ctx: i64):
+    http.SetStatus(ctx, 202)
+    http.Text(ctx, "fallback got " + http.Method(ctx) + " " + http.Path(ctx))
+end
+
+func main:
+    mut r := router.NewRouter()
+    println r.fallback
+    router.Get(r, "/", home)
+    router.SetFallback(r, anything_else)
+    println r.fallback == anything_else
+    mut s := http.NewServer(19623)
+    http.Use(s, r)
+    println http.RunBackground(s)
+    a := http.Get("http://127.0.0.1:19623/")
+    println http.Status(a), http.Body(a)
+    b := http.Get("http://127.0.0.1:19623/unknown/page")
+    println http.Status(b), http.Body(b)
+end
+```
+
+Output:
+
+```text
+0
+true
+true
+200 home
+202 fallback got GET /unknown/page
+```
 
 ### `ParamGet`
 
@@ -80564,6 +80912,104 @@ The greatest number of requests over one connection.
 
 The example for this item is shown with the ones above: net-http-Server.salam
 
+### `File`
+
+```salam
+func File(h: i64, path: str, content_type: str): bool
+```
+
+Answers with a file from disk as the body, streamed in pieces so a large file never sits in memory; the length and the content type are set for you. The status and headers you set are kept, and a HEAD request gets only the headers. It returns false when the file cannot be opened, and then nothing is changed.
+
+net-http-FileBody.salam
+
+```salam
+import io
+import os
+import net.http
+import net.router
+
+func page(ctx: i64):
+    path := os.TempDir() + "/salam_filebody.txt"
+    if http.File(ctx, path, "text/plain"):
+        http.SetHeader(ctx, "X-Port", http.Own(ctx, "" + http.LocalPort(ctx)))
+        http.SetHeader(ctx, "X-Status", http.Own(ctx, "" + http.Status(ctx)))
+    else:
+        http.SetStatus(ctx, 404)
+        http.Text(ctx, "no file")
+    end
+end
+
+func part(ctx: i64):
+    path := os.TempDir() + "/salam_filebody.txt"
+    if http.FileRange(ctx, path, "text/plain", 6, 4):
+        http.SetStatus(ctx, 206)
+    else:
+        http.SetStatus(ctx, 416)
+        http.Text(ctx, "bad range")
+    end
+end
+
+func main:
+    path := os.TempDir() + "/salam_filebody.txt"
+    io.WriteFile(path, "hello from a file")
+    mut size := 0 as i64
+    mut mtime := 0 as i64
+    println http.FileStat(path, size, mtime), size
+    mut r := router.NewRouter()
+    router.Get(r, "/file", page)
+    router.Get(r, "/part", part)
+    mut s := http.NewServer(19622)
+    http.Use(s, r)
+    println http.RunBackground(s)
+    a := http.Get("http://127.0.0.1:19622/file")
+    println http.Status(a), http.Body(a)
+    println http.GetHeader(a, "x-port"), http.GetHeader(a, "x-status"), http.GetHeader(a, "content-type")
+    b := http.Get("http://127.0.0.1:19622/part")
+    println http.Status(b), http.Body(b)
+    os.Remove(path)
+end
+```
+
+Output:
+
+```text
+true 17
+true
+200 hello from a file
+19622 200 text/plain
+206 from
+```
+
+### `LocalPort`
+
+```salam
+func LocalPort(h: i64): int
+```
+
+The port of the server socket this request came in on; useful when one handler serves several ports.
+
+The example for this item is shown with the ones above: net-http-FileBody.salam
+
+### `Status`
+
+```salam
+func Status(h: i64): int
+```
+
+The response status code. Given a request handle inside a handler, it is the status set so far (200 until you change it).
+
+The example for this item is shown with the ones above: net-http-Handle.salam
+
+### `FileRange`
+
+```salam
+func FileRange(h: i64, path: str, content_type: str, offset: int, length: int): bool
+```
+
+Like `File` but sends only `length` bytes starting at `offset`, for answers to a `Range` request; the caller sets the 206 status and the `Content-Range` header. It returns false when the part does not lie inside the file.
+
+The example for this item is shown with the ones above: net-http-FileBody.salam
+
 ### `SendRaw`
 
 ```salam
@@ -80750,7 +81196,7 @@ The example for this item is shown with the ones above: net-http-Client.salam
 func Status(r: Response): int
 ```
 
-The response status code.
+The response status code. Given a request handle inside a handler, it is the status set so far (200 until you change it).
 
 The example for this item is shown with the ones above: net-http-Handle.salam
 
@@ -81323,6 +81769,16 @@ func ConnOf(ctx: Context): tcp.Conn
 The TCP connection under the request; for upgrading to another protocol.
 
 The example for this item is shown with the ones above: net-http-Server.salam
+
+### `FileStat`
+
+```salam
+func FileStat(path: str, size &: i64, mtime &: i64): bool
+```
+
+Reads the size and the modification time (Unix seconds) of a file with one system call, into the two variables you pass. It returns false when the file cannot be read. Outside Linux on x64 and arm64 the time is 0.
+
+The example for this item is shown with the ones above: net-http-FileBody.salam
 
 
 ---
@@ -96578,11 +97034,11 @@ end
 Output:
 
 ```text
-{"jsonrpc": "2.0", "id": 1, "result": 1}
-{"jsonrpc": "2.0", "id": 2, "result": 2}
-{"jsonrpc": "2.0", "error": {"message": "title is required", "code": -32602}, "id": 3}
-{"jsonrpc": "2.0", "id": 4, "result": ["buy bread", "call Sara"]}
-[{"jsonrpc": "2.0", "id": 5, "result": 2}, {"jsonrpc": "2.0", "error": {"message": "Method not found", "code": -32601}, "id": 6}]
+{"jsonrpc": "2.0", "result": 1, "id": 1}
+{"jsonrpc": "2.0", "result": 2, "id": 2}
+{"jsonrpc": "2.0", "error": {"code": -32602, "message": "title is required"}, "id": 3}
+{"jsonrpc": "2.0", "result": ["buy bread", "call Sara"], "id": 4}
+[{"jsonrpc": "2.0", "result": 2, "id": 5}, {"jsonrpc": "2.0", "error": {"code": -32601, "message": "Method not found"}, "id": 6}]
 adds a todo and returns how many there are
 ```
 
@@ -97027,22 +97483,22 @@ end
 Output:
 
 ```text
-{"jsonrpc": "2.0", "id": 1, "method": "calc", "params": [2, "hello", 1.5, true]}
+{"jsonrpc": "2.0", "method": "calc", "params": [2, "hello", 1.5, true], "id": 1}
 4 2 hello
 1.5 true false
 2 2
-{"jsonrpc": "2.0", "id": "req-1", "method": "greet", "params": {"name": "Ali"}}
+{"jsonrpc": "2.0", "method": "greet", "params": {"name": "Ali"}, "id": "req-1"}
 Ali
 true {"jsonrpc": "2.0", "method": "tick", "params": []}
 true add 9 2
-{"jsonrpc": "2.0", "id": 1, "result": "ok"}
+{"jsonrpc": "2.0", "result": "ok", "id": 1}
 -32601 Method not found
-{"jsonrpc": "2.0", "error": {"message": "the server is busy", "code": -32000}, "id": 2}
-true {"jsonrpc": "2.0", "error": {"message": "Parse error", "code": -32700}, "id": null}
+{"jsonrpc": "2.0", "error": {"code": -32000, "message": "the server is busy"}, "id": 2}
+true {"jsonrpc": "2.0", "error": {"code": -32700, "message": "Parse error"}, "id": null}
 true 3.5 false
 true -32601 nope
 true 2 true x
-[{"jsonrpc": "2.0", "id": 1, "result": true}, {"jsonrpc": "2.0", "id": 2, "result": "x"}]
+[{"jsonrpc": "2.0", "result": true, "id": 1}, {"jsonrpc": "2.0", "result": "x", "id": 2}]
 json-rpc-2.0 msgpack-rpc
 true true
 26 148
@@ -97051,7 +97507,7 @@ calc
 42 true
 42 true
 true
-{"jsonrpc": "2.0", "error": {"message": "Method not found", "code": -32601}, "id": null}
+{"jsonrpc": "2.0", "error": {"code": -32601, "message": "Method not found"}, "id": null}
 0 1 2
 -32600 -32603 -32000
 1 2 3
@@ -97171,18 +97627,18 @@ Output:
 ```text
 7 true adds two numbers
 7
-{"jsonrpc": "2.0", "id": 1, "result": 42}
-{"jsonrpc": "2.0", "id": 2, "result": 11}
-{"jsonrpc": "2.0", "error": {"message": "division by zero", "code": -32602}, "id": 3}
-{"jsonrpc": "2.0", "id": "x", "result": "hello Maryam"}
-{"jsonrpc": "2.0", "error": {"message": "a name is needed", "code": -32001}, "id": 4}
-{"jsonrpc": "2.0", "id": 5, "result": ["status", 1, true]}
-{"jsonrpc": "2.0", "error": {"message": "you are not allowed", "code": -32003, "data": "admin"}, "id": 6}
-{"jsonrpc": "2.0", "error": {"message": "Method not found", "code": -32601}, "id": 7}
+{"jsonrpc": "2.0", "result": 42, "id": 1}
+{"jsonrpc": "2.0", "result": 11, "id": 2}
+{"jsonrpc": "2.0", "error": {"code": -32602, "message": "division by zero"}, "id": 3}
+{"jsonrpc": "2.0", "result": "hello Maryam", "id": "x"}
+{"jsonrpc": "2.0", "error": {"code": -32001, "message": "a name is needed"}, "id": 4}
+{"jsonrpc": "2.0", "result": ["status", 1, true], "id": 5}
+{"jsonrpc": "2.0", "error": {"code": -32003, "message": "you are not allowed", "data": "admin"}, "id": 6}
+{"jsonrpc": "2.0", "error": {"code": -32601, "message": "Method not found"}, "id": 7}
 event: start true
 0
-[{"jsonrpc": "2.0", "id": 8, "result": true}, {"jsonrpc": "2.0", "id": 9, "result": 2}]
-{"jsonrpc": "2.0", "error": {"message": "Parse error", "code": -32700}, "id": null}
+[{"jsonrpc": "2.0", "result": true, "id": 8}, {"jsonrpc": "2.0", "result": 2, "id": 9}]
+{"jsonrpc": "2.0", "error": {"code": -32700, "message": "Parse error"}, "id": null}
 42
 1
 true false
@@ -125554,7 +126010,7 @@ end
 Output:
 
 ```text
-{"operationName": "Sum", "variables": {"x": 40}, "query": "query Sum($x: Int!) { add(a: $x, b: 2) }"}
+{"query": "query Sum($x: Int!) { add(a: $x, b: 2) }", "operationName": "Sum", "variables": {"x": 40}}
 200 {"data": {"add": 42}}
 true true 42
 {"data": {"me": "guest (Query.me)"}}
@@ -125988,12 +126444,12 @@ id 1 0
 title 2 0
 true
 {
+  "data": {
+    "names": "{\"a\": true, \"b\": 1.5, \"o\": {\"x\": 3}, \"v\": 42}",
+    "book": null
+  },
   "extensions": {
     "ms": 3
-  },
-  "data": {
-    "book": null,
-    "names": "{\"a\": true, \"b\": 1.5, \"v\": 42, \"o\": {\"x\": 3}}"
   }
 }
 ```
@@ -167874,3 +168330,719 @@ func ProbeFileMP3(path: str, ok &: bool): audio.Info
 The same from a path.
 
 The example for this item is shown with the ones above: mp3-Read.salam
+
+
+---
+
+# net/httpd
+
+https://salamlang.github.io/Salam/std/net-httpd/
+
+A web server driven by a config file: several sites on one port, locations, redirects, caching and static files.
+
+This package runs several websites from one process and one set of ports, the job people give to nginx in front of their programs. You describe the sites in a config file, load it, and call `Run`. The command `salam serve --config=web.salam` does exactly that, and `--test` checks the file without starting anything.
+
+The config is written in the same block style as the rest of Salam: a setting is `name = value`, a block opens with `name:` and closes with `end`, comments start with `//`, and a setting and its value stay on one line. Strings are in double quotes, or in backticks when they hold backslashes, like a regular expression.
+
+```salam
+server:
+    log: access = "/var/log/salam/access.log" end
+    site:
+        listen = 80
+        names = "example.com www.example.com"
+        root = "/srv/example/public"
+        index = "index.html"
+        error page = 404 "404.html"
+        location "/assets/": cache = 30d end
+        location "= /health": return = 200 "ok" end
+        location "/old/": redirect = "https://example.com$uri" code = 301 end
+    end
+    site:
+        names = "blog.example.com *.blog.example.com"
+        root = "/srv/blog"
+    end
+end
+```
+
+Two sites on the same port are told apart by the `Host` header. An exact name wins over a `*.example.com` wildcard, and a request for a name nobody listed goes to the site marked `default = true`, or else to the first site on that port. A site that does not say `listen` listens on port 80; `listen = "127.0.0.1:8080"` picks the address too.
+
+Inside a site, the request path is matched against its `location` blocks the way nginx does it:
+
+- `location "= /health"`: this exact path, and nothing else is tried.
+
+- `location "/assets/"`: any path starting with it; the longest prefix is remembered.
+
+- `location "^~ /static/"`: a prefix that also stops the regular expressions from being tried.
+
+- `location "~ \.php$"` and `"~* \.png$"`: a regular expression (the second ignores case), tried in file order after the prefixes; the first hit wins, and otherwise the longest prefix is used.
+
+The settings of a site, and of a location unless noted:
+
+| Setting | Meaning |
+| --- | --- |
+| `listen = 80` (site) | The port, optionally with an address: `listen = "0.0.0.0:8080"`. It can be repeated. |
+| `names = "a.com b.com"` (site) | The host names of the site; `*.a.com` matches any subdomain. |
+| `default = true` (site) | This site answers names no site claims. |
+| `root = "/srv/site"` | The folder the request path is appended to. A location with its own `root` replaces the site's. |
+| `alias = "/srv/files"` (prefix location) | The folder that replaces the matched prefix: with `location "/dl/": alias = "/srv/files" end`, `/dl/a.zip` is `/srv/files/a.zip`. |
+| `index = "index.html index.htm"` | The files tried for a folder, in order. The default is `index.html`. |
+| `return = 200 "ok"` | Answers at once with a status and an optional text. |
+| `redirect = "https://$host$request_uri"`, `code = 301` | Redirects. The code defaults to 301. The variables are `$host`, `$uri`, `$args`, `$request_uri` and `$scheme`. At the site level it applies to every request, before any location. |
+| `cache = 30d` | Sends `Cache-Control: public, max-age=...` with the files. Units: `s`, `m`, `h`, `d`, `w`, `y`. |
+| `header = "Name" "value"` | Adds a response header. Site headers go on every answer, location headers only on that location's. |
+| `error page = 404 "404.html"` | The file, relative to the root, sent with that error status. |
+
+The `log:` block takes `access = "path"`, where the path can also be `"stdout"` or `"stderr"`. Each line has the time, the host, the method, the path and the status.
+
+The things people get wrong:
+
+- Files are only read from the `root` of the matched site. The path is cleaned first, so `..` cannot climb out of it, and any file or folder whose name starts with a dot, such as `.env` or `.git`, is answered with 404. `.well-known` is allowed.
+
+- Every file goes out with an `ETag` and a `Last-Modified` header. A request with a matching `If-None-Match` or a recent enough `If-Modified-Since` gets 304 and no body, and a single `Range: bytes=a-b` (also `a-` and `-n`) gets 206 with the part; a range outside the file gets 416. `If-Range` is honoured with the ETag. Several ranges in one request are answered with the whole file.
+
+- Only GET and HEAD are answered for files; anything else gets 405 with an `Allow` header.
+
+- Names and values are checked when the file is loaded: a misspelled setting, a port out of range, a missing root folder, a bad regular expression or two sites with the same name on one port is reported with its line and column, and a close name is suggested. Nothing is started from a file with problems.
+
+- `listen = 443 tls` is read but refused for now; HTTPS arrives in a later release, so put a TLS terminator in front until then.
+
+- The package keeps one loaded configuration for the process. Loading again replaces it, but a running server keeps the sites it started with.
+
+- The settings, the sites and the locations are plain data, so a config that loads is a config that runs; everything that can be wrong about the file is found by `Check` or `LoadText`, not on the first request.
+
+Related packages: net/http is the server underneath, net/router holds the routes, and net/httpd/conf is the parser that reads the file.
+
+## Functions
+
+### `ParseDuration`
+
+```salam
+func ParseDuration(text: str): i64
+```
+
+Reads a length of time such as `45`, `10m` or `30d` and returns it in seconds, or -1 when it is not valid. The units are `s`, `m`, `h`, `d`, `w` and `y` (365 days); no unit means seconds.
+
+net-httpd-ParseDuration.salam
+
+```salam
+import net.httpd
+
+func main:
+    println httpd.ParseDuration("45")
+    println httpd.ParseDuration("90s")
+    println httpd.ParseDuration("10m")
+    println httpd.ParseDuration("12h")
+    println httpd.ParseDuration("30d")
+    println httpd.ParseDuration("2w")
+    println httpd.ParseDuration("1y")
+    println httpd.ParseDuration("")
+    println httpd.ParseDuration("abc")
+    println httpd.ParseDuration("5x")
+end
+```
+
+Output:
+
+```text
+45
+90
+600
+43200
+2592000
+1209600
+31536000
+-1
+-1
+-1
+```
+
+### `LoadText`
+
+```salam
+func LoadText(text: str, file: str): bool
+```
+
+Loads a configuration from text. The second argument names the file in the problem messages. It returns true when there are no problems; otherwise the problems are kept for `ProblemAt` and nothing else changes.
+
+net-httpd-Serve.salam
+
+```salam
+import io
+import os
+import time
+import str
+import net.http
+import net.httpd
+
+func serve():
+    httpd.Run()
+end
+
+func get(host: str, path: str): http.Response:
+    r := http.Do("GET", "http://" + host + ":19434" + path, http.NewHeaders(), "", http.RequestOptions {})
+    ret r
+end
+
+func main:
+    root := os.TempDir() + "/salam_httpd_serve"
+    os.RemoveAll(root)
+    os.MkdirAll(root + "/shop")
+    os.MkdirAll(root + "/blog")
+    io.WriteFile(root + "/shop/index.html", "the shop")
+    io.WriteFile(root + "/blog/index.html", "the blog")
+    io.WriteFile(root + "/blog/404.html", "no such post")
+    text := `
+server:
+    site:
+        listen = 19434
+        names = "localhost"
+        root = "@ROOT@/shop"
+        header = "X-Site" "shop"
+        location "= /health": return = 200 "ok" end
+        location "/old/": redirect = "http://$host/new$uri" code = 302 end
+    end
+    site:
+        listen = 19434
+        names = "127.0.0.1"
+        root = "@ROOT@/blog"
+        error page = 404 "404.html"
+    end
+end
+`
+    println httpd.LoadText(str.Replace(text, "@ROOT@", root), "serve.salam")
+    t := spawn(serve)
+    time.Sleep(300)
+    a := get("localhost", "/")
+    println a.status, a.body, http.GetHeader(a, "x-site")
+    b := get("127.0.0.1", "/")
+    println b.status, b.body
+    println get("localhost", "/health").body
+    c := get("localhost", "/old/page")
+    println c.status, http.GetHeader(c, "location")
+    d := get("127.0.0.1", "/missing")
+    println d.status, d.body
+    println get("localhost", "/.git/config").status
+    httpd.Stop()
+    join(t)
+    os.RemoveAll(root)
+end
+```
+
+Output:
+
+```text
+true
+200 the shop shop
+200 the blog
+ok
+302 http://localhost:19434/new/old/page
+404 no such post
+404
+```
+
+### `SiteFor`
+
+```salam
+func SiteFor(host: str, port: int): int
+```
+
+The index of the site that answers a host name on a port, or -1 when none does. The name is lower-cased and a trailing port or dot is ignored. An exact name wins over a wildcard, and a name nobody listed falls back to the default site of that port.
+
+net-httpd-Match.salam
+
+```salam
+import net.httpd
+
+func main:
+    text := `
+server:
+    site:
+        listen = 8080
+        names = "example.test *.example.test"
+        location "/assets/": cache = 30d end
+        location "= /health": return = 200 "ok" end
+        location "^~ /static/": cache = 1h end
+        location "~ \.php$": return = 403 "no" end
+    end
+    site:
+        listen = 8080
+        names = "other.test"
+        default = true
+    end
+end
+`
+    println httpd.LoadText(text, "match.salam"), httpd.ProblemCount()
+    println httpd.SiteCount(), httpd.SiteNames(0), httpd.SiteNames(1)
+    println httpd.SiteFor("example.test", 8080), httpd.SiteFor("API.Example.Test:8080", 8080), httpd.SiteFor("other.test.", 8080)
+    println httpd.SiteFor("unknown.test", 8080), httpd.SiteFor("example.test", 9090)
+    println httpd.LocationPattern(httpd.LocationFor(0, "/health"))
+    println httpd.LocationPattern(httpd.LocationFor(0, "/assets/logo.png"))
+    println httpd.LocationPattern(httpd.LocationFor(0, "/static/a.php"))
+    println httpd.LocationPattern(httpd.LocationFor(0, "/x/index.php"))
+    println httpd.LocationFor(0, "/plain"), httpd.LocationFor(1, "/anything")
+end
+```
+
+Output:
+
+```text
+true 0
+2 example.test *.example.test other.test
+0 0 1
+1 -1
+/health
+/assets/
+/static/
+\.php$
+-1 -1
+```
+
+### `LocationFor`
+
+```salam
+func LocationFor(site: int, path: str): int
+```
+
+The index of the location that handles a path in a site, or -1 when only the site settings apply. An exact location wins, then a `^~` prefix, then the first matching regular expression, then the longest prefix.
+
+The example for this item is shown with the ones above: net-httpd-Match.salam
+
+### `SiteCount`
+
+```salam
+func SiteCount(): int
+```
+
+The number of sites in the loaded configuration.
+
+The example for this item is shown with the ones above: net-httpd-Match.salam
+
+### `SiteNames`
+
+```salam
+func SiteNames(site: int): str
+```
+
+The host names of one site, separated by spaces.
+
+The example for this item is shown with the ones above: net-httpd-Match.salam
+
+### `LocationPattern`
+
+```salam
+func LocationPattern(loc: int): str
+```
+
+The pattern of a location without its `=`, `^~` or `~` marker.
+
+The example for this item is shown with the ones above: net-httpd-Match.salam
+
+### `ProblemCount`
+
+```salam
+func ProblemCount(): int
+```
+
+The number of problems found while loading the last configuration; zero means it is valid.
+
+net-httpd-Problems.salam
+
+```salam
+import net.httpd
+
+func attempt(text: str):
+    ok := httpd.LoadText(text, "bad.salam")
+    println ok, httpd.ProblemCount()
+    repeat httpd.ProblemCount() in i:
+        println httpd.ProblemAt(i)
+    end
+end
+
+func main:
+    attempt("server:\n    sit:\n    end\nend\n")
+    attempt("server:\n    site:\n        listen = 70000\n    end\nend\n")
+    attempt("server:\n    site:\n        names = \"a.test\"\n        root = \"/no/such/dir\"\n    end\nend\n")
+    attempt("server:\n    site:\n        names = \"a.test\"\n    end\n    site:\n        names = \"a.test\"\n    end\nend\n")
+    attempt("server:\n    site:\n        listen = 443 tls\n    end\nend\n")
+    attempt("server:\n    site:\n        names = \"a.test\"\n        location \"/x\": hedaer = \"A\" \"b\" end\n    end\nend\n")
+    attempt("server:\nend\n")
+    attempt("server:\n    site:\n        names = \"a.test\"\n        cache = soon\n    end\nend\n")
+    attempt("server:\n    site:\n        names = \"a.test\"\n        location \"/x\": alias = \"/tmp\" end\n        location \"~ x\": alias = \"/tmp\" end\n    end\nend\n")
+end
+```
+
+Output:
+
+```text
+false 1
+bad.salam:2:5: unknown block 'sit' (did you mean 'site'?)
+false 1
+bad.salam:3:18: port must be a number from 1 to 65535
+false 1
+bad.salam:2:5: root '/no/such/dir' is not a directory
+false 1
+bad.salam:5:5: name 'a.test' is used by two sites on port 80
+false 1
+bad.salam:3:22: tls is not available yet
+false 1
+bad.salam:4:24: unknown setting 'hedaer' in a location (did you mean 'header'?)
+false 1
+bad.salam:1:1: the config has no sites
+false 1
+bad.salam:4:9: cache must be a duration such as 30s, 10m, 12h, 30d or 1y
+false 1
+bad.salam:5:9: alias works only with a prefix location, use root for the others
+```
+
+### `ProblemAt`
+
+```salam
+func ProblemAt(i: int): str
+```
+
+One problem as `file:line:column: message`, counting from 0.
+
+The example for this item is shown with the ones above: net-httpd-Problems.salam
+
+### `LoadFile`
+
+```salam
+func LoadFile(path: str): bool
+```
+
+Reads a file and loads it like `LoadText`. A file that cannot be read is a problem too.
+
+net-httpd-Run.salam
+
+```salam
+import os
+import net.httpd
+
+func main:
+    mut path := "web.salam"
+    args := os.Args()
+    if args.len() > 1:
+        path = args[1]
+    end
+    if httpd.Check(path) != 0:
+        ret 1
+    end
+    if not httpd.LoadFile(path):
+        ret 2
+    end
+    code := httpd.Run()
+    httpd.Stop()
+    ret code
+end
+```
+
+### `Check`
+
+```salam
+func Check(path: str): int
+```
+
+Loads a file the way `salam serve --config=FILE --test` does: it prints the problems to the error output and returns 1, or prints a one line summary and returns 0.
+
+The example for this item is shown with the ones above: net-httpd-Run.salam
+
+### `Run`
+
+```salam
+func Run(): int
+```
+
+Starts one listener for each distinct address in the loaded configuration and then waits until `Stop` is called. It returns 2 at once when no valid configuration is loaded, when the log cannot be opened or when an address cannot be bound.
+
+The example for this item is shown with the ones above: net-httpd-Serve.salam
+
+### `Stop`
+
+```salam
+func Stop()
+```
+
+Makes `Run` return. Connections already accepted are not drained.
+
+The example for this item is shown with the ones above: net-httpd-Serve.salam
+
+
+---
+
+# net/httpd/conf
+
+https://salamlang.github.io/Salam/std/net-httpd-conf/
+
+The reader of the web server config: blocks, settings and values in Salam block syntax, with positions for errors.
+
+This package reads text written in the block style that net/httpd uses for its config, and gives back a tree. It knows nothing about web servers: it only recognises the shapes, and `net/httpd` decides which names are valid. You can use it for settings files of your own that look like Salam.
+
+There are two shapes. A setting is a name, an equals sign and one or more values on the same line: `max connections = 100`. A block is a name, optional strings, a colon, its contents and `end`: `location "/api/": cache = 1h end`. A name may be several words (`error page`), values are strings in double quotes (with `\n`, `\t`, `\"` and `\\`), strings in backticks (taken as written, so a regular expression needs no doubling of backslashes), numbers with an optional unit such as `64mb` or `30d`, and plain words such as `tls`. Comments are `//` to the end of the line, or `/* ... */`.
+
+Everything lives in a `Doc`, a list of nodes that point at each other by number: node 0 is the root, `Find` and `ChildAt` move down, and the fields of a node hold its words, labels, values and children. Free the document with `Free` when you are done with it.
+
+The things people get wrong:
+
+- A value list ends at the end of the line, at `end`, or where the next setting starts on the same line, so `a = 1 b = 2` is two settings. A bare word at the end of a list is read as a value, which is why `listen = 443 tls` works.
+
+- A parse stops at the first error, and `ok` is then false. The error has the line and the column, and `ErrorText` puts them in front of the message the way compilers do.
+
+- Addresses and anything with a colon in it need quotes: `listen = "127.0.0.1:8080"`. Without them the colon would read as the start of a block.
+
+- A node's `words` hold its name, so `Name` joins them with single spaces. Block labels, such as the path of a location, are in `labels`, not in the name.
+
+## Types
+
+### `Value`
+
+```salam
+struct Value
+```
+
+One value of a setting.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `kind` | `int = 0` | `VAL_WORD`, `VAL_STR` or `VAL_NUM`. |
+| `text` | `str = ""` | The value as text; strings without their quotes and with escapes resolved. |
+| `line` | `int = 0` | The line, counting from 1. |
+| `col` | `int = 0` | The column, counting from 1. |
+
+net-httpd-conf-Parse.salam
+
+```salam
+import net.httpd.conf
+
+func main:
+    text := `
+server:
+    site:
+        listen = 80 tls
+        names = "a.test www.a.test"
+        location "/api/": cache = 1h end
+    end
+end
+`
+    d := conf.Parse(text)
+    println d.ok, d.nodes.len(), conf.Count(d, conf.Root())
+    server := conf.Find(d, conf.Root(), "server")
+    site := conf.Find(d, server, "site")
+    println conf.Name(d, site), conf.Count(d, site), d.nodes.get(site).block
+    listen := conf.Find(d, site, "listen")
+    v := d.nodes.get(listen).values.get(0)
+    println v.text, v.kind == conf.VAL_NUM, v.line, v.col
+    w := d.nodes.get(listen).values.get(1)
+    println w.text, w.kind == conf.VAL_WORD, conf.ValueText(d, conf.Find(d, site, "names"), 0)
+    names := d.nodes.get(conf.Find(d, site, "names")).values.get(0)
+    println names.kind == conf.VAL_STR
+    loc := conf.ChildAt(d, site, 2)
+    n := d.nodes.get(loc)
+    println conf.Name(d, loc), n.labels.get(0), n.block, n.words.len(), n.children.len(), n.line, n.col
+    conf.Free(d)
+end
+```
+
+Output:
+
+```text
+true 7 1
+site 3 true
+80 true 4 18
+tls true a.test www.a.test
+true
+location /api/ true 1 1 6 9
+```
+
+### `Node`
+
+```salam
+struct Node
+```
+
+One setting or block of the tree.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `block` | `bool = false` | True for a block, false for a setting. |
+| `words` | `Vector` | The words of the name, such as `error` and `page`. |
+| `labels` | `Vector` | The strings written between the name and the colon of a block. |
+| `values` | `Vector` | The values of a setting. |
+| `children` | `Vector` | The numbers of the nodes inside a block. |
+| `line` | `int = 0` | The line where it starts. |
+| `col` | `int = 0` | The column where it starts. |
+
+The example for this item is shown with the ones above: net-httpd-conf-Parse.salam
+
+### `Doc`
+
+```salam
+struct Doc
+```
+
+A parsed document: all the nodes and the first error.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `nodes` | `Vector` | Every node; node 0 is the root. |
+| `ok` | `bool = true` | True when the text parsed without an error. |
+| `error` | `str = ""` | The message of the first error, empty when there is none. |
+| `line` | `int = 0` | The line of the error. |
+| `col` | `int = 0` | The column of the error. |
+
+The example for this item is shown with the ones above: net-httpd-conf-Parse.salam
+
+## Constants and variables
+
+### `VAL_WORD`
+
+```salam
+const VAL_WORD: i32 = 0
+```
+
+The kind of a value that is a plain word such as `tls` or `auto`.
+
+The example for this item is shown with the ones above: net-httpd-conf-Parse.salam
+
+### `VAL_STR`
+
+```salam
+const VAL_STR: i32 = 1
+```
+
+The kind of a value written in quotes or backticks.
+
+The example for this item is shown with the ones above: net-httpd-conf-Parse.salam
+
+### `VAL_NUM`
+
+```salam
+const VAL_NUM: i32 = 2
+```
+
+The kind of a value that starts with a digit, with or without a unit, such as `8080` or `30d`; the text keeps the unit.
+
+The example for this item is shown with the ones above: net-httpd-conf-Parse.salam
+
+## Functions
+
+### `Parse`
+
+```salam
+func Parse(text: str): Doc
+```
+
+Parses text and returns the document; check `ok` before using it.
+
+The example for this item is shown with the ones above: net-httpd-conf-Parse.salam
+
+### `Free`
+
+```salam
+func Free(d &: Doc)
+```
+
+Frees the memory of a document.
+
+The example for this item is shown with the ones above: net-httpd-conf-Parse.salam
+
+### `ErrorText`
+
+```salam
+func ErrorText(d: Doc, file: str): str
+```
+
+The first error as `file:line:column: message`, or an empty string when the document is valid. The first argument is the name to show for the file.
+
+net-httpd-conf-Errors.salam
+
+```salam
+import net.httpd.conf
+
+func show(text: str):
+    d := conf.Parse(text)
+    println d.ok, conf.ErrorText(d, "web.salam"), d.error, d.line, d.col
+    conf.Free(d)
+end
+
+func main:
+    show("server:\n    site:\n")
+    show("server:\nend\nend\n")
+    show("listen = \n")
+    show("names = \"open\n")
+    show("listen 80\n")
+    show("a = 1 # no\n")
+    show("ok = 1\n")
+end
+```
+
+Output:
+
+```text
+false web.salam:3:1: missing 'end' for the block opened on line 2 missing 'end' for the block opened on line 2 3 1
+false web.salam:3:1: 'end' without a matching block 'end' without a matching block 3 1
+false web.salam:1:8: expected a value after '=' expected a value after '=' 1 8
+false web.salam:1:9: unterminated string unterminated string 1 9
+false web.salam:1:8: expected '=' or ':' after 'listen' expected '=' or ':' after 'listen' 1 8
+false web.salam:1:7: unexpected character '#' unexpected character '#' 1 7
+true   0 0
+```
+
+### `Name`
+
+```salam
+func Name(d: Doc, node: int): str
+```
+
+The name of a node: its words joined by single spaces.
+
+The example for this item is shown with the ones above: net-httpd-conf-Parse.salam
+
+### `Root`
+
+```salam
+func Root(): int
+```
+
+The number of the root node, which is 0.
+
+The example for this item is shown with the ones above: net-httpd-conf-Parse.salam
+
+### `Count`
+
+```salam
+func Count(d: Doc, node: int): int
+```
+
+The number of children of a block.
+
+The example for this item is shown with the ones above: net-httpd-conf-Parse.salam
+
+### `ChildAt`
+
+```salam
+func ChildAt(d: Doc, node: int, i: int): int
+```
+
+The node number of the child at a position, counting from 0.
+
+The example for this item is shown with the ones above: net-httpd-conf-Parse.salam
+
+### `Find`
+
+```salam
+func Find(d: Doc, node: int, name: str): int
+```
+
+The node number of the first child of a node with a given name, or -1.
+
+The example for this item is shown with the ones above: net-httpd-conf-Parse.salam
+
+### `ValueText`
+
+```salam
+func ValueText(d: Doc, node: int, i: int): str
+```
+
+The text of the value at a position of a setting.
+
+The example for this item is shown with the ones above: net-httpd-conf-Parse.salam

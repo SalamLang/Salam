@@ -1,0 +1,390 @@
+package nativegen
+
+func ww_node_ok(g &: Ng, i: int): bool:
+    op := g.i_op[i]
+    if g.i_ty[i] != T_I32 or g.i_res[i] < 0:
+        ret false
+    end
+    if op == OP_PHI or op == OP_SELECT:
+        ret true
+    end
+    if op == OP_ADD or op == OP_SUB or op == OP_MUL:
+        ret (g.i_f[i] & IF_NSW) != 0
+    end
+    ret false
+end
+
+func ww_is_sext64(g &: Ng, u: int): bool:
+    ret g.i_op[u] == OP_SEXT and g.i_ty[u] == T_I64
+end
+
+func ww_operands(g &: Ng, i: int, out &: Vector<int>):
+    out.clear()
+    op := g.i_op[i]
+    if op == OP_PHI:
+        repeat g.i_pcount[i] in k:
+            out.push(g.pool[g.i_ps[i] + 2 * k])
+        end
+    else op == OP_SELECT:
+        out.push(g.i_b[i])
+        out.push(g.i_c[i])
+    else:
+        out.push(g.i_a[i])
+        out.push(g.i_b[i])
+    end
+end
+
+func ww_users(g &: Ng, uh &: Vector<int>, un &: Vector<int>, ui &: Vector<int>):
+    uh.clear()
+    un.clear()
+    ui.clear()
+    repeat g.v_kind.len():
+        uh.push(0 - 1)
+    end
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0:
+            op := g.i_op[i]
+            m := val_mask(op)
+            mut vs := Vector {} as Vector<int>
+            if (m & 1) != 0: vs.push(g.i_a[i]) end
+            if (m & 2) != 0: vs.push(g.i_b[i]) end
+            if (m & 4) != 0: vs.push(g.i_c[i]) end
+            if op == OP_PHI:
+                repeat g.i_pcount[i] in k:
+                    vs.push(g.pool[g.i_ps[i] + 2 * k])
+                end
+            else op == OP_CALL:
+                repeat g.i_pcount[i] in k2:
+                    vs.push(g.pool[g.i_ps[i] + 3 * k2])
+                end
+            else op == OP_CMP64 or op == OP_ADC64:
+                vs.push(g.i_d[i] as int)
+            end
+            each v in vs:
+                if v >= 0 and v < uh.len():
+                    ui.push(i)
+                    un.push(uh[v])
+                    uh[v] = ui.len() - 1
+                end
+            end
+            vs.free()
+            i = g.i_next[i]
+        end
+    end
+end
+
+func ww_depths(g &: Ng, wt &: Vector<int>):
+    nb := g.b_first.len()
+    wt.clear()
+    repeat nb:
+        wt.push(1)
+    end
+    if g.off_wwdep:
+        ret
+    end
+    build_dom(g)
+    mut l := Lp {}
+    repeat nb:
+        l.inl.push(0)
+    end
+    lp_find(g, l)
+    mut mark := 7000000
+    each h in l.head:
+        mark += 1
+        _n := lp_body(g, l, h, mark)
+        repeat nb in b:
+            if l.inl[b] == mark and wt[b] < 512:
+                wt[b] = wt[b] * 8
+            end
+        end
+    end
+    l.head.free()
+    l.size.free()
+    l.inl.free()
+    l.wl.free()
+    l.succ.free()
+end
+
+func ww_w(g &: Ng, wt &: Vector<int>, i: int): int:
+    b := g.i_blk[i]
+    ret b >= 0 and b < wt.len() ? wt[b] : 1
+end
+
+func ww_in(web &: Vector<int>, i: int): bool:
+    each w in web:
+        if w == i:
+            ret true
+        end
+    end
+    ret false
+end
+
+func ww_grow(g &: Ng, seed: int, web &: Vector<int>, uh &: Vector<int>, un &: Vector<int>, ui &: Vector<int>, wt &: Vector<int>, gain &: int, cost &: int): bool:
+    web.clear()
+    gain = 0
+    cost = 0
+    mut work := Vector {} as Vector<int>
+    defer work.free()
+    mut ops := Vector {} as Vector<int>
+    defer ops.free()
+    mut bnd := Vector {} as Vector<int>
+    defer bnd.free()
+    web.push(seed)
+    work.push(seed)
+    until work.len() > 0:
+        if web.len() > 64:
+            ret false
+        end
+        i := work.pop()
+        ww_operands(g, i, ops)
+        each v in ops:
+            if v < 0:
+                ret false
+            end
+            k := g.v_kind[v]
+            if k == VK_INT or k == VK_ZERO:
+                continue
+            end
+            if k == VK_INS:
+                d := g.v_def[v]
+                if ww_node_ok(g, d):
+                    if not ww_in(web, d):
+                        web.push(d)
+                        work.push(d)
+                    end
+                    continue
+                end
+            end
+            if (k == VK_INS or k == VK_ARG) and g.v_ty[v] == T_I32:
+                mut seen := false
+                each bv in bnd:
+                    if bv == v:
+                        seen = true
+                    end
+                end
+                if not seen:
+                    bnd.push(v)
+                    cost += k == VK_INS ? ww_w(g, wt, g.v_def[v]) : 1
+                end
+                continue
+            end
+            ret false
+        end
+        mut e := uh[g.i_res[i]]
+        until e >= 0:
+            u := ui[e]
+            if ww_is_sext64(g, u):
+                gain += ww_w(g, wt, u)
+            else g.i_op[u] == OP_ICMP:
+                other := g.i_a[u] == g.i_res[i] ? g.i_b[u] : g.i_a[u]
+                if other >= 0 and g.v_kind[other] != VK_INT and g.v_kind[other] != VK_ZERO and not (g.v_kind[other] == VK_INS and ww_node_ok(g, g.v_def[other])) and g.off_wwtr:
+                    cost += ww_w(g, wt, u)
+                end
+            else ww_node_ok(g, u):
+                if not ww_in(web, u):
+                    web.push(u)
+                    work.push(u)
+                end
+            else:
+                ret false
+            end
+            e = un[e]
+        end
+    end
+    ret true
+end
+
+func ww_wide(g &: Ng, v: int, made &: Vector<int>, wide &: Vector<int>, ext &: Vector<int>): int:
+    k := g.v_kind[v]
+    if k == VK_INT:
+        ret const_int(g, T_I64, norm_int(g, T_I32, g.v_i[v]))
+    end
+    if k == VK_ZERO:
+        ret const_int(g, T_I64, 0 as i64)
+    end
+    if k == VK_INS and ww_in(made, g.v_def[v]):
+        ret v
+    end
+    repeat ext.len() in q:
+        if ext[q] == v:
+            ret wide[q]
+        end
+    end
+    s := ins_new(g, OP_SEXT, T_I64)
+    g.i_a[s] = v
+    g.i_x[s] = T_I32
+    sv := new_res(g, s)
+    if k == VK_ARG:
+        mut f := g.b_first[0]
+        until f >= 0 and g.i_op[f] == OP_PHI:
+            f = g.i_next[f]
+        end
+        ins_before(g, f, s)
+    else:
+        d := g.v_def[v]
+        mut nx := g.i_next[d]
+        until nx >= 0 and g.i_op[nx] == OP_PHI:
+            nx = g.i_next[nx]
+        end
+        ins_before(g, nx, s)
+    end
+    ext.push(v)
+    wide.push(sv)
+    ret sv
+end
+
+func ww_apply(g &: Ng, web &: Vector<int>, uh &: Vector<int>, un &: Vector<int>, ui &: Vector<int>):
+    mut wide := Vector {} as Vector<int>
+    defer wide.free()
+    mut ext := Vector {} as Vector<int>
+    defer ext.free()
+    mut sexts := Vector {} as Vector<int>
+    defer sexts.free()
+    mut cmps := Vector {} as Vector<int>
+    defer cmps.free()
+    each i in web:
+        mut e := uh[g.i_res[i]]
+        until e >= 0:
+            u := ui[e]
+            if ww_is_sext64(g, u):
+                sexts.push(u)
+            else g.i_op[u] == OP_ICMP:
+                cmps.push(u)
+            end
+            e = un[e]
+        end
+    end
+    each i2 in web:
+        op := g.i_op[i2]
+        if op == OP_PHI:
+            repeat g.i_pcount[i2] in k:
+                p := g.i_ps[i2] + 2 * k
+                g.pool[p] = ww_wide(g, g.pool[p], web, wide, ext)
+            end
+        else op == OP_SELECT:
+            g.i_b[i2] = ww_wide(g, g.i_b[i2], web, wide, ext)
+            g.i_c[i2] = ww_wide(g, g.i_c[i2], web, wide, ext)
+        else:
+            g.i_a[i2] = ww_wide(g, g.i_a[i2], web, wide, ext)
+            g.i_b[i2] = ww_wide(g, g.i_b[i2], web, wide, ext)
+        end
+        g.i_ty[i2] = T_I64
+        g.v_ty[g.i_res[i2]] = T_I64
+        dv_taint(g, i2)
+    end
+    each c in cmps:
+        if g.i_op[c] == OP_ICMP:
+            a := g.i_a[c]
+            b := g.i_b[c]
+            narrow := not g.off_wwtr and ((a >= 0 and g.v_ty[a] == T_I32 and g.v_kind[a] != VK_INT and g.v_kind[a] != VK_ZERO) or (b >= 0 and g.v_ty[b] == T_I32 and g.v_kind[b] != VK_INT and g.v_kind[b] != VK_ZERO))
+            if narrow:
+                if a >= 0 and g.v_ty[a] == T_I64:
+                    g.i_a[c] = ww_trunc_at(g, a, c)
+                end
+                if b >= 0 and g.v_ty[b] == T_I64:
+                    g.i_b[c] = ww_trunc_at(g, b, c)
+                end
+            else:
+                if a >= 0 and g.v_ty[a] == T_I32:
+                    g.i_a[c] = ww_wide_at(g, a, c, web, wide, ext)
+                end
+                if b >= 0 and g.v_ty[b] == T_I32:
+                    g.i_b[c] = ww_wide_at(g, b, c, web, wide, ext)
+                end
+            end
+        end
+    end
+    repl_grow(g)
+    each s in sexts:
+        if g.i_op[s] == OP_SEXT:
+            g.v_repl[g.i_res[s]] = g.i_a[s]
+            ins_unlink(g, s)
+        end
+    end
+end
+
+func ww_trunc_at(g &: Ng, v: int, at: int): int:
+    t := ins_new(g, OP_TRUNC, T_I32)
+    g.i_a[t] = v
+    g.i_x[t] = T_I64
+    tv := new_res(g, t)
+    ins_before(g, at, t)
+    ret tv
+end
+
+func ww_wide_at(g &: Ng, v: int, at: int, web &: Vector<int>, wide &: Vector<int>, ext &: Vector<int>): int:
+    k := g.v_kind[v]
+    if k == VK_INT or k == VK_ZERO:
+        ret ww_wide(g, v, web, wide, ext)
+    end
+    repeat ext.len() in q:
+        if ext[q] == v:
+            ret wide[q]
+        end
+    end
+    s := ins_new(g, OP_SEXT, T_I64)
+    g.i_a[s] = v
+    g.i_x[s] = T_I32
+    sv := new_res(g, s)
+    ins_before(g, at, s)
+    ret sv
+end
+
+func widen_one(g &: Ng, done &: Vector<bool>): bool:
+    count_uses(g)
+    mut uh := Vector {} as Vector<int>
+    defer uh.free()
+    mut un := Vector {} as Vector<int>
+    defer un.free()
+    mut ui := Vector {} as Vector<int>
+    defer ui.free()
+    ww_users(g, uh, un, ui)
+    mut wt := Vector {} as Vector<int>
+    defer wt.free()
+    ww_depths(g, wt)
+    mut web := Vector {} as Vector<int>
+    defer web.free()
+    until done.len() < g.i_op.len():
+        done.push(false)
+    end
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0:
+            if ww_is_sext64(g, i) and not done[i]:
+                done[i] = true
+                v := g.i_a[i]
+                if v >= 0 and g.v_kind[v] == VK_INS and g.v_ty[v] == T_I32 and ww_node_ok(g, g.v_def[v]) and not done[g.v_def[v]]:
+                    mut gain := 0
+                    mut cost := 0
+                    ok := ww_grow(g, g.v_def[v], web, uh, un, ui, wt, gain, cost)
+                    each w in web:
+                        done[w] = true
+                    end
+                    if ok and gain > cost:
+                        ww_apply(g, web, uh, un, ui)
+                        remap_all(g)
+                        ret true
+                    end
+                end
+            end
+            i = g.i_next[i]
+        end
+    end
+    ret false
+end
+
+func widen_webs(g &: Ng): bool:
+    if g.wsz != 8:
+        ret false
+    end
+    mut done := Vector {} as Vector<bool>
+    defer done.free()
+    mut changed := false
+    mut n := 0
+    until n < 16 and widen_one(g, done):
+        changed = true
+        n += 1
+    end
+    ret changed
+end

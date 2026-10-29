@@ -101,7 +101,9 @@ const streamed = chunks.map((c) => c.choices?.[0]?.delta?.content ?? "").join(""
 check("streaming uses text/event-stream", st.headers.get("content-type").startsWith("text/event-stream"));
 check("the first chunk carries the assistant role", chunks[0].choices[0].delta.role === "assistant");
 check("the stream ends with stop, usage and [DONE]", chunks.some((c) => c.choices?.[0]?.finish_reason === "stop") && chunks.some((c) => c.usage && c.choices.length === 0) && events.at(-1) === "[DONE]", events.slice(-3));
-check("streamed text is the whole answer without dashes", streamed.startsWith("Echo: Stream please") && streamed.includes("done") && !DASHES.test(streamed), streamed);
+const streamUsage = chunks.find((c) => c.usage && c.choices.length === 0)?.usage;
+check("the streamed usage is an estimate too", streamUsage?.prompt_tokens_details?.cached_tokens === 0 && streamUsage.completion_tokens_details?.reasoning_tokens === 0 && streamUsage.total_tokens === streamUsage.prompt_tokens + streamUsage.completion_tokens, streamUsage);
+check("streamed text is the whole answer without dashes",streamed.startsWith("Echo: Stream please") && streamed.includes("done") && !DASHES.test(streamed), streamed);
 
 console.log("long answers");
 const slowStream = await chat(key, { model: "salam", stream: true, messages: [{ role: "user", content: "slow: 12 stream" }] });
@@ -330,11 +332,31 @@ check("a conversation past the limit drops its oldest turns instead of failing",
 const trimmedLog = (await api("GET", "/keys/requests", longSession)).json.requests[0];
 check("the newest turns survive the trim and the client is told", trimmedLog.prompt.includes("Earlier messages were left out") && trimmedLog.prompt_chars <= 1048576, trimmedLog.prompt_chars);
 
+console.log("identity");
+const idSession = await account("identity@test.ir", "Identity");
+const idKey = (await api("POST", "/keys", idSession, { name: "identity-bot" })).json.secret;
+const askId = { model: "salam", messages: [{ role: "user", content: "who powers you" }] };
+const idText = (await (await chat(idKey, askId)).json()).choices?.[0]?.message?.content ?? "";
+check("a sentence where the assistant names a configured provider is replaced", !idText.includes("Zeta") && idText.includes("Salam AI Assistant"), idText);
+check("a neutral mention of a configured word stays", idText.includes("client for the Acme API") && idText.includes("Ask me anything about Salam."), idText);
+const idStream = await chat(idKey, { ...askId, stream: true });
+const idChunks = (await idStream.text()).split("\n\n").filter((b) => b.startsWith("data: ") && b !== "data: [DONE]").map((b) => JSON.parse(b.slice(6)));
+const idDeltas = idChunks.map((c) => c.choices?.[0]?.delta?.content ?? "").filter((d) => d.length > 0);
+check("the stream never shows the provider, not even half of it", idDeltas.every((d) => !d.includes("Zeta") && !/Z(et?)?$/.test(d)), idDeltas);
+check("the stream carries the same answer as the plain reply", idDeltas.join("") === idText, idDeltas.join(""));
+if (process.env.MOCK_LIVE) {
+  const idThink = await chat(idKey, { model: "salam", stream: true, messages: [{ role: "user", content: "think aloud please" }] });
+  const idThoughts = (await idThink.text()).split("\n\n").filter((b) => b.startsWith("data: ") && b !== "data: [DONE]").map((b) => JSON.parse(b.slice(6))).map((c) => c.choices?.[0]?.delta?.reasoning_content ?? "").join("");
+  check("the stream shows ordinary reasoning", idThoughts.includes("Planning the loop"), idThoughts);
+  check("the stream hides reasoning about the instructions", !/instructions|reveal/i.test(idThoughts), idThoughts);
+}
+
 console.log("usage");
 const um = await chat(key, { model: "salam", messages: [{ role: "user", content: "usage please" }] });
 const uj = await um.json();
-check("usage reports the engine's real tokens", uj.usage.prompt_tokens === 410 && uj.usage.completion_tokens === 25 && uj.usage.total_tokens === 435, uj.usage);
-check("usage details carry cached and reasoning tokens", uj.usage.prompt_tokens_details?.cached_tokens === 300 && uj.usage.completion_tokens_details?.reasoning_tokens === 5, uj.usage);
+const usedLog = (await api("GET", "/keys/requests", session)).json.requests.find((r) => r.prompt.includes("usage please"));
+check("usage is estimated from the text, never the engine's token counts", uj.usage.prompt_tokens === Math.ceil(usedLog.prompt_chars / 4) && uj.usage.completion_tokens === Math.ceil(usedLog.completion_chars / 4) && uj.usage.total_tokens === uj.usage.prompt_tokens + uj.usage.completion_tokens && uj.usage.prompt_tokens !== 410, uj.usage);
+check("usage details show no cache or reasoning counts", uj.usage.prompt_tokens_details?.cached_tokens === 0 && uj.usage.completion_tokens_details?.reasoning_tokens === 0, uj.usage);
 
 console.log("logging");
 const mine = await api("GET", "/keys/requests", session);
@@ -346,7 +368,9 @@ const adm = await api("GET", "/admin/requests?project=website-bot", session);
 check("admin sees requests with the user", adm.json.requests[0]?.user?.email === ADMIN, adm.json.requests[0]);
 const sum = await api("GET", "/admin/summary", session);
 check("admin summary counts API requests and projects", sum.json.api_requests >= 2 && sum.json.top_projects.some((p) => p.name === "website-bot") && typeof sum.json.daily.at(-1).api === "number", sum.json);
-const stored = (await api("GET", "/keys/requests", session)).json.requests.find((r) => r.prompt.includes("usage please"));
+const stored = (await api("GET", "/admin/requests", session)).json.requests.find((r) => r.prompt.includes("usage please"));
+const shown = (await api("GET", "/keys/requests", session)).json.requests.find((r) => r.prompt.includes("usage please"));
+check("the owner sees estimated tokens and no cost, cache or reasoning", shown?.usage?.input === Math.ceil(shown.prompt_chars / 4) && shown.usage.output === Math.ceil(shown.completion_chars / 4) && shown.usage.cost === 0 && shown.usage.cache_read === 0 && shown.usage.cache_write === 0 && shown.usage.reasoning === 0 && shown.usage.tools === 1, shown?.usage);
 check("each request stores input, output, cache, cost and tools", stored?.usage?.input === 100 && stored.usage.output === 20 && stored.usage.cache_read === 300 && stored.usage.cache_write === 10 && stored.usage.reasoning === 5 && stored.usage.tools === 1 && Math.abs(stored.usage.cost - 0.0012) < 1e-9, stored?.usage);
 const chatRes = await api("POST", "/chats", session);
 const sent = await api("POST", `/chats/${chatRes.json.chat.id}/messages`, session, { text: "chat usage" });

@@ -371,7 +371,7 @@ class Gen:
                 f"        s = (s * 3 + x + (i as i64)) % {M}",
                 "    end",
                 "    sync.Lock(fz_mu)",
-                f"    fz_total = (fz_total + s) % {M}",
+                f"    fz_total = ((fz_total + s) % {M} + {M}) % {M}",
                 "    sync.Unlock(fz_mu)",
                 "end"]))
         body = [f"noinline func t{idx}(a: i64, b: i64): i64:",

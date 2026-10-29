@@ -24,6 +24,8 @@ pub struct Lv:
     pub divn: int = 0 - 1
     pub rsum: int = 0 - 1
     pub rsum64: int = 0 - 1
+    pub hpool: int = 0 - 1
+    pub hp64: int = 0 - 1
     pub cmp: int = 0 - 1
     pub lim: int = 0 - 1
     pub sle: bool = false
@@ -1576,7 +1578,27 @@ func lv_transform(g &: Ng, r &: Lv):
     ins_append(g, vh, vct)
     r.vmap[ivv] = viv
     if r.divp >= 0:
-        r.vmap[g.i_res[r.divp]] = lv_emit(g, vb, OP_SUB, ivt, r.rsum, viv)
+        hph := ins_new(g, OP_PHI, T_I64)
+        g.i_ps[hph] = g.pool.len()
+        g.i_pcount[hph] = 2
+        g.pool.push(lv_sext(g, ck, phi_val_for(g, r.divp, pre)))
+        g.pool.push(ck)
+        g.pool.push(0 - 1)
+        g.pool.push(vb)
+        r.hpool = g.pool.len() - 2
+        r.hp64 = new_res(g, hph)
+        mut fp := g.b_first[vh]
+        until fp >= 0 and g.i_op[fp] == OP_PHI:
+            fp = g.i_next[fp]
+        end
+        ins_before(g, fp, hph)
+        if ivt == T_I64:
+            r.vmap[g.i_res[r.divp]] = r.hp64
+        else:
+            ht := lv_emit(g, vb, OP_TRUNC, ivt, r.hp64, 0 - 1)
+            g.i_x[g.v_def[ht]] = T_I64
+            r.vmap[g.i_res[r.divp]] = ht
+        end
     end
     if r.shape == 0:
         ne := new_blk(g)
@@ -1614,6 +1636,10 @@ func lv_transform(g &: Ng, r &: Lv):
             continue
         end
         if c == LV_SKIP or c == LV_NARROW or c == LV_HOIST:
+            continue
+        end
+        if op == OP_SEXT and g.i_ty[i] == T_I64 and r.divp >= 0 and g.i_a[i] == g.i_res[r.divp]:
+            r.vmap[res] = r.hp64
             continue
         end
         if c == LV_IDX or c == LV_ADDR or c == LV_RIDX or c == LV_RADDR:
@@ -1780,6 +1806,10 @@ func lv_transform(g &: Ng, r &: Lv):
     vnext := lv_emit(g, vb, OP_ADD, ivt, viv, const_int(g, ivt, r.vf as i64))
     g.i_f[g.v_def[vnext]] = IF_NSW
     g.pool[vpool] = vnext
+    if r.divp >= 0:
+        hnext := lv_emit(g, vb, OP_SUB, T_I64, r.hp64, const_int(g, T_I64, r.vf as i64))
+        g.pool[r.hpool] = hnext
+    end
     repeat r.reds.len() in k2:
         g.pool[vpools[k2]] = r.vmap[g.i_res[r.rnext[k2]]]
     end

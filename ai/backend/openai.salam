@@ -424,23 +424,15 @@ func chunk(cid: str, created: i64, delta: str, finish: str): str:
     ret "data: " + json.Object(m) + "\n\n"
 end
 
-func usage_json(prompt_chars: int, completion_chars: int, real: aiengine.Usage): str:
-    mut p := approx_tokens(prompt_chars)
-    mut q := approx_tokens(completion_chars)
-    mut cached := 0 as i64
-    mut reasoning := 0 as i64
-    if real.ok:
-        p = real.input + real.cache_read + real.cache_write
-        q = real.output + real.reasoning
-        cached = real.cache_read
-        reasoning = real.reasoning
-    end
+func usage_json(prompt_chars: int, completion_chars: int): str:
+    p := approx_tokens(prompt_chars)
+    q := approx_tokens(completion_chars)
     mut u := Vector {} as Vector<str>
     u.push(json.MemberInt("prompt_tokens", p))
     u.push(json.MemberInt("completion_tokens", q))
     u.push(json.MemberInt("total_tokens", p + q))
-    u.push(json.MemberRaw("prompt_tokens_details", "{" + json.MemberInt("cached_tokens", cached) + "}"))
-    u.push(json.MemberRaw("completion_tokens_details", "{" + json.MemberInt("reasoning_tokens", reasoning) + "}"))
+    u.push(json.MemberRaw("prompt_tokens_details", "{" + json.MemberInt("cached_tokens", 0) + "}"))
+    u.push(json.MemberRaw("completion_tokens_details", "{" + json.MemberInt("reasoning_tokens", 0) + "}"))
     ret json.Object(u)
 end
 
@@ -919,7 +911,7 @@ func answer(c: tcp.Conn, h: HashMap<str, str>, body: str, uid: str, kid: str, kn
     aiturn.SaveUsage("api_requests", rid, usage)
     if stream:
         if opened:
-            end_stream(c, cid, t, with_usage, usage_json(prompt.len(), final.len(), usage))
+            end_stream(c, cid, t, with_usage, usage_json(prompt.len(), final.len()))
         end
         ret
     end
@@ -960,7 +952,7 @@ func answer(c: tcp.Conn, h: HashMap<str, str>, body: str, uid: str, kid: str, kn
     m.push(json.MemberInt("created", t))
     m.push(json.Member("model", MODEL))
     m.push(json.MemberRaw("choices", "[" + json.Object(choice) + "]"))
-    m.push(json.MemberRaw("usage", usage_json(prompt.len(), final.len(), usage)))
+    m.push(json.MemberRaw("usage", usage_json(prompt.len(), final.len())))
     if opened:
         _o := wr(c, json.Object(m))
         ret
@@ -1104,12 +1096,21 @@ pub func Requests(where: str, args: Vector<str>, with_user: bool): str:
         m.push(json.Member("ip", aistore.Text(rows, 14)))
         m.push(json.Member("agent", aistore.Text(rows, 15)))
         mut tk := Vector {} as Vector<str>
-        tk.push(json.MemberRaw("input", aistore.Text(rows, 19)))
-        tk.push(json.MemberRaw("output", aistore.Text(rows, 20)))
-        tk.push(json.MemberRaw("reasoning", aistore.Text(rows, 21)))
-        tk.push(json.MemberRaw("cache_read", aistore.Text(rows, 22)))
-        tk.push(json.MemberRaw("cache_write", aistore.Text(rows, 23)))
-        tk.push(json.MemberRaw("cost", aistore.Text(rows, 24)))
+        if with_user:
+            tk.push(json.MemberRaw("input", aistore.Text(rows, 19)))
+            tk.push(json.MemberRaw("output", aistore.Text(rows, 20)))
+            tk.push(json.MemberRaw("reasoning", aistore.Text(rows, 21)))
+            tk.push(json.MemberRaw("cache_read", aistore.Text(rows, 22)))
+            tk.push(json.MemberRaw("cache_write", aistore.Text(rows, 23)))
+            tk.push(json.MemberRaw("cost", aistore.Text(rows, 24)))
+        else:
+            tk.push(json.MemberInt("input", approx_tokens(aistore.Text(rows, 12).to_int())))
+            tk.push(json.MemberInt("output", approx_tokens(aistore.Text(rows, 13).to_int())))
+            tk.push(json.MemberInt("reasoning", 0))
+            tk.push(json.MemberInt("cache_read", 0))
+            tk.push(json.MemberInt("cache_write", 0))
+            tk.push(json.MemberInt("cost", 0))
+        end
         tk.push(json.MemberRaw("tools", aistore.Text(rows, 25)))
         m.push(json.MemberRaw("usage", json.Object(tk)))
         if with_user:

@@ -104,6 +104,7 @@ struct _ReqCtx:
     pub raw: str = ""
     pub hdr_pos: int = 0
     pub hdr_end: int = 0
+    pub bad_framing: bool = false
 end
 
 @en "Context"
@@ -325,6 +326,7 @@ func salam_ctx_reset(h: i64):
     c.raw = ""
     c.hdr_pos = 0
     c.hdr_end = 0
+    c.bad_framing = false
     c.method = ""
     c.path = ""
     c.query = ""
@@ -586,6 +588,8 @@ func _parse_http(ctx: i64, req: str, req_len: int):
     c.hdr_pos = first_crlf + 2
     mut pos := first_crlf + 2
     mut body_start := 0 - 1
+    mut cl_seen := false
+    mut cl_first := 0
     until pos < n:
         if pos + 1 < n and _scan_crlf(req, pos, pos + 2) == pos:
             body_start = pos + 2
@@ -596,6 +600,11 @@ func _parse_http(ctx: i64, req: str, req_len: int):
             break
         end
         colon := _scan_byte(req, pos, line_end, 58)
+        if colon >= 0 and colon - pos == 17 and _eq_at_fold(req, pos, "transfer-encoding"):
+            c.bad_framing = true
+        else colon >= 0 and colon - pos == 14 and _eq_at_fold(req, pos, "content-length"):
+            if _bad_cl_value(req, colon, line_end, cl_seen, cl_first): c.bad_framing = true end
+        end
         if colon >= 0 and colon < line_end and colon - pos == 10 and _eq_at_fold(req, pos, "connection"):
             mut vs := colon + 1
             until vs < line_end and _ows_at(req, vs):
@@ -783,50 +792,34 @@ func _str_of(ptr: void *, n: int): str:
     ret r as str
 end
 
-func _bad_framing(head: str, head_len: int): bool:
-    mut pos := 0
-    mut seen := false
-    mut first := 0
-    until pos < head_len:
-        line_end := _scan_crlf(head, pos, head_len)
-        if line_end < 0 or line_end >= head_len: break end
-        colon := _scan_byte(head, pos, line_end, 58)
-        if colon >= 0 and colon < line_end:
-            if colon - pos == 17 and _eq_at_fold(head, pos, "transfer-encoding"):
-                ret true
-            end
-            if colon - pos == 14 and _eq_at_fold(head, pos, "content-length"):
-                raw := head.substr(colon + 1, line_end - colon - 1)
-                t := str.Trim(raw)
-                mem.Free(raw as void *)
-                if t.len() == 0:
-                    mem.Free(t as void *)
-                    ret true
-                end
-                tp := t as u8 *
-                mut k := 0
-                until k < t.len():
-                    c := tp[k] as int
-                    if c < 48 or c > 57:
-                        mem.Free(t as void *)
-                        ret true
-                    end
-                    k += 1
-                end
-                if t.len() > 15:
-                    mem.Free(t as void *)
-                    ret true
-                end
-                v := t.to_int()
-                mem.Free(t as void *)
-                if v < 0: ret true end
-                if seen and v != first: ret true end
-                seen = true
-                first = v
-            end
-        end
-        pos = line_end + 2
+func _bad_cl_value(head: str, colon: int, line_end: int, seen &: bool, first &: int): bool:
+    raw := head.substr(colon + 1, line_end - colon - 1)
+    t := str.Trim(raw)
+    mem.Free(raw as void *)
+    if t.len() == 0:
+        mem.Free(t as void *)
+        ret true
     end
+    tp := t as u8 *
+    mut k := 0
+    until k < t.len():
+        c := tp[k] as int
+        if c < 48 or c > 57:
+            mem.Free(t as void *)
+            ret true
+        end
+        k += 1
+    end
+    if t.len() > 15:
+        mem.Free(t as void *)
+        ret true
+    end
+    v := t.to_int()
+    mem.Free(t as void *)
+    if v < 0: ret true end
+    if seen and v != first: ret true end
+    seen = true
+    first = v
     ret false
 end
 
@@ -884,11 +877,10 @@ end
 
 // Reads one request. Lengths are tracked explicitly (req_len, pending_len)
 // so bodies may carry NUL bytes; header scanning stops before the body.
-func _read_request(fd: i64, scratch: void *, pending &: str, pending_len &: int, req_len &: int, head_out &: int, owned &: bool, oversize &: int): str:
+func _read_request(fd: i64, scratch: void *, pending &: str, pending_len &: int, req_len &: int, owned &: bool, oversize &: int): str:
     sock := rawsock.FromFd(fd)
     owned = false
     req_len = 0
-    head_out = 0
     if pending_len == 0:
         got := rawsock.RecvBytes(sock, scratch, _RD_CHUNK)
         if got <= 0: ret "" end
@@ -898,7 +890,6 @@ func _read_request(fd: i64, scratch: void *, pending &: str, pending_len &: int,
         head_end := str.IndexFrom(one, "\r\n\r\n", 0)
         if head_end >= 0:
             head_len := head_end + 4
-            head_out = head_len
             mut need := head_len
             vend := one.find(" ")
             if vend > 0 and _has_body_at(one, vend):
@@ -945,7 +936,6 @@ func _read_request(fd: i64, scratch: void *, pending &: str, pending_len &: int,
         head_end = str.IndexFrom(buf, "\r\n\r\n", scan)
     end
     head_len := head_end + 4
-    head_out = head_len
     mut need := head_len
     vend := buf.find(" ")
     if vend > 0 and _has_body_at(buf, vend):
@@ -1176,6 +1166,11 @@ func _route_request(slot: int, fd: i64, ctx: i64, req: str, req_len: int, keep &
     end
     salam_ctx_reset(ctx)
     _parse_http(ctx, req, req_len)
+    if _rc(ctx).bad_framing:
+        if fd >= 0: _net_send_all(fd, "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n") end
+        keep = false
+        ret false
+    end
     keep = _rc(ctx).keep_alive
     r := _srv_routers.get(slot)
     shdr := _srv_shdr.get(slot)
@@ -1257,8 +1252,7 @@ func _conn_step(slot: int, fd: i64, ctx: i64, scratch: void *, pending &: str, p
     mut owned := false
     mut oversize := 0
     mut req_len := 0
-    mut head_len := 0
-    req := _read_request(fd, scratch, pending, pending_len, req_len, head_len, owned, oversize)
+    req := _read_request(fd, scratch, pending, pending_len, req_len, owned, oversize)
     if oversize == 431:
         _net_send_all(fd, "HTTP/1.1 431 Request Header Fields Too Large\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
         ret false
@@ -1268,11 +1262,6 @@ func _conn_step(slot: int, fd: i64, ctx: i64, scratch: void *, pending &: str, p
         ret false
     end
     if req_len == 0: ret false end
-    if head_len > 0 and _bad_framing(req, head_len):
-        _net_send_all(fd, "HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
-        if owned: mem.Free(req as void *) end
-        ret false
-    end
     mut keep := true
     ok := _serve_request(slot, fd, ctx, req, req_len, keep)
     if owned: mem.Free(req as void *) end

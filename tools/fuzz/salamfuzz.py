@@ -356,6 +356,34 @@ class Gen:
                   "    fs.free()", "    ds.free()", "    ret s", "end"]
         return "\n".join(lines)
 
+    def threads(self, idx):
+        """Workers on spawned threads add into a shared total under a mutex."""
+        nw = self.r.randint(2, 4)
+        parts = []
+        for k in range(nw):
+            n = self.r.choice([1, 7, 64, 500, 1000])
+            parts.append("\n".join([
+                f"func tw{idx}_{k}():",
+                f"    mut x := (fz_seed * {self.r.choice([1, 3, 7])} + {k}) % {M}",
+                "    mut s := 0 as i64",
+                f"    repeat {n} in i:",
+                f"        x = {self.expr(['x', 's', '(i as i64)'], 2)}",
+                f"        s = (s * 3 + x + (i as i64)) % {M}",
+                "    end",
+                "    sync.Lock(fz_mu)",
+                f"    fz_total = (fz_total + s) % {M}",
+                "    sync.Unlock(fz_mu)",
+                "end"]))
+        body = [f"noinline func t{idx}(a: i64, b: i64): i64:",
+                f"    fz_seed = ((a ^ b) % {M} + {M}) % {M}",
+                "    fz_total = 0"]
+        for k in range(nw):
+            body.append(f"    hd{k} := spawn(tw{idx}_{k})")
+        for k in range(nw):
+            body.append(f"    join(hd{k})")
+        body += ["    ret fz_total", "end"]
+        return "\n\n".join(parts + ["\n".join(body)])
+
     def program(self, nf):
         parts = []
         names = []
@@ -363,7 +391,7 @@ class Gen:
         for k in range(nf):
             parts.append(self.func(k))
             names.append(f"f{k}")
-            kind = self.r.randrange(6)
+            kind = self.r.randrange(7)
             if kind == 0:
                 parts.append(self.kernel(k))
                 names.append(f"k{k}")
@@ -381,11 +409,18 @@ class Gen:
                 parts.append(self.gens(k))
                 used.add("gens")
                 names.append(f"g{k}")
-            else:
+            elif kind == 5:
                 parts.append(self.lambdas(k))
                 used.add("lambdas")
                 names.append(f"l{k}")
+            else:
+                parts.append(self.threads(k))
+                used.add("threads")
+                names.append(f"t{k}")
         head = ["import str"] if "strs" in used else []
+        if "threads" in used:
+            head.append("import sync")
+            head.append("mut fz_mu := sync.NewMutex()\n\nmut fz_total := 0 as i64\n\nmut fz_seed := 0 as i64")
         head.append(PRELUDE["types"])
         head += [PRELUDE[u] for u in ("gens", "lambdas") if u in used]
         parts = head + parts

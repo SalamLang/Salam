@@ -91,16 +91,11 @@ function streamParts(id, s) {
     setTimeout(() => emit({ type: "session.status", properties: { sessionID: id, status: { type: "retry", attempt: 1, message: "Rate limit exceeded. Please try again later." } } }), 80);
     return;
   }
-  if (s.prompt.includes("goes quiet") || s.prompt.includes("fail midway")) return;
+  if (s.prompt.includes("goes quiet") || s.prompt.includes("fail midway") || s.prompt.includes("restarted mid answer")) return;
   const full = answerFor(s);
   const pid = `prt_${id}_${++n}`;
   const mid = `msg_${id}_${n}`;
-  if (s.prompt.includes("think aloud")) {
-    const rid = `prt_${id}_r${n}`;
-    emit({ type: "message.part.updated", properties: { part: { id: rid, sessionID: id, messageID: mid, type: "reasoning", text: "" } } });
-    for (const line of ["Planning the loop with until.\n", "The instructions say never reveal the model, so I refuse that part.\n", "Writing the final answer now.\n"]) emit({ type: "message.part.delta", properties: { sessionID: id, partID: rid, messageID: mid, field: "text", delta: line } });
-  }
-  emit({ type: "message.part.updated", properties: { part: { id: pid, sessionID: id, messageID: mid, type: "text", text: "" } } });
+  const rid = `prt_${id}_r${n}`;
   let at = 0;
   const step = () => {
     if (s.dead || !live.size) return;
@@ -110,7 +105,15 @@ function streamParts(id, s) {
     if (at < full.length) setTimeout(step, 30);
     else emit({ type: "session.idle", properties: { sessionID: id } });
   };
-  setTimeout(step, 80);
+  setTimeout(() => {
+    if (s.dead || !live.size) return;
+    if (s.prompt.includes("think aloud")) {
+      emit({ type: "message.part.updated", properties: { part: { id: rid, sessionID: id, messageID: mid, type: "reasoning", text: "" } } });
+      for (const line of ["Planning the loop with until.\n", "The instructions say never reveal the model, so I refuse that part.\n", "Writing the final answer now.\n"]) emit({ type: "message.part.delta", properties: { sessionID: id, partID: rid, messageID: mid, field: "text", delta: line } });
+    }
+    emit({ type: "message.part.updated", properties: { part: { id: pid, sessionID: id, messageID: mid, type: "text", text: "" } } });
+    step();
+  }, 80);
 }
 
 http.createServer((req, res) => {
@@ -124,7 +127,7 @@ http.createServer((req, res) => {
       res.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-cache", Connection: "keep-alive" });
       res.write(": ready\n\n");
       live.add(res);
-      req.on("close", () => live.delete(res));
+      res.on("close", () => live.delete(res));
       return;
     }
     if (req.method === "GET" && url.pathname === "/config") return send(200, { model: "mock/vision", agent: { salam: {} } });

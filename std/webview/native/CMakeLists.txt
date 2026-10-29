@@ -1,6 +1,6 @@
 # Salam Programming Language (2024-2026)
 #
-# Builds the CEF backend of packages/webview:
+# Builds the CEF backend of std/webview:
 #
 #   libsalam_webview_cef   - the shared library cef.salam links against
 #   salam_cef_helper       - CEF's subprocess executable

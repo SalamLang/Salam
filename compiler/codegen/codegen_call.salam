@@ -412,24 +412,37 @@ func cg_extern_io_kind(nm: str): int:
     ret 0
 end
 
+func cg_stdio_writer(nm: str): bool:
+    if cg_extern_io_kind(nm) == 2:
+        ret true
+    end
+    ret str.Equals(nm, "fwrite") or str.Equals(nm, "fputs") or str.Equals(nm, "fputc") or str.Equals(nm, "fprintf") or str.Equals(nm, "vfprintf") or str.Equals(nm, "putc") or str.Equals(nm, "fwrite_unlocked") or str.Equals(nm, "fputs_unlocked") or str.Equals(nm, "fputc_unlocked") or str.Equals(nm, "putc_unlocked")
+end
+
 func cg_wrap_extern_io(g &: Cg, s &: sm.Sema, sig: int, nm: str, call: str): str:
-    if not g.single_threaded or g.freestanding:
+    if g.freestanding:
         ret call
     end
     k := cg_extern_io_kind(nm)
-    if k == 0:
+    wr := cg_stdio_writer(nm)
+    if k == 0 and not wr:
         ret call
     end
-    if k == 1:
-        ret "(salam_out_flush(), (void)fflush(0), " + call + ")"
+    pre := g.single_threaded ? "salam_out_flush(), SALAM_STDIO_SYNC()" : "SALAM_STDIO_SYNC()"
+    mut post := wr ? "SALAM_STDIO_DIRTY()" : ""
+    if k == 2 and g.single_threaded:
+        post = "(void)fflush(0)"
+    end
+    if str.Len(post) == 0:
+        ret "(" + pre + ", " + call + ")"
     end
     rts := sm.ToString(s, sm.SigAt(s, sig).ret_type)
     if str.Len(rts) == 0 or str.Equals(rts, "void"):
-        ret "(salam_out_flush(), " + call + ", (void)fflush(0))"
+        ret "(" + pre + ", " + call + ", " + post + ")"
     end
     g.tmpn += 1
     tv := "__sio" + co.I64Toa(g.tmpn as i64)
-    ret "({ salam_out_flush(); " + cg_ctype(rts) + " " + tv + " = " + call + "; fflush(0); " + tv + "; })"
+    ret "({ " + pre + "; " + cg_ctype(rts) + " " + tv + " = " + call + "; " + post + "; " + tv + "; })"
 end
 
 func cg_lower_print(

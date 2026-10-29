@@ -2247,6 +2247,8 @@ salam format app.salam                  # reformat in place (--check to verify; 
 salam sql check src --schema=db/      # check every SQL query in .salam/.sql files against the schema
 salam sql generate q --schema=db/ --output=gen/store.salam   # typed query functions from annotated .sql
 salam new name                          # scaffold a project: name/main.salam + salam.toml
+salam serve [dir] [--port=N]            # serve a folder over HTTP
+salam serve --config=web.salam [--test] # several sites from one config (std/net/httpd); --test only checks it
 salam init                              # same, in the current directory
 salam add github.com/owner/repo         # add a GitHub package (import "github.com/owner/repo"); remove/update/deps too
 salam install github.com/owner/tool     # build a program into ~/.salam/bin; salam search <word> finds packages

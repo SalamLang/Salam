@@ -225,6 +225,32 @@ salam page build            # main.salam if present, else EVERY layout
 A `main.salam` layout page compiles to `index.html` (the web server entry
 name), so `salam serve` picks it up directly.
 
+`salam serve` also runs several sites from one process when you give it a
+config file in Salam's block syntax:
+
+```
+server:
+    site:
+        listen = 80
+        names = "example.com www.example.com"
+        root = "/srv/example"
+        location "/assets/": cache = 30d end
+    end
+    site:
+        names = "blog.example.com"
+        root = "/srv/blog"
+    end
+end
+```
+
+```sh
+salam serve --config=web.salam --test   # check the file, exit 0 when valid
+salam serve --config=web.salam          # run it
+```
+
+Sites are chosen by the `Host` header, files are sent with `ETag` and byte
+range support, and `net/httpd` (see the std page) lists every setting.
+
 ### 🧩 Official packages
 
 Many packages are maintained with Salam but do not ship with it, so a fresh

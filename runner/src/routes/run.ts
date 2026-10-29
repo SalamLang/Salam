@@ -10,6 +10,7 @@ import { fetchSandbox } from "../sandbox-client";
 import {
   BODY_TOO_LARGE_MESSAGE,
   MAX_BODY_BYTES,
+  byteLength,
   parseRunOptions,
   validateRunInput,
 } from "../validation";
@@ -59,7 +60,7 @@ async function readSourceCode(
     return { error: badRequest("could not read request body", requestId) };
   }
 
-  if (code.length > MAX_BODY_BYTES) {
+  if (byteLength(code) > MAX_BODY_BYTES) {
     return { error: payloadTooLarge(BODY_TOO_LARGE_MESSAGE, requestId) };
   }
   return { code };
@@ -97,7 +98,7 @@ export async function handleRun(
     type,
     engine,
     language,
-    codeBytes: code.length,
+    codeBytes: byteLength(code),
   });
   const startedAt = Date.now();
 

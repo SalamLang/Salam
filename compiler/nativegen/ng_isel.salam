@@ -120,6 +120,17 @@ func isel_init(g &: Ng):
             i = g.i_next[i]
         end
     end
+    if g.opt and not g.off_selinc and (g.arch == NG_ARCH_X64 or g.arch == NG_ARCH_X86):
+        each b2 in g.b_rpo:
+            mut i2 := g.b_first[b2]
+            until i2 >= 0:
+                if g.i_op[i2] == OP_SELECT and sel_scalar(g, g.i_ty[i2]):
+                    sel_inc_plan(g, i2)
+                end
+                i2 = g.i_next[i2]
+            end
+        end
+    end
 end
 
 func count_inline_mem(g &: Ng, i: int):
@@ -1873,7 +1884,7 @@ func isel_bin(g &: Ng, i: int):
                 mb = a
             end
             move_into(g, r, ma)
-            rb := use_reg(g, mb)
+            rb := ma == mb and not g.off_sqself ? r : use_reg(g, mb)
             _m := e_rr(g, M_IMUL_RR, sz, r, rb)
         end
         set_res(g, i, r)
@@ -3988,8 +3999,71 @@ func dies_here(g &: Ng, v: int, i: int): bool:
     ret g.i_op[d] != OP_PHI and g.i_blk[d] == g.i_blk[i]
 end
 
+func sel_inc_add(g &: Ng, i: int): int:
+    t := g.i_ty[i]
+    if t != T_I32 and t != T_I64:
+        ret 0 - 1
+    end
+    repeat 2 in k:
+        v1 := k == 0 ? g.i_b[i] : g.i_c[i]
+        v0 := k == 0 ? g.i_c[i] : g.i_b[i]
+        if v1 >= 0 and g.v_kind[v1] == VK_INS and g.v_uses[v1] == 1:
+            ad := g.v_def[v1]
+            if g.i_op[ad] == OP_ADD and g.i_a[ad] == v0 and is_cint(g, g.i_b[ad]) and g.v_i[g.i_b[ad]] == (1 as i64) and g.i_blk[ad] == g.i_blk[i]:
+                ret ad
+            end
+        end
+    end
+    ret 0 - 1
+end
+
+func sel_inc_plan(g &: Ng, i: int):
+    d := fused_cond(g, i)
+    if d < 0:
+        ret
+    end
+    p := g.i_x[d]
+    ok := (g.i_op[d] == OP_FCMP and (p == FC_OGE or p == FC_OLE)) or (g.i_op[d] == OP_ICMP and (p == CC_ULT or p == CC_ULE or p == CC_UGT or p == CC_UGE))
+    if not ok:
+        ret
+    end
+    ad := sel_inc_add(g, i)
+    if ad >= 0:
+        g.skipi[ad] = true
+    end
+end
+
 func isel_select_fused(g &: Ng, i: int, d: int):
     t := g.i_ty[i]
+    ad := sel_inc_add(g, i)
+    if ad >= 0 and g.skipi[ad]:
+        inc_true := g.i_b[i] == g.i_res[ad]
+        mut cc0 := 0
+        if g.i_op[d] == OP_FCMP:
+            cc0 = fcmp_cc(fcmp_setup(g, d))
+        else:
+            cc0 = emit_icmp(g, d)
+        end
+        xr := use_reg(g, g.i_a[ad])
+        if cc0 == X_AE or cc0 == X_B:
+            ri := gpr(g)
+            _ci := e_copy(g, ri, xr)
+            add_cf := (cc0 == X_B) == inc_true
+            ai := e_ri(g, M_ALU_RI, asz(g, t), ri, add_cf ? (0 as i64) : (0 - 1 as i64))
+            g.mc.cc[ai] = add_cf ? ALU_ADC : ALU_SBB
+            set_res(g, i, ri)
+            ret
+        end
+        rl := gpr(g)
+        _li := e_rm(g, M_LEA, 8, rl, Mem { k = MK_BI, b = xr, i = 0 - 1, s = 0, d = 1 as i64 })
+        set_res(g, ad, rl)
+        rs := gpr(g)
+        _cs := e_copy(g, rs, use_reg(g, g.i_c[i]))
+        cms := e_rr(g, M_CMOV, asz(g, t), rs, use_reg(g, g.i_b[i]))
+        g.mc.cc[cms] = cc0
+        set_res(g, i, rs)
+        ret
+    end
     mut bv := g.i_b[i]
     mut cv := g.i_c[i]
     swap := g.i_op[d] != OP_FCMP and tie_true_arm(g, i)
@@ -4857,7 +4931,7 @@ func isel_ins(g &: Ng, i: int, b: int):
         OP_VREV:
             rv := wide_reg(g)
             sv := e_rr(g, M_PSHUFD, 16, rv, use_reg(g, g.i_a[i]))
-            g.mc.imm[sv] = (tsize(g, g.t_elem[g.i_ty[i]]) == 8 ? 0x4E : 0x1B) as i64
+            g.mc.imm[sv] = (g.i_x[i] != 0 ? g.i_x[i] : (tsize(g, g.t_elem[g.i_ty[i]]) == 8 ? 0x4E : 0x1B)) as i64
             set_res(g, i, rv)
             ret
         end

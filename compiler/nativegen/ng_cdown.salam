@@ -1,0 +1,113 @@
+package nativegen
+
+func cd_try(g &: Ng, h: int, ph: int, latchb: int, pre: int): bool:
+    t := g.i_ty[ph]
+    if t != T_I32 and t != T_I64:
+        ret false
+    end
+    c0 := phi_val_for(g, ph, pre)
+    nx := phi_val_for(g, ph, latchb)
+    if c0 < 0 or nx < 0 or (not is_cint(g, c0) and g.v_kind[c0] != VK_ZERO) or g.v_kind[nx] != VK_INS:
+        ret false
+    end
+    inc := g.v_def[nx]
+    iv := g.i_res[ph]
+    if g.i_op[inc] != OP_ADD or g.i_a[inc] != iv or not is_cint(g, g.i_b[inc]) or g.v_i[g.i_b[inc]] != (1 as i64):
+        ret false
+    end
+    mut x := g.b_last[latchb]
+    mut stay_true := false
+    if x >= 0 and g.i_op[x] == OP_CBR and (g.i_b[x] == h or g.i_c[x] == h) and g.i_b[x] != g.i_c[x]:
+        stay_true = g.i_b[x] == h
+    else:
+        x = g.b_last[h]
+        if x < 0 or g.i_op[x] != OP_CBR or g.i_b[x] == g.i_c[x]:
+            ret false
+        end
+        db := dominates(g, g.i_b[x], latchb)
+        dc := dominates(g, g.i_c[x], latchb)
+        if db == dc:
+            ret false
+        end
+        stay_true = db
+    end
+    cv2 := g.i_a[x]
+    if cv2 < 0 or g.v_kind[cv2] != VK_INS or g.v_uses[cv2] != 1:
+        ret false
+    end
+    cd2 := g.v_def[cv2]
+    if g.i_op[cd2] != OP_ICMP or g.i_x[cd2] != CC_SLT or not is_cint(g, g.i_b[cd2]):
+        ret false
+    end
+    a := g.i_a[cd2]
+    nb := g.i_b[cd2]
+    if a == iv:
+        if g.v_uses[iv] != 2 or g.v_uses[nx] != 1:
+            ret false
+        end
+    else a == nx:
+        if g.v_uses[iv] != 1 or g.v_uses[nx] != 2:
+            ret false
+        end
+    else:
+        ret false
+    end
+    n := norm_int(g, t, g.v_i[nb])
+    s0 := g.v_kind[c0] == VK_ZERO ? (0 as i64) : norm_int(g, t, g.v_i[c0])
+    big := (1 as i64) << (40 as i64)
+    if n > big or n < (0 as i64) - big or s0 > big or s0 < (0 as i64) - big:
+        ret false
+    end
+    j0 := n - s0
+    first := a == iv ? j0 : j0 - (1 as i64)
+    if first < (0 as i64) or (t == T_I32 and j0 > (2147483647 as i64)):
+        ret false
+    end
+    repeat g.i_pcount[ph] in k:
+        if g.pool[g.i_ps[ph] + 2 * k + 1] == pre:
+            g.pool[g.i_ps[ph] + 2 * k] = const_int(g, t, j0)
+        end
+    end
+    g.i_op[inc] = OP_SUB
+    g.i_f[inc] = g.i_f[inc] | IF_NSW
+    g.i_b[cd2] = const_int(g, t, 0 as i64)
+    g.i_x[cd2] = stay_true ? CC_NE : CC_EQ
+    dv_taint(g, ph)
+    dv_taint(g, inc)
+    ret true
+end
+
+func count_down(g &: Ng): bool:
+    build_dom(g)
+    count_uses(g)
+    mut changed := false
+    each h in g.b_rpo:
+        np := g.b_npred[h]
+        if np != 2:
+            continue
+        end
+        p0 := g.b_pred[g.b_ps[h]]
+        p1 := g.b_pred[g.b_ps[h] + 1]
+        mut latchb := 0 - 1
+        mut pre := 0 - 1
+        if dominates(g, h, p0) and not dominates(g, h, p1):
+            latchb = p0
+            pre = p1
+        else dominates(g, h, p1) and not dominates(g, h, p0):
+            latchb = p1
+            pre = p0
+        end
+        if latchb < 0:
+            continue
+        end
+        mut i := g.b_first[h]
+        until i >= 0 and g.i_op[i] == OP_PHI:
+            if cd_try(g, h, i, latchb, pre):
+                changed = true
+                break
+            end
+            i = g.i_next[i]
+        end
+    end
+    ret changed
+end

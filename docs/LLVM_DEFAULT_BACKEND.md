@@ -116,7 +116,7 @@ built-in work:
 ### Also fixed (second pass)
 
 - **Raw C function pointers** (`externfunc(...)`, from
-  `x as extern func (i32, i32) i32` and packages/webview's COM vtable slot
+  `x as extern func (i32, i32) i32` and std/webview's COM vtable slot
   casts). The LLVM backend had no case for them at all. Unlike a `func(...)`
   closure - env pointer whose first word is the code pointer - an
   externfunc _is_ the code pointer and takes no hidden argument, so it needs
@@ -138,7 +138,7 @@ built-in work:
   the global scope first, so `time.FormatDate(...)` could resolve `time` to
   std/time's `extern func time(...)` rather than the package, reported as a
   method on type `<null>`. Whether it happened depended on which other
-  packages a program pulled in, which is why it surfaced in packages/excel and
+  packages a program pulled in, which is why it surfaced in std/excel and
   not in a two-line test. Now falls back to a package lookup by name, but
   only when the receiver is not a value in scope, so a local that
   legitimately shadows a package name still wins.

@@ -6,7 +6,6 @@ RUN apt-get update \
 RUN curl -fsSL "https://github.com/SalamLang/Salam/releases/download/v${SALAM_VERSION}/salam-${SALAM_VERSION}-linux-x86_64.tar.gz" | tar -xz -C /opt
 WORKDIR /src
 COPY std /srv/salam/std
-COPY packages /srv/salam/std
 COPY tools/mcp/*.salam ./
 ENV SALAM_STD=/srv/salam/std
 RUN mkdir -p /out && /opt/salam-linux-x86_64/salam build main.salam --output=/out/salam-mcp --log-level=error

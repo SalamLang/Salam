@@ -1,6 +1,6 @@
-# Salam Programming Language (2024-2026) - packages/opencv native shim build
+# Salam Programming Language (2024-2026) - std/opencv native shim build
 #
-# Builds libsalam_opencv_shim (the library packages/opencv/opencv.salam's
+# Builds libsalam_opencv_shim (the library std/opencv/opencv.salam's
 # `link dynamic "salam_opencv_shim"` expects to find). See BUILD.md for the
 # full walkthrough, including how to make the result discoverable by
 # `salam build`/`salam run`.

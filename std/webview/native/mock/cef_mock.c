@@ -8,7 +8,7 @@
  * compiled, linked and run in CI without the ~200 MB CEF binary
  * distribution. It opens no window and renders nothing; it only tracks state
  * so that the calls Salam makes can be observed and asserted on.
- * packages/opencv/native/mock/opencv_mock.c serves the same purpose for OpenCV.
+ * std/opencv/native/mock/opencv_mock.c serves the same purpose for OpenCV.
  *
  * Do not ship this. A program linked against it has no browser.
  */

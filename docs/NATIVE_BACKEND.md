@@ -752,7 +752,9 @@ ret end` at the top of a recursive AST walk) tests that parameter before
   `i16` and `i64`, clamped `f64` code, calls with eight arguments and a
   struct passed by reference, string building, slicing and UTF-8 walks,
   generic functions and a generic struct over several element types, and
-  lambdas with captures called directly, from a Vector and through `dyn`)
+  lambdas with captures called directly, from a Vector and through `dyn`,
+  and workers on spawned threads that add into a shared total under a
+  `sync` mutex, so the result does not depend on scheduling)
   that are well defined by construction (values are kept small with a prime
   modulus, divisors and shift counts are offset or masked, indices are
   wrapped into range), builds each with the reference backend and the native

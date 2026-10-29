@@ -93,6 +93,9 @@ struct _ReqCtx:
     pub resp_ct: str = ""
     pub resp_body: str = ""
     pub resp_len: int = -1
+    pub resp_file: str = ""
+    pub resp_file_len: int = -1
+    pub resp_file_off: int = 0
     pub req_hdrs: Vector<_KV> = Vector {}
     pub path_params: Vector<_KV> = Vector {}
     pub resp_hdrs: Vector<_KV> = Vector {}
@@ -323,6 +326,9 @@ func salam_ctx_reset(h: i64):
     c.resp_ct = ""
     c.resp_body = ""
     c.resp_len = -1
+    c.resp_file = ""
+    c.resp_file_len = -1
+    c.resp_file_off = 0
 end
 
 func salam_ctx_free(h: i64):
@@ -653,6 +659,8 @@ func _fill_response(b &: str.StringBuilder, ctx: i64, slot: int, keep: bool):
     binary := _rc(ctx).resp_len
     mut blen := body.len()
     if binary >= 0: blen = binary end
+    file_len := _rc(ctx).resp_file_len
+    if file_len >= 0: blen = file_len end
     if binary < 0:
         _buf_presize(b, 256 + blen)
     else:
@@ -701,7 +709,7 @@ func _fill_response(b &: str.StringBuilder, ctx: i64, slot: int, keep: bool):
         str.BufAppend(b, "\r\n")
     end
     str.BufAppend(b, "\r\n")
-    if salam_ctx_get(ctx, 0) != "HEAD" and binary < 0:
+    if salam_ctx_get(ctx, 0) != "HEAD" and binary < 0 and file_len < 0:
         str.BufAppend(b, body)
     end
 end
@@ -731,6 +739,11 @@ func _dispatch(r: router.Router, ctx: i64): bool:
     mut m := router.Dispatch(r, method, path)
     if not m.matched:
         router.FreeMatch(m)
+        if r.fallback != 0:
+            salam_ctx_kv_clear(ctx, 1)
+            callhandler(r.fallback, ctx)
+            ret true
+        end
         ret false
     end
     salam_ctx_kv_clear(ctx, 1)
@@ -1235,6 +1248,10 @@ func _serve_request(slot: int, fd: i64, ctx: i64, req: str, req_len: int, keep &
         mut n := 0
         p := _binary_body(ctx, n)
         if n > 0: tcp.WriteBytes(conn, p, n) end
+        fl := _rc(ctx).resp_file_len
+        if fl > 0 and salam_ctx_get(ctx, 0) != "HEAD":
+            _stream_file_body(fd, _rc(ctx).resp_file, _rc(ctx).resp_file_off, fl)
+        end
     end
     ret true
 end
@@ -1360,8 +1377,55 @@ func _web_tls_conn_handler(packed: i64):
         mut n := 0
         p := _binary_body(ctx, n)
         if n > 0: tls.WriteBytes(c, p, n) end
+        fl := _rc(ctx).resp_file_len
+        if fl > 0 and salam_ctx_get(ctx, 0) != "HEAD":
+            _tls_file_body(c, _rc(ctx).resp_file, _rc(ctx).resp_file_off, fl)
+        end
     end
     tls.Close(c)
+end
+
+func _stream_file_body(fd: i64, path: str, off: int, size: int):
+    f := fopen(path, "rb")
+    if f == null: ret end
+    defer fclose(f)
+    if off > 0: fseek(f, off, 0) end
+    chunk_cap := 65536 as u64
+    buf := mem.Allocate(chunk_cap)
+    defer mem.Free(buf)
+    conn := tcp.ConnFromFd(fd)
+    mut remaining := size as i64
+    until remaining > 0:
+        want := remaining < (chunk_cap as i64) ? (remaining as u64) : chunk_cap
+        got := fread(buf, 1 as u64, want, f)
+        if got == (0 as u64):
+            break
+        end
+        if tcp.WriteBytes(conn, buf, got as int) <= 0:
+            break
+        end
+        remaining -= got as i64
+    end
+end
+
+func _tls_file_body(c &: tls.Conn, path: str, off: int, size: int):
+    f := fopen(path, "rb")
+    if f == null: ret end
+    defer fclose(f)
+    if off > 0: fseek(f, off, 0) end
+    chunk_cap := 65536 as u64
+    buf := mem.Allocate(chunk_cap)
+    defer mem.Free(buf)
+    mut remaining := size as i64
+    until remaining > 0:
+        want := remaining < (chunk_cap as i64) ? (remaining as u64) : chunk_cap
+        got := fread(buf, 1 as u64, want, f)
+        if got == (0 as u64):
+            break
+        end
+        tls.WriteBytes(c, buf, got as int)
+        remaining -= got as i64
+    end
 end
 
 func _tls_send_file(c &: tls.Conn, path: str, ct: str, server_hdr: str):
@@ -1415,4 +1479,56 @@ end
 @fa "بیشینه درخواست زنده نگه داشتن"
 pub func SetKeepAliveMaxRequests(n: int):
     _keepalive_max_reqs = n
+end
+
+@en "File"
+@fa "ارسال پرونده"
+pub func File(h: i64, path: str, content_type: str): bool:
+    f := fopen(path, "rb")
+    if f == null:
+        ret false
+    end
+    fseek(f, 0, 2)
+    sz := ftell(f) as i64
+    fclose(f)
+    if sz < 0:
+        ret false
+    end
+    c := _rc(h)
+    c.resp_ct = _ctx_own(h, str.Clone(content_type))
+    c.resp_file = _ctx_own(h, str.Clone(path))
+    c.resp_file_len = sz as int
+    ret true
+end
+
+@en "LocalPort"
+@fa "درگاه محلی"
+pub func LocalPort(h: i64): int:
+    ret rawsock.LocalPort(rawsock.FromFd(salam_ctx_fd(h)))
+end
+
+@en "Status"
+@fa "وضعیت"
+pub func Status(h: i64): int:
+    ret salam_ctx_get_status(h)
+end
+
+@en "FileRange"
+@fa "ارسال بخشی از پرونده"
+pub func FileRange(h: i64, path: str, content_type: str, offset: int, length: int): bool:
+    if offset < 0 or length < 0:
+        ret false
+    end
+    if not File(h, path, content_type):
+        ret false
+    end
+    c := _rc(h)
+    if offset + length > c.resp_file_len:
+        c.resp_file = ""
+        c.resp_file_len = -1
+        ret false
+    end
+    c.resp_file_off = offset
+    c.resp_file_len = length
+    ret true
 end

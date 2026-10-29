@@ -1,0 +1,92 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "httpd"
+@fa "سرور وب"
+package httpd
+
+import str
+import os
+import io
+import time
+import net.http
+import net.router
+
+@en "LoadFile"
+@fa "بارگذاری پرونده"
+pub func LoadFile(path: str): bool:
+    if not os.Exists(path) or os.IsDir(path):
+        mut cfg := Config {}
+        cfg.problems.push(path + ": cannot read the config file")
+        _publish(cfg)
+        ret false
+    end
+    ret LoadText(io.ReadFile(path), path)
+end
+
+@en "Check"
+@fa "بررسی"
+pub func Check(path: str): int:
+    if not LoadFile(path):
+        repeat ProblemCount() in i:
+            printerrln ProblemAt(i)
+        end
+        printerrln "configuration is not valid"
+        ret 1
+    end
+    println "configuration is ok:", SiteCount(), "site(s),", _cfg.listens.len(), "listener(s)"
+    ret 0
+end
+
+@en "Run"
+@fa "اجرا"
+pub func Run(): int:
+    if _cfg.sites.len() == 0 or _cfg.problems.len() > 0:
+        printerrln "salam serve: load a valid configuration before running"
+        ret 2
+    end
+    if not _open_log(_cfg.access_log):
+        printerrln "salam serve: cannot open the access log " + _cfg.access_log
+        ret 2
+    end
+    mut r := router.NewRouter()
+    router.SetFallback(r, _handle)
+    mut started := HashMap {} as HashMap<str, int>
+    defer started.free()
+    repeat _cfg.listens.len() in i:
+        l := _cfg.listens.get(i)
+        key := l.host + ":" + str.FromInt(l.port as i64)
+        if not started.has(key):
+            started.put(key, 1)
+            mut s := http.NewServer(l.port)
+            http.SetHost(s, l.host)
+            http.Use(s, r)
+            if not http.RunBackground(s):
+                printerrln "salam serve: cannot listen on " + key
+                ret 2
+            end
+        end
+    end
+    _serving = true
+    until _serving:
+        time.Sleep(200)
+    end
+    ret 0
+end
+
+@en "Stop"
+@fa "توقف"
+pub func Stop():
+    _serving = false
+end

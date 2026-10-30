@@ -170,6 +170,20 @@ func fake_loop():
     end
 end
 
+func slow_loop():
+    mut srv := tcp.Bind(19453)
+    until not tcp.Ok(srv):
+        time.Sleep(50)
+        srv = tcp.Bind(19453)
+    end
+    until true:
+        c := tcp.Accept(srv)
+        if not tcp.ConnOk(c): continue end
+        time.Sleep(3000)
+        tcp.Close(c)
+    end
+end
+
 func serve_loop():
     httpd.Run()
 end
@@ -190,6 +204,10 @@ server:
         end
         location "^~ /down.php":
             fastcgi_pass = "127.0.0.1:19459"
+        end
+        location "^~ /slow.php":
+            fastcgi_pass = "127.0.0.1:19453"
+            fastcgi_timeout = 1s
         end
         location "/":
             fastcgi_pass = "127.0.0.1:19452"
@@ -216,10 +234,12 @@ func main:
     io.WriteFile(root + "/index.php", "<?php echo 'index';")
     io.WriteFile(root + "/hello.php", "<?php echo 'hello';")
     io.WriteFile(root + "/down.php", "<?php echo 'down';")
+    io.WriteFile(root + "/slow.php", "<?php sleep(3);")
 
     test_config()
 
     _fake := spawn(fake_loop)
+    _slow := spawn(slow_loop)
     time.Sleep(300)
     testing.AssertTrue(httpd.LoadText(config_text(root), "fcgi.salam"))
     web := spawn(serve_loop)
@@ -263,6 +283,10 @@ func main:
     r7 := http.Get("http://localhost:19451/down.php")
     testing.AssertEqInt(r7.status, 502)
     testing.AssertContains(r7.body, "502 Bad Gateway")
+
+    r8 := http.Get("http://localhost:19451/slow.php")
+    testing.AssertEqInt(r8.status, 502)
+    testing.AssertContains(r8.body, "timed out")
 
     httpd.Stop()
     join(web)

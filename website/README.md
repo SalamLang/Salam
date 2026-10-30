@@ -46,6 +46,10 @@ HTML allowed
 >>
 ```
 
+A std page URL is the package name as it is imported, so `net/udp` is
+`/std/net/udp/` and not `/std/net-udp/`. The dashed form is only the folder
+under `std-examples/` and the API JSON file.
+
 Values are inserted as HTML. Keys ending in `_cmd` are shell commands and are
 escaped automatically. Keys containing `_code_<lang>`, for example `ai.api_code_python`, are
 syntax highlighted at build time (`python`, `javascript`, `typescript`, `bash`, `json`, `yaml`, `toml`, `c`, `cpp`, `java`, `go`, `rust`, `php`). `<page>.title` and `<page>.description` fill the

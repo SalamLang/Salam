@@ -31,8 +31,9 @@ The output goes to `website/dist/<lang>/`. Preview it with
 
 `build.sh` first runs every example and compares its output with the `.out`
 file next to it, so the site never shows code that does not compile or output
-that is out of date. The generator fails on any `{{key}}` a template uses that
-the content does not define.
+that is out of date. It also refuses a std package that has no page in both
+languages, with `check-std-coverage.py`. The generator fails on any `{{key}}` a
+template uses that the content does not define.
 
 ## Content files
 

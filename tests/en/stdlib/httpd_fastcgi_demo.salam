@@ -106,10 +106,13 @@ func _answer(c: tcp.Conn, params: void*, plen: int, body: void*, blen: int):
     info := _param_value(params, plen, "PATH_INFO")
     appenv := _param_value(params, plen, "APP_ENV")
     ua := _param_value(params, plen, "HTTP_USER_AGENT")
+    custom := _param_value(params, plen, "HTTP_X_CUSTOM")
     sent := _bytes_str(body, 0, blen)
-    text := "method=" + method + ";script=" + script + ";query=" + query + ";pathinfo=" + info + ";appenv=" + appenv + ";ua=" + ua + ";body=" + sent
+    text := "method=" + method + ";script=" + script + ";query=" + query + ";pathinfo=" + info + ";appenv=" + appenv + ";ua=" + ua + ";custom=" + custom + ";body=" + sent
     head := "Status: 201 Created\r\nContent-Type: text/plain; charset=utf-8\r\nSet-Cookie: a=1; Path=/\r\nSet-Cookie: b=2; Path=/\r\nX-Fcgi: yes\r\n\r\n"
     payload := head + text
+    warn := "a warning from the backend\n"
+    _send_rec(c, 7, warn as void *, warn.len())
     _send_rec(c, 6, payload as void *, payload.len())
     endrec := mem.AllocateZeroed(8 as u64)
     _send_rec(c, 3, endrec, 8)
@@ -167,6 +170,20 @@ func fake_loop():
     end
 end
 
+func slow_loop():
+    mut srv := tcp.Bind(19453)
+    until not tcp.Ok(srv):
+        time.Sleep(50)
+        srv = tcp.Bind(19453)
+    end
+    until true:
+        c := tcp.Accept(srv)
+        if not tcp.ConnOk(c): continue end
+        time.Sleep(3000)
+        tcp.Close(c)
+    end
+end
+
 func serve_loop():
     httpd.Run()
 end
@@ -183,6 +200,14 @@ server:
             fastcgi_index = "index.php"
             fastcgi_timeout = 20s
             fastcgi_param = "APP_ENV" "test"
+            fastcgi_param = "HTTP_X_CUSTOM" "$header:X-Custom"
+        end
+        location "^~ /down.php":
+            fastcgi_pass = "127.0.0.1:19459"
+        end
+        location "^~ /slow.php":
+            fastcgi_pass = "127.0.0.1:19453"
+            fastcgi_timeout = 1s
         end
         location "/":
             fastcgi_pass = "127.0.0.1:19452"
@@ -208,10 +233,13 @@ func main:
     os.MkdirAll(root)
     io.WriteFile(root + "/index.php", "<?php echo 'index';")
     io.WriteFile(root + "/hello.php", "<?php echo 'hello';")
+    io.WriteFile(root + "/down.php", "<?php echo 'down';")
+    io.WriteFile(root + "/slow.php", "<?php sleep(3);")
 
     test_config()
 
     _fake := spawn(fake_loop)
+    _slow := spawn(slow_loop)
     time.Sleep(300)
     testing.AssertTrue(httpd.LoadText(config_text(root), "fcgi.salam"))
     web := spawn(serve_loop)
@@ -245,6 +273,20 @@ func main:
 
     r5 := http.Get("http://localhost:19451/missing.php")
     testing.AssertEqInt(r5.status, 404)
+
+    mut h := http.NewHeaders()
+    h.insert("X-Custom", "tenant-7")
+    r6 := http.Do("GET", "http://localhost:19451/hello.php", h, "", http.RequestOptions {})
+    testing.AssertEqInt(r6.status, 201)
+    testing.AssertContains(r6.body, "custom=tenant-7")
+
+    r7 := http.Get("http://localhost:19451/down.php")
+    testing.AssertEqInt(r7.status, 502)
+    testing.AssertContains(r7.body, "502 Bad Gateway")
+
+    r8 := http.Get("http://localhost:19451/slow.php")
+    testing.AssertEqInt(r8.status, 502)
+    testing.AssertContains(r8.body, "timed out")
 
     httpd.Stop()
     join(web)

@@ -803,7 +803,7 @@ async function testAgentTools() {
     ["ReadFile", "ReadAll", "ReadText"].includes(search[0]?.name) && search.slice(0, 5).some((d) => d.name === "ReadFile"),
     JSON.stringify(search[0]),
   );
-  check("stdlib search gives the file and line", search.every((d) => (d.file.startsWith("std/") || d.file.startsWith("packages/")) && d.line > 0));
+  check("stdlib search gives the file and line", search.every((d) => d.file.startsWith("std/") && d.line > 0));
 
   check("a bare package leaf resolves to its dotted name", r[8].result.structuredContent?.package === "encoding.json");
   const jsonDecls = r[8].result.structuredContent.declarations;

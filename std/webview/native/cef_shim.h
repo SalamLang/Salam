@@ -1,7 +1,7 @@
 /*
  * Salam Programming Language (2024-2026)
  *
- * Flat C ABI between packages/webview's CEF backend (cef.salam) and CEF itself.
+ * Flat C ABI between std/webview's CEF backend (cef.salam) and CEF itself.
  *
  * Salam generates C and links with a C compiler, while CEF's real API is C++.
  * Everything below is therefore plain C with no CEF types in the signatures -

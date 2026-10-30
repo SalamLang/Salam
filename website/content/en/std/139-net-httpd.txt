@@ -1,9 +1,9 @@
 pkg.en = net/httpd
 pkg.name = net/httpd
 pkg.group = Network
-pkg.summary = A web server driven by a config file: several sites on one port, locations, redirects, caching and static files.
+pkg.summary = A web server driven by a config file: several sites on one port, locations, redirects, caching, static files and FastCGI backends such as PHP.
 pkg.title = The net/httpd package in Salam | Virtual hosts from a config file
-pkg.description = The net/httpd package in Salam: serving many domains from one process with a config file written in Salam block syntax, sites picked by the Host header, location rules, redirects, error pages, cache headers and an access log, with examples.
+pkg.description = The net/httpd package in Salam: serving many domains from one process with a config file written in Salam block syntax, sites picked by the Host header, location rules, redirects, error pages, cache headers, an access log and FastCGI backends such as php-fpm, with examples.
 pkg.flat = true
 pkg.import = net.httpd
 pkg.intro <<
@@ -49,19 +49,45 @@ end</code></pre>
 <tr><td><code>cache = 30d</code></td><td>Sends <code>Cache-Control: public, max-age=...</code> with the files. Units: <code>s</code>, <code>m</code>, <code>h</code>, <code>d</code>, <code>w</code>, <code>y</code>.</td></tr>
 <tr><td><code>header = "Name" "value"</code></td><td>Adds a response header. Site headers go on every answer, location headers only on that location's.</td></tr>
 <tr><td><code>error page = 404 "404.html"</code></td><td>The file, relative to the root, sent with that error status.</td></tr>
+<tr><td><code>fastcgi_pass = "127.0.0.1:9000"</code></td><td>Hands the matched requests to a FastCGI backend, such as php-fpm.</td></tr>
+<tr><td><code>fastcgi_index = "index.php"</code></td><td>The script used when the path ends in <code>/</code>. The default is <code>index.php</code>.</td></tr>
+<tr><td><code>fastcgi_timeout = 30s</code></td><td>How long one backend request may take. The default is 30 seconds.</td></tr>
+<tr><td><code>fastcgi_param = "NAME" "value"</code></td><td>One more CGI variable, with <code>$uri</code> style variables. It can be repeated.</td></tr>
 </tbody></table></div>
+<p>A location can hand the request to a FastCGI backend instead of reading a file, which is how PHP runs behind Salam:</p>
+<pre><code>server:
+    site:
+        listen = 8080
+        names = "localhost"
+        root = "/srv/app/public"
+        location "~ \.php$":
+            fastcgi_pass = "127.0.0.1:9000"
+            fastcgi_index = "index.php"
+            fastcgi_param = "APP_ENV" "production"
+        end
+        location "/":
+            fastcgi_pass = "127.0.0.1:9000"
+        end
+    end
+end</code></pre>
+<p><code>fastcgi_pass</code> is the TCP address of php-fpm, or of <code>php-cgi -b 127.0.0.1:9000</code>. The script is <code>root</code> plus the request path; a path ending in <code>/</code> gets <code>fastcgi_index</code>, and a path with segments after an existing script is split into <code>SCRIPT_NAME</code> and <code>PATH_INFO</code>, so <code>/index.php/a/b</code> runs <code>index.php</code> with <code>PATH_INFO=/a/b</code>. A path that names no file answers 404.</p>
+<p>Salam fills the usual CGI variables: <code>GATEWAY_INTERFACE</code>, <code>SERVER_SOFTWARE</code>, <code>SERVER_PROTOCOL</code>, <code>REQUEST_METHOD</code>, <code>REQUEST_URI</code>, <code>SCRIPT_NAME</code>, <code>SCRIPT_FILENAME</code>, <code>PATH_INFO</code>, <code>DOCUMENT_ROOT</code>, <code>DOCUMENT_URI</code>, <code>QUERY_STRING</code>, <code>CONTENT_TYPE</code>, <code>CONTENT_LENGTH</code>, <code>SERVER_NAME</code>, <code>SERVER_PORT</code>, <code>REMOTE_ADDR</code>, <code>REDIRECT_STATUS</code>, and <code>HTTP_*</code> for Host, User-Agent, Accept, Accept-Language, Accept-Encoding, Cookie, Referer, Authorization, Origin, Cache-Control, If-None-Match, If-Modified-Since, Range, X-Requested-With, X-Forwarded-For, X-Forwarded-Proto and X-Real-IP. <code>fastcgi_param</code> adds or overrides one more and understands <code>$host</code>, <code>$uri</code>, <code>$document_uri</code>, <code>$request_uri</code>, <code>$args</code>, <code>$query_string</code>, <code>$document_root</code>, <code>$root</code>, <code>$script_name</code>, <code>$server_port</code>, <code>$remote_addr</code> and <code>$scheme</code>.</p>
+<p>The answer is whatever the backend sends: the <code>Status:</code> line sets the status, every other header goes out as it is (several <code>Set-Cookie</code> headers included), and the body is passed through byte for byte. A backend that cannot be reached, or that dies halfway, answers 502.</p>
 <p>The <code>log:</code> block takes <code>access = "path"</code>, where the path can also be <code>"stdout"</code> or <code>"stderr"</code>. Each line has the time, the host, the method, the path and the status.</p>
 <p>The things people get wrong:</p>
 <ul>
 <li>Files are only read from the <code>root</code> of the matched site. The path is cleaned first, so <code>..</code> cannot climb out of it, and any file or folder whose name starts with a dot, such as <code>.env</code> or <code>.git</code>, is answered with 404. <code>.well-known</code> is allowed.</li>
 <li>Every file goes out with an <code>ETag</code> and a <code>Last-Modified</code> header. A request with a matching <code>If-None-Match</code> or a recent enough <code>If-Modified-Since</code> gets 304 and no body, and a single <code>Range: bytes=a-b</code> (also <code>a-</code> and <code>-n</code>) gets 206 with the part; a range outside the file gets 416. <code>If-Range</code> is honoured with the ETag. Several ranges in one request are answered with the whole file.</li>
-<li>Only GET and HEAD are answered for files; anything else gets 405 with an <code>Allow</code> header.</li>
+<li>Only GET and HEAD are answered for files; anything else gets 405 with an <code>Allow</code> header. A FastCGI location answers every method.</li>
+<li><code>fastcgi_pass</code> reads a TCP address only. <code>unix:/run/php.sock</code> is refused with a message, so point php-fpm at a port (<code>listen = 127.0.0.1:9000</code>).</li>
+<li>The location must match the script path. <code>location "~ \.php$"</code> does not match <code>/index.php/a/b</code>, so a prefix location is needed when the application uses <code>PATH_INFO</code>.</li>
+<li><code>REMOTE_ADDR</code> is 127.0.0.1 unless a <code>fastcgi_param</code> sets it, because the HTTP layer does not expose the peer address. Each request opens its own connection to the backend.</li>
 <li>Names and values are checked when the file is loaded: a misspelled setting, a port out of range, a missing root folder, a bad regular expression or two sites with the same name on one port is reported with its line and column, and a close name is suggested. Nothing is started from a file with problems.</li>
 <li><code>listen = 443 tls</code> is read but refused for now; HTTPS arrives in a later release, so put a TLS terminator in front until then.</li>
 <li>The package keeps one loaded configuration for the process. Loading again replaces it, but a running server keeps the sites it started with.</li>
 <li>The settings, the sites and the locations are plain data, so a config that loads is a config that runs; everything that can be wrong about the file is found by <code>Check</code> or <code>LoadText</code>, not on the first request.</li>
 </ul>
-<p>Related packages: <a href="/std/net-http/">net/http</a> is the server underneath, <a href="/std/net-router/">net/router</a> holds the routes, and <a href="/std/net-httpd-conf/">net/httpd/conf</a> is the parser that reads the file.</p>
+<p>Related packages: <a href="/std/net-http/">net/http</a> is the server underneath, <a href="/std/net-router/">net/router</a> holds the routes, <a href="/std/net-httpd-conf/">net/httpd/conf</a> is the parser that reads the file, and <a href="/std/net-fastcgi/">net/fastcgi</a> speaks the FastCGI protocol.</p>
 >>
 doc.SiteFor = The index of the site that answers a host name on a port, or -1 when none does. The name is lower-cased and a trailing port or dot is ignored. An exact name wins over a wildcard, and a name nobody listed falls back to the default site of that port.
 doc.LocationFor = The index of the location that handles a path in a site, or -1 when only the site settings apply. An exact location wins, then a <code>^~</code> prefix, then the first matching regular expression, then the longest prefix.

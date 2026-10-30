@@ -168,8 +168,8 @@ routes it serves itself, Salam leads on all seven, from `/plaintext`
 
 ## Honesty about the machine
 
-The language benchmark elsewhere on this site runs on a dedicated AMD EPYC
-7763 host with nothing else scheduled on it. This one ran on a shared,
+The language benchmark elsewhere on this site runs in CI, on a GitHub Actions
+`ubuntu-24.04` runner (a shared cloud VM). This one ran on a shared,
 6-vCPU development sandbox that was busy with unrelated work the whole time.
 Interleaving the routes means every server got the same share of that
 load, but contention costs servers that run many threads more than servers

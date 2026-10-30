@@ -106,10 +106,13 @@ func _answer(c: tcp.Conn, params: void*, plen: int, body: void*, blen: int):
     info := _param_value(params, plen, "PATH_INFO")
     appenv := _param_value(params, plen, "APP_ENV")
     ua := _param_value(params, plen, "HTTP_USER_AGENT")
+    custom := _param_value(params, plen, "HTTP_X_CUSTOM")
     sent := _bytes_str(body, 0, blen)
-    text := "method=" + method + ";script=" + script + ";query=" + query + ";pathinfo=" + info + ";appenv=" + appenv + ";ua=" + ua + ";body=" + sent
+    text := "method=" + method + ";script=" + script + ";query=" + query + ";pathinfo=" + info + ";appenv=" + appenv + ";ua=" + ua + ";custom=" + custom + ";body=" + sent
     head := "Status: 201 Created\r\nContent-Type: text/plain; charset=utf-8\r\nSet-Cookie: a=1; Path=/\r\nSet-Cookie: b=2; Path=/\r\nX-Fcgi: yes\r\n\r\n"
     payload := head + text
+    warn := "a warning from the backend\n"
+    _send_rec(c, 7, warn as void *, warn.len())
     _send_rec(c, 6, payload as void *, payload.len())
     endrec := mem.AllocateZeroed(8 as u64)
     _send_rec(c, 3, endrec, 8)
@@ -183,6 +186,10 @@ server:
             fastcgi_index = "index.php"
             fastcgi_timeout = 20s
             fastcgi_param = "APP_ENV" "test"
+            fastcgi_param = "HTTP_X_CUSTOM" "$header:X-Custom"
+        end
+        location "^~ /down.php":
+            fastcgi_pass = "127.0.0.1:19459"
         end
         location "/":
             fastcgi_pass = "127.0.0.1:19452"
@@ -208,6 +215,7 @@ func main:
     os.MkdirAll(root)
     io.WriteFile(root + "/index.php", "<?php echo 'index';")
     io.WriteFile(root + "/hello.php", "<?php echo 'hello';")
+    io.WriteFile(root + "/down.php", "<?php echo 'down';")
 
     test_config()
 
@@ -245,6 +253,16 @@ func main:
 
     r5 := http.Get("http://localhost:19451/missing.php")
     testing.AssertEqInt(r5.status, 404)
+
+    mut h := http.NewHeaders()
+    h.insert("X-Custom", "tenant-7")
+    r6 := http.Do("GET", "http://localhost:19451/hello.php", h, "", http.RequestOptions {})
+    testing.AssertEqInt(r6.status, 201)
+    testing.AssertContains(r6.body, "custom=tenant-7")
+
+    r7 := http.Get("http://localhost:19451/down.php")
+    testing.AssertEqInt(r7.status, 502)
+    testing.AssertContains(r7.body, "502 Bad Gateway")
 
     httpd.Stop()
     join(web)

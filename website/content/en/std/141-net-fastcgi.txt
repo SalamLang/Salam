@@ -1,0 +1,74 @@
+pkg.en = net/fastcgi
+pkg.name = net/fastcgi
+pkg.group = Network
+pkg.summary = A FastCGI client: run PHP or any FastCGI program behind a Salam server.
+pkg.title = The net/fastcgi package in Salam | Talking to php-fpm
+pkg.description = The net/fastcgi package in Salam: connecting to a FastCGI backend such as php-fpm, sending the CGI parameters and the request body, and reading the status, headers and body back, with an example.
+pkg.flat = true
+pkg.import = net.fastcgi
+pkg.intro <<
+<p>FastCGI is the protocol php-fpm and <code>php-cgi -b</code> speak, and this package is a client for it. The web server in <a href="/std/net-httpd/">net/httpd</a> uses it for the <code>fastcgi_pass</code> setting; you can also use it directly when a program has to hand one request to a PHP script.</p>
+<p>A request is a list of CGI variables and a body. <code>NewParams</code> makes the list, <code>Add</code> fills it, <code>Connect</code> opens a TCP connection to the backend, and <code>Execute</code> sends everything and waits for the answer. The answer holds the status, every header in the order the backend sent them, and the body as a pointer with a length, so an image or a zip comes back intact.</p>
+<pre><code>// lang: en
+package main
+
+import net.fastcgi
+import net.tcp
+
+func main:
+    p := fastcgi.NewParams()
+    defer fastcgi.Free(p)
+    fastcgi.Add(p, "GATEWAY_INTERFACE", "CGI/1.1")
+    fastcgi.Add(p, "REQUEST_METHOD", "GET")
+    fastcgi.Add(p, "SCRIPT_NAME", "/index.php")
+    fastcgi.Add(p, "SCRIPT_FILENAME", "/srv/app/index.php")
+    fastcgi.Add(p, "QUERY_STRING", "a=1")
+
+    c := fastcgi.Connect("127.0.0.1", 9000, 5000)
+    if not tcp.ConnOk(c):
+        println "cannot reach the FastCGI backend"
+        ret 1
+    end
+    defer tcp.Close(c)
+
+    r := fastcgi.Execute(c, p, null, 0, 5000)
+    if not r.ok:
+        println "the request failed: ", r.error
+        ret 1
+    end
+    println r.status, " ", r.len, " bytes"
+    fastcgi.FreeResponse(r)
+    ret 0
+end</code></pre>
+<p>One connection carries one request, which is what php-fpm expects from a simple front end. The timeout is in milliseconds and covers the whole exchange, dialling included; zero means 30 seconds. A backend that closes the connection early, a response without a header block, or a protocol error comes back as <code>ok = false</code> with a message in <code>error</code>, never as a crash.</p>
+<p>The things people get wrong:</p>
+<ul>
+<li><code>Execute</code> takes the body as a pointer and a length. With no body, pass <code>null</code> and <code>0</code>; an empty string is not a pointer.</li>
+<li><code>Add</code> copies the name and the value, so a temporary string can be freed as soon as <code>Add</code> returns, and <code>Free</code> releases every copy.</li>
+<li>The body of the answer belongs to the response: call <code>FreeResponse</code> when done with it, or the buffer stays allocated.</li>
+<li>The address is TCP. php-fpm has to listen on a port such as <code>127.0.0.1:9000</code>, not on a unix socket, and the CGI variables are yours to fill: a backend needs at least <code>SCRIPT_FILENAME</code> and <code>REQUEST_METHOD</code> to answer.</li>
+<li>The backend's stderr is not an error. A PHP warning on stderr does not fail the request; only a broken or missing response does.</li>
+</ul>
+>>
+
+doc.Param = One CGI variable: a name such as <code>REQUEST_METHOD</code> and its value.
+doc.Param.name = The variable name, as PHP reads it from <code>$_SERVER</code>.
+doc.Param.value = The variable value.
+doc.Params = The list of CGI variables of one request. <code>Add</code> appends to it and <code>Free</code> releases it.
+doc.Params.items = The variables, in the order they were added.
+doc.Header = One response header, as the backend sent it. The same name may appear more than once, which is how several <code>Set-Cookie</code> headers arrive.
+doc.Header.name = The header name.
+doc.Header.value = The header value, without the name and the colon.
+doc.Response = The answer of a backend: the status, the headers, and the body as a pointer with its length.
+doc.Response.status = The HTTP status from the <code>Status:</code> line, or 200 when the backend sends no such line.
+doc.Response.headers = The headers in the order the backend sent them, without <code>Status</code>.
+doc.Response.body = The body bytes, owned by the response. Pass it to <code>FreeResponse</code> when done.
+doc.Response.len = The number of body bytes; zero when the body is empty and <code>body</code> is null.
+doc.Response.ok = True when a complete answer was read, whatever its status. A 404 from PHP is still <code>ok</code>.
+doc.Response.error = Why the request failed, when <code>ok</code> is false: no connection, a cut response, a protocol error, or the stderr text when no header block arrived.
+doc.NewParams = Makes an empty list of CGI variables.
+doc.Add = Appends one CGI variable, copying the name and the value.
+doc.Free = Releases the list and every name and value in it.
+doc.Connect = Opens a TCP connection to a FastCGI backend. The timeout is in milliseconds; zero means 30 seconds. Check it with <code>tcp.ConnOk</code>.
+doc.Execute = Sends the parameters and the body, then reads the answer. The body is a pointer and a length, and the timeout covers the whole exchange. The returned response must be released with <code>FreeResponse</code>.
+doc.FreeResponse = Releases the body and the header strings of a response.

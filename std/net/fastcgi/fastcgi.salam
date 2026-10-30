@@ -1,0 +1,488 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "fastcgi"
+@fa "فست سی جی آی"
+package fastcgi
+
+import str
+import mem
+import net.tcp
+
+// FastCGI version 1 record types (the only version in use).
+const VERSION := 1
+const BEGIN_REQUEST := 1
+const END_REQUEST := 3
+const PARAMS := 4
+const STDIN := 5
+const STDOUT := 6
+const STDERR := 7
+
+const ROLE_RESPONDER := 1
+
+// One record carries at most 65535 bytes; stay well below it.
+const MAX_CONTENT := 32768
+
+const READ_CHUNK := 65536
+
+struct Buf:
+    pub data: void* = null
+    pub len: int = 0
+    pub cap: int = 0
+    pub bad: bool = false
+end
+
+@en "Param"
+@fa "پارامتر"
+pub struct Param:
+    @en "name"
+    @fa "نام"
+    pub name: str = ""
+    @en "value"
+    @fa "مقدار"
+    pub value: str = ""
+end
+
+@en "Params"
+@fa "پارامترها"
+pub struct Params:
+    @en "items"
+    @fa "آیتم ها"
+    pub items: Vector<Param> = Vector {}
+end
+
+@en "Header"
+@fa "سرصفحه"
+pub struct Header:
+    @en "name"
+    @fa "نام"
+    pub name: str = ""
+    @en "value"
+    @fa "مقدار"
+    pub value: str = ""
+end
+
+@en "Response"
+@fa "پاسخ"
+pub struct Response:
+    @en "status"
+    @fa "وضعیت"
+    pub status: int = 0
+    @en "headers"
+    @fa "سرصفحه ها"
+    pub headers: Vector<Header> = Vector {}
+    @en "body"
+    @fa "بدنه"
+    pub body: void* = null
+    @en "len"
+    @fa "اندازه"
+    pub len: int = 0
+    @en "ok"
+    @fa "موفق"
+    pub ok: bool = false
+    @en "error"
+    @fa "خطا"
+    pub error: str = ""
+end
+
+inline func _at(p: void*, off: int): void*:
+    ret ((p as i64) + (off as i64)) as void *
+end
+
+inline func _byte(p: void*, i: int): int:
+    bp := p as u8 *
+    ret bp[i] as int
+end
+
+func _new(cap: int): Buf:
+    mut b := Buf {}
+    mut size := cap
+    if size < 64: size = 64 end
+    p := mem.Allocate(size as u64)
+    if p == null:
+        b.bad = true
+    else:
+        b.data = p
+        b.cap = size
+    end
+    ret b
+end
+
+func _free_buf(b: Buf):
+    if b.data != null:
+        mem.Free(b.data)
+    end
+    b.data = null
+    b.len = 0
+    b.cap = 0
+end
+
+func _reserve(b &: Buf, need: int): bool:
+    if b.bad: ret false end
+    if b.len + need <= b.cap: ret true end
+    mut nc := b.cap
+    if nc < 64: nc = 64 end
+    until nc >= b.len + need: nc = nc * 2 end
+    p := mem.Reallocate(b.data, nc as u64)
+    if p == null:
+        b.bad = true
+        ret false
+    end
+    b.data = p
+    b.cap = nc
+    ret true
+end
+
+func _put(b &: Buf, src: void*, n: int):
+    if n <= 0 or b.bad: ret end
+    if not _reserve(b, n): ret end
+    mem.Copy(_at(b.data, b.len), src, n as u64)
+    b.len += n
+end
+
+func _put_str(b &: Buf, s: str):
+    _put(b, s as void *, s.len())
+end
+
+func _u8(b &: Buf, v: int):
+    if not _reserve(b, 1): ret end
+    p := b.data as u8 *
+    p[b.len] = (v & 255) as u8
+    b.len += 1
+end
+
+func _u16(b &: Buf, v: int):
+    _u8(b, (v >> 8) & 255)
+    _u8(b, v & 255)
+end
+
+func _put_len(b &: Buf, n: int):
+    if n < 128:
+        _u8(b, n)
+    else:
+        _u8(b, ((n >> 24) & 127) | 128)
+        _u8(b, (n >> 16) & 255)
+        _u8(b, (n >> 8) & 255)
+        _u8(b, n & 255)
+    end
+end
+
+func _head(b &: Buf, typ: int, n: int):
+    _u8(b, VERSION)
+    _u8(b, typ)
+    _u16(b, 1)
+    _u16(b, n)
+    _u8(b, 0)
+    _u8(b, 0)
+end
+
+func _write_all(c: tcp.Conn, p: void*, n: int): bool:
+    mut off := 0
+    until off < n:
+        k := tcp.WriteBytes(c, _at(p, off), n - off)
+        if k <= 0: ret false end
+        off += k
+    end
+    ret true
+end
+
+func _read_exact(c: tcp.Conn, p: void*, n: int): int:
+    mut got := 0
+    until got < n:
+        k := tcp.ReadBytes(c, _at(p, got), n - got)
+        if k <= 0: ret got end
+        got += k
+    end
+    ret got
+end
+
+func _send_record(c: tcp.Conn, typ: int, p: void*, n: int): bool:
+    mut h := _new(8)
+    _head(h, typ, n)
+    mut ok := _write_all(c, h.data, 8)
+    _free_buf(h)
+    if ok and n > 0:
+        ok = _write_all(c, p, n)
+    end
+    ret ok
+end
+
+func _head_end(p: void*, n: int): int:
+    mut i := 0
+    until i + 3 < n:
+        if _byte(p, i) == 13 and _byte(p, i + 1) == 10 and _byte(p, i + 2) == 13 and _byte(p, i + 3) == 10:
+            ret i + 4
+        end
+        i += 1
+    end
+    until i + 1 < n:
+        if _byte(p, i) == 10 and _byte(p, i + 1) == 10:
+            ret i + 2
+        end
+        i += 1
+    end
+    ret -1
+end
+
+func _bytes_str(p: void*, n: int): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    repeat n in i:
+        str.BufAppendChar(sb, _byte(p, i))
+    end
+    ret str.BufStr(sb)
+end
+
+func _status_code(v: str): int:
+    if v.len() < 3: ret 0 end
+    bp := v as u8 *
+    repeat 3 in i:
+        if (bp[i] as int) < 48 or (bp[i] as int) > 57: ret 0 end
+    end
+    ret v.substr(0, 3).to_int()
+end
+
+func _free_parts(v: Vector<str>):
+    repeat v.len() in i:
+        mem.Free(v.get(i) as void *)
+    end
+    v.free()
+end
+
+func _parse_head(r &: Response, head: str):
+    lines := str.Split(head, "\n")
+    repeat lines.len() in i:
+        line := str.Trim(lines.get(i))
+        if line.len() == 0: continue end
+        c := line.indexOf(":")
+        if c <= 0: continue end
+        name := str.Trim(line.substr(0, c))
+        value := str.Trim(line.substr(c + 1, line.len() - c - 1))
+        if str.Equals(str.Lower(name), "status"):
+            code := _status_code(value)
+            if code >= 100 and code <= 599: r.status = code end
+        else:
+            r.headers.push(Header { name = str.Clone(name), value = str.Clone(value) })
+        end
+    end
+    _free_parts(lines)
+end
+
+@en "NewParams"
+@fa "پارامترهای جدید"
+pub func NewParams(): Params:
+    ret Params {}
+end
+
+@en "Add"
+@fa "افزودن"
+pub func Add(p &: Params, name: str, value: str):
+    p.items.push(Param { name = str.Clone(name), value = str.Clone(value) })
+end
+
+@en "Free"
+@fa "آزادسازی"
+pub func Free(p &: Params):
+    repeat p.items.len() in i:
+        it := p.items.get(i)
+        mem.Free(it.name as void *)
+        mem.Free(it.value as void *)
+    end
+    p.items.free()
+end
+
+@en "Connect"
+@fa "اتصال"
+pub func Connect(host: str, port: int, timeout_ms: int): tcp.Conn:
+    mut wait := timeout_ms
+    if wait <= 0: wait = 30000 end
+    ret tcp.DialTimeout(host, port, wait)
+end
+
+@en "Execute"
+@fa "اجرا"
+pub func Execute(c: tcp.Conn, params: Params, data: void*, n: int, timeout_ms: int): Response:
+    if not tcp.ConnOk(c):
+        ret Response { error = "the FastCGI connection is not open" }
+    end
+    mut wait := timeout_ms
+    if wait <= 0: wait = 30000 end
+    tcp.SetDeadline(c, wait)
+
+    mut pb := _new(1024)
+    repeat params.items.len() in i:
+        it := params.items.get(i)
+        _put_len(pb, it.name.len())
+        _put_len(pb, it.value.len())
+        _put_str(pb, it.name)
+        _put_str(pb, it.value)
+    end
+    if pb.bad:
+        _free_buf(pb)
+        ret Response { error = "out of memory building the FastCGI parameters" }
+    end
+
+    mut rec := _new(16)
+    _head(rec, BEGIN_REQUEST, 8)
+    _u16(rec, ROLE_RESPONDER)
+    _u8(rec, 0)
+    _u8(rec, 0)
+    _u8(rec, 0)
+    _u8(rec, 0)
+    _u8(rec, 0)
+    _u8(rec, 0)
+    ok := _write_all(c, rec.data, rec.len)
+    _free_buf(rec)
+    if not ok:
+        _free_buf(pb)
+        ret Response { error = "could not send the request to the FastCGI backend" }
+    end
+
+    mut off := 0
+    until off < pb.len:
+        mut size := pb.len - off
+        if size > MAX_CONTENT: size = MAX_CONTENT end
+        if not _send_record(c, PARAMS, _at(pb.data, off), size):
+            _free_buf(pb)
+            ret Response { error = "could not send the parameters to the FastCGI backend" }
+        end
+        off += size
+    end
+    _free_buf(pb)
+    if not _send_record(c, PARAMS, null, 0):
+        ret Response { error = "could not send the parameters to the FastCGI backend" }
+    end
+
+    mut boff := 0
+    until boff < n:
+        mut size := n - boff
+        if size > MAX_CONTENT: size = MAX_CONTENT end
+        if not _send_record(c, STDIN, _at(data, boff), size):
+            ret Response { error = "could not send the body to the FastCGI backend" }
+        end
+        boff += size
+    end
+    if not _send_record(c, STDIN, null, 0):
+        ret Response { error = "could not send the body to the FastCGI backend" }
+    end
+
+    mut out := _new(4096)
+    mut errb := _new(256)
+    scratch := mem.Allocate(READ_CHUNK as u64)
+    hdr := mem.Allocate(8 as u64)
+    mut failed := ""
+    mut done := false
+    mut proto := 0
+    until not done and failed.len() == 0:
+        if _read_exact(c, hdr, 8) != 8:
+            failed = "the FastCGI backend closed the connection without answering"
+            break
+        end
+        typ := _byte(hdr, 1)
+        rec_len := (_byte(hdr, 4) << 8) | _byte(hdr, 5)
+        plen := _byte(hdr, 6)
+        if rec_len > 0:
+            if typ == STDOUT:
+                if not _reserve(out, rec_len):
+                    failed = "out of memory reading the FastCGI response"
+                else:
+                    got := _read_exact(c, _at(out.data, out.len), rec_len)
+                    if got != rec_len:
+                        failed = "the FastCGI response was cut short"
+                    else:
+                        out.len += rec_len
+                    end
+                end
+            else:
+                got := _read_exact(c, scratch, rec_len)
+                if got != rec_len:
+                    failed = "the FastCGI response was cut short"
+                else:
+                    if typ == STDERR:
+                        _put(errb, scratch, rec_len)
+                    else typ == END_REQUEST and rec_len >= 5:
+                        proto = _byte(scratch, 4)
+                    end
+                end
+            end
+        end
+        if plen > 0 and failed.len() == 0:
+            if _read_exact(c, scratch, plen) != plen:
+                failed = "the FastCGI response was cut short"
+            end
+        end
+        if typ == END_REQUEST: done = true end
+    end
+
+    mut note := failed
+    mut errtxt := ""
+    if errb.len > 0:
+        errtxt = _bytes_str(errb.data, errb.len)
+    end
+    _free_buf(errb)
+    mem.Free(scratch)
+    mem.Free(hdr)
+
+    if note.len() > 0:
+        _free_buf(out)
+        ret Response { error = note }
+    end
+    if not done:
+        _free_buf(out)
+        ret Response { error = "the FastCGI backend did not finish the request" }
+    end
+    if proto != 0:
+        _free_buf(out)
+        ret Response { error = "the FastCGI backend ended the request with protocol status " + str.FromInt(proto as i64) }
+    end
+
+    hend := _head_end(out.data, out.len)
+    if hend < 0:
+        _free_buf(out)
+        mut msg := "the FastCGI response has no header block"
+        if errtxt.len() > 0:
+            msg = msg + ": " + errtxt
+        end
+        ret Response { error = msg }
+    end
+    head := _bytes_str(out.data, hend)
+    mut r := Response { status = 200 }
+    _parse_head(r, head)
+    body_len := out.len - hend
+    if body_len > 0:
+        mem.MemMove(out.data, _at(out.data, hend), body_len as u64)
+        r.body = out.data
+        r.len = body_len
+    else:
+        _free_buf(out)
+    end
+    r.ok = true
+    ret r
+end
+
+@en "FreeResponse"
+@fa "آزادسازی پاسخ"
+pub func FreeResponse(r &: Response):
+    repeat r.headers.len() in i:
+        h := r.headers.get(i)
+        mem.Free(h.name as void *)
+        mem.Free(h.value as void *)
+    end
+    r.headers.free()
+    if r.body != null:
+        mem.Free(r.body)
+        r.body = null
+        r.len = 0
+    end
+end

@@ -1,0 +1,775 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package httpd
+
+import str
+import os
+import io
+import time
+import mem
+import conv
+import sync
+import filepath
+import net.http
+import net.router
+import net.mime
+import net.tcp
+import net.fastcgi
+
+extern:
+    func fopen(path: str, mode: str): void *
+    func fclose(stream: void *): int
+    func fputs(s: str, stream: void *): int
+    func fflush(stream: void *): int
+    func fdopen(fd: int, mode: str): void *
+end
+
+mut _log_fp := null as void *
+
+mut _log_mu := sync.NewMutex()
+
+func _open_log(path: str): bool:
+    if path.len() == 0:
+        _log_fp = null
+        ret true
+    end
+    if str.Equals(path, "stdout"):
+        _log_fp = fdopen(1, "w")
+    else str.Equals(path, "stderr"):
+        _log_fp = fdopen(2, "w")
+    else:
+        _log_fp = fopen(path, "ab")
+    end
+    ret _log_fp != null
+end
+
+func _log_line(host: str, method: str, path: str, status: int):
+    if _log_fp == null: ret end
+    mut sb := str.NewBuilder()
+    stamp := time.FormatISOUTC(time.Now())
+    code := str.FromInt(status as i64)
+    str.BufAppend(sb, stamp)
+    str.BufAppend(sb, " ")
+    str.BufAppend(sb, host)
+    str.BufAppend(sb, " ")
+    str.BufAppend(sb, method)
+    str.BufAppend(sb, " ")
+    str.BufAppend(sb, path)
+    str.BufAppend(sb, " ")
+    str.BufAppend(sb, code)
+    str.BufAppend(sb, "\n")
+    line := str.BufStr(sb)
+    sync.Lock(_log_mu)
+    fputs(line, _log_fp)
+    fflush(_log_fp)
+    sync.Unlock(_log_mu)
+    mem.Free(line as void *)
+    mem.Free(stamp as void *)
+    mem.Free(code as void *)
+    str.BufFree(sb)
+end
+
+func _swap(cur: str, find: str, repl: str): str:
+    next := str.Replace(cur, find, repl)
+    mem.Free(cur as void *)
+    ret next
+end
+
+func _expand(tmpl: str, host: str, path: str, query: str): str:
+    mut out := str.Replace(tmpl, "$host", host)
+    out = _swap(out, "$scheme", "http")
+    if query.len() > 0:
+        ru := _cat3(path, "?", query)
+        out = _swap(out, "$request_uri", ru)
+        mem.Free(ru as void *)
+    else:
+        out = _swap(out, "$request_uri", path)
+    end
+    out = _swap(out, "$uri", path)
+    out = _swap(out, "$args", query)
+    ret out
+end
+
+func _reply(ctx: i64, code: int, body: str):
+    http.SetStatus(ctx, code)
+    http.Text(ctx, body)
+end
+
+func _apply_headers(ctx: i64, site: int, loc: int):
+    repeat _cfg.headers.len() in i:
+        h := _cfg.headers.get(i)
+        if h.site == site and (h.loc == -1 or h.loc == loc):
+            http.SetHeader(ctx, h.name, h.value)
+        end
+    end
+end
+
+func _norm_path(path: str): str:
+    n := path.len()
+    bp := path as u8 *
+    out := mem.Allocate((n + 2) as u64)
+    ob := out as u8 *
+    mut marks := Vector {} as Vector<int>
+    defer marks.free()
+    mut len := 0
+    mut i := 0
+    mut bad := false
+    until i < n and not bad:
+        until i < n and bp[i] as int == 47:
+            i += 1
+        end
+        start := i
+        until i < n and bp[i] as int != 47:
+            i += 1
+        end
+        seg := i - start
+        if seg == 0 or (seg == 1 and bp[start] as int == 46):
+            continue
+        end
+        if seg == 2 and bp[start] as int == 46 and bp[start + 1] as int == 46:
+            if marks.len() == 0:
+                bad = true
+            else:
+                len = marks.pop()
+            end
+        else:
+            marks.push(len)
+            ob[len] = 47 as u8
+            len += 1
+            repeat seg in k:
+                ob[len] = bp[start + k]
+                len += 1
+            end
+        end
+    end
+    if bad:
+        mem.Free(out)
+        ret str.Clone("")
+    end
+    if len == 0:
+        ob[0] = 47 as u8
+        len = 1
+    else n > 0 and bp[n - 1] as int == 47:
+        ob[len] = 47 as u8
+        len += 1
+    end
+    ob[len] = 0 as u8
+    ret out as str
+end
+
+func _starts_at(s: str, at: int, lit: str): bool:
+    ln := lit.len()
+    if at + ln > s.len(): ret false end
+    sp := s as u8 *
+    lp := lit as u8 *
+    repeat ln in k:
+        if sp[at + k] != lp[k]: ret false end
+    end
+    ret true
+end
+
+func _blocked_segment(path: str): bool:
+    n := path.len()
+    bp := path as u8 *
+    mut i := 0
+    until i < n:
+        ch := bp[i] as int
+        if ch == 92: ret true end
+        if ch == 46 and (i == 0 or bp[i - 1] as int == 47):
+            ok := _starts_at(path, i, ".well-known") and (i + 11 == n or bp[i + 11] as int == 47)
+            if not ok: ret true end
+        end
+        i += 1
+    end
+    ret false
+end
+
+func _cat3(a: str, b: str, c: str): str:
+    mut sb := str.NewBuilder()
+    str.BufAppend(sb, a)
+    str.BufAppend(sb, b)
+    str.BufAppend(sb, c)
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func _page_for(site: int, loc: int, code: int): str:
+    mut found := ""
+    repeat _cfg.pages.len() in i:
+        p := _cfg.pages.get(i)
+        if p.site == site and p.code == code:
+            if p.loc == loc: ret p.path end
+            if p.loc == -1: found = p.path end
+        end
+    end
+    ret found
+end
+
+func _fail(ctx: i64, site: int, loc: int, root: str, code: int, text: str):
+    page := _page_for(site, loc, code)
+    if page.len() > 0 and root.len() > 0:
+        rel := "/" + page
+        clean := _norm_path(rel)
+        mem.Free(rel as void *)
+        target := root + clean
+        mem.Free(clean as void *)
+        if os.Exists(target) and not os.IsDir(target):
+            if http.File(ctx, target, mime.MimeType(target)):
+                http.SetStatus(ctx, code)
+                mem.Free(target as void *)
+                ret
+            end
+        end
+        mem.Free(target as void *)
+    end
+    _reply(ctx, code, text)
+end
+
+func _effective_root(site: int, loc: int): str:
+    if loc >= 0 and _cfg.locations.get(loc).rule.root.len() > 0:
+        ret _cfg.locations.get(loc).rule.root
+    end
+    ret _cfg.sites.get(site).rule.root
+end
+
+func _effective_alias(loc: int): str:
+    if loc < 0: ret "" end
+    ret _cfg.locations.get(loc).rule.alias
+end
+
+func _effective_index(site: int, loc: int): str:
+    if loc >= 0 and _cfg.locations.get(loc).rule.index.len() > 0:
+        ret _cfg.locations.get(loc).rule.index
+    end
+    ret _cfg.sites.get(site).rule.index
+end
+
+func _effective_cache(site: int, loc: int): i64:
+    if loc >= 0 and _cfg.locations.get(loc).rule.cache >= 0:
+        ret _cfg.locations.get(loc).rule.cache
+    end
+    ret _cfg.sites.get(site).rule.cache
+end
+
+func _send_rule(ctx: i64, rule: Rule, host: str, path: str, query: str): bool:
+    if rule.redirect.len() > 0:
+        mut code := rule.redirect_code
+        if code == 0: code = 301 end
+        http.SetStatus(ctx, code)
+        http.SetHeader(ctx, "Location", http.Own(ctx, _expand(rule.redirect, host, path, query)))
+        http.Text(ctx, "")
+        ret true
+    end
+    if rule.ret_code > 0:
+        _reply(ctx, rule.ret_code, rule.ret_body)
+        ret true
+    end
+    ret false
+end
+
+func _free_strs(v: Vector<str>):
+    repeat v.len() in i:
+        mem.Free(v.get(i) as void *)
+    end
+    v.free()
+end
+
+func _serve_file(ctx: i64, site: int, loc: int, root: str, rel: str, path: str, query: str): int:
+    mut target := http.Own(ctx, root + rel)
+    if os.IsDir(target):
+        if not str.EndsWith(path, "/"):
+            http.SetStatus(ctx, 301)
+            base := _cat3(path, "/", "")
+            mut dest := base
+            if query.len() > 0:
+                dest = _cat3(base, "?", query)
+                mem.Free(base as void *)
+            end
+            http.SetHeader(ctx, "Location", http.Own(ctx, dest))
+            http.Text(ctx, "")
+            ret 301
+        end
+        names := str.Fields(_effective_index(site, loc))
+        mut found := ""
+        repeat names.len() in i:
+            cand := filepath.Join(target, names.get(i))
+            if found.len() == 0 and os.Exists(cand) and not os.IsDir(cand):
+                found = http.Own(ctx, cand)
+            else:
+                mem.Free(cand as void *)
+            end
+        end
+        _free_strs(names)
+        if found.len() == 0: ret 404 end
+        target = found
+    else not os.Exists(target):
+        ret 404
+    end
+    ret _send_target(ctx, site, loc, target)
+end
+
+func _etag_of(mt: i64, size: i64): str:
+    a := conv.FormatHex(mt as u64)
+    b := conv.FormatHex(size as u64)
+    mut sb := str.NewBuilder()
+    str.BufAppend(sb, "\"")
+    str.BufAppend(sb, a)
+    str.BufAppend(sb, "-")
+    str.BufAppend(sb, b)
+    str.BufAppend(sb, "\"")
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    mem.Free(a as void *)
+    mem.Free(b as void *)
+    ret out
+end
+
+func _etag_listed(header: str, etag: str): bool:
+    if str.Equals(str.Trim(header), "*"): ret true end
+    parts := str.Split(header, ",")
+    mut hit := false
+    repeat parts.len() in i:
+        mut p := str.Trim(parts.get(i))
+        if str.StartsWith(p, "W/"): p = p.substr(2, p.len() - 2) end
+        if str.Equals(p, etag): hit = true end
+    end
+    _free_strs(parts)
+    ret hit
+end
+
+func _not_modified(ctx: i64, etag: str, mt: i64): bool:
+    inm := http.Header(ctx, "If-None-Match")
+    if inm.len() > 0:
+        ret _etag_listed(inm, etag)
+    end
+    ims := http.Header(ctx, "If-Modified-Since")
+    if ims.len() > 0 and mt > 0:
+        r := time.ParseHTTPDate(ims)
+        ret r.ok and mt <= r.epoch
+    end
+    ret false
+end
+
+func _range_bounds(spec: str, size: i64, start &: i64, last &: i64): int:
+    dash := spec.indexOf("-")
+    if dash < 0 or spec.indexOf(",") >= 0: ret 0 end
+    a := str.Trim(spec.substr(0, dash))
+    b := str.Trim(spec.substr(dash + 1, spec.len() - dash - 1))
+    mut result := 1
+    if a.len() == 0:
+        n := _parse_uint(b)
+        if n < 1:
+            result = 2
+        else:
+            start = n < size ? size - n : 0
+            last = size - 1
+        end
+    else:
+        s0 := _parse_uint(a)
+        if s0 < 0:
+            result = 0
+        else:
+            start = s0
+            last = size - 1
+            if b.len() > 0:
+                e0 := _parse_uint(b)
+                if e0 < 0:
+                    result = 0
+                else:
+                    if e0 < last: last = e0 end
+                end
+            end
+            if result == 1 and (start >= size or last < start): result = 2 end
+        end
+    end
+    mem.Free(a as void *)
+    mem.Free(b as void *)
+    ret result
+end
+
+func _content_range(start: i64, last: i64, size: i64): str:
+    mut sb := str.NewBuilder()
+    str.BufAppend(sb, "bytes ")
+    if start < 0:
+        str.BufAppend(sb, "*")
+    else:
+        str.BufAppendInt(sb, start)
+        str.BufAppend(sb, "-")
+        str.BufAppendInt(sb, last)
+    end
+    str.BufAppend(sb, "/")
+    str.BufAppendInt(sb, size)
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func _send_target(ctx: i64, site: int, loc: int, target: str): int:
+    ct := mime.MimeType(target)
+    mut size := 0 as i64
+    mut mt := 0 as i64
+    if not http.FileStat(target, size, mt): ret 404 end
+    etag := http.Own(ctx, _etag_of(mt, size))
+    http.SetHeader(ctx, "ETag", etag)
+    if mt > 0:
+        http.SetHeader(ctx, "Last-Modified", http.Own(ctx, time.FormatHTTPDate(mt)))
+    end
+    http.SetHeader(ctx, "Accept-Ranges", "bytes")
+    cache := _effective_cache(site, loc)
+    if cache >= 0:
+        secs := str.FromInt(cache)
+        http.SetHeader(ctx, "Cache-Control", http.Own(ctx, _cat3("public, max-age=", secs, "")))
+        mem.Free(secs as void *)
+    end
+    if _not_modified(ctx, etag, mt):
+        http.SetStatus(ctx, 304)
+        http.Text(ctx, "")
+        ret 304
+    end
+    rh := http.Header(ctx, "Range")
+    ir := http.Header(ctx, "If-Range")
+    if rh.len() > 6 and str.StartsWith(rh, "bytes=") and (ir.len() == 0 or str.Equals(ir, etag)):
+        spec := rh.substr(6, rh.len() - 6)
+        mut start := 0 as i64
+        mut last := 0 as i64
+        kind := _range_bounds(spec, size, start, last)
+        mem.Free(spec as void *)
+        if kind == 2:
+            http.SetStatus(ctx, 416)
+            http.SetHeader(ctx, "Content-Range", http.Own(ctx, _content_range(-1, -1, size)))
+            http.Text(ctx, "")
+            ret 416
+        end
+        if kind == 1:
+            if not http.FileRange(ctx, target, ct, start as int, (last - start + 1) as int): ret 404 end
+            http.SetStatus(ctx, 206)
+            http.SetHeader(ctx, "Content-Range", http.Own(ctx, _content_range(start, last, size)))
+            ret 206
+        end
+    end
+    if not http.File(ctx, target, ct): ret 404 end
+    ret 200
+end
+
+func _effective_fastcgi(site: int, loc: int): str:
+    if loc >= 0 and _cfg.locations.get(loc).rule.fastcgi.len() > 0:
+        ret _cfg.locations.get(loc).rule.fastcgi
+    end
+    ret _cfg.sites.get(site).rule.fastcgi
+end
+
+func _effective_fcgi_index(site: int, loc: int): str:
+    if loc >= 0 and _cfg.locations.get(loc).rule.fastcgi_index.len() > 0:
+        ret _cfg.locations.get(loc).rule.fastcgi_index
+    end
+    if _cfg.sites.get(site).rule.fastcgi_index.len() > 0:
+        ret _cfg.sites.get(site).rule.fastcgi_index
+    end
+    ret "index.php"
+end
+
+func _effective_fcgi_timeout(site: int, loc: int): int:
+    if loc >= 0 and _cfg.locations.get(loc).rule.fastcgi_timeout > 0:
+        ret _cfg.locations.get(loc).rule.fastcgi_timeout
+    end
+    if _cfg.sites.get(site).rule.fastcgi_timeout > 0:
+        ret _cfg.sites.get(site).rule.fastcgi_timeout
+    end
+    ret 30000
+end
+
+func _host_only(host: str): str:
+    c := host.indexOf(":")
+    if c > 0: ret host.substr(0, c) end
+    ret str.Clone(host)
+end
+
+func _is_slash(s: str, i: int): bool:
+    bp := s as u8 *
+    ret bp[i] as int == 47
+end
+
+func _http_param(name: str): str:
+    mut sb := str.NewBuilder()
+    str.BufAppend(sb, "HTTP_")
+    bp := name as u8 *
+    repeat name.len() in i:
+        mut ch := bp[i] as int
+        if ch == 45:
+            str.BufAppend(sb, "_")
+        else:
+            if ch >= 97 and ch <= 122:
+                ch -= 32
+            end
+            str.BufAppendChar(sb, ch)
+        end
+    end
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func _expand_param(tmpl: str, host: str, path: str, query: str, root: str, script: str, port: int, remote: str): str:
+    mut out := str.Replace(tmpl, "$host", host)
+    if query.len() > 0:
+        ru := _cat3(path, "?", query)
+        out = _swap(out, "$request_uri", ru)
+        mem.Free(ru as void *)
+    else:
+        out = _swap(out, "$request_uri", path)
+    end
+    out = _swap(out, "$document_root", root)
+    out = _swap(out, "$document_uri", path)
+    out = _swap(out, "$script_name", script)
+    out = _swap(out, "$query_string", query)
+    out = _swap(out, "$args", query)
+    out = _swap(out, "$remote_addr", remote)
+    pnum := str.FromInt(port as i64)
+    out = _swap(out, "$server_port", pnum)
+    mem.Free(pnum as void *)
+    out = _swap(out, "$scheme", "http")
+    out = _swap(out, "$uri", path)
+    out = _swap(out, "$root", root)
+    ret out
+end
+
+func _serve_fastcgi(ctx: i64, site: int, loc: int, root: str, rel: str, path: str, query: str, host: str, port: int): int:
+    addr := _effective_fastcgi(site, loc)
+    colon := addr.indexOf(":")
+    if colon <= 0: ret 502 end
+    fhost := addr.substr(0, colon)
+    fpstr := addr.substr(colon + 1, addr.len() - colon - 1)
+    fport := fpstr.to_int()
+    mem.Free(fpstr as void *)
+    timeout := _effective_fcgi_timeout(site, loc)
+    index := _effective_fcgi_index(site, loc)
+    mut script_rel := rel
+    if str.EndsWith(rel, "/"):
+        script_rel = _cat3(rel, index, "")
+    end
+    mut script_name := ""
+    mut path_info := ""
+    mut target := root + script_rel
+    if os.Exists(target) and not os.IsDir(target):
+        script_name = script_rel
+    else:
+        mem.Free(target as void *)
+        target = ""
+        mut cut := script_rel.len()
+        until cut > 0:
+            cand := script_rel.substr(0, cut)
+            full := root + cand
+            if os.Exists(full) and not os.IsDir(full):
+                script_name = cand
+                path_info = script_rel.substr(cut, script_rel.len() - cut)
+                target = full
+                break
+            end
+            mem.Free(full as void *)
+            mem.Free(cand as void *)
+            mut k := cut - 1
+            until k >= 0 and not _is_slash(script_rel, k):
+                k -= 1
+            end
+            if k <= 0:
+                cut = 0
+            else:
+                cut = k
+            end
+        end
+    end
+    if script_name.len() == 0:
+        mem.Free(fhost as void *)
+        ret 404
+    end
+
+    mut p := fastcgi.NewParams()
+    defer fastcgi.Free(p)
+    hname := _host_only(host)
+    fastcgi.Add(p, "GATEWAY_INTERFACE", "CGI/1.1")
+    fastcgi.Add(p, "SERVER_SOFTWARE", "Salam")
+    fastcgi.Add(p, "SERVER_PROTOCOL", "HTTP/1.1")
+    fastcgi.Add(p, "REQUEST_METHOD", http.Method(ctx))
+    fastcgi.Add(p, "SCRIPT_NAME", script_name)
+    fastcgi.Add(p, "SCRIPT_FILENAME", target)
+    fastcgi.Add(p, "PATH_INFO", path_info)
+    fastcgi.Add(p, "DOCUMENT_ROOT", root)
+    fastcgi.Add(p, "DOCUMENT_URI", path)
+    fastcgi.Add(p, "QUERY_STRING", query)
+    fastcgi.Add(p, "REDIRECT_STATUS", "200")
+    fastcgi.Add(p, "SERVER_NAME", hname)
+    pnum := str.FromInt(port as i64)
+    fastcgi.Add(p, "SERVER_PORT", pnum)
+    mem.Free(pnum as void *)
+    fastcgi.Add(p, "REMOTE_ADDR", "127.0.0.1")
+    fastcgi.Add(p, "HTTPS", "off")
+    if query.len() > 0:
+        ru := _cat3(path, "?", query)
+        fastcgi.Add(p, "REQUEST_URI", ru)
+        mem.Free(ru as void *)
+    else:
+        fastcgi.Add(p, "REQUEST_URI", path)
+    end
+    ctype := http.Header(ctx, "Content-Type")
+    if ctype.len() > 0:
+        fastcgi.Add(p, "CONTENT_TYPE", ctype)
+    end
+    body_len_txt := str.FromInt(http.BodyLen(ctx) as i64)
+    fastcgi.Add(p, "CONTENT_LENGTH", body_len_txt)
+    mem.Free(body_len_txt as void *)
+
+    mut hdrs := Vector {} as Vector<str>
+    hdrs.push("Host")
+    hdrs.push("User-Agent")
+    hdrs.push("Accept")
+    hdrs.push("Accept-Language")
+    hdrs.push("Accept-Encoding")
+    hdrs.push("Cookie")
+    hdrs.push("Referer")
+    hdrs.push("Authorization")
+    hdrs.push("Origin")
+    hdrs.push("Cache-Control")
+    hdrs.push("If-None-Match")
+    hdrs.push("If-Modified-Since")
+    hdrs.push("Range")
+    hdrs.push("X-Requested-With")
+    hdrs.push("X-Forwarded-For")
+    hdrs.push("X-Forwarded-Proto")
+    hdrs.push("X-Real-IP")
+    repeat hdrs.len() in i:
+        hn := hdrs.get(i)
+        hv := http.Header(ctx, hn)
+        if hv.len() > 0:
+            key := _http_param(hn)
+            fastcgi.Add(p, key, hv)
+            mem.Free(key as void *)
+        end
+    end
+    hdrs.free()
+
+    repeat _cfg.fcgi.len() in i:
+        fp := _cfg.fcgi.get(i)
+        if fp.site == site and (fp.loc == -1 or fp.loc == loc):
+            val := _expand_param(fp.value, hname, path, query, root, script_name, port, "127.0.0.1")
+            fastcgi.Add(p, fp.name, val)
+            mem.Free(val as void *)
+        end
+    end
+    mem.Free(hname as void *)
+
+    c := fastcgi.Connect(fhost, fport, timeout)
+    if not tcp.ConnOk(c):
+        mem.Free(fhost as void *)
+        mem.Free(target as void *)
+        _reply(ctx, 502, "502 Bad Gateway: cannot connect to the FastCGI backend " + addr)
+        ret 502
+    end
+    defer tcp.Close(c)
+    r := fastcgi.Execute(c, p, http.BodyBytes(ctx), http.BodyLen(ctx), timeout)
+    mem.Free(fhost as void *)
+    mem.Free(target as void *)
+    if not r.ok:
+        msg := "502 Bad Gateway: " + r.error
+        fastcgi.FreeResponse(r)
+        _reply(ctx, 502, msg)
+        ret 502
+    end
+
+    http.SetStatus(ctx, r.status)
+    mut ctout := "text/html; charset=utf-8"
+    repeat r.headers.len() in i:
+        h := r.headers.get(i)
+        ln := str.Lower(h.name)
+        if str.Equals(ln, "content-type"):
+            ctout = h.value
+        else str.Equals(ln, "content-length") or str.Equals(ln, "connection") or str.Equals(ln, "transfer-encoding"):
+            continue
+        else:
+            http.AddHeader(ctx, http.Own(ctx, str.Clone(h.name)), http.Own(ctx, str.Clone(h.value)))
+        end
+    end
+    if str.Equals(http.Method(ctx), "HEAD"):
+        http.Bytes(ctx, ctout, r.body, 0)
+    else:
+        http.Bytes(ctx, ctout, r.body, r.len)
+    end
+    fastcgi.FreeResponse(r)
+    ret r.status
+end
+
+func _handle(ctx: i64):
+    host := http.Header(ctx, "Host")
+    mut port := _only_port
+    if _multi_port: port = http.LocalPort(ctx) end
+    method := http.Method(ctx)
+    raw := http.Path(ctx)
+    query := http.RawQuery(ctx)
+    site := SiteFor(host, port)
+    if site < 0:
+        _reply(ctx, 404, "no site is configured for this host")
+        _log_line(host, method, raw, 404)
+        ret
+    end
+    dec := http.UrlDecode(raw)
+    path := http.Own(ctx, _norm_path(dec))
+    mem.Free(dec as void *)
+    mut status := 200
+    mut loc := -1
+    if path.len() == 0 or _blocked_segment(path):
+        _fail(ctx, site, -1, _effective_root(site, -1), 404, "404 Not Found")
+        _log_line(host, method, raw, 404)
+        ret
+    end
+    _apply_headers(ctx, site, -1)
+    if _send_rule(ctx, _cfg.sites.get(site).rule, host, path, query):
+        _log_line(host, method, raw, http.Status(ctx))
+        ret
+    end
+    loc = LocationFor(site, path)
+    if loc >= 0:
+        _apply_headers(ctx, site, loc)
+        if _send_rule(ctx, _cfg.locations.get(loc).rule, host, path, query):
+            _log_line(host, method, raw, http.Status(ctx))
+            ret
+        end
+    end
+    mut root := _effective_root(site, loc)
+    mut rel := path
+    alias := _effective_alias(loc)
+    if alias.len() > 0:
+        root = alias
+        cut := _cfg.locations.get(loc).pattern.len()
+        tail := path.substr(cut, path.len() - cut)
+        rel = http.Own(ctx, _cat3("/", tail, ""))
+        mem.Free(tail as void *)
+    end
+    if _effective_fastcgi(site, loc).len() > 0:
+        status = _serve_fastcgi(ctx, site, loc, root, rel, path, query, host, port)
+    else root.len() == 0:
+        status = 404
+    else not (str.Equals(method, "GET") or str.Equals(method, "HEAD")):
+        http.SetHeader(ctx, "Allow", "GET, HEAD")
+        status = 405
+    else:
+        status = _serve_file(ctx, site, loc, root, rel, path, query)
+    end
+    if status == 404:
+        _fail(ctx, site, loc, root, 404, "404 Not Found")
+    else status == 405:
+        _fail(ctx, site, loc, root, 405, "405 Method Not Allowed")
+    end
+    _log_line(host, method, raw, http.Status(ctx))
+end

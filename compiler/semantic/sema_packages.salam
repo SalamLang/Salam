@@ -141,6 +141,14 @@ func load_package(s &: Sema, a &: at.Ast, path: str, imp: int): int:
     save_requal := s.requal
     save_lam := s.lam
     save_yield := s.match_yield_collect
+    save_pre := s.pre_stmts
+    save_pre_ok := s.pre_ok
+    save_try_marks := s.try_marks
+    save_try_ctx := s.try_ctx
+    s.pre_stmts = Vector {} as Vector<int>
+    s.pre_ok = false
+    s.try_marks = 0
+    s.try_ctx = Vector {} as Vector<TryCtx>
     s.gen_pkg = 0
     s.self_type = TYPE_NONE
     s.cur_func = 0
@@ -167,6 +175,7 @@ func load_package(s &: Sema, a &: at.Ast, path: str, imp: int): int:
     s.pending = Vector {} as Vector<int>
     s.loading.push(path)
     load_imports(s, a, prog)
+    err_prelude_scan(s, a, prog)
     sema_collect(s, a, prog)
     sema_check_pass(s, a, prog)
     _lp0 := s.loading.pop()
@@ -184,6 +193,12 @@ func load_package(s &: Sema, a &: at.Ast, path: str, imp: int): int:
     s.lam = save_lam
     s.match_yield_collect.free()
     s.match_yield_collect = save_yield
+    s.pre_stmts.free()
+    s.pre_stmts = save_pre
+    s.pre_ok = save_pre_ok
+    s.try_marks = save_try_marks
+    s.try_ctx.free()
+    s.try_ctx = save_try_ctx
     s.gen_pkg = save_gen_pkg
     s.self_type = save_self_type
     s.cur_func = save_cur_func
@@ -266,18 +281,6 @@ func load_import_file(s &: Sema, a &: at.Ast, imp: int):
     if is_file and not src.HasOverlay(path) and os.IsDir(path):
         serr(
             s, 8, sp, co.Format1(i18.Tr("'%s' is a directory, not a file to include"), co.ArgStr(spec))
-        )
-        ret
-    end
-    if str.Len(path) == 0 and pm.OfficialListed(s.dir, spec):
-        serr(s, 8, sp, co.Format1(i18.Tr("package '%s' is not downloaded yet; run: salam deps"), co.ArgStr(spec)))
-        ret
-    end
-    if str.Len(path) == 0 and pm.IsOfficial(spec):
-        serr(
-            s, 8, sp, co.Format2(
-                i18.Tr("'%s' is an official package that does not ship with Salam; add it to the project with: salam add %s"), co.ArgStr(spec), co.ArgStr(spec)
-            )
         )
         ret
     end
@@ -482,6 +485,25 @@ func sema_check_unused_imports(s &: Sema, a &: at.Ast):
         )
     end
     s.file = save_file
+end
+
+func sema_load_err_prelude(s &: Sema, a &: at.Ast):
+    if s.prelude_err != 0 or s.prelude_err_tried or str.Equals(s.pkg, "core"):
+        ret
+    end
+    s.prelude_err_tried = true
+    path := resolve_import("", "core")
+    if str.Len(path) == 0:
+        ret
+    end
+    imp := scratch_import_node(a)
+    pk := load_package(s, a, path, imp)
+    if pk != 0:
+        s.prelude_err = sym_at(s, pk).members
+        s.prelude_err_pkg = pk
+        err_prelude_aliases(s, a)
+        s.throws_sym = scope_lookup_local(s, s.prelude_err, "Throws")
+    end
 end
 
 func sema_load_prelude(s &: Sema, a &: at.Ast):

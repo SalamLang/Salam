@@ -177,8 +177,27 @@ func is_int_lit(a &: at.Ast, nid: int): bool:
     ret n.kind == at.AST_LITERAL and n.op == tok.TK_INT
 end
 
+func check_logic(s &: Sema, a &: at.Ast, nid: int): int:
+    n := at.Get(a, nid)
+    l := sema_check_expr(s, a, n.a)
+    saved_ok := s.pre_ok
+    s.pre_ok = false
+    r := sema_check_expr(s, a, n.b)
+    s.pre_ok = saved_ok
+    if type_is_error(s, l) or type_is_error(s, r):
+        ret sema_decorate(s, a, nid, sema_err_ty(s))
+    end
+    if ty_at(s, l).kind != TY_BOOL or ty_at(s, r).kind != TY_BOOL:
+        serr(s, 21, span_of(a, nid), i18.Tr("logical operator requires bool operands"))
+    end
+    ret sema_decorate(s, a, nid, sema_ty(s, TY_BOOL))
+end
+
 func check_binary(s &: Sema, a &: at.Ast, nid: int): int:
     n := at.Get(a, nid)
+    if (n.op == tok.TK_AND or n.op == tok.TK_OR) and s.pre_ok:
+        ret check_logic(s, a, nid)
+    end
     sp := span_of(a, nid)
     l_lit := is_int_lit(a, n.a)
     r_lit := is_int_lit(a, n.b)
@@ -590,6 +609,7 @@ func check_member(s &: Sema, a &: at.Ast, nid: int): int:
     if n.a != 0 and at.KindOf(a, n.a) == at.AST_IDENTIFIER:
         sy := scope_lookup(s, s.cur, at.Get(a, n.a).name)
         if sy != 0 and sym_at(s, sy).kind == SYM_ENUM:
+            err_prelude_canon(s, a, n.a, sy)
             ret resolve_enum_member(s, a, nid, sy)
         end
         if sy != 0 and sym_at(s, sy).kind == SYM_ALIAS:

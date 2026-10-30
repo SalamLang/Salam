@@ -48,6 +48,9 @@ pub struct Ra:
     pub defs: Vector<int> = Vector {}
     pub wl: Vector<int> = Vector {}
     pub nuse: Vector<int> = Vector {}
+    pub cp_head: Vector<int> = Vector {}
+    pub cp_to: Vector<int> = Vector {}
+    pub cp_next: Vector<int> = Vector {}
 end
 
 func is_callee_saved(g &: Ng, r: int): bool:
@@ -584,6 +587,39 @@ func choose_reg(g &: Ng, ra &: Ra, v: int): int:
     if ph >= 0 and reg_ok_for(g, ph, cls) and ra.free_until[ph] > e:
         ret ph
     end
+    if v < ra.cp_head.len():
+        mut ce := ra.cp_head[v]
+        mut nc := 0
+        until ce >= 0 and nc < 16:
+            u := ra.cp_to[ce]
+            ur := g.mc.vloc[u]
+            if ur >= 0 and ur < 32 and reg_ok_for(g, ur, cls) and ra.free_until[ur] > e:
+                ret ur
+            end
+            ce = ra.cp_next[ce]
+            nc += 1
+        end
+        mut ce2 := ra.cp_head[v]
+        mut n2 := 0
+        until ce2 >= 0 and n2 < 16:
+            u2 := ra.cp_to[ce2]
+            if g.mc.vloc[u2] < 0 and u2 < ra.cp_head.len():
+                mut cf := ra.cp_head[u2]
+                mut nf := 0
+                until cf >= 0 and nf < 16:
+                    w := ra.cp_to[cf]
+                    wr := g.mc.vloc[w]
+                    if w != v and wr >= 0 and wr < 32 and reg_ok_for(g, wr, cls) and ra.free_until[wr] > e:
+                        ret wr
+                    end
+                    cf = ra.cp_next[cf]
+                    nf += 1
+                end
+            end
+            ce2 = ra.cp_next[ce2]
+            n2 += 1
+        end
+    end
     if cls == 1 and g.arch == NG_ARCH_ARM:
         each xa in k_ra_xmm_arm:
             if ra.free_until[xa] > e:
@@ -657,8 +693,37 @@ func spill_weight(g &: Ng, ra &: Ra, v: int): int:
     ret w as int
 end
 
+func cp_edge(ra &: Ra, a: int, b: int):
+    ra.cp_to.push(b)
+    ra.cp_next.push(ra.cp_head[a])
+    ra.cp_head[a] = ra.cp_to.len() - 1
+end
+
+func cp_build(g &: Ng, ra &: Ra):
+    ra.cp_head.clear()
+    ra.cp_to.clear()
+    ra.cp_next.clear()
+    repeat g.mc.vcls.len():
+        ra.cp_head.push(0 - 1)
+    end
+    if g.off_cpref:
+        ret
+    end
+    repeat g.mc.op.len() in i:
+        if g.mc.op[i] == M_COPY:
+            a := g.mc.r0[i]
+            b := g.mc.r1[i]
+            if a >= VBASE and b >= VBASE and a != b and a < ra.cp_head.len() and b < ra.cp_head.len():
+                cp_edge(ra, a, b)
+                cp_edge(ra, b, a)
+            end
+        end
+    end
+end
+
 func linear_scan(g &: Ng, ra &: Ra):
     nv := g.mc.vcls.len()
+    cp_build(g, ra)
     ra.order.clear()
     ra.v_rc.clear()
     repeat nv in q0:
@@ -935,7 +1000,7 @@ end
 
 func is_use_r0(op: int): bool:
     switch op:
-        M_MOV_RR, M_COPY, M_MOVZX_RR, M_MOVSX_RR, M_FMOV_RR, M_CVTSI2F, M_CVTF2SI, M_CVTF2F, M_MOVQ_XG, M_MOVQ_GX, M_SQRT, M_MOV_RI, M_SETCC, M_LD, M_LDZX, M_LDSX, M_LEA, M_FLD, M_LDGOT, M_IMUL_RRI, M_VLD, M_VLD32:
+        M_MOV_RR, M_COPY, M_MOVZX_RR, M_MOVSX_RR, M_FMOV_RR, M_CVTSI2F, M_CVTF2SI, M_CVTF2F, M_MOVQ_XG, M_MOVQ_GX, M_SQRT, M_MOV_RI, M_SETCC, M_LD, M_LDZX, M_LDSX, M_LEA, M_FLD, M_LDGOT, M_IMUL_RRI, M_VLD, M_VLD32, M_PSHUFD:
             ret false
         end
     end
@@ -1590,6 +1655,12 @@ func regalloc(g &: Ng):
     if g.opt and not g.off_shoist:
         spill_hoist(g)
     end
+    if g.opt and not g.off_cpelim:
+        copy_elim(g)
+    end
+    if g.opt and not g.off_stfwd:
+        store_forward(g)
+    end
     frame_layout(g)
     ra.fr_s.free()
     ra.fr_e.free()
@@ -1627,6 +1698,9 @@ func regalloc(g &: Ng):
     ra.defs.free()
     ra.wl.free()
     ra.nuse.free()
+    ra.cp_head.free()
+    ra.cp_to.free()
+    ra.cp_next.free()
 end
 
 func slot_loc(g &: Ng, s: int): int:

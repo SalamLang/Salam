@@ -25,6 +25,8 @@ export type AgentCall = {
 export type AgentInfo = {
   version: string;
   os: "windows" | "macos" | "linux" | "other";
+  os_version: string;
+  arch: string;
   device: { id: string; name: string } | null;
   connected: boolean;
 };

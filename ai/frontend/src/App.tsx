@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { api, ApiError, getToken, handleUnauthorized, setClientVersion, setToken, streamMessage, uiText, type Chat, type FileMeta, type Message, type OutgoingFile, type User } from "./api";
+import { api, ApiError, getToken, handleUnauthorized, setClientPlatform, setClientVersion, setToken, streamMessage, uiText, type Chat, type FileMeta, type Message, type OutgoingFile, type User } from "./api";
 import { Admin, NoAccess } from "./Admin";
 import { AdminChat } from "./AdminChat";
 import { AgentBar, useAgent } from "./Agent";
@@ -442,6 +442,12 @@ export function App() {
   useEffect(() => {
     if (agentVersion) setClientVersion(agentVersion);
   }, [agentVersion]);
+  const agentOs = tools.info?.os ?? "";
+  const agentOsVersion = tools.info?.os_version ?? "";
+  const agentArch = tools.info?.arch ?? "";
+  useEffect(() => {
+    if (agentOs) setClientPlatform(agentOs, agentOsVersion, agentArch);
+  }, [agentOs, agentOsVersion, agentArch]);
 
   useEffect(() => {
     if (!signedIn) return;

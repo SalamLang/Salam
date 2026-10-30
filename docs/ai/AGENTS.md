@@ -141,7 +141,29 @@ that ends without `ret` (or with a bare `ret`) exits with 0.
 Parameter and variable names cannot be keywords. `in`, `to`, `by`, `on`,
 `type`, `each`, `match`, `eq`, `lt`, `gt` and the other words in
 `salam_keywords` are all reserved, so `func scale(v: f64, by: f64)` does not
-parse.
+parse. `try`, `catch`, `throw` and `throws` are reserved too.
+
+A function that can fail is declared `throws` and fails with `throw`. Every
+call to it needs `try` (which passes the error to the caller, so the caller
+must be `throws` too) or a surrounding `try: ... catch e: ... end` block;
+an unmarked call is `E139`. The error is always the built-in `Error`
+(`e.kind`, `e.message`, `e.to_str()`), which needs no import.
+
+```salam
+func parse port(text: str): int throws:
+    if text == "": throw Error.New(ErrorKind.InvalidArgument, "empty port") end
+    ret text.to_int()
+end
+
+func main:
+    port := try parse port("") catch 8080       // fallback on error
+    try:
+        println parse port("80") + port
+    catch e:
+        println "bad port:", e.message
+    end
+end
+```
 
 ## 6. Strings
 

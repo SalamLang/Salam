@@ -391,26 +391,58 @@ ensure_assets
 say "machine: $NPROC cores; servers on cpu $SERVER_CPUS, generator on cpu $GEN_CPUS ($THREADS threads)"
 say "each route: ${WARMUP}s warmup discarded + ${DURATION}s measured, $CONNS connections"
 
-for server in $SERVERS; do
-    say "== $server"
-    if ! start_server "$server"; then
-        note "$server did not come up; see $RUNDIR/$server.log"
-        stop_server
-        continue
-    fi
-    prewarm "$(port_of "$server")"
-    ensure_up "$server" "prewarm"
-    for route in $ROUTES; do
-        if server_skips "$server" "$route"; then
-            note "$server skips /$route (needs an application server)"
+if [ "${ORDER:-route}" = "server" ]; then
+    for server in $SERVERS; do
+        say "== $server"
+        if ! start_server "$server"; then
+            note "$server did not come up; see $RUNDIR/$server.log"
+            stop_server
             continue
         fi
-        drain_time_wait
-        ensure_up "$server" "$route"
-        measure "$server" "$route"
+        prewarm "$(port_of "$server")"
+        ensure_up "$server" "prewarm"
+        for route in $ROUTES; do
+            if server_skips "$server" "$route"; then
+                note "$server skips /$route (needs an application server)"
+                continue
+            fi
+            drain_time_wait
+            ensure_up "$server" "$route"
+            measure "$server" "$route"
+        done
+        stop_server
     done
-    stop_server
-done
+else
+    declare -A PIDS
+    UP=""
+    for server in $SERVERS; do
+        if start_server "$server"; then
+            PIDS[$server]=$SERVER_PID
+            UP="$UP $server"
+            prewarm "$(port_of "$server")"
+        else
+            note "$server did not come up; see $RUNDIR/$server.log"
+        fi
+        SERVER_PID=""
+    done
+    for route in $ROUTES; do
+        say "== /$route"
+        for server in $UP; do
+            if server_skips "$server" "$route"; then
+                continue
+            fi
+            SERVER_PID=${PIDS[$server]}
+            drain_time_wait
+            ensure_up "$server" "$route"
+            PIDS[$server]=$SERVER_PID
+            measure "$server" "$route"
+        done
+    done
+    for server in $UP; do
+        SERVER_PID=${PIDS[$server]}
+        stop_server
+    done
+fi
 
 [ -n "$CRASHED_ROUTES" ] && say "servers that died during a run:$CRASHED_ROUTES"
 say "results: $RESULTS"

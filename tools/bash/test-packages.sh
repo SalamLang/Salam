@@ -23,7 +23,7 @@ export GIT_CONFIG_KEY_0="url.file://$work/remote/.insteadOf"
 export GIT_CONFIG_VALUE_0="https://"
 export GIT_AUTHOR_NAME=salam GIT_AUTHOR_EMAIL=salam@example.com
 export GIT_COMMITTER_NAME=salam GIT_COMMITTER_EMAIL=salam@example.com
-unset SALAM_NO_GIT SALAM_RELEASES_URL SALAM_PACKAGES SALAM_REGISTRY
+unset SALAM_NO_GIT SALAM_REGISTRY
 : >"$work/sums.txt"
 export SALAM_SUMDB="$work/sums.txt"
 
@@ -262,66 +262,21 @@ EOF
     cd "$work" || exit 1
 fi
 
-version=$(tr -d ' \t\r\n' <"$root/VERSION")
-if command -v python3 >/dev/null 2>&1 && [ -d "$root/packages/db/redis" ]; then
-    mkdir -p "$work/rel" "$work/srv/store/v$version"
-    ln -s "$root/std" "$work/rel/std"
-    (cd "$root" && tar -czf "$work/srv/store/v$version/salam-packages-$version.tar.gz" packages/db/redis)
-    mkdir -p "$work/srv/store/v0.0.1"
-    cp "$work/srv/store/v$version/salam-packages-$version.tar.gz" "$work/srv/store/v0.0.1/salam-packages-0.0.1.tar.gz"
-    port=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
-    cat >"$work/redirect_server.py" <<'PY'
-import http.server
-import sys
-
-
-class Handler(http.server.SimpleHTTPRequestHandler):
-    def do_GET(self):
-        if "Authorization" in self.headers:
-            self.send_error(400)
-            return
-        if self.path.startswith("/store/"):
-            return super().do_GET()
-        self.send_response(302)
-        if self.path.startswith("/v0.0.1/"):
-            self.send_header("Location", "/store" + self.path)
-        elif self.path.startswith("/hop/"):
-            self.send_header("Location", "//127.0.0.1:" + sys.argv[1] + "/rel/" + self.path[len("/hop/"):])
-        elif self.path.startswith("/rel/") and "/stage/" not in self.path:
-            self.send_header("Location", "stage/" + self.path.rsplit("/", 1)[1])
-        elif self.path.startswith("/rel/"):
-            version_dir = self.path[len("/rel/"):].split("/", 1)[0]
-            self.send_header("Location", "/store/" + version_dir + "/" + self.path.rsplit("/", 1)[1])
-        else:
-            self.send_header("Location", "http://localhost:" + sys.argv[1] + "/hop" + self.path)
-        self.end_headers()
-
-    def log_message(self, *args):
-        pass
-
-
-http.server.ThreadingHTTPServer(("127.0.0.1", int(sys.argv[1])), Handler).serve_forever()
-PY
-    (cd "$work/srv" && exec python3 "$work/redirect_server.py" "$port" >/dev/null 2>&1) &
-    server=$!
-    sleep 1
-    mkdir -p "$work/off"
-    cd "$work/off" || exit 1
-    printf '[package]\nname = "off"\n' >salam.toml
-    printf 'import db.redis\n\nfunc main:\n    println redis.Ok(redis.Client {})\nend\n' >main.salam
-    SALAM_STD="$work/rel/std" run "$salam" check main.salam
-    check "an official package needs salam add" "$(has 'official package that does not ship with Salam' "$work/last.log" && echo 0 || echo 1)"
-    GITHUB_TOKEN=test-token SALAM_STD="$work/rel/std" SALAM_RELEASES_URL="http://127.0.0.1:$port/" run "$salam" add db.redis
-    check "add follows redirects to the official packages archive" "$(has '"db.redis" = "v' salam.toml && [ -d "$SALAM_PKG/salam-packages@v$version/db/redis" ] && echo 0 || echo 1)"
-    SALAM_STD="$work/rel/std" run "$salam" run --log-level=error
-    check "a program imports the downloaded official package" "$(has '^false$' "$work/last.log" && echo 0 || echo 1)"
-    rm -rf "$SALAM_PKG/salam-packages@v$version"
-    SALAM_STD="$work/rel/std" SALAM_RELEASES_URL="http://127.0.0.1:$port/" run "$salam" deps
-    check "deps downloads the official packages again" "$([ -d "$SALAM_PKG/salam-packages@v$version/db/redis" ] && echo 0 || echo 1)"
-    SALAM_STD="$work/rel/std" SALAM_RELEASES_URL="http://127.0.0.1:$port/" run "$salam" add db.redis@v0.0.1
-    check "an official package can be pinned to another release" "$(has '"db.redis" = "v0.0.1"' salam.toml && [ -d "$SALAM_PKG/salam-packages@v0.0.1/db/redis" ] && echo 0 || echo 1)"
-    kill "$server" 2>/dev/null
-    cd "$work" || exit 1
-fi
+mkdir -p "$work/builtin"
+cd "$work/builtin" || exit 1
+printf '[package]\nname = "builtin"\n' >salam.toml
+printf 'import db.redis\n\nfunc main:\n    println redis.Ok(redis.Client {})\nend\n' >main.salam
+run "$salam" run --log-level=error
+check "a standard library package imports without salam add" "$(has '^false$' "$work/last.log" && echo 0 || echo 1)"
+run "$salam" add db.redis
+check "add says a standard library package needs no download" "$(has 'part of the standard library' "$work/last.log" && ! has 'db.redis' salam.toml && echo 0 || echo 1)"
+printf '[package]\nname = "builtin"\n\n[dependencies]\n"db.redis" = "v0.5.9"\n' >salam.toml
+run "$salam" deps
+check "deps skips a standard library package an old manifest lists" "$(! has 'db.redis' salam.lock && echo 0 || echo 1)"
+run "$salam" run --log-level=error
+check "a manifest that still lists a standard library package builds" "$(has '^false$' "$work/last.log" && echo 0 || echo 1)"
+run "$salam" search redis
+check "search finds a standard library package" "$(has 'db.redis  (standard library' "$work/last.log" && echo 0 || echo 1)"
+cd "$work" || exit 1
 
 [ "$fails" -eq 0 ]

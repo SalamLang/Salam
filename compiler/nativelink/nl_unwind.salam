@@ -1,0 +1,227 @@
+package nativelink
+
+const UNW_PAGE := 511
+
+func mo_unw_size(n: int): i64:
+    if n <= 0:
+        ret 0
+    end
+    ents := 2 * n + 1
+    pages := (ents + UNW_PAGE - 1) / UNW_PAGE
+    sz := 28 + 12 * (pages + 1) + 8 * pages + 8 * ents
+    ret sz
+end
+
+func mo_fde_count(l &: Nl, t &: Mo): int:
+    mut n := 0
+    repeat l.s_obj.len() in s:
+        if t.out_k[s] != MO_EH or l.s_off[s] <= (0 as i64):
+            continue
+        end
+        p := fptr(l, l.o_file[l.s_obj[s]])
+        base := l.s_off[s]
+        mut at := 0 as i64
+        until at + (8 as i64) <= l.s_size[s]:
+            ln := rd32(p, base + at)
+            if ln == (0 as i64) or ln == (0xFFFFFFFF as i64):
+                break
+            end
+            if rd32(p, base + at + (4 as i64)) != (0 as i64):
+                n += 1
+            end
+            at = at + (4 as i64) + ln
+        end
+    end
+    ret n
+end
+
+func eh_uleb(p: u8*, at &: i64): i64:
+    mut v := 0 as i64
+    mut sh := 0 as i64
+    until true:
+        b := p[at] as i64
+        at = at + (1 as i64)
+        v = v | ((b & (127 as i64)) << sh)
+        sh = sh + (7 as i64)
+        if (b & (128 as i64)) == (0 as i64):
+            ret v
+        end
+    end
+end
+
+func eh_ptr(p: u8*, at &: i64, enc: int, va: i64): i64:
+    f := enc & 0x0F
+    mut v := 0 as i64
+    if f == 0x00 or f == 0x04 or f == 0x0C:
+        v = rd32(p, at) | (rd32(p, at + (4 as i64)) << (32 as i64))
+        at = at + (8 as i64)
+    else f == 0x0B:
+        v = rd32(p, at)
+        if v >= (0x80000000 as i64):
+            v = v - (0x100000000 as i64)
+        end
+        at = at + (4 as i64)
+    else f == 0x03:
+        v = rd32(p, at)
+        at = at + (4 as i64)
+    else:
+        ret 0 - 1
+    end
+    if (enc & 0x70) == 0x10:
+        v = v + va
+    end
+    ret v
+end
+
+func eh_cie_enc(p: u8*, cie: i64): int:
+    mut at := cie + (8 as i64)
+    ver := p[at] as int
+    at = at + (1 as i64)
+    aug := at
+    until p[at] != (0 as u8):
+        at = at + (1 as i64)
+    end
+    at = at + (1 as i64)
+    if p[aug] != (122 as u8):
+        ret 0
+    end
+    _ca := eh_uleb(p, at)
+    _da := eh_uleb(p, at)
+    if ver == 1:
+        at = at + (1 as i64)
+    else:
+        _ra := eh_uleb(p, at)
+    end
+    _al := eh_uleb(p, at)
+    mut q := aug + (1 as i64)
+    until p[q] != (0 as u8):
+        c := p[q] as int
+        if c == 82:
+            ret p[at] as int
+        end
+        if c == 80:
+            pe := p[at] as int
+            at = at + (1 as i64)
+            _pp := eh_ptr(p, at, pe & 0x0F, 0 as i64)
+        else c == 76:
+            at = at + (1 as i64)
+        end
+        q = q + (1 as i64)
+    end
+    ret 0
+end
+
+func mo_unwind(l &: Nl, t &: Mo, buf: u8*):
+    eh := t.fpos[MO_EH]
+    ehva := t.addr[MO_EH]
+    mut fs := Vector {} as Vector<i64>
+    mut fe := Vector {} as Vector<i64>
+    mut fo := Vector {} as Vector<i64>
+    mut at := 0 as i64
+    until at + (8 as i64) <= t.size[MO_EH]:
+        ln := rd32(buf, eh + at)
+        if ln == (0 as i64) or ln == (0xFFFFFFFF as i64):
+            break
+        end
+        cid := rd32(buf, eh + at + (4 as i64))
+        if cid != (0 as i64):
+            cie := eh + at + (4 as i64) - cid
+            enc := eh_cie_enc(buf, cie)
+            mut q := eh + at + (8 as i64)
+            pc := eh_ptr(buf, q, enc, ehva + (q - eh))
+            rng := eh_ptr(buf, q, enc & 0x0F, 0 as i64)
+            if pc > (0 as i64) and rng > (0 as i64):
+                fs.push(pc - t.base)
+                fe.push(pc - t.base + rng)
+                fo.push(at)
+            end
+        end
+        at = at + (4 as i64) + ln
+    end
+    mut keys := Vector {} as Vector<i64>
+    repeat fs.len() in k:
+        keys.push(fs[k])
+    end
+    mut ord := Vector {} as Vector<int>
+    repeat fs.len() in k1:
+        ord.push(k1)
+    end
+    repeat ord.len() in a:
+        repeat ord.len() - a - 1 in b0:
+            b := a + b0 + 1
+            if keys[ord[b]] < keys[ord[a]]:
+                tmp := ord[a]
+                ord[a] = ord[b]
+                ord[b] = tmp
+            end
+        end
+    end
+    mode := (l.mach == EM_X86_64 ? 0x04000000 : 0x03000000) as i64
+    mut ef := Vector {} as Vector<i64>
+    mut en := Vector {} as Vector<i64>
+    each i in ord:
+        if ef.len() > 0 and ef[ef.len() - 1] == fs[i]:
+            _p1 := ef.pop()
+            _p2 := en.pop()
+        end
+        ef.push(fs[i])
+        en.push(mode | (fo[i] & (0xFFFFFF as i64)))
+        ef.push(fe[i])
+        en.push(0 as i64)
+    end
+    mut last_end := 0 as i64
+    if ef.len() > 0:
+        last_end = ef[ef.len() - 1]
+        _p3 := ef.pop()
+        _p4 := en.pop()
+    end
+    n := ef.len()
+    pages := n == 0 ? 0 : (n + UNW_PAGE - 1) / UNW_PAGE
+    mut u := Vector {} as Vector<u8>
+    tb_le(u, 1 as i64, 4)
+    tb_le(u, 28 as i64, 4)
+    tb_le(u, 0 as i64, 4)
+    tb_le(u, 28 as i64, 4)
+    tb_le(u, 0 as i64, 4)
+    tb_le(u, 28 as i64, 4)
+    tb_le(u, (pages + 1) as i64, 4)
+    lsda := 28 + 12 * (pages + 1)
+    mut pg := lsda
+    repeat pages in pi:
+        first := pi * UNW_PAGE
+        tb_le(u, ef[first], 4)
+        tb_le(u, pg as i64, 4)
+        tb_le(u, lsda as i64, 4)
+        cnt := n - first < UNW_PAGE ? n - first : UNW_PAGE
+        pg = pg + 8 + 8 * cnt
+    end
+    tb_le(u, last_end, 4)
+    tb_le(u, 0 as i64, 4)
+    tb_le(u, lsda as i64, 4)
+    repeat pages in pj:
+        first2 := pj * UNW_PAGE
+        cnt2 := n - first2 < UNW_PAGE ? n - first2 : UNW_PAGE
+        tb_le(u, 2 as i64, 4)
+        tb_le(u, 8 as i64, 2)
+        tb_le(u, cnt2 as i64, 2)
+        repeat cnt2 in e:
+            tb_le(u, ef[first2 + e], 4)
+            tb_le(u, en[first2 + e], 4)
+        end
+    end
+    if (u.len() as i64) <= t.size[MO_UNW]:
+        repeat u.len() in c:
+            buf[t.fpos[MO_UNW] + (c as i64)] = u[c]
+        end
+    else:
+        nl_fail(l, "__unwind_info does not fit its reserved size")
+    end
+    fs.free()
+    fe.free()
+    fo.free()
+    keys.free()
+    ord.free()
+    ef.free()
+    en.free()
+    u.free()
+end

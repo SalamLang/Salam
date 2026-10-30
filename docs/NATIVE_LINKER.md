@@ -197,15 +197,23 @@ discardable section, names it through a COFF string table that
 offset inside the merged section and `ADDR64` to the virtual address
 without a base relocation.
 
-When objects carry CodeView (`.debug$S` without `.debug$T`, which is what
-`-g` gives on Windows targets), the PE linker also writes `<name>.pdb`
+When objects carry CodeView (`.debug$S`, and `.debug$T` holding only the
+pointer, struct, field list, array, enum, procedure, argument list and
+function ID records the native backend writes, which is what `-g` gives on Windows targets), the PE linker also writes `<name>.pdb`
 next to the executable (`nl_pdb.salam`) and points a debug directory entry
 with an `RSDS` record at it, so WinDbg, Visual Studio and
 `llvm-symbolizer` find functions and lines without the DWARF. The PDB is an
 MSF file with 4 KiB blocks holding:
 
 - the info stream (GUID, age and a `/names` entry);
-- empty TPI and IPI streams;
+- the TPI stream, with every object's `.debug$T` records appended and their
+  type indices shifted (in the records and in the module's symbols), plus
+  its hash stream (names for structs and enums, JamCRC for the rest), which
+  debuggers use to resolve forward references; the IPI stream, with the
+  `LF_FUNC_ID` records split out of the same `.debug$T` sections (each
+  object gets a map from its own indices to the TPI or IPI ones, applied to
+  the records, to the module's symbols, including `S_INLINESITE`, and to its
+  inlinee line entries);
 - DBI, with module info, section contributions, a section map, file info
   and a section header stream;
 - `/names`;
@@ -697,13 +705,19 @@ string forms in DWARF 5 line table headers, and `.debug_aranges`. An object
 whose units cannot be walked (64-bit DWARF, an unknown form) is left out
 rather than linked with wrong offsets, and `__debug_names` is dropped when
 more than one object contributes, since its tables cannot be concatenated
-(lldb builds its own index of the units). The executable has no `__unwind_info`;
-unwinders fall back to `__eh_frame`, which is what lldb does.
+(lldb builds its own index of the units). The executable gets an
+`__unwind_info` section (`nl_unwind.salam`) in which every function with an
+FDE uses the DWARF encoding (`UNWIND_X86_64_MODE_DWARF` or
+`UNWIND_ARM64_MODE_DWARF` plus the FDE's offset in `__eh_frame`), and the
+code between FDEs gets encoding 0, so the system unwinder finds each frame
+through `__eh_frame` without guessing. Entries sit in regular second-level
+pages of up to 511, behind an index whose last entry marks the end of the
+code.
 
 The output is a PIE `MH_EXECUTE`:
 
 - `__PAGEZERO`, `__TEXT` (`__text`, `__stubs`, `__cstring`, `__const`,
-  `__eh_frame`), `__DATA_CONST` (`__got`, `__mod_init_func`, `__const`),
+  `__eh_frame`, `__unwind_info`), `__DATA_CONST` (`__got`, `__mod_init_func`, `__const`),
   `__DATA` (`__data`, `__bss`) and `__LINKEDIT`.
 - Calls to imported functions go through a stub that jumps through a
   non-lazy `__got` slot; there is no lazy binding. GOT loads of local

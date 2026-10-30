@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
-import { api, ApiError, PAGE_SIZE, type AdminApp, type AdminTelegram, type AdminKey, type AdminSubscription, type AdminGuest, type AdminSession, type AdminSummary, type GuestMessage, type AdminUpload, type AdminUser, type ApiRequest, type AppEvent, type Chat, type EventFilters, type Payment, type PlanId, type RequestFilters, type UsagePeriod, type UsagePeriodKey, type UsageTotals } from "./api";
+import { api, ApiError, PAGE_SIZE, type AdminApp, type AdminTelegram, type AdminKey, type AdminPlatforms, type AdminSubscription, type AdminGuest, type AdminSession, type AdminSummary, type GuestMessage, type AdminUpload, type AdminUser, type ApiRequest, type AppEvent, type Chat, type EventFilters, type Payment, type PlanId, type RequestFilters, type UsagePeriod, type UsagePeriodKey, type UsageTotals } from "./api";
 import { EventList } from "./Events";
 import { fmtCompact, fmtCost, fmtDate, fmtDateTime, fmtDay, fmtMonth, fmtNum, fmtRelative, tokenSplit } from "./format";
 import { IconBadgeCheck, IconChevronDown, IconClose, IconSearch, IconShield } from "./icons";
@@ -1834,6 +1834,114 @@ function Guests() {
   );
 }
 
+const PLATFORM_DAYS = [
+  { id: "7", label: t("۷ روز", "7 days") },
+  { id: "30", label: t("۳۰ روز", "30 days") },
+  { id: "0", label: t("همه", "All") },
+];
+
+function platformName(id: string): string {
+  switch (id) {
+    case "windows":
+      return "Windows";
+    case "macos":
+      return "macOS";
+    case "linux":
+      return "Linux";
+    case "other":
+      return t("سایر سیستم‌ها", "Other systems");
+    case "telegram":
+      return t("ربات تلگرام", "Telegram bot");
+    default:
+      return t("نامشخص (وب و چت‌بات سایت)", "Unknown (website and chatbot)");
+  }
+}
+
+function PlatformsPanel() {
+  const [days, setDays] = useState("30");
+  const [data, setData] = useState<AdminPlatforms | null>(null);
+  const [error, setError] = useState("");
+
+  useEffect(() => {
+    let live = true;
+    setError("");
+    api
+      .adminPlatforms(Number(days))
+      .then((r) => live && setData(r))
+      .catch((e) => live && setError(errText(e, t("بارگذاری آمار سیستم‌عامل‌ها ناموفق بود.", "Could not load the platform breakdown."))));
+    return () => {
+      live = false;
+    };
+  }, [days]);
+
+  const total = data?.total ?? 0;
+  const pct = (n: number) => (total === 0 ? "0" : fmtNum(Math.round((n / total) * 1000) / 10));
+  return (
+    <section className="card panel">
+      <div className="panel-head">
+        <h3>{t("سیستم‌عامل نشست‌ها", "Session platforms")}</h3>
+        <Segmented label={t("بازه", "Period")} options={PLATFORM_DAYS} value={days} onChange={setDays} />
+      </div>
+      {error ? (
+        <div className="form-error" role="alert">
+          {error}
+        </div>
+      ) : data === null ? (
+        <div className="list-loading" role="status">
+          <span className="spinner" />
+          <span className="sr-only">{t("در حال بارگذاری", "Loading")}</span>
+        </div>
+      ) : total === 0 ? (
+        <p className="empty-list">{t("هنوز نشستی نیست.", "No sessions yet.")}</p>
+      ) : (
+        <>
+          <ol className="top-list">
+            {data.platforms.map((p) => (
+              <li key={p.id}>
+                <div className="top-row">
+                  <span>{platformName(p.id)}</span>
+                  <span className="top-count">
+                    {fmtNum(p.count)} ({pct(p.count)}٪)
+                  </span>
+                </div>
+                <span className="meter" aria-hidden="true">
+                  <i style={{ width: `${(p.count / total) * 100}%` }} />
+                </span>
+              </li>
+            ))}
+          </ol>
+          {data.systems.length > 0 && (
+            <div className="table-wrap">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th scope="col">{t("سیستم‌عامل", "System")}</th>
+                    <th scope="col">{t("معماری", "Architecture")}</th>
+                    <th scope="col">{t("نشست", "Sessions")}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {data.systems.map((x) => (
+                    <tr key={`${x.os}|${x.version}|${x.arch}`}>
+                      <td dir="ltr" className="cell-ltr">
+                        {x.version || platformName(x.os)}
+                      </td>
+                      <td dir="ltr" className="cell-ltr">
+                        {x.arch || "-"}
+                      </td>
+                      <td>{fmtNum(x.count)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
 function Sessions({ picked, notify }: { picked: Picked; notify: (msg: string) => void }) {
   const [rows, setRows] = useState<AdminSession[] | null>(null);
   const [total, setTotal] = useState(0);
@@ -1908,6 +2016,8 @@ function Sessions({ picked, notify }: { picked: Picked; notify: (msg: string) =>
   };
 
   return (
+    <>
+    {!picked && <PlatformsPanel />}
     <section className="card panel">
       <div className="panel-head">
         <h3>{t("نشست‌ها", "Sessions")}{picked ? t(" این کاربر", " for this user") : ""}</h3>
@@ -1947,6 +2057,7 @@ function Sessions({ picked, notify }: { picked: Picked; notify: (msg: string) =>
                   <th scope="col">{t("کاربر", "User")}</th>
                   <th scope="col">{t("از", "Client")}</th>
                   <th scope="col">{t("نسخه", "Version")}</th>
+                  <th scope="col">{t("سیستم‌عامل", "System")}</th>
                   <th scope="col">{t("مرورگر یا سیستم", "Browser or system")}</th>
                   <th scope="col">IP</th>
                   <th scope="col">{t("ورود", "Signed in")}</th>
@@ -1965,6 +2076,9 @@ function Sessions({ picked, notify }: { picked: Picked; notify: (msg: string) =>
                     <td>{s.client === "agent" ? t("ایجنت", "Agent") : t("وب", "Web")}</td>
                     <td dir="ltr" className="cell-ltr">
                       {s.client_version || "-"}
+                    </td>
+                    <td dir="ltr" className="cell-ltr" title={s.arch}>
+                      {s.os ? s.os_version || platformName(s.os) : "-"}
                     </td>
                     <td dir="ltr" className="cell-ltr cell-clip" title={s.agent}>
                       {shortAgent(s.agent)}
@@ -1987,7 +2101,7 @@ function Sessions({ picked, notify }: { picked: Picked; notify: (msg: string) =>
                 ))}
                 {rows.length === 0 && (
                   <tr>
-                    <td colSpan={8} className="empty-cell">
+                    <td colSpan={9} className="empty-cell">
                       {t("نشست فعالی نیست.", "No active sessions.")}
                     </td>
                   </tr>
@@ -2011,6 +2125,7 @@ function Sessions({ picked, notify }: { picked: Picked; notify: (msg: string) =>
         </>
       )}
     </section>
+    </>
   );
 }
 
@@ -2203,7 +2318,7 @@ export function NoAccess() {
           <IconShield />
         </div>
         <h3>{t("دسترسی به این بخش ندارید", "You do not have access to this section")}</h3>
-        <p className="muted">{t("این صفحه فقط برای مدیران دستیار سلام است. اگر فکر می‌کنید باید دسترسی داشته باشید، با مدیر سایت تماس بگیرید.", "This page is only for Salam assistant admins. If you think you should have access, contact the site admin.")}</p>
+        <p className="muted">{t("این صفحه فقط برای مدیران دستیار سلام است. اگر فکر می‌کنید باید دسترسی داشته باشید، با مدیر سایت تماس بگیرید.", "This page is only for Salam AI Assistant admins. If you think you should have access, contact the site admin.")}</p>
         <a className="button ghost" href="/">
           {t("بازگشت به گفت‌وگوها", "Back to chats")}
         </a>
@@ -2243,7 +2358,7 @@ export function Admin({ notify }: { notify: (msg: string) => void }) {
     <div className="page">
       <header className="page-head">
         <h2>{t("مدیریت", "Admin")}</h2>
-        <p className="muted">{t("نمای کلی استفاده از دستیار و سرور MCP سلام.", "An overview of how the Salam assistant and MCP server are used.")}</p>
+        <p className="muted">{t("نمای کلی استفاده از دستیار و سرور MCP سلام.", "An overview of how Salam AI Assistant and the MCP server are used.")}</p>
       </header>
       {error && (
         <div className="form-error" role="alert">

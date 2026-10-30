@@ -114,9 +114,42 @@ func isel_init(g &: Ng):
                 if p >= 0 and p != g.i_a[i]:
                     g.v_mem[p] = g.v_mem[p] + 1
                 end
+            else op == OP_CALL and not g.off_memaddr:
+                count_inline_mem(g, i)
             end
             i = g.i_next[i]
         end
+    end
+    if g.opt and not g.off_selinc and (g.arch == NG_ARCH_X64 or g.arch == NG_ARCH_X86):
+        each b2 in g.b_rpo:
+            mut i2 := g.b_first[b2]
+            until i2 >= 0:
+                if g.i_op[i2] == OP_SELECT and sel_scalar(g, g.i_ty[i2]):
+                    sel_inc_plan(g, i2)
+                end
+                i2 = g.i_next[i2]
+            end
+        end
+    end
+end
+
+func count_inline_mem(g &: Ng, i: int):
+    callee := g.i_a[i]
+    if callee < 0 or g.v_kind[callee] != VK_GLB or g.v_i[callee] != (0 as i64) or g.i_pcount[i] < 3:
+        ret
+    end
+    sy := g.v_def[callee]
+    ln := call_arg(g, i, 2)
+    if g.v_kind[ln] != VK_INT or g.v_i[ln] > (256 as i64):
+        ret
+    end
+    d0 := call_arg(g, i, 0)
+    s0 := call_arg(g, i, 1)
+    if sy == g.sym_i_memset and g.v_kind[s0] == VK_INT and d0 >= 0:
+        g.v_mem[d0] = g.v_mem[d0] + 1
+    else sy == g.sym_i_memcpy and d0 >= 0 and s0 >= 0 and d0 != s0:
+        g.v_mem[d0] = g.v_mem[d0] + 1
+        g.v_mem[s0] = g.v_mem[s0] + 1
     end
 end
 
@@ -179,6 +212,19 @@ func raw_const(g &: Ng, bits: i64, sz: int): Mem:
         sec_pad(g, SEC_CONST, 16 - sz)
         g.fpcr.put(bits, off)
     end
+    ret Mem { k = MK_RIP, sym = g.sym_ro, d = off as i64 }
+end
+
+func vec_const(g &: Ng, lo: i64, hi: i64): Mem:
+    key := "v" + str.FromInt(lo) + ":" + str.FromInt(hi)
+    if g.vconst.has(key):
+        ret Mem { k = MK_RIP, sym = g.sym_ro, d = g.vconst.get(key) as i64 }
+    end
+    sec_align_to(g, SEC_CONST, 16)
+    off := g.s_cst.len()
+    sec_le(g, SEC_CONST, lo, 8)
+    sec_le(g, SEC_CONST, hi, 8)
+    g.vconst.put(key, off)
     ret Mem { k = MK_RIP, sym = g.sym_ro, d = off as i64 }
 end
 
@@ -1642,7 +1688,33 @@ func isel_vint_add(g &: Ng, i: int):
     set_res(g, i, rv)
 end
 
+func isel_vredadd_flt(g &: Ng, i: int):
+    v := use_reg(g, g.i_a[i])
+    d := g.t_elem[g.v_ty[g.i_a[i]]] == T_F64
+    t1 := wide_reg(g)
+    s1 := e_rr(g, M_PSHUFD, 16, t1, v)
+    g.mc.imm[s1] = 0xEE as i64
+    a1 := e_rr(g, M_VOP_RR, d ? 8 : 4, t1, v)
+    g.mc.cc[a1] = FO_ADD
+    mut fin := t1
+    if not d:
+        t2 := wide_reg(g)
+        s2 := e_rr(g, M_PSHUFD, 16, t2, t1)
+        g.mc.imm[s2] = 0x55 as i64
+        a2 := e_rr(g, M_VOP_RR, 4, t2, t1)
+        g.mc.cc[a2] = FO_ADD
+        fin = t2
+    end
+    r := xmm(g)
+    _c := e_copy(g, r, fin)
+    set_res(g, i, r)
+end
+
 func isel_vredadd(g &: Ng, i: int):
+    if is_flt(g, g.i_ty[i]):
+        isel_vredadd_flt(g, i)
+        ret
+    end
     v := use_reg(g, g.i_a[i])
     vt := g.v_ty[g.i_a[i]]
     q := g.t_elem[vt] == T_I64
@@ -1812,7 +1884,7 @@ func isel_bin(g &: Ng, i: int):
                 mb = a
             end
             move_into(g, r, ma)
-            rb := use_reg(g, mb)
+            rb := ma == mb and not g.off_sqself ? r : use_reg(g, mb)
             _m := e_rr(g, M_IMUL_RR, sz, r, rb)
         end
         set_res(g, i, r)
@@ -2783,12 +2855,6 @@ func isel_div(g &: Ng, i: int):
         _z0 := e_ri(g, M_MOV_RI, 4, RDX, 0 as i64)
         d0 := e_rr(g, M_DIV, 4, 0 - 1, rb)
         g.mc.cc[d0] = 0
-        if need_q:
-            _q0 := e_copy(g, rq, RAX)
-        end
-        if need_r:
-            _r0 := e_copy(g, rr, RDX)
-        end
         _jd := e_jmp(g, done)
         _ls := e_label(g, slow)
     end
@@ -2800,14 +2866,14 @@ func isel_div(g &: Ng, i: int):
     end
     d := e_rr(g, M_DIV, sz, 0 - 1, rb)
     g.mc.cc[d] = (sign ? 1 : 0) | (need_q ? 0 : 2) | (need_r ? 0 : 4)
+    if done >= 0:
+        _ld := e_label(g, done)
+    end
     if need_q:
         _c3 := e_copy(g, rq, RAX)
     end
     if need_r:
         _c4 := e_copy(g, rr, RDX)
-    end
-    if done >= 0:
-        _ld := e_label(g, done)
     end
     if g.opt and twin:
         g.dq_a.push(a)
@@ -3828,11 +3894,101 @@ func isel_select(g &: Ng, i: int):
         ret
     end
     r3 := gpr(g)
+    tie := tie_true_arm(g, i)
     _t3 := e_rr(g, M_TEST_RR, 1, rc2, rc2)
-    _c4 := e_copy(g, r3, rf)
-    cm2 := e_rr(g, M_CMOV, asz(g, t), r3, rt)
-    g.mc.cc[cm2] = X_NE
+    _c4 := e_copy(g, r3, tie ? rt : rf)
+    cm2 := e_rr(g, M_CMOV, asz(g, t), r3, tie ? rf : rt)
+    g.mc.cc[cm2] = tie ? X_E : X_NE
     set_res(g, i, r3)
+end
+
+func phi_dead_after(g &: Ng, v: int, b: int): bool:
+    dblk := g.i_blk[g.v_def[v]]
+    mut seen := HashMap {} as HashMap<int, int>
+    mut work := Vector {} as Vector<int>
+    mut succ := Vector {} as Vector<int>
+    work.push(b)
+    mut ok := true
+    mut steps := 0
+    until ok and work.len() > 0:
+        x := work.pop()
+        blk_succs(g, x, succ)
+        each y in succ:
+            if y == dblk or seen.has(y):
+                continue
+            end
+            seen.put(y, 1)
+            steps += 1
+            if steps > 64:
+                ok = false
+                break
+            end
+            mut j := g.b_first[y]
+            until j >= 0:
+                if uses_val(g, j, v):
+                    ok = false
+                    break
+                end
+                j = g.i_next[j]
+            end
+            work.push(y)
+        end
+    end
+    seen.free()
+    work.free()
+    succ.free()
+    ret ok
+end
+
+func last_use_here(g &: Ng, v: int, i: int): bool:
+    if v < 0 or (g.v_kind[v] != VK_INS and g.v_kind[v] != VK_ARG):
+        ret false
+    end
+    b := g.i_blk[i]
+    mut n := 0
+    mut after := false
+    mut j := g.b_first[b]
+    until j >= 0:
+        if j == i:
+            after = true
+            n += 1
+        else uses_val(g, j, v):
+            if after:
+                ret false
+            end
+            n += 1
+        end
+        j = g.i_next[j]
+    end
+    if n == g.v_uses[v]:
+        ret true
+    end
+    ret g.v_kind[v] == VK_INS and g.i_op[g.v_def[v]] == OP_PHI and g.i_blk[g.v_def[v]] != b and phi_dead_after(g, v, b)
+end
+
+func feeds_own_phi(g &: Ng, v: int, i: int): bool:
+    if g.off_seltie or v < 0 or g.v_kind[v] != VK_INS or g.i_op[g.v_def[v]] != OP_PHI or g.i_res[i] < 0:
+        ret false
+    end
+    p := g.v_def[v]
+    mut hit := false
+    repeat g.i_pcount[p] in k:
+        if g.pool[g.i_ps[p] + 2 * k] == g.i_res[i]:
+            hit = true
+        end
+    end
+    ret hit and last_use_here(g, v, i)
+end
+
+func tie_true_arm(g &: Ng, i: int): bool:
+    b := g.i_b[i]
+    c := g.i_c[i]
+    pb := feeds_own_phi(g, b, i)
+    pc := feeds_own_phi(g, c, i)
+    if pb != pc:
+        ret pb
+    end
+    ret dies_here(g, b, i) and not dies_here(g, c, i)
 end
 
 func dies_here(g &: Ng, v: int, i: int): bool:
@@ -3843,11 +3999,74 @@ func dies_here(g &: Ng, v: int, i: int): bool:
     ret g.i_op[d] != OP_PHI and g.i_blk[d] == g.i_blk[i]
 end
 
+func sel_inc_add(g &: Ng, i: int): int:
+    t := g.i_ty[i]
+    if t != T_I32 and t != T_I64:
+        ret 0 - 1
+    end
+    repeat 2 in k:
+        v1 := k == 0 ? g.i_b[i] : g.i_c[i]
+        v0 := k == 0 ? g.i_c[i] : g.i_b[i]
+        if v1 >= 0 and g.v_kind[v1] == VK_INS and g.v_uses[v1] == 1:
+            ad := g.v_def[v1]
+            if g.i_op[ad] == OP_ADD and g.i_a[ad] == v0 and is_cint(g, g.i_b[ad]) and g.v_i[g.i_b[ad]] == (1 as i64) and g.i_blk[ad] == g.i_blk[i]:
+                ret ad
+            end
+        end
+    end
+    ret 0 - 1
+end
+
+func sel_inc_plan(g &: Ng, i: int):
+    d := fused_cond(g, i)
+    if d < 0:
+        ret
+    end
+    p := g.i_x[d]
+    ok := (g.i_op[d] == OP_FCMP and (p == FC_OGE or p == FC_OLE)) or (g.i_op[d] == OP_ICMP and (p == CC_ULT or p == CC_ULE or p == CC_UGT or p == CC_UGE))
+    if not ok:
+        ret
+    end
+    ad := sel_inc_add(g, i)
+    if ad >= 0:
+        g.skipi[ad] = true
+    end
+end
+
 func isel_select_fused(g &: Ng, i: int, d: int):
     t := g.i_ty[i]
+    ad := sel_inc_add(g, i)
+    if ad >= 0 and g.skipi[ad]:
+        inc_true := g.i_b[i] == g.i_res[ad]
+        mut cc0 := 0
+        if g.i_op[d] == OP_FCMP:
+            cc0 = fcmp_cc(fcmp_setup(g, d))
+        else:
+            cc0 = emit_icmp(g, d)
+        end
+        xr := use_reg(g, g.i_a[ad])
+        if cc0 == X_AE or cc0 == X_B:
+            ri := gpr(g)
+            _ci := e_copy(g, ri, xr)
+            add_cf := (cc0 == X_B) == inc_true
+            ai := e_ri(g, M_ALU_RI, asz(g, t), ri, add_cf ? (0 as i64) : (0 - 1 as i64))
+            g.mc.cc[ai] = add_cf ? ALU_ADC : ALU_SBB
+            set_res(g, i, ri)
+            ret
+        end
+        rl := gpr(g)
+        _li := e_rm(g, M_LEA, 8, rl, Mem { k = MK_BI, b = xr, i = 0 - 1, s = 0, d = 1 as i64 })
+        set_res(g, ad, rl)
+        rs := gpr(g)
+        _cs := e_copy(g, rs, use_reg(g, g.i_c[i]))
+        cms := e_rr(g, M_CMOV, asz(g, t), rs, use_reg(g, g.i_b[i]))
+        g.mc.cc[cms] = cc0
+        set_res(g, i, rs)
+        ret
+    end
     mut bv := g.i_b[i]
     mut cv := g.i_c[i]
-    swap := g.i_op[d] != OP_FCMP and dies_here(g, bv, i) and not dies_here(g, cv, i)
+    swap := g.i_op[d] != OP_FCMP and tie_true_arm(g, i)
     if swap:
         bv = g.i_c[i]
         cv = g.i_b[i]
@@ -3960,6 +4179,47 @@ func insv_to_ret(g &: Ng, i: int): bool:
     ret false
 end
 
+func insv_to_store(g &: Ng, i: int): int:
+    if g.off_istore:
+        ret 0 - 1
+    end
+    t := g.i_ty[i]
+    mut j := i
+    repeat 160:
+        r := g.i_res[j]
+        if r < 0 or g.v_uses[r] != 1:
+            ret 0 - 1
+        end
+        mut k := g.i_next[j]
+        until k >= 0:
+            op := g.i_op[k]
+            if op == OP_STORE and g.i_a[k] == r:
+                p := g.i_b[k]
+                if (g.i_f[k] & (IF_VOLATILE | IF_ATOMIC)) != 0 or p == r:
+                    ret 0 - 1
+                end
+                pk := g.v_kind[p]
+                if (pk == VK_INS and g.vak[p] == AK_ALLOCA) or pk == VK_ARG:
+                    ret k
+                end
+                ret 0 - 1
+            end
+            if op == OP_INSV and g.i_a[k] == r and g.i_ty[k] == t:
+                break
+            end
+            if op == OP_CALL or op == OP_STORE or op == OP_LOAD or uses_val(g, k, r):
+                ret 0 - 1
+            end
+            k = g.i_next[k]
+        end
+        if k < 0:
+            ret 0 - 1
+        end
+        j = k
+    end
+    ret 0 - 1
+end
+
 func zero_const(g &: Ng, v: int): bool:
     if v < 0:
         ret false
@@ -4021,10 +4281,21 @@ func isel_insv(g &: Ng, i: int):
         base = g.var_[a]
         m = agg_mem(g, a)
     else:
+        sd := insv_to_ret(g, i) ? 0 - 1 : insv_to_store(g, i)
         if insv_to_ret(g, i):
             ak = AK_PTR
             base = g.retp
             m = mem_bi(base, 0 as i64)
+        else sd >= 0 and g.v_kind[g.i_b[sd]] == VK_ARG:
+            ak = AK_PTR
+            base = use_reg(g, g.i_b[sd])
+            m = mem_bi(base, 0 as i64)
+            g.skipi[sd] = true
+        else sd >= 0:
+            ak = AK_FRAME
+            base = g.var_[g.i_b[sd]]
+            m = frame_mem(base, 0 as i64)
+            g.skipi[sd] = true
         else:
             base = new_slot(g, sz, talign(g, t))
             m = frame_mem(base, 0 as i64)
@@ -4640,6 +4911,36 @@ func isel_ins(g &: Ng, i: int, b: int):
             if res_used(g, i):
                 isel_vredadd(g, i)
             end
+            ret
+        end
+        OP_VREDMM:
+            if res_used(g, i):
+                isel_vredmm(g, i)
+            end
+            ret
+        end
+        OP_VLANES:
+            vt := g.i_ty[i]
+            q := g.t_elem[vt] == T_I64
+            m := q ? vec_const(g, 0 as i64, 1 as i64) : vec_const(g, (1 as i64) << (32 as i64), (3 as i64) << (32 as i64) | (2 as i64))
+            rl := wide_reg(g)
+            _vl := e_rm(g, M_VLD, 16, rl, m)
+            set_res(g, i, rl)
+            ret
+        end
+        OP_VREV:
+            rv := wide_reg(g)
+            sv := e_rr(g, M_PSHUFD, 16, rv, use_reg(g, g.i_a[i]))
+            g.mc.imm[sv] = (g.i_x[i] != 0 ? g.i_x[i] : (tsize(g, g.t_elem[g.i_ty[i]]) == 8 ? 0x4E : 0x1B)) as i64
+            set_res(g, i, rv)
+            ret
+        end
+        OP_VSADB:
+            rs := vcopy(g, g.i_a[i])
+            zs := wide_reg(g)
+            _zz := e_rr(g, M_XORPS, 16, zs, zs)
+            vop(g, 0xF6, rs, zs)
+            set_res(g, i, rs)
             ret
         end
         OP_VBCAST:

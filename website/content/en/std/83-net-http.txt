@@ -56,7 +56,7 @@ curl http://127.0.0.1:8080/health</code></pre>
 <p>Any number of threads can use the one-line calls at once, because a call keeps no state outside itself. A <code>Client</code> from <code>NewClient</code> can be shared by threads too: it carries its own lock, so <code>SetHeader</code>, the cookie jar and the settings stay consistent. Call <code>Free</code> when you are done with a shared client. A <code>Client {}</code> written as a literal has no lock and belongs to one thread.</p>
 
 <h2 id="guide-raw">Raw requests: your own headers, bytes and time limits</h2>
-<p>The one-line calls above build the request for you. When you need full control of the request line and headers, for example to sign a request, to send a binary body or to talk to an API with unusual headers, write the request head yourself and send it with <code>SendRaw</code>. The <a href="/packages/aws/">aws</a>, <a href="/packages/webpush/">webpush</a>, <a href="/std/db-meilisearch/">db/meilisearch</a>, <a href="/std/db-elasticsearch/">db/elasticsearch</a> and <a href="/std/db-typesense/">db/typesense</a> packages are built on these calls. The examples run against a small server in a thread of the same program, so they need no network.</p>
+<p>The one-line calls above build the request for you. When you need full control of the request line and headers, for example to sign a request, to send a binary body or to talk to an API with unusual headers, write the request head yourself and send it with <code>SendRaw</code>. The <a href="/std/aws/">aws</a>, <a href="/std/webpush/">webpush</a>, <a href="/std/db-meilisearch/">db/meilisearch</a>, <a href="/std/db-elasticsearch/">db/elasticsearch</a> and <a href="/std/db-typesense/">db/typesense</a> packages are built on these calls. The examples run against a small server in a thread of the same program, so they need no network.</p>
 <p>Every raw call takes an <code>Endpoint</code> from <code>ParseEndpoint</code> (host, port and TLS on or off; any path in the URL is dropped, because the path goes in your request line) and a request head: the request line, the headers and an empty line, each line ending in <code>\r\n</code>. The body is a pointer and a length, so it can hold any bytes. The answer is a <code>RawResponse</code> with the body as bytes, chunked bodies already decoded, freed with <code>FreeRaw</code>. <code>SendRaw</code> waits as long as the server does; <code>SendRawTimeout</code> adds a time limit in milliseconds; <code>SendRawTLS</code> adds your own <code>tls.Config</code>. A response larger than <code>RawLimit</code> (256 MB by default) is reported as an error.</p>
 <p>Things that catch people out:</p>
 <ul>
@@ -158,11 +158,16 @@ doc.Param = One path parameter, such as <code>id</code> in <code>/books/:id</cod
 doc.Form = One form field from an <code>application/x-www-form-urlencoded</code> body.
 doc.SetStatus = The response status code; 200 by default.
 doc.SetHeader = Sets one response header. A second call with the same name, spelled the same way, replaces the value; a different spelling such as <code>cache-control</code> adds a second header.
+doc.AddHeader = Adds a response header without replacing a value already stored under the same name, so a response can carry several <code>Set-Cookie</code> headers.
 doc.Html = Sends an HTML response.
 doc.Json = Sends a JSON response; you build the JSON text yourself.
 doc.Text = Sends a text response.
 doc.Bytes = Sends <code>n</code> bytes from a pointer as the body, with the given content type; binary safe, for files, images and archives. The bytes are copied, so the call takes nothing over: free the pointer afterwards only if you allocated it, and never free one the request owns, such as the one <code>BodyBytes</code> returns.
 doc.Redirect = Redirects to another address with a 302 and an empty body.
+doc.File = Answers with a file from disk as the body, streamed in pieces so a large file never sits in memory; the length and the content type are set for you. The status and headers you set are kept, and a HEAD request gets only the headers. It returns false when the file cannot be opened, and then nothing is changed.
+doc.LocalPort = The port of the server socket this request came in on; useful when one handler serves several ports.
+doc.FileRange = Like <code>File</code> but sends only <code>length</code> bytes starting at <code>offset</code>, for answers to a <code>Range</code> request; the caller sets the 206 status and the <code>Content-Range</code> header. It returns false when the part does not lie inside the file.
+doc.FileStat = Reads the size and the modification time (Unix seconds) of a file with one system call, into the two variables you pass. It returns false when the file cannot be read. Outside Linux on x64 and arm64 the time is 0.
 doc.Own = Hands a string the handler built to the context, so it is freed when the request ends; do not hand it a string that came from the context itself, such as the body.
 doc.Cookies = Every cookie of the request.
 doc.CookieValue = The value of one cookie; an empty string when there is none.
@@ -219,7 +224,7 @@ doc.Request = A request with any method, headers and body.
 doc.RequestRaw = A request with the header text written out by you; every line has to end with <code>\r\n</code>.
 doc.NewHeaders = An empty map for headers or parameters.
 doc.Ok = True when the status is 2xx. A request that got no answer has status 0, so <code>Ok</code> is false for it too; tell the two apart with <code>Status</code>.
-doc.Status = The response status code.
+doc.Status = The response status code. Given a request handle inside a handler, it is the status set so far (200 until you change it).
 doc.Error = The error message; empty when the request succeeded.
 doc.Headers = The response headers as a map; the names exactly as the server sent them, in the same case.
 doc.GetHeader = The value of one header; the name is case insensitive.
@@ -308,6 +313,10 @@ ex.Html = net-http-Handle
 ex.Json = net-http-Handle
 ex.Text = net-http-Handle
 ex.Redirect = net-http-Handle
+ex.File = net-http-FileBody
+ex.LocalPort = net-http-FileBody
+ex.FileRange = net-http-FileBody
+ex.FileStat = net-http-FileBody
 ex.Own = net-http-Handle
 ex.BodyLen = net-http-Upload
 ex.BodyBytes = net-http-Upload

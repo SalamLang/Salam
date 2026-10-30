@@ -77,13 +77,13 @@ When asked to convert program `X` (in some other language) into Salam:
 1. **Understand `X`**: its entry point, data types, control flow, external I/O,
    and dependencies.
 2. **Map constructs** to Salam using §7 (class→`struct`, interface→`interface`,
-   generics→`<T>`, exceptions→`bool`/`Option`/sentinel, dict→`HashMap`,
+   generics→`<T>`, exceptions→`throws`/`try`/`catch`, dict→`HashMap`,
    list→`Vector`, etc.).
 3. **Pick stdlib packages** from §5 rather than reimplementing (`str`, `json`,
    `http`, `regex`, `math`, `sort`, `collections`, `db`, …).
 4. **Write idiomatic Salam** using §2 to §4, obeying the strict rules in §6
-   (unused = error, `until` = while, manual `.free()`, integer `/` truncates, no
-   exceptions, `mut` to reassign, `pub` to export, top-level ordering).
+   (unused = error, `until` = while, manual `.free()`, integer `/` truncates,
+   errors through `throws`/`try`, `mut` to reassign, `pub` to export, top-level ordering).
 5. **Verify** with `salam exec file.salam` (interpreter) or `salam build
 file.salam --output=app` (§10). Fix every warning; most are hard errors.
 
@@ -719,6 +719,53 @@ println area(Shape.Rect(3.0, 4.0))
 println Shape.Circle(2.0)          // Circle(r = 2)
 ```
 
+**Errors: `throws`, `throw`, `try`, `catch`.** Add `throws` after the return
+type (or after the parameters when there is none). `throw` takes an `Error`, or
+a `str` that becomes one of kind `ErrorKind.Other`. `Error` and `ErrorKind`
+need no import (`import error` only for `KindName`, `RetryPolicy`, ...).
+
+```salam
+func parse port(text: str): int throws:
+    if text == "":
+        throw Error.New(ErrorKind.InvalidArgument, "empty port")
+    end
+    ret text.to_int()
+end
+
+func load(text: str): int throws:
+    p := try parse port(text)          // passes any error to the caller
+    ret p * 2
+end
+
+func load config(text: str): int throws:
+    try:
+        ret load(text)
+    catch e:
+        throw e.wrap("loading config")  // rethrow with context
+    end
+end
+
+func main:
+    port := try parse port("") catch 8080   // fallback value on error
+    try:                                 // calls inside need no 'try'
+        println load config("80"), port
+    catch e:                             // e: Error (kind, message, code, path, line, column)
+        println e.to_str()
+    end
+end
+```
+
+`try` covers everything to its right (`try v.field("a").int()` marks both
+calls) and may appear anywhere in an expression of a statement, except where
+it would run conditionally or repeatedly: the right side of `and`/`or`, a
+`?:` branch, an `until` or `else` condition, a `defer`, or a match expression
+arm (E140; store the value first). `func main throws:` prints
+`error: <message>` to stderr and exits 1. `continue` cannot leave a `try:`
+block yet; `break` can. Methods and interface methods may be `throws`;
+lambdas and `extern` functions cannot. `E139` unmarked throwing call, `E140`
+misplaced `try`, `E141` misplaced or mistyped `throw`, `E142` `try` with
+nothing that can throw.
+
 **Generic enums, `result.Result` and `?`:** an enum with data may take type
 parameters (`enum Maybe<T>: Some(v: T), Nothing end`). A generic member is
 built where its type is known - returned from a function, or with `as`:
@@ -985,7 +1032,7 @@ both sites teaches the language only, not the libraries.
   should not allocate per iteration. **Every returning function hands over a
   fresh value the caller frees** (`defer x.free()`); operands are taken by
   value and are never mutated, so `Mul(x, x)` is fine. Not constant-time - for
-  a secret exponent use the blinded routine in `packages/ssh/bigint.salam`.
+  a secret exponent use the blinded routine in `std/ssh/bigint.salam`.
   `b := a` shares the limbs (an in-place call on `b` then frees what `a`
   points at): `Clone` for a second number. `Div Rem Mod ModExp` by zero
   return 0 (use `DivMod`, which returns false); a negative `Pow` exponent,
@@ -1026,7 +1073,7 @@ both sites teaches the language only, not the libraries.
 
 One family of packages, all pure Salam, seeded and deterministic (a fixed
 seed gives the same result on every machine at any thread count). The deep
-learning half is `f32` on `packages/tensor`; the classical half is `f64` on
+learning half is `f32` on `std/tensor`; the classical half is `f64` on
 `std/matrix`. Shape errors return the empty tensor / `0x0` matrix.
 
 - **`tensor`**: n-d `f32` arrays, contiguous row-major, no views. `Tensor {data: Vector<f32>, shape: Vector<int>}` with `rank numel dim at set_at at2 set_at2 reshape_ free`; build `Zeros(shape) Zeros1..4 Ones Full Scalar FromArray Arange Clone CopyInto Shape1..4`. `Add Sub Mul Div` broadcast
@@ -1495,7 +1542,7 @@ end
   not a server.
 - **`webview`** (desktop windows: `Create SetTitle SetSize SetHTML Navigate Eval Init Run Destroy IsClosed`; `-DSALAM_WEBVIEW_CEF` renders with a
   bundled Chromium instead of the OS webview, see
-  `packages/webview/native/BUILD.md`). Put data into the HTML you pass to
+  `std/webview/native/BUILD.md`). Put data into the HTML you pass to
   `SetHTML`; the page cannot call back into Salam, `Eval` right after
   `SetHTML` usually hits the old page, and a failed `Create` returns a window
   that `IsClosed()` already.
@@ -1606,7 +1653,7 @@ Each driver keeps its own full surface, and `Conn(d)` boxes one as a
   from each thread before its first query - `tests/en/apps/*api/_store.salam`
   is the worked example.
 - **`db.sql`** (read and check SQL without a database, the sqlc idea with your own DDL as the schema): `DialectOf DialectNamed` give a `Dialect` for `SQLITE MYSQL MARIADB POSTGRES`; `Lint(sql, d)` parses one statement or a whole `;` separated script and returns a `Report` of `Diag` values (`code message help line col offset length`, rendered by `ReportText`/`DiagText`); `ParamCount`/`Placeholders` count and list the placeholders. With a schema: `NewCatalog(d)` then `Apply(cat, ddl)` reads `CREATE TABLE`, `ALTER TABLE`, `DROP` and `CREATE VIEW` into a `Catalog` (so the migrations are the schema), `TableCount TableName HasTable ColumnCount ColumnAt HasColumn` look around it, and `Check(sql, cat)` resolves names: unknown table or column with the nearest real name offered, ambiguous column, INSERT arity, a NOT NULL column with no default left out, a write with no WHERE. `Analyze(sql, cat)` adds what the query takes and returns - `Param { marker ordinal table column kind not_null }` and `ResultCol { name table kind nullable }`, with outer joins making a whole side nullable - and `SalamType(kind, not_null)` names the Salam type to read it into (`option.Option<T>` when it can be null). Codes: `SQL0xx` lexical, `SQL1xx` syntax, `SQL2xx` a dialect rule (`?` in postgres, `AUTO_INCREMENT` in sqlite, `ILIKE` outside postgres, `::` outside postgres, `LIMIT a, b` in postgres, `ON DUPLICATE KEY` outside mysql, `TRUNCATE`/`PRAGMA` in the wrong engine), `SQL3xx` the schema. Messages are English in both language modes; match on `code`. Free with `FreeReport`, `FreeCatalog`, `FreeAnalysis`. Putting values in: the three drivers do not all prepare and bind (only `db.sqlite` has `Prepare`/`Bind*`), so `NewArgs` + `AddInt AddFloat AddText AddBool AddNull` + `Fill(query, args, d, err)` writes the values into the SQL properly - the query is lexed first, so a `?` inside a string literal is left alone, the count has to match (`SQL400`), quotes are doubled, backslashes are doubled on MySQL, and a boolean is `TRUE`/`FALSE` on postgres and `1`/`0` elsewhere. It is substitution, not a prepared statement; `ArgCount` and `FreeArgs` round it out. Code generation, the sqlc half: annotate a `.sql` file with `-- name: GetUser :one` (`:one :many :exec :execrows`), then `ParseQueries(src, err)` and `Generate(pkg, queries, cat, err)` write a row struct and a typed function per query - parameters named and typed from the column each placeholder binds against, nullable columns as `option.Option<T>` read through `IsNull`, every query analysed against the catalog first so a typo stops generation with the query's name. One `dyn db.Connection` signature serves all three engines. The command is `salam sql generate queries --schema=db --output=gen/store.salam --package=store`. The `salam sql check` command runs the same checks over `.sql` files and over every SQL string literal in `.salam` files (`--schema=` a file or a directory; without `--dialect=` each file is read with the engine it imports); a literal assembled from pieces (glued with `+` or `.concat`, or one that simply stops mid-statement) is a fragment, so it is counted in the summary and skipped instead of reported.
-- **Official packages** live in `packages/`, not `std/`, and do not ship with Salam: `db.sqlite db.postgres db.mysql db.redis db.meilisearch db.elasticsearch db.typesense db.opensearch`, `audio` and every `audio.*`, `tensor autograd nn optim ml data gguf llm onnx npy`, `net.http.swagger net.http.middleware net.http.session net.http.validate net.http2 net.websocket net.socketio net.email net.proxy`, `grpc rpc graphql ftp ssh aws google webpush telegram.bot`, `webview opencv excel`. A program that imports one must be in a project (`salam init`) that ran `salam add <name>` (for example `salam add tensor`); otherwise the import fails with that hint. Inside a source checkout they resolve from `packages/` directly. Their API notes below still apply.
+- **The whole library is in `std/`** and ships with Salam, so no `salam add` is needed for any of it: `db.sqlite db.postgres db.mysql db.redis db.meilisearch db.elasticsearch db.typesense db.opensearch`, `audio` and every `audio.*`, `tensor autograd nn optim ml data gguf llm onnx npy`, `net.http.swagger net.http.middleware net.http.session net.http.validate net.http2 net.websocket net.socketio net.email net.proxy`, `grpc rpc graphql ftp ssh aws google webpush telegram.bot`, `webview opencv excel`. `salam add` is only for packages from GitHub and other hosts. Their API notes below still apply.
 - **`db.redis`** (RESP over TCP): `Connect Ok Error Close Ping Auth Select Set SetEx Get Exists Del Expire TTL Incr IncrBy Decr Append Keys HSet HGet HDel HExists HGetAll LPush RPush LPop RPop LLen LRange SAdd SRem SIsMember SMembers Publish`, anything else via `Command` and `Reply*`. Failures come
   back as empty values (`""`, 0, false); `Command` shows the server's
   `REPLY_ERROR` text. A plain `Set` removes a key's TTL; `Auth` sends only
@@ -1664,10 +1711,12 @@ naive port into compile errors (each corresponds to a case in
    are supported on integers** with C precedence and compound forms
    (`&= |= ^= <<= >>=`), but they require integer operands (a bitwise op on a
    float is a compile error).
-6. **No exceptions / no try-catch.** Signal failure with a `bool` return and
-   an `err &:` out-parameter (the std style), an `option.Option<T>`
-   (`import option`), a `result.Result<T, E>` (`import result`), or a sentinel
-   value, and check it at the call site.
+6. **Errors are thrown and caught explicitly.** A function that can fail is
+   declared `throws` and fails with `throw`; every call to it is marked `try`
+   (pass the error on, only inside a `throws` function) or sits in a
+   `try: ... catch e: ... end` block. An unmarked call is E139. The error is
+   always the prelude type `Error`; nothing is unwound, `defer` runs, and
+   panics (out-of-bounds index, `Unwrap` on None) are not caught.
 7. **Privacy.** Struct fields/methods and package symbols are private by default;
    expose with `pub`. Accessing a private field/method from outside is an error.
 8. **Top-level ordering.** Within a file: `package` first, then all `import`s,
@@ -1713,30 +1762,30 @@ When the compiler complains, fix the code; do not try to suppress the check.
 
 General mapping that applies to all source languages:
 
-| Source concept               | Salam                                                                             |
-| ---------------------------- | --------------------------------------------------------------------------------- |
-| class                        | `struct` with `pub` fields + methods (`this` receiver)                            |
-| static method / constructor  | `static func` inside the struct, called as `Type.Name(...)`                       |
-| interface / protocol / trait | `interface` + structural `pub` methods; add to existing types with `impl I on T`  |
-| inheritance / base class     | embed with `use Base` (fields + methods promoted); override by redefining         |
-| subtype polymorphism         | `dyn Interface` (dynamic) or `<T: Interface>` (static)                            |
-| generics / templates         | `<T>`, `struct Box<T>`, `func F<T>(…)`                                            |
-| dict / map / object          | `HashMap<K,V>` (`put/get/has`)                                                    |
-| list / array / vector        | `Vector<T>` (`push/get(i)/set/len`) or fixed `T[n]`                               |
-| set                          | `Set<T>`                                                                          |
-| tuple / record               | small `struct`, or `Pair`, or `Variant` for sum types                             |
-| string ops                   | `str.*` package + `+` concatenation + `len()`                                     |
-| exception / error            | `result.Result<T, E>` + postfix `?`, or `bool` flag / `Option<T>`; no throw/catch |
-| null / nil / None            | `null` (pointers) or `Option.None()`                                              |
-| lambda / closure             | `(x: int): ret expr end`; type `func (…) R`                                       |
-| enum / union                 | `enum` (C-like, or members with data: `Circle(r: f64)`) or `Variant<…>`           |
-| module / package / import    | `package name` + `import pkg` (only `pub` exported)                               |
-| free function                | top-level `func`; a bare name is its address (`i64`), `&fn` is a `void*`          |
-| `while`                      | **`until`** (no `while` keyword exists - same "loop while true" semantics)        |
-| `switch` / `case`            | `switch`: bare labels, no `case`/`default`, C-style fallthrough (§2, §12.2)       |
-| `for i in range(n)`          | `repeat n in i:`                                                                  |
-| `for x in xs`                | `each x in xs:`                                                                   |
-| destructor / cleanup         | `defer x.free()`                                                                  |
+| Source concept               | Salam                                                                                       |
+| ---------------------------- | ------------------------------------------------------------------------------------------- |
+| class                        | `struct` with `pub` fields + methods (`this` receiver)                                      |
+| static method / constructor  | `static func` inside the struct, called as `Type.Name(...)`                                 |
+| interface / protocol / trait | `interface` + structural `pub` methods; add to existing types with `impl I on T`            |
+| inheritance / base class     | embed with `use Base` (fields + methods promoted); override by redefining                   |
+| subtype polymorphism         | `dyn Interface` (dynamic) or `<T: Interface>` (static)                                      |
+| generics / templates         | `<T>`, `struct Box<T>`, `func F<T>(…)`                                                      |
+| dict / map / object          | `HashMap<K,V>` (`put/get/has`)                                                              |
+| list / array / vector        | `Vector<T>` (`push/get(i)/set/len`) or fixed `T[n]`                                         |
+| set                          | `Set<T>`                                                                                    |
+| tuple / record               | small `struct`, or `Pair`, or `Variant` for sum types                                       |
+| string ops                   | `str.*` package + `+` concatenation + `len()`                                               |
+| exception / error            | `func f(): T throws`, `throw`, `try f()`, `try: ... catch e: ... end` (no finally: `defer`) |
+| null / nil / None            | `null` (pointers) or `Option.None()`                                                        |
+| lambda / closure             | `(x: int): ret expr end`; type `func (…) R`                                                 |
+| enum / union                 | `enum` (C-like, or members with data: `Circle(r: f64)`) or `Variant<…>`                     |
+| module / package / import    | `package name` + `import pkg` (only `pub` exported)                                         |
+| free function                | top-level `func`; a bare name is its address (`i64`), `&fn` is a `void*`                    |
+| `while`                      | **`until`** (no `while` keyword exists - same "loop while true" semantics)                  |
+| `switch` / `case`            | `switch`: bare labels, no `case`/`default`, C-style fallthrough (§2, §12.2)                 |
+| `for i in range(n)`          | `repeat n in i:`                                                                            |
+| `for x in xs`                | `each x in xs:`                                                                             |
+| destructor / cleanup         | `defer x.free()`                                                                            |
 
 ### From PHP
 
@@ -2198,6 +2247,8 @@ salam format app.salam                  # reformat in place (--check to verify; 
 salam sql check src --schema=db/      # check every SQL query in .salam/.sql files against the schema
 salam sql generate q --schema=db/ --output=gen/store.salam   # typed query functions from annotated .sql
 salam new name                          # scaffold a project: name/main.salam + salam.toml
+salam serve [dir] [--port=N]            # serve a folder over HTTP
+salam serve --config=web.salam [--test] # several sites from one config (std/net/httpd); --test only checks it
 salam init                              # same, in the current directory
 salam add github.com/owner/repo         # add a GitHub package (import "github.com/owner/repo"); remove/update/deps too
 salam install github.com/owner/tool     # build a program into ~/.salam/bin; salam search <word> finds packages
@@ -2453,6 +2504,8 @@ course at **<https://www.salamlang.ir/learn/>** (§19 maps its lessons).
 | `deprecated`        | `بی‌کاره`           | `and` / `or` / `not`      | `و` / `یا` / `وارونه`         |
 | `eq` / `neq`        | `برابر` / `نابرابر` | `main` (entry)            | `ریشه`                        |
 | `lt` / `gt`         | `کوچکتر` / `بزرگتر` | `lte` / `gte`             | `کوچکتربرابر` / `بزرگتربرابر` |
+| `try`               | `تلاش`              | `catch`                   | `گرفتن خطا`                   |
+| `throw`             | `پرتاب خطا`         | `throws`                  | `خطادار`                      |
 
 Context words (keywords only in their position, usable as names elsewhere):
 `static` `ایستا` (`ایستا تابع`, `پیوند ایستا`), `dynamic` `پویا`

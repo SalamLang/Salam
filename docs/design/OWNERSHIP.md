@@ -189,10 +189,10 @@ What the summaries buy:
 
 The first sweep found real bugs in std:
 
-- `packages/telegram/bot`: `_put_chat_id(params: HashMap<str, str>, ...)` took the
+- `std/telegram/bot`: `_put_chat_id(params: HashMap<str, str>, ...)` took the
   map by value. Its `put` resized the callee's copy, so every request built
   through it silently lost `chat_id`. It now takes `params &:`.
-- `packages/net/socketio`: `_resolve_ack` kept scanning after the matching waiter.
+- `std/net/socketio`: `_resolve_ack` kept scanning after the matching waiter.
   A second waiter with the same id would reuse `bins` after they were freed or
   queued. It now stops at the match.
 - `std/archive/rar`: the free and the later use of an entry name tested the

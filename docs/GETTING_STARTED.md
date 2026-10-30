@@ -225,32 +225,56 @@ salam page build            # main.salam if present, else EVERY layout
 A `main.salam` layout page compiles to `index.html` (the web server entry
 name), so `salam serve` picks it up directly.
 
-### 🧩 Official packages
+`salam serve` also runs several sites from one process when you give it a
+config file in Salam's block syntax:
 
-Many packages are maintained with Salam but do not ship with it, so a fresh
-install stays small: the database clients (`db.sqlite`, `db.postgres`, `db.mysql`,
-`db.redis`, `db.opensearch`, ...), machine learning (`tensor`, `nn`, `llm`, ...), audio,
-the network services (`grpc`, `ftp`, `ssh`, `net.websocket`,
-`net.http.swagger`, ...), `webview`, `opencv` and `excel`.
-[`packages/`](../packages/) holds them all and `salam search` finds them.
-Import them as usual (`import db.redis`) after adding them to the project:
-
-```sh
-salam add db.redis
+```
+server:
+    site:
+        listen = 80
+        names = "example.com www.example.com"
+        root = "/srv/example"
+        location "/assets/": cache = 30d end
+    end
+    site:
+        names = "blog.example.com"
+        root = "/srv/blog"
+    end
+end
 ```
 
-`salam add db.redis@v0.5.6` pins another release's copy instead. `salam
-add` downloads the official packages that match your compiler's
-version (`salam-packages-<version>.tar.gz` from its release) into
-`~/.salam/pkg/salam-packages@v<version>/` and records the package in
-`salam.toml` and `salam.lock`. `salam update` moves them to the compiler you
-are running now. In a source checkout, `packages/` next to `std/` is used
-directly, and `$SALAM_PACKAGES` points at another copy.
+```sh
+salam serve --config=web.salam --test   # check the file, exit 0 when valid
+salam serve --config=web.salam          # run it
+```
+
+Sites are chosen by the `Host` header, files are sent with `ETag` and byte
+range support, and `net/httpd` (see the std page) lists every setting.
+
+### 🧩 Everything ships with Salam
+
+The whole library is installed with the compiler: the database clients
+(`db.sqlite`, `db.postgres`, `db.mysql`, `db.redis`, `db.opensearch`, ...),
+machine learning (`tensor`, `nn`, `llm`, ...), audio, the network services
+(`grpc`, `ftp`, `ssh`, `net.websocket`, `net.http.swagger`, ...), `webview`,
+`opencv` and `excel`. [`std/`](../std/) holds them all and `salam search`
+finds them. Import them like any other library; there is nothing to add or
+download first:
+
+```salam
+import db.redis
+```
+
+A package that wraps a C library (`db.sqlite`, `webview`, ...) finds or builds
+that library the first time a program that imports it is compiled; see
+Native libraries below. Older projects may still list a library package in
+`salam.toml`, such as `"db.redis" = "v0.5.9"`. Salam ignores those lines, and
+`salam remove db.redis` takes one out.
 
 ### 📦 Packages from GitHub
 
-A package outside the standard library is named by its repository and
-imported with a string:
+A package outside the standard library, one that somebody else publishes, is
+named by its repository and imported with a string:
 
 ```salam
 import "github.com/owner/repo"        // binds repo

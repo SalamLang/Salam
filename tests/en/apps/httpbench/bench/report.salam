@@ -238,6 +238,70 @@ func health_table(rows &: Rows, servers &: Vector<str>): str:
     ret "_No errors, no forced reconnects, no crashes._"
 end
 
+func geomean_of(rows &: Rows, server: str, routes &: Vector<str>, out &: f64): bool:
+    mut sum := 0.0
+    mut n := 0
+    each r in routes:
+        k := key_of(server, r)
+        if rows.bykey.has(k) == false: ret false end
+        v := json.GetFloat(rows.bykey.get(k), "rps")
+        if v <= 0.0: ret false end
+        sum += math.Log(v)
+        n += 1
+    end
+    if n == 0: ret false end
+    out = math.Exp(sum / (n as f64))
+    ret true
+end
+
+func ratio_text(v: f64, base: f64): str:
+    if v == base: ret "n/a" end
+    if v > base:
+        ret conv.FormatFloatPrec(v / base, 2) + "x faster"
+    end
+    ret conv.FormatFloatPrec(base / v, 2) + "x slower"
+end
+
+func geomean_table(rows &: Rows, servers &: Vector<str>, routes &: Vector<str>): str:
+    labels := server_labels()
+    mut names := Vector {} as Vector<str>
+    mut means := Vector {} as Vector<f64>
+    each s in servers:
+        mut g := 0.0
+        if geomean_of(rows, s, routes, g):
+            mut at := names.len()
+            until at > 0 and means.get(at - 1) < g:
+                at -= 1
+            end
+            names.insert(at, s)
+            means.insert(at, g)
+        end
+    end
+    mut base := 0.0
+    _has := geomean_of(rows, "salam", routes, base)
+    mut out := Vector {} as Vector<str>
+    out.push("| Server | Geomean req/s | vs Salam |")
+    out.push("| --- | ---: | ---: |")
+    repeat names.len() in i:
+        s := names.get(i)
+        g := means.get(i)
+        mut rel := "n/a"
+        if base > 0.0 and s != "salam": rel = ratio_text(g, base) end
+        mut label := labels.get(s)
+        if s == "salam": label = "**" + label + "**" end
+        out.push("| " + label + " | " + fmt_rps(g) + " | " + rel + " |")
+    end
+    ret str.Join(out, "\n")
+end
+
+func nginx_routes(rows &: Rows): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    each r in route_keys():
+        if rows.bykey.has(key_of("nginx", r)): out.push(r) end
+    end
+    ret out
+end
+
 func main:
     args := os.Args()
     defer args.free()
@@ -278,6 +342,22 @@ func main:
     println ""
     println table(rows, servers, "p50_us", true)
     println ""
+    all_routes := route_keys()
+    println "### Geometric mean, every route"
+    println ""
+    println "Servers that answer all " + conv.FormatInt(all_routes.len() as i64) + " routes."
+    println ""
+    println geomean_table(rows, servers, all_routes)
+    println ""
+    ng := nginx_routes(rows)
+    if ng.len() > 0:
+        println "### Geometric mean on the routes nginx answers"
+        println ""
+        println "The " + conv.FormatInt(ng.len() as i64) + " routes nginx serves from its own config, for every server that answers all of them."
+        println ""
+        println geomean_table(rows, servers, ng)
+        println ""
+    end
     println "### Errors and forced reconnects"
     println ""
     println health_table(rows, servers)

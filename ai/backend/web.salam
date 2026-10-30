@@ -108,6 +108,25 @@ func version_char(c: str): bool:
     ret (c >= "0" and c <= "9") or (c >= "a" and c <= "z") or (c >= "A" and c <= "Z") or c == "." or c == "-" or c == "+"
 end
 
+func label_char(c: str): bool:
+    ret version_char(c) or c == " " or c == "_" or c == "(" or c == ")"
+end
+
+func label_header(ctx: i64, name: str, max: int): str:
+    v := str.Trim(http.Header(ctx, name))
+    if v.len() == 0 or v.len() > max:
+        ret ""
+    end
+    mut i := 0
+    until i < v.len():
+        if not label_char(v.substr(i, 1)):
+            ret ""
+        end
+        i += 1
+    end
+    ret v
+end
+
 func touch(ctx: i64, hash: str):
     now := aistore.Now()
     mut a := Vector {} as Vector<str>
@@ -117,8 +136,11 @@ func touch(ctx: i64, hash: str):
     a.push(ClientVersion(ctx))
     a.push(hash)
     a.push(I64s(now - 60))
+    a.push(ClientOs(ctx))
+    a.push(ClientOsVersion(ctx))
+    a.push(ClientArch(ctx))
     aistore.Lock()
-    _r := aistore.Run("UPDATE sessions SET last_used = ?1, ip = LEFT(?2, 64), client = IF(?3 = '', client, ?3), client_version = IF(?4 = '', client_version, ?4) WHERE token = ?5 AND last_used < ?6", a)
+    _r := aistore.Run("UPDATE sessions SET last_used = ?1, ip = LEFT(?2, 64), client = IF(?3 = '', client, ?3), client_version = IF(?4 = '', client_version, ?4), os = IF(?7 = '', os, ?7), os_version = IF(?8 = '', os_version, ?8), arch = IF(?9 = '', arch, ?9) WHERE token = ?5 AND last_used < ?6", a)
     aistore.Unlock()
 end
 
@@ -171,7 +193,7 @@ pub func Cors(ctx: i64):
     origin := http.Header(ctx, "Origin")
     if AllowedOrigin(origin):
         http.SetHeader(ctx, "Access-Control-Allow-Origin", origin)
-        http.SetHeader(ctx, "Access-Control-Allow-Headers", "Authorization, Content-Type, X-Salam-Client, X-Salam-Version, X-Salam-Lang")
+        http.SetHeader(ctx, "Access-Control-Allow-Headers", "Authorization, Content-Type, X-Salam-Client, X-Salam-Version, X-Salam-OS, X-Salam-OS-Version, X-Salam-Arch, X-Salam-Lang")
         http.SetHeader(ctx, "Access-Control-Allow-Methods", "GET, POST, PATCH, DELETE, OPTIONS")
         http.SetHeader(ctx, "Access-Control-Max-Age", "86400")
     end
@@ -276,6 +298,22 @@ pub func ClientVersion(ctx: i64): str:
         i += 1
     end
     ret v
+end
+
+pub func ClientOs(ctx: i64): str:
+    v := http.Header(ctx, "X-Salam-OS")
+    if v == "windows" or v == "macos" or v == "linux" or v == "other":
+        ret v
+    end
+    ret ""
+end
+
+pub func ClientOsVersion(ctx: i64): str:
+    ret label_header(ctx, "X-Salam-OS-Version", 64)
+end
+
+pub func ClientArch(ctx: i64): str:
+    ret label_header(ctx, "X-Salam-Arch", 16)
 end
 
 pub func Bearer(ctx: i64): str:

@@ -1,0 +1,254 @@
+// lang: en
+package main
+
+import testing
+import str
+import os
+import io
+import time
+import mem
+import net.http
+import net.tcp
+import net.httpd
+
+const WEB_PORT := 19451
+const FCGI_PORT := 19452
+
+func _be8(p: void*, off: int, v: int):
+    bp := p as u8 *
+    bp[off] = (v & 255) as u8
+end
+
+func _be16(p: void*, off: int, v: int):
+    _be8(p, off, (v >> 8) & 255)
+    _be8(p, off + 1, v & 255)
+end
+
+func _rd8(p: void*, off: int): int:
+    bp := p as u8 *
+    ret bp[off] as int
+end
+
+func _rd16(p: void*, off: int): int:
+    ret (_rd8(p, off) << 8) | _rd8(p, off + 1)
+end
+
+func _at(p: void*, off: int): void*:
+    ret ((p as i64) + (off as i64)) as void *
+end
+
+func _read_exact(c: tcp.Conn, p: void*, n: int): int:
+    mut got := 0
+    until got < n:
+        k := tcp.ReadBytes(c, _at(p, got), n - got)
+        if k <= 0: ret got end
+        got += k
+    end
+    ret got
+end
+
+func _bytes_str(p: void*, off: int, n: int): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    repeat n in i:
+        str.BufAppendChar(sb, _rd8(p, off + i))
+    end
+    ret str.BufStr(sb)
+end
+
+func _nv_len(p: void*, cur: int): int:
+    b := _rd8(p, cur)
+    if b < 128: ret b end
+    v := ((b & 127) << 24) | (_rd8(p, cur + 1) << 16) | (_rd8(p, cur + 2) << 8) | _rd8(p, cur + 3)
+    ret v
+end
+
+func _nv_size(p: void*, cur: int): int:
+    if _rd8(p, cur) < 128: ret 1 end
+    ret 4
+end
+
+func _param_value(p: void*, total: int, want: str): str:
+    mut cur := 0
+    until cur < total:
+        nl := _nv_len(p, cur)
+        cur += _nv_size(p, cur)
+        vl := _nv_len(p, cur)
+        cur += _nv_size(p, cur)
+        name := _bytes_str(p, cur, nl)
+        cur += nl
+        value := _bytes_str(p, cur, vl)
+        cur += vl
+        if str.Equals(name, want): ret value end
+    end
+    ret ""
+end
+
+func _send_rec(c: tcp.Conn, typ: int, p: void*, n: int):
+    h := mem.Allocate(8 as u64)
+    _be8(h, 0, 1)
+    _be8(h, 1, typ)
+    _be16(h, 2, 1)
+    _be16(h, 4, n)
+    _be8(h, 6, 0)
+    _be8(h, 7, 0)
+    tcp.WriteBytes(c, h, 8)
+    if n > 0:
+        tcp.WriteBytes(c, p, n)
+    end
+    mem.Free(h)
+end
+
+func _answer(c: tcp.Conn, params: void*, plen: int, body: void*, blen: int):
+    method := _param_value(params, plen, "REQUEST_METHOD")
+    script := _param_value(params, plen, "SCRIPT_NAME")
+    query := _param_value(params, plen, "QUERY_STRING")
+    info := _param_value(params, plen, "PATH_INFO")
+    appenv := _param_value(params, plen, "APP_ENV")
+    ua := _param_value(params, plen, "HTTP_USER_AGENT")
+    sent := _bytes_str(body, 0, blen)
+    text := "method=" + method + ";script=" + script + ";query=" + query + ";pathinfo=" + info + ";appenv=" + appenv + ";ua=" + ua + ";body=" + sent
+    head := "Status: 201 Created\r\nContent-Type: text/plain; charset=utf-8\r\nSet-Cookie: a=1; Path=/\r\nSet-Cookie: b=2; Path=/\r\nX-Fcgi: yes\r\n\r\n"
+    payload := head + text
+    _send_rec(c, 6, payload as void *, payload.len())
+    endrec := mem.AllocateZeroed(8 as u64)
+    _send_rec(c, 3, endrec, 8)
+    mem.Free(endrec)
+end
+
+func _handle(c: tcp.Conn):
+    hdr := mem.Allocate(8 as u64)
+    pbuf := mem.Allocate(262144 as u64)
+    body := mem.Allocate(262144 as u64)
+    mut plen := 0
+    mut blen := 0
+    mut done := false
+    until not done:
+        if _read_exact(c, hdr, 8) != 8: break end
+        typ := _rd8(hdr, 1)
+        rec_len := _rd16(hdr, 4)
+        pad := _rd8(hdr, 6)
+        if rec_len > 0:
+            tmp := mem.Allocate(rec_len as u64)
+            _read_exact(c, tmp, rec_len)
+            if typ == 4:
+                mem.Copy(_at(pbuf, plen), tmp, rec_len as u64)
+                plen += rec_len
+            else typ == 5:
+                mem.Copy(_at(body, blen), tmp, rec_len as u64)
+                blen += rec_len
+            end
+            mem.Free(tmp)
+        end
+        if pad > 0:
+            skip := mem.Allocate(pad as u64)
+            _read_exact(c, skip, pad)
+            mem.Free(skip)
+        end
+        if typ == 5 and rec_len == 0: done = true end
+    end
+    _answer(c, pbuf, plen, body, blen)
+    mem.Free(hdr)
+    mem.Free(pbuf)
+    mem.Free(body)
+end
+
+func fake_loop():
+    mut srv := tcp.Bind(FCGI_PORT)
+    until not tcp.Ok(srv):
+        time.Sleep(50)
+        srv = tcp.Bind(FCGI_PORT)
+    end
+    until true:
+        c := tcp.Accept(srv)
+        if not tcp.ConnOk(c): continue end
+        _handle(c)
+        tcp.Close(c)
+    end
+end
+
+func serve_loop():
+    httpd.Run()
+end
+
+func config_text(root: str): str:
+    t := `
+server:
+    site:
+        listen = 19451
+        names = "localhost"
+        root = "@ROOT@"
+        location "~ \.php$":
+            fastcgi_pass = "127.0.0.1:19452"
+            fastcgi_index = "index.php"
+            fastcgi_timeout = 20s
+            fastcgi_param = "APP_ENV" "test"
+        end
+        location "/":
+            fastcgi_pass = "127.0.0.1:19452"
+        end
+    end
+end
+`
+    ret str.Replace(t, "@ROOT@", root)
+end
+
+func test_config():
+    testing.AssertFalse(httpd.LoadText("server:\n    site:\n        names = \"a.test\"\n        root = \"/tmp\"\n        fastcgi_pass = \"unix:/run/php.sock\"\n    end\nend\n", "bad.salam"))
+    testing.AssertContains(httpd.ProblemAt(0), "unix socket")
+    testing.AssertFalse(httpd.LoadText("server:\n    site:\n        names = \"a.test\"\n        root = \"/tmp\"\n        fastcgi_pass = \"127.0.0.1:70000\"\n    end\nend\n", "bad.salam"))
+    testing.AssertContains(httpd.ProblemAt(0), "fastcgi_pass needs an address")
+    testing.AssertFalse(httpd.LoadText("server:\n    site:\n        names = \"a.test\"\n        fastcgi_pass = \"127.0.0.1:9000\"\n    end\nend\n", "bad.salam"))
+    testing.AssertContains(httpd.ProblemAt(0), "fastcgi_pass needs a root")
+end
+
+func main:
+    root := os.TempDir() + "/salam_httpd_fcgi"
+    os.RemoveAll(root)
+    os.MkdirAll(root)
+    io.WriteFile(root + "/index.php", "<?php echo 'index';")
+    io.WriteFile(root + "/hello.php", "<?php echo 'hello';")
+
+    test_config()
+
+    _fake := spawn(fake_loop)
+    time.Sleep(300)
+    testing.AssertTrue(httpd.LoadText(config_text(root), "fcgi.salam"))
+    web := spawn(serve_loop)
+    time.Sleep(400)
+
+    r := http.Get("http://localhost:19451/hello.php?a=1&b=2")
+    testing.AssertEqInt(r.status, 201)
+    testing.AssertEqStr(http.GetHeader(r, "X-Fcgi"), "yes")
+    testing.AssertEqStr(http.GetHeader(r, "Content-Type"), "text/plain; charset=utf-8")
+    testing.AssertContains(r.body, "method=GET")
+    testing.AssertContains(r.body, "script=/hello.php")
+    testing.AssertContains(r.body, "query=a=1&b=2")
+    testing.AssertContains(r.body, "appenv=test")
+    testing.AssertContains(r.body, "ua=Salam")
+    cookies := http.HeaderValues(r, "Set-Cookie")
+    testing.AssertEqInt(cookies.len(), 2)
+    testing.AssertEqStr(cookies.get(0), "a=1; Path=/")
+    testing.AssertEqStr(cookies.get(1), "b=2; Path=/")
+
+    r2 := http.Post("http://localhost:19451/hello.php", "name=ali")
+    testing.AssertEqInt(r2.status, 201)
+    testing.AssertContains(r2.body, "method=POST")
+    testing.AssertContains(r2.body, "body=name=ali")
+
+    r3 := http.Get("http://localhost:19451/hello.php/extra/path?x=1")
+    testing.AssertContains(r3.body, "script=/hello.php")
+    testing.AssertContains(r3.body, "pathinfo=/extra/path")
+
+    r4 := http.Get("http://localhost:19451/")
+    testing.AssertContains(r4.body, "script=/index.php")
+
+    r5 := http.Get("http://localhost:19451/missing.php")
+    testing.AssertEqInt(r5.status, 404)
+
+    httpd.Stop()
+    join(web)
+    os.RemoveAll(root)
+    testing.Summary()
+    ret 0
+end

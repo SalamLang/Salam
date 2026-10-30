@@ -25,6 +25,8 @@ import filepath
 import net.http
 import net.router
 import net.mime
+import net.tcp
+import net.fastcgi
 
 extern:
     func fopen(path: str, mode: str): void *
@@ -462,6 +464,252 @@ func _send_target(ctx: i64, site: int, loc: int, target: str): int:
     ret 200
 end
 
+func _effective_fastcgi(site: int, loc: int): str:
+    if loc >= 0 and _cfg.locations.get(loc).rule.fastcgi.len() > 0:
+        ret _cfg.locations.get(loc).rule.fastcgi
+    end
+    ret _cfg.sites.get(site).rule.fastcgi
+end
+
+func _effective_fcgi_index(site: int, loc: int): str:
+    if loc >= 0 and _cfg.locations.get(loc).rule.fastcgi_index.len() > 0:
+        ret _cfg.locations.get(loc).rule.fastcgi_index
+    end
+    if _cfg.sites.get(site).rule.fastcgi_index.len() > 0:
+        ret _cfg.sites.get(site).rule.fastcgi_index
+    end
+    ret "index.php"
+end
+
+func _effective_fcgi_timeout(site: int, loc: int): int:
+    if loc >= 0 and _cfg.locations.get(loc).rule.fastcgi_timeout > 0:
+        ret _cfg.locations.get(loc).rule.fastcgi_timeout
+    end
+    if _cfg.sites.get(site).rule.fastcgi_timeout > 0:
+        ret _cfg.sites.get(site).rule.fastcgi_timeout
+    end
+    ret 30000
+end
+
+func _host_only(host: str): str:
+    c := host.indexOf(":")
+    if c > 0: ret host.substr(0, c) end
+    ret str.Clone(host)
+end
+
+func _is_slash(s: str, i: int): bool:
+    bp := s as u8 *
+    ret bp[i] as int == 47
+end
+
+func _http_param(name: str): str:
+    mut sb := str.NewBuilder()
+    str.BufAppend(sb, "HTTP_")
+    bp := name as u8 *
+    repeat name.len() in i:
+        mut ch := bp[i] as int
+        if ch == 45:
+            str.BufAppend(sb, "_")
+        else:
+            if ch >= 97 and ch <= 122:
+                ch -= 32
+            end
+            str.BufAppendChar(sb, ch)
+        end
+    end
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
+end
+
+func _expand_param(tmpl: str, host: str, path: str, query: str, root: str, script: str, port: int, remote: str): str:
+    mut out := str.Replace(tmpl, "$host", host)
+    if query.len() > 0:
+        ru := _cat3(path, "?", query)
+        out = _swap(out, "$request_uri", ru)
+        mem.Free(ru as void *)
+    else:
+        out = _swap(out, "$request_uri", path)
+    end
+    out = _swap(out, "$document_root", root)
+    out = _swap(out, "$document_uri", path)
+    out = _swap(out, "$script_name", script)
+    out = _swap(out, "$query_string", query)
+    out = _swap(out, "$args", query)
+    out = _swap(out, "$remote_addr", remote)
+    pnum := str.FromInt(port as i64)
+    out = _swap(out, "$server_port", pnum)
+    mem.Free(pnum as void *)
+    out = _swap(out, "$scheme", "http")
+    out = _swap(out, "$uri", path)
+    out = _swap(out, "$root", root)
+    ret out
+end
+
+func _serve_fastcgi(ctx: i64, site: int, loc: int, root: str, rel: str, path: str, query: str, host: str, port: int): int:
+    addr := _effective_fastcgi(site, loc)
+    colon := addr.indexOf(":")
+    if colon <= 0: ret 502 end
+    fhost := addr.substr(0, colon)
+    fpstr := addr.substr(colon + 1, addr.len() - colon - 1)
+    fport := fpstr.to_int()
+    mem.Free(fpstr as void *)
+    timeout := _effective_fcgi_timeout(site, loc)
+    index := _effective_fcgi_index(site, loc)
+    mut script_rel := rel
+    if str.EndsWith(rel, "/"):
+        script_rel = _cat3(rel, index, "")
+    end
+    mut script_name := ""
+    mut path_info := ""
+    mut target := root + script_rel
+    if os.Exists(target) and not os.IsDir(target):
+        script_name = script_rel
+    else:
+        mem.Free(target as void *)
+        target = ""
+        mut cut := script_rel.len()
+        until cut > 0:
+            cand := script_rel.substr(0, cut)
+            full := root + cand
+            if os.Exists(full) and not os.IsDir(full):
+                script_name = cand
+                path_info = script_rel.substr(cut, script_rel.len() - cut)
+                target = full
+                break
+            end
+            mem.Free(full as void *)
+            mem.Free(cand as void *)
+            mut k := cut - 1
+            until k >= 0 and not _is_slash(script_rel, k):
+                k -= 1
+            end
+            if k <= 0:
+                cut = 0
+            else:
+                cut = k
+            end
+        end
+    end
+    if script_name.len() == 0:
+        mem.Free(fhost as void *)
+        ret 404
+    end
+
+    mut p := fastcgi.NewParams()
+    defer fastcgi.Free(p)
+    hname := _host_only(host)
+    fastcgi.Add(p, "GATEWAY_INTERFACE", "CGI/1.1")
+    fastcgi.Add(p, "SERVER_SOFTWARE", "Salam")
+    fastcgi.Add(p, "SERVER_PROTOCOL", "HTTP/1.1")
+    fastcgi.Add(p, "REQUEST_METHOD", http.Method(ctx))
+    fastcgi.Add(p, "SCRIPT_NAME", script_name)
+    fastcgi.Add(p, "SCRIPT_FILENAME", target)
+    fastcgi.Add(p, "PATH_INFO", path_info)
+    fastcgi.Add(p, "DOCUMENT_ROOT", root)
+    fastcgi.Add(p, "DOCUMENT_URI", path)
+    fastcgi.Add(p, "QUERY_STRING", query)
+    fastcgi.Add(p, "REDIRECT_STATUS", "200")
+    fastcgi.Add(p, "SERVER_NAME", hname)
+    pnum := str.FromInt(port as i64)
+    fastcgi.Add(p, "SERVER_PORT", pnum)
+    mem.Free(pnum as void *)
+    fastcgi.Add(p, "REMOTE_ADDR", "127.0.0.1")
+    fastcgi.Add(p, "HTTPS", "off")
+    if query.len() > 0:
+        ru := _cat3(path, "?", query)
+        fastcgi.Add(p, "REQUEST_URI", ru)
+        mem.Free(ru as void *)
+    else:
+        fastcgi.Add(p, "REQUEST_URI", path)
+    end
+    ctype := http.Header(ctx, "Content-Type")
+    if ctype.len() > 0:
+        fastcgi.Add(p, "CONTENT_TYPE", ctype)
+    end
+    body_len_txt := str.FromInt(http.BodyLen(ctx) as i64)
+    fastcgi.Add(p, "CONTENT_LENGTH", body_len_txt)
+    mem.Free(body_len_txt as void *)
+
+    mut hdrs := Vector {} as Vector<str>
+    hdrs.push("Host")
+    hdrs.push("User-Agent")
+    hdrs.push("Accept")
+    hdrs.push("Accept-Language")
+    hdrs.push("Accept-Encoding")
+    hdrs.push("Cookie")
+    hdrs.push("Referer")
+    hdrs.push("Authorization")
+    hdrs.push("Origin")
+    hdrs.push("Cache-Control")
+    hdrs.push("If-None-Match")
+    hdrs.push("If-Modified-Since")
+    hdrs.push("Range")
+    hdrs.push("X-Requested-With")
+    hdrs.push("X-Forwarded-For")
+    hdrs.push("X-Forwarded-Proto")
+    hdrs.push("X-Real-IP")
+    repeat hdrs.len() in i:
+        hn := hdrs.get(i)
+        hv := http.Header(ctx, hn)
+        if hv.len() > 0:
+            key := _http_param(hn)
+            fastcgi.Add(p, key, hv)
+            mem.Free(key as void *)
+        end
+    end
+    hdrs.free()
+
+    repeat _cfg.fcgi.len() in i:
+        fp := _cfg.fcgi.get(i)
+        if fp.site == site and (fp.loc == -1 or fp.loc == loc):
+            val := _expand_param(fp.value, hname, path, query, root, script_name, port, "127.0.0.1")
+            fastcgi.Add(p, fp.name, val)
+            mem.Free(val as void *)
+        end
+    end
+    mem.Free(hname as void *)
+
+    c := fastcgi.Connect(fhost, fport, timeout)
+    if not tcp.ConnOk(c):
+        mem.Free(fhost as void *)
+        mem.Free(target as void *)
+        _reply(ctx, 502, "502 Bad Gateway: cannot connect to the FastCGI backend " + addr)
+        ret 502
+    end
+    defer tcp.Close(c)
+    r := fastcgi.Execute(c, p, http.BodyBytes(ctx), http.BodyLen(ctx), timeout)
+    mem.Free(fhost as void *)
+    mem.Free(target as void *)
+    if not r.ok:
+        msg := "502 Bad Gateway: " + r.error
+        fastcgi.FreeResponse(r)
+        _reply(ctx, 502, msg)
+        ret 502
+    end
+
+    http.SetStatus(ctx, r.status)
+    mut ctout := "text/html; charset=utf-8"
+    repeat r.headers.len() in i:
+        h := r.headers.get(i)
+        ln := str.Lower(h.name)
+        if str.Equals(ln, "content-type"):
+            ctout = h.value
+        else str.Equals(ln, "content-length") or str.Equals(ln, "connection") or str.Equals(ln, "transfer-encoding"):
+            continue
+        else:
+            http.AddHeader(ctx, http.Own(ctx, str.Clone(h.name)), http.Own(ctx, str.Clone(h.value)))
+        end
+    end
+    if str.Equals(http.Method(ctx), "HEAD"):
+        http.Bytes(ctx, ctout, r.body, 0)
+    else:
+        http.Bytes(ctx, ctout, r.body, r.len)
+    end
+    fastcgi.FreeResponse(r)
+    ret r.status
+end
+
 func _handle(ctx: i64):
     host := http.Header(ctx, "Host")
     mut port := _only_port
@@ -508,7 +756,9 @@ func _handle(ctx: i64):
         rel = http.Own(ctx, _cat3("/", tail, ""))
         mem.Free(tail as void *)
     end
-    if root.len() == 0:
+    if _effective_fastcgi(site, loc).len() > 0:
+        status = _serve_fastcgi(ctx, site, loc, root, rel, path, query, host, port)
+    else root.len() == 0:
         status = 404
     else not (str.Equals(method, "GET") or str.Equals(method, "HEAD")):
         http.SetHeader(ctx, "Allow", "GET, HEAD")

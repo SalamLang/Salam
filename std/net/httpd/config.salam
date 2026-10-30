@@ -55,6 +55,16 @@ struct Rule:
     pub redirect: str = ""
     pub redirect_code: int = 0
     pub cache: i64 = -1
+    pub fastcgi: str = ""
+    pub fastcgi_index: str = ""
+    pub fastcgi_timeout: int = 0
+end
+
+struct FcgiParam:
+    pub site: int = 0
+    pub loc: int = -1
+    pub name: str = ""
+    pub value: str = ""
 end
 
 struct Location:
@@ -81,6 +91,7 @@ struct Config:
     pub locations: Vector<Location> = Vector {}
     pub headers: Vector<HeaderRule> = Vector {}
     pub pages: Vector<ErrorPage> = Vector {}
+    pub fcgi: Vector<FcgiParam> = Vector {}
     pub problems: Vector<str> = Vector {}
 end
 
@@ -159,6 +170,25 @@ func _parse_uint(s: str): i64:
         if ch < 48 or ch > 57: ret -1 end
     end
     ret conv.ParseInt(s)
+end
+
+// Splits "host:port", "host" or "port" into an address a FastCGI backend
+// listens on. A bare number means 127.0.0.1 on that port.
+func _parse_addr(text: str, host &: str, port &: int): bool:
+    t := str.Trim(text)
+    if t.len() == 0: ret false end
+    colon := t.indexOf(":")
+    mut h := "127.0.0.1"
+    mut ps := t
+    if colon >= 0:
+        if colon > 0: h = t.substr(0, colon) end
+        ps = t.substr(colon + 1, t.len() - colon - 1)
+    end
+    p := _parse_uint(ps)
+    if p < 1 or p > 65535: ret false end
+    host = h
+    port = p as int
+    ret true
 end
 
 func _joined(d: conf.Doc, node: int): str:
@@ -264,6 +294,39 @@ func _apply_common(c &: Config, file: str, d: conf.Doc, node: int, name: str, ru
         else:
             c.pages.push(ErrorPage { site = site, loc = loc, code = p as int, path = n.values.get(1).text })
         end
+    else str.Equals(name, "fastcgi_pass"):
+        v := _joined(d, node)
+        if str.StartsWith(v, "unix:"):
+            _problem(c, file, n.line, n.col, "fastcgi_pass cannot read a unix socket yet; give a TCP address such as 127.0.0.1:9000")
+        else:
+            mut fh := ""
+            mut fp := 0
+            if not _parse_addr(v, fh, fp):
+                _problem(c, file, n.line, n.col, "fastcgi_pass needs an address such as 127.0.0.1:9000")
+            else:
+                rule.fastcgi = fh + ":" + str.FromInt(fp as i64)
+            end
+        end
+    else str.Equals(name, "fastcgi_index"):
+        rule.fastcgi_index = _joined(d, node)
+    else str.Equals(name, "fastcgi_timeout"):
+        secs := ParseDuration(_joined(d, node))
+        if secs <= 0:
+            _problem(c, file, n.line, n.col, "fastcgi_timeout must be a duration such as 30s or 2m")
+        else:
+            rule.fastcgi_timeout = (secs * 1000) as int
+        end
+    else str.Equals(name, "fastcgi_param"):
+        if n.values.len() < 2 or n.values.get(0).kind != conf.VAL_STR:
+            _problem(c, file, n.line, n.col, "fastcgi_param needs a name and a value")
+        else:
+            mut value := ""
+            repeat n.values.len() - 1 in k:
+                if k > 0: value = value + " " end
+                value = value + n.values.get(k + 1).text
+            end
+            c.fcgi.push(FcgiParam { site = site, loc = loc, name = n.values.get(0).text, value = value })
+        end
     else:
         ret false
     end
@@ -313,7 +376,7 @@ func _parse_location(c &: Config, file: str, d: conf.Doc, node: int, site: int):
             _problem(c, file, cn.line, cn.col, "'" + name + "' cannot be used inside a location")
         else:
             if not _apply_common(c, file, d, ch, name, rule, site, idx):
-                _problem(c, file, cn.line, cn.col, "unknown setting '" + name + "' in a location" + _suggest(name, "root|alias|index|redirect|code|return|cache|header|error page"))
+                _problem(c, file, cn.line, cn.col, "unknown setting '" + name + "' in a location" + _suggest(name, "root|alias|index|redirect|code|return|cache|header|error page|fastcgi_pass|fastcgi_index|fastcgi_param|fastcgi_timeout"))
             end
         end
     end
@@ -358,7 +421,7 @@ func _parse_site(c &: Config, file: str, d: conf.Doc, node: int):
             end
         else:
             if not _apply_common(c, file, d, ch, name, rule, site, -1):
-                _problem(c, file, cn.line, cn.col, "unknown setting '" + name + "' in a site" + _suggest(name, "listen|names|default|root|index|redirect|code|return|cache|header|error page|location"))
+                _problem(c, file, cn.line, cn.col, "unknown setting '" + name + "' in a site" + _suggest(name, "listen|names|default|root|index|redirect|code|return|cache|header|error page|fastcgi_pass|fastcgi_index|fastcgi_param|fastcgi_timeout|location"))
             end
         end
     end
@@ -368,6 +431,9 @@ func _parse_site(c &: Config, file: str, d: conf.Doc, node: int):
     if rule.index.len() == 0: rule.index = "index.html" end
     if rule.root.len() > 0 and not os.IsDir(rule.root):
         _problem(c, file, n.line, n.col, "root '" + rule.root + "' is not a directory")
+    end
+    if rule.fastcgi.len() > 0 and rule.root.len() == 0:
+        _problem(c, file, n.line, n.col, "fastcgi_pass needs a root: the folder that holds the scripts")
     end
     s.loc_count = c.locations.len() - s.loc_first
     s.rule = rule

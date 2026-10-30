@@ -4855,7 +4855,7 @@ Type parameters themselves are covered in generics and interfaces.
 
 ## Result and the ? operator
 
-Salam has no exceptions. The `result` package provides `Result<T, E>`, which is either `Ok` with a value or `Err` with an error. Inside a function that returns a Result, writing `?` after a call unwraps the successful value, and on an error returns that error straight away.
+Errors are usually thrown and caught (see the rules lesson), but sometimes you want to keep a result as a value, store it, or pass it around before you look at it. The `result` package provides `Result<T, E>`, which is either `Ok` with a value or `Err` with an error. Inside a function that returns a Result, writing `?` after a call unwraps the successful value, and on an error returns that error straight away.
 
 result-try.salam
 
@@ -4941,7 +4941,7 @@ Keep `Expect` for errors that mean a bug in the program, not for bad input from 
 
 - Give each case the data that belongs to it, instead of one struct with fields that are only sometimes used.
 
-- Return a `Result` from functions that can fail, and pass errors up with `?`.
+- Make functions that can fail `throws`; keep `Result` for results you want to store or pass around as values.
 
 
 ---
@@ -5962,13 +5962,13 @@ Salam asks for a fixed order of the top-level definitions in every file, so that
 
 - Each package keeps its public surface small and documents it with `@en` and `@fa` names.
 
-## Official packages
+## Everything ships with Salam
 
-Many libraries are maintained with Salam but are not installed with it, so the compiler stays small: the database clients such as `db.sqlite`, `db.postgres` and `db.redis`, machine learning (`tensor`, `nn`, `llm`), audio, network services such as `grpc`, `ssh` and `net.websocket`, and `webview`, `opencv` and `excel`. They are imported like any library, after `salam add db.redis` has added them to the project. Without that step the compiler says which command to run. Their reference pages carry the same note.
+The whole library is installed with the compiler, including the database clients such as `db.sqlite`, `db.postgres` and `db.redis`, machine learning (`tensor`, `nn`, `llm`), audio, network services such as `grpc`, `ssh` and `net.websocket`, and `webview`, `opencv` and `excel`. They are imported like any other library with nothing to add first. A library that needs a system library, such as `db.sqlite`, builds or finds it the first time you compile a program that imports it.
 
 ## Packages from GitHub
 
-A package that is not in the standard library is named by its repository and imported with a string: `import "github.com/owner/repo"` binds `repo`, and `import "github.com/owner/repo/sub"` reaches the package in that repository's `sub` folder. Such an import only works inside a project, because the project's `salam.toml` says which version to use and `salam.lock` records exactly what was downloaded, so every machine builds the same code.
+Packages written by other people live in their own repositories. A package that is not in the standard library is named by its repository and imported with a string: `import "github.com/owner/repo"` binds `repo`, and `import "github.com/owner/repo/sub"` reaches the package in that repository's `sub` folder. Such an import only works inside a project, because the project's `salam.toml` says which version to use and `salam.lock` records exactly what was downloaded, so every machine builds the same code.
 
 | Command | What it does |
 | --- | --- |
@@ -6137,47 +6137,64 @@ negative zero positive
 
 When a new member is added to `Light` later, every `match` that does not handle it stops compiling, which is exactly where you need to look.
 
-## No exceptions, and main returns the exit code
+## Errors with throw, try and catch, and main's exit code
 
-Salam has no exceptions and no try and catch. A function that can fail says so in what it returns: a `bool` with the result in a `&:` parameter, as below, or a `Result` enum with the `?` operator from the enums lesson. The caller checks it right away.
+A function that can fail says so in its signature: `throws` after the return type. It fails with `throw`, which takes an `Error` (or just a message). Every call to such a function is marked: `try` in front of the call passes the error on to the caller, which then has to be `throws` as well; a `try: ... catch e: ... end` block handles it, and the calls inside need no mark. `try f() catch value` gives a fallback instead. Nothing is hidden: you can see on every line where an error can come from, and `defer` still runs when one passes through.
 
 rules-exit.salam
 
 ```salam
-func parse_age(text: str, age &: int): bool:
+func parse age(text: str): int throws:
     n := text.to_int()
     if n <= 0 or n > 150:
-        ret false
+        throw Error.New(ErrorKind.OutOfRange, "'" + text + "' is not an age")
     end
-    age = n
-    ret true
+    ret n
+end
+
+func oldest(texts: Vector<str>): int throws:
+    mut best := 0
+    each text in texts:
+        age := try parse age(text)
+        if age > best:
+            best = age
+        end
+    end
+    ret best
 end
 
 func main:
-    mut age := 0
-    each text in ["42", "abc", "900"]:
-        if parse_age(text, age):
-            println text, "is a valid age"
-        else:
-            println text, "is not an age"
+    each text in ["42", "abc"]:
+        try:
+            println text, "is a valid age:", parse age(text)
+        catch e:
+            println e.message
         end
     end
-    if age == 0:
-        printerrln "no valid age found"
+    fallback := try parse age("900") catch 18
+    println "with a fallback:", fallback
+    mut texts := Vector {} as Vector<str>
+    texts.push("30")
+    texts.push("45")
+    try:
+        println "oldest:", oldest(texts)
+    catch e:
+        printerrln "no oldest age:", e.message
         ret 1
     end
-    println "last valid age:", age
 end
 ```
 
 Output:
 
 ```text
-42 is a valid age
-abc is not an age
-900 is not an age
-last valid age: 42
+42 is a valid age: 42
+'abc' is not an age
+with a fallback: 18
+oldest: 45
 ```
+
+Forgetting the mark is a compile error, `E139`, and `try` in a function that is not `throws` is `E140`. A bug such as an index out of bounds is not an error value: it stops the program, and `catch` does not see it. The error package lists the kinds of errors and what an `Error` carries.
 
 The value `main` returns is the program's exit code: `ret 1` reports failure to the shell, and no `ret` means 0. Calling `os.Exit` inside `main` is `E109`, because it would skip the cleanup that `main` deferred.
 
@@ -18768,11 +18785,11 @@ position-area | A newer feature: Chromium browsers have it and others are catchi
 position-try-fallbacks | A newer feature: Chromium browsers have it and others are catching up. A comma separated list of other places to try when the element would run out of the screen. Use the tactics `flip-block`, `flip-inline` and `flip-start`, a `position-area` value, or the name of a `@position-try` rule. The first one that fits is used. [comma list of tactics and/or position-area values] | `box: position = absolute position anchor = "--tip" position area = top position try fallbacks = "flip-block, bottom" content = "Moves below if there is no room" end` |
 
 | `position try order`
-ترتیب تلاش جایگاه
+ترتیب کوشش جایگاه
 position-try-order | A newer feature: Chromium browsers have it and others are catching up. Decides how the fallbacks of `position-try-fallbacks` are ranked. `normal` tries them in the order written. `most-width`, `most-height`, `most-block-size` and `most-inline-size` pick the one that leaves the most room in that direction. [normal / most-width / most-height / most-block-size / most-inline-size] | `box: position = absolute position anchor = "--tip" position area = left position try order = "most-width" position try fallbacks = "right, top" content = "Picks the widest side" end` |
 
 | `position try`
-تلاش جایگاه
+کوشش جایگاه
 position-try | A newer feature: Chromium browsers have it and others are catching up. Shorthand for `position-try-order` and `position-try-fallbacks`. The order word, if any, comes first, then the list of fallbacks. [position-try-order then position-try-fallbacks, shorthand] | `box: position = absolute position anchor = "--tip" position area = top position try = "most-height flip-block" content = "Tries the taller side first" end` |
 
 | `position visibility`
@@ -23421,7 +23438,9 @@ The smallest package in Salam, for when the program must not carry on.
 
 The `core` package has exactly one function, but an important one. Sometimes a program reaches a point where carrying on makes no sense: data is corrupt, or a condition that "can never happen" has happened. In that case it is better to stop right there with a clear message than to quietly hand back a wrong answer.
 
-For ordinary errors, such as bad input from a user, use result instead, so that the caller decides what to do. A panic is for when there is no correct way to continue.
+For ordinary errors, such as bad input from a user, declare the function `throws` and `throw` an `Error` instead, so that the caller decides what to do with `try` and `catch`. A panic is for when there is no correct way to continue, and `catch` does not stop it.
+
+`core` also defines the built-in error types, `Error` and `ErrorKind`, which every program can use without an import. The error package explains how to throw, pass on and catch them.
 
 ## Guarding an invariant
 
@@ -23575,6 +23594,476 @@ rejected: a percentage must be between 0 and 100, got 250
 - In a server, one bad request that panics takes down every other request too.
 
 That is the main reason to keep `Panic` for real bugs only.
+
+## Types
+
+### `ErrorKind`
+
+```salam
+enum ErrorKind
+```
+
+The general category of an error. Code decides on the kind; the message is for people.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `Other` | `` | Any error that fits none of the other kinds. A `throw "message"` gets this kind. |
+| `Syntax` | `` | The input does not follow its format, such as a missing comma in JSON. |
+| `UnexpectedEnd` | `` | The input ended in the middle of a value. |
+| `TypeMismatch` | `` | A value has another type than the one asked for. |
+| `MissingKey` | `` | A required key or field is not there. |
+| `OutOfRange` | `` | A number, index or size is outside the allowed range. |
+| `InvalidUtf8` | `` | Text is not valid UTF-8. |
+| `InvalidArgument` | `` | The caller passed a value the function cannot accept. |
+| `NotFound` | `` | What was asked for does not exist. |
+| `AlreadyExists` | `` | Something that should be new is already there. |
+| `PermissionDenied` | `` | The operation is not allowed. |
+| `Io` | `` | A read or write failed; trying again may work. |
+| `Timeout` | `` | Time ran out; trying again may work. |
+| `Canceled` | `` | The work was stopped on purpose. |
+| `Unavailable` | `` | A service is unavailable for now; trying again may work. |
+| `Unsupported` | `` | The input or the request uses something that is not supported. |
+| `Internal` | `` | A fault inside the program itself. |
+
+core-ErrorKind.salam
+
+```salam
+func retryable(e: Error): bool:
+    ret e.is(ErrorKind.Io) or e.is(ErrorKind.Timeout) or e.is(ErrorKind.Unavailable)
+end
+
+func main:
+    kinds := [ErrorKind.Io, ErrorKind.Timeout, ErrorKind.Unavailable, ErrorKind.NotFound, ErrorKind.PermissionDenied, ErrorKind.Internal]
+    each kind in kinds:
+        e := Error.New(kind, "failed")
+        if retryable(e):
+            println e.kind_name() + ": try again"
+        else:
+            println e.kind_name() + ": give up"
+        end
+    end
+end
+```
+
+Output:
+
+```text
+I/O error: try again
+timed out: try again
+unavailable: try again
+not found: give up
+permission denied: give up
+internal error: give up
+```
+
+### `Error`
+
+```salam
+struct Error
+```
+
+The error that `throw` sends and `catch` receives. It holds only text and numbers, so copying it is cheap and safe.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `kind` | `ErrorKind` | The general category, one of `ErrorKind`. |
+| `code` | `str = ""` | A precise code chosen by the package that threw the error, such as `json.trailing_data`; empty when there is none. |
+| `message` | `str = ""` | What went wrong, for a person to read. |
+| `context` | `str = ""` | The explanations added by `wrap`, outermost first, joined with ": ". |
+| `path` | `str = ""` | Where in the data the problem is, such as `$.users[3].age`, or a file path; empty when unknown. |
+| `offset` | `int = -1` | The byte offset of the problem in the input, or -1 when unknown. |
+| `line` | `int = 0` | The line of the problem, counting from 1, or 0 when unknown. |
+| `column` | `int = 0` | The column of the problem, counting from 1, or 0 when unknown. |
+
+core-Error.salam
+
+```salam
+func parse age(text: str): int throws:
+    if text == "":
+        throw Error.New(ErrorKind.MissingKey, "the age is missing")
+    end
+    n := text.to_int()
+    if n < 0 or n > 150:
+        throw Error.New(ErrorKind.OutOfRange, "the age " + n + " is out of range").with_code("age.range")
+    end
+    ret n
+end
+
+func main:
+    each text in ["42", "", "200"]:
+        try:
+            println "age", parse age(text)
+        catch e:
+            println e.kind_name() + ":", e.message
+            println "  code:", e.code, "| out of range:", e.is(ErrorKind.OutOfRange)
+        end
+    end
+    e := Error.At(ErrorKind.Syntax, "expected a digit", 4).with_path("$.age")
+    println e.to_str()
+    placed := e.with_position(4, 2, 3).wrap("reading the form")
+    println placed.to_str()
+    println placed.offset, placed.line, placed.column, placed.context
+end
+```
+
+Output:
+
+```text
+age 42
+missing key: the age is missing
+  code:  | out of range: false
+out of range: the age 200 is out of range
+  code: age.range | out of range: true
+expected a digit at $.age (offset 4)
+reading the form: expected a digit at $.age (line 2, column 3)
+4 2 3 reading the form
+```
+
+#### `is`
+
+```salam
+func is(kind: ErrorKind): bool
+```
+
+True when the error is of this kind.
+
+core-Error.is.salam
+
+```salam
+func read note(name: str): str throws:
+    if name == "":
+        throw Error.New(ErrorKind.InvalidArgument, "the name is empty")
+    end
+    if name != "notes.txt":
+        throw Error.New(ErrorKind.NotFound, name + " does not exist")
+    end
+    ret "contents of " + name
+end
+
+func main:
+    each name in ["notes.txt", "todo.txt", ""]:
+        try:
+            println read note(name)
+        catch e:
+            if e.is(ErrorKind.NotFound):
+                println "create it first:", e.message
+            else:
+                println "cannot go on:", e.message
+            end
+        end
+    end
+end
+```
+
+Output:
+
+```text
+contents of notes.txt
+create it first: todo.txt does not exist
+cannot go on: the name is empty
+```
+
+#### `wrap`
+
+```salam
+func wrap(message: str): Error
+```
+
+A copy with an explanation added in front of the context. The kind, code and position stay.
+
+core-Error.wrap.salam
+
+```salam
+func read port(text: str): int throws:
+    n := text.to_int()
+    if n < 1 or n > 65535:
+        throw Error.New(ErrorKind.OutOfRange, "port " + n + " is not valid")
+    end
+    ret n
+end
+
+func load config(text: str): int throws:
+    try:
+        ret read port(text)
+    catch e:
+        throw e.wrap("reading the port")
+    end
+end
+
+func main:
+    try:
+        println load config("80")
+        println load config("70000")
+    catch e:
+        println e.to_str()
+        println "context:", e.context
+        println "kind:", e.kind_name()
+    end
+end
+```
+
+Output:
+
+```text
+80
+reading the port: port 70000 is not valid
+context: reading the port
+kind: out of range
+```
+
+#### `with_code`
+
+```salam
+func with_code(code: str): Error
+```
+
+A copy with the code set.
+
+core-Error.with_code.salam
+
+```salam
+func parse age(text: str): int throws:
+    n := text.to_int()
+    if n < 0 or n > 150:
+        throw Error.New(ErrorKind.OutOfRange, "the age " + n + " is out of range").with_code("age.range")
+    end
+    ret n
+end
+
+func main:
+    each text in ["30", "200"]:
+        try:
+            println "age", parse age(text)
+        catch e:
+            if e.code == "age.range":
+                println "ask again:", e.message
+            end
+            println "code:", e.code
+        end
+    end
+end
+```
+
+Output:
+
+```text
+age 30
+ask again: the age 200 is out of range
+code: age.range
+```
+
+#### `with_path`
+
+```salam
+func with_path(path: str): Error
+```
+
+A copy with the path set.
+
+core-Error.with_path.salam
+
+```salam
+func check(user: str, age: int): int throws:
+    if age < 18:
+        throw Error.New(ErrorKind.OutOfRange, "must be at least 18").with_path("$.users[" + user + "].age")
+    end
+    ret age
+end
+
+func main:
+    try:
+        println check("sara", 31)
+        println check("omid", 12)
+    catch e:
+        println e.to_str()
+        println "where:", e.path
+    end
+end
+```
+
+Output:
+
+```text
+31
+must be at least 18 at $.users[omid].age
+where: $.users[omid].age
+```
+
+#### `with_position`
+
+```salam
+func with_position(offset: int, line: int, column: int): Error
+```
+
+A copy with the offset, line and column set.
+
+core-Error.with_position.salam
+
+```salam
+func main:
+    text := "name = Sara\nage = ?\n"
+    offset := text.find("?")
+    line start := text.find("age")
+    column := offset - line start + 1
+    e := Error.New(ErrorKind.Syntax, "a number was expected").with_position(offset, 2, column)
+    println e.to_str()
+    println e.offset, e.line, e.column
+end
+```
+
+Output:
+
+```text
+a number was expected (line 2, column 7)
+18 2 7
+```
+
+#### `kind_name`
+
+```salam
+func kind_name(): str
+```
+
+A short English name for the kind, such as "out of range".
+
+core-Error.kind_name.salam
+
+```salam
+func main:
+    each kind in [ErrorKind.NotFound, ErrorKind.OutOfRange, ErrorKind.Timeout, ErrorKind.PermissionDenied, ErrorKind.Other]:
+        e := Error.New(kind, "details")
+        println e.kind_name()
+    end
+end
+```
+
+Output:
+
+```text
+not found
+out of range
+timed out
+permission denied
+error
+```
+
+#### `to_str`
+
+```salam
+func to_str(): str
+```
+
+The error as one line: context, message, path and position. `println` uses it too.
+
+core-Error.to_str.salam
+
+```salam
+func main:
+    plain := Error.New(ErrorKind.Timeout, "the server did not answer")
+    println plain.to_str()
+    bare := Error.New(ErrorKind.NotFound, "")
+    println bare.to_str()
+    located := Error.New(ErrorKind.Syntax, "a comma is missing").with_path("$.items[2]").with_position(40, 3, 9)
+    println located.to_str()
+    wrapped := located.wrap("reading the order").wrap("handling the request")
+    println wrapped.to_str()
+end
+```
+
+Output:
+
+```text
+the server did not answer
+not found
+a comma is missing at $.items[2] (line 3, column 9)
+handling the request: reading the order: a comma is missing at $.items[2] (line 3, column 9)
+```
+
+#### `New`
+
+```salam
+static func New(kind: ErrorKind, message: str): Error
+```
+
+Makes an error from a kind and a message. This is the usual way to build the error you `throw`.
+
+core-Error.New.salam
+
+```salam
+func find user(id: int): str throws:
+    if id != 1:
+        throw Error.New(ErrorKind.NotFound, "no user with id " + id)
+    end
+    ret "Sara"
+end
+
+func main:
+    each id in [1, 7]:
+        try:
+            println "found", find user(id)
+        catch e:
+            println e.kind_name() + ":", e.message
+        end
+    end
+end
+```
+
+Output:
+
+```text
+found Sara
+not found: no user with id 7
+```
+
+#### `At`
+
+```salam
+static func At(kind: ErrorKind, message: str, offset: int): Error
+```
+
+Like `New`, and also records the byte offset in the input where the problem is.
+
+core-Error.At.salam
+
+```salam
+func digit(text: str, at: int): int throws:
+    c := text.substr(at, 1)
+    if c < "0" or c > "9":
+        throw Error.At(ErrorKind.Syntax, "a digit was expected", at)
+    end
+    ret c.to_int()
+end
+
+func main:
+    text := "12x4"
+    repeat text.len() in i:
+        try:
+            println "digit", digit(text, i)
+        catch e:
+            println e.to_str()
+            println "offset", e.offset
+        end
+    end
+end
+```
+
+Output:
+
+```text
+digit 1
+digit 2
+a digit was expected (offset 2)
+offset 2
+digit 4
+```
+
+### `Throws`
+
+```salam
+type Throws = Variant<auto<T>, auto<T>>
+```
+
+What a `throws` function returns under the hood. You never write it: `try` and `catch` take it apart for you.
 
 ## Functions
 
@@ -41119,7 +41608,7 @@ os-shell-guide-check.salam
 ```salam
 import os.shell
 
-func try(command: str):
+func attempt(command: str):
     r := shell.Exec(command)
     if r.code == 0:
         println "ok:", command
@@ -41130,8 +41619,8 @@ func try(command: str):
 end
 
 func main:
-    try("ls .")
-    try("ls no-such-folder")
+    attempt("ls .")
+    attempt("ls no-such-folder")
     println "exit code of false:", shell.System("false")
 end
 ```
@@ -48078,76 +48567,70 @@ The example for this item is shown with the ones above: testing-Runner.salam
 
 https://salamlang.github.io/Salam/std/error/
 
-Structured errors with a kind, a message, a chain of causes, metadata and a retry policy.
+The one Error type behind throw, try and catch: a kind, a message, where it happened, and a retry policy.
 
-Salam has no exceptions, so a function that may fail says so in its result. The `error` package gives your own code one error type for that: an `error.Error` is either nil, meaning everything went well, or an error with a kind, such as `not_found`, and a message. The kind is for the code to decide on; the message is for a person to read. The usual shape is an `err &: error.Error` out parameter, as in the standard library.
+A function that can fail says so in its signature with `throws`, and reports the failure with `throw`. The caller either passes the error on with `try`, or handles it in a `try: ... catch e: ... end` block. What travels is always an `Error` from this package, so an error from a JSON decoder, a file read and your own code all look the same to the caller. `Error` and `ErrorKind` need no import; import `error` only for the helper functions below.
 
-When an error comes up from a lower layer, `Wrap` it so the current layer's explanation is added. The final message shows the whole chain, as in could not save the report: the disk is full, and `RootMessage` gives the original cause. For transient errors, such as a dropped network connection, `RetryPolicy` says how often to try again and how long to wait between attempts.
+An `Error` has a kind, such as `ErrorKind.NotFound`, for the code to decide on, and a message for a person to read. Parsers also fill in where the problem is: an `offset`, a `line` and `column`, and a `path` such as `$.users[3].age`. A package can put a precise `code` of its own, such as `json.trailing_data`, next to the general kind. When an error passes through a layer that knows more, `wrap` adds that layer's explanation in front, and the kind stays the same.
 
-Neighbouring packages: result and option return a value or its absence in one result, which suits short chains with `?`; os/error holds the last error of a file or process call. Many std packages, such as the database clients, have an `Error` type of their own; turn it into an `error.Error` at the edge of your code when you want one type throughout.
+Under the hood a `throws` function returns a `Throws` value, and `try` checks it right after the call. Nothing is unwound and nothing is hidden: `defer` runs as with any other early return, and a call that can throw always carries `try` or sits inside a `try:` block. A bug, such as an index out of bounds, is not an error value: it still stops the program, and `catch` does not see it.
+
+Neighbouring packages: result and option keep a value or its absence in one place, when you want to store a result instead of handling it right away.
 
 The things people get wrong:
 
-- `Wrap` and `WithMeta` on a nil error make a real error. Check `Ok` before you wrap.
+- A call to a `throws` function needs `try` in front of it, or a `try:` block around it. The compiler refuses it otherwise (E139).
 
-- Every `Wrap`, `WithMeta` and `WrapKind` returns a new error with its own copies, and leaves the old one as it was. Free the ones you no longer need with `Free`.
+- `try` on its own passes the error to the caller, so it only works in a function that is itself `throws` (E140). In `main`, either declare `func main throws:` or use a `try:` block.
 
-- `Is` and the `Is...` helpers look at every layer, not only the outer kind. After `WrapKind` to `internal`, an error that started as a timeout still answers true to `IsTimeout` and `IsRetryable` (see below). Compare `Kind` when only the outer kind should count.
+- `try x catch fallback` evaluates the fallback first, every time. Keep it a plain value.
 
-- `DelayForAttempt` only computes the wait; your loop has to sleep. It adds no random jitter, so many clients that fail together retry together.
+- `wrap`, `with_code`, `with_path` and `with_position` return a new error and leave the old one as it was.
+
+- Decide by `kind` or `is`, not by reading the message: messages are for people and may change.
 
 ## Errors through the layers of a program
 
-A typical program has layers: one reads data, the next builds something from it, and the top one answers a user. Each layer that can fail takes an `err &: error.Error` out parameter, sets it to `error.Nil()` on success, and on failure either makes a new error or wraps the one it got from below. Only the top layer decides what to do, and it decides by kind, not by reading the message.
+A typical program has layers: one reads data, the next builds something from it, and the top one answers a user. Each layer that can fail is `throws`. A middle layer that has something to add catches the error, wraps it, and throws it again; the top layer decides what to do by kind.
 
 error-guide-layers.salam
 
 ```salam
-import error
-import str
-
-func load user(id: int, err &: error.Error): str:
+func load user(id: int): str throws:
     if id <= 0:
-        err = error.New(error.KindInvalidArgument, "the id must be positive")
-        ret ""
+        throw Error.New(ErrorKind.InvalidArgument, "the id must be positive")
     end
     if id != 7:
-        err = error.WithMeta(error.New(error.KindNotFound, "no such user"), "id", str.FromInt(id))
-        ret ""
+        throw Error.New(ErrorKind.NotFound, "no such user").with_code("user." + id)
     end
-    err = error.Nil()
     ret "Leila"
 end
 
-func greeting(id: int, err &: error.Error): str:
-    mut inner := error.Nil()
-    name := load user(id, inner)
-    if not error.Ok(inner):
-        err = error.Wrap(inner, "could not build the greeting")
-        ret ""
+func greeting(id: int): str throws:
+    try:
+        ret "Welcome back, " + load user(id)
+    catch e:
+        throw e.wrap("could not build the greeting")
     end
-    err = error.Nil()
-    ret "Welcome back, " + name
 end
 
-func status for(e: error.Error): int:
-    if error.Ok(e): ret 200 end
-    if error.IsNotFound(e): ret 404 end
-    if error.IsInvalidArgument(e): ret 400 end
+func status for(e: Error): int:
+    if e.is(ErrorKind.NotFound):
+        ret 404
+    else e.is(ErrorKind.InvalidArgument):
+        ret 400
+    end
     ret 500
 end
 
 func main:
     each id in [7, 3, -1]:
-        mut err := error.Nil()
-        text := greeting(id, err)
-        status := status for(err)
-        if error.Ok(err):
-            println status, text
-        else:
-            println status, error.Message(err)
-            if error.Meta(err, "id") != "":
-                println "    missing id:", error.Meta(err, "id")
+        try:
+            println 200, greeting(id)
+        catch e:
+            println status for(e), e.to_str()
+            if e.code != "":
+                println "    code:", e.code
             end
         end
     end
@@ -48159,15 +48642,15 @@ Output:
 ```text
 200 Welcome back, Leila
 404 could not build the greeting: no such user
-    missing id: 3
+    code: user.3
 400 could not build the greeting: the id must be positive
 ```
 
-Wrapping keeps the kind of the original error, so the top layer can still see that the root cause was "not found" and answer 404. `WithMeta` attaches a detail, here the missing id, that the code can read back with `Meta` without parsing text.
+Wrapping keeps the kind of the original error, so the top layer can still see that the root cause was "not found" and answer 404. The `code` carries a detail, here the missing id, that the code can read without parsing text.
 
 ## A retry loop
 
-`ShouldRetry` answers the whole question in one call: is there an error at all, is it the kind that may go away by itself (`unavailable`, `timeout` or `io`), and are there attempts left? `DelayForAttempt` gives the wait before the next try, doubling each time up to the maximum.
+`ShouldRetry` answers the whole question in one call: is the error the kind that may go away by itself (`Unavailable`, `Timeout` or `Io`), and are there attempts left? `DelayForAttempt` gives the wait before the next try, doubling each time up to the maximum. When the attempts run out, the last error is wrapped and thrown to the caller.
 
 error-guide-retry.salam
 
@@ -48177,34 +48660,40 @@ import sync
 
 mut calls := 0
 
-func fetch price(err &: error.Error): int:
+func fetch price(): int throws:
     calls += 1
     if calls < 3:
-        err = error.New(error.KindUnavailable, "the price service is busy")
-        ret 0
+        throw Error.New(ErrorKind.Unavailable, "the price service is busy")
     end
-    err = error.Nil()
     ret 4200
 end
 
-func main:
+func steady price(): int throws:
     mut policy := error.NewRetryPolicy(5, 10, 80)
     mut attempt := 1
-    mut err := error.Nil()
-    mut price := fetch price(err)
-    until error.ShouldRetry(policy, err, attempt):
-        wait := error.DelayForAttempt(policy, attempt)
-        println "attempt", attempt, "failed:", error.Message(err), "| waiting", wait, "ms"
-        sync.SleepMs(wait)
+    until true:
+        try:
+            ret fetch price()
+        catch e:
+            if not error.ShouldRetry(policy, e, attempt):
+                throw e.wrap("gave up after " + attempt + " attempts")
+            end
+            wait := error.DelayForAttempt(policy, attempt)
+            println "attempt", attempt, "failed:", e.message, "| waiting", wait, "ms"
+            sync.SleepMs(wait)
+        end
         attempt += 1
-        price = fetch price(err)
     end
-    if error.Ok(err):
-        println "price:", price, "after", attempt, "attempts"
-    else:
-        println "gave up:", error.Format(err)
+end
+
+func main:
+    try:
+        println "price:", steady price()
+    catch e:
+        println e.to_str()
     end
-    bad := error.New(error.KindInvalidArgument, "unknown product")
+    bad := Error.New(ErrorKind.InvalidArgument, "unknown product")
+    mut policy := error.NewRetryPolicy(5, 10, 80)
     println "retry a bad request?", error.ShouldRetry(policy, bad, 1)
 end
 ```
@@ -48214,7 +48703,7 @@ Output:
 ```text
 attempt 1 failed: the price service is busy | waiting 10 ms
 attempt 2 failed: the price service is busy | waiting 20 ms
-price: 4200 after 3 attempts
+price: 4200
 retry a bad request? false
 ```
 
@@ -48222,34 +48711,37 @@ An invalid argument is never retried: sending the same bad request again gives t
 
 ## Collect every problem at once
 
-For a form or a config file, stopping at the first mistake makes the user fix them one by one. Collect the errors in a vector instead and show them all. `Newf` fills the `{}` placeholders of a message from a vector of strings, and a `field` meta entry says which input each error is about.
+For a form or a config file, stopping at the first mistake makes the user fix them one by one. An `Error` is an ordinary value, so collect them in a vector instead and show them all, with `path` naming the field each one is about. Throw once at the end if any were found.
 
 error-guide-validate.salam
 
 ```salam
-import error
-
 struct Signup:
     pub email: str = ""
     pub age: int = 0
     pub password: str = ""
 end
 
-func check(s: Signup): Vector<error.Error>:
-    mut problems := Vector {} as Vector<error.Error>
+func check(s: Signup): Vector<Error>:
+    mut problems := Vector {} as Vector<Error>
     if not s.email.includes("@"):
-        problems.push(error.WithMeta(error.New(error.KindInvalidArgument, "the email has no @"), "field", "email"))
+        problems.push(Error.New(ErrorKind.InvalidArgument, "the email has no @").with_path("email"))
     end
     if s.age < 13:
-        mut args := Vector {} as Vector<str>
-        defer args.free()
-        args.push("13")
-        problems.push(error.WithMeta(error.Newf(error.KindInvalidArgument, "you must be at least {}", args), "field", "age"))
+        problems.push(Error.New(ErrorKind.OutOfRange, "you must be at least 13").with_path("age"))
     end
     if s.password.len() < 8:
-        problems.push(error.WithMeta(error.New(error.KindInvalidArgument, "the password is too short"), "field", "password"))
+        problems.push(Error.New(ErrorKind.InvalidArgument, "the password is too short").with_path("password"))
     end
     ret problems
+end
+
+func register(s: Signup): str throws:
+    problems := check(s)
+    if problems.len() > 0:
+        throw Error.New(ErrorKind.InvalidArgument, problems.len() + " fields need fixing")
+    end
+    ret "welcome, " + s.email
 end
 
 func main:
@@ -48257,10 +48749,18 @@ func main:
     problems := check(form)
     println problems.len(), "problems:"
     each p in problems:
-        println "  " + error.Meta(p, "field") + ":", error.Message(p)
+        println "  " + p.path + ":", p.message
     end
-    ok := check(Signup { email = "sara@example.com", age = 30, password = "long enough" })
-    println "a good form has", ok.len(), "problems"
+    try:
+        println register(form)
+    catch e:
+        println "not registered:", e.message
+    end
+    try:
+        println register(Signup { email = "sara@example.com", age = 30, password = "long enough" })
+    catch e:
+        println "not registered:", e.message
+    end
 end
 ```
 
@@ -48271,151 +48771,30 @@ Output:
   email: the email has no @
   age: you must be at least 13
   password: the password is too short
-a good form has 0 problems
+not registered: 3 fields need fixing
+welcome, sara@example.com
 ```
-
-## Logging an error with its trace
-
-`NewAt` and `WrapAt` also record where the error passed, which `Trace` joins with `->`. `WrapKind` gives the error a new outer kind, here `internal` once the program has decided it cannot start. `Format` puts everything on a few lines for a log: the outer kind in brackets, the full message, the trace and each meta entry.
-
-error-guide-format.salam
-
-```salam
-import error
-
-func read_file(path: str, err &: error.Error):
-    mut e := error.NewAt(error.KindIO, "permission denied reading " + path, "fs.read_file")
-    defer error.Free(e)
-    err = error.WithMeta(e, "path", path)
-end
-
-func load_config(err &: error.Error):
-    mut inner := error.Nil()
-    read_file("/etc/shop/config.yaml", inner)
-    defer error.Free(inner)
-    if not error.Ok(inner):
-        err = error.WrapAt(inner, "could not load the settings", "config.load")
-        ret
-    end
-    err = error.Nil()
-end
-
-func start(err &: error.Error):
-    mut inner := error.Nil()
-    load_config(inner)
-    defer error.Free(inner)
-    if not error.Ok(inner):
-        err = error.WrapKind(inner, error.KindInternal, "the shop did not start")
-        ret
-    end
-    err = error.Nil()
-end
-
-func main:
-    mut err := error.Nil()
-    start(err)
-    defer error.Free(err)
-    println error.Format(err)
-    println "kind:", error.Kind(err)
-    println "root cause:", error.RootMessage(err)
-    println "was an io error:", error.Is(err, error.KindIO)
-    println "retryable:", error.IsRetryable(err)
-end
-```
-
-Output:
-
-```text
-[internal] the shop did not start: could not load the settings: permission denied reading /etc/shop/config.yaml
-  trace: fs.read_file -> config.load
-  path=/etc/shop/config.yaml
-kind: internal
-root cause: permission denied reading /etc/shop/config.yaml
-was an io error: true
-retryable: true
-```
-
-The last two lines are the trap from the list above: the error now reads as `internal`, but `Is` still finds the `io` kind of its root cause, so `IsRetryable` says yes. Each layer frees the error it got from below with `defer error.Free(inner)`; that is safe because the wrapped error has its own copies.
 
 ## Choosing a kind
 
 | Kind | Use it when | Retry? |
 | --- | --- | --- |
-| `KindInvalidArgument` | The caller passed bad input | No |
-| `KindNotFound` | The thing asked for does not exist | No |
-| `KindAlreadyExists` | Creating something that is already there | No |
-| `KindPermissionDenied` | The caller may not do this | No |
-| `KindUnavailable` | A service is down or busy | Yes |
-| `KindTimeout` | Something took too long | Yes |
-| `KindIO` | A file or device operation failed | Yes |
-| `KindCanceled` | The work was stopped on purpose | No |
-| `KindInternal` | A bug or a broken invariant | No |
+| `Syntax` | The input does not follow its format | No |
+| `UnexpectedEnd` | The input stopped in the middle of something | No |
+| `TypeMismatch` | A value has the wrong type, such as text where a number belongs | No |
+| `MissingKey` | A required key or field is absent | No |
+| `OutOfRange` | A number or index is outside what is allowed | No |
+| `InvalidArgument` | The caller passed bad input | No |
+| `NotFound` | The thing asked for does not exist | No |
+| `PermissionDenied` | The caller may not do this | No |
+| `Unavailable` | A service is down or busy | Yes |
+| `Timeout` | Something took too long | Yes |
+| `Io` | A file or device operation failed | Yes |
+| `Internal` | A broken invariant inside the program | No |
 
-Keep messages short and in lower case without a final full stop, because `Message` joins them with ": " into one sentence. Put values the code needs, such as ids and file names, in `WithMeta`, and show `Format` in logs, where the trace and meta entries help most.
+Keep messages short and in lower case without a final full stop, because `to_str` joins the context and the message with ": " into one sentence.
 
 ## Types
-
-### `Error`
-
-```salam
-struct Error
-```
-
-An error, or nil when `kind` is empty. It holds vectors, so free it with `Free`.
-
-| Name | Type | Description |
-| --- | --- | --- |
-| `kind` | `str = ""` | The outer kind of the error: one of the constants above, or one you define yourself; empty for nil. |
-| `messages` | `Vector` | The message from each layer, from the innermost cause to the outermost. |
-| `kinds` | `Vector` | The kind given at creation and each kind added by `WrapKind`. |
-| `trace` | `Vector` | The places recorded by `NewAt` and `WrapAt`, innermost first. |
-| `meta_keys` | `Vector` | The metadata keys. |
-| `meta_vals` | `Vector` | The metadata values. |
-
-error-New.salam
-
-```salam
-import error
-
-func find_user(id: int): error.Error:
-    if id <= 0:
-        ret error.New(error.KindInvalidArgument, "the id has to be positive")
-    end
-    if id > 100:
-        ret error.NewAt(error.KindNotFound, "no such user", "find_user")
-    end
-    ret error.Nil()
-end
-
-func main:
-    each id in [7, -1, 500]:
-        mut e := find_user(id)
-        if error.Ok(e):
-            println id, "found", error.IsNil(e)
-        else:
-            println id, error.Kind(e), error.Message(e)
-            println error.Is(e, error.KindNotFound), error.IsNotFound(e), error.IsInvalidArgument(e)
-        end
-        error.Free(e)
-    end
-    mut args := Vector {} as Vector<str>
-    defer args.free()
-    args.push("config.ini")
-    e2 := error.Newf(error.KindIO, "cannot read {}", args)
-    println error.Message(e2)
-end
-```
-
-Output:
-
-```text
-7 found true
--1 invalid_argument the id has to be positive
-false false true
-500 not_found no such user
-true true false
-cannot read config.ini
-```
 
 ### `RetryPolicy`
 
@@ -48439,13 +48818,14 @@ import error
 func main:
     mut policy := error.NewRetryPolicy(4, 100, 1000)
     println policy.max_attempts, policy.base_delay_ms, policy.max_delay_ms
-    e := error.New(error.KindTimeout, "the server did not answer")
+    e := Error.New(ErrorKind.Timeout, "the server did not answer")
+    println error.KindName(e.kind), error.IsRetryable(e)
     mut attempt := 1
     until error.ShouldRetry(policy, e, attempt):
         println "attempt", attempt, "after", error.DelayForAttempt(policy, attempt), "milliseconds"
         attempt += 1
     end
-    println error.ShouldRetry(policy, error.New(error.KindInvalidArgument, "bad input"), 1)
+    println error.ShouldRetry(policy, Error.New(ErrorKind.InvalidArgument, "bad input"), 1)
 end
 ```
 
@@ -48453,427 +48833,24 @@ Output:
 
 ```text
 4 100 1000
+timed out true
 attempt 1 after 100 milliseconds
 attempt 2 after 200 milliseconds
 attempt 3 after 400 milliseconds
 false
 ```
 
-## Constants and variables
-
-### `KindUnknown`
-
-```salam
-const KindUnknown: str = "unknown"
-```
-
-An unspecified kind.
-
-The example for this item is shown with the ones above: error-New.salam
-
-### `KindNotFound`
-
-```salam
-const KindNotFound: str = "not_found"
-```
-
-What was asked for was not found.
-
-The example for this item is shown with the ones above: error-New.salam
-
-### `KindInvalidArgument`
-
-```salam
-const KindInvalidArgument: str = "invalid_argument"
-```
-
-The input is wrong; trying again will not help.
-
-The example for this item is shown with the ones above: error-New.salam
-
-### `KindPermissionDenied`
-
-```salam
-const KindPermissionDenied: str = "permission_denied"
-```
-
-Access is not allowed.
-
-error-Kinds.salam
-
-```salam
-import error
-
-func main:
-    each kind in [error.KindPermissionDenied, error.KindAlreadyExists, error.KindTimeout, error.KindCanceled, error.KindUnavailable, error.KindUnknown, error.KindUnimplemented]:
-        e := error.New(kind, "an example")
-        println kind, error.IsPermissionDenied(e), error.IsAlreadyExists(e), error.IsTimeout(e), error.IsCanceled(e), error.IsUnavailable(e), error.IsRetryable(e)
-    end
-end
-```
-
-Output:
-
-```text
-permission_denied true false false false false false
-already_exists false true false false false false
-timeout false false true false false true
-canceled false false false true false false
-unavailable false false false false true true
-unknown false false false false false false
-unimplemented false false false false false false
-```
-
-### `KindAlreadyExists`
-
-```salam
-const KindAlreadyExists: str = "already_exists"
-```
-
-It is already there.
-
-The example for this item is shown with the ones above: error-Kinds.salam
-
-### `KindUnavailable`
-
-```salam
-const KindUnavailable: str = "unavailable"
-```
-
-The service is unavailable for now; trying again may work.
-
-The example for this item is shown with the ones above: error-Kinds.salam
-
-### `KindTimeout`
-
-```salam
-const KindTimeout: str = "timeout"
-```
-
-Time ran out; trying again may work.
-
-The example for this item is shown with the ones above: error-Kinds.salam
-
-### `KindCanceled`
-
-```salam
-const KindCanceled: str = "canceled"
-```
-
-The work was cancelled.
-
-The example for this item is shown with the ones above: error-Kinds.salam
-
-### `KindInternal`
-
-```salam
-const KindInternal: str = "internal"
-```
-
-An internal fault in the program.
-
-error-Wrap.salam
-
-```salam
-import error
-
-func main:
-    root := error.New(error.KindIO, "the disk is full")
-    a := error.Wrap(root, "could not save the report")
-    b := error.WrapAt(a, "the nightly run stopped", "nightly job")
-    c := error.WrapKind(b, error.KindInternal, "internal error")
-    d := error.WithMeta(c, "disk", "/dev/sda1")
-    println error.Message(d)
-    println error.RootMessage(d)
-    println error.Kind(d), error.IsInternal(d), error.Meta(d, "disk")
-    println error.Trace(d)
-    println error.Format(d)
-end
-```
-
-Output:
-
-```text
-internal error: the nightly run stopped: could not save the report: the disk is full
-the disk is full
-internal true /dev/sda1
-nightly job
-[internal] internal error: the nightly run stopped: could not save the report: the disk is full
-  trace: nightly job
-  disk=/dev/sda1
-```
-
-### `KindIO`
-
-```salam
-const KindIO: str = "io"
-```
-
-A read or write error.
-
-The example for this item is shown with the ones above: error-New.salam
-
-### `KindUnimplemented`
-
-```salam
-const KindUnimplemented: str = "unimplemented"
-```
-
-Not implemented yet.
-
-The example for this item is shown with the ones above: error-Kinds.salam
-
 ## Functions
 
-### `Nil`
+### `KindName`
 
 ```salam
-func Nil(): Error
+func KindName(kind: ErrorKind): str
 ```
 
-The nil error, meaning "no error".
+A short English name for a kind, such as "not found"; `to_str` uses it when the message is empty.
 
-The example for this item is shown with the ones above: error-New.salam
-
-### `IsNil`
-
-```salam
-func IsNil(e: Error): bool
-```
-
-True when the error is nil.
-
-The example for this item is shown with the ones above: error-New.salam
-
-### `Ok`
-
-```salam
-func Ok(e: Error): bool
-```
-
-The same as `IsNil`, and easier to read in a condition.
-
-The example for this item is shown with the ones above: error-New.salam
-
-### `New`
-
-```salam
-func New(kind: str, message: str): Error
-```
-
-A new error with a kind and a message; an empty kind becomes `unknown`.
-
-The example for this item is shown with the ones above: error-New.salam
-
-### `NewAt`
-
-```salam
-func NewAt(kind: str, message: str, at: str): Error
-```
-
-A new error that also records the place it happened, such as a function name, in its trace.
-
-The example for this item is shown with the ones above: error-New.salam
-
-### `Newf`
-
-```salam
-func Newf(kind: str, tmpl: str, args: Vector<str>): Error
-```
-
-A new error with a formatted message; every `{}` is filled with the next string from `args`.
-
-The example for this item is shown with the ones above: error-New.salam
-
-### `Wrap`
-
-```salam
-func Wrap(e: Error, message: str): Error
-```
-
-Puts a new message on an error and keeps the earlier ones; the kind does not change. When the error is nil it builds a new one of unknown kind.
-
-The example for this item is shown with the ones above: error-Wrap.salam
-
-### `WrapAt`
-
-```salam
-func WrapAt(e: Error, message: str, at: str): Error
-```
-
-Like `Wrap`, and adds the place to the trace.
-
-The example for this item is shown with the ones above: error-Wrap.salam
-
-### `WrapKind`
-
-```salam
-func WrapKind(e: Error, kind: str, message: str): Error
-```
-
-Like `Wrap`, and sets a new outer kind. The earlier kinds stay in the error, so `Is` still finds them.
-
-The example for this item is shown with the ones above: error-Wrap.salam
-
-### `WithMeta`
-
-```salam
-func WithMeta(e: Error, key: str, val: str): Error
-```
-
-A copy of the error with a key and value pair added, such as a user id or a file path. On a nil error it makes an error of kind `unknown`.
-
-The example for this item is shown with the ones above: error-Wrap.salam
-
-### `Meta`
-
-```salam
-func Meta(e: Error, key: str): str
-```
-
-The value of a metadata key, or an empty string when it is absent. With a repeated key, the first value wins.
-
-The example for this item is shown with the ones above: error-Wrap.salam
-
-### `Kind`
-
-```salam
-func Kind(e: Error): str
-```
-
-The outer kind of the error; empty for nil.
-
-The example for this item is shown with the ones above: error-New.salam
-
-### `Is`
-
-```salam
-func Is(e: Error, kind: str): bool
-```
-
-True when this kind is the error's kind at any layer, including kinds replaced by `WrapKind`.
-
-The example for this item is shown with the ones above: error-New.salam
-
-### `Message`
-
-```salam
-func Message(e: Error): str
-```
-
-The full message, outermost layer first, joined with `: `.
-
-The example for this item is shown with the ones above: error-New.salam
-
-### `RootMessage`
-
-```salam
-func RootMessage(e: Error): str
-```
-
-The message of the innermost cause.
-
-The example for this item is shown with the ones above: error-Wrap.salam
-
-### `Trace`
-
-```salam
-func Trace(e: Error): str
-```
-
-The recorded places, joined with ` -> `.
-
-The example for this item is shown with the ones above: error-Wrap.salam
-
-### `Format`
-
-```salam
-func Format(e: Error): str
-```
-
-The full text for a log: the kind in brackets and the message, then the trace and each meta entry on lines of their own. `<nil>` for nil.
-
-The example for this item is shown with the ones above: error-Wrap.salam
-
-### `IsNotFound`
-
-```salam
-func IsNotFound(e: Error): bool
-```
-
-True when the error is of the "not found" kind.
-
-The example for this item is shown with the ones above: error-New.salam
-
-### `IsInvalidArgument`
-
-```salam
-func IsInvalidArgument(e: Error): bool
-```
-
-For the "invalid argument" kind.
-
-The example for this item is shown with the ones above: error-New.salam
-
-### `IsPermissionDenied`
-
-```salam
-func IsPermissionDenied(e: Error): bool
-```
-
-For the "permission denied" kind.
-
-The example for this item is shown with the ones above: error-Kinds.salam
-
-### `IsAlreadyExists`
-
-```salam
-func IsAlreadyExists(e: Error): bool
-```
-
-For the "already exists" kind.
-
-The example for this item is shown with the ones above: error-Kinds.salam
-
-### `IsTimeout`
-
-```salam
-func IsTimeout(e: Error): bool
-```
-
-For the "timeout" kind.
-
-The example for this item is shown with the ones above: error-Kinds.salam
-
-### `IsCanceled`
-
-```salam
-func IsCanceled(e: Error): bool
-```
-
-For the "cancelled" kind.
-
-The example for this item is shown with the ones above: error-Kinds.salam
-
-### `IsUnavailable`
-
-```salam
-func IsUnavailable(e: Error): bool
-```
-
-For the "unavailable" kind.
-
-The example for this item is shown with the ones above: error-Kinds.salam
-
-### `IsInternal`
-
-```salam
-func IsInternal(e: Error): bool
-```
-
-For the "internal" kind.
-
-The example for this item is shown with the ones above: error-Wrap.salam
+The example for this item is shown with the ones above: error-RetryPolicy.salam
 
 ### `IsRetryable`
 
@@ -48881,9 +48858,9 @@ The example for this item is shown with the ones above: error-Wrap.salam
 func IsRetryable(e: Error): bool
 ```
 
-True when the error is transient and worth retrying: a timeout, unavailability or a read or write error.
+True when the error is transient and worth retrying: a timeout, an unavailable service or a read or write error.
 
-The example for this item is shown with the ones above: error-Kinds.salam
+The example for this item is shown with the ones above: error-RetryPolicy.salam
 
 ### `NewRetryPolicy`
 
@@ -48911,19 +48888,9 @@ The example for this item is shown with the ones above: error-RetryPolicy.salam
 func ShouldRetry(p &: RetryPolicy, e: Error, attempt: int): bool
 ```
 
-True when an error happened, is retryable at any layer, and `attempt` is still below `max_attempts`.
+True when the error is retryable and `attempt` is still below `max_attempts`.
 
 The example for this item is shown with the ones above: error-RetryPolicy.salam
-
-### `Free`
-
-```salam
-func Free(e &: Error)
-```
-
-Releases the error's vectors. Wrapped copies are not affected.
-
-The example for this item is shown with the ones above: error-New.salam
 
 
 ---
@@ -56747,7 +56714,7 @@ mut claimed := atomic.Flag {}
 mut winners := atomic.I64 {}
 mut losers := atomic.I64 {}
 
-func try claim():
+func attempt claim():
     if atomic.TestAndSet(claimed):
         atomic.Add(winners, 1)
     else:
@@ -56762,7 +56729,7 @@ func main:
     mut threads := Vector {} as Vector<i64>
     defer threads.free()
     repeat 8:
-        threads.push(spawn(try claim))
+        threads.push(spawn(attempt claim))
     end
     each t in threads:
         join(t)
@@ -58574,7 +58541,7 @@ The things people get wrong:
 
 - Strict or lenient. `Unmarshal` fails on a missing field, an unknown key or a type that does not match; `UnmarshalLenient` keeps the struct's defaults for missing fields and skips unknown keys, but a wrong type still fails.
 
-- Key order. `Marshal` writes fields in struct order, but a decoded `Value` object does not keep the order of its keys; pass `sort_keys` to `Encode` when output must be stable.
+- Key order. `Marshal` writes fields in struct order. A decoded `Value` object keeps the order of the text and `Encode` writes its keys in that order; pass `sort_keys` to `Encode` when output must be alphabetical.
 
 ## Guide: load a config file into a struct
 
@@ -58751,7 +58718,7 @@ color is missing
 area: 900
 ```
 
-Whole numbers come back as `int` and numbers with a fraction as `float`; `IsNumber` accepts both. An object does not keep the order of its keys, so when the order matters, walk a list of the keys you expect, as this program does, and use `ObjectHas` for the optional ones.
+Whole numbers come back as `int` and numbers with a fraction as `float`; `IsNumber` accepts both. A decoded object keeps its keys in the order of the text, but a sender is free to change that order, so walk a list of the keys you expect, as this program does, and use `ObjectHas` for the optional ones.
 
 ## Guide: report bad input
 
@@ -58887,7 +58854,7 @@ The options for `Encode`.
 | Name | Type | Description |
 | --- | --- | --- |
 | `indent` | `str = ""` | The indent unit; empty means one line. |
-| `sort_keys` | `bool = false` | Write the keys in alphabetical order. Without it the key order is not fixed. |
+| `sort_keys` | `bool = false` | Write the keys in alphabetical order. Without it they are written in the order the object holds them: the order they were added or decoded. |
 | `ignore_null` | `bool = false` | Leave out the keys whose value is null. |
 
 encoding-json-Value.salam
@@ -60218,7 +60185,7 @@ The things people get wrong:
 
 - Line breaks inside a quoted field cannot be read back: `ReadAll` splits the text into lines first. `WriteLine` quotes such a field correctly for other tools, but this reader cuts it in two.
 
-- `FromValue` takes the columns from the keys of the first object, and an object does not keep its key order, so the columns can come out in a different order from the file you read. When the order matters, write the rows yourself with `WriteLine`.
+- `FromValue` takes the columns from the keys of the first object, in the order they were added, so a table read with `ToValue` is written back with its columns in the original order.
 
 ## Guide: totals from a CSV export
 
@@ -60485,8 +60452,8 @@ Ali,Tehran
 ["a", "b,c", "d"]
 plain,"with ""quotes"""
 1 Ali
-age,name
-30,Ali
+name,age
+Ali,30
 2 1,2
 3,4
 ```
@@ -60821,10 +60788,10 @@ Output:
 ```text
 encoded: true
 [database]
-replicas = [{host = "10.0.0.2", weight = 2}, {host = "10.0.0.3", weight = 1}]
-timeout = 30.0
-pool = 8
 url = "postgres://localhost/shop"
+pool = 8
+timeout = 30.0
+replicas = [{host = "10.0.0.2", weight = 2}, {host = "10.0.0.3", weight = 1}]
 timeout is still a float: true
 password written: false
 replicas read back: 2
@@ -60915,8 +60882,8 @@ salam 8080
 title = "salam"
 [server]
 host = "localhost"
-tags = ["a", "b"]
 port = 8080
+tags = ["a", "b"]
 
 false
  false
@@ -62457,7 +62424,7 @@ Reach for a `Value` when the shape of the data is not known when you write the p
 
 - Copies share parts. A copy of an object shares its map, so `ObjectSet` through the copy changes the original. A copy of an array shares its elements but not its length, so `ArrayPush` on an array you got from `ObjectGet` is lost until you `ObjectSet` it back. Use `ValueClone` for a real copy.
 
-- Key order is not kept. `ObjectKeys` comes back in hash order; sort it, or encode with `sort_keys`, when output must be stable.
+- Key order depends on how the object was built. `ObjectKeys` returns keys in the order they were added with `ObjectSet`, and a decoded JSON document in the order of its text. An object made from a map by `ValueObject` follows that map's own order. Sort the keys, or encode with `sort_keys`, when output must be alphabetical.
 
 ## Guide: walk a whole document
 
@@ -62508,7 +62475,7 @@ $.note = null
 $.order = int(1042)
 ```
 
-An object does not remember the order of its keys, so the program sorts `ObjectKeys` with `sort.QuickSort` to print the same order every time. `ToDebugString` shows each leaf together with its kind.
+`ObjectKeys` gives the keys in the order they were added, so a decoded document keeps the order of its text. This program sorts them with `sort.QuickSort` to print them alphabetically whatever order the input had. `ToDebugString` shows each leaf together with its kind.
 
 ## Guide: build a payload with optional fields
 
@@ -62736,6 +62703,7 @@ A dynamic value: null, boolean, whole number, decimal, string, array or object.
 | `s` | `str = ""` | The string value. |
 | `arr` | `Vector` | The elements of an array. |
 | `obj` | `HashMap` | The keys and values of an object. |
+| `order` | `i64 = 0` | An internal handle to the list that records the order in which keys were added to an object with `ObjectSet`. `ObjectDelete` keeps it up to date. Do not use it directly; `ObjectKeys` reads it. |
 
 encoding-value-Value.salam
 
@@ -62781,8 +62749,8 @@ end
 Output:
 
 ```text
-object{name: string(Narges), height: float(1.68), age: int(34), admin: bool(false), langs: array[string(fa), string(ar)], phone: null}
-6 true ["name", "height", "age", "admin", "langs", "phone"]
+object{name: string(Narges), age: int(34), height: float(1.68), admin: bool(false), phone: null, langs: array[string(fa), string(ar)]}
+6 true ["name", "age", "height", "admin", "phone", "langs"]
 Narges 34 1.68 false
 true 2 ar
 false
@@ -63193,7 +63161,7 @@ The example for this item is shown with the ones above: encoding-value-Value.sal
 func ObjectKeys(v: Value): Vector<str>
 ```
 
-The keys of an object. Their order is not fixed.
+The keys of an object. Keys added with `ObjectSet` come in the order they were added; the keys of an object made from a map by `ValueObject` come in that map's own order.
 
 The example for this item is shown with the ones above: encoding-value-Value.salam
 
@@ -63242,7 +63210,7 @@ It suits tools that take whatever format a user hands them, and one-off migratio
 
 ### What survives a conversion
 
-Everything passes through a `Value`, so comments, key order and formatting are always lost. Beyond that, each format can hold less than JSON:
+Everything passes through a `Value`, so comments and formatting are always lost, while keys keep the order they were read in. Beyond that, each format can hold less than JSON:
 
 | Format | Reading gives | Writing loses |
 | --- | --- | --- |
@@ -63370,10 +63338,10 @@ Output:
 
 ```text
 <?xml version="1.0" encoding="UTF-8"?>
-<root id="1042"><item>tea</item><item>cups</item><customer>Sara</customer><total>39.5</total><paid>true</paid></root>
+<root id="1042"><customer>Sara</customer><item>tea</item><item>cups</item><total>39.5</total><paid>true</paid></root>
 detected: xml
-back: {"item": ["tea", "cups"], "customer": "Sara", "total": "39.5", "paid": "true", "@id": "1042"}
-{"title": "Salam", "pages": "153", "@lang": "fa"}
+back: {"@id": "1042", "customer": "Sara", "item": ["tea", "cups"], "total": "39.5", "paid": "true"}
+{"@lang": "fa", "title": "Salam", "pages": "153"}
 ```
 
 Numbers and booleans are written as their text, so `39.5` and `true` arrive in the XML. The way back shows what XML cannot express: every value returns as a string, and the outer `<root>` or `<book>` is gone, leaving only its contents. When the element names, order or namespaces matter, build the document with encoding/xml directly.
@@ -63387,7 +63355,7 @@ encoding-serde-guide-errors.salam
 ```salam
 import encoding.serde
 
-func try(label: str, data: str, from: str, dest: str):
+func attempt(label: str, data: str, from: str, dest: str):
     mut ok := false
     out := serde.TranscodeStrict(data, from, dest, ok)
     if ok:
@@ -63398,11 +63366,11 @@ func try(label: str, data: str, from: str, dest: str):
 end
 
 func main:
-    try("good yaml   ", "- 1\n- 2\n", "yaml", "json")
-    try("broken json ", `{"a": 1`, "json", "yaml")
-    try("unknown from", `a = 1`, "ini", "json")
-    try("unknown dest", `{"a": 1}`, "json", "ini")
-    try("toml needs a table", `[1, 2]`, "json", "toml")
+    attempt("good yaml   ", "- 1\n- 2\n", "yaml", "json")
+    attempt("broken json ", `{"a": 1`, "json", "yaml")
+    attempt("unknown from", `a = 1`, "ini", "json")
+    attempt("unknown dest", `{"a": 1}`, "json", "ini")
+    attempt("toml needs a table", `[1, 2]`, "json", "toml")
     println "lenient gives [" + serde.Transcode(`{"a": 1`, "json", "yaml") + "]"
 end
 ```
@@ -63451,16 +63419,16 @@ Output:
 ```text
 json yaml xml toml csv
 true 0 2 3 4 5
+name: salam
+port: 8080
 tags:
   - a
   - b
-name: salam
-port: 8080
-tags = ["a", "b"]
 name = "salam"
 port = 8080
+tags = ["a", "b"]
 
-[{"age": "30", "name": "Ali"}]
+[{"name": "Ali", "age": "30"}]
 false
 ```
 
@@ -65735,8 +65703,8 @@ true 5432 false
 <item id="3"><name>book</name></item>
 true false
 false
-object{feature: array[string(search), string(chat)], @env: string(prod), db: object{@port: string(5432), @host: string(localhost)}}
-<root env="prod"><feature>search</feature><feature>chat</feature><db host="localhost" port="5432"/></root>
+object{@env: string(prod), db: object{@host: string(localhost), @port: string(5432)}, feature: array[string(search), string(chat)]}
+<root env="prod"><db host="localhost" port="5432"/><feature>search</feature><feature>chat</feature></root>
 a &lt; b &amp; c &quot;x&quot; <p> & s
 1 a
 3  hello
@@ -70206,8 +70174,6 @@ https://salamlang.github.io/Salam/std/npy/
 
 Reading and writing NumPy `.npy` and `.npz` files.
 
-This is an official package that does not ship with Salam. Add it to a project first: `salam add npy`
-
 `.npy` files are the standard way NumPy arrays are stored in Python, and `.npz` keeps several named arrays in one zip archive. With this package you can move data and model weights between Python and Salam.
 
 An `NpyArray` is three things: `shape`, the size of each dimension; `data`, every element as an `f64` in row-major (C) order; and `dtype`, the element type the file declared. The guide below goes from the usual case, moving a weight matrix between NumPy and Salam, to checkpoints with several arrays, arrays with more than two dimensions, the file layout itself and what happens with bad files.
@@ -70739,8 +70705,6 @@ The example for this item is shown with the ones above: npy-Npy.salam
 https://salamlang.github.io/Salam/std/excel/
 
 Reading and writing Excel (xlsx), OpenDocument (ods) and CSV spreadsheets: sheets, cells, styles, formulas and dates.
-
-This is an official package that does not ship with Salam. Add it to a project first: `salam add excel`
 
 A workbook holds several sheets, and each sheet holds cells by row and column, from zero. Turn Excel references such as `C5` into a row and column with `CellRef` and `ParseCellRef`.
 
@@ -72451,8 +72415,6 @@ The example for this item is shown with the ones above: excel-Workbook.salam
 https://salamlang.github.io/Salam/std/data/
 
 Reading data for machine learning: CSV tables, batching samples, MNIST and images, and synthetic data.
-
-This is an official package that does not ship with Salam. Add it to a project first: `salam add data`
 
 This package readies data for training a model. `LoadCsv` reads a CSV file into a `Table`, decides for each column whether it holds integers, floats, categories or free text, and turns categories into numbers by itself; `split_xy` then divides the table into a feature matrix and a label. `MatrixDataset` hands the rows out in shuffled mini-batches, `LoadMnist`, `LoadIdx` and `LoadImageFolder` read image sets, and the `Make...` functions build synthetic data from a fixed seed, for trying algorithms out without a file.
 
@@ -75729,8 +75691,6 @@ https://salamlang.github.io/Salam/std/net-proxy/
 
 Connecting through an HTTP or SOCKS5 proxy, alone or in a chain.
 
-This is an official package that does not ship with Salam. Add it to a project first: `salam add net.proxy`
-
 A proxy is a middleman that makes the connection on behalf of the program. This package builds the tunnel and gives back an ordinary net/tcp connection, read and written exactly as a direct one is.
 
 Two kinds of proxy are supported. An HTTP proxy (`NewHTTPProxy`, often on port 3128 or 8080) opens the tunnel with a `CONNECT` request; a SOCKS5 proxy (`NewSOCKS5Proxy`, port 1080, or 9050 for Tor) uses its own small binary handshake. Both take `"host:port"`, and the `...Auth` forms add a user name and password. `Dial` returns a `tcp.Conn`; when the proxy cannot be reached or refuses, the connection is empty, so always check it with `tcp.ConnOk`.
@@ -76619,6 +76579,7 @@ The router: it sends requests to the right function by method and path.
 | `static_dir` | `str = ""` | The directory of the static files. |
 | `has_static` | `bool = false` | Static files are enabled. |
 | `static_listing` | `bool = false` | Show the contents of directories. |
+| `fallback` | `i64 = 0` | The handler that runs when no route matches. Zero means there is none and the server answers 404. |
 | `idx` | `Vector` | The hash table of the literal routes. |
 | `idx_mask` | `int = 0` | The table size minus one. |
 | `n_literal` | `int = 0` | The number of literal routes. |
@@ -76764,6 +76725,55 @@ For directories with no `index.html`, shows the list of files.
 
 The example for this item is shown with the ones above: net-router-Dispatch.salam
 
+### `SetFallback`
+
+```salam
+func SetFallback(r &: Router, fn: i64)
+```
+
+Sets the handler for every request that no route matches, whatever its method or path; the handler builds the whole response. It is how a server that picks the answer from the `Host` header, such as `net/httpd`, sits behind one router.
+
+net-router-Fallback.salam
+
+```salam
+import net.http
+import net.router
+
+func home(ctx: i64):
+    http.Text(ctx, "home")
+end
+
+func anything_else(ctx: i64):
+    http.SetStatus(ctx, 202)
+    http.Text(ctx, "fallback got " + http.Method(ctx) + " " + http.Path(ctx))
+end
+
+func main:
+    mut r := router.NewRouter()
+    println r.fallback
+    router.Get(r, "/", home)
+    router.SetFallback(r, anything_else)
+    println r.fallback == anything_else
+    mut s := http.NewServer(19623)
+    http.Use(s, r)
+    println http.RunBackground(s)
+    a := http.Get("http://127.0.0.1:19623/")
+    println http.Status(a), http.Body(a)
+    b := http.Get("http://127.0.0.1:19623/unknown/page")
+    println http.Status(b), http.Body(b)
+end
+```
+
+Output:
+
+```text
+0
+true
+true
+200 home
+202 fallback got GET /unknown/page
+```
+
 ### `ParamGet`
 
 ```salam
@@ -76802,8 +76812,6 @@ The example for this item is shown with the ones above: net-router-Dispatch.sala
 https://salamlang.github.io/Salam/std/net-email/
 
 Sending email over SMTP and reading it over IMAP and POP3.
-
-This is an official package that does not ship with Salam. Add it to a project first: `salam add net.email`
 
 This package speaks the three mail protocols directly over net/tcp and tls: SMTP to send, POP3 and IMAP to read. Use it for password reset mails, alerts and reports from a server, or a script that reads a support inbox. It is a protocol client, not a mail library: it builds simple text and HTML messages, but it has no attachments and no MIME parser, so a fetched message comes back as raw lines.
 
@@ -77721,8 +77729,6 @@ https://salamlang.github.io/Salam/std/net-websocket/
 
 A two way connection that stays open between browser and server, with rooms for broadcasting.
 
-This is an official package that does not ship with Salam. Add it to a project first: `salam add net.websocket`
-
 A WebSocket is a connection that starts as one HTTP request and then stays open, and either side sends a message whenever it likes: live chat, notifications, dashboards, games. This package has both ends. The server takes connections with `Listen` and `Accept` on its own port, and a client connects with `Dial`; `AcceptWSS` and `DialWSS` do the same over TLS. It runs its own listener and does not plug into the net/http server. For the Socket.IO protocol that many JavaScript apps use (events, acknowledgements, reconnection) use net/socketio instead; a plain browser `WebSocket` talks to this package directly.
 
 Core ideas:
@@ -77971,7 +77977,7 @@ func gate():
     end
 end
 
-func try(port: int, extra: str):
+func attempt(port: int, extra: str):
     mut c := websocket.DialWith("127.0.0.1", port, "/live", extra)
     println "open:", websocket.IsOpen(c), "server says:", websocket.ReceiveText(c)
     if extra != "":
@@ -77985,8 +77991,8 @@ end
 func main:
     server = websocket.Listen(0)
     t := spawn(gate)
-    try(websocket.Port(server), "Authorization: Bearer sara-token\r\n")
-    try(websocket.Port(server), "")
+    attempt(websocket.Port(server), "Authorization: Bearer sara-token\r\n")
+    attempt(websocket.Port(server), "")
     join(t)
     websocket.CloseServer(server)
 end
@@ -80464,23 +80470,91 @@ The greatest number of requests over one connection.
 
 The example for this item is shown with the ones above: net-http-Server.salam
 
-### `Ctx`
+### `File`
 
 ```salam
-func Ctx(h: i64): Context
+func File(h: i64, path: str, content_type: str): bool
 ```
 
-Turns the numeric id of the handler into a `Context`. Every function on this page takes either one, so this is a matter of taste: a struct to pass around and read fields from, or the bare id.
+Answers with a file from disk as the body, streamed in pieces so a large file never sits in memory; the length and the content type are set for you. The status and headers you set are kept, and a HEAD request gets only the headers. It returns false when the file cannot be opened, and then nothing is changed.
 
-The example for this item is shown with the ones above: net-http-Context.salam
-
-### `Method`
+net-http-FileBody.salam
 
 ```salam
-func Method(ctx: Context): str
+import io
+import os
+import net.http
+import net.router
+
+func page(ctx: i64):
+    path := os.TempDir() + "/salam_filebody.txt"
+    if http.File(ctx, path, "text/plain"):
+        http.SetHeader(ctx, "X-Port", http.Own(ctx, "" + http.LocalPort(ctx)))
+        http.SetHeader(ctx, "X-Status", http.Own(ctx, "" + http.Status(ctx)))
+    else:
+        http.SetStatus(ctx, 404)
+        http.Text(ctx, "no file")
+    end
+end
+
+func part(ctx: i64):
+    path := os.TempDir() + "/salam_filebody.txt"
+    if http.FileRange(ctx, path, "text/plain", 6, 4):
+        http.SetStatus(ctx, 206)
+    else:
+        http.SetStatus(ctx, 416)
+        http.Text(ctx, "bad range")
+    end
+end
+
+func main:
+    path := os.TempDir() + "/salam_filebody.txt"
+    io.WriteFile(path, "hello from a file")
+    mut size := 0 as i64
+    mut mtime := 0 as i64
+    println http.FileStat(path, size, mtime), size
+    mut r := router.NewRouter()
+    router.Get(r, "/file", page)
+    router.Get(r, "/part", part)
+    mut s := http.NewServer(19622)
+    http.Use(s, r)
+    println http.RunBackground(s)
+    a := http.Get("http://127.0.0.1:19622/file")
+    println http.Status(a), http.Body(a)
+    println http.GetHeader(a, "x-port"), http.GetHeader(a, "x-status"), http.GetHeader(a, "content-type")
+    b := http.Get("http://127.0.0.1:19622/part")
+    println http.Status(b), http.Body(b)
+    os.Remove(path)
+end
 ```
 
-The request method, such as GET.
+Output:
+
+```text
+true 17
+true
+200 hello from a file
+19622 200 text/plain
+206 from
+```
+
+### `LocalPort`
+
+```salam
+func LocalPort(h: i64): int
+```
+
+The port of the server socket this request came in on; useful when one handler serves several ports.
+
+The example for this item is shown with the ones above: net-http-FileBody.salam
+
+### `Status`
+
+```salam
+func Status(h: i64): int
+```
+
+The response status code. Given a request handle inside a handler, it is the status set so far (200 until you change it).
 
 net-http-Handle.salam
 
@@ -80560,6 +80634,46 @@ text/html; charset=utf-8 <h1>hello</h1>
 302 /
 404
 ```
+
+### `FileRange`
+
+```salam
+func FileRange(h: i64, path: str, content_type: str, offset: int, length: int): bool
+```
+
+Like `File` but sends only `length` bytes starting at `offset`, for answers to a `Range` request; the caller sets the 206 status and the `Content-Range` header. It returns false when the part does not lie inside the file.
+
+The example for this item is shown with the ones above: net-http-FileBody.salam
+
+### `FileStat`
+
+```salam
+func FileStat(path: str, size &: i64, mtime &: i64): bool
+```
+
+Reads the size and the modification time (Unix seconds) of a file with one system call, into the two variables you pass. It returns false when the file cannot be read. Outside Linux on x64 and arm64 the time is 0.
+
+The example for this item is shown with the ones above: net-http-FileBody.salam
+
+### `Ctx`
+
+```salam
+func Ctx(h: i64): Context
+```
+
+Turns the numeric id of the handler into a `Context`. Every function on this page takes either one, so this is a matter of taste: a struct to pass around and read fields from, or the bare id.
+
+The example for this item is shown with the ones above: net-http-Context.salam
+
+### `Method`
+
+```salam
+func Method(ctx: Context): str
+```
+
+The request method, such as GET.
+
+The example for this item is shown with the ones above: net-http-Handle.salam
 
 ### `Path`
 
@@ -81420,7 +81534,7 @@ The example for this item is shown with the ones above: net-http-Client.salam
 func Status(r: Response): int
 ```
 
-The response status code.
+The response status code. Given a request handle inside a handler, it is the status set so far (200 until you change it).
 
 The example for this item is shown with the ones above: net-http-Handle.salam
 
@@ -81662,8 +81776,6 @@ The example for this item is shown with the ones above: net-http-Context.salam
 https://salamlang.github.io/Salam/std/net-http-middleware/
 
 The usual security, cache and CORS headers, and request logging, in one call.
-
-This is an official package that does not ship with Salam. Add it to a project first: `salam add net.http.middleware`
 
 Five small helpers for net/http handlers: `AllowAll` for CORS, `Secure` for basic security headers, `NoCache` and `Cache` for caching, and `Log` for a line per request. Each takes the context id, as the handler does, and only sets response headers (or prints), so you call them on the first lines of a handler.
 
@@ -82042,8 +82154,6 @@ https://salamlang.github.io/Salam/std/net-http-validate/
 
 Checking form input and answering with a 400.
 
-This is an official package that does not ship with Salam. Add it to a project first: `salam add net.http.validate`
-
 Five small checks for input that arrives at a net/http handler: `Required`, `Length`, `IsEmail`, `Matches` and `Assert`. The first four take a string and return true or false, so they work anywhere, not only in handlers. `Assert` is the one that answers: when its condition is false it sends a 400 with a JSON message. For patterns beyond `Matches`, such as finding or replacing, use regex directly; for typed JSON bodies, decode with encoding/json and check the fields after.
 
 What the checks really test:
@@ -82322,8 +82432,6 @@ The example for this item is shown with the ones above: net-http-validate-Check.
 https://salamlang.github.io/Salam/std/net-http-session/
 
 User sessions over a cookie: keeping data between requests, and a CSRF token.
-
-This is an official package that does not ship with Salam. Add it to a project first: `salam add net.http.session`
 
 A session keeps each visitor's data on the server and gives the browser nothing but a random id in an `HttpOnly` cookie. Use it for logins, carts and form tokens on a site built with net/http. When the client is not a browser, or several servers must accept the same login without sharing memory, a signed token from jwt is usually the better fit.
 
@@ -82922,8 +83030,6 @@ The example for this item is shown with the ones above: net-http-session-Session
 https://salamlang.github.io/Salam/std/net-http-swagger/
 
 Writing OpenAPI documentation for an API and serving the documentation page.
-
-This is an official package that does not ship with Salam. Add it to a project first: `salam add net.http.swagger`
 
 This package writes the documentation of an HTTP API as an OpenAPI 3.1 document and serves it with a viewer page where people can read each operation and try it. Use it with an API built on net/http and net/router: client generators, API gateways and your own front-end team read the same `openapi.json`. The viewer is built into the package, so it works offline and loads nothing from a CDN.
 
@@ -83964,8 +84070,6 @@ The example for this item is shown with the ones above: net-http-swagger-Build.s
 https://salamlang.github.io/Salam/std/net-http2/
 
 The HTTP/2 protocol from the ground up: frames, HPACK header compression and streams.
-
-This is an official package that does not ship with Salam. Add it to a project first: `salam add net.http2`
 
 This package implements HTTP/2 at the protocol level: it builds and reads frames, compresses the headers with HPACK and carries several requests at once over one connection as "streams". It is not a web server or a ready client. For an ordinary web server or one-off requests use net/http, which speaks HTTP/1.1; reach for this package when you need the protocol itself, for example to talk to a service that only offers HTTP/2, to test a server, or to send many requests over one connection.
 
@@ -85832,8 +85936,6 @@ The example for this item is shown with the ones above: net-http2-Frame.salam
 https://salamlang.github.io/Salam/std/net-socketio/
 
 A Socket.IO client: events, acknowledgements, namespaces and automatic reconnection.
-
-This is an official package that does not ship with Salam. Add it to a project first: `salam add net.socketio`
 
 Socket.IO is the usual live messaging library in the Node.js world. This package is a client for Socket.IO 3 and 4 servers (Engine.IO protocol 4), over WebSocket or HTTP long polling; it has no server of its own. Use it when the other side already speaks Socket.IO, for example a Node.js chat or dashboard backend. When you control both ends and the client is a browser, a plain net/websocket server is simpler, because Socket.IO adds its own packet format on top of the WebSocket.
 
@@ -90169,8 +90271,6 @@ The example for this item is shown with the ones above: web-keys-Game.salam
 https://salamlang.github.io/Salam/std/webpush/
 
 Sending notifications to browsers from a server, with VAPID keys and the standard encryption.
-
-This is an official package that does not ship with Salam. Add it to a project first: `salam add webpush`
 
 A web push notification is a message a server sends to a user's browser even when the site is not open: a new chat message, a shipped order, a breaking news alert. This package is the server side. It makes the VAPID keys that identify your server, encrypts each message for one browser under RFC 8291 (`aes128gcm`) so the push service in between never sees its contents, signs the request, and posts it with net/http. The page side is plain JavaScript: a service worker and `pushManager.subscribe`.
 
@@ -94687,8 +94787,6 @@ https://salamlang.github.io/Salam/std/ssh/
 
 SSH connections, running a command on a server, and working with files over SFTP.
 
-This is an official package that does not ship with Salam. Add it to a project first: `salam add ssh`
-
 This package is an SSH client written in Salam and needs neither OpenSSH nor any other library. Make a `Config` with the host and the user, pick the login method, and connect with `Connect`; then run a command with `Exec`, or move files with `SftpOpen`. It suits automating deployments, backups and checks across a fleet of servers. It is a client only; for plain file transfer with an FTP server see ftp.
 
 The host key is checked against the known_hosts file, the way `ssh` itself does. The buffer and reader functions build and read the data format of the SSH protocol; an ordinary program does not need them.
@@ -94805,7 +94903,7 @@ ssh-host-keys.salam
 ```salam
 import ssh
 
-func try(mode: int, label: str):
+func attempt(mode: int, label: str):
     mut cfg := ssh.NewConfig("new-server.example.com", 22, "admin")
     ssh.WithPassword(cfg, "first-login-password")
     ssh.WithKnownHostsPath(cfg, "known_hosts")
@@ -94820,9 +94918,9 @@ func try(mode: int, label: str):
 end
 
 func main:
-    try(ssh.HOSTKEY_MODE_STRICT, "strict, empty known_hosts:")
-    try(ssh.HOSTKEY_MODE_ACCEPT_NEW, "accept-new, first time:")
-    try(ssh.HOSTKEY_MODE_STRICT, "strict, key now recorded:")
+    attempt(ssh.HOSTKEY_MODE_STRICT, "strict, empty known_hosts:")
+    attempt(ssh.HOSTKEY_MODE_ACCEPT_NEW, "accept-new, first time:")
+    attempt(ssh.HOSTKEY_MODE_STRICT, "strict, key now recorded:")
 end
 ```
 
@@ -96015,8 +96113,6 @@ https://salamlang.github.io/Salam/std/ftp/
 
 An FTP and FTPS client: listing a directory, uploading and downloading files.
 
-This is an official package that does not ship with Salam. Add it to a project first: `salam add ftp`
-
 This package connects to FTP servers, for uploading a site to shared hosting or pulling files off old equipment and suppliers' servers. Plain FTP sends the password and the data unencrypted; wherever the server supports it, use `DialTLS`, which encrypts both the commands and the data with AUTH TLS. When the server also speaks SSH, SFTP through ssh is the better choice: one encrypted connection, no separate data channel.
 
 Transfers go in passive mode (EPSV, or PASV when the server lacks it), which works from behind a firewall; active mode (`PORT`) is not offered. The parsing functions, such as `ParseListLine`, are available for writing tools of your own too.
@@ -96851,8 +96947,6 @@ https://salamlang.github.io/Salam/std/rpc/
 
 JSON-RPC 2.0 and MessagePack-RPC: a server, a client and registering methods.
 
-This is an official package that does not ship with Salam. Add it to a project first: `salam add rpc`
-
 With a remote procedure call one program calls another program's methods as if they were its own routines. On the server side you tie each method to a routine with `Register`; that routine takes the call's number, reads the parameters with `CallParamInt` and the like, and answers with `Reply...` or `Fail`.
 
 The messages are exchanged with the JSON codec (JSON-RPC 2.0) or MessagePack, and over TCP they are separated by one of three framings, line, header (like LSP) or length prefixed; the client and the server must have the same framing. `HandleText` does the same thing without a network, so you can put RPC behind an net/http route.
@@ -96908,11 +97002,11 @@ end
 Output:
 
 ```text
-{"jsonrpc": "2.0", "id": 1, "result": 1}
-{"jsonrpc": "2.0", "id": 2, "result": 2}
-{"jsonrpc": "2.0", "error": {"message": "title is required", "code": -32602}, "id": 3}
-{"jsonrpc": "2.0", "id": 4, "result": ["buy bread", "call Sara"]}
-[{"jsonrpc": "2.0", "id": 5, "result": 2}, {"jsonrpc": "2.0", "error": {"message": "Method not found", "code": -32601}, "id": 6}]
+{"jsonrpc": "2.0", "result": 1, "id": 1}
+{"jsonrpc": "2.0", "result": 2, "id": 2}
+{"jsonrpc": "2.0", "error": {"code": -32602, "message": "title is required"}, "id": 3}
+{"jsonrpc": "2.0", "result": ["buy bread", "call Sara"], "id": 4}
+[{"jsonrpc": "2.0", "result": 2, "id": 5}, {"jsonrpc": "2.0", "error": {"code": -32601, "message": "Method not found"}, "id": 6}]
 adds a todo and returns how many there are
 ```
 
@@ -97354,22 +97448,22 @@ end
 Output:
 
 ```text
-{"jsonrpc": "2.0", "id": 1, "method": "calc", "params": [2, "hello", 1.5, true]}
+{"jsonrpc": "2.0", "method": "calc", "params": [2, "hello", 1.5, true], "id": 1}
 4 2 hello
 1.5 true false
 2 2
-{"jsonrpc": "2.0", "id": "req-1", "method": "greet", "params": {"name": "Ali"}}
+{"jsonrpc": "2.0", "method": "greet", "params": {"name": "Ali"}, "id": "req-1"}
 Ali
 true {"jsonrpc": "2.0", "method": "tick", "params": []}
 true add 9 2
-{"jsonrpc": "2.0", "id": 1, "result": "ok"}
+{"jsonrpc": "2.0", "result": "ok", "id": 1}
 -32601 Method not found
-{"jsonrpc": "2.0", "error": {"message": "the server is busy", "code": -32000}, "id": 2}
-true {"jsonrpc": "2.0", "error": {"message": "Parse error", "code": -32700}, "id": null}
+{"jsonrpc": "2.0", "error": {"code": -32000, "message": "the server is busy"}, "id": 2}
+true {"jsonrpc": "2.0", "error": {"code": -32700, "message": "Parse error"}, "id": null}
 true 3.5 false
 true -32601 nope
 true 2 true x
-[{"jsonrpc": "2.0", "id": 1, "result": true}, {"jsonrpc": "2.0", "id": 2, "result": "x"}]
+[{"jsonrpc": "2.0", "result": true, "id": 1}, {"jsonrpc": "2.0", "result": "x", "id": 2}]
 json-rpc-2.0 msgpack-rpc
 true true
 26 148
@@ -97378,7 +97472,7 @@ calc
 42 true
 42 true
 true
-{"jsonrpc": "2.0", "error": {"message": "Method not found", "code": -32601}, "id": null}
+{"jsonrpc": "2.0", "error": {"code": -32601, "message": "Method not found"}, "id": null}
 0 1 2
 -32600 -32603 -32000
 1 2 3
@@ -97498,18 +97592,18 @@ Output:
 ```text
 7 true adds two numbers
 7
-{"jsonrpc": "2.0", "id": 1, "result": 42}
-{"jsonrpc": "2.0", "id": 2, "result": 11}
-{"jsonrpc": "2.0", "error": {"message": "division by zero", "code": -32602}, "id": 3}
-{"jsonrpc": "2.0", "id": "x", "result": "hello Maryam"}
-{"jsonrpc": "2.0", "error": {"message": "a name is needed", "code": -32001}, "id": 4}
-{"jsonrpc": "2.0", "id": 5, "result": ["status", 1, true]}
-{"jsonrpc": "2.0", "error": {"message": "you are not allowed", "code": -32003, "data": "admin"}, "id": 6}
-{"jsonrpc": "2.0", "error": {"message": "Method not found", "code": -32601}, "id": 7}
+{"jsonrpc": "2.0", "result": 42, "id": 1}
+{"jsonrpc": "2.0", "result": 11, "id": 2}
+{"jsonrpc": "2.0", "error": {"code": -32602, "message": "division by zero"}, "id": 3}
+{"jsonrpc": "2.0", "result": "hello Maryam", "id": "x"}
+{"jsonrpc": "2.0", "error": {"code": -32001, "message": "a name is needed"}, "id": 4}
+{"jsonrpc": "2.0", "result": ["status", 1, true], "id": 5}
+{"jsonrpc": "2.0", "error": {"code": -32003, "message": "you are not allowed", "data": "admin"}, "id": 6}
+{"jsonrpc": "2.0", "error": {"code": -32601, "message": "Method not found"}, "id": 7}
 event: start true
 0
-[{"jsonrpc": "2.0", "id": 8, "result": true}, {"jsonrpc": "2.0", "id": 9, "result": 2}]
-{"jsonrpc": "2.0", "error": {"message": "Parse error", "code": -32700}, "id": null}
+[{"jsonrpc": "2.0", "result": true, "id": 8}, {"jsonrpc": "2.0", "result": 2, "id": 9}]
+{"jsonrpc": "2.0", "error": {"code": -32700, "message": "Parse error"}, "id": null}
 42
 1
 true false
@@ -98986,8 +99080,6 @@ The example for this item is shown with the ones above: rpc-Messages.salam
 https://salamlang.github.io/Salam/std/grpc/
 
 A gRPC server and client over HTTP/2: unary and streaming calls, metadata and status codes.
-
-This is an official package that does not ship with Salam. Add it to a project first: `salam add grpc`
 
 gRPC is a way of calling a remote procedure that runs over HTTP/2, and it is common in microservices. On the server side you register each method under its path, like `/demo.Greeter/SayHello`; the method routine reads the client's message with `Recv`, answers with `Send` and ends it with `SetStatus` or `Fail`.
 
@@ -103019,8 +103111,6 @@ https://salamlang.github.io/Salam/std/db-sqlite/
 
 An SQLite database in one file or in memory.
 
-This is an official package that does not ship with Salam. Add it to a project first: `salam add db.sqlite`
-
 SQLite is a database that fits in one file and needs no server; for desktop programs, tools and a great many websites it is enough. The program links against the system's sqlite3 library, so that library has to be installed where it runs (it is on almost every Linux and macOS system already).
 
 There are two ways to work: the functions of this package, such as `Query` and `Next`, which reach everything SQLite offers; or the database and row methods and `Conn`, which is the shared interface of db. Send user values through `Prepare` and the `Bind...` functions, not by pasting them into the SQL text.
@@ -104810,8 +104900,6 @@ https://salamlang.github.io/Salam/std/db-mysql/
 
 Connecting to MySQL and MariaDB.
 
-This is an official package that does not ship with Salam. Add it to a project first: `salam add db.mysql`
-
 This package speaks the MySQL and MariaDB client protocol itself and needs no outside library: there is no `libmysqlclient` to install and nothing to link. It logs in with `mysql_native_password` or `caching_sha2_password`, encrypts the connection with TLS whenever the server offers it, and asks for `utf8mb4` during the handshake, so Persian text and emoji work from the first query. The functions follow the shape of the C API (`Open`, `Exec`, `Query`, `Next`, `Finish`), and `Conn` turns a connection into the shared `Connection` of db, so code written against that interface also runs on SQLite and PostgreSQL. This page starts with a tutorial; the reference of every function comes after it.
 
 ## Tutorial: a small bookshop in eleven steps
@@ -106462,8 +106550,6 @@ https://salamlang.github.io/Salam/std/db-postgres/
 
 A PostgreSQL client written in Salam: connection strings and URIs, TLS, queries, transactions, pools and migrations.
 
-This is an official package that does not ship with Salam. Add it to a project first: `salam add db.postgres`
-
 This package talks to PostgreSQL directly: it implements the Postgres wire protocol in Salam itself, with password, MD5 and SCRAM-SHA-256 logins and optional TLS, so it needs no `libpq` or any other outside library. Every row of a result is fetched from the server at once, so `RowCount` is known before you read any of them. A `Database` also fits the shared `Connection` interface of db, which gives you engine neutral helpers, connection pools and migrations. This page starts with a tutorial; the full reference of every function and type comes after it.
 
 ## Tutorial: a bookshop in eleven steps
@@ -106982,7 +107068,7 @@ db-postgres-errors.salam
 import db.postgres
 import str
 
-func try(d: postgres.Database, sql: str):
+func attempt(d: postgres.Database, sql: str):
     if postgres.Exec(d, sql) != 0:
         print postgres.Error(d)
     end
@@ -106992,10 +107078,10 @@ func main:
     d := postgres.Open("host=127.0.0.1 user=postgres password=secret dbname=bookshop")
     defer postgres.Close(d)
 
-    try(d, "INSERT INTO books (title, author, price) VALUES ('Dune', 'Someone', 5)")
-    try(d, "UPDATE books SET stock = stock - 50 WHERE id = 1")
-    try(d, "INSERT INTO orders (customer, book_id, qty, total) VALUES ('Omid', 99, 1, 1)")
-    try(d, "SELEC title FROM books")
+    attempt(d, "INSERT INTO books (title, author, price) VALUES ('Dune', 'Someone', 5)")
+    attempt(d, "UPDATE books SET stock = stock - 50 WHERE id = 1")
+    attempt(d, "INSERT INTO orders (customer, book_id, qty, total) VALUES ('Omid', 99, 1, 1)")
+    attempt(d, "SELEC title FROM books")
 
     r := postgres.Query(d, "SELECT nope FROM books")
     println "query ok:", r.Ok(), "rows:", r.RowCount(), "next:", r.Next()
@@ -107956,8 +108042,6 @@ The example for this item is shown with the ones above: db-postgres-Client.salam
 https://salamlang.github.io/Salam/std/db-redis/
 
 A Redis client: keys and values, hashes, lists, sets and publishing.
-
-This is an official package that does not ship with Salam. Add it to a project first: `salam add db.redis`
 
 Redis is an in memory database for caches, sessions, counters, queues and leaderboards. This package speaks the Redis protocol directly over a socket, with no outside library: one function per common command for strings, hashes, lists and sets, plus `Command`, which sends any other command with its arguments and hands back the raw reply. This page starts with a tutorial; the full reference of every function and type comes after it.
 
@@ -109561,8 +109645,6 @@ The example for this item is shown with the ones above: db-redis-Client.salam
 https://salamlang.github.io/Salam/std/db-typesense/
 
 A Typesense client: collections, documents, typo tolerant, faceted, grouped, vector and union search, synonyms, curation, API keys, analytics and clusters.
-
-This is an official package that does not ship with Salam. Add it to a project first: `salam add db.typesense`
 
 Typesense is an open source search engine with typo tolerance, filters, facets, grouping, vector and hybrid search. This package speaks its HTTP API directly with `net.http` and covers all of it: collections and their fields, documents one at a time or in bulk JSONL imports and exports, every search parameter, multi search and union search, synonym sets and curation sets, presets, stopwords, stemming dictionaries, API keys and scoped search keys signed with no request, analytics rules and events, conversation (RAG) models, natural language search models and the cluster operations. The examples need a running server, so they are only checked.
 
@@ -113273,8 +113355,6 @@ https://salamlang.github.io/Salam/std/db-elasticsearch/
 
 An Elasticsearch and OpenSearch client: documents, search, aggregations, bulk, SQL and index management.
 
-This is an official package that does not ship with Salam. Add it to a project first: `salam add db.elasticsearch`
-
 Elasticsearch is a search engine and document store spoken to with JSON over HTTP. This package is written in Salam on top of `net.http` and `tls`, with no outside library. It works with Elasticsearch 7 and 8, Elastic Cloud (`ConnectCloud`) and OpenSearch; SQL and point in time calls switch to the OpenSearch endpoints by themselves. A client keeps one connection open per node and can list several nodes: it rotates over them, skips a node that refuses connections for `DEAD_NODE_MS`, and retries on 502, 503 and 504. Documents and query clauses are plain JSON text, so you can mix the builders here with JSON you write by hand, and `Perform` reaches every API that has no function of its own. After any call, `Error`, `ErrorType` and `Status` describe what the server said. The examples need a running cluster, so they are only checked.
 
 ## Tutorial: Search with Elasticsearch
@@ -116571,8 +116651,6 @@ The example for this item is shown with the ones above: db-elasticsearch-Client.
 https://salamlang.github.io/Salam/std/db-meilisearch/
 
 A Meilisearch client: indexes, documents, full text, faceted, hybrid and federated search, settings, tasks and API keys.
-
-This is an official package that does not ship with Salam. Add it to a project first: `salam add db.meilisearch`
 
 Meilisearch is a fast search engine with typo tolerance, filters, facets and AI powered hybrid search. This package talks to its HTTP API directly with `net.http` and covers all of it: indexes, documents in JSON, NDJSON or CSV, every search parameter, multi-search and federated search, facet search, similar documents, every index setting, tasks and batches, API keys and tenant tokens, webhooks, dynamic search rules and chat workspaces. This page starts with a tutorial; the full reference of every function and type comes after it.
 
@@ -120156,8 +120234,6 @@ https://salamlang.github.io/Salam/std/db-opensearch/
 
 An OpenSearch client: documents, bulk, the query DSL, aggregations, scroll and point in time, index admin, SQL and PPL, k-NN vector search, ISM, security and AWS signing.
 
-This is an official package that does not ship with Salam. Add it to a project first: `salam add db.opensearch`
-
 OpenSearch is an open source search and analytics engine. This package speaks its REST API directly over `net.tcp` and `tls`, with no outside library: several nodes with retries and dead node skipping, basic, bearer and AWS SigV4 authentication (for Amazon OpenSearch Service and Serverless), and TLS with your own CA file or, for a test server, no verification. On top of that it covers documents, bulk, every common query and aggregation, scroll and point in time paging, index, alias, template and data stream admin, cluster, task, snapshot and pipeline admin, and the plugins that make OpenSearch what it is: SQL and PPL, k-NN and neural search, hybrid search pipelines, ISM policies, the security plugin, alerting monitors and ML Commons.
 
 Queries, aggregations and request bodies are plain JSON text: the builders such as `Match`, `BoolOf` and `TermsAgg` return it, and anything they do not cover can be written as a backtick string. Results come back as Salam structs whose JSON parts (a hit's source, the aggregations) are raw text you read with `Buckets`, `AggValue` and `JsonPath`. Every call records its status and error on the client, so read `Error` or `ErrorType` after a call that returned false. `Conn` boxes a client as a `db.Connection`, so SQL code written for the other engines can query OpenSearch too. For a route with no function of its own, use `Perform`. Only the examples for the query builders and request signing run here; the others need a server, so they are only checked.
@@ -120172,7 +120248,7 @@ You give OpenSearch documents as JSON, and it finds the ones that match a query,
 
 Every example that talks to a cluster expects one at `http://localhost:9200`. The quickest way to get one is Docker: `docker run -p 9200:9200 -e discovery.type=single-node -e DISABLE_SECURITY_PLUGIN=true opensearchproject/opensearch:2.17.1`. There is no server behind this page, so those examples are checked by the compiler and show the output they printed when run, in order, against a real OpenSearch 2.17.1. The ones that only build requests or read answers are run every time the site is built.
 
-The package is an official package, not part of the standard library: add it to your project with `salam add db.opensearch` first. Then import it as `db.opensearch` and call it as `opensearch`.
+Import the package as `db.opensearch` and call it as `opensearch`.
 
 ## Connecting
 
@@ -125472,8 +125548,6 @@ https://salamlang.github.io/Salam/std/graphql/
 
 A GraphQL server: schemas, resolvers, query execution and HTTP handling.
 
-This is an official package that does not ship with Salam. Add it to a project first: `salam add graphql`
-
 GraphQL is a language for asking an API for data: the client asks for exactly the fields it needs and the server sends back just those. This package is a complete server side implementation of the specification. Write the schema as SDL text and pass it to `ParseSchema`, or build it with the `Add...` functions, register resolvers for the fields and run a query with `ExecuteSource`.
 
 A resolver is a function that takes a slot number; it reads the arguments and the parent object with `ArgStr`, `ParentField` and their siblings, and answers with one of the `Resolve...` functions or with `Fail`. A field without a resolver takes the value of the same name from the parent object. For a web server, call `HandleHttpSimple` inside a net/http handler.
@@ -126409,7 +126483,7 @@ end
 Output:
 
 ```text
-{"operationName": "Sum", "variables": {"x": 40}, "query": "query Sum($x: Int!) { add(a: $x, b: 2) }"}
+{"query": "query Sum($x: Int!) { add(a: $x, b: 2) }", "operationName": "Sum", "variables": {"x": 40}}
 200 {"data": {"add": 42}}
 true true 42
 {"data": {"me": "guest (Query.me)"}}
@@ -126725,12 +126799,12 @@ id 1 0
 title 2 0
 true
 {
+  "data": {
+    "names": "{\"a\": true, \"b\": 1.5, \"o\": {\"x\": 3}, \"v\": 42}",
+    "book": null
+  },
   "extensions": {
     "ms": 3
-  },
-  "data": {
-    "book": null,
-    "names": "{\"a\": true, \"b\": 1.5, \"v\": 42, \"o\": {\"x\": 3}}"
   }
 }
 ```
@@ -128705,8 +128779,6 @@ https://salamlang.github.io/Salam/std/google/
 
 Google service account authentication for the Google APIs.
 
-This is an official package that does not ship with Salam. Add it to a project first: `salam add google`
-
 Server programs reach the Google APIs through a "service account". Get the account JSON file from the Google console, read it with `ParseServiceAccount`, and get a token for the scope you need with `AccessToken`; then send it in your net/http requests with `Authorization`. Keep the service account file as carefully as a password.
 
 The package does one job: it signs a JWT with the account's RSA key (RS256), trades it at Google's token endpoint for an OAuth access token, and keeps that token for reuse. The calls to the APIs themselves are ordinary HTTP requests that you write. For Web Push to browsers without Firebase, see webpush.
@@ -129029,8 +129101,6 @@ The example for this item is shown with the ones above: google-Account.salam
 https://salamlang.github.io/Salam/std/telegram-bot/
 
 Building a bot with the Bot API: messages, buttons, webhooks and a polling loop.
-
-This is an official package that does not ship with Salam. Add it to a project first: `salam add telegram.bot`
 
 To build a bot, get a token from BotFather and make one with `NewBot`. A bot has two ways of taking messages: `Poll`, which asks Telegram itself and suits testing and simple servers, or a webhook, where Telegram POSTs the messages to your server.
 
@@ -131112,8 +131182,6 @@ The example for this item is shown with the ones above: node-Calls.salam
 https://salamlang.github.io/Salam/std/aws/
 
 Amazon S3, SQS and STS, and any S3 compatible service, with Signature Version 4.
-
-This is an official package that does not ship with Salam. Add it to a project first: `salam add aws`
 
 This package works with Amazon S3 and any storage compatible with it without the official SDK, including MinIO, Cloudflare R2, DigitalOcean Spaces, Wasabi, Backblaze and any other S3 compatible cloud storage. Build the configuration with `ForAws` or `ForEndpoint` and hand it the keys with `WithCredentials`, or let the package find them itself with `FromEnvironment` and `ResolveConfig`.
 
@@ -137782,8 +137850,6 @@ https://salamlang.github.io/Salam/std/optim/
 
 Neural network optimisers: SGD, Adam, RMSProp and learning rate schedules.
 
-This is an official package that does not ship with Salam. Add it to a project first: `salam add optim`
-
 An optimiser turns gradients into better parameters. This package has the three that cover almost all neural network training (`SGD` with optional momentum, `Adam` and AdamW, `RMSProp`), gradient clipping, and learning rate schedules. It works on the parameters of an nn `ParamStore` whose gradients autograd has filled in. For classical models that train themselves, such as linear regression, trees or k-means, use ml instead.
 
 Every training loop has the same five steps:
@@ -138281,8 +138347,6 @@ The example for this item is shown with the ones above: optim-Train.salam
 https://salamlang.github.io/Salam/std/onnx/
 
 Reading and running ONNX models with no outside dependency.
-
-This is an official package that does not ship with Salam. Add it to a project first: `salam add onnx`
 
 ONNX is the common exchange format for trained machine learning models. Train in PyTorch, TensorFlow or scikit-learn, export to `.onnx` once, and this package runs the model inside a Salam program with no Python and no ONNX Runtime library. `LoadOnnx` reads the file, `Run` computes the outputs from your input tensors, and the results are ordinary tensor values.
 
@@ -138787,8 +138851,6 @@ The example for this item is shown with the ones above: onnx-Run.salam
 https://salamlang.github.io/Salam/std/gguf/
 
 Reading GGUF model files, the llama.cpp format.
-
-This is an official package that does not ship with Salam. Add it to a project first: `salam add gguf`
 
 GGUF is the file format of llama.cpp for large language models. One file holds the metadata (the architecture, the sizes, the tokenizer vocabulary, the chat template) and every weight, usually quantized to 8 or 4 bits. This package reads such a file: `LoadGguf` parses the header and the tensor list, `meta_int` and `meta_str` read the metadata, and `LoadTensorF32` turns one weight into a tensor of 32 bit floats when you need it.
 
@@ -139392,8 +139454,6 @@ https://salamlang.github.io/Salam/std/webview/
 
 A desktop program with an HTML interface in a native window.
 
-This is an official package that does not ship with Salam. Add it to a project first: `salam add webview`
-
 This package opens a native desktop window with the browser engine the operating system already has in it: WebView2 on Windows, WKWebView on macOS and WebKitGTK on Linux. You write the interface in HTML, CSS and JavaScript, show it with `SetHTML` or `Navigate`, and `Run` keeps the window open until the user closes it. The program stays one native executable with no browser to bundle.
 
 Use it for a small desktop tool, a viewer for data your program computed, or a native window around a web interface your program serves. For pages that run in the user's own browser, see dom; to generate the HTML, see template.
@@ -139720,8 +139780,6 @@ The example for this item is shown with the ones above: webview-Window.salam
 https://salamlang.github.io/Salam/std/tensor/
 
 Multi dimensional arrays and numeric operations for machine learning.
-
-This is an official package that does not ship with Salam. Add it to a project first: `salam add tensor`
 
 A tensor is a multi dimensional array of numbers: a vector is one dimensional, a matrix two, and a batch of images four. The data is 32 bit floats in row order. The `+`, `-`, `*` and `/` operators work element by element and take tensors of the same shape, or shapes that broadcast.
 
@@ -141827,8 +141885,6 @@ https://salamlang.github.io/Salam/std/autograd/
 
 Reverse mode automatic differentiation for training models.
 
-This is an official package that does not ship with Salam. Add it to a project first: `salam add autograd`
-
 Training a model means lowering the loss with gradients. This package records every computation on a `Tape`, and `Backward` works out the gradient of the loss for every input. The functions return a node index rather than a tensor; read the value with `Value` and the gradient with `Grad`.
 
 Use it directly for a custom loss, a new layer or any function you need the slope of. For ordinary networks, the ready made layers are in nn and the optimisers in optim; both sit on top of this package. The values themselves are tensors.
@@ -142797,8 +142853,6 @@ The example for this item is shown with the ones above: autograd-Layers.salam
 https://salamlang.github.io/Salam/std/nn/
 
 Neural network layers: linear, convolutional, recurrent, transformer, and checkpoints.
-
-This is an official package that does not ship with Salam. Add it to a project first: `salam add nn`
 
 This package has the ready made layers for building a neural network in Salam: linear, convolution, pooling, normalization, embedding, LSTM and GRU, attention and transformer blocks, plus weight initializers and checkpoints. The weights of every layer live in one `ParamStore`. Make each layer with a `New...` function and a unique name, and call its `forward` on the autograd tape at every step. `Sequential` runs several layers one after the other. Training itself is done by optim.
 
@@ -144037,8 +144091,6 @@ The example for this item is shown with the ones above: nn-Layers.salam
 https://salamlang.github.io/Salam/std/llm/
 
 Running Llama and Qwen language models from a GGUF file.
-
-This is an official package that does not ship with Salam. Add it to a project first: `salam add llm`
 
 This package runs large language models of the Llama family on the processor, in pure Salam with no outside library. Download a model in GGUF form, read it with `LoadGgufModel` and make text with `Generate`, or drive the loop yourself with `Forward` and a `Sampler` (temperature, top-k, top-p and a repetition penalty).
 
@@ -155745,8 +155797,6 @@ https://salamlang.github.io/Salam/std/ml/
 
 Classic machine learning: preprocessing, regression, classification, trees, clustering and evaluation.
 
-This is an official package that does not ship with Salam. Add it to a project first: `salam add ml`
-
 This package gives you the classic machine learning algorithms behind an interface much like scikit-learn. The data is a matrix where each row is a sample and each column a feature, and the labels are a one-column matrix. Every model is a struct: build it with its parameters, train it with `fit` and use it with `predict`.
 
 Before training, prepare the data with `StandardScaler` and `SimpleImputer` and split it with `TrainTestSplit`; after that, measure the model with metrics such as `Accuracy`, `F1` and `R2Score`, and pick the parameters with `GridSearch`. For neural networks see nn; for a trained model from Python, onnx.
@@ -159456,8 +159506,6 @@ https://salamlang.github.io/Salam/std/opencv/
 
 Computer vision with OpenCV: image processing, features, face detection, neural networks and video.
 
-This is an official package that does not ship with Salam. Add it to a project first: `salam add opencv`
-
 This package binds the OpenCV library and gives most of the everyday computer vision work: color conversion, resizing, filters, edge detection and thresholds, contours, ORB and SIFT features, face detection with a cascade classifier, running DNN networks, and reading and writing video and camera frames.
 
 Use it for real computer vision: finding objects, matching features, reading camera frames, running a detection network. For thumbnails, drawing, text on images and format conversion with no outside library, the image package is enough. To run a model file without OpenCV, see onnx.
@@ -159476,11 +159524,11 @@ The examples need OpenCV, so the site only type-checks them.
 
 ## Set up OpenCV
 
-The package talks to OpenCV 4 through a small C++ shim, `salam_opencv_shim`, that lives in `packages/opencv/native` of the Salam repository. On Debian or Ubuntu, install OpenCV and the build tools, build the shim, and let the loader find it:
+The package talks to OpenCV 4 through a small C++ shim, `salam_opencv_shim`, that lives in `std/opencv/native` of the Salam repository. On Debian or Ubuntu, install OpenCV and the build tools, build the shim, and let the loader find it:
 
 ```salam
 sudo apt install libopencv-dev cmake g++
-cd packages/opencv
+cd std/opencv
 cmake -S native -B native/build -DCMAKE_BUILD_TYPE=Release
 cmake --build native/build --config Release
 export LD_LIBRARY_PATH=$PWD/native/build:$LD_LIBRARY_PATH
@@ -161660,8 +161708,6 @@ https://salamlang.github.io/Salam/std/audio/
 
 Sound as a clip of samples: cutting, mixing, measuring and converting it.
 
-This is an official package that does not ship with Salam. Add it to a project first: `salam add audio`
-
 This package is the middle of everything to do with sound in Salam. A `Clip` holds the sound itself: plain 32 bit floating point samples between -1 and 1, one frame after another, with the channels side by side. Reading and writing files is the job of the format packages, audio/wav today, and audio/codec opens any of them without being told which. Filters, a Fourier transform and careful resampling live in audio/dsp.
 
 What is here is the clip and everything that does not need to know a file format: cutting, joining, mixing, fading, measuring how loud something is, moving between mono and stereo and between sample rates, and the most significant bit first bitstream reader that every audio codec is written on top of.
@@ -163146,8 +163192,6 @@ https://salamlang.github.io/Salam/std/audio-wav/
 
 Reading and writing WAVE files: PCM, floating point, A-law and mu-law.
 
-This is an official package that does not ship with Salam. Add it to a project first: `salam add audio.wav`
-
 WAVE is the format to reach for when nothing should be lost. It is a RIFF container holding a `fmt ` chunk that says what the samples are and a `data` chunk holding them, and this package reads and writes it without any outside library.
 
 Integer samples at 8, 16, 24 and 32 bits are all handled, as are IEEE floating point samples and the two eight bit companding schemes from telephony, A-law and mu-law. `OpenWAV` and `SaveWAV` are the short way in; audio/codec is shorter still when you do not want to name the format at all.
@@ -163560,8 +163604,6 @@ The example for this item is shown with the ones above: wav-Write.salam
 https://salamlang.github.io/Salam/std/audio-dsp/
 
 A Fourier transform, windows, filters and resampling for sound.
-
-This is an official package that does not ship with Salam. Add it to a project first: `salam add audio.dsp`
 
 This is the arithmetic behind sound: a Fourier transform to see what frequencies are in a block, windows to taper the block first, filters to shape it and resampling to move it between rates. The codecs in this family lean on the same code, which is why it lives here rather than inside any one of them.
 
@@ -164855,8 +164897,6 @@ https://salamlang.github.io/Salam/std/audio-codec/
 
 Open and save a sound file without naming its format.
 
-This is an official package that does not ship with Salam. Add it to a project first: `salam add audio.codec`
-
 This package is the one call that does not care what format a file is in. `Open` reads the first bytes, works out the format and hands back a clip; `Save` looks at the extension and writes the right thing. `Probe` and `ProbeFile` do the same for a header alone.
 
 It sits in its own package for a plain reason: audio cannot import the format packages, because they import it. So the sniffing lives in `audio`, where it needs nothing, and the dispatch lives here, where it can reach every codec.
@@ -165054,8 +165094,6 @@ The example for this item is shown with the ones above: codec-Open.salam
 https://salamlang.github.io/Salam/std/audio-aiff/
 
 Reading and writing AIFF and AIFF-C files.
-
-This is an official package that does not ship with Salam. Add it to a project first: `salam add audio.aiff`
 
 AIFF is the big-endian cousin of WAVE: the same idea of a chunked container, written the other way round because it came from the Motorola side of the world. AIFF-C adds a compression tag, and this package reads the ones that matter: plain PCM, the little-endian `sowt` variant Apple tools write, IEEE floating point, and A-law and mu-law.
 
@@ -165289,8 +165327,6 @@ The example for this item is shown with the ones above: aiff-Read.salam
 https://salamlang.github.io/Salam/std/audio-au/
 
 Reading and writing the Sun and NeXT au format.
-
-This is an official package that does not ship with Salam. Add it to a project first: `salam add audio.au`
 
 The au format is the simplest real sound file there is: a 24 byte big-endian header and then the samples. It came from Sun, it is what `/dev/audio` spoke, and it is still a pleasant way to hand raw audio between programs because there is almost nothing to get wrong.
 
@@ -165532,8 +165568,6 @@ The example for this item is shown with the ones above: au-Read.salam
 https://salamlang.github.io/Salam/std/audio-flac/
 
 Lossless compression: reading and writing FLAC.
-
-This is an official package that does not ship with Salam. Add it to a project first: `salam add audio.flac`
 
 FLAC is lossless: what comes out is exactly what went in, and the file is usually a little over half the size of the same sound as 16 bit PCM. This package reads and writes it without any outside library.
 
@@ -166001,8 +166035,6 @@ The example for this item is shown with the ones above: flac-Write.salam
 https://salamlang.github.io/Salam/std/audio-tag/
 
 Reading and writing the tags on a song: title, artist, album and cover art.
-
-This is an official package that does not ship with Salam. Add it to a project first: `salam add audio.tag`
 
 A sound file carries more than sound. This package reads and writes the part that says what the music is: the title, who played it, which album it came from, and the picture on the cover.
 
@@ -166495,8 +166527,6 @@ The example for this item is shown with the ones above: tag-Flac.salam
 https://salamlang.github.io/Salam/std/audio-music/
 
 Notes, scales, chords and tunings, Persian dastgah among them.
-
-This is an official package that does not ship with Salam. Add it to a project first: `salam add audio.music`
 
 This package is the arithmetic of music rather than of sound: what a note is, which notes belong together, and what frequency each one wants. It makes no sound itself, which audio/synth does.
 
@@ -166992,8 +167022,6 @@ https://salamlang.github.io/Salam/std/audio-synth/
 
 Making sound from nothing: oscillators, envelopes and voices.
 
-This is an official package that does not ship with Salam. Add it to a project first: `salam add audio.synth`
-
 Everything else in this family reads sound that already exists. This package makes it. Six waveforms, an envelope to shape a note, three colours of noise, and four ways of building a voice that sounds like something rather than like a test tone.
 
 The quickest way in is `Tone` for a bare waveform or `ToneEnvelope` for a note that starts and stops the way an instrument does. To play a phrase, fill a vector of `Note` and hand it to `RenderNotes`, which mixes and pans them into one clip.
@@ -167380,8 +167408,6 @@ The example for this item is shown with the ones above: synth-Voice.salam
 https://salamlang.github.io/Salam/std/audio-midi/
 
 Reading, writing and playing standard MIDI files.
-
-This is an official package that does not ship with Salam. Add it to a project first: `salam add audio.midi`
 
 A MIDI file holds notes, not sound: which note, when, how hard and on what instrument. That makes it tiny, and it makes it editable in a way a recording is not.
 
@@ -167863,8 +167889,6 @@ https://salamlang.github.io/Salam/std/audio-mp3/
 
 Reading the frames, headers and VBR tags of an mp3 file.
 
-This is an official package that does not ship with Salam. Add it to a project first: `salam add audio.mp3`
-
 An mp3 file is a run of frames, each with a header saying how it is coded and how long it is. This package reads those headers, so you can tell what a file is, how long it lasts, how many frames it holds and where in it a given second falls, all without decoding any sound.
 
 That covers everything a library listing, a player's seek bar or a tag editor needs. Every MPEG version and layer is parsed, including the MPEG-2 and 2.5 half and quarter sample rates, and the Xing, Info and VBRI headers that say how long a variable bit rate file really is.
@@ -168204,3 +168228,719 @@ func ProbeFileMP3(path: str, ok &: bool): audio.Info
 The same from a path.
 
 The example for this item is shown with the ones above: mp3-Read.salam
+
+
+---
+
+# net/httpd
+
+https://salamlang.github.io/Salam/std/net-httpd/
+
+A web server driven by a config file: several sites on one port, locations, redirects, caching and static files.
+
+This package runs several websites from one process and one set of ports, the job people give to nginx in front of their programs. You describe the sites in a config file, load it, and call `Run`. The command `salam serve --config=web.salam` does exactly that, and `--test` checks the file without starting anything.
+
+The config is written in the same block style as the rest of Salam: a setting is `name = value`, a block opens with `name:` and closes with `end`, comments start with `//`, and a setting and its value stay on one line. Strings are in double quotes, or in backticks when they hold backslashes, like a regular expression.
+
+```salam
+server:
+    log: access = "/var/log/salam/access.log" end
+    site:
+        listen = 80
+        names = "example.com www.example.com"
+        root = "/srv/example/public"
+        index = "index.html"
+        error page = 404 "404.html"
+        location "/assets/": cache = 30d end
+        location "= /health": return = 200 "ok" end
+        location "/old/": redirect = "https://example.com$uri" code = 301 end
+    end
+    site:
+        names = "blog.example.com *.blog.example.com"
+        root = "/srv/blog"
+    end
+end
+```
+
+Two sites on the same port are told apart by the `Host` header. An exact name wins over a `*.example.com` wildcard, and a request for a name nobody listed goes to the site marked `default = true`, or else to the first site on that port. A site that does not say `listen` listens on port 80; `listen = "127.0.0.1:8080"` picks the address too.
+
+Inside a site, the request path is matched against its `location` blocks the way nginx does it:
+
+- `location "= /health"`: this exact path, and nothing else is tried.
+
+- `location "/assets/"`: any path starting with it; the longest prefix is remembered.
+
+- `location "^~ /static/"`: a prefix that also stops the regular expressions from being tried.
+
+- `location "~ \.php$"` and `"~* \.png$"`: a regular expression (the second ignores case), tried in file order after the prefixes; the first hit wins, and otherwise the longest prefix is used.
+
+The settings of a site, and of a location unless noted:
+
+| Setting | Meaning |
+| --- | --- |
+| `listen = 80` (site) | The port, optionally with an address: `listen = "0.0.0.0:8080"`. It can be repeated. |
+| `names = "a.com b.com"` (site) | The host names of the site; `*.a.com` matches any subdomain. |
+| `default = true` (site) | This site answers names no site claims. |
+| `root = "/srv/site"` | The folder the request path is appended to. A location with its own `root` replaces the site's. |
+| `alias = "/srv/files"` (prefix location) | The folder that replaces the matched prefix: with `location "/dl/": alias = "/srv/files" end`, `/dl/a.zip` is `/srv/files/a.zip`. |
+| `index = "index.html index.htm"` | The files tried for a folder, in order. The default is `index.html`. |
+| `return = 200 "ok"` | Answers at once with a status and an optional text. |
+| `redirect = "https://$host$request_uri"`, `code = 301` | Redirects. The code defaults to 301. The variables are `$host`, `$uri`, `$args`, `$request_uri` and `$scheme`. At the site level it applies to every request, before any location. |
+| `cache = 30d` | Sends `Cache-Control: public, max-age=...` with the files. Units: `s`, `m`, `h`, `d`, `w`, `y`. |
+| `header = "Name" "value"` | Adds a response header. Site headers go on every answer, location headers only on that location's. |
+| `error page = 404 "404.html"` | The file, relative to the root, sent with that error status. |
+
+The `log:` block takes `access = "path"`, where the path can also be `"stdout"` or `"stderr"`. Each line has the time, the host, the method, the path and the status.
+
+The things people get wrong:
+
+- Files are only read from the `root` of the matched site. The path is cleaned first, so `..` cannot climb out of it, and any file or folder whose name starts with a dot, such as `.env` or `.git`, is answered with 404. `.well-known` is allowed.
+
+- Every file goes out with an `ETag` and a `Last-Modified` header. A request with a matching `If-None-Match` or a recent enough `If-Modified-Since` gets 304 and no body, and a single `Range: bytes=a-b` (also `a-` and `-n`) gets 206 with the part; a range outside the file gets 416. `If-Range` is honoured with the ETag. Several ranges in one request are answered with the whole file.
+
+- Only GET and HEAD are answered for files; anything else gets 405 with an `Allow` header.
+
+- Names and values are checked when the file is loaded: a misspelled setting, a port out of range, a missing root folder, a bad regular expression or two sites with the same name on one port is reported with its line and column, and a close name is suggested. Nothing is started from a file with problems.
+
+- `listen = 443 tls` is read but refused for now; HTTPS arrives in a later release, so put a TLS terminator in front until then.
+
+- The package keeps one loaded configuration for the process. Loading again replaces it, but a running server keeps the sites it started with.
+
+- The settings, the sites and the locations are plain data, so a config that loads is a config that runs; everything that can be wrong about the file is found by `Check` or `LoadText`, not on the first request.
+
+Related packages: net/http is the server underneath, net/router holds the routes, and net/httpd/conf is the parser that reads the file.
+
+## Functions
+
+### `SiteFor`
+
+```salam
+func SiteFor(host: str, port: int): int
+```
+
+The index of the site that answers a host name on a port, or -1 when none does. The name is lower-cased and a trailing port or dot is ignored. An exact name wins over a wildcard, and a name nobody listed falls back to the default site of that port.
+
+net-httpd-Match.salam
+
+```salam
+import net.httpd
+
+func main:
+    text := `
+server:
+    site:
+        listen = 8080
+        names = "example.test *.example.test"
+        location "/assets/": cache = 30d end
+        location "= /health": return = 200 "ok" end
+        location "^~ /static/": cache = 1h end
+        location "~ \.php$": return = 403 "no" end
+    end
+    site:
+        listen = 8080
+        names = "other.test"
+        default = true
+    end
+end
+`
+    println httpd.LoadText(text, "match.salam"), httpd.ProblemCount()
+    println httpd.SiteCount(), httpd.SiteNames(0), httpd.SiteNames(1)
+    println httpd.SiteFor("example.test", 8080), httpd.SiteFor("API.Example.Test:8080", 8080), httpd.SiteFor("other.test.", 8080)
+    println httpd.SiteFor("unknown.test", 8080), httpd.SiteFor("example.test", 9090)
+    println httpd.LocationPattern(httpd.LocationFor(0, "/health"))
+    println httpd.LocationPattern(httpd.LocationFor(0, "/assets/logo.png"))
+    println httpd.LocationPattern(httpd.LocationFor(0, "/static/a.php"))
+    println httpd.LocationPattern(httpd.LocationFor(0, "/x/index.php"))
+    println httpd.LocationFor(0, "/plain"), httpd.LocationFor(1, "/anything")
+end
+```
+
+Output:
+
+```text
+true 0
+2 example.test *.example.test other.test
+0 0 1
+1 -1
+/health
+/assets/
+/static/
+\.php$
+-1 -1
+```
+
+### `LocationFor`
+
+```salam
+func LocationFor(site: int, path: str): int
+```
+
+The index of the location that handles a path in a site, or -1 when only the site settings apply. An exact location wins, then a `^~` prefix, then the first matching regular expression, then the longest prefix.
+
+The example for this item is shown with the ones above: net-httpd-Match.salam
+
+### `SiteCount`
+
+```salam
+func SiteCount(): int
+```
+
+The number of sites in the loaded configuration.
+
+The example for this item is shown with the ones above: net-httpd-Match.salam
+
+### `SiteNames`
+
+```salam
+func SiteNames(site: int): str
+```
+
+The host names of one site, separated by spaces.
+
+The example for this item is shown with the ones above: net-httpd-Match.salam
+
+### `LocationPattern`
+
+```salam
+func LocationPattern(loc: int): str
+```
+
+The pattern of a location without its `=`, `^~` or `~` marker.
+
+The example for this item is shown with the ones above: net-httpd-Match.salam
+
+### `ProblemCount`
+
+```salam
+func ProblemCount(): int
+```
+
+The number of problems found while loading the last configuration; zero means it is valid.
+
+net-httpd-Problems.salam
+
+```salam
+import net.httpd
+
+func attempt(text: str):
+    ok := httpd.LoadText(text, "bad.salam")
+    println ok, httpd.ProblemCount()
+    repeat httpd.ProblemCount() in i:
+        println httpd.ProblemAt(i)
+    end
+end
+
+func main:
+    attempt("server:\n    sit:\n    end\nend\n")
+    attempt("server:\n    site:\n        listen = 70000\n    end\nend\n")
+    attempt("server:\n    site:\n        names = \"a.test\"\n        root = \"/no/such/dir\"\n    end\nend\n")
+    attempt("server:\n    site:\n        names = \"a.test\"\n    end\n    site:\n        names = \"a.test\"\n    end\nend\n")
+    attempt("server:\n    site:\n        listen = 443 tls\n    end\nend\n")
+    attempt("server:\n    site:\n        names = \"a.test\"\n        location \"/x\": hedaer = \"A\" \"b\" end\n    end\nend\n")
+    attempt("server:\nend\n")
+    attempt("server:\n    site:\n        names = \"a.test\"\n        cache = soon\n    end\nend\n")
+    attempt("server:\n    site:\n        names = \"a.test\"\n        location \"/x\": alias = \"/tmp\" end\n        location \"~ x\": alias = \"/tmp\" end\n    end\nend\n")
+end
+```
+
+Output:
+
+```text
+false 1
+bad.salam:2:5: unknown block 'sit' (did you mean 'site'?)
+false 1
+bad.salam:3:18: port must be a number from 1 to 65535
+false 1
+bad.salam:2:5: root '/no/such/dir' is not a directory
+false 1
+bad.salam:5:5: name 'a.test' is used by two sites on port 80
+false 1
+bad.salam:3:22: tls is not available yet
+false 1
+bad.salam:4:24: unknown setting 'hedaer' in a location (did you mean 'header'?)
+false 1
+bad.salam:1:1: the config has no sites
+false 1
+bad.salam:4:9: cache must be a duration such as 30s, 10m, 12h, 30d or 1y
+false 1
+bad.salam:5:9: alias works only with a prefix location, use root for the others
+```
+
+### `ProblemAt`
+
+```salam
+func ProblemAt(i: int): str
+```
+
+One problem as `file:line:column: message`, counting from 0.
+
+The example for this item is shown with the ones above: net-httpd-Problems.salam
+
+### `LoadFile`
+
+```salam
+func LoadFile(path: str): bool
+```
+
+Reads a file and loads it like `LoadText`. A file that cannot be read is a problem too.
+
+net-httpd-Run.salam
+
+```salam
+import os
+import net.httpd
+
+func main:
+    mut path := "web.salam"
+    args := os.Args()
+    if args.len() > 1:
+        path = args[1]
+    end
+    if httpd.Check(path) != 0:
+        ret 1
+    end
+    if not httpd.LoadFile(path):
+        ret 2
+    end
+    code := httpd.Run()
+    httpd.Stop()
+    ret code
+end
+```
+
+### `Check`
+
+```salam
+func Check(path: str): int
+```
+
+Loads a file the way `salam serve --config=FILE --test` does: it prints the problems to the error output and returns 1, or prints a one line summary and returns 0.
+
+The example for this item is shown with the ones above: net-httpd-Run.salam
+
+### `Run`
+
+```salam
+func Run(): int
+```
+
+Starts one listener for each distinct address in the loaded configuration and then waits until `Stop` is called. It returns 2 at once when no valid configuration is loaded, when the log cannot be opened or when an address cannot be bound.
+
+net-httpd-Serve.salam
+
+```salam
+import io
+import os
+import time
+import str
+import net.http
+import net.httpd
+
+func serve():
+    httpd.Run()
+end
+
+func get(host: str, path: str): http.Response:
+    r := http.Do("GET", "http://" + host + ":19434" + path, http.NewHeaders(), "", http.RequestOptions {})
+    ret r
+end
+
+func main:
+    root := os.TempDir() + "/salam_httpd_serve"
+    os.RemoveAll(root)
+    os.MkdirAll(root + "/shop")
+    os.MkdirAll(root + "/blog")
+    io.WriteFile(root + "/shop/index.html", "the shop")
+    io.WriteFile(root + "/blog/index.html", "the blog")
+    io.WriteFile(root + "/blog/404.html", "no such post")
+    text := `
+server:
+    site:
+        listen = 19434
+        names = "localhost"
+        root = "@ROOT@/shop"
+        header = "X-Site" "shop"
+        location "= /health": return = 200 "ok" end
+        location "/old/": redirect = "http://$host/new$uri" code = 302 end
+    end
+    site:
+        listen = 19434
+        names = "127.0.0.1"
+        root = "@ROOT@/blog"
+        error page = 404 "404.html"
+    end
+end
+`
+    println httpd.LoadText(str.Replace(text, "@ROOT@", root), "serve.salam")
+    t := spawn(serve)
+    time.Sleep(300)
+    a := get("localhost", "/")
+    println a.status, a.body, http.GetHeader(a, "x-site")
+    b := get("127.0.0.1", "/")
+    println b.status, b.body
+    println get("localhost", "/health").body
+    c := get("localhost", "/old/page")
+    println c.status, http.GetHeader(c, "location")
+    d := get("127.0.0.1", "/missing")
+    println d.status, d.body
+    println get("localhost", "/.git/config").status
+    httpd.Stop()
+    join(t)
+    os.RemoveAll(root)
+end
+```
+
+Output:
+
+```text
+true
+200 the shop shop
+200 the blog
+ok
+302 http://localhost:19434/new/old/page
+404 no such post
+404
+```
+
+### `Stop`
+
+```salam
+func Stop()
+```
+
+Makes `Run` return. Connections already accepted are not drained.
+
+The example for this item is shown with the ones above: net-httpd-Serve.salam
+
+### `ParseDuration`
+
+```salam
+func ParseDuration(text: str): i64
+```
+
+Reads a length of time such as `45`, `10m` or `30d` and returns it in seconds, or -1 when it is not valid. The units are `s`, `m`, `h`, `d`, `w` and `y` (365 days); no unit means seconds.
+
+net-httpd-ParseDuration.salam
+
+```salam
+import net.httpd
+
+func main:
+    println httpd.ParseDuration("45")
+    println httpd.ParseDuration("90s")
+    println httpd.ParseDuration("10m")
+    println httpd.ParseDuration("12h")
+    println httpd.ParseDuration("30d")
+    println httpd.ParseDuration("2w")
+    println httpd.ParseDuration("1y")
+    println httpd.ParseDuration("")
+    println httpd.ParseDuration("abc")
+    println httpd.ParseDuration("5x")
+end
+```
+
+Output:
+
+```text
+45
+90
+600
+43200
+2592000
+1209600
+31536000
+-1
+-1
+-1
+```
+
+### `LoadText`
+
+```salam
+func LoadText(text: str, file: str): bool
+```
+
+Loads a configuration from text. The second argument names the file in the problem messages. It returns true when there are no problems; otherwise the problems are kept for `ProblemAt` and nothing else changes.
+
+The example for this item is shown with the ones above: net-httpd-Serve.salam
+
+
+---
+
+# net/httpd/conf
+
+https://salamlang.github.io/Salam/std/net-httpd-conf/
+
+The reader of the web server config: blocks, settings and values in Salam block syntax, with positions for errors.
+
+This package reads text written in the block style that net/httpd uses for its config, and gives back a tree. It knows nothing about web servers: it only recognises the shapes, and `net/httpd` decides which names are valid. You can use it for settings files of your own that look like Salam.
+
+There are two shapes. A setting is a name, an equals sign and one or more values on the same line: `max connections = 100`. A block is a name, optional strings, a colon, its contents and `end`: `location "/api/": cache = 1h end`. A name may be several words (`error page`), values are strings in double quotes (with `\n`, `\t`, `\"` and `\\`), strings in backticks (taken as written, so a regular expression needs no doubling of backslashes), numbers with an optional unit such as `64mb` or `30d`, and plain words such as `tls`. Comments are `//` to the end of the line, or `/* ... */`.
+
+Everything lives in a `Doc`, a list of nodes that point at each other by number: node 0 is the root, `Find` and `ChildAt` move down, and the fields of a node hold its words, labels, values and children. Free the document with `Free` when you are done with it.
+
+The things people get wrong:
+
+- A value list ends at the end of the line, at `end`, or where the next setting starts on the same line, so `a = 1 b = 2` is two settings. A bare word at the end of a list is read as a value, which is why `listen = 443 tls` works.
+
+- A parse stops at the first error, and `ok` is then false. The error has the line and the column, and `ErrorText` puts them in front of the message the way compilers do.
+
+- Addresses and anything with a colon in it need quotes: `listen = "127.0.0.1:8080"`. Without them the colon would read as the start of a block.
+
+- A node's `words` hold its name, so `Name` joins them with single spaces. Block labels, such as the path of a location, are in `labels`, not in the name.
+
+## Types
+
+### `Value`
+
+```salam
+struct Value
+```
+
+One value of a setting.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `kind` | `int = 0` | `VAL_WORD`, `VAL_STR` or `VAL_NUM`. |
+| `text` | `str = ""` | The value as text; strings without their quotes and with escapes resolved. |
+| `line` | `int = 0` | The line, counting from 1. |
+| `col` | `int = 0` | The column, counting from 1. |
+
+net-httpd-conf-Parse.salam
+
+```salam
+import net.httpd.conf
+
+func main:
+    text := `
+server:
+    site:
+        listen = 80 tls
+        names = "a.test www.a.test"
+        location "/api/": cache = 1h end
+    end
+end
+`
+    d := conf.Parse(text)
+    println d.ok, d.nodes.len(), conf.Count(d, conf.Root())
+    server := conf.Find(d, conf.Root(), "server")
+    site := conf.Find(d, server, "site")
+    println conf.Name(d, site), conf.Count(d, site), d.nodes.get(site).block
+    listen := conf.Find(d, site, "listen")
+    v := d.nodes.get(listen).values.get(0)
+    println v.text, v.kind == conf.VAL_NUM, v.line, v.col
+    w := d.nodes.get(listen).values.get(1)
+    println w.text, w.kind == conf.VAL_WORD, conf.ValueText(d, conf.Find(d, site, "names"), 0)
+    names := d.nodes.get(conf.Find(d, site, "names")).values.get(0)
+    println names.kind == conf.VAL_STR
+    loc := conf.ChildAt(d, site, 2)
+    n := d.nodes.get(loc)
+    println conf.Name(d, loc), n.labels.get(0), n.block, n.words.len(), n.children.len(), n.line, n.col
+    conf.Free(d)
+end
+```
+
+Output:
+
+```text
+true 7 1
+site 3 true
+80 true 4 18
+tls true a.test www.a.test
+true
+location /api/ true 1 1 6 9
+```
+
+### `Node`
+
+```salam
+struct Node
+```
+
+One setting or block of the tree.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `block` | `bool = false` | True for a block, false for a setting. |
+| `words` | `Vector` | The words of the name, such as `error` and `page`. |
+| `labels` | `Vector` | The strings written between the name and the colon of a block. |
+| `values` | `Vector` | The values of a setting. |
+| `children` | `Vector` | The numbers of the nodes inside a block. |
+| `line` | `int = 0` | The line where it starts. |
+| `col` | `int = 0` | The column where it starts. |
+
+The example for this item is shown with the ones above: net-httpd-conf-Parse.salam
+
+### `Doc`
+
+```salam
+struct Doc
+```
+
+A parsed document: all the nodes and the first error.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `nodes` | `Vector` | Every node; node 0 is the root. |
+| `ok` | `bool = true` | True when the text parsed without an error. |
+| `error` | `str = ""` | The message of the first error, empty when there is none. |
+| `line` | `int = 0` | The line of the error. |
+| `col` | `int = 0` | The column of the error. |
+
+The example for this item is shown with the ones above: net-httpd-conf-Parse.salam
+
+## Constants and variables
+
+### `VAL_WORD`
+
+```salam
+const VAL_WORD: i32 = 0
+```
+
+The kind of a value that is a plain word such as `tls` or `auto`.
+
+The example for this item is shown with the ones above: net-httpd-conf-Parse.salam
+
+### `VAL_STR`
+
+```salam
+const VAL_STR: i32 = 1
+```
+
+The kind of a value written in quotes or backticks.
+
+The example for this item is shown with the ones above: net-httpd-conf-Parse.salam
+
+### `VAL_NUM`
+
+```salam
+const VAL_NUM: i32 = 2
+```
+
+The kind of a value that starts with a digit, with or without a unit, such as `8080` or `30d`; the text keeps the unit.
+
+The example for this item is shown with the ones above: net-httpd-conf-Parse.salam
+
+## Functions
+
+### `Parse`
+
+```salam
+func Parse(text: str): Doc
+```
+
+Parses text and returns the document; check `ok` before using it.
+
+The example for this item is shown with the ones above: net-httpd-conf-Parse.salam
+
+### `Free`
+
+```salam
+func Free(d &: Doc)
+```
+
+Frees the memory of a document.
+
+The example for this item is shown with the ones above: net-httpd-conf-Parse.salam
+
+### `ErrorText`
+
+```salam
+func ErrorText(d: Doc, file: str): str
+```
+
+The first error as `file:line:column: message`, or an empty string when the document is valid. The first argument is the name to show for the file.
+
+net-httpd-conf-Errors.salam
+
+```salam
+import net.httpd.conf
+
+func show(text: str):
+    d := conf.Parse(text)
+    println d.ok, conf.ErrorText(d, "web.salam"), d.error, d.line, d.col
+    conf.Free(d)
+end
+
+func main:
+    show("server:\n    site:\n")
+    show("server:\nend\nend\n")
+    show("listen = \n")
+    show("names = \"open\n")
+    show("listen 80\n")
+    show("a = 1 # no\n")
+    show("ok = 1\n")
+end
+```
+
+Output:
+
+```text
+false web.salam:3:1: missing 'end' for the block opened on line 2 missing 'end' for the block opened on line 2 3 1
+false web.salam:3:1: 'end' without a matching block 'end' without a matching block 3 1
+false web.salam:1:8: expected a value after '=' expected a value after '=' 1 8
+false web.salam:1:9: unterminated string unterminated string 1 9
+false web.salam:1:8: expected '=' or ':' after 'listen' expected '=' or ':' after 'listen' 1 8
+false web.salam:1:7: unexpected character '#' unexpected character '#' 1 7
+true   0 0
+```
+
+### `Name`
+
+```salam
+func Name(d: Doc, node: int): str
+```
+
+The name of a node: its words joined by single spaces.
+
+The example for this item is shown with the ones above: net-httpd-conf-Parse.salam
+
+### `Root`
+
+```salam
+func Root(): int
+```
+
+The number of the root node, which is 0.
+
+The example for this item is shown with the ones above: net-httpd-conf-Parse.salam
+
+### `Count`
+
+```salam
+func Count(d: Doc, node: int): int
+```
+
+The number of children of a block.
+
+The example for this item is shown with the ones above: net-httpd-conf-Parse.salam
+
+### `ChildAt`
+
+```salam
+func ChildAt(d: Doc, node: int, i: int): int
+```
+
+The node number of the child at a position, counting from 0.
+
+The example for this item is shown with the ones above: net-httpd-conf-Parse.salam
+
+### `Find`
+
+```salam
+func Find(d: Doc, node: int, name: str): int
+```
+
+The node number of the first child of a node with a given name, or -1.
+
+The example for this item is shown with the ones above: net-httpd-conf-Parse.salam
+
+### `ValueText`
+
+```salam
+func ValueText(d: Doc, node: int, i: int): str
+```
+
+The text of the value at a position of a setting.
+
+The example for this item is shown with the ones above: net-httpd-conf-Parse.salam

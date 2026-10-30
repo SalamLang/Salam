@@ -359,11 +359,12 @@ def main():
         return 0
 
     dry_run = bool(os.environ.get("DRY_RUN"))
+    manual = os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
     gh = GitHub(token, repo)
     pr = gh.call("GET", f"/pulls/{number}")
     head_sha = pr["head"]["sha"]
 
-    if pr.get("draft") and not dry_run:
+    if pr.get("draft") and not (manual or dry_run):
         print("draft pull request; skipping")
         return 0
     labels = {label["name"] for label in pr.get("labels", [])}

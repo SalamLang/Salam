@@ -130116,6 +130116,435 @@ ok := Data(c, msg)
 Quit(c)
 ret ok
 end
+@en "fastcgi"
+@fa "فست سی جی آی"
+package fastcgi
+import str
+import mem
+import net.tcp
+const VERSION := 1
+const BEGIN_REQUEST := 1
+const END_REQUEST := 3
+const PARAMS := 4
+const STDIN := 5
+const STDOUT := 6
+const STDERR := 7
+const ROLE_RESPONDER := 1
+const MAX_CONTENT := 32768
+const READ_CHUNK := 65536
+struct Buf:
+pub data: void* = null
+pub len: int = 0
+pub cap: int = 0
+pub bad: bool = false
+end
+@en "Param"
+@fa "پارامتر"
+pub struct Param:
+@en "name"
+@fa "نام"
+pub name: str = ""
+@en "value"
+@fa "مقدار"
+pub value: str = ""
+end
+@en "Params"
+@fa "پارامترها"
+pub struct Params:
+@en "items"
+@fa "آیتم ها"
+pub items: Vector<Param> = Vector {}
+end
+@en "Header"
+@fa "سرصفحه"
+pub struct Header:
+@en "name"
+@fa "نام"
+pub name: str = ""
+@en "value"
+@fa "مقدار"
+pub value: str = ""
+end
+@en "Response"
+@fa "پاسخ"
+pub struct Response:
+@en "status"
+@fa "وضعیت"
+pub status: int = 0
+@en "headers"
+@fa "سرصفحه ها"
+pub headers: Vector<Header> = Vector {}
+@en "body"
+@fa "بدنه"
+pub body: void* = null
+@en "len"
+@fa "اندازه"
+pub len: int = 0
+@en "ok"
+@fa "موفق"
+pub ok: bool = false
+@en "error"
+@fa "خطا"
+pub error: str = ""
+end
+inline func _at(p: void*, off: int): void*:
+ret ((p as i64) + (off as i64)) as void *
+end
+inline func _byte(p: void*, i: int): int:
+bp := p as u8 *
+ret bp[i] as int
+end
+func _new(cap: int): Buf:
+mut b := Buf {}
+mut size := cap
+if size < 64: size = 64 end
+p := mem.Allocate(size as u64)
+if p == null:
+b.bad = true
+else:
+b.data = p
+b.cap = size
+end
+ret b
+end
+func _free_buf(b: Buf):
+if b.data != null:
+mem.Free(b.data)
+end
+b.data = null
+b.len = 0
+b.cap = 0
+end
+func _reserve(b &: Buf, need: int): bool:
+if b.bad: ret false end
+if b.len + need <= b.cap: ret true end
+mut nc := b.cap
+if nc < 64: nc = 64 end
+until nc >= b.len + need: nc = nc * 2 end
+p := mem.Reallocate(b.data, nc as u64)
+if p == null:
+b.bad = true
+ret false
+end
+b.data = p
+b.cap = nc
+ret true
+end
+func _put(b &: Buf, src: void*, n: int):
+if n <= 0 or b.bad: ret end
+if not _reserve(b, n): ret end
+mem.Copy(_at(b.data, b.len), src, n as u64)
+b.len += n
+end
+func _put_str(b &: Buf, s: str):
+_put(b, s as void *, s.len())
+end
+func _u8(b &: Buf, v: int):
+if not _reserve(b, 1): ret end
+p := b.data as u8 *
+p[b.len] = (v & 255) as u8
+b.len += 1
+end
+func _u16(b &: Buf, v: int):
+_u8(b, (v >> 8) & 255)
+_u8(b, v & 255)
+end
+func _put_len(b &: Buf, n: int):
+if n < 128:
+_u8(b, n)
+else:
+_u8(b, ((n >> 24) & 127) | 128)
+_u8(b, (n >> 16) & 255)
+_u8(b, (n >> 8) & 255)
+_u8(b, n & 255)
+end
+end
+func _head(b &: Buf, typ: int, n: int):
+_u8(b, VERSION)
+_u8(b, typ)
+_u16(b, 1)
+_u16(b, n)
+_u8(b, 0)
+_u8(b, 0)
+end
+func _write_all(c: tcp.Conn, p: void*, n: int): bool:
+mut off := 0
+until off < n:
+k := tcp.WriteBytes(c, _at(p, off), n - off)
+if k <= 0: ret false end
+off += k
+end
+ret true
+end
+func _read_exact(c: tcp.Conn, p: void*, n: int): int:
+mut got := 0
+until got < n:
+k := tcp.ReadBytes(c, _at(p, got), n - got)
+if k <= 0: ret got end
+got += k
+end
+ret got
+end
+func _send_record(c: tcp.Conn, typ: int, p: void*, n: int): bool:
+mut h := _new(8)
+_head(h, typ, n)
+mut ok := _write_all(c, h.data, 8)
+_free_buf(h)
+if ok and n > 0:
+ok = _write_all(c, p, n)
+end
+ret ok
+end
+func _head_end(p: void*, n: int): int:
+mut i := 0
+until i + 3 < n:
+if _byte(p, i) == 13 and _byte(p, i + 1) == 10 and _byte(p, i + 2) == 13 and _byte(p, i + 3) == 10:
+ret i + 4
+end
+i += 1
+end
+until i + 1 < n:
+if _byte(p, i) == 10 and _byte(p, i + 1) == 10:
+ret i + 2
+end
+i += 1
+end
+ret -1
+end
+func _bytes_str(p: void*, n: int): str:
+mut sb := str.NewBuilder()
+defer str.BufFree(sb)
+repeat n in i:
+str.BufAppendChar(sb, _byte(p, i))
+end
+ret str.BufStr(sb)
+end
+func _status_code(v: str): int:
+if v.len() < 3: ret 0 end
+bp := v as u8 *
+repeat 3 in i:
+if (bp[i] as int) < 48 or (bp[i] as int) > 57: ret 0 end
+end
+ret v.substr(0, 3).to_int()
+end
+func _free_parts(v: Vector<str>):
+repeat v.len() in i:
+mem.Free(v.get(i) as void *)
+end
+v.free()
+end
+func _parse_head(r &: Response, head: str):
+lines := str.Split(head, "\n")
+repeat lines.len() in i:
+line := str.Trim(lines.get(i))
+if line.len() == 0: continue end
+c := line.indexOf(":")
+if c <= 0: continue end
+name := str.Trim(line.substr(0, c))
+value := str.Trim(line.substr(c + 1, line.len() - c - 1))
+if str.Equals(str.Lower(name), "status"):
+code := _status_code(value)
+if code >= 100 and code <= 599: r.status = code end
+else:
+r.headers.push(Header { name = str.Clone(name), value = str.Clone(value) })
+end
+end
+_free_parts(lines)
+end
+@en "NewParams"
+@fa "پارامترهای جدید"
+pub func NewParams(): Params:
+ret Params {}
+end
+@en "Add"
+@fa "افزودن"
+pub func Add(p &: Params, name: str, value: str):
+p.items.push(Param { name = str.Clone(name), value = str.Clone(value) })
+end
+@en "Free"
+@fa "آزادسازی"
+pub func Free(p &: Params):
+repeat p.items.len() in i:
+it := p.items.get(i)
+mem.Free(it.name as void *)
+mem.Free(it.value as void *)
+end
+p.items.free()
+end
+@en "Connect"
+@fa "اتصال"
+pub func Connect(host: str, port: int, timeout_ms: int): tcp.Conn:
+mut wait := timeout_ms
+if wait <= 0: wait = 30000 end
+ret tcp.DialTimeout(host, port, wait)
+end
+@en "Execute"
+@fa "اجرا"
+pub func Execute(c: tcp.Conn, params: Params, data: void*, n: int, timeout_ms: int): Response:
+if not tcp.ConnOk(c):
+ret Response { error = "the FastCGI connection is not open" }
+end
+mut wait := timeout_ms
+if wait <= 0: wait = 30000 end
+tcp.SetDeadline(c, wait)
+mut pb := _new(1024)
+repeat params.items.len() in i:
+it := params.items.get(i)
+_put_len(pb, it.name.len())
+_put_len(pb, it.value.len())
+_put_str(pb, it.name)
+_put_str(pb, it.value)
+end
+if pb.bad:
+_free_buf(pb)
+ret Response { error = "out of memory building the FastCGI parameters" }
+end
+mut rec := _new(16)
+_head(rec, BEGIN_REQUEST, 8)
+_u16(rec, ROLE_RESPONDER)
+_u8(rec, 0)
+_u8(rec, 0)
+_u8(rec, 0)
+_u8(rec, 0)
+_u8(rec, 0)
+_u8(rec, 0)
+ok := _write_all(c, rec.data, rec.len)
+_free_buf(rec)
+if not ok:
+_free_buf(pb)
+ret Response { error = "could not send the request to the FastCGI backend" }
+end
+mut off := 0
+until off < pb.len:
+mut size := pb.len - off
+if size > MAX_CONTENT: size = MAX_CONTENT end
+if not _send_record(c, PARAMS, _at(pb.data, off), size):
+_free_buf(pb)
+ret Response { error = "could not send the parameters to the FastCGI backend" }
+end
+off += size
+end
+_free_buf(pb)
+if not _send_record(c, PARAMS, null, 0):
+ret Response { error = "could not send the parameters to the FastCGI backend" }
+end
+mut boff := 0
+until boff < n:
+mut size := n - boff
+if size > MAX_CONTENT: size = MAX_CONTENT end
+if not _send_record(c, STDIN, _at(data, boff), size):
+ret Response { error = "could not send the body to the FastCGI backend" }
+end
+boff += size
+end
+if not _send_record(c, STDIN, null, 0):
+ret Response { error = "could not send the body to the FastCGI backend" }
+end
+mut out := _new(4096)
+mut errb := _new(256)
+scratch := mem.Allocate(READ_CHUNK as u64)
+hdr := mem.Allocate(8 as u64)
+mut failed := ""
+mut done := false
+mut proto := 0
+until not done and failed.len() == 0:
+if _read_exact(c, hdr, 8) != 8:
+failed = "the FastCGI backend closed the connection without answering"
+break
+end
+typ := _byte(hdr, 1)
+rec_len := (_byte(hdr, 4) << 8) | _byte(hdr, 5)
+plen := _byte(hdr, 6)
+if rec_len > 0:
+if typ == STDOUT:
+if not _reserve(out, rec_len):
+failed = "out of memory reading the FastCGI response"
+else:
+got := _read_exact(c, _at(out.data, out.len), rec_len)
+if got != rec_len:
+failed = "the FastCGI response was cut short"
+else:
+out.len += rec_len
+end
+end
+else:
+got := _read_exact(c, scratch, rec_len)
+if got != rec_len:
+failed = "the FastCGI response was cut short"
+else:
+if typ == STDERR:
+_put(errb, scratch, rec_len)
+else typ == END_REQUEST and rec_len >= 5:
+proto = _byte(scratch, 4)
+end
+end
+end
+end
+if plen > 0 and failed.len() == 0:
+if _read_exact(c, scratch, plen) != plen:
+failed = "the FastCGI response was cut short"
+end
+end
+if typ == END_REQUEST: done = true end
+end
+mut note := failed
+mut errtxt := ""
+if errb.len > 0:
+errtxt = _bytes_str(errb.data, errb.len)
+end
+_free_buf(errb)
+mem.Free(scratch)
+mem.Free(hdr)
+if note.len() > 0:
+_free_buf(out)
+ret Response { error = note }
+end
+if not done:
+_free_buf(out)
+ret Response { error = "the FastCGI backend did not finish the request" }
+end
+if proto != 0:
+_free_buf(out)
+ret Response { error = "the FastCGI backend ended the request with protocol status " + str.FromInt(proto as i64) }
+end
+hend := _head_end(out.data, out.len)
+if hend < 0:
+_free_buf(out)
+mut msg := "the FastCGI response has no header block"
+if errtxt.len() > 0:
+msg = msg + ": " + errtxt
+end
+ret Response { error = msg }
+end
+head := _bytes_str(out.data, hend)
+mut r := Response { status = 200 }
+_parse_head(r, head)
+body_len := out.len - hend
+if body_len > 0:
+mem.MemMove(out.data, _at(out.data, hend), body_len as u64)
+r.body = out.data
+r.len = body_len
+else:
+_free_buf(out)
+end
+r.ok = true
+ret r
+end
+@en "FreeResponse"
+@fa "آزادسازی پاسخ"
+pub func FreeResponse(r &: Response):
+repeat r.headers.len() in i:
+h := r.headers.get(i)
+mem.Free(h.name as void *)
+mem.Free(h.value as void *)
+end
+r.headers.free()
+if r.body != null:
+mem.Free(r.body)
+r.body = null
+r.len = 0
+end
+end
 package http
 @en "Ctx"
 @fa "زمینه جدید"
@@ -130175,6 +130604,11 @@ end
 @fa "تنظیم سرصفحه"
 pub func SetHeader(ctx: Context, k: str, v: str):
 salam_ctx_kv_add(ctx.h, 2, k, v)
+end
+@en "AddHeader"
+@fa "افزودن سرصفحه"
+pub func AddHeader(ctx: Context, k: str, v: str):
+salam_ctx_kv_push(ctx.h, 2, k, v)
 end
 @en "Html"
 @fa "اچ تی ام ال"
@@ -130423,6 +130857,9 @@ pub func SetStatus(h: i64, code: int): salam_ctx_set_status(h, code) end
 @en "SetHeader"
 @fa "تنظیم سرصفحه"
 pub func SetHeader(h: i64, k: str, v: str): salam_ctx_kv_add(h, 2, k, v) end
+@en "AddHeader"
+@fa "افزودن سرصفحه"
+pub func AddHeader(h: i64, k: str, v: str): salam_ctx_kv_push(h, 2, k, v) end
 @en "Html"
 @fa "اچ تی ام ال"
 pub func Html(h: i64, html: str):
@@ -130879,6 +131316,14 @@ if list == 0: _kvl_set(c.req_hdrs, key, val)
 else list == 1: _kvl_set(c.path_params, key, val)
 else:
 _kvl_set(c.resp_hdrs, key, val)
+end
+end
+func salam_ctx_kv_push(h: i64, list: int, key: str, val: str):
+c := _rc(h)
+if list == 0: c.req_hdrs.push(_KV { k = key, v = val })
+else list == 1: c.path_params.push(_KV { k = key, v = val })
+else:
+c.resp_hdrs.push(_KV { k = key, v = val })
 end
 end
 func salam_ctx_kv_set_cookie(h: i64, cookie_name: str, val: str):
@@ -138906,6 +139351,15 @@ pub ret_body: str = ""
 pub redirect: str = ""
 pub redirect_code: int = 0
 pub cache: i64 = -1
+pub fastcgi: str = ""
+pub fastcgi_index: str = ""
+pub fastcgi_timeout: int = 0
+end
+struct FcgiParam:
+pub site: int = 0
+pub loc: int = -1
+pub name: str = ""
+pub value: str = ""
 end
 struct Location:
 pub site: int = 0
@@ -138929,6 +139383,7 @@ pub sites: Vector<Site> = Vector {}
 pub locations: Vector<Location> = Vector {}
 pub headers: Vector<HeaderRule> = Vector {}
 pub pages: Vector<ErrorPage> = Vector {}
+pub fcgi: Vector<FcgiParam> = Vector {}
 pub problems: Vector<str> = Vector {}
 end
 func _problem(c &: Config, file: str, line: int, col: int, msg: str):
@@ -139001,6 +139456,22 @@ ch := bp[i] as int
 if ch < 48 or ch > 57: ret -1 end
 end
 ret conv.ParseInt(s)
+end
+func _parse_addr(text: str, host &: str, port &: int): bool:
+t := str.Trim(text)
+if t.len() == 0: ret false end
+colon := t.indexOf(":")
+mut h := "127.0.0.1"
+mut ps := t
+if colon >= 0:
+if colon > 0: h = t.substr(0, colon) end
+ps = t.substr(colon + 1, t.len() - colon - 1)
+end
+p := _parse_uint(ps)
+if p < 1 or p > 65535: ret false end
+host = h
+port = p as int
+ret true
 end
 func _joined(d: conf.Doc, node: int): str:
 n := d.nodes.get(node)
@@ -139101,6 +139572,39 @@ _problem(c, file, v0.line, v0.col, "error page needs a status from 400 to 599 an
 else:
 c.pages.push(ErrorPage { site = site, loc = loc, code = p as int, path = n.values.get(1).text })
 end
+else str.Equals(name, "fastcgi_pass"):
+v := _joined(d, node)
+if str.StartsWith(v, "unix:"):
+_problem(c, file, n.line, n.col, "fastcgi_pass cannot read a unix socket yet; give a TCP address such as 127.0.0.1:9000")
+else:
+mut fh := ""
+mut fp := 0
+if not _parse_addr(v, fh, fp):
+_problem(c, file, n.line, n.col, "fastcgi_pass needs an address such as 127.0.0.1:9000")
+else:
+rule.fastcgi = fh + ":" + str.FromInt(fp as i64)
+end
+end
+else str.Equals(name, "fastcgi_index"):
+rule.fastcgi_index = _joined(d, node)
+else str.Equals(name, "fastcgi_timeout"):
+secs := ParseDuration(_joined(d, node))
+if secs <= 0:
+_problem(c, file, n.line, n.col, "fastcgi_timeout must be a duration such as 30s or 2m")
+else:
+rule.fastcgi_timeout = (secs * 1000) as int
+end
+else str.Equals(name, "fastcgi_param"):
+if n.values.len() < 2 or n.values.get(0).kind != conf.VAL_STR:
+_problem(c, file, n.line, n.col, "fastcgi_param needs a name and a value")
+else:
+mut value := ""
+repeat n.values.len() - 1 in k:
+if k > 0: value = value + " " end
+value = value + n.values.get(k + 1).text
+end
+c.fcgi.push(FcgiParam { site = site, loc = loc, name = n.values.get(0).text, value = value })
+end
 else:
 ret false
 end
@@ -139149,7 +139653,7 @@ if cn.block:
 _problem(c, file, cn.line, cn.col, "'" + name + "' cannot be used inside a location")
 else:
 if not _apply_common(c, file, d, ch, name, rule, site, idx):
-_problem(c, file, cn.line, cn.col, "unknown setting '" + name + "' in a location" + _suggest(name, "root|alias|index|redirect|code|return|cache|header|error page"))
+_problem(c, file, cn.line, cn.col, "unknown setting '" + name + "' in a location" + _suggest(name, "root|alias|index|redirect|code|return|cache|header|error page|fastcgi_pass|fastcgi_index|fastcgi_param|fastcgi_timeout"))
 end
 end
 end
@@ -139193,7 +139697,7 @@ _problem(c, file, cn.line, cn.col, "default must be true or false")
 end
 else:
 if not _apply_common(c, file, d, ch, name, rule, site, -1):
-_problem(c, file, cn.line, cn.col, "unknown setting '" + name + "' in a site" + _suggest(name, "listen|names|default|root|index|redirect|code|return|cache|header|error page|location"))
+_problem(c, file, cn.line, cn.col, "unknown setting '" + name + "' in a site" + _suggest(name, "listen|names|default|root|index|redirect|code|return|cache|header|error page|fastcgi_pass|fastcgi_index|fastcgi_param|fastcgi_timeout|location"))
 end
 end
 end
@@ -139203,6 +139707,9 @@ end
 if rule.index.len() == 0: rule.index = "index.html" end
 if rule.root.len() > 0 and not os.IsDir(rule.root):
 _problem(c, file, n.line, n.col, "root '" + rule.root + "' is not a directory")
+end
+if rule.fastcgi.len() > 0 and rule.root.len() == 0:
+_problem(c, file, n.line, n.col, "fastcgi_pass needs a root: the folder that holds the scripts")
 end
 s.loc_count = c.locations.len() - s.loc_first
 s.rule = rule
@@ -139590,6 +140097,8 @@ import filepath
 import net.http
 import net.router
 import net.mime
+import net.tcp
+import net.fastcgi
 extern:
 func fopen(path: str, mode: str): void *
 func fclose(stream: void *): int
@@ -139998,6 +140507,239 @@ end
 if not http.File(ctx, target, ct): ret 404 end
 ret 200
 end
+func _effective_fastcgi(site: int, loc: int): str:
+if loc >= 0 and _cfg.locations.get(loc).rule.fastcgi.len() > 0:
+ret _cfg.locations.get(loc).rule.fastcgi
+end
+ret _cfg.sites.get(site).rule.fastcgi
+end
+func _effective_fcgi_index(site: int, loc: int): str:
+if loc >= 0 and _cfg.locations.get(loc).rule.fastcgi_index.len() > 0:
+ret _cfg.locations.get(loc).rule.fastcgi_index
+end
+if _cfg.sites.get(site).rule.fastcgi_index.len() > 0:
+ret _cfg.sites.get(site).rule.fastcgi_index
+end
+ret "index.php"
+end
+func _effective_fcgi_timeout(site: int, loc: int): int:
+if loc >= 0 and _cfg.locations.get(loc).rule.fastcgi_timeout > 0:
+ret _cfg.locations.get(loc).rule.fastcgi_timeout
+end
+if _cfg.sites.get(site).rule.fastcgi_timeout > 0:
+ret _cfg.sites.get(site).rule.fastcgi_timeout
+end
+ret 30000
+end
+func _host_only(host: str): str:
+c := host.indexOf(":")
+if c > 0: ret host.substr(0, c) end
+ret str.Clone(host)
+end
+func _is_slash(s: str, i: int): bool:
+bp := s as u8 *
+ret bp[i] as int == 47
+end
+func _http_param(name: str): str:
+mut sb := str.NewBuilder()
+str.BufAppend(sb, "HTTP_")
+bp := name as u8 *
+repeat name.len() in i:
+mut ch := bp[i] as int
+if ch == 45:
+str.BufAppend(sb, "_")
+else:
+if ch >= 97 and ch <= 122:
+ch -= 32
+end
+str.BufAppendChar(sb, ch)
+end
+end
+out := str.BufStr(sb)
+str.BufFree(sb)
+ret out
+end
+func _expand_param(tmpl: str, host: str, path: str, query: str, root: str, script: str, port: int, remote: str): str:
+mut out := str.Replace(tmpl, "$host", host)
+if query.len() > 0:
+ru := _cat3(path, "?", query)
+out = _swap(out, "$request_uri", ru)
+mem.Free(ru as void *)
+else:
+out = _swap(out, "$request_uri", path)
+end
+out = _swap(out, "$document_root", root)
+out = _swap(out, "$document_uri", path)
+out = _swap(out, "$script_name", script)
+out = _swap(out, "$query_string", query)
+out = _swap(out, "$args", query)
+out = _swap(out, "$remote_addr", remote)
+pnum := str.FromInt(port as i64)
+out = _swap(out, "$server_port", pnum)
+mem.Free(pnum as void *)
+out = _swap(out, "$scheme", "http")
+out = _swap(out, "$uri", path)
+out = _swap(out, "$root", root)
+ret out
+end
+func _serve_fastcgi(ctx: i64, site: int, loc: int, root: str, rel: str, path: str, query: str, host: str, port: int): int:
+addr := _effective_fastcgi(site, loc)
+colon := addr.indexOf(":")
+if colon <= 0: ret 502 end
+fhost := addr.substr(0, colon)
+fpstr := addr.substr(colon + 1, addr.len() - colon - 1)
+fport := fpstr.to_int()
+mem.Free(fpstr as void *)
+timeout := _effective_fcgi_timeout(site, loc)
+index := _effective_fcgi_index(site, loc)
+mut script_rel := rel
+if str.EndsWith(rel, "/"):
+script_rel = _cat3(rel, index, "")
+end
+mut script_name := ""
+mut path_info := ""
+mut target := root + script_rel
+if os.Exists(target) and not os.IsDir(target):
+script_name = script_rel
+else:
+mem.Free(target as void *)
+target = ""
+mut cut := script_rel.len()
+until cut > 0:
+cand := script_rel.substr(0, cut)
+full := root + cand
+if os.Exists(full) and not os.IsDir(full):
+script_name = cand
+path_info = script_rel.substr(cut, script_rel.len() - cut)
+target = full
+break
+end
+mem.Free(full as void *)
+mem.Free(cand as void *)
+mut k := cut - 1
+until k >= 0 and not _is_slash(script_rel, k):
+k -= 1
+end
+if k <= 0:
+cut = 0
+else:
+cut = k
+end
+end
+end
+if script_name.len() == 0:
+mem.Free(fhost as void *)
+ret 404
+end
+mut p := fastcgi.NewParams()
+defer fastcgi.Free(p)
+hname := _host_only(host)
+fastcgi.Add(p, "GATEWAY_INTERFACE", "CGI/1.1")
+fastcgi.Add(p, "SERVER_SOFTWARE", "Salam")
+fastcgi.Add(p, "SERVER_PROTOCOL", "HTTP/1.1")
+fastcgi.Add(p, "REQUEST_METHOD", http.Method(ctx))
+fastcgi.Add(p, "SCRIPT_NAME", script_name)
+fastcgi.Add(p, "SCRIPT_FILENAME", target)
+fastcgi.Add(p, "PATH_INFO", path_info)
+fastcgi.Add(p, "DOCUMENT_ROOT", root)
+fastcgi.Add(p, "DOCUMENT_URI", path)
+fastcgi.Add(p, "QUERY_STRING", query)
+fastcgi.Add(p, "REDIRECT_STATUS", "200")
+fastcgi.Add(p, "SERVER_NAME", hname)
+pnum := str.FromInt(port as i64)
+fastcgi.Add(p, "SERVER_PORT", pnum)
+mem.Free(pnum as void *)
+fastcgi.Add(p, "REMOTE_ADDR", "127.0.0.1")
+fastcgi.Add(p, "HTTPS", "off")
+if query.len() > 0:
+ru := _cat3(path, "?", query)
+fastcgi.Add(p, "REQUEST_URI", ru)
+mem.Free(ru as void *)
+else:
+fastcgi.Add(p, "REQUEST_URI", path)
+end
+ctype := http.Header(ctx, "Content-Type")
+if ctype.len() > 0:
+fastcgi.Add(p, "CONTENT_TYPE", ctype)
+end
+body_len_txt := str.FromInt(http.BodyLen(ctx) as i64)
+fastcgi.Add(p, "CONTENT_LENGTH", body_len_txt)
+mem.Free(body_len_txt as void *)
+mut hdrs := Vector {} as Vector<str>
+hdrs.push("Host")
+hdrs.push("User-Agent")
+hdrs.push("Accept")
+hdrs.push("Accept-Language")
+hdrs.push("Accept-Encoding")
+hdrs.push("Cookie")
+hdrs.push("Referer")
+hdrs.push("Authorization")
+hdrs.push("Origin")
+hdrs.push("Cache-Control")
+hdrs.push("If-None-Match")
+hdrs.push("If-Modified-Since")
+hdrs.push("Range")
+hdrs.push("X-Requested-With")
+hdrs.push("X-Forwarded-For")
+hdrs.push("X-Forwarded-Proto")
+hdrs.push("X-Real-IP")
+repeat hdrs.len() in i:
+hn := hdrs.get(i)
+hv := http.Header(ctx, hn)
+if hv.len() > 0:
+key := _http_param(hn)
+fastcgi.Add(p, key, hv)
+mem.Free(key as void *)
+end
+end
+hdrs.free()
+repeat _cfg.fcgi.len() in i:
+fp := _cfg.fcgi.get(i)
+if fp.site == site and (fp.loc == -1 or fp.loc == loc):
+val := _expand_param(fp.value, hname, path, query, root, script_name, port, "127.0.0.1")
+fastcgi.Add(p, fp.name, val)
+mem.Free(val as void *)
+end
+end
+mem.Free(hname as void *)
+c := fastcgi.Connect(fhost, fport, timeout)
+if not tcp.ConnOk(c):
+mem.Free(fhost as void *)
+mem.Free(target as void *)
+_reply(ctx, 502, "502 Bad Gateway: cannot connect to the FastCGI backend " + addr)
+ret 502
+end
+defer tcp.Close(c)
+r := fastcgi.Execute(c, p, http.BodyBytes(ctx), http.BodyLen(ctx), timeout)
+mem.Free(fhost as void *)
+mem.Free(target as void *)
+if not r.ok:
+msg := "502 Bad Gateway: " + r.error
+fastcgi.FreeResponse(r)
+_reply(ctx, 502, msg)
+ret 502
+end
+http.SetStatus(ctx, r.status)
+mut ctout := "text/html; charset=utf-8"
+repeat r.headers.len() in i:
+h := r.headers.get(i)
+ln := str.Lower(h.name)
+if str.Equals(ln, "content-type"):
+ctout = h.value
+else str.Equals(ln, "content-length") or str.Equals(ln, "connection") or str.Equals(ln, "transfer-encoding"):
+continue
+else:
+http.AddHeader(ctx, http.Own(ctx, str.Clone(h.name)), http.Own(ctx, str.Clone(h.value)))
+end
+end
+if str.Equals(http.Method(ctx), "HEAD"):
+http.Bytes(ctx, ctout, r.body, 0)
+else:
+http.Bytes(ctx, ctout, r.body, r.len)
+end
+fastcgi.FreeResponse(r)
+ret r.status
+end
 func _handle(ctx: i64):
 host := http.Header(ctx, "Host")
 mut port := _only_port
@@ -140044,7 +140786,9 @@ tail := path.substr(cut, path.len() - cut)
 rel = http.Own(ctx, _cat3("/", tail, ""))
 mem.Free(tail as void *)
 end
-if root.len() == 0:
+if _effective_fastcgi(site, loc).len() > 0:
+status = _serve_fastcgi(ctx, site, loc, root, rel, path, query, host, port)
+else root.len() == 0:
 status = 404
 else not (str.Equals(method, "GET") or str.Equals(method, "HEAD")):
 http.SetHeader(ctx, "Allow", "GET, HEAD")

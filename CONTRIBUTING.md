@@ -432,6 +432,7 @@ Every pull request triggers a suite of automated checks. Understanding what runs
 | **Prek Infra Hooks**              | Runs `prek run --all-files --config prek-infra.toml` across the same platform matrix to perform infrastructure and dependency audit checks defined in `prek-infra.toml`. |
 | **Super-Linter**                  | Runs a broad set of language-specific linters across the repository.                                                                                                     |
 | **PR - Auto-Labeler**             | Applies labels automatically based on the files changed in the pull request.                                                                                             |
+| **PR - Salam AI Review**          | Posts an automated summary and merge verdict on every pull request. See [AI pull request review](#-ai-pull-request-review) below.                                        |
 
 All checks must pass before a pull request can be merged. If a check fails:
 
@@ -492,6 +493,16 @@ A `DIVERGE` is a lead, not a verdict. The JS backend has no 64-bit integers
 (`18446744073709551615` prints as `...552000`), no sockets, sqlite or FFI; the
 interpreter refuses variadic externs and is slow enough that crypto-heavy or
 ML tests hit the timeout. Read the actual diff before filing anything.
+
+## 🤖 AI pull request review
+
+Every pull request gets one automated review comment from Salam AI, the assistant behind [ai.salamlang.ir](https://ai.salamlang.ir). It reads the diff, writes a short summary of what changed, lists problems with the files to fix, and ends with a verdict: good to merge, changes needed, or not worth continuing.
+
+The comment is a **helper, not a decision**. It is written by a machine and can be wrong: verify its claims before you merge or close something. A maintainer always has the last word, and the comment is kept up to date on every push instead of being repeated.
+
+- Add the `ai-review:skip` label to a pull request to switch the bot off for it. Draft pull requests are skipped until they are marked ready for review.
+- The workflow is `.github/workflows/ai-pr-review.yml` and the reviewer is `.github/scripts/ai_pr_review.py`. It needs the `SALAM_AI_API_KEY` repository secret and never runs code from the pull request: it only reads the diff through the GitHub API.
+- To try it locally, set `GITHUB_TOKEN`, `GITHUB_REPOSITORY`, `PR_NUMBER`, `SALAM_AI_API_KEY` and `DRY_RUN=1`, then run `python3 .github/scripts/ai_pr_review.py` to print the review without posting it.
 
 ## 💬 Feedback and Support
 

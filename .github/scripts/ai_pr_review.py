@@ -33,6 +33,7 @@ MAX_TOTAL_PATCH = int(os.environ.get("SALAM_AI_MAX_DIFF", "90000"))
 MAX_BODY_CHARS = 6000
 MAX_COMMITS = 20
 MAX_FILES = 300
+RETRIES = 3
 
 # Files whose content never helps a review of this repository.
 IGNORED_SUFFIXES = (
@@ -118,37 +119,46 @@ Rules for "comment":
 # ---------------------------------------------------------------- HTTP helpers
 
 
-def _request(url, method="GET", body=None, headers=None, timeout=60, retries=3):
+class RetryableError(Exception):
+    """An error worth retrying, with the delay the server asked for."""
+
+    def __init__(self, message, wait=0):
+        super().__init__(message)
+        self.wait = wait
+
+
+def _send_once(url, method, data, headers, timeout):
+    request = urllib.request.Request(url, data=data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            payload = response.read()
+            return json.loads(payload) if payload else None
+    except urllib.error.HTTPError as error:
+        detail = error.read().decode("utf-8", "replace")[:800]
+        if error.code == 429 or error.code >= 500:
+            wait = int(error.headers.get("Retry-After") or 0)
+            raise RetryableError(
+                f"HTTP {error.code} from {url}: {detail}", wait
+            ) from error
+        raise RuntimeError(f"HTTP {error.code} from {url}: {detail}") from error
+    except urllib.error.URLError as error:
+        raise RetryableError(f"network error for {url}: {error}") from error
+
+
+def _request(url, method="GET", body=None, headers=None, timeout=60):
     data = None if body is None else json.dumps(body).encode("utf-8")
     request_headers = {"User-Agent": "salam-ai-review/1.0"}
     request_headers.update(headers or {})
-    attempt = 0
-    while True:
-        attempt += 1
-        request = urllib.request.Request(
-            url, data=data, headers=request_headers, method=method
-        )
+    for attempt in range(1, RETRIES + 1):
         try:
-            with urllib.request.urlopen(request, timeout=timeout) as response:
-                payload = response.read()
-                if not payload:
-                    return None
-                return json.loads(payload)
-        except urllib.error.HTTPError as error:
-            detail = error.read().decode("utf-8", "replace")[:800]
-            retryable = error.code == 429 or error.code >= 500
-            if retryable and attempt < retries:
-                wait = int(error.headers.get("Retry-After") or 0) or 10 * attempt
-                print(f"HTTP {error.code} from {url}; retrying in {wait}s")
-                time.sleep(min(wait, 60))
-                continue
-            raise RuntimeError(f"HTTP {error.code} from {url}: {detail}") from error
-        except urllib.error.URLError as error:
-            if attempt < retries:
-                print(f"network error for {url}: {error}; retrying")
-                time.sleep(5 * attempt)
-                continue
-            raise RuntimeError(f"network error for {url}: {error}") from error
+            return _send_once(url, method, data, request_headers, timeout)
+        except RetryableError as error:
+            if attempt == RETRIES:
+                raise RuntimeError(str(error)) from error
+            wait = min(error.wait or 10 * attempt, 60)
+            print(f"{error}; retrying in {wait}s")
+            time.sleep(wait)
+    return None
 
 
 class GitHub:
@@ -349,6 +359,68 @@ def render(pr, review, head_sha, truncated):
 # ---------------------------------------------------------------- main
 
 
+def find_comment(gh, number):
+    for comment in gh.paged(f"/issues/{number}/comments", limit=500):
+        if MARKER in (comment.get("body") or ""):
+            return comment
+    return None
+
+
+def skip_reason(pr, allow_draft):
+    if SKIP_LABEL in {label["name"] for label in pr.get("labels", [])}:
+        return f"label {SKIP_LABEL} present"
+    if pr.get("draft") and not allow_draft:
+        return "draft pull request"
+    return None
+
+
+def compose(gh, pr, dry_run):
+    """Read the pull request, ask the model and return the comment body."""
+    number = pr["number"]
+    files = gh.paged(f"/pulls/{number}/files", limit=MAX_FILES)
+    commits = gh.paged(f"/pulls/{number}/commits", limit=100)
+    prompt = build_prompt(pr, files, commits)
+    if dry_run:
+        print("=" * 70)
+        print(prompt)
+        print("=" * 70)
+    print(f"asking the model about {len(prompt)} characters")
+    review = parse_review(ask_model(prompt))
+    truncated = pr["changed_files"] > len(files)
+    body = render(pr, review, pr["head"]["sha"], truncated)
+    print(f"decision: {review['decision']}")
+    return body
+
+
+def publish(gh, number, existing, body):
+    if existing:
+        gh.call("PATCH", f"/issues/comments/{existing['id']}", {"body": body})
+        print(f"updated review comment {existing['id']}")
+    else:
+        gh.call("POST", f"/issues/{number}/comments", {"body": body})
+        print("posted review comment")
+
+
+def review_pull_request(gh, number):
+    dry_run = bool(os.environ.get("DRY_RUN"))
+    manual = os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
+    pr = gh.call("GET", f"/pulls/{number}")
+    reason = skip_reason(pr, allow_draft=manual)
+    if reason and not dry_run:
+        print(f"{reason}; skipping")
+        return
+    head_sha = pr["head"]["sha"]
+    existing = None if dry_run else find_comment(gh, number)
+    if existing and f"sha={head_sha}" in existing["body"]:
+        print(f"already reviewed {head_sha[:7]}; nothing to do")
+        return
+    body = compose(gh, pr, dry_run)
+    if dry_run:
+        print(body)
+    else:
+        publish(gh, number, existing, body)
+
+
 def main():
     token = os.environ.get("GITHUB_TOKEN")
     repo = os.environ.get("GITHUB_REPOSITORY")
@@ -359,59 +431,13 @@ def main():
     if not os.environ.get("SALAM_AI_API_KEY"):
         print("SALAM_AI_API_KEY is not set; skipping the review")
         return 0
-
-    dry_run = bool(os.environ.get("DRY_RUN"))
-    manual = os.environ.get("GITHUB_EVENT_NAME") == "workflow_dispatch"
-    gh = GitHub(token, repo)
-    pr = gh.call("GET", f"/pulls/{number}")
-    head_sha = pr["head"]["sha"]
-
-    if pr.get("draft") and not (manual or dry_run):
-        print("draft pull request; skipping")
-        return 0
-    labels = {label["name"] for label in pr.get("labels", [])}
-    if SKIP_LABEL in labels and not dry_run:
-        print(f"label {SKIP_LABEL} present; skipping")
-        return 0
-
-    comments = gh.paged(f"/issues/{number}/comments", limit=500) if not dry_run else []
-    existing = next((c for c in comments if MARKER in (c.get("body") or "")), None)
-    if existing and f"sha={head_sha}" in existing["body"] and not dry_run:
-        print(f"already reviewed {head_sha[:7]}; nothing to do")
-        return 0
-
-    files = gh.paged(f"/pulls/{number}/files", limit=MAX_FILES)
-    commits = gh.paged(f"/pulls/{number}/commits", limit=100)
-    prompt = build_prompt(pr, files, commits)
-    truncated = pr["changed_files"] > len(files)
-
-    if dry_run:
-        print("=" * 70)
-        print(prompt)
-        print("=" * 70)
-
-    print(f"asking the model about {len(prompt)} characters")
-    answer = ask_model(prompt)
-    review = parse_review(answer)
-    body = render(pr, review, head_sha, truncated)
-
-    if dry_run:
-        print(body)
-        return 0
-
-    if existing:
-        gh.call("PATCH", f"/issues/comments/{existing['id']}", {"body": body})
-        print(f"updated review comment {existing['id']}")
-    else:
-        gh.call("POST", f"/issues/{number}/comments", {"body": body})
-        print("posted review comment")
-    print(f"decision: {review['decision']}")
+    try:
+        review_pull_request(GitHub(token, repo), number)
+    except (RuntimeError, OSError, ValueError, KeyError, TypeError) as error:
+        print(f"::error::Salam AI review failed: {error}")
+        return 1
     return 0
 
 
 if __name__ == "__main__":
-    try:
-        sys.exit(main())
-    except Exception as error:  # noqa: BLE001 - the workflow should show it
-        print(f"::error::Salam AI review failed: {error}")
-        sys.exit(1)
+    sys.exit(main())

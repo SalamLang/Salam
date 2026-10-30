@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Review a pull request with the Salam AI assistant.
 
 The script reads the pull request through the GitHub API, asks the Salam AI
@@ -99,8 +98,12 @@ Rules for "comment":
 - Markdown in English, about 200 to 400 words, no HTML comments.
 - Sections in this order, each only when it has content: "What changed",
   "Review", "Tests", "Risks".
-- "Review" lists the findings, each one naming the file and, when the diff
-  shows it, the line: a real problem, why it matters, and the fix.
+- "Review" lists at most six findings, the most important first, each one naming
+  the file and, when the diff shows it, the line: a real problem, why it
+  matters, and the fix.
+- Only claim what the diff supports. When a point depends on files or behaviour
+  you cannot see, write it as a question instead of a fact, and never invent how
+  a third-party tool, workflow or API behaves.
 - Do not pad with praise and do not repeat the summary word for word.
 - Never claim that you ran a build, a test or a command.
 - If the diff was truncated, say which files or parts you could not see.
@@ -327,8 +330,7 @@ def render(pr, review, head_sha, truncated):
         parts += [review["comment"], ""]
     if truncated:
         parts += [
-            "> The diff was too large for the model, so some files were not "
-            "analysed.",
+            "> The diff was too large for the model, so some files were not analysed.",
             "",
         ]
     parts += [
@@ -373,9 +375,7 @@ def main():
         return 0
 
     comments = gh.paged(f"/issues/{number}/comments", limit=500) if not dry_run else []
-    existing = next(
-        (c for c in comments if MARKER in (c.get("body") or "")), None
-    )
+    existing = next((c for c in comments if MARKER in (c.get("body") or "")), None)
     if existing and f"sha={head_sha}" in existing["body"] and not dry_run:
         print(f"already reviewed {head_sha[:7]}; nothing to do")
         return 0

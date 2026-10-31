@@ -168,11 +168,11 @@ for triple in x86_64-w64-windows-gnu i686-w64-windows-gnu; do
                 fi
                 got=$("$symbolizer" --obj="$d/nd/dbg.exe" --relative-address $((text + at + 1)) 2>/dev/null | tr '\n' ' ')
                 case "$got" in
-                    walk*wd.salam:1[2-9]*) ;;
-                    *)
-                        bad "$tag (llvm-symbolizer through the PDB alone gave: $got)"
-                        continue
-                        ;;
+                walk*wd.salam:1[2-9]*) ;;
+                *)
+                    bad "$tag (llvm-symbolizer through the PDB alone gave: $got)"
+                    continue
+                    ;;
                 esac
             fi
         fi

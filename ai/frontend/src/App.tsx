@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import { api, ApiError, getToken, handleUnauthorized, setClientPlatform, setClientVersion, setToken, streamMessage, uiText, type Chat, type FileMeta, type Message, type OutgoingFile, type User } from "./api";
 import { Admin, NoAccess } from "./Admin";
 import { AdminChat } from "./AdminChat";
+import { confirmDialog } from "./Confirm";
 import { AgentBar, useAgent } from "./Agent";
 import { Memory } from "./Memory";
 import { fileLoader, type Pending } from "./Attach";
@@ -143,6 +144,12 @@ export function App() {
   const watching = useRef(new Set<number>());
   const netFails = useRef(0);
   const signedIn = user !== null;
+  useEffect(() => {
+    if (!isDesktop) return;
+    agent.alive().catch(() => {});
+    const beat = window.setInterval(() => agent.alive().catch(() => {}), 4000);
+    return () => window.clearInterval(beat);
+  }, []);
   useEffect(() => {
     if (!signedIn || isDesktop) return;
     api
@@ -479,7 +486,22 @@ export function App() {
     }
   };
 
-  const changeMode = (m: AgentMode) => {
+  const changeMode = async (m: AgentMode) => {
+    if (m === mode) return;
+    if (m === "everything") {
+      const ok = await confirmDialog({
+        title: t("همه‌چیز را خودکار کنم؟", "Allow everything automatically?"),
+        message: t(
+          "دستیار می‌تواند بیرون از پوشه‌ی کاری هم فایل بسازد و تغییر بدهد و هر فرمانی را بدون پرسیدن از شما اجرا کند. این حالت فقط برای کاری مناسب است که کاملاً به آن و به منبعش اطمینان دارید.",
+          "The assistant can create and change files anywhere on this computer, and run any command without asking you. Only use this for a task and a source you fully trust.",
+        ),
+        confirmLabel: t("بله، همه‌چیز مجاز باشد", "Yes, allow everything"),
+        cancelLabel: t("نه، پیش از تغییر بپرس", "No, keep asking"),
+        tone: "danger",
+        icon: "alert",
+      });
+      if (!ok) return;
+    }
     setMode(m);
     if (activeId) {
       saveMode(activeId, m);
@@ -686,7 +708,7 @@ export function App() {
               draft={draft}
               onDraftUsed={dropDraft}
               placeholder={agentChat ? t("بگویید روی این پروژه چه کاری انجام شود…", "Tell me what to do in this project…") : undefined}
-              note={agentChat ? t("دستیار پیش از تغییر فایل یا اجرای فرمان از شما اجازه می‌گیرد، مگر حالت خودکار را انتخاب کنید.", "The assistant asks before changing files or running commands, unless you choose auto mode.") : undefined}
+              note={agentChat ? t("دستیار پیش از تغییر فایل یا اجرای فرمان از شما اجازه می‌گیرد، مگر حالت خودکار یا «همه‌چیز» را انتخاب کنید.", "The assistant asks before changing files or running commands, unless you choose automatic or \"everything\" mode.") : undefined}
               bar={
                 isDesktop && (!activeChat || activeChat.agent) ? (
                   <AgentBar

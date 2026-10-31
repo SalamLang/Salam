@@ -1,0 +1,550 @@
+pkg.en = metatrader
+pkg.name = metatrader
+pkg.group = Trading
+pkg.summary = Read account, symbols, rates and history, and send trades through a local MetaTrader 5 bridge.
+pkg.title = The metatrader package in Salam
+pkg.description = The metatrader package in Salam: account, symbol, rate, tick, order and trade calls for MetaTrader 5 through a local HTTP bridge, with a guide and examples.
+pkg.import = metatrader
+pkg.intro <<
+<p><code>metatrader</code> is a client for a local bridge to a running MetaTrader 5 terminal. The package speaks HTTP and JSON: every call sends a request to the bridge, and the bridge asks the terminal for the data or the trade. There is no DLL, no COM and no terminal plugin inside your program, so the same Salam program runs on Linux, macOS and Windows as long as the bridge is reachable.</p>
+<p>The terminal itself must be running and logged in, and a bridge must be listening on the address you set. The default is <code>http://127.0.0.1:18812</code>, the value of <code>DEFAULT_BRIDGE_URL</code>. The bridge implements the endpoints below; the package only calls them and decodes the JSON.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Endpoint</th><th>Used by</th></tr></thead>
+<tbody>
+<tr><td><code>POST /initialize</code>, <code>POST /login</code>, <code>POST /shutdown</code></td><td><code>Initialize</code>, <code>Login</code>, <code>Shutdown</code></td></tr>
+<tr><td><code>GET /version</code>, <code>GET /account_info</code>, <code>GET /terminal_info</code></td><td><code>Version</code>, <code>GetAccountInfo</code>, <code>GetTerminalInfo</code></td></tr>
+<tr><td><code>GET /symbols_total</code>, <code>GET /symbols_get</code>, <code>GET /symbol_info</code>, <code>GET /symbol_info_tick</code>, <code>POST /symbol_select</code></td><td>Symbol calls</td></tr>
+<tr><td><code>GET /copy_rates_from</code>, <code>GET /copy_rates_from_pos</code>, <code>GET /copy_rates_range</code></td><td><code>CopyRates*</code></td></tr>
+<tr><td><code>GET /copy_ticks_from</code>, <code>GET /copy_ticks_range</code></td><td><code>CopyTicks*</code></td></tr>
+<tr><td><code>GET /orders_total</code>, <code>GET /orders_get</code>, <code>GET /positions_total</code>, <code>GET /positions_get</code></td><td>Order and position reads</td></tr>
+<tr><td><code>GET /history_orders_*</code>, <code>GET /history_deals_*</code></td><td>History calls</td></tr>
+<tr><td><code>POST /order_calc_margin</code>, <code>POST /order_calc_profit</code>, <code>POST /order_check</code>, <code>POST /order_send</code></td><td>Trading calls</td></tr>
+<tr><td><code>POST /market_book_add</code>, <code>GET /market_book_get</code>, <code>POST /market_book_release</code></td><td>Market depth calls</td></tr>
+</tbody>
+</table></div>
+
+<h2 id="guide-start">Start with the account</h2>
+<p>Set the bridge address once, call <code>Initialize</code>, then read the account. Every call returns a value even when it fails, so check <code>Ok</code> or <code>LastError</code> after the calls that matter, and stop when the bridge is not there.</p>
+{{example.metatrader-quickstart}}
+<p><code>Initialize</code> and <code>Login</code> mark the session connected only when the bridge answers with a 2xx status. <code>IsConnected</code> reports that flag, not a live socket: call <code>Version</code> or <code>GetTerminalInfo</code> when you need to know that the terminal is still there. <code>Shutdown</code> only asks the bridge to close; it does not free anything in your program.</p>
+
+<h2 id="guide-errors">Errors and retcodes</h2>
+<p>A failed call returns the zero value of its type, an empty vector, an empty struct, or <code>false</code>, and leaves the reason in <code>LastError</code>. <code>Ok</code> is true exactly when the last code is <code>RES_S_OK</code>. The bridge uses the <code>RES_E_*</code> constants for transport and parameter errors, and the trade server uses <code>TRADE_RETCODE_*</code> in the result of <code>OrderCheck</code> and <code>OrderSend</code>.</p>
+<pre class="code"><code>a := metatrader.GetAccountInfo()
+if not metatrader.Ok():
+    e := metatrader.LastError()
+    printerrln "account failed:", e.code, e.description
+    ret 1
+end
+println a.balance</code></pre>
+<p>An HTTP error and a rejected trade are different: the first leaves <code>Ok</code> false, the second is a normal answer with a <code>retcode</code>. Always read <code>retcode</code> after <code>OrderSend</code>; a successful HTTP call does not mean the trade was accepted.</p>
+
+<h2 id="guide-symbols">Symbols, prices and ticks</h2>
+<p><code>SymbolsGet</code> returns every symbol with its contract rules and session data; the group forms filter with a mask such as <code>*USD*</code>, where <code>*</code> matches any text. <code>GetSymbolInfo</code> asks for one symbol, and <code>SymbolInfoTick</code> is the cheap call for the current bid and ask.</p>
+{{example.metatrader-symbols}}
+<p><code>digits</code> and <code>point</code> tell you how to round a price; <code>volume_min</code>, <code>volume_max</code> and <code>volume_step</code> tell you which volumes the server accepts; <code>trade_stops_level</code> is the shortest distance in points between the price and a stop loss or take profit.</p>
+
+<h2 id="guide-rates">Candles and ticks</h2>
+<p>Rates are returned oldest first. <code>CopyRatesFromPos</code> counts from the newest candle, so position 0 is the candle that is still forming, and <code>CopyRatesFrom</code> starts at a time. Times are seconds since the epoch, as in <code>time</code>; tick times are milliseconds in <code>time_msc</code>, which is what <code>CopyTicksRange</code> expects.</p>
+{{example.metatrader-rates}}
+<p>The tick filters keep the payload small: <code>COPY_TICKS_INFO</code> keeps bid and ask changes, <code>COPY_TICKS_TRADE</code> keeps trades, and <code>COPY_TICKS_ALL</code> keeps both. Check <code>flags</code> on each tick when you need to know which side changed.</p>
+
+<h2 id="guide-trade">Checking and sending an order</h2>
+<p>Fill a <code>TradeRequest</code>, call <code>OrderCheck</code>, and look at its margin fields before you send anything. Then call <code>OrderSend</code> and read <code>retcode</code>. A check returning <code>0</code> means the request is valid; the send returns <code>TRADE_RETCODE_DONE</code> for a filled order, <code>TRADE_RETCODE_PLACED</code> for a pending order, and an error code otherwise.</p>
+{{example.metatrader-trade}}
+<p><code>action</code> selects what the request does: <code>TRADE_ACTION_DEAL</code> for a market order, <code>TRADE_ACTION_PENDING</code> for a pending one, <code>TRADE_ACTION_SLTP</code> to change stops, <code>TRADE_ACTION_MODIFY</code> and <code>TRADE_ACTION_REMOVE</code> for pending orders, and <code>TRADE_ACTION_CLOSE_BY</code> to close one position with another. Set <code>type_filling</code> to a mode the symbol allows, and set <code>magic</code> so you can find your own orders later.</p>
+
+<h2 id="guide-history">Orders, positions and history</h2>
+<p><code>OrdersGet</code> returns active orders, <code>PositionsGet</code> returns open positions, and the history calls return what is already closed. Every filter has a total and a get form; the get form returns a vector, even when you ask by ticket, because the bridge keeps one answer shape.</p>
+<p>History times are seconds since the epoch. Give both ends of the range; an empty range returns an empty vector, not an error.</p>
+{{example.metatrader-history}}
+
+<h2 id="guide-book">Market depth</h2>
+<p>Market depth is a subscription. Call <code>MarketBookAdd</code> once, read the levels with <code>MarketBookGet</code> as often as you need, and call <code>MarketBookRelease</code> when you stop. The depth stays empty until the terminal has it and the subscription is active.</p>
+
+<h2 id="guide-types">Types and units</h2>
+<div class="table-wrap"><table>
+<thead><tr><th>Type</th><th>What it holds</th></tr></thead>
+<tbody>
+<tr><td><code>AccountInfo</code></td><td>Balance, equity, margin, free margin, margin level, currency and account limits.</td></tr>
+<tr><td><code>TerminalInfo</code></td><td>Connection, build, folders, language and permissions of the terminal.</td></tr>
+<tr><td><code>SymbolInfo</code></td><td>Prices, spread, digits, point, contract size, volume limits, swap and session data.</td></tr>
+<tr><td><code>Tick</code>, <code>Rate</code></td><td>One price change and one candle; times are seconds, and tick times also have milliseconds.</td></tr>
+<tr><td><code>TradeOrder</code></td><td>An order with its state, volume, prices and the position it belongs to.</td></tr>
+<tr><td><code>TradePosition</code></td><td>An open position with its volume, profit, swap and stop prices.</td></tr>
+<tr><td><code>TradeDeal</code></td><td>An executed deal with its profit, commission, swap and fee.</td></tr>
+<tr><td><code>TradeRequest</code>, <code>OrderCheckResult</code>, <code>OrderSendResult</code></td><td>The input and the two possible answers of the trading calls.</td></tr>
+</tbody>
+</table></div>
+
+<h2 id="guide-limits">What the package does not do</h2>
+<ul>
+<li>It does not start the terminal. The bridge must be running and the terminal logged in; <code>Initialize</code> is a request to the bridge, not to the terminal process.</li>
+<li>It does not retry. A timeout, a closed bridge or an HTTP 5xx is returned once; decide in your own code whether to repeat the call.</li>
+<li>It does not replace <code>OrderCheck</code> with local validation. The broker has the last word on volume, stops, filling and market hours.</li>
+<li>It does not keep a cache. Every call asks the bridge for fresh data, so a tight loop of <code>SymbolInfoTick</code> is a lot of HTTP requests; sleep between them.</li>
+</ul>
+>>
+
+group.TIMEFRAME_.title = Timeframes
+group.TIMEFRAME_ = Chart timeframes, the values of the MQL5 <code>ENUM_TIMEFRAMES</code>.
+ex.group.TIMEFRAME_ = -
+group.ORDER_TYPE_.title = Order types
+group.ORDER_TYPE_ = Order types, the values of <code>ENUM_ORDER_TYPE</code>.
+ex.group.ORDER_TYPE_ = -
+group.ORDER_STATE_.title = Order states
+group.ORDER_STATE_ = Order states, the values of <code>ENUM_ORDER_STATE</code>.
+ex.group.ORDER_STATE_ = -
+group.ORDER_FILLING_.title = Filling modes
+group.ORDER_FILLING_ = Order filling modes, the values of <code>ENUM_ORDER_TYPE_FILLING</code>.
+ex.group.ORDER_FILLING_ = -
+group.ORDER_TIME_.title = Order lifetimes
+group.ORDER_TIME_ = Order time types, the values of <code>ENUM_ORDER_TYPE_TIME</code>.
+ex.group.ORDER_TIME_ = -
+group.ORDER_REASON_.title = Order reasons
+group.ORDER_REASON_ = Why the terminal created an order, the values of <code>ENUM_ORDER_REASON</code>.
+ex.group.ORDER_REASON_ = -
+group.TRADE_ACTION_.title = Trade actions
+group.TRADE_ACTION_ = Trade request actions, the values of <code>ENUM_TRADE_REQUEST_ACTIONS</code>.
+ex.group.TRADE_ACTION_ = -
+group.POSITION_TYPE_.title = Position types
+group.POSITION_TYPE_ = Position types, the values of <code>ENUM_POSITION_TYPE</code>.
+ex.group.POSITION_TYPE_ = -
+group.POSITION_REASON_.title = Position reasons
+group.POSITION_REASON_ = Why the terminal opened a position, the values of <code>ENUM_POSITION_REASON</code>.
+ex.group.POSITION_REASON_ = -
+group.DEAL_TYPE_.title = Deal types
+group.DEAL_TYPE_ = Deal types, the values of <code>ENUM_DEAL_TYPE</code>.
+ex.group.DEAL_TYPE_ = -
+group.DEAL_ENTRY_.title = Deal entries
+group.DEAL_ENTRY_ = How a deal changed the position, the values of <code>ENUM_DEAL_ENTRY</code>.
+ex.group.DEAL_ENTRY_ = -
+group.DEAL_REASON_.title = Deal reasons
+group.DEAL_REASON_ = Why the terminal made a deal, the values of <code>ENUM_DEAL_REASON</code>.
+ex.group.DEAL_REASON_ = -
+group.TRADE_RETCODE_.title = Trade result codes
+group.TRADE_RETCODE_ = Result codes the trade server returns in <code>retcode</code>.
+ex.group.TRADE_RETCODE_ = -
+group.BOOK_TYPE_.title = Book levels
+group.BOOK_TYPE_ = The side of a market depth level, the values of <code>ENUM_BOOK_TYPE</code>.
+ex.group.BOOK_TYPE_ = -
+group.COPY_TICKS_.title = Tick filters
+group.COPY_TICKS_ = What <code>CopyTicksFrom</code> and <code>CopyTicksRange</code> return, the values of <code>ENUM_COPY_TICKS</code>.
+ex.group.COPY_TICKS_ = -
+group.TICK_FLAG_.title = Tick flags
+group.TICK_FLAG_ = What a tick carries, as a bit mask in <code>flags</code>.
+ex.group.TICK_FLAG_ = -
+group.SYMBOL_TRADE_MODE_.title = Symbol trade modes
+group.SYMBOL_TRADE_MODE_ = What trading a symbol allows, the values of <code>ENUM_SYMBOL_TRADE_MODE</code>.
+ex.group.SYMBOL_TRADE_MODE_ = -
+group.SYMBOL_CALC_MODE_.title = Symbol calculation modes
+group.SYMBOL_CALC_MODE_ = How the terminal calculates profit and margin for a symbol, the values of <code>ENUM_SYMBOL_CALC_MODE</code>.
+ex.group.SYMBOL_CALC_MODE_ = -
+group.RES_.title = Bridge result codes
+group.RES_ = Result codes the bridge and this package use in <code>LastError</code>.
+ex.group.RES_ = -
+group.DEAL_.title = Deal kinds
+group.DEAL_ = Deal kinds that are not a buy or a sell, such as dividends and taxes.
+ex.group.DEAL_ = -
+
+doc.DEFAULT_BRIDGE_URL = The default address of the bridge.
+ex.DEFAULT_BRIDGE_URL = -
+doc.DEFAULT_TIMEOUT_MS = The default timeout of a bridge call, in milliseconds: 60000.
+ex.DEFAULT_TIMEOUT_MS = -
+
+doc.LastErrorInfo = The last result of the package: a code and a description.
+ex.LastErrorInfo = -
+doc.LastErrorInfo.code = The result code; <code>RES_S_OK</code> on success.
+doc.LastErrorInfo.description = The human readable description of the code or instrument.
+doc.VersionInfo = The version and build of the MetaTrader terminal.
+ex.VersionInfo = -
+doc.VersionInfo.terminal_version = The version of the terminal.
+doc.VersionInfo.build = The build number.
+doc.VersionInfo.build_release_date = The release date of that build.
+doc.AccountInfo = The state of the trading account: balance, equity, margin and limits.
+ex.AccountInfo = -
+doc.AccountInfo.login = The account number.
+doc.AccountInfo.trade_mode = The trade mode of the symbol or account.
+doc.AccountInfo.leverage = The leverage of the account.
+doc.AccountInfo.limit_orders = The greatest number of open orders the account allows.
+doc.AccountInfo.margin_so_mode = The stop out mode of the account.
+doc.AccountInfo.trade_allowed = True when trading is allowed.
+doc.AccountInfo.trade_expert = True when expert trading is allowed.
+doc.AccountInfo.margin_mode = The margin calculation mode of the account.
+doc.AccountInfo.currency_digits = The digits used for the deposit currency.
+doc.AccountInfo.fifo_close = True when positions must close in the order they opened.
+doc.AccountInfo.balance = The account balance in the deposit currency.
+doc.AccountInfo.credit = The credit granted to the account.
+doc.AccountInfo.profit = The floating profit or the profit of the deal.
+doc.AccountInfo.equity = Balance plus floating profit and credit.
+doc.AccountInfo.margin = The margin currently used.
+doc.AccountInfo.margin_free = Free margin available for new positions.
+doc.AccountInfo.margin_level = Equity divided by margin, in percent.
+doc.AccountInfo.margin_so_call = The margin level that triggers a margin call, in percent.
+doc.AccountInfo.margin_so_so = The margin level that triggers a stop out, in percent.
+doc.AccountInfo.margin_initial = The initial margin of one lot.
+doc.AccountInfo.margin_maintenance = The maintenance margin of one lot.
+doc.AccountInfo.assets = Total assets in the account.
+doc.AccountInfo.liabilities = Total liabilities in the account.
+doc.AccountInfo.commission_blocked = The commission blocked on the account.
+doc.AccountInfo.name = The name of the account owner.
+doc.AccountInfo.server = The trade server of the account.
+doc.AccountInfo.currency = The deposit currency of the account.
+doc.AccountInfo.company = The company that provides the account.
+doc.TerminalInfo = The state of the MetaTrader terminal: connection, folders and permissions.
+ex.TerminalInfo = -
+doc.TerminalInfo.community_account = True when the account is a MQL5.community account.
+doc.TerminalInfo.community_connection = True when the terminal has a MQL5.community connection.
+doc.TerminalInfo.connected = True while the terminal is connected to the trade server.
+doc.TerminalInfo.dlls_allowed = True when the terminal allows DLL calls.
+doc.TerminalInfo.trade_allowed = True when trading is allowed.
+doc.TerminalInfo.tradeapi_disabled = True when the trade API is disabled in the terminal.
+doc.TerminalInfo.email_enabled = True when email is enabled in the terminal.
+doc.TerminalInfo.ftp_enabled = True when FTP is enabled in the terminal.
+doc.TerminalInfo.notifications_enabled = True when push notifications are enabled.
+doc.TerminalInfo.mqid = True when the terminal has a MetaQuotes ID.
+doc.TerminalInfo.build = The build number.
+doc.TerminalInfo.maxbars = The greatest number of bars the terminal keeps.
+doc.TerminalInfo.codepage = The code page of the terminal.
+doc.TerminalInfo.ping_last = The last ping to the trade server, in milliseconds.
+doc.TerminalInfo.community_balance = The MQL5.community balance.
+doc.TerminalInfo.retransmission = The share of retransmitted data, in percent.
+doc.TerminalInfo.company = The company that provides the account.
+doc.TerminalInfo.name = The name of the terminal.
+doc.TerminalInfo.language = The interface language of the terminal.
+doc.TerminalInfo.path = The installation folder of the terminal.
+doc.TerminalInfo.data_path = The data folder of this terminal.
+doc.TerminalInfo.commondata_path = The shared data folder of all terminals.
+doc.SymbolInfo = Everything the terminal knows about one symbol, from prices to contract rules.
+ex.SymbolInfo = -
+doc.SymbolInfo.custom = True when the symbol is custom, not from the server.
+doc.SymbolInfo.chart_mode = How the symbol is shown in Market Watch.
+doc.SymbolInfo.select = True when the symbol is selected in Market Watch.
+doc.SymbolInfo.visible = True when the symbol is visible in Market Watch.
+doc.SymbolInfo.session_deals = The deals made in the session.
+doc.SymbolInfo.session_buy_orders = The buy orders placed in the session.
+doc.SymbolInfo.session_sell_orders = The sell orders placed in the session.
+doc.SymbolInfo.volume = The tick volume of the day.
+doc.SymbolInfo.volumehigh = The highest volume of the day.
+doc.SymbolInfo.volumelow = The lowest volume of the day.
+doc.SymbolInfo.time = The time in seconds since the epoch.
+doc.SymbolInfo.digits = The digits after the decimal point in the price.
+doc.SymbolInfo.spread = The spread in points.
+doc.SymbolInfo.spread_float = True when the spread floats.
+doc.SymbolInfo.ticks_bookdepth = The depth of the book the ticks cover.
+doc.SymbolInfo.trade_calc_mode = The profit calculation mode of the symbol.
+doc.SymbolInfo.trade_mode = The trade mode of the symbol or account.
+doc.SymbolInfo.start_time = The time the symbol starts trading, in seconds since the epoch.
+doc.SymbolInfo.expiration_time = The expiration time of the symbol, in seconds since the epoch; 0 when it does not expire.
+doc.SymbolInfo.trade_stops_level = The shortest allowed distance to the price for stops, in points.
+doc.SymbolInfo.trade_freeze_level = The distance in points where orders cannot be changed.
+doc.SymbolInfo.trade_exemode = The execution mode of the symbol.
+doc.SymbolInfo.swap_mode = The swap calculation mode of the symbol.
+doc.SymbolInfo.swap_rollover3days = The weekday with triple swap: 0 is Sunday.
+doc.SymbolInfo.margin_hedged_use_leg = True when the hedged margin uses the larger leg.
+doc.SymbolInfo.expiration_mode = The expiration modes the symbol allows.
+doc.SymbolInfo.filling_mode = The filling modes the symbol allows, as a bit mask.
+doc.SymbolInfo.order_mode = The order types the symbol allows, as a bit mask.
+doc.SymbolInfo.order_gtc_mode = The GTC order mode of the symbol.
+doc.SymbolInfo.option_mode = The option mode of the symbol.
+doc.SymbolInfo.option_right = The option right of the symbol.
+doc.SymbolInfo.bid = The best bid price.
+doc.SymbolInfo.bidhigh = The highest bid of the session.
+doc.SymbolInfo.bidlow = The lowest bid of the session.
+doc.SymbolInfo.ask = The best ask price.
+doc.SymbolInfo.askhigh = The highest ask of the session.
+doc.SymbolInfo.asklow = The lowest ask of the session.
+doc.SymbolInfo.last = The last trade price.
+doc.SymbolInfo.lasthigh = The highest last price of the session.
+doc.SymbolInfo.lastlow = The lowest last price of the session.
+doc.SymbolInfo.volume_real = The real volume, in contracts or units.
+doc.SymbolInfo.volumehigh_real = The highest real volume of the day.
+doc.SymbolInfo.volumelow_real = The lowest real volume of the day.
+doc.SymbolInfo.option_strike = The strike price of the option.
+doc.SymbolInfo.point = The point size of the symbol.
+doc.SymbolInfo.trade_tick_value = The value of one tick in the deposit currency.
+doc.SymbolInfo.trade_tick_value_profit = The value of one tick for a profit.
+doc.SymbolInfo.trade_tick_value_loss = The value of one tick for a loss.
+doc.SymbolInfo.trade_tick_size = The tick size used for profit.
+doc.SymbolInfo.trade_contract_size = The size of one contract.
+doc.SymbolInfo.trade_accrued_interest = The accrued interest of the instrument.
+doc.SymbolInfo.trade_face_value = The face value of the instrument.
+doc.SymbolInfo.trade_liquidity_rate = The liquidity rate of the instrument.
+doc.SymbolInfo.volume_min = The smallest volume of one order.
+doc.SymbolInfo.volume_max = The greatest volume of one position.
+doc.SymbolInfo.volume_step = The step between volumes.
+doc.SymbolInfo.volume_limit = The greatest volume of one order.
+doc.SymbolInfo.swap_long = The swap of a long position per lot per day.
+doc.SymbolInfo.swap_short = The swap of a short position per lot per day.
+doc.SymbolInfo.margin_initial = The initial margin of one lot.
+doc.SymbolInfo.margin_maintenance = The maintenance margin of one lot.
+doc.SymbolInfo.session_volume = The volume of the session.
+doc.SymbolInfo.session_turnover = The turnover of the session.
+doc.SymbolInfo.session_interest = The open interest of the session.
+doc.SymbolInfo.session_buy_orders_volume = The volume of the buy orders of the session.
+doc.SymbolInfo.session_sell_orders_volume = The volume of the sell orders of the session.
+doc.SymbolInfo.session_open = The open price of the session.
+doc.SymbolInfo.session_close = The close price of the session.
+doc.SymbolInfo.session_aw = The weighted average price of the session.
+doc.SymbolInfo.session_price_settlement = The settlement price of the session.
+doc.SymbolInfo.session_price_limit_min = The lower price limit of the session.
+doc.SymbolInfo.session_price_limit_max = The upper price limit of the session.
+doc.SymbolInfo.margin_hedged = The margin of a hedged position.
+doc.SymbolInfo.price_change = The price change of the day, in percent.
+doc.SymbolInfo.price_volatility = The price volatility of the instrument.
+doc.SymbolInfo.price_theoretical = The theoretical price of the option.
+doc.SymbolInfo.price_greeks_delta = The delta of the option.
+doc.SymbolInfo.price_greeks_theta = The theta of the option.
+doc.SymbolInfo.price_greeks_gamma = The gamma of the option.
+doc.SymbolInfo.price_greeks_vega = The vega of the option.
+doc.SymbolInfo.price_greeks_rho = The rho of the option.
+doc.SymbolInfo.price_greeks_omega = The omega of the option.
+doc.SymbolInfo.price_sensitivity = The price sensitivity of the instrument.
+doc.SymbolInfo.basis = The basis of the instrument.
+doc.SymbolInfo.category = The category of the instrument.
+doc.SymbolInfo.currency_base = The base currency of the symbol.
+doc.SymbolInfo.currency_profit = The profit currency of the symbol.
+doc.SymbolInfo.currency_margin = The margin currency of the symbol.
+doc.SymbolInfo.bank = The bank of the instrument, for exchange instruments.
+doc.SymbolInfo.description = The human readable description of the code or instrument.
+doc.SymbolInfo.exchange = The exchange of the instrument.
+doc.SymbolInfo.formula = The pricing formula of the instrument.
+doc.SymbolInfo.isin = The ISIN of the instrument.
+doc.SymbolInfo.name = The name of the account, symbol or terminal.
+doc.SymbolInfo.page = The web page of the instrument.
+doc.SymbolInfo.path = The path of the symbol in the symbol tree.
+doc.Tick = One price change of a symbol.
+ex.Tick = -
+doc.Tick.time = The time in seconds since the epoch.
+doc.Tick.bid = The best bid price.
+doc.Tick.ask = The best ask price.
+doc.Tick.last = The last trade price.
+doc.Tick.volume = The tick volume.
+doc.Tick.time_msc = The time in milliseconds since the epoch.
+doc.Tick.flags = The tick flags, a combination of <code>TICK_FLAG_*</code>.
+doc.Tick.volume_real = The real volume, in contracts or units.
+doc.Rate = One candle of a symbol at a timeframe.
+ex.Rate = -
+doc.Rate.time = The time in seconds since the epoch.
+doc.Rate.open = The open price of the candle.
+doc.Rate.high = The high price of the candle.
+doc.Rate.low = The low price of the candle.
+doc.Rate.close = The close price of the candle.
+doc.Rate.tick_volume = The tick volume of the candle.
+doc.Rate.spread = The spread in points.
+doc.Rate.real_volume = The real volume of the candle or tick, in contracts.
+doc.BookInfo = One level of the market depth, a price and its volume.
+ex.BookInfo = -
+doc.BookInfo.book_type = The side of the book level, <code>BOOK_TYPE_SELL</code> or <code>BOOK_TYPE_BUY</code>.
+doc.BookInfo.price = The price of the request, the book level or the result.
+doc.BookInfo.volume = The volume of the book level, in lots.
+doc.BookInfo.volume_dbl = The volume of the book level as a floating point number.
+doc.TradeRequest = A trade request for <code>OrderCheck</code> and <code>OrderSend</code>.
+ex.TradeRequest = -
+doc.TradeRequest.action = The trade operation, one of the <code>TRADE_ACTION_*</code> values.
+doc.TradeRequest.magic = The magic number that identifies the expert.
+doc.TradeRequest.order = The order ticket.
+doc.TradeRequest.symbol = The trading symbol.
+doc.TradeRequest.volume = The volume to trade, in lots.
+doc.TradeRequest.price = The price of the request; for a market order the current price.
+doc.TradeRequest.stoplimit = The stop limit price, in points from the stop price.
+doc.TradeRequest.sl = The stop loss price; 0 when there is none.
+doc.TradeRequest.tp = The take profit price; 0 when there is none.
+doc.TradeRequest.deviation = The allowed slippage in points.
+doc.TradeRequest.order_type = The order type, one of <code>ORDER_TYPE_*</code>.
+doc.TradeRequest.type_filling = The filling type of the order, one of <code>ORDER_FILLING_*</code>.
+doc.TradeRequest.type_time = The time type of the order, one of <code>ORDER_TIME_*</code>.
+doc.TradeRequest.expiration = The expiration time of the request, in seconds since the epoch.
+doc.TradeRequest.comment = The comment stored with the record.
+doc.TradeRequest.position = The ticket of the position the request changes.
+doc.TradeRequest.position_by = The ticket of the opposite position for a close by.
+doc.OrderCheckResult = What <code>OrderCheck</code> reports: the result code and the margin the order would use.
+ex.OrderCheckResult = -
+doc.OrderCheckResult.retcode = The result code of the trade request.
+doc.OrderCheckResult.balance = The balance after the order.
+doc.OrderCheckResult.equity = The equity after the order.
+doc.OrderCheckResult.profit = The profit the order would add.
+doc.OrderCheckResult.margin = The margin the order would use.
+doc.OrderCheckResult.margin_free = The free margin after the order.
+doc.OrderCheckResult.margin_level = Equity divided by margin, in percent.
+doc.OrderCheckResult.comment = The comment stored with the record.
+doc.OrderCheckResult.request = The request that produced this result.
+doc.OrderSendResult = What <code>OrderSend</code> reports: the result code and the tickets it created.
+ex.OrderSendResult = -
+doc.OrderSendResult.retcode = The result code of the trade request.
+doc.OrderSendResult.deal = The ticket of the deal the server created.
+doc.OrderSendResult.order = The ticket of the order the server created.
+doc.OrderSendResult.volume = The volume in lots.
+doc.OrderSendResult.price = The price of the request, the book level or the result.
+doc.OrderSendResult.bid = The best bid price.
+doc.OrderSendResult.ask = The best ask price.
+doc.OrderSendResult.comment = The comment stored with the record.
+doc.OrderSendResult.request_id = The identifier the server assigned to the request.
+doc.OrderSendResult.retcode_external = The result code of the external system.
+doc.OrderSendResult.request = The request that produced this result.
+doc.TradeOrder = An active or historical order.
+ex.TradeOrder = -
+doc.TradeOrder.ticket = The ticket of the record.
+doc.TradeOrder.time_setup = The time the order was placed, in seconds since the epoch.
+doc.TradeOrder.time_setup_msc = The time the order was placed, in milliseconds since the epoch.
+doc.TradeOrder.time_done = The time the order was done, in seconds since the epoch.
+doc.TradeOrder.time_done_msc = The time the order was done, in milliseconds since the epoch.
+doc.TradeOrder.time_expiration = The expiration time of the order, in seconds since the epoch.
+doc.TradeOrder.order_type = The order type, one of <code>ORDER_TYPE_*</code>.
+doc.TradeOrder.type_time = The time type of the order, one of <code>ORDER_TIME_*</code>.
+doc.TradeOrder.type_filling = The filling type of the order, one of <code>ORDER_FILLING_*</code>.
+doc.TradeOrder.state = The order state, one of <code>ORDER_STATE_*</code>.
+doc.TradeOrder.magic = The magic number that identifies the expert.
+doc.TradeOrder.position_id = The identifier of the position.
+doc.TradeOrder.position_by_id = The identifier of the opposite position.
+doc.TradeOrder.reason = The reason the record was created, one of the reason constants.
+doc.TradeOrder.volume_initial = The volume the order was placed with.
+doc.TradeOrder.volume_current = The volume still open on the order.
+doc.TradeOrder.price_open = The price the order was placed at.
+doc.TradeOrder.sl = The stop loss price; 0 when there is none.
+doc.TradeOrder.tp = The take profit price; 0 when there is none.
+doc.TradeOrder.price_current = The current price of the order or position.
+doc.TradeOrder.price_stoplimit = The stop limit price of a stop limit order.
+doc.TradeOrder.symbol = The trading symbol.
+doc.TradeOrder.comment = The comment stored with the record.
+doc.TradeOrder.external_id = The exchange identifier of the order, position or deal.
+doc.TradePosition = An open position, with its volume, prices and profit.
+ex.TradePosition = -
+doc.TradePosition.ticket = The ticket of the record.
+doc.TradePosition.time = The time in seconds since the epoch.
+doc.TradePosition.time_msc = The time in milliseconds since the epoch.
+doc.TradePosition.time_update = The time of the last update, in seconds since the epoch.
+doc.TradePosition.time_update_msc = The time of the last update, in milliseconds since the epoch.
+doc.TradePosition.position_type = The position type, <code>POSITION_TYPE_BUY</code> or <code>POSITION_TYPE_SELL</code>.
+doc.TradePosition.magic = The magic number that identifies the expert.
+doc.TradePosition.identifier = The identifier of the position.
+doc.TradePosition.reason = The reason the record was created, one of the reason constants.
+doc.TradePosition.volume = The volume of the position, in lots.
+doc.TradePosition.price_open = The price the position opened at.
+doc.TradePosition.sl = The stop loss price; 0 when there is none.
+doc.TradePosition.tp = The take profit price; 0 when there is none.
+doc.TradePosition.price_current = The current price of the order or position.
+doc.TradePosition.swap = The swap charged on the position or deal.
+doc.TradePosition.profit = The floating profit or the profit of the deal.
+doc.TradePosition.symbol = The trading symbol.
+doc.TradePosition.comment = The comment stored with the record.
+doc.TradePosition.external_id = The exchange identifier of the order, position or deal.
+doc.TradeDeal = A deal that was executed, with its profit, commission and swap.
+ex.TradeDeal = -
+doc.TradeDeal.ticket = The ticket of the record.
+doc.TradeDeal.order = The ticket of the order the deal came from.
+doc.TradeDeal.time = The time in seconds since the epoch.
+doc.TradeDeal.time_msc = The time in milliseconds since the epoch.
+doc.TradeDeal.deal_type = The deal type, one of the <code>DEAL_TYPE_*</code> values.
+doc.TradeDeal.entry = How the deal entered or left the position, one of <code>DEAL_ENTRY_*</code>.
+doc.TradeDeal.magic = The magic number that identifies the expert.
+doc.TradeDeal.position_id = The identifier of the position.
+doc.TradeDeal.reason = The reason the record was created, one of the reason constants.
+doc.TradeDeal.volume = The volume of the deal, in lots.
+doc.TradeDeal.price = The price of the request, the book level or the result.
+doc.TradeDeal.commission = The commission charged for the deal.
+doc.TradeDeal.swap = The swap charged on the position or deal.
+doc.TradeDeal.profit = The floating profit or the profit of the deal.
+doc.TradeDeal.fee = The fee charged for the deal.
+doc.TradeDeal.symbol = The trading symbol.
+doc.TradeDeal.comment = The comment stored with the record.
+doc.TradeDeal.external_id = The exchange identifier of the order, position or deal.
+
+doc.OrdersTotal = The number of active orders, as the terminal reports it. Returns 0 on failure, with <code>LastError</code> set.
+ex.OrdersTotal = metatrader-Trade
+doc.OrdersGet = All active orders. Returns an empty vector on failure, with <code>LastError</code> set.
+ex.OrdersGet = metatrader-Trade
+doc.OrdersGetSymbol = The active orders of one symbol.
+ex.OrdersGetSymbol = metatrader-Trade
+doc.OrdersGetGroup = The active orders of the symbols that match a group mask such as <code>*USD*</code>.
+ex.OrdersGetGroup = metatrader-Trade
+doc.OrdersGetTicket = The active order with this ticket, as a vector of zero or one item, because the bridge answers in the same shape for every filter.
+ex.OrdersGetTicket = metatrader-Trade
+doc.OrderCalcMargin = The margin one order would use, in the deposit currency, for an action, symbol, volume and price. Returns 0 on failure.
+ex.OrderCalcMargin = metatrader-Trade
+doc.OrderCalcProfit = The profit the order would make between two prices. Returns 0 on failure.
+ex.OrderCalcProfit = metatrader-Trade
+doc.OrderCheck = Checks a request without sending it: the result code, the margin, the free margin after the order, and the balance, equity and profit the account would have.
+ex.OrderCheck = metatrader-Trade
+doc.OrderSend = Sends a request to the trade server and returns the result code, the order and deal tickets, the executed volume and price, and the server comment.
+ex.OrderSend = metatrader-Trade
+doc.CopyRatesFrom = Candles from a time onward: the oldest candle at or after <code>date_from</code>, then up to <code>count</code> candles.
+ex.CopyRatesFrom = metatrader-Rates
+doc.CopyRatesFromPos = Candles by position: <code>start_pos</code> is counted from the current candle, 0 being the newest, so 0 and 10 give the last ten candles.
+ex.CopyRatesFromPos = metatrader-Rates
+doc.CopyRatesRange = The candles between two times, both in seconds since the epoch.
+ex.CopyRatesRange = metatrader-Rates
+doc.PositionsTotal = The number of open positions. Returns 0 on failure.
+ex.PositionsTotal = metatrader-Trade
+doc.PositionsGet = All open positions.
+ex.PositionsGet = metatrader-Trade
+doc.PositionsGetSymbol = The open positions of one symbol.
+ex.PositionsGetSymbol = metatrader-Trade
+doc.PositionsGetGroup = The open positions of the symbols that match a group mask.
+ex.PositionsGetGroup = metatrader-Trade
+doc.PositionsGetTicket = The open position with this ticket, as a vector of zero or one item.
+ex.PositionsGetTicket = metatrader-Trade
+doc.HistoryOrdersTotal = The number of orders in the history between two times, both in seconds since the epoch.
+ex.HistoryOrdersTotal = metatrader-History
+doc.HistoryOrdersGet = The orders in the history between two times.
+ex.HistoryOrdersGet = metatrader-History
+doc.HistoryOrdersGetGroup = The historical orders whose symbols match a group mask.
+ex.HistoryOrdersGetGroup = metatrader-History
+doc.HistoryOrdersGetTicket = The historical order with this ticket.
+ex.HistoryOrdersGetTicket = metatrader-History
+doc.HistoryOrdersGetPosition = The historical orders of one position.
+ex.HistoryOrdersGetPosition = metatrader-History
+doc.HistoryDealsTotal = The number of deals in the history between two times.
+ex.HistoryDealsTotal = metatrader-History
+doc.HistoryDealsGet = The deals in the history between two times.
+ex.HistoryDealsGet = metatrader-History
+doc.HistoryDealsGetGroup = The historical deals whose symbols match a group mask.
+ex.HistoryDealsGetGroup = metatrader-History
+doc.HistoryDealsGetTicket = The historical deal with this ticket.
+ex.HistoryDealsGetTicket = metatrader-History
+doc.HistoryDealsGetPosition = The historical deals of one position.
+ex.HistoryDealsGetPosition = metatrader-History
+doc.GetAccountInfo = The current account state: login, balance, equity, margin, currency, server and company.
+ex.GetAccountInfo = metatrader-Account
+doc.GetTerminalInfo = The current terminal state: connection, build, folders, language and permissions.
+ex.GetTerminalInfo = metatrader-Account
+doc.MarketBookAdd = Asks the terminal to keep the market depth of a symbol and returns true when it started. Read it with <code>MarketBookGet</code> and stop it with <code>MarketBookRelease</code>.
+ex.MarketBookAdd = metatrader-History
+doc.MarketBookGet = The current market depth of a symbol, or an empty vector when the depth is not subscribed or is not available.
+ex.MarketBookGet = metatrader-History
+doc.MarketBookRelease = Stops the market depth subscription of a symbol.
+ex.MarketBookRelease = metatrader-History
+doc.SetBridgeUrl = Sets the base address of the bridge, for example <code>http://127.0.0.1:18812</code>. It applies to every later call.
+ex.SetBridgeUrl = metatrader-Connect
+doc.BridgeUrl = The bridge address in use, by default <code>DEFAULT_BRIDGE_URL</code>.
+ex.BridgeUrl = metatrader-Connect
+doc.Initialize = Calls the <code>/initialize</code> endpoint, optionally changing the bridge address, and marks the session connected when the bridge answers. The login and password are passed through for bridges that start the terminal themselves.
+ex.Initialize = metatrader-Connect
+doc.Login = Calls the <code>/login</code> endpoint with an account number, password, server and timeout, and marks the session connected on success.
+ex.Login = metatrader-Connect
+doc.Shutdown = Calls <code>/shutdown</code> and marks the session disconnected. Call it before the program ends so the bridge can close the terminal cleanly.
+ex.Shutdown = metatrader-Connect
+doc.IsConnected = True after a successful <code>Initialize</code> or <code>Login</code> and before <code>Shutdown</code>; it reports the last call, not a live check.
+ex.IsConnected = metatrader-Connect
+doc.Version = The terminal version and build, with the release date of the build.
+ex.Version = metatrader-Connect
+doc.LastError = The code and description of the last operation, as the package or the bridge set them.
+ex.LastError = metatrader-Connect
+doc.Ok = True when the last operation succeeded, that is when <code>LastError</code> is <code>RES_S_OK</code>.
+ex.Ok = metatrader-Connect
+doc.SymbolsTotal = The number of symbols the terminal offers. Returns 0 on failure.
+ex.SymbolsTotal = metatrader-Symbols
+doc.SymbolsGet = Every symbol the terminal offers, with its prices, contract rules and session data.
+ex.SymbolsGet = metatrader-Symbols
+doc.SymbolsGetGroup = The symbols that match a group mask such as <code>*USD*</code>.
+ex.SymbolsGetGroup = metatrader-Symbols
+doc.GetSymbolInfo = Everything the terminal knows about one symbol; an empty struct on failure.
+ex.GetSymbolInfo = metatrader-Symbols
+doc.SymbolInfoTick = The latest tick of a symbol: bid, ask, last, volume and flags.
+ex.SymbolInfoTick = metatrader-Symbols
+doc.SymbolSelect = Adds a symbol to Market Watch or removes it, and returns true when the terminal accepted the change.
+ex.SymbolSelect = metatrader-Symbols
+doc.CopyTicksFrom = Ticks from a time onward, up to <code>count</code>, filtered by the <code>COPY_TICKS_*</code> flags.
+ex.CopyTicksFrom = metatrader-Rates
+doc.CopyTicksRange = The ticks between two times in milliseconds since the epoch, filtered by the <code>COPY_TICKS_*</code> flags.
+ex.CopyTicksRange = metatrader-Rates

@@ -71,9 +71,13 @@ asks the OS to flash the taskbar or bounce the dock icon (`src/notify.rs`):
 - the assistant link is down for 20 seconds, and back again (app)
 - this computer was unlinked, HTTP 401 (app)
 
-The bell next to the access level sets notifications, sound and the reply
-preview, and sends a test. Settings are kept in `notifications.json` in the
-app's config folder. The same notice is not repeated within 4 seconds.
+Every one of these also appears inside the window as a toast in the corner,
+with a short chime, even when the window is in front or the system
+notification is unavailable. The bell next to the access level sets
+notifications, sound and the reply preview, and its test button checks both
+paths and reports which one worked. Settings are kept in
+`notifications.json` in the app's config folder. The same notice is not
+repeated within 4 seconds.
 
 - Windows: toasts use the app's own identity when installed under
   `%LOCALAPPDATA%` or Program Files, and PowerShell's otherwise (portable ZIP).
@@ -92,11 +96,38 @@ You pick one per chat in the composer.
 | پیش از هر تغییر بپرس  | run                 | ask (or "always" per tool)        | ask                         |
 | خودکار در پوشه‌ی کاری | run                 | run                               | ask                         |
 | فقط خواندنی           | run                 | refused                           | ask for reads, refuse rest  |
+| همه‌چیز را خودکار کن  | run                 | run                               | run, without asking         |
+
+The last level accepts every tool call everywhere on the computer. Choosing
+it asks for confirmation first, and the select marks it in red while it is
+active. It is meant for a task you fully trust, not as a default.
 
 Writes inside `.git/` are always refused. A running command can be stopped
 from its card. Output is capped at 30 KB (head and tail are kept), and
 commands time out after 120 seconds unless the model asks for up to 30
 minutes.
+
+## When something goes wrong
+
+The app never leaves WebKit's own error page on screen. `dist/error.html`
+is a local, bilingual page with a reason, a short checklist and a retry
+button:
+
+- `#offline`: the network or the server cannot be reached at startup
+- `#server`: the server answers with 5xx
+- `#memory`: the macOS web content process was terminated (typically out
+  of memory), caught by `on_web_content_process_terminate`
+- `#crash`: the page stopped beating its heartbeat
+
+The page probes the server with a tiny image request before retrying, so a
+retry never navigates into a network error page. Offline and server pages
+retry by themselves when the server comes back.
+
+For a renderer crash on other systems, the web app sends `agent_alive`
+every 4 seconds (`src/watchdog.rs`). If the window is focused and the
+heartbeat has been silent for 30 seconds, the app navigates to the matching
+local error page. Minimized and unfocused windows are never judged, so
+background throttling cannot trigger it.
 
 ## Develop
 

@@ -58,7 +58,6 @@ export const agent = {
     invoke<boolean>("agent_decide", { callId, answer }),
   stop: (callId: string) => invoke<boolean>("agent_stop", { callId }),
   pending: () => invoke<Omit<AgentCall, "state" | "output">[]>("agent_pending"),
-  alive: () => invoke<void>("agent_alive"),
   projectContext: (workspace: string) =>
     invoke<ProjectContext>("agent_project_context", { workspace }),
   notify: (kind: NotifyKind, chat?: string, text?: string) =>

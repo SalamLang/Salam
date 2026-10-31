@@ -191,9 +191,7 @@ pub fn run() {
             }
         });
     });
-    builder
-        .run(tauri::generate_context!())
-        .expect("error while running Salam Agent");
+    builder.run(tauri::generate_context!()).expect("error while running Salam Agent");
 }
 
 #[cfg(test)]

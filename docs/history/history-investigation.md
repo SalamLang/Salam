@@ -2,7 +2,7 @@
 
 Question: does Salam descend from One-Language/One, so that One's history belongs before Salam's first commit?
 
-Answer: no. The two projects are independent. They share an author, a coding style and repository scaffolding, but the evidence shows no transferred code and no common ancestry.
+Answer from the evidence: no code or commit was moved from One into Salam. The two projects share an author, a coding style and repository scaffolding, but the Git evidence shows no transferred code and no common ancestry. The repository owner nevertheless decided to present One's history up to Salam's first day as the earlier part of this repository's history. See the decision at the end.
 
 ## The two repositories
 
@@ -49,11 +49,15 @@ Both mirrors are saved in `/home/developer/Backups/One-2026-10-31/` and `/home/d
 
 Salam was started as a new project on 2024-02-24. It reuses its author's conventions and the repository scaffolding from One, which is normal for one maintainer. Nothing shows that One's code, design documents or commits were moved into Salam.
 
-The justified strategy is D: keep both histories independent and document the relationship. Joining them would give Salam a start date of 2018 and credit One's contributors with work they did on a different project.
+## Decision
+
+The owner of both repositories asked for One's history, up to the day before Salam's first commit, to be placed before Salam's history in this repository. Salam's own source headers describe it as born from language design work "since 2018", and One is that earlier work by the same author.
+
+This is the owner's statement about the lineage of the project. The tests above do not prove it, and this report does not claim they do. What was done is described in `history-integration-report.md`: One's commits were imported unchanged, with their original authors, dates and messages, and no date anywhere was changed.
 
 ## Limits
 
 - The comparison is textual. A design idea carried over without any shared text would not be found.
 - Only English line matching was used for the overlap test. Persian keyword tables were not compared.
 - GitHub pull request refs (`refs/pull/*`) were fetched for both repositories, but only commit content was examined, not review discussions.
-- If a specific file or design is later shown to come from One, strategy C applies: record that file's origin and attribution, without merging the whole history.
+- If a specific file or design is later shown to come from One, record that file's origin and attribution in this folder.

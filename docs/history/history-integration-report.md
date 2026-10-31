@@ -1,6 +1,6 @@
 # History work on the master branch
 
-`master` is `main` plus two commits. `main` was not touched and the default branch was not changed.
+`master` holds the full history of this repository in this order: One's history up to 2024-02-21, then Salam's own history from 2024-02-24, with the contributor restoration and these reports. `main` was not touched and the default branch was not changed.
 
 ## What changed
 
@@ -23,11 +23,17 @@
 
 3. These reports in `docs/history/`.
 
+4. One's history placed before Salam's.
+   - Source: `One-Language/One`, branch `main`, up to commit `e1227d705fb58b0032352c24ffe38bdc47f8f7d2` (2024-02-21, the last commit before Salam's first commit on 2024-02-24 14:06 +03:30). That is 1,439 commits, reachable from that commit.
+   - Method: Salam's first commit (`8dbdba7fc` in the old numbering) was given that One commit as its parent, and every Salam commit above it was recreated on top. Trees, authors, author dates, committer dates and messages are unchanged. Only the hashes of Salam's commits changed, because a commit hash includes its parents.
+   - Effect on the file tree: Salam's first commit replaces One's files with Salam's, because Salam started from an empty repository. `git show` on it displays that as a large deletion and addition. That is what happened.
+   - One commits after 2024-02-21 are not imported.
+   - Why: a decision by the owner of both projects, recorded in `history-investigation.md`. The Git evidence alone does not show that Salam derives from One.
+
 ## What was not done
 
-- One's history was not merged or grafted. See `history-investigation.md`.
-- No dates were changed. No commit was backdated.
-- No existing commit on `main` was rewritten.
+- No dates were changed. No commit was backdated. Salam's commits keep their true dates, and One's keep theirs.
+- No commit on `main` was rewritten. `master` has different hashes for Salam's commits, so it is a separate line and cannot be merged with `main`. Replace `main` with it, do not merge.
 
 ## Numbers
 
@@ -43,7 +49,8 @@ Some people use two emails, so 41 emails is fewer than 41 people.
 
 ## Reading the history
 
-- `git log --first-parent` shows only the real mainline plus the one restoration merge.
+- `git log --first-parent` shows One's mainline, then Salam's mainline plus the one restoration merge.
+- Salam's first commit is the one titled "Initial commit" on 2024-02-24. Everything before it is One.
 - `git log --grep '^Restored-from:'` lists the restored commits.
 - Restored commits have no file changes. Use `git log --no-merges --first-parent` or `git blame` for code history.
 

@@ -417,8 +417,8 @@ Tests: `tests/{en,fa}/page/style/prop_<name>.salam` checks the generated CSS, `t
 | `position-anchor` | `position anchor` | لنگر جایگاه | dashed ident / `auto` | Done | en, fa: `prop_position_anchor` | |
 | `position-area` | `position area` | ناحیه جایگاه | up to 2 keywords (`top`, `span-right`, `center`, ...) | Done | en, fa: `prop_position_area` | |
 | `position-try-fallbacks` | `position try fallbacks` | جایگزین های جایگاه | comma list of tactics and/or `position-area` values | Done | en, fa: `prop_position_try_fallbacks` | |
-| `position-try-order` | `position try order` | ترتیب تلاش جایگاه | `normal` / `most-width` / `most-height` / `most-block-size` / `most-inline-size` | Done | en, fa: `prop_position_try_order` | |
-| `position-try` | `position try` | تلاش جایگاه | `position-try-order` then `position-try-fallbacks`, shorthand | Done | en, fa: `prop_position_try` | |
+| `position-try-order` | `position try order` | ترتیب کوشش جایگاه | `normal` / `most-width` / `most-height` / `most-block-size` / `most-inline-size` | Done | en, fa: `prop_position_try_order` | |
+| `position-try` | `position try` | کوشش جایگاه | `position-try-order` then `position-try-fallbacks`, shorthand | Done | en, fa: `prop_position_try` | |
 | `position-visibility` | `position visibility` | پیدایی جایگاه | up to 2 of `always`, `anchors-visible`, `no-overflow` | Done | en, fa: `prop_position_visibility` | |
 | `animation-timeline` | `animation timeline` | خط زمان پویانمایی | comma list of dashed idents, `scroll()`, `view()` / `none`, `auto` | Done | en, fa: `prop_animation_timeline` | |
 | `animation-range` | `animation range` | بازه پویانمایی | comma list of range names with optional length/percentage | Done | en, fa: `prop_animation_range` | |

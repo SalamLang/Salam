@@ -18,11 +18,16 @@ import net.tcp
 import sync
 import mem
 import str
+import os
 
 if SALAM_OS_LINUX:
     if SALAM_ARCH_X64 or SALAM_ARCH_ARM64:
         extern:
             func stat(path: str, buf: void *): int
+        end
+    else:
+        extern:
+            func statx(dirfd: int, path: str, flags: int, mask: u32, buf: void *): int
         end
     end
 end
@@ -72,7 +77,19 @@ if SALAM_OS_LINUX:
             ret sig
         end
     else:
-        func _sc_signature(path: str): i64: ret 0 - 1 end
+        func _sc_signature(path: str): i64:
+            buf := mem.Allocate(256 as u64)
+            if statx(0 - 100, path, 0, 2047 as u32, buf) != 0:
+                mem.Free(buf)
+                ret 0 - 1
+            end
+            w := buf as i64 *
+            ns := ((buf as i64 + 120) as u32 *)[0] as i64
+            sig := (w[14] * (1000000007 as i64) + ns) * (31 as i64) + w[5]
+            mem.Free(buf)
+            if sig < (0 as i64): ret 0 - sig end
+            ret sig
+        end
     end
 else:
     func _sc_signature(path: str): i64: ret 0 - 1 end
@@ -217,4 +234,46 @@ func _sc_send_new(slot: int, fd: i64, url: str, file: str, ct: str, server_hdr: 
     tcp.WriteBytes(tcp.ConnFromFd(fd), buf, total)
     _sc_put(slot, url, file, sig, buf, total)
     ret true
+end
+
+if SALAM_OS_LINUX:
+    if SALAM_ARCH_X64 or SALAM_ARCH_ARM64:
+        @en "FileStat"
+        @fa "وضعیت پرونده"
+        pub func FileStat(path: str, size &: i64, mtime &: i64): bool:
+            buf := mem.Allocate(256 as u64)
+            if stat(path, buf) != 0:
+                mem.Free(buf)
+                ret false
+            end
+            w := buf as i64 *
+            size = w[6]
+            mtime = w[11]
+            mem.Free(buf)
+            ret true
+        end
+    else:
+        @en "FileStat"
+        @fa "وضعیت پرونده"
+        pub func FileStat(path: str, size &: i64, mtime &: i64): bool:
+            buf := mem.Allocate(256 as u64)
+            if statx(0 - 100, path, 0, 2047 as u32, buf) != 0:
+                mem.Free(buf)
+                ret false
+            end
+            w := buf as i64 *
+            size = w[5]
+            mtime = w[14]
+            mem.Free(buf)
+            ret true
+        end
+    end
+else:
+    @en "FileStat"
+    @fa "وضعیت پرونده"
+    pub func FileStat(path: str, size &: i64, mtime &: i64): bool:
+        mtime = 0
+        size = os.FileSize(path)
+        ret size >= 0
+    end
 end

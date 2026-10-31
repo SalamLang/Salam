@@ -21,6 +21,7 @@ check | skip | only) ;;
 esac
 
 "$SALAM" run tools/salam/check-fa-names.salam --no-color --log-level=error
+python3 website/check-std-coverage.py
 
 if [ "$examples" != skip ]; then
     jobs=$(nproc 2>/dev/null || echo 4)
@@ -43,15 +44,13 @@ for page in website/content/*/std/*.txt; do
     [ -f "$page" ] || continue
     pkg=$(sed -n 's/^pkg\.en = //p' "$page")
     slug=$(printf '%s' "$pkg" | tr '/' '-')
-    base=std
-    [ -d "std/$pkg" ] || [ ! -d "packages/$pkg" ] || base=packages
-    src="$base/$pkg"
+    src="std/$pkg"
     if grep -q '^pkg\.flat = true' "$page"; then
         src=$(mktemp -d)
-        cp "$base/$pkg"/*.salam "$src/"
+        cp "std/$pkg"/*.salam "$src/"
     fi
     if ! "$SALAM" doc "$src" --output="website/dist/api/$slug.json" >/dev/null; then
-        echo "website: salam doc failed for $base/$pkg" >&2
+        echo "website: salam doc failed for std/$pkg" >&2
         exit 1
     fi
 done

@@ -1,5 +1,17 @@
 package nativegen
 
+struct Llp:
+    pub head: int = 0
+    pub phi: int = 0
+    pub addr: int = 0
+    pub ty: int = 0
+    pub ld: int = 0
+    pub dry: bool = true
+    pub fail: bool = false
+    pub steps: int = 0
+    pub cache: HashMap<int, int> = HashMap {}
+end
+
 func same_addr(g &: Ng, x: int, y: int): bool:
     if x == y:
         ret true
@@ -181,6 +193,214 @@ func merge_load_phis(g &: Ng): bool:
         end
     end
     vals.free()
+    if changed:
+        remap_all(g)
+        simplify_phis(g)
+    end
+    ret changed
+end
+
+
+func llp_load_at_end(g &: Ng, s &: Llp, b: int): int:
+    if s.dry:
+        ret 1
+    end
+    nl := ins_new(g, OP_LOAD, s.ty)
+    g.i_a[nl] = s.addr
+    g.i_c[nl] = g.i_c[s.ld]
+    g.i_f[nl] = g.i_f[s.ld]
+    nv := new_res(g, nl)
+    ins_before(g, g.b_last[b], nl)
+    ret nv
+end
+
+func llp_avail(g &: Ng, s &: Llp, b: int): int:
+    if s.cache.has(b):
+        ret s.cache.get(b)
+    end
+    s.steps += 1
+    if s.fail or s.steps > 32 or not dominates(g, s.head, b) or g.b_last[b] < 0:
+        s.fail = true
+        ret 0 - 1
+    end
+    mut i := g.b_last[b]
+    until i >= 0:
+        op := g.i_op[i]
+        if op == OP_STORE and same_addr(g, g.i_b[i], s.addr) and (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) == 0:
+            v := g.i_a[i]
+            if v < 0 or g.v_ty[v] != s.ty:
+                s.fail = true
+                ret 0 - 1
+            end
+            s.cache.put(b, v)
+            ret v
+        end
+        if op == OP_LOAD and same_addr(g, g.i_a[i], s.addr) and g.i_ty[i] == s.ty and g.i_res[i] >= 0 and (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) == 0:
+            s.cache.put(b, g.i_res[i])
+            ret g.i_res[i]
+        end
+        if mlp_clobber(g, i, s.addr, tsize(g, s.ty)):
+            v2 := llp_load_at_end(g, s, b)
+            s.cache.put(b, v2)
+            ret v2
+        end
+        i = g.i_prev[i]
+    end
+    if b == s.head:
+        vh := s.dry ? 1 : s.phi
+        s.cache.put(b, vh)
+        ret vh
+    end
+    np := g.b_npred[b]
+    if np == 1:
+        v3 := llp_avail(g, s, g.b_pred[g.b_ps[b]])
+        s.cache.put(b, v3)
+        ret v3
+    end
+    if np == 0 or np > 8:
+        s.fail = true
+        ret 0 - 1
+    end
+    mut ph := 0 - 1
+    mut pv := 1
+    if not s.dry:
+        ph = ins_new(g, OP_PHI, s.ty)
+        pv = new_res(g, ph)
+        ins_before(g, g.b_first[b], ph)
+    end
+    s.cache.put(b, pv)
+    mut vals := Vector {} as Vector<int>
+    repeat np in q:
+        vals.push(llp_avail(g, s, g.b_pred[g.b_ps[b] + q]))
+        if s.fail:
+            vals.free()
+            ret 0 - 1
+        end
+    end
+    if not s.dry:
+        g.i_ps[ph] = g.pool.len()
+        g.i_pcount[ph] = np
+        repeat np in q2:
+            g.pool.push(vals[q2])
+            g.pool.push(g.b_pred[g.b_ps[b] + q2])
+        end
+    end
+    vals.free()
+    ret pv
+end
+
+func llp_find_load(g &: Ng, b: int): int:
+    mut i := g.b_first[b]
+    until i >= 0:
+        op := g.i_op[i]
+        if op == OP_LOAD and g.i_res[i] >= 0 and (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) == 0 and not is_agg(g, g.i_ty[i]) and not is_vec(g, g.i_ty[i]):
+            ret i
+        end
+        if op == OP_STORE or mlp_clobber(g, i, 0 - 1, 0):
+            ret 0 - 1
+        end
+        i = g.i_next[i]
+    end
+    ret 0 - 1
+end
+
+func llp_try(g &: Ng, h: int, ld: int, dry: bool, phi: int): bool:
+    mut s := Llp {}
+    s.head = h
+    s.addr = g.i_a[ld]
+    s.ty = g.i_ty[ld]
+    s.ld = ld
+    s.dry = dry
+    s.phi = phi
+    np := g.b_npred[h]
+    mut vals := Vector {} as Vector<int>
+    repeat np in q:
+        p := g.b_pred[g.b_ps[h] + q]
+        if dominates(g, h, p):
+            vals.push(llp_avail(g, s, p))
+        else:
+            vals.push(llp_load_at_end(g, s, p))
+        end
+        if s.fail:
+            break
+        end
+    end
+    ok := not s.fail
+    if ok and not dry:
+        g.i_ps[g.v_def[phi]] = g.pool.len()
+        g.i_pcount[g.v_def[phi]] = np
+        repeat np in q2:
+            g.pool.push(vals[q2])
+            g.pool.push(g.b_pred[g.b_ps[h] + q2])
+        end
+    end
+    vals.free()
+    s.cache.free()
+    ret ok
+end
+
+func loop_load_phis(g &: Ng): bool:
+    build_dom(g)
+    repl_grow(g)
+    mut changed := false
+    each h in g.b_rpo:
+        np := g.b_npred[h]
+        if np < 2 or np > 8:
+            continue
+        end
+        mut back := false
+        mut outs := 0
+        repeat np in q0:
+            if dominates(g, h, g.b_pred[g.b_ps[h] + q0]):
+                back = true
+            else:
+                outs += 1
+            end
+        end
+        if not back or outs == 0:
+            continue
+        end
+        mut ld := llp_find_load(g, h)
+        if ld < 0:
+            t := g.b_last[h]
+            if t >= 0 and g.i_op[t] == OP_CBR:
+                repeat 2 in side:
+                    sb := side == 0 ? g.i_b[t] : g.i_c[t]
+                    if ld < 0 and g.b_npred[sb] == 1 and dominates(g, h, sb):
+                        mut onlyh := true
+                        mut k := g.b_first[h]
+                        until k >= 0:
+                            if g.i_op[k] != OP_PHI and g.i_op[k] != OP_ICMP and g.i_op[k] != OP_CBR:
+                                onlyh = false
+                            end
+                            k = g.i_next[k]
+                        end
+                        if onlyh:
+                            ld = llp_find_load(g, sb)
+                        end
+                    end
+                end
+            end
+        end
+        if ld < 0:
+            continue
+        end
+        a := g.i_a[ld]
+        if a < 0 or (g.v_kind[a] == VK_INS and dominates(g, h, g.i_blk[g.v_def[a]])) or not mlp_deref(g, a, g.i_ty[ld]):
+            continue
+        end
+        if not llp_try(g, h, ld, true, 0 - 1):
+            continue
+        end
+        ph := ins_new(g, OP_PHI, g.i_ty[ld])
+        pv := new_res(g, ph)
+        ins_before(g, g.b_first[h], ph)
+        _ok := llp_try(g, h, ld, false, pv)
+        repl_grow(g)
+        g.v_repl[g.i_res[ld]] = pv
+        ins_unlink(g, ld)
+        changed = true
+    end
     if changed:
         remap_all(g)
         simplify_phis(g)

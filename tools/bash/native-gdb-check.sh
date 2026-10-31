@@ -104,6 +104,7 @@ for lk in $linkers; do
         kill "$rpid" 2>/dev/null
         wait "$rpid" 2>/dev/null
     fi
+    f0=$fail
     check "$out" "p = {x = 3, y = 4}" "$lk struct pieces"
     check "$out" "scale = 1.5" "$lk float argument"
     check "$out" "w = 6" "$lk register local"
@@ -112,6 +113,11 @@ for lk in $linkers; do
     check "$out" "k = 8" "$lk folded loop"
     check "$out" "in get (" "$lk inlined frame"
     check "$out" "boom (" "$lk caller of inlined frame"
+    if [ "$fail" -gt "$f0" ]; then
+        echo "--- gdb output ($lk) ---"
+        cat "$out"
+        echo "--- end gdb output ($lk) ---"
+    fi
 done
 echo "native gdb check: $fail failed"
 [ "$fail" -eq 0 ]

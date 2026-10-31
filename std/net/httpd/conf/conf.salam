@@ -1,0 +1,444 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "conf"
+@fa "پیکربندی وب"
+package conf
+
+import str
+
+const T_EOF := 0
+const T_WORD := 1
+const T_STR := 2
+const T_NUM := 3
+const T_EQ := 4
+const T_COLON := 5
+
+@en "VAL_WORD"
+@fa "مقدار واژه"
+pub const VAL_WORD := 0
+
+@en "VAL_STR"
+@fa "مقدار رشته"
+pub const VAL_STR := 1
+
+@en "VAL_NUM"
+@fa "مقدار عددی"
+pub const VAL_NUM := 2
+
+struct Tok:
+    pub kind: int = 0
+    pub text: str = ""
+    pub line: int = 0
+    pub col: int = 0
+end
+
+@en "Value"
+@fa "مقدار"
+pub struct Value:
+    @en "kind"
+    @fa "نوع مقدار"
+    pub kind: int = 0
+    @en "text"
+    @fa "متن مقدار"
+    pub text: str = ""
+    @en "line"
+    @fa "خط مقدار"
+    pub line: int = 0
+    @en "col"
+    @fa "ستون مقدار"
+    pub col: int = 0
+end
+
+@en "Node"
+@fa "گره"
+pub struct Node:
+    @en "block"
+    @fa "بلوک است"
+    pub block: bool = false
+    @en "words"
+    @fa "واژه های نام"
+    pub words: Vector<str> = Vector {}
+    @en "labels"
+    @fa "برچسب ها"
+    pub labels: Vector<str> = Vector {}
+    @en "values"
+    @fa "مقدارها"
+    pub values: Vector<Value> = Vector {}
+    @en "children"
+    @fa "فرزندان"
+    pub children: Vector<int> = Vector {}
+    @en "line"
+    @fa "خط گره"
+    pub line: int = 0
+    @en "col"
+    @fa "ستون گره"
+    pub col: int = 0
+end
+
+@en "Doc"
+@fa "سند"
+pub struct Doc:
+    @en "nodes"
+    @fa "گره ها"
+    pub nodes: Vector<Node> = Vector {}
+    @en "ok"
+    @fa "درست است"
+    pub ok: bool = true
+    @en "error"
+    @fa "پیام خطا"
+    pub error: str = ""
+    @en "line"
+    @fa "خط خطا"
+    pub line: int = 0
+    @en "col"
+    @fa "ستون خطا"
+    pub col: int = 0
+end
+
+func _fail(d &: Doc, line: int, col: int, msg: str):
+    if d.ok:
+        d.ok = false
+        d.error = msg
+        d.line = line
+        d.col = col
+    end
+end
+
+func _is_word_start(c: int): bool:
+    if c >= 97 and c <= 122: ret true end
+    if c >= 65 and c <= 90: ret true end
+    if c == 95: ret true end
+    ret c >= 128
+end
+
+func _is_word_char(c: int): bool:
+    if _is_word_start(c): ret true end
+    ret c >= 48 and c <= 57
+end
+
+func _is_digit(c: int): bool:
+    ret c >= 48 and c <= 57
+end
+
+func _is_num_char(c: int): bool:
+    if _is_digit(c): ret true end
+    if c == 46 or c == 37: ret true end
+    if c >= 97 and c <= 122: ret true end
+    ret c >= 65 and c <= 90
+end
+
+func _unescape_at(c: int): str:
+    if c == 110: ret "\n" end
+    if c == 116: ret "\t" end
+    if c == 114: ret "\r" end
+    if c == 34: ret "\"" end
+    if c == 92: ret "\\" end
+    ret ""
+end
+
+func _tok(kind: int, text: str, line: int, col: int): Tok:
+    ret Tok { kind = kind, text = text, line = line, col = col }
+end
+
+func _lex(d &: Doc, text: str): Vector<Tok>:
+    mut out := Vector {} as Vector<Tok>
+    n := text.len()
+    bp := text as u8 *
+    mut i := 0
+    mut line := 1
+    mut ls := 0
+    until i < n:
+        c := bp[i] as int
+        col := i - ls + 1
+        if c == 10:
+            line += 1
+            i += 1
+            ls = i
+        else c == 32 or c == 9 or c == 13:
+            i += 1
+        else c == 47 and i + 1 < n and bp[i + 1] as int == 47:
+            until i < n and bp[i] as int != 10:
+                i += 1
+            end
+        else c == 47 and i + 1 < n and bp[i + 1] as int == 42:
+            start_line := line
+            start_col := col
+            i += 2
+            mut closed := false
+            until i < n and not closed:
+                if bp[i] as int == 42 and i + 1 < n and bp[i + 1] as int == 47:
+                    i += 2
+                    closed = true
+                else:
+                    if bp[i] as int == 10:
+                        line += 1
+                        ls = i + 1
+                    end
+                    i += 1
+                end
+            end
+            if not closed:
+                _fail(d, start_line, start_col, "unterminated comment")
+            end
+        else c == 61:
+            out.push(_tok(T_EQ, "=", line, col))
+            i += 1
+        else c == 58:
+            out.push(_tok(T_COLON, ":", line, col))
+            i += 1
+        else c == 96:
+            start := i + 1
+            mut j := start
+            until j < n and bp[j] as int != 96:
+                if bp[j] as int == 10:
+                    line += 1
+                    ls = j + 1
+                end
+                j += 1
+            end
+            if j >= n:
+                _fail(d, line, col, "unterminated string")
+                i = n
+            else:
+                out.push(_tok(T_STR, text.substr(start, j - start), line, col))
+                i = j + 1
+            end
+        else c == 34:
+            mut sb := str.NewBuilder()
+            mut j := i + 1
+            mut closed := false
+            until j < n and not closed:
+                b := bp[j] as int
+                if b == 34:
+                    closed = true
+                    j += 1
+                else b == 10:
+                    j = n
+                else b == 92 and j + 1 < n:
+                    e := _unescape_at(bp[j + 1] as int)
+                    if e.len() > 0:
+                        str.BufAppend(sb, e)
+                    else:
+                        str.BufAppend(sb, "\\")
+                        str.BufAppend(sb, text.substr(j + 1, 1))
+                    end
+                    j += 2
+                else:
+                    str.BufAppend(sb, text.substr(j, 1))
+                    j += 1
+                end
+            end
+            if not closed:
+                _fail(d, line, col, "unterminated string")
+                i = n
+            else:
+                out.push(_tok(T_STR, str.BufStr(sb), line, col))
+                i = j
+            end
+            str.BufFree(sb)
+        else _is_digit(c) or (c == 45 and i + 1 < n and _is_digit(bp[i + 1] as int)):
+            mut j := i + 1
+            until j < n and _is_num_char(bp[j] as int):
+                j += 1
+            end
+            out.push(_tok(T_NUM, text.substr(i, j - i), line, col))
+            i = j
+        else _is_word_start(c):
+            mut j := i + 1
+            until j < n and _is_word_char(bp[j] as int):
+                j += 1
+            end
+            out.push(_tok(T_WORD, text.substr(i, j - i), line, col))
+            i = j
+        else:
+            _fail(d, line, col, "unexpected character '" + text.substr(i, 1) + "'")
+            i = n
+        end
+    end
+    out.push(_tok(T_EOF, "", line, i - ls + 1))
+    ret out
+end
+
+func _add_child(d &: Doc, parent: int, idx: int):
+    mut p := d.nodes.get(parent)
+    p.children.push(idx)
+    d.nodes.set(parent, p)
+end
+
+func _is_end(t: Tok): bool:
+    if t.kind != T_WORD: ret false end
+    ret str.Equals(t.text, "end") or str.Equals(t.text, "پایان")
+end
+
+func _starts_item(toks: Vector<Tok>, at: int): bool:
+    t := toks.get(at)
+    if t.kind != T_WORD or _is_end(t): ret false end
+    mut j := at
+    until toks.get(j).kind == T_WORD and not _is_end(toks.get(j)) and toks.get(j).line == t.line:
+        j += 1
+    end
+    until toks.get(j).kind == T_STR and toks.get(j).line == t.line:
+        j += 1
+    end
+    nk := toks.get(j).kind
+    ret nk == T_EQ or nk == T_COLON
+end
+
+func _parse_items(d &: Doc, toks: Vector<Tok>, pos &: int, parent: int):
+    until d.ok:
+        t := toks.get(pos)
+        if t.kind == T_EOF:
+            if parent != 0:
+                _fail(d, t.line, t.col, "missing 'end' for the block opened on line " + str.FromInt(d.nodes.get(parent).line as i64))
+            end
+            ret
+        end
+        if _is_end(t):
+            if parent == 0:
+                _fail(d, t.line, t.col, "'end' without a matching block")
+            else:
+                pos += 1
+            end
+            ret
+        end
+        if t.kind != T_WORD:
+            _fail(d, t.line, t.col, "expected a setting or block name, found '" + t.text + "'")
+            ret
+        end
+        mut node := Node { line = t.line, col = t.col }
+        mut j := pos
+        until toks.get(j).kind == T_WORD and not _is_end(toks.get(j)) and toks.get(j).line == t.line:
+            node.words.push(toks.get(j).text)
+            j += 1
+        end
+        mut k := j
+        until toks.get(k).kind == T_STR and toks.get(k).line == t.line:
+            node.labels.push(toks.get(k).text)
+            k += 1
+        end
+        next := toks.get(k)
+        if next.kind == T_EQ and node.labels.len() == 0:
+            pos = k + 1
+            eq_line := next.line
+            until d.ok:
+                v := toks.get(pos)
+                if v.line != eq_line or v.kind == T_EOF or _is_end(v):
+                    break
+                end
+                if v.kind == T_WORD and _starts_item(toks, pos):
+                    break
+                end
+                if v.kind == T_STR:
+                    node.values.push(Value { kind = VAL_STR, text = v.text, line = v.line, col = v.col })
+                else v.kind == T_NUM:
+                    node.values.push(Value { kind = VAL_NUM, text = v.text, line = v.line, col = v.col })
+                else v.kind == T_WORD:
+                    node.values.push(Value { kind = VAL_WORD, text = v.text, line = v.line, col = v.col })
+                else:
+                    _fail(d, v.line, v.col, "unexpected '" + v.text + "' in a value")
+                end
+                pos += 1
+            end
+            if node.values.len() == 0:
+                _fail(d, next.line, next.col, "expected a value after '='")
+            end
+            d.nodes.push(node)
+            _add_child(d, parent, d.nodes.len() - 1)
+        else next.kind == T_COLON:
+            node.block = true
+            pos = k + 1
+            d.nodes.push(node)
+            idx := d.nodes.len() - 1
+            _add_child(d, parent, idx)
+            _parse_items(d, toks, pos, idx)
+        else:
+            _fail(d, next.line, next.col, "expected '=' or ':' after '" + t.text + "'")
+        end
+    end
+end
+
+@en "Parse"
+@fa "تجزیه"
+pub func Parse(text: str): Doc:
+    mut d := Doc {}
+    d.nodes.push(Node { block = true })
+    toks := _lex(d, text)
+    defer toks.free()
+    if not d.ok: ret d end
+    mut pos := 0
+    _parse_items(d, toks, pos, 0)
+    ret d
+end
+
+@en "Free"
+@fa "آزاد سازی"
+pub func Free(d &: Doc):
+    repeat d.nodes.len() in i:
+        n := d.nodes.ref(i)
+        n.words.free()
+        n.labels.free()
+        n.values.free()
+        n.children.free()
+    end
+    d.nodes.free()
+end
+
+@en "ErrorText"
+@fa "متن خطا"
+pub func ErrorText(d: Doc, file: str): str:
+    if d.ok: ret "" end
+    ret file + ":" + str.FromInt(d.line as i64) + ":" + str.FromInt(d.col as i64) + ": " + d.error
+end
+
+@en "Name"
+@fa "نام"
+pub func Name(d: Doc, node: int): str:
+    ret str.Join(d.nodes.get(node).words, " ")
+end
+
+@en "Root"
+@fa "گره ریشه"
+pub func Root(): int:
+    ret 0
+end
+
+@en "Count"
+@fa "شمار فرزندان"
+pub func Count(d: Doc, node: int): int:
+    ret d.nodes.get(node).children.len()
+end
+
+@en "ChildAt"
+@fa "فرزند شماره"
+pub func ChildAt(d: Doc, node: int, i: int): int:
+    ret d.nodes.get(node).children.get(i)
+end
+
+@en "Find"
+@fa "یافتن فرزند"
+pub func Find(d: Doc, node: int, name: str): int:
+    ch := d.nodes.get(node).children
+    repeat ch.len() in i:
+        c := ch.get(i)
+        if str.Equals(Name(d, c), name): ret c end
+    end
+    ret -1
+end
+
+@en "ValueText"
+@fa "متن مقدار گره"
+pub func ValueText(d: Doc, node: int, i: int): str:
+    ret d.nodes.get(node).values.get(i).text
+end

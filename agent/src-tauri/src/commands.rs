@@ -15,6 +15,8 @@ use tauri_plugin_dialog::DialogExt;
 pub struct Info {
     version: &'static str,
     os: &'static str,
+    os_version: &'static str,
+    arch: &'static str,
     device: Option<Device>,
     connected: bool,
 }
@@ -23,6 +25,8 @@ fn info(app: &AppHandle) -> Info {
     Info {
         version: env!("CARGO_PKG_VERSION"),
         os: config::os_name(),
+        os_version: config::os_version(),
+        arch: config::arch(),
         device: app.state::<DeviceStore>().device(),
         connected: app.state::<Status>().connected(),
     }
@@ -106,6 +110,11 @@ pub fn agent_stop(app: AppHandle, call_id: String) -> bool {
 #[tauri::command]
 pub fn agent_pending(app: AppHandle) -> Vec<Preview> {
     app.state::<Approvals>().pending()
+}
+
+#[tauri::command]
+pub fn agent_alive(app: AppHandle) {
+    crate::watchdog::beat(&app);
 }
 
 #[tauri::command]

@@ -386,45 +386,318 @@ func lines_detail(offset: i64, limit: i64): str:
     ret "خطوط " + fa_num(from) + " تا " + fa_num(from + limit)
 end
 
+func is_space(c: int): bool:
+    ret c == 32 or c == 10 or c == 13 or c == 9
+end
+
+func fold(c: int): int:
+    if c >= 65 and c <= 90:
+        ret c + 32
+    end
+    ret c
+end
+
+func word_hit(text: str, from: int, size &: int): int:
+    mut i := from
+    until i < text.len():
+        c := fold(text[i] as int)
+        each w in REDACT:
+            if w.len() > 0 and fold(w[0] as int) == c and i + w.len() <= text.len():
+                mut k := 1
+                until k < w.len() and fold(text[i + k] as int) == fold(w[k] as int):
+                    k += 1
+                end
+                if k == w.len():
+                    size = w.len()
+                    ret i
+                end
+            end
+        end
+        i += 1
+    end
+    ret -1
+end
+
+func partial_tail(text: str): int:
+    mut best := 0
+    each w in REDACT:
+        mut k := w.len() - 1
+        until k > best:
+            if k <= text.len():
+                mut agree := true
+                mut j := 0
+                until j < k:
+                    if fold(text[text.len() - k + j] as int) != fold(w[j] as int):
+                        agree = false
+                        break
+                    end
+                    j += 1
+                end
+                if agree:
+                    best = k
+                    break
+                end
+            end
+            k -= 1
+        end
+    end
+    ret best
+end
+
+func sentence_start(text: str, hit: int, floor: int): int:
+    mut i := hit
+    until i > floor:
+        c := text[i - 1] as int
+        if c == 10:
+            ret i
+        end
+        if is_space(c) and i - 2 >= 0:
+            p := text[i - 2] as int
+            if p == 46 or p == 33 or p == 63:
+                ret i
+            end
+            if p == 159 and i - 3 >= 0 and (text[i - 3] as int) == 216:
+                ret i
+            end
+        end
+        i -= 1
+    end
+    ret floor
+end
+
+func sentence_end(text: str, from: int, done: bool): int:
+    mut i := from
+    until i < text.len():
+        c := text[i] as int
+        if c == 10:
+            ret i
+        end
+        if c == 46 or c == 33 or c == 63:
+            if i + 1 < text.len():
+                if is_space(text[i + 1] as int):
+                    ret i + 1
+                end
+            else done:
+                ret i + 1
+            end
+        end
+        if c == 216 and i + 1 < text.len() and (text[i + 1] as int) == 159:
+            ret i + 2
+        end
+        i += 1
+    end
+    ret done ? text.len() : -1
+end
+
+func claims_word(l: str): bool:
+    each w in REDACT:
+        lw := str.Lower(w)
+        if lw.len() > 0:
+            each p in ["i am ", "i am a ", "i am an ", "i am the ", "i'm ", "i'm a ", "i'm an ", "i'm the ", "i’m ", "i was ", "i am called ", "i'm called ", "i am named ", "my name is "]:
+                if l.find(p + lw) >= 0:
+                    ret true
+                end
+            end
+        end
+    end
+    ret false
+end
+
+func self_ref(sentence: str): bool:
+    l := str.Lower(sentence)
+    if claims_word(l):
+        ret true
+    end
+    mut about_me := false
+    each p in ["i am", "i'm", "i’m", "i was", "i run", "i use", "i'd", "myself", " my ", " me ", " me.", " me,", "من ", "مرا", "خودم"]:
+        if l.find(p) >= 0:
+            about_me = true
+            break
+        end
+    end
+    if not about_me:
+        ret false
+    end
+    each p in ["model", "built", "based", "powered", "trained", "made by", "created", "developed", "run on", "running on", "behind", "underlying", "provider", "vendor", "company", "llm", "engine", "ساخته", "مدل", "توسعه", "آموزش", "قدرت", "پایه", "شرکت", "سازنده", "ارائه", "هستم"]:
+        if l.find(p) >= 0:
+            ret true
+        end
+    end
+    ret false
+end
+
+func canned(sentence: str): str:
+    mut i := 0
+    until i < sentence.len():
+        c := sentence[i] as int
+        if c >= 216 and c <= 219:
+            ret "من «دستیار سلام» هستم و درباره‌ی نحوه‌ی کار داخلی سرویس توضیحی نمی‌دهم."
+        end
+        i += 1
+    end
+    ret "I'm Salam AI Assistant, made by the Salam team, and I don't share how the service works inside."
+end
+
+func tool_line(text: str, at: int): bool:
+    mut i := at
+    until i > 0 and (text[i - 1] as int) != 10:
+        i -= 1
+    end
+    until i < text.len() and is_space(text[i] as int) and (text[i] as int) != 10:
+        i += 1
+    end
+    if i >= text.len() or (text[i] as int) != 123:
+        ret false
+    end
+    i += 1
+    until i < text.len() and is_space(text[i] as int):
+        i += 1
+    end
+    ret i + 6 <= text.len() and text.substr(i, 6) == "\"tool\""
+end
+
+func settled_len(text: str): int:
+    mut i := text.len() - 1
+    until i >= 0:
+        c := text[i] as int
+        if c == 10:
+            ret i + 1
+        end
+        if i + 1 < text.len() and is_space(text[i + 1] as int):
+            if c == 46 or c == 33 or c == 63:
+                ret i + 1
+            end
+            if c == 159 and i >= 1 and (text[i - 1] as int) == 216:
+                ret i + 1
+            end
+        end
+        i -= 1
+    end
+    ret 0
+end
+
+func mask_words(text: str): str:
+    mut size := 0
+    mut hit := word_hit(text, 0, size)
+    if hit < 0:
+        ret text
+    end
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    mut at := 0
+    until hit >= 0:
+        str.BufAppend(b, text.substr(at, hit - at))
+        str.BufAppend(b, "assistant")
+        at = hit + size
+        hit = word_hit(text, at, size)
+    end
+    str.BufAppend(b, text.substr(at, text.len() - at))
+    ret str.BufStr(b)
+end
+
+func about_rules(line: str): bool:
+    l := str.Lower(line)
+    each p in ["instruction", "system prompt", "system message", "the prompt", "my prompt", "policy", "the operator", "operator_instr", "confidential", "reveal", "disclose", "upstream", "underlying", "which model", "what model", "model family", "my model", "model id", "model name", "model identity", "provider", "vendor", "identity", "default to persian", "default persian", "without a note", "interface note", "<salam", "salam_policy", "user_interface", "caller_", "language_check", "compiler_check", "desktop_session", "attached_file", "project_instructions", "project_memory", "user_memory", "memory_task", "دستورالعمل", "دستور‌العمل", "پرامپت", "پیام سیستم", "سیاست", "محرمانه", "افشا", "ارائه‌دهنده", "ارائه دهنده", "مدل زیرین", "مدل پایه", "شرکت سازنده", "هویت"]:
+        if l.find(p) >= 0:
+            ret true
+        end
+    end
+    ret false
+end
+
 pub func Configure(words: str):
     REDACT = Vector {} as Vector<str>
     each w in words.split(","):
         t := str.Trim(w)
         if t.len() > 0:
             REDACT.push(t)
-            REDACT.push(str.Lower(t))
         end
     end
 end
 
 pub func Thought(text: str): str:
-    mut t := str.Replace(str.Replace(text, "/work/", ""), "/work", "")
-    each w in REDACT:
-        if w.len() > 0:
-            t = str.Replace(t, w, "assistant")
+    mut t := mask_words(str.Replace(str.Replace(text, "/work/", ""), "/work", ""))
+    mut kept := Vector {} as Vector<str>
+    each line in t.split("\n"):
+        if not about_rules(line):
+            kept.push(line)
         end
     end
-    each w in ["system prompt", "System prompt", "the prompt", "my prompt", "caller_instructions", "desktop_session"]:
-        t = str.Replace(t, w, "instructions")
-    end
-    t = str.Trim(t)
+    t = str.Trim(str.Join(kept, "\n"))
     if t.len() > THOUGHT_MAX:
         t = t.substr(0, THOUGHT_MAX) + "…"
     end
     ret t
 end
 
-pub func TextStep(text: str): str:
+pub func Mask(text: str): str:
+    ret mask_words(text)
+end
+
+pub func TextStep(text: str, growing: bool): str:
     mut m := Vector {} as Vector<str>
     m.push(json.Member("kind", "text"))
-    m.push(json.Member("text", text))
+    m.push(json.Member("text", Guard(growing ? Settled(text) : text, true)))
     ret json.Object(m)
 end
 
-pub func ThoughtStep(text: str): str:
+pub func Guarding(): bool:
+    ret REDACT.len() > 0
+end
+
+pub func Settled(text: str): str:
+    cut := settled_len(text)
+    ret cut == text.len() ? text : text.substr(0, cut)
+end
+
+pub func Guard(text: str, done: bool): str:
+    if REDACT.len() == 0 or text.len() == 0:
+        ret text
+    end
+    mut probe := 0
+    seen := word_hit(text, 0, probe) >= 0
+    cut := done ? text.len() : text.len() - partial_tail(text)
+    if not seen:
+        ret cut == text.len() ? text : text.substr(0, cut)
+    end
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    mut at := 0
+    mut size := 0
+    mut held := false
+    mut going := true
+    until going:
+        hit := word_hit(text, at, size)
+        if hit < 0 or hit >= cut:
+            going = false
+        else:
+            start := sentence_start(text, hit, at)
+            stop := sentence_end(text, hit + size, done)
+            str.BufAppend(b, text.substr(at, start - at))
+            if stop < 0 or stop > cut:
+                held = true
+                going = false
+            else:
+                sentence := text.substr(start, stop - start)
+                str.BufAppend(b, not tool_line(text, hit) and self_ref(sentence) ? canned(sentence) : sentence)
+                at = stop
+            end
+        end
+    end
+    if not held and at < cut:
+        str.BufAppend(b, text.substr(at, cut - at))
+    end
+    ret str.BufStr(b)
+end
+
+pub func ThoughtStep(text: str, growing: bool): str:
+    t := Thought(growing ? text.substr(0, text.len() - partial_tail(text)) : text)
+    if t.len() == 0:
+        ret ""
+    end
     mut m := Vector {} as Vector<str>
     m.push(json.Member("kind", "think"))
-    m.push(json.Member("text", Thought(text)))
+    m.push(json.Member("text", t))
     ret json.Object(m)
 end
 

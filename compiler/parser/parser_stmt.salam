@@ -124,15 +124,28 @@ func parse_foreign_statement(p &: Ps, a &: at.Ast, handled &: bool): int:
         p.panic = true
         ret 0
     end
+    if str.Equals(w, "raise") and run == 1 and not p_assign_after(p, run) and p_peekn(p, 1).kind != tok.TK_LPAREN and p_peekn(p, 1).kind != tok.TK_DOT:
+        p_foreign_swap(p, "write 'throw error', for example 'throw \"what went wrong\"'", "Salam spells 'raise' as 'throw'", tok.TK_KW_THROW)
+        ret parse_throw(p, a)
+    end
+    if (str.Equals(w, "except") or str.Equals(w, "finally")) and run <= 2 and p_line_has(p, tok.TK_COLON):
+        if str.Equals(w, "except"):
+            p_foreign_error(p, "write 'catch e:' to handle the error of the 'try:' block above", "Salam spells 'except' as 'catch'")
+        else:
+            p_foreign_error(p, "Salam has no 'finally': put a 'defer' statement at the top of the 'try:' block; it runs however the block is left", "Salam has no 'finally'")
+        end
+        p.panic = true
+        ret 0
+    end
     handled = false
     ret 0
 end
 
 func fill_block_body(p &: Ps, a &: at.Ast, n: int):
     p_skip_terminators(p)
-    until not p_at(p, tok.TK_KW_END) and not p_at(p, tok.TK_KW_ELSE) and not p_at_eof(p) and not p_at_elif(p):
+    until not p_at(p, tok.TK_KW_END) and not p_at(p, tok.TK_KW_ELSE) and not p_at(p, tok.TK_KW_CATCH) and not p_at_eof(p) and not p_at_elif(p):
         p_skip_terminators(p)
-        if p_at(p, tok.TK_KW_END) or p_at(p, tok.TK_KW_ELSE) or p_at_eof(p) or p_at_elif(p):
+        if p_at(p, tok.TK_KW_END) or p_at(p, tok.TK_KW_ELSE) or p_at(p, tok.TK_KW_CATCH) or p_at_eof(p) or p_at_elif(p):
             break
         end
         s := parse_statement(p, a)
@@ -197,6 +210,12 @@ func parse_statement(p &: Ps, a &: at.Ast): int:
     end
     if k == tok.TK_KW_DEFER:
         ret parse_defer(p, a)
+    end
+    if k == tok.TK_KW_THROW:
+        ret parse_throw(p, a)
+    end
+    if k == tok.TK_KW_TRY and p_peek2(p).kind == tok.TK_COLON:
+        ret parse_try_block(p, a)
     end
     if k == tok.TK_KW_BREAK:
         n := p_mk(p, a, at.AST_BREAK)
@@ -319,6 +338,52 @@ func parse_defer(p &: Ps, a &: at.Ast): int:
     n := p_mk(p, a, at.AST_DEFER)
     p_advance(p)
     ps_set_a(a, n, parse_statement(p, a))
+    p_fin(p, a, n)
+    p_recurse_leave(p)
+    ret n
+end
+
+func parse_throw(p &: Ps, a &: at.Ast): int:
+    p_rule(p, "throw_stmt")
+    n := p_mk(p, a, at.AST_THROW)
+    p_advance(p)
+    if p_at(p, tok.TK_STMT_END) or p_at(p, tok.TK_KW_END) or p_at(p, tok.TK_KW_ELSE) or p_at_eof(p):
+        p_error(p, "'throw' needs an error to throw, as in 'throw Error.New(ErrorKind.Other, \"what went wrong\")' or 'throw \"what went wrong\"'")
+    else:
+        ps_set_a(a, n, parse_expr(p, a))
+    end
+    p_fin(p, a, n)
+    p_term(p)
+    ret n
+end
+
+func parse_try_block(p &: Ps, a &: at.Ast): int:
+    p_rule(p, "try_block")
+    if not p_recurse_enter(p, "block nested too deeply"):
+        ret p_mk(p, a, at.AST_TRY_BLOCK)
+    end
+    n := p_mk(p, a, at.AST_TRY_BLOCK)
+    head := p_line_head(p)
+    p_advance(p)
+    body := p_mk(p, a, at.AST_BLOCK)
+    ps_set_a(a, n, body)
+    p_expect(p, tok.TK_COLON, "':' after try")
+    fill_block_body(p, a, body)
+    p_fin(p, a, body)
+    p_skip_terminators(p)
+    if p_match(p, tok.TK_KW_CATCH):
+        if not p_at(p, tok.TK_COLON):
+            at.SetName(a, n, parse_decl_name(p))
+        end
+        h := p_mk(p, a, at.AST_BLOCK)
+        ps_set_b(a, n, h)
+        p_expect(p, tok.TK_COLON, "':' after catch")
+        fill_block_body(p, a, h)
+        p_fin(p, a, h)
+    else:
+        p_error(p, "a 'try:' block needs a 'catch e:' part that handles the error, before 'end'")
+    end
+    p_expect_end(p, head, "'end' to close try")
     p_fin(p, a, n)
     p_recurse_leave(p)
     ret n

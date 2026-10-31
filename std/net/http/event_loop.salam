@@ -1,0 +1,369 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package http
+
+import net.internal.rawsock
+import sync
+import mem
+import os
+
+if SALAM_OS_LINUX:
+    extern:
+        func epoll_create1(flags: int): int
+        func epoll_ctl(epfd: int, op: int, fd: int, event: void *): int
+        func epoll_wait(epfd: int, events: void *, maxevents: int, timeout: int): int
+        func sysconf(name: int): size
+        func poll(fds: void *, nfds: usize, timeout: int): int
+    end
+end
+
+const _EV_MAX := 65536
+
+const _EV_MAX_WORKERS := 1024
+
+const _EV_IDLE := 0
+
+const _EV_BUSY := 1
+
+const _EV_CLOSED := 3
+
+const _EV_FREE := 4
+
+const _EV_PENDING := 5
+
+const _EV_GRACE_MS := 1000
+
+const _EV_BATCH := 8
+
+mut _ev_ready := false
+
+mut _ev_mu := sync.NewMutex()
+
+mut _ev_fd := 0 as i64
+
+mut _ev_ctx := 0 as i64
+
+mut _ev_pend := 0 as i64
+
+mut _ev_plen := 0 as i64
+
+mut _ev_served := 0 as i64
+
+mut _ev_state := 0 as i64
+
+mut _ev_last := 0 as i64
+
+mut _ev_owner := 0 as i64
+
+mut _ev_dead := 0 as i64
+
+mut _ev_free := 0 as i64
+
+mut _ev_ftop := 0
+
+mut _ev_hi := 0
+
+mut _ev_epfd := 0 - 1
+
+mut _ev_workers := 0 as i64
+
+mut _ev_busy := 0 as i64
+
+if SALAM_OS_LINUX:
+    if defined(SALAM_CC_TCC):
+        func _ev_supported(): bool: ret false end
+    else:
+        func _ev_supported(): bool: ret true end
+    end
+
+    if SALAM_ARCH_X64 or SALAM_ARCH_X86:
+        func _ev_size(): int: ret 12 end
+
+        func _ev_off(): int: ret 4 end
+    else:
+        func _ev_size(): int: ret 16 end
+
+        func _ev_off(): int: ret 8 end
+    end
+
+    func _ep_create(): int: ret epoll_create1(0) end
+
+    func _ep_ctl(epfd: int, op: int, fd: i64, cid: int, buf: void *): int:
+        ep := buf as u32 *
+        ep[0] = ((1 as i64) | (8192 as i64) | ((1 as i64) << (31 as i64))) as u32
+        dp := ((buf as i64) + (_ev_off() as i64)) as i64 *
+        dp[0] = cid as i64
+        ret epoll_ctl(epfd, op, fd as int, buf)
+    end
+
+    func _ep_wait(epfd: int, buf: void *, max: int, timeout: int): int:
+        ret epoll_wait(epfd, buf, max, timeout)
+    end
+
+    func _ev_readable(fd: i64, buf: void *): bool:
+        pf := buf as i32 *
+        pf[0] = fd as i32
+        pf[1] = 1 as i32
+        ret poll(buf, 1 as usize, 0) > 0
+    end
+
+    func _ev_cpus(): int:
+        n := sysconf(84) as int
+        if n < 2: ret 2 end
+        if n > 64: ret 64 end
+        ret n
+    end
+else:
+    func _ev_supported(): bool: ret false end
+
+    func _ev_size(): int: ret 16 end
+
+    func _ev_off(): int: ret 8 end
+
+    func _ep_create(): int: ret 0 - 1 end
+
+    func _ep_ctl(epfd: int, op: int, fd: i64, cid: int, buf: void *): int:
+        if epfd < 0 or fd < (0 as i64) or cid < 0 or buf == null: ret 0 - 1 end
+        ret 0 - 1
+    end
+
+    func _ep_wait(epfd: int, buf: void *, max: int, timeout: int): int:
+        if epfd < 0 or buf == null or max < 0: ret timeout end
+        ret 0 - 1
+    end
+
+    func _ev_readable(fd: i64, buf: void *): bool:
+        ret fd >= (0 as i64) and buf != null
+    end
+
+    func _ev_cpus(): int: ret 2 end
+end
+
+func _evp(base: i64, i: int): i64 *:
+    ret ((base + (i as i64) * (8 as i64)) as void *) as i64 *
+end
+
+func _evg(base: i64, i: int): i64:
+    ret _evp(base, i)[0]
+end
+
+func _evs(base: i64, i: int, v: i64):
+    p := _evp(base, i)
+    p[0] = v
+end
+
+func _ev_table(n: int): i64:
+    ret mem.AllocateZeroed(((n as i64) * (8 as i64)) as u64) as i64
+end
+
+func _ev_init():
+    sync.Lock(_ev_mu)
+    if not _ev_ready:
+        _ev_fd = _ev_table(_EV_MAX)
+        _ev_ctx = _ev_table(_EV_MAX)
+        _ev_pend = _ev_table(_EV_MAX)
+        _ev_plen = _ev_table(_EV_MAX)
+        _ev_served = _ev_table(_EV_MAX)
+        _ev_state = _ev_table(_EV_MAX)
+        _ev_last = _ev_table(_EV_MAX)
+        _ev_owner = _ev_table(_EV_MAX)
+        _ev_dead = _ev_table(_EV_MAX)
+        _ev_free = _ev_table(_EV_MAX)
+        _ev_workers = _ev_table(1)
+        _ev_busy = _ev_table(1)
+        _ev_ready = true
+    end
+    sync.Unlock(_ev_mu)
+end
+
+func _ev_alloc(): int:
+    sync.Lock(_ev_mu)
+    mut cid := 0 - 1
+    if _ev_ftop > 0:
+        _ev_ftop -= 1
+        cid = _evg(_ev_free, _ev_ftop) as int
+    else _ev_hi < _EV_MAX:
+        cid = _ev_hi
+        atomic_store(_evp(_ev_state, cid), _EV_FREE as i64)
+        _ev_hi += 1
+    end
+    sync.Unlock(_ev_mu)
+    ret cid
+end
+
+func _ev_release(cid: int):
+    sync.Lock(_ev_mu)
+    if atomic_cas(_evp(_ev_state, cid), _EV_CLOSED as i64, _EV_FREE as i64):
+        _evs(_ev_free, _ev_ftop, cid as i64)
+        _ev_ftop += 1
+    end
+    sync.Unlock(_ev_mu)
+end
+
+func _ev_drop(cid: int):
+    plen := _evg(_ev_plen, cid)
+    if plen > (0 as i64): mem.Free(_evg(_ev_pend, cid) as void *) end
+    _evs(_ev_plen, cid, 0 as i64)
+    salam_ctx_free(_evg(_ev_ctx, cid))
+    _net_close(_evg(_ev_fd, cid))
+    _evs(_ev_dead, cid, sync.NowMs())
+end
+
+func _ev_claim(cid: int): bool:
+    cell := _evp(_ev_state, cid)
+    until 1 == 1:
+        st := atomic_load(cell)
+        if st == (_EV_IDLE as i64):
+            if atomic_cas(cell, _EV_IDLE as i64, _EV_BUSY as i64): ret true end
+        else st == (_EV_BUSY as i64):
+            if atomic_cas(cell, _EV_BUSY as i64, _EV_PENDING as i64): ret false end
+        else:
+            ret false
+        end
+    end
+end
+
+func _ev_park(cid: int, fd: i64, buf: void *): bool:
+    cell := _evp(_ev_state, cid)
+    until 1 == 1:
+        if atomic_cas(cell, _EV_BUSY as i64, _EV_IDLE as i64): ret true end
+        atomic_store(cell, _EV_BUSY as i64)
+        if _ev_readable(fd, buf): ret false end
+    end
+end
+
+func _ev_serve(cid: int, scratch: void *, ctl: void *):
+    slot := _evg(_ev_owner, cid) as int
+    fd := _evg(_ev_fd, cid)
+    ctx := _evg(_ev_ctx, cid)
+    mut pending_len := _evg(_ev_plen, cid) as int
+    mut pending := ""
+    if pending_len > 0: pending = (_evg(_ev_pend, cid) as void *) as str end
+    mut served := _evg(_ev_served, cid) as int
+    mut more := true
+    until more:
+        if not _conn_step(slot, fd, ctx, scratch, pending, pending_len, served):
+            more = false
+        else pending_len == 0:
+            _evs(_ev_served, cid, served as i64)
+            _evs(_ev_plen, cid, 0 as i64)
+            _evs(_ev_last, cid, sync.NowMs())
+            if _ev_park(cid, fd, ctl): ret end
+        end
+    end
+    _evs(_ev_served, cid, served as i64)
+    _evs(_ev_plen, cid, pending_len as i64)
+    if pending_len > 0: _evs(_ev_pend, cid, (pending as void *) as i64) end
+    _ev_drop(cid)
+    atomic_store(_evp(_ev_state, cid), _EV_CLOSED as i64)
+    _ev_release(cid)
+end
+
+func _ev_worker(_unused: i64):
+    epfd := _ev_epfd
+    scratch := mem.Allocate((_RD_CHUNK + 1) as u64)
+    esz := _ev_size()
+    eoff := _ev_off()
+    ev := mem.AllocateZeroed((esz * _EV_BATCH) as u64)
+    ctl := mem.AllocateZeroed(16 as u64)
+    busy := _evp(_ev_busy, 0)
+    workers := _evp(_ev_workers, 0)
+    until 1 == 1:
+        n := _ep_wait(epfd, ev, _EV_BATCH, 1000)
+        mut i := 0
+        until i < n:
+            cid := (((ev as i64) + ((i * esz + eoff) as i64)) as i64 *)[0] as int
+            i += 1
+            if cid >= 0 and cid < _EV_MAX and _ev_claim(cid):
+                b := atomic_add(busy, 1 as i64)
+                w := atomic_load(workers)
+                if b >= w and w < (_EV_MAX_WORKERS as i64):
+                    if atomic_cas(workers, w, w + (1 as i64)):
+                        salam_spawn_fn_i64(_ev_worker, 0 as i64)
+                    end
+                end
+                _ev_serve(cid, scratch, ctl)
+                _d := atomic_add(busy, 0 - (1 as i64))
+            end
+        end
+    end
+end
+
+func _ev_sweeper(_unused: i64):
+    until 1 == 1:
+        sync.SleepMs(1000)
+        now := sync.NowMs()
+        idle := _keepalive_idle_ms as i64
+        sync.Lock(_ev_mu)
+        hi := _ev_hi
+        sync.Unlock(_ev_mu)
+        repeat hi in cid:
+            st := atomic_load(_evp(_ev_state, cid))
+            if st == (_EV_IDLE as i64) and idle > (0 as i64) and now - _evg(_ev_last, cid) > idle:
+                if atomic_cas(_evp(_ev_state, cid), _EV_IDLE as i64, _EV_BUSY as i64):
+                    _ev_drop(cid)
+                    atomic_store(_evp(_ev_state, cid), _EV_CLOSED as i64)
+                end
+            else st == (_EV_CLOSED as i64) and now - _evg(_ev_dead, cid) > (_EV_GRACE_MS as i64):
+                _ev_release(cid)
+            end
+        end
+    end
+end
+
+func _ev_start(): bool:
+    if not _ev_supported(): ret false end
+    if os.Env("SALAM_HTTP_EVENTS") == "0": ret false end
+    _ev_init()
+    sync.Lock(_ev_mu)
+    mut fresh := false
+    if _ev_epfd < 0:
+        _ev_epfd = _ep_create()
+        fresh = _ev_epfd >= 0
+    end
+    ok := _ev_epfd >= 0
+    sync.Unlock(_ev_mu)
+    if fresh:
+        n := _ev_cpus()
+        atomic_store(_evp(_ev_workers, 0), n as i64)
+        repeat n:
+            salam_spawn_fn_i64(_ev_worker, 0 as i64)
+        end
+        salam_spawn_fn_i64(_ev_sweeper, 0 as i64)
+    end
+    ret ok
+end
+
+func _ev_adopt(slot: int, fd: i64, ctl: void *): bool:
+    cid := _ev_alloc()
+    if cid < 0: ret false end
+    sock := rawsock.FromFd(fd)
+    rawsock.SetNoDelay(sock, true)
+    rawsock.SetTimeout(sock, _keepalive_idle_ms)
+    _evs(_ev_fd, cid, fd)
+    _evs(_ev_ctx, cid, salam_ctx_new(fd))
+    _evs(_ev_plen, cid, 0 as i64)
+    _evs(_ev_served, cid, 0 as i64)
+    _evs(_ev_owner, cid, slot as i64)
+    _evs(_ev_last, cid, sync.NowMs())
+    atomic_store(_evp(_ev_state, cid), _EV_IDLE as i64)
+    if _ep_ctl(_ev_epfd, 1, fd, cid, ctl) != 0:
+        salam_ctx_free(_evg(_ev_ctx, cid))
+        _evs(_ev_dead, cid, 0 as i64)
+        atomic_store(_evp(_ev_state, cid), _EV_CLOSED as i64)
+        ret false
+    end
+    ret true
+end

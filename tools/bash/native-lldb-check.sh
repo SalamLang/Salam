@@ -187,7 +187,7 @@ if [ -f "$DIR/mix_arm64" ]; then
     chmod +x "$DIR/mix_arm64"
     (cd "$DIR" && lim 300 lldb --batch --no-lldbinit \
         -o "breakpoint set -f mixd.c -l 3" -o "breakpoint set -f mixc.c -l 3" \
-        -o run -o "frame variable" -o "thread backtrace" -o continue -o "frame variable" -o kill \
+        -o run -o "frame variable" -o "thread backtrace" -o continue -o "frame variable" -o continue \
         -- "$DIR/mix_arm64" >"$mo" 2>&1)
     check "$mo" "p = 35" "mix DWARF 5 C local"
     check "$mo" "s = 6" "mix DWARF 4 C local"

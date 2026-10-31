@@ -1,0 +1,118 @@
+pkg.en = net/httpd
+pkg.name = net/httpd
+pkg.group = Network
+pkg.summary = A web server driven by a config file: several sites on one port, locations, redirects, caching, static files and FastCGI backends such as PHP.
+pkg.title = The net/httpd package in Salam | Virtual hosts from a config file
+pkg.description = The net/httpd package in Salam: serving many domains from one process with a config file written in Salam block syntax, sites picked by the Host header, location rules, redirects, error pages, cache headers, an access log and FastCGI backends such as php-fpm, with examples.
+pkg.flat = true
+pkg.import = net.httpd
+pkg.intro <<
+<p>This package runs several websites from one process and one set of ports, the job people give to nginx in front of their programs. You describe the sites in a config file, load it, and call <code>Run</code>. The command <code>salam serve --config=web.salam</code> does exactly that, and <code>--test</code> checks the file without starting anything.</p>
+<p>The config is written in the same block style as the rest of Salam: a setting is <code>name = value</code>, a block opens with <code>name:</code> and closes with <code>end</code>, comments start with <code>//</code>, and a setting and its value stay on one line. Strings are in double quotes, or in backticks when they hold backslashes, like a regular expression.</p>
+<pre><code>server:
+    log: access = "/var/log/salam/access.log" end
+    site:
+        listen = 80
+        names = "example.com www.example.com"
+        root = "/srv/example/public"
+        index = "index.html"
+        error page = 404 "404.html"
+        location "/assets/": cache = 30d end
+        location "= /health": return = 200 "ok" end
+        location "/old/": redirect = "https://example.com$uri" code = 301 end
+    end
+    site:
+        names = "blog.example.com *.blog.example.com"
+        root = "/srv/blog"
+    end
+end</code></pre>
+<p>Two sites on the same port are told apart by the <code>Host</code> header. An exact name wins over a <code>*.example.com</code> wildcard, and a request for a name nobody listed goes to the site marked <code>default = true</code>, or else to the first site on that port. A site that does not say <code>listen</code> listens on port 80; <code>listen = "127.0.0.1:8080"</code> picks the address too.</p>
+<p>Inside a site, the request path is matched against its <code>location</code> blocks the way nginx does it:</p>
+<ul>
+<li><code>location "= /health"</code>: this exact path, and nothing else is tried.</li>
+<li><code>location "/assets/"</code>: any path starting with it; the longest prefix is remembered.</li>
+<li><code>location "^~ /static/"</code>: a prefix that also stops the regular expressions from being tried.</li>
+<li><code>location "~ \.php$"</code> and <code>"~* \.png$"</code>: a regular expression (the second ignores case), tried in file order after the prefixes; the first hit wins, and otherwise the longest prefix is used.</li>
+</ul>
+<p>The settings of a site, and of a location unless noted:</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Setting</th><th>Meaning</th></tr></thead>
+<tbody>
+<tr><td><code>listen = 80</code> (site)</td><td>The port, optionally with an address: <code>listen = "0.0.0.0:8080"</code>. It can be repeated.</td></tr>
+<tr><td><code>names = "a.com b.com"</code> (site)</td><td>The host names of the site; <code>*.a.com</code> matches any subdomain.</td></tr>
+<tr><td><code>default = true</code> (site)</td><td>This site answers names no site claims.</td></tr>
+<tr><td><code>root = "/srv/site"</code></td><td>The folder the request path is appended to. A location with its own <code>root</code> replaces the site's.</td></tr>
+<tr><td><code>alias = "/srv/files"</code> (prefix location)</td><td>The folder that replaces the matched prefix: with <code>location "/dl/": alias = "/srv/files" end</code>, <code>/dl/a.zip</code> is <code>/srv/files/a.zip</code>.</td></tr>
+<tr><td><code>index = "index.html index.htm"</code></td><td>The files tried for a folder, in order. The default is <code>index.html</code>.</td></tr>
+<tr><td><code>return = 200 "ok"</code></td><td>Answers at once with a status and an optional text.</td></tr>
+<tr><td><code>redirect = "https://$host$request_uri"</code>, <code>code = 301</code></td><td>Redirects. The code defaults to 301. The variables are <code>$host</code>, <code>$uri</code>, <code>$args</code>, <code>$request_uri</code> and <code>$scheme</code>. At the site level it applies to every request, before any location.</td></tr>
+<tr><td><code>cache = 30d</code></td><td>Sends <code>Cache-Control: public, max-age=...</code> with the files. Units: <code>s</code>, <code>m</code>, <code>h</code>, <code>d</code>, <code>w</code>, <code>y</code>.</td></tr>
+<tr><td><code>header = "Name" "value"</code></td><td>Adds a response header. Site headers go on every answer, location headers only on that location's.</td></tr>
+<tr><td><code>error page = 404 "404.html"</code></td><td>The file, relative to the root, sent with that error status.</td></tr>
+<tr><td><code>fastcgi_pass = "127.0.0.1:9000"</code></td><td>Hands the matched requests to a FastCGI backend, such as php-fpm.</td></tr>
+<tr><td><code>fastcgi_index = "index.php"</code></td><td>The script used when the path ends in <code>/</code>. The default is <code>index.php</code>.</td></tr>
+<tr><td><code>fastcgi_timeout = 30s</code></td><td>How long one backend request may take. The default is 30 seconds.</td></tr>
+<tr><td><code>fastcgi_param = "NAME" "value"</code></td><td>One more CGI variable, with <code>$uri</code> style variables. It can be repeated.</td></tr>
+</tbody></table></div>
+<p>A location can hand the request to a FastCGI backend instead of reading a file, which is how PHP runs behind Salam:</p>
+<pre><code>server:
+    site:
+        listen = 8080
+        names = "localhost"
+        root = "/srv/app/public"
+        location "~ \.php$":
+            fastcgi_pass = "127.0.0.1:9000"
+            fastcgi_index = "index.php"
+            fastcgi_param = "APP_ENV" "production"
+        end
+        location "/":
+            fastcgi_pass = "127.0.0.1:9000"
+        end
+    end
+end</code></pre>
+<p><code>fastcgi_pass</code> is the TCP address of php-fpm, or of <code>php-cgi -b 127.0.0.1:9000</code>. The script is <code>root</code> plus the request path; a path ending in <code>/</code> gets <code>fastcgi_index</code>, and a path with segments after an existing script is split into <code>SCRIPT_NAME</code> and <code>PATH_INFO</code>, so <code>/index.php/a/b</code> runs <code>index.php</code> with <code>PATH_INFO=/a/b</code>. A path that names no file answers 404.</p>
+<p>Salam fills the usual CGI variables: <code>GATEWAY_INTERFACE</code>, <code>SERVER_SOFTWARE</code>, <code>SERVER_PROTOCOL</code>, <code>REQUEST_METHOD</code>, <code>REQUEST_URI</code>, <code>SCRIPT_NAME</code>, <code>SCRIPT_FILENAME</code>, <code>PATH_INFO</code>, <code>DOCUMENT_ROOT</code>, <code>DOCUMENT_URI</code>, <code>QUERY_STRING</code>, <code>CONTENT_TYPE</code>, <code>CONTENT_LENGTH</code>, <code>SERVER_NAME</code>, <code>SERVER_PORT</code>, <code>REMOTE_ADDR</code>, <code>REDIRECT_STATUS</code>, and <code>HTTP_*</code> for Host, User-Agent, Accept, Accept-Language, Accept-Encoding, Cookie, Referer, Authorization, Origin, Cache-Control, If-None-Match, If-Modified-Since, Range, X-Requested-With, X-Forwarded-For, X-Forwarded-Proto and X-Real-IP. <code>fastcgi_param</code> adds or overrides one more and understands <code>$host</code>, <code>$uri</code>, <code>$document_uri</code>, <code>$request_uri</code>, <code>$args</code>, <code>$query_string</code>, <code>$document_root</code>, <code>$root</code>, <code>$script_name</code>, <code>$server_port</code>, <code>$remote_addr</code> and <code>$scheme</code>. A value of <code>$header:Name</code> copies that request header into the variable, which is how a header Salam does not forward by default reaches PHP.</p>
+<p>The answer is whatever the backend sends: the <code>Status:</code> line sets the status, every other header goes out as it is (several <code>Set-Cookie</code> headers included), and the body is passed through byte for byte. A backend that cannot be reached, or that dies halfway, answers 502.</p>
+<p>The <code>log:</code> block takes <code>access = "path"</code>, where the path can also be <code>"stdout"</code> or <code>"stderr"</code>. Each line has the time, the host, the method, the path and the status.</p>
+<p>The things people get wrong:</p>
+<ul>
+<li>Files are only read from the <code>root</code> of the matched site. The path is cleaned first, so <code>..</code> cannot climb out of it, and any file or folder whose name starts with a dot, such as <code>.env</code> or <code>.git</code>, is answered with 404. <code>.well-known</code> is allowed.</li>
+<li>Every file goes out with an <code>ETag</code> and a <code>Last-Modified</code> header. A request with a matching <code>If-None-Match</code> or a recent enough <code>If-Modified-Since</code> gets 304 and no body, and a single <code>Range: bytes=a-b</code> (also <code>a-</code> and <code>-n</code>) gets 206 with the part; a range outside the file gets 416. <code>If-Range</code> is honoured with the ETag. Several ranges in one request are answered with the whole file.</li>
+<li>Only GET and HEAD are answered for files; anything else gets 405 with an <code>Allow</code> header. A FastCGI location answers every method.</li>
+<li><code>fastcgi_pass</code> reads a TCP address only. <code>unix:/run/php.sock</code> is refused with a message, so point php-fpm at a port (<code>listen = 127.0.0.1:9000</code>).</li>
+<li>The location must match the script path. <code>location "~ \.php$"</code> does not match <code>/index.php/a/b</code>, so a prefix location is needed when the application uses <code>PATH_INFO</code>.</li>
+<li><code>REMOTE_ADDR</code> is 127.0.0.1 unless a <code>fastcgi_param</code> sets it, because the HTTP layer does not expose the peer address. Each request opens its own connection to the backend.</li>
+<li>Names and values are checked when the file is loaded: a misspelled setting, a port out of range, a missing root folder, a bad regular expression or two sites with the same name on one port is reported with its line and column, and a close name is suggested. Nothing is started from a file with problems.</li>
+<li><code>listen = 443 tls</code> is read but refused for now; HTTPS arrives in a later release, so put a TLS terminator in front until then.</li>
+<li>The package keeps one loaded configuration for the process. Loading again replaces it, but a running server keeps the sites it started with.</li>
+<li>The settings, the sites and the locations are plain data, so a config that loads is a config that runs; everything that can be wrong about the file is found by <code>Check</code> or <code>LoadText</code>, not on the first request.</li>
+</ul>
+<p>Related packages: <a href="/std/net/http/">net/http</a> is the server underneath, <a href="/std/net/router/">net/router</a> holds the routes, <a href="/std/net/httpd/conf/">net/httpd/conf</a> is the parser that reads the file, and <a href="/std/net/fastcgi/">net/fastcgi</a> speaks the FastCGI protocol.</p>
+>>
+doc.SiteFor = The index of the site that answers a host name on a port, or -1 when none does. The name is lower-cased and a trailing port or dot is ignored. An exact name wins over a wildcard, and a name nobody listed falls back to the default site of that port.
+doc.LocationFor = The index of the location that handles a path in a site, or -1 when only the site settings apply. An exact location wins, then a <code>^~</code> prefix, then the first matching regular expression, then the longest prefix.
+doc.SiteCount = The number of sites in the loaded configuration.
+doc.SiteNames = The host names of one site, separated by spaces.
+doc.LocationPattern = The pattern of a location without its <code>=</code>, <code>^~</code> or <code>~</code> marker.
+doc.ProblemCount = The number of problems found while loading the last configuration; zero means it is valid.
+doc.ProblemAt = One problem as <code>file:line:column: message</code>, counting from 0.
+doc.ParseDuration = Reads a length of time such as <code>45</code>, <code>10m</code> or <code>30d</code> and returns it in seconds, or -1 when it is not valid. The units are <code>s</code>, <code>m</code>, <code>h</code>, <code>d</code>, <code>w</code> and <code>y</code> (365 days); no unit means seconds.
+doc.LoadText = Loads a configuration from text. The second argument names the file in the problem messages. It returns true when there are no problems; otherwise the problems are kept for <code>ProblemAt</code> and nothing else changes.
+doc.LoadFile = Reads a file and loads it like <code>LoadText</code>. A file that cannot be read is a problem too.
+doc.Check = Loads a file the way <code>salam serve --config=FILE --test</code> does: it prints the problems to the error output and returns 1, or prints a one line summary and returns 0.
+doc.Run = Starts one listener for each distinct address in the loaded configuration and then waits until <code>Stop</code> is called. It returns 2 at once when no valid configuration is loaded, when the log cannot be opened or when an address cannot be bound.
+doc.Stop = Makes <code>Run</code> return. Connections already accepted are not drained.
+
+ex.SiteFor = net-httpd-Match
+ex.LocationFor = net-httpd-Match
+ex.SiteCount = net-httpd-Match
+ex.SiteNames = net-httpd-Match
+ex.LocationPattern = net-httpd-Match
+ex.ProblemCount = net-httpd-Problems
+ex.ProblemAt = net-httpd-Problems
+ex.ParseDuration = net-httpd-ParseDuration
+ex.LoadText = net-httpd-Serve
+ex.LoadFile = net-httpd-Run
+ex.Check = net-httpd-Run
+ex.Run = net-httpd-Serve
+ex.Stop = net-httpd-Serve

@@ -21,6 +21,7 @@ check | skip | only) ;;
 esac
 
 "$SALAM" run tools/salam/check-fa-names.salam --no-color --log-level=error
+python3 website/check-std-coverage.py
 
 if [ "$examples" != skip ]; then
     jobs=$(nproc 2>/dev/null || echo 4)

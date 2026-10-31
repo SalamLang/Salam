@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type ReactNode } from "react";
 import type { OutgoingFile } from "./api";
 import { acceptList, kindOf, PendingChips, toOutgoing, useCapabilities, type Pending } from "./Attach";
-import { IconPaperclip, IconSend, IconStop } from "./icons";
+import { IconPaperclip, IconQueueAdd, IconSend, IconStop } from "./icons";
 import { t } from "./i18n";
 
 type Props = {
@@ -9,6 +9,8 @@ type Props = {
   disabled?: boolean;
   onSend: (text: string, files: OutgoingFile[], previews: Pending[]) => Promise<boolean> | boolean | void;
   onStop: () => void;
+  onQueue?: (text: string, files: OutgoingFile[], previews: Pending[]) => Promise<boolean> | boolean | void;
+  queueing?: boolean;
   autoFocus?: boolean;
   bar?: ReactNode;
   placeholder?: string;
@@ -21,7 +23,7 @@ const RTL_FIRST = /^[^A-Za-z֐-ࣿיִ-﷿ﹰ-﻿]*[֐-ࣿיִ-﷿ﹰ-﻿]/;
 
 let seq = 0;
 
-export function Composer({ busy, disabled, onSend, onStop, autoFocus, bar, placeholder, note, draft, onDraftUsed }: Props) {
+export function Composer({ busy, disabled, onSend, onStop, onQueue, queueing, autoFocus, bar, placeholder, note, draft, onDraftUsed }: Props) {
   const [text, setText] = useState(draft ?? "");
   const [files, setFiles] = useState<Pending[]>([]);
   const [problem, setProblem] = useState("");
@@ -88,7 +90,8 @@ export function Composer({ busy, disabled, onSend, onStop, autoFocus, bar, place
 
   const send = async () => {
     const typed = text.trim();
-    if ((!typed && files.length === 0) || busy || disabled || sending) return;
+    const later = !!onQueue && (busy || !!queueing);
+    if ((!typed && files.length === 0) || (busy && !later) || disabled || sending) return;
     const keep = { text, files };
     setSending(true);
     try {
@@ -96,7 +99,7 @@ export function Composer({ busy, disabled, onSend, onStop, autoFocus, bar, place
       setText("");
       setFiles([]);
       setProblem("");
-      const ok = await onSend(typed, payload, keep.files);
+      const ok = later && onQueue ? await onQueue(typed, payload, keep.files) : await onSend(typed, payload, keep.files);
       if (ok === false) {
         setText(keep.text);
         setFiles(keep.files);
@@ -190,10 +193,17 @@ export function Composer({ busy, disabled, onSend, onStop, autoFocus, bar, place
             onPaste={canAttach ? onPaste : undefined}
             aria-label={t("پیام", "Message")}
           />
-          {busy ? (
+          {busy && (
             <button type="button" className="send stop" onClick={onStop} aria-label={t("توقف پاسخ", "Stop answer")} title={t("توقف", "Stop")}>
               <IconStop />
             </button>
+          )}
+          {busy || queueing ? (
+            onQueue && (
+              <button type="submit" className="send queue-add" disabled={!ready} aria-label={t("افزودن به صف", "Add to the queue")} title={t("افزودن به صف: بعد از پاسخ فعلی اجرا می‌شود (Enter)", "Add to the queue: runs after the current answer (Enter)")}>
+                {sending ? <span className="spinner tiny" /> : <IconQueueAdd />}
+              </button>
+            )
           ) : (
             <button type="submit" className="send" disabled={!ready} aria-label={t("فرستادن", "Send")} title={t("فرستادن", "Send")}>
               {sending ? <span className="spinner tiny" /> : <IconSend />}

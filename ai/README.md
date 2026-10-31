@@ -41,6 +41,7 @@ or `docker build ai/backend`. It is configured through environment variables:
 | `AI_BILLING_CALLBACK`                                             | the public URL of this API, where the gateway sends the browser back                                                                                     | `AI_OAUTH_ISSUER`                               |
 | `AI_BILLING_SWEEP_SECONDS`                                        | how often to settle payments the gateway never returned from, and how long a payment may sit first                                                       | `600`                                           |
 | `AI_MEMORY_SOFT_MB`, `AI_MEMORY_HARD_MB`                          | restart to give memory back once past the first with nothing in flight, or past the second regardless                                                    | `1200`, `2600`                                  |
+| `AI_QUEUE_MAX`                                                    | how many messages one chat may keep waiting in its queue                                                                                                 | `20`                                            |
 | `AI_API_ANSWER_SECONDS`                                           | how long one API answer may take before it is cut off                                                                                                    | `3600`                                          |
 | `AI_CHAT_MEMORY`                                                  | `off` stops remembering chats and recalling them                                                                                                         | `on`                                            |
 | `AI_CHAT_MEMORY_IDLE_SECONDS`                                     | how long a chat stays quiet before its new turns are summarized, so a quick back and forth costs one pass                                                | `60`                                            |
@@ -83,6 +84,9 @@ The API:
 | `GET /chats/:id/files/:fid`                                                                    | one attached file as `{name, kind, mime, data}`                                                                                                                                                                                              |
 | `GET /chats/:id/messages/:mid`                                                                 | the answer so far: `{body, status, phase}`; poll until `status` is not `pending`                                                                                                                                                             |
 | `POST /chats/:id/stop`                                                                         | stop the answer being written                                                                                                                                                                                                                |
+| `GET /chats/:id/queue`, `POST /chats/:id/queue`                                                | the messages waiting in the chat's queue; add one (`{text, files?, project?}` like a normal message) while an answer runs                                                                                                                    |
+| `DELETE /chats/:id/queue/:qid`, `DELETE /chats/:id/queue`                                      | remove one waiting message, or clear the queue                                                                                                                                                                                               |
+| `POST /chats/:id/queue/:qid/now`                                                               | run this waiting message immediately: the running answer is stopped (what it wrote is kept) and this one starts                                                                                                                              |
 | `GET /bridge/devices`, `POST /bridge/devices`, `DELETE /bridge/devices/:id`                    | list, register (`{name, os}` gives `{device, secret}`) or remove Salam Agent installs                                                                                                                                                        |
 | `GET /plans`                                                                                   | the four plans, with prices and limits, and the gateways that are on                                                                                                                                                                         |
 | `GET /billing/subscription`, `GET /billing/payments`                                           | the signed-in account's plan with this hour's usage, and its payments                                                                                                                                                                        |
@@ -97,6 +101,29 @@ The API:
 | `GET /admin/files`, `GET /admin/files/:id`                                                     | every uploaded file with its owner and path, and one file's bytes as base64                                                                                                                                                                  |
 | `GET /admin/keys`, `PATCH /admin/keys/:id`                                                     | every API key with its owner and behavior (`?user=`, `?custom=1`, `?active=1`, `?before=`), and changing one key's `{salam_prompt, salam_tools, system_prompt}`; the list also says whether the engine has the plain profile (`plain_ready`) |
 | `GET /admin/messages/:id/trace`                                                                | the whole turn behind an answer, in order: prompts, reasoning, every tool call with full input and output                                                                                                                                    |
+
+### Message queue
+
+A chat can hold up to `AI_QUEUE_MAX` messages that wait for the answer in progress.
+They are stored in `chat_queue` (with their attachments in `chat_queue_files`) and
+run on the server, not in the browser: a background worker looks at every chat with
+waiting messages once a second, marks a finished answer done, and sends the next
+message as soon as the chat is free. So closing the browser or switching off the
+laptop does not stop the queue, and neither does an answer nobody is watching.
+
+- Messages run in the order they were queued, one at a time per chat. Each one is
+  a normal turn: it counts against the plan's hourly message limit (a limited chat
+  keeps waiting and tries again) and a failed turn does not stop the ones after it.
+- A direct `POST /chats/:id/messages` is refused with 409 while the chat is busy or
+  its queue is not empty, so nothing jumps the line.
+- Run now (`POST /chats/:id/queue/:qid/now`) moves the message to the front, stops the
+  running answer as Stop does, and starts it. Stop on its own ends the running answer
+  and lets the next queued message start.
+- Desktop agent chats queue the same way, but their tools run on the user's computer,
+  so the queue only moves while Salam Agent is online there. Cloud sandbox chats keep
+  going on the server.
+
+`node ai/backend/tests/queue_flow.mjs` tests it against a running API and the engine mock.
 
 ### Telegram bot
 

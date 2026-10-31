@@ -63,6 +63,7 @@ const MAX_BODY := 8388608
 const BODY_MS := 30000
 const WATCH_MS := 20000
 const WATCH_GRACE_MS := 300000
+const QUEUE_MS := 1000
 
 mut STREAM_JOBS := chan.Chan {} as chan.Chan<i64>
 mut STREAM_SRV := tcp.Server {}
@@ -71,6 +72,7 @@ mut STREAM_COUNT := HashMap {} as HashMap<str, str>
 mut MEM_SOFT_MB := 1200
 mut MEM_HARD_MB := 2600
 mut AGENT_TURN_SECONDS := 3600 as i64
+mut QUEUE_MAX := 20
 mut CONTEXT_LOCK := sync.Mutex {}
 mut CONTEXT_SENT := HashMap {} as HashMap<str, str>
 
@@ -113,6 +115,7 @@ func main:
     end
     aibridge.Configure(os.Env("AI_BRIDGE_SECRET"), BRIDGE_SLOTS, env_or("AI_BRIDGE_HOLD_SECONDS", "40").to_int())
     AGENT_TURN_SECONDS = env_or("AI_AGENT_TURN_SECONDS", "3600").to_int() as i64
+    QUEUE_MAX = env_or("AI_QUEUE_MAX", "20").to_int()
     if not aistore.Open(env_or("AI_DB_HOST", "127.0.0.1"), env_or("AI_DB_USER", "salam_ai"), os.Env("AI_DB_PASSWORD"), env_or("AI_DB_NAME", "salam_ai"), env_or("AI_DB_PORT", "3306").to_int()):
         println "cannot open the database:", aistore.Error()
         ret 1
@@ -166,6 +169,7 @@ func main:
     if MEM_SOFT_MB > 0:
         _m := spawn(watchdog)
     end
+    _q := spawn(queue_worker)
     port := env_or("AI_PORT", "8080").to_int()
     mut r := router.NewRouter()
     router.Get(r, "/health", health)
@@ -183,6 +187,11 @@ func main:
     router.Post(r, "/chats/:id/messages", send_message)
     router.Get(r, "/chats/:id/messages/:mid", poll_message)
     router.Post(r, "/chats/:id/stop", stop_message)
+    router.Get(r, "/chats/:id/queue", list_queue)
+    router.Post(r, "/chats/:id/queue", enqueue_message)
+    router.Delete(r, "/chats/:id/queue", clear_queue)
+    router.Delete(r, "/chats/:id/queue/:qid", remove_queued)
+    router.Post(r, "/chats/:id/queue/:qid/now", run_queued_now)
     aioauth.Routes(r)
     aiadmin.Routes(r)
     aiopenai.Routes(r)
@@ -193,7 +202,7 @@ func main:
     aitelegram.Routes(r)
     aicloud.Routes(r)
     ailogin.Routes(r)
-    each path in ["/auth/register", "/auth/login", "/auth/logout", "/me", "/chats", "/chats/:id", "/chats/:id/messages", "/chats/:id/messages/:mid", "/chats/:id/stop", "/capabilities", "/chats/:id/files/:fid"]:
+    each path in ["/auth/register", "/auth/login", "/auth/logout", "/me", "/chats", "/chats/:id", "/chats/:id/messages", "/chats/:id/messages/:mid", "/chats/:id/stop", "/chats/:id/queue", "/chats/:id/queue/:qid", "/chats/:id/queue/:qid/now", "/capabilities", "/chats/:id/files/:fid"]:
         router.Options(r, path, preflight)
     end
     mut s := http.NewServer(port)
@@ -649,7 +658,7 @@ func get_chat(ctx: i64):
     end
     aistore.Finish(crows)
     aistore.Unlock()
-    reply(ctx, 200, `{"chat": ` + head + `, "messages": ` + json.Array(items) + `, "calls": ` + json.Array(calls) + "}")
+    reply(ctx, 200, `{"chat": ` + head + `, "messages": ` + json.Array(items) + `, "calls": ` + json.Array(calls) + `, "queue": ` + queue_json(id) + "}")
 end
 
 func rename_chat(ctx: i64):
@@ -701,15 +710,8 @@ func send_message(ctx: i64):
     body := http.Body(ctx)
     text := str.Trim(json.Get(body, "text"))
     mut files := Vector {} as Vector<aifiles.Upload>
-    if body.find(`"files"`) >= 0:
-        mut image_ok := false
-        mut pdf_ok := false
-        aiengine.Accepts(image_ok, pdf_ok)
-        mut problem := ""
-        if not aifiles.Parse(body, image_ok, pdf_ok, files, problem, aiweb.English(ctx)):
-            fail(ctx, 400, "file", problem)
-            ret
-        end
+    if not read_files(ctx, body, files):
+        ret
     end
     if text.len() == 0 and files.len() == 0:
         fail(ctx, 400, "empty", "پیام خالی است.")
@@ -724,11 +726,39 @@ func send_message(ctx: i64):
         fail(ctx, 404, "not_found", "این گفت‌وگو پیدا نشد.")
         ret
     end
-    mut sid := str.TrimSuffix(owned, "|")
+    mut status := 0
+    mut code := ""
+    mut message := ""
+    mut out := ""
+    if not launch_turn(uid, id, str.TrimSuffix(owned, "|"), text, files, aiweb.UiLangNote(ctx), body, "", status, code, message, out):
+        fail(ctx, status, code, message)
+        ret
+    end
+    reply(ctx, 201, out)
+end
+
+func read_files(ctx: i64, body: str, files &: Vector<aifiles.Upload>): bool:
+    if body.find(`"files"`) < 0:
+        ret true
+    end
+    mut image_ok := false
+    mut pdf_ok := false
+    aiengine.Accepts(image_ok, pdf_ok)
+    mut problem := ""
+    if not aifiles.Parse(body, image_ok, pdf_ok, files, problem, aiweb.English(ctx)):
+        fail(ctx, 400, "file", problem)
+        ret false
+    end
+    ret true
+end
+
+func launch_turn(uid: i64, id: str, sid_in: str, text: str, files &: Vector<aifiles.Upload>, ui_note: str, body: str, qid: str, status &: int, code &: str, message &: str, out &: str): bool:
+    mut sid := sid_in
     sync_pending(id, sid)
     t := i64s(aistore.Now())
     aistore.Lock()
     pending := aistore.OneText("SELECT COUNT(*) FROM messages WHERE chat_id = ?1 AND status = 'pending'", one(id))
+    queued := qid.len() > 0 ? "0" : aistore.OneText("SELECT COUNT(*) FROM chat_queue WHERE chat_id = ?1", one(id))
     recent := aistore.OneText("SELECT COUNT(*) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = ?1 AND m.role = 'user' AND m.created > ?2", two(i64s(uid), i64s(aistore.Now() - 3600)))
     title := aistore.OneText("SELECT title FROM chats WHERE id = ?1", one(id))
     mut rows := aistore.Stmt("SELECT device_id, workspace, bridge_token, cloud FROM chats WHERE id = ?1", one(id))
@@ -744,22 +774,28 @@ func send_message(ctx: i64):
     end
     aistore.Finish(rows)
     aistore.Unlock()
-    if pending != "0":
-        fail(ctx, 409, "busy", "هنوز پاسخ پیام قبلی کامل نشده است.")
-        ret
+    if pending != "0" or queued != "0":
+        status = 409
+        code = "busy"
+        message = "هنوز پاسخ پیام قبلی کامل نشده است."
+        ret false
     end
     limits := aibilling.LimitsOf(i64s(uid))
     if limits.chat_hourly > 0 and recent.to_int() >= limits.chat_hourly:
-        fail(ctx, 429, "rate", "پیام‌های این ساعت پلن «" + limits.name + "» تمام شد. کمی بعد دوباره تلاش کنید یا پلن را ارتقا دهید.")
-        ret
+        status = 429
+        code = "rate"
+        message = "پیام‌های این ساعت پلن «" + limits.name + "» تمام شد. کمی بعد دوباره تلاش کنید یا پلن را ارتقا دهید."
+        ret false
     end
     mut fresh := false
     if sid.len() == 0:
         fresh = true
         sid = aiengine.NewSession("chat " + id)
         if sid.len() == 0:
-            fail(ctx, 503, "engine", "دستیار در دسترس نیست. چند لحظه بعد دوباره تلاش کنید.")
-            ret
+            status = 503
+            code = "engine"
+            message = "دستیار در دسترس نیست. چند لحظه بعد دوباره تلاش کنید."
+            ret false
         end
         aistore.Lock()
         _s := aistore.Run("UPDATE chats SET engine_sid = ?1 WHERE id = ?2", two(sid, id))
@@ -769,29 +805,45 @@ func send_message(ctx: i64):
     if title == DEFAULT_TITLE:
         new_title = short_title(text.len() > 0 ? text : files.get(0).name)
     end
-    if files.len() > 0 and not aifiles.Store(files, aistore.Now()):
-        fail(ctx, 500, "file", "ذخیره‌ی فایل‌ها ناموفق بود. دوباره تلاش کنید.")
-        ret
+    if files.len() > 0 and files.get(0).path.len() == 0 and not aifiles.Store(files, aistore.Now()):
+        status = 500
+        code = "file"
+        message = "ذخیره‌ی فایل‌ها ناموفق بود. دوباره تلاش کنید."
+        ret false
     end
     aistore.Lock()
+    taken := aistore.OneText("SELECT COUNT(*) FROM messages WHERE chat_id = ?1 AND status = 'pending'", one(id))
+    mine := qid.len() == 0 ? "1" : aistore.OneText("SELECT COUNT(*) FROM chat_queue WHERE id = ?1", one(qid))
+    if taken != "0" or mine != "1":
+        aistore.Unlock()
+        status = 409
+        code = "busy"
+        message = "هنوز پاسخ پیام قبلی کامل نشده است."
+        ret false
+    end
     _a := aistore.Run("INSERT INTO messages (chat_id, role, body, status, created) VALUES (?1, 'user', ?2, 'done', ?3)", three(id, text, t))
     umid := aistore.LastId()
-    _b := aistore.Run("INSERT INTO messages (chat_id, role, body, status, created) VALUES (?1, 'assistant', '', 'pending', ?2)", two(id, t))
+    _b := aistore.Run("INSERT INTO messages (chat_id, role, body, status, created, via_queue) VALUES (?1, 'assistant', '', 'pending', ?2, ?3)", three(id, t, qid.len() > 0 ? "1" : "0"))
     amid := aistore.LastId()
     _c := aistore.Run("UPDATE chats SET title = ?1, updated = ?2 WHERE id = ?3", three(new_title, t, id))
+    if qid.len() > 0:
+        _q := aistore.Run("DELETE FROM chat_queue WHERE id = ?1", one(qid))
+    end
     aistore.Unlock()
     if not aifiles.Record(id, umid, i64s(uid), files, t):
         aistore.Lock()
         _x := aistore.Run("DELETE FROM message_files WHERE message_id = ?1", one(umid))
         _y := aistore.Run("DELETE FROM messages WHERE id = ?1 OR id = ?2", two(umid, amid))
         aistore.Unlock()
-        fail(ctx, 500, "file", "ذخیره‌ی فایل‌ها ناموفق بود. دوباره تلاش کنید.")
-        ret
+        status = 500
+        code = "file"
+        message = "ذخیره‌ی فایل‌ها ناموفق بود. دوباره تلاش کنید."
+        ret false
     end
     recall := fresh ? aimemory.Recall(i64s(uid), id) : ""
     mut free_system := ""
     free := aiweb.PolicyOf(i64s(uid), free_system)
-    prompt := aiweb.UiLangNote(ctx) + aifiles.PromptText(aipolicy.Defang(text), files) + recall
+    prompt := ui_note + aifiles.PromptText(aipolicy.Defang(text), files) + recall
     parts := aifiles.Parts(files)
     ailive.Begin(sid)
     forget_check(sid)
@@ -811,14 +863,255 @@ func send_message(ctx: i64):
         aistore.Lock()
         _e := aistore.Run("UPDATE messages SET status = 'error', body = ?1 WHERE id = ?2", two("دستیار در دسترس نیست. چند لحظه بعد دوباره تلاش کنید.", amid))
         aistore.Unlock()
-        fail(ctx, 503, "engine", "دستیار در دسترس نیست. چند لحظه بعد دوباره تلاش کنید.")
-        ret
+        status = 503
+        code = "engine"
+        message = "دستیار در دسترس نیست. چند لحظه بعد دوباره تلاش کنید."
+        ret false
     end
     mut m := Vector {} as Vector<str>
     m.push(json.MemberRaw("user", with_files(message_json(umid, "user", text, "done", t, "[]", "0"), files.len() > 0 ? aifiles.Metas(files) : "")))
     m.push(json.MemberRaw("assistant", message_json(amid, "assistant", "", "pending", t, "[]", "0")))
     m.push(json.Member("title", new_title))
-    reply(ctx, 201, json.Object(m))
+    out = json.Object(m)
+    ret true
+end
+
+func queue_json(id: str): str:
+    mut items := Vector {} as Vector<str>
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT id, body, created FROM chat_queue WHERE chat_id = ?1 ORDER BY pos, id", one(id))
+    mut ids := Vector {} as Vector<str>
+    mut texts := Vector {} as Vector<str>
+    mut stamps := Vector {} as Vector<str>
+    until aistore.Next(rows):
+        ids.push(aistore.Text(rows, 0))
+        texts.push(aistore.Text(rows, 1))
+        stamps.push(aistore.Text(rows, 2))
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    mut i := 0
+    until i < ids.len():
+        mut m := Vector {} as Vector<str>
+        m.push(json.MemberRaw("id", ids.get(i)))
+        m.push(json.Member("text", texts.get(i)))
+        m.push(json.MemberRaw("created", stamps.get(i)))
+        m.push(json.MemberRaw("files", aifiles.QueuedMetas(ids.get(i))))
+        items.push(json.Object(m))
+        i += 1
+    end
+    ret json.Array(items)
+end
+
+func queue_reply(ctx: i64, status: int, id: str, extra: str):
+    mut body := `{"queue": ` + queue_json(id)
+    if extra.len() > 0:
+        body = body + ", " + extra
+    end
+    reply(ctx, status, body + "}")
+end
+
+func list_queue(ctx: i64):
+    uid := need_user(ctx)
+    if uid == 0:
+        ret
+    end
+    id := http.Param(ctx, "id")
+    if own_chat(uid, id).len() == 0:
+        fail(ctx, 404, "not_found", "این گفت‌وگو پیدا نشد.")
+        ret
+    end
+    queue_reply(ctx, 200, id, "")
+end
+
+func enqueue_message(ctx: i64):
+    uid := need_user(ctx)
+    if uid == 0:
+        ret
+    end
+    id := http.Param(ctx, "id")
+    body := http.Body(ctx)
+    text := str.Trim(json.Get(body, "text"))
+    mut files := Vector {} as Vector<aifiles.Upload>
+    if not read_files(ctx, body, files):
+        ret
+    end
+    if text.len() == 0 and files.len() == 0:
+        fail(ctx, 400, "empty", "پیام خالی است.")
+        ret
+    end
+    if text.len() > MAX_MESSAGE:
+        fail(ctx, 400, "too_long", "پیام خیلی بلند است. آن را کوتاه‌تر کنید.")
+        ret
+    end
+    if own_chat(uid, id).len() == 0:
+        fail(ctx, 404, "not_found", "این گفت‌وگو پیدا نشد.")
+        ret
+    end
+    aistore.Lock()
+    waiting := aistore.OneText("SELECT COUNT(*) FROM chat_queue WHERE chat_id = ?1", one(id))
+    aistore.Unlock()
+    if waiting.to_int() >= QUEUE_MAX:
+        fail(ctx, 429, "queue_full", "صف این گفت‌وگو پر است. صبر کنید تا چند پیام اجرا شود یا بعضی را حذف کنید.")
+        ret
+    end
+    if files.len() > 0 and not aifiles.Store(files, aistore.Now()):
+        fail(ctx, 500, "file", "ذخیره‌ی فایل‌ها ناموفق بود. دوباره تلاش کنید.")
+        ret
+    end
+    project := json.Get(body, "project")
+    mut a := Vector {} as Vector<str>
+    a.push(id)
+    a.push(i64s(uid))
+    a.push(text)
+    a.push(aiweb.UiLangNote(ctx))
+    a.push(str.StartsWith(project, "{") ? project : "")
+    a.push(i64s(aistore.Now()))
+    aistore.Lock()
+    ok := aistore.Run("INSERT INTO chat_queue (chat_id, user_id, body, ui_note, project, created) VALUES (?1, ?2, ?3, ?4, ?5, ?6)", a)
+    qid := aistore.LastId()
+    aistore.Unlock()
+    if not ok or not aifiles.Persist(qid, files):
+        fail(ctx, 500, "server", "افزودن به صف ناموفق بود. دوباره تلاش کنید.")
+        ret
+    end
+    queue_reply(ctx, 201, id, `"added": ` + qid)
+end
+
+func remove_queued(ctx: i64):
+    uid := need_user(ctx)
+    if uid == 0:
+        ret
+    end
+    id := http.Param(ctx, "id")
+    if own_chat(uid, id).len() == 0:
+        fail(ctx, 404, "not_found", "این گفت‌وگو پیدا نشد.")
+        ret
+    end
+    aistore.Lock()
+    _d := aistore.Run("DELETE FROM chat_queue WHERE id = ?1 AND chat_id = ?2", two(http.Param(ctx, "qid"), id))
+    aistore.Unlock()
+    queue_reply(ctx, 200, id, "")
+end
+
+func clear_queue(ctx: i64):
+    uid := need_user(ctx)
+    if uid == 0:
+        ret
+    end
+    id := http.Param(ctx, "id")
+    if own_chat(uid, id).len() == 0:
+        fail(ctx, 404, "not_found", "این گفت‌وگو پیدا نشد.")
+        ret
+    end
+    aistore.Lock()
+    _d := aistore.Run("DELETE FROM chat_queue WHERE chat_id = ?1", one(id))
+    aistore.Unlock()
+    queue_reply(ctx, 200, id, "")
+end
+
+func run_queued_now(ctx: i64):
+    uid := need_user(ctx)
+    if uid == 0:
+        ret
+    end
+    id := http.Param(ctx, "id")
+    qid := http.Param(ctx, "qid")
+    owned := own_chat(uid, id)
+    if owned.len() == 0:
+        fail(ctx, 404, "not_found", "این گفت‌وگو پیدا نشد.")
+        ret
+    end
+    aistore.Lock()
+    found := aistore.OneText("SELECT COUNT(*) FROM chat_queue WHERE id = ?1 AND chat_id = ?2", two(qid, id))
+    if found == "1":
+        _f := aistore.Run("UPDATE chat_queue SET pos = (SELECT m FROM (SELECT COALESCE(MIN(pos), 0) - 1 AS m FROM chat_queue WHERE chat_id = ?1) t) WHERE id = ?2", two(id, qid))
+    end
+    aistore.Unlock()
+    if found != "1":
+        fail(ctx, 404, "not_found", "این پیام دیگر در صف نیست.")
+        ret
+    end
+    _s := abort_turn(id, str.TrimSuffix(owned, "|"))
+    mut launched := ""
+    if queue_step(id, launched):
+        reply(ctx, 201, launched)
+        ret
+    end
+    queue_reply(ctx, 200, id, `"waiting": true`)
+end
+
+func queue_worker():
+    until true:
+        sync.SleepMs(QUEUE_MS)
+        queue_tick()
+    end
+end
+
+func queue_tick():
+    mut chats := Vector {} as Vector<str>
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT chat_id FROM chat_queue UNION SELECT chat_id FROM messages WHERE status = 'pending' AND via_queue = 1 LIMIT 200", Vector {} as Vector<str>)
+    until aistore.Next(rows):
+        chats.push(aistore.Text(rows, 0))
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    each id in chats:
+        mut launched := ""
+        _l := queue_step(id, launched)
+    end
+end
+
+func queue_step(id: str, launched &: str): bool:
+    aistore.Lock()
+    sid := aistore.OneText("SELECT engine_sid FROM chats WHERE id = ?1", one(id))
+    uid := aistore.OneText("SELECT user_id FROM chats WHERE id = ?1", one(id))
+    mut prow := aistore.Stmt("SELECT id, created FROM messages WHERE chat_id = ?1 AND status = 'pending' ORDER BY id DESC LIMIT 1", one(id))
+    mut mid := ""
+    mut created := 0 as i64
+    if aistore.Next(prow):
+        mid = aistore.Text(prow, 0)
+        created = aistore.Int64(prow, 1)
+    end
+    aistore.Finish(prow)
+    mut qrow := aistore.Stmt("SELECT id, body, ui_note, project FROM chat_queue WHERE chat_id = ?1 ORDER BY pos, id LIMIT 1", one(id))
+    mut qid := ""
+    mut text := ""
+    mut note := ""
+    mut project := ""
+    if aistore.Next(qrow):
+        qid = aistore.Text(qrow, 0)
+        text = aistore.Text(qrow, 1)
+        note = aistore.Text(qrow, 2)
+        project = aistore.Text(qrow, 3)
+    end
+    aistore.Finish(qrow)
+    aistore.Unlock()
+    if mid.len() > 0:
+        r := settle(mid, sid, created, turn_seconds(id))
+        if not r.done:
+            ret false
+        end
+    end
+    if qid.len() == 0 or uid.len() == 0:
+        ret false
+    end
+    mut files := aifiles.Revive(qid)
+    mut status := 0
+    mut code := ""
+    mut message := ""
+    body := project.len() > 0 ? `{"project": ` + project + "}" : ""
+    if launch_turn(uid.to_int(), id, sid, text, files, note, body, qid, status, code, message, launched):
+        ret true
+    end
+    if status == 500:
+        println "salam-ai: dropped a queued message that could not start:", code, message
+        aistore.Lock()
+        _d := aistore.Run("DELETE FROM chat_queue WHERE id = ?1", one(qid))
+        aistore.Unlock()
+    end
+    ret false
 end
 
 func capabilities(ctx: i64):
@@ -964,7 +1257,11 @@ func stop_message(ctx: i64):
         fail(ctx, 404, "not_found", "این گفت‌وگو پیدا نشد.")
         ret
     end
-    sid := str.TrimSuffix(owned, "|")
+    body := abort_turn(id, str.TrimSuffix(owned, "|"))
+    reply(ctx, 200, `{"ok": true, "body": ` + json.Str(body) + "}")
+end
+
+func abort_turn(id: str, sid: str): str:
     if sid.len() > 0:
         aiengine.Abort(sid)
     end
@@ -981,7 +1278,7 @@ func stop_message(ctx: i64):
         ailive.End(sid)
         forget_check(sid)
     end
-    reply(ctx, 200, `{"ok": true, "body": ` + json.Str(body) + "}")
+    ret body
 end
 
 func cors_lines(origin: str): str:

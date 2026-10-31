@@ -140,6 +140,18 @@ export type Message = {
   ms?: number;
   files?: FileMeta[];
 };
+export type QueueItem = {
+  id: number;
+  text: string;
+  created: number;
+  files: {
+    id: number;
+    name: string;
+    kind: string;
+    mime: string;
+    size: number;
+  }[];
+};
 export type TraceItem =
   | { kind: "prompt"; text: string; at: number }
   | { kind: "think"; text: string; at: number }
@@ -780,10 +792,12 @@ export const api = {
     ),
   devices: () => call<{ devices: Device[] }>("GET", "/bridge/devices"),
   chat: (id: string) =>
-    call<{ chat: Chat; messages: Message[]; calls?: MessageCall[] }>(
-      "GET",
-      `/chats/${id}`,
-    ),
+    call<{
+      chat: Chat;
+      messages: Message[];
+      calls?: MessageCall[];
+      queue?: QueueItem[];
+    }>("GET", `/chats/${id}`),
   renameChat: (id: string, title: string) =>
     call<{ title: string }>("PATCH", `/chats/${id}`, { title }),
   deleteChat: (id: string) => call<{ ok: boolean }>("DELETE", `/chats/${id}`),
@@ -865,6 +879,28 @@ export const api = {
       activity?: ActivityStep[];
     }>("GET", `/chats/${id}/messages/${mid}`),
   stop: (id: string) => call<{ body: string }>("POST", `/chats/${id}/stop`),
+  queue: (id: string) =>
+    call<{ queue: QueueItem[] }>("GET", `/chats/${id}/queue`),
+  enqueue: (
+    id: string,
+    text: string,
+    files?: OutgoingFile[],
+    project?: ProjectContext,
+  ) =>
+    call<{ queue: QueueItem[] }>("POST", `/chats/${id}/queue`, {
+      text,
+      ...(files && files.length > 0 ? { files } : {}),
+      ...(project ? { project } : {}),
+    }),
+  unqueue: (id: string, qid: number) =>
+    call<{ queue: QueueItem[] }>("DELETE", `/chats/${id}/queue/${qid}`),
+  clearQueue: (id: string) =>
+    call<{ queue: QueueItem[] }>("DELETE", `/chats/${id}/queue`),
+  runQueued: (id: string, qid: number) =>
+    call<{ queue?: QueueItem[]; user?: Message; assistant?: Message }>(
+      "POST",
+      `/chats/${id}/queue/${qid}/now`,
+    ),
   consentRequest: (id: string) =>
     call<{ request: ConsentRequest }>(
       "GET",

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { api, ApiError, getToken, handleUnauthorized, setClientPlatform, setClientVersion, setToken, streamMessage, uiText, type Chat, type FileMeta, type Message, type OutgoingFile, type User } from "./api";
+import { api, ApiError, getToken, handleUnauthorized, setClientPlatform, setClientVersion, setToken, streamMessage, uiText, type Chat, type FileMeta, type Message, type OutgoingFile, type QueueItem, type User } from "./api";
 import { Admin, NoAccess } from "./Admin";
 import { AdminChat } from "./AdminChat";
 import { confirmDialog } from "./Confirm";
@@ -8,6 +8,7 @@ import { Memory } from "./Memory";
 import { fileLoader, type Pending } from "./Attach";
 import { Auth } from "./Auth";
 import { Composer } from "./Composer";
+import { QueuePanel } from "./Queue";
 import { Connect } from "./Connect";
 import { Connections, TelegramLink } from "./Telegram";
 import { OAuthCallback, providerFromPath } from "./OAuthCallback";
@@ -121,6 +122,7 @@ export function App() {
   const [toast, setToast] = useState("");
   const [workspace, setWorkspace] = useState(isDesktop ? savedWorkspace() : "");
   const [mode, setMode] = useState<AgentMode>("ask");
+  const [queue, setQueue] = useState<QueueItem[]>([]);
   const [cloudOk, setCloudOk] = useState(false);
   const [cloud, setCloud] = useState(() => {
     try {
@@ -134,8 +136,11 @@ export function App() {
   const stick = useRef(true);
   const pollTimer = useRef<number | null>(null);
   const streamCtrl = useRef<AbortController | null>(null);
+  const followed = useRef(0);
+  const queueRef = useRef<QueueItem[]>([]);
   const activeRef = useRef<string | null>(activeId);
   activeRef.current = activeId;
+  queueRef.current = queue;
   const messagesRef = useRef<Message[]>(messages);
   messagesRef.current = messages;
   const chatsRef = useRef<Chat[]>(chats);
@@ -283,6 +288,7 @@ export function App() {
   const follow = useCallback(
     (chatId: string, mid: number) => {
       stopPolling();
+      followed.current = mid;
       const ctrl = new AbortController();
       streamCtrl.current = ctrl;
       const update = (fn: (m: Message) => Message) => {
@@ -300,6 +306,7 @@ export function App() {
           activity: (steps) => update((m) => ({ ...m, activity: steps })),
           done: (body, status, activity, ms) => {
             finished = true;
+            if (followed.current === mid) followed.current = 0;
             finish(chatId, mid, status, body);
             update((m) => ({
               ...m,
@@ -323,6 +330,34 @@ export function App() {
     [poll, finish],
   );
 
+  const applyChat = useCallback((r: Awaited<ReturnType<typeof api.chat>>) => {
+    const byMid = new Map<number, NonNullable<Message["calls"]>>();
+    for (const c of r.calls ?? []) {
+      const list = byMid.get(c.mid) ?? [];
+      list.push(c);
+      byMid.set(c.mid, list);
+    }
+    setMessages(
+      r.messages.map((m) =>
+        m.role === "assistant" && byMid.has(m.id) ? { ...m, calls: byMid.get(m.id) } : m,
+      ),
+    );
+    setQueue(r.queue ?? []);
+    return r.messages.find((m) => m.status === "pending");
+  }, []);
+
+  const syncChat = useCallback(
+    async (id: string) => {
+      try {
+        const r = await api.chat(id);
+        if (activeRef.current !== id) return;
+        const pending = applyChat(r);
+        if (pending && followed.current !== pending.id) follow(id, pending.id);
+      } catch {}
+    },
+    [applyChat, follow],
+  );
+
   const openChat = useCallback(
     async (id: string | null, replace = false) => {
       if (id !== activeRef.current) watchAway();
@@ -342,22 +377,12 @@ export function App() {
         setMessages([]);
         return;
       }
+      setQueue([]);
       setLoadingChat(true);
       try {
         const r = await api.chat(id);
         if (activeRef.current !== id) return;
-        const byMid = new Map<number, NonNullable<Message["calls"]>>();
-        for (const c of r.calls ?? []) {
-          const list = byMid.get(c.mid) ?? [];
-          list.push(c);
-          byMid.set(c.mid, list);
-        }
-        setMessages(
-          r.messages.map((m) =>
-            m.role === "assistant" && byMid.has(m.id) ? { ...m, calls: byMid.get(m.id) } : m,
-          ),
-        );
-        const pending = r.messages.find((m) => m.status === "pending");
+        const pending = applyChat(r);
         if (pending) follow(id, pending.id);
       } catch (e) {
         if (e instanceof ApiError && e.status === 404) {
@@ -370,7 +395,7 @@ export function App() {
         setLoadingChat(false);
       }
     },
-    [notify, follow, watchAway],
+    [notify, follow, watchAway, applyChat],
   );
 
   const leaveChat = () => {
@@ -548,6 +573,74 @@ export function App() {
     }
   };
 
+  const folderFor = (id: string) => {
+    const chat = chats.find((c) => c.id === id);
+    return chat ? (chat.agent ? chat.workspace || "" : "") : isDesktop ? workspace : "";
+  };
+
+  const enqueue = async (text: string, files: OutgoingFile[] = []): Promise<boolean> => {
+    const id = activeId;
+    if (!id) return false;
+    try {
+      const folder = folderFor(id);
+      const project = isDesktop && folder ? await agent.projectContext(folder).catch(() => undefined) : undefined;
+      const r = await api.enqueue(id, text, files, project);
+      setQueue(r.queue);
+      return true;
+    } catch (e) {
+      notify(e instanceof ApiError ? e.message : t("افزودن به صف ناموفق بود.", "Could not add the message to the queue."));
+      return false;
+    }
+  };
+
+  const unqueue = async (qid: number) => {
+    if (!activeId) return;
+    try {
+      const r = await api.unqueue(activeId, qid);
+      setQueue(r.queue);
+    } catch (e) {
+      if (e instanceof ApiError) notify(e.message);
+    }
+  };
+
+  const clearQueue = async () => {
+    if (!activeId) return;
+    try {
+      const r = await api.clearQueue(activeId);
+      setQueue(r.queue);
+    } catch (e) {
+      if (e instanceof ApiError) notify(e.message);
+    }
+  };
+
+  const runQueued = async (qid: number) => {
+    const id = activeId;
+    if (!id) return;
+    stopPolling();
+    try {
+      await api.runQueued(id, qid);
+    } catch (e) {
+      if (e instanceof ApiError) notify(e.message);
+    }
+    await syncChat(id);
+  };
+
+  const hasQueue = queue.length > 0;
+  useEffect(() => {
+    if (!activeId || !hasQueue) return;
+    const id = activeId;
+    const timer = window.setInterval(async () => {
+      try {
+        const r = await api.queue(id);
+        if (activeRef.current !== id) return;
+        const before = queueRef.current;
+        setQueue(r.queue);
+        if (r.queue.length < before.length || r.queue[0]?.id !== before[0]?.id) syncChat(id);
+      } catch {}
+    }, 2000);
+    return () => window.clearInterval(timer);
+  }, [activeId, hasQueue, syncChat]);
+
   const stop = async () => {
     if (!activeId) return;
     stopPolling();
@@ -693,8 +786,11 @@ export function App() {
                 {t("یک کار در گفت‌وگوی دیگری منتظر اجازه‌ی شماست. نمایش", "A task in another chat is waiting for your permission. Show")}
               </button>
             )}
+            {activeId && <QueuePanel items={queue} working={busy} onRun={runQueued} onRemove={unqueue} onClear={clearQueue} />}
             <Composer
               busy={busy}
+              queueing={queue.length > 0}
+              onQueue={activeId ? enqueue : undefined}
               disabled={loadingChat}
               onSend={send}
               onStop={stop}

@@ -41,6 +41,12 @@ export const IconStop = (p: P) => (
     <rect x="7" y="7" width="10" height="10" rx="2" fill="currentColor" stroke="none" />
   </Base>
 );
+export const IconQueueAdd = (p: P) => (
+  <Base {...p}>
+    <path d="M4 6h11M4 12h7M4 18h7" />
+    <path d="M17 14v6M14 17h6" />
+  </Base>
+);
 export const IconSun = (p: P) => (
   <Base {...p}>
     <circle cx="12" cy="12" r="4" />

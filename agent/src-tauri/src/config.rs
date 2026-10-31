@@ -37,6 +37,17 @@ pub fn is_local_asset(url: &Url) -> bool {
     url.scheme() == "tauri" || url.host_str() == Some("tauri.localhost")
 }
 
+pub fn local_url(path: &str) -> Url {
+    let base = if cfg!(windows) || cfg!(target_os = "android") {
+        "http://tauri.localhost/"
+    } else {
+        "tauri://localhost/"
+    };
+    Url::parse(base)
+        .and_then(|url| url.join(path))
+        .unwrap_or_else(|_| Url::parse(base).expect("valid asset base url"))
+}
+
 pub fn os_name() -> &'static str {
     if cfg!(target_os = "windows") {
         "windows"

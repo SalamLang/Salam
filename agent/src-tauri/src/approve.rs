@@ -16,6 +16,7 @@ pub enum Mode {
     Ask,
     Auto,
     Readonly,
+    Everything,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, PartialEq, Eq)]
@@ -43,6 +44,7 @@ pub fn policy(mode: Mode, kind: Kind, outside: bool, always: bool, memory: bool)
         return if mode == Mode::Readonly { Policy::Ask } else { Policy::Allow };
     }
     match mode {
+        Mode::Everything => Policy::Allow,
         Mode::Readonly => match (kind, outside) {
             (Kind::Read, false) => Policy::Allow,
             (Kind::Read, true) => Policy::Ask,
@@ -150,6 +152,21 @@ mod tests {
         assert_eq!(policy(Mode::Ask, Kind::Exec, false, false, false), Policy::Ask);
         assert_eq!(policy(Mode::Ask, Kind::Exec, false, true, false), Policy::Allow);
         assert_eq!(policy(Mode::Ask, Kind::Exec, true, true, false), Policy::Ask);
+    }
+
+    #[test]
+    fn everything_mode_never_asks_even_outside() {
+        assert_eq!(policy(Mode::Everything, Kind::Read, true, false, false), Policy::Allow);
+        assert_eq!(policy(Mode::Everything, Kind::Write, true, false, false), Policy::Allow);
+        assert_eq!(policy(Mode::Everything, Kind::Exec, true, false, false), Policy::Allow);
+        assert_eq!(policy(Mode::Everything, Kind::Exec, false, false, false), Policy::Allow);
+        assert_eq!(policy(Mode::Everything, Kind::Write, true, false, true), Policy::Allow);
+    }
+
+    #[test]
+    fn the_everything_mode_is_sent_as_everything() {
+        let mode: Mode = serde_json::from_str("\"everything\"").unwrap();
+        assert_eq!(mode, Mode::Everything);
     }
 
     #[test]

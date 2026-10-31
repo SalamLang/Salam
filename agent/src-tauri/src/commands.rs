@@ -113,6 +113,11 @@ pub fn agent_pending(app: AppHandle) -> Vec<Preview> {
 }
 
 #[tauri::command]
+pub fn agent_alive(app: AppHandle) {
+    crate::watchdog::beat(&app);
+}
+
+#[tauri::command]
 pub async fn agent_project_context(workspace: String) -> Result<memory::ProjectContext, String> {
     if workspace.trim().is_empty() {
         return Err("No workspace folder is selected.".to_string());

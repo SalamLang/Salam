@@ -130121,6 +130121,7 @@ end
 package fastcgi
 import str
 import mem
+import sync
 import net.tcp
 const VERSION := 1
 const BEGIN_REQUEST := 1
@@ -130387,6 +130388,7 @@ end
 mut wait := timeout_ms
 if wait <= 0: wait = 30000 end
 tcp.SetDeadline(c, wait)
+deadline := sync.NowMs() + (wait as i64)
 mut pb := _new(1024)
 repeat params.items.len() in i:
 it := params.items.get(i)
@@ -130449,7 +130451,11 @@ mut done := false
 mut proto := 0
 until not done and failed.len() == 0:
 if _read_exact(c, hdr, 8) != 8:
+if sync.NowMs() >= deadline - 5:
+failed = "the FastCGI backend timed out"
+else:
 failed = "the FastCGI backend closed the connection without answering"
+end
 break
 end
 typ := _byte(hdr, 1)
@@ -140559,7 +140565,10 @@ out := str.BufStr(sb)
 str.BufFree(sb)
 ret out
 end
-func _expand_param(tmpl: str, host: str, path: str, query: str, root: str, script: str, port: int, remote: str): str:
+func _expand_param(ctx: i64, tmpl: str, host: str, path: str, query: str, root: str, script: str, port: int, remote: str): str:
+if str.StartsWith(tmpl, "$header:"):
+ret str.Clone(http.Header(ctx, tmpl.substr(8, tmpl.len() - 8)))
+end
 mut out := str.Replace(tmpl, "$host", host)
 if query.len() > 0:
 ru := _cat3(path, "?", query)
@@ -140696,7 +140705,7 @@ hdrs.free()
 repeat _cfg.fcgi.len() in i:
 fp := _cfg.fcgi.get(i)
 if fp.site == site and (fp.loc == -1 or fp.loc == loc):
-val := _expand_param(fp.value, hname, path, query, root, script_name, port, "127.0.0.1")
+val := _expand_param(ctx, fp.value, hname, path, query, root, script_name, port, "127.0.0.1")
 fastcgi.Add(p, fp.name, val)
 mem.Free(val as void *)
 end

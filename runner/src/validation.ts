@@ -39,6 +39,12 @@ function validateEnum(
   return `'${label}' query param must be one of: ${[...allowed].join(", ")}`;
 }
 
+const textEncoder = new TextEncoder();
+
+export function byteLength(text: string): number {
+  return textEncoder.encode(text).length;
+}
+
 export function validateRunInput(input: RunInput): ValidationError | undefined {
   if (!input.code) {
     return {
@@ -47,7 +53,7 @@ export function validateRunInput(input: RunInput): ValidationError | undefined {
       message: "request body must contain Salam source code",
     };
   }
-  if (input.code.length > MAX_CODE_BYTES) {
+  if (byteLength(input.code) > MAX_CODE_BYTES) {
     return {
       status: 413,
       error: "payload_too_large",

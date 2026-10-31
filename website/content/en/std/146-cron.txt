@@ -1,0 +1,93 @@
+pkg.en = cron
+pkg.name = cron
+pkg.group = Time and concurrency
+pkg.summary = Five-field cron expressions and a minute scheduler that runs each job on its own thread.
+pkg.title = The cron package in Salam
+pkg.description = The cron package in Salam: parse five-field cron expressions, match a time, compute the next run, and schedule jobs on threads, with a guide and examples.
+pkg.import = cron
+pkg.intro <<
+<p><code>cron</code> parses the usual five-field cron expression, matches it against a time, computes the next matching minute, and can run registered jobs once a minute. It is a library, not a service: it runs inside your program, uses your program's threads and stops when your program stops.</p>
+<p>The five fields are minute, hour, day of month, month and day of week, in that order. Each field accepts <code>*</code>, a number, a range <code>a-b</code>, a list <code>a,b,c</code>, and a step <code>*/n</code> or <code>a-b/n</code>. Months and weekdays also accept three-letter English names such as <code>jan</code> and <code>mon</code>. As in Vixie cron, when both day fields are restricted a time matches either of them; when one is <code>*</code>, both must match.</p>
+<pre class="code"><code>*/15 * * * *        every quarter hour
+0 9-17 * * mon-fri  every hour from 9 to 17 on weekdays
+30 2 1 * *          at 02:30 on the first day of every month
+0 0 29 feb *        on February 29</code></pre>
+<p>The macros <code>@yearly</code>, <code>@annually</code>, <code>@monthly</code>, <code>@weekly</code>, <code>@daily</code>, <code>@midnight</code> and <code>@hourly</code> expand to the usual five fields.</p>
+
+<h2 id="guide-parse">Parsing and the next run</h2>
+<p><code>Parse</code> returns an <code>Expr</code> with <code>ok</code> false when the text is not a valid expression. Check <code>ok</code> before you use it. <code>Next</code> returns the first minute strictly after the given time that matches, in the given time zone, or 0 when it finds none within the scan limit.</p>
+{{example.cron-quickstart}}
+<p>Times are UTC seconds since the epoch. <code>Next</code> asks the zone database for the offset at each candidate minute, so daylight saving changes are handled. When the zone does not exist, every call takes <code>fallback_minutes</code> instead, which is also what the tests use to stay independent of the machine.</p>
+
+<h2 id="guide-match">Matching a time you already have</h2>
+<p><code>MatchFields</code> takes the local minute, hour, day, month and weekday directly, so you can use it on values from your own clock or from a database. <code>MatchesLocal</code> takes a wall-clock instant in seconds, already shifted by the zone offset, and is what the scheduler uses internally.</p>
+{{example.cron-match}}
+<p>Weekdays are 0 for Sunday through 6 for Saturday; 7 is accepted and treated as Sunday. <code>MatchFields</code> returns false for an expression whose <code>ok</code> is false.</p>
+
+<h2 id="guide-zone">Zones and offsets</h2>
+<p>The scheduler keeps one zone for all jobs. <code>SetZone</code> sets its name and the fallback offset in minutes, used when the name cannot be loaded. <code>OffsetSeconds</code> returns the offset of any zone at an instant, which is useful outside the scheduler too.</p>
+<pre class="code"><code>cron.SetZone("Asia/Tehran", 210)
+off := cron.OffsetSeconds("Asia/Tehran", 210, 1700000000 as i64)
+println off / (60 as i64)</code></pre>
+<p>The default zone is <code>UTC</code> with a fallback of 0. Call <code>SetZone</code> before <code>Run</code> or <code>RunBackground</code>; changing it later affects the next minute, not a job that is already running.</p>
+
+<h2 id="guide-jobs">Jobs and the scheduler</h2>
+<p><code>Add</code> registers a function under a name and an expression and returns the job id, or -1 when the expression does not parse. A job handler takes the job id as an <code>i64</code>. Register every job before you start the scheduler.</p>
+{{example.cron-schedule}}
+<p><code>Run</code> blocks and fires the jobs that are due once a minute; <code>RunBackground</code> runs the same loop on its own thread and returns at once. <code>RunDue</code> fires what is due at the given time without waiting for the next minute, which is what a test or a manual tick uses. In every form a job that is still running from an earlier firing is skipped, not queued, so a slow job cannot pile up.</p>
+<p><code>Count</code>, <code>Name</code> and <code>IsBusy</code> inspect the table. <code>Stop</code> asks the loop to end after the current job; it does not wait for a running job, and it can be called from a signal handler or another thread.</p>
+<pre class="code"><code>cron.SetZone("UTC", 0)
+cron.Add("cleanup", "0 3 * * *", cleanup)
+cron.RunBackground()
+time.Sleep(60000)
+cron.Stop()</code></pre>
+
+<h2 id="guide-limits">What to know</h2>
+<ul>
+<li>Resolution is one minute. There are no seconds and no sub-minute schedules.</li>
+<li>Jobs run on their own threads and share the process with you. A panic, a blocking read or a long loop in one job affects the whole program.</li>
+<li><code>Stop</code> is cooperative: the loop checks the flag between minutes and while sleeping, so a job that ignores its own cancellation can keep running.</li>
+<li>The package does not persist jobs. If you need them after a restart, store the name and expression yourself and register them again at startup.</li>
+<li>A day-of-month and day-of-week pair that are both restricted matches either field, as in Vixie cron. This is often surprising; prefer a single day field when you can.</li>
+</ul>
+>>
+
+doc.Expr = A parsed schedule: five bit masks, two flags that say which day field was a star, and an <code>ok</code> flag.
+doc.Expr.minutes = The minutes of the hour that match, as a bit mask.
+doc.Expr.hours = The hours of the day that match, as a bit mask.
+doc.Expr.days = The days of the month that match, as a bit mask.
+doc.Expr.months = The months that match, as a bit mask.
+doc.Expr.weekdays = The weekdays that match, as a bit mask; Sunday is bit 0.
+doc.Expr.dom_star = True when the day-of-month field was <code>*</code>.
+doc.Expr.dow_star = True when the day-of-week field was <code>*</code>.
+doc.Expr.ok = True when the text parsed; every other function refuses an expression whose <code>ok</code> is false.
+doc.Parse = Parses five fields or a macro such as <code>@daily</code>. Returns an expression with <code>ok</code> false on a bad field count, a number out of range, a broken range, a zero step or an unknown name.
+doc.MatchFields = True when the local minute, hour, day, month and weekday match the expression. Weekdays are 0 for Sunday through 6 for Saturday.
+doc.MatchesLocal = True when a wall-clock instant in seconds, already shifted by the zone offset, matches the expression.
+doc.OffsetSeconds = The offset of a time zone at an instant, in seconds; the fallback in minutes when the zone cannot be loaded.
+doc.Next = The first minute strictly after <code>after</code> that matches, in UTC seconds, or 0 when none is found within the scan limit.
+doc.SetZone = Sets the zone name and fallback offset for the scheduler. The default is <code>UTC</code> with 0.
+doc.Add = Registers a handler under a name and a schedule and returns the job id, or -1 when the schedule does not parse. A handler takes the job id as an <code>i64</code>.
+doc.Count = The number of registered jobs.
+doc.Name = The name of a job.
+doc.IsBusy = True while the job is running from a firing; the scheduler skips a busy job.
+doc.RunDue = Starts every job due at the given UTC time, each on its own thread, and returns how many started. A busy job is skipped.
+doc.Run = Blocks and fires due jobs once a minute until <code>Stop</code> is called.
+doc.RunBackground = Starts the same loop on its own thread and returns at once.
+doc.Stop = Asks the scheduler loop to end after the current job. A job already running is not interrupted.
+
+ex.Expr = -
+ex.Parse = cron-Parse
+ex.MatchFields = cron-Match
+ex.MatchesLocal = cron-Match
+ex.OffsetSeconds = cron-Parse
+ex.Next = cron-Parse
+ex.SetZone = cron-Parse
+ex.Add = cron-Schedule
+ex.Count = cron-Schedule
+ex.Name = cron-Schedule
+ex.IsBusy = cron-Schedule
+ex.RunDue = cron-Schedule
+ex.Run = cron-Schedule
+ex.RunBackground = cron-Schedule
+ex.Stop = cron-Schedule

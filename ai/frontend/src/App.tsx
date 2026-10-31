@@ -145,12 +145,6 @@ export function App() {
   const netFails = useRef(0);
   const signedIn = user !== null;
   useEffect(() => {
-    if (!isDesktop) return;
-    agent.alive().catch(() => {});
-    const beat = window.setInterval(() => agent.alive().catch(() => {}), 4000);
-    return () => window.clearInterval(beat);
-  }, []);
-  useEffect(() => {
     if (!signedIn || isDesktop) return;
     api
       .integrations()

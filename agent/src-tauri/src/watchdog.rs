@@ -1,14 +1,17 @@
-use std::sync::Mutex;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
-use tauri::{AppHandle, Manager};
+use tauri::{AppHandle, Manager, WebviewWindow};
 
 const CHECK: Duration = Duration::from_secs(3);
-const SILENCE: Duration = Duration::from_secs(30);
+const SILENCE: Duration = Duration::from_secs(45);
+const PROBE: Duration = Duration::from_secs(15);
+const RECOVER_GAP: Duration = Duration::from_secs(120);
 
 #[derive(Default)]
 pub struct Watchdog {
     last: Mutex<Option<Instant>>,
+    recovered: Mutex<Option<Instant>>,
     armed: AtomicBool,
 }
 
@@ -26,6 +29,15 @@ impl Watchdog {
         self.armed.store(false, Ordering::Relaxed);
     }
 
+    fn recover(&self) -> bool {
+        let mut last = self.recovered.lock().unwrap();
+        if last.is_some_and(|at| at.elapsed() < RECOVER_GAP) {
+            return false;
+        }
+        *last = Some(Instant::now());
+        true
+    }
+
     fn silence(&self) -> Option<Duration> {
         self.last.lock().unwrap().map(|last| last.elapsed())
     }
@@ -39,7 +51,6 @@ pub fn beat(app: &AppHandle) {
     app.state::<Watchdog>().beat();
 }
 
-#[cfg(any(target_os = "macos", target_os = "ios"))]
 pub fn disarm(app: &AppHandle) {
     app.state::<Watchdog>().disarm();
 }
@@ -62,6 +73,19 @@ async fn reach() -> Reach {
     }
 }
 
+async fn responds(window: &WebviewWindow) -> bool {
+    let answered = Arc::new(AtomicBool::new(false));
+    let flag = answered.clone();
+    if window.eval_with_callback("1", move |_| flag.store(true, Ordering::Relaxed)).is_err() {
+        return false;
+    }
+    let deadline = Instant::now() + PROBE;
+    while Instant::now() < deadline && !answered.load(Ordering::Relaxed) {
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    answered.load(Ordering::Relaxed)
+}
+
 pub async fn run(app: AppHandle) {
     loop {
         tokio::time::sleep(CHECK).await;
@@ -74,6 +98,7 @@ pub async fn run(app: AppHandle) {
         };
         let awake = window.is_visible().unwrap_or(false) && !window.is_minimized().unwrap_or(true) && window.is_focused().unwrap_or(false);
         if !awake {
+            watchdog.beat();
             continue;
         }
         let Some(silence) = watchdog.silence() else {
@@ -83,11 +108,19 @@ pub async fn run(app: AppHandle) {
             continue;
         }
         watchdog.disarm();
+        if responds(&window).await {
+            watchdog.arm();
+            continue;
+        }
         let reason = match reach().await {
             Reach::Ok => "crash",
             Reach::Server => "server",
             Reach::Offline => "offline",
         };
+        if reason == "crash" && watchdog.recover() {
+            let _ = window.navigate(crate::config::app_url());
+            continue;
+        }
         let _ = window.navigate(crate::config::local_url(&format!("error.html#{reason}")));
     }
 }
@@ -107,6 +140,13 @@ mod tests {
         assert!(watchdog.armed.load(Ordering::Relaxed));
         watchdog.disarm();
         assert!(!watchdog.armed.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn it_recovers_silently_only_once_in_a_while() {
+        let watchdog = Watchdog::default();
+        assert!(watchdog.recover());
+        assert!(!watchdog.recover());
     }
 
     #[test]

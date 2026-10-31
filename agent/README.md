@@ -123,11 +123,24 @@ The page probes the server with a tiny image request before retrying, so a
 retry never navigates into a network error page. Offline and server pages
 retry by themselves when the server comes back.
 
-For a renderer crash on other systems, the web app sends `agent_alive`
-every 4 seconds (`src/watchdog.rs`). If the window is focused and the
-heartbeat has been silent for 30 seconds, the app navigates to the matching
-local error page. Minimized and unfocused windows are never judged, so
-background throttling cannot trigger it.
+The web app sends `agent_alive` every 4 seconds, from an inline script in
+`index.html` so it also runs while the bundle downloads and after a React
+error (`src/watchdog.rs`). The watchdog only starts once the page has
+finished loading, so a slow connection never counts as a crash. If the
+window is focused and the heartbeat has been silent for 45 seconds, the app
+asks the page to run a one-line script. A page that answers is alive and is
+left alone. A page that does not answer for 15 seconds is reloaded once
+silently, and the local error page appears only if that happens again within
+two minutes (or the network is down). Minimized and unfocused windows are
+never judged, and the silence timer restarts when focus returns.
+
+## Locked window
+
+The app should feel native, so `src/lock.js` is injected into every page of
+the window. Text cannot be selected except in chat messages and input
+fields, Ctrl+A only works inside inputs, and the context menu, drag, F12,
+Ctrl+Shift+I/J/C, Ctrl+U/S/P/R and F5 are blocked. Devtools are switched
+off. Debug builds skip all of it when `SALAM_DEVTOOLS` is set.
 
 ## Develop
 

@@ -10,9 +10,11 @@ mod watchdog;
 mod workspace;
 
 use std::time::Duration;
-use tauri::webview::NewWindowResponse;
+use tauri::webview::{NewWindowResponse, PageLoadEvent};
 use tauri::{AppHandle, Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_opener::OpenerExt;
+
+const LOCK_SCRIPT: &str = include_str!("lock.js");
 
 const REMOTE_COMMANDS: &[&str] = &[
     "core:event:allow-listen",
@@ -59,25 +61,38 @@ fn open_external(app: &AppHandle, url: &tauri::Url) -> bool {
     app.opener().open_url(url.as_str(), None::<&str>).is_ok()
 }
 
+fn locked() -> bool {
+    !(cfg!(debug_assertions) && std::env::var_os("SALAM_DEVTOOLS").is_some())
+}
+
 fn open_main(app: &AppHandle) -> tauri::Result<()> {
     let target = config::app_url();
+    let loaded = target.clone();
     let navigation = app.clone();
     let popup = app.clone();
     let mut builder = WebviewWindowBuilder::new(app, "main", WebviewUrl::App("index.html".into()));
     if let Some(icon) = app.default_window_icon() {
         builder = builder.icon(icon.clone())?;
     }
+    if locked() {
+        builder = builder.initialization_script_for_all_frames(LOCK_SCRIPT);
+    }
     builder
         .title("Salam Agent")
         .inner_size(1180.0, 800.0)
         .min_inner_size(720.0, 520.0)
         .disable_drag_drop_handler()
-        .on_navigation(move |url| {
-            if config::is_local_asset(url) || url.scheme() == "about" {
-                return true;
+        .devtools(!locked())
+        .on_page_load(move |window, payload| {
+            let app = window.app_handle();
+            match payload.event() {
+                PageLoadEvent::Started => watchdog::disarm(app),
+                PageLoadEvent::Finished if config::same_origin(payload.url(), &loaded) => watchdog::arm(app),
+                PageLoadEvent::Finished => {}
             }
-            if config::same_origin(url, &target) {
-                watchdog::arm(&navigation);
+        })
+        .on_navigation(move |url| {
+            if config::is_local_asset(url) || url.scheme() == "about" || config::same_origin(url, &target) {
                 return true;
             }
             open_external(&navigation, url);
@@ -108,7 +123,6 @@ async fn connect_main(app: AppHandle) {
         if let Some(window) = app.get_webview_window("main") {
             if state == "ok" {
                 let _ = window.navigate(url.clone());
-                watchdog::arm(&app);
                 return;
             }
             attempts += 1;

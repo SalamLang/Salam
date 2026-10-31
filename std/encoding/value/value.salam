@@ -50,6 +50,63 @@ pub struct Value:
     @en "obj"
     @fa "عضوهای شیء"
     pub obj: HashMap<str, Value> = HashMap {} as HashMap<str, Value>
+    @en "order"
+    @fa "ترتیب کلیدها"
+    pub order: i64 = 0
+end
+
+func _ord_new(): i64:
+    h := mem.AllocateZeroed(24 as u64) as i64 *
+    h[1] = 4 as i64
+    h[2] = mem.Allocate(32 as u64) as i64
+    ret h as i64
+end
+
+func _ord_len(o: i64): int:
+    if o == (0 as i64): ret 0 end
+    ret (o as i64 *)[0] as int
+end
+
+func _ord_at(o: i64, i: int): str:
+    h := o as i64 *
+    ret (((h[2] + (i as i64) * (8 as i64)) as i64 *)[0] as void *) as str
+end
+
+func _ord_push(o: i64, key: str):
+    if o == (0 as i64): ret end
+    h := o as i64 *
+    if h[0] == h[1]:
+        h[1] = h[1] * (2 as i64)
+        h[2] = mem.Reallocate(h[2] as void *, (h[1] * (8 as i64)) as u64) as i64
+    end
+    slot := (h[2] + h[0] * (8 as i64)) as i64 *
+    slot[0] = (key as void *) as i64
+    h[0] = h[0] + (1 as i64)
+end
+
+func _ord_remove(o: i64, key: str):
+    n := _ord_len(o)
+    h := o as i64 *
+    repeat n in i:
+        if _ord_at(o, i) == key:
+            mut j := i
+            until j + 1 < n:
+                dst := (h[2] + (j as i64) * (8 as i64)) as i64 *
+                src := (h[2] + ((j + 1) as i64) * (8 as i64)) as i64 *
+                dst[0] = src[0]
+                j += 1
+            end
+            h[0] = h[0] - (1 as i64)
+            ret
+        end
+    end
+end
+
+func _ord_free(o: i64):
+    if o == (0 as i64): ret end
+    h := o as i64 *
+    mem.Free(h[2] as void *)
+    mem.Free(o as void *)
 end
 
 @en "ValueNull"
@@ -79,8 +136,13 @@ end
 @en "ValueObject"
 @fa "مقدار شیء"
 pub func ValueObject(fields: HashMap<str, Value>): Value:
-    mut v := Value { kind = KindObject }
+    mut v := Value { kind = KindObject, order = _ord_new() }
     v.obj = fields
+    mut it := fields.iter()
+    until it.has_next():
+        _ord_push(v.order, it.key())
+        it.next()
+    end
     ret v
 end
 
@@ -93,7 +155,7 @@ end
 @en "NewValueObject"
 @fa "شیء جدید"
 pub func NewValueObject(): Value:
-    ret Value { kind = KindObject, obj = HashMap {} as HashMap<str, Value> }
+    ret Value { kind = KindObject, obj = HashMap {} as HashMap<str, Value>, order = _ord_new() }
 end
 
 @en "IsNull"
@@ -184,21 +246,40 @@ end
 
 @en "ObjectSet"
 @fa "تنظیم کلید"
-pub func ObjectSet(v &: Value, key: str, item: Value): v.obj.put(key, item) end
+pub func ObjectSet(v &: Value, key: str, item: Value):
+    if not v.obj.has(key): _ord_push(v.order, key) end
+    v.obj.put(key, item)
+end
 
 @en "ObjectDelete"
 @fa "حذف کلید"
-pub func ObjectDelete(v &: Value, key: str): bool: ret v.obj.remove(key) end
+pub func ObjectDelete(v &: Value, key: str): bool:
+    if not v.obj.remove(key): ret false end
+    _ord_remove(v.order, key)
+    ret true
+end
 
 @en "ObjectKeys"
 @fa "کلیدهای شیء"
 pub func ObjectKeys(v: Value): Vector<str>:
     mut out := Vector {} as Vector<str>
+    mut seen := HashMap {} as HashMap<str, bool>
+    repeat _ord_len(v.order) in i:
+        k := _ord_at(v.order, i)
+        if v.obj.has(k) and not seen.has(k):
+            out.push(k)
+            seen.put(k, true)
+        end
+    end
     mut it := v.obj.iter()
     until it.has_next():
-        out.push(it.key())
+        k := it.key()
+        if not seen.has(k):
+            out.push(k)
+        end
         it.next()
     end
+    seen.free()
     ret out
 end
 
@@ -215,13 +296,13 @@ pub func ValueClone(v: Value): Value:
         ret ValueArray(out)
     end
     if v.kind == KindObject:
-        mut out := HashMap {} as HashMap<str, Value>
-        mut it := v.obj.iter()
-        until it.has_next():
-            out.put(it.key(), ValueClone(it.value()))
-            it.next()
+        mut out := NewValueObject()
+        keys := ObjectKeys(v)
+        repeat keys.len() in i:
+            k := keys.get(i)
+            ObjectSet(out, k, ValueClone(v.obj.get(k)))
         end
-        ret ValueObject(out)
+        ret out
     end
     ret v
 end
@@ -245,5 +326,7 @@ pub func ValueFree(v &: Value):
             it.next()
         end
         v.obj.free()
+        _ord_free(v.order)
+        v.order = 0 as i64
     end
 end

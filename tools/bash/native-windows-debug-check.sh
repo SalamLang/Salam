@@ -10,8 +10,10 @@
 # objdump is needed, since llvm-dwarfdump --verify does not finish on i686
 # PE files linked against the mingw-w64 CRT. With the built-in linker the -g
 # build also gets a PDB: when llvm-pdbutil is there, every part of it must
-# parse, and llvm-symbolizer must find walk's file and line through the PDB
-# alone once the DWARF sections are stripped.
+# parse, the Pt struct must be in its type stream with area's p typed as it,
+# step must show up as an inline site in walk in a --release build,
+# and llvm-symbolizer must find walk's file and line through the PDB alone
+# once the DWARF sections are stripped.
 #
 # Usage: tools/bash/native-windows-debug-check.sh <salam>
 
@@ -21,6 +23,8 @@ case "$SALAM" in /*) ;; */*) SALAM="$(pwd)/$SALAM" ;; esac
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 cat >"$work/wd.salam" <<'SRC'
+import os
+
 struct Pt:
     pub x: int = 0
     pub y: int = 0
@@ -32,11 +36,16 @@ noinline func area(p: Pt, scale: f64): f64:
     ret ((w * h) as f64) * scale
 end
 
+func step(a: int, b: int): int:
+    c := a * b
+    ret c + 1
+end
+
 noinline func walk(n: int, name: str): int:
     mut s := 0
     mut k := 3
     repeat n in i:
-        s += i * k
+        s += step(i, k)
         k += 1
     end
     println name
@@ -46,7 +55,7 @@ end
 func main:
     p := Pt { x = 3, y = 4 }
     println area(p, 1.5)
-    println walk(5, "hello")
+    println walk(os.Args().len() + 4, "hello")
 end
 SRC
 if ! command -v llvm-pdbutil >/dev/null 2>&1; then
@@ -138,6 +147,16 @@ for triple in x86_64-w64-windows-gnu i686-w64-windows-gnu; do
                 bad "$tag (llvm-pdbutil cannot read the PDB, $perr)"
                 continue
             fi
+            if ! "$pdbutil" dump -types "$d/dbg.pdb" | grep -q 'LF_STRUCTURE .*`Pt`' ||
+                ! "$pdbutil" dump -symbols "$d/dbg.pdb" | grep -A1 'S_LOCAL .*`p`' | grep -q '(Pt)'; then
+                bad "$tag (the PDB has no Pt type, or area's p is not typed Pt)"
+                continue
+            fi
+            if ! (cd "$d" && SALAM_LINKER=$lk "$SALAM" build ../wd.salam --backend=native --release -g --target="$triple" --output=rel.exe --log-level=error >>log 2>&1) ||
+                ! "$pdbutil" dump -symbols "$d/rel.pdb" | grep -q 'inlinee = 0x[0-9A-F]* (step)'; then
+                bad "$tag (a --release -g build has no S_INLINESITE for the inlined step)"
+                continue
+            fi
             if [ -n "$symbolizer" ]; then
                 mkdir -p "$d/nd"
                 llvm-objcopy --strip-debug "$d/dbg.exe" "$d/nd/dbg.exe" && cp "$d/dbg.pdb" "$d/nd/dbg.pdb"
@@ -149,11 +168,11 @@ for triple in x86_64-w64-windows-gnu i686-w64-windows-gnu; do
                 fi
                 got=$("$symbolizer" --obj="$d/nd/dbg.exe" --relative-address $((text + at + 1)) 2>/dev/null | tr '\n' ' ')
                 case "$got" in
-                    walk*wd.salam:1[2-9]*) ;;
-                    *)
-                        bad "$tag (llvm-symbolizer through the PDB alone gave: $got)"
-                        continue
-                        ;;
+                walk*wd.salam:1[2-9]*) ;;
+                *)
+                    bad "$tag (llvm-symbolizer through the PDB alone gave: $got)"
+                    continue
+                    ;;
                 esac
             fi
         fi

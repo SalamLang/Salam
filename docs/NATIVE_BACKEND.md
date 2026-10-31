@@ -366,6 +366,10 @@ then goes through:
    case. A struct result that the caller only reads field by field earns a
    bonus too (`p_peekn` returns a whole `Token`), and a callee of at most ten
    instructions is inlined even after the caller used up its growth budget.
+   A call inside a loop to a callee that makes no calls itself earns a larger
+   bonus when the caller has at most 40 blocks (`image.BlendPixel` in a fill
+   loop); bigger callers, such as an image codec's frame decoder, only grew
+   and got slower with it.
 4. Tail recursion elimination. `ret f(x)` becomes a jump back to the top of
    the function, and so does `ret f(x) + y` or `ret f(x) * y` by carrying an
    accumulator, which removes one of the two calls in a recursive Fibonacci.
@@ -462,31 +466,68 @@ then goes through:
    quotient and remainder of the same value share the bias; the SHA-256
    rotations in `std/crypto` are built from such pairs. A counter bounded by a sign-extended 32-bit length is known to fit
    in 32 bits, so `sext(trunc(i))` on the widened counter folds back to `i`.
+   Beyond counters, a web of 32-bit values joined by phis, selects and `nsw`
+   adds, subtracts and multiplies that ends in sign extensions for addressing
+   is computed in 64 bits instead (no signed overflow means the wide result
+   is the extension of the narrow one): values entering the web are extended
+   once where they are defined, constants are re-emitted wide, a compare
+   against a 32-bit value outside the web reads the low half, and the
+   extensions disappear. The web is rewritten only when the extensions it
+   removes outweigh the ones it adds, each weighted by loop depth. `heap_sort`'s
+   `largest`, `2 * i + 1` and `2 * i + 2` lose all their `movsxd`.
    Integer sum loops over an array (`total += v[k]`) get an SSE2 `paddq` or
    `paddd` loop with two accumulators followed by the scalar loop for the
    leftover elements, and a
    loop that only copies elements (`a[k] = b[i]`) becomes `memmove` behind a
    runtime check that a forward copy and `memmove` agree (only from 16
    elements up; shorter copies stay a loop).
-   Innermost loops whose body is one branch-free block are vectorized with
+   The counter itself (or a value derived from it) can be data: a store of
+   `i` or `i * 3 + 7` broadcasts the scalar index and adds a constant
+   `[0, 1, ...]` lane vector from `.rdata`.
+   Before a loop is matched, the loop vectorizer hoists pure instructions
+   whose operands all come from outside the loop (an address base like
+   `p + from` that a later rewrite left inside the loop) into the preheader.
+   Innermost loops whose body is one branch-free block, counting up to a
+   limit with `<` or `<=` (before or after the body), are vectorized with
    SSE2: bytes sixteen lanes at a time, 16-bit integers eight, 32-bit integer
    and `f32` code four, 64-bit and `f64` two. Loads and stores must be
-   contiguous in the counter; a byte loop that also does 32-bit work widens
-   its bytes on load (`movd` and two unpacks) and narrows them with
+   contiguous in the counter; a loop that also does 32-bit work widens its
+   bytes or 16-bit values on load (`movd` or `movsd` and unpacks, then
+   `psrad` when the extension is signed) and narrows bytes with
    `packssdw`/`packuswb` on store. A load from a loop-invariant address (the
    data pointer of a vector passed by reference) is done once before the
-   vector loop, behind a runtime check that no store in the loop reaches it. A 32-bit multiply, which SSE2 has no
+   vector loop, behind a runtime check that no store in the loop reaches it.
+   A second counter that steps down by one while the first steps up (the
+   `lo < hi` swap of a reversal) is rewritten as `lo0 + hi0 - i`, the loop
+   runs while `i < (lo0 + hi0 + 1) / 2`, and its loads and stores read and
+   write the lanes just below the address and reverse them with `pshufd`
+   (4- and 8-byte elements). `a[lo]` and `a[hi]` on the same buffer need no
+   runtime check, since the loop condition keeps the two ranges apart.
+   An integer sum whose addend is `y + c` with `c` the same on every
+   iteration accumulates `y` and adds `c` times the element count once after
+   the vector loop (`flac`'s Rice cost adds `1 + param` per residual).
+   The descending index gets its own 64-bit counter in the vector loop, so
+   the swap loop is two loads, two shuffles, two stores and the two counters. A 32-bit multiply, which SSE2 has no
    instruction for, is two `pmuludq` (the even lanes, then the odd ones
    shifted down) joined by `pshufd` and `punpckldq`; on AArch64 it is one
    `mul .4s`. A compare that only feeds selects is
    emitted in its cheaper sense with the select arms swapped, and a
    commutative vector operation writes into an operand that dies there
    (but not into a reduction's accumulator). Adds, subtracts, bitwise operations,
-   constant shifts, the four float operations, compares of any sign
+   shifts by a constant or a loop-invariant count (the count is masked like
+   a scalar shift's and broadcast once before the loop; a 64-bit arithmetic
+   shift, which SSE2 lacks, is a logical shift plus `xor` and `sub` with
+   `sign >> count`, and a shift by 63 is `pshufd` of the high halves plus
+   `psrad 31`), the four float operations, compares of any sign
    (unsigned 32-bit ones flip the sign bit first; 64-bit ones other than
    equality only on AArch64, since SSE2 needs a long sequence for them)
    and selects (on a per-lane or loop-invariant condition) are supported,
-   and any number of integer add reductions. A loop that stores gets a
+   and any number of integer add reductions and min or max reductions
+   (`m = x > m ? x : m`, or the same as an `if`, either sign; 64-bit ones
+   on AArch64 only), which end in a shuffle-and-select tree, and counts of bytes that match a
+   compare (`if b[i] == 0: n += 1`, either polarity), which mask each match
+   to 1 and sum sixteen at a time with `psadbw` (`uaddlv` on AArch64) into
+   64-bit lanes. A loop that stores gets a
    runtime check that each stored range is disjoint from every range it
    loads from another base. The vector loop runs while a full vector fits
    and the scalar loop finishes the rest, so the PNG filter scoring and
@@ -601,7 +642,9 @@ to the operand that dies there by inverting the condition, turns
 `(x >> n) | (x << (bits - n))` (also with `^` or `+`) and `rol %cl` for the
 variable form `(x << r) | (x >> (32 - r))` even when the counts are masked
 with `& 31`, builds an `insertvalue` chain that is returned directly in
-the caller's result buffer, copies and clears structs of up to 256 bytes
+the caller's result buffer (or, when the chain is only stored to a local
+or through a pointer argument with no load, store or call in between,
+directly in that memory), copies and clears structs of up to 256 bytes
 with 16-byte SSE moves (larger ones call `memcpy`/`memset`), fuses a
 compare with the branch or select that uses it, and turns `x * k + y` into one
 or two `lea`s. Division by a constant uses a shift or a multiply by the
@@ -623,15 +666,65 @@ dropped. Inside an innermost loop without calls, a stack slot that is only
 read gets loaded once before the loop into a register the loop does not
 touch and that is not live on entry, and the reloads become uses of that
 register.
+A load of a stack slot that was just stored from a register (or an
+immediate) of the same size, with no write to the slot or the register in
+between and no jump target on the way, becomes a register copy (or a move of
+the immediate). This runs after allocation and again after the encoder's jump
+cleanup, and on x86-64 a copy into a scratch register is folded into the
+next instruction that reads it. The same walk on x86-64 tracks which 64-bit
+registers hold equal values after a copy and drops a copy whose registers
+are already equal, such as the second half of `mov r8, rax` followed by
+`mov rax, r8` (one instruction per divisor in `prime_factorization`).
+A loop whose counter only feeds its own `+ 1` and its `< N` exit test, with
+a constant start and bound, counts down to zero instead, and on x86 a
+`test r, r` right after an `add`, `sub` or `lea` of the same register (or a
+bitwise operation) is dropped when the branch after it only reads the zero
+or sign flag, the `lea` becoming an `add`. `hello_print`'s loop ends in
+`sub ebx, 1` and `jne`. A load into a register that is only tested for zero
+or sign becomes `cmp [mem], 0` when every path from there writes the
+register again before reading it (a bounded walk over both branch targets),
+like the print buffer's `is a terminal` flag. A select between `x` and `x + 1` on an
+unsigned or `>=`/`<=` float compare is `adc r, 0` or `sbb r, -1` on the carry
+flag (`monte_carlo_pi`'s `count += hit`), the way LLVM writes it; NaN leaves
+the carry set, so the float form stays correct for unordered inputs. A multiply of a value by itself squares the
+destination register (`imul r, r` after the copy), so the source dies at the
+copy and the pair coalesces (`pow_mod`'s squaring chain).
+Before instruction selection on x86, when a two-address operation (`sub`,
+`divsd` and the like overwrite their first operand) reads a value that has
+one or two later pure uses in the same block, and those uses only need
+values that are ready already, they move ahead of it so the value dies at
+the operation and needs no copy. `sum + sign / den` followed by
+`0.0 - sign` negates first and divides `sign` in place (`pi_leibniz` runs
+11% fewer instructions). A later use that is itself tied to the same value
+stays put unless it is commutative with an operand that dies there, or
+takes a constant (`lea` and `imul` with an immediate need no tie), so DCT
+butterflies keep their order. A loop value that also feeds the phi
+leaving the loop still counts as dying there, since that phi reads the
+header's next definition, and an add, subtract or multiply by a constant is
+never the tied operation (it is three-address already).
+When the hints of a value are taken, the allocator tries the register of
+any value it is copied to or from that already has one, so phi webs and the
+copies around them tend to land in one register. A `select` whose result
+replaces a loop value (the value dies at the `select` and the result flows
+back into its phi) is emitted with that loop value as the tied operand of the
+`cmov`, so the loop carries it in one register with no copy at the latch. A
+32-bit division fast path leaves its quotient and remainder in `rax` and
+`rdx` on both paths and copies them once after the join.
 Copy-related values that both spill share one stack slot. When vector
 registers run out, the allocator evicts the value whose next use is
 farthest away, so a kernel with sixteen accumulators keeps most of them in
 registers instead of spilling each one as a temporary arrives. The encoder rotates small loop headers into the latch so
-loops are bottom-tested, copies a short loop test into a branch arm that
-would otherwise jump to it, shares one epilogue between a function's returns
+loops are bottom-tested (a header of up to ten instructions with one early
+exit, like `mandelbrot`'s `zx * zx + zy * zy <= 4.0 and iter < max_iter`,
+is copied whole), copies a short loop test into a branch arm that
+would otherwise jump to it (up to eleven instructions when that test is the
+loop's latch, so a division fast path ends in the loop branch instead of a
+`jmp` to it), shares one epilogue between a function's returns
 on Linux, zeroes registers with `xor` where the flags are dead (a following `div` or `imul` overwrites them anyway), drops a `test r, r` that repeats the one before a conditional jump, and aligns loop heads to 16 bytes. An innermost loop
 that fits in 64 bytes is placed so it does not straddle a cache line;
-otherwise it gets 32-byte alignment.
+otherwise it gets 32-byte alignment. Padding uses NOPs of up to 15 bytes,
+and padding longer than that is a short `jmp` over the gap, so falling into
+an aligned loop costs one instruction.
 
 ### Conventions worth knowing
 
@@ -667,6 +760,21 @@ ret end` at the top of a recursive AST walk) tests that parameter before
   With the default sections it agrees on everything except
   `interop/redis_demo`, which needs a live redis server, the same as the LLVM
   backend.
+- `python3 -I tools/fuzz/salamfuzz.py <salam>` generates random programs
+  (integer code with loops and vectors, vector kernels over `int`, `u8`,
+  `i16` and `i64`, clamped `f64` code, calls with eight arguments and a
+  struct passed by reference, string building, slicing and UTF-8 walks,
+  generic functions and a generic struct over several element types, and
+  lambdas with captures called directly, from a Vector and through `dyn`,
+  and workers on spawned threads that add into a shared total under a
+  `sync` mutex, so the result does not depend on scheduling)
+  that are well defined by construction (values are kept small with a prime
+  modulus, divisors and shift counts are offset or masked, indices are
+  wrapped into range), builds each with the reference backend and the native
+  backend, and compares their output. `--count`, `--seed`, `--target` with
+  `--runner`, `--ref` and `--keep` (which saves the programs that differ)
+  adjust it. The gate runs 30 on x86-64 and 15 per emulated target, seeded
+  with the run number, so each run tries new programs.
 - `python3 -I tools/linker/machorun.py <exe>` runs a linked x86-64 macOS
   executable on x86-64 Linux: it maps the segments into this process, applies
   the rebase and bind opcodes against glibc (Darwin names such as `___error`
@@ -693,7 +801,7 @@ ret end` at the top of a recursive AST walk) tests that parameter before
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing, and a comma-separated list dumps several functions.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,zins,ndiv,niv,cmp64,adc64,rvc`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,loopinl,cpelim,tord,vrev,cdown,tfold,mexit,sqself,vsign,redinv,ldcmp,phix,selinc,wweb,wwdep,wwtr,tdup,padjmp,zins,ndiv,niv,cmp64,adc64,rvc`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator.
@@ -810,7 +918,16 @@ with built-in type indices (integers, floats, `bool`, and `str` as a char
 pointer) and the same ranges as their DWARF location lists:
 `S_DEFRANGE_REGISTER` for a register, `S_DEFRANGE_REGISTER_REL` for a stack
 slot. A variable that is one constant everywhere becomes `S_CONSTANT`.
-There are no type records, so struct and array locals are in DWARF only.
+Structs, enums, arrays and pointers get type records in `.debug$T`
+(a pointer to a struct goes through a forward reference, so self-referential
+structs work), and a struct local split into registers gets one
+`S_DEFRANGE_SUBFIELD_REGISTER` per field, or `S_DEFRANGE_REGISTER_REL` with
+its field offset when that field is on the stack. Each inlined call gets an
+`S_INLINESITE` (with an `LF_FUNC_ID` for the callee and binary annotations
+for its code ranges and lines, the call-site line of any call inlined
+further in), a `DEBUG_S_INLINEE_LINES` entry gives the callee's first line,
+and the function's own line table gives the outermost call site for inlined
+code, so a debugger shows the inlined frames and steps over them as calls.
 The built-in linker turns all of it into a PDB (see `NATIVE_LINKER.md`);
 with the system linker, GNU ld discards it.
 
@@ -839,16 +956,20 @@ faster than the LLVM path.
 
 Not there yet:
 
-- CodeView has no type records, so WinDbg and Visual Studio show scalar
-  locals but not struct or array ones.
+- CodeView carries no FPO frame data, so on i686 a debugger walks the
+  stack by frame pointer only.
 - The loop and SLP vectorizers run on x86-64 and AArch64 (SLP also on
   i686); armhf and RISC-V baselines have no vector unit to use.
 - The loop vectorizer needs a loop body that if-conversion can turn into
   one block (a load inside one arm of a branch keeps it scalar) and
-  unit-stride accesses. On x86-64 it has no 64-bit multiplies or ordered
-  64-bit compares, and 8- and 16-bit lanes take no reductions. Float
+  unit-stride accesses (counting up, or down by one through a second
+  counter). On x86-64 it has no 64-bit multiplies or ordered
+  64-bit compares, and reductions run in 32- or 64-bit lanes (narrower
+  values are widened first). Float
   reductions are not reordered, since that would change the rounding of the
-  result. There is no AVX code path.
+  result, unless the program is built with `--fast-math`, which lets float
+  add reductions run in vector lanes too (and gives LLVM `reassoc nsz`).
+  There is no AVX code path.
 - The built-in linker (see `NATIVE_LINKER.md`) links every supported
   target itself (static musl, glibc PIE, Windows PE), so a native build needs
   no outside tool beyond the C runtime files. It keeps `.debug_*` sections

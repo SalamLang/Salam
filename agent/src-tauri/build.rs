@@ -8,6 +8,7 @@ const COMMANDS: &[&str] = &[
     "agent_stop",
     "agent_pending",
     "agent_project_context",
+    "agent_alive",
     "agent_notify",
     "agent_notify_prefs",
     "agent_set_notify_prefs",

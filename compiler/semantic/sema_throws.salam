@@ -1,0 +1,773 @@
+package semantic
+
+import str
+
+include co "../sal_core.salam"
+include tok "../token.salam"
+include at "../ast.salam"
+include i18 "../i18n.salam"
+include lp "../langpack.salam"
+
+func err_prelude_aliases(s &: Sema, a &: at.Ast):
+    each en in ["Error", "ErrorKind", "Throws"]:
+        sym := scope_lookup_local(s, s.prelude_err, en)
+        if sym == 0 or sym_at(s, sym).decl == 0:
+            continue
+        end
+        al := at.Get(a, sym_at(s, sym).decl).aliases
+        mut i := 0
+        until i + 1 < al.len():
+            if not str.Equals(al.get(i), "en"):
+                s.prelude_err_alias.push(al.get(i + 1))
+                s.prelude_err_alias.push(en)
+            end
+            i += 2
+        end
+    end
+end
+
+func err_prelude_local(s &: Sema, name: str): int:
+    if str.Equals(name, "Error") or str.Equals(name, "ErrorKind") or str.Equals(name, "Throws"):
+        ret scope_lookup_local(s, s.prelude_err, name)
+    end
+    mut ai := 0
+    until ai + 1 < s.prelude_err_alias.len():
+        if su_ident_eq(s.prelude_err_alias.get(ai), name):
+            ret scope_lookup_local(s, s.prelude_err, s.prelude_err_alias.get(ai + 1))
+        end
+        ai += 2
+    end
+    if str.Equals(name, "core"):
+        ret s.prelude_err_pkg
+    end
+    if str.StartsWith(name, "__Error__") or str.StartsWith(name, "__ErrorKind__"):
+        ret scope_lookup_local(s, s.prelude_err, name)
+    end
+    if str.StartsWith(name, "__prelude_"):
+        ret scope_lookup_local(s, s.prelude_err, str.Substr(name, 10, str.Len(name) - 10))
+    end
+    ret 0
+end
+
+func err_prelude_wants(a &: at.Ast, nid: int): bool:
+    if nid == 0:
+        ret false
+    end
+    n := at.At(a, nid)
+    k := n.kind
+    if k == at.AST_THROW or k == at.AST_TRY_PREFIX or k == at.AST_TRY_BLOCK or n.is_throws:
+        ret true
+    end
+    if (k == at.AST_IDENTIFIER or k == at.AST_TYPE or k == at.AST_STRUCT_LIT) and (str.Equals(n.name, "Error") or str.Equals(n.name, "ErrorKind") or su_ident_eq(n.name, "خطا") or su_ident_eq(n.name, "نوع خطا")):
+        ret true
+    end
+    if err_prelude_wants(a, n.a) or err_prelude_wants(a, n.b) or err_prelude_wants(a, n.c) or err_prelude_wants(a, n.d) or err_prelude_wants(a, n.ty):
+        ret true
+    end
+    repeat n.list.len() in i:
+        if err_prelude_wants(a, n.list.get(i)):
+            ret true
+        end
+    end
+    ret false
+end
+
+func err_prelude_scan(s &: Sema, a &: at.Ast, prog: int):
+    if str.Equals(s.pkg, "core") or not err_prelude_wants(a, prog):
+        ret
+    end
+    sema_load_err_prelude(s, a)
+    if s.prelude_err_pkg == 0 or scope_lookup_local(s, s.global, "core") != 0:
+        ret
+    end
+    pkv := sym_at(s, s.prelude_err_pkg)
+    bind := symbol_new(s, SYM_PACKAGE, "core")
+    mut bv := sym_at(s, bind)
+    bv.members = pkv.members
+    bv.pkgname = pkv.pkgname
+    bv.decl = pkv.decl
+    sym_put(s, bind, bv)
+    _b := scope_define(s, s.global, bind)
+end
+
+func err_prelude_canon(s &: Sema, a &: at.Ast, nid: int, sym: int):
+    if sym == 0 or s.prelude_err == 0 or sym_at(s, sym).home != s.prelude_err:
+        ret
+    end
+    if not str.Equals(at.Get(a, nid).name, sym_at(s, sym).name):
+        at.SetName(a, nid, sym_at(s, sym).name)
+    end
+end
+
+func th_move(a &: at.Ast, dst: int, src: int):
+    at.Put(a, dst, at.Get(a, src))
+    mut sv := at.Get(a, src)
+    sv.list = Vector {} as Vector<int>
+    sv.dims = Vector {} as Vector<int>
+    sv.typarams = Vector {} as Vector<str>
+    sv.typaram_bounds = Vector {} as Vector<str>
+    sv.aliases = Vector {} as Vector<str>
+    sv.captures = Vector {} as Vector<int>
+    at.Put(a, src, sv)
+end
+
+func th_is_throws(s &: Sema, t: int): bool:
+    ret s.throws_sym != 0 and t >= 0 and enum_data_sym(s, t) == s.throws_sym
+end
+
+func th_error_type(s &: Sema): int:
+    if s.prelude_err == 0:
+        ret TYPE_NONE
+    end
+    es := scope_lookup_local(s, s.prelude_err, "Error")
+    ret es != 0 ? sym_at(s, es).ty : TYPE_NONE
+end
+
+func th_fn_throws(s &: Sema, a &: at.Ast): bool:
+    if s.cur_func == 0 or s.lam.len() > 0:
+        ret false
+    end
+    d := sig_at(s, s.cur_func).decl
+    ret d != 0 and at.At(a, d).is_throws
+end
+
+func th_fn_void(s &: Sema, a &: at.Ast): bool:
+    d := sig_at(s, s.cur_func).decl
+    if d == 0 or at.At(a, d).ty == 0:
+        ret false
+    end
+    tn := at.At(a, at.At(a, d).ty)
+    ret tn.list.len() == 1 and at.At(a, tn.list.get(0)).synthetic
+end
+
+func th_ctx_index(s &: Sema): int:
+    n := s.try_ctx.len()
+    if n == 0:
+        ret 0 - 1
+    end
+    c := s.try_ctx.get(n - 1)
+    if c.func_id != s.cur_func or c.lam_n != s.lam.len():
+        ret 0 - 1
+    end
+    ret n - 1
+end
+
+func th_levels(s &: Sema): int:
+    ret s.loop_depth + s.switch_depth
+end
+
+func th_bool(a &: at.Ast, sp: co.SrcSpan, v: bool): int:
+    n := new_node_at(a, at.AST_LITERAL, sp)
+    at.SetOp(a, n, v ? tok.TK_KW_TRUE : tok.TK_KW_FALSE)
+    at.SetTokenValue(a, n, tok.ValueBool(v))
+    at.SetName(a, n, v ? "true" : "false")
+    ret n
+end
+
+func th_int(a &: at.Ast, sp: co.SrcSpan, v: int): int:
+    n := new_node_at(a, at.AST_LITERAL, sp)
+    at.SetOp(a, n, tok.TK_INT)
+    at.SetTokenValue(a, n, tok.ValueInt(v as u64))
+    at.SetName(a, n, str.FromInt(v as i64))
+    ret n
+end
+
+func th_decl(a &: at.Ast, sp: co.SrcSpan, name: str, init: int, is_mut: bool): int:
+    d := new_node_at(a, at.AST_VAR_DECL, sp)
+    mut dv := at.Get(a, d)
+    dv.name = name
+    dv.a = init
+    dv.is_mut = is_mut
+    dv.synthetic = true
+    at.Put(a, d, dv)
+    ret d
+end
+
+func th_assign(a &: at.Ast, sp: co.SrcSpan, name: str, val: int): int:
+    n := new_node_at(a, at.AST_ASSIGN, sp)
+    mut nv := at.Get(a, n)
+    nv.a = try_ident(a, sp, name)
+    nv.b = val
+    nv.op = tok.TK_ASSIGN
+    at.Put(a, n, nv)
+    ret n
+end
+
+func th_break(a &: at.Ast, sp: co.SrcSpan, levels: int): int:
+    n := new_node_at(a, at.AST_BREAK, sp)
+    mut nv := at.Get(a, n)
+    nv.synthetic = true
+    at.Put(a, n, nv)
+    if levels > 1:
+        at.SetTokenValue(a, n, tok.ValueInt(levels as u64))
+    end
+    ret n
+end
+
+func th_if(a &: at.Ast, sp: co.SrcSpan, cond: int, body: int): int:
+    n := new_node_at(a, at.AST_IF, sp)
+    mut nv := at.Get(a, n)
+    nv.a = cond
+    nv.b = body
+    at.Put(a, n, nv)
+    ret n
+end
+
+func th_block_of(a &: at.Ast, sp: co.SrcSpan, stmts: Vector<int>): int:
+    b := new_node_at(a, at.AST_BLOCK, sp)
+    repeat stmts.len() in i:
+        at.AddChild(a, b, stmts.get(i))
+    end
+    ret b
+end
+
+func th_checked_decl(s &: Sema, a &: at.Ast, sp: co.SrcSpan, name: str, init: int, t: int): int:
+    d := th_decl(a, sp, name, init, false)
+    at.SetTypeStr(a, d, type_to_string(s, t))
+    define_local(s, a, d, SYM_VAR, t)
+    ret d
+end
+
+func th_err_match(a &: at.Ast, sp: co.SrcSpan, subj: str, bind: str, body: Vector<int>): int:
+    arm1 := new_node_at(a, at.AST_MATCH_ARM, sp)
+    at.AddChild(a, arm1, try_pattern(a, sp, "Err", bind))
+    mut a1v := at.Get(a, arm1)
+    a1v.b = th_block_of(a, sp, body)
+    at.Put(a, arm1, a1v)
+    keep := th_decl(a, sp, "_", th_int(a, sp, 0), false)
+    arm2 := new_node_at(a, at.AST_MATCH_ARM, sp)
+    mut a2v := at.Get(a, arm2)
+    a2v.op = tok.TK_KW_ELSE
+    a2v.b = try_block(a, sp, keep)
+    at.Put(a, arm2, a2v)
+    m := new_node_at(a, at.AST_MATCH, sp)
+    mut mv := at.Get(a, m)
+    mv.a = try_ident(a, sp, subj)
+    mv.synthetic = true
+    at.Put(a, m, mv)
+    at.AddChild(a, m, arm1)
+    at.AddChild(a, m, arm2)
+    ret m
+end
+
+func th_unwrap(a &: at.Ast, sp: co.SrcSpan, subj: str, bind: str): int:
+    es := new_node_at(a, at.AST_EXPR_STMT, sp)
+    mut esv := at.Get(a, es)
+    esv.a = try_ident(a, sp, bind)
+    at.Put(a, es, esv)
+    arm := new_node_at(a, at.AST_MATCH_ARM, sp)
+    at.AddChild(a, arm, try_pattern(a, sp, "Ok", bind))
+    mut av := at.Get(a, arm)
+    av.b = try_block(a, sp, es)
+    at.Put(a, arm, av)
+    m := new_node_at(a, at.AST_MATCH, sp)
+    mut mv := at.Get(a, m)
+    mv.a = try_ident(a, sp, subj)
+    mv.synthetic = true
+    at.Put(a, m, mv)
+    at.AddChild(a, m, arm)
+    ret m
+end
+
+func th_fail_stmts(a &: at.Ast, sp: co.SrcSpan, c: TryCtx, err_val: int, out &: Vector<int>):
+    if str.Len(c.err_var) > 0 and err_val != 0:
+        out.push(th_assign(a, sp, c.err_var, err_val))
+    end
+    out.push(th_assign(a, sp, c.fail_var, th_bool(a, sp, true)))
+end
+
+func th_place_error(s &: Sema, sp: co.SrcSpan, what: str): bool:
+    if not s.pre_ok:
+        serr(
+            s, 140, sp, co.Format1(
+                i18.Tr("%s cannot be used here: this spot runs conditionally or more than once (an 'until' or 'else' condition, the right side of 'and'/'or', a '?:' branch, or a 'defer'); store the value in a variable on its own line first"), co.ArgStr(what)
+            )
+        )
+        ret true
+    end
+    if s.match_arm_depth > 0 and s.match_yield_active:
+        serr(
+            s, 140, sp, co.Format1(
+                i18.Tr("%s cannot be used inside a match expression's arm yet; compute the value before the match, or use a match statement"), co.ArgStr(what)
+            )
+        )
+        ret true
+    end
+    ret false
+end
+
+func th_call_result(s &: Sema, a &: at.Ast, nid: int, t: int): int:
+    if not th_is_throws(s, t) or at.At(a, nid).is_throws:
+        ret t
+    end
+    sp := span_of(a, nid)
+    ci := th_ctx_index(s)
+    if ci < 0 and s.try_marks == 0:
+        serr(
+            s, 139, sp, i18.Tr("this call can throw an error: mark it with 'try' to pass the error on, or put it inside a 'try:' block to handle it")
+        )
+        ret sema_err_ty(s)
+    end
+    if ci < 0 and not th_fn_throws(s, a):
+        serr(
+            s, 140, sp, i18.Tr("'try' passes the error on to the caller, but this function is not declared 'throws'; add 'throws' after its return type, or handle the error with 'try: ... catch e: ... end'")
+        )
+        ret sema_err_ty(s)
+    end
+    if th_place_error(s, sp, i18.Tr("a call that can throw")):
+        ret sema_err_ty(s)
+    end
+    tag := str.FromInt(nid as i64)
+    tname := "__tt" + tag
+    ename := "__te" + tag
+    vname := "__tv" + tag
+    nc := new_node_at(a, at.AST_CALL, sp)
+    mut cv := at.Get(a, nid)
+    cv.is_throws = true
+    at.Put(a, nc, cv)
+    if s.call_decl.has(nid):
+        s.call_decl.put(nc, s.call_decl.get(nid))
+    end
+    s.pre_stmts.push(th_checked_decl(s, a, sp, tname, nc, t))
+    mut body := Vector {} as Vector<int>
+    if ci >= 0:
+        c := s.try_ctx.get(ci)
+        th_fail_stmts(a, sp, c, try_ident(a, sp, ename), body)
+        m := th_err_match(a, sp, tname, ename, body)
+        check_stmt(s, a, m)
+        s.pre_stmts.push(m)
+        mut bb := Vector {} as Vector<int>
+        bb.push(th_break(a, sp, th_levels(s) - c.depth + 1))
+        fi := th_if(a, sp, try_ident(a, sp, c.fail_var), th_block_of(a, sp, bb))
+        bb.free()
+        check_stmt(s, a, fi)
+        s.pre_stmts.push(fi)
+    else:
+        rs := new_node_at(a, at.AST_RETURN, sp)
+        mut rv := at.Get(a, rs)
+        rv.a = try_ident(a, sp, ename)
+        rv.is_throws = true
+        at.Put(a, rs, rv)
+        body.push(rs)
+        m := th_err_match(a, sp, tname, ename, body)
+        check_stmt(s, a, m)
+        s.pre_stmts.push(m)
+    end
+    body.free()
+    u := th_unwrap(a, sp, tname, vname)
+    ut := sema_check_expr(s, a, u)
+    th_move(a, nid, u)
+    ret ut
+end
+
+func th_check_prefix(s &: Sema, a &: at.Ast, nid: int): int:
+    n := at.Get(a, nid)
+    if n.b != 0:
+        ret th_check_fallback(s, a, nid)
+    end
+    before := s.pre_stmts.len()
+    s.try_marks += 1
+    t := sema_check_expr(s, a, n.a)
+    s.try_marks -= 1
+    if s.pre_stmts.len() == before and not type_is_error(s, t):
+        serr(
+            s, 142, span_of(a, nid), i18.Tr("nothing after this 'try' can throw an error; remove the 'try'")
+        )
+    end
+    th_move(a, nid, n.a)
+    ret t
+end
+
+func th_check_fallback(s &: Sema, a &: at.Ast, nid: int): int:
+    n := at.Get(a, nid)
+    sp := span_of(a, nid)
+    if th_place_error(s, sp, i18.Tr("'try ... catch' with a fallback value")):
+        ret sema_err_ty(s)
+    end
+    tag := str.FromInt(nid as i64)
+    fail := "__tf" + tag
+    val := "__tv" + tag
+    res := "__tr" + tag
+    d1 := th_decl(a, sp, fail, th_bool(a, sp, false), true)
+    check_stmt(s, a, d1)
+    s.pre_stmts.push(d1)
+    saved_pre := s.pre_stmts
+    s.pre_stmts = Vector {} as Vector<int>
+    s.loop_depth += 1
+    s.try_ctx.push(TryCtx { fail_var = fail, depth = th_levels(s), loop_base = s.loop_depth, func_id = s.cur_func, lam_n = s.lam.len() })
+    et := sema_check_expr(s, a, n.a)
+    _c := s.try_ctx.pop()
+    s.loop_depth -= 1
+    mut group := s.pre_stmts
+    s.pre_stmts = saved_pre
+    if type_is_error(s, et):
+        group.free()
+        ret et
+    end
+    if group.len() == 0:
+        serr(
+            s, 142, sp, i18.Tr("nothing after this 'try' can throw an error, so its 'catch' value is never used; remove 'try' and 'catch'")
+        )
+    end
+    castn := new_node_at(a, at.AST_CAST, sp)
+    mut castv := at.Get(a, castn)
+    castv.a = n.b
+    at.Put(a, castn, castv)
+    at.SetTypeNode(a, castn, preset_type_node(a, sp, et))
+    d2 := th_decl(a, sp, val, castn, true)
+    check_stmt(s, a, d2)
+    s.pre_stmts.push(d2)
+    group.push(th_checked_decl(s, a, sp, res, n.a, et))
+    asg := th_assign(a, sp, val, try_ident(a, sp, res))
+    check_stmt(s, a, asg)
+    group.push(asg)
+    mut ph := Vector {} as Vector<int>
+    ph.push(th_break(a, sp, 1))
+    body := th_block_of(a, sp, ph)
+    ph.free()
+    loop := new_node_at(a, at.AST_REPEAT, sp)
+    mut lv := at.Get(a, loop)
+    lv.a = th_int(a, sp, 1)
+    lv.b = body
+    at.Put(a, loop, lv)
+    check_stmt(s, a, loop)
+    mut bv := at.Get(a, body)
+    bv.list = group
+    at.Put(a, body, bv)
+    s.pre_stmts.push(loop)
+    idn := try_ident(a, sp, val)
+    vt := sema_check_expr(s, a, idn)
+    th_move(a, nid, idn)
+    ret vt
+end
+
+func th_check_try_stmt(s &: Sema, a &: at.Ast, stmt: int, ea: int):
+    before := s.pre_stmts.len()
+    _t := sema_check_expr(s, a, ea)
+    if s.pre_stmts.len() > before and at.KindOf(a, ea) == at.AST_MATCH and at.At(a, ea).synthetic:
+        last := s.pre_stmts.pop()
+        th_move(a, stmt, last)
+        ret
+    end
+    if s.match_arm_depth == 0:
+        check_no_effect(s, a, ea)
+    end
+end
+
+func th_wrap_return(s &: Sema, a &: at.Ast, nid: int):
+    n := at.Get(a, nid)
+    sp := span_of(a, nid)
+    vt := sig_at(s, s.cur_func).ret_type
+    member := n.is_throws ? "Err" : "Ok"
+    ci := enum_case_index(s, a, vt, member)
+    if ci < 0:
+        ret
+    end
+    mut args := Vector {} as Vector<int>
+    defer args.free()
+    if n.a != 0:
+        args.push(n.a)
+    else member == "Ok" and th_fn_void(s, a):
+        args.push(th_bool(a, sp, false))
+    else:
+        ret
+    end
+    holder := new_node_at(a, at.AST_CALL, sp)
+    enum_make_value(s, a, holder, "", vt, enum_case_struct(s, vt, ci), args)
+    mut nv := at.Get(a, nid)
+    nv.a = holder
+    nv.synthetic = true
+    at.Put(a, nid, nv)
+end
+
+func th_check_throw(s &: Sema, a &: at.Ast, nid: int):
+    n := at.Get(a, nid)
+    sp := span_of(a, nid)
+    if n.a == 0:
+        ret
+    end
+    ci := th_ctx_index(s)
+    if ci < 0 and not th_fn_throws(s, a):
+        serr(
+            s, 141, sp, i18.Tr("'throw' needs a function declared 'throws' or an enclosing 'try:' block; add 'throws' after the function's return type")
+        )
+        _t := sema_check_expr(s, a, n.a)
+        ret
+    end
+    if th_place_error(s, sp, "'throw'"):
+        ret
+    end
+    tag := str.FromInt(nid as i64)
+    tmp := "__th" + tag
+    et := sema_check_expr(s, a, n.a)
+    if type_is_error(s, et):
+        ret
+    end
+    errt := th_error_type(s)
+    mut val := 0
+    sugar := ty_at(s, et).kind == TY_STR
+    saved_skip := s.skip_lang
+    if sugar:
+        s.skip_lang = true
+    end
+    if sugar:
+        s.pre_stmts.push(th_checked_decl(s, a, sp, tmp, n.a, et))
+        lit := new_node_at(a, at.AST_STRUCT_LIT, sp)
+        at.SetName(a, lit, "__prelude_Error")
+        fi := new_node_at(a, at.AST_FIELD_INIT, sp)
+        at.SetName(a, fi, "message")
+        mut fv := at.Get(a, fi)
+        fv.a = try_ident(a, sp, tmp)
+        at.Put(a, fi, fv)
+        at.AddChild(a, lit, fi)
+        val = lit
+    else errt >= 0 and type_assignable(s, errt, et):
+        s.pre_stmts.push(th_checked_decl(s, a, sp, tmp, n.a, et))
+        val = try_ident(a, sp, tmp)
+    else:
+        serr(
+            s, 141, sp, co.Format1(
+                i18.Tr("'throw' needs an 'Error' (or a 'str' message), got '%s'"), co.ArgStr(type_disp(s, et))
+            )
+        )
+        s.skip_lang = saved_skip
+        ret
+    end
+    if ci >= 0:
+        c := s.try_ctx.get(ci)
+        mut stmts := Vector {} as Vector<int>
+        th_fail_stmts(a, sp, c, val, stmts)
+        stmts.push(th_break(a, sp, th_levels(s) - c.depth + 1))
+        blk := th_block_of(a, sp, stmts)
+        stmts.free()
+        th_move(a, nid, blk)
+        check_stmt(s, a, nid)
+        s.skip_lang = saved_skip
+        ret
+    end
+    mut rv := at.Get(a, nid)
+    rv.kind = at.AST_RETURN
+    rv.a = val
+    rv.is_throws = true
+    at.Put(a, nid, rv)
+    check_stmt(s, a, nid)
+    s.skip_lang = saved_skip
+end
+
+func th_check_try_block(s &: Sema, a &: at.Ast, nid: int):
+    n := at.Get(a, nid)
+    sp := span_of(a, nid)
+    if n.a == 0 or n.b == 0:
+        ret
+    end
+    if at.ChildCount(a, n.a) == 0:
+        serr(s, 60, sp, i18.Tr("the 'try:' block is empty: put the code that can throw inside it, or remove it"))
+        ret
+    end
+    if at.ChildCount(a, n.b) == 0:
+        serr(s, 60, span_of(a, n.b), i18.Tr("the 'catch' part is empty: handle or report the error there"))
+        ret
+    end
+    if th_place_error(s, sp, "'try:'"):
+        ret
+    end
+    sema_load_err_prelude(s, a)
+    tag := str.FromInt(nid as i64)
+    fail := "__tf" + tag
+    mut errv := ""
+    d1 := th_decl(a, sp, fail, th_bool(a, sp, false), true)
+    check_stmt(s, a, d1)
+    s.pre_stmts.push(d1)
+    if str.Len(n.name) > 0:
+        errv = "__te" + tag
+        lit := new_node_at(a, at.AST_STRUCT_LIT, sp)
+        at.SetName(a, lit, "__prelude_Error")
+        d2 := th_decl(a, sp, errv, lit, true)
+        check_stmt(s, a, d2)
+        s.pre_stmts.push(d2)
+    end
+    loop := new_node_at(a, at.AST_REPEAT, sp)
+    mut lv := at.Get(a, loop)
+    lv.a = th_int(a, sp, 1)
+    lv.b = n.a
+    at.Put(a, loop, lv)
+    s.try_ctx.push(TryCtx { fail_var = fail, err_var = errv, depth = th_levels(s) + 1, loop_base = s.loop_depth + 1, func_id = s.cur_func, lam_n = s.lam.len() })
+    check_stmt(s, a, loop)
+    _c := s.try_ctx.pop()
+    s.pre_stmts.push(loop)
+    if str.Len(errv) > 0:
+        bind := th_decl(a, sp, n.name, try_ident(a, sp, errv), false)
+        mut hv := at.Get(a, n.b)
+        hv.list.insert(0, bind)
+        at.Put(a, n.b, hv)
+    end
+    if sema_stmt_terminates(s, a, n.a):
+        th_move(a, nid, n.b)
+    else:
+        fi := th_if(a, sp, try_ident(a, sp, fail), n.b)
+        th_move(a, nid, fi)
+    end
+    check_stmt(s, a, nid)
+end
+
+func th_add_final_ret(a &: at.Ast, body: int, ty: int):
+    if ty == 0:
+        ret
+    end
+    tn := at.At(a, ty)
+    if tn.list.len() != 1 or not at.At(a, tn.list.get(0)).synthetic:
+        ret
+    end
+    n := at.ChildCount(a, body)
+    if n > 0:
+        last := at.At(a, at.Child(a, body, n - 1))
+        if last.kind == at.AST_RETURN and last.synthetic:
+            ret
+        end
+    end
+    rs := new_node_at(a, at.AST_RETURN, span_of(a, body))
+    mut rv := at.Get(a, rs)
+    rv.synthetic = true
+    at.Put(a, rs, rv)
+    at.AddChild(a, body, rs)
+end
+
+func th_ctx_synthetic_level(s &: Sema, pos: int): bool:
+    repeat s.try_ctx.len() in i:
+        c := s.try_ctx.get(i)
+        if c.func_id == s.cur_func and c.lam_n == s.lam.len() and c.depth == pos:
+            ret true
+        end
+    end
+    ret false
+end
+
+func th_adjust_break(s &: Sema, a &: at.Ast, nid: int): bool:
+    if th_ctx_index(s) < 0 or at.At(a, nid).synthetic:
+        ret false
+    end
+    want := at.BreakLevels(a, nid)
+    total := th_levels(s)
+    mut need := want
+    mut pos := total
+    mut actual := 0
+    until pos >= 1:
+        if not th_ctx_synthetic_level(s, pos):
+            need -= 1
+            if need == 0:
+                actual = total - pos + 1
+                break
+            end
+        end
+        pos -= 1
+    end
+    if actual == 0:
+        serr(
+            s, 37, span_of(a, nid), want == 1 ? co.Format1(i18.Tr("'%s' outside of a loop or switch"), co.ArgStr("break")) : co.Format1(i18.Tr("'break %s' must name 1 up to the number of enclosing loops and switches"), co.ArgStr(co.I64Toa(want as i64)))
+        )
+        ret true
+    end
+    if actual != want:
+        at.SetTokenValue(a, nid, tok.ValueInt(actual as u64))
+    end
+    ret false
+end
+
+func th_continue_blocked(s &: Sema, a &: at.Ast, nid: int): bool:
+    ci := th_ctx_index(s)
+    if ci < 0:
+        ret false
+    end
+    if s.loop_depth > s.try_ctx.get(ci).loop_base:
+        ret false
+    end
+    serr(
+        s, 140, span_of(a, nid), i18.Tr("'continue' cannot jump out of a 'try:' block yet; set a flag, and 'continue' after the block or in its 'catch' part")
+    )
+    ret true
+end
+
+func th_str_lit(a &: at.Ast, sp: co.SrcSpan, v: str): int:
+    n := new_node_at(a, at.AST_LITERAL, sp)
+    at.SetOp(a, n, tok.TK_STRING)
+    at.SetTokenValue(a, n, tok.ValueStr(v))
+    at.SetName(a, n, "\"" + v + "\"")
+    ret n
+end
+
+func th_call0(a &: at.Ast, sp: co.SrcSpan, callee: int): int:
+    c := new_node_at(a, at.AST_CALL, sp)
+    mut cv := at.Get(a, c)
+    cv.a = callee
+    at.Put(a, c, cv)
+    ret c
+end
+
+func th_expr_stmt(a &: at.Ast, sp: co.SrcSpan, e: int): int:
+    es := new_node_at(a, at.AST_EXPR_STMT, sp)
+    mut ev := at.Get(a, es)
+    ev.a = e
+    at.Put(a, es, ev)
+    ret es
+end
+
+func th_wrap_main(s &: Sema, a &: at.Ast, prog: int):
+    entry := lp.EntryFor(s.lang)
+    list := at.Get(a, prog).list
+    repeat list.len() in i:
+        fid := list.get(i)
+        fn := at.At(a, fid)
+        if fn.kind != at.AST_FUNC_DEF or not fn.is_throws or at.ChildCount(a, fid) != 0:
+            continue
+        end
+        if not str.Equals(fn.name, "main") and not (str.Len(entry) > 0 and str.Equals(fn.name, entry)):
+            continue
+        end
+        orig := fn.name
+        sp := span_of(a, fid)
+        at.SetName(a, fid, "__main_throws")
+        mut body := Vector {} as Vector<int>
+        body.push(th_expr_stmt(a, sp, th_call0(a, sp, try_ident(a, sp, "__main_throws"))))
+        mem := new_node_at(a, at.AST_MEMBER, sp)
+        at.SetName(a, mem, "to_str")
+        mut mv := at.Get(a, mem)
+        mv.a = try_ident(a, sp, "e")
+        at.Put(a, mem, mv)
+        bin := new_node_at(a, at.AST_BINARY, sp)
+        mut bnv := at.Get(a, bin)
+        bnv.op = tok.TK_PLUS
+        bnv.a = th_str_lit(a, sp, "error: ")
+        bnv.b = th_call0(a, sp, mem)
+        at.Put(a, bin, bnv)
+        pc := th_call0(a, sp, try_ident(a, sp, "printerrln"))
+        at.AddChild(a, pc, bin)
+        mut hand := Vector {} as Vector<int>
+        hand.push(th_expr_stmt(a, sp, pc))
+        rs := new_node_at(a, at.AST_RETURN, sp)
+        mut rv := at.Get(a, rs)
+        rv.a = th_int(a, sp, 1)
+        at.Put(a, rs, rv)
+        hand.push(rs)
+        tb := new_node_at(a, at.AST_TRY_BLOCK, sp)
+        mut tv := at.Get(a, tb)
+        tv.a = th_block_of(a, sp, body)
+        tv.b = th_block_of(a, sp, hand)
+        tv.name = "e"
+        tv.view_glue = true
+        at.Put(a, tb, tv)
+        body.free()
+        hand.free()
+        mut outer := Vector {} as Vector<int>
+        outer.push(tb)
+        wrapper := new_node_at(a, at.AST_FUNC_DEF, sp)
+        mut wv := at.Get(a, wrapper)
+        wv.name = orig
+        wv.a = th_block_of(a, sp, outer)
+        at.Put(a, wrapper, wv)
+        outer.free()
+        mut pv := at.Get(a, prog)
+        pv.list.insert(i + 1, wrapper)
+        at.Put(a, prog, pv)
+        ret
+    end
+end

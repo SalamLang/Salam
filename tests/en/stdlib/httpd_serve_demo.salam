@@ -1,0 +1,254 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import testing
+import str
+import os
+import io
+import time
+import net.http
+import net.httpd
+
+const PORT := 19433
+
+func config_text(root: str): str:
+    t := `
+server:
+    site:
+        listen = 19433
+        names = "localhost *.localhost"
+        root = "@ROOT@/a"
+        error page = 404 "404.html"
+        header = "X-Site" "a"
+        location "/assets/": cache = 30d end
+        location "= /health": return = 200 "ok" end
+        location "^~ /static/": alias = "@ROOT@/b" end
+        location "~ \.txt$": header = "X-Kind" "text" end
+        location "/old/": redirect = "http://$host/new$uri" code = 302 end
+    end
+    site:
+        listen = 19433
+        names = "127.0.0.1"
+        root = "@ROOT@/b"
+    end
+end
+`
+    ret str.Replace(t, "@ROOT@", root)
+end
+
+func prepare(root: str):
+    os.RemoveAll(root)
+    os.MkdirAll(root + "/a/assets")
+    os.MkdirAll(root + "/b/docs")
+    io.WriteFile(root + "/a/index.html", "site A")
+    io.WriteFile(root + "/a/404.html", "custom 404")
+    io.WriteFile(root + "/a/assets/app.css", "body{}")
+    io.WriteFile(root + "/a/notes.txt", "notes")
+    io.WriteFile(root + "/a/.env", "secret")
+    io.WriteFile(root + "/b/index.html", "site B")
+    io.WriteFile(root + "/b/docs/index.html", "docs index")
+    io.WriteFile(root + "/b/logo.txt", "logo")
+end
+
+func serve_loop():
+    httpd.Run()
+end
+
+func get(host: str, path: str): http.Response:
+    ret http.Do("GET", "http://" + host + ":19433" + path, http.NewHeaders(), "", http.RequestOptions {})
+end
+
+func test_matching():
+    testing.AssertEqInt(httpd.SiteFor("localhost", PORT), 0)
+    testing.AssertEqInt(httpd.SiteFor("LOCALHOST:19433", PORT), 0)
+    testing.AssertEqInt(httpd.SiteFor("api.localhost", PORT), 0)
+    testing.AssertEqInt(httpd.SiteFor("127.0.0.1", PORT), 1)
+    testing.AssertEqInt(httpd.SiteFor("unknown.test", PORT), 0)
+    testing.AssertEqInt(httpd.SiteFor("localhost", 1), -1)
+    exact := httpd.LocationFor(0, "/health")
+    testing.AssertEqStr(httpd.LocationPattern(exact), "/health")
+    testing.AssertEqStr(httpd.LocationPattern(httpd.LocationFor(0, "/assets/x.css")), "/assets/")
+    testing.AssertEqStr(httpd.LocationPattern(httpd.LocationFor(0, "/static/a.txt")), "/static/")
+    testing.AssertEqStr(httpd.LocationPattern(httpd.LocationFor(0, "/b/notes.txt")), "\\.txt$")
+    testing.AssertEqInt(httpd.LocationFor(0, "/other"), -1)
+end
+
+func test_durations():
+    testing.AssertEqInt64(httpd.ParseDuration("45"), 45)
+    testing.AssertEqInt64(httpd.ParseDuration("10m"), 600)
+    testing.AssertEqInt64(httpd.ParseDuration("2h"), 7200)
+    testing.AssertEqInt64(httpd.ParseDuration("30d"), 2592000)
+    testing.AssertEqInt64(httpd.ParseDuration("1y"), 31536000)
+    testing.AssertEqInt64(httpd.ParseDuration("abc"), -1)
+    testing.AssertEqInt64(httpd.ParseDuration("5x"), -1)
+end
+
+func test_live():
+    r := get("localhost", "/")
+    testing.AssertEqInt(r.status, 200)
+    testing.AssertEqStr(r.body, "site A")
+    testing.AssertEqStr(http.GetHeader(r, "X-Site"), "a")
+    r2 := get("127.0.0.1", "/")
+    testing.AssertEqStr(r2.body, "site B")
+    testing.AssertEqStr(http.GetHeader(r2, "X-Site"), "")
+    r3 := get("localhost", "/assets/app.css")
+    testing.AssertEqStr(http.GetHeader(r3, "Cache-Control"), "public, max-age=2592000")
+    testing.AssertEqStr(http.GetHeader(r3, "Content-Type"), "text/css")
+    r4 := get("localhost", "/health")
+    testing.AssertEqStr(r4.body, "ok")
+    r5 := get("localhost", "/static/docs/")
+    testing.AssertEqStr(r5.body, "docs index")
+    r6 := get("localhost", "/notes.txt")
+    testing.AssertEqStr(http.GetHeader(r6, "X-Kind"), "text")
+    testing.AssertEqStr(r6.body, "notes")
+    r7 := get("localhost", "/old/page?x=1")
+    testing.AssertEqInt(r7.status, 302)
+    testing.AssertEqStr(http.GetHeader(r7, "Location"), "http://localhost:19433/new/old/page")
+    r8 := get("localhost", "/missing")
+    testing.AssertEqInt(r8.status, 404)
+    testing.AssertEqStr(r8.body, "custom 404")
+    r9 := get("127.0.0.1", "/missing")
+    testing.AssertEqInt(r9.status, 404)
+    testing.AssertEqStr(r9.body, "404 Not Found")
+    r10 := get("localhost", "/docs")
+    testing.AssertEqInt(r10.status, 404)
+    r11 := get("127.0.0.1", "/docs")
+    testing.AssertEqInt(r11.status, 301)
+    testing.AssertEqStr(http.GetHeader(r11, "Location"), "/docs/")
+    r12 := get("localhost", "/.env")
+    testing.AssertEqInt(r12.status, 404)
+    r13 := get("localhost", "/%2e%2e/%2e%2e/etc/passwd")
+    testing.AssertEqInt(r13.status, 404)
+    r14 := http.Do("POST", "http://localhost:19433/", http.NewHeaders(), "x", http.RequestOptions {})
+    testing.AssertEqInt(r14.status, 405)
+    testing.AssertEqStr(http.GetHeader(r14, "Allow"), "GET, HEAD")
+end
+
+func get_with(path: str, name: str, value: str): http.Response:
+    mut h := http.NewHeaders()
+    h.insert(name, value)
+    ret http.Do("GET", "http://localhost:19433" + path, h, "", http.RequestOptions {})
+end
+
+func test_conditional_and_range():
+    r := get("localhost", "/notes.txt")
+    etag := http.GetHeader(r, "ETag")
+    testing.AssertTrue(etag.len() > 4)
+    testing.AssertTrue(str.StartsWith(etag, "\""))
+    testing.AssertTrue(str.EndsWith(http.GetHeader(r, "Last-Modified"), "GMT"))
+    testing.AssertEqStr(http.GetHeader(r, "Accept-Ranges"), "bytes")
+    c1 := get_with("/notes.txt", "If-None-Match", etag)
+    testing.AssertEqInt(c1.status, 304)
+    testing.AssertEqStr(c1.body, "")
+    c2 := get_with("/notes.txt", "If-None-Match", "\"nope\"")
+    testing.AssertEqInt(c2.status, 200)
+    c3 := get_with("/notes.txt", "If-Modified-Since", "Fri, 01 Jan 2100 00:00:00 GMT")
+    testing.AssertEqInt(c3.status, 304)
+    c4 := get_with("/notes.txt", "If-Modified-Since", "Mon, 01 Jan 2001 00:00:00 GMT")
+    testing.AssertEqInt(c4.status, 200)
+    g1 := get_with("/notes.txt", "Range", "bytes=0-3")
+    testing.AssertEqInt(g1.status, 206)
+    testing.AssertEqStr(g1.body, "note")
+    testing.AssertEqStr(http.GetHeader(g1, "Content-Range"), "bytes 0-3/5")
+    g2 := get_with("/notes.txt", "Range", "bytes=-2")
+    testing.AssertEqStr(g2.body, "es")
+    testing.AssertEqStr(http.GetHeader(g2, "Content-Range"), "bytes 3-4/5")
+    g3 := get_with("/notes.txt", "Range", "bytes=3-")
+    testing.AssertEqStr(g3.body, "es")
+    g4 := get_with("/notes.txt", "Range", "bytes=1-100")
+    testing.AssertEqStr(g4.body, "otes")
+    testing.AssertEqStr(http.GetHeader(g4, "Content-Range"), "bytes 1-4/5")
+    g5 := get_with("/notes.txt", "Range", "bytes=10-")
+    testing.AssertEqInt(g5.status, 416)
+    testing.AssertEqStr(http.GetHeader(g5, "Content-Range"), "bytes */5")
+    g6 := get_with("/notes.txt", "Range", "bytes=0-1,3-4")
+    testing.AssertEqInt(g6.status, 200)
+    testing.AssertEqStr(g6.body, "notes")
+    g7 := get_with("/notes.txt", "Range", "bytes=abc")
+    testing.AssertEqInt(g7.status, 200)
+    mut h := http.NewHeaders()
+    h.insert("Range", "bytes=0-1")
+    h.insert("If-Range", "\"other\"")
+    g8 := http.Do("GET", "http://localhost:19433/notes.txt", h, "", http.RequestOptions {})
+    testing.AssertEqInt(g8.status, 200)
+    testing.AssertEqStr(g8.body, "notes")
+end
+
+func test_multiport(root: str):
+    os.MkdirAll(root + "/p1")
+    os.MkdirAll(root + "/p2")
+    io.WriteFile(root + "/p1/index.html", "port one")
+    io.WriteFile(root + "/p2/index.html", "port two")
+    text := `
+server:
+    site:
+        listen = 19437
+        names = "localhost"
+        root = "@ROOT@/p1"
+    end
+    site:
+        listen = 19438
+        names = "localhost"
+        root = "@ROOT@/p2"
+    end
+end
+`
+    testing.AssertTrue(httpd.LoadText(str.Replace(text, "@ROOT@", root), "ports.salam"))
+    testing.AssertEqInt(httpd.SiteFor("localhost", 19437), 0)
+    testing.AssertEqInt(httpd.SiteFor("localhost", 19438), 1)
+    t := spawn(serve_loop)
+    time.Sleep(400)
+    a := http.Get("http://localhost:19437/")
+    testing.AssertEqStr(a.body, "port one")
+    b := http.Get("http://localhost:19438/")
+    testing.AssertEqStr(b.body, "port two")
+    httpd.Stop()
+    join(t)
+end
+
+func test_problems():
+    testing.AssertFalse(httpd.LoadText("server:\n    sit:\n    end\nend\n", "bad.salam"))
+    testing.AssertContains(httpd.ProblemAt(0), "did you mean 'site'?")
+    testing.AssertFalse(httpd.LoadText("server:\n    site:\n        listen = 70000\n    end\nend\n", "bad.salam"))
+    testing.AssertContains(httpd.ProblemAt(0), "port must be a number")
+    testing.AssertFalse(httpd.LoadText("server:\n    site:\n        names = \"a.test\"\n        root = \"/no/such/dir\"\n    end\nend\n", "bad.salam"))
+    testing.AssertContains(httpd.ProblemAt(0), "is not a directory")
+    testing.AssertFalse(httpd.LoadText("server:\n    site:\n        names = \"a.test\"\n    end\n    site:\n        names = \"a.test\"\n    end\nend\n", "bad.salam"))
+    testing.AssertContains(httpd.ProblemAt(0), "used by two sites")
+    testing.AssertFalse(httpd.LoadText("server:\n    site:\n        listen = 443 tls\n    end\nend\n", "bad.salam"))
+    testing.AssertContains(httpd.ProblemAt(0), "tls is not available yet")
+    testing.AssertFalse(httpd.LoadText("server:\n    site:\n        names = \"a.test\"\n        location \"/x\": hedaer = \"A\" \"b\" end\n    end\nend\n", "bad.salam"))
+    testing.AssertContains(httpd.ProblemAt(0), "did you mean 'header'?")
+end
+
+func main:
+    root := os.TempDir() + "/salam_httpd_demo"
+    prepare(root)
+    testing.AssertTrue(httpd.LoadText(config_text(root), "demo.salam"))
+    test_durations()
+    test_matching()
+    t := spawn(serve_loop)
+    time.Sleep(400)
+    test_live()
+    test_conditional_and_range()
+    httpd.Stop()
+    join(t)
+    test_multiport(root)
+    test_problems()
+    os.RemoveAll(root)
+    testing.Summary()
+    ret 0
+end

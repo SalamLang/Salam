@@ -1020,8 +1020,8 @@ if want opencv; then
     done
     ocvmockc=""
     for lang in $LANGS; do
-        [ -f "packages/opencv/native/mock/opencv_mock.c" ] && {
-            ocvmockc="packages/opencv/native/mock/opencv_mock.c"
+        [ -f "std/opencv/native/mock/opencv_mock.c" ] && {
+            ocvmockc="std/opencv/native/mock/opencv_mock.c"
             break
         }
     done
@@ -1059,7 +1059,7 @@ if want webview_cef; then
         }
     done
     cefmockc=""
-    [ -f "packages/webview/native/mock/cef_mock.c" ] && cefmockc="packages/webview/native/mock/cef_mock.c"
+    [ -f "std/webview/native/mock/cef_mock.c" ] && cefmockc="std/webview/native/mock/cef_mock.c"
     cefok=0
     if [ -n "$CEFCC" ] && [ -n "$cefmockc" ] && command -v "$MOCK_AR" >/dev/null 2>&1; then
         mkdir -p "$WORK/cefwork/.work"

@@ -3,33 +3,39 @@ import sync
 
 mut calls := 0
 
-func fetch price(err &: error.Error): int:
+func fetch price(): int throws:
     calls += 1
     if calls < 3:
-        err = error.New(error.KindUnavailable, "the price service is busy")
-        ret 0
+        throw Error.New(ErrorKind.Unavailable, "the price service is busy")
     end
-    err = error.Nil()
     ret 4200
 end
 
-func main:
+func steady price(): int throws:
     mut policy := error.NewRetryPolicy(5, 10, 80)
     mut attempt := 1
-    mut err := error.Nil()
-    mut price := fetch price(err)
-    until error.ShouldRetry(policy, err, attempt):
-        wait := error.DelayForAttempt(policy, attempt)
-        println "attempt", attempt, "failed:", error.Message(err), "| waiting", wait, "ms"
-        sync.SleepMs(wait)
+    until true:
+        try:
+            ret fetch price()
+        catch e:
+            if not error.ShouldRetry(policy, e, attempt):
+                throw e.wrap("gave up after " + attempt + " attempts")
+            end
+            wait := error.DelayForAttempt(policy, attempt)
+            println "attempt", attempt, "failed:", e.message, "| waiting", wait, "ms"
+            sync.SleepMs(wait)
+        end
         attempt += 1
-        price = fetch price(err)
     end
-    if error.Ok(err):
-        println "price:", price, "after", attempt, "attempts"
-    else:
-        println "gave up:", error.Format(err)
+end
+
+func main:
+    try:
+        println "price:", steady price()
+    catch e:
+        println e.to_str()
     end
-    bad := error.New(error.KindInvalidArgument, "unknown product")
+    bad := Error.New(ErrorKind.InvalidArgument, "unknown product")
+    mut policy := error.NewRetryPolicy(5, 10, 80)
     println "retry a bad request?", error.ShouldRetry(policy, bad, 1)
 end

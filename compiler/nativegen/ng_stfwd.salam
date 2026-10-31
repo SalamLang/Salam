@@ -1,0 +1,355 @@
+package nativegen
+
+struct Sf:
+    pub slot: Vector<int> = Vector {}
+    pub off: Vector<i64> = Vector {}
+    pub sz: Vector<int> = Vector {}
+    pub reg: Vector<int> = Vector {}
+    pub flt: Vector<bool> = Vector {}
+    pub imm: Vector<i64> = Vector {}
+    pub isimm: Vector<bool> = Vector {}
+end
+
+func sf_clear(t &: Sf):
+    t.slot.clear()
+    t.off.clear()
+    t.sz.clear()
+    t.reg.clear()
+    t.flt.clear()
+    t.imm.clear()
+    t.isimm.clear()
+end
+
+func sf_drop(t &: Sf, k: int):
+    last := t.slot.len() - 1
+    t.slot[k] = t.slot[last]
+    t.off[k] = t.off[last]
+    t.sz[k] = t.sz[last]
+    t.reg[k] = t.reg[last]
+    t.flt[k] = t.flt[last]
+    t.imm[k] = t.imm[last]
+    t.isimm[k] = t.isimm[last]
+    _a := t.slot.pop()
+    _b := t.off.pop()
+    _c := t.sz.pop()
+    _d := t.reg.pop()
+    _e := t.flt.pop()
+    _f := t.imm.pop()
+    _h := t.isimm.pop()
+end
+
+func sf_kill_slot(t &: Sf, s: int):
+    mut k := 0
+    until k < t.slot.len():
+        if t.slot[k] == s:
+            sf_drop(t, k)
+        else:
+            k += 1
+        end
+    end
+end
+
+func sf_kill_reg(t &: Sf, r: int):
+    mut k := 0
+    until k < t.slot.len():
+        if not t.isimm[k] and t.reg[k] == r:
+            sf_drop(t, k)
+        else:
+            k += 1
+        end
+    end
+end
+
+func sf_find(t &: Sf, s: int, off: i64, sz: int, flt: bool): int:
+    repeat t.slot.len() in k:
+        if t.slot[k] == s and t.off[k] == off and t.sz[k] == sz and t.flt[k] == flt:
+            ret k
+        end
+    end
+    ret 0 - 1
+end
+
+func sf_add(t &: Sf, s: int, off: i64, sz: int, flt: bool, reg: int, isimm: bool, imm: i64):
+    if t.slot.len() >= 48:
+        sf_clear(t)
+    end
+    t.slot.push(s)
+    t.off.push(off)
+    t.sz.push(sz)
+    t.reg.push(reg)
+    t.flt.push(flt)
+    t.isimm.push(isimm)
+    t.imm.push(imm)
+end
+
+func sf_known(op: int): bool:
+    switch op:
+        M_MOV_RR, M_COPY, M_MOVZX_RR, M_MOVSX_RR, M_FMOV_RR, M_CVTSI2F, M_CVTF2SI, M_CVTF2F, M_MOVQ_XG, M_MOVQ_GX, M_SQRT: ret true end
+        M_MOV_RI, M_SETCC, M_LD, M_LDZX, M_LDSX, M_LEA, M_FLD, M_VLD, M_VLD32, M_ST, M_FST, M_VST, M_VST32: ret true end
+        M_STI, M_ALU_MI, M_ALU_MR, M_ALU_RR, M_IMUL_RR, M_FOP_RR, M_XORPS, M_ANDPS, M_VOP_RR, M_SHUFPS, M_UNPCKLPD, M_PSHUFD: ret true end
+        M_ALU_RI, M_SHIFT_RI, M_UNARY, M_VSHI, M_ALU_RM, M_FOP_RM, M_TEST_RR, M_UCOMI, M_TEST_RI, M_IMUL_RRI, M_SHIFT_RC: ret true end
+        M_CQO, M_DIV, M_MULHI, M_CMOV: ret true end
+    end
+    ret false
+end
+
+func sf_size_ok(g &: Ng, sz: int, flt: bool): bool:
+    if flt:
+        ret sz == 4 or sz == 8
+    end
+    if sz == 8:
+        ret true
+    end
+    ret sz == 4 and g.arch != NG_ARCH_RV64
+end
+
+func sf_has(v: Vector<int>, r: int): bool:
+    each x in v:
+        if x == r:
+            ret true
+        end
+    end
+    ret false
+end
+
+func sf_next(g &: Ng, i: int): int:
+    mut j := i + 1
+    until j < g.mc.op.len() and g.mc.op[j] == M_NOP:
+        j += 1
+    end
+    ret j < g.mc.op.len() ? j : 0 - 1
+end
+
+func sf_prop(g &: Ng, i: int, uses &: Vector<int>, defs &: Vector<int>):
+    sr := g.mc.r0[i]
+    src := g.mc.r1[i]
+    if g.arch != NG_ARCH_X64 or (sr != R10 and sr != R11) or src == sr or src < 0 or src >= 16:
+        ret
+    end
+    j := sf_next(g, i)
+    if j < 0 or not sf_known(g.mc.op[j]):
+        ret
+    end
+    mi_regs(g, j, uses, defs)
+    if not sf_has(uses, sr) or sf_has(defs, sr):
+        ret
+    end
+    mk := g.mc.mk[j]
+    if g.mc.mi[j] == sr and src == RSP and (mk == MK_BI or mk == MK_FRAME):
+        ret
+    end
+    o0 := g.mc.r0[j]
+    o1 := g.mc.r1[j]
+    ob := g.mc.mb[j]
+    oi := g.mc.mi[j]
+    if o0 == sr: g.mc.r0[j] = src end
+    if o1 == sr: g.mc.r1[j] = src end
+    if mk == MK_BI and ob == sr: g.mc.mb[j] = src end
+    if (mk == MK_BI or mk == MK_FRAME) and oi == sr: g.mc.mi[j] = src end
+    mi_regs(g, j, uses, defs)
+    if sf_has(uses, sr):
+        g.mc.r0[j] = o0
+        g.mc.r1[j] = o1
+        g.mc.mb[j] = ob
+        g.mc.mi[j] = oi
+        ret
+    end
+    mut k := sf_next(g, j)
+    until k >= 0:
+        ok := g.mc.op[k]
+        if ok == M_CALL or ok == M_CALLR:
+            mi_regs(g, k, uses, defs)
+            if not sf_has(uses, sr):
+                g.mc.op[i] = M_NOP
+            end
+            ret
+        end
+        if not sf_known(ok):
+            ret
+        end
+        mi_regs(g, k, uses, defs)
+        if sf_has(uses, sr):
+            ret
+        end
+        if sf_has(defs, sr):
+            g.mc.op[i] = M_NOP
+            ret
+        end
+        k = sf_next(g, k)
+    end
+end
+
+func store_forward(g &: Ng):
+    n := g.mc.op.len()
+    mut t := Sf {}
+    mut uses := Vector {} as Vector<int>
+    mut defs := Vector {} as Vector<int>
+    mut refs := Vector {} as Vector<int>
+    repeat g.mc.nlabels:
+        refs.push(0)
+    end
+    repeat n in j:
+        if g.mc.op[j] == M_JMP or g.mc.op[j] == M_JCC:
+            refs[g.mc.tgt[j]] = refs[g.mc.tgt[j]] + 1
+        end
+    end
+    mut fall := true
+    repeat n in i:
+        op := g.mc.op[i]
+        if op == M_NOP:
+            continue
+        end
+        if op == M_LABEL:
+            if not fall or refs[g.mc.tgt[i]] > 0:
+                sf_clear(t)
+            end
+            fall = true
+            continue
+        end
+        if op == M_JCC:
+            continue
+        end
+        fall = not (op == M_JMP or op == M_RET or op == M_UD2)
+        if not sf_known(op):
+            sf_clear(t)
+            continue
+        end
+        mk := g.mc.mk[i]
+        fr := mk == MK_FRAME and g.mc.mi[i] < 0
+        if (op == M_LD or op == M_FLD) and fr:
+            flt := op == M_FLD
+            sz := g.mc.sz[i]
+            s := slot_loc(g, g.mc.mb[i])
+            off := g.mc.md[i]
+            r0 := g.mc.r0[i]
+            k := sf_find(t, s, off, sz, flt)
+            if k >= 0 and sf_size_ok(g, sz, flt):
+                if t.isimm[k]:
+                    g.mc.op[i] = M_MOV_RI
+                    g.mc.imm[i] = t.imm[k]
+                    g.mc.mk[i] = MK_NONE
+                else t.reg[k] == r0:
+                    g.mc.op[i] = M_NOP
+                    continue
+                else:
+                    g.mc.op[i] = flt ? M_FMOV_RR : M_MOV_RR
+                    g.mc.r1[i] = t.reg[k]
+                    g.mc.mk[i] = MK_NONE
+                    if not flt and sz == 8:
+                        sf_prop(g, i, uses, defs)
+                    end
+                end
+                sf_kill_reg(t, r0)
+                continue
+            end
+            sf_kill_reg(t, r0)
+            if sf_size_ok(g, sz, flt):
+                sf_add(t, s, off, sz, flt, r0, false, 0 as i64)
+            end
+            continue
+        end
+        if (op == M_ST or op == M_FST or op == M_STI) and fr:
+            s2 := slot_loc(g, g.mc.mb[i])
+            sf_kill_slot(t, s2)
+            sz2 := g.mc.sz[i]
+            flt2 := op == M_FST
+            if sf_size_ok(g, sz2, flt2):
+                if op == M_STI:
+                    sf_add(t, s2, g.mc.md[i], sz2, false, 0 - 1, true, g.mc.imm[i])
+                else:
+                    sf_add(t, s2, g.mc.md[i], sz2, flt2, g.mc.r1[i], false, 0 as i64)
+                end
+            end
+            continue
+        end
+        if mk != MK_NONE and not frame_read_only(op, g.mc.cc[i]):
+            if mk == MK_FRAME:
+                sf_kill_slot(t, slot_loc(g, g.mc.mb[i]))
+            else:
+                sf_clear(t)
+            end
+        end
+        mi_regs(g, i, uses, defs)
+        each d in defs:
+            sf_kill_reg(t, d)
+        end
+    end
+    sf_clear(t)
+    refs.free()
+    uses.free()
+    defs.free()
+end
+
+func ce_kill(cls &: Vector<int>, r: int):
+    if r >= 0 and r < 16:
+        cls[r] = 0 - 1
+    end
+end
+
+func copy_elim(g &: Ng):
+    if g.arch != NG_ARCH_X64:
+        ret
+    end
+    n := g.mc.op.len()
+    mut cls := Vector {} as Vector<int>
+    repeat 16:
+        cls.push(0 - 1)
+    end
+    mut next_id := 0
+    mut uses := Vector {} as Vector<int>
+    mut defs := Vector {} as Vector<int>
+    mut refs := Vector {} as Vector<int>
+    repeat g.mc.nlabels:
+        refs.push(0)
+    end
+    repeat n in j:
+        if g.mc.op[j] == M_JMP or g.mc.op[j] == M_JCC:
+            refs[g.mc.tgt[j]] = refs[g.mc.tgt[j]] + 1
+        end
+    end
+    mut fall := true
+    repeat n in i:
+        op := g.mc.op[i]
+        if op == M_NOP or op == M_JCC:
+            continue
+        end
+        if op == M_LABEL:
+            if not fall or refs[g.mc.tgt[i]] > 0:
+                repeat 16 in c0:
+                    cls[c0] = 0 - 1
+                end
+            end
+            fall = true
+            continue
+        end
+        fall = not (op == M_JMP or op == M_RET or op == M_UD2)
+        if not sf_known(op):
+            repeat 16 in c1:
+                cls[c1] = 0 - 1
+            end
+            continue
+        end
+        a := g.mc.r0[i]
+        b := g.mc.r1[i]
+        if op == M_MOV_RR and g.mc.sz[i] == 8 and a >= 0 and a < 16 and b >= 0 and b < 16 and a != RSP and b != RSP:
+            if cls[a] >= 0 and cls[a] == cls[b]:
+                g.mc.op[i] = M_NOP
+                continue
+            end
+            if cls[b] < 0:
+                cls[b] = next_id
+                next_id += 1
+            end
+            cls[a] = cls[b]
+            continue
+        end
+        mi_regs(g, i, uses, defs)
+        each d in defs:
+            ce_kill(cls, d)
+        end
+    end
+    cls.free()
+    refs.free()
+    uses.free()
+    defs.free()
+end

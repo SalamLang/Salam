@@ -1,0 +1,1821 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "net/socketio"
+@fa "سوکت‌آیاو"
+package socketio
+
+import str
+import mem
+import time
+import encoding.json
+import encoding.value
+
+const RESERVED := "|connect|connect_error|disconnect|disconnecting|newListener|removeListener|"
+
+func _lifecycle_name(kind: int): str:
+    if kind == EV_CONNECT:
+        ret "connect"
+    end
+    if kind == EV_DISCONNECT:
+        ret "disconnect"
+    end
+    if kind == EV_CONNECT_ERROR:
+        ret "connect_error"
+    end
+    if kind == EV_ERROR:
+        ret "error"
+    end
+    if kind == EV_RECONNECT:
+        ret "reconnect"
+    end
+    if kind == EV_RECONNECT_ATTEMPT:
+        ret "reconnect_attempt"
+    end
+    if kind == EV_RECONNECT_ERROR:
+        ret "reconnect_error"
+    end
+    if kind == EV_RECONNECT_FAILED:
+        ret "reconnect_failed"
+    end
+    if kind == EV_PING:
+        ret "ping"
+    end
+    if kind == EV_UPGRADE:
+        ret "upgrade"
+    end
+    ret ""
+end
+
+func _event_name(ev: Event): str:
+    if ev.kind == EV_EVENT:
+        ret ev.name
+    end
+    ret _lifecycle_name(ev.kind)
+end
+
+func _compact_handlers(v &: Vector<Handler>):
+    mut kept := Vector {} as Vector<Handler>
+    repeat v.len() in i:
+        h := v.get(i)
+        if h.alive:
+            kept.push(h)
+        end
+    end
+    v.free()
+    v = kept
+end
+
+func _deliver(c: Client, ev0: Event):
+    sp := _sock(c)
+    m := sp[0].mgr as MgrState*
+    mut ev := ev0
+    ev.client = c
+    mut dead := false
+    m[0].dispatching += 1
+    if ev.kind == EV_EVENT:
+        n := sp[0].any_handlers.len()
+        mut i := 0
+        until i < n and i < sp[0].any_handlers.len():
+            h := sp[0].any_handlers.get(i)
+            if h.alive:
+                h.cb(ev)
+            end
+            i += 1
+        end
+    end
+    want := _event_name(ev)
+    if want.len() > 0:
+        n := sp[0].handlers.len()
+        mut i := 0
+        until i < n and i < sp[0].handlers.len():
+            mut h := sp[0].handlers.get(i)
+            if h.alive and h.name == want:
+                h.cb(ev)
+                if h.once:
+                    h.alive = false
+                    sp[0].handlers.set(i, h)
+                    dead = true
+                end
+            end
+            i += 1
+        end
+    end
+    if dead:
+        _compact_handlers(sp[0].handlers)
+    end
+    m[0].dispatching -= 1
+    if sp[0].queueing and sp[0].max_queue > 0:
+        sp[0].inbox.push(ev)
+        until sp[0].inbox.len() > sp[0].max_queue:
+            mut old := sp[0].inbox.get(0)
+            _free_bins(old.bins)
+            sp[0].inbox.remove_at(0)
+        end
+    else:
+        _free_bins(ev.bins)
+    end
+end
+
+func _notify_outgoing(c: Client, name: str, data: str, ack_id: int):
+    sp := _sock(c)
+    if sp[0].out_handlers.len() == 0:
+        ret
+    end
+    ev := Event { kind = EV_EVENT, name = name, nsp = sp[0].nsp, data = data, ack_id = ack_id, client = c }
+    n := sp[0].out_handlers.len()
+    mut i := 0
+    until i < n and i < sp[0].out_handlers.len():
+        h := sp[0].out_handlers.get(i)
+        if h.alive:
+            h.cb(ev)
+        end
+        i += 1
+    end
+end
+
+func _broadcast_lifecycle(m: MgrState*, kind: int, message: str):
+    repeat m[0].socks.len() in i:
+        c := m[0].socks.get(i)
+        _deliver(c, Event { kind = kind, nsp = _sock(c)[0].nsp, message = message, data = "[]" })
+    end
+end
+
+func _find_sock(m: MgrState*, nsp: str): Client:
+    repeat m[0].socks.len() in i:
+        c := m[0].socks.get(i)
+        if _sock(c)[0].nsp == nsp:
+            ret c
+        end
+    end
+    ret Client {}
+end
+
+func _resolve_ack(c: Client, id: int, data: str, bins &: Vector<Bytes>): bool:
+    sp := _sock(c)
+    repeat sp[0].waiters.len() in i:
+        mut w := sp[0].waiters.get(i)
+        if w.alive and w.id == id:
+            w.alive = false
+            if w.has_packet:
+                mut kept := w.packet
+                _free_bins(kept.bins)
+                w.has_packet = false
+            end
+            sp[0].waiters.set(i, w)
+            mut a := Ack { ok = true, id = id, data = data, bins = bins }
+            if w.has_cb:
+                w.cb(a)
+                _free_bins(a.bins)
+            else if w.internal:
+                _free_bins(a.bins)
+            else:
+                sp[0].results.push(a)
+            end
+            ret true
+        end
+    end
+    _free_bins(bins)
+    ret false
+end
+
+func _expire_acks(m: MgrState*):
+    now := time.MonoMillis()
+    repeat m[0].socks.len() in s:
+        c := m[0].socks.get(s)
+        sp := _sock(c)
+        mut dead := false
+        repeat sp[0].waiters.len() in i:
+            mut w := sp[0].waiters.get(i)
+            if not w.alive:
+                dead = true
+            else w.has_deadline and now >= w.deadline:
+                if w.internal and m[0].state != ST_OPEN:
+                    w.deadline = now + (w.interval as i64)
+                    sp[0].waiters.set(i, w)
+                else w.retries_left > 0 and w.has_packet:
+                    w.retries_left -= 1
+                    w.deadline = now + (w.interval as i64)
+                    sp[0].waiters.set(i, w)
+                    _write_packet(m, w.packet.text, w.packet.bins)
+                else:
+                    w.alive = false
+                    dead = true
+                    if w.has_packet:
+                        mut p := w.packet
+                        _free_bins(p.bins)
+                        w.has_packet = false
+                    end
+                    sp[0].waiters.set(i, w)
+                    a := Ack { ok = false, id = w.id, data = "[]" }
+                    if w.has_cb:
+                        w.cb(a)
+                    else if not w.internal:
+                        sp[0].results.push(a)
+                    end
+                end
+            end
+        end
+        if dead:
+            _drop_dead_waiters(sp)
+        end
+    end
+end
+
+func _free_waiter_packets(sp: SockState*):
+    repeat sp[0].waiters.len() in i:
+        w := sp[0].waiters.get(i)
+        if w.has_packet:
+            mut p := w.packet
+            _free_bins(p.bins)
+        end
+    end
+end
+
+func _fail_pending_acks(sp: SockState*):
+    mut dead := false
+    repeat sp[0].waiters.len() in i:
+        mut w := sp[0].waiters.get(i)
+        if w.alive and not w.internal:
+            w.alive = false
+            sp[0].waiters.set(i, w)
+            dead = true
+            a := Ack { ok = false, id = w.id, data = "[]" }
+            if w.has_cb:
+                w.cb(a)
+            else:
+                sp[0].results.push(a)
+            end
+        end
+    end
+    if dead:
+        _drop_dead_waiters(sp)
+    end
+end
+
+func _drop_dead_waiters(sp: SockState*):
+    mut kept := Vector {} as Vector<AckWaiter>
+    repeat sp[0].waiters.len() in i:
+        w := sp[0].waiters.get(i)
+        if w.alive:
+            kept.push(w)
+        end
+    end
+    sp[0].waiters.free()
+    sp[0].waiters = kept
+end
+
+func _take_result(sp: SockState*, id: int, out &: Ack): bool:
+    repeat sp[0].results.len() in i:
+        a := sp[0].results.get(i)
+        if a.id == id:
+            out = a
+            sp[0].results.remove_at(i)
+            ret true
+        end
+    end
+    ret false
+end
+
+func _on_connect_packet(c: Client, p: Packet):
+    sp := _sock(c)
+    sp[0].id = json.Get(p.data, "sid")
+    newpid := json.Get(p.data, "pid")
+    sp[0].recovered = newpid.len() > 0 and sp[0].pid.len() > 0 and sp[0].pid == newpid
+    if newpid.len() > 0:
+        sp[0].pid = newpid
+    end
+    sp[0].connected = true
+    _flush_outbuf(c)
+    _deliver(c, Event { kind = EV_CONNECT, nsp = sp[0].nsp, data = "[]" })
+end
+
+func _on_event_packet(c: Client, p: Packet, bins &: Vector<Bytes>):
+    sp := _sock(c)
+    mut parts := SplitJSONArray(p.data)
+    defer parts.free()
+    if parts.len() == 0:
+        _free_bins(bins)
+        ret
+    end
+    name := ItemStr(p.data, 0)
+    mut rest := "["
+    mut i := 1
+    until i < parts.len():
+        if i > 1:
+            rest += ","
+        end
+        rest += parts.get(i)
+        i += 1
+    end
+    rest += "]"
+    if sp[0].pid.len() > 0 and parts.len() > 1:
+        last := parts.get(parts.len() - 1)
+        if str.StartsWith(last, "\""):
+            sp[0].last_offset = ItemStr(p.data, parts.len() - 1)
+        end
+    end
+    _deliver(c, Event { kind = EV_EVENT, name = name, nsp = sp[0].nsp, data = rest, ack_id = p.id, bins = bins })
+end
+
+func _handle_packet(m: MgrState*, p: Packet, bins &: Vector<Bytes>):
+    c := _find_sock(m, p.nsp)
+    if c.p == null:
+        _free_bins(bins)
+        ret
+    end
+    sp := _sock(c)
+    if p.kind == PKT_CONNECT:
+        _free_bins(bins)
+        _on_connect_packet(c, p)
+    else p.kind == PKT_CONNECT_ERROR:
+        _free_bins(bins)
+        sp[0].connected = false
+        mut why := json.Get(p.data, "message")
+        if why.len() == 0:
+            why = p.data
+        end
+        sp[0].refused = true
+        sp[0].refusal = why
+        _deliver(c, Event { kind = EV_CONNECT_ERROR, nsp = sp[0].nsp, message = why, data = "[]" })
+    else p.kind == PKT_DISCONNECT:
+        _free_bins(bins)
+        sp[0].connected = false
+        sp[0].id = ""
+        sp[0].active = false
+        _fail_pending_acks(sp)
+        _deliver(c, Event { kind = EV_DISCONNECT, nsp = sp[0].nsp, message = REASON_SERVER_DISCONNECT, data = "[]" })
+    else p.kind == PKT_EVENT or p.kind == PKT_BINARY_EVENT:
+        _on_event_packet(c, p, bins)
+    else p.kind == PKT_ACK or p.kind == PKT_BINARY_ACK:
+        _resolve_ack(c, p.id, p.data, bins)
+    else:
+        _free_bins(bins)
+    end
+end
+
+func _on_socketio_text(m: MgrState*, text: str):
+    p := DecodePacket(text)
+    if not p.ok:
+        _broadcast_lifecycle(m, EV_ERROR, REASON_PARSE_ERROR + ": " + text)
+        ret
+    end
+    if p.attachments > 0 and (p.kind == PKT_BINARY_EVENT or p.kind == PKT_BINARY_ACK):
+        _free_bins(m[0].recon_bins)
+        m[0].recon_bins = Vector {} as Vector<Bytes>
+        m[0].recon_pkt = p
+        m[0].recon = true
+        ret
+    end
+    mut none := Vector {} as Vector<Bytes>
+    _handle_packet(m, p, none)
+end
+
+func _on_socketio_binary(m: MgrState*, b: Bytes):
+    if not m[0].recon:
+        ret
+    end
+    m[0].recon_bins.push(NewBytes(b.ptr, b.len))
+    if m[0].recon_bins.len() < m[0].recon_pkt.attachments:
+        ret
+    end
+    p := m[0].recon_pkt
+    mut bins := m[0].recon_bins
+    m[0].recon_bins = Vector {} as Vector<Bytes>
+    m[0].recon = false
+    _handle_packet(m, p, bins)
+end
+
+func _write_packet(m: MgrState*, text: str, bins: Vector<Bytes>): bool:
+    if not _engine_write(m, text):
+        ret false
+    end
+    repeat bins.len() in i:
+        if not _engine_write_bytes(m, bins.get(i)):
+            ret false
+        end
+    end
+    ret true
+end
+
+func _send_connect(m: MgrState*, c: Client):
+    sp := _sock(c)
+    sp[0].refused = false
+    sp[0].refusal = ""
+    mut payload := ""
+    if sp[0].pid.len() > 0:
+        payload = `{"pid":` + json.Str(sp[0].pid) + `,"offset":` + json.Str(sp[0].last_offset) + "}"
+    else sp[0].auth.len() > 0:
+        payload = sp[0].auth
+    end
+    p := Packet { kind = PKT_CONNECT, nsp = sp[0].nsp, data = payload }
+    _engine_write(m, EncodeEngine(EIO_MESSAGE, EncodePacket(p)))
+end
+
+func _flush_outbuf(c: Client):
+    sp := _sock(c)
+    m := sp[0].mgr as MgrState*
+    if sp[0].outbuf.len() == 0:
+        ret
+    end
+    mut pending := sp[0].outbuf
+    sp[0].outbuf = Vector {} as Vector<Outgoing>
+    m[0].batching = true
+    repeat pending.len() in i:
+        mut o := pending.get(i)
+        _write_packet(m, o.text, o.bins)
+        _free_bins(o.bins)
+    end
+    m[0].batching = false
+    pending.free()
+    _poll_flush(m)
+end
+
+func _reconnect_namespaces(m: MgrState*):
+    repeat m[0].socks.len() in i:
+        c := m[0].socks.get(i)
+        if _sock(c)[0].active:
+            _send_connect(m, c)
+        end
+    end
+end
+
+func _engine_shutdown(m: MgrState*, reason: str):
+    if m[0].state == ST_CLOSED:
+        ret
+    end
+    _engine_close(m)
+    m[0].last_error = reason
+    mut wants_more := false
+    repeat m[0].socks.len() in i:
+        c := m[0].socks.get(i)
+        sp := _sock(c)
+        was := sp[0].connected
+        sp[0].connected = false
+        sp[0].id = ""
+        if sp[0].active:
+            wants_more = true
+        end
+        if was:
+            _fail_pending_acks(sp)
+            _deliver(c, Event { kind = EV_DISCONNECT, nsp = sp[0].nsp, message = reason, data = "[]" })
+        end
+    end
+    if m[0].opts.reconnection and wants_more:
+        m[0].state = ST_WAITING
+        m[0].retry_at = time.MonoMillis() + _backoff(m)
+    end
+end
+
+func _backoff(m: MgrState*): i64:
+    cap := m[0].opts.reconnection_delay_max as i64
+    mut d := m[0].opts.reconnection_delay as i64
+    if d < 1:
+        d = 1
+    end
+    mut i := 0
+    until i < m[0].attempts and d < cap:
+        d *= 2
+        i += 1
+    end
+    if d > cap:
+        d = cap
+    end
+    spread := (d * (m[0].opts.randomization_factor as i64)) / 100
+    if spread > 0:
+        d += rand.Int32Range(0, spread as int) as i64
+    end
+    ret d
+end
+
+func _reconnect_step(m: MgrState*, timeout_ms: int): int:
+    if m[0].state != ST_WAITING:
+        ret PUMP_CLOSED
+    end
+    limit := m[0].opts.reconnection_attempts
+    if limit > 0 and m[0].attempts >= limit:
+        m[0].state = ST_CLOSED
+        _broadcast_lifecycle(m, EV_RECONNECT_FAILED, "gave up after " + m[0].attempts + " attempts")
+        ret PUMP_CLOSED
+    end
+    now := time.MonoMillis()
+    if now < m[0].retry_at:
+        mut nap := (m[0].retry_at - now) as int
+        if timeout_ms >= 0 and nap > timeout_ms:
+            nap = timeout_ms
+        end
+        if nap > 0:
+            time.Sleep(nap)
+        end
+        ret PUMP_TIMEOUT
+    end
+    m[0].attempts += 1
+    _broadcast_lifecycle(m, EV_RECONNECT_ATTEMPT, "" + m[0].attempts)
+    if _engine_open(m):
+        m[0].attempts = 0
+        _reconnect_namespaces(m)
+        _broadcast_lifecycle(m, EV_RECONNECT, "")
+        ret PUMP_OK
+    end
+    _broadcast_lifecycle(m, EV_RECONNECT_ERROR, m[0].last_error)
+    m[0].retry_at = time.MonoMillis() + _backoff(m)
+    ret PUMP_TIMEOUT
+end
+
+func _pump_mgr(m: MgrState*, timeout_ms: int): int:
+    _expire_acks(m)
+    if m[0].state == ST_OPEN and _heartbeat_expired(m):
+        _engine_shutdown(m, REASON_PING_TIMEOUT)
+    end
+    if m[0].state != ST_OPEN:
+        ret _reconnect_step(m, timeout_ms)
+    end
+    rc := _transport_read(m, timeout_ms)
+    if rc == PUMP_CLOSED:
+        _engine_shutdown(m, REASON_TRANSPORT_CLOSE)
+        ret PUMP_CLOSED
+    end
+    ret rc
+end
+
+func _copy_outgoing(text: str, a: Args): Outgoing:
+    mut o := Outgoing { text = text }
+    repeat a.bins.len() in i:
+        b := a.bins.get(i)
+        o.bins.push(NewBytes(b.ptr, b.len))
+    end
+    ret o
+end
+
+func _emit_raw(c: Client, kind: int, name: str, a: Args, ack_id0: int, volatile: bool): bool:
+    sp := _sock(c)
+    m := sp[0].mgr as MgrState*
+    mut ack_id := ack_id0
+    mut retrying := false
+    if kind == PKT_EVENT and ack_id < 0 and m[0].opts.retries > 0 and m[0].opts.ack_timeout > 0:
+        ack_id = _next_ack_id(sp)
+        retrying = true
+    end
+    data := ArgsJSON(a, name)
+    mut p := Packet { kind = kind, nsp = sp[0].nsp, id = ack_id, data = data }
+    if a.bins.len() > 0:
+        if kind == PKT_EVENT:
+            p.kind = PKT_BINARY_EVENT
+        else:
+            p.kind = PKT_BINARY_ACK
+        end
+        p.attachments = a.bins.len()
+    end
+    text := EncodeEngine(EIO_MESSAGE, EncodePacket(p))
+    if kind == PKT_EVENT:
+        _notify_outgoing(c, name, data, ack_id0)
+    end
+    if retrying:
+        mut w := AckWaiter { id = ack_id, alive = true, internal = true, has_deadline = true, has_packet = true }
+        w.deadline = time.MonoMillis() + (m[0].opts.ack_timeout as i64)
+        w.interval = m[0].opts.ack_timeout
+        w.retries_left = m[0].opts.retries
+        w.packet = _copy_outgoing(text, a)
+        sp[0].waiters.push(w)
+    end
+    if not sp[0].connected:
+        if volatile:
+            ret false
+        end
+        sp[0].outbuf.push(_copy_outgoing(text, a))
+        ret true
+    end
+    ret _write_packet(m, text, a.bins)
+end
+
+func _wait_connected(c: Client, deadline: i64): bool:
+    sp := _sock(c)
+    m := sp[0].mgr as MgrState*
+    until not sp[0].connected and not sp[0].refused and time.MonoMillis() < deadline:
+        left := (deadline - time.MonoMillis()) as int
+        if left <= 0:
+            ret sp[0].connected
+        end
+        rc := _pump_mgr(m, left)
+        if rc == PUMP_CLOSED and m[0].state == ST_CLOSED:
+            ret sp[0].connected
+        end
+    end
+    ret sp[0].connected
+end
+
+func _reserved(name: str): bool:
+    ret str.Contains(RESERVED, "|" + name + "|")
+end
+
+func _norm_nsp(nsp: str): str:
+    mut s := str.Trim(nsp)
+    if s.len() == 0:
+        ret "/"
+    end
+    if not str.StartsWith(s, "/"):
+        s = "/" + s
+    end
+    ret s
+end
+
+func _norm_path(path: str): str:
+    mut s := str.Trim(path)
+    if s.len() == 0:
+        ret "/socket.io"
+    end
+    if not str.StartsWith(s, "/"):
+        s = "/" + s
+    end
+    until s.len() > 1 and str.EndsWith(s, "/"):
+        s = s.substr(0, s.len() - 1)
+    end
+    ret s
+end
+
+func _connect_timeout(m: MgrState*): int:
+    if m[0].opts.timeout > 0:
+        ret m[0].opts.timeout
+    end
+    ret 20000
+end
+
+func _ack_wait(m: MgrState*, timeout_ms: int): int:
+    if timeout_ms > 0:
+        ret timeout_ms
+    end
+    if timeout_ms < 0:
+        ret 0
+    end
+    ret m[0].opts.ack_timeout
+end
+
+func _next_ack_id(sp: SockState*): int:
+    id := sp[0].ack_seq
+    sp[0].ack_seq += 1
+    ret id
+end
+
+func _register_waiter(sp: SockState*, id: int, timeout_ms: int, has_cb: bool, cb: func (Ack)):
+    mut w := AckWaiter { id = id, alive = true, has_cb = has_cb, cb = cb }
+    if timeout_ms > 0:
+        w.has_deadline = true
+        w.deadline = time.MonoMillis() + (timeout_ms as i64)
+    end
+    sp[0].waiters.push(w)
+end
+
+func _free_sock(c: Client):
+    if c.p == null:
+        ret
+    end
+    sp := _sock(c)
+    sp[0].handlers.free()
+    sp[0].any_handlers.free()
+    sp[0].out_handlers.free()
+    _free_waiter_packets(sp)
+    sp[0].waiters.free()
+    repeat sp[0].outbuf.len() in i:
+        mut o := sp[0].outbuf.get(i)
+        _free_bins(o.bins)
+    end
+    sp[0].outbuf.free()
+    repeat sp[0].inbox.len() in i:
+        mut ev := sp[0].inbox.get(i)
+        _free_bins(ev.bins)
+    end
+    sp[0].inbox.free()
+    repeat sp[0].results.len() in i:
+        mut a := sp[0].results.get(i)
+        _free_bins(a.bins)
+    end
+    sp[0].results.free()
+    mem.Free(c.p)
+end
+
+func _any_active(m: MgrState*): bool:
+    mut any := false
+    repeat m[0].socks.len() in i:
+        if _sock(m[0].socks.get(i))[0].active:
+            any = true
+        end
+    end
+    ret any
+end
+
+@en "NewOptions"
+@fa "گزینه‌های جدید"
+pub func NewOptions(): Options:
+    ret Options {}
+end
+
+@en "NewManager"
+@fa "مدیر جدید"
+pub func NewManager(url: str, opts: Options): Manager:
+    mut ep := ParseURL(url)
+    mut o := opts
+    o.path = _norm_path(opts.path)
+    ep.path = o.path
+    m := _new_mgr(ep, o)
+    if m.p != null and not ep.ok:
+        mp := _mgr(m)
+        mp[0].last_error = "could not read the server URL: " + url
+    end
+    ret m
+end
+
+@en "Of"
+@fa "از"
+pub func Of(m: Manager, nsp: str): Client:
+    if m.p == null:
+        ret Client {}
+    end
+    mp := _mgr(m)
+    ns := _norm_nsp(nsp)
+    existing := _find_sock(mp, ns)
+    if existing.p != null:
+        ret existing
+    end
+    c := _new_sock(m.p, ns)
+    if c.p == null:
+        ret c
+    end
+    sp := _sock(c)
+    sp[0].auth = mp[0].opts.auth
+    sp[0].max_queue = mp[0].opts.event_queue
+    sp[0].queueing = mp[0].opts.event_queue > 0
+    mp[0].socks.push(c)
+    ret c
+end
+
+@en "ManagerOf"
+@fa "مدیر کلاینت"
+pub func ManagerOf(c: Client): Manager:
+    if c.p == null:
+        ret Manager {}
+    end
+    ret Manager { p = _sock(c)[0].mgr }
+end
+
+@en "Dial"
+@fa "اتصال"
+pub func Dial(url: str): Client:
+    ret DialWith(url, NewOptions())
+end
+
+@en "DialWith"
+@fa "اتصال با"
+pub func DialWith(url: str, opts: Options): Client:
+    m := NewManager(url, opts)
+    if m.p == null:
+        ret Client {}
+    end
+    mp := _mgr(m)
+    c := Of(m, mp[0].ep.namespace)
+    if not mp[0].ep.ok:
+        ret c
+    end
+    if mp[0].opts.auto_connect:
+        Connect(c)
+    end
+    ret c
+end
+
+@en "Connect"
+@fa "وصل شدن"
+pub func Connect(c: Client): bool:
+    if c.p == null:
+        ret false
+    end
+    sp := _sock(c)
+    m := sp[0].mgr as MgrState*
+    sp[0].active = true
+    if sp[0].connected:
+        ret true
+    end
+    if not m[0].ep.ok:
+        _deliver(c, Event { kind = EV_CONNECT_ERROR, nsp = sp[0].nsp, message = m[0].last_error, data = "[]" })
+        ret false
+    end
+    if m[0].state != ST_OPEN:
+        if not _engine_open(m):
+            if m[0].opts.reconnection:
+                m[0].state = ST_WAITING
+                m[0].retry_at = time.MonoMillis() + _backoff(m)
+            end
+            _deliver(c, Event { kind = EV_CONNECT_ERROR, nsp = sp[0].nsp, message = m[0].last_error, data = "[]" })
+            ret false
+        end
+        m[0].attempts = 0
+    end
+    _send_connect(m, c)
+    ret _wait_connected(c, time.MonoMillis() + (_connect_timeout(m) as i64))
+end
+
+@en "Disconnect"
+@fa "قطع اتصال"
+pub func Disconnect(c: Client):
+    if c.p == null:
+        ret
+    end
+    sp := _sock(c)
+    m := sp[0].mgr as MgrState*
+    sp[0].active = false
+    if sp[0].connected:
+        p := Packet { kind = PKT_DISCONNECT, nsp = sp[0].nsp }
+        _engine_write(m, EncodeEngine(EIO_MESSAGE, EncodePacket(p)))
+        sp[0].connected = false
+        sp[0].id = ""
+        _fail_pending_acks(sp)
+        _deliver(c, Event { kind = EV_DISCONNECT, nsp = sp[0].nsp, message = REASON_CLIENT_DISCONNECT, data = "[]" })
+    end
+    if not _any_active(m):
+        _engine_close(m)
+        m[0].state = ST_CLOSED
+    end
+end
+
+@en "CloseManager"
+@fa "بستن مدیر"
+pub func CloseManager(m: Manager):
+    if m.p == null:
+        ret
+    end
+    mp := _mgr(m)
+    if mp[0].dispatching > 0:
+        repeat mp[0].socks.len() in i:
+            Disconnect(mp[0].socks.get(i))
+        end
+        ret
+    end
+    repeat mp[0].socks.len() in i:
+        Disconnect(mp[0].socks.get(i))
+    end
+    _engine_close(mp)
+    repeat mp[0].socks.len() in i:
+        _free_sock(mp[0].socks.get(i))
+    end
+    mp[0].socks.free()
+    mp[0].cookies.free()
+    mp[0].pollout.free()
+    _free_bins(mp[0].recon_bins)
+    mem.Free(m.p)
+end
+
+@en "Close"
+@fa "بستن"
+pub func Close(c: Client):
+    if c.p == null:
+        ret
+    end
+    m := ManagerOf(c)
+    mp := _mgr(m)
+    Disconnect(c)
+    if mp[0].dispatching > 0:
+        ret
+    end
+    if mp[0].socks.len() <= 1:
+        CloseManager(m)
+        ret
+    end
+    mut kept := Vector {} as Vector<Client>
+    repeat mp[0].socks.len() in i:
+        other := mp[0].socks.get(i)
+        if other.p != c.p:
+            kept.push(other)
+        end
+    end
+    mp[0].socks.free()
+    mp[0].socks = kept
+    _free_sock(c)
+end
+
+@en "Pump"
+@fa "پمپ"
+pub func Pump(c: Client, timeout_ms: int): int:
+    if c.p == null:
+        ret PUMP_CLOSED
+    end
+    ret _pump_mgr(_mgr_of(c), timeout_ms)
+end
+
+@en "PumpManager"
+@fa "پمپ مدیر"
+pub func PumpManager(m: Manager, timeout_ms: int): int:
+    if m.p == null:
+        ret PUMP_CLOSED
+    end
+    ret _pump_mgr(_mgr(m), timeout_ms)
+end
+
+@en "Next"
+@fa "بعدی"
+pub func Next(c: Client, timeout_ms: int): Event:
+    if c.p == null:
+        ret Event { kind = EV_TIMEOUT }
+    end
+    sp := _sock(c)
+    m := sp[0].mgr as MgrState*
+    if sp[0].max_queue <= 0:
+        sp[0].max_queue = 256
+    end
+    sp[0].queueing = true
+    deadline := time.MonoMillis() + (timeout_ms as i64)
+    mut out := Event { kind = EV_TIMEOUT, nsp = sp[0].nsp, client = c }
+    mut going := true
+    mut finished := false
+    until going:
+        if sp[0].inbox.len() > 0:
+            out = sp[0].inbox.get(0)
+            sp[0].inbox.remove_at(0)
+            going = false
+        else finished:
+            going = false
+        else:
+            mut left := (deadline - time.MonoMillis()) as int
+            if timeout_ms < 0:
+                left = 0 - 1
+            else left <= 0:
+                going = false
+            end
+            if going:
+                rc := _pump_mgr(m, left)
+                if rc == PUMP_CLOSED and m[0].state == ST_CLOSED:
+                    finished = true
+                end
+            end
+        end
+    end
+    ret out
+end
+
+@en "NextEvent"
+@fa "رویداد بعدی"
+pub func NextEvent(c: Client, timeout_ms: int): Event:
+    if c.p == null:
+        ret Event { kind = EV_TIMEOUT }
+    end
+    sp := _sock(c)
+    m := sp[0].mgr as MgrState*
+    deadline := time.MonoMillis() + (timeout_ms as i64)
+    mut out := Event { kind = EV_TIMEOUT, nsp = sp[0].nsp, client = c }
+    mut going := true
+    until going:
+        mut left := 0 - 1
+        if timeout_ms >= 0:
+            left = (deadline - time.MonoMillis()) as int
+            if left <= 0:
+                going = false
+            end
+        end
+        if going:
+            mut ev := Next(c, left)
+            if ev.kind == EV_EVENT or ev.kind == EV_TIMEOUT:
+                out = ev
+                going = false
+            else ev.kind == EV_DISCONNECT and (not sp[0].active or m[0].state == ST_CLOSED):
+                out = ev
+                going = false
+            else:
+                EventFree(ev)
+            end
+        end
+    end
+    ret out
+end
+
+@en "Run"
+@fa "اجرا"
+pub func Run(c: Client):
+    if c.p == null:
+        ret
+    end
+    sp := _sock(c)
+    m := sp[0].mgr as MgrState*
+    until sp[0].active and m[0].state != ST_CLOSED:
+        _pump_mgr(m, 1000)
+    end
+end
+
+@en "RunFor"
+@fa "اجرا برای"
+pub func RunFor(c: Client, ms: int):
+    if c.p == null:
+        ret
+    end
+    sp := _sock(c)
+    m := sp[0].mgr as MgrState*
+    deadline := time.MonoMillis() + (ms as i64)
+    until sp[0].active and m[0].state != ST_CLOSED and time.MonoMillis() < deadline:
+        mut left := (deadline - time.MonoMillis()) as int
+        if left > 250:
+            left = 250
+        end
+        if left <= 0:
+            ret
+        end
+        _pump_mgr(m, left)
+    end
+end
+
+@en "On"
+@fa "روی"
+pub func On(c: Client, name: str, cb: func (Event)):
+    if c.p == null:
+        ret
+    end
+    sp := _sock(c)
+    sp[0].handlers.push(Handler { name = name, cb = cb })
+end
+
+@en "Once"
+@fa "یک‌بار"
+pub func Once(c: Client, name: str, cb: func (Event)):
+    if c.p == null:
+        ret
+    end
+    sp := _sock(c)
+    sp[0].handlers.push(Handler { name = name, once = true, cb = cb })
+end
+
+@en "Off"
+@fa "خاموش"
+pub func Off(c: Client, name: str):
+    if c.p == null:
+        ret
+    end
+    sp := _sock(c)
+    repeat sp[0].handlers.len() in i:
+        mut h := sp[0].handlers.get(i)
+        if h.name == name:
+            h.alive = false
+            sp[0].handlers.set(i, h)
+        end
+    end
+    _compact_handlers(sp[0].handlers)
+end
+
+@en "OffAll"
+@fa "خاموش همه"
+pub func OffAll(c: Client):
+    if c.p == null:
+        ret
+    end
+    sp := _sock(c)
+    sp[0].handlers.free()
+    sp[0].handlers = Vector {} as Vector<Handler>
+    sp[0].any_handlers.free()
+    sp[0].any_handlers = Vector {} as Vector<Handler>
+end
+
+@en "OnAny"
+@fa "روی دلخواه"
+pub func OnAny(c: Client, cb: func (Event)):
+    if c.p == null:
+        ret
+    end
+    sp := _sock(c)
+    sp[0].any_handlers.push(Handler { name = "*", cb = cb })
+end
+
+@en "OffAny"
+@fa "خاموش دلخواه"
+pub func OffAny(c: Client):
+    if c.p == null:
+        ret
+    end
+    sp := _sock(c)
+    sp[0].any_handlers.free()
+    sp[0].any_handlers = Vector {} as Vector<Handler>
+end
+
+@en "EmitArgs"
+@fa "ارسال با آرگومان"
+pub func EmitArgs(c: Client, name: str, a: Args): bool:
+    if c.p == null or _reserved(name):
+        ret false
+    end
+    ret _emit_raw(c, PKT_EVENT, name, a, 0 - 1, false)
+end
+
+@en "EmitVolatile"
+@fa "ارسال ناپایدار"
+pub func EmitVolatile(c: Client, name: str, a: Args): bool:
+    if c.p == null or _reserved(name):
+        ret false
+    end
+    ret _emit_raw(c, PKT_EVENT, name, a, 0 - 1, true)
+end
+
+@en "Emit"
+@fa "ارسال"
+pub func Emit(c: Client, name: str): bool:
+    mut a := NewArgs()
+    defer ArgsFree(a)
+    ret EmitArgs(c, name, a)
+end
+
+@en "EmitStr"
+@fa "ارسال رشته"
+pub func EmitStr(c: Client, name: str, s: str): bool:
+    mut a := NewArgs()
+    defer ArgsFree(a)
+    AddStr(a, s)
+    ret EmitArgs(c, name, a)
+end
+
+@en "EmitInt"
+@fa "ارسال عدد"
+pub func EmitInt(c: Client, name: str, n: i64): bool:
+    mut a := NewArgs()
+    defer ArgsFree(a)
+    AddInt(a, n)
+    ret EmitArgs(c, name, a)
+end
+
+@en "EmitFloat"
+@fa "ارسال اعشاری"
+pub func EmitFloat(c: Client, name: str, n: f64): bool:
+    mut a := NewArgs()
+    defer ArgsFree(a)
+    AddFloat(a, n)
+    ret EmitArgs(c, name, a)
+end
+
+@en "EmitBool"
+@fa "ارسال بولی"
+pub func EmitBool(c: Client, name: str, b: bool): bool:
+    mut a := NewArgs()
+    defer ArgsFree(a)
+    AddBool(a, b)
+    ret EmitArgs(c, name, a)
+end
+
+@en "EmitJSON"
+@fa "ارسال جیسون"
+pub func EmitJSON(c: Client, name: str, raw: str): bool:
+    mut a := NewArgs()
+    defer ArgsFree(a)
+    AddJSON(a, raw)
+    ret EmitArgs(c, name, a)
+end
+
+@en "EmitBytes"
+@fa "ارسال بایت"
+pub func EmitBytes(c: Client, name: str, ptr: void*, n: int): bool:
+    mut a := NewArgs()
+    defer ArgsFree(a)
+    AddBytes(a, ptr, n)
+    ret EmitArgs(c, name, a)
+end
+
+@en "EmitAck"
+@fa "ارسال منتظر تایید"
+pub func EmitAck(c: Client, name: str, a: Args, timeout_ms: int): Ack:
+    if c.p == null or _reserved(name):
+        ret Ack {}
+    end
+    sp := _sock(c)
+    m := sp[0].mgr as MgrState*
+    id := _next_ack_id(sp)
+    wait := _ack_wait(m, timeout_ms)
+    _register_waiter(sp, id, wait, false, (x: Ack): end)
+    if not _emit_raw(c, PKT_EVENT, name, a, id, false):
+        ret Ack { id = id }
+    end
+    mut deadline := time.MonoMillis() + (wait as i64)
+    if wait <= 0:
+        deadline = 0
+    end
+    mut out := Ack { id = id }
+    mut going := true
+    until going:
+        if _take_result(sp, id, out):
+            going = false
+        else:
+            mut left := 0 - 1
+            if deadline > 0:
+                left = (deadline - time.MonoMillis()) as int
+                if left <= 0:
+                    going = false
+                end
+            end
+            if going:
+                rc := _pump_mgr(m, left)
+                if rc == PUMP_CLOSED and m[0].state == ST_CLOSED:
+                    going = false
+                end
+            end
+        end
+    end
+    if not out.ok:
+        _expire_acks(m)
+        _take_result(sp, id, out)
+    end
+    _drop_dead_waiters(sp)
+    ret out
+end
+
+@en "EmitWithAck"
+@fa "ارسال با تایید"
+pub func EmitWithAck(c: Client, name: str, a: Args, timeout_ms: int, cb: func (Ack)): bool:
+    if c.p == null or _reserved(name):
+        ret false
+    end
+    sp := _sock(c)
+    m := sp[0].mgr as MgrState*
+    id := _next_ack_id(sp)
+    _register_waiter(sp, id, _ack_wait(m, timeout_ms), true, cb)
+    ret _emit_raw(c, PKT_EVENT, name, a, id, false)
+end
+
+@en "Reply"
+@fa "پاسخ"
+pub func Reply(ev: Event, a: Args): bool:
+    if ev.ack_id < 0 or ev.client.p == null:
+        ret false
+    end
+    ret _emit_raw(ev.client, PKT_ACK, "", a, ev.ack_id, false)
+end
+
+@en "ReplyJSON"
+@fa "پاسخ جیسون"
+pub func ReplyJSON(ev: Event, raw: str): bool:
+    mut a := NewArgs()
+    defer ArgsFree(a)
+    AddJSON(a, raw)
+    ret Reply(ev, a)
+end
+
+@en "ReplyStr"
+@fa "پاسخ رشته"
+pub func ReplyStr(ev: Event, s: str): bool:
+    mut a := NewArgs()
+    defer ArgsFree(a)
+    AddStr(a, s)
+    ret Reply(ev, a)
+end
+
+@en "ArgCount"
+@fa "شمار آرگومان رویداد"
+pub func ArgCount(ev: Event): int:
+    ret ItemCount(ev.data)
+end
+
+@en "Arg"
+@fa "آرگومان"
+pub func Arg(ev: Event, i: int): str:
+    ret Item(ev.data, i)
+end
+
+@en "ArgStr"
+@fa "آرگومان رشته"
+pub func ArgStr(ev: Event, i: int): str:
+    ret ItemStr(ev.data, i)
+end
+
+@en "ArgInt"
+@fa "آرگومان عددی"
+pub func ArgInt(ev: Event, i: int): i64:
+    ret ItemInt(ev.data, i)
+end
+
+@en "ArgFloat"
+@fa "آرگومان اعشاری"
+pub func ArgFloat(ev: Event, i: int): f64:
+    ret ItemFloat(ev.data, i)
+end
+
+@en "ArgBool"
+@fa "آرگومان بولی"
+pub func ArgBool(ev: Event, i: int): bool:
+    ret ItemBool(ev.data, i)
+end
+
+@en "ArgValue"
+@fa "مقدار آرگومان"
+pub func ArgValue(ev: Event, i: int): value.Value:
+    ret ItemValue(ev.data, i)
+end
+
+@en "ArgIsBinary"
+@fa "آرگومان دودویی است"
+pub func ArgIsBinary(ev: Event, i: int): bool:
+    ret PlaceholderNum(Item(ev.data, i)) >= 0
+end
+
+@en "ArgBytes"
+@fa "آرگومان بایتی"
+pub func ArgBytes(ev: Event, i: int): Bytes:
+    n := PlaceholderNum(Item(ev.data, i))
+    if n < 0 or n >= ev.bins.len():
+        ret Bytes {}
+    end
+    ret ev.bins.get(n)
+end
+
+@en "AckCount"
+@fa "شمار تایید"
+pub func AckCount(a: Ack): int:
+    ret ItemCount(a.data)
+end
+
+@en "AckArg"
+@fa "آرگومان تایید"
+pub func AckArg(a: Ack, i: int): str:
+    ret Item(a.data, i)
+end
+
+@en "AckStr"
+@fa "رشته تایید"
+pub func AckStr(a: Ack, i: int): str:
+    ret ItemStr(a.data, i)
+end
+
+@en "AckInt"
+@fa "عدد تایید"
+pub func AckInt(a: Ack, i: int): i64:
+    ret ItemInt(a.data, i)
+end
+
+@en "AckFloat"
+@fa "اعشار تایید"
+pub func AckFloat(a: Ack, i: int): f64:
+    ret ItemFloat(a.data, i)
+end
+
+@en "AckBool"
+@fa "بولی تایید"
+pub func AckBool(a: Ack, i: int): bool:
+    ret ItemBool(a.data, i)
+end
+
+@en "AckIsBinary"
+@fa "تایید دودویی است"
+pub func AckIsBinary(a: Ack, i: int): bool:
+    ret PlaceholderNum(Item(a.data, i)) >= 0
+end
+
+@en "AckBytes"
+@fa "بایت تایید"
+pub func AckBytes(a: Ack, i: int): Bytes:
+    n := PlaceholderNum(Item(a.data, i))
+    if n < 0 or n >= a.bins.len():
+        ret Bytes {}
+    end
+    ret a.bins.get(n)
+end
+
+@en "AckValue"
+@fa "مقدار تایید"
+pub func AckValue(a: Ack, i: int): value.Value:
+    ret ItemValue(a.data, i)
+end
+
+@en "EventFree"
+@fa "آزادسازی رویداد"
+pub func EventFree(ev &: Event):
+    _free_bins(ev.bins)
+    ev.bins = Vector {} as Vector<Bytes>
+end
+
+@en "AckFree"
+@fa "آزادسازی تایید"
+pub func AckFree(a &: Ack):
+    _free_bins(a.bins)
+    a.bins = Vector {} as Vector<Bytes>
+end
+
+@en "IsConnected"
+@fa "متصل است"
+pub func IsConnected(c: Client): bool:
+    if c.p == null:
+        ret false
+    end
+    ret _sock(c)[0].connected
+end
+
+@en "Id"
+@fa "شناسه"
+pub func Id(c: Client): str:
+    if c.p == null:
+        ret ""
+    end
+    ret _sock(c)[0].id
+end
+
+@en "Sid"
+@fa "شناسه نشست"
+pub func Sid(c: Client): str:
+    if c.p == null:
+        ret ""
+    end
+    ret _mgr_of(c)[0].sid
+end
+
+@en "Namespace"
+@fa "فضای نام"
+pub func Namespace(c: Client): str:
+    if c.p == null:
+        ret "/"
+    end
+    ret _sock(c)[0].nsp
+end
+
+@en "Recovered"
+@fa "بازیابی شده"
+pub func Recovered(c: Client): bool:
+    if c.p == null:
+        ret false
+    end
+    ret _sock(c)[0].recovered
+end
+
+@en "Transport"
+@fa "حمل‌ونقل"
+pub func Transport(c: Client): int:
+    if c.p == null:
+        ret TRANSPORT_POLLING
+    end
+    ret _mgr_of(c)[0].transport
+end
+
+@en "LastError"
+@fa "آخرین خطا"
+pub func LastError(c: Client): str:
+    if c.p == null:
+        ret "no client"
+    end
+    ret _mgr_of(c)[0].last_error
+end
+
+@en "Buffered"
+@fa "بافر شده"
+pub func Buffered(c: Client): int:
+    if c.p == null:
+        ret 0
+    end
+    ret _sock(c)[0].outbuf.len()
+end
+
+@en "Attempts"
+@fa "تلاش‌ها"
+pub func Attempts(c: Client): int:
+    if c.p == null:
+        ret 0
+    end
+    ret _mgr_of(c)[0].attempts
+end
+
+@en "EndpointOf"
+@fa "نقطه پایانی"
+pub func EndpointOf(c: Client): Endpoint:
+    if c.p == null:
+        ret Endpoint {}
+    end
+    ret _mgr_of(c)[0].ep
+end
+
+@en "Send"
+@fa "فرستادن"
+pub func Send(c: Client, msg: str): bool:
+    ret EmitStr(c, "message", msg)
+end
+
+@en "PrependAny"
+@fa "پیش‌افزودن دلخواه"
+pub func PrependAny(c: Client, cb: func (Event)):
+    if c.p == null:
+        ret
+    end
+    sp := _sock(c)
+    mut fresh := Vector {} as Vector<Handler>
+    fresh.push(Handler { name = "*", cb = cb })
+    repeat sp[0].any_handlers.len() in i:
+        fresh.push(sp[0].any_handlers.get(i))
+    end
+    sp[0].any_handlers.free()
+    sp[0].any_handlers = fresh
+end
+
+@en "OnAnyOutgoing"
+@fa "روی دلخواه خروجی"
+pub func OnAnyOutgoing(c: Client, cb: func (Event)):
+    if c.p == null:
+        ret
+    end
+    sp := _sock(c)
+    sp[0].out_handlers.push(Handler { name = "*", cb = cb })
+end
+
+@en "PrependAnyOutgoing"
+@fa "پیش‌افزودن دلخواه خروجی"
+pub func PrependAnyOutgoing(c: Client, cb: func (Event)):
+    if c.p == null:
+        ret
+    end
+    sp := _sock(c)
+    mut fresh := Vector {} as Vector<Handler>
+    fresh.push(Handler { name = "*", cb = cb })
+    repeat sp[0].out_handlers.len() in i:
+        fresh.push(sp[0].out_handlers.get(i))
+    end
+    sp[0].out_handlers.free()
+    sp[0].out_handlers = fresh
+end
+
+@en "OffAnyOutgoing"
+@fa "خاموش دلخواه خروجی"
+pub func OffAnyOutgoing(c: Client):
+    if c.p == null:
+        ret
+    end
+    sp := _sock(c)
+    sp[0].out_handlers.free()
+    sp[0].out_handlers = Vector {} as Vector<Handler>
+end
+
+@en "ListenerCount"
+@fa "شمار شنونده"
+pub func ListenerCount(c: Client, name: str): int:
+    if c.p == null:
+        ret 0
+    end
+    sp := _sock(c)
+    mut n := 0
+    repeat sp[0].handlers.len() in i:
+        h := sp[0].handlers.get(i)
+        if h.alive and h.name == name:
+            n += 1
+        end
+    end
+    ret n
+end
+
+@en "HasListeners"
+@fa "شنونده دارد"
+pub func HasListeners(c: Client, name: str): bool:
+    ret ListenerCount(c, name) > 0
+end
+
+@en "AnyListenerCount"
+@fa "شمار شنونده دلخواه"
+pub func AnyListenerCount(c: Client): int:
+    if c.p == null:
+        ret 0
+    end
+    sp := _sock(c)
+    ret sp[0].any_handlers.len() + sp[0].out_handlers.len()
+end
+
+@en "Disconnected"
+@fa "قطع شده"
+pub func Disconnected(c: Client): bool:
+    ret not IsConnected(c)
+end
+
+@en "Active"
+@fa "فعال"
+pub func Active(c: Client): bool:
+    if c.p == null:
+        ret false
+    end
+    ret _sock(c)[0].active
+end
+
+@en "Pending"
+@fa "در انتظار"
+pub func Pending(c: Client): int:
+    if c.p == null:
+        ret 0
+    end
+    sp := _sock(c)
+    mut n := 0
+    repeat sp[0].waiters.len() in i:
+        if sp[0].waiters.get(i).alive:
+            n += 1
+        end
+    end
+    ret n
+end
+
+@en "Queued"
+@fa "در صف"
+pub func Queued(c: Client): int:
+    if c.p == null:
+        ret 0
+    end
+    ret _sock(c)[0].inbox.len()
+end
+
+@en "TransportName"
+@fa "نام حمل‌ونقل"
+pub func TransportName(c: Client): str:
+    if c.p == null:
+        ret ""
+    end
+    if _mgr_of(c)[0].transport == TRANSPORT_WEBSOCKET:
+        ret "websocket"
+    end
+    ret "polling"
+end
+
+@en "PingInterval"
+@fa "بازه پینگ"
+pub func PingInterval(c: Client): int:
+    if c.p == null:
+        ret 0
+    end
+    ret _mgr_of(c)[0].ping_interval
+end
+
+@en "PingTimeout"
+@fa "مهلت پینگ"
+pub func PingTimeout(c: Client): int:
+    if c.p == null:
+        ret 0
+    end
+    ret _mgr_of(c)[0].ping_timeout
+end
+
+@en "MaxPayload"
+@fa "بیشینه بار"
+pub func MaxPayload(c: Client): int:
+    if c.p == null:
+        ret 0
+    end
+    ret _mgr_of(c)[0].max_payload
+end
+
+@en "SetAuth"
+@fa "تنظیم احراز"
+pub func SetAuth(c: Client, auth json: str):
+    if c.p == null:
+        ret
+    end
+    sp := _sock(c)
+    sp[0].auth = auth json
+end
+
+@en "AuthOf"
+@fa "احراز"
+pub func AuthOf(c: Client): str:
+    if c.p == null:
+        ret ""
+    end
+    ret _sock(c)[0].auth
+end
+
+@en "SetReconnection"
+@fa "تنظیم اتصال دوباره"
+pub func SetReconnection(m: Manager, enabled: bool):
+    if m.p == null:
+        ret
+    end
+    mp := _mgr(m)
+    mp[0].opts.reconnection = enabled
+end
+
+@en "SetReconnectionAttempts"
+@fa "تنظیم شمار اتصال دوباره"
+pub func SetReconnectionAttempts(m: Manager, n: int):
+    if m.p == null:
+        ret
+    end
+    mp := _mgr(m)
+    mp[0].opts.reconnection_attempts = n
+end
+
+@en "SetReconnectionDelay"
+@fa "تنظیم تاخیر دوباره"
+pub func SetReconnectionDelay(m: Manager, ms: int):
+    if m.p == null:
+        ret
+    end
+    mp := _mgr(m)
+    mp[0].opts.reconnection_delay = ms
+end
+
+@en "SetReconnectionDelayMax"
+@fa "تنظیم بیشینه تاخیر"
+pub func SetReconnectionDelayMax(m: Manager, ms: int):
+    if m.p == null:
+        ret
+    end
+    mp := _mgr(m)
+    mp[0].opts.reconnection_delay_max = ms
+end
+
+@en "SetRandomizationFactor"
+@fa "تنظیم ضریب تصادفی"
+pub func SetRandomizationFactor(m: Manager, percent: int):
+    if m.p == null:
+        ret
+    end
+    mp := _mgr(m)
+    mp[0].opts.randomization_factor = percent
+end
+
+@en "SetTimeout"
+@fa "تنظیم مهلت"
+pub func SetTimeout(m: Manager, ms: int):
+    if m.p == null:
+        ret
+    end
+    mp := _mgr(m)
+    mp[0].opts.timeout = ms
+end
+
+@en "OptionsOf"
+@fa "گزینه‌های مدیر"
+pub func OptionsOf(m: Manager): Options:
+    if m.p == null:
+        ret Options {}
+    end
+    ret _mgr(m)[0].opts
+end
+
+@en "Sockets"
+@fa "سوکت‌ها"
+pub func Sockets(m: Manager): Vector<Client>:
+    mut out := Vector {} as Vector<Client>
+    if m.p == null:
+        ret out
+    end
+    mp := _mgr(m)
+    repeat mp[0].socks.len() in i:
+        out.push(mp[0].socks.get(i))
+    end
+    ret out
+end
+
+@en "Open"
+@fa "باز کردن"
+pub func Open(m: Manager): bool:
+    if m.p == null:
+        ret false
+    end
+    mp := _mgr(m)
+    if mp[0].state == ST_OPEN:
+        ret true
+    end
+    if not mp[0].ep.ok:
+        ret false
+    end
+    if not _engine_open(mp):
+        if mp[0].opts.reconnection:
+            mp[0].state = ST_WAITING
+            mp[0].retry_at = time.MonoMillis() + _backoff(mp)
+        end
+        ret false
+    end
+    mp[0].attempts = 0
+    ret true
+end
+
+@en "IsOpen"
+@fa "باز است"
+pub func IsOpen(m: Manager): bool:
+    if m.p == null:
+        ret false
+    end
+    ret _mgr(m)[0].state == ST_OPEN
+end
+
+@en "ManagerError"
+@fa "خطای مدیر"
+pub func ManagerError(m: Manager): str:
+    if m.p == null:
+        ret "no manager"
+    end
+    ret _mgr(m)[0].last_error
+end
+
+@en "Refused"
+@fa "رد شده"
+pub func Refused(c: Client): bool:
+    if c.p == null:
+        ret false
+    end
+    ret _sock(c)[0].refused
+end
+
+@en "RefusalReason"
+@fa "دلیل رد"
+pub func RefusalReason(c: Client): str:
+    if c.p == null:
+        ret ""
+    end
+    ret _sock(c)[0].refusal
+end

@@ -22,7 +22,6 @@ kind = "bin"              # "bin" (default) or "lib"
 
 [dependencies]
 "github.com/owner/repo" = "v1.2.0"           # a GitHub package, pinned to a tag
-"db.redis" = "v0.5.9"                         # an official package (follows the compiler)
 "example.com/me/lib" = { path = "../lib" }    # a local folder standing in for a package
 
 [native.sqlite3]          # only in packages that wrap a C library
@@ -102,10 +101,17 @@ clean` keeps this file.
 
 ```salam
 import net.http                          // standard library
-import db.redis                          // official package, after `salam add db.redis`
+import db.redis                          // standard library too, nothing to add
 import "github.com/owner/repo"           // binds repo
 import tools "github.com/owner/repo/sub" // the package in the repo's sub/ folder
 ```
+
+Every package in the standard library comes with Salam, the database clients,
+machine learning, audio and network services included. They need no entry in
+`salam.toml` and no `salam add`; the commands below are for packages that
+somebody publishes in their own repository. A `salam.toml` from an older
+release that still lists a library package (`"db.redis" = "v0.5.9"`) keeps
+working: the line is ignored, and `salam remove db.redis` takes it out.
 
 A path import resolves to `<repo>/<last segment>.salam` (or
 `<repo>/<sub>/<sub>.salam`). It only works inside a project whose
@@ -142,18 +148,17 @@ exists, so a subgroup is not mistaken for a folder.
 | `salam install <pkg>[/cmd][@v]`         | build that program's `main.salam` into `~/.salam/bin`                                       |
 | `salam install`                         | the same for the project you are in                                                         |
 | `salam uninstall [name]`                | remove an installed program; with no name, list them                                        |
-| `salam search <words>`                  | search the standard library, the official packages and `registry/index.toml`                |
+| `salam search <words>`                  | search the standard library and `registry/index.toml`                                       |
 | `salam build --lib[=static]`            | build a library and a C header from the entry file's `export:` block                        |
 
 ## Where things live
 
-| Path                                      | What                                              |
-| ----------------------------------------- | ------------------------------------------------- |
-| `~/.salam/pkg/<module>@<version>/`        | downloaded packages (`$SALAM_PKG` moves the root) |
-| `~/.salam/pkg/salam-packages@v<version>/` | the official packages for one compiler version    |
-| `~/.salam/pkg/native/`                    | C libraries built from source                     |
-| `~/.salam/pkg/installed.txt`              | what `salam install` put where                    |
-| `~/.salam/bin/`                           | installed programs (`$SALAM_BIN` moves it)        |
+| Path                               | What                                              |
+| ---------------------------------- | ------------------------------------------------- |
+| `~/.salam/pkg/<module>@<version>/` | downloaded packages (`$SALAM_PKG` moves the root) |
+| `~/.salam/pkg/native/`             | C libraries built from source                     |
+| `~/.salam/pkg/installed.txt`       | what `salam install` put where                    |
+| `~/.salam/bin/`                    | installed programs (`$SALAM_BIN` moves it)        |
 
 ## Environment
 
@@ -162,8 +167,6 @@ exists, so a subgroup is not mistaken for a folder.
 | `SALAM_PKG`                   | the package cache root                                                  |
 | `SALAM_BIN`                   | where `salam install` puts programs                                     |
 | `SALAM_NO_GIT=1`              | download GitHub packages as tar.gz even when Git is installed           |
-| `SALAM_PACKAGES`              | a folder of official packages to use instead of downloading them        |
-| `SALAM_RELEASES_URL`          | the base URL official package archives are downloaded from              |
 | `SALAM_SUMDB`                 | the published checksum list (a file or URL; `off` to skip)              |
 | `SALAM_REGISTRY`              | a registry file or URL for `salam search`                               |
 | `SALAM_NATIVE=source\|system` | build C libraries from source, or always use the system copy            |

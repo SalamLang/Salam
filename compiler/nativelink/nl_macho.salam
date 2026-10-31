@@ -16,7 +16,8 @@ const MO_TCONST := 9
 const MO_TVARS := 10
 const MO_TDATA := 11
 const MO_TBSS := 12
-const MO_COUNT := 13
+const MO_UNW := 13
+const MO_COUNT := 14
 const MO_DROP := 0 - 1
 
 pub struct Mo:
@@ -47,6 +48,7 @@ pub struct Mo:
     pub dw_size: i64 = 0
     pub dw_vm: i64 = 0
     pub com_g: Vector<int> = Vector {}
+    pub unw_n: int = 0
 end
 
 func is_macho(p: u8*, base: i64): bool:
@@ -646,6 +648,7 @@ func macho_link(l &: Nl, out: str):
     if not l.ok:
         ret
     end
+    t.unw_n = mo_fde_count(l, t)
     if not l.strip:
         dbg_collect_mo(l)
     end
@@ -692,6 +695,9 @@ func macho_link(l &: Nl, out: str):
         ret
     end
     mo_got_fill(l, t, buf)
+    if t.unw_n > 0:
+        mo_unwind(l, t, buf)
+    end
     if l.dg_name.len() > 0:
         dbg_build_mo(l)
         repeat l.dg_bytes.len() in dq:
@@ -718,6 +724,12 @@ func mo_layout(l &: Nl, t &: Mo):
     mo_place_class(l, t, MO_CSTR, pos)
     mo_place_class(l, t, MO_TCONST, pos)
     mo_place_class(l, t, MO_EH, pos)
+    pos = align_to(pos, 4 as i64)
+    t.addr[MO_UNW] = t.base + pos
+    t.fpos[MO_UNW] = pos
+    t.size[MO_UNW] = mo_unw_size(t.unw_n)
+    t.align[MO_UNW] = 4 as i64
+    pos = pos + t.size[MO_UNW]
     t.text_end = align_to(pos, t.page)
     pos = t.text_end
     t.dc_start = pos
@@ -787,6 +799,9 @@ func mo_has(l &: Nl, t &: Mo, k: int): bool:
     end
     if k == MO_GOT:
         ret t.got_k.len() > 0
+    end
+    if k == MO_UNW:
+        ret t.unw_n > 0
     end
     repeat l.s_obj.len() in s:
         if t.out_k[s] == k:
@@ -1281,7 +1296,7 @@ func mo_write(l &: Nl, t &: Mo, buf: u8*, out: str):
     mut ncmd := 0
     mo_seg(h, "__PAGEZERO", 0 as i64, t.base, 0 as i64, 0 as i64, 0, 0, 0)
     ncmd += 1
-    ntext := mo_count(l, t, [MO_TEXT, MO_STUBS, MO_CSTR, MO_TCONST, MO_EH])
+    ntext := mo_count(l, t, [MO_TEXT, MO_STUBS, MO_CSTR, MO_TCONST, MO_EH, MO_UNW])
     mo_seg(h, "__TEXT", t.base, t.text_end, 0 as i64, t.text_end, 5, ntext, 0)
     ncmd += 1
     if mo_has(l, t, MO_TEXT):
@@ -1298,6 +1313,9 @@ func mo_write(l &: Nl, t &: Mo, buf: u8*, out: str):
     end
     if mo_has(l, t, MO_EH):
         mo_sect(h, "__eh_frame", "__TEXT", t.addr[MO_EH], t.size[MO_EH], t.fpos[MO_EH], t.align[MO_EH], 0x6800000B as i64, 0, 0)
+    end
+    if mo_has(l, t, MO_UNW):
+        mo_sect(h, "__unwind_info", "__TEXT", t.addr[MO_UNW], t.size[MO_UNW], t.fpos[MO_UNW], 4 as i64, 0 as i64, 0, 0)
     end
     ndc := mo_count(l, t, [MO_GOT, MO_INIT, MO_CONST])
     mo_seg(h, "__DATA_CONST", t.base + t.dc_start, t.dc_end - t.dc_start, t.dc_start, t.dc_end - t.dc_start, 3, ndc, 16)
@@ -1521,7 +1539,7 @@ func mo_secno(l &: Nl, t &: Mo, s: int): int:
     end
     k := t.out_k[s]
     mut n := 0
-    each kk in [MO_TEXT, MO_STUBS, MO_CSTR, MO_TCONST, MO_EH, MO_GOT, MO_INIT, MO_CONST, MO_DATA, MO_TVARS, MO_TDATA, MO_TBSS, MO_BSS]:
+    each kk in [MO_TEXT, MO_STUBS, MO_CSTR, MO_TCONST, MO_EH, MO_UNW, MO_GOT, MO_INIT, MO_CONST, MO_DATA, MO_TVARS, MO_TDATA, MO_TBSS, MO_BSS]:
         if mo_has(l, t, kk):
             n += 1
             if kk == k:

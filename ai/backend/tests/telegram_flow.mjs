@@ -134,6 +134,7 @@ async function main() {
   });
   check("/new starts a second chat", !!two);
   await say(1001, "/new");
+  await lastText(1001, /fresh chat/);
   await say(1001, "این یک پیام فارسی بسیار بلند برای آزمایش عنوان گفت‌وگو در فهرست است");
   await until(async () => (await api("GET", "/chats", token)).json?.chats?.some((c) => c.title.startsWith("این یک پیام")));
   await sleep(1500);

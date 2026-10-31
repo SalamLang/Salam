@@ -1,148 +1,70 @@
 pkg.en = error
 pkg.name = error
 pkg.group = System and tools
-pkg.summary = Structured errors with a kind, a message, a chain of causes, metadata and a retry policy.
-pkg.title = The error package in Salam | Structured errors and retries
-pkg.description = The error package in Salam: building an error with a kind and a message, wrapping an error with its cause, metadata, testing the kind, and a retry policy with exponential backoff, with examples.
+pkg.summary = The one Error type behind throw, try and catch: a kind, a message, where it happened, and a retry policy.
+pkg.title = The error package in Salam | Error, ErrorKind, throw, try and catch
+pkg.description = The error package in Salam: the Error type that throw, try and catch carry, its kinds, wrapping an error with context, positions for parsers, and a retry policy with exponential backoff, with examples.
 pkg.intro <<
-<p>Salam has no exceptions, so a function that may fail says so in its result. The <code>error</code> package gives your own code one error type for that: an <code>error.Error</code> is either nil, meaning everything went well, or an error with a <strong>kind</strong>, such as <code>not_found</code>, and a <strong>message</strong>. The kind is for the code to decide on; the message is for a person to read. The usual shape is an <code>err &amp;: error.Error</code> out parameter, as in the standard library.</p>
-<p>When an error comes up from a lower layer, <code>Wrap</code> it so the current layer's explanation is added. The final message shows the whole chain, as in <em>could not save the report: the disk is full</em>, and <code>RootMessage</code> gives the original cause. For transient errors, such as a dropped network connection, <code>RetryPolicy</code> says how often to try again and how long to wait between attempts.</p>
-<p>Neighbouring packages: <a href="/std/result/">result</a> and <a href="/std/option/">option</a> return a value or its absence in one result, which suits short chains with <code>?</code>; <a href="/std/os-error/">os/error</a> holds the last error of a file or process call. Many std packages, such as the database clients, have an <code>Error</code> type of their own; turn it into an <code>error.Error</code> at the edge of your code when you want one type throughout.</p>
+<p>A function that can fail says so in its signature with <code>throws</code>, and reports the failure with <code>throw</code>. The caller either passes the error on with <code>try</code>, or handles it in a <code>try: ... catch e: ... end</code> block. What travels is always an <code>Error</code> from this package, so an error from a JSON decoder, a file read and your own code all look the same to the caller. <code>Error</code> and <code>ErrorKind</code> need no import; import <code>error</code> only for the helper functions below.</p>
+<p>An <code>Error</code> has a <strong>kind</strong>, such as <code>ErrorKind.NotFound</code>, for the code to decide on, and a <strong>message</strong> for a person to read. Parsers also fill in where the problem is: an <code>offset</code>, a <code>line</code> and <code>column</code>, and a <code>path</code> such as <code>$.users[3].age</code>. A package can put a precise <code>code</code> of its own, such as <code>json.trailing_data</code>, next to the general kind. When an error passes through a layer that knows more, <code>wrap</code> adds that layer's explanation in front, and the kind stays the same.</p>
+<p>Under the hood a <code>throws</code> function returns a <code>Throws</code> value, and <code>try</code> checks it right after the call. Nothing is unwound and nothing is hidden: <code>defer</code> runs as with any other early return, and a call that can throw always carries <code>try</code> or sits inside a <code>try:</code> block. A bug, such as an index out of bounds, is not an error value: it still stops the program, and <code>catch</code> does not see it.</p>
+<p>Neighbouring packages: <a href="/std/result/">result</a> and <a href="/std/option/">option</a> keep a value or its absence in one place, when you want to store a result instead of handling it right away.</p>
 <p>The things people get wrong:</p>
 <ul>
-<li><code>Wrap</code> and <code>WithMeta</code> on a nil error make a real error. Check <code>Ok</code> before you wrap.</li>
-<li>Every <code>Wrap</code>, <code>WithMeta</code> and <code>WrapKind</code> returns a new error with its own copies, and leaves the old one as it was. Free the ones you no longer need with <code>Free</code>.</li>
-<li><code>Is</code> and the <code>Is...</code> helpers look at every layer, not only the outer kind. After <code>WrapKind</code> to <code>internal</code>, an error that started as a timeout still answers true to <code>IsTimeout</code> and <code>IsRetryable</code> (see <a href="#guide-format">below</a>). Compare <code>Kind</code> when only the outer kind should count.</li>
-<li><code>DelayForAttempt</code> only computes the wait; your loop has to sleep. It adds no random jitter, so many clients that fail together retry together.</li>
+<li>A call to a <code>throws</code> function needs <code>try</code> in front of it, or a <code>try:</code> block around it. The compiler refuses it otherwise (E139).</li>
+<li><code>try</code> on its own passes the error to the caller, so it only works in a function that is itself <code>throws</code> (E140). In <code>main</code>, either declare <code>func main throws:</code> or use a <code>try:</code> block.</li>
+<li><code>try x catch fallback</code> evaluates the fallback first, every time. Keep it a plain value.</li>
+<li><code>wrap</code>, <code>with_code</code>, <code>with_path</code> and <code>with_position</code> return a new error and leave the old one as it was.</li>
+<li>Decide by <code>kind</code> or <code>is</code>, not by reading the message: messages are for people and may change.</li>
 </ul>
 
 <h2 id="guide-layers">Errors through the layers of a program</h2>
-<p>A typical program has layers: one reads data, the next builds something from it, and the top one answers a user. Each layer that can fail takes an <code>err &amp;: error.Error</code> out parameter, sets it to <code>error.Nil()</code> on success, and on failure either makes a new error or wraps the one it got from below. Only the top layer decides what to do, and it decides by <strong>kind</strong>, not by reading the message.</p>
+<p>A typical program has layers: one reads data, the next builds something from it, and the top one answers a user. Each layer that can fail is <code>throws</code>. A middle layer that has something to add catches the error, wraps it, and throws it again; the top layer decides what to do by <strong>kind</strong>.</p>
 {{example.error-guide-layers}}
-<p>Wrapping keeps the kind of the original error, so the top layer can still see that the root cause was "not found" and answer 404. <code>WithMeta</code> attaches a detail, here the missing id, that the code can read back with <code>Meta</code> without parsing text.</p>
+<p>Wrapping keeps the kind of the original error, so the top layer can still see that the root cause was "not found" and answer 404. The <code>code</code> carries a detail, here the missing id, that the code can read without parsing text.</p>
 
 <h2 id="guide-retry">A retry loop</h2>
-<p><code>ShouldRetry</code> answers the whole question in one call: is there an error at all, is it the kind that may go away by itself (<code>unavailable</code>, <code>timeout</code> or <code>io</code>), and are there attempts left? <code>DelayForAttempt</code> gives the wait before the next try, doubling each time up to the maximum.</p>
+<p><code>ShouldRetry</code> answers the whole question in one call: is the error the kind that may go away by itself (<code>Unavailable</code>, <code>Timeout</code> or <code>Io</code>), and are there attempts left? <code>DelayForAttempt</code> gives the wait before the next try, doubling each time up to the maximum. When the attempts run out, the last error is wrapped and thrown to the caller.</p>
 {{example.error-guide-retry}}
 <p>An invalid argument is never retried: sending the same bad request again gives the same answer. In a server, keep the total wait well below the time the caller is willing to wait for you.</p>
 
 <h2 id="guide-validate">Collect every problem at once</h2>
-<p>For a form or a config file, stopping at the first mistake makes the user fix them one by one. Collect the errors in a vector instead and show them all. <code>Newf</code> fills the <code>{}</code> placeholders of a message from a vector of strings, and a <code>field</code> meta entry says which input each error is about.</p>
+<p>For a form or a config file, stopping at the first mistake makes the user fix them one by one. An <code>Error</code> is an ordinary value, so collect them in a vector instead and show them all, with <code>path</code> naming the field each one is about. Throw once at the end if any were found.</p>
 {{example.error-guide-validate}}
-
-<h2 id="guide-format">Logging an error with its trace</h2>
-<p><code>NewAt</code> and <code>WrapAt</code> also record where the error passed, which <code>Trace</code> joins with <code>-&gt;</code>. <code>WrapKind</code> gives the error a new outer kind, here <code>internal</code> once the program has decided it cannot start. <code>Format</code> puts everything on a few lines for a log: the outer kind in brackets, the full message, the trace and each meta entry.</p>
-{{example.error-guide-format}}
-<p>The last two lines are the trap from the list above: the error now reads as <code>internal</code>, but <code>Is</code> still finds the <code>io</code> kind of its root cause, so <code>IsRetryable</code> says yes. Each layer frees the error it got from below with <code>defer error.Free(inner)</code>; that is safe because the wrapped error has its own copies.</p>
 
 <h2 id="guide-kinds">Choosing a kind</h2>
 <div class="table-wrap"><table>
 <thead><tr><th>Kind</th><th>Use it when</th><th>Retry?</th></tr></thead>
 <tbody>
-<tr><td><code>KindInvalidArgument</code></td><td>The caller passed bad input</td><td>No</td></tr>
-<tr><td><code>KindNotFound</code></td><td>The thing asked for does not exist</td><td>No</td></tr>
-<tr><td><code>KindAlreadyExists</code></td><td>Creating something that is already there</td><td>No</td></tr>
-<tr><td><code>KindPermissionDenied</code></td><td>The caller may not do this</td><td>No</td></tr>
-<tr><td><code>KindUnavailable</code></td><td>A service is down or busy</td><td>Yes</td></tr>
-<tr><td><code>KindTimeout</code></td><td>Something took too long</td><td>Yes</td></tr>
-<tr><td><code>KindIO</code></td><td>A file or device operation failed</td><td>Yes</td></tr>
-<tr><td><code>KindCanceled</code></td><td>The work was stopped on purpose</td><td>No</td></tr>
-<tr><td><code>KindInternal</code></td><td>A bug or a broken invariant</td><td>No</td></tr>
+<tr><td><code>Syntax</code></td><td>The input does not follow its format</td><td>No</td></tr>
+<tr><td><code>UnexpectedEnd</code></td><td>The input stopped in the middle of something</td><td>No</td></tr>
+<tr><td><code>TypeMismatch</code></td><td>A value has the wrong type, such as text where a number belongs</td><td>No</td></tr>
+<tr><td><code>MissingKey</code></td><td>A required key or field is absent</td><td>No</td></tr>
+<tr><td><code>OutOfRange</code></td><td>A number or index is outside what is allowed</td><td>No</td></tr>
+<tr><td><code>InvalidArgument</code></td><td>The caller passed bad input</td><td>No</td></tr>
+<tr><td><code>NotFound</code></td><td>The thing asked for does not exist</td><td>No</td></tr>
+<tr><td><code>PermissionDenied</code></td><td>The caller may not do this</td><td>No</td></tr>
+<tr><td><code>Unavailable</code></td><td>A service is down or busy</td><td>Yes</td></tr>
+<tr><td><code>Timeout</code></td><td>Something took too long</td><td>Yes</td></tr>
+<tr><td><code>Io</code></td><td>A file or device operation failed</td><td>Yes</td></tr>
+<tr><td><code>Internal</code></td><td>A broken invariant inside the program</td><td>No</td></tr>
 </tbody>
 </table></div>
-<p>Keep messages short and in lower case without a final full stop, because <code>Message</code> joins them with ": " into one sentence. Put values the code needs, such as ids and file names, in <code>WithMeta</code>, and show <code>Format</code> in logs, where the trace and meta entries help most.</p>
+<p>Keep messages short and in lower case without a final full stop, because <code>to_str</code> joins the context and the message with ": " into one sentence.</p>
 >>
 
-doc.KindUnknown = An unspecified kind.
-doc.KindNotFound = What was asked for was not found.
-doc.KindInvalidArgument = The input is wrong; trying again will not help.
-doc.KindPermissionDenied = Access is not allowed.
-doc.KindAlreadyExists = It is already there.
-doc.KindUnavailable = The service is unavailable for now; trying again may work.
-doc.KindTimeout = Time ran out; trying again may work.
-doc.KindCanceled = The work was cancelled.
-doc.KindInternal = An internal fault in the program.
-doc.KindIO = A read or write error.
-doc.KindUnimplemented = Not implemented yet.
-doc.Error = An error, or nil when <code>kind</code> is empty. It holds vectors, so free it with <code>Free</code>.
-doc.Error.kind = The outer kind of the error: one of the constants above, or one you define yourself; empty for nil.
-doc.Error.messages = The message from each layer, from the innermost cause to the outermost.
-doc.Error.kinds = The kind given at creation and each kind added by <code>WrapKind</code>.
-doc.Error.trace = The places recorded by <code>NewAt</code> and <code>WrapAt</code>, innermost first.
-doc.Error.meta_keys = The metadata keys.
-doc.Error.meta_vals = The metadata values.
 doc.RetryPolicy = A retry policy.
 doc.RetryPolicy.max_attempts = The greatest number of attempts; three by default.
 doc.RetryPolicy.base_delay_ms = The delay after the first failed attempt, in milliseconds; 100 by default.
 doc.RetryPolicy.max_delay_ms = The ceiling on the delay, in milliseconds; 5000 by default.
-doc.Nil = The nil error, meaning "no error".
-doc.IsNil = True when the error is nil.
-doc.Ok = The same as <code>IsNil</code>, and easier to read in a condition.
-doc.New = A new error with a kind and a message; an empty kind becomes <code>unknown</code>.
-doc.NewAt = A new error that also records the place it happened, such as a function name, in its trace.
-doc.Newf = A new error with a formatted message; every <code>{}</code> is filled with the next string from <code>args</code>.
-doc.Wrap = Puts a new message on an error and keeps the earlier ones; the kind does not change. When the error is nil it builds a new one of unknown kind.
-doc.WrapAt = Like <code>Wrap</code>, and adds the place to the trace.
-doc.WrapKind = Like <code>Wrap</code>, and sets a new outer kind. The earlier kinds stay in the error, so <code>Is</code> still finds them.
-doc.WithMeta = A copy of the error with a key and value pair added, such as a user id or a file path. On a nil error it makes an error of kind <code>unknown</code>.
-doc.Meta = The value of a metadata key, or an empty string when it is absent. With a repeated key, the first value wins.
-doc.Kind = The outer kind of the error; empty for nil.
-doc.Is = True when this kind is the error's kind at any layer, including kinds replaced by <code>WrapKind</code>.
-doc.Message = The full message, outermost layer first, joined with <code>: </code>.
-doc.RootMessage = The message of the innermost cause.
-doc.Trace = The recorded places, joined with <code> -&gt; </code>.
-doc.Format = The full text for a log: the kind in brackets and the message, then the trace and each meta entry on lines of their own. <code>&lt;nil&gt;</code> for nil.
-doc.IsNotFound = True when the error is of the "not found" kind.
-doc.IsInvalidArgument = For the "invalid argument" kind.
-doc.IsPermissionDenied = For the "permission denied" kind.
-doc.IsAlreadyExists = For the "already exists" kind.
-doc.IsTimeout = For the "timeout" kind.
-doc.IsCanceled = For the "cancelled" kind.
-doc.IsUnavailable = For the "unavailable" kind.
-doc.IsInternal = For the "internal" kind.
-doc.IsRetryable = True when the error is transient and worth retrying: a timeout, unavailability or a read or write error.
+doc.KindName = A short English name for a kind, such as "not found"; <code>to_str</code> uses it when the message is empty.
+doc.IsRetryable = True when the error is transient and worth retrying: a timeout, an unavailable service or a read or write error.
 doc.NewRetryPolicy = Builds a policy with a maximum number of attempts and a base and maximum delay.
 doc.DelayForAttempt = How many milliseconds to wait after attempt number <code>attempt</code> failed: the base delay after the first, then doubling each time up to the ceiling. It does not sleep.
-doc.ShouldRetry = True when an error happened, is retryable at any layer, and <code>attempt</code> is still below <code>max_attempts</code>.
-doc.Free = Releases the error's vectors. Wrapped copies are not affected.
+doc.ShouldRetry = True when the error is retryable and <code>attempt</code> is still below <code>max_attempts</code>.
 
-ex.KindUnknown = error-New
-ex.KindNotFound = error-New
-ex.KindInvalidArgument = error-New
-ex.KindIO = error-New
-ex.Error = error-New
-ex.Nil = error-New
-ex.IsNil = error-New
-ex.Ok = error-New
-ex.NewAt = error-New
-ex.Newf = error-New
-ex.Kind = error-New
-ex.Is = error-New
-ex.Message = error-New
-ex.IsNotFound = error-New
-ex.IsInvalidArgument = error-New
-ex.Free = error-New
-ex.KindInternal = error-Wrap
-ex.WrapAt = error-Wrap
-ex.WrapKind = error-Wrap
-ex.WithMeta = error-Wrap
-ex.Meta = error-Wrap
-ex.RootMessage = error-Wrap
-ex.Trace = error-Wrap
-ex.Format = error-Wrap
-ex.IsInternal = error-Wrap
-ex.KindPermissionDenied = error-Kinds
-ex.KindAlreadyExists = error-Kinds
-ex.KindUnavailable = error-Kinds
-ex.KindTimeout = error-Kinds
-ex.KindCanceled = error-Kinds
-ex.KindUnimplemented = error-Kinds
-ex.IsPermissionDenied = error-Kinds
-ex.IsAlreadyExists = error-Kinds
-ex.IsTimeout = error-Kinds
-ex.IsCanceled = error-Kinds
-ex.IsUnavailable = error-Kinds
-ex.IsRetryable = error-Kinds
+ex.KindName = error-RetryPolicy
+ex.IsRetryable = error-RetryPolicy
 ex.NewRetryPolicy = error-RetryPolicy
 ex.DelayForAttempt = error-RetryPolicy
 ex.ShouldRetry = error-RetryPolicy

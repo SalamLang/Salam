@@ -124,10 +124,6 @@ Or from `cmd.exe`:
 curl -fsSLo "%TEMP%\salam-install.bat" https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.bat && "%TEMP%\salam-install.bat" --version 0.5.0
 ```
 
-## 📜 History
-
-This repository's history starts with the [One](https://github.com/One-Language/One) language project (2018 to 2024-02-21), kept unchanged. Salam's own history begins on 2024-02-24.
-
 ## 🧩 Editor Support
 
 ### [Visual Studio Code](https://code.visualstudio.com/)

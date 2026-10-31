@@ -10,7 +10,6 @@ import { fetchSandbox } from "../sandbox-client";
 import {
   BODY_TOO_LARGE_MESSAGE,
   MAX_BODY_BYTES,
-  byteLength,
   parseRunOptions,
   validateRunInput,
 } from "../validation";
@@ -41,7 +40,11 @@ async function checkRateLimit(
   return null;
 }
 
-type SourceCodeResult = { code: string } | { error: Response };
+const textDecoder = new TextDecoder();
+
+type SourceCodeResult =
+  | { code: string; codeBytes: number }
+  | { error: Response };
 
 async function readSourceCode(
   request: Request,
@@ -52,18 +55,19 @@ async function readSourceCode(
     return { error: payloadTooLarge(BODY_TOO_LARGE_MESSAGE, requestId) };
   }
 
-  let code: string;
+  let buf: ArrayBuffer;
   try {
-    code = await request.text();
+    buf = await request.arrayBuffer();
   } catch (err) {
     log("warn", "body_read_error", { requestId, error: errMessage(err) });
     return { error: badRequest("could not read request body", requestId) };
   }
 
-  if (byteLength(code) > MAX_BODY_BYTES) {
+  if (buf.byteLength > MAX_BODY_BYTES) {
     return { error: payloadTooLarge(BODY_TOO_LARGE_MESSAGE, requestId) };
   }
-  return { code };
+  const code = textDecoder.decode(buf);
+  return { code, codeBytes: buf.byteLength };
 }
 
 export async function handleRun(
@@ -79,7 +83,7 @@ export async function handleRun(
 
   const sourceResult = await readSourceCode(request, requestId);
   if ("error" in sourceResult) return sourceResult.error;
-  const { code } = sourceResult;
+  const { code, codeBytes } = sourceResult;
 
   const { type, engine, language } = parseRunOptions(url);
   const validationError = validateRunInput({ code, type, engine, language });
@@ -98,7 +102,7 @@ export async function handleRun(
     type,
     engine,
     language,
-    codeBytes: byteLength(code),
+    codeBytes,
   });
   const startedAt = Date.now();
 

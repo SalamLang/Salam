@@ -603,6 +603,73 @@ pub func Record(chat: str, mid: str, uid: str, files: Vector<Upload>, now: str):
     ret all
 end
 
+pub func Persist(queue_id: str, files: Vector<Upload>): bool:
+    mut all := true
+    each u in files:
+        mut a := Vector {} as Vector<str>
+        a.push(queue_id)
+        a.push(u.name)
+        a.push(u.kind)
+        a.push(u.mime.len() > 0 ? u.mime : "text/plain")
+        a.push("" + u.size)
+        a.push(u.path)
+        a.push(u.prompt)
+        a.push(u.kind == "archive" ? u.data : "")
+        aistore.Lock()
+        ok := aistore.Run("INSERT INTO chat_queue_files (queue_id, name, kind, mime, size, path, prompt, listing) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)", a)
+        aistore.Unlock()
+        if not ok:
+            all = false
+        end
+    end
+    ret all
+end
+
+pub func Revive(queue_id: str): Vector<Upload>:
+    mut out := Vector {} as Vector<Upload>
+    mut a := Vector {} as Vector<str>
+    a.push(queue_id)
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT name, kind, mime, size, path, prompt, listing FROM chat_queue_files WHERE queue_id = ?1 ORDER BY id", a)
+    until aistore.Next(rows):
+        mut u := Upload {}
+        u.name = aistore.Text(rows, 0)
+        u.kind = aistore.Text(rows, 1)
+        u.mime = aistore.Text(rows, 2)
+        u.size = aistore.Text(rows, 3).to_int()
+        u.path = aistore.Text(rows, 4)
+        u.prompt = aistore.Text(rows, 5)
+        u.data = u.kind == "archive" ? aistore.Text(rows, 6) : ""
+        out.push(u)
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    mut i := 0
+    until i < out.len():
+        mut u := out.get(i)
+        if u.kind == "image" or u.kind == "pdf":
+            u.data = read_b64(u.path)
+            out.set(i, u)
+        end
+        i += 1
+    end
+    ret out
+end
+
+pub func QueuedMetas(queue_id: str): str:
+    mut items := Vector {} as Vector<str>
+    mut a := Vector {} as Vector<str>
+    a.push(queue_id)
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT id, name, kind, mime, size FROM chat_queue_files WHERE queue_id = ?1 ORDER BY id", a)
+    until aistore.Next(rows):
+        items.push(meta_json(aistore.Text(rows, 0), aistore.Text(rows, 1), aistore.Text(rows, 2), aistore.Text(rows, 3), aistore.Text(rows, 4)))
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    ret json.Array(items)
+end
+
 pub func Metas(files: Vector<Upload>): str:
     mut items := Vector {} as Vector<str>
     mut i := 0

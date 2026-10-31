@@ -39,6 +39,7 @@ pub fn beat(app: &AppHandle) {
     app.state::<Watchdog>().beat();
 }
 
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 pub fn disarm(app: &AppHandle) {
     app.state::<Watchdog>().disarm();
 }

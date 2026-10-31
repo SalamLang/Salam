@@ -72,9 +72,7 @@ pub async fn run(app: AppHandle) {
         let Some(window) = app.get_webview_window("main") else {
             continue;
         };
-        let awake = window.is_visible().unwrap_or(false)
-            && !window.is_minimized().unwrap_or(true)
-            && window.is_focused().unwrap_or(false);
+        let awake = window.is_visible().unwrap_or(false) && !window.is_minimized().unwrap_or(true) && window.is_focused().unwrap_or(false);
         if !awake {
             continue;
         }

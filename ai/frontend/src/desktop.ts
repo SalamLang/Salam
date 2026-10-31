@@ -3,7 +3,7 @@ import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 export const isDesktop = isTauri();
 
-export type AgentMode = "ask" | "auto" | "readonly";
+export type AgentMode = "ask" | "auto" | "readonly" | "everything";
 export type AgentAnswer = "allow" | "always" | "deny";
 export type CallState = "pending" | "running" | "done" | "error" | "denied";
 export type CallKind = "read" | "write" | "exec";
@@ -58,6 +58,7 @@ export const agent = {
     invoke<boolean>("agent_decide", { callId, answer }),
   stop: (callId: string) => invoke<boolean>("agent_stop", { callId }),
   pending: () => invoke<Omit<AgentCall, "state" | "output">[]>("agent_pending"),
+  alive: () => invoke<void>("agent_alive"),
   projectContext: (workspace: string) =>
     invoke<ProjectContext>("agent_project_context", { workspace }),
   notify: (kind: NotifyKind, chat?: string, text?: string) =>
@@ -108,7 +109,7 @@ function write(key: string, value: string) {
 
 export function savedMode(chat: string): AgentMode {
   const m = read(MODE_KEY + chat);
-  return m === "auto" || m === "readonly" ? m : "ask";
+  return m === "auto" || m === "readonly" || m === "everything" ? m : "ask";
 }
 
 export function saveMode(chat: string, mode: AgentMode) {

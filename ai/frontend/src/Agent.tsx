@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, getToken } from "./api";
 import { agent, folderName, onAgent, type AgentAnswer, type AgentCall, type AgentInfo, type AgentMode } from "./desktop";
-import { IconAlert, IconChevronDown, IconClose, IconFile, IconFolder, IconSearch, IconTerminal } from "./icons";
+import { IconAlert, IconChevronDown, IconClose, IconEye, IconFile, IconFolder, IconGlobe, IconSearch, IconShield, IconSpark, IconTerminal } from "./icons";
 import { useHighlighted } from "./Markdown";
-import { NotifyMenu, syncNotifyLanguage } from "./Notify";
+import { NotifyMenu, announceApproval, syncNotifyLanguage } from "./Notify";
+import { Select, type SelectOption } from "./Select";
 import { t } from "./i18n";
 
 export type CallView = AgentCall & { mid?: number };
@@ -35,6 +36,7 @@ export const MODE_LABEL: Record<AgentMode, string> = {
   ask: t("پیش از هر تغییر بپرس", "Ask before every change"),
   auto: t("خودکار در پوشه‌ی کاری", "Automatic in workspace folder"),
   readonly: t("فقط خواندنی", "Read only"),
+  everything: t("همه‌چیز را خودکار کن", "Accept everything, everywhere"),
 };
 
 function clipOutput(s: string): string {
@@ -57,6 +59,12 @@ export function useAgent(enabled: boolean, midFor: (chat: string) => number | un
   midRef.current = midFor;
   const errRef = useRef(onError);
   errRef.current = onError;
+  const noted = useRef(new Set<string>());
+  const notePending = useCallback((c: AgentCall) => {
+    if (c.state !== "pending" || noted.current.has(c.call_id)) return;
+    noted.current.add(c.call_id);
+    announceApproval(c.summary);
+  }, []);
 
   useEffect(() => {
     if (!enabled) return;
@@ -78,11 +86,15 @@ export function useAgent(enabled: boolean, midFor: (chat: string) => number | un
       .pending()
       .then((ps) => {
         if (!alive) return;
+        for (const p of ps) notePending({ ...p, state: "pending", output: "" });
         setCalls((cs) => ps.reduce((acc, p) => upsert(acc, { ...p, state: "pending", output: "", mid: midRef.current(p.chat) }), cs));
       })
       .catch(() => {});
     const off = onAgent({
-      call: (c) => setCalls((cs) => upsert(cs, { ...c, mid: midRef.current(c.chat) })),
+      call: (c) => {
+        notePending(c);
+        setCalls((cs) => upsert(cs, { ...c, mid: midRef.current(c.chat) }));
+      },
       output: (id, chunk) => setCalls((cs) => cs.map((c) => (c.call_id === id ? { ...c, output: clipOutput(c.output + chunk) } : c))),
       connection: (connected) => setInfo((i) => (i ? { ...i, connected } : i)),
       device: () => {
@@ -93,7 +105,7 @@ export function useAgent(enabled: boolean, midFor: (chat: string) => number | un
       alive = false;
       off();
     };
-  }, [enabled]);
+  }, [enabled, notePending]);
 
   const decide = useCallback((id: string, answer: AgentAnswer) => {
     agent.decide(id, answer).catch(() => {});
@@ -250,13 +262,41 @@ export function AgentBar({ info, workspace, locked, elsewhere, mode, onPick, onC
         </button>
       )}
       {workspace && (
-        <select className="agent-mode" value={mode} onChange={(e) => onMode(e.target.value as AgentMode)} aria-label={t("سطح دسترسی", "Access level")}>
-          {(Object.keys(MODE_LABEL) as AgentMode[]).map((m) => (
-            <option key={m} value={m}>
-              {MODE_LABEL[m]}
-            </option>
-          ))}
-        </select>
+        <Select
+          className="agent-mode"
+          value={mode}
+          onChange={onMode}
+          ariaLabel={t("سطح دسترسی", "Access level")}
+          title={t("سطح دسترسی", "Access level")}
+          options={[
+            {
+              value: "ask",
+              label: MODE_LABEL.ask,
+              hint: t("خواندن در پوشه انجام می‌شود؛ نوشتن و فرمان می‌پرسد.", "Reads in the folder run; writes and commands ask."),
+              icon: <IconShield width={16} height={16} />,
+            },
+            {
+              value: "auto",
+              label: MODE_LABEL.auto,
+              hint: t("هر کاری داخل پوشه بدون پرسیدن انجام می‌شود؛ بیرون از آن می‌پرسد.", "Anything inside the folder runs without asking; outside still asks."),
+              icon: <IconSpark width={16} height={16} />,
+            },
+            {
+              value: "readonly",
+              label: MODE_LABEL.readonly,
+              hint: t("هیچ فایلی تغییر نمی‌کند و هیچ فرمانی اجرا نمی‌شود.", "Nothing is changed or run."),
+              icon: <IconEye width={16} height={16} />,
+            },
+            {
+              value: "everything",
+              label: MODE_LABEL.everything,
+              hint: t("بدون پرسیدن، همه‌جا روی سیستم. فقط وقتی به کار اطمینان دارید.", "No prompts, anywhere on the computer. Only when you trust the task."),
+              icon: <IconGlobe width={16} height={16} />,
+              tone: "danger",
+              dividerBefore: true,
+            },
+          ] satisfies SelectOption<AgentMode>[]}
+        />
       )}
       <NotifyMenu os={info?.os} />
       {elsewhere && <span className="agent-note">{t("این گفت‌وگو به رایانه‌ی دیگری وصل است.", "This chat is linked to another computer.")}</span>}

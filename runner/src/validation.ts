@@ -41,7 +41,9 @@ function validateEnum(
 
 const textEncoder = new TextEncoder();
 
-export const byteLength = (text: string): number => textEncoder.encode(text).length;
+export function byteLength(text: string): number {
+  return textEncoder.encode(text).length;
+}
 
 export function validateRunInput(input: RunInput): ValidationError | undefined {
   if (!input.code) {

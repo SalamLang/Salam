@@ -1,0 +1,329 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+/*
+ * Compile every code snippet marked class="snip" in the lessons.
+ *
+ * The reference tables of the web lessons carry hundreds of short examples.
+ * Each one sits in an element with class "snip" (<code class="snip"> in a table
+ * cell, <pre class="code snip"> for a block). A snippet is an element
+ * expression: it is wrapped in a page: block (and gets an import for dom when
+ * it calls dom) and built with `salam page build`. A snippet that already
+ * starts a page: block is built as it is.
+ *
+ *     salam run tools/salam/check-snippets.salam [lesson.txt ...]
+ *
+ * Environment: SALAM (compiler to use, default "salam"), SALAM_STD (standard
+ * library, default "std"), CHECK_JOBS (parallel builds, default: CPU count).
+ */
+
+import env
+import fs.file
+import os
+import os.process
+import os.temp
+import pool
+import regex
+import str
+import sync
+
+const SNIP := `<(code|pre)[^>]*class="[^"]*snip[^"]*"[^>]*>(.*?)</(code|pre)>`
+const TAGS := `<[^>]+>`
+const BODY_OPEN := "lesson.body <<"
+const BODY_CLOSE := ">>"
+const SHOWN := 20
+
+struct Snippet:
+    pub path: str = ""
+    pub lang: str = ""
+    pub src: str = ""
+end
+
+struct Run:
+    pub code: int = 0
+    pub out: str = ""
+end
+
+// ---------------------------------------------------------------- text helpers
+
+func sorted_names(names: Vector<str>): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    each name in names:
+        mut at := 0
+        until at >= out.len():
+            if out.get(at) > name:
+                break
+            end
+            at += 1
+        end
+        out.insert(at, name)
+    end
+    ret out
+end
+
+func trim_newlines(text: str): str:
+    mut out := text
+    until out.len() == 0:
+        if out.substr(0, 1) != "\n":
+            break
+        end
+        out = out.substr(1, out.len() - 1)
+    end
+    until out.len() == 0:
+        if out.substr(out.len() - 1, 1) != "\n":
+            break
+        end
+        out = out.substr(0, out.len() - 1)
+    end
+    ret out
+end
+
+func tail(text: str, limit: int): str:
+    if text.len() <= limit:
+        ret text
+    end
+    ret text.substr(text.len() - limit, limit)
+end
+
+func unescape(text: str): str:
+    mut out := str.Replace(text, "&quot;", `"`)
+    out = str.Replace(out, "&#x27;", `'`)
+    out = str.Replace(out, "&#39;", `'`)
+    out = str.Replace(out, "&lt;", "<")
+    out = str.Replace(out, "&gt;", ">")
+    ret str.Replace(out, "&amp;", "&")
+end
+
+func quote_shell(text: str): str:
+    ret "'" + str.Replace(text, "'", `'\''`) + "'"
+end
+
+// ---------------------------------------------------------------- lesson parsing
+
+func body_lines(path: str): Vector<str>:
+    lines := str.Split(file.ReadText(path), "\n")
+    mut start := -1
+    mut i := 0
+    until i < lines.len():
+        if lines.get(i).trim() == BODY_OPEN:
+            start = i
+            break
+        end
+        i += 1
+    end
+    out := Vector {} as Vector<str>
+    if start < 0:
+        ret out
+    end
+    mut j := start + 1
+    until j < lines.len():
+        if lines.get(j).trim() == BODY_CLOSE:
+            ret out
+        end
+        out.push(lines.get(j))
+        j += 1
+    end
+    empty := Vector {} as Vector<str>
+    ret empty
+end
+
+func snippets(path: str): Vector<str>:
+    out := Vector {} as Vector<str>
+    body := body_lines(path)
+    if body.len() == 0:
+        ret out
+    end
+    re := regex.Compile(SNIP)
+    each m in regex.FindAllMatches(re, str.Join(body, "\n"), 1000000):
+        if regex.Group(m, 1) != regex.Group(m, 3):
+            continue
+        end
+        inner := regex.ReplaceStr(TAGS, regex.Group(m, 2), "")
+        out.push(trim_newlines(unescape(inner)))
+    end
+    ret out
+end
+
+func has_page_block(src: str): bool:
+    each line in str.Split(src, "\n"):
+        text := line.trim()
+        if text == "page:" or text == "صفحه:":
+            ret true
+        end
+    end
+    ret false
+end
+
+func lasts_dom_import(src: str): bool:
+    each line in str.Split(src, "\n"):
+        text := line.trim()
+        if text == "import dom" or text == "import دام":
+            ret true
+        end
+        if text == "واردسازی دام":
+            ret true
+        end
+    end
+    ret false
+end
+
+func uses_dom(src: str): bool:
+    ret src.includes("dom.") or src.includes("دام.")
+end
+
+func wrap(src: str, lang: str): str:
+    mut page := "page:"
+    mut finish := "end"
+    mut import_line := "import dom"
+    if lang == "fa":
+        page = "صفحه:"
+        finish = "پایان"
+        import_line = "واردسازی دام"
+    end
+    mut prefix := ""
+    if uses_dom(src) and lasts_dom_import(src) == false:
+        prefix = import_line + "\n\n"
+    end
+    if has_page_block(src):
+        ret prefix + src + "\n"
+    end
+    indented := Vector {} as Vector<str>
+    each line in str.Split(src, "\n"):
+        if line.trim() == "":
+            indented.push(line)
+        else:
+            indented.push("    " + line)
+        end
+    end
+    ret prefix + page + "\n" + str.Join(indented, "\n") + "\n" + finish + "\n"
+end
+
+// ---------------------------------------------------------------- building
+
+func build(salam: str, dir: str): Run:
+    args := Vector {} as Vector<str>
+    args.push("-c")
+    args.push(
+        "cd " + quote_shell(dir) + " && " + quote_shell(salam)
+            + " page build snip.salam --inline --no-color --log-level=warn"
+    )
+    mut child := process.StartCaptured("/bin/sh", args)
+    code := process.Wait(child)
+    out := (process.ReadStdout(child) + process.ReadStderr(child)).trim()
+    process.Cleanup(child)
+    ret Run { code = code, out = out }
+end
+
+func problem(snippet: Snippet, salam: str): str:
+    dir := temp.Directory()
+    defer temp.RemoveDir(dir)
+    file.WriteText(dir + "/snip.salam", wrap(snippet.src, snippet.lang))
+    run := build(salam, dir)
+    if run.code != 0:
+        ret "exit " + str.FromInt(run.code) + ": " + tail(run.out, 200)
+    end
+    if file.Exists(dir + "/snip.html") == false:
+        ret "the build produced no snip.html"
+    end
+    mut noise := str.Replace(run.out.lower(), "0 error", "")
+    noise = str.Replace(noise, "0 warning", "")
+    if noise.includes("error") or noise.includes("warning"):
+        ret tail(run.out, 300)
+    end
+    ret ""
+end
+
+// ---------------------------------------------------------------- entry point
+
+func lesson_files(): Vector<str>:
+    dirs := Vector {} as Vector<str>
+    dirs.push("website/content/en/learn")
+    dirs.push("website/content/fa/learn")
+    out := Vector {} as Vector<str>
+    each dir in dirs:
+        each name in sorted_names(os.ListDir(dir)):
+            if name.ends_with(".txt"):
+                out.push(dir + "/" + name)
+            end
+        end
+    end
+    ret out
+end
+
+func argument_files(): Vector<str>:
+    out := Vector {} as Vector<str>
+    argv := os.Args()
+    mut i := 1
+    until i < argv.len():
+        out.push(argv.get(i))
+        i += 1
+    end
+    ret out
+end
+
+func collect(paths: Vector<str>): Vector<Snippet>:
+    out := Vector {} as Vector<Snippet>
+    each path in paths:
+        mut lang := "en"
+        if path.includes("/fa/"):
+            lang = "fa"
+        end
+        each src in snippets(path):
+            out.push(Snippet { path = path, lang = lang, src = src })
+        end
+    end
+    ret out
+end
+
+func main:
+    salam := env.GetOr("SALAM", "salam")
+    env.Set("SALAM_STD", env.GetOr("SALAM_STD", "std"))
+
+    mut paths := argument_files()
+    if paths.len() == 0:
+        paths = lesson_files()
+    end
+    jobs := collect(paths)
+
+    mut workers := env.GetInt("CHECK_JOBS", 0)
+    if workers <= 0:
+        workers = pool.CPUCount()
+    end
+
+    mutex := sync.NewMutex()
+    failed := Vector {} as Vector<str>
+    pool.ParallelFor(jobs.len() as i64, workers, (i: i64):
+        snippet := jobs.get(i as int)
+        reason := problem(snippet, salam)
+        if reason != "":
+            sync.Lock(mutex)
+            failed.push("FAIL " + snippet.path + "\n" + snippet.src + "\n--> " + reason + "\n")
+            sync.Unlock(mutex)
+        end
+    end)
+
+    mut shown := 0
+    each message in failed:
+        if shown >= SHOWN:
+            break
+        end
+        println message
+        shown += 1
+    end
+    println "snippets: ", jobs.len(), " checked, ", failed.len(), " failed"
+    if failed.len() > 0:
+        ret 1
+    end
+    ret 0
+end

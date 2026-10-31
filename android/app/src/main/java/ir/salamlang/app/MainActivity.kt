@@ -1,482 +1,423 @@
 package ir.salamlang.app
 
-import android.annotation.SuppressLint
-import android.content.ActivityNotFoundException
+import android.app.AlertDialog
 import android.content.Intent
-import android.content.pm.ApplicationInfo
-import android.content.pm.PackageManager
 import android.net.Uri
-import android.os.Build
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
-import android.os.Message
-import android.util.Log
+import android.provider.OpenableColumns
+import android.text.format.DateUtils
+import android.text.format.Formatter
+import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
-import android.view.animation.DecelerateInterpolator
-import android.webkit.ConsoleMessage
-import android.webkit.CookieManager
-import android.webkit.ValueCallback
-import android.webkit.WebChromeClient
-import android.webkit.WebResourceError
-import android.webkit.WebResourceRequest
-import android.webkit.WebSettings
-import android.webkit.WebView
-import android.webkit.WebViewClient
-import android.widget.Button
-import android.widget.FrameLayout
+import android.widget.BaseAdapter
+import android.widget.EditText
 import android.widget.ImageView
+import android.widget.LinearLayout
+import android.widget.ListView
 import android.widget.ProgressBar
-import androidx.activity.ComponentActivity
-import androidx.activity.OnBackPressedCallback
-import androidx.activity.enableEdgeToEdge
-import androidx.activity.result.contract.ActivityResultContracts
-import androidx.annotation.RequiresApi
-import androidx.core.net.toUri
-import androidx.core.splashscreen.SplashScreen.Companion.installSplashScreen
-import androidx.core.view.ViewCompat
-import androidx.core.view.WindowCompat
-import androidx.core.view.WindowInsetsCompat
+import android.widget.RadioButton
+import android.widget.RadioGroup
+import android.widget.TextView
+import android.widget.Toast
+import java.io.File
 
-class MainActivity : ComponentActivity() {
-    private lateinit var contentArea: FrameLayout
-    private lateinit var webView: WebView
-    private lateinit var topProgress: ProgressBar
-    private lateinit var errorView: View
-    private lateinit var retryButton: Button
-    private lateinit var splashOverlay: View
-    private lateinit var splashLogo: ImageView
-
-    private val mainHandler = Handler(Looper.getMainLooper())
-    private val splashTimeoutRunnable = Runnable { hideSplash() }
-    private var splashHidden = false
-
-    private var filePathCallback: ValueCallback<Array<Uri>>? = null
-
-    private var popupWebView: WebView? = null
-
-    private val fileChooserLauncher =
-        registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-            val callback = filePathCallback ?: return@registerForActivityResult
-            callback.onReceiveValue(
-                WebChromeClient.FileChooserParams.parseResult(result.resultCode, result.data),
-            )
-            filePathCallback = null
-        }
+class MainActivity : BaseActivity() {
+    private lateinit var list: ListView
+    private lateinit var empty: View
+    private lateinit var loading: View
+    private lateinit var version: TextView
+    private var files: List<File> = emptyList()
+    private var exportSource: File? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        installSplashScreen()
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
-        setContentView(R.layout.activity_main)
-
-        bindViews()
-        setupSystemBars()
-        setupInsets()
-        setupWebView()
-        setupBackNavigation()
-        animateSplashEntrance()
-        retryButton.setOnClickListener { reload() }
-
-        val restored =
-            savedInstanceState != null && webView.restoreState(savedInstanceState) != null
-        if (!restored) {
-            webView.loadUrl(HOME_URL)
+        buildUi()
+        if (!StdInstaller.isReady(this)) {
+            loading.visibility = View.VISIBLE
         }
-
-        mainHandler.postDelayed(splashTimeoutRunnable, SPLASH_TIMEOUT_MS)
-    }
-
-    private fun bindViews() {
-        contentArea = findViewById(R.id.contentArea)
-        webView = findViewById(R.id.webView)
-        topProgress = findViewById(R.id.topProgress)
-        errorView = findViewById(R.id.errorView)
-        retryButton = findViewById(R.id.retryButton)
-        splashOverlay = findViewById(R.id.splashOverlay)
-        splashLogo = findViewById(R.id.splashLogo)
-    }
-
-    private fun animateSplashEntrance() {
-        splashLogo.alpha = 0f
-        splashLogo.scaleX = 0.85f
-        splashLogo.scaleY = 0.85f
-        splashLogo
-            .animate()
-            .alpha(1f)
-            .scaleX(1f)
-            .scaleY(1f)
-            .setStartDelay(60L)
-            .setDuration(280L)
-            .setInterpolator(DecelerateInterpolator())
-            .start()
-    }
-
-    private fun setupSystemBars() {
-        val controller = WindowCompat.getInsetsController(window, window.decorView)
-        controller.isAppearanceLightStatusBars = false
-        controller.isAppearanceLightNavigationBars = false
-    }
-
-    private fun setupInsets() {
-        ViewCompat.setOnApplyWindowInsetsListener(contentArea) { v, insets ->
-            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars())
-            val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
-            v.setPadding(bars.left, bars.top, bars.right, maxOf(bars.bottom, ime.bottom))
-            insets
+        Analyzer.whenReady(this) {
+            loading.visibility = View.GONE
         }
+        Analyzer.version(this) { version.text = getString(R.string.version_line, it.trim()) }
+        handleShare(intent)
     }
 
-    @SuppressLint("SetJavaScriptEnabled")
-    private fun applyWebSettings(settings: WebSettings) {
-        settings.apply {
-            javaScriptEnabled = true
-            domStorageEnabled = true
-            javaScriptCanOpenWindowsAutomatically = true
-            setSupportMultipleWindows(true)
-            loadWithOverviewMode = true
-            useWideViewPort = true
-            cacheMode = WebSettings.LOAD_DEFAULT
-            mediaPlaybackRequiresUserGesture = false
-
-            mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
-            allowFileAccess = false
-            allowContentAccess = false
-
-            setSupportZoom(true)
-            builtInZoomControls = false
-            displayZoomControls = false
-        }
-    }
-
-    private fun setupWebView() {
-        if (0 != applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE) {
-            WebView.setWebContentsDebuggingEnabled(true)
-        }
-
-        applyWebSettings(webView.settings)
-
-        CookieManager.getInstance().apply {
-            setAcceptCookie(true)
-            setAcceptThirdPartyCookies(webView, true)
-        }
-
-        webView.webViewClient = SalamWebViewClient()
-        webView.webChromeClient = SalamWebChromeClient()
-
-        webView.setDownloadListener { url, _, _, _, _ ->
-            openExternally(url.toUri())
-        }
-    }
-
-    private fun openPopupWebView(): WebView {
-        closePopup()
-        val popup = WebView(this)
-        applyWebSettings(popup.settings)
-        CookieManager.getInstance().setAcceptThirdPartyCookies(popup, true)
-        popup.webViewClient = SalamWebViewClient()
-        popup.webChromeClient = SalamWebChromeClient()
-        popup.layoutParams =
-            FrameLayout.LayoutParams(
-                ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.MATCH_PARENT,
-            )
-        popup.setBackgroundColor(android.graphics.Color.WHITE)
-        contentArea.addView(popup)
-        popupWebView = popup
-        return popup
-    }
-
-    private fun closePopup() {
-        popupWebView?.let { popup ->
-            contentArea.removeView(popup)
-            popup.webChromeClient = null
-            popup.destroy()
-        }
-        popupWebView = null
-    }
-
-    private fun setupBackNavigation() {
-        onBackPressedDispatcher.addCallback(
-            this,
-            object : OnBackPressedCallback(true) {
-                override fun handleOnBackPressed() {
-                    val popup = popupWebView
-                    when {
-                        popup != null && popup.canGoBack() -> {
-                            popup.goBack()
-                        }
-
-                        popup != null -> {
-                            closePopup()
-                        }
-
-                        errorView.visibility != View.VISIBLE && webView.canGoBack() -> {
-                            webView.goBack()
-                        }
-
-                        else -> {
-                            isEnabled = false
-                            onBackPressedDispatcher.onBackPressed()
-                        }
-                    }
-                }
-            },
-        )
-    }
-
-    private fun hideSplash() {
-        if (splashHidden) return
-        splashHidden = true
-        mainHandler.removeCallbacks(splashTimeoutRunnable)
-        splashOverlay
-            .animate()
-            .alpha(0f)
-            .setDuration(350L)
-            .withEndAction { splashOverlay.visibility = View.GONE }
-            .start()
-    }
-
-    private fun showError() {
-        topProgress.visibility = View.GONE
-        errorView.visibility = View.VISIBLE
-        hideSplash()
-    }
-
-    private fun reload() {
-        errorView.visibility = View.GONE
-        if (webView.url == null) webView.loadUrl(HOME_URL) else webView.reload()
-    }
-
-    @SuppressLint("QueryPermissionsNeeded")
-    private fun openExternally(uri: Uri) {
-        try {
-            val intent =
-                if (uri.scheme?.lowercase() == "intent") {
-                    val rawIntent = Intent.parseUri(uri.toString(), Intent.URI_INTENT_SCHEME)
-
-                    rawIntent.action = Intent.ACTION_VIEW
-                    rawIntent.addCategory(Intent.CATEGORY_BROWSABLE)
-                    rawIntent.component = null
-                    rawIntent.selector = null
-                    rawIntent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
-
-                    val packageManager = packageManager
-                    val activities =
-                        packageManager.queryIntentActivities(
-                            rawIntent,
-                            PackageManager.MATCH_DEFAULT_ONLY,
-                        )
-                    if (activities.isEmpty()) {
-                        Log.w(TAG, "No activity found for intent, ignoring")
-                        return
-                    }
-
-                    val data = rawIntent.data
-                    if (data != null) {
-                        val scheme = data.scheme?.lowercase()
-                        if (scheme != "http" && scheme != "https" && scheme != "tel" && scheme != "mailto") {
-                            Log.w(TAG, "Unsupported scheme: $scheme, ignoring")
-                            return
-                        }
-                    }
-
-                    rawIntent
-                } else {
-                    Intent(Intent.ACTION_VIEW, uri).apply {
-                        addCategory(Intent.CATEGORY_BROWSABLE)
-                        component = null
-                        selector = null
-                    }
-                }
-
-            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-            startActivity(intent)
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to open external URI: $uri", e)
-        }
-    }
-
-    override fun onPause() {
-        webView.onPause()
-        super.onPause()
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleShare(intent)
     }
 
     override fun onResume() {
         super.onResume()
-        webView.onResume()
+        refresh()
     }
 
-    override fun onSaveInstanceState(outState: Bundle) {
-        super.onSaveInstanceState(outState)
-        webView.saveState(outState)
-    }
+    private fun buildUi() {
+        val root =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setBackgroundColor(palette.background)
+            }
+        val header =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(dp(16), dp(14), dp(6), dp(6))
+            }
+        val logo =
+            ImageView(this).apply {
+                setImageResource(R.drawable.logo)
+                layoutParams = LinearLayout.LayoutParams(dp(40), dp(40))
+            }
+        header.addView(logo)
+        val titles =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(12), 0, dp(8), 0)
+            }
+        titles.addView(label(getString(R.string.app_name), 22f, palette.text, true))
+        version = label(getString(R.string.tagline), 13f, palette.textDim)
+        titles.addView(version)
+        header.addView(weight(titles))
+        header.addView(iconButton(R.drawable.ic_settings, R.string.settings) { startActivity(Intent(this, SettingsActivity::class.java)) })
+        root.addView(header)
 
-    override fun onDestroy() {
-        mainHandler.removeCallbacks(splashTimeoutRunnable)
-        closePopup()
-        (webView.parent as? ViewGroup)?.removeView(webView)
-        webView.destroy()
-        super.onDestroy()
-    }
+        val actions =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(dp(16), dp(8), dp(16), dp(12))
+            }
+        val newButton = pillButton("＋ " + getString(R.string.new_file), true) { askNewFile() }
+        actions.addView(newButton)
+        val importButton = pillButton(getString(R.string.import_file), false) { pickImport() }
+        actions.addView(importButton)
+        (importButton.layoutParams as? LinearLayout.LayoutParams)?.marginStart = dp(8)
+        val examplesButton = pillButton(getString(R.string.examples), false) { showExamples() }
+        actions.addView(examplesButton)
+        (examplesButton.layoutParams as? LinearLayout.LayoutParams)?.marginStart = dp(8)
+        root.addView(actions)
 
-    private inner class SalamWebViewClient : WebViewClient() {
-        // Both spellings delegate here so the two can never drift apart.
-        // The framework calls exactly one of them: the request-based
-        // override only exists from API 24, so on 21-23 the deprecated
-        // String form below is the only one that ever fires - without it
-        // those releases would hand tel:/mailto:/intent: links to the
-        // WebView itself, which cannot open them.
-        private fun routeUrl(url: Uri): Boolean =
-            when (url.scheme?.lowercase()) {
-                "https" -> {
-                    false
-                }
+        root.addView(
+            label(getString(R.string.your_files), 13f, palette.textDim, true).apply {
+                setPadding(dp(20), dp(4), dp(20), dp(6))
+            },
+        )
 
-                // android:usesCleartextTraffic="false" is only honoured from API 23, so on 21
-                // and 22 nothing stops a plain http navigation. Refusing it here ourselves keeps
-                // one behaviour across the whole supported range.
-                "http" -> {
-                    Log.w(TAG, "blocked cleartext navigation: $url")
+        val body = android.widget.FrameLayout(this)
+        list =
+            ListView(this).apply {
+                divider = null
+                selector = android.graphics.drawable.ColorDrawable(0)
+                setPadding(dp(8), 0, dp(8), dp(16))
+                clipToPadding = false
+                adapter = FilesAdapter()
+                setOnItemClickListener { _, _, pos, _ -> EditorActivity.open(this@MainActivity, files[pos]) }
+                setOnItemLongClickListener { _, _, pos, _ ->
+                    fileOptions(files[pos])
                     true
                 }
+            }
+        body.addView(list)
+        empty =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                setPadding(dp(32), dp(32), dp(32), dp(32))
+                addView(label(getString(R.string.empty_title), 17f, palette.text, true).apply { gravity = Gravity.CENTER })
+                addView(label(getString(R.string.empty_hint), 14f, palette.textDim).apply { gravity = Gravity.CENTER })
+            }
+        body.addView(empty)
+        loading =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                gravity = Gravity.CENTER
+                setBackgroundColor(palette.background)
+                isClickable = true
+                visibility = View.GONE
+                addView(ProgressBar(this@MainActivity))
+                addView(label(getString(R.string.preparing), 14f, palette.textDim).apply { setPadding(0, dp(12), 0, 0) })
+            }
+        body.addView(loading)
+        root.addView(body, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f))
+        setContentView(root)
+    }
 
-                else -> {
-                    openExternally(url)
-                    true
+    private fun refresh() {
+        files = Workspace.files(this)
+        (list.adapter as BaseAdapter).notifyDataSetChanged()
+        empty.visibility = if (files.isEmpty()) View.VISIBLE else View.GONE
+    }
+
+    private inner class FilesAdapter : BaseAdapter() {
+        override fun getCount() = files.size
+
+        override fun getItem(position: Int) = files[position]
+
+        override fun getItemId(position: Int) = position.toLong()
+
+        override fun getView(
+            position: Int,
+            convertView: View?,
+            parent: ViewGroup?,
+        ): View {
+            val item = (convertView as? LinearLayout) ?: createRow()
+            val f = files[position]
+            item.findViewWithTag<TextView>("name").text = f.name
+            item.findViewWithTag<TextView>("meta").text =
+                DateUtils.getRelativeTimeSpanString(f.lastModified()).toString() + " · " +
+                Formatter.formatShortFileSize(this@MainActivity, f.length())
+            return item
+        }
+
+        private fun createRow(): LinearLayout {
+            val row =
+                LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.HORIZONTAL
+                    gravity = Gravity.CENTER_VERTICAL
+                    setPadding(dp(14), dp(12), dp(14), dp(12))
+                    background = ripple(palette.surface, 14f)
+                    isDuplicateParentStateEnabled = true
                 }
+            val icon =
+                ImageView(this@MainActivity).apply {
+                    setImageResource(R.drawable.ic_file)
+                    imageTintList = android.content.res.ColorStateList.valueOf(palette.brand)
+                }
+            row.addView(icon, LinearLayout.LayoutParams(dp(24), dp(24)))
+            val texts =
+                LinearLayout(this@MainActivity).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(dp(14), 0, 0, 0)
+                }
+            texts.addView(label("", 15f, palette.text, true).apply { tag = "name" }.startAligned())
+            texts.addView(label("", 12f, palette.textDim).apply { tag = "meta" }.startAligned())
+            row.addView(weight(texts))
+            return LinearLayout(this@MainActivity).apply {
+                setPadding(0, dp(3), 0, dp(3))
+                addView(row, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
             }
-
-        override fun shouldOverrideUrlLoading(
-            view: WebView,
-            request: WebResourceRequest,
-        ): Boolean {
-            Log.d(TAG, "shouldOverride: ${request.url} (mainFrame=${request.isForMainFrame})")
-            return routeUrl(request.url)
-        }
-
-        @Deprecated("Superseded by the WebResourceRequest form on API 24+; kept for 21-23.")
-        override fun shouldOverrideUrlLoading(
-            view: WebView,
-            url: String?,
-        ): Boolean {
-            Log.d(TAG, "shouldOverride (legacy): $url")
-            if (url == null) return false
-            return routeUrl(url.toUri())
-        }
-
-        override fun onPageFinished(
-            view: WebView,
-            url: String,
-        ) {
-            Log.d(TAG, "onPageFinished: $url")
-            hideSplash()
-        }
-
-        // The framework only dispatches this form from API 23 up; the legacy overload below
-        // covers 21 and 22. WebResourceError itself is API 23, hence the annotation.
-        @RequiresApi(Build.VERSION_CODES.M)
-        override fun onReceivedError(
-            view: WebView,
-            request: WebResourceRequest,
-            error: WebResourceError,
-        ) {
-            Log.w(
-                TAG,
-                "onReceivedError: ${request.url} code=${error.errorCode} '${error.description}' mainFrame=${request.isForMainFrame}",
-            )
-            if (request.isForMainFrame && view === webView) {
-                showError()
-            }
-        }
-
-        // The request-based form above starts at API 23, so on 21-22 this
-        // is what reports a failed load. It has no isForMainFrame: the
-        // older callback is only raised for the main frame anyway, which
-        // is exactly the case that should show the retry screen.
-        @Deprecated("Superseded by the WebResourceRequest form on API 23+; kept for 21-22.")
-        override fun onReceivedError(
-            view: WebView,
-            errorCode: Int,
-            description: String?,
-            failingUrl: String?,
-        ) {
-            Log.w(TAG, "onReceivedError (legacy): $failingUrl code=$errorCode '$description'")
-            if (view === webView) {
-                showError()
-            }
-        }
-
-        // API 23 and up only. Before 23 WebView never surfaced http status codes to the
-        // client at all, so there is nothing to fall back to; a 4xx or 5xx page just renders
-        // as the server sent it. Nothing here touches an API above 21, so no annotation.
-        override fun onReceivedHttpError(
-            view: WebView,
-            request: WebResourceRequest,
-            errorResponse: android.webkit.WebResourceResponse,
-        ) {
-            Log.w(TAG, "onReceivedHttpError: ${request.url} status=${errorResponse.statusCode}")
         }
     }
 
-    private inner class SalamWebChromeClient : WebChromeClient() {
-        override fun onProgressChanged(
-            view: WebView,
-            newProgress: Int,
-        ) {
-            topProgress.progress = newProgress
-            topProgress.visibility = if (newProgress in 1..99) View.VISIBLE else View.GONE
-            if (newProgress == 100) hideSplash()
-        }
-
-        override fun onConsoleMessage(message: ConsoleMessage): Boolean {
-            Log.d(
-                TAG,
-                "console[${message.messageLevel()}]: ${message.message()} (${message.sourceId()}:${message.lineNumber()})",
-            )
-            return true
-        }
-
-        override fun onShowFileChooser(
-            webView: WebView,
-            callback: ValueCallback<Array<Uri>>,
-            params: FileChooserParams,
-        ): Boolean {
-            filePathCallback?.onReceiveValue(null)
-            filePathCallback = callback
-            return try {
-                fileChooserLauncher.launch(params.createIntent())
-                true
-            } catch (e: ActivityNotFoundException) {
-                Log.w(TAG, "No activity found to handle file chooser intent", e)
-                filePathCallback = null
-                false
+    private fun askNewFile(
+        initialName: String = "",
+        content: String? = null,
+    ) {
+        val box =
+            LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(20), dp(8), dp(20), 0)
             }
+        val name =
+            EditText(this).apply {
+                hint = getString(R.string.file_name_hint)
+                setSingleLine(true)
+                setText(initialName)
+            }
+        box.addView(name)
+        val group = RadioGroup(this).apply { orientation = RadioGroup.HORIZONTAL }
+        val fa =
+            RadioButton(this).apply {
+                id = View.generateViewId()
+                text = getString(R.string.lang_fa)
+            }
+        val en =
+            RadioButton(this).apply {
+                id = View.generateViewId()
+                text = getString(R.string.lang_en)
+            }
+        group.addView(fa)
+        group.addView(en)
+        val last = Prefs.newFileLang(this).ifEmpty { Prefs.effectiveUiLang(this) }
+        group.check(if (last == "fa") fa.id else en.id)
+        if (content == null) {
+            box.addView(group)
+        }
+        AlertDialog
+            .Builder(this)
+            .setTitle(R.string.new_file)
+            .setView(box)
+            .setPositiveButton(R.string.create) { _, _ ->
+                val lang = if (group.checkedRadioButtonId == fa.id) "fa" else "en"
+                Prefs.setNewFileLang(this, lang)
+                val f = Workspace.unique(this, name.text.toString().ifBlank { "main" })
+                f.writeText(content ?: Workspace.template(lang))
+                EditorActivity.open(this, f)
+            }.setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    private fun showExamples() {
+        val all = Workspace.examples(this)
+        if (all.isEmpty()) {
+            return
+        }
+        val fa = Prefs.effectiveUiLang(this) == "fa"
+        val titles = all.map { if (fa) it.titleFa else it.titleEn }.toTypedArray()
+        AlertDialog
+            .Builder(this)
+            .setTitle(R.string.examples)
+            .setItems(titles) { _, which ->
+                val ex = all[which]
+                val lang = if (fa) "fa" else "en"
+                val src = Workspace.exampleSource(this, ex.id, lang) ?: Workspace.exampleSource(this, ex.id, "en") ?: return@setItems
+                val f = Workspace.unique(this, ex.id)
+                f.writeText(src)
+                EditorActivity.open(this, f)
+            }.show()
+    }
+
+    private fun fileOptions(f: File) {
+        val items =
+            arrayOf(
+                getString(R.string.rename),
+                getString(R.string.duplicate),
+                getString(R.string.export),
+                getString(R.string.share),
+                getString(R.string.delete),
+            )
+        AlertDialog
+            .Builder(this)
+            .setTitle(f.name)
+            .setItems(items) { _, which ->
+                when (which) {
+                    0 -> rename(f)
+                    1 -> {
+                        Workspace.unique(this, f.name).writeText(f.readText())
+                        refresh()
+                    }
+                    2 -> export(f)
+                    3 ->
+                        startActivity(
+                            Intent.createChooser(
+                                Intent(Intent.ACTION_SEND)
+                                    .setType("text/plain")
+                                    .putExtra(Intent.EXTRA_SUBJECT, f.name)
+                                    .putExtra(Intent.EXTRA_TEXT, f.readText()),
+                                getString(R.string.share),
+                            ),
+                        )
+                    4 ->
+                        AlertDialog
+                            .Builder(this)
+                            .setMessage(getString(R.string.delete_confirm, f.name))
+                            .setPositiveButton(R.string.delete) { _, _ ->
+                                f.delete()
+                                refresh()
+                            }.setNegativeButton(R.string.cancel, null)
+                            .show()
+                }
+            }.show()
+    }
+
+    private fun rename(f: File) {
+        val input =
+            EditText(this).apply {
+                setSingleLine(true)
+                setText(f.name)
+            }
+        val box = LinearLayout(this).apply { setPadding(dp(20), dp(8), dp(20), 0) }
+        box.addView(input, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT))
+        AlertDialog
+            .Builder(this)
+            .setTitle(R.string.rename)
+            .setView(box)
+            .setPositiveButton(R.string.ok) { _, _ ->
+                val target = File(Workspace.dir(this), Workspace.cleanName(input.text.toString()))
+                if (target.exists() && target != f) {
+                    Toast.makeText(this, R.string.name_taken, Toast.LENGTH_SHORT).show()
+                } else {
+                    f.renameTo(target)
+                    refresh()
+                }
+            }.setNegativeButton(R.string.cancel, null)
+            .show()
+    }
+
+    private fun pickImport() {
+        val pick =
+            Intent(Intent.ACTION_OPEN_DOCUMENT)
+                .addCategory(Intent.CATEGORY_OPENABLE)
+                .setType("*/*")
+        try {
+            startActivityForResult(pick, REQ_IMPORT)
+        } catch (_: Exception) {
+            Toast.makeText(this, R.string.no_picker, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun export(f: File) {
+        exportSource = f
+        val create =
+            Intent(Intent.ACTION_CREATE_DOCUMENT)
+                .addCategory(Intent.CATEGORY_OPENABLE)
+                .setType("text/plain")
+                .putExtra(Intent.EXTRA_TITLE, f.name)
+        try {
+            startActivityForResult(create, REQ_EXPORT)
+        } catch (_: Exception) {
+            Toast.makeText(this, R.string.no_picker, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    @Deprecated("framework Activity result API")
+    override fun onActivityResult(
+        requestCode: Int,
+        resultCode: Int,
+        data: Intent?,
+    ) {
+        super.onActivityResult(requestCode, resultCode, data)
+        val uri = data?.data ?: return
+        if (resultCode != RESULT_OK) {
+            return
+        }
+        try {
+            when (requestCode) {
+                REQ_IMPORT -> {
+                    val text = contentResolver.openInputStream(uri)?.use { it.readBytes().decodeToString() } ?: return
+                    val f = Workspace.unique(this, displayName(uri) ?: "imported.salam")
+                    f.writeText(text)
+                    EditorActivity.open(this, f)
+                }
+                REQ_EXPORT -> {
+                    val src = exportSource ?: return
+                    contentResolver.openOutputStream(uri)?.use { it.write(src.readBytes()) }
+                    Toast.makeText(this, R.string.exported, Toast.LENGTH_SHORT).show()
+                }
+            }
+        } catch (_: Exception) {
+            Toast.makeText(this, R.string.io_failed, Toast.LENGTH_SHORT).show()
+        }
+    }
+
+    private fun displayName(uri: Uri): String? =
+        try {
+            contentResolver.query(uri, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)?.use {
+                if (it.moveToFirst()) it.getString(0) else null
+            }
+        } catch (_: Exception) {
+            null
         }
 
-        override fun onCreateWindow(
-            view: WebView,
-            isDialog: Boolean,
-            isUserGesture: Boolean,
-            resultMsg: Message,
-        ): Boolean {
-            Log.d(TAG, "onCreateWindow: isUserGesture=$isUserGesture isDialog=$isDialog")
-            val transport = resultMsg.obj as? WebView.WebViewTransport ?: return false
-            val popup = openPopupWebView()
-            transport.webView = popup
-            resultMsg.sendToTarget()
-            return true
+    private fun handleShare(intent: Intent?) {
+        if (intent?.action != Intent.ACTION_SEND) {
+            return
         }
+        val text = intent.getStringExtra(Intent.EXTRA_TEXT) ?: return
+        intent.action = null
+        askNewFile(intent.getStringExtra(Intent.EXTRA_SUBJECT) ?: "shared", text)
+    }
 
-        override fun onCloseWindow(window: WebView) {
-            closePopup()
-        }
+    private fun TextView.startAligned(): TextView {
+        textDirection = View.TEXT_DIRECTION_LOCALE
+        textAlignment = View.TEXT_ALIGNMENT_VIEW_START
+        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
+        return this
     }
 
     companion object {
-        private const val TAG = "SalamWV"
-        private const val HOME_URL = "https://editor.salamlang.ir"
-        private const val SPLASH_TIMEOUT_MS = 12_000L
+        private const val REQ_IMPORT = 10
+        private const val REQ_EXPORT = 11
     }
 }

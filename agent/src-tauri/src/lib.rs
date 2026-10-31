@@ -6,6 +6,7 @@ mod device;
 mod memory;
 mod notify;
 mod tools;
+mod watchdog;
 mod workspace;
 
 use std::time::Duration;
@@ -25,6 +26,7 @@ const REMOTE_COMMANDS: &[&str] = &[
     "allow-agent-stop",
     "allow-agent-pending",
     "allow-agent-project-context",
+    "allow-agent-alive",
     "allow-agent-notify",
     "allow-agent-notify-prefs",
     "allow-agent-set-notify-prefs",
@@ -71,7 +73,11 @@ fn open_main(app: &AppHandle) -> tauri::Result<()> {
         .min_inner_size(720.0, 520.0)
         .disable_drag_drop_handler()
         .on_navigation(move |url| {
-            if config::is_local_asset(url) || config::same_origin(url, &target) || url.scheme() == "about" {
+            if config::is_local_asset(url) || url.scheme() == "about" {
+                return true;
+            }
+            if config::same_origin(url, &target) {
+                watchdog::arm(&navigation);
                 return true;
             }
             open_external(&navigation, url);
@@ -91,20 +97,30 @@ async fn connect_main(app: AppHandle) {
         .timeout(Duration::from_secs(8))
         .build()
         .unwrap_or_else(|_| bridge::client());
-    let mut offline_shown = false;
+    let mut attempts = 0u32;
+    let mut shown = "";
     loop {
-        let reachable = matches!(http.get(url.clone()).send().await, Ok(r) if r.status().as_u16() < 500);
-        if let Some(w) = app.get_webview_window("main") {
-            if reachable {
-                let _ = w.navigate(url);
+        let state = match http.get(url.clone()).send().await {
+            Ok(response) if response.status().as_u16() < 500 => "ok",
+            Ok(_) => "server",
+            Err(_) => "offline",
+        };
+        if let Some(window) = app.get_webview_window("main") {
+            if state == "ok" {
+                let _ = window.navigate(url.clone());
+                watchdog::arm(&app);
                 return;
             }
-            if !offline_shown {
-                if let Ok(mut here) = w.url() {
-                    here.set_fragment(Some("offline"));
-                    let _ = w.navigate(here);
+            attempts += 1;
+            if attempts >= 2 && shown != state {
+                let _ = window.navigate(config::local_url(&format!("error.html#{state}")));
+                shown = state;
+            } else if shown.is_empty() {
+                if let Ok(mut here) = window.url() {
+                    here.set_fragment(Some(state));
+                    let _ = window.navigate(here);
                 }
-                offline_shown = true;
+                shown = "loader";
             }
         }
         tokio::time::sleep(Duration::from_secs(5)).await;
@@ -126,7 +142,7 @@ fn allow_dev_origin(app: &tauri::App) -> tauri::Result<()> {
 pub fn run() {
     #[cfg(unix)]
     config::import_login_path();
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _, _| {
             notify::raise(app);
         }))
@@ -134,6 +150,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(approve::Approvals::default())
         .manage(bridge::Status::default())
+        .manage(watchdog::Watchdog::default())
         .invoke_handler(tauri::generate_handler![
             commands::agent_info,
             commands::agent_link,
@@ -144,6 +161,7 @@ pub fn run() {
             commands::agent_stop,
             commands::agent_pending,
             commands::agent_project_context,
+            commands::agent_alive,
             commands::agent_notify,
             commands::agent_notify_prefs,
             commands::agent_set_notify_prefs,
@@ -157,9 +175,23 @@ pub fn run() {
             allow_dev_origin(app)?;
             open_main(&handle)?;
             tauri::async_runtime::spawn(connect_main(handle.clone()));
+            tauri::async_runtime::spawn(watchdog::run(handle.clone()));
             tauri::async_runtime::spawn(bridge::run(handle));
             Ok(())
-        })
+        });
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    let builder = builder.on_web_content_process_terminate(|webview| {
+        let app = webview.app_handle().clone();
+        watchdog::disarm(&app);
+        let url = config::local_url("error.html#memory");
+        tauri::async_runtime::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(150)).await;
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.navigate(url);
+            }
+        });
+    });
+    builder
         .run(tauri::generate_context!())
         .expect("error while running Salam Agent");
 }

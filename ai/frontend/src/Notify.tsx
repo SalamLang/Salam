@@ -3,17 +3,64 @@ import { agent, isDesktop, type AgentInfo, type NotifyKind, type NotifyPrefs } f
 import { IconBell } from "./icons";
 import { Checkbox } from "./Checkbox";
 import { lang, t } from "./i18n";
+import { chime, pushToast, setToastSound } from "./Toasts";
+
+let prefs: NotifyPrefs = { enabled: true, sound: true, preview: true, lang: "fa" };
+
+function apply(next: NotifyPrefs) {
+  prefs = next;
+  setToastSound(next.sound);
+  return next;
+}
+
+function snippet(text: string, max = 150): string {
+  const flat = text
+    .replace(/```[\s\S]*?```/g, " ")
+    .replace(/\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/[#>*`_]/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+  return flat.length > max ? `${flat.slice(0, max - 1).trimEnd()}…` : flat;
+}
 
 export function announce(kind: NotifyKind, chat: string, text: string) {
+  if (!prefs.enabled) return;
+  const tone = kind === "failed" ? "failed" : kind === "network" ? "network" : "done";
+  const title =
+    kind === "failed"
+      ? t("پاسخ ناموفق بود", "The reply failed")
+      : kind === "network"
+        ? t("ارتباط قطع شد", "Connection lost")
+        : t("پاسخ آماده است", "Reply ready");
+  const body =
+    kind === "network"
+      ? t("ارتباط با سرور برقرار نیست. پاسخ ممکن است همچنان برسد.", "Cannot reach the server. The reply may still arrive.")
+      : prefs.preview
+        ? snippet(text) || chat
+        : undefined;
+  pushToast({ tone, title, body: body || undefined });
+  chime(tone);
   if (!isDesktop) return;
   agent.notify(kind, chat, text).catch(() => {});
+}
+
+export function announceApproval(summary: string) {
+  pushToast({
+    tone: "approval",
+    title: t("منتظر اجازه‌ی شما", "Waiting for your approval"),
+    body: summary,
+  });
+  chime("approval");
 }
 
 export function syncNotifyLanguage() {
   if (!isDesktop) return;
   agent
     .notifyPrefs()
-    .then((p) => (p.lang === lang ? p : agent.setNotifyPrefs({ ...p, lang })))
+    .then((current) => {
+      apply(current);
+      if (current.lang !== lang) agent.setNotifyPrefs({ ...current, lang }).then(apply).catch(() => {});
+    })
     .catch(() => {});
 }
 
@@ -33,14 +80,17 @@ function failureHint(os: AgentInfo["os"] | undefined, reason: string): string {
 
 export function NotifyMenu({ os }: { os: AgentInfo["os"] | undefined }) {
   const [open, setOpen] = useState(false);
-  const [prefs, setPrefs] = useState<NotifyPrefs | null>(null);
+  const [current, setCurrent] = useState<NotifyPrefs | null>(null);
   const [result, setResult] = useState("");
   const [testing, setTesting] = useState(false);
   const box = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!open) return;
-    agent.notifyPrefs().then(setPrefs).catch(() => {});
+    agent
+      .notifyPrefs()
+      .then((p) => setCurrent(apply(p)))
+      .catch(() => {});
     const away = (e: MouseEvent) => {
       if (box.current && !box.current.contains(e.target as Node)) setOpen(false);
     };
@@ -56,18 +106,36 @@ export function NotifyMenu({ os }: { os: AgentInfo["os"] | undefined }) {
   }, [open]);
 
   const change = (patch: Partial<NotifyPrefs>) => {
-    if (!prefs) return;
-    const next = { ...prefs, ...patch, lang };
-    setPrefs(next);
-    agent.setNotifyPrefs(next).then(setPrefs).catch(() => {});
+    if (!current) return;
+    const next = { ...current, ...patch, lang };
+    setCurrent(next);
+    apply(next);
+    agent
+      .setNotifyPrefs(next)
+      .then((saved) => setCurrent(apply(saved)))
+      .catch(() => {});
   };
 
   const test = async () => {
     setTesting(true);
     setResult("");
+    pushToast({
+      tone: "info",
+      title: t("اعلان آزمایشی", "Test notification"),
+      body: t("اگر این پیام را می‌بینید، اعلان‌های ایجنت سلام کار می‌کنند.", "If you can see this, Salam Agent notifications work."),
+      seconds: 8,
+    });
+    chime("info");
     try {
-      await agent.notify("test");
-      setResult(t("فرستاده شد. اگر چیزی ندیدید، حالت «مزاحم نشوید» یا تنظیمات اعلان سیستم را بررسی کنید.", "Sent. If you saw nothing, check Do Not Disturb or your system notification settings."));
+      const shown = await agent.notify("test");
+      setResult(
+        shown === "shown"
+          ? t("هم اعلان سیستم و هم اعلان داخل برنامه فرستاده شد.", "Both the system notification and the in-app notice were sent.")
+          : t(
+              "اعلان سیستم نمایش داده نشد؛ اعلان داخل برنامه کار می‌کند. تنظیمات اعلان سیستم را بررسی کنید.",
+              "The system notification was not shown; the in-app notice works. Check your system notification settings.",
+            ),
+      );
     } catch (e) {
       setResult(failureHint(os, typeof e === "string" ? e : e instanceof Error ? e.message : ""));
     } finally {
@@ -75,7 +143,7 @@ export function NotifyMenu({ os }: { os: AgentInfo["os"] | undefined }) {
     }
   };
 
-  const on = prefs?.enabled ?? true;
+  const on = current?.enabled ?? true;
   return (
     <div className="notify" ref={box}>
       <button
@@ -92,18 +160,19 @@ export function NotifyMenu({ os }: { os: AgentInfo["os"] | undefined }) {
         <div className="notify-pop" role="dialog" aria-label={t("اعلان‌ها", "Notifications")}>
           <strong>{t("اعلان‌های سیستم", "System notifications")}</strong>
           <p>{t("وقتی پاسخ آماده شد، خطایی پیش آمد، ارتباط قطع شد یا دستیار منتظر اجازه‌ی شما بود، اگر پنجره جلوی چشم شما نباشد خبر می‌دهیم.", "When a reply is ready, something fails, the connection drops, or the assistant waits for your approval, we let you know if this window is not in front.")}</p>
-          <Checkbox checked={on} onChange={(v) => change({ enabled: v })} label={t("نمایش اعلان", "Show notifications")} disabled={!prefs} />
-          <Checkbox checked={prefs?.sound ?? true} onChange={(v) => change({ sound: v })} label={t("پخش صدا", "Play a sound")} disabled={!prefs || !on} />
+          <Checkbox checked={on} onChange={(v) => change({ enabled: v })} label={t("نمایش اعلان", "Show notifications")} disabled={!current} />
+          <Checkbox checked={current?.sound ?? true} onChange={(v) => change({ sound: v })} label={t("پخش صدا", "Play a sound")} disabled={!current || !on} />
           <Checkbox
-            checked={prefs?.preview ?? true}
+            checked={current?.preview ?? true}
             onChange={(v) => change({ preview: v })}
             label={t("نمایش پیش‌نمایش پاسخ", "Show a reply preview")}
             hint={t("عنوان گفت‌وگو و چند کلمه از پاسخ در اعلان دیده می‌شود.", "The chat title and the start of the reply appear in the notification.")}
-            disabled={!prefs || !on}
+            disabled={!current || !on}
           />
           <button type="button" className="button small ghost" onClick={test} disabled={testing}>
             {t("فرستادن اعلان آزمایشی", "Send a test notification")}
           </button>
+          <p className="notify-live">{t("اعلان داخل برنامه همیشه، حتی وقتی پنجره در پیش‌زمینه است، گوشه‌ی صفحه نمایش داده می‌شود.", "An in-app notice also appears in the corner, even when this window is in front.")}</p>
           {result && <p className="notify-result">{result}</p>}
         </div>
       )}

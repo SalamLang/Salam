@@ -3,8 +3,18 @@ import os
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SKIP = {"console", "layout", "layoutgen", "map", "net", "net/internal", "web", "telegram"}
+SKIP = {
+    "console",
+    "layout",
+    "layoutgen",
+    "map",
+    "net",
+    "net/internal",
+    "web",
+    "telegram",
+}
 SKIP_PREFIX = ("layout/", "net/internal/")
+
 
 def pages(lang):
     found = set()
@@ -20,10 +30,11 @@ def pages(lang):
                     break
     return found
 
+
 def packages():
     found = set()
     base = os.path.join(ROOT, "std")
-    for root, dirs, files in os.walk(base):
+    for root, _, files in os.walk(base):
         if not any(name.endswith(".salam") for name in files):
             continue
         rel = os.path.relpath(root, base).replace(os.sep, "/")
@@ -41,6 +52,7 @@ def packages():
         found.add(rel)
     return found
 
+
 en = pages("en")
 fa = pages("fa")
 expected = packages()
@@ -50,12 +62,26 @@ missing_fa = sorted(expected - fa)
 missing_translation = sorted(en ^ fa)
 
 if missing_en:
-    print("website: std packages without an English page:", ", ".join(missing_en), file=sys.stderr)
+    print(
+        "website: std packages without an English page:",
+        ", ".join(missing_en),
+        file=sys.stderr,
+    )
 if missing_fa:
-    print("website: std packages without a Persian page:", ", ".join(missing_fa), file=sys.stderr)
+    print(
+        "website: std packages without a Persian page:",
+        ", ".join(missing_fa),
+        file=sys.stderr,
+    )
 if missing_translation:
-    print("website: std pages only in one language:", ", ".join(missing_translation), file=sys.stderr)
+    print(
+        "website: std pages only in one language:",
+        ", ".join(missing_translation),
+        file=sys.stderr,
+    )
 if missing_en or missing_fa or missing_translation:
     sys.exit(1)
 
-print(f"std coverage: {len(expected)} packages, {len(en)} English and {len(fa)} Persian pages")
+print(
+    f"std coverage: {len(expected)} packages, {len(en)} English and {len(fa)} Persian pages"
+)

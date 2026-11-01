@@ -1,8 +1,10 @@
 #include <errno.h>
 #include <unistd.h>
 
-__attribute__((weak)) int posix_spawnp(int *pid, const char *file, const void *file_actions, const void *attrp,
-                                       char *const argv[], char *const envp[]) {
+__attribute__((weak)) int posix_spawnp(int *pid, const char *file,
+                                       const void *file_actions, const void *attrp,
+                                       char *const argv[], char *const envp[])
+{
     (void)file_actions;
     (void)attrp;
     (void)envp;

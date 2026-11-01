@@ -111,7 +111,9 @@ class SettingsActivity : BaseActivity() {
                     id = View.generateViewId()
                     text = getString(res)
                     setTextColor(palette.text)
-                    buttonTintList = android.content.res.ColorStateList.valueOf(palette.brand)
+                    buttonTintList =
+                        android.content.res.ColorStateList
+                            .valueOf(palette.brand)
                 }
             ids.add(b.id)
             group.addView(b)

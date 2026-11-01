@@ -8,7 +8,8 @@
 #include <fcntl.h>
 #include <unistd.h>
 
-static char *utf8_from_jstring(JNIEnv *env, jstring s) {
+static char *utf8_from_jstring(JNIEnv *env, jstring s)
+{
     if (s == NULL) {
         char *empty = malloc(1);
         if (empty) {
@@ -26,7 +27,8 @@ static char *utf8_from_jstring(JNIEnv *env, jstring s) {
     }
     for (jsize i = 0; i < n; i++) {
         uint32_t c = u[i];
-        if (c >= 0xD800 && c <= 0xDBFF && i + 1 < n && u[i + 1] >= 0xDC00 && u[i + 1] <= 0xDFFF) {
+        if (c >= 0xD800 && c <= 0xDBFF && i + 1 < n && u[i + 1] >= 0xDC00 &&
+            u[i + 1] <= 0xDFFF) {
             c = 0x10000 + ((c - 0xD800) << 10) + (u[i + 1] - 0xDC00);
             i++;
         } else if (c >= 0xD800 && c <= 0xDFFF) {
@@ -53,7 +55,8 @@ static char *utf8_from_jstring(JNIEnv *env, jstring s) {
     return out;
 }
 
-static jstring jstring_from_utf8(JNIEnv *env, const char *s) {
+static jstring jstring_from_utf8(JNIEnv *env, const char *s)
+{
     if (s == NULL) {
         return (*env)->NewString(env, NULL, 0);
     }
@@ -111,13 +114,16 @@ static jstring jstring_from_utf8(JNIEnv *env, const char *s) {
     return r;
 }
 
-static jstring take(JNIEnv *env, char *s) {
+static jstring take(JNIEnv *env, char *s)
+{
     jstring r = jstring_from_utf8(env, s);
     salam_engine_free(s);
     return r;
 }
 
-JNIEXPORT jint JNICALL Java_ir_salamlang_app_Engine_nativeBoot(JNIEnv *env, jclass cls, jstring std_root) {
+JNIEXPORT jint JNICALL Java_ir_salamlang_app_Engine_nativeBoot(JNIEnv *env, jclass cls,
+                                                               jstring std_root)
+{
     (void)cls;
     char *root = utf8_from_jstring(env, std_root);
     int rc = salam_engine_boot(root);
@@ -125,7 +131,9 @@ JNIEXPORT jint JNICALL Java_ir_salamlang_app_Engine_nativeBoot(JNIEnv *env, jcla
     return rc;
 }
 
-JNIEXPORT jint JNICALL Java_ir_salamlang_app_Engine_nativeCli(JNIEnv *env, jclass cls, jstring args) {
+JNIEXPORT jint JNICALL Java_ir_salamlang_app_Engine_nativeCli(JNIEnv *env, jclass cls,
+                                                              jstring args)
+{
     (void)cls;
     char *a = utf8_from_jstring(env, args);
     int rc = salam_engine_cli(a);
@@ -135,19 +143,26 @@ JNIEXPORT jint JNICALL Java_ir_salamlang_app_Engine_nativeCli(JNIEnv *env, jclas
     return rc;
 }
 
-JNIEXPORT void JNICALL Java_ir_salamlang_app_Engine_nativeStop(JNIEnv *env, jclass cls) {
+JNIEXPORT void JNICALL Java_ir_salamlang_app_Engine_nativeStop(JNIEnv *env, jclass cls)
+{
     (void)env;
     (void)cls;
     salam_engine_stop();
 }
 
-JNIEXPORT void JNICALL Java_ir_salamlang_app_Engine_nativeClearStop(JNIEnv *env, jclass cls) {
+JNIEXPORT void JNICALL Java_ir_salamlang_app_Engine_nativeClearStop(JNIEnv *env,
+                                                                    jclass cls)
+{
     (void)env;
     (void)cls;
     salam_engine_clear_stop();
 }
 
-JNIEXPORT jstring JNICALL Java_ir_salamlang_app_Engine_nativeTokens(JNIEnv *env, jclass cls, jstring source, jstring lang) {
+JNIEXPORT jstring JNICALL Java_ir_salamlang_app_Engine_nativeTokens(JNIEnv *env,
+                                                                    jclass cls,
+                                                                    jstring source,
+                                                                    jstring lang)
+{
     (void)cls;
     char *s = utf8_from_jstring(env, source);
     char *l = utf8_from_jstring(env, lang);
@@ -157,7 +172,9 @@ JNIEXPORT jstring JNICALL Java_ir_salamlang_app_Engine_nativeTokens(JNIEnv *env,
     return r;
 }
 
-JNIEXPORT jstring JNICALL Java_ir_salamlang_app_Engine_nativeCheck(JNIEnv *env, jclass cls, jstring source, jstring path, jstring lang) {
+JNIEXPORT jstring JNICALL Java_ir_salamlang_app_Engine_nativeCheck(
+    JNIEnv *env, jclass cls, jstring source, jstring path, jstring lang)
+{
     (void)cls;
     char *s = utf8_from_jstring(env, source);
     char *p = utf8_from_jstring(env, path);
@@ -169,7 +186,10 @@ JNIEXPORT jstring JNICALL Java_ir_salamlang_app_Engine_nativeCheck(JNIEnv *env, 
     return r;
 }
 
-JNIEXPORT jstring JNICALL Java_ir_salamlang_app_Engine_nativeDetect(JNIEnv *env, jclass cls, jstring source) {
+JNIEXPORT jstring JNICALL Java_ir_salamlang_app_Engine_nativeDetect(JNIEnv *env,
+                                                                    jclass cls,
+                                                                    jstring source)
+{
     (void)cls;
     char *s = utf8_from_jstring(env, source);
     jstring r = take(env, salam_engine_detect(s));
@@ -177,12 +197,16 @@ JNIEXPORT jstring JNICALL Java_ir_salamlang_app_Engine_nativeDetect(JNIEnv *env,
     return r;
 }
 
-JNIEXPORT jstring JNICALL Java_ir_salamlang_app_Engine_nativeVersion(JNIEnv *env, jclass cls) {
+JNIEXPORT jstring JNICALL Java_ir_salamlang_app_Engine_nativeVersion(JNIEnv *env,
+                                                                     jclass cls)
+{
     (void)cls;
     return take(env, salam_engine_version());
 }
 
-JNIEXPORT jintArray JNICALL Java_ir_salamlang_app_Engine_nativeRedirect(JNIEnv *env, jclass cls) {
+JNIEXPORT jintArray JNICALL Java_ir_salamlang_app_Engine_nativeRedirect(JNIEnv *env,
+                                                                        jclass cls)
+{
     (void)cls;
     int out_pipe[2], err_pipe[2], in_pipe[2];
     if (pipe(out_pipe) != 0 || pipe(err_pipe) != 0 || pipe(in_pipe) != 0) {
@@ -206,7 +230,9 @@ JNIEXPORT jintArray JNICALL Java_ir_salamlang_app_Engine_nativeRedirect(JNIEnv *
     return r;
 }
 
-JNIEXPORT jint JNICALL Java_ir_salamlang_app_Engine_nativeChdir(JNIEnv *env, jclass cls, jstring dir) {
+JNIEXPORT jint JNICALL Java_ir_salamlang_app_Engine_nativeChdir(JNIEnv *env, jclass cls,
+                                                                jstring dir)
+{
     (void)cls;
     char *d = utf8_from_jstring(env, dir);
     int rc = d ? chdir(d) : -1;
@@ -214,7 +240,9 @@ JNIEXPORT jint JNICALL Java_ir_salamlang_app_Engine_nativeChdir(JNIEnv *env, jcl
     return rc;
 }
 
-JNIEXPORT void JNICALL Java_ir_salamlang_app_Engine_nativeDrainStdin(JNIEnv *env, jclass cls) {
+JNIEXPORT void JNICALL Java_ir_salamlang_app_Engine_nativeDrainStdin(JNIEnv *env,
+                                                                     jclass cls)
+{
     (void)env;
     (void)cls;
     int flags = fcntl(0, F_GETFL);
@@ -228,7 +256,9 @@ JNIEXPORT void JNICALL Java_ir_salamlang_app_Engine_nativeDrainStdin(JNIEnv *env
     fcntl(0, F_SETFL, flags);
 }
 
-JNIEXPORT void JNICALL Java_ir_salamlang_app_Engine_nativeMark(JNIEnv *env, jclass cls, jstring text) {
+JNIEXPORT void JNICALL Java_ir_salamlang_app_Engine_nativeMark(JNIEnv *env, jclass cls,
+                                                               jstring text)
+{
     (void)cls;
     char *t = utf8_from_jstring(env, text);
     if (t == NULL) {

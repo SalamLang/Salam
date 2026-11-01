@@ -122,7 +122,10 @@ object Analyzer {
                     }
                     value = 0
                 }
-                else -> value = value * 10 + (c - '0')
+
+                else -> {
+                    value = value * 10 + (c - '0')
+                }
             }
         }
         return out

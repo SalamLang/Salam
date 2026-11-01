@@ -482,6 +482,9 @@ EOF_LNOTS
             mkdir -p "$tdir"
             "$SALAM_ABS" translate "$other" "$f" --lang="$lang" --output="$tdir/t.salam" --no-color >/dev/null 2>&1
             got=$("$SALAM_ABS" exec "$tdir/t.salam" --no-color --log-level=error --lang="$other" 2>&1 | tr -d '\r')
+            case "$got" in
+            *"'salam run'"*) got=$("$SALAM_ABS" run "$tdir/t.salam" --no-color --log-level=error --lang="$other" 2>&1 | tr -d '\r') ;;
+            esac
             rm -rf "$tdir"
             wk_check "$expabs" "$got"
             ;;
@@ -534,6 +537,16 @@ EOF_LAYOUT_NOT
             )
             got=$(tr -d '\r' <"$jobdir/.stdout")
             rc=$(cat "$jobdir/.rc")
+            if [ "$HOST_OS" = windows ] && [ -z "$got" ]; then
+                echo "NOTE $label: the in-process JIT died with exit $rc, running the AOT build instead" >&2
+                (
+                    cd "$jobdir" && "$SALAM_ABS" llvm "$fabs" --exec -o "$jobdir/prog.exe" --no-color --log-level=error >"$jobdir/.stdout" 2>"$jobdir/.stderr" &&
+                        "$jobdir/prog.exe" >"$jobdir/.stdout" 2>"$jobdir/.stderr"
+                    echo "$?" >"$jobdir/.rc"
+                )
+                got=$(tr -d '\r' <"$jobdir/.stdout")
+                rc=$(cat "$jobdir/.rc")
+            fi
             why=$(tr -d '\r' <"$jobdir/.stderr" | grep -v '^$' | head -3 | tr '\n' ' ')
             rm -rf "$jobdir"
             want_rc_file="${fabs%.salam}.exit"

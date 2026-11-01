@@ -59,7 +59,10 @@ class ConsoleView(
         var lastY = 0f
         handleBox.setOnTouchListener { _, e ->
             when (e.actionMasked) {
-                MotionEvent.ACTION_DOWN -> lastY = e.rawY
+                MotionEvent.ACTION_DOWN -> {
+                    lastY = e.rawY
+                }
+
                 MotionEvent.ACTION_MOVE -> {
                     listener?.onConsoleResize(lastY - e.rawY)
                     lastY = e.rawY

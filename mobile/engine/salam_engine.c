@@ -18,7 +18,8 @@ static int booted;
 static char boot_arg0[] = "salam";
 static char *boot_argv[] = {boot_arg0, NULL};
 
-int salam_engine_boot(const char *std_root) {
+int salam_engine_boot(const char *std_root)
+{
     if (!booted) {
         salam_engine_main(1, boot_argv);
         booted = 1;
@@ -27,34 +28,43 @@ int salam_engine_boot(const char *std_root) {
     return 0;
 }
 
-int salam_engine_cli(const char *args) {
+int salam_engine_cli(const char *args)
+{
     return (int)salam_m_cli(args ? args : "");
 }
 
-void salam_engine_stop(void) {
+void salam_engine_stop(void)
+{
     salam_m_stop();
 }
 
-void salam_engine_clear_stop(void) {
+void salam_engine_clear_stop(void)
+{
     salam_m_clear_stop();
 }
 
-char *salam_engine_tokens(const char *source, const char *lang) {
+char *salam_engine_tokens(const char *source, const char *lang)
+{
     return (char *)salam_m_tokens(source ? source : "", lang ? lang : "");
 }
 
-char *salam_engine_check(const char *source, const char *path, const char *lang) {
-    return (char *)salam_m_check(source ? source : "", path ? path : "", lang ? lang : "");
+char *salam_engine_check(const char *source, const char *path, const char *lang)
+{
+    return (char *)salam_m_check(source ? source : "", path ? path : "",
+                                 lang ? lang : "");
 }
 
-char *salam_engine_detect(const char *source) {
+char *salam_engine_detect(const char *source)
+{
     return (char *)salam_m_detect(source ? source : "");
 }
 
-char *salam_engine_version(void) {
+char *salam_engine_version(void)
+{
     return (char *)salam_m_version();
 }
 
-void salam_engine_free(char *p) {
+void salam_engine_free(char *p)
+{
     free(p);
 }

@@ -84,7 +84,10 @@ class EngineService : Service() {
     private fun handle(msg: Message): Boolean {
         msg.replyTo?.let { client = it }
         when (msg.what) {
-            RunClient.MSG_RUN -> start(msg.data)
+            RunClient.MSG_RUN -> {
+                start(msg.data)
+            }
+
             RunClient.MSG_INPUT -> {
                 val text = msg.data.getString("text") ?: ""
                 try {
@@ -93,7 +96,10 @@ class EngineService : Service() {
                 } catch (_: Exception) {
                 }
             }
-            RunClient.MSG_STOP -> stop()
+
+            RunClient.MSG_STOP -> {
+                stop()
+            }
         }
         return true
     }

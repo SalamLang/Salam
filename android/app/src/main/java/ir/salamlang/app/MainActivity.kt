@@ -182,7 +182,9 @@ class MainActivity : BaseActivity() {
             val icon =
                 ImageView(this@MainActivity).apply {
                     setImageResource(R.drawable.ic_file)
-                    imageTintList = android.content.res.ColorStateList.valueOf(palette.brand)
+                    imageTintList =
+                        android.content.res.ColorStateList
+                            .valueOf(palette.brand)
                 }
             row.addView(icon, LinearLayout.LayoutParams(dp(24), dp(24)))
             val texts =
@@ -282,13 +284,20 @@ class MainActivity : BaseActivity() {
             .setTitle(f.name)
             .setItems(items) { _, which ->
                 when (which) {
-                    0 -> rename(f)
+                    0 -> {
+                        rename(f)
+                    }
+
                     1 -> {
                         Workspace.unique(this, f.name).writeText(f.readText())
                         refresh()
                     }
-                    2 -> export(f)
-                    3 ->
+
+                    2 -> {
+                        export(f)
+                    }
+
+                    3 -> {
                         startActivity(
                             Intent.createChooser(
                                 Intent(Intent.ACTION_SEND)
@@ -298,7 +307,9 @@ class MainActivity : BaseActivity() {
                                 getString(R.string.share),
                             ),
                         )
-                    4 ->
+                    }
+
+                    4 -> {
                         AlertDialog
                             .Builder(this)
                             .setMessage(getString(R.string.delete_confirm, f.name))
@@ -307,6 +318,7 @@ class MainActivity : BaseActivity() {
                                 refresh()
                             }.setNegativeButton(R.string.cancel, null)
                             .show()
+                    }
                 }
             }.show()
     }
@@ -380,6 +392,7 @@ class MainActivity : BaseActivity() {
                     f.writeText(text)
                     EditorActivity.open(this, f)
                 }
+
                 REQ_EXPORT -> {
                     val src = exportSource ?: return
                     contentResolver.openOutputStream(uri)?.use { it.write(src.readBytes()) }

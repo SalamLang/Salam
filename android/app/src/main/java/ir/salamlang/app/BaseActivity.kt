@@ -102,7 +102,9 @@ abstract class BaseActivity : Activity() {
             layoutParams = LinearLayout.LayoutParams(dp(44), dp(44))
             setOnClickListener(onClick)
             setOnLongClickListener {
-                android.widget.Toast.makeText(context, contentDescription, android.widget.Toast.LENGTH_SHORT).show()
+                android.widget.Toast
+                    .makeText(context, contentDescription, android.widget.Toast.LENGTH_SHORT)
+                    .show()
                 true
             }
         }

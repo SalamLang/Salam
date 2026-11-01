@@ -175,6 +175,7 @@ class EditorActivity :
                 setPadding(dp(8), 0, dp(4), dp(6))
                 visibility = View.GONE
             }
+
         fun field(hint: Int): EditText =
             EditText(this).apply {
                 setHint(hint)
@@ -197,8 +198,14 @@ class EditorActivity :
             true
         }
         row1.addView(weight(findQuery))
-        row1.addView(iconButton(R.drawable.ic_up, R.string.previous) { if (!editor.find(findQuery.text.toString(), false)) toast(R.string.not_found) })
-        row1.addView(iconButton(R.drawable.ic_down, R.string.next) { if (!editor.find(findQuery.text.toString(), true)) toast(R.string.not_found) })
+        row1.addView(
+            iconButton(R.drawable.ic_up, R.string.previous) {
+                if (!editor.find(findQuery.text.toString(), false)) toast(R.string.not_found)
+            },
+        )
+        row1.addView(
+            iconButton(R.drawable.ic_down, R.string.next) { if (!editor.find(findQuery.text.toString(), true)) toast(R.string.not_found) },
+        )
         row1.addView(
             iconButton(R.drawable.ic_more, R.string.replace) {
                 replaceRow.visibility = if (replaceRow.visibility == View.VISIBLE) View.GONE else View.VISIBLE
@@ -451,25 +458,70 @@ class EditorActivity :
         m.add(0, 11, 0, R.string.settings)
         menu.setOnMenuItemClickListener {
             when (it.itemId) {
-                1 -> if (save()) toast(R.string.saved)
-                2 -> formatFile()
-                3 -> translateFile()
+                1 -> {
+                    if (save()) toast(R.string.saved)
+                }
+
+                2 -> {
+                    formatFile()
+                }
+
+                3 -> {
+                    translateFile()
+                }
+
                 4 -> {
                     findBar.visibility = View.VISIBLE
                     findQuery.requestFocus()
                 }
-                5 -> askGoToLine()
-                6 -> requestCheck()
-                7 -> previewPage()
-                9 -> shareFile()
-                10 -> console.visibility = View.VISIBLE
-                11 -> startActivity(Intent(this, SettingsActivity::class.java))
-                20 -> inspect("--emit-tokens", "xml", R.string.inspect_tokens)
-                21 -> inspect("--emit-ast", "xml", R.string.inspect_ast)
-                22 -> inspect("--emit-symbol", "xml", R.string.inspect_symbols)
-                23 -> emitTo("js", "js", R.string.inspect_js)
-                24 -> emitTo("llvm", "ll", R.string.inspect_llvm)
-                25 -> emitC()
+
+                5 -> {
+                    askGoToLine()
+                }
+
+                6 -> {
+                    requestCheck()
+                }
+
+                7 -> {
+                    previewPage()
+                }
+
+                9 -> {
+                    shareFile()
+                }
+
+                10 -> {
+                    console.visibility = View.VISIBLE
+                }
+
+                11 -> {
+                    startActivity(Intent(this, SettingsActivity::class.java))
+                }
+
+                20 -> {
+                    inspect("--emit-tokens", "xml", R.string.inspect_tokens)
+                }
+
+                21 -> {
+                    inspect("--emit-ast", "xml", R.string.inspect_ast)
+                }
+
+                22 -> {
+                    inspect("--emit-symbol", "xml", R.string.inspect_symbols)
+                }
+
+                23 -> {
+                    emitTo("js", "js", R.string.inspect_js)
+                }
+
+                24 -> {
+                    emitTo("llvm", "ll", R.string.inspect_llvm)
+                }
+
+                25 -> {
+                    emitC()
+                }
             }
             true
         }

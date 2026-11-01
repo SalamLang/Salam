@@ -62,14 +62,22 @@ read-only one, and they never leave the workspace.
 
 ## Notifications
 
-When the window is not in front, the app shows a system notification and
-asks the OS to flash the taskbar or bounce the dock icon (`src/notify.rs`):
+When the window is not in front (another window is on top, the app is
+minimized, or on macOS it is hidden with Cmd+H), the app shows a system
+notification and asks the OS to flash the taskbar or bounce the dock icon
+(`src/notify.rs`):
 
-- a reply is ready, or failed (raised by the web app)
+- a reply is ready, or failed (the app watches every reply it starts)
 - the server cannot be reached mid-reply (web app)
 - a command or edit waits for approval (app)
 - the assistant link is down for 20 seconds, and back again (app)
 - this computer was unlinked, HTTP 401 (app)
+
+A reply started in the window is handed to the app with `agent_watch_reply`,
+and the app itself polls it while the window is away (`src/watch.rs`). Because
+the check runs in Rust rather than in a page timer, the notification still
+arrives when the window is minimized, the webview is throttled, or the page is
+busy; each reply is announced once, whichever side sees it finish first.
 
 Every one of these also appears inside the window as a toast in the corner,
 with a short chime, even when the window is in front or the system
@@ -81,7 +89,9 @@ repeated within 4 seconds.
 
 - Windows: toasts use the app's own identity when installed under
   `%LOCALAPPDATA%` or Program Files, and PowerShell's otherwise (portable ZIP).
-- macOS: needs notification permission for Salam Agent in System Settings.
+- macOS: needs notification permission for Salam Agent in System Settings. A
+  development build (not inside a `.app`) posts through `osascript`, because
+  the notification centre drops notices from an unbundled binary.
 - Linux: talks to the session's `org.freedesktop.Notifications` service over
   D-Bus (any desktop, or dunst/mako on a bare window manager). Clicking a
   notification raises the window. Without a service the taskbar hint still

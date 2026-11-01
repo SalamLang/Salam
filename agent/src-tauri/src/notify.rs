@@ -1,6 +1,6 @@
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -67,6 +67,7 @@ pub struct Notice {
     pub kind: Kind,
     pub chat: String,
     pub text: String,
+    pub mid: Option<i64>,
 }
 
 impl Notice {
@@ -75,11 +76,17 @@ impl Notice {
             kind,
             chat: String::new(),
             text: String::new(),
+            mid: None,
         }
     }
 
     pub fn text(mut self, text: impl Into<String>) -> Self {
         self.text = text.into();
+        self
+    }
+
+    pub fn mid(mut self, mid: i64) -> Self {
+        self.mid = Some(mid);
         self
     }
 }
@@ -95,6 +102,7 @@ pub struct Notifier {
     file: PathBuf,
     prefs: Mutex<Prefs>,
     recent: Mutex<HashMap<(Kind, String), Instant>>,
+    notified: Mutex<HashSet<i64>>,
 }
 
 impl Notifier {
@@ -112,6 +120,7 @@ impl Notifier {
             file,
             prefs: Mutex::new(prefs),
             recent: Mutex::new(HashMap::new()),
+            notified: Mutex::new(HashSet::new()),
         }
     }
 
@@ -138,6 +147,14 @@ impl Notifier {
         }
         recent.insert(key, now);
         true
+    }
+
+    fn claim(&self, mid: i64) -> bool {
+        let mut notified = self.notified.lock().unwrap();
+        if notified.len() > 1024 {
+            notified.clear();
+        }
+        notified.insert(mid)
     }
 }
 
@@ -292,9 +309,34 @@ pub fn compose(n: &Notice, prefs: &Prefs) -> (String, String) {
     }
 }
 
-fn looking_at_window(app: &AppHandle) -> bool {
-    let Some(w) = app.get_webview_window("main") else { return false };
-    w.is_visible().unwrap_or(false) && !w.is_minimized().unwrap_or(false) && w.is_focused().unwrap_or(false)
+pub fn away(app: &AppHandle) -> bool {
+    let Some(w) = app.get_webview_window("main") else { return true };
+    if !w.is_visible().unwrap_or(false) || w.is_minimized().unwrap_or(false) || !w.is_focused().unwrap_or(false) {
+        return true;
+    }
+    #[cfg(target_os = "macos")]
+    if app_hidden(app) {
+        return true;
+    }
+    false
+}
+
+#[cfg(target_os = "macos")]
+fn app_hidden(app: &AppHandle) -> bool {
+    use std::sync::mpsc;
+    let (tx, rx) = mpsc::channel();
+    let asked = app.run_on_main_thread(move || {
+        use objc2::MainThreadMarker;
+        use objc2_app_kit::NSApplication;
+        let hidden = MainThreadMarker::new()
+            .map(|mtm| NSApplication::sharedApplication(mtm).isHidden())
+            .unwrap_or(false);
+        let _ = tx.send(hidden);
+    });
+    if asked.is_err() {
+        return false;
+    }
+    rx.recv_timeout(Duration::from_millis(80)).unwrap_or(false)
 }
 
 pub fn raise(app: &AppHandle) {
@@ -359,6 +401,11 @@ fn icon_file(app: &AppHandle) -> Option<PathBuf> {
 }
 
 fn show(app: &AppHandle, kind: Kind, title: &str, body: &str, sound: bool) -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    if !crate::config::bundled() {
+        return script(title, body, kind, sound);
+    }
+
     let mut n = notify_rust::Notification::new();
     n.appname(APP_NAME).summary(title).body(body);
 
@@ -374,12 +421,7 @@ fn show(app: &AppHandle, kind: Kind, title: &str, body: &str, sound: bool) -> Re
 
     #[cfg(target_os = "macos")]
     {
-        let id = if tauri::is_dev() {
-            "com.apple.Terminal".to_string()
-        } else {
-            app.config().identifier.clone()
-        };
-        let _ = notify_rust::set_application(&id);
+        let _ = notify_rust::set_application(&app.config().identifier);
         if sound {
             n.sound_name(if kind.failure() || kind.urgent() { "Basso" } else { "Glass" });
         }
@@ -408,7 +450,40 @@ fn show(app: &AppHandle, kind: Kind, title: &str, body: &str, sound: bool) -> Re
         }
         n.action("default", "Open");
     }
-    fire(app, &n)
+    let result = fire(app, &n);
+    #[cfg(target_os = "macos")]
+    if result.is_err() {
+        return script(title, body, kind, sound);
+    }
+    result
+}
+
+#[cfg(target_os = "macos")]
+fn script(title: &str, body: &str, kind: Kind, sound: bool) -> Result<(), String> {
+    let mut line = format!("display notification \"{}\" with title \"{}\"", quoted(body), quoted(title));
+    if sound {
+        let name = if kind.failure() || kind.urgent() { "Basso" } else { "Glass" };
+        line.push_str(&format!(" sound name \"{name}\""));
+    }
+    let out = std::process::Command::new("osascript")
+        .arg("-e")
+        .arg(line)
+        .output()
+        .map_err(|e| format!("osascript: {e}"))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let err = String::from_utf8_lossy(&out.stderr).trim().to_string();
+    Err(if err.is_empty() {
+        "osascript could not show the notification".to_string()
+    } else {
+        err
+    })
+}
+
+#[cfg(target_os = "macos")]
+fn quoted(text: &str) -> String {
+    text.replace('\\', "\\\\").replace('"', "\\\"")
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
@@ -434,15 +509,17 @@ pub async fn deliver(app: &AppHandle, notice: Notice) -> Result<Delivery, String
     let prefs = app.state::<Notifier>().prefs();
     let kind = notice.kind;
     let test = kind == Kind::Test;
-    if !test && kind != Kind::Approval && !prefs.enabled {
+    let forced = test || kind == Kind::Approval;
+    if !forced && (!prefs.enabled || away(app)) {
         return Ok(Delivery::Skipped);
     }
-    if !test && looking_at_window(app) {
+    if !forced && !app.state::<Notifier>().due((kind, notice.chat.clone()), Instant::now()) {
         return Ok(Delivery::Skipped);
     }
-    let key = (kind, notice.chat.clone());
-    if !test && !app.state::<Notifier>().due(key, Instant::now()) {
-        return Ok(Delivery::Skipped);
+    if let Some(mid) = notice.mid {
+        if !test && !app.state::<Notifier>().claim(mid) {
+            return Ok(Delivery::Skipped);
+        }
     }
     attract(app, kind);
     if !prefs.enabled && !test {
@@ -496,6 +573,7 @@ mod tests {
             kind: Kind::Done,
             chat: "Fix the parser".into(),
             text: "All **12** tests pass now.".into(),
+            mid: None,
         };
         let (title, body) = compose(&n, &prefs(Lang::En, true));
         assert_eq!(title, "Reply ready");
@@ -550,6 +628,7 @@ mod tests {
             file: PathBuf::new(),
             prefs: Mutex::new(Prefs::default()),
             recent: Mutex::new(HashMap::new()),
+            notified: Mutex::new(HashSet::new()),
         };
         let t0 = Instant::now();
         assert!(n.due((Kind::Done, "a".into()), t0));
@@ -557,6 +636,31 @@ mod tests {
         assert!(n.due((Kind::Done, "b".into()), t0 + Duration::from_secs(1)));
         assert!(n.due((Kind::Failed, "a".into()), t0 + Duration::from_secs(1)));
         assert!(n.due((Kind::Done, "a".into()), t0 + Duration::from_secs(5)));
+    }
+
+    #[test]
+    fn a_reply_is_announced_once_even_from_two_watchers() {
+        let n = Notifier {
+            file: PathBuf::new(),
+            prefs: Mutex::new(Prefs::default()),
+            recent: Mutex::new(HashMap::new()),
+            notified: Mutex::new(HashSet::new()),
+        };
+        assert!(n.claim(7));
+        assert!(!n.claim(7));
+        assert!(n.claim(8));
+    }
+
+    #[test]
+    fn a_notice_can_carry_the_message_it_is_about() {
+        assert_eq!(Notice::new(Kind::Done).mid, None);
+        assert_eq!(Notice::new(Kind::Done).mid(12).mid, Some(12));
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn applescript_text_is_quoted() {
+        assert_eq!(quoted(r#"a "b" \c"#), r#"a \"b\" \\c"#);
     }
 
     #[test]

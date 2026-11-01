@@ -212,7 +212,6 @@ export function App() {
 
   const finish = useCallback((chatId: string, mid: number, status: Message["status"], body: string) => {
     if (!isDesktop || status === "pending") return;
-    agent.unwatchReply(chatId).catch(() => {});
     if (announced.current.has(mid)) return;
     announced.current.add(mid);
     const title = chatsRef.current.find((c) => c.id === chatId)?.title ?? "";
@@ -650,6 +649,7 @@ export function App() {
   const stop = async () => {
     if (!activeId) return;
     stopPolling();
+    if (isDesktop) agent.unwatchReply(activeId).catch(() => {});
     try {
       const r = await api.stop(activeId);
       setMessages((ms) => ms.map((m) => (m.status === "pending" ? { ...m, status: "done", body: r.body } : m)));
@@ -670,6 +670,7 @@ export function App() {
   const remove = async (id: string) => {
     try {
       await api.deleteChat(id);
+      if (isDesktop) agent.unwatchReply(id).catch(() => {});
       setChats((cs) => cs.filter((c) => c.id !== id));
       if (id === activeId) openChat(null);
     } catch (e) {

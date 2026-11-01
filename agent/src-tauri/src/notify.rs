@@ -156,6 +156,14 @@ impl Notifier {
         }
         notified.insert(mid)
     }
+
+    fn release(&self, mid: i64) {
+        self.notified.lock().unwrap().remove(&mid);
+    }
+
+    pub fn forget_seen(&self) {
+        self.notified.lock().unwrap().clear();
+    }
 }
 
 fn pick<'a>(lang: Lang, fa: &'a str, en: &'a str) -> &'a str {
@@ -509,17 +517,20 @@ pub async fn deliver(app: &AppHandle, notice: Notice) -> Result<Delivery, String
     let prefs = app.state::<Notifier>().prefs();
     let kind = notice.kind;
     let test = kind == Kind::Test;
-    let forced = test || kind == Kind::Approval;
-    if !forced && (!prefs.enabled || away(app)) {
-        return Ok(Delivery::Skipped);
-    }
-    if !forced && !app.state::<Notifier>().due((kind, notice.chat.clone()), Instant::now()) {
-        return Ok(Delivery::Skipped);
-    }
+    let approval = kind == Kind::Approval;
     if let Some(mid) = notice.mid {
         if !test && !app.state::<Notifier>().claim(mid) {
             return Ok(Delivery::Skipped);
         }
+    }
+    if !test && !approval && !prefs.enabled {
+        return Ok(Delivery::Skipped);
+    }
+    if !test && !away(app) {
+        return Ok(Delivery::Skipped);
+    }
+    if !test && !app.state::<Notifier>().due((kind, notice.chat.clone()), Instant::now()) {
+        return Ok(Delivery::Skipped);
     }
     attract(app, kind);
     if !prefs.enabled && !test {
@@ -528,9 +539,15 @@ pub async fn deliver(app: &AppHandle, notice: Notice) -> Result<Delivery, String
     let (title, body) = compose(&notice, &prefs);
     let handle = app.clone();
     let sound = prefs.sound;
-    tauri::async_runtime::spawn_blocking(move || show(&handle, kind, &title, &body, sound))
+    let shown = tauri::async_runtime::spawn_blocking(move || show(&handle, kind, &title, &body, sound))
         .await
-        .map_err(|e| e.to_string())??;
+        .map_err(|e| e.to_string())?;
+    if let Err(e) = shown {
+        if let Some(mid) = notice.mid {
+            app.state::<Notifier>().release(mid);
+        }
+        return Err(e);
+    }
     Ok(Delivery::Shown)
 }
 
@@ -648,6 +665,10 @@ mod tests {
         };
         assert!(n.claim(7));
         assert!(!n.claim(7));
+        assert!(n.claim(8));
+        n.release(7);
+        assert!(n.claim(7));
+        n.forget_seen();
         assert!(n.claim(8));
     }
 

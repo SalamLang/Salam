@@ -33,7 +33,7 @@ concurrency:
     || (github.event_name == 'pull_request' && format('compiler-release-pr-{0}', github.event.pull_request.number))
     || (github.event_name == 'push' && 'compiler-release-main')
     || format('compiler-release-{0}', github.run_id) }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ !(github.event_name == 'push' && github.ref == 'refs/heads/main' && startsWith(github.event.head_commit.message, 'release:')) }}
 jobs:
   release-guard:
     name: Release version is not taken
@@ -100,6 +100,7 @@ jobs:
     if: needs.changes.outputs.run == 'true'
     name: Build Salam for Linux
     runs-on: ubuntu-24.04
+    timeout-minutes: 100
     services:
       redis:
         image: redis:7-alpine
@@ -522,6 +523,7 @@ jobs:
     if: needs.changes.outputs.run == 'true'
     name: Build Salam for Linux (x86_64 musl, fully static)
     runs-on: ubuntu-24.04
+    timeout-minutes: 45
     continue-on-error: true
     steps:
       - name: Checkout code
@@ -599,6 +601,7 @@ jobs:
     if: needs.changes.outputs.run == 'true'
     name: Build Salam for macOS
     runs-on: macos-latest
+    timeout-minutes: 60
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -767,6 +770,7 @@ jobs:
     if: needs.changes.outputs.run == 'true'
     name: Build Salam for Windows (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 150
     strategy:
       fail-fast: false
       matrix:
@@ -1289,6 +1293,7 @@ jobs:
     if: needs.changes.outputs.run == 'true'
     name: Build Salam for Windows (32-bit / i686, cross-compiled static LLVM+LLD)
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     continue-on-error: true
     needs: [changes, build-linux]
     steps:
@@ -1568,6 +1573,7 @@ jobs:
     if: needs.changes.outputs.run == 'true'
     name: Build Salam for Windows on Arm (native backend, built-in linker)
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     continue-on-error: true
     needs: [changes, build-linux]
     env:
@@ -1640,6 +1646,7 @@ jobs:
     if: needs.changes.outputs.run == 'true'
     name: Build Salam for Linux (32-bit / i686, embedded LLVM+LLD)
     runs-on: ubuntu-24.04
+    timeout-minutes: 60
     continue-on-error: true
     steps:
       - name: Checkout code
@@ -1702,7 +1709,22 @@ jobs:
                 /work/salam build /tmp/smoke.salam --target=x86_64-linux-musl -o /work/.smoke_x86_64 --log-level=warn
                 /work/salam build /tmp/smoke.salam --target=x86_64-w64-windows-gnu -o /work/.smoke_x86_64.exe --log-level=warn
               fi
-            '
+            ' >"$log" 2>&1 &
+          build_pid=$!
+          tail -n +1 -f "$log" &
+          tail_pid=$!
+          while kill -0 "$build_pid" 2>/dev/null; do
+            sleep 30
+            idle=$(( $(date +%s) - $(stat -c %Y "$log") ))
+            if [ "$idle" -gt 1800 ]; then
+              echo "::error::the armhf build printed nothing for 30 minutes, it is stuck"
+              docker kill armhf-build || true
+            fi
+          done
+          build_rc=0
+          wait "$build_pid" || build_rc=$?
+          kill "$tail_pid" 2>/dev/null || true
+          [ "$build_rc" = 0 ] || exit "$build_rc"
           echo "SELF_CONTAINED=$(cat .self_contained)" >> "$GITHUB_ENV"
           rm -f .self_contained
       - name: Verify cross-compiled x86_64-linux-musl output runs natively on this host
@@ -1764,6 +1786,7 @@ jobs:
     if: needs.changes.outputs.run == 'true'
     name: Build Salam for Linux (armhf, embedded LLVM+LLD)
     runs-on: ubuntu-24.04
+    timeout-minutes: 300
     continue-on-error: true
     steps:
       - name: Checkout code
@@ -1811,7 +1834,9 @@ jobs:
         run: |
           set -eu
           mkdir -p /tmp/ccache-armhf
-          docker run --rm --platform=linux/arm/v7 \
+          log="$RUNNER_TEMP/armhf-build.log"
+          : >"$log"
+          docker run --rm --name armhf-build --platform=linux/arm/v7 \
             --user "$(id -u):$(id -g)" \
             -v "$PWD:/work" -w /work \
             -v /tmp/ccache-armhf:/tmp/ccache \
@@ -1900,6 +1925,7 @@ jobs:
     if: needs.changes.outputs.run == 'true'
     name: Build Salam for Linux (aarch64, native flagship)
     runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
     continue-on-error: true
     steps:
       - name: Checkout code

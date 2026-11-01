@@ -4,7 +4,7 @@ set -u
 salam=${1:-}
 root=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 [ -n "$salam" ] || salam="$root/salam"
-case "$salam" in /*) ;; *) salam="$root/$salam" ;; esac
+case "$salam" in /* | [A-Za-z]:*) ;; *) salam="$root/$salam" ;; esac
 command -v git >/dev/null 2>&1 || {
     echo "skip: git is not installed"
     exit 0

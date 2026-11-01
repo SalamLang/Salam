@@ -80,6 +80,7 @@ pub async fn agent_unlink(app: AppHandle, token: Option<String>) -> Result<Info,
     }
     store.clear();
     app.state::<crate::watch::Watchers>().stop_all();
+    app.state::<Notifier>().forget_seen();
     Ok(info(&app))
 }
 

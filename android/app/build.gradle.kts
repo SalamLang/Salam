@@ -32,7 +32,12 @@ val engineAbis =
         "x86_64" to "x86_64-linux-android",
     )
 val requestedAbis: List<String> =
-    project.findProperty("salamAbis")?.toString()?.split(',')?.map { it.trim() }?.filter { it.isNotEmpty() }
+    project
+        .findProperty("salamAbis")
+        ?.toString()
+        ?.split(',')
+        ?.map { it.trim() }
+        ?.filter { it.isNotEmpty() }
         ?: engineAbis.keys.toList()
 val engineGenRoot = layout.buildDirectory.dir("salam-engine")
 

@@ -2,7 +2,7 @@ use crate::config;
 use crate::notify::{self, Kind, Notice};
 use serde_json::Value;
 use std::collections::HashMap;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
@@ -13,6 +13,7 @@ const MAX_JOBS: usize = 8;
 
 struct Job {
     mid: i64,
+    started: u64,
     stop: AtomicBool,
 }
 
@@ -29,6 +30,7 @@ impl Job {
 #[derive(Default)]
 pub struct Watchers {
     jobs: Mutex<HashMap<String, Arc<Job>>>,
+    seq: AtomicU64,
 }
 
 impl Watchers {
@@ -41,13 +43,15 @@ impl Watchers {
             old.halt();
         }
         if jobs.len() >= MAX_JOBS {
-            for job in jobs.values() {
-                job.halt();
+            if let Some(oldest) = jobs.iter().min_by_key(|(_, job)| job.started).map(|(chat, _)| chat.clone()) {
+                if let Some(job) = jobs.remove(&oldest) {
+                    job.halt();
+                }
             }
-            jobs.clear();
         }
         let job = Arc::new(Job {
             mid,
+            started: self.seq.fetch_add(1, Ordering::Relaxed),
             stop: AtomicBool::new(false),
         });
         jobs.insert(chat.to_string(), job.clone());
@@ -96,7 +100,7 @@ pub fn watch(app: &AppHandle, chat: String, mid: i64, token: String, title: Stri
             let url = format!("{base}/messages/{mid}");
             let mut finished: Option<(Kind, String)> = None;
             while !job.halted() && start.elapsed() < LIMIT {
-                tokio::time::sleep(STEP).await;
+                tokio::time::sleep(step(start.elapsed())).await;
                 if job.halted() {
                     break 'watch;
                 }
@@ -125,7 +129,7 @@ pub fn watch(app: &AppHandle, chat: String, mid: i64, token: String, title: Stri
             let mut notice = Notice::new(kind).text(body).mid(mid);
             notice.chat = title.clone();
             notify::post(&app, notice);
-            match next_pending(&http, &base, &token, mid).await {
+            match next_reply(&http, &base, &token, mid).await {
                 Some(next) => mid = next,
                 None => break,
             }
@@ -134,9 +138,19 @@ pub fn watch(app: &AppHandle, chat: String, mid: i64, token: String, title: Stri
     });
 }
 
-async fn next_pending(http: &reqwest::Client, base: &str, token: &str, after: i64) -> Option<i64> {
-    for _ in 0..2 {
-        tokio::time::sleep(STEP).await;
+fn step(elapsed: Duration) -> Duration {
+    if elapsed > Duration::from_secs(5 * 60) {
+        Duration::from_secs(10)
+    } else {
+        STEP
+    }
+}
+
+async fn next_reply(http: &reqwest::Client, base: &str, token: &str, after: i64) -> Option<i64> {
+    for attempt in 0..2 {
+        if attempt > 0 {
+            tokio::time::sleep(STEP).await;
+        }
         let Ok(res) = http.get(base).bearer_auth(token).send().await else {
             continue;
         };
@@ -144,19 +158,21 @@ async fn next_pending(http: &reqwest::Client, base: &str, token: &str, after: i6
             return None;
         }
         let Ok(value) = res.json::<Value>().await else { continue };
-        if let Some(mid) = value["messages"]
-            .as_array()
-            .and_then(|items| {
-                items
-                    .iter()
-                    .find(|m| m["role"] == "assistant" && m["status"] == "pending" && m["id"].as_i64().unwrap_or(0) > after)
-            })
-            .and_then(|m| m["id"].as_i64())
-        {
+        if let Some(mid) = pick_next(&value["messages"], after) {
             return Some(mid);
         }
     }
     None
+}
+
+fn pick_next(messages: &Value, after: i64) -> Option<i64> {
+    let items = messages.as_array()?;
+    items
+        .iter()
+        .filter(|m| m["role"] == "assistant")
+        .filter_map(|m| m["id"].as_i64())
+        .filter(|id| *id > after)
+        .min()
 }
 
 #[cfg(test)]
@@ -185,13 +201,38 @@ mod tests {
     }
 
     #[test]
-    fn too_many_watchers_are_dropped() {
+    fn a_ninth_watcher_evicts_the_oldest_only() {
         let w = Watchers::default();
-        for i in 0..MAX_JOBS {
+        let oldest = w.start("c0", 1).expect("the first job");
+        for i in 1..MAX_JOBS {
             assert!(w.start(&format!("c{i}"), 1).is_some());
         }
-        let last = w.start("extra", 1).expect("a fresh job replaces the crowd");
-        assert!(!last.halted());
-        assert_eq!(w.jobs.lock().unwrap().len(), 1);
+        let fresh = w.start("extra", 1).expect("a fresh job fits in");
+        assert!(oldest.halted());
+        assert!(!fresh.halted());
+        let jobs = w.jobs.lock().unwrap();
+        assert_eq!(jobs.len(), MAX_JOBS);
+        assert!(!jobs.contains_key("c0"));
+        assert!(jobs.contains_key("c1"));
+    }
+
+    #[test]
+    fn the_next_reply_is_the_oldest_assistant_message_after_the_announced_one() {
+        let messages = serde_json::json!([
+            {"id": 4, "role": "user"},
+            {"id": 5, "role": "assistant", "status": "done"},
+            {"id": 6, "role": "assistant", "status": "done"},
+            {"id": 7, "role": "assistant", "status": "pending"}
+        ]);
+        assert_eq!(pick_next(&messages, 5), Some(6));
+        assert_eq!(pick_next(&messages, 7), None);
+        assert_eq!(pick_next(&serde_json::json!([]), 1), None);
+        assert_eq!(pick_next(&serde_json::json!({}), 1), None);
+    }
+
+    #[test]
+    fn a_long_wait_is_polled_less_often() {
+        assert_eq!(step(Duration::from_secs(10)), STEP);
+        assert_eq!(step(Duration::from_secs(10 * 60)), Duration::from_secs(10));
     }
 }

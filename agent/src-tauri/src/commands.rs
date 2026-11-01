@@ -79,6 +79,7 @@ pub async fn agent_unlink(app: AppHandle, token: Option<String>) -> Result<Info,
             .await;
     }
     store.clear();
+    app.state::<crate::watch::Watchers>().stop_all();
     Ok(info(&app))
 }
 
@@ -131,13 +132,45 @@ pub async fn agent_project_context(workspace: String) -> Result<memory::ProjectC
 }
 
 #[tauri::command]
-pub async fn agent_notify(app: AppHandle, kind: Kind, chat: Option<String>, text: Option<String>) -> Result<Delivery, String> {
+pub async fn agent_notify(
+    app: AppHandle,
+    kind: Kind,
+    chat: Option<String>,
+    text: Option<String>,
+    mid: Option<i64>,
+) -> Result<Delivery, String> {
     let notice = Notice {
         kind,
         chat: chat.unwrap_or_default(),
         text: text.unwrap_or_default(),
+        mid,
     };
     notify::deliver(&app, notice).await
+}
+
+fn chat_id(chat: &str) -> bool {
+    !chat.is_empty() && chat.len() <= 64 && chat.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+}
+
+#[tauri::command]
+pub fn agent_watch_reply(app: AppHandle, chat: String, mid: i64, token: String, title: Option<String>) -> Result<(), String> {
+    if !chat_id(&chat) {
+        return Err("invalid chat id".to_string());
+    }
+    if mid <= 0 {
+        return Err("invalid message id".to_string());
+    }
+    let token = token.trim();
+    if token.is_empty() || token.len() > 4096 {
+        return Err("invalid token".to_string());
+    }
+    crate::watch::watch(&app, chat, mid, token.to_string(), title.unwrap_or_default());
+    Ok(())
+}
+
+#[tauri::command]
+pub fn agent_unwatch_reply(app: AppHandle, chat: String) {
+    app.state::<crate::watch::Watchers>().stop(&chat);
 }
 
 #[tauri::command]

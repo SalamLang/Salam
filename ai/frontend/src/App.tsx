@@ -211,11 +211,13 @@ export function App() {
   const tools = useAgent(isDesktop && signedIn, midFor, notify);
 
   const finish = useCallback((chatId: string, mid: number, status: Message["status"], body: string) => {
-    if (!isDesktop || status === "pending" || announced.current.has(mid)) return;
+    if (!isDesktop || status === "pending") return;
+    agent.unwatchReply(chatId).catch(() => {});
+    if (announced.current.has(mid)) return;
     announced.current.add(mid);
     const title = chatsRef.current.find((c) => c.id === chatId)?.title ?? "";
-    if (status === "error") announce("failed", title, uiText(body));
-    else announce("done", title, body);
+    if (status === "error") announce("failed", title, uiText(body), mid);
+    else announce("done", title, body, mid);
   }, []);
 
   const watchAway = useCallback(() => {
@@ -286,9 +288,13 @@ export function App() {
   );
 
   const follow = useCallback(
-    (chatId: string, mid: number) => {
+    (chatId: string, mid: number, title = "") => {
       stopPolling();
       followed.current = mid;
+      if (isDesktop) {
+        const named = title || chatsRef.current.find((c) => c.id === chatId)?.title || "";
+        agent.watchReply(chatId, mid, getToken(), named).catch(() => {});
+      }
       const ctrl = new AbortController();
       streamCtrl.current = ctrl;
       const update = (fn: (m: Message) => Message) => {
@@ -564,7 +570,7 @@ export function App() {
         const rest = cs.filter((c) => c.id !== id);
         return cur ? [{ ...cur, title: r.title, updated: now }, ...rest] : cs;
       });
-      follow(id, r.assistant.id);
+      follow(id, r.assistant.id, r.title);
       return true;
     } catch (e) {
       setMessages((ms) => ms.filter((m) => m.id > 0));

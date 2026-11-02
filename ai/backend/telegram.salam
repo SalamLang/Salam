@@ -462,6 +462,39 @@ func state_set(key: str, value: str):
     aistore.Unlock()
 end
 
+func effort_of(w: Who): str:
+    ret aiengine.Effort(state_get("effort:" + w.tg))
+end
+
+func effort_name(en: bool, effort: str): str:
+    switch effort:
+        "low":
+            ret tr(en, "کم (سریع)", "low (fast)")
+        end
+        "high":
+            ret tr(en, "زیاد (عمیق)", "high (deep)")
+        end
+    end
+    ret tr(en, "متوسط", "medium")
+end
+
+func effort_menu(w: Who):
+    now := effort_of(w)
+    mut row := Vector {} as Vector<str>
+    each e in ["low", "medium", "high"]:
+        row.push(cb_button((e == now ? "✓ " : "") + effort_name(w.en, e), "e:" + e))
+    end
+    mut rows := Vector {} as Vector<str>
+    rows.push(str.Join(row, ", "))
+    _m := send_plain(w.chat, tr(w.en, "سطح فکر کردن برای پیام‌های بعدی: " + effort_name(false, now) + "\n\nکم: پاسخ کوتاه و فوری برای کارهای ساده.\nمتوسط: حالت پیش‌فرض.\nزیاد: فکر بیشتر و بررسی دقیق، برای ریاضی، استدلال و کارهای سخت.", "Thinking level for your next messages: " + effort_name(true, now) + "\n\nLow: short, fast answers for simple tasks.\nMedium: the default.\nHigh: thinks longer and checks its work, for math, reasoning and hard tasks."), keyboard(rows))
+end
+
+func set_effort(w: Who, effort: str):
+    e := aiengine.Effort(effort)
+    state_set("effort:" + w.tg, e)
+    _m := send_plain(w.chat, tr(w.en, "سطح فکر کردن: " + effort_name(false, e), "Thinking level: " + effort_name(true, e)), "")
+end
+
 func claim(chat: str): bool:
     _l := sync.Lock(STATE_LOCK)
     free := not BUSY.has(chat)
@@ -636,9 +669,9 @@ end
 
 func help_text(w: Who): str:
     if w.en:
-        ret "**Salam AI on Telegram**\n\nJust write your question. Commands:\n\n/new start a fresh chat\n/chats your chats (signed in)\n/stop stop the answer being written\n/login sign in or sign up\n/logout disconnect this Telegram from your account\n/account your account and plan\n/github connect GitHub (private repositories)\n/figma connect Figma\n/sandbox your command sandbox\n/lang switch between Persian and English\n/help this message"
+        ret "**Salam AI on Telegram**\n\nJust write your question. Commands:\n\n/new start a fresh chat\n/chats your chats (signed in)\n/stop stop the answer being written\n/effort how hard to think: low, medium or high\n/login sign in or sign up\n/logout disconnect this Telegram from your account\n/account your account and plan\n/github connect GitHub (private repositories)\n/figma connect Figma\n/sandbox your command sandbox\n/lang switch between Persian and English\n/help this message"
     end
-    ret "**دستیار سلام در تلگرام**\n\nکافی است سؤالتان را بنویسید. دستورها:\n\n/new شروع گفت‌وگوی تازه\n/chats گفت‌وگوهای شما (بعد از ورود)\n/stop متوقف کردن پاسخ در حال نوشته شدن\n/login ورود یا ثبت‌نام\n/logout جدا کردن این تلگرام از حساب\n/account حساب و پلن شما\n/github وصل کردن GitHub (مخازن خصوصی)\n/figma وصل کردن Figma\n/sandbox محیط اجرای دستورها\n/lang تغییر زبان بین فارسی و انگلیسی\n/help همین راهنما"
+    ret "**دستیار سلام در تلگرام**\n\nکافی است سؤالتان را بنویسید. دستورها:\n\n/new شروع گفت‌وگوی تازه\n/chats گفت‌وگوهای شما (بعد از ورود)\n/stop متوقف کردن پاسخ در حال نوشته شدن\n/effort سطح فکر کردن: کم، متوسط یا زیاد\n/login ورود یا ثبت‌نام\n/logout جدا کردن این تلگرام از حساب\n/account حساب و پلن شما\n/github وصل کردن GitHub (مخازن خصوصی)\n/figma وصل کردن Figma\n/sandbox محیط اجرای دستورها\n/lang تغییر زبان بین فارسی و انگلیسی\n/help همین راهنما"
 end
 
 func welcome(w: Who):
@@ -723,6 +756,7 @@ func guest_turn(w: Who, text: str):
     aistore.Unlock()
     ailive.Begin(sid)
     aiturn.Forget(sid)
+    aiengine.SetEffort(sid, effort_of(w))
     if not aiengine.Send(sid, aiweb.LangNote(w.en) + aipolicy.Defang(text), ""):
         ailive.End(sid)
         aistore.Lock()
@@ -830,8 +864,9 @@ func user_turn(w: Who, text: str):
         aistore.Unlock()
     end
     t := i64s(now)
+    effort := effort_of(w)
     aistore.Lock()
-    _a := aistore.Run("INSERT INTO messages (chat_id, role, body, status, created) VALUES (?1, 'user', ?2, 'done', ?3)", three(id, text, t))
+    _a := aistore.Run("INSERT INTO messages (chat_id, role, body, status, created, effort) VALUES (?1, 'user', ?2, 'done', ?3, ?4)", four(id, text, t, effort))
     _b := aistore.Run("INSERT INTO messages (chat_id, role, body, status, created) VALUES (?1, 'assistant', '', 'pending', ?2)", two(id, t))
     mid := aistore.LastId()
     _c := aistore.Run("UPDATE chats SET title = ?1, updated = ?2 WHERE id = ?3", three(title == DEFAULT_TITLE ? short_title(text) : title, t, id))
@@ -843,6 +878,7 @@ func user_turn(w: Who, text: str):
     ailive.Begin(sid)
     aiturn.Forget(sid)
     aiturn.Relax(sid, free)
+    aiengine.SetEffort(sid, effort)
     mut sent := false
     if token.len() > 0:
         preamble := aicloud.Prelude(token, w.uid) + prompt
@@ -1455,6 +1491,14 @@ func command(w: Who, cmd: str, arg: str, message_id: str):
             sandbox_command(w, arg)
             break
         end
+        "effort", "level", "think":
+            if str.Trim(arg).len() > 0:
+                set_effort(w, arg)
+            else:
+                effort_menu(w)
+            end
+            break
+        end
         "lang", "language":
             set_lang(w, not w.en)
             mut switched := w
@@ -1482,6 +1526,10 @@ func on_callback(cb: str):
     answer_callback(id, "")
     if data == "l:fa" or data == "l:en":
         choose_language(w, data == "l:en")
+        ret
+    end
+    if str.StartsWith(data, "e:"):
+        set_effort(w, data.substr(2, data.len() - 2))
         ret
     end
     if str.StartsWith(data, "c:"):
@@ -1632,13 +1680,13 @@ func commands_json(en: bool): str:
     names := Vector {} as Vector<str>
     fa := Vector {} as Vector<str>
     english := Vector {} as Vector<str>
-    each n in ["new", "chats", "stop", "login", "logout", "account", "github", "figma", "sandbox", "lang", "help"]:
+    each n in ["new", "chats", "stop", "effort", "login", "logout", "account", "github", "figma", "sandbox", "lang", "help"]:
         names.push(n)
     end
-    each n in ["شروع گفت‌وگوی تازه", "گفت‌وگوهای من", "متوقف کردن پاسخ", "ورود یا ثبت‌نام", "جدا شدن از حساب", "حساب و پلن", "وصل کردن GitHub", "وصل کردن Figma", "محیط اجرای دستورها", "تغییر زبان", "راهنما"]:
+    each n in ["شروع گفت‌وگوی تازه", "گفت‌وگوهای من", "متوقف کردن پاسخ", "سطح فکر کردن: کم، متوسط، زیاد", "ورود یا ثبت‌نام", "جدا شدن از حساب", "حساب و پلن", "وصل کردن GitHub", "وصل کردن Figma", "محیط اجرای دستورها", "تغییر زبان", "راهنما"]:
         fa.push(n)
     end
-    each n in ["Start a fresh chat", "My chats", "Stop the answer", "Sign in or sign up", "Disconnect from account", "Account and plan", "Connect GitHub", "Connect Figma", "Command sandbox", "Switch language", "Help"]:
+    each n in ["Start a fresh chat", "My chats", "Stop the answer", "Thinking level: low, medium, high", "Sign in or sign up", "Disconnect from account", "Account and plan", "Connect GitHub", "Connect Figma", "Command sandbox", "Switch language", "Help"]:
         english.push(n)
     end
     each i, name in names:

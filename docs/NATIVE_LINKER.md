@@ -120,8 +120,9 @@ segments so that no page is both writable and executable:
 Plus `PT_GNU_STACK` (non-executable stack) and `PT_GNU_EH_FRAME` for
 `.eh_frame_hdr`. Segments are aligned to the page size and file
 offsets are congruent to addresses modulo the page size. Input sections keep
-their alignment, are placed in input order, and same-named `.rodata.cst*`
-constants may be merged later as an optimisation.
+their alignment and are placed in input order. Sections flagged
+`SHF_MERGE` are split into their strings or constants and identical ones
+kept once; see "Section merging and identical code folding".
 
 `.init` and `.fini` are concatenated in link order: `crti.o`'s prologue, any
 middle pieces, then `crtn.o`'s epilogue. That is the order `cc` uses.
@@ -253,6 +254,10 @@ x86-64 musl, a PIE for x86-64 glibc, and a PE for x86-64 Windows. It falls
 back to `system` otherwise. `SALAM_LINKER` sets the default mode, which
 is how the test runner forces one or the other.
 
+`--icf` turns on identical code folding in the built-in ELF linker (see
+"Section merging and identical code folding"). It is off by default and
+`--release` does not turn it on.
+
 ## Code layout
 
 A new package `compiler/nativelink/`, independent of `nativegen` except for
@@ -267,6 +272,8 @@ the in-memory object hand-off:
 | `nl_layout.salam` | output sections, segments, addresses, synthetic symbols |
 | `nl_reloc.salam` | relocation application and GOT relaxation |
 | `nl_elfout.salam` | executable writer |
+| `nl_split.salam` | splitting `SHF_MERGE` sections and, with `--icf`, our code into pieces |
+| `nl_icf.salam` | identical code folding |
 | `nl_api.salam` | `Link(inputs, options) -> result` with diagnostics |
 
 ## Testing
@@ -441,6 +448,11 @@ file alignment `0x200`:
 | `.idata` | `$2`, five zero words, `$4`, `$5` (the IAT, data directory 12), `$6`, `$7` |
 | `.tls` | `.tls$AAA`, `.tls` (mingw's `_tls_start`), `.tls$` (clang's thread-locals), other `.tls$*`, `.tls$ZZZ`; `_tls_used` becomes data directory 9 |
 | `.reloc` | base relocations for every `ADDR64` (dynamic base) |
+
+Data directory 1 covers the `.idata$2` descriptors and data directory 12
+runs from the first `.idata$5` slot to the end of the last, for executables
+and DLLs on every PE machine, so it matches the `ImportAddressTableRVA` of
+each DLL that `llvm-readobj --coff-imports` lists.
 
 Relocations: `ADDR64`, `ADDR32`, `ADDR32NB` (image-relative), `REL32` and
 `REL32_1` to `REL32_5`, `SECTION`, `SECREL` (for TLS). Entry point
@@ -1028,3 +1040,100 @@ a C program and a Salam program that call both. On the build machine the C
 program also runs under valgrind, the library is loaded and closed twice with
 `dlopen`/`dlclose`, and the same library built by the C backend must print
 the same output.
+
+## Section merging and identical code folding
+
+### `SHF_MERGE` sections
+
+C compilers put string literals in sections such as `.rodata.str1.1`
+(`SHF_MERGE | SHF_STRINGS`, entry size 1) and floating point and vector
+constants in `.rodata.cst4`, `.cst8`, `.cst16` and `.cst32` (`SHF_MERGE`,
+entry size the constant's size). Every ELF link splits such a section into
+pieces: with `SHF_STRINGS` each string up to and including its terminator,
+read in units of the entry size (a string with no terminator is one piece),
+otherwise every entry. Pieces with the same bytes, entry size, alignment and
+flags are kept once, across all objects. Each piece keeps its section's
+alignment, as lld does. A section stays whole when it is writable or TLS, has
+relocations of its own, or its size is not a multiple of the entry size, and
+non-allocated ones such as `.debug_str` are concatenated as before.
+
+References move the way lld moves them. A relocation against a section
+symbol picks the piece at `value + addend` and points at that piece plus the
+rest of the offset, which is the form clang writes for AArch64
+(`.rodata.str1.1 + 0xc`). A named symbol (the `.LC0` that gcc writes, which
+`R_X86_64_PC32 .LC0 - 4` refers to) is moved to its piece and the addend is
+applied after. From then on the pieces are ordinary input sections, so
+garbage collection keeps only the strings something refers to, and the kept
+ones are laid out where their section stood.
+
+### Identical code folding
+
+`--icf` folds functions of our own objects whose code and relocations are
+the same. It works for x86-64 and AArch64 ELF output (static, PIE or shared
+library); other targets ignore the flag. Our objects are the ones the native
+backend wrote, which have a `.rodata.salam` section. An object built with
+`-g` is left alone, since its line table is one sequence over the whole
+`.text` and every function folded away would shift the rows after it.
+
+The native backend puts every function in one `.text` and writes a
+relocation for every reference, even a call to the next function, so the
+linker can cut `.text` at each `STT_FUNC` symbol into one piece per function.
+The padding after a function goes with it, and a piece keeps the largest
+alignment its offset had. A reference through the section symbol moves to
+the piece the target lies in, which for an x86-64 PC-relative relocation in
+code is `value + addend + 4`, since there the addend is the target minus the
+4 bytes of the field. C objects are never cut, because the assembler resolves
+a call within a section without leaving a relocation.
+
+Two functions fold when they have the same size, alignment, bytes and
+relocations (offset, type and addend). A call or tail call
+(`R_X86_64_PLT32`, `R_AARCH64_CALL26`, `R_AARCH64_JUMP26`) to another
+candidate only needs that candidate to be in the same class, and the
+classes are split until they stop changing, as lld does, so equal call trees
+fold together. Every other reference needs the very same target.
+
+The rules are lld's `--icf=safe`. A function whose address is taken is never
+folded away, because two function pointers that used to differ would then
+compare equal. Its address is taken when a relocation other than a call
+refers to it from a live allocated section other than `.eh_frame`, when it is
+`main` or `_start`, when a shared library we build exports it, or when a
+shared library we link against names it. Since our objects relocate every
+reference, nothing escapes that list. A function whose address is taken can
+still be the one others fold into, but two such functions never fold
+together. A folded function's symbols, `.eh_frame` entry and debug
+information point at the copy that stays, and `.eh_frame_hdr` lists that
+address once.
+
+It stays opt-in, also with `--release`: a backtrace, profile or debugger
+then names the function that stayed, and the native backend already inlines
+most of the small helpers that ICF removes from C++ programs, so the gain on
+Salam code is small.
+
+### Measurements
+
+All on x86-64, linking the object the native backend writes for the compiler
+itself (`compiler/main.salam --release`), by the linker before this change and
+after it:
+
+| Link | `.rodata` | `.text` | File |
+|---|---|---|---|
+| glibc PIE, before | 304,688 | 6,744,418 | 8,090,776 |
+| glibc PIE, after | 304,688 | 6,744,418 | 8,090,776 |
+| glibc PIE, after, `--icf` | 304,688 | 6,740,429 | 8,086,680 |
+| static musl, before | 326,100 | 6,840,614 | 8,088,640 |
+| static musl, after | 325,492 | 6,840,614 | 8,088,640 |
+| static musl, after, `--icf` | 325,492 | 6,836,070 | 8,080,448 |
+
+Merging finds nothing in our own object (its constants are in one plain
+`.rodata`) and 4 bytes in glibc's startup files. Against static musl, the
+2,065 bytes of mergeable strings and constants that `libc.a` contributes
+come down to 1,432 and `.rodata` shrinks by 608 bytes; the file does not,
+since the segments are page aligned. ICF folds 19 of the 3,424 functions of
+the compiler (4,464 bytes, 4,960 with musl), mostly generic instances
+that came out the same, such as `HashMap<str, bool>.has` and
+`HashMap<str, i32>.has`, or `Vector<bool>.free` and four other `free`s; only
+11 functions have their address taken. A small C program with a string in
+two objects (gcc for x86-64, clang for AArch64, RISC-V, i686 and ARM, static
+musl) keeps the same output, with `.rodata` 0 to 32 bytes smaller.
+
+LINKTIME

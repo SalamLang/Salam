@@ -914,6 +914,27 @@ ret end` at the top of a recursive AST walk) tests that parameter before
   are built on Linux, run on a real machine of each kind, and the compiler
   built by the native backend for that machine reproduces the reference IR
   there and builds and runs programs with `--backend=native` itself.
+- Those native-built compilers are kept for internal use (they are not
+  releases). `tools/bash/package-native.sh` lays one out like a release
+  archive (`salam`, `std/`, a `BUILD.txt` naming the commit, and for Windows the mingw-w64 or llvm-mingw
+  runtime under `sysroots/`) as `salam-native-<platform>.tar.gz`, and
+  `tools/bash/native-package-check.sh <tarball>` unpacks it into an empty
+  folder and, with `SALAM_STD` unset, builds and runs a few tests with
+  `--backend=native`, among them the TCP and HTTP loopback tests and the TLS
+  self-test. The gate does this on the real machine for `linux-x64` (a static
+  musl build), `linux-arm64`, `macos-arm64`, `macos-x64`, `windows-x64` and
+  `windows-arm64`, and on pushes to `main` and manual runs it uploads each
+  package that passed as the workflow artifact `salam-native-<platform>`,
+  kept for 14 days.
+- `tools/bash/native-compile-report.sh <salam>` builds the compiler and a few
+  large tests with `--backend=native` and with `--backend=llvm` and prints a
+  Markdown table of build times and executable sizes; the gate's `linux` job
+  adds it to its run summary. Without in-process LLVM, `--backend=llvm` hands
+  the IR to the `clang` on `PATH`. It fails only on gross regressions,
+  measured on the totals as native over LLVM ratios, so machine speed cancels
+  out: more than `NATIVE_REPORT_MAX_TIME_RATIO` (0.6) of LLVM's build time or
+  `NATIVE_REPORT_MAX_SIZE_RATIO` (1.5) of its size. `NATIVE_REPORT_RUNS`
+  repeats each build and keeps the fastest.
 - `tools/bash/native-encoder-check.sh <salam> <files...>` checks the encoder:
   it assembles the `--emit-asm` listing with GNU `as` and compares the result
   with the object nativegen wrote, instruction by instruction.

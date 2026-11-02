@@ -1575,6 +1575,7 @@ end
   on a negative weight), **`llvm`** (build, verify, JIT and link LLVM IR;
   `ParseIR`/`RunJIT` take a `.ll` **path**, call `Verify` before emitting,
   free builder, module, context in that order) and **`llvm.triple`**.
+- Games and graphics: **`gui.raylib`** binds raylib 5.5 with the names of its cheatsheet (`InitWindow WindowShouldClose BeginDrawing ClearBackground DrawCircle DrawText LoadTexture DrawTexturePro IsKeyDown GetMousePosition CheckCollisionRecs BeginMode3D DrawCube LoadModel LoadSound PlayMusicStream ...`). It needs the `libraylib` shared library and a desktop session. Structs (`Color Vector2 Vector3 Rectangle Camera3D ...`) pass by value; build them with `Vec2 Vec3 Rect RGB RGBA`. Colors are functions (`Red() RayWhite()`), keys and flags are constants (`KEY_SPACE FLAG_VSYNC_HINT`). Every `f32` function also takes `f64`. Calls that change a value (`ImageResize`, `UpdateCamera`) need a `mut` variable. Unload what you load. `--backend=native` refuses these calls; use the default backend.
 
 ### JWT and API route protection
 
@@ -1854,6 +1855,13 @@ func main:  printf("%d\n", 42)  end
 ```
 
 C pointer types (`void*`, `u16*`, `T*`) and `null` are available for interop.
+
+Structs can be passed to and returned from `extern:` functions by value; the
+compiler follows the C ABI of the target (System V and Windows on x86-64,
+AArch64), so `func ClearBackground(c: Color)` matches a C `Color`. Field order and
+types must match the C struct. `--backend=native` refuses such calls. A function in
+an extern block may be `pub`, carry `@en`/`@fa`, and then be called as
+`pkg.Name`; the C symbol is always the declared name.
 
 **Exporting Salam functions to C (`export:`):** `extern:` only _declares_
 symbols defined elsewhere (no bodies). A Salam function that C code, a C

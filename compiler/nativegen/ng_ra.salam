@@ -519,7 +519,7 @@ func coalesce_spills(g &: Ng, ra &: Ra):
         end
         sa := g.mc.vslot[a]
         sb := g.mc.vslot[b]
-        if sa < 0 or sb < 0 or sa == sb or g.mc.vwide[a] != g.mc.vwide[b] or head[sa] < 0 or head[sb] < 0:
+        if sa < 0 or sb < 0 or sa == sb or g.mc.vwide[a] != g.mc.vwide[b] or g.mc.vymm[a] != g.mc.vymm[b] or head[sa] < 0 or head[sb] < 0:
             continue
         end
         same_val := ndef[a] == 1 and ndef[b] == 1 and nxt[a] < 0 and head[sa] == a
@@ -545,7 +545,9 @@ end
 func spill_vreg(g &: Ng, v: int):
     g.mc.vloc[v] = 0 - 1
     if g.mc.vslot[v] < 0:
-        if g.mc.vwide[v]:
+        if g.mc.vymm[v]:
+            g.mc.vslot[v] = new_slot(g, 32, 16)
+        else g.mc.vwide[v]:
             g.mc.vslot[v] = new_slot(g, 16, 16)
         else:
             g.mc.vslot[v] = new_slot(g, 8, 8)
@@ -787,6 +789,12 @@ func linear_scan(g &: Ng, ra &: Ra):
         each a3 in ra.active:
             ra.free_until[g.mc.vloc[a3]] = 0 - 1
         end
+        ywin := g.os == NG_OS_WINDOWS and g.mc.vymm[v]
+        if ywin:
+            repeat 10 in yw:
+                ra.free_until[22 + yw] = 0 - 1
+            end
+        end
         each a4 in ra.inactive:
             r4 := g.mc.vloc[a4]
             if ra.free_until[r4] > 0:
@@ -817,7 +825,7 @@ func linear_scan(g &: Ng, ra &: Ra):
             mut far := next_ref(g, ra, v, pos + 1)
             repeat ra.active.len() in qb:
                 ab := ra.active[qb]
-                if g.mc.vcls[ab] == cls:
+                if g.mc.vcls[ab] == cls and not (ywin and g.mc.vloc[ab] >= 22):
                     rb := g.mc.vloc[ab]
                     nu := next_ref(g, ra, ab, pos)
                     if nu > far and fixed_inter(ra, rb, v, pos) < 0 and not inactive_blocks(g, ra, rb, v, pos):
@@ -830,7 +838,7 @@ func linear_scan(g &: Ng, ra &: Ra):
         else:
             repeat ra.active.len() in q:
                 a5 := ra.active[q]
-                if g.mc.vcls[a5] == cls:
+                if g.mc.vcls[a5] == cls and not (ywin and g.mc.vloc[a5] >= 22):
                     rr := g.mc.vloc[a5]
                     w := spill_weight(g, ra, a5)
                     if w < vw and fixed_inter(ra, rr, v, pos) < 0 and not inactive_blocks(g, ra, rr, v, pos):
@@ -902,6 +910,7 @@ func mc_take(g &: Ng): Mc:
     g.mc.tgt = Vector {} as Vector<int>
     g.mc.loc = Vector {} as Vector<int>
     g.mc.dv = Vector {} as Vector<int>
+    g.mc.ymm = Vector {} as Vector<bool>
     ret old
 end
 
@@ -922,6 +931,7 @@ func mc_free_arrays(m &: Mc):
     m.tgt.free()
     m.loc.free()
     m.dv.free()
+    m.ymm.free()
 end
 
 func mi_clone(g &: Ng, o &: Mc, i: int): int:
@@ -940,6 +950,7 @@ func mi_clone(g &: Ng, o &: Mc, i: int): int:
     g.mc.tgt[j] = o.tgt[i]
     g.mc.loc[j] = o.loc[i]
     g.mc.dv[j] = g.mc_dv >= 0 ? g.mc_dv : o.dv[i]
+    g.mc.ymm[j] = o.ymm[i]
     ret j
 end
 
@@ -957,7 +968,8 @@ end
 func reload(g &: Ng, v: int, scratch: int):
     m := frame_mem(g.mc.vslot[v], 0 as i64)
     if g.mc.vwide[v]:
-        _lw := e_rm(g, M_VLD, 16, scratch, m)
+        lw := e_rm(g, M_VLD, 16, scratch, m)
+        g.mc.ymm[lw] = g.mc.vymm[v]
     else g.mc.vcls[v] == 1:
         _l := e_rm(g, M_FLD, 8, scratch, m)
     else:
@@ -968,7 +980,8 @@ end
 func spill_store(g &: Ng, v: int, scratch: int):
     m := frame_mem(g.mc.vslot[v], 0 as i64)
     if g.mc.vwide[v]:
-        _sw := e_mr(g, M_VST, 16, m, scratch)
+        sw := e_mr(g, M_VST, 16, m, scratch)
+        g.mc.ymm[sw] = g.mc.vymm[v]
     else g.mc.vcls[v] == 1:
         _s := e_mr(g, M_FST, 8, m, scratch)
     else:
@@ -978,7 +991,7 @@ end
 
 func is_def_slot(op: int, cc: int): bool:
     switch op:
-        M_MOV_RR, M_COPY, M_MOVZX_RR, M_MOVSX_RR, M_FMOV_RR, M_CVTSI2F, M_CVTF2SI, M_CVTF2F, M_MOVQ_XG, M_MOVQ_GX, M_SQRT, M_MOV_RI, M_SETCC, M_LD, M_LDZX, M_LDSX, M_LEA, M_FLD, M_LDGOT, M_IMUL_RR, M_FOP_RR, M_XORPS, M_ANDPS, M_UNARY, M_SHIFT_RI, M_SHIFT_RC, M_IMUL_RRI, M_CMOV, M_XCHG, M_LXADD, M_ALU_RM, M_FOP_RM, M_VLD, M_VOP_RR, M_SHUFPS, M_UNPCKLPD, M_PSHUFD, M_VSHI, M_VLD32:
+        M_MOV_RR, M_COPY, M_MOVZX_RR, M_MOVSX_RR, M_FMOV_RR, M_CVTSI2F, M_CVTF2SI, M_CVTF2F, M_MOVQ_XG, M_MOVQ_GX, M_SQRT, M_MOV_RI, M_SETCC, M_LD, M_LDZX, M_LDSX, M_LEA, M_FLD, M_LDGOT, M_IMUL_RR, M_FOP_RR, M_XORPS, M_ANDPS, M_UNARY, M_SHIFT_RI, M_SHIFT_RC, M_IMUL_RRI, M_CMOV, M_XCHG, M_LXADD, M_ALU_RM, M_FOP_RM, M_VLD, M_VOP_RR, M_SHUFPS, M_UNPCKLPD, M_PSHUFD, M_VSHI, M_VLD32, M_VUN:
             ret true
         end
         M_ALU_RR, M_ALU_RI:
@@ -1000,7 +1013,7 @@ end
 
 func is_use_r0(op: int): bool:
     switch op:
-        M_MOV_RR, M_COPY, M_MOVZX_RR, M_MOVSX_RR, M_FMOV_RR, M_CVTSI2F, M_CVTF2SI, M_CVTF2F, M_MOVQ_XG, M_MOVQ_GX, M_SQRT, M_MOV_RI, M_SETCC, M_LD, M_LDZX, M_LDSX, M_LEA, M_FLD, M_LDGOT, M_IMUL_RRI, M_VLD, M_VLD32, M_PSHUFD:
+        M_MOV_RR, M_COPY, M_MOVZX_RR, M_MOVSX_RR, M_FMOV_RR, M_CVTSI2F, M_CVTF2SI, M_CVTF2F, M_MOVQ_XG, M_MOVQ_GX, M_SQRT, M_MOV_RI, M_SETCC, M_LD, M_LDZX, M_LDSX, M_LEA, M_FLD, M_LDGOT, M_IMUL_RRI, M_VLD, M_VLD32, M_PSHUFD, M_VUN, M_VZU:
             ret false
         end
     end
@@ -1081,7 +1094,8 @@ func rewrite(g &: Ng):
                 if fl:
                     mop = M_FMOV_RR
                 end
-                _m := e_rr(g, mop, 8, p0, p1)
+                mm := e_rr(g, mop, 8, p0, p1)
+                g.mc.ymm[mm] = g.mc.vymm[r0] or g.mc.vymm[r1]
             end
             continue
         end

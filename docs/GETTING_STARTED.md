@@ -339,9 +339,12 @@ salam build --lib            # libNAME.so, libNAME.dylib, or NAME.dll + libNAME.
 salam build --lib=static     # libNAME.a
 ```
 
-Both backends build libraries. The C backend is the default; `--backend=llvm`
+Every backend builds libraries. The C backend is the default; `--backend=llvm`
 (or a `--target` build with no cross `--cc`) produces the object with LLVM and
-links it with `cc -shared` (or archives it for `--lib=static`). A Windows DLL
+links it with `cc -shared` (or archives it for `--lib=static`).
+`--backend=native` links a shared library with the built-in linker, with no
+C compiler, for Linux (glibc and musl) and macOS targets; see "Shared
+libraries" in [docs/NATIVE_LINKER.md](NATIVE_LINKER.md). A Windows DLL
 also gets `NAME.def` and, when `llvm-dlltool` is installed, an MSVC import
 library `NAME.lib`, next to the mingw `libNAME.dll.a`.
 

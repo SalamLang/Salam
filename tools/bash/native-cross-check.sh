@@ -37,7 +37,7 @@ RUNNER=$3
 shift 3
 TEST_GROUPS=${*:-basics features types data games match switch llvm general stdlib}
 DEFAULT_SKIP="general/condcomp_toplevel general/condcomp_pruned_lints general/const_define general/preproc
-general/dbfile general/dbparams general/dbtest general/linkkind general/sqlite_*
+general/dbfile general/dbparams general/dbtest general/linkkind general/sqlite_* stdlib/db_extra
 llvm/ll_div_zero_runtime llvm/ll_mod_zero_compound stdlib/os_platform_demo"
 case "$TRIPLE" in
 aarch64* | arm64* | riscv*) ;;

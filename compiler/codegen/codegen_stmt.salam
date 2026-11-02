@@ -307,6 +307,116 @@ func repeat_ctl_ctype(idx_ts: str): str:
     ret "int64_t"
 end
 
+func cg_assign_tail(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
+    nn := at.Get(a, n)
+    if nn.op != tok.TK_ASSIGN and nn.a != 0 and str.Len(at.Get(a, nn.a).type_str) > 0:
+        base_op := cg_compound_base(nn.op)
+        if base_op != tok.TK_EOF:
+            mut sname2 := ""
+            ssym2 := cg_struct_of(s, at.Get(a, nn.a).type_str, sname2)
+            if ssym2 != 0:
+                mname := cg_op_method(base_op)
+                if str.Len(mname) > 0:
+                    callv := cg_emit_op_call(
+                        g, s, a, nn.a, ssym2, sname2, mname, nn.b
+                    )
+                    if str.Len(callv) > 0:
+                        cg_line(
+                            g, cg_expr(g, s, a, nn.a) + " = " + callv + ";"
+                        )
+                        ret
+                    end
+                end
+            end
+        end
+    end
+    if nn.op == tok.TK_PLUS_EQ and str.Equals(at.Get(a, nn.a).type_str, "str"):
+        e1 := cg_expr(g, s, a, nn.a)
+        e2 := cg_expr(g, s, a, nn.a)
+        ob := cg_str_operand(g, s, a, nn.b)
+        cg_line(g, e1 + " = salam_strcat(" + e2 + ", " + ob + ");")
+        ret
+    end
+    if nn.op == tok.TK_POWER_EQ:
+        a_ts := at.Get(a, nn.a).type_str
+        ct2 := cg_ctype(str.Len(a_ts) > 0 ? a_ts : "double")
+        g.tmpn += 1
+        t2 := g.tmpn
+        lhs := cg_expr(g, s, a, nn.a)
+        rhs := cg_expr(g, s, a, nn.b)
+        cg_line(
+            g, "{ " + ct2 + " *__pw" + t2 + " = &(" + lhs + "); " + "*__pw" + t2 + " = (" + ct2 + ")pow(SALAM_FPARG_D((double)(*__pw" + t2 + ")), (double)(" + rhs + ")); }"
+        )
+        ret
+    end
+    ea := cg_expr(g, s, a, nn.a)
+    eb := cg_div_guard(g, a, nn.op, at.Get(a, nn.a).type_str, nn.b, cg_expr(g, s, a, nn.b))
+    cg_line(g, ea + " " + cg_op(nn.op) + " " + eb + ";")
+    ret
+end
+
+func cg_compound_index_set(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): bool:
+    nn := at.Get(a, n)
+    if nn.op == tok.TK_ASSIGN or nn.a == 0 or at.KindOf(a, nn.a) != at.AST_INDEX:
+        ret false
+    end
+    ixn := at.Get(a, nn.a)
+    ets := at.Get(a, nn.a).type_str
+    if ixn.a == 0 or ixn.b == 0 or str.Len(ets) == 0:
+        ret false
+    end
+    cts := at.Get(a, ixn.a).type_str
+    if str.Len(cts) == 0 or cg_is_ptr_ts(cts):
+        ret false
+    end
+    mut sname := ""
+    ssym := cg_struct_of(s, cts, sname)
+    if ssym == 0:
+        ret false
+    end
+    m := sm.LookupLocal(s, sm.SymAt(s, ssym).members, "operator_index_set")
+    if m == 0 or sm.SymAt(s, m).kind != sm.SYM_METHOD:
+        ret false
+    end
+    sig := pick_op_overload(s, m, 2)
+    if sig == 0:
+        ret false
+    end
+    mangled := cg_mangle_method(
+        g, s, sname, ssym, "operator_index_set", sm.SigAt(s, sig).params
+    )
+    g.tmpn += 1
+    t := g.tmpn
+    rv := "__ixr" + t
+    iv := "__ixi" + t
+    vv := "__ixv" + t
+    ct := cg_ctype(cts)
+    its := at.Get(a, ixn.b).type_str
+    cg_line(g, "{")
+    g.indent += 1
+    if cg_addressable(s, a, ixn.a):
+        cg_line(g, ct + " *" + rv + " = &(" + cg_expr(g, s, a, ixn.a) + ");")
+    else:
+        cg_line(g, ct + " __ixc" + t + " = (" + cg_expr(g, s, a, ixn.a) + ");")
+        cg_line(g, ct + " *" + rv + " = &__ixc" + t + ";")
+    end
+    cg_line(
+        g, cg_decl_cn(str.Len(its) > 0 ? its : "i64", iv) + " = " + cg_expr_value(g, s, a, ixn.b) + ";"
+    )
+    g.arg_ovr.put(ixn.a, "(*" + rv + ")")
+    g.arg_ovr.put(ixn.b, iv)
+    cg_line(g, cg_decl_cn(ets, vv) + " = " + cg_expr(g, s, a, nn.a) + ";")
+    g.arg_ovr.remove(ixn.a)
+    g.arg_ovr.remove(ixn.b)
+    g.arg_ovr.put(nn.a, vv)
+    cg_assign_tail(g, s, a, n)
+    g.arg_ovr.remove(nn.a)
+    cg_line(g, mangled + "(" + rv + ", " + iv + ", " + vv + ");")
+    g.indent -= 1
+    cg_line(g, "}")
+    ret true
+end
+
 func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
     if n == 0:
         ret
@@ -412,9 +522,7 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
                             container := ixn.a
                             idx_c := cg_expr(g, s, a, ixn.b)
                             val_c := cg_expr(g, s, a, nn.b)
-                            ck := at.KindOf(a, container)
-                            addressable := ck == at.AST_IDENTIFIER or ck == at.AST_MEMBER or ck == at.AST_INDEX or ck == at.AST_THIS
-                            if addressable:
+                            if cg_addressable(s, a, container):
                                 recv := "&(" + cg_expr(g, s, a, container) + ")"
                                 cg_line(
                                     g, mangled + "(" + recv + ", " + idx_c + ", " + val_c + ");"
@@ -435,57 +543,10 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
                 end
             end
         end
-        if nn.op != tok.TK_ASSIGN and nn.a != 0 and str.Len(at.Get(a, nn.a).type_str) > 0:
-            base_op := cg_compound_base(nn.op)
-            if base_op != tok.TK_EOF:
-                mut sname2 := ""
-                ssym2 := cg_struct_of(s, at.Get(a, nn.a).type_str, sname2)
-                if ssym2 != 0:
-                    mname := cg_op_method(base_op)
-                    if str.Len(mname) > 0:
-                        callv := cg_emit_op_call(
-                            g, s, a, nn.a, ssym2, sname2, mname, nn.b
-                        )
-                        if str.Len(callv) > 0:
-                            mut lhs_c := cg_vec_elem_place(g, s, a, nn.a)
-                            if str.Len(lhs_c) == 0:
-                                lhs_c = cg_expr(g, s, a, nn.a)
-                            end
-                            cg_line(g, lhs_c + " = " + callv + ";")
-                            ret
-                        end
-                    end
-                end
-            end
-        end
-        if nn.op == tok.TK_PLUS_EQ and str.Equals(at.Get(a, nn.a).type_str, "str"):
-            e1 := cg_expr(g, s, a, nn.a)
-            e2 := cg_expr(g, s, a, nn.a)
-            ob := cg_str_operand(g, s, a, nn.b)
-            cg_line(g, e1 + " = salam_strcat(" + e2 + ", " + ob + ");")
+        if cg_compound_index_set(g, s, a, n):
             ret
         end
-        if nn.op == tok.TK_POWER_EQ:
-            a_ts := at.Get(a, nn.a).type_str
-            ct2 := cg_ctype(str.Len(a_ts) > 0 ? a_ts : "double")
-            g.tmpn += 1
-            t2 := g.tmpn
-            mut lhs := cg_vec_elem_place(g, s, a, nn.a)
-            if str.Len(lhs) == 0:
-                lhs = cg_expr(g, s, a, nn.a)
-            end
-            rhs := cg_expr(g, s, a, nn.b)
-            cg_line(
-                g, "{ " + ct2 + " *__pw" + t2 + " = &(" + lhs + "); " + "*__pw" + t2 + " = (" + ct2 + ")pow(SALAM_FPARG_D((double)(*__pw" + t2 + ")), (double)(" + rhs + ")); }"
-            )
-            ret
-        end
-        mut ea := cg_vec_elem_place(g, s, a, nn.a)
-        if str.Len(ea) == 0:
-            ea = cg_expr(g, s, a, nn.a)
-        end
-        eb := cg_div_guard(g, a, nn.op, at.Get(a, nn.a).type_str, nn.b, cg_expr(g, s, a, nn.b))
-        cg_line(g, ea + " " + cg_op(nn.op) + " " + eb + ";")
+        cg_assign_tail(g, s, a, n)
         ret
     end
     if k == at.AST_EXPR_STMT and nn.synthetic and str.Equals(nn.name, sm.SF_MARK):

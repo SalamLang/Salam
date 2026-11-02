@@ -76,7 +76,7 @@ async fn pump<R: AsyncRead + Unpin>(mut r: R, buf: Arc<Mutex<Capped>>, sink: Sin
     }
 }
 
-fn kill_tree(pid: Option<u32>) {
+pub fn kill_tree(pid: Option<u32>) {
     let Some(pid) = pid else { return };
     #[cfg(unix)]
     unsafe {

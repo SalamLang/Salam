@@ -5,14 +5,18 @@ import net.router
 mut guard := jwt.NewGuard("a-server-secret-only-the-server-knows")
 
 func login(ctx: i64):
-    mut err := 0
     mut c := jwt.NewClaims()
     c.sub = "42"
     jwt.SetStr(c, "scope", "read")
     jwt.SetRaw(c, "roles", `["editor"]`)
-    token := jwt.Issue(guard, c, 3600, err)
-    jwt.SetSessionCookieInsecure(ctx, guard, token, 3600)
-    http.Text(ctx, token)
+    try:
+        token := jwt.Issue(guard, c, 3600)
+        jwt.SetSessionCookieInsecure(ctx, guard, token, 3600)
+        http.Text(ctx, token)
+    catch e:
+        http.SetStatus(ctx, 500)
+        http.Text(ctx, e.message)
+    end
 end
 
 func me(ctx: i64):
@@ -44,16 +48,19 @@ func profile(ctx: i64):
 end
 
 func manual(ctx: i64):
-    mut err := 0
-    t := jwt.Check(ctx, guard, err)
-    if jwt.BearerToken(ctx).len() == 0 and jwt.TokenFrom(ctx, guard).len() == 0:
-        jwt.MissingCredential(ctx, guard)
-    else err != jwt.JWT_OK:
-        jwt.Unauthorized(ctx, guard, jwt.ErrorText(err))
-    else t.claims.sub == "0":
-        jwt.Forbidden(ctx, "the user is blocked")
-    else:
-        http.Text(ctx, "valid")
+    try:
+        t := jwt.Check(ctx, guard)
+        if t.claims.sub == "0":
+            jwt.Forbidden(ctx, "the user is blocked")
+        else:
+            http.Text(ctx, "valid")
+        end
+    catch e:
+        if e.code == "jwt.missing_token":
+            jwt.MissingCredential(ctx, guard)
+        else:
+            jwt.Unauthorized(ctx, guard, e.message)
+        end
     end
 end
 
@@ -69,7 +76,7 @@ func logout(ctx: i64):
     http.Text(ctx, "you are logged out")
 end
 
-func main:
+func main throws:
     guard.cookie = "session"
     mut r := router.NewRouter()
     router.Post(r, "/login", login)
@@ -109,10 +116,11 @@ func main:
 
     mut access := ""
     mut refresh := ""
-    mut err := 0
-    println jwt.IssuePair(guard, "42", 900, 86400, access, refresh, err), access != refresh
-    one := jwt.IssueFor(guard, "42", 60, err)
-    println jwt.Verify(one, guard.secret, guard.opts, err).claims.sub, guard.realm
+    try jwt.IssuePair(guard, "42", 900, 86400, access, refresh)
+    println access.len() > 0, access != refresh
+    one := try jwt.IssueFor(guard, "42", 60)
+    checked := try jwt.Verify(one, guard.secret, guard.opts)
+    println checked.claims.sub, guard.realm
 end
 
 func ask(base: str, path: str, headers: HashMap<str, str>):

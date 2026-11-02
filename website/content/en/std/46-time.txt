@@ -17,19 +17,22 @@ pkg.intro <<
 <li><code>Year</code>, <code>FormatDate</code>, <code>Format</code>, <code>FormatISO</code> and <code>Weekday</code> use the machine's local time zone, so the same instant prints differently on a server set to UTC and a laptop in Tehran. Use the <code>...UTC</code> functions and <code>FormatISOUTC</code> for anything stored or compared.</li>
 <li><code>FormatISO</code> has no offset, so the text cannot be read back to the same instant on another machine. Send <code>FormatISOUTC</code> or <code>FormatRFC3339</code>.</li>
 <li><code>Days(30)</code> is 30 times 24 hours, not a month. There is no month arithmetic; build the date with <code>FromUTCParts</code> and a month one higher (it rolls 13 over into January).</li>
-<li><code>FromUTCParts</code> and <code>FromLocalParts</code> accept any numbers and roll over: 30 February becomes 1 March. The parse functions, by contrast, reject a day that the month does not have.</li>
+<li><code>FromUTCParts</code> and <code>FromLocalParts</code> accept any numbers and roll over: 30 February becomes 1 March. The parse functions, by contrast, throw for a day that the month does not have.</li>
 <li>Timing code with <code>Now</code>. It has whole seconds and follows clock changes; use <code>MonoNanos</code>.</li>
 </ul>
 
 <h2 id="guide-dates">Dates from text, and date arithmetic</h2>
-<p>Dates usually arrive as text: from JSON, a database or a form. <code>ParseISO</code> reads the ISO 8601 form and returns a <code>TimeResult</code>; check <code>ok</code> before using <code>epoch</code>, because bad input is common. Once you have an instant, arithmetic is plain integer arithmetic: <code>AddDuration</code> moves it, and <code>DiffSeconds</code> gives the distance between two instants.</p>
+<p>Dates usually arrive as text: from JSON, a database or a form. <code>ParseISO</code> reads the ISO 8601 form and returns the instant. Bad input is common, so it is declared <code>throws</code>: catch the error with <code>try:</code> ... <code>catch e:</code> and report or skip the value. Once you have an instant, arithmetic is plain integer arithmetic: <code>AddDuration</code> moves it, and <code>DiffSeconds</code> gives the distance between two instants.</p>
 {{example.time-guide-expiry}}
 <p>The example fixes "today" with <code>FromUTCParts</code> so its output never changes; a real program would use <code>Now()</code>. Adding <code>Days(30)</code> adds exactly 30 times 24 hours. In UTC that is always 30 calendar days, but in a zone with daylight saving the local clock time can move by an hour, so keep stored instants in UTC and convert only for display.</p>
 
 <h2 id="guide-durations">Timeouts from settings</h2>
-<p>A setting such as <code>timeout = 1m30s</code> is easier to read than a number of milliseconds. <code>ParseDuration</code> understands <code>h</code>, <code>m</code>, <code>s</code>, <code>ms</code>, <code>us</code> and <code>ns</code>, in any combination and with fractions. Check the value against sensible limits too: a parse that worked is not yet a value that makes sense.</p>
+<p>A setting such as <code>timeout = 1m30s</code> is easier to read than a number of milliseconds. <code>ParseDuration</code> understands <code>h</code>, <code>m</code>, <code>s</code>, <code>ms</code>, <code>us</code> and <code>ns</code>, in any combination and with fractions. It throws on text it cannot read, and the error's <code>message</code> says why. Check the value against sensible limits too: a parse that worked is not yet a value that makes sense.</p>
 {{example.time-guide-timeouts}}
 <p>Durations add, subtract, multiply and compare without any unit conversions, and <code>to_str</code> prints them in the same short form that <code>ParseDuration</code> reads. When a quick default is enough, <code>ParseDurationOr</code> does the parse and the fallback in one call.</p>
+
+<h2 id="guide-errors">When the text is not a date</h2>
+<p><code>ParseISO</code>, <code>ParseISONanos</code>, <code>ParseISOIn</code>, <code>ParseHTTPDate</code>, <code>ParseFormat</code> and <code>ParseDuration</code> either return a value or throw an <a href="/std/core/">Error</a>; nothing half-read comes back. <code>e.kind</code> tells the cases apart: <code>Syntax</code> for a character that does not fit, such as a slash where a dash belongs or a letter in the year, <code>UnexpectedEnd</code> for text that stops early, and <code>OutOfRange</code> for a field that is too large, such as month 13, hour 25, 30 February or a duration longer than about 292 years. <code>e.offset</code> and <code>e.column</code> point at the spot, and <code>e.code</code> is one of <code>time.syntax</code>, <code>time.unexpected_end</code>, <code>time.empty</code>, <code>time.trailing</code>, <code>time.bad_month</code>, <code>time.bad_day</code>, <code>time.bad_hour</code>, <code>time.bad_minute</code>, <code>time.bad_second</code>, <code>time.bad_offset</code>, <code>time.bad_month_name</code>, <code>time.layout_mismatch</code>, <code>time.bad_unit</code>, <code>time.missing_unit</code> or <code>time.overflow</code>. A layout that <code>ParseFormat</code> does not understand is the caller's mistake and throws <code>InvalidArgument</code> with <code>time.bad_layout</code>. When a default is fine, <code>ParseISOOr</code> and <code>ParseDurationOr</code> never throw; for the others, catch the error and use your default.</p>
 
 <h2 id="guide-schedule">The next run of a daily job</h2>
 <p>An instant is seconds since 1970 in UTC, so the start of its UTC day is <code>t - t % SecondsPerDay</code>, and the time of day is the rest. That is enough to work out when a job that runs every night at 02:30 UTC should run next.</p>
@@ -145,9 +148,6 @@ doc.Duration.equals = True when it equals the other span.
 doc.Duration.truncate = Rounds the span down to a multiple of <code>m</code>.
 doc.Duration.round = Rounds the span to the nearest multiple of <code>m</code>, with halves going away from zero.
 doc.Duration.to_str = Writes the span as <code>1h30m0s</code>; the same as <code>FormatDuration</code>.
-doc.DurationResult = The result of parsing a duration.
-doc.DurationResult.ok = Whether the text was read successfully.
-doc.DurationResult.value = The span that was read.
 doc.Nanoseconds = A span of <code>n</code> nanoseconds.
 doc.Microseconds = A span of <code>n</code> microseconds.
 doc.Milliseconds = A span of <code>n</code> milliseconds.
@@ -158,21 +158,18 @@ doc.Days = A span of <code>n</code> days.
 doc.SecondsF = A span of a fractional number of seconds, such as 0.25 for a quarter second.
 doc.ZeroDuration = A span of zero.
 doc.FormatDuration = Writes the span short and readable: <code>42ns</code>, <code>250us</code>, <code>1.5s</code>, <code>1m30s</code> or <code>1h15m30.5s</code>.
-doc.ParseDuration = Reads text such as <code>1h15m30.5s</code> or <code>-250ms</code>. The units are <code>ns</code>, <code>us</code>, <code>ms</code>, <code>s</code>, <code>m</code>, <code>h</code> and <code>d</code> for days.
-doc.ParseDurationOr = Like <code>ParseDuration</code>, returning the default when the text is not valid.
+doc.ParseDuration = Reads text such as <code>1h15m30.5s</code> or <code>-250ms</code>. The units are <code>ns</code>, <code>us</code>, <code>ms</code>, <code>s</code>, <code>m</code>, <code>h</code> and <code>d</code> for days, and every number needs one. Throws <code>Syntax</code> for a character or unit it does not know, <code>UnexpectedEnd</code> for empty text or a number with no unit, and <code>OutOfRange</code> when the span does not fit in 64 bits of nanoseconds.
+doc.ParseDurationOr = Like <code>ParseDuration</code>, but returns the default instead of throwing when the text is not valid.
 doc.SleepFor = Sleeps for the given span.
 doc.SinceDuration = The span since an instant taken from <code>MonoNanos</code>.
 doc.DurationBetween = The span between two epoch instants.
 doc.AddDuration = Adds a span to an instant; any fraction of a second is dropped.
-doc.TimeResult = The result of parsing a date and time.
-doc.TimeResult.ok = Whether the text was read successfully.
-doc.TimeResult.epoch = The instant that was read, in seconds since the Unix epoch.
-doc.TimeResult.nanos = The fraction of a second, in nanoseconds.
-doc.ParseISO = Reads an ISO 8601 date and time, such as <code>2024-03-20T17:35:09+03:30</code> or <code>2024-03-20</code>. Without an offset it assumes local time. A day the month does not have, such as 30 February, gives <code>ok</code> false.
-doc.ParseISOIn = Like <code>ParseISO</code>, but without an offset it assumes <code>offsetMinutes</code> minutes.
-doc.ParseHTTPDate = Reads the date format of HTTP headers.
-doc.ParseFormat = Reads text with a pattern. <code>%Y</code> is a four digit year, <code>%y</code> a two digit one, <code>%m</code> the month, <code>%d</code> the day, <code>%H</code> the hour, <code>%M</code> the minute, <code>%S</code> the second, <code>%f</code> the fraction, <code>%b</code> the English month name, <code>%a</code> the day name, which is ignored, <code>%z</code> an offset such as <code>+0330</code> and <code>%Z</code> a zone name such as UTC. One space in the pattern matches any number of spaces in the text.
-doc.ParseISOOr = Like <code>ParseISO</code>, returning the default when the text is not valid.
+doc.ParseISO = Reads an ISO 8601 date and time, such as <code>2024-03-20T17:35:09+03:30</code> or <code>2024-03-20</code>, and returns the instant in whole seconds; a fraction is checked and dropped. Without an offset it assumes local time. Throws <code>Syntax</code> or <code>UnexpectedEnd</code> for text in another shape and <code>OutOfRange</code> for a field that does not exist, such as month 13 or 30 February.
+doc.ParseISOIn = Like <code>ParseISO</code>, but without an offset it assumes <code>offsetMinutes</code> minutes. Throws the same errors.
+doc.ParseISONanos = Like <code>ParseISO</code>, but keeps the fraction of a second: it returns nanoseconds since the Unix epoch. Also throws <code>OutOfRange</code> for a date before 1677 or after 2262, which do not fit.
+doc.ParseHTTPDate = Reads the date format of HTTP headers, such as <code>Wed, 09 Jun 2021 10:18:14 GMT</code>, and the two older forms HTTP still allows. The zone must be GMT, UTC or a numeric offset. Throws like <code>ParseISO</code>, and <code>Syntax</code> for an unknown month name.
+doc.ParseFormat = Reads text with a pattern. <code>%Y</code> is a four digit year, <code>%y</code> a two digit one, <code>%m</code> the month, <code>%d</code> the day, <code>%H</code> the hour, <code>%M</code> the minute, <code>%S</code> the second, <code>%f</code> the fraction, <code>%b</code> the English month name, <code>%a</code> the day name, which is ignored, <code>%z</code> an offset such as <code>+0330</code> and <code>%Z</code> a zone name such as UTC. One space in the pattern matches any number of spaces in the text. Throws like <code>ParseISO</code> when the text does not fit the pattern, and <code>InvalidArgument</code> for a directive it does not know.
+doc.ParseISOOr = Like <code>ParseISO</code>, but returns the default instead of throwing when the text is not valid.
 doc.FormatISOUTC = Writes the instant in UTC in ISO 8601, such as <code>2024-03-20T14:05:09Z</code>.
 doc.FormatRFC3339 = Writes the instant in local time with its offset, such as <code>2024-03-20T17:35:09+03:30</code>, or <code>Z</code> when the offset is zero.
 doc.LocalOffsetMinutesAt = The difference between local time and UTC at that instant, in minutes. With daylight saving it can change over the year.
@@ -217,9 +214,6 @@ ex.Duration.equals = time-Duration
 ex.Duration.truncate = time-Duration
 ex.Duration.round = time-Duration
 ex.Duration.to_str = time-Duration
-ex.DurationResult = time-Duration
-ex.DurationResult.ok = time-Duration
-ex.DurationResult.value = time-Duration
 ex.Nanoseconds = time-Duration
 ex.Microseconds = time-Duration
 ex.Milliseconds = time-Duration
@@ -244,9 +238,9 @@ ex.FormatHTTPDate = time-UTC
 ex.ParseHTTPDate = time-UTC
 ex.ParseISO = time-UTC
 ex.ParseISOIn = time-UTC
+ex.ParseISONanos = time-UTC
 ex.ParseFormat = time-UTC
 ex.ParseISOOr = time-UTC
-ex.TimeResult = time-UTC
 ex.AddDuration = time-UTC
 ex.DiffSeconds = time-UTC
 ex.DurationBetween = time-UTC

@@ -2,7 +2,9 @@
 # Debugs a small program built with --backend=native -g under gdb and checks
 # what gdb prints: locals and arguments in registers, a struct split into
 # pieces, constants left after folding a loop, and a backtrace through an
-# inlined std function. It runs once per linker.
+# inlined std function. A second session stops on the first instruction of
+# two functions, before the prologue, where the arguments are still where the
+# caller put them. It runs once per linker.
 #
 # With a target triple and a runner it cross-builds instead (built-in linker
 # only, against SALAM_MUSL_SYSROOT) and debugs through gdb-multiarch and the
@@ -70,6 +72,25 @@ check() {
         fail=$((fail + 1))
     fi
 }
+start_target() {
+    rpid=
+    if [ -z "$TRIPLE" ] || [ "$RUNNER" = env ]; then
+        echo run >"$work/start.gdb"
+        return
+    fi
+    port=$((20000 + ($$ + $1) % 20000))
+    # shellcheck disable=SC2086
+    (cd "$work" && exec $RUNNER -g "$port" "./dg_$lk" >/dev/null 2>&1) &
+    rpid=$!
+    sleep 1
+    printf 'target remote :%s\ncontinue\n' "$port" >"$work/start.gdb"
+}
+stop_target() {
+    if [ -n "$rpid" ]; then
+        kill "$rpid" 2>/dev/null
+        wait "$rpid" 2>/dev/null
+    fi
+}
 linkers="builtin system"
 tgt=
 if [ -n "$TRIPLE" ]; then
@@ -85,25 +106,17 @@ for lk in $linkers; do
         continue
     fi
     out="$work/gdb_$lk.txt"
-    rpid=
-    if [ -z "$TRIPLE" ] || [ "$RUNNER" = env ]; then
-        set -- -ex run
-    else
-        port=$((20000 + $$ % 20000))
-        # shellcheck disable=SC2086
-        (cd "$work" && exec $RUNNER -g "$port" "./dg_$lk" >/dev/null 2>&1) &
-        rpid=$!
-        sleep 1
-        set -- -ex "target remote :$port" -ex continue
-    fi
+    start_target 0
     (cd "$work" && timeout 120 "$GDB" -batch -nx \
         -ex "break salam_area_Pt_f64" -ex "break dg.salam:9" -ex "break dg.salam:21" -ex "break salam_panic" \
-        "$@" -ex "info args" -ex continue -ex "info locals" -ex continue -ex "info locals" \
+        -ex "source start.gdb" -ex "info args" -ex continue -ex "info locals" -ex continue -ex "info locals" \
         -ex continue -ex bt -ex kill "./dg_$lk" >"$out" 2>&1)
-    if [ -n "$rpid" ]; then
-        kill "$rpid" 2>/dev/null
-        wait "$rpid" 2>/dev/null
-    fi
+    stop_target
+    ent="$work/gdb_entry_$lk.txt"
+    start_target 1
+    (cd "$work" && timeout 120 "$GDB" -batch -nx -ex "break *area" -ex "break *walk" \
+        -ex "source start.gdb" -ex "info args" -ex continue -ex "info args" -ex kill "./dg_$lk" >"$ent" 2>&1)
+    stop_target
     f0=$fail
     check "$out" "p = {x = 3, y = 4}" "$lk struct pieces"
     check "$out" "scale = 1.5" "$lk float argument"
@@ -113,9 +126,15 @@ for lk in $linkers; do
     check "$out" "k = 8" "$lk folded loop"
     check "$out" "in get (" "$lk inlined frame"
     check "$out" "boom (" "$lk caller of inlined frame"
+    check "$ent" "p = {x = 3, y = 4}" "$lk struct argument at entry"
+    check "$ent" "scale = 1.5" "$lk float argument at entry"
+    check "$ent" "n = 5" "$lk argument at entry"
+    check "$ent" '"hello"' "$lk string argument at entry"
     if [ "$fail" -gt "$f0" ]; then
         echo "--- gdb output ($lk) ---"
         cat "$out"
+        echo "--- gdb output at entry ($lk) ---"
+        cat "$ent"
         echo "--- end gdb output ($lk) ---"
     fi
 done

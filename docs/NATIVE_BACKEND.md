@@ -1091,6 +1091,17 @@ How the pieces fit:
   been loaded into registers. gdb only trusts its own prologue analysis for
   compilers it knows, and on i686, where every argument arrives on the
   stack, that would stop before any of them has a location.
+- Arguments also have a location before the prologue, for a debugger that
+  stops on a function's first instruction (`break *func`, or a caller's
+  `stepi`). Instruction selection records where each argument arrives: a
+  register, or on i686 and x86-64 a stack slot, written as
+  `DW_OP_call_frame_cfa` plus its offset, since those functions have CFI.
+  That location covers the entry block from the function's first byte for as
+  long as the variable still holds the argument and nothing has overwritten
+  the register (an instruction other than the argument moves, or one that
+  writes it, ends a register location). A struct argument passed by pointer
+  and split into fields by SROA gets the whole struct behind that pointer
+  until the first of its fields is loaded.
 
 Enums are written as enumeration types, so gdb prints `Blue`, not `2`.
 On Windows targets, `-g` also writes CodeView into each object: a
@@ -1127,7 +1138,8 @@ with the system linker, GNU ld discards it.
 
 `tools/bash/native-gdb-check.sh <salam>` debugs a small program under gdb
 and checks the printed locals, a struct split into pieces, folded
-constants and an inlined frame.
+constants, an inlined frame, and the arguments at a function's first
+instruction.
 
 A good end-to-end check is the compiler itself: emit its IR with
 `salam llvm compiler/main.salam`, build that IR with the native backend, and

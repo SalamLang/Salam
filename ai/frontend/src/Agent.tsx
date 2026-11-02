@@ -22,6 +22,7 @@ const TOOL_LABEL: Record<string, string> = {
   list_dir: t("فهرست پوشه", "List folder"),
   glob: t("یافتن فایل‌ها", "Find files"),
   grep: t("جست‌وجو در فایل‌ها", "Search files"),
+  browser: t("مرورگر", "Browser"),
 };
 
 const STATE_LABEL: Record<AgentCall["state"], string> = {
@@ -157,10 +158,34 @@ function Output({ text, live }: { text: string; live: boolean }) {
 }
 
 function ToolIcon({ c }: { c: AgentCall }) {
+  if (c.tool === "browser") return <IconGlobe width={16} height={16} />;
   if (c.kind === "exec") return <IconTerminal width={16} height={16} />;
   if (c.tool === "glob" || c.tool === "grep") return <IconSearch width={16} height={16} />;
   if (c.tool === "list_dir") return <IconFolder width={16} height={16} />;
   return <IconFile width={16} height={16} />;
+}
+
+function CallShot({ chat, id }: { chat: string; id: string }) {
+  const [src, setSrc] = useState("");
+  const [failed, setFailed] = useState(false);
+  const [big, setBig] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    api
+      .callImage(chat, id)
+      .then((r) => alive && setSrc(`data:${r.mime};base64,${r.data}`))
+      .catch(() => alive && setFailed(true));
+    return () => {
+      alive = false;
+    };
+  }, [chat, id]);
+  if (failed) return null;
+  if (!src) return <div className="call-shot loading" />;
+  return (
+    <button type="button" className={`call-shot${big ? " big" : ""}`} onClick={() => setBig((b) => !b)} title={big ? t("کوچک کردن", "Shrink") : t("بزرگ کردن", "Enlarge")}>
+      <img src={src} alt={t("تصویر صفحه از مرورگر", "Browser screenshot")} />
+    </button>
+  );
 }
 
 export function ToolCard({ c, onDecide, onStop }: { c: CallView; onDecide: (id: string, a: AgentAnswer) => void; onStop: (id: string) => void }) {
@@ -186,7 +211,7 @@ export function ToolCard({ c, onDecide, onStop }: { c: CallView; onDecide: (id: 
         </span>
         <IconChevronDown className={`tool-chevron${open ? " open" : ""}`} width={16} height={16} />
       </button>
-      {open && (showDetail || c.output || c.outside || c.kind === "exec") && (
+      {open && (showDetail || c.output || c.outside || c.kind === "exec" || c.image) && (
         <div className="tool-body">
           {c.outside && (
             <p className="tool-warn">
@@ -200,6 +225,7 @@ export function ToolCard({ c, onDecide, onStop }: { c: CallView; onDecide: (id: 
             </p>
           )}
           {showDetail && (c.lang === "diff" ? <DiffView text={c.detail} /> : <CodeView text={c.detail} lang={c.lang} />)}
+          {c.image && c.chat && <CallShot chat={c.chat} id={c.call_id} />}
           {c.output && c.state !== "pending" && <Output text={c.output} live={live} />}
         </div>
       )}

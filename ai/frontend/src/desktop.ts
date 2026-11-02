@@ -20,6 +20,7 @@ export type AgentCall = {
   cwd: string;
   state: CallState;
   output: string;
+  image?: boolean;
 };
 
 export type AgentInfo = {

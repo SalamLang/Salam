@@ -29,6 +29,8 @@ pkg.intro <<
 <p>If you control both ends and only need to move data, <a href="/std/encoding/json/">encoding/json</a> is simpler. Reach for this package when the other side speaks XML.</p>
 <h3 id="safety">Untrusted input</h3>
 <p><code>Parse</code> is safe to run on documents from outside. External entities (<code>&lt;!ENTITY x SYSTEM "file:///etc/passwd"&gt;</code>) are never fetched, so a reference to one fails as undeclared, and entity expansion is capped by <code>max_entity_expansion</code> (256 KB by default) and <code>max_entity_depth</code> (32), which stops the "billion laughs" attack. Element nesting is capped at 1024 levels.</p>
+<h3 id="errors">Errors</h3>
+<p><code>Parse</code>, <code>ParseWith</code>, the simple <code>Decode</code>, <code>Evaluate</code> and the <code>Select</code> functions are declared <code>throws</code>: on a broken document or a bad XPath expression they throw an <a href="/std/core/">Error</a> and give back nothing half-built. Catch it with <code>try:</code> ... <code>catch e:</code>, or write <code>try</code> before the call in a function that is itself <code>throws</code>. <code>e.message</code> says what is wrong, <code>e.line</code> and <code>e.column</code> point at it (in the expression, for XPath), and <code>e.kind</code> sorts it: <code>Syntax</code>, <code>UnexpectedEnd</code>, <code>NotFound</code> for an undeclared entity, prefix or XPath function, <code>AlreadyExists</code> for an attribute given twice, <code>OutOfRange</code> for the entity and depth limits, <code>InvalidUtf8</code>, <code>TypeMismatch</code> and <code>InvalidArgument</code>. <code>e.code</code> names the common cases exactly, such as <code>xml.unclosed_tag</code>, <code>xml.mismatched_tag</code> or <code>xpath.unknown_function</code>. <code>WellFormed</code> and <code>Valid</code> answer the same question as a plain <code>bool</code>.</p>
 <h3 id="pitfalls">What trips people up</h3>
 <ul>
 <li><strong>XPath matches names as written.</strong> A name test compares the element's full name, prefix included, with the query. <code>//entry</code> finds Atom entries in a default namespace, and <code>//m:thumbnail</code> works only if the document uses the prefix <code>m</code>. When the prefix may vary, test <code>local-name()</code> and <code>namespace-uri()</code>; the namespaces guide shows how.</li>
@@ -54,7 +56,7 @@ pkg.intro <<
 <p>Text is escaped on the way out, so the <code>&amp;</code> in the second URL is written as <code>&amp;amp;</code>, as XML requires. Building the document this way means you never have to escape anything by hand.</p>
 
 <h2 id="guide-config">Guide: a small config with the simple nodes</h2>
-<p>For a short file you read once, the simple interface is enough: <code>DecodeStrict</code> gives the root as a plain struct, <code>Child</code> and <code>Children</code> find elements by name, and <code>Attr</code> reads an attribute. <code>Found</code> tells you whether <code>Child</code> found anything, and <code>HasAttr</code> lets an attribute have a default.</p>
+<p>For a short file you read once, the simple interface is enough: <code>Decode</code> gives the root as a plain struct, or throws when the file is not well formed, <code>Child</code> and <code>Children</code> find elements by name, and <code>Attr</code> reads an attribute. <code>Found</code> tells you whether <code>Child</code> found anything, and <code>HasAttr</code> lets an attribute have a default.</p>
 {{example.encoding-xml-guide-config}}
 
 <h2 id="guide-tokens">Guide: scan a product feed with the tokenizer</h2>
@@ -63,7 +65,7 @@ pkg.intro <<
 <p>Attributes of a start tag arrive in <code>tok.attrs</code>, and text has its entities decoded, so <code>&amp;amp;</code> comes out as <code>&amp;</code>. Text tokens include the whitespace between tags, which is why the program trims the name and ignores text outside <code>&lt;name&gt;</code>. A self-closing tag such as <code>&lt;br/&gt;</code> gives a start token followed by an end token.</p>
 
 <h2 id="guide-errors">Guide: report broken XML</h2>
-<p>XML is strict: one root, every tag closed in order, every <code>&amp;</code> part of an entity. <code>Parse</code> stops at the first problem and <code>ErrorText</code> gives a line, a column and a readable reason, ready to show to whoever wrote the file. <code>WellFormed</code> only answers yes or no.</p>
+<p>XML is strict: one root, every tag closed in order, every <code>&amp;</code> part of an entity. <code>Parse</code> throws at the first problem, and the error carries a line, a column and a readable reason in <code>e.message</code>, ready to show to whoever wrote the file. <code>WellFormed</code> only answers yes or no.</p>
 {{example.encoding-xml-guide-errors}}
 <p>The last case is the most common one in hand-written files: a bare <code>&amp;</code> in text. When you build XML from strings yourself, pass text through <code>EscapeText</code> and attribute values through <code>EscapeAttr</code>, or build the document with the functions above, which escape for you.</p>
 
@@ -119,12 +121,6 @@ doc.Attribute.line = The line.
 doc.Attribute.col = The column.
 doc.NodeList = A list of node ids.
 doc.NodeList.items = The ids.
-doc.ParseError = An XML parse error.
-doc.ParseError.ok = Whether the parse succeeded.
-doc.ParseError.message = The error message.
-doc.ParseError.line = The line of the error.
-doc.ParseError.col = The column of the error.
-doc.ParseError.offset = The position of the error in bytes.
 doc.ParseOptions = The parse options.
 doc.ParseOptions.preserve_whitespace = Keep text nodes that are only whitespace.
 doc.ParseOptions.keep_comments = Keep the comments.
@@ -135,10 +131,8 @@ doc.ParseOptions.max_depth = The greatest element depth.
 doc.ParseOptions.max_entity_depth = The greatest depth of nested entities.
 doc.ParseOptions.max_entity_expansion = The greatest text length after entities are expanded; a guard against the "entity bomb" attack.
 doc.DefaultOptions = The default parse options.
-doc.NoError = An empty error to pass to the parse functions.
-doc.ErrorText = Writes the error as "line, column: message".
-doc.ParseWith = Reads the text with the given options.
-doc.Parse = Reads the text; <code>err.ok</code> becomes false when the XML is not well formed.
+doc.ParseWith = Reads the text with the given options. When the XML is not well formed it throws an <code>Error</code> with the line, the column and a code such as <code>xml.unclosed_tag</code>.
+doc.Parse = Reads the text with the default options. When the XML is not well formed it throws an <code>Error</code> with the line, the column and a code such as <code>xml.mismatched_tag</code>.
 doc.WellFormed = True when the text is well formed.
 doc.NewDocument = An empty document, to build one from scratch.
 doc.Free = Frees the memory of the document.
@@ -214,9 +208,9 @@ doc.XPathValue.nodes = The nodes, when the result is a node set.
 doc.XPathValue.text = The string result.
 doc.XPathValue.number = The numeric result.
 doc.XPathValue.flag = The boolean result.
-doc.Evaluate = Evaluates an XPath 1.0 expression from the <code>context</code> node.
+doc.Evaluate = Evaluates an XPath 1.0 expression from the <code>context</code> node. A bad expression throws an <code>Error</code> whose column points into the expression.
 doc.FreeValue = Frees the memory of the result.
-doc.Select = The nodes the expression picks, such as <code>//item[@price &lt; 100]</code>.
+doc.Select = The nodes the expression picks, such as <code>//item[@price &lt; 100]</code>. Throws on a bad expression, and with <code>TypeMismatch</code> when the result is not a node set.
 doc.SelectFirst = The first node picked; -1 when there is none.
 doc.SelectString = Turns the result into a string.
 doc.SelectNumber = Turns the result into a number, such as <code>sum(//item/@price)</code>.
@@ -294,8 +288,7 @@ doc.SetAttr = Sets an attribute of a simple node.
 doc.AppendChild = Adds a child to a simple node.
 doc.Child = The first child with the given name; when there is none, a node whose <code>Found</code> is false.
 doc.Children = Every child with the given name.
-doc.DecodeStrict = Turns the text into a simple node; <code>ok</code> becomes false when it is not valid.
-doc.Decode = Turns the text into a simple node.
+doc.Decode = Turns the text into a simple node. When the text is not well-formed XML it throws an <code>Error</code> with the line and column.
 doc.Valid = True when the text is valid XML.
 doc.Encode = Turns a simple node into text.
 doc.EncodeIndent = Writes a simple node with indenting.
@@ -308,11 +301,8 @@ ex.Document = encoding-xml-Parse
 ex.Node = encoding-xml-Parse
 ex.Attribute = encoding-xml-Parse
 ex.NodeList = encoding-xml-Parse
-ex.ParseError = encoding-xml-Parse
 ex.ParseOptions = encoding-xml-Parse
 ex.DefaultOptions = encoding-xml-Parse
-ex.NoError = encoding-xml-Parse
-ex.ErrorText = encoding-xml-Parse
 ex.ParseWith = encoding-xml-Parse
 ex.Parse = encoding-xml-Parse
 ex.WellFormed = encoding-xml-Parse
@@ -428,7 +418,6 @@ ex.SetAttr = encoding-xml-Simple
 ex.AppendChild = encoding-xml-Simple
 ex.Child = encoding-xml-Simple
 ex.Children = encoding-xml-Simple
-ex.DecodeStrict = encoding-xml-Simple
 ex.Decode = encoding-xml-Simple
 ex.Valid = encoding-xml-Simple
 ex.Encode = encoding-xml-Simple

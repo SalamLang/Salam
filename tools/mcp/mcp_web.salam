@@ -1,0 +1,933 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "mcpweb"
+@fa "وب‌ام‌سی‌پی"
+package mcpweb
+
+import str
+import env
+import time
+import net.tcp
+import net.dns
+import tls
+import encoding.json
+import encoding.value
+
+include mcpout "mcp_result.salam"
+include mcpexec "mcp_exec.salam"
+
+const FETCH_MS := 15000
+const MAX_RAW := 4000000
+const MAX_REDIRECTS := 5
+const DEFAULT_CHARS := 20000
+const MOST_CHARS := 80000
+const AGENT := "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36 SalamAI/1.0"
+
+struct Fetched:
+    pub ok: bool = false
+    pub status: int = 0
+    pub url: str = ""
+    pub mime: str = ""
+    pub body: str = ""
+    pub problem: str = ""
+end
+
+struct Target:
+    pub ok: bool = false
+    pub secure: bool = true
+    pub host: str = ""
+    pub port: int = 443
+    pub path: str = "/"
+end
+
+struct Hit:
+    pub title: str = ""
+    pub url: str = ""
+    pub snippet: str = ""
+end
+
+func _lc(c: int): int:
+    if c >= 65 and c <= 90: ret c + 32 end
+    ret c
+end
+
+func _at(s: str, i: int, lit: str): bool:
+    if i < 0 or i + lit.len() > s.len(): ret false end
+    mut k := 0
+    until k < lit.len():
+        if _lc(s[i + k] as int) != (lit[k] as int): ret false end
+        k += 1
+    end
+    ret true
+end
+
+func _seek(s: str, start: int, lit: str): int:
+    mut i := start
+    first := lit[0] as int
+    until i + lit.len() <= s.len():
+        if _lc(s[i] as int) == first and _at(s, i, lit): ret i end
+        i += 1
+    end
+    ret -1
+end
+
+func _space(c: int): bool:
+    ret c == 32 or c == 9 or c == 10 or c == 13 or c == 12
+end
+
+func _hex(c: int): int:
+    if c >= 48 and c <= 57: ret c - 48 end
+    l := _lc(c)
+    if l >= 97 and l <= 102: ret l - 87 end
+    ret -1
+end
+
+func _split(url: str): Target:
+    mut t := Target {}
+    mut rest := url
+    if _at(rest, 0, "https://"):
+        rest = rest.substr(8, rest.len() - 8)
+    else _at(rest, 0, "http://"):
+        t.secure = false
+        t.port = 80
+        rest = rest.substr(7, rest.len() - 7)
+    else:
+        ret t
+    end
+    hash := rest.find("#")
+    if hash >= 0: rest = rest.substr(0, hash) end
+    mut cut := rest.len()
+    each stop in ["/", "?"]:
+        at := rest.find(stop)
+        if at >= 0 and at < cut: cut = at end
+    end
+    mut host := rest.substr(0, cut)
+    t.path = cut < rest.len() ? rest.substr(cut, rest.len() - cut) : "/"
+    if str.StartsWith(t.path, "?"): t.path = "/" + t.path end
+    if host.find("@") >= 0 or host.len() == 0: ret t end
+    colon := host.find(":")
+    if colon >= 0:
+        t.port = host.substr(colon + 1, host.len() - colon - 1).to_int()
+        host = host.substr(0, colon)
+        if t.port <= 0 or t.port > 65535: ret t end
+    end
+    t.host = str.Lower(host)
+    t.ok = true
+    ret t
+end
+
+func _public(ip: str): bool:
+    parts := str.Split(ip, ".")
+    if parts.len() != 4: ret false end
+    a := parts.get(0).to_int()
+    b := parts.get(1).to_int()
+    c := parts.get(2).to_int()
+    if a == 0 or a == 10 or a == 127 or a >= 224: ret false end
+    if a == 169 and b == 254: ret false end
+    if a == 172 and b >= 16 and b <= 31: ret false end
+    if a == 192 and b == 168: ret false end
+    if a == 100 and b >= 64 and b <= 127: ret false end
+    if a == 192 and b == 0 and c == 0: ret false end
+    if a == 198 and (b == 18 or b == 19): ret false end
+    ret true
+end
+
+func _origin(url: str): str:
+    scheme := url.find("://")
+    if scheme < 0: ret "" end
+    mut slash := -1
+    mut i := scheme + 3
+    until i < url.len():
+        c := url[i] as int
+        if c == 47 or c == 63 or c == 35:
+            slash = i
+            break
+        end
+        i += 1
+    end
+    ret slash < 0 ? url : url.substr(0, slash)
+end
+
+func _resolve(base: str, href_in: str): str:
+    href := str.Trim(href_in)
+    if href.len() == 0 or str.StartsWith(href, "#"): ret "" end
+    if _at(href, 0, "http://") or _at(href, 0, "https://"): ret href end
+    if str.StartsWith(href, "//"):
+        ret (_at(base, 0, "http://") ? "http:" : "https:") + href
+    end
+    if href.find(":") >= 0 and href.find(":") < 12 and href.find("/") != href.find(":") + 1: ret "" end
+    origin := _origin(base)
+    if origin.len() == 0: ret "" end
+    if str.StartsWith(href, "/"): ret origin + href end
+    mut dir := base.substr(origin.len(), base.len() - origin.len())
+    q := dir.find("?")
+    if q >= 0: dir = dir.substr(0, q) end
+    mut last := -1
+    mut i := 0
+    until i < dir.len():
+        if (dir[i] as int) == 47: last = i end
+        i += 1
+    end
+    dir = last >= 0 ? dir.substr(0, last + 1) : "/"
+    ret origin + dir + href
+end
+
+func _header(head: str, name: str): str:
+    at := _seek(head, 0, "\r\n" + name + ":")
+    if at < 0: ret "" end
+    from := at + name.len() + 3
+    mut stop := _seek(head, from, "\r\n")
+    if stop < 0: stop = head.len() end
+    ret str.Trim(head.substr(from, stop - from))
+end
+
+func _dechunk(raw: str): str:
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    mut pos := 0
+    until pos < raw.len():
+        le := _seek(raw, pos, "\r\n")
+        if le < 0: break end
+        mut size := 0
+        mut i := pos
+        until i < le:
+            h := _hex(raw[i] as int)
+            if h < 0: break end
+            size = size * 16 + h
+            i += 1
+        end
+        if size <= 0 or le + 2 + size > raw.len(): break end
+        str.BufAppend(b, raw.substr(le + 2, size))
+        pos = le + 2 + size + 2
+    end
+    ret str.BufStr(b)
+end
+
+func _exchange(t: Target, ip: str, req: str, problem &: str): str:
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    began := time.NowMillis()
+    if t.secure:
+        mut c := tls.Dial(ip, t.port, tls.NewConfig(t.host))
+        if not tls.ConnOk(c):
+            problem = "could not open a secure connection to " + t.host + ": " + tls.ConnError(c)
+            tls.Close(c)
+            ret ""
+        end
+        tcp.SetDeadline(tcp.ConnFromFd(tls.Fd(c)), FETCH_MS)
+        if tls.Write(c, req) <= 0:
+            problem = "could not send the request to " + t.host
+            tls.Close(c)
+            ret ""
+        end
+        until str.BufLen(b) < MAX_RAW and time.NowMillis() - began < FETCH_MS:
+            got := tls.Read(c, 65536)
+            if got.len() == 0: break end
+            str.BufAppend(b, got)
+        end
+        tls.Close(c)
+    else:
+        c := tcp.DialTimeout(ip, t.port, FETCH_MS)
+        if not tcp.ConnOk(c):
+            problem = "could not connect to " + t.host
+            tcp.Close(c)
+            ret ""
+        end
+        tcp.SetDeadline(c, FETCH_MS)
+        if tcp.Write(c, req) <= 0:
+            problem = "could not send the request to " + t.host
+            tcp.Close(c)
+            ret ""
+        end
+        until str.BufLen(b) < MAX_RAW and time.NowMillis() - began < FETCH_MS:
+            got := tcp.Read(c, 65536)
+            if got.len() == 0: break end
+            str.BufAppend(b, got)
+        end
+        tcp.Close(c)
+    end
+    ret str.BufStr(b)
+end
+
+func _get(url_in: str, extra: Vector<str>, trusted: bool): Fetched:
+    mut out := Fetched { url = url_in }
+    mut url := url_in
+    mut hops := 0
+    until hops <= MAX_REDIRECTS:
+        t := _split(url)
+        if not t.ok:
+            out.problem = "only http and https links without a user name are supported: " + url
+            ret out
+        end
+        ip := dns.Lookup(t.host)
+        if ip.len() == 0:
+            out.problem = "the host " + t.host + " was not found"
+            ret out
+        end
+        if mcpexec.Hosted() and not trusted and not _public(ip):
+            out.problem = t.host + " points to a private network address, which this server does not fetch"
+            ret out
+        end
+        mut host_line := t.host
+        if (t.secure and t.port != 443) or (not t.secure and t.port != 80): host_line = host_line + ":" + t.port end
+        mut req := "GET " + t.path + " HTTP/1.1\r\nHost: " + host_line + "\r\nUser-Agent: " + AGENT + "\r\nAccept: text/html,application/xhtml+xml,application/json,text/plain;q=0.9,*/*;q=0.5\r\nAccept-Language: en,fa;q=0.8\r\nConnection: close\r\n"
+        each h in extra:
+            req = req + h + "\r\n"
+        end
+        req = req + "\r\n"
+        mut problem := ""
+        raw := _exchange(t, ip, req, problem)
+        if problem.len() > 0:
+            out.problem = problem
+            ret out
+        end
+        he := raw.find("\r\n\r\n")
+        sp := raw.find(" ")
+        if he < 0 or sp < 0 or sp > he:
+            out.problem = t.host + " sent no valid HTTP answer in time"
+            ret out
+        end
+        head := raw.substr(0, he + 2)
+        status := raw.substr(sp + 1, 3).to_int()
+        if status >= 300 and status < 400:
+            next := _resolve(url, _header(head, "location"))
+            if next.len() == 0:
+                out.problem = "the page redirected without a usable location"
+                ret out
+            end
+            url = next
+            hops += 1
+            continue
+        end
+        mut body := raw.substr(he + 4, raw.len() - he - 4)
+        if str.Lower(_header(head, "transfer-encoding")).find("chunked") >= 0: body = _dechunk(body) end
+        encoding := str.Lower(_header(head, "content-encoding"))
+        if encoding.len() > 0 and encoding != "identity":
+            out.problem = "the server sent " + encoding + " compressed content, which is not supported"
+            ret out
+        end
+        out.ok = true
+        out.status = status
+        out.url = url
+        out.mime = str.Lower(_header(head, "content-type"))
+        out.body = body
+        ret out
+    end
+    out.problem = "too many redirects"
+    ret out
+end
+
+func _entity(s: str, i: int, b &: str.StringBuilder, used &: int): bool:
+    semi := _seek(s, i, ";")
+    if semi < 0 or semi - i > 10: ret false end
+    name := s.substr(i + 1, semi - i - 1)
+    used = semi - i + 1
+    if str.StartsWith(name, "#"):
+        mut cp := 0
+        mut k := 1
+        hexa := name.len() > 1 and _lc(name[1] as int) == 120
+        if hexa: k = 2 end
+        until k < name.len():
+            d := hexa ? _hex(name[k] as int) : (name[k] as int) - 48
+            if d < 0 or d > (hexa ? 15 : 9): ret false end
+            cp = cp * (hexa ? 16 : 10) + d
+            k += 1
+        end
+        if cp <= 0 or cp > 1114111: ret false end
+        str.BufAppendCp(b, cp == 160 ? 32 : cp)
+        ret true
+    end
+    switch str.Lower(name):
+        "amp":
+            str.BufAppend(b, "&")
+            ret true
+        end
+        "lt":
+            str.BufAppend(b, "<")
+            ret true
+        end
+        "gt":
+            str.BufAppend(b, ">")
+            ret true
+        end
+        "quot", "ldquo", "rdquo":
+            str.BufAppend(b, "\"")
+            ret true
+        end
+        "apos", "lsquo", "rsquo":
+            str.BufAppend(b, "'")
+            ret true
+        end
+        "nbsp", "ensp", "emsp", "thinsp":
+            str.BufAppend(b, " ")
+            ret true
+        end
+        "mdash", "ndash":
+            str.BufAppend(b, "-")
+            ret true
+        end
+        "hellip":
+            str.BufAppend(b, "...")
+            ret true
+        end
+        "zwnj":
+            str.BufAppendCp(b, 8204)
+            ret true
+        end
+        "zwj":
+            str.BufAppendCp(b, 8205)
+            ret true
+        end
+        "copy":
+            str.BufAppendCp(b, 169)
+            ret true
+        end
+    end
+    ret false
+end
+
+func _text_run(s: str, from: int, stop: int, pre: bool, b &: str.StringBuilder, last &: int):
+    mut i := from
+    until i < stop:
+        c := s[i] as int
+        if c == 38:
+            mut used := 0
+            if _entity(s, i, b, used):
+                last = 0
+                i += used
+                continue
+            end
+        end
+        if not pre and _space(c):
+            if last != 32 and last != 10:
+                str.BufAppend(b, " ")
+                last = 32
+            end
+        else:
+            str.BufAppendChar(b, c)
+            last = c
+        end
+        i += 1
+    end
+end
+
+func _line(b &: str.StringBuilder, last &: int, mark: str):
+    if last != 10:
+        str.BufAppend(b, "\n")
+    end
+    str.BufAppend(b, mark)
+    last = mark.len() > 0 ? 32 : 10
+end
+
+func _attr(tag: str, name: str): str:
+    mut i := 0
+    until i < tag.len():
+        at := _seek(tag, i, name)
+        if at < 0: ret "" end
+        before := at > 0 ? (tag[at - 1] as int) : 32
+        mut j := at + name.len()
+        until j < tag.len() and _space(tag[j] as int):
+            j += 1
+        end
+        if _space(before) and j < tag.len() and (tag[j] as int) == 61:
+            j += 1
+            until j < tag.len() and _space(tag[j] as int):
+                j += 1
+            end
+            if j >= tag.len(): ret "" end
+            q := tag[j] as int
+            if q == 34 or q == 39:
+                mut k := j + 1
+                until k < tag.len() and (tag[k] as int) != q:
+                    k += 1
+                end
+                ret tag.substr(j + 1, k - j - 1)
+            end
+            mut k := j
+            until k < tag.len() and not _space(tag[k] as int) and (tag[k] as int) != 62:
+                k += 1
+            end
+            ret tag.substr(j, k - j)
+        end
+        i = at + name.len()
+    end
+    ret ""
+end
+
+func _unescape(s: str): str:
+    if s.find("&") < 0: ret s end
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    mut last := 10
+    _text_run(s, 0, s.len(), true, b, last)
+    ret str.BufStr(b)
+end
+
+func _skip_tag(name: str): bool:
+    switch name:
+        "script", "style", "noscript", "svg", "template", "iframe", "object", "canvas", "select", "nav", "button":
+            ret true
+        end
+    end
+    ret false
+end
+
+func _block_tag(name: str): bool:
+    switch name:
+        "p", "div", "section", "article", "header", "footer", "nav", "aside", "main", "ul", "ol", "table", "tr", "blockquote", "form", "dl", "dt", "dd", "figure", "figcaption", "hr", "br", "details", "summary", "fieldset", "address", "body":
+            ret true
+        end
+    end
+    ret false
+end
+
+func _link_only(line: str): bool:
+    t := str.TrimPrefix(str.Trim(line), "- ")
+    ret str.StartsWith(t, "[") and str.EndsWith(t, ")") and t.find("](") > 0 and t.find("](") == t.find("]")
+end
+
+func _plain(text: str): str:
+    lines := str.Split(text, "\n")
+    mut out := Vector {} as Vector<str>
+    mut blank := true
+    mut run := 0
+    mut hidden := 0
+    each l in lines:
+        t := str.TrimRight(l)
+        if str.Trim(t).len() == 0:
+            if run > 0: continue end
+            if not blank: out.push("") end
+            blank = true
+            continue
+        end
+        if _link_only(t):
+            run += 1
+            if run > 5:
+                hidden += 1
+                continue
+            end
+        else:
+            if hidden > 0: out.push("- (" + hidden + " more links)") end
+            run = 0
+            hidden = 0
+        end
+        out.push(str.TrimLeft(t).len() < t.len() and not str.StartsWith(t, "    ") ? str.TrimLeft(t) : t)
+        blank = false
+    end
+    if hidden > 0: out.push("- (" + hidden + " more links)") end
+    ret str.Trim(str.Join(out, "\n"))
+end
+
+func _html_text(html: str, base: str, title &: str): str:
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    mut last := 10
+    mut pre := 0
+    mut href := ""
+    mut i := 0
+    mut text_from := 0
+    t_at := _seek(html, 0, "<title")
+    if t_at >= 0:
+        gt_at := _seek(html, t_at, ">")
+        close_at := _seek(html, t_at, "</title")
+        if gt_at > 0 and close_at > gt_at:
+            mut tb := str.NewBuilder()
+            mut tl := 10
+            _text_run(html, gt_at + 1, close_at, false, tb, tl)
+            title = str.Trim(str.BufStr(tb))
+            str.BufFree(tb)
+        end
+    end
+    mut stop := html.len()
+    m := _seek(html, 0, "<main")
+    if m >= 0:
+        me := _seek(html, m, "</main>")
+        if me > m + 2000:
+            i = m
+            text_from = m
+            stop = me
+        end
+    end
+    until i < stop:
+        if (html[i] as int) != 60:
+            i += 1
+            continue
+        end
+        _text_run(html, text_from, i, pre > 0, b, last)
+        if _at(html, i, "<!--"):
+            ce := _seek(html, i + 4, "-->")
+            i = ce < 0 ? stop : ce + 3
+            text_from = i
+            continue
+        end
+        if _at(html, i, "<!") or _at(html, i, "<?"):
+            ge := _seek(html, i, ">")
+            i = ge < 0 ? stop : ge + 1
+            text_from = i
+            continue
+        end
+        mut j := i + 1
+        closing := j < stop and (html[j] as int) == 47
+        if closing: j += 1 end
+        name_from := j
+        until j < stop and ((_lc(html[j] as int) >= 97 and _lc(html[j] as int) <= 122) or ((html[j] as int) >= 48 and (html[j] as int) <= 57)):
+            j += 1
+        end
+        if j == name_from:
+            str.BufAppend(b, "<")
+            last = 60
+            i += 1
+            text_from = i
+            continue
+        end
+        name := str.Lower(html.substr(name_from, j - name_from))
+        mut k := j
+        mut quote := 0
+        until k < stop:
+            c := html[k] as int
+            if quote != 0:
+                if c == quote: quote = 0 end
+            else c == 34 or c == 39:
+                quote = c
+            else c == 62:
+                break
+            end
+            k += 1
+        end
+        tag := html.substr(i, (k < stop ? k + 1 : stop) - i)
+        i = k < stop ? k + 1 : stop
+        text_from = i
+        if not closing and (_skip_tag(name) or name == "head"):
+            if name == "head" or not str.EndsWith(tag, "/>"):
+                ce := _seek(html, i, "</" + name)
+                if ce >= 0:
+                    ge := _seek(html, ce, ">")
+                    i = ge < 0 ? stop : ge + 1
+                else:
+                    i = stop
+                end
+                text_from = i
+            end
+            continue
+        end
+        if name.len() == 2 and (name[0] as int) == 104 and (name[1] as int) >= 49 and (name[1] as int) <= 54:
+            level := (name[1] as int) - 48
+            if closing:
+                _line(b, last, "")
+            else:
+                if last != 10: str.BufAppend(b, "\n") end
+                str.BufAppend(b, "\n")
+                str.BufAppend(b, "######".substr(0, level) + " ")
+                last = 32
+            end
+            continue
+        end
+        switch name:
+            "li":
+                if not closing: _line(b, last, "- ") end
+                continue
+            end
+            "pre":
+                pre = closing ? (pre > 0 ? pre - 1 : 0) : pre + 1
+                _line(b, last, closing ? "" : "```\n")
+                if closing:
+                    str.BufAppend(b, "```\n")
+                    last = 10
+                end
+                continue
+            end
+            "td", "th":
+                if not closing and last != 10:
+                    str.BufAppend(b, " | ")
+                    last = 32
+                end
+                continue
+            end
+            "a":
+                if closing:
+                    if href.len() > 0:
+                        str.BufAppend(b, "](" + href + ")")
+                        last = 41
+                    end
+                    href = ""
+                else:
+                    href = _resolve(base, _unescape(_attr(tag, "href")))
+                    if href.len() > 0:
+                        str.BufAppend(b, "[")
+                        last = 91
+                    end
+                end
+                continue
+            end
+            "img":
+                alt := str.Trim(_unescape(_attr(tag, "alt")))
+                if alt.len() > 0:
+                    str.BufAppend(b, "[image: " + alt + "]")
+                    last = 93
+                end
+                continue
+            end
+        end
+        if _block_tag(name):
+            _line(b, last, "")
+        end
+    end
+    _text_run(html, text_from, stop, pre > 0, b, last)
+    ret _plain(str.BufStr(b))
+end
+
+func _encode(s: str): str:
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    digits := "0123456789ABCDEF"
+    mut i := 0
+    until i < s.len():
+        c := s[i] as int
+        if (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 45 or c == 95 or c == 46 or c == 126:
+            str.BufAppendChar(b, c)
+        else c == 32:
+            str.BufAppend(b, "+")
+        else:
+            str.BufAppend(b, "%")
+            str.BufAppend(b, digits.substr(c / 16, 1))
+            str.BufAppend(b, digits.substr(c % 16, 1))
+        end
+        i += 1
+    end
+    ret str.BufStr(b)
+end
+
+func _decode(s: str): str:
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    mut i := 0
+    until i < s.len():
+        c := s[i] as int
+        if c == 37 and i + 2 < s.len() and _hex(s[i + 1] as int) >= 0 and _hex(s[i + 2] as int) >= 0:
+            str.BufAppendChar(b, _hex(s[i + 1] as int) * 16 + _hex(s[i + 2] as int))
+            i += 3
+            continue
+        end
+        str.BufAppendChar(b, c == 43 ? 32 : c)
+        i += 1
+    end
+    ret str.BufStr(b)
+end
+
+func _field(v: value.Value, key: str): str:
+    if not value.IsObject(v) or not value.ObjectHas(v, key): ret "" end
+    f := value.ObjectGet(v, key)
+    ret value.IsString(f) ? value.AsString(f) : ""
+end
+
+func _searxng(base: str, query: str, limit: int, hits &: Vector<Hit>, problem &: str):
+    r := _get(str.TrimSuffix(base, "/") + "/search?format=json&q=" + _encode(query), Vector {} as Vector<str>, true)
+    if not r.ok or r.status != 200:
+        problem = r.ok ? "the search service answered " + r.status : r.problem
+        ret
+    end
+    mut root := try json.Decode(r.body) catch value.ValueNull()
+    if value.IsObject(root) and value.ObjectHas(root, "results"):
+        list := value.ObjectGet(root, "results")
+        mut i := 0
+        until i < value.ArrayLen(list) and hits.len() < limit:
+            item := value.ArrayGet(list, i)
+            hits.push(Hit { title = _field(item, "title"), url = _field(item, "url"), snippet = _field(item, "content") })
+            i += 1
+        end
+    end
+    value.ValueFree(root)
+end
+
+func _brave(key: str, query: str, limit: int, hits &: Vector<Hit>, problem &: str):
+    mut extra := Vector {} as Vector<str>
+    extra.push("X-Subscription-Token: " + key)
+    r := _get("https://api.search.brave.com/res/v1/web/search?count=" + limit + "&q=" + _encode(query), extra, false)
+    if not r.ok or r.status != 200:
+        problem = r.ok ? "the search service answered " + r.status : r.problem
+        ret
+    end
+    mut root := try json.Decode(r.body) catch value.ValueNull()
+    if value.IsObject(root) and value.ObjectHas(root, "web"):
+        web := value.ObjectGet(root, "web")
+        if value.IsObject(web) and value.ObjectHas(web, "results"):
+            list := value.ObjectGet(web, "results")
+            mut i := 0
+            until i < value.ArrayLen(list) and hits.len() < limit:
+                item := value.ArrayGet(list, i)
+                mut ignored := ""
+                hits.push(Hit { title = _html_text(_field(item, "title"), "", ignored), url = _field(item, "url"), snippet = _html_text(_field(item, "description"), "", ignored) })
+                i += 1
+            end
+        end
+    end
+    value.ValueFree(root)
+end
+
+func _between(s: str, from: int, open_lit: str, close_lit: str, after &: int): str:
+    o := _seek(s, from, open_lit)
+    if o < 0: ret "" end
+    gt_at := _seek(s, o, ">")
+    if gt_at < 0: ret "" end
+    c := _seek(s, gt_at, close_lit)
+    if c < 0: ret "" end
+    after = c
+    ret s.substr(gt_at + 1, c - gt_at - 1)
+end
+
+func _duck(query: str, limit: int, hits &: Vector<Hit>, problem &: str):
+    r := _get("https://html.duckduckgo.com/html/?q=" + _encode(query), Vector {} as Vector<str>, false)
+    if not r.ok or r.status != 200:
+        problem = r.ok ? "the fallback search answered " + r.status + "; ask the operator to set SALAM_MCP_SEARCH_URL" : r.problem
+        ret
+    end
+    html := r.body
+    mut pos := 0
+    until hits.len() < limit:
+        a := _seek(html, pos, "class=\"result__a\"")
+        if a < 0: break end
+        tag_from := _seek(html, a - 400 > 0 ? a - 400 : 0, "<a ")
+        mut tag_start := tag_from
+        until tag_start >= 0:
+            nx := _seek(html, tag_start + 3, "<a ")
+            if nx < 0 or nx > a: break end
+            tag_start = nx
+        end
+        tag_end := _seek(html, a, ">")
+        if tag_start < 0 or tag_end < 0: break end
+        mut href := _unescape(_attr(html.substr(tag_start, tag_end - tag_start + 1), "href"))
+        u := href.find("uddg=")
+        if u >= 0:
+            rest := href.substr(u + 5, href.len() - u - 5)
+            amp := rest.find("&")
+            href = _decode(amp >= 0 ? rest.substr(0, amp) : rest)
+        else str.StartsWith(href, "//"):
+            href = "https:" + href
+        end
+        close_a := _seek(html, tag_end, "</a>")
+        if close_a < 0: break end
+        mut ignored := ""
+        title := _html_text(html.substr(tag_end + 1, close_a - tag_end - 1), "", ignored)
+        mut after := close_a
+        mut snippet := ""
+        next_a := _seek(html, close_a, "class=\"result__a\"")
+        sn := _seek(html, close_a, "class=\"result__snippet\"")
+        if sn >= 0 and (next_a < 0 or sn < next_a):
+            snippet = _html_text(_between(html, sn - 60 > 0 ? sn - 60 : 0, "result__snippet", "</a>", after), "", ignored)
+        end
+        if href.find("duckduckgo.com/y.js") < 0 and href.len() > 0:
+            hits.push(Hit { title = title, url = href, snippet = snippet })
+        end
+        pos = after + 1
+    end
+    if hits.len() == 0 and problem.len() == 0:
+        problem = "the fallback search returned no results (it may be blocking this server); ask the operator to set SALAM_MCP_SEARCH_URL"
+    end
+end
+
+@en "Search"
+@fa "جستجو"
+pub func Search(query_in: str, limit_in: int): mcpout.ToolResult:
+    query := str.Trim(query_in)
+    if query.len() == 0: ret mcpout.Failure("Give a search query.") end
+    mut limit := limit_in
+    if limit <= 0: limit = 8 end
+    if limit > 20: limit = 20 end
+    mut hits := Vector {} as Vector<Hit>
+    mut problem := ""
+    searx := env.GetOr("SALAM_MCP_SEARCH_URL", "")
+    brave := env.GetOr("SALAM_MCP_BRAVE_KEY", "")
+    if searx.len() > 0: _searxng(searx, query, limit, hits, problem) end
+    if hits.len() == 0 and brave.len() > 0:
+        problem = ""
+        _brave(brave, query, limit, hits, problem)
+    end
+    if hits.len() == 0:
+        mut fallback := ""
+        _duck(query, limit, hits, fallback)
+        if problem.len() == 0: problem = fallback end
+    end
+    if hits.len() == 0:
+        ret mcpout.Failure("Web search found nothing for '" + query + "'" + (problem.len() > 0 ? ": " + problem : ".") + " Try other words, or fetch a page you know with salam_web_fetch.")
+    end
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    str.BufAppend(b, "Web results for '" + query + "' (" + time.FormatDate(time.Now()) + "):\n")
+    mut arr := value.NewValueArray()
+    each n, h in hits:
+        str.BufAppend(b, "\n" + (n + 1) + ". " + str.Trim(h.title) + "\n   " + h.url + "\n")
+        if str.Trim(h.snippet).len() > 0:
+            str.BufAppend(b, "   " + str.Trim(h.snippet) + "\n")
+        end
+        mut o := value.NewValueObject()
+        value.ObjectSet(o, "title", value.ValueString(h.title))
+        value.ObjectSet(o, "url", value.ValueString(h.url))
+        value.ObjectSet(o, "snippet", value.ValueString(h.snippet))
+        value.ArrayPush(arr, o)
+    end
+    str.BufAppend(b, "\nRead a result with salam_web_fetch before relying on it; snippets can be stale or cut.")
+    mut data := value.NewValueObject()
+    value.ObjectSet(data, "results", arr)
+    ret mcpout.Rich(str.BufStr(b), data, false)
+end
+
+@en "Fetch"
+@fa "دریافت"
+pub func Fetch(url_in: str, offset_in: int, max_in: int, raw: bool): mcpout.ToolResult:
+    mut url := str.Trim(url_in)
+    if url.len() == 0: ret mcpout.Failure("Give the url to read.") end
+    if not _at(url, 0, "http://") and not _at(url, 0, "https://"): url = "https://" + url end
+    r := _get(url, Vector {} as Vector<str>, false)
+    if not r.ok: ret mcpout.Failure("Could not read " + url + ": " + r.problem + ".") end
+    mut most := max_in
+    if most <= 0: most = DEFAULT_CHARS end
+    if most > MOST_CHARS: most = MOST_CHARS end
+    mut offset := offset_in
+    if offset < 0: offset = 0 end
+    mime := r.mime
+    mut title := ""
+    mut text := ""
+    if raw or mime.find("json") >= 0 or mime.find("text/plain") >= 0 or mime.find("markdown") >= 0 or mime.find("xml") >= 0 and mime.find("html") < 0 or mime.find("javascript") >= 0 or mime.find("css") >= 0:
+        text = r.body
+    else mime.find("html") >= 0 or mime.len() == 0:
+        text = _html_text(r.body, r.url, title)
+    else:
+        ret mcpout.Failure(r.url + " is " + mime + ", which salam_web_fetch cannot read as text.")
+    end
+    total := text.len()
+    if offset > total: offset = total end
+    mut take := total - offset
+    if take > most: take = most end
+    slice := text.substr(offset, take)
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    str.BufAppend(b, "URL: " + r.url + "\nStatus: " + r.status + "\n")
+    if title.len() > 0: str.BufAppend(b, "Title: " + title + "\n") end
+    str.BufAppend(b, "\n")
+    str.BufAppend(b, slice)
+    if offset + take < total:
+        str.BufAppend(b, "\n\n[" + (total - offset - take) + " more characters; call salam_web_fetch again with offset " + (offset + take) + " to read on]")
+    end
+    if r.status >= 400:
+        ret mcpout.Failure(str.BufStr(b))
+    end
+    ret mcpout.Text(str.BufStr(b))
+end
+
+@en "HtmlText"
+@fa "متن اچ‌تی‌ام‌ال"
+pub func HtmlText(html: str, base: str, title &: str): str:
+    ret _html_text(html, base, title)
+end

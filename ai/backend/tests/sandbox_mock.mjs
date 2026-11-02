@@ -29,6 +29,10 @@ http
       }
       if (req.url !== "/v1/exec") return send(404, { error: "not_found" });
       calls.push({ session: data.session, cmd: data.cmd, env: Object.keys(data.env ?? {}) });
+      if (data.cmd.includes("/opt/salam-browser/browser.mjs")) {
+        const args = JSON.parse(data.stdin || "{}");
+        return send(200, { exit: 0, output: JSON.stringify({ output: `${args.url || "http://localhost:3000/"} (200) "Mock page"\nScreenshot attached (2x2).`, image: "SU1BR0VEQVRB", image_mime: "image/jpeg" }), timed_out: false });
+      }
       const work = path.join(ROOT, data.session, "work");
       fs.mkdirSync(work, { recursive: true });
       boxes.add(data.session);

@@ -16,6 +16,8 @@
 @fa "تبدیل"
 package conv
 
+import conv.numfmt
+
 extern:
     func malloc(size: u64): void*
 end
@@ -28,28 +30,6 @@ inline pure func _ub(bp: i8*, i: int): int:
     ret v
 end
 
-func _format_mag(x: u64, neg: bool): str:
-    lead := neg ? 1 : 0
-    mut ndigits := 1
-    mut t := x
-    until t >= (10 as u64):
-        t /= (10 as u64)
-        ndigits += 1
-    end
-    total := ndigits + lead
-    buf := malloc((total + 1) as u64)
-    p := buf as i8*
-    p[total] = 0 as i8
-    if neg: p[0] = 45 as i8 end
-    mut v := x
-    mut i := total - 1
-    until i >= lead:
-        p[i] = ((v % (10 as u64)) as int + 48) as i8
-        v /= (10 as u64)
-        i -= 1
-    end
-    ret buf as str
-end
 
 pure func _native_digit(bp: i8*, i: int, n: int): int:
     if i + 1 >= n:
@@ -70,74 +50,6 @@ inline pure func _is_space(c: int): bool:
     ret c == 32 or c == 9 or c == 10 or c == 13
 end
 
-if not SALAM_KERNEL:
-    func _ascii_digits(s: str): str:
-        n := s.len()
-        bp := _bp(s)
-        mut hit := false
-        repeat n in j:
-            if _native_digit(bp, j, n) >= 0:
-                hit = true
-                break
-            end
-        end
-        if not hit:
-            ret s
-        end
-        buf := malloc((n + 1) as u64)
-        p := buf as i8*
-        mut i := 0
-        mut k := 0
-        until i < n:
-            d := _native_digit(bp, i, n)
-            if d >= 0:
-                p[k] = (d + 48) as i8
-                i += 2
-            else _ub(bp, i) == 217 and i + 1 < n and _ub(bp, i + 1) == 171:
-                p[k] = 46 as i8
-                i += 2
-            else:
-                p[k] = _ub(bp, i) as i8
-                i += 1
-            end
-            k += 1
-        end
-        p[k] = 0 as i8
-        ret buf as str
-    end
-
-    func _fix_exp(p: i8*):
-        mut n := 0
-        until _ub(p, n) != 0:
-            n += 1
-        end
-        mut e := 0
-        until e < n and _ub(p, e) != 101:
-            e += 1
-        end
-        if e >= n:
-            ret
-        end
-        mut d := e + 1
-        if d < n and (_ub(p, d) == 43 or _ub(p, d) == 45):
-            d += 1
-        end
-        mut z := d
-        until n - z > 2 and _ub(p, z) == 48:
-            z += 1
-        end
-        if z == d:
-            ret
-        end
-        mut i := d
-        mut j := z
-        until j <= n:
-            p[i] = p[j]
-            i += 1
-            j += 1
-        end
-    end
-end
 
 pure func _kw(bp: i8*, i: int, w: int, kw: str): bool:
     if w != kw.len(): ret false end
@@ -146,6 +58,210 @@ pure func _kw(bp: i8*, i: int, w: int, kw: str): bool:
         if bp[i + k] != kp[k]: ret false end
     end
     ret true
+end
+
+pure func _kw_ci(bp: i8*, i: int, w: int, kw: str): bool:
+    if w != kw.len(): ret false end
+    kp := _bp(kw)
+    repeat w in k:
+        mut c := _ub(bp, i + k)
+        if c >= 65 and c <= 90: c += 32 end
+        if c != _ub(kp, k): ret false end
+    end
+    ret true
+end
+
+pure func _lead(bp: i8*, n: int): int:
+    mut i := 0
+    until i < n and _is_space(_ub(bp, i)):
+        i += 1
+    end
+    ret i
+end
+
+pure func _trail(bp: i8*, i: int, n: int): int:
+    mut e := n
+    until e > i and _is_space(_ub(bp, e - 1)):
+        e -= 1
+    end
+    ret e
+end
+
+func _conv_err(s: str, kind: ErrorKind, message: str, offset: int, code: str): Error:
+    bp := _bp(s)
+    lim := offset < s.len() ? offset : s.len()
+    mut line := 1
+    mut column := 1
+    repeat lim in i:
+        b := _ub(bp, i)
+        if b == 10:
+            line += 1
+            column = 1
+        else (b & 192) != 128:
+            column += 1
+        end
+    end
+    ret Error.At(kind, message, offset).with_position(offset, line, column).with_code(code).wrap("conv")
+end
+
+pure func _char_desc(s: str, bp: i8*, i: int, n: int): str:
+    c := _ub(bp, i)
+    if c == 32: ret "space" end
+    if c == 9: ret "tab" end
+    if c == 10: ret "line break" end
+    if c == 13: ret "carriage return" end
+    if c > 32 and c < 127: ret "character '" + char_from_code(c) + "'" end
+    mut w := 0
+    if c >= 194 and c <= 223: w = 2
+    else c >= 224 and c <= 239: w = 3
+    else c >= 240 and c <= 244: w = 4
+    end
+    if w > 0 and i + w <= n:
+        mut whole := true
+        mut k := 1
+        until k < w:
+            if (_ub(bp, i + k) & 192) != 128: whole = false end
+            k += 1
+        end
+        if whole: ret "character '" + s.substr(i, w) + "'" end
+    end
+    hex := "0123456789ABCDEF"
+    ret "byte 0x" + hex.substr(c / 16, 1) + hex.substr(c % 16, 1)
+end
+
+func _bad_char(s: str, bp: i8*, i: int, n: int): Error:
+    ret _conv_err(s, ErrorKind.Syntax, "invalid " + _char_desc(s, bp, i, n), i, "conv.invalid_char")
+end
+
+func _empty_err(s: str, at: int): Error:
+    ret _conv_err(s, ErrorKind.Syntax, "empty input", at, "conv.empty")
+end
+
+func _parse_int(s: str, max_pos: i64, bits: str): i64 throws:
+    n := s.len()
+    bp := _bp(s)
+    mut i := _lead(bp, n)
+    e := _trail(bp, i, n)
+    if i >= e:
+        throw _empty_err(s, i)
+    end
+    start := i
+    c0 := _ub(bp, i)
+    mut neg := false
+    if c0 == 45 or c0 == 43:
+        neg = c0 == 45
+        i += 1
+    end
+    lim := neg ? 0 - max_pos - 1 : 0 - max_pos
+    mut v := 0 as i64
+    mut any := false
+    until i < e:
+        c := _ub(bp, i)
+        mut d := 0 - 1
+        mut w := 1
+        if c >= 48 and c <= 57:
+            d = c - 48
+        else:
+            d = _native_digit(bp, i, n)
+            w = 2
+        end
+        if d < 0:
+            throw _bad_char(s, bp, i, n)
+        end
+        if v < (lim + (d as i64)) / 10:
+            throw _conv_err(s, ErrorKind.OutOfRange, "number does not fit in " + bits, start, "conv.overflow")
+        end
+        v = v * 10 - (d as i64)
+        any = true
+        i += w
+    end
+    if not any:
+        throw _conv_err(s, ErrorKind.Syntax, "no digits after '" + char_from_code(c0) + "'", i, "conv.no_digits")
+    end
+    if neg: ret v end
+    ret 0 - v
+end
+
+pure func _hex_digit(c: int): int:
+    if c >= 48 and c <= 57: ret c - 48
+    else c >= 97 and c <= 102: ret c - 87
+    else c >= 65 and c <= 70: ret c - 55
+    else:
+        ret 0 - 1
+    end
+end
+
+pure func _float_digit(bp: i8*, i: int, n: int): int:
+    c := _ub(bp, i)
+    if c >= 48 and c <= 57: ret 1 end
+    if _native_digit(bp, i, n) >= 0: ret 2 end
+    ret 0
+end
+
+func _float_check(s: str): int throws:
+    n := s.len()
+    bp := _bp(s)
+    mut i := _lead(bp, n)
+    e := _trail(bp, i, n)
+    if i >= e:
+        throw _empty_err(s, i)
+    end
+    start := i
+    c0 := _ub(bp, i)
+    if c0 == 45 or c0 == 43:
+        i += 1
+    end
+    w := e - i
+    if _kw_ci(bp, i, w, "inf") or _kw_ci(bp, i, w, "infinity") or _kw_ci(bp, i, w, "nan"):
+        ret 0 - 1
+    end
+    mut digits := false
+    mut point := false
+    until i < e:
+        c := _ub(bp, i)
+        dw := _float_digit(bp, i, n)
+        if dw > 0:
+            digits = true
+            i += dw
+        else not point and c == 46:
+            point = true
+            i += 1
+        else not point and c == 217 and i + 1 < n and _ub(bp, i + 1) == 171:
+            point = true
+            i += 2
+        else:
+            break
+        end
+    end
+    if not digits:
+        if i < e:
+            throw _bad_char(s, bp, i, n)
+        end
+        throw _conv_err(s, ErrorKind.Syntax, "no digits after '" + s.substr(start, i - start) + "'", i, "conv.no_digits")
+    end
+    if i < e and (_ub(bp, i) == 101 or _ub(bp, i) == 69):
+        i += 1
+        if i < e and (_ub(bp, i) == 43 or _ub(bp, i) == 45):
+            i += 1
+        end
+        mut ed := false
+        until i < e:
+            dw := _float_digit(bp, i, n)
+            if dw == 0: break end
+            ed = true
+            i += dw
+        end
+        if not ed:
+            if i < e:
+                throw _bad_char(s, bp, i, n)
+            end
+            throw _conv_err(s, ErrorKind.Syntax, "no digits in the exponent", i, "conv.no_digits")
+        end
+    end
+    if i < e:
+        throw _bad_char(s, bp, i, n)
+    end
+    ret start
 end
 
 if not SALAM_KERNEL:
@@ -177,14 +293,11 @@ end
 
 @en "FormatUint"
 @fa "قالب عدد بی علامت"
-pub func FormatUint(x: u64): str: ret _format_mag(x, false) end
+pub func FormatUint(x: u64): str: ret numfmt.FormatUint(x) end
 
 @en "FormatInt"
 @fa "قالب عدد"
-pub func FormatInt(n: i64): str:
-    if n >= 0: ret _format_mag(n as u64, false) end
-    ret _format_mag((0 as u64) - (n as u64), true)
-end
+pub func FormatInt(n: i64): str: ret numfmt.FormatInt(n) end
 
 @en "FormatBool"
 @fa "قالب منطقی"
@@ -195,72 +308,86 @@ end
 
 @en "ParseBool"
 @fa "تجزیه منطقی"
-pub pure func ParseBool(s: str): bool:
+pub func ParseBool(s: str): bool throws:
     n := s.len()
     bp := _bp(s)
-    mut i := 0
-    until i < n and _is_space(_ub(bp, i)):
-        i += 1
-    end
-    mut e := n
-    until e > i and _is_space(_ub(bp, e - 1)):
-        e -= 1
-    end
+    i := _lead(bp, n)
+    e := _trail(bp, i, n)
     w := e - i
-    if _kw(bp, i, w, "true"): ret true
-    else _kw(bp, i, w, "1"): ret true
-    else _kw(bp, i, w, "yes"): ret true
-    else _kw(bp, i, w, "on"): ret true
-    else:
+    if w == 0:
+        throw _empty_err(s, i)
+    end
+    if _kw(bp, i, w, "true") or _kw(bp, i, w, "1") or _kw(bp, i, w, "yes") or _kw(bp, i, w, "on"):
+        ret true
+    end
+    if _kw(bp, i, w, "false") or _kw(bp, i, w, "0") or _kw(bp, i, w, "no") or _kw(bp, i, w, "off"):
         ret false
+    end
+    throw _conv_err(s, ErrorKind.Syntax, "'" + s.substr(i, w) + "' is not a boolean", i, "conv.not_bool")
+end
+
+@en "ParseBoolOr"
+@fa "تجزیه منطقی با پیش فرض"
+pub func ParseBoolOr(s: str, fallback: bool): bool:
+    try:
+        ret ParseBool(s)
+    catch:
+        ret fallback
     end
 end
 
 @en "ParseInt"
 @fa "تجزیه عدد"
-pub pure func ParseInt(s: str): i64:
-    n := s.len()
-    bp := _bp(s)
-    mut i := 0
-    until i < n and _is_space(_ub(bp, i)):
-        i += 1
+pub func ParseInt(s: str): i64 throws:
+    ret try _parse_int(s, 9223372036854775807 as i64, "64 bits")
+end
+
+@en "ParseIntOr"
+@fa "تجزیه عدد با پیش فرض"
+pub func ParseIntOr(s: str, fallback: i64): i64:
+    try:
+        ret ParseInt(s)
+    catch:
+        ret fallback
     end
-    mut neg := false
-    if i < n:
-        c := _ub(bp, i)
-        if c == 45:
-            neg = true
-            i += 1
-        else c == 43:
-            i += 1
-        end
-    end
-    mut v := 0 as i64
-    until i < n:
-        c := _ub(bp, i)
-        if c >= 48 and c <= 57:
-            v = v * 10 + ((c - 48) as i64)
-            i += 1
-        else:
-            d := _native_digit(bp, i, n)
-            if d < 0: break end
-            v = v * 10 + (d as i64)
-            i += 2
-        end
-    end
-    if neg: ret 0 - v end
-    ret v
 end
 
 @en "Atoi"
 @fa "رشته به عدد"
-pub inline pure func Atoi(s: str): int: ret ParseInt(s) as int end
+pub inline func Atoi(s: str): int throws:
+    ret (try _parse_int(s, 2147483647 as i64, "32 bits")) as int
+end
+
+@en "AtoiOr"
+@fa "رشته به عدد با پیش فرض"
+pub func AtoiOr(s: str, fallback: int): int:
+    try:
+        ret Atoi(s)
+    catch:
+        ret fallback
+    end
+end
 
 if not SALAM_KERNEL:
     @en "ParseFloat"
     @fa "تجزیه اعشار"
-    pub func ParseFloat(s: str): f64:
-        ret _dtoa_parse(_ascii_digits(s), null)
+    pub func ParseFloat(s: str): f64 throws:
+        start := try _float_check(s)
+        v := numfmt.ScanFloat(s)
+        if start >= 0 and v != 0.0 and v / 2.0 == v:
+            throw _conv_err(s, ErrorKind.OutOfRange, "number does not fit in a 64-bit float", start, "conv.overflow")
+        end
+        ret v
+    end
+
+    @en "ParseFloatOr"
+    @fa "تجزیه اعشار با پیش فرض"
+    pub func ParseFloatOr(s: str, fallback: f64): f64:
+        try:
+            ret ParseFloat(s)
+        catch:
+            ret fallback
+        end
     end
 
     @en "IsNaNF"
@@ -269,19 +396,7 @@ if not SALAM_KERNEL:
 
     @en "FormatFloat"
     @fa "قالب اعشار"
-    pub func FormatFloat(x: f64): str:
-        cap := 64 as u64
-        buf := malloc(cap)
-        if buf == null:
-            ret ""
-        end
-        n := _dtoa_shortest(x, buf, cap as int)
-        if n <= 0 or n >= (cap as int):
-            ret ""
-        end
-        _fix_exp(buf as i8*)
-        ret buf as str
-    end
+    pub func FormatFloat(x: f64): str: ret numfmt.FormatFloat(x) end
 
     @en "FormatFloatShort"
     @fa "قالب اعشار کوتاه"
@@ -399,27 +514,44 @@ end
 
 @en "ParseHex"
 @fa "تجزیه شانزده"
-pub pure func ParseHex(s: str): i64:
+pub func ParseHex(s: str): i64 throws:
     n := s.len()
     bp := _bp(s)
-    mut i := 0
-    until i < n and _is_space(_ub(bp, i)):
-        i += 1
+    mut i := _lead(bp, n)
+    e := _trail(bp, i, n)
+    if i >= e:
+        throw _empty_err(s, i)
     end
-    if i + 1 < n and _ub(bp, i) == 48 and _ub(bp, i + 1) == 120:
+    start := i
+    if i + 1 < e and _ub(bp, i) == 48 and _ub(bp, i + 1) == 120:
         i += 2
     end
-    mut v := 0 as i64
-    until i < n:
-        c := _ub(bp, i)
-        mut d := 0 - 1
-        if c >= 48 and c <= 57: d = c - 48
-        else c >= 97 and c <= 102: d = c - 87
-        else c >= 65 and c <= 70: d = c - 55
+    mut v := 0 as u64
+    mut any := false
+    until i < e:
+        d := _hex_digit(_ub(bp, i))
+        if d < 0:
+            throw _bad_char(s, bp, i, n)
         end
-        if d < 0: break end
-        v = v * 16 + (d as i64)
+        if v > (1152921504606846975 as u64):
+            throw _conv_err(s, ErrorKind.OutOfRange, "number does not fit in 64 bits", start, "conv.overflow")
+        end
+        v = v * (16 as u64) + (d as u64)
+        any = true
         i += 1
     end
-    ret v
+    if not any:
+        throw _conv_err(s, ErrorKind.Syntax, "no digits after '0x'", i, "conv.no_digits")
+    end
+    ret v as i64
+end
+
+@en "ParseHexOr"
+@fa "تجزیه شانزده با پیش فرض"
+pub func ParseHexOr(s: str, fallback: i64): i64:
+    try:
+        ret ParseHex(s)
+    catch:
+        ret fallback
+    end
 end

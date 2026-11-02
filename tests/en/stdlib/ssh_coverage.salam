@@ -1,0 +1,219 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+package main
+
+import ssh
+import mem
+import os
+import filepath
+import fs.dir
+import testing
+
+func byte_at(p: void*, i: int): int:
+    bp := p as u8*
+    ret bp[i] as int
+end
+
+func hex_byte(v: int): str:
+    digits := "0123456789abcdef"
+    ret digits.substr(v / 16, 1) + digits.substr(v % 16, 1)
+end
+
+func hex_of(p: void*, n: int): str:
+    mut out := ""
+    repeat n in i:
+        out += hex_byte(byte_at(p, i))
+    end
+    ret out
+end
+
+func test_writers():
+    mut b := ssh.NewBuf(8)
+    testing.AssertEqInt(b.len, 0)
+    ssh.BufPutByte(b, 0xab)
+    ssh.BufPutBool(b, true)
+    ssh.BufPutBool(b, false)
+    ssh.BufPutUint32(b, 0x01020304 as u32)
+    ssh.BufPutUint64(b, 0x0102030405060708 as u64)
+    testing.AssertEqStr(hex_of(b.p, b.len), "ab" + "01" + "00" + "01020304" + "0102030405060708")
+    ssh.BufPutZeros(b, 3)
+    testing.AssertEqInt(b.len, 18)
+    testing.AssertEqStr(hex_of(b.p, b.len).substr(30, 6), "000000")
+    ssh.WipeBuf(b)
+    testing.AssertEqInt(b.len, 0)
+    testing.AssertTrue(b.p == null)
+
+    mut raw := ssh.NewBuf(8)
+    ssh.BufPutBytes(raw, "xyz" as void*, 3)
+    mut copy := ssh.NewBuf(8)
+    ssh.BufPutBuf(copy, raw)
+    ssh.BufPutBuf(copy, raw)
+    testing.AssertEqStr(hex_of(copy.p, copy.len), "78797a78797a")
+    ssh.FreeBuf(copy)
+    testing.AssertEqInt(copy.len, 0)
+
+    mut s := ssh.NewBuf(8)
+    ssh.BufPutString(s, "hi" as void*, 2)
+    ssh.BufPutStringBuf(s, raw)
+    ssh.BufPutStringStr(s, "ssh")
+    testing.AssertEqStr(hex_of(s.p, s.len), "000000026869" + "00000003" + "78797a" + "00000003" + "737368")
+    ssh.FreeBuf(s)
+    ssh.FreeBuf(raw)
+end
+
+func test_mpint():
+    mut m := ssh.NewBuf(8)
+    plain := mem.Allocate(4 as u64)
+    defer mem.Free(plain)
+    pp := plain as u8*
+    pp[0] = 0 as u8
+    pp[1] = 0 as u8
+    pp[2] = 0x7f as u8
+    pp[3] = 0x01 as u8
+    ssh.BufPutMpintBytes(m, plain, 4)
+    testing.AssertEqStr(hex_of(m.p, m.len), "000000027f01")
+    pp[2] = 0x80 as u8
+    ssh.BufPutMpintBytes(m, plain, 4)
+    testing.AssertEqStr(hex_of(m.p, m.len), "000000027f01" + "00000003" + "008001")
+    mut zero := ssh.NewBuf(8)
+    ssh.BufPutMpintBytes(zero, plain, 0)
+    testing.AssertEqStr(hex_of(zero.p, zero.len), "00000000")
+    mut src := ssh.NewBuf(8)
+    ssh.BufPutBytes(src, plain, 4)
+    mut viabuf := ssh.NewBuf(8)
+    ssh.BufPutMpintBuf(viabuf, src)
+    testing.AssertEqStr(hex_of(viabuf.p, viabuf.len), "00000003" + "008001")
+
+    mut r := ssh.NewReader(viabuf.p, viabuf.len)
+    view := ssh.RGetMpintView(r)
+    testing.AssertEqInt(view.len, 2)
+    testing.AssertEqStr(hex_of(view.p, view.len), "8001")
+    mut r2 := ssh.NewReader(m.p, m.len)
+    first := ssh.RGetMpintCopy(r2)
+    testing.AssertEqStr(hex_of(first.p, first.len), "7f01")
+    second := ssh.RGetMpintCopy(r2)
+    testing.AssertEqStr(hex_of(second.p, second.len), "8001")
+    testing.AssertEqInt(ssh.RRemaining(r2), 0)
+    ssh.FreeBuf(m)
+    ssh.FreeBuf(zero)
+    ssh.FreeBuf(src)
+    ssh.FreeBuf(viabuf)
+end
+
+func test_readers():
+    mut w := ssh.NewBuf(8)
+    ssh.BufPutByte(w, 9)
+    ssh.BufPutBool(w, true)
+    ssh.BufPutUint32(w, 4000000000 as u32)
+    ssh.BufPutUint64(w, 5000000000 as u64)
+    ssh.BufPutStringStr(w, "alpha")
+    ssh.BufPutStringStr(w, "beta")
+    ssh.BufPutStringStr(w, "aes256-ctr,aes128-ctr")
+    ssh.BufPutZeros(w, 5)
+    ssh.BufPutByte(w, 1)
+    mut r := ssh.NewReader(w.p, w.len)
+    testing.AssertEqInt(ssh.RRemaining(r), w.len)
+    testing.AssertEqInt(ssh.RGetByte(r), 9)
+    testing.AssertTrue(ssh.RGetBool(r))
+    testing.AssertTrue(ssh.RGetUint32(r) == 4000000000 as u32)
+    testing.AssertTrue(ssh.RGetUint64(r) == 5000000000 as u64)
+    view := ssh.RGetStringView(r)
+    testing.AssertEqInt(view.len, 5)
+    testing.AssertEqStr(hex_of(view.p, view.len), "616c706861")
+    copy := ssh.RGetStringCopy(r)
+    testing.AssertEqStr(hex_of(copy.p, copy.len), "62657461")
+    testing.AssertEqStr(ssh.RGetNameList(r), "aes256-ctr,aes128-ctr")
+    ssh.RSkip(r, 5)
+    testing.AssertEqInt(ssh.RRemaining(r), 1)
+    testing.AssertEqInt(ssh.RGetByte(r), 1)
+    testing.AssertEqInt(ssh.RRemaining(r), 0)
+    testing.AssertFalse(r.bad)
+    testing.AssertEqInt(ssh.RGetByte(r), 0)
+    testing.AssertTrue(r.bad)
+
+    mut again := ssh.NewReader(w.p, w.len)
+    ssh.RSkip(again, 14)
+    testing.AssertEqStr(ssh.RGetStringAsStr(again), "alpha")
+    ssh.RSkip(again, 100000)
+    testing.AssertTrue(again.bad)
+    ssh.FreeBuf(copy)
+    ssh.FreeBuf(w)
+end
+
+func test_lists():
+    testing.AssertTrue(ssh.NameListContains("a,b,c", "b"))
+    testing.AssertFalse(ssh.NameListContains("a,b,c", "d"))
+    testing.AssertFalse(ssh.NameListContains("", "a"))
+    testing.AssertEqStr(ssh.NegotiateFirstMatch("x,b,a", "a,b"), "b")
+    testing.AssertEqStr(ssh.NegotiateFirstMatch("x", "a,b"), "")
+    one := mem.Allocate(4 as u64)
+    defer mem.Free(one)
+    two := mem.Allocate(4 as u64)
+    defer mem.Free(two)
+    mem.Copy(one, "abcd" as void*, 4 as u64)
+    mem.Copy(two, "abcd" as void*, 4 as u64)
+    testing.AssertTrue(ssh.ConstantTimeEqual(one, two, 4))
+    mem.Copy(two, "abce" as void*, 4 as u64)
+    testing.AssertFalse(ssh.ConstantTimeEqual(one, two, 4))
+    testing.AssertTrue(ssh.ConstantTimeEqual(one, two, 3))
+end
+
+func test_stderr():
+    mut session := ssh.Session {}
+    session.ch.stderr = ssh.NewBuf(8)
+    ssh.BufPutBytes(session.ch.stderr, "warn: one\n" as void*, 10)
+    testing.AssertEqStr(ssh.StderrOutput(session), "warn: one\n")
+    testing.AssertEqStr(ssh.StderrOutput(session), "warn: one\n")
+    testing.AssertEqStr(ssh.DrainStderrOutput(session), "warn: one\n")
+    testing.AssertEqStr(ssh.StderrOutput(session), "")
+    ssh.BufPutBytes(session.ch.stderr, "warn: two\n" as void*, 10)
+    testing.AssertEqStr(ssh.DrainStderrOutput(session), "warn: two\n")
+    testing.AssertEqStr(ssh.DrainStderrOutput(session), "")
+    ssh.FreeBuf(session.ch.stderr)
+end
+
+func test_key_pem():
+    mut cfg := ssh.NewConfig("host.example", 22, "ali")
+    testing.AssertFalse(cfg.use_key)
+    ssh.WithKeyPEM(cfg, "-----BEGIN OPENSSH PRIVATE KEY-----\nabc\n-----END OPENSSH PRIVATE KEY-----\n")
+    testing.AssertTrue(cfg.use_key)
+    testing.AssertFalse(cfg.use_password)
+    testing.AssertTrue(cfg.key_pem.find("OPENSSH PRIVATE KEY") > 0)
+end
+
+func test_unconnected_sftp():
+    mut client := ssh.Client {}
+    mut sftp := ssh.Sftp {}
+    testing.AssertEqStr(ssh.Lstat(client, sftp, "/etc/passwd").name, "")
+    testing.AssertFalse(ssh.IsLink(client, sftp, "/etc/passwd"))
+    local := filepath.Join(os.TempDir(), "salam_ssh_coverage_none")
+    dir.RemoveAll(local)
+    _ := ssh.DownloadDir(client, sftp, "/remote", local)
+    testing.AssertTrue(os.IsDir(local))
+    testing.AssertEqInt(os.ListDir(local).len(), 0)
+    _ := ssh.UploadDir(client, sftp, local, "/remote")
+    dir.RemoveAll(local)
+end
+
+func main:
+    test_writers()
+    test_mpint()
+    test_readers()
+    test_lists()
+    test_stderr()
+    test_key_pem()
+    test_unconnected_sftp()
+    testing.Summary()
+    ret 0
+end

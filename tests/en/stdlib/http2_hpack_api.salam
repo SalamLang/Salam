@@ -1,0 +1,129 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import net.http2
+import compress
+import conv
+
+func hex of(b: compress.ByteBuf): str:
+    mut out := ""
+    mut i := 0
+    until i < compress.BufLen(b):
+        v := compress.BufGet(b, i)
+        if v < 16: out = out + "0" end
+        out = out + conv.FormatHex(v as u64).lower()
+        i += 1
+    end
+    ret out
+end
+
+func main:
+    println "huffman len www.example.com: ", http2.HuffmanEncodedLenStr("www.example.com")
+    println "huffman len no-cache: ", http2.HuffmanEncodedLenStr("no-cache")
+    println "huffman len empty: ", http2.HuffmanEncodedLenStr("")
+    text := "custom-key"
+    println "huffman len raw: ", http2.HuffmanEncodedLen(text as void*, text.len())
+    mut packed := http2.HuffmanEncodeStr(text)
+    println "len matches encoding: ", compress.BufLen(packed) == http2.HuffmanEncodedLenStr(text)
+    compress.BufFree(packed)
+
+    mut hl := http2.HeaderList {}
+    http2.HeadersAdd(hl, "accept", "text/html")
+    http2.HeadersAddSensitive(hl, "authorization", "token")
+    println "has accept: ", http2.HeadersHas(hl, "accept")
+    println "has authorization: ", http2.HeadersHas(hl, "authorization")
+    println "has cookie: ", http2.HeadersHas(hl, "cookie")
+    println "plain is not sensitive: ", hl.items.get(0).sensitive
+    println "added sensitive: ", hl.items.get(1).sensitive
+
+    secret := http2.NewSensitiveHeader("password", "secret")
+    println "sensitive header: ", secret.name, secret.value, secret.sensitive
+
+    mut table := http2.NewDynTable(4096)
+    mut out := compress.NewByteBuf()
+    http2.EncodeHeader(out, table, http2.NewHeader(":method", "GET"), true)
+    println "indexed: ", hex of(out)
+    println "table untouched: ", http2.DynCount(table)
+
+    mut lit := compress.NewByteBuf()
+    http2.EncodeHeader(lit, table, http2.NewHeader("custom-key", "custom-value"), false)
+    println "literal: ", hex of(lit)
+    println "table grew: ", http2.DynCount(table)
+
+    mut never := compress.NewByteBuf()
+    http2.EncodeHeader(never, table, secret, false)
+    println "never indexed: ", hex of(never)
+    println "table unchanged: ", http2.DynCount(table)
+
+    mut ok := false
+    entry := http2.TableGet(table, 62, ok)
+    println "dynamic entry: ", ok, entry.name, entry.value
+    stat := http2.TableGet(table, 2, ok)
+    println "static entry: ", ok, stat.name, stat.value
+    http2.TableGet(table, 63, ok)
+    println "past the end: ", ok
+    http2.TableGet(table, 0, ok)
+    println "index zero: ", ok
+
+    mut upd := compress.NewByteBuf()
+    http2.EncodeTableSizeUpdate(upd, table, 0)
+    println "size update zero: ", hex of(upd)
+    println "table emptied: ", http2.DynCount(table), http2.DynSize(table)
+    mut upd2 := compress.NewByteBuf()
+    http2.EncodeTableSizeUpdate(upd2, table, 4096)
+    println "size update 4096: ", hex of(upd2)
+
+    mut dec := http2.NewDynTable(4096)
+    mut dok := false
+    back := http2.DecodeHeaderList(dec, lit, dok)
+    println "decoded literal: ", dok, http2.HeadersGet(back, "custom-key")
+
+    mut f := http2.NewFrame(http2.H2_HEADERS, http2.H2_FLAG_PADDED, 1)
+    compress.BufPush(f.payload, 2)
+    compress.BufPush(f.payload, 0x82)
+    compress.BufPush(f.payload, 0x86)
+    compress.BufPush(f.payload, 0)
+    compress.BufPush(f.payload, 0)
+    mut bok := false
+    mut block := http2.HeaderBlockOf(f, bok)
+    println "padded block: ", bok, hex of(block)
+    compress.BufFree(block)
+    http2.FreeFrame(f)
+
+    mut short := http2.NewFrame(http2.H2_HEADERS, http2.H2_FLAG_PADDED, 1)
+    mut sok := true
+    mut empty := http2.HeaderBlockOf(short, sok)
+    println "padded but empty: ", sok, compress.BufLen(empty)
+    compress.BufFree(empty)
+    http2.FreeFrame(short)
+
+    mut prio := http2.NewFrame(http2.H2_HEADERS, http2.H2_FLAG_PRIORITY, 1)
+    repeat 5:
+        compress.BufPush(prio.payload, 0)
+    end
+    compress.BufPush(prio.payload, 0x84)
+    mut pok := false
+    mut pblock := http2.HeaderBlockOf(prio, pok)
+    println "priority block: ", pok, hex of(pblock)
+    compress.BufFree(pblock)
+    http2.FreeFrame(prio)
+
+    compress.BufFree(upd2)
+    compress.BufFree(upd)
+    compress.BufFree(never)
+    compress.BufFree(lit)
+    compress.BufFree(out)
+end

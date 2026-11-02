@@ -1,0 +1,155 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import grpc
+import compress
+import testing
+import sync
+import net.http2
+import net.tcp
+
+mut srv wg := sync.NewWaitGroup()
+mut bound port := 0
+mut server := grpc.NewServer(0)
+mut direct server := tcp.Server {}
+
+func tagger(call: i64):
+    mut ok := false
+    grpc.RecvStr(call, ok)
+    grpc.SendStr(call, "reply")
+    grpc.SetStatus(call, grpc.GRPC_OK, "")
+end
+
+func serve loopback():
+    grpc.Listen(server)
+    bound port = grpc.Port(server)
+    sync.Done(srv wg)
+    grpc.ServeCount(server, 1)
+end
+
+func serve direct():
+    c := tcp.Accept(direct server)
+    testing.AssertEqInt(grpc.ServeConn(c.fd), 1)
+    tcp.Close(c)
+end
+
+func check metadata headers():
+    mut md := grpc.NewMetadata()
+    grpc.MDAdd(md, "x-user", "ali")
+    grpc.MDAddBinary(md, "blob-bin", "raw")
+    testing.AssertEqStr(grpc.MDValueAt(md, 0), "ali")
+    testing.AssertEqStr(grpc.MDValueAt(md, 1), "raw")
+    testing.AssertEqStr(grpc.MDValueAt(md, 9), "")
+
+    mut hl := http2.HeaderList {}
+    grpc.MDToHeaders(md, hl)
+    testing.AssertEqStr(http2.HeadersGet(hl, "x-user"), "ali")
+    testing.AssertEqStr(http2.HeadersGet(hl, "blob-bin"), "cmF3")
+
+    http2.HeadersAdd(hl, "grpc-status", "0")
+    back := grpc.MDFromHeaders(hl)
+    testing.AssertEqInt(grpc.MDCount(back), 2)
+    testing.AssertEqStr(grpc.MDGet(back, "x-user"), "ali")
+    testing.AssertEqStr(grpc.MDGet(back, "blob-bin"), "raw")
+    testing.AssertFalse(grpc.MDHas(back, "grpc-status"))
+end
+
+func check registry reset():
+    testing.AssertTrue(grpc.HasMethod("/demo.Tagger/Tag"))
+    grpc.ResetMethods()
+    testing.AssertFalse(grpc.HasMethod("/demo.Tagger/Tag"))
+    testing.AssertEqInt(grpc.MethodCount(), 0)
+    grpc.RegisterMethod("/demo.Tagger/Tag", tagger)
+    testing.AssertEqInt(grpc.MethodCount(), 1)
+end
+
+func check stop server():
+    mut s := grpc.NewServer(0)
+    testing.AssertTrue(grpc.Listen(s))
+    p := grpc.Port(s)
+    testing.AssertTrue(p > 0)
+    grpc.StopServer(s)
+    gone := grpc.Dial("127.0.0.1", p)
+    testing.AssertFalse(grpc.ChannelOk(gone))
+end
+
+func check tls dial failure():
+    ch := grpc.DialTLS("127.0.0.1", 1)
+    testing.AssertFalse(grpc.ChannelOk(ch))
+    testing.AssertTrue(grpc.ChannelError(ch) != "")
+end
+
+func check live calls():
+    sync.Add(srv wg, 1 as i64)
+    t := spawn(serve loopback)
+    sync.Wait(srv wg)
+    testing.AssertTrue(bound port > 0)
+
+    mut ch := grpc.Dial("127.0.0.1", bound port)
+    testing.AssertTrue(grpc.ChannelOk(ch))
+    grpc.SetGzip(ch, true)
+
+    mut md := grpc.NewMetadata()
+    grpc.MDAdd(md, "x-trace", "t1")
+    mut st := grpc.Status {}
+    mut req := compress.BufFromStr("hi")
+    mut reply := grpc.UnaryCall(ch, "/demo.Tagger/Tag", req, md, st)
+    testing.AssertEqInt(st.code, grpc.GRPC_OK)
+    testing.AssertEqStr(compress.BufToStrUnsafe(reply), "reply")
+
+    sid := grpc.StartCall(ch, "/demo.Tagger/Tag", md)
+    mut body := compress.BufFromStr("hi")
+    testing.AssertTrue(grpc.SendMessage(ch, sid, body, false))
+    testing.AssertTrue(grpc.CloseSend(ch, sid))
+    mut ok := false
+    mut got := grpc.RecvMessage(ch, sid, ok)
+    testing.AssertTrue(ok)
+    testing.AssertEqStr(compress.BufToStrUnsafe(got), "reply")
+    fin := grpc.FinishCall(ch, sid)
+    testing.AssertEqInt(fin.code, grpc.GRPC_OK)
+    headers := grpc.CallHeaders(ch, sid)
+    trailers := grpc.CallTrailers(ch, sid)
+    testing.AssertFalse(grpc.MDHas(headers, "grpc-status"))
+    testing.AssertEqInt(grpc.MDCount(trailers), 0)
+
+    compress.BufFree(req)
+    compress.BufFree(reply)
+    compress.BufFree(body)
+    compress.BufFree(got)
+    grpc.CloseChannel(ch)
+    join(t)
+
+    direct server = tcp.Bind(0)
+    t2 := spawn(serve direct)
+    mut dch := grpc.Dial("127.0.0.1", tcp.Port(direct server))
+    testing.AssertTrue(grpc.ChannelOk(dch))
+    mut dst := grpc.Status {}
+    testing.AssertEqStr(grpc.UnaryCallStr(dch, "/demo.Tagger/Tag", "hi", dst), "reply")
+    testing.AssertEqInt(dst.code, grpc.GRPC_OK)
+    grpc.CloseChannel(dch)
+    join(t2)
+    tcp.CloseServer(direct server)
+end
+
+func main:
+    grpc.RegisterMethod("/demo.Tagger/Tag", tagger)
+    check metadata headers()
+    check stop server()
+    check tls dial failure()
+    check live calls()
+    check registry reset()
+    ret testing.Summary()
+end

@@ -1,0 +1,119 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import net.http2
+import net.tcp
+import compress
+
+func bytes of(text: str): compress.ByteBuf:
+    ret compress.BufFromStr(text)
+end
+
+func main:
+    srv := tcp.Bind(0)
+    port := tcp.Port(srv)
+    cli := tcp.Dial("127.0.0.1", port)
+    acc := tcp.Accept(srv)
+    println "sockets: ", tcp.ConnOk(cli), tcp.ConnOk(acc)
+
+    mut ct := http2.PlainTransport(cli.fd)
+    st := http2.PlainTransport(acc.fd)
+    println "plain transport ok: ", ct.ok, st.ok
+    println "plain kind: ", ct.kind == http2.H2_TRANSPORT_PLAIN
+    bad := http2.PlainTransport(0 - 1)
+    println "invalid fd: ", bad.ok
+
+    mut cc := http2.NewConn(ct, false)
+    mut sc := http2.NewConn(st, true)
+    println "fresh conns: ", http2.ConnOk(cc), http2.ConnOk(sc)
+    println "client first id: ", cc.next_id
+    println "server first id: ", sc.next_id
+
+    println "client handshake: ", http2.ClientHandshake(cc)
+    println "server handshake: ", http2.ServerHandshake(sc)
+    println "conns ok: ", http2.ConnOk(cc), http2.ConnOk(sc)
+    println "server sees client settings: ", http2.Poll(sc)
+    println "client sees server settings: ", http2.Poll(cc)
+
+    id := http2.NextStreamId(cc)
+    println "stream id: ", id
+    println "next stream id: ", http2.NextStreamId(cc)
+    println "client streams: ", http2.StreamCount(cc)
+    println "stream known: ", http2.StreamAt(cc, id).live
+    println "unknown stream: ", http2.StreamAt(cc, 99).live
+
+    mut req := http2.HeaderList {}
+    http2.HeadersAdd(req, ":method", "POST")
+    http2.HeadersAdd(req, ":scheme", "http")
+    http2.HeadersAdd(req, ":path", "/upload")
+    http2.HeadersAdd(req, ":authority", "localhost")
+    http2.HeadersAddSensitive(req, "authorization", "secret")
+    println "send headers: ", http2.SendHeaders(cc, id, req, false)
+
+    mut body := bytes of("hello over h2")
+    println "send data: ", http2.SendData(cc, id, body, false)
+
+    mut trailer := http2.HeaderList {}
+    http2.HeadersAdd(trailer, "x-checksum", "abc")
+    println "send trailers: ", http2.SendTrailers(cc, id, trailer)
+
+    seen := http2.AwaitAnyHeaders(sc, 10)
+    println "headers on stream: ", seen == id
+    println "server streams: ", http2.StreamCount(sc)
+    println "await end: ", http2.AwaitStreamEnd(sc, id, 10)
+    s := http2.StreamAt(sc, id)
+    println "method: ", http2.HeadersGet(s.headers, ":method")
+    println "path: ", http2.HeadersGet(s.headers, ":path")
+    println "authorization: ", http2.HeadersGet(s.headers, "authorization")
+    println "body: ", compress.BufToStrUnsafe(s.data)
+    println "trailer: ", http2.HeadersGet(s.trailers, "x-checksum")
+    println "ended: ", s.end_stream
+
+    mut resp := http2.HeaderList {}
+    http2.HeadersAdd(resp, ":status", "200")
+    println "send response: ", http2.SendHeaders(sc, id, resp, true)
+    println "client await: ", http2.AwaitStreamEnd(cc, id, 10)
+    println "status: ", http2.HeadersGet(http2.StreamAt(cc, id).headers, ":status")
+
+    mut payload := bytes of("pingpong")
+    println "send ping: ", http2.SendPing(cc, payload)
+    println "server poll ping: ", http2.Poll(sc)
+    println "client poll pong: ", http2.Poll(cc)
+
+    other := http2.NextStreamId(cc)
+    println "send reset: ", http2.SendRstStream(cc, other, http2.H2_CANCEL)
+    println "server poll reset: ", http2.Poll(sc) == other
+    rs := http2.StreamAt(sc, other)
+    println "stream reset: ", rs.reset, http2.ErrorName(rs.error_code)
+    println "await reset: ", http2.AwaitStreamEnd(sc, other, 3)
+
+    println "send goaway: ", http2.SendGoAway(sc, http2.H2_NO_ERROR, "bye")
+    println "client poll goaway: ", http2.Poll(cc)
+    println "goaway seen: ", cc.goaway, http2.ErrorName(cc.last_error)
+
+    mut empty := compress.NewByteBuf()
+    println "await nothing: ", http2.AwaitAnyHeaders(cc, 0) == http2.H2_POLL_ERROR
+
+    compress.BufFree(empty)
+    compress.BufFree(payload)
+    compress.BufFree(body)
+    http2.CloseConn(sc)
+    println "server closed: ", http2.ConnOk(sc)
+    println "poll after peer close: ", http2.Poll(cc) == http2.H2_POLL_ERROR
+    http2.CloseTransport(ct)
+    println "transport closed: ", ct.ok
+    tcp.CloseServer(srv)
+end

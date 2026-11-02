@@ -1,0 +1,206 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import jwt
+import net.http
+import net.router
+
+const SECRET := "errors-demo-secret-kept-on-the-server"
+const NOW := 1700000000
+const PORT := 19747
+
+mut guard := jwt.NewGuard(SECRET)
+
+func opts(): jwt.Options:
+    mut o := jwt.DefaultOptions()
+    o.now = NOW as i64
+    ret o
+end
+
+func show(label: str, e: Error):
+    println label + ": " + e.code + " (" + e.kind_name() + ") path=[" + e.path + "] " + e.to_str()
+end
+
+func verify(label: str, token: str, secret: str, o: jwt.Options):
+    try:
+        t := jwt.Verify(token, secret, o)
+        println label + ": ok, valid=" + t.valid
+    catch e:
+        show(label, e)
+    end
+end
+
+func with_header(header_json: str, payload_json: str): str:
+    si := jwt.B64UrlEncode(header_json) + "." + jwt.B64UrlEncode(payload_json)
+    ret si + "." + jwt.SignatureOf(si, jwt.JWT_HS256, SECRET)
+end
+
+func mint(c: jwt.Claims): str throws:
+    ret try jwt.SignHS256(c, SECRET)
+end
+
+func syntax_errors():
+    verify("malformed", "abc", SECRET, opts())
+    verify("empty part", ".b.c", SECRET, opts())
+    verify("bad base64", "eyJhbGciOiJIUzI1NiJ9.e+J9.sig", SECRET, opts())
+    verify("no alg", with_header(`{"typ":"JWT"}`, `{"sub":"1"}`), SECRET, opts())
+    verify("duplicate claim", with_header(`{"alg":"HS256"}`, `{"sub":"admin","sub":"guest"}`), SECRET, opts())
+    each text in ["Zm9vYmFy", "Zm9v YmFy", "Zm9vY"]:
+        try:
+            println "B64UrlDecode " + text + ": " + jwt.B64UrlDecode(text)
+        catch e:
+            show("B64UrlDecode " + text, e)
+        end
+    end
+end
+
+func header_errors():
+    verify("alg none", with_header(`{"alg":"none"}`, `{"sub":"1"}`), SECRET, opts())
+    verify("typ", with_header(`{"alg":"HS256","typ":"JOSE"}`, `{"sub":"1"}`), SECRET, opts())
+    verify("crit", with_header(`{"alg":"HS256","crit":["exp"]}`, `{"sub":"1"}`), SECRET, opts())
+    mut c := jwt.NewClaims()
+    c.sub = "1"
+    try:
+        _ := jwt.Sign(c, "RS256", SECRET)
+    catch e:
+        show("sign RS256", e)
+    end
+    try:
+        _ := jwt.SignHS256(c, "")
+    catch e:
+        show("sign empty secret", e)
+    end
+end
+
+func policy_errors() throws:
+    mut c := jwt.NewClaims()
+    c.iss = "auth.example.com"
+    c.sub = "user-7"
+    c.aud = "web"
+    c.iat = (NOW - 60) as i64
+    c.nbf = (NOW - 60) as i64
+    c.exp = (NOW + 600) as i64
+    token := try mint(c)
+    verify("good", token, SECRET, opts())
+    verify("empty secret", token, "", opts())
+    verify("wrong secret", token, "another-secret", opts())
+    verify("alg mismatch", token, SECRET, jwt.OptionsFor(jwt.JWT_HS512))
+    mut late := opts()
+    late.now = (NOW + 600) as i64
+    verify("expired", token, SECRET, late)
+    mut early := opts()
+    early.now = (NOW - 120) as i64
+    verify("not yet valid", token, SECRET, early)
+    mut future := jwt.NewClaims()
+    future.iat = (NOW + 3600) as i64
+    verify("issued in future", try mint(future), SECRET, opts())
+    mut o := opts()
+    o.issuer = "other.example.com"
+    verify("issuer", token, SECRET, o)
+    o = opts()
+    o.subject = "user-8"
+    verify("subject", token, SECRET, o)
+    o = opts()
+    o.audience = "mobile"
+    verify("audience", token, SECRET, o)
+    o = opts()
+    o.require_jti = true
+    verify("missing jti", token, SECRET, o)
+end
+
+func kinds() throws:
+    mut c := jwt.NewClaims()
+    c.exp = (NOW - 1) as i64
+    token := try mint(c)
+    try:
+        _ := jwt.Verify(token, SECRET, opts())
+    catch e:
+        println "rejected:", e.is(ErrorKind.PermissionDenied), "expired:", e.code == "jwt.expired"
+        println "wrapped:", e.wrap("login").to_str()
+    end
+    println "IsValid:", jwt.IsValid(token, SECRET, opts())
+    try:
+        _ := jwt.Decode("x.y")
+    catch e:
+        println "decode:", e.is(ErrorKind.Syntax), e.message
+    end
+end
+
+func checked(ctx: i64):
+    try:
+        t := jwt.Check(ctx, guard)
+        http.Text(ctx, "hello " + t.claims.sub)
+    catch e:
+        if e.code == "jwt.missing_token":
+            jwt.MissingCredential(ctx, guard)
+        else:
+            jwt.Unauthorized(ctx, guard, e.code)
+        end
+    end
+end
+
+func required(ctx: i64):
+    mut t := jwt.Token {}
+    if jwt.Require(ctx, guard, t):
+        http.Text(ctx, "hello " + t.claims.sub)
+    end
+end
+
+func ask(path: str, token: str):
+    mut headers := http.NewHeaders()
+    if token.len() > 0:
+        headers.insert("Authorization", "Bearer " + token)
+    end
+    response := http.GetWith("http://127.0.0.1:" + PORT + path, headers)
+    println path, http.Status(response), http.GetHeader(response, "WWW-Authenticate"), http.Body(response)
+end
+
+func http_errors() throws:
+    mut r := router.NewRouter()
+    router.Get(r, "/check", checked)
+    router.Get(r, "/require", required)
+    mut s := http.NewServer(PORT)
+    http.Use(s, r)
+    _ := http.RunBackground(s)
+    good := try jwt.IssueFor(guard, "user-7", 600)
+    forged := try jwt.IssueFor(jwt.NewGuard("not-the-server-secret"), "admin", 600)
+    ask("/check", good)
+    ask("/check", "")
+    ask("/check", forged)
+    ask("/require", "")
+    ask("/require", forged)
+    ask("/require", "abc")
+    mut access := ""
+    mut refresh := ""
+    try:
+        jwt.IssuePair(jwt.NewGuard(""), "user-7", 60, 600, access, refresh)
+    catch e:
+        show("IssuePair", e)
+    end
+    println "pair untouched:", access == "" and refresh == ""
+end
+
+func main:
+    syntax_errors()
+    header_errors()
+    try:
+        policy_errors()
+        kinds()
+        http_errors()
+    catch e:
+        println "unexpected:", e.to_str()
+    end
+end

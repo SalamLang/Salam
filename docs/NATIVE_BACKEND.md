@@ -895,7 +895,9 @@ ret end` at the top of a recursive AST walk) tests that parameter before
   `SALAM_NG_LIST=1` prints every function with its compile index.
 - `SALAM_NG_INLTRACE=1` prints why the inliner kept a call: callee too big
   (`skip`, with its cost and limit), not cached yet, caller over its growth
-  budget (`grown`), or a call-site bonus too small (`need`).
+  budget (`grown`), or a call-site bonus too small (`need`). Lines starting
+  with `hotpath` show where a callee was split for partial inlining, and
+  `spromo` the loops whose fields were promoted.
   `SALAM_NG_INL_MAX=n` overrides the base inline limit for experiments.
 - `SALAM_NG_VERIFY=1` checks after optimization that every instruction's
   operands are defined in a block that dominates it, and fails the build

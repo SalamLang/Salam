@@ -1,0 +1,114 @@
+package nativelink
+
+func exp_collect(l &: Nl):
+    repeat l.o_file.len() in o:
+        if l.f_arch[l.o_file[o]] or l.o_coff[o]:
+            continue
+        end
+        s0 := l.o_sym0[o]
+        repeat l.o_nsym[o] in k:
+            os := s0 + k
+            g := l.os_glob[os]
+            if g < 0 or l.g_state[g] != SY_DEF or l.g_obj[g] != o or l.g_hid[g] or l.expd.has(g):
+                continue
+            end
+            s := l.os_sec[os]
+            if s < 0 or s != l.g_sec[g] or (l.s_flags[s] & (2 as i64)) == (0 as i64):
+                continue
+            end
+            st := l.os_type[os] & 15
+            if st != 0 and st != 1 and st != 2:
+                continue
+            end
+            l.expd.put(g, true)
+            l.exp_size.put(g, l.os_size[os])
+            l.exp_type.put(g, st)
+        end
+    end
+end
+
+func so_abs_code(l &: Nl, ty: int): bool:
+    switch l.mach:
+        EM_ARM:
+            ret ty == 43 or ty == 44 or ty == 47 or ty == 48
+        end
+        EM_RISCV:
+            ret ty == 1 or ty == 26 or ty == 27 or ty == 28
+        end
+        EM_AARCH64:
+            ret ty >= 263 and ty <= 273
+        end
+    end
+    ret false
+end
+
+func oc_shndx(l &: Nl, c: int): int:
+    mut n := 1
+    repeat OC_COUNT in k:
+        if l.oc_size[k] <= (0 as i64):
+            continue
+        end
+        if k == c:
+            ret n
+        end
+        n += 1
+    end
+    ret 0xfff1
+end
+
+func gh_sort(l &: Nl, hs &: Vector<int>):
+    n := hs.len()
+    mut nb := n / 4
+    if nb < 1:
+        nb = 1
+    end
+    l.gh_nb = nb
+    if nb == 1:
+        ret
+    end
+    mut hb := Vector {} as Vector<int>
+    mut cnt := Vector {} as Vector<int>
+    mut out := Vector {} as Vector<int>
+    repeat nb + 1:
+        cnt.push(0)
+    end
+    each g in hs:
+        b := (gnu_hash(l, l.g_name[g]) % (nb as i64)) as int
+        hb.push(b)
+        cnt[b + 1] += 1
+        out.push(0)
+    end
+    repeat nb in q:
+        cnt[q + 1] += cnt[q]
+    end
+    repeat n in i:
+        out[cnt[hb[i]]] = hs[i]
+        cnt[hb[i]] += 1
+    end
+    hs.clear()
+    each x in out:
+        hs.push(x)
+    end
+    hb.free()
+    cnt.free()
+    out.free()
+end
+
+func so_plt_stub(l &: Nl, buf: u8*, at: i64, pa: i64, slot: i64):
+    if l.mach == EM_ARM:
+        wr32(buf, at, 0x46C04778 as i64)
+        wr32(buf, at + (4 as i64), 0xE59FC000 as i64)
+        wr32(buf, at + (8 as i64), 0xE79FF00C as i64)
+        wr32(buf, at + (12 as i64), slot - (pa + (16 as i64)))
+        ret
+    end
+    buf[at] = 0xe8 as u8
+    wr32(buf, at + (1 as i64), 0 as i64)
+    buf[at + (5 as i64)] = 0x59 as u8
+    buf[at + (6 as i64)] = 0xff as u8
+    buf[at + (7 as i64)] = 0xa1 as u8
+    wr32(buf, at + (8 as i64), slot - (pa + (5 as i64)))
+    repeat 4 in z:
+        buf[at + ((12 + z) as i64)] = 0x90 as u8
+    end
+end

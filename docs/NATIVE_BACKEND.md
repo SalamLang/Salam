@@ -17,6 +17,7 @@ salam build app.salam --backend=native --target=arm-linux-musleabihf
 salam build app.salam --backend=native --target=riscv64-linux-musl
 salam build app.salam --backend=native --target=arm64-apple-macos
 salam build app.salam --backend=native --emit-asm     # also writes app.s
+salam build app.salam --backend=native --cpu=x86-64-v3 # 256-bit AVX2 loops
 salam obj app.salam --backend=native                  # object file only
 ```
 
@@ -533,6 +534,42 @@ then goes through:
    and the scalar loop finishes the rest, so the PNG filter scoring and
    filter application and the tensor element-wise kernels run four values
    per instruction.
+   With `--cpu=x86-64-v3` (or `x86-64-v4`) the loop vectorizer uses the
+   256-bit AVX2 registers instead: eight 32-bit or `f32` lanes, four 64-bit
+   or `f64`, sixteen 16-bit and thirty-two bytes. The vector step, the
+   `[0, 1, ...]` lane constant (now 32 bytes in `.rdata`), the runtime
+   overlap checks and the scalar remainder all follow the wider vector.
+   Broadcasts are one `vpbroadcastb/w/d/q` or `vbroadcastss/sd` from a `movd`,
+   a 32-bit multiply is one `vpmulld` instead of the `pmuludq` sequence, and
+   a reduction first combines the upper half, taken with `vextracti128`, with
+   the lower one (an add, or a compare and select for min and max) before the
+   usual 128-bit steps. Loops that widen or narrow bytes, count matching
+   bytes or walk a second counter down keep 128-bit vectors, and so does
+   every loop when `SALAM_NG_OFF=avx2` is set. A function that touches a
+   256-bit register is VEX-encoded throughout, scalar float code included,
+   so it never mixes legacy SSE with AVX, and it runs `vzeroupper` before
+   each call and return; functions without 256-bit code are encoded exactly
+   as before. The register allocator keeps 256-bit values in the same class
+   as the other vector registers and gives them 32-byte spill slots, read and
+   written with unaligned moves so the frame stays 16-byte aligned; on Windows
+   it keeps them out of `xmm6`-`xmm15`, whose upper halves a callee may
+   clobber. `SALAM_NATIVE_CPU` sets the level when `--cpu` is not given, so a
+   whole test sweep can run with AVX2. The default stays the x86-64 baseline
+   (SSE2), and `x86-64-v2` changes nothing yet; a program built for
+   `x86-64-v3` needs a CPU with AVX2 and stops with an illegal instruction
+   on one without it. `--cpu` also reaches LLVM (`-march` for clang, the
+   target machine's CPU in-process) when the backend is `llvm`.
+   On the machine these numbers come from (an AMD EPYC of the first Zen
+   generation, which splits each 256-bit operation into two 128-bit halves,
+   so it shows the low end of the gain) the minimum CPU time of five runs of
+   a loop over 4096 elements, called 400000 to 1000000 times, drops by 2.0x
+   for an `f32` saxpy, 2.0x for an `int` sum, 2.1x for an `i64` sum, 2.0x for a
+   `u8` clamp, 2.0x for an `f32` dot product with `--fast-math`, 1.97x for an
+   `int` min and max, 1.54x for `int` add and multiply, 1.34x for an `f64`
+   scale and 1.0x for an `i16` multiply. The `nn`, `audio` and `image` tests
+   move by less than 6% either way, since their hot loops are SLP or
+   128-bit-only shapes, and none of the 42 programs under `benchmark/` has a
+   loop the vectorizer takes on, so their binaries do not change.
    A field read from a struct loaded whole (`v.get(i).kind`, or a phi of two
    such loads) becomes a load of just that field, and a stack copy of a
    struct that is only ever written is dropped, so `n := at.Get(a, i)` then
@@ -720,7 +757,9 @@ is copied whole), copies a short loop test into a branch arm that
 would otherwise jump to it (up to eleven instructions when that test is the
 loop's latch, so a division fast path ends in the loop branch instead of a
 `jmp` to it), shares one epilogue between a function's returns
-on Linux, zeroes registers with `xor` where the flags are dead (a following `div` or `imul` overwrites them anyway), drops a `test r, r` that repeats the one before a conditional jump, and aligns loop heads to 16 bytes. An innermost loop
+on Linux, zeroes registers with `xor` where the flags are dead (a following `div` or `imul` overwrites them anyway), drops a `test r, r` that repeats the one before a conditional jump (and any
+compare or test whose flags nothing reads, such as one left behind when its
+branch folded to a constant), and aligns loop heads to 16 bytes. An innermost loop
 that fits in 64 bytes is placed so it does not straddle a cache line;
 otherwise it gets 32-byte alignment. Padding uses NOPs of up to 15 bytes,
 and padding longer than that is a short `jmp` over the gap, so falling into
@@ -760,6 +799,9 @@ ret end` at the top of a recursive AST walk) tests that parameter before
   With the default sections it agrees on everything except
   `interop/redis_demo`, which needs a live redis server, the same as the LLVM
   backend.
+  With `SALAM_NATIVE_CPU=x86-64-v3` in the environment every build uses the
+  256-bit AVX2 loops, so the same sweep (and the fuzzer below) checks them
+  against the same `.out` files.
 - `python3 -I tools/fuzz/salamfuzz.py <salam>` generates random programs
   (integer code with loops and vectors, vector kernels over `int`, `u8`,
   `i16` and `i64`, clamped `f64` code, calls with eight arguments and a
@@ -793,15 +835,24 @@ ret end` at the top of a recursive AST walk) tests that parameter before
   `abs()`; everything else must pass, and the native backend gate runs it for
   all four targets on every change. The native-built compiler for AArch64
   reproduces the x86-64 compiler's IR for the whole compiler.
+  With `NATIVE_CROSS_STAGE=<dir>` it only builds the programs, into
+  `<dir>/<group>/<name>`, and `tools/bash/native-stage-tests.sh <dir>` runs
+  them on the machine they are for. The gate does this for macOS on Apple
+  silicon and on Intel, Windows on x86-64 and Linux on AArch64: the programs
+  are built on Linux, run on a real machine of each kind, and the compiler
+  built by the native backend for that machine reproduces the reference IR
+  there and builds and runs programs with `--backend=native` itself.
 - `tools/bash/native-encoder-check.sh <salam> <files...>` checks the encoder:
   it assembles the `--emit-asm` listing with GNU `as` and compares the result
   with the object nativegen wrote, instruction by instruction.
+  `NATIVE_ENC_FLAGS="--release --cpu=x86-64-v3"` checks the VEX encodings of
+  the vectorized loops too.
 - `SALAM_BACKEND=native sh tools/bash/run-tests.sh <groups>` runs the regular
   build tests through the native backend.
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing, and a comma-separated list dumps several functions.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,loopinl,cpelim,tord,vrev,cdown,tfold,mexit,sqself,vsign,redinv,ldcmp,phix,selinc,wweb,wwdep,wwtr,tdup,padjmp,zins,ndiv,niv,cmp64,adc64,rvc`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,loopinl,cpelim,tord,vrev,cdown,tfold,mexit,sqself,vsign,redinv,ldcmp,phix,selinc,wweb,wwdep,wwtr,tdup,padjmp,dtst,zins,ndiv,niv,cmp64,adc64,rvc,avx2`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator.
@@ -969,7 +1020,11 @@ Not there yet:
   reductions are not reordered, since that would change the rounding of the
   result, unless the program is built with `--fast-math`, which lets float
   add reductions run in vector lanes too (and gives LLVM `reassoc nsz`).
-  There is no AVX code path.
+  AVX2 is opt-in (`--cpu=x86-64-v3`) and only the loop vectorizer uses
+  it: the SLP and sum-reduction vectorizers, and loops that widen, narrow,
+  count bytes or reverse, stay at 128 bits. There is no AVX-512 or FMA code,
+  no 64-bit ordered compare even with AVX2, and no runtime dispatch, so a
+  build is either baseline everywhere or needs AVX2 everywhere.
 - The built-in linker (see `NATIVE_LINKER.md`) links every supported
   target itself (static musl, glibc PIE, Windows PE), so a native build needs
   no outside tool beyond the C runtime files. It keeps `.debug_*` sections

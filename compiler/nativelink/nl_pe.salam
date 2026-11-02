@@ -8,8 +8,9 @@ const PS_XDATA := 4
 const PS_BSS := 5
 const PS_IDATA := 6
 const PS_TLS := 7
-const PS_RELOC := 8
-const PS_COUNT := 9
+const PS_RSRC := 8
+const PS_RELOC := 9
+const PS_COUNT := 10
 
 const IT_SEC := 0
 const IT_BYTES := 1
@@ -40,6 +41,8 @@ pub struct Pe:
     pub imp_va: i64 = 0
     pub imp_size: i64 = 0
     pub dbg_rva: i64 = 0
+    pub exp_rva: i64 = 0
+    pub exp_size: i64 = 0
 end
 
 func ps_name(k: int): str:
@@ -52,6 +55,7 @@ func ps_name(k: int): str:
         PS_BSS: ret ".bss" end
         PS_IDATA: ret ".idata" end
         PS_TLS: ret ".tls" end
+        PS_RSRC: ret ".rsrc" end
         PS_RELOC: ret ".reloc" end
     end
     ret ".unknown"
@@ -197,6 +201,10 @@ func pe_classify(l &: Nl, t &: Pe, s: int):
         if str.Equals(n, "5"): key = "51" + lab end
         if str.Equals(n, "6"): key = "56" + lab end
         if str.Equals(n, "7"): key = "57" + lab end
+    else str.StartsWith(nm, ".rsrc"):
+        ps = PS_RSRC
+        key = "1" + nm
+        l.pe_nrsrc += 1
     else str.StartsWith(nm, ".tls"):
         ps = PS_TLS
         if str.Equals(nm, ".tls$AAA"):
@@ -636,7 +644,9 @@ func pe_link(l &: Nl, out: str):
         end
     end
     if l.mach == EM_386:
-        l.pe_base = 0x400000 as i64
+        l.pe_base = (l.pe_dll ? 0x10000000 : 0x400000) as i64
+    else l.pe_dll:
+        l.pe_base = 0x180000000 as i64
     end
     mut cvs := Vector {} as Vector<int>
     mut pdb := ""
@@ -651,12 +661,23 @@ func pe_link(l &: Nl, out: str):
     synth(l, "__image_base__", SYN_EHDR)
     synth(l, "___ImageBase", SYN_EHDR)
     synth(l, "___image_base__", SYN_EHDR)
+    if l.pe_nrsrc > 1:
+        nl_fail(l, "cannot link: more than one resource section (.rsrc) in the inputs; put all resources in one object")
+        ret
+    end
     pe_frame(l, t)
     pe_commons(l, t)
     pe_aliases(l)
     check_undefined(l)
     if not l.ok:
         ret
+    end
+    if l.pe_dll:
+        pe_exp_collect(l)
+        if l.pe_exp.len() > 0:
+            pe_item(t, PS_RDATA, IT_ALIGN, "zex0", 0, 4 as i64)
+            pe_bytes(t, PS_RDATA, "zexp", pe_exp_size(l), 0)
+        end
     end
     if not l.strip:
         dbg_collect_pe(l)
@@ -670,12 +691,13 @@ func pe_link(l &: Nl, out: str):
         t.ps_rawsize.clear()
         pe_place(l, t)
     end
-    mut ent := glob_find(l, "mainCRTStartup")
+    mut ename := l.pe_dll ? "DllMainCRTStartup" : (l.pe_gui ? "WinMainCRTStartup" : "mainCRTStartup")
     if l.mach == EM_386:
-        ent = glob_find(l, "_mainCRTStartup")
+        ename = l.pe_dll ? "_DllMainCRTStartup@12" : "_" + ename
     end
+    ent := glob_find(l, ename)
     if ent < 0 or l.g_state[ent] != SY_DEF:
-        nl_fail(l, "cannot link: no entry point 'mainCRTStartup' (is crt2.o missing?)")
+        nl_fail(l, "cannot link: no entry point '" + ename + "' (is " + (l.pe_dll ? "dllcrt2.o" : "crt2.o") + " missing?)")
         ret
     end
     t.entry = l.s_addr[l.g_sec[ent]] + l.g_val[ent] - l.pe_base
@@ -723,6 +745,7 @@ func pe_link(l &: Nl, out: str):
     if not l.ok:
         ret
     end
+    pe_exp_fill(l, t, buf, fpos_of)
     if l.dg_name.len() > 0:
         dbg_build_pe(l)
     end
@@ -756,6 +779,17 @@ func pe_link(l &: Nl, out: str):
     cvs.free()
     rel.free()
     fpos_of.free()
+end
+
+func pe_exp_fill(l &: Nl, t &: Pe, buf: u8*, fpos_of &: Vector<i64>):
+    repeat t.it_ps.len() in i:
+        if t.it_kind[i] == IT_BYTES and str.Equals(t.it_key[i], "zexp"):
+            rva := t.it_addr[i]
+            pe_exp_write(l, buf, fpos_of[PS_RDATA] + (rva - t.ps_va[PS_RDATA]), rva)
+            t.exp_rva = rva
+            t.exp_size = t.it_val[i] & (0xFFFFFFFF as i64)
+        end
+    end
 end
 
 func pdb_path_of(out: str): str:
@@ -870,7 +904,7 @@ func pe_write(l &: Nl, t &: Pe, buf: u8*, total: i64, rel &: Vector<u8>, out: st
     w32(h, l.dg_name.len() > 0 ? l.pe_strpos : (0 as i64))
     w32(h, 0 as i64)
     w16(h, (p32 ? 224 : 240) as i64)
-    w16(h, (p32 ? 0x0122 : 0x22) as i64)
+    w16(h, ((p32 ? 0x0122 : 0x22) | (l.pe_dll ? 0x2000 : 0)) as i64)
     w16(h, (p32 ? 0x10b : 0x20b) as i64)
     h.push(2 as u8)
     h.push(41 as u8)
@@ -904,7 +938,7 @@ func pe_write(l &: Nl, t &: Pe, buf: u8*, total: i64, rel &: Vector<u8>, out: st
     w32(h, t.image_size)
     w32(h, t.hdr_size)
     w32(h, 0 as i64)
-    w16(h, 3 as i64)
+    w16(h, (l.pe_gui ? 2 : 3) as i64)
     w16(h, (p32 ? 0x140 : (a64 ? 0x8160 : 0x160)) as i64)
     if p32:
         w32(h, 0x200000 as i64)
@@ -947,9 +981,15 @@ func pe_write(l &: Nl, t &: Pe, buf: u8*, total: i64, rel &: Vector<u8>, out: st
         tls = l.s_addr[l.g_sec[tg]] + l.g_val[tg] - l.pe_base
     end
     repeat 16 in d:
-        if d == 1 and imp0 > (0 as i64):
+        if d == 0 and t.exp_rva > (0 as i64):
+            w32(h, t.exp_rva)
+            w32(h, t.exp_size)
+        else d == 1 and imp0 > (0 as i64):
             w32(h, imp0)
             w32(h, imp1 - imp0 + (20 as i64))
+        else d == 2 and t.ps_vsize[PS_RSRC] > (0 as i64):
+            w32(h, t.ps_va[PS_RSRC])
+            w32(h, t.ps_vsize[PS_RSRC])
         else d == 3 and t.ps_vsize[PS_PDATA] > (0 as i64):
             w32(h, t.ps_va[PS_PDATA])
             w32(h, t.ps_vsize[PS_PDATA])

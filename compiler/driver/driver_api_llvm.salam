@@ -57,7 +57,7 @@ func build_opt_level(opt &: Dr): int:
 end
 
 pub func Llvm(opt &: Dr): int:
-    lgr := lg.New(opt.log_level, resolve_color(opt.color))
+    mut lgr := lg.New(opt.log_level, resolve_color(opt.color))
     pack := lp.Load(opt.lang)
     if pack == lp.LP_NONE:
         lg.Log(
@@ -97,7 +97,7 @@ pub func Llvm(opt &: Dr): int:
     mut pok := ps.Run(lgr, toks, a, prog)
     pf.End(pf.TP_PARSER, _pt_ps)
     tok.StreamFree(toks)
-    table := cc.TableBuild(opt.llvm_target, opt.defines)
+    mut table := cc.TableBuild(opt.llvm_target, opt.defines)
     cc.TableSetPack(table, modpack)
     if not cc.PruneProgram(a, lgr, sf.path, table, prog):
         pok = false
@@ -153,6 +153,13 @@ pub func Llvm(opt &: Dr): int:
         lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "using embedded static third-party libs: " + xl)
     end
     o.native_cpu = opt.llvm_native_cpu and str.Len(opt.llvm_target) == 0
+    if str.Len(opt.cpu) > 0 and native_cpu_level(opt.cpu) < 0:
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, "unknown CPU level '" + opt.cpu + "' (expected x86-64, x86-64-v2, x86-64-v3 or x86-64-v4)")
+        sm.Free(s)
+        at.FreeAst(a)
+        ret 1
+    end
+    o.cpu = opt.cpu
     o.fp_contract = opt.llvm_fp_contract
     o.fast_math = opt.fast_math
     o.lib_mode = is_lib
@@ -207,8 +214,17 @@ pub func Llvm(opt &: Dr): int:
     out := lv.RunOpts(lgr, s, a, prog, module, entry, o, sf.path)
     pf.End(pf.TP_CODEGEN, _pt_cg)
 
+    if str.Equals(opt.backend, "native") and is_lib:
+        nlr := native_lib_finish(lgr, opt, o, out.ll_src, out.ok, lv.ErrorOf(out), a, prog)
+        sm.Free(s)
+        at.FreeAst(a)
+        ret nlr
+    end
     if str.Equals(opt.backend, "native") and (o.output_mode == lv.LV_OUT_EXEC or o.output_mode == lv.LV_OUT_OBJ):
-        nrc := native_finish(lgr, opt, o, out.ll_src, out.ok, lv.ErrorOf(out))
+        mut nrc := native_finish(lgr, opt, o, out.ll_src, out.ok, lv.ErrorOf(out))
+        if nrc == 0 and native_dll_target(opt, o):
+            nrc = lib_write_api(opt, a, prog, native_dll_path(opt), native_dll_stem(opt))
+        end
         sm.Free(s)
         at.FreeAst(a)
         ret nrc

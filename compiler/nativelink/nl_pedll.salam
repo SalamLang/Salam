@@ -1,0 +1,377 @@
+package nativelink
+
+import str
+
+func pe_exp_skip(nm: str): bool:
+    if str.StartsWith(nm, ".") or str.StartsWith(nm, "__imp_") or str.StartsWith(nm, "_head_"):
+        ret true
+    end
+    ret str.Equals(nm, "DllMain") or str.Equals(nm, "_DllMain@12") or str.Equals(nm, "DllMainCRTStartup") or str.Equals(nm, "_DllMainCRTStartup@12")
+end
+
+func pe_exp_name(l &: Nl, nm: str): str:
+    if l.mach == EM_386 and str.StartsWith(nm, "_"):
+        ret str.Substr(nm, 1, str.Len(nm) - 1)
+    end
+    ret nm
+end
+
+func pe_exp_collect(l &: Nl):
+    repeat l.g_name.len() in g:
+        if l.g_state[g] != SY_DEF or l.g_obj[g] < 0:
+            continue
+        end
+        if not str.Equals(l.o_label[l.g_obj[g]], l.pe_expsrc):
+            continue
+        end
+        nm := name_of(l, l.g_name[g])
+        if pe_exp_skip(nm):
+            continue
+        end
+        l.pe_exp.push(pe_exp_name(l, nm))
+        l.pe_expg.push(g)
+    end
+    n := l.pe_exp.len()
+    mut i := 1
+    until i < n:
+        mut j := i
+        until j > 0 and str.Compare(l.pe_exp[j], l.pe_exp[j - 1]) < 0:
+            e := l.pe_exp[j]
+            l.pe_exp[j] = l.pe_exp[j - 1]
+            l.pe_exp[j - 1] = e
+            g2 := l.pe_expg[j]
+            l.pe_expg[j] = l.pe_expg[j - 1]
+            l.pe_expg[j - 1] = g2
+            j -= 1
+        end
+        i += 1
+    end
+end
+
+func pe_exp_size(l &: Nl): int:
+    mut sz := 40 + 10 * l.pe_exp.len() + str.Len(l.pe_dllname) + 1
+    each e in l.pe_exp:
+        sz += str.Len(e) + 1
+    end
+    ret sz
+end
+
+func pe_exp_code(l &: Nl, g: int): bool:
+    ret (l.s_flags[l.g_sec[g]] & (0x20000020 as i64)) != (0 as i64)
+end
+
+func push_cstr(v &: Vector<u8>, s: str):
+    sp := (s as void*) as u8*
+    repeat str.Len(s) in c:
+        v.push(sp[c])
+    end
+    v.push(0 as u8)
+end
+
+func pe_exp_write(l &: Nl, buf: u8*, at: i64, rva: i64):
+    n := l.pe_exp.len() as i64
+    eat := rva + (40 as i64)
+    npt := eat + (4 as i64) * n
+    ords := npt + (4 as i64) * n
+    dname := ords + (2 as i64) * n
+    mut v := Vector {} as Vector<u8>
+    w32(v, 0 as i64)
+    w32(v, 0 as i64)
+    w16(v, 0 as i64)
+    w16(v, 0 as i64)
+    w32(v, dname)
+    w32(v, 1 as i64)
+    w32(v, n)
+    w32(v, n)
+    w32(v, eat)
+    w32(v, npt)
+    w32(v, ords)
+    each g in l.pe_expg:
+        w32(v, l.s_addr[l.g_sec[g]] + l.g_val[g] - l.pe_base)
+    end
+    mut p := dname + ((str.Len(l.pe_dllname) + 1) as i64)
+    each e in l.pe_exp:
+        w32(v, p)
+        p = p + ((str.Len(e) + 1) as i64)
+    end
+    repeat l.pe_exp.len() in k:
+        w16(v, k as i64)
+    end
+    push_cstr(v, l.pe_dllname)
+    each e2 in l.pe_exp:
+        push_cstr(v, e2)
+    end
+    repeat v.len() in b:
+        buf[at + (b as i64)] = v[b]
+    end
+    v.free()
+end
+
+func implib_prefix(path: str): str:
+    mut cut := 0
+    repeat str.Len(path) in i:
+        c := str.Substr(path, i, 1)
+        if str.Equals(c, "/") or str.Equals(c, "\\"):
+            cut = i + 1
+        end
+    end
+    base := str.Substr(path, cut, str.Len(path) - cut)
+    mut b := str.NewBuilder()
+    bp := (base as void*) as u8*
+    repeat str.Len(base) in k:
+        ch := bp[k] as int
+        if (ch >= 48 and ch <= 57) or (ch >= 65 and ch <= 90) or (ch >= 97 and ch <= 122):
+            str.BufAppendChar(b, ch)
+        else:
+            str.BufAppendChar(b, 95)
+        end
+    end
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
+
+func implib_mach(l &: Nl): int:
+    if l.mach == EM_386: ret 0x14C end
+    if l.mach == EM_AARCH64: ret 0xAA64 end
+    ret 0x8664
+end
+
+func implib_head(m: int, pfx: str): Vector<u8>:
+    dfl := m == 0x14C ? (0xC0300040 as i64) : (0xC0400040 as i64)
+    mut h := CoffB { mach = m }
+    mut d2 := Vector {} as Vector<u8>
+    repeat 20:
+        d2.push(0 as u8)
+    end
+    s2 := cb_sec(h, ".idata$2", 0xC0300040 as i64, d2)
+    s5 := cb_sec(h, ".idata$5", dfl, Vector {} as Vector<u8>)
+    s4 := cb_sec(h, ".idata$4", dfl, Vector {} as Vector<u8>)
+    y4 := cb_sym(h, ".idata$4", s4, 3)
+    y5 := cb_sym(h, ".idata$5", s5, 3)
+    _yh := cb_sym(h, "_head_" + pfx, s2, 2)
+    yn := cb_sym(h, pfx + "_iname", 0, 2)
+    nb := imp_rt_addr32nb(m)
+    cb_rel(h, s2, 0, nb, y4)
+    cb_rel(h, s2, 12, nb, yn)
+    cb_rel(h, s2, 16, nb, y5)
+    ret cb_done(h)
+end
+
+func implib_tail(m: int, pfx: str, dll: str): Vector<u8>:
+    psz := m == 0x14C ? 4 : 8
+    dfl := m == 0x14C ? (0xC0300040 as i64) : (0xC0400040 as i64)
+    mut t := CoffB { mach = m }
+    mut z4 := Vector {} as Vector<u8>
+    mut z5 := Vector {} as Vector<u8>
+    repeat psz:
+        z4.push(0 as u8)
+        z5.push(0 as u8)
+    end
+    _s4 := cb_sec(t, ".idata$4", dfl, z4)
+    _s5 := cb_sec(t, ".idata$5", dfl, z5)
+    mut d7 := Vector {} as Vector<u8>
+    push_cstr(d7, dll)
+    if (d7.len() % 2) == 1:
+        d7.push(0 as u8)
+    end
+    s7 := cb_sec(t, ".idata$7", 0xC0300040 as i64, d7)
+    _yn := cb_sym(t, pfx + "_iname", s7, 2)
+    ret cb_done(t)
+end
+
+func implib_sym(m: int, pfx: str, csym: str, iname: str, hint: int, code: bool): Vector<u8>:
+    psz := m == 0x14C ? 4 : 8
+    dfl := m == 0x14C ? (0xC0300040 as i64) : (0xC0400040 as i64)
+    nb := imp_rt_addr32nb(m)
+    mut b := CoffB { mach = m }
+    mut st := 0
+    if code:
+        mut tx := Vector {} as Vector<u8>
+        if m == 0xAA64:
+            tb_le(tx, 0x90000010 as i64, 4)
+            tb_le(tx, 0xF9400210 as i64, 4)
+            tb_le(tx, 0xD61F0200 as i64, 4)
+        else:
+            tx.push(0xFF as u8)
+            tx.push(0x25 as u8)
+            tb_le(tx, 0 as i64, 4)
+            tx.push(0x90 as u8)
+            tx.push(0x90 as u8)
+        end
+        st = cb_sec(b, ".text", 0x60300020 as i64, tx)
+    end
+    mut d7 := Vector {} as Vector<u8>
+    tb_le(d7, 0 as i64, 4)
+    s7 := cb_sec(b, ".idata$7", 0xC0300040 as i64, d7)
+    mut e5 := Vector {} as Vector<u8>
+    mut e4 := Vector {} as Vector<u8>
+    tb_le(e5, 0 as i64, psz)
+    tb_le(e4, 0 as i64, psz)
+    s5 := cb_sec(b, ".idata$5", dfl, e5)
+    s4 := cb_sec(b, ".idata$4", dfl, e4)
+    mut hn := Vector {} as Vector<u8>
+    tb_le(hn, hint as i64, 2)
+    push_cstr(hn, iname)
+    if (hn.len() % 2) == 1:
+        hn.push(0 as u8)
+    end
+    s6 := cb_sec(b, ".idata$6", 0xC0200040 as i64, hn)
+    y6 := cb_sym(b, ".idata$6", s6, 3)
+    yimp := cb_sym(b, "__imp_" + csym, s5, 2)
+    if code:
+        _yc := cb_sym(b, csym, st, 2)
+        if m == 0xAA64:
+            cb_rel(b, st, 0, 4, yimp)
+            cb_rel(b, st, 4, 7, yimp)
+        else m == 0x14C:
+            cb_rel(b, st, 2, 6, yimp)
+        else:
+            cb_rel(b, st, 2, 4, yimp)
+        end
+    end
+    yh := cb_sym(b, "_head_" + pfx, 0, 2)
+    cb_rel(b, s7, 0, nb, yh)
+    cb_rel(b, s5, 0, nb, y6)
+    cb_rel(b, s4, 0, nb, y6)
+    ret cb_done(b)
+end
+
+func cb_done(b &: CoffB): Vector<u8>:
+    v := cb_bytes(b)
+    each d in b.sdata:
+        d.free()
+    end
+    b.sname.free()
+    b.sflag.free()
+    b.sdata.free()
+    b.rsec.free()
+    b.roff.free()
+    b.rtype.free()
+    b.rsym.free()
+    b.yname.free()
+    b.ysec.free()
+    b.yclass.free()
+    ret v
+end
+
+func ar_field(h &: Vector<u8>, s: str, w: int):
+    sp := (s as void*) as u8*
+    repeat w in i:
+        h.push(i < str.Len(s) ? sp[i] : (32 as u8))
+    end
+end
+
+func ar_put(o &: Vector<u8>, name: str, data &: Vector<u8>):
+    ar_field(o, name, 16)
+    ar_field(o, "0", 12)
+    ar_field(o, "0", 6)
+    ar_field(o, "0", 6)
+    ar_field(o, "644", 8)
+    ar_field(o, str.FromInt(data.len() as i64), 10)
+    o.push(96 as u8)
+    o.push(10 as u8)
+    each x in data:
+        o.push(x)
+    end
+    if (data.len() % 2) == 1:
+        o.push(10 as u8)
+    end
+end
+
+pub func WriteImportLib(l &: Nl, path: str): bool:
+    m := implib_mach(l)
+    pfx := implib_prefix(path)
+    cpre := m == 0x14C ? "_" : ""
+    mut mname := Vector {} as Vector<str>
+    mut mdata := Vector {} as Vector<Vector<u8>>
+    mut ysym := Vector {} as Vector<str>
+    mut ymem := Vector {} as Vector<int>
+    mname.push(pfx + "_h.o")
+    mdata.push(implib_head(m, pfx))
+    ysym.push("_head_" + pfx)
+    ymem.push(0)
+    repeat l.pe_exp.len() in k:
+        nm := l.pe_exp[k]
+        code := pe_exp_code(l, l.pe_expg[k])
+        ks := str.FromInt(k as i64)
+        mut pad := ""
+        repeat 5 - str.Len(ks):
+            pad = pad + "0"
+        end
+        mname.push(pfx + "_s" + pad + ks + ".o")
+        mdata.push(implib_sym(m, pfx, cpre + nm, nm, k, code))
+        if code:
+            ysym.push(cpre + nm)
+            ymem.push(mname.len() - 1)
+        end
+        ysym.push("__imp_" + cpre + nm)
+        ymem.push(mname.len() - 1)
+    end
+    mname.push(pfx + "_t.o")
+    mdata.push(implib_tail(m, pfx, l.pe_dllname))
+    ysym.push(pfx + "_iname")
+    ymem.push(mname.len() - 1)
+    mut longs := Vector {} as Vector<u8>
+    mut hname := Vector {} as Vector<str>
+    each mn in mname:
+        if str.Len(mn) <= 15:
+            hname.push(mn + "/")
+        else:
+            hname.push("/" + str.FromInt(longs.len() as i64))
+            push_cstr(longs, mn + "/\n")
+            longs.pop()
+        end
+    end
+    mut isz := 4 + 4 * ysym.len()
+    each ys in ysym:
+        isz += str.Len(ys) + 1
+    end
+    mut pos := 8 + 60 + isz + (isz % 2)
+    if longs.len() > 0:
+        pos += 60 + longs.len() + (longs.len() % 2)
+    end
+    mut moff := Vector {} as Vector<i64>
+    each md in mdata:
+        moff.push(pos as i64)
+        pos += 60 + md.len() + (md.len() % 2)
+    end
+    mut idx := Vector {} as Vector<u8>
+    be32(idx, ysym.len() as i64)
+    each ym in ymem:
+        be32(idx, moff[ym])
+    end
+    each ys2 in ysym:
+        push_cstr(idx, ys2)
+    end
+    mut o := Vector {} as Vector<u8>
+    push_cstr(o, "!<arch>\n")
+    o.pop()
+    ar_put(o, "/", idx)
+    if longs.len() > 0:
+        ar_put(o, "//", longs)
+    end
+    repeat mdata.len() in q:
+        ar_put(o, hname[q], mdata[q])
+    end
+    mut ok := false
+    f := fopen(path, "wb")
+    if f != null:
+        w := fwrite(o.data as void*, 1 as u64, o.len() as u64, f)
+        _c := fclose(f)
+        ok = (w as i64) == (o.len() as i64)
+    end
+    each md2 in mdata:
+        md2.free()
+    end
+    o.free()
+    idx.free()
+    longs.free()
+    moff.free()
+    mname.free()
+    mdata.free()
+    hname.free()
+    ysym.free()
+    ymem.free()
+    ret ok
+end

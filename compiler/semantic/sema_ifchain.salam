@@ -21,10 +21,11 @@ include tok "../token.salam"
 include at "../ast.salam"
 include i18 "../i18n.salam"
 include lg "../logger.salam"
-include lp "../langpack.salam"
-include src "../source.salam"
 
 pub const IFCHAIN_CODE := 145
+
+const IC_EQ := 0
+const IC_RANGE := 0 - 1
 
 mut g_ic_seen := HashMap {} as HashMap<str, bool>
 mut g_ic_lib := HashMap {} as HashMap<str, bool>
@@ -42,6 +43,16 @@ struct IcSeq:
     pub last_of_stmt: Vector<bool> = Vector {}
     pub tail_else: Vector<int> = Vector {}
     pub labels: Vector<int> = Vector {}
+    pub lab_kind: Vector<int> = Vector {}
+    pub lab_hi: Vector<int> = Vector {}
+end
+
+struct IcAtom:
+    pub ok: bool = false
+    pub key: str = ""
+    pub subj: int = 0
+    pub kind: int = 0
+    pub cst: int = 0
 end
 
 func ic_free(q &: IcSeq):
@@ -57,6 +68,8 @@ func ic_free(q &: IcSeq):
     q.last_of_stmt.free()
     q.tail_else.free()
     q.labels.free()
+    q.lab_kind.free()
+    q.lab_hi.free()
 end
 
 func ic_clear(q &: IcSeq):
@@ -72,6 +85,16 @@ func ic_clear(q &: IcSeq):
     q.last_of_stmt.clear()
     q.tail_else.clear()
     q.labels.clear()
+    q.lab_kind.clear()
+    q.lab_hi.clear()
+end
+
+func ic_labels_truncate(q &: IcSeq, n: int):
+    until q.labels.len() > n:
+        q.labels.pop()
+        q.lab_kind.pop()
+        q.lab_hi.pop()
+    end
 end
 
 func ic_library_file(file: str): bool:
@@ -89,13 +112,39 @@ func ic_library_file(file: str): bool:
     ret lib
 end
 
-func ic_type_ok(ts: str): bool:
+func ic_int_type(ts: str): bool:
     switch ts:
-        "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "usize", "size", "char", "uchar", "str":
+        "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "usize", "size":
             ret true
         end
     end
     ret false
+end
+
+func ic_type_ok(ts: str): bool:
+    ret ic_int_type(ts) or str.Equals(ts, "char") or str.Equals(ts, "uchar") or str.Equals(ts, "str")
+end
+
+func ic_order_op(op: int): bool:
+    ret op == tok.TK_LT or op == tok.TK_LE or op == tok.TK_GT or op == tok.TK_GE
+end
+
+func ic_flip(kind: int): int:
+    switch kind:
+        tok.TK_LT:
+            ret tok.TK_GT
+        end
+        tok.TK_GT:
+            ret tok.TK_LT
+        end
+        tok.TK_LE:
+            ret tok.TK_GE
+        end
+        tok.TK_GE:
+            ret tok.TK_LE
+        end
+    end
+    ret kind
 end
 
 func ic_const_sym(s &: Sema, a &: at.Ast, nid: int): int:
@@ -119,12 +168,56 @@ func ic_const_sym(s &: Sema, a &: at.Ast, nid: int): int:
     ret 0
 end
 
+func ic_enum_sym(s &: Sema, a &: at.Ast, subj: int): int:
+    ts := at.Get(a, subj).type_str
+    if str.Len(ts) == 0:
+        ret 0
+    end
+    sid := scope_lookup(s, s.cur, ts)
+    if sid == 0 or sym_at(s, sid).kind != SYM_ENUM or sym_at(s, sid).enum_data:
+        ret 0
+    end
+    ret sid
+end
+
+func ic_enum_member(s &: Sema, a &: at.Ast, esym: int, nid: int): int:
+    n := at.Get(a, nid)
+    if n.kind != at.AST_MEMBER or n.a == 0 or at.KindOf(a, n.a) != at.AST_IDENTIFIER:
+        ret 0
+    end
+    if scope_lookup(s, s.cur, at.Get(a, n.a).name) != esym:
+        ret 0
+    end
+    m := scope_lookup_local(s, sym_at(s, esym).members, n.name)
+    if m != 0 and sym_at(s, m).kind == SYM_ENUM_MEMBER:
+        ret m
+    end
+    ret 0
+end
+
+func ic_enum_total(s &: Sema, esym: int): int:
+    syms := scope_at(s, sym_at(s, esym).members).symbols
+    mut total := 0
+    repeat syms.len() in i:
+        if sym_at(s, syms.get(i)).kind == SYM_ENUM_MEMBER:
+            total += 1
+        end
+    end
+    ret total
+end
+
 func ic_label_id(s &: Sema, a &: at.Ast, nid: int): str:
     n := at.Get(a, nid)
+    if n.kind == at.AST_MEMBER and n.a != 0 and at.KindOf(a, n.a) == at.AST_IDENTIFIER:
+        root := scope_lookup(s, s.cur, at.Get(a, n.a).name)
+        if root != 0 and sym_at(s, root).kind == SYM_ENUM:
+            m := ic_enum_member(s, a, root, nid)
+            ret m != 0 ? "m" + m : ""
+        end
+    end
     mut lit := nid
-    mut sid := 0
     if n.kind != at.AST_LITERAL:
-        sid = ic_const_sym(s, a, nid)
+        sid := ic_const_sym(s, a, nid)
         if sid == 0:
             ret ""
         end
@@ -186,92 +279,153 @@ func ic_key(s &: Sema, a &: at.Ast, nid: int): str:
     end
     if n.kind == at.AST_MEMBER:
         ka := ic_key(s, a, n.a)
-        if str.Len(ka) == 0:
-            ret ""
-        end
-        ret ka + "." + n.name
+        ret str.Len(ka) == 0 ? "" : ka + "." + n.name
     end
     if n.kind == at.AST_INDEX:
         ka := ic_key(s, a, n.a)
         kb := ic_key(s, a, n.b)
-        if str.Len(ka) == 0 or str.Len(kb) == 0:
-            ret ""
-        end
-        ret ka + "[" + kb + "]"
+        ret str.Len(ka) == 0 or str.Len(kb) == 0 ? "" : ka + "[" + kb + "]"
     end
     if n.kind == at.AST_CAST:
         ka := ic_key(s, a, n.a)
-        if str.Len(ka) == 0 or str.Len(n.type_str) == 0:
-            ret ""
-        end
-        ret "(" + ka + " as " + n.type_str + ")"
+        ret str.Len(ka) == 0 or str.Len(n.type_str) == 0 ? "" : "(" + ka + " as " + n.type_str + ")"
     end
     if n.kind == at.AST_BINARY and ic_arith_op(n.op):
         ka := ic_key(s, a, n.a)
         kb := ic_key(s, a, n.b)
-        if str.Len(ka) == 0 or str.Len(kb) == 0:
-            ret ""
-        end
-        ret "(" + ka + " " + n.op + " " + kb + ")"
+        ret str.Len(ka) == 0 or str.Len(kb) == 0 ? "" : "(" + ka + " " + n.op + " " + kb + ")"
     end
     if n.kind == at.AST_UNARY and (n.op == tok.TK_MINUS or n.op == tok.TK_TILDE):
         ka := ic_key(s, a, n.a)
-        if str.Len(ka) == 0:
-            ret ""
-        end
-        ret "(u" + n.op + " " + ka + ")"
+        ret str.Len(ka) == 0 ? "" : "(u" + n.op + " " + ka + ")"
     end
     ret ""
 end
 
-func ic_subject_ok(a &: at.Ast, nid: int): bool:
-    n := at.Get(a, nid)
-    if n.kind == at.AST_LITERAL:
+func ic_subject_ok(a &: at.Ast, nid: int, esym: int): bool:
+    if at.Get(a, nid).kind == at.AST_LITERAL:
         ret false
     end
-    ret ic_type_ok(n.type_str)
+    ret esym != 0 or ic_type_ok(at.Get(a, nid).type_str)
 end
 
-func ic_eq_atom(s &: Sema, a &: at.Ast, q &: IcSeq, subj: int, cst: int, cur_key &: str, cur_subj &: int): bool:
-    if not ic_subject_ok(a, subj) or not ic_const_ok(s, a, cst):
+func ic_side(s &: Sema, a &: at.Ast, subj: int, cst: int, kind: int): IcAtom:
+    mut r := IcAtom {}
+    esym := ic_enum_sym(s, a, subj)
+    if not ic_subject_ok(a, subj, esym):
+        ret r
+    end
+    if esym != 0:
+        if kind != IC_EQ or ic_enum_member(s, a, esym, cst) == 0:
+            ret r
+        end
+    else:
+        if not ic_const_ok(s, a, cst):
+            ret r
+        end
+        if kind != IC_EQ and not ic_int_type(at.Get(a, subj).type_str):
+            ret r
+        end
+    end
+    key := ic_key(s, a, subj)
+    if str.Len(key) == 0:
+        ret r
+    end
+    r.ok = true
+    r.key = key
+    r.subj = subj
+    r.kind = kind
+    r.cst = cst
+    ret r
+end
+
+func ic_pair(s &: Sema, a &: at.Ast, x: int, y: int, kind: int): IcAtom:
+    r := ic_side(s, a, x, y, kind)
+    if r.ok:
+        ret r
+    end
+    ret ic_side(s, a, y, x, ic_flip(kind))
+end
+
+func ic_is_str_equals(s &: Sema, a &: at.Ast, call: int): bool:
+    callee := at.Get(a, at.Get(a, call).a)
+    if callee.kind != at.AST_MEMBER or callee.a == 0 or at.KindOf(a, callee.a) != at.AST_IDENTIFIER:
         ret false
     end
-    k := ic_key(s, a, subj)
-    if str.Len(k) == 0:
+    pk := scope_lookup(s, s.cur, at.Get(a, callee.a).name)
+    if pk == 0 or sym_at(s, pk).kind != SYM_PACKAGE or not str.Equals(sym_at(s, pk).pkgname, "str"):
         ret false
     end
+    m := scope_lookup_local(s, sym_at(s, pk).members, callee.name)
+    ret m != 0 and str.Equals(sym_at(s, m).name, "Equals")
+end
+
+func ic_cmp(s &: Sema, a &: at.Ast, nid: int): IcAtom:
+    n := at.Get(a, nid)
+    if n.kind == at.AST_BINARY:
+        if n.op == tok.TK_EQ:
+            ret ic_pair(s, a, n.a, n.b, IC_EQ)
+        end
+        if ic_order_op(n.op):
+            ret ic_pair(s, a, n.a, n.b, n.op)
+        end
+    else n.kind == at.AST_CALL and n.list.len() == 2 and ic_is_str_equals(s, a, nid):
+        ret ic_pair(s, a, n.list.get(0), n.list.get(1), IC_EQ)
+    end
+    ret IcAtom {}
+end
+
+func ic_range(s &: Sema, a &: at.Ast, l: IcAtom, r: IcAtom, lo &: int, hi &: int): bool:
+    if l.kind == tok.TK_GE and r.kind == tok.TK_LE:
+        lo = l.cst
+        hi = r.cst
+    else l.kind == tok.TK_LE and r.kind == tok.TK_GE:
+        lo = r.cst
+        hi = l.cst
+    else:
+        ret false
+    end
+    mut lv := 0 as i64
+    mut hv := 0 as i64
+    if fold_operand_int(s, a, lo, lv) and fold_operand_int(s, a, hi, hv) and lv > hv:
+        ret false
+    end
+    ret true
+end
+
+func ic_commit(q &: IcSeq, ac: IcAtom, hi: int, cur_key &: str, cur_subj &: int): bool:
     if str.Len(cur_key) == 0:
-        cur_key = k
-        cur_subj = subj
-    else not str.Equals(cur_key, k):
+        cur_key = ac.key
+        cur_subj = ac.subj
+    else not str.Equals(cur_key, ac.key):
         ret false
     end
-    q.labels.push(cst)
+    q.labels.push(ac.cst)
+    q.lab_kind.push(ac.kind)
+    q.lab_hi.push(hi)
     ret true
 end
 
 func ic_atoms(s &: Sema, a &: at.Ast, q &: IcSeq, nid: int, cur_key &: str, cur_subj &: int): bool:
     n := at.Get(a, nid)
-    if n.kind != at.AST_BINARY:
-        ret false
-    end
-    if n.op == tok.TK_OR:
+    if n.kind == at.AST_BINARY and n.op == tok.TK_OR:
         ret ic_atoms(s, a, q, n.a, cur_key, cur_subj) and ic_atoms(s, a, q, n.b, cur_key, cur_subj)
     end
-    if n.op != tok.TK_EQ:
-        ret false
+    if n.kind == at.AST_BINARY and n.op == tok.TK_AND:
+        l := ic_cmp(s, a, n.a)
+        r := ic_cmp(s, a, n.b)
+        mut lo := 0
+        mut hi := 0
+        if not (l.ok and r.ok and str.Equals(l.key, r.key) and ic_range(s, a, l, r, lo, hi)):
+            ret false
+        end
+        mut ac := l
+        ac.kind = IC_RANGE
+        ac.cst = lo
+        ret ic_commit(q, ac, hi, cur_key, cur_subj)
     end
-    mark := q.labels.len()
-    if ic_eq_atom(s, a, q, n.a, n.b, cur_key, cur_subj):
-        ret true
-    end
-    if ic_eq_atom(s, a, q, n.b, n.a, cur_key, cur_subj):
-        ret true
-    end
-    until q.labels.len() > mark:
-        q.labels.pop()
-    end
-    ret false
+    single := ic_cmp(s, a, nid)
+    ret single.ok and ic_commit(q, single, 0, cur_key, cur_subj)
 end
 
 func ic_add_link(s &: Sema, a &: at.Ast, q &: IcSeq, stmt: int, cond: int, body: int, first: bool):
@@ -286,9 +440,7 @@ func ic_add_link(s &: Sema, a &: at.Ast, q &: IcSeq, stmt: int, cond: int, body:
     mut subj := 0
     good := ic_atoms(s, a, q, cond, key, subj)
     if not good:
-        until q.labels.len() > lo:
-            q.labels.pop()
-        end
+        ic_labels_truncate(q, lo)
         key = ""
         subj = 0
     end
@@ -299,308 +451,6 @@ func ic_add_link(s &: Sema, a &: at.Ast, q &: IcSeq, stmt: int, cond: int, body:
     q.lab_to.push(q.labels.len())
 end
 
-func ic_break_escapes(a &: at.Ast, nid: int, depth: int): bool:
-    if nid == 0:
-        ret false
-    end
-    n := at.Get(a, nid)
-    if n.kind == at.AST_BREAK:
-        ret at.BreakLevels(a, nid) > depth
-    end
-    if n.kind == at.AST_FUNC_DEF or n.kind == at.AST_LAMBDA:
-        ret false
-    end
-    mut d := depth
-    if n.kind == at.AST_UNTIL or n.kind == at.AST_FOR or n.kind == at.AST_REPEAT or n.kind == at.AST_EACH or n.kind == at.AST_SWITCH:
-        d = depth + 1
-    end
-    if ic_break_escapes(a, n.a, d) or ic_break_escapes(a, n.b, d) or ic_break_escapes(a, n.c, d) or ic_break_escapes(a, n.d, d):
-        ret true
-    end
-    repeat n.list.len() in i:
-        if ic_break_escapes(a, n.list.get(i), d):
-            ret true
-        end
-    end
-    ret false
-end
-
-func ic_all_ws(text: str, b: int, e: int): bool:
-    mut i := b
-    until i < e:
-        c := byte_at(text, i)
-        if c != 32 and c != 9 and c != 10 and c != 13:
-            ret false
-        end
-        i += 1
-    end
-    ret true
-end
-
-func ic_has_comment(text: str, b: int, e: int): bool:
-    if e <= b:
-        ret false
-    end
-    piece := str.Substr(text, b, e - b)
-    ret str.Contains(piece, "//") or str.Contains(piece, "/*")
-end
-
-func ic_line_start(text: str, pos: int): int:
-    mut p := pos
-    until p > 0 and byte_at(text, p - 1) != 10:
-        p -= 1
-    end
-    ret p
-end
-
-func ic_trim_end(text: str, b: int, e: int): int:
-    mut p := e
-    until p > b and (byte_at(text, p - 1) == 32 or byte_at(text, p - 1) == 9 or byte_at(text, p - 1) == 10 or byte_at(text, p - 1) == 13):
-        p -= 1
-    end
-    ret p
-end
-
-func ic_indent_body(piece: str, lead: str, unit: str): str:
-    mut out := lead
-    mut pos := 0
-    n := str.Len(piece)
-    mut first := true
-    until pos <= n:
-        nl := str.IndexFrom(piece, "\n", pos)
-        mut line_end := nl
-        if nl < 0:
-            line_end = n
-        end
-        mut line := str.Substr(piece, pos, line_end - pos)
-        if str.EndsWith(line, "\r"):
-            line = str.Substr(line, 0, str.Len(line) - 1)
-        end
-        if first:
-            out = out + line
-            first = false
-        else str.Len(line) > 0:
-            out = out + "\n" + unit + line
-        else:
-            out = out + "\n"
-        end
-        if nl < 0:
-            break
-        end
-        pos = nl + 1
-    end
-    ret out
-end
-
-func ic_body_range(a &: at.Ast, text: str, body: int, rb &: int, re &: int): bool:
-    cnt := at.ChildCount(a, body)
-    if cnt == 0:
-        ret false
-    end
-    fn := at.Get(a, at.Child(a, body, 0))
-    ln := at.Get(a, at.Child(a, body, cnt - 1))
-    rb = fn.begin_index as int
-    re = ic_trim_end(text, rb, ln.end_index as int)
-    ret rb < re and re <= str.Len(text)
-end
-
-func ic_balanced_end(text: str, b: int, e0: int): int:
-    n := str.Len(text)
-    mut depth := 0
-    mut i := b
-    until i < e0:
-        c := byte_at(text, i)
-        if c == 34 or c == 39:
-            i += 1
-            until i < e0 and byte_at(text, i) != c:
-                if byte_at(text, i) == 92:
-                    i += 1
-                end
-                i += 1
-            end
-        else c == 40 or c == 91:
-            depth += 1
-        else c == 41 or c == 93:
-            depth -= 1
-            if depth < 0:
-                ret 0 - 1
-            end
-        end
-        i += 1
-    end
-    mut e := e0
-    until depth > 0:
-        if e >= n:
-            ret 0 - 1
-        end
-        c2 := byte_at(text, e)
-        if c2 == 41 or c2 == 93:
-            depth -= 1
-            e += 1
-        else c2 == 32 or c2 == 9:
-            e += 1
-        else:
-            ret 0 - 1
-        end
-    end
-    ret e
-end
-
-func ic_expr_text(a &: at.Ast, text: str, nid: int, out &: str): bool:
-    n := at.Get(a, nid)
-    b := n.begin_index as int
-    e := n.end_index as int
-    if b < 0 or e <= b or e > str.Len(text):
-        ret false
-    end
-    fixed := ic_balanced_end(text, b, e)
-    if fixed < 0:
-        ret false
-    end
-    out = str.Substr(text, b, fixed - b)
-    ret true
-end
-
-func ic_if_start(text: str, at_cond: int, kw_if: str): int:
-    mut p := at_cond
-    until p > 0 and (byte_at(text, p - 1) == 32 or byte_at(text, p - 1) == 9):
-        p -= 1
-    end
-    k := str.Len(kw_if)
-    if p < k or not str.Equals(str.Substr(text, p - k, k), kw_if):
-        ret 0 - 1
-    end
-    ret p - k
-end
-
-func ic_try_fix(s &: Sema, a &: at.Ast, q &: IcSeq, i: int, j: int, f &: lg.Fix): bool:
-    if not q.first_of_stmt.get(i) or not q.last_of_stmt.get(j - 1):
-        ret false
-    end
-    text := src.Peek(s.file)
-    tn := str.Len(text)
-    if tn == 0:
-        ret false
-    end
-    kw_if := kw_spell(s, s.file, tok.TK_KW_IF)
-    run_b := ic_if_start(text, at.Get(a, q.stmt.get(i)).begin_index as int, kw_if)
-    if run_b < 0:
-        ret false
-    end
-    last_stmt := q.stmt.get(j - 1)
-    run_e := ic_trim_end(text, run_b, at.Get(a, last_stmt).end_index as int)
-    if run_b < 0 or run_e > tn or run_b >= run_e:
-        ret false
-    end
-    ls := ic_line_start(text, run_b)
-    if not ic_all_ws(text, ls, run_b):
-        ret false
-    end
-    lead := str.Substr(text, ls, run_b - ls)
-    subj := q.subj.get(i)
-    sn := at.Get(a, subj)
-    mut subj_text := ""
-    if not ic_expr_text(a, text, subj, subj_text):
-        ret false
-    end
-    if sn.kind == at.AST_BINARY or sn.kind == at.AST_CAST or sn.kind == at.AST_UNARY:
-        subj_text = "(" + subj_text + ")"
-    end
-    mut unit := "    "
-    if str.IndexOf(lead, "\t") >= 0:
-        unit = "\t"
-    end
-    pack := FilePack(s, s.file)
-    fa := pack == lp.LP_FA
-    kw_switch := kw_spell(s, s.file, tok.TK_KW_SWITCH)
-    kw_end := kw_spell(s, s.file, tok.TK_KW_END)
-    kw_else := kw_spell(s, s.file, tok.TK_KW_ELSE)
-    kw_break := kw_spell(s, s.file, tok.TK_KW_BREAK)
-    comma := fa ? "\xD8\x8C " : ", "
-    mut out := kw_switch + " " + subj_text + ":"
-    mut cursor := run_b
-    mut k := i
-    until k < j:
-        body := q.body.get(k)
-        mut rb := 0
-        mut re := 0
-        if not ic_body_range(a, text, body, rb, re):
-            ret false
-        end
-        if rb < cursor or ic_break_escapes(a, body, 0):
-            ret false
-        end
-        piece := str.Substr(text, rb, re - rb)
-        if str.Contains(piece, "\"\"\"") or str.Contains(piece, "`"):
-            ret false
-        end
-        if ic_has_comment(text, cursor, rb):
-            ret false
-        end
-        ln0 := ic_line_start(text, rb)
-        if ln0 <= ic_line_start(text, at.Get(a, q.cond.get(k)).begin_index as int) or not ic_all_ws(text, ln0, rb):
-            ret false
-        end
-        mut labels := ""
-        mut li := q.lab_from.get(k)
-        until li < q.lab_to.get(k):
-            mut ltxt := ""
-            if not ic_expr_text(a, text, q.labels.get(li), ltxt):
-                ret false
-            end
-            if str.Len(labels) > 0:
-                labels = labels + comma
-            end
-            labels = labels + ltxt
-            li += 1
-        end
-        out = out + "\n" + lead + unit + labels + ":\n" + ic_indent_body(piece, lead + unit + unit, unit)
-        last_arm := k == j - 1 and q.tail_else.get(k) == 0
-        if not sema_stmt_terminates(s, a, body) and not last_arm:
-            out = out + "\n" + lead + unit + unit + kw_break
-        end
-        out = out + "\n" + lead + unit + kw_end
-        cursor = re
-        k += 1
-    end
-    tail := q.tail_else.get(j - 1)
-    if tail != 0:
-        mut rb2 := 0
-        mut re2 := 0
-        if not ic_body_range(a, text, tail, rb2, re2):
-            ret false
-        end
-        if rb2 < cursor or ic_break_escapes(a, tail, 0):
-            ret false
-        end
-        piece2 := str.Substr(text, rb2, re2 - rb2)
-        if str.Contains(piece2, "\"\"\"") or str.Contains(piece2, "`"):
-            ret false
-        end
-        if ic_has_comment(text, cursor, rb2):
-            ret false
-        end
-        ln1 := ic_line_start(text, rb2)
-        if ln1 <= ic_line_start(text, cursor) or not ic_all_ws(text, ln1, rb2):
-            ret false
-        end
-        out = out + "\n" + lead + unit + kw_else + ":\n" + ic_indent_body(piece2, lead + unit + unit, unit) + "\n" + lead + unit + kw_end
-        cursor = re2
-    end
-    if ic_has_comment(text, cursor, run_e):
-        ret false
-    end
-    out = out + "\n" + lead + kw_end
-    f.index = run_b
-    f.length = run_e - run_b
-    f.text = out
-    f.title = co.Format1(i18.Tr("Rewrite as a '%s' statement"), co.ArgStr(kw_switch))
-    f.mode = lg.FIX_RANGE
-    f.preferred = false
-    f.safe = false
-    ret true
-end
-
 func ic_labels_distinct(s &: Sema, a &: at.Ast, q &: IcSeq, i: int, j: int): bool:
     mut seen := HashMap {} as HashMap<str, bool>
     defer seen.free()
@@ -608,14 +458,13 @@ func ic_labels_distinct(s &: Sema, a &: at.Ast, q &: IcSeq, i: int, j: int): boo
     until k < j:
         mut li := q.lab_from.get(k)
         until li < q.lab_to.get(k):
-            id := ic_label_id(s, a, q.labels.get(li))
-            if str.Len(id) == 0:
-                ret false
+            if q.lab_kind.get(li) == IC_EQ:
+                id := ic_label_id(s, a, q.labels.get(li))
+                if str.Len(id) == 0 or seen.has(id):
+                    ret false
+                end
+                seen.put(id, true)
             end
-            if seen.has(id):
-                ret false
-            end
-            seen.put(id, true)
             li += 1
         end
         k += 1
@@ -646,6 +495,19 @@ func ic_subject_text(a &: at.Ast, nid: int): str:
     ret "..."
 end
 
+func ic_queue_fix(fx: lg.Fix, imp: lg.Fix, drop: bool):
+    mut primary := fx
+    primary.safe = g_sm_ifchain == 3
+    primary.preferred = g_sm_ifchain == 3
+    queue_fix(primary)
+    if drop:
+        mut extra := imp
+        extra.safe = primary.safe
+        extra.preferred = primary.preferred
+        queue_fix(extra)
+    end
+end
+
 func ic_report(s &: Sema, a &: at.Ast, q &: IcSeq, i: int, j: int, stop: int):
     first := at.Get(a, q.cond.get(i))
     seen_key := s.file + ":" + first.begin_index
@@ -668,11 +530,10 @@ func ic_report(s &: Sema, a &: at.Ast, q &: IcSeq, i: int, j: int, stop: int):
         )
     end
     mut fx := fix_at(sp)
-    if ic_labels_distinct(s, a, q, i, j) and ic_try_fix(s, a, q, i, j, fx):
-        fx.rec = 0
-        fx.safe = g_sm_ifchain == 3
-        fx.preferred = g_sm_ifchain == 3
-        queue_fix(fx)
+    mut imp := fix_at(sp)
+    mut drop := false
+    if ic_labels_distinct(s, a, q, i, j) and ic_try_fix(s, a, q, i, j, fx, imp, drop):
+        ic_queue_fix(fx, imp, drop)
     end
     msg := co.Format2(
         i18.Tr("%d consecutive comparisons of '%s' against constants could be a switch"), co.ArgInt((j - i) as i64), co.ArgStr(subj)
@@ -697,11 +558,7 @@ func ic_flush(s &: Sema, a &: at.Ast, q &: IcSeq):
             j += 1
         end
         if j - i >= g_sm_ifchain_min:
-            mut stop := 0 - 1
-            if j < n:
-                stop = j
-            end
-            ic_report(s, a, q, i, j, stop)
+            ic_report(s, a, q, i, j, j < n ? j : 0 - 1)
         end
         i = j
     end
@@ -758,8 +615,7 @@ pub func SemaCheckIfChains(s &: Sema, a &: at.Ast, block: int):
             ic_flush(s, a, q)
             continue
         end
-        exclusive := ic_unroll(s, a, q, st)
-        if not exclusive:
+        if not ic_unroll(s, a, q, st):
             ic_flush(s, a, q)
         end
     end

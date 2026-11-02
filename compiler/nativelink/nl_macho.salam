@@ -49,6 +49,7 @@ pub struct Mo:
     pub dw_vm: i64 = 0
     pub com_g: Vector<int> = Vector {}
     pub unw_n: int = 0
+    pub seg0: int = 1
 end
 
 func is_macho(p: u8*, base: i64): bool:
@@ -192,6 +193,9 @@ func add_macho(l &: Nl, f: int, base: i64, size: i64, label: str):
                 end
             else:
                 sym_merge(l, gi, o, sec, v, (desc & 0x80) != 0)
+                if l.g_obj[gi] == o:
+                    l.g_hid[gi] = (ty & 0x10) != 0
+                end
             end
         end
         l.os_glob.push(gi)
@@ -456,6 +460,9 @@ func mo_ncmds_size(l &: Nl, t &: Mo, nsect: int): i64:
         dl += 24 + ((str.Len(dn) + 8) / 8) * 8
     end
     dw := l.dg_name.len() > 0 ? 72 + 80 * l.dg_name.len() : 0
+    if l.shared:
+        ret 72 + 80 * nsect + 72 + 72 + 72 + 48 + 24 + 80 + 24 + 32 + 24 + ((str.Len(l.soname) + 8) / 8) * 8 + 56 + 16 + 16 + dl + dw
+    end
     ret 72 + 72 + 80 * nsect + 72 + 72 + 72 + 48 + 24 + 80 + 32 + 24 + 32 + 24 + 56 + 16 + 16 + dl + dw
 end
 
@@ -478,7 +485,7 @@ end
 
 func mo_ordinal(l &: Nl, g: int, dl: Vector<str>): int:
     if not l.dy_sym.has(l.g_name[g]):
-        ret 1
+        ret l.dy_flat ? 0 - 2 : 1
     end
     nm := l.dy_name.get(l.dy_sym.get(l.g_name[g]))
     repeat dl.len() in i:
@@ -636,7 +643,11 @@ func macho_link(l &: Nl, out: str):
         t.fpos.push(0 as i64)
         t.align.push(1 as i64)
     end
-    mh := glob_find(l, "__mh_execute_header")
+    if l.shared:
+        t.base = 0 as i64
+        t.seg0 = 0
+    end
+    mh := glob_find(l, l.shared ? "__mh_dylib_header" : "__mh_execute_header")
     dso := glob_find(l, "___dso_handle")
     each sg in [mh, dso]:
         if sg >= 0 and l.g_state[sg] == SY_UNDEF:
@@ -705,7 +716,7 @@ func macho_link(l &: Nl, out: str):
         end
     end
     ent := glob_find(l, "_main")
-    if ent < 0 or l.g_state[ent] != SY_DEF:
+    if not l.shared and (ent < 0 or l.g_state[ent] != SY_DEF):
         nl_fail(l, "cannot link: no '_main' function")
         ret
     end
@@ -1048,13 +1059,13 @@ end
 func mo_seg_of(t &: Mo, addr: i64, segi &: int, off &: i64):
     a := addr - t.base
     if a < t.text_end:
-        segi = 1
+        segi = t.seg0
         off = a
     else a < t.dc_end:
-        segi = 2
+        segi = t.seg0 + 1
         off = a - t.dc_start
     else:
-        segi = 3
+        segi = t.seg0 + 2
         off = a - t.d_start
     end
 end
@@ -1101,7 +1112,9 @@ func mo_bind_ops(l &: Nl, t &: Mo): Vector<u8>:
         mut off := 0 as i64
         mo_seg_of(t, t.bind_at[i], sg, off)
         ordn := mo_ordinal(l, t.bind_g[i], dl)
-        if ordn < 16:
+        if ordn < 0:
+            o.push((0x30 | (ordn & 15)) as u8)
+        else ordn < 16:
             o.push((0x10 | ordn) as u8)
         else:
             o.push(0x20 as u8)
@@ -1214,7 +1227,7 @@ func mo_write(l &: Nl, t &: Mo, buf: u8*, out: str):
             tb_le(syms, tb_name(l, strs, l.g_name[g]), 4)
             syms.push((def ? 0x0f : 0x01) as u8)
             syms.push((def ? mo_secno(l, t, l.g_sec[g]) : 0) as u8)
-            tb_le(syms, (def ? 0 : (mo_ordinal(l, g, dyl) << 8)) as i64, 2)
+            tb_le(syms, (def ? 0 : ((mo_ordinal(l, g, dyl) & 255) << 8)) as i64, 2)
             tb_le(syms, def ? mo_sym_g(l, g) : (0 as i64), 8)
             nsym += 1
             if imp:
@@ -1244,6 +1257,19 @@ func mo_write(l &: Nl, t &: Mo, buf: u8*, out: str):
     bd_off := t.le_off + (le.len() as i64)
     each b2 in bind:
         le.push(b2)
+    end
+    ex_off := t.le_off + (le.len() as i64)
+    mut ex_len := 0
+    if l.shared:
+        trie := mo_export_trie(l, t)
+        ex_len = trie.len()
+        each b6 in trie:
+            le.push(b6)
+        end
+        until (le.len() % 8) != 0:
+            le.push(0 as u8)
+        end
+        trie.free()
     end
     sym_off := t.le_off + (le.len() as i64)
     each b3 in syms:
@@ -1288,14 +1314,20 @@ func mo_write(l &: Nl, t &: Mo, buf: u8*, out: str):
     tb_le(h, 0xFEEDFACF as i64, 4)
     tb_le(h, (l.mach == EM_X86_64 ? 0x01000007 : 0x0100000C) as i64, 4)
     tb_le(h, (l.mach == EM_X86_64 ? 3 : 0) as i64, 4)
-    tb_le(h, 2 as i64, 4)
+    tb_le(h, (l.shared ? 6 : 2) as i64, 4)
     tb_le(h, 0 as i64, 4)
     tb_le(h, 0 as i64, 4)
-    tb_le(h, (mo_has(l, t, MO_TVARS) ? 0x00A00085 : 0x00200085) as i64, 4)
+    mut mflags := l.shared ? 0x00100085 : 0x00200085
+    if mo_has(l, t, MO_TVARS):
+        mflags = mflags | 0x00800000
+    end
+    tb_le(h, mflags as i64, 4)
     tb_le(h, 0 as i64, 4)
     mut ncmd := 0
-    mo_seg(h, "__PAGEZERO", 0 as i64, t.base, 0 as i64, 0 as i64, 0, 0, 0)
-    ncmd += 1
+    if not l.shared:
+        mo_seg(h, "__PAGEZERO", 0 as i64, t.base, 0 as i64, 0 as i64, 0, 0, 0)
+        ncmd += 1
+    end
     ntext := mo_count(l, t, [MO_TEXT, MO_STUBS, MO_CSTR, MO_TCONST, MO_EH, MO_UNW])
     mo_seg(h, "__TEXT", t.base, t.text_end, 0 as i64, t.text_end, 5, ntext, 0)
     ncmd += 1
@@ -1363,9 +1395,11 @@ func mo_write(l &: Nl, t &: Mo, buf: u8*, out: str):
     tb_le(h, rebase.len() as i64, 4)
     tb_le(h, bd_off, 4)
     tb_le(h, bind.len() as i64, 4)
-    repeat 6:
+    repeat 4:
         tb_le(h, 0 as i64, 4)
     end
+    tb_le(h, ex_len > 0 ? ex_off : (0 as i64), 4)
+    tb_le(h, ex_len as i64, 4)
     ncmd += 1
     tb_le(h, 2 as i64, 4)
     tb_le(h, 24 as i64, 4)
@@ -1391,10 +1425,21 @@ func mo_write(l &: Nl, t &: Mo, buf: u8*, out: str):
         tb_le(h, 0 as i64, 4)
     end
     ncmd += 1
-    tb_le(h, 0x0E as i64, 4)
-    tb_le(h, 32 as i64, 4)
-    tb_le(h, 12 as i64, 4)
-    tb_cstr(h, "/usr/lib/dyld")
+    if l.shared:
+        isz := 24 + ((str.Len(l.soname) + 8) / 8) * 8
+        tb_le(h, 0x0D as i64, 4)
+        tb_le(h, isz as i64, 4)
+        tb_le(h, 24 as i64, 4)
+        tb_le(h, 1 as i64, 4)
+        tb_le(h, 0x00010000 as i64, 4)
+        tb_le(h, 0x00010000 as i64, 4)
+        tb_cstr(h, l.soname)
+    else:
+        tb_le(h, 0x0E as i64, 4)
+        tb_le(h, 32 as i64, 4)
+        tb_le(h, 12 as i64, 4)
+        tb_cstr(h, "/usr/lib/dyld")
+    end
     until (h.len() % 8) != 0:
         h.push(0 as u8)
     end
@@ -1414,12 +1459,14 @@ func mo_write(l &: Nl, t &: Mo, buf: u8*, out: str):
     tb_le(h, 0x000B0000 as i64, 4)
     tb_le(h, 0 as i64, 4)
     ncmd += 1
-    ent := glob_find(l, "_main")
-    tb_le(h, 0x80000028 as i64, 4)
-    tb_le(h, 24 as i64, 4)
-    tb_le(h, mo_sym_g(l, ent) - t.base, 8)
-    tb_le(h, 0 as i64, 8)
-    ncmd += 1
+    if not l.shared:
+        ent := glob_find(l, "_main")
+        tb_le(h, 0x80000028 as i64, 4)
+        tb_le(h, 24 as i64, 4)
+        tb_le(h, mo_sym_g(l, ent) - t.base, 8)
+        tb_le(h, 0 as i64, 8)
+        ncmd += 1
+    end
     each dname in dyl:
         dsz := 24 + ((str.Len(dname) + 8) / 8) * 8
         tb_le(h, 0x0C as i64, 4)
@@ -1486,7 +1533,7 @@ func mo_write(l &: Nl, t &: Mo, buf: u8*, out: str):
     be64(cs, 0 as i64)
     be64(cs, 0 as i64)
     be64(cs, t.text_end)
-    be64(cs, 1 as i64)
+    be64(cs, (l.shared ? 0 : 1) as i64)
     ip := (ident as void*) as u8*
     repeat str.Len(ident) in ic:
         cs.push(ip[ic])

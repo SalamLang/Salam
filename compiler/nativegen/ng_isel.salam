@@ -35,7 +35,7 @@ func msz(g &: Ng, t: int): int:
 end
 
 func fsz(t: int): int:
-    if t == T_F32 or t == T_V4F32:
+    if t == T_F32 or t == T_V4F32 or t == T_V8F32:
         ret 4
     end
     ret 8
@@ -45,11 +45,19 @@ func new_reg_ty(g &: Ng, t: int): int:
     r := vnew(g, vcls_ty(g, t))
     if is_vec(g, t):
         g.mc.vwide[r] = true
+        g.mc.vymm[r] = is_ymm(g, t)
     end
     ret r
 end
 
 func wide_reg(g &: Ng): int:
+    r := xmm(g)
+    g.mc.vwide[r] = true
+    g.mc.vymm[r] = g.isy
+    ret r
+end
+
+func xwide(g &: Ng): int:
     r := xmm(g)
     g.mc.vwide[r] = true
     ret r
@@ -224,6 +232,21 @@ func vec_const(g &: Ng, lo: i64, hi: i64): Mem:
     off := g.s_cst.len()
     sec_le(g, SEC_CONST, lo, 8)
     sec_le(g, SEC_CONST, hi, 8)
+    g.vconst.put(key, off)
+    ret Mem { k = MK_RIP, sym = g.sym_ro, d = off as i64 }
+end
+
+func vec_const32(g &: Ng, w0: i64, w1: i64, w2: i64, w3: i64): Mem:
+    key := "y" + str.FromInt(w0) + ":" + str.FromInt(w1) + ":" + str.FromInt(w2) + ":" + str.FromInt(w3)
+    if g.vconst.has(key):
+        ret Mem { k = MK_RIP, sym = g.sym_ro, d = g.vconst.get(key) as i64 }
+    end
+    sec_align_to(g, SEC_CONST, 32)
+    off := g.s_cst.len()
+    sec_le(g, SEC_CONST, w0, 8)
+    sec_le(g, SEC_CONST, w1, 8)
+    sec_le(g, SEC_CONST, w2, 8)
+    sec_le(g, SEC_CONST, w3, 8)
     g.vconst.put(key, off)
     ret Mem { k = MK_RIP, sym = g.sym_ro, d = off as i64 }
 end
@@ -1106,6 +1129,7 @@ func split_copies(g &: Ng, b: int):
             src := use_reg(g, v)
             nr := vnew(g, g.mc.vcls[src])
             g.mc.vwide[nr] = g.mc.vwide[src]
+            g.mc.vymm[nr] = g.mc.vymm[src]
             _c := e_copy(g, nr, src)
             g.sp_loop.push(lp)
             g.sp_val.push(v)
@@ -1162,6 +1186,7 @@ func par_copy(g &: Ng, dsts: Vector<int>, srcs: Vector<int>):
             d0 := rd[0]
             tmp := vnew(g, g.mc.vcls[d0])
             g.mc.vwide[tmp] = g.mc.vwide[d0]
+            g.mc.vymm[tmp] = g.mc.vymm[d0]
             _c2 := e_copy(g, tmp, d0)
             repeat rs.len() in j2:
                 if rs[j2] == d0:
@@ -1688,9 +1713,19 @@ func isel_vint_add(g &: Ng, i: int):
     set_res(g, i, rv)
 end
 
+func ysum_halves(g &: Ng, v: int, sz: int, opc: int): int:
+    hi := yext_hi(g, v)
+    a := e_rr(g, M_VOP_RR, sz, hi, v)
+    g.mc.cc[a] = opc
+    ret hi
+end
+
 func isel_vredadd_flt(g &: Ng, i: int):
-    v := use_reg(g, g.i_a[i])
+    mut v := use_reg(g, g.i_a[i])
     d := g.t_elem[g.v_ty[g.i_a[i]]] == T_F64
+    if is_ymm(g, g.v_ty[g.i_a[i]]):
+        v = ysum_halves(g, v, d ? 8 : 4, FO_ADD)
+    end
     t1 := wide_reg(g)
     s1 := e_rr(g, M_PSHUFD, 16, t1, v)
     g.mc.imm[s1] = 0xEE as i64
@@ -1715,10 +1750,13 @@ func isel_vredadd(g &: Ng, i: int):
         isel_vredadd_flt(g, i)
         ret
     end
-    v := use_reg(g, g.i_a[i])
+    mut v := use_reg(g, g.i_a[i])
     vt := g.v_ty[g.i_a[i]]
     q := g.t_elem[vt] == T_I64
     addop := q ? 0xD4 : 0xFE
+    if is_ymm(g, vt):
+        v = ysum_halves(g, v, 8, addop)
+    end
     t1 := wide_reg(g)
     _c1 := e_copy(g, t1, v)
     s1 := e_rr(g, M_SHUFPS, 4, t1, t1)
@@ -4717,7 +4755,20 @@ func isel_ret(g &: Ng, i: int):
     g.mc.imm[ri] = mask
 end
 
+func ins_ymm(g &: Ng, i: int): bool:
+    if is_ymm(g, g.i_ty[i]):
+        ret true
+    end
+    ret g.i_op[i] == OP_STORE and g.i_a[i] >= 0 and is_ymm(g, g.v_ty[g.i_a[i]])
+end
+
 func isel_ins(g &: Ng, i: int, b: int):
+    g.isy = ins_ymm(g, i)
+    isel_ins1(g, i, b)
+    g.isy = false
+end
+
+func isel_ins1(g &: Ng, i: int, b: int):
     op := g.i_op[i]
     if is_vec(g, g.i_ty[i]) and not g.skipi[i] and isel_vec_ins(g, i):
         ret
@@ -4934,7 +4985,10 @@ func isel_ins(g &: Ng, i: int, b: int):
         OP_VLANES:
             vt := g.i_ty[i]
             q := g.t_elem[vt] == T_I64
-            m := q ? vec_const(g, 0 as i64, 1 as i64) : vec_const(g, (1 as i64) << (32 as i64), (3 as i64) << (32 as i64) | (2 as i64))
+            mut m := q ? vec_const(g, 0 as i64, 1 as i64) : vec_const(g, (1 as i64) << (32 as i64), (3 as i64) << (32 as i64) | (2 as i64))
+            if g.isy:
+                m = q ? vec_const32(g, 0 as i64, 1 as i64, 2 as i64, 3 as i64) : vec_const32(g, (1 as i64) << (32 as i64), (3 as i64) << (32 as i64) | (2 as i64), (5 as i64) << (32 as i64) | (4 as i64), (7 as i64) << (32 as i64) | (6 as i64))
+            end
             rl := wide_reg(g)
             _vl := e_rm(g, M_VLD, 16, rl, m)
             set_res(g, i, rl)
@@ -4957,6 +5011,10 @@ func isel_ins(g &: Ng, i: int, b: int):
         end
         OP_VBCAST:
             src := use_reg(g, g.i_a[i])
+            if g.isy:
+                set_res(g, i, ybcast(g, src, g.i_ty[i] == T_V8F32 ? VUN_BCSS : VUN_BCSD))
+                ret
+            end
             rb := wide_reg(g)
             _cb := e_copy(g, rb, src)
             if g.i_ty[i] == T_V4F32:

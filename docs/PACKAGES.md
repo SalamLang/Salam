@@ -56,6 +56,13 @@ winget = "SQLite.SQLite"
 - **`[lib] export_pub = true`** exports every `pub` function of the entry
   file as `<name>_<Function>` in a `--lib` build, so a library needs no
   `export:` block.
+- **`[windows]`** sets what a Windows build of the project embeds:
+  `subsystem` (`"console"` or `"windows"` for a GUI program with no
+  console), `icon` (an `.ico` file), `manifest`, and the version resource's
+  `version` (default `[package].version`), `company`, `description`,
+  `product` and `copyright`. The command-line options `--subsystem`,
+  `--icon`, `--manifest` and `--version-info` override them. They apply to
+  builds with `--backend=native` or `--linker=builtin`.
 - **`[native.<lib>.prebuilt.<platform>]`** lists a ready-built library for
   one platform (`linux-x86_64`, `linux-aarch64`, `macos-aarch64`,
   `macos-x86_64`, `windows-x86_64`, ...): `url`, `sha256`, and `lib`, the

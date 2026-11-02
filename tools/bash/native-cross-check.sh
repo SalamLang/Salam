@@ -18,6 +18,11 @@
 # Each program gets NATIVE_CROSS_TIMEOUT seconds (180 by default); the larger
 # tensor and nn demos take over a minute under qemu.
 #
+# With NATIVE_CROSS_STAGE=<dir> the programs are only built: each lands in
+# <dir>/<group>/<name> (with .exe for Windows targets), for
+# tools/bash/native-stage-tests.sh to run on a machine of the target's kind
+# (macOS, Windows, AArch64 Linux). The runner argument is then ignored.
+#
 # Usage: tools/bash/native-cross-check.sh <salam> <triple> <runner> [group...]
 #   e.g. tools/bash/native-cross-check.sh ./salam aarch64-linux-musl qemu-aarch64 basics general
 #   Use `env` as the runner for a target the host runs directly (i686).
@@ -39,7 +44,17 @@ esac
 case "$TRIPLE" in
 i686* | i386* | arm-* | armv7*) DEFAULT_SKIP="$DEFAULT_SKIP types/size_type llvm/size_type general/extern_builtin_protos" ;;
 esac
+case "$TRIPLE" in
+*windows*) DEFAULT_SKIP="$DEFAULT_SKIP general/extern_builtin_protos" ;;
+esac
 SKIP=${NATIVE_CROSS_SKIP-$DEFAULT_SKIP}
+STAGE=${NATIVE_CROSS_STAGE:-}
+EXT=
+case "$TRIPLE" in *windows*) EXT=.exe ;; esac
+if [ -n "$STAGE" ]; then
+    mkdir -p "$STAGE"
+    STAGE=$(cd "$STAGE" && pwd)
+fi
 LIMIT=${NATIVE_CROSS_TIMEOUT:-180}
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 work=$(mktemp -d)
@@ -69,11 +84,22 @@ for grp in $TEST_GROUPS; do
             skipped=$((skipped + 1))
             continue
         fi
-        exe=$work/t
+        exe=$work/t$EXT
         rm -f "$exe"
         if ! (cd "$work" && "$SALAM" build "$f" --backend=native --release --target="$TRIPLE" --output="$exe" --log-level=error >"$work/build.log" 2>&1); then
             echo "BUILDFAIL $id"
+            head -3 "$work/build.log"
             bad=$((bad + 1))
+            continue
+        fi
+        if [ -n "$STAGE" ]; then
+            mkdir -p "$STAGE/$grp"
+            if cp "$exe" "$STAGE/$id$EXT"; then
+                ok=$((ok + 1))
+            else
+                echo "STAGEFAIL $id"
+                bad=$((bad + 1))
+            fi
             continue
         fi
         (cd "$ROOT" && timeout "$LIMIT" $RUNNER "$exe" </dev/null >"$work/got" 2>&1)
@@ -85,5 +111,10 @@ for grp in $TEST_GROUPS; do
         fi
     done
 done
+if [ -n "$STAGE" ]; then
+    echo "native cross stage ($TRIPLE): $ok staged in $STAGE, $bad failed to build, $skipped skipped"
+    [ "$bad" -eq 0 ]
+    exit
+fi
 echo "native cross check ($TRIPLE): $ok ok, $bad differ, $skipped skipped"
 [ "$bad" -eq 0 ]

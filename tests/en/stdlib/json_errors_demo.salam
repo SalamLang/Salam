@@ -16,7 +16,10 @@ package main
 
 import encoding.json
 import encoding.value
-import encoding.encerr
+import encoding.msgpack
+import encoding.envfile
+import encoding.serde
+import compress
 import testing
 import mem
 
@@ -36,103 +39,186 @@ struct Chain:
     pub next: Chain* = null
 end
 
-func typed_rejections():
+func show(label: str, e: Error):
+    mut line := label + ": " + e.kind_name() + " | " + e.to_str()
+    if e.code != "":
+        line = line + " [" + e.code + "]"
+    end
+    println line
+end
+
+func decode(label: str, text: str):
+    try:
+        mut v := json.Decode(text)
+        println label + ": ok " + json.EncodeDefault(v)
+        value.ValueFree(v)
+    catch e:
+        show(label, e)
+    end
+end
+
+func unmarshal(label: str, text: str):
     mut p := Point {}
-
-    mut e1 := encerr.NoError()
-    testing.AssertFalse(json.Unmarshal(`{"x":1,"y":2,"z":3}`, p, e1))
-    testing.AssertTrue(encerr.IsError(e1))
-    testing.AssertContains(e1.message, "unknown key")
-
-    mut e2 := encerr.NoError()
-    testing.AssertFalse(json.Unmarshal(`{"x":1}`, p, e2))
-    testing.AssertTrue(encerr.IsError(e2))
-
-    mut e3 := encerr.NoError()
-    testing.AssertFalse(json.Unmarshal(`{"x":1,"x":2,"y":3}`, p, e3))
-    testing.AssertTrue(encerr.IsError(e3))
-
-    mut e4 := encerr.NoError()
-    testing.AssertFalse(json.Unmarshal(`{"x":"1","y":2}`, p, e4))
-    testing.AssertTrue(encerr.IsError(e4))
-
-    mut e5 := encerr.NoError()
-    testing.AssertFalse(json.Unmarshal(`{"x":1,"y":2} tail`, p, e5))
-    testing.AssertEqInt(e5.kind, encerr.KindTrailingData)
-
-    mut e6 := encerr.NoError()
-    testing.AssertFalse(json.Unmarshal(`{"x":1,`, p, e6))
-    testing.AssertTrue(e6.position > 0)
-
-    mut q := Point {}
-    mut e7 := encerr.NoError()
-    testing.AssertTrue(json.UnmarshalLenient(`{"x":1,"x":2,"z":9}`, q, e7))
-    testing.AssertEqInt(q.y, 0)
-
-    mut e8 := encerr.NoError()
-    testing.AssertFalse(json.UnmarshalLenient(`{"x":`, q, e8))
-    testing.AssertTrue(encerr.IsError(e8))
+    try:
+        json.Unmarshal(text, p)
+        println label + ": ok " + json.Marshal(p)
+    catch e:
+        show(label, e)
+    end
 end
 
-func dynamic_rejections():
-    mut ok1 := encerr.NoError()
-    v1 := json.Decode(`{"x":1,"y":2,"z":3}`, ok1)
-    testing.AssertFalse(encerr.IsError(ok1))
-    testing.AssertEqInt(value.ObjectLen(v1), 3)
-    value.ValueFree(v1)
-
-    mut ok2 := encerr.NoError()
-    v2 := json.Decode(`{"x":"1"}`, ok2)
-    testing.AssertFalse(encerr.IsError(ok2))
-    testing.AssertTrue(value.IsString(value.ObjectGet(v2, "x")))
-    value.ValueFree(v2)
-
-    mut b1 := encerr.NoError()
-    json.Decode(`{"a": }`, b1)
-    testing.AssertTrue(encerr.IsError(b1))
-    testing.AssertTrue(b1.position > 0)
-
-    mut b2 := encerr.NoError()
-    json.Decode(`[1,2`, b2)
-    testing.AssertTrue(encerr.IsError(b2))
-
-    mut deep := ""
-    mut shallow := ""
-    repeat 600:
-        deep = deep.concat("[")
+func unmarshal_lenient(label: str, text: str):
+    mut p := Point {}
+    try:
+        json.UnmarshalLenient(text, p)
+        println label + ": ok " + json.Marshal(p)
+    catch e:
+        show(label, e)
     end
-    repeat 100:
-        shallow = shallow.concat("[")
-    end
-    repeat 100:
-        shallow = shallow.concat("]")
-    end
-    mut b_deep := encerr.NoError()
-    json.Decode(deep, b_deep)
-    testing.AssertTrue(encerr.IsError(b_deep))
-    mut ok_shallow := encerr.NoError()
-    vs := json.Decode(shallow, ok_shallow)
-    testing.AssertFalse(encerr.IsError(ok_shallow))
-    value.ValueFree(vs)
-
-    mut b3 := encerr.NoError()
-    json.Decode(``, b3)
-    testing.AssertTrue(encerr.IsError(b3))
-
-    mut b4 := encerr.NoError()
-    json.Decode(`{} {}`, b4)
-    testing.AssertEqInt(b4.kind, encerr.KindTrailingData)
-
-    testing.AssertTrue(json.Valid(`{"a":[1,2,{"b":null}]}`))
-    testing.AssertFalse(json.Valid(`{"a":}`))
 end
 
-func encoder_edges():
+func nested(depth: int): str:
+    mut out := ""
+    repeat depth:
+        out = out.concat("[")
+    end
+    repeat depth:
+        out = out.concat("]")
+    end
+    ret out
+end
+
+func dynamic_errors():
+    println "== json.Decode =="
+    decode("valid", `{"x":1,"y":[true,null]}`)
+    decode("empty input", ``)
+    decode("truncated array", `[1,2`)
+    decode("truncated object", `{"a": 1,`)
+    decode("missing value", `{"a": }`)
+    decode("bad token", "{\n  \"a\": 1,\n  \"b\": yes\n}")
+    decode("bad key", "[1,\n {x: 2}]")
+    decode("trailing data", `{} {}`)
+    decode("too deep", nested(600))
+    try:
+        mut v := json.Decode(nested(500))
+        println "500 levels: ok, " + json.EncodeDefault(v).len() + " bytes"
+        value.ValueFree(v)
+    catch e:
+        show("500 levels", e)
+    end
+end
+
+func typed_errors():
+    println ""
+    println "== json.Unmarshal =="
+    unmarshal("valid", `{"x":1,"y":2}`)
+    unmarshal("type mismatch", `{"x":"1","y":2}`)
+    unmarshal("missing key", `{"x":1}`)
+    unmarshal("unknown key", `{"x":1,"y":2,"z":3}`)
+    unmarshal("duplicate key", `{"x":1,"x":2,"y":3}`)
+    unmarshal("truncated", `{"x":1,`)
+    unmarshal("trailing data", `{"x":1,"y":2} tail`)
+    unmarshal("not an object", `[1,2]`)
+    unmarshal_lenient("lenient extra keys", `{"x":1,"x":2,"z":9}`)
+    unmarshal_lenient("lenient truncated", `{"x":`)
+end
+
+func accessor_errors() throws:
+    println ""
+    println "== value accessors =="
+    mut doc := try json.Decode(`{"name": "salam", "version": 6, "tags": ["a", "b"], "ok": true}`)
+    defer value.ValueFree(doc)
+    name := try doc.field("name")
+    println "name: " + (try name.str())
+    version := try doc.field("version")
+    println "version: " + (try version.int())
+    tags := try doc.field("tags")
+    second := try tags.at(1)
+    println "second tag: " + (try second.str())
+    try:
+        name.int()
+    catch e:
+        show("int of a string", e)
+    end
+    try:
+        doc.field("license")
+    catch e:
+        show("missing key", e)
+    end
+    try:
+        tags.at(5)
+    catch e:
+        show("index out of range", e)
+    end
+    try:
+        tags.field("a")
+    catch e:
+        show("key of an array", e)
+    end
+    try:
+        version.bool()
+    catch e:
+        show("bool of an int", e)
+    end
+    mut fallback := try doc.field("port") catch value.ValueInt(8080 as i64)
+    println "port with a fallback: " + value.AsInt(fallback)
+    mut parsed := try json.Decode(`{"broken"`) catch value.NewValueObject()
+    println "fallback document keys: " + value.ObjectLen(parsed)
+    value.ValueFree(fallback)
+    value.ValueFree(parsed)
+end
+
+func stream_errors():
+    println ""
+    println "== JSONDecoder =="
+    mut d := json.NewBufDecoder("{\"a\": 1}\n{\"b\": 2}\n{\"c\": }\n{\"d\": 4}")
+    until d.More():
+        try:
+            mut v := d.Decode()
+            println "document: " + json.EncodeDefault(v)
+            value.ValueFree(v)
+        catch e:
+            show("bad document", e)
+            break
+        end
+    end
+end
+
+func other_formats():
+    println ""
+    println "== other formats =="
+    mut buf := compress.NewByteBuf()
+    compress.BufPush(buf, 0x93)
+    compress.BufPush(buf, 1)
+    compress.BufPush(buf, 2)
+    try:
+        msgpack.Unmarshal(buf)
+    catch e:
+        show("msgpack truncated", e)
+    end
+    compress.BufFree(buf)
+
+    try:
+        mut doc := envfile.ParseStrict("A=1\nB=\"open\nC=3\n")
+        envfile.Free(doc)
+    catch e:
+        show("envfile unterminated quote", e)
+    end
+
+    try:
+        serde.TranscodeStrict(`{"a":1}`, "json", "nope")
+    catch e:
+        show("serde unknown format", e)
+    end
+end
+
+func encoder_edges() throws:
     inf := 1.0 / 0.0
     f := Floats { a = 0.0 - inf, b = inf, c = 0.5 }
     text := json.Marshal(f)
     testing.AssertEqStr(text, `{"a":null,"b":null,"c":0.5}`)
     testing.AssertTrue(json.Valid(text))
+    testing.AssertFalse(json.Valid(`{"a":}`))
 
     testing.AssertEqStr(json.Marshal(Chain { id = 3 }), `{"id":3,"next":null}`)
     cell := mem.Allocate(64 as u64)
@@ -146,19 +232,28 @@ func encoder_edges():
     enc := json.Marshal(raw)
     testing.AssertTrue(json.Valid(enc))
     mut got := ""
-    mut e := encerr.NoError()
-    testing.AssertTrue(json.Unmarshal(enc, got, e))
+    try json.Unmarshal(enc, got)
     testing.AssertEqStr(got, raw)
 
-    mut de := encerr.NoError()
-    v := json.Decode(enc, de)
-    testing.AssertEqStr(value.AsString(v), raw)
+    mut v := try json.Decode(enc)
+    testing.AssertEqStr(try v.str(), raw)
     value.ValueFree(v)
 end
 
 func main:
-    typed_rejections()
-    dynamic_rejections()
-    encoder_edges()
+    dynamic_errors()
+    typed_errors()
+    try:
+        accessor_errors()
+    catch e:
+        testing.AssertMsg(false, e.to_str())
+    end
+    stream_errors()
+    other_formats()
+    try:
+        encoder_edges()
+    catch e:
+        testing.AssertMsg(false, e.to_str())
+    end
     ret testing.Summary()
 end

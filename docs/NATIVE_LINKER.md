@@ -25,7 +25,8 @@ so that a native build needs no tool beyond `salam` itself.
 
 - Shared libraries. A program that links a system `.so` (sqlite, a database
   client, a GUI toolkit) keeps using the system linker. The driver decides per
-  build (see "Driver integration").
+  build (see "Driver integration"). Both are supported now: see phase 2 for
+  programs that use a `.so` and "Shared libraries" for building one.
 - Linker scripts, versioned symbols, symbol interposition, `--wrap`.
 - Debug information was left out of the first phase. It is supported now:
   see "Debug sections" under Writing.
@@ -437,11 +438,87 @@ Relocations: `ADDR64`, `ADDR32`, `ADDR32NB` (image-relative), `REL32` and
 `HIGH_ENTROPY_VA`; stack reserve as the backend requests (Windows reserves
 only 1 MB by default, see `NATIVE_BACKEND.md`).
 
+### Resources and GUI programs
+
+`--icon`, `--manifest` and `--version-info` (or a `[windows]` table in
+`salam.toml`) make the driver write a small COFF object with one `.rsrc`
+section (`nl_rsrc.salam`), the way `windres` would, and link it with the
+program. The section holds the resource directory: three levels (type, ID,
+language `0x409`), entries sorted by ID, then 16-byte data entries whose
+`OffsetToData` is an `ADDR32NB` relocation against the section, then the
+data, 8-byte aligned:
+
+| Type | ID | Data |
+|---|---|---|
+| `RT_ICON` (3) | 1..n | each image of the `.ico` file (BMP or PNG) |
+| `RT_GROUP_ICON` (14) | 1 | the `.ico` directory with each 14-byte entry pointing at its `RT_ICON` ID |
+| `RT_VERSION` (16) | 1 | `VS_VERSIONINFO`: `VS_FIXEDFILEINFO` (file and product version from `version`, `VFT_APP` or `VFT_DLL`), a `StringFileInfo` table `040904B0` in UTF-16 and a `VarFileInfo` translation |
+| `RT_MANIFEST` (24) | 1 (2 in a DLL) | the manifest file, byte for byte |
+
+The PE writer puts input `.rsrc` sections in their own output section
+before `.reloc` and points data directory 2 at it, so an object from
+`windres -O coff`, named with `link static`, links too; two resource objects
+in one link are an error, since the linker does not merge trees. Because the resources travel as an object,
+the system linker path passes the same object to mingw `gcc`, whose `ld`
+handles `.rsrc` itself.
+
+`--subsystem=windows` sets `IMAGE_SUBSYSTEM_WINDOWS_GUI` and makes
+`WinMainCRTStartup` (`_WinMainCRTStartup` on i386) the entry point. mingw's
+`crt2.o` defines it next to `mainCRTStartup`; it marks the program as a GUI
+one for the runtime's error reporting and then calls `main` as usual. With
+the system linker the driver passes `-mwindows`.
+
+`tools/bash/native-windows-gui-check.sh` builds a program with all four
+options and as a project with a `[windows]` table, checks the header and
+resource directory with `llvm-readobj`, and under wine loads the result as a
+data file to find the icon (and create an `HICON` from it), the manifest and
+the version strings through `GetFileVersionInfo`.
+
 ### Testing the PE linker
 
 `tools/bash/native-windows-check.sh` already cross-builds 111 programs and
 runs them under wine. It runs once with each linker; outputs must match, and
 `x86_64-w64-mingw32-objdump -p` must show the same imports.
+
+### DLLs
+
+`salam build --lib --backend=native --target=<windows triple>` writes a DLL
+with the built-in linker (`nl_pedll.salam`), so a Windows library needs no
+mingw `gcc` either. The link is the executable's with these differences:
+
+- `dllcrt2.o` replaces `crt2.o` and the entry point is `DllMainCRTStartup`
+  (`_DllMainCRTStartup@12` on i386). It runs the pseudo relocator, the
+  `.ctors` list (where the library's initializer sits, so package globals
+  are set up when the DLL loads) and `DllMain`, for which mingw's default
+  returns `TRUE`.
+- The header has `IMAGE_FILE_DLL`, the image base is `0x180000000` (x64 and
+  ARM64) or `0x10000000` (i386), as `lld-link` picks, and every absolute
+  address already gets a base relocation, so a DLL that cannot load at its
+  preferred base is rebased.
+- Exports follow `ld`'s auto-export: every external symbol the program
+  object defines, which is what the C and LLVM backends' DLLs export (the
+  `export:` block's functions plus a few runtime entry points). i386 names
+  lose their leading underscore. The export directory (data directory 0)
+  sits at the end of `.rdata`, as `lld-link` places it: the 40-byte header,
+  the address table, the name pointers sorted by name, the ordinal table,
+  then the DLL name and the export names.
+- Next to `NAME.dll` the driver writes `libNAME.dll.a`, an import library in
+  GNU `dlltool`'s long form: a head object with the `.idata$2` descriptor,
+  one object per export (the `jmp` or `adrp`/`ldr`/`br` thunk, `.idata$4`,
+  `.idata$5`, `.idata$6`, and an `.idata$7` reference that pulls the head
+  in), and a tail with the null entries and the DLL name, named `_h`, `_sNNNNN`
+  and `_t` so the usual sort keeps each DLL's tables together. GNU `ld`,
+  `lld` and the built-in linker all link against it. `NAME.h` and `NAME.def`
+  (plus `NAME.lib` when `llvm-dlltool` is installed) are written as for the
+  other backends.
+
+With `--linker=system` (or when `dllcrt2.o` is not found) the driver links
+the object with `<mingw gcc> -shared -Wl,--out-implib,libNAME.dll.a`
+instead. `tools/bash/native-windows-dll-check.sh` builds
+`tests/en/lib/mathlib` as a DLL and runs it under wine from a C program
+linked by mingw `gcc`, from a Salam program linked by the built-in linker,
+and as a second, rebased copy loaded with `LoadLibrary`. ARM64 DLLs are
+checked with `llvm-readobj`.
 
 ## Later phases
 
@@ -731,6 +808,12 @@ The output is a PIE `MH_EXECUTE`:
   `libSystem`. The driver finds `lib<name>.tbd` or `.dylib` on the library
   paths and in the SDK (`SDKROOT`, or the Xcode command-line tools and Xcode
   locations), and frameworks as `<name>.framework/<name>.tbd` there.
+  Without an SDK, as when building for macOS on Linux, a requested framework
+  or library still gets its `LC_LOAD_DYLIB` at the system path
+  (`/System/Library/Frameworks/<name>.framework/Versions/A/<name>`, or
+  `/usr/lib/lib<name>.dylib`), and every import no input lists binds with
+  flat lookup (ordinal -2), so dyld finds it in whichever loaded image
+  exports it, `libSystem` included.
 - Static archives may use the BSD format macOS tools write (`#1/N` member
   names stored after the header and a `__.SYMDEF`, `__.SYMDEF SORTED` or
   `__.SYMDEF_64` index) as well as the GNU one; only the members that
@@ -765,3 +848,117 @@ from run to run with either linker. All 1238 Mach-O links matched
 `ld64.lld`. `tools/linker/cross-check.sh` runs the same comparison for one
 target at a time, and `tools/linker/macho_check.py` holds the Mach-O
 signature and disassembly checks.
+
+## Shared libraries
+
+`salam build --lib --backend=native` compiles the library with the native
+backend and links it with the built-in linker: an ELF shared object for every
+Linux target (glibc and musl) and a Mach-O dylib for x86-64 and arm64 macOS.
+`--linker=system`, and `--linker=auto` when the built-in linker cannot do the
+link (a Windows DLL, a missing `libc.so`), hand the object to `cc -shared`
+instead. `--lib=static` archives the native object with `ar`. A project with
+`[lib] export_pub = true` still builds with the C backend, as it does with
+`--backend=llvm`.
+
+`nl.SetShared(l, soname)` switches the linker to this mode. No start files
+are linked: the inputs are the object, the libraries named by `link`, the C
+library (`libc.so` and `libm.so`, or musl's `libc.so`) and `libgcc.a` or
+`libclang_rt.builtins` for helpers.
+
+### What is exported
+
+Every global symbol defined in an object given on the command line, unless it
+is hidden. For a Salam library those are the functions of the `export:` block
+plus the runtime's global helpers (`salam_panic`, `salam_idx`, `salam_div0`),
+the same set the library built by the LLVM backend exports. Archive members
+(`libc_nonshared.a`, `libgcc.a`) export nothing. References inside the
+library bind to its own definitions, as with `-Bsymbolic`, so two Salam
+libraries in one process never reach into each other's runtime. (The C
+backend exports every symbol of every module; two of its libraries loaded
+together resolve `salam_mod_main_init` to the first one, and the second
+library's globals are never initialised.)
+
+### ELF output
+
+The layout is the PIE layout of phase 2 at address 0, without `PT_PHDR` and
+`PT_INTERP`: a read-only segment with the dynamic tables, the text segment,
+and a writable segment whose start (`.init_array`, `.fini_array`,
+`.data.rel.ro`, `.dynamic`, `.got`) is `PT_GNU_RELRO`, plus `PT_DYNAMIC`,
+`PT_GNU_EH_FRAME` and `PT_GNU_STACK`. The type is `ET_DYN` with entry 0.
+
+- `.dynamic` has `DT_SONAME` (the output filename), `DT_NEEDED` for the
+  libraries a symbol was taken from, `DT_INIT_ARRAY`/`DT_FINI_ARRAY`,
+  `DT_FLAGS` = `BIND_NOW` and `DT_FLAGS_1` = `NOW | NODELETE`, and no
+  `DT_DEBUG`. `DT_VERNEED` is left out when nothing is versioned (musl).
+- The library's globals are set up by `salam_lib_init`, which the LLVM IR
+  puts in `.init_array`, so they are ready when the loader returns from
+  `dlopen` or before `main` of a program linked against the library. The
+  output buffer is flushed from `.fini_array` and from the `atexit` handler
+  the initialiser registers.
+- `NODELETE` keeps the library mapped after `dlclose`. glibc does not
+  remove a library's `atexit` handlers when it unloads it (`crtbeginS.o` calls
+  `__cxa_finalize` for that, and the built-in linker links no start files),
+  so an unloaded library would leave the flush handler pointing at unmapped
+  code and `exit` would crash. musl never unloads libraries anyway.
+- Exported symbols get their section, size and type in `.dynsym` and are
+  hashed into a `.gnu.hash` with one bucket per four symbols.
+- Absolute words become `RELATIVE` relocations, or symbolic ones against an
+  imported symbol; GOT slots of imports get `GLOB_DAT`, calls go through
+  PLT stubs. There are no copy relocations and no canonical PLT entries: a
+  shared variable used without the GOT is an error, and the address of an
+  imported function formed in code is its PLT stub.
+- Thread-local variables in a shared library are reported as unsupported;
+  Salam code does not use them.
+
+### Position independence
+
+x86-64 and AArch64 code is position independent already. For the other
+targets nativegen has a `pic` mode that the driver turns on for shared
+libraries; executables keep their absolute addressing.
+
+- ARM forms an address with `movw`/`movt` (`R_ARM_MOVW_PREL_NC`,
+  `R_ARM_MOVT_PREL`, addends -16 and -12) and `add ip, pc, ip`. The address of
+  an undefined symbol is loaded from its GOT slot: `ldr rd, [pc]`, a branch
+  over an `R_ARM_GOT_PREL` literal, then `ldr rd, [pc, rd]`. After the Thumb
+  `bx pc` entry, the PLT stub is `ldr ip, [pc]; ldr pc, [pc, ip]` with the
+  slot's offset after it.
+- RISC-V uses `auipc`/`addi` (`R_RISCV_PCREL_HI20`/`PCREL_LO12_I`) and
+  `auipc`/`ld` (`R_RISCV_GOT_HI20`) for undefined symbols. The low half must
+  name a symbol at its `auipc`, so the encoder records the `auipc`'s offset
+  in its function and the object writer creates a local `.Lsalam.pcrel<N>`
+  label for it after dead-code removal, which moves functions but never
+  splits them. The RVC pass leaves both instructions 4 bytes long.
+- i686 code keeps absolute addresses, so an i686 library has text
+  relocations (`R_386_RELATIVE` and `R_386_32` in `.text`), `DT_TEXTREL`,
+  and a writable text segment, which is what lets musl, which ignores
+  `DT_TEXTREL`, apply them too. Its PLT stub finds its GOT slot with
+  `call`/`pop ecx`, since nothing sets up `ebx`.
+
+### Mach-O dylibs
+
+The Mach-O writer produces `MH_DYLIB` at address 0, without `__PAGEZERO`,
+`LC_MAIN` or `LC_LOAD_DYLINKER`, with `LC_ID_DYLIB` set to
+`@rpath/lib<name>.dylib` (the install name `cc -dynamiclib` gets from the
+driver) and `MH_NO_REEXPORTED_DYLIBS`. The exported symbols (not private
+externs, not archive members) go into an export trie, pointed to by
+`LC_DYLD_INFO_ONLY`, which is built as a radix tree and laid out until the
+ULEB128 child offsets stop changing. Rebase and bind opcodes count segments
+from `__TEXT`, and the code signature does not carry the main-binary flag.
+`__mod_init_func` runs the library's initialiser as on Linux.
+
+No macOS machine is available here, so a dylib is checked by
+`llvm-objdump --macho` (load commands and the export trie), by linking a
+program against it with `ld64.lld`, which reads its export trie, and, for
+x86-64, by `python3 -I tools/linker/machodylib.py`, which maps the dylib into
+a Linux process the way `machorun.py` maps an executable, binds its
+`libSystem` imports to glibc, runs its initialisers and calls its exports.
+
+### Testing shared libraries
+
+`tools/bash/native-shared-lib-check.sh <salam> <triple|host> <runner>` builds
+the `mathlib` test project and a larger library (strings, vectors, hash
+maps, libm, initialised globals), checks their shape with `readelf`, and runs
+a C program and a Salam program that call both. On the build machine the C
+program also runs under valgrind, the library is loaded and closed twice with
+`dlopen`/`dlclose`, and the same library built by the C backend must print
+the same output.

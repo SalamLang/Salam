@@ -306,7 +306,7 @@ func head_annotates(k: int): bool:
 end
 
 func type_token(k: int): bool:
-    ret k == tok.TK_IDENT or k == tok.TK_DOT or k == tok.TK_STAR or k == tok.TK_AMP or k == tok.TK_LT or k == tok.TK_GT or k == tok.TK_SHR or k == tok.TK_LBRACKET or k == tok.TK_RBRACKET or k == tok.TK_LPAREN or k == tok.TK_RPAREN or k == tok.TK_COMMA or k == tok.TK_INT or k == tok.TK_KW_FUNC
+    ret k == tok.TK_IDENT or k == tok.TK_DOT or k == tok.TK_STAR or k == tok.TK_AMP or k == tok.TK_LT or k == tok.TK_GT or k == tok.TK_SHR or k == tok.TK_LBRACKET or k == tok.TK_RBRACKET or k == tok.TK_LPAREN or k == tok.TK_RPAREN or k == tok.TK_COMMA or k == tok.TK_INT or k == tok.TK_KW_FUNC or k == tok.TK_KW_THROWS
 end
 
 func colon_is_annotation(ts: tok.TokenStream, colon_idx: int): bool:
@@ -409,11 +409,15 @@ func in_match_arms_now(c &: FmtCtx): bool:
     ret c.block_top > 0 and c.block_top <= FMT_MAX_BLOCK and c.in_match_arms[c.block_top - 1] != 0
 end
 
+func block_catch(c &: FmtCtx, k: int): bool:
+    ret k == tok.TK_KW_CATCH and c.bracket == 0 and c.stmt_head == tok.TK_EOF
+end
+
 func step_dedent(c &: FmtCtx, out &: str.StringBuilder, t: tok.Token, k: int):
     if k == tok.TK_KW_ELSE and in_match_arms_now(c):
         ret
     end
-    if c.bracket == 0 and c.angle == 0 and (k == tok.TK_KW_END or k == tok.TK_KW_ELSE):
+    if c.bracket == 0 and c.angle == 0 and (k == tok.TK_KW_END or k == tok.TK_KW_ELSE or block_catch(c, k)):
         if c.block_top > 0 and c.block_top <= FMT_MAX_BLOCK and c.line_has_content and (t.begin_line as int) > c.block_line[c.block_top - 1]:
             co.SbPutc(out, 10)
             c.line_has_content = false
@@ -602,6 +606,8 @@ func step_state_after(
         c.stmt_head = tok.TK_EOF
     else c.bracket == 0 and k == tok.TK_KW_ELSE:
         c.stmt_head = tok.TK_KW_ELSE
+    else block_catch(c, k):
+        c.stmt_head = tok.TK_KW_CATCH
     end
     if c.stmt_head == tok.TK_EOF and c.bracket == 0 and k != tok.TK_KW_END and k != tok.TK_COLON and k != tok.TK_COMMENT_LINE and k != tok.TK_COMMENT_BLOCK and not head_modifier(k) and not static_word(ts, i):
         c.stmt_head = k
@@ -624,7 +630,10 @@ func step_state_after(
         mut opener := false
         was_match_subject := c.match_pending
         was_in_match_arms := in_match_arms_now(c)
+        try_head := c.stmt_head == tok.TK_KW_CATCH or (c.stmt_head == tok.TK_KW_TRY and c.has_prev and c.prev_kind == tok.TK_KW_TRY)
         if c.has_prev and c.prev_kind == tok.TK_RPAREN and c.prev_close_was_lambda:
+            opener = true
+        else try_head or (c.has_prev and c.prev_kind == tok.TK_KW_THROWS):
             opener = true
         else was_match_subject:
             opener = true
@@ -647,7 +656,7 @@ func step_state_after(
                 c.in_match_arms[c.block_top] = was_match_subject ? 1 : 0
             end
             c.block_top += 1
-            if c.has_prev and c.prev_kind == tok.TK_KW_ELSE and not was_in_match_arms:
+            if (c.has_prev and c.prev_kind == tok.TK_KW_ELSE and not was_in_match_arms) or try_head:
                 c.force_break = true
             end
             c.stmt_head = tok.TK_EOF

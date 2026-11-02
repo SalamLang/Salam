@@ -130,7 +130,109 @@ func asm_epilogue(g &: Ng):
     asl(g, "ret")
 end
 
+func yreg(r: int, y: bool): str:
+    if y:
+        ret "ymm" + (r - 16)
+    end
+    ret regname(r, 16)
+end
+
+func asm_vop_name(vc: int, sz: int): str:
+    if vc == 0xD4: ret "paddq" end
+    if vc == 0xFE: ret "paddd" end
+    pn := vint_name(vc)
+    if pn != "":
+        ret pn
+    end
+    mut vn := "add"
+    if vc == FO_MUL: vn = "mul" end
+    if vc == FO_SUB: vn = "sub" end
+    if vc == FO_DIV: vn = "div" end
+    ret vn + (sz == 8 ? "pd" : "ps")
+end
+
+func vshift_reg_op(vc: int): bool:
+    ret (vc >= 0xD1 and vc <= 0xD3) or vc == 0xE1 or vc == 0xE2 or (vc >= 0xF1 and vc <= 0xF3)
+end
+
+func asm_vex_ins(g &: Ng, i: int): bool:
+    op := g.mc.op[i]
+    sz := g.mc.sz[i]
+    r0 := g.mc.r0[i]
+    r1 := g.mc.r1[i]
+    imm := g.mc.imm[i]
+    y := g.mc.ymm[i]
+    x0 := regname(r0, 16)
+    x1 := regname(r1, 16)
+    pw := y ? "YMMWORD PTR " : "XMMWORD PTR "
+    switch op:
+        M_FMOV_RR: asl(g, "vmovaps " + yreg(r0, y) + ", " + yreg(r1, y)) ret true end
+        M_FLD: asl(g, "v" + asm_sse(sz, "mov") + " " + x0 + ", " + asm_mem(g, rm_of(g, i), sz)) ret true end
+        M_FST: asl(g, "v" + asm_sse(sz, "mov") + " " + asm_mem(g, rm_of(g, i), sz) + ", " + x1) ret true end
+        M_FOP_RR, M_FOP_RM:
+            mut nm := "add"
+            c := g.mc.cc[i]
+            if c == FO_MUL: nm = "mul" end
+            if c == FO_SUB: nm = "sub" end
+            if c == FO_DIV: nm = "div" end
+            if op == M_FOP_RR:
+                asl(g, "v" + asm_sse(sz, nm) + " " + x0 + ", " + x0 + ", " + x1)
+            else:
+                asl(g, "v" + asm_sse(sz, nm) + " " + x0 + ", " + x0 + ", " + asm_mem(g, rm_of(g, i), sz))
+            end
+            ret true
+        end
+        M_SQRT: asl(g, "v" + asm_sse(sz, "sqrt") + " " + x0 + ", " + x0 + ", " + x1) ret true end
+        M_UCOMI: asl(g, "v" + asm_sse(sz, "ucomi") + " " + x0 + ", " + x1) ret true end
+        M_CVTSI2F: asl(g, "vcvtsi2" + (sz == 4 ? "ss " : "sd ") + x0 + ", " + x0 + ", " + regname(r1, g.mc.sz2[i])) ret true end
+        M_CVTF2SI: asl(g, "vcvtt" + (sz == 4 ? "ss" : "sd") + "2si " + regname(r0, g.mc.sz2[i]) + ", " + x1) ret true end
+        M_CVTF2F: asl(g, (sz == 8 ? "vcvtss2sd " : "vcvtsd2ss ") + x0 + ", " + x0 + ", " + x1) ret true end
+        M_MOVQ_XG: asl(g, (sz == 8 ? "vmovq " : "vmovd ") + x0 + ", " + regname(r1, sz)) ret true end
+        M_MOVQ_GX: asl(g, (sz == 8 ? "vmovq " : "vmovd ") + regname(r0, sz) + ", " + x1) ret true end
+        M_XORPS:
+            yx := y and r0 != r1
+            asl(g, "vxorps " + yreg(r0, yx) + ", " + yreg(r0, yx) + ", " + yreg(r1, yx))
+            ret true
+        end
+        M_ANDPS: asl(g, "vandps " + yreg(r0, y) + ", " + yreg(r0, y) + ", " + yreg(r1, y)) ret true end
+        M_VLD: asl(g, "vmovups " + yreg(r0, y) + ", " + pw + asm_mem(g, rm_of(g, i), 0)) ret true end
+        M_VST: asl(g, "vmovups " + pw + asm_mem(g, rm_of(g, i), 0) + ", " + yreg(r1, y)) ret true end
+        M_VOP_RR:
+            vc := g.mc.cc[i]
+            src := vshift_reg_op(vc) ? x1 : yreg(r1, y)
+            asl(g, "v" + asm_vop_name(vc, sz) + " " + yreg(r0, y) + ", " + yreg(r0, y) + ", " + src)
+            ret true
+        end
+        M_SHUFPS: asl(g, "vshufps " + yreg(r0, y) + ", " + yreg(r0, y) + ", " + yreg(r1, y) + ", " + str.FromInt(imm)) ret true end
+        M_UNPCKLPD: asl(g, "vunpcklpd " + yreg(r0, y) + ", " + yreg(r0, y) + ", " + yreg(r1, y)) ret true end
+        M_PSHUFD: asl(g, "vpshufd " + yreg(r0, y) + ", " + yreg(r1, y) + ", " + str.FromInt(imm)) ret true end
+        M_VSHI: asl(g, "v" + vshift_name(g.mc.cc[i], g.mc.sz2[i]) + " " + yreg(r0, y) + ", " + yreg(r0, y) + ", " + str.FromInt(imm)) ret true end
+        M_VLD32: asl(g, "vmovd " + x0 + ", " + asm_mem(g, rm_of(g, i), 4)) ret true end
+        M_VST32: asl(g, "vmovd " + asm_mem(g, rm_of(g, i), 4) + ", " + x1) ret true end
+        M_VUN:
+            c2 := g.mc.cc[i]
+            if c2 == VUN_EXT:
+                asl(g, "vextracti128 " + x0 + ", " + yreg(r1, true) + ", " + str.FromInt(imm))
+                ret true
+            end
+            mut bn := "vpbroadcastd "
+            if c2 == VUN_BCQ: bn = "vpbroadcastq " end
+            if c2 == VUN_BCB: bn = "vpbroadcastb " end
+            if c2 == VUN_BCW: bn = "vpbroadcastw " end
+            if c2 == VUN_BCSS: bn = "vbroadcastss " end
+            if c2 == VUN_BCSD: bn = "vbroadcastsd " end
+            asl(g, bn + yreg(r0, y) + ", " + x1)
+            ret true
+        end
+        M_VZU: asl(g, "vzeroupper") ret true end
+    end
+    ret false
+end
+
 func asm_ins(g &: Ng, i: int):
+    if g.mc.vex and asm_vex_ins(g, i):
+        ret
+    end
     op := g.mc.op[i]
     sz := g.mc.sz[i]
     r0 := g.mc.r0[i]
@@ -545,6 +647,15 @@ func vint_name(vc: int): str:
         0xDA: ret "pminub" end
         0x62: ret "punpckldq" end
         0x67: ret "packuswb" end
+        0xD1: ret "psrlw" end
+        0xD2: ret "psrld" end
+        0xD3: ret "psrlq" end
+        0xE1: ret "psraw" end
+        0xE2: ret "psrad" end
+        0xF1: ret "psllw" end
+        0xF2: ret "pslld" end
+        0xF3: ret "psllq" end
+        0x3840: ret "pmulld" end
     end
     ret ""
 end

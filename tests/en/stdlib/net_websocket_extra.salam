@@ -1,0 +1,95 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import net.websocket
+import net.tcp
+import testing
+
+mut hub server := websocket.Server {}
+mut plain server := tcp.Server {}
+
+func hub side():
+    mut hub := websocket.NewHub()
+    a := websocket.Accept(hub server)
+    b := websocket.Accept(hub server)
+    websocket.Register(hub, "room", a)
+    websocket.Register(hub, "room", b)
+    testing.AssertEqInt(websocket.BroadcastBinary(hub, "room", "bin\nary"), 2)
+    testing.AssertEqInt(websocket.BroadcastBinary(hub, "empty", "x"), 0)
+    testing.AssertEqInt(websocket.SendBinary(a, "solo"), 0)
+    websocket.Close(a)
+    websocket.Close(b)
+end
+
+func plain side():
+    c := tcp.Accept(plain server)
+    tcp.Close(c)
+end
+
+func check hub binary():
+    hub server = websocket.Listen(0)
+    t := spawn(hub side)
+    port := websocket.Port(hub server)
+    mut x := websocket.Dial("127.0.0.1", port, "/")
+    mut y := websocket.Dial("127.0.0.1", port, "/")
+    testing.AssertTrue(websocket.IsOpen(x))
+    testing.AssertTrue(websocket.IsOpen(y))
+    mx := websocket.Poll(x, 3000)
+    testing.AssertTrue(websocket.IsBinary(mx))
+    testing.AssertEqInt(mx.len, 7)
+    my := websocket.Poll(y, 3000)
+    testing.AssertTrue(websocket.IsBinary(my))
+    testing.AssertFalse(websocket.IsClose(my))
+    solo := websocket.Poll(x, 3000)
+    testing.AssertTrue(websocket.IsBinary(solo))
+    testing.AssertEqInt(solo.len, 4)
+    join(t)
+    websocket.Close(x)
+    websocket.Close(y)
+    websocket.CloseServer(hub server)
+end
+
+func check handshake text():
+    plain := websocket.HandshakeRequestWith("example.com", "/chat", "dGhlIHNhbXBsZSBub25jZQ==", "")
+    testing.AssertContains(plain, "GET /chat HTTP/1.1\r\n")
+    testing.AssertContains(plain, "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n")
+    testing.AssertTrue(plain.len() > 0)
+    extra := websocket.HandshakeRequestWith("example.com", "/chat", "k", "X-Token: t1")
+    testing.AssertContains(extra, "X-Token: t1\r\n\r\n")
+    ready := websocket.HandshakeRequestWith("example.com", "/chat", "k", "X-Token: t1\r\n")
+    testing.AssertEqStr(ready, extra)
+end
+
+func check secure dial failures():
+    refused := websocket.DialWSS("127.0.0.1", 1, "/")
+    testing.AssertFalse(websocket.IsOpen(refused))
+    refused_extra := websocket.DialWSSWith("127.0.0.1", 1, "/", "X-Token: t1")
+    testing.AssertFalse(websocket.IsOpen(refused_extra))
+
+    plain server = tcp.Bind(0)
+    t := spawn(plain side)
+    notls := websocket.DialWSS("127.0.0.1", tcp.Port(plain server), "/")
+    testing.AssertFalse(websocket.IsOpen(notls))
+    join(t)
+    tcp.CloseServer(plain server)
+end
+
+func main:
+    check hub binary()
+    check handshake text()
+    check secure dial failures()
+    ret testing.Summary()
+end

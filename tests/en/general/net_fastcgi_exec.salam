@@ -1,0 +1,187 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import mem
+import net.fastcgi
+import net.tcp
+import str
+import sync
+
+mut ready := sync.NewWaitGroup()
+mut fcgi_port := 0
+
+func _rd8(p: void*, off: int): int:
+    bp := p as u8 *
+    ret bp[off] as int
+end
+
+func _at(p: void*, off: int): void*:
+    ret ((p as i64) + (off as i64)) as void *
+end
+
+func _read_exact(c: tcp.Conn, p: void*, n: int): int:
+    mut got := 0
+    until got < n:
+        k := tcp.ReadBytes(c, _at(p, got), n - got)
+        if k <= 0: ret got end
+        got += k
+    end
+    ret got
+end
+
+func _bytes_str(p: void*, off: int, n: int): str:
+    mut sb := str.NewBuilder()
+    repeat n in i:
+        str.BufAppendChar(sb, _rd8(p, off + i))
+    end
+    r := str.BufStr(sb)
+    str.BufFree(sb)
+    ret r
+end
+
+func _param_value(p: void*, total: int, want: str): str:
+    mut cur := 0
+    until cur < total:
+        nl := _rd8(p, cur)
+        vl := _rd8(p, cur + 1)
+        cur += 2
+        name := _bytes_str(p, cur, nl)
+        cur += nl
+        value := _bytes_str(p, cur, vl)
+        cur += vl
+        if str.Equals(name, want): ret value end
+    end
+    ret ""
+end
+
+func _send_rec(c: tcp.Conn, typ: int, p: void*, n: int):
+    h := mem.Allocate(8 as u64)
+    bp := h as u8 *
+    bp[0] = 1 as u8
+    bp[1] = typ as u8
+    bp[2] = 0 as u8
+    bp[3] = 1 as u8
+    bp[4] = ((n >> 8) & 255) as u8
+    bp[5] = (n & 255) as u8
+    bp[6] = 0 as u8
+    bp[7] = 0 as u8
+    tcp.WriteBytes(c, h, 8)
+    if n > 0: tcp.WriteBytes(c, p, n) end
+    mem.Free(h)
+end
+
+func _handle(c: tcp.Conn):
+    hdr := mem.Allocate(8 as u64)
+    pbuf := mem.Allocate(4096 as u64)
+    body := mem.Allocate(4096 as u64)
+    mut plen := 0
+    mut blen := 0
+    mut done := false
+    until not done:
+        if _read_exact(c, hdr, 8) != 8: break end
+        typ := _rd8(hdr, 1)
+        rec_len := (_rd8(hdr, 4) << 8) | _rd8(hdr, 5)
+        pad := _rd8(hdr, 6)
+        if rec_len > 0:
+            tmp := mem.Allocate(rec_len as u64)
+            _read_exact(c, tmp, rec_len)
+            if typ == 4:
+                mem.Copy(_at(pbuf, plen), tmp, rec_len as u64)
+                plen += rec_len
+            else typ == 5:
+                mem.Copy(_at(body, blen), tmp, rec_len as u64)
+                blen += rec_len
+            end
+            mem.Free(tmp)
+        end
+        if pad > 0:
+            skip := mem.Allocate(pad as u64)
+            _read_exact(c, skip, pad)
+            mem.Free(skip)
+        end
+        if typ == 5 and rec_len == 0: done = true end
+    end
+    method := _param_value(pbuf, plen, "REQUEST_METHOD")
+    script := _param_value(pbuf, plen, "SCRIPT_NAME")
+    sent := _bytes_str(body, 0, blen)
+    head := "Status: 201 Created\r\nContent-Type: text/plain\r\nX-Fcgi: yes\r\n\r\n"
+    payload := head + "method=" + method + ";script=" + script + ";body=" + sent
+    warn := "warning\n"
+    _send_rec(c, 7, warn as void *, warn.len())
+    _send_rec(c, 6, payload as void *, payload.len())
+    endrec := mem.AllocateZeroed(8 as u64)
+    _send_rec(c, 3, endrec, 8)
+    mem.Free(endrec)
+    mem.Free(hdr)
+    mem.Free(pbuf)
+    mem.Free(body)
+end
+
+func backend():
+    srv := tcp.Bind(0)
+    fcgi_port = tcp.Port(srv)
+    sync.Done(ready)
+    if not tcp.Ok(srv): ret end
+    c1 := tcp.Accept(srv)
+    if tcp.ConnOk(c1):
+        _handle(c1)
+        tcp.Close(c1)
+    end
+    c2 := tcp.Accept(srv)
+    if tcp.ConnOk(c2): tcp.Close(c2) end
+    tcp.CloseServer(srv)
+end
+
+func main:
+    sync.Add(ready, 1 as i64)
+    t := spawn(backend)
+    sync.Wait(ready)
+
+    mut params := fastcgi.NewParams()
+    fastcgi.Add(params, "REQUEST_METHOD", "POST")
+    fastcgi.Add(params, "SCRIPT_NAME", "/app.php")
+    println params.items.len()
+
+    c := fastcgi.Connect("127.0.0.1", fcgi_port, 3000)
+    println tcp.ConnOk(c)
+    payload := "name=ali"
+    mut r := fastcgi.Execute(c, params, payload as void *, payload.len(), 3000)
+    println r.ok
+    println r.status
+    println r.len
+    println r.headers.len()
+    println _bytes_str(r.body, 0, r.len)
+    println r.headers.get(0).name
+    println r.headers.get(1).value
+    fastcgi.FreeResponse(r)
+    println r.len
+    tcp.Close(c)
+
+    c2 := fastcgi.Connect("127.0.0.1", fcgi_port, 3000)
+    mut r2 := fastcgi.Execute(c2, params, null, 0, 3000)
+    println r2.ok
+    println r2.error
+    fastcgi.FreeResponse(r2)
+    tcp.Close(c2)
+
+    mut r3 := fastcgi.Execute(tcp.Conn {}, params, null, 0, 100)
+    println r3.ok
+    println r3.error
+    fastcgi.FreeResponse(r3)
+
+    fastcgi.Free(params)
+    join(t)
+end

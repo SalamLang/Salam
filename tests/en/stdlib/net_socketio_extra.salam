@@ -1,0 +1,194 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import net.socketio
+import net.websocket
+import encoding.value
+import str
+import testing
+
+mut server := websocket.Server {}
+mut wire := ""
+mut trace := ""
+
+func note(tag: str):
+    trace += tag
+end
+
+func fake server():
+    mut conn := websocket.Accept(server)
+    _ := websocket.SendText(conn, `0{"sid":"s1","upgrades":[],"pingInterval":20000,"pingTimeout":5000}`)
+    mut going := true
+    until going:
+        m := websocket.Poll(conn, 3000)
+        if m.kind == websocket.BINARY:
+            wire += "<binary>|"
+            continue
+        end
+        if m.kind != websocket.TEXT:
+            break
+        end
+        packet := m.text.substr(1, m.text.len() - 1)
+        if packet == "0":
+            _ := websocket.SendText(conn, `40{"sid":"a1"}`)
+            _ := websocket.SendText(conn, `42["vals",7,2.5,true,"x",{"k":1}]`)
+            _ := websocket.SendText(conn, `4215["need",1]`)
+            _ := websocket.SendText(conn, `4216["need",2]`)
+        else str.Contains(packet, `"add"`):
+            id := packet.substr(1, str.Find(packet, "[") - 1)
+            _ := websocket.SendText(conn, "43" + id + `[5,2.5,true,{"z":1}]`)
+        else str.StartsWith(packet, `2["go"`):
+            wire += packet + "|"
+            _ := websocket.SendText(conn, `42["tick"]`)
+        else packet == "1":
+            wire += "disconnect|"
+            going = false
+        else:
+            wire += packet + "|"
+        end
+    end
+    websocket.Close(conn)
+end
+
+func check typed reads(c: socketio.Client):
+    mut e := socketio.NextEvent(c, 2000)
+    testing.AssertEqInt(e.kind, socketio.EV_EVENT)
+    testing.AssertEqStr(e.name, "vals")
+    testing.AssertEqInt64(socketio.ArgInt(e, 0), 7)
+    testing.AssertEqStr(socketio.ArgStr(e, 2), "true")
+    testing.AssertTrue(socketio.ArgFloat(e, 1) > 2.49 and socketio.ArgFloat(e, 1) < 2.51)
+    testing.AssertTrue(socketio.ArgBool(e, 2))
+    mut v := socketio.ArgValue(e, 4)
+    testing.AssertTrue(value.IsObject(v))
+    testing.AssertEqInt64(value.AsInt(value.ObjectGet(v, "k")), 1)
+    value.ValueFree(v)
+    socketio.EventFree(e)
+end
+
+func check replies(c: socketio.Client):
+    mut first := socketio.NextEvent(c, 2000)
+    testing.AssertEqStr(first.name, "need")
+    testing.AssertEqInt(first.ack_id, 15)
+    mut args := socketio.NewArgs()
+    socketio.AddInt(args, 1)
+    socketio.AddValue(args, value.ValueString("fine"))
+    testing.AssertEqInt(socketio.ArgsCount(args), 2)
+    testing.AssertTrue(socketio.Reply(first, args))
+    socketio.ArgsFree(args)
+    socketio.EventFree(first)
+
+    mut second := socketio.NextEvent(c, 2000)
+    testing.AssertEqInt(second.ack_id, 16)
+    testing.AssertTrue(socketio.ReplyJSON(second, `{"ok":true}`))
+    socketio.EventFree(second)
+
+    plain := socketio.Event { ack_id = 0 - 1 }
+    testing.AssertFalse(socketio.ReplyJSON(plain, "1"))
+end
+
+func check ack reads(c: socketio.Client):
+    mut a := socketio.NewArgs()
+    socketio.AddInt(a, 2)
+    socketio.AddInt(a, 3)
+    mut k := socketio.EmitAck(c, "add", a, 2000)
+    testing.AssertTrue(k.ok)
+    testing.AssertEqInt64(socketio.AckInt(k, 0), 5)
+    testing.AssertTrue(socketio.AckFloat(k, 1) > 2.49 and socketio.AckFloat(k, 1) < 2.51)
+    testing.AssertTrue(socketio.AckBool(k, 2))
+    mut v := socketio.AckValue(k, 3)
+    testing.AssertEqInt64(value.AsInt(value.ObjectGet(v, "z")), 1)
+    value.ValueFree(v)
+    socketio.AckFree(k)
+    socketio.ArgsFree(a)
+end
+
+func check emits(c: socketio.Client):
+    testing.AssertTrue(socketio.EmitInt(c, "score", 12))
+    testing.AssertTrue(socketio.EmitFloat(c, "temp", 21.5))
+    testing.AssertTrue(socketio.EmitBool(c, "ready", true))
+    testing.AssertTrue(socketio.EmitJSON(c, "user", `{"name":"Ali"}`))
+    mut a := socketio.NewArgs()
+    socketio.AddStr(a, "room-1")
+    testing.AssertTrue(socketio.EmitArgs(c, "join", a))
+    socketio.ArgsFree(a)
+    testing.AssertTrue(socketio.EmitBytes(c, "file", "abc" as void*, 3))
+    testing.AssertFalse(socketio.EmitArgs(c, "connect", socketio.NewArgs()))
+    pending := socketio.BytesFromStr("xyz")
+    testing.AssertEqInt(pending.len, 3)
+    testing.AssertEqStr(socketio.BytesToStr(pending), "xyz")
+end
+
+func check handler order(c: socketio.Client):
+    socketio.OnAny(c, (_e: socketio.Event): note("a") end)
+    socketio.PrependAny(c, (_e: socketio.Event): note("p") end)
+    socketio.OnAnyOutgoing(c, (_e: socketio.Event): note("o") end)
+    socketio.PrependAnyOutgoing(c, (_e: socketio.Event): note("q") end)
+    testing.AssertEqInt(socketio.AnyListenerCount(c), 4)
+    testing.AssertTrue(socketio.EmitStr(c, "go", "now"))
+    testing.AssertEqStr(trace, "qo")
+    _ := socketio.Pump(c, 2000)
+    testing.AssertEqStr(trace, "qopa")
+
+    socketio.OffAnyOutgoing(c)
+    socketio.OffAny(c)
+    testing.AssertEqInt(socketio.AnyListenerCount(c), 0)
+    socketio.On(c, "one", (_e: socketio.Event): note("1") end)
+    socketio.On(c, "two", (_e: socketio.Event): note("2") end)
+    testing.AssertTrue(socketio.HasListeners(c, "one"))
+    socketio.OffAll(c)
+    testing.AssertFalse(socketio.HasListeners(c, "one"))
+    testing.AssertFalse(socketio.HasListeners(c, "two"))
+end
+
+func main:
+    server = websocket.Listen(0)
+    t := spawn(fake server)
+    mut o := socketio.NewOptions()
+    o.transports = socketio.TRANSPORT_WEBSOCKET
+    o.reconnection = false
+    c := socketio.DialWith("http://127.0.0.1:" + websocket.Port(server), o)
+    testing.AssertTrue(socketio.IsConnected(c))
+    testing.AssertFalse(socketio.Recovered(c))
+    testing.AssertFalse(socketio.Recovered(socketio.Client {}))
+
+    check typed reads(c)
+    check replies(c)
+    check ack reads(c)
+    check emits(c)
+    check handler order(c)
+
+    m := socketio.ManagerOf(c)
+    testing.AssertEqInt(socketio.PumpManager(m, 50), socketio.PUMP_TIMEOUT)
+    testing.AssertEqInt(socketio.PumpManager(socketio.Manager {}, 50), socketio.PUMP_CLOSED)
+
+    socketio.Disconnect(c)
+    testing.AssertFalse(socketio.IsConnected(c))
+    socketio.Disconnect(socketio.Client {})
+    socketio.Close(c)
+    join(t)
+    websocket.CloseServer(server)
+
+    testing.AssertContains(wire, `2["score",12]|`)
+    testing.AssertContains(wire, `2["temp",21.5]|`)
+    testing.AssertContains(wire, `2["ready",true]|`)
+    testing.AssertContains(wire, `2["user",{"name":"Ali"}]|`)
+    testing.AssertContains(wire, `2["join","room-1"]|`)
+    testing.AssertContains(wire, `51-["file",{"_placeholder":true,"num":0}]|<binary>|`)
+    testing.AssertContains(wire, `315[1,"fine"]|`)
+    testing.AssertContains(wire, `316[{"ok":true}]|`)
+    testing.AssertContains(wire, "disconnect|")
+    ret testing.Summary()
+end

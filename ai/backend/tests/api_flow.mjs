@@ -513,6 +513,27 @@ for (let i = 0; i < 60; i += 1) {
 }
 check("a guest on the English site gets the English interface note", uiGuestAnswer.body === "Interface: en", uiGuestAnswer);
 
+console.log("effort levels");
+const effortSession = await account("effort@test.ir", "Effort");
+async function askEffort(effort) {
+  const c = await api("POST", "/chats", effortSession, {});
+  const sent = await api("POST", `/chats/${c.json.chat.id}/messages`, effortSession, { text: "show effort", ...(effort ? { effort } : {}) });
+  let p;
+  for (let i = 0; i < 60; i += 1) {
+    p = await api("GET", `/chats/${c.json.chat.id}/messages/${sent.json.assistant.id}`, effortSession);
+    if (p.json.status !== "pending") break;
+    await new Promise((res) => setTimeout(res, 500));
+  }
+  const saved = await api("GET", `/chats/${c.json.chat.id}`, effortSession);
+  return { sent: sent.json, body: p.json.body, user: saved.json.messages.find((m) => m.role === "user") };
+}
+const plainEffort = await askEffort();
+check("a chat turn carries the answer style and the medium level by default", plainEffort.body === "Effort: level=medium style=true variant= model=" && plainEffort.user.effort === undefined, plainEffort);
+const highEffort = await askEffort("high");
+check("a high effort turn gets the high note, its model and its variant", highEffort.body === "Effort: level=high style=true variant=max model=deep" && highEffort.sent.user.effort === "high" && highEffort.user.effort === "high", highEffort);
+const lowEffort = await askEffort("سریع");
+check("a Persian effort word is understood and stored as low", lowEffort.body === "Effort: level=low style=true variant= model=" && lowEffort.user.effort === "low", lowEffort);
+
 console.log("salam policy");
 const policySession = await account("policy@test.ir", "Policy");
 const policyMe = (await api("GET", "/me", policySession)).json.user;

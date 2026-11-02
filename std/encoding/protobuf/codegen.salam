@@ -16,6 +16,15 @@ func _is_scalar_or_string(kind: int): bool:
     ret kind != FK_MESSAGE and kind != FK_MAP and kind != 0
 end
 
+func _has_scalar(msg: PMessage): bool:
+    mut fi := 0
+    until fi < msg.fields.len():
+        if _is_scalar_or_string(msg.fields.get(fi).kind): ret true end
+        fi += 1
+    end
+    ret false
+end
+
 func _salam_field_type(f: PField): str:
     base := _scalar_salam_type(f.kind)
     if f.repeated: ret "Vector<".concat(base).concat(">") end
@@ -63,28 +72,16 @@ func _write_stmt(kind: int, expr: str): str:
     ret "protobuf.WriteVarint(buf, ".concat(expr).concat(" as u64)")
 end
 
-func _read_expr(kind: int, okVar: str): str:
-    if kind == FK_STRING or kind == FK_BYTES:
-        ret "protobuf.ReadLenPrefixedStr(r, ".concat(okVar).concat(")")
-    end
-    if kind == FK_DOUBLE: ret "protobuf.ReadDouble(r, ".concat(okVar).concat(")") end
-    if kind == FK_FLOAT: ret "protobuf.ReadFloat(r, ".concat(okVar).concat(")") end
-    if kind == FK_BOOL:
-        ret "(protobuf.ReadVarint(r, ".concat(okVar).concat(") != (0 as u64))")
-    end
-    if kind == FK_SINT32:
-        ret "protobuf.ZigZagDecode32((protobuf.ReadVarint(r, ".concat(okVar).concat(") as u32)) as i64")
-    end
-    if kind == FK_SINT64:
-        ret "protobuf.ZigZagDecode64(protobuf.ReadVarint(r, ".concat(okVar).concat("))")
-    end
-    if kind == FK_FIXED32 or kind == FK_SFIXED32:
-        ret "protobuf.ReadFixed32(r, ".concat(okVar).concat(") as i64")
-    end
-    if kind == FK_FIXED64 or kind == FK_SFIXED64:
-        ret "protobuf.ReadFixed64(r, ".concat(okVar).concat(") as i64")
-    end
-    ret "protobuf.ReadVarint(r, ".concat(okVar).concat(") as i64")
+func _read_expr(kind: int): str:
+    if kind == FK_STRING or kind == FK_BYTES: ret "protobuf.ReadLenPrefixedStr(r)" end
+    if kind == FK_DOUBLE: ret "protobuf.ReadDouble(r)" end
+    if kind == FK_FLOAT: ret "protobuf.ReadFloat(r)" end
+    if kind == FK_BOOL: ret "protobuf.ReadVarint(r) != (0 as u64)" end
+    if kind == FK_SINT32: ret "protobuf.ZigZagDecode32(protobuf.ReadVarint(r) as u32) as i64" end
+    if kind == FK_SINT64: ret "protobuf.ZigZagDecode64(protobuf.ReadVarint(r))" end
+    if kind == FK_FIXED32 or kind == FK_SFIXED32: ret "protobuf.ReadFixed32(r) as i64" end
+    if kind == FK_FIXED64 or kind == FK_SFIXED64: ret "protobuf.ReadFixed64(r) as i64" end
+    ret "protobuf.ReadVarint(r) as i64"
 end
 
 func _nonzero_check(f: PField): str:
@@ -112,10 +109,23 @@ func _emit_struct(sb &: str.StringBuilder, msg: PMessage):
         end
         fi += 1
     end
+    if not _has_scalar(msg):
+        str.BufAppend(sb, "    pub _empty: bool = false\n")
+    end
     str.BufAppend(sb, "end\n\n")
 end
 
 func _emit_marshal(sb &: str.StringBuilder, msg: PMessage):
+    if not _has_scalar(msg):
+        str.BufAppend(sb, "pub func Marshal")
+        str.BufAppend(sb, msg.name)
+        str.BufAppend(sb, "(_m: ")
+        str.BufAppend(sb, msg.name)
+        str.BufAppend(sb, "): compress.ByteBuf:\n")
+        str.BufAppend(sb, "    ret compress.NewByteBuf()\n")
+        str.BufAppend(sb, "end\n\n")
+        ret
+    end
     str.BufAppend(sb, "pub func Marshal")
     str.BufAppend(sb, msg.name)
     str.BufAppend(sb, "(m: ")
@@ -169,62 +179,82 @@ end
 func _emit_unmarshal(sb &: str.StringBuilder, msg: PMessage):
     str.BufAppend(sb, "pub func Unmarshal")
     str.BufAppend(sb, msg.name)
-    str.BufAppend(sb, "(data: void*, n: int, ok &: bool): ")
+    str.BufAppend(sb, "(data: void*, n: int): ")
     str.BufAppend(sb, msg.name)
-    str.BufAppend(sb, ":\n")
-    str.BufAppend(sb, "    mut out := ")
-    str.BufAppend(sb, msg.name)
-    str.BufAppend(sb, " {}\n")
+    str.BufAppend(sb, " throws:\n")
+    scalar := _has_scalar(msg)
+    if scalar:
+        str.BufAppend(sb, "    mut out := ")
+        str.BufAppend(sb, msg.name)
+        str.BufAppend(sb, " {}\n")
+    end
     str.BufAppend(sb, "    mut r := compress.NewByteReader(data, n)\n")
-    str.BufAppend(sb, "    ok = true\n")
-    str.BufAppend(sb, "    until compress.RdLeft(r) > 0:\n")
-    str.BufAppend(sb, "        mut fnum := 0\n")
-    str.BufAppend(sb, "        mut wtype := 0\n")
-    str.BufAppend(sb, "        mut tagOk := false\n")
-    str.BufAppend(sb, "        protobuf.ReadTag(r, fnum, wtype, tagOk)\n")
-    str.BufAppend(sb, "        if not tagOk:\n            ok = false\n            ret out\n        end\n")
+    str.BufAppend(sb, "    try:\n")
+    str.BufAppend(sb, "        until compress.RdLeft(r) > 0:\n")
+    if scalar: str.BufAppend(sb, "            at := r.pos\n") end
+    str.BufAppend(sb, "            mut fnum := 0\n")
+    str.BufAppend(sb, "            mut wtype := 0\n")
+    str.BufAppend(sb, "            protobuf.ReadTag(r, fnum, wtype)\n")
     mut fi := 0
     mut any := false
     until fi < msg.fields.len():
         f := msg.fields.get(fi)
         if _is_scalar_or_string(f.kind):
             numStr := conv.FormatInt(f.number as i64)
+            wire := _wire_type_const(f.kind)
             mut kw := "if"
             if any: kw = "else" end
             any = true
-            str.BufAppend(sb, "        ")
+            str.BufAppend(sb, "            ")
             str.BufAppend(sb, kw)
             str.BufAppend(sb, " fnum == ")
             str.BufAppend(sb, numStr)
             str.BufAppend(sb, ":\n")
-            str.BufAppend(sb, "            mut fok := false\n")
-            str.BufAppend(sb, "            v := ")
-            str.BufAppend(sb, _read_expr(f.kind, "fok"))
-            str.BufAppendChar(sb, 10)
-            str.BufAppend(sb, "            if not fok:\n                ok = false\n                ret out\n            end\n")
+            str.BufAppend(sb, "                if wtype != ")
+            str.BufAppend(sb, wire)
+            str.BufAppend(sb, ":\n")
+            str.BufAppend(sb, "                    throw Error.At(ErrorKind.TypeMismatch, \"field ")
+            str.BufAppend(sb, numStr)
+            str.BufAppend(sb, " (")
+            str.BufAppend(sb, f.name)
+            str.BufAppend(sb, ") has wire type \" + wtype + \", expected \" + ")
+            str.BufAppend(sb, wire)
+            str.BufAppend(sb, ", at).with_code(\"protobuf.wire_type_mismatch\").wrap(\"protobuf\")\n")
+            str.BufAppend(sb, "                end\n")
+            str.BufAppend(sb, "                out.")
+            str.BufAppend(sb, f.name)
             if f.repeated:
-                str.BufAppend(sb, "            out.")
-                str.BufAppend(sb, f.name)
-                str.BufAppend(sb, ".push(v)\n")
+                str.BufAppend(sb, ".push(")
+                str.BufAppend(sb, _read_expr(f.kind))
+                str.BufAppend(sb, ")\n")
             else:
-                str.BufAppend(sb, "            out.")
-                str.BufAppend(sb, f.name)
-                str.BufAppend(sb, " = v\n")
+                str.BufAppend(sb, " = ")
+                str.BufAppend(sb, _read_expr(f.kind))
+                str.BufAppendChar(sb, 10)
             end
         end
         fi += 1
     end
     if any:
-        str.BufAppend(sb, "        else:\n")
+        str.BufAppend(sb, "            else:\n")
+        str.BufAppend(sb, "                protobuf.SkipField(r, wtype)\n")
+        str.BufAppend(sb, "            end\n")
     else:
-        str.BufAppend(sb, "        if true:\n")
+        str.BufAppend(sb, "            protobuf.SkipField(r, wtype)\n")
     end
-    str.BufAppend(sb, "            mut skipOk := false\n")
-    str.BufAppend(sb, "            protobuf.SkipField(r, wtype, skipOk)\n")
-    str.BufAppend(sb, "            if not skipOk:\n                ok = false\n                ret out\n            end\n")
     str.BufAppend(sb, "        end\n")
+    str.BufAppend(sb, "    catch e:\n")
+    str.BufAppend(sb, "        throw e.wrap(\"")
+    str.BufAppend(sb, msg.name)
+    str.BufAppend(sb, "\")\n")
     str.BufAppend(sb, "    end\n")
-    str.BufAppend(sb, "    ret out\n")
+    if scalar:
+        str.BufAppend(sb, "    ret out\n")
+    else:
+        str.BufAppend(sb, "    ret ")
+        str.BufAppend(sb, msg.name)
+        str.BufAppend(sb, " {}\n")
+    end
     str.BufAppend(sb, "end\n\n")
 end
 
@@ -244,38 +274,41 @@ func _emit_enum(sb &: str.StringBuilder, en: PEnum):
     str.BufAppendChar(sb, 10)
 end
 
-func _emit_message(sb &: str.StringBuilder, msg: PMessage):
-    _emit_struct(sb, msg)
-    _emit_marshal(sb, msg)
-    _emit_unmarshal(sb, msg)
-end
-
-@en "GenerateSingle"
-@fa "تولید کد"
-pub func GenerateSingle(protoSource: str, ok &: bool): str:
-    mut pok := false
-    f := ParseFile(protoSource, pok)
-    if not pok:
-        ok = false
-        ret ""
-    end
-    ok = true
+func _generate(f: PFile, services: bool): str:
     mut sb := str.NewBuilder()
     str.BufAppend(sb, "// Generated by encoding.protobuf - DO NOT EDIT.\n\n")
     str.BufAppend(sb, "package generated_pb\n\n")
     str.BufAppend(sb, "import encoding.protobuf\n")
-    str.BufAppend(sb, "import compress\n\n")
+    str.BufAppend(sb, "import compress\n")
+    withServices := services and f.services.len() > 0
+    if withServices: str.BufAppend(sb, "import grpc\n") end
+    str.BufAppendChar(sb, 10)
     mut ei := 0
     until ei < f.enums.len():
         _emit_enum(sb, f.enums.get(ei))
         ei += 1
     end
+    if withServices: _emit_service_consts(sb, f) end
     mut mi := 0
     until mi < f.messages.len():
-        _emit_message(sb, f.messages.get(mi))
+        _emit_struct(sb, f.messages.get(mi))
         mi += 1
     end
+    mi = 0
+    until mi < f.messages.len():
+        _emit_marshal(sb, f.messages.get(mi))
+        _emit_unmarshal(sb, f.messages.get(mi))
+        mi += 1
+    end
+    if withServices: _emit_service_funcs(sb, f) end
     out := str.BufStr(sb)
     str.BufFree(sb)
     ret out
+end
+
+@en "GenerateSingle"
+@fa "تولید کد"
+pub func GenerateSingle(protoSource: str): str throws:
+    f := try ParseFile(protoSource)
+    ret _generate(f, false)
 end

@@ -22,9 +22,31 @@ pkg.intro <<
 <p><code>Require</code> takes the token from the <code>Authorization: Bearer</code> header, or from the cookie named in <code>guard.cookie</code> when there is no header. A 401 also carries a <code>WWW-Authenticate</code> header, as the HTTP rules ask.</p>
 
 <h2 id="guide-errors">Why a token is rejected</h2>
-<p><code>Verify</code> checks, in order, that the token has three parts, that its algorithm is the one you expect, that the signature matches, and then the times and the claims you asked for in <code>Options</code>. The first failure goes into <code>err</code>, and <code>ErrorText</code> turns it into a short reason. The program below fixes <code>now</code> so that it prints the same lines every time; in a server leave <code>now</code> at 0 and the current clock is used.</p>
+<p><code>Verify</code> checks, in order, that the token has three parts, that its algorithm is the one you expect, that the signature matches, and then the times and the claims you asked for in <code>Options</code>. It is declared <code>throws</code>, as are <code>Decode</code>, the <code>Sign</code> and <code>Issue</code> functions, <code>Check</code> and <code>B64UrlDecode</code>: the first failure is thrown as an <a href="/std/core/">Error</a>. Catch it with <code>try:</code> ... <code>catch e:</code>, or write <code>try</code> before the call in a function that is itself <code>throws</code> to pass it on. <code>e.message</code> is a short reason and <code>e.code</code> a stable name to branch on. The program below fixes <code>now</code> so that it prints the same lines every time; in a server leave <code>now</code> at 0 and the current clock is used.</p>
 {{example.jwt-errors}}
 <p>Three things to notice. Changing even one claim breaks the signature, so a client cannot raise its own rights. <code>leeway</code> forgives a small clock difference between the machine that signed and the one that checks; a minute or two is usual. And a token signed with HS512 is refused when the options say HS256: the algorithm comes from your options, never from the token, which is how this package avoids the classic <code>alg</code> attacks.</p>
+<p>Every code the package throws:</p>
+<div class="table-wrap"><table>
+<thead><tr><th><code>e.code</code></th><th><code>e.kind</code></th><th>When</th></tr></thead>
+<tbody>
+<tr><td><code>jwt.malformed</code></td><td><code>Syntax</code></td><td>Not three parts separated by dots, or the header or the body part is empty.</td></tr>
+<tr><td><code>jwt.bad_base64</code></td><td><code>Syntax</code></td><td>A part is not url safe base64; <code>e.path</code> is <code>header</code> or <code>payload</code> and <code>e.offset</code> points into the token.</td></tr>
+<tr><td><code>jwt.bad_json</code></td><td><code>Syntax</code></td><td>The header has no single <code>alg</code>, or a registered claim appears twice; <code>e.path</code> names it.</td></tr>
+<tr><td><code>jwt.bad_alg</code></td><td><code>Unsupported</code></td><td>An algorithm other than HS256, HS384 or HS512, <code>none</code> included.</td></tr>
+<tr><td><code>jwt.bad_typ</code></td><td><code>Unsupported</code></td><td>The <code>typ</code> header is not <code>JWT</code> or <code>...+jwt</code>.</td></tr>
+<tr><td><code>jwt.crit</code></td><td><code>Unsupported</code></td><td>The header has a <code>crit</code> list, which this package does not understand.</td></tr>
+<tr><td><code>jwt.empty_secret</code></td><td><code>InvalidArgument</code></td><td>The secret is empty, when signing or checking.</td></tr>
+<tr><td><code>jwt.alg_mismatch</code></td><td><code>PermissionDenied</code></td><td>The token's algorithm is not the one in the options.</td></tr>
+<tr><td><code>jwt.bad_signature</code></td><td><code>PermissionDenied</code></td><td>The signature does not match.</td></tr>
+<tr><td><code>jwt.expired</code></td><td><code>PermissionDenied</code></td><td>Now is at or past <code>exp</code>, after the leeway.</td></tr>
+<tr><td><code>jwt.not_yet_valid</code></td><td><code>PermissionDenied</code></td><td>Now is before <code>nbf</code>.</td></tr>
+<tr><td><code>jwt.issued_in_future</code></td><td><code>PermissionDenied</code></td><td>Now is before <code>iat</code>.</td></tr>
+<tr><td><code>jwt.bad_claim</code></td><td><code>PermissionDenied</code></td><td>The issuer, subject or audience is not the one asked for; <code>e.path</code> is <code>iss</code>, <code>sub</code> or <code>aud</code>.</td></tr>
+<tr><td><code>jwt.missing_claim</code></td><td><code>MissingKey</code></td><td>A claim the options require is absent; <code>e.path</code> names it.</td></tr>
+<tr><td><code>jwt.missing_token</code></td><td><code>NotFound</code></td><td><code>Check</code> found no token in the request.</td></tr>
+</tbody>
+</table></div>
+<p><code>e.message</code> is the short English reason, such as <code>token expired</code>; <code>Require</code> and its siblings send it as the reason of their 401. With <code>Check</code> you choose the answer yourself, as the <code>/check</code> route of the <code>Guard</code> example does: <code>jwt.missing_token</code> gets <code>MissingCredential</code> and every other code <code>Unauthorized</code>.</p>
 
 <h2 id="guide-refresh">Short access tokens and a refresh token</h2>
 <p>A token cannot be taken back once issued, so access tokens should live for minutes, not days. To spare the user a new login every fifteen minutes, issue a second, long lived refresh token at login and accept it at one route only, where it buys a new access token. Mark each token with what it is for, so that a refresh token is refused as an access token. <code>IssuePair</code> on a <code>Guard</code> issues both in one call; the program does it by hand to show the checks.</p>
@@ -73,28 +95,11 @@ doc.SecondsRemaining = How many seconds are left until the expiry; zero when it 
 doc.JWT_HS256 = The HS256 algorithm.
 doc.JWT_HS384 = The HS384 algorithm.
 doc.JWT_HS512 = The HS512 algorithm.
-doc.JWT_OK = Error code: no error.
-doc.JWT_ERR_MALFORMED = Error code: the token does not have three parts separated by dots.
-doc.JWT_ERR_BAD_BASE64 = Error code: one part is not valid base64.
-doc.JWT_ERR_BAD_JSON = Error code: the header or the body is not valid JSON.
-doc.JWT_ERR_ALG_UNSUPPORTED = Error code: the algorithm is not supported, <code>none</code> for instance.
-doc.JWT_ERR_ALG_MISMATCH = Error code: the algorithm of the token is not the one expected.
-doc.JWT_ERR_SIGNATURE = Error code: the signature is wrong.
-doc.JWT_ERR_EXPIRED = Error code: the token has expired.
-doc.JWT_ERR_NOT_YET_VALID = Error code: the <code>nbf</code> time has not arrived yet.
-doc.JWT_ERR_ISSUED_IN_FUTURE = Error code: the issue time is in the future.
-doc.JWT_ERR_ISSUER = Error code: the issuer is wrong.
-doc.JWT_ERR_AUDIENCE = Error code: the audience is wrong.
-doc.JWT_ERR_SUBJECT = Error code: the subject is wrong.
-doc.JWT_ERR_MISSING_CLAIM = Error code: a required claim is absent.
-doc.JWT_ERR_EMPTY_SECRET = Error code: the secret is empty.
-doc.JWT_ERR_TYPE = Error code: the token type is not <code>JWT</code>.
 doc.IsSupportedAlg = This algorithm is supported.
 doc.DigestSize = The signature length of the algorithm in bytes.
-doc.ErrorText = The English explanation of an error code.
-doc.Issue = Sets <code>exp</code> to now plus <code>ttl</code> seconds and <code>iat</code> to now, fills in the guard's issuer and audience when the claims have none, and signs with the guard's algorithm.
+doc.Issue = Throws like <code>Sign</code>. Sets <code>exp</code> to now plus <code>ttl</code> seconds and <code>iat</code> to now, fills in the guard's issuer and audience when the claims have none, and signs with the guard's algorithm.
 doc.IssueFor = A token with nothing but a subject and an expiry.
-doc.IssuePair = Makes a short lived access token and a long lived refresh token; the <code>kind</code> claim tells them apart.
+doc.IssuePair = Makes a short lived access token and a long lived refresh token and puts them in <code>access</code> and <code>refresh</code>; the <code>kind</code> claim tells them apart. Throws like <code>Issue</code>, and then leaves both untouched.
 doc.SetSessionCookie = Puts the token in the secure, HttpOnly cookie of the guard.
 doc.SetSessionCookieInsecure = The same, without the Secure flag; for testing over HTTP only.
 doc.ClearSessionCookie = Clears the session cookie.
@@ -107,21 +112,21 @@ doc.NewGuard = A new guard with a secret and the default options; set <code>opts
 doc.ParseBearer = Pulls the token out of a <code>Bearer ...</code> header value.
 doc.BearerToken = The token in the Authorization header of the request.
 doc.TokenFrom = The token of the request, from the header or the cookie of the guard.
-doc.Check = Checks the token of the request and sends no response itself.
+doc.Check = Checks the token of the request and sends no response itself. Throws <code>jwt.missing_token</code> when the request carries none, and otherwise whatever <code>Verify</code> throws.
 doc.Unauthorized = A 401 response with a reason.
 doc.MissingCredential = A 401 response for a request that carries no token at all.
 doc.Forbidden = A 403 response: the token is right but is not allowed.
-doc.Require = Checks the token; when it is absent or wrong it sends the 401 response itself and returns false.
+doc.Require = Checks the token; when it is absent or wrong it sends the 401 response itself, with the error message as the reason, and returns false.
 doc.RequireScope = The same, and the token has to carry this scope, otherwise 403.
 doc.RequireClaim = The token has to carry this value in this array claim.
 doc.RequireSubject = The subject of the token has to be exactly this; so a user only reaches their own data.
 doc.B64UrlEncodeBytes = Turns bytes into url safe base64 without <code>=</code>.
 doc.B64UrlEncode = Turns a string into url safe base64.
-doc.B64UrlDecode = Decodes url safe base64.
-doc.SignJSON = Signs a JSON body you have already built.
+doc.B64UrlDecode = Decodes url safe base64 without <code>=</code> padding. Throws <code>Syntax</code> at the offset of a character outside the url safe alphabet, and <code>UnexpectedEnd</code> when one character is left over; the code is <code>jwt.bad_base64</code>.
+doc.SignJSON = Signs a JSON body you have already built. Throws <code>jwt.bad_alg</code> for an unsupported algorithm and <code>jwt.empty_secret</code> for an empty secret.
 doc.SignatureOf = Works out the signature of one input.
 doc.SignWithKid = Like <code>Sign</code>, with a key id in the header; for rotating keys.
-doc.Sign = Signs the claims with the given algorithm.
+doc.Sign = Signs the claims with the given algorithm; throws like <code>SignJSON</code>.
 doc.SignHS256 = Signs with HS256.
 doc.SignHS384 = Signs with HS384.
 doc.SignHS512 = Signs with HS512.
@@ -158,10 +163,10 @@ doc.Options.require_jti = Reject one with no <code>jti</code>.
 doc.Options.check_typ = Check that the type is <code>JWT</code>.
 doc.DefaultOptions = The default options: HS256, no leeway, and no claim required, not even <code>exp</code>.
 doc.OptionsFor = The default options with another algorithm.
-doc.Decode = Decodes a token without checking the signature; only to look at the contents, never to trust them.
-doc.Verify = Checks the signature, the algorithm and the times.
-doc.VerifyHS256 = Checks with HS256 and the default options.
-doc.IsValid = The token is valid.
+doc.Decode = Decodes a token without checking the signature; only to look at the contents, never to trust them. Throws <code>jwt.malformed</code>, <code>jwt.bad_base64</code> or <code>jwt.bad_json</code> when it cannot be read.
+doc.Verify = Checks the signature, the algorithm, the times and the claims the options ask for, and returns the token with <code>valid</code> set. Throws an <code>Error</code> with a <code>jwt.*</code> code at the first failure.
+doc.VerifyHS256 = Checks with HS256 and the default options; throws like <code>Verify</code>.
+doc.IsValid = The token is valid; <code>Verify</code> without the error, for a plain yes or no.
 
 ex.Token = jwt-Sign
 ex.Token.alg = jwt-Sign
@@ -181,11 +186,6 @@ ex.Bool = jwt-Sign
 ex.HasAudience = jwt-Sign
 ex.ListHas = jwt-Sign
 ex.HasScope = jwt-Sign
-ex.JWT_OK = jwt-Sign
-ex.JWT_ERR_MALFORMED = jwt-Sign
-ex.JWT_ERR_SIGNATURE = jwt-Sign
-ex.JWT_ERR_EXPIRED = jwt-Sign
-ex.ErrorText = jwt-Sign
 ex.Sign = jwt-Sign
 ex.SignHS256 = jwt-Sign
 ex.Claims = jwt-Sign
@@ -223,18 +223,6 @@ ex.SecondsRemaining = jwt-Algorithms
 ex.JWT_HS256 = jwt-Algorithms
 ex.JWT_HS384 = jwt-Algorithms
 ex.JWT_HS512 = jwt-Algorithms
-ex.JWT_ERR_BAD_BASE64 = jwt-Algorithms
-ex.JWT_ERR_BAD_JSON = jwt-Algorithms
-ex.JWT_ERR_ALG_UNSUPPORTED = jwt-Algorithms
-ex.JWT_ERR_ALG_MISMATCH = jwt-Algorithms
-ex.JWT_ERR_NOT_YET_VALID = jwt-Algorithms
-ex.JWT_ERR_ISSUED_IN_FUTURE = jwt-Algorithms
-ex.JWT_ERR_ISSUER = jwt-Algorithms
-ex.JWT_ERR_AUDIENCE = jwt-Algorithms
-ex.JWT_ERR_SUBJECT = jwt-Algorithms
-ex.JWT_ERR_MISSING_CLAIM = jwt-Algorithms
-ex.JWT_ERR_EMPTY_SECRET = jwt-Algorithms
-ex.JWT_ERR_TYPE = jwt-Algorithms
 ex.IsSupportedAlg = jwt-Algorithms
 ex.DigestSize = jwt-Algorithms
 ex.Issue = jwt-Algorithms

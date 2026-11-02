@@ -11,9 +11,9 @@ pkg.intro <<
 <h3>Limits to know before you download a model</h3>
 <ul>
 <li><code>LoadGguf</code> reads the <em>whole file</em> into memory first, and a buffer holds at most 2 GB. Pick files under 2 GB: TinyLlama 1.1B, Qwen 0.5B or 1.5B and other small models.</li>
-<li>Only five weight types can be read: <code>F32</code>, <code>F16</code>, <code>Q8_0</code>, <code>Q4_0</code> and <code>Q4_1</code>. The K-quants that most downloads use, such as <code>Q4_K_M</code> or <code>Q5_K_S</code>, and BF16 are not supported: <code>TensorBytes</code> returns -1 for them and <code>LoadTensorF32</code> fails. Download the <code>Q8_0</code> or <code>Q4_0</code> file of a model.</li>
+<li>Only five weight types can be read: <code>F32</code>, <code>F16</code>, <code>Q8_0</code>, <code>Q4_0</code> and <code>Q4_1</code>. The K-quants that most downloads use, such as <code>Q4_K_M</code> or <code>Q5_K_S</code>, and BF16 are not supported: <code>TensorBytes</code> returns -1 for them and <code>LoadTensorF32</code> throws <code>gguf.tensor_type</code>. Download the <code>Q8_0</code> or <code>Q4_0</code> file of a model.</li>
 <li>Dimensions are stored fastest first, the order llama.cpp uses. <code>LoadTensorF32</code> reverses them, so a weight listed as <code>4096 x 32000</code> becomes a tensor of 32000 rows of 4096.</li>
-<li><code>ParseGguf</code> takes ownership of the buffer you give it; the model's <code>free</code> releases it.</li>
+<li><code>ParseGguf</code> takes ownership of the buffer you give it; the model's <code>free</code> releases it. When it throws, the buffer stays yours.</li>
 </ul>
 <p>The examples build small files in memory, so they run without a download.</p>
 <h2 id="guide-inspect">What is in a model file</h2>
@@ -35,9 +35,9 @@ pkg.intro <<
 <p>The file lists the dimensions as <code>32 x 2</code>, fastest first, and the loaded tensor has the shape <code>2 x 32</code>, one row per token, so <code>at2(token, j)</code> reads one value. The values come out as 3.599 rather than 3.6 because the scale itself is stored as a 16 bit float: quantization error is part of the format. A real model's table has one row per vocabulary entry; look the token text up in the <code>tokenizer.ggml.tokens</code> array to find its row.</p>
 
 <h2 id="guide-errors">Bad files and missing keys</h2>
-<p>Parsing reports failure through its <code>ok</code> argument and a short message in <code>error</code>. A model with nothing in it is still valid; looking up a key or a tensor it does not have gives an empty string, your default, or <code>-1</code> for an index. Check the index before you use it with <code>values</code> or <code>tensors</code>.</p>
+<p><code>ParseGguf</code>, <code>LoadGguf</code> and <code>LoadTensorF32</code> are <code>throws</code>. A file that is not GGUF is <code>gguf.bad_magic</code>, a file cut off in the header is <code>UnexpectedEnd</code> with the byte offset (and the metadata key or tensor name in <code>path</code> when it happened inside one), and tensor data past the end of the file is <code>gguf.truncated</code>. A model with nothing in it is still valid; looking up a key or a tensor it does not have gives an empty string, your default, or <code>-1</code> for an index. Check the index before you use it with <code>values</code> or <code>tensors</code>.</p>
 {{example.gguf-guide-errors}}
-<p><code>ParseGguf</code> takes ownership of the buffer you give it, and the model's <code>free</code> releases it. Do not also call <code>BufFree</code> on it: freeing it twice crashes the program.</p>
+<p><code>ParseGguf</code> takes ownership of the buffer you give it, and the model's <code>free</code> releases it. Do not also call <code>BufFree</code> on it: freeing it twice crashes the program. When <code>ParseGguf</code> throws, the buffer is still yours to free, as the program does with <code>junk</code>.</p>
 >>
 
 doc.GGML_F32 = Weight type: 32 bit float.
@@ -72,17 +72,15 @@ doc.Gguf.tensors = The tensors.
 doc.Gguf.alignment = The data alignment.
 doc.Gguf.data_offset = Where the data section starts in the file.
 doc.Gguf.raw = The bytes of the whole file, kept in memory.
-doc.Gguf.error = The error message.
-doc.Gguf.ok = It was read correctly.
 doc.Gguf.meta_index = The index of a metadata key; -1 when there is none.
 doc.Gguf.meta_int = An integer metadata value, or the default value.
 doc.Gguf.meta_str = A string metadata value.
 doc.Gguf.tensor_index = The index of the tensor with this name.
 doc.Gguf.free = Frees all of it.
-doc.ParseGguf = Reads the file from a buffer; the buffer belongs to the result from then on.
-doc.LoadGguf = Reads a <code>.gguf</code> file. The whole file is loaded into memory, so it must be smaller than 2 GB.
+doc.ParseGguf = Reads the file from a buffer; the buffer belongs to the result from then on. Throws on a file that is not GGUF, an unsupported version or a header cut short; the buffer stays the caller's then.
+doc.LoadGguf = Reads a <code>.gguf</code> file. The whole file is loaded into memory, so it must be smaller than 2 GB. Throws <code>NotFound</code> when it cannot be opened and the errors of <code>ParseGguf</code> otherwise, with the file name in <code>path</code>.
 doc.TensorBytes = The size of the tensor data in bytes; -1 for a weight type this package cannot read, such as the K-quants.
-doc.LoadTensorF32 = Converts the tensor to 32 bit floats, unpacking F16, Q8_0, Q4_0 and Q4_1, with the dimensions reversed so the last one stored becomes the first. <code>ok</code> is false for any other weight type.
+doc.LoadTensorF32 = Converts the tensor to 32 bit floats, unpacking F16, Q8_0, Q4_0 and Q4_1, with the dimensions reversed so the last one stored becomes the first. Throws <code>OutOfRange</code> for a bad index, <code>Unsupported</code> for any other weight type and <code>UnexpectedEnd</code> when the data runs past the end of the file.
 
 ex.GGML_F32 = gguf-Read
 ex.GGML_F16 = gguf-Read
@@ -116,8 +114,6 @@ ex.Gguf.tensors = gguf-Read
 ex.Gguf.alignment = gguf-Read
 ex.Gguf.data_offset = gguf-Read
 ex.Gguf.raw = gguf-Read
-ex.Gguf.error = gguf-Read
-ex.Gguf.ok = gguf-Read
 ex.Gguf.meta_index = gguf-Read
 ex.Gguf.meta_int = gguf-Read
 ex.Gguf.meta_str = gguf-Read

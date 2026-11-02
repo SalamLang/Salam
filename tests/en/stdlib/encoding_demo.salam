@@ -29,61 +29,73 @@ func test_base64_vectors():
     testing.AssertEqStr(encoding.Base64Encode("Hello, World!"), "SGVsbG8sIFdvcmxkIQ==")
 end
 
-func test_base64_decode():
-    testing.AssertEqStr(encoding.Base64Decode("Zg=="), "f")
-    testing.AssertEqStr(encoding.Base64Decode("Zm8="), "fo")
-    testing.AssertEqStr(encoding.Base64Decode("Zm9vYmFy"), "foobar")
-    testing.AssertEqStr(encoding.Base64Decode(""), "")
-    testing.AssertEqStr(encoding.Base64Decode("Zm9v\nYmFy"), "foobar")
-    testing.AssertEqStr(encoding.Base64Decode("Zm9v YmFy"), "foobar")
+func b64_fails(s: str): str:
+    try:
+        _ := encoding.Base64Decode(s)
+    catch e:
+        ret e.kind_name()
+    end
+    ret "ok"
 end
 
-func test_base64_roundtrip():
+func test_base64_decode() throws:
+    testing.AssertEqStr(try encoding.Base64Decode("Zg=="), "f")
+    testing.AssertEqStr(try encoding.Base64Decode("Zm8="), "fo")
+    testing.AssertEqStr(try encoding.Base64Decode("Zm9vYmFy"), "foobar")
+    testing.AssertEqStr(try encoding.Base64Decode(""), "")
+    testing.AssertEqStr(try encoding.Base64Decode("Zm9v\nYmFy"), "foobar")
+    testing.AssertEqStr(try encoding.Base64Decode("Zm9v YmFy"), "foobar")
+    testing.AssertEqStr(try encoding.Base64Decode("Zg"), "f")
+    testing.AssertEqStr(try encoding.Base64Decode("-_8"), try encoding.Base64Decode("+/8="))
+end
+
+func test_base64_roundtrip() throws:
     mut s := ""
     repeat 40:
         s = s.concat("ab-")
-        testing.AssertEqStr(encoding.Base64Decode(encoding.Base64Encode(s)), s)
+        testing.AssertEqStr(try encoding.Base64Decode(encoding.Base64Encode(s)), s)
     end
 end
 
-func test_base64_strict():
-    mut ok := false
-    testing.AssertEqStr(encoding.Base64DecodeStrict("Zm9vYmFy", ok), "foobar")
-    testing.AssertTrue(ok)
-    testing.AssertEqStr(encoding.Base64DecodeStrict("Zg==", ok), "f")
-    testing.AssertTrue(ok)
-    encoding.Base64DecodeStrict("Zm9v\nYmFy", ok)
-    testing.AssertTrue(ok)
-    encoding.Base64DecodeStrict("Zm9*YmFy", ok)
-    testing.AssertFalse(ok)
-    encoding.Base64DecodeStrict("Zg==Zg==", ok)
-    testing.AssertFalse(ok)
-    encoding.Base64DecodeStrict("Zm9vY", ok)
-    testing.AssertFalse(ok)
+func test_base64_errors():
+    testing.AssertEqStr(b64_fails("Zm9vYmFy"), "ok")
+    testing.AssertEqStr(b64_fails("Zm9*YmFy"), "syntax error")
+    testing.AssertEqStr(b64_fails("Zg==Zg=="), "syntax error")
+    testing.AssertEqStr(b64_fails("Zm9vY"), "unexpected end of input")
+    testing.AssertEqStr(b64_fails("Zg="), "unexpected end of input")
+    testing.AssertEqStr(b64_fails("Zm9v=="), "syntax error")
 end
 
-func test_base64_bytes():
-    mut ok := false
+func test_base64_bytes() throws:
     buf := mem.AllocateZeroed(64 as u64)
-    n := encoding.Base64DecodeBytes("Zm9vYmFy", buf, 64, ok)
-    testing.AssertTrue(ok)
+    defer mem.Free(buf)
+    n := try encoding.Base64DecodeBytes("Zm9vYmFy", buf, 64)
     testing.AssertEqInt(n, 6)
-    z := encoding.Base64DecodeBytes("AAAA", buf, 64, ok)
-    testing.AssertTrue(ok)
+    z := try encoding.Base64DecodeBytes("AAAA", buf, 64)
     testing.AssertEqInt(z, 3)
-    encoding.Base64DecodeBytes("Zm9vYmFy", buf, 2, ok)
-    testing.AssertFalse(ok)
-    mem.Free(buf)
+    mut kind := "ok"
+    try:
+        _ := encoding.Base64DecodeBytes("Zm9vYmFy", buf, 2)
+    catch e:
+        kind = e.kind_name()
+    end
+    testing.AssertEqStr(kind, "out of range")
 end
 
-func test_hex():
+func test_hex() throws:
     testing.AssertEqStr(encoding.HexEncode(""), "")
     testing.AssertEqStr(encoding.HexEncode("abc"), "616263")
     testing.AssertEqStr(encoding.HexEncode("foobar"), "666f6f626172")
-    testing.AssertEqStr(encoding.HexDecode("616263"), "abc")
-    testing.AssertEqStr(encoding.HexDecode("666f6f626172"), "foobar")
-    testing.AssertEqStr(encoding.HexDecode(""), "")
-    testing.AssertEqStr(encoding.HexDecode("6162zz"), "ab")
+    testing.AssertEqStr(try encoding.HexDecode("616263"), "abc")
+    testing.AssertEqStr(try encoding.HexDecode("666f6f626172"), "foobar")
+    testing.AssertEqStr(try encoding.HexDecode(""), "")
+    mut kind := "ok"
+    try:
+        _ := encoding.HexDecode("6162zz")
+    catch e:
+        kind = e.kind_name()
+    end
+    testing.AssertEqStr(kind, "syntax error")
     testing.AssertEqInt(encoding.HexVal("0"), 0)
     testing.AssertEqInt(encoding.HexVal("9"), 9)
     testing.AssertEqInt(encoding.HexVal("a"), 10)
@@ -91,26 +103,30 @@ func test_hex():
     testing.AssertEqInt(encoding.HexVal("g"), 0 - 1)
 end
 
-func test_url():
+func test_url() throws:
     testing.AssertEqStr(encoding.URLEncode("safe-._~09AZaz"), "safe-._~09AZaz")
     testing.AssertEqStr(encoding.URLEncode("a b"), "a%20b")
     testing.AssertEqStr(encoding.URLEncode("a/b?c=d&e"), "a%2Fb%3Fc%3Dd%26e")
     testing.AssertEqStr(encoding.URLEncode(""), "")
-    testing.AssertEqStr(encoding.URLDecode("a%20b"), "a b")
-    testing.AssertEqStr(encoding.URLDecode("a+b"), "a b")
-    testing.AssertEqStr(encoding.URLDecode("a%2Fb"), "a/b")
-    testing.AssertEqStr(encoding.URLDecode("100%"), "100%")
-    testing.AssertEqStr(encoding.URLDecode(encoding.URLEncode("x y/z?q=1")), "x y/z?q=1")
+    testing.AssertEqStr(try encoding.URLDecode("a%20b"), "a b")
+    testing.AssertEqStr(try encoding.URLDecode("a+b"), "a b")
+    testing.AssertEqStr(try encoding.URLDecode("a%2Fb"), "a/b")
+    testing.AssertEqStr(try encoding.URLDecode("100%25"), "100%")
+    testing.AssertEqStr(try encoding.URLDecode(encoding.URLEncode("x y/z?q=1")), "x y/z?q=1")
 end
 
 func main:
     test_base64_vectors()
-    test_base64_decode()
-    test_base64_roundtrip()
-    test_base64_strict()
-    test_base64_bytes()
-    test_hex()
-    test_url()
+    test_base64_errors()
+    try:
+        test_base64_decode()
+        test_base64_roundtrip()
+        test_base64_bytes()
+        test_hex()
+        test_url()
+    catch e:
+        println "unexpected error: " + e.to_str()
+    end
     testing.Summary()
     ret 0
 end

@@ -30,8 +30,8 @@ pure func _b64val(code: int): int:
     if code >= 65 and code <= 90: ret code - 65
     else code >= 97 and code <= 122: ret code - 71
     else code >= 48 and code <= 57: ret code + 4
-    else code == 43: ret 62
-    else code == 47: ret 63
+    else code == 43 or code == 45: ret 62
+    else code == 47 or code == 95: ret 63
     else:
         ret 0 - 1
     end
@@ -54,6 +54,107 @@ pure func _url_safe(code: int): bool:
     else:
         ret false
     end
+end
+
+func _byte_desc(code: int): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    if code == 32:
+        str.BufAppend(sb, "space")
+    else code > 32 and code < 127:
+        str.BufAppend(sb, "character ")
+        str.BufAppendChar(sb, 39)
+        str.BufAppendChar(sb, code)
+        str.BufAppendChar(sb, 39)
+    else:
+        digits := "0123456789ABCDEF"
+        hp := _bp(digits)
+        str.BufAppend(sb, "byte 0x")
+        str.BufAppendChar(sb, _ub(hp, code / 16))
+        str.BufAppendChar(sb, _ub(hp, code % 16))
+    end
+    out := str.BufStr(sb)
+    ret out
+end
+
+func _enc_err(text: str, kind: ErrorKind, message: str, offset: int, context: str): Error:
+    ret Error.At(kind, message, offset).locate(text).wrap(context)
+end
+
+func _b64_decode_into(s: str, sb &: str.StringBuilder, op: u8*, cap: int): int throws:
+    n := s.len()
+    bp := _bp(s)
+    mut written := 0
+    mut acc := 0
+    mut nbits := 0
+    mut digits := 0
+    mut pad := 0
+    mut pad_at := 0 - 1
+    mut extra_pad_at := 0 - 1
+    mut i := 0
+    until i < n:
+        code := _ub(bp, i)
+        if code == 32 or code == 9 or code == 10 or code == 13:
+            i += 1
+            continue
+        end
+        if code == 61:
+            if pad == 0: pad_at = i end
+            pad += 1
+            if pad == 3: extra_pad_at = i end
+            i += 1
+            continue
+        end
+        v := _b64val(code)
+        if v < 0:
+            throw _enc_err(s, ErrorKind.Syntax, "invalid " + _byte_desc(code), i, "base64")
+        end
+        if pad > 0:
+            throw _enc_err(s, ErrorKind.Syntax, "data after '=' padding", i, "base64")
+        end
+        digits += 1
+        acc = (acc << 6) | v
+        nbits += 6
+        if nbits >= 8:
+            nbits -= 8
+            b := (acc >> nbits) & 255
+            if cap < 0:
+                str.BufAppendChar(sb, b)
+            else written < cap:
+                op[written] = b as u8
+            end
+            written += 1
+            acc = acc & ((1 << nbits) - 1)
+        end
+        i += 1
+    end
+    r := digits % 4
+    if r == 1:
+        throw _enc_err(s, ErrorKind.UnexpectedEnd, "input ends one character into a group of four", n, "base64")
+    end
+    if pad > 0:
+        mut need := 0
+        if r == 2: need = 2 end
+        if r == 3: need = 1 end
+        if need == 0:
+            throw _enc_err(s, ErrorKind.Syntax, "unexpected '=' padding", pad_at, "base64")
+        end
+        if pad < need:
+            throw _enc_err(s, ErrorKind.UnexpectedEnd, "missing '=' padding", n, "base64")
+        end
+        if pad > need:
+            mut at := extra_pad_at
+            if need == 1:
+                mut j := pad_at + 1
+                until j < n and _ub(bp, j) != 61:
+                    j += 1
+                end
+                at = j
+            end
+            throw _enc_err(s, ErrorKind.Syntax, "too much '=' padding", at, "base64")
+        end
+    end
+    ret written
 end
 
 func _b64_encode_bytes(p: void*, n: int): str:
@@ -101,46 +202,10 @@ end
 
 @en "Base64Decode"
 @fa "کدگشایی پایه۶۴"
-pub func Base64Decode(s: str): str:
-    n := s.len()
-    bp := _bp(s)
+pub func Base64Decode(s: str): str throws:
     mut sb := str.NewBuilder()
     defer str.BufFree(sb)
-    mut qi := 0
-    mut q0 := 0
-    mut q1 := 0
-    mut q2 := 0
-    mut i := 0
-    until i < n:
-        code := _ub(bp, i)
-        i += 1
-        if code != 32 and code != 9 and code != 10 and code != 13:
-            v := _b64val(code)
-            if v >= 0:
-                if qi == 0:
-                    q0 = v
-                    qi = 1
-                else qi == 1:
-                    q1 = v
-                    qi = 2
-                else qi == 2:
-                    q2 = v
-                    qi = 3
-                else:
-                    str.BufAppendChar(sb, q0 * 4 + q1 / 16)
-                    str.BufAppendChar(sb, (q1 % 16) * 16 + q2 / 4)
-                    str.BufAppendChar(sb, (q2 % 4) * 64 + v)
-                    qi = 0
-                end
-            end
-        end
-    end
-    if qi >= 2:
-        str.BufAppendChar(sb, q0 * 4 + q1 / 16)
-    end
-    if qi >= 3:
-        str.BufAppendChar(sb, (q1 % 16) * 16 + q2 / 4)
-    end
+    try _b64_decode_into(s, sb, null, 0 - 1)
     out := str.BufStr(sb)
     ret out
 end
@@ -169,18 +234,23 @@ pub inline pure func HexVal(c: str): int: ret _hexval(char_code(c)) end
 
 @en "HexDecode"
 @fa "کدگشایی شانزده"
-pub func HexDecode(s: str): str:
+pub func HexDecode(s: str): str throws:
     n := s.len()
     bp := _bp(s)
     mut sb := str.NewBuilder()
     defer str.BufFree(sb)
     mut i := 0
-    until i + 1 < n:
+    until i < n:
         hi := _hexval(_ub(bp, i))
+        if hi < 0:
+            throw _enc_err(s, ErrorKind.Syntax, "invalid " + _byte_desc(_ub(bp, i)), i, "hex")
+        end
+        if i + 1 >= n:
+            throw _enc_err(s, ErrorKind.UnexpectedEnd, "odd number of hex digits", n, "hex")
+        end
         lo := _hexval(_ub(bp, i + 1))
-        if hi < 0 or lo < 0:
-            out0 := str.BufStr(sb)
-            ret out0
+        if lo < 0:
+            throw _enc_err(s, ErrorKind.Syntax, "invalid " + _byte_desc(_ub(bp, i + 1)), i + 1, "hex")
         end
         str.BufAppendChar(sb, hi * 16 + lo)
         i += 2
@@ -214,7 +284,7 @@ end
 
 @en "URLDecode"
 @fa "کدگشایی نشانی"
-pub func URLDecode(s: str): str:
+pub func URLDecode(s: str): str throws:
     n := s.len()
     bp := _bp(s)
     mut sb := str.NewBuilder()
@@ -222,16 +292,18 @@ pub func URLDecode(s: str): str:
     mut i := 0
     until i < n:
         code := _ub(bp, i)
-        if code == 37 and i + 2 < n:
-            hi := _hexval(_ub(bp, i + 1))
-            lo := _hexval(_ub(bp, i + 2))
-            if hi >= 0 and lo >= 0:
-                str.BufAppendChar(sb, hi * 16 + lo)
-                i += 3
-            else:
-                str.BufAppendChar(sb, code)
-                i += 1
+        if code == 37:
+            if i + 1 < n and _hexval(_ub(bp, i + 1)) < 0:
+                throw _enc_err(s, ErrorKind.Syntax, "malformed percent escape", i, "url")
             end
+            if i + 2 < n and _hexval(_ub(bp, i + 2)) < 0:
+                throw _enc_err(s, ErrorKind.Syntax, "malformed percent escape", i, "url")
+            end
+            if i + 2 >= n:
+                throw _enc_err(s, ErrorKind.UnexpectedEnd, "incomplete percent escape", i, "url")
+            end
+            str.BufAppendChar(sb, _hexval(_ub(bp, i + 1)) * 16 + _hexval(_ub(bp, i + 2)))
+            i += 3
         else:
             if code == 43:
                 str.BufAppendChar(sb, 32)
@@ -245,120 +317,16 @@ pub func URLDecode(s: str): str:
     ret out
 end
 
-@en "Base64DecodeStrict"
-@fa "کدگشایی پایه۶۴ سخت گیرانه"
-pub func Base64DecodeStrict(s: str, ok &: bool): str:
-    ok = true
-    n := s.len()
-    bp := _bp(s)
-    mut sb := str.NewBuilder()
-    defer str.BufFree(sb)
-    mut acc := 0
-    mut nbits := 0
-    mut pad := 0
-    mut ndigits := 0
-    mut i := 0
-    until i < n:
-        code := _ub(bp, i)
-        i += 1
-        if code == 32 or code == 9 or code == 10 or code == 13:
-            continue
-        end
-        if code == 61:
-            pad += 1
-            if pad > 2:
-                ok = false
-                ret ""
-            end
-            continue
-        end
-        if pad > 0:
-            ok = false
-            ret ""
-        end
-        v := _b64val(code)
-        if v < 0:
-            ok = false
-            ret ""
-        end
-        ndigits += 1
-        acc = acc * 64 + v
-        nbits += 6
-        if nbits >= 8:
-            nbits -= 8
-            mut shift := 1
-            repeat nbits:
-                shift = shift * 2
-            end
-            str.BufAppendChar(sb, (acc / shift) % 256)
-            acc = acc % shift
-        end
-    end
-    if (ndigits + pad) % 4 != 0:
-        ok = false
-        ret ""
-    end
-    out := str.BufStr(sb)
-    ret out
-end
-
 @en "Base64DecodeBytes"
 @fa "کدگشایی پایه۶۴ به بایت"
-pub func Base64DecodeBytes(s: str, out: void*, cap: int, ok &: bool): int:
-    ok = true
-    n := s.len()
-    bp := _bp(s)
-    op := out as u8*
-    mut written := 0
-    mut acc := 0
-    mut nbits := 0
-    mut pad := 0
-    mut ndigits := 0
-    mut i := 0
-    until i < n:
-        code := _ub(bp, i)
-        i += 1
-        if code == 32 or code == 9 or code == 10 or code == 13:
-            continue
-        end
-        if code == 61:
-            pad += 1
-            if pad > 2:
-                ok = false
-                ret 0
-            end
-            continue
-        end
-        if pad > 0:
-            ok = false
-            ret 0
-        end
-        v := _b64val(code)
-        if v < 0:
-            ok = false
-            ret 0
-        end
-        ndigits += 1
-        acc = acc * 64 + v
-        nbits += 6
-        if nbits >= 8:
-            nbits -= 8
-            mut shift := 1
-            repeat nbits:
-                shift = shift * 2
-            end
-            if written >= cap:
-                ok = false
-                ret 0
-            end
-            op[written] = ((acc / shift) % 256) as u8
-            written += 1
-            acc = acc % shift
-        end
-    end
-    if (ndigits + pad) % 4 != 0:
-        ok = false
-        ret 0
+pub func Base64DecodeBytes(s: str, out: void*, cap: int): int throws:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    mut room := cap
+    if room < 0: room = 0 end
+    written := try _b64_decode_into(s, sb, out as u8*, room)
+    if written > room:
+        throw Error.New(ErrorKind.OutOfRange, "decoded data needs " + written + " bytes but the buffer holds " + room).wrap("base64")
     end
     ret written
 end

@@ -329,6 +329,62 @@ func ex_classify(v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str): ExArg:
     ret r
 end
 
+func ex_reg_need(e: ExArg, ni &: int, ns &: int):
+    ni = 0
+    ns = 0
+    each pc in e.pieces:
+        if str.Equals(pc, "float") or str.Equals(pc, "double"):
+            ns += 1
+        else:
+            ni += 1
+        end
+    end
+end
+
+func ex_param(v &: Lv, s &: sm.Sema, a &: at.Ast, sig: int, j: int): ExArg:
+    sg := sm.SigAt(s, sig)
+    mut e := ex_classify(v, s, a, sm.ToString(s, sg.params.get(j)))
+    if e.mode != EXM_REGS or ex_arch(v) != EXA_SYSV:
+        ret e
+    end
+    mut gi := 6
+    mut fi := 8
+    if ex_classify(v, s, a, sm.ToString(s, sg.ret_type)).mode == EXM_BYVAL:
+        gi -= 1
+    end
+    mut ni := 0
+    mut ns := 0
+    repeat j in k:
+        kts := sm.ToString(s, sg.params.get(k))
+        if param_is_ref(s, a, sig, k):
+            gi -= 1
+        else:
+            ke := ex_classify(v, s, a, kts)
+            if ke.mode == EXM_REGS:
+                ex_reg_need(ke, ni, ns)
+                if ni <= gi and ns <= fi:
+                    gi -= ni
+                    fi -= ns
+                end
+            else ke.mode == EXM_NONE:
+                kty := ty_of(v, s, a, kts)
+                if str.Equals(kty, "float") or str.Equals(kty, "double"):
+                    fi -= 1
+                else is_slice(kts):
+                    gi -= 2
+                else:
+                    gi -= 1
+                end
+            end
+        end
+    end
+    ex_reg_need(e, ni, ns)
+    if ni > gi or ns > fi:
+        e.mode = EXM_BYVAL
+    end
+    ret e
+end
+
 func ex_param_text(e: ExArg, lty: str): str:
     if e.mode == EXM_REGS:
         mut b := co.SbNew()

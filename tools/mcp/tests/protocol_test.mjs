@@ -893,6 +893,8 @@ async function testHostedInputs() {
     check("a hosted multi-file check passes", multi.result?.isError === false, textOf(multi));
     const docs = await rpc(4, "tools/call", { name: "salam_docs", arguments: { query: "loops" } });
     check("the hosted server answers docs", textOf(docs).includes("until"));
+    const own = await rpc(5, "tools/call", { name: "salam_web_fetch", arguments: { url: `${base}/health` } });
+    check("the hosted server never fetches a private address", own.result?.isError === true && textOf(own).includes("private network"), textOf(own));
   } finally {
     child.kill();
   }
@@ -991,6 +993,57 @@ async function testSignIn() {
   }
 }
 
+async function testWeb() {
+  console.log("web tools");
+  const site = createHttpServer((req, res) => {
+    const url = new URL(req.url, "http://x");
+    if (url.pathname === "/old") {
+      res.writeHead(302, { Location: "/docs/page" }).end();
+      return;
+    }
+    if (url.pathname === "/search") {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ results: [{ title: `Hit for ${url.searchParams.get("q")}`, url: "https://example.com/a", content: `format=${url.searchParams.get("format")}` }] }));
+      return;
+    }
+    res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+    res.end(
+      '<!doctype html><html><head><title>Docs &amp; notes</title><style>p{}</style></head><body><nav><a href="/x">Menu</a></nav><main>' +
+        "<h1>Salam &amp; web</h1><p>First   line<br>second line with <a href=\"next?a=1&amp;b=2\">a link</a>.</p>" +
+        "<script>var hidden = 1;</script><ul><li>one</li><li>two</li></ul><pre>  keep   spaces</pre><p>نیم&zwnj;فاصله</p>" +
+        `${"<p>filler text for the main block</p>".repeat(80)}</main></body></html>`,
+    );
+  });
+  await new Promise((r) => site.listen(0, "127.0.0.1", r));
+  const base = `http://127.0.0.1:${site.address().port}`;
+  try {
+    const call = (id, name, args) => ({ jsonrpc: "2.0", id, method: "tools/call", params: { _meta: meta, name, arguments: args } });
+    const { raw } = await converse(
+      [
+        call(1, "salam_web_fetch", { url: `${base}/old`, max_chars: 400 }),
+        call(2, "salam_web_search", { query: "زبان سلام" }),
+        call(3, "salam_web_fetch", { url: `${base}/old`, offset: 10, max_chars: 20 }),
+        call(4, "salam_web_fetch", { url: "ftp://example.com/" }),
+      ],
+      { SALAM_MCP_SEARCH_URL: base },
+    );
+    const [page, found, part, ftp] = parseLines(raw);
+    const text = textOf(page);
+    check("a redirect is followed to the final page", text.includes(`URL: ${base}/docs/page`), text);
+    check("the title and headings come through as Markdown", text.includes("Title: Docs & notes") && text.includes("# Salam & web"), text);
+    check("links are resolved and unescaped", text.includes(`[a link](${base}/docs/next?a=1&b=2)`), text);
+    check("lists keep their items", text.includes("- one") && text.includes("- two"), text);
+    check("scripts, styles and menus are dropped", !text.includes("hidden") && !text.includes("p{}") && !text.includes("Menu"), text);
+    check("whitespace collapses outside pre", text.includes("First line\nsecond line"), text);
+    check("a long page says how to read on", textOf(part).includes("call salam_web_fetch again with offset 30"), textOf(part));
+    check("search uses the configured SearXNG instance", textOf(found).includes("Hit for زبان سلام") && textOf(found).includes("format=json"), textOf(found));
+    check("search returns structured results", found.result?.structuredContent?.results?.[0]?.url === "https://example.com/a", found.result?.structuredContent);
+    check("other schemes are refused", ftp.result?.isError === true, textOf(ftp));
+  } finally {
+    site.close();
+  }
+}
+
 // --- runner ------------------------------------------------------------
 
 const suites = [
@@ -1003,6 +1056,7 @@ const suites = [
   testKeywords,
   testAgentTools,
   testHostedInputs,
+  testWeb,
   testSignIn,
   testHttp,
 ];

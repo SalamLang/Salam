@@ -7,38 +7,28 @@ struct User:
     pub admin: bool = false
 end
 
-func decodeUser(data: void*, n: int, ok &: bool): User:
+func decodeUser(data: void*, n: int): User throws:
     mut u := User {}
     mut r := compress.NewByteReader(data, n)
-    ok = true
-    until compress.RdLeft(r) > 0 and ok:
+    until compress.RdLeft(r) > 0:
         mut number := 0
         mut wire := 0
-        protobuf.ReadTag(r, number, wire, ok)
-        if not ok: ret u end
-        switch number:
-            1:
-                u.id = protobuf.ReadVarint(r, ok) as int
-                break
-            end
-            2:
-                u.name = protobuf.ReadLenPrefixedStr(r, ok)
-                break
-            end
-            3:
-                u.admin = protobuf.ReadVarint(r, ok) != (0 as u64)
-                break
-            end
-            else:
-                println "skipping unknown field", number
-                protobuf.SkipField(r, wire, ok)
-            end
+        try protobuf.ReadTag(r, number, wire)
+        if number == 1:
+            u.id = try protobuf.ReadVarint(r) as int
+        else number == 2:
+            u.name = try protobuf.ReadLenPrefixedStr(r)
+        else number == 3:
+            u.admin = try protobuf.ReadVarint(r) != (0 as u64)
+        else:
+            println "skipping unknown field", number
+            try protobuf.SkipField(r, wire)
         end
     end
     ret u
 end
 
-func main:
+func main throws:
     mut b := compress.NewByteBuf()
     protobuf.WriteTag(b, 1, protobuf.WT_VARINT)
     protobuf.WriteVarint(b, 42 as u64)
@@ -46,10 +36,12 @@ func main:
     protobuf.WriteLenPrefixedStr(b, "added in v2")
     protobuf.WriteTag(b, 2, protobuf.WT_LEN)
     protobuf.WriteLenPrefixedStr(b, "Sara")
-    mut ok := false
-    u := decodeUser(b.data, b.len, ok)
-    println ok, u.id, u.name, u.admin
-    _ := decodeUser(b.data, b.len - 2, ok)
-    println "truncated:", ok
+    u := try decodeUser(b.data, b.len)
+    println u.id, u.name, u.admin
+    try:
+        _ := decodeUser(b.data, b.len - 2)
+    catch e:
+        println "truncated:", e.kind_name(), "|", e.to_str()
+    end
     compress.BufFree(b)
 end

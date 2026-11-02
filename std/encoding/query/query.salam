@@ -40,30 +40,43 @@ inline pure func _ub(bp: i8*, i: int): int:
     ret v
 end
 
-func _pct_decode(s: str, plus_as_space: bool): str:
-    n := s.len()
-    bp := _bp(s)
+func _hexval(code: int): int:
+    if code >= 48 and code <= 57: ret code - 48 end
+    if code >= 65 and code <= 70: ret code - 55 end
+    if code >= 97 and code <= 102: ret code - 87 end
+    ret 0 - 1
+end
+
+func _pct_decode(text: str, from: int, stop: int, plus_as_space: bool, strict: bool, err &: Error): str:
+    bp := _bp(text)
     mut sb := str.NewBuilder()
     defer str.BufFree(sb)
-    mut i := 0
-    until i < n:
+    mut i := from
+    until i < stop:
         code := _ub(bp, i)
-        if code == 37 and i + 2 < n:
-            hi := encoding.HexVal(str.CharAt(s, i + 1))
-            lo := encoding.HexVal(str.CharAt(s, i + 2))
+        if code == 37:
+            mut hi := 0 - 1
+            mut lo := 0 - 1
+            if i + 1 < stop: hi = _hexval(_ub(bp, i + 1)) end
+            if i + 2 < stop: lo = _hexval(_ub(bp, i + 2)) end
             if hi >= 0 and lo >= 0:
                 str.BufAppendChar(sb, hi * 16 + lo)
                 i += 3
             else:
+                if strict and err.message == "":
+                    mut kind := ErrorKind.Syntax
+                    mut message := "malformed percent escape"
+                    if i + 2 >= stop and (i + 1 >= stop or hi >= 0):
+                        kind = ErrorKind.UnexpectedEnd
+                        message = "incomplete percent escape"
+                    end
+                    err = Error.At(kind, message, i).locate(text).wrap("query")
+                end
                 str.BufAppendChar(sb, code)
                 i += 1
             end
-        else code == 43:
-            if plus_as_space:
-                str.BufAppendChar(sb, 32)
-            else:
-                str.BufAppendChar(sb, 43)
-            end
+        else code == 43 and plus_as_space:
+            str.BufAppendChar(sb, 32)
             i += 1
         else:
             str.BufAppendChar(sb, code)
@@ -73,9 +86,40 @@ func _pct_decode(s: str, plus_as_space: bool): str:
     ret str.BufStr(sb)
 end
 
-func _decode_component(s: str, space_as_plus: bool): str:
-    if space_as_plus: ret encoding.URLDecode(s) end
-    ret _pct_decode(s, false)
+func _parse(qs: str, opts: QueryOptions, strict: bool, err &: Error): QueryMap:
+    mut out := QueryMap {}
+    n := qs.len()
+    bp := _bp(qs)
+    mut pos := 0
+    if n > 0 and _ub(bp, 0) == 63: pos = 1 end
+    until pos < n:
+        mut pend := pos
+        until pend < n and _ub(bp, pend) != 38:
+            pend += 1
+        end
+        if pend > pos:
+            mut eq_at := pos
+            until eq_at < pend and _ub(bp, eq_at) != 61:
+                eq_at += 1
+            end
+            key := _pct_decode(qs, pos, eq_at, opts.space_as_plus, strict, err)
+            mut val := ""
+            if eq_at < pend:
+                val = _pct_decode(qs, eq_at + 1, pend, opts.space_as_plus, strict, err)
+            end
+            if strict and err.message != "": ret out end
+            mut qv := QueryValues {}
+            if out.data.has(key):
+                qv = out.data.get(key)
+            else:
+                out.order.push(key)
+            end
+            qv.items.push(val)
+            out.data.put(key, qv)
+        end
+        pos = pend + 1
+    end
+    ret out
 end
 
 func _encode_component(s: str, space_as_plus: bool): str:
@@ -90,46 +134,17 @@ pub func NewQueryMap(): QueryMap: ret QueryMap {} end
 
 @en "DecodeWith"
 @fa "کدگشایی سفارشی"
-pub func DecodeWith(qs: str, opts: QueryOptions): QueryMap:
-    mut out := QueryMap {}
-    mut body := qs
-    if body.len() > 0 and str.CharAt(body, 0) == "?":
-        body = body.substr(1, body.len() - 1)
-    end
-    if body.len() == 0: ret out end
-
-    pairs := str.Split(body, "&")
-    mut i := 0
-    until i < pairs.len():
-        pair := pairs.get(i)
-        i += 1
-        if pair.len() == 0: continue end
-        eq_at := str.IndexOf(pair, "=")
-        mut rawKey := pair
-        mut rawVal := ""
-        if eq_at >= 0:
-            rawKey = pair.substr(0, eq_at)
-            rawVal = pair.substr(eq_at + 1, pair.len() - eq_at - 1)
-        end
-        key := _decode_component(rawKey, opts.space_as_plus)
-        val := _decode_component(rawVal, opts.space_as_plus)
-
-        mut qv := QueryValues {}
-        if out.data.has(key):
-            qv = out.data.get(key)
-        else:
-            out.order.push(key)
-        end
-        qv.items.push(val)
-        out.data.put(key, qv)
-    end
+pub func DecodeWith(qs: str, opts: QueryOptions): QueryMap throws:
+    mut err := Error {}
+    out := _parse(qs, opts, true, err)
+    if err.message != "": throw err end
     ret out
 end
 
 @en "Decode"
 @fa "کدگشایی"
-pub func Decode(qs: str): QueryMap:
-    ret DecodeWith(qs, QueryOptions {})
+pub func Decode(qs: str): QueryMap throws:
+    ret try DecodeWith(qs, QueryOptions {})
 end
 
 @en "EncodeWith"
@@ -165,7 +180,8 @@ end
 @en "GetAll"
 @fa "همه مقدارها"
 pub func GetAll(qs: str, key: str): Vector<str>:
-    m := Decode(qs)
+    mut err := Error {}
+    m := _parse(qs, QueryOptions {}, false, err)
     if m.data.has(key): ret m.data.get(key).items end
     ret Vector {}
 end
@@ -181,7 +197,8 @@ end
 @en "Has"
 @fa "دارد"
 pub func Has(qs: str, key: str): bool:
-    m := Decode(qs)
+    mut err := Error {}
+    m := _parse(qs, QueryOptions {}, false, err)
     ret m.data.has(key)
 end
 

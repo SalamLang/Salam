@@ -1,0 +1,190 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import encoding.csv
+import encoding.value
+import data
+import excel
+import testing
+import str
+
+func show(label: str, e: Error):
+    println label + ": " + e.kind_name() + " | " + e.to_str() + " [" + e.code + "]"
+end
+
+func crlf(text: str): str:
+    ret str.Replace(text, "\r\n", `\r\n`)
+end
+
+func rows(t: csv.CSVTable): str:
+    bar := csv.CSVOptions { separator = "|" }
+    mut out := ""
+    each r in t.rows:
+        if out != "": out = out + " / " end
+        out = out + csv.WriteLineWith(r.fields, bar)
+    end
+    ret out
+end
+
+func read_all(label: str, text: str):
+    try:
+        mut t := csv.ReadAll(text)
+        println label + ": ok " + t.rows.len() + " rows: " + rows(t)
+        csv.FreeTable(t)
+    catch e:
+        show(label, e)
+    end
+end
+
+func read_line(label: str, line: str):
+    try:
+        f := csv.ReadLine(line)
+        println label + ": ok " + csv.WriteLineWith(f, csv.CSVOptions { separator = "|" })
+    catch e:
+        show(label, e)
+    end
+end
+
+func reader_errors():
+    println "== ReadAll =="
+    read_all("valid", "name,city\r\nAli,Tehran\r\n\r\n\"Sara, A\",Shiraz\r\n")
+    read_all("line break in quotes", "id,note\n1,\"first line\nsecond line\"\n2,plain\n")
+    read_all("unterminated quote", "id,note\n1,\"never closed\n2,plain\n")
+    read_all("text after quote", "item,color\n\"Pen\" ,blue\n")
+    read_all("bare quote", "name,height\nAli,5'11\"\n")
+    read_all("empty", "")
+    println ""
+    println "== ReadLine =="
+    read_line("valid", `a,"b,c","d""e"`)
+    read_line("trailing line break", "x,y\r\n")
+    read_line("two rows", "x,y\nz")
+    read_line("unterminated", `a,"b`)
+end
+
+func separators():
+    println ""
+    println "== separators =="
+    semi := csv.CSVOptions { separator = ";" }
+    try:
+        mut t := csv.ReadAllWith("name;price\n\"Tea; green\";2,50\n", semi)
+        println "semicolon: " + rows(t)
+        println crlf(csv.WriteAllWith(t, semi))
+        csv.FreeTable(t)
+    catch e:
+        show("semicolon", e)
+    end
+    tab := csv.CSVOptions { separator = "\t" }
+    try:
+        f := csv.ReadLineWith("a\tb c\td", tab)
+        println "tab: " + f.len() + " fields"
+        csv.ReadLineWith(`"x" y`, tab)
+    catch e:
+        show("tab", e)
+    end
+    try:
+        csv.ReadAllWith("a,b", csv.CSVOptions { separator = "::" })
+    catch e:
+        show("bad separator", e)
+    end
+    mut pair := Vector {} as Vector<str>
+    pair.push("a")
+    pair.push("b")
+    println "writer with an empty separator: " + csv.WriteLineWith(pair, csv.CSVOptions { separator = "" })
+    pair.free()
+end
+
+func values():
+    println ""
+    println "== ToValue =="
+    try:
+        mut v := csv.ToValue("id,note\n1,\"two\nlines\"\n")
+        println value.ArrayLen(v), crlf(csv.FromValue(v))
+        value.ValueFree(v)
+    catch e:
+        show("multiline", e)
+    end
+    try:
+        csv.ToValue("id,name,id\n1,Ali,2\n")
+    catch e:
+        show("duplicate header", e)
+    end
+    try:
+        mut v := csv.ToValueWith("1,1\n2,2\n", csv.CSVOptions { header = false })
+        println "no header: " + value.ArrayLen(v)
+        value.ValueFree(v)
+        csv.ToValue("a,b\n1,\"2\n")
+    catch e:
+        show("unterminated", e)
+    end
+end
+
+func callers():
+    println ""
+    println "== data and excel =="
+    try:
+        data.LoadCsv("x,y\n1,2\n3,\"4\n", true)
+    catch e:
+        show("data.LoadCsv", e)
+    end
+    try:
+        excel.CSVToSheet("a,b\n\"c\" d\n", "s")
+    catch e:
+        show("excel.CSVToSheet", e)
+    end
+end
+
+func round_trip() throws:
+    mut fields := Vector {} as Vector<str>
+    fields.push("plain")
+    fields.push("comma, inside")
+    fields.push("quote \" inside")
+    fields.push("line\nbreak")
+    fields.push("")
+    mut table := csv.CSVTable {}
+    repeat 2:
+        table.rows.push(csv.CSVRow { fields = fields })
+    end
+    text := csv.WriteAll(table)
+    mut back := try csv.ReadAll(text)
+    testing.AssertEqInt(back.rows.len(), 2)
+    repeat 2 in r:
+        got := back.rows.get(r).fields
+        testing.AssertEqInt(got.len(), 5)
+        repeat 5 in i:
+            testing.AssertEqStr(got.get(i), fields.get(i))
+        end
+    end
+    csv.FreeTable(back)
+    line := try csv.ReadLine(csv.WriteLine(fields))
+    testing.AssertEqStr(line.get(3), "line\nbreak")
+    keep := try csv.ReadAllWith("a\n\nb\n", csv.CSVOptions { keep_blank = true })
+    testing.AssertEqInt(keep.rows.len(), 3)
+    testing.AssertEqStr(keep.rows.get(1).fields.get(0), "")
+    fields.free()
+end
+
+func main(): int:
+    reader_errors()
+    separators()
+    values()
+    callers()
+    try:
+        round_trip()
+    catch e:
+        testing.AssertMsg(false, e.to_str())
+    end
+    ret testing.Summary()
+end

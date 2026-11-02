@@ -139,11 +139,13 @@ export type Message = {
   calls?: MessageCall[];
   ms?: number;
   files?: FileMeta[];
+  effort?: "low" | "medium" | "high";
 };
 export type QueueItem = {
   id: number;
   text: string;
   created: number;
+  effort?: "low" | "medium" | "high";
   files: {
     id: number;
     name: string;
@@ -807,6 +809,7 @@ export const api = {
     text: string,
     files?: OutgoingFile[],
     project?: ProjectContext,
+    effort?: string,
   ) =>
     call<{ user: Message; assistant: Message; title: string }>(
       "POST",
@@ -815,6 +818,7 @@ export const api = {
         text,
         ...(files && files.length > 0 ? { files } : {}),
         ...(project ? { project } : {}),
+        ...(effort ? { effort } : {}),
       },
     ),
   capabilities: () => call<Capabilities>("GET", "/capabilities"),
@@ -892,11 +896,13 @@ export const api = {
     text: string,
     files?: OutgoingFile[],
     project?: ProjectContext,
+    effort?: string,
   ) =>
     call<{ queue: QueueItem[] }>("POST", `/chats/${id}/queue`, {
       text,
       ...(files && files.length > 0 ? { files } : {}),
       ...(project ? { project } : {}),
+      ...(effort ? { effort } : {}),
     }),
   unqueue: (id: string, qid: number) =>
     call<{ queue: QueueItem[] }>("DELETE", `/chats/${id}/queue/${qid}`),

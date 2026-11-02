@@ -49,20 +49,11 @@ struct _Parts:
     pub nanos: int = 0
     pub has_offset: bool = false
     pub offset_minutes: int = 0
-end
-
-@en "TimeResult"
-@fa "نتیجه زمان"
-pub struct TimeResult:
-    @en "ok"
-    @fa "معتبر"
-    pub ok: bool = false
-    @en "epoch"
-    @fa "ثانیه مبدا"
-    pub epoch: i64 = 0
-    @en "nanos"
-    @fa "نانوثانیه"
-    pub nanos: int = 0
+    pub at_month: int = 0
+    pub at_day: int = 0
+    pub at_hour: int = 0
+    pub at_minute: int = 0
+    pub at_second: int = 0
 end
 
 inline pure func _pbp(s: str): i8*: ret (s as void*) as i8* end
@@ -79,20 +70,56 @@ pure func _pIsAlpha(c: int): bool:
     ret (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
 end
 
-func _fixedDigits(bp: i8*, n: int, i &: int, count: int, out &: int): bool:
-    if i + count > n: ret false end
-    mut v := 0
-    repeat count in k:
-        c := _pub(bp, i + k)
-        if not _pIsDigit(c): ret false end
-        v = v * 10 + (c - 48)
-    end
-    i = i + count
-    out = v
-    ret true
+pure func _pIsBlank(c: int): bool:
+    ret c == 32 or c == 9 or c == 10 or c == 13
 end
 
-func _someDigits(bp: i8*, n: int, i &: int, maxd: int, out &: int): bool:
+func _tdesc(s: str, i: int): str:
+    n := s.len()
+    if i >= n: ret "the end of the text" end
+    c := _pub(_pbp(s), i)
+    if c == 32: ret "a space" end
+    mut w := 1
+    if c >= 240: w = 4
+    else c >= 224: w = 3
+    else c >= 192: w = 2
+    end
+    if c < 32 or c == 127 or (c >= 128 and c < 192) or i + w > n:
+        ret "byte " + c
+    end
+    ret "'" + s.substr(i, w) + "'"
+end
+
+func _terr(s: str, kind: ErrorKind, code: str, message: str, offset: int): Error:
+    ret Error.At(kind, message, offset).locate(s).with_code(code).wrap("time")
+end
+
+func _want(s: str, n: int, i: int, what: str): Error:
+    if i >= n:
+        ret _terr(s, ErrorKind.UnexpectedEnd, "time.unexpected_end", "expected " + what + ", found the end of the text", i)
+    end
+    ret _terr(s, ErrorKind.Syntax, "time.syntax", "expected " + what + ", found " + _tdesc(s, i), i)
+end
+
+func _trailing(s: str, i: int, after: str): Error:
+    ret _terr(s, ErrorKind.Syntax, "time.trailing", "expected the end of the text after " + after + ", found " + _tdesc(s, i), i)
+end
+
+func _fixedDigits(s: str, n: int, i &: int, count: int, what: str): int throws:
+    bp := _pbp(s)
+    mut v := 0
+    repeat count in k:
+        if i + k >= n or not _pIsDigit(_pub(bp, i + k)):
+            throw _want(s, n, i + k, "a digit in the " + what)
+        end
+        v = v * 10 + (_pub(bp, i + k) - 48)
+    end
+    i = i + count
+    ret v
+end
+
+func _someDigits(s: str, n: int, i &: int, maxd: int, what: str): int throws:
+    bp := _pbp(s)
     mut v := 0
     mut got := 0
     until i < n and got < maxd and _pIsDigit(_pub(bp, i)):
@@ -100,9 +127,13 @@ func _someDigits(bp: i8*, n: int, i &: int, maxd: int, out &: int): bool:
         got += 1
         i += 1
     end
-    if got == 0: ret false end
-    out = v
-    ret true
+    if got == 0: throw _want(s, n, i, "the " + what) end
+    ret v
+end
+
+func _expectByte(s: str, n: int, i &: int, c: int, what: str) throws:
+    if i >= n or _pub(_pbp(s), i) != c: throw _want(s, n, i, what) end
+    i += 1
 end
 
 pure func _pfloordiv(a: i64, b: i64): i64:
@@ -199,19 +230,29 @@ func _daysInMonth(y: int, m: int): int:
     ret 31
 end
 
-func _resolve(p: _Parts): TimeResult:
-    if p.month < 1 or p.month > 12: ret TimeResult { ok = false } end
-    if p.day < 1 or p.day > _daysInMonth(p.year, p.month): ret TimeResult { ok = false } end
-    if p.hour < 0 or p.hour > 24: ret TimeResult { ok = false } end
-    if p.minute < 0 or p.minute > 59: ret TimeResult { ok = false } end
-    if p.second < 0 or p.second > 60: ret TimeResult { ok = false } end
+func _resolve(s: str, p: _Parts): i64 throws:
+    if p.month < 1 or p.month > 12:
+        throw _terr(s, ErrorKind.OutOfRange, "time.bad_month", "month " + p.month + " is out of range (1 to 12)", p.at_month)
+    end
+    dim := _daysInMonth(p.year, p.month)
+    if p.day < 1 or p.day > dim:
+        throw _terr(s, ErrorKind.OutOfRange, "time.bad_day", "day " + p.day + " is out of range for month " + p.month + " of " + p.year + " (1 to " + dim + ")", p.at_day)
+    end
+    if p.hour > 24 or (p.hour == 24 and (p.minute != 0 or p.second != 0 or p.nanos != 0)):
+        throw _terr(s, ErrorKind.OutOfRange, "time.bad_hour", "hour " + p.hour + " is out of range (0 to 23, or 24:00:00)", p.at_hour)
+    end
+    if p.minute > 59:
+        throw _terr(s, ErrorKind.OutOfRange, "time.bad_minute", "minute " + p.minute + " is out of range (0 to 59)", p.at_minute)
+    end
+    if p.second > 60:
+        throw _terr(s, ErrorKind.OutOfRange, "time.bad_second", "second " + p.second + " is out of range (0 to 60)", p.at_second)
+    end
     mut sec := p.second
     if sec == 60: sec = 59 end
     if p.has_offset:
-        e := _utcEpoch(p.year, p.month, p.day, p.hour, p.minute, sec) - (p.offset_minutes as i64) * 60
-        ret TimeResult { ok = true, epoch = e, nanos = p.nanos }
+        ret _utcEpoch(p.year, p.month, p.day, p.hour, p.minute, sec) - (p.offset_minutes as i64) * 60
     end
-    ret TimeResult { ok = true, epoch = _localEpoch(p.year, p.month, p.day, p.hour, p.minute, sec), nanos = p.nanos }
+    ret _localEpoch(p.year, p.month, p.day, p.hour, p.minute, sec)
 end
 
 func _monthFromName(name: str): int:
@@ -232,60 +273,73 @@ func _monthFromName(name: str): int:
     ret 0
 end
 
-func _parseZone(bp: i8*, n: int, i &: int, p &: _Parts): bool:
-    if i >= n: ret true end
+func _monthName(s: str, n: int, i &: int, p &: _Parts) throws:
+    bp := _pbp(s)
+    ms := i
+    until i < n and _pIsAlpha(_pub(bp, i)):
+        i += 1
+    end
+    if i == ms: throw _want(s, n, i, "a month name") end
+    mo := _monthFromName(s.substr(ms, i - ms))
+    if mo == 0:
+        throw _terr(s, ErrorKind.Syntax, "time.bad_month_name", "unknown month name '" + s.substr(ms, i - ms) + "'", ms)
+    end
+    p.month = mo
+    p.at_month = ms
+end
+
+func _parseZone(s: str, n: int, i &: int, p &: _Parts) throws:
+    if i >= n: ret end
+    bp := _pbp(s)
     c := _pub(bp, i)
     if c == 90 or c == 122:
         i += 1
         p.has_offset = true
         p.offset_minutes = 0
-        ret true
+        ret
     end
     if c == 43 or c == 45:
+        at := i
         sign := 1 - 2 * ((c == 45) ? 1 : 0)
         i += 1
-        mut hh := 0
-        if not _fixedDigits(bp, n, i, 2, hh): ret false end
+        hh := try _fixedDigits(s, n, i, 2, "offset")
         mut mm := 0
         if i < n and _pub(bp, i) == 58:
             i += 1
-            if not _fixedDigits(bp, n, i, 2, mm): ret false end
+            mm = try _fixedDigits(s, n, i, 2, "offset")
         else i < n and _pIsDigit(_pub(bp, i)):
-            if not _fixedDigits(bp, n, i, 2, mm): ret false end
+            mm = try _fixedDigits(s, n, i, 2, "offset")
         end
-        if hh > 23 or mm > 59: ret false end
+        if hh > 23 or mm > 59:
+            throw _terr(s, ErrorKind.OutOfRange, "time.bad_offset", "offset " + s.substr(at, i - at) + " is out of range (up to 23:59)", at)
+        end
         p.has_offset = true
         p.offset_minutes = sign * (hh * 60 + mm)
-        ret true
     end
-    ret true
 end
 
-func _skipSpaces(bp: i8*, n: int, i &: int):
+func _skipSpaces(s: str, n: int, i &: int):
+    bp := _pbp(s)
     until i < n and (_pub(bp, i) == 32 or _pub(bp, i) == 9):
         i += 1
     end
 end
 
-func _parseClock(bp: i8*, n: int, i &: int, p &: _Parts): bool:
-    mut hh := 0
-    if not _fixedDigits(bp, n, i, 2, hh): ret false end
-    if i >= n or _pub(bp, i) != 58: ret false end
-    i += 1
-    mut mi := 0
-    if not _fixedDigits(bp, n, i, 2, mi): ret false end
-    p.hour = hh
-    p.minute = mi
-    if i < n and _pub(bp, i) == 58:
+func _parseClock(s: str, n: int, i &: int, p &: _Parts) throws:
+    p.at_hour = i
+    p.hour = try _fixedDigits(s, n, i, 2, "hour")
+    try _expectByte(s, n, i, 58, "':' after the hour")
+    p.at_minute = i
+    p.minute = try _fixedDigits(s, n, i, 2, "minute")
+    if i < n and _pub(_pbp(s), i) == 58:
         i += 1
-        mut ss := 0
-        if not _fixedDigits(bp, n, i, 2, ss): ret false end
-        p.second = ss
+        p.at_second = i
+        p.second = try _fixedDigits(s, n, i, 2, "second")
     end
-    ret true
 end
 
-func _parseFraction(bp: i8*, n: int, i &: int, out &: int): bool:
+func _parseFraction(s: str, n: int, i &: int): int throws:
+    bp := _pbp(s)
     mut scale := 100000000
     mut acc := 0
     mut got := 0
@@ -297,134 +351,183 @@ func _parseFraction(bp: i8*, n: int, i &: int, out &: int): bool:
         got += 1
         i += 1
     end
-    if got == 0: ret false end
-    out = acc
-    ret true
+    if got == 0: throw _want(s, n, i, "a digit of the fraction") end
+    ret acc
 end
 
-func _scanISO(s: str, p &: _Parts): bool:
-    n := s.len()
-    if n < 8: ret false end
+func _trimStart(s: str): int:
     bp := _pbp(s)
+    n := s.len()
     mut i := 0
-    mut y := 0
-    if not _fixedDigits(bp, n, i, 4, y): ret false end
-    if i >= n or _pub(bp, i) != 45: ret false end
-    i += 1
-    mut mo := 0
-    if not _fixedDigits(bp, n, i, 2, mo): ret false end
-    if i >= n or _pub(bp, i) != 45: ret false end
-    i += 1
-    mut d := 0
-    if not _fixedDigits(bp, n, i, 2, d): ret false end
-    p.year = y
-    p.month = mo
-    p.day = d
-    if i >= n: ret true end
+    until i < n and _pIsBlank(_pub(bp, i)):
+        i += 1
+    end
+    ret i
+end
+
+func _trimEnd(s: str, from: int): int:
+    bp := _pbp(s)
+    mut n := s.len()
+    until n > from and _pIsBlank(_pub(bp, n - 1)):
+        n -= 1
+    end
+    ret n
+end
+
+func _empty(s: str, what: str): Error:
+    ret _terr(s, ErrorKind.UnexpectedEnd, "time.empty", "empty " + what, 0)
+end
+
+func _scanISO(s: str, p &: _Parts) throws:
+    mut i := _trimStart(s)
+    n := _trimEnd(s, i)
+    if i >= n: throw _empty(s, "date") end
+    bp := _pbp(s)
+    p.year = try _fixedDigits(s, n, i, 4, "year")
+    try _expectByte(s, n, i, 45, "'-' after the year")
+    p.at_month = i
+    p.month = try _fixedDigits(s, n, i, 2, "month")
+    try _expectByte(s, n, i, 45, "'-' after the month")
+    p.at_day = i
+    p.day = try _fixedDigits(s, n, i, 2, "day")
+    if i >= n: ret end
     sep := _pub(bp, i)
-    if sep != 84 and sep != 116 and sep != 32: ret false end
+    if sep != 84 and sep != 116 and sep != 32:
+        throw _want(s, n, i, "'T' or a space before the time")
+    end
     i += 1
-    if not _parseClock(bp, n, i, p): ret false end
+    try _parseClock(s, n, i, p)
     if i < n and (_pub(bp, i) == 46 or _pub(bp, i) == 44):
         i += 1
-        mut frac := 0
-        if not _parseFraction(bp, n, i, frac): ret false end
-        p.nanos = frac
+        p.nanos = try _parseFraction(s, n, i)
     end
-    if not _parseZone(bp, n, i, p): ret false end
-    ret i == n
+    try _parseZone(s, n, i, p)
+    if i != n: throw _trailing(s, i, "the time") end
+end
+
+func _httpZone(s: str, n: int, i &: int, p &: _Parts) throws:
+    if i >= n: ret end
+    bp := _pbp(s)
+    c := _pub(bp, i)
+    if c == 43 or c == 45:
+        try _parseZone(s, n, i, p)
+        ret
+    end
+    zs := i
+    until i < n and _pIsAlpha(_pub(bp, i)):
+        i += 1
+    end
+    if i == zs: throw _want(s, n, zs, "GMT or an offset such as +0000") end
+    word := s.substr(zs, i - zs)
+    nm := word.upper()
+    if nm != "GMT" and nm != "UTC" and nm != "UT" and nm != "Z":
+        throw _terr(s, ErrorKind.Syntax, "time.syntax", "expected GMT or an offset such as +0000, found '" + word + "'", zs)
+    end
+end
+
+func _layoutErr(pattern: str, message: str): Error:
+    ret Error.New(ErrorKind.InvalidArgument, "layout \"" + pattern + "\" " + message).with_code("time.bad_layout").wrap("time")
+end
+
+func _layoutWant(s: str, n: int, i: int, lit: str): Error:
+    mut what := "'" + lit + "'"
+    if lit == " ": what = "a space" end
+    if i >= n:
+        ret _terr(s, ErrorKind.UnexpectedEnd, "time.unexpected_end", "expected " + what + " from the layout, found the end of the text", i)
+    end
+    ret _terr(s, ErrorKind.Syntax, "time.layout_mismatch", "expected " + what + " from the layout, found " + _tdesc(s, i), i)
 end
 
 @en "ParseISO"
 @fa "تجزیه ایزو"
-pub func ParseISO(s: str): TimeResult:
+pub func ParseISO(s: str): i64 throws:
     mut p := _Parts {}
-    if not _scanISO(s.trim(), p): ret TimeResult { ok = false } end
-    ret _resolve(p)
+    try _scanISO(s, p)
+    ret try _resolve(s, p)
+end
+
+@en "ParseISONanos"
+@fa "تجزیه ایزو نانوثانیه"
+pub func ParseISONanos(s: str): i64 throws:
+    mut p := _Parts {}
+    try _scanISO(s, p)
+    epoch := try _resolve(s, p)
+    nanos := p.nanos as i64
+    lo := 0 - 9223372037 as i64
+    hi := 9223372036 as i64
+    if epoch > hi or epoch < lo or (epoch == hi and nanos > 854775807) or (epoch == lo and nanos < 145224192):
+        throw _terr(s, ErrorKind.OutOfRange, "time.overflow", "date is outside the range of nanosecond timestamps (years 1677 to 2262)", _trimStart(s))
+    end
+    ret epoch * 1000000000 + nanos
 end
 
 @en "ParseISOIn"
 @fa "تجزیه ایزو در"
-pub func ParseISOIn(s: str, offsetMinutes: int): TimeResult:
+pub func ParseISOIn(s: str, offsetMinutes: int): i64 throws:
     mut p := _Parts {}
-    if not _scanISO(s.trim(), p): ret TimeResult { ok = false } end
+    try _scanISO(s, p)
     if not p.has_offset:
         p.has_offset = true
         p.offset_minutes = offsetMinutes
     end
-    ret _resolve(p)
+    ret try _resolve(s, p)
 end
 
 @en "ParseHTTPDate"
 @fa "تجزیه تاریخ اچ‌تی‌تی‌پی"
-pub func ParseHTTPDate(s: str): TimeResult:
-    bad := TimeResult { ok = false }
-    t := s.trim()
-    n := t.len()
-    if n < 10: ret bad end
-    bp := _pbp(t)
-    mut i := 0
+pub func ParseHTTPDate(s: str): i64 throws:
+    mut i := _trimStart(s)
+    n := _trimEnd(s, i)
+    if i >= n: throw _empty(s, "date") end
+    bp := _pbp(s)
+    ds := i
     until i < n and _pIsAlpha(_pub(bp, i)):
         i += 1
     end
-    if i == 0: ret bad end
+    if i == ds: throw _want(s, n, i, "a day name such as 'Mon'") end
     mut isAsctime := true
     if i < n and _pub(bp, i) == 44:
         i += 1
         isAsctime = false
     end
-    _skipSpaces(bp, n, i)
+    _skipSpaces(s, n, i)
     mut p := _Parts { has_offset = true, offset_minutes = 0 }
     if isAsctime:
-        ms := i
-        until i < n and _pIsAlpha(_pub(bp, i)):
-            i += 1
-        end
-        mo := _monthFromName(t.substr(ms, i - ms))
-        if mo == 0: ret bad end
-        p.month = mo
-        _skipSpaces(bp, n, i)
-        mut d := 0
-        if not _someDigits(bp, n, i, 2, d): ret bad end
-        p.day = d
-        _skipSpaces(bp, n, i)
-        if not _parseClock(bp, n, i, p): ret bad end
-        _skipSpaces(bp, n, i)
-        mut y := 0
-        if not _fixedDigits(bp, n, i, 4, y): ret bad end
-        p.year = y
-        ret _resolve(p)
+        try _monthName(s, n, i, p)
+        _skipSpaces(s, n, i)
+        p.at_day = i
+        p.day = try _someDigits(s, n, i, 2, "day")
+        _skipSpaces(s, n, i)
+        try _parseClock(s, n, i, p)
+        _skipSpaces(s, n, i)
+        p.year = try _fixedDigits(s, n, i, 4, "year")
+        if i != n: throw _trailing(s, i, "the year") end
+        ret try _resolve(s, p)
     end
-    mut d2 := 0
-    if not _someDigits(bp, n, i, 2, d2): ret bad end
-    p.day = d2
+    p.at_day = i
+    p.day = try _someDigits(s, n, i, 2, "day")
     if i < n and (_pub(bp, i) == 45 or _pub(bp, i) == 32): i += 1 end
-    ms2 := i
-    until i < n and _pIsAlpha(_pub(bp, i)):
-        i += 1
-    end
-    mo2 := _monthFromName(t.substr(ms2, i - ms2))
-    if mo2 == 0: ret bad end
-    p.month = mo2
+    try _monthName(s, n, i, p)
     if i < n and (_pub(bp, i) == 45 or _pub(bp, i) == 32): i += 1 end
-    mut y2 := 0
-    if not _someDigits(bp, n, i, 4, y2): ret bad end
-    if y2 < 100:
-        if y2 < 69: y2 = y2 + 2000
+    mut y := try _someDigits(s, n, i, 4, "year")
+    if y < 100:
+        if y < 69: y = y + 2000
         else:
-            y2 = y2 + 1900
+            y = y + 1900
         end
     end
-    p.year = y2
-    _skipSpaces(bp, n, i)
-    if not _parseClock(bp, n, i, p): ret bad end
-    ret _resolve(p)
+    p.year = y
+    _skipSpaces(s, n, i)
+    try _parseClock(s, n, i, p)
+    _skipSpaces(s, n, i)
+    try _httpZone(s, n, i, p)
+    if i != n: throw _trailing(s, i, "the time") end
+    ret try _resolve(s, p)
 end
 
 @en "ParseFormat"
 @fa "تجزیه با قالب"
-pub func ParseFormat(pattern: str, s: str): TimeResult:
-    bad := TimeResult { ok = false }
+pub func ParseFormat(pattern: str, s: str): i64 throws:
     pn := pattern.len()
     n := s.len()
     pbpv := _pbp(pattern)
@@ -437,97 +540,82 @@ pub func ParseFormat(pattern: str, s: str): TimeResult:
         if pc != 37:
             if pc == 32:
                 pi += 1
-                _skipSpaces(bp, n, i)
+                _skipSpaces(s, n, i)
                 continue
             end
-            if i >= n or _pub(bp, i) != pc: ret bad end
+            if i >= n or _pub(bp, i) != pc: throw _layoutWant(s, n, i, pattern.substr(pi, 1)) end
             pi += 1
             i += 1
             continue
         end
         pi += 1
-        if pi >= pn: ret bad end
+        if pi >= pn: throw _layoutErr(pattern, "ends with a lone '%'") end
         d := _pub(pbpv, pi)
         pi += 1
         if d == 37:
-            if i >= n or _pub(bp, i) != 37: ret bad end
+            if i >= n or _pub(bp, i) != 37: throw _layoutWant(s, n, i, "%") end
             i += 1
         else d == 89:
-            mut v := 0
-            if not _fixedDigits(bp, n, i, 4, v): ret bad end
-            p.year = v
+            p.year = try _fixedDigits(s, n, i, 4, "year")
         else d == 121:
-            mut v := 0
-            if not _fixedDigits(bp, n, i, 2, v): ret bad end
+            v := try _fixedDigits(s, n, i, 2, "year")
             if v < 69: p.year = v + 2000 else:
                 p.year = v + 1900
             end
         else d == 109:
-            mut v := 0
-            if not _someDigits(bp, n, i, 2, v): ret bad end
-            p.month = v
+            p.at_month = i
+            p.month = try _someDigits(s, n, i, 2, "month")
         else d == 100:
-            mut v := 0
-            if not _someDigits(bp, n, i, 2, v): ret bad end
-            p.day = v
+            p.at_day = i
+            p.day = try _someDigits(s, n, i, 2, "day")
         else d == 72:
-            mut v := 0
-            if not _someDigits(bp, n, i, 2, v): ret bad end
-            p.hour = v
+            p.at_hour = i
+            p.hour = try _someDigits(s, n, i, 2, "hour")
         else d == 77:
-            mut v := 0
-            if not _someDigits(bp, n, i, 2, v): ret bad end
-            p.minute = v
+            p.at_minute = i
+            p.minute = try _someDigits(s, n, i, 2, "minute")
         else d == 83:
-            mut v := 0
-            if not _someDigits(bp, n, i, 2, v): ret bad end
-            p.second = v
+            p.at_second = i
+            p.second = try _someDigits(s, n, i, 2, "second")
         else d == 102:
-            mut frac := 0
-            if not _parseFraction(bp, n, i, frac): ret bad end
-            p.nanos = frac
+            p.nanos = try _parseFraction(s, n, i)
         else d == 98 or d == 66:
-            ms := i
-            until i < n and _pIsAlpha(_pub(bp, i)):
-                i += 1
-            end
-            mo := _monthFromName(s.substr(ms, i - ms))
-            if mo == 0: ret bad end
-            p.month = mo
+            try _monthName(s, n, i, p)
         else d == 97 or d == 65:
-            mut got := 0
+            ds := i
             until i < n and _pIsAlpha(_pub(bp, i)):
                 i += 1
-                got += 1
             end
-            if got == 0: ret bad end
+            if i == ds: throw _want(s, n, i, "a day name") end
         else d == 122:
-            if not _parseZone(bp, n, i, p): ret bad end
+            try _parseZone(s, n, i, p)
         else d == 90:
-            ms := i
+            zs := i
             until i < n and _pIsAlpha(_pub(bp, i)):
                 i += 1
             end
-            if i == ms: ret bad end
-            nm := s.substr(ms, i - ms).upper()
+            if i == zs: throw _want(s, n, i, "a zone name") end
+            nm := s.substr(zs, i - zs).upper()
             if nm == "GMT" or nm == "UTC" or nm == "Z":
                 p.has_offset = true
                 p.offset_minutes = 0
             end
         else:
-            ret bad
+            throw _layoutErr(pattern, "has an unknown directive '%" + pattern.substr(pi - 1, 1) + "'")
         end
     end
-    if i != n: ret bad end
-    ret _resolve(p)
+    if i != n: throw _trailing(s, i, "the layout") end
+    ret try _resolve(s, p)
 end
 
 @en "ParseISOOr"
 @fa "تجزیه ایزو با پیش فرض"
 pub func ParseISOOr(s: str, fallback: i64): i64:
-    r := ParseISO(s)
-    if r.ok: ret r.epoch end
-    ret fallback
+    try:
+        ret ParseISO(s)
+    catch:
+        ret fallback
+    end
 end
 
 @en "FormatISOUTC"

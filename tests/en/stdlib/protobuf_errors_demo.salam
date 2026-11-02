@@ -1,0 +1,292 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import encoding.protobuf
+import compress
+import str
+
+pub struct Point:
+    pub x: i64 = 0 as i64
+    pub y: i64 = 0 as i64
+    pub label: str = ""
+end
+
+func show(label: str, e: Error):
+    mut line := label + ": " + e.kind_name() + " | " + e.to_str()
+    if e.code != "":
+        line = line + " [" + e.code + "]"
+    end
+    println line
+end
+
+func buf_of(bytes: int[]): compress.ByteBuf:
+    mut b := compress.NewByteBuf()
+    each v in bytes:
+        compress.BufPush(b, v)
+    end
+    ret b
+end
+
+func read_varint(label: str, bytes: int[]):
+    mut b := buf_of(bytes)
+    mut r := compress.NewByteReader(b.data, b.len)
+    try:
+        v := protobuf.ReadVarint(r)
+        println label + ": ok " + (v as i64)
+    catch e:
+        show(label, e)
+    end
+    compress.BufFree(b)
+end
+
+func read_tag(label: str, bytes: int[]):
+    mut b := buf_of(bytes)
+    mut r := compress.NewByteReader(b.data, b.len)
+    mut field := 0
+    mut wire := 0
+    try:
+        protobuf.ReadTag(r, field, wire)
+        println label + ": ok field " + field + ", wire type " + wire
+    catch e:
+        show(label, e)
+    end
+    compress.BufFree(b)
+end
+
+func skip(label: str, bytes: int[], wire: int):
+    mut b := buf_of(bytes)
+    mut r := compress.NewByteReader(b.data, b.len)
+    try:
+        protobuf.SkipField(r, wire)
+        println label + ": ok, now at offset " + r.pos
+    catch e:
+        show(label, e)
+    end
+    compress.BufFree(b)
+end
+
+func wire_errors():
+    println "== wire readers =="
+    read_varint("varint 300", [0xac, 0x02])
+    mut empty := compress.NewByteReader(null, 0)
+    try:
+        protobuf.ReadVarint(empty)
+    catch e:
+        show("empty input", e)
+    end
+    read_varint("truncated varint", [0xac, 0x82])
+    read_varint("over-long varint", [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x01])
+    read_varint("varint past 64 bits", [0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x02])
+    read_tag("tag field 2, wire type 2", [0x12])
+    read_tag("bad wire type", [0x0f])
+    read_tag("field number 0", [0x00])
+    skip("skip a fixed32", [1, 2, 3, 4, 5], protobuf.WT_FIXED32)
+    skip("skip a cut fixed64", [1, 2, 3], protobuf.WT_FIXED64)
+    skip("skip a group", [0x0b], 3)
+    skip("skip wire type 6", [0], 6)
+
+    mut b := compress.NewByteBuf()
+    protobuf.WriteTag(b, 1, protobuf.WT_FIXED32)
+    compress.BufPush(b, 1)
+    compress.BufPush(b, 2)
+    mut r := compress.NewByteReader(b.data, b.len)
+    mut field := 0
+    mut wire := 0
+    try:
+        protobuf.ReadTag(r, field, wire)
+        protobuf.ReadFixed32(r)
+    catch e:
+        show("truncated fixed32", e)
+    end
+    compress.BufFree(b)
+
+    mut lb := compress.NewByteBuf()
+    protobuf.WriteTag(lb, 2, protobuf.WT_LEN)
+    protobuf.WriteVarint(lb, 5 as u64)
+    compress.BufPush(lb, 104)
+    compress.BufPush(lb, 105)
+    mut lr := compress.NewByteReader(lb.data, lb.len)
+    try:
+        protobuf.ReadTag(lr, field, wire)
+        protobuf.ReadLenPrefixedStr(lr)
+    catch e:
+        show("truncated length-prefixed string", e)
+    end
+    mut lr2 := compress.NewByteReader(lb.data, lb.len)
+    try:
+        protobuf.ReadTag(lr2, field, wire)
+        mut lp2 := protobuf.ReadLenPrefixedBuf(lr2)
+        compress.BufFree(lp2)
+    catch e:
+        show("truncated length-prefixed bytes", e)
+    end
+    compress.BufFree(lb)
+
+    mut fb := compress.NewByteBuf()
+    compress.BufPush(fb, 0x80)
+    mut fr := compress.NewByteReader(fb.data, fb.len)
+    n := try protobuf.ReadVarint(fr) catch 42 as u64
+    println "fallback value: " + (n as i64)
+    compress.BufFree(fb)
+end
+
+func parse(label: str, src: str):
+    try:
+        f := protobuf.ParseFile(src)
+        println label + ": ok, " + f.messages.len() + " messages"
+    catch e:
+        show(label, e)
+    end
+end
+
+func proto_errors():
+    println ""
+    println "== .proto front end =="
+    parse("valid", "syntax = \"proto3\";\nmessage A {\n  optional int32 id = 1;\n  repeated string tags = 2;\n}\n")
+    parse("missing semicolon", "syntax = \"proto3\";\nmessage A {\n  int32 id = 1\n  string name = 2;\n}\n")
+    parse("missing field number", "message A {\n  int32 id = ;\n}\n")
+    parse("missing name", "message {\n}\n")
+    parse("unclosed message", "message A {\n  int32 id = 1;\n")
+    parse("unknown top level", "syntax = \"proto3\";\nrecord A {}\n")
+    parse("bad character", "message A {\n  int32 id = 1; $\n}\n")
+    parse("unterminated string", "syntax = \"proto3;\nmessage A {}\n")
+    parse("unterminated comment", "message A {}\n/* end")
+    parse("rpc without returns", "service S {\n  rpc Get (A) (B);\n}\n")
+
+    try:
+        protobuf.Tokenize("message A { int32 id = 1; }\n#")
+    catch e:
+        show("Tokenize", e)
+        println "  line " + e.line + ", column " + e.column + ", offset " + e.offset
+    end
+    try:
+        protobuf.GenerateSingle("message A { int32 id 1; }")
+    catch e:
+        show("GenerateSingle", e)
+    end
+    try:
+        protobuf.GenerateWithServices("service S { rpc }")
+    catch e:
+        show("GenerateWithServices", e)
+    end
+    try:
+        protobuf.ServiceSummary("service S {\n  option x = 1;\n  message M {}\n}")
+    catch e:
+        show("ServiceSummary", e)
+    end
+end
+
+func decode_point(label: str, b: compress.ByteBuf, n: int):
+    try:
+        p := UnmarshalPoint(b.data, n)
+        println label + ": ok x=" + p.x + " y=" + p.y + " label=" + p.label
+    catch e:
+        show(label, e)
+    end
+end
+
+func generated_errors():
+    println ""
+    println "== generated code =="
+    proto := "syntax = \"proto3\";\nmessage Point {\n  sint32 x = 1;\n  sint32 y = 2;\n  string label = 3;\n}\n"
+    try:
+        code := protobuf.GenerateSingle(proto)
+        println "generator: " + str.Contains(code, "pub func UnmarshalPoint(data: void*, n: int): Point throws:")
+    catch e:
+        show("generator", e)
+    end
+
+    mut p := Point {}
+    p.x = 0 - 3
+    p.y = 7
+    p.label = "home"
+    mut b := MarshalPoint(p)
+    decode_point("whole message", b, b.len)
+    decode_point("cut in the label", b, b.len - 2)
+    decode_point("cut after a tag", b, 1)
+    compress.BufFree(b)
+
+    mut bad := compress.NewByteBuf()
+    protobuf.WriteTag(bad, 1, protobuf.WT_VARINT)
+    protobuf.WriteVarint(bad, 4 as u64)
+    protobuf.WriteTag(bad, 3, protobuf.WT_VARINT)
+    protobuf.WriteVarint(bad, 1 as u64)
+    decode_point("label sent as a number", bad, bad.len)
+    compress.BufFree(bad)
+
+    mut unknown := compress.NewByteBuf()
+    protobuf.WriteTag(unknown, 9, protobuf.WT_FIXED64)
+    compress.BufPush(unknown, 1)
+    decode_point("cut unknown field", unknown, unknown.len)
+    compress.BufFree(unknown)
+end
+
+pub func MarshalPoint(m: Point): compress.ByteBuf:
+    mut buf := compress.NewByteBuf()
+    if m.x != (0 as i64):
+        protobuf.WriteTag(buf, 1, protobuf.WT_VARINT)
+        protobuf.WriteVarint(buf, protobuf.ZigZagEncode32(m.x as i32) as u64)
+    end
+    if m.y != (0 as i64):
+        protobuf.WriteTag(buf, 2, protobuf.WT_VARINT)
+        protobuf.WriteVarint(buf, protobuf.ZigZagEncode32(m.y as i32) as u64)
+    end
+    if m.label.len() > 0:
+        protobuf.WriteTag(buf, 3, protobuf.WT_LEN)
+        protobuf.WriteLenPrefixedStr(buf, m.label)
+    end
+    ret buf
+end
+
+pub func UnmarshalPoint(data: void*, n: int): Point throws:
+    mut out := Point {}
+    mut r := compress.NewByteReader(data, n)
+    try:
+        until compress.RdLeft(r) > 0:
+            at := r.pos
+            mut fnum := 0
+            mut wtype := 0
+            protobuf.ReadTag(r, fnum, wtype)
+            if fnum == 1:
+                if wtype != protobuf.WT_VARINT:
+                    throw Error.At(ErrorKind.TypeMismatch, "field 1 (x) has wire type " + wtype + ", expected " + protobuf.WT_VARINT, at).with_code("protobuf.wire_type_mismatch").wrap("protobuf")
+                end
+                out.x = protobuf.ZigZagDecode32(protobuf.ReadVarint(r) as u32) as i64
+            else fnum == 2:
+                if wtype != protobuf.WT_VARINT:
+                    throw Error.At(ErrorKind.TypeMismatch, "field 2 (y) has wire type " + wtype + ", expected " + protobuf.WT_VARINT, at).with_code("protobuf.wire_type_mismatch").wrap("protobuf")
+                end
+                out.y = protobuf.ZigZagDecode32(protobuf.ReadVarint(r) as u32) as i64
+            else fnum == 3:
+                if wtype != protobuf.WT_LEN:
+                    throw Error.At(ErrorKind.TypeMismatch, "field 3 (label) has wire type " + wtype + ", expected " + protobuf.WT_LEN, at).with_code("protobuf.wire_type_mismatch").wrap("protobuf")
+                end
+                out.label = protobuf.ReadLenPrefixedStr(r)
+            else:
+                protobuf.SkipField(r, wtype)
+            end
+        end
+    catch e:
+        throw e.wrap("Point")
+    end
+    ret out
+end
+
+func main:
+    wire_errors()
+    proto_errors()
+    generated_errors()
+end

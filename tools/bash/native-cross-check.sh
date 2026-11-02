@@ -13,9 +13,7 @@
 # (release builds on ARM return 0), and on 32-bit targets a few assume a
 # 64-bit usize or declare C's int-returning abs() as i64. stdlib/os_platform_demo
 # runs a different number of assertions per architecture, so its .out only
-# matches on x86-64. general/pubextern calls C's div(), which returns a struct
-# by value, and the native backend passes structs to C only on x86-64 and
-# AArch64. NATIVE_CROSS_SKIP replaces the list.
+# matches on x86-64. NATIVE_CROSS_SKIP replaces the list.
 #
 # Each program gets NATIVE_CROSS_TIMEOUT seconds (180 by default); the larger
 # tensor and nn demos take over a minute under qemu.
@@ -37,7 +35,7 @@ RUNNER=$3
 shift 3
 TEST_GROUPS=${*:-basics features types data games match switch llvm general stdlib}
 DEFAULT_SKIP="general/condcomp_toplevel general/condcomp_pruned_lints general/const_define general/preproc
-general/dbfile general/dbparams general/dbtest general/linkkind general/sqlite_*
+general/dbfile general/dbparams general/dbtest general/linkkind general/sqlite_* stdlib/db_extra
 llvm/ll_div_zero_runtime llvm/ll_mod_zero_compound stdlib/os_platform_demo"
 case "$TRIPLE" in
 aarch64* | arm64* | riscv*) ;;
@@ -45,9 +43,6 @@ aarch64* | arm64* | riscv*) ;;
 esac
 case "$TRIPLE" in
 i686* | i386* | arm-* | armv7*) DEFAULT_SKIP="$DEFAULT_SKIP types/size_type llvm/size_type general/extern_builtin_protos" ;;
-esac
-case "$TRIPLE" in
-i686* | i386* | arm-* | armv7* | riscv*) DEFAULT_SKIP="$DEFAULT_SKIP general/pubextern" ;;
 esac
 case "$TRIPLE" in
 *windows*) DEFAULT_SKIP="$DEFAULT_SKIP general/extern_builtin_protos" ;;

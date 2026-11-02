@@ -1298,7 +1298,7 @@ end
   `Unsupported`, `offset` is the byte position and `line`/`column` are filled
   in (`e.to_str()` gives `json: expected ':' (line 2, column 7)`); trailing
   text after the value is code `json.trailing_data`. `JSONDecoder.Decode()`
-  throws too. toml and xml errors also carry a `code` (`toml.duplicate_key`,
+  throws too. TOML and XML errors also carry a `code` (`toml.duplicate_key`,
   `xml.unclosed_tag`, `xml.mismatched_tag`, `xpath.unknown_function`, ...).
 - **`xml`** (`import encoding.xml`): two models in one package.
   - **Simple tree** `XMLNode` (`tag attrs children text`): `Decode Valid Encode EncodeIndent Child Children Attr HasAttr SetAttr AppendChild NewXMLNode ToValue FromValue EscapeText EscapeAttr` (`Decode` throws; it reads through the strict parser, namespaces off), plus the
@@ -1329,7 +1329,7 @@ end
   `CSVOptions { header separator keep_blank }` (`separator = ";"` or `"\t"`). RFC 4180: quoted
   fields may hold line breaks. Broken input throws `Syntax` with line/column and a code:
   `csv.unterminated_quote`, `csv.text_after_quote` (`"Pen" ,blue`), `csv.bare_quote` (`5'11"`),
-  `csv.multiple_rows` (`ReadLine` got two rows), `csv.duplicate_header` (`ToValue`). Blank lines
+  `csv.multiple_rows` (`ReadLine` got two rows), `csv.duplicate_header` (`ToValue`). Empty lines
   are skipped unless `keep_blank`; spaces are kept; writers never fail.
 - **`toml`** (`import encoding.toml`): `Decode(text): value.Value throws`,
   `Valid`, `Encode(v): str throws`. `Decode` is strict: duplicate keys and

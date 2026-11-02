@@ -613,7 +613,7 @@ then goes through:
     traced back through arithmetic, broadcasts, adjacent loads and loop phis,
     and the whole tree becomes SSE `ps`/`pd` code (AVX2 `ymm` code for runs of
     eight `f32` or four `f64` under `--cpu=x86-64-v3`). The tensor and matrix
-    multiply kernels rely on this. A broadcast of a function argument is
+    multiply kernels rely on this. A broadcast of a function parameter is
     placed at the top of the entry block, so straight-line code in that
     block can use it.
 12. Global value numbering over the dominator tree, including redundant load

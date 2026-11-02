@@ -1,0 +1,105 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import encoding
+import env
+import net.email
+import net.tcp
+import str
+import sync
+import tls
+
+const CERT := "tests/fixtures/ssl/server.crt"
+const KEY := "tests/fixtures/ssl/server.key"
+
+mut ready := sync.NewWaitGroup()
+mut plain_port := 0
+mut tls_port := 0
+mut login_cmd := ""
+mut oauth_cmd := ""
+mut logout_cmd := ""
+
+func tag_of(cmd: str): str:
+    sp := cmd.find(" ")
+    if sp < 0: ret cmd end
+    ret cmd.substr(0, sp)
+end
+
+func plain_server():
+    srv := tcp.Bind(0)
+    plain_port = tcp.Port(srv)
+    sync.Done(ready)
+    if not tcp.Ok(srv): ret end
+    c := tcp.Accept(srv)
+    if tcp.ConnOk(c):
+        tcp.Write(c, "* OK mock imap ready\r\n")
+        login_cmd = tcp.Read(c, 4096)
+        tcp.Write(c, tag_of(login_cmd) + " OK LOGIN done\r\n")
+        oauth_cmd = tcp.Read(c, 4096)
+        tcp.Write(c, tag_of(oauth_cmd) + " OK authenticated\r\n")
+        logout_cmd = tcp.Read(c, 4096)
+        tcp.Write(c, "* BYE\r\n" + tag_of(logout_cmd) + " OK LOGOUT done\r\n")
+        tcp.Close(c)
+    end
+    tcp.CloseServer(srv)
+end
+
+func tls_server():
+    srv := tcp.Bind(0)
+    tls_port = tcp.Port(srv)
+    sync.Done(ready)
+    if not tcp.Ok(srv): ret end
+    scfg := tls.NewServerConfig(CERT, KEY)
+    s := tcp.Accept(srv)
+    if tcp.ConnOk(s):
+        mut tc := tls.WrapServer(s.fd, scfg)
+        if tls.ConnOk(tc):
+            tls.Write(tc, "* OK tls imap ready\r\n")
+            cmd := tls.Read(tc, 4096)
+            tls.Write(tc, "* BYE\r\n" + tag_of(cmd) + " OK LOGOUT done\r\n")
+        end
+        tls.Close(tc)
+    end
+    tcp.CloseServer(srv)
+end
+
+func main:
+    sync.Add(ready, 2 as i64)
+    t1 := spawn(plain_server)
+    t2 := spawn(tls_server)
+    sync.Wait(ready)
+
+    mut c := email.DialIMAP("127.0.0.1", plain_port)
+    println c.ok
+    println email.Login(c, "ali", "secret")
+    println email.LoginXOAuth2(c, "ali@example.com", "tok123")
+    email.Logout(c)
+    join(t1)
+    println login_cmd.find("A1 LOGIN") == 0
+    println oauth_cmd.find("A2 AUTHENTICATE XOAUTH2 ") == 0
+    blob := str.Trim(oauth_cmd.substr(24, oauth_cmd.len() - 24))
+    decoded := encoding.Base64Decode(blob)
+    println decoded.find("user=ali@example.com") == 0
+    println decoded.find("auth=Bearer tok123") > 0
+    println logout_cmd.find("A3 LOGOUT") == 0
+
+    env.Set("SSL_CERT_FILE", CERT)
+    mut s := email.DialIMAPTLS("127.0.0.1", tls_port)
+    println s.ok
+    println s.secure
+    email.Logout(s)
+    join(t2)
+end

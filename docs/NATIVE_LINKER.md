@@ -190,7 +190,11 @@ section resolves to its offset inside that output section, which is what the
 `.debug_line` need (the `ABS32`/`ABS64` types of i386, ARM, AArch64 and
 RISC-V are applied the same way). A relocation against code that garbage collection
 removed is written as 0, the usual tombstone. `--strip` drops them along
-with the section headers.
+with the section headers. The DWARF 5 that `-g` writes adds `.debug_addr`,
+`.debug_rnglists` and `.debug_loclists`; `DW_AT_addr_base` and the list
+offsets are relocations like the rest, and the list entries are offsets
+from the unit's base address, so each object's sections are concatenated
+without being rewritten.
 
 PE output places each merged `.debug_*` section after `.reloc` as a
 discardable section, names it through a COFF string table that
@@ -221,7 +225,13 @@ MSF file with 4 KiB blocks holding:
 - one stream per object, with its symbols, their parent and end offsets
   filled in, and its C13 line and checksum subsections;
 - the globals (`S_PROCREF`), publics (`S_PUB32` with an address map) and
-  symbol record streams.
+  symbol record streams;
+- for i686, the frame data (NewFPO) stream named in DBI's optional debug
+  header: every `DEBUG_S_FRAMEDATA` record of every object, moved to an RVA
+  by the subsection's relocation, its program moved into `/names`, sorted by
+  RVA. These subsections are left out of the module streams, as `lld` does,
+  and `llvm-pdbutil dump -fpo` reads them in the form it shows for a clang
+  build linked by `lld-link`.
 
 Relative source names are made absolute with the link directory, as `lld`
 does. The GUID is a hash of the image, taken before the `RSDS` record is

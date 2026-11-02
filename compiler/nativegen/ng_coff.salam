@@ -24,7 +24,7 @@ func coff_rtype(g &: Ng, r: int): int:
     if g.arch == NG_ARCH_X86:
         if t == R_ABS32:
             ts := g.sy_sec[g.r_sym[r]]
-            ret (ts >= SEC_DBGINFO and ts <= SEC_DBGLOC) or ts == SEC_EHFRAME ? 11 : 6
+            ret (ts >= SEC_DBGINFO and ts <= SEC_DBGLOC) or ts == SEC_DBGADDR or ts == SEC_EHFRAME ? 11 : 6
         end
         if t == R_ADDR32NB: ret 7 end
         ret 20
@@ -52,6 +52,9 @@ func coff_secs(g &: Ng): Vector<int>:
         v.push(SEC_DBGLINE)
         v.push(SEC_DBGRANGES)
         v.push(SEC_DBGLOC)
+        if g.s_daddr.len() > 0:
+            v.push(SEC_DBGADDR)
+        end
     end
     if g.s_eh.len() > 0:
         v.push(SEC_EHFRAME)
@@ -81,6 +84,7 @@ func coff_name(sec: int): str:
         SEC_DBGLINE: ret ".debug_line" end
         SEC_DBGRANGES: ret ".debug_ranges" end
         SEC_DBGLOC: ret ".debug_loc" end
+        SEC_DBGADDR: ret ".debug_addr" end
         SEC_EHFRAME: ret ".debug_frame" end
         SEC_CVSYM: ret ".debug$S" end
         SEC_CVTYP: ret ".debug$T" end
@@ -106,7 +110,7 @@ func coff_flags(g &: Ng, sec: int): i64:
         SEC_BSS: ret (0xC0000080 as i64) | al end
         SEC_PDATA, SEC_XDATA: ret (0x40000040 as i64) | (coff_align_flag(4) as i64) end
         SEC_INIT, SEC_FINI: ret (0xC0000040 as i64) | (coff_align_flag(8) as i64) end
-        SEC_DBGINFO, SEC_DBGABBREV, SEC_DBGLINE, SEC_DBGRANGES, SEC_DBGLOC, SEC_EHFRAME: ret (0x42000040 as i64) | (coff_align_flag(1) as i64) end
+        SEC_DBGINFO, SEC_DBGABBREV, SEC_DBGLINE, SEC_DBGRANGES, SEC_DBGLOC, SEC_DBGADDR, SEC_EHFRAME: ret (0x42000040 as i64) | (coff_align_flag(1) as i64) end
         SEC_CVSYM, SEC_CVTYP: ret (0x42000040 as i64) | (coff_align_flag(4) as i64) end
     end
     ret (0xC0000040 as i64) | al
@@ -129,6 +133,7 @@ func put_addend(g &: Ng, sec: int, off: int, v: i64, n: int):
             SEC_DBGLINE: g.s_dline[off + i] = b break end
             SEC_DBGRANGES: g.s_dranges[off + i] = b break end
             SEC_DBGLOC: g.s_dloc[off + i] = b break end
+            SEC_DBGADDR: g.s_daddr[off + i] = b break end
             SEC_CVSYM: g.s_cvsym[off + i] = b break end
         end
         x = x >> (8 as u64)
@@ -287,7 +292,7 @@ func write_coff(g &: Ng, path: str): bool:
     end
     mut long_at := Vector {} as Vector<int>
     each scn in secs:
-        nmn := coff_name(scn)
+        nmn := dbg_sec_name(g, scn, coff_name(scn))
         if str_len_of(nmn) > 8:
             long_at.push(strtab.b.len() + 4)
             np0 := sp(nmn)
@@ -310,7 +315,7 @@ func write_coff(g &: Ng, path: str): bool:
     put_le(o, 12, count as i64, 4)
     repeat nsec in q2:
         h := 20 + 40 * q2
-        mut nm := coff_name(secs[q2])
+        mut nm := dbg_sec_name(g, secs[q2], coff_name(secs[q2]))
         if long_at[q2] >= 0:
             nm = "/" + str.FromInt(long_at[q2] as i64)
         end

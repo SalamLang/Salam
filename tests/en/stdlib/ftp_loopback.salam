@@ -1,0 +1,625 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+package main
+
+import ftp
+import net.tcp
+import tls
+import str
+import sync
+import os
+import filepath
+import fs.file
+import fs.dir
+import testing
+
+const PORT := 19921
+const DPORT := 19922
+const CERT := "tests/fixtures/ssl/server.crt"
+const KEY := "tests/fixtures/ssl/server.key"
+const SESSIONS := 5
+
+mut wg := sync.NewWaitGroup()
+
+struct Fs:
+    pub names: Vector<str> = Vector {} as Vector<str>
+    pub blobs: Vector<str> = Vector {} as Vector<str>
+    pub dirs: Vector<str> = Vector {} as Vector<str>
+end
+
+struct Sess:
+    pub ctl: tcp.Conn = tcp.Conn {}
+    pub sc: tls.Conn = tls.Conn {}
+    pub dc: tcp.Conn = tcp.Conn {}
+    pub dtc: tls.Conn = tls.Conn {}
+    pub secure: bool = false
+    pub prot: bool = false
+    pub dsecure: bool = false
+    pub epsv: bool = false
+    pub alive: bool = false
+    pub buf: str = ""
+    pub cwd: str = "/"
+    pub rnfr: str = ""
+end
+
+func recv_line(s &: Sess): str:
+    until s.alive:
+        at := s.buf.find("\r\n")
+        if at >= 0:
+            line := s.buf.substr(0, at)
+            s.buf = s.buf.substr(at + 2, s.buf.len() - at - 2)
+            ret line
+        end
+        mut chunk := ""
+        if s.secure:
+            chunk = tls.Read(s.sc, 4096)
+        else:
+            chunk = tcp.Read(s.ctl, 4096)
+        end
+        if chunk.len() == 0:
+            s.alive = false
+        else:
+            s.buf += chunk
+        end
+    end
+    ret ""
+end
+
+func say(s &: Sess, line: str):
+    if s.secure:
+        _ := tls.Write(s.sc, line + "\r\n")
+    else:
+        _ := tcp.Write(s.ctl, line + "\r\n")
+    end
+end
+
+func absolute(cwd: str, p: str): str:
+    mut raw := p
+    if not str.StartsWith(raw, "/"):
+        if cwd == "/":
+            raw = "/" + raw
+        else:
+            raw = cwd + "/" + raw
+        end
+    end
+    parts := str.Split(raw, "/")
+    mut out := Vector {} as Vector<str>
+    each part in parts:
+        if part == "..":
+            if out.len() > 0:
+                _ := out.pop()
+            end
+        else part != "" and part != ".":
+            out.push(part)
+        end
+    end
+    if out.len() == 0:
+        ret "/"
+    end
+    ret "/" + str.Join(out, "/")
+end
+
+func parent_of(p: str): str:
+    mut slash := 0 - 1
+    repeat p.len() in i:
+        if p.substr(i, 1) == "/":
+            slash = i
+        end
+    end
+    if slash <= 0:
+        ret "/"
+    end
+    ret p.substr(0, slash)
+end
+
+func base_of(p: str): str:
+    mut slash := 0 - 1
+    repeat p.len() in i:
+        if p.substr(i, 1) == "/":
+            slash = i
+        end
+    end
+    ret p.substr(slash + 1, p.len() - slash - 1)
+end
+
+func file_at(fs &: Fs, path: str): int:
+    mut i := 0
+    until i < fs.names.len():
+        if fs.names.get(i) == path:
+            ret i
+        end
+        i += 1
+    end
+    ret 0 - 1
+end
+
+func dir_at(fs &: Fs, path: str): int:
+    mut i := 0
+    until i < fs.dirs.len():
+        if fs.dirs.get(i) == path:
+            ret i
+        end
+        i += 1
+    end
+    ret 0 - 1
+end
+
+func put_file(fs &: Fs, path: str, body: str, append: bool):
+    at := file_at(fs, path)
+    if at < 0:
+        fs.names.push(path)
+        fs.blobs.push(body)
+    else append:
+        fs.blobs.set(at, fs.blobs.get(at) + body)
+    else:
+        fs.blobs.set(at, body)
+    end
+end
+
+func has_children(fs &: Fs, path: str): bool:
+    mut i := 0
+    until i < fs.names.len():
+        if fs.names.get(i) != "" and parent_of(fs.names.get(i)) == path:
+            ret true
+        end
+        i += 1
+    end
+    i = 0
+    until i < fs.dirs.len():
+        if fs.dirs.get(i) != "" and fs.dirs.get(i) != "/" and parent_of(fs.dirs.get(i)) == path:
+            ret true
+        end
+        i += 1
+    end
+    ret false
+end
+
+func listing(fs &: Fs, path: str, names_only: bool): str:
+    mut out := ""
+    mut i := 0
+    until i < fs.dirs.len():
+        d := fs.dirs.get(i)
+        if d != "" and d != "/" and parent_of(d) == path:
+            if names_only:
+                out += base_of(d) + "\r\n"
+            else:
+                out += "drwxr-xr-x    2 ftp      ftp          4096 Aug 19 10:00 " + base_of(d) + "\r\n"
+            end
+        end
+        i += 1
+    end
+    i = 0
+    until i < fs.names.len():
+        f := fs.names.get(i)
+        if f != "" and parent_of(f) == path:
+            if names_only:
+                out += base_of(f) + "\r\n"
+            else:
+                out += "-rw-r--r--    1 ftp      ftp          " + str.FromInt(fs.blobs.get(i).len()) + " Aug 19 10:00 " + base_of(f) + "\r\n"
+            end
+        end
+        i += 1
+    end
+    if path == "/" and not names_only:
+        out += "lrwxrwxrwx    1 ftp      ftp          9 Aug 19 10:00 shortcut -> hello.txt\r\n"
+    end
+    ret out
+end
+
+func open_data(s &: Sess, dsrv: tcp.Server, scfg: tls.ServerConfig): bool:
+    s.dc = tcp.Accept(dsrv)
+    s.dsecure = false
+    if s.prot:
+        s.dtc = tls.WrapServer(s.dc.fd, scfg)
+        if not tls.ConnOk(s.dtc):
+            ret false
+        end
+        s.dsecure = true
+    end
+    ret true
+end
+
+func data_send(s &: Sess, payload: str):
+    if s.dsecure:
+        if payload.len() > 0:
+            _ := tls.Write(s.dtc, payload)
+        end
+        tls.Close(s.dtc)
+    else:
+        if payload.len() > 0:
+            _ := tcp.Write(s.dc, payload)
+        end
+        tcp.Close(s.dc)
+    end
+end
+
+func data_recv(s &: Sess): str:
+    mut body := ""
+    mut more := true
+    until more:
+        mut chunk := ""
+        if s.dsecure:
+            chunk = tls.Read(s.dtc, 8192)
+        else:
+            chunk = tcp.Read(s.dc, 8192)
+        end
+        if chunk.len() == 0:
+            more = false
+        else:
+            body += chunk
+        end
+    end
+    if s.dsecure:
+        tls.Close(s.dtc)
+    else:
+        tcp.Close(s.dc)
+    end
+    ret body
+end
+
+func handle(c: tcp.Conn, index: int, fs &: Fs, dsrv: tcp.Server, scfg: tls.ServerConfig):
+    mut s := Sess {}
+    s.ctl = c
+    s.alive = true
+    s.cwd = "/"
+    s.epsv = index != 4
+    say(s, "220 mock ftp ready")
+    until s.alive:
+        line := recv_line(s)
+        if not s.alive:
+            break
+        end
+        sp := line.find(" ")
+        mut verb := line
+        mut arg := ""
+        if sp >= 0:
+            verb = line.substr(0, sp)
+            arg = line.substr(sp + 1, line.len() - sp - 1)
+        end
+        if verb == "USER":
+            say(s, "331 password please")
+        else verb == "PASS":
+            if arg == "secret":
+                say(s, "230 welcome")
+            else:
+                say(s, "530 login incorrect")
+            end
+        else verb == "AUTH":
+            say(s, "234 go ahead")
+            s.sc = tls.WrapServer(c.fd, scfg)
+            if not tls.ConnOk(s.sc):
+                s.alive = false
+            else:
+                s.secure = true
+                s.buf = ""
+            end
+        else verb == "PBSZ":
+            say(s, "200 ok")
+        else verb == "PROT":
+            if arg == "P":
+                s.prot = true
+                say(s, "200 private")
+            else:
+                say(s, "200 clear")
+            end
+        else verb == "SYST":
+            say(s, "215 UNIX Type: L8")
+        else verb == "FEAT":
+            say(s, "211-Features:\r\n EPSV\r\n PASV\r\n211 End")
+        else verb == "NOOP":
+            say(s, "200 noop")
+        else verb == "TYPE":
+            say(s, "200 type set")
+        else verb == "PWD":
+            say(s, "257 \"" + s.cwd + "\" is the current directory")
+        else verb == "CWD":
+            target := absolute(s.cwd, arg)
+            if dir_at(fs, target) >= 0:
+                s.cwd = target
+                say(s, "250 directory changed")
+            else:
+                say(s, "550 no such directory")
+            end
+        else verb == "CDUP":
+            s.cwd = parent_of(s.cwd)
+            say(s, "250 directory changed")
+        else verb == "MKD":
+            target := absolute(s.cwd, arg)
+            if dir_at(fs, target) >= 0:
+                say(s, "550 exists")
+            else:
+                fs.dirs.push(target)
+                say(s, "257 \"" + target + "\" created")
+            end
+        else verb == "RMD":
+            target := absolute(s.cwd, arg)
+            at := dir_at(fs, target)
+            if at >= 0 and not has_children(fs, target):
+                fs.dirs.set(at, "")
+                say(s, "250 removed")
+            else:
+                say(s, "550 cannot remove")
+            end
+        else verb == "DELE":
+            at := file_at(fs, absolute(s.cwd, arg))
+            if at >= 0:
+                fs.names.set(at, "")
+                say(s, "250 deleted")
+            else:
+                say(s, "550 no such file")
+            end
+        else verb == "RNFR":
+            s.rnfr = absolute(s.cwd, arg)
+            if file_at(fs, s.rnfr) >= 0:
+                say(s, "350 ready for destination")
+            else:
+                say(s, "550 no such file")
+            end
+        else verb == "RNTO":
+            at := file_at(fs, s.rnfr)
+            if at >= 0:
+                fs.names.set(at, absolute(s.cwd, arg))
+                say(s, "250 renamed")
+            else:
+                say(s, "503 send RNFR first")
+            end
+        else verb == "SIZE":
+            at := file_at(fs, absolute(s.cwd, arg))
+            if at >= 0:
+                say(s, "213 " + str.FromInt(fs.blobs.get(at).len()))
+            else:
+                say(s, "550 no such file")
+            end
+        else verb == "MDTM":
+            if file_at(fs, absolute(s.cwd, arg)) >= 0:
+                say(s, "213 20260102030405")
+            else:
+                say(s, "550 no such file")
+            end
+        else verb == "EPSV":
+            if s.epsv:
+                say(s, "229 Entering Extended Passive Mode (|||" + str.FromInt(DPORT) + "|)")
+                if not open_data(s, dsrv, scfg):
+                    s.alive = false
+                end
+            else:
+                say(s, "500 EPSV is not supported")
+            end
+        else verb == "PASV":
+            say(s, "227 Entering Passive Mode (127,0,0,1," + str.FromInt(DPORT / 256) + "," + str.FromInt(DPORT % 256) + ")")
+            if not open_data(s, dsrv, scfg):
+                s.alive = false
+            end
+        else verb == "LIST" or verb == "NLST":
+            mut where := s.cwd
+            if arg != "":
+                where = absolute(s.cwd, arg)
+            end
+            say(s, "150 here comes the listing")
+            data_send(s, listing(fs, where, verb == "NLST"))
+            say(s, "226 done")
+        else verb == "RETR":
+            at := file_at(fs, absolute(s.cwd, arg))
+            if at < 0:
+                say(s, "550 no such file")
+                s.dc = tcp.Conn {}
+                tcp.Close(s.dc)
+            else:
+                say(s, "150 sending")
+                data_send(s, fs.blobs.get(at))
+                say(s, "226 done")
+            end
+        else verb == "STOR" or verb == "APPE":
+            say(s, "150 receiving")
+            body := data_recv(s)
+            put_file(fs, absolute(s.cwd, arg), body, verb == "APPE")
+            say(s, "226 done")
+        else verb == "QUIT":
+            say(s, "221 bye")
+            s.alive = false
+        else:
+            say(s, "502 not implemented")
+        end
+    end
+    if s.secure:
+        tls.Close(s.sc)
+    else:
+        tcp.Close(c)
+    end
+end
+
+func serve():
+    srv := tcp.Bind(PORT)
+    dsrv := tcp.Bind(DPORT)
+    sync.Done(wg)
+    scfg := tls.NewServerConfig(CERT, KEY)
+    mut fs := Fs {}
+    fs.dirs.push("/")
+    fs.dirs.push("/pub")
+    fs.names.push("/hello.txt")
+    fs.blobs.push("hello ftp\n")
+    fs.names.push("/pub/a.txt")
+    fs.blobs.push("alpha")
+    mut index := 0
+    until index < SESSIONS:
+        c := tcp.Accept(srv)
+        handle(c, index, fs, dsrv, scfg)
+        index += 1
+    end
+    tcp.CloseServer(dsrv)
+    tcp.CloseServer(srv)
+end
+
+func tls_config(): tls.Config:
+    mut cfg := tls.NewConfig("127.0.0.1")
+    cfg.ca_file = CERT
+    ret cfg
+end
+
+func test_plain():
+    mut c := ftp.Dial("127.0.0.1", PORT)
+    testing.AssertTrue(ftp.Ok(c))
+    testing.AssertEqInt(ftp.LastCode(c), 220)
+    testing.AssertEqStr(ftp.LastReply(c), "220 mock ftp ready")
+    testing.AssertFalse(ftp.Secure(c))
+    testing.AssertFalse(ftp.SecureData(c))
+    testing.AssertFalse(ftp.Login(c, "ali", "wrong"))
+    testing.AssertEqInt(ftp.LastCode(c), 530)
+    testing.AssertTrue(ftp.Login(c, "ali", "secret"))
+    testing.AssertTrue(ftp.Noop(c))
+    testing.AssertEqStr(ftp.System(c), "215 UNIX Type: L8")
+    features := ftp.Features(c)
+    testing.AssertTrue(features.find(" EPSV") > 0)
+    testing.AssertTrue(features.find("211 End") > 0)
+    testing.AssertTrue(ftp.Binary(c))
+    testing.AssertTrue(ftp.Ascii(c))
+    testing.AssertEqInt(ftp.Command(c, "NOOP"), 200)
+    testing.AssertEqInt(ftp.Command(c, "BOGUS"), 502)
+    testing.AssertEqStr(ftp.Pwd(c), "/")
+
+    testing.AssertTrue(ftp.Mkdir(c, "work"))
+    testing.AssertFalse(ftp.Mkdir(c, "work"))
+    testing.AssertTrue(ftp.Cwd(c, "work"))
+    testing.AssertEqStr(ftp.Pwd(c), "/work")
+    testing.AssertTrue(ftp.CdUp(c))
+    testing.AssertEqStr(ftp.Pwd(c), "/")
+    testing.AssertFalse(ftp.Cwd(c, "missing"))
+    testing.AssertTrue(ftp.MkdirAll(c, "/deep/er/still"))
+    testing.AssertTrue(ftp.IsDir(c, "/deep/er/still"))
+    testing.AssertFalse(ftp.IsDir(c, "/hello.txt"))
+    testing.AssertEqStr(ftp.Pwd(c), "/")
+
+    testing.AssertEqStr(ftp.Read(c, "hello.txt"), "hello ftp\n")
+    testing.AssertTrue(ftp.Write(c, "work/new.txt", "first"))
+    testing.AssertTrue(ftp.Append(c, "work/new.txt", "+second"))
+    testing.AssertEqStr(ftp.Read(c, "work/new.txt"), "first+second")
+    testing.AssertEqInt64(ftp.Size(c, "work/new.txt"), 12 as i64)
+    testing.AssertEqInt64(ftp.Size(c, "nothing"), 0 - 1 as i64)
+    testing.AssertEqStr(ftp.ModTime(c, "hello.txt"), "20260102030405")
+    testing.AssertEqStr(ftp.ModTime(c, "nothing"), "")
+    testing.AssertTrue(ftp.Exists(c, "hello.txt"))
+    testing.AssertTrue(ftp.Exists(c, "work"))
+    testing.AssertFalse(ftp.Exists(c, "nothing"))
+    testing.AssertTrue(ftp.IsLink(c, "/shortcut"))
+    testing.AssertFalse(ftp.IsLink(c, "/hello.txt"))
+    testing.AssertFalse(ftp.IsLink(c, "/"))
+
+    raw := ftp.ListRaw(c, "/")
+    testing.AssertTrue(raw.find("hello.txt") > 0)
+    testing.AssertTrue(raw.find("shortcut -> hello.txt") > 0)
+    entries := ftp.List(c, "/pub")
+    testing.AssertEqInt(entries.len(), 1)
+    testing.AssertEqStr(entries.get(0).name, "a.txt")
+    testing.AssertEqInt64(entries.get(0).size, 5 as i64)
+    entries.free()
+    names := ftp.NameList(c, "/")
+    testing.AssertEqInt(names.len(), 4)
+    testing.AssertEqStr(names.get(0), "pub")
+    testing.AssertEqStr(names.get(3), "hello.txt")
+    names.free()
+    here := ftp.NameList(c, "")
+    testing.AssertEqInt(here.len(), 4)
+    here.free()
+
+    testing.AssertTrue(ftp.Rename(c, "work/new.txt", "work/old.txt"))
+    testing.AssertFalse(ftp.Rename(c, "work/new.txt", "work/older.txt"))
+    testing.AssertTrue(ftp.Move(c, "work/old.txt", "moved.txt"))
+    testing.AssertEqStr(ftp.Read(c, "moved.txt"), "first+second")
+    testing.AssertTrue(ftp.Delete(c, "moved.txt"))
+    testing.AssertFalse(ftp.Delete(c, "moved.txt"))
+    testing.AssertFalse(ftp.Exists(c, "moved.txt"))
+
+    local := filepath.Join(os.TempDir(), "salam_ftp_coverage")
+    dir.RemoveAll(local)
+    dir.MkdirAll(local)
+    one := filepath.Join(local, "one.txt")
+    testing.AssertTrue(ftp.Download(c, "hello.txt", one))
+    testing.AssertEqStr(file.ReadText(one), "hello ftp\n")
+    testing.AssertFalse(ftp.Download(c, "nothing", filepath.Join(local, "none.txt")))
+    file.WriteText(filepath.Join(local, "up.txt"), "uploaded body")
+    testing.AssertTrue(ftp.Upload(c, filepath.Join(local, "up.txt"), "up.txt"))
+    testing.AssertEqStr(ftp.Read(c, "up.txt"), "uploaded body")
+    testing.AssertFalse(ftp.Upload(c, filepath.Join(local, "absent.txt"), "absent.txt"))
+
+    tree := filepath.Join(local, "tree")
+    dir.MkdirAll(filepath.Join(tree, "inner"))
+    file.WriteText(filepath.Join(tree, "top.txt"), "top")
+    file.WriteText(filepath.Join(tree, "inner/leaf.txt"), "leaf")
+    testing.AssertTrue(ftp.UploadDir(c, tree, "/uploaded"))
+    testing.AssertEqStr(ftp.Read(c, "/uploaded/top.txt"), "top")
+    testing.AssertEqStr(ftp.Read(c, "/uploaded/inner/leaf.txt"), "leaf")
+    back := filepath.Join(local, "back")
+    testing.AssertTrue(ftp.DownloadDir(c, "/uploaded", back))
+    testing.AssertEqStr(file.ReadText(filepath.Join(back, "top.txt")), "top")
+    testing.AssertEqStr(file.ReadText(filepath.Join(back, "inner/leaf.txt")), "leaf")
+    testing.AssertTrue(ftp.RemoveAll(c, "/uploaded"))
+    testing.AssertFalse(ftp.Exists(c, "/uploaded"))
+    dir.RemoveAll(local)
+
+    ftp.Close(c)
+    testing.AssertFalse(ftp.Ok(c))
+end
+
+func test_implicit_tls():
+    mut c := ftp.DialTLSWith("127.0.0.1", PORT, tls_config())
+    testing.AssertTrue(ftp.Ok(c))
+    testing.AssertTrue(ftp.Secure(c))
+    testing.AssertTrue(ftp.SecureData(c))
+    testing.AssertTrue(ftp.Login(c, "ali", "secret"))
+    testing.AssertEqStr(ftp.Pwd(c), "/")
+    testing.AssertEqStr(ftp.Read(c, "hello.txt"), "hello ftp\n")
+    testing.AssertTrue(ftp.Write(c, "secure.txt", "over tls"))
+    testing.AssertEqStr(ftp.Read(c, "secure.txt"), "over tls")
+    testing.AssertTrue(ftp.ListRaw(c, "/").find("secure.txt") > 0)
+    ftp.Quit(c)
+    testing.AssertFalse(ftp.Secure(c))
+end
+
+func test_untrusted():
+    c := ftp.DialTLS("127.0.0.1", PORT)
+    testing.AssertFalse(ftp.Ok(c))
+    testing.AssertFalse(ftp.Secure(c))
+    mut d := ftp.Dial("127.0.0.1", PORT)
+    testing.AssertTrue(ftp.Ok(d))
+    testing.AssertFalse(ftp.AuthTLS(d))
+    testing.AssertFalse(ftp.Secure(d))
+    testing.AssertFalse(ftp.SecureData(d))
+end
+
+func test_explicit_tls_passive():
+    mut c := ftp.Dial("127.0.0.1", PORT)
+    testing.AssertTrue(ftp.Ok(c))
+    testing.AssertTrue(ftp.AuthTLSWith(c, tls_config()))
+    testing.AssertFalse(ftp.AuthTLSWith(c, tls_config()))
+    testing.AssertTrue(ftp.Secure(c))
+    testing.AssertTrue(ftp.SecureData(c))
+    testing.AssertTrue(ftp.Login(c, "ali", "secret"))
+    testing.AssertTrue(ftp.Write(c, "passive.txt", "via pasv"))
+    testing.AssertEqStr(ftp.Read(c, "passive.txt"), "via pasv")
+    testing.AssertEqInt(ftp.Command(c, "EPSV"), 500)
+    ftp.Close(c)
+end
+
+func main:
+    sync.Add(wg, 1 as i64)
+    t := spawn(serve)
+    sync.Wait(wg)
+    test_plain()
+    test_implicit_tls()
+    test_untrusted()
+    test_explicit_tls_passive()
+    join(t)
+    testing.Summary()
+    ret 0
+end

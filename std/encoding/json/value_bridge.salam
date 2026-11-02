@@ -1,7 +1,6 @@
 package json
 
 import encoding.value
-import encoding.encerr
 import encoding
 import conv
 import str
@@ -32,10 +31,10 @@ end
 
 func _skip_ws(s: str, i: int): int: ret _skip_ws_n(s, str.ByteLen(s), i) end
 
-func _pstr_n(s: str, n: int, i: int, endpos &: int, err &: encerr.EncodingError): str:
+func _pstr_n(s: str, n: int, i: int, endpos &: int, err &: Error): str:
     bp := _bp(s)
     if i >= n or _ub(bp, i) != 34:
-        err = encerr.ErrUnexpectedToken(`expected '"'`, i)
+        err = Error.At(ErrorKind.Syntax, `expected '"'`, i)
         endpos = i
         ret ""
     end
@@ -51,7 +50,7 @@ func _pstr_n(s: str, n: int, i: int, endpos &: int, err &: encerr.EncodingError)
         if c == 92:
             p += 1
             if p >= n:
-                err = encerr.ErrUnexpectedEOF(p)
+                err = Error.At(ErrorKind.UnexpectedEnd, "unexpected end of input", p)
                 endpos = p
                 ret str.BufStr(sb)
             end
@@ -67,7 +66,7 @@ func _pstr_n(s: str, n: int, i: int, endpos &: int, err &: encerr.EncodingError)
             else e == 117:
                 q := __jdcp(s, p, sb)
                 if q < 0:
-                    err = encerr.ErrUnexpectedToken("invalid \\u escape", p)
+                    err = Error.At(ErrorKind.Syntax, "invalid \\u escape", p)
                     endpos = p
                     ret str.BufStr(sb)
                 end
@@ -81,28 +80,28 @@ func _pstr_n(s: str, n: int, i: int, endpos &: int, err &: encerr.EncodingError)
             p += 1
         end
     end
-    err = encerr.ErrUnexpectedEOF(p)
+    err = Error.At(ErrorKind.UnexpectedEnd, "unexpected end of input", p)
     endpos = p
     ret str.BufStr(sb)
 end
 
-func _pval(s: str, i: int, endpos &: int, err &: encerr.EncodingError): value.Value:
+func _pval(s: str, i: int, endpos &: int, err &: Error): value.Value:
     ret _pval_d_n(s, str.ByteLen(s), i, endpos, err, 0)
 end
 
-func _pval_d_n(s: str, n: int, i: int, endpos &: int, err &: encerr.EncodingError, depth: int): value.Value:
-    if encerr.IsError(err):
+func _pval_d_n(s: str, n: int, i: int, endpos &: int, err &: Error, depth: int): value.Value:
+    if err.message != "":
         endpos = i
         ret value.ValueNull()
     end
     if depth > 512:
-        err = encerr.NewError(encerr.KindCustom, "JSON nesting is deeper than 512 levels", i)
+        err = Error.At(ErrorKind.OutOfRange, "JSON nesting is deeper than 512 levels", i)
         endpos = i
         ret value.ValueNull()
     end
     p0 := _skip_ws_n(s, n, i)
     if p0 >= n:
-        err = encerr.ErrUnexpectedEOF(p0)
+        err = Error.At(ErrorKind.UnexpectedEnd, "unexpected end of input", p0)
         endpos = p0
         ret value.ValueNull()
     end
@@ -124,22 +123,22 @@ func _pval_d_n(s: str, n: int, i: int, endpos &: int, err &: encerr.EncodingErro
         until true:
             q = _skip_ws_n(s, n, q)
             if q >= n or _ub(bp, q) != 34:
-                err = encerr.ErrUnexpectedToken("expected object key", q)
+                err = q >= n ? Error.At(ErrorKind.UnexpectedEnd, "unexpected end of input", q) : Error.At(ErrorKind.Syntax, "expected object key", q)
                 endpos = q
                 ret out
             end
             mut kend := q
             key := _pstr_n(s, n, q, kend, err)
-            if encerr.IsError(err): endpos = kend ret out end
+            if err.message != "": endpos = kend ret out end
             q = _skip_ws_n(s, n, kend)
             if q >= n or _ub(bp, q) != 58:
-                err = encerr.ErrUnexpectedToken("expected ':'", q)
+                err = q >= n ? Error.At(ErrorKind.UnexpectedEnd, "unexpected end of input", q) : Error.At(ErrorKind.Syntax, "expected ':'", q)
                 endpos = q
                 ret out
             end
             mut vend := q + 1
             v := _pval_d_n(s, n, q + 1, vend, err, depth + 1)
-            if encerr.IsError(err): endpos = vend ret out end
+            if err.message != "": endpos = vend ret out end
             value.ObjectSet(out, key, v)
             q = _skip_ws_n(s, n, vend)
             if q < n and _ub(bp, q) == 44:
@@ -150,7 +149,7 @@ func _pval_d_n(s: str, n: int, i: int, endpos &: int, err &: encerr.EncodingErro
                 endpos = q + 1
                 ret out
             end
-            err = encerr.ErrUnexpectedToken("expected ',' or '}'", q)
+            err = q >= n ? Error.At(ErrorKind.UnexpectedEnd, "unexpected end of input", q) : Error.At(ErrorKind.Syntax, "expected ',' or '}'", q)
             endpos = q
             ret out
         end
@@ -165,7 +164,7 @@ func _pval_d_n(s: str, n: int, i: int, endpos &: int, err &: encerr.EncodingErro
         until true:
             mut vend := q
             v := _pval_d_n(s, n, q, vend, err, depth + 1)
-            if encerr.IsError(err): endpos = vend ret out end
+            if err.message != "": endpos = vend ret out end
             value.ArrayPush(out, v)
             q = _skip_ws_n(s, n, vend)
             if q < n and _ub(bp, q) == 44:
@@ -176,7 +175,7 @@ func _pval_d_n(s: str, n: int, i: int, endpos &: int, err &: encerr.EncodingErro
                 endpos = q + 1
                 ret out
             end
-            err = encerr.ErrUnexpectedToken("expected ',' or ']'", q)
+            err = q >= n ? Error.At(ErrorKind.UnexpectedEnd, "unexpected end of input", q) : Error.At(ErrorKind.Syntax, "expected ',' or ']'", q)
             endpos = q
             ret out
         end
@@ -195,7 +194,7 @@ func _pval_d_n(s: str, n: int, i: int, endpos &: int, err &: encerr.EncodingErro
     end
     ep := _jnum_n(s, n, p0)
     if ep < 0 or ep == p0:
-        err = encerr.ErrUnexpectedToken("invalid value", p0)
+        err = Error.At(ErrorKind.Syntax, "invalid value", p0)
         endpos = p0
         ret value.ValueNull()
     end
@@ -305,13 +304,18 @@ end
 
 @en "Decode"
 @fa "کدگشایی"
-pub func Decode(text: str, err &: encerr.EncodingError): value.Value:
+pub func Decode(text: str): value.Value throws:
+    mut err := Error {}
     mut endpos := 0
     v := _pval(text, 0, endpos, err)
-    if encerr.IsError(err): ret v end
-    p := _skip_ws(text, endpos)
-    if p < str.ByteLen(text):
-        err = encerr.NewError(encerr.KindTrailingData, "trailing data after JSON value", p)
+    if err.message == "":
+        p := _skip_ws(text, endpos)
+        if p < str.ByteLen(text):
+            err = Error.At(ErrorKind.Syntax, "trailing data after JSON value", p).with_code("json.trailing_data")
+        end
+    end
+    if err.message != "":
+        throw err.locate(text).wrap("json")
     end
     ret v
 end

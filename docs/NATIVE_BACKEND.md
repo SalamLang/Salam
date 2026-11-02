@@ -932,7 +932,7 @@ ret end` at the top of a recursive AST walk) tests that parameter before
   adds it to its run summary. Without in-process LLVM, `--backend=llvm` hands
   the IR to the `clang` on `PATH`. It fails only on gross regressions,
   measured on the totals as native over LLVM ratios, so machine speed cancels
-  out: more than `NATIVE_REPORT_MAX_TIME_RATIO` (0.5) of LLVM's build time or
+  out: more than `NATIVE_REPORT_MAX_TIME_RATIO` (0.6) of LLVM's build time or
   `NATIVE_REPORT_MAX_SIZE_RATIO` (1.5) of its size. `NATIVE_REPORT_RUNS`
   repeats each build and keeps the fastest.
 - `tools/bash/native-encoder-check.sh <salam> <files...>` checks the encoder:

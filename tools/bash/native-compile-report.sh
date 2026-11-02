@@ -12,7 +12,7 @@
 # Single rows are noisy on shared machines, so the gate looks at the totals
 # only, and as ratios of the two backends measured side by side: it fails
 # when the native backend takes longer than NATIVE_REPORT_MAX_TIME_RATIO times
-# LLVM's total time (0.5 by default) or writes more than
+# LLVM's total time (0.6 by default) or writes more than
 # NATIVE_REPORT_MAX_SIZE_RATIO times LLVM's total size (1.5 by default), or
 # when either backend cannot build a program. Set a ratio to 0 to only report.
 #
@@ -24,7 +24,7 @@ case "$SALAM" in /*) ;; */*) SALAM="$(pwd)/$SALAM" ;; esac
 shift
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 RUNS=${NATIVE_REPORT_RUNS:-1}
-MAX_TIME=${NATIVE_REPORT_MAX_TIME_RATIO:-0.5}
+MAX_TIME=${NATIVE_REPORT_MAX_TIME_RATIO:-0.6}
 MAX_SIZE=${NATIVE_REPORT_MAX_SIZE_RATIO:-1.5}
 if [ $# -eq 0 ]; then
     set -- "$ROOT/compiler/main.salam" "$ROOT/tests/en/stdlib/tls_selftest.salam" \

@@ -11,6 +11,7 @@ const RG_NUL_UNK := 0
 const RG_NUL_NULL := 1
 const RG_NUL_SET := 2
 const RG_NUL_MAYBE := 3
+const RG_NUL_TEST := 4
 
 const RG_WARN := 1
 const RG_ERR := 2
@@ -71,6 +72,7 @@ pub struct Rg:
     pub fname: Vector<str> = Vector {}
     pub fslot: HashMap<int, int> = HashMap {} as HashMap<int, int>
     pub rto: bool = false
+    pub rdown: bool = false
     pub budget: int = 0
     pub mode: int = 1
     pub fbody: int = 0
@@ -111,6 +113,9 @@ end
 func rg_nul_join(x: int, y: int): int:
     if x == y:
         ret x
+    end
+    if x == RG_NUL_TEST or y == RG_NUL_TEST:
+        ret RG_NUL_UNK
     end
     if x == RG_NUL_NULL or x == RG_NUL_MAYBE or y == RG_NUL_NULL or y == RG_NUL_MAYBE:
         ret RG_NUL_MAYBE
@@ -658,6 +663,9 @@ func rg_sev_def(r &: Rg): int:
 end
 
 func rg_repeat_hint(r &: Rg, help: str): str:
+    if r.rdown:
+        ret help + "; " + i18.Tr("'repeat a to b' counts down when b is below a, so 'repeat 0 to xs.len() - 1 in i:' runs with i = 0 and i = -1 when xs is empty; count with 'repeat xs.len() in i:' or 'each i, x in xs:'")
+    end
     if not r.rto:
         ret help
     end
@@ -790,14 +798,22 @@ func rg_check_index(r &: Rg, a &: at.Ast, nid: int, cnode: int, cv: RgV, inode: 
 end
 
 func rg_check_null(r &: Rg, a &: at.Ast, nid: int, pnode: int, pv: RgV):
-    if not r.report or pnode == 0 or (pv.nul != RG_NUL_NULL and pv.nul != RG_NUL_MAYBE) or not rg_ptr_ts(at.At(a, pnode).type_str):
+    if not r.report or pnode == 0 or (pv.nul != RG_NUL_NULL and pv.nul != RG_NUL_MAYBE and pv.nul != RG_NUL_TEST) or not rg_ptr_ts(at.At(a, pnode).type_str):
         ret
     end
-    if not rg_will(r, pv.nul == RG_NUL_NULL ? rg_sev_def(r) : RG_WARN):
+    if not rg_will(r, pv.nul != RG_NUL_MAYBE ? rg_sev_def(r) : RG_WARN):
         ret
     end
     pname := rg_text_or(a, pnode, i18.Tr("the pointer"))
-    if pv.nul == RG_NUL_NULL:
+    if pv.nul != RG_NUL_MAYBE and pv.why == 0:
+        rg_diag(
+            r, rg_sev_def(r), 152, nid, co.Format1(
+                i18.Tr("null pointer dereference: '%s' is null here"), co.ArgStr(pname)
+            ), co.Format2(i18.Tr("give '%s' a value before using it, or check 'if %s != null:' first"), co.ArgStr(pname), co.ArgStr(pname))
+        )
+        ret
+    end
+    if pv.nul != RG_NUL_MAYBE:
         rg_diag(
             r, rg_sev_def(r), 152, nid, co.Format2(
                 i18.Tr("null pointer dereference: '%s' is null here (set on line %d)"), co.ArgStr(pname), co.ArgInt(rg_line(a, pv.why))
@@ -1167,14 +1183,15 @@ func rg_cast(r &: Rg, a &: at.Ast, nid: int, v: RgV): RgV:
     _tr := cv_int_range(ts, tlo, thi)
     bits := fold_ts_bits(ts)
     if rg_lossy(ts, v) and rg_will(r, RG_WARN):
-        vname := rg_text_or(a, n.a, i18.Tr("the value"))
+        vtext := rg_text(a, n.a, 0)
+        vname := str.Len(vtext) > 0 ? "'" + vtext + "'" : i18.Tr("the value")
         mut got := ""
         if rg_is_exact(v):
             got = co.Format1(i18.Tr(", giving %d"), co.ArgInt(fold_wrap(ts, v.lo)))
         end
         rg_diag(
             r, RG_WARN, 154, nid, co.Format4(
-                i18.Tr("'%s' is %s, which does not fit in '%s'; the cast keeps only the low %d bits"), co.ArgStr(vname), co.ArgStr(rg_desc(v)), co.ArgStr(ts), co.ArgInt(bits as i64)
+                i18.Tr("%s is %s, which does not fit in '%s'; the cast keeps only the low %d bits"), co.ArgStr(vname), co.ArgStr(rg_desc(v)), co.ArgStr(ts), co.ArgInt(bits as i64)
             ) + got, i18.Tr("use a wider type, or mask the bits you want on purpose, for example '(x & 255) as u8'")
         )
     end
@@ -1200,6 +1217,36 @@ func rg_lossy(ts: str, v: RgV): bool:
     umax := ((1 as i64) << bits) - 1
     smin := 0 - ((1 as i64) << (bits - 1))
     ret (v.hlo and v.lo > umax) or (rg_signed_ts(ts) and v.hhi and v.hi < smin)
+end
+
+func rg_const_overflow(s &: Sema, a &: at.Ast, nid: int, ok: bool, v: i64, up: bool): bool:
+    ts := at.At(a, nid).type_str
+    if g_sm_ranges == 0 or s.requal or not rg_signed_ts(ts):
+        ret false
+    end
+    mut tlo := 0 as i64
+    mut thi := 0 as i64
+    if not cv_int_range(ts, tlo, thi):
+        ret false
+    end
+    mut res := RgV {}
+    if ok:
+        if v >= tlo and v <= thi:
+            ret false
+        end
+        res = rg_exact(v)
+    else:
+        res.big = up ? 1 : 0 - 1
+    end
+    ename := rg_text_or(a, nid, i18.Tr("this expression"))
+    serr_help(
+        s, 148, span_of(a, nid), co.Format3(
+            i18.Tr("integer overflow: '%s' gives %s, which does not fit in '%s'"), co.ArgStr(ename), co.ArgStr(rg_desc(res)), co.ArgStr(ts)
+        ), co.Format3(
+            i18.Tr("'%s' holds %d to %d; cast an operand to a wider type such as 'i64' first. A release build assumes signed arithmetic never overflows, and only unsigned types wrap by design"), co.ArgStr(ts), co.ArgInt(tlo), co.ArgInt(thi)
+        )
+    )
+    ret true
 end
 
 func rg_warn_lossy_const(s &: Sema, a &: at.Ast, nid: int, v: i64):
@@ -1463,6 +1510,13 @@ func rg_eval(s &: Sema, r &: Rg, a &: at.Ast, st &: RgSt, nid: int): RgV:
         end
         if not rg_int_ts(n.type_str):
             ret RgV {}
+        end
+        if at.KindOf(a, n.a) == at.AST_LITERAL and at.KindOf(a, n.b) == at.AST_LITERAL:
+            saved_rep := r.report
+            r.report = false
+            lv := rg_arith(r, a, nid, n.op, xa, xb, n.type_str, n.b)
+            r.report = saved_rep
+            ret lv
         end
         ret rg_arith(r, a, nid, n.op, xa, xb, n.type_str, n.b)
     end
@@ -1805,9 +1859,9 @@ func rg_refine_side(r &: Rg, a &: at.Ast, st &: RgSt, tnode: int, op: int, e: Rg
                     st.live = false
                     ret
                 end
-                pv.nul = RG_NUL_NULL
+                pv.nul = cur.nul == RG_NUL_NULL ? RG_NUL_NULL : RG_NUL_TEST
             else op == tok.TK_NE:
-                if cur.nul == RG_NUL_NULL:
+                if cur.nul == RG_NUL_NULL or cur.nul == RG_NUL_TEST:
                     st.live = false
                     ret
                 end
@@ -2278,6 +2332,8 @@ func rg_repeat(s &: Sema, r &: Rg, a &: at.Ast, st &: RgSt, nid: int):
     k := rg_slot(r, n.name)
     prev := k >= 0 ? st.v.get(k) : RgV {}
     saved_rto := r.rto
+    saved_down := r.rdown
+    r.rdown = false
     mut iv := RgV {}
     mut first := RgV {}
     mut last := RgV {}
@@ -2303,6 +2359,7 @@ func rg_repeat(s &: Sema, r &: Rg, a &: at.Ast, st &: RgSt, nid: int):
             rg_unroll(s, r, a, st, nid, k, 0 as i64, va.lo as int, 1 as i64, n.b)
             rg_set_var(st, k, prev)
             r.rto = saved_rto
+            r.rdown = saved_down
             ret
         end
     else:
@@ -2327,6 +2384,7 @@ func rg_repeat(s &: Sema, r &: Rg, a &: at.Ast, st &: RgSt, nid: int):
                 iv.hlo = true
                 iv.hs = vc.hs
                 iv.hoff = rg_max(vc.hoff, va.lo)
+                r.rdown = true
             end
         end
         if rg_is_exact(vc) and va.hs >= 0 and va.ls == va.hs and va.loff >= vc.lo:
@@ -2354,6 +2412,7 @@ func rg_repeat(s &: Sema, r &: Rg, a &: at.Ast, st &: RgSt, nid: int):
     rg_loop(s, r, a, st, nid, 0, k, iv, n.b, 0, k, first, last, pins)
     rg_set_var(st, k, prev)
     r.rto = saved_rto
+    r.rdown = saved_down
 end
 
 func rg_each(s &: Sema, r &: Rg, a &: at.Ast, st &: RgSt, nid: int):

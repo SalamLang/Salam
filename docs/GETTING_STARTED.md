@@ -354,6 +354,35 @@ prototypes. No `main` is needed: the runtime and the package's globals are
 set up when the library is loaded. A Windows DLL can be built from Linux with
 `--target=x86_64-windows-gnu --cc=x86_64-w64-mingw32-gcc`.
 
+### 🪟 Windows programs: icon, manifest and no console
+
+A program built for Windows with `--backend=native` (or with
+`--linker=builtin`) can carry an icon, an application manifest and version
+information, and can be a GUI program that opens no console window:
+
+```sh
+salam build app.salam --backend=native --target=x86_64-w64-windows-gnu \
+    --subsystem=windows --icon=app.ico --manifest=app.manifest \
+    --version-info=version=1.2.0 --version-info=company="Example Ltd"
+```
+
+`--version-info` takes `version`, `company`, `description`, `product` and
+`copyright`. A project can keep the same settings in `salam.toml`; paths are
+relative to the project, and `version` defaults to `[package].version`:
+
+```toml
+[windows]
+subsystem = "windows"
+icon = "assets/app.ico"
+manifest = "app.manifest"
+description = "Salam demo"
+company = "Example Ltd"
+```
+
+The compiler writes the resources itself, so no `windres` is needed. A GUI
+program still starts in `main`; its output only shows up when it is
+redirected to a file or a pipe.
+
 More examples live in [`tests/en/`](../tests/en/).
 
 ## 🎨 Formatting with `salam format`

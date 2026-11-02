@@ -48,6 +48,31 @@ func _to_url_alphabet(s: str): str:
     ret out
 end
 
+func _byte_text(code: int): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    if code == 32:
+        str.BufAppend(sb, "space")
+    else code > 32 and code < 127:
+        str.BufAppend(sb, "character ")
+        str.BufAppendChar(sb, 39)
+        str.BufAppendChar(sb, code)
+        str.BufAppendChar(sb, 39)
+    else:
+        digits := "0123456789ABCDEF"
+        hp := _bp(digits)
+        str.BufAppend(sb, "byte 0x")
+        str.BufAppendChar(sb, _ub(hp, code / 16))
+        str.BufAppendChar(sb, _ub(hp, code % 16))
+    end
+    out := str.BufStr(sb)
+    ret out
+end
+
+func _b64url_err(kind: ErrorKind, message: str, offset: int): Error:
+    ret Error.At(kind, message, offset).with_code("jwt.bad_base64").wrap("base64url")
+end
+
 @en "B64UrlEncodeBytes"
 @fa "کدگذاری پایه۶۴ نشانی بایت"
 pub func B64UrlEncodeBytes(p: void*, n: int): str:
@@ -63,37 +88,17 @@ end
 
 @en "B64UrlDecode"
 @fa "کدگشایی پایه۶۴ نشانی"
-pub func B64UrlDecode(s: str, ok &: bool): str:
-    ok = false
+pub func B64UrlDecode(s: str): str throws:
     n := s.len()
-    if n % 4 == 1: ret "" end
     bp := _bp(s)
-    mut sb := str.NewBuilder()
-    defer str.BufFree(sb)
     repeat n in i:
         code := _ub(bp, i)
         if not _b64url_ok(code):
-            ret ""
-        end
-        if code == 45:
-            str.BufAppendChar(sb, 43)
-        else code == 95:
-            str.BufAppendChar(sb, 47)
-        else:
-            str.BufAppendChar(sb, code)
+            throw _b64url_err(ErrorKind.Syntax, "invalid " + _byte_text(code), i)
         end
     end
-    pad := (4 - (n % 4)) % 4
-    repeat pad:
-        str.BufAppendChar(sb, 61)
+    if n % 4 == 1:
+        throw _b64url_err(ErrorKind.UnexpectedEnd, "input ends one character into a group of four", n)
     end
-    padded := str.BufStr(sb)
-    mut out := ""
-    try:
-        out = encoding.Base64Decode(padded)
-    catch:
-        ret ""
-    end
-    ok = true
-    ret out
+    ret try encoding.Base64Decode(s)
 end

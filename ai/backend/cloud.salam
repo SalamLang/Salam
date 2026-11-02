@@ -72,6 +72,8 @@ struct Outcome:
     pub kind: str = "exec"
     pub lang: str = ""
     pub cwd: str = ""
+    pub image: str = ""
+    pub image_mime: str = ""
 end
 
 struct Reply:
@@ -1082,6 +1084,32 @@ func summarize_cmd(cmd: str): str:
     ret clip(first, 140)
 end
 
+func tool_browser(session: str, args: str): Outcome:
+    mut o := Outcome { kind = "read" }
+    action := json.Get(args, "action")
+    target := json.Get(args, "url") + json.Get(args, "selector")
+    o.summary = clip(("browser " + action + " " + target).trim(), 400)
+    if action == "eval":
+        o.kind = "exec"
+        o.detail = json.Get(args, "script")
+        o.lang = "javascript"
+    end
+    res := sbx_exec(session, "if node -e 'process.exit(typeof WebSocket == \"function\" ? 0 : 1)' 2>/dev/null; then node /opt/salam-browser/browser.mjs; else node --experimental-websocket /opt/salam-browser/browser.mjs; fi", "/work", 120, args, Vector {} as Vector<str>)
+    if not res.ok or res.timed_out or not str.StartsWith(str.Trim(res.out), "{"):
+        o.ok = false
+        o.text = finish_exec(res, true)
+        if res.ok and res.out.find("not found") >= 0:
+            o.text = o.text + "\nThis sandbox has no browser yet; the operator needs to rebuild the sandbox image."
+        end
+        ret o
+    end
+    o.ok = true
+    o.text = clip(json.Get(res.out, "output"), MAX_OUTPUT)
+    o.image = json.Get(res.out, "image")
+    o.image_mime = o.image.len() > 0 ? "image/jpeg" : ""
+    ret o
+end
+
 func tool_shell(session: str, uid: str, args: str, tool: str): Outcome:
     mut o := Outcome {}
     mut cmd := json.Get(args, "command")
@@ -1320,6 +1348,9 @@ func run_tool(session: str, uid: str, tool: str, args: str): Outcome:
         "figma_export":
             ret tool_figma_export(session, uid, args)
         end
+        "browser":
+            ret tool_browser(session, args)
+        end
     end
     o.ok = false
     o.text = "The tool " + tool + " is only available in Salam Agent on the user's own computer, not in the cloud sandbox."
@@ -1336,6 +1367,10 @@ func outcome_json(o: Outcome): str:
     m.push(json.Member("kind", o.kind))
     m.push(json.Member("cwd", o.cwd))
     m.push(json.MemberBool("outside", false))
+    if o.image.len() > 0:
+        m.push(json.Member("image", o.image))
+        m.push(json.Member("image_mime", o.image_mime))
+    end
     ret json.Object(m)
 end
 
@@ -1351,8 +1386,10 @@ func persist(id: str, o: Outcome):
     a.push(clip(o.cwd, 990))
     a.push(i64s(aistore.Now()))
     a.push(id)
+    a.push(o.image)
+    a.push(o.image_mime)
     aistore.Lock()
-    _r := aistore.Run("UPDATE bridge_calls SET status = ?1, state = ?2, output = ?3, summary = ?4, detail = ?5, lang = ?6, kind = ?7, cwd = ?8, outside = 0, finished = ?9 WHERE id = ?10", a)
+    _r := aistore.Run("UPDATE bridge_calls SET status = ?1, state = ?2, output = ?3, summary = ?4, detail = ?5, lang = ?6, kind = ?7, cwd = ?8, outside = 0, finished = ?9, image = ?11, image_mime = ?12 WHERE id = ?10", a)
     aistore.Unlock()
 end
 
@@ -1708,7 +1745,7 @@ end
 pub func Prelude(session: str, uid: str): str:
     gh := login_state(uid, "github")
     fg := login_state(uid, "figma")
-    text := "<cloud_session>\nsession: " + session + "\nsandbox: a private Linux container for this conversation with bash, git, curl, ripgrep, python3, node and the Salam compiler; the working folder is /work and files last while the conversation is active. It has no access to the user's own computer.\ngithub: " + (gh.len() > 0 ? "connected as " + gh : "not connected") + "\nfigma: " + (fg.len() > 0 ? "connected as " + fg : "not connected") + "\nUse the desktop tools (shell, read_file, write_file, edit_file, list_dir, glob, grep, run_tests) and pass the session value above in every call. Paths are relative to /work. For GitHub use github_api for the REST API and github_git for clone, fetch, pull and push in the sandbox. The sandbox shell is also already signed in as the user: plain git clone, pull and push to github.com work with their login, and GH_TOKEN, GITHUB_TOKEN, FIGMA_TOKEN and FIGMA_AUTH_HEADER (for curl -H) are set when connected. Never print or repeat those values. For Figma use figma_api to read files and nodes and figma_export to save images into the sandbox. If a service is not connected, tell the user to send /github or /figma in Telegram, or to open Connections on the Salam AI site. Look before you change things, keep edits small, run the tests after changing code, and tell the user what you did.\n</cloud_session>\n\n"
+    text := "<cloud_session>\nsession: " + session + "\nsandbox: a private Linux container for this conversation with bash, git, curl, ripgrep, python3, node, a headless Chromium and the Salam compiler; the working folder is /work and files last while the conversation is active. It has no access to the user's own computer.\ngithub: " + (gh.len() > 0 ? "connected as " + gh : "not connected") + "\nfigma: " + (fg.len() > 0 ? "connected as " + fg : "not connected") + "\nUse the desktop tools (shell, read_file, write_file, edit_file, list_dir, glob, grep, run_tests, browser) and pass the session value above in every call. Paths are relative to /work. To check a web page or a site you built (start its server in the background first), open it with browser, look at the screenshot and the console errors, and fix what is wrong before you say it is done. For GitHub use github_api for the REST API and github_git for clone, fetch, pull and push in the sandbox. The sandbox shell is also already signed in as the user: plain git clone, pull and push to github.com work with their login, and GH_TOKEN, GITHUB_TOKEN, FIGMA_TOKEN and FIGMA_AUTH_HEADER (for curl -H) are set when connected. Never print or repeat those values. For Figma use figma_api to read files and nodes and figma_export to save images into the sandbox. If a service is not connected, tell the user to send /github or /figma in Telegram, or to open Connections on the Salam AI site. Look before you change things, keep edits small, run the tests after changing code, and tell the user what you did.\n</cloud_session>\n\n"
     ret text
 end
 

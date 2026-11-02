@@ -132,12 +132,21 @@ async function main() {
   check("figma_export saves images", /saved assets\/1-2\.png/.test(r.body ?? ""), r);
   r = await ask(token, chat, 'tool: shell {"command": "cat assets/1-2.png"}');
   check("the exported image is in the sandbox", /PNGDATA/.test(r.body ?? ""), r);
+  r = await ask(token, chat, 'tool: browser {"action": "open", "url": "http://localhost:3000/"}');
+  check("browser opens a page in the sandbox and the screenshot reaches the model", /Mock page/.test(r.body ?? "") && /images=1/.test(r.body ?? ""), r);
   r = await ask(token, chat, 'tool: docker {"args": ["ps"]}');
   check("desktop-only tools are refused", /only available in Salam Agent/.test(r.body ?? ""), r);
 
   const detail = await api("GET", `/chats/${chat}`, token);
   const calls = detail.json?.calls ?? [];
   check("every tool call is recorded", calls.length >= 16, calls.length);
+  const shotCall = calls.find((c) => c.tool === "browser");
+  check("the browser call is marked as having a screenshot", shotCall?.image === true && !calls.some((c) => c.tool === "shell" && c.image), shotCall);
+  const shotImage = await api("GET", `/chats/${chat}/calls/${shotCall?.call_id}/image`, token);
+  check("the screenshot can be read back by its owner", shotImage.json?.mime === "image/jpeg" && shotImage.json.data === "SU1BR0VEQVRB", shotImage.json);
+  const otherReg = await api("POST", "/auth/register", null, { name: "Other", email: `cloud-other-${Date.now()}@test.ir`, password: "password123" });
+  const stranger = await api("GET", `/chats/${chat}/calls/${shotCall?.call_id}/image`, otherReg.json?.token);
+  check("nobody else can read the screenshot", stranger.res.status === 404, stranger.res.status);
   check("a shell call keeps its command and output", calls.some((c) => c.tool === "shell" && c.kind === "exec" && c.state === "done" && /hello/.test(c.output)), calls[0]);
   check("file calls are read or write kinds", calls.some((c) => c.tool === "write_file" && c.kind === "write") && calls.some((c) => c.tool === "read_file" && c.kind === "read"));
 

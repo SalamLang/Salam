@@ -16,6 +16,7 @@ salam build app.salam --backend=native --target=i686-w64-windows-gnu
 salam build app.salam --backend=native --target=arm-linux-musleabihf
 salam build app.salam --backend=native --target=riscv64-linux-musl
 salam build app.salam --backend=native --target=arm64-apple-macos
+salam build app.salam --backend=native --target=universal-apple-macos  # arm64 + x86_64
 salam build app.salam --backend=native --emit-asm     # also writes app.s
 salam build app.salam --backend=native --cpu=x86-64-v3 # 256-bit AVX2 loops
 salam obj app.salam --backend=native                  # object file only
@@ -316,6 +317,7 @@ All of it lives in `compiler/nativegen/`:
 | `ng_gvn.salam`, `ng_slp.salam`                                     | Value numbering with redundant load elimination, and SLP vectorization                                                                                                      |
 | `ng_isel.salam`                                                    | Instruction selection into machine instructions on virtual registers                                                                                                        |
 | `ng_ra.salam`                                                      | Linear-scan register allocation with lifetime holes, spilling, frame layout                                                                                                 |
+| `ng_rasp.salam`                                                    | Splits a value's range between registers and its stack slot, with the moves at split points and block edges                                                                 |
 | `ng_enc.salam`                                                     | x86-64 encoder, prologues and epilogues, branch relaxation, Windows unwind info                                                                                             |
 | `ng_a64.salam`                                                     | AArch64 encoder: machine instructions to A64 words, flag translation, frame records, relocations                                                                            |
 | `ng_legal.salam`                                                   | Splits 64-bit integers into 32-bit pairs for the 32-bit targets, and turns ARM divisions into library calls                                                                 |
@@ -750,7 +752,35 @@ back into its phi) is emitted with that loop value as the tied operand of the
 Copy-related values that both spill share one stack slot. When vector
 registers run out, the allocator evicts the value whose next use is
 farthest away, so a kernel with sixteen accumulators keeps most of them in
-registers instead of spilling each one as a temporary arrives. The encoder rotates small loop headers into the latch so
+registers instead of spilling each one as a temporary arrives.
+
+A value that does not get a register for its whole range is split instead
+of living in its stack slot from start to end (`SALAM_NG_OFF=rasp` turns
+this off). A value evicted by a heavier one keeps its register up to the
+eviction, and that point moves back to the cheapest block boundary before
+it, so a loop is not entered with the value in a register it loses inside
+the loop. The rest stays in the stack slot and gets a register again from
+the cheapest boundary before its next use, but only when the uses it
+covers there, weighted by loop depth, pay at least three times for the
+reload. Uses that cost nothing from memory do not count: the source of a
+copy (the reload goes straight into the copy's register) and, on x86, the
+second operand of an ALU instruction, which reads the slot directly. A
+value that only has a register free for part of its range takes it for
+that part when the part covers two uses, and pieces made by splitting
+never evict other values. Every definition of a split value is stored to
+its slot, so giving up a register needs no store, while taking one is a
+load or a move. Where the two ends of a block edge disagree on a value's
+location, the moves go at the end of a predecessor with one successor or
+at the start of a successor with one predecessor, as one parallel copy
+with `r11` or `xmm15` breaking cycles. Splits never fall between an
+instruction that sets the flags and the jump, `setcc`, `cmov` or carry
+operation that reads them, after a block's first branch, or inside the
+short jumps a block's own lowering contains (an atomic retry loop, a
+select's branch). A function with a critical edge that would need moves
+(no predecessor or successor of its own to hold them) is allocated again
+without splitting; that happens in about one function in three hundred.
+
+The encoder rotates small loop headers into the latch so
 loops are bottom-tested (a header of up to ten instructions with one early
 exit, like `mandelbrot`'s `zx * zx + zy * zy <= 4.0 and iter < max_iter`,
 is copied whole), copies a short loop test into a branch arm that
@@ -852,10 +882,11 @@ ret end` at the top of a recursive AST walk) tests that parameter before
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing, and a comma-separated list dumps several functions.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,loopinl,cpelim,tord,vrev,cdown,tfold,mexit,sqself,vsign,redinv,ldcmp,phix,selinc,wweb,wwdep,wwtr,tdup,padjmp,dtst,zins,ndiv,niv,cmp64,adc64,rvc,avx2`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,loopinl,cpelim,tord,vrev,cdown,tfold,mexit,sqself,vsign,redinv,ldcmp,phix,selinc,wweb,wwdep,wwtr,tdup,padjmp,dtst,zins,ndiv,niv,cmp64,adc64,rvc,avx2,rasp`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
-  `split` the loop live-range splitting in the allocator.
+  `split` the loop live-range splitting in the allocator and `rasp` the
+  splitting of a value's range between registers and its stack slot.
 - `SALAM_NG_OFF_RANGE=lo:hi` limits `SALAM_NG_OFF` to the functions compiled
   in that range (1-based, in compile order), and `SALAM_NG_OFF_BASE` names
   passes to turn off everywhere. Halving the range finds the one function a
@@ -1012,6 +1043,17 @@ for its code ranges and lines, the call-site line of any call inlined
 further in), a `DEBUG_S_INLINEE_LINES` entry gives the callee's first line,
 and the function's own line table gives the outermost call site for inlined
 code, so a debugger shows the inlined frames and steps over them as calls.
+i686 functions never keep a frame pointer, so on that target each function
+also gets an `S_FRAMEPROC` (frame size, saved register bytes, both frame
+registers `VFRAME`) and a `DEBUG_S_FRAMEDATA` subsection, the FPO data a
+Windows debugger walks such stacks with. It has one record per prologue
+step, as clang writes them: one at the function start, one after each
+register push and one after the stack allocation, each with the local,
+parameter and saved register sizes, the remaining prologue length and a
+program (`$T0 .raSearch = $eip $T0 ^ = $esp $T0 4 + = $ebx $T0 4 - ^ = ...`)
+that finds the return address and the saved registers. The relocation in
+front of the records is `DIR32NB`, so the records hold offsets from the
+function start.
 The built-in linker turns all of it into a PDB (see `NATIVE_LINKER.md`);
 with the system linker, GNU ld discards it.
 

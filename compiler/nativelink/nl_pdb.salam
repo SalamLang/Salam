@@ -37,6 +37,7 @@ pub struct Pdb:
     pub ipi: Vector<u8> = Vector {}
     pub icount: int = 0
     pub tmap: Vector<int> = Vector {}
+    pub fpo: Vector<u8> = Vector {}
 end
 
 func pdb_hash_bytes(p: Vector<u8>, s: int, n: int): i64:
@@ -179,6 +180,8 @@ func pdb_cv_bytes(l &: Nl, t &: Pe, s: int): Vector<u8>:
         end
         if ty == 11:
             pdb_put32(v, at, pe_sym(l, os) + pdb_get32(v, at) - (l.pe_base + t.ps_va[l.s_oc[ts]]))
+        else ty == 3:
+            pdb_put32(v, at, pe_sym(l, os) + pdb_get32(v, at) - l.pe_base)
         else ty == 10:
             pdb_put16(v, at, pe_secidx(t, l.s_oc[ts]))
         end
@@ -286,6 +289,48 @@ func pdb_checksums(l &: Nl, m &: Pdb, cv &: Vector<u8>, at0: int, n: int, strs: 
     end
 end
 
+func pdb_framedata(l &: Nl, m &: Pdb, cv &: Vector<u8>, at0: int, n: int, strs: int):
+    if n < 4:
+        ret
+    end
+    base := pdb_get32(cv, at0)
+    mut at := at0 + 4
+    until at + 32 <= at0 + n:
+        rec := m.fpo.len()
+        repeat 32 in b:
+            m.fpo.push(cv[at + b])
+        end
+        pdb_put32(m.fpo, rec, pdb_get32(m.fpo, rec) + base)
+        if strs >= 0:
+            np := strs + (pdb_get32(cv, at + 20) as int)
+            mut e := np
+            until e < cv.len() and cv[e] != (0 as u8):
+                e += 1
+            end
+            id := nt_find(l.names, cv.data, np as i64, e - np, true)
+            pdb_put32(m.fpo, rec + 20, pdb_name_off(l, m, id) as i64)
+        end
+        at = at + 32
+    end
+end
+
+func pdb_fpo_stream(m &: Pdb): Vector<u8>:
+    mut keys := Vector {} as Vector<i64>
+    n := m.fpo.len() / 32
+    repeat n in i:
+        keys.push(pdb_get32(m.fpo, 32 * i))
+    end
+    ord := pdb_sort(keys)
+    mut v := Vector {} as Vector<u8>
+    each q in ord:
+        repeat 32 in b:
+            v.push(m.fpo[32 * q + b])
+        end
+    end
+    keys.free()
+    ret v
+end
+
 func pdb_module(l &: Nl, m &: Pdb, t &: Pe, obj: int, secs: Vector<int>):
     modix := m.mod_name.len()
     mut ms := Vector {} as Vector<u8>
@@ -323,7 +368,9 @@ func pdb_module(l &: Nl, m &: Pdb, t &: Pe, obj: int, secs: Vector<int>):
                 tb_le(c13, 0 as i64, 4)
                 pdb_checksums(l, m, cv, at + 8, n2, strs, c13)
                 pdb_put32(c13, hl, (c13.len() - hl - 4) as i64)
-            else k2 == 0xF2 or k2 == 0xF6 or k2 == 0xF5:
+            else k2 == 0xF5:
+                pdb_framedata(l, m, cv, at + 8, n2, strs)
+            else k2 == 0xF2 or k2 == 0xF6:
                 st0 := c13.len()
                 repeat 8 + n2 in b:
                     c13.push(cv[at + b])
@@ -878,7 +925,7 @@ func pdb_publics(l &: Nl, t &: Pe, ids &: Vector<int>, segs &: Vector<int>, offs
     seen.free()
 end
 
-func pdb_dbi(l &: Nl, m &: Pdb, sechdr &: Vector<u8>, gl: int, pu: int, sr: int, sh: int): Vector<u8>:
+func pdb_dbi(l &: Nl, m &: Pdb, sechdr &: Vector<u8>, gl: int, pu: int, sr: int, sh: int, fp: int): Vector<u8>:
     mut mi := Vector {} as Vector<u8>
     repeat m.mod_name.len() in k:
         tb_le(mi, 0 as i64, 4)
@@ -982,7 +1029,7 @@ func pdb_dbi(l &: Nl, m &: Pdb, sechdr &: Vector<u8>, gl: int, pu: int, sr: int,
     ec := pdb_strtab(l, no_ids, no_offs, no_data)
     mut od := Vector {} as Vector<u8>
     repeat 11 in x:
-        tb_le(od, (x == 5 ? sh : 0xFFFF) as i64, 2)
+        tb_le(od, (x == 5 ? sh : (x == 9 and fp >= 0 ? fp : 0xFFFF)) as i64, 2)
     end
     mut v := Vector {} as Vector<u8>
     tb_le(v, 0xFFFFFFFF as i64, 4)
@@ -1128,6 +1175,12 @@ func pdb_write(l &: Nl, t &: Pe, cvs: Vector<int>, sechdr &: Vector<u8>, g0: i64
     pub_ix := pdb_stream(m, pubs)
     sr_ix := pdb_stream(m, sr)
     sh_ix := pdb_stream(m, sechdr)
+    mut fp_ix := 0 - 1
+    if m.fpo.len() > 0:
+        mut fps := pdb_fpo_stream(m)
+        fp_ix = pdb_stream(m, fps)
+        fps.free()
+    end
     mut info := pdb_info(names_ix, g0, g1)
     pdb_stream_set(m, 1, info)
     mut tph := pdb_tpi_hash(m.tpi)
@@ -1136,7 +1189,7 @@ func pdb_write(l &: Nl, t &: Pe, cvs: Vector<int>, sechdr &: Vector<u8>, g0: i64
     pdb_stream_set(m, 2, tpi)
     mut iph := pdb_tpi_hash(m.ipi)
     iph_ix := pdb_stream(m, iph)
-    mut dbi := pdb_dbi(l, m, sechdr, glob_ix, pub_ix, sr_ix, sh_ix)
+    mut dbi := pdb_dbi(l, m, sechdr, glob_ix, pub_ix, sr_ix, sh_ix, fp_ix)
     pdb_stream_set(m, 3, dbi)
     mut ipi := pdb_tpi_full(m.ipi, m.icount, iph_ix)
     pdb_stream_set(m, 4, ipi)

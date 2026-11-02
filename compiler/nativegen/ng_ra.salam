@@ -593,6 +593,134 @@ func coalesce_spills(g &: Ng, ra &: Ra):
     ndef.free()
 end
 
+func cps_bad(bad &: Vector<int>, r: int, w: int):
+    if r >= VBASE and r < bad.len():
+        bad[r] = bad[r] + w
+    end
+end
+
+func cps_piece(ra &: Ra, v: int): bool:
+    ret rs_is_split(ra, v) or (v < ra.par.len() and ra.par[v] != v)
+end
+
+func cps_free(g &: Ng, ra &: Ra, v: int, s: int): bool:
+    nv := g.mc.vcls.len()
+    mut u := VBASE
+    until u < nv:
+        if u != v and g.mc.vslot[u] == s and ra.v_rn[u] > 0:
+            if ranges_overlap(ra.rg_s, ra.rg_e, ra.v_r0[v], ra.v_rn[v], ra.rg_s, ra.rg_e, ra.v_r0[u], ra.v_rn[u]):
+                ret false
+            end
+        end
+        u += 1
+    end
+    ret true
+end
+
+func cp_spill(g &: Ng, ra &: Ra):
+    nv := g.mc.vcls.len()
+    n := g.mc.op.len()
+    mut bad := Vector {} as Vector<int>
+    mut wt := Vector {} as Vector<int>
+    mut cps := Vector {} as Vector<int>
+    repeat nv:
+        bad.push(0)
+    end
+    repeat n:
+        wt.push(1)
+    end
+    each b in g.mc.lorder:
+        if g.mc.bstart[b] < 0:
+            continue
+        end
+        mut k := g.mc.bstart[b]
+        until k < g.mc.bend[b]:
+            wt[k] = g.b_wt[b]
+            k += 1
+        end
+    end
+    repeat n in i:
+        op := g.mc.op[i]
+        r0 := g.mc.r0[i]
+        r1 := g.mc.r1[i]
+        if (op == M_COPY or op == M_FMOV_RR) and r0 >= VBASE and r1 >= VBASE and r0 != r1:
+            cps.push(i)
+            continue
+        end
+        mi_regs(g, i, ra.uses, ra.defs)
+        each x in ra.uses:
+            cps_bad(bad, x, wt[i])
+        end
+        each y in ra.defs:
+            cps_bad(bad, y, wt[i])
+        end
+    end
+    mut sl := Vector {} as Vector<int>
+    mut sw := Vector {} as Vector<int>
+    mut v := VBASE
+    until v < nv:
+        if g.mc.vloc[v] < 0 or ra.v_rn[v] == 0 or cps_piece(ra, v):
+            v += 1
+            continue
+        end
+        sl.clear()
+        sw.clear()
+        each c in cps:
+            if g.mc.r0[c] != v and g.mc.r1[c] != v:
+                continue
+            end
+            p := g.mc.r0[c] == v ? g.mc.r1[c] : g.mc.r0[c]
+            if g.mc.vloc[p] < 0 and g.mc.vslot[p] >= 0 and not cps_piece(ra, p) and g.mc.vcls[p] == g.mc.vcls[v] and g.mc.vwide[p] == g.mc.vwide[v] and g.mc.vymm[p] == g.mc.vymm[v]:
+                mut f := 0 - 1
+                repeat sl.len() in q:
+                    if sl[q] == g.mc.vslot[p]:
+                        f = q
+                    end
+                end
+                if f < 0:
+                    sl.push(g.mc.vslot[p])
+                    sw.push(0)
+                    f = sl.len() - 1
+                end
+                sw[f] = sw[f] + wt[c]
+            end
+        end
+        mut best := 0 - 1
+        repeat sl.len() in q2:
+            if best < 0 or sw[q2] > sw[best]:
+                best = q2
+            end
+        end
+        if best < 0:
+            v += 1
+            continue
+        end
+        s := sl[best]
+        mut gain := 0 - bad[v]
+        each c2 in cps:
+            if g.mc.r0[c2] != v and g.mc.r1[c2] != v:
+                continue
+            end
+            p2 := g.mc.r0[c2] == v ? g.mc.r1[c2] : g.mc.r0[c2]
+            if g.mc.vloc[p2] < 0:
+                gain += g.mc.vslot[p2] == s ? wt[c2] : 0 - wt[c2]
+            else g.mc.vloc[p2] == g.mc.vloc[v]:
+                gain -= wt[c2]
+            end
+        end
+        if gain > 0 and cps_free(g, ra, v, s):
+            g.mc.vloc[v] = 0 - 1
+            g.mc.vslot[v] = s
+        end
+        v += 1
+    end
+    bad.free()
+    wt.free()
+    cps.free()
+    sl.free()
+    sw.free()
+end
+
 func spill_vreg(g &: Ng, v: int):
     g.mc.vloc[v] = 0 - 1
     if g.mc.vslot[v] < 0:
@@ -1791,6 +1919,9 @@ func regalloc(g &: Ng):
         end
     end
     coalesce_spills(g, ra)
+    if g.opt and not g.off_cpspill:
+        cp_spill(g, ra)
+    end
     if g.fv_val.len() > 0:
         dv_markers(g, ra)
     end

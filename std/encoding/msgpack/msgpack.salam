@@ -5,7 +5,6 @@ package msgpack
 import compress
 import encoding.binary
 import encoding.value
-import encoding.encerr
 
 @en "MsgpackOptions"
 @fa "گزینه‌های مسج‌پک"
@@ -151,27 +150,27 @@ func _read_str(r &: compress.ByteReader, n: int): str:
     ret out
 end
 
-func _mp_fits(r &: compress.ByteReader, n: int, per: int, err &: encerr.EncodingError): bool:
+func _mp_fits(r &: compress.ByteReader, n: int, per: int, err &: Error): bool:
     if r.bad or n < 0 or (n as i64) * (per as i64) > ((r.len - r.pos) as i64):
-        err = encerr.ErrUnexpectedEOF(r.pos)
+        err = Error.At(ErrorKind.UnexpectedEnd, "unexpected end of input", r.pos)
         ret false
     end
     ret true
 end
 
-func _unmarshal(r &: compress.ByteReader, err &: encerr.EncodingError): value.Value:
+func _unmarshal(r &: compress.ByteReader, err &: Error): value.Value:
     ret _unmarshal_d(r, err, 0)
 end
 
-func _unmarshal_d(r &: compress.ByteReader, err &: encerr.EncodingError, depth: int): value.Value:
-    if encerr.IsError(err): ret value.ValueNull() end
+func _unmarshal_d(r &: compress.ByteReader, err &: Error, depth: int): value.Value:
+    if err.message != "": ret value.ValueNull() end
     if depth > 512:
-        err = encerr.NewError(encerr.KindCustom, "msgpack nesting is deeper than 512 levels", r.pos)
+        err = Error.At(ErrorKind.OutOfRange, "msgpack nesting is deeper than 512 levels", r.pos)
         ret value.ValueNull()
     end
     tag := binary.ReadU8(r)
     if r.bad:
-        err = encerr.ErrUnexpectedEOF(r.pos)
+        err = Error.At(ErrorKind.UnexpectedEnd, "unexpected end of input", r.pos)
         ret value.ValueNull()
     end
     if tag <= 0x7f: ret value.ValueInt(tag as i64) end
@@ -244,32 +243,32 @@ func _unmarshal_d(r &: compress.ByteReader, err &: encerr.EncodingError, depth: 
         n := binary.ReadU32BE(r)
         ret _unmarshal_map(r, n, err, depth)
     end
-    err = encerr.NewError(encerr.KindCustom, "unsupported msgpack tag (ext/bin types are not supported)", r.pos)
+    err = Error.At(ErrorKind.Unsupported, "unsupported msgpack tag (ext/bin types are not supported)", r.pos)
     ret value.ValueNull()
 end
 
-func _unmarshal_array(r &: compress.ByteReader, n: int, err &: encerr.EncodingError, depth: int): value.Value:
+func _unmarshal_array(r &: compress.ByteReader, n: int, err &: Error, depth: int): value.Value:
     if not _mp_fits(r, n, 1, err): ret value.ValueNull() end
     mut out := value.NewValueArray()
     mut i := 0
     until i < n:
         item := _unmarshal_d(r, err, depth + 1)
-        if encerr.IsError(err): ret value.ValueNull() end
+        if err.message != "": ret value.ValueNull() end
         value.ArrayPush(out, item)
         i += 1
     end
     ret out
 end
 
-func _unmarshal_map(r &: compress.ByteReader, n: int, err &: encerr.EncodingError, depth: int): value.Value:
+func _unmarshal_map(r &: compress.ByteReader, n: int, err &: Error, depth: int): value.Value:
     if not _mp_fits(r, n, 2, err): ret value.ValueNull() end
     mut out := value.NewValueObject()
     mut i := 0
     until i < n:
         k := _unmarshal_d(r, err, depth + 1)
-        if encerr.IsError(err): ret value.ValueNull() end
+        if err.message != "": ret value.ValueNull() end
         v := _unmarshal_d(r, err, depth + 1)
-        if encerr.IsError(err): ret value.ValueNull() end
+        if err.message != "": ret value.ValueNull() end
         value.ObjectSet(out, value.AsString(k), v)
         i += 1
     end
@@ -292,13 +291,18 @@ end
 
 @en "UnmarshalBytes"
 @fa "واسریال سازی بایت‌ها"
-pub func UnmarshalBytes(p: void*, n: int, err &: encerr.EncodingError): value.Value:
+pub func UnmarshalBytes(p: void*, n: int): value.Value throws:
     mut r := compress.NewByteReader(p, n)
-    ret _unmarshal(r, err)
+    mut err := Error {}
+    v := _unmarshal(r, err)
+    if err.message != "":
+        throw err.wrap("msgpack")
+    end
+    ret v
 end
 
 @en "Unmarshal"
 @fa "واسریال سازی"
-pub func Unmarshal(b: compress.ByteBuf, err &: encerr.EncodingError): value.Value:
-    ret UnmarshalBytes(b.data, b.len, err)
+pub func Unmarshal(b: compress.ByteBuf): value.Value throws:
+    ret try UnmarshalBytes(b.data, b.len)
 end

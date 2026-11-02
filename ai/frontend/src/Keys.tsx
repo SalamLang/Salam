@@ -17,30 +17,23 @@ const SHORT_PROMPT = t("یک برنامه‌ی کوتاه سلام بنویس.",
 
 const SALAM_CHAT = `import net.http
 import encoding.json
-import encoding.value
-import encoding.encerr
 
-func main:
+func main throws:
     mut headers := http.NewHeaders()
     headers.put("Authorization", "Bearer sk-salam-KEY")
     headers.put("Content-Type", "application/json")
     body := \`{"model": "salam", "messages": [{"role": "user", "content": "${SHORT_PROMPT}"}]}\`
     r := http.PostWith("https://ai-api.salamlang.ir/chat/completions", body, headers)
     if http.Status(r) != 200:
-        println "error", http.Status(r), http.Body(r)
-        ret 1
+        throw "HTTP " + http.Status(r) + ": " + http.Body(r)
     end
-    mut err := encerr.EncodingError {}
-    reply := json.Decode(http.Body(r), err)
-    choice := value.ArrayGet(value.ObjectGet(reply, "choices"), 0)
-    println value.AsString(value.ObjectGet(value.ObjectGet(choice, "message"), "content"))
-    ret 0
+    reply := try json.Decode(http.Body(r))
+    println try reply.field("choices").at(0).field("message").field("content").str()
 end`;
 
 const SALAM_STREAM = `import net.http
 import encoding.json
 import encoding.value
-import encoding.encerr
 
 func main:
     mut headers := http.NewHeaders()
@@ -56,8 +49,7 @@ func main:
         if not line.starts_with("data: ") or line == "data: [DONE]":
             continue
         end
-        mut err := encerr.EncodingError {}
-        chunk := json.Decode(line.substr(6, line.len() - 6), err)
+        chunk := try json.Decode(line.substr(6, line.len() - 6)) catch value.ValueNull()
         choices := value.ObjectGet(chunk, "choices")
         if value.ArrayLen(choices) > 0:
             delta := value.ObjectGet(value.ArrayGet(choices, 0), "delta")

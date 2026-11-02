@@ -1317,7 +1317,7 @@ TOTAL=$((TOTAL + 0))
 START=$(date +%s 2>/dev/null || echo 0)
 if [ "$TOTAL" -gt 0 ]; then
     echo "== running $TOTAL tests on $NPROC parallel workers$SHARD_NOTE =="
-    export SALAM SALAM_ABS WORK TOTAL
+    export SALAM SALAM_ABS WORK TOTAL HOST_OS
     if printf 'x\0' | xargs -0 -n 1 -P 2 sh -c ':' probe >/dev/null 2>&1; then
         tr '\n' '\000' <"$JOBS" | xargs -0 -n 1 -P "$NPROC" sh "$SELF" --worker
     else

@@ -6,6 +6,8 @@ struct Pp:
     pub pos: int = 0
     pub hadError: bool = false
     pub errMsg: str = ""
+    pub errOffset: int = 0
+    pub errAtEnd: bool = false
 end
 
 func pp_peek(p: Pp): PToken: ret p.toks.toks.get(p.pos) end
@@ -39,9 +41,19 @@ func pp_match_ident(p &: Pp, lexeme: str): bool:
     ret false
 end
 
-func pp_error(p &: Pp, msg: str):
+func pp_describe(t: PToken): str:
+    if t.kind == PTK_EOF: ret "end of input" end
+    if t.kind == PTK_STRING: ret "a string" end
+    ret "'" + t.lexeme + "'"
+end
+
+func pp_error(p &: Pp, what: str):
+    if p.hadError: ret end
+    t := pp_peek(p)
     p.hadError = true
-    if p.errMsg == "": p.errMsg = msg end
+    p.errMsg = "expected " + what + ", found " + pp_describe(t)
+    p.errOffset = t.offset
+    p.errAtEnd = t.kind == PTK_EOF
 end
 
 func pp_expect(p &: Pp, kind: int, what: str): bool:
@@ -49,8 +61,18 @@ func pp_expect(p &: Pp, kind: int, what: str): bool:
         pp_advance(p)
         ret true
     end
-    pp_error(p, "expected ".concat(what))
+    pp_error(p, what)
     ret false
+end
+
+func pp_expect_ident(p &: Pp, what: str): PToken:
+    if not pp_check(p, PTK_IDENT): pp_error(p, what) end
+    ret pp_advance(p)
+end
+
+func pp_expect_int(p &: Pp, what: str): PToken:
+    if not pp_check(p, PTK_INT): pp_error(p, what) end
+    ret pp_advance(p)
 end
 
 func pp_sync(p &: Pp):
@@ -76,11 +98,11 @@ func parse_type_name(p &: Pp): str:
         pp_advance(p)
         sb = "."
     end
-    t := pp_advance(p)
+    t := pp_expect_ident(p, "a type name")
     sb = sb.concat(t.lexeme)
-    until pp_check(p, PTK_DOT):
+    until pp_check(p, PTK_DOT) and not p.hadError:
         pp_advance(p)
-        t2 := pp_advance(p)
+        t2 := pp_expect_ident(p, "a name after '.'")
         sb = sb.concat(".").concat(t2.lexeme)
     end
     ret sb
@@ -88,8 +110,8 @@ end
 
 func parse_field_options(p &: Pp, f &: PField):
     if not pp_match(p, PTK_LBRACKET): ret end
-    until true:
-        nameTok := pp_advance(p)
+    until not p.hadError:
+        nameTok := pp_expect_ident(p, "an option name")
         pp_expect(p, PTK_EQ, "'='")
         valTok := pp_advance(p)
         if nameTok.lexeme == "packed":
@@ -113,13 +135,13 @@ func parse_field_with_type(p &: Pp, msg &: PMessage, typeName: str, repeated: bo
         f.kind = FK_MESSAGE
         f.typeName = typeName
     end
-    nameTok := pp_advance(p)
+    nameTok := pp_expect_ident(p, "a field name")
     f.name = nameTok.lexeme
     if not pp_expect(p, PTK_EQ, "'='"):
         pp_sync(p)
         ret false
     end
-    numTok := pp_advance(p)
+    numTok := pp_expect_int(p, "a field number")
     f.number = numTok.ival as int
     parse_field_options(p, f)
     if not pp_expect(p, PTK_SEMI, "';'"):
@@ -137,12 +159,12 @@ func parse_map_field(p &: Pp, msg &: PMessage): bool:
     pp_expect(p, PTK_COMMA, "','")
     valTypeName := parse_type_name(p)
     pp_expect(p, PTK_RANGLE, "'>'")
-    nameTok := pp_advance(p)
+    nameTok := pp_expect_ident(p, "a field name")
     if not pp_expect(p, PTK_EQ, "'='"):
         pp_sync(p)
         ret false
     end
-    numTok := pp_advance(p)
+    numTok := pp_expect_int(p, "a field number")
     mut f := PField {}
     f.name = nameTok.lexeme
     f.kind = FK_MAP
@@ -166,13 +188,13 @@ end
 
 func parse_oneof(p &: Pp, msg &: PMessage): bool:
     pp_advance(p)
-    nameTok := pp_advance(p)
+    nameTok := pp_expect_ident(p, "a oneof name")
     mut oneof := POneof { name = nameTok.lexeme }
     if not pp_expect(p, PTK_LBRACE, "'{'"):
         pp_sync(p)
         ret false
     end
-    until true:
+    until not p.hadError:
         if pp_check(p, PTK_RBRACE) or pp_check(p, PTK_EOF): break end
         if pp_match(p, PTK_SEMI): continue end
         idx := msg.fields.len()
@@ -208,13 +230,13 @@ end
 
 func parse_enum(p &: Pp, out &: PEnum): bool:
     pp_advance(p)
-    nameTok := pp_advance(p)
+    nameTok := pp_expect_ident(p, "an enum name")
     out.name = nameTok.lexeme
     if not pp_expect(p, PTK_LBRACE, "'{'"):
         pp_sync(p)
         ret false
     end
-    until true:
+    until not p.hadError:
         if pp_check(p, PTK_RBRACE) or pp_check(p, PTK_EOF): break end
         if pp_match(p, PTK_SEMI): continue end
         if pp_check_ident(p, "option"):
@@ -225,14 +247,14 @@ func parse_enum(p &: Pp, out &: PEnum): bool:
             parse_reserved(p)
             continue
         end
-        valNameTok := pp_advance(p)
+        valNameTok := pp_expect_ident(p, "an enum value name")
         if not pp_expect(p, PTK_EQ, "'='"):
             pp_sync(p)
             continue
         end
         mut sign := 1 as i64
         if pp_match(p, PTK_MINUS): sign = 0 - 1 as i64 end
-        numTok := pp_advance(p)
+        numTok := pp_expect_int(p, "an enum value number")
         mut ev := PEnumValue { name = valNameTok.lexeme }
         ev.number = (sign * numTok.ival) as int
         if pp_check(p, PTK_LBRACKET):
@@ -248,13 +270,13 @@ end
 
 func parse_message(p &: Pp, out &: PMessage): bool:
     pp_advance(p)
-    nameTok := pp_advance(p)
+    nameTok := pp_expect_ident(p, "a message name")
     out.name = nameTok.lexeme
     if not pp_expect(p, PTK_LBRACE, "'{'"):
         pp_sync(p)
         ret false
     end
-    until true:
+    until not p.hadError:
         if pp_check(p, PTK_RBRACE) or pp_check(p, PTK_EOF): break end
         if pp_match(p, PTK_SEMI): continue end
         if pp_check_ident(p, "message"):
@@ -286,7 +308,11 @@ func parse_message(p &: Pp, out &: PMessage): bool:
             continue
         end
         mut repeated := false
-        if pp_match_ident(p, "repeated"): repeated = true end
+        if pp_match_ident(p, "repeated"):
+            repeated = true
+        else:
+            pp_match_ident(p, "optional")
+        end
         typeName := parse_type_name(p)
         parse_field_with_type(p, out, typeName, repeated)
     end
@@ -296,7 +322,7 @@ end
 
 func parse_rpc(p &: Pp, out &: PService):
     pp_advance(p)
-    nameTok := pp_advance(p)
+    nameTok := pp_expect_ident(p, "a method name")
     mut m := PMethod {}
     m.name = nameTok.lexeme
     pp_expect(p, PTK_LPAREN, "'('")
@@ -304,7 +330,7 @@ func parse_rpc(p &: Pp, out &: PService):
     m.inputType = parse_type_name(p)
     pp_expect(p, PTK_RPAREN, "')'")
     if not pp_match_ident(p, "returns"):
-        pp_error(p, "expected 'returns' in rpc declaration")
+        pp_error(p, "'returns'")
         pp_sync(p)
         ret
     end
@@ -322,11 +348,11 @@ end
 
 func parse_service(p &: Pp, out &: PFile):
     pp_advance(p)
-    nameTok := pp_advance(p)
+    nameTok := pp_expect_ident(p, "a service name")
     mut svc := PService {}
     svc.name = nameTok.lexeme
     pp_expect(p, PTK_LBRACE, "'{'")
-    until not pp_check(p, PTK_RBRACE) and not pp_check(p, PTK_EOF):
+    until not pp_check(p, PTK_RBRACE) and not pp_check(p, PTK_EOF) and not p.hadError:
         if pp_match(p, PTK_SEMI): continue end
         if pp_check_ident(p, "option"):
             parse_option_stmt(p)
@@ -336,7 +362,7 @@ func parse_service(p &: Pp, out &: PFile):
             parse_rpc(p, svc)
             continue
         end
-        pp_error(p, "unexpected token in service body")
+        pp_error(p, "'rpc' or 'option' in the service body")
         pp_sync(p)
     end
     pp_expect(p, PTK_RBRACE, "'}'")
@@ -352,6 +378,9 @@ end
 
 func parse_import_stmt(p &: Pp, out &: PFile):
     pp_advance(p)
+    pp_match_ident(p, "public")
+    pp_match_ident(p, "weak")
+    if not pp_check(p, PTK_STRING): pp_error(p, "a file name in quotes") end
     strTok := pp_advance(p)
     out.imports.push(strTok.sval)
     pp_expect(p, PTK_SEMI, "';'")
@@ -360,22 +389,21 @@ end
 func parse_syntax_stmt(p &: Pp):
     pp_advance(p)
     pp_expect(p, PTK_EQ, "'='")
+    if not pp_check(p, PTK_STRING): pp_error(p, "the syntax name in quotes") end
     pp_advance(p)
     pp_expect(p, PTK_SEMI, "';'")
 end
 
 @en "ParseFile"
 @fa "تجزیه پرونده"
-pub func ParseFile(source: str, ok &: bool): PFile:
+pub func ParseFile(source: str): PFile throws:
     mut out := PFile {}
-    mut tokOk := false
-    ts := Tokenize(source, tokOk)
+    ts := try Tokenize(source)
     mut p := Pp {}
     p.toks = ts
     p.count = ts.toks.len()
     p.pos = 0
-    ok = tokOk
-    until true:
+    until not p.hadError:
         if pp_check(p, PTK_EOF): break end
         if pp_match(p, PTK_SEMI): continue end
         if pp_check_ident(p, "syntax"):
@@ -410,9 +438,12 @@ pub func ParseFile(source: str, ok &: bool): PFile:
             parse_service(p, out)
             continue
         end
-        pp_error(p, "unexpected top-level token")
-        pp_sync(p)
+        pp_error(p, "'message', 'enum', 'service' or another top-level statement")
     end
-    if p.hadError: ok = false end
+    if p.hadError:
+        kind := p.errAtEnd ? ErrorKind.UnexpectedEnd : ErrorKind.Syntax
+        code := p.errAtEnd ? "protobuf.unexpected_end" : "protobuf.unexpected_token"
+        throw Error.At(kind, p.errMsg, p.errOffset).with_code(code).locate(source).wrap("protobuf")
+    end
     ret out
 end

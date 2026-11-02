@@ -1346,7 +1346,8 @@ end
   (reading past the end yields 0 and sets `r.bad`; `ReadU32*` comes back in a
   signed `int`, so widen with `(v as i64) & 4294967295`; writers truncate
   silently), **`protobuf`** (`.proto` parser, wire helpers `WriteVarint ReadVarint WriteTag ReadTag SkipField ZigZag*` and Salam code generation;
-  generated readers do not accept packed repeated fields).
+  the readers, `ParseFile Tokenize GenerateSingle GenerateWithServices ServiceSummary` throw, `ReadTag(r, num, wire)` fills
+  its out-params; generated `Unmarshal<Msg>(data, n)` throws and rejects packed repeated fields).
 - **`url`** (`import encoding.url`): `Parse(s): URL HostPort Hostname Query SetParam RemoveParam KeepParams Join Domain Subdomain PublicSuffix IsIP`.
   `Parse` never fails or validates (check `scheme` and `host` yourself),
   nothing is lower-cased, and editing one parameter re-encodes the whole

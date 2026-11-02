@@ -1,0 +1,476 @@
+package nativegen
+
+const SP_MAX_LOCS := 4
+const SP_MAX_CALLS := 4
+
+pub struct Sp:
+    pub mem: Vector<int> = Vector {}
+    pub calls: Vector<int> = Vector {}
+    pub latch: Vector<int> = Vector {}
+    pub lroot: Vector<int> = Vector {}
+    pub loff: Vector<i64> = Vector {}
+    pub lty: Vector<int> = Vector {}
+    pub lcls: Vector<int> = Vector {}
+    pub tmp: Vector<int> = Vector {}
+    pub esc_r: Vector<int> = Vector {}
+    pub esc_v: Vector<bool> = Vector {}
+    pub der: Vector<int> = Vector {}
+    pub succ: Vector<int> = Vector {}
+end
+
+func sp_free(s &: Sp):
+    s.mem.free()
+    s.calls.free()
+    s.latch.free()
+    s.lroot.free()
+    s.loff.free()
+    s.lty.free()
+    s.lcls.free()
+    s.tmp.free()
+    s.esc_r.free()
+    s.esc_v.free()
+    s.der.free()
+    s.succ.free()
+end
+
+func sp_obj(g &: Ng, a: int, off &: i64, known &: bool): int:
+    off = 0 as i64
+    known = true
+    mut r := a
+    repeat 8:
+        if r < 0 or g.v_kind[r] != VK_INS:
+            ret r
+        end
+        d := g.v_def[r]
+        if d < 0 or g.i_op[d] != OP_ADDR:
+            ret r
+        end
+        if g.i_b[d] >= 0:
+            known = false
+        end
+        off += g.i_d[d]
+        r = g.i_a[d]
+    end
+    known = false
+    ret r
+end
+
+func sp_kind(g &: Ng, r: int): int:
+    if r < 0:
+        ret 0
+    end
+    k := g.v_kind[r]
+    if k == VK_GLB:
+        ret 3
+    end
+    if k == VK_ARG:
+        ret 4
+    end
+    if k != VK_INS:
+        ret 0
+    end
+    d := g.v_def[r]
+    if d < 0:
+        ret 0
+    end
+    if g.i_op[d] == OP_ALLOCA:
+        ret 1
+    end
+    if g.i_op[d] == OP_CALL:
+        fv := g.i_a[d]
+        if fv >= 0 and g.v_kind[fv] == VK_GLB and g.v_def[fv] >= 0:
+            nm := tab_str(g.syms, g.v_def[fv])
+            if nm == "malloc" or nm == "calloc":
+                ret 2
+            end
+        end
+    end
+    ret 0
+end
+
+func sp_escaped(g &: Ng, s &: Sp, r: int): bool:
+    repeat s.esc_r.len() in k:
+        if s.esc_r[k] == r:
+            ret s.esc_v[k]
+        end
+    end
+    s.der.clear()
+    s.der.push(r)
+    mut esc := false
+    mut q := 0
+    until q < s.der.len() and not esc:
+        v := s.der[q]
+        q += 1
+        each b in g.b_rpo:
+            mut i := g.b_first[b]
+            until i >= 0 and not esc:
+                op := g.i_op[i]
+                if uses_val(g, i, v):
+                    if op == OP_LOAD and g.i_a[i] == v:
+                        esc = false
+                    else op == OP_STORE and g.i_b[i] == v and g.i_a[i] != v:
+                        esc = false
+                    else op == OP_ADDR and g.i_a[i] == v and g.i_b[i] != v and g.i_res[i] >= 0:
+                        s.der.push(g.i_res[i])
+                    else:
+                        esc = true
+                    end
+                end
+                i = g.i_next[i]
+            end
+        end
+    end
+    s.esc_r.push(r)
+    s.esc_v.push(esc)
+    ret esc
+end
+
+func sp_disjoint(g &: Ng, s &: Sp, ra: int, offa: i64, sza: int, b: int, szb: int): bool:
+    mut offb := 0 as i64
+    mut kb := true
+    rb := sp_obj(g, b, offb, kb)
+    if rb == ra:
+        if not kb:
+            ret false
+        end
+        ret offb + (szb as i64) <= offa or offa + (sza as i64) <= offb
+    end
+    ka := sp_kind(g, ra)
+    kd := sp_kind(g, rb)
+    if ka == 1:
+        if kd != 0:
+            ret true
+        end
+        ret not sp_escaped(g, s, ra)
+    end
+    if ka == 4:
+        ret kd == 1 or kd == 2
+    end
+    ret false
+end
+
+func sp_safe_root(g &: Ng, r: int, off: i64, t: int): bool:
+    if off < (0 as i64) or off >= (4096 as i64):
+        ret false
+    end
+    k := sp_kind(g, r)
+    if k == 4:
+        ai := g.v_i[r] as int
+        ret ai >= 0 and ai < g.f_argf.len() and (g.f_argf[ai] & IF_NONNULL) != 0
+    end
+    if k == 1:
+        d := g.v_def[r]
+        n := g.i_d[d] < (1 as i64) ? (1 as i64) : g.i_d[d]
+        ret off + (tsize(g, t) as i64) <= (tsize(g, g.i_x[d]) as i64) * n
+    end
+    ret false
+end
+
+func sp_access(g &: Ng, i: int, addr &: int, ty &: int): bool:
+    op := g.i_op[i]
+    if op == OP_LOAD:
+        addr = g.i_a[i]
+        ty = g.i_ty[i]
+        ret true
+    end
+    if op == OP_STORE:
+        addr = g.i_b[i]
+        v := g.i_a[i]
+        ty = v >= 0 ? g.v_ty[v] : T_VOID
+        ret true
+    end
+    ret false
+end
+
+func sp_scan(g &: Ng, l &: Lp, s &: Sp, mk: int, h: int): bool:
+    s.mem.clear()
+    s.calls.clear()
+    s.latch.clear()
+    repeat g.b_npred[h] in q:
+        p := g.b_pred[g.b_ps[h] + q]
+        if l.inl[p] == mk:
+            s.latch.push(p)
+        end
+    end
+    each b in g.b_rpo:
+        if l.inl[b] != mk:
+            continue
+        end
+        mut i := g.b_first[b]
+        until i >= 0:
+            op := g.i_op[i]
+            if op == OP_RMW or op == OP_CMPXCHG or op == OP_FENCE:
+                ret false
+            end
+            if op == OP_LOAD or op == OP_STORE:
+                if (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) != 0:
+                    ret false
+                end
+                s.mem.push(i)
+            else op == OP_CALL:
+                each lb in s.latch:
+                    if dominates(g, b, lb):
+                        ret false
+                    end
+                end
+                s.calls.push(i)
+                if s.calls.len() > SP_MAX_CALLS:
+                    ret false
+                end
+            end
+            i = g.i_next[i]
+        end
+    end
+    ret true
+end
+
+func sp_try_loc(g &: Ng, l &: Lp, s &: Sp, mk: int, st: int): bool:
+    mut a := 0 - 1
+    mut t := T_VOID
+    if not sp_access(g, st, a, t):
+        ret false
+    end
+    if t == T_VOID or is_agg(g, t) or is_vec(g, t) or t == T_I128:
+        ret false
+    end
+    mut off := 0 as i64
+    mut kn := true
+    r := sp_obj(g, a, off, kn)
+    if not kn or not lp_inv(g, l, r, mk) or not sp_safe_root(g, r, off, t):
+        ret false
+    end
+    repeat s.lroot.len() in k:
+        if s.lroot[k] == r and s.loff[k] == off:
+            ret false
+        end
+    end
+    sz := tsize(g, t)
+    each i in s.mem:
+        mut b := 0 - 1
+        mut bt := T_VOID
+        _x := sp_access(g, i, b, bt)
+        mut ob := 0 as i64
+        mut kb := true
+        rb := sp_obj(g, b, ob, kb)
+        if rb == r and kb and ob == off:
+            if bt != t:
+                ret false
+            end
+        else not sp_disjoint(g, s, r, off, sz, b, tsize(g, bt)):
+            ret false
+        end
+    end
+    s.lroot.push(r)
+    s.loff.push(off)
+    s.lty.push(t)
+    s.lcls.push(mem_cls(g, st))
+    ret true
+end
+
+func sp_same(g &: Ng, s &: Sp, i: int, k: int): bool:
+    mut a := 0 - 1
+    mut t := T_VOID
+    if not sp_access(g, i, a, t):
+        ret false
+    end
+    mut off := 0 as i64
+    mut kn := true
+    r := sp_obj(g, a, off, kn)
+    ret kn and r == s.lroot[k] and off == s.loff[k]
+end
+
+func sp_addr(g &: Ng, s &: Sp, k: int, at: int): int:
+    ad := ins_new(g, OP_ADDR, T_PTR)
+    g.i_a[ad] = s.lroot[k]
+    g.i_b[ad] = 0 - 1
+    g.i_x[ad] = 1
+    g.i_d[ad] = s.loff[k]
+    av := new_res(g, ad)
+    ins_before(g, at, ad)
+    ret av
+end
+
+func sp_copy(g &: Ng, at: int, from: int, into: int, t: int, c: int):
+    ld := ins_new(g, OP_LOAD, t)
+    g.i_a[ld] = from
+    g.i_c[ld] = c
+    lv := new_res(g, ld)
+    st := ins_new(g, OP_STORE, T_VOID)
+    g.i_a[st] = lv
+    g.i_b[st] = into
+    g.i_c[st] = c
+    ins_before(g, at, ld)
+    ins_before(g, at, st)
+end
+
+func sp_rewrite(g &: Ng, l &: Lp, s &: Sp, mk: int, pt: int):
+    n := s.lroot.len()
+    s.tmp.clear()
+    repeat n in k:
+        al := ins_new(g, OP_ALLOCA, T_PTR)
+        g.i_x[al] = s.lty[k]
+        g.i_d[al] = 1 as i64
+        tv := new_res(g, al)
+        ins_before(g, g.b_first[0], al)
+        s.tmp.push(tv)
+        pa := sp_addr(g, s, k, pt)
+        sp_copy(g, pt, pa, tv, s.lty[k], s.lcls[k])
+    end
+    each i in s.mem:
+        repeat n in k2:
+            if sp_same(g, s, i, k2):
+                if g.i_op[i] == OP_LOAD:
+                    g.i_a[i] = s.tmp[k2]
+                else:
+                    g.i_b[i] = s.tmp[k2]
+                end
+            end
+        end
+    end
+    each c in s.calls:
+        nx := g.i_next[c]
+        repeat n in k3:
+            ca := sp_addr(g, s, k3, c)
+            sp_copy(g, c, s.tmp[k3], ca, s.lty[k3], s.lcls[k3])
+            if not call_no_write(g, c):
+                sp_copy(g, nx, ca, s.tmp[k3], s.lty[k3], s.lcls[k3])
+            end
+        end
+    end
+    mut exits := Vector {} as Vector<int>
+    mut targ := Vector {} as Vector<int>
+    each b in g.b_rpo:
+        if l.inl[b] != mk:
+            continue
+        end
+        blk_succs(g, b, s.succ)
+        each x in s.succ:
+            if l.inl[x] != mk:
+                exits.push(b)
+                targ.push(x)
+            end
+        end
+    end
+    repeat exits.len() in e:
+        b2 := exits[e]
+        x2 := targ[e]
+        nb := new_blk(g)
+        l.inl.push(0)
+        br := ins_new(g, OP_BR, T_VOID)
+        g.i_b[br] = x2
+        ins_append(g, nb, br)
+        repeat n in k4:
+            ea := sp_addr(g, s, k4, br)
+            sp_copy(g, br, s.tmp[k4], ea, s.lty[k4], s.lcls[k4])
+        end
+        replace_succ(g, g.b_last[b2], x2, nb)
+        retarget_phis(g, x2, b2, nb)
+    end
+    exits.free()
+    targ.free()
+end
+
+func sp_loop(g &: Ng, l &: Lp, s &: Sp, mk: int, h: int, pt: int): bool:
+    if not sp_scan(g, l, s, mk, h):
+        ret false
+    end
+    s.lroot.clear()
+    s.loff.clear()
+    s.lty.clear()
+    s.lcls.clear()
+    each i in s.mem:
+        if s.lroot.len() >= SP_MAX_LOCS:
+            break
+        end
+        if g.i_op[i] == OP_STORE:
+            _ok := sp_try_loc(g, l, s, mk, i)
+        end
+    end
+    if s.lroot.len() == 0:
+        ret false
+    end
+    if g.inl_trace:
+        printerrln "spromo: " + tab_str(g.syms, g.f_sym) + " loop b" + h + " locs " + s.lroot.len() + " calls " + s.calls.len()
+    end
+    sp_rewrite(g, l, s, mk, pt)
+    ret true
+end
+
+func spromo(g &: Ng): bool:
+    build_dom(g)
+    mut l := Lp {}
+    repeat g.b_first.len():
+        l.inl.push(0)
+    end
+    lp_find(g, l)
+    if l.head.len() == 0:
+        l.inl.free()
+        ret false
+    end
+    if make_preheaders(g, l):
+        build_cfg(g)
+        build_dom(g)
+        l.inl.clear()
+        repeat g.b_first.len():
+            l.inl.push(0)
+        end
+        lp_find(g, l)
+    end
+    mut s := Sp {}
+    mut done := Vector {} as Vector<int>
+    mut changed := false
+    mut rounds := 0
+    mut again := true
+    until again and rounds < 8:
+        again = false
+        mut mk := 5000000 + rounds * 10000
+        each h in l.head:
+            mut seen := false
+            each dh in done:
+                if dh == h:
+                    seen = true
+                end
+            end
+            if seen:
+                continue
+            end
+            mk += 1
+            _n := lp_body(g, l, h, mk)
+            p := lp_outside_pred(g, l, h, mk)
+            if p < 0:
+                continue
+            end
+            pt := g.b_last[p]
+            if pt < 0 or g.i_op[pt] != OP_BR:
+                continue
+            end
+            done.push(h)
+            if sp_loop(g, l, s, mk, h, pt):
+                changed = true
+                again = true
+                rounds += 1
+                build_cfg(g)
+                build_dom(g)
+                l.inl.clear()
+                repeat g.b_first.len():
+                    l.inl.push(0)
+                end
+                lp_find(g, l)
+                break
+            end
+        end
+    end
+    sp_free(s)
+    done.free()
+    l.head.free()
+    l.size.free()
+    l.inl.free()
+    l.wl.free()
+    l.succ.free()
+    if changed:
+        build_cfg(g)
+        mem2reg(g)
+        simplify_phis(g)
+    end
+    ret changed
+end

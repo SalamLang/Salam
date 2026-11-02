@@ -1295,18 +1295,20 @@ end
   `Unsupported`, `offset` is the byte position and `line`/`column` are filled
   in (`e.to_str()` gives `json: expected ':' (line 2, column 7)`); trailing
   text after the value is code `json.trailing_data`. `JSONDecoder.Decode()`
-  throws too.
+  throws too. toml and xml errors also carry a `code` (`toml.duplicate_key`,
+  `xml.unclosed_tag`, `xml.mismatched_tag`, `xpath.unknown_function`, ...).
 - **`xml`** (`import encoding.xml`): two models in one package.
-  - **Simple tree** `XMLNode` (`tag attrs children text`): `Decode DecodeStrict Valid Encode EncodeIndent Child Children Attr HasAttr SetAttr AppendChild NewXMLNode ToValue FromValue EscapeText EscapeAttr`, plus the
+  - **Simple tree** `XMLNode` (`tag attrs children text`): `Decode Valid Encode EncodeIndent Child Children Attr HasAttr SetAttr AppendChild NewXMLNode ToValue FromValue EscapeText EscapeAttr` (`Decode` throws; it reads through the strict parser, namespaces off), plus the
     tokenizer `NewXMLTokenizer`/`NextToken` (checks nothing; run
     `WellFormed` first). Ignores namespaces and mixed-content order: fine
     for a config file.
   - **Full `Document`** (an arena of `int` node handles, strict parsing with
-    line/column errors, namespaces, bounded entity expansion): `Parse(text, err) ParseWith(text, opts, err) WellFormed`, `ParseOptions`
+    line/column errors, namespaces, bounded entity expansion): `Parse(text) ParseWith(text, opts)` (both `throws`), `WellFormed(text): bool`, `ParseOptions`
     (`preserve_whitespace keep_comments namespaces expand_entities max_depth`; whitespace-only text is dropped by default). Read `Root Kind Name LocalName NamespaceURI Parent ChildCount ChildAt Elements ElementsNamed FirstElementNamed Descendants NextSibling AttributeValue AttributeValueNS Text Line Column`; edit `NewDocument CreateElement CreateText Append InsertBefore RemoveChild SetAttribute SetText`; write
     `Write WriteIndent WriteNode Canonical`. `Free(d)`, `FreeList(list)`.
-  - **XPath 1.0**: `Select(d, context, expr, err): NodeList` (context `-1` =
-    document) `SelectFirst SelectString SelectNumber SelectBoolean Evaluate`;
+  - **XPath 1.0**: `Select(d, context, expr): NodeList` (context `-1` =
+    document) `SelectFirst SelectString SelectNumber SelectBoolean Evaluate`,
+    all `throws` on a bad expression (context `xpath`, column inside it);
     all axes and the core function library, no variables, no namespace axis.
     Name tests match the name as written, prefix included: use
     `local-name()`/`namespace-uri()` when the prefix may vary. Attributes
@@ -1322,10 +1324,12 @@ end
   `WriteLine(Vector<str>): str`, `ReadAll WriteAll FreeTable ToValue FromValue`. The separator is always a comma; a quoted field with a line
   break cannot be read back (`ReadAll` splits lines first); `"Pen" ,blue`
   (space after the quote) ends the row silently; spaces are kept.
-- **`toml`** (`import encoding.toml`): `DecodeStrict Decode Valid EncodeStrict Encode` over `value.Value`. `Decode` never reports errors
-  (a typo drops the rest), so use `DecodeStrict` on edited files. Triple
-  quoted strings are invalid and dates stay strings; `Encode` loses comments
-  and key order.
+- **`toml`** (`import encoding.toml`): `Decode(text): value.Value throws`,
+  `Valid`, `Encode(v): str throws`. `Decode` is strict: duplicate keys and
+  tables, bare words (`mode = fast`), bad escapes and numbers and text after a
+  value all throw with the line and column. Triple quoted strings throw
+  `Unsupported` and dates stay strings; `Encode` throws `Unsupported` for a
+  non-object top level or a null in an array, and loses comments.
 - **`value`** (`import encoding.value`): the dynamic `Value` every format
   shares: `ValueNull ValueBool ValueInt ValueFloat ValueString NewValueArray NewValueObject Is* As* ArrayLen ArrayGet ArraySet ArrayPush ObjectGet ObjectGetOk ObjectSet ObjectHas ObjectDelete ObjectKeys ValueClone ValueFree Equal`. `As*` never checks the kind (`AsInt` of a string is 0);
   the checked methods `v.field(k) v.at(i) v.int() v.float() v.str() v.bool()`

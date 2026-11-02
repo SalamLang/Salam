@@ -657,6 +657,20 @@ then goes through:
    remainder loop keeps the branch. A select with a zero arm is one `pand`
    or `pandn` instead of three operations. `SALAM_NG_OFF=specld` turns
    this off.
+   Loads with a stride of two `i32`, `f32`, `i64` or `f64` elements are
+   vectorized too: `a[2 * i]` and `a[2 * i + 1]` (an index `2 * i` computed
+   with a no-overflow multiply or shift of the counter) and fields of a
+   two-field struct read from a vector of them (`p.get(i).x`, `p.get(i).y`).
+   Two such loads that differ by one element share two vector loads that
+   cover exactly the elements they read, and `shufps` picks the even and
+   the odd lanes (`0x88`/`0xDD` for 32-bit elements, `0x44`/`0xEE` for
+   64-bit ones). A lone strided load reads its first element and the
+   element `VF - 1` further on, so the two vectors end exactly at the last
+   element the loop reads, and one `shufps` (`0xD8` or `0xE4`) gathers it.
+   With AVX2 `vshufps` works inside each 128-bit half, so a `vpermq` with
+   `0xD8` puts the quadwords in order. A strided address gets a runtime
+   overlap check that spans twice the range, strided stores stay scalar,
+   and `SALAM_NG_OFF=deint` turns this off.
    With `--cpu=x86-64-v3` (or `x86-64-v4`) the loop vectorizer uses the
    256-bit AVX2 registers instead: eight 32-bit or `f32` lanes, four 64-bit
    or `f64`, sixteen 16-bit and thirty-two bytes. The vector step, the
@@ -1277,7 +1291,7 @@ ret end` at the top of a recursive AST walk) tests that parameter before
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing, and a comma-separated list dumps several functions.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,vnarrow,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,loopinl,cpelim,tord,vrev,cdown,tfold,mexit,sqself,vsign,redinv,ldcmp,phix,selinc,wweb,wwdep,wwtr,tdup,padjmp,dtst,zins,ndiv,niv,cmp64,adc64,rvc,avx2,rasp,hotpath,inlnest,spromo,ypack,ysum,winv,zxcmp,cpspill,scdead,yzext,uswsel,vex3,vabs,vdemor,lvnsw,vblend,xfree,lvunr,vtail,vkpool,remat,sse41,shbudg,andbr,lhloc,aggphi,specld`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,vnarrow,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,loopinl,cpelim,tord,vrev,cdown,tfold,mexit,sqself,vsign,redinv,ldcmp,phix,selinc,wweb,wwdep,wwtr,tdup,padjmp,dtst,zins,ndiv,niv,cmp64,adc64,rvc,avx2,rasp,hotpath,inlnest,spromo,ypack,ysum,winv,zxcmp,cpspill,scdead,yzext,uswsel,vex3,vabs,vdemor,lvnsw,vblend,xfree,lvunr,vtail,vkpool,remat,sse41,shbudg,andbr,lhloc,aggphi,specld,deint`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator and `rasp` the
@@ -1572,7 +1586,8 @@ Not there yet:
   addresses it can prove safe (a store or call in an arm, or a load it
   cannot prove, keeps the loop scalar; so does a float compare as the
   condition), and unit-stride accesses (counting up, or down by one through a second
-  counter). On x86-64 it has no 64-bit multiplies or ordered
+  counter), apart from loads with a stride of two 4- or 8-byte elements;
+  larger strides, strided stores and strided bytes stay scalar. On x86-64 it has no 64-bit multiplies or ordered
   64-bit compares, and reductions run in 32- or 64-bit lanes (narrower
   values are widened first). Float
   reductions are not reordered, since that would change the rounding of the

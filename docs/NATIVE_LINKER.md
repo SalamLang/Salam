@@ -1112,28 +1112,37 @@ Salam code is small.
 ### Measurements
 
 All on x86-64, linking the object the native backend writes for the compiler
-itself (`compiler/main.salam --release`), by the linker before this change and
-after it:
+itself (`compiler/main.salam --release`, 3,493 functions), once with the
+linker before this change and once after it. Sizes in bytes:
 
 | Link | `.rodata` | `.text` | File |
 |---|---|---|---|
-| glibc PIE, before | 304,688 | 6,744,418 | 8,090,776 |
-| glibc PIE, after | 304,688 | 6,744,418 | 8,090,776 |
-| glibc PIE, after, `--icf` | 304,688 | 6,740,429 | 8,086,680 |
-| static musl, before | 326,100 | 6,840,614 | 8,088,640 |
-| static musl, after | 325,492 | 6,840,614 | 8,088,640 |
-| static musl, after, `--icf` | 325,492 | 6,836,070 | 8,080,448 |
+| glibc PIE, before | 305,808 | 6,778,034 | 8,138,248 |
+| glibc PIE, after | 305,808 | 6,778,034 | 8,138,248 |
+| glibc PIE, after, `--icf` | 305,808 | 6,774,002 | 8,134,152 |
+| static musl, before | 326,868 | 6,874,534 | 8,136,032 |
+| static musl, after | 326,260 | 6,874,534 | 8,131,936 |
+| static musl, after, `--icf` | 326,260 | 6,870,502 | 8,127,840 |
 
-Merging finds nothing in our own object (its constants are in one plain
-`.rodata`) and 4 bytes in glibc's startup files. Against static musl, the
-2,065 bytes of mergeable strings and constants that `libc.a` contributes
-come down to 1,432 and `.rodata` shrinks by 608 bytes; the file does not,
-since the segments are page aligned. ICF folds 19 of the 3,424 functions of
-the compiler (4,464 bytes, 4,960 with musl), mostly generic instances
-that came out the same, such as `HashMap<str, bool>.has` and
-`HashMap<str, i32>.has`, or `Vector<bool>.free` and four other `free`s; only
-11 functions have their address taken. A small C program with a string in
-two objects (gcc for x86-64, clang for AArch64, RISC-V, i686 and ARM, static
-musl) keeps the same output, with `.rodata` 0 to 32 bytes smaller.
+Merging finds nothing to share in our own object, whose constants sit in one
+plain `.rodata`, and glibc's startup files bring only 4 bytes of mergeable
+data. Against static musl, the 2,065 bytes of mergeable strings and constants
+in the `libc.a` members we pull in come down to 1,432, and `.rodata` shrinks
+by 608 bytes. ICF folds 17 functions (4,512 bytes, 4,032 after alignment),
+all generic instances or helpers that came out the same, such as
+`HashMap<str, bool>.has` and `HashMap<str, i32>.has`, `Vector<i64>.push` and
+`Vector<str>.push`, or `Vector<u8>.free` and `Vector<i64>.free`. A small C
+program with the same string in two objects (gcc for x86-64, clang for
+AArch64, RISC-V, i686 and ARM, static musl) prints the same and has a
+`.rodata` 0 to 32 bytes smaller.
 
-LINKTIME
+Link time, best CPU time (user plus system) of ten runs of a program that
+calls `nativelink.Link` on the same inputs:
+
+| Link | Before | After | After, `--icf` |
+|---|---|---|---|
+| glibc PIE | 34 ms | 42 ms | 71 ms |
+| static musl | 37 ms | 40 ms | 70 ms |
+
+Splitting the sections and moving every symbol and relocation is most of what
+`--icf` costs; finding the 17 folds takes about a third of it.

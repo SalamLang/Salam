@@ -965,8 +965,8 @@ both sites teaches the language only, not the libraries.
   result: a missing file, an unknown JSON key and a server that refused a
   command all look like empty data.
 - `int` is 32 bits. Helpers that return `int` (`json.GetInt`,
-  `yaml.GetInt`, `conv.Atoi`, `"..".to_int()`) clamp or wrap anything larger;
-  use the `i64` form (`conv.ParseInt`, `json.Unmarshal` into an `i64` field)
+  `yaml.GetInt`, `"..".to_int()`) clamp or give 0 for anything larger, and
+  `conv.Atoi` throws `OutOfRange`; use the `i64` form (`conv.ParseInt`, `json.Unmarshal` into an `i64` field)
   for IDs, sizes and timestamps.
 - Std functions that return a `str` hand you a fresh string you may free;
   arguments are never modified.
@@ -996,11 +996,17 @@ both sites teaches the language only, not the libraries.
   `fmt.Hex(n as u64)`.
 - **`conv`**: `FormatInt FormatUint FormatHex FormatBool FormatFloat`
   (shortest round-trip) `FormatFloatShort` (6 digits, like `%g`)
-  `FormatFloatPrec ParseInt(i64) Atoi(int) ParseFloat ParseBool ParseHex IsNaNF`. Nothing reports bad input: `ParseInt("abc")` is 0, `ParseInt`
-  wraps past 64 bits and `Atoi` keeps only 32 (`Atoi("3000000000")` is
-  `-1294967296`), `ParseBool` is case-sensitive (`"True"` is false), and a
-  comma is not a decimal point (`ParseFloat("1,5")` is 1). Persian digits
-  are accepted.
+  `FormatFloatPrec IsNaNF`. The parsers `ParseInt` (i64), `Atoi` (int),
+  `ParseFloat`, `ParseBool` and `ParseHex` all `throws` (context `conv`):
+  `Syntax` for an empty string, a sign with no digits or any stray character
+  (`12abc`, `1_000`, `1,5`, `12.5` in `ParseInt`, `"True"`), with
+  offset/line/column of that character; `OutOfRange` (`conv.overflow`) past
+  64 bits, or 32 for `Atoi`. Codes: `conv.empty`, `conv.no_digits`,
+  `conv.invalid_char`, `conv.not_bool`, `conv.overflow`. Spaces around, one
+  sign and Persian/Arabic digits are accepted; `ParseBool` reads
+  `true 1 yes on` / `false 0 no off`. For a default use `ParseIntOr(s, fallback)`,
+  `AtoiOr`, `ParseFloatOr`, `ParseBoolOr`, `ParseHexOr`. The string methods
+  `to_int`/`to_float` stay lenient (0).
 - **`text`**: `ToUtf16(str): void*` (yours to `mem.Free`), `FromUtf16(void*): str`,
   `Utf16Len` (what JavaScript and browsers count), `Utf16UnitAt` (no bounds
   check). For Windows/UTF-16 FFI.
@@ -1388,7 +1394,9 @@ end
   (`IsXLS` detects it); the format comes from the file extension; formulas
   are not evaluated; rows and columns count from 0.
 - **`regex`**: `Compile Match Find Replace ReplaceAll` (`Regex` handle) and
-  one-shot `MatchStr FindStr ReplaceStr ReplaceAllStr`. Captures: `FindMatch`
+  one-shot `MatchStr FindStr ReplaceStr ReplaceAllStr`. `Compile` and every
+  `...Str` function `throws` `Syntax` (code `regex.invalid`, `offset` where the
+  pattern breaks); functions taking a `Regex` cannot fail. Captures: `FindMatch`
   returns a `MatchResult` value (`.ok .start .stop .count`) to read with
   `Group GroupStart GroupEnd GroupOk GroupByName GroupIndex GroupCount`, plus
   `FindSubmatch FindAll FindAllN FindAllMatches Split SplitN` (all
@@ -1396,8 +1404,8 @@ end
   `Expand ReplaceExpand ReplaceAllExpand`; `IsValid` checks a pattern. Syntax:
   `. [] \d \w \s \D \W \S ^ $ | (…) (?:…) (?<name>…) (?P<name>…) * + ? {n,m}`
   and the lazy `*? +? ?? {n,m}?`. **No `\b`** (it means `b`), **no `(?i)`**,
-  no lookaround, no back references; an unsupported pattern is invalid and
-  never matches (test with `IsValid`). The engine works on **bytes**: `\w`
+  no lookaround, no back references; an unsupported pattern is invalid
+  (`Compile` throws, `IsValid` is false). The engine works on **bytes**: `\w`
   never matches a Persian letter, `[آ-ی]` does not work and `ب+` repeats
   only the last byte (write `(ب)+`). `^`/`$` anchor the whole text, never a
   line. At most 16 groups and `{n}` up to 64; a match over 400000 steps is
@@ -1422,12 +1430,15 @@ end
   `FormatRFC3339` for anything stored); `Now` has whole seconds and follows
   clock changes, so time code with `MonoNanos`; `Days(30)` is not a month;
   `FromUTCParts` rolls over (30 February is 1 March) while the parsers
-  reject impossible days. `Sleep` takes milliseconds.
+  throw on impossible days. `Sleep` takes milliseconds.
   - **`Duration`** (nanoseconds, so it cannot be read in the wrong unit):
-    `Nanoseconds Microseconds Milliseconds Seconds Minutes Hours Days SecondsF ZeroDuration`, methods `nanos millis secs seconds minutes hours days add sub mul div ratio neg abs truncate round cmp less equals is_zero`; `FormatDuration` ("1h30m0s") and `ParseDuration`/
-    `ParseDurationOr` (`DurationResult { ok, value }`); `SleepFor SinceDuration DurationBetween AddDuration`.
-  - **Parsing**: `ParseISO ParseISOIn ParseISOOr ParseHTTPDate ParseFormat(pattern, s)` (strftime `%Y %m %d %H %M %S %f %b %a %z %Z`),
-    all returning `TimeResult { ok, epoch, nanos }`; an unzoned string is
+    `Nanoseconds Microseconds Milliseconds Seconds Minutes Hours Days SecondsF ZeroDuration`, methods `nanos millis secs seconds minutes hours days add sub mul div ratio neg abs truncate round cmp less equals is_zero`; `FormatDuration` ("1h30m0s") and `ParseDuration(s): Duration throws`/
+    `ParseDurationOr(s, fallback)`; `SleepFor SinceDuration DurationBetween AddDuration`.
+  - **Parsing**: `ParseISO ParseISOIn ParseHTTPDate ParseFormat(pattern, s)` (strftime `%Y %m %d %H %M %S %f %b %a %z %Z`)
+    return the `i64` epoch and `throws` (`Syntax`, `UnexpectedEnd`, or `OutOfRange`
+    for month 13 / hour 25 / 30 February, with `offset` and a `time.*` code;
+    a bad layout is `InvalidArgument`); `ParseISONanos` keeps the fraction
+    (nanoseconds since the epoch); `ParseISOOr(s, fallback)` never throws. An unzoned string is
     **local** time. `FromLocalParts` (DST-correct) / `FromUTCParts`,
     `LocalOffsetMinutesAt`.
   - **Timers** (monotonic): `NewTimer` (`expired remaining wait reset stop`),
@@ -1489,8 +1500,8 @@ end
   automatic 405; `Body` is a `str` (binary uploads are cut).
 - **`net.router`** alone: `Dispatch` (a `Match`) `FreeMatch ParamGet EnableListing` for routing without a server. **`net.http.middleware`** `Log AllowAll Secure NoCache Cache` (`AllowAll` omits PATCH; `Secure` sets no CSP or
   HSTS), **`net.http.validate`** `Required Length IsEmail Matches Assert`
-  (`Required` accepts spaces, `IsEmail` is loose, `Matches` is unanchored,
-  and you must `ret` after a failed `Assert`), **`net.http.session`**
+  (`Required` accepts spaces, `IsEmail` is loose, `Matches` is unanchored and
+  throws on a bad pattern, and you must `ret` after a failed `Assert`), **`net.http.session`**
   `Configure Start Save Regenerate Destroy Value SetValue CSRFToken CSRFVerify` (call `Save` after changes, `Regenerate` after login; sessions
   live in process memory).
 - **`net.http` raw calls**: requests with your own header text and any bytes: `ParseEndpoint SendRaw SendRawTimeout SendRawTLS FreeRaw RawText HeaderValue`
@@ -1619,8 +1630,16 @@ end
   a token links none of it.
   - Tokens: `NewClaims SetStr/SetInt/SetBool/SetRaw ExpiresIn NotBeforeIn ClaimsJSON`; `Sign SignHS256/384/512 SignWithKid SignJSON SignatureOf`;
     `Verify VerifyHS256 IsValid DefaultOptions OptionsFor`; `Decode` (parses,
-    verifies **nothing**); claim readers `Str Int Bool Raw Has ListHas HasScope HasAudience SecondsRemaining`; `ErrorText IsSupportedAlg`; error
-    codes `JWT_OK JWT_ERR_*`. `Options` carries the policy (`alg issuer audience subject leeway now require_exp/nbf/iat/sub/jti`). **`alg` comes
+    verifies **nothing**); claim readers `Str Int Bool Raw Has ListHas HasScope HasAudience SecondsRemaining`; `IsSupportedAlg`.
+    `Decode Verify VerifyHS256 Sign* SignJSON Issue IssueFor IssuePair Check B64UrlDecode`
+    are `throws` (`IsValid` is the bool form): the `Error` carries a `jwt.*`
+    `code` (`malformed bad_base64 bad_json` are `Syntax`;
+    `bad_alg bad_typ crit` are `Unsupported`; `empty_secret` is `InvalidArgument`;
+    `alg_mismatch bad_signature expired not_yet_valid issued_in_future bad_claim`
+    are `PermissionDenied`; `missing_claim` is `MissingKey`; `missing_token`
+    (from `Check`) is `NotFound`),
+    `path` names the claim for `bad_claim`/`missing_claim`, and `message` is
+    the short reason the guards send. `Options` carries the policy (`alg issuer audience subject leeway now require_exp/nbf/iat/sub/jti`). **`alg` comes
     from `Options`, never from the token**; `"none"` and RS*/ES* are rejected
     (no asymmetric support). **`require_exp` is off by default**, so a token
     without `exp` is accepted forever unless you set it; the secret is not
@@ -1628,7 +1647,7 @@ end
   - HTTP (needs `net.http` + `net.router`): `NewGuard` bundles the secret with
     an `Options`; `Require RequireScope RequireClaim RequireSubject` verify at
     the top of a handler and, on failure, write the 401/403 themselves and
-    return false. Also `Check` (verify, write nothing), `ParseBearer BearerToken TokenFrom Unauthorized MissingCredential Forbidden`, issuing
+    return false. Also `Check` (verify, write nothing; branch on `e.code`), `ParseBearer BearerToken TokenFrom Unauthorized MissingCredential Forbidden`, issuing
     (`Issue IssueFor IssuePair`) and cookies (`SetSessionCookie SetSessionCookieInsecure ClearSessionCookie`).
 
 Passwords and secrets live in **`crypto`**, not here: `HashPassword`
@@ -1651,7 +1670,7 @@ end
 
 Worked examples: `tests/en/apps/auth/` (seven programs), the five REST APIs in
 `tests/en/apps/*api/`, and `tests/en/webframework/authapi.salam`. Package
-tests: `tests/en/stdlib/jwt_demo.salam`.
+tests: `tests/en/stdlib/jwt_demo.salam` and `jwt_errors_demo.salam` (one line per code).
 
 ### Databases (`import db`, `import db.<engine>`)
 

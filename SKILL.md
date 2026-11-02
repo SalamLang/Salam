@@ -1097,7 +1097,8 @@ learning half is `f32` on `std/tensor`; the classical half is `f64` on
   `LastStep`, the `Layer` interface with `Sequential` and the
   `ReluLayer GeluLayer TanhLayer` wrappers, `Flatten SinusoidalPositions`,
   init `XavierUniform XavierNormal KaimingUniform KaimingNormal`, checkpoints `SaveCheckpoint LoadCheckpoint`
-  (SLMT, `.gz` aware) and the `*Buf` forms.
+  (SLMT, `.gz` aware) and the `*Buf` forms; the loaders `throws` (`nn.crc`,
+  `nn.param_count`, `nn.shape`, ...) and write nothing unless the whole file matches.
 - **`optim`**: `SGD` (momentum, nesterov, weight decay) `Adam` `NewAdamW`
   `RMSProp` with `step(ps)`, `ClipGradNorm ClipGradValue`, schedules `StepLR CosineLR WarmupCosine`.
 - **`ml`**: struct-per-estimator over `matrix`; `fit(x, y): bool`, `predict`,
@@ -1109,14 +1110,16 @@ learning half is `f32` on `std/tensor`; the classical half is `f64` on
   rows only.
 - **`data`**: `MakeBlobs MakeMoons MakeCircles MakeRegression MakeClassification` (seeded), `LoadCsv LoadCsvFile` → `Table` (`kinds to_matrix split_xy cat_levels`), `MatrixDataset.batches` → `BatchIter`
   (`next next_tensor reset`), `LoadIdx LoadMnist ParseIdx`, `LoadImageFolder`,
-  `XTensor YLabels`.
-- **`npy`**: `ReadNpy ReadNpyFile WriteNpy WriteNpyFile ToMatrix FromMatrix NpzList NpzRead NpzWrite`.
+  `XTensor YLabels`. `LoadCsv LoadCsvFile LoadIdx LoadMnist ParseIdx` are `throws`.
+- **`npy`**: `ReadNpy ReadNpyFile WriteNpy WriteNpyFile ToMatrix FromMatrix NpzList NpzRead NpzWrite`;
+  every reader and `ToMatrix` `throws` (`npy.bad_magic`, `npy.dtype`, `npy.truncated`, `npy.missing_key`).
 - **`onnx`**: `LoadOnnx ParseOnnx Run` for MLP, CNN and transformer-style
   graphs (`Conv Gemm MatMul` activations, pooling, the norms, shape ops,
   reductions, `Gather Slice Where Cast` and more, about 65 ops); anything
   else fails with the op named in `model.error`.
 - **`gguf`**: `LoadGguf ParseGguf` (metadata, tensor directory),
-  `LoadTensorF32` dequantizing `F32 F16 Q8_0 Q4_0 Q4_1`.
+  `LoadTensorF32` dequantizing `F32 F16 Q8_0 Q4_0 Q4_1`; all three `throws`
+  (`ParseGguf` owns the buffer only on success). `tensor.ReadTensor` throws too.
 - **`llm`**: decoder-only models (Llama layout: RMSNorm, RoPE, GQA,
   SwiGLU). `Config Model RandomModel NewKVCache(cfg) Forward(m, cache, tokens)` (positions continue from `cache.len`), `LogitsRow Greedy`,
   `Sampler` (`temperature top_k top_p repeat_penalty`) with `GenerateIds Generate`, `NewTokenizer` (`TOK_SPM`, `TOK_BPE`; `encode decode`), and
@@ -1318,10 +1321,14 @@ end
   `*a`, `<<:`; an anchored map silently drops the rest of the document);
   `yes`/`no`/`on`/`off` are strings; `GetInt` is 32-bit and wraps; every path
   call reparses, so `Decode` once for many reads.
-- **`csv`** (`import encoding.csv`): `ReadLine(str): Vector<str>`,
-  `WriteLine(Vector<str>): str`, `ReadAll WriteAll FreeTable ToValue FromValue`. The separator is always a comma; a quoted field with a line
-  break cannot be read back (`ReadAll` splits lines first); `"Pen" ,blue`
-  (space after the quote) ends the row silently; spaces are kept.
+- **`csv`** (`import encoding.csv`): `ReadLine(str): Vector<str> throws`,
+  `WriteLine(Vector<str>): str`, `ReadAll ToValue` (`throws`) `WriteAll FreeTable FromValue`, and the
+  `ReadLineWith ReadAllWith WriteLineWith WriteAllWith ToValueWith FromValueWith` forms taking
+  `CSVOptions { header separator keep_blank }` (`separator = ";"` or `"\t"`). RFC 4180: quoted
+  fields may hold line breaks. Broken input throws `Syntax` with line/column and a code:
+  `csv.unterminated_quote`, `csv.text_after_quote` (`"Pen" ,blue`), `csv.bare_quote` (`5'11"`),
+  `csv.multiple_rows` (`ReadLine` got two rows), `csv.duplicate_header` (`ToValue`). Blank lines
+  are skipped unless `keep_blank`; spaces are kept; writers never fail.
 - **`toml`** (`import encoding.toml`): `DecodeStrict Decode Valid EncodeStrict Encode` over `value.Value`. `Decode` never reports errors
   (a typo drops the rest), so use `DecodeStrict` on edited files. Triple
   quoted strings are invalid and dates stay strings; `Encode` loses comments
@@ -1339,7 +1346,8 @@ end
   `TranscodeStrict` throws, **`msgpack`**
   `Marshal Unmarshal UnmarshalBytes` (the two readers throw; no bin/ext types, string map keys
   only, trailing bytes ignored), **`binary`** `WriteU32BE ReadI64LE ...`
-  (reading past the end yields 0 and sets `r.bad`; `ReadU32*` comes back in a
+  (every `Read*` `throws` `UnexpectedEnd`, code `binary.unexpected_end`, with the
+  offset, and leaves the reader in place; `ReadU32*` comes back in a
   signed `int`, so widen with `(v as i64) & 4294967295`; writers truncate
   silently), **`protobuf`** (`.proto` parser, wire helpers `WriteVarint ReadVarint WriteTag ReadTag SkipField ZigZag*` and Salam code generation;
   generated readers do not accept packed repeated fields).

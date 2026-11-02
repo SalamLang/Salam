@@ -442,6 +442,36 @@ func _value_text(v: value.Value): str:
     ret ""
 end
 
+func _simple_node(d: Document, id: int): XMLNode:
+    n := node_at(d, id)
+    mut node := XMLNode { tag = str.Clone(n.name) }
+    each aid in n.attrs:
+        a := d.attributes.get(aid)
+        node.attrs.put(str.Clone(a.name), str.Clone(a.value))
+    end
+    mut sb := str.NewBuilder()
+    each child in n.children:
+        c := node_at(d, child)
+        if c.kind == KindElement:
+            node.children.push(_simple_node(d, child))
+        else c.kind == KindText or c.kind == KindCData:
+            str.BufAppend(sb, c.value)
+        end
+    end
+    node.text = str.BufStr(sb)
+    str.BufFree(sb)
+    ret node
+end
+
+func _simple_options(): ParseOptions:
+    mut opts := DefaultOptions()
+    opts.preserve_whitespace = true
+    opts.keep_comments = false
+    opts.keep_instructions = false
+    opts.namespaces = false
+    ret opts
+end
+
 @en "UnescapeEntities"
 @fa "بازگردانی موجودیت‌ها"
 pub func UnescapeEntities(s: str): str: ret _unescape(s) end
@@ -522,61 +552,22 @@ pub func Children(node: XMLNode, tag: str): XMLNodeList:
     ret out
 end
 
-@en "DecodeStrict"
-@fa "کدگشایی سخت گیرانه"
-pub func DecodeStrict(text: str, ok &: bool): XMLNode:
-    mut tz := NewXMLTokenizer(text)
-    tn := text.len()
-    mut stack := Vector {} as Vector<XMLNode>
-    mut root := XMLNode {}
-    ok = true
-    until true:
-        tok := _next_token(tz, tn)
-        if tok.kind == XMLTokEOF:
-            if stack.len() > 0: ok = false end
-            ret root
-        end
-        if tok.kind == XMLTokStartElement:
-            mut node := XMLNode { tag = tok.tag }
-            node.attrs = tok.attrs
-            stack.push(node)
-        else tok.kind == XMLTokEndElement:
-            if stack.len() == 0:
-                ok = false
-                ret root
-            end
-            finished := stack.get(stack.len() - 1)
-            stack.pop()
-            if stack.len() > 0:
-                mut parent := stack.get(stack.len() - 1)
-                parent.children.push(finished)
-                stack.set(stack.len() - 1, parent)
-            else:
-                root = finished
-            end
-        else tok.kind == XMLTokText or tok.kind == XMLTokCData:
-            if stack.len() > 0:
-                mut top := stack.get(stack.len() - 1)
-                top.text = top.text.concat(tok.text)
-                stack.set(stack.len() - 1, top)
-            end
-        end
-    end
-end
-
 @en "Decode"
 @fa "کدگشایی"
-pub func Decode(text: str): XMLNode:
-    mut ok := false
-    ret DecodeStrict(text, ok)
+pub func Decode(text: str): XMLNode throws:
+    mut d := try ParseWith(text, _simple_options())
+    node := _simple_node(d, Root(d))
+    Free(d)
+    ret node
 end
 
 @en "Valid"
 @fa "معتبر"
 pub func Valid(text: str): bool:
-    mut ok := false
-    DecodeStrict(text, ok)
-    ret ok
+    mut err := ReadFail {}
+    mut d := read_document(text, _simple_options(), err)
+    Free(d)
+    ret err.ok
 end
 
 @en "Encode"

@@ -1,0 +1,155 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import encoding.xml
+import str
+
+func show(label: str, e: Error):
+    mut line := label + ": " + e.kind_name() + " | " + e.to_str()
+    if e.code != "":
+        line = line + " [" + e.code + "]"
+    end
+    println line
+end
+
+func parse(label: str, text: str):
+    try:
+        mut d := xml.Parse(text)
+        println label + ": ok " + xml.Write(d)
+        xml.Free(d)
+    catch e:
+        show(label, e)
+    end
+end
+
+func parse_with(label: str, text: str, opts: xml.ParseOptions):
+    try:
+        mut d := xml.ParseWith(text, opts)
+        println label + ": ok " + xml.Write(d)
+        xml.Free(d)
+    catch e:
+        show(label, e)
+    end
+end
+
+func select(label: str, d: xml.Document, expr: str):
+    try:
+        println label + ": ok " + xml.SelectString(d, 0 - 1, expr)
+    catch e:
+        show(label, e)
+    end
+end
+
+func nodes(label: str, d: xml.Document, expr: str):
+    try:
+        mut list := xml.Select(d, 0 - 1, expr)
+        println label + ": ok " + list.items.len() + " nodes"
+        xml.FreeList(list)
+    catch e:
+        show(label, e)
+    end
+end
+
+func main:
+    println "== xml.Parse =="
+    parse("valid", "<a x=\"1\"><b>text</b></a>")
+    parse("empty", "")
+    parse("only a comment", "<!-- nothing -->")
+    parse("unclosed element", "<a>\n  <b>text</b>\n")
+    parse("mismatched tag", "<a>\n  <b>text</a>\n</b>")
+    parse("stray end tag", "<a/>\n</a>")
+    parse("two roots", "<a/><b/>")
+    parse("unclosed start tag", "<a x=\"1\"")
+    parse("unclosed attribute", "<a x=\"1/>")
+    parse("unquoted attribute", "<a x=1/>")
+    parse("duplicate attribute", "<a x=\"1\" x=\"2\"/>")
+    parse("unclosed comment", "<a><!-- note</a>")
+    parse("unclosed CDATA", "<a><![CDATA[x</a>")
+    parse("undeclared entity", "<a>&nbsp;</a>")
+    parse("undeclared prefix", "<a>\n  <p:b/>\n</a>")
+    parse("text outside", "hello <a/>")
+    parse("bad character", "<a>\u0001</a>")
+    mut raw := str.NewBuilder()
+    str.BufAppend(raw, "<a>")
+    str.BufAppendChar(raw, 255)
+    str.BufAppend(raw, "</a>")
+    parse("invalid UTF-8", str.BufStr(raw))
+    str.BufFree(raw)
+    parse("entity loop", "<!DOCTYPE a [<!ENTITY e \"&e;\">]><a>&e;</a>")
+    mut shallow := xml.DefaultOptions()
+    shallow.max_depth = 2
+    parse_with("too deep", "<a><b><c/></b></a>", shallow)
+    mut lax := xml.DefaultOptions()
+    lax.namespaces = false
+    parse_with("namespaces off", "<a><p:b/></a>", lax)
+
+    println ""
+    println "== xml.WellFormed =="
+    println xml.WellFormed("<a/>"), xml.WellFormed("<a>"), xml.WellFormed("")
+
+    println ""
+    println "== xml.Decode =="
+    try:
+        n := xml.Decode("<config env=\"prod\"><db port=\"5432\"/></config>")
+        println "valid: ok", n.tag, xml.Attr(xml.Child(n, "db"), "port")
+    catch e:
+        show("valid", e)
+    end
+    try:
+        xml.Decode("<config>\n  <db>\n</config>")
+    catch e:
+        show("broken", e)
+    end
+    println xml.Valid("<a/>"), xml.Valid("<a><b></a>")
+
+    println ""
+    println "== XPath =="
+    try:
+        mut d := xml.Parse("<shop><item price=\"3\">tea</item><item price=\"4\">milk</item></shop>")
+        select("valid", d, "sum(//item/@price)")
+        select("unclosed predicate", d, "//item[@price")
+        select("bad character", d, "//item ! 2")
+        select("unknown function", d, "upper(//item)")
+        select("wrong arity", d, "count()")
+        select("variable", d, "$price")
+        select("trailing text", d, "//item )")
+        select("unclosed string", d, "'tea")
+        nodes("node-set", d, "//item")
+        nodes("not a node-set", d, "count(//item)")
+        try:
+            println "first:", xml.SelectFirst(d, 0 - 1, "//item[2]") > 0
+            println "number:", xml.SelectNumber(d, 0 - 1, "count(//item) * 2")
+            println "boolean:", xml.SelectBoolean(d, 0 - 1, "//item[@price > 3]")
+            v := xml.Evaluate(d, 0 - 1, "//item[")
+            println v.kind
+        catch e:
+            show("evaluate", e)
+        end
+        xml.Free(d)
+    catch e:
+        show("setup", e)
+    end
+
+    println ""
+    println "== fields =="
+    try:
+        mut d := xml.Parse("<a>\n  <b>\n</a>")
+        xml.Free(d)
+    catch e:
+        println e.kind == ErrorKind.Syntax, e.code, e.context, e.line, e.column, e.offset
+        println e.wrap("reading feed").to_str()
+    end
+end

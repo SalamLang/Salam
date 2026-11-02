@@ -16,7 +16,7 @@ pkg.intro <<
 <thead><tr><th></th><th>Read</th><th>Write</th></tr></thead>
 <tbody>
 <tr><td>Element types</td><td><code>f8</code>, <code>f4</code>, <code>i1</code> to <code>i8</code>, <code>u1</code> to <code>u4</code>, <code>b1</code>, little- or big-endian</td><td><code>&lt;f8</code> only</td></tr>
-<tr><td>Not read</td><td colspan="2"><code>u8</code> (uint64), <code>f2</code> (float16), complex, strings and object arrays: <code>ok</code> turns false</td></tr>
+<tr><td>Not read</td><td colspan="2"><code>u8</code> (uint64), <code>f2</code> (float16), complex, strings and object arrays: an <code>Unsupported</code> error (<code>npy.dtype</code>)</td></tr>
 <tr><td>Memory order</td><td>C order; Fortran order for one or two dimensions</td><td>C order</td></tr>
 <tr><td><code>.npz</code></td><td>both <code>numpy.savez</code> and <code>numpy.savez_compressed</code></td><td>uncompressed, like <code>savez</code></td></tr>
 </tbody>
@@ -24,16 +24,16 @@ pkg.intro <<
 <p>Every element becomes an <code>f64</code>, so <code>int64</code> values above 2<sup>53</sup> (9,007,199,254,740,992) lose their last digits.</p>
 
 <h2 id="guide-weights">Save a matrix for NumPy, and load it back</h2>
-<p><code>FromMatrix</code> turns a <a href="/std/matrix/">matrix</a> into an <code>NpyArray</code> and <code>WriteNpyFile</code> writes it. In Python, <code>numpy.load("weights.npy")</code> opens the file as a 2 by 3 <code>float64</code> array. The way back is <code>ReadNpyFile</code> followed by <code>ToMatrix</code>. Both report failure: <code>WriteNpyFile</code> returns false and <code>ReadNpyFile</code> clears <code>ok</code>.</p>
+<p><code>FromMatrix</code> turns a <a href="/std/matrix/">matrix</a> into an <code>NpyArray</code> and <code>WriteNpyFile</code> writes it. In Python, <code>numpy.load("weights.npy")</code> opens the file as a 2 by 3 <code>float64</code> array. The way back is <code>ReadNpyFile</code> followed by <code>ToMatrix</code>. Both report failure: <code>WriteNpyFile</code> returns false and <code>ReadNpyFile</code> throws, so the program runs it with <code>try</code>.</p>
 {{example.npy-weights}}
 
 <h2 id="guide-checkpoint">Several arrays in one .npz checkpoint</h2>
 <p>A trained model has more than one array: weights, biases, perhaps the mean and spread used to scale the inputs. <code>NpzWrite</code> stores them in one <code>.npz</code> file under the names you give in <code>keys</code>, the same file <code>numpy.savez</code> writes and <code>numpy.load</code> returns as a dictionary. <code>NpzList</code> shows what a file holds and <code>NpzRead</code> takes one array out by name. Below, a tiny linear layer is saved, loaded again and used for a prediction.</p>
 {{example.npy-checkpoint}}
-<p>Asking for a name that is not in the file (<code>gamma</code> here) clears <code>ok</code>, so a loader can fall back to a default instead of crashing on an older checkpoint.</p>
+<p>Asking for a name that is not in the file (<code>gamma</code> here) throws a <code>NotFound</code> error with the code <code>npy.missing_key</code>, so a loader can catch it and fall back to a default instead of crashing on an older checkpoint.</p>
 
 <h2 id="guide-shapes">Arrays with more than two dimensions</h2>
-<p>A <code>.npy</code> file can hold any number of dimensions, such as a batch of images as <code>(count, height, width)</code>. The package reads and writes them all, but <code>ToMatrix</code> only accepts one or two dimensions (a 1-D array becomes a single row) and clears <code>ok</code> otherwise. For higher dimensions index <code>data</code> yourself: the element at <code>[i][j][k]</code> of shape <code>(A, B, C)</code> is at <code>(i * B + j) * C + k</code>.</p>
+<p>A <code>.npy</code> file can hold any number of dimensions, such as a batch of images as <code>(count, height, width)</code>. The package reads and writes them all, but <code>ToMatrix</code> only accepts one or two dimensions (a 1-D array becomes a single row) and throws an <code>InvalidArgument</code> error otherwise. For higher dimensions index <code>data</code> yourself: the element at <code>[i][j][k]</code> of shape <code>(A, B, C)</code> is at <code>(i * B + j) * C + k</code>.</p>
 {{example.npy-shapes}}
 
 <h2 id="guide-format">What is inside a .npy file</h2>
@@ -42,7 +42,7 @@ pkg.intro <<
 <p>The header shows a limit to keep in mind: the writer always stores <code>'&lt;f8'</code>, little-endian 64 bit floats, whatever <code>dtype</code> says. On reading, files with <code>float32</code>, integer or <code>bool</code> elements are accepted, <code>dtype</code> tells you what they were and <code>data</code> holds them converted to <code>f64</code>. If Python needs another type, convert after loading with <code>arr.astype(numpy.float32)</code>.</p>
 
 <h2 id="guide-errors">Bad, short and missing files</h2>
-<p>Every reader takes an <code>ok</code> flag and never stops the program. A missing file, a file that is not <code>.npy</code> at all and a file that was cut off in the middle all clear it, and you get an empty array back. Check <code>ok</code> before you use <code>shape</code> or <code>data</code>.</p>
+<p>Every reader is <code>throws</code>: you never get an empty or half filled array back. A missing file is <code>NotFound</code>, a file that is not <code>.npy</code> at all is <code>npy.bad_magic</code>, an unknown element type is <code>npy.dtype</code>, and a file cut off in the middle is <code>UnexpectedEnd</code> with the code <code>npy.truncated</code> and the byte offset. The file name is in the error's <code>path</code>.</p>
 {{example.npy-errors}}
 <p>An <code>NpyArray</code> owns its two vectors, so call <code>free</code> on arrays you no longer need in a long running program, and <code>matrix.Free</code> on the matrices made from them.</p>
 >>
@@ -54,14 +54,14 @@ doc.NpyArray.data = The elements in row order.
 doc.NpyArray.ndim = The number of dimensions.
 doc.NpyArray.count = The total number of elements.
 doc.NpyArray.free = Frees the memory of the array.
-doc.ReadNpy = Reads the bytes of a <code>.npy</code> file from memory.
-doc.ReadNpyFile = Reads a <code>.npy</code> file.
+doc.ReadNpy = Reads the bytes of a <code>.npy</code> file from memory. Throws on bad magic bytes, an unsupported version or dtype, a broken header or data that ends early.
+doc.ReadNpyFile = Reads a <code>.npy</code> file. Throws <code>NotFound</code> when the file cannot be opened and the errors of <code>ReadNpy</code> otherwise, with the file name in <code>path</code>.
 doc.WriteNpy = Turns the array into <code>.npy</code> bytes.
 doc.WriteNpyFile = Writes the array to a <code>.npy</code> file.
-doc.ToMatrix = Turns a two dimensional array into a matrix; for any other number of dimensions <code>ok</code> becomes false.
+doc.ToMatrix = Turns a one or two dimensional array into a matrix (one dimension gives a single row); throws <code>InvalidArgument</code> for any other number of dimensions.
 doc.FromMatrix = Turns a matrix into a two dimensional array of 64 bit floats.
-doc.NpzList = The names of the arrays in a <code>.npz</code> file.
-doc.NpzRead = Reads the array with the given name out of a <code>.npz</code>; pass the name without <code>.npy</code>, as <code>numpy.savez</code> keys are. Compressed files from <code>savez_compressed</code> work too.
+doc.NpzList = The names of the arrays in a <code>.npz</code> file. Throws when the file cannot be opened or is not a zip archive.
+doc.NpzRead = Reads the array with the given name out of a <code>.npz</code>; pass the name without <code>.npy</code>, as <code>numpy.savez</code> keys are. Compressed files from <code>savez_compressed</code> work too. Throws <code>npy.missing_key</code> when there is no such array.
 doc.NpzWrite = Writes several arrays with their names into one <code>.npz</code> file, uncompressed. <code>keys</code> and <code>arrays</code> go in the same order.
 
 ex.NpyArray = npy-Npy

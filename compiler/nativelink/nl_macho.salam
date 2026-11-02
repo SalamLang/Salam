@@ -1196,8 +1196,17 @@ func mo_count(l &: Nl, t &: Mo, ks: int[]): int:
 end
 
 func mo_write(l &: Nl, t &: Mo, buf: u8*, out: str):
-    rebase := mo_rebase_ops(t)
-    bind := mo_bind_ops(l, t)
+    mut rebase := Vector {} as Vector<u8>
+    mut bind := Vector {} as Vector<u8>
+    if l.mo_chained:
+        rebase = mo_chained_fixups(l, t, buf)
+        if not l.ok:
+            ret
+        end
+    else:
+        rebase = mo_rebase_ops(t)
+        bind = mo_bind_ops(l, t)
+    end
     mut strs := Vector {} as Vector<u8>
     strs.push(32 as u8)
     strs.push(0 as u8)
@@ -1262,7 +1271,7 @@ func mo_write(l &: Nl, t &: Mo, buf: u8*, out: str):
     end
     ex_off := t.le_off + (le.len() as i64)
     mut ex_len := 0
-    if l.shared:
+    if l.shared or l.mo_chained:
         trie := mo_export_trie(l, t)
         ex_len = trie.len()
         each b6 in trie:
@@ -1391,18 +1400,30 @@ func mo_write(l &: Nl, t &: Mo, buf: u8*, out: str):
     end
     mo_seg(h, "__LINKEDIT", t.base + t.d_end + t.dw_vm, align_to(le_size, t.page), t.le_off, le_size, 1, 0, 0)
     ncmd += 1
-    tb_le(h, 0x80000022 as i64, 4)
-    tb_le(h, 48 as i64, 4)
-    tb_le(h, rb_off, 4)
-    tb_le(h, rebase.len() as i64, 4)
-    tb_le(h, bd_off, 4)
-    tb_le(h, bind.len() as i64, 4)
-    repeat 4:
-        tb_le(h, 0 as i64, 4)
+    if l.mo_chained:
+        tb_le(h, 0x80000034 as i64, 4)
+        tb_le(h, 16 as i64, 4)
+        tb_le(h, rb_off, 4)
+        tb_le(h, rebase.len() as i64, 4)
+        tb_le(h, 0x80000033 as i64, 4)
+        tb_le(h, 16 as i64, 4)
+        tb_le(h, ex_off, 4)
+        tb_le(h, ex_len as i64, 4)
+        ncmd += 2
+    else:
+        tb_le(h, 0x80000022 as i64, 4)
+        tb_le(h, 48 as i64, 4)
+        tb_le(h, rb_off, 4)
+        tb_le(h, rebase.len() as i64, 4)
+        tb_le(h, bd_off, 4)
+        tb_le(h, bind.len() as i64, 4)
+        repeat 4:
+            tb_le(h, 0 as i64, 4)
+        end
+        tb_le(h, ex_len > 0 ? ex_off : (0 as i64), 4)
+        tb_le(h, ex_len as i64, 4)
+        ncmd += 1
     end
-    tb_le(h, ex_len > 0 ? ex_off : (0 as i64), 4)
-    tb_le(h, ex_len as i64, 4)
-    ncmd += 1
     tb_le(h, 2 as i64, 4)
     tb_le(h, 24 as i64, 4)
     tb_le(h, sym_off, 4)
@@ -1457,8 +1478,8 @@ func mo_write(l &: Nl, t &: Mo, buf: u8*, out: str):
     tb_le(h, 0x32 as i64, 4)
     tb_le(h, 24 as i64, 4)
     tb_le(h, 1 as i64, 4)
-    tb_le(h, 0x000B0000 as i64, 4)
-    tb_le(h, 0x000B0000 as i64, 4)
+    tb_le(h, l.mo_minos, 4)
+    tb_le(h, l.mo_minos, 4)
     tb_le(h, 0 as i64, 4)
     ncmd += 1
     if not l.shared:

@@ -1,0 +1,850 @@
+package nativegen
+
+const PI_HOT_MAX := 40
+const PI_COLD_MIN := 8
+const PI_MAX_ARGS := 6
+const PI_MAX_BLOCKS := 160
+const PI_MAX_COST := 2000
+const PI_COLD_MAX := 160
+
+pub struct Pi:
+    pub rin: Vector<bool> = Vector {}
+    pub hin: Vector<bool> = Vector {}
+    pub oin: Vector<bool> = Vector {}
+    pub vis: Vector<bool> = Vector {}
+    pub wl: Vector<int> = Vector {}
+    pub succ: Vector<int> = Vector {}
+    pub lv: Vector<int> = Vector {}
+    pub lvs: Vector<bool> = Vector {}
+    pub pre: Vector<int> = Vector {}
+end
+
+func pi_free(p &: Pi):
+    p.rin.free()
+    p.hin.free()
+    p.oin.free()
+    p.vis.free()
+    p.wl.free()
+    p.succ.free()
+    p.lv.free()
+    p.lvs.free()
+    p.pre.free()
+end
+
+func pi_reach(g &: Ng, p &: Pi, start: int, avoid: int, mark &: Vector<bool>):
+    mark.clear()
+    repeat g.b_first.len():
+        mark.push(false)
+    end
+    if start == avoid:
+        ret
+    end
+    mark[start] = true
+    p.wl.clear()
+    p.wl.push(start)
+    until p.wl.len() > 0:
+        b := p.wl.pop()
+        blk_succs(g, b, p.succ)
+        each s in p.succ:
+            if s != avoid and not mark[s]:
+                mark[s] = true
+                p.wl.push(s)
+            end
+        end
+    end
+end
+
+func pi_blk_cost(g &: Ng, b: int): int:
+    mut n := 0
+    mut i := g.b_first[b]
+    until i >= 0:
+        op := g.i_op[i]
+        if op != OP_NOP and op != OP_PHI and op != OP_BR:
+            n += 1
+            if op == OP_CALL:
+                n += 2
+            end
+        end
+        i = g.i_next[i]
+    end
+    ret n
+end
+
+func pi_blk_has(g &: Ng, b: int, op: int): bool:
+    mut i := g.b_first[b]
+    until i >= 0:
+        if g.i_op[i] == op:
+            ret true
+        end
+        i = g.i_next[i]
+    end
+    ret false
+end
+
+func pi_ret_only(g &: Ng, b: int): bool:
+    mut i := g.b_first[b]
+    until i >= 0 and g.i_op[i] == OP_PHI:
+        i = g.i_next[i]
+    end
+    ret i >= 0 and g.i_op[i] == OP_RET
+end
+
+func pi_is_header(g &: Ng, x: int): bool:
+    repeat g.b_npred[x] in q:
+        if dominates(g, x, g.b_pred[g.b_ps[x] + q]):
+            ret true
+        end
+    end
+    ret false
+end
+
+func pi_note(g &: Ng, p &: Pi, v: int):
+    if v < 0:
+        ret
+    end
+    k := g.v_kind[v]
+    mut take := k == VK_ARG
+    if k == VK_INS:
+        d := g.v_def[v]
+        take = d >= 0 and g.i_blk[d] >= 0 and not p.rin[g.i_blk[d]]
+        if take and g.i_op[d] == OP_ADDR:
+            each x0 in p.pre:
+                if x0 == d:
+                    ret
+                end
+            end
+            pi_note(g, p, g.i_a[d])
+            pi_note(g, p, g.i_b[d])
+            p.pre.push(d)
+            ret
+        end
+    end
+    if not take:
+        ret
+    end
+    each x in p.lv:
+        if x == v:
+            ret
+        end
+    end
+    p.lv.push(v)
+    p.lvs.push(false)
+end
+
+func pi_live_at(g &: Ng, p &: Pi, v: int, d: int, s: int): bool:
+    pi_reach(g, p, s, d, p.vis)
+    each b in g.b_rpo:
+        if not p.rin[b]:
+            continue
+        end
+        mut i := g.b_first[b]
+        until i >= 0:
+            if g.i_op[i] == OP_PHI:
+                repeat g.i_pcount[i] in k:
+                    q := g.i_ps[i] + 2 * k
+                    if g.pool[q] == v and p.vis[g.pool[q + 1]]:
+                        ret true
+                    end
+                end
+            else p.vis[b] and uses_val(g, i, v):
+                ret true
+            end
+            i = g.i_next[i]
+        end
+    end
+    ret false
+end
+
+func pi_liveins(g &: Ng, p &: Pi, s: int): bool:
+    p.lv.clear()
+    p.lvs.clear()
+    p.pre.clear()
+    each b in g.b_rpo:
+        if not p.rin[b]:
+            continue
+        end
+        mut i := g.b_first[b]
+        until i >= 0:
+            op := g.i_op[i]
+            m := val_mask(op)
+            if (m & 1) != 0: pi_note(g, p, g.i_a[i]) end
+            if (m & 2) != 0: pi_note(g, p, g.i_b[i]) end
+            if (m & 4) != 0: pi_note(g, p, g.i_c[i]) end
+            if op == OP_CALL:
+                repeat g.i_pcount[i] in k:
+                    pi_note(g, p, g.pool[g.i_ps[i] + 3 * k])
+                end
+            else op == OP_PHI:
+                repeat g.i_pcount[i] in k2:
+                    q := g.i_ps[i] + 2 * k2
+                    if p.rin[g.pool[q + 1]]:
+                        pi_note(g, p, g.pool[q])
+                    end
+                end
+            else op == OP_ALLOCA:
+                ret false
+            end
+            i = g.i_next[i]
+        end
+    end
+    each d in g.b_rpo:
+        if d == s or not p.rin[d] or not p.hin[d] or not dominates(g, d, s):
+            continue
+        end
+        mut j := g.b_first[d]
+        until j >= 0:
+            r := g.i_res[j]
+            if r >= 0 and pi_live_at(g, p, r, d, s):
+                p.lv.push(r)
+                p.lvs.push(true)
+            end
+            j = g.i_next[j]
+        end
+    end
+    if p.lv.len() > PI_MAX_ARGS:
+        ret false
+    end
+    each v in p.lv:
+        t := g.v_ty[v]
+        if t == T_VOID or is_agg(g, t) or is_vec(g, t):
+            ret false
+        end
+    end
+    ret true
+end
+
+func pi_try(g &: Ng, p &: Pi, x: int, s: int, other: int, full: int): int:
+    if g.b_npred[s] != 1 or s == 0:
+        ret 0 - 1
+    end
+    if g.b_first[s] >= 0 and g.i_op[g.b_first[s]] == OP_PHI:
+        ret 0 - 1
+    end
+    pi_reach(g, p, s, 0 - 1, p.rin)
+    pi_reach(g, p, 0, s, p.hin)
+    mut cold := 0
+    mut has_call := false
+    each b in g.b_rpo:
+        if p.rin[b] and not p.hin[b]:
+            cold += pi_blk_cost(g, b)
+            if pi_blk_has(g, b, OP_CALL):
+                has_call = true
+            end
+        end
+    end
+    mut loopcut := false
+    if p.rin[x] and pi_is_header(g, x):
+        pi_reach(g, p, other, 0 - 1, p.oin)
+        loopcut = not p.oin[x]
+    end
+    if not loopcut and not (has_call and not pi_ret_only(g, other)):
+        ret 0 - 1
+    end
+    if cold < PI_COLD_MIN or cold > PI_COLD_MAX:
+        ret 0 - 1
+    end
+    mut hot := 4
+    each b2 in g.b_rpo:
+        if p.hin[b2]:
+            hot += pi_blk_cost(g, b2)
+        end
+    end
+    if hot > PI_HOT_MAX or hot >= full:
+        if g.inl_trace:
+            printerrln "hotpath: " + tab_str(g.syms, g.f_sym) + " cut b" + s + " hot " + hot + " cold " + cold + " full " + full
+        end
+        ret 0 - 1
+    end
+    ret hot
+end
+
+func pi_find(g &: Ng, p &: Pi, full: int): int:
+    mut best := 0 - 1
+    mut best_hot := 0
+    each x in g.b_rpo:
+        t := g.b_last[x]
+        if t < 0 or g.i_op[t] != OP_CBR or g.i_b[t] == g.i_c[t]:
+            continue
+        end
+        repeat 2 in k:
+            s := k == 0 ? g.i_b[t] : g.i_c[t]
+            other := k == 0 ? g.i_c[t] : g.i_b[t]
+            h := pi_try(g, p, x, s, other, full)
+            if h >= 0 and (best < 0 or h < best_hot):
+                best = s
+                best_hot = h
+            end
+        end
+    end
+    ret best
+end
+
+func pi_fn_ok(g &: Ng, full: int): bool:
+    if g.off_hotpath or g.dbg_on or g.f_noinline or g.f_always or g.f_noret or g.f_sret:
+        ret false
+    end
+    if full <= PI_HOT_MAX or full > PI_MAX_COST or g.b_rpo.len() > PI_MAX_BLOCKS:
+        ret false
+    end
+    if g.f_ret != T_VOID and (is_agg(g, g.f_ret) or is_vec(g, g.f_ret)):
+        ret false
+    end
+    each fl in g.f_argf:
+        if (fl & IF_BYVAL) != 0:
+            ret false
+        end
+    end
+    ret not calls_self(g)
+end
+
+func ic_extra(g &: Ng):
+    g.ic.e_cent.push(0 - 1)
+    g.ic.e_csym.push(0 - 1)
+    g.ic.e_lv0.push(g.ic.lv.len())
+    g.ic.e_nlv.push(0)
+    g.ic.e_cret.push(T_VOID)
+    g.ic.e_done.push(false)
+end
+
+func pi_cval(g &: Ng, kind: int, ty: int, d: int): int:
+    nv := g.ic.vk.len()
+    g.ic.vk.push(kind)
+    g.ic.vt.push(ty)
+    g.ic.vi.push(0 as i64)
+    g.ic.vd.push(d)
+    ret nv
+end
+
+func pi_push_ins(g &: Ng, op: int, ty: int, blk: int, a: int, res: int, ps: int, pc: int):
+    g.ic.op.push(op)
+    g.ic.dbg.push(0 - 1)
+    g.ic.ty.push(ty)
+    g.ic.x.push(0 - 1)
+    g.ic.d.push(0 as i64)
+    g.ic.f.push(0)
+    g.ic.blk.push(blk)
+    g.ic.a.push(a)
+    g.ic.b.push(0 - 1)
+    g.ic.c.push(0 - 1)
+    g.ic.res.push(res)
+    g.ic.ps.push(ps)
+    g.ic.pcount.push(pc)
+end
+
+func pi_copy_ins(g &: Ng, j: int, bk: int, redir: int, nb: int, bidx &: Vector<int>, v0: int, p0: int, imap &: Vector<int>):
+    op := g.i_op[j]
+    g.ic.op.push(op)
+    g.ic.dbg.push(g.i_dbg[j])
+    g.ic.ty.push(g.i_ty[j])
+    g.ic.x.push(g.i_x[j])
+    g.ic.d.push(g.i_d[j])
+    g.ic.f.push(g.i_f[j])
+    g.ic.blk.push(bk)
+    m := val_mask(op)
+    mut va := g.i_a[j]
+    mut vb := g.i_b[j]
+    mut vc := g.i_c[j]
+    if (m & 1) != 0:
+        va = cache_val(g, va, v0)
+    end
+    if (m & 2) != 0:
+        vb = cache_val(g, vb, v0)
+    else op == OP_BR or op == OP_CBR:
+        vb = vb == redir ? nb : bidx[vb]
+    end
+    if (m & 4) != 0:
+        vc = cache_val(g, vc, v0)
+    else op == OP_CBR:
+        vc = vc == redir ? nb : bidx[vc]
+    end
+    g.ic.a.push(va)
+    g.ic.b.push(vb)
+    g.ic.c.push(vc)
+    r := g.i_res[j]
+    if r >= 0:
+        cr := cache_val(g, r, v0)
+        g.ic.vd[v0 + cr] = imap[j]
+        g.ic.res.push(cr)
+    else:
+        g.ic.res.push(0 - 1)
+    end
+    g.ic.ps.push(g.ic.pool.len() - p0)
+    if op == OP_CALL:
+        g.ic.pcount.push(g.i_pcount[j])
+        repeat g.i_pcount[j] in k2:
+            q := g.i_ps[j] + 3 * k2
+            g.ic.pool.push(cache_val(g, g.pool[q], v0))
+            g.ic.pool.push(g.pool[q + 1])
+            g.ic.pool.push(g.pool[q + 2])
+        end
+    else op == OP_PHI:
+        mut kept := 0
+        repeat g.i_pcount[j] in k3:
+            q2 := g.i_ps[j] + 2 * k3
+            pb := g.pool[q2 + 1]
+            if bidx[pb] >= 0:
+                g.ic.pool.push(cache_val(g, g.pool[q2], v0))
+                g.ic.pool.push(bidx[pb])
+                kept += 1
+            end
+        end
+        g.ic.pcount.push(kept)
+    else:
+        g.ic.pcount.push(g.i_pcount[j])
+    end
+end
+
+func pi_store(g &: Ng, blks &: Vector<int>, bidx &: Vector<int>, redir: int, lv &: Vector<int>, pre &: Vector<int>, csym: int, cost: int): int:
+    g.ic.vmap.clear()
+    repeat g.v_kind.len():
+        g.ic.vmap.push(0 - 1)
+    end
+    v0 := g.ic.vk.len()
+    i0 := g.ic.op.len()
+    p0 := g.ic.pool.len()
+    repeat g.f_args.len() in k:
+        _a := cache_val(g, g.f_args[k], v0)
+    end
+    mut imap := Vector {} as Vector<int>
+    repeat g.i_op.len():
+        imap.push(0 - 1)
+    end
+    mut n := 0
+    each pi0 in pre:
+        imap[pi0] = n
+        n += 1
+    end
+    each b in blks:
+        mut i := g.b_first[b]
+        until i >= 0:
+            imap[i] = n
+            n += 1
+            i = g.i_next[i]
+        end
+    end
+    nb := blks.len()
+    each pj in pre:
+        pi_copy_ins(g, pj, 0, redir, nb, bidx, v0, p0, imap)
+    end
+    each b2 in blks:
+        mut j := g.b_first[b2]
+        until j >= 0:
+            pi_copy_ins(g, j, bidx[b2], redir, nb, bidx, v0, p0, imap)
+            j = g.i_next[j]
+        end
+    end
+    imap.free()
+    mut nblk := nb
+    if csym >= 0:
+        nblk += 1
+        cv := pi_cval(g, VK_GLB, T_PTR, csym) - v0
+        mut res := 0 - 1
+        if g.f_ret != T_VOID:
+            res = pi_cval(g, VK_INS, g.f_ret, n) - v0
+        end
+        pi_push_ins(g, OP_CALL, g.f_ret, nb, cv, res, g.ic.pool.len() - p0, lv.len())
+        each v in lv:
+            g.ic.pool.push(cache_val(g, v, v0))
+            g.ic.pool.push(0)
+            g.ic.pool.push(0 - 1)
+        end
+        pi_push_ins(g, OP_RET, g.f_ret, nb, res, 0 - 1, g.ic.pool.len() - p0, 0)
+    end
+    e := g.ic.e_v0.len()
+    g.ic.e_ev0.push(g.ic.ev_anchor.len())
+    g.ic.e_evcount.push(0)
+    g.ic.e_v0.push(v0)
+    g.ic.e_nv.push(g.ic.vk.len() - v0)
+    g.ic.e_i0.push(i0)
+    g.ic.e_ni.push(g.ic.op.len() - i0)
+    g.ic.e_p0.push(p0)
+    g.ic.e_nb.push(nblk)
+    g.ic.e_cost.push(cost)
+    g.ic.e_need.push(0)
+    g.ic.e_na.push(g.f_args.len())
+    g.ic.e_am0.push(g.ic.am.len())
+    each av in g.f_args:
+        g.ic.am.push(arg_memops(g, av))
+    end
+    g.ic.e_rec.push(false)
+    ic_extra(g)
+    ret e
+end
+
+func pi_cache(g &: Ng, full: int):
+    if not pi_fn_ok(g, full):
+        ret
+    end
+    build_cfg(g)
+    build_dom(g)
+    mut p := Pi {}
+    s := pi_find(g, p, full)
+    if s < 0:
+        pi_free(p)
+        ret
+    end
+    pi_reach(g, p, s, 0 - 1, p.rin)
+    pi_reach(g, p, 0, s, p.hin)
+    if not pi_liveins(g, p, s):
+        if g.inl_trace:
+            printerrln "hotpath: " + tab_str(g.syms, g.f_sym) + " live-ins"
+        end
+        pi_free(p)
+        ret
+    end
+    mut hot := 4
+    mut cold := 0
+    mut hb := Vector {} as Vector<int>
+    mut cb := Vector {} as Vector<int>
+    mut hidx := Vector {} as Vector<int>
+    mut cidx := Vector {} as Vector<int>
+    repeat g.b_first.len():
+        hidx.push(0 - 1)
+        cidx.push(0 - 1)
+    end
+    cidx[s] = 0
+    cb.push(s)
+    each b in g.b_rpo:
+        if p.hin[b]:
+            hidx[b] = hb.len()
+            hb.push(b)
+            hot += pi_blk_cost(g, b)
+        end
+        if p.rin[b]:
+            cold += pi_blk_cost(g, b)
+            if b != s:
+                cidx[b] = cb.len()
+                cb.push(b)
+            end
+        end
+    end
+    csym := sym_named(g, tab_str(g.syms, g.f_sym) + ".cold")
+    g.sy_kind[csym] = SY_FUNC
+    g.sy_local[csym] = true
+    mut none := Vector {} as Vector<int>
+    ce := pi_store(g, cb, cidx, 0 - 1, none, p.pre, 0 - 1, cold)
+    g.ic.e_lv0[ce] = g.ic.lv.len()
+    g.ic.e_nlv[ce] = p.lv.len()
+    g.ic.e_cret[ce] = g.f_ret
+    repeat p.lv.len() in k:
+        v := p.lv[k]
+        g.ic.lv.push(g.ic.vmap[v])
+        g.ic.lvs.push(p.lvs[k])
+        g.ic.lvt.push(g.v_ty[v])
+        mut fl := 0
+        if g.v_kind[v] == VK_ARG:
+            ai := g.v_i[v] as int
+            if ai >= 0 and ai < g.f_argf.len():
+                fl = g.f_argf[ai] & IF_NONNULL
+            end
+        end
+        g.ic.lvf.push(fl)
+    end
+    he := pi_store(g, hb, hidx, s, p.lv, none, csym, hot)
+    g.ic.e_cent[he] = ce
+    g.ic.e_csym[he] = csym
+    sy := g.f_sym
+    until g.ic.pent.len() <= sy:
+        g.ic.pent.push(0 - 1)
+    end
+    g.ic.pent[sy] = he
+    g.ic.npart += 1
+    if g.inl_trace:
+        printerrln "hotpath: " + tab_str(g.syms, sy) + " hot " + hot + " cold " + cold + " args " + p.lv.len()
+    end
+    hb.free()
+    cb.free()
+    hidx.free()
+    cidx.free()
+    none.free()
+    pi_free(p)
+end
+
+func pi_lookup(g &: Ng, sym: int): int:
+    if sym < 0 or sym >= g.ic.pent.len():
+        ret 0 - 1
+    end
+    ret g.ic.pent[sym]
+end
+
+func pi_mark_loops(g &: Ng):
+    nb := g.b_first.len()
+    g.pi_loopb.clear()
+    repeat nb:
+        g.pi_loopb.push(false)
+    end
+    build_dom(g)
+    mut l := Lp {}
+    repeat nb:
+        l.inl.push(0)
+    end
+    lp_find(g, l)
+    mut mark := 9100000
+    each h in l.head:
+        mark += 1
+        _n := lp_body(g, l, h, mark)
+    end
+    repeat nb in b:
+        if l.inl[b] != 0:
+            g.pi_loopb[b] = true
+        end
+    end
+    l.head.free()
+    l.size.free()
+    l.inl.free()
+    l.wl.free()
+    l.succ.free()
+end
+
+func pi_site(g &: Ng, i: int, grown: int): int:
+    if g.off_hotpath or g.ic.npart == 0:
+        ret 0 - 1
+    end
+    cv := g.i_a[i]
+    if g.v_kind[cv] != VK_GLB or g.v_i[cv] != (0 as i64):
+        ret 0 - 1
+    end
+    s := g.v_def[cv]
+    if s == g.f_sym:
+        ret 0 - 1
+    end
+    e := pi_lookup(g, s)
+    if e < 0:
+        ret 0 - 1
+    end
+    if grown + g.ic.e_cost[e] > INL_GROW:
+        ret 0 - 1
+    end
+    if (g.i_f[i] & IF_VARARG) != 0 or g.i_pcount[i] != g.ic.e_na[e]:
+        ret 0 - 1
+    end
+    repeat g.i_pcount[i] in k:
+        if (g.pool[g.i_ps[i] + 3 * k + 1] & IF_BYVAL) != 0:
+            ret 0 - 1
+        end
+    end
+    if g.inl_trace:
+        printerrln "inline: hotpath " + tab_str(g.syms, s) + " in " + tab_str(g.syms, g.f_sym)
+    end
+    ret e
+end
+
+func pi_used(g &: Ng, e: int):
+    if g.ic.e_cent[e] >= 0 and not g.ic.e_done[e]:
+        g.ic.e_done[e] = true
+        g.ic.cold_q.push(e)
+    end
+end
+
+func pi_map(g &: Ng, cv: int, v0: int): int:
+    if cv < 0:
+        ret cv
+    end
+    if g.ic.vmap[cv] >= 0:
+        ret g.ic.vmap[cv]
+    end
+    k := g.ic.vk[v0 + cv]
+    mut nv := 0 - 1
+    if k == VK_ARG:
+        nv = new_val(g, VK_UNDEF, g.ic.vt[v0 + cv], 0 as i64)
+    else:
+        nv = new_val(g, k, g.ic.vt[v0 + cv], g.ic.vi[v0 + cv])
+        if k == VK_GLB:
+            g.v_def[nv] = g.ic.vd[v0 + cv]
+        end
+    end
+    g.ic.vmap[cv] = nv
+    ret nv
+end
+
+func pi_repl_use(g &: Ng, i: int, old: int, nw: int):
+    m := val_mask(g.i_op[i])
+    if (m & 1) != 0 and g.i_a[i] == old: g.i_a[i] = nw end
+    if (m & 2) != 0 and g.i_b[i] == old: g.i_b[i] = nw end
+    if (m & 4) != 0 and g.i_c[i] == old: g.i_c[i] = nw end
+    if g.i_op[i] == OP_CALL:
+        repeat g.i_pcount[i] in k:
+            q := g.i_ps[i] + 3 * k
+            if g.pool[q] == old:
+                g.pool[q] = nw
+            end
+        end
+    end
+end
+
+func pi_slot_load(g &: Ng, at: int, slot: int, t: int): int:
+    ld := ins_new(g, OP_LOAD, t)
+    g.i_a[ld] = slot
+    lv := new_res(g, ld)
+    ins_before(g, at, ld)
+    ret lv
+end
+
+func pi_demote(g &: Ng, nv: int, slot: int, nb0: int):
+    t := g.v_ty[nv]
+    d := g.v_def[nv]
+    mut at := g.i_next[d]
+    until at >= 0 and g.i_op[at] == OP_PHI:
+        at = g.i_next[at]
+    end
+    st := ins_new(g, OP_STORE, T_VOID)
+    g.i_a[st] = nv
+    g.i_b[st] = slot
+    if at >= 0:
+        ins_before(g, at, st)
+    else:
+        ins_append(g, g.i_blk[d], st)
+    end
+    nb := g.b_first.len()
+    repeat nb - nb0 in bk:
+        b := nb0 + bk
+        mut i := g.b_first[b]
+        until i >= 0:
+            nx := g.i_next[i]
+            if i != st:
+                if g.i_op[i] == OP_PHI:
+                    repeat g.i_pcount[i] in k:
+                        q := g.i_ps[i] + 2 * k
+                        if g.pool[q] == nv:
+                            pb := g.pool[q + 1]
+                            g.pool[q] = pi_slot_load(g, g.b_last[pb], slot, t)
+                        end
+                    end
+                else uses_val(g, i, nv):
+                    pi_repl_use(g, i, nv, pi_slot_load(g, i, slot, t))
+                end
+            end
+            i = nx
+        end
+    end
+end
+
+func pi_compile_cold(g &: Ng, he: int):
+    ce := g.ic.e_cent[he]
+    s := g.ic.e_csym[he]
+    v0 := g.ic.e_v0[ce]
+    i0 := g.ic.e_i0[ce]
+    ni := g.ic.e_ni[ce]
+    p0 := g.ic.e_p0[ce]
+    nb := g.ic.e_nb[ce]
+    fn_reset(g)
+    g.f_sym = s
+    g.f_ret = g.ic.e_cret[ce]
+    g.f_noinline = true
+    g.f_popn = 0
+    g.f_sp = 0 - 1
+    g.cur_dbg = 0 - 1
+    g.sy_def[s] = true
+    g.sy_local[s] = true
+    entry := new_blk(g)
+    g.ic.vmap.clear()
+    repeat g.ic.e_nv[ce]:
+        g.ic.vmap.push(0 - 1)
+    end
+    l0 := g.ic.e_lv0[ce]
+    nl := g.ic.e_nlv[ce]
+    mut slots := Vector {} as Vector<int>
+    repeat nl in k:
+        av := new_val(g, VK_ARG, g.ic.lvt[l0 + k], k as i64)
+        g.f_args.push(av)
+        g.f_argf.push(g.ic.lvf[l0 + k])
+        if g.ic.lvs[l0 + k]:
+            al := ins_new(g, OP_ALLOCA, T_PTR)
+            g.i_x[al] = g.ic.lvt[l0 + k]
+            g.i_d[al] = 1 as i64
+            sl := new_res(g, al)
+            ins_append(g, entry, al)
+            st := ins_new(g, OP_STORE, T_VOID)
+            g.i_a[st] = av
+            g.i_b[st] = sl
+            ins_append(g, entry, st)
+            slots.push(sl)
+        else:
+            g.ic.vmap[g.ic.lv[l0 + k]] = av
+            slots.push(0 - 1)
+        end
+    end
+    nb0 := g.b_first.len()
+    g.ic.bmap.clear()
+    repeat nb:
+        g.ic.bmap.push(new_blk(g))
+    end
+    br := ins_new(g, OP_BR, T_VOID)
+    g.i_b[br] = g.ic.bmap[0]
+    ins_append(g, entry, br)
+    repeat ni in k2:
+        ci := i0 + k2
+        op := g.ic.op[ci]
+        ni2 := ins_new(g, op, g.ic.ty[ci])
+        g.i_x[ni2] = g.ic.x[ci]
+        g.i_d[ni2] = g.ic.d[ci]
+        g.i_f[ni2] = g.ic.f[ci]
+        m := val_mask(op)
+        if (m & 1) != 0:
+            g.i_a[ni2] = pi_map(g, g.ic.a[ci], v0)
+        else:
+            g.i_a[ni2] = g.ic.a[ci]
+        end
+        if (m & 2) != 0:
+            g.i_b[ni2] = pi_map(g, g.ic.b[ci], v0)
+        else op == OP_BR or op == OP_CBR:
+            g.i_b[ni2] = g.ic.bmap[g.ic.b[ci]]
+        else:
+            g.i_b[ni2] = g.ic.b[ci]
+        end
+        if (m & 4) != 0:
+            g.i_c[ni2] = pi_map(g, g.ic.c[ci], v0)
+        else op == OP_CBR:
+            g.i_c[ni2] = g.ic.bmap[g.ic.c[ci]]
+        else:
+            g.i_c[ni2] = g.ic.c[ci]
+        end
+        pcount := g.ic.pcount[ci]
+        if op == OP_CALL:
+            g.i_ps[ni2] = g.pool.len()
+            g.i_pcount[ni2] = pcount
+            repeat pcount in q:
+                pq := p0 + g.ic.ps[ci] + 3 * q
+                g.pool.push(pi_map(g, g.ic.pool[pq], v0))
+                g.pool.push(g.ic.pool[pq + 1])
+                g.pool.push(g.ic.pool[pq + 2])
+            end
+        else op == OP_PHI:
+            g.i_ps[ni2] = g.pool.len()
+            g.i_pcount[ni2] = pcount
+            repeat pcount in q2:
+                pq2 := p0 + g.ic.ps[ci] + 2 * q2
+                g.pool.push(pi_map(g, g.ic.pool[pq2], v0))
+                g.pool.push(g.ic.bmap[g.ic.pool[pq2 + 1]])
+            end
+        end
+        cr := g.ic.res[ci]
+        if cr >= 0:
+            nv := pi_map(g, cr, v0)
+            g.v_kind[nv] = VK_INS
+            g.i_res[ni2] = nv
+            g.v_def[nv] = ni2
+        end
+        ins_append(g, g.ic.bmap[g.ic.blk[ci]], ni2)
+    end
+    repeat nl in k3:
+        if slots[k3] >= 0:
+            nv2 := g.ic.vmap[g.ic.lv[l0 + k3]]
+            if nv2 >= 0 and g.v_kind[nv2] == VK_INS:
+                pi_demote(g, nv2, slots[k3], nb0)
+            end
+        end
+    end
+    slots.free()
+    if g.inl_trace:
+        printerrln "hotpath: compile " + tab_str(g.syms, s)
+    end
+    CompileFunction(g)
+end
+
+func pi_flush(g &: Ng):
+    until g.ok and g.ic.cold_q.len() > 0:
+        he := g.ic.cold_q.pop()
+        pi_compile_cold(g, he)
+    end
+end

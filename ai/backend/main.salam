@@ -107,6 +107,7 @@ func main:
     engine_url := str.TrimSuffix(env_or("AI_ENGINE_URL", "http://127.0.0.1:4096"), "/")
     aiengine.Configure(engine_url, engine_auth, env_or("AI_ENGINE_AGENT", "salam"), env_or("AI_ENGINE_AGENT_DESKTOP", "salam-agent"))
     aiengine.SetFallbacks(os.Env("AI_ENGINE_FALLBACK_MODELS"))
+    aiengine.SetEfforts(os.Env("AI_ENGINE_EFFORT_MODELS"), os.Env("AI_ENGINE_EFFORT_VARIANTS"))
     aiengine.SetPolicy(aipolicy.System(), env_or("AI_ENGINE_AGENT_RAW", "raw"))
     aifiles.Configure(env_or("AI_UPLOAD_DIR", "/data/uploads"))
     aiguest.Configure(env_or("AI_GUEST_ORIGINS", "https://www.salamlang.ir,https://salamlang.ir,https://salamlang.github.io"), env_or("AI_GUEST_LIMIT", "15").to_int(), env_or("AI_GUEST_PER_IP", "6").to_int(), env_or("AI_GUEST_MESSAGES_PER_IP", "60").to_int())
@@ -182,6 +183,7 @@ func main:
     router.Get(r, "/chats/:id", get_chat)
     router.Get(r, "/capabilities", capabilities)
     router.Get(r, "/chats/:id/files/:fid", get_file)
+    router.Get(r, "/chats/:id/calls/:cid/image", get_call_image)
     router.Patch(r, "/chats/:id", rename_chat)
     router.Delete(r, "/chats/:id", delete_chat)
     router.Post(r, "/chats/:id/messages", send_message)
@@ -202,7 +204,7 @@ func main:
     aitelegram.Routes(r)
     aicloud.Routes(r)
     ailogin.Routes(r)
-    each path in ["/auth/register", "/auth/login", "/auth/logout", "/me", "/chats", "/chats/:id", "/chats/:id/messages", "/chats/:id/messages/:mid", "/chats/:id/stop", "/chats/:id/queue", "/chats/:id/queue/:qid", "/chats/:id/queue/:qid/now", "/capabilities", "/chats/:id/files/:fid"]:
+    each path in ["/auth/register", "/auth/login", "/auth/logout", "/me", "/chats", "/chats/:id", "/chats/:id/messages", "/chats/:id/messages/:mid", "/chats/:id/stop", "/chats/:id/queue", "/chats/:id/queue/:qid", "/chats/:id/queue/:qid/now", "/capabilities", "/chats/:id/files/:fid", "/chats/:id/calls/:cid/image"]:
         router.Options(r, path, preflight)
     end
     mut s := http.NewServer(port)
@@ -452,6 +454,13 @@ func message_json(id: str, role: str, body: str, status: str, created: str, acti
     ret json.Object(m)
 end
 
+func with_effort(obj: str, effort: str): str:
+    if effort.len() == 0 or effort == "medium" or not str.EndsWith(obj, "}"):
+        ret obj
+    end
+    ret obj.substr(0, obj.len() - 1) + `, "effort": ` + json.Str(effort) + "}"
+end
+
 func with_files(obj: str, files: str): str:
     if files.len() == 0 or not str.EndsWith(obj, "}"):
         ret obj
@@ -630,14 +639,14 @@ func get_chat(ctx: i64):
         head = chat_json(aistore.Text(crow, 0), aistore.Text(crow, 1), aistore.Text(crow, 2), aistore.Text(crow, 3), aistore.Text(crow, 4), aistore.Text(crow, 5))
     end
     aistore.Finish(crow)
-    mut rows := aistore.Stmt("SELECT id, role, body, status, created, COALESCE(activity, ''), ms FROM messages WHERE chat_id = ?1 ORDER BY id", one(id))
+    mut rows := aistore.Stmt("SELECT id, role, body, status, created, COALESCE(activity, ''), ms, effort FROM messages WHERE chat_id = ?1 ORDER BY id", one(id))
     until aistore.Next(rows):
         mid := aistore.Text(rows, 0)
-        items.push(with_files(message_json(mid, aistore.Text(rows, 1), aistore.Text(rows, 2), aistore.Text(rows, 3), aistore.Text(rows, 4), aistore.Text(rows, 5), aistore.Text(rows, 6)), attached.has(mid) ? attached.get(mid) : ""))
+        items.push(with_files(with_effort(message_json(mid, aistore.Text(rows, 1), aistore.Text(rows, 2), aistore.Text(rows, 3), aistore.Text(rows, 4), aistore.Text(rows, 5), aistore.Text(rows, 6)), aistore.Text(rows, 7)), attached.has(mid) ? attached.get(mid) : ""))
     end
     aistore.Finish(rows)
     mut calls := Vector {} as Vector<str>
-    mut crows := aistore.Stmt("SELECT id, message_id, tool, kind, summary, detail, lang, outside, cwd, output, state, created, finished FROM bridge_calls WHERE chat_id = ?1 ORDER BY seq", one(id))
+    mut crows := aistore.Stmt("SELECT id, message_id, tool, kind, summary, detail, lang, outside, cwd, output, state, created, finished, IF(COALESCE(image, '') = '', 0, 1) FROM bridge_calls WHERE chat_id = ?1 ORDER BY seq", one(id))
     until aistore.Next(crows):
         mut cm := Vector {} as Vector<str>
         cm.push(json.Member("call_id", aistore.Text(crows, 0)))
@@ -654,6 +663,9 @@ func get_chat(ctx: i64):
         cm.push(json.Member("state", aistore.Text(crows, 10)))
         cm.push(json.MemberRaw("created", aistore.Text(crows, 11)))
         cm.push(json.MemberRaw("finished", aistore.Text(crows, 12)))
+        if aistore.Text(crows, 13) == "1":
+            cm.push(json.MemberBool("image", true))
+        end
         calls.push(json.Object(cm))
     end
     aistore.Finish(crows)
@@ -756,6 +768,7 @@ func launch_turn(uid: i64, id: str, sid_in: str, text: str, files &: Vector<aifi
     mut sid := sid_in
     sync_pending(id, sid)
     t := i64s(aistore.Now())
+    effort := aiengine.Effort(json.Get(body, "effort"))
     aistore.Lock()
     pending := aistore.OneText("SELECT COUNT(*) FROM messages WHERE chat_id = ?1 AND status = 'pending'", one(id))
     queued := qid.len() > 0 ? "0" : aistore.OneText("SELECT COUNT(*) FROM chat_queue WHERE chat_id = ?1", one(id))
@@ -821,7 +834,7 @@ func launch_turn(uid: i64, id: str, sid_in: str, text: str, files &: Vector<aifi
         message = "هنوز پاسخ پیام قبلی کامل نشده است."
         ret false
     end
-    _a := aistore.Run("INSERT INTO messages (chat_id, role, body, status, created) VALUES (?1, 'user', ?2, 'done', ?3)", three(id, text, t))
+    _a := aistore.Run("INSERT INTO messages (chat_id, role, body, status, created, effort) VALUES (?1, 'user', ?2, 'done', ?3, ?4)", four(id, text, t, effort))
     umid := aistore.LastId()
     _b := aistore.Run("INSERT INTO messages (chat_id, role, body, status, created, via_queue) VALUES (?1, 'assistant', '', 'pending', ?2, ?3)", three(id, t, qid.len() > 0 ? "1" : "0"))
     amid := aistore.LastId()
@@ -848,6 +861,7 @@ func launch_turn(uid: i64, id: str, sid_in: str, text: str, files &: Vector<aifi
     ailive.Begin(sid)
     forget_check(sid)
     aiturn.Relax(sid, free)
+    aiengine.SetEffort(sid, effort)
     mut sent := false
     if device != "0" and token.len() > 0:
         preamble := desktop_preamble(uid, device, workspace, token) + project_block(id, body, fresh) + prompt
@@ -869,7 +883,7 @@ func launch_turn(uid: i64, id: str, sid_in: str, text: str, files &: Vector<aifi
         ret false
     end
     mut m := Vector {} as Vector<str>
-    m.push(json.MemberRaw("user", with_files(message_json(umid, "user", text, "done", t, "[]", "0"), files.len() > 0 ? aifiles.Metas(files) : "")))
+    m.push(json.MemberRaw("user", with_files(with_effort(message_json(umid, "user", text, "done", t, "[]", "0"), effort), files.len() > 0 ? aifiles.Metas(files) : "")))
     m.push(json.MemberRaw("assistant", message_json(amid, "assistant", "", "pending", t, "[]", "0")))
     m.push(json.Member("title", new_title))
     out = json.Object(m)
@@ -879,14 +893,16 @@ end
 func queue_json(id: str): str:
     mut items := Vector {} as Vector<str>
     aistore.Lock()
-    mut rows := aistore.Stmt("SELECT id, body, created FROM chat_queue WHERE chat_id = ?1 ORDER BY pos, id", one(id))
+    mut rows := aistore.Stmt("SELECT id, body, created, effort FROM chat_queue WHERE chat_id = ?1 ORDER BY pos, id", one(id))
     mut ids := Vector {} as Vector<str>
     mut texts := Vector {} as Vector<str>
     mut stamps := Vector {} as Vector<str>
+    mut efforts := Vector {} as Vector<str>
     until aistore.Next(rows):
         ids.push(aistore.Text(rows, 0))
         texts.push(aistore.Text(rows, 1))
         stamps.push(aistore.Text(rows, 2))
+        efforts.push(aistore.Text(rows, 3))
     end
     aistore.Finish(rows)
     aistore.Unlock()
@@ -897,6 +913,9 @@ func queue_json(id: str): str:
         m.push(json.Member("text", texts.get(i)))
         m.push(json.MemberRaw("created", stamps.get(i)))
         m.push(json.MemberRaw("files", aifiles.QueuedMetas(ids.get(i))))
+        if efforts.get(i).len() > 0 and efforts.get(i) != "medium":
+            m.push(json.Member("effort", efforts.get(i)))
+        end
         items.push(json.Object(m))
         i += 1
     end
@@ -967,8 +986,9 @@ func enqueue_message(ctx: i64):
     a.push(aiweb.UiLangNote(ctx))
     a.push(str.StartsWith(project, "{") ? project : "")
     a.push(i64s(aistore.Now()))
+    a.push(aiengine.Effort(json.Get(body, "effort")))
     aistore.Lock()
-    ok := aistore.Run("INSERT INTO chat_queue (chat_id, user_id, body, ui_note, project, created) VALUES (?1, ?2, ?3, ?4, ?5, ?6)", a)
+    ok := aistore.Run("INSERT INTO chat_queue (chat_id, user_id, body, ui_note, project, created, effort) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)", a)
     qid := aistore.LastId()
     aistore.Unlock()
     if not ok or not aifiles.Persist(qid, files):
@@ -1075,16 +1095,18 @@ func queue_step(id: str, launched &: str): bool:
         created = aistore.Int64(prow, 1)
     end
     aistore.Finish(prow)
-    mut qrow := aistore.Stmt("SELECT id, body, ui_note, project FROM chat_queue WHERE chat_id = ?1 ORDER BY pos, id LIMIT 1", one(id))
+    mut qrow := aistore.Stmt("SELECT id, body, ui_note, project, effort FROM chat_queue WHERE chat_id = ?1 ORDER BY pos, id LIMIT 1", one(id))
     mut qid := ""
     mut text := ""
     mut note := ""
     mut project := ""
+    mut effort := ""
     if aistore.Next(qrow):
         qid = aistore.Text(qrow, 0)
         text = aistore.Text(qrow, 1)
         note = aistore.Text(qrow, 2)
         project = aistore.Text(qrow, 3)
+        effort = aistore.Text(qrow, 4)
     end
     aistore.Finish(qrow)
     aistore.Unlock()
@@ -1101,7 +1123,7 @@ func queue_step(id: str, launched &: str): bool:
     mut status := 0
     mut code := ""
     mut message := ""
-    body := project.len() > 0 ? `{"project": ` + project + "}" : ""
+    body := `{"effort": ` + json.Str(effort) + (project.len() > 0 ? `, "project": ` + project : "") + "}"
     if launch_turn(uid.to_int(), id, sid, text, files, note, body, qid, status, code, message, launched):
         ret true
     end
@@ -1139,13 +1161,40 @@ func get_file(ctx: i64):
     reply(ctx, 200, found)
 end
 
+func get_call_image(ctx: i64):
+    uid := need_user(ctx)
+    if uid == 0:
+        ret
+    end
+    id := http.Param(ctx, "id")
+    if own_chat(uid, id).len() == 0:
+        fail(ctx, 404, "not_found", "این گفت‌وگو پیدا نشد.")
+        ret
+    end
+    mut data := ""
+    mut mime := ""
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT COALESCE(image, ''), image_mime FROM bridge_calls WHERE id = ?1 AND chat_id = ?2", two(http.Param(ctx, "cid"), id))
+    if aistore.Next(rows):
+        data = aistore.Text(rows, 0)
+        mime = aistore.Text(rows, 1)
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    if data.len() == 0:
+        fail(ctx, 404, "not_found", "این تصویر پیدا نشد.")
+        ret
+    end
+    reply(ctx, 200, "{" + json.Member("mime", mime.len() > 0 ? mime : "image/jpeg") + ", " + json.Member("data", data) + "}")
+end
+
 func desktop_preamble(uid: i64, device: str, workspace: str, token: str): str:
     os_name := aibridge.DeviceOs(uid, device)
     mut state := "connected"
     if not aibridge.Online(device):
         state = "not connected right now"
     end
-    ret "<desktop_session>\nsession: " + token + "\nworkspace: " + workspace + "\nos: " + os_name + "\napp: " + state + "\nYou are working on this user's computer through Salam Agent, the desktop app on their computer. Use the desktop tools (shell, read_file, write_file, edit_file, list_dir, glob, grep, docker, wsl, run_tests) and pass the session value above in every call. Paths are relative to the workspace. Look before you change things, keep edits small, run the tests after changing code, and tell the user what you did.\nThe project's own instructions, from its AGENTS.md or AGENT.md, come in a project_instructions block: follow them unless they conflict with the Salam policy. The project's memory lives in .salam-agent/ in the workspace: .salam-agent/index.md lists every memory with a link to its file under .salam-agent/memory/, and it comes in a project_memory block. Read a memory file with read_file when its title looks relevant. Save what will help in a later session, such as how to build and test, the layout, decisions, the user's preferences and the traps you hit, with save_memory (reuse a slug to update a memory), and use forget_memory for what turned out wrong. If neither block has appeared in this conversation, read AGENTS.md or AGENT.md and .salam-agent/index.md yourself when they exist.\n</desktop_session>\n\n"
+    ret "<desktop_session>\nsession: " + token + "\nworkspace: " + workspace + "\nos: " + os_name + "\napp: " + state + "\nYou are working on this user's computer through Salam Agent, the desktop app on their computer. Use the desktop tools (shell, read_file, write_file, edit_file, list_dir, glob, grep, docker, wsl, run_tests, browser) and pass the session value above in every call. After changing a web page or frontend, open it with browser, look at the screenshot and the console errors, and fix what is wrong before you say it is done. Paths are relative to the workspace. Look before you change things, keep edits small, run the tests after changing code, and tell the user what you did.\nThe project's own instructions, from its AGENTS.md or AGENT.md, come in a project_instructions block: follow them unless they conflict with the Salam policy. The project's memory lives in .salam-agent/ in the workspace: .salam-agent/index.md lists every memory with a link to its file under .salam-agent/memory/, and it comes in a project_memory block. Read a memory file with read_file when its title looks relevant. Save what will help in a later session, such as how to build and test, the layout, decisions, the user's preferences and the traps you hit, with save_memory (reuse a slug to update a memory), and use forget_memory for what turned out wrong. If neither block has appeared in this conversation, read AGENTS.md or AGENT.md and .salam-agent/index.md yourself when they exist.\n</desktop_session>\n\n"
 end
 
 func project_block(chat: str, body: str, fresh: bool): str:

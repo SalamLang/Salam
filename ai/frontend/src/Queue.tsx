@@ -1,6 +1,7 @@
 import type { QueueItem } from "./api";
 import { IconClose, IconPlay } from "./icons";
 import { fmtNum } from "./format";
+import { EffortBadge } from "./effort";
 import { t } from "./i18n";
 
 type Props = {
@@ -30,6 +31,7 @@ export function QueuePanel({ items, working, onRun, onRemove, onClear }: Props) 
             <span className="queue-text" dir="auto">
               {q.text || q.files.map((f) => f.name).join("، ")}
               {q.text && q.files.length > 0 && <em className="queue-files"> +{fmtNum(q.files.length)}</em>}
+              <EffortBadge effort={q.effort} />
             </span>
             <button type="button" className="queue-btn run" onClick={() => onRun(q.id)} title={t("اجرای فوری: پاسخ فعلی متوقف می‌شود و این پیام همین الان اجرا می‌شود", "Run now: stops the current answer and runs this message immediately")} aria-label={t("اجرای فوری", "Run now")}>
               <IconPlay width={15} height={15} />

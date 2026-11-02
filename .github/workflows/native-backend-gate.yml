@@ -24,6 +24,7 @@ jobs:
         tools/bash/backend-sweep.sh
         tools/bash/run-one-build.sh
         tools/bash/native-*.sh
+        tools/bash/package-native.sh
         tools/fuzz/*
         .github/workflows/native-backend-gate.yml
         .github/actions/setup-*
@@ -47,6 +48,9 @@ jobs:
 
       - name: Build the compiler
         run: sh tools/bash/build-selfhost.sh
+
+      - name: Native build time and size against LLVM
+        run: sh tools/bash/native-compile-report.sh ./salam | tee -a "$GITHUB_STEP_SUMMARY"
 
       - name: Encoder output matches GNU as
         run: |
@@ -77,6 +81,24 @@ jobs:
           sh tools/bash/native-shared-lib-check.sh ./salam arm64-apple-macos none
           sh tools/bash/native-shared-lib-check.sh ./salam x86_64-apple-macos11 none
           sh tools/bash/native-shared-lib-check.sh ./salam arm64-apple-macos11 none
+
+      - name: Package a native-built compiler for Linux x64
+        run: |
+          mkdir -p native-pkg
+          SALAM_MUSL_SYSROOT=/tmp/muslcc/sr-x86_64 ./salam build compiler/main.salam --backend=native --release \
+            --target=x86_64-linux-musl --output=native-pkg/salam --log-level=error
+          sh tools/bash/package-native.sh native-pkg/salam x86_64-linux-musl linux-x64 native-pkg
+
+      - name: The packaged compiler builds and runs programs
+        run: sh tools/bash/native-package-check.sh native-pkg/salam-native-linux-x64.tar.gz
+
+      - name: Upload the packaged compiler
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: salam-native-linux-x64
+          path: native-pkg/salam-native-linux-x64.tar.gz
+          retention-days: 14
 
   macos-debug-build:
     needs: changes
@@ -189,14 +211,17 @@ jobs:
           NATIVE_CROSS_STAGE=host-stage/macos11 sh tools/bash/native-cross-check.sh ./salam "${TRIPLE}11.0" none llvm
           NATIVE_CROSS_STAGE=host-stage/universal sh tools/bash/native-cross-check.sh ./salam universal-apple-macos none llvm
 
-      - name: Build the compiler itself for the host
+      - name: Build and package the compiler itself for the host
         env:
+          TARGET: ${{ matrix.target }}
           TRIPLE: ${{ matrix.triple }}
           EXE: ${{ matrix.exe }}
         run: |
           mkdir -p host-stage/selfhost
           ./salam build compiler/main.salam --backend=native --release --target="$TRIPLE" --output="host-stage/selfhost/$EXE" --log-level=error
           ./salam llvm compiler/main.salam --target=x86_64-linux-gnu -o host-stage/selfhost/ref.ll --log-level=error
+          sh tools/bash/package-native.sh "host-stage/selfhost/$EXE" "$TRIPLE" "$TARGET" host-stage
+          rm -rf "host-stage/selfhost/$EXE" "host-stage/salam-native-$TARGET"
 
       - name: Upload the programs
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -259,12 +284,14 @@ jobs:
         if: always()
         shell: bash
         env:
+          TARGET: ${{ matrix.target }}
           EXE: ${{ matrix.exe }}
         run: |
-          chmod +x "host-stage/selfhost/$EXE"
+          mkdir -p host-stage/pkg
+          tar -xzf "host-stage/salam-native-$TARGET.tar.gz" -C host-stage/pkg
           std="$(pwd)/std"
           if command -v cygpath >/dev/null 2>&1; then std="$(cygpath -m "$std")"; fi
-          SALAM_STD="$std" "host-stage/selfhost/$EXE" llvm compiler/main.salam --target=x86_64-linux-gnu -o host-stage/out.ll --log-level=error
+          SALAM_STD="$std" "host-stage/pkg/salam-native-$TARGET/$EXE" llvm compiler/main.salam --target=x86_64-linux-gnu -o host-stage/out.ll --log-level=error
           grep -v ' UTC\\00"$' host-stage/selfhost/ref.ll >host-stage/ref.trim
           grep -v ' UTC\\00"$' host-stage/out.ll | tr -d '\r' >host-stage/out.trim
           if ! cmp -s host-stage/ref.trim host-stage/out.trim; then
@@ -273,12 +300,20 @@ jobs:
           fi
           echo "the native-built compiler reproduces the reference IR on this host"
 
-      - name: The compiler built by the native backend builds and runs programs on the host
+      - name: The packaged compiler builds and runs programs on the host
         if: always()
         shell: bash
         env:
-          EXE: ${{ matrix.exe }}
-        run: NATIVE_HOST_FLAGS=--backend=native sh tools/bash/native-host-check.sh "host-stage/selfhost/$EXE" tests/en/llvm/ll_fib.salam tests/en/llvm/ll_hashmap.salam tests/en/llvm/ll_float.salam
+          TARGET: ${{ matrix.target }}
+        run: sh tools/bash/native-package-check.sh "host-stage/salam-native-$TARGET.tar.gz"
+
+      - name: Upload the packaged compiler
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: salam-native-${{ matrix.target }}
+          path: host-stage/salam-native-${{ matrix.target }}.tar.gz
+          retention-days: 14
 
   windows-cross:
     needs: changes
@@ -538,6 +573,9 @@ jobs:
             --output=winarm-stage/selfhost/salam.exe --log-level=error
           ./salam llvm compiler/main.salam --target=x86_64-linux-gnu -o winarm-stage/selfhost/ref.ll --log-level=error
           tar -cf winarm-stage/selfhost/src.tar compiler std tests/en/llvm
+          SALAM_LLVM_MINGW="/tmp/${LLVM_MINGW}" sh tools/bash/package-native.sh winarm-stage/selfhost/salam.exe \
+            aarch64-w64-windows-gnu windows-arm64 winarm-stage
+          rm -rf winarm-stage/salam-native-windows-arm64
       - name: Package Salam for Windows on Arm
         run: sh tools/bash/package-winarm.sh ./salam "/tmp/${LLVM_MINGW}" winarm-stage/package
       - name: Upload the programs
@@ -589,3 +627,14 @@ jobs:
           cd winarm-stage/selfhost
           [ -d src ] || { mkdir src && tar -xf src.tar -C src; }
           sh ../../tools/bash/native-host-check.sh ../package/salam.exe src/tests/en/llvm/*.salam
+      - name: The native-built compiler package builds and runs programs on Windows on Arm
+        if: always()
+        shell: bash
+        run: sh tools/bash/native-package-check.sh winarm-stage/salam-native-windows-arm64.tar.gz
+      - name: Upload the packaged compiler
+        if: github.event_name != 'pull_request'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: salam-native-windows-arm64
+          path: winarm-stage/salam-native-windows-arm64.tar.gz
+          retention-days: 14

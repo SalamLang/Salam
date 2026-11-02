@@ -1,0 +1,262 @@
+package nativelink
+
+func mo_msort(a &: Vector<i64>, b &: Vector<i64>, ta &: Vector<i64>, tb &: Vector<i64>, lo: int, hi: int):
+    if hi - lo < 2:
+        ret
+    end
+    mid := (lo + hi) / 2
+    mo_msort(a, b, ta, tb, lo, mid)
+    mo_msort(a, b, ta, tb, mid, hi)
+    if a[mid - 1] <= a[mid]:
+        ret
+    end
+    mut i := lo
+    mut j := mid
+    mut k := lo
+    until k < hi:
+        if j >= hi or (i < mid and a[i] <= a[j]):
+            ta[k] = a[i]
+            tb[k] = b[i]
+            i += 1
+        else:
+            ta[k] = a[j]
+            tb[k] = b[j]
+            j += 1
+        end
+        k += 1
+    end
+    mut q := lo
+    until q < hi:
+        a[q] = ta[q]
+        b[q] = tb[q]
+        q += 1
+    end
+end
+
+func mo_seg_start(t &: Mo, segi: int): i64:
+    if segi == t.seg0 + 1:
+        ret t.dc_start
+    end
+    if segi == t.seg0 + 2:
+        ret t.d_start
+    end
+    ret 0
+end
+
+func mo_nseg(l &: Nl, t &: Mo): int:
+    ret t.seg0 + 3 + (l.dg_name.len() > 0 ? 1 : 0) + 1
+end
+
+func mo_hex(v: i64): str:
+    digits := "0123456789abcdef"
+    mut b := str.NewBuilder()
+    mut sh := 60
+    mut started := false
+    until sh >= 0:
+        d := ((v >> (sh as i64)) & (15 as i64)) as int
+        if d != 0 or started or sh == 0:
+            str.BufAppendChar(b, tr_byte(digits, d))
+            started = true
+        end
+        sh -= 4
+    end
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret "0x" + r
+end
+
+func mo_chained_fixups(l &: Nl, t &: Mo, buf: u8*): Vector<u8>:
+    dl := mo_dylib_list(l)
+    mut out := Vector {} as Vector<u8>
+    mut wide := false
+    each ba in t.bind_add:
+        if ba < (0 as i64) or ba > (255 as i64):
+            wide = true
+        end
+    end
+    mut imp_glob := Vector {} as Vector<int>
+    mut imp_addend := Vector {} as Vector<i64>
+    mut imp_of := HashMap {} as HashMap<int, int>
+    mut bind_imp := Vector {} as Vector<int>
+    repeat t.bind_at.len() in bi:
+        g := t.bind_g[bi]
+        add := wide ? t.bind_add[bi] : (0 as i64)
+        mut idx := 0 - 1
+        if wide:
+            repeat imp_glob.len() in ii:
+                if imp_glob[ii] == g and imp_addend[ii] == add:
+                    idx = ii
+                end
+            end
+        else imp_of.has(g):
+            idx = imp_of.get(g)
+        end
+        if idx < 0:
+            idx = imp_glob.len()
+            imp_glob.push(g)
+            imp_addend.push(add)
+            if not wide:
+                imp_of.put(g, idx)
+            end
+        end
+        bind_imp.push(idx)
+    end
+    mut fa := Vector {} as Vector<i64>
+    mut fk := Vector {} as Vector<i64>
+    mut ta := Vector {} as Vector<i64>
+    mut tk := Vector {} as Vector<i64>
+    each ra in t.rebase:
+        fa.push(ra)
+        fk.push(0 - 1 as i64)
+        ta.push(0 as i64)
+        tk.push(0 as i64)
+    end
+    repeat t.bind_at.len() in bj:
+        fa.push(t.bind_at[bj])
+        fk.push(bj as i64)
+        ta.push(0 as i64)
+        tk.push(0 as i64)
+    end
+    mo_msort(fa, fk, ta, tk, 0, fa.len())
+    nseg := mo_nseg(l, t)
+    mut pg_first := Vector {} as Vector<int>
+    mut pg_count := Vector {} as Vector<int>
+    repeat nseg:
+        pg_first.push(0)
+        pg_count.push(0)
+    end
+    mut starts := Vector {} as Vector<int>
+    n := fa.len()
+    repeat n in i:
+        a := fa[i]
+        mut sg := 0
+        mut off := 0 as i64
+        mo_seg_of(t, a, sg, off)
+        if (a & (3 as i64)) != (0 as i64):
+            nl_fail(l, "a pointer at " + mo_hex(a) + " is not 4-byte aligned, which chained fixups cannot encode; target macOS 11 for the classic format")
+            ret out
+        end
+        pg := (off / t.page) as int
+        if i > 0 and fa[i - 1] == a:
+            nl_fail(l, "two fixups at " + mo_hex(a))
+            ret out
+        end
+        mut next := 0 as i64
+        if i + 1 < n:
+            mut sg2 := 0
+            mut off2 := 0 as i64
+            mo_seg_of(t, fa[i + 1], sg2, off2)
+            if sg2 == sg and ((off2 / t.page) as int) == pg:
+                next = (fa[i + 1] - a) / (4 as i64)
+            end
+        end
+        if pg_count[sg] == 0:
+            pg_first[sg] = starts.len()
+        end
+        until pg_count[sg] <= pg:
+            starts.push(0xFFFF)
+            pg_count[sg] = pg_count[sg] + 1
+        end
+        si := pg_first[sg] + pg
+        if starts[si] == 0xFFFF:
+            starts[si] = (off - (pg as i64) * t.page) as int
+        end
+        f := a - t.base
+        mut v := 0 as i64
+        if fk[i] < (0 as i64):
+            tgt := rd64(buf, f)
+            if ((tgt >> (36 as i64)) & (0xFFFFF as i64)) != (0 as i64):
+                nl_fail(l, "the pointer at " + mo_hex(a) + " does not fit a chained rebase")
+                ret out
+            end
+            v = (tgt & (0xFFFFFFFFF as i64)) | (((tgt >> (56 as i64)) & (255 as i64)) << (36 as i64))
+        else:
+            bk := fk[i] as int
+            v = (bind_imp[bk] as i64) | ((1 as i64) << (63 as i64))
+            if not wide:
+                v = v | (t.bind_add[bk] << (24 as i64))
+            end
+        end
+        wr64(buf, f, v | (next << (51 as i64)))
+    end
+    tb_le(out, 0 as i64, 4)
+    tb_le(out, 32 as i64, 4)
+    tb_le(out, 0 as i64, 4)
+    tb_le(out, 0 as i64, 4)
+    tb_le(out, imp_glob.len() as i64, 4)
+    tb_le(out, (wide ? 2 : 1) as i64, 4)
+    tb_le(out, 0 as i64, 4)
+    tb_le(out, 0 as i64, 4)
+    img0 := out.len()
+    tb_le(out, nseg as i64, 4)
+    repeat nseg:
+        tb_le(out, 0 as i64, 4)
+    end
+    until (out.len() % 8) != 0:
+        out.push(0 as u8)
+    end
+    repeat nseg in s:
+        np := pg_count[s]
+        if np == 0:
+            continue
+        end
+        put32_le(out, img0 + 4 + 4 * s, (out.len() - img0) as i64)
+        ssz := align_to((22 + 2 * np) as i64, 8 as i64)
+        tb_le(out, ssz, 4)
+        tb_le(out, t.page, 2)
+        tb_le(out, 2 as i64, 2)
+        tb_le(out, mo_seg_start(t, s), 8)
+        tb_le(out, 0 as i64, 4)
+        tb_le(out, np as i64, 2)
+        repeat np in p:
+            tb_le(out, starts[pg_first[s] + p] as i64, 2)
+        end
+        until (out.len() % 8) != 0:
+            out.push(0 as u8)
+        end
+    end
+    imp_off := out.len()
+    put32_le(out, 8, imp_off as i64)
+    mut pool := Vector {} as Vector<u8>
+    repeat imp_glob.len() in k:
+        g := imp_glob[k]
+        ordn := mo_ordinal(l, g, dl)
+        if ordn > 240:
+            nl_fail(l, "too many libraries for chained fixups")
+            ret out
+        end
+        mut word := ((ordn & 255) as i64) | ((pool.len() as i64) << (9 as i64))
+        if not l.g_strongref[g]:
+            word = word | (256 as i64)
+        end
+        tb_le(out, word, 4)
+        if wide:
+            a32 := imp_addend[k]
+            if a32 < (0 - 2147483648 as i64) or a32 > (2147483647 as i64):
+                nl_fail(l, "an addend to '" + name_of(l, l.g_name[g]) + "' is too large for chained fixups")
+                ret out
+            end
+            tb_le(out, a32, 4)
+        end
+        nm := name_of(l, l.g_name[g])
+        np2 := (nm as void*) as u8*
+        repeat str.Len(nm) in c:
+            pool.push(np2[c])
+        end
+        pool.push(0 as u8)
+    end
+    put32_le(out, 12, out.len() as i64)
+    each pb in pool:
+        out.push(pb)
+    end
+    until (out.len() % 8) != 0:
+        out.push(0 as u8)
+    end
+    pool.free()
+    fa.free()
+    fk.free()
+    ta.free()
+    tk.free()
+    starts.free()
+    ret out
+end

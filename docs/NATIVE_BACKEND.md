@@ -16,6 +16,7 @@ salam build app.salam --backend=native --target=i686-w64-windows-gnu
 salam build app.salam --backend=native --target=arm-linux-musleabihf
 salam build app.salam --backend=native --target=riscv64-linux-musl
 salam build app.salam --backend=native --target=arm64-apple-macos
+salam build app.salam --backend=native --target=universal-apple-macos  # arm64 + x86_64
 salam build app.salam --backend=native --emit-asm     # also writes app.s
 salam build app.salam --backend=native --cpu=x86-64-v3 # 256-bit AVX2 loops
 salam obj app.salam --backend=native                  # object file only

@@ -50,7 +50,7 @@ func test_buffers():
     tls.FreeBuf(empty)
 end
 
-func test_aead():
+func test_aead() throws:
     mut priv1 := ""
     mut pub1 := ""
     mut priv2 := ""
@@ -83,7 +83,7 @@ func test_aead():
     plain := encoding.Base64Encode("abc")
     sealed := tls.AesGcmSealBytes(key, nonce, plain, good)
     testing.AssertTrue(good)
-    testing.AssertEqStr(encoding.Base64Decode(tls.AesGcmOpenBytes(key, nonce, sealed, good)), "abc")
+    testing.AssertEqStr(try encoding.Base64Decode(tls.AesGcmOpenBytes(key, nonce, sealed, good)), "abc")
     testing.AssertTrue(good)
     _ := tls.AesGcmOpenBytes(key, tls.GcmNonce(8 as i64), sealed, good)
     testing.AssertFalse(good)
@@ -179,7 +179,7 @@ func test_ecdsa():
     tls.FreePrivateKey(key)
 end
 
-func test_certs():
+func test_certs() throws:
     text := io.ReadFile(CERT)
     begin := "-----BEGIN CERTIFICATE-----"
     start := text.find(begin) + begin.len()
@@ -187,9 +187,16 @@ func test_certs():
     pem_body := text.substr(start, stop - start)
     room := pem_body.len()
     mut der := tls.NewBuf(room)
-    mut decoded := false
-    der.len = encoding.Base64DecodeBytes(pem_body, der.p, room, decoded)
-    testing.AssertTrue(decoded)
+    der.len = try encoding.Base64DecodeBytes(pem_body, der.p, room)
+    testing.AssertTrue(der.len > 0)
+    mut tiny := tls.NewBuf(8)
+    mut overflow := false
+    try:
+        tiny.len = encoding.Base64DecodeBytes(pem_body, tiny.p, 8)
+    catch e:
+        overflow = e.is(ErrorKind.OutOfRange)
+    end
+    testing.AssertTrue(overflow)
     testing.AssertTrue(tls.BufLen(der) > 400)
     testing.AssertTrue(tls.CertIsValid(der))
     testing.AssertEqStr(tls.CertSubjectCN(der), "localhost")
@@ -266,10 +273,18 @@ end
 
 func main:
     test_buffers()
-    test_aead()
+    try:
+        test_aead()
+    catch e:
+        testing.AssertMsg(false, "unexpected error: " + e.to_str())
+    end
     test_rsa()
     test_ecdsa()
-    test_certs()
+    try:
+        test_certs()
+    catch e:
+        testing.AssertMsg(false, "unexpected error: " + e.to_str())
+    end
     test_loopback()
     testing.Summary()
     ret 0

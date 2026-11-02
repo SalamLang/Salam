@@ -179,6 +179,11 @@ func dv_reset(g &: Ng):
     g.fv_foff.clear()
     g.fv_ctx.clear()
     g.fv_fsz.clear()
+    g.fv_ent.clear()
+    g.fv_par.clear()
+    g.ea_val.clear()
+    g.ea_k.clear()
+    g.ea_p.clear()
     g.fv_of = HashMap {} as HashMap<int, int>
     g.av_fv.clear()
     g.ev_fv.clear()
@@ -228,6 +233,8 @@ func dv_bind(g &: Ng, fstart: int, fend: int):
                 g.fv_foff.push(0 - 1)
                 g.fv_ctx.push(0 - 1)
                 g.fv_fsz.push(0)
+                g.fv_ent.push(0 - 1)
+                g.fv_par.push(0 - 1)
                 g.fv_of.put(v, f)
             end
         end
@@ -533,12 +540,22 @@ func dv_markers(g &: Ng, ra &: Ra):
     mut act := Vector {} as Vector<int>
     mut uses := Vector {} as Vector<int>
     mut defs := Vector {} as Vector<int>
+    mut en := Vector {} as Vector<int>
+    mut ea_ok := Vector {} as Vector<bool>
+    repeat nf in f0:
+        en.push(dv_ea_of(g, g.fv_ent[f0]))
+    end
+    repeat g.ea_val.len():
+        ea_ok.push(true)
+    end
+    mut in_entry := g.ea_val.len() > 0 and g.mc.lorder.len() > 0 and g.mc.lorder[0] == 0
     mut mc_cur := 0
     nme := g.me_idx.len()
     each b in g.mc.lorder:
         bs := g.mc.bstart[b]
         be := g.mc.bend[b]
         if bs < 0 or be <= bs:
+            in_entry = false
             continue
         end
         until mc_cur < nme and g.me_idx[mc_cur] < bs:
@@ -551,6 +568,15 @@ func dv_markers(g &: Ng, ra &: Ra):
             inact[fa] = false
         end
         act.clear()
+        if in_entry:
+            dv_entry_params(g, en, mc_cur, be)
+            repeat nf in fe:
+                if en[fe] >= 0:
+                    inact[fe] = true
+                    act.push(fe)
+                end
+            end
+        end
         mut i := bs
         until i < be:
             mut head := 0 - 1
@@ -561,6 +587,9 @@ func dv_markers(g &: Ng, ra &: Ra):
                     dv_mark(g, head, tail, 0 - 1, 0, 0, 0)
                     mc_cur += 1
                     continue
+                end
+                if in_entry:
+                    dv_entry_event(g, en, fx, g.me_val[mc_cur])
                 end
                 mut kk := 0
                 mut pp := 0
@@ -582,7 +611,8 @@ func dv_markers(g &: Ng, ra &: Ra):
             repeat act.len() in ai:
                 f := act[ai]
                 mut dk := ck[f]
-                dp := cp[f]
+                mut dp := cp[f]
+                mut dx := cx[f]
                 if dk == 1 or dk == 4:
                     if dv_live_at(ra, dp, 2 * i):
                         ext[f] = dp < g.mc.vloc.len() and g.mc.vloc[dp] >= 0
@@ -590,12 +620,19 @@ func dv_markers(g &: Ng, ra &: Ra):
                         dk = 0
                     end
                 end
+                if dk == 0 and in_entry and en[f] >= 0 and ea_ok[en[f]]:
+                    av := g.ea_val[en[f]]
+                    ptr := av < g.vak.len() and g.vak[av] == AK_PTR
+                    dk = (g.ea_k[en[f]] == 1 ? 10 : 12) + (ptr ? 1 : 0)
+                    dp = g.ea_p[en[f]]
+                    dx = ptr ? g.vao[av] : 0
+                end
                 if dk != ek[f] or (dk != 0 and dp != ep[f]):
-                    dv_mark(g, head, tail, f, dk, dp, cx[f])
+                    dv_mark(g, head, tail, f, dk, dp, dx)
                     ek[f] = dk
                     ep[f] = dp
                 end
-                if ck[f] == 0 and ek[f] == 0:
+                if ck[f] == 0 and ek[f] == 0 and not (in_entry and en[f] >= 0):
                     inact[f] = false
                 else:
                     act[w] = f
@@ -608,6 +645,9 @@ func dv_markers(g &: Ng, ra &: Ra):
             g.mc.dv[i] = head
             op := g.mc.op[i]
             is_call := op == M_CALL or op == M_CALLR
+            if in_entry:
+                dv_entry_clobber(g, i, ea_ok, uses, defs)
+            end
             mut need := false
             each fq in act:
                 if ext[fq] and (ck[fq] == 1 or ck[fq] == 4):
@@ -641,7 +681,10 @@ func dv_markers(g &: Ng, ra &: Ra):
             end
             i += 1
         end
+        in_entry = false
     end
+    en.free()
+    ea_ok.free()
     ck.free()
     cp.free()
     ek.free()
@@ -652,6 +695,76 @@ func dv_markers(g &: Ng, ra &: Ra):
     act.free()
     uses.free()
     defs.free()
+end
+
+func dv_entry_params(g &: Ng, en &: Vector<int>, from: int, be: int):
+    mut seen := Vector {} as Vector<bool>
+    repeat en.len():
+        seen.push(false)
+    end
+    mut m := from
+    until m < g.me_idx.len() and g.me_idx[m] < be:
+        f := g.me_fv[m]
+        if f >= 0 and not seen[f]:
+            seen[f] = true
+            md := g.fv_var[f]
+            if g.fv_ctx[f] < 0 and md >= 0 and md < g.md_a.len() and g.md_a[md] > 0:
+                ei := dv_ea_of(g, g.me_val[m])
+                if ei >= 0:
+                    en[f] = ei
+                end
+            end
+        end
+        m += 1
+    end
+    seen.free()
+end
+
+func dv_entry_event(g &: Ng, en &: Vector<int>, f: int, val: int):
+    en[f] = dv_ea_of(g, val)
+    mut a := g.fv_par[f]
+    mut guard := 0
+    until a >= 0 and guard < 64:
+        en[a] = 0 - 1
+        a = g.fv_par[a]
+        guard += 1
+    end
+end
+
+func dv_self_copy(g &: Ng, i: int, ph: int): bool:
+    op := g.mc.op[i]
+    if op != M_COPY and op != M_MOV_RR and op != M_FMOV_RR:
+        ret false
+    end
+    r := g.mc.r1[i]
+    sph := r >= VBASE ? (r < g.mc.vloc.len() ? g.mc.vloc[r] : 0 - 1) : r
+    ret sph == ph
+end
+
+func dv_entry_clobber(g &: Ng, i: int, ea_ok &: Vector<bool>, uses &: Vector<int>, defs &: Vector<int>):
+    op := g.mc.op[i]
+    if op == M_LABEL or op == M_NOP:
+        ret
+    end
+    keep := op == M_COPY or op == M_MOV_RR or op == M_FMOV_RR or op == M_LD or op == M_FLD or op == M_ARM_SODD
+    if keep:
+        mi_regs(g, i, uses, defs)
+    end
+    repeat ea_ok.len() in k:
+        if not ea_ok[k] or g.ea_k[k] != 1:
+            continue
+        end
+        if not keep:
+            ea_ok[k] = false
+            continue
+        end
+        each d in defs:
+            dph := d >= VBASE ? (d < g.mc.vloc.len() ? g.mc.vloc[d] : 0 - 1) : d
+            if dph == g.ea_p[k] and not dv_self_copy(g, i, dph):
+                ea_ok[k] = false
+            end
+        end
+    end
 end
 
 func dv_dwreg(g &: Ng, r: int): int:
@@ -709,7 +822,7 @@ func dv_words(g &: Ng, base: int, pos: Vector<int>, endpc: int, scale: int):
         dv_enc_begin(g)
         repeat pos.len() in i:
             if g.mc.dv[i] >= 0:
-                dv_enc_at(g, base + scale * pos[i], g.mc.dv[i])
+                dv_enc_at(g, i == 0 ? base : base + scale * pos[i], g.mc.dv[i])
             end
         end
     end
@@ -761,6 +874,21 @@ func dv_concrete(g &: Ng, k0: int, p: int, x: int, ind: bool, ok &: int, op &: i
     ox = 0
     mut k := k0
     mut xx := x
+    if k >= 10:
+        if ind and (k == 10 or k == 12):
+            k += 1
+            xx = 0
+        end
+        if k == 10 or k == 11:
+            ok = k == 10 ? 1 : 6
+            op = dv_dwreg(g, p) as i64
+        else:
+            ok = k == 12 ? 10 : 11
+            op = p as i64
+        end
+        ox = (k == 11 or k == 13) ? xx : 0
+        ret
+    end
     if ind:
         if k == 1:
             k = 4
@@ -1060,6 +1188,19 @@ func dv_expr(g &: Ng, k: int, p: i64, x: int): Vector<u8>:
     else k == 8:
         e.push(0x76 as u8)
         vb_sleb(e, p)
+    else k == 10 or k == 11:
+        e.push(0x9c as u8)
+        if p != (0 as i64):
+            e.push(0x23 as u8)
+            vb_uleb(e, p)
+        end
+        if k == 11:
+            e.push(0x06 as u8)
+            if x != 0:
+                e.push(0x23 as u8)
+                vb_uleb(e, x as i64)
+            end
+        end
     end
     ret e
 end
@@ -1151,7 +1292,42 @@ func dv_sroa_leaf(g &: Ng, old: int, leaf: int, off: int, size: int):
     g.fv_foff.push(g.fv_foff[f0] >= 0 ? g.fv_foff[f0] + off : off)
     g.fv_ctx.push(g.fv_ctx[f0])
     g.fv_fsz.push(size)
+    g.fv_ent.push(0 - 1)
+    g.fv_par.push(f0)
     g.fv_of.put(leaf, f)
+end
+
+func dv_entry_arg(g &: Ng, v: int, k: int, p: int):
+    if g.dbg_on and g.fv_val.len() > 0:
+        g.ea_val.push(v)
+        g.ea_k.push(k)
+        g.ea_p.push(p)
+    end
+end
+
+func dv_ea_of(g &: Ng, v: int): int:
+    if v >= 0:
+        repeat g.ea_val.len() in k:
+            if g.ea_val[k] == v:
+                ret k
+            end
+        end
+    end
+    ret 0 - 1
+end
+
+func dv_sroa_entry(g &: Ng, a: int, t: int, i: int, off: int):
+    if g.fv_val.len() == 0 or off != 0 or not g.fv_of.has(a) or g.i_op[i] != OP_STORE or g.i_blk[i] != 0:
+        ret
+    end
+    val := g.i_a[i]
+    if val < 0 or val >= g.v_kind.len() or g.v_kind[val] != VK_ARG or g.v_ty[val] != t:
+        ret
+    end
+    f := g.fv_of.get(a)
+    if g.fv_ent[f] < 0:
+        g.fv_ent[f] = val
+    end
 end
 
 func dv_write_fn_vars(g &: Ng, t &: DvTypes, di &: Vector<u8>, fgv: Vector<int>, lsym: int):
@@ -1226,7 +1402,10 @@ func dv_write_frag(g &: Ng, t &: DvTypes, di &: Vector<u8>, grp: Vector<int>, ls
         end
     end
     mut bnd := Vector {} as Vector<int>
-    each q3 in fr:
+    each q3 in grp:
+        if g.gv_foff[q3] < 0 and g.gv_mem[q3]:
+            continue
+        end
         mut e := t.le_head[q3]
         until e >= 0:
             bnd.push(g.le_s[e])
@@ -1297,6 +1476,8 @@ func dv_write_frag(g &: Ng, t &: DvTypes, di &: Vector<u8>, grp: Vector<int>, ls
         end
         if any:
             dbg_loc_ent(g, body, lo, hi, ex)
+        else:
+            dv_frag_whole(g, t, grp, body, lo, hi)
         end
         ex.free()
     end
@@ -1319,6 +1500,24 @@ func dv_write_frag(g &: Ng, t &: DvTypes, di &: Vector<u8>, grp: Vector<int>, ls
     fr.free()
     bnd.free()
     uq.free()
+end
+
+func dv_frag_whole(g &: Ng, t &: DvTypes, grp: Vector<int>, body &: Vector<u8>, lo: int, hi: int):
+    each q in grp:
+        if g.gv_foff[q] >= 0 or g.gv_mem[q]:
+            continue
+        end
+        mut e := t.le_head[q]
+        until e >= 0:
+            if g.le_s[e] <= lo and g.le_e[e] >= hi:
+                mut y := dv_expr(g, g.le_k[e], g.le_p[e], g.le_x[e])
+                dbg_loc_ent(g, body, lo, hi, y)
+                y.free()
+                ret
+            end
+            e = t.le_next[e]
+        end
+    end
 end
 
 func dv_cache_ok(g &: Ng, v: int, imap &: Vector<int>): bool:
@@ -1404,6 +1603,8 @@ func dv_inline_events(g &: Ng, e: int, newi &: Vector<int>, v0: int, c: int, cl:
             g.fv_foff.push(fo)
             g.fv_ctx.push(cx)
             g.fv_fsz.push(g.ic.ev_fsz[q])
+            g.fv_ent.push(0 - 1)
+            g.fv_par.push(0 - 1)
             kv.push(var)
             ko.push(fo)
             kc.push(cx)

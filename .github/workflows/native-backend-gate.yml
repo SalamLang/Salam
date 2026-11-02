@@ -117,6 +117,141 @@ jobs:
       - name: lldb reads the debug info and unwinds the stack
         run: sh tools/bash/native-lldb-check.sh run macos-debug
 
+  hosts-build:
+    needs: changes
+    if: needs.changes.outputs.run == 'true'
+    runs-on: ubuntu-24.04
+    env:
+      SALAM_STD: ${{ github.workspace }}/std
+      SALAM_LINKER: builtin
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: macos-arm64
+            triple: arm64-apple-macos
+            exe: salam
+          - target: macos-x64
+            triple: x86_64-apple-macos
+            exe: salam
+          - target: windows-x64
+            triple: x86_64-w64-windows-gnu
+            exe: salam.exe
+          - target: linux-arm64
+            triple: aarch64-linux-musl
+            exe: salam
+    name: hosts-build (${{ matrix.target }})
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install mingw-w64
+        if: matrix.target == 'windows-x64'
+        run: |
+          echo 'Acquire::ForceIPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4 >/dev/null
+          sudo apt-get update
+          sudo apt-get install -y mingw-w64
+
+      - name: Fetch the musl sysroot
+        if: matrix.target == 'linux-arm64'
+        run: |
+          sh tools/bash/fetch-musl-sysroots.sh --out /tmp/muslcc --arches aarch64
+          echo "SALAM_MUSL_SYSROOT=/tmp/muslcc/sr-aarch64" >> "$GITHUB_ENV"
+
+      - name: Install a seed compiler
+        uses: ./.github/actions/setup-salam # zizmor: ignore[self-repository]
+
+      - name: Build the compiler
+        run: sh tools/bash/build-selfhost.sh
+
+      - name: Build the test programs for the host with the native backend
+        env:
+          TRIPLE: ${{ matrix.triple }}
+        run: NATIVE_CROSS_STAGE=host-stage/tests sh tools/bash/native-cross-check.sh ./salam "$TRIPLE" none
+
+      - name: Build the compiler itself for the host
+        env:
+          TRIPLE: ${{ matrix.triple }}
+          EXE: ${{ matrix.exe }}
+        run: |
+          mkdir -p host-stage/selfhost
+          ./salam build compiler/main.salam --backend=native --release --target="$TRIPLE" --output="host-stage/selfhost/$EXE" --log-level=error
+          ./salam llvm compiler/main.salam --target=x86_64-linux-gnu -o host-stage/selfhost/ref.ll --log-level=error
+
+      - name: Upload the programs
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: host-stage-${{ matrix.target }}
+          path: host-stage
+          retention-days: 3
+
+  hosts-run:
+    needs: hosts-build
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: macos-arm64
+            host: macos-latest
+            exe: salam
+          - target: macos-x64
+            host: macos-15-intel
+            exe: salam
+          - target: windows-x64
+            host: windows-latest
+            exe: salam.exe
+          - target: linux-arm64
+            host: ubuntu-24.04-arm
+            exe: salam
+    runs-on: ${{ matrix.host }}
+    name: hosts-run (${{ matrix.target }})
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download the programs
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: host-stage-${{ matrix.target }}
+          path: host-stage
+
+      - name: Test programs built by the native backend run on the host
+        shell: bash
+        env:
+          TARGET: ${{ matrix.target }}
+        run: NATIVE_STAGE_SKIP="$(sh tools/bash/native-host-skips.sh "$TARGET")" sh tools/bash/native-stage-tests.sh host-stage/tests
+
+      - name: The compiler built by the native backend reproduces the reference IR on the host
+        if: always()
+        shell: bash
+        env:
+          EXE: ${{ matrix.exe }}
+        run: |
+          chmod +x "host-stage/selfhost/$EXE"
+          std="$(pwd)/std"
+          if command -v cygpath >/dev/null 2>&1; then std="$(cygpath -m "$std")"; fi
+          SALAM_STD="$std" "host-stage/selfhost/$EXE" llvm compiler/main.salam --target=x86_64-linux-gnu -o host-stage/out.ll --log-level=error
+          grep -v ' UTC\\00"$' host-stage/selfhost/ref.ll >host-stage/ref.trim
+          grep -v ' UTC\\00"$' host-stage/out.ll | tr -d '\r' >host-stage/out.trim
+          if ! cmp -s host-stage/ref.trim host-stage/out.trim; then
+            diff host-stage/ref.trim host-stage/out.trim | head -20
+            exit 1
+          fi
+          echo "the native-built compiler reproduces the reference IR on this host"
+
+      - name: The compiler built by the native backend builds and runs programs on the host
+        if: always()
+        shell: bash
+        env:
+          EXE: ${{ matrix.exe }}
+        run: NATIVE_HOST_FLAGS=--backend=native sh tools/bash/native-host-check.sh "host-stage/selfhost/$EXE" tests/en/llvm/ll_fib.salam tests/en/llvm/ll_hashmap.salam tests/en/llvm/ll_float.salam
+
   windows-cross:
     needs: changes
     if: needs.changes.outputs.run == 'true'

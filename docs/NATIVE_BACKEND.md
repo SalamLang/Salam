@@ -795,6 +795,13 @@ ret end` at the top of a recursive AST walk) tests that parameter before
   `abs()`; everything else must pass, and the native backend gate runs it for
   all four targets on every change. The native-built compiler for AArch64
   reproduces the x86-64 compiler's IR for the whole compiler.
+  With `NATIVE_CROSS_STAGE=<dir>` it only builds the programs, into
+  `<dir>/<group>/<name>`, and `tools/bash/native-stage-tests.sh <dir>` runs
+  them on the machine they are for. The gate does this for macOS on Apple
+  silicon and on Intel, Windows on x86-64 and Linux on AArch64: the programs
+  are built on Linux, run on a real machine of each kind, and the compiler
+  built by the native backend for that machine reproduces the reference IR
+  there and builds and runs programs with `--backend=native` itself.
 - `tools/bash/native-encoder-check.sh <salam> <files...>` checks the encoder:
   it assembles the `--emit-asm` listing with GNU `as` and compares the result
   with the object nativegen wrote, instruction by instruction.

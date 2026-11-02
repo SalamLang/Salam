@@ -979,6 +979,17 @@ for its code ranges and lines, the call-site line of any call inlined
 further in), a `DEBUG_S_INLINEE_LINES` entry gives the callee's first line,
 and the function's own line table gives the outermost call site for inlined
 code, so a debugger shows the inlined frames and steps over them as calls.
+i686 functions never keep a frame pointer, so on that target each function
+also gets an `S_FRAMEPROC` (frame size, saved register bytes, both frame
+registers `VFRAME`) and a `DEBUG_S_FRAMEDATA` subsection, the FPO data a
+Windows debugger walks such stacks with. It has one record per prologue
+step, as clang writes them: one at the function start, one after each
+register push and one after the stack allocation, each with the local,
+parameter and saved register sizes, the remaining prologue length and a
+program (`$T0 .raSearch = $eip $T0 ^ = $esp $T0 4 + = $ebx $T0 4 - ^ = ...`)
+that finds the return address and the saved registers. The relocation in
+front of the records is `DIR32NB`, so the records hold offsets from the
+function start.
 The built-in linker turns all of it into a PDB (see `NATIVE_LINKER.md`);
 with the system linker, GNU ld discards it.
 

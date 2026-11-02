@@ -221,7 +221,13 @@ MSF file with 4 KiB blocks holding:
 - one stream per object, with its symbols, their parent and end offsets
   filled in, and its C13 line and checksum subsections;
 - the globals (`S_PROCREF`), publics (`S_PUB32` with an address map) and
-  symbol record streams.
+  symbol record streams;
+- for i686, the frame data (NewFPO) stream named in DBI's optional debug
+  header: every `DEBUG_S_FRAMEDATA` record of every object, moved to an RVA
+  by the subsection's relocation, its program moved into `/names`, sorted by
+  RVA. These subsections are left out of the module streams, as `lld` does,
+  and `llvm-pdbutil dump -fpo` reads them in the form it shows for a clang
+  build linked by `lld-link`.
 
 Relative source names are made absolute with the link directory, as `lld`
 does. The GUID is a hash of the image, taken before the `RSDS` record is

@@ -16,6 +16,7 @@ salam build app.salam --backend=native --target=i686-w64-windows-gnu
 salam build app.salam --backend=native --target=arm-linux-musleabihf
 salam build app.salam --backend=native --target=riscv64-linux-musl
 salam build app.salam --backend=native --target=arm64-apple-macos
+salam build app.salam --backend=native --target=universal-apple-macos  # arm64 + x86_64
 salam build app.salam --backend=native --emit-asm     # also writes app.s
 salam build app.salam --backend=native --cpu=x86-64-v3 # 256-bit AVX2 loops
 salam obj app.salam --backend=native                  # object file only
@@ -910,9 +911,11 @@ ret end` at the top of a recursive AST walk) tests that parameter before
 
 ### Debug information
 
-`salam build app.salam --backend=native -g` writes DWARF 4
+`salam build app.salam --backend=native -g` writes DWARF 5
 into the object: `.debug_info`, `.debug_abbrev`, `.debug_line`,
-`.debug_ranges` and `.debug_loc`. With it gdb shows file and line for every
+`.debug_addr`, `.debug_rnglists` and `.debug_loclists`. `-gdwarf-4` writes
+DWARF 4 instead, with `.debug_ranges` and `.debug_loc` in place of the last
+three, and `-gdwarf-5` names the default. With it gdb shows file and line for every
 frame, steps through loops, stops on inlined functions by name, and prints
 locals and arguments. Debug info never changes the generated code: the
 `.text` of a `-g` build is byte-identical to one without it, which
@@ -954,7 +957,38 @@ How the pieces fit:
 - Blocks that declare variables become `DILexicalBlock`s, written as
   `DW_TAG_lexical_block` with their own ranges, so gdb only shows the
   variables in scope and two `a`s in sibling branches stay apart. Lambdas
-  get their own subprogram. Both backends emit DWARF 4.
+  get their own subprogram.
+- The version travels in the IR: llvmgen writes it into the `"Dwarf Version"`
+  module flag and nativegen reads it from there, so `--backend=llvm` follows
+  the same flags and default. The C backend passes `-gdwarf-4` or
+  `-gdwarf-5` to the C compiler when one is given.
+- In DWARF 5 the units have a version 5 header (`DW_UT_compile`). The line
+  table header describes its entries with `DW_LNCT_path` and
+  `DW_LNCT_directory_index`; directory 0 is the compilation directory and
+  file 0 the unit's source file, which is also file 1 (as gcc does), so the
+  file numbers in the line program and in `DW_AT_decl_file` are the same as
+  in DWARF 4. There are no MD5 checksums, since the frontend has none to give.
+  Every code address in `.debug_info` (the `DW_AT_low_pc` of the unit,
+  functions, inlined calls and lexical blocks) is a `DW_FORM_addrx` index into
+  `.debug_addr`, and the unit carries `DW_AT_addr_base`. Range and location
+  lists are `DW_RLE_offset_pair`/`DW_LLE_offset_pair` entries from the unit's
+  base address, referenced with `DW_FORM_sec_offset`, so no list base
+  attributes are needed; their ULEB128 offsets make `.debug_loclists` about
+  half the size of `.debug_loc`. Names stay inline (`DW_FORM_string`):
+  `.debug_str_offsets` and `DW_FORM_strx` pay off with split DWARF, which the
+  backend does not write. `DW_AT_language` stays `DW_LANG_C99` in both
+  versions, so gdb and lldb read expressions as C.
+- `dsymutil` rewrites location lists with `DW_LLE_base_addressx`, which needs
+  the unit's `DW_AT_addr_base`; it only writes one when its input has one.
+  That is why DWARF 5 units use `.debug_addr` even though the relocation
+  count is the same as with `DW_FORM_addr`: without it a dSYM fails
+  `llvm-dwarfdump --verify` with an unresolved address index per variable.
+- Instructions inlined from a function without debug info (the runtime's
+  print helpers) take the location of the call, as LLVM's inliner does, and
+  instruction selection starts every function with no location, so the
+  argument moves at a function's entry stay on its opening line instead of
+  the last line of the function emitted before it, and the code of an
+  inlined `println` belongs to the line that prints.
 - Windows objects carry the same sections (long names through the COFF
   string table, `SECREL` relocations), and stack slots are addressed from
   `rbp` there. Both the built-in PE linker and mingw `ld` keep them, so gdb
@@ -1009,6 +1043,17 @@ for its code ranges and lines, the call-site line of any call inlined
 further in), a `DEBUG_S_INLINEE_LINES` entry gives the callee's first line,
 and the function's own line table gives the outermost call site for inlined
 code, so a debugger shows the inlined frames and steps over them as calls.
+i686 functions never keep a frame pointer, so on that target each function
+also gets an `S_FRAMEPROC` (frame size, saved register bytes, both frame
+registers `VFRAME`) and a `DEBUG_S_FRAMEDATA` subsection, the FPO data a
+Windows debugger walks such stacks with. It has one record per prologue
+step, as clang writes them: one at the function start, one after each
+register push and one after the stack allocation, each with the local,
+parameter and saved register sizes, the remaining prologue length and a
+program (`$T0 .raSearch = $eip $T0 ^ = $esp $T0 4 + = $ebx $T0 4 - ^ = ...`)
+that finds the return address and the saved registers. The relocation in
+front of the records is `DIR32NB`, so the records hold offsets from the
+function start.
 The built-in linker turns all of it into a PDB (see `NATIVE_LINKER.md`);
 with the system linker, GNU ld discards it.
 

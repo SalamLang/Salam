@@ -1,0 +1,90 @@
+package nativelink
+
+pub func WriteFat(slices: Vector<str>, out: str, err &: str): bool:
+    mut l := New()
+    mut fid := Vector {} as Vector<int>
+    mut cpu := Vector {} as Vector<i64>
+    mut sub := Vector {} as Vector<i64>
+    each sp in slices:
+        f := read_file(l, sp)
+        if f < 0:
+            err = l.err
+            ret false
+        end
+        p := fptr(l, f)
+        if l.f_size[f] < (32 as i64) or rd32(p, 0 as i64) != (0xFEEDFACF as i64):
+            err = sp + " is not a 64-bit Mach-O file"
+            ret false
+        end
+        c := rd32(p, 4 as i64)
+        each c0 in cpu:
+            if c0 == c:
+                err = "two slices for the same CPU: " + sp
+                ret false
+            end
+        end
+        mut k := fid.len()
+        fid.push(f)
+        cpu.push(c)
+        sub.push(rd32(p, 8 as i64))
+        until k > 0 and cpu[k - 1] == (0x0100000C as i64) and c != (0x0100000C as i64):
+            fid[k] = fid[k - 1]
+            cpu[k] = cpu[k - 1]
+            sub[k] = sub[k - 1]
+            k -= 1
+        end
+        fid[k] = f
+        cpu[k] = c
+        sub[k] = rd32(p, 8 as i64)
+    end
+    mut h := Vector {} as Vector<u8>
+    be32(h, 0xCAFEBABE as i64)
+    be32(h, fid.len() as i64)
+    mut pos := (8 + 20 * fid.len()) as i64
+    mut offs := Vector {} as Vector<i64>
+    repeat fid.len() in i:
+        al := cpu[i] == (0x0100000C as i64) ? 14 : 12
+        pos = align_to(pos, (1 as i64) << (al as i64))
+        offs.push(pos)
+        be32(h, cpu[i])
+        be32(h, sub[i])
+        be32(h, pos)
+        be32(h, l.f_size[fid[i]])
+        be32(h, al as i64)
+        pos = pos + l.f_size[fid[i]]
+    end
+    if pos > (0xFFFFFFFF as i64):
+        err = "a universal binary over 4 GiB needs the 64-bit fat format"
+        ret false
+    end
+    fh := fopen(out, "wb")
+    if fh == null:
+        err = "cannot write " + out
+        ret false
+    end
+    mut at := 0 as i64
+    mut ok := fwrite(h.data as void*, 1 as u64, h.len() as u64, fh) == (h.len() as u64)
+    at = h.len() as i64
+    mut zero := Vector {} as Vector<u8>
+    repeat 16384:
+        zero.push(0 as u8)
+    end
+    repeat fid.len() in j:
+        gap := offs[j] - at
+        if gap > (0 as i64):
+            ok = ok and fwrite(zero.data as void*, 1 as u64, gap as u64, fh) == (gap as u64)
+        end
+        n := l.f_size[fid[j]]
+        ok = ok and fwrite(fptr(l, fid[j]) as void*, 1 as u64, n as u64, fh) == (n as u64)
+        at = offs[j] + n
+    end
+    _c := fclose(fh)
+    if not ok:
+        err = "cannot write " + out
+        ret false
+    end
+    _m := chmod(out, 493)
+    h.free()
+    zero.free()
+    ret true
+end

@@ -1,6 +1,10 @@
 #!/usr/bin/env python3
 """Run a linked x86_64 Mach-O executable on x86_64 Linux by loading it into
-this process and binding its libSystem imports to glibc."""
+this process and binding its libSystem imports to glibc.
+
+Both ways of describing the fixups are applied: the rebase and bind opcodes
+of LC_DYLD_INFO_ONLY and the pointer chains of LC_DYLD_CHAINED_FIXUPS. From a
+universal binary the x86_64 slice is run."""
 
 import ctypes
 import mmap
@@ -118,6 +122,28 @@ class Image:
         self.put64(a, self.get64(a) + self.slide)
 
 
+class Dyld:
+    """Where the image's fixups and exports are described."""
+
+    def __init__(self):
+        self.info = None
+        self.chained = None
+        self.exports = (0, 0)
+
+
+def thin(data):
+    """The x86_64 slice of a universal binary, or the file itself."""
+    if struct.unpack_from(">I", data, 0)[0] != 0xCAFEBABE:
+        return data
+    n = struct.unpack_from(">I", data, 4)[0]
+    for k in range(n):
+        cpu, _, off, size, _ = struct.unpack_from(">iiIII", data, 8 + 20 * k)
+        if cpu == 0x01000007:
+            end = off + size
+            return data[off:end]
+    raise SystemExit("machorun: no x86_64 slice in the universal binary")
+
+
 def parse(data):
     magic, cpu = struct.unpack_from("<Ii", data, 0)
     ncmds = struct.unpack_from("<I", data, 16)[0]
@@ -125,7 +151,7 @@ def parse(data):
         raise SystemExit("machorun: not an x86_64 Mach-O")
     off = 32
     segs = []
-    dyld = None
+    dyld = Dyld()
     entry = None
     for _ in range(ncmds):
         cmd, csize = struct.unpack_from("<II", data, off)
@@ -135,7 +161,12 @@ def parse(data):
             name = bytes(data[n0:n1]).rstrip(b"\0").decode()
             segs.append((name,) + struct.unpack_from("<QQQQ", data, off + 24))
         elif cmd in (0x22, 0x80000022):
-            dyld = struct.unpack_from("<10I", data, off + 8)
+            dyld.info = struct.unpack_from("<10I", data, off + 8)
+            dyld.exports = dyld.info[8:10]
+        elif cmd == 0x80000034:
+            dyld.chained = struct.unpack_from("<II", data, off + 8)
+        elif cmd == 0x80000033:
+            dyld.exports = struct.unpack_from("<II", data, off + 8)
         elif cmd == 0x80000028:
             entry = struct.unpack_from("<Q", data, off + 8)[0]
         off += csize
@@ -226,9 +257,67 @@ def bind(img, b, p, end, lazy):
             raise SystemExit(f"machorun: bad bind opcode {op:x}")
 
 
+def chained_imports(data, base, imports, symbols, count, fmt):
+    targets = []
+    for k in range(count):
+        if fmt == 1:
+            word = struct.unpack_from("<I", data, base + imports + 4 * k)[0]
+            addend = 0
+            name_off = word >> 9
+        elif fmt == 2:
+            word, addend = struct.unpack_from("<Ii", data, base + imports + 8 * k)
+            name_off = word >> 9
+        elif fmt == 3:
+            word, addend = struct.unpack_from("<Qq", data, base + imports + 16 * k)
+            name_off = word >> 32
+        else:
+            raise SystemExit(f"machorun: unknown chained import format {fmt}")
+        p = base + symbols + name_off
+        q = data.index(b"\0", p)
+        targets.append(resolve(data[p:q].decode()) + addend)
+    return targets
+
+
+def chained(img, data, off):
+    _, starts, imports, symbols, count, fmt, _ = struct.unpack_from("<7I", data, off)
+    targets = chained_imports(data, off, imports, symbols, count, fmt)
+    si = off + starts
+    nseg = struct.unpack_from("<I", data, si)[0]
+    for s in range(nseg):
+        so = struct.unpack_from("<I", data, si + 4 + 4 * s)[0]
+        if so == 0:
+            continue
+        sb = si + so
+        _, page_size, pfmt, seg_off, _, npages = struct.unpack_from("<IHHQIH", data, sb)
+        if pfmt not in (2, 6):
+            raise SystemExit(f"machorun: unknown chained pointer format {pfmt}")
+        for p in range(npages):
+            start = struct.unpack_from("<H", data, sb + 22 + 2 * p)[0]
+            if start == 0xFFFF:
+                continue
+            a = img.lo + seg_off + p * page_size + start
+            while True:
+                v = img.get64(a)
+                nxt = (v >> 51) & 0xFFF
+                if v >> 63:
+                    img.put64(a, targets[v & 0xFFFFFF] + ((v >> 24) & 0xFF))
+                else:
+                    tgt = v & 0xFFFFFFFFF
+                    if pfmt == 6:
+                        tgt += img.lo
+                    img.put64(a, (((v >> 36) & 0xFF) << 56 | tgt) + img.slide)
+                if nxt == 0:
+                    break
+                a += 4 * nxt
+
+
 def link(img, data, dyld):
-    rb_off, rb_size, bd_off, bd_size = dyld[0:4]
-    lz_off, lz_size = dyld[6:8]
+    if dyld.chained:
+        chained(img, data, dyld.chained[0])
+    if not dyld.info:
+        return
+    rb_off, rb_size, bd_off, bd_size = dyld.info[0:4]
+    lz_off, lz_size = dyld.info[6:8]
     rebase(img, data, rb_off, rb_off + rb_size)
     bind(img, data, bd_off, bd_off + bd_size, False)
     bind(img, data, lz_off, lz_off + lz_size, True)
@@ -237,11 +326,10 @@ def link(img, data, dyld):
 def main():
     path = sys.argv[1]
     with open(path, "rb") as f:
-        data = f.read()
+        data = thin(f.read())
     segs, dyld, entry = parse(data)
     img = Image(data, segs)
-    if dyld:
-        link(img, data, dyld)
+    link(img, data, dyld)
     text = next(s for s in segs if s[0] == "__TEXT")
     proto = ctypes.CFUNCTYPE(
         ctypes.c_int, ctypes.c_int, ctypes.POINTER(ctypes.c_char_p)

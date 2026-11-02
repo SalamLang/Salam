@@ -49,6 +49,49 @@ class StyleBag {
   }
 }
 
+const CONTEXT_METHODS = [
+  "fillRect",
+  "strokeRect",
+  "clearRect",
+  "roundRect",
+  "rect",
+  "beginPath",
+  "closePath",
+  "moveTo",
+  "lineTo",
+  "arc",
+  "fill",
+  "stroke",
+  "fillText",
+  "save",
+  "restore",
+  "translate",
+  "rotate",
+  "scale",
+  "drawImage",
+];
+
+class Context2D {
+  constructor(el) {
+    this.canvas = {
+      width: Number(el.getAttribute("width") || 300),
+      height: Number(el.getAttribute("height") || 150),
+    };
+    this.calls = {};
+    this.fillStyle = "#000000";
+    this.strokeStyle = "#000000";
+    this.lineWidth = 1;
+    this.font = "10px sans-serif";
+    this.textAlign = "start";
+    this.globalAlpha = 1;
+    for (const name of CONTEXT_METHODS) {
+      this[name] = () => {
+        this.calls[name] = (this.calls[name] || 0) + 1;
+      };
+    }
+  }
+}
+
 class Element {
   constructor(tag) {
     this.tagName = String(tag || "").toUpperCase();
@@ -106,6 +149,10 @@ class Element {
   dispatchEvent(ev) {
     const l = this.listeners.get(ev.type);
     if (l) for (const h of l.slice()) h(ev);
+  }
+  getContext(_kind) {
+    if (!this._ctx) this._ctx = new Context2D(this);
+    return this._ctx;
   }
   _walk(cb) {
     cb(this);
@@ -206,8 +253,11 @@ const localStorage = (() => {
 
 const performance = { now: () => 123 };
 
-function requestAnimationFrame(_fn) {
-  return 0;
+const frameQueue = [];
+
+function requestAnimationFrame(fn) {
+  frameQueue.push(fn);
+  return frameQueue.length;
 }
 
 global.document = document;
@@ -238,6 +288,10 @@ function fireAutoEvents() {
     };
     el.dispatchEvent(ev);
   }
+  for (const h of (document.listeners.get("DOMContentLoaded") || []).slice()) {
+    h({ type: "DOMContentLoaded" });
+  }
+  for (const fn of frameQueue.splice(0)) fn(16);
   if (window.listeners.has("resize")) {
     const ev = { type: "resize" };
     for (const h of window.listeners.get("resize").slice()) h(ev);

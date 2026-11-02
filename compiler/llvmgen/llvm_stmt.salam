@@ -164,6 +164,82 @@ func compound_base(op: int): int:
     ret tok.TK_EOF
 end
 
+func lv_compound_value(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, base_op: int, cur: str, cur_ts: str, want_ts: str
+): str:
+    node := at.Get(a, n)
+    target := node.a
+    v.ovr_node.push(target)
+    v.ovr_ref.push(cur)
+    v.ovr_ts.push(cur_ts)
+    bin := at.NewNode(a, at.AST_BINARY)
+    at.SetOp(a, bin, base_op)
+    at.SetTypeStr(a, bin, cur_ts)
+    mut bin_node := at.Get(a, bin)
+    bin_node.a = target
+    bin_node.b = node.b
+    at.Put(a, bin, bin_node)
+    r := conv(v, s, a, lv_binary(v, s, a, bin), want_ts)
+    _drop_node := v.ovr_node.pop()
+    _drop_ref := v.ovr_ref.pop()
+    _drop_ts := v.ovr_ts.pop()
+    ret r
+end
+
+func lv_compound_index_set(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): bool:
+    node := at.Get(a, n)
+    base_op := compound_base(node.op)
+    idxn := at.Get(a, node.a)
+    if base_op == tok.TK_EOF or idxn.a == 0 or idxn.b == 0:
+        ret false
+    end
+    cts := at.Get(a, idxn.a).type_str
+    if str.Len(cts) == 0 or is_ptr_ts(cts):
+        ret false
+    end
+    mut sname2 := ""
+    ss := op_struct(v, s, a, cts, sname2)
+    if ss == 0:
+        ret false
+    end
+    mems := sm.SymAt(s, ss).members
+    ms := sm.LookupLocal(s, mems, "operator_index_set")
+    mg := sm.LookupLocal(s, mems, "operator_index")
+    if ms == 0 or mg == 0 or sm.SymAt(s, ms).kind != sm.SYM_METHOD or sm.SymAt(s, mg).kind != sm.SYM_METHOD:
+        ret false
+    end
+    sig := pick_arity(s, ms, 2)
+    gsig := pick_arity(s, mg, 1)
+    if sig == 0 or gsig == 0:
+        ret false
+    end
+    mut osc := scope_of(s, ss)
+    if osc == 0:
+        osc = v.pkg_scope
+    end
+    ensure_fn(v, s, a, sm.SigAt(s, sig).decl, ss, osc)
+    ensure_fn(v, s, a, sm.SigAt(s, gsig).decl, ss, osc)
+    recv := lv_addr_of(v, s, a, idxn.a).ptr
+    ix := lv_expr(v, s, a, idxn.b)
+    sg := sm.SigAt(s, sig)
+    p0 := sm.ToString(s, sg.params.get(0))
+    p1 := sm.ToString(s, sg.params.get(1))
+    gsg := sm.SigAt(s, gsig)
+    gp0 := sm.ToString(s, gsg.params.get(0))
+    grts := sm.ToString(s, gsg.ret_type)
+    get_ix := conv(v, s, a, ix, gp0)
+    cur := new_tmp(v)
+    emit(
+        v, cur + " = call " + ty_of(v, s, a, grts) + " " + gsym(mangle(v, s, sname2, "operator_index", gsig)) + "(ptr " + recv + ", " + ty_of(v, s, a, gp0) + " " + get_ix + ")"
+    )
+    rhs := lv_compound_value(v, s, a, n, base_op, cur, grts, p1)
+    set_ix := conv(v, s, a, ix, p0)
+    emit(
+        v, "call void " + gsym(mangle(v, s, sname2, "operator_index_set", sig)) + "(ptr " + recv + ", " + ty_of(v, s, a, p0) + " " + set_ix + ", " + ty_of(v, s, a, p1) + " " + rhs + ")"
+    )
+    ret true
+end
+
 func lv_assign(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     node := at.Get(a, n)
     target := node.a
@@ -178,6 +254,9 @@ func lv_assign(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
     if node.op == tok.TK_ASSIGN and target_kind == at.AST_INDEX and lv_index_set(v, s, a, target, node.b):
         ret
     end
+    if node.op != tok.TK_ASSIGN and target_kind == at.AST_INDEX and lv_compound_index_set(v, s, a, n):
+        ret
+    end
     addr := lv_addr_of(v, s, a, target)
     ts := addr.ts
     mut rhs := ""
@@ -189,14 +268,9 @@ func lv_assign(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int):
             lv_error(v, a, n, "compound assignment operator")
             ret
         end
-        bin := at.NewNode(a, at.AST_BINARY)
-        at.SetOp(a, bin, base_op)
-        at.SetTypeStr(a, bin, ts)
-        mut bin_node := at.Get(a, bin)
-        bin_node.a = target
-        bin_node.b = node.b
-        at.Put(a, bin, bin_node)
-        rhs = conv(v, s, a, lv_binary(v, s, a, bin), ts)
+        cur := new_tmp(v)
+        emit(v, cur + " = load " + ty_of(v, s, a, ts) + ", ptr " + addr.ptr + addr.tbaa)
+        rhs = lv_compound_value(v, s, a, n, base_op, cur, ts, ts)
     end
     emit(v, "store " + ty_of(v, s, a, ts) + " " + rhs + ", ptr " + addr.ptr + addr.tbaa)
 end

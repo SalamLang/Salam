@@ -372,20 +372,21 @@ then goes through:
    loop); bigger callers, such as an image codec's frame decoder, only grew
    and got slower with it.
    A callee too big to inline whole may still be inlined in part. When a
-   function has a cheap common path that updates state and a region that
-   only some calls reach and that calls out (the body of a loop that usually
-   runs zero times, such as the flush loop of `audio.MsbWrite`, or a
-   buffer's grow path), the region is copied into a separate function
-   `<name>.cold` that takes the values live into it as arguments (up to
-   six; field addresses are recomputed inside instead of passed). A call in a loop
+   function has a cheap, call-free common path that updates state and a
+   region that only some calls reach and that calls out (the body of a loop
+   that usually runs zero times, such as the flush loop of `audio.MsbWrite`,
+   or a buffer's grow path), the region is copied into a separate function
+   `<name>.cold` that takes the values live into it as arguments (up to six;
+   field addresses are recomputed inside instead of passed). A call in a loop
    then inlines only the common path, which ends in a call to the cold
    function where the region used to start. The original function is left
    whole for its other callers, and a cold function is only compiled when
-   some call site uses it. Calls that arrive through an inlined body and sit
-   in a loop of the caller get a second chance at being inlined, whole or in
-   part, so `MsbUnary` inlined into a residual loop also brings the bit
-   read it makes. The FLAC encoder and decoder in `audio_flac` run 8%
-   fewer instructions with both.
+   some call site uses it. In a caller of at most 40 blocks, calls that
+   arrive through an inlined body and sit in a loop get a second chance at
+   being inlined, whole or in part, so `MsbUnary` also brings in the bit read
+   its loop makes. The FLAC encoder and decoder in `audio_flac` run 8.7%
+   fewer instructions with both (206 million instead of 226 million; the LLVM
+   build runs 181 million).
 4. Tail recursion elimination. `ret f(x)` becomes a jump back to the top of
    the function, and so does `ret f(x) + y` or `ret f(x) * y` by carrying an
    accumulator, which removes one of the two calls in a recursive Fibonacci.

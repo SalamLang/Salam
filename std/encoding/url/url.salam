@@ -78,7 +78,29 @@ func _path_seg_safe(code: int): bool:
     ret false
 end
 
-func _pct_decode_no_plus(s: str): str:
+func _url_err(text: str, kind: ErrorKind, message: str, offset: int): Error:
+    ret Error.At(kind, message, offset).locate(text).wrap("url")
+end
+
+func _byte_desc(code: int): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    if code == 32:
+        str.BufAppend(sb, "space")
+    else code > 32 and code < 127:
+        str.BufAppend(sb, "character ")
+        str.BufAppendChar(sb, 39)
+        str.BufAppendChar(sb, code)
+        str.BufAppendChar(sb, 39)
+    else:
+        str.BufAppend(sb, "byte 0x")
+        str.BufAppendChar(sb, _hexdigit(code / 16))
+        str.BufAppendChar(sb, _hexdigit(code % 16))
+    end
+    ret str.BufStr(sb)
+end
+
+func _pct_decode_no_plus(s: str): str throws:
     n := s.len()
     bp := _bp(s)
     mut sb := str.NewBuilder()
@@ -86,16 +108,10 @@ func _pct_decode_no_plus(s: str): str:
     mut i := 0
     until i < n:
         code := _ub(bp, i)
-        if code == 37 and i + 2 < n:
-            hi := _hexval(_ub(bp, i + 1))
-            lo := _hexval(_ub(bp, i + 2))
-            if hi >= 0 and lo >= 0:
-                str.BufAppendChar(sb, hi * 16 + lo)
-                i += 3
-            else:
-                str.BufAppendChar(sb, code)
-                i += 1
-            end
+        if code == 37:
+            try _check_escape(s, i, n)
+            str.BufAppendChar(sb, _hexval(_ub(bp, i + 1)) * 16 + _hexval(_ub(bp, i + 2)))
+            i += 3
         else:
             str.BufAppendChar(sb, code)
             i += 1
@@ -104,30 +120,153 @@ func _pct_decode_no_plus(s: str): str:
     ret str.BufStr(sb)
 end
 
-func _split_authority(authority: str, u &: URL):
-    mut rest := authority
-    at := rest.find("@")
-    if at >= 0:
-        u.userinfo = rest.substr(0, at)
-        rest = rest.substr(at + 1, rest.len() - at - 1)
+func _check_escape(raw: str, i: int, stop: int) throws:
+    bp := _bp(raw)
+    if i + 1 < stop and _hexval(_ub(bp, i + 1)) < 0:
+        throw _url_err(raw, ErrorKind.Syntax, "malformed percent escape", i)
     end
-    if rest.len() > 0 and rest.substr(0, 1) == "[":
-        close := rest.find("]")
-        if close >= 0:
-            u.host = rest.substr(1, close - 1)
-            tail := rest.substr(close + 1, rest.len() - close - 1)
-            if tail.len() > 1 and tail.substr(0, 1) == ":":
-                u.port = tail.substr(1, tail.len() - 1).to_int()
-            end
-            ret
+    if i + 2 < stop and _hexval(_ub(bp, i + 2)) < 0:
+        throw _url_err(raw, ErrorKind.Syntax, "malformed percent escape", i)
+    end
+    if i + 2 >= stop:
+        throw _url_err(raw, ErrorKind.UnexpectedEnd, "incomplete percent escape", i)
+    end
+end
+
+func _check_escapes(raw: str, from: int, stop: int) throws:
+    bp := _bp(raw)
+    mut i := from
+    until i < stop:
+        if _ub(bp, i) == 37:
+            try _check_escape(raw, i, stop)
+            i += 3
+        else:
+            i += 1
         end
     end
-    colon := rest.find(":")
-    if colon >= 0:
-        u.host = rest.substr(0, colon)
-        u.port = rest.substr(colon + 1, rest.len() - colon - 1).to_int()
+end
+
+func _is_alpha(code: int): bool:
+    ret (code >= 65 and code <= 90) or (code >= 97 and code <= 122)
+end
+
+func _is_digit(code: int): bool:
+    ret code >= 48 and code <= 57
+end
+
+func _sub_delim(code: int): bool:
+    ret code == 33 or code == 36 or code == 38 or code == 39 or code == 40 or code == 41 or code == 42 or code == 43 or code == 44 or code == 59 or code == 61
+end
+
+func _name_char(code: int): bool:
+    if _is_alpha(code) or _is_digit(code) or code >= 128: ret true end
+    if code == 45 or code == 46 or code == 95 or code == 126 or code == 37: ret true end
+    ret _sub_delim(code)
+end
+
+func _check_scheme(raw: str, stop: int) throws:
+    if stop == 0:
+        throw _url_err(raw, ErrorKind.Syntax, "missing scheme before '://'", 0)
+    end
+    bp := _bp(raw)
+    repeat stop in i:
+        code := _ub(bp, i)
+        mut good := _is_alpha(code)
+        if i > 0 and (_is_digit(code) or code == 43 or code == 45 or code == 46): good = true end
+        if not good:
+            throw _url_err(raw, ErrorKind.Syntax, "invalid " + _byte_desc(code) + " in scheme", i)
+        end
+    end
+end
+
+func _check_name(raw: str, from: int, stop: int, what: str, allow_colon: bool) throws:
+    bp := _bp(raw)
+    mut i := from
+    until i < stop:
+        code := _ub(bp, i)
+        if not _name_char(code) and not (allow_colon and code == 58):
+            throw _url_err(raw, ErrorKind.Syntax, "invalid " + _byte_desc(code) + " in " + what, i)
+        end
+        i += 1
+    end
+    try _check_escapes(raw, from, stop)
+end
+
+func _parse_port(raw: str, from: int, stop: int): int throws:
+    bp := _bp(raw)
+    mut port := 0
+    mut i := from
+    until i < stop:
+        code := _ub(bp, i)
+        if not _is_digit(code):
+            throw _url_err(raw, ErrorKind.Syntax, "invalid " + _byte_desc(code) + " in port", i)
+        end
+        port = port * 10 + (code - 48)
+        if port > 65535:
+            throw _url_err(raw, ErrorKind.OutOfRange, "port is larger than 65535", from)
+        end
+        i += 1
+    end
+    ret port
+end
+
+func _index_from(raw: str, code: int, from: int, stop: int): int:
+    bp := _bp(raw)
+    mut i := from
+    until i < stop:
+        if _ub(bp, i) == code: ret i end
+        i += 1
+    end
+    ret 0 - 1
+end
+
+func _parse_authority(raw: str, from: int, stop: int, u &: URL) throws:
+    bp := _bp(raw)
+    mut hs := from
+    mut at := 0 - 1
+    mut i := from
+    until i < stop:
+        if _ub(bp, i) == 64: at = i end
+        i += 1
+    end
+    if at >= 0:
+        try _check_name(raw, from, at, "userinfo", true)
+        u.userinfo = raw.substr(from, at - from)
+        hs = at + 1
+    end
+    mut port_at := 0 - 1
+    if hs < stop and _ub(bp, hs) == 91:
+        close := _index_from(raw, 93, hs, stop)
+        if close < 0:
+            throw _url_err(raw, ErrorKind.Syntax, "missing ']' after the IPv6 address", hs)
+        end
+        if close == hs + 1:
+            throw _url_err(raw, ErrorKind.Syntax, "empty IPv6 address", hs)
+        end
+        mut j := hs + 1
+        until j < close:
+            code := _ub(bp, j)
+            if _hexval(code) < 0 and code != 58 and code != 46:
+                throw _url_err(raw, ErrorKind.Syntax, "invalid " + _byte_desc(code) + " in IPv6 address", j)
+            end
+            j += 1
+        end
+        u.host = raw.substr(hs + 1, close - hs - 1)
+        if close + 1 < stop:
+            if _ub(bp, close + 1) != 58:
+                throw _url_err(raw, ErrorKind.Syntax, "unexpected " + _byte_desc(_ub(bp, close + 1)) + " after the IPv6 address", close + 1)
+            end
+            port_at = close + 1
+        end
     else:
-        u.host = rest
+        port_at = _index_from(raw, 58, hs, stop)
+        mut he := stop
+        if port_at >= 0: he = port_at end
+        try _check_name(raw, hs, he, "host", false)
+        u.host = raw.substr(hs, he - hs)
+    end
+    if port_at >= 0:
+        u.port = try _parse_port(raw, port_at + 1, stop)
     end
 end
 
@@ -177,46 +316,55 @@ end
 
 @en "Parse"
 @fa "تجزیه نشانی"
-pub func Parse(raw: str): URL:
-    mut u := URL {}
-    mut rest := raw
-
-    hash := rest.find("#")
-    if hash >= 0:
-        u.fragment = rest.substr(hash + 1, rest.len() - hash - 1)
-        rest = rest.substr(0, hash)
+pub func Parse(raw: str): URL throws:
+    n := raw.len()
+    if n == 0:
+        throw _url_err(raw, ErrorKind.InvalidArgument, "empty URL", 0)
     end
-
-    q := rest.find("?")
-    if q >= 0:
-        u.raw_query = rest.substr(q + 1, rest.len() - q - 1)
-        rest = rest.substr(0, q)
-    end
-
-    mut has_authority := false
-    scheme_end := rest.find("://")
-    if scheme_end >= 0:
-        u.scheme = rest.substr(0, scheme_end)
-        rest = rest.substr(scheme_end + 3, rest.len() - scheme_end - 3)
-        has_authority = true
-    else rest.len() >= 2 and rest.substr(0, 2) == "//":
-        rest = rest.substr(2, rest.len() - 2)
-        has_authority = true
-    end
-
-    if has_authority:
-        slash := rest.find("/")
-        mut authority := rest
-        mut path_rest := ""
-        if slash >= 0:
-            authority = rest.substr(0, slash)
-            path_rest = rest.substr(slash, rest.len() - slash)
+    bp := _bp(raw)
+    repeat n in i:
+        code := _ub(bp, i)
+        if code <= 32 or code == 127:
+            throw _url_err(raw, ErrorKind.Syntax, "invalid " + _byte_desc(code), i)
         end
-        _split_authority(authority, u)
-        u.path = path_rest
-    else:
-        u.path = rest
     end
+    mut u := URL {}
+    mut stop := n
+    hash := _index_from(raw, 35, 0, n)
+    if hash >= 0:
+        try _check_escapes(raw, hash + 1, n)
+        u.fragment = raw.substr(hash + 1, n - hash - 1)
+        stop = hash
+    end
+    q := _index_from(raw, 63, 0, stop)
+    if q >= 0:
+        try _check_escapes(raw, q + 1, stop)
+        u.raw_query = raw.substr(q + 1, stop - q - 1)
+        stop = q
+    end
+    mut pos := 0
+    mut has_authority := false
+    scheme_end := raw.substr(0, stop).find("://")
+    if scheme_end >= 0 and _index_from(raw, 47, 0, scheme_end) < 0:
+        try _check_scheme(raw, scheme_end)
+        u.scheme = raw.substr(0, scheme_end)
+        pos = scheme_end + 3
+        has_authority = true
+    else stop >= 2 and _ub(bp, 0) == 47 and _ub(bp, 1) == 47:
+        pos = 2
+        has_authority = true
+    end
+    if has_authority:
+        mut aend := _index_from(raw, 47, pos, stop)
+        if aend < 0: aend = stop end
+        try _parse_authority(raw, pos, aend, u)
+        if u.host == "" and str.Lower(u.scheme) != "file":
+            throw _url_err(raw, ErrorKind.Syntax, "missing host", pos)
+        end
+        pos = aend
+    end
+    try _check_escapes(raw, pos, stop)
+    u.path = raw.substr(pos, stop - pos)
     ret u
 end
 
@@ -262,14 +410,14 @@ end
 
 @en "DecodedPath"
 @fa "مسیر کدگشایی‌شده"
-pub func DecodedPath(u: URL): str:
-    ret _pct_decode_no_plus(u.path)
+pub func DecodedPath(u: URL): str throws:
+    ret try _pct_decode_no_plus(u.path)
 end
 
 @en "DecodedUserinfo"
 @fa "اطلاعات کاربر کدگشایی‌شده"
-pub func DecodedUserinfo(u: URL): str:
-    ret _pct_decode_no_plus(u.userinfo)
+pub func DecodedUserinfo(u: URL): str throws:
+    ret try _pct_decode_no_plus(u.userinfo)
 end
 
 @en "EncodePathSegment"
@@ -296,8 +444,8 @@ end
 
 @en "Query"
 @fa "پرس‌وجو"
-pub func Query(u: URL): query.QueryMap:
-    ret query.Decode(u.raw_query)
+pub func Query(u: URL): query.QueryMap throws:
+    ret try query.Decode(u.raw_query)
 end
 
 @en "SetQuery"
@@ -308,47 +456,28 @@ end
 
 @en "Join"
 @fa "پیوستن نشانی"
-pub func Join(base: URL, ref: str): URL:
+pub func Join(base: URL, ref: str): URL throws:
     if ref.len() == 0: ret base end
-    if ref.find("://") >= 0: ret Parse(ref) end
-    if ref.len() >= 2 and ref.substr(0, 2) == "//":
-        ret Parse(base.scheme + ":" + ref)
-    end
-    if ref.substr(0, 1) == "/":
-        mut u := base
-        hash := ref.find("#")
-        mut path_and_query := ref
-        u.fragment = ""
-        if hash >= 0:
-            u.fragment = ref.substr(hash + 1, ref.len() - hash - 1)
-            path_and_query = ref.substr(0, hash)
-        end
-        q := path_and_query.find("?")
-        u.raw_query = ""
-        if q >= 0:
-            u.raw_query = path_and_query.substr(q + 1, path_and_query.len() - q - 1)
-            u.path = _remove_dots(path_and_query.substr(0, q))
-        else:
-            u.path = _remove_dots(path_and_query)
-        end
-        ret u
+    r := try Parse(ref)
+    if r.scheme.len() > 0: ret r end
+    if r.host.len() > 0:
+        mut out := r
+        out.scheme = base.scheme
+        ret out
     end
     mut u := base
-    u.path = _path_dir(base.path) + ref
-    u.raw_query = ""
-    u.fragment = ""
-    hash := ref.find("#")
-    mut rel := ref
-    if hash >= 0:
-        u.fragment = ref.substr(hash + 1, ref.len() - hash - 1)
-        rel = ref.substr(0, hash)
+    u.fragment = r.fragment
+    if r.path.len() == 0:
+        if ref.substr(0, 1) == "?": u.raw_query = r.raw_query end
+        ret u
     end
-    q := rel.find("?")
-    if q >= 0:
-        u.raw_query = rel.substr(q + 1, rel.len() - q - 1)
-        u.path = _remove_dots(_path_dir(base.path) + rel.substr(0, q))
+    u.raw_query = r.raw_query
+    if r.path.substr(0, 1) == "/":
+        u.path = _remove_dots(r.path)
     else:
-        u.path = _remove_dots(_path_dir(base.path) + rel)
+        mut dir := _path_dir(base.path)
+        if dir == "" and base.host.len() > 0: dir = "/" end
+        u.path = _remove_dots(dir + r.path)
     end
     ret u
 end

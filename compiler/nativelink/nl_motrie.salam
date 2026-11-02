@@ -1,0 +1,155 @@
+package nativelink
+
+pub struct MoTrie:
+    pub names: Vector<str> = Vector {}
+    pub addrs: Vector<i64> = Vector {}
+    pub term: Vector<i64> = Vector {}
+    pub off: Vector<i64> = Vector {}
+    pub e_par: Vector<int> = Vector {}
+    pub e_lab: Vector<str> = Vector {}
+    pub e_kid: Vector<int> = Vector {}
+end
+
+func tr_byte(s: str, i: int): int:
+    p := (s as void*) as u8*
+    ret p[i] as int
+end
+
+func tr_lcp(a: str, b: str): int:
+    n := str.Len(a) < str.Len(b) ? str.Len(a) : str.Len(b)
+    mut k := 0
+    until k < n and tr_byte(a, k) == tr_byte(b, k):
+        k += 1
+    end
+    ret k
+end
+
+func tr_less(a: str, b: str): bool:
+    k := tr_lcp(a, b)
+    if k == str.Len(a):
+        ret k < str.Len(b)
+    end
+    if k == str.Len(b):
+        ret false
+    end
+    ret tr_byte(a, k) < tr_byte(b, k)
+end
+
+func tr_build(t &: MoTrie, lo: int, hi: int, depth: int): int:
+    node := t.term.len()
+    t.term.push(0 - 1 as i64)
+    t.off.push(0 as i64)
+    mut i := lo
+    if i < hi and str.Len(t.names[i]) == depth:
+        t.term[node] = t.addrs[i]
+        i += 1
+    end
+    until i < hi:
+        c := tr_byte(t.names[i], depth)
+        mut j := i + 1
+        until j < hi and tr_byte(t.names[j], depth) == c:
+            j += 1
+        end
+        lcp := tr_lcp(t.names[i], t.names[j - 1])
+        e := t.e_par.len()
+        t.e_par.push(node)
+        t.e_lab.push(str.Substr(t.names[i], depth, lcp - depth))
+        t.e_kid.push(0)
+        t.e_kid[e] = tr_build(t, i, j, lcp)
+        i = j
+    end
+    ret node
+end
+
+func uleb_len(x: i64): int:
+    mut n := 1
+    mut v := x >> (7 as i64)
+    until v != (0 as i64):
+        n += 1
+        v = v >> (7 as i64)
+    end
+    ret n
+end
+
+func tr_node_size(t &: MoTrie, n: int): i64:
+    mut sz := 0
+    if t.term[n] >= (0 as i64):
+        info := 1 + uleb_len(t.term[n])
+        sz = uleb_len(info as i64) + info
+    else:
+        sz = 1
+    end
+    sz += 1
+    repeat t.e_par.len() in e:
+        if t.e_par[e] == n:
+            sz += str.Len(t.e_lab[e]) + 1 + uleb_len(t.off[t.e_kid[e]])
+        end
+    end
+    ret sz
+end
+
+func mo_export_trie(l &: Nl, t &: Mo): Vector<u8>:
+    mut tr := MoTrie {}
+    repeat l.g_name.len() in g:
+        if l.g_state[g] != SY_DEF or l.g_hid[g] or l.g_obj[g] < 0 or l.f_arch[l.o_file[l.g_obj[g]]]:
+            continue
+        end
+        nm := name_of(l, l.g_name[g])
+        ad := mo_sym_g(l, g) - t.base
+        mut k := tr.names.len()
+        tr.names.push(nm)
+        tr.addrs.push(ad)
+        until k > 0 and tr_less(nm, tr.names[k - 1]):
+            tr.names[k] = tr.names[k - 1]
+            tr.addrs[k] = tr.addrs[k - 1]
+            k -= 1
+        end
+        tr.names[k] = nm
+        tr.addrs[k] = ad
+    end
+    mut out := Vector {} as Vector<u8>
+    if tr.names.len() == 0:
+        ret out
+    end
+    _root := tr_build(tr, 0, tr.names.len(), 0)
+    mut moved := true
+    until moved:
+        moved = false
+        mut pos := 0 as i64
+        repeat tr.term.len() in n:
+            if tr.off[n] != pos:
+                tr.off[n] = pos
+                moved = true
+            end
+            pos = pos + tr_node_size(tr, n)
+        end
+    end
+    repeat tr.term.len() in n2:
+        if tr.term[n2] >= (0 as i64):
+            info := 1 + uleb_len(tr.term[n2])
+            uleb(out, info as i64)
+            uleb(out, 0 as i64)
+            uleb(out, tr.term[n2])
+        else:
+            out.push(0 as u8)
+        end
+        mut nk := 0
+        repeat tr.e_par.len() in e:
+            if tr.e_par[e] == n2:
+                nk += 1
+            end
+        end
+        out.push(nk as u8)
+        repeat tr.e_par.len() in e2:
+            if tr.e_par[e2] == n2:
+                lab := tr.e_lab[e2]
+                repeat str.Len(lab) in c:
+                    out.push(tr_byte(lab, c) as u8)
+                end
+                out.push(0 as u8)
+                uleb(out, tr.off[tr.e_kid[e2]])
+            end
+        end
+    end
+    ret out
+end

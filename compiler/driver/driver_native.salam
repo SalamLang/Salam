@@ -12,6 +12,7 @@ include lv "../llvmgen/llvmgen.salam"
 include lb "../llvm_bridge.salam"
 include ng "../nativegen/nativegen.salam"
 include nl "../nativelink/nativelink.salam"
+include at "../ast.salam"
 include pth "../sal_path.salam"
 
 mut g_win_res := nl.WinRes {}
@@ -427,7 +428,14 @@ func macho_link_ok(triple: str, o: lv.Options, why &: str): bool:
 end
 
 func native_link_macho(lgr: lg.Logger, obj: str, exe: str, o: lv.Options): int:
+    ret native_link_macho_as(lgr, obj, exe, o, "")
+end
+
+func native_link_macho_as(lgr: lg.Logger, obj: str, exe: str, o: lv.Options, install: str): int:
     mut l := nl.New()
+    if str.Len(install) > 0:
+        nl.SetShared(l, install)
+    end
     nl.AddInput(l, obj)
     repeat o.link_libs.len() in i:
         spec := lib_spec(o.link_libs.get(i))
@@ -1196,4 +1204,160 @@ func native_finish(lgr: lg.Logger, opt &: Dr, o: lv.Options, ll_src: str, ok: bo
         opt.exe_path = exe
     end
     ret 0
+end
+
+func native_link_shared(lgr: lg.Logger, obj: str, out: str, triple: str, o: lv.Options, mode: str): int:
+    if str.Equals(mode, "system"):
+        ret 0 - 1
+    end
+    mut tgt := triple
+    if str.Len(tgt) == 0 and musl_host():
+        tgt = glibc_host_arch() + "-linux-musl"
+    end
+    mut why := ""
+    mut ok := false
+    mut musl := false
+    mut dir := ""
+    if str.Contains(tgt, "linux-musl"):
+        musl = true
+        ok = builtin_link_ok(tgt, o, why)
+        if ok:
+            dir = musl_libdir(musl_root(o, tri_arch(tgt)))
+            if not os.Exists(dir + "/libc.so"):
+                why = i18.Tr("the built-in linker needs the musl sysroot's libc.so to build a shared library, and none was found")
+                ok = false
+            end
+        end
+    else is_apple(tgt):
+        if macho_link_ok(tgt, o, why):
+            ret native_link_macho_as(lgr, obj, out, o, "@rpath/" + pth.PathBase(out))
+        end
+    else str.Contains(tgt, "windows") or str.Contains(tgt, "mingw"):
+        why = co.Format1(i18.Tr("the built-in linker does not build shared libraries for '%s' yet"), co.ArgStr(tgt))
+    else:
+        ok = glibc_link_ok(tgt, o, why)
+    end
+    if not ok:
+        if str.Equals(mode, "builtin"):
+            lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, why)
+            ret 1
+        end
+        ret 0 - 1
+    end
+    mut l := nl.New()
+    nl.SetShared(l, pth.PathBase(out))
+    nl.AddInput(l, obj)
+    if musl:
+        repeat o.link_libs.len() in i:
+            spec := lib_spec(o.link_libs.get(i))
+            if str.Len(spec) == 0 or str.Equals(spec, "m") or str.Equals(spec, "c") or str.Equals(spec, "pthread"):
+                continue
+            end
+            mut kind := ""
+            if i < o.link_kinds.len():
+                kind = o.link_kinds.get(i)
+            end
+            mut lib := static_lib_path(spec, kind, o)
+            if str.Len(lib) == 0:
+                lib = musl_shared_lib(spec, kind, o, dir)
+            end
+            nl.AddInput(l, lib)
+        end
+        nl.AddInput(l, dir + "/libc.so")
+        rt := dir + "/libclang_rt.builtins-" + tri_arch(tgt) + ".a"
+        if os.Exists(rt):
+            nl.AddInput(l, rt)
+        else os.Exists(dir + "/libgcc.a"):
+            nl.AddInput(l, dir + "/libgcc.a")
+        end
+    else:
+        arch := glibc_arch(tgt)
+        dirs := glibc_dirs(o, arch)
+        nl.SetSysroot(l, glibc_sysroot(o))
+        repeat o.link_libs.len() in j:
+            spec2 := lib_spec(o.link_libs.get(j))
+            if str.Len(spec2) == 0 or str.Equals(spec2, "c") or str.Equals(spec2, "m") or str.Equals(spec2, "pthread"):
+                continue
+            end
+            mut kind2 := ""
+            if j < o.link_kinds.len():
+                kind2 = o.link_kinds.get(j)
+            end
+            nl.AddInput(l, glibc_lib(dirs, spec2, kind2))
+        end
+        nl.AddInput(l, find_in(dirs, "libm.so"))
+        nl.AddInput(l, find_in(dirs, "libc.so"))
+        gcc := glibc_libgcc(o, arch)
+        if str.Len(gcc) > 0:
+            nl.AddInput(l, gcc)
+        end
+    end
+    if not nl.Link(l, out):
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, nl.Error(l))
+        ret 1
+    end
+    lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "built-in link: " + nl.Stats(l))
+    ret 0
+end
+
+func native_lib_finish(lgr: lg.Logger, opt &: Dr, o: lv.Options, ll_src: str, ok: bool, why: str, a &: at.Ast, prog: int): int:
+    if not ok:
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, why)
+        ret 1
+    end
+    mut triple := o.target_triple
+    if str.Len(triple) == 0:
+        triple = native_link_triple()
+    end
+    mut terr := ""
+    tos := native_target_os(triple, terr)
+    if tos < 0:
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, terr)
+        ret 1
+    end
+    _pt := pf.Begin(pf.TP_CODEGEN, opt.input)
+    mut g := ng.New(tos)
+    ng.SetArch(g, native_target_arch(triple))
+    g.release = o.release
+    g.fast_math = opt.fast_math
+    g.pic = str.Equals(opt.lib_kind, "shared")
+    built := ng.Run(g, ll_src)
+    pf.End(pf.TP_CODEGEN, _pt)
+    if not built:
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, ng.Error(g))
+        ret 1
+    end
+    mut stem := opt.lib_name
+    if str.Len(stem) == 0:
+        stem = output_stem_of(opt.input)
+    end
+    final := lib_output_name(opt, stem)
+    win := tos == ng.NG_OS_WINDOWS
+    g_ll_tmp_seq += 1
+    mut obj := os.TempDir() + "/salam-native-" + driver_pid() + "-" + time.NowMicros() + "-" + g_ll_tmp_seq + (win ? ".obj" : ".o")
+    if str.Equals(opt.lib_kind, "static"):
+        obj = final + (win ? ".obj" : ".o")
+    end
+    if not ng.WriteObject(g, obj):
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, ng.Error(g))
+        ret 2
+    end
+    if str.Equals(opt.lib_kind, "static") or win:
+        ret llvm_lib_finish(lgr, opt, obj, o.link_libs, a, prog, final, stem)
+    end
+    _pl := pf.Begin(pf.TP_LINK, final)
+    rc := native_link_shared(lgr, obj, final, str.Len(o.target_triple) > 0 ? triple : "", o, linker_mode(opt))
+    pf.End(pf.TP_LINK, _pl)
+    if rc == 0 - 1:
+        ret llvm_lib_finish(lgr, opt, obj, o.link_libs, a, prog, final, stem)
+    end
+    if opt.keep_temp:
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "kept native object: " + obj)
+    else:
+        _rm := os.Remove(obj)
+    end
+    if rc != 0:
+        ret rc
+    end
+    ret lib_write_api(opt, a, prog, final, stem)
 end

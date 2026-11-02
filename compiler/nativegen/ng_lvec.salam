@@ -32,6 +32,7 @@ pub struct Lv:
     pub sle: bool = false
     pub lane: int = 0
     pub vf: int = 0
+    pub wide: bool = false
     pub cls: Vector<int> = Vector {}
     pub vmap: Vector<int> = Vector {}
     pub reds: Vector<int> = Vector {}
@@ -117,19 +118,40 @@ func lv_lane_of(t: int): int:
     ret 0
 end
 
-func lv_vty(t: int, lane: int): int:
-    if t == T_I32: ret T_V4I32 end
-    if t == T_I64: ret T_V2I64 end
-    if t == T_F32: ret T_V4F32 end
-    if t == T_F64: ret T_V2F64 end
-    if t == T_I8: ret T_V16I8 end
-    if t == T_I16: ret T_V8I16 end
+func lv_vty(t: int, lane: int, wide: bool): int:
+    mut et := t
     if t == T_I1:
-        if lane == 1: ret T_V16I8 end
-        if lane == 2: ret T_V8I16 end
-        ret lane == 4 ? T_V4I32 : T_V2I64
+        et = lane == 1 ? T_I8 : (lane == 2 ? T_I16 : (lane == 4 ? T_I32 : T_I64))
     end
-    ret 0 - 1
+    if et != T_I32 and et != T_I64 and et != T_F32 and et != T_F64 and et != T_I8 and et != T_I16:
+        ret 0 - 1
+    end
+    ret vec_ty(et, wide)
+end
+
+func lv_wide_ok(g &: Ng, r &: Lv): bool:
+    if r.divp >= 0:
+        ret false
+    end
+    each rk in r.rkind:
+        if rk >= 5:
+            ret false
+        end
+    end
+    each i in r.body:
+        res := g.i_res[i]
+        c := res >= 0 ? r.cls[res] : LV_NONE
+        if c == LV_NARROW or c == LV_RADDR or c == LV_RIDX:
+            ret false
+        end
+        if (g.i_op[i] == OP_ZEXT or g.i_op[i] == OP_SEXT) and c == LV_VEC:
+            ret false
+        end
+        if g.i_op[i] == OP_STORE and lv_cls(r, g.i_a[i]) == LV_NARROW:
+            ret false
+        end
+    end
+    ret true
 end
 
 func lv_set_lane(r &: Lv, l: int): bool:
@@ -1062,7 +1084,8 @@ func lv_match(g &: Ng, l &: Lp, mark: int, h: int, r &: Lv): bool:
     if r.lane == 0:
         ret false
     end
-    r.vf = 16 / r.lane
+    r.wide = g.avx2 and not g.off_avx2 and g.arch == NG_ARCH_X64 and lv_wide_ok(g, r)
+    r.vf = (r.wide ? 32 : 16) / r.lane
     if r.lane <= 2 and r.reds.len() > 0:
         each rk in r.rkind:
             if rk < 5 or r.lane != 1:
@@ -1223,7 +1246,7 @@ func lv_bmask(g &: Ng, r &: Lv, ck: int, c: int, vt: int): int:
             ret r.bc_v[k]
         end
     end
-    et := vt == T_V2I64 ? T_I64 : (vt == T_V16I8 ? T_I8 : (vt == T_V8I16 ? T_I16 : T_I32))
+    et := g.t_elem[vt]
     sl := ins_new(g, OP_SELECT, et)
     g.i_a[sl] = c
     g.i_b[sl] = const_int(g, et, 0 - 1 as i64)
@@ -1551,7 +1574,7 @@ func lv_transform(g &: Ng, r &: Lv):
     mut vpools := Vector {} as Vector<int>
     repeat r.reds.len() in rk:
         rp := r.reds[rk]
-        vt := r.rkind[rk] >= 5 ? T_V2I64 : lv_vty(g.i_ty[rp], r.lane)
+        vt := r.rkind[rk] >= 5 ? T_V2I64 : lv_vty(g.i_ty[rp], r.lane, r.wide)
         mut a0 := new_val(g, VK_ZERO, vt, 0 as i64)
         if r.rkind[rk] != 0 and r.rkind[rk] < 5:
             a0 = lv_bcast(g, r, ck, phi_val_for(g, rp, pre), vt)
@@ -1627,11 +1650,11 @@ func lv_transform(g &: Ng, r &: Lv):
                 g.i_a[nst] = r.vmap[g.i_a[g.v_def[sv]]]
                 g.i_f[nst] = IF_W8
             else:
-                g.i_a[nst] = lv_vget(g, r, ck, sv, lv_vty(g.v_ty[sv], r.lane))
+                g.i_a[nst] = lv_vget(g, r, ck, sv, lv_vty(g.v_ty[sv], r.lane, r.wide))
             end
             g.i_b[nst] = r.vmap[g.i_b[i]]
             if lv_cls(r, g.i_b[i]) == LV_RADDR:
-                g.i_a[nst] = lv_emit(g, vb, OP_VREV, lv_vty(g.v_ty[sv], r.lane), g.i_a[nst], 0 - 1)
+                g.i_a[nst] = lv_emit(g, vb, OP_VREV, lv_vty(g.v_ty[sv], r.lane, r.wide), g.i_a[nst], 0 - 1)
                 g.i_b[nst] = lv_rshift(g, r, vb, g.i_b[nst], tsize(g, g.v_ty[sv]))
             end
             g.i_c[nst] = g.i_c[i]
@@ -1692,7 +1715,7 @@ func lv_transform(g &: Ng, r &: Lv):
             if rk2 != 0:
                 xm := g.i_b[i] == pv ? g.i_c[i] : g.i_b[i]
                 xvv := lv_vget(g, r, ck, xm, vt2)
-                vc2 := ins_new(g, OP_ICMP, lv_vty(T_I1, r.lane))
+                vc2 := ins_new(g, OP_ICMP, lv_vty(T_I1, r.lane, r.wide))
                 g.i_a[vc2] = xvv
                 g.i_b[vc2] = vaccs[red_i]
                 g.i_x[vc2] = rk2 == 1 ? CC_SGT : (rk2 == 2 ? CC_SLT : (rk2 == 3 ? CC_UGT : CC_ULT))
@@ -1726,7 +1749,7 @@ func lv_transform(g &: Ng, r &: Lv):
             if g.i_ty[i] == T_I8 and r.lane != 1:
                 continue
             end
-            vt3 := lv_vty(g.i_ty[i], r.lane)
+            vt3 := lv_vty(g.i_ty[i], r.lane, r.wide)
             nl := ins_new(g, OP_LOAD, vt3)
             rev := lv_cls(r, g.i_a[i]) == LV_RADDR
             g.i_a[nl] = rev ? lv_rshift(g, r, vb, r.vmap[g.i_a[i]], tsize(g, g.i_ty[i])) : r.vmap[g.i_a[i]]
@@ -1750,14 +1773,15 @@ func lv_transform(g &: Ng, r &: Lv):
             continue
         end
         if (op == OP_SHL or op == OP_LSHR or op == OP_ASHR) and (not is_cint(g, g.i_b[i]) or (op == OP_ASHR and g.i_ty[i] == T_I64)):
-            vts := lv_vty(g.i_ty[i], r.lane)
+            vts := lv_vty(g.i_ty[i], r.lane, r.wide)
             xv := lv_vget(g, r, ck, g.i_a[i], vts)
             if not g.off_vsign and op == OP_ASHR and g.i_ty[i] == T_I64 and is_cint(g, g.i_b[i]) and (g.v_i[g.i_b[i]] & (63 as i64)) == (63 as i64):
-                hi := lv_emit(g, vb, OP_VREV, T_V4I32, xv, 0 - 1)
+                v32 := vec_ty(T_I32, r.wide)
+                hi := lv_emit(g, vb, OP_VREV, v32, xv, 0 - 1)
                 g.i_x[g.v_def[hi]] = 0xF5
-                sg := lv_emit(g, vb, OP_ASHR, T_V4I32, hi, const_int(g, T_I32, 31 as i64))
+                sg := lv_emit(g, vb, OP_ASHR, v32, hi, const_int(g, T_I32, 31 as i64))
                 r.vmap[res] = lv_emit(g, vb, OP_BITCAST, vts, sg, 0 - 1)
-                g.i_x[g.v_def[r.vmap[res]]] = T_V4I32
+                g.i_x[g.v_def[r.vmap[res]]] = v32
                 continue
             end
             bits := g.i_ty[i] == T_I64 ? 63 : 31
@@ -1788,8 +1812,8 @@ func lv_transform(g &: Ng, r &: Lv):
         if op == OP_SELECT and not lv_inv(g, r, g.i_a[i]) and g.i_a[i] < r.inv.len() and r.inv[g.i_a[i]]:
             swapsel = true
         end
-        vt4 := lv_vty(g.i_ty[i], r.lane)
-        opty := op == OP_ICMP ? lv_vty(g.v_ty[g.i_a[i]], r.lane) : vt4
+        vt4 := lv_vty(g.i_ty[i], r.lane, r.wide)
+        opty := op == OP_ICMP ? lv_vty(g.v_ty[g.i_a[i]], r.lane, r.wide) : vt4
         ni2 := ins_new(g, op, vt4)
         g.i_x[ni2] = g.i_x[i]
         if op == OP_SELECT:

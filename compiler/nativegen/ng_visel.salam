@@ -6,6 +6,37 @@ const VOP_CMPEQ64 := 0x1E0
 const VOP_CMPGT64 := 0x1E1
 const VOP_CMPHI64 := 0x1E2
 const VOP_CMPHI32 := 0x1E3
+const VOP_PMULLD := 0x3840
+const VUN_BCD := 0x58
+const VUN_BCQ := 0x59
+const VUN_BCB := 0x78
+const VUN_BCW := 0x79
+const VUN_BCSS := 0x18
+const VUN_BCSD := 0x19
+const VUN_EXT := 0x39
+
+func ybcast(g &: Ng, x: int, kind: int): int:
+    d := wide_reg(g)
+    m := e_rr(g, M_VUN, 32, d, x)
+    g.mc.cc[m] = kind
+    g.mc.ymm[m] = true
+    ret d
+end
+
+func yext_hi(g &: Ng, src: int): int:
+    hi := xwide(g)
+    m := e_rr(g, M_VUN, 32, hi, src)
+    g.mc.cc[m] = VUN_EXT
+    g.mc.imm[m] = 1 as i64
+    g.mc.ymm[m] = true
+    ret hi
+end
+
+func ybcast_gpr(g &: Ng, r: int, q: bool, kind: int): int:
+    x := xmm(g)
+    _m := e_rr(g, M_MOVQ_XG, q ? 8 : 4, x, r)
+    ret ybcast(g, x, kind)
+end
 
 func vop(g &: Ng, opc: int, dst: int, src: int):
     m := e_rr(g, M_VOP_RR, 8, dst, src)
@@ -92,6 +123,10 @@ end
 
 func isel_vbcast_byte(g &: Ng, i: int):
     w := g.t_elem[g.i_ty[i]] == T_I16
+    if g.isy:
+        set_res(g, i, ybcast_gpr(g, use_reg(g, g.i_a[i]), false, w ? VUN_BCW : VUN_BCB))
+        ret
+    end
     k := gpr(g)
     zx := e_rr(g, M_MOVZX_RR, 4, k, use_reg(g, g.i_a[i]))
     g.mc.sz2[zx] = w ? 2 : 1
@@ -180,6 +215,11 @@ end
 func isel_vmul32(g &: Ng, i: int):
     b := use_reg(g, g.i_b[i])
     lo := vcopy(g, g.i_a[i])
+    if g.isy:
+        vop(g, VOP_PMULLD, lo, b)
+        set_res(g, i, lo)
+        ret
+    end
     if g.arch == NG_ARCH_A64:
         vop(g, VOP_MUL32, lo, b)
         set_res(g, i, lo)
@@ -210,6 +250,9 @@ end
 func vsplat32(g &: Ng, v: i64): int:
     k := gpr(g)
     _m := e_movi(g, k, v)
+    if g.isy:
+        ret ybcast_gpr(g, k, false, VUN_BCD)
+    end
     r := wide_reg(g)
     _x := e_rr(g, M_MOVQ_XG, 4, r, k)
     s := e_rr(g, M_PSHUFD, 16, r, r)
@@ -305,6 +348,11 @@ func isel_vredmm(g &: Ng, i: int):
     uns := kind >= 3
     mx := kind == 1 or kind == 3
     mut acc := use_reg(g, a)
+    if is_ymm(g, g.v_ty[a]):
+        hi := yext_hi(g, acc)
+        m0 := mx ? vgt_regs(g, e, acc, hi, uns) : vgt_regs(g, e, hi, acc, uns)
+        acc = vpick(g, m0, acc, hi)
+    end
     repeat (e == T_I64 ? 1 : 2) in st:
         sh := wide_reg(g)
         s := e_rr(g, M_PSHUFD, 16, sh, acc)
@@ -369,7 +417,11 @@ func isel_vsel(g &: Ng, i: int):
 end
 
 func isel_vbcast_int(g &: Ng, i: int):
-    q := g.i_ty[i] == T_V2I64
+    q := g.t_elem[g.i_ty[i]] == T_I64
+    if g.isy:
+        set_res(g, i, ybcast_gpr(g, use_reg(g, g.i_a[i]), q, q ? VUN_BCQ : VUN_BCD))
+        ret
+    end
     rb := wide_reg(g)
     _m := e_rr(g, M_MOVQ_XG, q ? 8 : 4, rb, use_reg(g, g.i_a[i]))
     if q:

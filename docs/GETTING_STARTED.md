@@ -339,17 +339,52 @@ salam build --lib            # libNAME.so, libNAME.dylib, or NAME.dll + libNAME.
 salam build --lib=static     # libNAME.a
 ```
 
-Both backends build libraries. The C backend is the default; `--backend=llvm`
+Every backend builds libraries. The C backend is the default; `--backend=llvm`
 (or a `--target` build with no cross `--cc`) produces the object with LLVM and
-links it with `cc -shared` (or archives it for `--lib=static`). A Windows DLL
+links it with `cc -shared` (or archives it for `--lib=static`).
+`--backend=native` links a shared library with the built-in linker, with no
+C compiler, for Linux (glibc and musl) and macOS targets; see "Shared
+libraries" in [docs/NATIVE_LINKER.md](NATIVE_LINKER.md). A Windows DLL
 also gets `NAME.def` and, when `llvm-dlltool` is installed, an MSVC import
-library `NAME.lib`, next to the mingw `libNAME.dll.a`.
+library `NAME.lib`, next to the mingw `libNAME.dll.a`. With
+`--backend=native` and a Windows target the compiler's own linker writes the
+DLL and `libNAME.dll.a`, so no mingw `gcc` is needed, only the mingw-w64
+runtime files.
 
 The functions in the entry file's `export:` block become the library's C API,
 under their own names, and `NAME.h` is written next to the library with their
 prototypes. No `main` is needed: the runtime and the package's globals are
 set up when the library is loaded. A Windows DLL can be built from Linux with
 `--target=x86_64-windows-gnu --cc=x86_64-w64-mingw32-gcc`.
+
+### 🪟 Windows programs: icon, manifest and no console
+
+A program built for Windows with `--backend=native` (or with
+`--linker=builtin`) can carry an icon, an application manifest and version
+information, and can be a GUI program that opens no console window:
+
+```sh
+salam build app.salam --backend=native --target=x86_64-w64-windows-gnu \
+    --subsystem=windows --icon=app.ico --manifest=app.manifest \
+    --version-info=version=1.2.0 --version-info=company="Example Ltd"
+```
+
+`--version-info` takes `version`, `company`, `description`, `product` and
+`copyright`. A project can keep the same settings in `salam.toml`; paths are
+relative to the project, and `version` defaults to `[package].version`:
+
+```toml
+[windows]
+subsystem = "windows"
+icon = "assets/app.ico"
+manifest = "app.manifest"
+description = "Salam demo"
+company = "Example Ltd"
+```
+
+The compiler writes the resources itself, so no `windres` is needed. A GUI
+program still starts in `main`; its output only shows up when it is
+redirected to a file or a pipe.
 
 More examples live in [`tests/en/`](../tests/en/).
 

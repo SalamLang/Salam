@@ -79,6 +79,39 @@ func rv_addi(a &: Rv, rd: int, rs: int, imm: i64):
     rv_i(a, imm, rs, 0, rd, 0x13)
 end
 
+func rv_pcaddr(a &: Rv, rd: int, sym: int, add: i64):
+    at := a.w.len()
+    rv_rel(a, sym, R_RV_PCHI20, add)
+    rv_w(a, ((rd as i64) << (7 as i64)) | (0x17 as i64))
+    rv_rel(a, 0 - 1, R_RV_PCLO12, at as i64)
+    rv_addi(a, rd, rd, 0 as i64)
+end
+
+func rv_gotload(a &: Rv, rd: int, sym: int):
+    at := a.w.len()
+    rv_rel(a, sym, R_RV_GOTHI20, 0 as i64)
+    rv_w(a, ((rd as i64) << (7 as i64)) | (0x17 as i64))
+    rv_rel(a, 0 - 1, R_RV_PCLO12, at as i64)
+    rv_i(a, 0 as i64, rd, 3, rd, 0x03)
+end
+
+func rv_pclabels(g &: Ng):
+    repeat g.r_sec.len() in r:
+        if g.r_type[r] != R_RV_PCLO12 or g.r_sec[r] != SEC_TEXT:
+            continue
+        end
+        g.pc_lbl += 1
+        s := sym_named(g, ".Lsalam.pcrel" + g.pc_lbl)
+        g.sy_def[s] = true
+        g.sy_local[s] = true
+        g.sy_sec[s] = SEC_TEXT
+        g.sy_off[s] = g.sy_off[g.r_sym[r]] + (g.r_add[r] as int)
+        g.sy_used[s] = true
+        g.r_sym[r] = s
+        g.r_add[r] = 0 as i64
+    end
+end
+
 func rv_mv(a &: Rv, rd: int, rs: int):
     if rd != rs:
         rv_addi(a, rd, rs, 0 as i64)
@@ -170,6 +203,12 @@ func rv_addr(g &: Ng, a &: Rv, i: int, base &: int, off &: i64):
     if k == MK_ARG:
         base = RV_S0
         off = g.mc.md[i]
+        ret
+    end
+    if (k == MK_RIP or k == MK_GOT) and g.pic:
+        rv_pcaddr(a, RV_T3, g.mc.msym[i], g.mc.md[i])
+        base = RV_T3
+        off = 0 as i64
         ret
     end
     if k == MK_RIP or k == MK_GOT:
@@ -1031,6 +1070,10 @@ func rv_ins(g &: Ng, a &: Rv, i: int):
             ret
         end
         M_LDGOT:
+            if g.pic:
+                rv_gotload(a, rv_x(r0), g.mc.msym[i])
+                ret
+            end
             rv_rel(a, g.mc.msym[i], R_RV_HI20, 0 as i64)
             rv_w(a, ((rv_x(r0) as i64) << (7 as i64)) | (0x37 as i64))
             rv_rel(a, g.mc.msym[i], R_RV_LO12, 0 as i64)
@@ -1438,7 +1481,13 @@ func encode_function_rv64(g &: Ng):
     g.sy_sec[g.f_sym] = SEC_TEXT
     g.sy_off[g.f_sym] = base
     repeat a.rl_at.len() in r:
-        add_reloc(g, SEC_TEXT, base + bpos[a.rl_at[r]], a.rl_sym[r], a.rl_type[r], a.rl_add[r])
+        mut rsym := a.rl_sym[r]
+        mut radd := a.rl_add[r]
+        if a.rl_type[r] == R_RV_PCLO12:
+            rsym = g.f_sym
+            radd = bpos[radd as int] as i64
+        end
+        add_reloc(g, SEC_TEXT, base + bpos[a.rl_at[r]], rsym, a.rl_type[r], radd)
     end
     repeat a.w.len() in wi:
         v := a.w[wi] as i64

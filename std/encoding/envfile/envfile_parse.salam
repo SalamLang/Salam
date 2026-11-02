@@ -16,13 +16,13 @@ package envfile
 
 import str
 import mem
-import encoding.encerr
 
 struct _DV:
     pub value: str = ""
     pub next: int = 0
     pub flag: int = 1
     pub ok: bool = true
+    pub at: int = -1
 end
 
 func _slice(s: str, i: int, ln: int): str:
@@ -186,15 +186,16 @@ func _parse_entry(d &: Doc, s: str, n: int, i: int): _DV:
     if k.ok == false or p >= n or _ub(bp, p) != 61:
         ret _DV { value = "envfile: expected KEY=VALUE", next = _skip_to_eol(s, n, i), ok = false }
     end
-    v := _read_value(s, n, _skip_hspace(s, n, p + 1), false)
+    vstart := _skip_hspace(s, n, p + 1)
+    v := _read_value(s, n, vstart, false)
     if v.ok == false:
-        ret _DV { value = "envfile: unterminated quoted value", next = v.next, ok = false }
+        ret _DV { value = "envfile: unterminated quoted value", next = v.next, ok = false, at = vstart }
     end
     _push(d, k.value, v.value, v.flag)
     ret _DV { value = "", next = v.next, ok = true }
 end
 
-func _parse_into(d &: Doc, text: str, err &: encerr.EncodingError, strict: bool):
+func _parse_into(d &: Doc, text: str, err &: Error, strict: bool):
     n := text.len()
     mut p := _skip_bom(text, n, 0)
     until p < n:
@@ -202,7 +203,8 @@ func _parse_into(d &: Doc, text: str, err &: encerr.EncodingError, strict: bool)
         if p >= n: ret end
         r := _parse_entry(d, text, n, p)
         if r.ok == false and strict:
-            err = encerr.ErrUnexpectedToken(r.value, p)
+            msg := r.value.starts_with("envfile: ") ? r.value.substr(9, r.value.len() - 9) : r.value
+            err = Error.At(ErrorKind.Syntax, msg, r.at >= 0 ? r.at : p)
             ret
         end
         if r.next > p:
@@ -217,7 +219,7 @@ end
 @fa "تجزیه خام"
 pub func ParseRaw(text: str): Doc:
     mut out := Doc {}
-    mut err := encerr.NoError()
+    mut err := Error {}
     _parse_into(out, text, err, false)
     ret out
 end
@@ -234,11 +236,14 @@ end
 
 @en "ParseStrict"
 @fa "تجزیه سخت گیرانه"
-pub func ParseStrict(text: str, err &: encerr.EncodingError): Doc:
+pub func ParseStrict(text: str): Doc throws:
     mut raw := Doc {}
-    err = encerr.NoError()
+    mut err := Error {}
     _parse_into(raw, text, err, true)
     defer Free(raw)
+    if err.message != "":
+        throw err.locate(text).wrap("envfile")
+    end
     mut base := Doc {}
     defer Free(base)
     ret ExpandDoc(raw, base)
@@ -247,10 +252,13 @@ end
 @en "Valid"
 @fa "معتبر"
 pub func Valid(text: str): bool:
-    mut err := encerr.NoError()
-    mut d := ParseStrict(text, err)
-    defer Free(d)
-    ret encerr.IsError(err) == false
+    try:
+        mut d := ParseStrict(text)
+        Free(d)
+        ret true
+    catch:
+        ret false
+    end
 end
 
 @en "ParseScalar"

@@ -102,6 +102,22 @@ func x_movt(a &: Arm, rd: int, v: i64):
     arm_w(a, (0xE3400000 as i64) | (((v >> (12 as i64)) & (15 as i64)) << (16 as i64)) | ((rd as i64) << (12 as i64)) | (v & (0xFFF as i64)))
 end
 
+func arm_pcaddr(a &: Arm, rd: int, sym: int, add: i64):
+    arm_rel(a, sym, R_ARM_MOVW_PREL, add - (16 as i64))
+    x_movw(a, rd, 0 as i64)
+    arm_rel(a, sym, R_ARM_MOVT_PREL, add - (12 as i64))
+    x_movt(a, rd, 0 as i64)
+    arm_dps(a, 4, false, rd, 15, rd, 0, 0)
+end
+
+func arm_gotload(a &: Arm, rd: int, sym: int):
+    arm_w(a, (0xE59F0000 as i64) | ((rd as i64) << (12 as i64)))
+    arm_w(a, 0xEA000000 as i64)
+    arm_rel(a, sym, R_ARM_GOT_PREL, 0 - 12 as i64)
+    arm_w(a, 0 as i64)
+    arm_w(a, (0xE79F0000 as i64) | ((rd as i64) << (12 as i64)) | (rd as i64))
+end
+
 func x_mov_imm(a &: Arm, rd: int, v0: i64):
     v := v0 & (0xFFFFFFFF as i64)
     e := arm_imm(v)
@@ -212,6 +228,14 @@ func arm_addr(g &: Ng, a &: Arm, i: int, base &: int, off &: i64):
     if k == MK_ARG:
         base = ASPR
         off = (a.fbase as i64) + g.mc.md[i]
+        ret
+    end
+    if (k == MK_RIP or k == MK_GOT) and g.pic:
+        md2 := g.mc.md[i]
+        small2 := md2 >= (0 - 32000 as i64) and md2 < (32000 as i64)
+        arm_pcaddr(a, AIP, g.mc.msym[i], small2 ? md2 : (0 as i64))
+        base = AIP
+        off = small2 ? (0 as i64) : md2
         ret
     end
     if k == MK_RIP or k == MK_GOT:
@@ -785,6 +809,10 @@ func arm_ins(g &: Ng, a &: Arm, i: int):
             ret
         end
         M_LDGOT:
+            if g.pic:
+                arm_gotload(a, arm_r(r0), g.mc.msym[i])
+                ret
+            end
             arm_rel(a, g.mc.msym[i], R_ARM_MOVW, 0 as i64)
             x_movw(a, arm_r(r0), 0 as i64)
             arm_rel(a, g.mc.msym[i], R_ARM_MOVT, 0 as i64)

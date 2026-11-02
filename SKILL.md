@@ -1272,7 +1272,7 @@ end
   `Object(members) Array(items)`
   `Member/MemberInt/MemberBool/MemberFloat/MemberRaw Str`. Typed codecs the
   compiler derives per type:
-  `Marshal(v) MarshalIndent Unmarshal(text, out, err) UnmarshalLenient`,
+  `Marshal(v) MarshalIndent Unmarshal(text, out) UnmarshalLenient` (both `throws`),
   with `@json "wire"` to rename a field, `@json "-"` to drop it, and
   `@json "" "omitempty"/"optional"/"string"` for the rest. A Persian file
   spells the marker `@جیسون` and an English file `@json`; the other spelling is
@@ -1284,13 +1284,18 @@ end
   `@doc "..."` marker on a struct, enum or field becomes its `description`
   (one `@doc` per definition); `SchemaEnvelope`/`SchemaMerge` give the parts.
   Also `GetPath(text, "a.b.0.c")`, `Items Unquote`, and the dynamic tree
-  `Decode(text, err): value.Value` / `Encode(v, opts)` / `EncodeDefault`.
+  `Decode(text): value.Value throws` / `Encode(v, opts)` / `EncodeDefault`.
   Pitfalls: **`GetInt` returns a 32-bit `int` and clamps** (3000000000 reads
   as 2147483647): read IDs and timestamps by `Unmarshal` into an `i64`.
   `Get GetInt Has` see only the top level (`GetPath` for nested). `Unmarshal`
   fails on a missing field, an unknown key or a wrong type;
-  `UnmarshalLenient` keeps defaults and skips unknown keys. Reset the
-  `encerr.EncodingError` before each call.
+  `UnmarshalLenient` keeps defaults and skips unknown keys. Every decoder in
+  the encoding family throws a core `Error` on bad input: `kind` is
+  `Syntax`, `UnexpectedEnd`, `TypeMismatch`, `MissingKey`, `OutOfRange` or
+  `Unsupported`, `offset` is the byte position and `line`/`column` are filled
+  in (`e.to_str()` gives `json: expected ':' (line 2, column 7)`); trailing
+  text after the value is code `json.trailing_data`. `JSONDecoder.Decode()`
+  throws too.
 - **`xml`** (`import encoding.xml`): two models in one package.
   - **Simple tree** `XMLNode` (`tag attrs children text`): `Decode DecodeStrict Valid Encode EncodeIndent Child Children Attr HasAttr SetAttr AppendChild NewXMLNode ToValue FromValue EscapeText EscapeAttr`, plus the
     tokenizer `NewXMLTokenizer`/`NextToken` (checks nothing; run
@@ -1309,7 +1314,7 @@ end
   - **DTD validation**: `ParseDTD Validate ValidateInternalSubset CheckNamespaces ApplyDefaults` returning a `Report` (`ok`, `items` of
     `Violation`, `ReportText`, `FreeReport FreeDTD`).
 - **`yaml`** (`import encoding.yaml`): `Valid Get GetInt GetFloat GetBool Has Keys Len TypeOf Parse Decode ToJSON Encode Dump DumpWith SplitDocuments`
-  plus the `Object Array Member*` builders. No anchors or aliases (`&a`,
+  plus the `Object Array Member*` builders; `Decode` throws on bad input. No anchors or aliases (`&a`,
   `*a`, `<<:`; an anchored map silently drops the rest of the document);
   `yes`/`no`/`on`/`off` are strings; `GetInt` is 32-bit and wraps; every path
   call reparses, so `Decode` once for many reads.
@@ -1323,14 +1328,16 @@ end
   and key order.
 - **`value`** (`import encoding.value`): the dynamic `Value` every format
   shares: `ValueNull ValueBool ValueInt ValueFloat ValueString NewValueArray NewValueObject Is* As* ArrayLen ArrayGet ArraySet ArrayPush ObjectGet ObjectGetOk ObjectSet ObjectHas ObjectDelete ObjectKeys ValueClone ValueFree Equal`. `As*` never checks the kind (`AsInt` of a string is 0);
+  the checked methods `v.field(k) v.at(i) v.int() v.float() v.str() v.bool()`
+  throw instead (`MissingKey`, `OutOfRange`, `TypeMismatch` naming both
+  kinds), so `try v.field("db").field("port").int()` reads a nested value;
   `ObjectGet` of a missing key is null (chains are safe) but `ArrayGet` past
   the end stops the program; a copy shares its map/elements (`ValueClone`);
   keys come back in hash order; `Equal(1, 1.0)` is false.
 - **`serde`** `Detect DetectFormat Transcode TranscodeStrict` (detection is a
   guess and almost any text is YAML: pass the format when you know it),
-  **`encerr`** the shared `EncodingError` (`NoError` resets it; a reader
-  only writes it on failure; `position` counts bytes), **`msgpack`**
-  `Marshal Unmarshal UnmarshalBytes` (no bin/ext types, string map keys
+  `TranscodeStrict` throws, **`msgpack`**
+  `Marshal Unmarshal UnmarshalBytes` (the two readers throw; no bin/ext types, string map keys
   only, trailing bytes ignored), **`binary`** `WriteU32BE ReadI64LE ...`
   (reading past the end yields 0 and sets `r.bad`; `ReadU32*` comes back in a
   signed `int`, so widen with `(v as i64) & 4294967295`; writers truncate
@@ -1341,7 +1348,7 @@ end
   nothing is lower-cased, and editing one parameter re-encodes the whole
   query. **`query`** (`import encoding.query`): `Get GetAll Has` on the text,
   or `Decode` to a `QueryMap` with `Set Add Remove Retain Encode`; missing
-  and empty look the same to `Get`. **`envfile`** (`import encoding.envfile`): `Parse ParseStrict ParseRaw Get GetOr Set Format Expand RefNames`; `Parse` drops bad lines silently (use `ParseStrict`),
+  and empty look the same to `Get`. **`envfile`** (`import encoding.envfile`): `Parse ParseStrict ParseRaw Get GetOr Set Format Expand RefNames`; `Parse` drops bad lines silently (use `ParseStrict`, which throws with the line and column),
   and `${NAME}` only sees lines above it.
 - **`encoding`**: `Base64Encode Base64EncodeBytes Base64Decode Base64DecodeStrict Base64DecodeBytes HexEncode HexDecode URLEncode URLDecode`. `Base64Decode`/`HexDecode` return a `str`, so binary is cut at
   the first zero byte (use `Base64DecodeBytes`); `HexDecode` stops at the

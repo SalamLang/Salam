@@ -14,7 +14,7 @@ pkg.intro <<
 <ul>
 <li><code>GetInt</code> returns an <code>int</code>, 32 bits, and clamps anything larger: <code>3000000000</code> comes back as <code>2147483647</code>. For ids and timestamps, read the field with <code>Unmarshal</code> into an <code>i64</code>, or parse the text from <code>Get</code>.</li>
 <li><code>Get</code>, <code>GetInt</code> and <code>Has</code> look only at the top level of an object. For nested values use <code>GetPath</code>, such as <code>GetPath(text, "user.address.city")</code>.</li>
-<li>Strict or lenient. <code>Unmarshal</code> fails on a missing field, an unknown key or a type that does not match; <code>UnmarshalLenient</code> keeps the struct's defaults for missing fields and skips unknown keys, but a wrong type still fails.</li>
+<li>Strict or lenient. <code>Unmarshal</code> throws on a missing field, an unknown key or a type that does not match; <code>UnmarshalLenient</code> keeps the struct's defaults for missing fields and skips unknown keys, but a wrong type still fails.</li>
 <li>Key order. <code>Marshal</code> writes fields in struct order. A decoded <code>Value</code> object keeps the order of the text and <code>Encode</code> writes its keys in that order; pass <code>sort_keys</code> to <code>Encode</code> when output must be alphabetical.</li>
 </ul>
 
@@ -29,12 +29,12 @@ pkg.intro <<
 <p><code>@json "price_cents"</code> renames a field in the JSON without renaming it in the code, and <code>@json "-"</code> keeps internal fields such as <code>cache_key</code> out of the output. Use it for passwords and tokens too, so they can never leak into a response by accident.</p>
 
 <h2 id="guide-dynamic">Guide: explore JSON of unknown shape</h2>
-<p>When you do not know the shape ahead of time, for example a webhook from another service, <code>Decode</code> gives a tree of <a href="/std/encoding/value/">Value</a> nodes. Ask each node what it is with <code>IsString</code>, <code>IsInt</code>, <code>IsObject</code> and the rest, then read it with the matching <code>As</code> function.</p>
+<p>When you do not know the shape ahead of time, for example a webhook from another service, <code>Decode</code> gives a tree of <a href="/std/encoding/value/">Value</a> nodes. Ask each node what it is with <code>IsString</code>, <code>IsInt</code>, <code>IsObject</code> and the rest, then read it with the matching <code>As</code> function. Where a value must be there and of one kind, the checked methods are shorter: <code>doc.field("size").field("w").int()</code> throws <code>MissingKey</code> or <code>TypeMismatch</code> instead of quietly giving 0.</p>
 {{example.encoding-json-guide-dynamic}}
 <p>Whole numbers come back as <code>int</code> and numbers with a fraction as <code>float</code>; <code>IsNumber</code> accepts both. A decoded object keeps its keys in the order of the text, but a sender is free to change that order, so walk a list of the keys you expect, as this program does, and use <code>ObjectHas</code> for the optional ones.</p>
 
 <h2 id="guide-errors">Guide: report bad input</h2>
-<p>Every decoding function takes an <code>EncodingError</code> from <a href="/std/encoding/encerr/">encoding/encerr</a>. When it fails, <code>message</code> says what was wrong and <code>position</code> is the byte offset where the reader stopped, which is what you show the user. The text helpers like <code>Get</code> never fail; they return an empty string for a missing key, so check with <code>Has</code> or <code>Valid</code> first when that matters.</p>
+<p><code>Decode</code>, <code>Unmarshal</code>, <code>UnmarshalLenient</code> and a decoder's <code>Decode</code> are declared <code>throws</code>: on bad input they throw an <a href="/std/core/">Error</a> and give back nothing half-read. Catch it with <code>try:</code> ... <code>catch e:</code>, or write <code>try</code> before the call in a function that is itself <code>throws</code> to pass it on. <code>e.kind</code> says what went wrong (<code>Syntax</code>, <code>UnexpectedEnd</code>, <code>TypeMismatch</code>, <code>MissingKey</code>, <code>OutOfRange</code> and so on), <code>e.message</code> says it in words, and <code>e.line</code> and <code>e.column</code> point at the spot in the text, which is what you show the user; <code>e.to_str()</code> puts it all on one line. Data after a complete value has the code <code>json.trailing_data</code>. The text helpers like <code>Get</code> never fail; they return an empty string for a missing key, so check with <code>Has</code> or <code>Valid</code> first when that matters.</p>
 {{example.encoding-json-guide-errors}}
 
 <h2 id="guide-ndjson">Guide: stream newline-delimited JSON</h2>
@@ -84,7 +84,7 @@ doc.GetPath = Follows a dotted path through objects and arrays, such as <code>hi
 doc.Unquote = Decodes a raw JSON string token, escapes included; anything else comes back unchanged.
 doc.Marshal = Turns any Salam value, from a number or a string to a struct, a vector or a map, into compact JSON.
 doc.MarshalIndent = Like <code>Marshal</code>, indented.
-doc.Unmarshal = Fills the struct <code>out</code> from JSON. Every field has to be present with a matching type and an unknown key is an error too; on failure <code>err</code> is filled in and it returns false.
+doc.Unmarshal = Fills the struct <code>out</code> from JSON. Every field has to be present with a matching type and an unknown key is an error too; on failure it throws an <code>Error</code> with the kind, the message and the line and column in the text.
 doc.UnmarshalLenient = Like <code>Unmarshal</code>, but unknown keys are skipped and missing fields keep the value they already had. A value of the wrong type is still an error.
 doc.JSONEncoder = A streaming writer: it writes several JSON values one after another, each on its own line.
 doc.JSONEncoder.dst = The destination file, when it writes to one.
@@ -104,7 +104,7 @@ doc.JSONDecoder.loaded = Whether the file has been read.
 doc.JSONDecoder.eof = It has reached the end of the text.
 doc.JSONDecoder.bad = An error happened while reading.
 doc.JSONDecoder.More = True when another value is left.
-doc.JSONDecoder.Decode = Reads the next value.
+doc.JSONDecoder.Decode = Reads the next value. Throws an <code>Error</code> on bad input, after which <code>More</code> is false.
 doc.NewEncoder = A writer that writes into an open file.
 doc.NewEncoderIndent = A file writer with indenting.
 doc.NewBufEncoder = A writer that writes into memory; get the text with <code>String</code>.
@@ -118,7 +118,7 @@ doc.JSONOptions = The options for <code>Encode</code>.
 doc.JSONOptions.indent = The indent unit; empty means one line.
 doc.JSONOptions.sort_keys = Write the keys in alphabetical order. Without it they are written in the order the object holds them: the order they were added or decoded.
 doc.JSONOptions.ignore_null = Leave out the keys whose value is null.
-doc.Decode = Turns JSON into a dynamic <code>Value</code>; on an error <code>err</code> is filled in.
+doc.Decode = Turns JSON into a dynamic <code>Value</code>. Throws an <code>Error</code> with the line and column of the problem when the text is not valid JSON or has data after the value.
 doc.Encode = Turns a <code>Value</code> into JSON with the given options.
 doc.EncodeDefault = Turns a <code>Value</code> into JSON with the default options.
 

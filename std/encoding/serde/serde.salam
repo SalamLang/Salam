@@ -3,7 +3,6 @@
 package serde
 
 import encoding.value
-import encoding.encerr
 import encoding.json
 import encoding.yaml
 import encoding.toml
@@ -78,56 +77,49 @@ func _looks_csv(s: str): bool:
     ret true
 end
 
-func _decode_by_name(data: str, from: str, ok &: bool): value.Value:
-    ok = true
+func _decode_by_name(data: str, from: str): value.Value throws:
     if from == "json":
-        mut err := encerr.NoError()
-        v := json.Decode(data, err)
-        if encerr.IsError(err): ok = false end
-        ret v
+        ret try json.Decode(data)
     end
     if from == "yaml":
-        mut err := encerr.NoError()
-        v := yaml.Decode(data, err)
-        if encerr.IsError(err): ok = false end
-        ret v
+        ret try yaml.Decode(data)
     end
     if from == "toml":
         mut tok := false
         v := toml.DecodeStrict(data, tok)
-        if not tok: ok = false end
+        if not tok:
+            throw Error.New(ErrorKind.Syntax, "the text is not valid TOML").wrap("toml")
+        end
         ret v
     end
     if from == "xml":
         mut xok := false
         node := xml.DecodeStrict(data, xok)
         if not xok:
-            ok = false
-            ret value.ValueNull()
+            throw Error.New(ErrorKind.Syntax, "the text is not well-formed XML").wrap("xml")
         end
         ret xml.ToValue(node)
     end
     if from == "csv":
         ret csv.ToValue(data)
     end
-    ok = false
-    ret value.ValueNull()
+    throw Error.New(ErrorKind.InvalidArgument, "unknown format '" + from + "'").wrap("serde")
 end
 
-func _encode_by_name(v: value.Value, dest: str, ok &: bool): str:
-    ok = true
+func _encode_by_name(v: value.Value, dest: str): str throws:
     if dest == "json": ret json.EncodeDefault(v) end
     if dest == "yaml": ret yaml.Encode(v) end
     if dest == "toml":
         mut tok := true
         out := toml.EncodeStrict(v, tok)
-        if not tok: ok = false end
+        if not tok:
+            throw Error.New(ErrorKind.Unsupported, "this value has no TOML form; TOML needs a table at the top").wrap("toml")
+        end
         ret out
     end
     if dest == "xml": ret xml.EncodeDeclaration(xml.FromValue(v, "root")) end
     if dest == "csv": ret csv.FromValue(v) end
-    ok = false
-    ret ""
+    throw Error.New(ErrorKind.InvalidArgument, "unknown format '" + dest + "'").wrap("serde")
 end
 
 @en "DetectFormat"
@@ -157,26 +149,17 @@ end
 
 @en "TranscodeStrict"
 @fa "تبدیل قالب سخت گیرانه"
-pub func TranscodeStrict(data: str, from: str, dest: str, ok &: bool): str:
-    mut decOk := false
-    v := _decode_by_name(data, from, decOk)
-    if not decOk:
-        ok = false
-        ret ""
-    end
-    mut encOk := false
-    out := _encode_by_name(v, dest, encOk)
-    if not encOk:
-        ok = false
-        ret ""
-    end
-    ok = true
-    ret out
+pub func TranscodeStrict(data: str, from: str, dest: str): str throws:
+    v := try _decode_by_name(data, from)
+    ret try _encode_by_name(v, dest)
 end
 
 @en "Transcode"
 @fa "تبدیل قالب"
 pub func Transcode(data: str, from: str, dest: str): str:
-    mut ok := false
-    ret TranscodeStrict(data, from, dest, ok)
+    try:
+        ret TranscodeStrict(data, from, dest)
+    catch:
+        ret ""
+    end
 end

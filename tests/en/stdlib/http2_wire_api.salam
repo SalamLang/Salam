@@ -1,0 +1,85 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import net.http2
+import net.tcp
+import tls
+import compress
+
+func main:
+    srv := tcp.Bind(0)
+    cli := tcp.Dial("127.0.0.1", tcp.Port(srv))
+    acc := tcp.Accept(srv)
+    mut ct := http2.PlainTransport(cli.fd)
+    mut st := http2.PlainTransport(acc.fd)
+
+    println "write preface: ", http2.WritePreface(ct)
+    println "read preface: ", http2.ReadPreface(st)
+
+    mut payload := compress.BufFromStr("12345678")
+    mut ping := http2.MakePing(payload, false)
+    println "ping frame: ", ping.kind == http2.H2_PING, ping.stream_id, compress.BufLen(ping.payload)
+    println "ping ack flag: ", http2.FrameHasFlag(ping, http2.H2_FLAG_ACK)
+    println "write ping: ", http2.WriteFrame(ct, ping)
+    mut got := http2.ReadFrame(st, http2.H2_DEFAULT_FRAME_SIZE)
+    println "read ping: ", got.ok, got.kind == http2.H2_PING, compress.BufToStrUnsafe(got.payload)
+    http2.FreeFrame(got)
+    http2.FreeFrame(ping)
+
+    mut short := compress.BufFromStr("abc")
+    mut pong := http2.MakePing(short, true)
+    println "pong ack flag: ", http2.FrameHasFlag(pong, http2.H2_FLAG_ACK)
+    println "padded payload: ", compress.BufLen(pong.payload), compress.BufGet(pong.payload, 2), compress.BufGet(pong.payload, 3)
+    http2.FreeFrame(pong)
+
+    mut ack := http2.MakeSettingsAck()
+    println "settings ack: ", ack.kind == http2.H2_SETTINGS, http2.FrameHasFlag(ack, http2.H2_FLAG_ACK), compress.BufLen(ack.payload)
+    println "write ack: ", http2.WriteFrame(st, ack)
+    mut back := http2.ReadFrame(ct, http2.H2_DEFAULT_FRAME_SIZE)
+    println "read ack: ", back.ok, back.kind == http2.H2_SETTINGS, http2.FrameHasFlag(back, http2.H2_FLAG_ACK)
+    http2.FreeFrame(back)
+    http2.FreeFrame(ack)
+
+    mut entries := compress.NewByteBuf()
+    http2.PutSetting(entries, http2.H2_SETTINGS_MAX_FRAME_SIZE, 32768)
+    http2.PutSetting(entries, http2.H2_SETTINGS_MAX_CONCURRENT_STREAMS, 7)
+    println "setting bytes: ", compress.BufLen(entries)
+    println "first id: ", compress.BufGet(entries, 0) * 256 + compress.BufGet(entries, 1)
+    println "first value: ", compress.BufGet(entries, 4) * 256 + compress.BufGet(entries, 5)
+    println "second value: ", compress.BufGet(entries, 11)
+    mut sf := http2.NewFrame(http2.H2_SETTINGS, 0, 0)
+    compress.BufPushBuf(sf.payload, entries)
+    mut applied := http2.DefaultSettings()
+    println "apply: ", http2.ApplySettings(applied, sf)
+    println "applied: ", applied.max_frame_size, applied.max_concurrent_streams
+    http2.FreeFrame(sf)
+    compress.BufFree(entries)
+
+    tcp.Write(cli, "GET / HTTP/1.1\r\nHost: x\r\n\r\n")
+    println "wrong preface: ", http2.ReadPreface(st)
+
+    tc := tls.Conn {}
+    tt := http2.TLSTransport(tc)
+    println "tls transport kind: ", tt.kind == http2.H2_TRANSPORT_TLS
+    println "tls transport ok: ", tt.ok
+
+    compress.BufFree(short)
+    compress.BufFree(payload)
+    http2.CloseTransport(ct)
+    http2.CloseTransport(st)
+    println "closed: ", ct.ok, st.ok
+    tcp.CloseServer(srv)
+end

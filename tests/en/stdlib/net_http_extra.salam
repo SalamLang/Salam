@@ -1,0 +1,221 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import net.http
+import net.router
+import net.tcp
+import compress
+import os
+import io
+import tls
+import testing
+
+const PORT := 23811
+
+mut raw server := tcp.Server {}
+
+func cookie probe(h: i64):
+    all := http.Cookies(h)
+    ctx := http.Ctx(h)
+    http.Text(h, "" + all.size() + " " + http.HasCookie(h, "sid") + " " + http.HasCookie(h, "nope") + " " + http.HasCookie(ctx, "lang") + " " + http.Cookies(ctx).size())
+    http.ClearCookieAt(h, "scoped", "/admin", "example.org")
+end
+
+func port probe(h: i64):
+    ctx := http.Ctx(h)
+    conn := http.ConnOf(ctx)
+    http.Text(h, "" + (http.LocalPort(h) == PORT) + " " + tcp.ConnOk(conn))
+end
+
+func slice(h: i64):
+    path := os.TempDir() + "/salam_http_extra.txt"
+    if http.FileRange(h, path, "text/plain", 6, 5):
+        http.SetStatus(h, 206)
+    else:
+        http.SetStatus(h, 416)
+        http.Text(h, "bad range")
+    end
+end
+
+func too far(h: i64):
+    path := os.TempDir() + "/salam_http_extra.txt"
+    if http.FileRange(h, path, "text/plain", 6, 500):
+        http.SetStatus(h, 206)
+    else:
+        http.SetStatus(h, 416)
+        http.Text(h, "bad range")
+    end
+end
+
+func echo(h: i64):
+    http.SetHeader(h, "X-Seen", "yes")
+    http.Text(h, http.Method(h) + ":" + http.Header(h, "X-Token") + ":" + http.Body(h))
+end
+
+func start server():
+    mut r := router.NewRouter()
+    router.Get(r, "/cookies", cookie probe)
+    router.Get(r, "/port", port probe)
+    router.Get(r, "/slice", slice)
+    router.Get(r, "/far", too far)
+    each m in ["GET", "PUT", "PATCH", "OPTIONS", "HEAD"]:
+        router.Method(r, m, "/echo", echo)
+    end
+    mut s := http.NewServer(PORT)
+    http.HideTokens(s)
+    http.Use(s, r)
+    testing.AssertTrue(http.RunBackground(s))
+end
+
+func check client verbs():
+    url := "http://127.0.0.1:23811/echo"
+    mut h := http.NewHeaders()
+    h.insert("X-Token", "t9")
+    testing.AssertEqStr(http.Body(http.PutWith(url, "p", h)), "PUT:t9:p")
+    testing.AssertEqStr(http.Body(http.PatchWith(url, "q", h)), "PATCH:t9:q")
+    testing.AssertEqStr(http.Body(http.OptionsWith(url, h)), "OPTIONS:t9:")
+    head := http.HeadWith(url, h)
+    testing.AssertEqInt(http.Status(head), 200)
+    testing.AssertEqStr(http.GetHeader(head, "x-seen"), "yes")
+    testing.AssertContains(http.RawHeaders(head), "200 OK")
+    testing.AssertEqStr(http.GetHeader(head, "server"), "Salam")
+
+    bytes := http.GetBytesWith(url, h)
+    testing.AssertEqInt(bytes.status, 200)
+    testing.AssertEqStr(compress.BufToStrUnsafe(bytes.body), "GET:t9:")
+end
+
+func check forms cookies():
+    mut form := http.NewHeaders()
+    form.insert("q", "a b&c")
+    testing.AssertEqStr(http.EncodeForm(form), "q=a%20b%26c")
+    testing.AssertEqStr(http.EncodeForm(http.NewHeaders()), "")
+    testing.AssertEqStr(http.CookieHeader(http.NewHeaders()), "")
+    mut jar := http.NewHeaders()
+    jar.insert("lang", "en")
+    testing.AssertEqStr(http.CookieHeader(jar), "lang=en")
+    jar.insert("sid", "abc")
+    testing.AssertEqInt(http.CookieHeader(jar).len(), 16)
+
+    gone := http.ExpiredCookie("sid", "/x", "example.org")
+    testing.AssertEqStr(gone.path, "/x")
+    testing.AssertEqStr(gone.domain, "example.org")
+    testing.AssertEqInt(gone.max_age, 0 - 1)
+    testing.AssertTrue(gone.has_max_age)
+
+    mut headers := http.NewHeaders()
+    headers.insert("Cookie", "sid=abc; lang=en")
+    r := http.GetWith("http://127.0.0.1:23811/cookies", headers)
+    testing.AssertEqStr(http.Body(r), "2 true false true 2")
+    lines := http.SetCookieLines(r)
+    testing.AssertEqInt(lines.len(), 1)
+    testing.AssertContains(lines.get(0), "scoped=")
+    testing.AssertContains(lines.get(0), "Path=/admin")
+    testing.AssertContains(lines.get(0), "Domain=example.org")
+end
+
+func check handler helpers():
+    r := http.Get("http://127.0.0.1:23811/port")
+    testing.AssertEqStr(http.Body(r), "true true")
+
+    path := os.TempDir() + "/salam_http_extra.txt"
+    io.WriteFile(path, "hello from a file")
+    mut size := 0 as i64
+    mut mtime := 0 as i64
+    testing.AssertTrue(http.FileStat(path, size, mtime))
+    testing.AssertEqInt(size as int, 17)
+    testing.AssertFalse(http.FileStat(path + ".missing", size, mtime))
+
+    part := http.Get("http://127.0.0.1:23811/slice")
+    testing.AssertEqInt(http.Status(part), 206)
+    testing.AssertEqStr(http.Body(part), "from ")
+    far := http.Get("http://127.0.0.1:23811/far")
+    testing.AssertEqInt(http.Status(far), 416)
+    testing.AssertEqStr(http.Body(far), "bad range")
+    os.Remove(path)
+end
+
+func responder():
+    repeat 3:
+        conn := tcp.Accept(raw server)
+        _ := tcp.Read(conn, 4096)
+        tcp.WriteHTTP(conn, "200 OK", "text/plain", "raw reply")
+        tcp.Close(conn)
+    end
+end
+
+func check raw endpoint():
+    raw server = tcp.Bind(0)
+    t := spawn(responder)
+    ep := http.ParseEndpoint("http://127.0.0.1:" + tcp.Port(raw server))
+    testing.AssertTrue(http.EndpointOk(ep))
+    testing.AssertFalse(http.EndpointOk(http.ParseEndpoint("")))
+    head := "GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n"
+
+    mut a := http.SendRawTimeout(ep, head, null, 0, 2000)
+    testing.AssertEqInt(a.status, 200)
+    testing.AssertEqStr(http.RawText(a), "raw reply")
+    testing.AssertEqStr(http.HeaderValue(a.head, "Content-Type"), "text/plain")
+    testing.AssertEqStr(http.HeaderValue(a.head, "x-missing"), "")
+    http.FreeRaw(a)
+    testing.AssertEqStr(http.RawText(a), "")
+
+    cfg := tls.NewConfig("127.0.0.1")
+    mut plain := http.SendRawTLS(ep, head, null, 0, 2000, cfg)
+    testing.AssertEqInt(plain.status, 200)
+    http.FreeRaw(plain)
+
+    old := http.RawLimit()
+    http.SetRawLimit(10)
+    testing.AssertEqInt(http.RawLimit(), 10)
+    mut c := http.SendRawTimeout(ep, head, null, 0, 2000)
+    testing.AssertTrue(c.len <= 10 or not c.ok)
+    http.FreeRaw(c)
+    http.SetRawLimit(old)
+    testing.AssertEqInt(http.RawLimit(), old)
+    join(t)
+    tcp.CloseServer(raw server)
+end
+
+func check run tls busy():
+    busy := tcp.Bind(0)
+    s := http.NewServer(tcp.Port(busy))
+    http.RunTLS(s, "no-such-cert.pem", "no-such-key.pem")
+    tcp.CloseServer(busy)
+end
+
+func check header limit():
+    http.SetMaxHeaderBytes(0)
+    mut big := http.NewHeaders()
+    big.insert("X-Big", "a".repeat(80000))
+    r := http.GetWith("http://127.0.0.1:23811/echo", big)
+    testing.AssertEqInt(http.Status(r), 431)
+    http.SetMaxHeaderBytes(200000)
+    ok := http.GetWith("http://127.0.0.1:23811/echo", big)
+    testing.AssertEqInt(http.Status(ok), 200)
+    http.SetMaxHeaderBytes(65536)
+end
+
+func main:
+    start server()
+    check client verbs()
+    check forms cookies()
+    check handler helpers()
+    check raw endpoint()
+    check run tls busy()
+    check header limit()
+    ret testing.Summary()
+end

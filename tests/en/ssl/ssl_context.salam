@@ -1,0 +1,97 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+package main
+
+import ssl
+import net.tcp
+import sync
+
+mut ready := sync.NewWaitGroup()
+
+func serve():
+    srv := tcp.Bind(19306)
+    sync.Done(ready)
+    ctx := ssl.NewServerContext("tests/fixtures/ssl/server.crt", "tests/fixtures/ssl/server.key")
+    repeat 3:
+        c := tcp.Accept(srv)
+        conn := ssl.Wrap(ctx, c.fd)
+        if ssl.Accept(conn):
+            msg := ssl.Read(conn, 1024)
+            ssl.Write(conn, "echo:" + msg)
+        end
+        ssl.Close(conn)
+        tcp.Close(c)
+    end
+    ssl.CloseContext(ctx)
+    tcp.CloseServer(srv)
+end
+
+func attempt(label: str, min_version: i64, trust_file: bool, default_paths: bool, verify: int):
+    ctx := ssl.NewClientContext()
+    println label
+    println ssl.SetMinVersion(ctx, min_version)
+    if trust_file:
+        ssl.LoadVerifyLocationsFile(ctx, "tests/fixtures/ssl/server.crt")
+    end
+    if default_paths:
+        println ssl.SetDefaultVerifyPaths(ctx)
+    end
+    ssl.SetVerify(ctx, verify)
+    c := tcp.Dial("127.0.0.1", 19306)
+    conn := ssl.Wrap(ctx, c.fd)
+    ssl.SetHostname(conn, "127.0.0.1")
+    ok := ssl.Connect(conn)
+    println ok
+    println ssl.VerifyResult(conn) == ssl.CERT_OK
+    if ok:
+        ssl.Write(conn, label)
+        println "  " + ssl.Read(conn, 1024)
+    else:
+        println "  err: " + ssl.ConnErrorString(conn)
+    end
+    ssl.Close(conn)
+    tcp.Close(c)
+    ssl.CloseContext(ctx)
+end
+
+func offline():
+    ctx := ssl.NewClientContext()
+    println ssl.SetMinVersion(ctx, ssl.TLS1_2)
+    println ssl.SetMinVersion(ctx, ssl.TLS1_3)
+    println ssl.SetMinVersion(ctx, ssl.TLS1_3 + 1)
+    println ssl.SetMinVersion(ctx, 0 - 1)
+    println ssl.SetDefaultVerifyPaths(ctx)
+    ssl.CloseContext(ctx)
+    none := ssl.Wrap(ssl.Context { handle = null }, 0 - 1)
+    println ssl.VerifyResult(none)
+    println ssl.PeerVerified(none)
+    println ssl.SetMinVersion(ssl.Context { handle = null }, ssl.TLS1_2)
+    println ssl.SetDefaultVerifyPaths(ssl.Context { handle = null })
+    println ssl.LastErrorString() == ""
+    bad := ssl.NewServerContext("tests/fixtures/ssl/missing.crt", "tests/fixtures/ssl/missing.key")
+    println ssl.CtxOk(bad)
+    println ssl.LastErrorString()
+    println ssl.LastErrorString() == ""
+end
+
+func main:
+    offline()
+    sync.Add(ready, 1 as i64)
+    t := spawn(serve)
+    sync.Wait(ready)
+    attempt("pinned", ssl.TLS1_3, true, false, ssl.VERIFY_PEER)
+    attempt("skipped", ssl.TLS1_2, false, false, ssl.VERIFY_NONE)
+    attempt("systemroots", ssl.TLS1_2, true, true, ssl.VERIFY_PEER)
+    join(t)
+end

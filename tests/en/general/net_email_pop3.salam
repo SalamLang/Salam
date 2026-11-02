@@ -1,0 +1,103 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import env
+import net.email
+import net.tcp
+import sync
+import tls
+
+const CERT := "tests/fixtures/ssl/server.crt"
+const KEY := "tests/fixtures/ssl/server.key"
+
+mut ready := sync.NewWaitGroup()
+mut plain_port := 0
+mut tls_port := 0
+mut seen := ""
+
+func plain_server():
+    srv := tcp.Bind(0)
+    plain_port = tcp.Port(srv)
+    sync.Done(ready)
+    if not tcp.Ok(srv): ret end
+    c := tcp.Accept(srv)
+    if tcp.ConnOk(c):
+        tcp.Write(c, "+OK mock pop3 ready\r\n")
+        tcp.Read(c, 4096)
+        tcp.Write(c, "+OK\r\n")
+        tcp.Read(c, 4096)
+        tcp.Write(c, "+OK\r\n")
+        tcp.Read(c, 4096)
+        tcp.Write(c, "+OK 2 messages\r\n1 120\r\n2 340\r\n.\r\n")
+        tcp.Read(c, 4096)
+        tcp.Write(c, "+OK 120 octets\r\nSubject: hi\r\n\r\nbody line\r\n..dotted\r\n.\r\n")
+        seen = tcp.Read(c, 4096)
+        tcp.Write(c, "+OK deleted\r\n")
+        tcp.Read(c, 4096)
+        tcp.Write(c, "+OK bye\r\n")
+        tcp.Close(c)
+    end
+    tcp.CloseServer(srv)
+end
+
+func tls_server():
+    srv := tcp.Bind(0)
+    tls_port = tcp.Port(srv)
+    sync.Done(ready)
+    if not tcp.Ok(srv): ret end
+    scfg := tls.NewServerConfig(CERT, KEY)
+    s := tcp.Accept(srv)
+    if tcp.ConnOk(s):
+        mut tc := tls.WrapServer(s.fd, scfg)
+        if tls.ConnOk(tc):
+            tls.Write(tc, "+OK tls pop3 ready\r\n")
+            tls.Read(tc, 4096)
+            tls.Write(tc, "+OK bye\r\n")
+        end
+        tls.Close(tc)
+    end
+    tcp.CloseServer(srv)
+end
+
+func main:
+    sync.Add(ready, 2 as i64)
+    t1 := spawn(plain_server)
+    t2 := spawn(tls_server)
+    sync.Wait(ready)
+
+    mut c := email.DialPOP3("127.0.0.1", plain_port)
+    println c.ok
+    println email.User(c, "ali")
+    println email.Pass(c, "secret")
+    items := email.POP3List(c)
+    println items.len()
+    println items.get(0)
+    println items.get(1)
+    msg := email.Retr(c, 1)
+    println msg.find("Subject: hi") == 0
+    println msg.find("\r\n.dotted") > 0
+    println email.Dele(c, 1)
+    println seen.find("DELE 1") == 0
+    email.POP3Quit(c)
+    join(t1)
+
+    env.Set("SSL_CERT_FILE", CERT)
+    mut s := email.DialPOP3TLS("127.0.0.1", tls_port)
+    println s.ok
+    println s.secure
+    email.POP3Quit(s)
+    join(t2)
+end

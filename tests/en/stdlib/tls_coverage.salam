@@ -1,0 +1,270 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+package main
+
+import tls
+import encoding
+import io
+import net.tcp
+import sync
+import testing
+
+const PORT := 19923
+const CERT := "tests/fixtures/ssl/server.crt"
+const KEY := "tests/fixtures/ssl/server.key"
+const EC_KEY := "-----BEGIN EC PRIVATE KEY-----" + "\n" + "MHcCAQEEIMX+8VIGCcQRsGpjANVEWMsfde581e+BqGOzRUs5gat9oAoGCCqGSM49" + "\n" + "AwEHoUQDQgAE9b/K5UL0oq91pi20Q9GRwAcq4LuN1tUYyZx18SjnCGYyypB2jC3G" + "\n" + "/P0yNGQN+Baa/mXUbiret9ftDs+k2iq7Ow==" + "\n" + "-----END EC PRIVATE KEY-----" + "\n"
+const RSA_PUBLIC := "-----BEGIN PUBLIC KEY-----" + "\n" + "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA5qHnn0ptzRybKzLR1iUa" + "\n" + "cTM3kY54eYVq/DDxWnq9GiLcqP61F54XqZr5uKbiOawJJt8sSVFzjBal8no23fSX" + "\n" + "jSF/ZWbkAktBGP7atLxa2M0Abaq/Hck5QxabXQ9DdcOctUxcXcMR1yTGQ3Hx8naN" + "\n" + "bXlG+XkiZwCsYEux0w6VA2yebi8Tf1nkDsEhJaDB7mcowPgxn9ohGviM4PeN7zif" + "\n" + "rNjwUFhPFCDhIl1OVB34Qn/nE8Rg2llECbjY46qrxXS2sh10Vw1FdO7gs5pexdBP" + "\n" + "AVGsxmp+BdG09RXTMnGqR96Egx8CRimOMgoBzfZnZOIMgwzk0OYFZb8FSbEffB7p" + "\n" + "1wIDAQAB" + "\n" + "-----END PUBLIC KEY-----" + "\n"
+
+mut wg := sync.NewWaitGroup()
+
+func test_buffers():
+    mut b := tls.HashDigest(false, "abc")
+    testing.AssertEqInt(tls.BufLen(b), 32)
+    testing.AssertEqStr(tls.HexEncodeBuf(b), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+    mut wide := tls.HashDigest(true, "abc")
+    testing.AssertEqInt(tls.BufLen(wide), 48)
+    mut hex := tls.HexDecodeBuf("cafe")
+    tls.BufAppendStr(hex, "!")
+    testing.AssertEqInt(tls.BufLen(hex), 3)
+    testing.AssertEqStr(tls.HexEncodeBuf(hex), "cafe21")
+    mut zeros := tls.NewZeroBuf(4)
+    testing.AssertEqStr(tls.HexEncodeBuf(zeros), "00000000")
+    mut empty := tls.NewBuf(64)
+    testing.AssertEqInt(tls.BufLen(empty), 0)
+    tls.WipeBuf(hex)
+    testing.AssertEqInt(tls.BufLen(hex), 0)
+    tls.FreeBuf(b)
+    tls.FreeBuf(wide)
+    tls.FreeBuf(zeros)
+    tls.FreeBuf(empty)
+end
+
+func test_aead():
+    mut priv1 := ""
+    mut pub1 := ""
+    mut priv2 := ""
+    mut pub2 := ""
+    testing.AssertTrue(tls.EcdhP256Generate(priv1, pub1))
+    testing.AssertTrue(tls.EcdhP256Generate(priv2, pub2))
+    mut good := false
+    point1 := tls.EcdhP256PublicPoint(priv1)
+    point2 := tls.EcdhP256PublicPoint(priv2)
+    testing.AssertTrue(point1.len() > 0)
+    testing.AssertNeStr(point1, point2)
+    shared1 := tls.EcdhP256SharedPoint(priv1, point2, good)
+    testing.AssertTrue(good)
+    shared2 := tls.EcdhP256SharedPoint(priv2, point1, good)
+    testing.AssertTrue(good)
+    testing.AssertEqStr(shared1, shared2)
+    _ := tls.EcdhP256SharedPoint(priv1, "AAAA", good)
+    testing.AssertFalse(good)
+    testing.AssertEqStr(tls.EcdhP256PublicPoint("AAAA"), "")
+
+    salt := encoding.Base64Encode("0123456789abcdef")
+    info := encoding.Base64Encode("chat v1")
+    key := tls.HkdfSha256Raw(shared1, salt, info, 32, good)
+    testing.AssertTrue(good)
+    testing.AssertEqStr(key, tls.HkdfSha256Raw(shared2, salt, info, 32, good))
+    testing.AssertEqStr(key, tls.HkdfSha256(shared1, salt, "chat v1", 32, good))
+    testing.AssertNeStr(key, tls.HkdfSha256Raw(shared1, salt, encoding.Base64Encode("chat v2"), 32, good))
+
+    nonce := tls.GcmNonce(7 as i64)
+    plain := encoding.Base64Encode("abc")
+    sealed := tls.AesGcmSealBytes(key, nonce, plain, good)
+    testing.AssertTrue(good)
+    testing.AssertEqStr(encoding.Base64Decode(tls.AesGcmOpenBytes(key, nonce, sealed, good)), "abc")
+    testing.AssertTrue(good)
+    _ := tls.AesGcmOpenBytes(key, tls.GcmNonce(8 as i64), sealed, good)
+    testing.AssertFalse(good)
+    _ := tls.AesGcmSealBytes("AAAA", nonce, plain, good)
+    testing.AssertFalse(good)
+
+    digest := encoding.Base64Encode("0123456789abcdef0123456789abcdef")
+    sig := tls.P256Sign(priv1, digest, good)
+    testing.AssertTrue(good)
+    testing.AssertTrue(tls.P256Verify(point1, digest, sig))
+    testing.AssertFalse(tls.P256Verify(point2, digest, sig))
+    testing.AssertFalse(tls.P256Verify(point1, encoding.Base64Encode("fedcba9876543210fedcba9876543210"), sig))
+    _ := tls.P256Sign("AAAA", digest, good)
+    testing.AssertFalse(good)
+end
+
+func test_rsa():
+    pem := io.ReadFile(KEY)
+    testing.AssertEqInt(tls.RsaKeyBits(pem), 2048)
+    testing.AssertEqInt(tls.RsaKeyBits("not a key"), 0)
+    mut key := tls.ParsePrivateKeyPEM(pem)
+    testing.AssertTrue(key.ok)
+    mut file_key := tls.LoadPrivateKeyFile(KEY)
+    testing.AssertTrue(file_key.ok)
+    missing := tls.LoadPrivateKeyFile("tests/fixtures/ssl/missing.key")
+    testing.AssertFalse(missing.ok)
+    junk := tls.ParsePrivateKeyPEM("-----BEGIN PRIVATE KEY-----\nAAAA\n-----END PRIVATE KEY-----\n")
+    testing.AssertFalse(junk.ok)
+
+    mut digest := tls.HashDigest(false, "message")
+    mut sig := tls.NewZeroBuf(256)
+    testing.AssertTrue(tls.SignRSAPKCS1(key, false, digest, sig))
+    mut again := tls.NewZeroBuf(256)
+    testing.AssertTrue(tls.SignRSAPKCS1(file_key, false, digest, again))
+    testing.AssertEqStr(tls.HexEncodeBuf(sig), tls.HexEncodeBuf(again))
+    mut pss := tls.NewZeroBuf(256)
+    testing.AssertTrue(tls.SignRSAPSS(key, false, digest, pss))
+    testing.AssertTrue(tls.VerifyRSAPSSWithKey(key, false, digest, pss))
+    mut other := tls.HashDigest(false, "another")
+    testing.AssertFalse(tls.VerifyRSAPSSWithKey(key, false, other, pss))
+    mut wide := tls.HashDigest(true, "message")
+    mut pss384 := tls.NewZeroBuf(256)
+    testing.AssertTrue(tls.SignRSAPSS(key, true, wide, pss384))
+    testing.AssertTrue(tls.VerifyRSAPSSWithKey(key, true, wide, pss384))
+
+    mut good := false
+    raw := tls.RsaSignPkcs1Sha256(pem, encoding.Base64Encode("0123456789abcdef0123456789abcdef"), good)
+    testing.AssertTrue(good)
+    testing.AssertTrue(raw.len() > 300)
+    _ := tls.RsaSignPkcs1Sha256("not a key", encoding.Base64Encode("x"), good)
+    testing.AssertFalse(good)
+
+    cipher := tls.RsaEncryptOaepSha1(RSA_PUBLIC, encoding.Base64Encode("hello"), good)
+    testing.AssertTrue(good)
+    testing.AssertEqInt(cipher.len(), 344)
+    _ := tls.RsaEncryptOaepSha1("not a key", encoding.Base64Encode("hello"), good)
+    testing.AssertFalse(good)
+
+    tls.FreeBuf(digest)
+    tls.FreeBuf(sig)
+    tls.FreeBuf(again)
+    tls.FreeBuf(pss)
+    tls.FreeBuf(other)
+    tls.FreeBuf(wide)
+    tls.FreeBuf(pss384)
+    tls.FreePrivateKey(key)
+    tls.FreePrivateKey(file_key)
+end
+
+func test_ecdsa():
+    mut key := tls.ParsePrivateKeyPEM(EC_KEY)
+    testing.AssertTrue(key.ok)
+    mut digest := tls.HashDigest(false, "message")
+    mut r := tls.NewZeroBuf(32)
+    mut s := tls.NewZeroBuf(32)
+    testing.AssertTrue(tls.SignECDSA(key, digest, r, s))
+    mut der := tls.ECDSADerEncode(r, s, 32)
+    testing.AssertTrue(tls.BufLen(der) >= 8)
+    testing.AssertTrue(tls.VerifyECDSADERWithKey(key, digest, der))
+    mut other := tls.HashDigest(false, "another")
+    testing.AssertFalse(tls.VerifyECDSADERWithKey(key, other, der))
+    tls.FreeBuf(digest)
+    tls.FreeBuf(r)
+    tls.FreeBuf(s)
+    tls.FreeBuf(der)
+    tls.FreeBuf(other)
+    tls.FreePrivateKey(key)
+end
+
+func test_certs():
+    text := io.ReadFile(CERT)
+    begin := "-----BEGIN CERTIFICATE-----"
+    start := text.find(begin) + begin.len()
+    stop := text.find("-----END CERTIFICATE-----")
+    pem_body := text.substr(start, stop - start)
+    room := pem_body.len()
+    mut der := tls.NewBuf(room)
+    mut decoded := false
+    der.len = encoding.Base64DecodeBytes(pem_body, der.p, room, decoded)
+    testing.AssertTrue(decoded)
+    testing.AssertTrue(tls.BufLen(der) > 400)
+    testing.AssertTrue(tls.CertIsValid(der))
+    testing.AssertEqStr(tls.CertSubjectCN(der), "localhost")
+    mut junk := tls.HexDecodeBuf("3082")
+    testing.AssertFalse(tls.CertIsValid(junk))
+    testing.AssertEqStr(tls.CertSubjectCN(junk), "")
+
+    mut roots := tls.LoadRoots(CERT)
+    testing.AssertEqInt(tls.RootCount(roots), 1)
+    testing.AssertEqInt(tls.VerifyCert(der, roots, "localhost"), 0)
+    wrong := tls.VerifyCert(der, roots, "other.example")
+    testing.AssertTrue(wrong != 0)
+    testing.AssertEqStr(tls.VerifyError(wrong), "hostname does not match certificate")
+    testing.AssertEqStr(tls.VerifyError(0), "ok")
+    mut empty := tls.LoadRoots("tests/fixtures/ssl/missing.crt")
+    testing.AssertEqInt(tls.RootCount(empty), 0)
+    untrusted := tls.VerifyCert(der, empty, "localhost")
+    testing.AssertEqStr(tls.VerifyError(untrusted), "no trusted issuer found")
+    mut chain := tls.LoadCertChainFile(CERT)
+    testing.AssertEqInt(tls.RootCount(chain), 1)
+    tls.FreeRoots(roots)
+    tls.FreeRoots(empty)
+    tls.FreeRoots(chain)
+    tls.FreeBuf(der)
+    tls.FreeBuf(junk)
+end
+
+func serve():
+    srv := tcp.Bind(PORT)
+    sync.Done(wg)
+    cfg := tls.NewServerConfig(CERT, KEY)
+    c := tcp.Accept(srv)
+    mut conn := tls.WrapServer(c.fd, cfg)
+    if tls.ConnOk(conn):
+        msg := tls.Read(conn, 1024)
+        _ := tls.Write(conn, "echo:" + msg)
+    end
+    tls.Close(conn)
+    c2 := tcp.Accept(srv)
+    mut bad := tls.WrapServer(c2.fd, tls.NewServerConfig("tests/fixtures/ssl/missing.crt", KEY))
+    tls.Close(bad)
+    tcp.CloseServer(srv)
+end
+
+func test_loopback():
+    sync.Add(wg, 1 as i64)
+    t := spawn(serve)
+    sync.Wait(wg)
+    cfg := tls.NewServerConfig(CERT, KEY)
+    testing.AssertTrue(cfg.ok)
+    testing.AssertFalse(tls.NewServerConfig("tests/fixtures/ssl/missing.crt", KEY).ok)
+    testing.AssertFalse(tls.NewServerConfig(CERT, "tests/fixtures/ssl/missing.key").ok)
+
+    sock := tcp.Dial("127.0.0.1", PORT)
+    mut client_cfg := tls.NewConfig("localhost")
+    client_cfg.ca_file = CERT
+    mut conn := tls.WrapClient(sock.fd, client_cfg)
+    testing.AssertTrue(tls.ConnOk(conn))
+    testing.AssertEqInt64(tls.Fd(conn), sock.fd)
+    testing.AssertEqStr(tls.Version(conn), "TLS1.3")
+    _ := tls.Write(conn, "ping")
+    testing.AssertEqStr(tls.Read(conn, 1024), "echo:ping")
+    tls.Detach(conn)
+    testing.AssertFalse(tls.ConnOk(conn))
+    tcp.Close(sock)
+
+    sock2 := tcp.Dial("127.0.0.1", PORT)
+    mut refused := tls.WrapClient(sock2.fd, tls.NewConfig("localhost"))
+    testing.AssertFalse(tls.ConnOk(refused))
+    tls.Detach(refused)
+    tcp.Close(sock2)
+    join(t)
+end
+
+func main:
+    test_buffers()
+    test_aead()
+    test_rsa()
+    test_ecdsa()
+    test_certs()
+    test_loopback()
+    testing.Summary()
+    ret 0
+end

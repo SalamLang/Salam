@@ -1,0 +1,376 @@
+package nativelink
+
+func sec_new(l &: Nl, s: int, off: i64, size: i64, al: i64): int:
+    id := l.s_obj.len()
+    l.s_obj.push(l.s_obj[s])
+    l.s_name.push(l.s_name[s])
+    l.s_type.push(l.s_type[s])
+    l.s_flags.push(l.s_flags[s])
+    l.s_off.push(l.s_off[s] + off)
+    l.s_size.push(size)
+    l.s_align.push(al)
+    l.s_rel0.push(0)
+    l.s_nrel.push(0)
+    l.s_oc.push(OC_NONE)
+    l.s_live.push(false)
+    l.s_addr.push(0 as i64)
+    l.s_fpos.push(0 as i64)
+    l.s_comdat.push(false)
+    l.s_sel.push(0)
+    l.s_assoc.push(0 - 1)
+    l.s_drop.push(false)
+    l.s_link.push(0 - 1)
+    ret id
+end
+
+func piece_add(l &: Nl, s: int, at: i64, n: i64, al: i64):
+    ns := sec_new(l, s, at, n, al)
+    sym := l.os_sec.len()
+    l.os_sec.push(ns)
+    l.os_val.push(0 as i64)
+    l.os_glob.push(0 - 1)
+    l.os_name.push(0 - 1)
+    l.os_type.push(3)
+    l.os_size.push(0 as i64)
+    l.pc_canon.push(l.pc_start.len())
+    l.pc_start.push(at)
+    l.pc_sec.push(ns)
+    l.pc_sym.push(sym)
+end
+
+func piece_find(l &: Nl, s: int, off: i64): int:
+    mut lo := l.sp_first[s]
+    mut hi := lo + l.sp_count[s] - 1
+    until lo < hi:
+        mid := (lo + hi + 1) / 2
+        if l.pc_start[mid] <= off:
+            lo = mid
+        else:
+            hi = mid - 1
+        end
+    end
+    ret lo
+end
+
+func merge_ok(l &: Nl, s: int): bool:
+    fl := l.s_flags[s]
+    if (fl & (0x10 as i64)) == (0 as i64) or (fl & (2 as i64)) == (0 as i64) or (fl & (0x401 as i64)) != (0 as i64):
+        ret false
+    end
+    if l.s_type[s] != 1 or l.s_nrel[s] > 0 or l.s_size[s] <= (0 as i64) or not l.s_ent.has(s):
+        ret false
+    end
+    ent := l.s_ent.get(s)
+    if ent <= (0 as i64) or ent > (64 as i64):
+        ret false
+    end
+    ret (fl & (0x20 as i64)) != (0 as i64) or l.s_size[s] % ent == (0 as i64)
+end
+
+func split_merge(l &: Nl, s: int):
+    ent := l.s_ent.get(s)
+    size := l.s_size[s]
+    strs := (l.s_flags[s] & (0x20 as i64)) != (0 as i64)
+    p := fptr(l, l.o_file[l.s_obj[s]])
+    base := l.s_off[s]
+    l.sp_first[s] = l.pc_start.len()
+    mut at := 0 as i64
+    until at < size:
+        mut n := ent
+        if strs:
+            mut q := at
+            mut fin := size
+            until q + ent <= size:
+                mut z := true
+                repeat ent in b:
+                    if p[base + q + b] != (0 as u8):
+                        z = false
+                    end
+                end
+                q = q + ent
+                if z:
+                    fin = q
+                    break
+                end
+            end
+            n = fin - at
+        end
+        if at + n > size:
+            n = size - at
+        end
+        piece_add(l, s, at, n, l.s_align[s])
+        at = at + n
+    end
+    l.sp_count[s] = l.pc_start.len() - l.sp_first[s]
+    l.stat_merge_in = l.stat_merge_in + size
+end
+
+func icf_object(l &: Nl, o: int): bool:
+    if l.o_coff[o] or (l.mach != EM_X86_64 and l.mach != EM_AARCH64):
+        ret false
+    end
+    mut own := false
+    repeat l.o_nsec[o] in i:
+        nm := l.s_name[l.o_sec0[o] + i]
+        if name_starts(l, nm, ".debug_"):
+            ret false
+        end
+        if name_is(l, nm, ".rodata.salam"):
+            own = true
+        end
+    end
+    ret own
+end
+
+func low_align(off: i64, al: i64): i64:
+    if off == (0 as i64):
+        ret al
+    end
+    mut a := 1 as i64
+    until a < al and (off % (a * (2 as i64))) == (0 as i64):
+        a = a * (2 as i64)
+    end
+    ret a
+end
+
+func split_funcs(l &: Nl, s: int):
+    o := l.s_obj[s]
+    size := l.s_size[s]
+    mut vals := Vector {} as Vector<i64>
+    vals.push(0 as i64)
+    s0 := l.o_sym0[o]
+    repeat l.o_nsym[o] in k:
+        os := s0 + k
+        v := l.os_val[os]
+        if l.os_sec[os] == s and (l.os_type[os] & 15) == 2 and v > (0 as i64) and v < size:
+            vals.push(v)
+        end
+    end
+    ix := pdb_sort(vals)
+    mut starts := Vector {} as Vector<i64>
+    each i in ix:
+        if starts.len() == 0 or vals[i] != starts[starts.len() - 1]:
+            starts.push(vals[i])
+        end
+    end
+    if starts.len() >= 2:
+        l.sp_first[s] = l.pc_start.len()
+        l.sp_code[s] = true
+        repeat starts.len() in k2:
+            at := starts[k2]
+            fin := k2 + 1 < starts.len() ? starts[k2 + 1] : size
+            piece_add(l, s, at, fin - at, low_align(at, l.s_align[s]))
+        end
+        l.sp_count[s] = starts.len()
+    end
+    vals.free()
+    starts.free()
+end
+
+func piece_hash(l &: Nl, k: int, key: i64): int:
+    ns := l.pc_sec[k]
+    h := nl_hash(fptr(l, l.o_file[l.s_obj[ns]]), l.s_off[ns], l.s_size[ns] as int)
+    mix := ((key * (0x9E3779B1 as i64)) & (0x7FFFFFFF as i64)) as int
+    ret (h ^ mix) & 0x7FFFFFFF
+end
+
+func piece_same(l &: Nl, a: int, b: int): bool:
+    sa := l.pc_sec[a]
+    sb := l.pc_sec[b]
+    n := l.s_size[sa]
+    if l.s_size[sb] != n or l.s_align[sa] != l.s_align[sb] or l.s_flags[sa] != l.s_flags[sb]:
+        ret false
+    end
+    pa := fptr(l, l.o_file[l.s_obj[sa]])
+    pb := fptr(l, l.o_file[l.s_obj[sb]])
+    oa := l.s_off[sa]
+    ob := l.s_off[sb]
+    repeat n in i:
+        if pa[oa + i] != pb[ob + i]:
+            ret false
+        end
+    end
+    ret true
+end
+
+func merge_dedup(l &: Nl, n0: int):
+    mut head := HashMap {} as HashMap<int, int>
+    mut nxt := Vector {} as Vector<int>
+    mut pkey := Vector {} as Vector<i64>
+    repeat l.pc_start.len():
+        nxt.push(0 - 1)
+        pkey.push(0 as i64)
+    end
+    repeat n0 in s:
+        if l.sp_first[s] < 0 or l.sp_code[s]:
+            continue
+        end
+        key := l.s_ent.get(s) * (65536 as i64) + l.s_align[s]
+        repeat l.sp_count[s] in i:
+            k := l.sp_first[s] + i
+            pkey[k] = key
+            h := piece_hash(l, k, key)
+            mut c := head.has(h) ? head.get(h) : (0 - 1)
+            mut last := 0 - 1
+            until c >= 0:
+                if pkey[c] == key and piece_same(l, c, k):
+                    break
+                end
+                last = c
+                c = nxt[c]
+            end
+            if c >= 0:
+                l.pc_canon[k] = c
+                l.s_drop[l.pc_sec[k]] = true
+                continue
+            end
+            if last < 0:
+                head.put(h, k)
+            else:
+                nxt[last] = k
+            end
+            l.stat_merge_out = l.stat_merge_out + l.s_size[l.pc_sec[k]]
+        end
+    end
+    nxt.free()
+    pkey.free()
+end
+
+func split_bias(l &: Nl, owner: int, ty: int): i64:
+    if owner < 0 or (l.s_flags[owner] & (4 as i64)) == (0 as i64):
+        ret 0
+    end
+    if l.mach == EM_X86_64 and (ty == 2 or ty == 4 or ty == 9 or ty == 41 or ty == 42):
+        ret 4
+    end
+    ret 0
+end
+
+func split_sections(l &: Nl):
+    n0 := l.s_obj.len()
+    l.sp_first.clear()
+    l.sp_count.clear()
+    l.sp_code.clear()
+    repeat n0:
+        l.sp_first.push(0 - 1)
+        l.sp_count.push(0)
+        l.sp_code.push(false)
+    end
+    mut own := Vector {} as Vector<bool>
+    repeat l.o_file.len() in o:
+        own.push(l.icf and icf_object(l, o))
+    end
+    mut any := false
+    repeat n0 in s:
+        if l.s_drop[s] or l.o_coff[l.s_obj[s]]:
+            continue
+        end
+        if merge_ok(l, s):
+            split_merge(l, s)
+            any = true
+        else own[l.s_obj[s]] and (l.s_flags[s] & (6 as i64)) == (6 as i64) and l.s_type[s] == 1:
+            split_funcs(l, s)
+            any = any or l.sp_first[s] >= 0
+        end
+    end
+    own.free()
+    if not any:
+        ret
+    end
+    merge_dedup(l, n0)
+    repeat n0 in s2:
+        if l.sp_first[s2] >= 0:
+            split_relocs(l, s2)
+        end
+    end
+    mut owner := Vector {} as Vector<int>
+    repeat l.r_off.len():
+        owner.push(0 - 1)
+    end
+    repeat l.s_obj.len() in s3:
+        r0 := l.s_rel0[s3]
+        repeat l.s_nrel[s3] in k:
+            owner[r0 + k] = s3
+        end
+    end
+    repeat l.os_sec.len() in os:
+        sec := l.os_sec[os]
+        if sec < 0 or sec >= n0 or l.sp_first[sec] < 0 or (l.os_type[os] & 15) == 3:
+            continue
+        end
+        k2 := piece_find(l, sec, l.os_val[os])
+        l.os_val[os] = l.os_val[os] - l.pc_start[k2]
+        l.os_sec[os] = l.pc_sec[l.pc_canon[k2]]
+    end
+    repeat l.g_name.len() in g:
+        sec2 := l.g_sec[g]
+        if l.g_state[g] != SY_DEF or sec2 < 0 or sec2 >= n0 or l.sp_first[sec2] < 0:
+            continue
+        end
+        k3 := piece_find(l, sec2, l.g_val[g])
+        l.g_val[g] = l.g_val[g] - l.pc_start[k3]
+        l.g_sec[g] = l.pc_sec[l.pc_canon[k3]]
+    end
+    repeat l.r_off.len() in r:
+        os2 := l.r_sym[r]
+        if l.os_glob[os2] >= 0:
+            continue
+        end
+        sec3 := l.os_sec[os2]
+        if sec3 < 0 or sec3 >= n0 or l.sp_first[sec3] < 0:
+            continue
+        end
+        t := l.os_val[os2] + l.r_add[r]
+        k4 := piece_find(l, sec3, t + (l.sp_code[sec3] ? split_bias(l, owner[r], l.r_type[r]) : (0 as i64)))
+        l.r_sym[r] = l.pc_sym[l.pc_canon[k4]]
+        l.r_add[r] = t - l.pc_start[k4]
+    end
+    repeat n0 in s4:
+        if l.sp_first[s4] >= 0:
+            l.s_drop[s4] = true
+        end
+    end
+    owner.free()
+end
+
+func split_relocs(l &: Nl, s: int):
+    r0 := l.s_rel0[s]
+    nr := l.s_nrel[s]
+    if nr == 0:
+        ret
+    end
+    mut pk := Vector {} as Vector<i64>
+    repeat nr in k:
+        pk.push(piece_find(l, s, l.r_off[r0 + k]) as i64)
+    end
+    ix := pdb_sort(pk)
+    mut j := 0
+    until j < nr:
+        k2 := pk[ix[j]] as int
+        ns := l.pc_sec[k2]
+        l.s_rel0[ns] = l.r_off.len()
+        mut c := 0
+        until j < nr and (pk[ix[j]] as int) == k2:
+            r := r0 + ix[j]
+            l.r_off.push(l.r_off[r] - l.pc_start[k2])
+            l.r_type.push(l.r_type[r])
+            l.r_sym.push(l.r_sym[r])
+            l.r_add.push(l.r_add[r])
+            c += 1
+            j += 1
+        end
+        l.s_nrel[ns] = c
+    end
+    pk.free()
+end
+
+func merge_stats(l &: Nl): str:
+    mut out := ""
+    if l.stat_merge_in > (0 as i64):
+        out = str.FromInt(l.stat_merge_in) + " merge bytes to " + str.FromInt(l.stat_merge_out) + ", "
+    end
+    if l.icf:
+        out = out + str.FromInt(l.stat_icf as i64) + " functions folded (" + str.FromInt(l.stat_icf_bytes) + " bytes), "
+    end
+    ret out
+end

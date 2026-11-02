@@ -9,6 +9,7 @@ import {
   IconChevronDown,
   IconCode,
   IconFolder,
+  IconGlobe,
   IconLink,
   IconPackage,
   IconPlay,
@@ -29,6 +30,7 @@ const ICONS: Record<string, (p: { width?: number; height?: number }) => ReactNod
   keyword: IconTag,
   code: IconCode,
   tool: IconSpark,
+  web: IconGlobe,
 };
 
 function seconds(ms: number): string {

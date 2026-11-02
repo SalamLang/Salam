@@ -5,6 +5,7 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SKIP = {
     "console",
+    "conv/numfmt",
     "gui",
     "layout",
     "layoutgen",

@@ -840,8 +840,22 @@ an aligned loop costs one instruction.
 ### Conventions worth knowing
 
 - Scalars follow the C ABI of the target, so calls to and from C code just
-  work. Struct values, which only Salam code passes, travel by pointer to a
-  copy, and struct returns use a hidden result pointer.
+  work. Between Salam functions, struct values travel by pointer to a copy,
+  and struct returns use a hidden result pointer.
+- A struct passed to or returned from an `extern` C function follows the
+  target's C rules (`ng_cabi.salam`). On x86-64 and AArch64 llvmgen already
+  splits it into the pieces the ABI wants, and a larger result's hidden
+  pointer goes in `x8` on AArch64. On i686 every struct argument is
+  copied onto the stack; Linux returns every struct through a hidden pointer
+  that the callee pops (`ret 4`), while Windows returns 1, 2, 4 and 8 byte
+  structs in `eax`/`edx:eax` and one holding a lone `float` or `double` in
+  `st0`. On armhf a homogeneous struct of up to four floats or doubles uses
+  consecutive VFP registers (or the stack, after which no float back-fills),
+  other structs fill `r0`-`r3` a word at a time and spill onto the stack
+  (8-byte aligned ones start at an even register), and a result of up to 4
+  bytes comes back in `r0`. On RISC-V a struct of up to 16 bytes goes in
+  `a`/`fa` registers (one or two floats, or a float and an integer, use the
+  float registers while enough are free), a larger one by reference.
 - On Linux frames are addressed from `rsp` and `rbp` is a sixth callee-saved
   register. Each function gets an `.eh_frame` entry, so gdb, perf and other
   unwinders can walk native frames. On Windows `rbp` is the frame pointer and
@@ -914,6 +928,27 @@ ret end` at the top of a recursive AST walk) tests that parameter before
   are built on Linux, run on a real machine of each kind, and the compiler
   built by the native backend for that machine reproduces the reference IR
   there and builds and runs programs with `--backend=native` itself.
+- Those native-built compilers are kept for internal use (they are not
+  releases). `tools/bash/package-native.sh` lays one out like a release
+  archive (`salam`, `std/`, a `BUILD.txt` naming the commit, and for Windows the mingw-w64 or llvm-mingw
+  runtime under `sysroots/`) as `salam-native-<platform>.tar.gz`, and
+  `tools/bash/native-package-check.sh <tarball>` unpacks it into an empty
+  folder and, with `SALAM_STD` unset, builds and runs a few tests with
+  `--backend=native`, among them the TCP and HTTP loopback tests and the TLS
+  self-test. The gate does this on the real machine for `linux-x64` (a static
+  musl build), `linux-arm64`, `macos-arm64`, `macos-x64`, `windows-x64` and
+  `windows-arm64`, and on pushes to `main` and manual runs it uploads each
+  package that passed as the workflow artifact `salam-native-<platform>`,
+  kept for 14 days.
+- `tools/bash/native-compile-report.sh <salam>` builds the compiler and a few
+  large tests with `--backend=native` and with `--backend=llvm` and prints a
+  Markdown table of build times and executable sizes; the gate's `linux` job
+  adds it to its run summary. Without in-process LLVM, `--backend=llvm` hands
+  the IR to the `clang` on `PATH`. It fails only on gross regressions,
+  measured on the totals as native over LLVM ratios, so machine speed cancels
+  out: more than `NATIVE_REPORT_MAX_TIME_RATIO` (0.6) of LLVM's build time or
+  `NATIVE_REPORT_MAX_SIZE_RATIO` (1.5) of its size. `NATIVE_REPORT_RUNS`
+  repeats each build and keeps the fastest.
 - `tools/bash/native-encoder-check.sh <salam> <files...>` checks the encoder:
   it assembles the `--emit-asm` listing with GNU `as` and compares the result
   with the object nativegen wrote, instruction by instruction.

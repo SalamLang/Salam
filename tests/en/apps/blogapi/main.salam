@@ -176,11 +176,11 @@ func register(ctx: i64):
     send(ctx, 201, `{"id":`.concat(conv.FormatInt(id)).concat(`,"email":`).concat(json.Str(email)).concat(`,"role":"author"}`))
 end
 
-func issue(user_id: i64, kind: str, ttl: int, err &: int): str:
+func issue(user_id: i64, kind: str, ttl: int): str throws:
     mut c := jwt.NewClaims()
     c.sub = conv.FormatInt(user_id)
     jwt.SetStr(c, "kind", kind)
-    ret jwt.Issue(guard(), c, ttl as i64, err)
+    ret try jwt.Issue(guard(), c, ttl as i64)
 end
 
 func login(ctx: i64):
@@ -196,10 +196,12 @@ func login(ctx: i64):
         fail(ctx, 401, "invalid email or password")
         ret
     end
-    mut err := 0
-    access := issue(u.id, "access", ACCESS_TTL, err)
-    refresh_tok := issue(u.id, "refresh", REFRESH_TTL, err)
-    if err != jwt.JWT_OK:
+    mut access := ""
+    mut refresh_tok := ""
+    try:
+        access = issue(u.id, "access", ACCESS_TTL)
+        refresh_tok = issue(u.id, "refresh", REFRESH_TTL)
+    catch:
         fail(ctx, 500, "could not issue tokens")
         ret
     end
@@ -216,9 +218,12 @@ func refresh(ctx: i64):
         jwt.Forbidden(ctx, "this route needs a refresh token")
         ret
     end
-    mut err := 0
-    access := issue(t.claims.sub.to_int() as i64, "access", ACCESS_TTL, err)
-    send(ctx, 200, `{"access":`.concat(json.Str(access)).concat("}"))
+    try:
+        access := issue(t.claims.sub.to_int() as i64, "access", ACCESS_TTL)
+        send(ctx, 200, `{"access":`.concat(json.Str(access)).concat("}"))
+    catch:
+        fail(ctx, 500, "could not issue a token")
+    end
 end
 
 func list_posts(ctx: i64):
@@ -250,10 +255,12 @@ func get_post(ctx: i64):
 end
 
 func viewer_may_edit(conn: store.Conn, ctx: i64, p: store.Post): bool:
-    mut err := 0
-    t := jwt.Check(ctx, guard(), err)
-    if err != jwt.JWT_OK: ret false end
-    ret may_edit(conn, t.claims.sub.to_int() as i64, p)
+    try:
+        t := jwt.Check(ctx, guard())
+        ret may_edit(conn, t.claims.sub.to_int() as i64, p)
+    catch:
+        ret false
+    end
 end
 
 func list_comments(ctx: i64):

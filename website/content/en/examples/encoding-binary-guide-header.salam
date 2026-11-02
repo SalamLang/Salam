@@ -13,21 +13,34 @@ func write_file(scores: Vector<int>): compress.ByteBuf:
     ret b
 end
 
-func read_file(data: compress.ByteBuf, size: int): str:
+func read_file(data: compress.ByteBuf, size: int): str throws:
     mut r := compress.NewByteReader(data.data, size)
     mut head := compress.RdBytes(r, 4)
     defer compress.BufFree(head)
-    if compress.BufToStrUnsafe(head) != "SLM1": ret "not our file" end
-    version := binary.ReadU16LE(r)
-    if version != 2: ret "unknown version " + str.FromInt(version) end
-    count := binary.ReadU32LE(r)
-    if count < 0 or count > 100000: ret "implausible count" end
+    if compress.BufToStrUnsafe(head) != "SLM1":
+        throw Error.At(ErrorKind.Syntax, "not our file", 0)
+    end
+    version := try binary.ReadU16LE(r)
+    if version != 2:
+        throw Error.At(ErrorKind.Unsupported, "unknown version " + str.FromInt(version), 4)
+    end
+    count := try binary.ReadU32LE(r)
+    if count < 0 or count > 100000:
+        throw Error.At(ErrorKind.OutOfRange, "implausible count", 6)
+    end
     mut total := 0 as i64
     repeat count:
-        total += binary.ReadI32LE(r) as i64
+        total += (try binary.ReadI32LE(r)) as i64
     end
-    if r.bad: ret "cut short after " + str.FromInt(r.pos) + " bytes" end
     ret str.FromInt(count) + " scores, total " + str.FromInt(total)
+end
+
+func show(label: str, data: compress.ByteBuf, size: int):
+    try:
+        println label, read_file(data, size)
+    catch e:
+        println label, e.to_str()
+    end
 end
 
 func main:
@@ -38,9 +51,9 @@ func main:
     mut data := write_file(scores)
     println "file is", compress.BufLen(data), "bytes"
 
-    println "whole file:", read_file(data, compress.BufLen(data))
-    println "first 18:  ", read_file(data, 18)
+    show("whole file:", data, compress.BufLen(data))
+    show("first 18:  ", data, 18)
     compress.BufSet(data, 4, 9)
-    println "edited:    ", read_file(data, compress.BufLen(data))
+    show("edited:    ", data, compress.BufLen(data))
     compress.BufFree(data)
 end

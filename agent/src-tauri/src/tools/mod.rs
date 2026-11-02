@@ -1,3 +1,5 @@
+pub mod browser;
+mod cdp;
 pub mod detect;
 pub mod exec;
 pub mod fs;
@@ -95,6 +97,12 @@ pub enum Action {
     ForgetMemory {
         slug: String,
     },
+    Browser(Box<browser::Request>),
+}
+
+pub struct Image {
+    pub data: String,
+    pub mime: &'static str,
 }
 
 pub struct Plan {
@@ -410,6 +418,15 @@ pub fn plan(call: &Call, ws: &Workspace) -> Result<Plan, String> {
             preview.lang = "markdown".into();
             Action::ForgetMemory { slug }
         }
+        "browser" => {
+            let request = browser::parse(a, &call.chat, ws)?;
+            let (summary, detail, lang) = browser::describe(&request);
+            preview.kind = request.act.kind();
+            preview.summary = summary;
+            preview.detail = detail;
+            preview.lang = lang;
+            Action::Browser(Box::new(request))
+        }
         other => {
             return Err(format!(
                 "This version of Salam Agent does not know the tool {other}. Ask the user to update Salam Agent."
@@ -439,8 +456,16 @@ fn wsl_list() -> Result<String, String> {
     }
 }
 
+pub async fn run(action: Action, ws_root: PathBuf, sink: exec::Sink, cancel: Arc<Notify>) -> Result<(String, Option<Image>), String> {
+    match action {
+        Action::Browser(request) => browser::execute(*request, cancel).await.map(|o| (o.text, o.image)),
+        other => execute(other, ws_root, sink, cancel).await.map(|text| (text, None)),
+    }
+}
+
 pub async fn execute(action: Action, ws_root: PathBuf, sink: exec::Sink, cancel: Arc<Notify>) -> Result<String, String> {
     match action {
+        Action::Browser(request) => browser::execute(*request, cancel).await.map(|o| o.text),
         Action::Run {
             program,
             args,
@@ -497,7 +522,7 @@ pub async fn execute(action: Action, ws_root: PathBuf, sink: exec::Sink, cancel:
                         content,
                     } => memory::save(ws.root(), Some(&slug), &title, &description, &content),
                     Action::ForgetMemory { slug } => memory::forget(ws.root(), &slug),
-                    Action::Run { .. } => unreachable!(),
+                    Action::Run { .. } | Action::Browser(_) => unreachable!(),
                 }
             });
             match task.await {

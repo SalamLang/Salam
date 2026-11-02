@@ -55,6 +55,8 @@ const _OP_LSPLIT := 14
 
 mut _re_last_end := -1
 mut _re_err := false
+mut _re_err_at := -1
+mut _re_err_msg := ""
 mut _re_pi := 0
 mut _re_nnode := 0
 mut _re_nprog := 0
@@ -192,9 +194,18 @@ pure func _re_class_match(pat: str, start: int, stop: int, cc: int): bool:
     ret found
 end
 
+func _re_fail_at(msg: str, at: int):
+    if _re_err: ret end
+    _re_err = true
+    _re_err_at = at
+    _re_err_msg = msg
+end
+
+func _re_fail(msg: str): _re_fail_at(msg, _re_pi) end
+
 func _re_new_node(k: int, l: int, r: int, a: int, b: int): int:
     if _re_nnode >= _RE_MAX_NODE:
-        _re_err = true
+        _re_fail("pattern is too long")
         ret 0
     end
     id := _re_nnode
@@ -208,9 +219,9 @@ func _re_new_node(k: int, l: int, r: int, a: int, b: int): int:
     ret id
 end
 
-func _re_next_group(): int:
+func _re_next_group(at: int): int:
     if _re_ngroup >= _RE_MAX_GROUP:
-        _re_err = true
+        _re_fail_at("more than 16 groups", at)
         ret 0
     end
     _re_ngroup += 1
@@ -246,7 +257,7 @@ func _re_scan_rep(pat: str, start: int): bool:
     if q >= pl or _ub(pp, q) != 125: ret false end
     if hi >= 0 and hi < lo: ret false end
     if lo > _RE_MAX_REP or hi > _RE_MAX_REP:
-        _re_err = true
+        _re_fail_at("repeat count is larger than 64", start)
         ret false
     end
     _re_rep_min = lo
@@ -261,6 +272,7 @@ func _re_p_atom(pat: str): int:
     if _re_pi >= pl: ret _re_new_node(_NK_EMPTY, -1, -1, 0, 0) end
     c := _ub(pp, _re_pi)
     if c == 40:
+        open_at := _re_pi
         _re_pi += 1
         mut gnum := 0
         if _re_pi < pl and _ub(pp, _re_pi) == 63:
@@ -273,7 +285,7 @@ func _re_p_atom(pat: str): int:
                 if nc == 80:
                     _re_pi += 1
                     if _re_pi >= pl or _ub(pp, _re_pi) != 60:
-                        _re_err = true
+                        _re_fail("expected '<' after '(?P'")
                         ret 0
                     end
                 end
@@ -282,22 +294,22 @@ func _re_p_atom(pat: str): int:
                     _re_pi += 1
                 end
                 if _re_pi >= pl:
-                    _re_err = true
+                    _re_fail_at("group name has no closing '>'", open_at)
                     ret 0
                 end
                 _re_pi += 1
-                gnum = _re_next_group()
+                gnum = _re_next_group(open_at)
             else:
-                _re_err = true
+                _re_fail_at("unsupported group syntax after '(?'", open_at)
                 ret 0
             end
         else:
-            gnum = _re_next_group()
+            gnum = _re_next_group(open_at)
         end
         inner := _re_p_alt(pat)
         if _re_err: ret inner end
         if _re_pi >= pl or _ub(pp, _re_pi) != 41:
-            _re_err = true
+            _re_fail_at("group has no closing ')'", open_at)
             ret inner
         end
         _re_pi += 1
@@ -306,7 +318,7 @@ func _re_p_atom(pat: str): int:
     else c == 91:
         stop := _re_scan_class(pat, _re_pi)
         if stop < 0:
-            _re_err = true
+            _re_fail("character class has no closing ']'")
             ret 0
         end
         st := _re_pi
@@ -314,7 +326,7 @@ func _re_p_atom(pat: str): int:
         ret _re_new_node(_NK_CLASS, -1, -1, st, stop)
     else c == 92:
         if _re_pi + 1 >= pl:
-            _re_err = true
+            _re_fail("pattern ends with a lone backslash")
             ret 0
         end
         e := _ub(pp, _re_pi + 1)
@@ -332,8 +344,11 @@ func _re_p_atom(pat: str): int:
     else c == 36:
         _re_pi += 1
         ret _re_new_node(_NK_EOL, -1, -1, 0, 0)
-    else c == 41 or c == 42 or c == 43 or c == 63:
-        _re_err = true
+    else c == 41:
+        _re_fail("unmatched ')'")
+        ret 0
+    else c == 42 or c == 43 or c == 63:
+        _re_fail("'" + pat.substr(_re_pi, 1) + "' has nothing to repeat")
         ret 0
     end
     _re_pi += 1
@@ -420,7 +435,7 @@ end
 
 func _re_emit(op: int, x: int, y: int): int:
     if _re_nprog >= _RE_MAX_PROG:
-        _re_err = true
+        _re_fail_at("pattern is too long", -1)
         ret 0
     end
     id := _re_nprog
@@ -588,6 +603,8 @@ end
 func _re_compile(pat: str): bool:
     if _re_cached and _re_same(_re_cached_pat, pat): ret _re_cached_ok end
     _re_err = false
+    _re_err_at = -1
+    _re_err_msg = ""
     _re_pi = 0
     _re_nnode = 0
     _re_nprog = 0
@@ -595,7 +612,7 @@ func _re_compile(pat: str): bool:
     _re_nmark = 0
     _re_emit(_OP_SAVE, 0, 0)
     root := _re_p_alt(pat)
-    if _re_pi < pat.len(): _re_err = true end
+    if _re_pi < pat.len(): _re_fail("unmatched ')'") end
     _re_gen(root)
     _re_emit(_OP_SAVE, 1, 0)
     _re_emit(_OP_MATCH, 0, 0)

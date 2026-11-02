@@ -61,7 +61,7 @@ for exe in "$DIR"/*/*; do
         ok=$((ok + 1))
     else
         echo "DIFF $id"
-        diff "$exp" "$got" | head -6
+        tr -d '\r' <"$got" | diff "$exp" - | head -6
         bad=$((bad + 1))
     fi
 done

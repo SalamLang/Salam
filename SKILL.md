@@ -965,8 +965,8 @@ both sites teaches the language only, not the libraries.
   result: a missing file, an unknown JSON key and a server that refused a
   command all look like empty data.
 - `int` is 32 bits. Helpers that return `int` (`json.GetInt`,
-  `yaml.GetInt`, `conv.Atoi`, `"..".to_int()`) clamp or wrap anything larger;
-  use the `i64` form (`conv.ParseInt`, `json.Unmarshal` into an `i64` field)
+  `yaml.GetInt`, `"..".to_int()`) clamp or give 0 for anything larger, and
+  `conv.Atoi` throws `OutOfRange`; use the `i64` form (`conv.ParseInt`, `json.Unmarshal` into an `i64` field)
   for IDs, sizes and timestamps.
 - Std functions that return a `str` hand you a fresh string you may free;
   arguments are never modified.
@@ -996,11 +996,17 @@ both sites teaches the language only, not the libraries.
   `fmt.Hex(n as u64)`.
 - **`conv`**: `FormatInt FormatUint FormatHex FormatBool FormatFloat`
   (shortest round-trip) `FormatFloatShort` (6 digits, like `%g`)
-  `FormatFloatPrec ParseInt(i64) Atoi(int) ParseFloat ParseBool ParseHex IsNaNF`. Nothing reports bad input: `ParseInt("abc")` is 0, `ParseInt`
-  wraps past 64 bits and `Atoi` keeps only 32 (`Atoi("3000000000")` is
-  `-1294967296`), `ParseBool` is case-sensitive (`"True"` is false), and a
-  comma is not a decimal point (`ParseFloat("1,5")` is 1). Persian digits
-  are accepted.
+  `FormatFloatPrec IsNaNF`. The parsers `ParseInt` (i64), `Atoi` (int),
+  `ParseFloat`, `ParseBool` and `ParseHex` all `throws` (context `conv`):
+  `Syntax` for an empty string, a sign with no digits or any stray character
+  (`12abc`, `1_000`, `1,5`, `12.5` in `ParseInt`, `"True"`), with
+  offset/line/column of that character; `OutOfRange` (`conv.overflow`) past
+  64 bits, or 32 for `Atoi`. Codes: `conv.empty`, `conv.no_digits`,
+  `conv.invalid_char`, `conv.not_bool`, `conv.overflow`. Spaces around, one
+  sign and Persian/Arabic digits are accepted; `ParseBool` reads
+  `true 1 yes on` / `false 0 no off`. For a default use `ParseIntOr(s, fallback)`,
+  `AtoiOr`, `ParseFloatOr`, `ParseBoolOr`, `ParseHexOr`. The string methods
+  `to_int`/`to_float` stay lenient (0).
 - **`text`**: `ToUtf16(str): void*` (yours to `mem.Free`), `FromUtf16(void*): str`,
   `Utf16Len` (what JavaScript and browsers count), `Utf16UnitAt` (no bounds
   check). For Windows/UTF-16 FFI.
@@ -1097,7 +1103,8 @@ learning half is `f32` on `std/tensor`; the classical half is `f64` on
   `LastStep`, the `Layer` interface with `Sequential` and the
   `ReluLayer GeluLayer TanhLayer` wrappers, `Flatten SinusoidalPositions`,
   init `XavierUniform XavierNormal KaimingUniform KaimingNormal`, checkpoints `SaveCheckpoint LoadCheckpoint`
-  (SLMT, `.gz` aware) and the `*Buf` forms.
+  (SLMT, `.gz` aware) and the `*Buf` forms; the loaders `throws` (`nn.crc`,
+  `nn.param_count`, `nn.shape`, ...) and write nothing unless the whole file matches.
 - **`optim`**: `SGD` (momentum, nesterov, weight decay) `Adam` `NewAdamW`
   `RMSProp` with `step(ps)`, `ClipGradNorm ClipGradValue`, schedules `StepLR CosineLR WarmupCosine`.
 - **`ml`**: struct-per-estimator over `matrix`; `fit(x, y): bool`, `predict`,
@@ -1109,14 +1116,16 @@ learning half is `f32` on `std/tensor`; the classical half is `f64` on
   rows only.
 - **`data`**: `MakeBlobs MakeMoons MakeCircles MakeRegression MakeClassification` (seeded), `LoadCsv LoadCsvFile` → `Table` (`kinds to_matrix split_xy cat_levels`), `MatrixDataset.batches` → `BatchIter`
   (`next next_tensor reset`), `LoadIdx LoadMnist ParseIdx`, `LoadImageFolder`,
-  `XTensor YLabels`.
-- **`npy`**: `ReadNpy ReadNpyFile WriteNpy WriteNpyFile ToMatrix FromMatrix NpzList NpzRead NpzWrite`.
+  `XTensor YLabels`. `LoadCsv LoadCsvFile LoadIdx LoadMnist ParseIdx` are `throws`.
+- **`npy`**: `ReadNpy ReadNpyFile WriteNpy WriteNpyFile ToMatrix FromMatrix NpzList NpzRead NpzWrite`;
+  every reader and `ToMatrix` `throws` (`npy.bad_magic`, `npy.dtype`, `npy.truncated`, `npy.missing_key`).
 - **`onnx`**: `LoadOnnx ParseOnnx Run` for MLP, CNN and transformer-style
   graphs (`Conv Gemm MatMul` activations, pooling, the norms, shape ops,
   reductions, `Gather Slice Where Cast` and more, about 65 ops); anything
   else fails with the op named in `model.error`.
 - **`gguf`**: `LoadGguf ParseGguf` (metadata, tensor directory),
-  `LoadTensorF32` dequantizing `F32 F16 Q8_0 Q4_0 Q4_1`.
+  `LoadTensorF32` dequantizing `F32 F16 Q8_0 Q4_0 Q4_1`; all three `throws`
+  (`ParseGguf` owns the buffer only on success). `tensor.ReadTensor` throws too.
 - **`llm`**: decoder-only models (Llama layout: RMSNorm, RoPE, GQA,
   SwiGLU). `Config Model RandomModel NewKVCache(cfg) Forward(m, cache, tokens)` (positions continue from `cache.len`), `LogitsRow Greedy`,
   `Sampler` (`temperature top_k top_p repeat_penalty`) with `GenerateIds Generate`, `NewTokenizer` (`TOK_SPM`, `TOK_BPE`; `encode decode`), and
@@ -1295,18 +1304,20 @@ end
   `Unsupported`, `offset` is the byte position and `line`/`column` are filled
   in (`e.to_str()` gives `json: expected ':' (line 2, column 7)`); trailing
   text after the value is code `json.trailing_data`. `JSONDecoder.Decode()`
-  throws too.
+  throws too. TOML and XML errors also carry a `code` (`toml.duplicate_key`,
+  `xml.unclosed_tag`, `xml.mismatched_tag`, `xpath.unknown_function`, ...).
 - **`xml`** (`import encoding.xml`): two models in one package.
-  - **Simple tree** `XMLNode` (`tag attrs children text`): `Decode DecodeStrict Valid Encode EncodeIndent Child Children Attr HasAttr SetAttr AppendChild NewXMLNode ToValue FromValue EscapeText EscapeAttr`, plus the
+  - **Simple tree** `XMLNode` (`tag attrs children text`): `Decode Valid Encode EncodeIndent Child Children Attr HasAttr SetAttr AppendChild NewXMLNode ToValue FromValue EscapeText EscapeAttr` (`Decode` throws; it reads through the strict parser, namespaces off), plus the
     tokenizer `NewXMLTokenizer`/`NextToken` (checks nothing; run
     `WellFormed` first). Ignores namespaces and mixed-content order: fine
     for a config file.
   - **Full `Document`** (an arena of `int` node handles, strict parsing with
-    line/column errors, namespaces, bounded entity expansion): `Parse(text, err) ParseWith(text, opts, err) WellFormed`, `ParseOptions`
+    line/column errors, namespaces, bounded entity expansion): `Parse(text) ParseWith(text, opts)` (both `throws`), `WellFormed(text): bool`, `ParseOptions`
     (`preserve_whitespace keep_comments namespaces expand_entities max_depth`; whitespace-only text is dropped by default). Read `Root Kind Name LocalName NamespaceURI Parent ChildCount ChildAt Elements ElementsNamed FirstElementNamed Descendants NextSibling AttributeValue AttributeValueNS Text Line Column`; edit `NewDocument CreateElement CreateText Append InsertBefore RemoveChild SetAttribute SetText`; write
     `Write WriteIndent WriteNode Canonical`. `Free(d)`, `FreeList(list)`.
-  - **XPath 1.0**: `Select(d, context, expr, err): NodeList` (context `-1` =
-    document) `SelectFirst SelectString SelectNumber SelectBoolean Evaluate`;
+  - **XPath 1.0**: `Select(d, context, expr): NodeList` (context `-1` =
+    document) `SelectFirst SelectString SelectNumber SelectBoolean Evaluate`,
+    all `throws` on a bad expression (context `xpath`, column inside it);
     all axes and the core function library, no variables, no namespace axis.
     Name tests match the name as written, prefix included: use
     `local-name()`/`namespace-uri()` when the prefix may vary. Attributes
@@ -1318,14 +1329,20 @@ end
   `*a`, `<<:`; an anchored map silently drops the rest of the document);
   `yes`/`no`/`on`/`off` are strings; `GetInt` is 32-bit and wraps; every path
   call reparses, so `Decode` once for many reads.
-- **`csv`** (`import encoding.csv`): `ReadLine(str): Vector<str>`,
-  `WriteLine(Vector<str>): str`, `ReadAll WriteAll FreeTable ToValue FromValue`. The separator is always a comma; a quoted field with a line
-  break cannot be read back (`ReadAll` splits lines first); `"Pen" ,blue`
-  (space after the quote) ends the row silently; spaces are kept.
-- **`toml`** (`import encoding.toml`): `DecodeStrict Decode Valid EncodeStrict Encode` over `value.Value`. `Decode` never reports errors
-  (a typo drops the rest), so use `DecodeStrict` on edited files. Triple
-  quoted strings are invalid and dates stay strings; `Encode` loses comments
-  and key order.
+- **`csv`** (`import encoding.csv`): `ReadLine(str): Vector<str> throws`,
+  `WriteLine(Vector<str>): str`, `ReadAll ToValue` (`throws`) `WriteAll FreeTable FromValue`, and the
+  `ReadLineWith ReadAllWith WriteLineWith WriteAllWith ToValueWith FromValueWith` forms taking
+  `CSVOptions { header separator keep_blank }` (`separator = ";"` or `"\t"`). RFC 4180: quoted
+  fields may hold line breaks. Broken input throws `Syntax` with line/column and a code:
+  `csv.unterminated_quote`, `csv.text_after_quote` (`"Pen" ,blue`), `csv.bare_quote` (`5'11"`),
+  `csv.multiple_rows` (`ReadLine` got two rows), `csv.duplicate_header` (`ToValue`). Empty lines
+  are skipped unless `keep_blank`; spaces are kept; writers never fail.
+- **`toml`** (`import encoding.toml`): `Decode(text): value.Value throws`,
+  `Valid`, `Encode(v): str throws`. `Decode` is strict: duplicate keys and
+  tables, bare words (`mode = fast`), bad escapes and numbers and text after a
+  value all throw with the line and column. Triple quoted strings throw
+  `Unsupported` and dates stay strings; `Encode` throws `Unsupported` for a
+  non-object top level or a null in an array, and loses comments.
 - **`value`** (`import encoding.value`): the dynamic `Value` every format
   shares: `ValueNull ValueBool ValueInt ValueFloat ValueString NewValueArray NewValueObject Is* As* ArrayLen ArrayGet ArraySet ArrayPush ObjectGet ObjectGetOk ObjectSet ObjectHas ObjectDelete ObjectKeys ValueClone ValueFree Equal`. `As*` never checks the kind (`AsInt` of a string is 0);
   the checked methods `v.field(k) v.at(i) v.int() v.float() v.str() v.bool()`
@@ -1339,21 +1356,34 @@ end
   `TranscodeStrict` throws, **`msgpack`**
   `Marshal Unmarshal UnmarshalBytes` (the two readers throw; no bin/ext types, string map keys
   only, trailing bytes ignored), **`binary`** `WriteU32BE ReadI64LE ...`
-  (reading past the end yields 0 and sets `r.bad`; `ReadU32*` comes back in a
+  (every `Read*` `throws` `UnexpectedEnd`, code `binary.unexpected_end`, with the
+  offset, and leaves the reader in place; `ReadU32*` comes back in a
   signed `int`, so widen with `(v as i64) & 4294967295`; writers truncate
   silently), **`protobuf`** (`.proto` parser, wire helpers `WriteVarint ReadVarint WriteTag ReadTag SkipField ZigZag*` and Salam code generation;
-  generated readers do not accept packed repeated fields).
+  the readers, `ParseFile Tokenize GenerateSingle GenerateWithServices ServiceSummary` throw, `ReadTag(r, num, wire)` fills
+  its out-params; generated `Unmarshal<Msg>(data, n)` throws and rejects packed repeated fields).
 - **`url`** (`import encoding.url`): `Parse(s): URL HostPort Hostname Query SetParam RemoveParam KeepParams Join Domain Subdomain PublicSuffix IsIP`.
-  `Parse` never fails or validates (check `scheme` and `host` yourself),
-  nothing is lower-cased, and editing one parameter re-encodes the whole
-  query. **`query`** (`import encoding.query`): `Get GetAll Has` on the text,
-  or `Decode` to a `QueryMap` with `Set Add Remove Retain Encode`; missing
-  and empty look the same to `Get`. **`envfile`** (`import encoding.envfile`): `Parse ParseStrict ParseRaw Get GetOr Set Format Expand RefNames`; `Parse` drops bad lines silently (use `ParseStrict`, which throws with the line and column),
+  `Parse` throws on text that is not a URL (empty, space, bad scheme,
+  missing host, bad port or host character, unclosed `[` IPv6, a `%` not
+  followed by two hex digits); relative references (`../a`, `?q=1`) still
+  parse, with no scheme or host. `Join`, `Query`, `DecodedPath`,
+  `DecodedUserinfo`, `ParamNames`, `SetParam`, `RemoveParam`, `KeepParams`
+  throw too. Nothing is lower-cased, and editing one parameter re-encodes
+  the whole query. **`query`** (`import encoding.query`): `Get GetAll Has`
+  on the text (never fail: a bad `%` escape is kept as written), or
+  `Decode`/`DecodeWith` (throw on a bad escape) to a `QueryMap` with
+  `Set Add Remove Retain Encode`; missing and empty look the same to `Get`. **`envfile`** (`import encoding.envfile`): `Parse ParseStrict ParseRaw Get GetOr Set Format Expand RefNames`; `Parse` drops bad lines silently (use `ParseStrict`, which throws with the line and column),
   and `${NAME}` only sees lines above it.
-- **`encoding`**: `Base64Encode Base64EncodeBytes Base64Decode Base64DecodeStrict Base64DecodeBytes HexEncode HexDecode URLEncode URLDecode`. `Base64Decode`/`HexDecode` return a `str`, so binary is cut at
-  the first zero byte (use `Base64DecodeBytes`); `HexDecode` stops at the
-  first bad pair without error; URL-safe base64 (`-_`) is damaged by the
-  lenient decoder.
+- **`encoding`**: `Base64Encode Base64EncodeBytes Base64Decode Base64DecodeBytes HexEncode HexDecode URLEncode URLDecode`. The four decoders
+  throw: `Base64Decode(s): str` reads both alphabets (`+/` and `-_`),
+  optional padding and whitespace, and throws `Syntax` (bad character, data
+  after `=`, too much `=`) or `UnexpectedEnd` (one char into a group,
+  missing `=`); `Base64DecodeBytes(s, out, cap): int` also throws
+  `OutOfRange` when `cap` is too small; `HexDecode` throws on an odd length
+  or a non-hex character; `URLDecode` on a `%` not followed by two hex
+  digits. `Base64Decode`/`HexDecode` return a `str`, so binary is cut at
+  the first zero byte (use `Base64DecodeBytes`). `http.UrlDecode` stays
+  lenient.
 - **`compress`**: `ByteBuf` (`NewByteBuf BufPush BufGet BufLen BufFree BufFromStr BufToBase64`), `Compress/Decompress(method)` over `Method*`,
   `DeflateCompress GzipCompress GzipDecompress CRC32 Adler32`. Gzip does not
   verify the CRC; the method is not stored in the output; free every buffer.
@@ -1364,7 +1394,9 @@ end
   (`IsXLS` detects it); the format comes from the file extension; formulas
   are not evaluated; rows and columns count from 0.
 - **`regex`**: `Compile Match Find Replace ReplaceAll` (`Regex` handle) and
-  one-shot `MatchStr FindStr ReplaceStr ReplaceAllStr`. Captures: `FindMatch`
+  one-shot `MatchStr FindStr ReplaceStr ReplaceAllStr`. `Compile` and every
+  `...Str` function `throws` `Syntax` (code `regex.invalid`, `offset` where the
+  pattern breaks); functions taking a `Regex` cannot fail. Captures: `FindMatch`
   returns a `MatchResult` value (`.ok .start .stop .count`) to read with
   `Group GroupStart GroupEnd GroupOk GroupByName GroupIndex GroupCount`, plus
   `FindSubmatch FindAll FindAllN FindAllMatches Split SplitN` (all
@@ -1372,8 +1404,8 @@ end
   `Expand ReplaceExpand ReplaceAllExpand`; `IsValid` checks a pattern. Syntax:
   `. [] \d \w \s \D \W \S ^ $ | (…) (?:…) (?<name>…) (?P<name>…) * + ? {n,m}`
   and the lazy `*? +? ?? {n,m}?`. **No `\b`** (it means `b`), **no `(?i)`**,
-  no lookaround, no back references; an unsupported pattern is invalid and
-  never matches (test with `IsValid`). The engine works on **bytes**: `\w`
+  no lookaround, no back references; an unsupported pattern is invalid
+  (`Compile` throws, `IsValid` is false). The engine works on **bytes**: `\w`
   never matches a Persian letter, `[آ-ی]` does not work and `ب+` repeats
   only the last byte (write `(ب)+`). `^`/`$` anchor the whole text, never a
   line. At most 16 groups and `{n}` up to 64; a match over 400000 steps is
@@ -1398,12 +1430,15 @@ end
   `FormatRFC3339` for anything stored); `Now` has whole seconds and follows
   clock changes, so time code with `MonoNanos`; `Days(30)` is not a month;
   `FromUTCParts` rolls over (30 February is 1 March) while the parsers
-  reject impossible days. `Sleep` takes milliseconds.
+  throw on impossible days. `Sleep` takes milliseconds.
   - **`Duration`** (nanoseconds, so it cannot be read in the wrong unit):
-    `Nanoseconds Microseconds Milliseconds Seconds Minutes Hours Days SecondsF ZeroDuration`, methods `nanos millis secs seconds minutes hours days add sub mul div ratio neg abs truncate round cmp less equals is_zero`; `FormatDuration` ("1h30m0s") and `ParseDuration`/
-    `ParseDurationOr` (`DurationResult { ok, value }`); `SleepFor SinceDuration DurationBetween AddDuration`.
-  - **Parsing**: `ParseISO ParseISOIn ParseISOOr ParseHTTPDate ParseFormat(pattern, s)` (strftime `%Y %m %d %H %M %S %f %b %a %z %Z`),
-    all returning `TimeResult { ok, epoch, nanos }`; an unzoned string is
+    `Nanoseconds Microseconds Milliseconds Seconds Minutes Hours Days SecondsF ZeroDuration`, methods `nanos millis secs seconds minutes hours days add sub mul div ratio neg abs truncate round cmp less equals is_zero`; `FormatDuration` ("1h30m0s") and `ParseDuration(s): Duration throws`/
+    `ParseDurationOr(s, fallback)`; `SleepFor SinceDuration DurationBetween AddDuration`.
+  - **Parsing**: `ParseISO ParseISOIn ParseHTTPDate ParseFormat(pattern, s)` (strftime `%Y %m %d %H %M %S %f %b %a %z %Z`)
+    return the `i64` epoch and `throws` (`Syntax`, `UnexpectedEnd`, or `OutOfRange`
+    for month 13 / hour 25 / 30 February, with `offset` and a `time.*` code;
+    a bad layout is `InvalidArgument`); `ParseISONanos` keeps the fraction
+    (nanoseconds since the epoch); `ParseISOOr(s, fallback)` never throws. An unzoned string is
     **local** time. `FromLocalParts` (DST-correct) / `FromUTCParts`,
     `LocalOffsetMinutesAt`.
   - **Timers** (monotonic): `NewTimer` (`expired remaining wait reset stop`),
@@ -1465,8 +1500,8 @@ end
   automatic 405; `Body` is a `str` (binary uploads are cut).
 - **`net.router`** alone: `Dispatch` (a `Match`) `FreeMatch ParamGet EnableListing` for routing without a server. **`net.http.middleware`** `Log AllowAll Secure NoCache Cache` (`AllowAll` omits PATCH; `Secure` sets no CSP or
   HSTS), **`net.http.validate`** `Required Length IsEmail Matches Assert`
-  (`Required` accepts spaces, `IsEmail` is loose, `Matches` is unanchored,
-  and you must `ret` after a failed `Assert`), **`net.http.session`**
+  (`Required` accepts spaces, `IsEmail` is loose, `Matches` is unanchored and
+  throws on a bad pattern, and you must `ret` after a failed `Assert`), **`net.http.session`**
   `Configure Start Save Regenerate Destroy Value SetValue CSRFToken CSRFVerify` (call `Save` after changes, `Regenerate` after login; sessions
   live in process memory).
 - **`net.http` raw calls**: requests with your own header text and any bytes: `ParseEndpoint SendRaw SendRawTimeout SendRawTLS FreeRaw RawText HeaderValue`
@@ -1595,8 +1630,16 @@ end
   a token links none of it.
   - Tokens: `NewClaims SetStr/SetInt/SetBool/SetRaw ExpiresIn NotBeforeIn ClaimsJSON`; `Sign SignHS256/384/512 SignWithKid SignJSON SignatureOf`;
     `Verify VerifyHS256 IsValid DefaultOptions OptionsFor`; `Decode` (parses,
-    verifies **nothing**); claim readers `Str Int Bool Raw Has ListHas HasScope HasAudience SecondsRemaining`; `ErrorText IsSupportedAlg`; error
-    codes `JWT_OK JWT_ERR_*`. `Options` carries the policy (`alg issuer audience subject leeway now require_exp/nbf/iat/sub/jti`). **`alg` comes
+    verifies **nothing**); claim readers `Str Int Bool Raw Has ListHas HasScope HasAudience SecondsRemaining`; `IsSupportedAlg`.
+    `Decode Verify VerifyHS256 Sign* SignJSON Issue IssueFor IssuePair Check B64UrlDecode`
+    are `throws` (`IsValid` is the bool form): the `Error` carries a `jwt.*`
+    `code` (`malformed bad_base64 bad_json` are `Syntax`;
+    `bad_alg bad_typ crit` are `Unsupported`; `empty_secret` is `InvalidArgument`;
+    `alg_mismatch bad_signature expired not_yet_valid issued_in_future bad_claim`
+    are `PermissionDenied`; `missing_claim` is `MissingKey`; `missing_token`
+    (from `Check`) is `NotFound`),
+    `path` names the claim for `bad_claim`/`missing_claim`, and `message` is
+    the short reason the guards send. `Options` carries the policy (`alg issuer audience subject leeway now require_exp/nbf/iat/sub/jti`). **`alg` comes
     from `Options`, never from the token**; `"none"` and RS*/ES* are rejected
     (no asymmetric support). **`require_exp` is off by default**, so a token
     without `exp` is accepted forever unless you set it; the secret is not
@@ -1604,7 +1647,7 @@ end
   - HTTP (needs `net.http` + `net.router`): `NewGuard` bundles the secret with
     an `Options`; `Require RequireScope RequireClaim RequireSubject` verify at
     the top of a handler and, on failure, write the 401/403 themselves and
-    return false. Also `Check` (verify, write nothing), `ParseBearer BearerToken TokenFrom Unauthorized MissingCredential Forbidden`, issuing
+    return false. Also `Check` (verify, write nothing; branch on `e.code`), `ParseBearer BearerToken TokenFrom Unauthorized MissingCredential Forbidden`, issuing
     (`Issue IssueFor IssuePair`) and cookies (`SetSessionCookie SetSessionCookieInsecure ClearSessionCookie`).
 
 Passwords and secrets live in **`crypto`**, not here: `HashPassword`
@@ -1627,7 +1670,7 @@ end
 
 Worked examples: `tests/en/apps/auth/` (seven programs), the five REST APIs in
 `tests/en/apps/*api/`, and `tests/en/webframework/authapi.salam`. Package
-tests: `tests/en/stdlib/jwt_demo.salam`.
+tests: `tests/en/stdlib/jwt_demo.salam` and `jwt_errors_demo.salam` (one line per code).
 
 ### Databases (`import db`, `import db.<engine>`)
 

@@ -1,0 +1,462 @@
+package nativegen
+
+const CA_STK := 5
+const CA_STK_GP := 6
+const CA_STK_FP := 7
+const CA_ARM_C4 := 1000
+const CA_ARM_C8 := 2000
+const CA_ARM_HS := 3000
+const CA_ARM_HD := 4000
+const CA_MAX_WORDS := 64
+
+const CP_GP := 0
+const CP_FP := 1
+const CP_X87 := 2
+const CP_SODD := 3
+
+struct CaParts:
+    pub off: Vector<int> = Vector {}
+    pub sz: Vector<int> = Vector {}
+    pub kind: Vector<int> = Vector {}
+    pub reg: Vector<int> = Vector {}
+end
+
+func ca_free(p &: CaParts):
+    p.off.free()
+    p.sz.free()
+    p.kind.free()
+    p.reg.free()
+end
+
+func ca_add(p &: CaParts, off: int, sz: int, kind: int, reg: int):
+    p.off.push(off)
+    p.sz.push(sz)
+    p.kind.push(kind)
+    p.reg.push(reg)
+end
+
+func ca_flat(g &: Ng, t: int, base: int, f &: CaParts): bool:
+    k := g.t_kind[t]
+    if k == TK_STRUCT:
+        repeat g.t_nf[t] in j:
+            if not ca_flat(g, field_ty(g, t, j), base + field_off(g, t, j), f):
+                ret false
+            end
+        end
+        ret true
+    end
+    if k == TK_ARRAY:
+        el := g.t_elem[t]
+        es := tsize(g, el)
+        if g.t_count[t] > (64 as i64):
+            ret false
+        end
+        cnt := g.t_count[t] as int
+        repeat cnt in e:
+            if not ca_flat(g, el, base + e * es, f):
+                ret false
+            end
+        end
+        ret true
+    end
+    if k == TK_OPAQUE or k == TK_VEC or k == TK_VOID or k == TK_LABEL or f.off.len() >= 64:
+        ret false
+    end
+    ca_add(f, base, msz(g, t), is_flt(g, t) ? CP_FP : CP_GP, 0 - 1)
+    ret true
+end
+
+func ca_hfa(f &: CaParts): int:
+    n := f.off.len()
+    if n < 1 or n > 4:
+        ret 0
+    end
+    es := f.sz[0]
+    repeat n in j:
+        if f.kind[j] != CP_FP or f.sz[j] != es or f.off[j] != j * es:
+            ret 0
+        end
+    end
+    ret es
+end
+
+func ca_rv_fp(f &: CaParts): bool:
+    n := f.off.len()
+    mut nf := 0
+    repeat n in j:
+        if f.sz[j] > 8:
+            ret false
+        end
+        if f.kind[j] == CP_FP:
+            nf += 1
+        end
+    end
+    ret (n == 1 and nf == 1) or (n == 2 and nf >= 1)
+end
+
+func ca_chunks(size: int, f &: CaParts, sse: bool, out &: CaParts):
+    nb := (size + 7) / 8
+    repeat nb in c:
+        mut ints := not sse
+        repeat f.off.len() in j:
+            if f.off[j] / 8 == c and f.kind[j] != CP_FP:
+                ints = true
+            end
+        end
+        mut ln := size - 8 * c
+        if ln > 8:
+            ln = 8
+        end
+        ca_add(out, 8 * c, ln, ints ? CP_GP : CP_FP, 0 - 1)
+    end
+end
+
+func ca_gp_ret(g &: Ng, n: int): int:
+    if n == 0:
+        ret RAX
+    end
+    if g.arch == NG_ARCH_X64 or g.arch == NG_ARCH_X86:
+        ret RDX
+    end
+    ret RCX
+end
+
+func ca_ret(g &: Ng, t: int, out &: CaParts): int:
+    size := tsize(g, t)
+    mut f := CaParts {}
+    defer ca_free(f)
+    ok := ca_flat(g, t, 0, f)
+    a := g.arch
+    if a == NG_ARCH_X86:
+        if g.os != NG_OS_WINDOWS:
+            ret 0
+        end
+        if ok and f.off.len() == 1 and f.kind[0] == CP_FP and f.sz[0] == size:
+            ca_add(out, 0, size, CP_X87, 0 - 1)
+            ret 1
+        end
+        if size == 1 or size == 2 or size == 4:
+            ca_add(out, 0, size, CP_GP, RAX)
+            ret 1
+        end
+        if size == 8:
+            ca_add(out, 0, 4, CP_GP, RAX)
+            ca_add(out, 4, 4, CP_GP, RDX)
+            ret 1
+        end
+        ret 0
+    end
+    if a == NG_ARCH_X64 and g.os == NG_OS_WINDOWS:
+        if size == 1 or size == 2 or size == 4 or size == 8:
+            ca_add(out, 0, size, CP_GP, RAX)
+            ret 1
+        end
+        ret 0
+    end
+    if not ok:
+        ret 0 - 1
+    end
+    if size == 0:
+        ret 1
+    end
+    if a == NG_ARCH_A64 or a == NG_ARCH_ARM:
+        es := ca_hfa(f)
+        if es > 0:
+            repeat f.off.len() in j:
+                if a == NG_ARCH_ARM and es == 4:
+                    ca_add(out, j * 4, 4, (j & 1) == 1 ? CP_SODD : CP_FP, XMM0 + (j >> 1))
+                else:
+                    ca_add(out, j * es, es, CP_FP, XMM0 + j)
+                end
+            end
+            ret 1
+        end
+        if a == NG_ARCH_ARM:
+            if size <= 4:
+                ca_add(out, 0, size, CP_GP, RAX)
+                ret 1
+            end
+            ret 0
+        end
+    end
+    if size > 16:
+        ret 0
+    end
+    if a == NG_ARCH_RV64 and ca_rv_fp(f):
+        mut nf := 0
+        repeat f.off.len() in j2:
+            if f.kind[j2] == CP_FP:
+                ca_add(out, f.off[j2], f.sz[j2], CP_FP, XMM0 + nf)
+                nf += 1
+            else:
+                ca_add(out, f.off[j2], f.sz[j2], CP_GP, RAX)
+            end
+        end
+        ret 1
+    end
+    ca_chunks(size, f, a == NG_ARCH_X64, out)
+    mut ng := 0
+    mut nx := 0
+    repeat out.off.len() in j3:
+        if out.kind[j3] == CP_FP:
+            out.reg[j3] = XMM0 + nx
+            nx += 1
+        else:
+            out.reg[j3] = ca_gp_ret(g, ng)
+            ng += 1
+        end
+    end
+    ret 1
+end
+
+func ca_odd(p &: CaParts): bool:
+    repeat p.off.len() in j:
+        s := p.sz[j]
+        if p.kind[j] == CP_GP and s != 1 and s != 2 and s != 4 and s != 8:
+            ret true
+        end
+    end
+    ret false
+end
+
+func ca_ret_store(g &: Ng, p &: CaParts, dst: Mem):
+    n := p.off.len()
+    mut vals := Vector {} as Vector<int>
+    defer vals.free()
+    repeat n in j:
+        k := p.kind[j]
+        if k == CP_X87:
+            vals.push(x87_to_xmm(g, p.sz[j]))
+        else k == CP_SODD:
+            x := xmm(g)
+            so := e_rr(g, M_ARM_SODD, 4, x, p.reg[j])
+            g.mc.cc[so] = 1
+            vals.push(x)
+        else k == CP_FP:
+            x2 := xmm(g)
+            _c := e_copy(g, x2, p.reg[j])
+            vals.push(x2)
+        else:
+            r := gpr(g)
+            _c2 := e_copy(g, r, p.reg[j])
+            vals.push(r)
+        end
+    end
+    repeat n in j2:
+        s := p.sz[j2]
+        m := mem_add(dst, p.off[j2])
+        if p.kind[j2] == CP_GP:
+            mut w := s
+            if s != 1 and s != 2 and s != 4 and s != 8:
+                w = g.wsz
+            end
+            _s := e_mr(g, M_ST, w, m, vals[j2])
+        else:
+            _s2 := e_mr(g, M_FST, s == 4 ? 4 : 8, m, vals[j2])
+        end
+    end
+end
+
+func ca_src(g &: Ng, src: Mem, size: int, w: int): Mem:
+    if size % w == 0:
+        ret src
+    end
+    slot := new_slot(g, align_up(size, w), w)
+    m := frame_mem(slot, 0 as i64)
+    emit_copy(g, m, src, size)
+    ret m
+end
+
+func ca_word(g &: Ng, m: Mem, off: int, w: int): int:
+    r := gpr(g)
+    _l := e_rm(g, M_LD, w, r, mem_add(m, off))
+    ret r
+end
+
+func ca_fp(g &: Ng, m: Mem, off: int, sz: int): int:
+    x := xmm(g)
+    _l := e_rm(g, M_FLD, sz, x, mem_add(m, off))
+    ret x
+end
+
+func ca_int(g &: Ng, m: Mem, off: int, sz: int): int:
+    r := gpr(g)
+    if sz == 8 or (sz == 4 and g.arch != NG_ARCH_RV64):
+        _l := e_rm(g, M_LD, sz, r, mem_add(m, off))
+        ret r
+    end
+    if sz == 4:
+        _l2 := e_rm(g, M_LD, 4, r, mem_add(m, off))
+        rs := gpr(g)
+        sx := e_rr(g, M_MOVSX_RR, 8, rs, r)
+        g.mc.sz2[sx] = 4
+        ret rs
+    end
+    l := e_rm(g, M_LDZX, 4, r, mem_add(m, off))
+    g.mc.sz2[l] = sz
+    ret r
+end
+
+func ca_byref(g &: Ng, src: Mem, size: int, al: int, regs &: Vector<int>, cls &: Vector<int>):
+    slot := new_slot(g, size, al < 16 ? 16 : al)
+    m := frame_mem(slot, 0 as i64)
+    emit_copy(g, m, src, size)
+    regs.push(lea_reg(g, m))
+    cls.push(0)
+end
+
+func ca_words(g &: Ng, src: Mem, size: int, w: int, c: int, regs &: Vector<int>, cls &: Vector<int>):
+    m := ca_src(g, src, size, w)
+    repeat (size + w - 1) / w in k:
+        regs.push(ca_word(g, m, w * k, w))
+        cls.push(c)
+    end
+end
+
+func ca_used(cls &: Vector<int>, gi &: int, fi &: int):
+    gi = 0
+    fi = 0
+    each c in cls:
+        if c == 0:
+            gi += 1
+        else c == 1:
+            fi += 1
+        else c == CA_STK_GP:
+            gi = 99
+        else c == CA_STK_FP:
+            fi = 99
+        end
+    end
+end
+
+func ca_arg(g &: Ng, src: Mem, t: int, byval: bool, va: bool, regs &: Vector<int>, cls &: Vector<int>): bool:
+    size := tsize(g, t)
+    al := talign(g, t)
+    a := g.arch
+    if size == 0:
+        ret true
+    end
+    if (size + 3) / 4 > CA_MAX_WORDS and (a == NG_ARCH_X86 or a == NG_ARCH_ARM or (a == NG_ARCH_X64 and g.os != NG_OS_WINDOWS)):
+        ret false
+    end
+    if a == NG_ARCH_X86:
+        ca_words(g, src, size, 4, 0, regs, cls)
+        ret true
+    end
+    if a == NG_ARCH_X64 and g.os == NG_OS_WINDOWS:
+        if not byval and (size == 1 or size == 2 or size == 4 or size == 8):
+            regs.push(ca_int(g, src, 0, size))
+            cls.push(0)
+        else:
+            ca_byref(g, src, size, al, regs, cls)
+        end
+        ret true
+    end
+    mut f := CaParts {}
+    defer ca_free(f)
+    if not ca_flat(g, t, 0, f):
+        ret false
+    end
+    mut gi := 0
+    mut fi := 0
+    ca_used(cls, gi, fi)
+    if a == NG_ARCH_ARM:
+        es := va ? 0 : ca_hfa(f)
+        if es > 0:
+            n := f.off.len()
+            repeat n in j:
+                regs.push(ca_fp(g, src, j * es, es))
+                if j == 0:
+                    cls.push((es == 8 ? CA_ARM_HD : CA_ARM_HS) + n)
+                else:
+                    cls.push(es == 8 ? 1 : 3)
+                end
+            end
+            ret true
+        end
+        m := ca_src(g, src, size, 4)
+        nw := (size + 3) / 4
+        repeat nw in k:
+            regs.push(ca_word(g, m, 4 * k, 4))
+            cls.push(k == 0 ? (al >= 8 ? CA_ARM_C8 : CA_ARM_C4) + nw : 0)
+        end
+        ret true
+    end
+    if a == NG_ARCH_RV64:
+        if size > 16:
+            ca_byref(g, src, size, al, regs, cls)
+            ret true
+        end
+        if not va and ca_rv_fp(f):
+            mut nf := 0
+            repeat f.off.len() in j2:
+                if f.kind[j2] == CP_FP:
+                    nf += 1
+                end
+            end
+            if fi + nf <= 8 and gi + f.off.len() - nf <= 8:
+                repeat f.off.len() in j3:
+                    if f.kind[j3] == CP_FP:
+                        regs.push(ca_fp(g, src, f.off[j3], f.sz[j3]))
+                        cls.push(1)
+                    else:
+                        regs.push(ca_int(g, src, f.off[j3], f.sz[j3]))
+                        cls.push(0)
+                    end
+                end
+                ret true
+            end
+        end
+        ca_words(g, src, size, 8, 0, regs, cls)
+        ret true
+    end
+    if a == NG_ARCH_A64:
+        es2 := ca_hfa(f)
+        if es2 > 0:
+            if fi + f.off.len() <= 8:
+                repeat f.off.len() in j4:
+                    regs.push(ca_fp(g, src, j4 * es2, es2))
+                    cls.push(1)
+                end
+            else:
+                ca_words(g, src, size, 8, CA_STK_FP, regs, cls)
+            end
+            ret true
+        end
+        if size > 16:
+            ca_byref(g, src, size, al, regs, cls)
+            ret true
+        end
+        nw2 := (size + 7) / 8
+        ca_words(g, src, size, 8, gi + nw2 <= 8 ? 0 : CA_STK_GP, regs, cls)
+        ret true
+    end
+    if byval or size > 16:
+        ca_words(g, src, size, 8, CA_STK, regs, cls)
+        ret true
+    end
+    mut ch := CaParts {}
+    defer ca_free(ch)
+    ca_chunks(size, f, true, ch)
+    mut nsse := 0
+    repeat ch.off.len() in j5:
+        if ch.kind[j5] == CP_FP:
+            nsse += 1
+        end
+    end
+    if gi + ch.off.len() - nsse > 6 or fi + nsse > 8:
+        ca_words(g, src, size, 8, CA_STK, regs, cls)
+        ret true
+    end
+    m2 := ca_src(g, src, size, 8)
+    repeat ch.off.len() in j6:
+        if ch.kind[j6] == CP_FP:
+            regs.push(ca_fp(g, src, ch.off[j6], ch.sz[j6] <= 4 ? 4 : 8))
+            cls.push(1)
+        else:
+            regs.push(ca_word(g, m2, ch.off[j6], 8))
+            cls.push(0)
+        end
+    end
+    ret true
+end

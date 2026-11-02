@@ -731,6 +731,12 @@ The output is a PIE `MH_EXECUTE`:
   `libSystem`. The driver finds `lib<name>.tbd` or `.dylib` on the library
   paths and in the SDK (`SDKROOT`, or the Xcode command-line tools and Xcode
   locations), and frameworks as `<name>.framework/<name>.tbd` there.
+  Without an SDK, as when building for macOS on Linux, a requested framework
+  or library still gets its `LC_LOAD_DYLIB` at the system path
+  (`/System/Library/Frameworks/<name>.framework/Versions/A/<name>`, or
+  `/usr/lib/lib<name>.dylib`), and every import no input lists binds with
+  flat lookup (ordinal -2), so dyld finds it in whichever loaded image
+  exports it, `libSystem` included.
 - Static archives may use the BSD format macOS tools write (`#1/N` member
   names stored after the header and a `__.SYMDEF`, `__.SYMDEF SORTED` or
   `__.SYMDEF_64` index) as well as the GNU one; only the members that

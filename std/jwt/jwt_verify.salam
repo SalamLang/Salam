@@ -79,69 +79,69 @@ func _split3(token: str, a &: str, b &: str, c &: str): bool:
     ret true
 end
 
-func _once(text: str, key: str, ok &: bool): str:
+func _once(text: str, key: str, dup &: str): str:
     mut count := 0
     value := _member_all(text, key, count)
-    if count > 1: ok = false end
+    if count > 1 and dup.len() == 0: dup = key end
     ret value
 end
 
-func _read_claims(payload: str, c &: Claims, ok &: bool):
-    c.iss = _raw_to_str(_once(payload, "iss", ok))
-    c.sub = _raw_to_str(_once(payload, "sub", ok))
-    c.jti = _raw_to_str(_once(payload, "jti", ok))
-    aud := _once(payload, "aud", ok)
+func _read_claims(payload: str, c &: Claims, dup &: str):
+    c.iss = _raw_to_str(_once(payload, "iss", dup))
+    c.sub = _raw_to_str(_once(payload, "sub", dup))
+    c.jti = _raw_to_str(_once(payload, "jti", dup))
+    aud := _once(payload, "aud", dup)
     if aud.len() > 0:
         c.aud_raw = aud
         c.aud = _raw_to_str(aud)
     end
-    c.exp = _raw_to_i64(_once(payload, "exp", ok))
-    c.nbf = _raw_to_i64(_once(payload, "nbf", ok))
-    c.iat = _raw_to_i64(_once(payload, "iat", ok))
+    c.exp = _raw_to_i64(_once(payload, "exp", dup))
+    c.nbf = _raw_to_i64(_once(payload, "nbf", dup))
+    c.iat = _raw_to_i64(_once(payload, "iat", dup))
 end
 
-func _parse(token: str, t &: Token, err &: int): bool:
-    err = JWT_OK
+func _segment(text: str, start: int, part: str): str throws:
+    try:
+        ret B64UrlDecode(text)
+    catch e:
+        throw Error.At(ErrorKind.Syntax, "invalid base64url segment", start + e.offset).with_code("jwt.bad_base64").with_path(part).wrap("jwt")
+    end
+end
+
+func _bad_json(member: str): Error:
+    ret _jwt_err(ErrorKind.Syntax, "bad_json", "invalid JSON in header or payload").with_path(member)
+end
+
+func _parse(token: str): Token throws:
     mut h := ""
     mut p := ""
     mut s := ""
     if not _split3(token, h, p, s):
-        err = JWT_ERR_MALFORMED
-        ret false
+        throw _jwt_err(ErrorKind.Syntax, "malformed", "malformed token")
     end
-    mut ok := false
-    header := B64UrlDecode(h, ok)
-    if not ok:
-        err = JWT_ERR_BAD_BASE64
-        ret false
-    end
-    payload := B64UrlDecode(p, ok)
-    if not ok:
-        err = JWT_ERR_BAD_BASE64
-        ret false
-    end
-    mut single := true
+    header := try _segment(h, 0, "header")
+    payload := try _segment(p, h.len() + 1, "payload")
+    mut t := Token {}
     mut alg_count := 0
     alg := _raw_to_str(_member_all(header, "alg", alg_count))
     if alg_count != 1:
-        err = JWT_ERR_BAD_JSON
-        ret false
+        throw _bad_json("alg")
     end
+    mut dup := ""
     t.alg = alg
-    t.typ = _raw_to_str(_once(header, "typ", single))
-    t.kid = _raw_to_str(_once(header, "kid", single))
+    t.typ = _raw_to_str(_once(header, "typ", dup))
+    t.kid = _raw_to_str(_once(header, "kid", dup))
     t.header_json = header
     t.payload_json = payload
     t.signing_input = h.concat(".").concat(p)
     t.signature = s
     mut c := Claims {}
-    _read_claims(payload, c, single)
+    _read_claims(payload, c, dup)
     t.claims = c
-    if not single:
-        err = JWT_ERR_BAD_JSON
-        ret false
+    if dup.len() > 0:
+        throw _bad_json(dup)
     end
-    ret true
+    ret t
 end
 
 func _typ_ok(typ: str): bool:
@@ -166,63 +166,52 @@ func _lower(s: str): str:
     ret out
 end
 
-func _check_time(t: Token, opts: Options, err &: int): bool:
+func _rejected(code: str, message: str): Error:
+    ret _jwt_err(ErrorKind.PermissionDenied, code, message)
+end
+
+func _bad_claim(message: str, claim: str): Error:
+    ret _rejected("bad_claim", message).with_path(claim)
+end
+
+func _missing(claim: str): Error:
+    ret _jwt_err(ErrorKind.MissingKey, "missing_claim", "required claim missing").with_path(claim)
+end
+
+func _check_time(t: Token, opts: Options) throws:
     mut now := opts.now
     if now == 0 as i64: now = time.Now() end
     if t.claims.exp != 0 as i64 and now - opts.leeway >= t.claims.exp:
-        err = JWT_ERR_EXPIRED
-        ret false
+        throw _rejected("expired", "token expired")
     end
     if t.claims.nbf != 0 as i64 and now + opts.leeway < t.claims.nbf:
-        err = JWT_ERR_NOT_YET_VALID
-        ret false
+        throw _rejected("not_yet_valid", "token not yet valid")
     end
     if t.claims.iat != 0 as i64 and now + opts.leeway < t.claims.iat:
-        err = JWT_ERR_ISSUED_IN_FUTURE
-        ret false
+        throw _rejected("issued_in_future", "token issued in the future")
     end
-    ret true
 end
 
-func _check_required(t: Token, opts: Options, err &: int): bool:
-    if opts.require_exp and t.claims.exp == 0 as i64:
-        err = JWT_ERR_MISSING_CLAIM
-        ret false
-    end
-    if opts.require_nbf and t.claims.nbf == 0 as i64:
-        err = JWT_ERR_MISSING_CLAIM
-        ret false
-    end
-    if opts.require_iat and t.claims.iat == 0 as i64:
-        err = JWT_ERR_MISSING_CLAIM
-        ret false
-    end
-    if opts.require_sub and t.claims.sub.len() == 0:
-        err = JWT_ERR_MISSING_CLAIM
-        ret false
-    end
-    if opts.require_jti and t.claims.jti.len() == 0:
-        err = JWT_ERR_MISSING_CLAIM
-        ret false
-    end
-    ret true
+func _check_required(t: Token, opts: Options) throws:
+    if opts.require_exp and t.claims.exp == 0 as i64: throw _missing("exp") end
+    if opts.require_nbf and t.claims.nbf == 0 as i64: throw _missing("nbf") end
+    if opts.require_iat and t.claims.iat == 0 as i64: throw _missing("iat") end
+    if opts.require_sub and t.claims.sub.len() == 0: throw _missing("sub") end
+    if opts.require_jti and t.claims.jti.len() == 0: throw _missing("jti") end
 end
 
-func _check_claims(t: Token, opts: Options, err &: int): bool:
+func _check_claims(t: Token, opts: Options) throws:
     if opts.issuer.len() > 0 and opts.issuer != t.claims.iss:
-        err = JWT_ERR_ISSUER
-        ret false
+        throw _bad_claim("issuer mismatch", "iss")
     end
     if opts.subject.len() > 0 and opts.subject != t.claims.sub:
-        err = JWT_ERR_SUBJECT
-        ret false
+        throw _bad_claim("subject mismatch", "sub")
     end
     if opts.audience.len() > 0 and not HasAudience(t, opts.audience):
-        err = JWT_ERR_AUDIENCE
-        ret false
+        throw _bad_claim("audience mismatch", "aud")
     end
-    if not _check_required(t, opts, err): ret false end
-    ret _check_time(t, opts, err)
+    try _check_required(t, opts)
+    try _check_time(t, opts)
 end
 
 @en "DefaultOptions"
@@ -239,58 +228,51 @@ end
 
 @en "Decode"
 @fa "کدگشایی"
-pub func Decode(token: str, err &: int): Token:
-    mut t := Token {}
-    _unused := _parse(token, t, err)
-    ret t
+pub func Decode(token: str): Token throws:
+    ret try _parse(token)
 end
 
 @en "Verify"
 @fa "تایید"
-pub func Verify(token: str, secret: str, opts: Options, err &: int): Token:
-    mut t := Token {}
-    if not _parse(token, t, err): ret t end
+pub func Verify(token: str, secret: str, opts: Options): Token throws:
+    mut t := try _parse(token)
     if secret.len() == 0:
-        err = JWT_ERR_EMPTY_SECRET
-        ret t
+        throw _jwt_err(ErrorKind.InvalidArgument, "empty_secret", "empty secret")
     end
     if not IsSupportedAlg(t.alg):
-        err = JWT_ERR_ALG_UNSUPPORTED
-        ret t
+        throw _jwt_err(ErrorKind.Unsupported, "bad_alg", "unsupported algorithm")
     end
     if opts.alg.len() > 0 and opts.alg != t.alg:
-        err = JWT_ERR_ALG_MISMATCH
-        ret t
+        throw _rejected("alg_mismatch", "algorithm mismatch")
     end
     if opts.check_typ and not _typ_ok(t.typ):
-        err = JWT_ERR_TYPE
-        ret t
+        throw _jwt_err(ErrorKind.Unsupported, "bad_typ", "unexpected typ header")
     end
     if _member_count(t.header_json, "crit") > 0:
-        err = JWT_ERR_ALG_UNSUPPORTED
-        ret t
+        throw _jwt_err(ErrorKind.Unsupported, "crit", "unsupported crit header")
     end
     expected := _signature(t.alg, secret, t.signing_input)
     if not crypto.SecretEquals(expected, t.signature):
-        err = JWT_ERR_SIGNATURE
-        ret t
+        throw _rejected("bad_signature", "signature does not match")
     end
-    if not _check_claims(t, opts, err): ret t end
-    err = JWT_OK
+    try _check_claims(t, opts)
     t.valid = true
     ret t
 end
 
 @en "VerifyHS256"
 @fa "تایید اچ اس۲۵۶"
-pub func VerifyHS256(token: str, secret: str, err &: int): Token:
-    ret Verify(token, secret, Options {}, err)
+pub func VerifyHS256(token: str, secret: str): Token throws:
+    ret try Verify(token, secret, Options {})
 end
 
 @en "IsValid"
 @fa "معتبر است"
 pub func IsValid(token: str, secret: str, opts: Options): bool:
-    mut err := 0
-    t := Verify(token, secret, opts, err)
-    ret t.valid
+    try:
+        t := Verify(token, secret, opts)
+        ret t.valid
+    catch:
+        ret false
+    end
 end

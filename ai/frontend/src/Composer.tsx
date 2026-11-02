@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type ReactNode } from "react";
 import type { OutgoingFile } from "./api";
 import { acceptList, kindOf, PendingChips, toOutgoing, useCapabilities, type Pending } from "./Attach";
+import { EffortPicker } from "./effort";
 import { IconPaperclip, IconQueueAdd, IconSend, IconStop } from "./icons";
 import { t } from "./i18n";
 
@@ -193,6 +194,7 @@ export function Composer({ busy, disabled, onSend, onStop, onQueue, queueing, au
             onPaste={canAttach ? onPaste : undefined}
             aria-label={t("پیام", "Message")}
           />
+          <EffortPicker disabled={disabled} />
           {busy && (
             <button type="button" className="send stop" onClick={onStop} aria-label={t("توقف پاسخ", "Stop answer")} title={t("توقف", "Stop")}>
               <IconStop />

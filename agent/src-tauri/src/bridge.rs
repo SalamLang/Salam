@@ -2,7 +2,7 @@ use crate::approve::{Approvals, Decision, Policy};
 use crate::config;
 use crate::device::DeviceStore;
 use crate::notify::{self, Kind, Notice};
-use crate::tools::{self, Call, Preview};
+use crate::tools::{self, Call, Image, Preview};
 use crate::workspace::Workspace;
 use serde::Serialize;
 use serde_json::json;
@@ -128,8 +128,20 @@ fn emit_call(app: &AppHandle, preview: &Preview, state: &str, output: &str) {
     let _ = app.emit("agent://call", CallEvent { preview, state, output });
 }
 
-async fn report(http: &reqwest::Client, secret: &str, call_id: &str, status: &str, output: &str, preview: Option<&Preview>) {
+async fn report(
+    http: &reqwest::Client,
+    secret: &str,
+    call_id: &str,
+    status: &str,
+    output: &str,
+    preview: Option<&Preview>,
+    image: Option<&Image>,
+) {
     let mut body = json!({ "call_id": call_id, "status": status, "output": output });
+    if let Some(i) = image {
+        body["image"] = json!(i.data);
+        body["image_mime"] = json!(i.mime);
+    }
     if let Some(p) = preview {
         body["tool"] = json!(p.tool);
         body["kind"] = json!(p.kind);
@@ -156,11 +168,11 @@ async fn report(http: &reqwest::Client, secret: &str, call_id: &str, status: &st
 async fn handle(app: AppHandle, http: reqwest::Client, secret: String, call: Call) {
     let ws = match Workspace::open(&call.workspace) {
         Ok(ws) => ws,
-        Err(e) => return report(&http, &secret, &call.id, "error", &e, None).await,
+        Err(e) => return report(&http, &secret, &call.id, "error", &e, None, None).await,
     };
     let plan = match tools::plan(&call, &ws) {
         Ok(p) => p,
-        Err(e) => return report(&http, &secret, &call.id, "error", &e, None).await,
+        Err(e) => return report(&http, &secret, &call.id, "error", &e, None, None).await,
     };
     let approvals = app.state::<Approvals>();
     let preview = plan.preview;
@@ -174,7 +186,7 @@ async fn handle(app: AppHandle, http: reqwest::Client, secret: String, call: Cal
     };
     if let Decision::Deny(reason) = decision {
         emit_call(&app, &preview, "denied", &reason);
-        return report(&http, &secret, &call.id, "denied", &reason, Some(&preview)).await;
+        return report(&http, &secret, &call.id, "denied", &reason, Some(&preview), None).await;
     }
     emit_call(&app, &preview, "running", "");
     let cancel = approvals.start(&call.id);
@@ -189,12 +201,12 @@ async fn handle(app: AppHandle, http: reqwest::Client, secret: String, call: Cal
             },
         );
     });
-    let result = tools::execute(plan.action, ws.root().to_path_buf(), sink, cancel).await;
+    let result = tools::run(plan.action, ws.root().to_path_buf(), sink, cancel).await;
     approvals.finish(&call.id);
-    let (status, output) = match &result {
-        Ok(o) => ("ok", o.as_str()),
-        Err(e) => ("error", e.as_str()),
+    let (status, output, image) = match &result {
+        Ok((o, image)) => ("ok", o.as_str(), image.as_ref()),
+        Err(e) => ("error", e.as_str(), None),
     };
     emit_call(&app, &preview, if status == "ok" { "done" } else { "error" }, output);
-    report(&http, &secret, &call.id, status, output, Some(&preview)).await;
+    report(&http, &secret, &call.id, status, output, Some(&preview), image).await;
 }

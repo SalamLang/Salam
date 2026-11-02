@@ -98,57 +98,59 @@ func _elem_size(dtype: int): int:
     ret 1
 end
 
-func _read_elem(rd &: compress.ByteReader, dtype: int, big: bool): f64:
-    if dtype == NPY_F64: ret binary.ReadF64(rd, big) end
-    if dtype == NPY_F32: ret binary.ReadF32(rd, big) end
+func _read_elem(rd &: compress.ByteReader, dtype: int, big: bool): f64 throws:
+    if dtype == NPY_F64: ret try binary.ReadF64(rd, big) end
+    if dtype == NPY_F32: ret try binary.ReadF32(rd, big) end
     if dtype == NPY_I8 or dtype == NPY_U8 or dtype == NPY_BOOL:
-        mut v := binary.ReadU8(rd)
+        mut v := try binary.ReadU8(rd)
         if dtype == NPY_I8 and v >= 128: v = v - 256 end
         ret v as f64
     end
     if dtype == NPY_I16 or dtype == NPY_U16:
         mut v := 0
-        if big: v = binary.ReadU16BE(rd) else:
-            v = binary.ReadU16LE(rd)
+        if big: v = try binary.ReadU16BE(rd) else:
+            v = try binary.ReadU16LE(rd)
         end
         if dtype == NPY_I16 and v >= 32768: v = v - 65536 end
         ret v as f64
     end
     if dtype == NPY_I32 or dtype == NPY_U32:
         mut v := 0 as i64
-        if big: v = binary.ReadU32BE(rd) as i64 else:
-            v = binary.ReadU32LE(rd) as i64
+        if big: v = (try binary.ReadU32BE(rd)) as i64 else:
+            v = (try binary.ReadU32LE(rd)) as i64
         end
         if v < 0: v = v + 4294967296 end
         if dtype == NPY_I32 and v >= 2147483648: v = v - 4294967296 end
         ret v as f64
     end
-    if big: ret binary.ReadU64BE(rd) as f64 end
-    ret binary.ReadU64LE(rd) as f64
+    if big: ret (try binary.ReadU64BE(rd)) as f64 end
+    ret (try binary.ReadU64LE(rd)) as f64
 end
 
-@en "ReadNpy"
-@fa "خواندن ان‌پی‌وای"
-pub func ReadNpy(p: void*, n: int, ok &: bool): NpyArray:
-    ok = false
+func _read_npy(p: void*, n: int): NpyArray throws:
     mut a := NpyArray {}
     mut rd := compress.NewByteReader(p, n)
     mut dtype := 0
     mut big := false
     mut fortran := false
-    hdr_ok := _read_header(rd, dtype, big, fortran, a.shape)
-    if hdr_ok == false: ret a end
+    try:
+        _read_header(rd, dtype, big, fortran, a.shape)
+    catch e:
+        a.shape.free()
+        throw e
+    end
     mut total := 1
     repeat a.shape.len() in i: total = total * a.shape.get(i) end
     if a.shape.len() == 0: total = 1 end
     esz := _elem_size(dtype)
     if compress.RdLeft(rd) < total * esz:
+        left := compress.RdLeft(rd)
         a.shape.free()
-        ret a
+        throw Error.At(ErrorKind.UnexpectedEnd, "the data ends early: " + total + " elements need " + (total * esz) + " bytes, " + left + " are left", rd.pos).with_code("npy.truncated")
     end
     if fortran and a.shape.len() > 2:
         a.shape.free()
-        ret a
+        throw Error.New(ErrorKind.Unsupported, "Fortran order with more than 2 dimensions is not supported").with_code("npy.fortran")
     end
     a.dtype = dtype
     a.data.alloc(total)
@@ -160,29 +162,45 @@ pub func ReadNpy(p: void*, n: int, ok &: bool): NpyArray:
         rows := a.shape.get(0)
         cols := a.shape.get(1)
         repeat cols in j:
-            repeat rows in i: pd[i * cols + j] = _read_elem(rd, dtype, big) end
+            repeat rows in i: pd[i * cols + j] = try _read_elem(rd, dtype, big) end
         end
     else:
-        repeat total in k: pd[k] = _read_elem(rd, dtype, big) end
+        repeat total in k: pd[k] = try _read_elem(rd, dtype, big) end
     end
     if a.shape.len() == 0: a.shape.push(1) end
-    ok = true
     ret a
 end
 
-@en "ReadNpyFile"
-@fa "خواندن پرونده ان‌پی‌وای"
-pub func ReadNpyFile(path: str, ok &: bool): NpyArray:
-    ok = false
+func _read_file(path: str): compress.ByteBuf throws:
     mut fok := false
     mut raw := archive.ReadBinaryFile(path, fok)
     if fok == false:
         compress.BufFree(raw)
-        ret NpyArray {}
+        throw Error.New(ErrorKind.NotFound, "cannot open file").with_path(path).wrap("npy")
     end
-    a := ReadNpy(raw.data, compress.BufLen(raw), ok)
-    compress.BufFree(raw)
-    ret a
+    ret raw
+end
+
+@en "ReadNpy"
+@fa "خواندن ان‌پی‌وای"
+pub func ReadNpy(p: void*, n: int): NpyArray throws:
+    try:
+        ret _read_npy(p, n)
+    catch e:
+        throw e.wrap("npy")
+    end
+end
+
+@en "ReadNpyFile"
+@fa "خواندن پرونده ان‌پی‌وای"
+pub func ReadNpyFile(path: str): NpyArray throws:
+    mut raw := try _read_file(path)
+    defer compress.BufFree(raw)
+    try:
+        ret _read_npy(raw.data, compress.BufLen(raw))
+    catch e:
+        throw e.with_path(path).wrap("npy")
+    end
 end
 
 @en "WriteNpy"
@@ -206,19 +224,18 @@ end
 
 @en "ToMatrix"
 @fa "به ماتریس"
-pub func ToMatrix(a &: NpyArray, ok &: bool): matrix.Matrix:
-    ok = false
+pub func ToMatrix(a &: NpyArray): matrix.Matrix throws:
     d := a.shape.len()
-    if d != 1 and d != 2: ret matrix.Matrix {} end
+    if d != 1 and d != 2:
+        throw Error.New(ErrorKind.InvalidArgument, "ToMatrix needs a 1-D or 2-D array, got " + d + " dimensions").with_code("npy.ndim").wrap("npy")
+    end
     mut rows := 1
     mut cols := a.shape.get(0)
     if d == 2:
         rows = a.shape.get(0)
         cols = a.shape.get(1)
     end
-    m := matrix.FromArray(rows, cols, a.data)
-    ok = true
-    ret m
+    ret matrix.FromArray(rows, cols, a.data)
 end
 
 @en "FromMatrix"

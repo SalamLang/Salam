@@ -43,75 +43,50 @@ pub func MarshalPerson(m: Person): compress.ByteBuf:
     ret buf
 end
 
-pub func UnmarshalPerson(data: void*, n: int, ok &: bool): Person:
+pub func UnmarshalPerson(data: void*, n: int): Person throws:
     mut out := Person {}
     mut r := compress.NewByteReader(data, n)
-    ok = true
-    until compress.RdLeft(r) > 0:
-        mut fnum := 0
-        mut wtype := 0
-        mut tagOk := false
-        protobuf.ReadTag(r, fnum, wtype, tagOk)
-        if not tagOk:
-            ok = false
-            ret out
-        end
-        switch fnum:
-            1:
-                mut fok := false
-                v := protobuf.ReadLenPrefixedStr(r, fok)
-                if not fok:
-                    ok = false
-                    ret out
+    try:
+        until compress.RdLeft(r) > 0:
+            at := r.pos
+            mut fnum := 0
+            mut wtype := 0
+            protobuf.ReadTag(r, fnum, wtype)
+            if fnum == 1:
+                if wtype != protobuf.WT_LEN:
+                    throw Error.At(ErrorKind.TypeMismatch, "field 1 (name) has wire type " + wtype + ", expected " + protobuf.WT_LEN, at).with_code("protobuf.wire_type_mismatch").wrap("protobuf")
                 end
-                out.name = v
-                break
-            end
-            2:
-                mut fok := false
-                v := protobuf.ReadVarint(r, fok) as i64
-                if not fok:
-                    ok = false
-                    ret out
+                out.name = protobuf.ReadLenPrefixedStr(r)
+            else fnum == 2:
+                if wtype != protobuf.WT_VARINT:
+                    throw Error.At(ErrorKind.TypeMismatch, "field 2 (age) has wire type " + wtype + ", expected " + protobuf.WT_VARINT, at).with_code("protobuf.wire_type_mismatch").wrap("protobuf")
                 end
-                out.age = v
-                break
-            end
-            3:
-                mut fok := false
-                v := protobuf.ReadLenPrefixedStr(r, fok)
-                if not fok:
-                    ok = false
-                    ret out
+                out.age = protobuf.ReadVarint(r) as i64
+            else fnum == 3:
+                if wtype != protobuf.WT_LEN:
+                    throw Error.At(ErrorKind.TypeMismatch, "field 3 (emails) has wire type " + wtype + ", expected " + protobuf.WT_LEN, at).with_code("protobuf.wire_type_mismatch").wrap("protobuf")
                 end
-                out.emails.push(v)
-                break
-            end
+                out.emails.push(protobuf.ReadLenPrefixedStr(r))
             else:
-                mut skipOk := false
-                protobuf.SkipField(r, wtype, skipOk)
-                if not skipOk:
-                    ok = false
-                    ret out
-                end
+                protobuf.SkipField(r, wtype)
             end
         end
+    catch e:
+        throw e.wrap("Person")
     end
     ret out
 end
 
-func main:
+pub func checks() throws:
     mut p := Person {}
     p.name = "Ada"
     p.age = 36 as i64
     p.emails.push("ada@example.com")
     p.emails.push("ada2@example.com")
 
-    mut buf := MarshalPerson(p)
-    mut ok := false
-    p2 := UnmarshalPerson(buf.data, buf.len, ok)
+    buf := MarshalPerson(p)
+    p2 := try UnmarshalPerson(buf.data, buf.len)
 
-    testing.AssertTrue(ok)
     testing.AssertEqStr(p2.name, "Ada")
     testing.AssertEqInt64(p2.age, 36 as i64)
     testing.AssertEqInt(p2.emails.len(), 2)
@@ -119,11 +94,9 @@ func main:
     testing.AssertEqStr(p2.emails.get(1), "ada2@example.com")
 
     empty := Person {}
-    mut emptyBuf := MarshalPerson(empty)
+    emptyBuf := MarshalPerson(empty)
     testing.AssertEqInt(compress.BufLen(emptyBuf), 0)
-    mut ok2 := false
-    roundEmpty := UnmarshalPerson(emptyBuf.data, emptyBuf.len, ok2)
-    testing.AssertTrue(ok2)
+    roundEmpty := try UnmarshalPerson(emptyBuf.data, emptyBuf.len)
     testing.AssertEqStr(roundEmpty.name, "")
     testing.AssertEqInt64(roundEmpty.age, 0 as i64)
 
@@ -132,14 +105,29 @@ func main:
     protobuf.WriteVarint(extra, 12345 as u64)
     protobuf.WriteTag(extra, 1, protobuf.WT_LEN)
     protobuf.WriteLenPrefixedStr(extra, "Grace")
-    mut ok3 := false
-    p3 := UnmarshalPerson(extra.data, extra.len, ok3)
-    testing.AssertTrue(ok3)
+    p3 := try UnmarshalPerson(extra.data, extra.len)
     testing.AssertEqStr(p3.name, "Grace")
+
+    mut failed := false
+    try:
+        UnmarshalPerson(buf.data, buf.len - 3)
+    catch e:
+        failed = true
+        testing.AssertTrue(e.is(ErrorKind.UnexpectedEnd))
+        testing.AssertEqStr(e.context, "Person: protobuf")
+    end
+    testing.AssertTrue(failed)
 
     compress.BufFree(buf)
     compress.BufFree(emptyBuf)
     compress.BufFree(extra)
+end
 
+func main:
+    try:
+        checks()
+    catch e:
+        testing.AssertMsg(false, e.to_str())
+    end
     ret testing.Summary()
 end

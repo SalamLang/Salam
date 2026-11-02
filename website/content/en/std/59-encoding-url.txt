@@ -12,21 +12,21 @@ pkg.intro <<
 <p>The fields hold the text exactly as it appeared, percent escapes included, so <code>String(Parse(x))</code> normally gives back <code>x</code>. Read the human form with <code>DecodedPath</code>, <code>DecodedUserinfo</code> or <code>Query</code>. When you set a field yourself, put encoded text in it: escape path segments with <code>EncodePathSegment</code> and build queries with <code>SetQuery</code>.</p>
 <h3 id="pitfalls">What trips people up</h3>
 <ul>
-<li><strong><code>Parse</code> never fails.</strong> It does no validation: a port that is not a number becomes <code>0</code>, and text without <code>://</code> (including <code>mailto:sara@example.com</code>) has no scheme or host and lands whole in <code>path</code>. Check <code>scheme</code> and <code>host</code> yourself before trusting an address from a user.</li>
+<li><strong><code>Parse</code> throws on text that is not a URL.</strong> It is declared <code>throws</code>, so call it with <code>try</code>. It refuses an empty string, a space or control character, a scheme that is not a letter followed by letters, digits, <code>+</code>, <code>-</code> or <code>.</code>, a missing host after <code>://</code> (only <code>file:///</code> may have none), a host with characters such as <code>&lt;</code>, a port that is not a number or is above 65535, an IPv6 address without its <code>]</code>, and a <code>%</code> not followed by two hex digits anywhere; the <a href="/std/core/">Error</a> has the kind (<code>Syntax</code>, <code>UnexpectedEnd</code>, <code>OutOfRange</code>, <code>InvalidArgument</code>) and the column. A relative reference such as <code>../a.html</code> or <code>?page=2</code> is fine, and text without <code>://</code> (including <code>mailto:sara@example.com</code>) still has no scheme or host and lands whole in <code>path</code>, so check <code>scheme</code> and <code>host</code> before trusting an address from a user.</li>
 <li><strong>Nothing is lowercased.</strong> <code>HTTPS://Shop.Example.COM</code> keeps its case in <code>scheme</code> and <code>host</code>, and <code>Domain</code> returns <code>Example.COM</code>. Lowercase with <code>str.Lower</code> before you compare hosts or domains.</li>
 <li><strong>Editing one parameter rewrites the whole query.</strong> <code>RemoveParam</code>, <code>SetParam</code> and <code>KeepParams</code> decode the query and encode it again: <code>%20</code> becomes <code>+</code>, characters such as <code>*</code> get escaped, a bare <code>flag</code> becomes <code>flag=</code>, and repeated keys are grouped together. The meaning stays the same; the text may not.</li>
-<li><strong><code>Join</code> with only <code>?query</code> or <code>#fragment</code> loses the file name</strong> of the base, unlike a browser. See the links guide.</li>
+<li><strong>Everything that decodes throws too.</strong> <code>Join</code> parses its reference, and <code>DecodedPath</code>, <code>DecodedUserinfo</code>, <code>Query</code>, <code>ParamNames</code>, <code>SetParam</code>, <code>RemoveParam</code> and <code>KeepParams</code> decode a field. An address from <code>Parse</code> always decodes, but a field you set by hand may not.</li>
 </ul>
 
 <h2 id="guide-clean">Guide: strip tracking parameters</h2>
 <p>Links copied from email and social media carry <code>utm_</code> and click id parameters that only serve analytics. Before you store or compare links, parse them, drop those parameters with <code>RemoveParam</code>, clear the fragment and print the result with <code>String</code>. The parameters that stay keep their order.</p>
 {{example.encoding-url-guide-clean}}
-<p><code>ParamNames</code> returns a copy of the names, so removing parameters inside the loop is safe. The fields of <code>URL</code> are plain strings you can set directly, as <code>u.fragment = ""</code> does. The last line shows the rewrite described above: <code>salam%20lang</code> comes out as <code>salam+lang</code> and the bare <code>debug</code> as <code>debug=</code>. Both mean the same to a server, but if you use the cleaned link as a cache or database key, clean every link the same way so equal links give equal text.</p>
+<p><code>ParamNames</code> returns a copy of the names, so removing parameters inside the loop is safe. The last link has a bare <code>%</code>, which is not a valid URL, so <code>Parse</code> throws and the loop skips it with the reason. The fields of <code>URL</code> are plain strings you can set directly, as <code>u.fragment = ""</code> does. The third line shows the rewrite described above: <code>salam%20lang</code> comes out as <code>salam+lang</code> and the bare <code>debug</code> as <code>debug=</code>. Both mean the same to a server, but if you use the cleaned link as a cache or database key, clean every link the same way so equal links give equal text.</p>
 
 <h2 id="guide-links">Guide: resolve the links of a page</h2>
-<p>A crawler or a link checker finds relative links like <code>../api/json.html</code> in a page and needs the full address. <code>Join</code> resolves a reference against the page's own URL the way a browser does: <code>./</code> and <code>../</code> move through the folders, a leading <code>/</code> starts at the site root, <code>//host</code> keeps the scheme, and a full URL replaces everything.</p>
+<p>A crawler or a link checker finds relative links like <code>../api/json.html</code> in a page and needs the full address. <code>Join</code> resolves a reference against the page's own URL the way a browser does: <code>./</code> and <code>../</code> move through the folders, a leading <code>/</code> starts at the site root, <code>//host</code> keeps the scheme, a full URL replaces everything, and a reference of only <code>?query</code> or <code>#fragment</code> keeps the page itself.</p>
 {{example.encoding-url-guide-links}}
-<p>A reference that is only a query (<code>?lang=fa</code>) or only a fragment (<code>#top</code>) does not keep the file name of the base yet, so resolve those yourself by setting <code>raw_query</code> or <code>fragment</code> on a copy of the base.</p>
+<p>These are the rules of RFC 3986, section 5. A link that is not a valid reference, such as one with a broken <code>%</code> escape, makes <code>Join</code> throw, so a crawler should catch the error and skip that link.</p>
 
 <h2 id="guide-site">Guide: is it the same site?</h2>
 <p>To allow redirects only within your own site, or to group links by owner, compare the registrable domain instead of the host name. <code>Domain</code> is the part a person registers, such as <code>example.co.uk</code>; <code>PublicSuffix</code> is the part under which anyone can register; <code>Subdomain</code> is what is left on the left. An address made of an IP has no domain, so compare the host name there. Host names are not case sensitive but the package keeps their case, so the program lowercases both addresses before parsing them.</p>
@@ -47,26 +47,26 @@ doc.URL.port = The port, or zero when none was given.
 doc.URL.path = The path, still encoded.
 doc.URL.raw_query = The query after the <code>?</code>, still encoded.
 doc.URL.fragment = The part after the <code>#</code>.
-doc.Parse = Takes an address apart into its pieces. It never fails and does no validation: only text with <code>://</code> (or a leading <code>//</code>) gets a scheme and host, and a port that is not a number becomes 0.
+doc.Parse = Takes an address apart into its pieces. Only text with <code>://</code> (or a leading <code>//</code>) gets a scheme and host; anything else is a relative reference kept in <code>path</code>. Throws an <code>Error</code> with the column when the text is not a URL: empty, a space or control character, a bad scheme, a missing host, a bad host character, a port that is not a number or above 65535, a broken IPv6 address or a bad <code>%</code> escape.
 doc.HostPort = The host and port together, such as <code>shop.example.co.uk:8443</code>.
 doc.String = Turns the address back into text.
-doc.DecodedPath = The path with its percent encoding undone.
-doc.DecodedUserinfo = The user information, decoded.
+doc.DecodedPath = The path with its percent encoding undone. Throws on a <code>%</code> not followed by two hex digits.
+doc.DecodedUserinfo = The user information, decoded. Throws on a broken <code>%</code> escape.
 doc.EncodePathSegment = Encodes one path segment; <code>/</code> is encoded too.
-doc.Query = Turns the address's query into a <code>QueryMap</code>.
+doc.Query = Turns the address's query into a <code>QueryMap</code>. Throws on a broken <code>%</code> escape, like <code>query.Decode</code>.
 doc.SetQuery = Replaces the address's query with the given map.
-doc.Join = Resolves a relative address against a base one, the way a browser does; <code>..</code> and <code>.</code> in the path are worked out. A reference of only <code>?query</code> or <code>#fragment</code> drops the base file name.
+doc.Join = Resolves a relative address against a base one, the way a browser does; <code>..</code> and <code>.</code> in the path are worked out, and a reference of only <code>?query</code> or <code>#fragment</code> keeps the base path. Throws when the reference is not a valid URL.
 doc.Hostname = The host name without the port.
 doc.IsIP = True when the host is four dot-separated groups of digits or contains <code>:</code> (an IPv6 address). The digits are not range checked.
 doc.Labels = The parts of the host name, separated by dots.
 doc.PublicSuffix = The public suffix of the domain, such as <code>co.uk</code> or <code>ir</code>.
 doc.Domain = The registered domain: one label before the public suffix, such as <code>example.co.uk</code>. An IP address or a one-label host such as <code>localhost</code> is returned unchanged. Case is kept.
 doc.Subdomain = Whatever comes before the registered domain, such as <code>shop</code>.
-doc.RemoveParam = Removes every value of a parameter and says whether it was there. Like the other parameter functions it re-encodes the rest of the query.
-doc.SetParam = Sets a parameter to one value, replacing any values it had; a new name goes at the end.
-doc.KeepParams = Keeps only the parameters you name, for stripping tracking parameters.
+doc.RemoveParam = Removes every value of a parameter and says whether it was there. Like the other parameter functions it re-encodes the rest of the query, and throws when the query has a broken <code>%</code> escape.
+doc.SetParam = Sets a parameter to one value, replacing any values it had; a new name goes at the end. Throws when the query has a broken escape.
+doc.KeepParams = Keeps only the parameters you name, for stripping tracking parameters. Throws when the query has a broken escape.
 doc.ClearQuery = Removes the whole query.
-doc.ParamNames = The names of the parameters, in order.
+doc.ParamNames = The names of the parameters, in order. Throws when the query has a broken escape.
 
 ex.URL = encoding-url-Parse
 ex.Parse = encoding-url-Parse

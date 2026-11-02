@@ -28,12 +28,14 @@ include aistore "store.salam"
 include aiweb "web.salam"
 include aipolicy "policy.salam"
 include aicloud "cloud.salam"
+include aiengine "engine.salam"
 
 const POLL_MS := 25000
 const CALL_MS := 600000
 const OFFLINE_SECONDS := 45
 const MAX_DEVICES := 10
 const MAX_OUTPUT := 200000
+const MAX_IMAGE := 3000000
 const PROTOCOL := "2025-06-18"
 const TOOLS := `[
 {"name": "shell", "description": "Run a command in the user's shell (bash or sh on Linux and macOS, PowerShell on Windows unless shell is set). Runs in the workspace unless cwd is given. Use it to build, run, install, use git and so on.", "inputSchema": {"type": "object", "properties": {"session": {"type": "string", "description": "The desktop session id from the conversation."}, "command": {"type": "string"}, "cwd": {"type": "string", "description": "Directory relative to the workspace."}, "shell": {"type": "string", "enum": ["default", "bash", "sh", "powershell", "cmd"]}, "timeout": {"type": "integer", "description": "Seconds, default 120, at most 1800."}}, "required": ["session", "command"]}},
@@ -48,6 +50,7 @@ const TOOLS := `[
 {"name": "run_tests", "description": "Detect the project's test runner (cargo, npm, bun, pnpm, yarn, go, pytest, make) and run it, or run command if given.", "inputSchema": {"type": "object", "properties": {"session": {"type": "string"}, "command": {"type": "string"}, "cwd": {"type": "string"}, "timeout": {"type": "integer"}}, "required": ["session"]}},
 {"name": "save_memory", "description": "Save or update one memory about this project in .salam-agent/memory/<slug>.md and refresh .salam-agent/index.md. Use it for what will help in a later session: how to build and test, the layout, decisions, the user's preferences, traps. Reuse a slug to update that memory.", "inputSchema": {"type": "object", "properties": {"session": {"type": "string"}, "title": {"type": "string", "description": "A few words."}, "description": {"type": "string", "description": "One line that says when this memory is useful."}, "content": {"type": "string", "description": "The full memory in Markdown."}, "slug": {"type": "string", "description": "Optional file name without .md, lowercase words joined by dashes; reuse one to update it."}}, "required": ["session", "title", "description", "content"]}},
 {"name": "forget_memory", "description": "Delete one memory from .salam-agent/memory/ and refresh .salam-agent/index.md.", "inputSchema": {"type": "object", "properties": {"session": {"type": "string"}, "slug": {"type": "string"}}, "required": ["session", "slug"]}},
+{"name": "browser", "description": "Drive a headless browser: on the user's computer through Salam Agent (it can open local dev servers such as http://localhost:3000 and file:// pages) or, in a cloud session, inside the sandbox. Use it to check a web page or a frontend you built: open it, look at the screenshot, read the console errors and failed requests, fix the code, open it again. action: open (url), screenshot (full_page, or selector for one element), click (selector, or x and y), type (text into selector, then key such as Enter), press (key), scroll (y pixels, or selector), eval (script, returns its JSON value), text (visible text and an outline of headings, links, buttons and inputs), console (messages, exceptions and failed requests since the last call), back, close. width and height set the viewport, for example 390 and 844 for a phone. Screenshots come back as images when the model can see them.", "inputSchema": {"type": "object", "properties": {"session": {"type": "string"}, "action": {"type": "string", "enum": ["open", "screenshot", "click", "type", "press", "scroll", "eval", "text", "console", "back", "close"]}, "url": {"type": "string"}, "selector": {"type": "string", "description": "A CSS selector."}, "text": {"type": "string"}, "key": {"type": "string"}, "script": {"type": "string"}, "x": {"type": "integer"}, "y": {"type": "integer"}, "full_page": {"type": "boolean"}, "width": {"type": "integer"}, "height": {"type": "integer"}, "wait_ms": {"type": "integer", "description": "Extra time to let the page render, at most 15000."}}, "required": ["session", "action"]}},
 {"name": "wait", "description": "Wait for a call that is still running on the user's computer and return its result. Use the call_id from the earlier result that said the call is still running. Do not repeat the original call.", "inputSchema": {"type": "object", "properties": {"session": {"type": "string"}, "call_id": {"type": "string"}}, "required": ["session", "call_id"]}}
 ,
 {"name": "github_api", "description": "Cloud sessions only: call the GitHub REST API as the user (private repositories included). path starts with /, for example /user/repos?per_page=100, /repos/OWNER/REPO/contents/PATH, /repos/OWNER/REPO/issues, /repos/OWNER/REPO/pulls. body is a JSON string for POST, PUT and PATCH.", "inputSchema": {"type": "object", "properties": {"session": {"type": "string"}, "method": {"type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]}, "path": {"type": "string"}, "body": {"type": "string"}}, "required": ["session", "path"]}},
@@ -161,8 +164,12 @@ func persist_result(id: str, body: str):
     a.push(json.Get(body, "outside") == "true" ? "1" : "0")
     a.push(n(aistore.Now()))
     a.push(id)
+    mut mime := ""
+    image := image_of(body, mime)
+    a.push(image)
+    a.push(image.len() > 0 ? mime : "")
     aistore.Lock()
-    _r := aistore.Run("UPDATE bridge_calls SET status = ?1, state = ?2, output = ?3, summary = ?4, detail = ?5, lang = ?6, kind = ?7, cwd = ?8, outside = ?9, finished = ?10 WHERE id = ?11", a)
+    _r := aistore.Run("UPDATE bridge_calls SET status = ?1, state = ?2, output = ?3, summary = ?4, detail = ?5, lang = ?6, kind = ?7, cwd = ?8, outside = ?9, finished = ?10, image = ?12, image_mime = ?13 WHERE id = ?11", a)
     aistore.Unlock()
 end
 
@@ -349,7 +356,7 @@ end
 
 func known_tool(name: str): bool:
     switch name:
-        "shell", "read_file", "write_file", "edit_file", "list_dir", "glob", "grep", "docker", "wsl", "run_tests", "save_memory", "forget_memory", "github_api", "github_git", "figma_api", "figma_export":
+        "shell", "read_file", "write_file", "edit_file", "list_dir", "glob", "grep", "docker", "wsl", "run_tests", "save_memory", "forget_memory", "browser", "github_api", "github_git", "figma_api", "figma_export":
             ret true
         end
     end
@@ -364,6 +371,44 @@ func tool_text(text: str, is_error: bool): str:
     m.push(json.MemberRaw("content", "[" + json.Object(item) + "]"))
     m.push(json.MemberBool("isError", is_error))
     ret json.Object(m)
+end
+
+func tool_shot(text: str, is_error: bool, image: str, mime: str): str:
+    if image.len() == 0:
+        ret tool_text(text, is_error)
+    end
+    mut image_ok := false
+    mut pdf_ok := false
+    aiengine.Accepts(image_ok, pdf_ok)
+    if not image_ok:
+        ret tool_text(text + "\n\nThe screenshot is shown to the user, but the current model cannot look at images: judge the page from its text, outline and console instead (browser action text and console).", is_error)
+    end
+    mut item := Vector {} as Vector<str>
+    item.push(json.Member("type", "text"))
+    item.push(json.Member("text", text))
+    mut shot := Vector {} as Vector<str>
+    shot.push(json.Member("type", "image"))
+    shot.push(json.Member("data", image))
+    shot.push(json.Member("mimeType", mime.len() > 0 ? mime : "image/jpeg"))
+    mut m := Vector {} as Vector<str>
+    m.push(json.MemberRaw("content", "[" + json.Object(item) + ", " + json.Object(shot) + "]"))
+    m.push(json.MemberBool("isError", is_error))
+    ret json.Object(m)
+end
+
+func image_of(body: str, mime &: str): str:
+    if body.find(`"image"`) < 0:
+        ret ""
+    end
+    data := json.Get(body, "image")
+    if data.len() == 0 or data.len() > MAX_IMAGE:
+        ret ""
+    end
+    mime = json.Get(body, "image_mime")
+    if mime != "image/png" and mime != "image/webp":
+        mime = "image/jpeg"
+    end
+    ret data
 end
 
 func forget(id: str):
@@ -455,7 +500,9 @@ func await_call(id: str, dev: str): str:
     if status == "denied" and output.len() == 0:
         output = "The user refused this call."
     end
-    ret tool_text(output, status != "ok")
+    mut mime := ""
+    image := image_of(got, mime)
+    ret tool_shot(output, status != "ok", image, mime)
 end
 
 func await_cloud(id: str): str:
@@ -477,7 +524,9 @@ func await_cloud(id: str): str:
     if got.len() == 0:
         ret tool_text("The call is still running in the sandbox. Call wait with call_id \"" + id + "\" and the same session to get its result. Do not repeat the original call.", false)
     end
-    ret tool_text(clip(json.Get(got, "output"), MAX_OUTPUT), json.Get(got, "status") != "ok")
+    mut mime := ""
+    image := image_of(got, mime)
+    ret tool_shot(clip(json.Get(got, "output"), MAX_OUTPUT), json.Get(got, "status") != "ok", image, mime)
 end
 
 func cloud_call(name: str, args: str, session: str, chat: str, uid: str): str:

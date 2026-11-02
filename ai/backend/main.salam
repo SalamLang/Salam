@@ -107,6 +107,7 @@ func main:
     engine_url := str.TrimSuffix(env_or("AI_ENGINE_URL", "http://127.0.0.1:4096"), "/")
     aiengine.Configure(engine_url, engine_auth, env_or("AI_ENGINE_AGENT", "salam"), env_or("AI_ENGINE_AGENT_DESKTOP", "salam-agent"))
     aiengine.SetFallbacks(os.Env("AI_ENGINE_FALLBACK_MODELS"))
+    aiengine.SetEfforts(os.Env("AI_ENGINE_EFFORT_MODELS"), os.Env("AI_ENGINE_EFFORT_VARIANTS"))
     aiengine.SetPolicy(aipolicy.System(), env_or("AI_ENGINE_AGENT_RAW", "raw"))
     aifiles.Configure(env_or("AI_UPLOAD_DIR", "/data/uploads"))
     aiguest.Configure(env_or("AI_GUEST_ORIGINS", "https://www.salamlang.ir,https://salamlang.ir,https://salamlang.github.io"), env_or("AI_GUEST_LIMIT", "15").to_int(), env_or("AI_GUEST_PER_IP", "6").to_int(), env_or("AI_GUEST_MESSAGES_PER_IP", "60").to_int())
@@ -453,6 +454,13 @@ func message_json(id: str, role: str, body: str, status: str, created: str, acti
     ret json.Object(m)
 end
 
+func with_effort(obj: str, effort: str): str:
+    if effort.len() == 0 or effort == "medium" or not str.EndsWith(obj, "}"):
+        ret obj
+    end
+    ret obj.substr(0, obj.len() - 1) + `, "effort": ` + json.Str(effort) + "}"
+end
+
 func with_files(obj: str, files: str): str:
     if files.len() == 0 or not str.EndsWith(obj, "}"):
         ret obj
@@ -631,10 +639,10 @@ func get_chat(ctx: i64):
         head = chat_json(aistore.Text(crow, 0), aistore.Text(crow, 1), aistore.Text(crow, 2), aistore.Text(crow, 3), aistore.Text(crow, 4), aistore.Text(crow, 5))
     end
     aistore.Finish(crow)
-    mut rows := aistore.Stmt("SELECT id, role, body, status, created, COALESCE(activity, ''), ms FROM messages WHERE chat_id = ?1 ORDER BY id", one(id))
+    mut rows := aistore.Stmt("SELECT id, role, body, status, created, COALESCE(activity, ''), ms, effort FROM messages WHERE chat_id = ?1 ORDER BY id", one(id))
     until aistore.Next(rows):
         mid := aistore.Text(rows, 0)
-        items.push(with_files(message_json(mid, aistore.Text(rows, 1), aistore.Text(rows, 2), aistore.Text(rows, 3), aistore.Text(rows, 4), aistore.Text(rows, 5), aistore.Text(rows, 6)), attached.has(mid) ? attached.get(mid) : ""))
+        items.push(with_files(with_effort(message_json(mid, aistore.Text(rows, 1), aistore.Text(rows, 2), aistore.Text(rows, 3), aistore.Text(rows, 4), aistore.Text(rows, 5), aistore.Text(rows, 6)), aistore.Text(rows, 7)), attached.has(mid) ? attached.get(mid) : ""))
     end
     aistore.Finish(rows)
     mut calls := Vector {} as Vector<str>
@@ -760,6 +768,7 @@ func launch_turn(uid: i64, id: str, sid_in: str, text: str, files &: Vector<aifi
     mut sid := sid_in
     sync_pending(id, sid)
     t := i64s(aistore.Now())
+    effort := aiengine.Effort(json.Get(body, "effort"))
     aistore.Lock()
     pending := aistore.OneText("SELECT COUNT(*) FROM messages WHERE chat_id = ?1 AND status = 'pending'", one(id))
     queued := qid.len() > 0 ? "0" : aistore.OneText("SELECT COUNT(*) FROM chat_queue WHERE chat_id = ?1", one(id))
@@ -825,7 +834,7 @@ func launch_turn(uid: i64, id: str, sid_in: str, text: str, files &: Vector<aifi
         message = "هنوز پاسخ پیام قبلی کامل نشده است."
         ret false
     end
-    _a := aistore.Run("INSERT INTO messages (chat_id, role, body, status, created) VALUES (?1, 'user', ?2, 'done', ?3)", three(id, text, t))
+    _a := aistore.Run("INSERT INTO messages (chat_id, role, body, status, created, effort) VALUES (?1, 'user', ?2, 'done', ?3, ?4)", four(id, text, t, effort))
     umid := aistore.LastId()
     _b := aistore.Run("INSERT INTO messages (chat_id, role, body, status, created, via_queue) VALUES (?1, 'assistant', '', 'pending', ?2, ?3)", three(id, t, qid.len() > 0 ? "1" : "0"))
     amid := aistore.LastId()
@@ -852,6 +861,7 @@ func launch_turn(uid: i64, id: str, sid_in: str, text: str, files &: Vector<aifi
     ailive.Begin(sid)
     forget_check(sid)
     aiturn.Relax(sid, free)
+    aiengine.SetEffort(sid, effort)
     mut sent := false
     if device != "0" and token.len() > 0:
         preamble := desktop_preamble(uid, device, workspace, token) + project_block(id, body, fresh) + prompt
@@ -873,7 +883,7 @@ func launch_turn(uid: i64, id: str, sid_in: str, text: str, files &: Vector<aifi
         ret false
     end
     mut m := Vector {} as Vector<str>
-    m.push(json.MemberRaw("user", with_files(message_json(umid, "user", text, "done", t, "[]", "0"), files.len() > 0 ? aifiles.Metas(files) : "")))
+    m.push(json.MemberRaw("user", with_files(with_effort(message_json(umid, "user", text, "done", t, "[]", "0"), effort), files.len() > 0 ? aifiles.Metas(files) : "")))
     m.push(json.MemberRaw("assistant", message_json(amid, "assistant", "", "pending", t, "[]", "0")))
     m.push(json.Member("title", new_title))
     out = json.Object(m)
@@ -883,14 +893,16 @@ end
 func queue_json(id: str): str:
     mut items := Vector {} as Vector<str>
     aistore.Lock()
-    mut rows := aistore.Stmt("SELECT id, body, created FROM chat_queue WHERE chat_id = ?1 ORDER BY pos, id", one(id))
+    mut rows := aistore.Stmt("SELECT id, body, created, effort FROM chat_queue WHERE chat_id = ?1 ORDER BY pos, id", one(id))
     mut ids := Vector {} as Vector<str>
     mut texts := Vector {} as Vector<str>
     mut stamps := Vector {} as Vector<str>
+    mut efforts := Vector {} as Vector<str>
     until aistore.Next(rows):
         ids.push(aistore.Text(rows, 0))
         texts.push(aistore.Text(rows, 1))
         stamps.push(aistore.Text(rows, 2))
+        efforts.push(aistore.Text(rows, 3))
     end
     aistore.Finish(rows)
     aistore.Unlock()
@@ -901,6 +913,9 @@ func queue_json(id: str): str:
         m.push(json.Member("text", texts.get(i)))
         m.push(json.MemberRaw("created", stamps.get(i)))
         m.push(json.MemberRaw("files", aifiles.QueuedMetas(ids.get(i))))
+        if efforts.get(i).len() > 0 and efforts.get(i) != "medium":
+            m.push(json.Member("effort", efforts.get(i)))
+        end
         items.push(json.Object(m))
         i += 1
     end
@@ -971,8 +986,9 @@ func enqueue_message(ctx: i64):
     a.push(aiweb.UiLangNote(ctx))
     a.push(str.StartsWith(project, "{") ? project : "")
     a.push(i64s(aistore.Now()))
+    a.push(aiengine.Effort(json.Get(body, "effort")))
     aistore.Lock()
-    ok := aistore.Run("INSERT INTO chat_queue (chat_id, user_id, body, ui_note, project, created) VALUES (?1, ?2, ?3, ?4, ?5, ?6)", a)
+    ok := aistore.Run("INSERT INTO chat_queue (chat_id, user_id, body, ui_note, project, created, effort) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)", a)
     qid := aistore.LastId()
     aistore.Unlock()
     if not ok or not aifiles.Persist(qid, files):
@@ -1079,16 +1095,18 @@ func queue_step(id: str, launched &: str): bool:
         created = aistore.Int64(prow, 1)
     end
     aistore.Finish(prow)
-    mut qrow := aistore.Stmt("SELECT id, body, ui_note, project FROM chat_queue WHERE chat_id = ?1 ORDER BY pos, id LIMIT 1", one(id))
+    mut qrow := aistore.Stmt("SELECT id, body, ui_note, project, effort FROM chat_queue WHERE chat_id = ?1 ORDER BY pos, id LIMIT 1", one(id))
     mut qid := ""
     mut text := ""
     mut note := ""
     mut project := ""
+    mut effort := ""
     if aistore.Next(qrow):
         qid = aistore.Text(qrow, 0)
         text = aistore.Text(qrow, 1)
         note = aistore.Text(qrow, 2)
         project = aistore.Text(qrow, 3)
+        effort = aistore.Text(qrow, 4)
     end
     aistore.Finish(qrow)
     aistore.Unlock()
@@ -1105,7 +1123,7 @@ func queue_step(id: str, launched &: str): bool:
     mut status := 0
     mut code := ""
     mut message := ""
-    body := project.len() > 0 ? `{"project": ` + project + "}" : ""
+    body := `{"effort": ` + json.Str(effort) + (project.len() > 0 ? `, "project": ` + project : "") + "}"
     if launch_turn(uid.to_int(), id, sid, text, files, note, body, qid, status, code, message, launched):
         ret true
     end

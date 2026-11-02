@@ -718,6 +718,14 @@ func place_args(g &: Ng, args: Vector<int>, cls: Vector<int>, vararg: bool, nfix
         if apple_va and cls[p3] != 2 and ord > nfixed:
             where.push(0 - 1 - stk2)
             stk2 += 8
+        else cls[p3] >= CA_STK and cls[p3] <= CA_STK_FP:
+            if cls[p3] == CA_STK_GP:
+                gi = ngp_args
+            else cls[p3] == CA_STK_FP:
+                fi = 8
+            end
+            where.push(0 - 1 - stk2)
+            stk2 += 8
         else cls[p3] == 1 and not win_va:
             if fi < 8:
                 where.push(XMM0 + fi)
@@ -840,6 +848,28 @@ func arm_vfp_slot(used &: Vector<bool>, dbl: bool): int:
     ret 0 - 1
 end
 
+func arm_vfp_run(used &: Vector<bool>, cnt: int, dbl: bool): int:
+    step := dbl ? 2 : 1
+    units := cnt * step
+    mut b := 0
+    until b + units <= 16:
+        mut avail := true
+        repeat units in u:
+            if used[b + u]:
+                avail = false
+            end
+        end
+        if avail:
+            repeat units in u2:
+                used[b + u2] = true
+            end
+            ret b
+        end
+        b += step
+    end
+    ret 0 - 1
+end
+
 func arm_gp_arg(g &: Ng, r: int, ncrn &: int, nsaa &: int, mask &: i64):
     if ncrn < 4:
         _c := e_copy(g, ncrn, r)
@@ -915,6 +945,54 @@ func place_args_arm(g &: Ng, args: Vector<int>, cls: Vector<int>, vararg: bool, 
             arm_gp_arg(g, r, ncrn, nsaa, mask)
             arm_gp_arg(g, args[p + 1], ncrn, nsaa, mask)
             p += 1
+        else c >= CA_ARM_HS:
+            dbl := c >= CA_ARM_HD
+            cnt := c - (dbl ? CA_ARM_HD : CA_ARM_HS)
+            mut base := 0 - 1
+            if not vstk:
+                base = arm_vfp_run(used, cnt, dbl)
+            end
+            if base < 0:
+                vstk = true
+                repeat 16 in u:
+                    used[u] = true
+                end
+                if dbl:
+                    nsaa = align_up(nsaa, 8)
+                end
+                repeat cnt in h:
+                    _sh := e_mr(g, M_FST, dbl ? 8 : 4, mem_bi(RSP, nsaa as i64), args[p + h])
+                    nsaa += dbl ? 8 : 4
+                end
+            else:
+                repeat cnt in h2:
+                    sl2 := base + (dbl ? 2 * h2 : h2)
+                    if (sl2 & 1) == 1:
+                        odd_r.push(args[p + h2])
+                        odd_k.push(sl2 >> 1)
+                    else:
+                        _ch := e_copy(g, XMM0 + (sl2 >> 1), args[p + h2])
+                        mask = mask | ((1 as i64) << ((XMM0 + (sl2 >> 1)) as i64))
+                    end
+                end
+            end
+            p += cnt - 1
+        else c >= CA_ARM_C4:
+            al8 := c >= CA_ARM_C8
+            nw := c - (al8 ? CA_ARM_C8 : CA_ARM_C4)
+            if al8 and (ncrn & 1) == 1:
+                ncrn += 1
+            end
+            if ncrn + nw > 4 and nsaa > 0:
+                ncrn = 4
+            end
+            if al8 and ncrn >= 4:
+                nsaa = align_up(nsaa, 8)
+            end
+            repeat nw in w:
+                arm_gp_arg(g, args[p + w], ncrn, nsaa, mask)
+            end
+            p += nw - 1
         else:
             arm_gp_arg(g, r, ncrn, nsaa, mask)
         end
@@ -4453,23 +4531,43 @@ func isel_call(g &: Ng, i: int):
     if sym >= 0 and isel_intrinsic(g, i, sym):
         ret
     end
+    mut cabi := false
     if sym >= 0 and not g.sy_def[sym]:
-        mut agg_by_value := is_agg(g, rt)
+        cabi = is_agg(g, rt)
         repeat na in k0:
             if (g.pool[ps + 3 * k0 + 1] & IF_BYVAL) != 0 or is_agg(g, g.v_ty[g.pool[ps + 3 * k0]]):
-                agg_by_value = true
+                cabi = true
             end
-        end
-        if agg_by_value:
-            fail(g, "native backend: '" + tab_str(g.syms, sym) + "' takes or returns a struct by value, which the native backend cannot pass to C code; use --backend=llvm")
-            ret
         end
     end
     mut regs := Vector {} as Vector<int>
     mut cls := Vector {} as Vector<int>
     mut rslot := 0 - 1
     mut fwd := 0 - 1
-    if is_agg(g, rt):
+    mut rparts := CaParts {}
+    defer ca_free(rparts)
+    mut rmode := 0
+    mut rdst := frame_mem(0, 0 as i64)
+    if cabi and is_agg(g, rt):
+        rmode = ca_ret(g, rt, rparts)
+        if rmode < 0:
+            fail(g, "native backend: '" + tab_str(g.syms, sym) + "' returns a struct the native backend cannot return from C code; use --backend=llvm")
+            ret
+        end
+    end
+    if rmode == 1:
+        fwd = sret_forward(g, i)
+        if fwd >= 0:
+            rdst = mem_of(g, g.i_b[fwd], 0 as i64)
+            g.skipi[fwd] = true
+        else ret_passthru(g, i):
+            rdst = mem_bi(g.retp, 0 as i64)
+            g.skipi[g.i_next[i]] = true
+        else:
+            rslot = new_slot(g, align_up(tsize(g, rt), 8), talign(g, rt) < 8 ? 8 : talign(g, rt))
+            rdst = frame_mem(rslot, 0 as i64)
+        end
+    else is_agg(g, rt):
         fwd = sret_forward(g, i)
         if fwd >= 0:
             regs.push(lea_reg(g, mem_of(g, g.i_b[fwd], 0 as i64)))
@@ -4483,12 +4581,28 @@ func isel_call(g &: Ng, i: int):
         end
         cls.push(g.arch == NG_ARCH_A64 ? 2 : 0)
     end
+    mut nfx := g.i_x[i]
     repeat na in k:
         v := g.pool[ps + 3 * k]
         fl := g.pool[ps + 3 * k + 1]
         aux := g.pool[ps + 3 * k + 2]
         t := g.v_ty[v]
-        if (fl & IF_BYVAL) != 0 and aux >= 0:
+        if cabi and k == g.i_x[i]:
+            nfx = 0
+            each c0 in cls:
+                if c0 != 2:
+                    nfx += 1
+                end
+            end
+        end
+        if cabi and (((fl & IF_BYVAL) != 0 and aux >= 0) or is_agg(g, t)):
+            byv := (fl & IF_BYVAL) != 0 and aux >= 0
+            va := (g.i_f[i] & IF_VARARG) != 0 and g.i_x[i] >= 0 and k >= g.i_x[i]
+            if not ca_arg(g, byv ? mem_of(g, v, 0 as i64) : agg_mem(g, v), byv ? aux : t, byv, va, regs, cls):
+                fail(g, "native backend: '" + tab_str(g.syms, sym) + "' takes a struct the native backend cannot pass to C code; use --backend=llvm")
+                ret
+            end
+        else (fl & IF_BYVAL) != 0 and aux >= 0:
             bs := new_slot(g, tsize(g, aux), talign(g, aux))
             emit_copy(g, frame_mem(bs, 0 as i64), mem_of(g, v, 0 as i64), tsize(g, aux))
             regs.push(lea_reg(g, frame_mem(bs, 0 as i64)))
@@ -4525,7 +4639,15 @@ func isel_call(g &: Ng, i: int):
         cr = use_reg(g, callee)
     end
     vararg := (g.i_f[i] & IF_VARARG) != 0
-    mask := place_args(g, regs, cls, vararg, g.i_x[i])
+    if cabi and g.i_x[i] >= na:
+        nfx = 0
+        each c1 in cls:
+            if c1 != 2:
+                nfx += 1
+            end
+        end
+    end
+    mask := place_args(g, regs, cls, vararg, nfx)
     mut ci := 0 - 1
     if sym >= 0:
         ci = mi_new(g, M_CALL, 8)
@@ -4534,6 +4656,8 @@ func isel_call(g &: Ng, i: int):
         if g.arch == NG_ARCH_X86 and stdcall_bytes(g, sym) >= 0:
             set_stdcall(g, sym, g.last_argsz)
             g.mc.sz2[ci] = g.last_argsz
+        else g.arch == NG_ARCH_X86 and cabi and is_agg(g, rt) and rmode == 0 and g.os != NG_OS_WINDOWS:
+            g.mc.sz2[ci] = 4
         end
         if g.sy_kind[sym] == SY_UNKNOWN:
             g.sy_kind[sym] = SY_FUNC
@@ -4546,6 +4670,15 @@ func isel_call(g &: Ng, i: int):
     regs.free()
     cls.free()
     v2 := g.i_res[i]
+    if rmode == 1:
+        if rslot < 0 and ca_odd(rparts):
+            st := new_slot(g, align_up(tsize(g, rt), 8), 8)
+            ca_ret_store(g, rparts, frame_mem(st, 0 as i64))
+            emit_copy(g, rdst, frame_mem(st, 0 as i64), tsize(g, rt))
+        else:
+            ca_ret_store(g, rparts, rdst)
+        end
+    end
     if rslot >= 0:
         if v2 >= 0:
             g.vak[v2] = AK_FRAME

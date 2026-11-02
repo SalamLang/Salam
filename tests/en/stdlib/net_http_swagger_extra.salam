@@ -1,0 +1,105 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import net.http
+import net.router
+import net.http.swagger
+import os
+import testing
+
+struct Login:
+    pub user: str = ""
+    pub secret: str = ""
+end
+
+struct Note:
+    pub text: str = ""
+end
+
+func login(ctx: i64): http.Text(ctx, "login") end
+func notes(ctx: i64): http.Text(ctx, "notes") end
+func upload(ctx: i64): http.Text(ctx, "upload") end
+func page(ctx: i64): http.Text(ctx, "page") end
+func ping(ctx: i64): http.Text(ctx, "ping") end
+
+func build router(): router.Router:
+    mut r := router.NewRouter()
+    router.Post(r, "/api/login", login)
+    router.Post(r, "/api/notes", notes)
+    router.Put(r, "/api/upload", upload)
+    router.Get(r, "/api/page", page)
+    router.Get(r, "/api/ping", ping)
+    router.Get(r, "/other/ping", ping)
+    ret r
+end
+
+func check bodies():
+    r := build router()
+    mut doc := swagger.New("Extras", "0.1.0")
+    swagger.ApiKeyAuth(doc, "key", "header", "X-API-Key")
+    swagger.ScanPrefix(doc, r, "/api")
+
+    _a := swagger.At(doc, "POST", "/api/login")
+    swagger.AcceptsForm(doc, "credentials", Login {})
+    swagger.ReturnsText(doc, 200, "a plain greeting")
+
+    _b := swagger.At(doc, "POST", "/api/notes")
+    swagger.AcceptsOptional(doc, "an optional note", Note {})
+    swagger.ReturnsHtml(doc, 200, "the rendered note")
+
+    _c := swagger.At(doc, "PUT", "/api/upload")
+    swagger.AcceptsRaw(doc, "raw bytes", "application/octet-stream", swagger.BINARY_SCHEMA, true)
+    swagger.Secure(doc, "key")
+
+    spec := swagger.Spec(doc)
+    testing.AssertContains(spec, "\"/api/login\"")
+    testing.AssertContains(spec, "\"/api/ping\"")
+    testing.AssertFalse(spec.find("/other/ping") >= 0)
+    testing.AssertContains(spec, "application/x-www-form-urlencoded")
+    testing.AssertContains(spec, "text/plain")
+    testing.AssertContains(spec, "text/html")
+    testing.AssertContains(spec, "application/octet-stream")
+    testing.AssertContains(spec, "\"apiKey\"")
+    testing.AssertContains(spec, "X-API-Key")
+    testing.AssertContains(spec, "\"required\":false")
+
+    pretty := swagger.SpecIndent(doc)
+    testing.AssertTrue(pretty.len() > spec.len())
+    testing.AssertContains(pretty, "\n")
+
+    path := os.TempDir() + "/salam_swagger_extra.json"
+    testing.AssertTrue(swagger.WriteSpec(doc, path))
+    testing.AssertEqStr(swagger.SpecFromFile(path), pretty)
+    os.Remove(path)
+    testing.AssertEqStr(swagger.SpecFromFile(path), "")
+end
+
+func check serve spec():
+    spec := "{\"openapi\":\"3.0.3\",\"info\":{\"title\":\"Fixed\",\"version\":\"1\"},\"paths\":{}}"
+    testing.AssertTrue(swagger.ServeSpec(spec, "Fixed", 23821))
+    home := http.Get("http://127.0.0.1:23821/")
+    testing.AssertEqInt(http.Status(home), 200)
+    testing.AssertContains(http.Body(home), "<title>Fixed</title>")
+    served := http.Get("http://127.0.0.1:23821/openapi.json")
+    testing.AssertEqInt(http.Status(served), 200)
+    testing.AssertEqStr(http.Body(served), spec)
+end
+
+func main:
+    check bodies()
+    check serve spec()
+    ret testing.Summary()
+end

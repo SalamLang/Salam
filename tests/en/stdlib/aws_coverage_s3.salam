@@ -1,0 +1,818 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+package main
+
+import aws
+import mem
+import str
+import sync
+import os
+import filepath
+import fs.dir
+import fs.file
+import testing
+import net.tcp
+
+const PORT := 19931
+const ACCESS_KEY := "AKIAIOSFODNN7EXAMPLE"
+const SECRET_KEY := "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+
+mut wg := sync.NewWaitGroup()
+mut replies := Vector {} as Vector<str>
+mut reply_at := 0
+mut lines := Vector {} as Vector<str>
+mut heads := Vector {} as Vector<str>
+mut bodies := Vector {} as Vector<str>
+
+func at(p: void*, off: int): void*:
+    ret ((p as i64) + (off as i64)) as void*
+end
+
+func byte_at(p: void*, i: int): int:
+    bp := p as u8*
+    ret bp[i] as int
+end
+
+func to_str(p: void*, n: int): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    repeat n in i:
+        str.BufAppendChar(sb, byte_at(p, i))
+    end
+    ret str.BufStr(sb)
+end
+
+func hdr_get(head: str, name: str): str:
+    lower := head.lower()
+    needle := "\r\n" + name.lower() + ":"
+    found := lower.find(needle)
+    if found < 0: ret "" end
+    start := found + needle.len()
+    mut stop := str.IndexFrom(head, "\r\n", start)
+    if stop < 0: stop = head.len() end
+    ret head.substr(start, stop - start).trim()
+end
+
+func read_request(c: tcp.Conn, head &: str, body &: str): bool:
+    cap := 65536
+    buf := mem.Allocate(cap as u64)
+    if buf == null: ret false end
+    defer mem.Free(buf)
+    mut have := 0
+    mut head_end := 0 - 1
+    until head_end < 0 and have < cap:
+        got := tcp.ReadBytes(c, at(buf, have), cap - have)
+        if got <= 0: break end
+        have += got
+        mut i := 0
+        until i + 3 < have and head_end < 0:
+            if byte_at(buf, i) == 13 and byte_at(buf, i + 1) == 10 and byte_at(buf, i + 2) == 13 and byte_at(buf, i + 3) == 10:
+                head_end = i + 4
+            end
+            i += 1
+        end
+    end
+    if head_end < 0: ret false end
+    head = to_str(buf, head_end)
+    cl := hdr_get(head, "Content-Length")
+    mut want := 0
+    if cl.len() > 0: want = cl.to_int() end
+    mut kept := have - head_end
+    if kept > 4096: kept = 4096 end
+    body = to_str(at(buf, head_end), kept)
+    mut seen := have - head_end
+    until seen < want:
+        got := tcp.ReadBytes(c, buf, cap)
+        if got <= 0: break end
+        if body.len() < 4096:
+            mut more := got
+            if body.len() + more > 4096: more = 4096 - body.len() end
+            body = body + to_str(buf, more)
+        end
+        seen += got
+    end
+    ret true
+end
+
+func http(status: int, extra: str, body: str): str:
+    ret "HTTP/1.1 " + status + " X\r\n" + extra + "Content-Length: " + body.len() + "\r\nConnection: close\r\n\r\n" + body
+end
+
+func http_head(status: int, extra: str, claimed: int): str:
+    ret "HTTP/1.1 " + status + " X\r\n" + extra + "Content-Length: " + claimed + "\r\nConnection: close\r\n\r\n"
+end
+
+func xml_ok(body: str): str:
+    ret http(200, "Content-Type: application/xml\r\n", body)
+end
+
+func arm(reply: str):
+    replies.push(reply)
+end
+
+func serve():
+    srv := tcp.Bind(PORT)
+    sync.Done(wg)
+    mut running := true
+    until running:
+        c := tcp.Accept(srv)
+        if not tcp.ConnOk(c):
+            running = false
+        else:
+            mut head := ""
+            mut body := ""
+            if read_request(c, head, body):
+                sp := head.find(" ")
+                sp2 := str.IndexFrom(head, " ", sp + 1)
+                line := head.substr(0, sp2)
+                lines.push(line)
+                heads.push(head)
+                bodies.push(body)
+                if line.find("/__stop") >= 0:
+                    running = false
+                    tcp.Write(c, http(204, "", ""))
+                else:
+                    mut reply := http(200, "", "")
+                    if reply_at < replies.len():
+                        reply = replies.get(reply_at)
+                        reply_at += 1
+                    end
+                    tcp.Write(c, reply)
+                end
+            end
+            tcp.Close(c)
+        end
+    end
+    tcp.CloseServer(srv)
+end
+
+func last_line(): str:
+    if lines.len() == 0: ret "" end
+    ret lines.get(lines.len() - 1)
+end
+
+func last_head(): str:
+    if heads.len() == 0: ret "" end
+    ret heads.get(heads.len() - 1)
+end
+
+func last_body(): str:
+    if bodies.len() == 0: ret "" end
+    ret bodies.get(bodies.len() - 1)
+end
+
+func has_header(name: str, value: str): bool:
+    ret hdr_get(last_head(), name) == value
+end
+
+func drained(): bool:
+    ret reply_at == replies.len()
+end
+
+func cfg(): aws.Config:
+    ret aws.Config {
+        endpoint = "http://127.0.0.1:19931", bucket = "bkt", access_key = ACCESS_KEY, secret_key = SECRET_KEY,
+        retry = 1
+    }
+end
+
+func test_objects():
+    c := cfg()
+    hello := "hello"
+    arm(http(200, "ETag: \"abc\"\r\n", ""))
+    put := aws.S3PutBytesWith(
+        c, "o/a.txt", hello as void*, 5, aws.PutOptions {
+            content_type = "text/plain", checksum_md5 = true, checksum_sha256 = true, storage_class = "STANDARD_IA"
+        }
+    )
+    testing.AssertTrue(put.ok)
+    testing.AssertEqStr(last_line(), "PUT /bkt/o/a.txt")
+    testing.AssertEqStr(last_body(), "hello")
+    testing.AssertTrue(has_header("Content-MD5", "XUFAKrxLKna5cZ2REBfFkg=="))
+    testing.AssertTrue(has_header("x-amz-checksum-sha256", "LPJNul+wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmCQ="))
+    testing.AssertTrue(has_header("x-amz-storage-class", "STANDARD_IA"))
+    testing.AssertTrue(has_header("Content-Type", "text/plain"))
+
+    arm(http(200, "", "hello"))
+    got := aws.S3GetWith(
+        c, "o/a.txt", aws.GetOptions {
+            range_start = 1 as i64, range_end = 3 as i64, version_id = "v9", response_content_type = "text/x-test"
+        }
+    )
+    testing.AssertEqStr(got.body, "hello")
+    testing.AssertEqStr(last_line(), "GET /bkt/o/a.txt?response-content-type=text%2Fx-test&versionId=v9")
+    testing.AssertTrue(has_header("Range", "bytes=1-3"))
+
+    arm(http_head(200, "ETag: \"e1\"\r\nContent-Type: text/plain\r\n", 5))
+    head := aws.S3Head(c, "o/a.txt")
+    testing.AssertTrue(head.ok)
+    testing.AssertEqStr(last_line(), "HEAD /bkt/o/a.txt")
+    testing.AssertEqInt64(head.length, 5 as i64)
+    testing.AssertEqStr(aws.ResultHeader(head, "Content-Type"), "text/plain")
+
+    arm(http_head(200, "ETag: \"e1\"\r\nContent-Type: text/plain\r\nLast-Modified: Wed, 21 Oct 2015 07:28:00 GMT\r\nx-amz-version-id: v9\r\nx-amz-meta-owner: ali\r\nx-amz-mp-parts-count: 3\r\n", 1234))
+    info := aws.S3StatVersion(c, "o/a.txt", "v9")
+    testing.AssertTrue(info.ok)
+    testing.AssertEqStr(last_line(), "HEAD /bkt/o/a.txt?versionId=v9")
+    testing.AssertEqInt64(info.size, 1234 as i64)
+    testing.AssertEqStr(info.etag, "e1")
+    testing.AssertEqStr(info.version_id, "v9")
+    testing.AssertEqInt(info.parts, 3)
+    testing.AssertEqInt64(info.modified_epoch, 1445412480 as i64)
+    testing.AssertEqStr(aws.HeaderGet(info.meta, "owner"), "ali")
+
+    arm(http_head(200, "", 77))
+    testing.AssertEqInt64(aws.S3Size(c, "o/a.txt"), 77 as i64)
+    arm(http_head(404, "", 0))
+    testing.AssertEqInt64(aws.S3Size(c, "o/none.txt"), 0 - 1 as i64)
+
+    arm(http(204, "", ""))
+    testing.AssertTrue(aws.S3DeleteVersion(c, "o/a.txt", "v9").ok)
+    testing.AssertEqStr(last_line(), "DELETE /bkt/o/a.txt?versionId=v9")
+
+    arm(xml_ok("<CopyObjectResult><ETag>\"x\"</ETag></CopyObjectResult>"))
+    testing.AssertTrue(aws.S3Copy(c, "src.txt", "dst.txt").ok)
+    testing.AssertEqStr(last_line(), "PUT /bkt/dst.txt")
+    testing.AssertTrue(has_header("x-amz-copy-source", "/bkt/src.txt"))
+
+    mut meta := aws.NewHeaders()
+    aws.HeaderSet(meta, "Owner", "Ali")
+    arm(xml_ok("<CopyObjectResult><ETag>\"x\"</ETag></CopyObjectResult>"))
+    with := aws.S3CopyWith(
+        c, "src.txt", "dst.txt", aws.CopyOptions {
+            source_bucket = "other", source_version_id = "v1", replace_metadata = true,
+            content_type = "text/csv", acl = "private", meta = meta
+        }
+    )
+    testing.AssertTrue(with.ok)
+    testing.AssertTrue(has_header("x-amz-copy-source", "/other/src.txt?versionId=v1"))
+    testing.AssertTrue(has_header("x-amz-metadata-directive", "REPLACE"))
+    testing.AssertTrue(has_header("Content-Type", "text/csv"))
+    testing.AssertTrue(has_header("x-amz-meta-owner", "Ali"))
+    testing.AssertTrue(has_header("x-amz-acl", "private"))
+    aws.HeaderFree(meta)
+
+    arm(xml_ok("<Error><Code>InternalError</Code><Message>try again</Message></Error>"))
+    bad := aws.S3Copy(c, "src.txt", "dst.txt")
+    testing.AssertFalse(bad.ok)
+    testing.AssertEqStr(bad.code, "InternalError")
+
+    arm(xml_ok("<CopyObjectResult/>"))
+    arm(http(204, "", ""))
+    mut seen := lines.len()
+    testing.AssertTrue(aws.S3Move(c, "a.txt", "b.txt").ok)
+    testing.AssertEqInt(lines.len(), seen + 2)
+    testing.AssertEqStr(lines.get(seen), "PUT /bkt/b.txt")
+    testing.AssertEqStr(last_line(), "DELETE /bkt/a.txt")
+    arm(http(404, "", "<Error><Code>NoSuchKey</Code></Error>"))
+    seen = lines.len()
+    moved := aws.S3Move(c, "gone.txt", "b.txt")
+    testing.AssertFalse(moved.ok)
+    testing.AssertEqInt(lines.len(), seen + 1)
+
+    arm(xml_ok("<CopyObjectResult/>"))
+    testing.AssertTrue(aws.S3Touch(c, "o/a.txt", aws.CopyOptions { content_type = "text/plain" }).ok)
+    testing.AssertEqStr(last_line(), "PUT /bkt/o/a.txt")
+    testing.AssertTrue(has_header("x-amz-copy-source", "/bkt/o/a.txt"))
+    testing.AssertTrue(has_header("x-amz-metadata-directive", "REPLACE"))
+
+    arm(http(202, "", ""))
+    testing.AssertTrue(aws.S3Restore(c, "frozen.bin", 7, "Bulk").ok)
+    testing.AssertEqStr(last_line(), "POST /bkt/frozen.bin?restore=")
+    testing.AssertTrue(last_body().find("<Days>7</Days>") > 0)
+    testing.AssertTrue(last_body().find("<Tier>Bulk</Tier>") > 0)
+    arm(http(202, "", ""))
+    testing.AssertTrue(aws.S3Restore(c, "frozen.bin", 1, "").ok)
+    testing.AssertTrue(last_body().find("<Tier>Standard</Tier>") > 0)
+
+    arm(http_head(200, "x-amz-checksum-sha256: AbC=\r\n", 0))
+    testing.AssertEqStr(aws.S3ObjectChecksum(c, "o/a.txt"), "AbC=")
+    testing.AssertTrue(has_header("x-amz-checksum-mode", "ENABLED"))
+    arm(http_head(404, "", 0))
+    testing.AssertEqStr(aws.S3ObjectChecksum(c, "o/none.txt"), "")
+    testing.AssertTrue(drained())
+end
+
+func test_buckets():
+    c := cfg()
+    arm(http(200, "", ""))
+    testing.AssertTrue(aws.S3CreateBucket(c, "newbkt").ok)
+    testing.AssertEqStr(last_line(), "PUT /newbkt")
+    testing.AssertEqStr(last_body(), "")
+    mut eu := cfg()
+    eu.region = "eu-west-1"
+    arm(http(200, "", ""))
+    testing.AssertTrue(aws.S3CreateBucketAcl(eu, "newbkt", "private").ok)
+    testing.AssertEqStr(last_line(), "PUT /newbkt")
+    testing.AssertTrue(has_header("x-amz-acl", "private"))
+    testing.AssertTrue(last_body().find("<LocationConstraint>eu-west-1</LocationConstraint>") > 0)
+    arm(http(204, "", ""))
+    testing.AssertTrue(aws.S3DeleteBucket(c, "newbkt").ok)
+    testing.AssertEqStr(last_line(), "DELETE /newbkt")
+    arm(http_head(200, "", 0))
+    testing.AssertTrue(aws.S3HeadBucket(c, "newbkt").ok)
+    testing.AssertEqStr(last_line(), "HEAD /newbkt")
+    arm(http_head(200, "", 0))
+    testing.AssertTrue(aws.S3BucketExists(c, "newbkt"))
+    arm(http_head(404, "", 0))
+    testing.AssertFalse(aws.S3BucketExists(c, "ghost"))
+
+    arm(xml_ok("<ListAllMyBucketsResult><Owner><DisplayName>ali</DisplayName></Owner><Buckets><Bucket><Name>alpha</Name><CreationDate>2024-01-02T03:04:05.000Z</CreationDate></Bucket><Bucket><Name>beta</Name><CreationDate>2025-05-06T07:08:09.000Z</CreationDate><BucketRegion>eu-west-1</BucketRegion></Bucket></Buckets></ListAllMyBucketsResult>"))
+    mut buckets := aws.S3ListBuckets(c)
+    testing.AssertTrue(buckets.ok)
+    testing.AssertEqStr(last_line(), "GET /")
+    testing.AssertEqInt(aws.BucketCount(buckets), 2)
+    testing.AssertEqStr(aws.BucketAt(buckets, 0).name, "alpha")
+    testing.AssertEqStr(aws.BucketAt(buckets, 1).region, "eu-west-1")
+    testing.AssertEqInt64(aws.BucketAt(buckets, 0).created_epoch, 1704164645 as i64)
+    testing.AssertEqStr(aws.BucketAt(buckets, 5).name, "")
+    testing.AssertEqStr(buckets.owner, "ali")
+    aws.BucketListFree(buckets)
+    arm(http(403, "", "<Error><Code>AccessDenied</Code></Error>"))
+    testing.AssertFalse(aws.S3ListBuckets(c).ok)
+
+    arm(xml_ok("<LocationConstraint>eu-west-1</LocationConstraint>"))
+    testing.AssertEqStr(aws.S3BucketRegion(c, "bkt"), "eu-west-1")
+    testing.AssertEqStr(last_line(), "GET /bkt?location=")
+    arm(xml_ok("<LocationConstraint/>"))
+    testing.AssertEqStr(aws.S3BucketRegion(c, "bkt"), "us-east-1")
+    arm(http(301, "x-amz-bucket-region: ap-south-1\r\n", ""))
+    testing.AssertEqStr(aws.S3BucketRegion(c, "bkt"), "ap-south-1")
+
+    arm(http(200, "", ""))
+    testing.AssertTrue(aws.S3SetVersioning(c, "bkt", true).ok)
+    testing.AssertEqStr(last_line(), "PUT /bkt?versioning=")
+    testing.AssertTrue(last_body().find("<Status>Enabled</Status>") > 0)
+    testing.AssertTrue(hdr_get(last_head(), "Content-MD5").len() > 0)
+    arm(http(200, "", ""))
+    testing.AssertTrue(aws.S3SetVersioning(c, "bkt", false).ok)
+    testing.AssertTrue(last_body().find("<Status>Suspended</Status>") > 0)
+    arm(xml_ok("<VersioningConfiguration><Status>Enabled</Status></VersioningConfiguration>"))
+    testing.AssertEqStr(aws.S3Versioning(c, "bkt"), "Enabled")
+    testing.AssertEqStr(last_line(), "GET /bkt?versioning=")
+    arm(http(404, "", ""))
+    testing.AssertEqStr(aws.S3Versioning(c, "bkt"), "")
+
+    mut tags := aws.NewHeaders()
+    aws.HeaderSet(tags, "team", "core & infra")
+    aws.HeaderSet(tags, "env", "prod")
+    arm(http(204, "", ""))
+    testing.AssertTrue(aws.S3SetBucketTags(c, "bkt", tags).ok)
+    testing.AssertEqStr(last_line(), "PUT /bkt?tagging=")
+    testing.AssertTrue(last_body().find("<Tag><Key>team</Key><Value>core &amp; infra</Value></Tag>") > 0)
+    aws.HeaderFree(tags)
+    arm(xml_ok("<Tagging><TagSet><Tag><Key>team</Key><Value>core</Value></Tag><Tag><Key>env</Key><Value>prod</Value></Tag></TagSet></Tagging>"))
+    mut got := aws.S3BucketTags(c, "bkt")
+    testing.AssertEqInt(aws.HeaderCount(got), 2)
+    testing.AssertEqStr(aws.HeaderGet(got, "env"), "prod")
+    testing.AssertEqStr(last_line(), "GET /bkt?tagging=")
+    aws.HeaderFree(got)
+    arm(http(404, "", ""))
+    testing.AssertEqInt(aws.HeaderCount(aws.S3BucketTags(c, "bkt")), 0)
+    arm(http(204, "", ""))
+    testing.AssertTrue(aws.S3DeleteBucketTags(c, "bkt").ok)
+    testing.AssertEqStr(last_line(), "DELETE /bkt?tagging=")
+
+    seen := lines.len()
+    empty := aws.S3SetBucketPolicy(c, "bkt", "")
+    testing.AssertFalse(empty.ok)
+    testing.AssertEqInt(lines.len(), seen)
+    arm(http(204, "", ""))
+    testing.AssertTrue(aws.S3SetBucketPolicy(c, "bkt", "{\"Version\":\"2012-10-17\"}").ok)
+    testing.AssertEqStr(last_line(), "PUT /bkt?policy=")
+    testing.AssertEqStr(last_body(), "{\"Version\":\"2012-10-17\"}")
+    testing.AssertTrue(has_header("Content-Type", "application/json"))
+    arm(http(200, "", "{\"Version\":\"2012-10-17\",\"Statement\":[]}"))
+    testing.AssertEqStr(aws.S3BucketPolicy(c, "bkt"), "{\"Version\":\"2012-10-17\",\"Statement\":[]}")
+    arm(http(404, "", ""))
+    testing.AssertEqStr(aws.S3BucketPolicy(c, "bkt"), "")
+    arm(http(204, "", ""))
+    testing.AssertTrue(aws.S3DeleteBucketPolicy(c, "bkt").ok)
+    testing.AssertEqStr(last_line(), "DELETE /bkt?policy=")
+
+    arm(http(200, "", ""))
+    testing.AssertTrue(aws.S3SetBucketCors(c, "bkt", "https://app.example", "get, put", 600).ok)
+    testing.AssertEqStr(last_line(), "PUT /bkt?cors=")
+    testing.AssertTrue(last_body().find("<AllowedOrigin>https://app.example</AllowedOrigin>") > 0)
+    testing.AssertTrue(last_body().find("<AllowedMethod>GET</AllowedMethod><AllowedMethod>PUT</AllowedMethod>") > 0)
+    testing.AssertTrue(last_body().find("<MaxAgeSeconds>600</MaxAgeSeconds>") > 0)
+    arm(xml_ok("<CORSConfiguration/>"))
+    testing.AssertEqStr(aws.S3BucketCors(c, "bkt"), "<CORSConfiguration/>")
+    arm(http(204, "", ""))
+    testing.AssertTrue(aws.S3DeleteBucketCors(c, "bkt").ok)
+    testing.AssertEqStr(last_line(), "DELETE /bkt?cors=")
+
+    rule := aws.S3ExpiryRule("logs/", 30, 7)
+    testing.AssertTrue(rule.find("<Prefix>logs/</Prefix>") > 0)
+    testing.AssertTrue(rule.find("<Days>30</Days>") > 0)
+    testing.AssertTrue(rule.find("<DaysAfterInitiation>7</DaysAfterInitiation>") > 0)
+    arm(http(200, "", ""))
+    testing.AssertTrue(aws.S3SetLifecycle(c, "bkt", rule).ok)
+    testing.AssertEqStr(last_line(), "PUT /bkt?lifecycle=")
+    testing.AssertEqStr(last_body(), rule)
+    arm(xml_ok(rule))
+    testing.AssertEqStr(aws.S3Lifecycle(c, "bkt"), rule)
+    arm(http(204, "", ""))
+    testing.AssertTrue(aws.S3DeleteLifecycle(c, "bkt").ok)
+    testing.AssertEqStr(last_line(), "DELETE /bkt?lifecycle=")
+    testing.AssertTrue(drained())
+end
+
+func test_object_tags():
+    c := cfg()
+    mut tags := aws.NewHeaders()
+    aws.HeaderSet(tags, "k", "v")
+    arm(http(200, "", ""))
+    testing.AssertTrue(aws.S3SetObjectTags(c, "o/a.txt", tags).ok)
+    testing.AssertEqStr(last_line(), "PUT /bkt/o/a.txt?tagging=")
+    testing.AssertTrue(last_body().find("<Tag><Key>k</Key><Value>v</Value></Tag>") > 0)
+    aws.HeaderFree(tags)
+    arm(xml_ok("<Tagging><TagSet><Tag><Key>a</Key><Value>1</Value></Tag></TagSet></Tagging>"))
+    mut got := aws.S3ObjectTags(c, "o/a.txt")
+    testing.AssertEqStr(aws.HeaderGet(got, "a"), "1")
+    testing.AssertEqStr(last_line(), "GET /bkt/o/a.txt?tagging=")
+    aws.HeaderFree(got)
+    arm(xml_ok("<Tagging><TagSet><Tag><Key>a</Key><Value>2</Value></Tag></TagSet></Tagging>"))
+    mut versioned := aws.S3ObjectTagsVersion(c, "o/a.txt", "v3")
+    testing.AssertEqStr(aws.HeaderGet(versioned, "a"), "2")
+    testing.AssertEqStr(last_line(), "GET /bkt/o/a.txt?tagging=&versionId=v3")
+    aws.HeaderFree(versioned)
+    arm(http(204, "", ""))
+    testing.AssertTrue(aws.S3DeleteObjectTags(c, "o/a.txt").ok)
+    testing.AssertEqStr(last_line(), "DELETE /bkt/o/a.txt?tagging=")
+    arm(xml_ok("<Tagging><TagSet><Tag><Key>a</Key><Value>1</Value></Tag></TagSet></Tagging>"))
+    arm(http(200, "", ""))
+    seen := lines.len()
+    testing.AssertTrue(aws.S3AddObjectTag(c, "o/a.txt", "b", "2").ok)
+    testing.AssertEqInt(lines.len(), seen + 2)
+    testing.AssertEqStr(last_line(), "PUT /bkt/o/a.txt?tagging=")
+    testing.AssertTrue(last_body().find("<Key>a</Key><Value>1</Value>") > 0)
+    testing.AssertTrue(last_body().find("<Key>b</Key><Value>2</Value>") > 0)
+
+    arm(http(200, "", ""))
+    testing.AssertTrue(aws.S3SetObjectAcl(c, "o/a.txt", "public-read").ok)
+    testing.AssertEqStr(last_line(), "PUT /bkt/o/a.txt?acl=")
+    testing.AssertTrue(has_header("x-amz-acl", "public-read"))
+    arm(xml_ok("<AccessControlPolicy/>"))
+    testing.AssertEqStr(aws.S3ObjectAcl(c, "o/a.txt"), "<AccessControlPolicy/>")
+    arm(http(200, "", ""))
+    testing.AssertTrue(aws.S3MakePublic(c, "o/a.txt").ok)
+    testing.AssertTrue(has_header("x-amz-acl", "public-read"))
+    arm(http(200, "", ""))
+    testing.AssertTrue(aws.S3MakePrivate(c, "o/a.txt").ok)
+    testing.AssertTrue(has_header("x-amz-acl", "private"))
+
+    arm(http(200, "", ""))
+    testing.AssertTrue(aws.S3SetLegalHold(c, "o/a.txt", true).ok)
+    testing.AssertEqStr(last_line(), "PUT /bkt/o/a.txt?legal-hold=")
+    testing.AssertTrue(last_body().find("<Status>ON</Status>") > 0)
+    arm(xml_ok("<LegalHold><Status>ON</Status></LegalHold>"))
+    testing.AssertTrue(aws.S3LegalHold(c, "o/a.txt"))
+    arm(xml_ok("<LegalHold><Status>OFF</Status></LegalHold>"))
+    testing.AssertFalse(aws.S3LegalHold(c, "o/a.txt"))
+    arm(http(200, "", ""))
+    testing.AssertTrue(aws.S3SetRetention(c, "o/a.txt", "compliance", 1700000000 as i64).ok)
+    testing.AssertEqStr(last_line(), "PUT /bkt/o/a.txt?retention=")
+    testing.AssertTrue(last_body().find("<Mode>COMPLIANCE</Mode>") > 0)
+    testing.AssertTrue(last_body().find("<RetainUntilDate>2023-11-14T22:13:20Z</RetainUntilDate>") > 0)
+    arm(http(200, "", ""))
+    testing.AssertTrue(aws.S3SetRetention(c, "o/a.txt", "other", 1700000000 as i64).ok)
+    testing.AssertTrue(last_body().find("<Mode>GOVERNANCE</Mode>") > 0)
+    testing.AssertTrue(drained())
+end
+
+func page(keys: str, token: str, truncated: bool): str:
+    mut more := "false"
+    if truncated: more = "true" end
+    mut out := "<ListBucketResult><Name>bkt</Name><IsTruncated>" + more + "</IsTruncated>"
+    if token != "": out += "<NextContinuationToken>" + token + "</NextContinuationToken>" end
+    ret out + keys + "</ListBucketResult>"
+end
+
+func entry(key: str, size: int): str:
+    ret "<Contents><Key>" + key + "</Key><Size>" + size + "</Size><ETag>\"e\"</ETag><LastModified>2024-01-02T03:04:05.000Z</LastModified></Contents>"
+end
+
+func test_listing():
+    c := cfg()
+    arm(xml_ok(page(entry("p/a", 1) + entry("p/b", 2), "", false)))
+    mut one := aws.S3List(c, aws.ListOptions { prefix = "p/", delimiter = "/", max_keys = 5, start_after = "p/0", fetch_owner = true })
+    testing.AssertTrue(one.ok)
+    testing.AssertEqStr(last_line(), "GET /bkt?delimiter=%2F&encoding-type=url&fetch-owner=true&list-type=2&max-keys=5&prefix=p%2F&start-after=p%2F0")
+    testing.AssertEqInt(aws.ListCount(one), 2)
+    testing.AssertEqInt64(aws.ListTotalSize(one), 3 as i64)
+    testing.AssertEqStr(aws.ListAt(one, 1).key, "p/b")
+    testing.AssertEqStr(aws.ListAt(one, 9).key, "")
+    aws.ListFree(one)
+
+    arm(xml_ok(page(entry("p/a", 1), "", false)))
+    mut by_prefix := aws.S3ListPrefix(c, "p/")
+    testing.AssertEqInt(aws.ListCount(by_prefix), 1)
+    testing.AssertEqStr(last_line(), "GET /bkt?encoding-type=url&list-type=2&prefix=p%2F")
+    aws.ListFree(by_prefix)
+
+    arm(xml_ok(page(entry("p/a", 1), "", false)))
+    mut legacy := aws.S3ListV1(c, aws.ListOptions { prefix = "p/" }, "p/0")
+    testing.AssertTrue(legacy.ok)
+    testing.AssertEqStr(last_line(), "GET /bkt?encoding-type=url&marker=p%2F0&prefix=p%2F")
+    aws.ListFree(legacy)
+
+    arm(xml_ok(page(entry("k1", 1) + entry("k2", 2), "tok-2", true)))
+    arm(xml_ok(page(entry("k3", 4), "", false)))
+    mut all := aws.S3ListAllWith(c, aws.ListOptions { prefix = "k", max_keys = 2 })
+    testing.AssertTrue(all.ok)
+    testing.AssertEqInt(aws.ListCount(all), 3)
+    testing.AssertEqInt64(aws.ListTotalSize(all), 7 as i64)
+    testing.AssertEqStr(last_line(), "GET /bkt?continuation-token=tok-2&encoding-type=url&list-type=2&max-keys=2&prefix=k")
+    aws.ListFree(all)
+
+    arm(xml_ok("<ListVersionsResult><IsTruncated>true</IsTruncated><NextKeyMarker>k</NextKeyMarker><NextVersionIdMarker>v2</NextVersionIdMarker><Version><Key>k</Key><VersionId>v2</VersionId><IsLatest>true</IsLatest><Size>3</Size></Version><DeleteMarker><Key>k</Key><VersionId>v1</VersionId></DeleteMarker></ListVersionsResult>"))
+    mut versions := aws.S3ListVersions(c, aws.ListOptions { prefix = "k" }, "k0", "v0")
+    testing.AssertTrue(versions.ok)
+    testing.AssertEqStr(last_line(), "GET /bkt?encoding-type=url&key-marker=k0&prefix=k&version-id-marker=v0&versions=")
+    testing.AssertEqInt(aws.ListCount(versions), 2)
+    testing.AssertEqStr(versions.next_version_marker, "v2")
+    testing.AssertTrue(aws.ListAt(versions, 0).is_latest)
+    testing.AssertTrue(aws.ListAt(versions, 1).delete_marker)
+    as_result := aws.ListToResult(versions)
+    testing.AssertTrue(as_result.ok)
+    testing.AssertEqInt64(as_result.length, 2 as i64)
+    aws.ListFree(versions)
+    arm(http(403, "", "<Error><Code>AccessDenied</Code><Message>no</Message></Error>"))
+    failed := aws.S3List(c, aws.ListOptions {})
+    testing.AssertFalse(aws.ListToResult(failed).ok)
+    testing.AssertEqStr(aws.ListToResult(failed).code, "AccessDenied")
+
+    arm(xml_ok(page(entry("a/1", 1) + entry("a/2", 1), "", false)))
+    mut keys := aws.S3Keys(c, "a/")
+    testing.AssertEqInt(aws.KeyCount(keys), 2)
+    testing.AssertEqStr(aws.KeyAt(keys, 1), "a/2")
+    testing.AssertEqStr(aws.KeyAt(keys, 7), "")
+    aws.KeyFree(keys)
+
+    mut doomed := aws.NewKeyList()
+    aws.KeyPush(doomed, "x/1")
+    aws.KeyPush(doomed, "x/<2>")
+    testing.AssertEqInt(aws.KeyCount(doomed), 2)
+    arm(xml_ok("<DeleteResult/>"))
+    testing.AssertTrue(aws.S3DeleteMany(c, doomed).ok)
+    testing.AssertEqStr(last_line(), "POST /bkt?delete=")
+    testing.AssertTrue(last_body().find("<Object><Key>x/1</Key></Object><Object><Key>x/&lt;2&gt;</Key></Object>") > 0)
+    testing.AssertTrue(hdr_get(last_head(), "Content-MD5").len() > 0)
+    arm(xml_ok("<DeleteResult><Error><Code>AccessDenied</Code><Message>nope</Message></Error></DeleteResult>"))
+    partial := aws.S3DeleteMany(c, doomed)
+    testing.AssertFalse(partial.ok)
+    testing.AssertEqStr(partial.code, "AccessDenied")
+    aws.KeyFree(doomed)
+    testing.AssertTrue(drained())
+end
+
+func test_wire():
+    c := cfg()
+    mut bucket_req := aws.NewBucketRequest("PUT", "other", "dir/file.bin")
+    aws.SetQueryInt(bucket_req, "partNumber", 4)
+    aws.SetFlag(bucket_req, "uploads")
+    data := "payload!"
+    aws.SetBody(bucket_req, data as void*, 8)
+    aws.SetUnsignedPayload(bucket_req)
+    arm(http(200, "ETag: \"w1\"\r\nx-custom: yes\r\n", ""))
+    res := aws.Do(c, bucket_req)
+    testing.AssertTrue(res.ok)
+    testing.AssertEqStr(last_line(), "PUT /other/dir/file.bin?partNumber=4&uploads=")
+    testing.AssertEqStr(last_body(), "payload!")
+    testing.AssertTrue(has_header("x-amz-content-sha256", aws.UNSIGNED_PAYLOAD))
+    testing.AssertEqStr(aws.ResultHeader(res, "x-custom"), "yes")
+
+    service_req := aws.NewServiceRequest("GET")
+    arm(xml_ok("<Buckets/>"))
+    testing.AssertTrue(aws.Do(c, service_req).ok)
+    testing.AssertEqStr(last_line(), "GET /")
+
+    arm(http(200, "ETag: \"b1\"\r\nx-note: raw\r\n", "binary-ish"))
+    mut raw := aws.DoBytes(c, aws.NewRequest("GET", "blob"))
+    testing.AssertTrue(raw.ok)
+    testing.AssertEqInt(raw.len, 10)
+    testing.AssertEqStr(aws.BytesHeader(raw, "x-note"), "raw")
+    testing.AssertEqStr(raw.etag, "b1")
+    aws.FreeBytes(raw)
+    arm(http(404, "", "<Error><Code>NoSuchKey</Code></Error>"))
+    mut missing := aws.DoBytes(c, aws.NewRequest("GET", "blob"))
+    testing.AssertFalse(missing.ok)
+    testing.AssertEqStr(missing.code, "NoSuchKey")
+    aws.FreeBytes(missing)
+
+    plain := aws.WithBucket(c, "else")
+    testing.AssertEqStr(plain.bucket, "else")
+    token := aws.WithSessionToken(c, "tok")
+    testing.AssertEqStr(token.session_token, "tok")
+    retrying := aws.WithRetry(c, 5, 20)
+    testing.AssertEqInt(retrying.retry, 5)
+    testing.AssertEqInt(retrying.retry_base_ms, 20)
+    creds := aws.WithCredentials(aws.NewConfig("http://x", "b"), "AK", "SK")
+    testing.AssertEqStr(creds.access_key, "AK")
+    testing.AssertEqStr(creds.secret_key, "SK")
+    failure := aws.Failure("because")
+    testing.AssertFalse(failure.ok)
+    testing.AssertEqStr(failure.error, "because")
+    testing.AssertTrue(drained())
+end
+
+func part_ok(tag: str): str:
+    ret http(200, "ETag: \"" + tag + "\"\r\n", "")
+end
+
+func test_multipart():
+    c := cfg()
+    arm(xml_ok("<InitiateMultipartUploadResult><Bucket>bkt</Bucket><Key>big.bin</Key><UploadId>U1</UploadId></InitiateMultipartUploadResult>"))
+    mut u := aws.S3CreateUpload(c, "big.bin", aws.PutOptions { content_type = "application/octet-stream" })
+    testing.AssertTrue(u.ok)
+    testing.AssertEqStr(u.upload_id, "U1")
+    testing.AssertEqStr(last_line(), "POST /bkt/big.bin?uploads=")
+    testing.AssertTrue(has_header("Content-Type", "application/octet-stream"))
+
+    arm(part_ok("p2"))
+    arm(part_ok("p1"))
+    two := "bb"
+    one := "a"
+    testing.AssertTrue(aws.S3UploadPart(c, u, 2, two as void*, 2).ok)
+    testing.AssertEqStr(last_line(), "PUT /bkt/big.bin?partNumber=2&uploadId=U1")
+    testing.AssertTrue(aws.S3UploadPart(c, u, 1, one as void*, 1).ok)
+    arm(xml_ok("<CopyPartResult><ETag>\"p3\"</ETag></CopyPartResult>"))
+    copied := aws.S3UploadPartCopy(c, u, 3, "src.bin", aws.CopyOptions {}, 0 as i64, 99 as i64)
+    testing.AssertTrue(copied.ok)
+    testing.AssertEqStr(last_line(), "PUT /bkt/big.bin?partNumber=3&uploadId=U1")
+    testing.AssertTrue(has_header("x-amz-copy-source", "/bkt/src.bin"))
+    testing.AssertTrue(has_header("x-amz-copy-source-range", "bytes=0-99"))
+    testing.AssertEqInt(aws.UploadParts(u), 3)
+    testing.AssertEqInt64(aws.UploadBytes(u), 103 as i64)
+    bad_number := aws.S3UploadPart(c, u, 0, one as void*, 1)
+    testing.AssertFalse(bad_number.ok)
+
+    arm(xml_ok("<CompleteMultipartUploadResult><ETag>\"final-3\"</ETag></CompleteMultipartUploadResult>"))
+    done := aws.S3CompleteUpload(c, u)
+    testing.AssertTrue(done.ok)
+    testing.AssertEqStr(done.etag, "final-3")
+    testing.AssertEqStr(last_line(), "POST /bkt/big.bin?uploadId=U1")
+    sorted := last_body().find("<PartNumber>1</PartNumber>") < last_body().find("<PartNumber>2</PartNumber>")
+    testing.AssertTrue(sorted)
+    testing.AssertTrue(last_body().find("&quot;p3&quot;") > 0)
+    arm(xml_ok("<Error><Code>InvalidPart</Code><Message>x</Message></Error>"))
+    testing.AssertEqStr(aws.S3CompleteUpload(c, u).code, "InvalidPart")
+    arm(http(204, "", ""))
+    testing.AssertTrue(aws.S3AbortUpload(c, u).ok)
+    testing.AssertEqStr(last_line(), "DELETE /bkt/big.bin?uploadId=U1")
+    aws.UploadFreeParts(u)
+    testing.AssertEqInt(aws.UploadParts(u), 0)
+    testing.AssertFalse(aws.S3CompleteUpload(c, u).ok)
+
+    arm(xml_ok("<ListPartsResult><IsTruncated>false</IsTruncated><Part><PartNumber>1</PartNumber><ETag>\"p1\"</ETag><Size>5242880</Size></Part><Part><PartNumber>2</PartNumber><ETag>\"p2\"</ETag><Size>7</Size></Part></ListPartsResult>"))
+    parts := aws.S3ListParts(c, "big.bin", "U1")
+    testing.AssertTrue(parts.ok)
+    testing.AssertEqStr(last_line(), "GET /bkt/big.bin?uploadId=U1")
+    testing.AssertEqInt(aws.PartCount(parts), 2)
+    testing.AssertEqStr(aws.PartAt(parts, 1).etag, "p2")
+    testing.AssertEqInt64(aws.PartAt(parts, 0).size, 5242880 as i64)
+    testing.AssertEqInt(aws.PartAt(parts, 8).number, 0)
+
+    arm(xml_ok("<ListMultipartUploadsResult><Upload><Key>big.bin</Key><UploadId>U1</UploadId><Initiated>2024-01-02T03:04:05.000Z</Initiated></Upload><Upload><Key>other.bin</Key><UploadId>U2</UploadId></Upload></ListMultipartUploadsResult>"))
+    uploads := aws.S3ListUploads(c, "big")
+    testing.AssertTrue(uploads.ok)
+    testing.AssertEqStr(last_line(), "GET /bkt?prefix=big&uploads=")
+    testing.AssertEqInt(aws.UploadCount(uploads), 2)
+    testing.AssertEqStr(aws.UploadAt(uploads, 1).upload_id, "U2")
+    testing.AssertEqInt64(aws.UploadAt(uploads, 0).initiated_epoch, 1704164645 as i64)
+    testing.AssertEqStr(aws.UploadAt(uploads, 5).key, "")
+    testing.AssertTrue(drained())
+end
+
+func test_large():
+    c := cfg()
+    data := mem.Allocate(16 as u64)
+    defer mem.Free(data)
+    mem.Set(data, 97, 16 as u64)
+    mut seen := lines.len()
+    arm(http(200, "", ""))
+    small := aws.S3PutLarge(c, "small.bin", data, 10, 0, aws.PutOptions {})
+    testing.AssertTrue(small.ok)
+    testing.AssertEqStr(last_line(), "PUT /bkt/small.bin")
+
+    arm(http_head(200, "ETag: \"s\"\r\n", 10485760))
+    arm(xml_ok("<InitiateMultipartUploadResult><UploadId>C1</UploadId></InitiateMultipartUploadResult>"))
+    arm(xml_ok("<CopyPartResult><ETag>\"c1\"</ETag></CopyPartResult>"))
+    arm(xml_ok("<CopyPartResult><ETag>\"c2\"</ETag></CopyPartResult>"))
+    arm(xml_ok("<CompleteMultipartUploadResult><ETag>\"copy-2\"</ETag></CompleteMultipartUploadResult>"))
+    seen = lines.len()
+    copy := aws.S3CopyLarge(c, "src/huge.bin", "dst/huge.bin", 5242880, aws.CopyOptions {})
+    testing.AssertTrue(copy.ok)
+    testing.AssertEqInt(lines.len(), seen + 5)
+    testing.AssertEqStr(lines.get(seen), "HEAD /bkt/src/huge.bin")
+    testing.AssertEqStr(lines.get(seen + 2), "PUT /bkt/dst/huge.bin?partNumber=1&uploadId=C1")
+    testing.AssertTrue(hdr_get(heads.get(seen + 3), "x-amz-copy-source-range") == "bytes=5242880-10485759")
+    testing.AssertEqStr(copy.etag, "copy-2")
+
+    arm(http_head(200, "", 100))
+    arm(xml_ok("<CopyObjectResult/>"))
+    testing.AssertTrue(aws.S3CopyLarge(c, "src/tiny.bin", "dst/tiny.bin", 0, aws.CopyOptions {}).ok)
+    testing.AssertEqStr(last_line(), "PUT /bkt/dst/tiny.bin")
+    testing.AssertTrue(drained())
+end
+
+func test_files():
+    c := cfg()
+    root := filepath.Join(os.TempDir(), "salam_aws_coverage_files")
+    dir.RemoveAll(root)
+    dir.MkdirAll(filepath.Join(root, "tree/inner"))
+    note := filepath.Join(root, "note.txt")
+    file.WriteText(note, "hello")
+    file.WriteText(filepath.Join(root, "tree/top.csv"), "a,b")
+    file.WriteText(filepath.Join(root, "tree/inner/leaf.txt"), "leaf")
+    testing.AssertEqStr(aws.S3FileEtag(note, 0), "5d41402abc4b2a76b9719d911017c592")
+    testing.AssertEqStr(aws.S3FileEtag(filepath.Join(root, "missing.txt"), 0), "")
+
+    arm(http(200, "ETag: \"up1\"\r\n", ""))
+    up := aws.S3UploadFile(c, "docs/note.txt", note, aws.PutOptions {})
+    testing.AssertTrue(up.ok)
+    testing.AssertEqInt64(up.bytes, 5 as i64)
+    testing.AssertEqInt(up.parts, 1)
+    testing.AssertEqStr(up.etag, "up1")
+    testing.AssertEqStr(last_line(), "PUT /bkt/docs/note.txt")
+    testing.AssertEqStr(last_body(), "hello")
+    testing.AssertTrue(str.StartsWith(hdr_get(last_head(), "Content-Type"), "text/plain"))
+    arm(http(200, "ETag: \"up2\"\r\n", ""))
+    named := aws.S3UploadFileAs(c, "docs/blob", note, "application/x-custom")
+    testing.AssertTrue(named.ok)
+    testing.AssertTrue(has_header("Content-Type", "application/x-custom"))
+    absent := aws.S3UploadFile(c, "docs/none", filepath.Join(root, "missing.txt"), aws.PutOptions {})
+    testing.AssertFalse(absent.ok)
+
+    arm(http(200, "ETag: \"d1\"\r\n", ""))
+    arm(http(200, "ETag: \"d2\"\r\n", ""))
+    seen := lines.len()
+    batch := aws.S3UploadDir(c, filepath.Join(root, "tree"), "backup", aws.PutOptions {})
+    testing.AssertTrue(batch.ok)
+    testing.AssertEqInt(batch.files, 2)
+    testing.AssertEqInt64(batch.bytes, 7 as i64)
+    testing.AssertEqInt(lines.len(), seen + 2)
+    targets := lines.get(seen) + " " + lines.get(seen + 1)
+    testing.AssertTrue(targets.find("PUT /bkt/backup/top.csv") >= 0)
+    testing.AssertTrue(targets.find("PUT /bkt/backup/inner/leaf.txt") >= 0)
+    notdir := aws.S3UploadDir(c, note, "x", aws.PutOptions {})
+    testing.AssertFalse(notdir.ok)
+    testing.AssertEqStr(notdir.code, "NotADirectory")
+
+    out := filepath.Join(root, "down.txt")
+    arm(http_head(200, "ETag: \"g1\"\r\n", 5))
+    arm(http(206, "", "hello"))
+    got := aws.S3DownloadFile(c, "docs/note.txt", out)
+    testing.AssertTrue(got.ok)
+    testing.AssertEqInt64(got.bytes, 5 as i64)
+    testing.AssertEqStr(file.ReadText(out), "hello")
+    testing.AssertTrue(has_header("Range", "bytes=0-4"))
+    arm(http_head(404, "", 0))
+    testing.AssertFalse(aws.S3DownloadFile(c, "docs/none.txt", filepath.Join(root, "none.txt")).ok)
+
+    arm(xml_ok(page(entry("pre/a.txt", 1) + entry("pre/sub/b.txt", 2) + entry("pre/sub/", 0), "", false)))
+    arm(http_head(200, "", 1))
+    arm(http(206, "", "A"))
+    arm(http_head(200, "", 2))
+    arm(http(206, "", "BB"))
+    dest := filepath.Join(root, "mirror")
+    pulled := aws.S3DownloadPrefix(c, "pre/", dest)
+    testing.AssertTrue(pulled.ok)
+    testing.AssertEqInt(pulled.files, 2)
+    testing.AssertEqInt(pulled.skipped, 1)
+    testing.AssertEqInt64(pulled.bytes, 3 as i64)
+    testing.AssertEqStr(file.ReadText(filepath.Join(dest, "a.txt")), "A")
+    testing.AssertEqStr(file.ReadText(filepath.Join(dest, "sub/b.txt")), "BB")
+    dir.RemoveAll(root)
+    testing.AssertTrue(drained())
+end
+
+func main:
+    sync.Add(wg, 1 as i64)
+    t := spawn(serve)
+    sync.Wait(wg)
+    test_objects()
+    test_buckets()
+    test_object_tags()
+    test_listing()
+    test_wire()
+    test_multipart()
+    test_large()
+    test_files()
+    aws.S3Delete(cfg(), "__stop")
+    join(t)
+    testing.Summary()
+    ret 0
+end

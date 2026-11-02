@@ -257,3 +257,22 @@ export const IconTelegram = (p: P) => (
     <path d="M21.9 3.4 2.7 10.8c-1 .4-1 1.2-.2 1.4l4.9 1.5 1.9 5.8c.2.6.4.8.8.8.4 0 .6-.2.8-.4l2.3-2.2 4.8 3.5c.9.5 1.5.2 1.7-.8L23 4.8c.3-1.3-.5-1.9-1.1-1.4zM9.2 13.2l9.4-5.9c.4-.3.8-.1.5.2l-7.8 7-.3 3.5z" />
   </svg>
 );
+export const IconBolt = (p: P) => (
+  <Base {...p}>
+    <path d="M13 3 5 14h6l-1 7 8-11h-6l1-7z" />
+  </Base>
+);
+export const IconGauge = (p: P) => (
+  <Base {...p}>
+    <path d="M3.5 17a9 9 0 1 1 17 0" />
+    <path d="m12 14 4-4" />
+    <circle cx="12" cy="14" r="1" />
+  </Base>
+);
+export const IconBrain = (p: P) => (
+  <Base {...p}>
+    <path d="M10 4.5A3 3 0 0 0 6 7a3 3 0 0 0-2 5 3 3 0 0 0 2 5 3 3 0 0 0 6 1.5V6a2 2 0 0 0-2-1.5z" />
+    <path d="M14 4.5A3 3 0 0 1 18 7a3 3 0 0 1 2 5 3 3 0 0 1-2 5 3 3 0 0 1-6 1.5" />
+    <path d="M8 10h2M14 10h2M8.5 14H10M14 14h1.5" />
+  </Base>
+);

@@ -43,7 +43,7 @@ def sections(data):
 
 
 def exports(data, dyld):
-    start, size = dyld[8], dyld[9]
+    start, size = dyld.exports
     found = {}
 
     def walk(node, prefix):
@@ -70,7 +70,7 @@ def exports(data, dyld):
 
 def main():
     with open(sys.argv[1], "rb") as f:
-        data = f.read()
+        data = machorun.thin(f.read())
     if struct.unpack_from("<I", data, 12)[0] != 6:
         raise SystemExit("machodylib: not a dylib")
     segs, dyld, _ = machorun.parse(data)

@@ -404,6 +404,117 @@ func mac_system_lib(spec: str): bool:
     ret str.Len(spec) == 0 or str.Equals(spec, "m") or str.Equals(spec, "c") or str.Equals(spec, "pthread") or str.Equals(spec, "System") or str.Equals(spec, "dl")
 end
 
+func mac_ver_of(s: str, at: int): i64:
+    p := (s as void*) as u8*
+    n := str.Len(s)
+    mut part := [0, 0, 0]
+    mut idx := 0
+    mut k := at
+    mut digits := false
+    until k < n and idx < 3:
+        c := p[k] as int
+        if c >= 48 and c <= 57:
+            part[idx] = part[idx] * 10 + c - 48
+            digits = true
+        else c == 46 or c == 95:
+            idx += 1
+        else:
+            break
+        end
+        k += 1
+    end
+    if not digits:
+        ret 0 - 1
+    end
+    ret ((part[0] as i64) << (16 as i64)) | (((part[1] & 255) as i64) << (8 as i64)) | ((part[2] & 255) as i64)
+end
+
+func mac_version(triple: str): i64:
+    t := str.Lower(triple)
+    mut v := 0 - 1 as i64
+    i := str.Find(t, "macos")
+    if i >= 0:
+        mut at := i + 5
+        if str.StartsWith(str.Substr(t, at, str.Len(t) - at), "x"):
+            at += 1
+        end
+        v = mac_ver_of(t, at)
+    else str.Find(t, "darwin") >= 0:
+        d := mac_ver_of(t, str.Find(t, "darwin") + 6)
+        if d >= (0 as i64):
+            dm := d >> (16 as i64)
+            v = dm >= (20 as i64) ? ((dm - (9 as i64)) << (16 as i64)) : ((0x000A0000 as i64) | ((dm - (4 as i64)) << (8 as i64)))
+        end
+    end
+    if v < (0 as i64):
+        v = mac_ver_of(os.Env("MACOSX_DEPLOYMENT_TARGET"), 0)
+    end
+    if v < (0 as i64):
+        v = 0x000C0000
+    end
+    floor := str.Equals(tri_arch(triple), "aarch64") ? (0x000B0000 as i64) : (0x000A0E00 as i64)
+    ret v < floor ? floor : v
+end
+
+func mac_is_universal(triple: str): bool:
+    ret str.StartsWith(str.Lower(triple), "universal-") and is_apple(triple)
+end
+
+func mac_universal_build(opt &: Dr): int:
+    lgr := lg.New(opt.log_level, resolve_color(opt.color))
+    if opt.command == CMD_OBJ or str.Len(opt.lib_kind) > 0 or str.Equals(opt.backend, "c"):
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, i18.Tr("a universal macOS target builds executables with --backend=native or --backend=llvm; build objects and libraries once per architecture"))
+        ret 2
+    end
+    if str.Equals(opt.backend, "auto"):
+        opt.backend = "native"
+    end
+    full := opt.llvm_target
+    out0 := opt.output
+    exe0 := opt.exe_path
+    mut final := out0
+    if str.Len(final) == 0:
+        final = output_stem_of(opt.input)
+    end
+    dir := os.TempDir() + "/salam-fat-" + driver_pid() + "-" + time.NowMicros()
+    rest := str.Substr(full, 9, str.Len(full) - 9)
+    mut slices := Vector {} as Vector<str>
+    mut rc := 0
+    each arch in ["x86_64", "arm64"]:
+        sdir := dir + "/" + arch
+        if os.MkdirAll(sdir) != 0:
+            lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("cannot write '%s'"), co.ArgStr(sdir)))
+            rc = 2
+            break
+        end
+        opt.llvm_target = arch + rest
+        opt.output = sdir + "/" + pth.PathBase(final)
+        opt.exe_path = ""
+        rc = LlvmBuild(opt)
+        if rc != 0:
+            break
+        end
+        slices.push(opt.output)
+    end
+    opt.llvm_target = full
+    opt.output = out0
+    opt.exe_path = exe0
+    if rc == 0:
+        mut err := ""
+        if nl.WriteFat(slices, final, err):
+            lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, co.Format1(i18.Tr("wrote %s"), co.ArgStr(final)))
+            if str.Len(opt.exe_path) == 0:
+                opt.exe_path = final
+            end
+        else:
+            lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, err)
+            rc = 1
+        end
+    end
+    _rm := os.RemoveAll(dir)
+    ret rc
+end
+
 func macho_link_ok(triple: str, o: lv.Options, why &: str): bool:
     arch := tri_arch(triple)
     if not is_apple(triple) or not (str.Equals(arch, "x86_64") or str.Equals(arch, "aarch64")):
@@ -436,6 +547,7 @@ func native_link_macho_as(lgr: lg.Logger, obj: str, exe: str, o: lv.Options, ins
     if str.Len(install) > 0:
         nl.SetShared(l, install)
     end
+    nl.SetMacosVersion(l, mac_version(o.target_triple))
     nl.AddInput(l, obj)
     repeat o.link_libs.len() in i:
         spec := lib_spec(o.link_libs.get(i))

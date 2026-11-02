@@ -1,0 +1,89 @@
+import db.elasticsearch
+
+func main:
+    c := elasticsearch.Connect("http://localhost:9200")
+
+    mut words := Vector {} as Vector<str>
+    words.push("poetry")
+    words.push("history")
+    mut fields := Vector {} as Vector<str>
+    fields.push("title")
+    fields.push("summary")
+    mut ids := Vector {} as Vector<str>
+    ids.push("1")
+    ids.push("2")
+
+    mut must := Vector {} as Vector<str>
+    must.push(elasticsearch.MatchAnd("title", "persian poetry"))
+    must.push(elasticsearch.MatchFuzzy("title", "shahnama"))
+    must.push(elasticsearch.MatchPhrase("summary", "book of kings"))
+    must.push(elasticsearch.MatchPhrasePrefix("summary", "book of"))
+    must.push(elasticsearch.MultiMatch("kings", fields))
+    mut filter := Vector {} as Vector<str>
+    filter.push(elasticsearch.TermInt("year", 1010 as i64))
+    filter.push(elasticsearch.TermBool("published", true))
+    filter.push(elasticsearch.Terms("tag", words))
+    filter.push(elasticsearch.RangeExclusive("year", "900", "1500"))
+    filter.push(elasticsearch.FieldExists("author"))
+    filter.push(elasticsearch.Ids(ids))
+    filter.push(elasticsearch.Nested("reviews", elasticsearch.Term("reviews.stars", "5")))
+    filter.push(elasticsearch.GeoDistance("place", 36.2, 59.6, "50km"))
+    mut should := Vector {} as Vector<str>
+    should.push(elasticsearch.Prefix("author", "fer"))
+    should.push(elasticsearch.Wildcard("author", "f*si"))
+    should.push(elasticsearch.Regexp("author", "fer.*"))
+    should.push(elasticsearch.Fuzzy("author", "ferdowsy"))
+    should.push(elasticsearch.QueryString("title:shah* AND year:[900 TO 1500]"))
+    should.push(elasticsearch.SimpleQueryString("epic | lyric", fields))
+    mut none := Vector {} as Vector<str>
+    none.push(elasticsearch.MatchNone())
+
+    query := elasticsearch.Bool(must, filter, should, none)
+    println elasticsearch.Or(should)
+    println elasticsearch.ConstantScore(elasticsearch.FieldExists("author"))
+
+    mut vector := Vector {} as Vector<f64>
+    vector.push(0.1)
+    vector.push(0.9)
+    println elasticsearch.Knn("embedding", vector, 5, 50)
+
+    mut aggs := elasticsearch.AddAgg("", "authors", elasticsearch.CardinalityAgg("author"))
+    aggs = elasticsearch.AddAgg(aggs, "first", elasticsearch.MinAgg("year"))
+    aggs = elasticsearch.AddAgg(aggs, "total", elasticsearch.SumAgg("pages"))
+    aggs = elasticsearch.AddAgg(aggs, "pages", elasticsearch.StatsAgg("pages"))
+    aggs = elasticsearch.AddAgg(aggs, "values", elasticsearch.ValueCountAgg("year"))
+    aggs = elasticsearch.AddAgg(aggs, "by_century", elasticsearch.HistogramAgg("year", 100.0))
+    aggs = elasticsearch.AddAgg(aggs, "by_month", elasticsearch.DateHistogramAgg("added", "month"))
+    aggs = elasticsearch.AddAgg(aggs, "drafts", elasticsearch.FilterAgg(elasticsearch.Term("status", "draft")))
+    aggs = elasticsearch.AddAgg(aggs, "latest", elasticsearch.TopHitsAgg(3))
+
+    mut sort := Vector {} as Vector<str>
+    sort.push(elasticsearch.SortAsc("year"))
+    req := elasticsearch.SearchRequest { query = query, size = 20, sort = sort, aggs = aggs }
+    body := elasticsearch.SearchBody(req)
+    println body
+    println elasticsearch.AddMember(body, "track_total_hits", "true")
+
+    res := elasticsearch.SearchRaw(c, "books", body)
+    if not res.ok:
+        println elasticsearch.Error(c)
+        ret
+    end
+    println res.total, elasticsearch.AggRaw(res, "pages")
+    each b in elasticsearch.AggBucketsIn(elasticsearch.AggRaw(res, "by_century"), "buckets"):
+        println b.key, b.doc_count
+    end
+
+    quick := elasticsearch.SearchQuery(c, "books", elasticsearch.MatchAll(), 5)
+    println quick.total
+
+    mut bodies := Vector {} as Vector<str>
+    bodies.push(`{"query":` + elasticsearch.Match("title", "shahnameh") + `}`)
+    bodies.push(`{"query":` + elasticsearch.Prefix("author", "fer") + `}`)
+    each r in elasticsearch.MSearch(c, "books", bodies):
+        println r.ok, r.total
+    end
+
+    parsed := elasticsearch.ParseSearchResult(`{"took":1,"hits":{"total":{"value":0,"relation":"eq"},"hits":[]}}`)
+    println parsed.total
+end

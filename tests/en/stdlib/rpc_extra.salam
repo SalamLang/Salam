@@ -1,0 +1,299 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import rpc
+import encoding.value
+import compress
+import net.http
+import net.router
+import net.tcp
+import testing
+import sync
+
+mut srv wg := sync.NewWaitGroup()
+mut bound port := 0
+mut server := rpc.NewServer(0, rpc.RPC_CODEC_JSON)
+mut line server := tcp.Server {}
+
+func half(slot: i64):
+    rpc.ReplyFloat(slot, rpc.CallParamFloat(slot, "x", 0) / 2.0)
+end
+
+func flag(slot: i64):
+    rpc.ReplyBool(slot, rpc.CallParamBool(slot, "on", 0))
+end
+
+func info(slot: i64):
+    req := rpc.CallRequest(slot)
+    params := rpc.CallParams(slot)
+    rpc.ReplyStr(slot, req.method + ":" + rpc.CallParamCount(slot) + ":" + rpc.CallIsNotification(slot) + ":" + value.IsArray(params))
+end
+
+func nothing(slot: i64):
+    rpc.ReplyNull(slot)
+end
+
+func deny(slot: i64):
+    rpc.FailWithData(slot, 0 - 32001, "denied", value.ValueString("why"))
+end
+
+func web entry(ctx: i64):
+    http.Json(ctx, rpc.HandleText(http.Body(ctx)))
+end
+
+func serve loopback():
+    rpc.SetFraming(server, rpc.RPC_FRAME_HEADER)
+    rpc.Listen(server)
+    bound port = rpc.Port(server)
+    sync.Done(srv wg)
+    rpc.ServeCount(server, 1)
+    rpc.StopServer(server)
+end
+
+func serve line():
+    c := tcp.Accept(line server)
+    testing.AssertEqInt(rpc.ServeConn(c.fd, rpc.RPC_CODEC_JSON, rpc.RPC_FRAME_LINE), 2)
+    tcp.Close(c)
+end
+
+func check constructors():
+    mut args := value.NewValueArray()
+    value.ArrayPush(args, value.ValueInt(7 as i64))
+    value.ArrayPush(args, value.ValueString("txt"))
+    value.ArrayPush(args, value.ValueBool(true))
+    value.ArrayPush(args, value.ValueFloat(1.5))
+    req := rpc.NewRequestStrId("m", args, "abc")
+    testing.AssertTrue(req.has_id)
+    testing.AssertEqStr(value.AsString(req.id), "abc")
+    testing.AssertEqStr(rpc.JsonEncodeRequest(req), `{"jsonrpc": "2.0", "method": "m", "params": [7, "txt", true, 1.5], "id": "abc"}`)
+    testing.AssertEqInt64(value.AsInt(rpc.ParamAt(req, 0)), 7)
+    testing.AssertTrue(value.IsNull(rpc.ParamAt(req, 9)))
+    testing.AssertEqStr(rpc.ParamStr(req, "", 1), "txt")
+    testing.AssertTrue(rpc.ParamBool(req, "", 2))
+    testing.AssertTrue(rpc.ParamFloat(req, "", 3) > 1.49 and rpc.ParamFloat(req, "", 3) < 1.51)
+    testing.AssertTrue(rpc.HasParam(req, "", 0))
+    testing.AssertFalse(rpc.HasParam(req, "", 8))
+
+    mut named := value.NewValueObject()
+    value.ObjectSet(named, "who", value.ValueString("ali"))
+    note := rpc.NewNotification("hello", named)
+    testing.AssertTrue(rpc.IsNotification(note))
+    testing.AssertEqStr(rpc.JsonEncodeRequest(note), `{"jsonrpc": "2.0", "method": "hello", "params": {"who": "ali"}}`)
+    testing.AssertEqStr(value.AsString(rpc.ParamNamed(note, "who")), "ali")
+    testing.AssertTrue(value.IsNull(rpc.ParamNamed(note, "nobody")))
+    testing.AssertTrue(rpc.HasParam(note, "who", 0))
+    testing.AssertFalse(rpc.HasParam(note, "nobody", 0))
+
+    good := rpc.NewResponse(value.ValueInt(3 as i64), value.ValueFloat(2.5))
+    testing.AssertTrue(rpc.ResultFloat(good) > 2.49 and rpc.ResultFloat(good) < 2.51)
+    testing.AssertEqStr(rpc.JsonEncodeResponse(good), `{"jsonrpc": "2.0", "result": 2.5, "id": 3}`)
+    testing.AssertEqStr(rpc.ErrorMessage(good), "")
+
+    err := rpc.ErrorWithData(0 - 5, "boom", value.ValueString("d"))
+    testing.AssertTrue(err.has_data)
+    bad := rpc.NewErrorResponse(value.ValueInt(4 as i64), err)
+    testing.AssertEqStr(rpc.ErrorMessage(bad), "boom")
+    testing.AssertTrue(rpc.ResultFloat(bad) == 0.0)
+    testing.AssertEqStr(rpc.JsonEncodeResponse(bad), `{"jsonrpc": "2.0", "error": {"code": -5, "message": "boom", "data": "d"}, "id": 4}`)
+
+    std := rpc.StdError(rpc.RPC_METHOD_NOT_FOUND)
+    testing.AssertEqStr(std.message, "Method not found")
+    testing.AssertFalse(std.has_data)
+    testing.AssertEqStr(rpc.JsonTopLevelError(rpc.StdError(rpc.RPC_PARSE_ERROR)), `{"jsonrpc": "2.0", "error": {"code": -32700, "message": "Parse error"}, "id": null}`)
+
+    mut rs := rpc.Responses {}
+    rs.is_batch = true
+    rs.items.push(good)
+    rs.items.push(bad)
+    testing.AssertTrue(rpc.JsonEncodeResponses(rs).len() > 0)
+    testing.AssertEqStr(rpc.JsonEncodeResponses(rs).substr(0, 1), "[")
+end
+
+func check codecs():
+    mut args := value.NewValueArray()
+    value.ArrayPush(args, value.ValueInt(8 as i64))
+    req := rpc.NewRequest("half", args, 21 as i64)
+
+    mut wire := rpc.EncodeRequest(rpc.RPC_CODEC_MSGPACK, req)
+    testing.AssertTrue(compress.BufLen(wire) > 0)
+    batch := rpc.DecodeBatch(rpc.RPC_CODEC_MSGPACK, wire)
+    testing.AssertTrue(batch.ok)
+    testing.AssertEqStr(batch.items.get(0).method, "half")
+    batch2 := rpc.MsgpackDecodeBatch(wire)
+    testing.AssertEqInt(batch2.items.len(), 1)
+    testing.AssertEqInt64(batch2.items.get(0).msgid, 21)
+
+    out := rpc.InvokeBatch(batch)
+    testing.AssertEqInt(out.items.len(), 1)
+    testing.AssertTrue(rpc.ResultFloat(out.items.get(0)) > 3.99 and rpc.ResultFloat(out.items.get(0)) < 4.01)
+
+    mut packed := rpc.EncodeResponses(rpc.RPC_CODEC_MSGPACK, out)
+    mut ok := false
+    decoded := rpc.DecodeResponse(rpc.RPC_CODEC_MSGPACK, packed, ok)
+    testing.AssertTrue(ok)
+    testing.AssertTrue(rpc.ResultFloat(decoded) > 3.99 and rpc.ResultFloat(decoded) < 4.01)
+
+    mut one := rpc.MsgpackEncodeResponse(out.items.get(0))
+    testing.AssertTrue(compress.BufLen(one) > 0)
+    mut ok2 := false
+    again := rpc.MsgpackDecodeResponse(one, ok2)
+    testing.AssertTrue(ok2)
+    testing.AssertEqInt64(again.msgid, 21)
+
+    mut top := rpc.EncodeTopLevelError(rpc.RPC_CODEC_MSGPACK, rpc.StdError(rpc.RPC_PARSE_ERROR))
+    testing.AssertTrue(compress.BufLen(top) > 0)
+    mut top json := rpc.EncodeTopLevelError(rpc.RPC_CODEC_JSON, rpc.StdError(rpc.RPC_PARSE_ERROR))
+    testing.AssertContains(compress.BufToStrUnsafe(top json), "Parse error")
+    compress.BufFree(top json)
+    compress.BufFree(top)
+    compress.BufFree(one)
+    compress.BufFree(packed)
+    compress.BufFree(wire)
+end
+
+func check handlers():
+    mut r := rpc.HandleText(`{"jsonrpc":"2.0","method":"info","params":[1,2,3],"id":1}`)
+    testing.AssertContains(r, `"result": "info:3:false:true"`)
+    r = rpc.HandleText(`{"jsonrpc":"2.0","method":"half","params":{"x":5},"id":2}`)
+    testing.AssertContains(r, `"result": 2.5`)
+    r = rpc.HandleText(`{"jsonrpc":"2.0","method":"flag","params":{"on":true},"id":3}`)
+    testing.AssertContains(r, `"result": true`)
+    r = rpc.HandleText(`{"jsonrpc":"2.0","method":"nothing","id":4}`)
+    testing.AssertContains(r, `"result": null`)
+    r = rpc.HandleText(`{"jsonrpc":"2.0","method":"deny","id":5}`)
+    testing.AssertContains(r, `"code": -32001`)
+    testing.AssertContains(r, `"data": "why"`)
+end
+
+func check stream helpers():
+    mut s := rpc.NewMemStream()
+    testing.AssertEqInt(rpc.StreamPending(s), 0)
+    rpc.FeedStr(s, "abc\nde")
+    testing.AssertEqInt(rpc.StreamPending(s), 6)
+    mut ok := false
+    testing.AssertEqStr(rpc.ReadFrameStr(s, rpc.RPC_FRAME_LINE, ok), "abc")
+    testing.AssertEqInt(rpc.StreamPending(s), 2)
+    testing.AssertFalse(rpc.StreamClosed(s))
+    rpc.FreeStream(s)
+
+    mut framed := rpc.FrameEncodeStr(rpc.RPC_FRAME_HEADER, "hello")
+    testing.AssertEqStr(compress.BufToStrUnsafe(framed), "Content-Length: 5\r\n\r\nhello")
+    mut line := rpc.FrameEncodeStr(rpc.RPC_FRAME_LINE, "hello")
+    testing.AssertEqInt(compress.BufLen(line), 6)
+    compress.BufFree(line)
+    compress.BufFree(framed)
+end
+
+func check live calls():
+    sync.Add(srv wg, 1 as i64)
+    t := spawn(serve loopback)
+    sync.Wait(srv wg)
+    testing.AssertTrue(bound port > 0)
+
+    conn := tcp.Dial("127.0.0.1", bound port)
+    testing.AssertTrue(tcp.ConnOk(conn))
+    mut c := rpc.ClientFromFd(conn.fd, rpc.RPC_CODEC_JSON)
+    rpc.ClientSetFraming(c, rpc.RPC_FRAME_HEADER)
+    testing.AssertTrue(rpc.ClientOk(c))
+    testing.AssertEqStr(rpc.ClientError(c), "")
+
+    mut args := value.NewValueArray()
+    value.ArrayPush(args, value.ValueFloat(9.0))
+    r1 := rpc.Call(c, "half", args)
+    testing.AssertTrue(rpc.ResultFloat(r1) > 4.49 and rpc.ResultFloat(r1) < 4.51)
+
+    mut reqs := Vector {} as Vector<rpc.Request>
+    reqs.push(rpc.NewRequest("half", args, 0 as i64))
+    reqs.push(rpc.NewNotification("nothing", value.NewValueArray()))
+    reqs.push(rpc.NewRequest("deny", value.NewValueArray(), 0 as i64))
+    answers := rpc.CallBatch(c, reqs)
+    testing.AssertEqInt(answers.items.len(), 2)
+    testing.AssertTrue(rpc.ResultFloat(answers.items.get(0)) > 4.49)
+    testing.AssertEqStr(rpc.ErrorMessage(answers.items.get(1)), "denied")
+
+    rpc.CloseClient(c)
+    after := rpc.Call(c, "half", args)
+    testing.AssertTrue(rpc.IsErrorResponse(after))
+    testing.AssertEqStr(rpc.ClientError(c), "client is not connected")
+
+    join(t)
+
+    line server = tcp.Bind(0)
+    t2 := spawn(serve line)
+    raw := tcp.Dial("127.0.0.1", tcp.Port(line server))
+    testing.AssertTrue(tcp.ConnOk(raw))
+    testing.AssertTrue(rpc.WriteFrameStr(raw.fd, rpc.RPC_FRAME_LINE, `{"jsonrpc":"2.0","method":"half","params":[3],"id":1}`))
+    mut body := compress.BufFromStr(`{"jsonrpc":"2.0","method":"flag","params":[true],"id":2}`)
+    testing.AssertTrue(rpc.WriteFrame(raw.fd, rpc.RPC_FRAME_LINE, body))
+    mut st := rpc.NewStream(raw.fd)
+    mut ok := false
+    first := rpc.ReadFrameStr(st, rpc.RPC_FRAME_LINE, ok)
+    testing.AssertTrue(ok)
+    testing.AssertContains(first, `"result": 1.5`)
+    second := rpc.ReadFrameStr(st, rpc.RPC_FRAME_LINE, ok)
+    testing.AssertTrue(ok)
+    testing.AssertContains(second, `"result": true`)
+    rpc.FreeStream(st)
+    compress.BufFree(body)
+    tcp.Close(raw)
+    join(t2)
+    tcp.CloseServer(line server)
+end
+
+func check web call():
+    mut r := router.NewRouter()
+    router.Post(r, "/rpc", web entry)
+    mut s := http.NewServer(23841)
+    http.Use(s, r)
+    testing.AssertTrue(http.RunBackground(s))
+    mut args := value.NewValueArray()
+    value.ArrayPush(args, value.ValueFloat(7.0))
+    resp := rpc.CallHTTP("http://127.0.0.1:23841/rpc", "half", args, 9 as i64)
+    testing.AssertTrue(rpc.ResultFloat(resp) > 3.49 and rpc.ResultFloat(resp) < 3.51)
+    gone := rpc.CallHTTP("http://127.0.0.1:23841/rpc", "nope", args, 10 as i64)
+    testing.AssertEqInt(rpc.ErrorCode(gone), rpc.RPC_METHOD_NOT_FOUND)
+    down := rpc.CallHTTP("http://127.0.0.1:1/rpc", "half", args, 11 as i64)
+    testing.AssertEqStr(rpc.ErrorMessage(down), "HTTP request failed")
+end
+
+func check registry():
+    names := rpc.ListMethods()
+    testing.AssertEqInt(names.len(), 5)
+    testing.AssertEqInt(rpc.MethodCount(), 5)
+    rpc.ResetRegistry()
+    testing.AssertEqInt(rpc.ListMethods().len(), 0)
+    testing.AssertFalse(rpc.HasMethod("half"))
+    gone := rpc.HandleText(`{"jsonrpc":"2.0","method":"half","params":[1],"id":1}`)
+    testing.AssertContains(gone, "Method not found")
+end
+
+func main:
+    rpc.Register("half", half)
+    rpc.Register("flag", flag)
+    rpc.Register("info", info)
+    rpc.Register("nothing", nothing)
+    rpc.Register("deny", deny)
+
+    check constructors()
+    check codecs()
+    check handlers()
+    check stream helpers()
+    check live calls()
+    check web call()
+    testing.AssertEqInt(rpc.ServeStdio(rpc.RPC_FRAME_LINE), 0)
+    check registry()
+    ret testing.Summary()
+end

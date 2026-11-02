@@ -61,7 +61,11 @@ func perturb(ps &: nn.ParamStore):
     end
 end
 
-func main:
+func fails(label: str, e: Error):
+    println label + ": " + e.kind_name() + " | " + e.to_str() + " [" + e.code + "]"
+end
+
+func main(): int throws:
     mut s := tensor.Shape2(4, 6)
     mut x := tensor.RandUniform(s, 0.0 - 1.0, 1.0, 3)
     s.free()
@@ -75,23 +79,35 @@ func main:
     perturb(ps)
     mut after_perturb := run(model, ps, x)
     testing.AssertFalse(tensor.Equal(before, after_perturb))
-    testing.AssertTrue(nn.LoadCheckpointBuf(buf, ps))
+    try nn.LoadCheckpointBuf(buf, ps)
     mut restored := run(model, ps, x)
     testing.AssertTrue(tensor.Equal(before, restored))
 
     mut bad := compress.BufClone(buf)
     compress.BufSet(bad, 30, (compress.BufGet(bad, 30) + 1) & 255)
-    testing.AssertFalse(nn.LoadCheckpointBuf(bad, ps))
+    try:
+        nn.LoadCheckpointBuf(bad, ps)
+    catch e:
+        fails("damaged", e)
+    end
     mut junk := compress.BufFromStr("definitely not a checkpoint, but long enough")
-    testing.AssertFalse(nn.LoadCheckpointBuf(junk, ps))
+    try:
+        nn.LoadCheckpointBuf(junk, ps)
+    catch e:
+        fails("junk", e)
+    end
 
     mut ps2 := nn.ParamStore {}
     mut g2 := tensor.NewRng(1)
     _other := nn.NewLinear(ps2, "other", 6, 8, g2)
-    testing.AssertFalse(nn.LoadCheckpointBuf(buf, ps2))
+    try:
+        nn.LoadCheckpointBuf(buf, ps2)
+    catch e:
+        fails("other model", e)
+    end
     mut ps3 := nn.ParamStore {}
     mut m3 := build(ps3, 1)
-    testing.AssertTrue(nn.LoadCheckpointBuf(buf, ps3))
+    try nn.LoadCheckpointBuf(buf, ps3)
     mut same := run(m3, ps3, x)
     testing.AssertTrue(tensor.Equal(before, same))
 
@@ -102,15 +118,19 @@ func main:
     testing.AssertTrue(nn.SaveCheckpoint(path, ps))
     testing.AssertTrue(nn.SaveCheckpoint(gzpath, ps))
     perturb(ps)
-    testing.AssertTrue(nn.LoadCheckpoint(path, ps))
+    try nn.LoadCheckpoint(path, ps)
     mut from_file := run(model, ps, x)
     testing.AssertTrue(tensor.Equal(before, from_file))
     perturb(ps)
-    testing.AssertTrue(nn.LoadCheckpoint(gzpath, ps))
+    try nn.LoadCheckpoint(gzpath, ps)
     mut from_gz := run(model, ps, x)
     testing.AssertTrue(tensor.Equal(before, from_gz))
     missing := filepath.Join(dir, "missing.slmt")
-    testing.AssertFalse(nn.LoadCheckpoint(missing, ps))
+    try:
+        nn.LoadCheckpoint(missing, ps)
+    catch e:
+        testing.AssertEqStr(e.kind_name(), "not found")
+    end
     mem.Free(missing as void*)
 
     compress.BufFree(buf)

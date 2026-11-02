@@ -1,0 +1,184 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "numfmt"
+@fa "قالب عددی"
+package numfmt
+
+extern:
+    func malloc(size: u64): void*
+    func free(ptr: void*)
+end
+
+inline pure func _bp(s: str): i8*: ret (s as void*) as i8* end
+
+inline pure func _ub(bp: i8*, i: int): int:
+    mut v := bp[i] as int
+    if v < 0: v = v + 256 end
+    ret v
+end
+
+func _format_mag(x: u64, neg: bool): str:
+    lead := neg ? 1 : 0
+    mut ndigits := 1
+    mut t := x
+    until t >= (10 as u64):
+        t /= (10 as u64)
+        ndigits += 1
+    end
+    total := ndigits + lead
+    buf := malloc((total + 1) as u64)
+    p := buf as i8*
+    p[total] = 0 as i8
+    if neg: p[0] = 45 as i8 end
+    mut v := x
+    mut i := total - 1
+    until i >= lead:
+        p[i] = ((v % (10 as u64)) as int + 48) as i8
+        v /= (10 as u64)
+        i -= 1
+    end
+    ret buf as str
+end
+
+pure func _native_digit(bp: i8*, i: int, n: int): int:
+    if i + 1 >= n:
+        ret 0 - 1
+    end
+    c := _ub(bp, i)
+    d := _ub(bp, i + 1)
+    if c == 219 and d >= 176 and d <= 185:
+        ret d - 176
+    end
+    if c == 217 and d >= 160 and d <= 169:
+        ret d - 160
+    end
+    ret 0 - 1
+end
+
+if not SALAM_KERNEL:
+    func _ascii_digits(s: str): str:
+        n := s.len()
+        bp := _bp(s)
+        mut hit := false
+        repeat n in j:
+            if _native_digit(bp, j, n) >= 0:
+                hit = true
+                break
+            end
+        end
+        if not hit:
+            ret s
+        end
+        buf := malloc((n + 1) as u64)
+        p := buf as i8*
+        mut i := 0
+        mut k := 0
+        until i < n:
+            d := _native_digit(bp, i, n)
+            if d >= 0:
+                p[k] = (d + 48) as i8
+                i += 2
+            else _ub(bp, i) == 217 and i + 1 < n and _ub(bp, i + 1) == 171:
+                p[k] = 46 as i8
+                i += 2
+            else:
+                p[k] = _ub(bp, i) as i8
+                i += 1
+            end
+            k += 1
+        end
+        p[k] = 0 as i8
+        ret buf as str
+    end
+
+    func _fix_exp(p: i8*):
+        mut n := 0
+        until _ub(p, n) != 0:
+            n += 1
+        end
+        mut e := 0
+        until e < n and _ub(p, e) != 101:
+            e += 1
+        end
+        if e >= n:
+            ret
+        end
+        mut d := e + 1
+        if d < n and (_ub(p, d) == 43 or _ub(p, d) == 45):
+            d += 1
+        end
+        mut z := d
+        until n - z > 2 and _ub(p, z) == 48:
+            z += 1
+        end
+        if z == d:
+            ret
+        end
+        mut i := d
+        mut j := z
+        until j <= n:
+            p[i] = p[j]
+            i += 1
+            j += 1
+        end
+    end
+end
+
+@en "FormatUint"
+@fa "قالب عدد بی علامت"
+pub func FormatUint(x: u64): str: ret _format_mag(x, false) end
+
+@en "FormatInt"
+@fa "قالب عدد"
+pub func FormatInt(n: i64): str:
+    if n >= 0: ret _format_mag(n as u64, false) end
+    ret _format_mag((0 as u64) - (n as u64), true)
+end
+
+@en "FormatBool"
+@fa "قالب منطقی"
+pub inline pure func FormatBool(b: bool): str:
+    if b: ret "true" end
+    ret "false"
+end
+
+if not SALAM_KERNEL:
+    @en "FormatFloat"
+    @fa "قالب اعشار"
+    pub func FormatFloat(x: f64): str:
+        cap := 64 as u64
+        buf := malloc(cap)
+        if buf == null:
+            ret ""
+        end
+        n := _dtoa_shortest(x, buf, cap as int)
+        if n <= 0 or n >= (cap as int):
+            ret ""
+        end
+        _fix_exp(buf as i8*)
+        ret buf as str
+    end
+
+    @en "ScanFloat"
+    @fa "خواندن اعشار"
+    pub func ScanFloat(s: str): f64:
+        t := _ascii_digits(s)
+        v := _dtoa_parse(t, null)
+        if (t as void*) != (s as void*):
+            free(t as void*)
+        end
+        ret v
+    end
+end

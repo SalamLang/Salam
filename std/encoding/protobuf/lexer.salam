@@ -7,6 +7,10 @@ struct Lx:
     pub n: int = 0
     pub pos: int = 0
     pub line: int = 1
+    pub err: str = ""
+    pub errPos: int = 0
+    pub errEnd: bool = false
+    pub errCode: str = ""
 end
 
 @en "PTokenStream"
@@ -49,6 +53,14 @@ func _lx_peek2(lx: Lx): int:
     ret _ub(_bp(lx.s), lx.pos + 1)
 end
 
+func _lx_fail(lx &: Lx, msg: str, pos: int, atEnd: bool, code: str):
+    if lx.err != "": ret end
+    lx.err = msg
+    lx.errPos = pos
+    lx.errEnd = atEnd
+    lx.errCode = code
+end
+
 func _lx_skip_trivia(lx &: Lx):
     until true:
         c := _lx_peek(lx)
@@ -62,10 +74,14 @@ func _lx_skip_trivia(lx &: Lx):
                 lx.pos += 1
             end
         else c == 47 and _lx_peek2(lx) == 42:
+            start := lx.pos
             lx.pos += 2
             until true:
                 d := _lx_peek(lx)
-                if d == -1: ret end
+                if d == -1:
+                    _lx_fail(lx, "unterminated comment", start, true, "protobuf.unterminated_comment")
+                    ret
+                end
                 if d == 42 and _lx_peek2(lx) == 47:
                     lx.pos += 2
                     break
@@ -82,17 +98,24 @@ end
 func _lx_string(lx &: Lx): PToken:
     quote := _lx_peek(lx)
     startLine := lx.line
+    start := lx.pos
     lx.pos += 1
     mut sb := str.NewBuilder()
     until true:
         c := _lx_peek(lx)
-        if c == -1 or c == quote:
-            if c == quote: lx.pos += 1 end
+        if c == -1 or c == 10:
+            str.BufFree(sb)
+            _lx_fail(lx, "unterminated string", start, c == -1, "protobuf.unterminated_string")
+            ret PToken { kind = PTK_ERROR, line = startLine, offset = start }
+        end
+        if c == quote:
+            lx.pos += 1
             out := str.BufStr(sb)
             str.BufFree(sb)
             mut tok := PToken { kind = PTK_STRING }
             tok.sval = out
             tok.line = startLine
+            tok.offset = start
             ret tok
         end
         if c == 92:
@@ -129,6 +152,7 @@ func _lx_number(lx &: Lx): PToken:
         tok.lexeme = text
         tok.ival = _hex_to_i64(text.substr(2, text.len() - 2))
         tok.line = startLine
+        tok.offset = start
         ret tok
     end
     until _is_digit(_lx_peek(lx)):
@@ -155,12 +179,14 @@ func _lx_number(lx &: Lx): PToken:
         tok.lexeme = text
         tok.fval = text.to_float()
         tok.line = startLine
+        tok.offset = start
         ret tok
     end
     mut tok := PToken { kind = PTK_INT }
     tok.lexeme = text
     tok.ival = text.to_int() as i64
     tok.line = startLine
+    tok.offset = start
     ret tok
 end
 
@@ -192,48 +218,66 @@ func _lx_ident(lx &: Lx): PToken:
     mut tok := PToken { kind = PTK_IDENT }
     tok.lexeme = lx.s.substr(start, lx.pos - start)
     tok.line = startLine
+    tok.offset = start
     ret tok
+end
+
+func _lx_punct_kind(c: int): int:
+    if c == 59: ret PTK_SEMI end
+    if c == 123: ret PTK_LBRACE end
+    if c == 125: ret PTK_RBRACE end
+    if c == 40: ret PTK_LPAREN end
+    if c == 41: ret PTK_RPAREN end
+    if c == 91: ret PTK_LBRACKET end
+    if c == 93: ret PTK_RBRACKET end
+    if c == 60: ret PTK_LANGLE end
+    if c == 62: ret PTK_RANGLE end
+    if c == 61: ret PTK_EQ end
+    if c == 44: ret PTK_COMMA end
+    if c == 46: ret PTK_DOT end
+    if c == 45: ret PTK_MINUS end
+    ret PTK_ERROR
 end
 
 func _lx_next(lx &: Lx): PToken:
     _lx_skip_trivia(lx)
     line := lx.line
+    start := lx.pos
+    if lx.err != "": ret PToken { kind = PTK_ERROR, line = line, offset = lx.errPos } end
     c := _lx_peek(lx)
-    if c == -1: ret PToken { kind = PTK_EOF, line = line } end
+    if c == -1: ret PToken { kind = PTK_EOF, line = line, offset = start } end
     if _is_ident_start(c): ret _lx_ident(lx) end
     if _is_digit(c): ret _lx_number(lx) end
     if c == 34 or c == 39: ret _lx_string(lx) end
-    if c == 59: lx.pos += 1 ret PToken { kind = PTK_SEMI, line = line } end
-    if c == 123: lx.pos += 1 ret PToken { kind = PTK_LBRACE, line = line } end
-    if c == 125: lx.pos += 1 ret PToken { kind = PTK_RBRACE, line = line } end
-    if c == 40: lx.pos += 1 ret PToken { kind = PTK_LPAREN, line = line } end
-    if c == 41: lx.pos += 1 ret PToken { kind = PTK_RPAREN, line = line } end
-    if c == 91: lx.pos += 1 ret PToken { kind = PTK_LBRACKET, line = line } end
-    if c == 93: lx.pos += 1 ret PToken { kind = PTK_RBRACKET, line = line } end
-    if c == 60: lx.pos += 1 ret PToken { kind = PTK_LANGLE, line = line } end
-    if c == 62: lx.pos += 1 ret PToken { kind = PTK_RANGLE, line = line } end
-    if c == 61: lx.pos += 1 ret PToken { kind = PTK_EQ, line = line } end
-    if c == 44: lx.pos += 1 ret PToken { kind = PTK_COMMA, line = line } end
-    if c == 46: lx.pos += 1 ret PToken { kind = PTK_DOT, line = line } end
-    if c == 45: lx.pos += 1 ret PToken { kind = PTK_MINUS, line = line } end
-    lx.pos += 1
-    mut tok := PToken { kind = PTK_ERROR }
-    tok.lexeme = lx.s.substr(lx.pos - 1, 1)
-    tok.line = line
+    kind := _lx_punct_kind(c)
+    mut n := 1
+    if c >= 128:
+        until n < 4 and start + n < lx.n and (_ub(_bp(lx.s), start + n) & 192) == 128:
+            n += 1
+        end
+    end
+    lx.pos += n
+    mut tok := PToken { kind = kind, line = line, offset = start }
+    tok.lexeme = lx.s.substr(start, n)
+    if kind == PTK_ERROR:
+        _lx_fail(lx, "unexpected character '" + tok.lexeme + "'", start, false, "protobuf.unexpected_char")
+    end
     ret tok
 end
 
 @en "Tokenize"
 @fa "نشانه گذاری"
-pub func Tokenize(source: str, ok &: bool): PTokenStream:
+pub func Tokenize(source: str): PTokenStream throws:
     mut lx := Lx { s = source }
     lx.n = source.len()
     mut out := PTokenStream {}
-    ok = true
     until true:
         tok := _lx_next(lx)
+        if lx.err != "":
+            kind := lx.errEnd ? ErrorKind.UnexpectedEnd : ErrorKind.Syntax
+            throw Error.At(kind, lx.err, lx.errPos).with_code(lx.errCode).locate(source).wrap("protobuf")
+        end
         out.toks.push(tok)
         if tok.kind == PTK_EOF: ret out end
-        if tok.kind == PTK_ERROR: ok = false end
     end
 end

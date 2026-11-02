@@ -6,7 +6,7 @@ pkg.title = The encoding/toml package in Salam | TOML
 pkg.description = The encoding/toml package in Salam: reading TOML configuration files into a dynamic value or a struct, writing them back, and catching syntax errors, with examples.
 pkg.import = encoding.toml
 pkg.intro <<
-<p>TOML is the configuration format of <code>[section]</code> tables and <code>key = value</code> lines used by <code>Cargo.toml</code>, <code>pyproject.toml</code> and many server configs. This package reads TOML text into a dynamic <a href="/std/encoding/value/">Value</a> and writes a Value back as TOML. It has five functions: <code>DecodeStrict</code>, <code>Decode</code> and <code>Valid</code> for reading, <code>EncodeStrict</code> and <code>Encode</code> for writing.</p>
+<p>TOML is the configuration format of <code>[section]</code> tables and <code>key = value</code> lines used by <code>Cargo.toml</code>, <code>pyproject.toml</code> and many server configs. This package reads TOML text into a dynamic <a href="/std/encoding/value/">Value</a> and writes a Value back as TOML. It has three functions: <code>Decode</code> and <code>Valid</code> for reading, <code>Encode</code> for writing. <code>Decode</code> and <code>Encode</code> are declared <code>throws</code>: on bad input they throw an <a href="/std/core/">Error</a> and give back nothing half-read.</p>
 <p>Pick TOML for files people edit by hand. For data that programs exchange use <a href="/std/encoding/json/">encoding/json</a>; for YAML files such as CI or Kubernetes configs use <a href="/std/encoding/yaml/">encoding/yaml</a>; for <code>KEY=value</code> secrets files use <a href="/std/encoding/envfile/">encoding/envfile</a>. If you only want settings loaded from a file with defaults and environment overrides, <a href="/std/config/">config</a> may already do the job.</p>
 <h3 id="mapping">How TOML maps to a Value</h3>
 <table>
@@ -23,14 +23,13 @@ pkg.intro <<
 </table>
 <h3 id="pitfalls">What trips people up</h3>
 <ul>
-<li><strong>Use <code>DecodeStrict</code>, not <code>Decode</code>, on files people edit.</strong> <code>Decode</code> never reports an error: on broken input it returns whatever it read before the mistake, so a typo silently drops the rest of the file.</li>
-<li><strong>The parser is lenient.</strong> It checks syntax, not every rule of the TOML specification. A key or <code>[table]</code> defined twice is accepted (the tables merge, the later key wins), and an unquoted word such as <code>mode = fast</code> is read as the string <code>"fast"</code> instead of being rejected.</li>
-<li><strong>Some syntax is missing.</strong> Multi-line strings in triple quotes (<code>"""</code> or <code>'''</code>) make the document invalid, and the 8-digit <code>\U</code> escape is not decoded. Dates stay strings; parse them with <a href="/std/time/">time</a> if you need them.</li>
+<li><strong>Errors stop the whole read.</strong> <code>Decode</code> throws at the first mistake, with <code>e.line</code> and <code>e.column</code> pointing at it, so a typo never silently drops the rest of the file. A key or <code>[table]</code> defined twice, an unquoted word such as <code>mode = fast</code>, a bad escape and an integer that does not fit in 64 bits are all errors.</li>
+<li><strong>Some syntax is missing.</strong> Multi-line strings in triple quotes (<code>"""</code> or <code>'''</code>) throw an <code>Unsupported</code> error. Dates stay strings; parse them with <a href="/std/time/">time</a> if you need them.</li>
 <li><strong>Writing is not formatting.</strong> <code>Encode</code> writes keys in no fixed order, drops keys whose value is null, and writes an array of objects as an inline array <code>[{...}, {...}]</code> rather than <code>[[table]]</code> blocks. The result is valid TOML that reads back to the same data, but comments and layout of an original file are lost.</li>
 </ul>
 
 <h2 id="guide-manifest">Guide: read a project manifest</h2>
-<p>Project files such as <code>Cargo.toml</code> or <code>pyproject.toml</code> mix plain tables, inline tables and arrays of tables. <code>DecodeStrict</code> reads the whole file into a <a href="/std/encoding/value/">Value</a> and tells you through <code>ok</code> whether it was valid; from there the <code>value</code> functions walk it.</p>
+<p>Project files such as <code>Cargo.toml</code> or <code>pyproject.toml</code> mix plain tables, inline tables and arrays of tables. <code>Decode</code> reads the whole file into a <a href="/std/encoding/value/">Value</a>, or throws if it is not valid TOML; since <code>main</code> is declared <code>throws</code>, a broken file ends the program with the error. From there the <code>value</code> functions walk it.</p>
 {{example.encoding-toml-guide-manifest}}
 <p>A dependency can be a plain version string or an inline table with more detail, so the program asks <code>IsString</code> before reading it. Objects do not keep the order of their keys; sorting <code>ObjectKeys</code> with <code>sort.QuickSort</code> gives a stable listing.</p>
 
@@ -39,24 +38,20 @@ pkg.intro <<
 {{example.encoding-toml-guide-struct}}
 
 <h2 id="guide-write">Guide: write a TOML file</h2>
-<p>To write TOML, build a <a href="/std/encoding/value/">Value</a> object and pass it to <code>Encode</code> or <code>EncodeStrict</code>. A nested object becomes a <code>[table]</code>. The top level must be an object, since a TOML document is always a table; <code>EncodeStrict</code> reports <code>false</code> for anything else.</p>
+<p>To write TOML, build a <a href="/std/encoding/value/">Value</a> object and pass it to <code>Encode</code>. A nested object becomes a <code>[table]</code>. The top level must be an object, since a TOML document is always a table; <code>Encode</code> throws <code>Unsupported</code> for anything else, and for a null inside an array, with <code>e.path</code> naming where it is.</p>
 {{example.encoding-toml-guide-write}}
 <p>Three things show in the output. The null <code>password</code> is left out, because TOML has no null. The array of replica objects is written inline on one line. The float <code>30.0</code> keeps its <code>.0</code>, so it reads back as a float and not as the integer <code>30</code>. Keys come out in no particular order, so never compare the text with a fixed string; compare the data, for example with <code>value.Equal</code> after decoding the text again.</p>
 
 <h2 id="guide-errors">Guide: catching mistakes</h2>
-<p>Use <code>DecodeStrict</code> or <code>Valid</code> on any file a person edits. They catch broken syntax: a key without a value, an unclosed string, array or table header.</p>
+<p><code>Decode</code> throws on the first mistake, and <code>Valid</code> answers the same question as a plain <code>bool</code>. The error says what is wrong in <code>e.message</code> and where in <code>e.line</code> and <code>e.column</code>; <code>e.kind</code> sorts it (<code>Syntax</code>, <code>UnexpectedEnd</code>, <code>AlreadyExists</code>, <code>TypeMismatch</code>, <code>OutOfRange</code>, <code>Unsupported</code>) and <code>e.code</code> names it exactly, such as <code>toml.duplicate_key</code>.</p>
 {{example.encoding-toml-guide-errors}}
-<p>The last two lines are the leniency described above: a duplicate key is accepted and the later value wins, and <code>mode = fast</code> passes as the string <code>"fast"</code>, although real TOML requires quotes. If either would hide a real mistake in your files, check the keys you care about after decoding, for example with <code>value.IsString</code> and a list of allowed values.</p>
+<p>The last two lines are mistakes that a looser parser would let through: a key given twice, and <code>mode = fast</code> without the quotes TOML requires around a string. Both are rejected, so a file that decodes holds exactly what it says.</p>
 >>
 
-doc.DecodeStrict = Reads TOML, setting <code>ok</code> false when the text is not valid.
-doc.Decode = Turns TOML into a <code>Value</code> without reporting errors: on invalid text it returns whatever was read before the error, so prefer <code>DecodeStrict</code> for files people edit.
+doc.Decode = Turns TOML into a <code>Value</code>. On invalid text it throws an <code>Error</code> with the kind, a <code>toml.*</code> code and the line and column of the mistake.
 doc.Valid = True when the text is valid TOML.
-doc.EncodeStrict = Turns a value into TOML. <code>ok</code> turns false when the top level is not an object or an array holds a null; null keys in a table are skipped.
-doc.Encode = Turns a value into TOML, ignoring problems; a top level that is not an object gives an empty string.
+doc.Encode = Turns a value into TOML; null keys in a table are skipped. Throws <code>Unsupported</code> when the top level is not an object or an array holds a null.
 
-ex.DecodeStrict = encoding-toml-Decode
 ex.Decode = encoding-toml-Decode
 ex.Valid = encoding-toml-Decode
-ex.EncodeStrict = encoding-toml-Decode
 ex.Encode = encoding-toml-Decode

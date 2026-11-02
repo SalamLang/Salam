@@ -142,36 +142,53 @@ func _descr_to_dtype(descr: str, dtype &: int, big &: bool): bool:
     ret false
 end
 
-func _read_header(rd &: compress.ByteReader, dtype &: int, big &: bool, fortran &: bool, shape_out &: Vector<int>): bool:
-    if compress.RdLeft(rd) < 10: ret false end
-    if binary.ReadU8(rd) != 147: ret false end
-    if binary.ReadU8(rd) != 78 or binary.ReadU8(rd) != 85 or binary.ReadU8(rd) != 77 or binary.ReadU8(rd) != 80 or binary.ReadU8(rd) != 89: ret false end
-    major := binary.ReadU8(rd)
-    binary.ReadU8(rd)
+func _npy_err(kind: ErrorKind, msg: str, at: int, code: str): Error:
+    ret Error.At(kind, msg, at).with_code(code)
+end
+
+func _read_header(rd &: compress.ByteReader, dtype &: int, big &: bool, fortran &: bool, shape_out &: Vector<int>) throws:
+    word := "NUMPY"
+    repeat 6 in k:
+        mut want := 147
+        if k > 0: want = _ub(_bp(word), k - 1) end
+        if (try binary.ReadU8(rd)) != want:
+            throw _npy_err(ErrorKind.Syntax, "not a .npy file (bad magic bytes)", 0, "npy.bad_magic")
+        end
+    end
+    major := try binary.ReadU8(rd)
+    try binary.ReadU8(rd)
     mut hlen := 0
     if major == 1:
-        hlen = binary.ReadU16LE(rd)
+        hlen = try binary.ReadU16LE(rd)
     else major == 2 or major == 3:
-        hlen = binary.ReadU32LE(rd)
+        hlen = try binary.ReadU32LE(rd)
     else:
-        ret false
+        throw _npy_err(ErrorKind.Unsupported, "unsupported .npy format version " + major, 6, "npy.version")
     end
-    if rd.bad or hlen <= 0 or compress.RdLeft(rd) < hlen: ret false end
+    at := rd.pos
+    if hlen <= 0 or compress.RdLeft(rd) < hlen:
+        throw _npy_err(ErrorKind.UnexpectedEnd, "the header says " + hlen + " bytes but " + compress.RdLeft(rd) + " are left", at, "npy.truncated")
+    end
     mut hb := compress.RdBytes(rd, hlen)
     text := compress.BufToStrUnsafe(hb)
     compress.BufFree(hb)
+    defer mem.Free(text as void*)
     descr := _quoted_after(text, "descr")
-    mut ok := str.Len(descr) > 0
-    if ok: ok = _descr_to_dtype(descr, dtype, big) end
-    mut found := false
-    if ok:
-        fortran = _bool_after(text, "fortran_order", found)
-        ok = found
+    if str.Len(descr) == 0:
+        throw _npy_err(ErrorKind.Syntax, "the header has no 'descr'", at, "npy.bad_header")
     end
-    if ok: ok = _shape_after(text, "shape", shape_out) end
-    if str.Len(descr) > 0: mem.Free(descr as void*) end
-    if str.Len(text) > 0: mem.Free(text as void*) end
-    ret ok
+    defer mem.Free(descr as void*)
+    if _descr_to_dtype(descr, dtype, big) == false:
+        throw _npy_err(ErrorKind.Unsupported, "unsupported dtype '" + descr + "'", at, "npy.dtype")
+    end
+    mut found := false
+    fortran = _bool_after(text, "fortran_order", found)
+    if found == false:
+        throw _npy_err(ErrorKind.Syntax, "the header has no 'fortran_order'", at, "npy.bad_header")
+    end
+    if _shape_after(text, "shape", shape_out) == false:
+        throw _npy_err(ErrorKind.Syntax, "the header has no valid 'shape'", at, "npy.bad_header")
+    end
 end
 
 func _write_header(buf &: compress.ByteBuf, shape &: Vector<int>):

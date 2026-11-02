@@ -6,13 +6,15 @@ pkg.title = The encoding/csv package in Salam | CSV
 pkg.description = The encoding/csv package in Salam: reading and writing CSV, quoted fields, and turning a table into a list of objects using the header row, with an example.
 pkg.import = encoding.csv
 pkg.intro <<
-<p>CSV is the simplest table format: one row per line, fields separated by commas. A field containing a comma, a quote or a line break is wrapped in quotes, and a quote inside it is doubled. This package reads and writes that format, one line at a time with <code>ReadLine</code> and <code>WriteLine</code> or a whole text with <code>ReadAll</code> and <code>WriteAll</code>, and converts it to and from a <a href="/std/encoding/value/">Value</a> for <a href="/std/encoding/json/">encoding/json</a>.</p>
+<p>CSV is the simplest table format: one row per line, fields separated by commas. A field containing a comma, a quote or a line break is wrapped in quotes, and a quote inside it is doubled (RFC 4180). This package reads and writes that format, one row at a time with <code>ReadLine</code> and <code>WriteLine</code> or a whole text with <code>ReadAll</code> and <code>WriteAll</code>, and converts it to and from a <a href="/std/encoding/value/">Value</a> for <a href="/std/encoding/json/">encoding/json</a>. The <code>...With</code> variants take a <code>CSVOptions</code> for another separator, such as <code>;</code> or a tab.</p>
+<p>The readers are <code>throws</code>: broken input stops with a core <code>Error</code> of kind <code>Syntax</code> that carries the line and column, never with a quietly shortened row. Call them with <code>try</code>, or inside a <code>try:</code> block. The writers cannot fail.</p>
 <p>Every field is a string; CSV has no numbers or booleans. For spreadsheets with several sheets, formulas or types, see <a href="/std/excel/">excel</a>; for CSV that feeds a machine learning model, <a href="/std/data/">data</a>.</p>
 <p>The things people get wrong:</p>
 <ul>
-<li>The separator is always a comma. A file from a European Excel with <code>;</code> between fields, or a tab-separated file, reads as one field per line; replace the separator or split those lines yourself.</li>
-<li>A quoted field must be followed directly by a comma or the end of the line. In <code>"Pen" ,blue</code> the space after the quote ends the row, and the rest of the line is dropped without an error.</li>
-<li>Line breaks inside a quoted field cannot be read back: <code>ReadAll</code> splits the text into lines first. <code>WriteLine</code> quotes such a field correctly for other tools, but this reader cuts it in two.</li>
+<li>The default separator is a comma. A file from a European Excel with <code>;</code> between fields, or a tab-separated file, reads as one field per line until you pass <code>CSVOptions { separator = ";" }</code> (or <code>"\t"</code>) to <code>ReadAllWith</code>.</li>
+<li>A quoted field must be followed directly by the separator or the end of the line. <code>"Pen" ,blue</code> is an error with the code <code>csv.text_after_quote</code>, pointing at the space; a quote inside an unquoted field (<code>5'11"</code>) is <code>csv.bare_quote</code>, and a quote that is never closed is <code>csv.unterminated_quote</code>.</li>
+<li>A quoted field may hold line breaks, and <code>ReadAll</code> keeps them, so the error line is the line in the file, not the row number. <code>ReadLine</code> reads exactly one row and refuses a second one (<code>csv.multiple_rows</code>).</li>
+<li><code>ToValue</code> refuses a header with the same column name twice (<code>csv.duplicate_header</code>), because the second column would overwrite the first.</li>
 <li><code>FromValue</code> takes the columns from the keys of the first object, in the order they were added, so a table read with <code>ToValue</code> is written back with its columns in the original order.</li>
 </ul>
 
@@ -32,16 +34,16 @@ pkg.intro <<
 <p>Every field stays a string, even <code>12</code>, because CSV has no types. Convert the columns you know are numbers with <code>to_int()</code> or <code>to_float()</code>. With <code>CSVOptions { header = false }</code>, <code>ToValueWith</code> reads a file without a header: every row, the first one included, becomes an object with the keys <code>col0</code>, <code>col1</code> and so on.</p>
 
 <h2 id="guide-pitfalls">Guide: edge cases</h2>
-<p>The reader keeps fields exactly as they are written. That matters in a few places:</p>
+<p>The reader keeps fields exactly as they are written, and stops at the first thing it cannot read without guessing. <code>show</code> catches the error so the program can go on with the next line:</p>
 {{example.encoding-csv-guide-pitfalls}}
 <ul>
 <li>An empty field, including one after a trailing comma, is an empty string, not a missing column.</li>
 <li>Spaces around a field are kept; trim them with <code>str.Trim</code> if your source pads columns.</li>
-<li>Windows line endings (<code>\r\n</code>) are handled by <code>ReadAll</code>.</li>
-<li><code>ReadAll</code> skips blank lines, so a table never has empty rows.</li>
-<li>A space between a closing quote and the comma ends the row: <code>"Pen" ,blue,3</code> gives one field.</li>
-<li>A line with semicolons is one field, because only commas separate fields.</li>
-<li><code>ReadAll</code> splits the text into lines before it reads the fields, so a quoted field that contains a line break comes back cut in two. If your data can hold line breaks, replace them before writing the file.</li>
+<li>Windows line endings (<code>\r\n</code>) are handled by every reader; a line break inside quotes is kept byte for byte.</li>
+<li><code>ReadAll</code> skips blank lines, so a table never has empty rows; <code>CSVOptions { keep_blank = true }</code> keeps them as rows with one empty field, which matters when row numbers must match the file.</li>
+<li>A space between a closing quote and the comma is an error, not a silent cut: the message gives the line and column of the space.</li>
+<li>A line with semicolons is one field with the default options; pass <code>separator = ";"</code> to split it.</li>
+<li>The error's <code>line</code> and <code>column</code> count from 1 in the text you passed, and <code>code</code> names the problem, so a program can report <code>orders.csv:14:7</code> or skip the file.</li>
 </ul>
 >>
 
@@ -49,17 +51,23 @@ doc.CSVRow = One row.
 doc.CSVRow.fields = The row's fields.
 doc.CSVTable = A table.
 doc.CSVTable.rows = The rows, including the header row; blank lines are not included.
-doc.CSVOptions = The options for converting to and from a value.
+doc.CSVOptions = The options for the <code>...With</code> functions: header row, separator and blank lines.
 doc.CSVOptions.header = The first row is a header; true by default. When false, every row becomes an object with the keys <code>col0</code>, <code>col1</code> and so on, and <code>FromValueWith</code> writes no header row.
-doc.ReadAll = Turns a whole piece of CSV text into a table. Both <code>\n</code> and <code>\r\n</code> line ends work and blank lines are skipped. Free the result with <code>FreeTable</code>.
+doc.CSVOptions.separator = The field separator, one character; <code>","</code> by default. <code>";"</code> and <code>"\t"</code> are common. A quote, a line break or more than one character makes the readers throw <code>csv.bad_separator</code>; the writers use a comma instead.
+doc.CSVOptions.keep_blank = Keep blank lines as rows with one empty field; false by default, so blank lines are skipped.
+doc.ReadAll = Turns a whole piece of CSV text into a table. Both <code>\n</code> and <code>\r\n</code> line ends work, quoted fields may hold line breaks and blank lines are skipped. Throws a <code>Syntax</code> error with the line and column on an unterminated quote, text after a closing quote or a bare quote. Free the result with <code>FreeTable</code>.
+doc.ReadAllWith = Like <code>ReadAll</code>, with the separator and blank line handling from the options.
 doc.FreeTable = Releases the table's memory.
 doc.WriteAll = Turns a table into CSV text, with <code>\r\n</code> between rows and no line break after the last one.
-doc.ToValueWith = Turns CSV into a <code>Value</code> with the given options.
-doc.ToValue = Turns CSV with a header into an array of objects, one per data row, with every value a string.
+doc.WriteAllWith = Like <code>WriteAll</code>, with the separator from the options.
+doc.ToValueWith = Turns CSV into a <code>Value</code> with the given options. Throws like <code>ReadAllWith</code>, and with <code>csv.duplicate_header</code> when a header name repeats.
+doc.ToValue = Turns CSV with a header into an array of objects, one per data row, with every value a string. Throws on text it cannot read and on a repeated header name.
 doc.FromValueWith = Turns an array of objects into CSV with the given options. The columns are the keys of the first object, in no fixed order.
 doc.FromValue = Turns an array of objects into CSV with a header row. The column order is not fixed; use <code>WriteLine</code> when it matters.
-doc.ReadLine = Splits one CSV line into its fields, undoing quotes and doubled quotes. Spaces are kept, and text after a closing quote that is not a comma is dropped.
+doc.ReadLine = Splits one CSV row into its fields, undoing quotes and doubled quotes. Spaces are kept and one trailing line break is ignored. Throws a <code>Syntax</code> error for broken quoting, and <code>csv.multiple_rows</code> when the text holds a second row.
+doc.ReadLineWith = Like <code>ReadLine</code>, with the separator from the options.
 doc.WriteLine = Turns fields into one CSV line, quoting wherever it has to.
+doc.WriteLineWith = Like <code>WriteLine</code>, with the separator from the options; a field that contains the separator is quoted.
 
 ex.CSVRow = encoding-csv-Table
 ex.CSVTable = encoding-csv-Table
@@ -73,3 +81,7 @@ ex.FromValueWith = encoding-csv-Table
 ex.FromValue = encoding-csv-Table
 ex.ReadLine = encoding-csv-Table
 ex.WriteLine = encoding-csv-Table
+ex.ReadLineWith = encoding-csv-Table
+ex.ReadAllWith = encoding-csv-Table
+ex.WriteLineWith = encoding-csv-Table
+ex.WriteAllWith = encoding-csv-Table

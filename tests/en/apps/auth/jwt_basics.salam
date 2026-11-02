@@ -25,8 +25,13 @@ func clock(): jwt.Options:
     ret o
 end
 
-func report(label: str, code: int):
-    println label, "->", jwt.ErrorText(code)
+func report(label: str, token: str, secret: str, o: jwt.Options):
+    try:
+        _ := jwt.Verify(token, secret, o)
+        println label, "->", "ok"
+    catch e:
+        println label, "->", e.message
+    end
 end
 
 func mint(): str:
@@ -40,13 +45,12 @@ func mint(): str:
     jwt.SetStr(c, "scope", "todos:read todos:write")
     jwt.SetBool(c, "mfa", true)
     jwt.SetRaw(c, "roles", `["author","reviewer"]`)
-    mut err := 0
-    token := jwt.SignHS256(c, SECRET, err)
-    if err != jwt.JWT_OK:
-        println "cannot sign:", jwt.ErrorText(err)
+    try:
+        ret jwt.SignHS256(c, SECRET)
+    catch e:
+        println "cannot sign:", e.message
         ret ""
     end
-    ret token
 end
 
 func read_it(token: str):
@@ -55,9 +59,13 @@ func read_it(token: str):
     o.audience = "web"
     o.leeway = 30 as i64
     o.require_exp = true
-    mut err := 0
-    t := jwt.Verify(token, SECRET, o, err)
-    report("verify", err)
+    mut t := jwt.Token {}
+    try:
+        t = jwt.Verify(token, SECRET, o)
+        println "verify", "->", "ok"
+    catch e:
+        println "verify", "->", e.message
+    end
     println "  valid   :", t.valid
     println "  subject :", t.claims.sub
     println "  name    :", jwt.Str(t, "name")
@@ -77,26 +85,19 @@ func flip_last(token: str): str:
 end
 
 func rejections(token: str):
-    mut err := 0
-    _a := jwt.Verify(token, "not-the-secret", clock(), err)
-    report("wrong key", err)
-    _b := jwt.Verify(flip_last(token), SECRET, clock(), err)
-    report("tampered", err)
+    report("wrong key", token, "not-the-secret", clock())
+    report("tampered", flip_last(token), SECRET, clock())
     mut late := clock()
     late.now = (NOW + 3601) as i64
-    _c := jwt.Verify(token, SECRET, late, err)
-    report("expired", err)
+    report("expired", token, SECRET, late)
     mut other := jwt.OptionsFor(jwt.JWT_HS512)
     other.now = NOW as i64
-    _d := jwt.Verify(token, SECRET, other, err)
-    report("alg mismatch", err)
+    report("alg mismatch", token, SECRET, other)
     forged := "eyJhbGciOiJub25lIiwidHlwIjoiSldUIn0.eyJzdWIiOiJhZG1pbiJ9."
-    _e := jwt.Verify(forged, SECRET, clock(), err)
-    report("alg none", err)
+    report("alg none", forged, SECRET, clock())
     mut audit := clock()
     audit.audience = "mobile"
-    _f := jwt.Verify(token, SECRET, audit, err)
-    report("wrong audience", err)
+    report("wrong audience", token, SECRET, audit)
 end
 
 func main:

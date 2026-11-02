@@ -35,78 +35,58 @@ struct _RawTensor:
     pub has_raw: bool = false
 end
 
-func _skip(rd &: compress.ByteReader, wt: int): bool:
-    mut ok := false
-    if wt == protobuf.WT_VARINT:
-        protobuf.ReadVarint(rd, ok)
-    else wt == protobuf.WT_FIXED64:
-        protobuf.ReadFixed64(rd, ok)
-    else wt == protobuf.WT_LEN:
-        mut b := protobuf.ReadLenPrefixedBuf(rd, ok)
-        compress.BufFree(b)
-    else wt == protobuf.WT_FIXED32:
-        protobuf.ReadFixed32(rd, ok)
-    else:
-        ret false
-    end
-    ret ok
-end
-
-func _read_ints(rd &: compress.ByteReader, wt: int, out &: Vector<i64>): bool:
-    mut ok := false
+func _read_ints(rd &: compress.ByteReader, wt: int, out &: Vector<i64>) throws:
     if wt == protobuf.WT_LEN:
-        mut b := protobuf.ReadLenPrefixedBuf(rd, ok)
-        if ok:
-            mut sub := compress.ReaderFromBuf(b)
-            until compress.RdLeft(sub) > 0 and ok:
-                v := protobuf.ReadVarint(sub, ok)
-                if ok: out.push(v as i64) end
+        mut b := try protobuf.ReadLenPrefixedBuf(rd)
+        mut sub := compress.ReaderFromBuf(b)
+        try:
+            until compress.RdLeft(sub) > 0:
+                out.push(protobuf.ReadVarint(sub) as i64)
             end
+        catch e:
+            compress.BufFree(b)
+            throw e
         end
         compress.BufFree(b)
-        ret ok
+        ret
     end
-    v := protobuf.ReadVarint(rd, ok)
-    if ok: out.push(v as i64) end
-    ret ok
+    out.push(try protobuf.ReadVarint(rd) as i64)
 end
 
-func _read_floats(rd &: compress.ByteReader, wt: int, out &: Vector<f64>): bool:
-    mut ok := false
+func _read_floats(rd &: compress.ByteReader, wt: int, out &: Vector<f64>) throws:
     if wt == protobuf.WT_LEN:
-        mut b := protobuf.ReadLenPrefixedBuf(rd, ok)
-        if ok:
-            mut sub := compress.ReaderFromBuf(b)
-            until compress.RdLeft(sub) >= 4 and ok:
-                v := protobuf.ReadFloat(sub, ok)
-                if ok: out.push(v) end
+        mut b := try protobuf.ReadLenPrefixedBuf(rd)
+        mut sub := compress.ReaderFromBuf(b)
+        try:
+            until compress.RdLeft(sub) > 0:
+                out.push(protobuf.ReadFloat(sub))
             end
+        catch e:
+            compress.BufFree(b)
+            throw e
         end
         compress.BufFree(b)
-        ret ok
+        ret
     end
-    v := protobuf.ReadFloat(rd, ok)
-    if ok: out.push(v) end
-    ret ok
+    out.push(try protobuf.ReadFloat(rd))
 end
 
-func _read_doubles(rd &: compress.ByteReader, wt: int, out &: Vector<f64>): bool:
-    mut ok := false
+func _read_doubles(rd &: compress.ByteReader, wt: int, out &: Vector<f64>) throws:
     if wt == protobuf.WT_LEN:
-        mut b := protobuf.ReadLenPrefixedBuf(rd, ok)
-        if ok:
-            mut sub := compress.ReaderFromBuf(b)
-            until compress.RdLeft(sub) >= 8 and ok:
-                v := protobuf.ReadDouble(sub, ok)
-                if ok: out.push(v) end
+        mut b := try protobuf.ReadLenPrefixedBuf(rd)
+        mut sub := compress.ReaderFromBuf(b)
+        try:
+            until compress.RdLeft(sub) > 0:
+                out.push(protobuf.ReadDouble(sub))
             end
+        catch e:
+            compress.BufFree(b)
+            throw e
         end
         compress.BufFree(b)
-        ret ok
+        ret
     end
-    v := protobuf.ReadDouble(rd, ok)
-    if ok: out.push(v) end
-    ret ok
+    out.push(try protobuf.ReadDouble(rd))
 end
 
 func _raw_to_tensor(rt &: _RawTensor, out &: tensor.Tensor): bool:
@@ -132,15 +112,27 @@ func _raw_to_tensor(rt &: _RawTensor, out &: tensor.Tensor): bool:
         else rt.dtype == _DT_INT64:
             if n < total * 8: ret false end
             mut rd := compress.ReaderFromBuf(rt.raw)
-            repeat total in k: p[k] = binary.ReadU64LE(rd) as f32 end
+            try:
+                repeat total in k: p[k] = binary.ReadU64LE(rd) as f32 end
+            catch:
+                ret false
+            end
         else rt.dtype == _DT_INT32:
             if n < total * 4: ret false end
             mut rd := compress.ReaderFromBuf(rt.raw)
-            repeat total in k: p[k] = binary.ReadU32LE(rd) as f32 end
+            try:
+                repeat total in k: p[k] = binary.ReadU32LE(rd) as f32 end
+            catch:
+                ret false
+            end
         else rt.dtype == _DT_DOUBLE:
             if n < total * 8: ret false end
             mut rd := compress.ReaderFromBuf(rt.raw)
-            repeat total in k: p[k] = binary.ReadF64(rd, false) as f32 end
+            try:
+                repeat total in k: p[k] = binary.ReadF64(rd, false) as f32 end
+            catch:
+                ret false
+            end
         else:
             ret false
         end
@@ -151,260 +143,225 @@ func _raw_to_tensor(rt &: _RawTensor, out &: tensor.Tensor): bool:
     ret true
 end
 
-func _decode_tensor(p: void*, n: int, name_out &: str, out &: tensor.Tensor): bool:
+func _decode_tensor(p: void*, n: int, name_out &: str, out &: tensor.Tensor) throws:
     mut rd := compress.NewByteReader(p, n)
     mut rt := _RawTensor {}
-    mut good := true
-    until compress.RdLeft(rd) > 0 and good:
-        mut fnum := 0
-        mut wt := 0
-        mut tok := false
-        protobuf.ReadTag(rd, fnum, wt, tok)
-        if tok == false:
-            good = false
-        else fnum == 1:
-            mut dims := Vector {} as Vector<i64>
-            good = _read_ints(rd, wt, dims)
-            repeat dims.len() in i: rt.dims.push(dims.get(i) as int) end
-            dims.free()
-        else fnum == 2:
-            mut ok := false
-            rt.dtype = protobuf.ReadVarint(rd, ok) as int
-            good = ok
-        else fnum == 4:
-            good = _read_floats(rd, wt, rt.values)
-        else fnum == 5 or fnum == 7:
-            mut iv := Vector {} as Vector<i64>
-            good = _read_ints(rd, wt, iv)
-            repeat iv.len() in i: rt.values.push(iv.get(i) as f64) end
-            iv.free()
-        else fnum == 11:
-            good = _read_doubles(rd, wt, rt.values)
-        else fnum == 8:
-            mut ok := false
-            rt.name = protobuf.ReadLenPrefixedStr(rd, ok)
-            good = ok
-        else fnum == 9:
-            mut ok := false
-            rt.raw = protobuf.ReadLenPrefixedBuf(rd, ok)
-            rt.has_raw = ok
-            good = ok
-        else:
-            good = _skip(rd, wt)
+    mut fail := Error {}
+    mut failed := false
+    try:
+        until compress.RdLeft(rd) > 0:
+            mut fnum := 0
+            mut wt := 0
+            protobuf.ReadTag(rd, fnum, wt)
+            if fnum == 1:
+                mut dims := Vector {} as Vector<i64>
+                try:
+                    _read_ints(rd, wt, dims)
+                catch e:
+                    dims.free()
+                    throw e
+                end
+                repeat dims.len() in i: rt.dims.push(dims.get(i) as int) end
+                dims.free()
+            else fnum == 2:
+                rt.dtype = protobuf.ReadVarint(rd) as int
+            else fnum == 4:
+                _read_floats(rd, wt, rt.values)
+            else fnum == 5 or fnum == 7:
+                mut iv := Vector {} as Vector<i64>
+                try:
+                    _read_ints(rd, wt, iv)
+                catch e:
+                    iv.free()
+                    throw e
+                end
+                repeat iv.len() in i: rt.values.push(iv.get(i) as f64) end
+                iv.free()
+            else fnum == 11:
+                _read_doubles(rd, wt, rt.values)
+            else fnum == 8:
+                rt.name = protobuf.ReadLenPrefixedStr(rd)
+            else fnum == 9:
+                if rt.has_raw: compress.BufFree(rt.raw) end
+                rt.raw = protobuf.ReadLenPrefixedBuf(rd)
+                rt.has_raw = true
+            else:
+                protobuf.SkipField(rd, wt)
+            end
         end
+    catch e:
+        fail = e
+        failed = true
     end
-    mut result := false
-    if good: result = _raw_to_tensor(rt, out) end
+    if not failed and not _raw_to_tensor(rt, out):
+        fail = Error.New(ErrorKind.Unsupported, "tensor '" + rt.name + "' has an unsupported data type or too little data")
+        failed = true
+    end
     name_out = rt.name
     rt.dims.free()
     rt.values.free()
     if rt.has_raw: compress.BufFree(rt.raw) end
-    ret result
+    if failed: throw fail end
 end
 
-func _decode_attr(p: void*, n: int, a &: Attr): bool:
+func _decode_attr(p: void*, n: int, a &: Attr) throws:
     mut rd := compress.NewByteReader(p, n)
-    mut good := true
-    until compress.RdLeft(rd) > 0 and good:
+    until compress.RdLeft(rd) > 0:
         mut fnum := 0
         mut wt := 0
-        mut tok := false
-        protobuf.ReadTag(rd, fnum, wt, tok)
-        if tok == false:
-            good = false
-        else fnum == 1:
-            mut ok := false
-            a.name = protobuf.ReadLenPrefixedStr(rd, ok)
-            good = ok
+        try protobuf.ReadTag(rd, fnum, wt)
+        if fnum == 1:
+            a.name = try protobuf.ReadLenPrefixedStr(rd)
         else fnum == 2:
-            mut ok := false
-            a.f = protobuf.ReadFloat(rd, ok)
-            good = ok
+            a.f = try protobuf.ReadFloat(rd)
         else fnum == 3:
-            mut ok := false
-            a.i = protobuf.ReadVarint(rd, ok) as i64
-            good = ok
+            a.i = try protobuf.ReadVarint(rd) as i64
         else fnum == 4:
-            mut ok := false
-            a.s = protobuf.ReadLenPrefixedStr(rd, ok)
-            good = ok
+            a.s = try protobuf.ReadLenPrefixedStr(rd)
         else fnum == 5:
-            mut ok := false
-            mut b := protobuf.ReadLenPrefixedBuf(rd, ok)
-            if ok:
-                mut nm := ""
-                good = _decode_tensor(b.data, compress.BufLen(b), nm, a.t)
-            else:
-                good = false
+            mut b := try protobuf.ReadLenPrefixedBuf(rd)
+            mut nm := ""
+            try:
+                _decode_tensor(b.data, compress.BufLen(b), nm, a.t)
+            catch e:
+                compress.BufFree(b)
+                throw e
             end
             compress.BufFree(b)
         else fnum == 7:
-            good = _read_floats(rd, wt, a.floats)
+            try _read_floats(rd, wt, a.floats)
         else fnum == 8:
-            good = _read_ints(rd, wt, a.ints)
+            try _read_ints(rd, wt, a.ints)
         else fnum == 20:
-            mut ok := false
-            a.kind = protobuf.ReadVarint(rd, ok) as int
-            good = ok
+            a.kind = try protobuf.ReadVarint(rd) as int
         else:
-            good = _skip(rd, wt)
+            try protobuf.SkipField(rd, wt)
         end
     end
-    ret good
 end
 
-func _decode_node(p: void*, n: int, node &: Node): bool:
+func _decode_node(p: void*, n: int, node &: Node) throws:
     mut rd := compress.NewByteReader(p, n)
-    mut good := true
-    until compress.RdLeft(rd) > 0 and good:
+    until compress.RdLeft(rd) > 0:
         mut fnum := 0
         mut wt := 0
-        mut tok := false
-        protobuf.ReadTag(rd, fnum, wt, tok)
-        if tok == false:
-            good = false
-        else fnum == 1:
-            mut ok := false
-            node.inputs.push(protobuf.ReadLenPrefixedStr(rd, ok))
-            good = ok
+        try protobuf.ReadTag(rd, fnum, wt)
+        if fnum == 1:
+            node.inputs.push(try protobuf.ReadLenPrefixedStr(rd))
         else fnum == 2:
-            mut ok := false
-            node.outputs.push(protobuf.ReadLenPrefixedStr(rd, ok))
-            good = ok
+            node.outputs.push(try protobuf.ReadLenPrefixedStr(rd))
         else fnum == 3:
-            mut ok := false
-            node.name = protobuf.ReadLenPrefixedStr(rd, ok)
-            good = ok
+            node.name = try protobuf.ReadLenPrefixedStr(rd)
         else fnum == 4:
-            mut ok := false
-            node.op = protobuf.ReadLenPrefixedStr(rd, ok)
-            good = ok
+            node.op = try protobuf.ReadLenPrefixedStr(rd)
         else fnum == 5:
-            mut ok := false
-            mut b := protobuf.ReadLenPrefixedBuf(rd, ok)
-            if ok:
-                mut a := Attr {}
-                good = _decode_attr(b.data, compress.BufLen(b), a)
+            mut b := try protobuf.ReadLenPrefixedBuf(rd)
+            mut a := Attr {}
+            try:
+                _decode_attr(b.data, compress.BufLen(b), a)
+            catch e:
                 node.attrs.push(a)
-            else:
-                good = false
+                compress.BufFree(b)
+                throw e
             end
+            node.attrs.push(a)
             compress.BufFree(b)
         else:
-            good = _skip(rd, wt)
+            try protobuf.SkipField(rd, wt)
         end
     end
-    ret good
 end
 
-func _decode_value_name(p: void*, n: int, name_out &: str): bool:
+func _decode_value_name(p: void*, n: int, name_out &: str) throws:
     mut rd := compress.NewByteReader(p, n)
-    mut good := true
-    until compress.RdLeft(rd) > 0 and good:
+    until compress.RdLeft(rd) > 0:
         mut fnum := 0
         mut wt := 0
-        mut tok := false
-        protobuf.ReadTag(rd, fnum, wt, tok)
-        if tok == false:
-            good = false
-        else fnum == 1:
-            mut ok := false
-            name_out = protobuf.ReadLenPrefixedStr(rd, ok)
-            good = ok
+        try protobuf.ReadTag(rd, fnum, wt)
+        if fnum == 1:
+            name_out = try protobuf.ReadLenPrefixedStr(rd)
         else:
-            good = _skip(rd, wt)
+            try protobuf.SkipField(rd, wt)
         end
     end
-    ret good
 end
 
-func _decode_graph(p: void*, n: int, m &: Model): bool:
+func _decode_graph(p: void*, n: int, m &: Model) throws:
     mut rd := compress.NewByteReader(p, n)
-    mut good := true
-    until compress.RdLeft(rd) > 0 and good:
+    until compress.RdLeft(rd) > 0:
         mut fnum := 0
         mut wt := 0
-        mut tok := false
-        protobuf.ReadTag(rd, fnum, wt, tok)
-        if tok == false:
-            good = false
-        else fnum == 1:
-            mut ok := false
-            mut b := protobuf.ReadLenPrefixedBuf(rd, ok)
-            if ok:
-                mut node := Node {}
-                good = _decode_node(b.data, compress.BufLen(b), node)
+        try protobuf.ReadTag(rd, fnum, wt)
+        if fnum == 1:
+            mut b := try protobuf.ReadLenPrefixedBuf(rd)
+            mut node := Node {}
+            try:
+                _decode_node(b.data, compress.BufLen(b), node)
+            catch e:
                 m.nodes.push(node)
-            else:
-                good = false
+                compress.BufFree(b)
+                throw e
             end
+            m.nodes.push(node)
             compress.BufFree(b)
         else fnum == 5:
-            mut ok := false
-            mut b := protobuf.ReadLenPrefixedBuf(rd, ok)
-            if ok:
-                mut nm := ""
-                mut t := tensor.Empty()
-                good = _decode_tensor(b.data, compress.BufLen(b), nm, t)
+            mut b := try protobuf.ReadLenPrefixedBuf(rd)
+            mut nm := ""
+            mut t := tensor.Empty()
+            try:
+                _decode_tensor(b.data, compress.BufLen(b), nm, t)
+            catch e:
                 m.init_names.push(nm)
                 m.inits.push(t)
-            else:
-                good = false
+                compress.BufFree(b)
+                throw e
             end
+            m.init_names.push(nm)
+            m.inits.push(t)
             compress.BufFree(b)
         else fnum == 11 or fnum == 12:
-            mut ok := false
-            mut b := protobuf.ReadLenPrefixedBuf(rd, ok)
-            if ok:
-                mut nm := ""
-                good = _decode_value_name(b.data, compress.BufLen(b), nm)
-                if fnum == 11: m.inputs.push(nm) else:
-                    m.outputs.push(nm)
-                end
-            else:
-                good = false
+            mut b := try protobuf.ReadLenPrefixedBuf(rd)
+            mut nm := ""
+            try:
+                _decode_value_name(b.data, compress.BufLen(b), nm)
+            catch e:
+                compress.BufFree(b)
+                throw e
+            end
+            if fnum == 11: m.inputs.push(nm) else:
+                m.outputs.push(nm)
             end
             compress.BufFree(b)
         else:
-            good = _skip(rd, wt)
+            try protobuf.SkipField(rd, wt)
         end
     end
-    ret good
 end
 
-func _decode_model(p: void*, n: int, m &: Model): bool:
+func _decode_model(p: void*, n: int, m &: Model) throws:
     mut rd := compress.NewByteReader(p, n)
-    mut good := true
     mut saw_graph := false
-    until compress.RdLeft(rd) > 0 and good:
+    until compress.RdLeft(rd) > 0:
         mut fnum := 0
         mut wt := 0
-        mut tok := false
-        protobuf.ReadTag(rd, fnum, wt, tok)
-        if tok == false:
-            good = false
-        else fnum == 1:
-            mut ok := false
-            m.ir_version = protobuf.ReadVarint(rd, ok) as i64
-            good = ok
+        try protobuf.ReadTag(rd, fnum, wt)
+        if fnum == 1:
+            m.ir_version = try protobuf.ReadVarint(rd) as i64
         else fnum == 7:
-            mut ok := false
-            mut b := protobuf.ReadLenPrefixedBuf(rd, ok)
-            if ok:
-                good = _decode_graph(b.data, compress.BufLen(b), m)
-                saw_graph = true
-            else:
-                good = false
+            mut b := try protobuf.ReadLenPrefixedBuf(rd)
+            try:
+                _decode_graph(b.data, compress.BufLen(b), m)
+            catch e:
+                compress.BufFree(b)
+                throw e
             end
             compress.BufFree(b)
+            saw_graph = true
         else:
-            good = _skip(rd, wt)
+            try protobuf.SkipField(rd, wt)
         end
     end
-    if good == false: m.error = str.Clone("malformed protobuf") end
-    if good and saw_graph == false:
-        m.error = str.Clone("no graph")
-        good = false
+    if not saw_graph:
+        throw Error.New(ErrorKind.MissingKey, "no graph")
     end
-    ret good
 end

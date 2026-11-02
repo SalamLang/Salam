@@ -164,17 +164,6 @@ pub struct Duration:
     pub func to_str(): str: ret FormatDuration(Duration { ns = this.ns }) end
 end
 
-@en "DurationResult"
-@fa "نتیجه مدت"
-pub struct DurationResult:
-    @en "ok"
-    @fa "معتبر"
-    pub ok: bool = false
-    @en "value"
-    @fa "مقدار"
-    pub value: Duration = Duration { ns = 0 }
-end
-
 inline pure func _dbp(s: str): i8*: ret (s as void*) as i8* end
 
 inline pure func _dub(bp: i8*, i: int): int:
@@ -209,6 +198,21 @@ func _unitNanos(u: str): i64:
     if u == "h": ret _NS_PER_HOUR end
     if u == "d": ret _NS_PER_DAY end
     ret 0
+end
+
+func _derr(s: str, kind: ErrorKind, code: str, message: str, offset: int): Error:
+    ret Error.At(kind, message, offset).locate(s).with_code(code).wrap("time")
+end
+
+func _dwant(s: str, n: int, i: int, what: str): Error:
+    if i >= n:
+        ret _derr(s, ErrorKind.UnexpectedEnd, "time.unexpected_end", "expected " + what + ", found the end of the text", i)
+    end
+    ret _derr(s, ErrorKind.Syntax, "time.syntax", "expected " + what + ", found " + _tdesc(s, i), i)
+end
+
+func _dtooLong(s: str, at: int): Error:
+    ret _derr(s, ErrorKind.OutOfRange, "time.overflow", "duration is too long (the limit is about 292 years)", at)
 end
 
 @en "Nanoseconds"
@@ -279,10 +283,9 @@ end
 
 @en "ParseDuration"
 @fa "تجزیه مدت"
-pub func ParseDuration(s: str): DurationResult:
+pub func ParseDuration(s: str): Duration throws:
     n := s.len()
-    bad := DurationResult { ok = false, value = Duration { ns = 0 } }
-    if n == 0: ret bad end
+    if n == 0: throw _derr(s, ErrorKind.UnexpectedEnd, "time.empty", "empty duration", 0) end
     bp := _dbp(s)
     mut i := 0
     mut neg := false
@@ -293,16 +296,16 @@ pub func ParseDuration(s: str): DurationResult:
     else c0 == 43:
         i = 1
     end
-    if i >= n: ret bad end
-    if s.substr(i, n - i) == "0": ret DurationResult { ok = true, value = Duration { ns = 0 } } end
+    if i >= n: throw _dwant(s, n, i, "a number") end
+    if s.substr(i, n - i) == "0": ret Duration { ns = 0 } end
     mut total := 0 as i64
-    mut groups := 0
     until i < n:
+        gs := i
         mut whole := 0 as i64
         mut digits := 0
         until i < n and _isDigitByte(_dub(bp, i)):
             dv := (_dub(bp, i) - 48) as i64
-            if whole > (_I64_MAX - dv) / 10: ret bad end
+            if whole > (_I64_MAX - dv) / 10: throw _dtooLong(s, gs) end
             whole = whole * 10 + dv
             digits += 1
             i += 1
@@ -312,46 +315,53 @@ pub func ParseDuration(s: str): DurationResult:
         if i < n and _dub(bp, i) == 46:
             i += 1
             mut fdigits := 0
+            mut seen := 0
             until i < n and _isDigitByte(_dub(bp, i)):
                 if fdigits < 9:
                     fracNum = fracNum * 10 + ((_dub(bp, i) - 48) as i64)
                     fracDen = fracDen * 10
                     fdigits += 1
                 end
+                seen += 1
                 i += 1
             end
-            if fdigits == 0: ret bad end
-            digits = digits + fdigits
+            if seen == 0: throw _dwant(s, n, i, "a digit after the decimal point") end
+            digits = digits + seen
         end
-        if digits == 0: ret bad end
+        if digits == 0: throw _dwant(s, n, i, "a number") end
         us := i
         until i < n and not _isDigitByte(_dub(bp, i)):
             i += 1
         end
-        if i == us: ret bad end
-        unitNs := _unitNanos(s.substr(us, i - us))
-        if unitNs == 0: ret bad end
-        if whole > _I64_MAX / unitNs: ret bad end
+        if i == us:
+            throw _derr(s, ErrorKind.UnexpectedEnd, "time.missing_unit", "the number has no unit (ns, us, ms, s, m, h or d)", i)
+        end
+        unit := s.substr(us, i - us)
+        unitNs := _unitNanos(unit)
+        if unitNs == 0:
+            throw _derr(s, ErrorKind.Syntax, "time.bad_unit", "unknown unit '" + unit + "' (use ns, us, ms, s, m, h or d)", us)
+        end
+        if whole > _I64_MAX / unitNs: throw _dtooLong(s, gs) end
         q := unitNs / fracDen
         r := unitNs % fracDen
         fpart := fracNum * q + (fracNum * r) / fracDen
         part := whole * unitNs
-        if part > _I64_MAX - fpart: ret bad end
-        if total > _I64_MAX - (part + fpart): ret bad end
+        if part > _I64_MAX - fpart: throw _dtooLong(s, gs) end
+        if total > _I64_MAX - (part + fpart): throw _dtooLong(s, gs) end
         total = total + part + fpart
-        groups += 1
     end
-    if groups == 0: ret bad end
     if neg: total = 0 - total end
-    ret DurationResult { ok = true, value = Duration { ns = total } }
+    ret Duration { ns = total }
 end
 
 @en "ParseDurationOr"
 @fa "تجزیه مدت با پیش فرض"
 pub func ParseDurationOr(s: str, fallback: Duration): Duration:
-    r := ParseDuration(s)
-    if r.ok: ret r.value end
-    ret fallback
+    try:
+        ret ParseDuration(s)
+    catch:
+        ret fallback
+    end
 end
 
 @en "SleepFor"

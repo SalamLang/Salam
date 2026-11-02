@@ -173,6 +173,8 @@ With `--http` the server also reads:
 | `SALAM_MCP_ISSUER`         | `https://ai-api.salamlang.ir`  | Issuer listed in the protected resource metadata                                                                                           |
 | `SALAM_MCP_RESOURCES`      | `https://mcp.salamlang.ir/mcp` | URIs this server answers to; tokens must be issued for one of them                                                                         |
 | `SALAM_MCP_SERVICE_TOKEN`  | empty                          | A bearer token (32 characters or more) for a trusted internal caller such as the Salam AI assistant; its calls are reported as the service |
+| `SALAM_MCP_SEARCH_URL`     | empty                          | A SearXNG instance for `salam_web_search`, for example `http://searxng:8080`                                                               |
+| `SALAM_MCP_BRAVE_KEY`      | empty                          | A Brave Search API key, used when no SearXNG instance is set or it fails                                                                   |
 
 ### 🔑 Sign-in
 
@@ -251,8 +253,23 @@ The hosted server takes only `source` and `files`.
 | `salam_read_source`     | Read a line-numbered slice of any checkout file                                 |
 | `salam_keywords`        | English/Persian keyword table                                                   |
 
+### 🌐 Web
+
+| Tool               | Use it for                                                                         |
+| ------------------ | ---------------------------------------------------------------------------------- |
+| `salam_web_search` | Search the web: title, link and snippet for each result                            |
+| `salam_web_fetch`  | Read one public page as Markdown (or JSON and text as is), in parts for long pages |
+
+Search uses the SearXNG instance in `SALAM_MCP_SEARCH_URL` (its JSON output must be
+enabled), then the Brave Search API when `SALAM_MCP_BRAVE_KEY` is set, and last the
+DuckDuckGo HTML page, which often refuses datacenter addresses. The hosted server
+never fetches loopback, private, link-local or carrier-grade NAT addresses, checks
+every redirect again and connects to the address it checked; the configured search
+instance is the only exception. Pages are cut at 4 MB and 15 seconds.
+
 Every tool carries MCP annotations: all of them are read-only and idempotent
-except `salam_run` and `salam_exec`, which execute the program.
+except `salam_run` and `salam_exec`, which execute the program. The web tools are
+read-only and marked open world.
 
 ### 🩺 Diagnostics
 

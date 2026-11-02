@@ -4,6 +4,7 @@ import { uiText, type ActivityStep, type Message, type ThinkStep, type ToolStep 
 import type { AgentAnswer } from "./desktop";
 import { ActivityPanel } from "./Activity";
 import { MessageFiles } from "./Attach";
+import { EffortBadge } from "./effort";
 import { CopyButton, Markdown } from "./Markdown";
 import { t } from "./i18n";
 
@@ -203,6 +204,7 @@ export function MessageView({ m, name, loadFile, ...tools }: { m: Message; name:
               {m.body}
             </div>
           )}
+          <EffortBadge effort={m.effort} />
         </div>
         <span className="sr-only">{name}</span>
       </div>

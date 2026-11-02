@@ -383,12 +383,14 @@ then goes through:
    then inlines only the common path, which ends in a call to the cold
    function where the region used to start. The original function is left
    whole for its other callers, and a cold function is only compiled when
-   some call site uses it. In a caller of at most 40 blocks, calls that
-   arrive through an inlined body and sit in a loop get a second chance at
-   being inlined, whole or in part, so `MsbUnary` also brings in the bit read
-   its loop makes. The FLAC encoder and decoder in `audio_flac` run 8.7%
-   fewer instructions with both (206 million instead of 226 million; the LLVM
-   build runs 181 million).
+   some call site uses it. Under `-g` the cold function keeps the region's
+   source lines and gets a subprogram entry under the callee's name, so a
+   breakpoint on the function also stops there. In a caller of at most 40
+   blocks, calls that arrive through an inlined body and sit in a loop get a
+   second chance at being inlined, whole or in part, so `MsbUnary` also
+   brings in the bit read its loop makes. The FLAC encoder and decoder in
+   `audio_flac` run 8.7% fewer instructions with both (206 million instead of
+   226 million; the LLVM build runs 181 million).
 4. Tail recursion elimination. `ret f(x)` becomes a jump back to the top of
    the function, and so does `ret f(x) + y` or `ret f(x) * y` by carrying an
    accumulator, which removes one of the two calls in a recursive Fibonacci.
@@ -1034,7 +1036,9 @@ How the pieces fit:
 - The frontend emits `!dbg` locations, a `DIFile` per source file,
   `DILocalVariable` plus `llvm.dbg.declare` for every local and parameter,
   and DWARF types (basic types, pointers, `str` as a `char` pointer, structs
-  with their members, fixed arrays).
+  with their members, fixed arrays). Building those types never pulls in
+  a package's globals or functions, which only the code decides, so `-g`
+  keeps the order of globals and the data layout of a build without it.
 - `ng_dbg.salam` prescans that metadata. A location is an interned pair of
   `DILocation` and inlined-at location, so the inliner rebases callee
   locations onto the call site. The encoder records a line row whenever the

@@ -8,8 +8,9 @@ const PS_XDATA := 4
 const PS_BSS := 5
 const PS_IDATA := 6
 const PS_TLS := 7
-const PS_RELOC := 8
-const PS_COUNT := 9
+const PS_RSRC := 8
+const PS_RELOC := 9
+const PS_COUNT := 10
 
 const IT_SEC := 0
 const IT_BYTES := 1
@@ -54,6 +55,7 @@ func ps_name(k: int): str:
         PS_BSS: ret ".bss" end
         PS_IDATA: ret ".idata" end
         PS_TLS: ret ".tls" end
+        PS_RSRC: ret ".rsrc" end
         PS_RELOC: ret ".reloc" end
     end
     ret ".unknown"
@@ -199,6 +201,10 @@ func pe_classify(l &: Nl, t &: Pe, s: int):
         if str.Equals(n, "5"): key = "51" + lab end
         if str.Equals(n, "6"): key = "56" + lab end
         if str.Equals(n, "7"): key = "57" + lab end
+    else str.StartsWith(nm, ".rsrc"):
+        ps = PS_RSRC
+        key = "1" + nm
+        l.pe_nrsrc += 1
     else str.StartsWith(nm, ".tls"):
         ps = PS_TLS
         if str.Equals(nm, ".tls$AAA"):
@@ -655,6 +661,10 @@ func pe_link(l &: Nl, out: str):
     synth(l, "__image_base__", SYN_EHDR)
     synth(l, "___ImageBase", SYN_EHDR)
     synth(l, "___image_base__", SYN_EHDR)
+    if l.pe_nrsrc > 1:
+        nl_fail(l, "cannot link: more than one resource section (.rsrc) in the inputs; put all resources in one object")
+        ret
+    end
     pe_frame(l, t)
     pe_commons(l, t)
     pe_aliases(l)
@@ -681,9 +691,9 @@ func pe_link(l &: Nl, out: str):
         t.ps_rawsize.clear()
         pe_place(l, t)
     end
-    mut ename := l.pe_dll ? "DllMainCRTStartup" : "mainCRTStartup"
+    mut ename := l.pe_dll ? "DllMainCRTStartup" : (l.pe_gui ? "WinMainCRTStartup" : "mainCRTStartup")
     if l.mach == EM_386:
-        ename = l.pe_dll ? "_DllMainCRTStartup@12" : "_mainCRTStartup"
+        ename = l.pe_dll ? "_DllMainCRTStartup@12" : "_" + ename
     end
     ent := glob_find(l, ename)
     if ent < 0 or l.g_state[ent] != SY_DEF:
@@ -928,7 +938,7 @@ func pe_write(l &: Nl, t &: Pe, buf: u8*, total: i64, rel &: Vector<u8>, out: st
     w32(h, t.image_size)
     w32(h, t.hdr_size)
     w32(h, 0 as i64)
-    w16(h, 3 as i64)
+    w16(h, (l.pe_gui ? 2 : 3) as i64)
     w16(h, (p32 ? 0x140 : (a64 ? 0x8160 : 0x160)) as i64)
     if p32:
         w32(h, 0x200000 as i64)
@@ -977,6 +987,9 @@ func pe_write(l &: Nl, t &: Pe, buf: u8*, total: i64, rel &: Vector<u8>, out: st
         else d == 1 and imp0 > (0 as i64):
             w32(h, imp0)
             w32(h, imp1 - imp0 + (20 as i64))
+        else d == 2 and t.ps_vsize[PS_RSRC] > (0 as i64):
+            w32(h, t.ps_va[PS_RSRC])
+            w32(h, t.ps_vsize[PS_RSRC])
         else d == 3 and t.ps_vsize[PS_PDATA] > (0 as i64):
             w32(h, t.ps_va[PS_PDATA])
             w32(h, t.ps_vsize[PS_PDATA])

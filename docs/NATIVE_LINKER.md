@@ -438,6 +438,42 @@ Relocations: `ADDR64`, `ADDR32`, `ADDR32NB` (image-relative), `REL32` and
 `HIGH_ENTROPY_VA`; stack reserve as the backend requests (Windows reserves
 only 1 MB by default, see `NATIVE_BACKEND.md`).
 
+### Resources and GUI programs
+
+`--icon`, `--manifest` and `--version-info` (or a `[windows]` table in
+`salam.toml`) make the driver write a small COFF object with one `.rsrc`
+section (`nl_rsrc.salam`), the way `windres` would, and link it with the
+program. The section holds the resource directory: three levels (type, ID,
+language `0x409`), entries sorted by ID, then 16-byte data entries whose
+`OffsetToData` is an `ADDR32NB` relocation against the section, then the
+data, 8-byte aligned:
+
+| Type | ID | Data |
+|---|---|---|
+| `RT_ICON` (3) | 1..n | each image of the `.ico` file (BMP or PNG) |
+| `RT_GROUP_ICON` (14) | 1 | the `.ico` directory with each 14-byte entry pointing at its `RT_ICON` ID |
+| `RT_VERSION` (16) | 1 | `VS_VERSIONINFO`: `VS_FIXEDFILEINFO` (file and product version from `version`, `VFT_APP` or `VFT_DLL`), a `StringFileInfo` table `040904B0` in UTF-16 and a `VarFileInfo` translation |
+| `RT_MANIFEST` (24) | 1 (2 in a DLL) | the manifest file, byte for byte |
+
+The PE writer puts input `.rsrc` sections in their own output section
+before `.reloc` and points data directory 2 at it, so an object from
+`windres -O coff`, named with `link static`, links too; two resource objects
+in one link are an error, since the linker does not merge trees. Because the resources travel as an object,
+the system linker path passes the same object to mingw `gcc`, whose `ld`
+handles `.rsrc` itself.
+
+`--subsystem=windows` sets `IMAGE_SUBSYSTEM_WINDOWS_GUI` and makes
+`WinMainCRTStartup` (`_WinMainCRTStartup` on i386) the entry point. mingw's
+`crt2.o` defines it next to `mainCRTStartup`; it marks the program as a GUI
+one for the runtime's error reporting and then calls `main` as usual. With
+the system linker the driver passes `-mwindows`.
+
+`tools/bash/native-windows-gui-check.sh` builds a program with all four
+options and as a project with a `[windows]` table, checks the header and
+resource directory with `llvm-readobj`, and under wine loads the result as a
+data file to find the icon (and create an `HICON` from it), the manifest and
+the version strings through `GetFileVersionInfo`.
+
 ### Testing the PE linker
 
 `tools/bash/native-windows-check.sh` already cross-builds 111 programs and

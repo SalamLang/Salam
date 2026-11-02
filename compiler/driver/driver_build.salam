@@ -50,6 +50,34 @@ func target_is_freestanding(triple: str): bool:
     ret str.Contains(triple, "uefi") or str.Contains(triple, "salamos")
 end
 
+func win_from_project(opt &: Dr, pinfo: pm.PkgInfo, rdir: str):
+    if str.Len(opt.win_subsystem) == 0:
+        opt.win_subsystem = pinfo.win_subsystem
+    end
+    if str.Len(opt.win_icon) == 0 and str.Len(pinfo.win_icon) > 0:
+        opt.win_icon = pth.PathIsAbs(pinfo.win_icon) ? pinfo.win_icon : pth.PathJoin(rdir, pinfo.win_icon)
+    end
+    if str.Len(opt.win_manifest) == 0 and str.Len(pinfo.win_manifest) > 0:
+        opt.win_manifest = pth.PathIsAbs(pinfo.win_manifest) ? pinfo.win_manifest : pth.PathJoin(rdir, pinfo.win_manifest)
+    end
+    if pinfo.win_version.len() == 0:
+        ret
+    end
+    mut vs := Vector {} as Vector<str>
+    mut has_ver := false
+    each kv in pinfo.win_version:
+        vs.push(kv)
+        has_ver = has_ver or str.StartsWith(kv, "version=")
+    end
+    if not has_ver and str.Len(pinfo.version) > 0:
+        vs.push("version=" + pinfo.version)
+    end
+    each kv2 in opt.win_version:
+        vs.push(kv2)
+    end
+    opt.win_version = vs
+end
+
 func build_impl(opt &: Dr): int:
     mut lib_stem := ""
     mut lib_export_pub := false
@@ -91,6 +119,7 @@ func build_impl(opt &: Dr): int:
             pname = project_output_name(rdir)
         end
         lib_export_pub = pinfo.export_pub
+        win_from_project(opt, pinfo, rdir)
         if str.Len(opt.lib_kind) > 0:
             lib_stem = pname
             opt.lib_name = pname
@@ -101,6 +130,15 @@ func build_impl(opt &: Dr): int:
 
     if str.Len(opt.input) == 0 and opt.inputs.len() > 0:
         opt.input = opt.inputs.get(0)
+    end
+
+    werr := win_settings(opt)
+    if str.Len(werr) > 0:
+        io.EPrintln("salam: " + werr)
+        ret 2
+    end
+    if win_settings_used() and not str.Equals(opt.backend, "native") and not str.Equals(linker_mode(opt), "builtin") and not (str.Equals(opt.backend, "auto") and native_by_default()):
+        io.EPrintln(i18.Tr("salam: warning: --subsystem, --icon, --manifest and --version-info only apply to Windows builds with --backend=native or --linker=builtin"))
     end
 
     if str.Len(opt.lib_kind) > 0 and not str.Equals(opt.backend, "c"):

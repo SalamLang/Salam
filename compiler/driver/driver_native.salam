@@ -15,6 +15,10 @@ include nl "../nativelink/nativelink.salam"
 include at "../ast.salam"
 include pth "../sal_path.salam"
 
+mut g_win_res := nl.WinRes {}
+
+mut g_win_gui := false
+
 func native_target_os(triple: str, err &: str): int:
     if str.Len(triple) == 0:
         mut host := ng.NG_OS_LINUX
@@ -814,10 +818,21 @@ func native_link_mingw_as(lgr: lg.Logger, obj: str, exe: str, o: lv.Options, tri
     nl.SetWindows(l)
     if dll:
         nl.SetDll(l, pth.PathBase(exe), obj)
+    else g_win_gui:
+        nl.SetWindowsGui(l)
     end
     nl.AddInput(l, find_in(dirs, dll ? "dllcrt2.o" : "crt2.o"))
     nl.AddInput(l, find_in(dirs, "crtbegin.o"))
     nl.AddInput(l, obj)
+    mut rerr := ""
+    res := win_res_object(obj, exe, arch, dll, rerr)
+    if str.Len(rerr) > 0:
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, rerr)
+        ret 1
+    end
+    if str.Len(res) > 0:
+        nl.AddInput(l, res)
+    end
     repeat o.link_libs.len() in i:
         spec := lib_spec(o.link_libs.get(i))
         if str.Len(spec) == 0 or str.Equals(spec, "m") or str.Equals(spec, "c") or str.Equals(spec, "pthread"):
@@ -834,7 +849,11 @@ func native_link_mingw_as(lgr: lg.Logger, obj: str, exe: str, o: lv.Options, tri
         end
     end
     nl.AddInput(l, find_in(dirs, "crtend.o"))
-    if not nl.Link(l, exe):
+    linked := nl.Link(l, exe)
+    if str.Len(res) > 0:
+        _rr := os.Remove(res)
+    end
+    if not linked:
         lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, nl.Error(l))
         ret 1
     end
@@ -889,13 +908,77 @@ func native_link_dll(lgr: lg.Logger, opt &: Dr, obj: str, dll: str, triple: str,
             ret 1
         end
     end
-    cmd := native_link_cmd(obj, dll, triple, o) + ` -shared "-Wl,--out-implib,` + implib + `"`
+    mut cmd := native_link_cmd(obj, dll, triple, o) + ` -shared "-Wl,--out-implib,` + implib + `"`
+    mut rerr := ""
+    res := win_res_object(obj, dll, tri_arch(triple), true, rerr)
+    if str.Len(rerr) > 0:
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, rerr)
+        ret 1
+    end
+    if str.Len(res) > 0:
+        cmd += ` "` + res + `"`
+    end
     lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "native link: " + cmd)
-    if os.Run(cmd) != 0:
+    rc := os.Run(cmd)
+    if str.Len(res) > 0:
+        _rr := os.Remove(res)
+    end
+    if rc != 0:
         lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("linking failed: %s"), co.ArgStr(cmd)))
         ret 1
     end
     ret 0
+end
+
+func win_res_object(obj: str, exe: str, arch: str, dll: bool, err &: str): str:
+    if nl.ResEmpty(g_win_res):
+        ret ""
+    end
+    mut r := g_win_res
+    r.file_name = pth.PathBase(exe)
+    r.dll = dll
+    path := obj + ".rsrc.obj"
+    if not nl.WriteResObject(r, nl.ResMachine(arch), path, err):
+        ret ""
+    end
+    ret path
+end
+
+func win_settings(opt &: Dr): str:
+    g_win_res = nl.WinRes {}
+    g_win_gui = false
+    if str.Len(opt.win_subsystem) > 0 and not str.Equals(opt.win_subsystem, "console") and not str.Equals(opt.win_subsystem, "windows"):
+        ret co.Format1(i18.Tr("the Windows subsystem must be 'console' or 'windows' (got '%s')"), co.ArgStr(opt.win_subsystem))
+    end
+    g_win_gui = str.Equals(opt.win_subsystem, "windows")
+    g_win_res.icon = opt.win_icon
+    g_win_res.manifest = opt.win_manifest
+    each kv in opt.win_version:
+        sep := str.IndexOf(kv, "=")
+        if sep <= 0:
+            ret co.Format1(i18.Tr("--version-info takes KEY=VALUE (got '%s')"), co.ArgStr(kv))
+        end
+        k := str.Lower(str.Substr(kv, 0, sep))
+        v := str.Substr(kv, sep + 1, str.Len(kv) - sep - 1)
+        if str.Equals(k, "version"):
+            g_win_res.version = v
+        else str.Equals(k, "company"):
+            g_win_res.company = v
+        else str.Equals(k, "description"):
+            g_win_res.description = v
+        else str.Equals(k, "product"):
+            g_win_res.product = v
+        else str.Equals(k, "copyright"):
+            g_win_res.copyright = v
+        else:
+            ret co.Format1(i18.Tr("unknown version-info key '%s'; use version, company, description, product or copyright"), co.ArgStr(k))
+        end
+    end
+    ret ""
+end
+
+func win_settings_used(): bool:
+    ret g_win_gui or not nl.ResEmpty(g_win_res)
 end
 
 func linker_mode(opt &: Dr): str:
@@ -953,8 +1036,12 @@ func builtin_link_mode(lgr: lg.Logger, obj: str, exe: str, triple: str, o: lv.Op
 end
 
 func native_link(lgr: lg.Logger, obj: str, exe: str, triple: str, o: lv.Options): int:
+    win := (str.Contains(triple, "windows") or str.Contains(triple, "mingw")) and win_settings_used()
     mut lerr := ""
-    lrc := lb.LinkObject(obj, exe, triple, o.sysroot, o.link_libs, o.link_kinds, o.lib_paths, lerr)
+    mut lrc := 0 - 1
+    if not win:
+        lrc = lb.LinkObject(obj, exe, triple, o.sysroot, o.link_libs, o.link_kinds, o.lib_paths, lerr)
+    end
     if lrc == 0:
         ret 0
     end
@@ -962,9 +1049,27 @@ func native_link(lgr: lg.Logger, obj: str, exe: str, triple: str, o: lv.Options)
         lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, lerr)
         ret 1
     end
-    cmd := native_link_cmd(obj, exe, triple, o)
+    mut cmd := native_link_cmd(obj, exe, triple, o)
+    mut res := ""
+    if win:
+        res = win_res_object(obj, exe, tri_arch(triple), false, lerr)
+        if str.Len(lerr) > 0:
+            lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, lerr)
+            ret 1
+        end
+        if str.Len(res) > 0:
+            cmd += ` "` + res + `"`
+        end
+        if g_win_gui:
+            cmd += " -mwindows"
+        end
+    end
     lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "native link: " + cmd)
-    if os.Run(cmd) != 0:
+    rc := os.Run(cmd)
+    if str.Len(res) > 0:
+        _rr := os.Remove(res)
+    end
+    if rc != 0:
         lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("linking failed: %s"), co.ArgStr(cmd)))
         ret 1
     end

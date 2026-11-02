@@ -215,6 +215,7 @@ export type MessageCall = {
   cwd: string;
   state: CallState;
   output: string;
+  image?: boolean;
 };
 
 export type PlanId = "free" | "plus" | "pro" | "unlimited";
@@ -863,6 +864,11 @@ export const api = {
     call<{ name: string; kind: string; mime: string; data: string }>(
       "GET",
       `/admin/files/${id}`,
+    ),
+  callImage: (id: string, cid: string) =>
+    call<{ mime: string; data: string }>(
+      "GET",
+      `/chats/${id}/calls/${cid}/image`,
     ),
   chatFile: (id: string, fid: number) =>
     call<{ name: string; kind: string; mime: string; data: string }>(

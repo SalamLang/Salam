@@ -71,6 +71,15 @@ Messages can carry up to six attachments (12 MB together). Each file is checked 
 
 Every upload is written to disk under `AI_UPLOAD_DIR` (default `/data/uploads`, a host volume on the server) as `yyyy/mm/yyyymmdd-hhmmss-<uuid>.<ext>`, a name the server makes up, so a filename from the browser never becomes a path. `message_files` keeps only the path and the details (owner, chat, kind, size, and for a ZIP the files it used). Rows go with their chat; the files stay on disk. A fallback retry resends the attachments. Admins see every upload at `GET /admin/files` (`?user=`, `?kind=`, `?offset=`), download one with `GET /admin/files/:id`, and the users list counts each account's images and files. The `/chats/:id/messages` route needs `client_max_body_size 20m` in nginx.
 
+The `browser` tool drives a headless Chromium: Salam Agent runs the user's own Chrome,
+Edge, Chromium or Brave with a fresh profile, and a cloud chat runs `sandbox/image/browser.mjs`
+inside its sandbox. It opens pages (local dev servers included), clicks, types, scrolls,
+runs scripts, reads the page text and the console, and takes JPEG screenshots. A screenshot
+goes back to the model as an MCP image when the engine model takes images (otherwise the
+model is told to judge the page by its text and console), is stored with the call
+(`bridge_calls.image`) and is shown in the chat; `GET /chats/:id/calls/:cid/image` returns
+it as `{mime, data}`.
+
 Every desktop tool call is also recorded in `bridge_calls`: the chat and assistant message it belongs to, the tool, its arguments (with the session token removed), the preview shown in the app, the full output and the final state. `GET /chats/:id` returns them as `calls`, in the order they ran, so reopening a chat shows the same text and command boxes as the live turn. Rows are deleted with their chat.
 
 The API:
@@ -186,8 +195,8 @@ in Persian and English and starts answering.
 
 A chat can be a cloud chat (`chats.cloud = 1`): it has a private Linux container
 (see `sandbox/`) and, through the same bridge MCP server the desktop agent uses, the
-tools `shell`, `read_file`, `write_file`, `edit_file`, `list_dir`, `glob`, `grep` and
-`run_tests`, plus `github_api`, `github_git`, `figma_api` and `figma_export`. The
+tools `shell`, `read_file`, `write_file`, `edit_file`, `list_dir`, `glob`, `grep`,
+`run_tests` and `browser`, plus `github_api`, `github_git`, `figma_api` and `figma_export`. The
 chat's random `bridge_token` is the session id the engine passes in every call, as
 for a desktop chat, so the engine needs no new configuration. Calls run on worker
 threads, are recorded in `bridge_calls` (the site shows them as command boxes) and,

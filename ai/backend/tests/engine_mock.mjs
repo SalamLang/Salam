@@ -72,7 +72,8 @@ async function callDesktop(s) {
       s.waits += 1;
       r = await call("wait", { session, call_id: id });
     }
-    s.tool = `${r.isError ? "error" : "ok"} ${r.content[0].text}${s.waits ? ` after ${s.waits} waits` : ""}`;
+    const images = r.content.filter((c) => c.type === "image").length;
+    s.tool = `${r.isError ? "error" : "ok"} ${r.content[0].text}${s.waits ? ` after ${s.waits} waits` : ""}${images ? ` images=${images}` : ""}`;
   } catch (e) {
     s.tool = `error ${e}`;
   }

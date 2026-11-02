@@ -183,6 +183,7 @@ func main:
     router.Get(r, "/chats/:id", get_chat)
     router.Get(r, "/capabilities", capabilities)
     router.Get(r, "/chats/:id/files/:fid", get_file)
+    router.Get(r, "/chats/:id/calls/:cid/image", get_call_image)
     router.Patch(r, "/chats/:id", rename_chat)
     router.Delete(r, "/chats/:id", delete_chat)
     router.Post(r, "/chats/:id/messages", send_message)
@@ -203,7 +204,7 @@ func main:
     aitelegram.Routes(r)
     aicloud.Routes(r)
     ailogin.Routes(r)
-    each path in ["/auth/register", "/auth/login", "/auth/logout", "/me", "/chats", "/chats/:id", "/chats/:id/messages", "/chats/:id/messages/:mid", "/chats/:id/stop", "/chats/:id/queue", "/chats/:id/queue/:qid", "/chats/:id/queue/:qid/now", "/capabilities", "/chats/:id/files/:fid"]:
+    each path in ["/auth/register", "/auth/login", "/auth/logout", "/me", "/chats", "/chats/:id", "/chats/:id/messages", "/chats/:id/messages/:mid", "/chats/:id/stop", "/chats/:id/queue", "/chats/:id/queue/:qid", "/chats/:id/queue/:qid/now", "/capabilities", "/chats/:id/files/:fid", "/chats/:id/calls/:cid/image"]:
         router.Options(r, path, preflight)
     end
     mut s := http.NewServer(port)
@@ -645,7 +646,7 @@ func get_chat(ctx: i64):
     end
     aistore.Finish(rows)
     mut calls := Vector {} as Vector<str>
-    mut crows := aistore.Stmt("SELECT id, message_id, tool, kind, summary, detail, lang, outside, cwd, output, state, created, finished FROM bridge_calls WHERE chat_id = ?1 ORDER BY seq", one(id))
+    mut crows := aistore.Stmt("SELECT id, message_id, tool, kind, summary, detail, lang, outside, cwd, output, state, created, finished, IF(COALESCE(image, '') = '', 0, 1) FROM bridge_calls WHERE chat_id = ?1 ORDER BY seq", one(id))
     until aistore.Next(crows):
         mut cm := Vector {} as Vector<str>
         cm.push(json.Member("call_id", aistore.Text(crows, 0)))
@@ -662,6 +663,9 @@ func get_chat(ctx: i64):
         cm.push(json.Member("state", aistore.Text(crows, 10)))
         cm.push(json.MemberRaw("created", aistore.Text(crows, 11)))
         cm.push(json.MemberRaw("finished", aistore.Text(crows, 12)))
+        if aistore.Text(crows, 13) == "1":
+            cm.push(json.MemberBool("image", true))
+        end
         calls.push(json.Object(cm))
     end
     aistore.Finish(crows)
@@ -1157,13 +1161,40 @@ func get_file(ctx: i64):
     reply(ctx, 200, found)
 end
 
+func get_call_image(ctx: i64):
+    uid := need_user(ctx)
+    if uid == 0:
+        ret
+    end
+    id := http.Param(ctx, "id")
+    if own_chat(uid, id).len() == 0:
+        fail(ctx, 404, "not_found", "این گفت‌وگو پیدا نشد.")
+        ret
+    end
+    mut data := ""
+    mut mime := ""
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT COALESCE(image, ''), image_mime FROM bridge_calls WHERE id = ?1 AND chat_id = ?2", two(http.Param(ctx, "cid"), id))
+    if aistore.Next(rows):
+        data = aistore.Text(rows, 0)
+        mime = aistore.Text(rows, 1)
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    if data.len() == 0:
+        fail(ctx, 404, "not_found", "این تصویر پیدا نشد.")
+        ret
+    end
+    reply(ctx, 200, "{" + json.Member("mime", mime.len() > 0 ? mime : "image/jpeg") + ", " + json.Member("data", data) + "}")
+end
+
 func desktop_preamble(uid: i64, device: str, workspace: str, token: str): str:
     os_name := aibridge.DeviceOs(uid, device)
     mut state := "connected"
     if not aibridge.Online(device):
         state = "not connected right now"
     end
-    ret "<desktop_session>\nsession: " + token + "\nworkspace: " + workspace + "\nos: " + os_name + "\napp: " + state + "\nYou are working on this user's computer through Salam Agent, the desktop app on their computer. Use the desktop tools (shell, read_file, write_file, edit_file, list_dir, glob, grep, docker, wsl, run_tests) and pass the session value above in every call. Paths are relative to the workspace. Look before you change things, keep edits small, run the tests after changing code, and tell the user what you did.\nThe project's own instructions, from its AGENTS.md or AGENT.md, come in a project_instructions block: follow them unless they conflict with the Salam policy. The project's memory lives in .salam-agent/ in the workspace: .salam-agent/index.md lists every memory with a link to its file under .salam-agent/memory/, and it comes in a project_memory block. Read a memory file with read_file when its title looks relevant. Save what will help in a later session, such as how to build and test, the layout, decisions, the user's preferences and the traps you hit, with save_memory (reuse a slug to update a memory), and use forget_memory for what turned out wrong. If neither block has appeared in this conversation, read AGENTS.md or AGENT.md and .salam-agent/index.md yourself when they exist.\n</desktop_session>\n\n"
+    ret "<desktop_session>\nsession: " + token + "\nworkspace: " + workspace + "\nos: " + os_name + "\napp: " + state + "\nYou are working on this user's computer through Salam Agent, the desktop app on their computer. Use the desktop tools (shell, read_file, write_file, edit_file, list_dir, glob, grep, docker, wsl, run_tests, browser) and pass the session value above in every call. After changing a web page or frontend, open it with browser, look at the screenshot and the console errors, and fix what is wrong before you say it is done. Paths are relative to the workspace. Look before you change things, keep edits small, run the tests after changing code, and tell the user what you did.\nThe project's own instructions, from its AGENTS.md or AGENT.md, come in a project_instructions block: follow them unless they conflict with the Salam policy. The project's memory lives in .salam-agent/ in the workspace: .salam-agent/index.md lists every memory with a link to its file under .salam-agent/memory/, and it comes in a project_memory block. Read a memory file with read_file when its title looks relevant. Save what will help in a later session, such as how to build and test, the layout, decisions, the user's preferences and the traps you hit, with save_memory (reuse a slug to update a memory), and use forget_memory for what turned out wrong. If neither block has appeared in this conversation, read AGENTS.md or AGENT.md and .salam-agent/index.md yourself when they exist.\n</desktop_session>\n\n"
 end
 
 func project_block(chat: str, body: str, fresh: bool): str:

@@ -16,6 +16,26 @@ pub const WT_LEN := 2
 @fa "نوع سیم ثابت۳۲"
 pub const WT_FIXED32 := 5
 
+func _pb_err(kind: ErrorKind, msg: str, offset: int, code: str): Error:
+    ret Error.At(kind, msg, offset).with_code(code).wrap("protobuf")
+end
+
+func _pb_need(r: compress.ByteReader, n: int, what: str) throws:
+    if r.bad or compress.RdLeft(r) < n:
+        throw _pb_err(ErrorKind.UnexpectedEnd, what + " needs " + n + " bytes, " + compress.RdLeft(r) + " left", r.pos, "protobuf.truncated")
+    end
+end
+
+func _pb_len(r &: compress.ByteReader): int throws:
+    start := r.pos
+    n := try ReadVarint(r)
+    left := compress.RdLeft(r)
+    if n > (left as u64):
+        throw _pb_err(ErrorKind.UnexpectedEnd, "length-prefixed field needs " + n + " bytes, " + left + " left", start, "protobuf.truncated")
+    end
+    ret n as int
+end
+
 @en "MakeTag"
 @fa "ساخت برچسب"
 pub func MakeTag(fieldNum: int, wireType: int): u64:
@@ -40,26 +60,27 @@ end
 
 @en "ReadVarint"
 @fa "خواندن عدد متغیر"
-pub func ReadVarint(r &: compress.ByteReader, ok &: bool): u64:
+pub func ReadVarint(r &: compress.ByteReader): u64 throws:
+    start := r.pos
     mut result := 0 as u64
     mut shift := 0 as u64
     mut i := 0
     until i < 10:
+        if r.bad or compress.RdLeft(r) < 1:
+            throw _pb_err(ErrorKind.UnexpectedEnd, "varint is cut short", r.pos, "protobuf.truncated")
+        end
         b := compress.RdByte(r)
-        if r.bad:
-            ok = false
-            ret 0
+        if i == 9 and b > 1:
+            throw _pb_err(ErrorKind.OutOfRange, "varint does not fit in 64 bits", start, "protobuf.varint_overflow")
         end
         result = result | (((b & 127) as u64) << shift)
         if (b & 128) == 0:
-            ok = true
             ret result
         end
         shift = shift + (7 as u64)
         i += 1
     end
-    ok = false
-    ret 0
+    throw _pb_err(ErrorKind.OutOfRange, "varint is longer than 10 bytes", start, "protobuf.varint_overflow")
 end
 
 @en "WriteTag"
@@ -70,16 +91,19 @@ end
 
 @en "ReadTag"
 @fa "خواندن برچسب"
-pub func ReadTag(r &: compress.ByteReader, fieldNum &: int, wireType &: int, ok &: bool):
-    mut vok := false
-    tag := ReadVarint(r, vok)
-    if not vok:
-        ok = false
-        ret
+pub func ReadTag(r &: compress.ByteReader, fieldNum &: int, wireType &: int) throws:
+    start := r.pos
+    tag := try ReadVarint(r)
+    num := tag >> (3 as u64)
+    wt := (tag & (7 as u64)) as int
+    if num == (0 as u64) or num > (536870911 as u64):
+        throw _pb_err(ErrorKind.Syntax, "invalid field number " + num, start, "protobuf.bad_field_number")
     end
-    fieldNum = (tag >> (3 as u64)) as int
-    wireType = (tag & (7 as u64)) as int
-    ok = true
+    if wt == 6 or wt == 7:
+        throw _pb_err(ErrorKind.Syntax, "invalid wire type " + wt + " for field " + num, start, "protobuf.bad_wire_type")
+    end
+    fieldNum = num as int
+    wireType = wt
 end
 
 @en "ZigZagEncode32"
@@ -107,13 +131,9 @@ end
 pub func WriteFixed32(buf &: compress.ByteBuf, v: u32): binary.WriteU32LE(buf, v as int) end
 @en "ReadFixed32"
 @fa "خواندن ثابت۳۲"
-pub func ReadFixed32(r &: compress.ByteReader, ok &: bool): u32:
-    if compress.RdLeft(r) < 4:
-        ok = false
-        ret 0
-    end
-    ok = true
-    ret binary.ReadU32LE(r) as u32
+pub func ReadFixed32(r &: compress.ByteReader): u32 throws:
+    try _pb_need(r, 4, "fixed32")
+    ret try binary.ReadU32LE(r) as u32
 end
 
 @en "WriteFixed64"
@@ -121,13 +141,9 @@ end
 pub func WriteFixed64(buf &: compress.ByteBuf, v: u64): binary.WriteU64LE(buf, v as i64) end
 @en "ReadFixed64"
 @fa "خواندن ثابت۶۴"
-pub func ReadFixed64(r &: compress.ByteReader, ok &: bool): u64:
-    if compress.RdLeft(r) < 8:
-        ok = false
-        ret 0
-    end
-    ok = true
-    ret binary.ReadU64LE(r) as u64
+pub func ReadFixed64(r &: compress.ByteReader): u64 throws:
+    try _pb_need(r, 8, "fixed64")
+    ret try binary.ReadU64LE(r) as u64
 end
 
 @en "WriteFloat"
@@ -135,13 +151,9 @@ end
 pub func WriteFloat(buf &: compress.ByteBuf, v: f64): binary.WriteF32(buf, v, false) end
 @en "ReadFloat"
 @fa "خواندن اعشار۳۲"
-pub func ReadFloat(r &: compress.ByteReader, ok &: bool): f64:
-    if compress.RdLeft(r) < 4:
-        ok = false
-        ret 0.0
-    end
-    ok = true
-    ret binary.ReadF32(r, false)
+pub func ReadFloat(r &: compress.ByteReader): f64 throws:
+    try _pb_need(r, 4, "float")
+    ret try binary.ReadF32(r, false)
 end
 
 @en "WriteDouble"
@@ -149,13 +161,9 @@ end
 pub func WriteDouble(buf &: compress.ByteBuf, v: f64): binary.WriteF64(buf, v, false) end
 @en "ReadDouble"
 @fa "خواندن اعشار۶۴"
-pub func ReadDouble(r &: compress.ByteReader, ok &: bool): f64:
-    if compress.RdLeft(r) < 8:
-        ok = false
-        ret 0.0
-    end
-    ok = true
-    ret binary.ReadF64(r, false)
+pub func ReadDouble(r &: compress.ByteReader): f64 throws:
+    try _pb_need(r, 8, "double")
+    ret try binary.ReadF64(r, false)
 end
 
 @en "WriteLenPrefixedBytes"
@@ -173,21 +181,16 @@ end
 
 @en "ReadLenPrefixedBuf"
 @fa "خواندن بافر طول‌دار"
-pub func ReadLenPrefixedBuf(r &: compress.ByteReader, ok &: bool): compress.ByteBuf:
-    mut vok := false
-    n := ReadVarint(r, vok)
-    if not vok or compress.RdLeft(r) < (n as int):
-        ok = false
-        ret compress.NewByteBuf()
-    end
-    ok = true
-    ret compress.RdBytes(r, n as int)
+pub func ReadLenPrefixedBuf(r &: compress.ByteReader): compress.ByteBuf throws:
+    n := try _pb_len(r)
+    ret compress.RdBytes(r, n)
 end
 
 @en "ReadLenPrefixedStr"
 @fa "خواندن رشته طول‌دار"
-pub func ReadLenPrefixedStr(r &: compress.ByteReader, ok &: bool): str:
-    b := ReadLenPrefixedBuf(r, ok)
+pub func ReadLenPrefixedStr(r &: compress.ByteReader): str throws:
+    n := try _pb_len(r)
+    b := compress.RdBytes(r, n)
     out := compress.BufToStrUnsafe(b)
     compress.BufFree(b)
     ret out
@@ -195,37 +198,22 @@ end
 
 @en "SkipField"
 @fa "رد کردن فیلد"
-pub func SkipField(r &: compress.ByteReader, wireType: int, ok &: bool):
+pub func SkipField(r &: compress.ByteReader, wireType: int) throws:
+    start := r.pos
     if wireType == WT_VARINT:
-        mut vok := false
-        ReadVarint(r, vok)
-        ok = vok
-        ret
+        try ReadVarint(r)
+    else wireType == WT_FIXED64:
+        try _pb_need(r, 8, "fixed64")
+        r.pos += 8
+    else wireType == WT_FIXED32:
+        try _pb_need(r, 4, "fixed32")
+        r.pos += 4
+    else wireType == WT_LEN:
+        n := try _pb_len(r)
+        r.pos += n
+    else wireType == 3 or wireType == 4:
+        throw _pb_err(ErrorKind.Unsupported, "groups (wire type " + wireType + ") are not supported", start, "protobuf.group")
+    else:
+        throw _pb_err(ErrorKind.Syntax, "invalid wire type " + wireType, start, "protobuf.bad_wire_type")
     end
-    if wireType == WT_FIXED64:
-        if compress.RdLeft(r) < 8:
-            ok = false
-            ret
-        end
-        binary.ReadU64LE(r)
-        ok = true
-        ret
-    end
-    if wireType == WT_FIXED32:
-        if compress.RdLeft(r) < 4:
-            ok = false
-            ret
-        end
-        binary.ReadU32LE(r)
-        ok = true
-        ret
-    end
-    if wireType == WT_LEN:
-        mut bok := false
-        b := ReadLenPrefixedBuf(r, bok)
-        compress.BufFree(b)
-        ok = bok
-        ret
-    end
-    ok = false
 end

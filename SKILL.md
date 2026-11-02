@@ -1097,7 +1097,8 @@ learning half is `f32` on `std/tensor`; the classical half is `f64` on
   `LastStep`, the `Layer` interface with `Sequential` and the
   `ReluLayer GeluLayer TanhLayer` wrappers, `Flatten SinusoidalPositions`,
   init `XavierUniform XavierNormal KaimingUniform KaimingNormal`, checkpoints `SaveCheckpoint LoadCheckpoint`
-  (SLMT, `.gz` aware) and the `*Buf` forms.
+  (SLMT, `.gz` aware) and the `*Buf` forms; the loaders `throws` (`nn.crc`,
+  `nn.param_count`, `nn.shape`, ...) and write nothing unless the whole file matches.
 - **`optim`**: `SGD` (momentum, nesterov, weight decay) `Adam` `NewAdamW`
   `RMSProp` with `step(ps)`, `ClipGradNorm ClipGradValue`, schedules `StepLR CosineLR WarmupCosine`.
 - **`ml`**: struct-per-estimator over `matrix`; `fit(x, y): bool`, `predict`,
@@ -1109,14 +1110,16 @@ learning half is `f32` on `std/tensor`; the classical half is `f64` on
   rows only.
 - **`data`**: `MakeBlobs MakeMoons MakeCircles MakeRegression MakeClassification` (seeded), `LoadCsv LoadCsvFile` → `Table` (`kinds to_matrix split_xy cat_levels`), `MatrixDataset.batches` → `BatchIter`
   (`next next_tensor reset`), `LoadIdx LoadMnist ParseIdx`, `LoadImageFolder`,
-  `XTensor YLabels`.
-- **`npy`**: `ReadNpy ReadNpyFile WriteNpy WriteNpyFile ToMatrix FromMatrix NpzList NpzRead NpzWrite`.
+  `XTensor YLabels`. `LoadCsv LoadCsvFile LoadIdx LoadMnist ParseIdx` are `throws`.
+- **`npy`**: `ReadNpy ReadNpyFile WriteNpy WriteNpyFile ToMatrix FromMatrix NpzList NpzRead NpzWrite`;
+  every reader and `ToMatrix` `throws` (`npy.bad_magic`, `npy.dtype`, `npy.truncated`, `npy.missing_key`).
 - **`onnx`**: `LoadOnnx ParseOnnx Run` for MLP, CNN and transformer-style
   graphs (`Conv Gemm MatMul` activations, pooling, the norms, shape ops,
   reductions, `Gather Slice Where Cast` and more, about 65 ops); anything
   else fails with the op named in `model.error`.
 - **`gguf`**: `LoadGguf ParseGguf` (metadata, tensor directory),
-  `LoadTensorF32` dequantizing `F32 F16 Q8_0 Q4_0 Q4_1`.
+  `LoadTensorF32` dequantizing `F32 F16 Q8_0 Q4_0 Q4_1`; all three `throws`
+  (`ParseGguf` owns the buffer only on success). `tensor.ReadTensor` throws too.
 - **`llm`**: decoder-only models (Llama layout: RMSNorm, RoPE, GQA,
   SwiGLU). `Config Model RandomModel NewKVCache(cfg) Forward(m, cache, tokens)` (positions continue from `cache.len`), `LogitsRow Greedy`,
   `Sampler` (`temperature top_k top_p repeat_penalty`) with `GenerateIds Generate`, `NewTokenizer` (`TOK_SPM`, `TOK_BPE`; `encode decode`), and
@@ -1295,18 +1298,20 @@ end
   `Unsupported`, `offset` is the byte position and `line`/`column` are filled
   in (`e.to_str()` gives `json: expected ':' (line 2, column 7)`); trailing
   text after the value is code `json.trailing_data`. `JSONDecoder.Decode()`
-  throws too.
+  throws too. TOML and XML errors also carry a `code` (`toml.duplicate_key`,
+  `xml.unclosed_tag`, `xml.mismatched_tag`, `xpath.unknown_function`, ...).
 - **`xml`** (`import encoding.xml`): two models in one package.
-  - **Simple tree** `XMLNode` (`tag attrs children text`): `Decode DecodeStrict Valid Encode EncodeIndent Child Children Attr HasAttr SetAttr AppendChild NewXMLNode ToValue FromValue EscapeText EscapeAttr`, plus the
+  - **Simple tree** `XMLNode` (`tag attrs children text`): `Decode Valid Encode EncodeIndent Child Children Attr HasAttr SetAttr AppendChild NewXMLNode ToValue FromValue EscapeText EscapeAttr` (`Decode` throws; it reads through the strict parser, namespaces off), plus the
     tokenizer `NewXMLTokenizer`/`NextToken` (checks nothing; run
     `WellFormed` first). Ignores namespaces and mixed-content order: fine
     for a config file.
   - **Full `Document`** (an arena of `int` node handles, strict parsing with
-    line/column errors, namespaces, bounded entity expansion): `Parse(text, err) ParseWith(text, opts, err) WellFormed`, `ParseOptions`
+    line/column errors, namespaces, bounded entity expansion): `Parse(text) ParseWith(text, opts)` (both `throws`), `WellFormed(text): bool`, `ParseOptions`
     (`preserve_whitespace keep_comments namespaces expand_entities max_depth`; whitespace-only text is dropped by default). Read `Root Kind Name LocalName NamespaceURI Parent ChildCount ChildAt Elements ElementsNamed FirstElementNamed Descendants NextSibling AttributeValue AttributeValueNS Text Line Column`; edit `NewDocument CreateElement CreateText Append InsertBefore RemoveChild SetAttribute SetText`; write
     `Write WriteIndent WriteNode Canonical`. `Free(d)`, `FreeList(list)`.
-  - **XPath 1.0**: `Select(d, context, expr, err): NodeList` (context `-1` =
-    document) `SelectFirst SelectString SelectNumber SelectBoolean Evaluate`;
+  - **XPath 1.0**: `Select(d, context, expr): NodeList` (context `-1` =
+    document) `SelectFirst SelectString SelectNumber SelectBoolean Evaluate`,
+    all `throws` on a bad expression (context `xpath`, column inside it);
     all axes and the core function library, no variables, no namespace axis.
     Name tests match the name as written, prefix included: use
     `local-name()`/`namespace-uri()` when the prefix may vary. Attributes
@@ -1318,14 +1323,20 @@ end
   `*a`, `<<:`; an anchored map silently drops the rest of the document);
   `yes`/`no`/`on`/`off` are strings; `GetInt` is 32-bit and wraps; every path
   call reparses, so `Decode` once for many reads.
-- **`csv`** (`import encoding.csv`): `ReadLine(str): Vector<str>`,
-  `WriteLine(Vector<str>): str`, `ReadAll WriteAll FreeTable ToValue FromValue`. The separator is always a comma; a quoted field with a line
-  break cannot be read back (`ReadAll` splits lines first); `"Pen" ,blue`
-  (space after the quote) ends the row silently; spaces are kept.
-- **`toml`** (`import encoding.toml`): `DecodeStrict Decode Valid EncodeStrict Encode` over `value.Value`. `Decode` never reports errors
-  (a typo drops the rest), so use `DecodeStrict` on edited files. Triple
-  quoted strings are invalid and dates stay strings; `Encode` loses comments
-  and key order.
+- **`csv`** (`import encoding.csv`): `ReadLine(str): Vector<str> throws`,
+  `WriteLine(Vector<str>): str`, `ReadAll ToValue` (`throws`) `WriteAll FreeTable FromValue`, and the
+  `ReadLineWith ReadAllWith WriteLineWith WriteAllWith ToValueWith FromValueWith` forms taking
+  `CSVOptions { header separator keep_blank }` (`separator = ";"` or `"\t"`). RFC 4180: quoted
+  fields may hold line breaks. Broken input throws `Syntax` with line/column and a code:
+  `csv.unterminated_quote`, `csv.text_after_quote` (`"Pen" ,blue`), `csv.bare_quote` (`5'11"`),
+  `csv.multiple_rows` (`ReadLine` got two rows), `csv.duplicate_header` (`ToValue`). Empty lines
+  are skipped unless `keep_blank`; spaces are kept; writers never fail.
+- **`toml`** (`import encoding.toml`): `Decode(text): value.Value throws`,
+  `Valid`, `Encode(v): str throws`. `Decode` is strict: duplicate keys and
+  tables, bare words (`mode = fast`), bad escapes and numbers and text after a
+  value all throw with the line and column. Triple quoted strings throw
+  `Unsupported` and dates stay strings; `Encode` throws `Unsupported` for a
+  non-object top level or a null in an array, and loses comments.
 - **`value`** (`import encoding.value`): the dynamic `Value` every format
   shares: `ValueNull ValueBool ValueInt ValueFloat ValueString NewValueArray NewValueObject Is* As* ArrayLen ArrayGet ArraySet ArrayPush ObjectGet ObjectGetOk ObjectSet ObjectHas ObjectDelete ObjectKeys ValueClone ValueFree Equal`. `As*` never checks the kind (`AsInt` of a string is 0);
   the checked methods `v.field(k) v.at(i) v.int() v.float() v.str() v.bool()`
@@ -1339,21 +1350,34 @@ end
   `TranscodeStrict` throws, **`msgpack`**
   `Marshal Unmarshal UnmarshalBytes` (the two readers throw; no bin/ext types, string map keys
   only, trailing bytes ignored), **`binary`** `WriteU32BE ReadI64LE ...`
-  (reading past the end yields 0 and sets `r.bad`; `ReadU32*` comes back in a
+  (every `Read*` `throws` `UnexpectedEnd`, code `binary.unexpected_end`, with the
+  offset, and leaves the reader in place; `ReadU32*` comes back in a
   signed `int`, so widen with `(v as i64) & 4294967295`; writers truncate
   silently), **`protobuf`** (`.proto` parser, wire helpers `WriteVarint ReadVarint WriteTag ReadTag SkipField ZigZag*` and Salam code generation;
-  generated readers do not accept packed repeated fields).
+  the readers, `ParseFile Tokenize GenerateSingle GenerateWithServices ServiceSummary` throw, `ReadTag(r, num, wire)` fills
+  its out-params; generated `Unmarshal<Msg>(data, n)` throws and rejects packed repeated fields).
 - **`url`** (`import encoding.url`): `Parse(s): URL HostPort Hostname Query SetParam RemoveParam KeepParams Join Domain Subdomain PublicSuffix IsIP`.
-  `Parse` never fails or validates (check `scheme` and `host` yourself),
-  nothing is lower-cased, and editing one parameter re-encodes the whole
-  query. **`query`** (`import encoding.query`): `Get GetAll Has` on the text,
-  or `Decode` to a `QueryMap` with `Set Add Remove Retain Encode`; missing
-  and empty look the same to `Get`. **`envfile`** (`import encoding.envfile`): `Parse ParseStrict ParseRaw Get GetOr Set Format Expand RefNames`; `Parse` drops bad lines silently (use `ParseStrict`, which throws with the line and column),
+  `Parse` throws on text that is not a URL (empty, space, bad scheme,
+  missing host, bad port or host character, unclosed `[` IPv6, a `%` not
+  followed by two hex digits); relative references (`../a`, `?q=1`) still
+  parse, with no scheme or host. `Join`, `Query`, `DecodedPath`,
+  `DecodedUserinfo`, `ParamNames`, `SetParam`, `RemoveParam`, `KeepParams`
+  throw too. Nothing is lower-cased, and editing one parameter re-encodes
+  the whole query. **`query`** (`import encoding.query`): `Get GetAll Has`
+  on the text (never fail: a bad `%` escape is kept as written), or
+  `Decode`/`DecodeWith` (throw on a bad escape) to a `QueryMap` with
+  `Set Add Remove Retain Encode`; missing and empty look the same to `Get`. **`envfile`** (`import encoding.envfile`): `Parse ParseStrict ParseRaw Get GetOr Set Format Expand RefNames`; `Parse` drops bad lines silently (use `ParseStrict`, which throws with the line and column),
   and `${NAME}` only sees lines above it.
-- **`encoding`**: `Base64Encode Base64EncodeBytes Base64Decode Base64DecodeStrict Base64DecodeBytes HexEncode HexDecode URLEncode URLDecode`. `Base64Decode`/`HexDecode` return a `str`, so binary is cut at
-  the first zero byte (use `Base64DecodeBytes`); `HexDecode` stops at the
-  first bad pair without error; URL-safe base64 (`-_`) is damaged by the
-  lenient decoder.
+- **`encoding`**: `Base64Encode Base64EncodeBytes Base64Decode Base64DecodeBytes HexEncode HexDecode URLEncode URLDecode`. The four decoders
+  throw: `Base64Decode(s): str` reads both alphabets (`+/` and `-_`),
+  optional padding and whitespace, and throws `Syntax` (bad character, data
+  after `=`, too much `=`) or `UnexpectedEnd` (one char into a group,
+  missing `=`); `Base64DecodeBytes(s, out, cap): int` also throws
+  `OutOfRange` when `cap` is too small; `HexDecode` throws on an odd length
+  or a non-hex character; `URLDecode` on a `%` not followed by two hex
+  digits. `Base64Decode`/`HexDecode` return a `str`, so binary is cut at
+  the first zero byte (use `Base64DecodeBytes`). `http.UrlDecode` stays
+  lenient.
 - **`compress`**: `ByteBuf` (`NewByteBuf BufPush BufGet BufLen BufFree BufFromStr BufToBase64`), `Compress/Decompress(method)` over `Method*`,
   `DeflateCompress GzipCompress GzipDecompress CRC32 Adler32`. Gzip does not
   verify the CRC; the method is not stored in the output; free every buffer.

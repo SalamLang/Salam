@@ -21,6 +21,45 @@ import str
 
 const _TSR_DTYPE_F32 := 1
 
+func _tsr_err(kind: ErrorKind, msg: str, at: int, code: str): Error:
+    ret Error.At(kind, msg, at).with_code(code)
+end
+
+func _read_shape(rd &: compress.ByteReader, shape &: Vector<int>): i64 throws:
+    dtype := try binary.ReadU8(rd)
+    r := try binary.ReadU8(rd)
+    if dtype != _TSR_DTYPE_F32: throw _tsr_err(ErrorKind.Unsupported, "unsupported dtype " + dtype + " (only f32)", rd.pos - 2, "tensor.dtype") end
+    if r <= 0: throw _tsr_err(ErrorKind.Syntax, "rank 0", rd.pos - 1, "tensor.rank") end
+    mut n := 1 as i64
+    repeat r:
+        d := try binary.ReadU32LE(rd)
+        if d < 0: throw _tsr_err(ErrorKind.OutOfRange, "dimension too large", rd.pos - 4, "tensor.size") end
+        shape.push(d)
+        n = n * (d as i64)
+    end
+    nbytes := try binary.ReadU64LE(rd)
+    if nbytes != n * 4:
+        throw _tsr_err(ErrorKind.Syntax, "the data size " + nbytes + " does not match the shape (" + (n * 4) + " bytes)", rd.pos - 8, "tensor.size")
+    end
+    if (compress.RdLeft(rd) as i64) < nbytes:
+        throw _tsr_err(ErrorKind.UnexpectedEnd, "the data needs " + nbytes + " bytes, " + compress.RdLeft(rd) + " left", rd.pos, "tensor.truncated")
+    end
+    ret nbytes
+end
+
+func _read_name(rd &: compress.ByteReader): str throws:
+    start := rd.pos
+    nl := try binary.ReadU16LE(rd)
+    if nl <= 0: throw _tsr_err(ErrorKind.Syntax, "empty tensor name", start, "tensor.bad_name") end
+    if compress.RdLeft(rd) < nl:
+        throw _tsr_err(ErrorKind.UnexpectedEnd, "the name needs " + nl + " bytes, " + compress.RdLeft(rd) + " left", rd.pos, "tensor.truncated")
+    end
+    mut nb := compress.RdBytes(rd, nl)
+    name := compress.BufToStrUnsafe(nb)
+    compress.BufFree(nb)
+    ret name
+end
+
 @en "WriteTensor"
 @fa "نوشتن تانسور"
 pub func WriteTensor(buf &: compress.ByteBuf, name: str, t &: Tensor): bool:
@@ -42,34 +81,27 @@ end
 
 @en "ReadTensor"
 @fa "خواندن تانسور"
-pub func ReadTensor(rd &: compress.ByteReader, name_out &: str, out &: Tensor): bool:
-    nl := binary.ReadU16LE(rd)
-    if rd.bad or nl <= 0: ret false end
-    if compress.RdLeft(rd) < nl: ret false end
-    mut nb := compress.RdBytes(rd, nl)
-    name_out = compress.BufToStrUnsafe(nb)
-    compress.BufFree(nb)
-    dtype := binary.ReadU8(rd)
-    r := binary.ReadU8(rd)
-    if rd.bad or dtype != _TSR_DTYPE_F32 or r <= 0 or r > 255: ret false end
-    mut shape := Vector {} as Vector<int>
-    mut n := 1
-    repeat r:
-        d := binary.ReadU32LE(rd)
-        shape.push(d)
-        n = n * d
+pub func ReadTensor(rd &: compress.ByteReader, name_out &: str, out &: Tensor) throws:
+    mut name := ""
+    try:
+        name = _read_name(rd)
+    catch e:
+        throw e.wrap("tensor")
     end
-    nbytes := binary.ReadU64LE(rd)
-    if rd.bad or nbytes != (n as i64) * 4 or compress.RdLeft(rd) < n * 4:
-        shape.free()
-        ret false
+    mut shape := Vector {} as Vector<int>
+    defer shape.free()
+    mut nbytes := 0 as i64
+    try:
+        nbytes = _read_shape(rd, shape)
+    catch e:
+        mem.Free(name as void*)
+        throw e.wrap("tensor")
     end
     out.free()
     t := _raw(shape)
-    shape.free()
     src := ((rd.data as i64) + (rd.pos as i64)) as void*
-    mem.Copy(t.data.data as void*, src, (n * 4) as u64)
-    rd.pos += n * 4
+    mem.Copy(t.data.data as void*, src, nbytes as u64)
+    rd.pos += nbytes as int
     out = t
-    ret true
+    name_out = name
 end

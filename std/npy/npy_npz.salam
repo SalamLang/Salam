@@ -28,36 +28,27 @@ end
 
 @en "NpzList"
 @fa "فهرست ان‌پی‌زد"
-pub func NpzList(path: str, ok &: bool): Vector<str>:
-    mut out := Vector {} as Vector<str>
-    ok = false
-    mut fok := false
-    mut raw := archive.ReadBinaryFile(path, fok)
-    if fok == false:
-        compress.BufFree(raw)
-        ret out
-    end
+pub func NpzList(path: str): Vector<str> throws:
+    mut raw := try _read_file(path)
+    defer compress.BufFree(raw)
     mut entries := archive.ZipList(raw.data, compress.BufLen(raw))
+    defer archive.FreeEntries(entries)
+    if entries.len() == 0:
+        throw Error.New(ErrorKind.Syntax, "not a .npz file (no zip entries)").with_code("npy.bad_npz").with_path(path).wrap("npy")
+    end
+    mut out := Vector {} as Vector<str>
     repeat entries.len() in i:
         e := entries.get(i)
         if e.is_dir == false: out.push(_strip_npy(e.name)) end
     end
-    ok = entries.len() > 0
-    archive.FreeEntries(entries)
-    compress.BufFree(raw)
     ret out
 end
 
 @en "NpzRead"
 @fa "خواندن ان‌پی‌زد"
-pub func NpzRead(path: str, key: str, ok &: bool): NpyArray:
-    ok = false
-    mut fok := false
-    mut raw := archive.ReadBinaryFile(path, fok)
-    if fok == false:
-        compress.BufFree(raw)
-        ret NpyArray {}
-    end
+pub func NpzRead(path: str, key: str): NpyArray throws:
+    mut raw := try _read_file(path)
+    defer compress.BufFree(raw)
     mut zok := false
     named := key + ".npy"
     mut member := archive.ZipExtractByName(raw.data, compress.BufLen(raw), named, zok)
@@ -66,11 +57,15 @@ pub func NpzRead(path: str, key: str, ok &: bool): NpyArray:
         compress.BufFree(member)
         member = archive.ZipExtractByName(raw.data, compress.BufLen(raw), key, zok)
     end
-    mut a := NpyArray {}
-    if zok: a = ReadNpy(member.data, compress.BufLen(member), ok) end
-    compress.BufFree(member)
-    compress.BufFree(raw)
-    ret a
+    defer compress.BufFree(member)
+    if zok == false:
+        throw Error.New(ErrorKind.NotFound, "no array named '" + key + "'").with_code("npy.missing_key").with_path(path).wrap("npy")
+    end
+    try:
+        ret _read_npy(member.data, compress.BufLen(member))
+    catch e:
+        throw e.with_path(path + ":" + key).wrap("npy")
+    end
 end
 
 @en "NpzWrite"

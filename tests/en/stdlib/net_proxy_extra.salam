@@ -1,0 +1,152 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import net.proxy
+import net.tcp
+import mem
+import testing
+
+mut http server := tcp.Server {}
+mut socks server := tcp.Server {}
+mut seen first := ""
+mut seen second := ""
+mut socks greeting := 0
+mut socks auth user := 0
+mut socks auth pass := 0
+
+func chain proxy():
+    c := tcp.Accept(http server)
+    seen first = tcp.Read(c, 4096)
+    tcp.Write(c, "HTTP/1.1 200 Connection established\r\n\r\n")
+    seen second = tcp.Read(c, 4096)
+    tcp.Write(c, "HTTP/1.1 200 Connection established\r\n\r\n")
+    echo := tcp.Read(c, 128)
+    tcp.Write(c, "tunnel:" + echo)
+    tcp.Close(c)
+end
+
+func auth http proxy():
+    c := tcp.Accept(http server)
+    seen first = tcp.Read(c, 4096)
+    tcp.Write(c, "HTTP/1.1 200 Connection established\r\n\r\n")
+    echo := tcp.Read(c, 128)
+    tcp.Write(c, "tunnel:" + echo)
+    tcp.Close(c)
+end
+
+func auth socks proxy():
+    c := tcp.Accept(socks server)
+    greet := mem.Allocate(16 as u64)
+    n := tcp.ReadBytes(c, greet, 16)
+    socks greeting = n
+    reply := mem.Allocate(2 as u64)
+    rp := reply as i8*
+    rp[0] = 5 as i8
+    rp[1] = 2 as i8
+    tcp.WriteBytes(c, reply, 2)
+
+    auth := mem.Allocate(64 as u64)
+    ap := auth as i8*
+    tcp.ReadBytes(c, auth, 64)
+    socks auth user = ap[1] as int
+    socks auth pass = ap[2 + socks auth user] as int
+    rp[0] = 1 as i8
+    rp[1] = 0 as i8
+    tcp.WriteBytes(c, reply, 2)
+
+    req := mem.Allocate(300 as u64)
+    tcp.ReadBytes(c, req, 300)
+    done := mem.Allocate(10 as u64)
+    dp := done as i8*
+    dp[0] = 5 as i8
+    dp[1] = 0 as i8
+    dp[2] = 0 as i8
+    dp[3] = 1 as i8
+    dp[4] = 0 as i8
+    dp[5] = 0 as i8
+    dp[6] = 0 as i8
+    dp[7] = 0 as i8
+    dp[8] = 0 as i8
+    dp[9] = 0 as i8
+    tcp.WriteBytes(c, done, 10)
+    echo := tcp.Read(c, 128)
+    tcp.Write(c, "tunnel:" + echo)
+    tcp.Close(c)
+    mem.Free(greet)
+    mem.Free(reply)
+    mem.Free(auth)
+    mem.Free(req)
+    mem.Free(done)
+end
+
+func check http auth():
+    http server = tcp.Bind(0)
+    t := spawn(auth http proxy)
+    p := proxy.NewHTTPProxyAuth("127.0.0.1:" + tcp.Port(http server), "user", "pass")
+    conn := proxy.Dial(p, "target.example.com", 443)
+    testing.AssertTrue(tcp.ConnOk(conn))
+    tcp.Write(conn, "hi")
+    testing.AssertEqStr(tcp.Read(conn, 128), "tunnel:hi")
+    tcp.Close(conn)
+    join(t)
+    tcp.CloseServer(http server)
+    testing.AssertContains(seen first, "CONNECT target.example.com:443 HTTP/1.1")
+    testing.AssertContains(seen first, "Proxy-Authorization: Basic dXNlcjpwYXNz")
+end
+
+func check socks auth():
+    socks server = tcp.Bind(0)
+    t := spawn(auth socks proxy)
+    p := proxy.NewSOCKS5ProxyAuth("127.0.0.1:" + tcp.Port(socks server), "user", "secret")
+    conn := proxy.Dial(p, "target.example.com", 443)
+    testing.AssertTrue(tcp.ConnOk(conn))
+    tcp.Write(conn, "yo")
+    testing.AssertEqStr(tcp.Read(conn, 128), "tunnel:yo")
+    tcp.Close(conn)
+    join(t)
+    tcp.CloseServer(socks server)
+    testing.AssertEqInt(socks greeting, 4)
+    testing.AssertEqInt(socks auth user, 4)
+    testing.AssertEqInt(socks auth pass, 6)
+end
+
+func check chain():
+    http server = tcp.Bind(0)
+    t := spawn(chain proxy)
+    mut c := proxy.NewChain()
+    proxy.Add(c, proxy.NewHTTPProxy("127.0.0.1:" + tcp.Port(http server)))
+    proxy.Add(c, proxy.NewHTTPProxy("second.example.com:8080"))
+    conn := proxy.DialChain(c, "target.example.com", 443)
+    testing.AssertTrue(tcp.ConnOk(conn))
+    tcp.Write(conn, "ab")
+    testing.AssertEqStr(tcp.Read(conn, 128), "tunnel:ab")
+    tcp.Close(conn)
+    join(t)
+    tcp.CloseServer(http server)
+    testing.AssertContains(seen first, "CONNECT second.example.com:8080 HTTP/1.1")
+    testing.AssertContains(seen second, "CONNECT target.example.com:443 HTTP/1.1")
+
+    empty := proxy.NewChain()
+    dead := proxy.DialChain(empty, "127.0.0.1", 1)
+    testing.AssertFalse(tcp.ConnOk(dead))
+end
+
+func main:
+    check http auth()
+    check socks auth()
+    check chain()
+    ret testing.Summary()
+end

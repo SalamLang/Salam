@@ -1,0 +1,142 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import encoding
+import env
+import net.email
+import net.tcp
+import str
+import sync
+import tls
+
+const CERT := "tests/fixtures/ssl/server.crt"
+const KEY := "tests/fixtures/ssl/server.key"
+
+mut ready := sync.NewWaitGroup()
+mut auth_port := 0
+mut starttls_port := 0
+mut tls_port := 0
+mut user_line := ""
+mut pass_line := ""
+mut oauth_line := ""
+
+func auth_server():
+    srv := tcp.Bind(0)
+    auth_port = tcp.Port(srv)
+    sync.Done(ready)
+    if not tcp.Ok(srv): ret end
+    c := tcp.Accept(srv)
+    if tcp.ConnOk(c):
+        tcp.Write(c, "220 mock.smtp ready\r\n")
+        tcp.Read(c, 4096)
+        tcp.Write(c, "250-mock.smtp\r\n250 AUTH LOGIN XOAUTH2\r\n")
+        tcp.Read(c, 4096)
+        tcp.Write(c, "334 VXNlcm5hbWU6\r\n")
+        user_line = tcp.Read(c, 4096)
+        tcp.Write(c, "334 UGFzc3dvcmQ6\r\n")
+        pass_line = tcp.Read(c, 4096)
+        tcp.Write(c, "235 Authentication successful\r\n")
+        oauth_line = tcp.Read(c, 4096)
+        tcp.Write(c, "235 Authentication successful\r\n")
+        tcp.Read(c, 4096)
+        tcp.Write(c, "221 bye\r\n")
+        tcp.Close(c)
+    end
+    tcp.CloseServer(srv)
+end
+
+func starttls_server():
+    srv := tcp.Bind(0)
+    starttls_port = tcp.Port(srv)
+    sync.Done(ready)
+    if not tcp.Ok(srv): ret end
+    scfg := tls.NewServerConfig(CERT, KEY)
+    c := tcp.Accept(srv)
+    if tcp.ConnOk(c):
+        tcp.Write(c, "220 mock.smtp ready\r\n")
+        tcp.Read(c, 4096)
+        tcp.Write(c, "250-mock.smtp\r\n250 STARTTLS\r\n")
+        tcp.Read(c, 4096)
+        tcp.Write(c, "220 go ahead\r\n")
+        mut tc := tls.WrapServer(c.fd, scfg)
+        if tls.ConnOk(tc):
+            tls.Read(tc, 4096)
+            tls.Write(tc, "250 mock.smtp again\r\n")
+            tls.Read(tc, 4096)
+            tls.Write(tc, "221 bye\r\n")
+        end
+        tls.Close(tc)
+    end
+    tcp.CloseServer(srv)
+end
+
+func tls_server():
+    srv := tcp.Bind(0)
+    tls_port = tcp.Port(srv)
+    sync.Done(ready)
+    if not tcp.Ok(srv): ret end
+    scfg := tls.NewServerConfig(CERT, KEY)
+    s := tcp.Accept(srv)
+    if tcp.ConnOk(s):
+        mut tc := tls.WrapServer(s.fd, scfg)
+        if tls.ConnOk(tc):
+            tls.Write(tc, "220 tls.smtp ready\r\n")
+            tls.Read(tc, 4096)
+            tls.Write(tc, "221 bye\r\n")
+        end
+        tls.Close(tc)
+    end
+    tcp.CloseServer(srv)
+end
+
+func main:
+    sync.Add(ready, 3 as i64)
+    t1 := spawn(auth_server)
+    t2 := spawn(starttls_server)
+    t3 := spawn(tls_server)
+    sync.Wait(ready)
+
+    mut a := email.DialSMTP("127.0.0.1", auth_port)
+    println a.ok
+    println email.Hello(a, "client.example")
+    println email.AuthLogin(a, "ali", "secret")
+    println encoding.Base64Decode(str.Trim(user_line))
+    println encoding.Base64Decode(str.Trim(pass_line))
+    println email.AuthXOAuth2(a, "ali@example.com", "tok123")
+    println oauth_line.find("AUTH XOAUTH2 ") == 0
+    decoded := encoding.Base64Decode(str.Trim(oauth_line.substr(13, oauth_line.len() - 13)))
+    println decoded.find("user=ali@example.com") == 0
+    println decoded.find("auth=Bearer tok123") > 0
+    email.Quit(a)
+    join(t1)
+
+    env.Set("SSL_CERT_FILE", CERT)
+    mut b := email.DialSMTP("127.0.0.1", starttls_port)
+    println b.ok
+    println b.secure
+    println email.Hello(b, "client.example")
+    println email.StartTLS(b, "127.0.0.1")
+    println b.secure
+    println email.Hello(b, "client.example")
+    email.Quit(b)
+    join(t2)
+
+    mut s := email.DialSMTPTLS("127.0.0.1", tls_port)
+    println s.ok
+    println s.secure
+    email.Quit(s)
+    join(t3)
+end

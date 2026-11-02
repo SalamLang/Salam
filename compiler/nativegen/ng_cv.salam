@@ -794,6 +794,86 @@ func cv_lines(g &: Ng, v &: Vector<u8>, k: int):
     rf.free()
 end
 
+func cv_frameproc(g &: Ng, v &: Vector<u8>, ehx: HashMap<int, int>, s: int):
+    if not ehx.has(s):
+        ret
+    end
+    f := ehx.get(s)
+    r := cv_rec_begin(v, 0x1012)
+    vb_le(v, g.eh_alloc[f] as i64, 4)
+    vb_le(v, 0 as i64, 4)
+    vb_le(v, 0 as i64, 4)
+    vb_le(v, (4 * g.eh_rn[f]) as i64, 4)
+    vb_le(v, 0 as i64, 4)
+    vb_le(v, 0 as i64, 2)
+    mut fl := (1 << 13) | (1 << 14) | (1 << 16)
+    if g.opt:
+        fl = fl | (1 << 20)
+    end
+    vb_le(v, fl as i64, 4)
+    cv_rec_end(v, r)
+end
+
+func cv_ffunc(g &: Ng, f: int, nsaved: int, strs &: Vector<u8>, ffs &: HashMap<str, int>): int:
+    names := ["$eax", "$ecx", "$edx", "$ebx", "$esp", "$ebp", "$esi", "$edi"]
+    mut b := str.NewBuilder()
+    str.BufAppend(b, "$T0 .raSearch = $eip $T0 ^ = $esp $T0 4 + = ")
+    repeat nsaved in k:
+        r := g.eh_regs[g.eh_rs[f] + k]
+        str.BufAppend(b, (r >= 0 and r < 8 ? names[r] : "$eax") + " $T0 " + str.FromInt((4 * (k + 1)) as i64) + " - ^ = ")
+    end
+    ff := str.BufStr(b)
+    if ffs.has(ff):
+        ret ffs.get(ff)
+    end
+    off := strs.len()
+    vb_str(strs, ff)
+    ffs.put(ff, off)
+    ret off
+end
+
+func cv_framedata(g &: Ng, v &: Vector<u8>, ehx: HashMap<int, int>, k: int, strs &: Vector<u8>, ffs &: HashMap<str, int>):
+    s := g.df_sym[k]
+    if not ehx.has(s) or g.df_size[k] <= 0:
+        ret
+    end
+    f := ehx.get(s)
+    size := g.df_size[k]
+    nr := g.eh_rn[f]
+    al := g.eh_alloc[f]
+    mut at := Vector {} as Vector<int>
+    at.push(0)
+    repeat nr in q:
+        at.push(g.eh_pre[f] + q + 1)
+    end
+    pend := g.eh_pend[f]
+    if al > 0:
+        at.push(pend)
+    end
+    fd := cv_sub_begin(v, 0xF5)
+    if g.sy_def[s] and g.sy_sec[s] == SEC_TEXT:
+        add_reloc(g, SEC_CVSYM, v.len(), s, R_ADDR32NB, (g.df_base[k] - g.sy_off[s]) as i64)
+    else:
+        add_reloc(g, SEC_CVSYM, v.len(), g.cv_text, R_ADDR32NB, g.df_base[k] as i64)
+    end
+    vb_le(v, 0 as i64, 4)
+    repeat at.len() in i:
+        st := at[i] < size ? at[i] : size
+        nsaved := i <= nr ? i : nr
+        vb_le(v, st as i64, 4)
+        vb_le(v, (size - st) as i64, 4)
+        vb_le(v, (i > nr ? al : 0) as i64, 4)
+        vb_le(v, g.eh_par[f] as i64, 4)
+        vb_le(v, 0 as i64, 4)
+        vb_le(v, cv_ffunc(g, f, nsaved, strs, ffs) as i64, 4)
+        vb_le(v, (pend > st ? pend - st : 0) as i64, 2)
+        vb_le(v, (4 * nsaved) as i64, 2)
+        vb_le(v, (i == 0 ? 4 : 0) as i64, 4)
+    end
+    cv_sub_end(v, fd)
+    at.free()
+end
+
 func cv_emit(g &: Ng, ts: int, tys &: DvTypes):
     g.cv_text = ts
     mut v := Vector {} as Vector<u8>
@@ -809,6 +889,12 @@ func cv_emit(g &: Ng, ts: int, tys &: DvTypes):
     vb_le(v, 0 as i64, 4)
     vb_str(v, cu)
     cv_rec_end(v, r1)
+    mut ehx := HashMap {} as HashMap<int, int>
+    if g.arch == NG_ARCH_X86:
+        repeat g.eh_sym.len() in f:
+            ehx.put(g.eh_sym[f], f)
+        end
+    end
     r2 := cv_rec_begin(v, 0x113C)
     vb_le(v, 0 as i64, 4)
     vb_le(v, cv_machine(g) as i64, 2)
@@ -836,6 +922,7 @@ func cv_emit(g &: Ng, ts: int, tys &: DvTypes):
         v.push(0 as u8)
         vb_str(v, nm)
         cv_rec_end(v, rp)
+        cv_frameproc(g, v, ehx, s)
         cv_locals(g, v, tys, k)
         cv_inlines(g, v, k)
         re := cv_rec_begin(v, 0x0006)
@@ -867,6 +954,14 @@ func cv_emit(g &: Ng, ts: int, tys &: DvTypes):
         vb_str(strs, cv_path(g, fmd))
     end
     cv_sub_end(v, sc)
+    if ehx.size() > 0:
+        mut ffs := HashMap {} as HashMap<str, int>
+        repeat g.df_sym.len() in k3:
+            cv_framedata(g, v, ehx, k3, strs, ffs)
+        end
+        ffs.free()
+    end
+    ehx.free()
     st := cv_sub_begin(v, CV_STRINGS)
     each b in strs:
         v.push(b)

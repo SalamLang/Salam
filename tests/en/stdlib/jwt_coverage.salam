@@ -1,0 +1,113 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+package main
+
+import jwt
+import mem
+import testing
+import net.http
+import net.router
+
+mut guard := jwt.NewGuard("a-server-secret-only-the-server-knows")
+
+func whoami(ctx: i64):
+    http.Text(ctx, "bearer=" + jwt.BearerToken(ctx) + " from=" + jwt.TokenFrom(ctx, guard))
+end
+
+func missing(ctx: i64):
+    jwt.MissingCredential(ctx, guard)
+end
+
+func login(ctx: i64):
+    mut err := 0
+    token := jwt.IssueFor(guard, "42", 3600, err)
+    jwt.SetSessionCookie(ctx, guard, token, 3600)
+    http.Text(ctx, token)
+end
+
+func test_b64url_bytes():
+    buf := mem.Allocate(6 as u64)
+    defer mem.Free(buf)
+    bp := buf as u8*
+    bp[0] = 0xfb as u8
+    bp[1] = 0xff as u8
+    bp[2] = 0xfe as u8
+    bp[3] = 0x00 as u8
+    bp[4] = 0x41 as u8
+    bp[5] = 0x42 as u8
+    testing.AssertEqStr(jwt.B64UrlEncodeBytes(buf, 6), "-__-AEFC")
+    testing.AssertEqStr(jwt.B64UrlEncodeBytes(buf, 3), "-__-")
+    testing.AssertEqStr(jwt.B64UrlEncodeBytes(buf, 0), "")
+end
+
+func test_claim_times():
+    mut c := jwt.NewClaims()
+    jwt.ExpiresIn(c, 600 as i64)
+    testing.AssertTrue(c.exp - c.iat == 600 as i64)
+    testing.AssertTrue(c.iat > 1600000000 as i64)
+    jwt.NotBeforeIn(c, 30 as i64)
+    testing.AssertTrue(c.nbf - c.iat >= 29 as i64)
+    testing.AssertTrue(c.nbf - c.iat <= 31 as i64)
+    jwt.NotBeforeIn(c, -5 as i64)
+    testing.AssertTrue(c.nbf < c.iat + 1 as i64)
+end
+
+func test_http():
+    mut r := router.NewRouter()
+    router.Get(r, "/who", whoami)
+    router.Get(r, "/missing", missing)
+    router.Post(r, "/login", login)
+    mut s := http.NewServer(19890)
+    http.Use(s, r)
+    _ := http.RunBackground(s)
+    base := "http://127.0.0.1:19890"
+
+    guard.cookie = "session"
+    plain := http.Get(base + "/who")
+    testing.AssertEqStr(http.Body(plain), "bearer= from=")
+
+    mut bearer := http.NewHeaders()
+    bearer.insert("Authorization", "Bearer abc.def.ghi")
+    viaheader := http.GetWith(base + "/who", bearer)
+    testing.AssertEqStr(http.Body(viaheader), "bearer=abc.def.ghi from=abc.def.ghi")
+
+    mut cookie := http.NewHeaders()
+    cookie.insert("Cookie", "session=cookie.token.value")
+    viacookie := http.GetWith(base + "/who", cookie)
+    testing.AssertEqStr(http.Body(viacookie), "bearer= from=cookie.token.value")
+
+    mut both := http.NewHeaders()
+    both.insert("Authorization", "Bearer first")
+    both.insert("Cookie", "session=second")
+    wins := http.GetWith(base + "/who", both)
+    testing.AssertEqStr(http.Body(wins), "bearer=first from=first")
+
+    denied := http.Get(base + "/missing")
+    testing.AssertEqInt(http.Status(denied), 401)
+    testing.AssertEqStr(http.Body(denied), `{"error":"unauthorized","reason":"missing bearer token"}`)
+    testing.AssertEqStr(http.Headers(denied).get("WWW-Authenticate"), `Bearer realm="api"`)
+
+    signed := http.Post(base + "/login", "")
+    token := http.Body(signed)
+    testing.AssertEqStr(http.CookieMap(signed).get("session"), token)
+    testing.AssertTrue(token.len() > 20)
+end
+
+func main:
+    test_b64url_bytes()
+    test_claim_times()
+    test_http()
+    testing.Summary()
+    ret 0
+end

@@ -1344,16 +1344,27 @@ end
   silently), **`protobuf`** (`.proto` parser, wire helpers `WriteVarint ReadVarint WriteTag ReadTag SkipField ZigZag*` and Salam code generation;
   generated readers do not accept packed repeated fields).
 - **`url`** (`import encoding.url`): `Parse(s): URL HostPort Hostname Query SetParam RemoveParam KeepParams Join Domain Subdomain PublicSuffix IsIP`.
-  `Parse` never fails or validates (check `scheme` and `host` yourself),
-  nothing is lower-cased, and editing one parameter re-encodes the whole
-  query. **`query`** (`import encoding.query`): `Get GetAll Has` on the text,
-  or `Decode` to a `QueryMap` with `Set Add Remove Retain Encode`; missing
-  and empty look the same to `Get`. **`envfile`** (`import encoding.envfile`): `Parse ParseStrict ParseRaw Get GetOr Set Format Expand RefNames`; `Parse` drops bad lines silently (use `ParseStrict`, which throws with the line and column),
+  `Parse` throws on text that is not a URL (empty, space, bad scheme,
+  missing host, bad port or host character, unclosed `[` IPv6, a `%` not
+  followed by two hex digits); relative references (`../a`, `?q=1`) still
+  parse, with no scheme or host. `Join`, `Query`, `DecodedPath`,
+  `DecodedUserinfo`, `ParamNames`, `SetParam`, `RemoveParam`, `KeepParams`
+  throw too. Nothing is lower-cased, and editing one parameter re-encodes
+  the whole query. **`query`** (`import encoding.query`): `Get GetAll Has`
+  on the text (never fail: a bad `%` escape is kept as written), or
+  `Decode`/`DecodeWith` (throw on a bad escape) to a `QueryMap` with
+  `Set Add Remove Retain Encode`; missing and empty look the same to `Get`. **`envfile`** (`import encoding.envfile`): `Parse ParseStrict ParseRaw Get GetOr Set Format Expand RefNames`; `Parse` drops bad lines silently (use `ParseStrict`, which throws with the line and column),
   and `${NAME}` only sees lines above it.
-- **`encoding`**: `Base64Encode Base64EncodeBytes Base64Decode Base64DecodeStrict Base64DecodeBytes HexEncode HexDecode URLEncode URLDecode`. `Base64Decode`/`HexDecode` return a `str`, so binary is cut at
-  the first zero byte (use `Base64DecodeBytes`); `HexDecode` stops at the
-  first bad pair without error; URL-safe base64 (`-_`) is damaged by the
-  lenient decoder.
+- **`encoding`**: `Base64Encode Base64EncodeBytes Base64Decode Base64DecodeBytes HexEncode HexDecode URLEncode URLDecode`. The four decoders
+  throw: `Base64Decode(s): str` reads both alphabets (`+/` and `-_`),
+  optional padding and whitespace, and throws `Syntax` (bad character, data
+  after `=`, too much `=`) or `UnexpectedEnd` (one char into a group,
+  missing `=`); `Base64DecodeBytes(s, out, cap): int` also throws
+  `OutOfRange` when `cap` is too small; `HexDecode` throws on an odd length
+  or a non-hex character; `URLDecode` on a `%` not followed by two hex
+  digits. `Base64Decode`/`HexDecode` return a `str`, so binary is cut at
+  the first zero byte (use `Base64DecodeBytes`). `http.UrlDecode` stays
+  lenient.
 - **`compress`**: `ByteBuf` (`NewByteBuf BufPush BufGet BufLen BufFree BufFromStr BufToBase64`), `Compress/Decompress(method)` over `Method*`,
   `DeflateCompress GzipCompress GzipDecompress CRC32 Adler32`. Gzip does not
   verify the CRC; the method is not stored in the output; free every buffer.

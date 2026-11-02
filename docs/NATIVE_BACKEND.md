@@ -411,7 +411,13 @@ then goes through:
    the same value (`c >= 97 and c <= 122`, as a branch pair or an `and`)
    become one unsigned compare of `c - 97`, and a sign-extended byte that is
    corrected with `+ 256` when negative (`ByteAt`) becomes a zero-extending
-   load. `(x + c1) * c2` becomes `x * c2 + c1 * c2` when that continues a
+   load. On x86-64 a compare of two zero-extended bytes (or 16-bit values),
+   at least one of them loaded, compares the narrow values instead, with a
+   signed predicate turned unsigned, so one load folds into the compare:
+   `cmp r8b, byte [mem]` in `RawDeflate`'s match-length loop
+   (`SALAM_NG_OFF=zxcmp`; `image_rtl_card` runs 3.3 million fewer
+   instructions, 2.0%, and `image_basics` 2.2 million).
+   `(x + c1) * c2` becomes `x * c2 + c1 * c2` when that continues a
    constant chain (an FNV hash of an int folds to one multiply), but not on
    loop indices, where it would hide the pattern strength reduction needs.
    Inserting a zero into a struct that is still zero at that offset is
@@ -494,6 +500,12 @@ then goes through:
    quotient and remainder of the same value share the bias; the SHA-256
    rotations in `std/crypto` are built from such pairs. A counter bounded by a sign-extended 32-bit length is known to fit
    in 32 bits, so `sext(trunc(i))` on the widened counter folds back to `i`.
+   Widening rewrites addresses inside the loop as `base + sext(pos)` plus the
+   wide counter, so loop-invariant code motion runs once more afterwards and
+   moves the new `sext(pos)` and `base + sext(pos)` to the preheader
+   (`SALAM_NG_OFF=winv`). `RawDeflate`'s hash-insert loop loses three
+   instructions per position: `image_rtl_card` runs 3.2 million fewer
+   instructions (1.9%) and `image_basics` 11.2 million (1.9%).
    Beyond counters, a web of 32-bit values joined by phis, selects and `nsw`
    adds, subtracts and multiplies that ends in sign extensions for addressing
    is computed in 64 bits instead (no signed overflow means the wide result
@@ -746,7 +758,12 @@ already holds it (with no write to the slot or the register in between) is
 dropped. Inside an innermost loop without calls, a stack slot that is only
 read gets loaded once before the loop into a register the loop does not
 touch and that is not live on entry, and the reloads become uses of that
-register.
+register. When a reload is replaced by a register this way, or a reload
+becomes a copy into `r10` or `r11` on x86-64, and the scratch register is
+not written again before the next label, jump or return, its uses are renamed
+and the copy dropped, since the scratch registers never carry a value
+across a block boundary (`SALAM_NG_OFF=scdead`; 1.4 million fewer
+instructions for `image_rtl_card`, 1.9 million for `image_basics`).
 A load of a stack slot that was just stored from a register (or an
 immediate) of the same size, with no write to the slot or the register in
 between and no jump target on the way, becomes a register copy (or a move of
@@ -791,7 +808,16 @@ back into its phi) is emitted with that loop value as the tied operand of the
 `cmov`, so the loop carries it in one register with no copy at the latch. A
 32-bit division fast path leaves its quotient and remainder in `rax` and
 `rdx` on both paths and copies them once after the join.
-Copy-related values that both spill share one stack slot. When vector
+Copy-related values that both spill share one stack slot. A value that
+got a register but is mostly copied to and from values sharing one such
+slot is then put in that slot too, when the copies that disappear outweigh
+the loads and stores its other uses need, weighted by loop depth, and its
+range does not overlap anything else living in the slot
+(`SALAM_NG_OFF=cpspill`). A vector accumulator whose sum is spilled no
+longer goes through a register and back every iteration: `EncodePNG`'s
+filter-scoring loop drops four instructions per four bytes, and
+`image_rtl_card` runs 1.6 million fewer instructions (1.0%),
+`image_basics` 2.1 million. When vector
 registers run out, the allocator evicts the value whose next use is
 farthest away, so a kernel with sixteen accumulators keeps most of them in
 registers instead of spilling each one as a temporary arrives.
@@ -959,7 +985,7 @@ ret end` at the top of a recursive AST walk) tests that parameter before
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing, and a comma-separated list dumps several functions.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,loopinl,cpelim,tord,vrev,cdown,tfold,mexit,sqself,vsign,redinv,ldcmp,phix,selinc,wweb,wwdep,wwtr,tdup,padjmp,dtst,zins,ndiv,niv,cmp64,adc64,rvc,avx2,rasp,hotpath,inlnest,spromo,ypack,ysum`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,loopinl,cpelim,tord,vrev,cdown,tfold,mexit,sqself,vsign,redinv,ldcmp,phix,selinc,wweb,wwdep,wwtr,tdup,padjmp,dtst,zins,ndiv,niv,cmp64,adc64,rvc,avx2,rasp,hotpath,inlnest,spromo,ypack,ysum,winv,zxcmp,cpspill,scdead`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator and `rasp` the
@@ -1161,6 +1187,19 @@ specializes the generic blocked matrix multiply for 4x4 operands. A compiler
 built with the native backend runs within a few percent of one built with
 LLVM on a full self-compile, while the native build itself is several times
 faster than the LLVM path.
+
+Library code is further behind. Counted with callgrind, the image tests
+`apps/image_rtl_card` and `apps/image_basics` run 1.23x and 1.25x the
+instructions of their LLVM builds (163.3 against 132.4 million, 587.2
+against 471.4 million; before `winv`, `zxcmp`, `cpspill` and `scdead` they
+were 174.6 and 608.0 million, 1.32x and 1.29x). What is left there is
+mostly not spilling: LLVM filters PNG rows sixteen bytes at a time where the native
+loops widen to four 32-bit lanes (about 13 million instructions of the gap
+on `image_rtl_card`), it inlines `DrawLine` into a constant horizontal span
+and unswitches the alpha test that keeps native `DrawLine`'s loop at full
+register pressure (about 8 million), and in `image_basics` it inlines
+`_vp8_quant` with constant arguments, peels the DC coefficient and hoists
+the reciprocal division out of the loop.
 
 Not there yet:
 

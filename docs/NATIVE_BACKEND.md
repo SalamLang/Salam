@@ -545,7 +545,14 @@ then goes through:
    the lower one (an add, or a compare and select for min and max) before the
    usual 128-bit steps. Loops that widen or narrow bytes, count matching
    bytes or walk a second counter down keep 128-bit vectors, and so does
-   every loop when `SALAM_NG_OFF=avx2` is set. A function that touches a
+   every loop when `SALAM_NG_OFF=avx2` is set. The SLP vectorizer (below)
+   first looks for runs of eight adjacent `f32` or four `f64` stores and
+   builds them as one 256-bit tree, then packs what is left into 128-bit
+   ones, so the 4x16 `f32` matrix multiply micro-kernel keeps eight `ymm`
+   accumulators instead of sixteen `xmm` ones (`SALAM_NG_OFF=ypack` keeps SLP
+   at 128 bits). The integer sum vectorizer's two accumulators become 256-bit
+   too, eight `int` or four `i64` lanes each, so it reads sixteen `int` values
+   per iteration (`SALAM_NG_OFF=ysum` keeps it at 128 bits). A function that touches a
    256-bit register is VEX-encoded throughout, scalar float code included,
    so it never mixes legacy SSE with AVX, and it runs `vzeroupper` before
    each call and return; functions without 256-bit code are encoded exactly
@@ -566,10 +573,17 @@ then goes through:
    for an `f32` saxpy, 2.0x for an `int` sum, 2.1x for an `i64` sum, 2.0x for a
    `u8` clamp, 2.0x for an `f32` dot product with `--fast-math`, 1.97x for an
    `int` min and max, 1.54x for `int` add and multiply, 1.34x for an `f64`
-   scale and 1.0x for an `i16` multiply. The `nn`, `audio` and `image` tests
-   move by less than 6% either way, since their hot loops are SLP or
-   128-bit-only shapes, and none of the 42 programs under `benchmark/` has a
-   loop the vectorizer takes on, so their binaries do not change.
+   scale and 1.0x for an `i16` multiply. With the 256-bit SLP trees a
+   256x256 `f32` `tensor.GemmAcc`, run 40 times, takes 0.033 s instead of
+   0.063 s (1.9x; the SSE2 build takes 0.060 s), and the `nn` demos that
+   spend their time in it gain: `nn_cnn_train_demo` 0.708 s to 0.619 s,
+   `nn_transformer_demo` 0.820 s to 0.726 s, `nn_mlp_train_demo` 0.317 s to
+   0.300 s and `nn_layers2_demo` 0.069 s to 0.065 s. An `int` and an `i64`
+   sum over 4096 elements, 400000 times, take 0.199 s with 256-bit
+   accumulators instead of 0.257 s with 128-bit ones. The `audio` and
+   `image` tests do not change, and none of the 42 programs under
+   `benchmark/` has a loop the vectorizer takes on, so their binaries do not
+   change.
    A field read from a struct loaded whole (`v.get(i).kind`, or a phi of two
    such loads) becomes a load of just that field, and a stack copy of a
    struct that is only ever written is dropped, so `n := at.Get(a, i)` then
@@ -597,8 +611,11 @@ then goes through:
     Addresses that differ only by a constant share one pointer.
 11. SLP vectorization: runs of stores to adjacent `f32` or `f64` slots are
     traced back through arithmetic, broadcasts, adjacent loads and loop phis,
-    and the whole tree becomes SSE `ps`/`pd` code. The tensor and matrix
-    multiply kernels rely on this.
+    and the whole tree becomes SSE `ps`/`pd` code (AVX2 `ymm` code for runs of
+    eight `f32` or four `f64` under `--cpu=x86-64-v3`). The tensor and matrix
+    multiply kernels rely on this. A broadcast of a function argument is
+    placed at the top of the entry block, so straight-line code in that
+    block can use it.
 12. Global value numbering over the dominator tree, including redundant load
     elimination and store-to-load forwarding. A store only invalidates loads
     of its own TBAA class (llvmgen tags pointer fields and plain data
@@ -852,7 +869,7 @@ ret end` at the top of a recursive AST walk) tests that parameter before
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing, and a comma-separated list dumps several functions.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,loopinl,cpelim,tord,vrev,cdown,tfold,mexit,sqself,vsign,redinv,ldcmp,phix,selinc,wweb,wwdep,wwtr,tdup,padjmp,dtst,zins,ndiv,niv,cmp64,adc64,rvc,avx2`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,loopinl,cpelim,tord,vrev,cdown,tfold,mexit,sqself,vsign,redinv,ldcmp,phix,selinc,wweb,wwdep,wwtr,tdup,padjmp,dtst,zins,ndiv,niv,cmp64,adc64,rvc,avx2,ypack,ysum`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator.
@@ -1020,9 +1037,9 @@ Not there yet:
   reductions are not reordered, since that would change the rounding of the
   result, unless the program is built with `--fast-math`, which lets float
   add reductions run in vector lanes too (and gives LLVM `reassoc nsz`).
-  AVX2 is opt-in (`--cpu=x86-64-v3`) and only the loop vectorizer uses
-  it: the SLP and sum-reduction vectorizers, and loops that widen, narrow,
-  count bytes or reverse, stay at 128 bits. There is no AVX-512 or FMA code,
+  AVX2 is opt-in (`--cpu=x86-64-v3`) and the loop, SLP and sum-reduction
+  vectorizers use it; loops that widen, narrow, count bytes or reverse stay
+  at 128 bits. There is no AVX-512 or FMA code,
   no 64-bit ordered compare even with AVX2, and no runtime dispatch, so a
   build is either baseline everywhere or needs AVX2 everywhere.
 - The built-in linker (see `NATIVE_LINKER.md`) links every supported

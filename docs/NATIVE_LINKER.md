@@ -810,7 +810,7 @@ and a writable segment whose start (`.init_array`, `.fini_array`,
 `.data.rel.ro`, `.dynamic`, `.got`) is `PT_GNU_RELRO`, plus `PT_DYNAMIC`,
 `PT_GNU_EH_FRAME` and `PT_GNU_STACK`. The type is `ET_DYN` with entry 0.
 
-- `.dynamic` has `DT_SONAME` (the output file name), `DT_NEEDED` for the
+- `.dynamic` has `DT_SONAME` (the output filename), `DT_NEEDED` for the
   libraries a symbol was taken from, `DT_INIT_ARRAY`/`DT_FINI_ARRAY`,
   `DT_FLAGS` = `BIND_NOW` and `DT_FLAGS_1` = `NOW | NODELETE`, and no
   `DT_DEBUG`. `DT_VERNEED` is left out when nothing is versioned (musl).
@@ -843,8 +843,9 @@ libraries; executables keep their absolute addressing.
 - ARM forms an address with `movw`/`movt` (`R_ARM_MOVW_PREL_NC`,
   `R_ARM_MOVT_PREL`, addends -16 and -12) and `add ip, pc, ip`. The address of
   an undefined symbol is loaded from its GOT slot: `ldr rd, [pc]`, a branch
-  over an `R_ARM_GOT_PREL` literal, then `ldr rd, [pc, rd]`. The PLT stub is
-  `ldr ip, [pc]; ldr pc, [pc, ip]` with the slot's offset after it.
+  over an `R_ARM_GOT_PREL` literal, then `ldr rd, [pc, rd]`. After the Thumb
+  `bx pc` entry, the PLT stub is `ldr ip, [pc]; ldr pc, [pc, ip]` with the
+  slot's offset after it.
 - RISC-V uses `auipc`/`addi` (`R_RISCV_PCREL_HI20`/`PCREL_LO12_I`) and
   `auipc`/`ld` (`R_RISCV_GOT_HI20`) for undefined symbols. The low half must
   name a symbol at its `auipc`, so the encoder records the `auipc`'s offset
@@ -885,4 +886,3 @@ a C program and a Salam program that call both. On the build machine the C
 program also runs under valgrind, the library is loaded and closed twice with
 `dlopen`/`dlclose`, and the same library built by the C backend must print
 the same output.
-

@@ -26,21 +26,21 @@ const _IDX_I32 := 12
 const _IDX_F32 := 13
 const _IDX_F64 := 14
 
-func _idx_elem(rd &: compress.ByteReader, kind: int): f64:
-    if kind == _IDX_U8: ret binary.ReadU8(rd) as f64 end
+func _idx_elem(rd &: compress.ByteReader, kind: int): f64 throws:
+    if kind == _IDX_U8: ret (try binary.ReadU8(rd)) as f64 end
     if kind == _IDX_I8:
-        mut v := binary.ReadU8(rd)
+        mut v := try binary.ReadU8(rd)
         if v >= 128: v = v - 256 end
         ret v as f64
     end
     if kind == _IDX_I16:
-        mut v := binary.ReadU16BE(rd)
+        mut v := try binary.ReadU16BE(rd)
         if v >= 32768: v = v - 65536 end
         ret v as f64
     end
-    if kind == _IDX_I32: ret binary.ReadU32BE(rd) as f64 end
-    if kind == _IDX_F32: ret binary.ReadF32(rd, true) end
-    ret binary.ReadF64(rd, true)
+    if kind == _IDX_I32: ret (try binary.ReadU32BE(rd)) as f64 end
+    if kind == _IDX_F32: ret try binary.ReadF32(rd, true) end
+    ret try binary.ReadF64(rd, true)
 end
 
 func _idx_size(kind: int): int:
@@ -50,75 +50,97 @@ func _idx_size(kind: int): int:
     ret 8
 end
 
+func _idx_err(kind: ErrorKind, msg: str, at: int, code: str): Error:
+    ret Error.At(kind, msg, at).with_code(code)
+end
+
+func _parse_idx(p: void*, n: int): matrix.Matrix throws:
+    mut rd := compress.NewByteReader(p, n)
+    z0 := try binary.ReadU8(rd)
+    z1 := try binary.ReadU8(rd)
+    if z0 != 0 or z1 != 0:
+        throw _idx_err(ErrorKind.Syntax, "not an IDX file (the first two bytes must be zero)", 0, "idx.bad_magic")
+    end
+    kind := try binary.ReadU8(rd)
+    ndim := try binary.ReadU8(rd)
+    if kind != _IDX_U8 and kind != _IDX_I8 and kind != _IDX_I16 and kind != _IDX_I32 and kind != _IDX_F32 and kind != _IDX_F64:
+        throw _idx_err(ErrorKind.Unsupported, "unknown IDX element type " + kind, 2, "idx.type")
+    end
+    if ndim < 1 or ndim > 4:
+        throw _idx_err(ErrorKind.Unsupported, "IDX files with " + ndim + " dimensions are not supported (1 to 4)", 3, "idx.ndim")
+    end
+    rows := try binary.ReadU32BE(rd)
+    mut inner := 1
+    repeat ndim - 1: inner = inner * (try binary.ReadU32BE(rd)) end
+    if rows < 0 or inner < 0:
+        throw _idx_err(ErrorKind.OutOfRange, "the dimensions are too large", 4, "idx.size")
+    end
+    need := (rows as i64) * (inner as i64) * (_idx_size(kind) as i64)
+    if (compress.RdLeft(rd) as i64) < need:
+        throw _idx_err(ErrorKind.UnexpectedEnd, "the data ends early: " + need + " bytes needed, " + compress.RdLeft(rd) + " left", rd.pos, "idx.truncated")
+    end
+    mut m := matrix.Zeros(rows, inner)
+    repeat rows * inner in k: m.a.set(k, try _idx_elem(rd, kind)) end
+    ret m
+end
+
 @en "ParseIdx"
 @fa "تجزیه آی‌دی‌ایکس"
-pub func ParseIdx(p: void*, n: int, ok &: bool): matrix.Matrix:
-    ok = false
-    if n < 8: ret matrix.Matrix {} end
-    mut rd := compress.NewByteReader(p, n)
-    if binary.ReadU8(rd) != 0 or binary.ReadU8(rd) != 0: ret matrix.Matrix {} end
-    kind := binary.ReadU8(rd)
-    ndim := binary.ReadU8(rd)
-    if ndim < 1 or ndim > 4: ret matrix.Matrix {} end
-    if kind != _IDX_U8 and kind != _IDX_I8 and kind != _IDX_I16 and kind != _IDX_I32 and kind != _IDX_F32 and kind != _IDX_F64:
-        ret matrix.Matrix {}
+pub func ParseIdx(p: void*, n: int): matrix.Matrix throws:
+    try:
+        ret _parse_idx(p, n)
+    catch e:
+        throw e.wrap("idx")
     end
-    if compress.RdLeft(rd) < 4 * ndim: ret matrix.Matrix {} end
-    rows := binary.ReadU32BE(rd)
-    mut inner := 1
-    repeat ndim - 1: inner = inner * binary.ReadU32BE(rd) end
-    if rows < 0 or inner < 0: ret matrix.Matrix {} end
-    if compress.RdLeft(rd) < rows * inner * _idx_size(kind): ret matrix.Matrix {} end
-    mut m := matrix.Zeros(rows, inner)
-    repeat rows * inner in k: m.a.set(k, _idx_elem(rd, kind)) end
-    ok = true
-    ret m
 end
 
 @en "LoadIdx"
 @fa "بارگذاری آی‌دی‌ایکس"
-pub func LoadIdx(path: str, ok &: bool): matrix.Matrix:
-    ok = false
+pub func LoadIdx(path: str): matrix.Matrix throws:
     mut fok := false
     mut raw := archive.ReadBinaryFile(path, fok)
+    defer compress.BufFree(raw)
     if fok == false:
-        compress.BufFree(raw)
-        ret matrix.Matrix {}
+        throw Error.New(ErrorKind.NotFound, "cannot open file").with_path(path).wrap("idx")
     end
     n := compress.BufLen(raw)
-    mut m := matrix.Matrix {}
-    if n >= 2 and compress.BufGet(raw, 0) == 31 and compress.BufGet(raw, 1) == 139:
-        mut zok := false
-        mut plain := compress.GzipDecompressBuf(raw, zok)
-        if zok: m = ParseIdx(plain.data, compress.BufLen(plain), ok) end
-        compress.BufFree(plain)
-    else:
-        m = ParseIdx(raw.data, n, ok)
+    try:
+        if n >= 2 and compress.BufGet(raw, 0) == 31 and compress.BufGet(raw, 1) == 139:
+            mut zok := false
+            mut plain := compress.GzipDecompressBuf(raw, zok)
+            defer compress.BufFree(plain)
+            if zok == false:
+                throw Error.New(ErrorKind.Syntax, "the gzip stream is damaged").with_code("idx.gzip")
+            end
+            ret _parse_idx(plain.data, compress.BufLen(plain))
+        end
+        ret _parse_idx(raw.data, n)
+    catch e:
+        throw e.with_path(path).wrap("idx")
     end
-    compress.BufFree(raw)
-    ret m
 end
 
 @en "LoadMnist"
 @fa "بارگذاری ام‌نیست"
-pub func LoadMnist(images_path: str, labels_path: str, x &: matrix.Matrix, y &: matrix.Matrix): bool:
-    mut iok := false
-    mut xi := LoadIdx(images_path, iok)
-    if iok == false:
+pub func LoadMnist(images_path: str, labels_path: str, x &: matrix.Matrix, y &: matrix.Matrix) throws:
+    mut xi := try LoadIdx(images_path)
+    mut yl := matrix.Matrix {}
+    try:
+        yl = LoadIdx(labels_path)
+    catch e:
         matrix.Free(xi)
-        ret false
+        throw e
     end
-    mut lok := false
-    mut yl := LoadIdx(labels_path, lok)
-    if lok == false or yl.rows != xi.rows:
+    if yl.rows != xi.rows:
+        rows_x := xi.rows
+        rows_y := yl.rows
         matrix.Free(xi)
         matrix.Free(yl)
-        ret false
+        throw Error.New(ErrorKind.InvalidArgument, "the images have " + rows_x + " rows but the labels have " + rows_y).with_code("idx.mismatch").wrap("mnist")
     end
     matrix.ScaleInPlace(xi, 1.0 / 255.0)
     matrix.Free(x)
     matrix.Free(y)
     x = xi
     y = yl
-    ret true
 end

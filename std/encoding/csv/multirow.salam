@@ -27,45 +27,19 @@ pub struct CSVOptions:
     @en "header"
     @fa "سرستون"
     pub header: bool = true
-end
-
-func _split_lines(text: str): Vector<str>:
-    norm := str.Replace(text, "\r\n", "\n")
-    out := str.Split(norm, "\n")
-    mem.Free(norm as void*)
-    ret out
-end
-
-func _free_lines(lines &: Vector<str>):
-    repeat lines.len() in i: mem.Free(lines.get(i) as void*) end
-    lines.free()
+    @en "separator"
+    @fa "جداکننده"
+    pub separator: str = ","
+    @en "keep_blank"
+    @fa "نگه داشتن خط خالی"
+    pub keep_blank: bool = false
 end
 
 func _index_key(i: int): str:
     ret "col".concat(conv.FormatInt(i as i64))
 end
 
-@en "ReadAll"
-@fa "خواندن همه"
-pub func ReadAll(text: str): CSVTable:
-    mut out := CSVTable {}
-    mut lines := _split_lines(text)
-    mut i := 0
-    until i < lines.len():
-        line := lines.get(i)
-        i += 1
-        if line.len() == 0: continue end
-        mut row := CSVRow {}
-        row.fields = ReadLine(line)
-        out.rows.push(row)
-    end
-    _free_lines(lines)
-    ret out
-end
-
-@en "FreeTable"
-@fa "آزادسازی جدول"
-pub func FreeTable(t &: CSVTable):
+func _free_rows(t &: CSVTable):
     repeat t.rows.len() in i:
         mut r := t.rows.get(i)
         repeat r.fields.len() in j: mem.Free(r.fields.get(j) as void*) end
@@ -74,24 +48,107 @@ pub func FreeTable(t &: CSVTable):
     t.rows.free()
 end
 
-@en "WriteAll"
-@fa "نوشتن همه"
-pub func WriteAll(table: CSVTable): str:
+func _read_table(text: str, sep: int, keep_blank: bool, header_at &: Vector<int>, err &: Error): CSVTable:
+    mut out := CSVTable {}
+    bp := _bp(text)
+    n := text.len()
+    mut at := Vector {} as Vector<int>
+    defer at.free()
+    mut pos := 0
+    until pos < n:
+        eol := _eol_len(bp, n, pos)
+        if eol > 0 and keep_blank == false:
+            pos += eol
+            continue
+        end
+        mut row := CSVRow {}
+        at.clear()
+        pos = _read_record(text, n, pos, sep, row.fields, at, err)
+        if err.message != "":
+            _free_fields(row.fields)
+            _free_rows(out)
+            ret CSVTable {}
+        end
+        if out.rows.len() == 0:
+            repeat at.len() in k: header_at.push(at.get(k)) end
+        end
+        out.rows.push(row)
+    end
+    ret out
+end
+
+func _check_header(table: CSVTable, at: Vector<int>, err &: Error):
+    header := table.rows.get(0).fields
+    repeat header.len() in j:
+        repeat j in k:
+            if str.Equals(header.get(k), header.get(j)):
+                mut off := 0
+                if j < at.len(): off = at.get(j) end
+                err = Error.At(ErrorKind.AlreadyExists, "duplicate column name '" + header.get(j) + "'", off).with_code("csv.duplicate_header")
+                ret
+            end
+        end
+    end
+end
+
+@en "ReadAllWith"
+@fa "خواندن همه سفارشی"
+pub func ReadAllWith(text: str, opts: CSVOptions): CSVTable throws:
+    mut err := Error {}
+    sep := _read_sep(opts, err)
+    if err.message != "": throw err.wrap("csv") end
+    mut hat := Vector {} as Vector<int>
+    defer hat.free()
+    out := _read_table(text, sep, opts.keep_blank, hat, err)
+    if err.message != "": throw err.locate(text).wrap("csv") end
+    ret out
+end
+
+@en "ReadAll"
+@fa "خواندن همه"
+pub func ReadAll(text: str): CSVTable throws:
+    ret try ReadAllWith(text, CSVOptions {})
+end
+
+@en "FreeTable"
+@fa "آزادسازی جدول"
+pub func FreeTable(t &: CSVTable):
+    _free_rows(t)
+end
+
+@en "WriteAllWith"
+@fa "نوشتن همه سفارشی"
+pub func WriteAllWith(table: CSVTable, opts: CSVOptions): str:
+    sep := _write_sep(opts)
     mut sb := str.NewBuilder()
     defer str.BufFree(sb)
-    mut i := 0
-    until i < table.rows.len():
+    repeat table.rows.len() in i:
         if i > 0: str.BufAppend(sb, "\r\n") end
-        str.BufAppend(sb, WriteLine(table.rows.get(i).fields))
-        i += 1
+        _write_line(sb, table.rows.get(i).fields, sep)
     end
     ret str.BufStr(sb)
 end
 
+@en "WriteAll"
+@fa "نوشتن همه"
+pub func WriteAll(table: CSVTable): str:
+    ret WriteAllWith(table, CSVOptions {})
+end
+
 @en "ToValueWith"
 @fa "به مقدار سفارشی"
-pub func ToValueWith(text: str, opts: CSVOptions): value.Value:
-    table := ReadAll(text)
+pub func ToValueWith(text: str, opts: CSVOptions): value.Value throws:
+    mut err := Error {}
+    sep := _read_sep(opts, err)
+    if err.message != "": throw err.wrap("csv") end
+    mut hat := Vector {} as Vector<int>
+    defer hat.free()
+    mut table := _read_table(text, sep, opts.keep_blank, hat, err)
+    if err.message == "" and opts.header and table.rows.len() > 0:
+        _check_header(table, hat, err)
+        if err.message != "": _free_rows(table) end
+    end
+    if err.message != "": throw err.locate(text).wrap("csv") end
     mut out := value.NewValueArray()
     if table.rows.len() == 0: ret out end
     mut headerIdx := 0
@@ -119,8 +176,8 @@ end
 
 @en "ToValue"
 @fa "به مقدار"
-pub func ToValue(text: str): value.Value:
-    ret ToValueWith(text, CSVOptions {})
+pub func ToValue(text: str): value.Value throws:
+    ret try ToValueWith(text, CSVOptions {})
 end
 
 @en "FromValueWith"
@@ -150,7 +207,7 @@ pub func FromValueWith(v: value.Value, opts: CSVOptions): str:
         table.rows.push(r)
         i += 1
     end
-    ret WriteAll(table)
+    ret WriteAllWith(table, opts)
 end
 
 @en "FromValue"

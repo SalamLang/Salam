@@ -145,12 +145,6 @@ pub struct Gguf:
     @en "raw"
     @fa "بایت‌های خام"
     pub raw: compress.ByteBuf = compress.ByteBuf {}
-    @en "error"
-    @fa "خطا"
-    pub error: str = ""
-    @en "ok"
-    @fa "موفق"
-    pub ok: bool = false
 
     @en "meta_index"
     @fa "نمایه فراداده"
@@ -202,7 +196,6 @@ pub struct Gguf:
             t.free()
         end
         this.tensors.free()
-        _free_read_str(this.error)
         compress.BufFree(this.raw)
     end
 end
@@ -211,131 +204,132 @@ func _free_read_str(s: str):
     if str.Len(s) > 0: mem.Free(s as void*) end
 end
 
-func _read_str(rd &: compress.ByteReader, out &: str): bool:
-    n := binary.ReadU64LE(rd) as int
-    if rd.bad or n < 0 or compress.RdLeft(rd) < n: ret false end
-    mut b := compress.RdBytes(rd, n)
-    out = compress.BufToStrUnsafe(b)
-    compress.BufFree(b)
-    ret true
+func _gg_err(kind: ErrorKind, msg: str, at: int, code: str): Error:
+    ret Error.At(kind, msg, at).with_code(code)
 end
 
-func _read_scalar(rd &: compress.ByteReader, kind: int, iv &: i64, fv &: f64): bool:
+func _read_str(rd &: compress.ByteReader): str throws:
+    at := rd.pos
+    n := try binary.ReadU64LE(rd)
+    if n < 0 or n > (compress.RdLeft(rd) as i64):
+        throw _gg_err(ErrorKind.UnexpectedEnd, "a string of " + n + " bytes but " + compress.RdLeft(rd) + " are left", at, "gguf.truncated")
+    end
+    mut b := compress.RdBytes(rd, n as int)
+    out := compress.BufToStrUnsafe(b)
+    compress.BufFree(b)
+    ret out
+end
+
+func _read_scalar(rd &: compress.ByteReader, kind: int, iv &: i64, fv &: f64) throws:
     if kind == 0:
-        iv = binary.ReadU8(rd) as i64
+        iv = (try binary.ReadU8(rd)) as i64
     else kind == 1:
-        mut x := binary.ReadU8(rd)
+        mut x := try binary.ReadU8(rd)
         if x >= 128: x = x - 256 end
         iv = x as i64
     else kind == 2:
-        iv = binary.ReadU16LE(rd) as i64
+        iv = (try binary.ReadU16LE(rd)) as i64
     else kind == 3:
-        mut x := binary.ReadU16LE(rd)
+        mut x := try binary.ReadU16LE(rd)
         if x >= 32768: x = x - 65536 end
         iv = x as i64
     else kind == 4:
-        mut x := binary.ReadU32LE(rd) as i64
+        mut x := (try binary.ReadU32LE(rd)) as i64
         if x < 0: x = x + 4294967296 end
         iv = x
     else kind == 5:
-        iv = binary.ReadU32LE(rd) as i64
+        iv = (try binary.ReadU32LE(rd)) as i64
     else kind == 6:
-        fv = binary.ReadF32(rd, false)
+        fv = try binary.ReadF32(rd, false)
     else kind == 7:
-        iv = binary.ReadU8(rd) as i64
+        iv = (try binary.ReadU8(rd)) as i64
     else kind == 10 or kind == 11:
-        iv = binary.ReadU64LE(rd)
+        iv = try binary.ReadU64LE(rd)
     else kind == 12:
-        fv = binary.ReadF64(rd, false)
+        fv = try binary.ReadF64(rd, false)
     else:
-        ret false
+        throw _gg_err(ErrorKind.Unsupported, "unknown metadata type " + kind, rd.pos - 4, "gguf.meta_type")
     end
-    ret rd.bad == false
 end
 
-func _read_value(rd &: compress.ByteReader, kind: int, v &: MetaValue): bool:
+func _read_value(rd &: compress.ByteReader, kind: int, v &: MetaValue) throws:
     v.kind = kind
-    if kind == META_STRING: ret _read_str(rd, v.s) end
+    if kind == META_STRING:
+        v.s = try _read_str(rd)
+        ret
+    end
     if kind == META_ARRAY:
-        ek := binary.ReadU32LE(rd)
-        cnt := binary.ReadU64LE(rd) as int
-        if rd.bad or cnt < 0: ret false end
+        at := rd.pos
+        ek := try binary.ReadU32LE(rd)
+        cnt := try binary.ReadU64LE(rd)
+        if cnt < 0 or cnt > (compress.RdLeft(rd) as i64):
+            throw _gg_err(ErrorKind.UnexpectedEnd, "an array of " + cnt + " items but " + compress.RdLeft(rd) + " bytes are left", at, "gguf.truncated")
+        end
         v.elem_kind = ek
-        repeat cnt:
+        repeat cnt as int:
             if ek == META_STRING:
-                mut s := ""
-                if _read_str(rd, s) == false: ret false end
-                v.strs.push(s)
+                v.strs.push(try _read_str(rd))
             else ek == 6 or ek == 12:
                 mut f := 0.0
                 mut iv := 0 as i64
-                if _read_scalar(rd, ek, iv, f) == false: ret false end
+                try _read_scalar(rd, ek, iv, f)
                 v.floats.push(f)
             else:
                 mut f := 0.0
                 mut iv := 0 as i64
-                if _read_scalar(rd, ek, iv, f) == false: ret false end
+                try _read_scalar(rd, ek, iv, f)
                 v.ints.push(iv)
             end
         end
-        ret true
+        ret
     end
-    ret _read_scalar(rd, kind, v.i, v.f)
+    try _read_scalar(rd, kind, v.i, v.f)
 end
 
-func _parse(g &: Gguf): bool:
+func _parse(g &: Gguf) throws:
     mut rd := compress.ReaderFromBuf(g.raw)
-    if compress.RdLeft(rd) < 24:
-        g.error = str.Clone("too short")
-        ret false
+    magic := try binary.ReadU32BE(rd)
+    if magic != 0x47475546:
+        throw _gg_err(ErrorKind.Syntax, "not a GGUF file (bad magic bytes)", 0, "gguf.bad_magic")
     end
-    if binary.ReadU8(rd) != 71 or binary.ReadU8(rd) != 71 or binary.ReadU8(rd) != 85 or binary.ReadU8(rd) != 70:
-        g.error = str.Clone("not a GGUF file")
-        ret false
-    end
-    g.version = binary.ReadU32LE(rd)
+    g.version = try binary.ReadU32LE(rd)
     if g.version != 2 and g.version != 3:
-        g.error = "unsupported version " + g.version
-        ret false
+        throw _gg_err(ErrorKind.Unsupported, "unsupported GGUF version " + g.version, 4, "gguf.version")
     end
-    ntensors := binary.ReadU64LE(rd) as int
-    nkv := binary.ReadU64LE(rd) as int
-    if rd.bad or ntensors < 0 or nkv < 0:
-        g.error = str.Clone("bad counts")
-        ret false
+    ntensors := try binary.ReadU64LE(rd)
+    nkv := try binary.ReadU64LE(rd)
+    if ntensors < 0 or nkv < 0 or ntensors > (compress.RdLeft(rd) as i64) or nkv > (compress.RdLeft(rd) as i64):
+        throw _gg_err(ErrorKind.Syntax, "impossible counts: " + ntensors + " tensors, " + nkv + " metadata entries", 8, "gguf.counts")
     end
-    repeat nkv:
-        mut key := ""
-        if _read_str(rd, key) == false:
-            g.error = str.Clone("bad metadata key")
-            ret false
-        end
-        kind := binary.ReadU32LE(rd)
-        mut v := MetaValue {}
-        if _read_value(rd, kind, v) == false:
-            g.error = "bad metadata value for " + key
-            ret false
-        end
+    repeat nkv as int:
+        key := try _read_str(rd)
         g.keys.push(key)
+        kind := try binary.ReadU32LE(rd)
+        mut v := MetaValue {}
+        try:
+            _read_value(rd, kind, v)
+        catch e:
+            v.free()
+            throw e.with_path(str.Clone(key))
+        end
         g.values.push(v)
     end
-    repeat ntensors:
+    repeat ntensors as int:
         mut t := TensorInfo {}
-        if _read_str(rd, t.name) == false:
-            g.error = str.Clone("bad tensor name")
-            ret false
-        end
-        nd := binary.ReadU32LE(rd)
-        if rd.bad or nd < 0 or nd > 8:
-            g.error = str.Clone("bad tensor rank")
-            ret false
-        end
-        repeat nd: t.dims.push(binary.ReadU64LE(rd) as int) end
-        t.ggml_type = binary.ReadU32LE(rd)
-        t.offset = binary.ReadU64LE(rd)
-        if rd.bad:
-            g.error = str.Clone("truncated tensor directory")
-            ret false
+        t.name = try _read_str(rd)
+        try:
+            at := rd.pos
+            nd := binary.ReadU32LE(rd)
+            if nd < 0 or nd > 8:
+                throw _gg_err(ErrorKind.Syntax, "tensor rank " + nd + " (at most 8)", at, "gguf.rank")
+            end
+            repeat nd: t.dims.push(binary.ReadU64LE(rd) as int) end
+            t.ggml_type = binary.ReadU32LE(rd)
+            t.offset = binary.ReadU64LE(rd)
+        catch e:
+            path := str.Clone(t.name)
+            t.free()
+            throw e.with_path(path)
         end
         g.tensors.push(t)
     end
@@ -344,30 +338,37 @@ func _parse(g &: Gguf): bool:
     mut off := rd.pos
     if off % g.alignment != 0: off = off + (g.alignment - off % g.alignment) end
     g.data_offset = off
-    ret true
 end
 
 @en "ParseGguf"
 @fa "تجزیه جی‌جی‌یو‌اف"
-pub func ParseGguf(buf: compress.ByteBuf, ok &: bool): Gguf:
+pub func ParseGguf(buf: compress.ByteBuf): Gguf throws:
     mut g := Gguf {}
     g.raw = buf
-    ok = _parse(g)
-    g.ok = ok
+    try:
+        _parse(g)
+    catch e:
+        g.raw = compress.ByteBuf {}
+        g.free()
+        throw e.wrap("gguf")
+    end
     ret g
 end
 
 @en "LoadGguf"
 @fa "بارگذاری جی‌جی‌یو‌اف"
-pub func LoadGguf(path: str, ok &: bool): Gguf:
-    ok = false
+pub func LoadGguf(path: str): Gguf throws:
     mut fok := false
     mut raw := archive.ReadBinaryFile(path, fok)
     if fok == false:
         compress.BufFree(raw)
-        mut g := Gguf {}
-        g.error = "cannot read " + path
-        ret g
+        throw Error.New(ErrorKind.NotFound, "cannot open file").with_path(path).wrap("gguf")
     end
-    ret ParseGguf(raw, ok)
+    try:
+        ret ParseGguf(raw)
+    catch e:
+        compress.BufFree(raw)
+        if e.path == "": throw e.with_path(path) end
+        throw e.with_path(path + ":" + e.path)
+    end
 end

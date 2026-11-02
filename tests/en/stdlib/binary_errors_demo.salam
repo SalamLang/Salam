@@ -1,0 +1,188 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import compress
+import encoding.binary
+import encoding.msgpack
+import encoding.value
+import testing
+
+struct Frame:
+    pub kind: int = 0
+    pub id: i64 = 0
+    pub scale: f64 = 0.0
+end
+
+func show(label: str, e: Error):
+    println label + ": " + e.kind_name() + " | " + e.to_str() + " [" + e.code + "]"
+end
+
+func bytes(n: int): compress.ByteBuf:
+    mut b := compress.NewByteBuf()
+    repeat n in i: binary.WriteU8(b, i + 1) end
+    ret b
+end
+
+func read_frame(r &: compress.ByteReader): Frame throws:
+    mut f := Frame {}
+    f.kind = try binary.ReadU8(r)
+    f.id = try binary.ReadU64BE(r)
+    f.scale = try binary.ReadF32(r, true)
+    ret f
+end
+
+func each_reader():
+    println "== every reader past the end =="
+    mut b := bytes(1)
+    names := ["ReadU8", "ReadU16BE", "ReadU16LE", "ReadU32BE", "ReadU32LE", "ReadU64BE", "ReadU64LE", "ReadI16BE", "ReadI32LE", "ReadI64BE", "ReadF32", "ReadF64"]
+    repeat 12 in k:
+        mut r := compress.ReaderFromBuf(b)
+        if k > 0: r.pos = 1 end
+        try:
+            if k == 0:
+                binary.ReadU8(r)
+                binary.ReadU8(r)
+            else k == 1:
+                binary.ReadU16BE(r)
+            else k == 2:
+                binary.ReadU16LE(r)
+            else k == 3:
+                binary.ReadU32BE(r)
+            else k == 4:
+                binary.ReadU32LE(r)
+            else k == 5:
+                binary.ReadU64BE(r)
+            else k == 6:
+                binary.ReadU64LE(r)
+            else k == 7:
+                binary.ReadI16BE(r)
+            else k == 8:
+                binary.ReadI32LE(r)
+            else k == 9:
+                binary.ReadI64BE(r)
+            else k == 10:
+                binary.ReadF32(r, false)
+            else:
+                binary.ReadF64(r, true)
+            end
+            println names[k] + ": no error"
+        catch e:
+            show(names[k], e)
+        end
+    end
+    compress.BufFree(b)
+end
+
+func partial_reads():
+    println ""
+    println "== a short read does not move the reader =="
+    mut b := bytes(6)
+    mut r := compress.ReaderFromBuf(b)
+    try:
+        println "u32: " + binary.ReadU32BE(r)
+        println "pos: " + r.pos
+        binary.ReadU32BE(r)
+    catch e:
+        show("second u32", e)
+        println "pos after the error: " + r.pos + ", left: " + compress.RdLeft(r)
+    end
+    try:
+        println "u16 from the same reader: " + binary.ReadU16LE(r)
+    catch e:
+        show("u16", e)
+    end
+    mut sticky := compress.ReaderFromBuf(b)
+    compress.RdBytes(sticky, 10)
+    try:
+        binary.ReadU8(sticky)
+    catch e:
+        show("after compress set bad", e)
+    end
+    compress.BufFree(b)
+end
+
+func frames():
+    println ""
+    println "== a decoder built on try =="
+    mut b := compress.NewByteBuf()
+    binary.WriteU8(b, 7)
+    binary.WriteU64BE(b, 1234567890123 as i64)
+    binary.WriteF32(b, 0.5, true)
+    binary.WriteU8(b, 9)
+    binary.WriteU64BE(b, 42 as i64)
+    mut r := compress.ReaderFromBuf(b)
+    mut count := 0
+    until compress.RdLeft(r) > 0:
+        try:
+            f := read_frame(r)
+            println "frame " + count + ": kind " + f.kind + ", id " + f.id + ", scale " + f.scale
+            count += 1
+        catch e:
+            show("frame " + count, e.wrap("frame " + count))
+            break
+        end
+    end
+    compress.BufFree(b)
+end
+
+func msgpack_truncated():
+    println ""
+    println "== msgpack scalars cut short =="
+    tags := [0xca, 0xcb, 0xcd, 0xcf, 0xd3, 0xdc]
+    repeat 6 in k:
+        mut b := compress.NewByteBuf()
+        binary.WriteU8(b, tags[k])
+        binary.WriteU8(b, 0x40)
+        try:
+            v := msgpack.Unmarshal(b)
+            println "tag " + tags[k] + ": decoded " + value.AsFloat(v)
+        catch e:
+            show("tag " + tags[k], e)
+        end
+        compress.BufFree(b)
+    end
+end
+
+func round_trip() throws:
+    mut b := compress.NewByteBuf()
+    binary.WriteI16LE(b, 0 - 2)
+    binary.WriteI32BE(b, 0 - 70000)
+    binary.WriteI64LE(b, 0 - 5000000000 as i64)
+    binary.WriteF64(b, 0.0 - 2.75, true)
+    binary.WriteU32LE(b, (3735928559 as i64) as int)
+    mut r := compress.ReaderFromBuf(b)
+    testing.AssertEqInt(try binary.ReadI16LE(r), 0 - 2)
+    testing.AssertEqInt(try binary.ReadI32BE(r), 0 - 70000)
+    testing.AssertEqInt64(try binary.ReadI64LE(r), 0 - 5000000000 as i64)
+    testing.AssertEqFloat(try binary.ReadF64(r, true), 0.0 - 2.75, 0.0000001)
+    u := try binary.ReadU32LE(r)
+    testing.AssertEqInt64((u as i64) & 4294967295, 3735928559 as i64)
+    testing.AssertEqInt(compress.RdLeft(r), 0)
+    compress.BufFree(b)
+end
+
+func main(): int:
+    each_reader()
+    partial_reads()
+    frames()
+    msgpack_truncated()
+    try:
+        round_trip()
+    catch e:
+        testing.AssertMsg(false, e.to_str())
+    end
+    ret testing.Summary()
+end

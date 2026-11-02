@@ -362,6 +362,84 @@ func jsg_repeat(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int):
     jsg_scope_reset(g, m)
 end
 
+func jsg_simple_place(a &: at.Ast, id: int): bool:
+    k := at.KindOf(a, id)
+    if k == at.AST_LITERAL or k == at.AST_IDENTIFIER or k == at.AST_THIS:
+        ret true
+    end
+    if k == at.AST_MEMBER:
+        ret jsg_simple_place(a, at.Get(a, id).a)
+    end
+    ret false
+end
+
+func jsg_index_set_fn(g &: Jg, s &: sm.Sema, cts: str): str:
+    if str.Len(cts) == 0 or str.EndsWith(cts, "*") or cg_is_vector_ts(s, cts):
+        ret ""
+    end
+    mut sname := ""
+    ssym := cg_struct_of(s, cts, sname)
+    if ssym == 0:
+        ret ""
+    end
+    sv := sm.SymAt(s, ssym)
+    if sv.members == 0:
+        ret ""
+    end
+    m := sm.LookupLocal(s, sv.members, "operator_index_set")
+    if m == 0 or sm.SymAt(s, m).kind != sm.SYM_METHOD:
+        ret ""
+    end
+    sig := pick_op_overload(s, m, 2)
+    if sig == 0:
+        ret ""
+    end
+    spkg := str.Len(sv.pkgname) > 0 ? sv.pkgname : g.pkg
+    ret jsg_fn_name(g, s, spkg, sv.name, "operator_index_set", m, sig, false, false)
+end
+
+func jsg_compound_index(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int): bool:
+    n := at.Get(a, id)
+    ix := at.Get(a, n.a)
+    if ix.a == 0 or ix.b == 0:
+        ret false
+    end
+    if g.expr_ovr.size() > 0 and (g.expr_ovr.has(n.a) or g.expr_ovr.has(ix.b)):
+        ret false
+    end
+    setfn := jsg_index_set_fn(g, s, at.Get(a, ix.a).type_str)
+    hoist_c := not jsg_simple_place(a, ix.a)
+    hoist_i := not jsg_simple_place(a, ix.b)
+    if str.Len(setfn) == 0 and not hoist_c and not hoist_i:
+        ret false
+    end
+    g.tmpn += 1
+    t := co.I64Toa(g.tmpn as i64)
+    rv := "__ixr" + t
+    iv := "__ixi" + t
+    vv := "__ixv" + t
+    cg_line(g, "{")
+    g.indent += 1
+    cg_line(g, "const " + rv + " = " + jsg_expr(g, s, a, ix.a) + ";")
+    cg_line(g, "const " + iv + " = " + jsg_expr(g, s, a, ix.b) + ";")
+    g.expr_ovr.put(ix.a, rv)
+    g.expr_ovr.put(ix.b, iv)
+    if str.Len(setfn) > 0:
+        cg_line(g, "let " + vv + " = " + jsg_expr(g, s, a, n.a) + ";")
+        g.expr_ovr.put(n.a, vv)
+        jsg_stmt(g, s, a, id)
+        g.expr_ovr.remove(n.a)
+        cg_line(g, setfn + "(" + rv + ", " + iv + ", " + vv + ");")
+    else:
+        jsg_stmt(g, s, a, id)
+    end
+    g.expr_ovr.remove(ix.a)
+    g.expr_ovr.remove(ix.b)
+    g.indent -= 1
+    cg_line(g, "}")
+    ret true
+end
+
 func jsg_stmt(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int):
     if id == 0:
         ret
@@ -431,6 +509,9 @@ func jsg_stmt(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int):
                     end
                 end
             end
+        end
+        if n.op != tok.TK_ASSIGN and n.a != 0 and at.KindOf(a, n.a) == at.AST_INDEX and jsg_compound_index(g, s, a, id):
+            ret
         end
         if n.op != tok.TK_ASSIGN and n.a != 0:
             lts := at.Get(a, n.a).type_str

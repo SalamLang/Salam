@@ -12,6 +12,7 @@ include lv "../llvmgen/llvmgen.salam"
 include lb "../llvm_bridge.salam"
 include ng "../nativegen/nativegen.salam"
 include nl "../nativelink/nativelink.salam"
+include pth "../sal_path.salam"
 
 func native_target_os(triple: str, err &: str): int:
     if str.Len(triple) == 0:
@@ -793,12 +794,20 @@ func mingw_lib(dirs: Vector<str>, spec0: str): str:
 end
 
 func native_link_mingw(lgr: lg.Logger, obj: str, exe: str, o: lv.Options, triple: str): int:
+    ret native_link_mingw_as(lgr, obj, exe, o, triple, "")
+end
+
+func native_link_mingw_as(lgr: lg.Logger, obj: str, exe: str, o: lv.Options, triple: str, implib: str): int:
     arch := tri_arch(triple)
     dirs := mingw_dirs(o, arch)
     rtlib := mingw_rtlib(dirs, arch)
+    dll := str.Len(implib) > 0
     mut l := nl.New()
     nl.SetWindows(l)
-    nl.AddInput(l, find_in(dirs, "crt2.o"))
+    if dll:
+        nl.SetDll(l, pth.PathBase(exe), obj)
+    end
+    nl.AddInput(l, find_in(dirs, dll ? "dllcrt2.o" : "crt2.o"))
     nl.AddInput(l, find_in(dirs, "crtbegin.o"))
     nl.AddInput(l, obj)
     repeat o.link_libs.len() in i:
@@ -821,7 +830,63 @@ func native_link_mingw(lgr: lg.Logger, obj: str, exe: str, o: lv.Options, triple
         lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, nl.Error(l))
         ret 1
     end
+    if dll and not nl.WriteImportLib(l, implib):
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("cannot write '%s'"), co.ArgStr(implib)))
+        ret 1
+    end
     lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "built-in link: " + nl.Stats(l))
+    ret 0
+end
+
+func native_dll_target(opt &: Dr, o: lv.Options): bool:
+    if not o.lib_mode or not str.Equals(opt.lib_kind, "shared"):
+        ret false
+    end
+    mut triple := o.target_triple
+    if str.Len(triple) == 0:
+        triple = native_link_triple()
+    end
+    ret str.Contains(triple, "windows") or str.Contains(triple, "mingw")
+end
+
+func native_dll_stem(opt &: Dr): str:
+    if str.Len(opt.lib_name) > 0:
+        ret opt.lib_name
+    end
+    ret output_stem_of(opt.input)
+end
+
+func native_dll_path(opt &: Dr): str:
+    if str.Len(opt.output) > 0:
+        ret opt.output
+    end
+    ret native_dll_stem(opt) + ".dll"
+end
+
+func native_link_dll(lgr: lg.Logger, opt &: Dr, obj: str, dll: str, triple: str, o: lv.Options): int:
+    mode := linker_mode(opt)
+    stem := native_dll_stem(opt)
+    implib := pth.PathJoin(pth.PathDir(dll), "lib" + stem + ".dll.a")
+    if not str.Equals(mode, "system"):
+        mut why := ""
+        arch := tri_arch(triple)
+        if mingw_link_ok(triple, o, why) and str.Len(find_in(mingw_dirs(o, arch), "dllcrt2.o")) == 0:
+            why = co.Format1(i18.Tr("the built-in linker could not find the C library file '%s'"), co.ArgStr("dllcrt2.o"))
+        end
+        if str.Len(why) == 0:
+            ret native_link_mingw_as(lgr, obj, dll, o, triple, implib)
+        end
+        if str.Equals(mode, "builtin"):
+            lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, why)
+            ret 1
+        end
+    end
+    cmd := native_link_cmd(obj, dll, triple, o) + ` -shared "-Wl,--out-implib,` + implib + `"`
+    lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "native link: " + cmd)
+    if os.Run(cmd) != 0:
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("linking failed: %s"), co.ArgStr(cmd)))
+        ret 1
+    end
     ret 0
 end
 
@@ -946,7 +1011,8 @@ func native_finish(lgr: lg.Logger, opt &: Dr, o: lv.Options, ll_src: str, ok: bo
         lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, co.Format1(i18.Tr("wrote %s"), co.ArgStr(apath)))
     end
     win := tos == ng.NG_OS_WINDOWS
-    if o.output_mode == lv.LV_OUT_OBJ:
+    is_dll := win and native_dll_target(opt, o)
+    if o.output_mode == lv.LV_OUT_OBJ and not is_dll:
         mut opath := opt.output
         if str.Len(opath) == 0:
             opath = stem + (win ? ".obj" : ".o")
@@ -969,8 +1035,11 @@ func native_finish(lgr: lg.Logger, opt &: Dr, o: lv.Options, ll_src: str, ok: bo
         exe = stem
     end
     exe = exe_name_for(exe, triple)
+    if is_dll:
+        exe = native_dll_path(opt)
+    end
     _pl := pf.Begin(pf.TP_LINK, exe)
-    mut rc := builtin_link_mode(lgr, obj, exe, triple, o, linker_mode(opt))
+    mut rc := is_dll ? native_link_dll(lgr, opt, obj, exe, triple, o) : builtin_link_mode(lgr, obj, exe, triple, o, linker_mode(opt))
     mut keep := opt.keep_temp
     if rc == 0 - 1:
         rc = native_link(lgr, obj, exe, triple, o)
@@ -989,6 +1058,9 @@ func native_finish(lgr: lg.Logger, opt &: Dr, o: lv.Options, ll_src: str, ok: bo
         ret rc
     end
     lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, co.Format1(i18.Tr("wrote %s"), co.ArgStr(exe)))
+    if is_dll:
+        ret 0
+    end
     if str.Len(opt.exe_path) == 0:
         opt.exe_path = exe
     end

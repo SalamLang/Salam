@@ -22,23 +22,11 @@ struct Reader:
     pub line_starts: Vector<int> = Vector {}
 end
 
-@en "ParseError"
-@fa "خطای تجزیه"
-pub struct ParseError:
-    @en "ok"
-    @fa "موفق"
+struct ReadFail:
     pub ok: bool = true
-    @en "message"
-    @fa "پیام"
+    pub kind: ErrorKind = ErrorKind.Syntax
+    pub code: str = ""
     pub message: str = ""
-    @en "line"
-    @fa "خط"
-    pub line: int = 0
-    @en "col"
-    @fa "ستون"
-    pub col: int = 0
-    @en "offset"
-    @fa "جابجایی"
     pub offset: int = 0
 end
 
@@ -171,14 +159,28 @@ func line_of(starts &: Vector<int>, offset: int): int:
     ret lo
 end
 
-func fail_at(err &: ParseError, rd &: Reader, offset: int, message: str):
+func fail_kind(err &: ReadFail, offset: int, kind: ErrorKind, code: str, message: str):
     if not err.ok: ret end
-    idx := line_of(rd.line_starts, offset)
     err.ok = false
+    err.kind = kind
+    err.code = code
     err.message = message
-    err.line = idx + 1
-    err.col = offset - rd.line_starts.get(idx) + 1
     err.offset = offset
+end
+
+func fail_at(err &: ReadFail, offset: int, message: str):
+    fail_kind(err, offset, ErrorKind.Syntax, "", message)
+end
+
+func fail_end(err &: ReadFail, rd &: Reader, offset: int, code: str, message: str):
+    mut kind := ErrorKind.Syntax
+    if offset >= rd.n: kind = ErrorKind.UnexpectedEnd end
+    fail_kind(err, offset, kind, code, message)
+end
+
+func offset_of(rd &: Reader, line: int, col: int): int:
+    if line < 1 or line > rd.line_starts.len(): ret 0 end
+    ret rd.line_starts.get(line - 1) + col - 1
 end
 
 func encode_cp(sb &: str.StringBuilder, cp: int):
@@ -230,19 +232,19 @@ func skip_space(rd &: Reader, p: i8*, at: int): int:
 end
 
 func expand_entities(
-    d &: Document, rd &: Reader, raw: str, at: int, in_attribute: bool, opts: ParseOptions, depth: int, err &: ParseError
+    d &: Document, rd &: Reader, raw: str, at: int, in_attribute: bool, opts: ParseOptions, depth: int, err &: ReadFail
 ): str:
     if not str.Contains(raw, "&"): ret str.Clone(raw) end
     mut ceiling := opts.max_entity_depth
     if ceiling <= 0: ceiling = EntityDepthLimit end
     if depth > ceiling:
-        fail_at(err, rd, at, "an entity expands into itself, or nests deeper than the parser allows")
+        fail_kind(err, at, ErrorKind.OutOfRange, "xml.entity_limit", "an entity expands into itself, or nests deeper than the parser allows")
         ret ""
     end
     mut budget := opts.max_entity_expansion
     if budget <= 0: budget = EntityExpansionLimit end
     if rd.expanded > budget:
-        fail_at(err, rd, at, "the entities in this document expand to more text than the parser allows")
+        fail_kind(err, at, ErrorKind.OutOfRange, "xml.entity_limit", "the entities in this document expand to more text than the parser allows")
         ret ""
     end
     mut sb := str.NewBuilder()
@@ -258,12 +260,12 @@ func expand_entities(
         end
         semi := str.IndexFrom(raw, ";", i)
         if semi < 0:
-            fail_at(err, rd, at + i, "an entity reference has no closing semicolon")
+            fail_at(err, at + i, "an entity reference has no closing semicolon")
             break
         end
         body := str.Substr(raw, i + 1, semi - i - 1)
         if str.Len(body) == 0:
-            fail_at(err, rd, at + i, "an entity reference is empty")
+            fail_at(err, at + i, "an entity reference is empty")
             break
         end
         if str.CharAt(body, 0) == "#":
@@ -306,11 +308,11 @@ func expand_entities(
                 end
             end
             if not good:
-                fail_at(err, rd, at + i, "\"&" + body + ";\" is not a character reference")
+                fail_at(err, at + i, "\"&" + body + ";\" is not a character reference")
                 break
             end
             if not valid_char_cp(cp):
-                fail_at(err, rd, at + i, "the character reference \"&" + body + ";\" is not a legal XML character")
+                fail_at(err, at + i, "the character reference \"&" + body + ";\" is not a legal XML character")
                 break
             end
             encode_cp(sb, cp)
@@ -334,11 +336,11 @@ func expand_entities(
                 e += 1
             end
             if not known:
-                fail_at(err, rd, at + i, "the entity \"&" + body + ";\" is not declared")
+                fail_kind(err, at + i, ErrorKind.NotFound, "xml.undeclared_entity", "the entity \"&" + body + ";\" is not declared")
                 break
             end
             if in_attribute and str.Contains(value, "<"):
-                fail_at(err, rd, at + i, "the entity \"&" + body + ";\" puts a '<' in an attribute value")
+                fail_at(err, at + i, "the entity \"&" + body + ";\" puts a '<' in an attribute value")
                 break
             end
             if opts.expand_entities:
@@ -348,7 +350,7 @@ func expand_entities(
                 str.BufAppend(sb, piece)
                 release(piece)
                 if rd.expanded > budget:
-                    fail_at(err, rd, at + i, "the entities in this document expand to more text than the parser allows")
+                    fail_kind(err, at + i, ErrorKind.OutOfRange, "xml.entity_limit", "the entities in this document expand to more text than the parser allows")
                     break
                 end
             else:
@@ -427,9 +429,9 @@ func split_qname(name: str, prefix &: str, local &: str): bool:
     ret true
 end
 
-func read_quoted(rd &: Reader, p: i8*, at: int, stop &: int, err &: ParseError, what: str): str:
+func read_quoted(rd &: Reader, p: i8*, at: int, stop &: int, err &: ReadFail, what: str): str:
     if at >= rd.n or (xub(p, at) != 34 and xub(p, at) != 39):
-        fail_at(err, rd, at, what + " must be in quotes")
+        fail_at(err, at, what + " must be in quotes")
         stop = at
         ret ""
     end
@@ -439,7 +441,7 @@ func read_quoted(rd &: Reader, p: i8*, at: int, stop &: int, err &: ParseError, 
         i += 1
     end
     if i >= rd.n:
-        fail_at(err, rd, at, what + " is never closed")
+        fail_kind(err, at, ErrorKind.UnexpectedEnd, "xml.unclosed", what + " is never closed")
         stop = rd.n
         ret ""
     end
@@ -447,18 +449,18 @@ func read_quoted(rd &: Reader, p: i8*, at: int, stop &: int, err &: ParseError, 
     ret str.Substr(rd.text, at + 1, i - at - 1)
 end
 
-func read_declaration(d &: Document, rd &: Reader, p: i8*, at: int, err &: ParseError): int:
+func read_declaration(d &: Document, rd &: Reader, p: i8*, at: int, err &: ReadFail): int:
     mut i := at + 5
     i = skip_space(rd, p, i)
     mut stop := i
     key := own(d, scan_name(rd, p, i, stop))
     if key != "version":
-        fail_at(err, rd, i, "the XML declaration must start with version")
+        fail_at(err, i, "the XML declaration must start with version")
         ret rd.n
     end
     i = skip_space(rd, p, stop)
     if i >= rd.n or xub(p, i) != 61:
-        fail_at(err, rd, i, "the XML declaration is missing '=' after version")
+        fail_at(err, i, "the XML declaration is missing '=' after version")
         ret rd.n
     end
     i = skip_space(rd, p, i + 1)
@@ -468,12 +470,12 @@ func read_declaration(d &: Document, rd &: Reader, p: i8*, at: int, err &: Parse
     until i < rd.n and xub(p, i) != 63:
         field := own(d, scan_name(rd, p, i, stop))
         if str.Len(field) == 0:
-            fail_at(err, rd, i, "the XML declaration holds something that is not a name")
+            fail_at(err, i, "the XML declaration holds something that is not a name")
             ret rd.n
         end
         i = skip_space(rd, p, stop)
         if i >= rd.n or xub(p, i) != 61:
-            fail_at(err, rd, i, "the XML declaration is missing '=' after " + field)
+            fail_at(err, i, "the XML declaration is missing '=' after " + field)
             ret rd.n
         end
         i = skip_space(rd, p, i + 1)
@@ -482,18 +484,18 @@ func read_declaration(d &: Document, rd &: Reader, p: i8*, at: int, err &: Parse
         if field == "encoding": d.encoding = text
         else field == "standalone":
             if text != "yes" and text != "no":
-                fail_at(err, rd, i, "standalone must be yes or no")
+                fail_at(err, i, "standalone must be yes or no")
                 ret rd.n
             end
             d.standalone = text
         else:
-            fail_at(err, rd, i, "the XML declaration has no field called " + field)
+            fail_at(err, i, "the XML declaration has no field called " + field)
             ret rd.n
         end
         i = skip_space(rd, p, stop)
     end
     if i + 1 >= rd.n or xub(p, i) != 63 or xub(p, i + 1) != 62:
-        fail_at(err, rd, i, "the XML declaration is never closed")
+        fail_end(err, rd, i, "xml.unclosed", "the XML declaration is never closed")
         ret rd.n
     end
     ret i + 2
@@ -540,12 +542,12 @@ func register_entities(d &: Document, subset: str):
     end
 end
 
-func read_doctype(d &: Document, rd &: Reader, p: i8*, at: int, err &: ParseError): int:
+func read_doctype(d &: Document, rd &: Reader, p: i8*, at: int, err &: ReadFail): int:
     mut i := skip_space(rd, p, at + 9)
     mut stop := i
     name := own(d, scan_name(rd, p, i, stop))
     if str.Len(name) == 0:
-        fail_at(err, rd, i, "the document type declaration has no name")
+        fail_at(err, i, "the document type declaration has no name")
         ret rd.n
     end
     d.doctype = name
@@ -565,7 +567,7 @@ func read_doctype(d &: Document, rd &: Reader, p: i8*, at: int, err &: ParseErro
         if not err.ok: ret rd.n end
         i = skip_space(rd, p, stop)
     else str.Len(word) > 0:
-        fail_at(err, rd, i, "a document type declaration takes SYSTEM or PUBLIC, not " + word)
+        fail_at(err, i, "a document type declaration takes SYSTEM or PUBLIC, not " + word)
         ret rd.n
     end
     if i < rd.n and xub(p, i) == 91:
@@ -579,7 +581,7 @@ func read_doctype(d &: Document, rd &: Reader, p: i8*, at: int, err &: ParseErro
             j += 1
         end
         if depth > 0:
-            fail_at(err, rd, i, "the internal subset is never closed")
+            fail_kind(err, i, ErrorKind.UnexpectedEnd, "xml.unclosed", "the internal subset is never closed")
             ret rd.n
         end
         d.internal_subset = own(d, str.Substr(rd.text, i + 1, j - i - 2))
@@ -587,26 +589,26 @@ func read_doctype(d &: Document, rd &: Reader, p: i8*, at: int, err &: ParseErro
         i = skip_space(rd, p, j)
     end
     if i >= rd.n or xub(p, i) != 62:
-        fail_at(err, rd, i, "the document type declaration is never closed")
+        fail_end(err, rd, i, "xml.unclosed", "the document type declaration is never closed")
         ret rd.n
     end
     ret i + 1
 end
 
 func read_comment(
-    d &: Document, rd &: Reader, p: i8*, at: int, parent: int, opts: ParseOptions, err &: ParseError
+    d &: Document, rd &: Reader, p: i8*, at: int, parent: int, opts: ParseOptions, err &: ReadFail
 ): int:
     start := at + 4
     mut i := start
     until i + 2 < rd.n and not (xub(p, i) == 45 and xub(p, i + 1) == 45 and xub(p, i + 2) == 62):
         if xub(p, i) == 45 and xub(p, i + 1) == 45:
-            fail_at(err, rd, i, "a comment may not hold \"--\"")
+            fail_at(err, i, "a comment may not hold \"--\"")
             ret rd.n
         end
         i += 1
     end
     if i + 2 >= rd.n:
-        fail_at(err, rd, at, "a comment is never closed")
+        fail_kind(err, at, ErrorKind.UnexpectedEnd, "xml.unclosed", "a comment is never closed")
         ret rd.n
     end
     if opts.keep_comments:
@@ -617,16 +619,16 @@ func read_comment(
 end
 
 func read_instruction(
-    d &: Document, rd &: Reader, p: i8*, at: int, parent: int, opts: ParseOptions, err &: ParseError
+    d &: Document, rd &: Reader, p: i8*, at: int, parent: int, opts: ParseOptions, err &: ReadFail
 ): int:
     mut stop := at + 2
     target := own(d, scan_name(rd, p, at + 2, stop))
     if str.Len(target) == 0:
-        fail_at(err, rd, at, "a processing instruction has no target")
+        fail_at(err, at, "a processing instruction has no target")
         ret rd.n
     end
     if str.EqualFold(target, "xml"):
-        fail_at(err, rd, at, "\"xml\" is reserved and cannot be a processing instruction target")
+        fail_at(err, at, "\"xml\" is reserved and cannot be a processing instruction target")
         ret rd.n
     end
     mut i := stop
@@ -636,7 +638,7 @@ func read_instruction(
         i += 1
     end
     if close < 0:
-        fail_at(err, rd, at, "a processing instruction is never closed")
+        fail_kind(err, at, ErrorKind.UnexpectedEnd, "xml.unclosed", "a processing instruction is never closed")
         ret rd.n
     end
     raw_data := str.Substr(rd.text, stop, close - stop)
@@ -649,7 +651,7 @@ func read_instruction(
     ret close + 2
 end
 
-func read_cdata(d &: Document, rd &: Reader, p: i8*, at: int, parent: int, err &: ParseError): int:
+func read_cdata(d &: Document, rd &: Reader, p: i8*, at: int, parent: int, err &: ReadFail): int:
     start := at + 9
     mut i := start
     mut close := 0 - 1
@@ -658,7 +660,7 @@ func read_cdata(d &: Document, rd &: Reader, p: i8*, at: int, parent: int, err &
         i += 1
     end
     if close < 0:
-        fail_at(err, rd, at, "a CDATA section is never closed")
+        fail_kind(err, at, ErrorKind.UnexpectedEnd, "xml.unclosed", "a CDATA section is never closed")
         ret rd.n
     end
     id := CreateCData(d, own(d, str.Substr(rd.text, start, close - start)))
@@ -687,18 +689,22 @@ func all_space(text: str): bool:
 end
 
 func read_text_run(
-    d &: Document, rd &: Reader, p: i8*, at: int, parent: int, opts: ParseOptions, err &: ParseError
+    d &: Document, rd &: Reader, p: i8*, at: int, parent: int, opts: ParseOptions, err &: ReadFail
 ): int:
     mut i := at
     until i < rd.n and xub(p, i) != 60:
         if xub(p, i) == 93 and i + 2 < rd.n and xub(p, i + 1) == 93 and xub(p, i + 2) == 62:
-            fail_at(err, rd, i, "\"]]>\" may not appear in character data")
+            fail_at(err, i, "\"]]>\" may not appear in character data")
             ret rd.n
         end
         mut width := 0
         cp := decode_cp(p, rd.n, i, width)
-        if cp < 0 or not valid_char_cp(cp):
-            fail_at(err, rd, i, "the document holds a character XML does not allow")
+        if cp < 0:
+            fail_kind(err, i, ErrorKind.InvalidUtf8, "xml.invalid_utf8", "the document is not valid UTF-8")
+            ret rd.n
+        end
+        if not valid_char_cp(cp):
+            fail_kind(err, i, ErrorKind.Syntax, "xml.invalid_char", "the document holds a character XML does not allow")
             ret rd.n
         end
         i += width
@@ -708,7 +714,7 @@ func read_text_run(
         outside := not all_space(raw)
         release(raw)
         if outside:
-            fail_at(err, rd, at, "text is not allowed outside the root element")
+            fail_at(err, at, "text is not allowed outside the root element")
             ret rd.n
         end
         ret i
@@ -729,7 +735,7 @@ func read_text_run(
 end
 
 func read_attributes(
-    d &: Document, rd &: Reader, p: i8*, at: int, id: int, sc &: Scope, opts: ParseOptions, self_closing &: bool, err &: ParseError
+    d &: Document, rd &: Reader, p: i8*, at: int, id: int, sc &: Scope, opts: ParseOptions, self_closing &: bool, err &: ReadFail
 ): int:
     mut i := at
     self_closing = false
@@ -737,37 +743,37 @@ func read_attributes(
         before := i
         i = skip_space(rd, p, i)
         if i >= rd.n:
-            fail_at(err, rd, at, "a start tag is never closed")
+            fail_kind(err, at, ErrorKind.UnexpectedEnd, "xml.unclosed_tag", "a start tag is never closed")
             ret rd.n
         end
         c := xub(p, i)
         if c == 62: ret i + 1 end
         if c == 47:
             if i + 1 >= rd.n or xub(p, i + 1) != 62:
-                fail_at(err, rd, i, "'/' in a start tag must be followed by '>'")
+                fail_at(err, i, "'/' in a start tag must be followed by '>'")
                 ret rd.n
             end
             self_closing = true
             ret i + 2
         end
         if i == before:
-            fail_at(err, rd, i, "attributes must be separated by whitespace")
+            fail_at(err, i, "attributes must be separated by whitespace")
             ret rd.n
         end
         mut stop := i
         name := own(d, scan_name(rd, p, i, stop))
         if str.Len(name) == 0:
-            fail_at(err, rd, i, "an attribute name is missing")
+            fail_at(err, i, "an attribute name is missing")
             ret rd.n
         end
         if HasAttribute(d, id, name):
-            fail_at(err, rd, i, "the attribute \"" + name + "\" is given twice")
+            fail_kind(err, i, ErrorKind.AlreadyExists, "xml.duplicate_attribute", "the attribute \"" + name + "\" is given twice")
             ret rd.n
         end
         name_at := i
         i = skip_space(rd, p, stop)
         if i >= rd.n or xub(p, i) != 61:
-            fail_at(err, rd, i, "the attribute \"" + name + "\" has no value")
+            fail_at(err, i, "the attribute \"" + name + "\" has no value")
             ret rd.n
         end
         i = skip_space(rd, p, i + 1)
@@ -778,7 +784,7 @@ func read_attributes(
         end
         if str.Contains(raw, "<"):
             release(raw)
-            fail_at(err, rd, i, "the attribute \"" + name + "\" holds a literal '<'")
+            fail_at(err, i, "the attribute \"" + name + "\" holds a literal '<'")
             ret rd.n
         end
         value := own(d, expand_entities(d, rd, raw, i + 1, true, opts, 0, err))
@@ -788,7 +794,7 @@ func read_attributes(
         mut local := ""
         if opts.namespaces:
             if not split_qname(name, prefix, local):
-                fail_at(err, rd, name_at, "\"" + name + "\" is not a valid qualified name")
+                fail_at(err, name_at, "\"" + name + "\" is not a valid qualified name")
                 ret rd.n
             end
             if str.Len(prefix) > 0: _kept := own(d, prefix) end
@@ -811,19 +817,19 @@ func read_attributes(
                 scope_bind(sc, "", value)
             else prefix == "xmlns":
                 if str.Len(value) == 0:
-                    fail_at(err, rd, name_at, "the prefix \"" + local + "\" cannot be bound to an empty namespace")
+                    fail_at(err, name_at, "the prefix \"" + local + "\" cannot be bound to an empty namespace")
                     ret rd.n
                 end
                 if local == "xmlns":
-                    fail_at(err, rd, name_at, "the prefix \"xmlns\" cannot be redeclared")
+                    fail_at(err, name_at, "the prefix \"xmlns\" cannot be redeclared")
                     ret rd.n
                 end
                 if local == "xml" and value != XMLNamespaceURI:
-                    fail_at(err, rd, name_at, "the prefix \"xml\" can only be bound to " + XMLNamespaceURI)
+                    fail_at(err, name_at, "the prefix \"xml\" can only be bound to " + XMLNamespaceURI)
                     ret rd.n
                 end
                 if value == XMLNSNamespaceURI:
-                    fail_at(err, rd, name_at, "no prefix may be bound to " + XMLNSNamespaceURI)
+                    fail_at(err, name_at, "no prefix may be bound to " + XMLNSNamespaceURI)
                     ret rd.n
                 end
                 scope_bind(sc, local, value)
@@ -834,15 +840,12 @@ func read_attributes(
     ret rd.n
 end
 
-func resolve_names(d &: Document, _rd &: Reader, id: int, sc &: Scope, err &: ParseError):
+func resolve_names(d &: Document, rd &: Reader, id: int, sc &: Scope, err &: ReadFail):
     mut n := d.nodes.get(id)
     mut found := false
     uri := scope_lookup(sc, n.prefix, found)
     if not found:
-        err.ok = false
-        err.message = "the namespace prefix \"" + n.prefix + "\" is not declared"
-        err.line = n.line
-        err.col = n.col
+        fail_kind(err, offset_of(rd, n.line, n.col), ErrorKind.NotFound, "xml.undeclared_prefix", "the namespace prefix \"" + n.prefix + "\" is not declared")
         ret
     end
     n.uri = uri
@@ -855,10 +858,7 @@ func resolve_names(d &: Document, _rd &: Reader, id: int, sc &: Scope, err &: Pa
             mut ok := false
             au := scope_lookup(sc, a.prefix, ok)
             if not ok:
-                err.ok = false
-                err.message = "the namespace prefix \"" + a.prefix + "\" is not declared"
-                err.line = a.line
-                err.col = a.col
+                fail_kind(err, offset_of(rd, a.line, a.col), ErrorKind.NotFound, "xml.undeclared_prefix", "the namespace prefix \"" + a.prefix + "\" is not declared")
                 ret
             end
             a.uri = au
@@ -868,10 +868,7 @@ func resolve_names(d &: Document, _rd &: Reader, id: int, sc &: Scope, err &: Pa
         until err.ok and j < i:
             b := d.attributes.get(n.attrs.get(j))
             if str.Len(a.uri) > 0 and b.uri == a.uri and b.local == a.local:
-                err.ok = false
-                err.message = "the attribute \"" + a.local + "\" is given twice in the same namespace"
-                err.line = a.line
-                err.col = a.col
+                fail_kind(err, offset_of(rd, a.line, a.col), ErrorKind.AlreadyExists, "xml.duplicate_attribute", "the attribute \"" + a.local + "\" is given twice in the same namespace")
                 ret
             end
             j += 1
@@ -880,7 +877,7 @@ func resolve_names(d &: Document, _rd &: Reader, id: int, sc &: Scope, err &: Pa
     end
 end
 
-func parse_into(d &: Document, rd &: Reader, opts: ParseOptions, err &: ParseError):
+func parse_into(d &: Document, rd &: Reader, opts: ParseOptions, err &: ReadFail):
     p := xbp(rd.text)
     mut sc := Scope {}
     mut stack := Vector {} as Vector<int>
@@ -901,7 +898,7 @@ func parse_into(d &: Document, rd &: Reader, opts: ParseOptions, err &: ParseErr
             continue
         end
         if i + 1 >= rd.n:
-            fail_at(err, rd, i, "the document ends with '<'")
+            fail_kind(err, i, ErrorKind.UnexpectedEnd, "", "the document ends with '<'")
             break
         end
         c1 := xub(p, i + 1)
@@ -912,7 +909,7 @@ func parse_into(d &: Document, rd &: Reader, opts: ParseOptions, err &: ParseErr
             end
             if i + 8 < rd.n and str.Substr(rd.text, i + 2, 7) == "[CDATA[":
                 if parent == 0:
-                    fail_at(err, rd, i, "a CDATA section is not allowed outside the root element")
+                    fail_at(err, i, "a CDATA section is not allowed outside the root element")
                     break
                 end
                 i = read_cdata(d, rd, p, i, parent, err)
@@ -920,18 +917,18 @@ func parse_into(d &: Document, rd &: Reader, opts: ParseOptions, err &: ParseErr
             end
             if i + 9 <= rd.n and str.Substr(rd.text, i + 2, 7) == "DOCTYPE":
                 if seen_doctype:
-                    fail_at(err, rd, i, "there is more than one document type declaration")
+                    fail_at(err, i, "there is more than one document type declaration")
                     break
                 end
                 if seen_root:
-                    fail_at(err, rd, i, "the document type declaration must come before the root element")
+                    fail_at(err, i, "the document type declaration must come before the root element")
                     break
                 end
                 seen_doctype = true
                 i = read_doctype(d, rd, p, i, err)
                 continue
             end
-            fail_at(err, rd, i, "\"<!\" starts nothing the parser knows")
+            fail_at(err, i, "\"<!\" starts nothing the parser knows")
             break
         end
         if c1 == 63:
@@ -942,19 +939,19 @@ func parse_into(d &: Document, rd &: Reader, opts: ParseOptions, err &: ParseErr
             mut stop := i + 2
             name := scan_name(rd, p, i + 2, stop)
             if stack.len() == 0:
-                fail_at(err, rd, i, "</" + name + "> closes an element that never opened")
+                fail_kind(err, i, ErrorKind.Syntax, "xml.unexpected_end_tag", "</" + name + "> closes an element that never opened")
                 release(name)
                 break
             end
             top := stack.get(stack.len() - 1)
             if d.nodes.get(top).name != name:
-                fail_at(err, rd, i, "</" + name + "> closes <" + d.nodes.get(top).name + ">")
+                fail_kind(err, i, ErrorKind.Syntax, "xml.mismatched_tag", "</" + name + "> closes <" + d.nodes.get(top).name + ">")
                 release(name)
                 break
             end
             j := skip_space(rd, p, stop)
             if j >= rd.n or xub(p, j) != 62:
-                fail_at(err, rd, j, "the end tag </" + name + "> is never closed")
+                fail_end(err, rd, j, "xml.unclosed_tag", "the end tag </" + name + "> is never closed")
                 release(name)
                 break
             end
@@ -969,15 +966,15 @@ func parse_into(d &: Document, rd &: Reader, opts: ParseOptions, err &: ParseErr
         mut stop := i + 1
         name := own(d, scan_name(rd, p, i + 1, stop))
         if str.Len(name) == 0:
-            fail_at(err, rd, i + 1, "an element name is missing or starts with a character XML does not allow")
+            fail_at(err, i + 1, "an element name is missing or starts with a character XML does not allow")
             break
         end
         if parent == 0 and seen_root:
-            fail_at(err, rd, i, "a document may hold only one root element, and <" + name + "> is a second")
+            fail_kind(err, i, ErrorKind.Syntax, "xml.multiple_roots", "a document may hold only one root element, and <" + name + "> is a second")
             break
         end
         if stack.len() >= opts.max_depth:
-            fail_at(err, rd, i, "the element nesting is deeper than the parser allows")
+            fail_kind(err, i, ErrorKind.OutOfRange, "xml.too_deep", "the element nesting is deeper than the parser allows")
             break
         end
         id := new_element(d, name)
@@ -985,7 +982,7 @@ func parse_into(d &: Document, rd &: Reader, opts: ParseOptions, err &: ParseErr
             mut prefix := ""
             mut local := ""
             if not split_qname(name, prefix, local):
-                fail_at(err, rd, i + 1, "\"" + name + "\" is not a valid qualified name")
+                fail_at(err, i + 1, "\"" + name + "\" is not a valid qualified name")
                 break
             end
             mut e := d.nodes.get(id)
@@ -1013,19 +1010,24 @@ func parse_into(d &: Document, rd &: Reader, opts: ParseOptions, err &: ParseErr
 
     if err.ok and stack.len() > 0:
         last := stack.get(stack.len() - 1)
-        err.ok = false
-        err.message = "<" + d.nodes.get(last).name + "> is never closed"
-        err.line = d.nodes.get(last).line
-        err.col = d.nodes.get(last).col
+        fail_kind(err, offset_of(rd, d.nodes.get(last).line, d.nodes.get(last).col), ErrorKind.UnexpectedEnd, "xml.unclosed_tag", "<" + d.nodes.get(last).name + "> is never closed")
     end
     if err.ok and not seen_root:
-        err.ok = false
-        err.message = "the document has no root element"
-        err.line = 1
-        err.col = 1
+        fail_kind(err, rd.n, ErrorKind.UnexpectedEnd, "xml.no_root", "the document has no root element")
     end
     stack.free()
     scope_free(sc)
+end
+
+func read_document(text: str, opts: ParseOptions, err &: ReadFail): Document:
+    mut d := NewDocument()
+    d.version = ""
+    d.encoding = ""
+    mut rd := Reader { text = text, n = str.Len(text) }
+    rd.line_starts = index_lines(text)
+    parse_into(d, rd, opts, err)
+    rd.line_starts.free()
+    ret d
 end
 
 @en "DefaultOptions"
@@ -1036,43 +1038,29 @@ pub func DefaultOptions(): ParseOptions:
     }
 end
 
-@en "NoError"
-@fa "بدون خطا"
-pub func NoError(): ParseError:
-    ret ParseError {}
-end
-
-@en "ErrorText"
-@fa "متن خطا"
-pub func ErrorText(e: ParseError): str:
-    if e.ok: ret "" end
-    ret "line " + str.FromInt(e.line as i64) + ", column " + str.FromInt(e.col as i64) + ": " + e.message
-end
-
 @en "ParseWith"
 @fa "تجزیه سفارشی"
-pub func ParseWith(text: str, opts: ParseOptions, err &: ParseError): Document:
-    mut d := NewDocument()
-    d.version = ""
-    d.encoding = ""
-    mut rd := Reader { text = text, n = str.Len(text) }
-    rd.line_starts = index_lines(text)
-    err = ParseError {}
-    parse_into(d, rd, opts, err)
-    rd.line_starts.free()
+pub func ParseWith(text: str, opts: ParseOptions): Document throws:
+    mut err := ReadFail {}
+    mut d := read_document(text, opts, err)
+    if not err.ok:
+        Free(d)
+        throw Error.At(err.kind, err.message, err.offset).with_code(err.code).locate(text).wrap("xml")
+    end
     ret d
 end
 
 @en "Parse"
 @fa "تجزیه"
-pub func Parse(text: str, err &: ParseError): Document:
-    ret ParseWith(text, DefaultOptions(), err)
+pub func Parse(text: str): Document throws:
+    ret try ParseWith(text, DefaultOptions())
 end
 
 @en "WellFormed"
 @fa "خوش‌ساخت است"
-pub func WellFormed(text: str, err &: ParseError): bool:
-    mut d := ParseWith(text, DefaultOptions(), err)
+pub func WellFormed(text: str): bool:
+    mut err := ReadFail {}
+    mut d := read_document(text, DefaultOptions(), err)
     Free(d)
     ret err.ok
 end

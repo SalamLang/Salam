@@ -117,6 +117,8 @@ struct XPEngine:
     pub failed: bool = false
     pub message: str = ""
     pub offset: int = 0
+    pub kind: ErrorKind = ErrorKind.Syntax
+    pub code: str = ""
 end
 
 @en "XPathValue"
@@ -139,11 +141,17 @@ pub struct XPathValue:
     pub flag: bool = false
 end
 
-func xp_fail(e &: XPEngine, offset: int, message: str):
+func xp_fail_kind(e &: XPEngine, offset: int, kind: ErrorKind, code: str, message: str):
     if e.failed: ret end
     e.failed = true
     e.message = message
     e.offset = offset
+    e.kind = kind
+    e.code = code
+end
+
+func xp_fail(e &: XPEngine, offset: int, message: str):
+    xp_fail_kind(e, offset, ErrorKind.Syntax, "", message)
 end
 
 func xp_op_expected(text: str, prev_kind: int, prev_text: str): bool:
@@ -503,7 +511,7 @@ func parse_primary(e &: XPEngine): int:
         ret inner
     end
     if tk_is_op(e, "$"):
-        xp_fail(e, tk_offset(e), "variable references are not supported")
+        xp_fail_kind(e, tk_offset(e), ErrorKind.Unsupported, "xpath.unsupported", "variable references are not supported")
         ret new_expr(e, XP_LITERAL)
     end
     if tk_kind(e, 0) == TK_NAME and tk_kind(e, 1) == TK_OP and tk_text(e, 1) == "(":
@@ -1188,7 +1196,7 @@ func call_function(
     if name == "false": ret boolean_val(false) end
     if name == "count":
         if count != 1 or args.get(0).kind != ValueNodeSet:
-            xp_fail(e, 0, "count() takes one node-set")
+            xp_fail_kind(e, 0, ErrorKind.InvalidArgument, "xpath.arity", "count() takes one node-set")
             ret number_val(0.0)
         end
         ret number_val(set_len(e, args.get(0).set) as f64)
@@ -1220,7 +1228,7 @@ func call_function(
     end
     if name == "starts-with" or name == "contains" or name == "ends-with" or name == "substring-before" or name == "substring-after":
         if count != 2:
-            xp_fail(e, 0, name + "() takes two arguments")
+            xp_fail_kind(e, 0, ErrorKind.InvalidArgument, "xpath.arity", name + "() takes two arguments")
             ret string_val("")
         end
         a := as_string(e, d, args.get(0))
@@ -1235,7 +1243,7 @@ func call_function(
     end
     if name == "substring":
         if count < 2:
-            xp_fail(e, 0, "substring() takes two or three arguments")
+            xp_fail_kind(e, 0, ErrorKind.InvalidArgument, "xpath.arity", "substring() takes two or three arguments")
             ret string_val("")
         end
         text := as_string(e, d, args.get(0))
@@ -1251,21 +1259,21 @@ func call_function(
     end
     if name == "translate":
         if count != 3:
-            xp_fail(e, 0, "translate() takes three arguments")
+            xp_fail_kind(e, 0, ErrorKind.InvalidArgument, "xpath.arity", "translate() takes three arguments")
             ret string_val("")
         end
         ret string_val(translate_text(as_string(e, d, args.get(0)), as_string(e, d, args.get(1)), as_string(e, d, args.get(2))))
     end
     if name == "boolean":
         if count != 1:
-            xp_fail(e, 0, "boolean() takes one argument")
+            xp_fail_kind(e, 0, ErrorKind.InvalidArgument, "xpath.arity", "boolean() takes one argument")
             ret boolean_val(false)
         end
         ret boolean_val(as_boolean(e, d, args.get(0)))
     end
     if name == "not":
         if count != 1:
-            xp_fail(e, 0, "not() takes one argument")
+            xp_fail_kind(e, 0, ErrorKind.InvalidArgument, "xpath.arity", "not() takes one argument")
             ret boolean_val(false)
         end
         ret boolean_val(not as_boolean(e, d, args.get(0)))
@@ -1276,7 +1284,7 @@ func call_function(
     end
     if name == "sum":
         if count != 1 or args.get(0).kind != ValueNodeSet:
-            xp_fail(e, 0, "sum() takes one node-set")
+            xp_fail_kind(e, 0, ErrorKind.InvalidArgument, "xpath.arity", "sum() takes one node-set")
             ret number_val(0.0)
         end
         mut total := 0.0
@@ -1289,7 +1297,7 @@ func call_function(
     end
     if name == "floor" or name == "ceiling" or name == "round":
         if count != 1:
-            xp_fail(e, 0, name + "() takes one argument")
+            xp_fail_kind(e, 0, ErrorKind.InvalidArgument, "xpath.arity", name + "() takes one argument")
             ret number_val(0.0)
         end
         v := as_number(e, d, args.get(0))
@@ -1297,7 +1305,7 @@ func call_function(
         if name == "ceiling": ret number_val(math.Ceil(v)) end
         ret number_val(math.Floor(v + 0.5))
     end
-    xp_fail(e, 0, "there is no XPath function called " + name + "()")
+    xp_fail_kind(e, 0, ErrorKind.NotFound, "xpath.unknown_function", "there is no XPath function called " + name + "()")
     ret string_val("")
 end
 
@@ -1383,7 +1391,7 @@ func evaluate(e &: XPEngine, d: Document, id: int, ctx: int, position: int, size
         left := evaluate(e, d, node.a, ctx, position, size)
         right := evaluate(e, d, node.b, ctx, position, size)
         if left.kind != ValueNodeSet or right.kind != ValueNodeSet:
-            xp_fail(e, 0, "'|' joins node-sets only")
+            xp_fail_kind(e, 0, ErrorKind.TypeMismatch, "xpath.not_node_set", "'|' joins node-sets only")
             ret string_val("")
         end
         merged := new_set(e)
@@ -1414,7 +1422,7 @@ func evaluate(e &: XPEngine, d: Document, id: int, ctx: int, position: int, size
     if node.kind == XP_FILTER:
         base := evaluate(e, d, node.a, ctx, position, size)
         if base.kind != ValueNodeSet:
-            xp_fail(e, 0, "a predicate can only filter a node-set")
+            xp_fail_kind(e, 0, ErrorKind.TypeMismatch, "xpath.not_node_set", "a predicate can only filter a node-set")
             ret string_val("")
         end
         mut candidates := Vector {} as Vector<int>
@@ -1474,10 +1482,10 @@ func evaluate(e &: XPEngine, d: Document, id: int, ctx: int, position: int, size
             if b == 0.0: ret number_val(math.NaN()) end
             ret number_val(math.Mod(a, b))
         end
-        xp_fail(e, 0, "\"" + op + "\" is not an operator this engine knows")
+        xp_fail_kind(e, 0, ErrorKind.Internal, "", "\"" + op + "\" is not an operator this engine knows")
         ret string_val("")
     end
-    xp_fail(e, 0, "the expression could not be evaluated")
+    xp_fail_kind(e, 0, ErrorKind.Internal, "", "the expression could not be evaluated")
     ret string_val("")
 end
 
@@ -1503,9 +1511,8 @@ func engine_free(e &: XPEngine):
     e.order.free()
 end
 
-func run_query(d: Document, context: int, expression: str, err &: ParseError, out &: XPathValue):
+func run_query(d: Document, context: int, expression: str, err &: Error, out &: XPathValue):
     mut e := XPEngine {}
-    err = ParseError {}
     out = XPathValue { kind = ValueNodeSet }
     xp_lex(e, expression)
     mut root := 0 - 1
@@ -1539,20 +1546,18 @@ func run_query(d: Document, context: int, expression: str, err &: ParseError, ou
         end
     end
     if e.failed:
-        err.ok = false
-        err.message = e.message
-        err.line = 1
-        err.col = e.offset + 1
-        err.offset = e.offset
+        err = Error.At(e.kind, e.message, e.offset).with_code(e.code).locate(expression).wrap("xpath")
     end
     engine_free(e)
 end
 
 @en "Evaluate"
 @fa "ارزیابی"
-pub func Evaluate(d: Document, context: int, expression: str, err &: ParseError): XPathValue:
+pub func Evaluate(d: Document, context: int, expression: str): XPathValue throws:
+    mut err := Error {}
     mut out := XPathValue {}
     run_query(d, context, expression, err, out)
+    if err.message != "": throw err end
     ret out
 end
 
@@ -1564,25 +1569,19 @@ end
 
 @en "Select"
 @fa "انتخاب"
-pub func Select(d: Document, context: int, expression: str, err &: ParseError): NodeList:
-    mut v := Evaluate(d, context, expression, err)
+pub func Select(d: Document, context: int, expression: str): NodeList throws:
+    mut v := try Evaluate(d, context, expression)
     if v.kind != ValueNodeSet:
-        if err.ok:
-            err.ok = false
-            err.message = "the expression does not produce a node-set"
-            err.line = 1
-            err.col = 1
-        end
         FreeValue(v)
-        ret NodeList {}
+        throw Error.At(ErrorKind.TypeMismatch, "the expression does not produce a node-set", 0).with_code("xpath.not_node_set").locate(expression).wrap("xpath")
     end
     ret v.nodes
 end
 
 @en "SelectFirst"
 @fa "انتخاب نخستین"
-pub func SelectFirst(d: Document, context: int, expression: str, err &: ParseError): int:
-    mut list := Select(d, context, expression, err)
+pub func SelectFirst(d: Document, context: int, expression: str): int throws:
+    mut list := try Select(d, context, expression)
     mut out := 0 - 1
     if list.items.len() > 0: out = list.items.get(0) end
     list.items.free()
@@ -1591,8 +1590,8 @@ end
 
 @en "SelectString"
 @fa "انتخاب رشته"
-pub func SelectString(d: Document, context: int, expression: str, err &: ParseError): str:
-    mut v := Evaluate(d, context, expression, err)
+pub func SelectString(d: Document, context: int, expression: str): str throws:
+    mut v := try Evaluate(d, context, expression)
     mut out := ""
     if v.kind == ValueString: out = v.text
     else v.kind == ValueNumber: out = number_to_string(v.number)
@@ -1605,8 +1604,8 @@ end
 
 @en "SelectNumber"
 @fa "انتخاب عدد"
-pub func SelectNumber(d: Document, context: int, expression: str, err &: ParseError): f64:
-    mut v := Evaluate(d, context, expression, err)
+pub func SelectNumber(d: Document, context: int, expression: str): f64 throws:
+    mut v := try Evaluate(d, context, expression)
     mut out := 0.0
     if v.kind == ValueNumber: out = v.number
     else v.kind == ValueString: out = string_to_number(v.text)
@@ -1622,8 +1621,8 @@ end
 
 @en "SelectBoolean"
 @fa "انتخاب منطقی"
-pub func SelectBoolean(d: Document, context: int, expression: str, err &: ParseError): bool:
-    mut v := Evaluate(d, context, expression, err)
+pub func SelectBoolean(d: Document, context: int, expression: str): bool throws:
+    mut v := try Evaluate(d, context, expression)
     mut out := false
     if v.kind == ValueBoolean: out = v.flag
     else v.kind == ValueString: out = str.Len(v.text) > 0

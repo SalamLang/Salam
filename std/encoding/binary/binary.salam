@@ -53,6 +53,19 @@ func bits_to_f32(bits: int): f32:
     ret v
 end
 
+inline func _b(p: void*, i: int): int:
+    bp := p as u8*
+    ret bp[i] as int
+end
+
+func _short(r: compress.ByteReader, n: int): Error:
+    mut left := r.len - r.pos
+    if r.bad or left < 0: left = 0 end
+    mut unit := " bytes, "
+    if n == 1: unit = " byte, " end
+    ret Error.At(ErrorKind.UnexpectedEnd, "unexpected end of data: needed " + n + unit + left + " left", r.pos).with_code("binary.unexpected_end")
+end
+
 @en "WriteU8"
 @fa "نوشتن طبیعی۸"
 pub func WriteU8(b &: compress.ByteBuf, v: int): compress.BufPush(b, v & 255) end
@@ -143,107 +156,126 @@ end
 
 @en "ReadU8"
 @fa "خواندن طبیعی۸"
-pub func ReadU8(r &: compress.ByteReader): int: ret compress.RdByte(r) end
+pub func ReadU8(r &: compress.ByteReader): int throws:
+    if r.bad or r.pos >= r.len: throw _short(r, 1) end
+    v := _b(r.data, r.pos)
+    r.pos += 1
+    ret v
+end
 
 @en "ReadU16BE"
 @fa "خواندن طبیعی۱۶ بزرگ‌انتها"
-pub func ReadU16BE(r &: compress.ByteReader): int:
-    a := compress.RdByte(r)
-    b := compress.RdByte(r)
-    ret (a << 8) | b
+pub func ReadU16BE(r &: compress.ByteReader): int throws:
+    i := r.pos
+    if r.bad or i + 2 > r.len: throw _short(r, 2) end
+    p := r.data
+    r.pos = i + 2
+    ret (_b(p, i) << 8) | _b(p, i + 1)
 end
 
 @en "ReadU16LE"
 @fa "خواندن طبیعی۱۶ کوچک‌انتها"
-pub func ReadU16LE(r &: compress.ByteReader): int:
-    a := compress.RdByte(r)
-    b := compress.RdByte(r)
-    ret (b << 8) | a
+pub func ReadU16LE(r &: compress.ByteReader): int throws:
+    i := r.pos
+    if r.bad or i + 2 > r.len: throw _short(r, 2) end
+    p := r.data
+    r.pos = i + 2
+    ret _b(p, i) | (_b(p, i + 1) << 8)
 end
 
 @en "ReadU32BE"
 @fa "خواندن طبیعی۳۲ بزرگ‌انتها"
-pub func ReadU32BE(r &: compress.ByteReader): int: ret compress.RdU32(r) end
+pub func ReadU32BE(r &: compress.ByteReader): int throws:
+    i := r.pos
+    if r.bad or i + 4 > r.len: throw _short(r, 4) end
+    p := r.data
+    r.pos = i + 4
+    ret (_b(p, i) << 24) | (_b(p, i + 1) << 16) | (_b(p, i + 2) << 8) | _b(p, i + 3)
+end
 
 @en "ReadU32LE"
 @fa "خواندن طبیعی۳۲ کوچک‌انتها"
-pub func ReadU32LE(r &: compress.ByteReader): int:
-    a := compress.RdByte(r)
-    b := compress.RdByte(r)
-    c := compress.RdByte(r)
-    d := compress.RdByte(r)
-    ret (d << 24) | (c << 16) | (b << 8) | a
+pub func ReadU32LE(r &: compress.ByteReader): int throws:
+    i := r.pos
+    if r.bad or i + 4 > r.len: throw _short(r, 4) end
+    p := r.data
+    r.pos = i + 4
+    ret _b(p, i) | (_b(p, i + 1) << 8) | (_b(p, i + 2) << 16) | (_b(p, i + 3) << 24)
 end
 
 @en "ReadU64BE"
 @fa "خواندن طبیعی۶۴ بزرگ‌انتها"
-pub func ReadU64BE(r &: compress.ByteReader): i64:
+pub func ReadU64BE(r &: compress.ByteReader): i64 throws:
+    i := r.pos
+    if r.bad or i + 8 > r.len: throw _short(r, 8) end
+    p := r.data
+    r.pos = i + 8
     mut out := 0 as i64
-    mut i := 0
-    until i < 8:
-        out = (out << (8 as i64)) | (compress.RdByte(r) as i64)
-        i += 1
+    repeat 8 in k:
+        out = (out << (8 as i64)) | (_b(p, i + k) as i64)
     end
     ret out
 end
 
 @en "ReadU64LE"
 @fa "خواندن طبیعی۶۴ کوچک‌انتها"
-pub func ReadU64LE(r &: compress.ByteReader): i64:
+pub func ReadU64LE(r &: compress.ByteReader): i64 throws:
+    i := r.pos
+    if r.bad or i + 8 > r.len: throw _short(r, 8) end
+    p := r.data
+    r.pos = i + 8
     mut out := 0 as i64
-    mut shift := 0 as i64
-    mut i := 0
-    until i < 8:
-        out = out | ((compress.RdByte(r) as i64) << shift)
-        shift += 8 as i64
-        i += 1
+    mut k := 7
+    until k >= 0:
+        out = (out << (8 as i64)) | (_b(p, i + k) as i64)
+        k -= 1
     end
     ret out
 end
 
 @en "ReadI16BE"
 @fa "خواندن صحیح۱۶ بزرگ‌انتها"
-pub func ReadI16BE(r &: compress.ByteReader): int:
-    v := ReadU16BE(r)
+pub func ReadI16BE(r &: compress.ByteReader): int throws:
+    v := try ReadU16BE(r)
     if v >= 32768: ret v - 65536 end
     ret v
 end
 @en "ReadI16LE"
 @fa "خواندن صحیح۱۶ کوچک‌انتها"
-pub func ReadI16LE(r &: compress.ByteReader): int:
-    v := ReadU16LE(r)
+pub func ReadI16LE(r &: compress.ByteReader): int throws:
+    v := try ReadU16LE(r)
     if v >= 32768: ret v - 65536 end
     ret v
 end
 @en "ReadI32BE"
 @fa "خواندن صحیح۳۲ بزرگ‌انتها"
-pub func ReadI32BE(r &: compress.ByteReader): int: ret ReadU32BE(r) end
+pub func ReadI32BE(r &: compress.ByteReader): int throws: ret try ReadU32BE(r) end
 @en "ReadI32LE"
 @fa "خواندن صحیح۳۲ کوچک‌انتها"
-pub func ReadI32LE(r &: compress.ByteReader): int: ret ReadU32LE(r) end
+pub func ReadI32LE(r &: compress.ByteReader): int throws: ret try ReadU32LE(r) end
 @en "ReadI64BE"
 @fa "خواندن صحیح۶۴ بزرگ‌انتها"
-pub func ReadI64BE(r &: compress.ByteReader): i64: ret ReadU64BE(r) end
+pub func ReadI64BE(r &: compress.ByteReader): i64 throws: ret try ReadU64BE(r) end
 @en "ReadI64LE"
 @fa "خواندن صحیح۶۴ کوچک‌انتها"
-pub func ReadI64LE(r &: compress.ByteReader): i64: ret ReadU64LE(r) end
+pub func ReadI64LE(r &: compress.ByteReader): i64 throws: ret try ReadU64LE(r) end
 
 @en "ReadF64"
 @fa "خواندن اعشار۶۴"
-pub func ReadF64(r &: compress.ByteReader, big_endian: bool): f64:
+pub func ReadF64(r &: compress.ByteReader, big_endian: bool): f64 throws:
     mut bits := 0 as i64
-    if big_endian: bits = ReadU64BE(r) else:
-        bits = ReadU64LE(r)
+    if big_endian: bits = try ReadU64BE(r) else:
+        bits = try ReadU64LE(r)
     end
     ret bits_to_f64(bits)
 end
 
 @en "ReadF32"
 @fa "خواندن اعشار۳۲"
-pub func ReadF32(r &: compress.ByteReader, big_endian: bool): f64:
+pub func ReadF32(r &: compress.ByteReader, big_endian: bool): f64 throws:
     mut bits := 0
-    if big_endian: bits = ReadU32BE(r) else:
-        bits = ReadU32LE(r)
+    if big_endian: bits = try ReadU32BE(r) else:
+        bits = try ReadU32LE(r)
     end
     ret bits_to_f32(bits)
 end

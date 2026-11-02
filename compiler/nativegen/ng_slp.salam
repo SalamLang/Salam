@@ -299,7 +299,10 @@ func slp_emit(g &: Ng, s &: Slp, n: int): int:
         else d >= 0:
             at_i = g.i_next[d]
         else:
-            at_i = g.b_last[0]
+            at_i = g.b_first[0]
+            until at_i >= 0 and (g.i_op[at_i] == OP_PHI or g.i_op[at_i] == OP_ALLOCA):
+                at_i = g.i_next[at_i]
+            end
         end
         if at_i >= 0:
             ins_before(g, at_i, bi)
@@ -423,15 +426,16 @@ func try_seed(g &: Ng, s &: Slp, stores: Vector<int>): bool:
     ret true
 end
 
-func slp_block(g &: Ng, s &: Slp, b: int, ety: int): bool:
+func slp_block(g &: Ng, s &: Slp, b: int, ety: int, wide: bool): bool:
     es := tsize(g, ety) as i64
-    w := 16 / tsize(g, ety)
-    if s.w != w:
+    w := (wide ? 32 : 16) / tsize(g, ety)
+    vt := vec_ty(ety, wide)
+    if s.w != w or s.vty != vt:
         slp_reset(s)
     end
     s.w = w
     s.ety = ety
-    s.vty = ety == T_F32 ? T_V4F32 : T_V2F64
+    s.vty = vt
     mut sts := Vector {} as Vector<int>
     mut bases := Vector {} as Vector<int>
     mut offs := Vector {} as Vector<i64>
@@ -534,12 +538,15 @@ func slp(g &: Ng): bool:
         end
     end
     mut changed := false
+    wide := g.avx2 and not g.off_avx2 and not g.off_ypack and g.arch == NG_ARCH_X64
     each b2 in g.b_rpo:
-        if slp_block(g, s, b2, T_F32):
-            changed = true
-        end
-        if slp_block(g, s, b2, T_F64):
-            changed = true
+        each et in [T_F32, T_F64]:
+            if wide and slp_block(g, s, b2, et, true):
+                changed = true
+            end
+            if slp_block(g, s, b2, et, false):
+                changed = true
+            end
         end
     end
     s.ord.free()

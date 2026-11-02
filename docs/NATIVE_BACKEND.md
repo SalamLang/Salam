@@ -798,8 +798,22 @@ an aligned loop costs one instruction.
 ### Conventions worth knowing
 
 - Scalars follow the C ABI of the target, so calls to and from C code just
-  work. Struct values, which only Salam code passes, travel by pointer to a
-  copy, and struct returns use a hidden result pointer.
+  work. Between Salam functions, struct values travel by pointer to a copy,
+  and struct returns use a hidden result pointer.
+- A struct passed to or returned from an `extern` C function follows the
+  target's C rules (`ng_cabi.salam`). On x86-64 and AArch64 llvmgen already
+  splits it into the pieces the ABI wants, and a larger result's hidden
+  pointer goes in `x8` on AArch64. On i686 every struct argument is
+  copied onto the stack; Linux returns every struct through a hidden pointer
+  that the callee pops (`ret 4`), while Windows returns 1, 2, 4 and 8 byte
+  structs in `eax`/`edx:eax` and one holding a lone `float` or `double` in
+  `st0`. On armhf a homogeneous struct of up to four floats or doubles uses
+  consecutive VFP registers (or the stack, after which no float back-fills),
+  other structs fill `r0`-`r3` a word at a time and spill onto the stack
+  (8-byte aligned ones start at an even register), and a result of up to 4
+  bytes comes back in `r0`. On RISC-V a struct of up to 16 bytes goes in
+  `a`/`fa` registers (one or two floats, or a float and an integer, use the
+  float registers while enough are free), a larger one by reference.
 - On Linux frames are addressed from `rsp` and `rbp` is a sixth callee-saved
   register. Each function gets an `.eh_frame` entry, so gdb, perf and other
   unwinders can walk native frames. On Windows `rbp` is the frame pointer and

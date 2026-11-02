@@ -5,9 +5,11 @@
 # assembles the emitted .s with as, and compares the two disassemblies
 # instruction by instruction. Branch targets, RIP displacements and
 # padding are ignored, since as resolves local calls itself and pads
-# differently; every other byte of every instruction has to match.
+# differently (a jmp over padding, which as never emits, is dropped too);
+# every other byte of every instruction has to match.
 #
 # Usage: tools/bash/native-encoder-check.sh <salam> <file.salam>...
+# NATIVE_ENC_FLAGS adds build flags (for example --release --cpu=x86-64-v3).
 
 set -u
 SALAM=$1
@@ -20,6 +22,19 @@ pass=0
 norm() {
     objdump -d -M intel --no-show-raw-insn "$1" |
         grep -E '^ +[0-9a-f]+:' |
+        awk '
+        {
+            a = $1; sub(":", "", a)
+            ins = $0; sub(/^ +[0-9a-f]+:[[:space:]]+/, "", ins)
+            if (held != "") {
+                if (ins ~ /^(int3|nop|data16|cs nop|xchg[[:space:]]+ax,ax)/) { print; next }
+                if (a != tgt) print held
+                held = ""
+            }
+            if (ins ~ /^jmp[[:space:]]+[0-9a-f]+ </) { held = $0; tgt = ins; sub(/^jmp[[:space:]]+/, "", tgt); sub(/ .*/, "", tgt); next }
+            print
+        }
+        END { if (held != "") print held }' |
         sed -E 's/^ +[0-9a-f]+:[[:space:]]+//; s/#.*//; s/(call|jmp|j[a-z]+)[[:space:]]+[0-9a-f]+ <[^>]*>/\1 T/; s/\[rip\+0x[0-9a-f]+\]/[rip+X]/; s/[[:space:]]+$//' |
         grep -vE '^(int3|nop|data16|cs nop|xchg[[:space:]]+ax,ax)'
 }
@@ -27,7 +42,8 @@ for f in "$@"; do
     b=$(basename "$f" .salam)
     d="$work/$b"
     mkdir -p "$d"
-    if ! (cd "$d" && "$SALAM" obj "$f" --backend=native --emit-asm --output="$d/n.o" --log-level=error >"$d/log" 2>&1); then
+    # shellcheck disable=SC2086
+    if ! (cd "$d" && "$SALAM" obj "$f" --backend=native --emit-asm ${NATIVE_ENC_FLAGS:-} --output="$d/n.o" --log-level=error >"$d/log" 2>&1); then
         echo "SKIP $b (native build failed)"
         continue
     fi

@@ -279,15 +279,18 @@ end
 - **Not usable on a `Variant`** subject - that is a semantic error that tells
   you to use `match`'s type patterns instead (see §3).
 - **W145 (opt-in lint)** - `salam check --switch-lint=warn` flags a run of
-  `if x == K:` tests (4 or more by default, `--switch-lint-min=N`) that compare
-  the same side-effect-free `x` with constants and could be one `switch`. Only
-  a _contiguous_ run of plain `==` tests counts (`or` joins labels): a call, a
-  bit test, `!=` or a different subject ends the run, because moving a test
-  across such a test could change which branch wins. `--switch-lint=error`
-  makes it an error, `--switch-lint=fix` makes `salam check --fix` rewrite it,
-  and the editor offers the rewrite as a quick fix. No rewrite is offered when
-  an arm has a `break` meant for an enclosing loop, when two labels are equal,
-  or when a comment sits between the tests. Details: `docs/design/SWITCH_LINT.md`.
+  tests (4 or more by default, `--switch-lint-min=N`) that compare the same
+  side-effect-free `x` with constants and could be one `switch`: `x == K`,
+  `str.Equals(x, "K")`, an enum member, `x >= K` style comparisons on integers,
+  and `lo <= x and x <= hi` (which becomes `lo to hi`). `or` joins labels. Only
+  a _contiguous_ run counts: a call, a bit test, `!=` or a different subject
+  ends the run, because moving a test across such a test could change which
+  branch wins. `--switch-lint=error` makes it an error, `--switch-lint=fix`
+  makes `salam check --fix` rewrite it, and the editor offers the rewrite as a
+  quick fix. No rewrite is offered when an arm has a `break` meant for an
+  enclosing loop, when two equality labels are equal, when a comment sits
+  between the tests, or for an enum run that has neither an `else` nor every
+  member. Details: `docs/design/SWITCH_LINT.md`.
 - Prefer `switch` for C-style fallthrough or open-ended relational/range
   labels; prefer `match` when the subject is an enum or `Variant` and you want
   the compiler to check every case is handled (see §12.2 for the C

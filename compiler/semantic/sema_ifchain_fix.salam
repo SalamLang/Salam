@@ -1,0 +1,445 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package semantic
+
+import str
+
+include co "../sal_core.salam"
+include tok "../token.salam"
+include at "../ast.salam"
+include i18 "../i18n.salam"
+include lg "../logger.salam"
+include lp "../langpack.salam"
+include src "../source.salam"
+
+struct IcStyle:
+    pub kw_if: str = ""
+    pub kw_switch: str = ""
+    pub kw_end: str = ""
+    pub kw_else: str = ""
+    pub kw_break: str = ""
+    pub kw_to: str = ""
+    pub comma: str = ""
+    pub lead: str = ""
+    pub unit: str = ""
+end
+
+func ic_break_escapes(a &: at.Ast, nid: int, depth: int): bool:
+    if nid == 0:
+        ret false
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_BREAK:
+        ret at.BreakLevels(a, nid) > depth
+    end
+    if n.kind == at.AST_FUNC_DEF or n.kind == at.AST_LAMBDA:
+        ret false
+    end
+    mut d := depth
+    if n.kind == at.AST_UNTIL or n.kind == at.AST_FOR or n.kind == at.AST_REPEAT or n.kind == at.AST_EACH or n.kind == at.AST_SWITCH:
+        d = depth + 1
+    end
+    if ic_break_escapes(a, n.a, d) or ic_break_escapes(a, n.b, d) or ic_break_escapes(a, n.c, d) or ic_break_escapes(a, n.d, d):
+        ret true
+    end
+    repeat n.list.len() in i:
+        if ic_break_escapes(a, n.list.get(i), d):
+            ret true
+        end
+    end
+    ret false
+end
+
+func ic_all_ws(text: str, b: int, e: int): bool:
+    mut i := b
+    until i < e:
+        c := byte_at(text, i)
+        if c != 32 and c != 9 and c != 10 and c != 13:
+            ret false
+        end
+        i += 1
+    end
+    ret true
+end
+
+func ic_has_comment(text: str, b: int, e: int): bool:
+    if e <= b:
+        ret false
+    end
+    piece := str.Substr(text, b, e - b)
+    ret str.Contains(piece, "//") or str.Contains(piece, "/*")
+end
+
+func ic_line_start(text: str, pos: int): int:
+    mut p := pos
+    until p > 0 and byte_at(text, p - 1) != 10:
+        p -= 1
+    end
+    ret p
+end
+
+func ic_trim_end(text: str, b: int, e: int): int:
+    mut p := e
+    until p > b and (byte_at(text, p - 1) == 32 or byte_at(text, p - 1) == 9 or byte_at(text, p - 1) == 10 or byte_at(text, p - 1) == 13):
+        p -= 1
+    end
+    ret p
+end
+
+func ic_indent_body(piece: str, lead: str, unit: str): str:
+    mut out := lead
+    mut pos := 0
+    n := str.Len(piece)
+    mut first := true
+    until pos <= n:
+        nl := str.IndexFrom(piece, "\n", pos)
+        mut line_end := nl
+        if nl < 0:
+            line_end = n
+        end
+        mut line := str.Substr(piece, pos, line_end - pos)
+        if str.EndsWith(line, "\r"):
+            line = str.Substr(line, 0, str.Len(line) - 1)
+        end
+        if first:
+            out = out + line
+            first = false
+        else str.Len(line) > 0:
+            out = out + "\n" + unit + line
+        else:
+            out = out + "\n"
+        end
+        if nl < 0:
+            break
+        end
+        pos = nl + 1
+    end
+    ret out
+end
+
+func ic_body_range(a &: at.Ast, text: str, body: int, rb &: int, re &: int): bool:
+    cnt := at.ChildCount(a, body)
+    if cnt == 0:
+        ret false
+    end
+    fn := at.Get(a, at.Child(a, body, 0))
+    ln := at.Get(a, at.Child(a, body, cnt - 1))
+    rb = fn.begin_index as int
+    re = ic_trim_end(text, rb, ln.end_index as int)
+    ret rb < re and re <= str.Len(text)
+end
+
+func ic_balanced_end(text: str, b: int, e0: int): int:
+    n := str.Len(text)
+    mut depth := 0
+    mut i := b
+    until i < e0:
+        c := byte_at(text, i)
+        if c == 34 or c == 39:
+            i += 1
+            until i < e0 and byte_at(text, i) != c:
+                if byte_at(text, i) == 92:
+                    i += 1
+                end
+                i += 1
+            end
+        else c == 40 or c == 91:
+            depth += 1
+        else c == 41 or c == 93:
+            depth -= 1
+            if depth < 0:
+                ret 0 - 1
+            end
+        end
+        i += 1
+    end
+    mut e := e0
+    until depth > 0:
+        if e >= n:
+            ret 0 - 1
+        end
+        c2 := byte_at(text, e)
+        if c2 == 41 or c2 == 93:
+            depth -= 1
+            e += 1
+        else c2 == 32 or c2 == 9:
+            e += 1
+        else:
+            ret 0 - 1
+        end
+    end
+    ret e
+end
+
+func ic_expr_text(a &: at.Ast, text: str, nid: int, out &: str): bool:
+    n := at.Get(a, nid)
+    b := n.begin_index as int
+    e := n.end_index as int
+    if b < 0 or e <= b or e > str.Len(text):
+        ret false
+    end
+    fixed := ic_balanced_end(text, b, e)
+    if fixed < 0:
+        ret false
+    end
+    out = str.Substr(text, b, fixed - b)
+    ret true
+end
+
+func ic_if_start(text: str, at_cond: int, kw_if: str): int:
+    mut p := at_cond
+    until p > 0 and (byte_at(text, p - 1) == 32 or byte_at(text, p - 1) == 9):
+        p -= 1
+    end
+    k := str.Len(kw_if)
+    if p < k or not str.Equals(str.Substr(text, p - k, k), kw_if):
+        ret 0 - 1
+    end
+    ret p - k
+end
+
+func ic_style(s &: Sema, lead: str): IcStyle:
+    mut st := IcStyle {}
+    st.kw_if = kw_spell(s, s.file, tok.TK_KW_IF)
+    st.kw_switch = kw_spell(s, s.file, tok.TK_KW_SWITCH)
+    st.kw_end = kw_spell(s, s.file, tok.TK_KW_END)
+    st.kw_else = kw_spell(s, s.file, tok.TK_KW_ELSE)
+    st.kw_break = kw_spell(s, s.file, tok.TK_KW_BREAK)
+    st.kw_to = kw_spell(s, s.file, tok.TK_KW_TO)
+    st.comma = FilePack(s, s.file) == lp.LP_FA ? "\xD8\x8C " : ", "
+    st.lead = lead
+    st.unit = str.IndexOf(lead, "\t") >= 0 ? "\t" : "    "
+    ret st
+end
+
+func ic_op_text(kind: int): str:
+    switch kind:
+        tok.TK_LT:
+            ret "<"
+        end
+        tok.TK_LE:
+            ret "<="
+        end
+        tok.TK_GT:
+            ret ">"
+        end
+    end
+    ret ">="
+end
+
+func ic_label_text(a &: at.Ast, text: str, q &: IcSeq, li: int, st: IcStyle, out &: str): bool:
+    mut value := ""
+    if not ic_expr_text(a, text, q.labels.get(li), value):
+        ret false
+    end
+    kind := q.lab_kind.get(li)
+    if kind == IC_EQ:
+        out = value
+        ret true
+    end
+    if kind != IC_RANGE:
+        out = ic_op_text(kind) + " " + value
+        ret true
+    end
+    mut upper := ""
+    if not ic_expr_text(a, text, q.lab_hi.get(li), upper):
+        ret false
+    end
+    out = value + " " + st.kw_to + " " + upper
+    ret true
+end
+
+func ic_arm_labels(a &: at.Ast, text: str, q &: IcSeq, k: int, st: IcStyle, out &: str): bool:
+    out = ""
+    mut li := q.lab_from.get(k)
+    until li < q.lab_to.get(k):
+        mut one := ""
+        if not ic_label_text(a, text, q, li, st, one):
+            ret false
+        end
+        out = str.Len(out) > 0 ? out + st.comma + one : one
+        li += 1
+    end
+    ret true
+end
+
+func ic_body_piece(a &: at.Ast, text: str, body: int, start: int, header: int, piece &: str, re &: int): bool:
+    mut rb := 0
+    if not ic_body_range(a, text, body, rb, re) or rb < start or ic_break_escapes(a, body, 0):
+        ret false
+    end
+    piece = str.Substr(text, rb, re - rb)
+    if str.Contains(piece, "\"\"\"") or str.Contains(piece, "`") or ic_has_comment(text, start, rb):
+        ret false
+    end
+    own_line := ic_line_start(text, rb)
+    ret own_line > ic_line_start(text, header) and ic_all_ws(text, own_line, rb)
+end
+
+func ic_arm_text(s &: Sema, a &: at.Ast, q &: IcSeq, k: int, last: int, text: str, st: IcStyle, cursor &: int, out &: str): bool:
+    mut piece := ""
+    mut re := 0
+    header := at.Get(a, q.cond.get(k)).begin_index as int
+    if not ic_body_piece(a, text, q.body.get(k), cursor, header, piece, re):
+        ret false
+    end
+    mut labels := ""
+    if not ic_arm_labels(a, text, q, k, st, labels):
+        ret false
+    end
+    deeper := st.lead + st.unit + st.unit
+    out = out + "\n" + st.lead + st.unit + labels + ":\n" + ic_indent_body(piece, deeper, st.unit)
+    if not sema_stmt_terminates(s, a, q.body.get(k)) and not (k == last and q.tail_else.get(k) == 0):
+        out = out + "\n" + deeper + st.kw_break
+    end
+    out = out + "\n" + st.lead + st.unit + st.kw_end
+    cursor = re
+    ret true
+end
+
+func ic_else_text(a &: at.Ast, q &: IcSeq, last: int, text: str, st: IcStyle, cursor &: int, out &: str): bool:
+    tail := q.tail_else.get(last)
+    if tail == 0:
+        ret true
+    end
+    mut piece := ""
+    mut re := 0
+    if not ic_body_piece(a, text, tail, cursor, cursor, piece, re):
+        ret false
+    end
+    out = out + "\n" + st.lead + st.unit + st.kw_else + ":\n" + ic_indent_body(piece, st.lead + st.unit + st.unit, st.unit)
+    out = out + "\n" + st.lead + st.unit + st.kw_end
+    cursor = re
+    ret true
+end
+
+func ic_ident_uses(a &: at.Ast, nid: int, alias: str): int:
+    if nid == 0:
+        ret 0
+    end
+    n := at.Get(a, nid)
+    mut total := 0
+    if n.kind == at.AST_IDENTIFIER and str.Equals(n.name, alias):
+        total = 1
+    end
+    total += ic_ident_uses(a, n.a, alias) + ic_ident_uses(a, n.b, alias) + ic_ident_uses(a, n.c, alias) + ic_ident_uses(a, n.d, alias)
+    repeat n.list.len() in i:
+        total += ic_ident_uses(a, n.list.get(i), alias)
+    end
+    ret total
+end
+
+func ic_count_str_equals(s &: Sema, a &: at.Ast, nid: int, alias &: str): int:
+    if nid == 0:
+        ret 0
+    end
+    n := at.Get(a, nid)
+    if n.kind == at.AST_CALL and ic_is_str_equals(s, a, nid):
+        alias = at.Get(a, at.Get(a, n.a).a).name
+        ret 1
+    end
+    ret ic_count_str_equals(s, a, n.a, alias) + ic_count_str_equals(s, a, n.b, alias)
+end
+
+func ic_import_fix(s &: Sema, a &: at.Ast, alias: str, imp &: lg.Fix): bool:
+    items := at.Get(a, s.program).list
+    repeat items.len() in i:
+        iid := items.get(i)
+        node := at.Get(a, iid)
+        if node.kind != at.AST_IMPORT:
+            continue
+        end
+        if str.Equals(norm_ident(import_local_name(a, iid, import_spec_of(node))), alias):
+            imp = fix_at(span_of(a, iid))
+            imp.mode = lg.FIX_LINES
+            ret true
+        end
+    end
+    ret false
+end
+
+func ic_enum_fixable(s &: Sema, a &: at.Ast, q &: IcSeq, i: int, j: int): bool:
+    esym := ic_enum_sym(s, a, q.subj.get(i))
+    if esym == 0 or q.tail_else.get(j - 1) != 0:
+        ret true
+    end
+    ret q.lab_to.get(j - 1) - q.lab_from.get(i) == ic_enum_total(s, esym)
+end
+
+func ic_drops_import(s &: Sema, a &: at.Ast, q &: IcSeq, i: int, j: int, imp &: lg.Fix, drop &: bool): bool:
+    mut alias := ""
+    mut calls := 0
+    mut k := i
+    until k < j:
+        calls += ic_count_str_equals(s, a, q.cond.get(k), alias)
+        k += 1
+    end
+    drop = calls > 0 and ic_ident_uses(a, s.program, alias) == calls
+    ret not drop or ic_import_fix(s, a, alias, imp)
+end
+
+func ic_try_fix(s &: Sema, a &: at.Ast, q &: IcSeq, i: int, j: int, f &: lg.Fix, imp &: lg.Fix, drop &: bool): bool:
+    if not q.first_of_stmt.get(i) or not q.last_of_stmt.get(j - 1) or not ic_enum_fixable(s, a, q, i, j):
+        ret false
+    end
+    text := src.Peek(s.file)
+    if str.Len(text) == 0:
+        ret false
+    end
+    kw_if := kw_spell(s, s.file, tok.TK_KW_IF)
+    run_b := ic_if_start(text, at.Get(a, q.stmt.get(i)).begin_index as int, kw_if)
+    if run_b < 0:
+        ret false
+    end
+    run_e := ic_trim_end(text, run_b, at.Get(a, q.stmt.get(j - 1)).end_index as int)
+    line_b := ic_line_start(text, run_b)
+    if run_e > str.Len(text) or run_b >= run_e or not ic_all_ws(text, line_b, run_b):
+        ret false
+    end
+    st := ic_style(s, str.Substr(text, line_b, run_b - line_b))
+    subj := q.subj.get(i)
+    mut head := ""
+    if not ic_expr_text(a, text, subj, head):
+        ret false
+    end
+    sk := at.Get(a, subj).kind
+    if sk == at.AST_BINARY or sk == at.AST_CAST or sk == at.AST_UNARY:
+        head = "(" + head + ")"
+    end
+    mut out := st.kw_switch + " " + head + ":"
+    mut cursor := run_b
+    mut k := i
+    until k < j:
+        if not ic_arm_text(s, a, q, k, j - 1, text, st, cursor, out):
+            ret false
+        end
+        k += 1
+    end
+    if not ic_else_text(a, q, j - 1, text, st, cursor, out) or ic_has_comment(text, cursor, run_e):
+        ret false
+    end
+    f.index = run_b
+    f.length = run_e - run_b
+    f.text = out + "\n" + st.lead + st.kw_end
+    f.title = co.Format1(i18.Tr("Rewrite as a '%s' statement"), co.ArgStr(st.kw_switch))
+    f.mode = lg.FIX_RANGE
+    f.preferred = false
+    f.safe = false
+    if not ic_drops_import(s, a, q, i, j, imp, drop):
+        ret false
+    end
+    imp.title = f.title
+    ret true
+end

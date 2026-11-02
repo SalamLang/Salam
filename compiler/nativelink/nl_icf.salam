@@ -1,0 +1,303 @@
+package nativelink
+
+pub struct Icf:
+    pub unit: Vector<int> = Vector {}
+    pub units: Vector<int> = Vector {}
+    pub sig: Vector<bool> = Vector {}
+    pub ur: Vector<int> = Vector {}
+    pub ur0: Vector<int> = Vector {}
+    pub urn: Vector<int> = Vector {}
+    pub cls: Vector<int> = Vector {}
+end
+
+func icf_call(l &: Nl, ty: int): bool:
+    if l.mach == EM_AARCH64:
+        ret ty == 282 or ty == 283
+    end
+    ret ty == 4
+end
+
+func icf_kind(l &: Nl, c &: Icf, s: int, r: int, a &: i64, b &: i64): int:
+    os := l.r_sym[r]
+    g := l.os_glob[os]
+    if g >= 0 and l.g_state[g] != SY_DEF:
+        a = g as i64
+        b = 0 as i64
+        ret 2
+    end
+    t := sym_sec(l, os)
+    if t < 0:
+        a = os as i64
+        b = l.os_val[os]
+        ret 3
+    end
+    b = g >= 0 ? l.g_val[g] : l.os_val[os]
+    a = t as i64
+    if c.unit[t] >= 0 and icf_call(l, l.r_type[r]) and (l.s_flags[s] & (4 as i64)) != (0 as i64):
+        ret 0
+    end
+    ret 1
+end
+
+func icf_mix(h: i64, v: i64): i64:
+    ret ((h ^ v) * (1099511628211 as i64)) & (0x3FFFFFFFFFFFFFFF as i64)
+end
+
+func icf_hash0(l &: Nl, c &: Icf, u: int): i64:
+    s := c.units[u]
+    mut h := (nl_hash(fptr(l, l.o_file[l.s_obj[s]]), l.s_off[s], l.s_size[s] as int) as i64) + (1469598103934665603 as i64)
+    h = icf_mix(h, l.s_size[s])
+    h = icf_mix(h, l.s_align[s])
+    h = icf_mix(h, c.urn[u] as i64)
+    repeat c.urn[u] in i:
+        r := c.ur[c.ur0[u] + i]
+        mut a := 0 as i64
+        mut b := 0 as i64
+        k := icf_kind(l, c, s, r, a, b)
+        h = icf_mix(h, l.r_off[r])
+        h = icf_mix(h, l.r_type[r] as i64)
+        h = icf_mix(h, l.r_add[r])
+        h = icf_mix(h, k as i64)
+        h = icf_mix(h, b)
+        if k != 0:
+            h = icf_mix(h, a)
+        end
+    end
+    ret h
+end
+
+func icf_eq0(l &: Nl, c &: Icf, u: int, v: int): bool:
+    su := c.units[u]
+    sv := c.units[v]
+    n := l.s_size[su]
+    if l.s_size[sv] != n or l.s_align[su] != l.s_align[sv] or l.s_flags[su] != l.s_flags[sv] or c.urn[u] != c.urn[v]:
+        ret false
+    end
+    pu := fptr(l, l.o_file[l.s_obj[su]])
+    pv := fptr(l, l.o_file[l.s_obj[sv]])
+    ou := l.s_off[su]
+    ov := l.s_off[sv]
+    repeat n in i:
+        if pu[ou + i] != pv[ov + i]:
+            ret false
+        end
+    end
+    repeat c.urn[u] in j:
+        ru := c.ur[c.ur0[u] + j]
+        rv := c.ur[c.ur0[v] + j]
+        if l.r_off[ru] != l.r_off[rv] or l.r_type[ru] != l.r_type[rv] or l.r_add[ru] != l.r_add[rv]:
+            ret false
+        end
+        mut au := 0 as i64
+        mut bu := 0 as i64
+        mut av := 0 as i64
+        mut bv := 0 as i64
+        ku := icf_kind(l, c, su, ru, au, bu)
+        kv := icf_kind(l, c, sv, rv, av, bv)
+        if ku != kv or bu != bv:
+            ret false
+        end
+        if ku != 0 and au != av:
+            ret false
+        end
+    end
+    ret true
+end
+
+func icf_hash1(l &: Nl, c &: Icf, u: int): i64:
+    s := c.units[u]
+    mut h := icf_mix(1469598103934665603 as i64, c.cls[u] as i64)
+    repeat c.urn[u] in i:
+        r := c.ur[c.ur0[u] + i]
+        mut a := 0 as i64
+        mut b := 0 as i64
+        if icf_kind(l, c, s, r, a, b) == 0:
+            h = icf_mix(h, c.cls[c.unit[a as int]] as i64)
+            h = icf_mix(h, b)
+        end
+    end
+    ret h
+end
+
+func icf_eq1(l &: Nl, c &: Icf, u: int, v: int): bool:
+    if c.cls[u] != c.cls[v]:
+        ret false
+    end
+    su := c.units[u]
+    sv := c.units[v]
+    repeat c.urn[u] in j:
+        ru := c.ur[c.ur0[u] + j]
+        rv := c.ur[c.ur0[v] + j]
+        mut au := 0 as i64
+        mut bu := 0 as i64
+        mut av := 0 as i64
+        mut bv := 0 as i64
+        if icf_kind(l, c, su, ru, au, bu) == 0:
+            _k := icf_kind(l, c, sv, rv, av, bv)
+            if bu != bv or c.cls[c.unit[au as int]] != c.cls[c.unit[av as int]]:
+                ret false
+            end
+        end
+    end
+    ret true
+end
+
+func icf_group(l &: Nl, c &: Icf, pass: int): int:
+    n := c.units.len()
+    mut head := HashMap {} as HashMap<i64, int>
+    mut nxt := Vector {} as Vector<int>
+    mut lead := Vector {} as Vector<int>
+    mut ncls := Vector {} as Vector<int>
+    repeat n:
+        nxt.push(0 - 1)
+        ncls.push(0)
+    end
+    repeat n in u:
+        h := pass == 0 ? icf_hash0(l, c, u) : icf_hash1(l, c, u)
+        mut k := head.has(h) ? head.get(h) : (0 - 1)
+        mut last := 0 - 1
+        until k >= 0:
+            v := lead[k]
+            if (pass == 0 and icf_eq0(l, c, u, v)) or (pass != 0 and icf_eq1(l, c, u, v)):
+                break
+            end
+            last = k
+            k = nxt[k]
+        end
+        if k < 0:
+            k = lead.len()
+            lead.push(u)
+            if last < 0:
+                head.put(h, k)
+            else:
+                nxt[last] = k
+            end
+        end
+        ncls[u] = k
+    end
+    repeat n in u2:
+        c.cls[u2] = ncls[u2]
+    end
+    nk := lead.len()
+    nxt.free()
+    lead.free()
+    ncls.free()
+    ret nk
+end
+
+func icf_sort_relocs(l &: Nl, c &: Icf, s: int):
+    c.ur0.push(c.ur.len())
+    c.urn.push(l.s_nrel[s])
+    mut offs := Vector {} as Vector<i64>
+    r0 := l.s_rel0[s]
+    repeat l.s_nrel[s] in k:
+        offs.push(l.r_off[r0 + k])
+    end
+    ix := pdb_sort(offs)
+    each i in ix:
+        c.ur.push(r0 + i)
+    end
+    offs.free()
+end
+
+func icf_run(l &: Nl):
+    if l.mach != EM_X86_64 and l.mach != EM_AARCH64:
+        ret
+    end
+    mut c := Icf {}
+    mut own := Vector {} as Vector<bool>
+    repeat l.o_file.len() in o:
+        own.push(not l.o_coff[o] and own_object(l, o))
+    end
+    ns := l.s_obj.len()
+    repeat ns in s:
+        c.unit.push(0 - 1)
+        if l.s_live[s] and l.s_oc[s] == OC_TEXT and own[l.s_obj[s]] and l.s_size[s] > (0 as i64):
+            c.unit[s] = c.units.len()
+            c.units.push(s)
+            c.sig.push(false)
+            c.cls.push(0)
+            icf_sort_relocs(l, c, s)
+        end
+    end
+    own.free()
+    if c.units.len() < 2:
+        ret
+    end
+    repeat ns in s2:
+        if not l.s_live[s2] or l.s_oc[s2] == OC_EHFRAME:
+            continue
+        end
+        code := (l.s_flags[s2] & (4 as i64)) != (0 as i64)
+        r0 := l.s_rel0[s2]
+        repeat l.s_nrel[s2] in k:
+            t := sym_sec(l, l.r_sym[r0 + k])
+            if t < 0 or c.unit[t] < 0 or (code and icf_call(l, l.r_type[r0 + k])):
+                continue
+            end
+            c.sig[c.unit[t]] = true
+        end
+    end
+    mut ext := HashMap {} as HashMap<int, bool>
+    each nm in l.sl_undef:
+        ext.put(nm, true)
+    end
+    repeat l.g_name.len() in g:
+        sg := l.g_sec[g]
+        if l.g_state[g] != SY_DEF or sg < 0 or c.unit[sg] < 0:
+            continue
+        end
+        if l.expd.has(g) or ext.has(l.g_name[g]) or name_is(l, l.g_name[g], "_start") or name_is(l, l.g_name[g], "main"):
+            c.sig[c.unit[sg]] = true
+        end
+    end
+    mut nk := icf_group(l, c, 0)
+    mut more := true
+    until more:
+        k2 := icf_group(l, c, 1)
+        more = k2 != nk
+        nk = k2
+    end
+    mut lead := Vector {} as Vector<int>
+    repeat nk:
+        lead.push(0 - 1)
+    end
+    repeat c.units.len() in u:
+        k3 := c.cls[u]
+        if lead[k3] < 0 or (c.sig[u] and not c.sig[lead[k3]]):
+            lead[k3] = u
+        end
+    end
+    mut fold := Vector {} as Vector<int>
+    repeat ns:
+        fold.push(0 - 1)
+    end
+    mut any := false
+    repeat c.units.len() in u2:
+        ld := lead[c.cls[u2]]
+        if ld == u2 or c.sig[u2]:
+            continue
+        end
+        s3 := c.units[u2]
+        fold[s3] = c.units[ld]
+        l.s_live[s3] = false
+        l.stat_icf += 1
+        l.stat_icf_bytes = l.stat_icf_bytes + l.s_size[s3]
+        any = true
+    end
+    if any:
+        repeat l.os_sec.len() in os:
+            sec := l.os_sec[os]
+            if sec >= 0 and fold[sec] >= 0:
+                l.os_sec[os] = fold[sec]
+            end
+        end
+        repeat l.g_name.len() in g2:
+            if l.g_state[g2] == SY_DEF and l.g_sec[g2] >= 0 and fold[l.g_sec[g2]] >= 0:
+                l.g_sec[g2] = fold[l.g_sec[g2]]
+            end
+        end
+    end
+    lead.free()
+    fold.free()
+end

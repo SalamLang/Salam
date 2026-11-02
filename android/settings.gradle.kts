@@ -22,5 +22,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Salam Language"
+rootProject.name = "Salam"
 include(":app")

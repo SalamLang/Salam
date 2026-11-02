@@ -48,6 +48,11 @@ pub fn local_url(path: &str) -> Url {
         .unwrap_or_else(|_| Url::parse(base).expect("valid asset base url"))
 }
 
+#[cfg(target_os = "macos")]
+pub fn bundled() -> bool {
+    std::env::current_exe().is_ok_and(|p| p.to_string_lossy().contains(".app/Contents/MacOS/"))
+}
+
 pub fn os_name() -> &'static str {
     if cfg!(target_os = "windows") {
         "windows"

@@ -8,12 +8,23 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 )
+
+// writeAll writes a response body and logs a failed write. A client that hangs
+// up mid-benchmark must not take the server down with it.
+func writeAll(w http.ResponseWriter, body []byte) {
+	//nolint:gosec // every caller passes a response body it built itself
+	if _, err := w.Write(body); err != nil {
+		log.Printf("write: %v", err)
+	}
+}
 
 var (
 	assetsDir string
@@ -38,23 +49,26 @@ func writeJSON(w http.ResponseWriter, v any) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
-	_ = enc.Encode(v)
+	if err := enc.Encode(v); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	body := bytes.TrimRight(buf.Bytes(), "\n")
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(body)
+	writeAll(w, body)
 }
 
 func writeJSONRaw(w http.ResponseWriter, body []byte) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(body)
+	writeAll(w, body)
 }
 
 func writeText(w http.ResponseWriter, body string) {
 	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	_, _ = io.WriteString(w, body)
+	writeAll(w, []byte(body))
 }
 
 func writeError(w http.ResponseWriter, code int, msg string) {
@@ -65,11 +79,14 @@ func writeJSONPlusStatus(w http.ResponseWriter, code int, v any) {
 	var buf bytes.Buffer
 	enc := json.NewEncoder(&buf)
 	enc.SetEscapeHTML(false)
-	_ = enc.Encode(v)
+	if err := enc.Encode(v); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
 	body := bytes.TrimRight(buf.Bytes(), "\n")
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
-	_, _ = w.Write(body)
+	writeAll(w, body)
 }
 
 func intQuery(r *http.Request, name string, fallback, lo, hi int) int {
@@ -120,7 +137,7 @@ func homeHandler(w http.ResponseWriter, _ *http.Request) {
 	b.WriteString("</table>\n</main>\n</body>\n</html>\n")
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
-	_, _ = io.WriteString(w, b.String())
+	writeAll(w, []byte(b.String()))
 }
 
 func main() {
@@ -207,7 +224,11 @@ func main() {
 	})
 
 	mux.HandleFunc("POST /echo", func(w http.ResponseWriter, r *http.Request) {
-		body, _ := io.ReadAll(io.LimitReader(r.Body, 10<<20))
+		body, err := io.ReadAll(io.LimitReader(r.Body, 10<<20))
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
 		writeJSON(w, map[string]any{"bytes": len(body), "echo": string(body)})
 	})
 
@@ -217,7 +238,12 @@ func main() {
 
 	addr := "127.0.0.1:" + port()
 	fmt.Println("httpbench-go on http://" + addr)
-	if err := http.ListenAndServe(addr, mux); err != nil {
+	srv := &http.Server{
+		Addr:              addr,
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+	}
+	if err := srv.ListenAndServe(); err != nil {
 		fmt.Println(err)
 		os.Exit(1)
 	}

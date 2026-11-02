@@ -76,7 +76,10 @@ async fn reach() -> Reach {
 async fn responds(window: &WebviewWindow) -> bool {
     let answered = Arc::new(AtomicBool::new(false));
     let flag = answered.clone();
-    if window.eval_with_callback("1", move |_| flag.store(true, Ordering::Relaxed)).is_err() {
+    if window
+        .eval_with_callback("1", move |_| flag.store(true, Ordering::Relaxed))
+        .is_err()
+    {
         return false;
     }
     let deadline = Instant::now() + PROBE;

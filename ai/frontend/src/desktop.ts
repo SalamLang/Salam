@@ -60,8 +60,11 @@ export const agent = {
   pending: () => invoke<Omit<AgentCall, "state" | "output">[]>("agent_pending"),
   projectContext: (workspace: string) =>
     invoke<ProjectContext>("agent_project_context", { workspace }),
-  notify: (kind: NotifyKind, chat?: string, text?: string) =>
-    invoke<"shown" | "skipped">("agent_notify", { kind, chat, text }),
+  notify: (kind: NotifyKind, chat?: string, text?: string, mid?: number) =>
+    invoke<"shown" | "skipped">("agent_notify", { kind, chat, text, mid }),
+  watchReply: (chat: string, mid: number, token: string, title: string) =>
+    invoke<void>("agent_watch_reply", { chat, mid, token, title }),
+  unwatchReply: (chat: string) => invoke<void>("agent_unwatch_reply", { chat }),
   notifyPrefs: () => invoke<NotifyPrefs>("agent_notify_prefs"),
   setNotifyPrefs: (prefs: NotifyPrefs) =>
     invoke<NotifyPrefs>("agent_set_notify_prefs", { prefs }),

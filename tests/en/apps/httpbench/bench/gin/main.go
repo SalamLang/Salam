@@ -156,7 +156,11 @@ func main() {
 	})
 
 	r.POST("/echo", func(c *gin.Context) {
-		body, _ := c.GetRawData()
+		body, err := c.GetRawData()
+		if err != nil {
+			c.String(http.StatusBadRequest, err.Error())
+			return
+		}
 		c.JSON(http.StatusOK, gin.H{"bytes": len(body), "echo": string(body)})
 	})
 

@@ -44,6 +44,7 @@ if SALAM_OS_WINDOWS and not SALAM_NATIVE_TLS:
         func WinHttpCloseHandle(handle: void*): int
         func WinHttpSetOption(handle: void*, option: int, buf: void*, buflen: int): int
         func WinHttpSetTimeouts(handle: void*, resolve: int, connect: int, send: int, receive: int): int
+        func GetLastError(): int
     end
 end
 
@@ -785,8 +786,12 @@ if SALAM_OS_WINDOWS and not SALAM_NATIVE_TLS:
         if sent == 0:
             ret _Reply { err = "could not send the request" }
         end
+        waited_from := sync.NowMs()
         recv_ok := WinHttpReceiveResponse(req, null)
         if recv_ok == 0:
+            if GetLastError() == 12002 or (io > 0 and sync.NowMs() - waited_from >= (io as i64) - 5):
+                ret _Reply { err = "the request timed out" }
+            end
             ret _Reply { err = "the server did not answer" }
         end
         mut hlen := mem.Allocate(8 as u64) as i64*
@@ -813,10 +818,18 @@ if SALAM_OS_WINDOWS and not SALAM_NATIVE_TLS:
         defer mem.Free(got as void*)
         mut out := _Reply { status = _status_of(hdr_str), head = hdr_str, body = compress.NewByteBuf() }
         mut reading := true
+        mut cut := ""
+        mut broken := false
+        mut timed_out := false
         until reading:
             got[0] = 0
+            read_from := sync.NowMs()
             rd_ok := WinHttpReadData(req, buf, 2048, got as void*)
-            if rd_ok == 0 or got[0] == 0:
+            if rd_ok == 0:
+                broken = true
+                timed_out = GetLastError() == 12002 or (io > 0 and sync.NowMs() - read_from >= (io as i64) - 5)
+                reading = false
+            else got[0] == 0:
                 reading = false
             else:
                 compress.BufPushBytes(out.body, buf, got[0] as int)
@@ -825,6 +838,21 @@ if SALAM_OS_WINDOWS and not SALAM_NATIVE_TLS:
                     out.err = "the response body is larger than the " + o.max_body + "-byte limit"
                     reading = false
                 end
+            end
+        end
+        if out.err.len() == 0:
+            want := _header_value(hdr_str, "Content-Length", "")
+            plain := str.Equals(_header_value(hdr_str, "Content-Encoding", ""), "") and method != "HEAD" and out.status >= 200 and out.status != 204 and out.status != 304
+            short := plain and want.len() > 0 and want.to_int() > out.body.len
+            whole := want.len() > 0 and want.to_int() <= out.body.len
+            if timed_out:
+                cut = "the request timed out"
+            else short or (broken and not whole):
+                cut = "the response body was cut short"
+            end
+            if cut.len() > 0:
+                compress.BufFree(out.body)
+                ret _Reply { err = cut }
             end
         end
         ret out

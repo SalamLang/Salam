@@ -371,7 +371,7 @@ func emit_globals(v &: Lv, s &: sm.Sema, a &: at.Ast, program: int):
         end
         if not skip and dn.is_extern:
             ets := str.Len(dn.type_str) > 0 ? dn.type_str : "i32"
-            eref := "@" + dn.name
+            eref := gsym(dn.name)
             out_g(v, eref + " = external global " + ty_of(v, s, a, ets) + "\n")
             mut ev := LvVar {}
             ev.name = dn.name
@@ -513,20 +513,41 @@ func declare_extern(v &: Lv, s &: sm.Sema, a &: at.Ast, name: str, sigid: int):
     if narrow and str.Equals(rty, "i64") and libc_size_ret(name) != 0:
         rty = v.usize
     end
+    ret_ts := sm.ToString(s, sg.ret_type)
+    rex := ex_classify(v, s, a, ret_ts)
+    mut sret_p := ""
+    if rex.mode != EXM_NONE:
+        sret_p = ex_sret_param(rex, ty_of(v, s, a, ret_ts))
+        rty = ex_ret_ty(rex)
+    end
     mut b := co.SbNew()
-    co.SbPuts(b, "declare" + StdcallCc(v, name) + " " + rty + " @" + name + "(")
+    co.SbPuts(b, "declare" + StdcallCc(v, name) + " " + rty + " " + gsym(name) + "(")
+    mut nparam := 0
+    if str.Len(sret_p) > 0:
+        co.SbPuts(b, sret_p)
+        nparam += 1
+    end
     repeat sg.params.len() in j:
-        if j != 0:
+        if nparam != 0:
             co.SbPuts(b, ", ")
         end
-        mut pty := ty_of(v, s, a, sm.ToString(s, sg.params.get(j)))
-        if narrow and str.Equals(pty, "i64") and libc_size_param(name, j):
-            pty = v.usize
+        nparam += 1
+        pts := sm.ToString(s, sg.params.get(j))
+        pex := ex_classify(v, s, a, pts)
+        if param_is_ref(s, a, sigid, j):
+            co.SbPuts(b, "ptr")
+        else pex.mode != EXM_NONE:
+            co.SbPuts(b, ex_param_text(pex, ty_of(v, s, a, pts)))
+        else:
+            mut pty := ty_of(v, s, a, pts)
+            if narrow and str.Equals(pty, "i64") and libc_size_param(name, j):
+                pty = v.usize
+            end
+            co.SbPuts(b, str.Equals(pty, "i1") ? "i1 zeroext" : pty)
         end
-        co.SbPuts(b, pty)
     end
     if sg.variadic:
-        co.SbPuts(b, sg.params.len() > 0 ? ", ..." : "...")
+        co.SbPuts(b, nparam > 0 ? ", ..." : "...")
     end
     co.SbPuts(b, ")")
     if dn2.is_pure:

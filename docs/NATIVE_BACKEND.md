@@ -720,7 +720,9 @@ is copied whole), copies a short loop test into a branch arm that
 would otherwise jump to it (up to eleven instructions when that test is the
 loop's latch, so a division fast path ends in the loop branch instead of a
 `jmp` to it), shares one epilogue between a function's returns
-on Linux, zeroes registers with `xor` where the flags are dead (a following `div` or `imul` overwrites them anyway), drops a `test r, r` that repeats the one before a conditional jump, and aligns loop heads to 16 bytes. An innermost loop
+on Linux, zeroes registers with `xor` where the flags are dead (a following `div` or `imul` overwrites them anyway), drops a `test r, r` that repeats the one before a conditional jump (and any
+compare or test whose flags nothing reads, such as one left behind when its
+branch folded to a constant), and aligns loop heads to 16 bytes. An innermost loop
 that fits in 64 bytes is placed so it does not straddle a cache line;
 otherwise it gets 32-byte alignment. Padding uses NOPs of up to 15 bytes,
 and padding longer than that is a short `jmp` over the gap, so falling into
@@ -793,6 +795,13 @@ ret end` at the top of a recursive AST walk) tests that parameter before
   `abs()`; everything else must pass, and the native backend gate runs it for
   all four targets on every change. The native-built compiler for AArch64
   reproduces the x86-64 compiler's IR for the whole compiler.
+  With `NATIVE_CROSS_STAGE=<dir>` it only builds the programs, into
+  `<dir>/<group>/<name>`, and `tools/bash/native-stage-tests.sh <dir>` runs
+  them on the machine they are for. The gate does this for macOS on Apple
+  silicon and on Intel, Windows on x86-64 and Linux on AArch64: the programs
+  are built on Linux, run on a real machine of each kind, and the compiler
+  built by the native backend for that machine reproduces the reference IR
+  there and builds and runs programs with `--backend=native` itself.
 - `tools/bash/native-encoder-check.sh <salam> <files...>` checks the encoder:
   it assembles the `--emit-asm` listing with GNU `as` and compares the result
   with the object nativegen wrote, instruction by instruction.
@@ -801,7 +810,7 @@ ret end` at the top of a recursive AST walk) tests that parameter before
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing, and a comma-separated list dumps several functions.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,loopinl,cpelim,tord,vrev,cdown,tfold,mexit,sqself,vsign,redinv,ldcmp,phix,selinc,wweb,wwdep,wwtr,tdup,padjmp,zins,ndiv,niv,cmp64,adc64,rvc`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,loopinl,cpelim,tord,vrev,cdown,tfold,mexit,sqself,vsign,redinv,ldcmp,phix,selinc,wweb,wwdep,wwtr,tdup,padjmp,dtst,zins,ndiv,niv,cmp64,adc64,rvc`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator.

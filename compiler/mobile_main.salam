@@ -1,0 +1,277 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import str
+
+include co "sal_core.salam"
+include lg "logger.salam"
+include i18 "i18n.salam"
+include lp "langpack.salam"
+include src "source.salam"
+include tok "token.salam"
+include at "ast.salam"
+include ps "parser/parser.salam"
+include cc "condcomp.salam"
+include sm "semantic/semantic.salam"
+include lx "lexer/lexer.salam"
+include ip "interp/interp.salam"
+include lo "sal_layout/sal_layout.salam"
+include dg "diag.salam"
+include cl "cli/cli.salam"
+
+const HL_KEYWORD := 1
+const HL_STRING := 2
+const HL_NUMBER := 3
+const HL_COMMENT := 4
+const HL_BUILTIN := 5
+const HL_FUNC := 6
+const HL_TYPE := 7
+const HL_OPERATOR := 8
+const HL_CONST := 9
+const HL_META := 10
+const HL_TAG := 11
+const HL_ATTR := 12
+
+mut g_m_std := ""
+mut g_m_schema := false
+
+func pick_pack(sf: src.SourceFile, lang: str): int:
+    if str.Equals(lang, "fa") or str.Equals(lang, "en"):
+        ret lp.Load(lang)
+    end
+    ret lx.Detect(sf, lp.Load("en"))
+end
+
+func utf16_offsets(s: str, n: int): Vector<int>:
+    mut out := Vector {} as Vector<int>
+    mut u := 0
+    repeat n in i:
+        out.push(u)
+        b := co.ByteAt(s, i)
+        if b < 128 or b >= 192:
+            u += b >= 240 ? 2 : 1
+        end
+    end
+    out.push(u)
+    ret out
+end
+
+func is_word_op(t: tok.Token): bool:
+    if str.Len(t.lexeme) == 0:
+        ret false
+    end
+    b := co.ByteAt(t.lexeme, 0)
+    ret (b >= 97 and b <= 122) or b >= 128
+end
+
+func classify_ident(t: tok.Token, next_kind: int, pack: int): int:
+    if next_kind == tok.TK_LPAREN:
+        ret HL_FUNC
+    end
+    if sm.PrimKindFromName(t.lexeme, "") >= 0:
+        ret HL_TYPE
+    end
+    canon := lp.BuiltinCanonOf(pack, t.lexeme)
+    repeat lp.BuiltinCount() in bi:
+        if str.Equals(lp.BuiltinCanonAt(bi), canon):
+            ret HL_BUILTIN
+        end
+    end
+    first := co.ByteAt(t.lexeme, 0)
+    if first >= 65 and first <= 90:
+        ret HL_TYPE
+    end
+    ret 0
+end
+
+func classify(t: tok.Token, next_kind: int, pack: int): int:
+    k := t.kind
+    switch k:
+        tok.TK_COMMENT_LINE, tok.TK_COMMENT_BLOCK: ret HL_COMMENT end
+        tok.TK_STRING, tok.TK_TRIPLE_STRING, tok.TK_RAW_STRING, tok.TK_CHAR, tok.TK_UTF8_CHAR: ret HL_STRING end
+        tok.TK_INT, tok.TK_FLOAT: ret HL_NUMBER end
+        tok.TK_KW_TRUE, tok.TK_KW_FALSE, tok.TK_KW_NULL, tok.TK_KW_THIS: ret HL_CONST end
+        tok.TK_META: ret HL_META end
+        tok.TK_LAYOUT_ELEMENT: ret HL_TAG end
+        tok.TK_LAYOUT_ATTR_NAME: ret HL_ATTR end
+        tok.TK_AND, tok.TK_OR, tok.TK_NOT: ret is_word_op(t) ? HL_KEYWORD : HL_OPERATOR end
+        tok.TK_IDENT: ret classify_ident(t, next_kind, pack) end
+    end
+    if tok.IsKeyword(k):
+        ret HL_KEYWORD
+    end
+    if (k >= tok.TK_PLUS and k <= tok.TK_MINUS_MINUS) or k == tok.TK_ELLIPSIS:
+        ret HL_OPERATOR
+    end
+    ret 0
+end
+
+func ensure_schema():
+    if not g_m_schema:
+        sm.LayoutSchemaInit(sm.GetStdlibRoot())
+        g_m_schema = true
+    end
+end
+
+export:
+    func salam_m_init(std_root: str):
+        g_m_std = str.Clone(std_root)
+        sm.SetStdlibRoot(g_m_std)
+        ip.SetEmbedded(true)
+    end
+
+    func salam_m_cli(args: str): int:
+        ret Cli(args)
+    end
+
+    func salam_m_stop():
+        ip.Stop()
+    end
+
+    func salam_m_clear_stop():
+        ip.ClearStop()
+    end
+
+    func salam_m_tokens(source: str, lang: str): str:
+        ret Tokens(source, lang)
+    end
+
+    func salam_m_check(source: str, path: str, lang: str): str:
+        ret Check(source, path, lang)
+    end
+
+    func salam_m_detect(source: str): str:
+        ret Detect(source)
+    end
+
+    func salam_m_version(): str:
+        ret str.Clone(cl.VersionText(true))
+    end
+end
+
+pub func Cli(args: str): int:
+    mut argv := Vector {} as Vector<str>
+    defer argv.free()
+    argv.push("salam")
+    parts := str.Split(args, "\n")
+    repeat parts.len() in i:
+        p := parts.get(i)
+        if str.Len(p) > 0:
+            argv.push(p)
+        end
+    end
+    has_std := str.Contains(args, "--stdlib-path")
+    if not has_std and str.Len(g_m_std) > 0 and argv.len() > 1:
+        argv.push("--stdlib-path=" + g_m_std)
+    end
+    rc := cl.Run(argv)
+    sm.SetStdlibRoot(g_m_std)
+    ret rc
+end
+
+pub func Detect(source: str): str:
+    mut sf := src.New()
+    sf.path = "main.salam"
+    sf.text = source
+    sf.len = str.Len(source)
+    ret str.Clone(lp.Code(lx.Detect(sf, lp.Load("en"))))
+end
+
+pub func Tokens(source: str, lang: str): str:
+    mut sf := src.New()
+    sf.path = "main.salam"
+    sf.text = source
+    sf.len = str.Len(source)
+    pack := pick_pack(sf, lang)
+    lgr := lg.New(lg.LOG_OFF, false)
+    lg.SetCapture(true)
+    mut toks := tok.StreamNew(sf.path)
+    _ok := lx.RunEx(lgr, pack, sf, true, toks)
+    lg.SetCapture(false)
+    u16 := utf16_offsets(source, sf.len)
+    defer u16.free()
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    n := tok.StreamCount(toks)
+    repeat n in i:
+        t := tok.StreamAt(toks, i)
+        nk := i + 1 < n ? tok.StreamAt(toks, i + 1).kind : tok.TK_EOF
+        cls := classify(t, nk, pack)
+        b := t.begin_index as int
+        e := t.end_index as int
+        if cls != 0 and b >= 0 and e > b and e <= sf.len:
+            str.BufAppendInt(sb, cls as i64)
+            str.BufAppend(sb, ",")
+            str.BufAppendInt(sb, u16.get(b) as i64)
+            str.BufAppend(sb, ",")
+            str.BufAppendInt(sb, (u16.get(e) - u16.get(b)) as i64)
+            str.BufAppend(sb, ";")
+        end
+    end
+    tok.StreamFree(toks)
+    ret str.BufStr(sb)
+end
+
+pub func Check(source: str, path: str, lang: str): str:
+    mut sf := src.New()
+    sf.path = str.Len(path) > 0 ? path : "main.salam"
+    sf.text = source
+    sf.len = str.Len(source)
+    pack := pick_pack(sf, lang)
+    if pack == lp.LP_NONE:
+        ret str.Clone("")
+    end
+    i18.SetLang(lp.Code(pack))
+    sm.SetStdlibRoot(g_m_std)
+    ensure_schema()
+    lgr := lg.New(lg.LOG_WARN, false)
+    lg.SetDiagSource(lgr, sf.text, sf.len, dg.DIAG_STYLE_RUST, dg.DIAG_FORMAT_JSON)
+    lg.SetCapture(true)
+
+    mut toks := tok.StreamNew(sf.path)
+    lok := lx.Run(lgr, pack, sf, toks)
+    mut a := at.NewAst()
+    mut prog := 0
+    pok := ps.Run(lgr, toks, a, prog)
+    tok.StreamFree(toks)
+
+    mut s := sm.New(lgr, sf.path, lp.Code(pack))
+    if lok and pok:
+        table := cc.TableBuild("", Vector {} as Vector<str>)
+        cc.TableSetPack(table, pack)
+        if cc.PruneProgram(a, lgr, sf.path, table, prog):
+            _eerr := lo.Expand(lgr, pack, table, a, prog, "")
+            _vw := lo.PrepareViews(lgr, pack, table, a, prog, sf.path)
+            sm.SetCc(s, table)
+            _sok := sm.Run(s, a, prog)
+        end
+    end
+    lg.SetCapture(false)
+    mut out := ""
+    if lok and pok:
+        out = dg.RenderAll(s.diag, source, sf.len, dg.DIAG_STYLE_RUST, dg.DIAG_FORMAT_JSON, false)
+    end
+    if str.Len(out) == 0:
+        out = str.Clone(lg.Captured())
+    end
+    sm.Free(s)
+    at.FreeAst(a)
+    ret out
+end
+
+func main:
+    _v := cl.VersionText(true)
+end

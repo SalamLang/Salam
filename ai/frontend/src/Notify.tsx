@@ -23,7 +23,7 @@ function snippet(text: string, max = 150): string {
   return flat.length > max ? `${flat.slice(0, max - 1).trimEnd()}…` : flat;
 }
 
-export function announce(kind: NotifyKind, chat: string, text: string) {
+export function announce(kind: NotifyKind, chat: string, text: string, mid?: number) {
   if (!prefs.enabled) return;
   const tone = kind === "failed" ? "failed" : kind === "network" ? "network" : "done";
   const title =
@@ -41,7 +41,7 @@ export function announce(kind: NotifyKind, chat: string, text: string) {
   pushToast({ tone, title, body: body || undefined });
   chime(tone);
   if (!isDesktop) return;
-  agent.notify(kind, chat, text).catch(() => {});
+  agent.notify(kind, chat, text, mid).catch(() => {});
 }
 
 export function announceApproval(summary: string) {
@@ -159,7 +159,7 @@ export function NotifyMenu({ os }: { os: AgentInfo["os"] | undefined }) {
       {open && (
         <div className="notify-pop" role="dialog" aria-label={t("اعلان‌ها", "Notifications")}>
           <strong>{t("اعلان‌های سیستم", "System notifications")}</strong>
-          <p>{t("وقتی پاسخ آماده شد، خطایی پیش آمد، ارتباط قطع شد یا دستیار منتظر اجازه‌ی شما بود، اگر پنجره جلوی چشم شما نباشد خبر می‌دهیم.", "When a reply is ready, something fails, the connection drops, or the assistant waits for your approval, we let you know if this window is not in front.")}</p>
+          <p>{t("وقتی پاسخ آماده شد، خطایی پیش آمد، ارتباط قطع شد یا دستیار منتظر اجازه‌ی شما بود، اگر پنجره جلوی چشم شما نباشد خبر می‌دهیم؛ حتی وقتی پنجره کوچک شده یا ایجنت در پس‌زمینه است.", "When a reply is ready, something fails, the connection drops, or the assistant waits for your approval, we let you know if this window is not in front of you, even when it is minimized or the agent is in the background.")}</p>
           <Checkbox checked={on} onChange={(v) => change({ enabled: v })} label={t("نمایش اعلان", "Show notifications")} disabled={!current} />
           <Checkbox checked={current?.sound ?? true} onChange={(v) => change({ sound: v })} label={t("پخش صدا", "Play a sound")} disabled={!current || !on} />
           <Checkbox

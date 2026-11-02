@@ -500,11 +500,11 @@ func spawn_target(v &: Lv, symn: str, with_arg: bool): str:
         end
     end
     v.stdthunks.push(th)
-    mut body := "  call void @" + symn + "()\n"
+    mut body := "  call void " + gsym(symn) + "()\n"
     if with_arg:
-        body = "  call void @" + symn + "(ptr %a)\n"
+        body = "  call void " + gsym(symn) + "(ptr %a)\n"
     end
-    out_hg(v, "define internal x86_stdcallcc i32 @" + th + "(ptr %a) nounwind {\nentry:\n" + body + "  ret i32 0\n}\n")
+    out_hg(v, "define internal x86_stdcallcc i32 " + gsym(th) + "(ptr %a) nounwind {\nentry:\n" + body + "  ret i32 0\n}\n")
     ret th
 end
 
@@ -570,6 +570,9 @@ func call_intrinsic(
     if str.Equals(nm, "open") and na == 2:
         ret call_runtime(v, s, a, n, "salam_open", 0, out2)
     end
+    if str.Equals(nm, "env") and na == 1:
+        ret call_runtime(v, s, a, n, "salam_env", 0, out2)
+    end
     if str.Equals(nm, "lang") and na == 0:
         out2 = make_llv(strconst(v, i18.Lang()), "str")
         ret true
@@ -584,7 +587,7 @@ func call_intrinsic(
             ret false
         end
         r = new_tmp(v)
-        emit(v, r + " = ptrtoint ptr @" + spawn_target(v, symn, na == 2) + " to i64")
+        emit(v, r + " = ptrtoint ptr " + gsym(spawn_target(v, symn, na == 2)) + " to i64")
         mut spk := 0
         ssig := runtime_fn(s, rt, spk)
         if ssig == 0 or sm.SigAt(s, ssig).decl == 0:
@@ -686,10 +689,12 @@ func lv_call(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
             lv_lower_print(v, s, a, n, true, true)
             ret make_llv("0", "void")
         end
-        if str.Equals(nm, "len") and nn.list.len() == 1:
+        fsym := sym_of(v, s, a, nm)
+        ushadow := fsym != 0 and sm.SymAt(s, fsym).kind == sm.SYM_FUNC
+        if not ushadow and str.Equals(nm, "len") and nn.list.len() == 1:
             ret call_len(v, s, a, n)
         end
-        if str.Equals(nm, "sizeof") and nn.list.len() == 1:
+        if not ushadow and str.Equals(nm, "sizeof") and nn.list.len() == 1:
             t := at.Get(a, nn.list.get(0)).type_str
             szp := new_tmp(v)
             sz := new_tmp(v)
@@ -699,8 +704,7 @@ func lv_call(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
             emit(v, sz + " = ptrtoint ptr " + szp + " to " + v.usize)
             ret make_llv(sz, "usize")
         end
-        fsym := sym_of(v, s, a, nm)
-        if fsym != 0 and sm.SymAt(s, fsym).kind == sm.SYM_FUNC:
+        if ushadow:
             ret call_user(v, s, a, n, nm)
         end
         if fsym == 0:

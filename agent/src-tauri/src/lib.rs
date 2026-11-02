@@ -6,6 +6,7 @@ mod device;
 mod memory;
 mod notify;
 mod tools;
+mod watch;
 mod watchdog;
 mod workspace;
 
@@ -32,6 +33,8 @@ const REMOTE_COMMANDS: &[&str] = &[
     "allow-agent-notify",
     "allow-agent-notify-prefs",
     "allow-agent-set-notify-prefs",
+    "allow-agent-watch-reply",
+    "allow-agent-unwatch-reply",
 ];
 
 #[cfg(target_os = "macos")]
@@ -39,11 +42,10 @@ fn set_dock_icon() {
     use objc2::{AllocAnyThread, MainThreadMarker};
     use objc2_app_kit::{NSApplication, NSImage};
     use objc2_foundation::NSData;
-    let bundled = std::env::current_exe().is_ok_and(|p| p.to_string_lossy().contains(".app/Contents/MacOS/"));
-    let Some(mtm) = MainThreadMarker::new() else { return };
-    if bundled {
+    if crate::config::bundled() {
         return;
     }
+    let Some(mtm) = MainThreadMarker::new() else { return };
     let data = NSData::with_bytes(include_bytes!("../icons/icon-macos.png"));
     if let Some(image) = NSImage::initWithData(NSImage::alloc(), &data) {
         unsafe { NSApplication::sharedApplication(mtm).setApplicationIconImage(Some(&image)) };
@@ -164,6 +166,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .manage(approve::Approvals::default())
         .manage(bridge::Status::default())
+        .manage(watch::Watchers::default())
         .manage(watchdog::Watchdog::default())
         .invoke_handler(tauri::generate_handler![
             commands::agent_info,
@@ -179,6 +182,8 @@ pub fn run() {
             commands::agent_notify,
             commands::agent_notify_prefs,
             commands::agent_set_notify_prefs,
+            commands::agent_watch_reply,
+            commands::agent_unwatch_reply,
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]

@@ -4,7 +4,7 @@ set -u
 salam=${1:-}
 root=$(CDPATH='' cd -- "$(dirname -- "$0")/../.." && pwd)
 [ -n "$salam" ] || salam="$root/salam"
-case "$salam" in /*) ;; *) salam="$root/$salam" ;; esac
+case "$salam" in /* | [A-Za-z]:*) ;; *) salam="$root/$salam" ;; esac
 
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT INT TERM

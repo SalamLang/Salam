@@ -157,7 +157,10 @@ func main() {
 	})
 
 	e.POST("/echo", func(c echo.Context) error {
-		body, _ := io.ReadAll(io.LimitReader(c.Request().Body, 10<<20))
+		body, err := io.ReadAll(io.LimitReader(c.Request().Body, 10<<20))
+		if err != nil {
+			return c.String(http.StatusBadRequest, err.Error())
+		}
 		return c.JSON(http.StatusOK, echo.Map{"bytes": len(body), "echo": string(body)})
 	})
 

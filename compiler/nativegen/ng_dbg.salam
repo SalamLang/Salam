@@ -138,6 +138,10 @@ func prescan_dbg(g &: Ng):
             if find_in_line(g, p, e, "!DICompileUnit(") >= 0:
                 any = true
             end
+            dwv := find_in_line(g, p, e, "\"Dwarf Version\", i32 ")
+            if dwv >= 0:
+                g.dwarf_ver = num_at(g, dwv) >= 5 ? 5 : 4
+            end
             if loc >= 0 or sub >= 0 or fil >= 0:
                 md_grow(g, id)
             else:
@@ -506,6 +510,107 @@ func vb_put32(v &: Vector<u8>, at: int, x: i64):
     end
 end
 
+func dbg_sec_name(g &: Ng, sec: int, nm: str): str:
+    if g.dwarf_ver < 5 or (sec != SEC_DBGRANGES and sec != SEC_DBGLOC):
+        ret nm
+    end
+    mo := sp(nm)[0] == (95 as u8)
+    if sec == SEC_DBGRANGES:
+        ret mo ? "__debug_rnglists" : ".debug_rnglists"
+    end
+    ret mo ? "__debug_loclists" : ".debug_loclists"
+end
+
+func dbg_list_head(g &: Ng, v &: Vector<u8>):
+    if g.dwarf_ver >= 5 and v.len() == 0:
+        vb_le(v, 0 as i64, 4)
+        vb_le(v, 5 as i64, 2)
+        v.push(dbg_aw(g) as u8)
+        v.push(0 as u8)
+        vb_le(v, 0 as i64, 4)
+    end
+end
+
+func dbg_list_close(g &: Ng, v &: Vector<u8>):
+    if g.dwarf_ver >= 5:
+        dbg_list_head(g, v)
+        vb_put32(v, 0, (v.len() - 4) as i64)
+    else v.len() == 0:
+        dbg_list_end(g, v)
+    end
+end
+
+func dbg_list_end(g &: Ng, v &: Vector<u8>):
+    if g.dwarf_ver >= 5:
+        v.push(0 as u8)
+        ret
+    end
+    vb_le(v, 0 as i64, dbg_aw(g))
+    vb_le(v, 0 as i64, dbg_aw(g))
+end
+
+func dbg_range_ent(g &: Ng, v &: Vector<u8>, s: int, e: int):
+    if g.dwarf_ver >= 5:
+        v.push(4 as u8)
+        vb_uleb(v, s as i64)
+        vb_uleb(v, e as i64)
+        ret
+    end
+    vb_le(v, s as i64, dbg_aw(g))
+    vb_le(v, e as i64, dbg_aw(g))
+end
+
+func dbg_loc_ent(g &: Ng, v &: Vector<u8>, s: int, e: int, x: Vector<u8>):
+    if g.dwarf_ver >= 5:
+        v.push(4 as u8)
+        vb_uleb(v, s as i64)
+        vb_uleb(v, e as i64)
+        vb_uleb(v, x.len() as i64)
+    else:
+        vb_le(v, s as i64, dbg_aw(g))
+        vb_le(v, e as i64, dbg_aw(g))
+        vb_le(v, x.len() as i64, 2)
+    end
+    each b in x:
+        v.push(b)
+    end
+end
+
+func dbg_lowpc(g &: Ng, di &: Vector<u8>, sym: int, add: i64):
+    if g.dwarf_ver < 5:
+        dbg_addr(g, SEC_DBGINFO, di, sym, add)
+        ret
+    end
+    if g.s_daddr.len() == 0:
+        vb_le(g.s_daddr, 0 as i64, 4)
+        vb_le(g.s_daddr, 5 as i64, 2)
+        g.s_daddr.push(dbg_aw(g) as u8)
+        g.s_daddr.push(0 as u8)
+    end
+    if g.da_map.has(add):
+        vb_uleb(di, g.da_map.get(add) as i64)
+        ret
+    end
+    ix := (g.s_daddr.len() - 8) / dbg_aw(g)
+    g.da_map.put(add, ix)
+    dbg_addr(g, SEC_DBGADDR, g.s_daddr, sym, add)
+    vb_uleb(di, ix as i64)
+end
+
+func dbg_addrx_forms(ab &: Vector<u8>):
+    mut p := 0
+    until p < ab.len() and ab[p] != (0 as u8):
+        p += 3
+        until p + 1 < ab.len() and (ab[p] != (0 as u8) or ab[p + 1] != (0 as u8)):
+            if ab[p] == (0x11 as u8) and ab[p + 1] == (0x01 as u8):
+                ab[p + 1] = 0x1b as u8
+            end
+            p += 2
+        end
+        p += 2
+    end
+end
+
 func dbg_local_sym(g &: Ng, name: str, sec: int): int:
     s := sym_named(g, name)
     g.sy_kind[s] = SY_DATA
@@ -725,19 +830,17 @@ func dt_write(g &: Ng, t &: DbgTree, di &: Vector<u8>, nd: int, abs: HashMap<int
         vb_le(di, abs.get(t.sp[nd]) as i64, 4)
     end
     if single:
-        dbg_addr(g, SEC_DBGINFO, di, ts, t.ivs[f] as i64)
+        dbg_lowpc(g, di, ts, t.ivs[f] as i64)
         vb_le(di, (t.ive[f] - t.ivs[f]) as i64, 8)
     else:
         add_reloc(g, SEC_DBGINFO, di.len(), rs, R_ABS32, g.s_dranges.len() as i64)
         vb_le(di, 0 as i64, 4)
         mut r := f
         until r >= 0:
-            vb_le(g.s_dranges, t.ivs[r] as i64, dbg_aw(g))
-            vb_le(g.s_dranges, t.ive[r] as i64, dbg_aw(g))
+            dbg_range_ent(g, g.s_dranges, t.ivs[r], t.ive[r])
             r = t.ivn[r]
         end
-        vb_le(g.s_dranges, 0 as i64, dbg_aw(g))
-        vb_le(g.s_dranges, 0 as i64, dbg_aw(g))
+        dbg_list_end(g, g.s_dranges)
     end
     if not lex:
         cmd := g.lt_md[t.loc[nd]]
@@ -771,9 +874,15 @@ func dbg_emit(g &: Ng):
         end
     end
     ab := g.s_dabbrev
-    each x in [1, 0x11, 1, 0x25, 0x08, 0x13, 0x05, 0x03, 0x08, 0x1b, 0x08, 0x10, 0x17, 0x11, 0x01, 0x12, 0x07, 0, 0]:
+    each x in [1, 0x11, 1, 0x25, 0x08, 0x13, 0x05, 0x03, 0x08, 0x1b, 0x08, 0x10, 0x17, 0x11, 0x01, 0x12, 0x07]:
         ab.push(x as u8)
     end
+    if g.dwarf_ver >= 5:
+        ab.push(0x73 as u8)
+        ab.push(0x17 as u8)
+    end
+    ab.push(0 as u8)
+    ab.push(0 as u8)
     each y in [2, 0x2e, 1, 0x03, 0x08, 0x3a, 0x0f, 0x3b, 0x0f, 0x11, 0x01, 0x12, 0x07, 0x3f, 0x19, 0, 0]:
         ab.push(y as u8)
     end
@@ -821,14 +930,23 @@ func dbg_emit(g &: Ng):
         ab.push(z8 as u8)
     end
     ab.push(0 as u8)
+    if g.dwarf_ver >= 5:
+        dbg_addrx_forms(ab)
+    end
     g.s_dabbrev = ab
     text_size := g.s_text.len()
     mut di := Vector {} as Vector<u8>
     vb_le(di, 0 as i64, 4)
-    vb_le(di, 4 as i64, 2)
+    vb_le(di, g.dwarf_ver as i64, 2)
+    if g.dwarf_ver >= 5:
+        di.push(1 as u8)
+        di.push(dbg_aw(g) as u8)
+    end
     add_reloc(g, SEC_DBGINFO, di.len(), as0, R_ABS32, 0 as i64)
     vb_le(di, 0 as i64, 4)
-    di.push(dbg_aw(g) as u8)
+    if g.dwarf_ver < 5:
+        di.push(dbg_aw(g) as u8)
+    end
     vb_uleb(di, 1 as i64)
     vb_str(di, "salam")
     vb_le(di, 0x0c as i64, 2)
@@ -836,10 +954,17 @@ func dbg_emit(g &: Ng):
     vb_str(di, cu_file >= 0 ? g.md_s2[cu_file] : "")
     add_reloc(g, SEC_DBGINFO, di.len(), ls, R_ABS32, 0 as i64)
     vb_le(di, 0 as i64, 4)
-    dbg_addr(g, SEC_DBGINFO, di, ts, 0 as i64)
+    dbg_lowpc(g, di, ts, 0 as i64)
     vb_le(di, text_size as i64, 8)
+    if g.dwarf_ver >= 5:
+        das := dbg_local_sym(g, ".Lsalam.daddr0", SEC_DBGADDR)
+        add_reloc(g, SEC_DBGINFO, di.len(), das, R_ABS32, 8 as i64)
+        vb_le(di, 0 as i64, 4)
+    end
     rs := dbg_local_sym(g, ".Lsalam.dranges0", SEC_DBGRANGES)
     lsym := dbg_local_sym(g, ".Lsalam.dloc0", SEC_DBGLOC)
+    dbg_list_head(g, g.s_dranges)
+    dbg_list_head(g, g.s_dloc)
     mut tys := DvTypes {}
     dv_index_entries(g, tys)
     mut gcur := 0
@@ -896,7 +1021,7 @@ func dbg_emit(g &: Ng):
         fm := g.md_file[spm]
         vb_uleb(di, (fm >= 0 ? dbg_file_index(g, fm) : 1) as i64)
         vb_uleb(di, g.md_line[spm] as i64)
-        dbg_addr(g, SEC_DBGINFO, di, ts, g.df_base[k] as i64)
+        dbg_lowpc(g, di, ts, g.df_base[k] as i64)
         vb_le(di, g.df_size[k] as i64, 8)
         dv_write_fn_vars(g, tys, di, topv, lsym)
         topv.free()
@@ -914,19 +1039,21 @@ func dbg_emit(g &: Ng):
     dv_write_globals(g, tys, di)
     dv_types_flush(g, tys, di)
     di.push(0 as u8)
-    if g.s_dloc.len() == 0:
-        vb_le(g.s_dloc, 0 as i64, dbg_aw(g))
-        vb_le(g.s_dloc, 0 as i64, dbg_aw(g))
-    end
-    if g.s_dranges.len() == 0:
-        vb_le(g.s_dranges, 0 as i64, dbg_aw(g))
-        vb_le(g.s_dranges, 0 as i64, dbg_aw(g))
+    dbg_list_close(g, g.s_dloc)
+    dbg_list_close(g, g.s_dranges)
+    if g.s_daddr.len() > 0:
+        vb_put32(g.s_daddr, 0, (g.s_daddr.len() - 4) as i64)
     end
     vb_put32(di, 0, (di.len() - 4) as i64)
     g.s_dinfo = di
+    v5 := g.dwarf_ver >= 5
     mut dl := Vector {} as Vector<u8>
     vb_le(dl, 0 as i64, 4)
-    vb_le(dl, 4 as i64, 2)
+    vb_le(dl, g.dwarf_ver as i64, 2)
+    if v5:
+        dl.push(dbg_aw(g) as u8)
+        dl.push(0 as u8)
+    end
     hl_at := dl.len()
     vb_le(dl, 0 as i64, 4)
     hs := dl.len()
@@ -949,17 +1076,37 @@ func dbg_emit(g &: Ng):
         end
         dix.push(found + 1)
     end
+    if v5:
+        each f5 in [1, 1, 0x08]:
+            dl.push(f5 as u8)
+        end
+        vb_uleb(dl, (dirs.len() + 1) as i64)
+        vb_str(dl, cu_file >= 0 ? g.md_s2[cu_file] : "")
+    end
     each dd in dirs:
         vb_str(dl, dd)
     end
-    dl.push(0 as u8)
+    if v5:
+        each f6 in [2, 1, 0x08, 2, 0x0f]:
+            dl.push(f6 as u8)
+        end
+        vb_uleb(dl, (g.dfiles.len() + 1) as i64)
+        vb_str(dl, cu_file >= 0 ? g.md_s1[cu_file] : "")
+        dl.push(0 as u8)
+    else:
+        dl.push(0 as u8)
+    end
     repeat g.dfiles.len() in fi:
         vb_str(dl, g.md_s1[g.dfiles[fi]])
         vb_uleb(dl, dix[fi] as i64)
-        vb_uleb(dl, 0 as i64)
-        vb_uleb(dl, 0 as i64)
+        if not v5:
+            vb_uleb(dl, 0 as i64)
+            vb_uleb(dl, 0 as i64)
+        end
     end
-    dl.push(0 as u8)
+    if not v5:
+        dl.push(0 as u8)
+    end
     vb_put32(dl, hl_at, (dl.len() - hs) as i64)
     dl.push(0 as u8)
     vb_uleb(dl, (dbg_aw(g) + 1) as i64)

@@ -57,6 +57,20 @@ pub struct Ic:
     pub ev_val: Vector<int> = Vector {}
     pub e_ev0: Vector<int> = Vector {}
     pub e_evcount: Vector<int> = Vector {}
+    pub pent: Vector<int> = Vector {}
+    pub e_cent: Vector<int> = Vector {}
+    pub e_csym: Vector<int> = Vector {}
+    pub e_lv0: Vector<int> = Vector {}
+    pub e_nlv: Vector<int> = Vector {}
+    pub e_cret: Vector<int> = Vector {}
+    pub e_done: Vector<bool> = Vector {}
+    pub lv: Vector<int> = Vector {}
+    pub lvs: Vector<bool> = Vector {}
+    pub lvt: Vector<int> = Vector {}
+    pub lvf: Vector<int> = Vector {}
+    pub cold_q: Vector<int> = Vector {}
+    pub npart: int = 0
+    pub newc: Vector<int> = Vector {}
 end
 
 func ic_lookup(g &: Ng, sym: int): int:
@@ -180,6 +194,7 @@ func cache_function(g &: Ng):
     end
     need := inline_ok_fn(g, eff)
     if need < 0:
+        pi_cache(g, cost)
         ret
     end
     s := g.f_sym
@@ -296,6 +311,8 @@ func cache_function(g &: Ng):
         g.ic.am.push(arg_memops(g, av))
     end
     g.ic.e_rec.push(calls_self(g))
+    ic_extra(g)
+    pi_cache(g, cost)
 end
 
 func map_cval(g &: Ng, cv: int, v0: int, call: int): int:
@@ -411,6 +428,9 @@ func inline_call(g &: Ng, c: int, e: int):
         ni2 := ins_new(g, op, g.ic.ty[ci])
         if ev_count > 0:
             newi.push(ni2)
+        end
+        if op == OP_CALL:
+            g.ic.newc.push(ni2)
         end
         g.i_dbg[ni2] = dbg_rebase(g, g.ic.dbg[ci], cl)
         g.i_x[ni2] = g.ic.x[ci]
@@ -658,6 +678,8 @@ end
 func inline_calls(g &: Ng): bool:
     mut grown := 0
     mut changed := false
+    g.ic.newc.clear()
+    small := g.b_rpo.len() <= INL_LOOP_BLOCKS
     inl_mark_loops(g)
     mut work := Vector {} as Vector<int>
     each b in g.b_rpo:
@@ -669,20 +691,73 @@ func inline_calls(g &: Ng): bool:
             i = g.i_next[i]
         end
     end
+    mut inloop := Vector {} as Vector<bool>
+    if not g.off_hotpath and g.ic.npart > 0:
+        mut any := false
+        each c0 in work:
+            cv0 := g.i_a[c0]
+            if cv0 >= 0 and g.v_kind[cv0] == VK_GLB and pi_lookup(g, g.v_def[cv0]) >= 0:
+                any = true
+            end
+        end
+        if any:
+            pi_mark_loops(g)
+            each c1 in work:
+                inloop.push(g.pi_loopb[g.i_blk[c1]])
+            end
+        end
+    end
     repl_grow(g)
-    each c in work:
-        e := call_inlinable(g, c, grown)
+    repeat work.len() in wi:
+        c := work[wi]
+        mut e := call_inlinable(g, c, grown)
+        if e < 0 and wi < inloop.len() and inloop[wi]:
+            e = pi_site(g, c, grown)
+        end
         if e >= 0:
             repeat g.i_pcount[c] in k:
                 q := g.i_ps[c] + 3 * k
                 g.pool[q] = resolve(g, g.pool[q])
             end
             inline_call(g, c, e)
+            pi_used(g, e)
             grown += g.ic.e_cost[e]
             changed = true
         end
     end
     work.free()
+    inloop.free()
+    if changed and small and not g.allow_self and not g.off_inlnest and not g.off_hotpath and g.ic.newc.len() > 0:
+        ensure_terms(g)
+        build_cfg(g)
+        inl_mark_loops(g)
+        pi_mark_loops(g)
+        mut work2 := Vector {} as Vector<int>
+        each nc in g.ic.newc:
+            if g.i_op[nc] == OP_CALL and g.i_blk[nc] >= 0 and g.pi_loopb[g.i_blk[nc]]:
+                work2.push(nc)
+            end
+        end
+        g.ic.newc.clear()
+        repl_grow(g)
+        each c2 in work2:
+            mut e2 := call_inlinable(g, c2, grown)
+            if e2 < 0:
+                e2 = pi_site(g, c2, grown)
+            end
+            if e2 >= 0:
+                repeat g.i_pcount[c2] in k2:
+                    q2 := g.i_ps[c2] + 3 * k2
+                    g.pool[q2] = resolve(g, g.pool[q2])
+                end
+                inline_call(g, c2, e2)
+                pi_used(g, e2)
+                grown += g.ic.e_cost[e2]
+            end
+        end
+        work2.free()
+    end
+    g.ic.newc.clear()
     ret changed
 end
 

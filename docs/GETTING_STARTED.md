@@ -346,7 +346,10 @@ links it with `cc -shared` (or archives it for `--lib=static`).
 C compiler, for Linux (glibc and musl) and macOS targets; see "Shared
 libraries" in [docs/NATIVE_LINKER.md](NATIVE_LINKER.md). A Windows DLL
 also gets `NAME.def` and, when `llvm-dlltool` is installed, an MSVC import
-library `NAME.lib`, next to the mingw `libNAME.dll.a`.
+library `NAME.lib`, next to the mingw `libNAME.dll.a`. With
+`--backend=native` and a Windows target the compiler's own linker writes the
+DLL and `libNAME.dll.a`, so no mingw `gcc` is needed, only the mingw-w64
+runtime files.
 
 The functions in the entry file's `export:` block become the library's C API,
 under their own names, and `NAME.h` is written next to the library with their

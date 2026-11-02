@@ -444,6 +444,46 @@ only 1 MB by default, see `NATIVE_BACKEND.md`).
 runs them under wine. It runs once with each linker; outputs must match, and
 `x86_64-w64-mingw32-objdump -p` must show the same imports.
 
+### DLLs
+
+`salam build --lib --backend=native --target=<windows triple>` writes a DLL
+with the built-in linker (`nl_pedll.salam`), so a Windows library needs no
+mingw `gcc` either. The link is the executable's with these differences:
+
+- `dllcrt2.o` replaces `crt2.o` and the entry point is `DllMainCRTStartup`
+  (`_DllMainCRTStartup@12` on i386). It runs the pseudo relocator, the
+  `.ctors` list (where the library's initializer sits, so package globals
+  are set up when the DLL loads) and `DllMain`, for which mingw's default
+  returns `TRUE`.
+- The header has `IMAGE_FILE_DLL`, the image base is `0x180000000` (x64 and
+  ARM64) or `0x10000000` (i386), as `lld-link` picks, and every absolute
+  address already gets a base relocation, so a DLL that cannot load at its
+  preferred base is rebased.
+- Exports follow `ld`'s auto-export: every external symbol the program
+  object defines, which is what the C and LLVM backends' DLLs export (the
+  `export:` block's functions plus a few runtime entry points). i386 names
+  lose their leading underscore. The export directory (data directory 0)
+  sits at the end of `.rdata`, as `lld-link` places it: the 40-byte header,
+  the address table, the name pointers sorted by name, the ordinal table,
+  then the DLL name and the export names.
+- Next to `NAME.dll` the driver writes `libNAME.dll.a`, an import library in
+  GNU `dlltool`'s long form: a head object with the `.idata$2` descriptor,
+  one object per export (the `jmp` or `adrp`/`ldr`/`br` thunk, `.idata$4`,
+  `.idata$5`, `.idata$6`, and an `.idata$7` reference that pulls the head
+  in), and a tail with the null entries and the DLL name, named `_h`, `_sNNNNN`
+  and `_t` so the usual sort keeps each DLL's tables together. GNU `ld`,
+  `lld` and the built-in linker all link against it. `NAME.h` and `NAME.def`
+  (plus `NAME.lib` when `llvm-dlltool` is installed) are written as for the
+  other backends.
+
+With `--linker=system` (or when `dllcrt2.o` is not found) the driver links
+the object with `<mingw gcc> -shared -Wl,--out-implib,libNAME.dll.a`
+instead. `tools/bash/native-windows-dll-check.sh` builds
+`tests/en/lib/mathlib` as a DLL and runs it under wine from a C program
+linked by mingw `gcc`, from a Salam program linked by the built-in linker,
+and as a second, rebased copy loaded with `LoadLibrary`. ARM64 DLLs are
+checked with `llvm-readobj`.
+
 ## Later phases
 
 1. **Dynamic ELF against glibc**: see phase 2 above.

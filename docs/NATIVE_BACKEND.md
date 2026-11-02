@@ -372,10 +372,11 @@ then goes through:
    loop); bigger callers, such as an image codec's frame decoder, only grew
    and got slower with it.
    A callee too big to inline whole may still be inlined in part. When a
-   function has a cheap common path and a region that only some calls reach
-   (the body of a loop that usually runs zero times, such as the flush loop
-   of `audio.MsbWrite`, or a block that calls out, such as a buffer's grow
-   path), the region is copied into a separate function `<name>.cold`
+   function has a cheap common path that updates state and a region that
+   only some calls reach and that calls out (the body of a loop that usually
+   runs zero times, such as the flush loop of `audio.MsbWrite`, or a
+   buffer's grow path), the region is copied into a separate function
+   `<name>.cold`
    that takes the values live into it as arguments (up to six; field
    addresses are recomputed inside instead of passed). A call in a loop
    then inlines only the common path, which ends in a call to the cold

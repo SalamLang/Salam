@@ -16,6 +16,7 @@ salam build app.salam --backend=native --target=i686-w64-windows-gnu
 salam build app.salam --backend=native --target=arm-linux-musleabihf
 salam build app.salam --backend=native --target=riscv64-linux-musl
 salam build app.salam --backend=native --target=arm64-apple-macos
+salam build app.salam --backend=native --target=universal-apple-macos  # arm64 + x86_64
 salam build app.salam --backend=native --emit-asm     # also writes app.s
 salam build app.salam --backend=native --cpu=x86-64-v3 # 256-bit AVX2 loops
 salam obj app.salam --backend=native                  # object file only
@@ -316,6 +317,7 @@ All of it lives in `compiler/nativegen/`:
 | `ng_gvn.salam`, `ng_slp.salam`                                     | Value numbering with redundant load elimination, and SLP vectorization                                                                                                      |
 | `ng_isel.salam`                                                    | Instruction selection into machine instructions on virtual registers                                                                                                        |
 | `ng_ra.salam`                                                      | Linear-scan register allocation with lifetime holes, spilling, frame layout                                                                                                 |
+| `ng_rasp.salam`                                                    | Splits a value's range between registers and its stack slot, with the moves at split points and block edges                                                                 |
 | `ng_enc.salam`                                                     | x86-64 encoder, prologues and epilogues, branch relaxation, Windows unwind info                                                                                             |
 | `ng_a64.salam`                                                     | AArch64 encoder: machine instructions to A64 words, flag translation, frame records, relocations                                                                            |
 | `ng_legal.salam`                                                   | Splits 64-bit integers into 32-bit pairs for the 32-bit targets, and turns ARM divisions into library calls                                                                 |
@@ -371,6 +373,22 @@ then goes through:
    bonus when the caller has at most 40 blocks (`image.BlendPixel` in a fill
    loop); bigger callers, such as an image codec's frame decoder, only grew
    and got slower with it.
+   A callee too big to inline whole may still be inlined in part. When a
+   function has a cheap, call-free common path that updates state and a
+   region that only some calls reach and that calls out (the body of a loop
+   that usually runs zero times, such as the flush loop of `audio.MsbWrite`,
+   or a buffer's grow path), the region is copied into a separate function
+   `<name>.cold` that takes the values live into it as arguments (up to six;
+   field addresses are recomputed inside instead of passed). A call in a loop
+   then inlines only the common path, which ends in a call to the cold
+   function where the region used to start. The original function is left
+   whole for its other callers, and a cold function is only compiled when
+   some call site uses it. In a caller of at most 40 blocks, calls that
+   arrive through an inlined body and sit in a loop get a second chance at
+   being inlined, whole or in part, so `MsbUnary` also brings in the bit read
+   its loop makes. The FLAC encoder and decoder in `audio_flac` run 8.7%
+   fewer instructions with both (206 million instead of 226 million; the LLVM
+   build runs 181 million).
 4. Tail recursion elimination. `ret f(x)` becomes a jump back to the top of
    the function, and so does `ret f(x) + y` or `ret f(x) * y` by carrying an
    accumulator, which removes one of the two calls in a recursive Fibonacci.
@@ -448,6 +466,15 @@ then goes through:
    the only writers in the loop are calls, such a load is still hoisted and
    reloaded right after each call, so a vector's data pointer stays in a
    register on the paths that do not call (the recursive `solve` in N-queens).
+   A field that the loop also writes is promoted too when every other
+   memory access in the loop provably touches something else (another field
+   at a known offset, another stack slot, a `malloc` result, or a
+   parameter's memory when the field lives in a stack slot) and the calls
+   in the loop are conditional (at most four): the field lives in a
+   register, is written back before each call and read again after it,
+   and is stored once on every edge that leaves the loop. The bit writer
+   that FLAC encoding keeps on its stack then keeps its accumulator and
+   bit count in registers while it writes a Rice code.
    A floating-point constant compared inside a loop is materialized once in
    the preheader, since `ucomisd` needs it in a register
    (`until zx * zx + zy * zy <= 4.0` in Mandelbrot), and so is a 64-bit
@@ -545,7 +572,14 @@ then goes through:
    the lower one (an add, or a compare and select for min and max) before the
    usual 128-bit steps. Loops that widen or narrow bytes, count matching
    bytes or walk a second counter down keep 128-bit vectors, and so does
-   every loop when `SALAM_NG_OFF=avx2` is set. A function that touches a
+   every loop when `SALAM_NG_OFF=avx2` is set. The SLP vectorizer (below)
+   first looks for runs of eight adjacent `f32` or four `f64` stores and
+   builds them as one 256-bit tree, then packs what is left into 128-bit
+   ones, so the 4x16 `f32` matrix multiply micro-kernel keeps eight `ymm`
+   accumulators instead of sixteen `xmm` ones (`SALAM_NG_OFF=ypack` keeps SLP
+   at 128 bits). The integer sum vectorizer's two accumulators become 256-bit
+   too, eight `int` or four `i64` lanes each, so it reads sixteen `int` values
+   per iteration (`SALAM_NG_OFF=ysum` keeps it at 128 bits). A function that touches a
    256-bit register is VEX-encoded throughout, scalar float code included,
    so it never mixes legacy SSE with AVX, and it runs `vzeroupper` before
    each call and return; functions without 256-bit code are encoded exactly
@@ -566,10 +600,17 @@ then goes through:
    for an `f32` saxpy, 2.0x for an `int` sum, 2.1x for an `i64` sum, 2.0x for a
    `u8` clamp, 2.0x for an `f32` dot product with `--fast-math`, 1.97x for an
    `int` min and max, 1.54x for `int` add and multiply, 1.34x for an `f64`
-   scale and 1.0x for an `i16` multiply. The `nn`, `audio` and `image` tests
-   move by less than 6% either way, since their hot loops are SLP or
-   128-bit-only shapes, and none of the 42 programs under `benchmark/` has a
-   loop the vectorizer takes on, so their binaries do not change.
+   scale and 1.0x for an `i16` multiply. With the 256-bit SLP trees a
+   256x256 `f32` `tensor.GemmAcc`, run 40 times, takes 0.033 s instead of
+   0.063 s (1.9x; the SSE2 build takes 0.060 s), and the `nn` demos that
+   spend their time in it gain: `nn_cnn_train_demo` 0.708 s to 0.619 s,
+   `nn_transformer_demo` 0.820 s to 0.726 s, `nn_mlp_train_demo` 0.317 s to
+   0.300 s and `nn_layers2_demo` 0.069 s to 0.065 s. An `int` and an `i64`
+   sum over 4096 elements, 400000 times, take 0.199 s with 256-bit
+   accumulators instead of 0.257 s with 128-bit ones. The `audio` and
+   `image` tests do not change, and none of the 42 programs under
+   `benchmark/` has a loop the vectorizer takes on, so their binaries do not
+   change.
    A field read from a struct loaded whole (`v.get(i).kind`, or a phi of two
    such loads) becomes a load of just that field, and a stack copy of a
    struct that is only ever written is dropped, so `n := at.Get(a, i)` then
@@ -597,8 +638,11 @@ then goes through:
     Addresses that differ only by a constant share one pointer.
 11. SLP vectorization: runs of stores to adjacent `f32` or `f64` slots are
     traced back through arithmetic, broadcasts, adjacent loads and loop phis,
-    and the whole tree becomes SSE `ps`/`pd` code. The tensor and matrix
-    multiply kernels rely on this.
+    and the whole tree becomes SSE `ps`/`pd` code (AVX2 `ymm` code for runs of
+    eight `f32` or four `f64` under `--cpu=x86-64-v3`). The tensor and matrix
+    multiply kernels rely on this. A broadcast of a function parameter is
+    placed at the top of the entry block, so straight-line code in that
+    block can use it.
 12. Global value numbering over the dominator tree, including redundant load
     elimination and store-to-load forwarding. A store only invalidates loads
     of its own TBAA class (llvmgen tags pointer fields and plain data
@@ -750,7 +794,35 @@ back into its phi) is emitted with that loop value as the tied operand of the
 Copy-related values that both spill share one stack slot. When vector
 registers run out, the allocator evicts the value whose next use is
 farthest away, so a kernel with sixteen accumulators keeps most of them in
-registers instead of spilling each one as a temporary arrives. The encoder rotates small loop headers into the latch so
+registers instead of spilling each one as a temporary arrives.
+
+A value that does not get a register for its whole range is split instead
+of living in its stack slot from start to end (`SALAM_NG_OFF=rasp` turns
+this off). A value evicted by a heavier one keeps its register up to the
+eviction, and that point moves back to the cheapest block boundary before
+it, so a loop is not entered with the value in a register it loses inside
+the loop. The rest stays in the stack slot and gets a register again from
+the cheapest boundary before its next use, but only when the uses it
+covers there, weighted by loop depth, pay at least three times for the
+reload. Uses that cost nothing from memory do not count: the source of a
+copy (the reload goes straight into the copy's register) and, on x86, the
+second operand of an ALU instruction, which reads the slot directly. A
+value that only has a register free for part of its range takes it for
+that part when the part covers two uses, and pieces made by splitting
+never evict other values. Every definition of a split value is stored to
+its slot, so giving up a register needs no store, while taking one is a
+load or a move. Where the two ends of a block edge disagree on a value's
+location, the moves go at the end of a predecessor with one successor or
+at the start of a successor with one predecessor, as one parallel copy
+with `r11` or `xmm15` breaking cycles. Splits never fall between an
+instruction that sets the flags and the jump, `setcc`, `cmov` or carry
+operation that reads them, after a block's first branch, or inside the
+short jumps a block's own lowering contains (an atomic retry loop, a
+select's branch). A function with a critical edge that would need moves
+(no predecessor or successor of its own to hold them) is allocated again
+without splitting; that happens in about one function in three hundred.
+
+The encoder rotates small loop headers into the latch so
 loops are bottom-tested (a header of up to ten instructions with one early
 exit, like `mandelbrot`'s `zx * zx + zy * zy <= 4.0 and iter < max_iter`,
 is copied whole), copies a short loop test into a branch arm that
@@ -842,6 +914,27 @@ ret end` at the top of a recursive AST walk) tests that parameter before
   are built on Linux, run on a real machine of each kind, and the compiler
   built by the native backend for that machine reproduces the reference IR
   there and builds and runs programs with `--backend=native` itself.
+- Those native-built compilers are kept for internal use (they are not
+  releases). `tools/bash/package-native.sh` lays one out like a release
+  archive (`salam`, `std/`, a `BUILD.txt` naming the commit, and for Windows the mingw-w64 or llvm-mingw
+  runtime under `sysroots/`) as `salam-native-<platform>.tar.gz`, and
+  `tools/bash/native-package-check.sh <tarball>` unpacks it into an empty
+  folder and, with `SALAM_STD` unset, builds and runs a few tests with
+  `--backend=native`, among them the TCP and HTTP loopback tests and the TLS
+  self-test. The gate does this on the real machine for `linux-x64` (a static
+  musl build), `linux-arm64`, `macos-arm64`, `macos-x64`, `windows-x64` and
+  `windows-arm64`, and on pushes to `main` and manual runs it uploads each
+  package that passed as the workflow artifact `salam-native-<platform>`,
+  kept for 14 days.
+- `tools/bash/native-compile-report.sh <salam>` builds the compiler and a few
+  large tests with `--backend=native` and with `--backend=llvm` and prints a
+  Markdown table of build times and executable sizes; the gate's `linux` job
+  adds it to its run summary. Without in-process LLVM, `--backend=llvm` hands
+  the IR to the `clang` on `PATH`. It fails only on gross regressions,
+  measured on the totals as native over LLVM ratios, so machine speed cancels
+  out: more than `NATIVE_REPORT_MAX_TIME_RATIO` (0.6) of LLVM's build time or
+  `NATIVE_REPORT_MAX_SIZE_RATIO` (1.5) of its size. `NATIVE_REPORT_RUNS`
+  repeats each build and keeps the fastest.
 - `tools/bash/native-encoder-check.sh <salam> <files...>` checks the encoder:
   it assembles the `--emit-asm` listing with GNU `as` and compares the result
   with the object nativegen wrote, instruction by instruction.
@@ -852,10 +945,14 @@ ret end` at the top of a recursive AST walk) tests that parameter before
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing, and a comma-separated list dumps several functions.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,loopinl,cpelim,tord,vrev,cdown,tfold,mexit,sqself,vsign,redinv,ldcmp,phix,selinc,wweb,wwdep,wwtr,tdup,padjmp,dtst,zins,ndiv,niv,cmp64,adc64,rvc,avx2`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,loopinl,cpelim,tord,vrev,cdown,tfold,mexit,sqself,vsign,redinv,ldcmp,phix,selinc,wweb,wwdep,wwtr,tdup,padjmp,dtst,zins,ndiv,niv,cmp64,adc64,rvc,avx2,rasp,hotpath,inlnest,spromo,ypack,ysum`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
-  `split` the loop live-range splitting in the allocator.
+  `split` the loop live-range splitting in the allocator and `rasp` the
+  splitting of a value's range between registers and its stack slot. `hotpath` is the
+  partial inlining through `.cold` functions, `inlnest` the second inlining
+  round for calls that came in with an inlined body, and `spromo` the
+  promotion of fields the loop writes.
 - `SALAM_NG_OFF_RANGE=lo:hi` limits `SALAM_NG_OFF` to the functions compiled
   in that range (1-based, in compile order), and `SALAM_NG_OFF_BASE` names
   passes to turn off everywhere. Halving the range finds the one function a
@@ -867,7 +964,9 @@ ret end` at the top of a recursive AST walk) tests that parameter before
   `SALAM_NG_LIST=1` prints every function with its compile index.
 - `SALAM_NG_INLTRACE=1` prints why the inliner kept a call: callee too big
   (`skip`, with its cost and limit), not cached yet, caller over its growth
-  budget (`grown`), or a call-site bonus too small (`need`).
+  budget (`grown`), or a call-site bonus too small (`need`). Lines starting
+  with `hotpath` show where a callee was split for partial inlining, and
+  `spromo` the loops whose fields were promoted.
   `SALAM_NG_INL_MAX=n` overrides the base inline limit for experiments.
 - `SALAM_NG_VERIFY=1` checks after optimization that every instruction's
   operands are defined in a block that dominates it, and fails the build
@@ -1064,9 +1163,9 @@ Not there yet:
   reductions are not reordered, since that would change the rounding of the
   result, unless the program is built with `--fast-math`, which lets float
   add reductions run in vector lanes too (and gives LLVM `reassoc nsz`).
-  AVX2 is opt-in (`--cpu=x86-64-v3`) and only the loop vectorizer uses
-  it: the SLP and sum-reduction vectorizers, and loops that widen, narrow,
-  count bytes or reverse, stay at 128 bits. There is no AVX-512 or FMA code,
+  AVX2 is opt-in (`--cpu=x86-64-v3`) and the loop, SLP and sum-reduction
+  vectorizers use it; loops that widen, narrow, count bytes or reverse stay
+  at 128 bits. There is no AVX-512 or FMA code,
   no 64-bit ordered compare even with AVX2, and no runtime dispatch, so a
   build is either baseline everywhere or needs AVX2 everywhere.
 - The built-in linker (see `NATIVE_LINKER.md`) links every supported

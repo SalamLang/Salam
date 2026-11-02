@@ -1,0 +1,868 @@
+package nativegen
+
+func rs_flag_reader(g &: Ng, k: int): bool:
+    op := g.mc.op[k]
+    if op == M_JCC or op == M_CMOV or op == M_SETCC:
+        ret true
+    end
+    if op == M_ALU_RR or op == M_ALU_RI or op == M_ALU_RM or op == M_ALU_MR or op == M_ALU_MI:
+        c := g.mc.cc[k]
+        ret c == ALU_SBB or c == ALU_ADC or c == ALU_SBBCMP or c == ALU_ADDCMP
+    end
+    ret false
+end
+
+func rs_use_free(g &: Ng, i: int, u: int): bool:
+    op := g.mc.op[i]
+    if (op == M_COPY or op == M_FMOV_RR) and g.mc.r1[i] == u and g.mc.r0[i] != u:
+        ret true
+    end
+    if op == M_ALU_RR and g.mc.mk[i] == MK_NONE and g.mc.r1[i] == u and g.mc.r0[i] != u and g.mc.vcls[u] == 0:
+        ret g.arch == NG_ARCH_X64 or g.arch == NG_ARCH_X86
+    end
+    ret false
+end
+
+func rs_init(g &: Ng, ra &: Ra):
+    n := g.mc.op.len()
+    nb := g.b_first.len()
+    nv := g.mc.vcls.len()
+    ra.legal.clear()
+    ra.blk_of.clear()
+    repeat n:
+        ra.legal.push(true)
+        ra.blk_of.push(0 - 1)
+    end
+    mut lpos := Vector {} as Vector<int>
+    repeat g.mc.nlabels + 1:
+        lpos.push(0 - 1)
+    end
+    repeat n in i:
+        if g.mc.op[i] == M_LABEL and g.mc.tgt[i] >= 0 and g.mc.tgt[i] < lpos.len():
+            lpos[g.mc.tgt[i]] = i
+        end
+    end
+    each b in g.mc.lorder:
+        bs := g.mc.bstart[b]
+        be := g.mc.bend[b]
+        if bs < 0:
+            continue
+        end
+        mut firstj := 0 - 1
+        mut k := bs
+        until k < be:
+            ra.blk_of[k] = b
+            if rs_flag_reader(g, k):
+                ra.legal[k] = false
+            end
+            if firstj >= 0 and k > firstj:
+                ra.legal[k] = false
+            end
+            op := g.mc.op[k]
+            if op == M_JMP or op == M_JCC:
+                t := g.mc.tgt[k]
+                if t >= 0 and t < nb:
+                    if firstj < 0:
+                        firstj = k
+                    end
+                else t >= 0 and t < lpos.len() and lpos[t] >= 0:
+                    l := lpos[t]
+                    lo := l < k ? l : k
+                    hi := l < k ? k : l
+                    mut q := lo + 1
+                    until q <= hi:
+                        ra.legal[q] = false
+                        q += 1
+                    end
+                else:
+                    ra.rs_on = false
+                end
+            end
+            k += 1
+        end
+    end
+    lpos.free()
+    ra.par.clear()
+    ra.psp.clear()
+    ra.pnx.clear()
+    ra.hasstk.clear()
+    ra.or0.clear()
+    ra.orn.clear()
+    repeat nv in v:
+        ra.par.push(v)
+        ra.psp.push(0)
+        ra.pnx.push(0 - 1)
+        ra.hasstk.push(false)
+        ra.or0.push(0 - 1)
+        ra.orn.push(0)
+    end
+    ra.nsplit = 0
+    ra.maxsplit = 4 * nv + 256
+    ra.nv0 = nv
+end
+
+func rs_build_occ(g &: Ng, ra &: Ra):
+    nv := g.mc.vcls.len()
+    ra.u0.clear()
+    ra.un.clear()
+    repeat nv:
+        ra.u0.push(0)
+        ra.un.push(0)
+    end
+    each v in ra.ov:
+        ra.un[v] = ra.un[v] + 1
+    end
+    mut s := 0
+    repeat nv in v2:
+        ra.u0[v2] = s
+        s += ra.un[v2]
+    end
+    ra.upos.clear()
+    ra.ucum.clear()
+    ra.tmp.clear()
+    mut uw := Vector {} as Vector<int>
+    repeat s:
+        ra.upos.push(0)
+        uw.push(0)
+    end
+    repeat nv in v3:
+        ra.tmp.push(ra.u0[v3])
+    end
+    repeat ra.ov.len() in k:
+        v4 := ra.ov[k]
+        c := ra.tmp[v4]
+        ra.upos[c] = ra.opos[k]
+        uw[c] = ra.ow[k]
+        ra.tmp[v4] = c + 1
+    end
+    ra.ucum.push(0)
+    repeat s in k2:
+        ra.ucum.push(ra.ucum[k2] + uw[k2])
+    end
+    uw.free()
+    ra.ov.clear()
+    ra.opos.clear()
+    ra.ow.clear()
+end
+
+func rs_occ_first(ra &: Ra, pv: int, p: int): int:
+    mut lo := ra.u0[pv]
+    mut hi := lo + ra.un[pv]
+    until lo < hi:
+        mid := (lo + hi) / 2
+        if ra.upos[mid] < p:
+            lo = mid + 1
+        else:
+            hi = mid
+        end
+    end
+    ret lo
+end
+
+func rs_wsum(ra &: Ra, pv: int, lo: int, hi: int): int:
+    a := rs_occ_first(ra, pv, lo)
+    b := rs_occ_first(ra, pv, hi + 1)
+    ret ra.ucum[b] - ra.ucum[a]
+end
+
+func rs_nuses(ra &: Ra, pv: int, lo: int, hi: int, need: int, weighted: bool): bool:
+    lim := ra.u0[pv] + ra.un[pv]
+    mut k := rs_occ_first(ra, pv, lo)
+    mut c := 0
+    mut last := 0 - 1
+    until k < lim and ra.upos[k] <= hi:
+        p := ra.upos[k]
+        w := ra.ucum[k + 1] - ra.ucum[k]
+        if p % 2 == 0 and p != last and w > 0:
+            c += weighted ? w : 1
+            last = p
+            if c >= need:
+                ret true
+            end
+        end
+        k += 1
+    end
+    ret false
+end
+
+func rs_need(g &: Ng, ra &: Ra, v: int): int:
+    if ra.par[v] == v:
+        ret 2
+    end
+    spos := ra.psp[v]
+    if ra.v_rn[v] == 0 or ra.rg_s[ra.v_r0[v]] != spos:
+        ret 1
+    end
+    b := ra.blk_of[spos / 2]
+    w := b >= 0 ? g.b_wt[b] : 1
+    ret w * 3
+end
+
+func rs_ok(g &: Ng, ra &: Ra, x: int): bool:
+    if not ra.rs_on or ra.nsplit >= ra.maxsplit or x >= ra.par.len():
+        ret false
+    end
+    pv := ra.par[x]
+    ret not g.mc.vwide[pv] and not g.mc.vymm[pv] and pv < ra.un.len() and ra.un[pv] > 0
+end
+
+func rs_new_child(g &: Ng, ra &: Ra, x: int, p: int): int:
+    pv := ra.par[x]
+    r0 := ra.v_r0[x]
+    n := ra.v_rn[x]
+    mut k := 0
+    until k < n and ra.rg_e[r0 + k] < p:
+        k += 1
+    end
+    if k >= n or p <= g.mc.vstart[x]:
+        ret 0 - 1
+    end
+    if ra.or0[pv] < 0:
+        ra.or0[pv] = ra.rg_s.len()
+        ra.orn[pv] = ra.v_rn[pv]
+        repeat ra.v_rn[pv] in q0:
+            ra.rg_s.push(ra.rg_s[ra.v_r0[pv] + q0])
+            ra.rg_e.push(ra.rg_e[ra.v_r0[pv] + q0])
+        end
+    end
+    c := vnew(g, g.mc.vcls[pv])
+    g.mc.vhint[c] = g.mc.vhint[pv]
+    g.mc.vphint[c] = g.mc.vphint[pv]
+    g.mc.vstart.push(0)
+    g.mc.vend.push(0)
+    cs := ra.rg_s.len()
+    first := r0 + k
+    if ra.rg_s[first] < p:
+        ra.rg_s.push(p)
+    else:
+        ra.rg_s.push(ra.rg_s[first])
+    end
+    ra.rg_e.push(ra.rg_e[first])
+    mut q := first + 1
+    until q < r0 + n:
+        ra.rg_s.push(ra.rg_s[q])
+        ra.rg_e.push(ra.rg_e[q])
+        q += 1
+    end
+    if ra.rg_s[first] < p:
+        ra.rg_e[first] = p - 1
+        ra.v_rn[x] = k + 1
+    else:
+        ra.v_rn[x] = k
+    end
+    if ra.v_rc[x] > r0 + ra.v_rn[x]:
+        ra.v_rc[x] = r0 + ra.v_rn[x]
+    end
+    ra.v_r0.push(cs)
+    ra.v_rn.push(ra.rg_s.len() - cs)
+    ra.v_rc.push(cs)
+    g.mc.vstart[c] = ra.rg_s[cs]
+    g.mc.vend[c] = ra.rg_e[ra.rg_s.len() - 1]
+    g.mc.vend[x] = ra.rg_e[r0 + ra.v_rn[x] - 1]
+    ra.nuse.push(rs_wsum(ra, pv, g.mc.vstart[c], g.mc.vend[c]))
+    ra.nuse[x] = rs_wsum(ra, pv, g.mc.vstart[x], g.mc.vend[x])
+    ra.par.push(pv)
+    ra.psp.push(p)
+    ra.pnx.push(ra.pnx[x])
+    ra.pnx[x] = c
+    ra.hasstk.push(false)
+    ra.or0.push(0 - 1)
+    ra.orn.push(0)
+    ra.nsplit += 1
+    ret c
+end
+
+func rs_spill_piece(g &: Ng, ra &: Ra, x: int):
+    pv := ra.par[x]
+    g.mc.vloc[x] = 0 - 1
+    if g.mc.vslot[pv] < 0:
+        keep := g.mc.vloc[pv]
+        spill_vreg(g, pv)
+        if pv != x:
+            g.mc.vloc[pv] = keep
+        end
+    end
+    g.mc.vslot[x] = g.mc.vslot[pv]
+    ra.hasstk[pv] = true
+end
+
+func rs_best_pos(g &: Ng, ra &: Ra, lo: int, hi: int): int:
+    if hi < lo:
+        ret 0 - 1
+    end
+    klo := (lo + 1) / 2
+    mut k := hi / 2
+    mut best := 0 - 1
+    mut bw := RA_INF
+    mut nblk := 0
+    until k >= klo and nblk < 64:
+        b := ra.blk_of[k]
+        if b < 0:
+            k -= 1
+            continue
+        end
+        bs := g.mc.bstart[b]
+        mut kk := k
+        until kk >= klo and kk >= bs and not ra.legal[kk]:
+            kk -= 1
+        end
+        if kk >= klo and kk >= bs and ra.legal[kk]:
+            w := g.b_wt[b]
+            if w < bw:
+                bw = w
+                best = 2 * kk
+            end
+        end
+        k = bs - 1
+        nblk += 1
+    end
+    ret best
+end
+
+func rs_heap_less(g &: Ng, ra &: Ra, a: int, b: int): bool:
+    sa := g.mc.vstart[ra.heap[a]]
+    sb := g.mc.vstart[ra.heap[b]]
+    if sa != sb:
+        ret sa < sb
+    end
+    ret ra.heap[a] < ra.heap[b]
+end
+
+func rs_heap_swap(ra &: Ra, a: int, b: int):
+    t := ra.heap[a]
+    ra.heap[a] = ra.heap[b]
+    ra.heap[b] = t
+end
+
+func rs_push(g &: Ng, ra &: Ra, x: int):
+    ra.heap.push(x)
+    mut i := ra.heap.len() - 1
+    until i > 0:
+        p := (i - 1) / 2
+        if not rs_heap_less(g, ra, i, p):
+            break
+        end
+        rs_heap_swap(ra, i, p)
+        i = p
+    end
+end
+
+func rs_pop(g &: Ng, ra &: Ra): int:
+    top := ra.heap[0]
+    last := ra.heap.pop()
+    if ra.heap.len() > 0:
+        ra.heap[0] = last
+        mut i := 0
+        n := ra.heap.len()
+        until 2 * i + 1 < n:
+            l := 2 * i + 1
+            r := l + 1
+            mut m := i
+            if rs_heap_less(g, ra, l, m):
+                m = l
+            end
+            if r < n and rs_heap_less(g, ra, r, m):
+                m = r
+            end
+            if m == i:
+                break
+            end
+            rs_heap_swap(ra, i, m)
+            i = m
+        end
+    end
+    ret top
+end
+
+func rs_spill_rest(g &: Ng, ra &: Ra, x: int, pos: int):
+    if g.mc.vstart[x] > pos:
+        g.mc.vloc[x] = 0 - 1
+        rs_push(g, ra, x)
+        ret
+    end
+    pv := ra.par[x]
+    lim := ra.u0[pv] + ra.un[pv]
+    mut k := rs_occ_first(ra, pv, pos + 1)
+    until k < lim and 2 * (ra.upos[k] / 2) <= pos:
+        k += 1
+    end
+    if k >= lim or ra.upos[k] > g.mc.vend[x] or ra.nsplit >= ra.maxsplit:
+        rs_spill_piece(g, ra, x)
+        ret
+    end
+    q := 2 * (ra.upos[k] / 2)
+    spos := rs_best_pos(g, ra, pos + 1, q)
+    if spos < 0:
+        rs_spill_piece(g, ra, x)
+        ret
+    end
+    z := rs_new_child(g, ra, x, spos)
+    rs_spill_piece(g, ra, x)
+    if z >= 0:
+        rs_push(g, ra, z)
+    end
+end
+
+func rs_cut(g &: Ng, ra &: Ra, a: int, pos: int):
+    spos := rs_best_pos(g, ra, g.mc.vstart[a] + 1, pos)
+    if spos < 0:
+        rs_spill_piece(g, ra, a)
+        ret
+    end
+    y := rs_new_child(g, ra, a, spos)
+    if y < 0:
+        rs_spill_piece(g, ra, a)
+        ret
+    end
+    if not rs_nuses(ra, ra.par[a], g.mc.vstart[a], spos - 1, ra.par[a] != a ? rs_need(g, ra, a) : 1, ra.par[a] != a):
+        rs_spill_piece(g, ra, a)
+    end
+    rs_spill_rest(g, ra, y, pos)
+end
+
+func rs_partial(g &: Ng, ra &: Ra, v: int, pos: int): bool:
+    cls := g.mc.vcls[v]
+    mut best := 0 - 1
+    mut fu := pos + 1
+    repeat 32 in r:
+        if reg_ok_for(g, r, cls) and ra.free_until[r] > fu:
+            fu = ra.free_until[r]
+            best = r
+        end
+    end
+    if best < 0:
+        ret false
+    end
+    pv := ra.par[v]
+    k := rs_occ_first(ra, pv, pos)
+    if k >= ra.u0[pv] + ra.un[pv] or ra.upos[k] >= fu:
+        ret false
+    end
+    mut lo := 2 * (ra.upos[k] / 2) + 2
+    if lo < pos + 1:
+        lo = pos + 1
+    end
+    spos := rs_best_pos(g, ra, lo, fu)
+    if spos < 0 or not rs_nuses(ra, pv, pos, spos - 1, rs_need(g, ra, v), ra.par[v] != v):
+        ret false
+    end
+    c := rs_new_child(g, ra, v, spos)
+    if c < 0:
+        ret false
+    end
+    g.mc.vloc[v] = best
+    ra.active.push(v)
+    rs_push(g, ra, c)
+    ret true
+end
+
+func rs_next_use(g &: Ng, ra &: Ra, v: int, pos: int): int:
+    pv := ra.par[v]
+    lim := ra.u0[pv] + ra.un[pv]
+    mut k := rs_occ_first(ra, pv, pos - 1)
+    until k < lim:
+        p := ra.upos[k]
+        if p > g.mc.vend[v]:
+            ret RA_INF
+        end
+        if p % 2 == 0 and p + 1 >= pos:
+            ret p
+        end
+        k += 1
+    end
+    ret RA_INF
+end
+
+func rs_finalize(g &: Ng, ra &: Ra):
+    nv := ra.nv0
+    ra.pc0.clear()
+    ra.pcn.clear()
+    ra.pcc.clear()
+    ra.pcs.clear()
+    ra.pcl.clear()
+    ra.pci.clear()
+    repeat nv:
+        ra.pc0.push(0)
+        ra.pcn.push(0)
+        ra.pcc.push(0)
+    end
+    mut v := VBASE
+    until v < nv:
+        if ra.pnx[v] < 0:
+            v += 1
+            continue
+        end
+        c0 := vnew(g, g.mc.vcls[v])
+        g.mc.vloc[c0] = g.mc.vloc[v]
+        g.mc.vslot[c0] = g.mc.vslot[v]
+        g.mc.vstart.push(g.mc.vstart[v])
+        g.mc.vend.push(g.mc.vend[v])
+        ra.v_r0.push(ra.v_r0[v])
+        ra.v_rn.push(ra.v_rn[v])
+        ra.v_rc.push(ra.v_r0[v])
+        ra.nuse.push(ra.nuse[v])
+        ra.par.push(v)
+        ra.psp.push(0)
+        ra.pnx.push(ra.pnx[v])
+        ra.hasstk.push(false)
+        ra.or0.push(0 - 1)
+        ra.orn.push(0)
+        ra.pc0[v] = ra.pcs.len()
+        ra.pcc[v] = ra.pcs.len()
+        ra.pcs.push(0)
+        ra.pcl.push(g.mc.vloc[v])
+        ra.pci.push(c0)
+        mut c := ra.pnx[v]
+        until c >= 0:
+            ra.pcs.push(ra.psp[c])
+            ra.pcl.push(g.mc.vloc[c])
+            ra.pci.push(c)
+            c = ra.pnx[c]
+        end
+        ra.pcn[v] = ra.pcs.len() - ra.pc0[v]
+        g.mc.vloc[v] = 0 - 1
+        g.mc.vstart[v] = 0 - 1
+        g.mc.vend[v] = 0 - 1
+        ra.v_r0[v] = ra.or0[v]
+        ra.v_rn[v] = ra.orn[v]
+        v += 1
+    end
+end
+
+func rs_is_split(ra &: Ra, v: int): bool:
+    ret v >= VBASE and v < ra.pcn.len() and ra.pcn[v] > 0
+end
+
+func rs_loc(ra &: Ra, v: int, pos: int): int:
+    mut lo := ra.pc0[v]
+    mut hi := lo + ra.pcn[v]
+    until hi - lo > 1:
+        mid := (lo + hi) / 2
+        if ra.pcs[mid] <= pos:
+            lo = mid
+        else:
+            hi = mid
+        end
+    end
+    ret ra.pcl[lo]
+end
+
+func rs_set(g &: Ng, ra &: Ra, x: int, i: int):
+    if not rs_is_split(ra, x):
+        ret
+    end
+    mut c := ra.pcc[x]
+    lim := ra.pc0[x] + ra.pcn[x]
+    until c + 1 < lim and ra.pcs[c + 1] <= 2 * i:
+        c += 1
+    end
+    ra.pcc[x] = c
+    g.mc.vloc[x] = ra.pcl[c]
+end
+
+func rs_add_move(ra &: Ra, heads &: Vector<int>, k: int, v: int, src: int, dst: int):
+    ra.mv_v.push(v)
+    ra.mv_src.push(src)
+    ra.mv_dst.push(dst)
+    ra.mv_next.push(heads[k])
+    heads[k] = ra.mv_v.len() - 1
+end
+
+func rs_branches_to(g &: Ng, p: int, s: int, skip: int): bool:
+    mut k := g.mc.bstart[p]
+    until k < g.mc.bend[p]:
+        op := g.mc.op[k]
+        if k != skip and (op == M_JMP or op == M_JCC) and g.mc.tgt[k] == s:
+            ret true
+        end
+        k += 1
+    end
+    ret false
+end
+
+func rs_events(g &: Ng, ra &: Ra): bool:
+    n := g.mc.op.len()
+    nb := g.b_first.len()
+    nv := ra.nv0
+    ra.ev_a.clear()
+    ra.ev_b.clear()
+    ra.ev_c.clear()
+    ra.ev_d.clear()
+    repeat n + 1:
+        ra.ev_a.push(0 - 1)
+        ra.ev_b.push(0 - 1)
+        ra.ev_c.push(0 - 1)
+        ra.ev_d.push(0 - 1)
+    end
+    ra.mv_v.clear()
+    ra.mv_src.clear()
+    ra.mv_dst.clear()
+    ra.mv_next.clear()
+    mut nlive := Vector {} as Vector<int>
+    mut nxt := Vector {} as Vector<int>
+    repeat nb in b0:
+        mut c := 0
+        repeat g.b_npred[b0] in q0:
+            if g.mc.bstart[g.b_pred[g.b_ps[b0] + q0]] >= 0:
+                c += 1
+            end
+        end
+        nlive.push(c)
+        nxt.push(0 - 1)
+    end
+    mut prevb := 0 - 1
+    each lb in g.mc.lorder:
+        if g.mc.bstart[lb] >= 0:
+            if prevb >= 0:
+                nxt[prevb] = lb
+            end
+            prevb = lb
+        end
+    end
+    mut ok := true
+    mut v := VBASE
+    until v < nv and ok:
+        if not rs_is_split(ra, v):
+            v += 1
+            continue
+        end
+        repeat ra.pcn[v] - 1 in t:
+            q := ra.pc0[v] + t + 1
+            spos := ra.pcs[q]
+            k := spos / 2
+            if k >= n:
+                continue
+            end
+            b := ra.blk_of[k]
+            if b >= 0 and g.mc.bstart[b] == k:
+                continue
+            end
+            c := ra.pci[q]
+            if ra.v_rn[c] == 0 or ra.rg_s[ra.v_r0[c]] != spos:
+                continue
+            end
+            src := ra.pcl[q - 1]
+            dst := ra.pcl[q]
+            if dst >= 0 and src != dst:
+                rs_add_move(ra, ra.ev_b, k, v, src, dst)
+            end
+        end
+        mut h := ra.li_head[v]
+        until h >= 0 and ok:
+            s := ra.li_blk[h]
+            h = ra.li_next[h]
+            if g.mc.bstart[s] < 0:
+                continue
+            end
+            dst2 := rs_loc(ra, v, 2 * g.mc.bstart[s])
+            repeat g.b_npred[s] in qp:
+                p := g.b_pred[g.b_ps[s] + qp]
+                if g.mc.bstart[p] < 0:
+                    continue
+                end
+                src2 := rs_loc(ra, v, 2 * g.mc.bend[p] - 1)
+                if dst2 < 0 or src2 == dst2:
+                    continue
+                end
+                if s != 0 and nlive[s] == 1:
+                    rs_add_move(ra, ra.ev_d, g.mc.bstart[s], v, src2, dst2)
+                    continue
+                end
+                last := g.mc.bend[p] - 1
+                lop := g.mc.op[last]
+                if lop == M_JMP and g.mc.tgt[last] == s and not rs_branches_to(g, p, s, last):
+                    rs_add_move(ra, ra.ev_c, last, v, src2, dst2)
+                else lop != M_JMP and lop != M_RET and lop != M_UD2 and nxt[p] == s and not rs_branches_to(g, p, s, 0 - 1):
+                    rs_add_move(ra, ra.ev_a, g.mc.bend[p], v, src2, dst2)
+                else:
+                    ok = false
+                end
+            end
+        end
+        v += 1
+    end
+    nlive.free()
+    nxt.free()
+    ret ok
+end
+
+func rs_emit(g &: Ng, ra &: Ra, head: int):
+    if head < 0:
+        ret
+    end
+    mut ms := Vector {} as Vector<int>
+    mut md := Vector {} as Vector<int>
+    mut mvv := Vector {} as Vector<int>
+    mut h := head
+    until h >= 0:
+        if ra.mv_src[h] >= 0:
+            ms.push(ra.mv_src[h])
+            md.push(ra.mv_dst[h])
+            mvv.push(ra.mv_v[h])
+        end
+        h = ra.mv_next[h]
+    end
+    until ms.len() > 0:
+        mut done := 0 - 1
+        repeat ms.len() in a:
+            if done < 0:
+                mut read := false
+                repeat ms.len() in b:
+                    if b != a and ms[b] == md[a]:
+                        read = true
+                    end
+                end
+                if not read:
+                    done = a
+                end
+            end
+        end
+        if done >= 0:
+            fl := g.mc.vcls[mvv[done]] == 1
+            _m := e_rr(g, fl ? M_FMOV_RR : M_MOV_RR, 8, md[done], ms[done])
+            last := ms.len() - 1
+            ms[done] = ms[last]
+            md[done] = md[last]
+            mvv[done] = mvv[last]
+            _a := ms.pop()
+            _b := md.pop()
+            _c := mvv.pop()
+        else:
+            fl2 := g.mc.vcls[mvv[0]] == 1
+            sc := fl2 ? XMM15 : R11
+            _t := e_rr(g, fl2 ? M_FMOV_RR : M_MOV_RR, 8, sc, ms[0])
+            ms[0] = sc
+        end
+    end
+    mut h2 := head
+    until h2 >= 0:
+        if ra.mv_src[h2] < 0:
+            reload(g, ra.mv_v[h2], ra.mv_dst[h2])
+        end
+        h2 = ra.mv_next[h2]
+    end
+    ms.free()
+    md.free()
+    mvv.free()
+end
+
+func rs_def_store(g &: Ng, ra &: Ra, op: int, cc: int, r0: int):
+    if not rs_is_split(ra, r0) or not ra.hasstk[r0]:
+        ret
+    end
+    ph := g.mc.vloc[r0]
+    if ph < 0 or not is_def_slot(op, cc):
+        ret
+    end
+    n := g.mc.op.len()
+    if n > 0 and (((g.mc.op[n - 1] == M_ST or g.mc.op[n - 1] == M_FST) and g.mc.r1[n - 1] == ph) or ((g.mc.op[n - 1] == M_LD or g.mc.op[n - 1] == M_FLD) and g.mc.r0[n - 1] == ph and g.mc.sz[n - 1] == 8)) and g.mc.mk[n - 1] == MK_FRAME and g.mc.mb[n - 1] == g.mc.vslot[r0] and g.mc.mi[n - 1] < 0 and g.mc.md[n - 1] == (0 as i64):
+        ret
+    end
+    spill_store(g, r0, ph)
+end
+
+func rs_save(g &: Ng, ra &: Ra):
+    ra.sv_slot.clear()
+    ra.sv_s.clear()
+    ra.sv_e.clear()
+    ra.sv_r0.clear()
+    ra.sv_rn.clear()
+    ra.sv_use.clear()
+    nv := g.mc.vcls.len()
+    repeat nv in v:
+        ra.sv_slot.push(g.mc.vslot[v])
+        ra.sv_s.push(g.mc.vstart[v])
+        ra.sv_e.push(g.mc.vend[v])
+        ra.sv_r0.push(ra.v_r0[v])
+        ra.sv_rn.push(ra.v_rn[v])
+        ra.sv_use.push(ra.nuse[v])
+    end
+    ra.sv_nfs = g.mc.fs_size.len()
+end
+
+func rs_reset(g &: Ng, ra &: Ra):
+    nv := ra.nv0
+    until g.mc.vcls.len() > nv:
+        _a := g.mc.vcls.pop()
+        _b := g.mc.vloc.pop()
+        _c := g.mc.vslot.pop()
+        _d := g.mc.vhint.pop()
+        _e := g.mc.vphint.pop()
+        _f := g.mc.vwide.pop()
+        _y := g.mc.vymm.pop()
+    end
+    until g.mc.vstart.len() > nv:
+        _g := g.mc.vstart.pop()
+        _h := g.mc.vend.pop()
+    end
+    until ra.v_r0.len() > nv:
+        _i := ra.v_r0.pop()
+        _j := ra.v_rn.pop()
+    end
+    until ra.nuse.len() > nv:
+        _k := ra.nuse.pop()
+    end
+    mut v := VBASE
+    until v < nv:
+        g.mc.vloc[v] = 0 - 1
+        g.mc.vslot[v] = ra.sv_slot[v]
+        g.mc.vstart[v] = ra.sv_s[v]
+        g.mc.vend[v] = ra.sv_e[v]
+        ra.v_r0[v] = ra.sv_r0[v]
+        ra.v_rn[v] = ra.sv_rn[v]
+        if ra.or0[v] >= 0:
+            ra.v_r0[v] = ra.or0[v]
+            ra.v_rn[v] = ra.orn[v]
+        end
+        ra.nuse[v] = ra.sv_use[v]
+        v += 1
+    end
+    until g.mc.fs_size.len() > ra.sv_nfs:
+        _l := g.mc.fs_size.pop()
+        _m := g.mc.fs_align.pop()
+        _n := g.mc.fs_off.pop()
+        _o := g.mc.fs_temp.pop()
+        _p := g.mc.fs_alias.pop()
+    end
+    ra.pcn.clear()
+    ra.rs_on = false
+end
+
+func rs_free(ra &: Ra):
+    ra.ov.free()
+    ra.opos.free()
+    ra.ow.free()
+    ra.u0.free()
+    ra.un.free()
+    ra.upos.free()
+    ra.ucum.free()
+    ra.par.free()
+    ra.psp.free()
+    ra.pnx.free()
+    ra.hasstk.free()
+    ra.or0.free()
+    ra.orn.free()
+    ra.legal.free()
+    ra.blk_of.free()
+    ra.heap.free()
+    ra.pc0.free()
+    ra.pcn.free()
+    ra.pcc.free()
+    ra.pcs.free()
+    ra.pcl.free()
+    ra.pci.free()
+    ra.ev_a.free()
+    ra.ev_b.free()
+    ra.ev_c.free()
+    ra.ev_d.free()
+    ra.mv_src.free()
+    ra.mv_dst.free()
+    ra.mv_v.free()
+    ra.mv_next.free()
+    ra.sv_slot.free()
+    ra.sv_s.free()
+    ra.sv_e.free()
+    ra.sv_r0.free()
+    ra.sv_rn.free()
+    ra.sv_use.free()
+end

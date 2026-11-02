@@ -809,7 +809,11 @@ The output is a PIE `MH_EXECUTE`:
 - Calls to imported functions go through a stub that jumps through a
   non-lazy `__got` slot; there is no lazy binding. GOT loads of local
   symbols point at a rebased slot.
-- `LC_DYLD_INFO_ONLY` carries the rebase and bind opcodes. `libSystem` is
+- The dyld fixups take one of two forms, chosen by the deployment target
+  (see "Mach-O fixups and universal binaries" below): chained fixups in
+  `LC_DYLD_CHAINED_FIXUPS` with the exports in `LC_DYLD_EXPORTS_TRIE` for
+  macOS 12 and later, or the rebase and bind opcodes of
+  `LC_DYLD_INFO_ONLY` for older systems. `libSystem` is
   always ordinal 1; every other library the program links becomes its own
   `LC_LOAD_DYLIB`, read from a text stub (`.tbd`, including multi-document
   stubs with reexported libraries) or a real dylib (its install name from
@@ -829,13 +833,65 @@ The output is a PIE `MH_EXECUTE`:
   `__.SYMDEF_64` index) as well as the GNU one; only the members that
   resolve a symbol are loaded.
 - `LC_SYMTAB`, `LC_DYSYMTAB` with the indirect symbol table for the stubs
-  and GOT, `LC_LOAD_DYLINKER`, `LC_UUID`, `LC_BUILD_VERSION` (macOS 11),
+  and GOT, `LC_LOAD_DYLINKER`, `LC_UUID`, `LC_BUILD_VERSION` (the
+  deployment target as both the minimum OS and the SDK version),
   `LC_MAIN`, `LC_LOAD_DYLIB`, `LC_DATA_IN_CODE` (jump tables inside
   `__text`) and `LC_CODE_SIGNATURE`.
 - An ad-hoc, linker-signed code signature: a SuperBlob with one
   CodeDirectory (version `0x20400`, SHA-256 of every 4 KiB page up to the
   signature, the executable segment marked as the main binary), which
   arm64 macOS requires before it runs anything.
+
+### Mach-O fixups and universal binaries
+
+The deployment target comes from the triple, as with clang
+(`arm64-apple-macos13`, `x86_64-apple-macos10.15`, `x86_64-apple-darwin21`),
+then from `MACOSX_DEPLOYMENT_TARGET`, and is macOS 12.0 when neither gives
+one. It is raised to 11.0 on arm64 and 10.14 on x86_64, the oldest systems
+`LC_BUILD_VERSION` describes for each.
+
+From macOS 12 on, the output uses chained fixups, the format Apple's linker
+writes for those systems (`nl_mochain.salam`). Every slot dyld must fix up
+(the GOT, pointers in `__DATA_CONST` and `__DATA`, the `__tlv_bootstrap`
+word of a thread-local descriptor) holds a `DYLD_CHAINED_PTR_64` entry
+instead of its value: a rebase keeps the target's address in its low 36 bits
+and its top byte in the next 8, a bind holds an index into the imports table
+and an addend of up to 255, and each entry gives the distance to the next
+fixup on its page in 4-byte strides, ending the chain with 0. The
+`LC_DYLD_CHAINED_FIXUPS` blob in `__LINKEDIT` has the header, the starts of
+the image (one entry per segment, `__PAGEZERO` and `__LINKEDIT` included),
+for each segment that has fixups its page size, pointer format, offset from
+the Mach header and the offset of the first fixup on each page
+(`0xFFFF` for a page without one), then the imports and their names. An
+import is a `DYLD_CHAINED_IMPORT` (library ordinal, weak flag, name offset),
+with the flat-lookup ordinal -2 stored as `0xFE`; when some addend does not
+fit the 8 bits of a bind, each (symbol, addend) pair gets its own
+`DYLD_CHAINED_IMPORT_ADDEND` instead. A pointer that is not 4-byte aligned
+cannot be chained and is an error that names it. The exports trie moves to
+`LC_DYLD_EXPORTS_TRIE`; an executable's trie holds `__mh_execute_header`.
+The rest of the file is laid out as before, and the code signature is still
+computed last, over the chained image. Targets before macOS 12 get the
+classic `LC_DYLD_INFO_ONLY` opcodes, in which a symbol referenced only weakly
+binds with the weak-import flag.
+
+`--target=universal-apple-macos` (with an optional version, such as
+`universal-apple-macos13`) builds a universal binary. The driver compiles and
+links the program once for `x86_64-apple-macos` and once for
+`arm64-apple-macos`, each a complete signed executable, then
+`nl_fat.salam` writes the fat header (`FAT_MAGIC`, big-endian `fat_arch`
+entries) with the x86_64 slice first at a 4 KiB boundary and the arm64 slice
+at a 16 KiB one, as `lipo` lays them out. Objects and libraries are built
+once per architecture; a universal target for them is an error. With
+`--backend=auto` a universal build uses the native backend.
+
+`tools/linker/machorun.py` and `machodylib.py` apply chained fixups as well
+as opcodes and take the x86_64 slice of a universal binary, so the x86_64
+programs still run on Linux. Checks done here: `llvm-objdump --macho
+--dyld-info` decodes every chain, and for each test the classic and chained
+links of one object list the same rebases and binds; the import tables and
+starts match what `ld64.lld -fixup_chains` writes; `llvm-lipo` reads the
+universal binaries. The native backend gate runs the test programs built
+both ways, and universal, on arm64 and Intel Macs.
 
 ### Testing phase 4
 
@@ -951,7 +1007,7 @@ The Mach-O writer produces `MH_DYLIB` at address 0, without `__PAGEZERO`,
 `@rpath/lib<name>.dylib` (the install name `cc -dynamiclib` gets from the
 driver) and `MH_NO_REEXPORTED_DYLIBS`. The exported symbols (not private
 externs, not archive members) go into an export trie, pointed to by
-`LC_DYLD_INFO_ONLY`, which is built as a radix tree and laid out until the
+`LC_DYLD_EXPORTS_TRIE` (or `LC_DYLD_INFO_ONLY` before macOS 12), which is built as a radix tree and laid out until the
 ULEB128 child offsets stop changing. Rebase and bind opcodes count segments
 from `__TEXT`, and the code signature does not carry the main-binary flag.
 `__mod_init_func` runs the library's initialiser as on Linux.

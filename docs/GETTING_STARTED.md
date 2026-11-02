@@ -343,7 +343,10 @@ Both backends build libraries. The C backend is the default; `--backend=llvm`
 (or a `--target` build with no cross `--cc`) produces the object with LLVM and
 links it with `cc -shared` (or archives it for `--lib=static`). A Windows DLL
 also gets `NAME.def` and, when `llvm-dlltool` is installed, an MSVC import
-library `NAME.lib`, next to the mingw `libNAME.dll.a`.
+library `NAME.lib`, next to the mingw `libNAME.dll.a`. With
+`--backend=native` and a Windows target the compiler's own linker writes the
+DLL and `libNAME.dll.a`, so no mingw `gcc` is needed, only the mingw-w64
+runtime files.
 
 The functions in the entry file's `export:` block become the library's C API,
 under their own names, and `NAME.h` is written next to the library with their

@@ -13,7 +13,9 @@
 # parse, the Pt struct must be in its type stream with area's p typed as it,
 # step must show up as an inline site in walk in a --release build,
 # and llvm-symbolizer must find walk's file and line through the PDB alone
-# once the DWARF sections are stripped.
+# once the DWARF sections are stripped. On i686 every procedure must also
+# have an S_FRAMEPROC and a frame data record that starts it, walk's at
+# walk's address.
 #
 # Usage: tools/bash/native-windows-debug-check.sh <salam>
 
@@ -151,6 +153,20 @@ for triple in x86_64-w64-windows-gnu i686-w64-windows-gnu; do
                 ! "$pdbutil" dump -symbols "$d/dbg.pdb" | grep -A1 'S_LOCAL .*`p`' | grep -q '(Pt)'; then
                 bad "$tag (the PDB has no Pt type, or area's p is not typed Pt)"
                 continue
+            fi
+            if [ "$triple" = i686-w64-windows-gnu ]; then
+                syms=$("$pdbutil" dump -symbols "$d/dbg.pdb")
+                nproc=$(echo "$syms" | grep -c 'S_[GL]PROC32 ')
+                nframe=$(echo "$syms" | grep -c 'S_FRAMEPROC ')
+                fpo=$("$pdbutil" dump -fpo "$d/dbg.pdb")
+                nfpo=$(echo "$fpo" | grep -c 'true | \$T0 \.raSearch = \$eip \$T0 ^ = \$esp \$T0 4 + = *$')
+                wat=$(echo "$syms" | grep -A1 'PROC32 .*`walk`' | sed -n 's/.*addr = 0001:\([0-9]*\).*/\1/p' | head -1)
+                tva=$(llvm-readobj --sections "$d/dbg.exe" | grep -A3 'Name: .text ' | sed -n 's/.*VirtualAddress: \(0x[0-9A-F]*\).*/\1/p')
+                if [ "$nproc" -eq 0 ] || [ "$nframe" -ne "$nproc" ] || [ "$nfpo" -ne "$nproc" ] || [ -z "$wat" ] || [ -z "$tva" ] ||
+                    ! echo "$fpo" | grep -q "^$(printf '%08X' $((tva + wat))) .* true | "; then
+                    bad "$tag ($nproc procedures, $nframe S_FRAMEPROC, $nfpo frame data starts, or none at walk)"
+                    continue
+                fi
             fi
             if ! (cd "$d" && SALAM_LINKER=$lk "$SALAM" build ../wd.salam --backend=native --release -g --target="$triple" --output=rel.exe --log-level=error >>log 2>&1) ||
                 ! "$pdbutil" dump -symbols "$d/rel.pdb" | grep -q 'inlinee = 0x[0-9A-F]* (step)'; then

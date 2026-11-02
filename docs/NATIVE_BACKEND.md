@@ -373,6 +373,22 @@ then goes through:
    bonus when the caller has at most 40 blocks (`image.BlendPixel` in a fill
    loop); bigger callers, such as an image codec's frame decoder, only grew
    and got slower with it.
+   A callee too big to inline whole may still be inlined in part. When a
+   function has a cheap, call-free common path that updates state and a
+   region that only some calls reach and that calls out (the body of a loop
+   that usually runs zero times, such as the flush loop of `audio.MsbWrite`,
+   or a buffer's grow path), the region is copied into a separate function
+   `<name>.cold` that takes the values live into it as arguments (up to six;
+   field addresses are recomputed inside instead of passed). A call in a loop
+   then inlines only the common path, which ends in a call to the cold
+   function where the region used to start. The original function is left
+   whole for its other callers, and a cold function is only compiled when
+   some call site uses it. In a caller of at most 40 blocks, calls that
+   arrive through an inlined body and sit in a loop get a second chance at
+   being inlined, whole or in part, so `MsbUnary` also brings in the bit read
+   its loop makes. The FLAC encoder and decoder in `audio_flac` run 8.7%
+   fewer instructions with both (206 million instead of 226 million; the LLVM
+   build runs 181 million).
 4. Tail recursion elimination. `ret f(x)` becomes a jump back to the top of
    the function, and so does `ret f(x) + y` or `ret f(x) * y` by carrying an
    accumulator, which removes one of the two calls in a recursive Fibonacci.
@@ -450,6 +466,15 @@ then goes through:
    the only writers in the loop are calls, such a load is still hoisted and
    reloaded right after each call, so a vector's data pointer stays in a
    register on the paths that do not call (the recursive `solve` in N-queens).
+   A field that the loop also writes is promoted too when every other
+   memory access in the loop provably touches something else (another field
+   at a known offset, another stack slot, a `malloc` result, or a
+   parameter's memory when the field lives in a stack slot) and the calls
+   in the loop are conditional (at most four): the field lives in a
+   register, is written back before each call and read again after it,
+   and is stored once on every edge that leaves the loop. The bit writer
+   that FLAC encoding keeps on its stack then keeps its accumulator and
+   bit count in registers while it writes a Rice code.
    A floating-point constant compared inside a loop is materialized once in
    the preheader, since `ucomisd` needs it in a register
    (`until zx * zx + zy * zy <= 4.0` in Mandelbrot), and so is a 64-bit
@@ -882,11 +907,14 @@ ret end` at the top of a recursive AST walk) tests that parameter before
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing, and a comma-separated list dumps several functions.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,loopinl,cpelim,tord,vrev,cdown,tfold,mexit,sqself,vsign,redinv,ldcmp,phix,selinc,wweb,wwdep,wwtr,tdup,padjmp,dtst,zins,ndiv,niv,cmp64,adc64,rvc,avx2,rasp`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,loopinl,cpelim,tord,vrev,cdown,tfold,mexit,sqself,vsign,redinv,ldcmp,phix,selinc,wweb,wwdep,wwtr,tdup,padjmp,dtst,zins,ndiv,niv,cmp64,adc64,rvc,avx2,rasp,hotpath,inlnest,spromo`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator and `rasp` the
-  splitting of a value's range between registers and its stack slot.
+  splitting of a value's range between registers and its stack slot. `hotpath` is the
+  partial inlining through `.cold` functions, `inlnest` the second inlining
+  round for calls that came in with an inlined body, and `spromo` the
+  promotion of fields the loop writes.
 - `SALAM_NG_OFF_RANGE=lo:hi` limits `SALAM_NG_OFF` to the functions compiled
   in that range (1-based, in compile order), and `SALAM_NG_OFF_BASE` names
   passes to turn off everywhere. Halving the range finds the one function a
@@ -898,7 +926,9 @@ ret end` at the top of a recursive AST walk) tests that parameter before
   `SALAM_NG_LIST=1` prints every function with its compile index.
 - `SALAM_NG_INLTRACE=1` prints why the inliner kept a call: callee too big
   (`skip`, with its cost and limit), not cached yet, caller over its growth
-  budget (`grown`), or a call-site bonus too small (`need`).
+  budget (`grown`), or a call-site bonus too small (`need`). Lines starting
+  with `hotpath` show where a callee was split for partial inlining, and
+  `spromo` the loops whose fields were promoted.
   `SALAM_NG_INL_MAX=n` overrides the base inline limit for experiments.
 - `SALAM_NG_VERIFY=1` checks after optimization that every instruction's
   operands are defined in a block that dominates it, and fails the build

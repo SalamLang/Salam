@@ -11,17 +11,40 @@ const CALL_MS = 30000;
 const LOGGER = `(() => {
   if (window.__salamLog) return;
   const log = (window.__salamLog = []);
-  const push = (level, text) => { if (log.length < 200) log.push(level + ": " + String(text).slice(0, 500)); };
-  for (const level of ["error", "warn"]) {
+  const net = (window.__salamNet = []);
+  const keep = (list, line) => { list.push(line); if (list.length > 300) list.shift(); };
+  const show = (x) => { try { return x instanceof Error ? x.stack || x.message : typeof x === "object" && x !== null ? JSON.stringify(x) : String(x); } catch { return String(x); } };
+  const push = (level, text) => keep(log, level + ": " + String(text).slice(0, 1000));
+  for (const level of ["log", "info", "debug", "warn", "error"]) {
     const orig = console[level].bind(console);
-    console[level] = (...a) => { push(level, a.map((x) => (x instanceof Error ? x.stack || x.message : typeof x === "object" ? JSON.stringify(x) : x)).join(" ")); orig(...a); };
+    console[level] = (...a) => { push(level === "warn" ? "warn" : level, a.map(show).join(" ")); orig(...a); };
   }
   addEventListener("error", (e) => {
     const t = e.target;
     if (t && t !== window && (t.src || t.href)) push("failed", (t.tagName || "").toLowerCase() + " " + (t.src || t.href));
     else push("exception", (e.message || "error") + (e.filename ? " at " + e.filename + ":" + e.lineno : ""));
   }, true);
-  addEventListener("unhandledrejection", (e) => push("exception", "unhandled rejection: " + (e.reason && (e.reason.stack || e.reason.message) || e.reason)));
+  addEventListener("unhandledrejection", (e) => push("exception", "unhandled rejection: " + show(e.reason)));
+  addEventListener("securitypolicyviolation", (e) => push("error", "CSP blocked " + e.blockedURI + " (" + e.violatedDirective + ")"));
+  const seenUrls = new Set();
+  const note = (entry) => {
+    if (seenUrls.has(entry.name + entry.startTime)) return;
+    seenUrls.add(entry.name + entry.startTime);
+    keep(net, "GET " + (entry.responseStatus || "-") + " " + entry.initiatorType + " " + entry.name.slice(0, 200) + " " + Math.round(entry.duration) + "ms");
+  };
+  try { new PerformanceObserver((l) => l.getEntries().forEach(note)).observe({ type: "resource", buffered: true }); } catch {}
+  const origFetch = window.fetch && window.fetch.bind(window);
+  if (origFetch) window.fetch = async (input, init) => {
+    const url = String(input && input.url ? input.url : input).slice(0, 200);
+    const method = (init && init.method) || (input && input.method) || "GET";
+    try { const r = await origFetch(input, init); if (r.status >= 400) push("failed", r.status + " " + method + " " + url); return r; }
+    catch (err) { keep(net, method + " failed fetch " + url + " " + show(err)); push("failed", method + " " + url + ": " + show(err)); throw err; }
+  };
+  const open = XMLHttpRequest.prototype.open;
+  XMLHttpRequest.prototype.open = function (method, url, ...rest) {
+    this.addEventListener("loadend", () => { keep(net, method + " " + (this.status || "failed") + " xhr " + String(url).slice(0, 200)); if (!this.status || this.status >= 400) push("failed", (this.status || "network error") + " " + method + " " + url); });
+    return open.call(this, method, url, ...rest);
+  };
 })()`;
 
 const OUTLINE = `(() => {
@@ -238,10 +261,14 @@ async function main() {
   cdp.on("Network.loadingFailed", (p) => {
     if (!p.canceled) problems.push(`failed: ${p.errorText} (${p.type})`);
   });
+  cdp.on("Log.entryAdded", (p) => {
+    if (live && (p.entry.level === "error" || p.entry.level === "warning")) problems.push(`${p.entry.level === "warning" ? "warn" : "error"} (${p.entry.source}): ${String(p.entry.text).slice(0, 500)}`);
+  });
   await cdp.send("Page.enable");
   await cdp.send("Runtime.enable");
   live = true;
   await cdp.send("Network.enable");
+  await cdp.send("Log.enable");
   await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: LOGGER });
   const mobile = state.width <= 500;
   await cdp.send("Emulation.setDeviceMetricsOverride", { width: state.width, height: state.height, deviceScaleFactor: 1, mobile });
@@ -335,7 +362,59 @@ async function main() {
     case "console": {
       const log = (await evaluate(cdp, "(() => { const l = (window.__salamLog || []).slice(); if (window.__salamLog) window.__salamLog.length = 0; return l; })()").catch(() => [])) || [];
       await evaluate(cdp, LOGGER).catch(() => {});
-      body = log.length ? `Console since the last check:\n- ${log.join("\n- ")}` : "Nothing in the console since the last check.";
+      body = log.length ? `Console since the last check (every level):\n- ${log.join("\n- ")}` : "Nothing in the console since the last check.";
+      break;
+    }
+    case "network": {
+      const list = (await evaluate(cdp, "(() => { const l = (window.__salamNet || []).slice(); if (window.__salamNet) window.__salamNet.length = 0; return l; })()").catch(() => [])) || [];
+      await evaluate(cdp, LOGGER).catch(() => {});
+      body = list.length ? `Requests since the last check (method, status, type, url, time):\n- ${list.join("\n- ")}` : "No requests since the last check.";
+      break;
+    }
+    case "hover": {
+      let x = Number(args.x);
+      let y = Number(args.y);
+      if (args.selector) {
+        const c = await evaluate(cdp, `(() => { const el = document.querySelector(${JSON.stringify(args.selector)}); if (!el) return null; el.scrollIntoView({block: "center"}); const r = el.getBoundingClientRect(); return {x: r.left + r.width / 2, y: r.top + r.height / 2}; })()`);
+        if (!c) finish(`No element matches ${args.selector}.`);
+        x = c.x;
+        y = c.y;
+      }
+      if (!Number.isFinite(x) || !Number.isFinite(y)) finish("hover needs a selector, or x and y.");
+      await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y });
+      await settle(500);
+      wantShot = true;
+      break;
+    }
+    case "select": {
+      if (!args.selector) finish("select needs the selector of a <select> and the option in text.");
+      const picked = await evaluate(cdp, `(() => { const el = document.querySelector(${JSON.stringify(args.selector)}); if (!el || !el.options) return "missing"; const want = ${JSON.stringify(String(args.text ?? ""))}; const opt = Array.from(el.options).find((o) => o.value === want || o.text.trim() === want); if (!opt) return "no option " + want + "; options: " + Array.from(el.options).map((o) => o.text.trim()).join(", "); el.value = opt.value; el.dispatchEvent(new Event("input", {bubbles: true})); el.dispatchEvent(new Event("change", {bubbles: true})); return "selected " + opt.text.trim(); })()`);
+      if (picked === "missing") finish(`No <select> matches ${args.selector}.`);
+      body = picked;
+      await settle(500);
+      wantShot = true;
+      break;
+    }
+    case "wait": {
+      if (!args.selector && !args.text) finish("wait needs a selector or a text to wait for.");
+      const limit = Math.min(Math.max(Number(args.wait_ms) || 10000, 100), 30000);
+      const probe = args.selector ? `(() => { const el = document.querySelector(${JSON.stringify(args.selector)}); if (!el) return false; const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; })()` : `(document.body ? document.body.innerText : "").includes(${JSON.stringify(String(args.text))})`;
+      const began = Date.now();
+      let found = false;
+      while (!found && Date.now() - began < limit) {
+        found = await evaluate(cdp, probe).catch(() => false);
+        if (!found) await sleep(200);
+      }
+      body = found ? `Found ${args.selector || JSON.stringify(args.text)} after ${Date.now() - began} ms.` : `Still not there after ${limit} ms: ${args.selector || JSON.stringify(args.text)}.`;
+      wantShot = !found;
+      break;
+    }
+    case "reload": {
+      const loaded = cdp.once("Page.loadEventFired", 20000);
+      await cdp.send("Page.reload", { ignoreCache: true });
+      await loaded;
+      await settle(1000);
+      wantShot = true;
       break;
     }
     case "back": {
@@ -347,7 +426,7 @@ async function main() {
       break;
     }
     default:
-      finish(`Unknown browser action ${action}. Use open, screenshot, click, type, press, scroll, eval, text, console, back or close.`);
+      finish(`Unknown browser action ${action}. Use open, screenshot, click, hover, type, press, select, scroll, wait, eval, text, console, network, reload, back or close.`);
   }
   const info = await evaluate(cdp, "({url: location.href, title: document.title})").catch(() => ({ url: "", title: "" }));
   let head = `${info.url}${status ? ` (${status})` : ""} "${info.title}"`;

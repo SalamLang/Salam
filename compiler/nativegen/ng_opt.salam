@@ -311,6 +311,45 @@ func fold_icmp(g &: Ng, i: int): bool:
     ret true
 end
 
+func zx_src(g &: Ng, v: int): int:
+    if v < 0 or g.v_kind[v] != VK_INS or not one_use(g, v):
+        ret 0 - 1
+    end
+    d := g.v_def[v]
+    if g.i_op[d] != OP_ZEXT or (g.i_x[d] != T_I8 and g.i_x[d] != T_I16):
+        ret 0 - 1
+    end
+    ret d
+end
+
+func zx_loaded(g &: Ng, v: int): bool:
+    ret v >= 0 and g.v_kind[v] == VK_INS and g.i_op[g.v_def[v]] == OP_LOAD and one_use(g, v)
+end
+
+func icmp_zext_narrow(g &: Ng, i: int): bool:
+    if g.arch != NG_ARCH_X64:
+        ret false
+    end
+    da := zx_src(g, g.i_a[i])
+    db := zx_src(g, g.i_b[i])
+    if da < 0 or db < 0 or g.i_x[da] != g.i_x[db]:
+        ret false
+    end
+    xa := g.i_a[da]
+    xb := g.i_a[db]
+    if not zx_loaded(g, xa) and not zx_loaded(g, xb):
+        ret false
+    end
+    mut p := g.i_x[i]
+    if p >= CC_SLT and p <= CC_SGE:
+        p += 4
+    end
+    g.i_x[i] = p
+    g.i_a[i] = xa
+    g.i_b[i] = xb
+    ret true
+end
+
 func fold_cast(g &: Ng, i: int): bool:
     op := g.i_op[i]
     a := g.i_a[i]
@@ -1685,6 +1724,9 @@ func fold_pass(g &: Ng, cfg_changed &: bool): bool:
                 end
                 if not ch and g.i_op[i] == OP_ICMP:
                     ch = icmp_add_one(g, i)
+                end
+                if not ch and not g.off_zxcmp and g.i_op[i] == OP_ICMP:
+                    ch = icmp_zext_narrow(g, i)
                 end
             else op >= OP_SEXT and op <= OP_FPTRUNC:
                 ch = fold_cast(g, i)

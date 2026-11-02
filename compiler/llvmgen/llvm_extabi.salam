@@ -1,0 +1,442 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package llvmgen
+
+import str
+
+include co "../sal_core.salam"
+include tok "../token.salam"
+include at "../ast.salam"
+include sm "../semantic/semantic.salam"
+
+const EXA_NONE := 0
+const EXA_SYSV := 1
+const EXA_WIN64 := 2
+const EXA_AARCH64 := 3
+
+const EXM_NONE := 0
+const EXM_REGS := 1
+const EXM_BYVAL := 2
+const EXM_COPY := 3
+
+struct ExArg:
+    pub mode: int = 0
+    pub size: int = 0
+    pub pieces: Vector<str> = Vector {}
+    pub offs: Vector<int> = Vector {}
+end
+
+func ex_host_arch(): str:
+    if SALAM_ARCH_X64:
+        ret "x86_64"
+    else SALAM_ARCH_ARM64:
+        ret "aarch64"
+    else:
+        ret ""
+    end
+end
+
+func ex_arch(v &: Lv): int:
+    if v.ptr_bits != 64:
+        ret EXA_NONE
+    end
+    arch := str.Len(v.triple) > 0 ? outbuf_arch(v) : ex_host_arch()
+    if str.Equals(arch, "x86_64") or str.Equals(arch, "amd64"):
+        if target_is_windows_of(v.triple):
+            ret EXA_WIN64
+        end
+        ret EXA_SYSV
+    end
+    if str.Equals(arch, "aarch64") or str.Equals(arch, "arm64"):
+        ret EXA_AARCH64
+    end
+    ret EXA_NONE
+end
+
+func ex_align_up(x: int, al: int): int:
+    ret (x + al - 1) / al * al
+end
+
+func ex_scalar_size(v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str): int:
+    if is_str(s, ts) or is_ptr_ts(ts):
+        ret 8
+    end
+    if str.Equals(ts, "f32"):
+        ret 4
+    end
+    if str.Equals(ts, "f64"):
+        ret 8
+    end
+    if is_int_ts(ts):
+        bits := int_bits(v, ts)
+        if bits < 8:
+            ret 1
+        end
+        ret bits / 8
+    end
+    esym := enum_sym(v, s, a, ts)
+    if esym != 0:
+        if sm.SymAt(s, esym).enum_val_kind == tok.TV_FLOAT:
+            ret 8
+        end
+        ret 4
+    end
+    ret 0 - 1
+end
+
+func ex_layout(v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str, align &: int): int:
+    if str.Len(ts) == 0:
+        ret 0 - 1
+    end
+    if is_slice(ts):
+        align = 8
+        ret 16
+    end
+    if is_array_ts(ts):
+        mut ea := 1
+        es := ex_layout(v, s, a, array_elem(ts), ea)
+        if es < 0:
+            ret 0 - 1
+        end
+        align = ea
+        ret es * (array_dim(ts) as int)
+    end
+    sc := ex_scalar_size(v, s, a, ts)
+    if sc >= 0:
+        align = sc
+        ret sc
+    end
+    ssym := struct_sym(v, s, a, ts)
+    if ssym == 0 or sm.SymAt(s, ssym).members == 0:
+        ret 0 - 1
+    end
+    syms := sm.ScopeAt(s, sm.SymAt(s, ssym).members).symbols
+    mut off := 0
+    mut mx := 1
+    repeat syms.len() in i:
+        f := sm.SymAt(s, syms.get(i))
+        if f.kind == sm.SYM_FIELD:
+            mut fa := 1
+            fs := ex_layout(v, s, a, sm.ToString(s, f.ty), fa)
+            if fs < 0:
+                ret 0 - 1
+            end
+            off = ex_align_up(off, fa) + fs
+            if fa > mx:
+                mx = fa
+            end
+        end
+    end
+    align = mx
+    ret ex_align_up(off, mx)
+end
+
+func ex_flat(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str, base: int, offs &: Vector<int>, cls &: Vector<int>, szs &: Vector<int>
+): bool:
+    if offs.len() > 64:
+        ret false
+    end
+    if is_slice(ts):
+        offs.push(base)
+        cls.push(1)
+        szs.push(8)
+        offs.push(base + 8)
+        cls.push(1)
+        szs.push(8)
+        ret true
+    end
+    if is_array_ts(ts):
+        mut ea := 1
+        es := ex_layout(v, s, a, array_elem(ts), ea)
+        if es < 0:
+            ret false
+        end
+        n := array_dim(ts) as int
+        repeat n in k:
+            if not ex_flat(v, s, a, array_elem(ts), base + k * es, offs, cls, szs):
+                ret false
+            end
+        end
+        ret true
+    end
+    sc := ex_scalar_size(v, s, a, ts)
+    if sc >= 0:
+        offs.push(base)
+        szs.push(sc)
+        if str.Equals(ts, "f32") or str.Equals(ts, "f64") or enum_backed_float(v, s, a, ts):
+            cls.push(sc == 4 ? 2 : 3)
+        else:
+            cls.push(1)
+        end
+        ret true
+    end
+    ssym := struct_sym(v, s, a, ts)
+    if ssym == 0 or sm.SymAt(s, ssym).members == 0:
+        ret false
+    end
+    syms := sm.ScopeAt(s, sm.SymAt(s, ssym).members).symbols
+    mut off := 0
+    repeat syms.len() in i:
+        f := sm.SymAt(s, syms.get(i))
+        if f.kind == sm.SYM_FIELD:
+            fts := sm.ToString(s, f.ty)
+            mut fa := 1
+            fs := ex_layout(v, s, a, fts, fa)
+            if fs < 0:
+                ret false
+            end
+            off = ex_align_up(off, fa)
+            if not ex_flat(v, s, a, fts, base + off, offs, cls, szs):
+                ret false
+            end
+            off += fs
+        end
+    end
+    ret true
+end
+
+func ex_int_width(n: int): int:
+    if n <= 1:
+        ret 1
+    end
+    if n == 2:
+        ret 2
+    end
+    if n <= 4:
+        ret 4
+    end
+    ret 8
+end
+
+func ex_sysv(v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str, size: int, r &: ExArg):
+    if size > 16:
+        r.mode = EXM_BYVAL
+        ret
+    end
+    mut offs := Vector {} as Vector<int>
+    mut cls := Vector {} as Vector<int>
+    mut szs := Vector {} as Vector<int>
+    if not ex_flat(v, s, a, ts, 0, offs, cls, szs):
+        ret
+    end
+    nb := (size + 7) / 8
+    repeat nb in eb:
+        mut has_int := false
+        mut nflt := 0
+        mut ndbl := 0
+        repeat offs.len() in k:
+            if offs.get(k) / 8 == eb:
+                if cls.get(k) == 1:
+                    has_int = true
+                else cls.get(k) == 2:
+                    nflt += 1
+                else:
+                    ndbl += 1
+                end
+            end
+        end
+        mut ln := size - eb * 8
+        if ln > 8:
+            ln = 8
+        end
+        mut piece := ""
+        if has_int or nflt + ndbl == 0:
+            piece = "i" + co.I64Toa((ex_int_width(ln) * 8) as i64)
+        else ndbl > 0:
+            piece = "double"
+        else nflt >= 2:
+            piece = "double"
+        else ln == 4:
+            piece = "float"
+        else:
+            piece = "double"
+        end
+        r.pieces.push(piece)
+        r.offs.push(eb * 8)
+    end
+    r.mode = EXM_REGS
+end
+
+func ex_aarch64(v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str, size: int, r &: ExArg):
+    if size <= 64:
+        mut offs := Vector {} as Vector<int>
+        mut cls := Vector {} as Vector<int>
+        mut szs := Vector {} as Vector<int>
+        if ex_flat(v, s, a, ts, 0, offs, cls, szs) and offs.len() >= 1 and offs.len() <= 4 and cls.get(0) != 1:
+            mut same := true
+            repeat cls.len() in k:
+                if cls.get(k) != cls.get(0):
+                    same = false
+                end
+            end
+            if same:
+                r.mode = EXM_REGS
+                r.pieces.push("[" + co.I64Toa(offs.len() as i64) + " x " + (cls.get(0) == 2 ? "float" : "double") + "]")
+                r.offs.push(0)
+                ret
+            end
+        end
+    end
+    if size > 16:
+        r.mode = EXM_COPY
+        ret
+    end
+    r.mode = EXM_REGS
+    r.pieces.push(size <= 8 ? "i64" : "[2 x i64]")
+    r.offs.push(0)
+end
+
+func ex_classify(v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str): ExArg:
+    mut r := ExArg {}
+    arch := ex_arch(v)
+    if arch == EXA_NONE or is_ptr_ts(ts) or is_slice(ts) or is_array_ts(ts) or struct_sym(v, s, a, ts) == 0:
+        ret r
+    end
+    mut al := 1
+    size := ex_layout(v, s, a, ts, al)
+    if size <= 0:
+        ret r
+    end
+    r.size = size
+    if arch == EXA_WIN64:
+        if size == 1 or size == 2 or size == 4 or size == 8:
+            r.mode = EXM_REGS
+            r.pieces.push("i" + co.I64Toa((size * 8) as i64))
+            r.offs.push(0)
+        else:
+            r.mode = EXM_COPY
+        end
+        ret r
+    end
+    if arch == EXA_SYSV:
+        ex_sysv(v, s, a, ts, size, r)
+        ret r
+    end
+    ex_aarch64(v, s, a, ts, size, r)
+    ret r
+end
+
+func ex_param_text(e: ExArg, lty: str): str:
+    if e.mode == EXM_REGS:
+        mut b := co.SbNew()
+        repeat e.pieces.len() in j:
+            if j > 0:
+                co.SbPuts(b, ", ")
+            end
+            co.SbPuts(b, e.pieces.get(j))
+        end
+        r := co.SbCstr(b)
+        co.SbFree(b)
+        ret r
+    end
+    if e.mode == EXM_BYVAL:
+        ret "ptr byval(" + lty + ") align 8"
+    end
+    ret "ptr"
+end
+
+func ex_ret_ty(e: ExArg): str:
+    if e.mode == EXM_REGS:
+        if e.pieces.len() == 1:
+            ret e.pieces.get(0)
+        end
+        ret "{ " + e.pieces.get(0) + ", " + e.pieces.get(1) + " }"
+    end
+    ret "void"
+end
+
+func ex_sret_param(e: ExArg, lty: str): str:
+    if e.mode == EXM_REGS:
+        ret ""
+    end
+    ret "ptr sret(" + lty + ") align 8"
+end
+
+func ex_slot(v &: Lv, size: int): str:
+    slot := new_tmp(v)
+    emit_alloca(v, slot + " = alloca [" + co.I64Toa(ex_align_up(size, 16) as i64) + " x i8], align 16")
+    ret slot
+end
+
+func ex_at(v &: Lv, slot: str, off: int): str:
+    if off == 0:
+        ret slot
+    end
+    p := new_tmp(v)
+    emit(v, p + " = getelementptr i8, ptr " + slot + ", i64 " + co.I64Toa(off as i64))
+    ret p
+end
+
+func ex_emit_arg(v &: Lv, ab &: str.StringBuilder, e: ExArg, lty: str, ref2: str):
+    if e.mode == EXM_REGS:
+        slot := ex_slot(v, e.size)
+        emit(v, "store " + lty + " " + ref2 + ", ptr " + slot)
+        repeat e.pieces.len() in j:
+            if j > 0:
+                co.SbPuts(ab, ", ")
+            end
+            p := ex_at(v, slot, e.offs.get(j))
+            x := new_tmp(v)
+            emit(v, x + " = load " + e.pieces.get(j) + ", ptr " + p)
+            co.SbPuts(ab, e.pieces.get(j) + " " + x)
+        end
+        ret
+    end
+    slot2 := new_tmp(v)
+    emit_alloca(v, slot2 + " = alloca " + lty + ", align 8")
+    emit(v, "store " + lty + " " + ref2 + ", ptr " + slot2)
+    if e.mode == EXM_BYVAL:
+        co.SbPuts(ab, "ptr byval(" + lty + ") align 8 " + slot2)
+    else:
+        co.SbPuts(ab, "ptr " + slot2)
+    end
+end
+
+func ex_emit_call(v &: Lv, s &: sm.Sema, a &: at.Ast, e: ExArg, rts: str, cc: str, fname: str, argsx: str): Llv:
+    lty := ty_of(v, s, a, rts)
+    res := new_tmp(v)
+    if e.mode == EXM_REGS:
+        slot := ex_slot(v, e.size)
+        rty := ex_ret_ty(e)
+        r := new_tmp(v)
+        emit(v, r + " = call" + cc + " " + rty + " " + gsym(fname) + "(" + argsx + ")")
+        if e.pieces.len() == 1:
+            emit(v, "store " + rty + " " + r + ", ptr " + slot)
+        else:
+            repeat e.pieces.len() in j:
+                x := new_tmp(v)
+                emit(v, x + " = extractvalue " + rty + " " + r + ", " + co.I64Toa(j as i64))
+                p := ex_at(v, slot, e.offs.get(j))
+                emit(v, "store " + e.pieces.get(j) + " " + x + ", ptr " + p)
+            end
+        end
+        emit(v, res + " = load " + lty + ", ptr " + slot)
+        ret make_llv(res, rts)
+    end
+    slot2 := new_tmp(v)
+    emit_alloca(v, slot2 + " = alloca " + lty + ", align 8")
+    mut full := ex_sret_param(e, lty) + " " + slot2
+    if str.Len(argsx) > 0:
+        full = full + ", " + argsx
+    end
+    emit(v, "call" + cc + " void " + gsym(fname) + "(" + full + ")")
+    emit(v, res + " = load " + lty + ", ptr " + slot2)
+    ret make_llv(res, rts)
+end
+
+func sig_is_extern(s &: sm.Sema, a &: at.Ast, sig: int): bool:
+    ret sig != 0 and sm.SigAt(s, sig).decl != 0 and at.Get(a, sm.SigAt(s, sig).decl).is_extern
+end

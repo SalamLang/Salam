@@ -1023,6 +1023,40 @@ if want db; then
     done
 fi
 
+if want raylib; then
+    RLCC=""
+    for c in tcc gcc cc clang; do
+        command -v "$c" >/dev/null 2>&1 && {
+            RLCC="$c"
+            break
+        }
+    done
+    rlok=0
+    rlmockc="tests/en/raylib/mock/raylib_mock.c"
+    if [ -n "$RLCC" ] && [ -f "$rlmockc" ] && command -v "$MOCK_AR" >/dev/null 2>&1; then
+        mkdir -p "$WORK/raylibwork"
+        if "$RLCC" -c -std=c11 "$rlmockc" -o "$WORK/raylibwork/raylib_mock.o" >/dev/null 2>&1 &&
+            "$MOCK_AR" rcs "$WORK/raylibwork/libraylib.a" "$WORK/raylibwork/raylib_mock.o" >/dev/null 2>&1; then
+            rlok=1
+        fi
+    fi
+    for lang in $LANGS; do
+        [ -d "tests/$lang/raylib" ] || continue
+        if [ "$rlok" = "1" ]; then
+            for f in tests/"$lang"/raylib/*.salam; do
+                [ -e "$f" ] || continue
+                name=$(basename "$f" .salam)
+                case "$name" in _*) continue ;; esac
+                exp="$(pick_expect "tests/$lang/raylib/$name")"
+                [ -f "$exp" ] || continue
+                add_job build "raylib/$lang/$name" "$f" "$lang" "$exp" "--libpath=$WORK/raylibwork"
+            done
+        else
+            note_result "SKIP raylib/$lang/* (no C compiler/ar to build the raylib mock)" "raylib/$lang/all"
+        fi
+    done
+fi
+
 if want opencv; then
     OCVCC=""
     for c in tcc gcc cc clang; do

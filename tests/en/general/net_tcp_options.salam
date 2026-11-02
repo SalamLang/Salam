@@ -1,0 +1,109 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import env
+import net.tcp
+import sync
+import tls
+
+const CERT := "tests/fixtures/ssl/server.crt"
+const KEY := "tests/fixtures/ssl/server.key"
+
+mut ready := sync.NewWaitGroup()
+mut port := 0
+
+func server():
+    srv := tcp.Bind(0)
+    port = tcp.Port(srv)
+    sync.Done(ready)
+    if not tcp.Ok(srv): ret end
+
+    c := tcp.Accept(srv)
+    if tcp.ConnOk(c):
+        tcp.Write(c, "echo:" + tcp.Read(c, 1024))
+        tcp.Write(c, "echo:" + tcp.Read(c, 1024))
+        tcp.Read(c, 1024)
+        tcp.Close(c)
+    end
+
+    scfg := tls.NewServerConfig(CERT, KEY)
+    repeat 2:
+        s := tcp.Accept(srv)
+        if tcp.ConnOk(s):
+            mut tc := tls.WrapServer(s.fd, scfg)
+            if tls.ConnOk(tc):
+                tls.Write(tc, "tls:" + tls.Read(tc, 1024))
+            end
+            tls.Close(tc)
+        end
+    end
+    tcp.CloseServer(srv)
+end
+
+func main:
+    sync.Add(ready, 1 as i64)
+    t := spawn(server)
+    sync.Wait(ready)
+
+    c := tcp.DialTimeout("127.0.0.1", port, 2000)
+    println tcp.ConnOk(c)
+    tcp.SetKeepAlive(c, true)
+    tcp.SetNoDelay(c, true)
+    tcp.SetWriteDeadline(c, 2000)
+    tcp.SetDeadline(c, 2000)
+
+    tcp.Write(c, "one")
+    println tcp.Read(c, 1024)
+
+    same := tcp.ConnFromFd(c.fd)
+    println same.fd == c.fd
+    println tcp.ConnOk(same)
+    tcp.Write(same, "two")
+    println tcp.Read(c, 1024)
+
+    mut pool := tcp.NewPool()
+    println tcp.PoolLen(pool)
+    tcp.Put(pool, "127.0.0.1", port, c, 1000 as i64)
+    println tcp.PoolLen(pool)
+    again := tcp.Get(pool, "127.0.0.1", port, 2000 as i64)
+    println again.fd == c.fd
+    println tcp.PoolLen(pool)
+
+    tcp.SetDeadline(again, 100)
+    println tcp.Read(again, 1024).len()
+    tcp.SetDeadline(again, 2000)
+    tcp.Write(again, "done")
+    tcp.Close(again)
+
+    plain := tcp.Dial("127.0.0.1", port)
+    mut cfg := tls.NewConfig("127.0.0.1")
+    cfg.ca_file = CERT
+    mut up := tcp.UpgradeTLS(plain, cfg)
+    println tls.ConnOk(up)
+    tls.Write(up, "upgraded")
+    println tls.Read(up, 1024)
+    tls.Close(up)
+    tcp.Close(plain)
+
+    env.Set("SSL_CERT_FILE", CERT)
+    mut dt := tcp.DialTLS("127.0.0.1", port)
+    println tls.ConnOk(dt)
+    tls.Write(dt, "dialed")
+    println tls.Read(dt, 1024)
+    tls.Close(dt)
+
+    join(t)
+end

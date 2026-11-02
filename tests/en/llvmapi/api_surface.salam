@@ -1,0 +1,192 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import llvm
+import io
+import os
+import str
+
+func has(text: str, needle: str): str:
+    if str.IndexFrom(text, needle, 0) >= 0:
+        ret "yes"
+    end
+    ret "no"
+end
+
+func main:
+    ctx := llvm.NewContext()
+    m := llvm.NewModule(ctx, "surface")
+    b := llvm.NewBuilder(ctx)
+    i1 := llvm.Int1Type(ctx)
+    i8 := llvm.Int8Type(ctx)
+    i16 := llvm.Int16Type(ctx)
+    i32 := llvm.Int32Type(ctx)
+    i64 := llvm.Int64Type(ctx)
+    flt := llvm.FloatType(ctx)
+    dbl := llvm.DoubleType(ctx)
+    void := llvm.VoidType(ctx)
+    ptr := llvm.PointerType(ctx)
+
+    counter := llvm.AddGlobal(m, i32, "counter")
+    llvm.SetInitializer(counter, llvm.ConstInt(i32, 7 as i64))
+    llvm.SetGlobalConstant(counter, true)
+    _table := llvm.AddGlobal(m, llvm.ArrayType(i8, 4 as i64), "table")
+
+    mut none := Vector {} as Vector<llvm.Type>
+    defer none.free()
+    bump_ty := llvm.FunctionType(void, none, false)
+    bump := llvm.AddFunction(m, "bump", bump_ty)
+    entry := llvm.AppendBlock(ctx, bump, "entry")
+    llvm.PositionAtEnd(b, entry)
+    println "insert block is entry:", llvm.InsertBlock(b).handle == entry.handle
+    slot := llvm.Alloca(b, i64, "slot")
+    llvm.Store(b, llvm.ConstInt(i64, 100 as i64), slot)
+    loaded := llvm.Load(b, i64, slot, "loaded")
+    quot := llvm.SDiv(b, loaded, llvm.ConstInt(i64, 7 as i64), "quot")
+    llvm.Store(b, quot, slot)
+    llvm.RetVoid(b)
+
+    mut dnone := Vector {} as Vector<llvm.Type>
+    defer dnone.free()
+    half_ty := llvm.FunctionType(dbl, dnone, false)
+    half := llvm.AddFunction(m, "half", half_ty)
+    hentry := llvm.AppendBlock(ctx, half, "entry")
+    llvm.PositionAtEnd(b, hentry)
+    llvm.Ret(b, llvm.ConstReal(dbl, 0.5))
+
+    mut main_params := Vector {} as Vector<llvm.Type>
+    defer main_params.free()
+    main_params.push(i32)
+    main_params.push(ptr)
+    main_ty := llvm.FunctionType(i32, main_params, false)
+    main_fn := llvm.AddFunction(m, "main", main_ty)
+    mentry := llvm.AppendBlock(ctx, main_fn, "entry")
+    llvm.PositionAtEnd(b, mentry)
+    llvm.Ret(b, llvm.Param(main_fn, 0))
+
+    println "named bump found:", llvm.NamedFunction(m, "bump").handle != null
+    println "named nope found:", llvm.NamedFunction(m, "nope").handle != null
+    println "unused types:", i1.handle != null, i16.handle != null, flt.handle != null
+
+    v := llvm.Verify(m)
+    println "verify:", v.ok
+    text := llvm.ModuleToString(m)
+    println "global constant:", has(text, "constant i32 7")
+    println "array global:", has(text, "[4 x i8]")
+    println "alloca:", has(text, "alloca i64")
+    println "sdiv:", has(text, "sdiv i64")
+    println "double ret:", has(text, "ret double 5.000000e-01")
+
+    llvm.InitTargets()
+    llvm.InitTargets()
+    llvm.SetTargetTriple(m, "x86_64-unknown-linux-gnu")
+    println "triple:", llvm.TargetTripleOf(m)
+    println "default triple set:", llvm.DefaultTriple().len() > 0
+
+    println "levels:", llvm.CodeGenLevelOf(llvm.OPT_O0), llvm.CodeGenLevelOf(llvm.OPT_O1), llvm.CodeGenLevelOf(llvm.OPT_O2), llvm.CodeGenLevelOf(llvm.OPT_O3)
+    println "pipelines:", llvm.PassPipelineOf(llvm.OPT_O0).len(), llvm.PassPipelineOf(llvm.OPT_O1), llvm.PassPipelineOf(llvm.OPT_O2), llvm.PassPipelineOf(llvm.OPT_O3)
+
+    tmr := llvm.NewTargetMachine("", llvm.OPT_O2, false)
+    if not tmr.ok:
+        println "no target machine: " + tmr.err
+        ret
+    end
+    llvm.SetTargetTriple(m, llvm.DefaultTriple())
+    llvm.ApplyDataLayout(m, tmr.tm)
+    println "datalayout applied:", has(llvm.ModuleToString(m), "target datalayout")
+
+    println "jobs ok:", llvm.ParallelJobs() >= 1
+    println "partitions ok:", llvm.ParallelPartitions(m, 2) >= 1
+
+    tmp := os.TempDir()
+    prefix := tmp + "/salam_llvmapi_surface_par"
+    pr := llvm.OptimizeEmitParallel(m, tmr.tm, llvm.OPT_O1, 2, prefix)
+    println "parallel emit:", pr.ok, pr.objects.len()
+    each o in pr.objects:
+        if os.Exists(o):
+            os.Remove(o)
+        end
+    end
+
+    bc_path := tmp + "/salam_llvmapi_surface.bc"
+    br := llvm.EmitBitcode(m, bc_path)
+    println "bitcode:", br.ok, os.Exists(bc_path)
+    os.Remove(bc_path)
+
+    ll_path := tmp + "/salam_llvmapi_surface.ll"
+    io.WriteFile(ll_path, text)
+    parsed := llvm.ParseIR(ll_path)
+    println "parse:", parsed.ok
+    if parsed.ok:
+        println "parsed main:", llvm.NamedFunction(parsed.mod, "main").handle != null
+        llvm.FreeModule(parsed.mod)
+        llvm.FreeContext(parsed.ctx)
+    end
+    bad := llvm.ParseIR(tmp + "/salam_llvmapi_surface_missing.ll")
+    println "parse missing:", bad.ok
+
+    mut jit_args := Vector {} as Vector<str>
+    defer jit_args.free()
+    jit_args.push("prog")
+    jit_args.push("one")
+    jit_args.push("two")
+    jr := llvm.RunJITArgs(ll_path, jit_args)
+    println "jit args:", jr.ok, jr.rc
+    os.Remove(ll_path)
+
+    obj_path := tmp + "/salam_llvmapi_surface.o"
+    exe_path := tmp + "/salam_llvmapi_surface.exe"
+    er := llvm.EmitObject(m, tmr.tm, obj_path)
+    println "object:", er.ok
+    opts := llvm.OptionsDefault()
+    println "options default:", opts.opt_level, opts.target_triple.len(), opts.sysroot.len()
+    lr := llvm.LinkExternal(obj_path, exe_path, opts)
+    println "link external:", lr.ok
+    os.Remove(obj_path)
+    os.Remove(exe_path)
+
+    mut wasi := llvm.OptionsDefault()
+    wasi.target_triple = "wasm32-unknown-wasi"
+    println "link wasi without sysroot:", llvm.LinkWasi("missing.o", "out.wasm", wasi).ok
+    mut elf := llvm.OptionsDefault()
+    elf.target_triple = "x86_64-unknown-linux-musl"
+    elf.sysroot = "no-such-sysroot"
+    println "link elf without sysroot:", llvm.LinkElf("missing.o", "out", elf).ok
+    mut mingw := llvm.OptionsDefault()
+    mingw.target_triple = "x86_64-unknown-linux-gnu"
+    println "link mingw wrong triple:", llvm.LinkMingw("missing.o", "out.exe", mingw).ok
+    println "auto no triple:", llvm.LinkAuto("missing.o", "out", llvm.OptionsDefault()).ok
+    mut mac := llvm.OptionsDefault()
+    mac.target_triple = "x86_64-apple-darwin"
+    println "auto darwin:", llvm.LinkAuto("missing.o", "out", mac).ok
+    mut auto_elf := llvm.OptionsDefault()
+    auto_elf.target_triple = "aarch64-unknown-linux-musl"
+    auto_elf.sysroot = "no-such-sysroot"
+    println "auto musl:", llvm.LinkAuto("missing.o", "out", auto_elf).ok
+
+    println "can link empty:", llvm.CanLinkTriple("")
+    println "can link darwin:", llvm.CanLinkTriple("x86_64-apple-darwin")
+    println "can link glibc:", llvm.CanLinkTriple("x86_64-unknown-linux-gnu")
+    println "can link mingw:", llvm.CanLinkTriple("x86_64-w64-mingw32") == llvm.LldAvailable()
+    println "can link musl:", llvm.CanLinkTriple("x86_64-unknown-linux-musl") == llvm.LldAvailable()
+    host := llvm.HostLinkTriple()
+    println "host link triple sane:", host.len() == 0 or has(host, "linux") == "yes" or has(host, "mingw") == "yes"
+
+    llvm.FreeTargetMachine(tmr.tm)
+    llvm.FreeBuilder(b)
+    llvm.FreeModule(m)
+    llvm.FreeContext(ctx)
+end

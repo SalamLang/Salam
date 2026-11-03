@@ -1,0 +1,211 @@
+package semantic
+
+import str
+
+include co "../sal_core.salam"
+include at "../ast.salam"
+include i18 "../i18n.salam"
+
+func tuple_field_name(i: int): str:
+    ret "f" + str.FromInt(i as i64)
+end
+
+func tuple_template(s &: Sema, a &: at.Ast, cnt: int): int:
+    if cnt < 2 or cnt > 8:
+        ret 0
+    end
+    sema_load_err_prelude(s, a)
+    if s.prelude_err == 0:
+        ret 0
+    end
+    ret scope_lookup_local(s, s.prelude_err, "Tuple" + str.FromInt(cnt as i64))
+end
+
+func tuple_arity_of(s &: Sema, t: int): int:
+    if t < 0 or s.prelude_err == 0 or ty_at(s, t).kind != TY_STRUCT:
+        ret 0
+    end
+    sy := ty_at(s, t).decl
+    if sy == 0:
+        ret 0
+    end
+    sv := sym_at(s, sy)
+    if sv.home != s.prelude_err or str.Len(sv.generic_base) != 6 or not str.StartsWith(sv.generic_base, "Tuple"):
+        ret 0
+    end
+    d := byte_at(sv.generic_base, 5) as int
+    if d < 50 or d > 56:
+        ret 0
+    end
+    ret d - 48
+end
+
+func tuple_instantiate(s &: Sema, a &: at.Ast, cnt: int, targs: Vector<int>, sp: co.SrcSpan): int:
+    tsym := tuple_template(s, a, cnt)
+    if tsym == 0 or sym_at(s, tsym).decl == 0:
+        serr(s, 1, sp, i18.Tr("a tuple needs between 2 and 8 elements and the 'core' package"))
+        ret sema_err_ty(s)
+    end
+    save_cur := s.cur
+    save_gp := s.gen_pkg
+    s.cur = s.prelude_err
+    s.gen_pkg = s.prelude_err
+    inst := g_instantiate_struct(s, a, sym_at(s, tsym).decl, targs, sp)
+    s.cur = save_cur
+    s.gen_pkg = save_gp
+    if inst == 0:
+        ret sema_err_ty(s)
+    end
+    ret sym_at(s, inst).ty
+end
+
+func check_tuple_lit(s &: Sema, a &: at.Ast, nid: int): int:
+    sp := span_of(a, nid)
+    exp := s.expected
+    s.expected = TYPE_NONE
+    cnt := at.ChildCount(a, nid)
+    if tuple_template(s, a, cnt) == 0:
+        serr(s, 1, sp, i18.Tr("a tuple needs between 2 and 8 elements"))
+        ret sema_decorate(s, a, nid, sema_err_ty(s))
+    end
+    mut kids := Vector {} as Vector<int>
+    defer kids.free()
+    repeat cnt in i:
+        kids.push(at.Child(a, nid, i))
+    end
+    mut exp_sym := 0
+    if tuple_arity_of(s, exp) == cnt:
+        exp_sym = ty_at(s, exp).decl
+    end
+    mut ets := Vector {} as Vector<int>
+    defer ets.free()
+    if exp_sym == 0:
+        mut bad := false
+        repeat cnt in i2:
+            t := sema_check_expr(s, a, kids.get(i2))
+            if type_is_error(s, t):
+                bad = true
+            else ty_at(s, t).kind == TY_VOID:
+                serr(s, 49, span_of(a, kids.get(i2)), i18.Tr("a tuple element cannot be a void value"))
+                bad = true
+            else ty_at(s, t).kind == TY_NULL:
+                serr(s, 52, span_of(a, kids.get(i2)), i18.Tr("cannot infer the type of a 'null' tuple element; give the tuple an expected type, such as a function return type"))
+                bad = true
+            end
+            ets.push(t)
+        end
+        if bad:
+            ret sema_decorate(s, a, nid, sema_err_ty(s))
+        end
+    end
+    mut inits := Vector {} as Vector<int>
+    repeat cnt in i3:
+        fi := new_node_at(a, at.AST_FIELD_INIT, span_of(a, kids.get(i3)))
+        at.SetName(a, fi, tuple_field_name(i3))
+        mut fv := at.Get(a, fi)
+        fv.a = kids.get(i3)
+        at.Put(a, fi, fv)
+        inits.push(fi)
+    end
+    mut lv := at.Get(a, nid)
+    lv.kind = at.AST_STRUCT_LIT
+    lv.list = inits
+    if exp_sym != 0:
+        lv.name = ty_at(s, exp).name
+        at.Put(a, nid, lv)
+        ret finish_struct_lit(s, a, nid, exp_sym)
+    end
+    mut tnodes := Vector {} as Vector<int>
+    defer tnodes.free()
+    repeat cnt in i4:
+        tn := new_node_at(a, at.AST_TYPE, sp)
+        mut tv := at.Get(a, tn)
+        tv.sema_type = ets.get(i4)
+        tv.name = type_to_string(s, ets.get(i4))
+        at.Put(a, tn, tv)
+        tnodes.push(tn)
+    end
+    tt := tuple_instantiate(s, a, cnt, tnodes, sp)
+    if type_is_error(s, tt):
+        lv.kind = at.AST_TUPLE
+        at.Put(a, nid, lv)
+        ret sema_decorate(s, a, nid, tt)
+    end
+    lv.name = ty_at(s, tt).name
+    lv.sema_type = tt
+    at.Put(a, nid, lv)
+    ssym := ty_at(s, tt).decl
+    note_ref(nid, ssym)
+    repeat cnt in i5:
+        _df := sema_decorate(s, a, at.Child(a, nid, i5), ets.get(i5))
+    end
+    ret sema_decorate(s, a, nid, tt)
+end
+
+func check_destructure(s &: Sema, a &: at.Ast, nid: int):
+    sp := span_of(a, nid)
+    n := at.Get(a, nid)
+    cnt := n.list.len()
+    tname := "__tup" + str.FromInt(nid as i64)
+    td := th_decl(a, sp, tname, n.a, false)
+    check_stmt(s, a, td)
+    tsym := scope_lookup_local(s, s.cur, tname)
+    mut vt := TYPE_NONE
+    if tsym != 0:
+        vt = sym_at(s, tsym).ty
+    end
+    mut ok := false
+    if type_is_error(s, vt):
+        ok = false
+    else tuple_arity_of(s, vt) != cnt:
+        if tuple_arity_of(s, vt) == 0:
+            serr(
+                s, 158, sp, co.Format2(
+                    i18.Tr("cannot split a value of type '%s' into %zu names: it is not a tuple; return '(A, B)' from the function, or declare one name"), co.ArgStr(type_disp(s, vt)), co.ArgUint(cnt as u64)
+                )
+            )
+        else:
+            serr(
+                s, 158, sp, co.Format3(
+                    i18.Tr("this value has %zu elements ('%s') but %zu names are declared; name every element, using '_' for the ones you do not need"), co.ArgUint(tuple_arity_of(s, vt) as u64), co.ArgStr(type_disp(s, vt)), co.ArgUint(cnt as u64)
+                )
+            )
+        end
+    else:
+        ok = true
+    end
+    mut kept := Vector {} as Vector<int>
+    defer kept.free()
+    repeat cnt in i:
+        d := n.list.get(i)
+        if ok and str.Equals(at.Get(a, d).name, "_"):
+            continue
+        end
+        mut dv := at.Get(a, d)
+        if ok:
+            m := new_node_at(a, at.AST_MEMBER, span_of(a, d))
+            mut mv := at.Get(a, m)
+            mv.a = try_ident(a, span_of(a, d), tname)
+            mv.name = tuple_field_name(i)
+            at.Put(a, m, mv)
+            dv.a = m
+        else:
+            dv.a = try_ident(a, span_of(a, d), "<error>")
+        end
+        at.Put(a, d, dv)
+        kept.push(d)
+    end
+    s.pre_stmts.push(td)
+    if kept.len() == 0:
+        keep := th_decl(a, sp, "_", th_int(a, sp, 0), false)
+        at.Put(a, nid, at.Get(a, keep))
+        check_stmt(s, a, nid)
+        ret
+    end
+    repeat kept.len() - 1 in j:
+        check_stmt(s, a, kept.get(j))
+        s.pre_stmts.push(kept.get(j))
+    end
+    at.Put(a, nid, at.Get(a, kept.get(kept.len() - 1)))
+    check_stmt(s, a, nid)
+end

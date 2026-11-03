@@ -399,7 +399,89 @@ func isel_vcmp(g &: Ng, i: int):
     set_res(g, i, r)
 end
 
+func vneg_of(g &: Ng, v: int, x: int): bool:
+    if v < 0 or g.v_kind[v] != VK_INS:
+        ret false
+    end
+    d := g.v_def[v]
+    ret g.i_op[d] == OP_SUB and g.i_b[d] == x and g.i_a[d] >= 0 and g.v_kind[g.i_a[d]] == VK_ZERO
+end
+
+func vabs_src(g &: Ng, i: int): int:
+    if g.off_vabs or g.arch != NG_ARCH_X64:
+        ret 0 - 1
+    end
+    e := g.t_elem[g.i_ty[i]]
+    m := g.i_a[i]
+    if (e != T_I32 and e != T_I16 and (e != T_I8 or not g.avx2)) or m < 0 or g.v_kind[m] != VK_INS:
+        ret 0 - 1
+    end
+    d := g.v_def[m]
+    if g.i_op[d] != OP_ICMP:
+        ret 0 - 1
+    end
+    p := g.i_x[d]
+    a := g.i_a[d]
+    b := g.i_b[d]
+    za := a >= 0 and g.v_kind[a] == VK_ZERO
+    zb := b >= 0 and g.v_kind[b] == VK_ZERO
+    plt := p == CC_SLT or p == CC_SLE
+    pgt := p == CC_SGT or p == CC_SGE
+    mut x := 0 - 1
+    mut negfirst := false
+    if zb and (plt or pgt):
+        x = a
+        negfirst = plt
+    else za and (plt or pgt):
+        x = b
+        negfirst = pgt
+    end
+    if x < 0 or g.t_elem[g.v_ty[x]] != e:
+        ret 0 - 1
+    end
+    neg := negfirst ? g.i_b[i] : g.i_c[i]
+    pos := negfirst ? g.i_c[i] : g.i_b[i]
+    if pos != x or not vneg_of(g, neg, x):
+        ret 0 - 1
+    end
+    ret x
+end
+
+func vabs_mark(g &: Ng, i: int):
+    x := vabs_src(g, i)
+    if x < 0:
+        ret
+    end
+    m := g.i_a[i]
+    if g.v_uses[m] == 1:
+        g.skipi[g.v_def[m]] = true
+    end
+    each nv in [g.i_b[i], g.i_c[i]]:
+        if nv != x and g.v_uses[nv] == 1:
+            g.skipi[g.v_def[nv]] = true
+        end
+    end
+end
+
 func isel_vsel(g &: Ng, i: int):
+    ax := vabs_src(g, i)
+    if ax >= 0:
+        e := g.t_elem[g.i_ty[i]]
+        if not g.avx2:
+            sg := vcopy(g, ax)
+            vshi(g, sg, e == T_I32 ? 0x72 : 0x71, 4, (e == T_I32 ? 31 : 15) as i64)
+            rx := vcopy(g, ax)
+            vop(g, 0xEF, rx, sg)
+            vop(g, e == T_I32 ? 0xFA : 0xF9, rx, sg)
+            set_res(g, i, rx)
+            ret
+        end
+        ra := wide_reg(g)
+        mu := e_rr(g, M_VUN, 32, ra, use_reg(g, ax))
+        g.mc.cc[mu] = e == T_I32 ? 0x1E : (e == T_I16 ? 0x1D : 0x1C)
+        set_res(g, i, ra)
+        ret
+    end
     m := g.i_a[i]
     bv := g.i_b[i]
     mut r := 0 - 1

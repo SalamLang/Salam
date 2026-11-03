@@ -45,6 +45,7 @@ norm() {
         grep -vE '^(int3|nop|data16|cs nop|xchg[[:space:]]+ax,ax)'
 }
 for f in "$@"; do
+    case "$f" in /*) ;; *) f="$(pwd)/$f" ;; esac
     b=$(basename "$f" .salam)
     d="$work/$b"
     mkdir -p "$d"
@@ -71,4 +72,4 @@ for f in "$@"; do
     fi
 done
 echo "encoder check: $pass passed, $fail failed"
-[ "$fail" -eq 0 ]
+[ "$fail" -eq 0 ] && [ "$pass" -gt 0 ]

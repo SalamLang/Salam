@@ -1282,6 +1282,13 @@ end
   `.present .value`. Never read `.value` unchecked: on an empty
   `Option<str>` it is a null pointer and printing it segfaults. No `match`
   and no `?` on an Option.
+- **`wire`**: dependency injection, google/wire style. Providers are keyed by a
+  name you choose (no runtime type identity): `New()`,
+  `Provide(c, "Service", "Repo", Service {}, (cx: wire.Container): ... end)` (the
+  second string lists the needs, the value only fixes the type), `Value`,
+  `Bind(c, "Store", "MemStore")`, `OnClose(c, name, T {}, (v: T): ... end)`,
+  `Build(c)` (returns "" or a missing/duplicate/cycle message), `Get(c, name, out)`
+  (lazy singleton), `Built Count Error`, `Close` (cleanups in reverse build order).
 - **`result`**: `Result<T, E>` (`Ok`/`Err`) with `IsOk IsErr UnwrapOr Expect`
   and postfix `?` (error types must match). There is no `Unwrap`, `map` or
   `and_then`; `Expect` does not print the error.

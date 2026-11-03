@@ -598,6 +598,30 @@ func su_grow_field(s &: Sema, a &: at.Ast, pm &: HashMap<int, int>, r: int): str
     ret "*"
 end
 
+func su_free_then_set(a &: at.Ast, pm &: HashMap<int, int>, r: int, name: str): bool:
+    mut stmt := r
+    mut blk := su_parent(pm, stmt)
+    until blk != 0 and at.KindOf(a, blk) != at.AST_BLOCK:
+        stmt = blk
+        blk = su_parent(pm, stmt)
+    end
+    if blk == 0:
+        ret false
+    end
+    n := at.ChildCount(a, blk)
+    repeat n in i:
+        if at.Child(a, blk, i) == stmt and i + 1 < n:
+            nx := at.Child(a, blk, i + 1)
+            if nx == 0 or at.KindOf(a, nx) != at.AST_ASSIGN or at.At(a, nx).op != tok.TK_ASSIGN:
+                ret false
+            end
+            lhs := at.At(a, nx).a
+            ret lhs != 0 and at.KindOf(a, lhs) == at.AST_IDENTIFIER and str.Equals(at.At(a, lhs).name, name)
+        end
+    end
+    ret false
+end
+
 func su_analyze(s &: Sema, a &: at.Ast, fi: int): bool:
     fnid := s.own_fns.get(fi)
     body := at.At(a, fnid).a
@@ -623,6 +647,17 @@ func su_analyze(s &: Sema, a &: at.Ast, fi: int): bool:
                 if rp0 != 0 and at.KindOf(a, rp0) == at.AST_ASSIGN and at.At(a, rp0).a == r:
                     c = SU_KEEP
                 end
+            end
+            if c == SU_FREE and slot > 0 and at.At(a, at.Child(a, fnid, slot - 1)).is_ref and su_free_then_set(a, pm, r, name):
+                if su_set(s.sp_grow, s, fi, slot):
+                    changed = true
+                end
+                gi0 := s.sum_off.get(fi) + slot
+                if not str.Equals(s.sp_gf.get(gi0), "*"):
+                    s.sp_gf.set(gi0, "*")
+                    changed = true
+                end
+                continue
             end
             if c == SU_KEEP or c == SU_RET:
                 if su_set(s.sp_keep, s, fi, slot):

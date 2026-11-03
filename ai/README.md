@@ -191,7 +191,7 @@ in Persian and English and starts answering.
 `salam exec ai/backend/tests/tgmd_test.salam` tests the Markdown converter, and
 `salam exec ai/backend/tests/policy_test.salam` tests the language detection of the Salam-only rule.
 
-After the compiler check, a finished answer also goes through a practice check (`Practice` in `policy.salam`). It sends the answer back once, as `<practice_check>`, when a Salam block hand-writes a hex or decimal parser that `conv` already has, or when the identifiers a block declares are in the wrong language for it (English names in Persian code, Persian names in English code). The same policy test covers it.
+After the compiler check, a finished answer also goes through a practice check (`Practice` in `policy.salam`). It sends the answer back once, as `<practice_check>`, when a Salam block hand-writes a hex or decimal parser that `conv` already has, or when the identifiers a block declares are in the wrong language for it (English names in Persian code, Persian names in English code; functions, parameters, struct fields, enum members, loop and `catch` names). It reads code only: strings and comments are blanked first, and the language comes from counting keyword tokens, so Persian text in an English program never changes the verdict. Single-letter names, common acronyms, `test_` functions and `extern:` blocks are exempt, and a block with no clear language is left alone. It also asks for `conv.FormatInt` or `str.Upper` when a block hand-writes them. The same policy test covers it.
 
 ### Cloud sandbox, GitHub and Figma
 

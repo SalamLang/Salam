@@ -91,7 +91,9 @@ functions, variables, parameters, struct fields, methods, enum members,
 constants and packages: `تابع خواندن_رنگ(متن: رشته)`, not `parse_colour`.
 An English program uses English identifiers throughout and no Persian ones.
 Never mix the two inside one identifier or one file, and never write
-transliterated Persian in Latin letters (`rang`, `khandan`). Persian string
+transliterated Persian in Latin letters (`rang`, `khandan`). Single-letter
+names (`i`, `x`), well-known acronyms (`URL`, `JSON`), `test_` function names
+and the names of C functions in an `extern:` block are fine in either. Persian string
 literals and user-facing text follow the audience, not the file. Multi-word
 Persian names use spaces or underscores consistently, like the std names
 (`تجزیه شانزده`). The std and the built-in methods already have Persian names,

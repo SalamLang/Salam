@@ -672,9 +672,33 @@ func after_word(s: str, words: str): str:
     ret ""
 end
 
-func names_on(line: str, field: bool): Vector<str>:
+func member_names(text: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    paren := text.find("(")
+    if paren < 0:
+        each n in comma_split(text):
+            if plain_name(n):
+                out.push(n)
+            end
+        end
+        ret out
+    end
+    head := str.Trim(text.substr(0, paren))
+    if plain_name(head):
+        out.push(head)
+    end
+    each p in params_of(text):
+        out.push(p)
+    end
+    ret out
+end
+
+func names_on(line: str, field: bool, member: bool): Vector<str>:
     mut out := Vector {} as Vector<str>
     s := strip_mods(line)
+    if member:
+        ret member_names(str.TrimSuffix(s, ","))
+    end
     func_key := starts_with_any(s, "func |تابع ")
     if func_key.len() > 0:
         rest := s.substr(func_key.len(), s.len() - func_key.len())
@@ -686,7 +710,16 @@ func names_on(line: str, field: bool): Vector<str>:
     end
     type_key := starts_with_any(s, "struct |ساختار |enum |جداشمار |interface |میانجی ")
     if type_key.len() > 0:
-        out.push(lead_name(s.substr(type_key.len(), s.len() - type_key.len())))
+        rest := s.substr(type_key.len(), s.len() - type_key.len())
+        out.push(lead_name(rest))
+        colon := rest.find(":")
+        if (type_key == "enum " or type_key == "جداشمار ") and colon > 0 and rest.find("(") < 0:
+            mut list := str.Trim(rest.substr(colon + 1, rest.len() - colon - 1))
+            list = str.Trim(str.TrimSuffix(str.TrimSuffix(list, "end"), "پایان"))
+            each n in member_names(list):
+                out.push(n)
+            end
+        end
         ret out
     end
     loop_key := starts_with_any(s, "each |هر ")
@@ -776,8 +809,17 @@ func indent_of(line: str): int:
     ret n
 end
 
+func acronym(name: str): bool:
+    each a in ["ID", "IP", "URL", "URI", "HTTP", "HTTPS", "JSON", "XML", "HTML", "CSS", "API", "SQL", "UUID", "TCP", "UDP", "DNS", "TLS", "SSL", "CPU", "GPU", "RGB", "RGBA", "UTF", "PDF", "CSV", "JWT", "SSH", "FTP", "OS", "UI", "DB"]:
+        if str.Upper(name) == a:
+            ret true
+        end
+    end
+    ret false
+end
+
 func exempt_name(name: str): bool:
-    ret entry_name(name) or str.StartsWith(name, "test_")
+    ret entry_name(name) or str.StartsWith(name, "test_") or name.len() == 1 or acronym(name)
 end
 
 func wrong_names(code: str, persian: bool): Vector<str>:
@@ -785,6 +827,8 @@ func wrong_names(code: str, persian: bool): Vector<str>:
     mut skip_at := 0 - 1
     mut struct_at := 0 - 1
     mut member_at := 0 - 1
+    mut enum_at := 0 - 1
+    mut enum_member_at := 0 - 1
     each line in str.Replace(code, "\t", "    ").split("\n"):
         if str.Trim(line).len() == 0:
             continue
@@ -800,6 +844,10 @@ func wrong_names(code: str, persian: bool): Vector<str>:
             struct_at = 0 - 1
             member_at = 0 - 1
         end
+        if enum_at >= 0 and indent <= enum_at:
+            enum_at = 0 - 1
+            enum_member_at = 0 - 1
+        end
         head := strip_mods(line)
         if starts_with_any(head, "extern:|export:|درون‌داد:|برون‌داد:").len() > 0:
             skip_at = indent
@@ -808,12 +856,20 @@ func wrong_names(code: str, persian: bool): Vector<str>:
         if struct_at >= 0 and member_at < 0:
             member_at = indent
         end
+        if enum_at >= 0 and enum_member_at < 0:
+            enum_member_at = indent
+        end
         is_member := struct_at >= 0 and indent == member_at
+        is_enum_member := enum_at >= 0 and indent == enum_member_at
+        if starts_with_any(head, "enum |جداشمار ").len() > 0 and not (str.EndsWith(head, " end") or str.EndsWith(head, " پایان")):
+            enum_at = indent
+            enum_member_at = 0 - 1
+        end
         if starts_with_any(head, "struct |ساختار ").len() > 0:
             struct_at = indent
             member_at = 0 - 1
         end
-        each name in names_on(line, is_member):
+        each name in names_on(line, is_member, is_enum_member):
             if name.len() == 0 or exempt_name(name):
                 continue
             end
@@ -834,6 +890,12 @@ func hand_rolled(code: str): str:
     end
     if squeezed.find("*10+") >= 0 and squeezed.find("-48") >= 0:
         ret "a hand-written decimal parser; std already has conv.ParseInt (throws on bad input) and conv.ParseIntOr (with a fallback)"
+    end
+    if squeezed.find("%10") >= 0 and squeezed.find("+48") >= 0:
+        ret "a hand-written number to text loop; std already has conv.FormatInt (and conv.FormatHex)"
+    end
+    if squeezed.find(">=97") >= 0 and squeezed.find("<=122") >= 0 and squeezed.find("-32") >= 0:
+        ret "a hand-written upper-casing loop; std already has str.Upper and str.Lower"
     end
     ret ""
 end

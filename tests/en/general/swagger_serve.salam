@@ -18,9 +18,10 @@ import net.http.swagger
 import net.internal.rawsock
 import str
 import time
+import net.tcp
 
-const API_PORT := 19271
-const DOC_PORT := 19272
+mut API_PORT := 0
+mut DOC_PORT := 0
 
 struct Todo:
     pub id: i64 = 0 as i64
@@ -54,6 +55,16 @@ func get_resp(port: int, path: str): str:
     ret resp
 end
 
+func serve_free(d: swagger.Doc): int:
+    mut tries := 0
+    until tries < 20:
+        port := tcp.FreePort()
+        if swagger.Serve(d, port): ret port end
+        tries += 1
+    end
+    ret 0
+end
+
 func main:
     mut r := router.NewRouter()
     router.Get(r, "/api/todos", list_todos)
@@ -68,11 +79,13 @@ func main:
 
     swagger.Mount(doc, r, "/docs")
 
-    mut s := http.NewServer(API_PORT)
+    mut s := http.NewServer(0)
     http.SetHost(s, "127.0.0.1")
     http.Use(s, r)
-    println http.RunBackground(s)
-    println swagger.Serve(doc, DOC_PORT)
+    API_PORT = http.RunBackgroundPort(s)
+    println API_PORT > 0
+    DOC_PORT = serve_free(doc)
+    println DOC_PORT > 0
 
     ui := get_resp(API_PORT, "/docs")
     println str.Contains(ui, "text/html")
@@ -103,12 +116,13 @@ func main:
     swagger.MountSpec(
         "{\"openapi\":\"3.1.0\",\"info\":{\"title\":\"Imported\",\"version\":\"9\"},\"paths\":{}}", "Imported", r2, "/imported"
     )
-    mut s2 := http.NewServer(19273)
+    mut s2 := http.NewServer(0)
     http.SetHost(s2, "127.0.0.1")
     http.Use(s2, r2)
-    println http.RunBackground(s2)
-    println str.Contains(get_resp(19273, "/imported"), "<title>Imported</title>")
-    println str.Contains(get_resp(19273, "/imported/openapi.json"), "\"title\":\"Imported\"")
+    imported_port := http.RunBackgroundPort(s2)
+    println imported_port > 0
+    println str.Contains(get_resp(imported_port, "/imported"), "<title>Imported</title>")
+    println str.Contains(get_resp(imported_port, "/imported/openapi.json"), "\"title\":\"Imported\"")
 
     mut ra := router.NewRouter()
     router.Get(ra, "/alpha", list_todos)
@@ -118,10 +132,12 @@ func main:
     router.Get(rb, "/beta", list_todos)
     mut db := swagger.New("Beta", "2")
     swagger.Scan(db, rb)
-    println swagger.Serve(da, 19274)
-    println swagger.Serve(db, 19275)
-    println str.Contains(get_resp(19274, "/"), "<title>Alpha</title>")
-    println str.Contains(get_resp(19275, "/"), "<title>Beta</title>")
-    println str.Contains(get_resp(19274, "/openapi.json"), "/alpha")
-    println str.Contains(get_resp(19275, "/openapi.json"), "/beta")
+    alpha_port := serve_free(da)
+    println alpha_port > 0
+    beta_port := serve_free(db)
+    println beta_port > 0
+    println str.Contains(get_resp(alpha_port, "/"), "<title>Alpha</title>")
+    println str.Contains(get_resp(beta_port, "/"), "<title>Beta</title>")
+    println str.Contains(get_resp(alpha_port, "/openapi.json"), "/alpha")
+    println str.Contains(get_resp(beta_port, "/openapi.json"), "/beta")
 end

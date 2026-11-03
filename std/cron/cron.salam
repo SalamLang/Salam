@@ -366,6 +366,21 @@ func _cron_loop(arg: i64):
     _loop()
 end
 
+// True when t is the second pass over a wall-clock hour that a clock change
+// repeated (autumn fall-back); a job runs only on the first pass.
+func _is_repeat(zone: str, t: i64): bool:
+    mut z := calendar.LoadZone(zone)
+    if not z.ok: ret false end
+    here := calendar.ZoneOffsetSeconds(z, t)
+    d := calendar.ZoneOffsetSeconds(z, t - (3600 as i64)) - here
+    mut rep := false
+    if d > (0 as i64):
+        rep = calendar.ZoneOffsetSeconds(z, t - d) == here + d
+    end
+    calendar.FreeZone(z)
+    ret rep
+end
+
 func _next_minute(e: Expr, after: i64, zone: str, fallback_minutes: int): i64:
     mut z := calendar.LoadZone(zone)
     mut found := 0 as i64
@@ -378,7 +393,7 @@ func _next_minute(e: Expr, after: i64, zone: str, fallback_minutes: int): i64:
             t += (86400 as i64) - sod
         else not _has(e.hours, time.HourUTC(local)):
             t += (3600 as i64) - (local % (3600 as i64))
-        else MatchesLocal(e, local):
+        else MatchesLocal(e, local) and not _is_repeat(zone, t):
             found = t
         else:
             t += 60 as i64
@@ -451,6 +466,7 @@ func _due(i: int, now: i64, dedupe: bool): bool:
     end
     local := now + _job_offset(i, now)
     if not MatchesLocal(j.expr, local): ret false end
+    if _is_repeat(_job_zone(i), now): ret false end
     if not _step_ok(i, local): ret false end
     mut slot := now / (60 as i64)
     if j.expr.with_seconds:
@@ -577,7 +593,7 @@ pub func Next(e: Expr, after: i64, zone: str, fallback_minutes: int): i64:
     base := t0 - (t0 % (60 as i64))
     first := (t0 % (60 as i64)) as int
     local := base + OffsetSeconds(zone, fallback_minutes, base)
-    if MatchesLocal(e, local):
+    if MatchesLocal(e, local) and not _is_repeat(zone, base):
         repeat 60 - first in k:
             sec := first + k
             if _has(e.seconds, sec): ret base + (sec as i64) end

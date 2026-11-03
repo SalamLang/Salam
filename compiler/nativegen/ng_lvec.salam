@@ -56,6 +56,11 @@ pub struct Lv:
     pub hoist: Vector<int> = Vector {}
     pub hchecks: Vector<int> = Vector {}
     pub hmap: Vector<int> = Vector {}
+    pub nw: int = 0
+    pub rlo: Vector<i64> = Vector {}
+    pub rhi: Vector<i64> = Vector {}
+    pub rkn: Vector<bool> = Vector {}
+    pub navg: Vector<int> = Vector {}
 end
 
 func lv_in(g &: Ng, r &: Lv, v: int): bool:
@@ -144,7 +149,7 @@ func lv_wide_ok(g &: Ng, r &: Lv): bool:
         if c == LV_NARROW or c == LV_RADDR or c == LV_RIDX:
             ret false
         end
-        if (g.i_op[i] == OP_ZEXT or g.i_op[i] == OP_SEXT) and c == LV_VEC:
+        if (g.i_op[i] == OP_ZEXT or g.i_op[i] == OP_SEXT) and c == LV_VEC and lv_nbits(g.v_ty[g.i_a[i]]) != r.nw:
             ret false
         end
         if g.i_op[i] == OP_STORE and lv_cls(r, g.i_a[i]) == LV_NARROW:
@@ -225,6 +230,12 @@ func lv_ridx_val(g &: Ng, r &: Lv, v: int): bool:
 end
 
 func lv_classify(g &: Ng, r &: Lv, i: int): bool:
+    if r.nw > 0:
+        nk := lv_ncls(g, r, i)
+        if nk != 0:
+            ret nk == 1
+        end
+    end
     op := g.i_op[i]
     res := g.i_res[i]
     t := g.i_ty[i]
@@ -341,7 +352,7 @@ func lv_classify(g &: Ng, r &: Lv, i: int): bool:
                 ret false
             end
             r.stores.push(i)
-            ret lv_set_lane(r, 4)
+            ret lv_set_lane(r, r.nw > 0 ? r.nw / 8 : 4)
         end
         if (g.i_x[ad2] as i64) != (tsize(g, st) as i64) or not lv_set_lane(r, lv_lane_of(st)):
             ret false
@@ -978,7 +989,7 @@ func lv_hoist_pure(g &: Ng, r &: Lv):
 end
 
 func lv_match(g &: Ng, l &: Lp, mark: int, h: int, r &: Lv): bool:
-    if not lv_shape(g, l, mark, h, r):
+    if not lv_shape(g, l, mark, h, r) or (r.nw > 0 and not lv_nany(g, r)):
         ret false
     end
     lv_hoist_pure(g, r)
@@ -999,6 +1010,12 @@ func lv_match(g &: Ng, l &: Lp, mark: int, h: int, r &: Lv): bool:
     end
     r.body.clear()
     r.hoist.clear()
+    if r.nw > 0:
+        if r.reds.len() > 0 or r.divp >= 0:
+            ret false
+        end
+        r.lane = r.nw / 8
+    end
     if r.shape == 1:
         mut hi := g.b_first[r.h]
         until hi >= 0:
@@ -1103,7 +1120,7 @@ func lv_match(g &: Ng, l &: Lp, mark: int, h: int, r &: Lv): bool:
                 if r.cls[lr] != LV_VEC:
                     ret false
                 end
-            else r.lane != 4 or g.v_uses[lr] < 1:
+            else (r.lane != 4 and r.nw != 16) or g.v_uses[lr] < 1:
                 ret false
             end
         end
@@ -1115,6 +1132,9 @@ func lv_match(g &: Ng, l &: Lp, mark: int, h: int, r &: Lv): bool:
         end
     end
     if not lv_uses_ok(g, r):
+        ret false
+    end
+    if r.nw > 0 and not lv_ncheck(g, r):
         ret false
     end
     ret lv_outside_ok(g, r) and lv_mem_ok(g, r)
@@ -1339,7 +1359,7 @@ func lv_vget(g &: Ng, r &: Lv, ck: int, v: int, vt: int): int:
         end
         ret m
     end
-    ret lv_bcast(g, r, ck, v, vt)
+    ret lv_bcast(g, r, ck, lv_nconst(g, r, v, vt), vt)
 end
 
 func lv_sext(g &: Ng, b: int, v: int): int:
@@ -1761,15 +1781,34 @@ func lv_transform(g &: Ng, r &: Lv):
             end
             continue
         end
+        if (op == OP_ZEXT or op == OP_SEXT or op == OP_TRUNC) and r.nw > 0 and lv_cls(r, g.i_a[i]) == LV_VEC:
+            r.vmap[res] = r.vmap[g.i_a[i]]
+            continue
+        end
         if op == OP_ZEXT or op == OP_SEXT:
             ld := g.v_def[g.i_a[i]]
-            nw := ins_new(g, OP_LOAD, T_V4I32)
+            nw := ins_new(g, OP_LOAD, r.nw == 16 ? vec_ty(T_I16, false) : T_V4I32)
             g.i_a[nw] = r.vmap[g.i_a[ld]]
             g.i_c[nw] = g.i_c[ld]
             g.i_f[nw] = IF_W8
             g.i_x[nw] = tsize(g, g.i_ty[ld]) | (op == OP_SEXT ? 4 : 0)
             r.vmap[res] = new_res(g, nw)
             ins_append(g, vb, nw)
+            continue
+        end
+        if r.nw == 8 and (op == OP_SHL or op == OP_LSHR):
+            vtb := lv_nvt(r, g.i_ty[i])
+            mut isavg := false
+            each na in r.navg:
+                if na == i:
+                    isavg = true
+                end
+            end
+            if isavg:
+                r.vmap[res] = lv_navg(g, r, ck, i, vtb)
+            else:
+                r.vmap[res] = lv_nbyte_shift(g, r, ck, op, lv_vget(g, r, ck, g.i_a[i], vtb), g.v_i[g.i_b[i]])
+            end
             continue
         end
         if (op == OP_SHL or op == OP_LSHR or op == OP_ASHR) and (not is_cint(g, g.i_b[i]) or (op == OP_ASHR and g.i_ty[i] == T_I64)):
@@ -1812,8 +1851,8 @@ func lv_transform(g &: Ng, r &: Lv):
         if op == OP_SELECT and not lv_inv(g, r, g.i_a[i]) and g.i_a[i] < r.inv.len() and r.inv[g.i_a[i]]:
             swapsel = true
         end
-        vt4 := lv_vty(g.i_ty[i], r.lane, r.wide)
-        opty := op == OP_ICMP ? lv_vty(g.v_ty[g.i_a[i]], r.lane, r.wide) : vt4
+        vt4 := lv_nvt(r, g.i_ty[i])
+        opty := op == OP_ICMP ? lv_nvt(r, g.v_ty[g.i_a[i]]) : vt4
         ni2 := ins_new(g, op, vt4)
         g.i_x[ni2] = g.i_x[i]
         if op == OP_SELECT:
@@ -1985,6 +2024,26 @@ func lv_transform(g &: Ng, r &: Lv):
     acc0.free()
 end
 
+func lv_free(r &: Lv):
+    r.cls.free()
+    r.vmap.free()
+    r.reds.free()
+    r.rnext.free()
+    r.rkind.free()
+    r.rcmp.free()
+    r.body.free()
+    r.stores.free()
+    r.loads.free()
+    r.checks.free()
+    r.bc_s.free()
+    r.bc_v.free()
+    r.inv.free()
+    r.rlo.free()
+    r.rhi.free()
+    r.rkn.free()
+    r.navg.free()
+end
+
 func loop_vectorize(g &: Ng): bool:
     ensure_preheaders(g)
     count_uses(g)
@@ -2006,24 +2065,20 @@ func loop_vectorize(g &: Ng): bool:
         end
         mark += 1
         _n := lp_body(g, l, h, mark)
-        mut r := Lv {}
-        if lv_match(g, l, mark, h, r):
-            lv_transform(g, r)
-            changed = true
+        mut nw := g.off_vnarrow ? 0 : 8
+        until not changed:
+            mut r := Lv {}
+            r.nw = nw
+            if lv_match(g, l, mark, h, r):
+                lv_transform(g, r)
+                changed = true
+            end
+            lv_free(r)
+            if nw == 0:
+                break
+            end
+            nw = nw == 8 ? 16 : 0
         end
-        r.cls.free()
-        r.vmap.free()
-        r.reds.free()
-        r.rnext.free()
-        r.rkind.free()
-        r.rcmp.free()
-        r.body.free()
-        r.stores.free()
-        r.loads.free()
-        r.checks.free()
-        r.bc_s.free()
-        r.bc_v.free()
-        r.inv.free()
     end
     heads.free()
     l.head.free()

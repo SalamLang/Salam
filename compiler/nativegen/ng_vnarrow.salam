@@ -1,0 +1,391 @@
+package nativegen
+
+func lv_nbits(t: int): int:
+    if t == T_I8:
+        ret 8
+    end
+    if t == T_I16:
+        ret 16
+    end
+    if t == T_I32:
+        ret 32
+    end
+    ret 0
+end
+
+func lv_nval(g &: Ng, r &: Lv, v: int): bool:
+    if v < 0:
+        ret false
+    end
+    if lv_inv(g, r, v):
+        ret lv_nbits(g.v_ty[v]) > 0
+    end
+    ret lv_cls(r, v) == LV_VEC and lv_nbits(g.v_ty[v]) >= r.nw
+end
+
+func lv_nidx(g &: Ng, r &: Lv, v: int): bool:
+    ret v >= 0 and (lv_idx_val(g, r, v) or lv_ridx_val(g, r, v) or (r.ivn >= 0 and v == g.i_res[r.ivn]))
+end
+
+func lv_nvt(r &: Lv, t: int): int:
+    if r.nw > 0 and lv_nbits(t) > 0:
+        ret vec_ty(r.nw == 8 ? T_I8 : T_I16, r.wide)
+    end
+    ret lv_vty(t, r.lane, r.wide)
+end
+
+func lv_nany(g &: Ng, r &: Lv): bool:
+    each b in [r.h, r.w, r.latch]:
+        if b < 0:
+            continue
+        end
+        mut i := g.b_first[b]
+        until i >= 0:
+            if g.i_op[i] == OP_LOAD and (g.i_ty[i] == T_I8 or g.i_ty[i] == T_I16):
+                ret true
+            end
+            i = g.i_next[i]
+        end
+    end
+    ret false
+end
+
+func lv_ncls(g &: Ng, r &: Lv, i: int): int:
+    op := g.i_op[i]
+    res := g.i_res[i]
+    t := g.i_ty[i]
+    tb := lv_nbits(t)
+    nw := r.nw
+    if op == OP_LOAD:
+        if lv_cls(r, g.i_a[i]) != LV_ADDR or (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) != 0 or res < 0:
+            ret 0
+        end
+        if tb == 0 or tb > 16 or (g.i_x[g.v_def[g.i_a[i]]] as i64) != (tsize(g, t) as i64):
+            ret 2
+        end
+        if tb == nw:
+            r.cls[res] = LV_VEC
+        else tb == 8 and nw == 16:
+            r.cls[res] = LV_SKIP
+        else:
+            ret 2
+        end
+        r.loads.push(i)
+        ret 1
+    end
+    if res < 0 or op == OP_STORE:
+        ret 0
+    end
+    if op == OP_ZEXT or op == OP_SEXT or op == OP_TRUNC:
+        a := g.i_a[i]
+        if lv_nidx(g, r, a):
+            ret 0
+        end
+        sb := lv_nbits(g.v_ty[a])
+        if tb == 0 or sb == 0:
+            ret 2
+        end
+        if op == OP_TRUNC:
+            if lv_cls(r, a) != LV_VEC:
+                ret 2
+            end
+            if tb >= nw:
+                r.cls[res] = LV_VEC
+                ret 1
+            end
+            if tb == 8 and nw == 16:
+                r.cls[res] = LV_NARROW
+                ret 1
+            end
+            ret 2
+        end
+        if sb == nw and lv_cls(r, a) == LV_VEC:
+            r.cls[res] = LV_VEC
+            ret 1
+        end
+        if sb == 8 and nw == 16 and lv_cls(r, a) == LV_SKIP:
+            r.cls[res] = LV_VEC
+            ret 1
+        end
+        ret 2
+    end
+    bin := t != T_I1 and (op == OP_ADD or op == OP_SUB or op == OP_AND or op == OP_OR or op == OP_XOR or op == OP_MUL)
+    sh := t != T_I1 and (op == OP_SHL or op == OP_LSHR or op == OP_ASHR)
+    if bin or sh:
+        a2 := g.i_a[i]
+        b2 := g.i_b[i]
+        if lv_nidx(g, r, a2) or lv_nidx(g, r, b2):
+            ret 0
+        end
+        if tb < nw or (op == OP_MUL and nw == 8):
+            ret 2
+        end
+        if sh:
+            if not is_cint(g, b2) or g.v_i[b2] < (0 as i64) or g.v_i[b2] >= (nw as i64):
+                ret 2
+            end
+            if lv_inv(g, r, a2) or not lv_nval(g, r, a2):
+                ret 2
+            end
+        else not lv_nval(g, r, a2) or not lv_nval(g, r, b2) or (lv_inv(g, r, a2) and lv_inv(g, r, b2)):
+            ret 2
+        end
+        r.cls[res] = LV_VEC
+        ret 1
+    end
+    if op == OP_ICMP:
+        a3 := g.i_a[i]
+        b3 := g.i_b[i]
+        if lv_nidx(g, r, a3) or lv_nidx(g, r, b3):
+            ret 2
+        end
+        ob := lv_nbits(g.v_ty[a3])
+        if ob < nw or g.i_x[i] > CC_UGE or not lv_nval(g, r, a3) or not lv_nval(g, r, b3) or (lv_inv(g, r, a3) and lv_inv(g, r, b3)):
+            ret 2
+        end
+        r.cls[res] = LV_VEC
+        ret 1
+    end
+    if op == OP_SELECT and t != T_I1:
+        c := g.i_a[i]
+        if g.v_ty[c] != T_I1 or (lv_cls(r, c) != LV_VEC and not lv_inv(g, r, c)):
+            ret 2
+        end
+        if tb < nw or not lv_nval(g, r, g.i_b[i]) or not lv_nval(g, r, g.i_c[i]):
+            ret 2
+        end
+        r.cls[res] = LV_VEC
+        ret 1
+    end
+    ret 0
+end
+
+func lv_rget(g &: Ng, r &: Lv, v: int, lo &: i64, hi &: i64): bool:
+    if v < 0:
+        ret false
+    end
+    if is_cint(g, v):
+        k := norm_int(g, g.v_ty[v], g.v_i[v])
+        lo = k
+        hi = k
+        ret true
+    end
+    if v < r.rkn.len() and r.rkn[v]:
+        lo = r.rlo[v]
+        hi = r.rhi[v]
+        ret true
+    end
+    ret false
+end
+
+func lv_floor_shr(x: i64, k: i64): i64:
+    if x >= (0 as i64):
+        ret x >> k
+    end
+    d := (1 as i64) << k
+    ret (0 as i64) - ((((0 as i64) - x) + d - (1 as i64)) / d)
+end
+
+func lv_nrange(g &: Ng, r &: Lv):
+    r.rlo.clear()
+    r.rhi.clear()
+    r.rkn.clear()
+    repeat g.v_kind.len():
+        r.rlo.push(0 as i64)
+        r.rhi.push(0 as i64)
+        r.rkn.push(false)
+    end
+    each i in r.body:
+        res := g.i_res[i]
+        if res < 0 or g.i_ty[i] != T_I32:
+            continue
+        end
+        op := g.i_op[i]
+        mut lo := 0 as i64
+        mut hi := 0 as i64
+        mut ok := false
+        mut xlo := 0 as i64
+        mut xhi := 0 as i64
+        mut ylo := 0 as i64
+        mut yhi := 0 as i64
+        ka := (val_mask(op) & 1) != 0 and lv_rget(g, r, g.i_a[i], xlo, xhi)
+        kb := (val_mask(op) & 2) != 0 and lv_rget(g, r, g.i_b[i], ylo, yhi)
+        if op == OP_ZEXT or op == OP_SEXT:
+            st := g.v_ty[g.i_a[i]]
+            if st == T_I1:
+                ok = true
+                hi = 1 as i64
+            else st == T_I8:
+                ok = true
+                lo = op == OP_ZEXT ? (0 as i64) : (0 - 128 as i64)
+                hi = op == OP_ZEXT ? (255 as i64) : (127 as i64)
+            else st == T_I16:
+                ok = true
+                lo = op == OP_ZEXT ? (0 as i64) : (0 - 32768 as i64)
+                hi = op == OP_ZEXT ? (65535 as i64) : (32767 as i64)
+            end
+        else op == OP_ADD and ka and kb:
+            ok = true
+            lo = xlo + ylo
+            hi = xhi + yhi
+        else op == OP_SUB and ka and kb:
+            ok = true
+            lo = xlo - yhi
+            hi = xhi - ylo
+        else op == OP_MUL and ka and kb and xlo > (0 - 65536 as i64) and xhi < (65536 as i64) and ylo > (0 - 65536 as i64) and yhi < (65536 as i64):
+            ok = true
+            p1 := xlo * ylo
+            p2 := xlo * yhi
+            p3 := xhi * ylo
+            p4 := xhi * yhi
+            lo = p1
+            hi = p1
+            each pv in [p2, p3, p4]:
+                if pv < lo: lo = pv end
+                if pv > hi: hi = pv end
+            end
+        else op == OP_AND and ((ka and xlo >= (0 as i64)) or (kb and ylo >= (0 as i64))):
+            ok = true
+            hi = 2147483647 as i64
+            if ka and xlo >= (0 as i64): hi = xhi end
+            if kb and ylo >= (0 as i64) and yhi < hi: hi = yhi end
+        else (op == OP_OR or op == OP_XOR) and ka and kb and xlo >= (0 as i64) and ylo >= (0 as i64):
+            ok = true
+            hi = low_upto((xhi > yhi ? xhi : yhi) as u64) as i64
+        else (op == OP_SHL or op == OP_LSHR or op == OP_ASHR) and ka and is_cint(g, g.i_b[i]) and g.v_i[g.i_b[i]] >= (0 as i64) and g.v_i[g.i_b[i]] < (31 as i64):
+            k := g.v_i[g.i_b[i]]
+            if op == OP_SHL:
+                ok = true
+                lo = xlo * ((1 as i64) << k)
+                hi = xhi * ((1 as i64) << k)
+            else op == OP_ASHR or xlo >= (0 as i64):
+                ok = true
+                lo = lv_floor_shr(xlo, k)
+                hi = lv_floor_shr(xhi, k)
+            end
+        else op == OP_SELECT:
+            mut zlo := 0 as i64
+            mut zhi := 0 as i64
+            if kb and lv_rget(g, r, g.i_c[i], zlo, zhi):
+                ok = true
+                lo = ylo < zlo ? ylo : zlo
+                hi = yhi > zhi ? yhi : zhi
+            end
+        end
+        if ok and lo >= (0 - 2147483648 as i64) and hi <= (2147483647 as i64):
+            r.rlo[res] = lo
+            r.rhi[res] = hi
+            r.rkn[res] = true
+        end
+    end
+end
+
+func lv_nfit(g &: Ng, r &: Lv, v: int, uns: bool): bool:
+    if lv_nbits(g.v_ty[v]) == r.nw:
+        ret true
+    end
+    mut lo := 0 as i64
+    mut hi := 0 as i64
+    if g.v_ty[v] != T_I32 or not lv_rget(g, r, v, lo, hi):
+        ret false
+    end
+    if uns:
+        ret lo >= (0 as i64) and hi < ((1 as i64) << (r.nw as i64))
+    end
+    lim := (1 as i64) << ((r.nw - 1) as i64)
+    ret lo >= (0 as i64) - lim and hi < lim
+end
+
+func lv_nnonneg(g &: Ng, r &: Lv, v: int): bool:
+    mut lo := 0 as i64
+    mut hi := 0 as i64
+    ret lv_rget(g, r, v, lo, hi) and lo >= (0 as i64)
+end
+
+func lv_navg_ok(g &: Ng, r &: Lv, i: int): bool:
+    if r.nw != 8 or g.i_op[i] != OP_LSHR or not is_cint(g, g.i_b[i]) or g.v_i[g.i_b[i]] != (1 as i64):
+        ret false
+    end
+    a := g.i_a[i]
+    if a < 0 or g.v_kind[a] != VK_INS or g.i_op[g.v_def[a]] != OP_ADD or not lv_in(g, r, a):
+        ret false
+    end
+    d := g.v_def[a]
+    ret g.i_ty[d] == T_I32 and lv_nfit(g, r, g.i_a[d], true) and lv_nfit(g, r, g.i_b[d], true)
+end
+
+func lv_ncheck(g &: Ng, r &: Lv): bool:
+    lv_nrange(g, r)
+    r.navg.clear()
+    each i in r.body:
+        op := g.i_op[i]
+        res := g.i_res[i]
+        if res < 0 or lv_cls(r, res) != LV_VEC:
+            continue
+        end
+        if op == OP_ICMP:
+            a := g.i_a[i]
+            b := g.i_b[i]
+            p := g.i_x[i]
+            if p == CC_EQ or p == CC_NE:
+                if not ((lv_nfit(g, r, a, false) and lv_nfit(g, r, b, false)) or (lv_nfit(g, r, a, true) and lv_nfit(g, r, b, true))):
+                    ret false
+                end
+            else p >= CC_ULT:
+                if not lv_nfit(g, r, a, true) or not lv_nfit(g, r, b, true):
+                    ret false
+                end
+            else not lv_nfit(g, r, a, false) or not lv_nfit(g, r, b, false):
+                if not lv_nnonneg(g, r, a) or not lv_nnonneg(g, r, b) or not lv_nfit(g, r, a, true) or not lv_nfit(g, r, b, true):
+                    ret false
+                end
+                g.i_x[i] = p + (CC_ULT - CC_SLT)
+            end
+        else op == OP_LSHR:
+            if not lv_nfit(g, r, g.i_a[i], true):
+                if not lv_navg_ok(g, r, i):
+                    ret false
+                end
+                r.navg.push(i)
+            end
+        else op == OP_ASHR:
+            if lv_nnonneg(g, r, g.i_a[i]) and lv_nfit(g, r, g.i_a[i], true):
+                g.i_op[i] = OP_LSHR
+            else r.nw == 8 or not lv_nfit(g, r, g.i_a[i], false):
+                ret false
+            end
+        end
+    end
+    ret true
+end
+
+func lv_nbyte_shift(g &: Ng, r &: Lv, ck: int, op: int, xv: int, k: i64): int:
+    vb := r.vbody
+    v16 := vec_ty(T_I16, r.wide)
+    v8 := vec_ty(T_I8, r.wide)
+    w := lv_emit(g, vb, OP_BITCAST, v16, xv, 0 - 1)
+    g.i_x[g.v_def[w]] = v8
+    s := lv_emit(g, vb, op, v16, w, const_int(g, T_I32, k))
+    n := lv_emit(g, vb, OP_BITCAST, v8, s, 0 - 1)
+    g.i_x[g.v_def[n]] = v16
+    m := op == OP_SHL ? ((255 as i64) << k) & (255 as i64) : (255 as i64) >> k
+    ret lv_emit(g, vb, OP_AND, v8, n, lv_bcast(g, r, ck, const_int(g, T_I8, norm_int(g, T_I8, m)), v8))
+end
+
+func lv_nconst(g &: Ng, r &: Lv, v: int, vt: int): int:
+    et := g.t_elem[vt]
+    if r.nw > 0 and is_cint(g, v) and g.v_ty[v] != et:
+        ret const_int(g, et, norm_int(g, et, g.v_i[v]))
+    end
+    ret v
+end
+
+func lv_navg(g &: Ng, r &: Lv, ck: int, i: int, vt: int): int:
+    d := g.v_def[g.i_a[i]]
+    x := lv_vget(g, r, ck, g.i_a[d], vt)
+    y := lv_vget(g, r, ck, g.i_b[d], vt)
+    t1 := lv_emit(g, r.vbody, OP_AND, vt, x, y)
+    t2 := lv_emit(g, r.vbody, OP_XOR, vt, x, y)
+    t3 := lv_nbyte_shift(g, r, ck, OP_LSHR, t2, 1 as i64)
+    ret lv_emit(g, r.vbody, OP_ADD, vt, t1, t3)
+end

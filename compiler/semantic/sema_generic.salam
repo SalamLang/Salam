@@ -50,8 +50,8 @@ func g_subst(a &: at.Ast, nid: int, params: Vector<str>, args: Vector<int>):
     repeat n.list.len() in i:
         g_subst(a, n.list.get(i), params, args)
     end
-    repeat n.dims.len() in i2:
-        g_subst(a, n.dims.get(i2), params, args)
+    repeat at.Dims(a, n.ext).len() in i2:
+        g_subst(a, at.Dims(a, n.ext).get(i2), params, args)
     end
     if n.kind == at.AST_TYPE and str.Len(n.name) > 0:
         repeat params.len() in pi:
@@ -81,23 +81,22 @@ func g_subst(a &: at.Ast, nid: int, params: Vector<str>, args: Vector<int>):
             if cc.is_slice:
                 nv.is_slice = true
             end
-            if n_depth == 0 and nv.dims.len() == 0 and nv.elem_ptr_depth == 0 and not nv.is_slice:
+            if n_depth == 0 and at.Dims(a, nv.ext).len() == 0 and nv.elem_ptr_depth == 0 and not nv.is_slice:
                 nv.sema_type = cc.sema_type
-            else cc_depth == 0 and cc.dims.len() == 0 and cc.elem_ptr_depth == 0:
+            else cc_depth == 0 and at.Dims(a, cc.ext).len() == 0 and cc.elem_ptr_depth == 0:
                 nv.sema_base_type = cc.sema_type
-            else cc_depth > 0 and cc.dims.len() == 0 and cc.elem_ptr_depth == 0 and not cc.is_slice and cc.sema_base_type >= 0:
+            else cc_depth > 0 and at.Dims(a, cc.ext).len() == 0 and cc.elem_ptr_depth == 0 and not cc.is_slice and cc.sema_base_type >= 0:
                 nv.sema_base_type = cc.sema_base_type
             end
             mut merged := Vector {} as Vector<int>
-            repeat cc.dims.len() in k2:
-                merged.push(cc.dims.get(k2))
+            repeat at.Dims(a, cc.ext).len() in k2:
+                merged.push(at.Dims(a, cc.ext).get(k2))
             end
-            repeat nv.dims.len() in k3:
-                merged.push(nv.dims.get(k3))
+            repeat at.Dims(a, nv.ext).len() in k3:
+                merged.push(at.Dims(a, nv.ext).get(k3))
             end
-            nv.dims.free()
-            nv.dims = merged
             at.Put(a, nid, nv)
+            at.SetDims(a, nid, merged)
             break
         end
     end
@@ -310,7 +309,7 @@ func g_pre_resolve_targs(s &: Sema, a &: at.Ast, targ_nodes: Vector<int>): Vecto
             mut cv := at.Get(a, cid)
             cv.sema_type = t
             depth := node.ptr_depth != 0 ? node.ptr_depth : (node.is_pointer ? 1 : 0)
-            if depth > 0 and node.dims.len() == 0 and node.elem_ptr_depth == 0 and not node.is_slice:
+            if depth > 0 and at.Dims(a, node.ext).len() == 0 and node.elem_ptr_depth == 0 and not node.is_slice:
                 mut base := t
                 mut k := 0
                 until k < depth and ty_at(s, base).kind == TY_PTR:
@@ -686,10 +685,10 @@ func g_instantiate_func(
     s &: Sema, a &: at.Ast, tmpl: int, targ_nodes: Vector<int>, sp: co.SrcSpan
 ): int:
     tn := at.Get(a, tmpl)
-    if targ_nodes.len() != tn.typarams.len():
+    if targ_nodes.len() != at.Typarams(a, tn.ext).len():
         serr(
             s, 1, sp, co.Format4(
-                i18.Tr("generic '%s' expects %zu type argument%s, got %zu"), co.ArgStr(tn.name), co.ArgUint(tn.typarams.len() as u64), co.ArgStr(plural_suffix(tn.typarams.len())), co.ArgUint(targ_nodes.len() as u64)
+                i18.Tr("generic '%s' expects %zu type argument%s, got %zu"), co.ArgStr(tn.name), co.ArgUint(at.Typarams(a, tn.ext).len() as u64), co.ArgStr(plural_suffix(at.Typarams(a, tn.ext).len())), co.ArgUint(targ_nodes.len() as u64)
             )
         )
         ret 0
@@ -722,11 +721,9 @@ func g_instantiate_func(
     iv.home_pkg = derive_pkg_name_of(s, s.gen_pkg != 0 ? s.gen_pkg : s.global)
     at.Put(a, inst, iv)
     rargs := g_resolved_targs(a, targ_nodes, argtypes)
-    g_subst(a, inst, tn.typarams, rargs)
+    g_subst(a, inst, at.Typarams(a, tn.ext), rargs)
     rargs.free()
-    mut iv2 := at.Get(a, inst)
-    iv2.typarams.clear()
-    at.Put(a, inst, iv2)
+    at.ClearTyparams(a, inst)
     at.AddChild(a, s.program, inst)
     fsym := get_or_make_func(s, s.global, iname, SYM_FUNC)
     mut fv := sym_at(s, fsym)
@@ -755,7 +752,7 @@ func g_unify(s &: Sema, a &: at.Ast, pty: int, att: int, tname: str): int:
     end
     pn := intrinsic_type_canon(p.name)
     v := ty_at(s, att)
-    if str.Equals(p.name, tname) and p.dims.len() == 0:
+    if str.Equals(p.name, tname) and at.Dims(a, p.ext).len() == 0:
         if p.is_slice:
             if v.kind == TY_SLICE or v.kind == TY_ARRAY:
                 ret v.elem
@@ -895,8 +892,8 @@ func g_infer_call(
         ret 0
     end
     mut targ_nodes := Vector {} as Vector<int>
-    repeat tv.typarams.len() in t:
-        tpn := tv.typarams.get(t)
+    repeat at.Typarams(a, tv.ext).len() in t:
+        tpn := at.Typarams(a, tv.ext).get(t)
         mut bound := TYPE_NONE
         mut pi := 0
         until pi < tv.list.len() and pi < argtypes.len():

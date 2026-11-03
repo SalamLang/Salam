@@ -1,12 +1,12 @@
 pkg.en = cron
 pkg.name = cron
 pkg.group = Time and concurrency
-pkg.summary = Five-field cron expressions and a minute scheduler that runs each job on its own thread.
+pkg.summary = Cron expressions with optional seconds, interval, daily, weekly, monthly and one-time jobs, tags, limits and hooks, each job on its own thread.
 pkg.title = The cron package in Salam
 pkg.description = The cron package in Salam: parse five-field cron expressions, match a time, compute the next run, and schedule jobs on threads, with a guide and examples.
 pkg.import = cron
 pkg.intro <<
-<p><code>cron</code> parses the usual five-field cron expression, matches it against a time, computes the next matching minute, and can run registered jobs once a minute. It is a library, not a service: it runs inside your program, uses your program's threads and stops when your program stops.</p>
+<p><code>cron</code> parses the usual five-field cron expression (or six, with a leading seconds field), matches it against a time, computes the next matching moment, and runs registered jobs on a one-second tick. It is a library, not a service: it runs inside your program, uses your program's threads and stops when your program stops.</p>
 <p>The five fields are minute, hour, day of month, month and day of week, in that order. Each field accepts <code>*</code>, a number, a range <code>a-b</code>, a list <code>a,b,c</code>, and a step <code>*/n</code> or <code>a-b/n</code>. Months and weekdays also accept three-letter English names such as <code>jan</code> and <code>mon</code>. As in Vixie cron, when both day fields are restricted a time matches either of them; when one is <code>*</code>, both must match.</p>
 <pre class="code"><code>*/15 * * * *        every quarter hour
 0 9-17 * * mon-fri  every hour from 9 to 17 on weekdays
@@ -42,11 +42,49 @@ cron.RunBackground()
 time.Sleep(60000)
 cron.Stop()</code></pre>
 
+<h2 id="guide-seconds">Seconds</h2>
+<p>A sixth field in front of the minute gives second resolution: <code>*/10 * * * * *</code> fires every ten seconds and <code>0 30 9 * * mon</code> at 09:30:00 on Mondays. With five fields nothing changes: the job fires once in the matching minute.</p>
+
+<h2 id="guide-readable">Setting a time without cron syntax</h2>
+<p>Most schedules are a clock time, so they have helpers that take <code>"HH:MM"</code> or <code>"HH:MM:SS"</code>.</p>
+<pre class="code"><code>cron.DailyAt("report", "10:30", report)
+cron.WeeklyAt("backup", "mon-fri", "02:00", backup)
+cron.MonthlyAt("invoice", 1, "08:00", invoice)
+cron.Every("heartbeat", 30, beat)
+cron.EveryBetween("poll", 20, 40, poll)
+cron.Once("launch", 1792900000 as i64, launch)</code></pre>
+<p>All of them return the job id, or -1 when the time does not parse. <code>Every</code> counts from now; <code>EveryBetween</code> picks a random gap between its two bounds each time, which spreads load.</p>
+{{example.cron-jobs}}
+
+<h2 id="guide-control">Controlling jobs</h2>
+<p>Ids are never reused. <code>Remove</code> and <code>RemoveByTag</code> retire jobs, <code>Find</code> looks one up by name, and <code>SetTags</code> takes a comma-separated list. <code>Limit</code> stops a job after n runs, <code>StartAt</code> and <code>StopAt</code> bound it in time, <code>FromCompletion</code> counts an interval from the end of a run, and <code>Queue</code> makes a firing that finds the job busy wait instead of being skipped. <code>RunNow</code> runs a job immediately, <code>NextRun</code> reports its next firing, and <code>Runs</code>, <code>LastRun</code> and <code>LastFinished</code> report what happened. <code>OnBefore</code> and <code>OnAfter</code> register one handler each that runs around every job. <code>StopWait</code> stops the loop and waits for running jobs up to a timeout in milliseconds.</p>
+
+<h2 id="guide-gocron">Compared with gocron</h2>
+<p>Salam cron covers gocron's schedule kinds and job options, except distribution.</p>
+<table>
+<tr><th>gocron</th><th>Salam cron</th></tr>
+<tr><td>CronJob(expr, withSeconds)</td><td>Add with five or six fields</td></tr>
+<tr><td>DurationJob, DurationRandomJob</td><td>Every, EveryBetween</td></tr>
+<tr><td>DailyJob, WeeklyJob, MonthlyJob</td><td>DailyAt, WeeklyAt, MonthlyAt (interval of 1)</td></tr>
+<tr><td>OneTimeJob</td><td>Once</td></tr>
+<tr><td>WithName, WithTags</td><td>the name argument, SetTags</td></tr>
+<tr><td>WithLimitedRuns</td><td>Limit</td></tr>
+<tr><td>WithStartAt, WithStopAt</td><td>StartAt, StopAt</td></tr>
+<tr><td>WithIntervalFromCompletion</td><td>FromCompletion</td></tr>
+<tr><td>WithSingletonMode (reschedule or wait)</td><td>skip by default, Queue to wait</td></tr>
+<tr><td>Before and After listeners</td><td>OnBefore, OnAfter (error and panic listeners: none)</td></tr>
+<tr><td>NextRun, LastRun, RunNow, RemoveJob</td><td>NextRun, LastRun, RunNow, Remove</td></tr>
+<tr><td>WithLocation</td><td>SetZone (one zone for all jobs)</td></tr>
+<tr><td>WithStopTimeout, Shutdown</td><td>StopWait</td></tr>
+<tr><td>Distributed elector and locker, monitors, concurrency limit, daily or weekly every n</td><td>not available</td></tr>
+</table>
+<p>For a readable clock time, <code>DailyAt("report", "10:30", f)</code> is shorter than gocron's <code>DailyJob(1, NewAtTimes(NewAtTime(10, 30, 0)))</code>, and a plain cron string works in both.</p>
+
 <h2 id="guide-limits">What to know</h2>
 <ul>
-<li>Resolution is one minute. There are no seconds and no sub-minute schedules.</li>
+<li>Resolution is one second, and only for jobs with a six-field expression or an interval. Five-field jobs fire once in their minute.</li>
 <li>Jobs run on their own threads and share the process with you. A panic, a blocking read or a long loop in one job affects the whole program.</li>
-<li><code>Stop</code> is cooperative: the loop checks the flag between minutes and while sleeping, so a job that ignores its own cancellation can keep running.</li>
+<li><code>Stop</code> is cooperative: the loop checks the flag several times a second, so a job that ignores its own cancellation can keep running.</li>
 <li>The package does not persist jobs. If you need them after a restart, store the name and expression yourself and register them again at startup.</li>
 <li>A day-of-month and day-of-week pair that are both restricted matches either field, as in Vixie cron. This is often surprising; prefer a single day field when you can.</li>
 </ul>
@@ -60,21 +98,48 @@ doc.Expr.months = The months that match, as a bit mask.
 doc.Expr.weekdays = The weekdays that match, as a bit mask; Sunday is bit 0.
 doc.Expr.dom_star = True when the day-of-month field was <code>*</code>.
 doc.Expr.dow_star = True when the day-of-week field was <code>*</code>.
+doc.Expr.seconds = The seconds that match, as a bit mask; only used when <code>with_seconds</code> is true.
+doc.Expr.with_seconds = True when the text had a leading seconds field.
 doc.Expr.ok = True when the text parsed; every other function refuses an expression whose <code>ok</code> is false.
-doc.Parse = Parses five fields or a macro such as <code>@daily</code>. Returns an expression with <code>ok</code> false on a bad field count, a number out of range, a broken range, a zero step or an unknown name.
+doc.Parse = Parses five fields, or six with a leading seconds field, or a macro such as <code>@daily</code>. Returns an expression with <code>ok</code> false on a bad field count, a number out of range, a broken range, a zero step or an unknown name.
 doc.MatchFields = True when the local minute, hour, day, month and weekday match the expression. Weekdays are 0 for Sunday through 6 for Saturday.
 doc.MatchesLocal = True when a wall-clock instant in seconds, already shifted by the zone offset, matches the expression.
 doc.OffsetSeconds = The offset of a time zone at an instant, in seconds; the fallback in minutes when the zone cannot be loaded.
-doc.Next = The first minute strictly after <code>after</code> that matches, in UTC seconds, or 0 when none is found within the scan limit.
+doc.Next = The first moment (minute, or second for six fields) strictly after <code>after</code> that matches, in UTC seconds, or 0 when none is found within the scan limit.
 doc.SetZone = Sets the zone name and fallback offset for the scheduler. The default is <code>UTC</code> with 0.
 doc.Add = Registers a handler under a name and a schedule and returns the job id, or -1 when the schedule does not parse. A handler takes the job id as an <code>i64</code>.
-doc.Count = The number of registered jobs.
+doc.Count = The number of jobs that have not been removed.
 doc.Name = The name of a job.
 doc.IsBusy = True while the job is running from a firing; the scheduler skips a busy job.
 doc.RunDue = Starts every job due at the given UTC time, each on its own thread, and returns how many started. A busy job is skipped.
-doc.Run = Blocks and fires due jobs once a minute until <code>Stop</code> is called.
+doc.Run = Blocks and fires due jobs, checking several times a second, until <code>Stop</code> is called.
 doc.RunBackground = Starts the same loop on its own thread and returns at once.
 doc.Stop = Asks the scheduler loop to end after the current job. A job already running is not interrupted.
+doc.Every = Runs a handler every n seconds, the first time n seconds from now. Returns the job id, or -1 for n of 0 or less.
+doc.EveryBetween = Runs a handler after a random gap between two bounds in seconds, drawn again after each firing.
+doc.Once = Runs a handler once at a UTC instant, then retires the job.
+doc.DailyAt = Runs a handler every day at <code>"HH:MM"</code> or <code>"HH:MM:SS"</code> in the scheduler zone. Returns -1 when the time does not parse.
+doc.WeeklyAt = Runs a handler on the given weekdays (for example <code>"mon-fri"</code>) at a clock time.
+doc.MonthlyAt = Runs a handler on a day of the month (1 to 31) at a clock time.
+doc.Total = Every id ever issued, including removed jobs. Use it to loop over ids.
+doc.Find = The id of the first live job with that name, or -1.
+doc.Remove = Retires a job; it never fires again and its id is not reused.
+doc.SetTags = Replaces a job's tags with a comma-separated list.
+doc.HasTag = True when the job carries the tag.
+doc.RemoveByTag = Retires every live job with the tag and returns how many.
+doc.Limit = Retires the job after n runs.
+doc.StartAt = The job does not fire before this UTC instant.
+doc.StopAt = The job does not fire after this UTC instant.
+doc.FromCompletion = Counts an interval job's next gap from the end of a run, not its start.
+doc.Queue = A firing that finds the job busy waits and runs after it, instead of being skipped.
+doc.OnBefore = Registers a handler (taking the job id) that runs before every job.
+doc.OnAfter = Registers a handler (taking the job id) that runs after every job.
+doc.Runs = How many times the job has started.
+doc.LastRun = When the last run started, in UTC seconds, or 0.
+doc.LastFinished = When the last run finished, in UTC seconds, or 0.
+doc.NextRun = The next firing after the given instant, honouring StartAt and StopAt, or 0 when there is none.
+doc.RunNow = Starts a job immediately, outside its schedule. Returns false when it is busy.
+doc.StopWait = Stops the loop, then waits up to a timeout in milliseconds for running jobs to finish.
 
 ex.Expr = -
 ex.Parse = cron-Parse
@@ -91,3 +156,28 @@ ex.RunDue = cron-Schedule
 ex.Run = cron-Schedule
 ex.RunBackground = cron-Schedule
 ex.Stop = cron-Schedule
+ex.Every = cron-Jobs
+ex.EveryBetween = cron-Jobs
+ex.Once = cron-Jobs
+ex.DailyAt = cron-Jobs
+ex.WeeklyAt = cron-Jobs
+ex.MonthlyAt = cron-Jobs
+ex.Find = cron-Jobs
+ex.Remove = cron-Jobs
+ex.SetTags = cron-Jobs
+ex.HasTag = cron-Jobs
+ex.RemoveByTag = cron-Jobs
+ex.Limit = cron-Jobs
+ex.StartAt = cron-Jobs
+ex.StopAt = cron-Jobs
+ex.FromCompletion = cron-Jobs
+ex.Queue = cron-Jobs
+ex.NextRun = cron-Jobs
+ex.RunNow = cron-Jobs
+ex.Total = -
+ex.OnBefore = -
+ex.OnAfter = -
+ex.Runs = -
+ex.LastRun = -
+ex.LastFinished = -
+ex.StopWait = -

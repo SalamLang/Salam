@@ -27,6 +27,7 @@ import mem
 import time
 import calendar
 import rand
+import sync
 
 if SALAM_OS_WINDOWS:
     extern:
@@ -65,7 +66,9 @@ const S_STOP_AT := 11
 const S_AFTER_DONE := 12
 const S_QUEUE := 13
 const S_PENDING := 14
-const S_COUNT := 15
+const S_FAILED := 15
+const S_FAILS := 16
+const S_COUNT := 17
 
 mut _jobs := Vector {} as Vector<_Job>
 mut _zone_name := "UTC"
@@ -73,6 +76,9 @@ mut _zone_fallback := 0
 mut _stop := null as i64*
 mut _last_minute := 0 as i64
 
+mut _mu := sync.NewMutex()
+mut _gcell := mem.AllocateZeroed(16 as u64) as i64*
+mut _on_error := 0 as i64
 mut _before := 0 as i64
 mut _after := 0 as i64
 
@@ -120,8 +126,22 @@ pub struct Expr:
     pub ok: bool = false
 end
 
+func _job(i: int): _Job:
+    sync.Lock(_mu)
+    j := _jobs.get(i)
+    sync.Unlock(_mu)
+    ret j
+end
+
+func _n(): int:
+    sync.Lock(_mu)
+    n := _jobs.len()
+    sync.Unlock(_mu)
+    ret n
+end
+
 func _slot(base: i64, slot: int): i64*: ret (base + ((slot * 8) as i64)) as i64* end
-func _cell(id: int): i64: ret _jobs.get(id).cell end
+func _cell(id: int): i64: ret _job(id).cell end
 func _get(id: int, slot: int): i64: ret atomic_load(_slot(_cell(id), slot)) end
 func _put(id: int, slot: int, v: i64): atomic_store(_slot(_cell(id), slot), v) end
 
@@ -247,7 +267,7 @@ end
 
 func _cron_entry(id: i64):
     i := id as int
-    j := _jobs.get(i)
+    j := _job(i)
     if _before != (0 as i64): callhandler(_before, id) end
     _put(i, S_STARTED, time.Now())
     callhandler(j.fn, id)
@@ -259,6 +279,12 @@ func _cron_entry(id: i64):
         if j.kind == JOB_BETWEEN: next = done + _pick(i) end
         _put(i, S_NEXT, next)
     end
+    if _get(i, S_FAILED) != (0 as i64):
+        _put(i, S_FAILS, _get(i, S_FAILS) + (1 as i64))
+        _put(i, S_FAILED, 0 as i64)
+        if _on_error != (0 as i64): callhandler(_on_error, id) end
+    end
+    atomic_add(_slot(_gcell as i64, 1), 0 as i64 - (1 as i64))
     _put(i, S_BUSY, 0 as i64)
     if _get(i, S_PENDING) != (0 as i64):
         _put(i, S_PENDING, 0 as i64)
@@ -274,10 +300,13 @@ func _pick(i: int): i64:
 end
 
 func _launch(i: int): bool:
+    cap := atomic_load(_gcell)
+    if cap > (0 as i64) and atomic_load(_slot(_gcell as i64, 1)) >= cap: ret false end
     if atomic_swap(_slot(_cell(i), S_BUSY), 1 as i64) != (0 as i64):
         if _get(i, S_QUEUE) != (0 as i64): _put(i, S_PENDING, 1 as i64) end
         ret false
     end
+    atomic_add(_slot(_gcell as i64, 1), 1 as i64)
     _put(i, S_RUNS, _get(i, S_RUNS) + (1 as i64))
     lim := _get(i, S_LIMIT)
     if lim > (0 as i64) and _get(i, S_RUNS) >= lim: _put(i, S_REMOVED, 1 as i64) end
@@ -317,8 +346,11 @@ func _register(name: str, kind: int, e: Expr, fn: i64, interval: i64, hi: i64, f
     atomic_store(_slot(cell as i64, S_INTERVAL), interval)
     atomic_store(_slot(cell as i64, S_MAX), hi)
     atomic_store(_slot(cell as i64, S_NEXT), first)
+    sync.Lock(_mu)
     _jobs.push(_Job { name = str.Clone(name), kind = kind, expr = e, fn = fn, cell = cell as i64 })
-    ret _jobs.len() - 1
+    id := _jobs.len() - 1
+    sync.Unlock(_mu)
+    ret id
 end
 
 // "H:M" or "H:M:S" to the leading cron fields "[S ]M H". Empty when invalid.
@@ -342,7 +374,7 @@ func _due(i: int, now: i64, dedupe: bool): bool:
     if st > (0 as i64) and now < st: ret false end
     stop := _get(i, S_STOP_AT)
     if stop > (0 as i64) and now > stop: ret false end
-    j := _jobs.get(i)
+    j := _job(i)
     if j.kind != JOB_CRON:
         nx := _get(i, S_NEXT)
         if nx == (0 as i64) or now < nx: ret false end
@@ -362,7 +394,7 @@ func _due(i: int, now: i64, dedupe: bool): bool:
 end
 
 func _advance(i: int, now: i64):
-    j := _jobs.get(i)
+    j := _job(i)
     if j.kind == JOB_CRON:
         slot := now / (60 as i64)
         if j.expr.with_seconds: _put(i, S_SLOT, now + (1 as i64)) else:
@@ -388,7 +420,7 @@ end
 
 func _fire_due(now: i64, dedupe: bool): int:
     mut started := 0
-    n := _jobs.len()
+    n := _n()
     repeat n in i:
         if _due(i, now, dedupe):
             _advance(i, now)
@@ -563,7 +595,7 @@ end
 @fa "تعداد"
 pub func Count(): int:
     mut n := 0
-    repeat _jobs.len() in i:
+    repeat _n() in i:
         if _get(i, S_REMOVED) == (0 as i64): n += 1 end
     end
     ret n
@@ -572,17 +604,17 @@ end
 // Every id ever issued, including removed jobs (ids are never reused).
 @en "Total"
 @fa "کل"
-pub func Total(): int: ret _jobs.len() end
+pub func Total(): int: ret _n() end
 
 @en "Name"
 @fa "نام"
-pub func Name(id: int): str: ret _jobs.get(id).name end
+pub func Name(id: int): str: ret _job(id).name end
 
 @en "Find"
 @fa "یافتن"
 pub func Find(name: str): int:
-    repeat _jobs.len() in i:
-        if _jobs.get(i).name == name and _get(i, S_REMOVED) == (0 as i64): ret i end
+    repeat _n() in i:
+        if _job(i).name == name and _get(i, S_REMOVED) == (0 as i64): ret i end
     end
     ret 0 - 1
 end
@@ -596,28 +628,30 @@ end
 @en "Remove"
 @fa "حذف"
 pub func Remove(id: int):
-    if id >= 0 and id < _jobs.len(): _put(id, S_REMOVED, 1 as i64) end
+    if id >= 0 and id < _n(): _put(id, S_REMOVED, 1 as i64) end
 end
 
 // Comma separated tags, replacing any earlier ones.
 @en "SetTags"
 @fa "تنظیم برچسب"
 pub func SetTags(id: int, tags: str):
-    j := _jobs.get(id)
+    j := _job(id)
+    sync.Lock(_mu)
     _jobs.set(id, _Job { name = j.name, tags = "," + tags + ",", kind = j.kind, expr = j.expr, fn = j.fn, cell = j.cell })
+    sync.Unlock(_mu)
 end
 
 @en "HasTag"
 @fa "برچسب دارد"
 pub func HasTag(id: int, tag: str): bool:
-    ret str.Contains(_jobs.get(id).tags, "," + tag + ",")
+    ret str.Contains(_job(id).tags, "," + tag + ",")
 end
 
 @en "RemoveByTag"
 @fa "حذف با برچسب"
 pub func RemoveByTag(tag: str): int:
     mut n := 0
-    repeat _jobs.len() in i:
+    repeat _n() in i:
         if HasTag(i, tag) and _get(i, S_REMOVED) == (0 as i64):
             Remove(i)
             n += 1
@@ -672,6 +706,31 @@ pub func OnAfter(fn: i64):
     _after = fn
 end
 
+// Call from inside a handler to mark the current run as failed.
+@en "Fail"
+@fa "شکست"
+pub func Fail(id: i64):
+    _put(id as int, S_FAILED, 1 as i64)
+end
+
+// Registers a handler (taking the job id) that runs after a run that called Fail.
+@en "OnError"
+@fa "هنگام خطا"
+pub func OnError(fn: i64):
+    _on_error = fn
+end
+
+@en "Failures"
+@fa "تعداد شکست"
+pub func Failures(id: int): i64: ret _get(id, S_FAILS) end
+
+// At most n jobs run at once; a firing past the cap is skipped. 0 removes the cap.
+@en "ConcurrencyLimit"
+@fa "سقف هم‌زمانی"
+pub func ConcurrencyLimit(n: int):
+    atomic_store(_gcell, n as i64)
+end
+
 @en "Runs"
 @fa "تعداد اجرا"
 pub func Runs(id: int): i64: ret _get(id, S_RUNS) end
@@ -689,7 +748,7 @@ pub func LastFinished(id: int): i64: ret _get(id, S_FINISHED) end
 @fa "اجرای بعدی"
 pub func NextRun(id: int, after: i64): i64:
     if _get(id, S_REMOVED) != (0 as i64): ret 0 end
-    j := _jobs.get(id)
+    j := _job(id)
     mut t := 0 as i64
     if j.kind == JOB_CRON:
         t = Next(j.expr, after, _zone_name, _zone_fallback)
@@ -721,7 +780,7 @@ end
 @en "RunNow"
 @fa "اجرای فوری"
 pub func RunNow(id: int): bool:
-    if id < 0 or id >= _jobs.len(): ret false end
+    if id < 0 or id >= _n(): ret false end
     ret _launch(id)
 end
 
@@ -765,7 +824,7 @@ pub func StopWait(timeout_ms: int):
     mut waited := 0
     until waited < timeout_ms:
         mut any := false
-        repeat _jobs.len() in i:
+        repeat _n() in i:
             if IsBusy(i): any = true end
         end
         if not any: ret end

@@ -79,7 +79,7 @@ func emit_arg(
     mut ty := ty_of(v, s, a, pts)
     mut ref2 := conv(v, s, a, val, pts)
     if i < sg.params.len() and sig_is_extern(s, a, sig):
-        exa := ex_classify(v, s, a, pts)
+        exa := ex_param(v, s, a, sig, i)
         if exa.mode != EXM_NONE:
             ex_emit_arg(v, ab, exa, ty, ref2)
             ret
@@ -93,6 +93,12 @@ func emit_arg(
     end
     if str.Equals(ty, "i1") and i < sg.params.len() and sig_is_extern(s, a, sig):
         co.SbPuts(ab, "i1 zeroext " + ref2)
+        ret
+    end
+    if i >= sg.params.len() and sig_is_extern(s, a, sig):
+        mut pty := ""
+        pref := ex_va_promote(v, ty, ref2, is_signed_ts(pts), pty)
+        co.SbPuts(ab, pty + " " + pref)
         ret
     end
     co.SbPuts(ab, ty + " " + ref2)
@@ -184,25 +190,7 @@ func call_user(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, nm: str): Llv:
 
     is_ext := sm.SigAt(s, sig).decl != 0 and at.Get(a, sm.SigAt(s, sig).decl).is_extern
     fname := is_ext ? cname : mangle(v, s, "", nm, sig)
-    mut callty := ""
-    if is_ext and sm.SigAt(s, sig).variadic:
-        mut sp := co.SbNew()
-        co.SbPutc(sp, 40)
-        sg := sm.SigAt(s, sig)
-        repeat sg.params.len() in j:
-            if j > 0:
-                co.SbPuts(sp, ", ")
-            end
-            mut pty := ty_of(v, s, a, sm.ToString(s, sg.params.get(j)))
-            if str.Equals(pty, "i64") and not str.Equals(v.usize, "i64") and libc_size_param(nm, j):
-                pty = v.usize
-            end
-            co.SbPuts(sp, pty)
-        end
-        co.SbPuts(sp, sg.params.len() > 0 ? ", ...)" : "...)")
-        callty = " " + co.SbCstr(sp)
-        co.SbFree(sp)
-    end
+    callty := is_ext ? ex_va_callty(v, s, a, sig, cname) : ""
     cc := StdcallCc(v, fname)
     iok := is_ext ? lv_extern_io_pre(v, fname) : 0
     if str.Equals(rts, "void"):
@@ -213,7 +201,7 @@ func call_user(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, nm: str): Llv:
     if is_ext:
         exr := ex_classify(v, s, a, rts)
         if exr.mode != EXM_NONE:
-            rv := ex_emit_call(v, s, a, exr, rts, cc, fname, argsx)
+            rv := ex_emit_call(v, s, a, exr, rts, cc, callty, fname, argsx)
             lv_extern_io_post(v, iok)
             ret rv
         end
@@ -328,18 +316,19 @@ func emit_call(
     fill_defaults(v, s, a, ab, n, sig, first)
     argsx := co.SbCstr(ab)
     co.SbFree(ab)
+    callty := ex_va_callty(v, s, a, sig, fname)
     if str.Equals(rts, "void"):
-        emit(v, "call void " + gsym(fname) + "(" + argsx + ")")
+        emit(v, "call void" + callty + " " + gsym(fname) + "(" + argsx + ")")
         ret make_llv("0", "void")
     end
     if sig_is_extern(s, a, sig):
         exr := ex_classify(v, s, a, rts)
         if exr.mode != EXM_NONE:
-            ret ex_emit_call(v, s, a, exr, rts, StdcallCc(v, fname), fname, argsx)
+            ret ex_emit_call(v, s, a, exr, rts, StdcallCc(v, fname), callty, fname, argsx)
         end
     end
     r := new_tmp(v)
-    emit(v, r + " = call " + ty_of(v, s, a, rts) + " " + gsym(fname) + "(" + argsx + ")")
+    emit(v, r + " = call " + ty_of(v, s, a, rts) + callty + " " + gsym(fname) + "(" + argsx + ")")
     ret make_llv(r, rts)
 end
 

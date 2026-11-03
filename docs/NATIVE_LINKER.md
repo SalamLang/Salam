@@ -120,8 +120,9 @@ segments so that no page is both writable and executable:
 Plus `PT_GNU_STACK` (non-executable stack) and `PT_GNU_EH_FRAME` for
 `.eh_frame_hdr`. Segments are aligned to the page size and file
 offsets are congruent to addresses modulo the page size. Input sections keep
-their alignment, are placed in input order, and same-named `.rodata.cst*`
-constants may be merged later as an optimisation.
+their alignment and are placed in input order. Sections flagged
+`SHF_MERGE` are split into their strings or constants and identical ones
+kept once; see "Section merging and identical code folding".
 
 `.init` and `.fini` are concatenated in link order: `crti.o`'s prologue, any
 middle pieces, then `crtn.o`'s epilogue. That is the order `cc` uses.
@@ -253,6 +254,10 @@ x86-64 musl, a PIE for x86-64 glibc, and a PE for x86-64 Windows. It falls
 back to `system` otherwise. `SALAM_LINKER` sets the default mode, which
 is how the test runner forces one or the other.
 
+`--icf` turns on identical code folding in the built-in linker for ELF, PE
+and Mach-O output (see "Section merging and identical code folding"). It is
+off by default and `--release` does not turn it on.
+
 ## Code layout
 
 A new package `compiler/nativelink/`, independent of `nativegen` except for
@@ -267,6 +272,8 @@ the in-memory object hand-off:
 | `nl_layout.salam` | output sections, segments, addresses, synthetic symbols |
 | `nl_reloc.salam` | relocation application and GOT relaxation |
 | `nl_elfout.salam` | executable writer |
+| `nl_split.salam` | splitting `SHF_MERGE` sections and, with `--icf`, our code (and COFF `.pdata`) into pieces |
+| `nl_icf.salam` | identical code folding |
 | `nl_api.salam` | `Link(inputs, options) -> result` with diagnostics |
 
 ## Testing
@@ -441,6 +448,11 @@ file alignment `0x200`:
 | `.idata` | `$2`, five zero words, `$4`, `$5` (the IAT, data directory 12), `$6`, `$7` |
 | `.tls` | `.tls$AAA`, `.tls` (mingw's `_tls_start`), `.tls$` (clang's thread-locals), other `.tls$*`, `.tls$ZZZ`; `_tls_used` becomes data directory 9 |
 | `.reloc` | base relocations for every `ADDR64` (dynamic base) |
+
+Data directory 1 covers the `.idata$2` descriptors and data directory 12
+runs from the first `.idata$5` slot to the end of the last, for executables
+and DLLs on every PE machine, so it matches the `ImportAddressTableRVA` of
+each DLL that `llvm-readobj --coff-imports` lists.
 
 Relocations: `ADDR64`, `ADDR32`, `ADDR32NB` (image-relative), `REL32` and
 `REL32_1` to `REL32_5`, `SECTION`, `SECREL` (for TLS). Entry point
@@ -1028,3 +1040,178 @@ a C program and a Salam program that call both. On the build machine the C
 program also runs under valgrind, the library is loaded and closed twice with
 `dlopen`/`dlclose`, and the same library built by the C backend must print
 the same output.
+
+## Section merging and identical code folding
+
+### `SHF_MERGE` sections
+
+C compilers put string literals in sections such as `.rodata.str1.1`
+(`SHF_MERGE | SHF_STRINGS`, entry size 1) and floating point and vector
+constants in `.rodata.cst4`, `.cst8`, `.cst16` and `.cst32` (`SHF_MERGE`,
+entry size the constant's size). Every ELF link splits such a section into
+pieces: with `SHF_STRINGS` each string up to and including its terminator,
+read in units of the entry size (a string with no terminator is one piece),
+otherwise every entry. Pieces with the same bytes, entry size, alignment and
+flags are kept once, across all objects. Each piece keeps its section's
+alignment, as lld does. A section stays whole when it is writable or TLS, has
+relocations of its own, or its size is not a multiple of the entry size, and
+non-allocated ones such as `.debug_str` are concatenated as before.
+
+References move the way lld moves them. A relocation against a section
+symbol picks the piece at `value + addend` and points at that piece plus the
+rest of the offset, which is the form clang writes for AArch64
+(`.rodata.str1.1 + 0xc`). A named symbol (the `.LC0` that gcc writes, which
+`R_X86_64_PC32 .LC0 - 4` refers to) is moved to its piece and the addend is
+applied after. From then on the pieces are ordinary input sections, so
+garbage collection keeps only the strings something refers to, and the kept
+ones are laid out where their section stood.
+
+### Identical code folding
+
+`--icf` folds functions of our own objects whose code and relocations are
+the same. It works for x86-64 and AArch64 ELF output (static, PIE or shared
+library), for PE output on x86-64, i686 and ARM64 Windows (executable or
+DLL) and for Mach-O output on x86-64 and arm64 macOS (executable or dylib);
+other targets ignore the flag. Our objects are the ones the native backend
+wrote, which have a `.rodata.salam` section (`.rdata$s` in COFF, and in
+Mach-O a `__TEXT,__salam_cst` section or the `salam_eh_frame` symbol). An
+object built with `-g` (DWARF or CodeView) is left alone, since its line
+table is one sequence over the whole `.text` and every function folded away
+would shift the rows after it.
+
+The native backend puts every function in one `.text` and writes a
+relocation for every reference, even a call to the next function, so the
+linker can cut `.text` at each `STT_FUNC` symbol into one piece per function.
+The padding after a function goes with it, and a piece keeps the largest
+alignment its offset had. A reference through the section symbol moves to
+the piece the target lies in, which for an x86-64 PC-relative relocation in
+code is `value + addend + 4`, since there the addend is the target minus the
+4 bytes of the field. C objects are never cut, because the assembler resolves
+a call within a section without leaving a relocation.
+
+Two functions fold when they have the same size, alignment, bytes and
+relocations (offset, type and addend). A call or tail call
+(`R_X86_64_PLT32`, `R_AARCH64_CALL26`, `R_AARCH64_JUMP26`) to another
+candidate only needs that candidate to be in the same class, and the
+classes are split until they stop changing, as lld does, so equal call trees
+fold together. Every other reference needs the very same target.
+
+The rules are lld's `--icf=safe`. A function whose address is taken is never
+folded away, because two function pointers that used to differ would then
+compare equal. Its address is taken when a relocation other than a call
+refers to it from a live allocated section other than `.eh_frame`, when it is
+`main` or `_start`, when a shared library we build exports it, or when a
+shared library we link against names it. Since our objects relocate every
+reference, nothing escapes that list. A function whose address is taken can
+still be the one others fold into, but two such functions never fold
+together. A folded function's symbols, `.eh_frame` entry and debug
+information point at the copy that stays, and `.eh_frame_hdr` lists that
+address once.
+
+### ICF on PE and Mach-O
+
+The same pass runs on COFF inputs and Mach-O objects, before the PE or
+Mach-O layout, with these differences:
+
+- COFF keeps addends in the section bytes, so comparing the bytes compares
+  them. The native backend refers to every function by its own symbol
+  (`IMAGE_SYM_DTYPE_FUNCTION` in the symbol's type), never through a section
+  symbol, so cutting `.text` at those symbols needs no addend changes. A
+  Mach-O object from the native backend uses only external relocations, and
+  their addends are already read into the relocation.
+- x86-64 COFF has one PC-relative type, `IMAGE_REL_AMD64_REL32`, for calls
+  and for `lea rax, [rip + f]` alike, and i686 uses `IMAGE_REL_I386_REL32`
+  for `call` and `jmp`. Such a relocation counts as a call only when the
+  byte before it is `E8` or `E9`, or `0F 8x` before it for a conditional
+  jump. A RIP-relative operand is preceded by its ModRM byte, which is never
+  one of those, so taking an address is never mistaken for a call. On ARM64
+  COFF the call is `IMAGE_REL_ARM64_BRANCH26`; on Mach-O it is
+  `X86_64_RELOC_BRANCH` and `ARM64_RELOC_BRANCH26`.
+- A PE link has no section garbage collection: everything a link pulls in
+  is laid out, and a folded function is dropped from the layout instead.
+  Each piece takes the place of the `.text` it was cut from, so the order
+  of the image is the same as without `--icf`.
+- `.pdata` of our objects is cut into its `RUNTIME_FUNCTION` entries (12
+  bytes on x86-64, 8 on ARM64) and the entry of a folded function is
+  dropped, so the exception directory lists each function once and stays
+  sorted. Its `.xdata` bytes stay, unreferenced. A reference from `.pdata`
+  does not take an address, like one from `.eh_frame`. i686 has no `.pdata`.
+- Import thunks and the IAT come from import libraries, never from our
+  objects, so they are never cut or folded; a call through one compares its
+  target like any other reference.
+- On Mach-O a folded function's `__eh_frame` FDE points at the copy that
+  stays, and `__unwind_info` lists that address once. Chained fixups, the
+  classic rebase and bind opcodes and the code signature are all computed
+  from the final layout, so they need nothing more.
+- `main` (`_main`, `WinMain` and their i686 spellings) is never folded away,
+  nor is a function a DLL exports or a dylib exports (any global that is
+  not hidden).
+
+It stays opt-in, also with `--release`: a backtrace, profile or debugger
+then names the function that stayed, and the native backend already inlines
+most of the small helpers that ICF removes from C++ programs, so the gain on
+Salam code is small.
+
+### Measurements
+
+All on x86-64, linking the object the native backend writes for the compiler
+itself (`compiler/main.salam --release`, 3,493 functions), once with the
+linker before this change and once after it. Sizes in bytes:
+
+| Link | `.rodata` | `.text` | File |
+|---|---|---|---|
+| glibc PIE, before | 305,808 | 6,778,034 | 8,138,248 |
+| glibc PIE, after | 305,808 | 6,778,034 | 8,138,248 |
+| glibc PIE, after, `--icf` | 305,808 | 6,774,002 | 8,134,152 |
+| static musl, before | 326,868 | 6,874,534 | 8,136,032 |
+| static musl, after | 326,260 | 6,874,534 | 8,131,936 |
+| static musl, after, `--icf` | 326,260 | 6,870,502 | 8,127,840 |
+
+Merging finds nothing to share in our own object, whose constants sit in one
+plain `.rodata`, and glibc's startup files bring only 4 bytes of mergeable
+data. Against static musl, the 2,065 bytes of mergeable strings and constants
+in the `libc.a` members we pull in come down to 1,432, and `.rodata` shrinks
+by 608 bytes. ICF folds 17 functions (4,512 bytes, 4,032 after alignment),
+all generic instances or helpers that came out the same, such as
+`HashMap<str, bool>.has` and `HashMap<str, i32>.has`, `Vector<i64>.push` and
+`Vector<str>.push`, or `Vector<u8>.free` and `Vector<i64>.free`. A small C
+program with the same string in two objects (gcc for x86-64, clang for
+AArch64, RISC-V, i686 and ARM, static musl) prints the same and has a
+`.rodata` 0 to 32 bytes smaller.
+
+Link time, best CPU time (user plus system) of ten runs of a program that
+calls `nativelink.Link` on the same inputs:
+
+| Link | Before | After | After, `--icf` |
+|---|---|---|---|
+| glibc PIE | 34 ms | 42 ms | 71 ms |
+| static musl | 37 ms | 40 ms | 70 ms |
+
+Splitting the sections and moving every symbol and relocation is most of what
+`--icf` costs; finding the 17 folds takes about a third of it.
+
+On PE and Mach-O, the compiler itself built for each target and linked
+without and with `--icf` (sizes in bytes; a file only shrinks by whole file
+alignment units, 512 bytes in a PE and a page in Mach-O):
+
+| Target | Folded | Bytes | File | File, `--icf` |
+|---|---|---|---|---|
+| `x86_64-w64-windows-gnu` | 19 | 5,984 | 6,985,857 | 6,979,713 |
+| `i686-w64-windows-gnu` | 16 | 4,576 | 9,887,860 | 9,883,764 |
+| `aarch64-w64-windows-gnu` | 35 | 15,632 | 7,701,070 | 7,685,198 |
+| `x86_64-apple-macos` | 16 | 3,296 | 8,122,688 | 8,118,560 |
+| `arm64-apple-macos` | 38 | 15,520 | 8,712,752 | 8,696,240 |
+
+The x86-64 and i686 Windows compilers print the same AST for a test under
+wine with and without `--icf`, and so does the x86_64 macOS one under
+`machorun.py`. The exception directory loses exactly the folded functions'
+entries (3,464 to 3,445 on x86-64, 3,415 to 3,380 on ARM64) and stays in
+order. On arm64 macOS `__unwind_info` goes from 6,175 to 6,103 entries,
+sorted and without repeats, every `bl` lands on the start of a symbol and
+every page hash of the signature verifies. Six test programs
+(`archive_demo`, `json_errors_demo` and `autograd_demo` from the stdlib
+tests, `ll_hashmap`, `generic_struct_pkg_types` and `ll_closure_counter`
+from the `llvm` group) print the same with and without `--icf` for x86-64
+and i686 Windows under wine and for x86_64 macOS under `machorun.py`
+(`archive_demo` does not run under `machorun.py` either way). They fold 0 to
+6 functions each; ARM64 builds fold the most.

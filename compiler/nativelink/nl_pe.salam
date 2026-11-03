@@ -638,11 +638,17 @@ end
 
 func pe_link(l &: Nl, out: str):
     mut t := Pe {}
-    repeat l.s_obj.len() in s:
+    if l.icf:
+        split_sections(l)
+        icf_run(l)
+    end
+    mut ord := sec_order(l)
+    each s in ord:
         if l.o_coff[l.s_obj[s]]:
             pe_classify(l, t, s)
         end
     end
+    ord.free()
     if l.mach == EM_386:
         l.pe_base = (l.pe_dll ? 0x10000000 : 0x400000) as i64
     else l.pe_dll:
@@ -958,22 +964,21 @@ func pe_write(l &: Nl, t &: Pe, buf: u8*, total: i64, rel &: Vector<u8>, out: st
     mut imp0 := 0 as i64
     mut imp1 := 0 as i64
     mut tls := 0 as i64
-    mut gi0 := glob_find(l, "__IAT_start__")
-    mut gi1 := glob_find(l, "__IAT_end__")
-    if p32 and gi0 < 0:
-        gi0 = glob_find(l, "___IAT_start__")
-        gi1 = glob_find(l, "___IAT_end__")
-    end
-    if gi0 >= 0 and gi1 >= 0:
-        iat0 = l.g_val[gi0] - l.pe_base
-        iat1 = l.g_val[gi1] - l.pe_base
-    end
     repeat t.it_ps.len() in i:
-        if t.it_ps[i] == PS_IDATA and t.it_kind[i] == IT_SEC and str.StartsWith(t.it_key[i], "12"):
+        if t.it_ps[i] != PS_IDATA or t.it_kind[i] != IT_SEC:
+            continue
+        end
+        if str.StartsWith(t.it_key[i], "12"):
             if imp0 == (0 as i64):
                 imp0 = t.it_addr[i]
             end
             imp1 = t.it_addr[i] + l.s_size[t.it_ord[i]]
+        end
+        if str.StartsWith(t.it_key[i], "51") and l.s_size[t.it_ord[i]] > (0 as i64):
+            if iat0 == (0 as i64):
+                iat0 = t.it_addr[i]
+            end
+            iat1 = t.it_addr[i] + l.s_size[t.it_ord[i]]
         end
     end
     tg := glob_find(l, l.mach == EM_386 ? "__tls_used" : "_tls_used")

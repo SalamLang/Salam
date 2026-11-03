@@ -383,12 +383,14 @@ then goes through:
    then inlines only the common path, which ends in a call to the cold
    function where the region used to start. The original function is left
    whole for its other callers, and a cold function is only compiled when
-   some call site uses it. In a caller of at most 40 blocks, calls that
-   arrive through an inlined body and sit in a loop get a second chance at
-   being inlined, whole or in part, so `MsbUnary` also brings in the bit read
-   its loop makes. The FLAC encoder and decoder in `audio_flac` run 8.7%
-   fewer instructions with both (206 million instead of 226 million; the LLVM
-   build runs 181 million).
+   some call site uses it. Under `-g` the cold function keeps the region's
+   source lines and gets a subprogram entry under the callee's name, so a
+   breakpoint on the function also stops there. In a caller of at most 40
+   blocks, calls that arrive through an inlined body and sit in a loop get a
+   second chance at being inlined, whole or in part, so `MsbUnary` also
+   brings in the bit read its loop makes. The FLAC encoder and decoder in
+   `audio_flac` run 8.7% fewer instructions with both (206 million instead of
+   226 million; the LLVM build runs 181 million).
 4. Tail recursion elimination. `ret f(x)` becomes a jump back to the top of
    the function, and so does `ret f(x) + y` or `ret f(x) * y` by carrying an
    accumulator, which removes one of the two calls in a recursive Fibonacci.
@@ -411,7 +413,13 @@ then goes through:
    the same value (`c >= 97 and c <= 122`, as a branch pair or an `and`)
    become one unsigned compare of `c - 97`, and a sign-extended byte that is
    corrected with `+ 256` when negative (`ByteAt`) becomes a zero-extending
-   load. `(x + c1) * c2` becomes `x * c2 + c1 * c2` when that continues a
+   load. On x86-64 a compare of two zero-extended bytes (or 16-bit values),
+   at least one of them loaded, compares the narrow values instead, with a
+   signed predicate turned unsigned, so one load folds into the compare:
+   `cmp r8b, byte [mem]` in `RawDeflate`'s match-length loop
+   (`SALAM_NG_OFF=zxcmp`; `image_rtl_card` runs 3.3 million fewer
+   instructions, 2.0%, and `image_basics` 2.2 million).
+   `(x + c1) * c2` becomes `x * c2 + c1 * c2` when that continues a
    constant chain (an FNV hash of an int folds to one multiply), but not on
    loop indices, where it would hide the pattern strength reduction needs.
    Inserting a zero into a struct that is still zero at that offset is
@@ -494,6 +502,12 @@ then goes through:
    quotient and remainder of the same value share the bias; the SHA-256
    rotations in `std/crypto` are built from such pairs. A counter bounded by a sign-extended 32-bit length is known to fit
    in 32 bits, so `sext(trunc(i))` on the widened counter folds back to `i`.
+   Widening rewrites addresses inside the loop as `base + sext(pos)` plus the
+   wide counter, so loop-invariant code motion runs once more afterwards and
+   moves the new `sext(pos)` and `base + sext(pos)` to the preheader
+   (`SALAM_NG_OFF=winv`). `RawDeflate`'s hash-insert loop loses three
+   instructions per position: `image_rtl_card` runs 3.2 million fewer
+   instructions (1.9%) and `image_basics` 11.2 million (1.9%).
    Beyond counters, a web of 32-bit values joined by phis, selects and `nsw`
    adds, subtracts and multiplies that ends in sign extensions for addressing
    is computed in 64 bits instead (no signed overflow means the wide result
@@ -559,8 +573,40 @@ then goes through:
    runtime check that each stored range is disjoint from every range it
    loads from another base. The vector loop runs while a full vector fits
    and the scalar loop finishes the rest, so the PNG filter scoring and
-   filter application and the tensor element-wise kernels run four values
-   per instruction.
+   the tensor element-wise kernels run four values per instruction.
+   Byte and 16-bit code written in `int` (`(x - a) & 255`, `x as int + y`
+   then `as u8`) is not widened when the narrow lanes give the same answer:
+   the vectorizer first tries the loop with every `int` value in byte lanes,
+   then in 16-bit lanes, and only then in 32-bit ones. Adds, subtracts,
+   multiplies (16-bit lanes only), bitwise operations and left shifts wrap
+   the same way in any width, so they only need the low bits of their
+   operands. A value that is compared, shifted right or selected for such a
+   use needs its full value instead, so a range pass bounds every `int` in
+   the loop (`zext` of a byte is 0 to 255, adds and subtracts add the
+   bounds, and so on) and the loop takes the narrow width only if each such
+   value fits it. A signed compare or arithmetic shift of values known to be
+   non-negative is turned into the unsigned form first, which is the same
+   result and fits a byte where the signed form would not. The extends and
+   truncates between the widths then disappear, constants and loop-invariant
+   values are broadcast at the narrow width, a 16-bit loop that loads bytes
+   widens them with one `movq` and `punpcklbw` (and `psraw 8` when signed)
+   and stores them back with `pand` and `packuswb`, and byte shifts, which
+   SSE2 does not have, are 16-bit shifts plus a mask. A floor average of two
+   bytes, `(a + b) >> 1` with both operands under 256, is
+   `(a & b) + ((a ^ b) >> 1)` in byte lanes. So the PNG encoder's Sub, Up and
+   Average filters run sixteen bytes per iteration (the average keeps its
+   nine-bit sum out of the lanes) and its Paeth filter eight, in 16-bit
+   lanes. On `apps/image_rtl_card` the loop that applies Sub, Up and Average
+   went from 176 to 34 instructions per 16 bytes and the Paeth loop from 158
+   to 74 per 8 bytes, 16.6 million instructions down to 5.5. A loop
+   with a reduction or a down-counting second counter keeps its old width.
+   `SALAM_NG_OFF=vnarrow` turns the narrow lanes off. On a 4096-byte row run
+   100000 times (minimum CPU time of five runs), the encoder's combined
+   Sub/Up/Average loop takes 0.045 s instead of 0.279 s (LLVM 0.014 s, as it
+   gives each filter its own loop), a bare Average filter 0.019 s instead of
+   0.179 s (LLVM 0.020 s) and Paeth 0.225 s instead of 0.508 s (LLVM
+   0.272 s). AArch64 runs the same code with NEON (`zip1` for the widening,
+   `sqxtun` for the narrowing).
    With `--cpu=x86-64-v3` (or `x86-64-v4`) the loop vectorizer uses the
    256-bit AVX2 registers instead: eight 32-bit or `f32` lanes, four 64-bit
    or `f64`, sixteen 16-bit and thirty-two bytes. The vector step, the
@@ -570,7 +616,11 @@ then goes through:
    a 32-bit multiply is one `vpmulld` instead of the `pmuludq` sequence, and
    a reduction first combines the upper half, taken with `vextracti128`, with
    the lower one (an add, or a compare and select for min and max) before the
-   usual 128-bit steps. Loops that widen or narrow bytes, count matching
+   usual 128-bit steps. Loops in narrowed byte lanes take thirty-two bytes
+   per step (the combined PNG filter loop 0.026 s instead of 0.045 s, the
+   Average filter 0.012 s), and 16-bit loops that do not load bytes sixteen
+   values. Loops that widen or narrow bytes (Paeth's 16-bit lanes among them:
+   0.233 s, LLVM 0.109 s with `vpmovzxbw`), count matching
    bytes or walk a second counter down keep 128-bit vectors, and so does
    every loop when `SALAM_NG_OFF=avx2` is set. The SLP vectorizer (below)
    first looks for runs of eight adjacent `f32` or four `f64` stores and
@@ -746,7 +796,12 @@ already holds it (with no write to the slot or the register in between) is
 dropped. Inside an innermost loop without calls, a stack slot that is only
 read gets loaded once before the loop into a register the loop does not
 touch and that is not live on entry, and the reloads become uses of that
-register.
+register. When a reload is replaced by a register this way, or a reload
+becomes a copy into `r10` or `r11` on x86-64, and the scratch register is
+not written again before the next label, jump or return, its uses are renamed
+and the copy dropped, since the scratch registers never carry a value
+across a block boundary (`SALAM_NG_OFF=scdead`; 1.4 million fewer
+instructions for `image_rtl_card`, 1.9 million for `image_basics`).
 A load of a stack slot that was just stored from a register (or an
 immediate) of the same size, with no write to the slot or the register in
 between and no jump target on the way, becomes a register copy (or a move of
@@ -791,7 +846,16 @@ back into its phi) is emitted with that loop value as the tied operand of the
 `cmov`, so the loop carries it in one register with no copy at the latch. A
 32-bit division fast path leaves its quotient and remainder in `rax` and
 `rdx` on both paths and copies them once after the join.
-Copy-related values that both spill share one stack slot. When vector
+Copy-related values that both spill share one stack slot. A value that
+got a register but is mostly copied to and from values sharing one such
+slot is then put in that slot too, when the copies that disappear outweigh
+the loads and stores its other uses need, weighted by loop depth, and its
+range does not overlap anything else living in the slot
+(`SALAM_NG_OFF=cpspill`). A vector accumulator whose sum is spilled no
+longer goes through a register and back every iteration: `EncodePNG`'s
+filter-scoring loop drops four instructions per four bytes, and
+`image_rtl_card` runs 1.6 million fewer instructions (1.0%),
+`image_basics` 2.1 million. When vector
 registers run out, the allocator evicts the value whose next use is
 farthest away, so a kernel with sixteen accumulators keeps most of them in
 registers instead of spilling each one as a temporary arrives.
@@ -840,8 +904,22 @@ an aligned loop costs one instruction.
 ### Conventions worth knowing
 
 - Scalars follow the C ABI of the target, so calls to and from C code just
-  work. Struct values, which only Salam code passes, travel by pointer to a
-  copy, and struct returns use a hidden result pointer.
+  work. Between Salam functions, struct values travel by pointer to a copy,
+  and struct returns use a hidden result pointer.
+- A struct passed to or returned from an `extern` C function follows the
+  target's C rules (`ng_cabi.salam`). On x86-64 and AArch64 llvmgen already
+  splits it into the pieces the ABI wants, and a larger result's hidden
+  pointer goes in `x8` on AArch64. On i686 every struct argument is
+  copied onto the stack; Linux returns every struct through a hidden pointer
+  that the callee pops (`ret 4`), while Windows returns 1, 2, 4 and 8 byte
+  structs in `eax`/`edx:eax` and one holding a lone `float` or `double` in
+  `st0`. On armhf a homogeneous struct of up to four floats or doubles uses
+  consecutive VFP registers (or the stack, after which no float back-fills),
+  other structs fill `r0`-`r3` a word at a time and spill onto the stack
+  (8-byte aligned ones start at an even register), and a result of up to 4
+  bytes comes back in `r0`. On RISC-V a struct of up to 16 bytes goes in
+  `a`/`fa` registers (one or two floats, or a float and an integer, use the
+  float registers while enough are free), a larger one by reference.
 - On Linux frames are addressed from `rsp` and `rbp` is a sixth callee-saved
   register. Each function gets an `.eh_frame` entry, so gdb, perf and other
   unwinders can walk native frames. On Windows `rbp` is the frame pointer and
@@ -945,7 +1023,7 @@ ret end` at the top of a recursive AST walk) tests that parameter before
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing, and a comma-separated list dumps several functions.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,loopinl,cpelim,tord,vrev,cdown,tfold,mexit,sqself,vsign,redinv,ldcmp,phix,selinc,wweb,wwdep,wwtr,tdup,padjmp,dtst,zins,ndiv,niv,cmp64,adc64,rvc,avx2,rasp,hotpath,inlnest,spromo,ypack,ysum`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,vnarrow,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,loopinl,cpelim,tord,vrev,cdown,tfold,mexit,sqself,vsign,redinv,ldcmp,phix,selinc,wweb,wwdep,wwtr,tdup,padjmp,dtst,zins,ndiv,niv,cmp64,adc64,rvc,avx2,rasp,hotpath,inlnest,spromo,ypack,ysum,winv,zxcmp,cpspill,scdead`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator and `rasp` the
@@ -994,7 +1072,9 @@ How the pieces fit:
 - The frontend emits `!dbg` locations, a `DIFile` per source file,
   `DILocalVariable` plus `llvm.dbg.declare` for every local and parameter,
   and DWARF types (basic types, pointers, `str` as a `char` pointer, structs
-  with their members, fixed arrays).
+  with their members, fixed arrays). Building those types never pulls in
+  a package's globals or functions, which only the code decides, so `-g`
+  keeps the order of globals and the data layout of a build without it.
 - `ng_dbg.salam` prescans that metadata. A location is an interned pair of
   `DILocation` and inlined-at location, so the inliner rebases callee
   locations onto the call site. The encoder records a line row whenever the
@@ -1091,6 +1171,17 @@ How the pieces fit:
   been loaded into registers. gdb only trusts its own prologue analysis for
   compilers it knows, and on i686, where every argument arrives on the
   stack, that would stop before any of them has a location.
+- Arguments also have a location before the prologue, for a debugger that
+  stops on a function's first instruction (`break *func`, or a caller's
+  `stepi`). Instruction selection records where each argument arrives: a
+  register, or on i686 and x86-64 a stack slot, written as
+  `DW_OP_call_frame_cfa` plus its offset, since those functions have CFI.
+  That location covers the entry block from the function's first byte for as
+  long as the variable still holds the argument and nothing has overwritten
+  the register (an instruction other than the argument moves, or one that
+  writes it, ends a register location). A struct argument passed by pointer
+  and split into fields by SROA gets the whole struct behind that pointer
+  until the first of its fields is loaded.
 
 Enums are written as enumeration types, so gdb prints `Blue`, not `2`.
 On Windows targets, `-g` also writes CodeView into each object: a
@@ -1127,7 +1218,8 @@ with the system linker, GNU ld discards it.
 
 `tools/bash/native-gdb-check.sh <salam>` debugs a small program under gdb
 and checks the printed locals, a struct split into pieces, folded
-constants and an inlined frame.
+constants, an inlined frame, and the arguments at a function's first
+instruction.
 
 A good end-to-end check is the compiler itself: emit its IR with
 `salam llvm compiler/main.salam`, build that IR with the native backend, and
@@ -1148,6 +1240,23 @@ built with the native backend runs within a few percent of one built with
 LLVM on a full self-compile, while the native build itself is several times
 faster than the LLVM path.
 
+Library code is further behind. Counted with callgrind, the image tests
+`apps/image_rtl_card` and `apps/image_basics` run 1.15x and 1.21x the
+instructions of their LLVM builds (152.3 against 132.4 million, 570.3
+against 471.4 million; before the narrow byte and 16-bit lanes they were
+163.3 and 587.2 million, 1.23x and 1.25x, and before `winv`, `zxcmp`,
+`cpspill` and `scdead` 174.6 and 608.0 million, 1.32x and 1.29x). With
+`--cpu=x86-64-v3` the two take 151.6 and 569.0 million (163.4 and 587.7
+without the narrow lanes). On `image_rtl_card`, `EncodePNG` and
+`RawDeflate` now run 99.3 million instructions against 97.4 million for
+LLVM's `Encode`, which inlines both; the biggest loop left there, the
+filter scoring with five `int` sums, runs four lanes in both builds. What
+is left is mostly not spilling: LLVM inlines `DrawLine` into a constant
+horizontal span and unswitches the alpha test that keeps native `DrawLine`'s loop at full
+register pressure (about 8 million), and in `image_basics` it inlines
+`_vp8_quant` with constant arguments, peels the DC coefficient and hoists
+the reciprocal division out of the loop.
+
 Not there yet:
 
 - CodeView carries no FPO frame data, so on i686 a debugger walks the
@@ -1165,7 +1274,9 @@ Not there yet:
   add reductions run in vector lanes too (and gives LLVM `reassoc nsz`).
   AVX2 is opt-in (`--cpu=x86-64-v3`) and the loop, SLP and sum-reduction
   vectorizers use it; loops that widen, narrow, count bytes or reverse stay
-  at 128 bits. There is no AVX-512 or FMA code,
+  at 128 bits, so a 16-bit loop over bytes (PNG's Paeth filter) does eight
+  values per step where LLVM's `vpmovzxbw` gives sixteen. There is no
+  AVX-512 or FMA code,
   no 64-bit ordered compare even with AVX2, and no runtime dispatch, so a
   build is either baseline everywhere or needs AVX2 everywhere.
 - The built-in linker (see `NATIVE_LINKER.md`) links every supported

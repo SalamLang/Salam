@@ -14,6 +14,27 @@
 
 package time
 
+import mem
+
+if SALAM_OS_WINDOWS:
+    extern:
+        func SetWaitableTimer(timer: void*, due: void*, period: int, routine: void*, arg: void*, resume: int): int
+        func WaitForSingleObject(h: void*, ms: int): int
+        func CloseHandle(h: void*): int
+    end
+    if SALAM_ARCH_X86:
+        extern:
+            func CreateWaitableTimerExW(attrs: void*, name: void*, flags: u32, access: u32): void*
+        end
+    else:
+        extern:
+            func GetModuleHandleA(name: str): void*
+            func GetProcAddress(mod: void*, name: str): void*
+        end
+    end
+    mut _hires_off := false
+end
+
 @en "Timer"
 @fa "زمان‌سنج"
 pub struct Timer:
@@ -138,10 +159,63 @@ pub struct Ticker:
 end
 
 if SALAM_OS_WINDOWS:
+    if SALAM_ARCH_X86:
+        func _hiresTimerNew(): void*:
+            ret CreateWaitableTimerExW(null, null, 2 as u32, 1048578 as u32)
+        end
+    else:
+        func _hiresTimerNew(): void*:
+            fp := GetProcAddress(GetModuleHandleA("kernel32.dll"), "CreateWaitableTimerExW")
+            if fp == null: ret null end
+            f := fp as extern func (void*, void*, u32, u32) void*
+            ret f(null, null, 2 as u32, 1048578 as u32)
+        end
+    end
+
     func _sleepChunk(ns: i64):
         mut ms := (ns + 999999) / 1000000
         if ms > 1000: ms = 1000 end
         SleepEx(ms as u32, 0)
+    end
+
+    func _sleepCoarse(deadline_ns: i64):
+        until true:
+            rem := deadline_ns - _mono_ns()
+            if rem <= 0: break end
+            if rem > 20000000:
+                _sleepChunk(rem - 16000000)
+            else:
+                SleepEx(0 as u32, 0)
+            end
+        end
+    end
+
+    func _sleepUntil(deadline_ns: i64):
+        if _mono_ns() >= deadline_ns: ret end
+        if _hires_off:
+            _sleepCoarse(deadline_ns)
+            ret
+        end
+        h := _hiresTimerNew()
+        if h == null:
+            _hires_off = true
+            _sleepCoarse(deadline_ns)
+            ret
+        end
+        due := mem.Allocate(8 as u64)
+        dp := due as i64*
+        until true:
+            rem := deadline_ns - _mono_ns()
+            if rem <= 0: break end
+            dp[0] = 0 - (rem + 99) / 100
+            if SetWaitableTimer(h, due, 0, null, null, 0) == 0 or WaitForSingleObject(h, 0 - 1) != 0:
+                _hires_off = true
+                _sleepCoarse(deadline_ns)
+                break
+            end
+        end
+        mem.Free(due)
+        _cl := CloseHandle(h)
     end
 else:
     func _sleepChunk(ns: i64):
@@ -149,13 +223,13 @@ else:
         if us > 999999: us = 999999 end
         usleep(us as u32)
     end
-end
 
-func _sleepUntil(deadline_ns: i64):
-    until true:
-        rem := deadline_ns - _mono_ns()
-        if rem <= 0: break end
-        _sleepChunk(rem)
+    func _sleepUntil(deadline_ns: i64):
+        until true:
+            rem := deadline_ns - _mono_ns()
+            if rem <= 0: break end
+            _sleepChunk(rem)
+        end
     end
 end
 

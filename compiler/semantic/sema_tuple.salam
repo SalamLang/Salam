@@ -4,6 +4,7 @@ import str
 
 include co "../sal_core.salam"
 include at "../ast.salam"
+include tok "../token.salam"
 include i18 "../i18n.salam"
 
 func tuple_field_name(i: int): str:
@@ -43,7 +44,9 @@ end
 func tuple_instantiate(s &: Sema, a &: at.Ast, cnt: int, targs: Vector<int>, sp: co.SrcSpan): int:
     tsym := tuple_template(s, a, cnt)
     if tsym == 0 or sym_at(s, tsym).decl == 0:
-        serr(s, 1, sp, i18.Tr("a tuple needs between 2 and 8 elements and the 'core' package"))
+        if cnt >= 2 and cnt <= 8:
+            serr(s, 1, sp, i18.Tr("tuples are built on the 'core' package, which could not be loaded"))
+        end
         ret sema_err_ty(s)
     end
     save_cur := s.cur
@@ -174,11 +177,33 @@ func check_destructure(s &: Sema, a &: at.Ast, nid: int):
     else:
         ok = true
     end
+    is_assign := n.op == tok.TK_ASSIGN
     mut kept := Vector {} as Vector<int>
     defer kept.free()
     repeat cnt in i:
         d := n.list.get(i)
-        if ok and str.Equals(at.Get(a, d).name, "_"):
+        if ok and is_assign and at.KindOf(a, d) == at.AST_IDENTIFIER and str.Equals(at.Get(a, d).name, "_"):
+            continue
+        end
+        if ok and not is_assign and str.Equals(at.Get(a, d).name, "_"):
+            continue
+        end
+        if is_assign:
+            if not ok:
+                continue
+            end
+            m := new_node_at(a, at.AST_MEMBER, span_of(a, d))
+            mut mv := at.Get(a, m)
+            mv.a = try_ident(a, span_of(a, d), tname)
+            mv.name = tuple_field_name(i)
+            at.Put(a, m, mv)
+            asn := new_node_at(a, at.AST_ASSIGN, span_of(a, d))
+            mut av := at.Get(a, asn)
+            av.a = d
+            av.b = m
+            av.op = tok.TK_ASSIGN
+            at.Put(a, asn, av)
+            kept.push(asn)
             continue
         end
         mut dv := at.Get(a, d)
@@ -208,4 +233,14 @@ func check_destructure(s &: Sema, a &: at.Ast, nid: int):
     end
     at.Put(a, nid, at.Get(a, kept.get(kept.len() - 1)))
     check_stmt(s, a, nid)
+    if not ok:
+        repeat kept.len() in u:
+            ksym := scope_lookup_local(s, s.cur, at.Get(a, kept.get(u)).name)
+            if ksym != 0:
+                mut kv := sym_at(s, ksym)
+                kv.used = true
+                sym_put(s, ksym, kv)
+            end
+        end
+    end
 end

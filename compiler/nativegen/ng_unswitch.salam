@@ -85,7 +85,7 @@ func usw_loop(g &: Ng, l &: Lp, mark: int, h: int, pre: int, run &: UswRun): boo
     mut ex := tin ? g.i_c[t] : g.i_b[t]
     mut size := 0
     mut cond := 0 - 1
-    mut selc := 0 - 1
+    mut sels := Vector {} as Vector<int>
     mut u := Usw {}
     each b in g.b_rpo:
         if l.inl[b] != mark:
@@ -99,6 +99,7 @@ func usw_loop(g &: Ng, l &: Lp, mark: int, h: int, pre: int, run &: UswRun): boo
                 if l.inl[sx] != mark:
                     sc.free()
                     u.blocks.free()
+                    sels.free()
                     ret false
                 end
             end
@@ -110,6 +111,7 @@ func usw_loop(g &: Ng, l &: Lp, mark: int, h: int, pre: int, run &: UswRun): boo
             op := g.i_op[i]
             if op == OP_ALLOCA:
                 u.blocks.free()
+                sels.free()
                 ret false
             end
             if op == OP_CBR and i != t and cond < 0:
@@ -118,27 +120,31 @@ func usw_loop(g &: Ng, l &: Lp, mark: int, h: int, pre: int, run &: UswRun): boo
                     cond = c
                 end
             end
-            if op == OP_SELECT and selc < 0 and not g.off_uswsel:
+            if op == OP_SELECT and not g.off_uswsel and sels.len() < 8:
                 c2 := g.i_a[i]
                 if c2 >= 0 and g.v_ty[c2] == T_I1 and g.v_kind[c2] == VK_INS and l.inl[g.i_blk[g.v_def[c2]]] != mark and usw_eq_x(g, c2) >= 0:
-                    selc = c2
+                    mut dup := false
+                    each sv in sels:
+                        if usw_eq_x(g, sv) == usw_eq_x(g, c2):
+                            dup = true
+                        end
+                    end
+                    if not dup:
+                        sels.push(c2)
+                    end
                 end
             end
             i = g.i_next[i]
         end
     end
-    if cond < 0 and selc >= 0:
-        sx := usw_eq_x(g, selc)
-        mut seen := false
-        each px in run.xs:
-            if px == sx:
-                seen = true
+    if cond < 0 and size <= USW_MAX_SIZE and size <= run.budget:
+        each sc2 in sels:
+            if cond < 0 and usw_sel_ok(g, l, mark, run, sc2):
+                cond = sc2
             end
         end
-        if seen or usw_cases(g, l, mark, sx) >= 2:
-            cond = selc
-        end
     end
+    sels.free()
     if cond < 0 or size > USW_MAX_SIZE or size > run.budget:
         u.blocks.free()
         ret false
@@ -308,6 +314,16 @@ func usw_loop(g &: Ng, l &: Lp, mark: int, h: int, pre: int, run &: UswRun): boo
     u.bmap.free()
     u.blocks.free()
     ret true
+end
+
+func usw_sel_ok(g &: Ng, l &: Lp, mark: int, run &: UswRun, c: int): bool:
+    x := usw_eq_x(g, c)
+    each px in run.xs:
+        if px == x:
+            ret true
+        end
+    end
+    ret usw_cases(g, l, mark, x) >= 2
 end
 
 func usw_eq_x(g &: Ng, c: int): int:

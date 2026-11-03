@@ -1,0 +1,138 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import mem
+import os
+import str
+import time
+import cron
+
+const ZONE := "Invalid/Nowhere"
+const AT := 1792900200
+
+mut zero := 0
+mut slot := 5
+mut table := [1, 2, 3]
+mut ran := null as i64*
+mut panics := null as i64*
+mut events := null as i64*
+mut lockable := true
+
+func work(_id: i64):
+    atomic_add(ran, 1 as i64)
+end
+
+func boom(_id: i64):
+    core.Panic("boom")
+end
+
+func divide(_id: i64):
+    println 10 / zero
+end
+
+func index(_id: i64):
+    println table[slot]
+end
+
+func spoke(_id: i64):
+    atomic_add(panics, 1 as i64)
+end
+
+func watch(arg: i64):
+    kind := cron.EventKind(arg)
+    atomic_add(events, kind as i64)
+end
+
+func gate(id: i64):
+    if lockable: cron.Grant(id) end
+end
+
+func settle():
+    mut waited := 0
+    mut any := true
+    until any and waited < 500:
+        any = false
+        repeat cron.Total() in i:
+            if cron.IsBusy(i): any = true end
+        end
+        time.Sleep(10)
+        waited += 1
+    end
+end
+
+func fire(now: i64): int:
+    n := cron.RunDue(now)
+    settle()
+    ret n
+end
+
+func main:
+    ran = mem.AllocateZeroed(8 as u64) as i64*
+    panics = mem.AllocateZeroed(8 as u64) as i64*
+    events = mem.AllocateZeroed(8 as u64) as i64*
+    cron.SetZone(ZONE, 0)
+    cron.OnPanic(spoke)
+    cron.OnEvent(watch)
+
+    good := cron.Add("good", "* * * * *", work)
+    b := cron.Add("boom", "* * * * *", boom)
+    d := cron.Add("divide", "* * * * *", divide)
+    x := cron.Add("index", "* * * * *", index)
+    println "started: ", fire(AT as i64)
+    println "program survived"
+    println "good ran: ", atomic_load(ran)
+    println "panics: ", cron.Panics(b), " ", cron.Panics(d), " ", cron.Panics(x), " handler: ", atomic_load(panics)
+    println "failures counted: ", cron.Failures(b)
+    println "busy after panic: ", cron.IsBusy(b), " ", cron.IsBusy(d), " ", cron.IsBusy(x)
+    println "last panic recorded: ", cron.LastPanic().len() > 0
+    println "running: ", cron.Running()
+    println "second round: ", fire((AT + 60) as i64)
+    println "good ran: ", atomic_load(ran), " panics: ", cron.Panics(b)
+    println "events seen: ", atomic_load(events) > (0 as i64)
+
+    m := cron.Metrics()
+    println "metric runs: ", str.Contains(m, "cron_job_runs_total{job=\"good\"} 2")
+    println "metric panics: ", str.Contains(m, "cron_job_panics_total{job=\"boom\"} 2")
+    println "metric running: ", str.Contains(m, "cron_jobs_running 0")
+    println "metric type: ", str.Contains(m, "# TYPE cron_job_duration_ms_max gauge")
+
+    cron.Remove(b)
+    cron.Remove(d)
+    cron.Remove(x)
+    cron.Remove(good)
+
+    cron.SetLocker(gate, 0 as i64)
+    leader := cron.Add("leader", "* * * * *", work)
+    lockable = false
+    before := atomic_load(ran)
+    println "denied start: ", fire((AT + 120) as i64)
+    println "denied ran: ", atomic_load(ran) - before, " denied: ", cron.LockDenied(leader), " runs: ", cron.Runs(leader)
+    lockable = true
+    println "granted start: ", fire((AT + 180) as i64)
+    println "key: ", cron.LockKey(leader)
+    cron.Remove(leader)
+
+    dir := "cron_locks_test"
+    println "file locker: ", cron.FileLocker(dir, 120)
+    one := cron.Add("shared job", "* * * * *", work)
+    two := cron.Add("shared job", "* * * * *", work)
+    first := atomic_load(ran)
+    fire((AT + 240) as i64)
+    println "only one instance ran: ", atomic_load(ran) - first
+    println "denied on the other: ", cron.LockDenied(one) + cron.LockDenied(two)
+    cron.ClearLocker()
+    os.RemoveAll(dir)
+end

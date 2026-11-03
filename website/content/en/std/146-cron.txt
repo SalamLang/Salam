@@ -60,6 +60,15 @@ cron.Once("launch", 1792900000 as i64, launch)</code></pre>
 <h2 id="guide-control">Controlling jobs</h2>
 <p>Ids are never reused. <code>Remove</code> and <code>RemoveByTag</code> retire jobs, <code>Find</code> looks one up by name, and <code>SetTags</code> takes a comma-separated list. <code>Limit</code> stops a job after n runs, <code>StartAt</code> and <code>StopAt</code> bound it in time, <code>FromCompletion</code> counts an interval from the end of a run, and <code>Queue</code> makes a firing that finds the job busy wait instead of being skipped. <code>RunNow</code> runs a job immediately, <code>NextRun</code> reports its next firing, and <code>Runs</code>, <code>LastRun</code> and <code>LastFinished</code> report what happened. <code>OnBefore</code> and <code>OnAfter</code> register one handler each that runs around every job. A handler that wants to report failure calls <code>Fail(id)</code>; <code>OnError</code> then runs after that run and <code>Failures</code> counts them. <code>EveryNDays</code>, <code>EveryNWeeks</code> and <code>EveryNMonths</code> make a job fire only every nth day, week or month, counted from the call; use them to get gocron's <code>DailyJob(n, ...)</code>. <code>ConcurrencyLimit</code> caps how many jobs run at once; a firing past the cap is skipped. <code>StopWait</code> stops the loop and waits for running jobs up to a timeout in milliseconds.</p>
 
+<h2 id="guide-panic">Panics and monitoring</h2>
+<p><code>OnPanic</code> registers a handler for a job that panicked, indexed past the end of an array or divided by zero. The scheduler and every other job keep running; only the faulting job's thread ends, the job is marked not busy, counted by <code>Panics</code> and <code>Failures</code>, and <code>LastPanic</code> returns the message. This is built on <code>core.SetPanicHook</code>, which the scheduler installs the first time it runs a job. It is best effort: a job that faults while holding a lock or in the middle of printing can leave that lock held, and a crash such as a null dereference cannot be caught.</p>
+<p><code>OnEvent</code> registers a monitor called for every start, end, failure, panic, skipped firing and denied lock. It receives one number; <code>EventJob</code> and <code>EventKind</code> split it into the job id and the kind (1 start, 2 end, 3 failure, 4 panic, 5 skipped busy, 6 skipped by the cap, 7 lock denied). <code>Metrics</code> returns every counter in the Prometheus text format, ready to serve on <code>/metrics</code>; <code>LastMs</code>, <code>TotalMs</code>, <code>MaxMs</code>, <code>SkippedBusy</code>, <code>SkippedCap</code>, <code>LockDenied</code> and <code>Running</code> read single values.</p>
+{{example.cron-monitor}}
+
+<h2 id="guide-lock">Running once across several instances</h2>
+<p>When the same program runs on several machines, each would fire every job. <code>SetLocker(lock_fn, unlock_fn)</code> makes them agree: before each run the job thread calls <code>lock_fn(id)</code>, which must call <code>Grant(id)</code> if this instance won the firing. A job that is not granted is skipped and counted by <code>LockDenied</code>. <code>LockKey(id)</code> gives the same text on every instance for the same firing (the name and the scheduled second), which you can use as a Redis key, a database row or a file name; <code>unlock_fn</code> (or 0) runs afterwards only when the lock was granted.</p>
+<p><code>FileLocker(dir, ttl_seconds)</code> is a ready-made locker for a shared folder such as a network mount: the instance that creates the firing's folder first runs the job, and folders older than the ttl are swept. A crashed winner means that one firing is missed, never run twice. Intervals started with <code>Every</code> are not in step across instances, so use cron expressions or <code>DailyAt</code> and its siblings when you need a lock.</p>
+
 <h2 id="guide-gocron">Compared with gocron</h2>
 <p>Salam cron covers gocron's schedule kinds and job options, except distribution.</p>
 <table>
@@ -73,19 +82,22 @@ cron.Once("launch", 1792900000 as i64, launch)</code></pre>
 <tr><td>WithStartAt, WithStopAt</td><td>StartAt, StopAt</td></tr>
 <tr><td>WithIntervalFromCompletion</td><td>FromCompletion</td></tr>
 <tr><td>WithSingletonMode (reschedule or wait)</td><td>skip by default, Queue to wait</td></tr>
-<tr><td>Before and After listeners</td><td>OnBefore, OnAfter, Fail with OnError (no panic listener)</td></tr>
+<tr><td>Before and After listeners</td><td>OnBefore, OnAfter, Fail with OnError, OnPanic</td></tr>
 <tr><td>NextRun, LastRun, RunNow, RemoveJob</td><td>NextRun, LastRun, RunNow, Remove</td></tr>
 <tr><td>WithLocation, and a location on a start time</td><td>SetZone for all jobs, SetJobZone for one job</td></tr>
 <tr><td>WithStopTimeout, Shutdown</td><td>StopWait</td></tr>
 <tr><td>WithLimitConcurrentJobs</td><td>ConcurrencyLimit (skips, never queues)</td></tr>
-<tr><td>Distributed elector and locker, monitors</td><td>not available</td></tr>
+<tr><td>WithDistributedJobLocker</td><td>SetLocker, FileLocker (once per firing)</td></tr>
+<tr><td>WithMonitor, WithSchedulerMonitor</td><td>OnEvent, Metrics, LastMs, TotalMs, MaxMs</td></tr>
+<tr><td>AfterJobRunsWithPanic</td><td>OnPanic</td></tr>
+<tr><td>Distributed elector (one leader instance)</td><td>not available; use a locker</td></tr>
 </table>
 <p>For a readable clock time, <code>DailyAt("report", "10:30", f)</code> is shorter than gocron's <code>DailyJob(1, NewAtTimes(NewAtTime(10, 30, 0)))</code>, and a plain cron string works in both.</p>
 
 <h2 id="guide-limits">What to know</h2>
 <ul>
 <li>Resolution is one second, and only for jobs with a six-field expression or an interval. Five-field jobs fire once in their minute.</li>
-<li>Jobs run on their own threads and share the process with you. A panic, a blocking read or a long loop in one job affects the whole program.</li>
+<li>Jobs run on their own threads and share the process with you. A blocking read or a long loop in one job still holds its thread. A panic, an index out of range or a division by zero ends only that job's thread (see Panics and monitoring); a crash such as a null dereference still stops the program.</li>
 <li><code>Stop</code> is cooperative: the loop checks the flag several times a second, so a job that ignores its own cancellation can keep running.</li>
 <li>The package does not persist jobs. If you need them after a restart, store the name and expression yourself and register them again at startup.</li>
 <li>A day-of-month and day-of-week pair that are both restricted matches either field, as in Vixie cron. This is often surprising; prefer a single day field when you can.</li>
@@ -156,6 +168,26 @@ doc.SetJobZone = Gives one job its own time zone name and a fallback offset in m
 doc.JobZone = The zone name in effect for a job.
 doc.ZoneExists = True when the zone database knows the name.
 
+doc.SetLocker = Makes instances agree on who runs each firing. lock_fn(id) runs on the job thread and must call Grant(id) to win; unlock_fn (or 0) runs after the job when the lock was granted.
+doc.Grant = Call from a lock handler when this instance won the firing.
+doc.LockKey = The same text on every instance for the same firing: the job name and the scheduled second.
+doc.FileLocker = A ready-made locker on a shared folder. Returns false when the folder cannot be created.
+doc.ClearLocker = Removes the locker, so every instance runs every firing again.
+doc.OnPanic = Registers a handler for a job that panicked, indexed out of range or divided by zero. Only that job's thread ends.
+doc.LastPanic = The message of the last isolated fault.
+doc.Panics = How many runs of the job ended in an isolated fault.
+doc.OnEvent = Registers a monitor that receives job*16+kind for every start, end, failure, panic, skip and denied lock.
+doc.EventJob = The job id inside a monitor argument.
+doc.EventKind = The kind inside a monitor argument: 1 start, 2 end, 3 failure, 4 panic, 5 skipped busy, 6 skipped by the cap, 7 lock denied.
+doc.SkippedBusy = How many firings were skipped because the job was still running.
+doc.SkippedCap = How many firings were skipped by ConcurrencyLimit.
+doc.LockDenied = How many firings another instance won.
+doc.LastMs = Milliseconds the last run took.
+doc.TotalMs = Milliseconds spent in all runs.
+doc.MaxMs = Milliseconds the longest run took.
+doc.Running = How many jobs are running right now.
+doc.Metrics = Every counter in the Prometheus text format.
+
 ex.Expr = -
 ex.Parse = cron-Parse
 ex.MatchFields = cron-Match
@@ -206,3 +238,22 @@ ex.EveryNMonths = -
 ex.SetJobZone = -
 ex.JobZone = -
 ex.ZoneExists = -
+ex.SetLocker = -
+ex.Grant = -
+ex.LockKey = -
+ex.FileLocker = -
+ex.ClearLocker = -
+ex.OnPanic = cron-Monitor
+ex.LastPanic = cron-Monitor
+ex.Panics = cron-Monitor
+ex.OnEvent = cron-Monitor
+ex.EventJob = -
+ex.EventKind = -
+ex.SkippedBusy = -
+ex.SkippedCap = -
+ex.LockDenied = -
+ex.LastMs = -
+ex.TotalMs = -
+ex.MaxMs = -
+ex.Running = -
+ex.Metrics = cron-Monitor

@@ -28,16 +28,22 @@ import time
 import calendar
 import rand
 import sync
+import os
+import fs
 
 if SALAM_OS_WINDOWS:
     extern:
         func _beginthreadex(sec: void *, stack: u32, start: void *, arg: void *, flags: u32, thrdaddr: void *): u64
         func CloseHandle(h: void *): int
+        func GetCurrentThreadId(): u32
+        noret func _endthreadex(code: u32)
     end
 else:
     extern:
         func pthread_create(thread: void *, attr: void *, start: void *, arg: void *): int
         func pthread_detach(thread: u64): int
+        func pthread_self(): u64
+        noret func pthread_exit(value: void *)
     end
 end
 
@@ -73,7 +79,26 @@ const S_NUNIT := 18
 const S_NANCHOR := 19
 const S_ZMIN := 20
 const S_ZVAL := 21
-const S_COUNT := 22
+const S_TID := 22
+const S_GRANTED := 23
+const S_FIRING := 24
+const S_T0 := 25
+const S_LAST_MS := 26
+const S_TOTAL_MS := 27
+const S_MAX_MS := 28
+const S_PANICS := 29
+const S_SKIP_BUSY := 30
+const S_SKIP_CAP := 31
+const S_LOCK_DENIED := 32
+const S_COUNT := 33
+
+const EV_START := 1
+const EV_END := 2
+const EV_FAIL := 3
+const EV_PANIC := 4
+const EV_SKIP_BUSY := 5
+const EV_SKIP_CAP := 6
+const EV_LOCK_DENIED := 7
 
 mut _jobs := Vector {} as Vector<_Job>
 mut _zone_name := "UTC"
@@ -86,6 +111,15 @@ mut _gcell := mem.AllocateZeroed(16 as u64) as i64*
 mut _off_minute := (0 as i64) - (1 as i64)
 mut _off_value := 0 as i64
 mut _on_error := 0 as i64
+mut _on_panic := 0 as i64
+mut _monitor := 0 as i64
+mut _lock_fn := 0 as i64
+mut _unlock_fn := 0 as i64
+mut _lock_dir := ""
+mut _lock_ttl := 120 as i64
+mut _last_sweep := 0 as i64
+mut _hooked := false
+mut _last_panic := ""
 mut _before := 0 as i64
 mut _after := 0 as i64
 
@@ -274,31 +308,155 @@ func _offset(z: calendar.Zone, fallback_minutes: int, epoch: i64): i64:
     ret fallback_minutes * 60
 end
 
-func _cron_entry(id: i64):
-    i := id as int
+func _tid(): i64:
+    if SALAM_OS_WINDOWS:
+        ret GetCurrentThreadId() as i64
+    else:
+        ret pthread_self() as i64
+    end
+end
+
+func _thread_exit():
+    if SALAM_OS_WINDOWS:
+        _endthreadex(0 as u32)
+    else:
+        pthread_exit(null)
+    end
+end
+
+func _event(i: int, kind: int):
+    if _monitor != (0 as i64): callhandler(_monitor, ((i * 16 + kind) as i64)) end
+end
+
+func _bump(i: int, slot: int):
+    atomic_add(_slot(_cell(i), slot), 1 as i64)
+end
+
+func _finish(i: int, panicked: bool):
+    id := i as i64
     j := _job(i)
-    if _before != (0 as i64): callhandler(_before, id) end
-    _put(i, S_STARTED, time.Now())
-    callhandler(j.fn, id)
     done := time.Now()
     _put(i, S_FINISHED, done)
+    dur := sync.NowMs() - _get(i, S_T0)
+    _put(i, S_LAST_MS, dur)
+    atomic_add(_slot(_cell(i), S_TOTAL_MS), dur)
+    if dur > _get(i, S_MAX_MS): _put(i, S_MAX_MS, dur) end
     if _after != (0 as i64): callhandler(_after, id) end
     if _get(i, S_AFTER_DONE) != (0 as i64):
         mut next := done + _get(i, S_INTERVAL)
         if j.kind == JOB_BETWEEN: next = done + _pick(i) end
         _put(i, S_NEXT, next)
     end
-    if _get(i, S_FAILED) != (0 as i64):
+    if panicked:
+        _bump(i, S_PANICS)
         _put(i, S_FAILS, _get(i, S_FAILS) + (1 as i64))
         _put(i, S_FAILED, 0 as i64)
+        _event(i, EV_PANIC)
+        if _on_panic != (0 as i64): callhandler(_on_panic, id) end
+    else _get(i, S_FAILED) != (0 as i64):
+        _put(i, S_FAILS, _get(i, S_FAILS) + (1 as i64))
+        _put(i, S_FAILED, 0 as i64)
+        _event(i, EV_FAIL)
         if _on_error != (0 as i64): callhandler(_on_error, id) end
     end
+    _event(i, EV_END)
+    if _unlock_fn != (0 as i64) and _get(i, S_GRANTED) != (0 as i64): callhandler(_unlock_fn, id) end
+    _put(i, S_GRANTED, 0 as i64)
+    _put(i, S_TID, 0 as i64)
     atomic_add(_slot(_gcell as i64, 1), 0 as i64 - (1 as i64))
     _put(i, S_BUSY, 0 as i64)
     if _get(i, S_PENDING) != (0 as i64):
         _put(i, S_PENDING, 0 as i64)
-        _launch(i)
+        _launch(i, time.Now())
     end
+end
+
+// Runs on the faulting thread when the language reports a panic, an index
+// out of range or a division by zero. If the thread is a cron job it is
+// retired here and only that thread ends; any other thread is left alone and
+// the fault takes its normal course.
+func _cron_panic(_kind: i64):
+    me := _tid()
+    n := _n()
+    repeat n in i:
+        if _get(i, S_TID) == me and _get(i, S_BUSY) != (0 as i64):
+            _last_panic = core.PanicMessage()
+            _finish(i, true)
+            _thread_exit()
+        end
+    end
+end
+
+func _safe(s: str): str:
+    mut out := ""
+    repeat s.len() in k:
+        c := s[k]
+        keep := (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '-' or c == '_'
+        if keep:
+            out = out + s.substr(k, 1)
+        else:
+            out = out + "_"
+        end
+    end
+    ret out
+end
+
+func _sweep():
+    now := time.Now()
+    if now - _last_sweep < (60 as i64): ret end
+    _last_sweep = now
+    names := os.ListDir(_lock_dir)
+    repeat names.len() in k:
+        p := _lock_dir + "/" + names.get(k)
+        if now - fs.ModTime(p) > _lock_ttl: os.Rmdir(p) end
+    end
+end
+
+func _file_lock(id: i64):
+    i := id as int
+    path := _lock_dir + "/" + _safe(_job(i).name) + "_" + conv.FormatInt(_get(i, S_FIRING))
+    _sweep()
+    if os.Mkdir(path) == 0: _put(i, S_GRANTED, 1 as i64) end
+end
+
+func _label(s: str): str:
+    mut out := ""
+    repeat s.len() in k:
+        c := s[k]
+        if c == '"' or c == '\\':
+            out = out + "\\" + s.substr(k, 1)
+        else c == '\n':
+            out = out + "\\n"
+        else:
+            out = out + s.substr(k, 1)
+        end
+    end
+    ret out
+end
+
+func _cron_entry(id: i64):
+    i := id as int
+    j := _job(i)
+    _put(i, S_TID, _tid())
+    _put(i, S_T0, sync.NowMs())
+    if _lock_fn != (0 as i64):
+        _put(i, S_GRANTED, 0 as i64)
+        callhandler(_lock_fn, id)
+        if _get(i, S_GRANTED) == (0 as i64):
+            _bump(i, S_LOCK_DENIED)
+            _event(i, EV_LOCK_DENIED)
+            _put(i, S_RUNS, _get(i, S_RUNS) - (1 as i64))
+            _put(i, S_TID, 0 as i64)
+            atomic_add(_slot(_gcell as i64, 1), 0 as i64 - (1 as i64))
+            _put(i, S_BUSY, 0 as i64)
+            ret
+        end
+    end
+    if _before != (0 as i64): callhandler(_before, id) end
+    _put(i, S_STARTED, time.Now())
+    _event(i, EV_START)
+    callhandler(j.fn, id)
+    _finish(i, false)
 end
 
 func _pick(i: int): i64:
@@ -308,15 +466,26 @@ func _pick(i: int): i64:
     ret rand.IntRange(lo, hi)
 end
 
-func _launch(i: int): bool:
+func _launch(i: int, at: i64): bool:
     cap := atomic_load(_gcell)
-    if cap > (0 as i64) and atomic_load(_slot(_gcell as i64, 1)) >= cap: ret false end
+    if cap > (0 as i64) and atomic_load(_slot(_gcell as i64, 1)) >= cap:
+        _bump(i, S_SKIP_CAP)
+        _event(i, EV_SKIP_CAP)
+        ret false
+    end
     if atomic_swap(_slot(_cell(i), S_BUSY), 1 as i64) != (0 as i64):
         if _get(i, S_QUEUE) != (0 as i64): _put(i, S_PENDING, 1 as i64) end
+        _bump(i, S_SKIP_BUSY)
+        _event(i, EV_SKIP_BUSY)
         ret false
+    end
+    if not _hooked:
+        _hooked = true
+        core.SetPanicHook(_cron_panic)
     end
     atomic_add(_slot(_gcell as i64, 1), 1 as i64)
     _put(i, S_RUNS, _get(i, S_RUNS) + (1 as i64))
+    _put(i, S_FIRING, at)
     lim := _get(i, S_LIMIT)
     if lim > (0 as i64) and _get(i, S_RUNS) >= lim: _put(i, S_REMOVED, 1 as i64) end
     salam_cron_spawn(_cron_entry, i as i64)
@@ -504,13 +673,23 @@ func _advance(i: int, now: i64):
     _put(i, S_NEXT, nx)
 end
 
+func _firing_time(i: int, now: i64): i64:
+    j := _job(i)
+    if j.kind == JOB_CRON:
+        if j.expr.with_seconds: ret now end
+        ret now - (now % (60 as i64))
+    end
+    ret _get(i, S_NEXT)
+end
+
 func _fire_due(now: i64, dedupe: bool): int:
     mut started := 0
     n := _n()
     repeat n in i:
         if _due(i, now, dedupe):
+            at := _firing_time(i, now)
             _advance(i, now)
-            if _launch(i): started += 1 end
+            if _launch(i, at): started += 1 end
         end
     end
     ret started
@@ -870,6 +1049,159 @@ pub func EveryNMonths(id: int, n: int):
     _set_step(id, n, 3)
 end
 
+// Makes sure only one scheduler instance runs each firing. lock_fn runs on
+// the job thread before the job and must call Grant(id) when it won the
+// firing; if it does not, the job is skipped on this instance. unlock_fn (0
+// for none) runs after the job, but only when the lock was granted. Use
+// LockKey(id) as the key in Redis, a database row or a file. Intervals are
+// not coordinated across instances; use cron expressions or DailyAt and its
+// siblings so every instance computes the same firing.
+@en "SetLocker"
+@fa "تنظیم قفل"
+pub func SetLocker(lock_fn: i64, unlock_fn: i64):
+    _lock_fn = lock_fn
+    _unlock_fn = unlock_fn
+end
+
+// Call from a lock handler when this instance won the firing.
+@en "Grant"
+@fa "اعطا"
+pub func Grant(id: i64):
+    _put(id as int, S_GRANTED, 1 as i64)
+end
+
+// "name@seconds": identical on every instance for the same firing.
+@en "LockKey"
+@fa "کلید قفل"
+pub func LockKey(id: int): str:
+    ret _job(id).name + "@" + conv.FormatInt(_get(id, S_FIRING))
+end
+
+// Built-in locker on a shared directory (a network mount, for instance):
+// the instance that creates the firing's folder first runs the job. Folders
+// older than ttl_seconds are swept. A crashed winner means that one firing
+// is missed, never doubled.
+@en "FileLocker"
+@fa "قفل پوشه"
+pub func FileLocker(dir: str, ttl_seconds: int): bool:
+    if os.MkdirAll(dir) != 0 and not os.IsDir(dir): ret false end
+    _lock_dir = str.Clone(dir)
+    _lock_ttl = ttl_seconds as i64
+    _lock_fn = _file_lock
+    _unlock_fn = 0 as i64
+    ret true
+end
+
+@en "ClearLocker"
+@fa "حذف قفل"
+pub func ClearLocker():
+    _lock_fn = 0 as i64
+    _unlock_fn = 0 as i64
+end
+
+// Runs after a job that panicked, hit an index out of range or divided by
+// zero. Only that job's thread ends; the scheduler and every other job keep
+// running. Faults on other threads, and crashes such as a null dereference,
+// still stop the program. A job that faults while holding a lock or in the
+// middle of printing can leave that lock held.
+@en "OnPanic"
+@fa "هنگام خطای مرگبار"
+pub func OnPanic(fn: i64):
+    _on_panic = fn
+end
+
+// The message of the last isolated fault.
+@en "LastPanic"
+@fa "آخرین خطای مرگبار"
+pub func LastPanic(): str: ret _last_panic end
+
+@en "Panics"
+@fa "تعداد خطای مرگبار"
+pub func Panics(id: int): i64: ret _get(id, S_PANICS) end
+
+// Monitor: fn receives job*16+kind for every start, end, failure, panic, skip
+// and denied lock. Decode with EventJob and EventKind.
+@en "OnEvent"
+@fa "هنگام رویداد"
+pub func OnEvent(fn: i64):
+    _monitor = fn
+end
+
+@en "EventJob"
+@fa "کار رویداد"
+pub func EventJob(arg: i64): int: ret (arg / (16 as i64)) as int end
+
+// 1 start, 2 end, 3 failure, 4 panic, 5 skipped busy, 6 skipped by the cap, 7 lock denied.
+@en "EventKind"
+@fa "نوع رویداد"
+pub func EventKind(arg: i64): int: ret (arg % (16 as i64)) as int end
+
+@en "SkippedBusy"
+@fa "ردشده مشغول"
+pub func SkippedBusy(id: int): i64: ret _get(id, S_SKIP_BUSY) end
+
+@en "SkippedCap"
+@fa "ردشده سقف"
+pub func SkippedCap(id: int): i64: ret _get(id, S_SKIP_CAP) end
+
+@en "LockDenied"
+@fa "قفل رد شد"
+pub func LockDenied(id: int): i64: ret _get(id, S_LOCK_DENIED) end
+
+// Milliseconds the last run took, the total of all runs, and the longest.
+@en "LastMs"
+@fa "آخرین میلی‌ثانیه"
+pub func LastMs(id: int): i64: ret _get(id, S_LAST_MS) end
+
+@en "TotalMs"
+@fa "کل میلی‌ثانیه"
+pub func TotalMs(id: int): i64: ret _get(id, S_TOTAL_MS) end
+
+@en "MaxMs"
+@fa "بیشینه میلی‌ثانیه"
+pub func MaxMs(id: int): i64: ret _get(id, S_MAX_MS) end
+
+// Number of jobs running right now.
+@en "Running"
+@fa "در حال اجرا"
+pub func Running(): i64: ret atomic_load(_slot(_gcell as i64, 1)) end
+
+// All counters in the Prometheus text format, ready to serve on /metrics.
+@en "Metrics"
+@fa "سنجه‌ها"
+pub func Metrics(): str:
+    mut out := "# TYPE cron_jobs_running gauge\ncron_jobs_running " + conv.FormatInt(Running()) + "\n"
+    names := Vector {} as Vector<str>
+    names.push("runs_total")
+    names.push("failures_total")
+    names.push("panics_total")
+    names.push("skipped_busy_total")
+    names.push("skipped_cap_total")
+    names.push("lock_denied_total")
+    names.push("duration_ms_total")
+    names.push("duration_ms_max")
+    slots := Vector {} as Vector<int>
+    slots.push(S_RUNS)
+    slots.push(S_FAILS)
+    slots.push(S_PANICS)
+    slots.push(S_SKIP_BUSY)
+    slots.push(S_SKIP_CAP)
+    slots.push(S_LOCK_DENIED)
+    slots.push(S_TOTAL_MS)
+    slots.push(S_MAX_MS)
+    repeat names.len() in m:
+        mut kind := "counter"
+        if names.get(m) == "duration_ms_max": kind = "gauge" end
+        out = out + "# TYPE cron_job_" + names.get(m) + " " + kind + "\n"
+        repeat _n() in i:
+            if _get(i, S_REMOVED) == (0 as i64):
+                out = out + "cron_job_" + names.get(m) + "{job=\"" + _label(_job(i).name) + "\"} " + conv.FormatInt(_get(i, slots.get(m))) + "\n"
+            end
+        end
+    end
+    ret out
+end
+
 @en "Runs"
 @fa "تعداد اجرا"
 pub func Runs(id: int): i64: ret _get(id, S_RUNS) end
@@ -920,7 +1252,7 @@ end
 @fa "اجرای فوری"
 pub func RunNow(id: int): bool:
     if id < 0 or id >= _n(): ret false end
-    ret _launch(id)
+    ret _launch(id, time.Now())
 end
 
 // Blocks, checking once per second and firing due jobs until Stop is called.

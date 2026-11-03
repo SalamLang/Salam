@@ -191,6 +191,8 @@ in Persian and English and starts answering.
 `salam exec ai/backend/tests/tgmd_test.salam` tests the Markdown converter, and
 `salam exec ai/backend/tests/policy_test.salam` tests the language detection of the Salam-only rule.
 
+After the compiler check, a finished answer also goes through a practice check (`Practice` in `policy.salam`). It sends the answer back once, as `<practice_check>`, when a Salam block hand-writes a hex or decimal parser that `conv` already has, or when the identifiers a block declares are in the wrong language for it (English names in Persian code, Persian names in English code). The same policy test covers it.
+
 ### Cloud sandbox, GitHub and Figma
 
 A chat can be a cloud chat (`chats.cloud = 1`): it has a private Linux container

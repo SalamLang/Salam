@@ -1,0 +1,296 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package nats
+
+import conv
+import str
+import encoding.json
+
+const JS_API := "$JS.API."
+
+@en "JSResult"
+@fa "نتیجه جت‌استریم"
+pub struct JSResult:
+    @en "ok"
+    @fa "سالم"
+    pub ok: bool = false
+    @en "err"
+    @fa "خطا"
+    pub err: str = ""
+    @en "code"
+    @fa "کد"
+    pub code: int = 0
+    @en "raw"
+    @fa "خام"
+    pub raw: str = ""
+end
+
+@en "StreamState"
+@fa "وضعیت جریان"
+pub struct StreamState:
+    @en "ok"
+    @fa "سالم"
+    pub ok: bool = false
+    @en "err"
+    @fa "خطا"
+    pub err: str = ""
+    @en "name"
+    @fa "نام"
+    pub name: str = ""
+    @en "messages"
+    @fa "پیام ها"
+    pub messages: int = 0
+    @en "bytes"
+    @fa "بایت ها"
+    pub bytes: int = 0
+    @en "first_seq"
+    @fa "نخستین شماره"
+    pub first_seq: int = 0
+    @en "last_seq"
+    @fa "واپسین شماره"
+    pub last_seq: int = 0
+    @en "consumers"
+    @fa "مصرف‌کننده ها"
+    pub consumers: int = 0
+end
+
+@en "PubAck"
+@fa "تاییدیه انتشار"
+pub struct PubAck:
+    @en "ok"
+    @fa "سالم"
+    pub ok: bool = false
+    @en "err"
+    @fa "خطا"
+    pub err: str = ""
+    @en "stream"
+    @fa "جریان"
+    pub stream: str = ""
+    @en "seq"
+    @fa "شماره"
+    pub seq: int = 0
+    @en "duplicate"
+    @fa "تکراری"
+    pub duplicate: bool = false
+end
+
+@en "Batch"
+@fa "دسته"
+pub struct Batch:
+    @en "msgs"
+    @fa "پیام ها"
+    pub msgs: Vector<Msg> = Vector {} as Vector<Msg>
+    @en "err"
+    @fa "خطا"
+    pub err: str = ""
+end
+
+func _unquote(v: str): str:
+    if v.len() >= 2 and v.substr(0, 1) == `"` and v.substr(v.len() - 1, 1) == `"`:
+        ret v.substr(1, v.len() - 2)
+    end
+    ret v
+end
+
+func _js_result(m: Msg): JSResult:
+    mut r := JSResult {}
+    if not m.ok:
+        r.err = m.err
+        ret r
+    end
+    r.raw = m.data
+    e := json.Get(m.data, "error")
+    if e.len() > 0:
+        r.code = json.GetInt(e, "err_code")
+        r.err = _unquote(json.Get(e, "description"))
+        if r.err.len() == 0:
+            r.err = e
+        end
+        ret r
+    end
+    r.ok = true
+    ret r
+end
+
+func _str_array(items: Vector<str>): str:
+    mut out := "["
+    repeat items.len() in i:
+        if i > 0:
+            out += ","
+        end
+        out += json.Str(items.get(i))
+    end
+    ret out + "]"
+end
+
+@en "JSRequest"
+@fa "درخواست جت‌استریم"
+pub func JSRequest(nc &: Conn, api: str, body: str, timeout_ms: int): JSResult:
+    ret _js_result(Request(nc, JS_API + api, body, timeout_ms))
+end
+
+@en "AddStream"
+@fa "افزودن جریان"
+pub func AddStream(nc &: Conn, name: str, subjects: Vector<str>, timeout_ms: int): JSResult:
+    body := "{" + json.Member("name", name) + `,"subjects":` + _str_array(subjects) + `,"storage":"file","retention":"limits"}`
+    ret JSRequest(nc, "STREAM.CREATE." + name, body, timeout_ms)
+end
+
+@en "DeleteStream"
+@fa "حذف جریان"
+pub func DeleteStream(nc &: Conn, name: str, timeout_ms: int): JSResult:
+    ret JSRequest(nc, "STREAM.DELETE." + name, "", timeout_ms)
+end
+
+@en "PurgeStream"
+@fa "پاکسازی جریان"
+pub func PurgeStream(nc &: Conn, name: str, timeout_ms: int): JSResult:
+    ret JSRequest(nc, "STREAM.PURGE." + name, "", timeout_ms)
+end
+
+@en "StreamInfo"
+@fa "اطلاعات جریان"
+pub func StreamInfo(nc &: Conn, name: str, timeout_ms: int): StreamState:
+    mut s := StreamState {}
+    r := JSRequest(nc, "STREAM.INFO." + name, "", timeout_ms)
+    if not r.ok:
+        s.err = r.err
+        ret s
+    end
+    st := json.Get(r.raw, "state")
+    s.ok = true
+    s.name = name
+    s.messages = json.GetInt(st, "messages")
+    s.bytes = json.GetInt(st, "bytes")
+    s.first_seq = json.GetInt(st, "first_seq")
+    s.last_seq = json.GetInt(st, "last_seq")
+    s.consumers = json.GetInt(st, "consumer_count")
+    ret s
+end
+
+@en "JSPublish"
+@fa "انتشار جت‌استریم"
+pub func JSPublish(nc &: Conn, subject: str, data: str, timeout_ms: int): PubAck:
+    ret JSPublishHeaders(nc, subject, Header {}, data, timeout_ms)
+end
+
+@en "JSPublishHeaders"
+@fa "انتشار جت‌استریم با سرآیند"
+pub func JSPublishHeaders(nc &: Conn, subject: str, h: Header, data: str, timeout_ms: int): PubAck:
+    mut a := PubAck {}
+    r := _js_result(RequestMsg(nc, subject, h, data, timeout_ms))
+    if not r.ok:
+        a.err = r.err
+        ret a
+    end
+    a.ok = true
+    a.stream = _unquote(json.Get(r.raw, "stream"))
+    a.seq = json.GetInt(r.raw, "seq")
+    a.duplicate = json.Get(r.raw, "duplicate") == "true"
+    ret a
+end
+
+@en "AddConsumer"
+@fa "افزودن مصرف‌کننده"
+pub func AddConsumer(nc &: Conn, stream: str, durable: str, filter: str, timeout_ms: int): JSResult:
+    mut cfg := "{" + json.Member("durable_name", durable) + `,"ack_policy":"explicit"`
+    if filter.len() > 0:
+        cfg += "," + json.Member("filter_subject", filter)
+    end
+    cfg += "}"
+    body := "{" + json.Member("stream_name", stream) + `,"config":` + cfg + "}"
+    ret JSRequest(nc, "CONSUMER.DURABLE.CREATE." + stream + "." + durable, body, timeout_ms)
+end
+
+@en "DeleteConsumer"
+@fa "حذف مصرف‌کننده"
+pub func DeleteConsumer(nc &: Conn, stream: str, durable: str, timeout_ms: int): JSResult:
+    ret JSRequest(nc, "CONSUMER.DELETE." + stream + "." + durable, "", timeout_ms)
+end
+
+@en "Fetch"
+@fa "واکشی"
+pub func Fetch(nc &: Conn, stream: str, durable: str, batch: int, timeout_ms: int): Batch:
+    mut out := Batch {}
+    inbox := NewInbox(nc)
+    s := Subscribe(nc, inbox)
+    if not s.ok:
+        out.err = nc.err
+        ret out
+    end
+    body := "{" + json.MemberInt("batch", batch as i64) + "," + json.MemberInt("expires", (timeout_ms as i64) * 900000 as i64) + "}"
+    subject := JS_API + "CONSUMER.MSG.NEXT." + stream + "." + durable
+    if not PublishRequest(nc, subject, inbox, body):
+        out.err = nc.err
+        Unsubscribe(nc, s)
+        ret out
+    end
+    until out.msgs.len() < batch:
+        m := NextMsg(nc, s, timeout_ms)
+        if not m.ok:
+            if out.msgs.len() == 0:
+                out.err = m.err
+            end
+            break
+        end
+        if m.status == 404 or m.status == 408 or m.status == 409:
+            if out.msgs.len() == 0:
+                out.err = m.status_text.len() > 0 ? m.status_text : conv.FormatInt(m.status as i64)
+            end
+            break
+        end
+        if m.status == STATUS_IDLE_HEARTBEAT:
+            continue
+        end
+        out.msgs.push(m)
+    end
+    Unsubscribe(nc, s)
+    ret out
+end
+
+@en "Ack"
+@fa "تایید"
+pub func Ack(nc &: Conn, m: Msg): bool:
+    ret Respond(nc, m, "+ACK")
+end
+
+@en "Nak"
+@fa "رد"
+pub func Nak(nc &: Conn, m: Msg): bool:
+    ret Respond(nc, m, "-NAK")
+end
+
+@en "Term"
+@fa "خاتمه"
+pub func Term(nc &: Conn, m: Msg): bool:
+    ret Respond(nc, m, "+TERM")
+end
+
+@en "InProgress"
+@fa "ادامه کار"
+pub func InProgress(nc &: Conn, m: Msg): bool:
+    ret Respond(nc, m, "+WPI")
+end
+
+@en "MsgSequence"
+@fa "شماره پیام جریان"
+pub func MsgSequence(m: Msg): int:
+    parts := m.reply.split(".")
+    defer parts.free()
+    if parts.len() >= 9:
+        ret parts.get(5).to_int()
+    end
+    ret 0
+end

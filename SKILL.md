@@ -395,6 +395,17 @@ x, y = y, x                   // assign several targets at once (swap)
   with `_`. Names are `mut` only where written.
 - There is no implicit spreading: `f(g())` passes one tuple argument, never
   several. Destructure first.
+- `match` takes tuple patterns: literals test, names bind, `_` ignores, and
+  a guard may follow. Nested tuple patterns are not supported.
+
+  ```salam
+  ret match p:
+      (0, 0): "origin" end
+      (0, y): "on the y axis at " + y end
+      (x, y) if x == y: "diagonal" end
+      else: "elsewhere" end
+  end
+  ```
 - Under the hood a tuple is the generic struct `Tuple2` ... `Tuple8` from
   `core` (fields `f0`, `f1`, ...), so it copies like a struct and every backend
   handles it as one.

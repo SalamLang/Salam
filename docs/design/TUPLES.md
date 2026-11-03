@@ -54,6 +54,11 @@ x, y = y, x                   // assign several mut targets at once
   rule applies to every name, so a name that is not needed is written `_`.
 - There is no implicit spreading: `f(g())` passes one tuple argument, never
   several. Destructure first.
+- `match` takes tuple patterns, `(0, y)`: a literal tests the element, a name
+  binds it, `_` ignores it, and a guard may follow. The parser turns the pattern
+  into the existing struct pattern on `Tuple2` (`Tuple2{f0 = 0, f1 = y}`), so
+  tests, bindings, guards and exhaustiveness work as they do for structs.
+  Nested tuple patterns are not supported.
 - A tuple prints as `(1, "a")`, compares with `==` and `!=` element by element
   (it is a struct), and copies like a struct.
 
@@ -70,6 +75,7 @@ Everything else is front end work:
 | `a, b := e`                  | `__tupN := e`, then `a := __tupN.f0` and `b := __tupN.f1`           |
 | `a, b = x, y`                | `__tupN := (x, y)`, then `a = __tupN.f0` and `b = __tupN.f1`        |
 | `t.0`, `t.1`                 | the member access `t.f0`, `t.f1`                                     |
+| `(0, y)` in a `match` arm    | the struct pattern `Tuple2{f0 = 0, f1 = y}`                          |
 
 Because the instances live in `core` they are the same type in every package,
 so a tuple can cross a package boundary. And because the backends only ever see
@@ -84,7 +90,7 @@ names are ordinary locals afterwards.
 ## Not done
 
 - Labeled elements, `(quot: int, rem: int)`.
-- Tuple patterns in `match` and `switch`.
+- Nested tuple patterns, and tuple patterns in `switch`.
 - Using tuples inside `compiler/` and `std/`: both are compiled by the previous
   release, which does not parse them. The standard library gets tuple-returning
   functions one release after this one.

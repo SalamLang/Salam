@@ -26,6 +26,7 @@ import conv
 import mem
 import time
 import calendar
+import rand
 
 if SALAM_OS_WINDOWS:
     extern:
@@ -44,17 +45,44 @@ const CRON_KIND_MONTH := 1
 const CRON_KIND_DOW := 2
 const CRON_MAX_SCAN := 2000000
 
+const JOB_CRON := 0
+const JOB_EVERY := 1
+const JOB_BETWEEN := 2
+const JOB_ONCE := 3
+
+const S_BUSY := 0
+const S_REMOVED := 1
+const S_INTERVAL := 2
+const S_MAX := 3
+const S_NEXT := 4
+const S_LIMIT := 5
+const S_RUNS := 6
+const S_STARTED := 7
+const S_FINISHED := 8
+const S_SLOT := 9
+const S_START_AT := 10
+const S_STOP_AT := 11
+const S_AFTER_DONE := 12
+const S_QUEUE := 13
+const S_PENDING := 14
+const S_COUNT := 15
+
 mut _jobs := Vector {} as Vector<_Job>
 mut _zone_name := "UTC"
 mut _zone_fallback := 0
 mut _stop := null as i64*
 mut _last_minute := 0 as i64
 
+mut _before := 0 as i64
+mut _after := 0 as i64
+
 struct _Job:
     pub name: str = ""
+    pub tags: str = ""
+    pub kind: int = 0
     pub expr: Expr = Expr {}
     pub fn: i64 = 0
-    pub busy: i64 = 0
+    pub cell: i64 = 0
 end
 
 @en "Expr"
@@ -81,10 +109,21 @@ pub struct Expr:
     @en "dow_star"
     @fa "همه روزهای هفته"
     pub dow_star: bool = true
+    @en "seconds"
+    @fa "ثانیه‌ها"
+    pub seconds: i64 = 1
+    @en "with_seconds"
+    @fa "با ثانیه"
+    pub with_seconds: bool = false
     @en "ok"
     @fa "معتبر"
     pub ok: bool = false
 end
+
+func _slot(base: i64, slot: int): i64*: ret (base + ((slot * 8) as i64)) as i64* end
+func _cell(id: int): i64: ret _jobs.get(id).cell end
+func _get(id: int, slot: int): i64: ret atomic_load(_slot(_cell(id), slot)) end
+func _put(id: int, slot: int, v: i64): atomic_store(_slot(_cell(id), slot), v) end
 
 if SALAM_OS_WINDOWS:
     export:
@@ -207,13 +246,156 @@ func _offset(z: calendar.Zone, fallback_minutes: int, epoch: i64): i64:
 end
 
 func _cron_entry(id: i64):
-    j := _jobs.get(id as int)
+    i := id as int
+    j := _jobs.get(i)
+    if _before != (0 as i64): callhandler(_before, id) end
+    _put(i, S_STARTED, time.Now())
     callhandler(j.fn, id)
-    atomic_store(j.busy as i64*, 0 as i64)
+    done := time.Now()
+    _put(i, S_FINISHED, done)
+    if _after != (0 as i64): callhandler(_after, id) end
+    if _get(i, S_AFTER_DONE) != (0 as i64):
+        mut next := done + _get(i, S_INTERVAL)
+        if j.kind == JOB_BETWEEN: next = done + _pick(i) end
+        _put(i, S_NEXT, next)
+    end
+    _put(i, S_BUSY, 0 as i64)
+    if _get(i, S_PENDING) != (0 as i64):
+        _put(i, S_PENDING, 0 as i64)
+        _launch(i)
+    end
+end
+
+func _pick(i: int): i64:
+    lo := _get(i, S_INTERVAL)
+    hi := _get(i, S_MAX)
+    if hi <= lo: ret lo end
+    ret rand.IntRange(lo, hi)
+end
+
+func _launch(i: int): bool:
+    if atomic_swap(_slot(_cell(i), S_BUSY), 1 as i64) != (0 as i64):
+        if _get(i, S_QUEUE) != (0 as i64): _put(i, S_PENDING, 1 as i64) end
+        ret false
+    end
+    _put(i, S_RUNS, _get(i, S_RUNS) + (1 as i64))
+    lim := _get(i, S_LIMIT)
+    if lim > (0 as i64) and _get(i, S_RUNS) >= lim: _put(i, S_REMOVED, 1 as i64) end
+    salam_cron_spawn(_cron_entry, i as i64)
+    ret true
 end
 
 func _cron_loop(arg: i64):
     Run()
+end
+
+func _next_minute(e: Expr, after: i64, zone: str, fallback_minutes: int): i64:
+    mut z := calendar.LoadZone(zone)
+    mut found := 0 as i64
+    mut t := (after / (60 as i64) + (1 as i64)) * (60 as i64)
+    mut steps := 0
+    until steps < CRON_MAX_SCAN and found == (0 as i64):
+        local := t + _offset(z, fallback_minutes, t)
+        sod := local % (86400 as i64)
+        if not _has(e.months, time.MonthUTC(local)):
+            t += (86400 as i64) - sod
+        else not _has(e.hours, time.HourUTC(local)):
+            t += (3600 as i64) - (local % (3600 as i64))
+        else MatchesLocal(e, local):
+            found = t
+        else:
+            t += 60 as i64
+        end
+        steps += 1
+    end
+    if z.ok: calendar.FreeZone(z) end
+    ret found
+end
+
+func _register(name: str, kind: int, e: Expr, fn: i64, interval: i64, hi: i64, first: i64): int:
+    cell := mem.AllocateZeroed((S_COUNT * 8) as u64) as i64*
+    atomic_store(_slot(cell as i64, S_INTERVAL), interval)
+    atomic_store(_slot(cell as i64, S_MAX), hi)
+    atomic_store(_slot(cell as i64, S_NEXT), first)
+    _jobs.push(_Job { name = str.Clone(name), kind = kind, expr = e, fn = fn, cell = cell as i64 })
+    ret _jobs.len() - 1
+end
+
+// "H:M" or "H:M:S" to the leading cron fields "[S ]M H". Empty when invalid.
+func _at_fields(at: str): str:
+    parts := str.Split(at, ":")
+    defer parts.free()
+    n := parts.len()
+    if n < 2 or n > 3: ret "" end
+    h := _num(parts.get(0), CRON_KIND_PLAIN)
+    m := _num(parts.get(1), CRON_KIND_PLAIN)
+    mut sec := 0
+    if n == 3: sec = _num(parts.get(2), CRON_KIND_PLAIN) end
+    if h < 0 or h > 23 or m < 0 or m > 59 or sec < 0 or sec > 59: ret "" end
+    if n == 3: ret conv.FormatInt(sec as i64) + " " + conv.FormatInt(m as i64) + " " + conv.FormatInt(h as i64) end
+    ret conv.FormatInt(m as i64) + " " + conv.FormatInt(h as i64)
+end
+
+func _due(i: int, now: i64, dedupe: bool): bool:
+    if _get(i, S_REMOVED) != (0 as i64): ret false end
+    st := _get(i, S_START_AT)
+    if st > (0 as i64) and now < st: ret false end
+    stop := _get(i, S_STOP_AT)
+    if stop > (0 as i64) and now > stop: ret false end
+    j := _jobs.get(i)
+    if j.kind != JOB_CRON:
+        nx := _get(i, S_NEXT)
+        if nx == (0 as i64) or now < nx: ret false end
+        ret true
+    end
+    local := now + OffsetSeconds(_zone_name, _zone_fallback, now)
+    if not MatchesLocal(j.expr, local): ret false end
+    mut slot := now / (60 as i64)
+    if j.expr.with_seconds:
+        if not _has(j.expr.seconds, time.SecondUTC(local)): ret false end
+        slot = now
+    end
+    if dedupe:
+        if _get(i, S_SLOT) == slot + (1 as i64): ret false end
+    end
+    ret true
+end
+
+func _advance(i: int, now: i64):
+    j := _jobs.get(i)
+    if j.kind == JOB_CRON:
+        slot := now / (60 as i64)
+        if j.expr.with_seconds: _put(i, S_SLOT, now + (1 as i64)) else:
+            _put(i, S_SLOT, slot + (1 as i64))
+        end
+        ret
+    end
+    if j.kind == JOB_ONCE:
+        _put(i, S_NEXT, 0 as i64)
+        _put(i, S_REMOVED, 1 as i64)
+        ret
+    end
+    if _get(i, S_AFTER_DONE) != (0 as i64):
+        _put(i, S_NEXT, 0 as i64)
+        ret
+    end
+    mut step := _get(i, S_INTERVAL)
+    if j.kind == JOB_BETWEEN: step = _pick(i) end
+    mut nx := _get(i, S_NEXT) + step
+    if nx <= now: nx = now + step end
+    _put(i, S_NEXT, nx)
+end
+
+func _fire_due(now: i64, dedupe: bool): int:
+    mut started := 0
+    n := _jobs.len()
+    repeat n in i:
+        if _due(i, now, dedupe):
+            _advance(i, now)
+            if _launch(i): started += 1 end
+        end
+    end
+    ret started
 end
 
 @en "Parse"
@@ -222,14 +404,22 @@ pub func Parse(spec: str): Expr:
     mut e := Expr {}
     fields := str.Fields(_expand_macro(spec))
     defer fields.free()
-    if fields.len() != 5: ret e end
+    n := fields.len()
+    if n != 5 and n != 6: ret e end
     mut star := false
-    if not _parse_field(fields.get(0), 0, 59, CRON_KIND_PLAIN, e.minutes, star): ret e end
-    if not _parse_field(fields.get(1), 0, 23, CRON_KIND_PLAIN, e.hours, star): ret e end
-    if not _parse_field(fields.get(2), 1, 31, CRON_KIND_PLAIN, e.days, star): ret e end
+    mut at := 0
+    if n == 6:
+        e.seconds = 0
+        if not _parse_field(fields.get(0), 0, 59, CRON_KIND_PLAIN, e.seconds, star): ret e end
+        e.with_seconds = true
+        at = 1
+    end
+    if not _parse_field(fields.get(at + 0), 0, 59, CRON_KIND_PLAIN, e.minutes, star): ret e end
+    if not _parse_field(fields.get(at + 1), 0, 23, CRON_KIND_PLAIN, e.hours, star): ret e end
+    if not _parse_field(fields.get(at + 2), 1, 31, CRON_KIND_PLAIN, e.days, star): ret e end
     e.dom_star = star
-    if not _parse_field(fields.get(3), 1, 12, CRON_KIND_MONTH, e.months, star): ret e end
-    if not _parse_field(fields.get(4), 0, 7, CRON_KIND_DOW, e.weekdays, star): ret e end
+    if not _parse_field(fields.get(at + 3), 1, 12, CRON_KIND_MONTH, e.months, star): ret e end
+    if not _parse_field(fields.get(at + 4), 0, 7, CRON_KIND_DOW, e.weekdays, star): ret e end
     e.dow_star = star
     if _has(e.weekdays, 7):
         e.weekdays = e.weekdays | _bit(0)
@@ -280,26 +470,23 @@ end
 @fa "بعدی"
 pub func Next(e: Expr, after: i64, zone: str, fallback_minutes: int): i64:
     if not e.ok: ret 0 end
-    mut z := calendar.LoadZone(zone)
-    mut found := 0 as i64
-    mut t := (after / (60 as i64) + (1 as i64)) * (60 as i64)
-    mut steps := 0
-    until steps < CRON_MAX_SCAN and found == (0 as i64):
-        local := t + _offset(z, fallback_minutes, t)
-        sod := local % (86400 as i64)
-        if not _has(e.months, time.MonthUTC(local)):
-            t += (86400 as i64) - sod
-        else not _has(e.hours, time.HourUTC(local)):
-            t += (3600 as i64) - (local % (3600 as i64))
-        else MatchesLocal(e, local):
-            found = t
-        else:
-            t += 60 as i64
+    if not e.with_seconds: ret _next_minute(e, after, zone, fallback_minutes) end
+    t0 := after + (1 as i64)
+    base := t0 - (t0 % (60 as i64))
+    first := (t0 % (60 as i64)) as int
+    local := base + OffsetSeconds(zone, fallback_minutes, base)
+    if MatchesLocal(e, local):
+        repeat 60 - first in k:
+            sec := first + k
+            if _has(e.seconds, sec): ret base + (sec as i64) end
         end
-        steps += 1
     end
-    if z.ok: calendar.FreeZone(z) end
-    ret found
+    m := _next_minute(e, base, zone, fallback_minutes)
+    if m == (0 as i64): ret 0 end
+    repeat 60 in sec:
+        if _has(e.seconds, sec): ret m + (sec as i64) end
+    end
+    ret 0
 end
 
 @en "SetZone"
@@ -310,53 +497,235 @@ pub func SetZone(name: str, fallback_minutes: int):
 end
 
 // Registers fn (a func(id: i64)) under spec. Register every job before Run.
+// spec has five fields, or six with a leading seconds field.
 // Returns the job id, or -1 when spec does not parse.
 @en "Add"
 @fa "افزودن"
 pub func Add(name: str, spec: str, fn: i64): int:
     e := Parse(spec)
     if not e.ok: ret 0 - 1 end
-    cell := mem.AllocateZeroed(8 as u64) as i64*
-    _jobs.push(_Job { name = str.Clone(name), expr = e, fn = fn, busy = cell as i64 })
-    ret _jobs.len() - 1
+    ret _register(name, JOB_CRON, e, fn, 0 as i64, 0 as i64, 0 as i64)
+end
+
+// Runs fn every `seconds` seconds, the first time `seconds` from now.
+@en "Every"
+@fa "هر"
+pub func Every(name: str, seconds: int, fn: i64): int:
+    if seconds <= 0: ret 0 - 1 end
+    ret _register(name, JOB_EVERY, Expr {}, fn, seconds as i64, 0 as i64, time.Now() + (seconds as i64))
+end
+
+// Runs fn at a random gap between lo and hi seconds.
+@en "EveryBetween"
+@fa "هر بین"
+pub func EveryBetween(name: str, lo: int, hi: int, fn: i64): int:
+    if lo <= 0 or hi < lo: ret 0 - 1 end
+    id := _register(name, JOB_BETWEEN, Expr {}, fn, lo as i64, hi as i64, 0 as i64)
+    _put(id, S_NEXT, time.Now() + _pick(id))
+    ret id
+end
+
+// Runs fn once at the given instant (UTC seconds since the epoch).
+@en "Once"
+@fa "یک بار"
+pub func Once(name: str, at: i64, fn: i64): int:
+    id := _register(name, JOB_ONCE, Expr {}, fn, 0 as i64, 0 as i64, at)
+    _put(id, S_LIMIT, 1 as i64)
+    ret id
+end
+
+@en "DailyAt"
+@fa "روزانه در"
+pub func DailyAt(name: str, at: str, fn: i64): int:
+    f := _at_fields(at)
+    if f == "": ret 0 - 1 end
+    ret Add(name, f + " * * *", fn)
+end
+
+// days is a cron weekday list such as "mon,wed,fri" or "1-5".
+@en "WeeklyAt"
+@fa "هفتگی در"
+pub func WeeklyAt(name: str, days: str, at: str, fn: i64): int:
+    f := _at_fields(at)
+    if f == "": ret 0 - 1 end
+    ret Add(name, f + " * * " + days, fn)
+end
+
+@en "MonthlyAt"
+@fa "ماهانه در"
+pub func MonthlyAt(name: str, day: int, at: str, fn: i64): int:
+    f := _at_fields(at)
+    if f == "" or day < 1 or day > 31: ret 0 - 1 end
+    ret Add(name, f + " " + conv.FormatInt(day as i64) + " * *", fn)
 end
 
 @en "Count"
 @fa "تعداد"
-pub func Count(): int: ret _jobs.len() end
+pub func Count(): int:
+    mut n := 0
+    repeat _jobs.len() in i:
+        if _get(i, S_REMOVED) == (0 as i64): n += 1 end
+    end
+    ret n
+end
+
+// Every id ever issued, including removed jobs (ids are never reused).
+@en "Total"
+@fa "کل"
+pub func Total(): int: ret _jobs.len() end
 
 @en "Name"
 @fa "نام"
 pub func Name(id: int): str: ret _jobs.get(id).name end
 
+@en "Find"
+@fa "یافتن"
+pub func Find(name: str): int:
+    repeat _jobs.len() in i:
+        if _jobs.get(i).name == name and _get(i, S_REMOVED) == (0 as i64): ret i end
+    end
+    ret 0 - 1
+end
+
 @en "IsBusy"
 @fa "مشغول است"
 pub func IsBusy(id: int): bool:
-    ret atomic_load(_jobs.get(id).busy as i64*) != (0 as i64)
+    ret _get(id, S_BUSY) != (0 as i64)
 end
 
-// Starts every job due in the minute containing now (UTC seconds), each on
-// its own thread. A job still running from an earlier firing is skipped.
+@en "Remove"
+@fa "حذف"
+pub func Remove(id: int):
+    if id >= 0 and id < _jobs.len(): _put(id, S_REMOVED, 1 as i64) end
+end
+
+// Comma separated tags, replacing any earlier ones.
+@en "SetTags"
+@fa "تنظیم برچسب"
+pub func SetTags(id: int, tags: str):
+    j := _jobs.get(id)
+    _jobs.set(id, _Job { name = j.name, tags = "," + tags + ",", kind = j.kind, expr = j.expr, fn = j.fn, cell = j.cell })
+end
+
+@en "HasTag"
+@fa "برچسب دارد"
+pub func HasTag(id: int, tag: str): bool:
+    ret str.Contains(_jobs.get(id).tags, "," + tag + ",")
+end
+
+@en "RemoveByTag"
+@fa "حذف با برچسب"
+pub func RemoveByTag(tag: str): int:
+    mut n := 0
+    repeat _jobs.len() in i:
+        if HasTag(i, tag) and _get(i, S_REMOVED) == (0 as i64):
+            Remove(i)
+            n += 1
+        end
+    end
+    ret n
+end
+
+// Stops the job after n runs.
+@en "Limit"
+@fa "محدودیت"
+pub func Limit(id: int, n: int):
+    _put(id, S_LIMIT, n as i64)
+end
+
+// The job does not fire before `at` / after `at` (UTC seconds). 0 clears.
+@en "StartAt"
+@fa "شروع از"
+pub func StartAt(id: int, at: i64):
+    _put(id, S_START_AT, at)
+end
+
+@en "StopAt"
+@fa "توقف در"
+pub func StopAt(id: int, at: i64):
+    _put(id, S_STOP_AT, at)
+end
+
+// Interval jobs count the next gap from the end of a run, not its start.
+@en "FromCompletion"
+@fa "از اتمام اجرا"
+pub func FromCompletion(id: int):
+    _put(id, S_AFTER_DONE, 1 as i64)
+end
+
+// A firing that finds the job busy waits and runs after it, instead of being skipped.
+@en "Queue"
+@fa "صف"
+pub func Queue(id: int):
+    _put(id, S_QUEUE, 1 as i64)
+end
+
+@en "OnBefore"
+@fa "پیش از اجرا"
+pub func OnBefore(fn: i64):
+    _before = fn
+end
+
+@en "OnAfter"
+@fa "پس از اجرا"
+pub func OnAfter(fn: i64):
+    _after = fn
+end
+
+@en "Runs"
+@fa "تعداد اجرا"
+pub func Runs(id: int): i64: ret _get(id, S_RUNS) end
+
+@en "LastRun"
+@fa "آخرین اجرا"
+pub func LastRun(id: int): i64: ret _get(id, S_STARTED) end
+
+@en "LastFinished"
+@fa "آخرین اتمام"
+pub func LastFinished(id: int): i64: ret _get(id, S_FINISHED) end
+
+// Next firing after `after` (UTC seconds), or 0 when the job will not fire again.
+@en "NextRun"
+@fa "اجرای بعدی"
+pub func NextRun(id: int, after: i64): i64:
+    if _get(id, S_REMOVED) != (0 as i64): ret 0 end
+    j := _jobs.get(id)
+    mut t := 0 as i64
+    if j.kind == JOB_CRON:
+        t = Next(j.expr, after, _zone_name, _zone_fallback)
+    else:
+        t = _get(id, S_NEXT)
+    end
+    st := _get(id, S_START_AT)
+    if st > (0 as i64) and t < st:
+        if j.kind == JOB_CRON: t = Next(j.expr, st - (1 as i64), _zone_name, _zone_fallback) else:
+            t = st
+        end
+    end
+    stop := _get(id, S_STOP_AT)
+    if stop > (0 as i64) and t > stop: ret 0 end
+    ret t
+end
+
+// Starts every job due at now (UTC seconds), each on its own thread. Cron
+// jobs without a seconds field match any second of the minute. A job still
+// running from an earlier firing is skipped unless Queue was set.
 // Returns how many jobs were started.
 @en "RunDue"
 @fa "اجرای موعد"
 pub func RunDue(now: i64): int:
-    local := now + OffsetSeconds(_zone_name, _zone_fallback, now)
-    mut started := 0
-    n := _jobs.len()
-    repeat n in i:
-        j := _jobs.get(i)
-        if MatchesLocal(j.expr, local):
-            if atomic_swap(j.busy as i64*, 1 as i64) == (0 as i64):
-                salam_cron_spawn(_cron_entry, i as i64)
-                started += 1
-            end
-        end
-    end
-    ret started
+    ret _fire_due(now, false)
 end
 
-// Blocks, firing due jobs once per minute until Stop is called.
+// Runs job id immediately, outside its schedule.
+@en "RunNow"
+@fa "اجرای فوری"
+pub func RunNow(id: int): bool:
+    if id < 0 or id >= _jobs.len(): ret false end
+    ret _launch(id)
+end
+
+// Blocks, checking once per second and firing due jobs until Stop is called.
 @en "Run"
 @fa "اجرا"
 pub func Run():
@@ -365,17 +734,8 @@ pub func Run():
     end
     until atomic_load(_stop) == (0 as i64):
         now := time.Now()
-        minute := now / (60 as i64)
-        if minute != _last_minute:
-            _last_minute = minute
-            RunDue(now)
-        end
-        wait := (60 as i64) - (now % (60 as i64))
-        if wait > (1 as i64):
-            time.Sleep(((wait - (1 as i64)) * (1000 as i64)) as int)
-        else:
-            time.Sleep(200)
-        end
+        _fire_due(now, true)
+        time.Sleep(200)
     end
 end
 
@@ -388,10 +748,28 @@ pub func RunBackground():
     salam_cron_spawn(_cron_loop, 0 as i64)
 end
 
+// Asks Run to return.
 @en "Stop"
 @fa "توقف"
 pub func Stop():
     if _stop != null:
         atomic_store(_stop, 1 as i64)
+    end
+end
+
+// Stops, then waits up to timeout_ms for running jobs to finish.
+@en "StopWait"
+@fa "توقف و انتظار"
+pub func StopWait(timeout_ms: int):
+    Stop()
+    mut waited := 0
+    until waited < timeout_ms:
+        mut any := false
+        repeat _jobs.len() in i:
+            if IsBusy(i): any = true end
+        end
+        if not any: ret end
+        time.Sleep(10)
+        waited += 10
     end
 end

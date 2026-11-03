@@ -1,0 +1,144 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import mem
+import time
+import cron
+
+const ZONE := "Invalid/Nowhere"
+const OFF := 0
+const AFTER := 1792800300
+
+mut hits := null as i64*
+mut befores := null as i64*
+mut afters := null as i64*
+
+func tick(_id: i64):
+    atomic_add(hits, 1 as i64)
+end
+
+func before(_id: i64):
+    atomic_add(befores, 1 as i64)
+end
+
+func after(_id: i64):
+    atomic_add(afters, 1 as i64)
+end
+
+func settle():
+    mut waited := 0
+    mut any := true
+    until any and waited < 500:
+        any = false
+        repeat cron.Total() in i:
+            if cron.IsBusy(i): any = true end
+        end
+        time.Sleep(10)
+        waited += 1
+    end
+end
+
+func fire(now: i64): int:
+    n := cron.RunDue(now)
+    settle()
+    ret n
+end
+
+func main:
+    hits = mem.AllocateZeroed(8 as u64) as i64*
+    befores = mem.AllocateZeroed(8 as u64) as i64*
+    afters = mem.AllocateZeroed(8 as u64) as i64*
+    cron.SetZone(ZONE, OFF)
+
+    sec := cron.Parse("15,45 * * * * *")
+    five := cron.Parse("* * * * *")
+    bad := cron.Parse("60 * * * * *")
+    seven := cron.Parse("* * * * * * *")
+    println "six fields: ", sec.ok, " with seconds: ", sec.with_seconds
+    println "five fields: ", five.with_seconds
+    println "bad seconds: ", bad.ok
+    println "seven fields: ", seven.ok
+    println "next 1: ", cron.Next(sec, AFTER as i64, ZONE, OFF)
+    println "next 2: ", cron.Next(sec, (AFTER + 15) as i64, ZONE, OFF)
+    println "next 3: ", cron.Next(sec, (AFTER + 45) as i64, ZONE, OFF)
+
+    println "bad daily: ", cron.DailyAt("x", "25:00", tick)
+    println "bad every: ", cron.Every("x", 0, tick)
+    println "bad between: ", cron.EveryBetween("x", 5, 2, tick)
+    println "bad monthly: ", cron.MonthlyAt("x", 32, "10:00", tick)
+
+    cron.OnBefore(before)
+    cron.OnAfter(after)
+
+    daily := cron.DailyAt("daily", "10:30", tick)
+    println "daily next: ", cron.NextRun(daily, AFTER as i64)
+    println "fire 10:30: ", fire(1792837800 as i64)
+    println "fire 10:31: ", fire(1792837860 as i64)
+
+    weekly := cron.WeeklyAt("weekly", "mon", "09:15:30", tick)
+    println "weekly next: ", cron.NextRun(weekly, AFTER as i64)
+
+    monthly := cron.MonthlyAt("monthly", 15, "00:00", tick)
+    println "monthly next: ", cron.NextRun(monthly, AFTER as i64)
+
+    println "once id: ", cron.Once("once", 1792900000 as i64, tick) >= 0
+    println "once early: ", fire(1792899999 as i64)
+    println "once due: ", fire(1792900000 as i64)
+    println "once again: ", fire(1792900000 as i64)
+
+    limited := cron.Add("limited", "* * * * *", tick)
+    cron.Limit(limited, 2)
+    println "limited 1: ", fire(1792800000 as i64)
+    println "limited 2: ", fire(1792800060 as i64)
+    println "limited 3: ", fire(1792800120 as i64)
+    println "limited runs: ", cron.Runs(limited)
+
+    window := cron.Add("window", "* * * * *", tick)
+    cron.StartAt(window, 1792801000 as i64)
+    cron.StopAt(window, 1792802000 as i64)
+    println "window before: ", fire(1792800900 as i64)
+    println "window inside: ", fire(1792801500 as i64)
+    println "window after: ", fire(1792802100 as i64)
+    println "window next: ", cron.NextRun(window, 1792800000 as i64)
+
+    t1 := cron.Add("t1", "* * * * *", tick)
+    t2 := cron.Add("t2", "* * * * *", tick)
+    cron.SetTags(t1, "ops,nightly")
+    cron.SetTags(t2, "ops")
+    println "has tag: ", cron.HasTag(t1, "nightly"), " ", cron.HasTag(t2, "nightly")
+    println "count before: ", cron.Count()
+    println "removed: ", cron.RemoveByTag("ops")
+    println "count after: ", cron.Count()
+    println "find window: ", cron.Find("window") == window
+    println "find removed: ", cron.Find("t1")
+
+    cron.Remove(window)
+    println "find gone: ", cron.Find("window")
+
+    id := cron.Every("fast", 30, tick)
+    cron.Queue(id)
+    println "run now: ", cron.RunNow(id)
+    settle()
+    println "runs: ", cron.Runs(id), " last run set: ", cron.LastRun(id) > (0 as i64)
+    started := cron.LastRun(id)
+    finished := cron.LastFinished(id)
+    println "finished set: ", finished >= started
+
+    nb := atomic_load(befores)
+    na := atomic_load(afters)
+    println "hooks balanced: ", nb == na
+    println "hooks ran: ", nb > (0 as i64)
+end

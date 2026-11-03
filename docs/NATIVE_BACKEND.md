@@ -494,7 +494,17 @@ then goes through:
    condition of a character loop then runs once.
    Then comes
    unswitching: an innermost loop that branches on a loop-invariant condition
-   is versioned into one copy per outcome. Compares, remainders and
+   is versioned into one copy per outcome. When the condition compares an
+   invariant value with a constant (`kind == 2`), the copy where it holds
+   also knows the value itself, so every other `kind == k` in that copy
+   folds as well. If-conversion has usually turned the arms of such a
+   switch into selects before this runs, so a loop that selects on two or
+   more such compares of the same value is unswitched on them too, one
+   constant per round, and the copy left over is split on the last one: the
+   PNG encoder's filter loop becomes one loop per filter type, each of which
+   the vectorizer then handles on its own (`SALAM_NG_OFF=uswsel` keeps the
+   older branch-only form). Up to eight rounds may run per function, within
+   a budget of 880 cloned instructions. Compares, remainders and
    divisions are folded when the value range of their operand decides them:
    inside `until i < 4000000:` the remainder `(i + 1) % 1000000007` is just
    `i + 1`. Signed division and remainder by a power of two that stay signed
@@ -607,6 +617,30 @@ then goes through:
    0.179 s (LLVM 0.020 s) and Paeth 0.225 s instead of 0.508 s (LLVM
    0.272 s). AArch64 runs the same code with NEON (`zip1` for the widening,
    `sqxtun` for the narrowing).
+   On x86-64 a vector select between `x` and `0 - x` on the sign of `x` is
+   an absolute value: one `vpabsd`, `vpabsw` or `vpabsb` with AVX2, and a
+   shift, `xor` and subtract (`psrad`, `pxor`, `psubd`) on SSE2
+   (`SALAM_NG_OFF=vabs`). Two compares that need an inversion (`<=`, `>=`,
+   `!=`) joined by `and` or `or` and feeding only selects are computed as
+   the opposite compares joined the other way, and the selects swap their
+   arms (`not a and not b` is `not (a or b)`), which saves both inversions
+   in Paeth's `pa <= pb and pa <= pc` (`SALAM_NG_OFF=vdemor`). Index math
+   such as `j - 4` keeps its no-overflow flag in the vector loop, so the
+   address folds into `[base + j - 4]` instead of a `lea` and a `movsxd`
+   (`SALAM_NG_OFF=lvnsw`). Counted with callgrind on a copy of the PNG
+   encoder's loops over a 4096-byte row, the filter scoring loop runs 28.8
+   instructions per byte instead of 33.3 on SSE2 (LLVM 29.8) and 8.9
+   instead of 33.3 with AVX2 (LLVM 8.1), the Paeth filter 6.8 instead of 9.1
+   (LLVM 11.3) and 2.2 instead of 9.1 (LLVM 2.8), and with one loop per
+   filter Sub and Up 0.48 instead of 2.10 (LLVM 0.30 to 0.32) and 0.29
+   instead of 1.18 (LLVM 0.11 to 0.14), Average 0.94 instead of 2.10 (LLVM
+   0.81) and 0.51 instead of 1.18 (LLVM 0.40). In wall time (median of nine
+   interleaved runs, 40000 or 200000 rows, range in brackets) the scoring
+   loop takes 301 ms [287-349] instead of 346 ms [328-395] (LLVM 327 ms
+   [313-356]) and with AVX2 122 ms [118-128] instead of 344 ms [327-393]
+   (LLVM 116 ms [114-132]); Paeth with AVX2 takes 38 ms [36-48] instead of
+   98 ms [93-130] (LLVM 54 ms [52-56]), and Sub 46 ms [42-63] instead of
+   110 ms [98-157] (LLVM 33 ms [31-51]).
    With `--cpu=x86-64-v3` (or `x86-64-v4`) the loop vectorizer uses the
    256-bit AVX2 registers instead: eight 32-bit or `f32` lanes, four 64-bit
    or `f64`, sixteen 16-bit and thirty-two bytes. The vector step, the
@@ -619,10 +653,16 @@ then goes through:
    usual 128-bit steps. Loops in narrowed byte lanes take thirty-two bytes
    per step (the combined PNG filter loop 0.026 s instead of 0.045 s, the
    Average filter 0.012 s), and 16-bit loops that do not load bytes sixteen
-   values. Loops that widen or narrow bytes (Paeth's 16-bit lanes among them:
-   0.233 s, LLVM 0.109 s with `vpmovzxbw`), count matching
-   bytes or walk a second counter down keep 128-bit vectors, and so does
-   every loop when `SALAM_NG_OFF=avx2` is set. The SLP vectorizer (below)
+   values. Loops that widen bytes or 16-bit values into wider lanes load
+   them with one `vpmovzxbw`, `vpmovzxbd` or `vpmovzxwd` (the `sx` forms
+   when signed) straight from memory, and loops that store their lanes back
+   as bytes mask them, fold the upper half onto the lower one with
+   `vextracti128` and pack (`vpackuswb`, after `vpackssdw` for 32-bit
+   lanes), so the PNG Paeth filter takes sixteen bytes per step and the
+   filter scoring loop eight (`SALAM_NG_OFF=yzext` keeps these loops at 128
+   bits). Loops that count matching bytes or walk a second counter down
+   keep 128-bit vectors, and so does every loop when `SALAM_NG_OFF=avx2` is
+   set. The SLP vectorizer (below)
    first looks for runs of eight adjacent `f32` or four `f64` stores and
    builds them as one 256-bit tree, then packs what is left into 128-bit
    ones, so the 4x16 `f32` matrix multiply micro-kernel keeps eight `ymm`
@@ -633,7 +673,10 @@ then goes through:
    256-bit register is VEX-encoded throughout, scalar float code included,
    so it never mixes legacy SSE with AVX, and it runs `vzeroupper` before
    each call and return; functions without 256-bit code are encoded exactly
-   as before. The register allocator keeps 256-bit values in the same class
+   as before. In such a function a register copy followed by a vector
+   operation that overwrites the copy (`vmovaps a, b` then `vpsubd a, a, c`)
+   becomes the one three-operand form `vpsubd a, b, c` once registers are
+   assigned (`SALAM_NG_OFF=vex3`). The register allocator keeps 256-bit values in the same class
    as the other vector registers and gives them 32-byte spill slots, read and
    written with unaligned moves so the frame stays 16-byte aligned; on Windows
    it keeps them out of `xmm6`-`xmm15`, whose upper halves a callee may
@@ -1025,14 +1068,18 @@ ret end` at the top of a recursive AST walk) tests that parameter before
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing, and a comma-separated list dumps several functions.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,vnarrow,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,loopinl,cpelim,tord,vrev,cdown,tfold,mexit,sqself,vsign,redinv,ldcmp,phix,selinc,wweb,wwdep,wwtr,tdup,padjmp,dtst,zins,ndiv,niv,cmp64,adc64,rvc,avx2,rasp,hotpath,inlnest,spromo,ypack,ysum,winv,zxcmp,cpspill,scdead`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,vnarrow,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,loopinl,cpelim,tord,vrev,cdown,tfold,mexit,sqself,vsign,redinv,ldcmp,phix,selinc,wweb,wwdep,wwtr,tdup,padjmp,dtst,zins,ndiv,niv,cmp64,adc64,rvc,avx2,rasp,hotpath,inlnest,spromo,ypack,ysum,winv,zxcmp,cpspill,scdead,yzext,uswsel,vex3,vabs,vdemor,lvnsw`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator and `rasp` the
   splitting of a value's range between registers and its stack slot. `hotpath` is the
   partial inlining through `.cold` functions, `inlnest` the second inlining
   round for calls that came in with an inlined body, and `spromo` the
-  promotion of fields the loop writes.
+  promotion of fields the loop writes. `yzext` is the 256-bit form of loops
+  that widen or narrow their lanes, `uswsel` the unswitching of selects on
+  a switch value, `vex3` the three-operand VEX rewrite, `vabs` the vector
+  absolute value, `vdemor` the swapped compares under `and` and `or`, and
+  `lvnsw` the no-overflow flag on vector index math.
 - `SALAM_NG_OFF_RANGE=lo:hi` limits `SALAM_NG_OFF` to the functions compiled
   in that range (1-based, in compile order), and `SALAM_NG_OFF_BASE` names
   passes to turn off everywhere. Halving the range finds the one function a
@@ -1243,16 +1290,19 @@ LLVM on a full self-compile, while the native build itself is several times
 faster than the LLVM path.
 
 Library code is further behind. Counted with callgrind, the image tests
-`apps/image_rtl_card` and `apps/image_basics` run 1.15x and 1.21x the
-instructions of their LLVM builds (152.3 against 132.4 million, 570.3
-against 471.4 million; before the narrow byte and 16-bit lanes they were
-163.3 and 587.2 million, 1.23x and 1.25x, and before `winv`, `zxcmp`,
-`cpspill` and `scdead` 174.6 and 608.0 million, 1.32x and 1.29x). With
-`--cpu=x86-64-v3` the two take 151.6 and 569.0 million (163.4 and 587.7
-without the narrow lanes). On `image_rtl_card`, `EncodePNG` and
-`RawDeflate` now run 99.3 million instructions against 97.4 million for
-LLVM's `Encode`, which inlines both; the biggest loop left there, the
-filter scoring with five `int` sums, runs four lanes in both builds. What
+`apps/image_rtl_card` and `apps/image_basics` run 1.10x and 1.18x the
+instructions of their LLVM builds (145.6 against 132.4 million, 558.6
+against 471.5 million; before the 256-bit widening, per-filter unswitching
+and vector `abs` they were 152.3 and 570.3 million, 1.15x and 1.21x, before
+the narrow byte and 16-bit lanes 163.3 and 587.2 million, 1.23x and 1.25x,
+and before `winv`, `zxcmp`, `cpspill` and `scdead` 174.6 and 608.0 million,
+1.32x and 1.29x). With `--cpu=x86-64-v3` the two take 119.7 and 523.3
+million against LLVM's 101.9 and 415.0, 1.17x and 1.26x (151.6 and 569.0
+million, 1.49x and 1.37x, before the 256-bit widening). On `image_rtl_card`, `EncodePNG` and
+`RawDeflate` now run 92.6 million instructions against 97.4 million for
+LLVM's `Encode`, which inlines both, and 66.5 million against 67.5 million
+with AVX2, where the filter scoring loop with its five `int` sums now runs
+eight lanes in both builds. What
 is left is mostly not spilling: LLVM inlines `DrawLine` into a constant
 horizontal span and unswitches the alpha test that keeps native `DrawLine`'s loop at full
 register pressure (about 8 million), and in `image_basics` it inlines
@@ -1275,9 +1325,10 @@ Not there yet:
   result, unless the program is built with `--fast-math`, which lets float
   add reductions run in vector lanes too (and gives LLVM `reassoc nsz`).
   AVX2 is opt-in (`--cpu=x86-64-v3`) and the loop, SLP and sum-reduction
-  vectorizers use it; loops that widen, narrow, count bytes or reverse stay
-  at 128 bits, so a 16-bit loop over bytes (PNG's Paeth filter) does eight
-  values per step where LLVM's `vpmovzxbw` gives sixteen. There is no
+  vectorizers use it; loops that count bytes or reverse stay at 128 bits,
+  and a vector select is still a mask, `and`, `andn` and `or` rather than
+  one `vpblendvb`, since the register allocator has no four-operand
+  instruction form. There is no
   AVX-512 or FMA code,
   no 64-bit ordered compare even with AVX2, and no runtime dispatch, so a
   build is either baseline everywhere or needs AVX2 everywhere.

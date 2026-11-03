@@ -38,6 +38,9 @@ const C_HEAD := 4
 const C_TAIL := 5
 const C_CELLS := 6
 
+mut g_ready := mem.AllocateZeroed(8 as u64) as i64*
+mut g_pool := mem.AllocateZeroed(16 as u64) as Pool*
+
 struct Node:
     pub task: func () = (): end
     pub next: i64 = 0
@@ -51,6 +54,41 @@ struct State:
     pub c: i64* = null
     pub handles: i64* = null
     pub workers: i64 = 0
+end
+
+struct GroupState:
+    pub p: Pool = Pool {}
+    pub mu: sync.Mutex = sync.Mutex {}
+    pub err: str = ""
+    pub failed: i64* = null
+end
+
+@en "Group"
+@fa "گروه کار"
+pub struct Group:
+    @en "state"
+    @fa "وضعیت"
+    pub state: void* = null
+end
+
+@en "Future"
+@fa "آینده"
+pub struct Future:
+    @en "value"
+    @fa "مقدار"
+    pub value: i64* = null
+    @en "text"
+    @fa "متن"
+    pub text: str* = null
+    @en "done"
+    @fa "انجام شد"
+    pub done: i64* = null
+    @en "mu"
+    @fa "قفل"
+    pub mu: sync.Mutex = sync.Mutex {}
+    @en "cv"
+    @fa "شرط"
+    pub cv: sync.CondVar = sync.CondVar {}
 end
 
 struct Range:
@@ -147,6 +185,73 @@ func enqueue(s: State, task: func ()): bool:
     c[C_COUNT] = c[C_COUNT] + 1
     sync.Signal(s.nonempty)
     ret true
+end
+
+func default_pool(): Pool:
+    until atomic_load(g_ready) != 2:
+        if atomic_cas(g_ready, 0 as i64, 1 as i64):
+            w := CPUCount()
+            g_pool[0] = New(w, w * 64)
+            atomic_store(g_ready, 2 as i64)
+        else:
+            sync.SleepMs(1)
+        end
+    end
+    ret g_pool[0]
+end
+
+func group_run(gp: GroupState*, fn: func () str):
+    g := gp[0]
+    if atomic_load(g.failed) != 0:
+        ret
+    end
+    e := fn()
+    if e != "":
+        sync.Lock(g.mu)
+        if atomic_load(g.failed) == 0:
+            gp[0].err = e
+            atomic_store(g.failed, 1 as i64)
+        end
+        sync.Unlock(g.mu)
+    end
+end
+
+func future_finish(f: Future):
+    atomic_store(f.done, 1 as i64)
+    sync.Broadcast(f.cv)
+    sync.Unlock(f.mu)
+end
+
+func future_run(f: Future, fn: func () i64):
+    v := fn()
+    sync.Lock(f.mu)
+    f.value[0] = v
+    future_finish(f)
+end
+
+func future_run_str(f: Future, fn: func () str):
+    v := fn()
+    sync.Lock(f.mu)
+    f.text[0] = v
+    future_finish(f)
+end
+
+func future_new(): Future:
+    mut f := Future {}
+    f.value = mem.AllocateZeroed(8 as u64) as i64*
+    f.text = mem.AllocateZeroed(sizeof(str) as u64) as str*
+    f.done = mem.AllocateZeroed(8 as u64) as i64*
+    f.mu = sync.NewMutex()
+    f.cv = sync.NewCondVar()
+    ret f
+end
+
+func future_wait(f: Future):
+    sync.Lock(f.mu)
+    until atomic_load(f.done) == 0:
+        sync.WaitCond(f.cv, f.mu)
+    end
+    sync.Unlock(f.mu)
 end
 
 @en "CPUCount"
@@ -320,4 +425,112 @@ end
 pub func Workers(p: Pool): i64:
     sp := p.state as State*
     ret sp[0].workers
+end
+
+@en "SubmitOrRun"
+@fa "ارسال یا اجرا"
+pub func SubmitOrRun(p: Pool, task: func ()):
+    if not TrySubmit(p, task):
+        task()
+    end
+end
+
+@en "Go"
+@fa "برو"
+pub func Go(task: func ()):
+    Submit(default_pool(), task)
+end
+
+@en "GoWait"
+@fa "انتظار برو"
+pub func GoWait():
+    Wait(default_pool())
+end
+
+@en "NewGroup"
+@fa "گروه کار جدید"
+pub func NewGroup(limit: i64): Group:
+    gp := mem.AllocateZeroed(sizeof(GroupState) as u64) as GroupState*
+    f := mem.AllocateZeroed(8 as u64) as i64*
+    gp[0] = GroupState { p = New(limit, limit * 2), mu = sync.NewMutex(), err = "", failed = f }
+    ret Group { state = gp as void* }
+end
+
+@en "GroupGo"
+@fa "گروه برو"
+pub func GroupGo(g: Group, fn: func () str): bool:
+    gp := g.state as GroupState*
+    ret Submit(gp[0].p, (): group_run(gp, fn) end)
+end
+
+@en "GroupFailed"
+@fa "گروه شکست خورده"
+pub func GroupFailed(g: Group): bool:
+    gp := g.state as GroupState*
+    ret atomic_load(gp[0].failed) != 0
+end
+
+@en "GroupWait"
+@fa "گروه انتظار"
+pub func GroupWait(g: Group): str:
+    gp := g.state as GroupState*
+    Wait(gp[0].p)
+    ret gp[0].err
+end
+
+@en "GroupStop"
+@fa "گروه توقف"
+pub func GroupStop(g: Group):
+    gp := g.state as GroupState*
+    s := gp[0]
+    Stop(s.p)
+    sync.Destroy(s.mu)
+    mem.Free(s.failed as void*)
+    mem.Free(gp as void*)
+end
+
+@en "Async"
+@fa "ناهمزمان"
+pub func Async(p: Pool, fn: func () i64): Future:
+    f := future_new()
+    Submit(p, (): future_run(f, fn) end)
+    ret f
+end
+
+@en "AsyncStr"
+@fa "ناهمزمان متن"
+pub func AsyncStr(p: Pool, fn: func () str): Future:
+    f := future_new()
+    Submit(p, (): future_run_str(f, fn) end)
+    ret f
+end
+
+@en "Await"
+@fa "منتظر ماندن"
+pub func Await(f: Future): i64:
+    future_wait(f)
+    ret f.value[0]
+end
+
+@en "AwaitStr"
+@fa "منتظر ماندن متن"
+pub func AwaitStr(f: Future): str:
+    future_wait(f)
+    ret f.text[0]
+end
+
+@en "Ready"
+@fa "آماده"
+pub func Ready(f: Future): bool:
+    ret atomic_load(f.done) != 0
+end
+
+@en "Release"
+@fa "رها کردن"
+pub func Release(f: Future):
+    sync.Destroy(f.mu)
+    sync.DestroyCondVar(f.cv)
+    mem.Free(f.value as void*)
+    mem.Free(f.text as void*)
+    mem.Free(f.done as void*)
 end

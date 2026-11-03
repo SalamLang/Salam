@@ -68,7 +68,10 @@ const S_QUEUE := 13
 const S_PENDING := 14
 const S_FAILED := 15
 const S_FAILS := 16
-const S_COUNT := 17
+const S_NSTEP := 17
+const S_NUNIT := 18
+const S_NANCHOR := 19
+const S_COUNT := 20
 
 mut _jobs := Vector {} as Vector<_Job>
 mut _zone_name := "UTC"
@@ -368,6 +371,27 @@ func _at_fields(at: str): str:
     ret conv.FormatInt(m as i64) + " " + conv.FormatInt(h as i64)
 end
 
+func _period(unit: int, local: i64): i64:
+    day := local / (86400 as i64)
+    if unit == 2: ret (day + (3 as i64)) / (7 as i64) end
+    if unit == 3: ret time.YearUTC(local) * 12 + time.MonthUTC(local) end
+    ret day
+end
+
+func _step_ok(i: int, local: i64): bool:
+    n := _get(i, S_NSTEP)
+    if n <= (1 as i64): ret true end
+    ret (_period(_get(i, S_NUNIT) as int, local) - _get(i, S_NANCHOR)) % n == (0 as i64)
+end
+
+func _set_step(id: int, n: int, unit: int):
+    if id < 0 or id >= _n() or n < 1: ret end
+    now := time.Now()
+    _put(id, S_NSTEP, n as i64)
+    _put(id, S_NUNIT, unit as i64)
+    _put(id, S_NANCHOR, _period(unit, now + OffsetSeconds(_zone_name, _zone_fallback, now)))
+end
+
 func _due(i: int, now: i64, dedupe: bool): bool:
     if _get(i, S_REMOVED) != (0 as i64): ret false end
     st := _get(i, S_START_AT)
@@ -382,6 +406,7 @@ func _due(i: int, now: i64, dedupe: bool): bool:
     end
     local := now + OffsetSeconds(_zone_name, _zone_fallback, now)
     if not MatchesLocal(j.expr, local): ret false end
+    if not _step_ok(i, local): ret false end
     mut slot := now / (60 as i64)
     if j.expr.with_seconds:
         if not _has(j.expr.seconds, time.SecondUTC(local)): ret false end
@@ -729,6 +754,26 @@ pub func Failures(id: int): i64: ret _get(id, S_FAILS) end
 @fa "سقف هم‌زمانی"
 pub func ConcurrencyLimit(n: int):
     atomic_store(_gcell, n as i64)
+end
+
+// Fires only every nth day / week / month, counted from today (this week, this month).
+// Use it on DailyAt, WeeklyAt, MonthlyAt or any cron job.
+@en "EveryNDays"
+@fa "هر چند روز"
+pub func EveryNDays(id: int, n: int):
+    _set_step(id, n, 1)
+end
+
+@en "EveryNWeeks"
+@fa "هر چند هفته"
+pub func EveryNWeeks(id: int, n: int):
+    _set_step(id, n, 2)
+end
+
+@en "EveryNMonths"
+@fa "هر چند ماه"
+pub func EveryNMonths(id: int, n: int):
+    _set_step(id, n, 3)
 end
 
 @en "Runs"

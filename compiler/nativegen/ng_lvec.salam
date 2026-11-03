@@ -146,13 +146,18 @@ func lv_wide_ok(g &: Ng, r &: Lv): bool:
     each i in r.body:
         res := g.i_res[i]
         c := res >= 0 ? r.cls[res] : LV_NONE
-        if c == LV_NARROW or c == LV_RADDR or c == LV_RIDX:
+        if c == LV_RADDR or c == LV_RIDX:
+            ret false
+        end
+        if c == LV_NARROW and g.off_yzext:
             ret false
         end
         if (g.i_op[i] == OP_ZEXT or g.i_op[i] == OP_SEXT) and c == LV_VEC and lv_nbits(g.v_ty[g.i_a[i]]) != r.nw:
-            ret false
+            if g.off_yzext or not lv_narrow_load(g, r, g.i_a[i]):
+                ret false
+            end
         end
-        if g.i_op[i] == OP_STORE and lv_cls(r, g.i_a[i]) == LV_NARROW:
+        if g.i_op[i] == OP_STORE and lv_cls(r, g.i_a[i]) == LV_NARROW and g.off_yzext:
             ret false
         end
     end
@@ -1220,6 +1225,34 @@ func lv_sel_only(g &: Ng, r &: Lv, v: int): bool:
     ret n > 0
 end
 
+func lv_dm_cmp(g &: Ng, r &: Lv, v: int): bool:
+    if v < 0 or g.v_kind[v] != VK_INS or g.v_uses[v] != 1 or not lv_in(g, r, v):
+        ret false
+    end
+    d := g.v_def[v]
+    p := g.i_x[d]
+    ret g.i_op[d] == OP_ICMP and (p == CC_NE or p == CC_SGE or p == CC_SLE)
+end
+
+func lv_dm(g &: Ng, r &: Lv, i: int): bool:
+    op := g.i_op[i]
+    if g.off_vdemor or (op != OP_AND and op != OP_OR) or g.i_ty[i] != T_I1 or g.i_res[i] < 0:
+        ret false
+    end
+    a := g.i_a[i]
+    b := g.i_b[i]
+    ret a != b and lv_dm_cmp(g, r, a) and lv_dm_cmp(g, r, b) and lv_sel_only(g, r, g.i_res[i])
+end
+
+func lv_dm_user(g &: Ng, r &: Lv, v: int): bool:
+    each i in r.body:
+        if (g.i_a[i] == v or g.i_b[i] == v) and (g.i_op[i] == OP_AND or g.i_op[i] == OP_OR):
+            ret lv_dm(g, r, i)
+        end
+    end
+    ret false
+end
+
 func lv_emit(g &: Ng, b: int, op: int, ty: int, a: int, bb: int): int:
     i := ins_new(g, op, ty)
     g.i_a[i] = a
@@ -1696,6 +1729,9 @@ func lv_transform(g &: Ng, r &: Lv):
             g.i_x[ni] = g.i_x[i]
             g.i_d[ni] = g.i_d[i]
             g.i_f[ni] = 0
+            if (op == OP_ADD or op == OP_SUB) and not g.off_lvnsw:
+                g.i_f[ni] = g.i_f[i] & IF_NSW
+            end
             if g.i_a[ni] >= 0 and lv_in(g, r, g.i_a[ni]) and r.vmap[g.i_a[ni]] >= 0: g.i_a[ni] = r.vmap[g.i_a[ni]] end
             if g.i_b[ni] >= 0 and lv_in(g, r, g.i_b[ni]) and r.vmap[g.i_b[ni]] >= 0: g.i_b[ni] = r.vmap[g.i_b[ni]] end
             g.i_a[ni] = lv_hm(r, g.i_a[ni])
@@ -1787,7 +1823,7 @@ func lv_transform(g &: Ng, r &: Lv):
         end
         if op == OP_ZEXT or op == OP_SEXT:
             ld := g.v_def[g.i_a[i]]
-            nw := ins_new(g, OP_LOAD, r.nw == 16 ? vec_ty(T_I16, false) : T_V4I32)
+            nw := ins_new(g, OP_LOAD, vec_ty(r.nw == 16 ? T_I16 : T_I32, r.wide))
             g.i_a[nw] = r.vmap[g.i_a[ld]]
             g.i_c[nw] = g.i_c[ld]
             g.i_f[nw] = IF_W8
@@ -1885,6 +1921,11 @@ func lv_transform(g &: Ng, r &: Lv):
                 g.i_x[ni2] = neg_cc(px)
                 r.inv[res] = true
             end
+        else op == OP_ICMP and lv_dm_user(g, r, res):
+            g.i_x[ni2] = neg_cc(g.i_x[ni2])
+        else lv_dm(g, r, i):
+            g.i_op[ni2] = op == OP_AND ? OP_OR : OP_AND
+            r.inv[res] = true
         end
         r.vmap[res] = new_res(g, ni2)
         ins_append(g, vb, ni2)

@@ -80,7 +80,15 @@ When asked to convert program `X` (in some other language) into Salam:
    generics→`<T>`, exceptions→`throws`/`try`/`catch`, dict→`HashMap`,
    list→`Vector`, etc.).
 3. **Pick stdlib packages** from §5 rather than reimplementing (`str`, `json`,
-   `http`, `regex`, `math`, `sort`, `collections`, `db`, …).
+   `http`, `regex`, `math`, `sort`, `collections`, `db`, …). This comes before
+   writing any helper: Python's `int(s, 16)` is `conv.ParseHex(s)`, not a digit
+   loop. Search §5 and `std/` for the job, and write your own function only
+   when nothing fits. Unless the user asked for a single file, also design
+   with `struct`, `enum`, `interface` and generics, report failure with
+   `throws`, keep functions small, and split a real program into files (see
+   `docs/ai/AGENTS.md` section 0 and the learn lesson "Best practices").
+   Name your own identifiers in the language of the file: Persian names in a
+   Persian program, English names in an English one, never mixed.
 4. **Write idiomatic Salam** using §2 to §4, obeying the strict rules in §6
    (unused = error, `until` = while, manual `.free()`, integer `/` truncates,
    errors through `throws`/`try`, `mut` to reassign, `pub` to export, top-level ordering).

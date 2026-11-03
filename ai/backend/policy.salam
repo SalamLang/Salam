@@ -71,7 +71,7 @@ func tag_at(s: str, i: int): bool:
     if j < s.len() and (s[j] as int) == 47:
         j += 1
     end
-    each name in ["salam_policy", "caller_instructions", "caller_tools", "compiler_check", "language_check", "desktop_session", "user_interface", "operator_instructions", "attached_file", "memory_task", "user_memory", "project_instructions", "project_memory"]:
+    each name in ["salam_policy", "caller_instructions", "caller_tools", "compiler_check", "language_check", "practice_check", "desktop_session", "user_interface", "operator_instructions", "attached_file", "memory_task", "user_memory", "project_instructions", "project_memory"]:
         if j + name.len() <= s.len():
             mut same := true
             mut k := 0
@@ -375,6 +375,200 @@ func scan(text: str, langs &: Vector<str>, salam_lines &: int, shell_lines &: in
             end
         end
     end
+end
+
+func byte_at(s: str, i: int): int:
+    ret (((s[i] as int) % 256) + 256) % 256
+end
+
+func salam_blocks(text: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    mut inside := false
+    mut keep := false
+    mut mark := 0
+    mut width := 0
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    each line in text.split("\n"):
+        t := str.Trim(line)
+        run := fence_run(t)
+        if not inside:
+            if run > 0:
+                inside = true
+                mark = t[0] as int
+                width = run
+                keep = fence_kind(first_word(t.substr(run, t.len() - run))) == SALAM
+                str.BufReset(b)
+            end
+            continue
+        end
+        if run >= width and run == t.len() and (t[0] as int) == mark:
+            inside = false
+            if keep:
+                out.push(str.BufStr(b))
+            end
+            continue
+        end
+        str.BufAppend(b, line)
+        str.BufAppend(b, "\n")
+    end
+    if inside and keep:
+        out.push(str.BufStr(b))
+    end
+    ret out
+end
+
+func persian_code(code: str): bool:
+    each mark in ["پایان", "برگشت", "تابع ", "// زبان: فارسی"]:
+        if code.find(mark) >= 0:
+            ret true
+        end
+    end
+    ret false
+end
+
+func strip_mods(line: str): str:
+    mut s := str.Trim(line)
+    mut again := true
+    until again:
+        again = false
+        each m in ["pub ", "همگانی ", "mut ", "ناپایا ", "static ", "ایستا ", "inline ", "pure "]:
+            if str.StartsWith(s, m):
+                s = str.Trim(s.substr(m.len(), s.len() - m.len()))
+                again = true
+            end
+        end
+    end
+    ret s
+end
+
+func lead_name(rest: str): str:
+    mut n := 0
+    until n < rest.len():
+        c := rest[n] as int
+        if c == 40 or c == 58 or c == 60 or c == 123 or c == 61:
+            break
+        end
+        n += 1
+    end
+    ret str.Trim(rest.substr(0, n))
+end
+
+func plain_name(left: str): bool:
+    if left.len() == 0:
+        ret false
+    end
+    repeat left.len() in i:
+        c := left[i] as int
+        if c == 34 or c == 46 or c == 91 or c == 40 or c == 44 or c == 61:
+            ret false
+        end
+    end
+    ret true
+end
+
+func declared_name(line: str): str:
+    s := strip_mods(line)
+    each k in ["func ", "تابع ", "struct ", "ساختار ", "enum ", "جداشمار ", "interface ", "میانجی "]:
+        if str.StartsWith(s, k):
+            ret lead_name(s.substr(k.len(), s.len() - k.len()))
+        end
+    end
+    at := s.find(":=")
+    if at > 0:
+        left := str.Trim(s.substr(0, at))
+        if plain_name(left):
+            ret left
+        end
+    end
+    ret ""
+end
+
+func script_of(name: str): int:
+    mut latin := false
+    mut persian_letters := false
+    repeat name.len() in i:
+        c := byte_at(name, i)
+        if (c >= 65 and c <= 90) or (c >= 97 and c <= 122):
+            latin = true
+        else c >= 216 and c <= 219 and i + 1 < name.len():
+            d := byte_at(name, i + 1)
+            if not (c == 219 and d >= 176 and d <= 185):
+                persian_letters = true
+            end
+        end
+    end
+    if latin and persian_letters:
+        ret 3
+    end
+    if latin:
+        ret 1
+    end
+    if persian_letters:
+        ret 2
+    end
+    ret 0
+end
+
+func entry_name(name: str): bool:
+    ret name == "main" or name == "ریشه"
+end
+
+func wrong_names(code: str, persian: bool): Vector<str>:
+    mut bad := Vector {} as Vector<str>
+    each line in code.split("\n"):
+        name := declared_name(line)
+        if name.len() == 0 or entry_name(name):
+            continue
+        end
+        kind := script_of(name)
+        if kind == 3 or (persian and kind == 1) or (not persian and kind == 2):
+            bad.push(name)
+        end
+    end
+    ret bad
+end
+
+func hand_rolled(code: str): str:
+    squeezed := str.Replace(code, " ", "")
+    has_digit_math := squeezed.find("-48") >= 0 or squeezed.find("-55") >= 0 or squeezed.find("-87") >= 0
+    if squeezed.find("*16+") >= 0 and has_digit_math:
+        ret "a hand-written hexadecimal parser; std already has conv.ParseHex (throws on bad input) and conv.ParseHexOr (with a fallback)"
+    end
+    if squeezed.find("*10+") >= 0 and squeezed.find("-48") >= 0:
+        ret "a hand-written decimal parser; std already has conv.ParseInt (throws on bad input) and conv.ParseIntOr (with a fallback)"
+    end
+    ret ""
+end
+
+pub func Practice(text: str): str:
+    mut found := Vector {} as Vector<str>
+    each code in salam_blocks(text):
+        persian := persian_code(code)
+        rolled := hand_rolled(code)
+        if rolled.len() > 0:
+            found.push(rolled)
+        end
+        bad := wrong_names(code, persian)
+        if bad.len() >= 2:
+            mut shown := Vector {} as Vector<str>
+            each n in bad:
+                if shown.len() < 4:
+                    shown.push(n)
+                end
+            end
+            if persian:
+                found.push("a Persian program whose own names are English (" + str.Join(shown, ", ") + "); name functions, variables, structs and fields in Persian")
+            else:
+                found.push("an English program whose own names are Persian or mixed (" + str.Join(shown, ", ") + "); name functions, variables, structs and fields in English")
+            end
+        end
+    end
+    ret str.Join(found, "; ")
+end
+
+pub func PracticePrompt(found: str): str:
+    ret "<practice_check>\nYour last answer works against the Salam best practices: " + found + ". Look in the std first (salam_stdlib_search, salam_stdlib_symbols) and call what exists instead of rewriting it. Name your own functions, variables, structs, fields and enum members in the language of the code: Persian names in Persian Salam, English names in English Salam, never mixed and never Persian written in Latin letters. Write your whole answer again with that fixed, check it with salam_check, and answer the user's last message directly. Do not mention this check.\n</practice_check>"
 end
 
 pub func System(): str:

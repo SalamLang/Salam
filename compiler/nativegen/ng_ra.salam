@@ -1111,6 +1111,7 @@ func mc_take(g &: Ng): Mc:
     g.mc.sz2 = Vector {} as Vector<int>
     g.mc.r0 = Vector {} as Vector<int>
     g.mc.r1 = Vector {} as Vector<int>
+    g.mc.r2 = Vector {} as Vector<int>
     g.mc.imm = Vector {} as Vector<i64>
     g.mc.mk = Vector {} as Vector<int>
     g.mc.mb = Vector {} as Vector<int>
@@ -1132,6 +1133,7 @@ func mc_free_arrays(m &: Mc):
     m.sz2.free()
     m.r0.free()
     m.r1.free()
+    m.r2.free()
     m.imm.free()
     m.mk.free()
     m.mb.free()
@@ -1151,6 +1153,7 @@ func mi_clone(g &: Ng, o &: Mc, i: int): int:
     g.mc.sz2[j] = o.sz2[i]
     g.mc.r0[j] = o.r0[i]
     g.mc.r1[j] = o.r1[i]
+    g.mc.r2[j] = o.r2[i]
     g.mc.imm[j] = o.imm[i]
     g.mc.mk[j] = o.mk[i]
     g.mc.mb[j] = o.mb[i]
@@ -1203,7 +1206,7 @@ end
 
 func is_def_slot(op: int, cc: int): bool:
     switch op:
-        M_MOV_RR, M_COPY, M_MOVZX_RR, M_MOVSX_RR, M_FMOV_RR, M_CVTSI2F, M_CVTF2SI, M_CVTF2F, M_MOVQ_XG, M_MOVQ_GX, M_SQRT, M_MOV_RI, M_SETCC, M_LD, M_LDZX, M_LDSX, M_LEA, M_FLD, M_LDGOT, M_IMUL_RR, M_FOP_RR, M_XORPS, M_ANDPS, M_UNARY, M_SHIFT_RI, M_SHIFT_RC, M_IMUL_RRI, M_CMOV, M_XCHG, M_LXADD, M_ALU_RM, M_FOP_RM, M_VLD, M_VOP_RR, M_SHUFPS, M_UNPCKLPD, M_PSHUFD, M_VSHI, M_VLD32, M_VUN:
+        M_MOV_RR, M_COPY, M_MOVZX_RR, M_MOVSX_RR, M_FMOV_RR, M_CVTSI2F, M_CVTF2SI, M_CVTF2F, M_MOVQ_XG, M_MOVQ_GX, M_SQRT, M_MOV_RI, M_SETCC, M_LD, M_LDZX, M_LDSX, M_LEA, M_FLD, M_LDGOT, M_IMUL_RR, M_FOP_RR, M_XORPS, M_ANDPS, M_UNARY, M_SHIFT_RI, M_SHIFT_RC, M_IMUL_RRI, M_CMOV, M_XCHG, M_LXADD, M_ALU_RM, M_FOP_RM, M_VLD, M_VOP_RR, M_SHUFPS, M_UNPCKLPD, M_PSHUFD, M_VSHI, M_VLD32, M_VUN, M_VBLEND:
             ret true
         end
         M_ALU_RR, M_ALU_RI:
@@ -1267,6 +1270,47 @@ func x86_borrow(g &: Ng, i: int, r0: int, r1: int, mb: int, mi: int, save &: boo
     ret pick
 end
 
+func rw_blend(g &: Ng, ra &: Ra, o &: Mc, i: int, rsp: bool):
+    r0 := o.r0[i]
+    r1 := o.r1[i]
+    r2 := o.r2[i]
+    mut p0 := phys(g, r0)
+    mut p2 := phys(g, r2)
+    s0 := spilled(g, r0)
+    s1 := spilled(g, r1)
+    if s0:
+        p0 = XMM15
+        reload(g, r0, XMM15)
+    end
+    if spilled(g, r2):
+        if r2 == r0:
+            p2 = XMM15
+        else:
+            p2 = XMM14
+            reload(g, r2, XMM14)
+        end
+    end
+    j := mi_clone(g, o, i)
+    g.mc.r0[j] = p0
+    g.mc.r2[j] = p2
+    if r1 == r0:
+        g.mc.r1[j] = p0
+    else r1 == r2:
+        g.mc.r1[j] = p2
+    else s1:
+        g.mc.r1[j] = 0 - 1
+        set_mem(g, j, frame_mem(g.mc.vslot[r1], 0 as i64))
+    else:
+        g.mc.r1[j] = phys(g, r1)
+    end
+    if s0:
+        spill_store(g, r0, XMM15)
+    end
+    if rsp:
+        rs_def_store(g, ra, M_VBLEND, o.cc[i], r0)
+    end
+end
+
 func rewrite(g &: Ng, ra &: Ra):
     mut o := mc_take(g)
     n := o.op.len()
@@ -1296,6 +1340,9 @@ func rewrite(g &: Ng, ra &: Ra):
             rs_set(g, ra, r1, i)
             rs_set(g, ra, mb, i)
             rs_set(g, ra, mi, i)
+            if op == M_VBLEND:
+                rs_set(g, ra, o.r2[i], i)
+            end
         end
         if op == M_COPY or op == M_FMOV_RR:
             s0 := spilled(g, r0)
@@ -1325,6 +1372,10 @@ func rewrite(g &: Ng, ra &: Ra):
             if rsp:
                 rs_def_store(g, ra, op, o.cc[i], r0)
             end
+            continue
+        end
+        if op == M_VBLEND:
+            rw_blend(g, ra, o, i, rsp)
             continue
         end
         if op == M_ALU_RR and o.mk[i] == MK_NONE and r0 >= 0 and r1 >= 0 and r0 != r1:

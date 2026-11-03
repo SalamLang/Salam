@@ -712,16 +712,23 @@ then goes through:
    bytes. LLVM still runs Sub and Up at 0.11 to 0.13: in this copy of the
    loops it knows the row length, ends each row in unrolled 8-byte steps
    and reads one operand of each `vpsubb` straight from memory, which the
-   native loop loads first. In wall time on a loaded machine (median of nine
-   interleaved runs, 200000 rows) AVX2 Sub takes 35 ms [32-42] instead of
-   40 ms [18-49] (LLVM 32 ms [22-36]) and Up 36 ms [34-53] instead of 40 ms
-   [39-49] (LLVM 27 ms [23-33]); Average and Paeth stay within the noise.
+   native loop loads first. In wall time on a shared machine (median of
+   nine interleaved runs, 200000 rows, load average about five on six cores)
+   AVX2 Sub takes 23 ms [18-45] instead of 29 ms [18-42] (LLVM 17 ms
+   [16-37]), Up 20 ms [19-42] instead of 22 ms [20-38] (LLVM 14 ms [13-32])
+   and Average 39 ms [31-85] instead of 43 ms [31-79] (LLVM 36 ms [25-73]).
    With the constant-pool splats and rematerialized constants (see the
    register allocator below) the filter scoring loop runs 27.59 on SSE2
    (28.59 before, LLVM 30.00) and 6.57 with AVX2 (6.82, LLVM 9.06), and
    Paeth 6.28 and 1.64 (6.65 and 1.83, LLVM 10.69 and 2.63); the 16-bit
    Paeth lanes are masked to bytes with one `vpand` from the constant pool
    per store instead of a `mov`, `vmovd`, `vpbroadcastd` and `vpand`.
+   Measured the same way (40000 rows), Paeth takes 74 ms [71-84] on SSE2
+   instead of 80 ms [75-100] (LLVM 122 ms [118-127]) and 27 ms [24-36] with
+   AVX2 instead of 31 ms [26-37] (LLVM 49 ms [46-56]); the scoring loop
+   stays within the noise, 313 ms [290-461] against 316 ms [302-424] on
+   SSE2 and 91 ms [85-110] against 90 ms [85-118] with AVX2 (LLVM 329 ms
+   [314-492] and 123 ms [120-132]).
    In wall time (median of nine interleaved runs,
    40000 or 200000 rows, range in brackets) the AVX2 scoring loop takes
    92 ms [85-235] instead of 115 ms [110-150] (LLVM 115 ms [112-121]), Sub

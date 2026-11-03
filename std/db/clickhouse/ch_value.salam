@@ -1,0 +1,248 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package clickhouse
+
+import str
+import math
+import conv
+
+func _bind(sql: str, args: Vector<str>, good &: bool): str:
+    good = true
+    n := str.ByteLen(sql)
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    mut used := 0
+    mut i := 0
+    until i < n:
+        ch := str.ByteSub(sql, i, 1)
+        if ch == "'" or ch == "\"" or ch == "`":
+            str.BufAppend(sb, ch)
+            i += 1
+            until i < n:
+                c2 := str.ByteSub(sql, i, 1)
+                str.BufAppend(sb, c2)
+                i += 1
+                if c2 == "\\" and i < n:
+                    str.BufAppend(sb, str.ByteSub(sql, i, 1))
+                    i += 1
+                else c2 == ch:
+                    break
+                end
+            end
+        else ch == "-" and i + 1 < n and str.ByteSub(sql, i + 1, 1) == "-":
+            until i < n and str.ByteSub(sql, i, 1) != "\n":
+                str.BufAppend(sb, str.ByteSub(sql, i, 1))
+                i += 1
+            end
+        else ch == "/" and i + 1 < n and str.ByteSub(sql, i + 1, 1) == "*":
+            str.BufAppend(sb, "/*")
+            i += 2
+            until i < n and not (str.ByteSub(sql, i, 1) == "*" and i + 1 < n and str.ByteSub(sql, i + 1, 1) == "/"):
+                str.BufAppend(sb, str.ByteSub(sql, i, 1))
+                i += 1
+            end
+            if i < n:
+                str.BufAppend(sb, "*/")
+                i += 2
+            end
+        else ch == "?":
+            if used >= args.len():
+                good = false
+                ret str.Clone("")
+            end
+            str.BufAppend(sb, args.get(used))
+            used += 1
+            i += 1
+        else:
+            str.BufAppend(sb, ch)
+            i += 1
+        end
+    end
+    if used != args.len():
+        good = false
+        ret str.Clone("")
+    end
+    ret str.BufStr(sb)
+end
+
+@en "StrArg"
+@fa "آرگومان رشته"
+pub func StrArg(s: str): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    str.BufAppend(sb, "'")
+    n := str.ByteLen(s)
+    repeat n in i:
+        ch := str.ByteSub(s, i, 1)
+        if ch == "'":
+            str.BufAppend(sb, "\\'")
+        else ch == "\\":
+            str.BufAppend(sb, "\\\\")
+        else ch == "\n":
+            str.BufAppend(sb, "\\n")
+        else ch == "\t":
+            str.BufAppend(sb, "\\t")
+        else ch == "\r":
+            str.BufAppend(sb, "\\r")
+        else:
+            str.BufAppend(sb, ch)
+        end
+    end
+    str.BufAppend(sb, "'")
+    ret str.BufStr(sb)
+end
+
+@en "QuoteIdent"
+@fa "نقل قول شناسه"
+pub func QuoteIdent(name: str): str:
+    ret "`" + str.Replace(str.Replace(name, "\\", "\\\\"), "`", "\\`") + "`"
+end
+
+@en "IntArg"
+@fa "آرگومان صحیح"
+pub func IntArg(n: i64): str:
+    ret conv.FormatInt(n)
+end
+
+@en "UIntArg"
+@fa "آرگومان طبیعی"
+pub func UIntArg(n: u64): str:
+    ret conv.FormatUint(n)
+end
+
+@en "FloatArg"
+@fa "آرگومان اعشاری"
+pub func FloatArg(x: f64): str:
+    if math.IsNaN(x): ret str.Clone("nan") end
+    if math.IsInf(x):
+        if x < 0.0: ret str.Clone("-inf") end
+        ret str.Clone("inf")
+    end
+    ret conv.FormatFloatShort(x)
+end
+
+@en "BoolArg"
+@fa "آرگومان منطقی"
+pub func BoolArg(b: bool): str:
+    if b: ret str.Clone("true") end
+    ret str.Clone("false")
+end
+
+@en "NullArg"
+@fa "آرگومان تهی"
+pub func NullArg(): str:
+    ret str.Clone("NULL")
+end
+
+@en "RawArg"
+@fa "آرگومان خام"
+pub func RawArg(sql: str): str:
+    ret sql
+end
+
+@en "ArrayArg"
+@fa "آرگومان آرایه"
+pub func ArrayArg(items: Vector<str>): str:
+    ret "[" + str.Join(items, ", ") + "]"
+end
+
+@en "TupleArg"
+@fa "آرگومان چندتایی"
+pub func TupleArg(items: Vector<str>): str:
+    ret "(" + str.Join(items, ", ") + ")"
+end
+
+@en "MapArg"
+@fa "آرگومان نگاشت"
+pub func MapArg(keys: Vector<str>, values: Vector<str>): str:
+    mut parts := Vector {} as Vector<str>
+    defer parts.free()
+    n := keys.len() < values.len() ? keys.len() : values.len()
+    repeat n in i:
+        parts.push(keys.get(i))
+        parts.push(values.get(i))
+    end
+    ret "map(" + str.Join(parts, ", ") + ")"
+end
+
+@en "Args"
+@fa "آرگومان‌ها"
+pub func Args(items: Vector<str>): Vector<str>:
+    ret items
+end
+
+@en "Bind"
+@fa "پیوند"
+pub func Bind(sql: str, args: Vector<str>): str:
+    mut good := true
+    out := _bind(sql, args, good)
+    if not good: ret str.Clone("") end
+    ret out
+end
+
+@en "BaseType"
+@fa "نوع پایه"
+pub func BaseType(t: str): str:
+    mut cur := str.Trim(t)
+    until true:
+        if str.StartsWith(cur, "Nullable(") and str.EndsWith(cur, ")"):
+            cur = str.Trim(cur.substr(9, cur.len() - 10))
+        else str.StartsWith(cur, "LowCardinality(") and str.EndsWith(cur, ")"):
+            cur = str.Trim(cur.substr(15, cur.len() - 16))
+        else:
+            break
+        end
+    end
+    ret cur
+end
+
+@en "IsNullableType"
+@fa "نوع تهی‌پذیر است"
+pub func IsNullableType(t: str): bool:
+    cur := str.Trim(t)
+    if str.StartsWith(cur, "LowCardinality(") and str.EndsWith(cur, ")"):
+        ret IsNullableType(cur.substr(15, cur.len() - 16))
+    end
+    ret str.StartsWith(cur, "Nullable(")
+end
+
+@en "TypeKind"
+@fa "دسته نوع"
+pub func TypeKind(t: str): int:
+    b := BaseType(t)
+    if str.StartsWith(b, "Array("): ret KIND_ARRAY end
+    if str.StartsWith(b, "Map("): ret KIND_MAP end
+    if str.StartsWith(b, "Tuple("): ret KIND_TUPLE end
+    if str.StartsWith(b, "Nested("): ret KIND_ARRAY end
+    if str.StartsWith(b, "UInt"): ret KIND_UINT end
+    if str.StartsWith(b, "Int"): ret KIND_INT end
+    if str.StartsWith(b, "Float"): ret KIND_FLOAT end
+    if str.StartsWith(b, "Decimal"): ret KIND_DECIMAL end
+    if b == "Bool": ret KIND_BOOL end
+    if str.StartsWith(b, "DateTime"): ret KIND_DATETIME end
+    if str.StartsWith(b, "Date"): ret KIND_DATE end
+    if b == "String" or str.StartsWith(b, "FixedString(") or b == "UUID" or str.StartsWith(b, "Enum") or b == "IPv4" or b == "IPv6": ret KIND_STRING end
+    ret KIND_OTHER
+end
+
+@en "ElementType"
+@fa "نوع عنصر"
+pub func ElementType(t: str): str:
+    b := BaseType(t)
+    if str.StartsWith(b, "Array(") and str.EndsWith(b, ")"):
+        ret str.Trim(b.substr(6, b.len() - 7))
+    end
+    ret str.Clone("")
+end

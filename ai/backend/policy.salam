@@ -611,21 +611,128 @@ func plain_name(left: str): bool:
     ret true
 end
 
-func declared_name(line: str): str:
-    s := strip_mods(line)
-    each k in ["func ", "تابع ", "struct ", "ساختار ", "enum ", "جداشمار ", "interface ", "میانجی "]:
+func starts_with_any(s: str, keys: str): str:
+    each k in keys.split("|"):
         if str.StartsWith(s, k):
-            ret lead_name(s.substr(k.len(), s.len() - k.len()))
-        end
-    end
-    at := s.find(":=")
-    if at > 0:
-        left := str.Trim(s.substr(0, at))
-        if plain_name(left):
-            ret left
+            ret k
         end
     end
     ret ""
+end
+
+func comma_split(s: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    each part in str.Replace(s, "،", ",").split(","):
+        mut name := str.Trim(part)
+        name = str.Trim(str.TrimSuffix(name, "&"))
+        if name.len() > 0:
+            out.push(name)
+        end
+    end
+    ret out
+end
+
+func name_part(item: str): str:
+    colon := item.find(":")
+    if colon < 0:
+        ret ""
+    end
+    mut name := str.Trim(item.substr(0, colon))
+    name = str.Trim(str.TrimSuffix(name, "&"))
+    if not plain_name(name):
+        ret ""
+    end
+    ret name
+end
+
+func params_of(rest: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    open := rest.find("(")
+    close := str.LastIndex(rest, ")")
+    if open < 0 or close <= open:
+        ret out
+    end
+    inner := rest.substr(open + 1, close - open - 1)
+    each item in comma_split(inner):
+        name := name_part(item)
+        if name.len() > 0:
+            out.push(name)
+        end
+    end
+    ret out
+end
+
+func after_word(s: str, words: str): str:
+    each w in words.split("|"):
+        at := s.find(w)
+        if at >= 0:
+            ret str.Trim(s.substr(at + w.len(), s.len() - at - w.len()))
+        end
+    end
+    ret ""
+end
+
+func names_on(line: str, field: bool): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    s := strip_mods(line)
+    func_key := starts_with_any(s, "func |تابع ")
+    if func_key.len() > 0:
+        rest := s.substr(func_key.len(), s.len() - func_key.len())
+        out.push(lead_name(rest))
+        each p in params_of(rest):
+            out.push(p)
+        end
+        ret out
+    end
+    type_key := starts_with_any(s, "struct |ساختار |enum |جداشمار |interface |میانجی ")
+    if type_key.len() > 0:
+        out.push(lead_name(s.substr(type_key.len(), s.len() - type_key.len())))
+        ret out
+    end
+    loop_key := starts_with_any(s, "each |هر ")
+    if loop_key.len() > 0:
+        head := after_word(" " + s, " each | هر ")
+        stop := head.find(" in ")
+        stop_fa := head.find(" در ")
+        mut cut := stop
+        if cut < 0 or (stop_fa >= 0 and stop_fa < cut):
+            cut = stop_fa
+        end
+        if cut > 0:
+            each n in comma_split(head.substr(0, cut)):
+                if plain_name(n):
+                    out.push(n)
+                end
+            end
+        end
+        ret out
+    end
+    catch_key := starts_with_any(s, "catch |گرفتن ")
+    if catch_key.len() > 0:
+        rest := str.Trim(str.TrimSuffix(str.Trim(s.substr(catch_key.len(), s.len() - catch_key.len())), ":"))
+        words := str.Fields(rest)
+        if words.len() > 0 and plain_name(words.get(words.len() - 1)):
+            out.push(words.get(words.len() - 1))
+        end
+        ret out
+    end
+    at := s.find(":=")
+    if at > 0:
+        for_left := str.Trim(s.substr(0, at))
+        each n in comma_split(for_left):
+            if plain_name(n):
+                out.push(n)
+            end
+        end
+        ret out
+    end
+    if field and s.find(":") > 0 and starts_with_any(s, "use |شامل |const |پایا |end|پایان|ret |برگشت").len() == 0:
+        name := name_part(s)
+        if name.len() > 0:
+            out.push(name)
+        end
+    end
+    ret out
 end
 
 func script_of(name: str): int:
@@ -658,16 +765,62 @@ func entry_name(name: str): bool:
     ret name == "main" or name == "ریشه"
 end
 
+func indent_of(line: str): int:
+    mut n := 0
+    until n < line.len():
+        if byte_at(line, n) != 32:
+            break
+        end
+        n += 1
+    end
+    ret n
+end
+
+func exempt_name(name: str): bool:
+    ret entry_name(name) or str.StartsWith(name, "test_")
+end
+
 func wrong_names(code: str, persian: bool): Vector<str>:
     mut bad := Vector {} as Vector<str>
-    each line in code.split("\n"):
-        name := declared_name(line)
-        if name.len() == 0 or entry_name(name):
+    mut skip_at := 0 - 1
+    mut struct_at := 0 - 1
+    mut member_at := 0 - 1
+    each line in str.Replace(code, "\t", "    ").split("\n"):
+        if str.Trim(line).len() == 0:
             continue
         end
-        kind := script_of(name)
-        if kind == 3 or (persian and kind == 1) or (not persian and kind == 2):
-            bad.push(name)
+        indent := indent_of(line)
+        if skip_at >= 0:
+            if indent > skip_at:
+                continue
+            end
+            skip_at = 0 - 1
+        end
+        if struct_at >= 0 and indent <= struct_at:
+            struct_at = 0 - 1
+            member_at = 0 - 1
+        end
+        head := strip_mods(line)
+        if starts_with_any(head, "extern:|export:|درون‌داد:|برون‌داد:").len() > 0:
+            skip_at = indent
+            continue
+        end
+        if struct_at >= 0 and member_at < 0:
+            member_at = indent
+        end
+        is_member := struct_at >= 0 and indent == member_at
+        if starts_with_any(head, "struct |ساختار ").len() > 0:
+            struct_at = indent
+            member_at = 0 - 1
+        end
+        each name in names_on(line, is_member):
+            if name.len() == 0 or exempt_name(name):
+                continue
+            end
+            kind := script_of(name)
+            if kind == 3 or (persian and kind == 1) or (not persian and kind == 2):
+                bad.push(name)
+            end
         end
     end
     ret bad

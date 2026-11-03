@@ -896,12 +896,14 @@ if want general; then
             def=$(grep -o 'DEFINE: [A-Za-z0-9_]*' "$f" | sed 's/DEFINE: /-D/' | tr '\n' ' ')
             def="$def$(grep -o 'CONST: [!-~]*' "$f" | sed 's/CONST: /-d/' | tr '\n' ' ')"
             if [ -f "tests/$lang/general/$name.c" ]; then
-                case "${SALAM_BACKEND:-c}:${SALAM_CC:-}:$HOST_ARCH:$HOST_OS" in
-                c:*tcc*:x64:linux | c:*tcc*:x64:mac)
-                    note_result "SKIP general/$lang/$name (tcc does not pass structs that mix float and integer fields the x86-64 C way)" "general/$lang/$name"
-                    continue
-                    ;;
-                esac
+                if [ -f "tests/$lang/general/$name.notcc" ]; then
+                    case "${SALAM_BACKEND:-c}:${SALAM_CC:-}:$HOST_ARCH:$HOST_OS" in
+                    c:*tcc*:x64:linux | c:*tcc*:x64:mac)
+                        note_result "SKIP general/$lang/$name ($(head -1 "tests/$lang/general/$name.notcc"))" "general/$lang/$name"
+                        continue
+                        ;;
+                    esac
+                fi
                 hcc=""
                 for c in ${CC:-} cc gcc clang; do
                     command -v "$c" >/dev/null 2>&1 && {

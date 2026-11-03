@@ -77,6 +77,7 @@ pub struct Rg:
     pub mode: int = 1
     pub fbody: int = 0
     pub lnames: HashMap<str, int> = HashMap {} as HashMap<str, int>
+    pub nullc: HashMap<int, int> = HashMap {} as HashMap<int, int>
 end
 
 func rg_min(x: i64, y: i64): i64:
@@ -805,6 +806,14 @@ func rg_check_null(r &: Rg, a &: at.Ast, nid: int, pnode: int, pv: RgV):
         ret
     end
     pname := rg_text_or(a, pnode, i18.Tr("the pointer"))
+    if pv.nul == RG_NUL_NULL and pv.why != 0 and at.KindOf(a, pv.why) == at.AST_CALL:
+        rg_diag(
+            r, rg_sev_def(r), 152, nid, co.Format3(
+                i18.Tr("null pointer dereference: '%s' is null here, because '%s' always returns null (line %d)"), co.ArgStr(pname), co.ArgStr(rg_text_or(a, at.At(a, pv.why).a, i18.Tr("the function"))), co.ArgInt(rg_line(a, pv.why))
+            ), co.Format1(i18.Tr("check 'if %s != null:' before using it"), co.ArgStr(pname))
+        )
+        ret
+    end
     if pv.nul != RG_NUL_MAYBE and pv.why == 0:
         rg_diag(
             r, rg_sev_def(r), 152, nid, co.Format1(
@@ -1391,7 +1400,59 @@ func rg_call(s &: Sema, r &: Rg, a &: at.Ast, st &: RgSt, nid: int): RgV:
     if node_flag(s.noret_calls, nid):
         st.live = false
     end
+    if res.nul == RG_NUL_UNK and rg_ptr_ts(n.type_str) and rg_always_null(r, a, su_call_decl(s, nid)):
+        res.nul = RG_NUL_NULL
+        res.why = nid
+    end
     ret res
+end
+
+func rg_strip(a &: at.Ast, nid: int): int:
+    mut cur := nid
+    until cur != 0 and at.KindOf(a, cur) == at.AST_CAST:
+        cur = at.At(a, cur).a
+    end
+    ret cur
+end
+
+func rg_null_rets(a &: at.Ast, nid: int, rets &: int): bool:
+    if nid == 0:
+        ret true
+    end
+    n := at.At(a, nid)
+    if n.kind == at.AST_LAMBDA:
+        ret true
+    end
+    if n.kind == at.AST_RETURN:
+        rets += 1
+        v := rg_strip(a, n.a)
+        if v == 0 or at.KindOf(a, v) != at.AST_LITERAL or at.At(a, v).op != tok.TK_KW_NULL:
+            ret false
+        end
+        ret true
+    end
+    if not rg_null_rets(a, n.a, rets) or not rg_null_rets(a, n.b, rets) or not rg_null_rets(a, n.c, rets) or not rg_null_rets(a, n.d, rets):
+        ret false
+    end
+    repeat at.ChildCount(a, nid) in i:
+        if not rg_null_rets(a, at.Child(a, nid, i), rets):
+            ret false
+        end
+    end
+    ret true
+end
+
+func rg_always_null(r &: Rg, a &: at.Ast, decl: int): bool:
+    if decl == 0 or at.KindOf(a, decl) != at.AST_FUNC_DEF or at.At(a, decl).a == 0 or at.At(a, decl).is_extern:
+        ret false
+    end
+    if r.nullc.has(decl):
+        ret r.nullc.get(decl) != 0
+    end
+    mut rets := 0
+    ok := rg_null_rets(a, at.At(a, decl).a, rets) and rets > 0
+    r.nullc.put(decl, ok ? 1 : 0)
+    ret ok
 end
 
 func rg_logic(s &: Sema, r &: Rg, a &: at.Ast, st &: RgSt, nid: int): RgV:
@@ -2788,6 +2849,7 @@ func rg_free_ctx(r &: Rg):
     r.fname.free()
     r.fslot.free()
     r.lnames.free()
+    r.nullc.free()
     r.exitc.free()
     r.sizec.free()
     r.brk.free()
@@ -2800,6 +2862,134 @@ func rg_free_ctx(r &: Rg):
     r.dhelp.free()
 end
 
+func rg_lk_is(a &: at.Ast, nid: int, name: str): bool:
+    v := rg_strip(a, nid)
+    ret v != 0 and at.KindOf(a, v) == at.AST_IDENTIFIER and str.Equals(at.At(a, v).name, name)
+end
+
+func rg_lk_walk(s &: Sema, a &: at.Ast, nid: int, name: str, decl: int, fl &: Vector<int>):
+    if nid == 0 or fl.get(1) != 0:
+        ret
+    end
+    n := at.At(a, nid)
+    k := n.kind
+    if k == at.AST_LAMBDA:
+        if rg_lk_uses(a, nid, name):
+            fl.set(1, 1)
+        end
+        ret
+    end
+    if k == at.AST_CALL:
+        if rg_mem_call(s, a, n.a, "Free") and at.ChildCount(a, nid) >= 1 and rg_lk_is(a, at.Child(a, nid, 0), name):
+            fl.set(0, 1)
+            ret
+        end
+        repeat at.ChildCount(a, nid) in i:
+            if rg_lk_is(a, at.Child(a, nid, i), name):
+                fl.set(1, 1)
+            end
+        end
+        if n.a != 0 and at.KindOf(a, n.a) == at.AST_MEMBER and rg_lk_is(a, at.At(a, n.a).a, name):
+            fl.set(1, 1)
+        end
+    end
+    if k == at.AST_RETURN or k == at.AST_THROW or k == at.AST_FIELD_INIT:
+        if rg_lk_is(a, n.a, name):
+            fl.set(1, 1)
+        end
+    end
+    if (k == at.AST_VAR_DECL or k == at.AST_CONST_DECL) and nid != decl and rg_lk_is(a, n.a, name):
+        fl.set(1, 1)
+    end
+    if k == at.AST_ASSIGN and (rg_lk_is(a, n.b, name) or rg_lk_is(a, n.a, name)):
+        fl.set(1, 1)
+    end
+    if k == at.AST_TERNARY and (rg_lk_is(a, n.b, name) or rg_lk_is(a, n.c, name)):
+        fl.set(1, 1)
+    end
+    if k == at.AST_MATCH_ARM and rg_lk_is(a, n.b, name):
+        fl.set(1, 1)
+    end
+    if k == at.AST_ARRAY_LIT:
+        repeat at.ChildCount(a, nid) in j:
+            if rg_lk_is(a, at.Child(a, nid, j), name):
+                fl.set(1, 1)
+            end
+        end
+    end
+    rg_lk_walk(s, a, n.a, name, decl, fl)
+    rg_lk_walk(s, a, n.b, name, decl, fl)
+    rg_lk_walk(s, a, n.c, name, decl, fl)
+    rg_lk_walk(s, a, n.d, name, decl, fl)
+    repeat at.ChildCount(a, nid) in c:
+        rg_lk_walk(s, a, at.Child(a, nid, c), name, decl, fl)
+    end
+end
+
+func rg_lk_uses(a &: at.Ast, nid: int, name: str): bool:
+    if nid == 0:
+        ret false
+    end
+    n := at.At(a, nid)
+    if n.kind == at.AST_IDENTIFIER and str.Equals(n.name, name):
+        ret true
+    end
+    if rg_lk_uses(a, n.a, name) or rg_lk_uses(a, n.b, name) or rg_lk_uses(a, n.c, name) or rg_lk_uses(a, n.d, name):
+        ret true
+    end
+    repeat at.ChildCount(a, nid) in i:
+        if rg_lk_uses(a, at.Child(a, nid, i), name):
+            ret true
+        end
+    end
+    ret false
+end
+
+func rg_lk_decls(s &: Sema, a &: at.Ast, nid: int, out &: Vector<int>):
+    if nid == 0:
+        ret
+    end
+    n := at.At(a, nid)
+    if n.kind == at.AST_LAMBDA:
+        ret
+    end
+    if n.kind == at.AST_VAR_DECL and str.Len(n.name) > 0 and n.a != 0:
+        v := rg_strip(a, n.a)
+        if v != 0 and at.KindOf(a, v) == at.AST_CALL and (rg_mem_call(s, a, at.At(a, v).a, "Allocate") or rg_mem_call(s, a, at.At(a, v).a, "AllocateZeroed")):
+            out.push(nid)
+        end
+    end
+    rg_lk_decls(s, a, n.a, out)
+    rg_lk_decls(s, a, n.b, out)
+    rg_lk_decls(s, a, n.c, out)
+    rg_lk_decls(s, a, n.d, out)
+    repeat at.ChildCount(a, nid) in i:
+        rg_lk_decls(s, a, at.Child(a, nid, i), out)
+    end
+end
+
+func rg_check_leaks(s &: Sema, a &: at.Ast, body: int):
+    mut decls := Vector {} as Vector<int>
+    rg_lk_decls(s, a, body, decls)
+    repeat decls.len() in i:
+        d := decls.get(i)
+        name := at.At(a, d).name
+        mut fl := Vector {} as Vector<int>
+        fl.push(0)
+        fl.push(0)
+        rg_lk_walk(s, a, body, name, d, fl)
+        if fl.get(0) == 0 and fl.get(1) == 0:
+            swarn_help(
+                s, 158, span_of(a, d), co.Format2(
+                    i18.Tr("the memory '%s' gets from mem.Allocate on line %d is never freed: nothing frees, returns, stores or passes it on before the function ends"), co.ArgStr(name), co.ArgInt(rg_line(a, d))
+                ), co.Format1(i18.Tr("free it with 'defer mem.Free(%s as void*)' on the line after the allocation"), co.ArgStr(name))
+            )
+        end
+        fl.free()
+    end
+    decls.free()
+end
+
 pub func SemaCheckRanges(s &: Sema, a &: at.Ast, fnid: int):
     if g_sm_ranges == 0 or fnid == 0 or s.requal or s.in_derive:
         ret
@@ -2808,6 +2998,7 @@ pub func SemaCheckRanges(s &: Sema, a &: at.Ast, fnid: int):
     if body == 0:
         ret
     end
+    rg_check_leaks(s, a, body)
     mut r := Rg {}
     r.mode = g_sm_ranges
     r.budget = RG_BUDGET

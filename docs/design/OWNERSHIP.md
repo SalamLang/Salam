@@ -107,12 +107,14 @@ positive count at zero on `std/` and `compiler/`:
 | E139 | a path is used after its storage was freed on every path                              | on (default) |
 | E140 | storage is freed twice on every path                                                  | on           |
 | E141 | a returned value is freed by the function's own `defer`                               | on           |
-| W142 | used after free on some paths                                                         | warn         |
-| W143 | freed twice on some paths                                                             | warn         |
+| W142 | used after free on some paths                                                         | on           |
+| W143 | freed twice on some paths                                                             | on           |
 | W144 | a copy, `.ref()` pointer or iterator used after a call that may have moved the buffer | warn         |
 
-`--ownership=off|on|warn|error` picks the mode. `error` turns the warnings into
-errors. Messages exist in English and Persian (`compiler/i18n.salam`).
+`--ownership=off|on|warn|error` picks the mode. `on` reports W142 and W143
+as warnings; `warn` adds W144, which needs a wider relevance scan and made
+`salam check compiler/main.salam` about 60% slower when measured. `error`
+turns the warnings into errors. Messages exist in English and Persian (`compiler/i18n.salam`).
 
 On the day phase 1 landed, `on` reported nothing across `compiler/`, every
 `std/` package reachable from the test suite, and all 3,129 test programs.
@@ -182,7 +184,7 @@ What the summaries buy:
 - **Errors across calls.** A use after a call that must free the argument is
   E139, even several calls deep (`forget(s)` calls `release(s)`, which frees
   it).
-- **Warnings across calls** (warn mode): a may-free callee gives W142. A callee
+- **Warnings across calls**: a may-free callee gives W142. In warn mode, a callee
   that grows a container gives W144 on every copy and `.ref()` pointer taken
   before the call, including results of alias-returning functions such as
   `at.At`.

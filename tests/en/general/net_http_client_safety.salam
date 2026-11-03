@@ -15,6 +15,7 @@ mut other_seen := Vector {} as Vector<str>
 mut gate := sync.Mutex {}
 mut ticket := 0
 mut mismatches := 0
+mut app_port := 0
 mut done_requests := 0
 mut shared := http.Client {}
 
@@ -78,7 +79,7 @@ func hammer():
     me := ticket
     ticket += 1
     sync.Unlock(gate)
-    base := "http://127.0.0.1:19781"
+    base := "http://127.0.0.1:" + app_port
     repeat 15 in j:
         want := "" + (me * 100 + j)
         r := http.Get(base + "/echo?n=" + want)
@@ -95,7 +96,7 @@ end
 
 func share():
     repeat 10:
-        r := shared.Get("http://127.0.0.1:19781/who")
+        r := shared.Get("http://127.0.0.1:" + app_port + "/who")
         if http.Status(r) != 200:
             sync.Lock(gate)
             mismatches += 1
@@ -114,9 +115,9 @@ func main:
     router.Get(routes, "/echo", echo)
     router.Get(routes, "/set", cookie_set)
     router.Get(routes, "/who", cookie_get)
-    mut app := http.NewServer(19781)
+    mut app := http.NewServer(0)
     http.Use(app, routes)
-    _ := http.RunBackground(app)
+    app_port = http.RunBackgroundPort(app)
 
     mut threads := Vector {} as Vector<i64>
     repeat 6:
@@ -126,7 +127,7 @@ func main:
     println "concurrent requests:", done_requests, "mismatches:", mismatches
 
     shared = http.NewClient()
-    _ := shared.Get("http://127.0.0.1:19781/set")
+    _ := shared.Get("http://127.0.0.1:" + app_port + "/set")
     mismatches = 0
     mut sharers := Vector {} as Vector<i64>
     repeat 4:
@@ -134,7 +135,7 @@ func main:
     end
     each t in sharers: join(t) end
     println "shared client mismatches:", mismatches
-    who := shared.Get("http://127.0.0.1:19781/who")
+    who := shared.Get("http://127.0.0.1:" + app_port + "/who")
     println "cookie sent back:", http.Body(who)
     shared.Free()
 
@@ -287,15 +288,22 @@ func main:
     println "max_body 0 means the default:", r13.status, http.Body(r13), r13.err
 
     mut started := 0
-    repeat 70 in k:
+    mut first_port := 0
+    mut last_port := 0
+    repeat 70:
         mut extra := router.NewRouter()
         router.Get(extra, "/id", echo)
-        mut more := http.NewServer(19800 + k)
+        mut more := http.NewServer(0)
         http.Use(more, extra)
-        if http.RunBackground(more): started += 1 end
+        port := http.RunBackgroundPort(more)
+        if port > 0:
+            started += 1
+            if first_port == 0: first_port = port end
+            last_port = port
+        end
     end
     println "servers started with room for 64:", started
-    println "first and last answer:", http.Body(http.Get("http://127.0.0.1:19800/id?n=a")), http.Body(http.Get("http://127.0.0.1:19862/id?n=b"))
+    println "first and last answer:", http.Body(http.Get("http://127.0.0.1:" + first_port + "/id?n=a")), http.Body(http.Get("http://127.0.0.1:" + last_port + "/id?n=b"))
 
     tcp.CloseServer(lone)
     tcp.CloseServer(other)

@@ -4,6 +4,10 @@ import str
 
 include tok "../token.salam"
 include at "../ast.salam"
+include co "../sal_core.salam"
+include lg "../logger.salam"
+include i18 "../i18n.salam"
+include lp "../langpack.salam"
 
 func parse_array_dims(p &: Ps, a &: at.Ast, n: int):
     until p_match(p, tok.TK_LBRACKET):
@@ -165,6 +169,35 @@ func parse_type_named(p &: Ps, a &: at.Ast, n: int): int:
     ret n
 end
 
+func p_callconv_words(p &: Ps): int:
+    mut k := 1
+    until k < 4 and p_peekn(p, k).kind == tok.TK_IDENT:
+        k += 1
+    end
+    if k > 1 and p_peekn(p, k).kind == tok.TK_KW_FUNC:
+        ret k - 1
+    end
+    ret 0
+end
+
+func p_callconv(p &: Ps, nw: int): int:
+    mut w := p_peek(p).lexeme
+    repeat nw - 1 in i:
+        w = w + " " + p_peekn(p, i + 1).lexeme
+    end
+    if str.Equals(w, "stdcall") or lp.IdentEqual(w, lp.STDCALL_FA):
+        ret at.CC_STDCALL
+    end
+    t := p_peek(p)
+    lg.LogAtHelp(
+        p.lgr, lg.PH_PARSER, lg.LOG_ERROR, p.file, t.begin_line as int, t.begin_col as int,
+        co.Format1(i18.Tr("the calling convention Salam knows is '%s'"), co.ArgStr(p.toks.pack == lp.LP_FA ? lp.STDCALL_FA : "stdcall")),
+        co.Format1(i18.Tr("unknown calling convention '%s' in an extern function type"), co.ArgStr(w))
+    )
+    p.had_error = true
+    ret 0
+end
+
 func parse_type(p &: Ps, a &: at.Ast): int:
     p_rule(p, "type")
 
@@ -172,11 +205,20 @@ func parse_type(p &: Ps, a &: at.Ast): int:
         ret p_mk(p, a, at.AST_TYPE)
     end
     mut n := p_mk(p, a, at.AST_TYPE)
-    if p_at(p, tok.TK_KW_EXTERN) and p_peek2(p).kind == tok.TK_KW_FUNC:
+    if p_at(p, tok.TK_KW_EXTERN) and (p_peek2(p).kind == tok.TK_KW_FUNC or p_callconv_words(p) > 0):
+        nw := p_callconv_words(p)
         p_advance(p)
+        mut cc := 0
+        if nw > 0:
+            cc = p_callconv(p, nw)
+            repeat nw:
+                p_advance(p)
+            end
+        end
         n = parse_type_func(p, a, n)
         mut nn := at.Get(a, n)
         nn.is_extern = true
+        nn.op = cc
         at.Put(a, n, nn)
     else p_at(p, tok.TK_IDENT) and (str.Equals(p_peek(p).lexeme, "dyn") or str.Equals(p_peek(p).lexeme, "dynamic")) and p_peek2(p).kind == tok.TK_IDENT:
         n = parse_type_dyn(p, a, n)

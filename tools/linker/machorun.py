@@ -67,7 +67,59 @@ def addr_of_var(name):
         return None
 
 
+class DarwinDirent(ctypes.Structure):
+    _fields_ = [
+        ("d_ino", ctypes.c_uint64),
+        ("d_seekoff", ctypes.c_uint64),
+        ("d_reclen", ctypes.c_uint16),
+        ("d_namlen", ctypes.c_uint16),
+        ("d_type", ctypes.c_uint8),
+        ("d_name", ctypes.c_char * 1024),
+    ]
+
+
+class LinuxDirent(ctypes.Structure):
+    _fields_ = [
+        ("d_ino", ctypes.c_uint64),
+        ("d_off", ctypes.c_int64),
+        ("d_reclen", ctypes.c_uint16),
+        ("d_type", ctypes.c_uint8),
+        ("d_name", ctypes.c_char * 256),
+    ]
+
+
+LIBC.readdir.restype = ctypes.POINTER(LinuxDirent)
+LIBC.readdir.argtypes = [ctypes.c_void_p]
+DIRENTS = {}
+
+
+@ctypes.CFUNCTYPE(ctypes.c_void_p, ctypes.c_void_p)
+def darwin_readdir(d):
+    """readdir that hands back the Darwin struct dirent layout, whose name
+    sits at offset 21 where glibc's sits at 19. Each stream keeps its own
+    entry, as on macOS."""
+    e = LIBC.readdir(d)
+    if not e:
+        return None
+    src = e.contents
+    out = DIRENTS.setdefault(d, DarwinDirent())
+    out.d_ino = src.d_ino
+    out.d_seekoff = src.d_off
+    out.d_reclen = ctypes.sizeof(DarwinDirent)
+    out.d_namlen = len(src.d_name)
+    out.d_type = src.d_type
+    out.d_name = src.d_name
+    return ctypes.addressof(out)
+
+
+SHIMS = {
+    "_readdir$INODE64": darwin_readdir,
+}
+
+
 def resolve(name):
+    if name in SHIMS:
+        return ctypes.cast(SHIMS[name], ctypes.c_void_p).value
     if name in SPECIAL_VAR:
         a = addr_of_var(SPECIAL_VAR[name])
         if a:

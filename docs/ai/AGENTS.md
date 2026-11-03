@@ -88,19 +88,37 @@ exceptions, generics or dictionaries, map them to `struct`, `throws`,
 **6. Name things in the language of the file.** A Persian program
 (`// زبان: فارسی`, Persian keywords) uses Persian identifiers for its
 functions, variables, parameters, struct fields, methods, enum members,
-constants and packages: `تابع خواندن_رنگ(متن: رشته)`, not `parse_colour`.
-An English program uses English identifiers throughout and no Persian ones.
-Never mix the two inside one identifier or one file, and never write
-transliterated Persian in Latin letters (`rang`, `khandan`). Single-letter
-names (`i`, `x`), well-known acronyms (`URL`, `JSON`), `test_` function names
-and the names of C functions in an `extern:` block are fine in either. Persian string
-literals and user-facing text follow the audience, not the file. Multi-word
-Persian names use spaces or underscores consistently, like the std names
-(`تجزیه شانزده`). The std and the built-in methods already have Persian names,
-so call those (`تبدیل.تجزیه شانزده`, `.طول()`); do not keep the English
-spelling in a Persian file, the compiler rejects it. `salam translate fa|en`
-converts keywords and std names but not your own identifiers, so after
-translating, rename those by hand.
+constants and packages. An English program uses English identifiers
+throughout and no Persian ones. Never mix the two inside one identifier or one
+file, and never write transliterated Persian in Latin letters (`rang`,
+`khandan`). Single-letter names (`i`, `x`), well-known acronyms (`URL`,
+`JSON`), `test_` function names and the names of C functions in an `extern:`
+block are fine in either. Persian string literals and user-facing text follow
+the audience, not the file.
+
+How a name with several words is written depends on the language:
+
+- **English: no whitespace, ever.** Use `snake_case` for functions, variables,
+  parameters and fields, and `PascalCase` for types, enums and the `pub` API
+  (as the std does): `parse_colour`, `red_value`, `Rgb`.
+- **Persian: separate the words with spaces.** That is the standard, and the
+  compiler accepts it for functions, methods, parameters, struct fields, enum
+  members and variables: `تابع خواندن رنگ(متن ورودی: رشته)`,
+  `ناپایا جمع کل := ۰`, `همگانی مقدار قرمز: صحیح`. Do not use underscores in
+  Persian names. The grammar takes only one word for a struct, enum or
+  interface name, a constant, a loop variable and a `catch` variable; there
+  join the words with a half-space (ZWNJ, `رنگ‌آمیزی`, `حداکثر‌مقدار`), which
+  the compiler treats exactly like a space.
+- A word of a multi-word Persian name must not be a keyword (`برابر`,
+  `بزرگتر`, `کوچکتر`, `در`, `تا`, `هر`, `و`, `یا`, ...), or the name stops
+  parsing: `بیشینه از` is fine, `بزرگتر از` is not. The keyword table is in
+  the Persian glossary lesson.
+
+The std and the built-in methods already have Persian names, so call those
+(`تبدیل.تجزیه شانزده`, `.طول()`); do not keep the English spelling in a
+Persian file, the compiler rejects it. `salam translate fa|en` converts
+keywords and std names but not your own identifiers, so after translating,
+rename those by hand.
 
 **7. Check your work.** `salam check` after every edit, `salam format`, then
 `salam test` or `salam run`. A program you did not compile is not finished.

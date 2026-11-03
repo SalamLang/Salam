@@ -88,7 +88,11 @@ When asked to convert program `X` (in some other language) into Salam:
    `throws`, keep functions small, and split a real program into files (see
    `docs/ai/AGENTS.md` section 0 and the learn lesson "Best practices").
    Name your own identifiers in the language of the file: Persian names in a
-   Persian program, English names in an English one, never mixed.
+   Persian program, English names in an English one, never mixed. English
+   names never contain whitespace (`snake_case`, `PascalCase` types); Persian
+   multi-word names are written with spaces (`خواندن رنگ`), or with a
+   half-space where only one word is allowed (type names, constants, loop and
+   `catch` variables).
 4. **Write idiomatic Salam** using §2 to §4, obeying the strict rules in §6
    (unused = error, `until` = while, manual `.free()`, integer `/` truncates,
    errors through `throws`/`try`, `mut` to reassign, `pub` to export, top-level ordering).

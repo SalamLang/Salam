@@ -106,9 +106,11 @@ How a name with several words is written depends on the language:
   members and variables: `تابع خواندن رنگ(متن ورودی: رشته)`,
   `ناپایا جمع کل := ۰`, `همگانی مقدار قرمز: صحیح`. Do not use underscores in
   Persian names. The grammar takes only one word for a struct, enum or
-  interface name, a constant, a loop variable and a `catch` variable; there
-  join the words with a half-space (ZWNJ, `رنگ‌آمیزی`, `حداکثر‌مقدار`), which
+  interface name, a constant, a loop variable, a `catch` variable, a lambda
+  parameter and an `extern:` parameter; there join the words with a half-space (ZWNJ, `رنگ‌آمیزی`, `حداکثر‌مقدار`), which
   the compiler treats exactly like a space.
+- Inside a one-line sequence of statements (a lambda written on one line, for
+  example) spaced names run together, so use half-space names there too.
 - A word of a multi-word Persian name must not be a keyword (`برابر`,
   `بزرگتر`, `کوچکتر`, `در`, `تا`, `هر`, `و`, `یا`, ...), or the name stops
   parsing: `بیشینه از` is fine, `بزرگتر از` is not. The keyword table is in

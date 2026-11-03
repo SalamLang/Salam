@@ -2,6 +2,11 @@ package nativegen
 
 const USW_MAX_SIZE := 220
 
+pub struct UswRun:
+    pub budget: int = 0
+    pub xs: Vector<int> = Vector {}
+end
+
 pub struct Usw:
     pub vmap: Vector<int> = Vector {}
     pub bmap: Vector<int> = Vector {}
@@ -67,7 +72,7 @@ func usw_clone_ins(g &: Ng, u &: Usw, i: int, nb: int):
     ins_append(g, nb, ni)
 end
 
-func usw_loop(g &: Ng, l &: Lp, mark: int, h: int, pre: int): bool:
+func usw_loop(g &: Ng, l &: Lp, mark: int, h: int, pre: int, run &: UswRun): bool:
     t := g.b_last[h]
     if t < 0 or g.i_op[t] != OP_CBR:
         ret false
@@ -80,6 +85,7 @@ func usw_loop(g &: Ng, l &: Lp, mark: int, h: int, pre: int): bool:
     mut ex := tin ? g.i_c[t] : g.i_b[t]
     mut size := 0
     mut cond := 0 - 1
+    mut scond := 0 - 1
     mut u := Usw {}
     each b in g.b_rpo:
         if l.inl[b] != mark:
@@ -112,13 +118,32 @@ func usw_loop(g &: Ng, l &: Lp, mark: int, h: int, pre: int): bool:
                     cond = c
                 end
             end
+            if op == OP_SELECT and scond < 0 and not g.off_uswsel:
+                c2 := g.i_a[i]
+                if c2 >= 0 and g.v_ty[c2] == T_I1 and g.v_kind[c2] == VK_INS and l.inl[g.i_blk[g.v_def[c2]]] != mark and usw_eq_x(g, c2) >= 0:
+                    scond = c2
+                end
+            end
             i = g.i_next[i]
         end
     end
-    if cond < 0 or size > USW_MAX_SIZE:
+    if cond < 0 and scond >= 0:
+        sx := usw_eq_x(g, scond)
+        mut seen := false
+        each px in run.xs:
+            if px == sx:
+                seen = true
+            end
+        end
+        if seen or usw_cases(g, l, mark, sx) >= 2:
+            cond = scond
+        end
+    end
+    if cond < 0 or size > USW_MAX_SIZE or size > run.budget:
         u.blocks.free()
         ret false
     end
+    run.budget -= size
     if g.b_npred[ex] != 1:
         xe := new_blk(g)
         bxe := ins_new(g, OP_BR, T_VOID)
@@ -196,7 +221,16 @@ func usw_loop(g &: Ng, l &: Lp, mark: int, h: int, pre: int): bool:
             k2 = g.i_next[k2]
         end
     end
+    ex_x := g.off_uswsel ? 0 - 1 : usw_eq_x(g, cond)
+    if ex_x >= 0:
+        run.xs.push(ex_x)
+    end
     each b7 in u.blocks:
+        if ex_x >= 0:
+            usw_fold_blk(g, b7, cond, true, ex_x)
+            usw_fold_blk(g, u.bmap[b7], cond, false, ex_x)
+            continue
+        end
         mut k3 := g.b_first[b7]
         until k3 >= 0:
             if g.i_op[k3] == OP_CBR and g.i_a[k3] == cond:
@@ -276,6 +310,122 @@ func usw_loop(g &: Ng, l &: Lp, mark: int, h: int, pre: int): bool:
     ret true
 end
 
+func usw_eq_x(g &: Ng, c: int): int:
+    if c < 0 or g.v_kind[c] != VK_INS:
+        ret 0 - 1
+    end
+    d := g.v_def[c]
+    if g.i_op[d] != OP_ICMP or (g.i_x[d] != CC_EQ and g.i_x[d] != CC_NE):
+        ret 0 - 1
+    end
+    a := g.i_a[d]
+    b := g.i_b[d]
+    if is_cint(g, b) and not is_cint(g, a) and a >= 0:
+        ret a
+    end
+    if is_cint(g, a) and not is_cint(g, b) and b >= 0:
+        ret b
+    end
+    ret 0 - 1
+end
+
+func usw_eq_k(g &: Ng, c: int): i64:
+    d := g.v_def[c]
+    ret is_cint(g, g.i_b[d]) ? g.v_i[g.i_b[d]] : g.v_i[g.i_a[d]]
+end
+
+func usw_case_of(g &: Ng, l &: Lp, mark: int, v: int, x: int): bool:
+    if v < 0 or g.v_kind[v] != VK_INS or l.inl[g.i_blk[g.v_def[v]]] == mark:
+        ret false
+    end
+    ret usw_eq_x(g, v) == x
+end
+
+func usw_cases(g &: Ng, l &: Lp, mark: int, x: int): int:
+    if x < 0:
+        ret 0
+    end
+    mut seen := Vector {} as Vector<int>
+    each b in g.b_rpo:
+        if l.inl[b] != mark:
+            continue
+        end
+        mut i := g.b_first[b]
+        until i >= 0:
+            m := val_mask(g.i_op[i])
+            each k in [1, 2, 4]:
+                if (m & k) != 0:
+                    v := k == 1 ? g.i_a[i] : (k == 2 ? g.i_b[i] : g.i_c[i])
+                    if usw_case_of(g, l, mark, v, x):
+                        mut dup := false
+                        each sv in seen:
+                            if sv == v or usw_eq_k(g, sv) == usw_eq_k(g, v):
+                                dup = true
+                            end
+                        end
+                        if not dup:
+                            seen.push(v)
+                        end
+                    end
+                end
+            end
+            i = g.i_next[i]
+        end
+    end
+    n := seen.len()
+    seen.free()
+    ret n
+end
+
+func usw_known(g &: Ng, v: int, cond: int, taken: bool, x: int, xk: i64, xeq: bool): int:
+    if v < 0:
+        ret v
+    end
+    if v == cond:
+        ret const_int(g, T_I1, (taken ? 1 : 0) as i64)
+    end
+    if xeq and v == x:
+        ret const_int(g, g.v_ty[x], xk)
+    end
+    if usw_eq_x(g, v) != x:
+        ret v
+    end
+    ne := g.i_x[g.v_def[v]] == CC_NE
+    k := usw_eq_k(g, v)
+    if xeq:
+        ret const_int(g, T_I1, ((k == xk) != ne ? 1 : 0) as i64)
+    end
+    if k == xk:
+        ret const_int(g, T_I1, (ne ? 1 : 0) as i64)
+    end
+    ret v
+end
+
+func usw_fold_blk(g &: Ng, b: int, cond: int, taken: bool, x: int):
+    xk := usw_eq_k(g, cond)
+    xeq := (g.i_x[g.v_def[cond]] == CC_EQ) == taken
+    mut i := g.b_first[b]
+    until i >= 0:
+        op := g.i_op[i]
+        m := val_mask(op)
+        if (m & 1) != 0: g.i_a[i] = usw_known(g, g.i_a[i], cond, taken, x, xk, xeq) end
+        if (m & 2) != 0: g.i_b[i] = usw_known(g, g.i_b[i], cond, taken, x, xk, xeq) end
+        if (m & 4) != 0: g.i_c[i] = usw_known(g, g.i_c[i], cond, taken, x, xk, xeq) end
+        if op == OP_CALL:
+            repeat g.i_pcount[i] in k:
+                q := g.i_ps[i] + 3 * k
+                g.pool[q] = usw_known(g, g.pool[q], cond, taken, x, xk, xeq)
+            end
+        else op == OP_PHI:
+            repeat g.i_pcount[i] in k2:
+                q2 := g.i_ps[i] + 2 * k2
+                g.pool[q2] = usw_known(g, g.pool[q2], cond, taken, x, xk, xeq)
+            end
+        end
+        i = g.i_next[i]
+    end
+end
+
 func usw_merge(g &: Ng, u &: Usw, outs &: Vector<int>, outp &: Vector<int>, v: int, xb: int, h: int): int:
     repeat outs.len() in k:
         if outs[k] == v:
@@ -318,7 +468,7 @@ func usw_fix_outside(g &: Ng, u &: Usw, i: int, outs &: Vector<int>, outp &: Vec
     end
 end
 
-func unswitch_loops(g &: Ng): bool:
+func unswitch_loops(g &: Ng, run &: UswRun): bool:
     ensure_preheaders(g)
     build_dom(g)
     mut l := Lp {}
@@ -358,7 +508,7 @@ func unswitch_loops(g &: Ng): bool:
         if p < 0 or g.b_last[p] < 0 or g.i_op[g.b_last[p]] != OP_BR:
             continue
         end
-        if usw_loop(g, l, mark, h, p):
+        if usw_loop(g, l, mark, h, p, run):
             changed = true
         end
     end

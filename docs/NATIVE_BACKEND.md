@@ -676,7 +676,39 @@ then goes through:
    as before. In such a function a register copy followed by a vector
    operation that overwrites the copy (`vmovaps a, b` then `vpsubd a, a, c`)
    becomes the one three-operand form `vpsubd a, b, c` once registers are
-   assigned (`SALAM_NG_OFF=vex3`). The register allocator keeps 256-bit values in the same class
+   assigned (`SALAM_NG_OFF=vex3`). With AVX2 a vector select is one
+   `vpblendvb` instead of a `pand`, `pandn` and `por` on the mask: the
+   instruction has a fourth register, the mask, which the register
+   allocator tracks as a third input, and a spilled second source is read
+   straight from its stack slot (`SALAM_NG_OFF=vblend`). A function with a
+   blend is VEX-encoded like one with 256-bit code. A vectorized loop
+   without a reduction, whose body is at most 48 instructions, is then
+   unrolled the way runtime unrolling handles scalar loops: four copies of
+   the body when it has at most 16 instructions and two otherwise, behind
+   one check that that many vector steps remain, with the single-step
+   vector loop after it taking the last ones. The copies fold their offsets
+   into the addresses (`[rdi + r8 + 32]`), they do not count against the
+   function's inline cost, and a loop that reads or writes a local array too
+   small for two vector steps (the four channel values of a PNG pixel) is
+   left alone (`SALAM_NG_OFF=lvunr`).
+   On the same copy of the PNG encoder's loops (callgrind,
+   4096-byte rows, instructions per byte, the numbers before the blends,
+   `xmm14` and the unrolling and LLVM's in brackets), the filter scoring loop runs 6.81 with
+   AVX2 (8.93, LLVM 8.57) and 28.59 on SSE2 (28.84, LLVM 30.26), where
+   `xmm14` keeps one more accumulator out of memory. Sub and Up run 0.34
+   on SSE2 (0.48, LLVM 0.30 to 0.33) and 0.22 with AVX2 (0.29, LLVM 0.11 to
+   0.14), Average 0.90 and 0.49 (0.99 and 0.53, LLVM 0.81 and 0.40) and
+   Paeth 6.65 and 1.88 (6.83 and 2.22, LLVM 10.76 and 2.64). What keeps
+   Sub and Up behind with AVX2 is the remainder: up to 31 bytes of each row
+   run scalar after the 32-byte steps, where LLVM finishes the row with
+   narrower vector steps. In wall time (median of nine interleaved runs,
+   40000 or 200000 rows, range in brackets) the AVX2 scoring loop takes
+   92 ms [85-235] instead of 115 ms [110-150] (LLVM 115 ms [112-121]), Sub
+   29 ms [24-37] on SSE2 instead of 46 ms [34-69] (LLVM 29 ms [25-39]) and
+   19 ms [19-21] with AVX2 instead of 25 ms [21-31] (LLVM 16 ms [15-19]),
+   and Paeth with AVX2 141 ms [136-153] instead of 163 ms [156-170] (LLVM
+   230 ms [223-249]).
+   The register allocator keeps 256-bit values in the same class
    as the other vector registers and gives them 32-byte spill slots, read and
    written with unaligned moves so the frame stays 16-byte aligned; on Windows
    it keeps them out of `xmm6`-`xmm15`, whose upper halves a callee may
@@ -973,8 +1005,13 @@ an aligned loop costs one instruction.
 ret end` at the top of a recursive AST walk) tests that parameter before
   the prologue and returns without saving any register. The `.eh_frame`
   entry starts its pushes after this short exit path.
-- `r10`, `r11`, `xmm14` and `xmm15` are kept free as scratch registers for
-  spill code.
+- `r10`, `r11` and `xmm15` are kept free as scratch registers for spill
+  code. On x86-64 Linux and macOS `xmm14` is allocated like the other vector
+  registers (`SALAM_NG_OFF=xfree` keeps it free as well); the rare
+  instruction whose spilled operands need a second vector scratch register
+  borrows one of `xmm8`-`xmm14` that holds nothing live there, or saves one
+  to the stack around the instruction when all of them do. On Windows and
+  the other targets the vector scratch registers stay as they were.
 - Stack temporaries share space when their live ranges do not overlap. A
   slot whose address is taken with `lea` stays live until the next call in
   its block (or the block's end), since the call reads it through the
@@ -1068,7 +1105,7 @@ ret end` at the top of a recursive AST walk) tests that parameter before
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing, and a comma-separated list dumps several functions.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,vnarrow,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,loopinl,cpelim,tord,vrev,cdown,tfold,mexit,sqself,vsign,redinv,ldcmp,phix,selinc,wweb,wwdep,wwtr,tdup,padjmp,dtst,zins,ndiv,niv,cmp64,adc64,rvc,avx2,rasp,hotpath,inlnest,spromo,ypack,ysum,winv,zxcmp,cpspill,scdead,yzext,uswsel,vex3,vabs,vdemor,lvnsw`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,vnarrow,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,loopinl,cpelim,tord,vrev,cdown,tfold,mexit,sqself,vsign,redinv,ldcmp,phix,selinc,wweb,wwdep,wwtr,tdup,padjmp,dtst,zins,ndiv,niv,cmp64,adc64,rvc,avx2,rasp,hotpath,inlnest,spromo,ypack,ysum,winv,zxcmp,cpspill,scdead,yzext,uswsel,vex3,vabs,vdemor,lvnsw,vblend,xfree,lvunr`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator and `rasp` the
@@ -1078,8 +1115,10 @@ ret end` at the top of a recursive AST walk) tests that parameter before
   promotion of fields the loop writes. `yzext` is the 256-bit form of loops
   that widen or narrow their lanes, `uswsel` the unswitching of selects on
   a switch value, `vex3` the three-operand VEX rewrite, `vabs` the vector
-  absolute value, `vdemor` the swapped compares under `and` and `or`, and
-  `lvnsw` the no-overflow flag on vector index math.
+  absolute value, `vdemor` the swapped compares under `and` and `or`,
+  `lvnsw` the no-overflow flag on vector index math, `vblend` the AVX2
+  `vpblendvb` selects, `xfree` the allocation of `xmm14` and `lvunr` the
+  unrolling of vectorized loops.
 - `SALAM_NG_OFF_RANGE=lo:hi` limits `SALAM_NG_OFF` to the functions compiled
   in that range (1-based, in compile order), and `SALAM_NG_OFF_BASE` names
   passes to turn off everywhere. Halving the range finds the one function a
@@ -1290,19 +1329,21 @@ LLVM on a full self-compile, while the native build itself is several times
 faster than the LLVM path.
 
 Library code is further behind. Counted with callgrind, the image tests
-`apps/image_rtl_card` and `apps/image_basics` run 1.10x and 1.18x the
-instructions of their LLVM builds (145.6 against 132.4 million, 558.6
-against 471.5 million; before the 256-bit widening, per-filter unswitching
+`apps/image_rtl_card` and `apps/image_basics` run 1.09x and 1.18x the
+instructions of their LLVM builds (144.9 against 132.4 million, 557.3
+against 471.4 million; before the AVX2 blends, `xmm14` and the vector loop
+unrolling they were 145.6 and 558.6 million, before the 256-bit widening, per-filter unswitching
 and vector `abs` they were 152.3 and 570.3 million, 1.15x and 1.21x, before
 the narrow byte and 16-bit lanes 163.3 and 587.2 million, 1.23x and 1.25x,
 and before `winv`, `zxcmp`, `cpspill` and `scdead` 174.6 and 608.0 million,
-1.32x and 1.29x). With `--cpu=x86-64-v3` the two take 119.7 and 523.3
-million against LLVM's 101.9 and 415.0, 1.17x and 1.26x (151.6 and 569.0
+1.32x and 1.29x). With `--cpu=x86-64-v3` the two take 116.4 and 518.1
+million against LLVM's 101.9 and 415.0, 1.14x and 1.25x (119.7 and 523.3
+million before the blends, `xmm14` and the unrolling, 151.6 and 569.0
 million, 1.49x and 1.37x, before the 256-bit widening). On `image_rtl_card`, `EncodePNG` and
-`RawDeflate` now run 92.6 million instructions against 97.4 million for
-LLVM's `Encode`, which inlines both, and 66.5 million against 67.5 million
-with AVX2, where the filter scoring loop with its five `int` sums now runs
-eight lanes in both builds. What
+`RawDeflate` now run 91.8 million instructions against 97.4 million for
+LLVM's `Encode`, which inlines both, and 63.3 million against 67.5 million
+with AVX2 (92.6 and 66.5 million before), where the filter scoring loop
+with its five `int` sums runs eight lanes in both builds. What
 is left is mostly not spilling: LLVM inlines `DrawLine` into a constant
 horizontal span and unswitches the alpha test that keeps native `DrawLine`'s loop at full
 register pressure (about 8 million), and in `image_basics` it inlines
@@ -1325,10 +1366,9 @@ Not there yet:
   result, unless the program is built with `--fast-math`, which lets float
   add reductions run in vector lanes too (and gives LLVM `reassoc nsz`).
   AVX2 is opt-in (`--cpu=x86-64-v3`) and the loop, SLP and sum-reduction
-  vectorizers use it; loops that count bytes or reverse stay at 128 bits,
-  and a vector select is still a mask, `and`, `andn` and `or` rather than
-  one `vpblendvb`, since the register allocator has no four-operand
-  instruction form. There is no
+  vectorizers use it; loops that count bytes or reverse stay at 128 bits.
+  Only AVX2 selects use a blend: `x86-64-v2` does not enable the SSE4.1
+  `pblendvb`, whose mask has to sit in `xmm0`. There is no
   AVX-512 or FMA code,
   no 64-bit ordered compare even with AVX2, and no runtime dispatch, so a
   build is either baseline everywhere or needs AVX2 everywhere.

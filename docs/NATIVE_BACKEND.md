@@ -573,8 +573,40 @@ then goes through:
    runtime check that each stored range is disjoint from every range it
    loads from another base. The vector loop runs while a full vector fits
    and the scalar loop finishes the rest, so the PNG filter scoring and
-   filter application and the tensor element-wise kernels run four values
-   per instruction.
+   the tensor element-wise kernels run four values per instruction.
+   Byte and 16-bit code written in `int` (`(x - a) & 255`, `x as int + y`
+   then `as u8`) is not widened when the narrow lanes give the same answer:
+   the vectorizer first tries the loop with every `int` value in byte lanes,
+   then in 16-bit lanes, and only then in 32-bit ones. Adds, subtracts,
+   multiplies (16-bit lanes only), bitwise operations and left shifts wrap
+   the same way in any width, so they only need the low bits of their
+   operands. A value that is compared, shifted right or selected for such a
+   use needs its full value instead, so a range pass bounds every `int` in
+   the loop (`zext` of a byte is 0 to 255, adds and subtracts add the
+   bounds, and so on) and the loop takes the narrow width only if each such
+   value fits it. A signed compare or arithmetic shift of values known to be
+   non-negative is turned into the unsigned form first, which is the same
+   result and fits a byte where the signed form would not. The extends and
+   truncates between the widths then disappear, constants and loop-invariant
+   values are broadcast at the narrow width, a 16-bit loop that loads bytes
+   widens them with one `movq` and `punpcklbw` (and `psraw 8` when signed)
+   and stores them back with `pand` and `packuswb`, and byte shifts, which
+   SSE2 does not have, are 16-bit shifts plus a mask. A floor average of two
+   bytes, `(a + b) >> 1` with both operands under 256, is
+   `(a & b) + ((a ^ b) >> 1)` in byte lanes. So the PNG encoder's Sub, Up and
+   Average filters run sixteen bytes per iteration (the average keeps its
+   nine-bit sum out of the lanes) and its Paeth filter eight, in 16-bit
+   lanes. On `apps/image_rtl_card` the loop that applies Sub, Up and Average
+   went from 176 to 34 instructions per 16 bytes and the Paeth loop from 158
+   to 74 per 8 bytes, 16.6 million instructions down to 5.5. A loop
+   with a reduction or a down-counting second counter keeps its old width.
+   `SALAM_NG_OFF=vnarrow` turns the narrow lanes off. On a 4096-byte row run
+   100000 times (minimum CPU time of five runs), the encoder's combined
+   Sub/Up/Average loop takes 0.045 s instead of 0.279 s (LLVM 0.014 s, as it
+   gives each filter its own loop), a bare Average filter 0.019 s instead of
+   0.179 s (LLVM 0.020 s) and Paeth 0.225 s instead of 0.508 s (LLVM
+   0.272 s). AArch64 runs the same code with NEON (`zip1` for the widening,
+   `sqxtun` for the narrowing).
    With `--cpu=x86-64-v3` (or `x86-64-v4`) the loop vectorizer uses the
    256-bit AVX2 registers instead: eight 32-bit or `f32` lanes, four 64-bit
    or `f64`, sixteen 16-bit and thirty-two bytes. The vector step, the
@@ -584,7 +616,11 @@ then goes through:
    a 32-bit multiply is one `vpmulld` instead of the `pmuludq` sequence, and
    a reduction first combines the upper half, taken with `vextracti128`, with
    the lower one (an add, or a compare and select for min and max) before the
-   usual 128-bit steps. Loops that widen or narrow bytes, count matching
+   usual 128-bit steps. Loops in narrowed byte lanes take thirty-two bytes
+   per step (the combined PNG filter loop 0.026 s instead of 0.045 s, the
+   Average filter 0.012 s), and 16-bit loops that do not load bytes sixteen
+   values. Loops that widen or narrow bytes (Paeth's 16-bit lanes among them:
+   0.233 s, LLVM 0.109 s with `vpmovzxbw`), count matching
    bytes or walk a second counter down keep 128-bit vectors, and so does
    every loop when `SALAM_NG_OFF=avx2` is set. The SLP vectorizer (below)
    first looks for runs of eight adjacent `f32` or four `f64` stores and
@@ -987,7 +1023,7 @@ ret end` at the top of a recursive AST walk) tests that parameter before
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing, and a comma-separated list dumps several functions.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,loopinl,cpelim,tord,vrev,cdown,tfold,mexit,sqself,vsign,redinv,ldcmp,phix,selinc,wweb,wwdep,wwtr,tdup,padjmp,dtst,zins,ndiv,niv,cmp64,adc64,rvc,avx2,rasp,hotpath,inlnest,spromo,ypack,ysum,winv,zxcmp,cpspill,scdead`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,vnarrow,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,loopinl,cpelim,tord,vrev,cdown,tfold,mexit,sqself,vsign,redinv,ldcmp,phix,selinc,wweb,wwdep,wwtr,tdup,padjmp,dtst,zins,ndiv,niv,cmp64,adc64,rvc,avx2,rasp,hotpath,inlnest,spromo,ypack,ysum,winv,zxcmp,cpspill,scdead`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator and `rasp` the
@@ -1205,14 +1241,18 @@ LLVM on a full self-compile, while the native build itself is several times
 faster than the LLVM path.
 
 Library code is further behind. Counted with callgrind, the image tests
-`apps/image_rtl_card` and `apps/image_basics` run 1.23x and 1.25x the
-instructions of their LLVM builds (163.3 against 132.4 million, 587.2
-against 471.4 million; before `winv`, `zxcmp`, `cpspill` and `scdead` they
-were 174.6 and 608.0 million, 1.32x and 1.29x). What is left there is
-mostly not spilling: LLVM filters PNG rows sixteen bytes at a time where the native
-loops widen to four 32-bit lanes (about 13 million instructions of the gap
-on `image_rtl_card`), it inlines `DrawLine` into a constant horizontal span
-and unswitches the alpha test that keeps native `DrawLine`'s loop at full
+`apps/image_rtl_card` and `apps/image_basics` run 1.15x and 1.21x the
+instructions of their LLVM builds (152.3 against 132.4 million, 570.3
+against 471.4 million; before the narrow byte and 16-bit lanes they were
+163.3 and 587.2 million, 1.23x and 1.25x, and before `winv`, `zxcmp`,
+`cpspill` and `scdead` 174.6 and 608.0 million, 1.32x and 1.29x). With
+`--cpu=x86-64-v3` the two take 151.6 and 569.0 million (163.4 and 587.7
+without the narrow lanes). On `image_rtl_card`, `EncodePNG` and
+`RawDeflate` now run 99.3 million instructions against 97.4 million for
+LLVM's `Encode`, which inlines both; the biggest loop left there, the
+filter scoring with five `int` sums, runs four lanes in both builds. What
+is left is mostly not spilling: LLVM inlines `DrawLine` into a constant
+horizontal span and unswitches the alpha test that keeps native `DrawLine`'s loop at full
 register pressure (about 8 million), and in `image_basics` it inlines
 `_vp8_quant` with constant arguments, peels the DC coefficient and hoists
 the reciprocal division out of the loop.
@@ -1234,7 +1274,9 @@ Not there yet:
   add reductions run in vector lanes too (and gives LLVM `reassoc nsz`).
   AVX2 is opt-in (`--cpu=x86-64-v3`) and the loop, SLP and sum-reduction
   vectorizers use it; loops that widen, narrow, count bytes or reverse stay
-  at 128 bits. There is no AVX-512 or FMA code,
+  at 128 bits, so a 16-bit loop over bytes (PNG's Paeth filter) does eight
+  values per step where LLVM's `vpmovzxbw` gives sixteen. There is no
+  AVX-512 or FMA code,
   no 64-bit ordered compare even with AVX2, and no runtime dispatch, so a
   build is either baseline everywhere or needs AVX2 everywhere.
 - The built-in linker (see `NATIVE_LINKER.md`) links every supported

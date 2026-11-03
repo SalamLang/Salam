@@ -1569,6 +1569,13 @@ end
   breaks on a password with `"` or `\`). **`net.http2`** frames, HPACK and
   streams (`NewConn ClientHandshake SendHeaders SendData Poll`; one thread
   per `Conn`).
+- **`events`** (`import events`): an in-process event emitter, generic over the
+  payload (`events.New() as events.Emitter<int>`). `On Once OnAny` take a dotted
+  topic (`*` is one word, `#` the rest) and a lambda and return an id for `Off`;
+  `OffTopic Count Len Emit`. Handlers run outside the lock, so they may call
+  `On`/`Off`/`Emit`. `NewAsync(cap)` adds one worker thread: `EmitAsync Pending
+Flush Close`. Lambdas capture by value, so share state through pointers or
+  `mut` globals. `Free` releases it.
 - **`tls`** (TLS 1.2/1.3 in pure Salam, no OpenSSL): `Dial WrapClient WrapServer NewConfig NewServerConfig ConnOk ConnError Read Write ReadBytes WriteBytes Close`, plus `AesGcmSeal`, `AesGcmOpen`, `HkdfSha256`, the `EcdhP256` functions,
   `P256Sign` and `P256Verify`. Check `ConnOk` after `Dial`; no client certificates;
   about 800 KB/s for bulk transfers. **`ssl`** is an OpenSSL-style API over

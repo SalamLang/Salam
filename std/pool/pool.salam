@@ -36,7 +36,10 @@ const C_STOP := 2
 const C_CAP := 3
 const C_HEAD := 4
 const C_TAIL := 5
-const C_CELLS := 6
+const C_LIVE := 6
+const C_IDLE := 7
+const C_MAX := 8
+const C_CELLS := 9
 
 mut g_ready := mem.AllocateZeroed(8 as u64) as i64*
 mut g_pool := mem.AllocateZeroed(16 as u64) as Pool*
@@ -61,6 +64,13 @@ struct GroupState:
     pub mu: sync.Mutex = sync.Mutex {}
     pub err: str = ""
     pub failed: i64* = null
+end
+
+struct Range:
+    pub body: func (i64) = (_i: i64): end
+    pub next: i64* = null
+    pub n: i64 = 0
+    pub mu: sync.Mutex = sync.Mutex {}
 end
 
 @en "Group"
@@ -89,13 +99,6 @@ pub struct Future:
     @en "cv"
     @fa "شرط"
     pub cv: sync.CondVar = sync.CondVar {}
-end
-
-struct Range:
-    pub body: func (i64) = (_i: i64): end
-    pub next: i64* = null
-    pub n: i64 = 0
-    pub mu: sync.Mutex = sync.Mutex {}
 end
 
 @en "Pool"
@@ -143,9 +146,11 @@ func pool_worker(sp: State*):
     c := s.c
     until true:
         sync.Lock(s.mu)
+        c[C_IDLE] = c[C_IDLE] + 1
         until c[C_COUNT] == 0 and c[C_STOP] == 0:
             sync.WaitCond(s.nonempty, s.mu)
         end
+        c[C_IDLE] = c[C_IDLE] - 1
         if c[C_COUNT] == 0:
             sync.Unlock(s.mu)
             break
@@ -171,7 +176,8 @@ func pool_worker(sp: State*):
     end
 end
 
-func enqueue(s: State, task: func ()): bool:
+func enqueue(sp: State*, task: func ()): bool:
+    s := sp[0]
     c := s.c
     np := mem.AllocateZeroed(sizeof(Node) as u64) as Node*
     np[0] = Node { task = task, next = 0 }
@@ -183,6 +189,10 @@ func enqueue(s: State, task: func ()): bool:
     end
     c[C_TAIL] = np as i64
     c[C_COUNT] = c[C_COUNT] + 1
+    if c[C_COUNT] > c[C_IDLE] and c[C_LIVE] < c[C_MAX]:
+        s.handles[c[C_LIVE]] = spawn(pool_worker, sp)
+        c[C_LIVE] = c[C_LIVE] + 1
+    end
     sync.Signal(s.nonempty)
     ret true
 end
@@ -301,20 +311,30 @@ end
 @en "New"
 @fa "جدید"
 pub func New(workers: i64, queue: i64): Pool:
-    mut w := workers
-    if w < 1: w = 1 end
+    ret NewElastic(workers, workers, queue)
+end
+
+@en "NewElastic"
+@fa "جدید کشسان"
+pub func NewElastic(min: i64, max: i64, queue: i64): Pool:
+    mut lo := min
+    if lo < 1: lo = 1 end
+    mut hi := max
+    if hi < lo: hi = lo end
     mut q := queue
     if q < 1: q = 1 end
     sp := mem.AllocateZeroed(sizeof(State) as u64) as State*
     c := mem.AllocateZeroed((C_CELLS * 8) as u64) as i64*
-    hs := mem.AllocateZeroed((w * 8) as u64) as i64*
+    hs := mem.AllocateZeroed((hi * 8) as u64) as i64*
     c[C_CAP] = q
-    sp[0] = State { mu = sync.NewMutex(), nonempty = sync.NewCondVar(), nonfull = sync.NewCondVar(), idle = sync.NewCondVar(), c = c, handles = hs, workers = w }
-    mut k := 0 as i64
-    until k < w:
-        hs[k] = spawn(pool_worker, sp)
-        k = k + 1
+    c[C_MAX] = hi
+    sp[0] = State { mu = sync.NewMutex(), nonempty = sync.NewCondVar(), nonfull = sync.NewCondVar(), idle = sync.NewCondVar(), c = c, handles = hs, workers = hi }
+    sync.Lock(sp[0].mu)
+    until c[C_LIVE] < lo:
+        hs[c[C_LIVE]] = spawn(pool_worker, sp)
+        c[C_LIVE] = c[C_LIVE] + 1
     end
+    sync.Unlock(sp[0].mu)
     ret Pool { state = sp as void* }
 end
 
@@ -339,7 +359,7 @@ pub func Submit(p: Pool, task: func ()): bool:
         sync.Unlock(s.mu)
         ret false
     end
-    enqueue(s, task)
+    enqueue(sp, task)
     sync.Unlock(s.mu)
     ret true
 end
@@ -355,7 +375,7 @@ pub func TrySubmit(p: Pool, task: func ()): bool:
         sync.Unlock(s.mu)
         ret false
     end
-    enqueue(s, task)
+    enqueue(sp, task)
     sync.Unlock(s.mu)
     ret true
 end
@@ -385,7 +405,7 @@ pub func Stop(p: Pool):
     sync.Broadcast(s.nonfull)
     sync.Unlock(s.mu)
     mut k := 0 as i64
-    until k < s.workers:
+    until k < c[C_LIVE]:
         thread.Join(thread.New(s.handles[k]))
         k = k + 1
     end
@@ -424,7 +444,11 @@ end
 @fa "کارگرها"
 pub func Workers(p: Pool): i64:
     sp := p.state as State*
-    ret sp[0].workers
+    s := sp[0]
+    sync.Lock(s.mu)
+    n := s.c[C_LIVE]
+    sync.Unlock(s.mu)
+    ret n
 end
 
 @en "SubmitOrRun"

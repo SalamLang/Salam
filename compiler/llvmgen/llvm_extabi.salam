@@ -25,6 +25,9 @@ const EXA_NONE := 0
 const EXA_SYSV := 1
 const EXA_WIN64 := 2
 const EXA_AARCH64 := 3
+const EXA_X86 := 4
+const EXA_ARM := 5
+const EXA_RV64 := 6
 
 const EXM_NONE := 0
 const EXM_REGS := 1
@@ -44,16 +47,31 @@ func ex_host_arch(): str:
         ret "x86_64"
     else SALAM_ARCH_ARM64:
         ret "aarch64"
+    else SALAM_ARCH_X86:
+        ret "i686"
+    else SALAM_ARCH_ARM:
+        ret "arm"
+    else SALAM_ARCH_RISCV64:
+        ret "riscv64"
     else:
         ret ""
     end
 end
 
 func ex_arch(v &: Lv): int:
+    arch := str.Len(v.triple) > 0 ? outbuf_arch(v) : ex_host_arch()
     if v.ptr_bits != 64:
+        if str.Equals(arch, "i386") or str.Equals(arch, "i486") or str.Equals(arch, "i586") or str.Equals(arch, "i686"):
+            ret EXA_X86
+        end
+        if (str.StartsWith(arch, "arm") or str.StartsWith(arch, "thumb")) and not str.EndsWith(arch, "eb"):
+            ret EXA_ARM
+        end
         ret EXA_NONE
     end
-    arch := str.Len(v.triple) > 0 ? outbuf_arch(v) : ex_host_arch()
+    if str.Equals(arch, "riscv64"):
+        ret EXA_RV64
+    end
     if str.Equals(arch, "x86_64") or str.Equals(arch, "amd64"):
         if target_is_windows_of(v.triple):
             ret EXA_WIN64
@@ -300,10 +318,96 @@ func ex_aarch64(v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str, size: int, r &: ExA
     r.offs.push(0)
 end
 
+func ex_is_win(v &: Lv): bool:
+    ret str.Len(v.triple) > 0 ? target_is_windows_of(v.triple) : SALAM_OS_WINDOWS
+end
+
+func ex_hfa(v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str, r &: ExArg): bool:
+    mut offs := Vector {} as Vector<int>
+    mut cls := Vector {} as Vector<int>
+    mut szs := Vector {} as Vector<int>
+    if not ex_flat(v, s, a, ts, 0, offs, cls, szs) or offs.len() < 1 or offs.len() > 4 or cls.get(0) == 1:
+        ret false
+    end
+    repeat cls.len() in k:
+        if cls.get(k) != cls.get(0):
+            ret false
+        end
+    end
+    r.mode = EXM_REGS
+    r.pieces.push("[" + co.I64Toa(offs.len() as i64) + " x " + (cls.get(0) == 2 ? "float" : "double") + "]")
+    r.offs.push(0)
+    ret true
+end
+
+func ex_arm(v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str, size: int, al: int, va: bool, r &: ExArg):
+    if not va and ex_hfa(v, s, a, ts, r):
+        ret
+    end
+    r.align = al > 4 ? 8 : 4
+    if size > 64:
+        r.mode = EXM_BYVAL
+        ret
+    end
+    r.mode = EXM_REGS
+    r.pieces.push("[" + co.I64Toa(((size + r.align - 1) / r.align) as i64) + " x i" + co.I64Toa((r.align * 8) as i64) + "]")
+    r.offs.push(0)
+end
+
+func ex_rv_int(size: int, r &: ExArg):
+    if size > 16:
+        r.mode = EXM_COPY
+        ret
+    end
+    r.mode = EXM_REGS
+    r.pieces.push(size <= 8 ? "i64" : "[2 x i64]")
+    r.offs.push(0)
+end
+
+func ex_rv(v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str, size: int, fp: bool, r &: ExArg):
+    if fp:
+        mut offs := Vector {} as Vector<int>
+        mut cls := Vector {} as Vector<int>
+        mut szs := Vector {} as Vector<int>
+        if ex_flat(v, s, a, ts, 0, offs, cls, szs) and (offs.len() == 1 or offs.len() == 2):
+            mut nf := 0
+            mut small := true
+            repeat offs.len() in k:
+                if cls.get(k) != 1:
+                    nf += 1
+                end
+                if szs.get(k) > 8:
+                    small = false
+                end
+            end
+            if small and nf >= 1 and (offs.len() == 2 or nf == 1):
+                repeat offs.len() in k2:
+                    if cls.get(k2) == 2:
+                        r.pieces.push("float")
+                    else cls.get(k2) == 3:
+                        r.pieces.push("double")
+                    else:
+                        r.pieces.push("i" + co.I64Toa((szs.get(k2) * 8) as i64))
+                    end
+                    r.offs.push(offs.get(k2))
+                end
+                r.mode = EXM_REGS
+                ret
+            end
+        end
+    end
+    ex_rv_int(size, r)
+end
+
 func ex_classify(v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str): ExArg:
     mut r := ExArg {}
     arch := ex_arch(v)
     if arch == EXA_NONE or is_ptr_ts(ts) or is_slice(ts) or is_array_ts(ts) or struct_sym(v, s, a, ts) == 0:
+        ret r
+    end
+    if arch == EXA_X86:
+        r.mode = EXM_BYVAL
+        r.align = 4
         ret r
     end
     mut al := 1
@@ -326,8 +430,131 @@ func ex_classify(v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str): ExArg:
         ex_sysv(v, s, a, ts, size, r)
         ret r
     end
+    if arch == EXA_ARM:
+        ex_arm(v, s, a, ts, size, al, false, r)
+        ret r
+    end
+    if arch == EXA_RV64:
+        ex_rv(v, s, a, ts, size, true, r)
+        ret r
+    end
     ex_aarch64(v, s, a, ts, size, r)
     ret r
+end
+
+func ex_ret(v &: Lv, s &: sm.Sema, a &: at.Ast, sig: int): ExArg:
+    sg := sm.SigAt(s, sig)
+    ts := sm.ToString(s, sg.ret_type)
+    arch := ex_arch(v)
+    if arch != EXA_X86 and arch != EXA_ARM:
+        ret ex_classify(v, s, a, ts)
+    end
+    mut r := ExArg {}
+    if is_ptr_ts(ts) or is_slice(ts) or is_array_ts(ts) or struct_sym(v, s, a, ts) == 0:
+        ret r
+    end
+    mut al := 1
+    size := ex_layout(v, s, a, ts, al)
+    r.size = size
+    if arch == EXA_X86 and not ex_is_win(v):
+        r.mode = EXM_COPY
+        ret r
+    end
+    if size <= 0:
+        ret ExArg {}
+    end
+    if arch == EXA_ARM:
+        if not sg.variadic and ex_hfa(v, s, a, ts, r):
+            ret r
+        end
+        if size <= 4:
+            r.mode = EXM_REGS
+            r.pieces.push("i32")
+            r.offs.push(0)
+        else:
+            r.mode = EXM_COPY
+        end
+        ret r
+    end
+    mut offs := Vector {} as Vector<int>
+    mut cls := Vector {} as Vector<int>
+    mut szs := Vector {} as Vector<int>
+    if ex_flat(v, s, a, ts, 0, offs, cls, szs) and offs.len() == 1 and cls.get(0) != 1 and szs.get(0) == size:
+        r.mode = EXM_REGS
+        r.pieces.push(size == 4 ? "float" : "double")
+        r.offs.push(0)
+        ret r
+    end
+    if size == 1 or size == 2 or size == 4 or size == 8:
+        r.mode = EXM_REGS
+        r.pieces.push("i" + co.I64Toa((size * 8) as i64))
+        r.offs.push(0)
+    else:
+        r.mode = EXM_COPY
+    end
+    ret r
+end
+
+func ex_rv_param(v &: Lv, s &: sm.Sema, a &: at.Ast, sig: int, j: int): ExArg:
+    sg := sm.SigAt(s, sig)
+    mut gl := 8
+    mut fl := 8
+    rm := ex_ret(v, s, a, sig).mode
+    if rm != EXM_NONE and rm != EXM_REGS:
+        gl -= 1
+    end
+    mut out := ExArg {}
+    repeat j + 1 in k:
+        kts := sm.ToString(s, sg.params.get(k))
+        mut e := ExArg {}
+        if param_is_ref(s, a, sig, k):
+            gl -= 1
+        else:
+            e = ex_classify(v, s, a, kts)
+            if e.mode == EXM_NONE:
+                kty := ty_of(v, s, a, kts)
+                if str.Equals(kty, "float") or str.Equals(kty, "double"):
+                    if fl > 0:
+                        fl -= 1
+                    else:
+                        gl -= 1
+                    end
+                else is_slice(kts):
+                    gl -= 2
+                else:
+                    gl -= 1
+                end
+            else e.mode == EXM_REGS:
+                mut nf := 0
+                mut ni := 0
+                each pc in e.pieces:
+                    if str.Equals(pc, "float") or str.Equals(pc, "double"):
+                        nf += 1
+                    else str.Equals(pc, "[2 x i64]"):
+                        ni += 2
+                    else:
+                        ni += 1
+                    end
+                end
+                if nf > 0 and (nf > fl or (ni > 0 and ni > gl)):
+                    mut w := ExArg {}
+                    w.size = e.size
+                    ex_rv_int(e.size, w)
+                    e = w
+                    gl -= e.mode == EXM_REGS and str.Equals(e.pieces.get(0), "[2 x i64]") ? 2 : 1
+                else:
+                    fl -= nf
+                    gl -= ni
+                end
+            else:
+                gl -= 1
+            end
+        end
+        if k == j:
+            out = e
+        end
+    end
+    ret out
 end
 
 func ex_reg_need(e: ExArg, ni &: int, ns &: int):
@@ -379,7 +606,7 @@ func ex_sysv_fixed(v &: Lv, s &: sm.Sema, a &: at.Ast, sig: int, upto: int, gi &
     sg := sm.SigAt(s, sig)
     gi = 6
     fi = 8
-    if ex_classify(v, s, a, sm.ToString(s, sg.ret_type)).mode == EXM_BYVAL:
+    if ex_ret(v, s, a, sig).mode == EXM_BYVAL:
         gi -= 1
     end
     repeat upto in k:
@@ -389,6 +616,9 @@ end
 
 func ex_param(v &: Lv, s &: sm.Sema, a &: at.Ast, sig: int, j: int): ExArg:
     sg := sm.SigAt(s, sig)
+    if ex_arch(v) == EXA_RV64:
+        ret ex_rv_param(v, s, a, sig, j)
+    end
     mut e := ex_classify(v, s, a, sm.ToString(s, sg.params.get(j)))
     if e.mode != EXM_REGS or ex_arch(v) != EXA_SYSV:
         ret e
@@ -404,8 +634,8 @@ end
 
 func ex_va_other(v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str): ExArg:
     mut r := ExArg {}
-    arch := str.Len(v.triple) > 0 ? outbuf_arch(v) : ""
-    if str.Equals(arch, "i386") or str.Equals(arch, "i486") or str.Equals(arch, "i586") or str.Equals(arch, "i686"):
+    arch := ex_arch(v)
+    if arch == EXA_X86:
         r.mode = EXM_BYVAL
         r.align = 4
         ret r
@@ -416,32 +646,17 @@ func ex_va_other(v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str): ExArg:
         ret r
     end
     r.size = size
-    if str.StartsWith(arch, "arm") or str.StartsWith(arch, "thumb"):
-        r.align = al > 4 ? 8 : 4
-        if size > 64:
-            r.mode = EXM_BYVAL
-            ret r
-        end
-        r.mode = EXM_REGS
-        r.pieces.push("[" + co.I64Toa(((size + r.align - 1) / r.align) as i64) + " x i" + co.I64Toa((r.align * 8) as i64) + "]")
-        r.offs.push(0)
-        ret r
-    end
-    if str.Equals(arch, "riscv64"):
-        if size > 16:
-            r.mode = EXM_COPY
-            ret r
-        end
-        r.mode = EXM_REGS
-        r.pieces.push(size <= 8 ? "i64" : "[2 x i64]")
-        r.offs.push(0)
+    if arch == EXA_ARM:
+        ex_arm(v, s, a, ts, size, al, true, r)
+    else arch == EXA_RV64:
+        ex_rv(v, s, a, ts, size, false, r)
     end
     ret r
 end
 
 func ex_va_arg(v &: Lv, s &: sm.Sema, a &: at.Ast, sig: int, call: int, i: int, ts: str): ExArg:
     arch := ex_arch(v)
-    if arch == EXA_NONE:
+    if arch == EXA_NONE or arch == EXA_X86 or arch == EXA_ARM or arch == EXA_RV64:
         ret ex_va_other(v, s, a, ts)
     end
     mut e := ex_classify(v, s, a, ts)
@@ -529,7 +744,7 @@ func ex_va_callty(v &: Lv, s &: sm.Sema, a &: at.Ast, sig: int, cname: str): str
     end
     mut b := co.SbNew()
     co.SbPuts(b, " (")
-    rmode := ex_classify(v, s, a, sm.ToString(s, sg.ret_type)).mode
+    rmode := ex_ret(v, s, a, sig).mode
     if rmode != EXM_NONE and rmode != EXM_REGS:
         co.SbPuts(b, "ptr, ")
     end

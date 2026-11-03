@@ -381,28 +381,45 @@ func attr_escape(s: str): str:
     ret str.Replace(str.Replace(str.Replace(str.Replace(s, "&", "&amp;"), "\"", "&quot;"), "<", "&lt;"), ">", "&gt;")
 end
 
-func preview_html(stem: str, src: str, errs &: Vector<str>): str:
+func preview_cache_path(src_path: str): str:
+    base := os.Env("SITE_PREVIEW_CACHE")
+    if base.len() == 0:
+        ret ""
+    end
+    ret base + "/" + file.Sha256Hex(src_path) + ".html"
+end
+
+func preview_batch(work: str, stems: Vector<str>):
+    mut list := str.NewBuilder()
+    defer str.BufFree(list)
+    each stem in stems:
+        str.BufAppend(list, stem + "\n")
+    end
+    _wl := os.WriteFile(work + "/list", str.BufStr(list))
     mut compiler := os.Env("SALAM")
     if compiler.len() == 0:
         compiler = "salam"
     end
-    work := os.TempDir() + "/salam-site-preview-" + str.FromInt(os.Pid() as i64) + "-" + stem
-    _rm := os.RemoveAll(work)
-    _mk := os.MkdirAll(work)
-    _wr := os.WriteFile(work + "/" + stem + ".salam", src + "\n")
-    cmd := "cd " + shell_quote(work) + " && SALAM_STD=" + shell_quote(os.Cwd() + "/std") + " " + shell_quote(compiler) + " page build " + shell_quote(stem + ".salam") + " --inline --no-color --log-level=error 2>&1"
-    res := os.RunCapture(cmd)
-    html_path := work + "/" + stem + ".html"
-    if res.code != 0 or not file.Exists(html_path):
-        report(errs, "preview of example '" + stem + "' failed: " + res.out)
-        _rm2 := os.RemoveAll(work)
+    run := "cd " + shell_quote(work) + " && SITE_PV_SALAM=" + shell_quote(compiler) + " SITE_PV_STD=" + shell_quote(os.Cwd() + "/std") + " xargs -n 1 -P \"$(nproc 2>/dev/null || echo 4)\" sh -c 'cd \"$1\" && SALAM_STD=\"$SITE_PV_STD\" \"$SITE_PV_SALAM\" page build \"$1.salam\" --inline --no-color --log-level=error > \"$1.log\" 2>&1; echo $? > \"$1.code\"' sh < list"
+    _res := os.RunCapture(run)
+end
+
+func preview_collect(work: str, stem: str, errs &: Vector<str>): str:
+    dir_path := work + "/" + stem
+    html_path := dir_path + "/" + stem + ".html"
+    code_path := dir_path + "/" + stem + ".code"
+    log := file.Exists(dir_path + "/" + stem + ".log") ? io.ReadFile(dir_path + "/" + stem + ".log") : ""
+    if not file.Exists(code_path) or not str.Equals(str.TrimRight(io.ReadFile(code_path)), "0") or not file.Exists(html_path):
+        report(errs, "preview of example '" + stem + "' failed: " + log)
         ret ""
     end
-    mut html := io.ReadFile(html_path)
-    _rm3 := os.RemoveAll(work)
+    ret io.ReadFile(html_path)
+end
+
+func preview_finish(html: str): str:
     at := str.LastIndex(html, "</body>")
     if at >= 0:
-        html = html.substr(0, at) + PREVIEW_SCRIPT + html.substr(at, html.len() - at)
+        ret html.substr(0, at) + PREVIEW_SCRIPT + html.substr(at, html.len() - at)
     end
     ret html
 end
@@ -441,6 +458,14 @@ func load_examples(lang_dir: str, ctx &: HashMap<str, str>, errs &: Vector<str>)
     if not dir.Exists(ex_dir):
         ret
     end
+    mut stems := Vector {} as Vector<str>
+    mut srcs := Vector {} as Vector<str>
+    mut outs := Vector {} as Vector<str>
+    mut previews := HashMap {} as HashMap<str, str>
+    mut missing := Vector {} as Vector<str>
+    work := os.TempDir() + "/salam-site-preview-" + str.FromInt(os.Pid() as i64) + "-" + str.Replace(lang_dir, "/", "-")
+    _rm := os.RemoveAll(work)
+    _mk := os.MkdirAll(work)
     each name in dir.ListFiles(ex_dir):
         if not str.EndsWith(name, ".salam"):
             continue
@@ -455,11 +480,39 @@ func load_examples(lang_dir: str, ctx &: HashMap<str, str>, errs &: Vector<str>)
         else file.Exists(sample_path):
             out_html = escape_text(str.TrimRight(io.ReadFile(sample_path)))
         end
-        mut page_html := ""
         if out_html.len() == 0 and not file.Exists(ex_dir + "/" + stem + ".server") and is_page_source(src):
-            page_html = preview_html(stem, src, errs)
+            cache_path := preview_cache_path(ex_dir + "/" + name)
+            if cache_path.len() > 0 and file.Exists(cache_path):
+                previews.put(stem, preview_finish(io.ReadFile(cache_path)))
+            else:
+                _mkd := os.MkdirAll(work + "/" + stem)
+                _wr := os.WriteFile(work + "/" + stem + "/" + stem + ".salam", src + "\n")
+                missing.push(stem)
+            end
         end
-        ctx.put("example." + stem, example_block(ctx_or(ctx, "exname." + stem, stem), src, highlight(src, classes), out_html, page_html, ctx, errs))
+        stems.push(stem)
+        srcs.push(src)
+        outs.push(out_html)
+    end
+    if missing.len() > 0:
+        preview_batch(work, missing)
+        each stem in missing:
+            html := preview_collect(work, stem, errs)
+            if html.len() > 0:
+                cache_path := preview_cache_path(ex_dir + "/" + stem + ".salam")
+                if cache_path.len() > 0:
+                    _cm := os.MkdirAll(os.Env("SITE_PREVIEW_CACHE"))
+                    _cw := file.WriteText(cache_path, html)
+                end
+                previews.put(stem, preview_finish(html))
+            end
+        end
+    end
+    _rm2 := os.RemoveAll(work)
+    repeat stems.len() in i:
+        stem := stems.get(i)
+        page_html := previews.has(stem) ? previews.get(stem) : ""
+        ctx.put("example." + stem, example_block(ctx_or(ctx, "exname." + stem, stem), srcs.get(i), highlight(srcs.get(i), classes), outs.get(i), page_html, ctx, errs))
     end
 end
 

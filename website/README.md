@@ -29,6 +29,13 @@ sh website/build.sh fa       # one language
 The output goes to `website/dist/<lang>/`. Preview it with
 `salam serve website/dist/fa`.
 
+`build.sh` compiles the generator while the API JSON for the std pages is
+written, runs `salam doc` for the packages in parallel and starts the example
+previews in parallel too. Results that only depend on the compiler and `std/`
+(the API JSON and the example previews) are kept in `website/.cache/` and are
+dropped as soon as either changes, so a repeat build only renders the pages.
+Delete `website/.cache/` to force a full rebuild.
+
 `build.sh` first runs every example and compares its output with the `.out`
 file next to it, so the site never shows code that does not compile or output
 that is out of date. It also refuses a std package that has no page in both

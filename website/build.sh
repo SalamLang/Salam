@@ -23,8 +23,8 @@ esac
 "$SALAM" run tools/salam/check-fa-names.salam --no-color --log-level=error
 python3 website/check-std-coverage.py
 
+jobs=$(nproc 2>/dev/null || echo 4)
 if [ "$examples" != skip ]; then
-    jobs=$(nproc 2>/dev/null || echo 4)
     fail=0
     printf '%s\0' website/content/*/examples/*.salam website/content/*/std-examples/*/*.salam |
         xargs -0 -P "$jobs" -n 1 sh website/check-example.sh || fail=1
@@ -39,20 +39,59 @@ if [ "$examples" != skip ]; then
 fi
 [ "$examples" = only ] && exit 0
 
-mkdir -p website/dist/api
+if command -v sha256sum >/dev/null 2>&1; then
+    sha=sha256sum
+else
+    sha="shasum -a 256"
+fi
+
+cache="$root/website/.cache"
+stamp=$({
+    $sha "$SALAM"
+    find std -type f -exec $sha {} + | LC_ALL=C sort
+} | $sha | cut -d ' ' -f 1)
+if [ "$(cat "$cache/stamp" 2>/dev/null)" != "$stamp" ]; then
+    rm -rf "$cache"
+    mkdir -p "$cache"
+    fresh=1
+else
+    fresh=0
+fi
+SITE_PREVIEW_CACHE="$cache/preview"
+export SITE_PREVIEW_CACHE
+
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+mkdir -p "$work/gen"
+(cd "$work/gen" && "$SALAM" build "$root/website/build.salam" --output="$work/generator" --no-color --log-level=error >"$work/gen.log" 2>&1) &
+gen_pid=$!
+
+mkdir -p website/dist/api "$cache/api"
+: >"$work/docs"
 for page in website/content/*/std/*.txt; do
     [ -f "$page" ] || continue
     pkg=$(sed -n 's/^pkg\.en = //p' "$page")
     slug=$(printf '%s' "$pkg" | tr '/' '-')
+    out="$cache/api/$slug.json"
+    grep -qxF "$out" "$work/seen" 2>/dev/null && continue
+    printf '%s\n' "$out" >>"$work/seen"
+    [ "$fresh" -eq 0 ] && [ -s "$out" ] && continue
     src="std/$pkg"
     if grep -q '^pkg\.flat = true' "$page"; then
-        src=$(mktemp -d)
+        src=$(mktemp -d "$work/flat.XXXXXX")
         cp "std/$pkg"/*.salam "$src/"
     fi
-    if ! "$SALAM" doc "$src" --output="website/dist/api/$slug.json" >/dev/null; then
-        echo "website: salam doc failed for std/$pkg" >&2
-        exit 1
-    fi
+    printf '%s\n%s\n%s\n' "$src" "$out" "$pkg" >>"$work/docs"
 done
+if [ -s "$work/docs" ] && ! tr '\n' '\0' <"$work/docs" | xargs -0 -n 3 -P "$jobs" sh -c '"$SALAM" doc "$1" --output="$2" >/dev/null || { echo "website: salam doc failed for std/$3" >&2; exit 1; }' sh; then
+    kill "$gen_pid" 2>/dev/null || true
+    exit 1
+fi
+printf '%s\n' "$stamp" >"$cache/stamp"
+cp "$cache/api"/*.json website/dist/api/
 
-"$SALAM" run website/build.salam --no-color --log-level=error "$@"
+if ! wait "$gen_pid"; then
+    cat "$work/gen.log" >&2
+    exit 1
+fi
+"$work/generator" "$@"

@@ -29,6 +29,14 @@ func regname(r: int, sz: int): str:
     ret k_r8[r]
 end
 
+func preg(g &: Ng, r: int): str:
+    ret g.arch == NG_ARCH_X86 ? k_r32[r] : k_r64[r]
+end
+
+func psz(g &: Ng): int:
+    ret g.arch == NG_ARCH_X86 ? 4 : 8
+end
+
 func ptr_kw(sz: int): str:
     if sz == 1: ret "BYTE PTR " end
     if sz == 2: ret "WORD PTR " end
@@ -52,6 +60,9 @@ func asm_mem(g &: Ng, rm: RM, sz: int): str:
     if sz > 0:
         p = ptr_kw(sz)
     end
+    if (rm.k == MK_RIP or rm.k == MK_GOT) and g.arch == NG_ARCH_X86:
+        ret p + "[" + tab_str(g.syms, rm.sym) + disp_str(rm.d) + "]"
+    end
     if rm.k == MK_RIP:
         ret p + "[rip+" + tab_str(g.syms, rm.sym) + disp_str(rm.d) + "]"
     end
@@ -64,14 +75,14 @@ func asm_mem(g &: Ng, rm: RM, sz: int): str:
     mut s := p + "["
     mut first := true
     if rm.b >= 0:
-        s = s + k_r64[rm.b]
+        s = s + preg(g, rm.b)
         first = false
     end
     if rm.i >= 0:
         if not first:
             s = s + "+"
         end
-        s = s + k_r64[rm.i]
+        s = s + preg(g, rm.i)
         if rm.s > 1:
             s = s + "*" + rm.s
         end
@@ -97,18 +108,26 @@ func asm_sse(sz: int, base: str): str:
     ret base + (sz == 4 ? "ss" : "sd")
 end
 
+func asm_ret(g &: Ng):
+    if g.f_popn > 0:
+        asl(g, "ret " + g.f_popn)
+        ret
+    end
+    asl(g, "ret")
+end
+
 func asm_epilogue(g &: Ng):
     ngp := ngp_count(g)
     if g.mc.fpo:
         if g.mc.fpo_pad > 0:
-            asl(g, "add rsp, " + g.mc.fpo_pad)
+            asl(g, "add " + preg(g, RSP) + ", " + g.mc.fpo_pad)
         end
         mut kf := ngp - 1
         until kf >= 0:
-            asl(g, "pop " + k_r64[g.mc.callee_used[kf]])
+            asl(g, "pop " + preg(g, g.mc.callee_used[kf]))
             kf -= 1
         end
-        asl(g, "ret")
+        asm_ret(g)
         ret
     end
     mut k2 := ngp
@@ -127,7 +146,7 @@ func asm_epilogue(g &: Ng):
     else:
         asl(g, "leave")
     end
-    asl(g, "ret")
+    asm_ret(g)
 end
 
 func yreg(r: int, y: bool): str:
@@ -245,6 +264,58 @@ func asm_vex_ins(g &: Ng, i: int): bool:
     ret false
 end
 
+func abs_pfx(g &: Ng, i: int, p: str): str:
+    if g.arch == NG_ARCH_X86 and (g.mc.mk[i] == MK_RIP or g.mc.mk[i] == MK_GOT):
+        ret p
+    end
+    ret ""
+end
+
+func asm_call_fix(g &: Ng, i: int):
+    if g.arch == NG_ARCH_X86 and g.mc.sz2[i] > 0:
+        asl(g, "sub esp, " + g.mc.sz2[i])
+    end
+end
+
+func asm_ins_x86(g &: Ng, i: int):
+    mut bad := Vector {} as Vector<int>
+    defer bad.free()
+    x86_byte_regs(g, i, bad)
+    if bad.len() == 0:
+        asm_ins(g, i)
+        ret
+    end
+    mut tmp := Vector {} as Vector<int>
+    defer tmp.free()
+    repeat bad.len():
+        tmp.push(x86_free_tmp(g, i, bad, tmp))
+    end
+    o0 := g.mc.r0[i]
+    o1 := g.mc.r1[i]
+    ob := g.mc.mb[i]
+    oi := g.mc.mi[i]
+    bi := g.mc.mk[i] == MK_BI
+    repeat bad.len() in k:
+        asl(g, "xchg " + k_r32[bad[k]] + ", " + k_r32[tmp[k]])
+        g.mc.r0[i] = x86_swap(g.mc.r0[i], tmp[k], bad[k])
+        g.mc.r1[i] = x86_swap(g.mc.r1[i], tmp[k], bad[k])
+        if bi:
+            g.mc.mb[i] = x86_swap(g.mc.mb[i], tmp[k], bad[k])
+            g.mc.mi[i] = x86_swap(g.mc.mi[i], tmp[k], bad[k])
+        end
+    end
+    asm_ins(g, i)
+    g.mc.r0[i] = o0
+    g.mc.r1[i] = o1
+    g.mc.mb[i] = ob
+    g.mc.mi[i] = oi
+    mut k2 := bad.len() - 1
+    until k2 >= 0:
+        asl(g, "xchg " + k_r32[bad[k2]] + ", " + k_r32[tmp[k2]])
+        k2 -= 1
+    end
+end
+
 func asm_ins(g &: Ng, i: int):
     if g.mc.vex and asm_vex_ins(g, i):
         ret
@@ -276,11 +347,23 @@ func asm_ins(g &: Ng, i: int):
             ret
         end
         M_LD, M_LDGOT:
+            if op == M_LDGOT and g.arch == NG_ARCH_X86:
+                asl(g, "mov " + regname(r0, 4) + ", OFFSET " + tab_str(g.syms, g.mc.msym[i]) + disp_str(g.mc.md[i]))
+                ret
+            end
             if op == M_LDGOT and g.os == NG_OS_WINDOWS:
                 asl(g, "lea " + regname(r0, 8) + ", " + asm_mem(g, rm_of(g, i), 0))
                 ret
             end
-            asl(g, "mov " + regname(r0, op == M_LDGOT ? 8 : sz) + ", " + asm_mem(g, rm_of(g, i), op == M_LDGOT ? 8 : sz))
+            asl(g, abs_pfx(g, i, "{load} ") + "mov " + regname(r0, op == M_LDGOT ? 8 : sz) + ", " + asm_mem(g, rm_of(g, i), op == M_LDGOT ? 8 : sz))
+            ret
+        end
+        M_X87:
+            if g.mc.cc[i] == 2:
+                asl(g, "fild " + asm_mem(g, rm_of(g, i), 8))
+            else:
+                asl(g, (g.mc.cc[i] == 1 ? "fstp " : "fld ") + asm_mem(g, rm_of(g, i), sz == 8 ? 8 : 4))
+            end
             ret
         end
         M_LDZX: asl(g, "movzx " + regname(r0, 4) + ", " + asm_mem(g, rm_of(g, i), sz2)) ret end
@@ -292,9 +375,9 @@ func asm_ins(g &: Ng, i: int):
             end
             ret
         end
-        M_ST: asl(g, "mov " + asm_mem(g, rm_of(g, i), sz) + ", " + regname(r1, sz)) ret end
+        M_ST: asl(g, abs_pfx(g, i, "{store} ") + "mov " + asm_mem(g, rm_of(g, i), sz) + ", " + regname(r1, sz)) ret end
         M_STI: asl(g, "mov " + asm_mem(g, rm_of(g, i), sz) + ", " + str.FromInt(imm)) ret end
-        M_LEA: asl(g, "lea " + regname(r0, 8) + ", " + asm_mem(g, rm_of(g, i), 0)) ret end
+        M_LEA: asl(g, "lea " + regname(r0, psz(g)) + ", " + asm_mem(g, rm_of(g, i), 0)) ret end
         M_ALU_RR: asl(g, k_alun[g.mc.cc[i]] + " " + regname(r0, sz) + ", " + regname(r1, sz)) ret end
         M_ALU_RI: asl(g, k_alun[g.mc.cc[i]] + " " + regname(r0, sz) + ", " + str.FromInt(imm)) ret end
         M_ALU_RM: asl(g, k_alun[g.mc.cc[i]] + " " + regname(r0, sz) + ", " + asm_mem(g, rm_of(g, i), sz)) ret end
@@ -309,7 +392,7 @@ func asm_ins(g &: Ng, i: int):
         M_UNARY: asl(g, (g.mc.cc[i] == UN_NEG ? "neg " : "not ") + regname(r0, sz)) ret end
         M_CQO: asl(g, sz == 8 ? "cqo" : "cdq") ret end
         M_DIV: asl(g, ((g.mc.cc[i] & 1) == 1 ? "idiv " : "div ") + regname(r1, sz)) ret end
-        M_MULHI: asl(g, (g.mc.cc[i] == 1 ? "imul " : "mul ") + regname(r1, 8)) ret end
+        M_MULHI: asl(g, (g.mc.cc[i] == 1 ? "imul " : "mul ") + regname(r1, psz(g))) ret end
         M_SETCC: asl(g, "set" + k_ccn[g.mc.cc[i]] + " " + regname(r0, 1)) ret end
         M_MOVZX_RR: asl(g, "movzx " + regname(r0, 4) + ", " + regname(r1, sz2)) ret end
         M_MOVSX_RR:
@@ -323,8 +406,16 @@ func asm_ins(g &: Ng, i: int):
         M_CMOV: asl(g, "cmov" + k_ccn[g.mc.cc[i]] + " " + regname(r0, sz) + ", " + regname(r1, sz)) ret end
         M_JMP: asl(g, "jmp " + asm_label_name(g, g.mc.tgt[i])) ret end
         M_JCC: asl(g, "j" + k_ccn[g.mc.cc[i]] + " " + asm_label_name(g, g.mc.tgt[i])) ret end
-        M_CALL: asl(g, "call " + tab_str(g.syms, g.mc.msym[i])) ret end
-        M_CALLR: asl(g, "call " + regname(r1, 8)) ret end
+        M_CALL:
+            asl(g, "call " + tab_str(g.syms, g.mc.msym[i]))
+            asm_call_fix(g, i)
+            ret
+        end
+        M_CALLR:
+            asl(g, "call " + regname(r1, psz(g)))
+            asm_call_fix(g, i)
+            ret
+        end
         M_RET: asm_epilogue(g) ret end
         M_UD2: asl(g, "ud2") ret end
         M_XCHG: asl(g, "xchg " + asm_mem(g, rm_of(g, i), sz) + ", " + regname(r0, sz)) ret end
@@ -412,8 +503,19 @@ func asm_fast_exit(g &: Ng, name: str):
     else g.fx_kind == 2:
         asl(g, "mov rax, " + regname(g.fx_rreg, 8))
     end
-    asl(g, "ret")
+    asm_ret(g)
     str.BufAppend(g.asm, lbl + ":\n")
+end
+
+func asm_alloc(g &: Ng, fsize: int):
+    spr := preg(g, RSP)
+    if g.os == NG_OS_WINDOWS and fsize >= 4096:
+        asl(g, "mov eax, " + fsize)
+        asl(g, "call " + tab_str(g.syms, g.sym_chkstk))
+        asl(g, "sub " + spr + ", " + preg(g, 0))
+    else:
+        asl(g, "sub " + spr + ", " + fsize)
+    end
 end
 
 func asm_function(g &: Ng):
@@ -431,10 +533,10 @@ func asm_function(g &: Ng):
     ngp := ngp_count(g)
     if g.mc.fpo:
         repeat ngp in kf:
-            asl(g, "push " + k_r64[g.mc.callee_used[kf]])
+            asl(g, "push " + preg(g, g.mc.callee_used[kf]))
         end
         if g.mc.fpo_pad > 0:
-            asl(g, "sub rsp, " + g.mc.fpo_pad)
+            asm_alloc(g, g.mc.fpo_pad)
         end
     else:
         asl(g, "push rbp")
@@ -444,13 +546,7 @@ func asm_function(g &: Ng):
         end
     end
     if g.mc.frame_size > 0 and not g.mc.fpo:
-        if g.os == NG_OS_WINDOWS and g.mc.frame_size >= 4096:
-            asl(g, "mov eax, " + g.mc.frame_size)
-            asl(g, "call ___chkstk_ms")
-            asl(g, "sub rsp, rax")
-        else:
-            asl(g, "sub rsp, " + g.mc.frame_size)
-        end
+        asm_alloc(g, g.mc.frame_size)
     end
     mut k2 := ngp
     until k2 + 1 < g.mc.callee_used.len():
@@ -458,7 +554,11 @@ func asm_function(g &: Ng):
         k2 += 2
     end
     repeat g.mc.op.len() in i:
-        asm_ins(g, i)
+        if g.arch == NG_ARCH_X86:
+            asm_ins_x86(g, i)
+        else:
+            asm_ins(g, i)
+        end
     end
     str.BufAppend(g.asm, "    .size " + name + ", .-" + name + "\n")
 end
@@ -555,8 +655,9 @@ func asm_data(g &: Ng, sec: int):
         end
         if ri < roff.len() and roff[ri] == pos:
             r2 := rid[ri]
-            asl(g, ".quad " + tab_str(g.syms, g.r_sym[r2]) + disp_str(g.r_add[r2]))
-            pos += 8
+            r4 := g.r_type[r2] == R_ABS32
+            asl(g, (r4 ? ".long " : ".quad ") + tab_str(g.syms, g.r_sym[r2]) + disp_str(g.r_add[r2]))
+            pos += r4 ? 4 : 8
             ri += 1
             continue
         end
@@ -692,6 +793,26 @@ func vshift_name(opc: int, ext: int): str:
     ret "psllq"
 end
 
+func asm_x86_helpers(g &: Ng):
+    mut code := Vector {} as Vector<int>
+    repeat 7 in k:
+        nm := x86_helper_code(k, code)
+        s := sym_named(g, nm)
+        if g.sy_used[s] and not g.sy_def[s]:
+            str.BufAppend(g.asm, "\n    .text\n    .p2align 4\n" + nm + ":\n")
+            mut line := ""
+            repeat code.len() in q:
+                line = line + (q % 16 == 0 ? ".byte " : ",") + str.FromInt(code[q] as i64)
+                if q % 16 == 15 or q + 1 == code.len():
+                    asl(g, line)
+                    line = ""
+                end
+            end
+        end
+    end
+    code.free()
+end
+
 pub func WriteAsm(g &: Ng, path: str): bool:
     if g.opt and not g.dce_done:
         gdce(g)
@@ -702,6 +823,9 @@ pub func WriteAsm(g &: Ng, path: str): bool:
     asm_live_text(g, b)
     hold := g.asm
     g.asm = b
+    if g.arch == NG_ARCH_X86:
+        asm_x86_helpers(g)
+    end
     asm_data(g, SEC_RODATA)
     asm_data(g, SEC_CONST)
     asm_data(g, SEC_DATA)

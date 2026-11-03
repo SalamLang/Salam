@@ -21,14 +21,35 @@ import io
 import time
 import net.http
 import net.httpd
+import net.tcp
 
-const PORT := 19433
+mut site_port := 0
+
+func free_port(): int:
+    probe := tcp.Bind(0)
+    port := tcp.Port(probe)
+    tcp.CloseServer(probe)
+    ret port
+end
+
+func wait_up(port: int):
+    mut tries := 0
+    until tries < 100:
+        c := tcp.Dial("127.0.0.1", port)
+        if tcp.ConnOk(c):
+            tcp.Close(c)
+            ret
+        end
+        time.Sleep(50)
+        tries += 1
+    end
+end
 
 func config_text(root: str): str:
     t := `
 server:
     site:
-        listen = 19433
+        listen = @PORT@
         names = "localhost *.localhost"
         root = "@ROOT@/a"
         error page = 404 "404.html"
@@ -40,13 +61,13 @@ server:
         location "/old/": redirect = "http://$host/new$uri" code = 302 end
     end
     site:
-        listen = 19433
+        listen = @PORT@
         names = "127.0.0.1"
         root = "@ROOT@/b"
     end
 end
 `
-    ret str.Replace(t, "@ROOT@", root)
+    ret str.Replace(str.Replace(t, "@ROOT@", root), "@PORT@", str.FromInt(site_port as i64))
 end
 
 func prepare(root: str):
@@ -68,15 +89,15 @@ func serve_loop():
 end
 
 func get(host: str, path: str): http.Response:
-    ret http.Do("GET", "http://" + host + ":19433" + path, http.NewHeaders(), "", http.RequestOptions {})
+    ret http.Do("GET", "http://" + host + ":" + site_port + path, http.NewHeaders(), "", http.RequestOptions {})
 end
 
 func test_matching():
-    testing.AssertEqInt(httpd.SiteFor("localhost", PORT), 0)
-    testing.AssertEqInt(httpd.SiteFor("LOCALHOST:19433", PORT), 0)
-    testing.AssertEqInt(httpd.SiteFor("api.localhost", PORT), 0)
-    testing.AssertEqInt(httpd.SiteFor("127.0.0.1", PORT), 1)
-    testing.AssertEqInt(httpd.SiteFor("unknown.test", PORT), 0)
+    testing.AssertEqInt(httpd.SiteFor("localhost", site_port), 0)
+    testing.AssertEqInt(httpd.SiteFor("LOCALHOST:" + site_port, site_port), 0)
+    testing.AssertEqInt(httpd.SiteFor("api.localhost", site_port), 0)
+    testing.AssertEqInt(httpd.SiteFor("127.0.0.1", site_port), 1)
+    testing.AssertEqInt(httpd.SiteFor("unknown.test", site_port), 0)
     testing.AssertEqInt(httpd.SiteFor("localhost", 1), -1)
     exact := httpd.LocationFor(0, "/health")
     testing.AssertEqStr(httpd.LocationPattern(exact), "/health")
@@ -116,7 +137,7 @@ func test_live():
     testing.AssertEqStr(r6.body, "notes")
     r7 := get("localhost", "/old/page?x=1")
     testing.AssertEqInt(r7.status, 302)
-    testing.AssertEqStr(http.GetHeader(r7, "Location"), "http://localhost:19433/new/old/page")
+    testing.AssertEqStr(http.GetHeader(r7, "Location"), "http://localhost:" + site_port + "/new/old/page")
     r8 := get("localhost", "/missing")
     testing.AssertEqInt(r8.status, 404)
     testing.AssertEqStr(r8.body, "custom 404")
@@ -132,7 +153,7 @@ func test_live():
     testing.AssertEqInt(r12.status, 404)
     r13 := get("localhost", "/%2e%2e/%2e%2e/etc/passwd")
     testing.AssertEqInt(r13.status, 404)
-    r14 := http.Do("POST", "http://localhost:19433/", http.NewHeaders(), "x", http.RequestOptions {})
+    r14 := http.Do("POST", "http://localhost:" + site_port + "/", http.NewHeaders(), "x", http.RequestOptions {})
     testing.AssertEqInt(r14.status, 405)
     testing.AssertEqStr(http.GetHeader(r14, "Allow"), "GET, HEAD")
 end
@@ -140,7 +161,7 @@ end
 func get_with(path: str, name: str, value: str): http.Response:
     mut h := http.NewHeaders()
     h.insert(name, value)
-    ret http.Do("GET", "http://localhost:19433" + path, h, "", http.RequestOptions {})
+    ret http.Do("GET", "http://localhost:" + site_port + path, h, "", http.RequestOptions {})
 end
 
 func test_conditional_and_range():
@@ -182,7 +203,7 @@ func test_conditional_and_range():
     mut h := http.NewHeaders()
     h.insert("Range", "bytes=0-1")
     h.insert("If-Range", "\"other\"")
-    g8 := http.Do("GET", "http://localhost:19433/notes.txt", h, "", http.RequestOptions {})
+    g8 := http.Do("GET", "http://localhost:" + site_port + "/notes.txt", h, "", http.RequestOptions {})
     testing.AssertEqInt(g8.status, 200)
     testing.AssertEqStr(g8.body, "notes")
 end
@@ -195,25 +216,29 @@ func test_multiport(root: str):
     text := `
 server:
     site:
-        listen = 19437
+        listen = @P1@
         names = "localhost"
         root = "@ROOT@/p1"
     end
     site:
-        listen = 19438
+        listen = @P2@
         names = "localhost"
         root = "@ROOT@/p2"
     end
 end
 `
-    testing.AssertTrue(httpd.LoadText(str.Replace(text, "@ROOT@", root), "ports.salam"))
-    testing.AssertEqInt(httpd.SiteFor("localhost", 19437), 0)
-    testing.AssertEqInt(httpd.SiteFor("localhost", 19438), 1)
+    port_one := free_port()
+    port_two := free_port()
+    filled := str.Replace(str.Replace(str.Replace(text, "@ROOT@", root), "@P1@", str.FromInt(port_one as i64)), "@P2@", str.FromInt(port_two as i64))
+    testing.AssertTrue(httpd.LoadText(filled, "ports.salam"))
+    testing.AssertEqInt(httpd.SiteFor("localhost", port_one), 0)
+    testing.AssertEqInt(httpd.SiteFor("localhost", port_two), 1)
     t := spawn(serve_loop)
-    time.Sleep(400)
-    a := http.Get("http://localhost:19437/")
+    wait_up(port_one)
+    wait_up(port_two)
+    a := http.Get("http://localhost:" + port_one + "/")
     testing.AssertEqStr(a.body, "port one")
-    b := http.Get("http://localhost:19438/")
+    b := http.Get("http://localhost:" + port_two + "/")
     testing.AssertEqStr(b.body, "port two")
     httpd.Stop()
     join(t)
@@ -235,13 +260,14 @@ func test_problems():
 end
 
 func main:
-    root := os.TempDir() + "/salam_httpd_demo"
+    site_port = free_port()
+    root := os.TempDir() + "/salam_httpd_demo_" + site_port
     prepare(root)
     testing.AssertTrue(httpd.LoadText(config_text(root), "demo.salam"))
     test_durations()
     test_matching()
     t := spawn(serve_loop)
-    time.Sleep(400)
+    wait_up(site_port)
     test_live()
     test_conditional_and_range()
     httpd.Stop()

@@ -418,13 +418,157 @@ func salam_blocks(text: str): Vector<str>:
     ret out
 end
 
-func persian_code(code: str): bool:
-    each mark in ["پایان", "برگشت", "تابع ", "// زبان: فارسی"]:
-        if code.find(mark) >= 0:
-            ret true
+func clamp(j: int, n: int): int:
+    ret j < n ? j : n
+end
+
+func literal_end(code: str, i: int): int:
+    n := code.len()
+    c := byte_at(code, i)
+    mut j := i + 1
+    if c == 34:
+        until j < n:
+            d := byte_at(code, j)
+            if d == 92:
+                j += 2
+                continue
+            end
+            if d == 34:
+                ret clamp(j + 1, n)
+            end
+            if d == 10:
+                ret j
+            end
+            j += 1
+        end
+        ret n
+    end
+    if c == 96:
+        until j < n:
+            if byte_at(code, j) == 96:
+                ret j + 1
+            end
+            j += 1
+        end
+        ret n
+    end
+    if c == 47 and j < n and byte_at(code, j) == 47:
+        until j < n:
+            if byte_at(code, j) == 10:
+                ret j
+            end
+            j += 1
+        end
+        ret n
+    end
+    if c == 47 and j < n and byte_at(code, j) == 42:
+        j += 1
+        until j + 1 < n:
+            if byte_at(code, j) == 42 and byte_at(code, j + 1) == 47:
+                ret j + 2
+            end
+            j += 1
+        end
+        ret n
+    end
+    if c == 194 and j < n and byte_at(code, j) == 171:
+        j += 1
+        until j < n:
+            d := byte_at(code, j)
+            if d == 194 and j + 1 < n and byte_at(code, j + 1) == 187:
+                ret j + 2
+            end
+            if d == 10:
+                ret j
+            end
+            j += 1
+        end
+        ret n
+    end
+    ret i
+end
+
+func mask(code: str): str:
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    n := code.len()
+    mut i := 0
+    mut from := 0
+    until i < n:
+        e := literal_end(code, i)
+        if e > i:
+            str.BufAppend(b, code.substr(from, i - from))
+            mut k := i
+            until k < e:
+                str.BufAppend(b, byte_at(code, k) == 10 ? "\n" : " ")
+                k += 1
+            end
+            i = e
+            from = e
+        else:
+            i += 1
         end
     end
-    ret false
+    str.BufAppend(b, code.substr(from, n - from))
+    ret str.BufStr(b)
+end
+
+func tokens_of(code: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    n := code.len()
+    mut i := 0
+    mut from := 0 - 1
+    until i < n:
+        c := byte_at(code, i)
+        mut word := (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 95 or c >= 128
+        mut step := 1
+        if c == 216 and i + 1 < n:
+            d := byte_at(code, i + 1)
+            if d == 140 or d == 155 or d == 159:
+                word = false
+                step = 2
+            end
+        end
+        if word and from < 0:
+            from = i
+        end
+        if not word and from >= 0:
+            out.push(code.substr(from, i - from))
+            from = 0 - 1
+        end
+        i += step
+    end
+    if from >= 0:
+        out.push(code.substr(from, n - from))
+    end
+    ret out
+end
+
+func code_language(code: str, masked: str): int:
+    if str.StartsWith(str.Trim(code), "// زبان: فارسی"):
+        ret 2
+    end
+    mut en := 0
+    mut fa := 0
+    each t in tokens_of(masked):
+        each k in ["func", "ret", "end", "if", "else", "each", "repeat", "until", "struct", "enum", "match", "mut", "pub", "import", "package", "interface", "impl", "throws", "try", "catch", "throw", "defer", "const", "switch", "println", "print"]:
+            if t == k:
+                en += 1
+            end
+        end
+        each k in ["تابع", "برگشت", "پایان", "اگر", "وگرنه", "هر", "تکرار", "تا", "ساختار", "جداشمار", "همخوان", "ناپایا", "همگانی", "واردسازی", "بسته", "میانجی", "کاربست", "خطادار", "تلاش", "گرفتن", "پرتاب", "دیرکن", "پایا", "ترابرد", "سرچاپ", "چاپ"]:
+            if t == k:
+                fa += 1
+            end
+        end
+    end
+    if fa > en:
+        ret 2
+    end
+    if en > fa:
+        ret 1
+    end
+    ret 0
 end
 
 func strip_mods(line: str): str:
@@ -544,12 +688,14 @@ end
 pub func Practice(text: str): str:
     mut found := Vector {} as Vector<str>
     each code in salam_blocks(text):
-        persian := persian_code(code)
-        rolled := hand_rolled(code)
+        masked := mask(code)
+        lang := code_language(code, masked)
+        rolled := hand_rolled(masked)
         if rolled.len() > 0:
             found.push(rolled)
         end
-        bad := wrong_names(code, persian)
+        persian := lang == 2
+        bad := lang == 0 ? Vector {} as Vector<str> : wrong_names(masked, persian)
         if bad.len() >= 2:
             mut shown := Vector {} as Vector<str>
             each n in bad:

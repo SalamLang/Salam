@@ -1,0 +1,74 @@
+import wire
+import str
+
+mut log := Vector {} as Vector<str>
+
+interface Store:
+    func Find(id: int): str
+end
+
+struct MemStore:
+    pub tag: str = ""
+    pub func Find(id: int): str:
+        ret this.tag + str.FromInt(id)
+    end
+end
+
+struct Service:
+    pub store: dyn Store = MemStore {}
+    pub name: str = ""
+end
+
+struct Handler:
+    pub svc: Service = Service {}
+end
+
+func main:
+    c := wire.New()
+    wire.Provide(c, "MemStore", "", MemStore {}, (_c: wire.Container): ret MemStore { tag = "row-" } end)
+    wire.Bind(c, "Store", "MemStore")
+    wire.Provide(c, "Service", "Store", Service {}, (cx: wire.Container):
+        mut s := MemStore {}
+        _ok := wire.Get(cx, "MemStore", s)
+        ret Service { store = s, name = "svc" }
+    end)
+    wire.Provide(c, "Handler", "Service", Handler {}, (cx: wire.Container):
+        mut s := Service {}
+        _ok := wire.Get(cx, "Service", s)
+        ret Handler { svc = s }
+    end)
+    wire.OnClose(c, "MemStore", MemStore {}, (m: MemStore): log.push("close store " + m.tag) end)
+    wire.OnClose(c, "Service", Service {}, (s: Service): log.push("close service " + s.name) end)
+    err := wire.Build(c)
+    println "build:", err == "" ? "ok" : err
+    mut h := Handler {}
+    println wire.Get(c, "Handler", h)
+    println h.svc.name, h.svc.store.Find(7)
+    order := wire.Built(c)
+    defer order.free()
+    each n in order:
+        println "built", n
+    end
+    wire.Close(c)
+    each l in log:
+        println l
+    end
+    log.free()
+
+    bad := wire.New()
+    wire.Provide(bad, "A", "B", Service {}, (_c: wire.Container): ret Service {} end)
+    println wire.Build(bad)
+    wire.Close(bad)
+
+    cyc := wire.New()
+    wire.Provide(cyc, "A", "B", Service {}, (_c: wire.Container): ret Service {} end)
+    wire.Provide(cyc, "B", "A", Service {}, (_c: wire.Container): ret Service {} end)
+    println wire.Build(cyc)
+    wire.Close(cyc)
+
+    dup := wire.New()
+    wire.Value(dup, "N", 1)
+    wire.Value(dup, "N", 2)
+    println wire.Build(dup)
+    wire.Close(dup)
+end

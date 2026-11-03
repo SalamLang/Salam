@@ -244,6 +244,13 @@ func eval_call(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
                 bcl := ip.closures.get(bfid)
                 ret invoke(ip, a, env, n, bcl.fn, bcl.env, false, val_null(), args)
             end
+            bnk := native_fnptr(ip, a, n, bv)
+            if bnk == 1:
+                ret call_native_fnptr(ip, a, n, bv, args)
+            end
+            if bnk == 2:
+                ret val_null()
+            end
         end
         fn := find_func(ip, a, nm, na)
         if fn != 0:
@@ -357,17 +364,16 @@ func eval_call(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
         vcl := ip.closures.get(fv2.id)
         ret invoke(ip, a, env, n, vcl.fn, vcl.env, false, val_null(), args)
     end
-    cts := at.At(a, callee).type_str
-    if fv2.kind == VAL_PTR and str.StartsWith(cts, "stdcallfunc(") and host_is_win32():
-        rt_error(ip, a, n, i18.Tr("the interpreter cannot call a stdcall function pointer on 32-bit Windows (use 'salam run' instead)"))
+    nk := native_fnptr(ip, a, n, fv2)
+    if nk == 2:
         ret val_null()
     end
-    if fv2.kind == VAL_PTR and fv2.pa != (0 as i64) and (str.StartsWith(cts, "externfunc(") or str.StartsWith(cts, "stdcallfunc(")):
+    if nk == 1:
         eval_args(ip, a, env, n, args)
         if ip.failed:
             ret val_null()
         end
-        ret ffi_call_sig(ip, a, n, fv2.pa as void*, cts, args)
+        ret call_native_fnptr(ip, a, n, fv2, args)
     end
     rt_error(ip, a, n, i18.Tr("value is not callable"))
     ret val_null()
@@ -1139,6 +1145,18 @@ func method_call_values(
                 fcl := ip.closures.get(fv.id)
                 ret invoke(ip, a, env, n, fcl.fn, fcl.env, false, val_null(), args)
             end
+            ffid := fn_id_of(fv)
+            if ffid >= 0 and ffid < ip.closures.len():
+                fcl2 := ip.closures.get(ffid)
+                ret invoke(ip, a, env, n, fcl2.fn, fcl2.env, false, val_null(), args)
+            end
+            fnk := native_fnptr(ip, a, n, fv)
+            if fnk == 1:
+                ret call_native_fnptr(ip, a, n, fv, args)
+            end
+            if fnk == 2:
+                ret val_null()
+            end
         end
         im2 := find_impl_method(ip, a, stv.type_name, method, na2)
         if im2 != 0:
@@ -1165,6 +1183,25 @@ func method_call_values(
         )
     end
     ret call_builtin_method(ip, a, n, recvr, method, args)
+end
+
+func native_fnptr(ip &: Interp, a &: at.Ast, n: int, fv: Value): int:
+    if fv.kind != VAL_PTR:
+        ret 0
+    end
+    cts := at.At(a, at.At(a, n).a).type_str
+    if str.StartsWith(cts, "stdcallfunc(") and host_is_win32():
+        rt_error(ip, a, n, i18.Tr("the interpreter cannot call a stdcall function pointer on 32-bit Windows (use 'salam run' instead)"))
+        ret 2
+    end
+    if fv.pa != (0 as i64) and (str.StartsWith(cts, "externfunc(") or str.StartsWith(cts, "stdcallfunc(")):
+        ret 1
+    end
+    ret 0
+end
+
+func call_native_fnptr(ip &: Interp, a &: at.Ast, n: int, fv: Value, args: Vector<Value>): Value:
+    ret ffi_call_sig(ip, a, n, fv.pa as void*, at.At(a, at.At(a, n).a).type_str, args)
 end
 
 func host_is_win32(): bool:

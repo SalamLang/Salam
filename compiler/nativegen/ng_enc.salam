@@ -256,6 +256,41 @@ func enc_vex(g &: Ng, e &: Enc, pp: int, mp: int, w: bool, l: bool, opc: int, re
     enc_modrm(g, e, rf, rm, immsz)
 end
 
+func vex_src(g &: Ng, i: int, r0: int): int:
+    if i < g.mc.vsrc.len() and g.mc.vsrc[i] >= 0:
+        ret g.mc.vsrc[i]
+    end
+    ret r0
+end
+
+func vex_three_op(g &: Ng):
+    g.mc.vsrc.clear()
+    n := g.mc.op.len()
+    repeat n:
+        g.mc.vsrc.push(0 - 1)
+    end
+    if not g.mc.vex or g.off_vex3:
+        ret
+    end
+    repeat n - 1 in i:
+        j := i + 1
+        oj := g.mc.op[j]
+        if g.mc.op[i] != M_FMOV_RR or (oj != M_VOP_RR and oj != M_VSHI and oj != M_ANDPS):
+            continue
+        end
+        a := g.mc.r0[i]
+        b := g.mc.r1[i]
+        if a == b or g.mc.r0[j] != a or (g.mc.ymm[j] and not g.mc.ymm[i]):
+            continue
+        end
+        if oj != M_VSHI and g.mc.r1[j] == a:
+            g.mc.r1[j] = b
+        end
+        g.mc.vsrc[j] = b
+        g.mc.op[i] = M_NOP
+    end
+end
+
 func vex_imm(e &: Enc, imm: i64):
     eb(e, (imm & (255 as i64)) as int)
 end
@@ -281,12 +316,12 @@ func enc_vex_ins(g &: Ng, e &: Enc, i: int): bool:
         M_MOVQ_XG: enc_vex(g, e, 1, 1, sz == 8, false, 0x6E, r0, 0 - 1, rm_reg(r1), 0) ret true end
         M_MOVQ_GX: enc_vex(g, e, 1, 1, sz == 8, false, 0x7E, r1, 0 - 1, rm_reg(r0), 0) ret true end
         M_XORPS: enc_vex(g, e, 0, 1, false, y and r0 != r1, 0x57, r0, r0, rm_reg(r1), 0) ret true end
-        M_ANDPS: enc_vex(g, e, 0, 1, false, y, 0x54, r0, r0, rm_reg(r1), 0) ret true end
+        M_ANDPS: enc_vex(g, e, 0, 1, false, y, 0x54, r0, vex_src(g, i, r0), rm_reg(r1), 0) ret true end
         M_VLD: enc_vex(g, e, 0, 1, false, y, 0x10, r0, 0 - 1, rm_of(g, i), 0) ret true end
         M_VST: enc_vex(g, e, 0, 1, false, y, 0x11, r1, 0 - 1, rm_of(g, i), 0) ret true end
         M_VOP_RR:
             c := g.mc.cc[i]
-            enc_vex(g, e, sz == 8 ? 1 : 0, c > 255 ? 2 : 1, false, y, c & 255, r0, r0, rm_reg(r1), 0)
+            enc_vex(g, e, sz == 8 ? 1 : 0, c > 255 ? 2 : 1, false, y, c & 255, r0, vex_src(g, i, r0), rm_reg(r1), 0)
             ret true
         end
         M_SHUFPS:
@@ -301,7 +336,7 @@ func enc_vex_ins(g &: Ng, e &: Enc, i: int): bool:
             ret true
         end
         M_VSHI:
-            enc_vex(g, e, 1, 1, false, y, g.mc.cc[i], g.mc.sz2[i], r0, rm_reg(r0), 1)
+            enc_vex(g, e, 1, 1, false, y, g.mc.cc[i], g.mc.sz2[i], r0, rm_reg(vex_src(g, i, r0)), 1)
             vex_imm(e, imm)
             ret true
         end
@@ -313,7 +348,7 @@ func enc_vex_ins(g &: Ng, e &: Enc, i: int): bool:
                 vex_imm(e, imm)
                 ret true
             end
-            enc_vex(g, e, 1, 2, false, y, g.mc.cc[i], r0, 0 - 1, rm_reg(r1), 0)
+            enc_vex(g, e, 1, 2, false, y, g.mc.cc[i], r0, 0 - 1, g.mc.mk[i] != MK_NONE ? rm_of(g, i) : rm_reg(r1), 0)
             ret true
         end
         M_VZU:
@@ -1992,7 +2027,7 @@ func vex_prepare(g &: Ng):
     end
     n := g.mc.op.len()
     repeat n in i:
-        if g.mc.ymm[i]:
+        if g.mc.ymm[i] or g.mc.op[i] == M_VUN:
             g.mc.vex = true
         end
     end
@@ -2044,6 +2079,7 @@ func encode_function(g &: Ng):
             end
         end
     end
+    vex_three_op(g)
     if g.arch == NG_ARCH_X86:
         x86_prepass(g)
     end

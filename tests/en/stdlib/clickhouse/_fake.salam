@@ -1,0 +1,87 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package fake
+
+import str
+import net.http
+import net.router
+
+mut _codes := Vector {} as Vector<int>
+mut _bodies := Vector {} as Vector<str>
+mut _heads := Vector {} as Vector<str>
+mut _next := 0
+mut _last := ""
+mut _count := 0
+
+func _handle(h: i64):
+    ctx := http.Ctx(h)
+    method := http.Method(ctx)
+    path := http.Path(ctx)
+    query := http.RawQuery(ctx)
+    _count += 1
+    mut line := method + " " + path
+    if query.len() > 0: line = line + "?" + query end
+    user := http.Header(ctx, "X-ClickHouse-User")
+    if user.len() > 0: line = line + "\n  user: " + user end
+    key := http.Header(ctx, "X-ClickHouse-Key")
+    if key.len() > 0: line = line + "\n  key: " + key end
+    body := http.Body(ctx)
+    if body.len() > 0: line = line + "\n  body: " + str.TrimRight(body) end
+    _last = line
+    if _next >= _codes.len():
+        http.SetStatus(ctx, 500)
+        http.Text(ctx, "Code: 999. DB::Exception: no reply queued")
+        ret
+    end
+    code := _codes.get(_next)
+    reply := _bodies.get(_next)
+    head := _heads.get(_next)
+    _next += 1
+    if head.len() > 0:
+        c := head.find(":")
+        http.SetHeader(ctx, head.substr(0, c), head.substr(c + 1, head.len() - c - 1))
+    end
+    http.SetStatus(ctx, code)
+    http.Text(ctx, reply)
+end
+
+pub func Reply(code: int, body: str):
+    _codes.push(code)
+    _bodies.push(body)
+    _heads.push("")
+end
+
+pub func ReplyWith(code: int, body: str, header: str):
+    _codes.push(code)
+    _bodies.push(body)
+    _heads.push(header)
+end
+
+pub func Last(): str:
+    ret _last
+end
+
+pub func Count(): int:
+    ret _count
+end
+
+pub func StartFree(): int:
+    mut r := router.NewRouter()
+    router.Get(r, "/*", _handle)
+    router.Post(r, "/*", _handle)
+    mut s := http.NewServer(0)
+    http.Use(s, r)
+    ret http.RunBackgroundPort(s)
+end

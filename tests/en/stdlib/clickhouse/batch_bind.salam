@@ -1,0 +1,82 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import str
+import db.clickhouse
+
+include fake "_fake.salam"
+
+mut PORT := 0
+
+func one(a: str): Vector<str>:
+    mut v := Vector {} as Vector<str>
+    v.push(a)
+    ret v
+end
+
+func two(a: str, b: str): Vector<str>:
+    mut v := Vector {} as Vector<str>
+    v.push(a)
+    v.push(b)
+    ret v
+end
+
+func main:
+    println clickhouse.StrArg("a\\b'c\nd\te")
+    println clickhouse.QuoteIdent("my`col")
+    println clickhouse.IntArg(-5 as i64), clickhouse.UIntArg(18446744073709551615 as u64), clickhouse.FloatArg(2.5)
+    println clickhouse.BoolArg(true), clickhouse.NullArg()
+    println clickhouse.ArrayArg(two("1", "2")), clickhouse.TupleArg(two("1", clickhouse.StrArg("x")))
+    println clickhouse.MapArg(one(clickhouse.StrArg("k")), one("1"))
+
+    println clickhouse.Bind("SELECT ? AS a, '?' AS b, \"?\" AS c, `?` AS d -- ?\n, ? /* ? */", two("1", "2"))
+    println "short:", clickhouse.Bind("SELECT ?, ?", one("1")).len()
+    println "long:", clickhouse.Bind("SELECT 1", one("1")).len()
+
+    println clickhouse.BaseType("LowCardinality(Nullable(String))"), clickhouse.IsNullableType("LowCardinality(Nullable(String))"), clickhouse.IsNullableType("String")
+    println clickhouse.ElementType("Array(Nullable(Int32))"), clickhouse.TypeKind("Array(Int32)"), clickhouse.TypeKind("Decimal(18, 4)"), clickhouse.TypeKind("Date32"), clickhouse.TypeKind("Enum8('a' = 1)")
+
+    fake.Reply(200, "")
+    PORT = fake.StartFree()
+    if PORT == 0:
+        println "fake server did not start"
+        ret
+    end
+    mut o := clickhouse.DefaultOptions()
+    o.addr = "127.0.0.1:" + str.FromInt(PORT as i64)
+    mut c := clickhouse.Open(o)
+
+    mut b := c.PrepareBatch("INSERT INTO events (id, name, tags);")
+    println "append:", b.Append(three("1", clickhouse.StrArg("start"), clickhouse.ArrayArg(one(clickhouse.StrArg("a")))))
+    println "append:", b.Append(three("2", clickhouse.StrArg("stop"), clickhouse.ArrayArg(Vector {} as Vector<str>)))
+    println "len:", b.Len()
+    println "send:", c.SendBatch(b)
+    println fake.Last()
+
+    mut short := c.PrepareBatch("INSERT INTO events (id, name) VALUES")
+    println "short append:", short.Append(one("1")), short.Error()
+    println "short send:", c.SendBatch(short)
+
+    wrong := c.PrepareBatch("SELECT 1")
+    println "wrong:", wrong.Error()
+
+    empty := c.PrepareBatch("INSERT INTO events")
+    println "empty send:", c.SendBatch(empty), c.Error()
+end
+
+func three(a: str, b: str, c: str): Vector<str>:
+    mut v := two(a, b)
+    v.push(c)
+    ret v
+end

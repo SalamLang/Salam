@@ -118,6 +118,7 @@ shapes, each now excluded:
 | E152 | a member or index read through a pointer that is null                        |
 | W153 | a pointer that is null on some paths reaching the read                       |
 | W154 | an explicit cast of a known value that does not fit and loses bits          |
+| W158 | memory from `mem.Allocate` that nothing frees, returns, stores or passes on |
 
 Unsigned arithmetic is not reported: it wraps by definition, and hashes rely
 on that. Signed overflow is reported because a `--release` build lets the
@@ -148,7 +149,15 @@ errors. Messages exist in English and Persian (`compiler/i18n.salam`).
   them.
 - A variable captured by a lambda, written inside a `defer` or a `try:`
   block, or bound by a `match` pattern is not tracked.
-- Nothing crosses a call: a function that indexes its parameter is not
-  checked against its callers' arguments.
+- Calls are crossed in one way only: a function whose every `ret` returns
+  `null` makes its result null at the call, so `p := find(3)` followed by
+  `p.key` is E152. A function that indexes its parameter is not checked
+  against its callers' arguments.
+- W158 is a syntactic check on top of the ownership pass: a local bound to
+  `mem.Allocate` or `mem.AllocateZeroed` whose name never reaches `mem.Free`,
+  a `ret`, an assignment, a field, a collection or another call. Any of those
+  counts as handing the block on, so it never reports memory that some other
+  code frees. Vectors, maps and strings need no such check: phases 2 and 4 of
+  OWNERSHIP.md free the ones that do not escape.
 - Each function has a work budget (60,000 node visits) and a cap on tracked
   names (600); a function past either is skipped rather than slowed down.

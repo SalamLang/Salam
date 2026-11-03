@@ -110,8 +110,10 @@ set -- "$@" "-dSALAM_GIT_DATE=\"$STAMP_DATE\"" "-dSALAM_GIT_DIRTY=\"$STAMP_DIRTY
 # shellcheck disable=SC2086 # a caller-supplied flag list; splitting is wanted
 [ -n "$EXTRA" ] && set -- "$@" $EXTRA
 
-# The ownership checker needs about 6 GB to analyse the compiler, more than a
-# 32-bit process can address, so a 32-bit host builds without it.
+# A seed older than the incremental summary pass needs about 6 GB to analyse
+# the compiler, more than a 32-bit process can address, so a 32-bit host runs
+# the seed without the ownership checks. A compiler built from this tree needs
+# about 1 GB, so the second stage keeps them.
 OWN=
 if [ "$(getconf LONG_BIT 2>/dev/null)" = 32 ]; then
     OWN=--ownership=off
@@ -128,6 +130,9 @@ else
     BUILDER=$SEED
 fi
 
+if [ -n "$EMBED_DIR" ]; then
+    OWN=
+fi
 "$BUILDER" build "$ROOT/compiler/main.salam" --output="$OUT" "$@" $OWN
 rm -f "$OUT.stage1"
 

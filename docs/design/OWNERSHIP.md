@@ -185,9 +185,67 @@ statement and then freed by the rules above. That happens only when:
 
 Results of `str.FromInt` and the other `numfmt` conversions are still not
 freed: `numfmt` allocates with libc `malloc` (it sits below `mem`), so its
-results are not `mem.Free` blocks. The largest remaining source is the
-accumulation pattern `out = out + chunk`, which drops the old `out`; freeing
-it needs proof that the old value is heap and not a literal.
+results are not `mem.Free` blocks.
+
+An `else if` condition gets the same hoisting. The `else if` is wrapped in an
+`else` block that holds the temporary, which is freed at the end of that
+block. Loop conditions, ternary arms and the right operand of `and`/`or` still
+keep today's behavior: their temporaries would need a free on every iteration
+or on a conditional path, which the AST rewrite cannot express without
+rebuilding the loop or the expression.
+
+### Reassigned string locals
+
+`out = out + chunk`, `out += chunk` and `s = f(s)` drop the old value of a
+`mut` string local on every step. Freeing it needs proof that the old value is
+heap owned by that local, and a literal initial value (`mut out := ""`) is not.
+No runtime check can tell a literal from a heap block, so the proof is a flag
+the compiler keeps next to the variable:
+
+```
+mut out := ""
+mut __own12 := false
+...
+__ac40 := out + chunk
+if __own12: free(out) end
+out = __ac40
+__own12 = true
+```
+
+The flag is `true` exactly when `out` currently holds a block that this local
+allocated. A declaration sets it from its initializer (a fused chain or a call
+whose summary says it returns a fresh string, else `false`). An assignment
+sets it to whether the right side is fresh (again a chain or a fresh call).
+The new value is computed into a temporary first, because the right side
+reads the old one. Nothing is freed unless the flag is set, so a literal, a
+borrowed parameter value (`mut t := s`) and any other non-fresh value are
+never freed.
+
+A local qualifies when:
+
+- it is declared directly in a block with a `str` initializer and is `mut`;
+- it is declared once in the function and is not captured by a lambda;
+- every use only reads it (the read-only rules of the immutable case), or is
+  `ret` of it, or is an assignment `x = e` / `x += e` that is a statement of a
+  block (not a match arm). `x += e` needs a `str` right side;
+- an assignment whose right side reads `x` must have a fresh right side, so
+  the new value can never alias the one being freed;
+- it is never passed by reference (`&:`), stored (`v.push(x)`, `y := x`,
+  `y = x`, a struct field), freed by hand, or handed to a callee that keeps
+  or returns its argument. Those make the old value reachable from somewhere
+  the compiler cannot see, so the local keeps today's behavior.
+
+When nothing but `ret x` escapes the local, only the reassignments free (the
+returned value is the caller's). When it never escapes, a `defer` also frees
+the final value at the end of the scope if the flag is set. Reassignments
+inside loops, `break`, `continue` and `switch` arms need nothing special: the
+free sits right before the assignment it belongs to, and the scope-end `defer`
+already runs on every exit.
+
+What this does not cover: parameters (`mut s: str` reassigned in the callee),
+fields and elements (`this.buf = this.buf + x`), a name declared twice in one
+function, and the final value of a local that is returned (it leaks only if
+the caller drops it).
 
 The remaining string leaks come from call results (`f() + "x"`, or a
 `str.FromInt` result stored in a local). Whether a function returns a fresh

@@ -293,6 +293,311 @@ func sf_hoist_stmt(s &: Sema, a &: at.Ast, blk: int, idx: int): int:
     ret added
 end
 
+func sf_pure_call(s &: Sema, a &: at.Ast, call: int): bool:
+    d := su_call_decl(s, call)
+    if d != 0:
+        ret at.At(a, d).is_pure
+    end
+    callee := at.At(a, call).a
+    if callee == 0 or at.KindOf(a, callee) != at.AST_MEMBER:
+        ret false
+    end
+    recv := at.At(a, callee).a
+    ret recv != 0 and str.Equals(at.At(a, recv).type_str, "str")
+end
+
+func sf_expr_pure(s &: Sema, a &: at.Ast, nid: int): bool:
+    if nid == 0:
+        ret true
+    end
+    k := at.KindOf(a, nid)
+    if k == at.AST_LITERAL or k == at.AST_IDENTIFIER or k == at.AST_THIS:
+        ret true
+    end
+    n := at.At(a, nid)
+    if k == at.AST_MEMBER or k == at.AST_UNARY or k == at.AST_CAST:
+        ret sf_expr_pure(s, a, n.a)
+    end
+    if k == at.AST_INDEX or k == at.AST_BINARY:
+        ret sf_expr_pure(s, a, n.a) and sf_expr_pure(s, a, n.b)
+    end
+    if k == at.AST_TERNARY:
+        ret sf_expr_pure(s, a, n.a) and sf_expr_pure(s, a, n.b) and sf_expr_pure(s, a, n.c)
+    end
+    if k == at.AST_CALL:
+        if not sf_pure_call(s, a, nid) or not sf_expr_pure(s, a, n.a):
+            ret false
+        end
+        repeat at.ChildCount(a, nid) in i:
+            c := at.Child(a, nid, i)
+            if not sf_expr_pure(s, a, c) or at.At(a, c).ref_arg:
+                ret false
+            end
+        end
+        ret true
+    end
+    ret false
+end
+
+func sf_is_pkg_ident(s &: Sema, a &: at.Ast, nid: int): bool:
+    if nid == 0 or at.KindOf(a, nid) != at.AST_IDENTIFIER:
+        ret false
+    end
+    pk := scope_lookup(s, s.global, at.At(a, nid).name)
+    ret pk != 0 and sym_at(s, pk).kind == SYM_PACKAGE
+end
+
+func sf_local_ident(s &: Sema, a &: at.Ast, nid: int): bool:
+    if nid == 0 or at.KindOf(a, nid) != at.AST_IDENTIFIER:
+        ret false
+    end
+    pk := scope_lookup(s, s.global, at.At(a, nid).name)
+    ret pk == 0 or sym_at(s, pk).kind != SYM_VAR
+end
+
+func sf_has_unsafe(a &: at.Ast, nid: int): bool:
+    if nid == 0:
+        ret false
+    end
+    k := at.KindOf(a, nid)
+    if k == at.AST_LAMBDA or k == at.AST_FUNC_ADDR or at.At(a, nid).ref_arg:
+        ret true
+    end
+    if sf_has_unsafe(a, at.At(a, nid).a) or sf_has_unsafe(a, at.At(a, nid).b) or sf_has_unsafe(a, at.At(a, nid).c) or sf_has_unsafe(a, at.At(a, nid).d):
+        ret true
+    end
+    repeat at.ChildCount(a, nid) in i:
+        if sf_has_unsafe(a, at.Child(a, nid, i)):
+            ret true
+        end
+    end
+    ret false
+end
+
+func sf_before_ok(s &: Sema, a &: at.Ast, x: int, level: int): bool:
+    if x == 0:
+        ret true
+    end
+    if level == 0:
+        ret sf_expr_pure(s, a, x)
+    end
+    if at.KindOf(a, x) == at.AST_LITERAL:
+        ret true
+    end
+    ret level == 1 and sf_local_ident(s, a, x)
+end
+
+func sf_callee_ok(s &: Sema, a &: at.Ast, callee: int, level: int): bool:
+    if callee == 0:
+        ret false
+    end
+    if level == 0:
+        ret sf_expr_pure(s, a, callee)
+    end
+    k := at.KindOf(a, callee)
+    if k == at.AST_IDENTIFIER:
+        ret true
+    end
+    if k != at.AST_MEMBER:
+        ret false
+    end
+    obj := at.At(a, callee).a
+    ret sf_is_pkg_ident(s, a, obj) or (level == 1 and sf_local_ident(s, a, obj))
+end
+
+func sf_tmp_cands(a &: at.Ast, nid: int, out &: Vector<int>):
+    if nid == 0:
+        ret
+    end
+    k := at.KindOf(a, nid)
+    n := at.At(a, nid)
+    if k == at.AST_CALL:
+        out.push(nid)
+        sf_tmp_cands(a, n.a, out)
+        repeat at.ChildCount(a, nid) in i:
+            sf_tmp_cands(a, at.Child(a, nid, i), out)
+        end
+        ret
+    end
+    if k == at.AST_MEMBER or k == at.AST_UNARY or k == at.AST_CAST or k == at.AST_TERNARY:
+        sf_tmp_cands(a, n.a, out)
+        ret
+    end
+    if k == at.AST_INDEX:
+        sf_tmp_cands(a, n.a, out)
+        sf_tmp_cands(a, n.b, out)
+        ret
+    end
+    if k == at.AST_BINARY:
+        sf_tmp_cands(a, n.a, out)
+        if n.op != tok.TK_AND and n.op != tok.TK_OR:
+            sf_tmp_cands(a, n.b, out)
+        end
+    end
+end
+
+func sf_tmp_arg_ok(s &: Sema, a &: at.Ast, call: int, ai: int): bool:
+    t := at.Child(a, call, ai)
+    if t == 0 or sf_is_print(a, at.At(a, call).a):
+        ret false
+    end
+    if not sf_is_concat(a, t):
+        if at.KindOf(a, t) != at.AST_CALL or not str.Equals(at.At(a, t).type_str, "str") or not su_call_fresh(s, a, t):
+            ret false
+        end
+    end
+    ret su_arg_effect(s, a, call, ai + 1) == SU_READ
+end
+
+func sf_tmp_valid(s &: Sema, a &: at.Ast, pm &: HashMap<int, int>, st: int, t: int): bool:
+    mut strict := 0
+    if not sf_expr_pure(s, a, t):
+        strict = sf_has_unsafe(a, t) ? 2 : 1
+    end
+    mut cur := t
+    mut steps := 0
+    until steps < 64:
+        steps += 1
+        p := su_parent(pm, cur)
+        if p == 0:
+            ret false
+        end
+        pn := at.At(a, p)
+        k := pn.kind
+        if p == st:
+            if k == at.AST_IF or k == at.AST_VAR_DECL or k == at.AST_RETURN or k == at.AST_EXPR_STMT:
+                ret pn.a == cur
+            end
+            if k == at.AST_ASSIGN:
+                ret pn.b == cur and sf_before_ok(s, a, pn.a, strict)
+            end
+            ret false
+        end
+        if k == at.AST_CALL:
+            if pn.a == cur or not sf_callee_ok(s, a, pn.a, strict):
+                ret false
+            end
+            mut seen := false
+            repeat at.ChildCount(a, p) in i:
+                c := at.Child(a, p, i)
+                if c == cur:
+                    seen = true
+                end
+                if not seen and not sf_before_ok(s, a, c, strict):
+                    ret false
+                end
+            end
+        else k == at.AST_BINARY:
+            if pn.op == tok.TK_AND or pn.op == tok.TK_OR:
+                if pn.a != cur:
+                    ret false
+                end
+            else pn.b == cur and not sf_before_ok(s, a, pn.a, strict):
+                ret false
+            end
+        else k == at.AST_INDEX:
+            if pn.b == cur and not sf_before_ok(s, a, pn.a, strict):
+                ret false
+            end
+            if pn.a != cur and pn.b != cur:
+                ret false
+            end
+        else k == at.AST_UNARY or k == at.AST_CAST or k == at.AST_MEMBER or k == at.AST_TERNARY:
+            if pn.a != cur:
+                ret false
+            end
+        else:
+            ret false
+        end
+        cur = p
+    end
+    ret false
+end
+
+func sf_tmp_hoist(s &: Sema, a &: at.Ast, blk: int, idx: int): int:
+    st := at.Child(a, blk, idx)
+    if st == 0:
+        ret 0
+    end
+    sk := at.KindOf(a, st)
+    if sk != at.AST_EXPR_STMT and sk != at.AST_VAR_DECL and sk != at.AST_ASSIGN and sk != at.AST_RETURN and sk != at.AST_IF:
+        ret 0
+    end
+    root := sk == at.AST_ASSIGN ? at.At(a, st).b : at.At(a, st).a
+    mut calls := Vector {} as Vector<int>
+    sf_tmp_cands(a, root, calls)
+    mut cands := Vector {} as Vector<int>
+    mut cslot := Vector {} as Vector<int>
+    repeat calls.len() in ci:
+        call := calls.get(ci)
+        repeat at.ChildCount(a, call) in ai:
+            if sf_tmp_arg_ok(s, a, call, ai):
+                cands.push(call)
+                cslot.push(ai)
+            end
+        end
+    end
+    calls.free()
+    if cands.len() == 0:
+        cands.free()
+        cslot.free()
+        ret 0
+    end
+    mut pm := HashMap {} as HashMap<int, int>
+    su_par_build(a, st, 0, pm)
+    mut ts := Vector {} as Vector<int>
+    repeat cands.len() in ti:
+        ts.push(at.Child(a, cands.get(ti), cslot.get(ti)))
+    end
+    mut added := 0
+    repeat cands.len() in q:
+        call := cands.get(q)
+        ai := cslot.get(q)
+        t := ts.get(q)
+        mut nested := false
+        mut anc := su_parent(pm, t)
+        until anc != 0 and anc != st:
+            repeat ts.len() in w:
+                if ts.get(w) == anc:
+                    nested = true
+                end
+            end
+            anc = su_parent(pm, anc)
+        end
+        if nested or not sf_tmp_valid(s, a, pm, st, t):
+            continue
+        end
+        sp := span_of(a, t)
+        tts := at.At(a, t).type_str
+        tst := at.At(a, t).sema_type
+        nm := "__tmp" + str.FromInt(t as i64)
+        decl := ea_decl(a, nm, t, false, sp)
+        mut dv := at.Get(a, decl)
+        dv.type_str = tts
+        dv.sema_type = tst
+        at.Put(a, decl, dv)
+        idn := ea_ident(a, nm, sp)
+        mut iv := at.Get(a, idn)
+        iv.type_str = tts
+        iv.sema_type = tst
+        at.Put(a, idn, iv)
+        mut cv := at.Get(a, call)
+        cv.list.set(ai, idn)
+        at.Put(a, call, cv)
+        pos := idx + added
+        mut bv := at.Get(a, blk)
+        bv.list.insert(pos, decl)
+        at.Put(a, blk, bv)
+        added += 1
+        added += sf_tmp_hoist(s, a, blk, pos)
+    end
+    pm.free()
+    cands.free()
+    cslot.free()
+    ts.free()
+    ret added
+end
+
 func sf_hoist(s &: Sema, a &: at.Ast, nid: int, arm: bool):
     if nid == 0:
         ret
@@ -305,7 +610,8 @@ func sf_hoist(s &: Sema, a &: at.Ast, nid: int, arm: bool):
         mut j := at.ChildCount(a, nid)
         until j > 0:
             j -= 1
-            _h := sf_hoist_stmt(s, a, nid, j)
+            hl := sf_hoist_stmt(s, a, nid, j)
+            _h := sf_tmp_hoist(s, a, nid, j + hl)
         end
     end
     na := at.At(a, nid).a

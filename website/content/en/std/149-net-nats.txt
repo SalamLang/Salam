@@ -1,0 +1,302 @@
+pkg.en = net/nats
+pkg.name = net/nats
+pkg.group = Network
+pkg.summary = A NATS client: publish and subscribe, request and reply, queue groups, automatic reconnection, JetStream and a key value helper.
+pkg.title = The net/nats package in Salam | NATS client
+pkg.description = The net/nats package in Salam: connect to a NATS server, publish and subscribe, request and reply, reconnect automatically, use JetStream streams and consumers and key value buckets, with examples.
+pkg.import = net.nats
+pkg.intro <<
+<p>NATS is a small, fast message bus. Programs publish messages to <em>subjects</em> such as <code>orders.eu.new</code>, other programs subscribe to subjects or patterns, and the server delivers. This package is a client for the core protocol, request and reply, queue groups, headers, JetStream streams and consumers, and a simple key value helper. It speaks the text protocol over TCP or TLS and needs nothing but the standard library.</p>
+<p>The model: <code>Connect</code> opens a connection and you pass it by reference to every call. Nothing runs in the background. Messages are read, handlers are called and PINGs are answered only while you call <code>Pump</code>, <code>NextMsg</code>, <code>Flush</code>, <code>Request</code> or <code>Fetch</code>, so a program that stops calling them stops answering the server. Failures are values: a call returns false, or a message whose <code>ok</code> is false with the reason in <code>err</code>.</p>
+<ul>
+<li><strong>Subjects</strong> are tokens joined by dots. <code>*</code> matches one token and a final <code>&gt;</code> matches the rest, in subscriptions only.</li>
+<li><strong>Queue groups</strong> split a subject among workers: each message goes to one member.</li>
+<li><strong>Payloads are text.</strong> A <code>str</code> stops at its first NUL byte, so send binary data encoded, for example with Base64.</li>
+</ul>
+
+<h2 id="guide-connect">Connecting</h2>
+<p><code>Connect</code> takes a URL such as <code>nats://127.0.0.1:4222</code>; <code>tls://</code> turns TLS on, and <code>nats://user:password@host</code> or <code>nats://token@host</code> carries credentials. <code>ConnectWith</code> takes an <code>Options</code> value for the rest. A failed connection is a connection with <code>ok</code> false, so check <code>IsConnected</code> and read <code>LastError</code>.</p>
+<pre class="code"><code>mut nc := nats.Connect("nats://127.0.0.1:4222")
+if not nats.IsConnected(nc):
+    println nats.LastError(nc)
+end</code></pre>
+
+<h2 id="guide-pubsub">Publishing and subscribing</h2>
+<p><code>Subscribe</code> returns a handle; <code>NextMsg</code> waits for its next message. Or give <code>SubscribeHandler</code> a function and let <code>Pump</code> call it. <code>Flush</code> sends a PING and waits for the PONG, which proves the server has received everything you published before it.</p>
+<pre class="code"><code>sub := nats.Subscribe(nc, "greet.*")
+nats.Publish(nc, "greet.bob", "hello")
+m := nats.NextMsg(nc, sub, 1000)
+println m.subject, m.data</code></pre>
+
+<h2 id="guide-request">Request and reply</h2>
+<p><code>Request</code> publishes with a private reply subject and waits for one answer. A responder is a <code>SubscribeReplier</code> or a handler that calls <code>Respond</code>. When nobody is subscribed, a server with headers support answers at once with <code>no responders</code> instead of making you wait for the timeout.</p>
+<pre class="code"><code>nats.SubscribeReplier(nc, "svc.up", "", (m: nats.Msg): ret str.Upper(m.data) end)
+r := nats.Request(nc, "svc.up", "quiet", 1000)</code></pre>
+
+<h2 id="guide-reconnect">Reconnecting</h2>
+<p>By default a lost connection is closed for good. Set <code>max_reconnects</code> to a positive number, or a negative one to never give up, and the client reconnects by itself. It walks the list made of the URL and <code>servers</code>, waits <code>reconnect_wait_ms</code> between attempts, sends all subscriptions again (an <code>AutoUnsubscribe</code> limit counts only what is left) and then sends the publishes that were held while the link was down, up to <code>reconnect_buffer</code> bytes. Reconnecting happens inside <code>Pump</code>, <code>NextMsg</code>, <code>Flush</code> and <code>Request</code>, since nothing runs in the background. A request that was already on its way when the link broke gets no answer and times out. Errors such as a refused login close the connection instead of retrying.</p>
+<pre class="code"><code>mut opts := nats.DefaultOptions()
+opts.servers.push("nats://10.0.0.2:4222")
+opts.max_reconnects = 20
+opts.reconnect_wait_ms = 500</code></pre>
+
+<h2 id="guide-jetstream">JetStream</h2>
+<p>JetStream stores messages in streams and hands them to consumers. <code>AddStream</code> makes a stream for some subjects, <code>JSPublish</code> publishes and returns the receipt with the stored sequence number, and a pull consumer made with <code>AddConsumer</code> is read with <code>Fetch</code>. Acknowledge every message with <code>Ack</code>; <code>Nak</code> asks for a redelivery and <code>Term</code> gives up on a message.</p>
+<p>A push consumer made with <code>AddPushConsumer</code> has the server send messages to a subject you subscribed to. Read them with <code>NextPush</code>, which also answers flow control and skips heartbeats. Any other JetStream call is available through <code>JSRequest</code>.</p>
+
+<h2 id="guide-kv">Key value buckets</h2>
+<p>A bucket is a stream called <code>KV_</code> followed by its name, with one subject for each key. <code>KVCreate</code>, <code>KVPut</code>, <code>KVGet</code> and <code>KVDelete</code> cover the common cases. A delete writes a marker, so <code>KVGet</code> then reports <code>found</code> false and <code>deleted</code> true. Watching keys, compare-and-set updates and purging are not provided; use <code>JSRequest</code> or the stream calls for those.</p>
+
+<h2 id="guide-limits">What to know</h2>
+<ul>
+<li>Nothing runs in the background. Call <code>Pump</code> or a waiting function regularly, or the server drops you as a slow consumer or a stale connection.</li>
+<li>A connection is not safe to use from two threads at once.</li>
+<li>Payloads stop at the first NUL byte. Binary data needs encoding.</li>
+<li>The default is no reconnecting. Turn it on with <code>max_reconnects</code>.</li>
+<li>Authentication is user and password or a token. NKeys, JWT credentials and client certificates are not supported.</li>
+<li>JetStream calls need a server started with JetStream. Without it they return <code>jetstream not enabled</code> or <code>no responders</code>.</li>
+</ul>
+>>
+
+doc.JSResult = The answer to a JetStream API call: <code>ok</code> is false when the call failed or the server said no.
+doc.JSResult.ok = True when the call worked.
+doc.JSResult.err = The error text from the server or the client, empty when the call worked.
+doc.JSResult.code = The JetStream error code, for example 10059 for a stream that does not exist. Zero when there is none.
+doc.JSResult.raw = The JSON the server answered with, for fields this package does not read.
+doc.StreamState = What <code>StreamInfo</code> returns about a stream.
+doc.StreamState.ok = True when the information was read.
+doc.StreamState.err = The error text when it was not.
+doc.StreamState.name = The name of the stream.
+doc.StreamState.messages = The number of messages stored.
+doc.StreamState.bytes = The size of the stored messages in bytes.
+doc.StreamState.first_seq = The sequence number of the oldest stored message.
+doc.StreamState.last_seq = The sequence number of the newest stored message.
+doc.StreamState.consumers = How many consumers the stream has.
+doc.PubAck = The server's receipt for a message published to a stream.
+doc.PubAck.ok = True when the stream stored the message.
+doc.PubAck.err = The error text when it did not; <code>no responders</code> means no stream listens on the subject.
+doc.PubAck.stream = The name of the stream that stored the message.
+doc.PubAck.seq = The sequence number the message got in the stream.
+doc.PubAck.duplicate = True when the server saw the same <code>Nats-Msg-Id</code> header recently and ignored the message.
+doc.Batch = The messages one <code>Fetch</code> call brought back.
+doc.Batch.msgs = The messages, in order. Acknowledge each one.
+doc.Batch.err = Why the batch is empty: a timeout, or the server's status text. Empty when there are messages.
+doc.KVEntry = The result of reading a key from a key value bucket.
+doc.KVEntry.ok = True when the call itself worked, even if the key is not there.
+doc.KVEntry.found = True when the key exists and holds a value.
+doc.KVEntry.deleted = True when the newest entry for the key is a delete marker.
+doc.KVEntry.key = The key that was asked for.
+doc.KVEntry.value = The value, empty when the key was not found.
+doc.KVEntry.revision = The revision of the entry: its sequence number in the bucket's stream.
+doc.KVEntry.err = The error text, or <code>key not found</code>.
+doc.Header = A list of message headers. A name can appear more than once, and names compare without regard to case.
+doc.Header.keys = The header names, in the order they were added.
+doc.Header.values = The values, one for each name in <code>keys</code>.
+doc.Msg = A message received from the server, or the empty result of a call that failed.
+doc.Msg.ok = True for a real message. A timeout or an error gives a message with <code>ok</code> false and the reason in <code>err</code>.
+doc.Msg.err = The reason a call returned no message, such as <code>timeout</code> or <code>no responders</code>.
+doc.Msg.subject = The subject the message was published to.
+doc.Msg.reply = The subject to answer on, empty when the sender does not want an answer.
+doc.Msg.data = The payload as text. It stops at the first NUL byte.
+doc.Msg.header = The headers of the message.
+doc.Msg.sid = The subscription id the message arrived on.
+doc.Msg.status = The status code of a message sent by the server itself, such as 503 for no responders or 100 for a heartbeat. Zero for an ordinary message.
+doc.Msg.status_text = The text that goes with <code>status</code>.
+doc.Subscription = A handle for one subscription, used to read its messages and to cancel it.
+doc.Subscription.ok = True when the subscription was made.
+doc.Subscription.sid = The id the server knows the subscription by.
+doc.Subscription.subject = The subject or pattern subscribed to.
+doc.Subscription.queue = The queue group, empty for a plain subscription.
+doc.ServerInfo = What the server said about itself in its INFO message when the connection opened.
+doc.ServerInfo.server_id = The unique id of the server.
+doc.ServerInfo.server_name = The name of the server.
+doc.ServerInfo.version = The server's version.
+doc.ServerInfo.host = The host the server is listening on.
+doc.ServerInfo.port = The port the server is listening on.
+doc.ServerInfo.proto = The protocol version the server speaks.
+doc.ServerInfo.client_id = The id the server gave this connection.
+doc.ServerInfo.max_payload = The largest message the server accepts, in bytes.
+doc.ServerInfo.headers = True when the server supports headers.
+doc.ServerInfo.tls_required = True when the server wants TLS.
+doc.ServerInfo.auth_required = True when the server wants credentials.
+doc.ServerInfo.jetstream = True when JetStream is turned on.
+doc.ServerInfo.raw = The whole INFO JSON, for fields this package does not read.
+doc.Options = Settings for <code>ConnectWith</code>. Start from <code>DefaultOptions</code> and change what you need.
+doc.Options.name = A name for this client, shown in the server's connection list.
+doc.Options.user = The user name. A <code>user:password@</code> part in the URL does the same.
+doc.Options.password = The password for <code>user</code>.
+doc.Options.token = An authentication token. A URL of the form <code>nats://token@host</code> sets it too.
+doc.Options.no_echo = When true the server does not send this connection the messages it publishes itself.
+doc.Options.verbose = Ask the server to answer every command with +OK. Rarely useful.
+doc.Options.pedantic = Ask the server to check subjects strictly.
+doc.Options.secure = Use TLS even when the server does not require it. A <code>tls://</code> URL does the same.
+doc.Options.insecure_skip_verify = Do not check the server's certificate. For testing only.
+doc.Options.timeout_ms = How long connecting may take, in milliseconds. Zero means 5000.
+doc.Options.ping_interval_ms = How long the line may be silent before the client sends a PING. Zero turns the check off.
+doc.Options.max_pings_out = How many PINGs may go unanswered before the connection counts as stale.
+doc.Options.inbox_prefix = The start of the private subjects used for replies. Change it when your permissions only allow a certain prefix.
+doc.Options.servers = More servers to try. The URL given to <code>ConnectWith</code> comes first, then these in order.
+doc.Options.max_reconnects = How many failed attempts in a row end the reconnecting: 0 turns reconnecting off, a negative number never gives up.
+doc.Options.reconnect_wait_ms = How long to wait between attempts in milliseconds.
+doc.Options.reconnect_buffer = How many bytes of publishes are held while the link is down. Over the limit, <code>Publish</code> returns false.
+doc.Stats = Counters for one connection.
+doc.Stats.in_msgs = Messages received.
+doc.Stats.out_msgs = Messages published.
+doc.Stats.in_bytes = Payload bytes received.
+doc.Stats.out_bytes = Payload bytes published.
+doc.Conn = One connection to a NATS server. Make it with <code>Connect</code> and pass it by reference to every call.
+doc.Conn.ok = True while the connection is up.
+doc.Conn.closed = True once the connection is closed for good.
+doc.Conn.draining = True while <code>Drain</code> is running.
+doc.Conn.err = The last error text.
+doc.Conn.url = The URL of the server the connection is on now.
+doc.Conn.info = What the server said about itself.
+doc.Conn.opts = The options the connection was made with.
+doc.Conn.stats = The message counters.
+doc.DefaultOptions = Returns the default options: five seconds to connect, a ping every two minutes and no reconnecting.
+doc.NewHeader = Returns an empty header list.
+doc.HeaderAdd = Adds a header. Adding a name again keeps both values.
+doc.HeaderDel = Removes every header with this name.
+doc.HeaderSet = Replaces every header with this name by a single one.
+doc.HeaderGet = Returns the first value of a header, or an empty text. The name is compared without regard to case.
+doc.HeaderValues = Returns every value of a header. Free the vector.
+doc.HeaderHas = True when a header with this name exists.
+doc.HeaderCount = The number of header lines.
+doc.HeaderEncode = Writes the headers in the wire form, <code>NATS/1.0</code> followed by one line for each header.
+doc.HeaderParse = Reads a wire header block. The status code and text on the first line, such as <code>503 No Responders</code>, come back through the two reference parameters.
+doc.NewInbox = Returns a fresh private subject to receive an answer on, built from <code>inbox_prefix</code> and random text.
+doc.ValidSubject = True when the text is a legal subject to publish to: tokens separated by dots, no empty token, no spaces and no wildcards.
+doc.SubjectMatches = True when a subject matches a pattern. <code>*</code> stands for one token and a final <code>&gt;</code> for one or more.
+doc.Pump = Waits up to the timeout for data, handles everything that arrived (calling handlers, answering PINGs, queueing messages) and returns how many messages it dealt with. While the link is down it runs reconnect attempts instead.
+doc.Connect = Connects to a server with the default options. Check <code>IsConnected</code>; a failed connection has the reason in <code>err</code>.
+doc.ConnectWith = Connects with the given options. It tries the URL and then each entry of <code>servers</code> once and keeps the first that answers.
+doc.IsConnected = True when the connection is up. It is false while reconnecting.
+doc.IsClosed = True once the connection is closed for good.
+doc.LastError = The text of the last error.
+doc.Close = Closes the connection at once. Anything not yet sent is lost; use <code>Drain</code> to finish cleanly.
+doc.Publish = Sends a message to a subject. Returns false when the subject is invalid, the payload is over the server's limit, the connection is closed or the reconnect buffer is full. While reconnecting, the message is held and sent after the link is back.
+doc.PublishRequest = Publishes with a reply subject, so that the receiver can answer on it.
+doc.PublishHeaders = Publishes with headers. The server must support headers.
+doc.PublishMsg = Publishes a whole message: its subject, reply, headers and data.
+doc.Respond = Answers a message on its reply subject. Returns false when the message has none.
+doc.Subscribe = Subscribes to a subject or a pattern. Read the messages with <code>NextMsg</code>.
+doc.QueueSubscribe = Subscribes as part of a queue group: each message goes to only one member of the group.
+doc.SubscribeHandler = Subscribes and calls the handler for every message. The handler runs while you call <code>Pump</code>, <code>NextMsg</code>, <code>Flush</code> or <code>Request</code>.
+doc.SubscribeReplier = Subscribes and sends whatever the handler returns back to the message's reply subject.
+doc.Unsubscribe = Cancels a subscription and drops its waiting messages.
+doc.AutoUnsubscribe = Cancels the subscription by itself after this many messages in total. The limit survives a reconnect.
+doc.IsValidSubscription = True while the subscription is active.
+doc.Delivered = How many messages the subscription has received.
+doc.Pending = How many received messages are waiting to be read with <code>NextMsg</code>.
+doc.NextMsg = Returns the next message of a subscription, waiting up to the timeout. On a timeout the result has <code>ok</code> false and <code>err</code> <code>timeout</code>.
+doc.Flush = Sends a PING and waits for the PONG, which proves the server has everything sent so far. It waits through a reconnect too.
+doc.Request = Sends a message and waits for one answer. A request nobody listens to ends at once with <code>no responders</code>.
+doc.RequestMsg = Like <code>Request</code> but with headers.
+doc.Drain = Stops the subscriptions, handles what is already on its way, flushes and closes. Returns false if the flush timed out.
+doc.MaxPayload = The largest payload the server accepts, in bytes.
+doc.SubscriptionCount = The number of active subscriptions.
+doc.IsReconnecting = True while the link is down and the client is trying to get it back.
+doc.Reconnects = How many times the connection has been re-established.
+doc.BufferedBytes = How many bytes of publishes are waiting for the link to come back.
+doc.JSRequest = Calls any JetStream API subject, given without the <code>$JS.API.</code> start, with a JSON body.
+doc.AddStream = Creates a file-backed stream that stores messages published to the given subjects.
+doc.DeleteStream = Deletes a stream and its messages.
+doc.PurgeStream = Removes every message from a stream and keeps the stream.
+doc.StreamInfo = Reads a stream's message counts and consumer count.
+doc.JSPublish = Publishes to a stream and waits for the receipt.
+doc.JSPublishHeaders = Publishes with headers. A <code>Nats-Msg-Id</code> header lets the server drop duplicates.
+doc.AddConsumer = Creates a durable pull consumer with explicit acknowledgements. An empty filter takes every subject of the stream.
+doc.DeleteConsumer = Deletes a durable consumer.
+doc.Fetch = Asks a pull consumer for up to <code>batch</code> messages and waits up to the timeout for them. Heartbeats are skipped.
+doc.Ack = Tells the server the message is done.
+doc.Nak = Tells the server the message failed so it will send it again.
+doc.Term = Tells the server never to send this message again.
+doc.InProgress = Tells the server work is still going on, which resets its acknowledgement timer.
+doc.MsgSequence = Reads the stream sequence number out of the reply subject of a JetStream message. Zero when the message is not from JetStream.
+doc.AddPushConsumer = Creates a durable push consumer: the server sends its messages to the <code>deliver</code> subject. Subscribe to that subject first. With an empty <code>queue</code> flow control and heartbeats are turned on.
+doc.NextPush = Like <code>NextMsg</code> for a push consumer's subscription, but it answers flow control requests and skips idle heartbeats by itself.
+doc.KVCreate = Creates a key value bucket, which is a stream named <code>KV_bucket</code>. <code>history</code> is how many revisions of a key are kept.
+doc.KVDeleteBucket = Deletes a bucket with all its keys.
+doc.KVPut = Writes a value and returns the receipt; its <code>seq</code> is the new revision. Keys follow subject rules, so no spaces or wildcards.
+doc.KVGet = Reads the latest value of a key. A missing or deleted key gives <code>found</code> false.
+doc.KVDelete = Marks a key deleted by writing a delete marker. Older revisions stay in the history.
+
+ex.Ack = net-nats-JetStream
+ex.AddConsumer = net-nats-JetStream
+ex.AddPushConsumer = net-nats-Push
+ex.AddStream = net-nats-JetStream
+ex.AutoUnsubscribe = net-nats-PubSub
+ex.BufferedBytes = net-nats-Reconnect
+ex.Close = net-nats-Connect
+ex.Connect = net-nats-Connect
+ex.ConnectWith = net-nats-Connect
+ex.DefaultOptions = net-nats-Connect
+ex.DeleteConsumer = net-nats-JetStream
+ex.DeleteStream = net-nats-JetStream
+ex.Delivered = net-nats-PubSub
+ex.Drain = net-nats-Request
+ex.Fetch = net-nats-JetStream
+ex.Flush = net-nats-PubSub
+ex.HeaderAdd = net-nats-Headers
+ex.HeaderCount = net-nats-Headers
+ex.HeaderDel = net-nats-Headers
+ex.HeaderEncode = net-nats-Headers
+ex.HeaderGet = net-nats-Headers
+ex.HeaderHas = net-nats-Headers
+ex.HeaderParse = net-nats-Headers
+ex.HeaderSet = net-nats-Headers
+ex.HeaderValues = net-nats-Headers
+ex.InProgress = net-nats-JetStream
+ex.IsClosed = net-nats-Connect
+ex.IsConnected = net-nats-Connect
+ex.IsReconnecting = net-nats-Reconnect
+ex.IsValidSubscription = net-nats-PubSub
+ex.JSPublish = net-nats-JetStream
+ex.JSPublishHeaders = net-nats-JetStream
+ex.JSRequest = net-nats-JetStream
+ex.KVCreate = net-nats-KV
+ex.KVDelete = net-nats-KV
+ex.KVDeleteBucket = net-nats-KV
+ex.KVGet = net-nats-KV
+ex.KVPut = net-nats-KV
+ex.LastError = net-nats-Connect
+ex.MaxPayload = net-nats-Connect
+ex.MsgSequence = net-nats-JetStream
+ex.Nak = net-nats-JetStream
+ex.NewHeader = net-nats-Headers
+ex.NewInbox = net-nats-Request
+ex.NextMsg = net-nats-PubSub
+ex.NextPush = net-nats-Push
+ex.Pending = net-nats-PubSub
+ex.Publish = net-nats-PubSub
+ex.PublishHeaders = net-nats-Headers
+ex.PublishMsg = net-nats-Handlers
+ex.PublishRequest = net-nats-Request
+ex.Pump = net-nats-Handlers
+ex.PurgeStream = net-nats-JetStream
+ex.QueueSubscribe = net-nats-PubSub
+ex.Reconnects = net-nats-Reconnect
+ex.Request = net-nats-Request
+ex.RequestMsg = net-nats-Request
+ex.Respond = net-nats-Handlers
+ex.StreamInfo = net-nats-JetStream
+ex.SubjectMatches = net-nats-Subjects
+ex.Subscribe = net-nats-PubSub
+ex.SubscribeHandler = net-nats-Handlers
+ex.SubscribeReplier = net-nats-Handlers
+ex.SubscriptionCount = net-nats-PubSub
+ex.Term = net-nats-JetStream
+ex.Unsubscribe = net-nats-PubSub
+ex.ValidSubject = net-nats-Subjects
+ex.JSResult = -
+ex.StreamState = -
+ex.PubAck = -
+ex.Batch = -
+ex.KVEntry = -
+ex.Header = -
+ex.Msg = -
+ex.Subscription = -
+ex.ServerInfo = -
+ex.Options = -
+ex.Stats = -
+ex.Conn = -

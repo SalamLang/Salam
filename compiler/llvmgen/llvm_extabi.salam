@@ -404,6 +404,61 @@ func ex_param_text(e: ExArg, lty: str): str:
     ret "ptr"
 end
 
+func ex_param_ty(v &: Lv, s &: sm.Sema, a &: at.Ast, sig: int, j: int, cname: str): str:
+    if param_is_ref(s, a, sig, j):
+        ret "ptr"
+    end
+    pex := ex_param(v, s, a, sig, j)
+    if pex.mode == EXM_REGS:
+        ret ex_param_text(pex, "")
+    end
+    if pex.mode != EXM_NONE:
+        ret "ptr"
+    end
+    pty := ty_of(v, s, a, sm.ToString(s, sm.SigAt(s, sig).params.get(j)))
+    if str.Equals(pty, "i64") and not str.Equals(v.usize, "i64") and libc_size_param(cname, j):
+        ret v.usize
+    end
+    ret pty
+end
+
+func ex_va_callty(v &: Lv, s &: sm.Sema, a &: at.Ast, sig: int, cname: str): str:
+    sg := sm.SigAt(s, sig)
+    if not sg.variadic or not sig_is_extern(s, a, sig):
+        ret ""
+    end
+    mut b := co.SbNew()
+    co.SbPuts(b, " (")
+    rmode := ex_classify(v, s, a, sm.ToString(s, sg.ret_type)).mode
+    if rmode != EXM_NONE and rmode != EXM_REGS:
+        co.SbPuts(b, "ptr, ")
+    end
+    repeat sg.params.len() in j:
+        co.SbPuts(b, ex_param_ty(v, s, a, sig, j, cname) + ", ")
+    end
+    co.SbPuts(b, "...)")
+    r := co.SbCstr(b)
+    co.SbFree(b)
+    ret r
+end
+
+func ex_va_promote(v &: Lv, ty: str, ref2: str, sgn: bool, out_ty &: str): str:
+    if str.Equals(ty, "float"):
+        r := new_tmp(v)
+        emit(v, r + " = fpext float " + ref2 + " to double")
+        out_ty = "double"
+        ret r
+    end
+    if str.Equals(ty, "i1") or str.Equals(ty, "i8") or str.Equals(ty, "i16"):
+        r2 := new_tmp(v)
+        emit(v, r2 + " = " + (sgn and not str.Equals(ty, "i1") ? "sext " : "zext ") + ty + " " + ref2 + " to i32")
+        out_ty = "i32"
+        ret r2
+    end
+    out_ty = ty
+    ret ref2
+end
+
 func ex_ret_ty(e: ExArg): str:
     if e.mode == EXM_REGS:
         if e.pieces.len() == 1:
@@ -461,14 +516,16 @@ func ex_emit_arg(v &: Lv, ab &: str.StringBuilder, e: ExArg, lty: str, ref2: str
     end
 end
 
-func ex_emit_call(v &: Lv, s &: sm.Sema, a &: at.Ast, e: ExArg, rts: str, cc: str, fname: str, argsx: str): Llv:
+func ex_emit_call(
+    v &: Lv, s &: sm.Sema, a &: at.Ast, e: ExArg, rts: str, cc: str, callty: str, fname: str, argsx: str
+): Llv:
     lty := ty_of(v, s, a, rts)
     res := new_tmp(v)
     if e.mode == EXM_REGS:
         slot := ex_slot(v, e.size)
         rty := ex_ret_ty(e)
         r := new_tmp(v)
-        emit(v, r + " = call" + cc + " " + rty + " " + gsym(fname) + "(" + argsx + ")")
+        emit(v, r + " = call" + cc + " " + rty + callty + " " + gsym(fname) + "(" + argsx + ")")
         if e.pieces.len() == 1:
             emit(v, "store " + rty + " " + r + ", ptr " + slot)
         else:
@@ -488,7 +545,7 @@ func ex_emit_call(v &: Lv, s &: sm.Sema, a &: at.Ast, e: ExArg, rts: str, cc: st
     if str.Len(argsx) > 0:
         full = full + ", " + argsx
     end
-    emit(v, "call" + cc + " void " + gsym(fname) + "(" + full + ")")
+    emit(v, "call" + cc + " void" + callty + " " + gsym(fname) + "(" + full + ")")
     emit(v, res + " = load " + lty + ", ptr " + slot2)
     ret make_llv(res, rts)
 end

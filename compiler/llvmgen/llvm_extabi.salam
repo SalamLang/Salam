@@ -36,6 +36,7 @@ struct ExArg:
     pub size: int = 0
     pub pieces: Vector<str> = Vector {}
     pub offs: Vector<int> = Vector {}
+    pub align: int = 8
 end
 
 func ex_host_arch(): str:
@@ -71,7 +72,7 @@ end
 
 func ex_scalar_size(v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str): int:
     if is_str(s, ts) or is_ptr_ts(ts):
-        ret 8
+        ret v.ptr_bits / 8
     end
     if str.Equals(ts, "f32"):
         ret 4
@@ -341,45 +342,144 @@ func ex_reg_need(e: ExArg, ni &: int, ns &: int):
     end
 end
 
+func ex_sysv_fits(e: ExArg, gi: int, fi: int): bool:
+    mut ni := 0
+    mut ns := 0
+    ex_reg_need(e, ni, ns)
+    ret (ni == 0 or ni <= gi) and (ns == 0 or ns <= fi)
+end
+
+func ex_sysv_take(v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str, is_ref: bool, gi &: int, fi &: int):
+    if is_ref:
+        gi -= 1
+        ret
+    end
+    ke := ex_classify(v, s, a, ts)
+    if ke.mode == EXM_REGS:
+        if ex_sysv_fits(ke, gi, fi):
+            mut ni := 0
+            mut ns := 0
+            ex_reg_need(ke, ni, ns)
+            gi -= ni
+            fi -= ns
+        end
+    else ke.mode == EXM_NONE:
+        kty := ty_of(v, s, a, ts)
+        if str.Equals(kty, "float") or str.Equals(kty, "double"):
+            fi -= 1
+        else is_slice(ts):
+            gi -= 2
+        else:
+            gi -= 1
+        end
+    end
+end
+
+func ex_sysv_fixed(v &: Lv, s &: sm.Sema, a &: at.Ast, sig: int, upto: int, gi &: int, fi &: int):
+    sg := sm.SigAt(s, sig)
+    gi = 6
+    fi = 8
+    if ex_classify(v, s, a, sm.ToString(s, sg.ret_type)).mode == EXM_BYVAL:
+        gi -= 1
+    end
+    repeat upto in k:
+        ex_sysv_take(v, s, a, sm.ToString(s, sg.params.get(k)), param_is_ref(s, a, sig, k), gi, fi)
+    end
+end
+
 func ex_param(v &: Lv, s &: sm.Sema, a &: at.Ast, sig: int, j: int): ExArg:
     sg := sm.SigAt(s, sig)
     mut e := ex_classify(v, s, a, sm.ToString(s, sg.params.get(j)))
     if e.mode != EXM_REGS or ex_arch(v) != EXA_SYSV:
         ret e
     end
-    mut gi := 6
-    mut fi := 8
-    if ex_classify(v, s, a, sm.ToString(s, sg.ret_type)).mode == EXM_BYVAL:
-        gi -= 1
+    mut gi := 0
+    mut fi := 0
+    ex_sysv_fixed(v, s, a, sig, j, gi, fi)
+    if not ex_sysv_fits(e, gi, fi):
+        e.mode = EXM_BYVAL
     end
-    mut ni := 0
-    mut ns := 0
-    repeat j in k:
-        kts := sm.ToString(s, sg.params.get(k))
-        if param_is_ref(s, a, sig, k):
-            gi -= 1
-        else:
-            ke := ex_classify(v, s, a, kts)
-            if ke.mode == EXM_REGS:
-                ex_reg_need(ke, ni, ns)
-                if ni <= gi and ns <= fi:
-                    gi -= ni
-                    fi -= ns
-                end
-            else ke.mode == EXM_NONE:
-                kty := ty_of(v, s, a, kts)
-                if str.Equals(kty, "float") or str.Equals(kty, "double"):
-                    fi -= 1
-                else is_slice(kts):
-                    gi -= 2
-                else:
-                    gi -= 1
-                end
+    ret e
+end
+
+func ex_va_other(v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str): ExArg:
+    mut r := ExArg {}
+    arch := str.Len(v.triple) > 0 ? outbuf_arch(v) : ""
+    if str.Equals(arch, "i386") or str.Equals(arch, "i486") or str.Equals(arch, "i586") or str.Equals(arch, "i686"):
+        r.mode = EXM_BYVAL
+        r.align = 4
+        ret r
+    end
+    mut al := 1
+    size := ex_layout(v, s, a, ts, al)
+    if size <= 0:
+        ret r
+    end
+    r.size = size
+    if str.StartsWith(arch, "arm") or str.StartsWith(arch, "thumb"):
+        r.align = al > 4 ? 8 : 4
+        if size > 64:
+            r.mode = EXM_BYVAL
+            ret r
+        end
+        r.mode = EXM_REGS
+        r.pieces.push("[" + co.I64Toa(((size + r.align - 1) / r.align) as i64) + " x i" + co.I64Toa((r.align * 8) as i64) + "]")
+        r.offs.push(0)
+        ret r
+    end
+    if str.Equals(arch, "riscv64"):
+        if size > 16:
+            r.mode = EXM_COPY
+            ret r
+        end
+        r.mode = EXM_REGS
+        r.pieces.push(size <= 8 ? "i64" : "[2 x i64]")
+        r.offs.push(0)
+    end
+    ret r
+end
+
+func ex_va_arg(v &: Lv, s &: sm.Sema, a &: at.Ast, sig: int, call: int, i: int, ts: str): ExArg:
+    arch := ex_arch(v)
+    if arch == EXA_NONE:
+        ret ex_va_other(v, s, a, ts)
+    end
+    mut e := ex_classify(v, s, a, ts)
+    if e.mode != EXM_REGS:
+        ret e
+    end
+    if arch == EXA_AARCH64 and target_is_windows_of(v.triple):
+        pc := e.pieces.get(0)
+        if str.Contains(pc, "float") or str.Contains(pc, "double"):
+            mut w := ExArg {}
+            w.size = e.size
+            if e.size > 16:
+                w.mode = EXM_COPY
+            else:
+                w.mode = EXM_REGS
+                w.pieces.push(e.size <= 8 ? "i64" : "[2 x i64]")
+                w.offs.push(0)
             end
+            ret w
+        end
+        ret e
+    end
+    if arch != EXA_SYSV:
+        ret e
+    end
+    mut gi := 0
+    mut fi := 0
+    np := sm.SigAt(s, sig).params.len()
+    ex_sysv_fixed(v, s, a, sig, np, gi, fi)
+    if call != 0:
+        cl := at.Get(a, call).list
+        mut j := np
+        until j < i:
+            ex_sysv_take(v, s, a, at.Get(a, cl.get(j)).type_str, false, gi, fi)
+            j += 1
         end
     end
-    ex_reg_need(e, ni, ns)
-    if ni > gi or ns > fi:
+    if not ex_sysv_fits(e, gi, fi):
         e.mode = EXM_BYVAL
     end
     ret e
@@ -399,7 +499,7 @@ func ex_param_text(e: ExArg, lty: str): str:
         ret r
     end
     if e.mode == EXM_BYVAL:
-        ret "ptr byval(" + lty + ") align 8"
+        ret "ptr byval(" + lty + ") align " + co.I64Toa(e.align as i64)
     end
     ret "ptr"
 end
@@ -510,7 +610,7 @@ func ex_emit_arg(v &: Lv, ab &: str.StringBuilder, e: ExArg, lty: str, ref2: str
     emit_alloca(v, slot2 + " = alloca " + lty + ", align 8")
     emit(v, "store " + lty + " " + ref2 + ", ptr " + slot2)
     if e.mode == EXM_BYVAL:
-        co.SbPuts(ab, "ptr byval(" + lty + ") align 8 " + slot2)
+        co.SbPuts(ab, "ptr byval(" + lty + ") align " + co.I64Toa(e.align as i64) + " " + slot2)
     else:
         co.SbPuts(ab, "ptr " + slot2)
     end

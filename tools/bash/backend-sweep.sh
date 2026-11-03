@@ -176,6 +176,12 @@ for section in $SECTIONS; do
                 fi
                 ;;
             llvm | native)
+                if [ -f "$dir/$name.c" ]; then
+                    mkdir -p "$WORK/clib"
+                    ${CC:-cc} -c "$dir/$name.c" -o "$WORK/clib/$name.o" >/dev/null 2>&1 &&
+                        ar rcs "$WORK/clib/lib$name.a" "$WORK/clib/$name.o" >/dev/null 2>&1
+                    defs="$defs --libpath=$WORK/clib"
+                fi
                 # shellcheck disable=SC2086
                 if (cd "$WORK" && timeout "${SALAM_SWEEP_TIMEOUT:-200}" "$SALAM_BIN" build "$ROOT/$f" $defs \
                     --backend="$BACKEND" --output=sweep.exe --no-color --log-level=error --lang="$lang") >/dev/null 2>&1 &&

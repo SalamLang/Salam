@@ -895,6 +895,33 @@ if want general; then
             [ -f "$exp" ] || continue
             def=$(grep -o 'DEFINE: [A-Za-z0-9_]*' "$f" | sed 's/DEFINE: /-D/' | tr '\n' ' ')
             def="$def$(grep -o 'CONST: [!-~]*' "$f" | sed 's/CONST: /-d/' | tr '\n' ' ')"
+            if [ -f "tests/$lang/general/$name.c" ]; then
+                case "${SALAM_BACKEND:-c}:${SALAM_CC:-}:$HOST_ARCH:$HOST_OS" in
+                c:*tcc*:x64:linux | c:*tcc*:x64:mac)
+                    note_result "SKIP general/$lang/$name (tcc does not pass structs that mix float and integer fields the x86-64 C way)" "general/$lang/$name"
+                    continue
+                    ;;
+                esac
+                hcc=""
+                for c in ${CC:-} cc gcc clang; do
+                    command -v "$c" >/dev/null 2>&1 && {
+                        hcc=$c
+                        break
+                    }
+                done
+                if [ -z "$hcc" ]; then
+                    note_result "SKIP general/$lang/$name (no C compiler for its C helper)" "general/$lang/$name"
+                    continue
+                fi
+                clib="$WORK/clib_${lang}_$name"
+                mkdir -p "$clib"
+                if ! { "$hcc" -c "tests/$lang/general/$name.c" -o "$clib/$name.o" &&
+                    "$MOCK_AR" rcs "$clib/lib$name.a" "$clib/$name.o"; } >/dev/null 2>&1; then
+                    note_result "FAIL general/$lang/$name (its C helper does not build)" "general/$lang/$name"
+                    continue
+                fi
+                def="--libpath=$clib $def"
+            fi
             add_job build "general/$lang/$name" "$f" "$lang" "$exp" "${def:--}"
         done
     done

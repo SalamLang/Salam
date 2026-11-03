@@ -156,6 +156,10 @@ pub const AST_ORDER_FUNC := 4
 
 pub const AST_ORDER_NONE := 0 - 1
 
+const NODE_PAGE_SHIFT := 15
+
+const NODE_PAGE_MASK := 32767
+
 k_ast_names := [
     "Program", "Import", "Link", "TypeAlias", "ConstDecl", "FunctionDef", "Param", "StructDef", "Field", "InterfaceDef", "ImplDef", "EnumDef", "EnumMember", "Block", "VariableDecl", "Assignment", "IfStmt", "UntilStmt", "ForStmt", "RepeatStmt", "EachStmt", "ReturnStmt", "BreakStmt", "ContinueStmt", "DeferStmt", "ExprStmt", "BinaryExpr", "UnaryExpr", "IncDecExpr", "Cast", "Literal", "Identifier", "FuncAddr", "This", "Call", "MemberAccess", "ArrayAccess", "SliceExpr", "TernaryExpr", "Lambda", "ArrayLiteral", "StructLiteral", "FieldInit", "Type", "LayoutBlock", "LayoutElement", "LayoutAttribute", "LayoutComponent", "MatchExpr", "MatchArm", "MatchPattern", "VariantBox", "VariantUnwrap", "SwitchStmt", "CaseClause", "CaseItem", "Try", "ThrowStmt", "TryPrefix", "TryBlock"
 ]
@@ -218,11 +222,7 @@ pub struct Node:
     pub c: NodeId = 0
     pub d: NodeId = 0
     pub list: Vector<int> = Vector {}
-    pub dims: Vector<int> = Vector {}
-    pub typarams: Vector<str> = Vector {}
-    pub typaram_bounds: Vector<str> = Vector {}
-    pub aliases: Vector<str> = Vector {}
-    pub captures: Vector<int> = Vector {}
+    pub ext: int = 0
     pub type_str: str = ""
     pub sema_type: int = -1
     pub sema_base_type: int = -1
@@ -230,12 +230,58 @@ pub struct Node:
     pub origin_lang: str = ""
 end
 
+pub struct NodeExt:
+    pub dims: Vector<int> = Vector {}
+    pub typarams: Vector<str> = Vector {}
+    pub typaram_bounds: Vector<str> = Vector {}
+    pub aliases: Vector<str> = Vector {}
+    pub captures: Vector<int> = Vector {}
+end
+
 pub struct Ast:
-    pub nodes: Vector<Node> = Vector {}
+    pub pages: Vector<Vector<Node>> = Vector {}
+    pub total: int = 0
+    pub exts: Vector<NodeExt> = Vector {}
     pub pruned_names: Vector<str> = Vector {}
     pub pruned_files: Vector<str> = Vector {}
     pub pruned_write_files: Vector<str> = Vector {}
     pub pruned_writes: Vector<str> = Vector {}
+end
+
+func node_ref(a &: Ast, id: NodeId): Node*:
+    p := a.pages.ref(id >> NODE_PAGE_SHIFT)
+    ret p.ref(id & NODE_PAGE_MASK)
+end
+
+func page_add(a &: Ast):
+    mut pg := Vector {} as Vector<Node>
+    pg.reserve(NODE_PAGE_MASK + 1)
+    a.pages.push(pg)
+end
+
+func page_push(a &: Ast, n: Node):
+    p := a.pages.ref(a.total >> NODE_PAGE_SHIFT)
+    p.push(n)
+end
+
+func node_push(a &: Ast, n: Node):
+    if (a.total & NODE_PAGE_MASK) == 0:
+        page_add(a)
+    end
+    page_push(a, n)
+    a.total += 1
+end
+
+func ensure_ext(a &: Ast, id: NodeId): int:
+    n := node_ref(a, id)
+    if n.ext != 0:
+        ret n.ext
+    end
+    e := a.exts.len()
+    a.exts.push(NodeExt {})
+    n2 := node_ref(a, id)
+    n2[0].ext = e
+    ret e
 end
 
 func kind_has_op(k: int): bool:
@@ -295,21 +341,30 @@ end
 
 pub func NewAst(): Ast:
     mut a := Ast {}
-    a.nodes.push(Node { kind = 0 - 1 })
+    node_push(a, Node { kind = 0 - 1 })
+    a.exts.push(NodeExt {})
     ret a
 end
 
 pub func FreeAst(a &: Ast):
-    repeat a.nodes.len() in i:
-        n := a.nodes.ref(i)
+    repeat a.total in i:
+        n := node_ref(a, i)
         n.list.free()
-        n.dims.free()
-        n.typarams.free()
-        n.typaram_bounds.free()
-        n.aliases.free()
-        n.captures.free()
     end
-    a.nodes.free()
+    repeat a.exts.len() in j:
+        e := a.exts.ref(j)
+        e.dims.free()
+        e.typarams.free()
+        e.typaram_bounds.free()
+        e.aliases.free()
+        e.captures.free()
+    end
+    repeat a.pages.len() in pj:
+        pp := a.pages.ref(pj)
+        pp.free()
+    end
+    a.pages.free()
+    a.exts.free()
     a.pruned_names.free()
     a.pruned_files.free()
     a.pruned_write_files.free()
@@ -317,36 +372,38 @@ pub func FreeAst(a &: Ast):
 end
 
 pub func Count(a &: Ast): int:
-    ret a.nodes.len()
+    ret a.total
 end
 
 pub func NewNode(a &: Ast, kind: AstKind): NodeId:
-    id := a.nodes.len()
-    a.nodes.push(Node { kind = kind })
+    id := a.total
+    node_push(a, Node { kind = kind })
     ret id
 end
 
 pub func Get(a &: Ast, id: NodeId): Node:
-    ret a.nodes.get(id)
+    n := node_ref(a, id)
+    ret n[0]
 end
 
 pub func At(a &: Ast, id: NodeId): Node*:
-    ret a.nodes.ref(id)
+    ret node_ref(a, id)
 end
 
 pub func Put(a &: Ast, id: NodeId, n: Node):
-    a.nodes.set(id, n)
+    p := node_ref(a, id)
+    p[0] = n
 end
 
 pub func KindOf(a &: Ast, id: NodeId): AstKind:
-    n := a.nodes.ref(id)
+    n := node_ref(a, id)
     ret n.kind
 end
 
 pub func SetSpan(
     a &: Ast, id: NodeId, bl: u32, bc: u32, bi: u32, el: u32, ec: u32, ei: u32, length: u32
 ):
-    n := a.nodes.ref(id)
+    n := node_ref(a, id)
     n[0].begin_line = bl
     n[0].begin_col = bc
     n[0].begin_index = bi
@@ -357,7 +414,7 @@ pub func SetSpan(
 end
 
 pub func SetName(a &: Ast, id: NodeId, name: str):
-    n := a.nodes.ref(id)
+    n := node_ref(a, id)
     n[0].name = name
 end
 
@@ -366,22 +423,22 @@ pub func NameIsErr(name: str): bool:
 end
 
 pub func SetOp(a &: Ast, id: NodeId, op: int):
-    n := a.nodes.ref(id)
+    n := node_ref(a, id)
     n[0].op = op
 end
 
 pub func SetTypeNode(a &: Ast, id: NodeId, t: NodeId):
-    n := a.nodes.ref(id)
+    n := node_ref(a, id)
     n[0].ty = t
 end
 
 pub func SetTypeStr(a &: Ast, id: NodeId, s: str):
-    n := a.nodes.ref(id)
+    n := node_ref(a, id)
     n[0].type_str = s
 end
 
 pub func SetTokenValue(a &: Ast, id: NodeId, v: tok.TokenValue):
-    n := a.nodes.ref(id)
+    n := node_ref(a, id)
     n[0].value_kind = v.kind
     n[0].value_int = v.ival
     n[0].value_float = v.fval
@@ -390,7 +447,7 @@ pub func SetTokenValue(a &: Ast, id: NodeId, v: tok.TokenValue):
 end
 
 pub func BreakLevels(a &: Ast, id: NodeId): int:
-    n := a.nodes.ref(id)
+    n := node_ref(a, id)
     if n.value_kind != tok.TV_INT:
         ret 1
     end
@@ -401,7 +458,7 @@ pub func HasMultiBreak(a &: Ast, id: NodeId): bool:
     if id == 0:
         ret false
     end
-    n := a.nodes.ref(id)
+    n := node_ref(a, id)
     if n.kind == AST_BREAK:
         ret BreakLevels(a, id) > 1
     end
@@ -420,7 +477,7 @@ pub func HasMultiBreak(a &: Ast, id: NodeId): bool:
 end
 
 pub func ValueOf(a &: Ast, id: NodeId): tok.TokenValue:
-    n := a.nodes.ref(id)
+    n := node_ref(a, id)
     mut v := tok.ValueNone()
     v.kind = n.value_kind
     v.ival = n.value_int
@@ -434,17 +491,17 @@ pub func AddChild(a &: Ast, parent: NodeId, child: NodeId):
     if child == 0:
         ret
     end
-    n := a.nodes.ref(parent)
+    n := node_ref(a, parent)
     n.list.push(child)
 end
 
 pub func Child(a &: Ast, id: NodeId, i: int): NodeId:
-    n := a.nodes.ref(id)
+    n := node_ref(a, id)
     ret n.list.get(i)
 end
 
 pub func ChildCount(a &: Ast, id: NodeId): int:
-    n := a.nodes.ref(id)
+    n := node_ref(a, id)
     ret n.list.len()
 end
 
@@ -454,7 +511,7 @@ pub func StampSrcFile(a &: Ast, prog: NodeId, file: str):
     todo.push(prog)
     until todo.len() > 0:
         id := todo.pop()
-        n := a.nodes.ref(id)
+        n := node_ref(a, id)
         n[0].src_file = file
         if n.a != 0: todo.push(n.a) end
         if n.b != 0: todo.push(n.b) end
@@ -520,70 +577,157 @@ pub func WasPrunedWrite(a &: Ast, file: str, name: str): bool:
     ret false
 end
 
+pub func Dims(a &: Ast, ext: int): Vector<int>:
+    if ext == 0:
+        ret Vector {}
+    end
+    e := a.exts.ref(ext)
+    ret e.dims
+end
+
+pub func Typarams(a &: Ast, ext: int): Vector<str>:
+    if ext == 0:
+        ret Vector {}
+    end
+    e := a.exts.ref(ext)
+    ret e.typarams
+end
+
+pub func TyparamBounds(a &: Ast, ext: int): Vector<str>:
+    if ext == 0:
+        ret Vector {}
+    end
+    e := a.exts.ref(ext)
+    ret e.typaram_bounds
+end
+
+pub func Aliases(a &: Ast, ext: int): Vector<str>:
+    if ext == 0:
+        ret Vector {}
+    end
+    e := a.exts.ref(ext)
+    ret e.aliases
+end
+
+pub func Captures(a &: Ast, ext: int): Vector<int>:
+    if ext == 0:
+        ret Vector {}
+    end
+    e := a.exts.ref(ext)
+    ret e.captures
+end
+
 pub func AddDim(a &: Ast, id: NodeId, dim: NodeId):
-    n := a.nodes.ref(id)
-    n.dims.push(dim)
+    x := ensure_ext(a, id)
+    e := a.exts.ref(x)
+    e.dims.push(dim)
 end
 
 pub func Dim(a &: Ast, id: NodeId, i: int): NodeId:
-    n := a.nodes.ref(id)
-    ret n.dims.get(i)
+    n := node_ref(a, id)
+    ret Dims(a, n.ext).get(i)
 end
 
 pub func DimCount(a &: Ast, id: NodeId): int:
-    n := a.nodes.ref(id)
-    ret n.dims.len()
+    n := node_ref(a, id)
+    ret Dims(a, n.ext).len()
+end
+
+pub func SetDim(a &: Ast, id: NodeId, i: int, dim: NodeId):
+    x := ensure_ext(a, id)
+    e := a.exts.ref(x)
+    e.dims.set(i, dim)
+end
+
+pub func SetDims(a &: Ast, id: NodeId, dims: Vector<int>):
+    x := ensure_ext(a, id)
+    e := a.exts.ref(x)
+    e.dims.free()
+    e[0].dims = dims
 end
 
 pub func AddCapture(a &: Ast, id: NodeId, cap: NodeId):
-    n := a.nodes.ref(id)
-    n.captures.push(cap)
+    x := ensure_ext(a, id)
+    e := a.exts.ref(x)
+    e.captures.push(cap)
 end
 
 pub func Capture(a &: Ast, id: NodeId, i: int): NodeId:
-    n := a.nodes.ref(id)
-    ret n.captures.get(i)
+    n := node_ref(a, id)
+    ret Captures(a, n.ext).get(i)
 end
 
 pub func CaptureCount(a &: Ast, id: NodeId): int:
-    n := a.nodes.ref(id)
-    ret n.captures.len()
+    n := node_ref(a, id)
+    ret Captures(a, n.ext).len()
+end
+
+pub func SetCapture(a &: Ast, id: NodeId, i: int, cap: NodeId):
+    x := ensure_ext(a, id)
+    e := a.exts.ref(x)
+    e.captures.set(i, cap)
+end
+
+pub func ClearCaptures(a &: Ast, id: NodeId):
+    n := node_ref(a, id)
+    if n.ext != 0:
+        e := a.exts.ref(n.ext)
+        e.captures.clear()
+    end
+end
+
+pub func ClearTyparams(a &: Ast, id: NodeId):
+    n := node_ref(a, id)
+    if n.ext != 0:
+        e := a.exts.ref(n.ext)
+        e.typarams.clear()
+    end
+end
+
+pub func ClearAliases(a &: Ast, id: NodeId):
+    n := node_ref(a, id)
+    if n.ext != 0:
+        e := a.exts.ref(n.ext)
+        e.aliases.clear()
+    end
 end
 
 pub func AddTyparam(a &: Ast, id: NodeId, name: str, bound: str):
-    n := a.nodes.ref(id)
-    n.typarams.push(name)
-    n.typaram_bounds.push(bound)
+    x := ensure_ext(a, id)
+    e := a.exts.ref(x)
+    e.typarams.push(name)
+    e.typaram_bounds.push(bound)
 end
 
 pub func Typaram(a &: Ast, id: NodeId, i: int): str:
-    n := a.nodes.ref(id)
-    ret n.typarams.get(i)
+    n := node_ref(a, id)
+    ret Typarams(a, n.ext).get(i)
 end
 
 pub func TyparamBound(a &: Ast, id: NodeId, i: int): str:
-    n := a.nodes.ref(id)
-    ret n.typaram_bounds.get(i)
+    n := node_ref(a, id)
+    ret TyparamBounds(a, n.ext).get(i)
 end
 
 pub func TyparamCount(a &: Ast, id: NodeId): int:
-    n := a.nodes.ref(id)
-    ret n.typarams.len()
+    n := node_ref(a, id)
+    ret Typarams(a, n.ext).len()
 end
 
 pub func AddAlias(a &: Ast, id: NodeId, alias: str):
-    n := a.nodes.ref(id)
-    n.aliases.push(alias)
+    x := ensure_ext(a, id)
+    e := a.exts.ref(x)
+    e.aliases.push(alias)
 end
 
 pub func Alias(a &: Ast, id: NodeId, i: int): str:
-    n := a.nodes.ref(id)
-    ret n.aliases.get(i)
+    n := node_ref(a, id)
+    ret Aliases(a, n.ext).get(i)
 end
 
 pub func AliasCount(a &: Ast, id: NodeId): int:
-    n := a.nodes.ref(id)
-    ret n.aliases.len()
+    n := node_ref(a, id)
+    ret Aliases(a, n.ext).len()
 end
 
 pub func KindName(kind: AstKind): str:
@@ -594,7 +738,7 @@ pub func KindName(kind: AstKind): str:
 end
 
 pub func ToplevelOrderPhase(a &: Ast, id: NodeId): int:
-    n := a.nodes.ref(id)
+    n := node_ref(a, id)
     if n.is_extern and n.kind == AST_VAR_DECL:
         ret AST_ORDER_IMPORT
     end
@@ -623,7 +767,7 @@ pub func StrLitLen(a &: Ast, id: NodeId): i64:
     if id == 0:
         ret (0 - 1)
     end
-    n := a.nodes.ref(id)
+    n := node_ref(a, id)
     if n.kind != AST_LITERAL:
         ret (0 - 1)
     end
@@ -640,7 +784,7 @@ pub func Clone(a &: Ast, id: NodeId): NodeId:
     if id == 0:
         ret 0
     end
-    src := a.nodes.get(id)
+    src := Get(a, id)
     mut c := src
     c.ty = Clone(a, src.ty)
     c.a = Clone(a, src.a)
@@ -651,28 +795,33 @@ pub func Clone(a &: Ast, id: NodeId): NodeId:
     repeat src.list.len() in i0:
         c.list.push(Clone(a, src.list.get(i0)))
     end
-    c.dims = Vector {} as Vector<int>
-    repeat src.dims.len() in i1:
-        c.dims.push(Clone(a, src.dims.get(i1)))
+    c.ext = 0
+    mut cdims := Vector {} as Vector<int>
+    mut ccaps := Vector {} as Vector<int>
+    repeat Dims(a, src.ext).len() in i1:
+        cdims.push(Clone(a, Dims(a, src.ext).get(i1)))
     end
-    c.captures = Vector {} as Vector<int>
-    repeat src.captures.len() in i2:
-        c.captures.push(Clone(a, src.captures.get(i2)))
+    repeat Captures(a, src.ext).len() in i2:
+        ccaps.push(Clone(a, Captures(a, src.ext).get(i2)))
     end
-    c.typarams = Vector {} as Vector<str>
-    repeat src.typarams.len() in i3:
-        c.typarams.push(src.typarams.get(i3))
+    nid := a.total
+    node_push(a, c)
+    if src.ext != 0:
+        repeat cdims.len() in k1:
+            AddDim(a, nid, cdims.get(k1))
+        end
+        repeat ccaps.len() in k2:
+            AddCapture(a, nid, ccaps.get(k2))
+        end
+        repeat Typarams(a, src.ext).len() in i3:
+            AddTyparam(a, nid, Typarams(a, src.ext).get(i3), TyparamBounds(a, src.ext).get(i3))
+        end
+        repeat Aliases(a, src.ext).len() in i5:
+            AddAlias(a, nid, Aliases(a, src.ext).get(i5))
+        end
     end
-    c.typaram_bounds = Vector {} as Vector<str>
-    repeat src.typaram_bounds.len() in i4:
-        c.typaram_bounds.push(src.typaram_bounds.get(i4))
-    end
-    c.aliases = Vector {} as Vector<str>
-    repeat src.aliases.len() in i5:
-        c.aliases.push(src.aliases.get(i5))
-    end
-    nid := a.nodes.len()
-    a.nodes.push(c)
+    cdims.free()
+    ccaps.free()
     ret nid
 end
 
@@ -809,8 +958,8 @@ pub func ToXml(w &: x.Writer, a &: Ast, id: NodeId):
     else k == AST_FIELD_INIT:
         emit_child(w, "value", a, n.a)
     else k == AST_TYPE:
-        if n.dims.len() != 0:
-            emit_child_list(w, "dims", a, n.dims)
+        if Dims(a, n.ext).len() != 0:
+            emit_child_list(w, "dims", a, Dims(a, n.ext))
         end
     else k == AST_LAYOUT_BLOCK:
         emit_child_list(w, "items", a, n.list)

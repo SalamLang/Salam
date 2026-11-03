@@ -30,7 +30,10 @@ not guessable, so verify with tools rather than assuming.
    program into files unless the user asked for one. The full checklist is
    section 0 of `docs/ai/AGENTS.md`. Name your own functions, variables and
    fields in the language of the file: Persian identifiers in a Persian
-   program, English in an English one, never mixed.
+   program, English in an English one, never mixed. English names have no
+   whitespace (`snake_case`); Persian multi-word names use spaces (`خواندن رنگ`),
+   with a half-space where only one word is allowed (type names, constants,
+   loop and `catch` variables).
 
 If those tools are not available, the same information is in `std/` (the
 standard library is ordinary Salam source) and `tests/`.

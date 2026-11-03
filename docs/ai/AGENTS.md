@@ -146,7 +146,7 @@ parse. `try`, `catch`, `throw` and `throws` are reserved too.
 A function that can fail is declared `throws` and fails with `throw`. Every
 call to it needs `try` (which passes the error to the caller, so the caller
 must be `throws` too) or a surrounding `try: ... catch e: ... end` block;
-an unmarked call is `E139`. The error is always the built-in `Error`
+an unmarked call is `E155`. The error is always the built-in `Error`
 (`e.kind`, `e.message`, `e.to_str()`), which needs no import.
 
 ```salam

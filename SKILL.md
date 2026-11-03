@@ -1575,6 +1575,15 @@ end
   it (`NewClientContext SetHostname Wrap Connect Read Write Shutdown`;
   `SetHostname` is required before `Connect`, and `Close` does not close
   the TCP socket).
+- **`net.nats`** (`import net.nats`): a NATS client over `net.tcp`, TLS
+  through `tls`. `Connect(url)` / `ConnectWith(url, opts)`, `Publish PublishHeaders
+PublishRequest PublishMsg Respond`, `Subscribe QueueSubscribe SubscribeHandler
+SubscribeReplier` with `NextMsg(nc, sub, ms)`, `Unsubscribe AutoUnsubscribe`,
+  `Request RequestMsg` (503 comes back as `no responders`), `Flush Drain Close`,
+  headers (`NewHeader HeaderAdd HeaderGet HeaderValues`), and JetStream basics
+  (`AddStream StreamInfo JSPublish AddConsumer Fetch Ack Nak`). Nothing runs in
+  the background: messages are read inside `NextMsg`, `Flush`, `Request` and
+  `Pump`, and handlers run there. Payloads are `str`, so text only.
 - **`ssh`**: `Connect`/`Dial` with `NewConfig WithPassword WithKeyFile WithHostKeyMode`, `RunCommand Exec NewSession RequestPty Shell`, SFTP
   `SftpOpen Upload Download ListDir Mkdir Remove Rename Stat`. RSA keys only
   (OpenSSH format, no passphrase; Ed25519 and ECDSA are not read) and the

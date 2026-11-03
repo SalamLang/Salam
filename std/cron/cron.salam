@@ -71,7 +71,9 @@ const S_FAILS := 16
 const S_NSTEP := 17
 const S_NUNIT := 18
 const S_NANCHOR := 19
-const S_COUNT := 20
+const S_ZMIN := 20
+const S_ZVAL := 21
+const S_COUNT := 22
 
 mut _jobs := Vector {} as Vector<_Job>
 mut _zone_name := "UTC"
@@ -91,6 +93,8 @@ struct _Job:
     pub name: str = ""
     pub tags: str = ""
     pub kind: int = 0
+    pub zone: str = ""
+    pub zfb: int = 0
     pub expr: Expr = Expr {}
     pub fn: i64 = 0
     pub cell: i64 = 0
@@ -319,6 +323,29 @@ func _launch(i: int): bool:
     ret true
 end
 
+func _job_offset(i: int, now: i64): i64:
+    j := _job(i)
+    if j.zone == "": ret _cached_offset(now) end
+    minute := now / (60 as i64)
+    if _get(i, S_ZMIN) == minute + (1 as i64): ret _get(i, S_ZVAL) end
+    v := OffsetSeconds(j.zone, j.zfb, now)
+    _put(i, S_ZVAL, v)
+    _put(i, S_ZMIN, minute + (1 as i64))
+    ret v
+end
+
+func _job_zone(i: int): str:
+    j := _job(i)
+    if j.zone == "": ret _zone_name end
+    ret j.zone
+end
+
+func _job_fallback(i: int): int:
+    j := _job(i)
+    if j.zone == "": ret _zone_fallback end
+    ret j.zfb
+end
+
 func _cached_offset(now: i64): i64:
     minute := now / (60 as i64)
     if minute == _off_minute: ret _off_value end
@@ -407,7 +434,7 @@ func _set_step(id: int, n: int, unit: int):
     now := time.Now()
     _put(id, S_NSTEP, n as i64)
     _put(id, S_NUNIT, unit as i64)
-    _put(id, S_NANCHOR, _period(unit, now + OffsetSeconds(_zone_name, _zone_fallback, now)))
+    _put(id, S_NANCHOR, _period(unit, now + _job_offset(id, now)))
 end
 
 func _due(i: int, now: i64, dedupe: bool): bool:
@@ -422,7 +449,7 @@ func _due(i: int, now: i64, dedupe: bool): bool:
         if nx == (0 as i64) or now < nx: ret false end
         ret true
     end
-    local := now + _cached_offset(now)
+    local := now + _job_offset(i, now)
     if not MatchesLocal(j.expr, local): ret false end
     if not _step_ok(i, local): ret false end
     mut slot := now / (60 as i64)
@@ -681,8 +708,40 @@ end
 pub func SetTags(id: int, tags: str):
     j := _job(id)
     sync.Lock(_mu)
-    _jobs.set(id, _Job { name = j.name, tags = "," + tags + ",", kind = j.kind, expr = j.expr, fn = j.fn, cell = j.cell })
+    _jobs.set(id, _Job { name = j.name, tags = "," + tags + ",", kind = j.kind, zone = j.zone, zfb = j.zfb, expr = j.expr, fn = j.fn, cell = j.cell })
     sync.Unlock(_mu)
+end
+
+// Gives one job its own time zone (an IANA name such as "Asia/Tehran"),
+// with fallback_minutes used when the zone database cannot load it.
+// An empty name returns the job to the scheduler zone.
+@en "SetJobZone"
+@fa "تنظیم منطقه کار"
+pub func SetJobZone(id: int, name: str, fallback_minutes: int):
+    if id < 0 or id >= _n(): ret end
+    j := _job(id)
+    sync.Lock(_mu)
+    _jobs.set(id, _Job { name = j.name, tags = j.tags, kind = j.kind, zone = str.Clone(name), zfb = fallback_minutes, expr = j.expr, fn = j.fn, cell = j.cell })
+    sync.Unlock(_mu)
+    _put(id, S_ZMIN, 0 as i64)
+    if _get(id, S_NSTEP) > (1 as i64):
+        now := time.Now()
+        _put(id, S_NANCHOR, _period(_get(id, S_NUNIT) as int, now + _job_offset(id, now)))
+    end
+end
+
+@en "JobZone"
+@fa "منطقه کار"
+pub func JobZone(id: int): str: ret _job_zone(id) end
+
+// True when the zone database knows the name.
+@en "ZoneExists"
+@fa "منطقه وجود دارد"
+pub func ZoneExists(name: str): bool:
+    mut z := calendar.LoadZone(name)
+    ok := z.ok
+    if ok: calendar.FreeZone(z) end
+    ret ok
 end
 
 @en "HasTag"
@@ -815,13 +874,13 @@ pub func NextRun(id: int, after: i64): i64:
     j := _job(id)
     mut t := 0 as i64
     if j.kind == JOB_CRON:
-        t = Next(j.expr, after, _zone_name, _zone_fallback)
+        t = Next(j.expr, after, _job_zone(id), _job_fallback(id))
     else:
         t = _get(id, S_NEXT)
     end
     st := _get(id, S_START_AT)
     if st > (0 as i64) and t < st:
-        if j.kind == JOB_CRON: t = Next(j.expr, st - (1 as i64), _zone_name, _zone_fallback) else:
+        if j.kind == JOB_CRON: t = Next(j.expr, st - (1 as i64), _job_zone(id), _job_fallback(id)) else:
             t = st
         end
     end

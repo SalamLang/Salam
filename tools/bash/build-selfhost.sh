@@ -110,18 +110,25 @@ set -- "$@" "-dSALAM_GIT_DATE=\"$STAMP_DATE\"" "-dSALAM_GIT_DIRTY=\"$STAMP_DIRTY
 # shellcheck disable=SC2086 # a caller-supplied flag list; splitting is wanted
 [ -n "$EXTRA" ] && set -- "$@" $EXTRA
 
+# The ownership checker needs about 6 GB to analyse the compiler, more than a
+# 32-bit process can address, so a 32-bit host builds without it.
+OWN=
+if [ "$(getconf LONG_BIT 2>/dev/null)" = 32 ]; then
+    OWN=--ownership=off
+fi
+
 echo "seed   : $SEED ($("$SEED" version 2>/dev/null | head -1))"
 echo "output : $OUT"
 
 if [ -n "$EMBED_DIR" ]; then
     echo "stage 1: a plain compiler, to build the embedded one with"
-    "$SEED" build --backend=c "$ROOT/compiler/main.salam" --output="$OUT.stage1"
+    "$SEED" build --backend=c "$ROOT/compiler/main.salam" --output="$OUT.stage1" $OWN
     BUILDER=$OUT.stage1
 else
     BUILDER=$SEED
 fi
 
-"$BUILDER" build "$ROOT/compiler/main.salam" --output="$OUT" "$@"
+"$BUILDER" build "$ROOT/compiler/main.salam" --output="$OUT" "$@" $OWN
 rm -f "$OUT.stage1"
 
 [ -x "$OUT" ] || {

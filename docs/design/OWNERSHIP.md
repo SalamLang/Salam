@@ -102,19 +102,34 @@ positive count at zero on `std/` and `compiler/`:
 
 ## Diagnostics
 
-| Code | When                                                                                  | Mode         |
-| ---- | ------------------------------------------------------------------------------------- | ------------ |
-| E139 | a path is used after its storage was freed on every path                              | on (default) |
-| E140 | storage is freed twice on every path                                                  | on           |
-| E141 | a returned value is freed by the function's own `defer`                               | on           |
-| W142 | used after free on some paths                                                         | on           |
-| W143 | freed twice on some paths                                                             | on           |
-| W144 | a copy, `.ref()` pointer or iterator used after a call that may have moved the buffer | warn         |
+| Code | When                                                                                  | Mode           |
+| ---- | ------------------------------------------------------------------------------------- | -------------- |
+| E139 | a path is used after its storage was freed on every path                              | on, warn       |
+| E140 | storage is freed twice on every path                                                  | on, warn       |
+| E141 | a returned value is freed by the function's own `defer`                               | on, warn       |
+| W142 | used after free on some paths                                                         | on, warn       |
+| W143 | freed twice on some paths                                                             | on, warn       |
+| W144 | a copy, `.ref()` pointer or iterator used after a call that may have moved the buffer | warn (default) |
 
-`--ownership=off|on|warn|error` picks the mode. `on` reports W142 and W143
-as warnings; `warn` adds W144, which needs a wider relevance scan and made
-`salam check compiler/main.salam` about 60% slower when measured. `error`
-turns the warnings into errors. Messages exist in English and Persian (`compiler/i18n.salam`).
+`--ownership=off|on|warn|error` picks the mode; `warn` is the default.
+`on` reports the errors plus W142 and W143; `warn` adds W144, which needs a
+wider relevance scan. Measured on 2026-11-03: `salam check` on typical test
+programs that import std took 0 to 9% longer (0.77s to 0.84s for
+`image_demo`), and on `compiler/main.salam`, which is unusually heavy on
+containers, 10.2s to 15.1s. `error` turns the warnings into errors.
+
+W144 became the default once `--ownership=warn` reported nothing on
+`compiler/`, `std/` and the test programs. Two fixes in the stale-bit
+collection got it there (28 false W144 in `compiler/nativegen` and
+`compiler/nativelink`):
+
+- the first state to reach a join was copied without collection, so a
+  moved bit from a branch that had rewritten the struct leaked into the
+  other branch;
+- a field token counted as live whenever its root token was, so the copy
+  that `each x in g.field` makes kept every other field of `g`'s old buffer
+  alive. A token is now live only if some path holds it or holds a token it
+  is a field of. Messages exist in English and Persian (`compiler/i18n.salam`).
 
 On the day phase 1 landed, `on` reported nothing across `compiler/`, every
 `std/` package reachable from the test suite, and all 3,129 test programs.

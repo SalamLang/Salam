@@ -523,6 +523,27 @@ func ow_tok_root(o &: Ow, t: int): int:
     ret p
 end
 
+func ow_held(st &: OwSt, t: int): bool:
+    ret ow_has(st.pt, t) or ow_has(st.rt, t)
+end
+
+func ow_reach(o &: Ow, st &: OwSt, t: int): bool:
+    mut p := t
+    until true:
+        if ow_held(st, p):
+            ret true
+        end
+        k := o.tkind.get(p)
+        if k == OW_TK_INIT:
+            ret not ow_key_explicit(st, o.targ.get(p))
+        end
+        if k != OW_TK_FIELD:
+            ret false
+        end
+        p = o.targ.get(p)
+    end
+end
+
 func ow_gc(o &: Ow, st &: OwSt):
     mut roots := Vector {} as Vector<int>
     repeat st.pt.len() in i:
@@ -540,6 +561,9 @@ func ow_gc(o &: Ow, st &: OwSt):
         if rk == OW_TK_INIT and not ow_has(roots, r) and ow_key_explicit(st, o.targ.get(r)):
             dead = true
         end
+        if not dead and not ow_reach(o, st, t):
+            dead = true
+        end
         if dead:
             _gone := st.fr.remove_at(k)
             ow_del(st.fm, t)
@@ -555,6 +579,7 @@ func ow_st_join(o &: Ow, dst &: OwSt, src &: OwSt): bool:
         ret false
     end
     if not dst.live:
+        ow_gc(o, src)
         ow_st_free(dst)
         dst.live = true
         dst.pk = ow_vclone(src.pk)
@@ -1283,6 +1308,43 @@ func ow_alias_result(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, call: int, rke
     cur.free()
 end
 
+func ow_frees_name(a &: at.Ast, nid: int, name: str): bool:
+    if nid == 0:
+        ret false
+    end
+    n := at.At(a, nid)
+    if n.kind == at.AST_LAMBDA:
+        ret false
+    end
+    if n.kind == at.AST_CALL and n.a != 0 and at.KindOf(a, n.a) == at.AST_MEMBER and str.Equals(at.At(a, n.a).name, "free") and at.ChildCount(a, nid) == 0:
+        recv := at.At(a, n.a).a
+        if recv != 0 and at.KindOf(a, recv) == at.AST_IDENTIFIER and str.Equals(at.At(a, recv).name, name):
+            ret true
+        end
+    end
+    if ow_frees_name(a, n.a, name) or ow_frees_name(a, n.b, name) or ow_frees_name(a, n.c, name) or ow_frees_name(a, n.d, name):
+        ret true
+    end
+    repeat at.ChildCount(a, nid) in i:
+        if ow_frees_name(a, at.Child(a, nid, i), name):
+            ret true
+        end
+    end
+    ret false
+end
+
+func ow_param_reset(s &: Sema, a &: at.Ast, call: int, idx: int): bool:
+    d := su_call_decl(s, call)
+    if d == 0 or at.KindOf(a, d) != at.AST_FUNC_DEF or at.At(a, d).a == 0 or idx >= at.ChildCount(a, d):
+        ret false
+    end
+    pn := at.Child(a, d, idx)
+    if pn == 0 or at.KindOf(a, pn) != at.AST_PARAM or not at.At(a, pn).is_ref:
+        ret false
+    end
+    ret ow_frees_name(a, at.At(a, d).a, at.At(a, pn).name)
+end
+
 func ow_args(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, nid: int):
     n := at.ChildCount(a, nid)
     repeat n in i:
@@ -1307,6 +1369,10 @@ func ow_args(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, nid: int):
         end
         eff := ow_effect(s, nid, j + 1)
         key2 := ow_path(o, a, arg2)
+        if at.At(a, arg2).ref_arg and key2 >= 0 and (eff == SU_FREE or eff == SU_FREE + 100) and ow_is_container(at.At(a, arg2).type_str) and ow_param_reset(s, a, nid, j):
+            ow_free(s, o, a, st, nid, key2, true, eff == SU_FREE)
+            continue
+        end
         if at.At(a, arg2).ref_arg and key2 >= 0:
             ow_apply(s, o, a, st, nid, key2, eff, false, j + 1)
             freed := eff == SU_FREE or eff == SU_FREE + 100

@@ -13,6 +13,139 @@ see a working usage, and `salam_check` after every edit.
 
 ---
 
+## 0. Best practices: read this before you write any code
+
+Compiling is the minimum. Write the program a Salam maintainer would write.
+These rules apply to every request, including a port from Python, PHP or
+JavaScript, unless the user says otherwise (for example "put it all in one
+file" or "keep it short"). Then do exactly what they asked and still follow
+rules 1, 6 and 7.
+
+**1. The standard library first, your own code last.** Before you write a
+helper, check whether `std` already has it. A hand-written parser, formatter,
+sorter, hasher or splitter is almost always a defect: it is longer, slower and
+misses the edge cases the std version handles and reports through `throws`.
+
+1. Search: `salam_stdlib_search` with a word for the job (`hex`, `split`,
+   `base64`, `sha256`, `trim`), then `salam_stdlib_symbols` with `query` for
+   the exact signature, then `salam_find_examples` for a working call.
+2. Use what you find. Only when nothing fits, write the function yourself,
+   keep it small, and say in your answer that std has no such function.
+
+| The Python or JS you are porting              | Use this, do not rewrite it                                |
+| --------------------------------------------- | ---------------------------------------------------------- |
+| `int(s, 16)`, `parseInt(s, 16)`               | `conv.ParseHex(s)` (throws), `conv.ParseHexOr(s, d)`       |
+| `int(s)`, `float(s)`, `bool(s)`               | `conv.ParseInt`, `conv.ParseFloat`, `conv.ParseBool`       |
+| `str(n)`, `hex(n)`, `f"{x:.2f}"`              | `conv.FormatInt`, `conv.FormatHex`, `conv.FormatFloatPrec` |
+| `s.split`, `s.strip`, `",".join`, `s.replace` | `str.*` and the built-in `str` methods (section 6)         |
+| `json.loads`, `json.dumps`                    | `import json`                                              |
+| `re.match`, `re.sub`                          | `import regex`                                             |
+| `hashlib.sha256`, `base64`, `uuid`, `secrets` | `crypto.*`, `encoding.*`                                   |
+| `sorted(xs)`, `dict`, `list`, `set`           | `sort.*`, `HashMap`, `Vector`, `collections.*`             |
+
+The table is a start, not the whole catalogue: look the job up every time.
+
+**2. Design before you type.** For anything beyond a few lines, decide the
+pieces first, then write them:
+
+- A record of related fields is a `struct`, with `static func New(...)` as its
+  constructor and methods for what it can do. Fields are private by default;
+  mark `pub` only what callers must see.
+- A closed set of choices (a state, a kind, a level, a command) is an `enum`,
+  taken apart with `match` so the compiler checks every case. Do not pass
+  magic strings or integers around.
+- Behaviour that several types share is an `interface`. Use `<T: Iface>` when
+  the type is known at compile time and `dyn Iface` for a mixed collection.
+- A function or container that is the same for many types is generic
+  (`func Max<T>(a: T, b: T): T`, `struct Stack<T>`), not copied per type.
+- A function that can fail is `throws`, not a sentinel like `-1` or `""`.
+  Callers use `try` or `try: ... catch e: ... end`. Offer an `...Or(value,
+fallback)` form only when a default is natural.
+- Cleanup goes in `defer` next to the thing it cleans (`defer v.free()`).
+- Magic numbers become `const` names.
+
+**3. Small functions.** One job per function, a name that says the job, about
+30 lines at most, few parameters. If you want a comment to explain a block,
+make the block a function with that name. Put private helpers above the first
+`pub func`; the public API is short and sits at the bottom of the file.
+
+**4. Split into files and packages unless told to use one.** A real program is
+a project: `main.salam` with a tiny `main` that only wires things together, and
+one file or folder per concern (`model`, `parse`, `store`, `render`),
+joined with `include "name.salam"` or imported as a package folder. Each file
+has one reason to change. Tests live next to the code in `*_test.salam`, as
+`test_` functions, and run with `salam test`. `salam new name` scaffolds the
+layout. A script of under about 40 lines may stay in one file.
+
+**5. Use the language, not a transliteration.** `repeat`/`each` instead of
+index bookkeeping, `match` instead of long `if` chains over an enum,
+`:=` with inference, `ret match ...` for a value, `a ? b : c` for a short
+choice, struct literals with named fields, `Vector<T>` and `HashMap<K, V>` with
+`.free()`, and `salam format` to finish. When the source language has classes,
+exceptions, generics or dictionaries, map them to `struct`, `throws`,
+`<T>` and `HashMap` (see SKILL.md section 7).
+
+**6. Name things in the language of the file.** A Persian program
+(`// زبان: فارسی`, Persian keywords) uses Persian identifiers for its
+functions, variables, parameters, struct fields, methods, enum members,
+constants and packages. An English program uses English identifiers
+throughout and no Persian ones. Never mix the two inside one identifier or one
+file, and never write transliterated Persian in Latin letters (`rang`,
+`khandan`). Single-letter names (`i`, `x`), well-known acronyms (`URL`,
+`JSON`), `test_` function names and the names of C functions in an `extern:`
+block are fine in either. Persian string literals and user-facing text follow
+the audience, not the file.
+
+How a name with several words is written depends on the language:
+
+- **English: no whitespace, ever.** Use `snake_case` for functions, variables,
+  parameters and fields, and `PascalCase` for types, enums and the `pub` API
+  (as the std does): `parse_colour`, `red_value`, `Rgb`.
+- **Persian: separate the words with spaces.** That is the standard, and the
+  compiler accepts it for functions, methods, parameters, struct fields, enum
+  members and variables: `تابع خواندن رنگ(متن ورودی: رشته)`,
+  `ناپایا جمع کل := ۰`, `همگانی مقدار قرمز: صحیح`. Do not use underscores in
+  Persian names. The grammar takes only one word for a struct, enum or
+  interface name, a constant, a loop variable, a `catch` variable, a lambda
+  parameter and an `extern:` parameter; there join the words with a half-space (ZWNJ, `رنگ‌آمیزی`, `حداکثر‌مقدار`), which
+  the compiler treats exactly like a space.
+- Inside a one-line sequence of statements (a lambda written on one line, for
+  example) spaced names run together, so use half-space names there too.
+- A word of a multi-word Persian name must not be a keyword (`برابر`,
+  `بزرگتر`, `کوچکتر`, `در`, `تا`, `هر`, `و`, `یا`, ...), or the name stops
+  parsing: `بیشینه از` is fine, `بزرگتر از` is not. The keyword table is in
+  the Persian glossary lesson.
+
+The std and the built-in methods already have Persian names, so call those
+(`تبدیل.تجزیه شانزده`, `.طول()`); do not keep the English spelling in a
+Persian file, the compiler rejects it. `salam translate fa|en` converts
+keywords and std names but not your own identifiers, so after translating,
+rename those by hand.
+
+**7. Check your work.** `salam check` after every edit, `salam format`, then
+`salam test` or `salam run`. A program you did not compile is not finished.
+
+Example. "Convert `def hex_to_decimal(hex): return int(hex, 16)`" is one line,
+because std already does it, and it keeps Python's behaviour of failing on bad
+input:
+
+```salam
+import conv
+
+func hex_to_decimal(hex: str): i64 throws:
+    ret try conv.ParseHex(hex)
+end
+```
+
+A forty-line digit-by-digit loop that stops silently at the first bad
+character is the wrong answer to that request.
+
+The learn course has the same rules with runnable examples, in Persian at
+<https://www.salamlang.ir/learn/best-practices/> and in English at
+<https://salamlang.github.io/Salam/learn/best-practices/>.
+
+---
+
 ## 1. The rule that trips up every newcomer: `until` means `while`
 
 `until COND:` runs the body **while `COND` is true**. It is not a do-while and

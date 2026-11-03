@@ -4,6 +4,12 @@ const RUN_MAX_SIZE := 48
 const RUN_SMALL := 16
 
 func run_match(g &: Ng, l &: Lp, mark: int, h: int, latch: int, iv &: int, step &: i64, lim &: int, cc &: int, skip: int, maxsz: int): bool:
+    mut sx := 0 - 1
+    ret run_match_sx(g, l, mark, h, latch, iv, step, lim, cc, skip, maxsz, false, sx)
+end
+
+func run_match_sx(g &: Ng, l &: Lp, mark: int, h: int, latch: int, iv &: int, step &: i64, lim &: int, cc &: int, skip: int, maxsz: int, allow_sx: bool, sx &: int): bool:
+    sx = 0 - 1
     t := g.b_last[h]
     if t < 0 or g.i_op[t] != OP_CBR or (g.i_f[t] & skip) != 0:
         ret false
@@ -13,6 +19,10 @@ func run_match(g &: Ng, l &: Lp, mark: int, h: int, latch: int, iv &: int, step 
     end
     mut i := g.b_first[h]
     until i >= 0 and g.i_op[i] == OP_PHI:
+        i = g.i_next[i]
+    end
+    if allow_sx and i >= 0 and g.i_op[i] == OP_SEXT and g.i_ty[i] == T_I64 and g.i_res[i] >= 0:
+        sx = i
         i = g.i_next[i]
     end
     if i < 0 or g.i_op[i] != OP_ICMP or g.i_next[i] != t or g.i_a[t] != g.i_res[i]:
@@ -25,7 +35,13 @@ func run_match(g &: Ng, l &: Lp, mark: int, h: int, latch: int, iv &: int, step 
     if blk_has_phi(g, g.i_b[t]):
         ret false
     end
-    a := g.i_a[i]
+    mut a := g.i_a[i]
+    if sx >= 0:
+        if a != g.i_res[sx]:
+            ret false
+        end
+        a = g.i_a[sx]
+    end
     if a < 0 or g.v_kind[a] != VK_INS:
         ret false
     end
@@ -170,6 +186,27 @@ func run_clone_body(g &: Ng, u &: Usw, h: int, order &: Vector<int>, back_to: in
     ov.free()
 end
 
+func run_lim_small(g &: Ng, v: int): bool:
+    if v < 0 or g.v_kind[v] != VK_INS:
+        ret false
+    end
+    d := g.v_def[v]
+    op := g.i_op[d]
+    mut x := v
+    if op == OP_ADD or op == OP_SUB:
+        c := g.i_b[d]
+        if not is_cint(g, c) or g.v_i[c] < (0 - 1048576 as i64) or g.v_i[c] > (1048576 as i64):
+            ret false
+        end
+        x = g.i_a[d]
+    end
+    if x < 0 or g.v_kind[x] != VK_INS:
+        ret false
+    end
+    xd := g.v_def[x]
+    ret g.i_op[xd] == OP_SEXT and (g.i_x[xd] == T_I32 or g.i_x[xd] == T_I16 or g.i_x[xd] == T_I8)
+end
+
 func run_limit(g &: Ng, pre: int, lim: int, step: i64, cc: int, ty: int): int:
     mut adj := 0 - step
     if cc == CC_SLE or cc == CC_SGE:
@@ -179,6 +216,14 @@ func run_limit(g &: Ng, pre: int, lim: int, step: i64, cc: int, ty: int): int:
     hi := ty == T_I64 ? 9223372036854775807 as i64 : 2147483647 as i64
     sat := step > (0 as i64) ? lo : hi
     pt := g.b_last[pre]
+    if ty == T_I64 and run_lim_small(g, lim) and adj >= (0 - 1048576 as i64) and adj <= (1048576 as i64):
+        sm0 := ins_new(g, OP_ADD, ty)
+        g.i_a[sm0] = lim
+        g.i_b[sm0] = const_int(g, ty, adj)
+        smv0 := new_res(g, sm0)
+        ins_before(g, pt, sm0)
+        ret smv0
+    end
     if is_cint(g, lim):
         lv := norm_int(g, ty, g.v_i[lim])
         if (adj < (0 as i64) and lv < lo - adj) or (adj > (0 as i64) and lv > hi - adj):
@@ -206,7 +251,16 @@ func run_limit(g &: Ng, pre: int, lim: int, step: i64, cc: int, ty: int): int:
     ret sev
 end
 
-func run_unroll(g &: Ng, l &: Lp, mark: int, h: int, pre: int, latch: int, ph: int, step: i64, lim: int, cc: int):
+func run_sext(g &: Ng, b: int, v: int): int:
+    i := ins_new(g, OP_SEXT, T_I64)
+    g.i_a[i] = v
+    g.i_x[i] = g.v_ty[v]
+    nv := new_res(g, i)
+    ins_append(g, b, i)
+    ret nv
+end
+
+func run_unroll(g &: Ng, l &: Lp, mark: int, h: int, pre: int, latch: int, ph: int, step: i64, lim: int, cc: int, sx: int):
     t := g.b_last[h]
     g.i_f[t] = g.i_f[t] | IF_NORUN
     body0 := g.i_b[t]
@@ -225,6 +279,9 @@ func run_unroll(g &: Ng, l &: Lp, mark: int, h: int, pre: int, latch: int, ph: i
         end
     end
     nf := size <= RUN_SMALL ? 4 : 2
+    if (g.i_f[t] & IF_LVRUN) != 0:
+        g.lvu_grow += nf * size + 4
+    end
     mut hphis := Vector {} as Vector<int>
     mut i := g.b_first[h]
     until i >= 0 and g.i_op[i] == OP_PHI:
@@ -253,9 +310,13 @@ func run_unroll(g &: Ng, l &: Lp, mark: int, h: int, pre: int, latch: int, ph: i
             ivu = g.i_res[uphis[k]]
         end
     end
-    limu := run_limit(g, pre, lim, step * ((nf - 1) as i64), cc, g.i_ty[ph])
+    limu := run_limit(g, pre, lim, step * ((nf - 1) as i64), cc, g.v_ty[lim])
+    mut ivc := ivu
+    if sx >= 0:
+        ivc = run_sext(g, hu, ivu)
+    end
     ic := ins_new(g, OP_ICMP, T_I1)
-    g.i_a[ic] = ivu
+    g.i_a[ic] = ivc
     g.i_b[ic] = limu
     g.i_x[ic] = step > (0 as i64) ? CC_SLT : CC_SGT
     icv := new_res(g, ic)
@@ -264,7 +325,7 @@ func run_unroll(g &: Ng, l &: Lp, mark: int, h: int, pre: int, latch: int, ph: i
     repeat nf - 1:
         mids.push(new_blk(g))
     end
-    mut none := Vector {} as Vector<int>
+    mut over := Vector {} as Vector<int>
     mut prev := Usw {}
     mut first := 0 - 1
     repeat nf in c:
@@ -283,7 +344,12 @@ func run_unroll(g &: Ng, l &: Lp, mark: int, h: int, pre: int, latch: int, ph: i
             end
         end
         back := c < nf - 1 ? mids[c] : hu
-        run_clone_body(g, u, h, order, back, none)
+        over.clear()
+        if sx >= 0:
+            over.push(g.i_res[sx])
+            over.push(c == 0 ? ivc : run_sext(g, mids[c - 1], u.vmap[g.i_res[ph]]))
+        end
+        run_clone_body(g, u, h, order, back, over)
         if c == 0:
             first = u.bmap[body0]
         else:
@@ -323,7 +389,7 @@ func run_unroll(g &: Ng, l &: Lp, mark: int, h: int, pre: int, latch: int, ph: i
         end
     end
     order.free()
-    none.free()
+    over.free()
     mids.free()
     hphis.free()
     uphis.free()
@@ -373,8 +439,11 @@ func runtime_unroll(g &: Ng): bool:
         mut step := 0 as i64
         mut lim := 0 - 1
         mut cc := 0
-        if run_match(g, l, mark, h, latch, iv, step, lim, cc, IF_NOVEC | IF_NORUN, RUN_MAX_SIZE):
-            run_unroll(g, l, mark, h, p, latch, iv, step, lim, cc)
+        th := g.b_last[h]
+        lvr := th >= 0 and (g.i_f[th] & IF_LVRUN) != 0
+        mut sx := 0 - 1
+        if run_match_sx(g, l, mark, h, latch, iv, step, lim, cc, lvr ? IF_NORUN : IF_NOVEC | IF_NORUN, RUN_MAX_SIZE, lvr, sx):
+            run_unroll(g, l, mark, h, p, latch, iv, step, lim, cc, sx)
             changed = true
         end
     end

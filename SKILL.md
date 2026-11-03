@@ -80,7 +80,19 @@ When asked to convert program `X` (in some other language) into Salam:
    generics→`<T>`, exceptions→`throws`/`try`/`catch`, dict→`HashMap`,
    list→`Vector`, etc.).
 3. **Pick stdlib packages** from §5 rather than reimplementing (`str`, `json`,
-   `http`, `regex`, `math`, `sort`, `collections`, `db`, …).
+   `http`, `regex`, `math`, `sort`, `collections`, `db`, …). This comes before
+   writing any helper: Python's `int(s, 16)` is `conv.ParseHex(s)`, not a digit
+   loop. Search §5 and `std/` for the job, and write your own function only
+   when nothing fits. Unless the user asked for a single file, also design
+   with `struct`, `enum`, `interface` and generics, report failure with
+   `throws`, keep functions small, and split a real program into files (see
+   `docs/ai/AGENTS.md` section 0 and the learn lesson "Best practices").
+   Name your own identifiers in the language of the file: Persian names in a
+   Persian program, English names in an English one, never mixed. English
+   names never contain whitespace (`snake_case`, `PascalCase` types); Persian
+   multi-word names are written with spaces (`خواندن رنگ`), or with a
+   half-space where only one word is allowed (type names, constants, loop and
+   `catch` variables, lambda and `extern:` parameters).
 4. **Write idiomatic Salam** using §2 to §4, obeying the strict rules in §6
    (unused = error, `until` = while, manual `.free()`, integer `/` truncates,
    errors through `throws`/`try`, `mut` to reassign, `pub` to export, top-level ordering).
@@ -1563,6 +1575,15 @@ end
   it (`NewClientContext SetHostname Wrap Connect Read Write Shutdown`;
   `SetHostname` is required before `Connect`, and `Close` does not close
   the TCP socket).
+- **`net.nats`** (`import net.nats`): a NATS client over `net.tcp`, TLS
+  through `tls`. `Connect(url)` / `ConnectWith(url, opts)`, `Publish PublishHeaders
+PublishRequest PublishMsg Respond`, `Subscribe QueueSubscribe SubscribeHandler
+SubscribeReplier` with `NextMsg(nc, sub, ms)`, `Unsubscribe AutoUnsubscribe`,
+  `Request RequestMsg` (503 comes back as `no responders`), `Flush Drain Close`,
+  headers (`NewHeader HeaderAdd HeaderGet HeaderValues`), and JetStream basics
+  (`AddStream StreamInfo JSPublish AddConsumer Fetch Ack Nak`). Nothing runs in
+  the background: messages are read inside `NextMsg`, `Flush`, `Request` and
+  `Pump`, and handlers run there. Payloads are `str`, so text only.
 - **`ssh`**: `Connect`/`Dial` with `NewConfig WithPassword WithKeyFile WithHostKeyMode`, `RunCommand Exec NewSession RequestPty Shell`, SFTP
   `SftpOpen Upload Download ListDir Mkdir Remove Rename Stat`. RSA keys only
   (OpenSSH format, no passphrase; Ed25519 and ECDSA are not read) and the
@@ -1940,6 +1961,12 @@ out-of-line C symbol. Only `deprecated`, `pure` (checked against the body) and
 `noret` may modify it. Persian: `درون‌داد:` = `extern:`, `برون‌داد:` =
 `export:` (with ZWNJ or a space). A body inside `extern:` is an error that
 points you to `export:`.
+
+On 32-bit Windows, Win32 functions reached through a pointer (the
+`GetProcAddress` pattern) need `extern stdcall func (...) R`: the call then
+uses stdcall on every backend. Everywhere else `stdcall` changes nothing.
+Persian: `درون‌داد فراخوان استاندارد تابع (...) R`. The seed release has to
+know the word before `std/` or `compiler/` can use it.
 
 `link` REQUIRES an explicit kind before the library name - there is no bare
 `link "X"` and no `@link(...)` attribute form, only one way to write this:

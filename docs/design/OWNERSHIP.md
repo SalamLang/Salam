@@ -164,6 +164,31 @@ Measured on a one-million-iteration loop that builds a five-part string:
 itself, built with these changes, leaks about 9% fewer blocks for `salam build`
 (193,185 to 175,468).
 
+Temporaries that are never named get the same treatment. A fresh `a + b`, or
+a call whose summary says it returns a fresh string, written directly as an
+argument of a call, is hoisted into a synthetic local right before its
+statement and then freed by the rules above. That happens only when:
+
+- the statement is an expression statement, a declaration, an assignment, a
+  `ret`, or an `if` (its first condition only, never a loop condition or an
+  `else if`);
+- the callee's summary says it only reads that parameter, or the callee is a
+  `pure` function that returns a number or a `bool` (so it cannot keep or
+  return the argument); `print` and `println` already split chains and are
+  skipped; externs and unknown callees keep today's behavior;
+- the temporary is evaluated unconditionally: not behind `and`/`or`, not in a
+  ternary arm, not inside a lambda or `match`;
+- hoisting does not reorder side effects: everything evaluated before it in
+  the statement is a pure expression; if the temporary itself calls an impure
+  function, only literals and local variables may come before it, and nothing
+  in it may pass a variable by reference or build a lambda.
+
+Results of `str.FromInt` and the other `numfmt` conversions are still not
+freed: `numfmt` allocates with libc `malloc` (it sits below `mem`), so its
+results are not `mem.Free` blocks. The largest remaining source is the
+accumulation pattern `out = out + chunk`, which drops the old `out`; freeing
+it needs proof that the old value is heap and not a literal.
+
 The remaining string leaks come from call results (`f() + "x"`, or a
 `str.FromInt` result stored in a local). Whether a function returns a fresh
 string is an interprocedural fact, so they wait for phase 3 summaries.

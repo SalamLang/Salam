@@ -23,6 +23,17 @@ not guessable, so verify with tools rather than assuming.
    for syntax borrowed from other languages. Fix the first error first.
 4. **Look at working code.** `salam_find_examples` searches the shipped test
    corpus for a real, compiling usage, with surrounding lines.
+5. **Standard library before your own helper.** Search for the job first
+   (`conv.ParseHex` for `int(s, 16)`, `json`, `regex`, `str`, `sort`) and write
+   a function only when nothing fits. Then design with `struct`, `enum`,
+   `interface`, generics and `throws`, keep functions small, and split a real
+   program into files unless the user asked for one. The full checklist is
+   section 0 of `docs/ai/AGENTS.md`. Name your own functions, variables and
+   fields in the language of the file: Persian identifiers in a Persian
+   program, English in an English one, never mixed. English names have no
+   whitespace (`snake_case`); Persian multi-word names use spaces (`خواندن رنگ`),
+   with a half-space where only one word is allowed (type names, constants,
+   loop and `catch` variables, lambda and `extern:` parameters).
 
 If those tools are not available, the same information is in `std/` (the
 standard library is ordinary Salam source) and `tests/`.

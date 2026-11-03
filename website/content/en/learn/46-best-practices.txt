@@ -1,0 +1,84 @@
+lesson.part = Reference
+lesson.title = Best practices
+lesson.summary = Check the standard library first, then design with structs, enums, interfaces and generics, keep functions small, and split a program into files
+lesson.seo_title = Best practices for writing Salam code | Lesson 46 of the Salam course
+lesson.description = How to write good Salam: look in the standard library before writing a helper (conv.ParseHex instead of a hand-made hex loop), model data with structs and enums, share behaviour with interfaces and generics, report failure with throws and try, keep functions small, split a project into files and packages, and check the result with salam check, salam format and salam test.
+lesson.lead = A program that compiles is only the start. This lesson is the checklist to run before you write code, and again before you call it done. The same rules are given to the Salam AI assistant, so what it writes for you follows them too.
+lesson.body <<
+<h2 id="std-first">1. The standard library first</h2>
+<p>Before you write a helper, find out whether the standard library already has it. A hand-written number parser, splitter, formatter or hash is nearly always worse than the library version: longer, slower, and silent about the cases the library reports as errors.</p>
+<p>Take a Python function that turns hex text into a number:</p>
+<pre class="code" dir="ltr"><code>def hex_to_decimal(hex):
+    return int(hex, 16)</code></pre>
+<p>It is one line in Python because Python has the parser built in. Salam has it too, in <a href="/std/conv/">conv</a>. The port is one line as well, and a forty line loop over the digits would be the wrong answer:</p>
+{{example.bp-std-first}}
+<p><code>conv.ParseHex</code> accepts upper and lower case digits and a leading <code>0x</code>, and it fails on bad input, exactly like <code>int(s, 16)</code> raising <code>ValueError</code>. <code>conv.ParseHexOr</code> returns a default of your choice instead of failing. A hand-made loop that stops at the first bad character would turn <code>12zz</code> into <code>18</code> without a word.</p>
+<p>How to look something up:</p>
+<ul>
+<li>Search the <a href="/std/">library reference</a> for a word describing the job: <code>hex</code>, <code>split</code>, <code>sha256</code>, <code>base64</code>, <code>trim</code>.</li>
+<li>Read the signature and the example on the function's page. Most functions come in a throwing form and an <code>...Or</code> form with a fallback.</li>
+<li>Only when nothing fits, write the function yourself, keep it small, and put it in its own file so the next person finds it.</li>
+</ul>
+<div class="table-wrap"><table>
+<thead><tr><th>You would write</th><th>Use instead</th></tr></thead>
+<tbody>
+<tr><td>a loop that turns text into a number</td><td><code>conv.ParseInt</code>, <code>conv.ParseFloat</code>, <code>conv.ParseHex</code></td></tr>
+<tr><td>number to text with padding or decimals</td><td><code>conv.FormatInt</code>, <code>conv.FormatHex</code>, <code>conv.FormatFloatPrec</code></td></tr>
+<tr><td>splitting, trimming, joining, replacing text</td><td>the <code>str</code> methods and the <code>str</code> package</td></tr>
+<tr><td>reading or writing JSON</td><td><code>json</code></td></tr>
+<tr><td>pattern matching in text</td><td><code>regex</code></td></tr>
+<tr><td>hashes, random bytes, base64</td><td><code>crypto</code>, <code>encoding</code></td></tr>
+<tr><td>sorting and keyed lookup</td><td><code>sort</code>, <code>Vector</code>, <code>HashMap</code></td></tr>
+</tbody>
+</table></div>
+
+<h2 id="model">2. Model the problem with types</h2>
+<p>Decide what the pieces of the program are before you write the code that connects them. Salam gives each kind of piece its own tool:</p>
+<ul>
+<li>A thing with several related fields is a <a href="/learn/structs/">struct</a>. Give it methods for what it can do, a <code>static func</code> as constructor, and keep fields private unless callers need them.</li>
+<li>A choice from a fixed list (a state, a kind, a command) is an <a href="/learn/enums/">enum</a>, taken apart with <code>match</code>, which makes the compiler check that every case is handled. Do not pass magic numbers or strings around.</li>
+<li>Behaviour that several types share is an <a href="/learn/generics/">interface</a>. Use a bound such as <code>&lt;T: Shape&gt;</code> when the type is known while compiling, and <code>dyn Shape</code> for a collection of mixed types.</li>
+<li>Code that does not care about the type is <a href="/learn/generics/">generic</a>: write <code>larger&lt;T&gt;</code> once instead of one copy per type.</li>
+</ul>
+{{example.bp-interface}}
+<p>Failure belongs in the type of the function too. A function that can fail is marked <code>throws</code> and fails with <code>throw</code>; the caller either passes the error on with <code>try</code> or handles it in a <code>try:</code> and <code>catch</code> block. Do not return <code>-1</code> or an empty string to mean "it did not work": the caller will forget to check it. Put cleanup next to what it cleans with <code>defer</code>, and give numbers that mean something a <code>const</code> name.</p>
+
+<h2 id="small">3. Small functions</h2>
+<p>A function does one job and its name says which. If you want to write a comment above a block to explain it, turn the block into a function with that name. About thirty lines is a good ceiling, and the fewer parameters the better. Helpers that are not part of the API stay private (no <code>pub</code>) and sit above the first <code>pub func</code>, which is also what the compiler requires.</p>
+<p>This program turns a colour such as <code>#ff8800</code> into a value. Every function is short, <code>pair</code> leaves the hex work to <code>conv</code>, the failure is a <code>throw</code>, <code>Channel</code> is an enum, and <code>main</code> only prints:</p>
+{{example.bp-design}}
+
+<h2 id="files">4. Split it into files</h2>
+<p>Unless you are writing a short script, do not put a program in one file. Keep <code>main.salam</code> tiny, so that it only wires the parts together, and give each concern its own file or folder. Each file then has one reason to change, and a reader can find things by name:</p>
+<pre class="code" dir="ltr"><code>colourtool/
+  main.salam         reads the command line, calls the rest
+  salam.toml         name, version, dependencies
+  model.salam        Rgb, Channel
+  parse.salam        parse_colour and its helpers
+  parse_test.salam   test_ functions for parse.salam</code></pre>
+<p><a href="/learn/packages/">Packages</a> shows how files include each other and how a folder becomes a package. <code>salam new name</code> creates the starting layout. Tests sit next to the code in files ending in <code>_test.salam</code> and run with <code>salam test</code>.</p>
+
+<h2 id="language">5. Write Salam, not a translation</h2>
+<p>When you port code from another language, keep what it does and change how it says it:</p>
+<ul>
+<li>classes become structs with methods, exceptions become <code>throws</code>, dictionaries become <code>HashMap</code>, lists become <code>Vector</code> (and call <code>.free()</code> on them);</li>
+<li>use <code>each</code> and <code>repeat</code> rather than counting indexes by hand, and <code>match</code> rather than a long chain of <code>if</code> on one enum;</li>
+<li>let the compiler infer types with <code>:=</code>, and use <code>mut</code> only for what changes;</li>
+<li>remember that <code>until</code> means <em>while</em> (see <a href="/learn/loops/">loops</a>).</li>
+</ul>
+
+<h2 id="names">6. Name things in the language of the file</h2>
+<p>A Salam file is written in one language, and its names should be too. In a Persian program give your functions, variables, parameters, struct fields, enum members and constants Persian names; in an English program use English ones. Do not mix the two in one file or one name, and do not spell Persian words with Latin letters (<code>rang</code>, <code>khandan</code>). Single letters such as <code>i</code> and <code>x</code>, well-known acronyms such as <code>URL</code> and <code>JSON</code>, <code>test_</code> function names and the C names in an <code>extern:</code> block are fine in either language. Strings shown to people follow your audience, not the file.</p>
+<p>How a name with several words is written depends on the language. In English a name never contains whitespace: use <code>snake_case</code> for functions, variables, parameters and fields, and <code>PascalCase</code> for types and the <code>pub</code> API, as the standard library does (<code>parse_colour</code>, <code>red_value</code>, <code>Rgb</code>). In Persian the standard is to separate the words with spaces, and the compiler accepts that for functions, methods, parameters, struct fields, enum members and variables, such as <code>خواندن رنگ</code> or <code>جمع کل</code>. Do not use underscores in Persian names. The grammar takes a single word for the name of a struct, enum or interface, for a constant, for a loop variable, for the <code>catch</code> variable and for lambda and <code>extern:</code> parameters; there join the words with a half-space (<code>رنگ‌آمیزی</code>), which the compiler treats exactly like a space. And no word of a multi-word name may be a keyword: <code>بیشینه از</code> is a fine name, <code>بزرگتر از</code> is not, because <code>بزرگتر</code> means <code>gt</code>.</p>
+<p>The standard library already has a Persian name for everything, so a Persian program calls <code>تبدیل.تجزیه شانزده</code> and <code>.طول()</code>. <code>salam translate</code> converts keywords and library names but not the names you invented, so after translating a file, rename those by hand. The examples in this lesson do exactly that: compare <code>parse_colour</code> with its Persian twin <code>خواندن رنگ</code> on the Persian page.</p>
+
+<h2 id="check">7. Check your work</h2>
+<p>Run these after every change. They are quick, and the compiler is strict on purpose (see <a href="/learn/rules/">the compiler's rules</a>):</p>
+<ul>
+<li><code>salam check app.salam</code> finds errors without building;</li>
+<li><code>salam format app.salam</code> puts the code in the standard layout;</li>
+<li><code>salam test</code> runs the <code>test_</code> functions;</li>
+<li><code>salam run app.salam</code> builds and runs the program.</li>
+</ul>
+<div class="note"><p>One file is fine when the task is small or you were asked for it. The first rule still applies: even a ten line script should call <code>conv.ParseHex</code> rather than reinvent it.</p></div>
+>>

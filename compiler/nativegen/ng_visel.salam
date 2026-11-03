@@ -123,6 +123,10 @@ end
 
 func isel_vbcast_byte(g &: Ng, i: int):
     w := g.t_elem[g.i_ty[i]] == T_I16
+    if vk_on(g) and is_cint(g, g.i_a[i]):
+        set_res(g, i, vsplat_ld(g, g.v_i[g.i_a[i]], w ? 2 : 1))
+        ret
+    end
     if g.isy:
         set_res(g, i, ybcast_gpr(g, use_reg(g, g.i_a[i]), false, w ? VUN_BCW : VUN_BCB))
         ret
@@ -247,6 +251,46 @@ func vnot(g &: Ng, r: int):
     vop(g, 0xEF, r, ones)
 end
 
+func vrep64(v: i64, bytes: int): i64:
+    if bytes >= 8:
+        ret v
+    end
+    mut w := (bytes * 8) as i64
+    mut x := v & (((1 as i64) << w) - (1 as i64))
+    until w < (64 as i64):
+        x = x | (x << w)
+        w = w * (2 as i64)
+    end
+    ret x
+end
+
+func vk_mem(g &: Ng, v: i64, bytes: int): Mem:
+    x := vrep64(v, bytes)
+    if g.isy:
+        ret vec_const32(g, x, x, x, x)
+    end
+    ret vec_const(g, x, x)
+end
+
+func vk_on(g &: Ng): bool:
+    ret g.arch == NG_ARCH_X64 and not g.off_vkpool
+end
+
+func vsplat_ld(g &: Ng, v: i64, bytes: int): int:
+    r := wide_reg(g)
+    _l := e_rm(g, M_VLD, 16, r, vk_mem(g, v, bytes))
+    ret r
+end
+
+func vop_k(g &: Ng, opc: int, dst: int, v: i64):
+    if not vk_on(g):
+        vop(g, opc, dst, vsplat32(g, v))
+        ret
+    end
+    m := e_rm(g, M_VOP_RR, 8, dst, vk_mem(g, v, 4))
+    g.mc.cc[m] = opc
+end
+
 func vsplat32(g &: Ng, v: i64): int:
     k := gpr(g)
     _m := e_movi(g, k, v)
@@ -262,7 +306,7 @@ end
 
 func vxor_bias(g &: Ng, src: int): int:
     r := rcopy(g, src)
-    vop(g, 0xEF, r, vsplat32(g, 0x80000000 as i64))
+    vop_k(g, 0xEF, r, 0x80000000 as i64)
     ret r
 end
 
@@ -484,6 +528,15 @@ func isel_vsel(g &: Ng, i: int):
     end
     m := g.i_a[i]
     bv := g.i_b[i]
+    if g.avx2 and g.arch == NG_ARCH_X64 and not g.off_vblend:
+        rm := use_reg(g, m)
+        rbv := use_reg(g, bv)
+        rb := vcopy(g, g.i_c[i])
+        mb := e_rr(g, M_VBLEND, 8, rb, rbv)
+        g.mc.r2[mb] = rm
+        set_res(g, i, rb)
+        ret
+    end
     mut r := 0 - 1
     if dies_here(g, bv, i) and bv != m:
         r = vcopy(g, bv)
@@ -500,6 +553,10 @@ end
 
 func isel_vbcast_int(g &: Ng, i: int):
     q := g.t_elem[g.i_ty[i]] == T_I64
+    if vk_on(g) and is_cint(g, g.i_a[i]):
+        set_res(g, i, vsplat_ld(g, g.v_i[g.i_a[i]], q ? 8 : 4))
+        ret
+    end
     if g.isy:
         set_res(g, i, ybcast_gpr(g, use_reg(g, g.i_a[i]), q, q ? VUN_BCQ : VUN_BCD))
         ret
@@ -518,7 +575,7 @@ end
 func ystore_w8(g &: Ng, i: int):
     r := vcopy(g, g.i_a[i])
     w := g.t_elem[g.v_ty[g.i_a[i]]] == T_I16
-    vop(g, 0xDB, r, vsplat32(g, (w ? 0x00FF00FF : 255) as i64))
+    vop_k(g, 0xDB, r, (w ? 0x00FF00FF : 255) as i64)
     hi := yext_hi(g, r)
     p1 := e_rr(g, M_VOP_RR, 8, r, hi)
     g.mc.cc[p1] = w ? 0x67 : 0x6B
@@ -557,7 +614,7 @@ func isel_vstore_w8(g &: Ng, i: int):
     end
     r := vcopy(g, g.i_a[i])
     if g.t_elem[g.v_ty[g.i_a[i]]] == T_I16:
-        vop(g, 0xDB, r, vsplat32(g, 0x00FF00FF as i64))
+        vop_k(g, 0xDB, r, 0x00FF00FF as i64)
         vop(g, 0x67, r, r)
         _s8 := e_mr(g, M_FST, 8, mem_of(g, g.i_b[i], 0 as i64), r)
         ret

@@ -10,6 +10,7 @@ const LV_NARROW := 6
 const LV_HOIST := 7
 const LV_RIDX := 8
 const LV_RADDR := 9
+const LV_TAIL_MAX := 48
 
 pub struct Lv:
     pub h: int = 0 - 1
@@ -61,6 +62,7 @@ pub struct Lv:
     pub rhi: Vector<i64> = Vector {}
     pub rkn: Vector<bool> = Vector {}
     pub navg: Vector<int> = Vector {}
+    pub tail: bool = false
 end
 
 func lv_in(g &: Ng, r &: Lv, v: int): bool:
@@ -1271,8 +1273,25 @@ func lv_emit_before(g &: Ng, at: int, op: int, ty: int, a: int, bb: int): int:
     ret v
 end
 
+func lv_tail_wide(g &: Ng, r &: Lv, v: int, vt: int): int:
+    if not r.tail or is_ymm(g, vt):
+        ret 0 - 1
+    end
+    wt := vec_ty(g.t_elem[vt], true)
+    repeat r.bc_s.len() in k:
+        if r.bc_s[k] == v and g.v_ty[r.bc_v[k]] == wt and g.v_kind[r.bc_v[k]] == VK_INS:
+            ret r.bc_v[k]
+        end
+    end
+    ret 0 - 1
+end
+
 func lv_bcast(g &: Ng, r &: Lv, ck: int, v0: int, vt: int): int:
     v := lv_hm(r, v0)
+    tw := lv_tail_wide(g, r, v, vt)
+    if tw >= 0:
+        ret tw
+    end
     repeat r.bc_s.len() in k:
         if r.bc_s[k] == v and g.v_ty[r.bc_v[k]] == vt:
             ret r.bc_v[k]
@@ -1294,6 +1313,10 @@ func lv_bcast(g &: Ng, r &: Lv, ck: int, v0: int, vt: int): int:
 end
 
 func lv_bmask(g &: Ng, r &: Lv, ck: int, c: int, vt: int): int:
+    tw := lv_tail_wide(g, r, c, vt)
+    if tw >= 0:
+        ret tw
+    end
     repeat r.bc_s.len() in k:
         if r.bc_s[k] == c and g.v_ty[r.bc_v[k]] == vt:
             ret r.bc_v[k]
@@ -1317,7 +1340,7 @@ end
 
 func lv_lanes(g &: Ng, r &: Lv, ck: int, vt: int): int:
     each lv in r.lanes_v:
-        if g.v_ty[lv] == vt:
+        if g.v_ty[lv] == vt or (r.tail and not is_ymm(g, vt) and g.v_ty[lv] == vec_ty(g.t_elem[vt], true)):
             ret lv
         end
     end
@@ -1380,7 +1403,7 @@ func lv_vget(g &: Ng, r &: Lv, ck: int, v: int, vt: int): int:
     if v >= 0 and v < r.vmap.len() and r.vmap[v] >= 0:
         m := r.vmap[v]
         if not is_vec(g, g.v_ty[m]) and lv_idx_data(g, r, v) and r.vbody >= 0 and r.vhead >= 0:
-            vi := lv_viv(g, r, ck, v, vt)
+            vi := r.tail ? 0 - 1 : lv_viv(g, r, ck, v, vt)
             if vi >= 0:
                 ret vi
             end
@@ -1518,180 +1541,34 @@ func lv_replace_uses(g &: Ng, r &: Lv, old: int, nv: int, skip: int):
     end
 end
 
-func lv_transform(g &: Ng, r &: Lv):
-    h := r.h
-    pre := r.pre
-    g.i_f[g.b_last[h]] = g.i_f[g.b_last[h]] | IF_NOVEC
-    ivv := g.i_res[r.ivp]
-    ivt := g.i_ty[r.ivp]
-    start := phi_val_for(g, r.ivp, pre)
-    ck := new_blk(g)
-    vh := new_blk(g)
-    vb := new_blk(g)
-    r.vbody = vb
-    rb := new_blk(g)
-    ckt := ins_new(g, OP_CBR, T_VOID)
-    ins_append(g, ck, ckt)
-    replace_succ(g, g.b_last[pre], h, ck)
-    if r.divp >= 0:
-        hi0 := phi_val_for(g, r.divp, pre)
-        r.rsum = lv_emit_before(g, ckt, OP_ADD, ivt, start, hi0)
-        sl := lv_sext(g, ck, start)
-        sh := lv_sext(g, ck, hi0)
-        r.rsum64 = lv_emit_before(g, ckt, OP_ADD, T_I64, sl, sh)
-        s1 := lv_emit_before(g, ckt, OP_ADD, T_I64, r.rsum64, const_int(g, T_I64, 1 as i64))
-        r.lim = lv_emit_before(g, ckt, OP_ASHR, T_I64, s1, const_int(g, T_I64, 1 as i64))
+func lv_short_at(g &: Ng, r &: Lv, adr: int, esz: int): bool:
+    if adr < 0 or g.v_kind[adr] != VK_INS or esz <= 0:
+        ret false
     end
-    lim64 := lv_sext(g, ck, r.lim)
-    s64 := lv_sext(g, ck, start)
-    vfm := r.sle ? r.vf - 2 : r.vf - 1
-    vlim := lv_emit_before(g, ckt, OP_SUB, T_I64, lim64, const_int(g, T_I64, vfm as i64))
-    mut cond := lv_emit_before(g, ckt, OP_ICMP, T_I1, s64, vlim)
-    g.i_x[g.v_def[cond]] = CC_SLT
-    mut ce := lim64
-    if r.sle:
-        ce = lv_emit_before(g, ckt, OP_ADD, T_I64, lim64, const_int(g, T_I64, 1 as i64))
+    base := g.i_a[g.v_def[adr]]
+    if base < 0 or g.v_kind[base] != VK_INS or g.i_op[g.v_def[base]] != OP_ALLOCA:
+        ret false
     end
-    r.hmap.clear()
-    repeat g.v_kind.len():
-        r.hmap.push(0 - 1)
-    end
-    each hl in r.hoist:
-        nh := ins_new(g, OP_LOAD, g.i_ty[hl])
-        g.i_a[nh] = lv_hm(r, g.i_a[hl])
-        g.i_c[nh] = g.i_c[hl]
-        ins_before(g, ckt, nh)
-        hres := new_res(g, nh)
-        repl_grow(g)
-        until r.hmap.len() >= g.v_kind.len():
-            r.hmap.push(0 - 1)
-        end
-        r.hmap[g.i_res[hl]] = hres
-    end
-    mut hq := 0
-    until hq < r.hchecks.len():
-        mut s_lo := 0 - 1
-        mut s_hi := 0 - 1
-        lv_addr_range(g, r, ck, r.hchecks[hq], s64, ce, s_lo, s_hi)
-        hl2 := r.hchecks[hq + 1]
-        p0 := lv_emit_before(g, ckt, OP_PTRTOINT, T_I64, lv_hm(r, g.i_a[hl2]), 0 - 1)
-        p1 := lv_emit_before(g, ckt, OP_ADD, T_I64, p0, const_int(g, T_I64, tsize(g, g.i_ty[hl2]) as i64))
-        h1 := lv_emit_before(g, ckt, OP_ICMP, T_I1, s_hi, p0)
-        g.i_x[g.v_def[h1]] = CC_ULE
-        h2 := lv_emit_before(g, ckt, OP_ICMP, T_I1, p1, s_lo)
-        g.i_x[g.v_def[h2]] = CC_ULE
-        h3 := lv_emit_before(g, ckt, OP_OR, T_I1, h1, h2)
-        cond = lv_emit_before(g, ckt, OP_AND, T_I1, cond, h3)
-        hq += 2
-    end
-    mut q := 0
-    until q < r.checks.len():
-        mut a_lo := 0 - 1
-        mut a_hi := 0 - 1
-        mut b_lo := 0 - 1
-        mut b_hi := 0 - 1
-        lv_addr_range(g, r, ck, r.checks[q], s64, ce, a_lo, a_hi)
-        lv_addr_range(g, r, ck, r.checks[q + 1], s64, ce, b_lo, b_hi)
-        c1 := lv_emit_before(g, ckt, OP_ICMP, T_I1, a_hi, b_lo)
-        g.i_x[g.v_def[c1]] = CC_ULE
-        c2 := lv_emit_before(g, ckt, OP_ICMP, T_I1, b_hi, a_lo)
-        g.i_x[g.v_def[c2]] = CC_ULE
-        c3 := lv_emit_before(g, ckt, OP_OR, T_I1, c1, c2)
-        cond = lv_emit_before(g, ckt, OP_AND, T_I1, cond, c3)
-        q += 2
-    end
-    g.i_a[ckt] = cond
-    g.i_b[ckt] = vh
-    g.i_c[ckt] = h
-    g.i_f[ckt] = IF_NOVEC
-    r.vmap.clear()
-    r.inv.clear()
-    repeat g.v_kind.len():
-        r.vmap.push(0 - 1)
-        r.inv.push(false)
-    end
-    viv_phi := ins_new(g, OP_PHI, ivt)
-    g.i_ps[viv_phi] = g.pool.len()
-    g.i_pcount[viv_phi] = 2
-    g.pool.push(start)
-    g.pool.push(ck)
-    g.pool.push(0 - 1)
-    g.pool.push(vb)
-    vpool := g.pool.len() - 2
-    viv := new_res(g, viv_phi)
-    ins_append(g, vh, viv_phi)
-    r.vhead = vh
-    r.vstart = start
-    r.rinv.clear()
-    mut vaccs := Vector {} as Vector<int>
-    mut vpools := Vector {} as Vector<int>
-    repeat r.reds.len() in rk:
-        rp := r.reds[rk]
-        vt := r.rkind[rk] >= 5 ? T_V2I64 : lv_vty(g.i_ty[rp], r.lane, r.wide)
-        mut a0 := new_val(g, VK_ZERO, vt, 0 as i64)
-        if r.rkind[rk] != 0 and r.rkind[rk] < 5:
-            a0 = lv_bcast(g, r, ck, phi_val_for(g, rp, pre), vt)
-        end
-        ap := ins_new(g, OP_PHI, vt)
-        g.i_ps[ap] = g.pool.len()
-        g.i_pcount[ap] = 2
-        g.pool.push(a0)
-        g.pool.push(ck)
-        g.pool.push(0 - 1)
-        g.pool.push(vb)
-        vpools.push(g.pool.len() - 2)
-        av := new_res(g, ap)
-        ins_append(g, vh, ap)
-        vaccs.push(av)
-        r.rinv.push(0 - 1)
-        r.vmap[g.i_res[rp]] = av
-    end
-    viv64 := lv_sext_app(g, vh, viv)
-    vc := lv_emit(g, vh, OP_ICMP, T_I1, viv64, vlim)
-    g.i_x[g.v_def[vc]] = CC_SLT
-    vct := ins_new(g, OP_CBR, T_VOID)
-    g.i_a[vct] = vc
-    g.i_b[vct] = vb
-    g.i_c[vct] = rb
-    g.i_f[vct] = IF_NOVEC
-    ins_append(g, vh, vct)
-    r.vmap[ivv] = viv
-    if r.divp >= 0:
-        hph := ins_new(g, OP_PHI, T_I64)
-        g.i_ps[hph] = g.pool.len()
-        g.i_pcount[hph] = 2
-        g.pool.push(lv_sext(g, ck, phi_val_for(g, r.divp, pre)))
-        g.pool.push(ck)
-        g.pool.push(0 - 1)
-        g.pool.push(vb)
-        r.hpool = g.pool.len() - 2
-        r.hp64 = new_res(g, hph)
-        mut fp := g.b_first[vh]
-        until fp >= 0 and g.i_op[fp] == OP_PHI:
-            fp = g.i_next[fp]
-        end
-        ins_before(g, fp, hph)
-        if ivt == T_I64:
-            r.vmap[g.i_res[r.divp]] = r.hp64
-        else:
-            ht := lv_emit(g, vb, OP_TRUNC, ivt, r.hp64, 0 - 1)
-            g.i_x[g.v_def[ht]] = T_I64
-            r.vmap[g.i_res[r.divp]] = ht
+    al := g.v_def[base]
+    n := g.i_d[al] < (1 as i64) ? 1 : g.i_d[al] as int
+    ret tsize(g, g.i_x[al]) * n / esz < 2 * r.vf
+end
+
+func lv_short(g &: Ng, r &: Lv): bool:
+    each s in r.stores:
+        if lv_short_at(g, r, g.i_b[s], tsize(g, g.v_ty[g.i_a[s]])):
+            ret true
         end
     end
-    if r.shape == 0:
-        ne := new_blk(g)
-        nej := ins_new(g, OP_BR, T_VOID)
-        g.i_b[nej] = r.exitb
-        ins_append(g, ne, nej)
-        replace_succ(g, g.b_last[h], r.exitb, ne)
-        mut ep := g.b_first[r.exitb]
-        until ep >= 0 and g.i_op[ep] == OP_PHI:
-            lv_phi_repred(g, ep, h, ne)
-            ep = g.i_next[ep]
+    each ld in r.loads:
+        if lv_short_at(g, r, g.i_a[ld], tsize(g, g.i_ty[ld])):
+            ret true
         end
-        r.exitb = ne
     end
+    ret false
+end
+
+func lv_emit_body(g &: Ng, r &: Lv, ck: int, vb: int, vaccs &: Vector<int>):
     each i in r.body:
         op := g.i_op[i]
         res := g.i_res[i]
@@ -1930,6 +1807,250 @@ func lv_transform(g &: Ng, r &: Lv):
         r.vmap[res] = new_res(g, ni2)
         ins_append(g, vb, ni2)
     end
+end
+
+func lv_tail_ok(g &: Ng, r &: Lv, vb: int): bool:
+    if g.off_vtail or not r.wide or r.reds.len() > 0 or r.divp >= 0 or lv_short(g, r):
+        ret false
+    end
+    mut n := 0
+    mut i := g.b_first[vb]
+    until i >= 0:
+        n += 1
+        i = g.i_next[i]
+    end
+    ret n <= LV_TAIL_MAX
+end
+
+func lv_tail(g &: Ng, r &: Lv, vct: int, rb: int, viv: int, viv64: int, lim64: int, ivt: int): int:
+    e0 := new_blk(g)
+    e1 := new_blk(g)
+    tb := new_blk(g)
+    vf := r.vf
+    vb := r.vbody
+    hvf := vf / 2
+    hfm := r.sle ? hvf - 2 : hvf - 1
+    elim := lv_emit(g, e0, OP_SUB, T_I64, lim64, const_int(g, T_I64, hfm as i64))
+    ec := lv_emit(g, e0, OP_ICMP, T_I1, viv64, elim)
+    g.i_x[g.v_def[ec]] = CC_SLT
+    et := ins_new(g, OP_CBR, T_VOID)
+    g.i_a[et] = ec
+    g.i_b[et] = e1
+    g.i_c[et] = rb
+    g.i_f[et] = IF_NOVEC
+    ins_append(g, e0, et)
+    ej := ins_new(g, OP_BR, T_VOID)
+    g.i_b[ej] = tb
+    ins_append(g, e1, ej)
+    g.i_c[vct] = e0
+    each i in r.body:
+        res := g.i_res[i]
+        if res >= 0 and res < r.vmap.len():
+            r.vmap[res] = 0 - 1
+        end
+    end
+    r.vmap[g.i_res[r.ivp]] = viv
+    r.wide = false
+    r.vf = hvf
+    r.vbody = tb
+    r.tail = true
+    mut none := Vector {} as Vector<int>
+    lv_emit_body(g, r, e1, tb, none)
+    none.free()
+    r.wide = true
+    r.vf = vf
+    r.vbody = vb
+    r.tail = false
+    ve := lv_emit(g, tb, OP_ADD, ivt, viv, const_int(g, ivt, hvf as i64))
+    g.i_f[g.v_def[ve]] = IF_NSW
+    bj := ins_new(g, OP_BR, T_VOID)
+    g.i_b[bj] = rb
+    ins_append(g, tb, bj)
+    each tbk in [e0, e1, tb]:
+        mut ti := g.b_first[tbk]
+        until ti >= 0:
+            g.lvu_grow += 1
+            ti = g.i_next[ti]
+        end
+    end
+    ret lv_phi(g, rb, ivt, viv, e0, ve, tb)
+end
+
+func lv_transform(g &: Ng, r &: Lv):
+    h := r.h
+    pre := r.pre
+    g.i_f[g.b_last[h]] = g.i_f[g.b_last[h]] | IF_NOVEC
+    ivv := g.i_res[r.ivp]
+    ivt := g.i_ty[r.ivp]
+    start := phi_val_for(g, r.ivp, pre)
+    ck := new_blk(g)
+    vh := new_blk(g)
+    vb := new_blk(g)
+    r.vbody = vb
+    rb := new_blk(g)
+    ckt := ins_new(g, OP_CBR, T_VOID)
+    ins_append(g, ck, ckt)
+    replace_succ(g, g.b_last[pre], h, ck)
+    if r.divp >= 0:
+        hi0 := phi_val_for(g, r.divp, pre)
+        r.rsum = lv_emit_before(g, ckt, OP_ADD, ivt, start, hi0)
+        sl := lv_sext(g, ck, start)
+        sh := lv_sext(g, ck, hi0)
+        r.rsum64 = lv_emit_before(g, ckt, OP_ADD, T_I64, sl, sh)
+        s1 := lv_emit_before(g, ckt, OP_ADD, T_I64, r.rsum64, const_int(g, T_I64, 1 as i64))
+        r.lim = lv_emit_before(g, ckt, OP_ASHR, T_I64, s1, const_int(g, T_I64, 1 as i64))
+    end
+    lim64 := lv_sext(g, ck, r.lim)
+    s64 := lv_sext(g, ck, start)
+    vfm := r.sle ? r.vf - 2 : r.vf - 1
+    vlim := lv_emit_before(g, ckt, OP_SUB, T_I64, lim64, const_int(g, T_I64, vfm as i64))
+    mut cond := lv_emit_before(g, ckt, OP_ICMP, T_I1, s64, vlim)
+    g.i_x[g.v_def[cond]] = CC_SLT
+    mut ce := lim64
+    if r.sle:
+        ce = lv_emit_before(g, ckt, OP_ADD, T_I64, lim64, const_int(g, T_I64, 1 as i64))
+    end
+    r.hmap.clear()
+    repeat g.v_kind.len():
+        r.hmap.push(0 - 1)
+    end
+    each hl in r.hoist:
+        nh := ins_new(g, OP_LOAD, g.i_ty[hl])
+        g.i_a[nh] = lv_hm(r, g.i_a[hl])
+        g.i_c[nh] = g.i_c[hl]
+        ins_before(g, ckt, nh)
+        hres := new_res(g, nh)
+        repl_grow(g)
+        until r.hmap.len() >= g.v_kind.len():
+            r.hmap.push(0 - 1)
+        end
+        r.hmap[g.i_res[hl]] = hres
+    end
+    mut hq := 0
+    until hq < r.hchecks.len():
+        mut s_lo := 0 - 1
+        mut s_hi := 0 - 1
+        lv_addr_range(g, r, ck, r.hchecks[hq], s64, ce, s_lo, s_hi)
+        hl2 := r.hchecks[hq + 1]
+        p0 := lv_emit_before(g, ckt, OP_PTRTOINT, T_I64, lv_hm(r, g.i_a[hl2]), 0 - 1)
+        p1 := lv_emit_before(g, ckt, OP_ADD, T_I64, p0, const_int(g, T_I64, tsize(g, g.i_ty[hl2]) as i64))
+        h1 := lv_emit_before(g, ckt, OP_ICMP, T_I1, s_hi, p0)
+        g.i_x[g.v_def[h1]] = CC_ULE
+        h2 := lv_emit_before(g, ckt, OP_ICMP, T_I1, p1, s_lo)
+        g.i_x[g.v_def[h2]] = CC_ULE
+        h3 := lv_emit_before(g, ckt, OP_OR, T_I1, h1, h2)
+        cond = lv_emit_before(g, ckt, OP_AND, T_I1, cond, h3)
+        hq += 2
+    end
+    mut q := 0
+    until q < r.checks.len():
+        mut a_lo := 0 - 1
+        mut a_hi := 0 - 1
+        mut b_lo := 0 - 1
+        mut b_hi := 0 - 1
+        lv_addr_range(g, r, ck, r.checks[q], s64, ce, a_lo, a_hi)
+        lv_addr_range(g, r, ck, r.checks[q + 1], s64, ce, b_lo, b_hi)
+        c1 := lv_emit_before(g, ckt, OP_ICMP, T_I1, a_hi, b_lo)
+        g.i_x[g.v_def[c1]] = CC_ULE
+        c2 := lv_emit_before(g, ckt, OP_ICMP, T_I1, b_hi, a_lo)
+        g.i_x[g.v_def[c2]] = CC_ULE
+        c3 := lv_emit_before(g, ckt, OP_OR, T_I1, c1, c2)
+        cond = lv_emit_before(g, ckt, OP_AND, T_I1, cond, c3)
+        q += 2
+    end
+    g.i_a[ckt] = cond
+    g.i_b[ckt] = vh
+    g.i_c[ckt] = h
+    g.i_f[ckt] = IF_NOVEC
+    r.vmap.clear()
+    r.inv.clear()
+    repeat g.v_kind.len():
+        r.vmap.push(0 - 1)
+        r.inv.push(false)
+    end
+    viv_phi := ins_new(g, OP_PHI, ivt)
+    g.i_ps[viv_phi] = g.pool.len()
+    g.i_pcount[viv_phi] = 2
+    g.pool.push(start)
+    g.pool.push(ck)
+    g.pool.push(0 - 1)
+    g.pool.push(vb)
+    vpool := g.pool.len() - 2
+    viv := new_res(g, viv_phi)
+    ins_append(g, vh, viv_phi)
+    r.vhead = vh
+    r.vstart = start
+    r.rinv.clear()
+    mut vaccs := Vector {} as Vector<int>
+    mut vpools := Vector {} as Vector<int>
+    repeat r.reds.len() in rk:
+        rp := r.reds[rk]
+        vt := r.rkind[rk] >= 5 ? T_V2I64 : lv_vty(g.i_ty[rp], r.lane, r.wide)
+        mut a0 := new_val(g, VK_ZERO, vt, 0 as i64)
+        if r.rkind[rk] != 0 and r.rkind[rk] < 5:
+            a0 = lv_bcast(g, r, ck, phi_val_for(g, rp, pre), vt)
+        end
+        ap := ins_new(g, OP_PHI, vt)
+        g.i_ps[ap] = g.pool.len()
+        g.i_pcount[ap] = 2
+        g.pool.push(a0)
+        g.pool.push(ck)
+        g.pool.push(0 - 1)
+        g.pool.push(vb)
+        vpools.push(g.pool.len() - 2)
+        av := new_res(g, ap)
+        ins_append(g, vh, ap)
+        vaccs.push(av)
+        r.rinv.push(0 - 1)
+        r.vmap[g.i_res[rp]] = av
+    end
+    viv64 := lv_sext_app(g, vh, viv)
+    vc := lv_emit(g, vh, OP_ICMP, T_I1, viv64, vlim)
+    g.i_x[g.v_def[vc]] = CC_SLT
+    vct := ins_new(g, OP_CBR, T_VOID)
+    g.i_a[vct] = vc
+    g.i_b[vct] = vb
+    g.i_c[vct] = rb
+    g.i_f[vct] = g.off_lvunr or r.reds.len() > 0 or lv_short(g, r) ? IF_NOVEC : IF_NOVEC | IF_LVRUN
+    ins_append(g, vh, vct)
+    r.vmap[ivv] = viv
+    if r.divp >= 0:
+        hph := ins_new(g, OP_PHI, T_I64)
+        g.i_ps[hph] = g.pool.len()
+        g.i_pcount[hph] = 2
+        g.pool.push(lv_sext(g, ck, phi_val_for(g, r.divp, pre)))
+        g.pool.push(ck)
+        g.pool.push(0 - 1)
+        g.pool.push(vb)
+        r.hpool = g.pool.len() - 2
+        r.hp64 = new_res(g, hph)
+        mut fp := g.b_first[vh]
+        until fp >= 0 and g.i_op[fp] == OP_PHI:
+            fp = g.i_next[fp]
+        end
+        ins_before(g, fp, hph)
+        if ivt == T_I64:
+            r.vmap[g.i_res[r.divp]] = r.hp64
+        else:
+            ht := lv_emit(g, vb, OP_TRUNC, ivt, r.hp64, 0 - 1)
+            g.i_x[g.v_def[ht]] = T_I64
+            r.vmap[g.i_res[r.divp]] = ht
+        end
+    end
+    if r.shape == 0:
+        ne := new_blk(g)
+        nej := ins_new(g, OP_BR, T_VOID)
+        g.i_b[nej] = r.exitb
+        ins_append(g, ne, nej)
+        replace_succ(g, g.b_last[h], r.exitb, ne)
+        mut ep := g.b_first[r.exitb]
+        until ep >= 0 and g.i_op[ep] == OP_PHI:
+            lv_phi_repred(g, ep, h, ne)
+            ep = g.i_next[ep]
+        end
+        r.exitb = ne
+    end
+    lv_emit_body(g, r, ck, vb, vaccs)
     vnext := lv_emit(g, vb, OP_ADD, ivt, viv, const_int(g, ivt, r.vf as i64))
     g.i_f[g.v_def[vnext]] = IF_NSW
     g.pool[vpool] = vnext
@@ -1946,6 +2067,10 @@ func lv_transform(g &: Ng, r &: Lv):
     bj := ins_new(g, OP_BR, T_VOID)
     g.i_b[bj] = vh
     ins_append(g, vb, bj)
+    mut xiv := viv
+    if lv_tail_ok(g, r, vb):
+        xiv = lv_tail(g, r, vct, rb, viv, viv64, lim64, ivt)
+    end
     mut acc0 := Vector {} as Vector<int>
     repeat r.reds.len() in k3:
         rp3 := r.reds[k3]
@@ -1965,7 +2090,7 @@ func lv_transform(g &: Ng, r &: Lv):
             mut fin := lv_emit(g, rb, is_flt(g, g.i_ty[rp3]) ? OP_FADD : OP_ADD, g.i_ty[rp3], init, hv)
             if r.rinv[k3] >= 0:
                 rt := g.i_ty[rp3]
-                mut cn := lv_emit(g, rb, OP_SUB, ivt, viv, r.vstart)
+                mut cn := lv_emit(g, rb, OP_SUB, ivt, xiv, r.vstart)
                 if ivt != rt:
                     cn = lv_emit(g, rb, rt == T_I64 ? OP_SEXT : OP_TRUNC, rt, cn, 0 - 1)
                     g.i_x[g.v_def[cn]] = ivt
@@ -1983,7 +2108,7 @@ func lv_transform(g &: Ng, r &: Lv):
         ins_append(g, rb, rbj)
     else:
         skip = new_blk(g)
-        viv64b := lv_sext_app(g, rb, viv)
+        viv64b := lv_sext_app(g, rb, xiv)
         lim64b := r.lim
         mut lw := lim64b
         if g.v_ty[lim64b] != T_I64:
@@ -2004,9 +2129,9 @@ func lv_transform(g &: Ng, r &: Lv):
     mut j := g.b_first[h]
     until j >= 0 and g.i_op[j] == OP_PHI:
         lv_phi_repred(g, j, pre, ck)
-        mut nv := j == r.ivp ? viv : phi_val_for(g, j, ck)
+        mut nv := j == r.ivp ? xiv : phi_val_for(g, j, ck)
         if j == r.divp:
-            nv = lv_emit_before(g, g.b_last[rb], OP_SUB, ivt, r.rsum, viv)
+            nv = lv_emit_before(g, g.b_last[rb], OP_SUB, ivt, r.rsum, xiv)
         end
         repeat r.reds.len() in k4:
             if r.reds[k4] == j:
@@ -2021,7 +2146,7 @@ func lv_transform(g &: Ng, r &: Lv):
         mut repl := Vector {} as Vector<int>
         if g.i_res[r.ivn] >= 0:
             outs.push(g.i_res[r.ivn])
-            repl.push(viv)
+            repl.push(xiv)
         end
         repeat r.rnext.len() in k5:
             outs.push(g.i_res[r.rnext[k5]])
@@ -2031,7 +2156,7 @@ func lv_transform(g &: Ng, r &: Lv):
             if g.i_res[bi] >= 0 and (g.i_op[bi] == OP_TRUNC or g.i_op[bi] == OP_SEXT or g.i_op[bi] == OP_ZEXT) and g.i_a[bi] == g.i_res[r.ivn]:
                 cv := ins_new(g, g.i_op[bi], g.i_ty[bi])
                 dv_taint(g, bi)
-                g.i_a[cv] = viv
+                g.i_a[cv] = xiv
                 g.i_x[cv] = g.i_x[bi]
                 cvv := new_res(g, cv)
                 ins_before(g, g.b_last[skip], cv)

@@ -179,6 +179,12 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Install clang and llvm-ar for the C test helpers
+        run: |
+          echo 'Acquire::ForceIPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4 >/dev/null
+          sudo apt-get update
+          sudo apt-get install -y clang llvm
+
       - name: Install mingw-w64
         if: matrix.target == 'windows-x64'
         run: |
@@ -222,6 +228,18 @@ jobs:
           ./salam llvm compiler/main.salam --target=x86_64-linux-gnu -o host-stage/selfhost/ref.ll --log-level=error
           sh tools/bash/package-native.sh "host-stage/selfhost/$EXE" "$TRIPLE" "$TARGET" host-stage
           rm -rf "host-stage/selfhost/$EXE" "host-stage/salam-native-$TARGET"
+
+      - name: Build the C ABI tests and programs with identical code folding
+        env:
+          TRIPLE: ${{ matrix.triple }}
+        run: sh tools/bash/native-hw-stage.sh ./salam "$TRIPLE" host-stage
+
+      - name: Build the compiler with identical code folding
+        if: matrix.target == 'macos-arm64'
+        env:
+          TARGET: ${{ matrix.target }}
+          TRIPLE: ${{ matrix.triple }}
+        run: sh tools/bash/native-icf-compiler.sh build ./salam "$TRIPLE" "host-stage/salam-native-$TARGET.tar.gz" host-stage/icf-compiler
 
       - name: Upload the programs
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -279,6 +297,26 @@ jobs:
           codesign --verify --verbose host-stage/universal/llvm/ll_fib host-stage/tests/llvm/ll_fib host-stage/macos11/llvm/ll_fib
           sh tools/bash/native-stage-tests.sh host-stage/macos11
           sh tools/bash/native-stage-tests.sh host-stage/universal
+
+      - name: C ABI and timer tests run on the host
+        if: always()
+        shell: bash
+        run: sh tools/bash/native-stage-tests.sh host-stage/abi
+
+      - name: C ABI tests built by the LLVM backend run on the host
+        if: always()
+        shell: bash
+        run: sh tools/bash/native-stage-tests.sh host-stage/abi-llvm
+
+      - name: Programs with identical code folding run on the host
+        if: always()
+        shell: bash
+        run: sh tools/bash/native-stage-tests.sh host-stage/icf
+
+      - name: The compiler with identical code folding reproduces the reference IR on the host
+        if: always() && matrix.target == 'macos-arm64'
+        shell: bash
+        run: sh tools/bash/native-icf-compiler.sh run host-stage/icf-compiler host-stage/selfhost/ref.ll
 
       - name: The compiler built by the native backend reproduces the reference IR on the host
         id: ir
@@ -413,11 +451,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y qemu-user-static
 
-      - name: Install debuggers
+      - name: Install debuggers, and clang and llvm-ar for the C test helpers
         run: |
           echo 'Acquire::ForceIPv4 "true";' | sudo tee /etc/apt/apt.conf.d/99force-ipv4 >/dev/null
           sudo apt-get update
-          sudo apt-get install -y gdb gdb-multiarch
+          sudo apt-get install -y gdb gdb-multiarch clang llvm
 
       - name: Fetch the musl sysroot
         env:
@@ -568,6 +606,10 @@ jobs:
           find tests/en/llvm -name '*.salam' ! -name '_*' -print0 | sort -z |
             SALAM_LINKER=system NATIVE_WIN_TRIPLE=aarch64-w64-windows-gnu NATIVE_WIN_STAGE=winarm-stage/lld \
               xargs -0 sh tools/bash/native-windows-check.sh ./salam
+      - name: Build the i686 stdcall programs with the LLVM backend
+        run: |
+          SALAM_LINKER=builtin NATIVE_WIN_BACKEND=llvm NATIVE_WIN_TRIPLE=i686-w64-windows-gnu NATIVE_WIN_STAGE=winarm-stage/i686-llvm \
+            sh tools/bash/native-windows-check.sh ./salam tests/en/llvm/stdcall_pkg_extern.salam tests/en/llvm/stdcall_fn_pointer.salam
       - name: Build the compiler itself for Windows on Arm
         run: |
           mkdir -p winarm-stage/selfhost
@@ -578,6 +620,14 @@ jobs:
           SALAM_LLVM_MINGW="/tmp/${LLVM_MINGW}" sh tools/bash/package-native.sh winarm-stage/selfhost/salam.exe \
             aarch64-w64-windows-gnu windows-arm64 winarm-stage
           rm -rf winarm-stage/salam-native-windows-arm64
+      - name: Build the C ABI tests and programs with identical code folding
+        run: |
+          SALAM_LINKER=builtin sh tools/bash/native-hw-stage.sh ./salam aarch64-w64-windows-gnu winarm-stage
+          SALAM_LINKER=builtin sh tools/bash/native-hw-stage.sh ./salam i686-w64-windows-gnu winarm-stage/i686
+      - name: Build the compiler with identical code folding
+        run: |
+          SALAM_LINKER=builtin sh tools/bash/native-icf-compiler.sh build ./salam aarch64-w64-windows-gnu \
+            winarm-stage/salam-native-windows-arm64.tar.gz winarm-stage/icf-compiler
       - name: Package Salam for Windows on Arm
         run: sh tools/bash/package-winarm.sh ./salam "/tmp/${LLVM_MINGW}" winarm-stage/package
       - name: Upload the programs
@@ -607,6 +657,38 @@ jobs:
         if: always()
         shell: bash
         run: sh tools/bash/native-stage-run.sh winarm-stage/lld
+      - name: i686 programs built by the LLVM backend run under x86 emulation
+        if: always()
+        shell: bash
+        run: sh tools/bash/native-stage-run.sh winarm-stage/i686-llvm
+      - name: C ABI and timer tests run on Windows on Arm
+        if: always()
+        shell: bash
+        run: sh tools/bash/native-stage-tests.sh winarm-stage/abi
+      - name: C ABI tests built by the LLVM backend run on Windows on Arm
+        if: always()
+        shell: bash
+        run: sh tools/bash/native-stage-tests.sh winarm-stage/abi-llvm
+      - name: Programs with identical code folding run on Windows on Arm
+        if: always()
+        shell: bash
+        run: sh tools/bash/native-stage-tests.sh winarm-stage/icf
+      - name: i686 C ABI and timer tests run under x86 emulation
+        if: always()
+        shell: bash
+        run: sh tools/bash/native-stage-tests.sh winarm-stage/i686/abi
+      - name: i686 C ABI tests built by the LLVM backend run under x86 emulation
+        if: always()
+        shell: bash
+        run: sh tools/bash/native-stage-tests.sh winarm-stage/i686/abi-llvm
+      - name: i686 programs with identical code folding run under x86 emulation
+        if: always()
+        shell: bash
+        run: sh tools/bash/native-stage-tests.sh winarm-stage/i686/icf
+      - name: The compiler with identical code folding reproduces the reference IR on Windows on Arm
+        if: always()
+        shell: bash
+        run: sh tools/bash/native-icf-compiler.sh run winarm-stage/icf-compiler winarm-stage/selfhost/ref.ll
       - name: The compiler built for Windows on Arm reproduces the reference IR
         id: ir
         if: always()

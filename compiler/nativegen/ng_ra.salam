@@ -5,6 +5,8 @@ const RA_INF := 2147483647
 k_ra_gpr_sysv := [0, 1, 2, 6, 7, 8, 9, 3, 12, 13, 14, 15, 5]
 k_ra_gpr_win := [0, 1, 2, 8, 9, 3, 6, 7, 12, 13, 14, 15]
 k_ra_xmm := [16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29]
+k_ra_xmm_x14 := [16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30]
+k_xborrow := [30, 29, 28, 27, 26, 25, 24]
 k_ra_gpr_a64 := [0, 1, 2, 3, 5, 6, 7, 8, 9, 12, 13, 14, 15]
 k_ra_gpr_x86 := [0, 1, 2, 3, 5, 6]
 k_ra_xmm_x86 := [16, 17, 18, 19, 20, 21]
@@ -92,6 +94,7 @@ pub struct Ra:
     pub sv_r0: Vector<int> = Vector {}
     pub sv_rn: Vector<int> = Vector {}
     pub sv_use: Vector<int> = Vector {}
+    pub rm_bad: Vector<int> = Vector {}
 end
 
 func is_callee_saved(g &: Ng, r: int): bool:
@@ -736,7 +739,7 @@ func spill_vreg(g &: Ng, v: int):
 end
 
 func reg_ok_for(g &: Ng, r: int, cls: int): bool:
-    if r < 0 or r == RSP or r == R10 or r == R11 or r >= XMM14:
+    if r < 0 or r == RSP or r == R10 or r == R11 or (r == XMM14 and not g.ra_x14) or r >= XMM15:
         ret false
     end
     if r == RBP and g.os == NG_OS_WINDOWS and g.arch == NG_ARCH_X64:
@@ -821,6 +824,14 @@ func choose_reg(g &: Ng, ra &: Ra, v: int): int:
         each x8 in k_ra_xmm_x86:
             if ra.free_until[x8] > e:
                 ret x8
+            end
+        end
+        ret 0 - 1
+    end
+    if cls == 1 and g.ra_x14:
+        each x14 in k_ra_xmm_x14:
+            if ra.free_until[x14] > e:
+                ret x14
             end
         end
         ret 0 - 1
@@ -1016,10 +1027,30 @@ func ls_one(g &: Ng, ra &: Ra, v: int):
         ra.active.push(v)
         ret
     end
+    if rm_cheap(g, ra, v):
+        if ra.rs_on:
+            rs_spill_piece(g, ra, v)
+        else:
+            spill_vreg(g, v)
+        end
+        ret
+    end
     mut victim := 0 - 1
     mut vi := 0 - 1
     mut vw := spill_weight(g, ra, v)
-    if g.opt and cls == 1 and not g.off_belady:
+    repeat ra.active.len() in qr:
+        ar := ra.active[qr]
+        if victim < 0 and g.mc.vcls[ar] == cls and rm_cheap(g, ra, ar) and not (ywin and g.mc.vloc[ar] >= 22):
+            rr0 := g.mc.vloc[ar]
+            if fixed_inter(ra, rr0, v, pos) < 0 and not inactive_blocks(g, ra, rr0, v, pos):
+                victim = ar
+                vi = qr
+            end
+        end
+    end
+    if victim >= 0:
+        vw = 0
+    else g.opt and cls == 1 and not g.off_belady:
         mut far := ra.rs_on ? rs_next_use(g, ra, v, pos + 1) : next_ref(g, ra, v, pos + 1)
         repeat ra.active.len() in qb:
             ab := ra.active[qb]
@@ -1111,6 +1142,7 @@ func mc_take(g &: Ng): Mc:
     g.mc.sz2 = Vector {} as Vector<int>
     g.mc.r0 = Vector {} as Vector<int>
     g.mc.r1 = Vector {} as Vector<int>
+    g.mc.r2 = Vector {} as Vector<int>
     g.mc.imm = Vector {} as Vector<i64>
     g.mc.mk = Vector {} as Vector<int>
     g.mc.mb = Vector {} as Vector<int>
@@ -1132,6 +1164,7 @@ func mc_free_arrays(m &: Mc):
     m.sz2.free()
     m.r0.free()
     m.r1.free()
+    m.r2.free()
     m.imm.free()
     m.mk.free()
     m.mb.free()
@@ -1151,6 +1184,7 @@ func mi_clone(g &: Ng, o &: Mc, i: int): int:
     g.mc.sz2[j] = o.sz2[i]
     g.mc.r0[j] = o.r0[i]
     g.mc.r1[j] = o.r1[i]
+    g.mc.r2[j] = o.r2[i]
     g.mc.imm[j] = o.imm[i]
     g.mc.mk[j] = o.mk[i]
     g.mc.mb[j] = o.mb[i]
@@ -1177,7 +1211,135 @@ func phys(g &: Ng, r: int): int:
     ret r
 end
 
+func rm_kind(g &: Ng, v: int): int:
+    ret v >= 0 and v < g.rm_k.len() ? g.rm_k[v] : 0
+end
+
+func rm_mem(g &: Ng, v: int): Mem:
+    ret Mem { k = MK_RIP, sym = g.rm_sym[v], d = g.rm_d[v] }
+end
+
+func rm_free_use(op: int, r0: int, r1: int, r2: int, mk: int, cc: int, u: int, vex: bool): bool:
+    if mk != MK_NONE or r1 != u or r0 == u:
+        ret false
+    end
+    if op == M_COPY:
+        ret not vex
+    end
+    if op == M_VOP_RR:
+        ret not vshift_reg_op(cc)
+    end
+    ret op == M_VBLEND and r2 != u
+end
+
+func rm_cheap(g &: Ng, ra &: Ra, v: int): bool:
+    ret rm_kind(g, v) == 1 and v < ra.rm_bad.len() and ra.rm_bad[v] == 0
+end
+
+func rm_scan(g &: Ng, ra &: Ra):
+    nv := g.mc.vcls.len()
+    g.rm_k.clear()
+    g.rm_sym.clear()
+    g.rm_d.clear()
+    ra.rm_bad.clear()
+    mut nd := Vector {} as Vector<int>
+    mut cps := Vector {} as Vector<int>
+    repeat nv:
+        g.rm_k.push(0)
+        g.rm_sym.push(0 - 1)
+        g.rm_d.push(0 as i64)
+        ra.rm_bad.push(0)
+        nd.push(0)
+        cps.push(0 - 1)
+    end
+    if not g.opt or g.off_remat or g.arch != NG_ARCH_X64:
+        nd.free()
+        cps.free()
+        ret
+    end
+    n := g.mc.op.len()
+    mut vex := false
+    repeat n in i0:
+        if g.mc.ymm[i0] or g.mc.op[i0] == M_VUN or g.mc.op[i0] == M_VBLEND:
+            vex = true
+        end
+    end
+    repeat n in i:
+        op := g.mc.op[i]
+        if op == M_NOP or op == M_LABEL:
+            continue
+        end
+        mi_regs(g, i, ra.uses, ra.defs)
+        each d in ra.defs:
+            if d >= VBASE and d < nv:
+                nd[d] = nd[d] + 1
+                if op == M_VLD and g.mc.mk[i] == MK_RIP and g.mc.msym[i] == g.sym_ro and g.mc.r0[i] == d:
+                    g.rm_k[d] = 1
+                    g.rm_sym[d] = g.mc.msym[i]
+                    g.rm_d[d] = g.mc.md[i]
+                else op == M_XORPS and g.mc.r0[i] == d and g.mc.r1[i] == d:
+                    g.rm_k[d] = 2
+                else op == M_COPY and g.mc.r0[i] == d and g.mc.r1[i] >= VBASE and g.mc.r1[i] < nv:
+                    g.rm_k[d] = 3
+                    cps[d] = g.mc.r1[i]
+                else:
+                    g.rm_k[d] = 0
+                end
+            end
+        end
+    end
+    repeat nv in v:
+        if nd[v] != 1 or not g.mc.vwide[v]:
+            g.rm_k[v] = 0
+        end
+    end
+    repeat 4:
+        repeat nv in v2:
+            if g.rm_k[v2] == 3:
+                c := cps[v2]
+                k := g.rm_k[c]
+                if k == 1 or k == 2:
+                    g.rm_k[v2] = k
+                    g.rm_sym[v2] = g.rm_sym[c]
+                    g.rm_d[v2] = g.rm_d[c]
+                else k == 0:
+                    g.rm_k[v2] = 0
+                end
+            end
+        end
+    end
+    repeat nv in v3:
+        if g.rm_k[v3] == 3:
+            g.rm_k[v3] = 0
+        end
+    end
+    repeat n in i2:
+        op2 := g.mc.op[i2]
+        if op2 == M_NOP or op2 == M_LABEL:
+            continue
+        end
+        mi_regs(g, i2, ra.uses, ra.defs)
+        each u in ra.uses:
+            if u >= VBASE and u < nv and g.rm_k[u] != 0 and not rm_free_use(op2, g.mc.r0[i2], g.mc.r1[i2], g.mc.r2[i2], g.mc.mk[i2], g.mc.cc[i2], u, vex):
+                ra.rm_bad[u] = ra.rm_bad[u] + 1
+            end
+        end
+    end
+    nd.free()
+    cps.free()
+end
+
 func reload(g &: Ng, v: int, scratch: int):
+    rk := rm_kind(g, v)
+    if rk == 1:
+        rl := e_rm(g, M_VLD, 16, scratch, rm_mem(g, v))
+        g.mc.ymm[rl] = g.mc.vymm[v]
+        ret
+    end
+    if rk == 2:
+        _z := e_rr(g, M_XORPS, 16, scratch, scratch)
+        ret
+    end
     m := frame_mem(g.mc.vslot[v], 0 as i64)
     if g.mc.vwide[v]:
         lw := e_rm(g, M_VLD, 16, scratch, m)
@@ -1203,7 +1365,7 @@ end
 
 func is_def_slot(op: int, cc: int): bool:
     switch op:
-        M_MOV_RR, M_COPY, M_MOVZX_RR, M_MOVSX_RR, M_FMOV_RR, M_CVTSI2F, M_CVTF2SI, M_CVTF2F, M_MOVQ_XG, M_MOVQ_GX, M_SQRT, M_MOV_RI, M_SETCC, M_LD, M_LDZX, M_LDSX, M_LEA, M_FLD, M_LDGOT, M_IMUL_RR, M_FOP_RR, M_XORPS, M_ANDPS, M_UNARY, M_SHIFT_RI, M_SHIFT_RC, M_IMUL_RRI, M_CMOV, M_XCHG, M_LXADD, M_ALU_RM, M_FOP_RM, M_VLD, M_VOP_RR, M_SHUFPS, M_UNPCKLPD, M_PSHUFD, M_VSHI, M_VLD32, M_VUN:
+        M_MOV_RR, M_COPY, M_MOVZX_RR, M_MOVSX_RR, M_FMOV_RR, M_CVTSI2F, M_CVTF2SI, M_CVTF2F, M_MOVQ_XG, M_MOVQ_GX, M_SQRT, M_MOV_RI, M_SETCC, M_LD, M_LDZX, M_LDSX, M_LEA, M_FLD, M_LDGOT, M_IMUL_RR, M_FOP_RR, M_XORPS, M_ANDPS, M_UNARY, M_SHIFT_RI, M_SHIFT_RC, M_IMUL_RRI, M_CMOV, M_XCHG, M_LXADD, M_ALU_RM, M_FOP_RM, M_VLD, M_VOP_RR, M_SHUFPS, M_UNPCKLPD, M_PSHUFD, M_VSHI, M_VLD32, M_VUN, M_VBLEND:
             ret true
         end
         M_ALU_RR, M_ALU_RI:
@@ -1267,6 +1429,97 @@ func x86_borrow(g &: Ng, i: int, r0: int, r1: int, mb: int, mi: int, save &: boo
     ret pick
 end
 
+func rw_blend(g &: Ng, ra &: Ra, o &: Mc, i: int, rsp: bool):
+    r0 := o.r0[i]
+    r1 := o.r1[i]
+    r2 := o.r2[i]
+    mut p0 := phys(g, r0)
+    mut p2 := phys(g, r2)
+    s0 := spilled(g, r0)
+    s1 := spilled(g, r1)
+    if s0:
+        p0 = XMM15
+        reload(g, r0, XMM15)
+    end
+    mut bsave := false
+    mut bsl := 0 - 1
+    if spilled(g, r2):
+        if r2 == r0:
+            p2 = XMM15
+        else g.ra_x14:
+            p2 = xborrow(g, i, p0, s1 ? 0 - 1 : phys(g, r1), bsave)
+            if bsave:
+                bsl = xborrow_save(g, p2)
+            end
+            reload(g, r2, p2)
+        else:
+            p2 = XMM14
+            reload(g, r2, XMM14)
+        end
+    end
+    j := mi_clone(g, o, i)
+    g.mc.r0[j] = p0
+    g.mc.r2[j] = p2
+    if r1 == r0:
+        g.mc.r1[j] = p0
+    else r1 == r2:
+        g.mc.r1[j] = p2
+    else s1:
+        g.mc.r1[j] = 0 - 1
+        set_mem(g, j, rm_kind(g, r1) == 1 ? rm_mem(g, r1) : frame_mem(g.mc.vslot[r1], 0 as i64))
+    else:
+        g.mc.r1[j] = phys(g, r1)
+    end
+    if s0:
+        spill_store(g, r0, XMM15)
+    end
+    if bsl >= 0:
+        xborrow_restore(g, p2, bsl)
+    end
+    if rsp:
+        rs_def_store(g, ra, M_VBLEND, o.cc[i], r0)
+    end
+end
+
+func xborrow(g &: Ng, i: int, a: int, b: int, save &: bool): int:
+    mut pick := 0 - 1
+    each x in k_xborrow:
+        if x != a and x != b:
+            if not x86_live(g, x, i):
+                save = false
+                ret x
+            end
+            if pick < 0:
+                pick = x
+            end
+        end
+    end
+    save = true
+    ret pick
+end
+
+func fn_has_ymm(g &: Ng): bool:
+    each y in g.mc.vymm:
+        if y:
+            ret true
+        end
+    end
+    ret false
+end
+
+func xborrow_save(g &: Ng, r: int): int:
+    sl := new_slot(g, 32, 16)
+    g.mc.fs_temp[sl] = false
+    sw := e_mr(g, M_VST, 16, frame_mem(sl, 0 as i64), r)
+    g.mc.ymm[sw] = fn_has_ymm(g)
+    ret sl
+end
+
+func xborrow_restore(g &: Ng, r: int, sl: int):
+    lw := e_rm(g, M_VLD, 16, r, frame_mem(sl, 0 as i64))
+    g.mc.ymm[lw] = fn_has_ymm(g)
+end
+
 func rewrite(g &: Ng, ra &: Ra):
     mut o := mc_take(g)
     n := o.op.len()
@@ -1296,6 +1549,9 @@ func rewrite(g &: Ng, ra &: Ra):
             rs_set(g, ra, r1, i)
             rs_set(g, ra, mb, i)
             rs_set(g, ra, mi, i)
+            if op == M_VBLEND:
+                rs_set(g, ra, o.r2[i], i)
+            end
         end
         if op == M_COPY or op == M_FMOV_RR:
             s0 := spilled(g, r0)
@@ -1327,6 +1583,10 @@ func rewrite(g &: Ng, ra &: Ra):
             end
             continue
         end
+        if op == M_VBLEND:
+            rw_blend(g, ra, o, i, rsp)
+            continue
+        end
         if op == M_ALU_RR and o.mk[i] == MK_NONE and r0 >= 0 and r1 >= 0 and r0 != r1:
             f0 := spilled(g, r0)
             f1 := spilled(g, r1)
@@ -1344,6 +1604,7 @@ func rewrite(g &: Ng, ra &: Ra):
                 continue
             end
         end
+        rmf := op == M_VOP_RR and r1 >= 0 and spilled(g, r1) and r1 != mb and r1 != mi and rm_kind(g, r1) == 1 and rm_free_use(op, r0, r1, o.r2[i], o.mk[i], o.cc[i], r1, true)
         mut ngs := 0
         mut nxs := 0
         mut sr0 := 0 - 1
@@ -1362,7 +1623,7 @@ func rewrite(g &: Ng, ra &: Ra):
                 ngs += 1
             end
         end
-        if spilled(g, r1) and r1 != mb and r1 != mi:
+        if spilled(g, r1) and r1 != mb and r1 != mi and not rmf:
             if g.mc.vcls[r1] == 1:
                 sr1 = XMM15
                 nxs += 1
@@ -1383,7 +1644,7 @@ func rewrite(g &: Ng, ra &: Ra):
             else r0 == mi:
                 sr0 = smi
             else g.mc.vcls[r0] == 1:
-                sr0 = nxs == 0 ? XMM15 : XMM14
+                sr0 = nxs == 0 ? XMM15 : (g.ra_x14 ? 0 - 3 : XMM14)
                 nxs += 1
             else:
                 sr0 = ngs == 0 ? R11 : (ngs == 1 ? R10 : 0 - 2)
@@ -1443,6 +1704,14 @@ func rewrite(g &: Ng, ra &: Ra):
                 fail(g, "native backend: register allocator ran out of scratch registers")
             end
         end
+        mut xsl := 0 - 1
+        if sr0 == 0 - 3:
+            mut xsave := false
+            sr0 = xborrow(g, i, sr1, sr1, xsave)
+            if xsave:
+                xsl = xborrow_save(g, sr0)
+            end
+        end
         if sr1 >= 0 and sr1 != smb and sr1 != smi:
             reload(g, r1, sr1)
         end
@@ -1456,6 +1725,10 @@ func rewrite(g &: Ng, ra &: Ra):
         if r1 >= 0:
             g.mc.r1[j] = sr1 >= 0 ? sr1 : phys(g, r1)
         end
+        if rmf:
+            g.mc.r1[j] = 0 - 1
+            set_mem(g, j, rm_mem(g, r1))
+        end
         if o.mk[i] == MK_BI:
             g.mc.mb[j] = nmb
             g.mc.mi[j] = nmi
@@ -1466,6 +1739,9 @@ func rewrite(g &: Ng, ra &: Ra):
         end
         if sr0 >= 0 and is_def_slot(op, o.cc[i]):
             spill_store(g, r0, sr0)
+        end
+        if xsl >= 0:
+            xborrow_restore(g, sr0, xsl)
         end
         if bw >= 0:
             _br := e_rm(g, M_LD, 4, bw, frame_mem(bslot, 0 as i64))
@@ -1910,6 +2186,8 @@ func regalloc(g &: Ng):
         rs_build_occ(g, ra)
         rs_save(g, ra)
     end
+    g.ra_x14 = g.opt and not g.off_xfree and g.arch == NG_ARCH_X64 and g.os != NG_OS_WINDOWS
+    rm_scan(g, ra)
     linear_scan(g, ra)
     if ra.rs_on:
         rs_finalize(g, ra)
@@ -1980,6 +2258,7 @@ func regalloc(g &: Ng):
     ra.cp_head.free()
     ra.cp_to.free()
     ra.cp_next.free()
+    ra.rm_bad.free()
     rs_free(ra)
 end
 

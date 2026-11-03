@@ -469,6 +469,10 @@ The counts are exactly reproducible, so the check fails on a regression and tell
 
 Add a line to `tools/lsan.supp` only when an allocation genuinely is not the compiler's to free, and say why in the file. A suppression hides a finding forever.
 
+### 🏷️ Markers in error tests
+
+A test under `tests/*/errors` says what the compiler must report with comment lines at the top of the file. The English spellings are `// EXPECT: E0xx` (the error code), `// EXPECT-MSG: text` (a message that must appear) and `// EXPECT-NOT: text` (one that must not). The Persian files use `// انتظار: ...`, `// انتظار پیام: ...` and `// انتظار-نه: ...`. The marker `انتظار پیام` is written with a space; the old `// انتظار-پیام:` is no longer read, so a test that still uses it fails with "want message". The lint tests under `tests/*/lint` use only the English `EXPECT-WARNINGS`, `EXPECT-FIXES`, `EXPECT-CODE`, `EXPECT-MSG` and `EXPECT-NOT`.
+
 ### 🔀 Cross-backend sweeps
 
 `run-tests.sh` gives nearly every section a C build, and only runs the

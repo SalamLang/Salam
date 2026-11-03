@@ -1,0 +1,429 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "clickhouse"
+@fa "کلیک هاوس"
+package clickhouse
+
+import str
+import conv
+import encoding
+import encoding.json
+import encoding.url
+import net.http
+
+@en "DEFAULT_PORT"
+@fa "درگاه پیش‌فرض"
+pub const DEFAULT_PORT := 8123
+
+@en "DEFAULT_SECURE_PORT"
+@fa "درگاه امن پیش‌فرض"
+pub const DEFAULT_SECURE_PORT := 8443
+
+@en "KIND_OTHER"
+@fa "نوع دیگر"
+pub const KIND_OTHER := 0
+
+@en "KIND_INT"
+@fa "نوع صحیح"
+pub const KIND_INT := 1
+
+@en "KIND_UINT"
+@fa "نوع طبیعی"
+pub const KIND_UINT := 2
+
+@en "KIND_FLOAT"
+@fa "نوع اعشاری"
+pub const KIND_FLOAT := 3
+
+@en "KIND_DECIMAL"
+@fa "نوع دهدهی"
+pub const KIND_DECIMAL := 4
+
+@en "KIND_STRING"
+@fa "نوع رشته"
+pub const KIND_STRING := 5
+
+@en "KIND_BOOL"
+@fa "نوع منطقی"
+pub const KIND_BOOL := 6
+
+@en "KIND_DATE"
+@fa "نوع تاریخ"
+pub const KIND_DATE := 7
+
+@en "KIND_DATETIME"
+@fa "نوع تاریخ و زمان"
+pub const KIND_DATETIME := 8
+
+@en "KIND_ARRAY"
+@fa "نوع آرایه"
+pub const KIND_ARRAY := 9
+
+@en "KIND_MAP"
+@fa "نوع نگاشت"
+pub const KIND_MAP := 10
+
+@en "KIND_TUPLE"
+@fa "نوع چندتایی"
+pub const KIND_TUPLE := 11
+
+@en "Options"
+@fa "گزینه‌ها"
+pub struct Options:
+    @en "addr"
+    @fa "نشانی"
+    pub addr: str = "localhost:8123"
+    @en "database"
+    @fa "پایگاه داده"
+    pub database: str = ""
+    @en "username"
+    @fa "نام کاربری"
+    pub username: str = "default"
+    @en "password"
+    @fa "گذرواژه"
+    pub password: str = ""
+    @en "secure"
+    @fa "امن"
+    pub secure: bool = false
+    @en "timeout_ms"
+    @fa "مهلت میلی‌ثانیه"
+    pub timeout_ms: int = 30000
+    @en "settings"
+    @fa "تنظیمات"
+    pub settings: HashMap<str, str> = HashMap {} as HashMap<str, str>
+    @en "headers"
+    @fa "سرآیندها"
+    pub headers: HashMap<str, str> = HashMap {} as HashMap<str, str>
+end
+
+@en "Conn"
+@fa "اتصال"
+pub struct Conn:
+    @en "opts"
+    @fa "گزینه‌ها"
+    pub opts: Options = Options {}
+    @en "base"
+    @fa "پایه"
+    pub base: str = ""
+    @en "connected"
+    @fa "باز"
+    pub connected: bool = false
+    @en "status"
+    @fa "وضعیت"
+    pub status: int = 0
+    @en "err"
+    @fa "پیام خطا"
+    pub err: str = ""
+    @en "code"
+    @fa "کد خطا"
+    pub code: int = 0
+    @en "query_id"
+    @fa "شناسه پرسمان"
+    pub query_id: str = ""
+    @en "read_rows"
+    @fa "ردیف‌های خوانده"
+    pub read_rows: i64 = 0
+    @en "written_rows"
+    @fa "ردیف‌های نوشته"
+    pub written_rows: i64 = 0
+
+    @en "Ok"
+    @fa "معتبر"
+    pub func Ok(): bool:
+        ret this.connected and this.err.len() == 0
+    end
+
+    @en "Error"
+    @fa "خطا"
+    pub func Error(): str:
+        ret this.err
+    end
+
+    @en "Code"
+    @fa "کد"
+    pub func Code(): int:
+        ret this.code
+    end
+
+    @en "Close"
+    @fa "بستن"
+    pub func Close():
+        this.connected = false
+    end
+
+    func _send(method: str, path: str, qs: str, body: str): http.Response:
+        this.err = ""
+        this.code = 0
+        this.status = 0
+        if not this.connected:
+            this.err = "the connection is closed"
+            ret http.Response { err = this.err }
+        end
+        opts := http.RequestOptions { timeout_ms = this.opts.timeout_ms }
+        r := http.Do(method, this.base + path + qs, _headers(this.opts), body, opts)
+        if r.err.len() > 0:
+            this.err = r.err
+            ret r
+        end
+        this.status = r.status
+        this.query_id = http.GetHeader(r, "X-ClickHouse-Query-Id")
+        summary := http.GetHeader(r, "X-ClickHouse-Summary")
+        if summary.len() > 0:
+            this.read_rows = conv.ParseIntOr(json.Get(summary, "read_rows"), 0 as i64)
+            this.written_rows = conv.ParseIntOr(json.Get(summary, "written_rows"), 0 as i64)
+        end
+        if r.status < 200 or r.status >= 300:
+            this.code = _exception_code(r)
+            this.err = str.Trim(r.body)
+            if this.err.len() == 0: this.err = "HTTP " + str.FromInt(r.status as i64) end
+        end
+        ret r
+    end
+
+    @en "Ping"
+    @fa "پینگ"
+    pub func Ping(): bool:
+        r := this._send("GET", "/ping", "", "")
+        if this.err.len() > 0: ret false end
+        ret str.StartsWith(r.body, "Ok")
+    end
+
+    @en "Exec"
+    @fa "اجرا"
+    pub func Exec(sql: str, args: Vector<str>): bool:
+        mut good := true
+        bound := _bind(sql, args, good)
+        if not good:
+            this.err = "the number of placeholders does not match the number of arguments"
+            ret false
+        end
+        ret this.ExecParams(bound, HashMap {} as HashMap<str, str>)
+    end
+
+    @en "ExecParams"
+    @fa "اجرا با پارامتر"
+    pub func ExecParams(sql: str, params: HashMap<str, str>): bool:
+        _ := this._send("POST", "/", _query_string(this.opts, params, false), sql)
+        ret this.err.len() == 0
+    end
+
+    @en "Query"
+    @fa "پرسمان"
+    pub func Query(sql: str, args: Vector<str>): Rows:
+        mut good := true
+        bound := _bind(sql, args, good)
+        if not good:
+            this.err = "the number of placeholders does not match the number of arguments"
+            ret Rows { err = this.err }
+        end
+        ret this.QueryParams(bound, HashMap {} as HashMap<str, str>)
+    end
+
+    @en "QueryParams"
+    @fa "پرسمان با پارامتر"
+    pub func QueryParams(sql: str, params: HashMap<str, str>): Rows:
+        r := this._send("POST", "/", _query_string(this.opts, params, true), sql)
+        if this.err.len() > 0: ret Rows { err = this.err } end
+        ret _parse_rows(r.body)
+    end
+
+    @en "QueryText"
+    @fa "پرسمان متن"
+    pub func QueryText(sql: str): str:
+        mut rows := this.QueryParams(sql, HashMap {} as HashMap<str, str>)
+        mut out := ""
+        if rows.Next(): out = rows.Text(0) end
+        rows.Close()
+        ret out
+    end
+
+    @en "QueryInt"
+    @fa "پرسمان عدد"
+    pub func QueryInt(sql: str): i64:
+        mut rows := this.QueryParams(sql, HashMap {} as HashMap<str, str>)
+        mut out := 0 as i64
+        if rows.Next(): out = rows.Int64(0) end
+        rows.Close()
+        ret out
+    end
+
+    @en "ServerVersion"
+    @fa "نسخه کارگزار"
+    pub func ServerVersion(): str:
+        ret this.QueryText("SELECT version()")
+    end
+
+    @en "PrepareBatch"
+    @fa "آماده‌سازی دسته"
+    pub func PrepareBatch(sql: str): Batch:
+        ret _new_batch(sql)
+    end
+
+    @en "SendBatch"
+    @fa "ارسال دسته"
+    pub func SendBatch(b: Batch): bool:
+        if b.err.len() > 0:
+            this.err = b.err
+            ret false
+        end
+        if b.rows.len() == 0:
+            this.err = "the batch has no rows"
+            ret false
+        end
+        ret this.ExecParams(b.head + " VALUES " + str.Join(b.rows, ","), HashMap {} as HashMap<str, str>)
+    end
+end
+
+func _base_url(o: Options): str:
+    mut addr := str.Trim(o.addr)
+    if addr.len() == 0: addr = "localhost" end
+    mut scheme := o.secure ? "https" : "http"
+    if str.StartsWith(addr, "https://"):
+        scheme = "https"
+        addr = addr.substr(8, addr.len() - 8)
+    else str.StartsWith(addr, "http://"):
+        addr = addr.substr(7, addr.len() - 7)
+    end
+    until str.EndsWith(addr, "/"):
+        addr = addr.substr(0, addr.len() - 1)
+    end
+    if addr.find(":") < 0 and not str.StartsWith(addr, "["):
+        port := scheme == "https" ? DEFAULT_SECURE_PORT : DEFAULT_PORT
+        addr = addr + ":" + str.FromInt(port as i64)
+    end
+    ret scheme + "://" + addr
+end
+
+func _query_string(o: Options, params: HashMap<str, str>, reading: bool): str:
+    mut parts := Vector {} as Vector<str>
+    defer parts.free()
+    if o.database.len() > 0: parts.push("database=" + encoding.URLEncode(o.database)) end
+    each k, v in o.settings:
+        parts.push(encoding.URLEncode(k) + "=" + encoding.URLEncode(v))
+    end
+    each k, v in params:
+        parts.push("param_" + encoding.URLEncode(k) + "=" + encoding.URLEncode(v))
+    end
+    if reading:
+        parts.push("default_format=JSONCompact")
+        parts.push("output_format_json_quote_64bit_integers=1")
+        parts.push("output_format_json_quote_denormals=1")
+    end
+    if parts.len() == 0: ret str.Clone("") end
+    ret "?" + str.Join(parts, "&")
+end
+
+func _headers(o: Options): HashMap<str, str>:
+    mut h := http.NewHeaders()
+    h.put("Content-Type", "text/plain; charset=utf-8")
+    if o.username.len() > 0: h.put("X-ClickHouse-User", o.username) end
+    if o.password.len() > 0: h.put("X-ClickHouse-Key", o.password) end
+    each k, v in o.headers:
+        h.put(k, v)
+    end
+    ret h
+end
+
+func _exception_code(r: http.Response): int:
+    hv := http.GetHeader(r, "X-ClickHouse-Exception-Code")
+    if hv.len() > 0: ret conv.ParseIntOr(hv, 0 as i64) as int end
+    body := r.body
+    if str.StartsWith(body, "Code: "):
+        mut stop := 6
+        until stop < body.len() and "0123456789".find(str.ByteSub(body, stop, 1)) >= 0:
+            stop += 1
+        end
+        ret conv.ParseIntOr(body.substr(6, stop - 6), 0 as i64) as int
+    end
+    ret 0
+end
+
+@en "DefaultOptions"
+@fa "گزینه‌های پیش‌فرض"
+pub func DefaultOptions(): Options:
+    ret Options {}
+end
+
+@en "Open"
+@fa "باز کردن"
+pub func Open(o: Options): Conn:
+    ret Conn { opts = o, base = _base_url(o), connected = true }
+end
+
+@en "OpenURL"
+@fa "باز کردن نشانی"
+pub func OpenURL(dsn: str): Conn:
+    mut text := str.Trim(dsn)
+    if str.StartsWith(text, "clickhouse://"):
+        text = "http://" + text.substr(13, text.len() - 13)
+    else str.StartsWith(text, "clickhouses://"):
+        text = "https://" + text.substr(14, text.len() - 14)
+    end
+    mut u := url.URL {}
+    try: u = url.Parse(text)
+    catch: ret Conn { err = "invalid ClickHouse address: " + dsn }
+end
+
+mut o := Options {}
+o.secure = u.scheme.lower() == "https"
+if u.host.len() == 0: ret Conn { err = "invalid ClickHouse address: " + dsn } end
+mut port := DEFAULT_PORT
+if u.port > 0:
+    port = u.port
+else o.secure:
+    port = DEFAULT_SECURE_PORT
+end
+o.addr = u.host + ":" + str.FromInt(port as i64)
+if u.userinfo.len() > 0:
+    mut info := u.userinfo
+    try: info = url.DecodedUserinfo(u)
+    catch: info = u.userinfo
+end
+colon := info.find(":")
+if colon >= 0:
+    o.username = info.substr(0, colon)
+    o.password = info.substr(colon + 1, info.len() - colon - 1)
+else:
+    o.username = info
+end
+end
+if u.path.len() > 1: o.database = u.path.substr(1, u.path.len() - 1) end
+if u.raw_query.len() > 0:
+    each pair in u.raw_query.split("&"):
+        eqi := pair.find("=")
+        if eqi > 0:
+            k := pair.substr(0, eqi)
+            mut v := pair.substr(eqi + 1, pair.len() - eqi - 1)
+            try: v = encoding.URLDecode(v)
+            catch: v = pair.substr(eqi + 1, pair.len() - eqi - 1)
+        end
+        if k == "database":
+            o.database = v
+        else k == "username":
+            o.username = v
+        else k == "password":
+            o.password = v
+        else k == "secure":
+            o.secure = v == "true" or v == "1"
+        else k == "timeout":
+            o.timeout_ms = conv.ParseIntOr(v, 30000 as i64) as int
+        else:
+            o.settings.put(k, v)
+        end
+    end
+end
+end
+ret Open(o)
+end

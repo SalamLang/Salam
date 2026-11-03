@@ -6,7 +6,8 @@
 # it suits tests/en/llvm/. Needs wine on PATH, and the mingw-w64 runtime for
 # the target (found by the built-in linker, or a cross compiler on PATH).
 #
-# NATIVE_WIN_TRIPLE picks the target (x86_64-w64-windows-gnu by default).
+# NATIVE_WIN_TRIPLE picks the target (x86_64-w64-windows-gnu by default),
+# NATIVE_WIN_BACKEND the backend (native by default).
 # With NATIVE_WIN_STAGE=<dir> the programs are only built, and each lands in
 # <dir> as <name>.exe next to its <name>.out, for tools/bash/native-stage-run.sh
 # to run on a Windows machine; this is how aarch64-w64-windows-gnu is tested.
@@ -18,6 +19,7 @@ SALAM=$1
 shift
 case "$SALAM" in /*) ;; */*) SALAM="$(pwd)/$SALAM" ;; esac
 TRIPLE=${NATIVE_WIN_TRIPLE:-x86_64-w64-windows-gnu}
+BACKEND=${NATIVE_WIN_BACKEND:-native}
 STAGE=${NATIVE_WIN_STAGE:-}
 if [ -n "$STAGE" ]; then
     mkdir -p "$STAGE"
@@ -36,7 +38,7 @@ for f in "$@"; do
     [ -f "$exp" ] || continue
     d="$work/$b"
     mkdir -p "$d"
-    if ! (cd "$d" && "$SALAM" build "$f" --backend=native --target="$TRIPLE" \
+    if ! (cd "$d" && "$SALAM" build "$f" --backend="$BACKEND" --target="$TRIPLE" \
         --output="$d/t.exe" --log-level=error >"$d/build.log" 2>&1); then
         echo "FAIL $b (build)"
         head -5 "$d/build.log"

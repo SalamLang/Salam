@@ -1123,6 +1123,11 @@ ret end` at the top of a recursive AST walk) tests that parameter before
   are built on Linux, run on a real machine of each kind, and the compiler
   built by the native backend for that machine reproduces the reference IR
   there and builds and runs programs with `--backend=native` itself.
+  `tools/bash/native-hw-stage.sh` adds the C ABI tests (native and LLVM
+  backends), the timer test and a few `--icf` programs to those machines and
+  to Windows on Arm, with i686 under its x86 emulation. On arm64 macOS and
+  Windows on Arm, `tools/bash/native-icf-compiler.sh` has a compiler linked
+  with `--icf` reproduce the reference IR too.
 - Those native-built compilers are kept for internal use (they are not
   releases). `tools/bash/package-native.sh` lays one out like a release
   archive (`salam`, `std/`, a `BUILD.txt` naming the commit, and for Windows the mingw-w64 or llvm-mingw

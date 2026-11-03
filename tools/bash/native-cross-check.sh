@@ -22,15 +22,16 @@
 # is skipped when either tool is missing.
 #
 # Each program gets NATIVE_CROSS_TIMEOUT seconds (180 by default); the larger
-# tensor and nn demos take over a minute under qemu.
+# tensor and nn demos take over a minute under qemu. NATIVE_CROSS_FLAGS adds
+# build flags, such as --icf.
 #
 # With NATIVE_CROSS_STAGE=<dir> the programs are only built: each lands in
 # <dir>/<group>/<name> (with .exe for Windows targets), for
 # tools/bash/native-stage-tests.sh to run on a machine of the target's kind
 # (macOS, Windows, AArch64 Linux). The runner argument is then ignored.
 #
-# Usage: tools/bash/native-cross-check.sh <salam> <triple> <runner> [group...]
-#   e.g. tools/bash/native-cross-check.sh ./salam aarch64-linux-musl qemu-aarch64 basics general
+# Usage: tools/bash/native-cross-check.sh <salam> <triple> <runner> [group|group/name...]
+#   e.g. tools/bash/native-cross-check.sh ./salam aarch64-linux-musl qemu-aarch64 basics general interop/ffi_libm
 #   Use `env` as the runner for a target the host runs directly (i686).
 
 set -u
@@ -88,10 +89,15 @@ skip_of() {
     set +f
     return 1
 }
-for grp in $TEST_GROUPS; do
-    for f in "$ROOT"/tests/en/"$grp"/*.salam; do
+for spec in $TEST_GROUPS; do
+    case "$spec" in
+    */*) set -- "$ROOT/tests/en/$spec.salam" ;;
+    *) set -- "$ROOT"/tests/en/"$spec"/*.salam ;;
+    esac
+    for f in "$@"; do
         exp=${f%.salam}.out
         [ -f "$exp" ] || continue
+        grp=$(basename "$(dirname "$f")")
         id=$grp/$(basename "$f" .salam)
         if skip_of "$id"; then
             skipped=$((skipped + 1))
@@ -119,7 +125,9 @@ for grp in $TEST_GROUPS; do
         fi
         exe=$work/t$EXT
         rm -f "$exe"
-        if ! (cd "$work" && "$SALAM" build "$f" --backend=native --release --target="$TRIPLE" --output="$exe" --log-level=error ${libarg:+"$libarg"} >"$work/build.log" 2>&1); then
+        # shellcheck disable=SC2086
+        if ! (cd "$work" && "$SALAM" build "$f" --backend=native --release --target="$TRIPLE" --output="$exe" \
+            --log-level=error ${libarg:+"$libarg"} ${NATIVE_CROSS_FLAGS:-} >"$work/build.log" 2>&1); then
             echo "BUILDFAIL $id"
             head -3 "$work/build.log"
             bad=$((bad + 1))

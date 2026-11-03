@@ -957,7 +957,7 @@ farthest away, so a kernel with sixteen accumulators keeps most of them in
 registers instead of spilling each one as a temporary arrives.
 On x86-64 a vector that repeats one constant (a broadcast of a constant,
 or the byte mask and sign bias that narrowing stores and unsigned compares
-need) is loaded from the constant pool instead of being built in a general
+need) is loaded from the constant pool instead of being assembled in a general
 register and moved over with `movd` and a shuffle or broadcast, and a vector
 operation that uses such a mask as its source reads it from the pool,
 `pand xmm0, [rip + c]` (`SALAM_NG_OFF=vkpool`). The allocator

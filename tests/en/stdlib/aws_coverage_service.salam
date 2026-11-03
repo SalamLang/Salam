@@ -25,12 +25,12 @@ import fs.file
 import testing
 import net.tcp
 
-const PORT := 19932
-const BASE := "http://127.0.0.1:19932"
 const ACCESS_KEY := "AKIAIOSFODNN7EXAMPLE"
 const SECRET_KEY := "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
-const QUEUE := "http://127.0.0.1:19932/123456789012/jobs"
 
+mut PORT := 0
+mut BASE := ""
+mut QUEUE := ""
 mut wg := sync.NewWaitGroup()
 mut replies := Vector {} as Vector<str>
 mut reply_at := 0
@@ -121,7 +121,8 @@ func arm(reply: str):
 end
 
 func serve():
-    srv := tcp.Bind(PORT)
+    srv := tcp.Bind(0)
+    PORT = tcp.Port(srv)
     sync.Done(wg)
     mut running := true
     until running:
@@ -201,7 +202,7 @@ end
 func test_presign():
     c := cfg()
     get := aws.S3PresignGet(c, "docs/a b.txt", 600)
-    testing.AssertTrue(str.StartsWith(get, "http://127.0.0.1:19932/bkt/docs/a%20b.txt?"))
+    testing.AssertTrue(str.StartsWith(get, "http://127.0.0.1:" + PORT + "/bkt/docs/a%20b.txt?"))
     testing.AssertTrue(get.find("X-Amz-Expires=600") > 0)
     testing.AssertTrue(get.find("X-Amz-SignedHeaders=host") > 0)
     cut := get.find("&X-Amz-Signature=")
@@ -220,13 +221,13 @@ func test_presign():
         }
     )
     testing.AssertTrue(form.ok)
-    testing.AssertEqStr(form.url, "http://127.0.0.1:19932/bkt")
+    testing.AssertEqStr(form.url, "http://127.0.0.1:" + PORT + "/bkt")
     testing.AssertEqStr(aws.HeaderGet(form.fields, "key"), "uploads/photo.png")
     testing.AssertEqStr(aws.HeaderGet(form.fields, "acl"), "public-read")
     testing.AssertEqInt(aws.HeaderGet(form.fields, "x-amz-signature").len(), 64)
     testing.AssertTrue(form.policy.find("[\"content-length-range\",1,1000]") > 0)
     html := aws.PostFormHtml(form, "")
-    testing.AssertTrue(str.StartsWith(html, "<form action=\"http://127.0.0.1:19932/bkt\" method=\"post\""))
+    testing.AssertTrue(str.StartsWith(html, "<form action=\"http://127.0.0.1:" + PORT + "/bkt\" method=\"post\""))
     testing.AssertTrue(html.find("<input type=\"file\" name=\"file\">") > 0)
     testing.AssertTrue(aws.PostFormHtml(form, "picture").find("name=\"picture\"") > 0)
     testing.AssertEqStr(aws.PostFormHtml(aws.PostForm {}, "x"), "")
@@ -303,7 +304,7 @@ func test_environment():
 end
 
 func test_profiles():
-    root := filepath.Join(os.TempDir(), "salam_aws_coverage_profiles")
+    root := filepath.Join(os.TempDir(), "salam_aws_coverage_profiles_" + os.Pid())
     dir.RemoveAll(root)
     dir.MkdirAll(root)
     credentials := filepath.Join(root, "credentials")
@@ -570,6 +571,8 @@ func main:
     sync.Add(wg, 1 as i64)
     t := spawn(serve)
     sync.Wait(wg)
+    BASE = "http://127.0.0.1:" + PORT
+    QUEUE = BASE + "/123456789012/jobs"
     test_signing()
     test_presign()
     test_presets()

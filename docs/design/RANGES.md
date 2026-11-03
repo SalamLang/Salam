@@ -121,7 +121,22 @@ shapes, each now excluded:
 
 Unsigned arithmetic is not reported: it wraps by definition, and hashes rely
 on that. Signed overflow is reported because a `--release` build lets the
-backend assume it never happens.
+backend assume it never happens. The constant folder (`sema_fold.salam`)
+reports E148 too, so `const B := A * 4096` no longer folds to `0` in silence
+when `A` is `1 << 20`; this is the rule Go, Swift and Rust apply to
+constants. Tests that check how each backend wraps at run time now pass
+their operands through a function, which is what code that wants run-time
+wrapping looks like.
+
+### `repeat a to b` counts down
+
+`repeat a to b` runs from `a` to `b` inclusive, and counts down when `b` is
+below `a`. So `repeat 0 to xs.len() - 1 in i:` on an empty `xs` runs twice,
+with `i = 0` and `i = -1`, and both reads are out of bounds. The pass models
+the loop counter as the hull of both directions, reports W147, and the help
+text explains the count-down. The first sweep found this pattern in three
+tests (`tests/en/basics/slices.salam`, `tests/en/exec/slice_func.salam`,
+`tests/en/llvm/ll_slice.salam`).
 
 `--range-checks=off|on|error` picks the mode; `error` turns the warnings into
 errors. Messages exist in English and Persian (`compiler/i18n.salam`).

@@ -369,16 +369,20 @@ EOF_NOTS
         out=$("$SALAM_ABS" check "$f" $largs --no-color --log-level=warn --lang="$lang" 2>&1 | tr -d '\r')
         want_n=$(grep -oE '^// EXPECT-WARNINGS: [0-9]+' "$f" | head -1 | sed -E 's|^// EXPECT-WARNINGS: ||')
         want_fx=$(grep -oE '^// EXPECT-FIXES: [0-9]+' "$f" | head -1 | sed -E 's|^// EXPECT-FIXES: ||')
-        got_n=$(printf '%s\n' "$json" | grep -cE '"code":"([WE]145|[^"]*۱۴۵)"')
-        got_fx=$(printf '%s\n' "$json" | grep -E '"code":"([WE]145|[^"]*۱۴۵)"' | grep -c '"fixes":\[{')
+        lcode=$(grep -oE '^// EXPECT-CODE: [0-9]+' "$f" | head -1 | sed -E 's|^// EXPECT-CODE: ||')
+        [ -n "$lcode" ] || lcode=145
+        lcode_fa=$(printf '%s' "$lcode" | sed 's/0/۰/g; s/1/۱/g; s/2/۲/g; s/3/۳/g; s/4/۴/g; s/5/۵/g; s/6/۶/g; s/7/۷/g; s/8/۸/g; s/9/۹/g')
+        lpat="\"code\":\"([WE]$lcode|[^\"]*$lcode_fa)\""
+        got_n=$(printf '%s\n' "$json" | grep -cE "$lpat")
+        got_fx=$(printf '%s\n' "$json" | grep -E "$lpat" | grep -c '"fixes":\[{')
         lfail=""
-        stray=$(printf '%s\n' "$json" | grep '"level":"error"' | grep -vE '"code":"([WE]145|[^"]*۱۴۵)"' | head -1)
+        stray=$(printf '%s\n' "$json" | grep '"level":"error"' | grep -vE "$lpat" | head -1)
         if [ -n "$stray" ]; then
             lfail="the program has its own error: $stray"
         elif [ -z "$want_n" ]; then
             lfail="missing // EXPECT-WARNINGS: N"
         elif [ "$got_n" != "$want_n" ]; then
-            lfail="want $want_n W145, got $got_n"
+            lfail="want $want_n W$lcode, got $got_n"
         elif [ -n "$want_fx" ] && [ "$got_fx" != "$want_fx" ]; then
             lfail="want $want_fx with a fix, got $got_fx"
         else

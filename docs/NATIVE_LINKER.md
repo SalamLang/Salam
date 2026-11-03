@@ -254,9 +254,9 @@ x86-64 musl, a PIE for x86-64 glibc, and a PE for x86-64 Windows. It falls
 back to `system` otherwise. `SALAM_LINKER` sets the default mode, which
 is how the test runner forces one or the other.
 
-`--icf` turns on identical code folding in the built-in ELF linker (see
-"Section merging and identical code folding"). It is off by default and
-`--release` does not turn it on.
+`--icf` turns on identical code folding in the built-in linker for ELF, PE
+and Mach-O output (see "Section merging and identical code folding"). It is
+off by default and `--release` does not turn it on.
 
 ## Code layout
 
@@ -272,7 +272,7 @@ the in-memory object hand-off:
 | `nl_layout.salam` | output sections, segments, addresses, synthetic symbols |
 | `nl_reloc.salam` | relocation application and GOT relaxation |
 | `nl_elfout.salam` | executable writer |
-| `nl_split.salam` | splitting `SHF_MERGE` sections and, with `--icf`, our code into pieces |
+| `nl_split.salam` | splitting `SHF_MERGE` sections and, with `--icf`, our code (and COFF `.pdata`) into pieces |
 | `nl_icf.salam` | identical code folding |
 | `nl_api.salam` | `Link(inputs, options) -> result` with diagnostics |
 
@@ -1070,10 +1070,14 @@ ones are laid out where their section stood.
 
 `--icf` folds functions of our own objects whose code and relocations are
 the same. It works for x86-64 and AArch64 ELF output (static, PIE or shared
-library); other targets ignore the flag. Our objects are the ones the native
-backend wrote, which have a `.rodata.salam` section. An object built with
-`-g` is left alone, since its line table is one sequence over the whole
-`.text` and every function folded away would shift the rows after it.
+library), for PE output on x86-64, i686 and ARM64 Windows (executable or
+DLL) and for Mach-O output on x86-64 and arm64 macOS (executable or dylib);
+other targets ignore the flag. Our objects are the ones the native backend
+wrote, which have a `.rodata.salam` section (`.rdata$s` in COFF, and in
+Mach-O a `__TEXT,__salam_cst` section or the `salam_eh_frame` symbol). An
+object built with `-g` (DWARF or CodeView) is left alone, since its line
+table is one sequence over the whole `.text` and every function folded away
+would shift the rows after it.
 
 The native backend puts every function in one `.text` and writes a
 relocation for every reference, even a call to the next function, so the
@@ -1103,6 +1107,45 @@ still be the one others fold into, but two such functions never fold
 together. A folded function's symbols, `.eh_frame` entry and debug
 information point at the copy that stays, and `.eh_frame_hdr` lists that
 address once.
+
+### ICF on PE and Mach-O
+
+The same pass runs on COFF inputs and Mach-O objects, before the PE or
+Mach-O layout, with these differences:
+
+- COFF keeps addends in the section bytes, so comparing the bytes compares
+  them. The native backend refers to every function by its own symbol
+  (`IMAGE_SYM_DTYPE_FUNCTION` in the symbol's type), never through a section
+  symbol, so cutting `.text` at those symbols needs no addend changes. A
+  Mach-O object from the native backend uses only external relocations, and
+  their addends are already read into the relocation.
+- x86-64 COFF has one PC-relative type, `IMAGE_REL_AMD64_REL32`, for calls
+  and for `lea rax, [rip + f]` alike, and i686 uses `IMAGE_REL_I386_REL32`
+  for `call` and `jmp`. Such a relocation counts as a call only when the
+  byte before it is `E8` or `E9`, or `0F 8x` before it for a conditional
+  jump. A RIP-relative operand is preceded by its ModRM byte, which is never
+  one of those, so taking an address is never mistaken for a call. On ARM64
+  COFF the call is `IMAGE_REL_ARM64_BRANCH26`; on Mach-O it is
+  `X86_64_RELOC_BRANCH` and `ARM64_RELOC_BRANCH26`.
+- A PE link has no section garbage collection: everything a link pulls in
+  is laid out, and a folded function is dropped from the layout instead.
+  Each piece takes the place of the `.text` it was cut from, so the order
+  of the image is the same as without `--icf`.
+- `.pdata` of our objects is cut into its `RUNTIME_FUNCTION` entries (12
+  bytes on x86-64, 8 on ARM64) and the entry of a folded function is
+  dropped, so the exception directory lists each function once and stays
+  sorted. Its `.xdata` bytes stay, unreferenced. A reference from `.pdata`
+  does not take an address, like one from `.eh_frame`. i686 has no `.pdata`.
+- Import thunks and the IAT come from import libraries, never from our
+  objects, so they are never cut or folded; a call through one compares its
+  target like any other reference.
+- On Mach-O a folded function's `__eh_frame` FDE points at the copy that
+  stays, and `__unwind_info` lists that address once. Chained fixups, the
+  classic rebase and bind opcodes and the code signature are all computed
+  from the final layout, so they need nothing more.
+- `main` (`_main`, `WinMain` and their i686 spellings) is never folded away,
+  nor is a function a DLL exports or a dylib exports (any global that is
+  not hidden).
 
 It stays opt-in, also with `--release`: a backtrace, profile or debugger
 then names the function that stayed, and the native backend already inlines
@@ -1146,3 +1189,29 @@ calls `nativelink.Link` on the same inputs:
 
 Splitting the sections and moving every symbol and relocation is most of what
 `--icf` costs; finding the 17 folds takes about a third of it.
+
+On PE and Mach-O, the compiler itself built for each target and linked
+without and with `--icf` (sizes in bytes; a file only shrinks by whole file
+alignment units, 512 bytes in a PE and a page in Mach-O):
+
+| Target | Folded | Bytes | File | File, `--icf` |
+|---|---|---|---|---|
+| `x86_64-w64-windows-gnu` | 19 | 5,984 | 6,985,857 | 6,979,713 |
+| `i686-w64-windows-gnu` | 16 | 4,576 | 9,887,860 | 9,883,764 |
+| `aarch64-w64-windows-gnu` | 35 | 15,632 | 7,701,070 | 7,685,198 |
+| `x86_64-apple-macos` | 16 | 3,296 | 8,122,688 | 8,118,560 |
+| `arm64-apple-macos` | 38 | 15,520 | 8,712,752 | 8,696,240 |
+
+The x86-64 and i686 Windows compilers print the same AST for a test under
+wine with and without `--icf`, and so does the x86_64 macOS one under
+`machorun.py`. The exception directory loses exactly the folded functions'
+entries (3,464 to 3,445 on x86-64, 3,415 to 3,380 on ARM64) and stays in
+order. On arm64 macOS `__unwind_info` goes from 6,175 to 6,103 entries,
+sorted and without repeats, every `bl` lands on the start of a symbol and
+every page hash of the signature verifies. Six test programs
+(`archive_demo`, `json_errors_demo` and `autograd_demo` from the stdlib
+tests, `ll_hashmap`, `generic_struct_pkg_types` and `ll_closure_counter`
+from the `llvm` group) print the same with and without `--icf` for x86-64
+and i686 Windows under wine and for x86_64 macOS under `machorun.py`
+(`archive_demo` does not run under `machorun.py` either way). They fold 0 to
+6 functions each; ARM64 builds fold the most.

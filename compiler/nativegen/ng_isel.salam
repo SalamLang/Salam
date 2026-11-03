@@ -918,8 +918,13 @@ func place_args_arm(g &: Ng, args: Vector<int>, cls: Vector<int>, vararg: bool, 
     until p < n:
         r := args[p]
         c := cls[p]
-        va := vararg and nfixed >= 0 and p >= nfixed
-        if (c == 1 or c == 3) and va:
+        va := vararg and nfixed >= 0
+        if c == 3 and va:
+            fw := gpr(g)
+            fm := e_rr(g, M_MOVQ_GX, 4, fw, r)
+            g.mc.sz2[fm] = 0
+            arm_gp_arg(g, fw, ncrn, nsaa, mask)
+        else c == 1 and va:
             lo := gpr(g)
             m0 := e_rr(g, M_MOVQ_GX, 4, lo, r)
             g.mc.sz2[m0] = 0
@@ -4570,7 +4575,7 @@ func isel_call(g &: Ng, i: int):
     mut rmode := 0
     mut rdst := frame_mem(0, 0 as i64)
     if cabi and is_agg(g, rt):
-        rmode = ca_ret(g, rt, rparts)
+        rmode = ca_ret(g, rt, (g.i_f[i] & IF_VARARG) != 0, rparts)
         if rmode < 0:
             fail(g, "native backend: '" + tab_str(g.syms, sym) + "' returns a struct the native backend cannot return from C code; use --backend=llvm")
             ret
@@ -4618,7 +4623,7 @@ func isel_call(g &: Ng, i: int):
         end
         if cabi and (((fl & IF_BYVAL) != 0 and aux >= 0) or is_agg(g, t)):
             byv := (fl & IF_BYVAL) != 0 and aux >= 0
-            va := (g.i_f[i] & IF_VARARG) != 0 and g.i_x[i] >= 0 and k >= g.i_x[i]
+            va := (g.i_f[i] & IF_VARARG) != 0 and g.i_x[i] >= 0 and (k >= g.i_x[i] or g.arch == NG_ARCH_ARM)
             if not ca_arg(g, byv ? mem_of(g, v, 0 as i64) : agg_mem(g, v), byv ? aux : t, byv, va, regs, cls):
                 fail(g, "native backend: '" + tab_str(g.syms, sym) + "' takes a struct the native backend cannot pass to C code; use --backend=llvm")
                 ret
@@ -4723,6 +4728,22 @@ func isel_call(g &: Ng, i: int):
         ret
     end
     if rt == T_VOID or v2 < 0:
+        ret
+    end
+    if is_flt(g, rt) and vararg and g.arch == NG_ARCH_ARM:
+        fs := fsz(rt)
+        lo := gpr(g)
+        _cl := e_copy(g, lo, RAX)
+        fsl := new_slot(g, 8, 8)
+        _sl := e_mr(g, M_ST, 4, frame_mem(fsl, 0 as i64), lo)
+        if fs == 8:
+            hi := gpr(g)
+            _ch := e_copy(g, hi, RCX)
+            _sh := e_mr(g, M_ST, 4, frame_mem(fsl, 4 as i64), hi)
+        end
+        rf := xmm(g)
+        _lf := e_rm(g, M_FLD, fs, rf, frame_mem(fsl, 0 as i64))
+        g.vv[v2] = rf
         ret
     end
     if is_flt(g, rt):

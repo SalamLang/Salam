@@ -8,6 +8,7 @@
 # relative path. Output is compared the way run-tests.sh compares it, ignoring
 # trailing newlines.
 #
+# stdlib/os_api is skipped under qemu, which prints a message when the forked child aborts.
 # Some tests cannot pass on a cross target and are skipped: they need -D flags
 # from their test harness, a database library, or a trapping integer division
 # (release builds on ARM return 0), and on 32-bit targets a few assume a
@@ -46,6 +47,9 @@ i686* | i386* | arm-* | armv7*) DEFAULT_SKIP="$DEFAULT_SKIP types/size_type llvm
 esac
 case "$TRIPLE" in
 *windows*) DEFAULT_SKIP="$DEFAULT_SKIP general/extern_builtin_protos" ;;
+esac
+case "$RUNNER" in
+qemu*) DEFAULT_SKIP="$DEFAULT_SKIP stdlib/os_api" ;;
 esac
 SKIP=${NATIVE_CROSS_SKIP-$DEFAULT_SKIP}
 STAGE=${NATIVE_CROSS_STAGE:-}

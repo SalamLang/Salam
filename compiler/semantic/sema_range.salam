@@ -1,0 +1,2841 @@
+package semantic
+
+import str
+
+include co "../sal_core.salam"
+include at "../ast.salam"
+include tok "../token.salam"
+include i18 "../i18n.salam"
+
+const RG_NUL_UNK := 0
+const RG_NUL_NULL := 1
+const RG_NUL_SET := 2
+const RG_NUL_MAYBE := 3
+const RG_NUL_TEST := 4
+
+const RG_WARN := 1
+const RG_ERR := 2
+
+const RG_UNROLL := 64
+const RG_BUDGET := 60000
+const RG_ROUNDS := 8
+const RG_MAX_SLOTS := 600
+
+pub struct RgV:
+    pub lo: i64 = 0 as i64
+    pub hi: i64 = 0 as i64
+    pub hlo: bool = false
+    pub hhi: bool = false
+    pub ls: int = -1
+    pub loff: i64 = 0 as i64
+    pub hs: int = -1
+    pub hoff: i64 = 0 as i64
+    pub nul: int = 0
+    pub nlo: i64 = 0 as i64
+    pub nhi: i64 = 0 as i64
+    pub hnlo: bool = false
+    pub hnhi: bool = false
+    pub bytes: bool = false
+    pub big: int = 0
+    pub why: int = 0
+    pub hcert: bool = false
+    pub hder: bool = false
+end
+
+pub struct RgSt:
+    pub live: bool = false
+    pub v: Vector<RgV> = Vector {}
+end
+
+pub struct Rg:
+    pub names: Vector<str> = Vector {}
+    pub slot: HashMap<str, int> = HashMap {} as HashMap<str, int>
+    pub off: Vector<bool> = Vector {}
+    pub fpar: Vector<int> = Vector {}
+    pub exitc: HashMap<int, int> = HashMap {} as HashMap<int, int>
+    pub sizec: HashMap<int, int> = HashMap {} as HashMap<int, int>
+    pub brk: Vector<RgSt> = Vector {}
+    pub cont: Vector<RgSt> = Vector {}
+    pub fsw: Vector<bool> = Vector {}
+    pub dnid: Vector<int> = Vector {}
+    pub dsev: Vector<int> = Vector {}
+    pub dcode: Vector<int> = Vector {}
+    pub dmsg: Vector<str> = Vector {}
+    pub dhelp: Vector<str> = Vector {}
+    pub report: bool = false
+    pub warn_ok: bool = true
+    pub pinned: bool = false
+    pub certain: bool = true
+    pub ctx: int = 0
+    pub ctx_line: i64 = 0 as i64
+    pub ctx_pass: i64 = 0 as i64
+    pub fname: Vector<str> = Vector {}
+    pub fslot: HashMap<int, int> = HashMap {} as HashMap<int, int>
+    pub rto: bool = false
+    pub rdown: bool = false
+    pub budget: int = 0
+    pub mode: int = 1
+    pub fbody: int = 0
+    pub lnames: HashMap<str, int> = HashMap {} as HashMap<str, int>
+end
+
+func rg_min(x: i64, y: i64): i64:
+    ret x < y ? x : y
+end
+
+func rg_max(x: i64, y: i64): i64:
+    ret x > y ? x : y
+end
+
+func rg_exact(x: i64): RgV:
+    mut v := RgV {}
+    v.lo = x
+    v.hi = x
+    v.hlo = true
+    v.hhi = true
+    ret v
+end
+
+func rg_is_exact(v: RgV): bool:
+    ret v.hlo and v.hhi and v.lo == v.hi and v.big == 0
+end
+
+func rg_len_exact(n: i64): RgV:
+    mut v := RgV {}
+    v.nlo = n
+    v.nhi = n
+    v.hnlo = true
+    v.hnhi = true
+    v.nul = RG_NUL_SET
+    ret v
+end
+
+func rg_nul_join(x: int, y: int): int:
+    if x == y:
+        ret x
+    end
+    if x == RG_NUL_TEST or y == RG_NUL_TEST:
+        ret RG_NUL_UNK
+    end
+    if x == RG_NUL_NULL or x == RG_NUL_MAYBE or y == RG_NUL_NULL or y == RG_NUL_MAYBE:
+        ret RG_NUL_MAYBE
+    end
+    ret RG_NUL_UNK
+end
+
+func rg_join(x: RgV, y: RgV): RgV:
+    mut v := RgV {}
+    v.hlo = x.hlo and y.hlo and x.big == 0 and y.big == 0
+    if v.hlo:
+        v.lo = rg_min(x.lo, y.lo)
+    end
+    v.hhi = x.hhi and y.hhi and x.big == 0 and y.big == 0
+    if v.hhi:
+        v.hi = rg_max(x.hi, y.hi)
+    end
+    if x.ls >= 0 and x.ls == y.ls:
+        v.ls = x.ls
+        v.loff = rg_min(x.loff, y.loff)
+    end
+    if x.hs >= 0 and x.hs == y.hs:
+        v.hs = x.hs
+        v.hoff = rg_max(x.hoff, y.hoff)
+    end
+    v.hnlo = x.hnlo and y.hnlo and x.bytes == y.bytes
+    if v.hnlo:
+        v.nlo = rg_min(x.nlo, y.nlo)
+    end
+    v.hnhi = x.hnhi and y.hnhi and x.bytes == y.bytes
+    if v.hnhi:
+        v.nhi = rg_max(x.nhi, y.nhi)
+    end
+    v.bytes = x.bytes and y.bytes
+    v.hcert = v.hhi and x.hcert and y.hcert
+    v.hder = v.hs >= 0 and (x.hder or y.hder)
+    v.nul = rg_nul_join(x.nul, y.nul)
+    v.why = x.why
+    if v.why == 0 or (y.nul == RG_NUL_NULL and x.nul != RG_NUL_NULL):
+        v.why = y.why
+    end
+    ret v
+end
+
+func rg_same(x: RgV, y: RgV): bool:
+    if x.hlo != y.hlo or x.hhi != y.hhi or x.ls != y.ls or x.hs != y.hs or x.nul != y.nul:
+        ret false
+    end
+    if x.hnlo != y.hnlo or x.hnhi != y.hnhi or x.big != y.big or x.bytes != y.bytes or x.hcert != y.hcert or x.hder != y.hder:
+        ret false
+    end
+    if (x.hlo and x.lo != y.lo) or (x.hhi and x.hi != y.hi):
+        ret false
+    end
+    if (x.ls >= 0 and x.loff != y.loff) or (x.hs >= 0 and x.hoff != y.hoff):
+        ret false
+    end
+    ret (not x.hnlo or x.nlo == y.nlo) and (not x.hnhi or x.nhi == y.nhi)
+end
+
+func rg_widen(o: RgV, nw: RgV): RgV:
+    mut v := nw
+    if not o.hlo or (nw.hlo and nw.lo < o.lo):
+        v.hlo = false
+    end
+    if not o.hhi or (nw.hhi and nw.hi > o.hi):
+        v.hhi = false
+        v.hcert = false
+    end
+    if nw.ls >= 0 and (o.ls != nw.ls or nw.loff < o.loff):
+        v.ls = 0 - 1
+    end
+    if nw.hs >= 0 and (o.hs != nw.hs or nw.hoff > o.hoff):
+        v.hs = 0 - 1
+    end
+    if not o.hnlo or (nw.hnlo and nw.nlo < o.nlo):
+        v.hnlo = false
+    end
+    if not o.hnhi or (nw.hnhi and nw.nhi > o.nhi):
+        v.hnhi = false
+    end
+    ret v
+end
+
+func rg_st_new(n: int, live: bool): RgSt:
+    mut st := RgSt {}
+    st.live = live
+    repeat n:
+        st.v.push(RgV {})
+    end
+    ret st
+end
+
+func rg_st_clone(st &: RgSt): RgSt:
+    mut c := RgSt {}
+    c.live = st.live
+    repeat st.v.len() in i:
+        c.v.push(st.v.get(i))
+    end
+    ret c
+end
+
+func rg_st_free(st &: RgSt):
+    st.v.free()
+end
+
+func rg_st_assign(dst &: RgSt, src &: RgSt):
+    dst.live = src.live
+    repeat src.v.len() in i:
+        dst.v.set(i, src.v.get(i))
+    end
+end
+
+func rg_st_join(dst &: RgSt, src &: RgSt):
+    if not src.live:
+        ret
+    end
+    if not dst.live:
+        rg_st_assign(dst, src)
+        ret
+    end
+    repeat src.v.len() in i:
+        dst.v.set(i, rg_join(dst.v.get(i), src.v.get(i)))
+    end
+end
+
+func rg_st_same(x &: RgSt, y &: RgSt): bool:
+    if x.live != y.live:
+        ret false
+    end
+    if not x.live:
+        ret true
+    end
+    repeat x.v.len() in i:
+        if not rg_same(x.v.get(i), y.v.get(i)):
+            ret false
+        end
+    end
+    ret true
+end
+
+func rg_st_widen(head &: RgSt, nw &: RgSt):
+    if not head.live:
+        rg_st_assign(head, nw)
+        ret
+    end
+    repeat nw.v.len() in i:
+        head.v.set(i, rg_widen(head.v.get(i), nw.v.get(i)))
+    end
+end
+
+func rg_int_ts(ts: str): bool:
+    mut lo := 0 as i64
+    mut hi := 0 as i64
+    ret cv_int_range(ts, lo, hi)
+end
+
+func rg_signed_ts(ts: str): bool:
+    ret str.Equals(ts, "i8") or str.Equals(ts, "i16") or str.Equals(ts, "i32") or str.Equals(ts, "i64") or str.Equals(ts, "size")
+end
+
+func rg_ptr_ts(ts: str): bool:
+    ret str.EndsWith(ts, "*") and not str.StartsWith(ts, "(")
+end
+
+func rg_arr_len(ts: str): i64:
+    n := str.Len(ts)
+    if n < 3 or byte_at(ts, n - 1) != 93 or str.StartsWith(ts, "Vector") or str.StartsWith(ts, "HashMap") or str.StartsWith(ts, "slice"):
+        ret 0 - 1
+    end
+    mut obr := 0 - 1
+    mut i := 0
+    mut depth := 0
+    until i < n:
+        c := byte_at(ts, i)
+        if c == 40 or c == 60:
+            depth += 1
+        else c == 41 or c == 62:
+            depth -= 1
+        else c == 91 and depth == 0:
+            obr = i
+            break
+        end
+        i += 1
+    end
+    if obr < 0:
+        ret 0 - 1
+    end
+    mut v := 0 as i64
+    mut j := obr + 1
+    mut digits := 0
+    until j < n and byte_at(ts, j) >= 48 and byte_at(ts, j) <= 57:
+        v = v * 10 + (byte_at(ts, j) - 48) as i64
+        j += 1
+        digits += 1
+    end
+    if digits == 0 or j >= n or byte_at(ts, j) != 93:
+        ret 0 - 1
+    end
+    ret v
+end
+
+func rg_esz(ts: str): i64:
+    if str.Equals(ts, "i8") or str.Equals(ts, "u8") or str.Equals(ts, "char") or str.Equals(ts, "bool"):
+        ret 1
+    end
+    if str.Equals(ts, "i16") or str.Equals(ts, "u16"):
+        ret 2
+    end
+    if str.Equals(ts, "i32") or str.Equals(ts, "u32") or str.Equals(ts, "f32"):
+        ret 4
+    end
+    if str.Equals(ts, "i64") or str.Equals(ts, "u64") or str.Equals(ts, "f64") or str.Equals(ts, "size") or str.Equals(ts, "usize") or str.Equals(ts, "str") or rg_ptr_ts(ts):
+        ret 8
+    end
+    ret 0
+end
+
+func rg_lenful_ts(ts: str): bool:
+    ret str.Equals(ts, "str") or ow_is_vec(ts) or str.StartsWith(ts, "slice<") or rg_arr_len(ts) >= 0
+end
+
+func rg_slot(r &: Rg, name: str): int:
+    if str.Len(name) == 0 or not r.slot.has(name):
+        ret 0 - 1
+    end
+    k := r.slot.get(name)
+    if r.off.get(k):
+        ret 0 - 1
+    end
+    ret k
+end
+
+func rg_add_slot(r &: Rg, name: str, par: int): int:
+    if str.Len(name) == 0:
+        ret 0 - 1
+    end
+    if r.slot.has(name):
+        ret r.slot.get(name)
+    end
+    k := r.names.len()
+    r.slot.put(name, k)
+    r.names.push(name)
+    r.fname.push("")
+    r.off.push(false)
+    r.fpar.push(par)
+    ret k
+end
+
+func rg_field_find(r &: Rg, par: int, field: str): int:
+    repeat r.fpar.len() in i:
+        if r.fpar.get(i) == par and str.Equals(r.fname.get(i), field):
+            ret i
+        end
+    end
+    ret 0 - 1
+end
+
+func rg_field_slot(r &: Rg, par: int, field: str): int:
+    k := rg_field_find(r, par, field)
+    if k < 0 or r.off.get(k) or r.off.get(par):
+        ret 0 - 1
+    end
+    ret k
+end
+
+func rg_set_off(r &: Rg, name: str):
+    k := rg_add_slot(r, name, 0 - 1)
+    if k >= 0:
+        r.off.set(k, true)
+    end
+end
+
+func rg_node_slot(r &: Rg, a &: at.Ast, nid: int): int:
+    if nid == 0:
+        ret 0 - 1
+    end
+    n := at.At(a, nid)
+    if n.kind == at.AST_IDENTIFIER:
+        ret rg_slot(r, n.name)
+    end
+    if n.kind == at.AST_MEMBER and r.fslot.has(nid):
+        fk := r.fslot.get(nid)
+        if r.off.get(fk) or r.off.get(r.fpar.get(fk)):
+            ret 0 - 1
+        end
+        ret fk
+    end
+    ret 0 - 1
+end
+
+func rg_root_slot(r &: Rg, a &: at.Ast, nid: int): int:
+    mut cur := nid
+    until cur != 0:
+        k := at.KindOf(a, cur)
+        if k == at.AST_IDENTIFIER:
+            ret rg_slot(r, at.At(a, cur).name)
+        end
+        if k != at.AST_MEMBER and k != at.AST_INDEX and k != at.AST_SLICE and k != at.AST_CAST:
+            ret 0 - 1
+        end
+        cur = at.At(a, cur).a
+    end
+    ret 0 - 1
+end
+
+func rg_kill_sym(st &: RgSt, c: int):
+    if c < 0:
+        ret
+    end
+    repeat st.v.len() in i:
+        v := st.v.get(i)
+        if v.ls == c or v.hs == c:
+            mut w := v
+            if w.ls == c:
+                w.ls = 0 - 1
+            end
+            if w.hs == c:
+                w.hs = 0 - 1
+            end
+            st.v.set(i, w)
+        end
+    end
+end
+
+func rg_havoc(r &: Rg, st &: RgSt, k: int):
+    if k < 0:
+        ret
+    end
+    st.v.set(k, RgV {})
+    rg_kill_sym(st, k)
+    repeat r.fpar.len() in i:
+        if r.fpar.get(i) == k:
+            st.v.set(i, RgV {})
+        end
+    end
+end
+
+func rg_put(r &: Rg, st &: RgSt, k: int, v: RgV):
+    if k < 0:
+        ret
+    end
+    rg_kill_sym(st, k)
+    mut w := v
+    if w.ls == k:
+        w.ls = 0 - 1
+    end
+    if w.hs == k:
+        w.hs = 0 - 1
+    end
+    st.v.set(k, w)
+    repeat r.fpar.len() in i:
+        if r.fpar.get(i) == k:
+            st.v.set(i, RgV {})
+        end
+    end
+end
+
+func rg_line(a &: at.Ast, nid: int): i64:
+    if nid == 0:
+        ret 0
+    end
+    ret at.At(a, nid).begin_line as i64
+end
+
+func rg_sym_text(r &: Rg, c: int, off: i64): str:
+    base := r.names.get(c) + ".len()"
+    if off > 0:
+        ret base + " + " + off
+    end
+    if off < 0:
+        ret base + " - " + (0 - off)
+    end
+    ret base
+end
+
+func rg_text(a &: at.Ast, nid: int, depth: int): str:
+    if nid == 0 or depth > 4:
+        ret ""
+    end
+    n := at.At(a, nid)
+    k := n.kind
+    if k == at.AST_IDENTIFIER:
+        ret n.name
+    end
+    if k == at.AST_THIS:
+        ret "this"
+    end
+    if k == at.AST_LITERAL and (n.value_kind == tok.TV_INT or n.value_kind == tok.TV_CHAR):
+        ret "" + (n.value_int as i64)
+    end
+    if k == at.AST_CAST:
+        ret rg_text(a, n.a, depth + 1)
+    end
+    if k == at.AST_MEMBER:
+        base := rg_text(a, n.a, depth + 1)
+        if str.Len(base) == 0:
+            ret ""
+        end
+        ret base + "." + n.name
+    end
+    if k == at.AST_INDEX:
+        base2 := rg_text(a, n.a, depth + 1)
+        ix := rg_text(a, n.b, depth + 1)
+        if str.Len(base2) == 0 or str.Len(ix) == 0:
+            ret ""
+        end
+        ret base2 + "[" + ix + "]"
+    end
+    if k == at.AST_CALL and n.a != 0 and at.KindOf(a, n.a) == at.AST_MEMBER and at.ChildCount(a, nid) == 0:
+        recv := rg_text(a, at.At(a, n.a).a, depth + 1)
+        if str.Len(recv) == 0:
+            ret ""
+        end
+        ret recv + "." + at.At(a, n.a).name + "()"
+    end
+    if k == at.AST_BINARY:
+        mut opx := ""
+        if n.op == tok.TK_PLUS:
+            opx = " + "
+        else n.op == tok.TK_MINUS:
+            opx = " - "
+        else n.op == tok.TK_STAR:
+            opx = " * "
+        else n.op == tok.TK_SLASH:
+            opx = " / "
+        else n.op == tok.TK_PERCENT:
+            opx = " % "
+        end
+        if str.Len(opx) == 0:
+            ret ""
+        end
+        l := rg_text(a, n.a, depth + 1)
+        rt := rg_text(a, n.b, depth + 1)
+        if str.Len(l) == 0 or str.Len(rt) == 0:
+            ret ""
+        end
+        ret l + opx + rt
+    end
+    if k == at.AST_ASSIGN and n.op != tok.TK_ASSIGN:
+        mut aop := ""
+        if n.op == tok.TK_PLUS_EQ:
+            aop = " += "
+        else n.op == tok.TK_MINUS_EQ:
+            aop = " -= "
+        else n.op == tok.TK_STAR_EQ:
+            aop = " *= "
+        else n.op == tok.TK_SLASH_EQ:
+            aop = " /= "
+        else n.op == tok.TK_PERCENT_EQ:
+            aop = " %= "
+        end
+        al := rg_text(a, n.a, depth + 1)
+        ar := rg_text(a, n.b, depth + 1)
+        if str.Len(aop) == 0 or str.Len(al) == 0 or str.Len(ar) == 0:
+            ret ""
+        end
+        ret al + aop + ar
+    end
+    if k == at.AST_INCDEC:
+        il := rg_text(a, n.a, depth + 1)
+        if str.Len(il) == 0:
+            ret ""
+        end
+        ret il + (n.op == tok.TK_PLUS_PLUS ? "++" : "--")
+    end
+    if k == at.AST_UNARY and n.op == tok.TK_MINUS:
+        inner := rg_text(a, n.a, depth + 1)
+        if str.Len(inner) == 0:
+            ret ""
+        end
+        ret "-" + inner
+    end
+    ret ""
+end
+
+func rg_text_or(a &: at.Ast, nid: int, alt: str): str:
+    t := rg_text(a, nid, 0)
+    if str.Len(t) == 0:
+        ret alt
+    end
+    ret t
+end
+
+func rg_desc(v: RgV): str:
+    if v.big > 0:
+        ret i18.Tr("more than 9223372036854775807")
+    end
+    if v.big < 0:
+        ret i18.Tr("less than -9223372036854775808")
+    end
+    if v.hlo and v.hhi:
+        if v.lo == v.hi:
+            ret "" + v.lo
+        end
+        ret co.Format2(i18.Tr("%d to %d"), co.ArgInt(v.lo), co.ArgInt(v.hi))
+    end
+    if v.hlo:
+        ret co.Format1(i18.Tr("at least %d"), co.ArgInt(v.lo))
+    end
+    if v.hhi:
+        ret co.Format1(i18.Tr("at most %d"), co.ArgInt(v.hi))
+    end
+    ret "?"
+end
+
+func rg_diag(r &: Rg, sev: int, code: int, nid: int, msg: str, help: str):
+    if not r.report or nid == 0:
+        ret
+    end
+    if sev == RG_WARN and not r.warn_ok:
+        ret
+    end
+    mut full := msg
+    if r.ctx == 1:
+        full = full + " " + co.Format1(i18.Tr("(on the first pass of the loop on line %d)"), co.ArgInt(r.ctx_line))
+    else r.ctx == 2:
+        full = full + " " + co.Format1(i18.Tr("(on the last pass of the loop on line %d)"), co.ArgInt(r.ctx_line))
+    else r.ctx == 3:
+        full = full + " " + co.Format2(i18.Tr("(on pass %d of the loop on line %d)"), co.ArgInt(r.ctx_pass), co.ArgInt(r.ctx_line))
+    end
+    repeat r.dnid.len() in i:
+        if r.dnid.get(i) == nid:
+            if sev > r.dsev.get(i):
+                r.dsev.set(i, sev)
+                r.dcode.set(i, code)
+                r.dmsg.set(i, full)
+                r.dhelp.set(i, help)
+            end
+            ret
+        end
+    end
+    r.dnid.push(nid)
+    r.dsev.push(sev)
+    r.dcode.push(code)
+    r.dmsg.push(full)
+    r.dhelp.push(help)
+end
+
+func rg_sev_def(r &: Rg): int:
+    if r.pinned and not r.certain:
+        ret RG_WARN
+    end
+    ret RG_ERR
+end
+
+func rg_repeat_hint(r &: Rg, help: str): str:
+    if r.rdown:
+        ret help + "; " + i18.Tr("'repeat a to b' counts down when b is below a, so 'repeat 0 to xs.len() - 1 in i:' runs with i = 0 and i = -1 when xs is empty; count with 'repeat xs.len() in i:' or 'each i, x in xs:'")
+    end
+    if not r.rto:
+        ret help
+    end
+    ret help + "; " + i18.Tr("'repeat a to b' includes b itself, so count with 'repeat xs.len() in i:' or 'each i, x in xs:'")
+end
+
+func rg_will(r &: Rg, sev: int): bool:
+    ret r.report and (sev == RG_ERR or r.warn_ok)
+end
+
+func rg_check_index(r &: Rg, a &: at.Ast, nid: int, cnode: int, cv: RgV, inode: int, iv: RgV, incl: bool):
+    if not r.report or cnode == 0:
+        ret
+    end
+    cts := at.At(a, cnode).type_str
+    if ow_is_map(cts):
+        ret
+    end
+    isptr := rg_ptr_ts(cts)
+    alen := rg_arr_len(cts)
+    if not isptr and alen < 0 and not rg_lenful_ts(cts):
+        ret
+    end
+    cs := isptr ? 0 - 1 : rg_root_slot(r, a, cnode)
+    csym := cs >= 0 and at.KindOf(a, cnode) == at.AST_IDENTIFIER
+    extra := incl ? 1 : 0
+    mut has_n := false
+    mut nlo := 0 as i64
+    mut nhi := 0 as i64
+    mut has_nlo := false
+    if alen >= 0:
+        has_n = true
+        has_nlo = true
+        nlo = alen
+        nhi = alen
+    else cv.bytes == false and (cv.hnhi or cv.hnlo):
+        has_n = cv.hnhi
+        nhi = cv.nhi
+        has_nlo = cv.hnlo
+        nlo = cv.nlo
+    end
+    mut why := 0
+    if iv.hhi and iv.hi < 0 and iv.big == 0:
+        why = 1
+    else has_n and iv.hlo and iv.lo >= nhi + extra:
+        why = 2
+    else csym and iv.ls == cs and iv.loff >= extra:
+        why = 3
+    else r.pinned and iv.hlo and iv.lo < 0 and iv.big == 0:
+        why = 4
+    else has_n and has_nlo and nlo == nhi and iv.hcert and iv.hhi and iv.hi >= nlo + extra and iv.big == 0 and not (csym and iv.hs == cs and iv.hoff < extra):
+        why = 5
+    else csym and iv.hs == cs and iv.hoff >= extra and not iv.hder:
+        why = 6
+    end
+    if why == 0:
+        ret
+    end
+    sev := why <= 3 ? rg_sev_def(r) : RG_WARN
+    if not rg_will(r, sev):
+        ret
+    end
+    cname := rg_text_or(a, cnode, i18.Tr("the container"))
+    itext := inode != 0 and at.KindOf(a, inode) != at.AST_LITERAL ? rg_text(a, inode, 0) : ""
+    iname := str.Len(itext) > 0 ? "'" + itext + "'" : i18.Tr("the index")
+    if why == 1:
+        rg_diag(
+            r, sev, 146, nid, co.Format2(
+                i18.Tr("index out of bounds: %s is %s, and indices start at 0"), co.ArgStr(iname), co.ArgStr(rg_desc(iv))
+            ), co.Format1(i18.Tr("the first element of '%s' is at index 0"), co.ArgStr(cname))
+        )
+        ret
+    end
+    if why == 4:
+        rg_diag(
+            r, sev, 147, nid, co.Format2(
+                i18.Tr("index may be out of bounds: %s can be %d, and indices start at 0"), co.ArgStr(iname), co.ArgInt(iv.lo)
+            ), str.Len(itext) > 0 ? co.Format1(i18.Tr("check it first, for example 'if %s >= 0:'"), co.ArgStr(itext)) : i18.Tr("check the index first")
+        )
+        ret
+    end
+    mut lim := ""
+    if has_n and has_nlo and nlo == nhi:
+        lim = co.Format2(i18.Tr("valid indices of '%s' are 0 to %d"), co.ArgStr(cname), co.ArgInt(nlo - 1 + extra))
+    else csym:
+        lim = co.Format2(i18.Tr("valid indices of '%s' are 0 to %s"), co.ArgStr(cname), co.ArgStr(rg_sym_text(r, cs, extra - 1)))
+    end
+    help := rg_repeat_hint(r, lim)
+    if why == 2:
+        mut cnt := ""
+        if has_nlo and nlo == nhi:
+            cnt = co.Format1(i18.Tr("%d elements"), co.ArgInt(nhi))
+        else:
+            cnt = co.Format1(i18.Tr("at most %d elements"), co.ArgInt(nhi))
+        end
+        rg_diag(
+            r, sev, 146, nid, co.Format4(
+                i18.Tr("index out of bounds: %s is %s, but '%s' has %s"), co.ArgStr(iname), co.ArgStr(rg_desc(iv)), co.ArgStr(cname), co.ArgStr(cnt)
+            ), help
+        )
+        ret
+    end
+    if why == 3:
+        rg_diag(
+            r, sev, 146, nid, co.Format3(
+                i18.Tr("index out of bounds: %s is %s, past the last element of '%s'"), co.ArgStr(iname), co.ArgStr(rg_sym_text(r, cs, iv.loff)), co.ArgStr(cname)
+            ), help
+        )
+        ret
+    end
+    if why == 5:
+        mut cnt2 := ""
+        if has_n and nlo == nhi:
+            cnt2 = co.Format1(i18.Tr("%d elements"), co.ArgInt(nlo))
+        else:
+            cnt2 = co.Format1(i18.Tr("as few as %d elements"), co.ArgInt(nlo))
+        end
+        rg_diag(
+            r, sev, 147, nid, co.Format4(
+                i18.Tr("index may be out of bounds: %s can be %d, but '%s' has %s"), co.ArgStr(iname), co.ArgInt(iv.hi), co.ArgStr(cname), co.ArgStr(cnt2)
+            ), help
+        )
+        ret
+    end
+    rg_diag(
+        r, sev, 147, nid, co.Format3(
+            i18.Tr("index may be out of bounds: %s can reach %s, past the last element of '%s'"), co.ArgStr(iname), co.ArgStr(rg_sym_text(r, cs, iv.hoff)), co.ArgStr(cname)
+        ), help
+    )
+end
+
+func rg_check_null(r &: Rg, a &: at.Ast, nid: int, pnode: int, pv: RgV):
+    if not r.report or pnode == 0 or (pv.nul != RG_NUL_NULL and pv.nul != RG_NUL_MAYBE and pv.nul != RG_NUL_TEST) or not rg_ptr_ts(at.At(a, pnode).type_str):
+        ret
+    end
+    if not rg_will(r, pv.nul != RG_NUL_MAYBE ? rg_sev_def(r) : RG_WARN):
+        ret
+    end
+    pname := rg_text_or(a, pnode, i18.Tr("the pointer"))
+    if pv.nul != RG_NUL_MAYBE and pv.why == 0:
+        rg_diag(
+            r, rg_sev_def(r), 152, nid, co.Format1(
+                i18.Tr("null pointer dereference: '%s' is null here"), co.ArgStr(pname)
+            ), co.Format2(i18.Tr("give '%s' a value before using it, or check 'if %s != null:' first"), co.ArgStr(pname), co.ArgStr(pname))
+        )
+        ret
+    end
+    if pv.nul != RG_NUL_MAYBE:
+        rg_diag(
+            r, rg_sev_def(r), 152, nid, co.Format2(
+                i18.Tr("null pointer dereference: '%s' is null here (set on line %d)"), co.ArgStr(pname), co.ArgInt(rg_line(a, pv.why))
+            ), co.Format2(i18.Tr("give '%s' a value before using it, or check 'if %s != null:' first"), co.ArgStr(pname), co.ArgStr(pname))
+        )
+        ret
+    end
+    if pv.nul == RG_NUL_MAYBE:
+        rg_diag(
+            r, RG_WARN, 153, nid, co.Format2(
+                i18.Tr("'%s' may be null here: it is still null on some paths (set on line %d)"), co.ArgStr(pname), co.ArgInt(rg_line(a, pv.why))
+            ), co.Format1(i18.Tr("check 'if %s != null:' before using it"), co.ArgStr(pname))
+        )
+    end
+end
+
+func rg_check_div(r &: Rg, a &: at.Ast, nid: int, dnode: int, dv: RgV, ts: str):
+    if not r.report or not rg_int_ts(ts):
+        ret
+    end
+    zero := rg_is_exact(dv) and dv.lo == 0
+    maybe := dv.hlo and dv.hhi and dv.lo <= 0 and dv.hi >= 0 and dv.big == 0
+    if not zero and not maybe:
+        ret
+    end
+    if not rg_will(r, zero ? rg_sev_def(r) : RG_WARN):
+        ret
+    end
+    dname := rg_text_or(a, dnode, i18.Tr("the divisor"))
+    if zero:
+        rg_diag(
+            r, rg_sev_def(r), 150, nid, co.Format1(
+                i18.Tr("division by zero: the divisor '%s' is 0 here"), co.ArgStr(dname)
+            ), co.Format1(i18.Tr("check it first, for example 'if %s != 0:'"), co.ArgStr(dname))
+        )
+        ret
+    end
+    if maybe:
+        rg_diag(
+            r, RG_WARN, 151, nid, co.Format2(
+                i18.Tr("possible division by zero: the divisor '%s' can be 0 here (it ranges over %s)"), co.ArgStr(dname), co.ArgStr(rg_desc(dv))
+            ), co.Format1(i18.Tr("check it first, for example 'if %s != 0:'"), co.ArgStr(dname))
+        )
+    end
+end
+
+func rg_fit(r &: Rg, a &: at.Ast, nid: int, res: RgV, ts: str): RgV:
+    mut tlo := 0 as i64
+    mut thi := 0 as i64
+    if not cv_int_range(ts, tlo, thi):
+        ret RgV {}
+    end
+    above := res.big > 0 or (res.hlo and res.lo > thi)
+    below := res.big < 0 or (res.hhi and res.hi < tlo)
+    if not rg_signed_ts(ts):
+        if above or below or (res.hhi and res.hi > thi) or (res.hlo and res.lo < tlo):
+            ret RgV {}
+        end
+        ret res
+    end
+    may_hi := res.hhi and res.hi > thi
+    may_lo := res.hlo and res.lo < tlo
+    if not above and not below and not may_hi and not may_lo:
+        ret res
+    end
+    if not rg_will(r, above or below ? rg_sev_def(r) : RG_WARN):
+        ret RgV {}
+    end
+    ename := rg_text_or(a, nid, i18.Tr("this expression"))
+    hint := co.Format3(
+        i18.Tr("'%s' holds %d to %d; cast an operand to a wider type such as 'i64' first. A release build assumes signed arithmetic never overflows, and only unsigned types wrap by design"), co.ArgStr(ts), co.ArgInt(tlo), co.ArgInt(thi)
+    )
+    if above or below:
+        rg_diag(
+            r, rg_sev_def(r), 148, nid, co.Format3(
+                i18.Tr("integer overflow: '%s' gives %s, which does not fit in '%s'"), co.ArgStr(ename), co.ArgStr(rg_desc(res)), co.ArgStr(ts)
+            ), hint
+        )
+        ret RgV {}
+    end
+    if may_hi:
+        rg_diag(
+            r, RG_WARN, 149, nid, co.Format3(
+                i18.Tr("possible integer overflow: '%s' can reach %d, which does not fit in '%s'"), co.ArgStr(ename), co.ArgInt(res.hi), co.ArgStr(ts)
+            ), hint
+        )
+        ret RgV {}
+    end
+    if may_lo:
+        rg_diag(
+            r, RG_WARN, 149, nid, co.Format3(
+                i18.Tr("possible integer overflow: '%s' can reach %d, which does not fit in '%s'"), co.ArgStr(ename), co.ArgInt(res.lo), co.ArgStr(ts)
+            ), hint
+        )
+        ret RgV {}
+    end
+    ret res
+end
+
+func rg_add_b(x: i64, y: i64, ok &: bool, big &: int): i64:
+    if add_ok(x, y):
+        ret x + y
+    end
+    ok = false
+    big = x > 0 ? 1 : 0 - 1
+    ret 0
+end
+
+func rg_sub_b(x: i64, y: i64, ok &: bool, big &: int): i64:
+    if sub_ok(x, y):
+        ret x - y
+    end
+    ok = false
+    big = x >= 0 ? 1 : 0 - 1
+    ret 0
+end
+
+func rg_addv(x: RgV, y: RgV, neg: bool): RgV:
+    mut v := RgV {}
+    if x.big != 0 or y.big != 0:
+        ret v
+    end
+    if (not neg and x.hlo and y.hlo) or (neg and x.hlo and y.hhi):
+        mut ok := true
+        mut big := 0
+        lo := neg ? rg_sub_b(x.lo, y.hi, ok, big) : rg_add_b(x.lo, y.lo, ok, big)
+        if ok:
+            v.lo = lo
+            v.hlo = true
+        else big > 0:
+            v.big = 1
+        end
+    end
+    if (not neg and x.hhi and y.hhi) or (neg and x.hhi and y.hlo):
+        mut ok2 := true
+        mut big2 := 0
+        hi := neg ? rg_sub_b(x.hi, y.lo, ok2, big2) : rg_add_b(x.hi, y.hi, ok2, big2)
+        if ok2:
+            v.hi = hi
+            v.hhi = true
+        else big2 < 0:
+            v.big = 0 - 1
+        end
+    end
+    if rg_is_exact(y):
+        c := neg ? 0 - y.lo : y.lo
+        if x.ls >= 0 and add_ok(x.loff, c):
+            v.ls = x.ls
+            v.loff = x.loff + c
+        end
+        if x.hs >= 0 and add_ok(x.hoff, c):
+            v.hs = x.hs
+            v.hoff = x.hoff + c
+            v.hder = x.hder or c > 0
+        end
+    else rg_is_exact(x) and not neg:
+        if y.ls >= 0 and add_ok(y.loff, x.lo):
+            v.ls = y.ls
+            v.loff = y.loff + x.lo
+        end
+        if y.hs >= 0 and add_ok(y.hoff, x.lo):
+            v.hs = y.hs
+            v.hoff = y.hoff + x.lo
+            v.hder = y.hder or x.lo > 0
+        end
+    end
+    ret v
+end
+
+func rg_mulv(x: RgV, y: RgV): RgV:
+    mut v := RgV {}
+    if x.big != 0 or y.big != 0:
+        ret v
+    end
+    if x.hlo and x.hhi and y.hlo and y.hhi:
+        mut lo := fold_i64_max()
+        mut hi := fold_i64_min()
+        mut over := 0
+        repeat 4 in q:
+            p := q < 2 ? x.lo : x.hi
+            m := q % 2 == 0 ? y.lo : y.hi
+            if mul_ok(p, m):
+                pr := p * m
+                lo = rg_min(lo, pr)
+                hi = rg_max(hi, pr)
+            else:
+                over += ((p > 0) == (m > 0)) ? 1 : 0 - 1
+                if (p > 0) == (m > 0):
+                    hi = fold_i64_max()
+                else:
+                    lo = fold_i64_min()
+                end
+            end
+        end
+        if over == 4:
+            v.big = 1
+            ret v
+        end
+        if over == 0 - 4:
+            v.big = 0 - 1
+            ret v
+        end
+        v.lo = lo
+        v.hi = hi
+        v.hlo = lo != fold_i64_min()
+        v.hhi = hi != fold_i64_max()
+        ret v
+    end
+    if x.hlo and y.hlo and x.lo >= 0 and y.lo >= 0:
+        if mul_ok(x.lo, y.lo):
+            v.lo = x.lo * y.lo
+            v.hlo = true
+        else:
+            v.big = 1
+        end
+    end
+    ret v
+end
+
+func rg_bitlen(x: i64): int:
+    mut n := 0
+    mut y := x
+    until y > 0:
+        y = y >> 1
+        n += 1
+    end
+    ret n
+end
+
+func rg_arith(r &: Rg, a &: at.Ast, nid: int, op: int, x: RgV, y: RgV, ts: str, dnode: int): RgV:
+    if op == tok.TK_PLUS or op == tok.TK_PLUS_EQ or op == tok.TK_PLUS_PLUS:
+        ret rg_fit(r, a, nid, rg_addv(x, y, false), ts)
+    end
+    if op == tok.TK_MINUS or op == tok.TK_MINUS_EQ or op == tok.TK_MINUS_MINUS:
+        ret rg_fit(r, a, nid, rg_addv(x, y, true), ts)
+    end
+    if op == tok.TK_STAR or op == tok.TK_STAR_EQ:
+        ret rg_fit(r, a, nid, rg_mulv(x, y), ts)
+    end
+    if op == tok.TK_SLASH or op == tok.TK_SLASH_EQ:
+        rg_check_div(r, a, nid, dnode, y, ts)
+        if rg_is_exact(y) and y.lo > 0 and x.hlo and x.hhi:
+            ret rg_fit(r, a, nid, rg_join(rg_exact(x.lo / y.lo), rg_exact(x.hi / y.lo)), ts)
+        end
+        if rg_is_exact(y) and y.lo > 0 and x.hlo and x.lo >= 0:
+            mut q := RgV {}
+            q.lo = x.lo / y.lo
+            q.hlo = true
+            ret q
+        end
+        ret RgV {}
+    end
+    if op == tok.TK_PERCENT or op == tok.TK_PERCENT_EQ:
+        rg_check_div(r, a, nid, dnode, y, ts)
+        if y.hlo and y.hhi and y.big == 0 and y.lo > fold_i64_min() and (y.lo > 0 or y.hi < 0):
+            m := rg_max(y.hi < 0 ? 0 - y.lo : y.hi, y.lo < 0 ? 0 - y.lo : y.lo) - 1
+            if x.hlo and x.lo >= 0:
+                mut rv := rg_exact(0 as i64)
+                rv.hi = x.hhi ? rg_min(m, x.hi) : m
+                ret rv
+            end
+            mut rv2 := rg_exact(0 - m)
+            rv2.hi = m
+            ret rv2
+        end
+        ret RgV {}
+    end
+    if op == tok.TK_AMP or op == tok.TK_AMP_EQ:
+        if rg_is_exact(y) and y.lo >= 0:
+            mut m1 := rg_exact(0 as i64)
+            m1.hi = x.hlo and x.lo >= 0 and x.hhi ? rg_min(x.hi, y.lo) : y.lo
+            ret m1
+        end
+        if rg_is_exact(x) and x.lo >= 0:
+            mut m2 := rg_exact(0 as i64)
+            m2.hi = y.hlo and y.lo >= 0 and y.hhi ? rg_min(y.hi, x.lo) : x.lo
+            ret m2
+        end
+        ret RgV {}
+    end
+    if op == tok.TK_PIPE or op == tok.TK_CARET or op == tok.TK_PIPE_EQ or op == tok.TK_CARET_EQ:
+        if x.hlo and x.hhi and y.hlo and y.hhi and x.lo >= 0 and y.lo >= 0 and x.big == 0 and y.big == 0:
+            bits := rg_bitlen(rg_max(x.hi, y.hi))
+            if bits < 62:
+                mut m3 := rg_exact(0 as i64)
+                m3.hi = ((1 as i64) << bits) - 1
+                ret m3
+            end
+        end
+        ret RgV {}
+    end
+    if op == tok.TK_SHR or op == tok.TK_SHR_EQ:
+        if rg_is_exact(y) and y.lo >= 0 and y.lo < 63 and x.hlo and x.lo >= 0:
+            mut sv := RgV {}
+            sv.lo = x.lo >> (y.lo as int)
+            sv.hlo = true
+            if x.hhi:
+                sv.hi = x.hi >> (y.lo as int)
+                sv.hhi = true
+            end
+            ret sv
+        end
+        ret RgV {}
+    end
+    ret RgV {}
+end
+
+func rg_lit(a &: at.Ast, nid: int): RgV:
+    n := at.At(a, nid)
+    if n.op == tok.TK_KW_NULL or str.Equals(n.type_str, "null"):
+        mut v := RgV {}
+        v.nul = RG_NUL_NULL
+        v.why = nid
+        ret v
+    end
+    if n.value_kind == tok.TV_INT or n.value_kind == tok.TV_CHAR:
+        if str.Equals(n.type_str, "u64") or str.Equals(n.type_str, "usize"):
+            if (n.value_int as i64) < 0:
+                ret RgV {}
+            end
+        end
+        ret rg_exact(n.value_int as i64)
+    end
+    if n.value_kind == tok.TV_BOOL:
+        ret rg_exact(n.value_bool ? 1 as i64 : 0 as i64)
+    end
+    if n.value_kind == tok.TV_STRING:
+        ret rg_len_exact(str.Len(n.value_str) as i64)
+    end
+    ret RgV {}
+end
+
+func rg_cast(r &: Rg, a &: at.Ast, nid: int, v: RgV): RgV:
+    n := at.At(a, nid)
+    ts := n.type_str
+    src := at.At(a, n.a).type_str
+    if rg_ptr_ts(ts):
+        mut pv := RgV {}
+        pv.nul = v.nul
+        pv.why = v.why
+        if v.bytes and v.hnlo:
+            esz := rg_esz(str.SubstrIn(ts, 0, str.Len(ts) - 1))
+            if esz > 0:
+                pv.nlo = v.nlo / esz
+                pv.hnlo = true
+                if v.hnhi:
+                    pv.nhi = v.nhi / esz
+                    pv.hnhi = true
+                end
+            end
+        else not v.bytes:
+            pv.nlo = v.nlo
+            pv.nhi = v.nhi
+            pv.hnlo = v.hnlo and str.Equals(ts, src)
+            pv.hnhi = v.hnhi and str.Equals(ts, src)
+        end
+        ret pv
+    end
+    if rg_lenful_ts(ts) or ow_is_map(ts):
+        ret v
+    end
+    if not rg_int_ts(ts) or not rg_int_ts(src):
+        ret RgV {}
+    end
+    mut tlo := 0 as i64
+    mut thi := 0 as i64
+    _tr := cv_int_range(ts, tlo, thi)
+    bits := fold_ts_bits(ts)
+    if rg_lossy(ts, v) and rg_will(r, RG_WARN):
+        vtext := rg_text(a, n.a, 0)
+        vname := str.Len(vtext) > 0 ? "'" + vtext + "'" : i18.Tr("the value")
+        mut got := ""
+        if rg_is_exact(v):
+            got = co.Format1(i18.Tr(", giving %d"), co.ArgInt(fold_wrap(ts, v.lo)))
+        end
+        rg_diag(
+            r, RG_WARN, 154, nid, co.Format4(
+                i18.Tr("%s is %s, which does not fit in '%s'; the cast keeps only the low %d bits"), co.ArgStr(vname), co.ArgStr(rg_desc(v)), co.ArgStr(ts), co.ArgInt(bits as i64)
+            ) + got, i18.Tr("use a wider type, or mask the bits you want on purpose, for example '(x & 255) as u8'")
+        )
+    end
+    if v.hlo and v.hhi and v.lo >= tlo and v.hi <= thi and v.big == 0:
+        ret v
+    end
+    if rg_is_exact(v):
+        ret rg_exact(fold_wrap(ts, v.lo))
+    end
+    mut slo := 0 as i64
+    mut shi := 0 as i64
+    if cv_int_range(src, slo, shi) and slo >= tlo and shi <= thi:
+        ret v
+    end
+    ret RgV {}
+end
+
+func rg_lossy(ts: str, v: RgV): bool:
+    bits := fold_ts_bits(ts)
+    if bits >= 64 or v.big != 0:
+        ret false
+    end
+    umax := ((1 as i64) << bits) - 1
+    smin := 0 - ((1 as i64) << (bits - 1))
+    ret (v.hlo and v.lo > umax) or (rg_signed_ts(ts) and v.hhi and v.hi < smin)
+end
+
+func rg_const_overflow(s &: Sema, a &: at.Ast, nid: int, ok: bool, v: i64, up: bool): bool:
+    ts := at.At(a, nid).type_str
+    if g_sm_ranges == 0 or s.requal or not rg_signed_ts(ts):
+        ret false
+    end
+    mut tlo := 0 as i64
+    mut thi := 0 as i64
+    if not cv_int_range(ts, tlo, thi):
+        ret false
+    end
+    mut res := RgV {}
+    if ok:
+        if v >= tlo and v <= thi:
+            ret false
+        end
+        res = rg_exact(v)
+    else:
+        res.big = up ? 1 : 0 - 1
+    end
+    ename := rg_text_or(a, nid, i18.Tr("this expression"))
+    serr_help(
+        s, 148, span_of(a, nid), co.Format3(
+            i18.Tr("integer overflow: '%s' gives %s, which does not fit in '%s'"), co.ArgStr(ename), co.ArgStr(rg_desc(res)), co.ArgStr(ts)
+        ), co.Format3(
+            i18.Tr("'%s' holds %d to %d; cast an operand to a wider type such as 'i64' first. A release build assumes signed arithmetic never overflows, and only unsigned types wrap by design"), co.ArgStr(ts), co.ArgInt(tlo), co.ArgInt(thi)
+        )
+    )
+    ret true
+end
+
+func rg_warn_lossy_const(s &: Sema, a &: at.Ast, nid: int, v: i64):
+    ts := at.At(a, nid).type_str
+    if g_sm_ranges == 0 or s.requal or not rg_lossy(ts, rg_exact(v)):
+        ret
+    end
+    swarn_help(
+        s, 154, span_of(a, nid), co.Format4(
+            i18.Tr("%d does not fit in '%s'; the cast keeps only the low %d bits, giving %d"), co.ArgInt(v), co.ArgStr(ts), co.ArgInt(fold_ts_bits(ts) as i64), co.ArgInt(fold_wrap(ts, v))
+        ), i18.Tr("use a wider type, or mask the bits you want on purpose, for example '(x & 255) as u8'")
+    )
+end
+
+func rg_len_of(r &: Rg, a &: at.Ast, st &: RgSt, recv: int): RgV:
+    ts := at.At(a, recv).type_str
+    alen := rg_arr_len(ts)
+    mut v := RgV {}
+    if alen >= 0:
+        v = rg_exact(alen)
+    else:
+        v.lo = 0 as i64
+        v.hlo = true
+        k := rg_node_slot(r, a, recv)
+        if k >= 0:
+            cv := st.v.get(k)
+            if cv.hnlo and not cv.bytes:
+                v.lo = cv.nlo
+            end
+            if cv.hnhi and not cv.bytes:
+                v.hi = cv.nhi
+                v.hhi = true
+            end
+        end
+    end
+    k2 := at.KindOf(a, recv) == at.AST_IDENTIFIER ? rg_slot(r, at.At(a, recv).name) : 0 - 1
+    if k2 >= 0:
+        v.ls = k2
+        v.hs = k2
+    end
+    ret v
+end
+
+func rg_set_len(st &: RgSt, k: int, lo: i64, hlo: bool, hi: i64, hhi: bool):
+    if k < 0:
+        ret
+    end
+    mut cv := st.v.get(k)
+    cv.nlo = lo
+    cv.hnlo = hlo
+    cv.nhi = hi
+    cv.hnhi = hhi
+    cv.bytes = false
+    cv.nul = RG_NUL_SET
+    st.v.set(k, cv)
+    rg_kill_sym(st, k)
+end
+
+func rg_mem_call(s &: Sema, a &: at.Ast, callee: int, name: str): bool:
+    if callee == 0 or at.KindOf(a, callee) != at.AST_MEMBER:
+        ret false
+    end
+    m := at.At(a, callee)
+    ret str.Equals(m.name, name) and ow_is_mem_pkg(s, a, m.a)
+end
+
+func rg_reader_method(name: str): bool:
+    ret str.Equals(name, "len") or str.Equals(name, "get") or str.Equals(name, "ref") or str.Equals(name, "contains") or str.Equals(name, "find") or str.Equals(name, "index_of") or str.Equals(name, "includes") or str.Equals(name, "iter") or str.Equals(name, "copy") or str.Equals(name, "clone") or str.Equals(name, "deep_copy") or str.Equals(name, "has") or str.Equals(name, "size") or str.Equals(name, "first") or str.Equals(name, "last") or str.Equals(name, "set") or str.Equals(name, "is_empty") or str.Equals(name, "join") or str.Equals(name, "sum") or str.Equals(name, "min") or str.Equals(name, "max")
+end
+
+func rg_call(s &: Sema, r &: Rg, a &: at.Ast, st &: RgSt, nid: int): RgV:
+    n := at.At(a, nid)
+    callee := n.a
+    nargs := at.ChildCount(a, nid)
+    mut av := Vector {} as Vector<RgV>
+    repeat nargs in i:
+        av.push(rg_eval(s, r, a, st, at.Child(a, nid, i)))
+    end
+    mut res := RgV {}
+    if rg_mem_call(s, a, callee, "Allocate") or rg_mem_call(s, a, callee, "AllocateZeroed") or rg_mem_call(s, a, callee, "Reallocate"):
+        res.nul = RG_NUL_SET
+        if nargs >= 1:
+            sz := av.get(nargs - 1)
+            if sz.hlo and sz.big == 0:
+                res.nlo = sz.lo
+                res.hnlo = true
+                res.nhi = sz.hi
+                res.hnhi = sz.hhi
+                res.bytes = true
+            end
+        end
+    else callee != 0 and at.KindOf(a, callee) == at.AST_MEMBER and not ow_is_pkg_obj(s, a, at.At(a, callee).a):
+        m := at.At(a, callee)
+        recv := m.a
+        rts := at.At(a, recv).type_str
+        rv := rg_eval(s, r, a, st, recv)
+        if rg_ptr_ts(rts) and not ow_is_vec(rts):
+            rg_check_null(r, a, nid, recv, rv)
+        end
+        rk := rg_node_slot(r, a, recv)
+        mname := m.name
+        if rg_lenful_ts(rts) or ow_is_map(rts):
+            if str.Equals(mname, "len") or (str.Equals(mname, "size") and not ow_is_map(rts)):
+                res = rg_len_of(r, a, st, recv)
+            else (str.Equals(mname, "get") or str.Equals(mname, "set") or str.Equals(mname, "ref")) and nargs >= 1 and not ow_is_map(rts):
+                rg_check_index(r, a, nid, recv, rv, at.Child(a, nid, 0), av.get(0), false)
+            else str.Equals(mname, "push") and rk >= 0 and ow_is_vec(rts):
+                cv := st.v.get(rk)
+                mut one := RgV {}
+                one.lo = cv.nlo
+                one.hi = cv.nhi
+                one.hlo = cv.hnlo
+                one.hhi = cv.hnhi
+                grown := rg_addv(one, rg_exact(1 as i64), false)
+                rg_set_len(st, rk, grown.lo, grown.hlo and cv.hnlo, grown.hi, grown.hhi and cv.hnhi)
+            else str.Equals(mname, "pop") and rk >= 0 and ow_is_vec(rts):
+                cv2 := st.v.get(rk)
+                rg_set_len(st, rk, rg_max(cv2.nlo - 1, 0 as i64), cv2.hnlo, cv2.nhi - 1, cv2.hnhi and cv2.nhi > 0)
+            else str.Equals(mname, "clear") and rk >= 0 and ow_is_vec(rts):
+                rg_set_len(st, rk, 0 as i64, true, 0 as i64, true)
+            else str.Equals(mname, "insert") and nargs >= 2 and ow_is_vec(rts):
+                rg_check_index(r, a, nid, recv, rv, at.Child(a, nid, 0), av.get(0), true)
+                rg_havoc(r, st, rk)
+            else not rg_reader_method(mname) and not str.Equals(rts, "str"):
+                rg_havoc(r, st, rk)
+            end
+        else not rg_ptr_ts(rts):
+            rg_havoc(r, st, rk)
+            rg_havoc(r, st, rg_root_slot(r, a, recv))
+        end
+    else callee != 0 and at.KindOf(a, callee) == at.AST_IDENTIFIER and str.Equals(at.At(a, callee).name, "len") and nargs == 1:
+        res = rg_len_of(r, a, st, at.Child(a, nid, 0))
+    end
+    repeat nargs in j:
+        arg := at.Child(a, nid, j)
+        if arg != 0 and at.At(a, arg).ref_arg:
+            rk2 := rg_root_slot(r, a, arg)
+            rg_havoc(r, st, rk2)
+        end
+    end
+    av.free()
+    if node_flag(s.noret_calls, nid):
+        st.live = false
+    end
+    ret res
+end
+
+func rg_logic(s &: Sema, r &: Rg, a &: at.Ast, st &: RgSt, nid: int): RgV:
+    n := at.At(a, nid)
+    is_and := n.op == tok.TK_AND
+    _va := rg_eval(s, r, a, st, n.a)
+    mut rhs := rg_st_clone(st)
+    rg_refine(s, r, a, rhs, n.a, is_and)
+    _vb := rg_eval(s, r, a, rhs, n.b)
+    rg_refine(s, r, a, st, n.a, not is_and)
+    rg_st_join(st, rhs)
+    rg_st_free(rhs)
+    ret RgV {}
+end
+
+func rg_branch_expr(s &: Sema, r &: Rg, a &: at.Ast, st &: RgSt, nid: int): RgV:
+    n := at.At(a, nid)
+    _vc := rg_eval(s, r, a, st, n.a)
+    mut th := rg_st_clone(st)
+    rg_refine(s, r, a, th, n.a, true)
+    vt := rg_eval(s, r, a, th, n.b)
+    rg_refine(s, r, a, st, n.a, false)
+    vf := rg_eval(s, r, a, st, n.c)
+    mut out := RgV {}
+    if th.live and st.live:
+        out = rg_join(vt, vf)
+    else th.live:
+        out = vt
+    else:
+        out = vf
+    end
+    rg_st_join(st, th)
+    rg_st_free(th)
+    ret out
+end
+
+func rg_match_expr(s &: Sema, r &: Rg, a &: at.Ast, st &: RgSt, nid: int): RgV:
+    _vs := rg_eval(s, r, a, st, at.At(a, nid).a)
+    mut base := rg_st_clone(st)
+    mut acc := rg_st_new(st.v.len(), false)
+    saved := r.certain
+    r.certain = false
+    repeat at.ChildCount(a, nid) in i:
+        arm := at.Child(a, nid, i)
+        if arm != 0:
+            mut ast := rg_st_clone(base)
+            body := at.At(a, arm).b
+            if body != 0 and at.KindOf(a, body) == at.AST_BLOCK:
+                rg_stmt(s, r, a, ast, body)
+            else:
+                _vv := rg_eval(s, r, a, ast, body)
+            end
+            rg_st_join(acc, ast)
+            rg_st_free(ast)
+        end
+    end
+    r.certain = saved
+    rg_st_join(acc, base)
+    rg_st_assign(st, acc)
+    rg_st_free(base)
+    rg_st_free(acc)
+    ret RgV {}
+end
+
+func rg_eval(s &: Sema, r &: Rg, a &: at.Ast, st &: RgSt, nid: int): RgV:
+    if nid == 0 or not st.live or r.budget <= 0:
+        ret RgV {}
+    end
+    r.budget -= 1
+    n := at.At(a, nid)
+    k := n.kind
+    if k == at.AST_LITERAL:
+        ret rg_lit(a, nid)
+    end
+    if k == at.AST_IDENTIFIER:
+        sl := rg_slot(r, n.name)
+        mut v := RgV {}
+        if sl >= 0:
+            v = st.v.get(sl)
+        end
+        alen := rg_arr_len(n.type_str)
+        if alen >= 0:
+            v = rg_len_exact(alen)
+        end
+        ret v
+    end
+    if k == at.AST_CAST:
+        inner := rg_eval(s, r, a, st, n.a)
+        ret rg_cast(r, a, nid, inner)
+    end
+    if k == at.AST_UNARY:
+        uv := rg_eval(s, r, a, st, n.a)
+        if n.op == tok.TK_MINUS and rg_int_ts(n.type_str):
+            ret rg_fit(r, a, nid, rg_addv(rg_exact(0 as i64), uv, true), n.type_str)
+        end
+        ret RgV {}
+    end
+    if k == at.AST_INCDEC:
+        ret rg_incdec(s, r, a, st, nid)
+    end
+    if k == at.AST_BINARY:
+        if n.op == tok.TK_AND or n.op == tok.TK_OR:
+            ret rg_logic(s, r, a, st, nid)
+        end
+        xa := rg_eval(s, r, a, st, n.a)
+        xb := rg_eval(s, r, a, st, n.b)
+        if str.Equals(n.type_str, "str") and n.op == tok.TK_PLUS:
+            if xa.hnlo and xb.hnlo and xa.hnhi and xb.hnhi and not xa.bytes and not xb.bytes:
+                mut sv := rg_len_exact(xa.nlo + xb.nlo)
+                sv.nhi = xa.nhi + xb.nhi
+                ret sv
+            end
+            mut sv2 := RgV {}
+            sv2.nul = RG_NUL_SET
+            ret sv2
+        end
+        if not rg_int_ts(n.type_str):
+            ret RgV {}
+        end
+        if at.KindOf(a, n.a) == at.AST_LITERAL and at.KindOf(a, n.b) == at.AST_LITERAL:
+            saved_rep := r.report
+            r.report = false
+            lv := rg_arith(r, a, nid, n.op, xa, xb, n.type_str, n.b)
+            r.report = saved_rep
+            ret lv
+        end
+        ret rg_arith(r, a, nid, n.op, xa, xb, n.type_str, n.b)
+    end
+    if k == at.AST_TERNARY:
+        ret rg_branch_expr(s, r, a, st, nid)
+    end
+    if k == at.AST_CALL:
+        ret rg_call(s, r, a, st, nid)
+    end
+    if k == at.AST_MEMBER:
+        ov := rg_eval(s, r, a, st, n.a)
+        rg_check_null(r, a, nid, n.a, ov)
+        fk := rg_node_slot(r, a, nid)
+        if fk >= 0:
+            ret st.v.get(fk)
+        end
+        alen2 := rg_arr_len(n.type_str)
+        if alen2 >= 0:
+            ret rg_len_exact(alen2)
+        end
+        ret RgV {}
+    end
+    if k == at.AST_INDEX:
+        cv := rg_eval(s, r, a, st, n.a)
+        iv := rg_eval(s, r, a, st, n.b)
+        cts := at.At(a, n.a).type_str
+        if rg_ptr_ts(cts):
+            rg_check_null(r, a, nid, n.a, cv)
+        end
+        if n.b != 0 and rg_int_ts(at.At(a, n.b).type_str):
+            rg_check_index(r, a, nid, n.a, cv, n.b, iv, false)
+        end
+        ret RgV {}
+    end
+    if k == at.AST_SLICE:
+        scv := rg_eval(s, r, a, st, n.a)
+        slo := rg_eval(s, r, a, st, n.b)
+        shi := rg_eval(s, r, a, st, n.c)
+        if n.b != 0:
+            rg_check_index(r, a, nid, n.a, scv, n.b, slo, true)
+        end
+        if n.c != 0:
+            rg_check_index(r, a, nid, n.a, scv, n.c, shi, true)
+        end
+        ret RgV {}
+    end
+    if k == at.AST_MATCH:
+        ret rg_match_expr(s, r, a, st, nid)
+    end
+    if k == at.AST_LAMBDA or k == at.AST_FUNC_ADDR or k == at.AST_TYPE:
+        mut fv := RgV {}
+        fv.nul = RG_NUL_SET
+        ret fv
+    end
+    if k == at.AST_ARRAY_LIT:
+        repeat at.ChildCount(a, nid) in ai:
+            _ae := rg_eval(s, r, a, st, at.Child(a, nid, ai))
+        end
+        ret rg_len_exact(at.ChildCount(a, nid) as i64)
+    end
+    if k == at.AST_STRUCT_LIT:
+        repeat at.ChildCount(a, nid) in si:
+            fi := at.Child(a, nid, si)
+            if fi != 0 and at.KindOf(a, fi) == at.AST_FIELD_INIT:
+                _fe := rg_eval(s, r, a, st, at.At(a, fi).a)
+            else:
+                _fe2 := rg_eval(s, r, a, st, fi)
+            end
+        end
+        if ow_is_vec(n.type_str):
+            ret rg_len_exact(0 as i64)
+        end
+        mut sv3 := RgV {}
+        sv3.nul = RG_NUL_SET
+        ret sv3
+    end
+    if k == at.AST_BLOCK:
+        rg_stmt(s, r, a, st, nid)
+        ret RgV {}
+    end
+    _ga := rg_eval(s, r, a, st, n.a)
+    _gb := rg_eval(s, r, a, st, n.b)
+    _gc := rg_eval(s, r, a, st, n.c)
+    _gd := rg_eval(s, r, a, st, n.d)
+    repeat at.ChildCount(a, nid) in ci:
+        _gx := rg_eval(s, r, a, st, at.Child(a, nid, ci))
+    end
+    ret RgV {}
+end
+
+func rg_incdec(s &: Sema, r &: Rg, a &: at.Ast, st &: RgSt, nid: int): RgV:
+    n := at.At(a, nid)
+    k := rg_node_slot(r, a, n.a)
+    old := rg_eval(s, r, a, st, n.a)
+    ts := at.At(a, n.a).type_str
+    if not rg_int_ts(ts):
+        rg_havoc(r, st, rg_root_slot(r, a, n.a))
+        ret RgV {}
+    end
+    nv := rg_arith(r, a, nid, n.op, old, rg_exact(1 as i64), ts, 0)
+    if k >= 0:
+        rg_put(r, st, k, nv)
+    else:
+        rg_havoc(r, st, rg_root_slot(r, a, n.a))
+    end
+    ret n.is_prefix ? nv : old
+end
+
+func rg_len_recv(a &: at.Ast, nid: int): int:
+    if nid == 0 or at.KindOf(a, nid) != at.AST_CALL:
+        ret 0
+    end
+    n := at.At(a, nid)
+    if n.a == 0:
+        ret 0
+    end
+    if at.KindOf(a, n.a) == at.AST_MEMBER and at.ChildCount(a, nid) == 0:
+        m := at.At(a, n.a)
+        if str.Equals(m.name, "len") and m.a != 0 and rg_lenful_ts(at.At(a, m.a).type_str):
+            ret m.a
+        end
+        ret 0
+    end
+    if at.KindOf(a, n.a) == at.AST_IDENTIFIER and str.Equals(at.At(a, n.a).name, "len") and at.ChildCount(a, nid) == 1:
+        arg := at.Child(a, nid, 0)
+        if arg != 0 and rg_lenful_ts(at.At(a, arg).type_str):
+            ret arg
+        end
+    end
+    ret 0
+end
+
+func rg_peek(r &: Rg, a &: at.Ast, st &: RgSt, nid: int): RgV:
+    if nid == 0:
+        ret RgV {}
+    end
+    n := at.At(a, nid)
+    k := n.kind
+    if k == at.AST_LITERAL:
+        ret rg_lit(a, nid)
+    end
+    if k == at.AST_IDENTIFIER or k == at.AST_MEMBER:
+        sl := rg_node_slot(r, a, nid)
+        alen := rg_arr_len(n.type_str)
+        if alen >= 0:
+            ret rg_len_exact(alen)
+        end
+        if sl >= 0:
+            ret st.v.get(sl)
+        end
+        ret RgV {}
+    end
+    if k == at.AST_CAST and rg_int_ts(n.type_str) and rg_int_ts(at.At(a, n.a).type_str):
+        iv := rg_peek(r, a, st, n.a)
+        mut tlo := 0 as i64
+        mut thi := 0 as i64
+        if cv_int_range(n.type_str, tlo, thi) and iv.hlo and iv.hhi and iv.lo >= tlo and iv.hi <= thi:
+            ret iv
+        end
+        mut slo := 0 as i64
+        mut shi := 0 as i64
+        if cv_int_range(at.At(a, n.a).type_str, slo, shi) and slo >= tlo and shi <= thi:
+            ret iv
+        end
+        ret RgV {}
+    end
+    if k == at.AST_CALL:
+        lr := rg_len_recv(a, nid)
+        if lr != 0:
+            ret rg_len_of(r, a, st, lr)
+        end
+        ret RgV {}
+    end
+    if k == at.AST_BINARY and (n.op == tok.TK_PLUS or n.op == tok.TK_MINUS) and rg_int_ts(n.type_str):
+        x := rg_peek(r, a, st, n.a)
+        y := rg_peek(r, a, st, n.b)
+        ret rg_addv(x, y, n.op == tok.TK_MINUS)
+    end
+    if k == at.AST_UNARY and n.op == tok.TK_MINUS:
+        ret rg_addv(rg_exact(0 as i64), rg_peek(r, a, st, n.a), true)
+    end
+    ret RgV {}
+end
+
+func rg_flip(op: int): int:
+    if op == tok.TK_LT:
+        ret tok.TK_GT
+    end
+    if op == tok.TK_GT:
+        ret tok.TK_LT
+    end
+    if op == tok.TK_LE:
+        ret tok.TK_GE
+    end
+    if op == tok.TK_GE:
+        ret tok.TK_LE
+    end
+    ret op
+end
+
+func rg_negate(op: int): int:
+    if op == tok.TK_LT:
+        ret tok.TK_GE
+    end
+    if op == tok.TK_GE:
+        ret tok.TK_LT
+    end
+    if op == tok.TK_GT:
+        ret tok.TK_LE
+    end
+    if op == tok.TK_LE:
+        ret tok.TK_GT
+    end
+    if op == tok.TK_EQ:
+        ret tok.TK_NE
+    end
+    if op == tok.TK_NE:
+        ret tok.TK_EQ
+    end
+    ret op
+end
+
+func rg_meet(x: RgV, op: int, e: RgV): RgV:
+    mut v := x
+    if op == tok.TK_LT or op == tok.TK_LE or op == tok.TK_EQ:
+        d := op == tok.TK_LT ? 1 as i64 : 0 as i64
+        if e.hhi and e.big == 0 and sub_ok(e.hi, d):
+            if not v.hhi or e.hi - d < v.hi:
+                v.hi = e.hi - d
+                v.hhi = true
+                v.hcert = rg_is_exact(e)
+            end
+        end
+        if e.hs >= 0 and sub_ok(e.hoff, d):
+            if v.hs != e.hs or e.hoff - d < v.hoff:
+                v.hs = e.hs
+                v.hoff = e.hoff - d
+                v.hder = e.hder
+            end
+        end
+    end
+    if op == tok.TK_GT or op == tok.TK_GE or op == tok.TK_EQ:
+        d2 := op == tok.TK_GT ? 1 as i64 : 0 as i64
+        if e.hlo and e.big == 0 and add_ok(e.lo, d2):
+            if not v.hlo or e.lo + d2 > v.lo:
+                v.lo = e.lo + d2
+                v.hlo = true
+            end
+        end
+        if e.ls >= 0 and add_ok(e.loff, d2):
+            if v.ls != e.ls or e.loff + d2 > v.loff:
+                v.ls = e.ls
+                v.loff = e.loff + d2
+            end
+        end
+    end
+    if op == tok.TK_NE and rg_is_exact(e):
+        if v.hlo and v.lo == e.lo and v.lo < fold_i64_max():
+            v.lo = v.lo + 1
+        end
+        if v.hhi and v.hi == e.lo and v.hi > fold_i64_min():
+            v.hi = v.hi - 1
+        end
+    end
+    ret v
+end
+
+func rg_empty(v: RgV): bool:
+    if v.hlo and v.hhi and v.lo > v.hi:
+        ret true
+    end
+    ret v.ls >= 0 and v.ls == v.hs and v.loff > v.hoff
+end
+
+func rg_len_meet(st &: RgSt, k: int, op: int, e: RgV):
+    mut cv := st.v.get(k)
+    if cv.bytes:
+        ret
+    end
+    mut lv := RgV {}
+    lv.lo = cv.hnlo ? cv.nlo : 0 as i64
+    lv.hlo = true
+    lv.hi = cv.nhi
+    lv.hhi = cv.hnhi
+    m := rg_meet(lv, op, e)
+    if rg_empty(m):
+        st.live = false
+        ret
+    end
+    cv.nlo = m.lo
+    cv.hnlo = m.hlo
+    cv.nhi = m.hi
+    cv.hnhi = m.hhi
+    st.v.set(k, cv)
+end
+
+func rg_refine_side(r &: Rg, a &: at.Ast, st &: RgSt, tnode: int, op: int, e: RgV):
+    if tnode == 0 or not st.live:
+        ret
+    end
+    tn := at.At(a, tnode)
+    if tn.kind == at.AST_CAST and rg_int_ts(tn.type_str) and rg_int_ts(at.At(a, tn.a).type_str):
+        mut tlo := 0 as i64
+        mut thi := 0 as i64
+        mut slo := 0 as i64
+        mut shi := 0 as i64
+        if cv_int_range(tn.type_str, tlo, thi) and cv_int_range(at.At(a, tn.a).type_str, slo, shi) and slo >= tlo and shi <= thi:
+            rg_refine_side(r, a, st, tn.a, op, e)
+        end
+        ret
+    end
+    if tn.kind == at.AST_BINARY and (tn.op == tok.TK_PLUS or tn.op == tok.TK_MINUS) and rg_int_ts(tn.type_str):
+        c := rg_peek(r, a, st, tn.b)
+        if rg_is_exact(c):
+            ee := rg_addv(e, c, tn.op == tok.TK_PLUS)
+            rg_refine_side(r, a, st, tn.a, op, ee)
+        end
+        ret
+    end
+    if tn.kind == at.AST_CALL:
+        lr := rg_len_recv(a, tnode)
+        if lr != 0 and rg_arr_len(at.At(a, lr).type_str) < 0:
+            ck := rg_node_slot(r, a, lr)
+            if ck >= 0:
+                rg_len_meet(st, ck, op, e)
+            end
+        end
+        ret
+    end
+    k := rg_node_slot(r, a, tnode)
+    if k < 0:
+        ret
+    end
+    cur := st.v.get(k)
+    if rg_ptr_ts(tn.type_str):
+        if e.nul == RG_NUL_NULL:
+            mut pv := cur
+            if op == tok.TK_EQ:
+                if cur.nul == RG_NUL_SET:
+                    st.live = false
+                    ret
+                end
+                pv.nul = cur.nul == RG_NUL_NULL ? RG_NUL_NULL : RG_NUL_TEST
+            else op == tok.TK_NE:
+                if cur.nul == RG_NUL_NULL or cur.nul == RG_NUL_TEST:
+                    st.live = false
+                    ret
+                end
+                pv.nul = RG_NUL_SET
+            end
+            st.v.set(k, pv)
+        end
+        ret
+    end
+    if not rg_int_ts(tn.type_str):
+        ret
+    end
+    m2 := rg_meet(cur, op, e)
+    if rg_empty(m2):
+        st.live = false
+        ret
+    end
+    st.v.set(k, m2)
+end
+
+func rg_refine(s &: Sema, r &: Rg, a &: at.Ast, st &: RgSt, cond: int, truth: bool):
+    if cond == 0 or not st.live:
+        ret
+    end
+    n := at.At(a, cond)
+    k := n.kind
+    if k == at.AST_UNARY and n.op == tok.TK_NOT:
+        rg_refine(s, r, a, st, n.a, not truth)
+        ret
+    end
+    if k == at.AST_LITERAL and n.value_kind == tok.TV_BOOL:
+        if n.value_bool != truth:
+            st.live = false
+        end
+        ret
+    end
+    if k != at.AST_BINARY:
+        ret
+    end
+    op := n.op
+    if op == tok.TK_AND or op == tok.TK_OR:
+        both := (op == tok.TK_AND) == truth
+        if both:
+            rg_refine(s, r, a, st, n.a, truth)
+            rg_refine(s, r, a, st, n.b, truth)
+            ret
+        end
+        mut s1 := rg_st_clone(st)
+        rg_refine(s, r, a, s1, n.a, truth)
+        rg_refine(s, r, a, st, n.a, not truth)
+        rg_refine(s, r, a, st, n.b, truth)
+        rg_st_join(st, s1)
+        rg_st_free(s1)
+        ret
+    end
+    if op != tok.TK_LT and op != tok.TK_LE and op != tok.TK_GT and op != tok.TK_GE and op != tok.TK_EQ and op != tok.TK_NE:
+        ret
+    end
+    eop := truth ? op : rg_negate(op)
+    vr := rg_peek(r, a, st, n.b)
+    vl := rg_peek(r, a, st, n.a)
+    rg_refine_side(r, a, st, n.a, eop, vr)
+    rg_refine_side(r, a, st, n.b, rg_flip(eop), vl)
+end
+
+func rg_bind(r &: Rg, a &: at.Ast, st &: RgSt, k: int, init: int, v: RgV):
+    if k < 0:
+        ret
+    end
+    rg_put(r, st, k, v)
+    if init == 0 or at.KindOf(a, init) != at.AST_STRUCT_LIT:
+        ret
+    end
+    repeat at.ChildCount(a, init) in i:
+        fi := at.Child(a, init, i)
+        if fi != 0 and at.KindOf(a, fi) == at.AST_FIELD_INIT:
+            fk := rg_field_slot(r, k, at.At(a, fi).name)
+            if fk >= 0:
+                fv := rg_peek(r, a, st, at.At(a, fi).a)
+                if fv.nul == RG_NUL_NULL and fv.why == 0:
+                    mut w := fv
+                    w.why = at.At(a, fi).a
+                    st.v.set(fk, w)
+                else:
+                    st.v.set(fk, fv)
+                end
+            end
+        end
+    end
+end
+
+func rg_assign(s &: Sema, r &: Rg, a &: at.Ast, st &: RgSt, nid: int):
+    n := at.At(a, nid)
+    lhs := n.a
+    rv := rg_eval(s, r, a, st, n.b)
+    if lhs == 0 or not st.live:
+        ret
+    end
+    lk := at.KindOf(a, lhs)
+    if lk == at.AST_IDENTIFIER or (lk == at.AST_MEMBER and rg_node_slot(r, a, lhs) >= 0):
+        k := rg_node_slot(r, a, lhs)
+        if lk == at.AST_MEMBER:
+            ov := rg_eval(s, r, a, st, at.At(a, lhs).a)
+            rg_check_null(r, a, lhs, at.At(a, lhs).a, ov)
+        end
+        if n.op == tok.TK_ASSIGN:
+            mut v := rv
+            if v.nul == RG_NUL_NULL and v.why == 0:
+                v.why = n.b
+            end
+            rg_bind(r, a, st, k, n.b, v)
+            ret
+        end
+        ts := at.At(a, lhs).type_str
+        if rg_int_ts(ts) and k >= 0:
+            nv := rg_arith(r, a, nid, n.op, st.v.get(k), rv, ts, n.b)
+            rg_put(r, st, k, nv)
+            ret
+        end
+        rg_havoc(r, st, k)
+        ret
+    end
+    _lv := rg_eval(s, r, a, st, lhs)
+    if n.op != tok.TK_ASSIGN and lk == at.AST_INDEX and rg_int_ts(at.At(a, lhs).type_str):
+        _cv := rg_arith(r, a, nid, n.op, RgV {}, rv, at.At(a, lhs).type_str, n.b)
+    end
+    if lk == at.AST_MEMBER:
+        root := at.At(a, lhs).a
+        if root != 0 and at.KindOf(a, root) == at.AST_IDENTIFIER and not rg_ptr_ts(at.At(a, root).type_str):
+            rk := rg_slot(r, at.At(a, root).name)
+            repeat r.fpar.len() in i:
+                if rk >= 0 and r.fpar.get(i) == rk:
+                    st.v.set(i, RgV {})
+                end
+            end
+        end
+    end
+end
+
+func rg_decl(s &: Sema, r &: Rg, a &: at.Ast, st &: RgSt, nid: int):
+    n := at.At(a, nid)
+    v := rg_eval(s, r, a, st, n.a)
+    if not st.live:
+        ret
+    end
+    k := rg_slot(r, n.name)
+    mut w := v
+    if w.nul == RG_NUL_NULL and w.why == 0:
+        w.why = n.a
+    end
+    rg_bind(r, a, st, k, n.a, w)
+end
+
+func rg_may_exit(s &: Sema, r &: Rg, a &: at.Ast, nid: int): bool:
+    if nid == 0:
+        ret false
+    end
+    if r.exitc.has(nid):
+        ret r.exitc.get(nid) != 0
+    end
+    n := at.At(a, nid)
+    k := n.kind
+    mut hit := false
+    if k == at.AST_RETURN or k == at.AST_BREAK or k == at.AST_CONTINUE or k == at.AST_THROW or k == at.AST_TRY or k == at.AST_TRY_PREFIX:
+        hit = true
+    else k == at.AST_LAMBDA:
+        hit = false
+    else k == at.AST_CALL and node_flag(s.noret_calls, nid):
+        hit = true
+    else:
+        hit = rg_may_exit(s, r, a, n.a) or rg_may_exit(s, r, a, n.b) or rg_may_exit(s, r, a, n.c) or rg_may_exit(s, r, a, n.d)
+        if not hit:
+            repeat at.ChildCount(a, nid) in i:
+                if not hit and rg_may_exit(s, r, a, at.Child(a, nid, i)):
+                    hit = true
+                end
+            end
+        end
+    end
+    r.exitc.put(nid, hit ? 1 : 0)
+    ret hit
+end
+
+func rg_size(r &: Rg, a &: at.Ast, nid: int): int:
+    if nid == 0:
+        ret 0
+    end
+    if r.sizec.has(nid):
+        ret r.sizec.get(nid)
+    end
+    n := at.At(a, nid)
+    mut c := 1
+    if n.kind != at.AST_LAMBDA:
+        c += rg_size(r, a, n.a) + rg_size(r, a, n.b) + rg_size(r, a, n.c) + rg_size(r, a, n.d)
+        repeat at.ChildCount(a, nid) in i:
+            c += rg_size(r, a, at.Child(a, nid, i))
+        end
+    end
+    r.sizec.put(nid, c)
+    ret c
+end
+
+func rg_block(s &: Sema, r &: Rg, a &: at.Ast, st &: RgSt, nid: int):
+    mut decl := Vector {} as Vector<int>
+    mut saved := Vector {} as Vector<RgV>
+    repeat at.ChildCount(a, nid) in i:
+        c := at.Child(a, nid, i)
+        if c != 0 and (at.KindOf(a, c) == at.AST_VAR_DECL or at.KindOf(a, c) == at.AST_CONST_DECL):
+            k := rg_slot(r, at.At(a, c).name)
+            if k >= 0:
+                decl.push(k)
+                saved.push(st.v.get(k))
+            end
+        end
+    end
+    repeat at.ChildCount(a, nid) in j:
+        if not st.live or r.budget <= 0:
+            break
+        end
+        c2 := at.Child(a, nid, j)
+        rg_stmt(s, r, a, st, c2)
+        if r.certain and rg_may_exit(s, r, a, c2):
+            r.certain = false
+        end
+    end
+    if st.live:
+        repeat decl.len() in d:
+            st.v.set(decl.get(d), saved.get(d))
+        end
+    end
+    decl.free()
+    saved.free()
+end
+
+func rg_if(s &: Sema, r &: Rg, a &: at.Ast, st &: RgSt, nid: int):
+    n := at.At(a, nid)
+    _vc := rg_eval(s, r, a, st, n.a)
+    if not st.live:
+        ret
+    end
+    mut th := rg_st_clone(st)
+    rg_refine(s, r, a, th, n.a, true)
+    rg_refine(s, r, a, st, n.a, false)
+    saved := r.certain
+    r.certain = false
+    rg_stmt(s, r, a, th, n.b)
+    if n.c != 0:
+        rg_stmt(s, r, a, st, n.c)
+    end
+    r.certain = saved
+    rg_st_join(st, th)
+    rg_st_free(th)
+end
+
+func rg_push_frame(r &: Rg, n: int, sw: bool):
+    r.brk.push(rg_st_new(n, false))
+    r.cont.push(rg_st_new(n, false))
+    r.fsw.push(sw)
+end
+
+func rg_pop_frame(r &: Rg):
+    top := r.brk.len() - 1
+    mut b := r.brk.get(top)
+    mut c := r.cont.get(top)
+    rg_st_free(b)
+    rg_st_free(c)
+    _pb := r.brk.pop()
+    _pc := r.cont.pop()
+    _pf := r.fsw.pop()
+end
+
+func rg_frame_reset(r &: Rg):
+    top := r.brk.len() - 1
+    mut b := r.brk.get(top)
+    mut c := r.cont.get(top)
+    b.live = false
+    c.live = false
+    r.brk.set(top, b)
+    r.cont.set(top, c)
+end
+
+func rg_jump(r &: Rg, st &: RgSt, is_brk: bool):
+    mut top := r.brk.len() - 1
+    if not is_brk:
+        until top >= 0 and r.fsw.get(top):
+            top -= 1
+        end
+    end
+    if top < 0:
+        st.live = false
+        ret
+    end
+    if is_brk:
+        mut b := r.brk.get(top)
+        rg_st_join(b, st)
+        r.brk.set(top, b)
+    else:
+        mut c := r.cont.get(top)
+        rg_st_join(c, st)
+        r.cont.set(top, c)
+    end
+    st.live = false
+end
+
+func rg_take_cont(r &: Rg, st &: RgSt):
+    top := r.brk.len() - 1
+    mut c := r.cont.get(top)
+    rg_st_join(st, c)
+    c.live = false
+    r.cont.set(top, c)
+end
+
+func rg_take_brk(r &: Rg, st &: RgSt):
+    top := r.brk.len() - 1
+    mut b := r.brk.get(top)
+    rg_st_join(st, b)
+end
+
+func rg_set_var(st &: RgSt, k: int, v: RgV):
+    if k >= 0:
+        st.v.set(k, v)
+    end
+end
+
+func rg_body_pass(s &: Sema, r &: Rg, a &: at.Ast, st &: RgSt, cond: int, var_k: int, var_v: RgV, body: int, post: int):
+    if cond != 0:
+        _vc := rg_eval(s, r, a, st, cond)
+        rg_refine(s, r, a, st, cond, true)
+    end
+    if not st.live:
+        ret
+    end
+    rg_set_var(st, var_k, var_v)
+    rg_stmt(s, r, a, st, body)
+    rg_take_cont(r, st)
+    if post != 0:
+        rg_stmt(s, r, a, st, post)
+    end
+end
+
+func rg_loop(s &: Sema, r &: Rg, a &: at.Ast, st &: RgSt, lnid: int, cond: int, var_k: int, var_v: RgV, body: int, post: int, pin_k: int, first: RgV, last: RgV, pins: bool):
+    n0 := st.v.len()
+    saved_report := r.report
+    saved_cert := r.certain
+    saved_pinned := r.pinned
+    saved_warn := r.warn_ok
+    saved_ctx := r.ctx
+    saved_line := r.ctx_line
+    saved_pass := r.ctx_pass
+    rg_push_frame(r, n0, false)
+    mut head := rg_st_clone(st)
+    r.report = false
+    mut rounds := 0
+    until rounds < RG_ROUNDS and r.budget > 0:
+        rounds += 1
+        rg_frame_reset(r)
+        mut bst := rg_st_clone(head)
+        r.certain = false
+        rg_body_pass(s, r, a, bst, cond, var_k, var_v, body, post)
+        mut nw := rg_st_clone(head)
+        rg_st_join(nw, bst)
+        rg_st_free(bst)
+        if rg_st_same(nw, head):
+            rg_st_free(nw)
+            break
+        end
+        if rounds >= 2:
+            rg_st_widen(head, nw)
+        else:
+            rg_st_assign(head, nw)
+        end
+        rg_st_free(nw)
+    end
+    if rounds >= RG_ROUNDS or r.budget <= 0:
+        repeat head.v.len() in hi:
+            head.v.set(hi, RgV {})
+        end
+    end
+    rg_frame_reset(r)
+    r.report = saved_report
+    r.certain = false
+    mut fin := rg_st_clone(head)
+    rg_body_pass(s, r, a, fin, cond, var_k, var_v, body, post)
+    rg_st_free(fin)
+    mut out := rg_st_clone(head)
+    if cond != 0:
+        _vx := rg_eval(s, r, a, out, cond)
+        rg_refine(s, r, a, out, cond, false)
+    end
+    rg_take_brk(r, out)
+    if pins and saved_report:
+        r.pinned = true
+        r.warn_ok = false
+        line := rg_line(a, lnid)
+        if rg_is_exact(first) or (first.ls >= 0 and first.ls == first.hs and first.loff == first.hoff):
+            r.certain = saved_cert
+            r.ctx = 1
+            r.ctx_line = line
+            rg_frame_reset(r)
+            mut p1 := rg_st_clone(st)
+            rg_body_pass(s, r, a, p1, cond, pin_k, first, body, 0)
+            rg_st_free(p1)
+        end
+        if rg_is_exact(last) or (last.ls >= 0 and last.ls == last.hs and last.loff == last.hoff):
+            r.certain = saved_cert and not rg_may_exit(s, r, a, body)
+            r.ctx = 2
+            r.ctx_line = line
+            rg_frame_reset(r)
+            mut p2 := rg_st_clone(head)
+            rg_body_pass(s, r, a, p2, cond, pin_k, last, body, 0)
+            rg_st_free(p2)
+        end
+    end
+    r.pinned = saved_pinned
+    r.warn_ok = saved_warn
+    r.ctx = saved_ctx
+    r.ctx_line = saved_line
+    r.ctx_pass = saved_pass
+    r.certain = saved_cert
+    rg_pop_frame(r)
+    rg_st_assign(st, out)
+    rg_st_free(out)
+    rg_st_free(head)
+end
+
+func rg_unroll(s &: Sema, r &: Rg, a &: at.Ast, st &: RgSt, lnid: int, var_k: int, start: i64, count: int, dir: i64, body: int):
+    n0 := st.v.len()
+    saved_cert := r.certain
+    saved_pinned := r.pinned
+    saved_ctx := r.ctx
+    saved_line := r.ctx_line
+    saved_pass := r.ctx_pass
+    exits := rg_may_exit(s, r, a, body)
+    line := rg_line(a, lnid)
+    rg_push_frame(r, n0, false)
+    r.pinned = true
+    mut cur := start
+    repeat count in it:
+        if not st.live or r.budget <= 0:
+            break
+        end
+        r.certain = saved_cert and (it == 0 or not exits)
+        r.ctx = 3
+        r.ctx_line = line
+        r.ctx_pass = (it + 1) as i64
+        rg_set_var(st, var_k, rg_exact(cur))
+        rg_stmt(s, r, a, st, body)
+        rg_take_cont(r, st)
+        cur = cur + dir
+    end
+    rg_take_brk(r, st)
+    r.certain = saved_cert
+    r.pinned = saved_pinned
+    r.ctx = saved_ctx
+    r.ctx_line = saved_line
+    r.ctx_pass = saved_pass
+    rg_pop_frame(r)
+end
+
+func rg_repeat(s &: Sema, r &: Rg, a &: at.Ast, st &: RgSt, nid: int):
+    n := at.At(a, nid)
+    va := rg_eval(s, r, a, st, n.a)
+    vc := rg_eval(s, r, a, st, n.c)
+    vd := rg_eval(s, r, a, st, n.d)
+    if not st.live:
+        ret
+    end
+    k := rg_slot(r, n.name)
+    prev := k >= 0 ? st.v.get(k) : RgV {}
+    saved_rto := r.rto
+    saved_down := r.rdown
+    r.rdown = false
+    mut iv := RgV {}
+    mut first := RgV {}
+    mut last := RgV {}
+    mut pins := false
+    if n.c == 0:
+        r.rto = false
+        iv.lo = 0 as i64
+        iv.hlo = true
+        if va.hhi and va.big == 0:
+            iv.hi = va.hi - 1
+            iv.hhi = true
+        end
+        if va.hs >= 0:
+            iv.hs = va.hs
+            iv.hoff = va.hoff - 1
+        end
+        if va.hlo and va.lo >= 1:
+            pins = true
+            first = rg_exact(0 as i64)
+            last = rg_addv(va, rg_exact(1 as i64), true)
+        end
+        if rg_is_exact(va) and va.lo >= 0 and va.lo <= RG_UNROLL and rg_size(r, a, n.b) * (va.lo as int) <= r.budget / 4:
+            rg_unroll(s, r, a, st, nid, k, 0 as i64, va.lo as int, 1 as i64, n.b)
+            rg_set_var(st, k, prev)
+            r.rto = saved_rto
+            r.rdown = saved_down
+            ret
+        end
+    else:
+        r.rto = true
+        step_one := n.d == 0 or (rg_is_exact(vd) and vd.lo == 1)
+        if va.hlo and vc.hlo:
+            iv.lo = rg_min(va.lo, vc.lo)
+            iv.hlo = va.big == 0 and vc.big == 0
+        end
+        if va.hhi and vc.hhi:
+            iv.hi = rg_max(va.hi, vc.hi)
+            iv.hhi = va.big == 0 and vc.big == 0
+        end
+        if rg_is_exact(va) and vc.hs >= 0 and vc.ls == vc.hs:
+            if vc.loff >= va.lo:
+                iv.lo = va.lo
+                iv.hlo = true
+                iv.hs = vc.hs
+                iv.hoff = vc.hoff
+            else:
+                iv.lo = rg_min(va.lo, vc.loff)
+                iv.hlo = true
+                iv.hs = vc.hs
+                iv.hoff = rg_max(vc.hoff, va.lo)
+                r.rdown = true
+            end
+        end
+        if rg_is_exact(vc) and va.hs >= 0 and va.ls == va.hs and va.loff >= vc.lo:
+            iv.lo = vc.lo
+            iv.hlo = true
+            iv.hs = va.hs
+            iv.hoff = va.hoff
+        end
+        pins = step_one
+        first = va
+        last = vc
+        if rg_is_exact(va) and rg_is_exact(vc) and (n.d == 0 or (rg_is_exact(vd) and vd.lo > 0)):
+            width := va.lo <= vc.lo ? vc.lo - va.lo : va.lo - vc.lo
+            stepv := n.d == 0 ? 1 as i64 : vd.lo
+            cnt := width / stepv + 1
+            if cnt <= RG_UNROLL as i64 and rg_size(r, a, n.b) * (cnt as int) <= r.budget / 4:
+                dir := va.lo <= vc.lo ? stepv : 0 - stepv
+                rg_unroll(s, r, a, st, nid, k, va.lo, cnt as int, dir, n.b)
+                rg_set_var(st, k, prev)
+                r.rto = saved_rto
+                ret
+            end
+        end
+    end
+    rg_loop(s, r, a, st, nid, 0, k, iv, n.b, 0, k, first, last, pins)
+    rg_set_var(st, k, prev)
+    r.rto = saved_rto
+    r.rdown = saved_down
+end
+
+func rg_each(s &: Sema, r &: Rg, a &: at.Ast, st &: RgSt, nid: int):
+    n := at.At(a, nid)
+    coll := n.a
+    _cv := rg_eval(s, r, a, st, coll)
+    if not st.live:
+        ret
+    end
+    cts := at.At(a, coll).type_str
+    ek := rg_slot(r, n.name)
+    eprev := ek >= 0 ? st.v.get(ek) : RgV {}
+    mut ik := 0 - 1
+    mut iv := RgV {}
+    mut first := RgV {}
+    mut last := RgV {}
+    mut pins := false
+    if n.c != 0 and (rg_lenful_ts(cts) or ow_is_vec(cts)):
+        ik = rg_slot(r, at.At(a, n.c).name)
+        ln := rg_peek(r, a, st, coll)
+        alen := rg_arr_len(cts)
+        iv.lo = 0 as i64
+        iv.hlo = true
+        if alen >= 0:
+            iv.hi = alen - 1
+            iv.hhi = true
+        else ln.hnhi and not ln.bytes:
+            iv.hi = ln.nhi - 1
+            iv.hhi = true
+        end
+        if at.KindOf(a, coll) == at.AST_IDENTIFIER:
+            ck := rg_slot(r, at.At(a, coll).name)
+            if ck >= 0:
+                iv.hs = ck
+                iv.hoff = 0 - 1
+                pins = true
+                first = rg_exact(0 as i64)
+                last = RgV {}
+                last.ls = ck
+                last.hs = ck
+                last.loff = 0 - 1
+                last.hoff = 0 - 1
+                last.lo = 0 as i64
+                last.hlo = true
+                if iv.hhi:
+                    last.hi = iv.hi
+                    last.hhi = true
+                end
+            end
+        end
+    else n.c != 0:
+        ik = rg_slot(r, at.At(a, n.c).name)
+    end
+    iprev := ik >= 0 ? st.v.get(ik) : RgV {}
+    if ek >= 0:
+        rg_set_var(st, ek, RgV {})
+    end
+    saved_rto := r.rto
+    r.rto = false
+    rg_loop(s, r, a, st, nid, 0, ik, iv, n.b, 0, ik, first, last, pins)
+    r.rto = saved_rto
+    rg_set_var(st, ik, iprev)
+    rg_set_var(st, ek, eprev)
+end
+
+func rg_until(s &: Sema, r &: Rg, a &: at.Ast, st &: RgSt, nid: int):
+    n := at.At(a, nid)
+    saved_rto := r.rto
+    r.rto = false
+    rg_loop(s, r, a, st, nid, n.a, 0 - 1, RgV {}, n.b, 0, 0 - 1, RgV {}, RgV {}, false)
+    r.rto = saved_rto
+end
+
+func rg_counted_for(r &: Rg, a &: at.Ast, nid: int, seq &: int): int:
+    n := at.At(a, nid)
+    if n.a == 0 or n.b == 0 or n.c == 0 or at.KindOf(a, n.a) != at.AST_VAR_DECL or at.KindOf(a, n.b) != at.AST_BINARY:
+        ret 0 - 1
+    end
+    dn := at.At(a, n.a)
+    if dn.a == 0 or at.KindOf(a, dn.a) != at.AST_LITERAL or at.At(a, dn.a).value_int != (0 as u64):
+        ret 0 - 1
+    end
+    cn := at.At(a, n.b)
+    if cn.op != tok.TK_LT or cn.a == 0 or at.KindOf(a, cn.a) != at.AST_IDENTIFIER or not str.Equals(at.At(a, cn.a).name, dn.name):
+        ret 0 - 1
+    end
+    lr := rg_len_recv(a, cn.b)
+    if lr == 0 or at.KindOf(a, lr) != at.AST_IDENTIFIER:
+        ret 0 - 1
+    end
+    pn := at.At(a, n.c)
+    if pn.kind != at.AST_ASSIGN or pn.a == 0 or at.KindOf(a, pn.a) != at.AST_IDENTIFIER or not str.Equals(at.At(a, pn.a).name, dn.name):
+        ret 0 - 1
+    end
+    if pn.b == 0 or at.KindOf(a, pn.b) != at.AST_BINARY or at.At(a, pn.b).op != tok.TK_PLUS:
+        ret 0 - 1
+    end
+    one := at.At(a, pn.b).b
+    if one == 0 or at.KindOf(a, one) != at.AST_LITERAL or at.At(a, one).value_int != (1 as u64):
+        ret 0 - 1
+    end
+    seq = lr
+    ret rg_slot(r, dn.name)
+end
+
+func rg_for(s &: Sema, r &: Rg, a &: at.Ast, st &: RgSt, nid: int):
+    n := at.At(a, nid)
+    rg_stmt(s, r, a, st, n.a)
+    saved_rto := r.rto
+    r.rto = false
+    mut seq := 0
+    pin_k := rg_counted_for(r, a, nid, seq)
+    mut pins := false
+    mut last := RgV {}
+    if pin_k >= 0:
+        al := rg_arr_len(at.At(a, seq).type_str)
+        ck := rg_slot(r, at.At(a, seq).name)
+        if al >= 1:
+            last = rg_exact(al - 1)
+            pins = true
+        else al < 0 and ck >= 0:
+            last.ls = ck
+            last.hs = ck
+            last.loff = 0 - 1
+            last.hoff = 0 - 1
+            last.lo = 0 as i64
+            last.hlo = true
+            pins = true
+        end
+    end
+    rg_loop(s, r, a, st, nid, n.b, 0 - 1, RgV {}, n.d, n.c, pin_k, rg_exact(0 as i64), last, pins)
+    r.rto = saved_rto
+end
+
+func rg_switch(s &: Sema, r &: Rg, a &: at.Ast, st &: RgSt, nid: int):
+    n := at.At(a, nid)
+    _vs := rg_eval(s, r, a, st, n.a)
+    if not st.live:
+        ret
+    end
+    n0 := st.v.len()
+    mut base := rg_st_clone(st)
+    mut prev := rg_st_new(n0, false)
+    mut has_else := false
+    saved := r.certain
+    r.certain = false
+    rg_push_frame(r, n0, true)
+    repeat at.ChildCount(a, nid) in i:
+        cs := at.Child(a, nid, i)
+        if cs != 0:
+            if at.At(a, cs).op == tok.TK_KW_ELSE:
+                has_else = true
+            end
+            mut arm := rg_st_clone(base)
+            rg_st_join(arm, prev)
+            rg_stmt(s, r, a, arm, at.At(a, cs).b)
+            rg_st_assign(prev, arm)
+            rg_st_free(arm)
+        end
+    end
+    r.certain = saved
+    mut out := rg_st_clone(prev)
+    rg_take_brk(r, out)
+    if not has_else:
+        rg_st_join(out, base)
+    end
+    rg_pop_frame(r)
+    rg_st_assign(st, out)
+    rg_st_free(out)
+    rg_st_free(prev)
+    rg_st_free(base)
+end
+
+func rg_try_block(s &: Sema, r &: Rg, a &: at.Ast, st &: RgSt, nid: int):
+    n := at.At(a, nid)
+    mut entry := rg_st_clone(st)
+    saved := r.certain
+    rg_stmt(s, r, a, st, n.a)
+    r.certain = false
+    rg_stmt(s, r, a, entry, n.b)
+    r.certain = saved
+    rg_st_join(st, entry)
+    rg_st_free(entry)
+end
+
+func rg_stmt(s &: Sema, r &: Rg, a &: at.Ast, st &: RgSt, nid: int):
+    if nid == 0 or not st.live or r.budget <= 0:
+        ret
+    end
+    r.budget -= 1
+    k := at.KindOf(a, nid)
+    if k == at.AST_BLOCK:
+        rg_block(s, r, a, st, nid)
+    else k == at.AST_VAR_DECL or k == at.AST_CONST_DECL:
+        rg_decl(s, r, a, st, nid)
+    else k == at.AST_ASSIGN:
+        rg_assign(s, r, a, st, nid)
+    else k == at.AST_IF:
+        rg_if(s, r, a, st, nid)
+    else k == at.AST_UNTIL:
+        rg_until(s, r, a, st, nid)
+    else k == at.AST_FOR:
+        rg_for(s, r, a, st, nid)
+    else k == at.AST_REPEAT:
+        rg_repeat(s, r, a, st, nid)
+    else k == at.AST_EACH:
+        rg_each(s, r, a, st, nid)
+    else k == at.AST_SWITCH:
+        rg_switch(s, r, a, st, nid)
+    else k == at.AST_MATCH:
+        _vm := rg_match_expr(s, r, a, st, nid)
+    else k == at.AST_TRY_BLOCK:
+        rg_try_block(s, r, a, st, nid)
+    else k == at.AST_RETURN or k == at.AST_THROW:
+        _vr := rg_eval(s, r, a, st, at.At(a, nid).a)
+        st.live = false
+    else k == at.AST_BREAK:
+        rg_jump(r, st, true)
+    else k == at.AST_CONTINUE:
+        rg_jump(r, st, false)
+    else k == at.AST_DEFER:
+        ret
+    else k == at.AST_EXPR_STMT:
+        e := at.At(a, nid).a
+        _ve := rg_eval(s, r, a, st, e)
+        if node_flag(s.noret_calls, e):
+            st.live = false
+        end
+    else:
+        _vx := rg_eval(s, r, a, st, nid)
+    end
+end
+
+func rg_mark_names(r &: Rg, a &: at.Ast, nid: int):
+    if nid == 0:
+        ret
+    end
+    n := at.At(a, nid)
+    if n.kind == at.AST_IDENTIFIER:
+        rg_set_off(r, n.name)
+    end
+    rg_mark_names(r, a, n.a)
+    rg_mark_names(r, a, n.b)
+    rg_mark_names(r, a, n.c)
+    rg_mark_names(r, a, n.d)
+    repeat at.ChildCount(a, nid) in i:
+        rg_mark_names(r, a, at.Child(a, nid, i))
+    end
+end
+
+func rg_mark_written(r &: Rg, a &: at.Ast, nid: int):
+    if nid == 0:
+        ret
+    end
+    n := at.At(a, nid)
+    k := n.kind
+    if k == at.AST_ASSIGN or k == at.AST_INCDEC:
+        mut cur := n.a
+        until cur != 0 and at.KindOf(a, cur) != at.AST_IDENTIFIER:
+            ck := at.KindOf(a, cur)
+            if ck != at.AST_MEMBER and ck != at.AST_INDEX and ck != at.AST_CAST:
+                cur = 0
+            else:
+                cur = at.At(a, cur).a
+            end
+        end
+        if cur != 0:
+            rg_set_off(r, at.At(a, cur).name)
+        end
+    end
+    if k == at.AST_VAR_DECL or k == at.AST_CONST_DECL:
+        rg_set_off(r, n.name)
+    end
+    if k == at.AST_CALL:
+        repeat at.ChildCount(a, nid) in j:
+            arg := at.Child(a, nid, j)
+            if arg != 0 and at.At(a, arg).ref_arg:
+                rg_mark_names(r, a, arg)
+            end
+        end
+        if n.a != 0 and at.KindOf(a, n.a) == at.AST_MEMBER:
+            rg_mark_names(r, a, at.At(a, n.a).a)
+        end
+    end
+    rg_mark_written(r, a, n.a)
+    rg_mark_written(r, a, n.b)
+    rg_mark_written(r, a, n.c)
+    rg_mark_written(r, a, n.d)
+    repeat at.ChildCount(a, nid) in i:
+        rg_mark_written(r, a, at.Child(a, nid, i))
+    end
+end
+
+func rg_top_child(a &: at.Ast, body: int, nid: int): bool:
+    repeat at.ChildCount(a, body) in i:
+        if at.Child(a, body, i) == nid:
+            ret true
+        end
+    end
+    ret false
+end
+
+func rg_collect(r &: Rg, a &: at.Ast, nid: int):
+    if nid == 0:
+        ret
+    end
+    n := at.At(a, nid)
+    k := n.kind
+    if k == at.AST_LAMBDA:
+        rg_mark_names(r, a, nid)
+        ret
+    end
+    if (k == at.AST_DEFER and not rg_top_child(a, r.fbody, nid)) or k == at.AST_TRY_BLOCK:
+        rg_mark_written(r, a, nid)
+        if k == at.AST_TRY_BLOCK:
+            rg_set_off(r, n.name)
+        end
+    end
+    if k == at.AST_MATCH_PATTERN or k == at.AST_VARIANT_UNWRAP or k == at.AST_MATCH_ARM:
+        if k != at.AST_MATCH_ARM:
+            rg_mark_names(r, a, nid)
+        end
+        if str.Len(n.name) > 0:
+            rg_set_off(r, n.name)
+        end
+    end
+    if k == at.AST_VAR_DECL or k == at.AST_CONST_DECL:
+        mut dts := n.type_str
+        if str.Len(dts) == 0 and n.a != 0:
+            dts = at.At(a, n.a).type_str
+        end
+        if str.Len(dts) == 0 or rg_int_ts(dts) or rg_lenful_ts(dts) or rg_ptr_ts(dts):
+            _ks := rg_add_slot(r, n.name, 0 - 1)
+        else:
+            r.lnames.put(n.name, 1)
+        end
+    end
+    if k == at.AST_REPEAT or k == at.AST_EACH:
+        _kl := rg_add_slot(r, n.name, 0 - 1)
+    end
+    if k == at.AST_EACH and n.c != 0:
+        _ki := rg_add_slot(r, at.At(a, n.c).name, 0 - 1)
+    end
+    if k == at.AST_MEMBER and n.a != 0 and at.KindOf(a, n.a) == at.AST_IDENTIFIER and rg_ptr_ts(n.type_str):
+        root := at.At(a, n.a)
+        if not rg_ptr_ts(root.type_str) and str.Len(root.type_str) > 0 and not rg_lenful_ts(root.type_str) and not rg_int_ts(root.type_str) and (r.lnames.has(root.name) or r.slot.has(root.name)):
+            par := rg_add_slot(r, root.name, 0 - 1)
+            mut kf := rg_field_find(r, par, n.name)
+            if kf < 0:
+                kf = r.names.len()
+                r.names.push(root.name + "." + n.name)
+                r.fname.push(n.name)
+                r.off.push(false)
+                r.fpar.push(par)
+            end
+            r.fslot.put(nid, kf)
+        end
+    end
+    rg_collect(r, a, n.a)
+    rg_collect(r, a, n.b)
+    rg_collect(r, a, n.c)
+    rg_collect(r, a, n.d)
+    repeat at.ChildCount(a, nid) in i:
+        rg_collect(r, a, at.Child(a, nid, i))
+    end
+end
+
+func rg_free_ctx(r &: Rg):
+    r.names.free()
+    r.slot.free()
+    r.off.free()
+    r.fpar.free()
+    r.fname.free()
+    r.fslot.free()
+    r.lnames.free()
+    r.exitc.free()
+    r.sizec.free()
+    r.brk.free()
+    r.cont.free()
+    r.fsw.free()
+    r.dnid.free()
+    r.dsev.free()
+    r.dcode.free()
+    r.dmsg.free()
+    r.dhelp.free()
+end
+
+pub func SemaCheckRanges(s &: Sema, a &: at.Ast, fnid: int):
+    if g_sm_ranges == 0 or fnid == 0 or s.requal or s.in_derive:
+        ret
+    end
+    body := at.At(a, fnid).a
+    if body == 0:
+        ret
+    end
+    mut r := Rg {}
+    r.mode = g_sm_ranges
+    r.budget = RG_BUDGET
+    repeat at.ChildCount(a, fnid) in i:
+        c := at.Child(a, fnid, i)
+        if c != 0 and at.KindOf(a, c) == at.AST_PARAM:
+            _kp := rg_add_slot(r, at.At(a, c).name, 0 - 1)
+        end
+    end
+    r.fbody = body
+    rg_collect(r, a, body)
+    if r.names.len() > RG_MAX_SLOTS:
+        rg_free_ctx(r)
+        ret
+    end
+    mut st := rg_st_new(r.names.len(), true)
+    r.report = true
+    r.certain = true
+    rg_stmt(s, r, a, st, body)
+    rg_st_free(st)
+    repeat r.dnid.len() in d:
+        sev := r.dsev.get(d)
+        sp := span_of(a, r.dnid.get(d))
+        if sev == RG_ERR or r.mode >= 2:
+            serr_help(s, r.dcode.get(d), sp, r.dmsg.get(d), r.dhelp.get(d))
+        else:
+            swarn_help(s, r.dcode.get(d), sp, r.dmsg.get(d), r.dhelp.get(d))
+        end
+    end
+    rg_free_ctx(r)
+end

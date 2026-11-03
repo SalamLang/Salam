@@ -105,21 +105,80 @@ func split_merge(l &: Nl, s: int):
     l.stat_merge_in = l.stat_merge_in + size
 end
 
+func icf_arch(l &: Nl): bool:
+    ret l.mach == EM_X86_64 or l.mach == EM_AARCH64 or (l.pe and l.mach == EM_386)
+end
+
 func icf_object(l &: Nl, o: int): bool:
-    if l.o_coff[o] or (l.mach != EM_X86_64 and l.mach != EM_AARCH64):
+    if not icf_arch(l):
         ret false
     end
     mut own := false
+    mut eh := false
     repeat l.o_nsec[o] in i:
         nm := l.s_name[l.o_sec0[o] + i]
-        if name_starts(l, nm, ".debug_"):
+        if name_starts(l, nm, ".debug_") or name_starts(l, nm, ".debug$") or name_starts(l, nm, "__DWARF,"):
             ret false
         end
-        if name_is(l, nm, ".rodata.salam"):
+        if name_is(l, nm, ".rodata.salam") or name_is(l, nm, ".rdata$s") or name_is(l, nm, "__TEXT,__salam_cst"):
             own = true
+        end
+        if name_is(l, nm, "__TEXT,__eh_frame"):
+            eh = true
+        end
+    end
+    if l.macho and not own and eh:
+        s0 := l.o_sym0[o]
+        repeat l.o_nsym[o] in k:
+            nm2 := l.os_name[s0 + k]
+            if nm2 >= 0 and name_is(l, nm2, "_salam_eh_frame"):
+                own = true
+            end
         end
     end
     ret own
+end
+
+func icf_text(l &: Nl, s: int): bool:
+    fl := l.s_flags[s]
+    if l.macho:
+        ret (fl & (0x80000000 as i64)) != (0 as i64) and l.s_type[s] == 1
+    end
+    if l.o_coff[l.s_obj[s]]:
+        ret (fl & (0x20000000 as i64)) != (0 as i64) and l.s_type[s] == 1
+    end
+    ret (fl & (6 as i64)) == (6 as i64) and l.s_type[s] == 1
+end
+
+func split_pdata(l &: Nl, s: int):
+    es := (l.mach == EM_AARCH64 ? 8 : 12) as i64
+    size := l.s_size[s]
+    if size < es or size % es != (0 as i64):
+        ret
+    end
+    l.sp_first[s] = l.pc_start.len()
+    l.sp_code[s] = true
+    mut at := 0 as i64
+    until at < size:
+        piece_add(l, s, at, es, 4 as i64)
+        at = at + es
+    end
+    l.sp_count[s] = l.pc_start.len() - l.sp_first[s]
+end
+
+func sec_order(l &: Nl): Vector<int>:
+    mut v := Vector {} as Vector<int>
+    n0 := l.sp_first.len()
+    repeat l.s_obj.len() in s:
+        if n0 == 0 or (s < n0 and l.sp_first[s] < 0):
+            v.push(s)
+        else s < n0:
+            repeat l.sp_count[s] in k:
+                v.push(l.pc_sec[l.sp_first[s] + k])
+            end
+        end
+    end
+    ret v
 end
 
 func low_align(off: i64, al: i64): i64:
@@ -260,16 +319,20 @@ func split_sections(l &: Nl):
     repeat l.o_file.len() in o:
         own.push(l.icf and icf_object(l, o))
     end
+    elf := not l.pe and not l.macho
     mut any := false
     repeat n0 in s:
-        if l.s_drop[s] or l.o_coff[l.s_obj[s]]:
+        if l.s_drop[s] or (elf and l.o_coff[l.s_obj[s]]):
             continue
         end
-        if merge_ok(l, s):
+        if elf and merge_ok(l, s):
             split_merge(l, s)
             any = true
-        else own[l.s_obj[s]] and (l.s_flags[s] & (6 as i64)) == (6 as i64) and l.s_type[s] == 1:
+        else own[l.s_obj[s]] and icf_text(l, s):
             split_funcs(l, s)
+            any = any or l.sp_first[s] >= 0
+        else own[l.s_obj[s]] and l.pe and name_is(l, l.s_name[s], ".pdata"):
+            split_pdata(l, s)
             any = any or l.sp_first[s] >= 0
         end
     end
@@ -356,6 +419,9 @@ func split_relocs(l &: Nl, s: int):
             l.r_type.push(l.r_type[r])
             l.r_sym.push(l.r_sym[r])
             l.r_add.push(l.r_add[r])
+            if l.macho:
+                l.r_sub.push(l.r_sub[r])
+            end
             c += 1
             j += 1
         end

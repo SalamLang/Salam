@@ -433,7 +433,46 @@ func isel_vbcast_int(g &: Ng, i: int):
     set_res(g, i, rb)
 end
 
+func ystore_w8(g &: Ng, i: int):
+    r := vcopy(g, g.i_a[i])
+    w := g.t_elem[g.v_ty[g.i_a[i]]] == T_I16
+    vop(g, 0xDB, r, vsplat32(g, (w ? 0x00FF00FF : 255) as i64))
+    hi := yext_hi(g, r)
+    p1 := e_rr(g, M_VOP_RR, 8, r, hi)
+    g.mc.cc[p1] = w ? 0x67 : 0x6B
+    g.mc.ymm[p1] = false
+    m := mem_of(g, g.i_b[i], 0 as i64)
+    if w:
+        s1 := e_mr(g, M_VST, 16, m, r)
+        g.mc.ymm[s1] = false
+        ret
+    end
+    p2 := e_rr(g, M_VOP_RR, 8, r, r)
+    g.mc.cc[p2] = 0x67
+    g.mc.ymm[p2] = false
+    _s2 := e_mr(g, M_FST, 8, m, r)
+end
+
+func yload_w8(g &: Ng, i: int, m: Mem):
+    w := (g.i_x[i] & 3) == 2 ? 2 : 1
+    sgn := (g.i_x[i] & 4) != 0
+    e16 := g.t_elem[g.i_ty[i]] == T_I16
+    mut k := e16 ? 0x20 : (w == 2 ? 0x23 : 0x21)
+    if not sgn:
+        k += 0x10
+    end
+    d := wide_reg(g)
+    mu := e_rm(g, M_VUN, 32, d, m)
+    g.mc.cc[mu] = k
+    g.mc.ymm[mu] = true
+    set_res(g, i, d)
+end
+
 func isel_vstore_w8(g &: Ng, i: int):
+    if is_ymm(g, g.v_ty[g.i_a[i]]):
+        ystore_w8(g, i)
+        ret
+    end
     r := vcopy(g, g.i_a[i])
     if g.t_elem[g.v_ty[g.i_a[i]]] == T_I16:
         vop(g, 0xDB, r, vsplat32(g, 0x00FF00FF as i64))
@@ -454,6 +493,10 @@ func isel_vstore_w8(g &: Ng, i: int):
 end
 
 func isel_vload_w8(g &: Ng, i: int, m: Mem):
+    if is_ymm(g, g.i_ty[i]):
+        yload_w8(g, i, m)
+        ret
+    end
     w := (g.i_x[i] & 3) == 2 ? 2 : 1
     sgn := (g.i_x[i] & 4) != 0
     r := wide_reg(g)

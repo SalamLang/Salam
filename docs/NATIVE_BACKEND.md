@@ -690,7 +690,14 @@ then goes through:
    into the addresses (`[rdi + r8 + 32]`), they do not count against the
    function's inline cost, and a loop that reads or writes a local array too
    small for two vector steps (the four channel values of a PNG pixel) is
-   left alone (`SALAM_NG_OFF=lvunr`).
+   left alone (`SALAM_NG_OFF=lvunr`). After a 256-bit loop without a
+   reduction or a down-counting counter, whose body is at most 48
+   instructions, one 128-bit copy of the body runs when half a vector or
+   more is left, so at most fifteen bytes of a byte loop (seven values of a
+   16-bit one) go through the scalar loop instead of 31. The step uses the
+   low halves of the loop's 256-bit constants instead of broadcasting new
+   ones, and like the unrolled copies it does not count against the
+   function's inline cost (`SALAM_NG_OFF=vtail`).
    On the same copy of the PNG encoder's loops (callgrind,
    4096-byte rows, instructions per byte, the numbers before the blends,
    `xmm14` and the unrolling and LLVM's in brackets), the filter scoring loop runs 6.81 with
@@ -698,10 +705,18 @@ then goes through:
    `xmm14` keeps one more accumulator out of memory. Sub and Up run 0.34
    on SSE2 (0.48, LLVM 0.30 to 0.33) and 0.22 with AVX2 (0.29, LLVM 0.11 to
    0.14), Average 0.90 and 0.49 (0.99 and 0.53, LLVM 0.81 and 0.40) and
-   Paeth 6.65 and 1.88 (6.83 and 2.22, LLVM 10.76 and 2.64). What keeps
-   Sub and Up behind with AVX2 is the remainder: up to 31 bytes of each row
-   run scalar after the 32-byte steps, where LLVM finishes the row with
-   narrower vector steps. In wall time (median of nine interleaved runs,
+   Paeth 6.65 and 1.88 (6.83 and 2.22, LLVM 10.76 and 2.64). The 128-bit
+   tail step takes Sub and Up with AVX2 to 0.20 (0.226 and 0.224 before it),
+   Average to 0.46 (0.49) and Paeth to 1.83 (1.89); a 4092-byte Sub row now
+   ends in one 16-byte step and twelve scalar bytes instead of 28 scalar
+   bytes. LLVM still runs Sub and Up at 0.11 to 0.13: in this copy of the
+   loops it knows the row length, ends each row in unrolled 8-byte steps
+   and reads one operand of each `vpsubb` straight from memory, which the
+   native loop loads first. In wall time on a loaded machine (median of nine
+   interleaved runs, 200000 rows) AVX2 Sub takes 35 ms [32-42] instead of
+   40 ms [18-49] (LLVM 32 ms [22-36]) and Up 36 ms [34-53] instead of 40 ms
+   [39-49] (LLVM 27 ms [23-33]); Average and Paeth stay within the noise.
+   In wall time (median of nine interleaved runs,
    40000 or 200000 rows, range in brackets) the AVX2 scoring loop takes
    92 ms [85-235] instead of 115 ms [110-150] (LLVM 115 ms [112-121]), Sub
    29 ms [24-37] on SSE2 instead of 46 ms [34-69] (LLVM 29 ms [25-39]) and
@@ -1105,7 +1120,7 @@ ret end` at the top of a recursive AST walk) tests that parameter before
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing, and a comma-separated list dumps several functions.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,vnarrow,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,loopinl,cpelim,tord,vrev,cdown,tfold,mexit,sqself,vsign,redinv,ldcmp,phix,selinc,wweb,wwdep,wwtr,tdup,padjmp,dtst,zins,ndiv,niv,cmp64,adc64,rvc,avx2,rasp,hotpath,inlnest,spromo,ypack,ysum,winv,zxcmp,cpspill,scdead,yzext,uswsel,vex3,vabs,vdemor,lvnsw,vblend,xfree,lvunr`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,vnarrow,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,loopinl,cpelim,tord,vrev,cdown,tfold,mexit,sqself,vsign,redinv,ldcmp,phix,selinc,wweb,wwdep,wwtr,tdup,padjmp,dtst,zins,ndiv,niv,cmp64,adc64,rvc,avx2,rasp,hotpath,inlnest,spromo,ypack,ysum,winv,zxcmp,cpspill,scdead,yzext,uswsel,vex3,vabs,vdemor,lvnsw,vblend,xfree,lvunr,vtail`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator and `rasp` the
@@ -1336,8 +1351,9 @@ unrolling they were 145.6 and 558.6 million, before the 256-bit widening, per-fi
 and vector `abs` they were 152.3 and 570.3 million, 1.15x and 1.21x, before
 the narrow byte and 16-bit lanes 163.3 and 587.2 million, 1.23x and 1.25x,
 and before `winv`, `zxcmp`, `cpspill` and `scdead` 174.6 and 608.0 million,
-1.32x and 1.29x). With `--cpu=x86-64-v3` the two take 116.4 and 518.1
-million against LLVM's 101.9 and 415.0, 1.14x and 1.25x (119.7 and 523.3
+1.32x and 1.29x). With `--cpu=x86-64-v3` the two take 116.3 and 515.7
+million against LLVM's 101.9 and 415.0, 1.14x and 1.24x (116.4 and 518.1
+million before the 128-bit tail step, 119.7 and 523.3
 million before the blends, `xmm14` and the unrolling, 151.6 and 569.0
 million, 1.49x and 1.37x, before the 256-bit widening). On `image_rtl_card`, `EncodePNG` and
 `RawDeflate` now run 91.8 million instructions against 97.4 million for

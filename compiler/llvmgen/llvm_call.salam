@@ -61,7 +61,8 @@ func libc_size_ret(fname: str): int:
 end
 
 func emit_arg(
-    v &: Lv, s &: sm.Sema, a &: at.Ast, ab &: str.StringBuilder, arg: int, sig: int, i: int, cname: str
+    v &: Lv, s &: sm.Sema, a &: at.Ast, ab &: str.StringBuilder, arg: int, call: int, sig: int, i: int,
+    cname: str
 ):
     if param_is_ref(s, a, sig, i):
         if at.Get(a, arg).ref_arg_ptr:
@@ -93,6 +94,15 @@ func emit_arg(
     end
     if str.Equals(ty, "i1") and i < sg.params.len() and sig_is_extern(s, a, sig):
         co.SbPuts(ab, "i1 zeroext " + ref2)
+        ret
+    end
+    if i >= sg.params.len() and sig_is_extern(s, a, sig) and struct_sym(v, s, a, pts) != 0 and not is_ptr_ts(pts):
+        vex := ex_va_arg(v, s, a, sig, call, i, pts)
+        if vex.mode == EXM_NONE:
+            lv_error(v, a, arg, "cannot pass struct '" + pts + "' as a variadic C argument on this target; pass a pointer to it instead")
+            ret
+        end
+        ex_emit_arg(v, ab, vex, ty, ref2)
         ret
     end
     if i >= sg.params.len() and sig_is_extern(s, a, sig):
@@ -143,7 +153,7 @@ func fill_defaults(
             if not first:
                 co.SbPuts(ab, ", ")
             end
-            emit_arg(v, s, a, ab, param.a, sig, i, "")
+            emit_arg(v, s, a, ab, param.a, 0, sig, i, "")
             first = false
         end
         i += 1
@@ -181,7 +191,7 @@ func call_user(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, nm: str): Llv:
         if i > 0:
             co.SbPuts(ab, ", ")
         end
-        emit_arg(v, s, a, ab, nn.list.get(i), sig, i, cname)
+        emit_arg(v, s, a, ab, nn.list.get(i), n, sig, i, cname)
     end
     fill_defaults(v, s, a, ab, n, sig, nn.list.len() == 0)
     argsx := co.SbCstr(ab)
@@ -310,7 +320,7 @@ func emit_call(
         if not first:
             co.SbPuts(ab, ", ")
         end
-        emit_arg(v, s, a, ab, nn.list.get(i), sig, i, fname)
+        emit_arg(v, s, a, ab, nn.list.get(i), n, sig, i, fname)
         first = false
     end
     fill_defaults(v, s, a, ab, n, sig, first)

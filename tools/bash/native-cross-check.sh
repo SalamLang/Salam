@@ -16,6 +16,11 @@
 # runs a different number of assertions per architecture, so its .out only
 # matches on x86-64. NATIVE_CROSS_SKIP replaces the list.
 #
+# A test with a C file next to it (name.c beside name.salam) links that file as
+# the static library lib<name>.a, compiled for the target with clang and
+# archived with llvm-ar (NATIVE_CROSS_CC and NATIVE_CROSS_AR override them); it
+# is skipped when either tool is missing.
+#
 # Each program gets NATIVE_CROSS_TIMEOUT seconds (180 by default); the larger
 # tensor and nn demos take over a minute under qemu.
 #
@@ -60,6 +65,10 @@ if [ -n "$STAGE" ]; then
     STAGE=$(cd "$STAGE" && pwd)
 fi
 LIMIT=${NATIVE_CROSS_TIMEOUT:-180}
+XCC=${NATIVE_CROSS_CC:-clang}
+XAR=${NATIVE_CROSS_AR:-llvm-ar}
+XMARCH=
+case "$TRIPLE" in riscv64*) XMARCH=-march=rv64gc ;; esac
 ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
@@ -88,9 +97,29 @@ for grp in $TEST_GROUPS; do
             skipped=$((skipped + 1))
             continue
         fi
+        libarg=
+        if [ -f "${f%.salam}.c" ]; then
+            if ! command -v "$XCC" >/dev/null 2>&1 || ! command -v "$XAR" >/dev/null 2>&1; then
+                echo "SKIP $id (its C helper needs $XCC and $XAR)"
+                skipped=$((skipped + 1))
+                continue
+            fi
+            rm -rf "$work/clib"
+            mkdir -p "$work/clib"
+            # shellcheck disable=SC2086
+            if ! "$XCC" --target="$TRIPLE" $XMARCH -O2 -ffreestanding -fno-stack-protector -c "${f%.salam}.c" \
+                -o "$work/clib/helper.o" >"$work/build.log" 2>&1 ||
+                ! "$XAR" rcs "$work/clib/lib$(basename "$f" .salam).a" "$work/clib/helper.o" >>"$work/build.log" 2>&1; then
+                echo "BUILDFAIL $id (C helper)"
+                head -3 "$work/build.log"
+                bad=$((bad + 1))
+                continue
+            fi
+            libarg=--libpath=$work/clib
+        fi
         exe=$work/t$EXT
         rm -f "$exe"
-        if ! (cd "$work" && "$SALAM" build "$f" --backend=native --release --target="$TRIPLE" --output="$exe" --log-level=error >"$work/build.log" 2>&1); then
+        if ! (cd "$work" && "$SALAM" build "$f" --backend=native --release --target="$TRIPLE" --output="$exe" --log-level=error ${libarg:+"$libarg"} >"$work/build.log" 2>&1); then
             echo "BUILDFAIL $id"
             head -3 "$work/build.log"
             bad=$((bad + 1))

@@ -81,6 +81,8 @@ mut _last_minute := 0 as i64
 
 mut _mu := sync.NewMutex()
 mut _gcell := mem.AllocateZeroed(16 as u64) as i64*
+mut _off_minute := (0 as i64) - (1 as i64)
+mut _off_value := 0 as i64
 mut _on_error := 0 as i64
 mut _before := 0 as i64
 mut _after := 0 as i64
@@ -317,8 +319,24 @@ func _launch(i: int): bool:
     ret true
 end
 
+func _cached_offset(now: i64): i64:
+    minute := now / (60 as i64)
+    if minute == _off_minute: ret _off_value end
+    v := OffsetSeconds(_zone_name, _zone_fallback, now)
+    _off_value = v
+    _off_minute = minute
+    ret v
+end
+
+func _loop():
+    until atomic_load(_stop) == (0 as i64):
+        _fire_due(time.Now(), true)
+        time.Sleep(200)
+    end
+end
+
 func _cron_loop(arg: i64):
-    Run()
+    _loop()
 end
 
 func _next_minute(e: Expr, after: i64, zone: str, fallback_minutes: int): i64:
@@ -404,7 +422,7 @@ func _due(i: int, now: i64, dedupe: bool): bool:
         if nx == (0 as i64) or now < nx: ret false end
         ret true
     end
-    local := now + OffsetSeconds(_zone_name, _zone_fallback, now)
+    local := now + _cached_offset(now)
     if not MatchesLocal(j.expr, local): ret false end
     if not _step_ok(i, local): ret false end
     mut slot := now / (60 as i64)
@@ -551,6 +569,7 @@ end
 pub func SetZone(name: str, fallback_minutes: int):
     _zone_name = str.Clone(name)
     _zone_fallback = fallback_minutes
+    _off_minute = (0 as i64) - (1 as i64)
 end
 
 // Registers fn (a func(id: i64)) under spec. Register every job before Run.
@@ -836,11 +855,8 @@ pub func Run():
     if _stop == null:
         _stop = mem.AllocateZeroed(8 as u64) as i64*
     end
-    until atomic_load(_stop) == (0 as i64):
-        now := time.Now()
-        _fire_due(now, true)
-        time.Sleep(200)
-    end
+    atomic_store(_stop, 0 as i64)
+    _loop()
 end
 
 @en "RunBackground"
@@ -849,6 +865,7 @@ pub func RunBackground():
     if _stop == null:
         _stop = mem.AllocateZeroed(8 as u64) as i64*
     end
+    atomic_store(_stop, 0 as i64)
     salam_cron_spawn(_cron_loop, 0 as i64)
 end
 

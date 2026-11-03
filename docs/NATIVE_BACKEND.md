@@ -971,8 +971,10 @@ ret end` at the top of a recursive AST walk) tests that parameter before
   executable on x86-64 Linux: it maps the segments into this process, applies
   the rebase and bind opcodes against glibc (Darwin names such as `___error`
   and `___stdoutp` map to their glibc counterparts) and calls `_main`.
-  Programs that only compute and print run unchanged; anything that passes a
-  Darwin struct to libc (sockets, `stat`, signals) does not. Compiling the
+  `readdir$INODE64` goes through a shim that copies glibc's entry into the
+  Darwin `struct dirent` layout, so directory listings work. Programs that
+  only compute, print and use files run unchanged; anything else that passes
+  a Darwin struct to libc (sockets, `stat`, signals) does not. Compiling the
   `basics`, `features`, `types`, `data`, `games`, `match`, `switch`, `llvm`
   and `general` tests for `x86_64-apple-macos` and running them this way
   matches the expected output for every test outside that set.

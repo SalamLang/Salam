@@ -17,6 +17,104 @@ func cg_atomic_guard(g &: Cg):
     )
 end
 
+func cg_scalar_size(ts: str, fp &: bool): int:
+    fp = str.Equals(ts, "f32") or str.Equals(ts, "f64")
+    if str.Equals(ts, "i8") or str.Equals(ts, "u8") or str.Equals(ts, "bool") or str.Equals(ts, "byte"):
+        ret 1
+    end
+    if str.Equals(ts, "i16") or str.Equals(ts, "u16"):
+        ret 2
+    end
+    if str.Equals(ts, "i32") or str.Equals(ts, "u32") or str.Equals(ts, "int") or str.Equals(ts, "f32") or str.Equals(ts, "char"):
+        ret 4
+    end
+    if str.Equals(ts, "i64") or str.Equals(ts, "u64") or str.Equals(ts, "usize") or str.Equals(ts, "size") or str.Equals(ts, "f64"):
+        ret 8
+    end
+    if str.Equals(ts, "str") or str.EndsWith(ts, "*"):
+        ret 8
+    end
+    ret 0 - 1
+end
+
+func cg_sysv_flat(s &: sm.Sema, ts: str, base: int, depth: int, offs &: Vector<int>, fps &: Vector<bool>, align &: int): int:
+    mut fp := false
+    sc := cg_scalar_size(ts, fp)
+    if sc > 0:
+        offs.push(base)
+        fps.push(fp)
+        align = sc
+        ret sc
+    end
+    ssym := cg_struct_sym(s, ts)
+    if ssym == 0 or depth > 8 or sm.SymAt(s, ssym).members == 0:
+        ret 0 - 1
+    end
+    syms := sm.ScopeAt(s, sm.SymAt(s, ssym).members).symbols
+    mut off := 0
+    mut mx := 1
+    repeat syms.len() in i:
+        f := sm.SymAt(s, syms.get(i))
+        if f.kind == sm.SYM_FIELD:
+            mut fa := 1
+            mut fo := Vector {} as Vector<int>
+            mut ff := Vector {} as Vector<bool>
+            fs := cg_sysv_flat(s, sm.ToString(s, f.ty), 0, depth + 1, fo, ff, fa)
+            if fs < 0:
+                fo.free()
+                ff.free()
+                ret 0 - 1
+            end
+            off = (off + fa - 1) / fa * fa
+            repeat fo.len() in k:
+                offs.push(base + off + fo.get(k))
+                fps.push(ff.get(k))
+            end
+            fo.free()
+            ff.free()
+            off += fs
+            if fa > mx:
+                mx = fa
+            end
+        end
+    end
+    align = mx
+    ret (off + mx - 1) / mx * mx
+end
+
+func cg_tcc_struct_check(g &: Cg, s &: sm.Sema, ts: str):
+    if g.tcc_mix_guard or cg_struct_sym(s, ts) == 0:
+        ret
+    end
+    mut offs := Vector {} as Vector<int>
+    mut fps := Vector {} as Vector<bool>
+    defer offs.free()
+    defer fps.free()
+    mut al := 1
+    size := cg_sysv_flat(s, ts, 0, 0, offs, fps, al)
+    if size <= 8 or size > 16:
+        ret
+    end
+    mut sse0 := true
+    mut sse1 := true
+    repeat offs.len() in k:
+        if not fps.get(k):
+            if offs.get(k) < 8:
+                sse0 = false
+            else:
+                sse1 = false
+            end
+        end
+    end
+    if sse0 == sse1:
+        ret
+    end
+    g.tcc_mix_guard = true
+    outh(
+        g, "#if defined(__TINYC__) && defined(__x86_64__) && !defined(_WIN32)\n" + "#error \"tcc passes struct " + ts + " to C code in the wrong registers, since it mixes floating-point and integer fields; build with --backend=llvm, --backend=native, --cc=gcc or --cc=clang\"\n" + "#endif\n"
+    )
+end
+
 func arg_at(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int, i: int): str:
     cn := at.Get(a, n)
     if cn.list.len() > i:
@@ -66,6 +164,9 @@ func call_emit_arg(
         end
     end
     if not arg_is_ref:
+        if sdecl != 0 and at.Get(a, sdecl).is_extern:
+            cg_tcc_struct_check(g, s, i < sm.SigAt(s, sig).params.len() ? sm.ToString(s, sm.SigAt(s, sig).params.get(i)) : at.Get(a, argid).type_str)
+        end
         mut e := cg_expr_value(g, s, a, argid)
         if cg_needs_fparg(s, a, sig, i, argid, nextid):
             mut mac := "SALAM_FPARG_D"
@@ -75,7 +176,11 @@ func call_emit_arg(
             e = mac + "(" + e + ")"
         else sig != 0 and sm.SigAt(s, sig).variadic and i >= sm.SigAt(s, sig).params.len():
             vts := at.Get(a, argid).type_str
-            if str.Equals(vts, "i64") or str.Equals(vts, "u64") or str.Equals(vts, "usize") or str.Equals(vts, "size"):
+            if str.Equals(vts, "i64"):
+                e = "(long long)(" + e + ")"
+            else str.Equals(vts, "u64"):
+                e = "(unsigned long long)(" + e + ")"
+            else str.Equals(vts, "usize") or str.Equals(vts, "size"):
                 e = "(" + cg_ctype(vts) + ")(" + e + ")"
             end
         end
@@ -427,6 +532,9 @@ func cg_stdio_writer(nm: str): bool:
 end
 
 func cg_wrap_extern_io(g &: Cg, s &: sm.Sema, sig: int, nm: str, call: str): str:
+    if sig != 0:
+        cg_tcc_struct_check(g, s, sm.ToString(s, sm.SigAt(s, sig).ret_type))
+    end
     if g.freestanding:
         ret call
     end

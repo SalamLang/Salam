@@ -151,8 +151,12 @@ errors. Messages exist in English and Persian (`compiler/i18n.salam`).
   block, or bound by a `match` pattern is not tracked.
 - Calls are crossed in one way only: a function whose every `ret` returns
   `null` makes its result null at the call, so `p := find(3)` followed by
-  `p.key` is E152. A function that indexes its parameter is not checked
-  against its callers' arguments.
+  `p.key` is E152. A function that indexes a parameter with another
+  parameter, `xs[i]`, in a top-level statement that runs before anything
+  can return, makes each call check its arguments: `get(a, 4)` on a
+  4-element `a` is E146 at the call, and the help names the line in `get`.
+  Neither parameter may be assigned or passed by `&:` in the callee. An
+  index that the callee guards first is not checked at the call.
 - W158 is a syntactic check on top of the ownership pass: a local bound to
   `mem.Allocate` or `mem.AllocateZeroed` whose name never reaches `mem.Free`,
   a `ret`, an assignment, a field, a collection or another call. Any of those

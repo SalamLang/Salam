@@ -1,0 +1,216 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import mem
+
+func at(p: u8*, k: int): u8*:
+    ret ((p as i64) + (k as i64)) as u8*
+end
+
+noinline func png_apply(cp: u8*, pp: u8*, out: u8*, stride: int, best: int):
+    mut i := 0
+    until i < stride:
+        xv := cp[i] as int
+        mut a := 0
+        if i >= 4: a = cp[i - 4] as int end
+        b := pp[i] as int
+        mut c := 0
+        if i >= 4: c = pp[i - 4] as int end
+        mut fv := xv
+        if best == 1: fv = xv - a end
+        if best == 2: fv = xv - b end
+        if best == 3: fv = xv - (a + b) / 2 end
+        out[i] = (fv & 255) as u8
+        i += 1
+    end
+end
+
+noinline func paeth(x: u8*, a: u8*, b: u8*, c: u8*, out: u8*, from: int, n: int):
+    mut i := from
+    until i < n:
+        av := a[i] as int
+        bv := b[i] as int
+        cv := c[i] as int
+        p := av + bv - cv
+        mut pa := p - av
+        if pa < 0: pa = 0 - pa end
+        mut pb := p - bv
+        if pb < 0: pb = 0 - pb end
+        mut pc := p - cv
+        if pc < 0: pc = 0 - pc end
+        mut pr := cv
+        if pb <= pc: pr = bv end
+        if pa <= pb and pa <= pc: pr = av end
+        out[i] = ((x[i] as int) - pr) as u8
+        i += 1
+    end
+end
+
+noinline func add_rows(dst: u8*, a: u8*, b: u8*, from: int, n: int):
+    mut i := from
+    until i < n:
+        dst[i] = ((a[i] as int) + (b[i] as int) + 200) as u8
+        i += 1
+    end
+end
+
+noinline func avg_rows(dst: u8*, x: u8*, a: u8*, b: u8*, n: int):
+    repeat n in i:
+        dst[i] = (((x[i] as int) - ((a[i] as int) + (b[i] as int)) / 2) & 255) as u8
+    end
+end
+
+noinline func mix8(dst: u8*, a: u8*, b: u8*, k: int, n: int):
+    repeat n in i:
+        x := a[i] as int
+        y := b[i] as int
+        d := x > y ? x - y : y - x
+        dst[i] = (((x << 3) ^ (y >> 2)) + (d | k) - (x & 15)) as u8
+    end
+end
+
+noinline func sext8(dst: i8*, a: i8*, n: int):
+    repeat n in i:
+        x := a[i] as int
+        dst[i] = (x < -5 ? x * 3 : (x >> 1) + 9) as i8
+    end
+end
+
+noinline func ops16(dst: Vector<u16>, a: Vector<u16>, b: Vector<u16>, n: int):
+    repeat n in i:
+        x := a.get(i) as int
+        y := b.get(i) as int
+        r := x > y ? (x - y) >> 2 : x * 3 + y - 7
+        dst.set(i, r as u16)
+    end
+end
+
+noinline func mix16(dst: Vector<u16>, a: Vector<u16>, b: Vector<u16>, k: int, n: int):
+    repeat n in i:
+        x := a.get(i) as int
+        y := b.get(i) as int
+        r := x > y ? (x ^ y) >> 3 : x * 5 + y - k
+        dst.set(i, (r + (x << 4)) as u16)
+    end
+end
+
+noinline func ops16s(dst: Vector<i16>, a: Vector<i16>, n: int):
+    repeat n in i:
+        x := a.get(i) as int
+        dst.set(i, (x > 100 ? x - 30000 : (x >> 1) ^ 0x1234) as i16)
+    end
+end
+
+func hash(p: u8*, n: int): i64:
+    mut h := 7 as i64
+    repeat n in i:
+        h = (h * (31 as i64) + (p[i] as i64)) % (1000000007 as i64)
+    end
+    ret h
+end
+
+func fill(p: u8*, n: int, seed: int):
+    repeat n in i:
+        p[i] = ((i * 37 + seed * 11 + (i >> 3) * 5) % 256) as u8
+    end
+end
+
+func run(n: int, from: int):
+    cap := n + 64
+    x := mem.AllocateZeroed(cap as u64) as u8*
+    a := mem.AllocateZeroed(cap as u64) as u8*
+    b := mem.AllocateZeroed(cap as u64) as u8*
+    c := mem.AllocateZeroed(cap as u64) as u8*
+    o := mem.AllocateZeroed(cap as u64) as u8*
+    fill(x, cap, 1)
+    fill(a, cap, 2)
+    fill(b, cap, 3)
+    fill(c, cap, 4)
+    mut line := "n=" + n + " from=" + from
+    repeat 4 in best:
+        png_apply(at(x, from), at(a, from), at(o, from), n, best)
+        line = line + " f" + best + "=" + hash(o, cap)
+    end
+    paeth(x, a, b, c, at(o, 1), from, n)
+    line = line + " paeth=" + hash(o, cap)
+    add_rows(o, a, b, from, n)
+    line = line + " add=" + hash(o, cap)
+    avg_rows(at(o, from), at(x, from), at(a, from), at(b, from), n)
+    line = line + " avg=" + hash(o, cap)
+    mix8(at(o, 3), at(a, from), b, from * 5 + 1, n)
+    line = line + " mix=" + hash(o, cap)
+    sext8(at(o, from) as i8*, a as i8*, n)
+    line = line + " sx=" + hash(o, cap)
+    fill(o, cap, 5)
+    add_rows(o, o, o, from, n)
+    line = line + " same=" + hash(o, cap)
+    fill(o, cap, 5)
+    add_rows(at(o, 1), o, b, from, n)
+    line = line + " fwd=" + hash(o, cap)
+    fill(o, cap, 5)
+    add_rows(o, at(o, 1), b, from, n)
+    line = line + " back=" + hash(o, cap)
+    fill(o, cap, 5)
+    avg_rows(at(o, 4), o, a, o, n)
+    line = line + " lag=" + hash(o, cap)
+    fill(o, cap, 5)
+    png_apply(o, o, o, n, 1)
+    line = line + " inpl=" + hash(o, cap)
+    println line
+    mem.Free(x as void*)
+    mem.Free(a as void*)
+    mem.Free(b as void*)
+    mem.Free(c as void*)
+    mem.Free(o as void*)
+end
+
+func run16(n: int):
+    mut a := Vector {} as Vector<u16>
+    mut b := Vector {} as Vector<u16>
+    mut d := Vector {} as Vector<u16>
+    mut s := Vector {} as Vector<i16>
+    mut t := Vector {} as Vector<i16>
+    repeat n in i:
+        a.push(((i * 7919 + 65000) % 65536) as u16)
+        b.push(((i * 104729 + 3) % 65536) as u16)
+        d.push(0 as u16)
+        s.push((((i * 4099) % 65536) - 32768) as i16)
+        t.push(0 as i16)
+    end
+    ops16(d, a, b, n)
+    ops16s(t, s, n)
+    mut h := 7 as i64
+    repeat n in k:
+        h = (h * (31 as i64) + (d.get(k) as i64) + (t.get(k) as i64)) % (1000000007 as i64)
+    end
+    mix16(d, a, b, 1000, n)
+    repeat n in k1:
+        h = (h * (31 as i64) + (d.get(k1) as i64)) % (1000000007 as i64)
+    end
+    ops16(a, a, a, n)
+    mix16(b, b, b, 3, n)
+    repeat n in k2:
+        h = (h * (31 as i64) + (a.get(k2) as i64) + (b.get(k2) as i64)) % (1000000007 as i64)
+    end
+    println "u16 n=" + n + " h=" + h
+end
+
+func main:
+    each n in [0, 1, 4, 7, 8, 15, 16, 17, 31, 32, 33, 63, 64, 65, 100, 1000]:
+        each from in [0, 1, 3]:
+            run(n, from)
+        end
+        run16(n)
+    end
+end

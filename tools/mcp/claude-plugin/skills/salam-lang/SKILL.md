@@ -33,7 +33,7 @@ not guessable, so verify with tools rather than assuming.
    program, English in an English one, never mixed. English names have no
    whitespace (`snake_case`); Persian multi-word names use spaces (`خواندن رنگ`),
    with a half-space where only one word is allowed (type names, constants,
-   loop and `catch` variables).
+   loop and `catch` variables, lambda and `extern:` parameters).
 
 If those tools are not available, the same information is in `std/` (the
 standard library is ordinary Salam source) and `tests/`.

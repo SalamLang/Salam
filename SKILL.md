@@ -92,7 +92,7 @@ When asked to convert program `X` (in some other language) into Salam:
    names never contain whitespace (`snake_case`, `PascalCase` types); Persian
    multi-word names are written with spaces (`خواندن رنگ`), or with a
    half-space where only one word is allowed (type names, constants, loop and
-   `catch` variables).
+   `catch` variables, lambda and `extern:` parameters).
 4. **Write idiomatic Salam** using §2 to §4, obeying the strict rules in §6
    (unused = error, `until` = while, manual `.free()`, integer `/` truncates,
    errors through `throws`/`try`, `mut` to reassign, `pub` to export, top-level ordering).

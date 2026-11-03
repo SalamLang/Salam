@@ -1,0 +1,203 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+package main
+
+import net.nats
+import net.tcp
+import str
+import conv
+
+mut SRV := tcp.Server {}
+mut sessions := 0
+
+struct Sess:
+    pub c: tcp.Conn = tcp.Conn {}
+    pub buf: str = ""
+    pub alive: bool = true
+    pub sids: Vector<int> = Vector {} as Vector<int>
+    pub subjects: Vector<str> = Vector {} as Vector<str>
+    pub maxes: Vector<int> = Vector {} as Vector<int>
+    pub counts: Vector<int> = Vector {} as Vector<int>
+end
+
+func fill(s &: Sess):
+    chunk := tcp.Read(s.c, 65536)
+    if chunk.len() == 0:
+        s.alive = false
+    else:
+        s.buf += chunk
+    end
+end
+
+func line(s &: Sess): str:
+    until s.alive:
+        at := s.buf.find("\r\n")
+        if at >= 0:
+            l := s.buf.substr(0, at)
+            s.buf = s.buf.substr(at + 2, s.buf.len() - at - 2)
+            ret l
+        end
+        fill(s)
+    end
+    ret ""
+end
+
+func bytes(s &: Sess, n: int): str:
+    until s.alive:
+        if s.buf.len() >= n + 2:
+            d := s.buf.substr(0, n)
+            s.buf = s.buf.substr(n + 2, s.buf.len() - n - 2)
+            ret d
+        end
+        fill(s)
+    end
+    ret ""
+end
+
+func say(s &: Sess, text: str):
+    _ := tcp.Write(s.c, text)
+end
+
+func deliver(s &: Sess, subject: str, data: str):
+    repeat s.sids.len() in i:
+        sid := s.sids.get(i)
+        if sid > 0 and nats.SubjectMatches(s.subjects.get(i), subject):
+            say(s, "MSG " + subject + " " + conv.FormatInt(sid as i64) + " " + conv.FormatInt(data.len() as i64) + "\r\n" + data + "\r\n")
+            s.counts.set(i, s.counts.get(i) + 1)
+            if s.maxes.get(i) > 0 and s.counts.get(i) >= s.maxes.get(i):
+                s.sids.set(i, 0)
+            end
+        end
+    end
+end
+
+func serve_one():
+    mut s := Sess {}
+    s.c = tcp.Accept(SRV)
+    sessions += 1
+    say(s, `INFO {"server_id":"FAKE","version":"2.10.0","host":"127.0.0.1","port":4222,"headers":true,"max_payload":1048576,"proto":1}` + "\r\n")
+    until s.alive:
+        l := line(s)
+        if l == "PING":
+            say(s, "PONG\r\n")
+        else l.starts_with("SUB "):
+            a := str.Fields(l)
+            s.subjects.push(a.get(1))
+            s.maxes.push(0)
+            s.counts.push(0)
+            s.sids.push(a.get(a.len() - 1).to_int())
+        else l.starts_with("UNSUB "):
+            a := str.Fields(l)
+            repeat s.sids.len() in i:
+                if s.sids.get(i) == a.get(1).to_int():
+                    if a.len() > 2:
+                        s.maxes.set(i, a.get(2).to_int())
+                    else:
+                        s.sids.set(i, 0)
+                    end
+                end
+            end
+        else l.starts_with("PUB "):
+            a := str.Fields(l)
+            n := a.get(a.len() - 1).to_int()
+            data := bytes(s, n)
+            if a.get(1) == "drop":
+                s.alive = false
+            else:
+                deliver(s, a.get(1), data)
+            end
+        end
+    end
+    tcp.Close(s.c)
+end
+
+func serve():
+    serve_one()
+    serve_one()
+    serve_one()
+    serve_one()
+end
+
+func wait_lost(nc &: nats.Conn): bool:
+    repeat 100:
+        if nats.IsReconnecting(nc) or nats.IsClosed(nc):
+            ret true
+        end
+        nats.Pump(nc, 50)
+    end
+    ret false
+end
+
+func main:
+    SRV = tcp.Bind(0)
+    port := tcp.Port(SRV)
+    url := "nats://127.0.0.1:" + conv.FormatInt(port as i64)
+    t := spawn(serve)
+
+    println "-- reconnect with a pool"
+    mut opts := nats.DefaultOptions()
+    opts.max_reconnects = 5
+    opts.reconnect_wait_ms = 20
+    opts.servers.push("nats://127.0.0.1:1")
+    mut nc := nats.ConnectWith(url, opts)
+    println "connected:", nats.IsConnected(nc), nats.Reconnects(nc)
+    all := nats.Subscribe(nc, "a.*")
+    two := nats.Subscribe(nc, "b")
+    nats.AutoUnsubscribe(nc, two, 3)
+    nats.Publish(nc, "b", "b1")
+    nats.Publish(nc, "b", "b2")
+    mut m := nats.NextMsg(nc, two, 1000)
+    println m.data
+    m = nats.NextMsg(nc, two, 1000)
+    println m.data
+
+    nats.Publish(nc, "drop", "")
+    println "lost:", wait_lost(nc), nats.IsConnected(nc), nats.IsReconnecting(nc)
+    queued := nats.Publish(nc, "a.x", "while down")
+    println "buffered:", queued, nats.BufferedBytes(nc) > 0
+    m = nats.NextMsg(nc, all, 3000)
+    println "after reconnect:", m.ok, m.subject, m.data
+    println "reconnects:", nats.Reconnects(nc), "connected:", nats.IsConnected(nc), "buffered:", nats.BufferedBytes(nc)
+    println "sessions:", sessions
+
+    nats.Publish(nc, "b", "b3")
+    m = nats.NextMsg(nc, two, 1000)
+    println m.data, nats.IsValidSubscription(nc, two)
+    nats.Publish(nc, "b", "b4")
+    println "flush:", nats.Flush(nc, 1000)
+    println "b after limit:", nats.Pending(nc, two), nats.Delivered(nc, two)
+
+    nats.Publish(nc, "drop", "")
+    println "lost again:", wait_lost(nc)
+    println "flush over reconnect:", nats.Flush(nc, 3000), nats.Reconnects(nc)
+    nats.Publish(nc, "a.y", "second")
+    m = nats.NextMsg(nc, all, 1000)
+    println m.ok, m.data
+    nats.Close(nc)
+
+    println "-- giving up"
+    mut o2 := nats.DefaultOptions()
+    o2.max_reconnects = 2
+    o2.reconnect_wait_ms = 10
+    mut gone := nats.ConnectWith(url, o2)
+    println "connected:", nats.IsConnected(gone)
+    nats.Publish(gone, "drop", "")
+    join(t)
+    tcp.CloseServer(SRV)
+    println "lost:", wait_lost(gone)
+    z := nats.Subscribe(gone, "z")
+    r := nats.NextMsg(gone, z, 2000)
+    println r.ok, r.err
+    println "closed:", nats.IsClosed(gone), nats.LastError(gone)
+end

@@ -406,6 +406,7 @@ x, y = y, x                   // assign several targets at once (swap)
       else: "elsewhere" end
   end
   ```
+
 - Under the hood a tuple is the generic struct `Tuple2` ... `Tuple8` from
   `core` (fields `f0`, `f1`, ...), so it copies like a struct and every backend
   handles it as one.

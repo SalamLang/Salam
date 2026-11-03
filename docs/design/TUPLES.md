@@ -9,22 +9,22 @@ Status: implemented. Parsing is in `compiler/parser/` (`parser_type.salam`,
 A Salam function returned exactly one value. Code that needed two answers had
 four ways out, and each one costs something:
 
-| Workaround                          | Example in the tree                      | Cost                                         |
-| ----------------------------------- | ---------------------------------------- | -------------------------------------------- |
-| out parameter plus a status         | `session.Get(id, ok &): Session`         | the result is split over two places          |
-| out parameter for the error         | `gql.Parse(src, err &): Document`        | a throwaway variable on every call           |
-| a one-off result struct             | `CoerceResult`, `PathParts`              | a declaration for every function             |
-| `Pair<A, B>` from `collections`     | `std/collections/pair.salam`             | no syntax, and an import for two values   |
+| Workaround                      | Example in the tree               | Cost                                    |
+| ------------------------------- | --------------------------------- | --------------------------------------- |
+| out parameter plus a status     | `session.Get(id, ok &): Session`  | the result is split over two places     |
+| out parameter for the error     | `gql.Parse(src, err &): Document` | a throwaway variable on every call      |
+| a one-off result struct         | `CoerceResult`, `PathParts`       | a declaration for every function        |
+| `Pair<A, B>` from `collections` | `std/collections/pair.salam`      | no syntax, and an import for two values |
 
 ## What other languages do
 
-| Language                    | Model                                                       | What it teaches                                                                                  |
-| --------------------------- | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| Language                    | Model                                                      | What it teaches                                                                                    |
+| --------------------------- | ---------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
 | Go, Lua                     | several values exist only at `return` and at the call site | cheap, but they cannot be stored, put in a generic or a `Result`; Go needs a special `f(g())` rule |
-| Python, Rust, Swift, Kotlin | a real tuple type with destructuring                        | composes with everything, no special cases                                                       |
-| Swift, C#                   | labeled elements                                            | self-documenting results                                                                         |
-| Odin                        | true multi-value returns                                    | fast, but every backend needs an ABI special case                                                |
-| Zig                         | an anonymous struct                                         | the same lowering Salam uses, without the syntax                                                 |
+| Python, Rust, Swift, Kotlin | a real tuple type with destructuring                       | composes with everything, no special cases                                                         |
+| Swift, C#                   | labeled elements                                           | self-documenting results                                                                           |
+| Odin                        | true multi-value returns                                   | fast, but every backend needs an ABI special case                                                  |
+| Zig                         | an anonymous struct                                        | the same lowering Salam uses, without the syntax                                                   |
 
 Salam takes the second row: a tuple is an ordinary value.
 
@@ -66,16 +66,16 @@ x, y = y, x                   // assign several mut targets at once
 
 A tuple is not a new kind of type. `std/core/core.salam` holds the generic
 structs `Tuple2<A, B>` to `Tuple8<A, ..., H>` with public fields `f0`, `f1`, ...
-Everything else is front end work:
+Everything else is frontend work:
 
-| Source                       | Becomes                                                              |
-| ---------------------------- | -------------------------------------------------------------------- |
-| `(A, B)` as a type           | `Tuple2<A, B>`, instantiated through the normal generic machinery   |
-| `(a, b)` and `ret a, b`      | a struct literal of that instance with fields `f0`, `f1`            |
-| `a, b := e`                  | `__tupN := e`, then `a := __tupN.f0` and `b := __tupN.f1`           |
-| `a, b = x, y`                | `__tupN := (x, y)`, then `a = __tupN.f0` and `b = __tupN.f1`        |
-| `t.0`, `t.1`                 | the member access `t.f0`, `t.f1`                                     |
-| `(0, y)` in a `match` arm    | the struct pattern `Tuple2{f0 = 0, f1 = y}`                          |
+| Source                    | Becomes                                                           |
+| ------------------------- | ----------------------------------------------------------------- |
+| `(A, B)` as a type        | `Tuple2<A, B>`, instantiated through the normal generic machinery |
+| `(a, b)` and `ret a, b`   | a struct literal of that instance with fields `f0`, `f1`          |
+| `a, b := e`               | `__tupN := e`, then `a := __tupN.f0` and `b := __tupN.f1`         |
+| `a, b = x, y`             | `__tupN := (x, y)`, then `a = __tupN.f0` and `b = __tupN.f1`      |
+| `t.0`, `t.1`              | the member access `t.f0`, `t.f1`                                  |
+| `(0, y)` in a `match` arm | the struct pattern `Tuple2{f0 = 0, f1 = y}`                       |
 
 Because the instances live in `core` they are the same type in every package,
 so a tuple can cross a package boundary. And because the backends only ever see

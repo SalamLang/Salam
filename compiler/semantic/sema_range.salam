@@ -1396,6 +1396,9 @@ func rg_call(s &: Sema, r &: Rg, a &: at.Ast, st &: RgSt, nid: int): RgV:
             rg_havoc(r, st, rk2)
         end
     end
+    if r.report:
+        rg_call_index(s, r, a, nid, av)
+    end
     av.free()
     if node_flag(s.noret_calls, nid):
         st.live = false
@@ -1405,6 +1408,161 @@ func rg_call(s &: Sema, r &: Rg, a &: at.Ast, st &: RgSt, nid: int): RgV:
         res.why = nid
     end
     ret res
+end
+
+func rg_param_idx(a &: at.Ast, decl: int, name: str): int:
+    mut k := 0
+    repeat at.ChildCount(a, decl) in i:
+        c := at.Child(a, decl, i)
+        if c != 0 and at.KindOf(a, c) == at.AST_PARAM:
+            if str.Equals(at.At(a, c).name, name):
+                ret at.At(a, c).is_ref ? 0 - 1 : k
+            end
+            k += 1
+        end
+    end
+    ret 0 - 1
+end
+
+func rg_param_count(a &: at.Ast, decl: int): int:
+    mut k := 0
+    repeat at.ChildCount(a, decl) in i:
+        c := at.Child(a, decl, i)
+        if c != 0 and at.KindOf(a, c) == at.AST_PARAM:
+            k += 1
+        end
+    end
+    ret k
+end
+
+func rg_assigns(a &: at.Ast, nid: int, name: str): bool:
+    if nid == 0:
+        ret false
+    end
+    n := at.At(a, nid)
+    if (n.kind == at.AST_ASSIGN or n.kind == at.AST_INCDEC) and n.a != 0:
+        root := rg_strip(a, n.a)
+        mut cur := root
+        until cur != 0 and (at.KindOf(a, cur) == at.AST_MEMBER or at.KindOf(a, cur) == at.AST_INDEX):
+            cur = at.At(a, cur).a
+        end
+        if cur != 0 and at.KindOf(a, cur) == at.AST_IDENTIFIER and str.Equals(at.At(a, cur).name, name) and cur == root:
+            ret true
+        end
+    end
+    if n.kind == at.AST_CALL:
+        repeat at.ChildCount(a, nid) in j:
+            arg := at.Child(a, nid, j)
+            if arg != 0 and at.At(a, arg).ref_arg and rg_lk_is(a, arg, name):
+                ret true
+            end
+        end
+    end
+    if rg_assigns(a, n.a, name) or rg_assigns(a, n.b, name) or rg_assigns(a, n.c, name) or rg_assigns(a, n.d, name):
+        ret true
+    end
+    repeat at.ChildCount(a, nid) in i:
+        if rg_assigns(a, at.Child(a, nid, i), name):
+            ret true
+        end
+    end
+    ret false
+end
+
+func rg_ci_scan(s &: Sema, r &: Rg, a &: at.Ast, decl: int, nid: int, call: int, av &: Vector<RgV>):
+    if nid == 0:
+        ret
+    end
+    n := at.At(a, nid)
+    k := n.kind
+    if k == at.AST_LAMBDA or k == at.AST_TERNARY or k == at.AST_MATCH or k == at.AST_BLOCK:
+        ret
+    end
+    if k == at.AST_BINARY and (n.op == tok.TK_AND or n.op == tok.TK_OR):
+        rg_ci_scan(s, r, a, decl, n.a, call, av)
+        ret
+    end
+    if k == at.AST_INDEX and n.a != 0 and n.b != 0 and at.KindOf(a, n.a) == at.AST_IDENTIFIER and at.KindOf(a, n.b) == at.AST_IDENTIFIER:
+        cname := at.At(a, n.a).name
+        iname := at.At(a, n.b).name
+        ci := rg_param_idx(a, decl, cname)
+        ii := rg_param_idx(a, decl, iname)
+        body := at.At(a, decl).a
+        if ci >= 0 and ii >= 0 and ci < av.len() and ii < av.len() and not rg_assigns(a, body, cname) and not rg_assigns(a, body, iname):
+            mut carg := at.Child(a, call, ci)
+            if carg != 0 and at.KindOf(a, carg) == at.AST_SLICE and at.At(a, carg).b == 0 and at.At(a, carg).c == 0 and at.At(a, carg).a != 0:
+                carg = at.At(a, carg).a
+            end
+            mut nlen := rg_arr_len(at.At(a, carg).type_str)
+            cv := av.get(ci)
+            if nlen < 0 and cv.hnlo and cv.hnhi and cv.nlo == cv.nhi and not cv.bytes and (ow_is_vec(at.At(a, carg).type_str) or str.Equals(at.At(a, carg).type_str, "str")):
+                nlen = cv.nlo
+            end
+            iv := av.get(ii)
+            out_hi := nlen >= 0 and iv.hlo and iv.lo >= nlen and iv.big == 0
+            out_lo := iv.hhi and iv.hi < 0 and iv.big == 0
+            if (out_hi or out_lo) and rg_will(r, rg_sev_def(r)):
+                fname := rg_text_or(a, at.At(a, call).a, i18.Tr("the function"))
+                mut have := ""
+                if nlen >= 0:
+                    have = co.Format1(i18.Tr("%d elements"), co.ArgInt(nlen))
+                end
+                qi := "'" + iname + "'"
+                where := co.Format1(i18.Tr("(in the call to '%s')"), co.ArgStr(fname))
+                msg := out_hi ? co.Format4(
+                    i18.Tr("index out of bounds: %s is %s, but '%s' has %s"), co.ArgStr(qi), co.ArgStr(rg_desc(iv)), co.ArgStr(cname), co.ArgStr(have)
+                ) + " " + where : co.Format2(
+                    i18.Tr("index out of bounds: %s is %s, and indices start at 0"), co.ArgStr(qi), co.ArgStr(rg_desc(iv))
+                ) + " " + where
+                rg_diag(
+                    r, rg_sev_def(r), 146, call, msg, co.Format4(
+                        i18.Tr("'%s' always reads '%s[%s]' on line %d before it can return"), co.ArgStr(fname), co.ArgStr(cname), co.ArgStr(iname), co.ArgInt(rg_line(a, nid))
+                    )
+                )
+            end
+        end
+    end
+    rg_ci_scan(s, r, a, decl, n.a, call, av)
+    rg_ci_scan(s, r, a, decl, n.b, call, av)
+    rg_ci_scan(s, r, a, decl, n.c, call, av)
+    rg_ci_scan(s, r, a, decl, n.d, call, av)
+    if k != at.AST_IF and k != at.AST_UNTIL and k != at.AST_REPEAT and k != at.AST_EACH and k != at.AST_FOR and k != at.AST_SWITCH:
+        repeat at.ChildCount(a, nid) in i:
+            rg_ci_scan(s, r, a, decl, at.Child(a, nid, i), call, av)
+        end
+    end
+end
+
+func rg_call_index(s &: Sema, r &: Rg, a &: at.Ast, call: int, av &: Vector<RgV>):
+    callee := at.At(a, call).a
+    if callee == 0:
+        ret
+    end
+    ck := at.KindOf(a, callee)
+    if ck != at.AST_IDENTIFIER and not (ck == at.AST_MEMBER and ow_is_pkg_obj(s, a, at.At(a, callee).a)):
+        ret
+    end
+    decl := su_call_decl(s, call)
+    if decl == 0 or at.KindOf(a, decl) != at.AST_FUNC_DEF or at.At(a, decl).a == 0 or at.At(a, decl).is_extern:
+        ret
+    end
+    if rg_param_count(a, decl) != at.ChildCount(a, call):
+        ret
+    end
+    body := at.At(a, decl).a
+    repeat at.ChildCount(a, body) in i:
+        st := at.Child(a, body, i)
+        if st == 0:
+            continue
+        end
+        sk := at.KindOf(a, st)
+        if sk == at.AST_VAR_DECL or sk == at.AST_CONST_DECL or sk == at.AST_RETURN or sk == at.AST_EXPR_STMT or sk == at.AST_ASSIGN or sk == at.AST_CALL:
+            rg_ci_scan(s, r, a, decl, sk == at.AST_VAR_DECL or sk == at.AST_CONST_DECL or sk == at.AST_RETURN or sk == at.AST_EXPR_STMT ? at.At(a, st).a : st, call, av)
+        end
+        if rg_may_exit(s, r, a, st) or (sk != at.AST_VAR_DECL and sk != at.AST_CONST_DECL and sk != at.AST_EXPR_STMT and sk != at.AST_ASSIGN and sk != at.AST_CALL):
+            ret
+        end
+    end
 end
 
 func rg_strip(a &: at.Ast, nid: int): int:

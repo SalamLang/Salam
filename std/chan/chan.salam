@@ -19,6 +19,13 @@ package chan
 import mem
 import sync
 
+struct TimerArg:
+    pub ch: Chan<i64> = Chan {} as Chan<i64>
+    pub cancel: i64* = null
+    pub ms: i64 = 0
+    pub repeat_: i64 = 0
+end
+
 @en "Chan"
 @fa "کانال"
 pub struct Chan<T>:
@@ -288,6 +295,77 @@ pub struct Chan<T>:
         mem.Free(this.ctl as void*)
         mem.Free(this.buf as void*)
     end
+end
+
+@en "Timer"
+@fa "زمان‌سنج"
+pub struct Timer:
+    @en "c"
+    @fa "کانال"
+    pub c: Chan<i64> = Chan {} as Chan<i64>
+    @en "cancel"
+    @fa "لغو"
+    pub cancel: i64* = null
+    @en "arg"
+    @fa "آرگومان"
+    pub arg: void* = null
+    @en "handle"
+    @fa "دسته"
+    pub handle: i64 = 0
+end
+
+func timer_run(ap: TimerArg*):
+    a := ap[0]
+    mut n := 0 as i64
+    until true:
+        mut left := a.ms
+        until left > 0 as i64 and atomic_load(a.cancel) == 0:
+            sync.SleepMs(1)
+            left = left - 1
+        end
+        if atomic_load(a.cancel) != 0:
+            break
+        end
+        n = n + 1
+        a.ch.try_send(n)
+        if a.repeat_ == 0:
+            break
+        end
+    end
+end
+
+func timer_start(ms: i64, again: i64): Timer:
+    mut t := Timer {}
+    t.c = Chan {} as Chan<i64>
+    t.c.init(1 as i64)
+    t.cancel = mem.AllocateZeroed(8 as u64) as i64*
+    ap := mem.AllocateZeroed(sizeof(TimerArg) as u64) as TimerArg*
+    ap[0] = TimerArg { ch = t.c, cancel = t.cancel, ms = ms, repeat_ = again }
+    t.arg = ap as void*
+    t.handle = spawn(timer_run, ap)
+    ret t
+end
+
+@en "After"
+@fa "پس از"
+pub func After(ms: i64): Timer:
+    ret timer_start(ms, 0 as i64)
+end
+
+@en "Tick"
+@fa "ضربان"
+pub func Tick(ms: i64): Timer:
+    ret timer_start(ms, 1 as i64)
+end
+
+@en "StopTimer"
+@fa "توقف زمان‌سنج"
+pub func StopTimer(t: Timer):
+    atomic_store(t.cancel, 1 as i64)
+    join(t.handle)
+    t.c.free()
+    mem.Free(t.cancel as void*)
+    mem.Free(t.arg)
 end
 
 @en "Select"

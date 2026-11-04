@@ -775,8 +775,8 @@ then goes through:
 
    `SALAM_NG_OFF=sse41` turns all of it off, and `SALAM_NG_OFF=vblend` just
    the blends. With `sse41` off, `--cpu=x86-64-v2` writes the same bytes as
-   the default level, and so does `--cpu=x86-64-v3` as before this level had
-   any code. `blendvps` and `blendvpd` are not used: `pblendvb` does the job
+   the default level, and `--cpu=x86-64-v3` the same bytes as before this
+   level had any code. `blendvps` and `blendvpd` are not used: `pblendvb` does the job
    for every lane width because the masks come from compares and are all
    ones or all zeros per lane. Measured numbers are under "Where it stands"
    below.
@@ -820,6 +820,7 @@ then goes through:
    rest. The test compares the
    counter with a limit adjusted once before the loop, so it never computes a
    counter value that could overflow.
+
 10. Strength reduction: an array address that is affine in a loop counter, such
     as `b[k * n + j]`, becomes a pointer bumped by a constant each iteration.
     Addresses that differ only by a constant share one pointer.
@@ -1441,6 +1442,42 @@ horizontal span and unswitches the alpha test that keeps native `DrawLine`'s loo
 register pressure (about 8 million), and in `image_basics` it inlines
 `_vp8_quant` with constant arguments, peels the DC coefficient and hoists
 the reciprocal division out of the loop.
+
+With `--cpu=x86-64-v2` the two take 130.7 and 534.7 million instructions
+against 143.6 and 555.4 at the default level (135.6 and 542.4 with
+`SALAM_NG_OFF=vblend`, so without the blends) and LLVM's 118.3 and 441.9 at the
+same level. On the copy of the PNG encoder's loops, 4096-byte rows, in
+instructions per byte, with callgrind:
+
+| loop           | default | v2 without blends | v2    | LLVM default | LLVM v2 |
+| -------------- | ------- | ----------------- | ----- | ------------ | ------- |
+| filter scoring | 27.33   | 22.09             | 18.09 | 29.50        | 21.74   |
+| Paeth          | 6.28    | 4.03              | 3.66  | 9.76         | 6.39    |
+| Sub            | 0.35    | 0.35              | 0.35  | 0.32         | 0.32    |
+| Up             | 0.35    | 0.35              | 0.35  | 0.30         | 0.30    |
+| Average        | 0.90    | 0.90              | 0.90  | 0.81         | 0.81    |
+
+Sub, Up and Average run in byte lanes with no select, so this level has nothing
+for them. Copying the mask into `xmm0` never made a loop worse: all eighteen
+`tests/en/general/lvec_*` programs take the same or fewer instructions with the
+blends than with `SALAM_NG_OFF=vblend`. Over 40000 rows, the median and range of
+nine interleaved runs, with the load around 10 on 6 cores from other jobs,
+scoring takes 275 ms [188-391] at `x86-64-v2` and 481 ms [310-585] at the
+default level (LLVM 395 ms [199-431] and 589 ms [309-649]), and Paeth 84 ms
+[40-98] and 140 ms [70-185] (LLVM 149 ms [74-187] and 167 ms [105-247]). CPU
+time in the same runs is steadier: scoring 180 ms [174-191] against 282 ms
+[275-291] (LLVM 202 and 315), Paeth 41 ms [39-47] against 69 ms [67-74] (LLVM 77
+and 104).
+
+Small loops over 4096 elements, default to `x86-64-v2` (LLVM at `x86-64-v2`), in
+million instructions for 1000 calls: an `int` min and max reduction 18.7 to 9.5
+(4.9), a `u8` clamp over 16384 bytes 15.7 to 12.6 (9.6), `int` add and multiply
+14.5 to 7.3 (7.2). Median and range of nine interleaved runs, same load: the min and max with 100000 calls 204 ms [117-257] to 94 ms [75-119] (LLVM 76 ms [68-85]), add and multiply with 100000 calls 184 ms [89-305] to 109 ms [61-152] (LLVM 117 ms [71-128]), the clamp with 40000 calls 59 ms [34-105] to 54 ms [28-62] (LLVM 41 ms [23-47]). An `i16` multiply and an `f32` saxpy do not change.
+None of the 42 programs in `benchmark/programs` changes: at `x86-64-v2` each
+is the same binary as at the default level, so the level brings nothing to the
+benchmark table. All of these come from one machine (an AMD EPYC of the first
+Zen generation). Published tables put `pmulld` at two micro-ops and 10 cycles of
+latency on Intel since Haswell; no Intel CPU has been timed here.
 
 Not there yet:
 

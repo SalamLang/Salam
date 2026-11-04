@@ -1,0 +1,48 @@
+import net.nats
+
+func main(): int:
+    mut nc := nats.Connect("nats://127.0.0.1:4222")
+    if not nats.IsConnected(nc):
+        println "cannot connect:", nats.LastError(nc)
+        ret 1
+    end
+    mut subjects := Vector {} as Vector<str>
+    defer subjects.free()
+    subjects.push("orders.*")
+    made := nats.AddStream(nc, "ORDERS", subjects, 2000)
+    println "stream:", made.ok, made.err
+    ack := nats.JSPublish(nc, "orders.new", "order 1", 2000)
+    println "stored at", ack.stream, ack.seq
+
+    mut h := nats.NewHeader()
+    nats.HeaderAdd(h, "Nats-Msg-Id", "order-2")
+    again := nats.JSPublishHeaders(nc, "orders.new", h, "order 2", 2000)
+    println again.ok, again.duplicate
+
+    info := nats.StreamInfo(nc, "ORDERS", 2000)
+    println info.messages, info.first_seq, info.last_seq, info.consumers
+    raw := nats.JSRequest(nc, "STREAM.NAMES", "", 2000)
+    println raw.ok
+
+    nats.AddConsumer(nc, "ORDERS", "worker", "orders.*", 2000)
+    batch := nats.Fetch(nc, "ORDERS", "worker", 10, 1000)
+    each m in batch.msgs:
+        println m.data, "number", nats.MsgSequence(m)
+        if m.data == "order 1":
+            nats.Ack(nc, m)
+        else m.data == "order 2":
+            nats.Nak(nc, m)
+        else:
+            nats.Term(nc, m)
+        end
+    end
+    if batch.msgs.len() > 0:
+        nats.InProgress(nc, batch.msgs.get(0))
+    end
+
+    nats.DeleteConsumer(nc, "ORDERS", "worker", 2000)
+    nats.PurgeStream(nc, "ORDERS", 2000)
+    nats.DeleteStream(nc, "ORDERS", 2000)
+    nats.Close(nc)
+    ret 0
+end

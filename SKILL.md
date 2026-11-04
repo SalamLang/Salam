@@ -1640,9 +1640,14 @@ PublishRequest PublishMsg Respond`, `Subscribe QueueSubscribe SubscribeHandler
 SubscribeReplier` with `NextMsg(nc, sub, ms)`, `Unsubscribe AutoUnsubscribe`,
   `Request RequestMsg` (503 comes back as `no responders`), `Flush Drain Close`,
   headers (`NewHeader HeaderAdd HeaderGet HeaderValues`), and JetStream basics
-  (`AddStream StreamInfo JSPublish AddConsumer Fetch Ack Nak`). Nothing runs in
-  the background: messages are read inside `NextMsg`, `Flush`, `Request` and
-  `Pump`, and handlers run there. Payloads are `str`, so text only.
+  (`AddStream StreamInfo JSPublish AddConsumer Fetch Ack Nak`), push consumers
+  (`AddPushConsumer NextPush`) and key value buckets (`KVCreate KVPut KVGet
+  KVDelete`). Reconnecting is opt in: set `opts.max_reconnects` (negative =
+  never give up) with `opts.servers`, `reconnect_wait_ms`, `reconnect_buffer`;
+  subscriptions are re-sent and publishes are held while the link is down.
+  Nothing runs in the background: messages are read, and reconnects happen,
+  inside `NextMsg`, `Flush`, `Request` and `Pump`, and handlers run there.
+  Payloads are `str`, so text only.
 - **`ssh`**: `Connect`/`Dial` with `NewConfig WithPassword WithKeyFile WithHostKeyMode`, `RunCommand Exec NewSession RequestPty Shell`, SFTP
   `SftpOpen Upload Download ListDir Mkdir Remove Rename Stat`. RSA keys only
   (OpenSSH format, no passphrase; Ed25519 and ECDSA are not read) and the
@@ -2024,8 +2029,8 @@ points you to `export:`.
 On 32-bit Windows, Win32 functions reached through a pointer (the
 `GetProcAddress` pattern) need `extern stdcall func (...) R`: the call then
 uses stdcall on every backend. Everywhere else `stdcall` changes nothing.
-Persian: `درون‌داد فراخوان استاندارد تابع (...) R`. The seed release has to
-know the word before `std/` or `compiler/` can use it.
+Persian: `درون‌داد فراخوان استاندارد تابع (...) R`. Releases know the word since
+0.6.1. `compiler/` and what it imports need a seed that does.
 
 `link` REQUIRES an explicit kind before the library name - there is no bare
 `link "X"` and no `@link(...)` attribute form, only one way to write this:
@@ -2048,6 +2053,13 @@ join(t)                               // wait for it
 sync.Lock(lock)  /* critical section */  sync.Unlock(lock)
 sync.Wait(wg)  sync.Destroy(lock)  sync.DestroyWaitGroup(wg)
 ```
+
+`go work(x)` (Persian `برو کار(x)`, needs `import pool`) runs the call as a
+task on a shared bounded pool; arguments are evaluated when `go` runs;
+`pool.GoWait()` waits. Prefer it to `spawn` for many small jobs. `go` is a
+contextual keyword, so a variable named `go` still works. For results and
+limits see `pool.New/NewElastic/Submit/Group/Async/Map`, `chan.Select/After`
+and `thread.SetLimit`.
 
 `spawn(f, arg)` is how a thread gets its own data; `arg`'s type must be a
 pointer, because it travels through the OS's single thread-argument slot.

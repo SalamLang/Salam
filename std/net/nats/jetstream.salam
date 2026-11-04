@@ -16,6 +16,7 @@ package nats
 
 import conv
 import str
+import encoding
 import encoding.json
 
 const JS_API := "$JS.API."
@@ -97,6 +98,32 @@ pub struct Batch:
     pub err: str = ""
 end
 
+@en "KVEntry"
+@fa "ورودی کی‌وی"
+pub struct KVEntry:
+    @en "ok"
+    @fa "سالم"
+    pub ok: bool = false
+    @en "found"
+    @fa "یافت شد"
+    pub found: bool = false
+    @en "deleted"
+    @fa "حذف شده"
+    pub deleted: bool = false
+    @en "key"
+    @fa "کلید"
+    pub key: str = ""
+    @en "value"
+    @fa "مقدار"
+    pub value: str = ""
+    @en "revision"
+    @fa "ویرایش"
+    pub revision: int = 0
+    @en "err"
+    @fa "خطا"
+    pub err: str = ""
+end
+
 func _unquote(v: str): str:
     if v.len() >= 2 and v.substr(0, 1) == `"` and v.substr(v.len() - 1, 1) == `"`:
         ret v.substr(1, v.len() - 2)
@@ -122,6 +149,16 @@ func _js_result(m: Msg): JSResult:
     end
     r.ok = true
     ret r
+end
+
+func _unb64(v: str): str:
+    mut out := ""
+    try:
+        out = encoding.Base64Decode(v)
+    catch:
+        out = ""
+    end
+    ret out
 end
 
 func _str_array(items: Vector<str>): str:
@@ -293,4 +330,120 @@ pub func MsgSequence(m: Msg): int:
         ret parts.get(5).to_int()
     end
     ret 0
+end
+
+@en "AddPushConsumer"
+@fa "افزودن مصرف‌کننده فشاری"
+pub func AddPushConsumer(nc &: Conn, stream: str, durable: str, filter: str, deliver: str, queue: str, timeout_ms: int): JSResult:
+    mut cfg := "{" + json.Member("durable_name", durable) + "," + json.Member("deliver_subject", deliver) + `,"ack_policy":"explicit"`
+    if filter.len() > 0:
+        cfg += "," + json.Member("filter_subject", filter)
+    end
+    if queue.len() > 0:
+        cfg += "," + json.Member("deliver_group", queue)
+    else:
+        cfg += `,"flow_control":true,"idle_heartbeat":5000000000`
+    end
+    cfg += "}"
+    body := "{" + json.Member("stream_name", stream) + `,"config":` + cfg + "}"
+    ret JSRequest(nc, "CONSUMER.DURABLE.CREATE." + stream + "." + durable, body, timeout_ms)
+end
+
+@en "NextPush"
+@fa "پیام فشاری بعدی"
+pub func NextPush(nc &: Conn, s: Subscription, timeout_ms: int): Msg:
+    deadline := _now() + timeout_ms as i64
+    until true:
+        left := deadline - _now()
+        if left <= 0:
+            break
+        end
+        m := NextMsg(nc, s, left as int)
+        if not m.ok:
+            ret m
+        end
+        if m.status == STATUS_IDLE_HEARTBEAT:
+            if m.reply.len() > 0:
+                Respond(nc, m, "")
+            end
+            continue
+        end
+        ret m
+    end
+    mut t := Msg {}
+    t.err = "timeout"
+    ret t
+end
+
+@en "KVCreate"
+@fa "ساخت سطل کی‌وی"
+pub func KVCreate(nc &: Conn, bucket: str, history: int, timeout_ms: int): JSResult:
+    keep := history > 0 ? history : 1
+    mut subjects := Vector {} as Vector<str>
+    defer subjects.free()
+    subjects.push("$KV." + bucket + ".>")
+    body := "{" + json.Member("name", "KV_" + bucket) + `,"subjects":` + _str_array(subjects) + `,"max_msgs_per_subject":` + conv.FormatInt(keep as i64) + `,"discard":"new","allow_rollup_hdr":true,"deny_delete":true,"allow_direct":true,"storage":"file","retention":"limits"}`
+    ret JSRequest(nc, "STREAM.CREATE.KV_" + bucket, body, timeout_ms)
+end
+
+@en "KVDeleteBucket"
+@fa "حذف سطل کی‌وی"
+pub func KVDeleteBucket(nc &: Conn, bucket: str, timeout_ms: int): JSResult:
+    ret DeleteStream(nc, "KV_" + bucket, timeout_ms)
+end
+
+@en "KVPut"
+@fa "نوشتن کی‌وی"
+pub func KVPut(nc &: Conn, bucket: str, key: str, value: str, timeout_ms: int): PubAck:
+    subject := "$KV." + bucket + "." + key
+    if not ValidSubject(subject):
+        mut bad := PubAck {}
+        bad.err = "invalid key"
+        ret bad
+    end
+    ret JSPublish(nc, subject, value, timeout_ms)
+end
+
+@en "KVGet"
+@fa "خواندن کی‌وی"
+pub func KVGet(nc &: Conn, bucket: str, key: str, timeout_ms: int): KVEntry:
+    mut e := KVEntry {}
+    e.key = key
+    subject := "$KV." + bucket + "." + key
+    if not ValidSubject(subject):
+        e.err = "invalid key"
+        ret e
+    end
+    r := JSRequest(nc, "STREAM.MSG.GET.KV_" + bucket, "{" + json.Member("last_by_subj", subject) + "}", timeout_ms)
+    if not r.ok:
+        e.err = r.code == 10037 ? "key not found" : r.err
+        e.ok = r.code == 10037
+        ret e
+    end
+    msg := json.Get(r.raw, "message")
+    hdrs := _unb64(_unquote(json.Get(msg, "hdrs")))
+    e.ok = true
+    e.revision = json.GetInt(msg, "seq")
+    if hdrs.find("KV-Operation: DEL") >= 0 or hdrs.find("KV-Operation: PURGE") >= 0:
+        e.deleted = true
+        e.err = "key not found"
+        ret e
+    end
+    e.found = true
+    e.value = _unb64(_unquote(json.Get(msg, "data")))
+    ret e
+end
+
+@en "KVDelete"
+@fa "حذف کی‌وی"
+pub func KVDelete(nc &: Conn, bucket: str, key: str, timeout_ms: int): PubAck:
+    subject := "$KV." + bucket + "." + key
+    if not ValidSubject(subject):
+        mut bad := PubAck {}
+        bad.err = "invalid key"
+        ret bad
+    end
+    mut h := NewHeader()
+    HeaderAdd(h, "KV-Operation", "DEL")
+    ret JSPublishHeaders(nc, subject, h, "", timeout_ms)
 end

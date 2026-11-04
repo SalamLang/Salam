@@ -64,7 +64,7 @@ pub const KIND_BOOL := 6
 pub const KIND_DATE := 7
 
 @en "KIND_DATETIME"
-@fa "نوع تاریخ و زمان"
+@fa "نوع تاریخ‌زمان"
 pub const KIND_DATETIME := 8
 
 @en "KIND_ARRAY"
@@ -188,6 +188,17 @@ pub struct Conn:
             this.code = _exception_code(r)
             this.err = str.Trim(r.body)
             if this.err.len() == 0: this.err = "HTTP " + str.FromInt(r.status as i64) end
+        else:
+            hc := _header_code(r)
+            at := _exception_at(r.body)
+            if at >= 0:
+                this.code = _code_in(r.body, at)
+                if this.code == 0: this.code = hc end
+                this.err = _exception_text(r.body, at)
+            else hc != 0:
+                this.code = hc
+                this.err = "the server reported exception code " + str.FromInt(hc as i64)
+            end
         end
         ret r
     end
@@ -215,7 +226,25 @@ pub struct Conn:
     @en "ExecParams"
     @fa "اجرا با پارامتر"
     pub func ExecParams(sql: str, params: HashMap<str, str>): bool:
-        _ := this._send("POST", "/", _query_string(this.opts, params, false), sql)
+        ret this.ExecFull(sql, params, HashMap {} as HashMap<str, str>)
+    end
+
+    @en "ExecWith"
+    @fa "اجرا با تنظیمات"
+    pub func ExecWith(sql: str, args: Vector<str>, settings: HashMap<str, str>): bool:
+        mut good := true
+        bound := _bind(sql, args, good)
+        if not good:
+            this.err = "the number of placeholders does not match the number of arguments"
+            ret false
+        end
+        ret this.ExecFull(bound, HashMap {} as HashMap<str, str>, settings)
+    end
+
+    @en "ExecFull"
+    @fa "اجرای کامل"
+    pub func ExecFull(sql: str, params: HashMap<str, str>, extra: HashMap<str, str>): bool:
+        _ := this._send("POST", "/", _query_string(this.opts, params, extra, false), sql)
         ret this.err.len() == 0
     end
 
@@ -234,7 +263,35 @@ pub struct Conn:
     @en "QueryParams"
     @fa "پرسمان با پارامتر"
     pub func QueryParams(sql: str, params: HashMap<str, str>): Rows:
-        r := this._send("POST", "/", _query_string(this.opts, params, true), sql)
+        ret this.QueryFull(sql, params, HashMap {} as HashMap<str, str>)
+    end
+
+    @en "QueryWith"
+    @fa "پرسمان با تنظیمات"
+    pub func QueryWith(sql: str, args: Vector<str>, settings: HashMap<str, str>): Rows:
+        mut good := true
+        bound := _bind(sql, args, good)
+        if not good:
+            this.err = "the number of placeholders does not match the number of arguments"
+            ret Rows { err = this.err }
+        end
+        ret this.QueryFull(bound, HashMap {} as HashMap<str, str>, settings)
+    end
+
+    @en "QueryRow"
+    @fa "پرسمان یک ردیف"
+    pub func QueryRow(sql: str, args: Vector<str>): Vector<str>:
+        mut rows := this.Query(sql, args)
+        mut out := Vector {} as Vector<str>
+        if rows.Next(): out = rows.Row() end
+        rows.Close()
+        ret out
+    end
+
+    @en "QueryFull"
+    @fa "پرسمان کامل"
+    pub func QueryFull(sql: str, params: HashMap<str, str>, extra: HashMap<str, str>): Rows:
+        r := this._send("POST", "/", _query_string(this.opts, params, extra, true), sql)
         if this.err.len() > 0: ret Rows { err = this.err } end
         ret _parse_rows(r.body)
     end
@@ -306,11 +363,14 @@ func _base_url(o: Options): str:
     ret scheme + "://" + addr
 end
 
-func _query_string(o: Options, params: HashMap<str, str>, reading: bool): str:
+func _query_string(o: Options, params: HashMap<str, str>, extra: HashMap<str, str>, reading: bool): str:
     mut parts := Vector {} as Vector<str>
     defer parts.free()
     if o.database.len() > 0: parts.push("database=" + encoding.URLEncode(o.database)) end
     each k, v in o.settings:
+        parts.push(encoding.URLEncode(k) + "=" + encoding.URLEncode(v))
+    end
+    each k, v in extra:
         parts.push(encoding.URLEncode(k) + "=" + encoding.URLEncode(v))
     end
     each k, v in params:
@@ -336,18 +396,72 @@ func _headers(o: Options): HashMap<str, str>:
     ret h
 end
 
-func _exception_code(r: http.Response): int:
+func _header_code(r: http.Response): int:
     hv := http.GetHeader(r, "X-ClickHouse-Exception-Code")
     if hv.len() > 0: ret conv.ParseIntOr(hv, 0 as i64) as int end
-    body := r.body
-    if str.StartsWith(body, "Code: "):
-        mut stop := 6
-        until stop < body.len() and "0123456789".find(str.ByteSub(body, stop, 1)) >= 0:
-            stop += 1
-        end
-        ret conv.ParseIntOr(body.substr(6, stop - 6), 0 as i64) as int
-    end
     ret 0
+end
+
+func _code_in(body: str, at: int): int:
+    mut start := body.find("Code: ")
+    if at >= 0: start = str.IndexFrom(body, "Code: ", at) end
+    if start < 0: ret 0 end
+    mut stop := start + 6
+    until stop < body.len() and "0123456789".find(str.ByteSub(body, stop, 1)) >= 0:
+        stop += 1
+    end
+    ret conv.ParseIntOr(body.substr(start + 6, stop - start - 6), 0 as i64) as int
+end
+
+func _exception_code(r: http.Response): int:
+    hc := _header_code(r)
+    if hc != 0: ret hc end
+    if str.StartsWith(r.body, "Code: "): ret _code_in(r.body, 0) end
+    ret 0
+end
+
+func _marker_at(body: str): int:
+    mut pos := 0
+    until pos >= 0:
+        mark := str.IndexFrom(body, "__exception__", pos)
+        if mark < 0: ret -1 end
+        if mark == 0 or str.ByteSub(body, mark - 1, 1) == "\n": ret mark end
+        pos = mark + 13
+    end
+    ret -1
+end
+
+func _exception_at(body: str): int:
+    mark := _marker_at(body)
+    if mark >= 0:
+        at := str.IndexFrom(body, "Code: ", mark)
+        if at >= 0: ret at end
+        ret mark
+    end
+    mut pos := 0
+    until pos >= 0:
+        at := str.IndexFrom(body, "Code: ", pos)
+        if at < 0: ret -1 end
+        eol := str.IndexFrom(body, "\n", at)
+        mut line := body.substr(at, body.len() - at)
+        if eol >= 0: line = body.substr(at, eol - at) end
+        lead := at == 0 or str.ByteSub(body, at - 1, 1) == "\n"
+        if lead and line.find("DB::Exception") >= 0: ret at end
+        pos = at + 6
+    end
+    ret -1
+end
+
+func _exception_text(body: str, at: int): str:
+    mut text := str.Trim(body.substr(at, body.len() - at))
+    mark := text.find("__exception__")
+    if mark >= 0:
+        text = str.Trim(text.substr(0, mark))
+        nl := text.find("\n")
+        if nl >= 0: text = str.Trim(text.substr(0, nl)) end
+    end
+    if text.len() == 0: text = "the server reported an exception while sending the reply" end
+    ret text
 end
 
 @en "DefaultOptions"

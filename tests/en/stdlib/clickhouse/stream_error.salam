@@ -1,0 +1,80 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import str
+import db
+import db.clickhouse
+
+include fake "_fake.salam"
+
+mut PORT := 0
+
+func main:
+    good := `{"meta":[{"name":"n","type":"UInt8"}],"data":[[1],[2]],"rows":2}` + "\n"
+    fake.Reply(200, good + "Code: 395. DB::Exception: Value passed to 'throwIf' function is non-zero. (FUNCTION_THROW_IF_VALUE_IS_NON_ZERO)\n")
+    fake.ReplyWith(200, "", "X-ClickHouse-Exception-Code:241")
+    fake.Reply(200, `{"meta":[],"data":[` + "\n\r\n__exception__\r\nabcdefghijklmnop\r\nCode: 241. DB::Exception: Memory limit exceeded\r\n55 abcdefghijklmnop\r\n__exception__\r\n")
+    fake.Reply(200, good)
+    fake.Reply(200, `{"meta":[{"name":"s","type":"String"}],"data":[["Code: 1. DB::Exception"]],"rows":1}` + "\n")
+    fake.Reply(200, `{"meta":[{"name":"s","type":"String"}],"data":[["a__exception__b"]],"rows":1}` + "\n")
+    fake.Reply(200, `{"meta":[{"name":"a","type":"UInt8"},{"name":"b","type":"String"}],"data":[[7,"x"]],"rows":1}` + "\n")
+    fake.Reply(200, "")
+    fake.Reply(200, `{"meta":[{"name":"n","type":"Int64"},{"name":"f","type":"Float64"},{"name":"s","type":"String"}],"data":[["5",1.5,"hi"],["6",2.5,null]],"rows":2}` + "\n")
+    fake.Reply(200, "")
+    fake.Reply(404, "Code: 60. DB::Exception: no table\n")
+    PORT = fake.StartFree()
+    if PORT == 0:
+        println "fake server did not start"
+        ret
+    end
+    mut o := clickhouse.DefaultOptions()
+    o.addr = "127.0.0.1:" + str.FromInt(PORT as i64)
+    mut c := clickhouse.Open(o)
+    none := Vector {} as Vector<str>
+
+    mut rows := c.Query("SELECT throwIf(1)", none)
+    println "trailing:", rows.Ok(), c.Code()
+    println str.Trim(c.Error())
+    println "exec header:", c.Exec("INSERT INTO t VALUES (1)", none), c.Code()
+    rows = c.Query("SELECT 1", none)
+    println "marker:", rows.Ok(), c.Code()
+    println str.Trim(c.Error())
+    rows = c.Query("SELECT 1", none)
+    println "clean:", rows.Ok(), c.Code(), rows.RowCount()
+    rows = c.Query("SELECT 'Code: 1. DB::Exception'", none)
+    println "in data:", rows.Ok(), rows.Next(), rows.Text(0)
+    rows = c.Query("SELECT 'a__exception__b'", none)
+    println "marker in data:", rows.Ok(), c.Code(), rows.Next(), rows.Text(0)
+
+    mut settings := HashMap {} as HashMap<str, str>
+    settings.put("max_execution_time", "5")
+    row := c.QueryRow("SELECT 7, 'x'", none)
+    println "row:", row.len(), row.get(0), row.get(1)
+    println "exec with:", c.ExecWith("OPTIMIZE TABLE t", none, settings)
+    println fake.Last()
+
+    d := clickhouse.AsDb(c)
+    println "kind:", d.Kind(), db.CLICKHOUSE
+    r := d.Query("SELECT n, f, s FROM t")
+    println "cols:", r.ColumnCount(), r.ColumnName(2)
+    until r.Next():
+        println r.Int64(0), r.Float(1), r.IsNull(2), r.Text(2), r.ColumnType(0), r.ColumnType(1), r.ColumnType(2)
+    end
+    r.Close()
+    println "run:", db.Run(d, "TRUNCATE TABLE t")
+    println "bad:", d.Exec("DROP TABLE nope"), d.Error() != ""
+    println "quote:", d.Quote("a'b")
+    tx := d.Begin()
+    println "tx:", tx.Ok(), tx.Commit(), tx.Rollback()
+end

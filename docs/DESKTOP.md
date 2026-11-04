@@ -159,6 +159,13 @@ x86-64, ARM64 and 32-bit Windows.
 The CEF build (`-DSALAM_WEBVIEW_CEF`) has no message channel or custom schemes,
 so `std/desktop` does not support it.
 
+## When a window stays blank
+
+Set `SALAM_WEBVIEW_TRACE` to a filename and run the application again. Each line
+records one step: how the runtime was started, each navigation, resource and
+message, and any message the bridge refused. It works in an application with no
+console. `desktop.LastError()` says why a window could not open at all.
+
 ## Testing
 
 - `tests/en/apps/desktop` and `tests/fa/apps/desktop`: logic that needs no

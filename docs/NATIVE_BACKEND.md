@@ -1014,10 +1014,20 @@ evicts anything else (`SALAM_NG_OFF=remat`). `EncodePNG`'s filter scoring
 loop then keeps all of its accumulators in registers: 113 instructions per
 four bytes on SSE2 instead of 117 and 51 per eight with AVX2 instead of 53. Scalar constants are not rematerialized: a general register reload is
 already one instruction, and the loop slot hoisting above handles them.
-The SSE2 scoring loop still reloads its two row pointers from the stack
-for each of its four loads: the general registers are taken by values
-that live through the loop without being used in it, and neither
-rematerialization nor a larger slot-hoisting budget changes that.
+Slot hoisting tries at most 32 loops per function, smallest first, and a
+loop with no reload of a stack slot no longer uses one of those tries. A
+reload that was already dropped no longer counts as a write to its slot
+(`SALAM_NG_OFF=shbudg` turns both back). `EncodePNG` has 32 smaller
+loops without reloads ahead of its scoring loop, so the budget ran out
+before reaching it, with twelve of the thirteen general registers free in
+that loop, and on AVX2 the dropped reload blocked it. The loop now has no
+reloads: 109 instructions per four bytes on SSE2 (113 before) and 50 per
+eight with AVX2 (51). Splitting values idle in a hot innermost loop around
+it (a stack slot inside the loop, a reload at each exit) was tried and not
+kept: limited to the deepest loops with a high entry ratio it changed
+`image_rtl_card` by -0.03% and `image_basics` by -0.004%, and with a lower
+ratio it made them 0.45% and 0.36% worse (0.76% on a PNG encode), since
+those loops run few iterations per entry.
 
 A value that does not get a register for its whole range is split instead
 of living in its stack slot from start to end (`SALAM_NG_OFF=rasp` turns
@@ -1194,7 +1204,7 @@ ret end` at the top of a recursive AST walk) tests that parameter before
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing, and a comma-separated list dumps several functions.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,vnarrow,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,loopinl,cpelim,tord,vrev,cdown,tfold,mexit,sqself,vsign,redinv,ldcmp,phix,selinc,wweb,wwdep,wwtr,tdup,padjmp,dtst,zins,ndiv,niv,cmp64,adc64,rvc,avx2,rasp,hotpath,inlnest,spromo,ypack,ysum,winv,zxcmp,cpspill,scdead,yzext,uswsel,vex3,vabs,vdemor,lvnsw,vblend,xfree,lvunr,vtail,vkpool,remat,sse41`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,vnarrow,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,loopinl,cpelim,tord,vrev,cdown,tfold,mexit,sqself,vsign,redinv,ldcmp,phix,selinc,wweb,wwdep,wwtr,tdup,padjmp,dtst,zins,ndiv,niv,cmp64,adc64,rvc,avx2,rasp,hotpath,inlnest,spromo,ypack,ysum,winv,zxcmp,cpspill,scdead,yzext,uswsel,vex3,vabs,vdemor,lvnsw,vblend,xfree,lvunr,vtail,vkpool,remat,sse41,shbudg`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator and `rasp` the
@@ -1419,23 +1429,25 @@ LLVM on a full self-compile, while the native build itself is several times
 faster than the LLVM path.
 
 Library code is further behind. Counted with callgrind, the image tests
-`apps/image_rtl_card` and `apps/image_basics` run 1.08x and 1.18x the
-instructions of their LLVM builds (143.5 against 132.4 million, 555.4
-against 471.5 million; before the constant-pool splats and
-rematerialization they were 144.9 and 557.3 million, before the AVX2 blends, `xmm14` and the vector loop
+`apps/image_rtl_card` and `apps/image_basics` run 1.08x and 1.17x the
+instructions of their LLVM builds (142.4 against 132.4 million, 553.5
+against 471.4 million; 143.5 and 555.4 million before the fuller slot
+hoisting, before the constant-pool splats and
+rematerialization 144.9 and 557.3 million, before the AVX2 blends, `xmm14` and the vector loop
 unrolling they were 145.6 and 558.6 million, before the 256-bit widening, per-filter unswitching
 and vector `abs` they were 152.3 and 570.3 million, 1.15x and 1.21x, before
 the narrow byte and 16-bit lanes 163.3 and 587.2 million, 1.23x and 1.25x,
 and before `winv`, `zxcmp`, `cpspill` and `scdead` 174.6 and 608.0 million,
-1.32x and 1.29x). With `--cpu=x86-64-v3` the two take 116.0 and 515.2
-million against LLVM's 101.9 and 415.0, 1.14x and 1.24x (116.3 and 515.7
+1.32x and 1.29x). With `--cpu=x86-64-v3` the two take 115.8 and 514.9
+million against LLVM's 101.9 and 415.0, 1.14x and 1.24x (116.0 and 515.2
+million before the fuller slot hoisting, 116.3 and 515.7
 million before the constant-pool splats and rematerialization, 116.4 and
 518.1 million before the 128-bit tail step, 119.7 and 523.3
 million before the blends, `xmm14` and the unrolling, 151.6 and 569.0
 million, 1.49x and 1.37x, before the 256-bit widening). On `image_rtl_card`, `EncodePNG` and
-`RawDeflate` now run 90.5 million instructions against 97.4 million for
-LLVM's `Encode`, which inlines both, and 62.9 million against 67.5 million
-with AVX2 (91.8 and 63.2 million before the rematerialization), where the filter scoring loop
+`RawDeflate` now run 89.3 million instructions against 97.4 million for
+LLVM's `Encode`, which inlines both, and 62.7 million against 67.5 million
+with AVX2 (90.5 and 62.9 million before the fuller slot hoisting, 91.8 and 63.2 million before the rematerialization), where the filter scoring loop
 with its five `int` sums runs eight lanes in both builds. What
 is left is mostly not spilling: LLVM inlines `DrawLine` into a constant
 horizontal span and unswitches the alpha test that keeps native `DrawLine`'s loop at full

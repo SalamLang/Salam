@@ -16,6 +16,10 @@ real page against a fake backend. Set `SALAM_AGENT_BROWSER` to also test the
 `browser` tool against Chrome. Set `SALAM_AGENT_DEBUG=1` to use `SALAM_APP_URL`,
 `SALAM_API_URL` and `SALAM_BRIDGE_URL`.
 
+`.github/workflows/desktop.yml` runs that test on real Linux, Windows and macOS
+(arm64 and x64), with the `browser` tool only on Linux. The releases still ship
+the Rust app.
+
 ## How it works
 
 ```text

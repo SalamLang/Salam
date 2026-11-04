@@ -1081,7 +1081,8 @@ callgrind: `image_rtl_card` 142.36 to 140.05 million instructions (x86-64-v3:
 cachegrind's branch model counts about as many mispredictions either way
 (403.6 and 401.6 thousand on `image_rtl_card`, 754.6 and 753.2 thousand on
 `image_basics`). 38 of the 42 benchmarks are the same binary, and the geometric
-mean of the rest is unchanged.
+mean over all 42 is unchanged. A compile job runs 1.3% fewer instructions (6.126
+to 6.046 billion).
 
 ### Conventions worth knowing
 

@@ -840,6 +840,25 @@ func clang_rt_dir(root: str, arch: str): str:
     ret base + "/" + best + "/lib/windows"
 end
 
+func mingw_dirs_beside_gcc(d &: Vector<str>, arch: str):
+    folders := str.Split(os.Env("PATH"), ";")
+    each folder in folders:
+        if str.Len(folder) > 0 and os.Exists(folder + "/gcc.exe"):
+            root := folder + "/.."
+            d.push(root + "/" + arch + "-w64-mingw32/lib")
+            gcc := root + "/lib/gcc/" + arch + "-w64-mingw32"
+            vers := os.ListDir(gcc)
+            each v in vers:
+                if os.Exists(gcc + "/" + v + "/crtbegin.o"):
+                    d.push(gcc + "/" + v)
+                end
+            end
+            vers.free()
+            ret
+        end
+    end
+end
+
 func mingw_dirs(o: lv.Options, arch: str): Vector<str>:
     mut d := Vector {} as Vector<str>
     each lp in o.lib_paths:
@@ -848,6 +867,13 @@ func mingw_dirs(o: lv.Options, arch: str): Vector<str>:
     if str.Len(o.sysroot) > 0:
         d.push(o.sysroot + "/lib")
         d.push(o.sysroot + "/" + arch + "-w64-mingw32/lib")
+    end
+    mut embedded := ""
+    if EmbeddedSysroot(arch + "-w64-mingw32", embedded):
+        d.push(embedded + "/lib")
+    end
+    if SALAM_OS_WINDOWS:
+        mingw_dirs_beside_gcc(d, arch)
     end
     base := cache_root() + "/salam/sysroots"
     names := os.ListDir(base)
@@ -1051,6 +1077,9 @@ func native_link_dll(lgr: lg.Logger, opt &: Dr, obj: str, dll: str, triple: str,
         cmd += ` "` + res + `"`
     end
     lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "native link: " + cmd)
+    if SALAM_OS_WINDOWS:
+        cmd = `"` + cmd + `"`
+    end
     rc := os.Run(cmd)
     if str.Len(res) > 0:
         _rr := os.Remove(res)
@@ -1134,6 +1163,20 @@ func builtin_pick(triple: str, o: lv.Options, why &: str): int:
     ret glibc_link_ok(triple, o, why) ? 3 : 0
 end
 
+func non_linux_host_triple(): str:
+    mut suffix := ""
+    if SALAM_OS_WINDOWS:
+        suffix = "-w64-windows-gnu"
+    end
+    if SALAM_OS_MAC:
+        suffix = "-apple-macos"
+    end
+    if str.Len(suffix) == 0:
+        ret ""
+    end
+    ret glibc_host_arch() + suffix
+end
+
 func builtin_link_mode(lgr: lg.Logger, obj: str, exe: str, triple: str, o: lv.Options, mode: str): int:
     if not str.Equals(mode, "auto") and not str.Equals(mode, "builtin") and not str.Equals(mode, "system"):
         lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("unknown --linker value '%s'; use auto, builtin or system"), co.ArgStr(mode)))
@@ -1147,6 +1190,9 @@ func builtin_link_mode(lgr: lg.Logger, obj: str, exe: str, triple: str, o: lv.Op
     if str.Len(tgt) == 0 and musl_host():
         tgt = glibc_host_arch() + "-linux-musl"
     end
+    if str.Len(tgt) == 0:
+        tgt = non_linux_host_triple()
+    end
     kind := builtin_pick(tgt, o, why)
     if kind == 0:
         if str.Equals(mode, "builtin"):
@@ -1159,7 +1205,7 @@ func builtin_link_mode(lgr: lg.Logger, obj: str, exe: str, triple: str, o: lv.Op
         ret native_link_builtin(lgr, obj, exe, o, tgt)
     end
     if kind == 2:
-        ret native_link_mingw(lgr, obj, exe, o, triple)
+        ret native_link_mingw(lgr, obj, exe, o, tgt)
     end
     if kind == 4:
         ret native_link_macho(lgr, obj, exe, o)

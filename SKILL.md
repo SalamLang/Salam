@@ -2394,7 +2394,7 @@ merged `style.css`/`script.js`.
 ## 10. Tooling & verification
 
 ```sh
-salam check app.salam                   # lex, parse and type-check only: the fast loop after every edit
+salam check app.salam                   # all of build before code generation, imports included: the fast loop after every edit
 salam check app.salam --switch-lint=warn   # also flag if-chains that could be a switch (W145; off by default)
 salam exec app.salam                    # run with the interpreter (pure compute, no C toolchain)
 salam run app.salam                     # build + run, keep nothing

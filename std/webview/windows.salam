@@ -68,6 +68,21 @@ if SALAM_OS_WINDOWS and not SALAM_WEBVIEW_CEF:
         end
     end
 
+    const _E_NOINTERFACE := -2147467262
+    const _E_POINTER := -2147467261
+    const _WAIT_MS := 60000
+    const _IID_IUNKNOWN := "00000000-0000-0000-c000-000000000046"
+    const _IID_ENV_DONE := "4e8a3389-c9d8-4bd2-b6b5-124fee6cc14d"
+    const _IID_CTRL_DONE := "6c4819f3-c9b7-4260-8127-c9f5bde7f68c"
+    const _IID_EXEC_DONE := "49511172-cc67-4bca-9923-137112f4c4cc"
+    const _IID_SCRIPT_DONE := "b99369f3-9b11-47b5-bc6f-8e7895fcea17"
+    const _IID_MESSAGE := "57213f19-00e6-49fa-8e07-898ea01ecbd2"
+    const _IID_NAV_START := "9adbe429-f36d-432b-9ddc-f8881fbd76e3"
+    const _IID_NAV_DONE := "d33a35bf-1c49-4f98-93ab-006e0533fe1c"
+    const _IID_NEW_WINDOW := "d4c185fe-c81c-4989-97af-2d3fa7ab5651"
+    const _IID_RESOURCE := "ab00b74c-15f1-4646-80e8-e76341d25d71"
+    const _IID_CRASH := "79e0aea4-990b-42d9-aa1d-0fcc2e5bc7f1"
+
     mut _win_views := Vector {} as Vector<_WinView>
     mut _win_ready := false
     mut _win_failed := false
@@ -81,6 +96,7 @@ if SALAM_OS_WINDOWS and not SALAM_WEBVIEW_CEF:
     mut _win_exec_handler := null as void*
     mut _win_script_handler := null as void*
     mut _win_task_free := null as void*
+    mut _win_iid_unknown := null as void*
     mut _h_qi := null as void*
     mut _h_addref := null as void*
     mut _h_release := null as void*
@@ -132,12 +148,17 @@ if SALAM_OS_WINDOWS and not SALAM_WEBVIEW_CEF:
     end
 
     export:
-        func salam_com_qi(_this: void*, _riid: void*, ppv: void*): i32:
-            if ppv != null:
-                slot := ppv as Slot*
-                slot[0].v = _this
+        func salam_com_qi(this_: void*, riid: void*, ppv: void*): i32:
+            if ppv == null:
+                ret _E_POINTER
             end
-            ret 0
+            slot := ppv as Slot*
+            if riid != null and (_win_guid_eq(riid, _win_iid_unknown) or _win_guid_eq(riid, (this_ as Slot*)[2].v)):
+                slot[0].v = this_
+                ret 0
+            end
+            slot[0].v = null
+            ret _E_NOINTERFACE
         end
         func salam_com_addref(_this: void*): u32:
             ret 1
@@ -146,7 +167,9 @@ if SALAM_OS_WINDOWS and not SALAM_WEBVIEW_CEF:
             ret 1
         end
         func salam_env_completed(_this: void*, error_code: i32, environment: void*): i32:
+            Trace("environment finished, HRESULT " + _win_hex(error_code))
             if error_code == 0:
+                com_add_ref(environment)
                 _win_env = environment
             else:
                 _wv_last_error = "WebView2 could not create its environment, HRESULT " + _win_hex(error_code)
@@ -155,7 +178,9 @@ if SALAM_OS_WINDOWS and not SALAM_WEBVIEW_CEF:
             ret 0
         end
         func salam_ctrl_completed(_this: void*, error_code: i32, controller: void*): i32:
+            Trace("controller finished, HRESULT " + _win_hex(error_code))
             if error_code == 0:
+                com_add_ref(controller)
                 _win_ctrl = controller
             else:
                 _wv_last_error = "WebView2 could not create its controller, HRESULT " + _win_hex(error_code)
@@ -195,10 +220,13 @@ if SALAM_OS_WINDOWS and not SALAM_WEBVIEW_CEF:
             _wv_fire_load(id, uri, false)
             ret 0
         end
-        func salam_wv_win_on_nav_done(this_: void*, sender: void*, _args: void*): i32:
+        func salam_wv_win_on_nav_done(this_: void*, sender: void*, args: void*): i32:
             id := com_handler_id(this_)
             uri := com_get_wide(sender, 4)
             defer mem.Free(uri as void*)
+            if _wv_tracing():
+                Trace("navigation finished: " + uri + ", web error " + str.FromInt(com_get_int(args, 4) as i64))
+            end
             _wv_fire_load(id, uri, true)
             ret 0
         end
@@ -218,6 +246,7 @@ if SALAM_OS_WINDOWS and not SALAM_WEBVIEW_CEF:
             f(args, kind as void*)
             what := kind[0]
             mem.Free(kind as void*)
+            Trace("a browser process failed, kind " + str.FromInt(what as i64))
             if what == 0 or what == 1:
                 _wv_fire_crash(id)
             end
@@ -413,15 +442,55 @@ if SALAM_OS_WINDOWS and not SALAM_WEBVIEW_CEF:
         end
     end
 
-    func make_com_obj(invoke: void*, id: int = -1): void*:
+    func _win_hex_digit(c: u8): int:
+        code := c as int
+        if code >= 97:
+            ret code - 87
+        end
+        if code >= 65:
+            ret code - 55
+        end
+        ret code - 48
+    end
+
+    func _win_guid(text: str): void*:
+        out := (mem.AllocateZeroed(16 as u64)) as u8*
+        order := [3, 2, 1, 0, 5, 4, 7, 6, 8, 9, 10, 11, 12, 13, 14, 15]
+        chars := (text as void*) as u8*
+        mut at := 0
+        repeat 16 in i:
+            if chars[at] == (45 as u8):
+                at += 1
+            end
+            high := _win_hex_digit(chars[at])
+            low := _win_hex_digit(chars[at + 1])
+            out[order[i]] = ((high * 16) + low) as u8
+            at += 2
+        end
+        ret out as void*
+    end
+
+    func _win_guid_eq(a: void*, b: void*): bool:
+        left := a as u8*
+        right := b as u8*
+        repeat 16 in i:
+            if left[i] != right[i]:
+                ret false
+            end
+        end
+        ret true
+    end
+
+    func make_com_obj(invoke: void*, iid: str, id: int = -1): void*:
         vtbl := (mem.Allocate(32 as u64)) as Slot*
         vtbl[0].v = _h_qi
         vtbl[1].v = _h_addref
         vtbl[2].v = _h_release
         vtbl[3].v = invoke
-        obj := (mem.Allocate((sizeof(Slot) as u64) * (2 as u64))) as Slot*
+        obj := (mem.Allocate((sizeof(Slot) as u64) * (3 as u64))) as Slot*
         obj[0].v = vtbl as void*
         obj[1].v = (id as size) as void*
+        obj[2].v = _win_guid(iid)
         ret obj as void*
     end
 
@@ -458,6 +527,23 @@ if SALAM_OS_WINDOWS and not SALAM_WEBVIEW_CEF:
         ret f(data, length)
     end
 
+    func com_add_ref(obj: void*):
+        if obj != null:
+            f := (com_vtbl_slot(obj, 1)) as extern stdcall func (void*) u32
+            _count := f(obj)
+        end
+    end
+
+    func com_get_int(obj: void*, slot: int): i32:
+        out := (mem.AllocateZeroed(8 as u64)) as i32*
+        defer mem.Free(out as void*)
+        f := (com_vtbl_slot(obj, slot)) as extern stdcall func (void*, void*) i32
+        if f(obj, out as void*) != 0:
+            ret 0
+        end
+        ret out[0]
+    end
+
     func com_release(obj: void*):
         if obj != null:
             f := (com_vtbl_slot(obj, 2)) as extern stdcall func (void*) u32
@@ -479,7 +565,10 @@ if SALAM_OS_WINDOWS and not SALAM_WEBVIEW_CEF:
 
     func com_add_handler(webview: void*, slot: int, handler: void*):
         f := (com_vtbl_slot(webview, slot)) as extern stdcall func (void*, void*, void*) i32
-        f(webview, handler, _win_token)
+        result := f(webview, handler, _win_token)
+        if result != 0:
+            Trace("could not add the handler in slot " + str.FromInt(slot as i64) + ", HRESULT " + _win_hex(result))
+        end
     end
 
     func to_wide(s: str): void*:
@@ -533,14 +622,14 @@ if SALAM_OS_WINDOWS and not SALAM_WEBVIEW_CEF:
     end
 
     func _win_pump_wait():
-        mut loops := 0
-        until not _win_wait_done and loops < 6000:
+        tick := _win_proc("kernel32.dll", "GetTickCount") as extern stdcall func () u32
+        start := tick()
+        until not _win_wait_done and (tick() - start) < (_WAIT_MS as u32):
             MsgWaitForMultipleObjects(0 as u32, null, 0, 10 as u32, 0x4FF as u32)
             until PeekMessageW(_win_msg, null, 0 as u32, 0 as u32, 1 as u32) != 0:
                 TranslateMessage(_win_msg)
                 DispatchMessageW(_win_msg)
             end
-            loops += 1
         end
     end
 
@@ -616,6 +705,7 @@ if SALAM_OS_WINDOWS and not SALAM_WEBVIEW_CEF:
         if loader != null:
             create := GetProcAddress(loader, "CreateCoreWebView2EnvironmentWithOptions")
             if create != null:
+                Trace("starting the runtime through WebView2Loader.dll")
                 f := create as extern stdcall func (void*, void*, void*, void*) i32
                 result := f(null, data_dir, null, handler)
                 if result != 0:
@@ -629,6 +719,7 @@ if SALAM_OS_WINDOWS and not SALAM_WEBVIEW_CEF:
             _wv_last_error = "The WebView2 runtime is not installed. Get it from https://developer.microsoft.com/microsoft-edge/webview2/"
             ret false
         end
+        Trace("starting the runtime from " + dll_path)
         wide_path := to_wide(dll_path)
         defer mem.Free(wide_path)
         client := LoadLibraryW(wide_path)
@@ -654,8 +745,9 @@ if SALAM_OS_WINDOWS and not SALAM_WEBVIEW_CEF:
             ret
         end
         com_handlers_init()
+        _win_iid_unknown = _win_guid(_IID_IUNKNOWN)
         co_init := _win_proc("ole32.dll", "CoInitializeEx") as extern stdcall func (void*, u32) i32
-        co_init(null, 2 as u32)
+        Trace("CoInitializeEx, HRESULT " + _win_hex(co_init(null, 2 as u32)))
         _win_msg = mem.AllocateZeroed(64 as u64)
         _win_token = mem.AllocateZeroed(16 as u64)
         user32_name := to_wide("user32.dll")
@@ -692,10 +784,10 @@ if SALAM_OS_WINDOWS and not SALAM_WEBVIEW_CEF:
             ret false
         end
         _win_message_window()
-        _win_exec_handler = make_com_obj(_h_exec)
-        _win_script_handler = make_com_obj(_h_script)
+        _win_exec_handler = make_com_obj(_h_exec, _IID_EXEC_DONE)
+        _win_script_handler = make_com_obj(_h_script, _IID_SCRIPT_DONE)
         _win_wait_done = false
-        if not _win_start_env(make_com_obj(_h_env)):
+        if not _win_start_env(make_com_obj(_h_env, _IID_ENV_DONE)):
             _win_failed = true
             ret false
         end
@@ -750,7 +842,12 @@ if SALAM_OS_WINDOWS and not SALAM_WEBVIEW_CEF:
         _win_ctrl = null as void*
         _win_wait_done = false
         create_ctrl := (com_vtbl_slot(_win_env, 3)) as extern stdcall func (void*, void*, void*) i32
-        create_ctrl(_win_env, hwnd, make_com_obj(_h_ctrl))
+        started := create_ctrl(_win_env, hwnd, make_com_obj(_h_ctrl, _IID_CTRL_DONE))
+        if started != 0:
+            _wv_last_error = "WebView2 refused to create its controller, HRESULT " + _win_hex(started)
+            DestroyWindow(hwnd)
+            ret false
+        end
         _win_pump_wait()
         if _win_ctrl == null:
             if _wv_last_error.len() == 0:
@@ -778,12 +875,12 @@ if SALAM_OS_WINDOWS and not SALAM_WEBVIEW_CEF:
             put_status(settings, 0)
         end
         _win_views[id] = _WinView { hwnd = hwnd, controller = controller, webview = webview, settings = settings }
-        com_add_handler(webview, 34, make_com_obj(_h_message, id))
-        com_add_handler(webview, 7, make_com_obj(_h_nav_start, id))
-        com_add_handler(webview, 15, make_com_obj(_h_nav_done, id))
-        com_add_handler(webview, 44, make_com_obj(_h_new_window, id))
-        com_add_handler(webview, 25, make_com_obj(_h_crash, id))
-        com_add_handler(webview, 55, make_com_obj(_h_resource, id))
+        com_add_handler(webview, 34, make_com_obj(_h_message, _IID_MESSAGE, id))
+        com_add_handler(webview, 7, make_com_obj(_h_nav_start, _IID_NAV_START, id))
+        com_add_handler(webview, 15, make_com_obj(_h_nav_done, _IID_NAV_DONE, id))
+        com_add_handler(webview, 44, make_com_obj(_h_new_window, _IID_NEW_WINDOW, id))
+        com_add_handler(webview, 25, make_com_obj(_h_crash, _IID_CRASH, id))
+        com_add_handler(webview, 55, make_com_obj(_h_resource, _IID_RESOURCE, id))
         each s in _wv_schemes:
             _win_add_scheme_filter(webview, s.name)
         end

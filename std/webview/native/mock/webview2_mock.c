@@ -66,12 +66,49 @@ static HRESULT call_com(void *fn, int nargs, void *a, void *b, void *c)
 }
 #endif
 
-static void complete(void *handler, void *result)
+static const GUID IID_UNKNOWN = {0, 0, 0, {0xc0, 0, 0, 0, 0, 0, 0, 0x46}};
+static const GUID IID_MARSHAL = {3, 0, 0, {0xc0, 0, 0, 0, 0, 0, 0, 0x46}};
+static const GUID IID_ENV_DONE = {
+    0x4e8a3389, 0xc9d8, 0x4bd2, {0xb6, 0xb5, 0x12, 0x4f, 0xee, 0x6c, 0xc1, 0x4d}};
+static const GUID IID_CTRL_DONE = {
+    0x6c4819f3, 0xc9b7, 0x4260, {0x81, 0x27, 0xc9, 0xf5, 0xbd, 0xe7, 0xf6, 0x8c}};
+static const GUID IID_EXEC_DONE = {
+    0x49511172, 0xcc67, 0x4bca, {0x99, 0x23, 0x13, 0x71, 0x12, 0xf4, 0xc4, 0xcc}};
+static const GUID IID_SCRIPT_DONE = {
+    0xb99369f3, 0x9b11, 0x47b5, {0xbc, 0x6f, 0x8e, 0x78, 0x95, 0xfc, 0xea, 0x17}};
+static const GUID IID_MESSAGE = {
+    0x57213f19, 0x00e6, 0x49fa, {0x8e, 0x07, 0x89, 0x8e, 0xa0, 0x1e, 0xcb, 0xd2}};
+static const GUID IID_NAV_START = {
+    0x9adbe429, 0xf36d, 0x432b, {0x9d, 0xdc, 0xf8, 0x88, 0x1f, 0xbd, 0x76, 0xe3}};
+static const GUID IID_NAV_DONE = {
+    0xd33a35bf, 0x1c49, 0x4f98, {0x93, 0xab, 0x00, 0x6e, 0x05, 0x33, 0xfe, 0x1c}};
+static const GUID IID_NEW_WINDOW = {
+    0xd4c185fe, 0xc81c, 0x4989, {0x97, 0xaf, 0x2d, 0x3f, 0xa7, 0xab, 0x56, 0x51}};
+static const GUID IID_RESOURCE = {
+    0xab00b74c, 0x15f1, 0x4646, {0x80, 0xe8, 0xe7, 0x63, 0x41, 0xd2, 0x5d, 0x71}};
+static const GUID IID_CRASH = {
+    0x79e0aea4, 0x990b, 0x42d9, {0xaa, 0x1d, 0x0f, 0xcc, 0x2e, 0x5b, 0xc7, 0xf1}};
+
+/* What the real runtime is entitled to do with a handler it was given. */
+static void check_handler(void *handler, const GUID *iid)
 {
     void **vt = ((Obj *)handler)->vtbl;
-    void *out = NULL;
-    HRESULT qr = call_com(vt[0], 3, handler, NULL, &out);
-    if (qr != S_OK || out != handler) printf("FAIL QueryInterface\n");
+    void *out = (void *)1;
+    if (call_com(vt[0], 3, handler, (void *)&IID_UNKNOWN, &out) != S_OK || out != handler)
+        printf("FAIL QueryInterface IUnknown\n");
+    out = (void *)1;
+    if (call_com(vt[0], 3, handler, (void *)iid, &out) != S_OK || out != handler)
+        printf("FAIL QueryInterface own interface\n");
+    out = (void *)1;
+    if (call_com(vt[0], 3, handler, (void *)&IID_MARSHAL, &out) != E_NOINTERFACE ||
+        out != NULL)
+        printf("FAIL QueryInterface claimed IMarshal\n");
+}
+
+static void complete(void *handler, void *result, const GUID *iid)
+{
+    void **vt = ((Obj *)handler)->vtbl;
+    check_handler(handler, iid);
     call_com(vt[1], 1, handler, NULL, NULL);
     call_com(vt[2], 1, handler, NULL, NULL);
     if (call_com(vt[3], 3, handler, (void *)(ULONG_PTR)S_OK, result) != S_OK)
@@ -108,6 +145,8 @@ static void *g_crash;
 static const wchar_t *g_source = L"about:blank";
 static const wchar_t *g_arg_text = L"";
 static int g_cancelled;
+static int g_env_refs;
+static int g_ctrl_refs;
 
 static wchar_t *task_copy(const wchar_t *text)
 {
@@ -232,7 +271,7 @@ static HRESULT __stdcall wv_execute_script(Obj *self, const wchar_t *js, void *h
 {
     if (self != &g_webview) printf("FAIL ExecuteScript this\n");
     if (g_exec++ == 0) show("exec", js);
-    complete(handler, (void *)L"null");
+    complete(handler, (void *)L"null", &IID_EXEC_DONE);
     return S_OK;
 }
 
@@ -240,7 +279,7 @@ static HRESULT __stdcall wv_add_script(Obj *self, const wchar_t *js, void *handl
 {
     if (self != &g_webview) printf("FAIL AddScript this\n");
     show("script", js);
-    complete(handler, (void *)L"id");
+    complete(handler, (void *)L"id", &IID_SCRIPT_DONE);
     return S_OK;
 }
 
@@ -258,20 +297,21 @@ static HRESULT __stdcall wv_get_source(Obj *self, wchar_t **out)
     return S_OK;
 }
 
-#define ADD_EVENT(name, slot)                                                            \
+#define ADD_EVENT(name, slot, iid)                                                       \
     static HRESULT __stdcall name(Obj *self, void *handler, void *token)                 \
     {                                                                                    \
         if (self != &g_webview || !handler || !token) printf("FAIL " #name "\n");        \
+        check_handler(handler, &iid);                                                    \
         slot = handler;                                                                  \
         return S_OK;                                                                     \
     }
 
-ADD_EVENT(wv_add_nav_start, g_nav_start)
-ADD_EVENT(wv_add_nav_done, g_nav_done)
-ADD_EVENT(wv_add_message, g_message)
-ADD_EVENT(wv_add_new_window, g_new_window)
-ADD_EVENT(wv_add_resource, g_resource)
-ADD_EVENT(wv_add_crash, g_crash)
+ADD_EVENT(wv_add_nav_start, g_nav_start, IID_NAV_START)
+ADD_EVENT(wv_add_nav_done, g_nav_done, IID_NAV_DONE)
+ADD_EVENT(wv_add_message, g_message, IID_MESSAGE)
+ADD_EVENT(wv_add_new_window, g_new_window, IID_NEW_WINDOW)
+ADD_EVENT(wv_add_resource, g_resource, IID_RESOURCE)
+ADD_EVENT(wv_add_crash, g_crash, IID_CRASH)
 
 static HRESULT __stdcall wv_add_filter(Obj *self, const wchar_t *uri, int kind)
 {
@@ -283,6 +323,7 @@ static HRESULT __stdcall wv_add_filter(Obj *self, const wchar_t *uri, int kind)
 static HRESULT __stdcall ctrl_put_bounds(Obj *self, RECT r)
 {
     if (self != &g_controller) printf("FAIL put_Bounds this\n");
+    if (g_ctrl_refs <= 0) printf("FAIL controller used after its last Release\n");
     if (r.left != 0 || r.top != 0) printf("FAIL put_Bounds origin\n");
     g_bounds++;
     return S_OK;
@@ -302,11 +343,38 @@ static HRESULT __stdcall ctrl_close(Obj *self)
     return S_OK;
 }
 
+static ULONG __stdcall env_add_ref(void *self)
+{
+    (void)self;
+    return (ULONG)++g_env_refs;
+}
+
+static ULONG __stdcall env_release(void *self)
+{
+    (void)self;
+    return (ULONG)--g_env_refs;
+}
+
+static ULONG __stdcall ctrl_add_ref(void *self)
+{
+    (void)self;
+    return (ULONG)++g_ctrl_refs;
+}
+
+static ULONG __stdcall ctrl_release(void *self)
+{
+    (void)self;
+    return (ULONG)--g_ctrl_refs;
+}
+
 static HRESULT __stdcall env_create_controller(Obj *self, HWND parent, void *handler)
 {
     if (self != &g_env || parent == NULL)
         printf("FAIL CreateCoreWebView2Controller args\n");
-    complete(handler, &g_controller);
+    if (g_env_refs <= 0) printf("FAIL environment used after its last Release\n");
+    g_ctrl_refs = 1;
+    complete(handler, &g_controller, &IID_CTRL_DONE);
+    g_ctrl_refs--;
     return S_OK;
 }
 
@@ -317,6 +385,7 @@ static HRESULT __stdcall env_create_response(Obj *self, IStream *content, int st
     char body[32] = {0};
     ULONG got = 0;
     if (self != &g_env) printf("FAIL CreateWebResourceResponse this\n");
+    if (g_env_refs <= 0) printf("FAIL environment used after its last Release\n");
     if (content) content->lpVtbl->Read(content, body, sizeof body - 1, &got);
     printf("response %d body=%s\n", status, body);
     show("reason", reason);
@@ -334,7 +403,8 @@ static void fill(void **vt)
     vt[2] = (void *)ok_ref;
 }
 
-static HRESULT start_environment(const wchar_t *browser, const wchar_t *data, void *options, void *handler)
+static HRESULT start_environment(const wchar_t *browser, const wchar_t *data,
+                                 void *options, void *handler)
 {
     setvbuf(stdout, NULL, _IONBF, 0);
     if (browser != NULL || options != NULL) printf("FAIL environment args\n");
@@ -353,6 +423,10 @@ static HRESULT start_environment(const wchar_t *browser, const wchar_t *data, vo
     g_args.vtbl = g_args_vt;
     g_request.vtbl = g_request_vt;
     g_response.vtbl = g_response_vt;
+    g_env_vt[1] = (void *)env_add_ref;
+    g_env_vt[2] = (void *)env_release;
+    g_controller_vt[1] = (void *)ctrl_add_ref;
+    g_controller_vt[2] = (void *)ctrl_release;
     g_env_vt[3] = (void *)env_create_controller;
     g_env_vt[4] = (void *)env_create_response;
     g_controller_vt[6] = (void *)ctrl_put_bounds;
@@ -383,18 +457,22 @@ static HRESULT start_environment(const wchar_t *browser, const wchar_t *data, vo
     g_args_vt[5] = (void *)args_get_text;
     g_request_vt[3] = (void *)args_get_text;
     g_request_vt[5] = (void *)request_get_method;
-    complete(handler, &g_env);
+    g_env_refs = 1;
+    complete(handler, &g_env, &IID_ENV_DONE);
+    g_env_refs--;
     return S_OK;
 }
 
 __declspec(dllexport) HRESULT __stdcall
-CreateCoreWebView2EnvironmentWithOptions(const wchar_t *browser, const wchar_t *data, void *options, void *handler)
+CreateCoreWebView2EnvironmentWithOptions(const wchar_t *browser, const wchar_t *data,
+                                         void *options, void *handler)
 {
     return start_environment(browser, data, options, handler);
 }
 
 __declspec(dllexport) HRESULT __stdcall
-CreateWebViewEnvironmentWithOptionsInternal(int check_running, int runtime_type, const wchar_t *data, void *options,
+CreateWebViewEnvironmentWithOptionsInternal(int check_running, int runtime_type,
+                                            const wchar_t *data, void *options,
                                             void *handler)
 {
     setvbuf(stdout, NULL, _IONBF, 0);

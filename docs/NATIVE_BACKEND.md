@@ -742,7 +742,7 @@ then goes through:
    written with unaligned moves so the frame stays 16-byte aligned; on Windows
    it keeps them out of `xmm6`-`xmm15`, whose upper halves a callee may
    clobber. `SALAM_NATIVE_CPU` sets the level when `--cpu` is not given, so a
-   whole test sweep can run with AVX2. The default stays the x86-64 baseline
+   whole test sweep can run with AVX2, and both reach `--lib` builds too. The default stays the x86-64 baseline
    (SSE2); a program built for `x86-64-v3` needs a CPU with AVX2 and stops
    with an illegal instruction on one without it, and a program built for
    `x86-64-v2` needs SSE4.1 the same way. `--cpu` also reaches LLVM (`-march`
@@ -1461,18 +1461,15 @@ Sub, Up and Average run in byte lanes with no select, so this level has nothing
 for them. Copying the mask into `xmm0` never made a loop worse: all eighteen
 `tests/en/general/lvec_*` programs take the same or fewer instructions with the
 blends than with `SALAM_NG_OFF=vblend`. Over 40000 rows, the median and range of
-nine interleaved runs, with the load around 10 on 6 cores from other jobs,
-scoring takes 275 ms [188-391] at `x86-64-v2` and 481 ms [310-585] at the
-default level (LLVM 395 ms [199-431] and 589 ms [309-649]), and Paeth 84 ms
-[40-98] and 140 ms [70-185] (LLVM 149 ms [74-187] and 167 ms [105-247]). CPU
-time in the same runs is steadier: scoring 180 ms [174-191] against 282 ms
-[275-291] (LLVM 202 and 315), Paeth 41 ms [39-47] against 69 ms [67-74] (LLVM 77
-and 104).
+nine interleaved runs, with the load around 4 on 6 cores from other jobs,
+scoring takes 175 ms [170-184] at `x86-64-v2` and 280 ms [274-293] at the
+default level (LLVM 200 ms [191-207] and 309 ms [303-337]), and Paeth 42 ms
+[38-44] and 69 ms [65-74] (LLVM 77 ms [73-80] and 103 ms [100-114]).
 
 Small loops over 4096 elements, default to `x86-64-v2` (LLVM at `x86-64-v2`), in
 million instructions for 1000 calls: an `int` min and max reduction 18.7 to 9.5
 (4.9), a `u8` clamp over 16384 bytes 15.7 to 12.6 (9.6), `int` add and multiply
-14.5 to 7.3 (7.2). Median and range of nine interleaved runs, same load: the min and max with 100000 calls 204 ms [117-257] to 94 ms [75-119] (LLVM 76 ms [68-85]), add and multiply with 100000 calls 184 ms [89-305] to 109 ms [61-152] (LLVM 117 ms [71-128]), the clamp with 40000 calls 59 ms [34-105] to 54 ms [28-62] (LLVM 41 ms [23-47]). An `i16` multiply and an `f32` saxpy do not change.
+14.5 to 7.3 (7.2). Median and range of nine interleaved runs, same load: the min and max with 100000 calls 103 ms [96-125] to 46 ms [42-81] (LLVM 36 ms [34-43]), add and multiply with 100000 calls 91 ms [81-102] to 57 ms [53-83] (LLVM 58 ms [56-67]), the clamp with 40000 calls 32 ms [31-57] to 31 ms [28-46] (LLVM 23 ms [20-27]). An `i16` multiply and an `f32` saxpy do not change.
 None of the 42 programs in `benchmark/programs` changes: at `x86-64-v2` each
 is the same binary as at the default level, so the level brings nothing to the
 benchmark table. All of these come from one machine (an AMD EPYC of the first

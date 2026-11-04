@@ -48,7 +48,7 @@ jobs:
       - name: Install the Windows toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y gcc-mingw-w64-x86-64
+          sudo apt-get install -y gcc-mingw-w64-x86-64 nsis
 
       - name: Build the smoke test for every target
         run: |
@@ -60,6 +60,11 @@ jobs:
           done
           for target in x86_64-w64-windows-gnu arm64-apple-macos x86_64-apple-macos; do
             ./salam bundle tests/en/desktop/sample --target="$target" --output="stage/sample-$target"
+          done
+          ./salam bundle tests/en/desktop/sample --target=x86_64-w64-windows-gnu --format=nsis --output=stage/sample-setup
+          for target in x86_64-w64-windows-gnu arm64-apple-macos; do
+            ./salam build compiler/main.salam --backend=native --target="$target" \
+              --output="stage/salam-$target" --log-level=error
           done
           ./salam bundle agent/salam --target=x86_64-w64-windows-gnu --output=stage/agent-x86_64-w64-windows-gnu
           ./salam bundle agent/salam --target=arm64-apple-macos --output=stage/agent-arm64-apple-macos
@@ -80,7 +85,7 @@ jobs:
     name: Linux x64
     needs: stage
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - name: Checkout code
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -123,6 +128,34 @@ jobs:
           sudo dpkg -i dist/salam-sample_*.deb
           timeout 60 xvfb-run -a salam-sample --self-test
 
+      - name: Install rpm and appimagetool
+        env:
+          TOOL_URL: https://github.com/AppImage/appimagetool/releases/download/1.9.1/appimagetool-x86_64.AppImage
+          TOOL_SHA256: ed4ce84f0d9caff66f50bcca6ff6f35aae54ce8135408b3fa33abfc3cb384eb0
+        run: |
+          sudo apt-get install -y rpm cpio
+          mkdir -p "$RUNNER_TEMP/tool"
+          cd "$RUNNER_TEMP/tool"
+          curl -fsSL -o appimagetool "$TOOL_URL"
+          echo "$TOOL_SHA256  appimagetool" | sha256sum -c -
+          chmod +x appimagetool
+          ./appimagetool --appimage-extract >/dev/null
+          sudo ln -s "$PWD/squashfs-root/AppRun" /usr/local/bin/appimagetool
+
+      - name: Bundle an rpm and an AppImage and run them
+        env:
+          ARCH: x86_64
+          SALAM_STD: ${{ github.workspace }}/std
+        run: |
+          ./salam bundle tests/en/desktop/sample --format=rpm,appimage --output=dist-more
+          ls -la dist-more
+          mkdir rpm-root
+          rpm2cpio dist-more/*.rpm | cpio -idm -D rpm-root
+          timeout 60 xvfb-run -a rpm-root/usr/bin/salam-sample --self-test
+          set -- dist-more/*.AppImage
+          chmod +x "$1"
+          timeout 60 xvfb-run -a "$1" --appimage-extract-and-run --self-test
+
   wine:
     name: Windows services under wine
     needs: stage
@@ -162,6 +195,11 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 25
     steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
       - name: Download the smoke test
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -194,6 +232,29 @@ jobs:
           unzip -q ./*.zip -d out
           timeout 60 out/*/salam-sample.exe --self-test
 
+      - name: Install, run and remove the NSIS package
+        shell: bash
+        env:
+          MSYS2_ARG_CONV_EXCL: '*'
+        run: |
+          set -- stage/sample-setup/*-setup.exe
+          chmod +x "$1"
+          "$1" /S '/D=C:\salam-sample-test'
+          timeout 60 /c/salam-sample-test/salam-sample.exe --self-test
+          /c/salam-sample-test/uninstall.exe /S '_?=C:\salam-sample-test'
+          test ! -e /c/salam-sample-test/salam-sample.exe
+
+      - name: Bundle on Windows with a Windows compiler
+        shell: bash
+        env:
+          SALAM_STD: ${{ github.workspace }}\std
+        run: |
+          chmod +x stage/salam-x86_64-w64-windows-gnu.exe
+          ./stage/salam-x86_64-w64-windows-gnu.exe bundle tests/en/desktop/sample --output=native-dist
+          mkdir native-out
+          unzip -q native-dist/*.zip -d native-out
+          timeout 60 native-out/*/salam-sample.exe --self-test
+
       - name: Salam Agent against a fake backend
         shell: bash
         run: |
@@ -215,6 +276,11 @@ jobs:
           - { os: macos-latest, arch: arm64, target: arm64-apple-macos }
           - { os: macos-15-intel, arch: x64, target: x86_64-apple-macos }
     steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
       - name: Download the smoke test
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
@@ -234,6 +300,17 @@ jobs:
           cd "stage/sample-$TARGET"
           tar xzf ./*.tar.gz
           perl -e 'alarm 60; exec @ARGV' "./Salam Sample.app/Contents/MacOS/salam-sample" --self-test
+
+      - name: Bundle a dmg with a macOS compiler and run it
+        if: matrix.arch == 'arm64'
+        env:
+          SALAM_STD: ${{ github.workspace }}/std
+        run: |
+          chmod +x stage/salam-arm64-apple-macos
+          ./stage/salam-arm64-apple-macos bundle tests/en/desktop/sample --format=app,tar,dmg --output=native-dist
+          hdiutil attach -nobrowse -mountpoint "$RUNNER_TEMP/sample" native-dist/*.dmg
+          perl -e 'alarm 60; exec @ARGV' "$RUNNER_TEMP/sample/Salam Sample.app/Contents/MacOS/salam-sample" --self-test
+          hdiutil detach "$RUNNER_TEMP/sample"
 
       - name: Salam Agent against a fake backend
         env:

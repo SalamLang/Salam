@@ -3,6 +3,7 @@ package interp
 import os
 import str
 import sync
+import thread
 
 include at "../ast.salam"
 include i18 "../i18n.salam"
@@ -31,6 +32,7 @@ mut g_ip_exit_code := 0
 struct ThreadState:
     pub break_levels: int = 0
     pub depth: int = 0
+    pub max_depth: int = 0
     pub match_expr_depth: int = 0
     pub pending_flow: int = FLOW_NORMAL
     pub subj: Vector<Value> = Vector {}
@@ -151,6 +153,7 @@ func ts_save(ip &: Interp): ThreadState:
     mut t := ThreadState {}
     t.break_levels = ip.break_levels
     t.depth = ip.depth
+    t.max_depth = ip.max_depth
     t.match_expr_depth = ip.match_expr_depth
     t.pending_flow = ip.pending_flow
     repeat ip.match_subj.len() in i:
@@ -162,6 +165,7 @@ end
 func ts_restore(ip &: Interp, t: ThreadState):
     ip.break_levels = t.break_levels
     ip.depth = t.depth
+    ip.max_depth = t.max_depth
     ip.match_expr_depth = t.match_expr_depth
     ip.pending_flow = t.pending_flow
     ip.match_subj.free()
@@ -242,6 +246,9 @@ else:
         _l := sync.Lock(g_gil)
         g_vm.break_levels = 0
         g_vm.depth = 0
+        if ffi_is_static(g_vm):
+            g_vm.max_depth = INTERP_THREAD_STACK / INTERP_STACK_PER_FRAME
+        end
         g_vm.match_expr_depth = 0
         g_vm.pending_flow = FLOW_NORMAL
         g_vm.match_subj = Vector {} as Vector<Value>
@@ -275,7 +282,12 @@ else:
         g_task_fn.push(fv)
         g_task_has_arg.push(args.len() > 1)
         g_task_arg.push(args.len() > 1 ? args.get(1) : val_null())
-        h := spawn(interp_thread_main, (tid as i64) as void*)
+        mut h := 0 as i64
+        if ffi_is_static(ip):
+            h = thread.SpawnStack((&interp_thread_main) as i64, (tid as i64) as void*, INTERP_THREAD_STACK as u64).handle
+        else:
+            h = spawn(interp_thread_main, (tid as i64) as void*)
+        end
         g_task_handle.push(h)
         ret val_int((tid + 1) as i64)
     end

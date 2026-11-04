@@ -252,8 +252,76 @@ func loop_writes(g &: Ng, b: int): int:
     ret w
 end
 
-func load_hoistable(g &: Ng, l &: Lp, i: int, mark: int, wr: int): bool:
-    if g.i_op[i] != OP_LOAD or (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) != 0 or (wr & 4) != 0:
+func lh_not_local(g &: Ng, v: int): bool:
+    mut x := v
+    repeat 32:
+        if x < 0 or g.v_kind[x] != VK_INS:
+            ret x >= 0
+        end
+        d := g.v_def[x]
+        if g.i_op[d] == OP_ALLOCA:
+            ret g.v_esc[x]
+        end
+        if g.i_op[d] != OP_ADDR:
+            ret true
+        end
+        x = g.i_a[d]
+    end
+    ret false
+end
+
+func lh_local_store(g &: Ng, i: int): bool:
+    mut x := g.i_b[i]
+    repeat 32:
+        if x < 0 or g.v_kind[x] != VK_INS:
+            ret false
+        end
+        d := g.v_def[x]
+        if g.i_op[d] == OP_ALLOCA:
+            ret not g.v_esc[x]
+        end
+        if g.i_op[d] != OP_ADDR:
+            ret false
+        end
+        x = g.i_a[d]
+    end
+    ret false
+end
+
+func loop_writes_out(g &: Ng, b: int): int:
+    mut w := 0
+    mut i := g.b_first[b]
+    until i >= 0:
+        if g.i_op[i] == OP_STORE and (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) == 0 and lh_local_store(g, i):
+            i = g.i_next[i]
+            continue
+        end
+        op := g.i_op[i]
+        if op == OP_STORE:
+            c := mem_cls(g, i)
+            if (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) != 0 or c == 0:
+                w = w | 4
+            else:
+                w = w | c
+            end
+        else op == OP_CALL and call_no_write(g, i):
+            w = w | 0
+        else op == OP_CALL or op == OP_RMW or op == OP_CMPXCHG or op == OP_FENCE:
+            w = w | 4
+        else op == OP_LOAD and (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) != 0:
+            w = w | 4
+        end
+        i = g.i_next[i]
+    end
+    ret w
+end
+
+func load_hoistable(g &: Ng, l &: Lp, i: int, mark: int, wr0: int, wr_out: int, h: int, p: int): bool:
+    if g.i_op[i] != OP_LOAD or (g.i_f[i] & (IF_VOLATILE | IF_ATOMIC)) != 0:
+        ret false
+    end
+    wr := not g.off_lhloc and lh_not_local(g, g.i_a[i]) ? wr_out : wr0
+    if (wr & 4) != 0:
         ret false
     end
     c := mem_cls(g, i)
@@ -266,19 +334,22 @@ func load_hoistable(g &: Ng, l &: Lp, i: int, mark: int, wr: int): bool:
     end
     mut disp := 0 as i64
     r := addr_root(g, a, disp)
-    if r < 0 or disp < (0 as i64) or disp >= (4096 as i64):
-        ret false
+    if r >= 0 and disp >= (0 as i64) and disp < (4096 as i64):
+        if g.v_kind[r] == VK_ARG:
+            k := g.v_i[r] as int
+            if k >= 0 and k < g.f_argf.len() and (g.f_argf[k] & IF_NONNULL) != 0:
+                ret true
+            end
+        end
+        if g.v_kind[r] == VK_INS and g.i_op[g.v_def[r]] == OP_ALLOCA:
+            d := g.v_def[r]
+            n := g.i_d[d] < (1 as i64) ? (1 as i64) : g.i_d[d]
+            if disp + (tsize(g, g.i_ty[i]) as i64) <= (tsize(g, g.i_x[d]) as i64) * n:
+                ret true
+            end
+        end
     end
-    if g.v_kind[r] == VK_ARG:
-        k := g.v_i[r] as int
-        ret k >= 0 and k < g.f_argf.len() and (g.f_argf[k] & IF_NONNULL) != 0
-    end
-    if g.v_kind[r] == VK_INS and g.i_op[g.v_def[r]] == OP_ALLOCA:
-        d := g.v_def[r]
-        n := g.i_d[d] < (1 as i64) ? (1 as i64) : g.i_d[d]
-        ret disp + (tsize(g, g.i_ty[i]) as i64) <= (tsize(g, g.i_x[d]) as i64) * n
-    end
-    ret false
+    ret not g.off_lhloc and first_iter_reaches(g, l, mark, h, p, g.i_blk[i])
 end
 
 func lr_add_inv(g &: Ng, l &: Lp, mark: int, v: int): bool:
@@ -383,6 +454,15 @@ func entry_const(g &: Ng, h: int, p: int, v: int, out &: i64): bool:
     mut x := v
     if g.v_kind[x] == VK_INS:
         d := g.v_def[x]
+        if g.i_op[d] == OP_ICMP and not g.off_lhloc:
+            mut ca := 0 as i64
+            mut cb := 0 as i64
+            if not entry_const(g, h, p, g.i_a[d], ca) or not entry_const(g, h, p, g.i_b[d], cb):
+                ret false
+            end
+            out = eval_icmp(g, g.v_ty[g.i_a[d]], g.i_x[d], ca, cb) ? (1 as i64) : (0 as i64)
+            ret true
+        end
         if g.i_op[d] != OP_PHI or g.i_blk[d] != h:
             ret false
         end
@@ -475,9 +555,23 @@ func call_hoistable(g &: Ng, l &: Lp, i: int, mark: int, wr: int, h: int, p: int
     ret first_iter_reaches(g, l, mark, h, p, g.i_blk[i])
 end
 
+func div_hoistable(g &: Ng, l &: Lp, i: int, mark: int, h: int, p: int): bool:
+    op := g.i_op[i]
+    if g.off_divh or (op != OP_SDIV and op != OP_UDIV and op != OP_SREM and op != OP_UREM) or g.i_res[i] < 0:
+        ret false
+    end
+    if not lp_inv(g, l, g.i_a[i], mark) or not lp_inv(g, l, g.i_b[i], mark):
+        ret false
+    end
+    ret first_iter_reaches(g, l, mark, h, p, g.i_blk[i])
+end
+
 func licm(g &: Ng): bool:
     build_dom(g)
     count_uses(g)
+    if not g.off_lhloc:
+        compute_escape(g)
+    end
     mut l := Lp {}
     repeat g.b_first.len():
         l.inl.push(0)
@@ -531,9 +625,13 @@ func licm(g &: Ng): bool:
             continue
         end
         mut wr := 0
+        mut wr_out := 0
         each b0 in g.b_rpo:
             if l.inl[b0] == mk:
                 wr = wr | loop_writes(g, b0)
+                if not g.off_lhloc:
+                    wr_out = wr_out | loop_writes_out(g, b0)
+                end
             end
         end
         each b in g.b_rpo:
@@ -557,7 +655,7 @@ func licm(g &: Ng): bool:
                     end
                 end
                 nx := nx0
-                if hoistable(g, l, i, mk) or (not g.off_lhoist and load_hoistable(g, l, i, mk, wr)) or (not g.off_chst and call_hoistable(g, l, i, mk, wr, h, p)):
+                if hoistable(g, l, i, mk) or div_hoistable(g, l, i, mk, h, p) or (not g.off_lhoist and load_hoistable(g, l, i, mk, wr, wr_out, h, p)) or (not g.off_chst and call_hoistable(g, l, i, mk, wr, h, p)):
                     op := g.i_op[i]
                     ins_unlink(g, i)
                     g.i_op[i] = op

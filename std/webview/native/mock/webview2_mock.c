@@ -258,12 +258,12 @@ static HRESULT __stdcall wv_get_source(Obj *self, wchar_t **out)
     return S_OK;
 }
 
-#define ADD_EVENT(name, slot)                                                     \
-    static HRESULT __stdcall name(Obj *self, void *handler, void *token)          \
-    {                                                                             \
-        if (self != &g_webview || !handler || !token) printf("FAIL " #name "\n"); \
-        slot = handler;                                                           \
-        return S_OK;                                                              \
+#define ADD_EVENT(name, slot)                                                            \
+    static HRESULT __stdcall name(Obj *self, void *handler, void *token)                 \
+    {                                                                                    \
+        if (self != &g_webview || !handler || !token) printf("FAIL " #name "\n");        \
+        slot = handler;                                                                  \
+        return S_OK;                                                                     \
     }
 
 ADD_EVENT(wv_add_nav_start, g_nav_start)
@@ -310,7 +310,8 @@ static HRESULT __stdcall env_create_controller(Obj *self, HWND parent, void *han
     return S_OK;
 }
 
-static HRESULT __stdcall env_create_response(Obj *self, IStream *content, int status, const wchar_t *reason,
+static HRESULT __stdcall env_create_response(Obj *self, IStream *content, int status,
+                                             const wchar_t *reason,
                                              const wchar_t *headers, void **out)
 {
     char body[32] = {0};
@@ -338,8 +339,7 @@ CreateCoreWebView2EnvironmentWithOptions(const wchar_t *browser, const wchar_t *
                                          void *options, void *handler)
 {
     setvbuf(stdout, NULL, _IONBF, 0);
-    if (browser != NULL || options != NULL)
-        printf("FAIL environment args\n");
+    if (browser != NULL || options != NULL) printf("FAIL environment args\n");
     if (data != NULL) show("data dir", data);
     fill(g_env_vt);
     fill(g_controller_vt);

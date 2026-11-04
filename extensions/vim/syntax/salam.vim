@@ -26,7 +26,7 @@ syn keyword salamType         auto خودکار تلقائي
 syn keyword salamBuiltinType  وکتور Vector نگاشت HashMap پیمایشگرنگاشت MapIter پرونده File گوناگون Variant
 syn keyword salamBuiltin      print println printerr printerrln input چاپ سرچاپ ورودی
 syn keyword salamOperatorWord and or not eq neq lt gt lte gte و یا برابر نابرابر وارونه کوچکتر بزرگتر کوچکتربرابر بزرگتربرابر
-syn keyword salamContextual   link static dynamic framework پیوند ایستا پویا چارچوب dyn
+syn keyword salamContextual   link static dynamic framework پیوند ایستا پویا چارچوب dyn go برو
 syn match salamStatement "\<\%(گرفتن خطا\|پرتاب خطا\)\>"
 syn match salamStorageClass "\<\%(درون‌داد\|برون‌داد\|بی‌کاره\)\>"
 syn match salamType "\<\%(اندازه مثبت\)\>"

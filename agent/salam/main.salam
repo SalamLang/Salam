@@ -33,13 +33,8 @@ import time
 
 include browser "browser.salam"
 
-if SALAM_OS_WINDOWS:
+if not SALAM_OS_WINDOWS:
     extern:
-        func _fullpath(out: void*, path: str, size: usize): void*
-    end
-else:
-    extern:
-        func realpath(path: str, out: void*): void*
         func setenv(name: str, value: str, overwrite: int): int
     end
 end
@@ -557,25 +552,12 @@ func device_json(): str:
     ret json.Object(members)
 end
 
-if SALAM_OS_WINDOWS:
-    func canonical(path: str): str:
-        if not os.Exists(path):
-            ret ""
-        end
-        raw := _fullpath(null, path, 0 as usize)
-        if raw == null:
-            ret ""
-        end
-        ret str.TrimSuffix(str.Replace(raw as str, "/", "\\"), "\\")
+func canonical(path: str): str:
+    found := os.RealPath(path)
+    if SALAM_OS_WINDOWS and found.len() > 3:
+        ret str.TrimSuffix(found, "\\")
     end
-else:
-    func canonical(path: str): str:
-        raw := realpath(path, null)
-        if raw == null:
-            ret ""
-        end
-        ret raw as str
-    end
+    ret found
 end
 
 func is_absolute(path: str): bool:
@@ -619,7 +601,7 @@ func canonical_prefix(path: str): str:
                 out = filepath.Join(out, rest[i])
                 i -= 1
             end
-            ret out
+            ret SALAM_OS_WINDOWS ? str.Replace(out, "/", "\\") : out
         end
         parent := filepath.Dir(existing)
         if parent == existing or parent == "." or parent.len() == 0:
@@ -701,6 +683,7 @@ func approvals_ask(p: Preview, reason &: str): bool:
     sync.Lock(g_mu)
     g_pending.put(p.call_id, entry)
     sync.Unlock(g_mu)
+    emit_call(p, "pending", "")
     notify_post("approval", "", p.summary, 0 as i64)
     deadline := sync.NowMs() + (ANSWER_WAIT_MS as i64)
     sync.Lock(g_mu)
@@ -2294,6 +2277,28 @@ func first_line(text: str, max: int): str:
     ret out
 end
 
+func windows_bash(): str:
+    folders := str.Split(os.Env("PATH"), ";")
+    each folder in folders:
+        low := str.Lower(folder)
+        if folder.len() > 0 and not str.Contains(low, "\\system32") and not str.Contains(low, "\\windowsapps"):
+            found := filepath.Join(folder, "bash.exe")
+            if os.Exists(found):
+                ret found
+            end
+        end
+    end
+    each root in [os.Env("ProgramFiles"), os.Env("ProgramFiles(x86)"), filepath.Join(os.Env("LOCALAPPDATA"), "Programs")]:
+        if root.len() > 0:
+            found := filepath.Join(root, "Git/bin/bash.exe")
+            if os.Exists(found):
+                ret found
+            end
+        end
+    end
+    ret "bash.exe"
+end
+
 func set_shell(act &: Action, pv &: Preview, shell_name: str, command: str):
     act.args = Vector {} as Vector<str>
     if SALAM_OS_WINDOWS:
@@ -2302,7 +2307,7 @@ func set_shell(act &: Action, pv &: Preview, shell_name: str, command: str):
             act.raw_args = `/D /S /C "chcp 65001>nul & ` + command + `"`
             pv.lang = "batch"
         else shell_name == "bash" or shell_name == "sh":
-            act.program = "bash.exe"
+            act.program = windows_bash()
             act.args.push("-lc")
             act.args.push(command)
             pv.lang = "bash"
@@ -2677,7 +2682,6 @@ func handle_call(secret: str, call_text: str):
     decision := approvals_needs(p, reason)
     mut allowed := decision == "allow"
     if decision == "ask":
-        emit_call(p, "pending", "")
         allowed = approvals_ask(p, reason)
     end
     if not allowed:

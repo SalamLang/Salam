@@ -508,7 +508,7 @@ func tr_builtin_words(targetpack: int, toks: tok.TokenStream, i: int, n: int, fr
     ret found
 end
 
-func tr_resolve_member(std_root: str, targetpack: int, toks: tok.TokenStream, i: int, n: int, from_fa: bool, member_pkg: int, var_pkg: int, alias_pkg: Vector<int>, declared: bool, best_j &: int): str:
+func tr_resolve_member(std_root: str, targetpack: int, toks: tok.TokenStream, i: int, n: int, from_fa: bool, member_pkg: int, var_pkg: int, alias_pkg: Vector<int>, declared: bool, user_method: bool, best_j &: int): str:
     best_j = i
     if member_pkg >= 0:
         top := tr_member_words(std_root, tr_pkg_dir.get(member_pkg), toks, i, n, from_fa, false, best_j)
@@ -522,6 +522,10 @@ func tr_resolve_member(std_root: str, targetpack: int, toks: tok.TokenStream, i:
         if str.Len(found) > 0 and (tr_next_is_call(toks, best_j, n) or var_pkg == tr_core_idx):
             ret found
         end
+    end
+    if user_method:
+        best_j = i
+        ret ""
     end
     builtin := tr_builtin_words(targetpack, toks, i, n, from_fa, best_j)
     if str.Len(builtin) > 0:
@@ -645,6 +649,63 @@ func tr_declared_names(toks: tok.TokenStream, n: int): Vector<str>:
         end
         if t.kind != tok.TK_COMMENT_LINE and t.kind != tok.TK_COMMENT_BLOCK:
             prev_kind = t.kind
+        end
+        i += 1
+    end
+    ret names
+end
+
+func tr_call_words(toks: tok.TokenStream, i: int, n: int): str:
+    first := tok.StreamAt(toks, i)
+    mut words := first.lexeme
+    mut j := i
+    until not tr_next_is_call(toks, j, n) and j + 1 < n and j - i < 3 and tr_word_kind(tok.StreamAt(toks, j + 1).kind) and tok.StreamAt(toks, j + 1).begin_line == first.begin_line:
+        j += 1
+        words = words + " " + tok.StreamAt(toks, j).lexeme
+    end
+    ret words
+end
+
+func tr_method_names(toks: tok.TokenStream, n: int): Vector<str>:
+    mut names := Vector {} as Vector<str>
+    mut prev_kind := 0 - 1
+    mut line := 0 - 1
+    mut line_col := 0
+    mut i := 0
+    until i < n:
+        t := tok.StreamAt(toks, i)
+        if t.begin_line as int != line:
+            line = t.begin_line as int
+            line_col = t.begin_col as int
+        end
+        if t.kind == tok.TK_IDENT and prev_kind == tok.TK_KW_FUNC and line_col > 1:
+            names.push(tr_call_words(toks, i, n))
+        end
+        if t.kind != tok.TK_COMMENT_LINE and t.kind != tok.TK_COMMENT_BLOCK:
+            prev_kind = t.kind
+        end
+        i += 1
+    end
+    ret names
+end
+
+func tr_builtin_typed_vars(toks: tok.TokenStream, n: int, targetpack: int): Vector<str>:
+    mut names := Vector {} as Vector<str>
+    mut prev := 0 - 1
+    mut i := 0
+    until i + 2 < n:
+        t := tok.StreamAt(toks, i)
+        if t.kind == tok.TK_IDENT and prev != tok.TK_DOT:
+            op := tok.StreamAt(toks, i + 1).kind
+            if op == tok.TK_COLON_ASSIGN or op == tok.TK_COLON or op == tok.TK_ASSIGN:
+                val := tok.StreamAt(toks, i + 2)
+                if val.kind == tok.TK_STRING or str.Len(tr_type_word(targetpack, val.lexeme)) > 0:
+                    names.push(t.lexeme)
+                end
+            end
+        end
+        if t.kind != tok.TK_COMMENT_LINE and t.kind != tok.TK_COMMENT_BLOCK:
+            prev = t.kind
         end
         i += 1
     end
@@ -959,6 +1020,10 @@ func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_root: s
     mut const_last := 0
     names := tr_declared_names(toks, n)
     defer names.free()
+    method_names := tr_method_names(toks, n)
+    defer method_names.free()
+    builtin_vars := tr_builtin_typed_vars(toks, n, targetpack)
+    defer builtin_vars.free()
     comp_names := tr_component_names(toks, n)
     defer comp_names.free()
     pkgs := tr_imported_packages(toks, n)
@@ -1010,7 +1075,7 @@ func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_root: s
         mut kw_j := i
         mut dot_member := ""
         if prev_kind == tok.TK_DOT and tr_word_kind(t.kind) and (t.kind == tok.TK_IDENT or from_fa):
-            dot_member = tr_resolve_member(std_root, targetpack, toks, i, n, from_fa, member_pkg, tr_var_package(var_names, var_pkgs, dot_var), alias_pkg, tr_has(names, t.lexeme), kw_j)
+            dot_member = tr_resolve_member(std_root, targetpack, toks, i, n, from_fa, member_pkg, tr_var_package(var_names, var_pkgs, dot_var), alias_pkg, tr_has(names, t.lexeme), tr_has(method_names, tr_call_words(toks, i, n)) and not tr_has(builtin_vars, dot_var), kw_j)
         end
         if t.kind == tok.TK_IDENT and not in_import and prev_kind != tok.TK_DOT and not tr_has(names, t.lexeme):
             recv_a = tr_alias_words(toks, i, n, aliases, recv_count)
@@ -1124,7 +1189,7 @@ func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_root: s
                 end
             end
         else t.kind == tok.TK_IDENT:
-            if expect_entry and str.Equals(t.lexeme, src_entry):
+            if (expect_entry or prev_kind == tok.TK_KW_PACKAGE) and str.Equals(t.lexeme, src_entry):
                 lexeme = tgt_entry
             else:
                 mut type_mapped := ""

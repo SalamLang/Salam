@@ -284,7 +284,7 @@ pub fn compose(n: &Notice, prefs: &Prefs) -> (String, String) {
             },
         ),
         Kind::Offline => (
-            pick(l, "ایجنت سلام آفلاین است", "Salam Agent is offline").to_string(),
+            pick(l, "دستیار زبان سلام آفلاین است", "Salam Agent is offline").to_string(),
             pick(
                 l,
                 "ارتباط با دستیار قطع شد و برنامه در پس‌زمینه دوباره تلاش می‌کند.",
@@ -296,7 +296,7 @@ pub fn compose(n: &Notice, prefs: &Prefs) -> (String, String) {
             pick(l, "دوباره وصل شد", "Back online").to_string(),
             pick(
                 l,
-                "ایجنت سلام دوباره به دستیار وصل شد.",
+                "دستیار زبان سلام دوباره به دستیار وصل شد.",
                 "Salam Agent is connected to the assistant again.",
             )
             .to_string(),
@@ -309,7 +309,7 @@ pub fn compose(n: &Notice, prefs: &Prefs) -> (String, String) {
             pick(l, "اعلان‌ها کار می‌کنند", "Notifications work").to_string(),
             pick(
                 l,
-                "اگر این پیام را می‌بینید، اعلان‌های ایجنت سلام درست تنظیم شده‌اند.",
+                "اگر این پیام را می‌بینید، اعلان‌های دستیار زبان سلام درست تنظیم شده‌اند.",
                 "If you can read this, Salam Agent notifications are set up correctly.",
             )
             .to_string(),

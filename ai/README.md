@@ -542,7 +542,7 @@ only when an answer uses them.
 
 ## Desktop agent bridge
 
-Salam Agent (ایجنت سلام, `agent/`) lets the assistant work on the user's own
+Salam Agent (دستیار زبان سلام, `agent/`) lets the assistant work on the user's own
 computer. The engine never reaches that computer directly. The API relays the
 calls:
 

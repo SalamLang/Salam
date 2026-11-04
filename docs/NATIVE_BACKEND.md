@@ -1070,6 +1070,45 @@ otherwise it gets 32-byte alignment. Padding uses NOPs of up to 15 bytes,
 and padding longer than that is a short `jmp` over the gap, so falling into
 an aligned loop costs one instruction.
 
+The last optimizer step turns a branch on an `and` or `or` of two conditions
+back into two branches (`SALAM_NG_OFF=andbr`). The branch chains get folded
+into one condition earlier so that loops stay single-block for the
+vectorizer, but a loop that did not vectorize would then compute each
+condition into a register with `setcc` and `cmov`. `InBounds`, inlined into
+every `SetPixel` and `GetPixel`, drops from 12 instructions to 8. Counted with
+callgrind: `image_rtl_card` 142.36 to 140.05 million instructions (x86-64-v3:
+115.80 to 113.53), `image_basics` 553.80 to 547.38 (515.25 to 505.02).
+cachegrind's branch model counts about as many mispredictions either way
+(403.6 and 401.6 thousand on `image_rtl_card`, 754.6 and 753.2 thousand on
+`image_basics`). 38 of the 42 benchmarks are the same binary, and the geometric
+mean over all 42 is unchanged. A compile job runs 1.3% fewer instructions (6.126
+to 6.046 billion).
+
+A local whose address never leaves the function cannot alias a pointer that
+did not come from it, and the loop passes now use that
+(`SALAM_NG_OFF=lhloc`). A store to such a local no longer stops LICM from
+hoisting a load through another pointer, a load may be hoisted without a proof
+that its pointer is valid if the first iteration is certain to reach it (a
+counted loop with constant bounds, for instance), and the loop vectorizer
+drops the runtime overlap check for that pair. `_fdct8x8`'s row pass stores to
+a local array, so its eight coefficient loads leave the loop and it
+vectorizes; `DecodePNG`'s per-pixel channel copy goes from 20 instructions of
+overlap checks to a trip count test. Counted with callgrind: `image_basics`
+553.80 to 538.60 million instructions (x86-64-v3: 515.25 to 499.37).
+`image_rtl_card` and all 42 benchmarks are the same binary, and a compile job
+is unchanged (6.126 billion).
+
+A phi of a small struct whose only uses are field reads becomes one phi per
+field (`SALAM_NG_OFF=aggphi`). Inlining a function with several returns, such
+as `GetPixel` with its transparent early return, leaves that shape; the struct
+used to go through a stack slot on every path, five byte stores and loads per
+pixel in `_extract_block`. Counted with callgrind: `image_rtl_card` 142.36 to
+141.40 million instructions (x86-64-v3: 115.80 to 114.85), `image_basics`
+553.80 to 544.50 (515.25 to 505.96). 39 of the 42 benchmarks are the same
+binary; `41_matrix_stdlib_smallops` runs 1.2% fewer instructions and the
+geometric mean is 0.9998. A compile job runs 0.15% fewer instructions and
+the compiler is 1.8% smaller.
+
 ### Conventions worth knowing
 
 - Scalars follow the C ABI of the target, so calls to and from C code just
@@ -1223,7 +1262,7 @@ ret end` at the top of a recursive AST walk) tests that parameter before
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing, and a comma-separated list dumps several functions.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,vnarrow,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,loopinl,cpelim,tord,vrev,cdown,tfold,mexit,sqself,vsign,redinv,ldcmp,phix,selinc,wweb,wwdep,wwtr,tdup,padjmp,dtst,zins,ndiv,niv,cmp64,adc64,rvc,avx2,rasp,hotpath,inlnest,spromo,ypack,ysum,winv,zxcmp,cpspill,scdead,yzext,uswsel,vex3,vabs,vdemor,lvnsw,vblend,xfree,lvunr,vtail,vkpool,remat,sse41,shbudg`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,vnarrow,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,loopinl,cpelim,tord,vrev,cdown,tfold,mexit,sqself,vsign,redinv,ldcmp,phix,selinc,wweb,wwdep,wwtr,tdup,padjmp,dtst,zins,ndiv,niv,cmp64,adc64,rvc,avx2,rasp,hotpath,inlnest,spromo,ypack,ysum,winv,zxcmp,cpspill,scdead,yzext,uswsel,vex3,vabs,vdemor,lvnsw,vblend,xfree,lvunr,vtail,vkpool,remat,sse41,shbudg,andbr,lhloc,aggphi`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator and `rasp` the

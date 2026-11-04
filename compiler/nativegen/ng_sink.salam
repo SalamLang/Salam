@@ -123,3 +123,90 @@ func sink_pass(g &: Ng): bool:
     isz.free()
     ret changed
 end
+
+func ab_is_const(g &: Ng, v: int, k: i64): bool:
+    ret v >= 0 and g.v_kind[v] == VK_INT and (g.v_i[v] & (1 as i64)) == k
+end
+
+func ab_split(g &: Ng, b: int): int:
+    t := g.b_last[b]
+    if t < 0 or g.i_op[t] != OP_CBR or g.i_b[t] == g.i_c[t]:
+        ret 0 - 1
+    end
+    c := g.i_a[t]
+    if c < 0 or g.v_kind[c] != VK_INS or g.v_ty[c] != T_I1 or g.v_uses[c] != 1:
+        ret 0 - 1
+    end
+    d := g.v_def[c]
+    op := g.i_op[d]
+    mut x := 0 - 1
+    mut y := 0 - 1
+    mut is_and := false
+    if op == OP_AND or op == OP_OR:
+        x = g.i_a[d]
+        y = g.i_b[d]
+        is_and = op == OP_AND
+    else op == OP_SELECT and ab_is_const(g, g.i_c[d], 0 as i64):
+        x = g.i_a[d]
+        y = g.i_b[d]
+        is_and = true
+    else op == OP_SELECT and ab_is_const(g, g.i_b[d], 1 as i64):
+        x = g.i_a[d]
+        y = g.i_c[d]
+    else:
+        ret 0 - 1
+    end
+    if x < 0 or y < 0 or g.v_kind[x] == VK_INT or g.v_kind[y] == VK_INT:
+        ret 0 - 1
+    end
+    tt := g.i_b[t]
+    ff := g.i_c[t]
+    nb := new_blk(g)
+    nc := ins_new(g, OP_CBR, T_VOID)
+    g.i_a[nc] = y
+    g.i_b[nc] = tt
+    g.i_c[nc] = ff
+    g.i_dbg[nc] = g.i_dbg[t]
+    ins_append(g, nb, nc)
+    g.i_a[t] = x
+    moved := is_and ? tt : ff
+    kept := is_and ? ff : tt
+    if is_and:
+        g.i_b[t] = nb
+    else:
+        g.i_c[t] = nb
+    end
+    phi_repred(g, moved, b, nb, false)
+    mut pi := g.b_first[kept]
+    until pi >= 0 and g.i_op[pi] == OP_PHI:
+        phi_add(g, pi, phi_val_for(g, pi, b), nb)
+        pi = g.i_next[pi]
+    end
+    ret nb
+end
+
+func and_branches(g &: Ng): bool:
+    count_uses(g)
+    mut changed := false
+    mut wl := Vector {} as Vector<int>
+    each b in g.b_rpo:
+        wl.push(b)
+    end
+    mut k := 0
+    until k < wl.len():
+        bc := wl[k]
+        k += 1
+        nb := ab_split(g, bc)
+        if nb >= 0:
+            changed = true
+            wl.push(bc)
+            wl.push(nb)
+        end
+    end
+    wl.free()
+    if changed:
+        ensure_terms(g)
+        build_cfg(g)
+    end
+    ret changed
+end

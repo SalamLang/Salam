@@ -87,6 +87,50 @@ else:
     end
 end
 
+if SALAM_OS_WINDOWS:
+    if SALAM_ARCH_X86:
+        func ffi_exec_page(code: int[], n: int): void*:
+            page := VirtualAlloc(null, (4096 as i64) as void*, 0x3000 as u32, 4 as u32)
+            if page == null:
+                ret null
+            end
+            bytes := page as u8*
+            repeat n in i:
+                bytes[i] = code[i] as u8
+            end
+            old := mem.Allocate(8 as u64)
+            done := VirtualProtect(page, (4096 as i64) as void*, 0x20 as u32, old)
+            mem.Free(old)
+            ret done != 0 ? page : null
+        end
+    else:
+        func ffi_exec_page(_code: int[], _n: int): void*:
+            ret null
+        end
+    end
+
+    func ffi_addr(_ip &: Interp, _a &: at.Ast, name: str): void*:
+        each lib in ["msvcrt.dll", "ucrtbase.dll", "kernel32.dll", "user32.dll", "ws2_32.dll"]:
+            h := GetModuleHandleA(lib)
+            if h != null:
+                p := GetProcAddress(h, name)
+                if p != null:
+                    ret p
+                end
+            end
+        end
+        ret null
+    end
+else:
+    func ffi_exec_page(_code: int[], _n: int): void*:
+        ret null
+    end
+
+    func ffi_addr(ip &: Interp, a &: at.Ast, name: str): void*:
+        ret ffi_sym(ip, a, name)
+    end
+end
+
 func extern_var_value(ip &: Interp, a &: at.Ast, name: str, ts: str): Value:
     addr := ffi_sym(ip, a, name)
     if addr == null:
@@ -101,6 +145,16 @@ func f32_in_f64_bits(v: f64): f64:
     pf[0] = v as f32
     pd := buf as f64*
     r := pd[0]
+    mem.Free(buf)
+    ret r
+end
+
+func f32_word(v: f64): u32:
+    buf := mem.AllocateZeroed(8 as u64)
+    pf := buf as f32*
+    pf[0] = v as f32
+    pw := buf as u32*
+    r := pw[0]
     mem.Free(buf)
     ret r
 end
@@ -148,7 +202,8 @@ func nx_str(x: i64): str:
 end
 
 func typestr_is_float(ts: str): bool:
-    ret is_float_typename(base_typename(ts))
+    base := base_typename(ts)
+    ret str.Len(base) == str.Len(ts) and is_float_typename(base)
 end
 
 func marshal_arg(ip &: Interp, v: Value): i64:
@@ -427,6 +482,14 @@ func native_dispatch(
                 a0 as u32, a1 as u32, nx_str(a2), a3 as int, a4 as void*, a5 as int
             )
         end
+        if str.Equals(name, "GetModuleHandleA"):
+            mh := GetModuleHandleA(nx_str(a0))
+            ret mh as i64
+        end
+        if str.Equals(name, "GetProcAddress"):
+            pa := GetProcAddress(a0 as void*, nx_str(a1))
+            ret pa as i64
+        end
         if str.Equals(name, "WideCharToMultiByte"):
             ret WideCharToMultiByte(
                 a0 as u32, a1 as u32, a2 as void*, a3 as int, a4 as void*, a5 as int, a6 as void*, a7 as void*
@@ -608,6 +671,64 @@ func call_native_extern(
     ret result
 end
 
+func ffi_x86_thunk(ip &: Interp): void*:
+    if ip.ffi_thunk == null:
+        code := [
+            0x55, 0x89, 0xE5, 0x8B, 0x4D, 0x10, 0x8B, 0x55, 0x0C, 0x8D, 0x04, 0x8D, 0x00, 0x00, 0x00, 0x00, 0x29, 0xC4, 0x83, 0xE4, 0xF0, 0x85, 0xC9, 0x74, 0x09, 0x49, 0x8B, 0x04, 0x8A, 0x89, 0x04, 0x8C, 0xEB, 0xF3, 0xFF, 0x55, 0x08, 0xC9, 0xC3
+        ]
+        ip.ffi_thunk = ffi_exec_page(code, code.len())
+    end
+    ret ip.ffi_thunk
+end
+
+func ffi_call_x86(ip &: Interp, a &: at.Ast, call: int, fp: void*, fn_sig: str, ptypes: Vector<str>, rts: str, args: Vector<Value>): Value:
+    thunk := ffi_x86_thunk(ip)
+    if thunk == null:
+        rt_error(ip, a, call, co.Format1(i18.Tr("extern function '%s' is not supported by the interpreter (use 'salam run' instead)"), co.ArgStr(fn_sig)))
+        ret val_null()
+    end
+    words := mem.AllocateZeroed(128 as u64) as u32*
+    defer mem.Free(words as void*)
+    mut n := 0
+    low := 0xFFFFFFFF as i64
+    repeat args.len() in k:
+        pts := k < ptypes.len() ? ptypes.get(k) : ""
+        av := args.get(k)
+        wide := str.Equals(pts, "f64") or str.Equals(pts, "i64") or str.Equals(pts, "u64")
+        if n + (wide ? 2 : 1) > 32:
+            rt_error(ip, a, call, i18.Tr("too many arguments for a native call in the interpreter"))
+            ret val_null()
+        end
+        mut bits := 0 as i64
+        if str.Equals(pts, "f32"):
+            bits = f32_word(to_float(av)) as i64
+        else str.Equals(pts, "f64"):
+            bits = f64_bits(to_float(av)) as i64
+        else:
+            bits = marshal_arg(ip, av)
+        end
+        words[n] = (bits & low) as u32
+        n += 1
+        if wide:
+            words[n] = ((bits >> 32) & low) as u32
+            n += 1
+        end
+    end
+    gts := gil_release(ip)
+    mut result := val_null()
+    if str.Len(rts) != 0 and typestr_is_float(rts):
+        ff := thunk as extern func (void*, u32*, int) f64
+        result = val_float(ff(fp, words, n))
+    else:
+        fi := thunk as extern func (void*, u32*, int) i64
+        r := fi(fp, words, n)
+        full := str.Equals(rts, "i64") or str.Equals(rts, "u64")
+        result = ffi_ret_value(full ? r : r & low, rts)
+    end
+    gil_acquire(ip, gts)
+    ret result
+end
+
 func ffi_call_sig(ip &: Interp, a &: at.Ast, call: int, fp: void*, sig: str, args: Vector<Value>): Value:
     out_flush(ip)
     open_at := str.IndexOf(sig, "(")
@@ -621,6 +742,27 @@ func ffi_call_sig(ip &: Interp, a &: at.Ast, call: int, fp: void*, sig: str, arg
         defer parts.free()
         repeat parts.len() in i:
             ptypes.push(str.Trim(parts.get(i)))
+        end
+    end
+    each bad in args:
+        if bad.kind == VAL_MAP or bad.kind == VAL_MAPITER or bad.kind == VAL_STRUCT or bad.kind == VAL_FUNC or bad.kind == VAL_MODULE or bad.kind == VAL_VARIANT:
+            rt_error(
+                ip, a, call, co.Format1(
+                    i18.Tr("extern function '%s' was passed a value the interpreter cannot turn into a native argument (use 'salam run' instead)"), co.ArgStr(sig)
+                )
+            )
+            ret val_null()
+        end
+    end
+    if host_is_win32():
+        ret ffi_call_x86(ip, a, call, fp, sig, ptypes, rts, args)
+    end
+    if host_is_win64():
+        each pt in ptypes:
+            if typestr_is_float(pt):
+                rt_error(ip, a, call, i18.Tr("the interpreter cannot pass a floating-point argument through a function pointer on 64-bit Windows (use 'salam run' instead)"))
+                ret val_null()
+            end
         end
     end
     ret_float := str.Len(rts) != 0 and typestr_is_float(rts)

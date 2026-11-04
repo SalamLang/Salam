@@ -131,6 +131,7 @@ pub struct Client:
     @en "cookie_hosts"
     @fa "میزبان‌های‌کوکی"
     pub cookie_hosts: HashMap<str, str> = HashMap {} as HashMap<str, str>
+    _host_copies: HashMap<str, str> = HashMap {} as HashMap<str, str>
     @en "cookie_secure"
     @fa "امنیت‌کوکی"
     pub cookie_secure: HashMap<str, bool> = HashMap {} as HashMap<str, bool>
@@ -162,7 +163,7 @@ pub struct Client:
     pub func SetCookie(name: str, value: str):
         this._lock()
         this.cookies.put(name, value)
-        this._forget_host(name)
+        this.cookie_hosts.remove(name)
         this.cookie_secure.remove(name)
         this._unlock()
     end
@@ -172,7 +173,6 @@ pub struct Client:
     pub func ClearCookies():
         this._lock()
         this.cookies = HashMap {} as HashMap<str, str>
-        this._free_hosts()
         this.cookie_hosts = HashMap {} as HashMap<str, str>
         this.cookie_secure = HashMap {} as HashMap<str, bool>
         this._unlock()
@@ -217,24 +217,26 @@ pub struct Client:
         this.mu = sync.Mutex {}
         this.cookies.free()
         this.headers.free()
-        this._free_hosts()
         this.cookie_hosts.free()
+        this._free_host_copies()
         this.cookie_secure.free()
     end
 
-    func _forget_host(name: str):
-        if this.cookie_hosts.has(name):
-            mem.Free(this.cookie_hosts.get(name) as void*)
-            this.cookie_hosts.remove(name)
+    func _host_copy(host: str): str:
+        if not this._host_copies.has(host):
+            copy := str.Clone(host)
+            this._host_copies.put(copy, copy)
         end
+        ret this._host_copies.get(host)
     end
 
-    func _free_hosts():
-        it := this.cookie_hosts.iter()
+    func _free_host_copies():
+        it := this._host_copies.iter()
         until it.has_next():
             mem.Free(it.value() as void*)
             it.next()
         end
+        this._host_copies.free()
     end
 
     func _opts(): RequestOptions:
@@ -345,13 +347,12 @@ pub struct Client:
                     gone := str.Contains(attrs, ";max-age=0") or str.Contains(attrs, ";max-age=-")
                     if gone:
                         this.cookies.remove(name)
-                        this._forget_host(name)
+                        this.cookie_hosts.remove(name)
                         this.cookie_secure.remove(name)
                     else _token_ok(name) and not _has_control(value):
                         if this.cookies.has(name) or this.cookies.size() < MAX_COOKIES:
                             this.cookies.put(name, value)
-                            this._forget_host(name)
-                            this.cookie_hosts.put(name, str.Clone(host))
+                            this.cookie_hosts.put(name, this._host_copy(host))
                             if str.Contains(attrs + ";", ";secure;"):
                                 this.cookie_secure.put(name, true)
                             else:

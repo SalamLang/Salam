@@ -1134,6 +1134,12 @@ ret end` at the top of a recursive AST walk) tests that parameter before
   With `SALAM_NATIVE_CPU=x86-64-v3` in the environment every build uses the
   256-bit AVX2 loops, so the same sweep (and the fuzzer below) checks them
   against the same `.out` files.
+- `tools/bash/native-cpu-check.sh <salam>` is the small version the gate runs
+  on every change: the `lvec_*` and `slp_*` tests and a few image programs at
+  `x86-64-v2` and `x86-64-v3`, on any CPU with SSE4.1 and AVX2 (a missing one
+  skips its level with a warning). It also disassembles a test to confirm
+  `pblendvb` and `ymm` appear at those levels, from both `--cpu` and
+  `SALAM_NATIVE_CPU`, and not in the baseline build.
 - `python3 -I tools/fuzz/salamfuzz.py <salam>` generates random programs
   (integer code with loops and vectors, vector kernels over `int`, `u8`,
   `i16` and `i64`, clamped `f64` code, calls with eight arguments and a
@@ -1181,6 +1187,11 @@ ret end` at the top of a recursive AST walk) tests that parameter before
   to Windows on Arm, with i686 under its x86 emulation. On arm64 macOS and
   Windows on Arm, `tools/bash/native-icf-compiler.sh` has a compiler linked
   with `--icf` reproduce the reference IR too.
+  Windows on Arm also runs the `general` and `stdlib` tests through
+  `native-cross-check.sh`'s stage, and
+  `tools/bash/native-windows-webview-check.sh` builds `std/webview` against a
+  mock WebView2 loader for AArch64, i686 and x86-64 with both backends and runs
+  all six there, the last two under Windows' x86 and x64 emulation.
 - Those native-built compilers are kept for internal use (they are not
   releases). `tools/bash/package-native.sh` lays one out like a release
   archive (`salam`, `std/`, a `BUILD.txt` naming the commit, and for Windows the mingw-w64 or llvm-mingw

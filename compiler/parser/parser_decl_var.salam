@@ -78,3 +78,77 @@ func parse_bare_var_decl(p &: Ps, a &: at.Ast): int:
     p_fin(p, a, n)
     ret n
 end
+
+func p_destructure_ahead(p &: Ps): bool:
+    mut k := 0
+    mut names := 0
+    until true:
+        if p_peekn(p, k).kind == tok.TK_KW_MUT:
+            k += 1
+        end
+        line := p_peekn(p, k).begin_line
+        mut m := 0
+        until p_peekn(p, k + m).kind == tok.TK_IDENT and p_peekn(p, k + m).begin_line == line:
+            m += 1
+        end
+        if m == 0:
+            ret false
+        end
+        k += m
+        names += 1
+        if p_peekn(p, k).kind == tok.TK_COMMA:
+            k += 1
+        else:
+            break
+        end
+    end
+    ret names >= 2 and p_peekn(p, k).kind == tok.TK_COLON_ASSIGN
+end
+
+func parse_destructure(p &: Ps, a &: at.Ast): int:
+    p_rule(p, "destructure_decl")
+    n := p_mk(p, a, at.AST_DESTRUCT)
+    mut go := true
+    until go:
+        d := p_mk(p, a, at.AST_VAR_DECL)
+        is_mut := p_match(p, tok.TK_KW_MUT)
+        nm := parse_decl_name(p)
+        mut dv := at.Get(a, d)
+        dv.is_mut = is_mut
+        dv.name = nm
+        if nm.len() == 0:
+            dv.name = "<error>"
+        end
+        at.Put(a, d, dv)
+        p_fin(p, a, d)
+        at.AddChild(a, n, d)
+        go = p_match(p, tok.TK_COMMA)
+    end
+    p_expect(p, tok.TK_COLON_ASSIGN, "':=' and a value after the names, as in 'q, r := divmod(a, b)'")
+    ps_set_a(a, n, parse_expr_or_tuple(p, a))
+    p_fin(p, a, n)
+    ret n
+end
+
+func p_is_assign_target(a &: at.Ast, e: int): bool:
+    k := at.KindOf(a, e)
+    ret k == at.AST_IDENTIFIER or k == at.AST_MEMBER or k == at.AST_INDEX
+end
+
+func parse_destructure_assign(p &: Ps, a &: at.Ast, first: int): int:
+    p_rule(p, "destructure_assign")
+    n := mk_from_node(a, at.AST_DESTRUCT, first)
+    at.SetOp(a, n, tok.TK_ASSIGN)
+    at.AddChild(a, n, first)
+    until p_match(p, tok.TK_COMMA):
+        t := parse_expr_bp(p, a, 11)
+        if not p_is_assign_target(a, t):
+            p_error(p, "only a name, a field or an element can receive a value in 'a, b = x, y'")
+        end
+        at.AddChild(a, n, t)
+    end
+    p_expect(p, tok.TK_ASSIGN, "'=' and the new values after the targets, as in 'a, b = b, a'")
+    ps_set_a(a, n, parse_expr_or_tuple(p, a))
+    p_fin(p, a, n)
+    ret n
+end

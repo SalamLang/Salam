@@ -41,6 +41,12 @@ if SALAM_OS_WINDOWS and not SALAM_WEBVIEW_CEF:
             browser_exe_folder: void*, user_data_folder: void*, environment_options: void*, handler: void*
         ): i32
     end
+    if SALAM_ARCH_X86:
+        extern:
+            func VirtualAlloc(addr: void*, size: void*, kind: u32, protect: u32): void*
+            func VirtualProtect(addr: void*, size: void*, protect: u32, old: void*): int
+        end
+    end
 
     @en "HintNone"
     @fa "بدون اشاره"
@@ -52,6 +58,12 @@ if SALAM_OS_WINDOWS and not SALAM_WEBVIEW_CEF:
 
     mut _wv2_env := null as void*
     mut _wv2_ctrl := null as void*
+    mut _h_qi := null as void*
+    mut _h_addref := null as void*
+    mut _h_release := null as void*
+    mut _h_env := null as void*
+    mut _h_ctrl := null as void*
+    mut _h_exec := null as void*
 
     struct Slot:
         pub v: void* = null
@@ -85,7 +97,7 @@ if SALAM_OS_WINDOWS and not SALAM_WEBVIEW_CEF:
         pub func Destroy():
             if this.hwnd != null and not this.closed:
                 if this.controller != null:
-                    close_fn := (com_vtbl_slot(this.controller, 24)) as extern func (void*) i32
+                    close_fn := (com_vtbl_slot(this.controller, 24)) as extern stdcall func (void*) i32
                     close_fn(this.controller)
                 end
                 DestroyWindow(this.hwnd)
@@ -135,8 +147,7 @@ if SALAM_OS_WINDOWS and not SALAM_WEBVIEW_CEF:
             if this.hwnd != null and not this.closed:
                 SetWindowPos(this.hwnd, null, 0, 0, width, height, 2 as u32)
                 if this.controller != null:
-                    put_bounds_fn := (com_vtbl_slot(this.controller, 6)) as extern func (void*, WvRect) i32
-                    put_bounds_fn(this.controller, WvRect { left = 0, top = 0, right = width, bottom = height })
+                    com_put_bounds(this.controller, width, height)
                 end
             end
         end
@@ -146,7 +157,7 @@ if SALAM_OS_WINDOWS and not SALAM_WEBVIEW_CEF:
         pub func SetHTML(html: str):
             if this.webview != null and not this.closed:
                 wide := to_wide(html)
-                nav_fn := (com_vtbl_slot(this.webview, 6)) as extern func (void*, void*) i32
+                nav_fn := (com_vtbl_slot(this.webview, 6)) as extern stdcall func (void*, void*) i32
                 nav_fn(this.webview, wide)
                 mem.Free(wide)
             end
@@ -157,7 +168,7 @@ if SALAM_OS_WINDOWS and not SALAM_WEBVIEW_CEF:
         pub func Navigate(url: str):
             if this.webview != null and not this.closed:
                 wide := to_wide(url)
-                nav_fn := (com_vtbl_slot(this.webview, 5)) as extern func (void*, void*) i32
+                nav_fn := (com_vtbl_slot(this.webview, 5)) as extern stdcall func (void*, void*) i32
                 nav_fn(this.webview, wide)
                 mem.Free(wide)
             end
@@ -168,8 +179,8 @@ if SALAM_OS_WINDOWS and not SALAM_WEBVIEW_CEF:
         pub func Eval(js: str):
             if this.webview != null and not this.closed:
                 wide := to_wide(js)
-                exec_handler := make_com_obj(&salam_com_qi, &salam_com_addref, &salam_com_release, &salam_exec_completed)
-                exec_fn := (com_vtbl_slot(this.webview, 29)) as extern func (void*, void*, void*) i32
+                exec_handler := make_com_obj(_h_exec)
+                exec_fn := (com_vtbl_slot(this.webview, 29)) as extern stdcall func (void*, void*, void*) i32
                 exec_fn(this.webview, wide, exec_handler)
                 mem.Free(wide)
             end
@@ -215,11 +226,103 @@ if SALAM_OS_WINDOWS and not SALAM_WEBVIEW_CEF:
         end
     end
 
-    func make_com_obj(qi: void*, addref: void*, release: void*, invoke: void*): void*:
+    if SALAM_ARCH_X86:
+        func com_page_open(): void*:
+            ret VirtualAlloc(null, (4096 as i64) as void*, 0x3000 as u32, 4 as u32)
+        end
+
+        func com_page_close(page: void*): bool:
+            old := mem.Allocate(8 as u64)
+            done := VirtualProtect(page, (4096 as i64) as void*, 0x20 as u32, old)
+            mem.Free(old)
+            ret done != 0
+        end
+
+        func com_handler(page: void*, index: int, fn: void*, words: int): void*:
+            if page == null:
+                ret fn
+            end
+            code := page as u8*
+            size := words * 4
+            mut at := index * 32
+            start := at
+            repeat words:
+                code[at] = 0xFF as u8
+                code[at + 1] = 0x74 as u8
+                code[at + 2] = 0x24 as u8
+                code[at + 3] = size as u8
+                at += 4
+            end
+            addr := fn as i64
+            code[at] = 0xB8 as u8
+            repeat 4 in i:
+                code[at + 1 + i] = ((addr >> (i * 8)) & (0xFF as i64)) as u8
+            end
+            code[at + 5] = 0xFF as u8
+            code[at + 6] = 0xD0 as u8
+            code[at + 7] = 0x83 as u8
+            code[at + 8] = 0xC4 as u8
+            code[at + 9] = size as u8
+            code[at + 10] = 0xC2 as u8
+            code[at + 11] = size as u8
+            code[at + 12] = 0 as u8
+            ret ((page as i64) + (start as i64)) as void*
+        end
+
+        func com_put_bounds(ctrl: void*, width: int, height: int):
+            f := (com_vtbl_slot(ctrl, 6)) as extern stdcall func (void*, i32, i32, i32, i32) i32
+            f(ctrl, 0, 0, width, height)
+        end
+    else:
+        func com_page_open(): void*:
+            ret null
+        end
+
+        func com_page_close(_page: void*): bool:
+            ret true
+        end
+
+        func com_handler(_page: void*, _index: int, fn: void*, _words: int): void*:
+            ret fn
+        end
+
+        if SALAM_ARCH_ARM64:
+            func com_put_bounds(ctrl: void*, width: int, height: int):
+                f := (com_vtbl_slot(ctrl, 6)) as extern stdcall func (void*, i64, i64) i32
+                f(ctrl, 0 as i64, (width as i64) | ((height as i64) << 32))
+            end
+        else:
+            func com_put_bounds(ctrl: void*, width: int, height: int):
+                bounds := mem.Allocate(16 as u64)
+                (bounds as WvRect*)[0] = WvRect { left = 0, top = 0, right = width, bottom = height }
+                f := (com_vtbl_slot(ctrl, 6)) as extern stdcall func (void*, void*) i32
+                f(ctrl, bounds)
+                mem.Free(bounds)
+            end
+        end
+    end
+
+    func com_handlers_init():
+        if _h_qi != null:
+            ret
+        end
+        page := com_page_open()
+        _h_qi = com_handler(page, 0, &salam_com_qi, 3)
+        _h_addref = com_handler(page, 1, &salam_com_addref, 1)
+        _h_release = com_handler(page, 2, &salam_com_release, 1)
+        _h_env = com_handler(page, 3, &salam_env_completed, 3)
+        _h_ctrl = com_handler(page, 4, &salam_ctrl_completed, 3)
+        _h_exec = com_handler(page, 5, &salam_exec_completed, 3)
+        if page != null:
+            _closed := com_page_close(page)
+        end
+    end
+
+    func make_com_obj(invoke: void*): void*:
         vtbl := (mem.Allocate(32 as u64)) as Slot*
-        vtbl[0].v = qi
-        vtbl[1].v = addref
-        vtbl[2].v = release
+        vtbl[0].v = _h_qi
+        vtbl[1].v = _h_addref
+        vtbl[2].v = _h_release
         vtbl[3].v = invoke
         obj := (mem.Allocate(8 as u64)) as Slot*
         obj[0].v = vtbl as void*
@@ -251,9 +354,8 @@ if SALAM_OS_WINDOWS and not SALAM_WEBVIEW_CEF:
         _wv2_env = null as void*
         _wv2_ctrl = null as void*
 
-        env_handler := make_com_obj(
-            &salam_com_qi, &salam_com_addref, &salam_com_release, &salam_env_completed
-        )
+        com_handlers_init()
+        env_handler := make_com_obj(_h_env)
         CreateCoreWebView2EnvironmentWithOptions(null, null, null, env_handler)
 
         msg := mem.Allocate(48 as u64)
@@ -269,10 +371,8 @@ if SALAM_OS_WINDOWS and not SALAM_WEBVIEW_CEF:
             ret WebView { hwnd = null, controller = null, webview = null, closed = true }
         end
 
-        ctrl_handler := make_com_obj(
-            &salam_com_qi, &salam_com_addref, &salam_com_release, &salam_ctrl_completed
-        )
-        create_ctrl_fn := (com_vtbl_slot(_wv2_env, 3)) as extern func (void*, void*, void*) i32
+        ctrl_handler := make_com_obj(_h_ctrl)
+        create_ctrl_fn := (com_vtbl_slot(_wv2_env, 3)) as extern stdcall func (void*, void*, void*) i32
         create_ctrl_fn(_wv2_env, hwnd, ctrl_handler)
 
         spins = 0
@@ -287,11 +387,10 @@ if SALAM_OS_WINDOWS and not SALAM_WEBVIEW_CEF:
             ret WebView { hwnd = null, controller = null, webview = null, closed = true }
         end
 
-        put_bounds_fn := (com_vtbl_slot(_wv2_ctrl, 6)) as extern func (void*, WvRect) i32
-        put_bounds_fn(_wv2_ctrl, WvRect { left = 0, top = 0, right = 800, bottom = 600 })
+        com_put_bounds(_wv2_ctrl, 800, 600)
 
         webview_slot := (mem.Allocate(8 as u64)) as Slot*
-        get_wv_fn := (com_vtbl_slot(_wv2_ctrl, 25)) as extern func (void*, void*) i32
+        get_wv_fn := (com_vtbl_slot(_wv2_ctrl, 25)) as extern stdcall func (void*, void*) i32
         get_wv_fn(_wv2_ctrl, webview_slot as void*)
 
         ret WebView {

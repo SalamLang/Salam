@@ -8,7 +8,7 @@
 # runs fewer checks (the /bin/sh and signal cases are POSIX only), so its count
 # differs from the .out file.
 #
-# Usage: tools/bash/native-host-skips.sh <macos-arm64|macos-x64|windows-x64|linux-arm64>
+# Usage: tools/bash/native-host-skips.sh <macos-arm64|macos-x64|windows-x64|windows-arm64|linux-arm64>
 
 case "${1:-}" in
 macos-*) echo "" ;;

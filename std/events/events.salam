@@ -62,7 +62,7 @@ end
 pub struct Emitter<T>:
     @en "hs"
     @fa "کنشگرها"
-    pub hs: Handler<T>* = null
+    pub hs: Handler<T>** = null
     @en "mu"
     @fa "قفل"
     pub mu: sync.Mutex = sync.Mutex {}
@@ -85,23 +85,24 @@ func _make<T>(): Emitter<T>:
     e.mu = sync.NewMutex()
     e.ctl = mem.AllocateZeroed(((_QCAP + 1) * 8) as u64) as i64*
     e.ctl[_CAP] = 8
-    e.hs = mem.AllocateZeroed((8 * (sizeof(Handler<T>) as i64)) as u64) as Handler<T>*
+    e.hs = mem.AllocateZeroed(8 as u64) as Handler<T>**
+    e.hs[0] = mem.AllocateZeroed((8 * (sizeof(Handler<T>) as i64)) as u64) as Handler<T>*
     ret e
 end
 
 func _push<T>(e: Emitter<T>, h: Handler<T>):
     if e.ctl[_COUNT] >= e.ctl[_CAP]:
         e.ctl[_CAP] = e.ctl[_CAP] * 2
-        e.hs = mem.Reallocate(e.hs as void*, (e.ctl[_CAP] * (sizeof(Handler<T>) as i64)) as u64) as Handler<T>*
+        e.hs[0] = mem.Reallocate(e.hs[0] as void*, (e.ctl[_CAP] * (sizeof(Handler<T>) as i64)) as u64) as Handler<T>*
     end
-    e.hs[e.ctl[_COUNT] as int] = h
+    e.hs[0][e.ctl[_COUNT] as int] = h
     e.ctl[_COUNT] = e.ctl[_COUNT] + 1
 end
 
 func _remove_at<T>(e: Emitter<T>, at: int):
     mut i := at
     until i < (e.ctl[_COUNT] as int) - 1:
-        e.hs[i] = e.hs[i + 1]
+        e.hs[0][i] = e.hs[0][i + 1]
         i = i + 1
     end
     e.ctl[_COUNT] = e.ctl[_COUNT] - 1
@@ -144,7 +145,7 @@ func _dispatch<T>(e: Emitter<T>, ev: Event<T>): int:
     mut n := 0
     mut i := 0
     until i < (e.ctl[_COUNT] as int):
-        h := e.hs[i]
+        h := e.hs[0][i]
         if _match(h.pattern, ev.topic):
             snap[n] = h
             n = n + 1
@@ -206,7 +207,7 @@ pub func Off<T>(e: Emitter<T>, id: int): bool:
     sync.Lock(e.mu)
     mut i := 0
     until i < (e.ctl[_COUNT] as int) and not found:
-        if e.hs[i].id == id:
+        if e.hs[0][i].id == id:
             _remove_at(e, i)
             found = true
         else:
@@ -224,7 +225,7 @@ pub func OffTopic<T>(e: Emitter<T>, pattern: str): int:
     sync.Lock(e.mu)
     mut i := 0
     until i < (e.ctl[_COUNT] as int):
-        if e.hs[i].pattern == pattern:
+        if e.hs[0][i].pattern == pattern:
             _remove_at(e, i)
             removed = removed + 1
         else:
@@ -241,7 +242,7 @@ pub func Count<T>(e: Emitter<T>, topic: str): int:
     mut n := 0
     sync.Lock(e.mu)
     repeat (e.ctl[_COUNT] as int) in i:
-        if _match(e.hs[i].pattern, topic):
+        if _match(e.hs[0][i].pattern, topic):
             n = n + 1
         end
     end
@@ -377,6 +378,7 @@ pub func Free<T>(e: Emitter<T>):
         mem.Free(e.qbuf as void*)
         sync.DestroyCondVar(e.cv)
     end
+    mem.Free(e.hs[0] as void*)
     mem.Free(e.hs as void*)
     mem.Free(e.ctl as void*)
     sync.Destroy(e.mu)

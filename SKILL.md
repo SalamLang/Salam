@@ -366,6 +366,51 @@ end
     value, `test := 5` next to `func test` is rejected (E090), in both
     directions, so an identifier always means exactly one thing.
 
+**Multiple return values are tuples.** A return type `(A, B)` (2 to 8
+elements), `ret a, b` builds one, and `a, b := f()` takes it apart:
+
+```salam
+func divmod(a: int, b: int): (int, int):
+    ret a / b, a % b
+end
+
+q, r := divmod(17, 5)         // destructuring declaration
+q, _ := divmod(17, 5)         // '_' drops an element
+q, mut r := divmod(17, 5)     // 'mut' is per name
+t := divmod(17, 5)            // or keep the tuple whole
+println t.0, t.1              // element access: t.0, t.1, w.0.1 (nested)
+mut x := 1
+mut y := 2
+x, y = y, x                   // assign several targets at once (swap)
+```
+
+- A tuple is a value type that works wherever a type does: parameters,
+  struct fields (`pos: (int, int)`), `Vector<(int, str)>`,
+  `HashMap<str, (int, int)>`, nested `((int, int), str)`, and with `throws`
+  (`func f(): (i64, bool) throws`, then `a, b := try f()`). Lambdas can return
+  one: `(x: int): ret x, x * 2 end`. `ret 1, 2` takes the declared element
+  types, so it fits `(i64, u8)`.
+- Destructuring needs exactly as many names as elements (E158); the usual
+  unused-name rule applies to every name, so drop the ones you do not need
+  with `_`. Names are `mut` only where written.
+- There is no implicit spreading: `f(g())` passes one tuple argument, never
+  several. Destructure first.
+- `match` takes tuple patterns: literals test, names bind, `_` ignores, and
+  a guard may follow. Nested tuple patterns are not supported.
+
+  ```salam
+  ret match p:
+      (0, 0): "origin" end
+      (0, y): "on the y axis at " + y end
+      (x, y) if x == y: "diagonal" end
+      else: "elsewhere" end
+  end
+  ```
+
+- Under the hood a tuple is the generic struct `Tuple2` ... `Tuple8` from
+  `core` (fields `f0`, `f1`, ...), so it copies like a struct and every backend
+  handles it as one.
+
 ---
 
 ## 3. Types & data
@@ -2349,7 +2394,7 @@ merged `style.css`/`script.js`.
 ## 10. Tooling & verification
 
 ```sh
-salam check app.salam                   # lex, parse and type-check only: the fast loop after every edit
+salam check app.salam                   # all of build before code generation, imports included: the fast loop after every edit
 salam check app.salam --switch-lint=warn   # also flag if-chains that could be a switch (W145; off by default)
 salam exec app.salam                    # run with the interpreter (pure compute, no C toolchain)
 salam run app.salam                     # build + run, keep nothing
@@ -2960,6 +3005,22 @@ More forms, each checked with the current compiler:
 // threads: spawn and join stay English
 ر := spawn(کارگر)
 join(ر)
+```
+
+**چند مقدار برگشتی (چندتایی).** گونه‌ی برگشتی `(الف، ب)`، ساختن با `برگشت الف، ب`
+و باز کردن با `الف، ب := تابع()`؛ `_` یک عنصر را دور می‌اندازد و `ناپایا` برای هر نام
+جداگانه نوشته می‌شود. دسترسی به عنصر: `ت.۰`، `ت.۱`؛ جابه‌جایی: `الف، ب = ب، الف`.
+
+```salam
+تابع تقسیم(الف: صحیح، ب: صحیح): (صحیح، صحیح):
+    برگشت الف / ب، الف % ب
+پایان
+
+تابع ریشه:
+    خارج، باقی := تقسیم(۱۷، ۵)
+    ت := تقسیم(۹، ۴)
+    سرچاپ خارج، باقی، ت.۰، ت.۱
+پایان
 ```
 
 ## 17. Rules and traps specific to Persian

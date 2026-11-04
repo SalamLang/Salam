@@ -53,6 +53,8 @@
 ["if" "اگر" "else" "وگرنه" "match" "همخوان" "switch" "ترابرد"] @keyword.conditional
 ["until" "تا" "each" "هر" "repeat" "تکرار" "to" "by" "in" "در" "break" "بشکن" "continue" "گذر"] @keyword.repeat
 ["import" "واردسازی" "include" "فراخوانی" "package" "بسته"] @keyword.import
+(function_type convention: (name) @keyword.modifier)
+
 ["mut" "ناپایا" "const" "پایا" "pub" "همگانی" "inline" "درخط" "noinline" "نادرخط" "pure" "ناب" "noret" "نابرگشت" "deprecated" "بی‌کاره" "extern" "درون‌داد" "export" "برون‌داد" "static" "ایستا"] @keyword.modifier
 ["struct" "ساختار" "enum" "جداشمار" "interface" "میانجی" "type" "گونه" "impl" "کاربست" "on" "بر" "page" "component" "dyn" "use" "شامل"] @keyword.type
 ["end" "پایان" "defer" "دیرکن" "as" "برگردان"] @keyword

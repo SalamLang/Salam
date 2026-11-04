@@ -4,20 +4,64 @@
 # the COM calling convention both ways: the program's vtable calls, and the
 # handlers the mock calls back, which must pop their own arguments on i686.
 #
-# Needs wine on PATH, Xvfb (wine has no window driver without a display) and
-# i686 and x86_64 mingw-w64 compilers.
+# Needs wine on PATH, Xvfb (wine has no window driver without a display) and a
+# mingw-w64 compiler for each target, <arch>-w64-mingw32-gcc from mingw-w64 or
+# llvm-mingw. NATIVE_WEBVIEW_TRIPLES lists the targets, by default i686 and x86_64.
+#
+# With NATIVE_WEBVIEW_STAGE=<dir> the programs are only built: each lands in
+# <dir>/<triple>-<backend> next to its mock DLL. Then `--run <dir>` runs them, on
+# a Windows machine without wine or Xvfb; NATIVE_WEBVIEW_RUNNER prefixes a command
+# such as `xvfb-run -a wine` to try the stage out elsewhere.
 #
 # Usage: tools/bash/native-windows-webview-check.sh <salam>
+#        tools/bash/native-windows-webview-check.sh --run <dir>
 
 set -u
+pass=0
+fail=0
+
+check_output() {
+    # check_output <name> <got> <expect>
+    if [ "$(tr -d '\r' <"$2")" = "$(tr -d '\r' <"$3")" ]; then
+        echo "ok   $1"
+        pass=$((pass + 1))
+    else
+        echo "FAIL $1"
+        tr -d '\r' <"$2" | head -20
+        fail=$((fail + 1))
+    fi
+}
+
+if [ "${1:-}" = "--run" ]; then
+    DIR=$2
+    for d in "$DIR"/*/; do
+        d=${d%/}
+        [ -f "$d/t.exe" ] || continue
+        # shellcheck disable=SC2086
+        (cd "$d" && timeout 120 ${NATIVE_WEBVIEW_RUNNER:-} ./t.exe </dev/null >got 2>err)
+        rc=$?
+        if [ "$rc" -ne 0 ]; then
+            echo "exit $rc from $(basename "$d")"
+            head -5 "$d/err"
+        fi
+        check_output "$(basename "$d")" "$d/got" "$d/expect"
+    done
+    echo "webview check: $pass passed, $fail failed"
+    [ "$fail" -eq 0 ] && [ "$pass" -gt 0 ]
+    exit
+fi
+
 SALAM=$1
 case "$SALAM" in /*) ;; */*) SALAM="$(pwd)/$SALAM" ;; esac
 MOCK="$(cd "$(dirname "$0")/../.." && pwd)/std/webview/native/mock/webview2_mock.c"
+STAGE=${NATIVE_WEBVIEW_STAGE:-}
+if [ -n "$STAGE" ]; then
+    mkdir -p "$STAGE"
+    STAGE=$(cd "$STAGE" && pwd)
+fi
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 export WINEDEBUG=-all
-pass=0
-fail=0
 
 cat >"$work/main.salam" <<'SALAM'
 import webview
@@ -48,17 +92,10 @@ close exec=1000 bad_stack=0
 done true
 OUT
 
-for triple in i686-w64-windows-gnu x86_64-w64-windows-gnu; do
-    case "$triple" in
-        i686-*)
-            tool=i686-w64-mingw32
-            decorated=@16
-            ;;
-        *)
-            tool=x86_64-w64-mingw32
-            decorated=
-            ;;
-    esac
+for triple in ${NATIVE_WEBVIEW_TRIPLES:-i686-w64-windows-gnu x86_64-w64-windows-gnu}; do
+    tool=${triple%%-*}-w64-mingw32
+    decorated=
+    case "$triple" in i686-*) decorated=@16 ;; esac
     d="$work/$triple"
     mkdir -p "$d"
     printf 'LIBRARY WebView2Loader.dll\nEXPORTS\nCreateCoreWebView2EnvironmentWithOptions%s\n' "$decorated" >"$d/mock.def"
@@ -78,17 +115,22 @@ for triple in i686-w64-windows-gnu x86_64-w64-windows-gnu; do
             fail=$((fail + 1))
             continue
         fi
-        (cd "$d" && timeout 120 xvfb-run -a wine "./$backend.exe" </dev/null >"$d/$backend.out" 2>/dev/null)
-        if [ "$(tr -d '\r' <"$d/$backend.out")" = "$(cat "$work/expect")" ]; then
-            echo "ok   $name"
+        if [ -n "$STAGE" ]; then
+            s="$STAGE/$triple-$backend"
+            mkdir -p "$s"
+            cp "$d/$backend.exe" "$s/t.exe"
+            cp "$d/WebView2Loader.dll" "$work/expect" "$s/"
             pass=$((pass + 1))
-        else
-            echo "FAIL $name"
-            tr -d '\r' <"$d/$backend.out" | head -20
-            fail=$((fail + 1))
+            continue
         fi
+        (cd "$d" && timeout 120 xvfb-run -a wine "./$backend.exe" </dev/null >"$d/$backend.out" 2>/dev/null)
+        check_output "$name" "$d/$backend.out" "$work/expect"
     done
 done
 
-echo "webview check: $pass passed, $fail failed"
+if [ -n "$STAGE" ]; then
+    echo "webview check: $pass staged in $STAGE, $fail failed to build"
+else
+    echo "webview check: $pass passed, $fail failed"
+fi
 [ "$fail" -eq 0 ]

@@ -144,10 +144,12 @@ for spec in $TEST_GROUPS; do
             continue
         fi
         (cd "$ROOT" && timeout "$LIMIT" $RUNNER "$exe" </dev/null >"$work/got" 2>&1)
+        rc=$?
         if [ "$(tr -d '\r' <"$work/got")" = "$(tr -d '\r' <"$exp")" ]; then
             ok=$((ok + 1))
         else
-            echo "DIFF $id"
+            echo "DIFF $id (exit $rc)"
+            tr -d '\r' <"$work/got" | diff "$exp" - | head -20
             bad=$((bad + 1))
         fi
     done

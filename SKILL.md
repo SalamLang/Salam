@@ -1526,7 +1526,7 @@ end
     Saturday = 0 and takes a JDN, the other `Weekday*` count from Sunday = 0.
     Conversions do not validate (month 13 gives a wrong date): check with
     `IsValidJalaliDate` first.
-- **`mem`**: `Allocate AllocateZeroed AllocateArray Reallocate Free Copy Set MemMove`, arenas `NewArena ArenaAlloc ArenaReset ArenaFree`, fixed-size
+- **`mem`**: `Allocate AllocateZeroed AllocateArray Reallocate Free Copy Set MemMove` (these return null on failure), `MustAllocate MustAllocateZeroed MustReallocate OutOfMemory` (these abort with `salam: out of memory`), arenas `NewArena ArenaAlloc ArenaReset ArenaFree`, fixed-size
   pools `NewPool PoolAlloc PoolFree PoolDestroy`; leak tooling `CheckLeaks LiveBytes AllocCount PeakBytes`. Nothing is checked (overruns and double
   frees corrupt silently; `salam memcheck` finds them for `Allocate`
   blocks), every allocator can return null, and memory from a C library

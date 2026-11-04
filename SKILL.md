@@ -1990,6 +1990,13 @@ sync.Lock(lock)  /* critical section */  sync.Unlock(lock)
 sync.Wait(wg)  sync.Destroy(lock)  sync.DestroyWaitGroup(wg)
 ```
 
+`go work(x)` (Persian `برو کار(x)`, needs `import pool`) runs the call as a
+task on a shared bounded pool; arguments are evaluated when `go` runs;
+`pool.GoWait()` waits. Prefer it to `spawn` for many small jobs. `go` is a
+contextual keyword, so a variable named `go` still works. For results and
+limits see `pool.New/NewElastic/Submit/Group/Async/Map`, `chan.Select/After`
+and `thread.SetLimit`.
+
 `spawn(f, arg)` is how a thread gets its own data; `arg`'s type must be a
 pointer, because it travels through the OS's single thread-argument slot.
 Without it a worker can only reach globals.

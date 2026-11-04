@@ -1,0 +1,3156 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import crypto
+import desktop
+import desktop.pack
+import encoding.json
+import filepath
+import fs
+import io
+import mem
+import net.http
+import os
+import os.process
+import os.shell
+import pool
+import regex
+import sort
+import str
+import sync
+import time
+
+if SALAM_OS_WINDOWS:
+    extern:
+        func _fullpath(out: void*, path: str, size: usize): void*
+    end
+else:
+    extern:
+        func realpath(path: str, out: void*): void*
+        func setenv(name: str, value: str, overwrite: int): int
+    end
+end
+
+const LOCK_JS := `(() => {
+  if (window.__salamLocked) return;
+  window.__salamLocked = true;
+
+  const READABLE = ".msg-body, .bubble";
+  const EDITABLE =
+    "input, textarea, select, [contenteditable]:not([contenteditable='false'])";
+
+  const style = document.createElement("style");
+  style.textContent =
+    "html, html * { -webkit-user-select: none; user-select: none; -webkit-user-drag: none; -webkit-touch-callout: none; }" +
+    "html .msg-body, html .msg-body *, html .bubble, html .bubble *, html input, html textarea, html [contenteditable]:not([contenteditable='false']), html [contenteditable]:not([contenteditable='false']) * { -webkit-user-select: text; user-select: text; }" +
+    "html img, html svg, html a { -webkit-user-drag: none; }";
+  document.documentElement.appendChild(style);
+
+  const element = (node) =>
+    node && node.nodeType === 1 ? node : node && node.parentElement;
+  const within = (node, selector) => {
+    const el = element(node);
+    return !!(el && el.closest && el.closest(selector));
+  };
+
+  const stop = (e) => {
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  };
+
+  window.addEventListener("contextmenu", stop, true);
+  window.addEventListener("dragstart", stop, true);
+  window.addEventListener(
+    "selectstart",
+    (e) => {
+      if (!within(e.target, READABLE) && !within(e.target, EDITABLE))
+        e.preventDefault();
+    },
+    true,
+  );
+
+  const blocked = (e) => {
+    const mod = e.ctrlKey || e.metaKey;
+    const code = e.code;
+    if (code === "F12" || code === "F5" || code === "F7") return true;
+    if (
+      e.altKey &&
+      (code === "ArrowLeft" || code === "ArrowRight" || code === "Home")
+    )
+      return true;
+    if (!mod) return false;
+    if (code === "KeyA") return !within(e.target, EDITABLE);
+    if (
+      e.shiftKey &&
+      (code === "KeyI" ||
+        code === "KeyJ" ||
+        code === "KeyC" ||
+        code === "KeyK" ||
+        code === "KeyR" ||
+        code === "KeyP")
+    )
+      return true;
+    if (
+      e.altKey &&
+      (code === "KeyI" || code === "KeyJ" || code === "KeyC" || code === "KeyU")
+    )
+      return true;
+    return (
+      code === "KeyU" ||
+      code === "KeyS" ||
+      code === "KeyP" ||
+      code === "KeyR" ||
+      code === "KeyG" ||
+      code === "KeyO"
+    );
+  };
+
+  window.addEventListener(
+    "keydown",
+    (e) => {
+      if (blocked(e)) stop(e);
+    },
+    true,
+  );
+
+  window.addEventListener(
+    "keyup",
+    (e) => {
+      if (e.code === "F12") stop(e);
+    },
+    true,
+  );
+})();
+`
+const APP_URL := "https://ai.salamlang.ir/"
+const API_URL := "https://ai-api.salamlang.ir"
+const AGENT_VERSION := "0.6.2"
+const ANSWER_WAIT_MS := 540000
+const MEMORY_DIR := ".salam-agent"
+const MAX_SLUG := 60
+const MAX_INSTRUCTIONS := 32768
+const MAX_INDEX := 16384
+const MEMORY_CUT := "[... cut, read the file for the rest ...]"
+const REPEAT_GAP_MS := 4000
+const SNIPPET_CHARS := 140
+const TITLE_CHARS := 60
+const OUTPUT_CAP := 30000
+const MAX_READ := 10485760
+const DEFAULT_LINES := 2000
+const MAX_ENTRIES := 1000
+const MAX_DIFF := 20000
+const MAX_FILES := 500
+const MAX_MATCHES := 300
+const MAX_FILE_BYTES := 2097152
+const OFFLINE_GRACE_MS := 20000
+const WATCH_STEP_MS := 2000
+const WATCH_LIMIT_MS := 7200000
+const MAX_JOBS := 8
+const WATCHDOG_CHECK_MS := 3000
+const WATCHDOG_SILENCE_MS := 45000
+const WATCHDOG_PROBE_MS := 15000
+const WATCHDOG_RECOVER_GAP_MS := 120000
+
+mut g_mu := sync.NewMutex()
+mut g_cv := sync.NewCondVar()
+mut g_ready := false
+mut g_win := desktop.Window {}
+mut g_os_version := ""
+mut g_device_id := ""
+mut g_device_name := ""
+mut g_secret := ""
+mut g_connected := false
+mut g_told_offline := false
+mut g_flips := 0
+mut g_poll_started := 0 as i64
+mut g_modes := HashMap {} as HashMap<str, str>
+mut g_always := HashMap {} as HashMap<str, bool>
+mut g_pending := HashMap {} as HashMap<str, Pending*>
+mut g_running := HashMap {} as HashMap<str, bool>
+mut g_prefs := Prefs {}
+mut g_recent := HashMap {} as HashMap<str, i64>
+mut g_notified := HashMap {} as HashMap<i64, bool>
+mut g_watchers := HashMap {} as HashMap<str, WatchJob*>
+mut g_watch_seq := 0 as i64
+mut g_last_beat := 0 as i64
+mut g_armed := false
+mut g_pong := false
+
+struct Workspace:
+    pub root: str = ""
+    pub error: str = ""
+
+    pub func resolve(rel: str, inside &: bool): str:
+        clean := str.Trim(rel)
+        mut joined := this.root
+        if clean.len() > 0 and clean != ".":
+            joined = is_absolute(clean) ? clean : filepath.Join(this.root, clean)
+        end
+        path := canonical_prefix(normalize_path(joined))
+        inside = path_inside(path, this.root)
+        ret path
+    end
+
+    pub func display(path: str): str:
+        if path == this.root:
+            ret "."
+        end
+        if path_inside(path, this.root):
+            skip := str.Len(this.root) + (str.EndsWith(this.root, "/") or str.EndsWith(this.root, "\\") ? 0 : 1)
+            ret str.Replace(str.Substr(path, skip, str.Len(path) - skip), "\\", "/")
+        end
+        ret path
+    end
+end
+
+struct Pending:
+    pub preview: Preview = Preview {}
+    pub answer: str = ""
+    pub answered: bool = false
+end
+
+struct Memory:
+    pub slug: str = ""
+    pub title: str = ""
+    pub description: str = ""
+    pub created: str = ""
+    pub updated: str = ""
+    pub content: str = ""
+end
+
+struct Draft:
+    pub slug: str = ""
+    pub before: str = ""
+    pub after: str = ""
+    pub error: str = ""
+end
+
+struct Prefs:
+    pub enabled: bool = true
+    pub sound: bool = true
+    pub preview: bool = true
+    pub lang: str = "fa"
+end
+
+struct IgnoreRule:
+    pub pattern: str = ""
+    pub negated: bool = false
+    pub only_dir: bool = false
+    pub base: str = ""
+end
+
+struct Preview:
+    pub call_id: str = ""
+    pub chat: str = ""
+    pub tool: str = ""
+    pub kind: str = "read"
+    pub summary: str = ""
+    pub detail: str = ""
+    pub lang: str = ""
+    pub outside: bool = false
+    pub cwd: str = ""
+    pub memory: bool = false
+end
+
+struct Action:
+    pub tool: str = ""
+    pub program: str = ""
+    pub args: Vector<str> = Vector {}
+    pub raw_args: str = ""
+    pub cwd: str = ""
+    pub timeout: i64 = 120
+    pub path: str = ""
+    pub offset: i64 = 1
+    pub limit: i64 = 0
+    pub content: str = ""
+    pub before: str = ""
+    pub after: str = ""
+    pub count: int = 0
+    pub pattern: str = ""
+    pub file_glob: str = ""
+    pub ignore_case: bool = false
+    pub slug: str = ""
+    pub title: str = ""
+    pub description: str = ""
+end
+
+struct Plan:
+    pub preview: Preview = Preview {}
+    pub action: Action = Action {}
+    pub error: str = ""
+end
+
+struct WatchJob:
+    pub mid: i64 = 0
+    pub started: i64 = 0
+    pub stop: bool = false
+end
+
+func debug_override(name: str): str:
+    if os.Env("SALAM_AGENT_DEBUG") != "1":
+        ret ""
+    end
+    ret os.Env(name)
+end
+
+func trim_slash(url: str): str:
+    mut out := url
+    until str.EndsWith(out, "/"):
+        out = str.Substr(out, 0, str.Len(out) - 1)
+    end
+    ret out
+end
+
+func app_url(): str:
+    raw := debug_override("SALAM_APP_URL")
+    ret raw.len() > 0 ? raw : APP_URL
+end
+
+func api_url(): str:
+    raw := debug_override("SALAM_API_URL")
+    ret trim_slash(raw.len() > 0 ? raw : API_URL)
+end
+
+func bridge_url(): str:
+    raw := debug_override("SALAM_BRIDGE_URL")
+    ret raw.len() > 0 ? trim_slash(raw) : api_url()
+end
+
+func os_name(): str:
+    if SALAM_OS_WINDOWS:
+        ret "windows"
+    else SALAM_OS_MAC:
+        ret "macos"
+    else SALAM_OS_LINUX:
+        ret "linux"
+    else:
+        ret "other"
+    end
+end
+
+func arch_name(): str:
+    if SALAM_ARCH_ARM64:
+        ret "aarch64"
+    else SALAM_ARCH_X86:
+        ret "x86"
+    else:
+        ret "x86_64"
+    end
+end
+
+func header_safe(text: str): str:
+    mut b := str.NewBuilder()
+    bytes := text as u8*
+    mut kept := 0
+    repeat str.Len(text) in i:
+        c := bytes[i] as int
+        alnum := (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
+        if (alnum or c == 32 or c == 46 or c == 45 or c == 43 or c == 95 or c == 40 or c == 41) and kept < 64:
+            str.BufAppendChar(b, c)
+            kept += 1
+        end
+    end
+    ret str.Trim(str.BufStr(b))
+end
+
+func parse_os_release(text: str): str:
+    mut name := ""
+    mut version := ""
+    lines := str.Split(text, "\n")
+    defer lines.free()
+    each line in lines:
+        if str.StartsWith(line, "NAME="):
+            name = str.Trim(str.Replace(str.Substr(line, 5, str.Len(line) - 5), `"`, ""))
+        else str.StartsWith(line, "VERSION_ID="):
+            version = str.Trim(str.Replace(str.Substr(line, 11, str.Len(line) - 11), `"`, ""))
+        end
+    end
+    if name.len() > 0 and version.len() > 0:
+        ret name + " " + version
+    end
+    ret name
+end
+
+func parse_windows_ver(text: str): str:
+    start := str.IndexOf(text, "Version ")
+    if start < 0:
+        ret ""
+    end
+    mut b := str.NewBuilder()
+    bytes := text as u8*
+    mut i := start + 8
+    until i < str.Len(text):
+        c := bytes[i] as int
+        if not ((c >= 48 and c <= 57) or c == 46):
+            break
+        end
+        str.BufAppendChar(b, c)
+        i += 1
+    end
+    version := str.BufStr(b)
+    parts := str.Split(version, ".")
+    defer parts.free()
+    if parts.len() >= 3 and parts[0] == "10":
+        build := str.ToInt(parts[2])
+        ret (build >= 22000 ? "Windows 11 (build " : "Windows 10 (build ") + parts[2] + ")"
+    end
+    ret "Windows " + version
+end
+
+func capture(program: str, args: Vector<str>): str:
+    result := shell.Run(program, args)
+    if result.code != 0:
+        ret ""
+    end
+    ret result.out
+end
+
+func detect_os_version(): str:
+    if SALAM_OS_LINUX:
+        each path in ["/etc/os-release", "/usr/lib/os-release"]:
+            if os.Exists(path):
+                ret parse_os_release(io.ReadFile(path))
+            end
+        end
+        ret ""
+    else SALAM_OS_MAC:
+        mut args := Vector {} as Vector<str>
+        args.push("-productVersion")
+        out := capture("sw_vers", args)
+        ret out.len() > 0 ? "macOS " + str.Trim(out) : ""
+    else SALAM_OS_WINDOWS:
+        mut args := Vector {} as Vector<str>
+        args.push("/C")
+        args.push("ver")
+        ret parse_windows_ver(capture("cmd", args))
+    else:
+        ret ""
+    end
+end
+
+func os_version(): str:
+    ret header_safe(detect_os_version())
+end
+
+if SALAM_OS_WINDOWS:
+    func import_login_path():
+        g_ready = true
+    end
+else:
+    func import_login_path():
+        login := os.Env("SHELL")
+        path := filepath.Join(os.TempDir(), "salam-agent-path-" + str.FromInt(process.Pid(process.Process {}) as i64))
+        mut args := Vector {} as Vector<str>
+        defer args.free()
+        args.push("-lc")
+        args.push(`printf %s "$PATH"`)
+        mut p := process.Spawn(process.SpawnOptions { path = login.len() > 0 ? login : "/bin/sh", args = args, output = path })
+        started := sync.NowMs()
+        mut done := false
+        until not done and sync.NowMs() - started < (4000 as i64):
+            done = process.TryWait(p)
+            if not done:
+                sync.SleepMs(20)
+            end
+        end
+        if not done:
+            process.KillTree(p)
+        else p.exit_code == 0:
+            found := str.Trim(io.ReadFile(path))
+            if str.Contains(found, "/"):
+                _set := setenv("PATH", found, 1)
+            end
+        end
+        _gone := os.Remove(path)
+    end
+end
+
+func device_file(): str:
+    ret filepath.Join(desktop.DataDir(), "device.json")
+end
+
+func device_load():
+    file := device_file()
+    if not os.Exists(file):
+        ret
+    end
+    text := io.ReadFile(file)
+    if not json.Valid(text):
+        ret
+    end
+    id := json.Get(text, "device_id")
+    name := json.Get(text, "device_name")
+    secret := desktop.SecretGet(bridge_url())
+    if id.len() > 0 and name.len() > 0 and secret.len() > 0:
+        sync.Lock(g_mu)
+        g_device_id = id
+        g_device_name = name
+        g_secret = secret
+        sync.Unlock(g_mu)
+    end
+end
+
+func device_save(id: str, name: str, secret: str): str:
+    if not desktop.SecretSet(bridge_url(), secret):
+        ret "could not store the device secret"
+    end
+    mut members := Vector {} as Vector<str>
+    defer members.free()
+    members.push(json.Member("device_id", id))
+    members.push(json.Member("device_name", name))
+    _mk := os.MkdirAll(desktop.DataDir())
+    if io.WriteFile(device_file(), json.Object(members)) < 0:
+        ret "could not write " + device_file()
+    end
+    _private := fs.Chmod(device_file(), 0o600)
+    sync.Lock(g_mu)
+    g_device_id = id
+    g_device_name = name
+    g_secret = secret
+    sync.Unlock(g_mu)
+    ret ""
+end
+
+func device_clear():
+    desktop.SecretDelete(bridge_url())
+    _gone := os.Remove(device_file())
+    sync.Lock(g_mu)
+    g_device_id = ""
+    g_device_name = ""
+    g_secret = ""
+    sync.Unlock(g_mu)
+end
+
+func device_secret(): str:
+    sync.Lock(g_mu)
+    out := g_secret
+    sync.Unlock(g_mu)
+    ret out
+end
+
+func device_json(): str:
+    sync.Lock(g_mu)
+    id := g_device_id
+    name := g_device_name
+    sync.Unlock(g_mu)
+    if id.len() == 0:
+        ret "null"
+    end
+    mut members := Vector {} as Vector<str>
+    defer members.free()
+    members.push(json.Member("id", id))
+    members.push(json.Member("name", name))
+    ret json.Object(members)
+end
+
+if SALAM_OS_WINDOWS:
+    func canonical(path: str): str:
+        if not os.Exists(path):
+            ret ""
+        end
+        raw := _fullpath(null, path, 0 as usize)
+        if raw == null:
+            ret ""
+        end
+        ret str.TrimSuffix(str.Replace(raw as str, "/", "\\"), "\\")
+    end
+else:
+    func canonical(path: str): str:
+        raw := realpath(path, null)
+        if raw == null:
+            ret ""
+        end
+        ret raw as str
+    end
+end
+
+func is_absolute(path: str): bool:
+    ret filepath.IsAbs(path)
+end
+
+func normalize_path(path: str): str:
+    separator := SALAM_OS_WINDOWS ? "\\" : "/"
+    unified := SALAM_OS_WINDOWS ? str.Replace(path, "/", "\\") : path
+    parts := str.Split(unified, separator)
+    defer parts.free()
+    mut kept := Vector {} as Vector<str>
+    defer kept.free()
+    each part in parts:
+        if part == "" or part == ".":
+            continue
+        end
+        if part == "..":
+            if kept.len() > 0:
+                _dropped := kept.pop()
+            end
+            continue
+        end
+        kept.push(part)
+    end
+    joined := str.Join(kept, separator)
+    lead := SALAM_OS_WINDOWS ? "\\\\" : "/"
+    ret str.StartsWith(unified, lead) ? lead + joined : joined
+end
+
+func canonical_prefix(path: str): str:
+    mut existing := path
+    mut rest := Vector {} as Vector<str>
+    defer rest.free()
+    until true:
+        found := canonical(existing)
+        if found.len() > 0:
+            mut out := found
+            mut i := rest.len() - 1
+            until i >= 0:
+                out = filepath.Join(out, rest[i])
+                i -= 1
+            end
+            ret out
+        end
+        parent := filepath.Dir(existing)
+        if parent == existing or parent == "." or parent.len() == 0:
+            ret path
+        end
+        rest.push(filepath.Base(existing))
+        existing = parent
+    end
+end
+
+func path_inside(path: str, root: str): bool:
+    if path == root:
+        ret true
+    end
+    separator := SALAM_OS_WINDOWS ? "\\" : "/"
+    ret str.StartsWith(path, str.EndsWith(root, separator) ? root : root + separator)
+end
+
+func workspace_open(root: str): Workspace:
+    found := canonical(root)
+    if found.len() == 0:
+        ret Workspace { error = "The workspace folder " + root + " does not exist on this computer." }
+    end
+    if not os.IsDir(found):
+        ret Workspace { error = "The workspace " + found + " is not a folder." }
+    end
+    ret Workspace { root = found }
+end
+
+func in_git_dir(path: str): bool:
+    parts := str.Split(str.Replace(path, "\\", "/"), "/")
+    defer parts.free()
+    each part in parts:
+        if part == ".git":
+            ret true
+        end
+    end
+    ret false
+end
+
+func policy(mode: str, kind: str, outside: bool, always: bool, memory: bool, reason &: str): str:
+    if memory and not outside:
+        ret mode == "readonly" ? "ask" : "allow"
+    end
+    if mode == "everything":
+        ret "allow"
+    else mode == "readonly":
+        if kind == "read":
+            ret outside ? "ask" : "allow"
+        end
+        reason = "The user set this conversation to read-only, so nothing may be changed or run. Explain what you would do instead."
+        ret "deny"
+    else mode == "auto":
+        ret outside ? "ask" : "allow"
+    end
+    if not outside and (kind == "read" or always):
+        ret "allow"
+    end
+    ret "ask"
+end
+
+func approvals_set_mode(chat: str, mode: str):
+    sync.Lock(g_mu)
+    g_modes.put(chat, mode)
+    sync.Unlock(g_mu)
+end
+
+func approvals_needs(p: Preview, reason &: str): str:
+    sync.Lock(g_mu)
+    mode := g_modes.has(p.chat) ? g_modes.get(p.chat) : "ask"
+    always := g_always.has(p.chat + "\n" + p.tool)
+    sync.Unlock(g_mu)
+    ret policy(mode, p.kind, p.outside, always, p.memory, reason)
+end
+
+func approvals_ask(p: Preview, reason &: str): bool:
+    entry := mem.AllocateZeroed(sizeof(Pending) as u64) as Pending*
+    entry[0] = Pending { preview = p }
+    sync.Lock(g_mu)
+    g_pending.put(p.call_id, entry)
+    sync.Unlock(g_mu)
+    notify_post("approval", "", p.summary, 0 as i64)
+    deadline := sync.NowMs() + (ANSWER_WAIT_MS as i64)
+    sync.Lock(g_mu)
+    until not entry[0].answered and sync.NowMs() < deadline:
+        _woke := sync.WaitCondTimeout(g_cv, g_mu, 1000 as i64)
+    end
+    answered := entry[0].answered
+    answer := entry[0].answer
+    _removed := g_pending.remove(p.call_id)
+    if answered and answer == "always":
+        g_always.put(p.chat + "\n" + p.tool, true)
+    end
+    sync.Unlock(g_mu)
+    mem.Free(entry as void*)
+    if not answered:
+        reason = "The user did not answer the approval request in time."
+        ret false
+    end
+    reason = ""
+    ret answer == "allow" or answer == "always"
+end
+
+func approvals_answer(call_id: str, answer: str): bool:
+    sync.Lock(g_mu)
+    mut found := false
+    if g_pending.has(call_id):
+        entry := g_pending.get(call_id)
+        entry[0].answer = answer
+        entry[0].answered = true
+        found = true
+        sync.Broadcast(g_cv)
+    end
+    sync.Unlock(g_mu)
+    ret found
+end
+
+func approvals_pending_json(): str:
+    mut items := Vector {} as Vector<str>
+    defer items.free()
+    sync.Lock(g_mu)
+    each _, entry in g_pending:
+        items.push(preview_json(entry[0].preview, "", ""))
+    end
+    sync.Unlock(g_mu)
+    ret json.Array(items)
+end
+
+func approvals_start(call_id: str):
+    sync.Lock(g_mu)
+    g_running.put(call_id, false)
+    sync.Unlock(g_mu)
+end
+
+func approvals_finish(call_id: str):
+    sync.Lock(g_mu)
+    _removed := g_running.remove(call_id)
+    sync.Unlock(g_mu)
+end
+
+func approvals_cancelled(call_id: str): bool:
+    sync.Lock(g_mu)
+    out := g_running.has(call_id) and g_running.get(call_id)
+    sync.Unlock(g_mu)
+    ret out
+end
+
+func approvals_stop(call_id: str): bool:
+    if approvals_answer(call_id, "deny"):
+        ret true
+    end
+    sync.Lock(g_mu)
+    mut found := false
+    if g_running.has(call_id):
+        g_running.put(call_id, true)
+        found = true
+    end
+    sync.Unlock(g_mu)
+    ret found
+end
+
+func memory_folder(root: str): str:
+    ret filepath.Join(filepath.Join(root, MEMORY_DIR), "memory")
+end
+
+func index_path(root: str): str:
+    ret filepath.Join(filepath.Join(root, MEMORY_DIR), "index.md")
+end
+
+func memory_path(root: str, slug: str): str:
+    ret filepath.Join(memory_folder(root), slug + ".md")
+end
+
+func memory_rel(slug: str): str:
+    ret MEMORY_DIR + "/memory/" + slug + ".md"
+end
+
+func now_stamp(): str:
+    ret time.FormatISOUTC(time.Now())
+end
+
+func one_line(text: str): str:
+    lines := str.Split(str.Replace(text, "\r", "\n"), "\n")
+    defer lines.free()
+    mut kept := Vector {} as Vector<str>
+    defer kept.free()
+    each line in lines:
+        t := str.Trim(line)
+        if t.len() > 0:
+            kept.push(t)
+        end
+    end
+    ret str.Join(kept, " ")
+end
+
+func slugify(title: str): str:
+    lower := str.Lower(title)
+    mut b := str.NewBuilder()
+    bytes := lower as u8*
+    n := str.Len(lower)
+    mut count := 0
+    mut pending := false
+    repeat n in i:
+        c := bytes[i] as int
+        letter := (c >= 97 and c <= 122) or (c >= 48 and c <= 57) or c >= 128
+        if letter:
+            if pending and str.BufLen(b) > 0 and count < MAX_SLUG:
+                str.BufAppendChar(b, 45)
+                count += 1
+            end
+            pending = false
+            if count < MAX_SLUG or (c >= 128 and c < 192):
+                str.BufAppendChar(b, c)
+                if c < 128 or c >= 192:
+                    count += 1
+                end
+            end
+        else:
+            pending = true
+        end
+    end
+    out := str.BufStr(b)
+    ret str.TrimSuffix(out, "-")
+end
+
+func check_slug(slug_in: str, error &: str): str:
+    slug := str.TrimSuffix(str.Trim(slug_in), ".md")
+    if slug.len() == 0:
+        error = "slug is empty."
+        ret ""
+    end
+    if str.Contains(slug, "/") or str.Contains(slug, "\\") or str.Contains(slug, "..") or str.StartsWith(slug, "."):
+        error = "The slug " + slug + " may not contain path separators or ..; pass a plain name like build-steps."
+        ret ""
+    end
+    bytes := slug as u8*
+    repeat str.Len(slug) in i:
+        c := bytes[i] as int
+        if c < 32 or c == 60 or c == 62 or c == 58 or c == 34 or c == 124 or c == 63 or c == 42:
+            error = "The slug " + slug + " contains characters that are not allowed in a file name."
+            ret ""
+        end
+    end
+    ret slug
+end
+
+func unquote_value(value: str): str:
+    t := str.Trim(value)
+    n := str.Len(t)
+    if n >= 2:
+        first := (t as u8*)[0]
+        last := (t as u8*)[n - 1]
+        if first == last and (first == (34 as u8) or first == (39 as u8)):
+            ret str.Substr(t, 1, n - 2)
+        end
+    end
+    ret t
+end
+
+func memory_parse(slug: str, raw: str): Memory:
+    text := str.Replace(str.TrimPrefix(raw, "\xEF\xBB\xBF"), "\r\n", "\n")
+    lines := str.Split(text, "\n")
+    defer lines.free()
+    mut m := Memory { slug = slug }
+    mut close := -1
+    if lines.len() > 0 and str.Trim(lines[0]) == "---":
+        mut i := 1
+        until i < lines.len():
+            if str.Trim(lines[i]) == "---":
+                close = i
+                break
+            end
+            i += 1
+        end
+    end
+    mut body := text
+    if close > 0:
+        mut i := 1
+        until i < close:
+            colon := str.IndexOf(lines[i], ":")
+            if colon > 0:
+                key := str.Lower(str.Trim(str.Substr(lines[i], 0, colon)))
+                value := unquote_value(str.Substr(lines[i], colon + 1, str.Len(lines[i]) - colon - 1))
+                if key == "title":
+                    m.title = value
+                else key == "description":
+                    m.description = value
+                else key == "created":
+                    m.created = value
+                else key == "updated":
+                    m.updated = value
+                end
+            end
+            i += 1
+        end
+        mut rest := Vector {} as Vector<str>
+        defer rest.free()
+        i = close + 1
+        until i < lines.len():
+            rest.push(lines[i])
+            i += 1
+        end
+        body = str.Join(rest, "\n")
+    end
+    m.content = str.Trim(body)
+    if str.Trim(m.title).len() == 0:
+        m.title = slug
+    end
+    ret m
+end
+
+func memory_render(m: Memory): str:
+    ret "---\ntitle: " + one_line(m.title) + "\ndescription: " + one_line(m.description) + "\ncreated: " + m.created + "\nupdated: " + m.updated + "\n---\n\n" + str.TrimRight(str.Replace(m.content, "\r\n", "\n")) + "\n"
+end
+
+func memory_files(root: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    folder := memory_folder(root)
+    if not os.IsDir(folder):
+        ret out
+    end
+    names := os.ListDir(folder)
+    defer names.free()
+    each name in names:
+        if str.EndsWith(name, ".md") and not os.IsDir(filepath.Join(folder, name)):
+            out.push(str.TrimSuffix(name, ".md"))
+        end
+    end
+    sort.Sort(out)
+    ret out
+end
+
+func memory_list(root: str): Vector<Memory>:
+    slugs := memory_files(root)
+    defer slugs.free()
+    mut out := Vector {} as Vector<Memory>
+    each slug in slugs:
+        out.push(memory_parse(slug, io.ReadFile(memory_path(root, slug))))
+    end
+    mut i := 1
+    until i < out.len():
+        item := out[i]
+        mut j := i - 1
+        until j >= 0 and str.Compare(out[j].updated, item.updated) < 0:
+            out[j + 1] = out[j]
+            j -= 1
+        end
+        out[j + 1] = item
+        i += 1
+    end
+    ret out
+end
+
+func link_target(slug: str): str:
+    ret "memory/" + str.Replace(str.Replace(str.Replace(str.Replace(slug, "%", "%25"), " ", "%20"), "(", "%28"), ")", "%29") + ".md"
+end
+
+func shown_time(stamp: str): str:
+    if str.Len(stamp) >= 16 and (stamp as u8*)[10] == (84 as u8):
+        ret str.Substr(stamp, 0, 10) + " " + str.Substr(stamp, 11, 5) + " UTC"
+    end
+    ret stamp
+end
+
+func memory_rebuild_index(root: str): int:
+    memories := memory_list(root)
+    defer memories.free()
+    mut out := "# Salam Agent memory\n\nWhat Salam Agent remembers about this project. Each memory is one file under memory/.\n\n"
+    if memories.len() == 0:
+        out = out + "No memories yet.\n"
+    end
+    each m in memories:
+        title := str.Replace(str.Replace(one_line(m.title), "[", "\\["), "]", "\\]")
+        out = out + "- [" + title + "](" + link_target(m.slug) + ")"
+        description := one_line(m.description)
+        if description.len() > 0:
+            out = out + " - " + description
+        end
+        if str.Trim(m.updated).len() > 0:
+            out = out + " (updated " + shown_time(str.Trim(m.updated)) + ")"
+        end
+        out = out + "\n"
+    end
+    _mk := os.MkdirAll(filepath.Join(root, MEMORY_DIR))
+    _wrote := io.WriteFile(index_path(root), out)
+    ret memories.len()
+end
+
+func memory_count(n: int): str:
+    ret str.FromInt(n as i64) + (n == 1 ? " memory" : " memories")
+end
+
+func memory_draft(root: str, slug_in: str, title_in: str, description: str, content: str): Draft:
+    title := one_line(title_in)
+    if title.len() == 0:
+        ret Draft { error = "title is empty." }
+    end
+    if str.Trim(content).len() == 0:
+        ret Draft { error = "content is empty." }
+    end
+    mut error := ""
+    mut slug := ""
+    if str.Trim(slug_in).len() > 0:
+        slug = check_slug(slug_in, error)
+        if error.len() > 0:
+            ret Draft { error = error }
+        end
+    else:
+        slug = slugify(title)
+        if slug.len() == 0:
+            slug = "memory-" + str.FromInt(time.Now())
+        end
+    end
+    path := memory_path(root, slug)
+    if os.IsDir(path):
+        ret Draft { error = memory_rel(slug) + " is a folder." }
+    end
+    before := os.Exists(path) ? io.ReadFile(path) : ""
+    stamp := now_stamp()
+    old := memory_parse(slug, before)
+    created := (before.len() == 0 or str.Trim(old.created).len() == 0) ? stamp : old.created
+    after := memory_render(Memory { slug = slug, title = title, description = one_line(description), created = created, updated = stamp, content = content })
+    ret Draft { slug = slug, before = before, after = after }
+end
+
+func memory_save(root: str, slug: str, title: str, description: str, content: str, failed &: bool): str:
+    d := memory_draft(root, slug, title, description, content)
+    if d.error.len() > 0:
+        failed = true
+        ret d.error
+    end
+    _mk := os.MkdirAll(memory_folder(root))
+    if io.WriteFile(memory_path(root, d.slug), d.after) < 0:
+        failed = true
+        ret "Could not write " + memory_rel(d.slug)
+    end
+    n := memory_rebuild_index(root)
+    ret "Saved " + memory_rel(d.slug) + " (" + memory_count(n) + " in " + MEMORY_DIR + "/index.md)."
+end
+
+func memory_forget(root: str, slug_in: str, failed &: bool): str:
+    mut error := ""
+    slug := check_slug(slug_in, error)
+    if error.len() > 0:
+        failed = true
+        ret error
+    end
+    path := memory_path(root, slug)
+    if not os.Exists(path):
+        failed = true
+        ret memory_rel(slug) + " does not exist."
+    end
+    _gone := os.Remove(path)
+    n := memory_rebuild_index(root)
+    ret "Forgot " + memory_rel(slug) + " (" + memory_count(n) + " left in " + MEMORY_DIR + "/index.md)."
+end
+
+func read_capped(path: str, max: int): str:
+    text := io.ReadFile(path)
+    if str.Len(text) <= max:
+        ret text
+    end
+    mut cut := max - str.Len(MEMORY_CUT) - 1
+    bytes := text as u8*
+    until cut > 0 and ((bytes[cut] as int) & 0xC0) == 0x80:
+        cut -= 1
+    end
+    head := str.Substr(text, 0, cut)
+    ret head + (str.EndsWith(head, "\n") ? "" : "\n") + MEMORY_CUT
+end
+
+func project_context_json(root: str): str:
+    mut file_name := ""
+    mut instructions := ""
+    each name in ["AGENTS.md", "AGENT.md"]:
+        path := filepath.Join(root, name)
+        if os.Exists(path) and not os.IsDir(path):
+            file_name = name
+            instructions = read_capped(path, MAX_INSTRUCTIONS)
+            break
+        end
+    end
+    index := index_path(root)
+    memory_index := os.Exists(index) ? read_capped(index, MAX_INDEX) : ""
+    slugs := memory_files(root)
+    defer slugs.free()
+    mut members := Vector {} as Vector<str>
+    defer members.free()
+    members.push(json.Member("instructions_file", file_name))
+    members.push(json.Member("instructions", instructions))
+    members.push(json.Member("memory_index", memory_index))
+    members.push(json.MemberInt("memories", slugs.len() as i64))
+    ret json.Object(members)
+end
+
+func prefs_file(): str:
+    ret filepath.Join(desktop.DataDir(), "notifications.json")
+end
+
+func prefs_json(p: Prefs): str:
+    mut members := Vector {} as Vector<str>
+    defer members.free()
+    members.push(json.MemberBool("enabled", p.enabled))
+    members.push(json.MemberBool("sound", p.sound))
+    members.push(json.MemberBool("preview", p.preview))
+    members.push(json.Member("lang", p.lang))
+    ret json.Object(members)
+end
+
+func prefs_parse(text: str): Prefs:
+    mut p := Prefs {}
+    if not json.Valid(text):
+        ret p
+    end
+    if json.Has(text, "enabled"):
+        p.enabled = json.Get(text, "enabled") == "true"
+    end
+    if json.Has(text, "sound"):
+        p.sound = json.Get(text, "sound") == "true"
+    end
+    if json.Has(text, "preview"):
+        p.preview = json.Get(text, "preview") == "true"
+    end
+    if json.Get(text, "lang") == "en":
+        p.lang = "en"
+    end
+    ret p
+end
+
+func prefs_load():
+    file := prefs_file()
+    if os.Exists(file):
+        g_prefs = prefs_parse(io.ReadFile(file))
+    end
+end
+
+func prefs_save(p: Prefs):
+    sync.Lock(g_mu)
+    g_prefs = p
+    sync.Unlock(g_mu)
+    _mk := os.MkdirAll(desktop.DataDir())
+    _wrote := io.WriteFile(prefs_file(), prefs_json(p))
+end
+
+func prefs_now(): Prefs:
+    sync.Lock(g_mu)
+    out := g_prefs
+    sync.Unlock(g_mu)
+    ret out
+end
+
+func cut_chars(text: str, max: int): str:
+    if str.CharCount(text) <= max:
+        ret text
+    end
+    bytes := text as u8*
+    mut chars := 0
+    mut at := 0
+    until at < str.Len(text) and chars < max - 1:
+        at += 1
+        until at < str.Len(text) and ((bytes[at] as int) & 0xC0) == 0x80:
+            at += 1
+        end
+        chars += 1
+    end
+    ret str.TrimRight(str.Substr(text, 0, at)) + "…"
+end
+
+func strip_links(line: str): str:
+    mut out := line
+    until true:
+        open := str.IndexOf(out, "[")
+        if open < 0:
+            break
+        end
+        middle := str.IndexFrom(out, "](", open)
+        if middle < 0:
+            break
+        end
+        close := str.IndexFrom(out, ")", middle)
+        if close < 0:
+            break
+        end
+        label := str.Substr(out, open + 1, middle - open - 1)
+        out = str.Substr(out, 0, open) + label + str.Substr(out, close + 1, str.Len(out) - close - 1)
+    end
+    ret out
+end
+
+func snippet(markdown: str, max: int): str:
+    lines := str.Split(markdown, "\n")
+    defer lines.free()
+    mut out := ""
+    mut fenced := false
+    each raw in lines:
+        mut line := str.Trim(raw)
+        if str.StartsWith(line, "```"):
+            fenced = not fenced
+            continue
+        end
+        if fenced or line.len() == 0:
+            continue
+        end
+        mut start := 0
+        bytes := line as u8*
+        until start < str.Len(line):
+            c := bytes[start] as int
+            if not (c == 35 or c == 62 or c == 45 or c == 42 or c == 32):
+                break
+            end
+            start += 1
+        end
+        line = str.Substr(line, start, str.Len(line) - start)
+        line = strip_links(line)
+        line = str.Trim(str.Replace(str.Replace(line, "*", ""), "`", ""))
+        if line.len() == 0:
+            continue
+        end
+        if out.len() > 0:
+            out = out + " "
+        end
+        out = out + line
+        if str.CharCount(out) > max:
+            break
+        end
+    end
+    ret cut_chars(out, max)
+end
+
+func pick(lang: str, fa: str, en: str): str:
+    ret lang == "en" ? en : fa
+end
+
+func with_chat(chat: str, generic: str, detail: str): str:
+    if chat.len() == 0:
+        ret detail.len() == 0 ? generic : detail
+    end
+    ret chat + "\n" + (detail.len() == 0 ? generic : detail)
+end
+
+func notify_compose(kind: str, chat_in: str, text: str, p: Prefs, title &: str): str:
+    l := p.lang
+    detail := p.preview ? cut_chars(str.Trim(text), SNIPPET_CHARS) : ""
+    chat := p.preview ? cut_chars(str.Trim(chat_in), TITLE_CHARS) : ""
+    if kind == "done":
+        title = pick(l, "پاسخ آماده است", "Reply ready")
+        ret with_chat(chat, pick(l, "پاسخ دستیار سلام آماده شد.", "Your Salam AI reply is ready."), p.preview ? snippet(text, SNIPPET_CHARS) : "")
+    else kind == "failed":
+        title = pick(l, "پاسخ ناموفق بود", "The reply failed")
+        ret with_chat(chat, pick(l, "دستیار نتوانست پاسخ بدهد. دوباره تلاش کنید.", "The assistant could not answer. Please try again."), cut_chars(str.Trim(text), SNIPPET_CHARS))
+    else kind == "network":
+        title = pick(l, "ارتباط قطع شد", "Connection lost")
+        ret with_chat(chat, pick(l, "ارتباط با سرور برقرار نیست. اتصال اینترنت را بررسی کنید. پاسخ ممکن است همچنان برسد.", "Cannot reach the server. Check your internet connection. The reply may still arrive."), "")
+    else kind == "approval":
+        title = pick(l, "منتظر اجازه‌ی شما", "Waiting for your approval")
+        ret detail.len() > 0 ? detail : pick(l, "دستیار برای ادامه به اجازه‌ی شما نیاز دارد.", "The assistant needs your approval to continue.")
+    else kind == "offline":
+        title = pick(l, "دستیار زبان سلام آفلاین است", "Salam Agent is offline")
+        ret pick(l, "ارتباط با دستیار قطع شد و برنامه در پس‌زمینه دوباره تلاش می‌کند.", "The connection to the assistant dropped. Retrying in the background.")
+    else kind == "online":
+        title = pick(l, "دوباره وصل شد", "Back online")
+        ret pick(l, "دستیار زبان سلام دوباره به دستیار وصل شد.", "Salam Agent is connected to the assistant again.")
+    else kind == "unlinked":
+        title = pick(l, "اتصال این رایانه قطع شد", "This computer was disconnected")
+        ret pick(l, "برای وصل شدن دوباره وارد حساب خود شوید.", "Sign in again to reconnect it.")
+    end
+    title = pick(l, "اعلان‌ها کار می‌کنند", "Notifications work")
+    ret pick(l, "اگر این پیام را می‌بینید، اعلان‌های دستیار زبان سلام درست تنظیم شده‌اند.", "If you can read this, Salam Agent notifications are set up correctly.")
+end
+
+func notify_due(kind: str, chat: str): bool:
+    key := kind + "\n" + chat
+    now := sync.NowMs()
+    sync.Lock(g_mu)
+    mut due := true
+    if g_recent.has(key) and now - g_recent.get(key) < (REPEAT_GAP_MS as i64):
+        due = false
+    else:
+        g_recent.put(key, now)
+    end
+    sync.Unlock(g_mu)
+    ret due
+end
+
+func notify_claim(mid: i64): bool:
+    sync.Lock(g_mu)
+    if g_notified.size() > 1024:
+        g_notified.free()
+        g_notified = HashMap {} as HashMap<i64, bool>
+    end
+    fresh := not g_notified.has(mid)
+    g_notified.put(mid, true)
+    sync.Unlock(g_mu)
+    ret fresh
+end
+
+func notify_release(mid: i64):
+    sync.Lock(g_mu)
+    _removed := g_notified.remove(mid)
+    sync.Unlock(g_mu)
+end
+
+func notify_forget_seen():
+    sync.Lock(g_mu)
+    g_notified.free()
+    g_notified = HashMap {} as HashMap<i64, bool>
+    sync.Unlock(g_mu)
+end
+
+func window_away(): bool:
+    ret g_win.IsClosed() or not g_win.IsActive()
+end
+
+func notify_deliver(kind: str, chat: str, text: str, mid: i64): str:
+    p := prefs_now()
+    test := kind == "test"
+    approval := kind == "approval"
+    if mid > 0 and not test and not notify_claim(mid):
+        ret "skipped"
+    end
+    if not test and not approval and not p.enabled:
+        ret "skipped"
+    end
+    if not test and not window_away():
+        ret "skipped"
+    end
+    if not test and not notify_due(kind, chat):
+        ret "skipped"
+    end
+    desktop.RequestAttention(g_win)
+    if not p.enabled and not test:
+        ret "skipped"
+    end
+    mut title := ""
+    body := notify_compose(kind, chat, text, p, title)
+    if not desktop.Notify(title, body):
+        if mid > 0:
+            notify_release(mid)
+        end
+        ret "failed"
+    end
+    ret "shown"
+end
+
+func notify_post(kind: str, chat: str, text: str, mid: i64):
+    desktop.Dispatch(
+        (): _result := notify_deliver(kind, chat, text, mid) end
+    )
+end
+
+func lossy_text(data: void*, n: i64): str:
+    bytes := data as u8*
+    mut b := str.NewBuilder()
+    mut i := 0 as i64
+    until i < n:
+        c := bytes[i] as int
+        mut need := 0
+        if c < 128:
+            str.BufAppendChar(b, c == 0 ? 32 : c)
+            i += 1
+            continue
+        else c >= 0xC2 and c <= 0xDF:
+            need = 1
+        else c >= 0xE0 and c <= 0xEF:
+            need = 2
+        else c >= 0xF0 and c <= 0xF4:
+            need = 3
+        end
+        mut good := need > 0 and i + (need as i64) < n
+        if good:
+            repeat need in k:
+                following := bytes[i + 1 + (k as i64)] as int
+                if (following & 0xC0) != 0x80:
+                    good = false
+                end
+            end
+        end
+        if good:
+            repeat need + 1 in k:
+                str.BufAppendChar(b, bytes[i + (k as i64)] as int)
+            end
+            i += (need + 1) as i64
+        else:
+            str.BufAppend(b, "\xEF\xBF\xBD")
+            i += 1
+        end
+    end
+    ret str.BufStr(b)
+end
+
+func read_output(path: str): str:
+    total := os.FileSize(path)
+    if total <= 0:
+        ret ""
+    end
+    half := (OUTPUT_CAP / 2) as i64
+    if total <= half * 2:
+        data := pack.ReadRange(path, 0 as i64, total)
+        defer mem.Free(data)
+        ret lossy_text(data, total)
+    end
+    head := pack.ReadRange(path, 0 as i64, half)
+    tail := pack.ReadRange(path, total - half, half)
+    defer mem.Free(head)
+    defer mem.Free(tail)
+    ret lossy_text(head, half) + "\n[... " + str.FromInt(total - half * 2) + " bytes cut ...]\n" + lossy_text(tail, half)
+end
+
+func cap_text(text: str): str:
+    n := str.Len(text)
+    if n <= OUTPUT_CAP:
+        ret text
+    end
+    half := OUTPUT_CAP / 2
+    ret str.Substr(text, 0, half) + "\n[... " + str.FromInt((n - OUTPUT_CAP) as i64) + " bytes cut ...]\n" + str.Substr(text, n - half, half)
+end
+
+func stream_new(path: str, offset &: i64, call_id: str):
+    size := os.FileSize(path)
+    if size <= offset:
+        ret
+    end
+    mut chunk := size - offset
+    if chunk > (65536 as i64):
+        chunk = 65536 as i64
+    end
+    data := pack.ReadRange(path, offset, chunk)
+    if data == null:
+        ret
+    end
+    defer mem.Free(data)
+    offset += chunk
+    mut members := Vector {} as Vector<str>
+    defer members.free()
+    members.push(json.Member("call_id", call_id))
+    members.push(json.Member("chunk", lossy_text(data, chunk)))
+    desktop.Emit("agent://output", json.Object(members))
+end
+
+func exec_run(program: str, args: Vector<str>, raw_args: str, cwd: str, timeout_s: i64, call_id: str, failed &: bool): str:
+    output := filepath.Join(os.TempDir(), "salam-agent-" + call_id + "-" + crypto.RandomHex(4) + ".log")
+    defer _gone := os.Remove(output)
+    mut child := process.Spawn(process.SpawnOptions { path = program, args = args, raw_args = raw_args, cwd = cwd, output = output })
+    if child.pid <= 0:
+        failed = true
+        ret program + " is not installed or not on PATH."
+    end
+    started := sync.NowMs()
+    limit := timeout_s * (1000 as i64)
+    mut offset := 0 as i64
+    mut note := ""
+    mut done := false
+    until not done:
+        done = process.TryWait(child)
+        stream_new(output, offset, call_id)
+        if done:
+            break
+        end
+        if note.len() == 0 and approvals_cancelled(call_id):
+            process.KillTree(child)
+            note = "\n[stopped by the user]"
+        else note.len() == 0 and sync.NowMs() - started > limit:
+            process.KillTree(child)
+            note = "\n[timed out after " + str.FromInt(timeout_s) + " seconds and was stopped]"
+        end
+        sync.SleepMs(50)
+    end
+    stream_new(output, offset, call_id)
+    mut text := read_output(output)
+    code := child.exit_code
+    if str.Trim(text).len() == 0:
+        if code == 127 and not SALAM_OS_WINDOWS:
+            failed = true
+            ret program + " is not installed or not on PATH."
+        end
+        text = "(no output)"
+    end
+    text = text + note
+    if code == 0 and note.len() == 0:
+        ret text
+    end
+    failed = true
+    if note.len() > 0:
+        ret text
+    end
+    ret text + "\n[exit code " + str.FromInt(code as i64) + "]"
+end
+
+func is_binary(data: void*, n: i64): bool:
+    bytes := data as u8*
+    mut i := 0 as i64
+    until i < n and i < (8000 as i64):
+        if bytes[i] == (0 as u8):
+            ret true
+        end
+        i += 1
+    end
+    ret false
+end
+
+func read_text(path: str, failed &: bool): str:
+    if not os.Exists(path):
+        failed = true
+        ret path + " does not exist."
+    end
+    if os.IsDir(path):
+        failed = true
+        ret path + " is a folder; use list_dir."
+    end
+    size := os.FileSize(path)
+    if size > (MAX_READ as i64):
+        failed = true
+        ret path + " is " + str.FromInt(size) + " bytes, too big to read whole; use grep or a shell command."
+    end
+    if size == 0:
+        ret ""
+    end
+    data := pack.ReadRange(path, 0 as i64, size)
+    if data == null:
+        failed = true
+        ret "Could not read " + path
+    end
+    defer mem.Free(data)
+    if is_binary(data, size):
+        failed = true
+        ret path + " is a binary file of " + str.FromInt(size) + " bytes."
+    end
+    ret lossy_text(data, size)
+end
+
+func old_content(path: str): str:
+    mut failed := false
+    if not os.Exists(path) or os.IsDir(path):
+        ret ""
+    end
+    text := read_text(path, failed)
+    ret failed ? "" : text
+end
+
+func split_lines(text: str): Vector<str>:
+    lines := str.Split(str.Replace(text, "\r\n", "\n"), "\n")
+    if lines.len() > 0 and lines[lines.len() - 1] == "":
+        _dropped := lines.pop()
+    end
+    ret lines
+end
+
+func read_file(path: str, offset_in: i64, limit_in: i64, failed &: bool): str:
+    text := read_text(path, failed)
+    if failed:
+        ret text
+    end
+    start := offset_in < 1 ? 1 as i64 : offset_in
+    limit := limit_in == 0 ? DEFAULT_LINES as i64 : limit_in
+    lines := split_lines(text)
+    defer lines.free()
+    if lines.len() == 0:
+        ret "(empty file)"
+    end
+    mut b := str.NewBuilder()
+    mut i := (start - 1) as int
+    mut shown := 0 as i64
+    until i < lines.len() and shown < limit:
+        number := str.FromInt((i + 1) as i64)
+        repeat 6 - str.Len(number):
+            str.BufAppendChar(b, 32)
+        end
+        str.BufAppend(b, number)
+        str.BufAppendChar(b, 9)
+        str.BufAppend(b, str.CharCount(lines[i]) > 2000 ? cut_chars(lines[i], 2000) : lines[i])
+        str.BufAppendChar(b, 10)
+        i += 1
+        shown += 1
+    end
+    mut out := str.BufStr(b)
+    if i < lines.len():
+        out = out + "[lines " + str.FromInt(start) + " to " + str.FromInt(i as i64) + " of " + str.FromInt(lines.len() as i64) + "; pass offset to read more]\n"
+    end
+    if out.len() == 0:
+        out = "[the file has " + str.FromInt(lines.len() as i64) + " lines]"
+    end
+    ret out
+end
+
+func write_file(path: str, content: str, failed &: bool): str:
+    existed := os.Exists(path)
+    if os.IsDir(path):
+        failed = true
+        ret path + " is a folder."
+    end
+    _mk := os.MkdirAll(filepath.Dir(path))
+    if io.WriteFile(path, content) < 0:
+        failed = true
+        ret "Could not write " + path
+    end
+    ret (existed ? "Updated " : "Created ") + path + " (" + str.FromInt(str.Len(content) as i64) + " bytes)."
+end
+
+func count_matches(text: str, needle: str): int:
+    mut n := 0
+    mut at := str.IndexOf(text, needle)
+    until at >= 0:
+        n += 1
+        at = str.IndexFrom(text, needle, at + str.Len(needle))
+    end
+    ret n
+end
+
+func apply_edit(old: str, old_text: str, new_text: str, all: bool, count_out &: int, failed &: bool): str:
+    if old_text.len() == 0:
+        failed = true
+        ret "old_text is empty; use write_file to create a file."
+    end
+    count := count_matches(old, old_text)
+    if count == 0:
+        failed = true
+        ret "old_text was not found in the file. Read the file again and copy the text exactly."
+    end
+    if count > 1 and not all:
+        failed = true
+        ret "old_text appears " + str.FromInt(count as i64) + " times. Add more surrounding lines to make it unique, or set replace_all."
+    end
+    count_out = all ? count : 1
+    if all:
+        ret str.Replace(old, old_text, new_text)
+    end
+    at := str.IndexOf(old, old_text)
+    ret str.Substr(old, 0, at) + new_text + str.Substr(old, at + str.Len(old_text), str.Len(old) - at - str.Len(old_text))
+end
+
+func list_dir(ws: Workspace, path: str, failed &: bool): str:
+    if not os.IsDir(path):
+        failed = true
+        ret path + " is not a readable folder."
+    end
+    raw := os.ListDir(path)
+    defer raw.free()
+    mut dirs := Vector {} as Vector<str>
+    mut plain := Vector {} as Vector<str>
+    defer dirs.free()
+    defer plain.free()
+    each name in raw:
+        if name == "." or name == "..":
+            continue
+        end
+        if os.IsDir(filepath.Join(path, name)):
+            dirs.push(name + "/")
+        else:
+            plain.push(name)
+        end
+    end
+    sort.Sort(dirs)
+    sort.Sort(plain)
+    total := dirs.len() + plain.len()
+    mut out := ws.display(path) + " (" + str.FromInt(total as i64) + " entries)"
+    mut shown := 0
+    each name in dirs:
+        if shown < MAX_ENTRIES:
+            out = out + "\n" + name
+            shown += 1
+        end
+    end
+    each name in plain:
+        if shown < MAX_ENTRIES:
+            out = out + "\n" + name
+            shown += 1
+        end
+    end
+    if total > MAX_ENTRIES:
+        out = out + "\n[" + str.FromInt((total - MAX_ENTRIES) as i64) + " more not shown]"
+    end
+    ret out
+end
+
+func glob_class(pattern: u8*, p: int, n: int, c: int, next &: int): bool:
+    mut i := p + 1
+    negate := i < n and (pattern[i] == (33 as u8) or pattern[i] == (94 as u8))
+    if negate:
+        i += 1
+    end
+    mut matched := false
+    until i < n and pattern[i] != (93 as u8):
+        low := pattern[i] as int
+        if i + 2 < n and pattern[i + 1] == (45 as u8) and pattern[i + 2] != (93 as u8):
+            high := pattern[i + 2] as int
+            if c >= low and c <= high:
+                matched = true
+            end
+            i += 3
+        else:
+            if c == low:
+                matched = true
+            end
+            i += 1
+        end
+    end
+    next = i + 1
+    ret matched != negate
+end
+
+func glob_rec(pattern: u8*, pn: int, p_in: int, text: u8*, tn: int, t_in: int): bool:
+    mut p := p_in
+    mut t := t_in
+    until p < pn:
+        c := pattern[p] as int
+        if c == 42:
+            if p + 1 < pn and pattern[p + 1] == (42 as u8):
+                mut after := p + 2
+                if after < pn and pattern[after] == (47 as u8):
+                    after += 1
+                end
+                mut k := t
+                until k <= tn:
+                    if k == t or (k > 0 and text[k - 1] == (47 as u8)):
+                        if glob_rec(pattern, pn, after, text, tn, k):
+                            ret true
+                        end
+                    end
+                    k += 1
+                end
+                ret false
+            end
+            mut k := t
+            until k <= tn:
+                if glob_rec(pattern, pn, p + 1, text, tn, k):
+                    ret true
+                end
+                if k < tn and text[k] == (47 as u8):
+                    break
+                end
+                k += 1
+            end
+            ret false
+        end
+        if t >= tn:
+            ret false
+        end
+        ch := text[t] as int
+        if c == 63:
+            if ch == 47:
+                ret false
+            end
+            p += 1
+            t += 1
+        else c == 91:
+            mut next := p
+            if not glob_class(pattern, p, pn, ch, next):
+                ret false
+            end
+            p = next
+            t += 1
+        else:
+            if c != ch:
+                ret false
+            end
+            p += 1
+            t += 1
+        end
+    end
+    ret t == tn
+end
+
+func glob_expand(pattern: str, out &: Vector<str>):
+    open := str.IndexOf(pattern, "{")
+    close := open >= 0 ? str.IndexFrom(pattern, "}", open) : -1
+    if open < 0 or close < 0:
+        out.push(pattern)
+        ret
+    end
+    head := str.Substr(pattern, 0, open)
+    tail := str.Substr(pattern, close + 1, str.Len(pattern) - close - 1)
+    choices := str.Split(str.Substr(pattern, open + 1, close - open - 1), ",")
+    defer choices.free()
+    each choice in choices:
+        glob_expand(head + choice + tail, out)
+    end
+end
+
+func glob_matches(pattern: str, path: str): bool:
+    mut alternatives := Vector {} as Vector<str>
+    defer alternatives.free()
+    glob_expand(pattern, alternatives)
+    each alternative in alternatives:
+        if glob_rec(alternative as u8*, str.Len(alternative), 0, path as u8*, str.Len(path), 0):
+            ret true
+        end
+    end
+    ret false
+end
+
+func load_ignore(dir: str, rel: str, rules &: Vector<IgnoreRule>):
+    path := filepath.Join(dir, ".gitignore")
+    if not os.Exists(path):
+        ret
+    end
+    lines := str.Split(io.ReadFile(path), "\n")
+    defer lines.free()
+    each raw in lines:
+        mut line := str.Trim(raw)
+        if line.len() == 0 or str.StartsWith(line, "#"):
+            continue
+        end
+        negated := str.StartsWith(line, "!")
+        if negated:
+            line = str.Substr(line, 1, str.Len(line) - 1)
+        end
+        only_dir := str.EndsWith(line, "/")
+        line = str.TrimSuffix(line, "/")
+        anchored := str.Contains(line, "/")
+        line = str.TrimPrefix(line, "/")
+        pattern := anchored ? line : "**/" + line
+        rules.push(IgnoreRule { pattern = pattern, negated = negated, only_dir = only_dir, base = rel })
+    end
+end
+
+func is_ignored(rel: str, is_dir: bool, rules: Vector<IgnoreRule>): bool:
+    mut ignored := false
+    each rule in rules:
+        if rule.only_dir and not is_dir:
+            continue
+        end
+        mut subject := rel
+        if rule.base.len() > 0:
+            if not str.StartsWith(rel, rule.base + "/"):
+                continue
+            end
+            subject = str.Substr(rel, str.Len(rule.base) + 1, str.Len(rel) - str.Len(rule.base) - 1)
+        end
+        if glob_matches(rule.pattern, subject):
+            ignored = not rule.negated
+        end
+    end
+    ret ignored
+end
+
+func walk_files(base: str, rel: str, rules: Vector<IgnoreRule>, out &: Vector<str>):
+    dir := rel.len() > 0 ? filepath.Join(base, rel) : base
+    mut own := Vector {} as Vector<IgnoreRule>
+    defer own.free()
+    each rule in rules:
+        own.push(rule)
+    end
+    load_ignore(dir, rel, own)
+    names := os.ListDir(dir)
+    defer names.free()
+    each name in names:
+        if name == "." or name == ".." or name == ".git" or name == "node_modules":
+            continue
+        end
+        child := rel.len() > 0 ? rel + "/" + name : name
+        full := filepath.Join(base, child)
+        if os.IsDir(full):
+            if not is_ignored(child, true, own):
+                walk_files(base, child, own, out)
+            end
+        else not is_ignored(child, false, own):
+            out.push(child)
+        end
+    end
+end
+
+func glob_search(ws: Workspace, base: str, pattern_in: str): str:
+    pattern := str.TrimPrefix(str.Trim(pattern_in), "./")
+    mut files := Vector {} as Vector<str>
+    defer files.free()
+    empty := Vector {} as Vector<IgnoreRule>
+    if os.IsDir(base):
+        walk_files(base, "", empty, files)
+    end
+    mut hits := Vector {} as Vector<str>
+    defer hits.free()
+    mut more := 0
+    each rel in files:
+        if glob_matches(pattern, rel):
+            if hits.len() < MAX_FILES:
+                hits.push(ws.display(filepath.Join(base, rel)))
+            else:
+                more += 1
+            end
+        end
+    end
+    if hits.len() == 0:
+        ret "No files match."
+    end
+    sort.Sort(hits)
+    mut out := str.Join(hits, "\n")
+    if more > 0:
+        out = out + "\n[" + str.FromInt(more as i64) + " more not shown; narrow the pattern]"
+    end
+    ret out
+end
+
+func ignore_case_pattern(pattern: str): str:
+    mut b := str.NewBuilder()
+    bytes := pattern as u8*
+    n := str.Len(pattern)
+    mut in_class := false
+    mut i := 0
+    until i < n:
+        c := bytes[i] as int
+        if c == 92 and i + 1 < n:
+            str.BufAppendChar(b, c)
+            str.BufAppendChar(b, bytes[i + 1] as int)
+            i += 2
+            continue
+        end
+        if c == 91:
+            in_class = true
+        else c == 93:
+            in_class = false
+        end
+        lower := c >= 97 and c <= 122
+        upper := c >= 65 and c <= 90
+        if lower or upper:
+            other := lower ? c - 32 : c + 32
+            if in_class:
+                str.BufAppendChar(b, c)
+                str.BufAppendChar(b, other)
+            else:
+                str.BufAppendChar(b, 91)
+                str.BufAppendChar(b, c)
+                str.BufAppendChar(b, other)
+                str.BufAppendChar(b, 93)
+            end
+        else:
+            str.BufAppendChar(b, c)
+        end
+        i += 1
+    end
+    ret str.BufStr(b)
+end
+
+func regex_of(source: str): regex.Regex:
+    try:
+        ret regex.Compile(source)
+    catch _err:
+        ret regex.Regex {}
+    end
+end
+
+func grep_search(ws: Workspace, base: str, pattern: str, file_glob: str, ignore_case: bool, failed &: bool): str:
+    source := ignore_case ? ignore_case_pattern(pattern) : pattern
+    if not regex.IsValid(source):
+        failed = true
+        ret "Bad regular expression: " + pattern
+    end
+    re := regex_of(source)
+    mut only := str.Trim(file_glob)
+    if only.len() > 0 and not str.Contains(only, "/"):
+        only = "**/" + only
+    end
+    mut files := Vector {} as Vector<str>
+    defer files.free()
+    single := not os.IsDir(base)
+    if single:
+        files.push("")
+    else:
+        empty := Vector {} as Vector<IgnoreRule>
+        walk_files(base, "", empty, files)
+    end
+    mut out := Vector {} as Vector<str>
+    defer out.free()
+    mut truncated := false
+    each rel in files:
+        if only.len() > 0 and not glob_matches(only, rel):
+            continue
+        end
+        full := single ? base : filepath.Join(base, rel)
+        size := os.FileSize(full)
+        if size <= 0 or size > (MAX_FILE_BYTES as i64):
+            continue
+        end
+        data := pack.ReadRange(full, 0 as i64, size)
+        if data == null:
+            continue
+        end
+        binary := is_binary(data, size)
+        if binary:
+            mem.Free(data)
+            continue
+        end
+        text := lossy_text(data, size)
+        mem.Free(data)
+        lines := split_lines(text)
+        repeat lines.len() in i:
+            if regex.Match(re, lines[i]):
+                if out.len() >= MAX_MATCHES:
+                    truncated = true
+                    break
+                end
+                out.push(ws.display(full) + ":" + str.FromInt((i + 1) as i64) + ": " + cut_chars(str.TrimRight(lines[i]), 300))
+            end
+        end
+        lines.free()
+        if truncated:
+            break
+        end
+    end
+    if out.len() == 0:
+        ret "No matches."
+    end
+    mut joined := str.Join(out, "\n")
+    if truncated:
+        joined = joined + "\n[stopped at " + str.FromInt(MAX_MATCHES as i64) + " matches; narrow the search]"
+    end
+    ret joined
+end
+
+func test_command(dir: str): str:
+    has := (name: str): ret os.Exists(filepath.Join(dir, name)) end
+    if has("Cargo.toml"):
+        ret "cargo test"
+    end
+    if has("package.json"):
+        package_text := io.ReadFile(filepath.Join(dir, "package.json"))
+        if json.Valid(package_text) and json.Has(json.Get(package_text, "scripts"), "test"):
+            if has("bun.lock") or has("bun.lockb"):
+                ret "bun run test"
+            else has("pnpm-lock.yaml"):
+                ret "pnpm test"
+            else has("yarn.lock"):
+                ret "yarn test"
+            end
+            ret "npm test"
+        end
+    end
+    if has("go.mod"):
+        ret "go test ./..."
+    end
+    if has("pytest.ini") or has("pyproject.toml") or has("setup.py") or has("tox.ini"):
+        ret "python -m pytest -q"
+    end
+    each name in ["Makefile", "makefile", "GNUmakefile"]:
+        if has(name):
+            lines := str.Split(io.ReadFile(filepath.Join(dir, name)), "\n")
+            defer lines.free()
+            each line in lines:
+                if str.StartsWith(line, "test:"):
+                    ret "make test"
+                end
+            end
+        end
+    end
+    ret ""
+end
+
+func range_text(start: int, count: int): str:
+    ret str.FromInt((count == 0 ? start : start + 1) as i64) + "," + str.FromInt(count as i64)
+end
+
+func unified_diff(path: str, before: str, after: str): str:
+    old := split_lines(before)
+    new := split_lines(after)
+    defer old.free()
+    defer new.free()
+    mut prefix := 0
+    until prefix < old.len() and prefix < new.len() and old[prefix] == new[prefix]:
+        prefix += 1
+    end
+    mut suffix := 0
+    until suffix < old.len() - prefix and suffix < new.len() - prefix and old[old.len() - 1 - suffix] == new[new.len() - 1 - suffix]:
+        suffix += 1
+    end
+    if prefix == old.len() and prefix == new.len():
+        ret ""
+    end
+    n := old.len() - prefix - suffix
+    m := new.len() - prefix - suffix
+    mut ops := Vector {} as Vector<int>
+    defer ops.free()
+    if n > 0 and m > 0 and n * m <= 4000000:
+        width := m + 1
+        table := mem.AllocateZeroed(((n + 1) * width * 4) as u64) as i32*
+        defer mem.Free(table as void*)
+        mut i := n - 1
+        until i >= 0:
+            mut j := m - 1
+            until j >= 0:
+                if old[prefix + i] == new[prefix + j]:
+                    table[i * width + j] = table[(i + 1) * width + j + 1] + 1
+                else:
+                    down := table[(i + 1) * width + j]
+                    right := table[i * width + j + 1]
+                    table[i * width + j] = down > right ? down : right
+                end
+                j -= 1
+            end
+            i -= 1
+        end
+        i = 0
+        mut j := 0
+        until i < n or j < m:
+            if i < n and j < m and old[prefix + i] == new[prefix + j]:
+                ops.push(0)
+                i += 1
+                j += 1
+            else j < m and (i == n or table[i * width + j + 1] >= table[(i + 1) * width + j]):
+                ops.push(2)
+                j += 1
+            else:
+                ops.push(1)
+                i += 1
+            end
+        end
+    else:
+        repeat n:
+            ops.push(1)
+        end
+        repeat m:
+            ops.push(2)
+        end
+    end
+    mut all_ops := Vector {} as Vector<int>
+    defer all_ops.free()
+    repeat prefix:
+        all_ops.push(0)
+    end
+    each op in ops:
+        all_ops.push(op)
+    end
+    repeat suffix:
+        all_ops.push(0)
+    end
+    mut out := str.NewBuilder()
+    str.BufAppend(out, "--- " + path + "\n+++ " + path + "\n")
+    total := all_ops.len()
+    mut at := 0
+    mut oi := 0
+    mut ni := 0
+    until at < total:
+        if all_ops[at] == 0:
+            oi += 1
+            ni += 1
+            at += 1
+            continue
+        end
+        mut stop := at
+        mut last_change := at
+        until stop < total and stop - last_change <= 6:
+            if all_ops[stop] != 0:
+                last_change = stop
+            end
+            stop += 1
+        end
+        hunk_end := last_change + 4 > total ? total : last_change + 4
+        back := at >= 3 ? 3 : at
+        hunk_start := at - back
+        o0 := oi - back
+        n0 := ni - back
+        mut oc := 0
+        mut nc := 0
+        mut k := hunk_start
+        until k < hunk_end:
+            if all_ops[k] != 2:
+                oc += 1
+            end
+            if all_ops[k] != 1:
+                nc += 1
+            end
+            k += 1
+        end
+        str.BufAppend(out, "@@ -" + range_text(o0, oc) + " +" + range_text(n0, nc) + " @@\n")
+        mut op_i := o0
+        mut op_n := n0
+        k = hunk_start
+        until k < hunk_end:
+            op := all_ops[k]
+            if op == 0:
+                str.BufAppend(out, " " + old[op_i] + "\n")
+                op_i += 1
+                op_n += 1
+            else op == 1:
+                str.BufAppend(out, "-" + old[op_i] + "\n")
+                op_i += 1
+            else:
+                str.BufAppend(out, "+" + new[op_n] + "\n")
+                op_n += 1
+            end
+            k += 1
+        end
+        oi = op_i
+        ni = op_n
+        at = hunk_end
+    end
+    text := str.BufStr(out)
+    if str.Len(text) > MAX_DIFF:
+        mut cut := MAX_DIFF
+        bytes := text as u8*
+        until cut > 0 and ((bytes[cut] as int) & 0xC0) == 0x80:
+            cut -= 1
+        end
+        ret str.Substr(text, 0, cut) + "\n[... diff cut ...]"
+    end
+    ret text
+end
+
+func preview_json(p: Preview, state: str, output: str): str:
+    mut members := Vector {} as Vector<str>
+    defer members.free()
+    members.push(json.Member("call_id", p.call_id))
+    members.push(json.Member("chat", p.chat))
+    members.push(json.Member("tool", p.tool))
+    members.push(json.Member("kind", p.kind))
+    members.push(json.Member("summary", p.summary))
+    members.push(json.Member("detail", p.detail))
+    members.push(json.Member("lang", p.lang))
+    members.push(json.MemberBool("outside", p.outside))
+    members.push(json.Member("cwd", p.cwd))
+    members.push(json.MemberBool("memory", p.memory))
+    if state.len() > 0:
+        members.push(json.Member("state", state))
+        members.push(json.Member("output", output))
+    end
+    ret json.Object(members)
+end
+
+func arg_number(args: str, key: str, fallback: i64): i64:
+    raw := json.Get(args, key)
+    if raw.len() == 0 or raw == "null":
+        ret fallback
+    end
+    ret str.ToInt(raw)
+end
+
+func arg_flag(args: str, key: str): bool:
+    ret json.Get(args, key) == "true"
+end
+
+func timeout_of(args: str): i64:
+    value := arg_number(args, "timeout", 120 as i64)
+    if value < 1:
+        ret 1
+    else value > 1800:
+        ret 1800
+    end
+    ret value
+end
+
+func shell_quote(arg: str): str:
+    bytes := arg as u8*
+    mut plain := str.Len(arg) > 0
+    repeat str.Len(arg) in i:
+        c := bytes[i] as int
+        alnum := (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
+        if not (alnum or c == 45 or c == 95 or c == 46 or c == 47 or c == 58 or c == 61 or c == 64 or c == 44 or c == 43):
+            plain = false
+        end
+    end
+    ret plain ? arg : "'" + str.Replace(arg, "'", "'\\''") + "'"
+end
+
+func first_line(text: str, max: int): str:
+    lines := str.Split(text, "\n")
+    defer lines.free()
+    mut line := ""
+    mut non_empty := 0
+    each raw in lines:
+        t := str.Trim(raw)
+        if t.len() > 0:
+            non_empty += 1
+            if line.len() == 0:
+                line = t
+            end
+        end
+    end
+    mut out := str.CharCount(line) > max ? cut_chars(line, max + 1) : line
+    if not str.EndsWith(out, "…") and non_empty > 1:
+        out = out + " …"
+    end
+    ret out
+end
+
+func set_shell(act &: Action, pv &: Preview, shell_name: str, command: str):
+    act.args = Vector {} as Vector<str>
+    if SALAM_OS_WINDOWS:
+        if shell_name == "cmd":
+            act.program = "cmd.exe"
+            act.raw_args = `/D /S /C "chcp 65001>nul & ` + command + `"`
+            pv.lang = "batch"
+        else shell_name == "bash" or shell_name == "sh":
+            act.program = "bash.exe"
+            act.args.push("-lc")
+            act.args.push(command)
+            pv.lang = "bash"
+        else:
+            act.program = "powershell.exe"
+            each flag in ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-Command"]:
+                act.args.push(flag)
+            end
+            act.args.push("[Console]::OutputEncoding=[Text.Encoding]::UTF8; " + command)
+            pv.lang = "powershell"
+        end
+    else:
+        pv.lang = "bash"
+        if shell_name == "bash":
+            act.program = "bash"
+            act.args.push("-lc")
+        else shell_name == "sh":
+            act.program = "sh"
+            act.args.push("-c")
+        else:
+            login := os.Env("SHELL")
+            act.program = login.len() > 0 ? login : "/bin/sh"
+            act.args.push("-lc")
+        end
+        act.args.push(command)
+    end
+end
+
+func plan_error(text: str): Plan:
+    ret Plan { error = text }
+end
+
+func tool_plan(id: str, tool: str, args: str, chat: str, ws: Workspace): Plan:
+    mut p := Preview { call_id = id, chat = chat, tool = tool, cwd = ws.display(ws.root) }
+    mut a := Action { tool = tool, cwd = ws.root, timeout = timeout_of(args) }
+    mut inside := true
+    if tool == "shell" or tool == "run_tests":
+        cwd := ws.resolve(json.Get(args, "cwd"), inside)
+        p.outside = not inside
+        p.cwd = ws.display(cwd)
+        if not os.IsDir(cwd):
+            ret plan_error("The folder " + cwd + " does not exist.")
+        end
+        mut command := json.Get(args, "command")
+        if tool == "run_tests" and str.Trim(command).len() == 0:
+            command = test_command(cwd)
+            if command.len() == 0:
+                ret plan_error("No test runner found in " + ws.display(cwd) + "; pass command.")
+            end
+        end
+        if str.Trim(command).len() == 0:
+            ret plan_error("command is empty.")
+        end
+        set_shell(a, p, json.Get(args, "shell"), command)
+        p.kind = "exec"
+        p.summary = first_line(command, 120)
+        p.detail = command
+        a.cwd = cwd
+    else tool == "docker":
+        cwd := ws.resolve(json.Get(args, "cwd"), inside)
+        p.outside = not inside
+        p.cwd = ws.display(cwd)
+        items := json.Items(json.Get(args, "args"))
+        if items.len() == 0:
+            ret plan_error("args is empty; pass the docker arguments as a list.")
+        end
+        mut shown := "docker"
+        a.args = Vector {} as Vector<str>
+        each item in items:
+            value := json.Unquote(item)
+            a.args.push(value)
+            shown = shown + " " + shell_quote(value)
+        end
+        a.program = "docker"
+        a.cwd = cwd
+        p.kind = "exec"
+        p.summary = first_line(shown, 120)
+        p.detail = shown
+        p.lang = "bash"
+    else tool == "wsl":
+        if os_name() != "windows":
+            ret plan_error("WSL exists only on Windows; this computer runs " + os_name() + ". Use the shell tool.")
+        end
+        command := json.Get(args, "command")
+        a.program = "wsl.exe"
+        a.args = Vector {} as Vector<str>
+        p.lang = "bash"
+        if str.Trim(command).len() == 0:
+            a.args.push("-l")
+            a.args.push("-v")
+            p.summary = "wsl -l -v"
+            p.detail = "wsl -l -v"
+        else:
+            cwd := ws.resolve(json.Get(args, "cwd"), inside)
+            p.outside = not inside
+            p.cwd = ws.display(cwd)
+            distro := json.Get(args, "distro")
+            if distro.len() > 0:
+                a.args.push("-d")
+                a.args.push(distro)
+            end
+            a.args.push("--cd")
+            a.args.push(cwd)
+            each part in ["-e", "bash", "-lc"]:
+                a.args.push(part)
+            end
+            a.args.push(command)
+            p.kind = "exec"
+            p.summary = first_line(command, 120)
+            p.detail = command
+        end
+    else tool == "read_file" or tool == "list_dir":
+        path := ws.resolve(json.Get(args, "path"), inside)
+        p.outside = not inside
+        p.summary = ws.display(path)
+        a.path = path
+        a.offset = arg_number(args, "offset", 1 as i64)
+        a.limit = arg_number(args, "limit", 0 as i64)
+    else tool == "glob" or tool == "grep":
+        path := ws.resolve(json.Get(args, "path"), inside)
+        p.outside = not inside
+        pattern := json.Get(args, "pattern")
+        if pattern.len() == 0:
+            ret plan_error("pattern is empty.")
+        end
+        p.summary = pattern + " in " + ws.display(path)
+        a.path = path
+        a.pattern = pattern
+        a.file_glob = json.Get(args, "glob")
+        a.ignore_case = arg_flag(args, "ignore_case")
+    else tool == "write_file" or tool == "edit_file":
+        raw := json.Get(args, "path")
+        if str.Trim(raw).len() == 0:
+            ret plan_error("path is empty.")
+        end
+        path := ws.resolve(raw, inside)
+        if in_git_dir(path):
+            ret plan_error("Writing inside .git is not allowed; use git commands.")
+        end
+        shown := ws.display(path)
+        p.kind = "write"
+        p.outside = not inside
+        p.summary = shown
+        p.lang = "diff"
+        a.path = path
+        if tool == "write_file":
+            a.content = json.Get(args, "content")
+            p.detail = unified_diff(shown, old_content(path), a.content)
+        else:
+            if not os.Exists(path) or os.IsDir(path):
+                ret plan_error(shown + " does not exist; use write_file to create it.")
+            end
+            mut failed := false
+            before := read_text(path, failed)
+            if failed:
+                ret plan_error(before)
+            end
+            after := apply_edit(before, json.Get(args, "old_text"), json.Get(args, "new_text"), arg_flag(args, "replace_all"), a.count, failed)
+            if failed:
+                ret plan_error(after)
+            end
+            a.before = before
+            a.after = after
+            p.detail = unified_diff(shown, before, after)
+        end
+    else tool == "save_memory":
+        a.title = json.Get(args, "title")
+        a.description = json.Get(args, "description")
+        a.content = json.Get(args, "content")
+        d := memory_draft(ws.root, json.Get(args, "slug"), a.title, a.description, a.content)
+        if d.error.len() > 0:
+            ret plan_error(d.error)
+        end
+        shown := memory_rel(d.slug)
+        _resolved := ws.resolve(shown, inside)
+        if not inside:
+            ret plan_error(shown + " points outside the workspace, so Salam Agent will not touch it.")
+        end
+        a.slug = d.slug
+        p.kind = "write"
+        p.memory = true
+        p.summary = shown
+        p.detail = unified_diff(shown, d.before, d.after)
+        p.lang = "diff"
+    else tool == "forget_memory":
+        mut error := ""
+        slug := check_slug(json.Get(args, "slug"), error)
+        if error.len() > 0:
+            ret plan_error(error)
+        end
+        shown := memory_rel(slug)
+        _resolved := ws.resolve(shown, inside)
+        if not inside:
+            ret plan_error(shown + " points outside the workspace, so Salam Agent will not touch it.")
+        end
+        path := memory_path(ws.root, slug)
+        if not os.Exists(path):
+            ret plan_error(shown + " does not exist.")
+        end
+        a.slug = slug
+        p.kind = "write"
+        p.memory = true
+        p.summary = "forget " + shown
+        p.detail = old_content(path)
+        p.lang = "markdown"
+    else tool == "browser":
+        ret plan_error("The browser tool is not available in this build of Salam Agent yet.")
+    else:
+        ret plan_error("This version of Salam Agent does not know the tool " + tool + ". Ask the user to update Salam Agent.")
+    end
+    ret Plan { preview = p, action = a }
+end
+
+func tool_run(a: Action, ws: Workspace, call_id: str, failed &: bool): str:
+    tool := a.tool
+    if tool == "shell" or tool == "run_tests" or tool == "docker" or tool == "wsl":
+        ret exec_run(a.program, a.args, a.raw_args, a.cwd, a.timeout, call_id, failed)
+    end
+    if tool == "read_file":
+        ret cap_text(read_file(a.path, a.offset, a.limit, failed))
+    else tool == "list_dir":
+        ret cap_text(list_dir(ws, a.path, failed))
+    else tool == "write_file":
+        ret write_file(a.path, a.content, failed)
+    else tool == "edit_file":
+        current := read_text(a.path, failed)
+        if failed:
+            ret current
+        end
+        if current != a.before:
+            failed = true
+            ret "The file changed while waiting for approval. Read it again."
+        end
+        result := write_file(a.path, a.after, failed)
+        if failed:
+            ret result
+        end
+        ret "Edited " + ws.display(a.path) + " (" + str.FromInt(a.count as i64) + " replacement" + (a.count == 1 ? "" : "s") + ")."
+    else tool == "glob":
+        ret cap_text(glob_search(ws, a.path, a.pattern))
+    else tool == "grep":
+        ret cap_text(grep_search(ws, a.path, a.pattern, a.file_glob, a.ignore_case, failed))
+    else tool == "save_memory":
+        ret memory_save(ws.root, a.slug, a.title, a.description, a.content, failed)
+    else tool == "forget_memory":
+        ret memory_forget(ws.root, a.slug, failed)
+    end
+    failed = true
+    ret "unknown tool " + tool
+end
+
+func new_client(timeout_ms: int): http.Client:
+    mut c := http.NewClient()
+    c.SetTimeout(timeout_ms)
+    c.SetHeader("User-Agent", "salam-agent/" + AGENT_VERSION)
+    ret c
+end
+
+func auth_headers(token: str): HashMap<str, str>:
+    mut h := http.NewHeaders()
+    h.put("Authorization", "Bearer " + token)
+    h.put("Content-Type", "application/json")
+    ret h
+end
+
+func emit_call(p: Preview, state: str, output: str):
+    desktop.Emit("agent://call", preview_json(p, state, output))
+end
+
+func offline_later(flip: int):
+    pool.Go(
+        (): sync.SleepMs(OFFLINE_GRACE_MS)
+        sync.Lock(g_mu)
+        still_down := not g_connected and g_flips == flip
+        linked := g_secret.len() > 0 if still_down and linked: g_told_offline = true end sync.Unlock(g_mu) if still_down and linked: notify_post("offline", "", "", 0 as i64) end end
+    )
+end
+
+func set_connected(value: bool):
+    sync.Lock(g_mu)
+    changed := g_connected != value
+    g_connected = value
+    told := g_told_offline
+    if changed:
+        g_flips += 1
+        if value:
+            g_told_offline = false
+        end
+    end
+    flip := g_flips
+    sync.Unlock(g_mu)
+    if not changed:
+        ret
+    end
+    desktop.Emit("agent://connection", value ? "true" : "false")
+    if value:
+        if told:
+            notify_post("online", "", "", 0 as i64)
+        end
+        ret
+    end
+    offline_later(flip)
+end
+
+func report(secret: str, call_id: str, status: str, output: str, p: Preview, has_preview: bool):
+    mut members := Vector {} as Vector<str>
+    defer members.free()
+    members.push(json.Member("call_id", call_id))
+    members.push(json.Member("status", status))
+    members.push(json.Member("output", output))
+    if has_preview:
+        members.push(json.Member("tool", p.tool))
+        members.push(json.Member("kind", p.kind))
+        members.push(json.Member("summary", p.summary))
+        members.push(json.Member("detail", p.detail))
+        members.push(json.Member("lang", p.lang))
+        members.push(json.MemberBool("outside", p.outside))
+        members.push(json.Member("cwd", p.cwd))
+    end
+    body := json.Object(members)
+    mut c := new_client(40000)
+    defer c.Free()
+    h := auth_headers(secret)
+    repeat 3:
+        res := c.RequestWith("POST", bridge_url() + "/bridge/result", body, h)
+        if (res.status >= 200 and res.status < 300) or res.status == 404:
+            ret
+        end
+        sync.SleepMs(1000)
+    end
+end
+
+func handle_call(secret: str, call_text: str):
+    id := json.Get(call_text, "id")
+    tool := json.Get(call_text, "tool")
+    args := json.Get(call_text, "args")
+    chat := json.Get(call_text, "chat")
+    ws := workspace_open(json.Get(call_text, "workspace"))
+    empty := Preview {}
+    if ws.error.len() > 0:
+        report(secret, id, "error", ws.error, empty, false)
+        ret
+    end
+    plan := tool_plan(id, tool, args.len() > 0 ? args : "{}", chat, ws)
+    if plan.error.len() > 0:
+        report(secret, id, "error", plan.error, empty, false)
+        ret
+    end
+    p := plan.preview
+    mut reason := ""
+    decision := approvals_needs(p, reason)
+    mut allowed := decision == "allow"
+    if decision == "ask":
+        emit_call(p, "pending", "")
+        allowed = approvals_ask(p, reason)
+    end
+    if not allowed:
+        emit_call(p, "denied", reason)
+        report(secret, id, "denied", reason, p, true)
+        ret
+    end
+    emit_call(p, "running", "")
+    approvals_start(id)
+    mut failed := false
+    output := tool_run(plan.action, ws, id, failed)
+    approvals_finish(id)
+    emit_call(p, failed ? "error" : "done", output)
+    report(secret, id, failed ? "error" : "ok", output, p, true)
+end
+
+func connection_monitor():
+    until true:
+        sync.SleepMs(250)
+        sync.Lock(g_mu)
+        started := g_poll_started
+        sync.Unlock(g_mu)
+        if started > 0 and sync.NowMs() - started > (1500 as i64):
+            set_connected(true)
+        end
+    end
+end
+
+func bridge_loop():
+    mut backoff := 1
+    mut c := new_client(40000)
+    until true:
+        secret := device_secret()
+        if secret.len() == 0:
+            set_connected(false)
+            sync.SleepMs(2000)
+            continue
+        end
+        h := auth_headers(secret)
+        sync.Lock(g_mu)
+        g_poll_started = sync.NowMs()
+        sync.Unlock(g_mu)
+        res := c.RequestWith("GET", bridge_url() + "/bridge/poll", "", h)
+        sync.Lock(g_mu)
+        g_poll_started = 0 as i64
+        sync.Unlock(g_mu)
+        if res.status == 200:
+            set_connected(true)
+            backoff = 1
+            call_text := json.Valid(res.body) ? json.Get(res.body, "call") : ""
+            if call_text.len() > 0 and json.Valid(call_text):
+                pool.Go((): handle_call(secret, call_text) end)
+            end
+        else res.status == 204:
+            set_connected(true)
+            backoff = 1
+        else res.status == 401:
+            device_clear()
+            set_connected(false)
+            notify_post("unlinked", "", "", 0 as i64)
+            desktop.Emit("agent://device", "null")
+        else:
+            set_connected(false)
+            sync.SleepMs(backoff * 1000)
+            backoff = backoff * 2 > 30 ? 30 : backoff * 2
+        end
+    end
+end
+
+func probe_app(timeout_ms: int): str:
+    mut c := http.NewClient()
+    defer c.Free()
+    c.SetTimeout(timeout_ms)
+    res := c.Get(app_url())
+    if res.status <= 0:
+        ret "offline"
+    end
+    ret res.status < 500 ? "ok" : "server"
+end
+
+func navigate_main(url: str):
+    desktop.Dispatch((): g_win.Navigate(url) end)
+end
+
+func connect_main():
+    mut attempts := 0
+    mut shown := ""
+    until true:
+        state := probe_app(8000)
+        if state == "ok":
+            navigate_main(app_url())
+            ret
+        end
+        attempts += 1
+        if attempts >= 2 and shown != state:
+            navigate_main(desktop.AssetURL("/error.html#" + state))
+            shown = state
+        end
+        sync.SleepMs(5000)
+    end
+end
+
+func ui_away(): bool:
+    mut answer := (mem.AllocateZeroed(16 as u64)) as i64*
+    answer[1] = 1 as i64
+    desktop.Dispatch(
+        (): answer[1] = window_away() ? 1 as i64 : 0 as i64
+        answer[0] = 1 as i64 end
+    )
+    deadline := sync.NowMs() + (300 as i64)
+    until answer[0] == 0 and sync.NowMs() < deadline:
+        sync.SleepMs(5)
+    end
+    ret answer[1] == 1
+end
+
+func watch_start(chat: str, mid: i64): WatchJob*:
+    sync.Lock(g_mu)
+    defer sync.Unlock(g_mu)
+    if g_watchers.has(chat):
+        old := g_watchers.get(chat)
+        if old[0].mid == mid:
+            ret null as WatchJob*
+        end
+        old[0].stop = true
+    end
+    if g_watchers.size() >= MAX_JOBS:
+        mut oldest_chat := ""
+        mut oldest := 0 as i64
+        each key, job in g_watchers:
+            if oldest_chat.len() == 0 or job[0].started < oldest:
+                oldest_chat = key
+                oldest = job[0].started
+            end
+        end
+        if oldest_chat.len() > 0:
+            g_watchers.get(oldest_chat)[0].stop = true
+            _removed := g_watchers.remove(oldest_chat)
+        end
+    end
+    g_watch_seq += 1
+    job := mem.AllocateZeroed(sizeof(WatchJob) as u64) as WatchJob*
+    job[0] = WatchJob { mid = mid, started = g_watch_seq }
+    g_watchers.put(chat, job)
+    ret job
+end
+
+func watch_stop(chat: str):
+    sync.Lock(g_mu)
+    if g_watchers.has(chat):
+        g_watchers.get(chat)[0].stop = true
+        _removed := g_watchers.remove(chat)
+    end
+    sync.Unlock(g_mu)
+end
+
+func watch_stop_all():
+    sync.Lock(g_mu)
+    each _, job in g_watchers:
+        job[0].stop = true
+    end
+    g_watchers.free()
+    g_watchers = HashMap {} as HashMap<str, WatchJob*>
+    sync.Unlock(g_mu)
+end
+
+func watch_done(chat: str, job: WatchJob*):
+    sync.Lock(g_mu)
+    if g_watchers.has(chat) and g_watchers.get(chat) == job:
+        _removed := g_watchers.remove(chat)
+    end
+    sync.Unlock(g_mu)
+end
+
+func watch_halted(job: WatchJob*): bool:
+    sync.Lock(g_mu)
+    out := job[0].stop
+    sync.Unlock(g_mu)
+    ret out
+end
+
+func pick_next(messages: str, after: i64): i64:
+    items := json.Items(messages)
+    defer items.free()
+    mut best := 0 as i64
+    each item in items:
+        if json.Get(item, "role") == "assistant":
+            id := str.ToInt(json.Get(item, "id")) as i64
+            if id > after and (best == 0 or id < best):
+                best = id
+            end
+        end
+    end
+    ret best
+end
+
+func next_reply(c &: http.Client, base: str, token: str, after: i64): i64:
+    h := auth_headers(token)
+    repeat 2 in attempt:
+        if attempt > 0:
+            sync.SleepMs(WATCH_STEP_MS)
+        end
+        res := c.RequestWith("GET", base, "", h)
+        if res.status <= 0:
+            continue
+        end
+        if res.status < 200 or res.status >= 300:
+            ret 0
+        end
+        if json.Valid(res.body):
+            next := pick_next(json.Get(res.body, "messages"), after)
+            if next > 0:
+                ret next
+            end
+        end
+    end
+    ret 0
+end
+
+func watch_run(chat: str, first_mid: i64, token: str, title: str, job: WatchJob*):
+    mut c := new_client(12000)
+    defer c.Free()
+    h := auth_headers(token)
+    base := api_url() + "/chats/" + chat
+    started := sync.NowMs()
+    mut mid := first_mid
+    until true:
+        url := base + "/messages/" + str.FromInt(mid)
+        mut kind := ""
+        mut body := ""
+        until kind.len() == 0 and not watch_halted(job) and sync.NowMs() - started < (WATCH_LIMIT_MS as i64):
+            elapsed := sync.NowMs() - started
+            sync.SleepMs(elapsed > (300000 as i64) ? 10000 : WATCH_STEP_MS)
+            if watch_halted(job):
+                break
+            end
+            if not ui_away() or not prefs_now().enabled:
+                continue
+            end
+            res := c.RequestWith("GET", url, "", h)
+            if res.status == 401:
+                watch_done(chat, job)
+                ret
+            end
+            if res.status < 200 or res.status >= 300 or not json.Valid(res.body):
+                continue
+            end
+            status := json.Get(res.body, "status")
+            if status.len() == 0 or status == "pending":
+                continue
+            end
+            body = json.Get(res.body, "body")
+            kind = status == "error" ? "failed" : "done"
+        end
+        if kind.len() == 0:
+            break
+        end
+        notify_post(kind, title, body, mid)
+        next := next_reply(c, base, token, mid)
+        if next == 0:
+            break
+        end
+        mid = next
+    end
+    watch_done(chat, job)
+end
+
+func watchdog_arm():
+    sync.Lock(g_mu)
+    g_last_beat = sync.NowMs()
+    g_armed = true
+    sync.Unlock(g_mu)
+end
+
+func watchdog_beat():
+    sync.Lock(g_mu)
+    g_last_beat = sync.NowMs()
+    sync.Unlock(g_mu)
+end
+
+func watchdog_disarm():
+    sync.Lock(g_mu)
+    g_armed = false
+    sync.Unlock(g_mu)
+end
+
+func watchdog_probe(): bool:
+    sync.Lock(g_mu)
+    g_pong = false
+    sync.Unlock(g_mu)
+    g_win.Eval(`window.salam && salam.emit("agent_pong", {})`)
+    deadline := sync.NowMs() + (WATCHDOG_PROBE_MS as i64)
+    until sync.NowMs() < deadline:
+        sync.Lock(g_mu)
+        got := g_pong
+        sync.Unlock(g_mu)
+        if got:
+            ret true
+        end
+        sync.SleepMs(200)
+    end
+    ret false
+end
+
+func watchdog_loop():
+    mut recovered := 0 as i64
+    until true:
+        sync.SleepMs(WATCHDOG_CHECK_MS)
+        sync.Lock(g_mu)
+        armed := g_armed
+        silence := sync.NowMs() - g_last_beat
+        sync.Unlock(g_mu)
+        if not armed:
+            continue
+        end
+        if ui_away():
+            watchdog_beat()
+            continue
+        end
+        if silence < (WATCHDOG_SILENCE_MS as i64):
+            continue
+        end
+        watchdog_disarm()
+        if watchdog_probe():
+            watchdog_arm()
+            continue
+        end
+        state := probe_app(6000)
+        reason := state == "ok" ? "crash" : state
+        if reason == "crash" and (recovered == 0 or sync.NowMs() - recovered >= (WATCHDOG_RECOVER_GAP_MS as i64)):
+            recovered = sync.NowMs()
+            navigate_main(app_url())
+            continue
+        end
+        navigate_main(desktop.AssetURL("/error.html#" + reason))
+    end
+end
+
+func info_json(): str:
+    sync.Lock(g_mu)
+    connected := g_connected
+    sync.Unlock(g_mu)
+    mut members := Vector {} as Vector<str>
+    defer members.free()
+    members.push(json.Member("version", AGENT_VERSION))
+    members.push(json.Member("os", os_name()))
+    members.push(json.Member("os_version", g_os_version))
+    members.push(json.Member("arch", arch_name()))
+    members.push(json.MemberRaw("device", device_json()))
+    members.push(json.MemberBool("connected", connected))
+    ret json.Object(members)
+end
+
+func device_name(): str:
+    name := os.Env(SALAM_OS_WINDOWS ? "COMPUTERNAME" : "HOSTNAME")
+    if name.len() > 0:
+        ret cut_chars(name, 80)
+    end
+    mut args := Vector {} as Vector<str>
+    host := str.Trim(capture("hostname", args))
+    ret host.len() > 0 ? cut_chars(host, 80) : os_name()
+end
+
+func valid_chat_id(chat: str): bool:
+    n := str.Len(chat)
+    if n == 0 or n > 64:
+        ret false
+    end
+    bytes := chat as u8*
+    repeat n in i:
+        c := bytes[i] as int
+        if not ((c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 45 or c == 95):
+            ret false
+        end
+    end
+    ret true
+end
+
+func register_commands():
+    desktop.Command("agent_info", (c: desktop.Call): c.Resolve(info_json()) end)
+    desktop.CommandAsync(
+        "agent_link", (c: desktop.Call): token := str.Trim(c.Str("token"))
+        name := device_name() mut members := Vector {} as Vector<str> members.push(json.Member("name", name))
+        members.push(json.Member("os", os_name())) mut client := new_client(40000)
+        res := client.RequestWith("POST", api_url() + "/bridge/devices", json.Object(members), auth_headers(token))
+        client.Free()
+        members.free() if res.status <= 0: c.Reject("network: " + res.err) ret end if res.status < 200 or res.status >= 300: message := json.Valid(res.body) ? json.Get(res.body, "message") : ""
+        c.Reject(message.len() > 0 ? message : "could not register this computer") ret end id := json.Get(json.Get(res.body, "device"), "id") if id.len() == 0: c.Reject("the server answered without a device id") ret end secret := json.Get(res.body, "secret") if secret.len() == 0: c.Reject("the server answered without a secret") ret end failed := device_save(id, name, secret) if failed.len() > 0: c.Reject(failed) ret end c.Resolve(info_json()) end
+    )
+    desktop.CommandAsync(
+        "agent_unlink", (c: desktop.Call): token := c.Str("token")
+        sync.Lock(g_mu)
+        id := g_device_id
+        sync.Unlock(g_mu) if token.len() > 0 and id.len() > 0: mut client := new_client(40000)
+        _res := client.RequestWith("DELETE", api_url() + "/bridge/devices/" + id, "", auth_headers(str.Trim(token)))
+        client.Free() end device_clear()
+        watch_stop_all()
+        notify_forget_seen()
+        c.Resolve(info_json()) end
+    )
+    desktop.Command(
+        "agent_pick_folder", (c: desktop.Call): picked := desktop.PickFolder("پوشه‌ی کاری را انتخاب کنید") if picked.len() == 0: c.ResolveNull() else: c.ResolveStr(picked) end end
+    )
+    desktop.Command(
+        "agent_set_mode", (c: desktop.Call): approvals_set_mode(c.Str("chat"), c.Str("mode"))
+        c.ResolveNull() end
+    )
+    desktop.Command(
+        "agent_decide", (c: desktop.Call): c.ResolveBool(approvals_answer(c.Str("callId"), c.Str("answer"))) end
+    )
+    desktop.Command(
+        "agent_stop", (c: desktop.Call): c.ResolveBool(approvals_stop(c.Str("callId"))) end
+    )
+    desktop.Command("agent_pending", (c: desktop.Call): c.Resolve(approvals_pending_json()) end)
+    desktop.Command(
+        "agent_alive", (c: desktop.Call): watchdog_beat()
+        c.ResolveNull() end
+    )
+    desktop.CommandAsync(
+        "agent_project_context", (c: desktop.Call): folder := str.Trim(c.Str("workspace")) if folder.len() == 0: c.Reject("No workspace folder is selected.") ret end ws := workspace_open(folder) if ws.error.len() > 0: c.Reject(ws.error) ret end c.Resolve(project_context_json(ws.root)) end
+    )
+    desktop.Command(
+        "agent_notify", (c: desktop.Call): result := notify_deliver(c.Str("kind"), c.Str("chat"), c.Str("text"), c.Has("mid") ? c.Int("mid") as i64 : 0 as i64) if result == "failed": c.Reject("the system could not show the notification") else: c.ResolveStr(result) end end
+    )
+    desktop.Command(
+        "agent_watch_reply", (c: desktop.Call): chat := c.Str("chat")
+        mid := c.Int("mid") as i64
+        token := str.Trim(c.Str("token"))
+        title := c.Str("title") if not valid_chat_id(chat): c.Reject("invalid chat id") ret end if mid <= 0: c.Reject("invalid message id") ret end if token.len() == 0 or token.len() > 4096: c.Reject("invalid token") ret end job := watch_start(chat, mid) if job != null: pool.Go((): watch_run(chat, mid, token, title, job) end) end c.ResolveNull() end
+    )
+    desktop.Command(
+        "agent_unwatch_reply", (c: desktop.Call): watch_stop(c.Str("chat"))
+        c.ResolveNull() end
+    )
+    desktop.Command("agent_notify_prefs", (c: desktop.Call): c.Resolve(prefs_json(prefs_now())) end)
+    desktop.Command(
+        "agent_set_notify_prefs", (c: desktop.Call): p := prefs_parse(json.Get(c.args, "prefs"))
+        prefs_save(p)
+        c.Resolve(prefs_json(p)) end
+    )
+end
+
+func allow_remote(origin: str):
+    mut commands := Vector {} as Vector<str>
+    commands.push("agent_*")
+    commands.push("event:agent_pong")
+    desktop.Allow(origin, commands)
+end
+
+func on_load(url: str, finished: bool):
+    if not finished:
+        watchdog_disarm()
+    else desktop.OriginOf(url) == desktop.OriginOf(app_url()):
+        watchdog_arm()
+    end
+end
+
+func main:
+    import_login_path()
+    g_os_version = os_version()
+    desktop.Init(desktop.Config { id = "ir.salamlang.agent", name = "Salam Agent", version = AGENT_VERSION })
+    primary := desktop.SingleInstance(
+        (_args: Vector<str>): g_win.Show()
+        g_win.Focus() end
+    )
+    if not primary:
+        ret 0
+    end
+    allow_remote(app_url())
+    register_commands()
+    desktop.On(
+        "agent_pong", (_data: str): sync.Lock(g_mu)
+        g_pong = true
+        sync.Unlock(g_mu) end
+    )
+    device_load()
+    prefs_load()
+    mut scripts := Vector {} as Vector<str>
+    if os.Env("SALAM_DEVTOOLS").len() == 0:
+        scripts.push(LOCK_JS)
+    end
+    g_win = desktop.Open(
+        desktop.WindowOptions {
+            title = "Salam Agent", width = 1180, height = 800, min_width = 720, min_height = 520,
+            scripts = scripts
+        }
+    )
+    if g_win.IsClosed():
+        printerrln "Salam Agent needs a desktop session and the system web view."
+        ret 1
+    end
+    g_win.OnLoad((url: str, finished: bool): on_load(url, finished) end)
+    g_win.OnCrash(
+        (): watchdog_disarm()
+        g_win.Navigate(desktop.AssetURL("/error.html#memory")) end
+    )
+    _bridge := spawn(bridge_loop)
+    _monitor := spawn(connection_monitor)
+    _connect := spawn(connect_main)
+    _watchdog := spawn(watchdog_loop)
+    desktop.Run()
+end

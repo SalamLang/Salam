@@ -1282,6 +1282,13 @@ end
   `.present .value`. Never read `.value` unchecked: on an empty
   `Option<str>` it is a null pointer and printing it segfaults. No `match`
   and no `?` on an Option.
+- **`wire`**: dependency injection, google/wire style. Providers are keyed by a
+  name you choose (no runtime type identity): `New()`,
+  `Provide(c, "Service", "Repo", Service {}, (cx: wire.Container): ... end)` (the
+  second string lists the needs, the value only fixes the type), `Value`,
+  `Bind(c, "Store", "MemStore")`, `OnClose(c, name, T {}, (v: T): ... end)`,
+  `Build(c)` (returns "" or a missing/duplicate/cycle message), `Get(c, name, out)`
+  (lazy singleton), `Built Count Error`, `Close` (cleanups in reverse build order).
 - **`result`**: `Result<T, E>` (`Ok`/`Err`) with `IsOk IsErr UnwrapOr Expect`
   and postfix `?` (error types must match). There is no `Unwrap`, `map` or
   `and_then`; `Expect` does not print the error.
@@ -1569,6 +1576,13 @@ end
   breaks on a password with `"` or `\`). **`net.http2`** frames, HPACK and
   streams (`NewConn ClientHandshake SendHeaders SendData Poll`; one thread
   per `Conn`).
+- **`events`** (`import events`): an in-process event emitter, generic over the
+  payload (`events.New() as events.Emitter<int>`). `On Once OnAny` take a dotted
+  topic (`*` is one word, `#` the rest) and a lambda and return an id for `Off`;
+  `OffTopic Count Len Emit`. Handlers run outside the lock, so they may call
+  `On`/`Off`/`Emit`. `NewAsync(cap)` adds one worker thread: `EmitAsync Pending
+Flush Close`. Lambdas capture by value, so share state through pointers or
+  `mut` globals. `Free` releases it.
 - **`tls`** (TLS 1.2/1.3 in pure Salam, no OpenSSL): `Dial WrapClient WrapServer NewConfig NewServerConfig ConnOk ConnError Read Write ReadBytes WriteBytes Close`, plus `AesGcmSeal`, `AesGcmOpen`, `HkdfSha256`, the `EcdhP256` functions,
   `P256Sign` and `P256Verify`. Check `ConnOk` after `Dial`; no client certificates;
   about 800 KB/s for bulk transfers. **`ssl`** is an OpenSSL-style API over

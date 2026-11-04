@@ -334,9 +334,7 @@ static void fill(void **vt)
     vt[2] = (void *)ok_ref;
 }
 
-__declspec(dllexport) HRESULT __stdcall
-CreateCoreWebView2EnvironmentWithOptions(const wchar_t *browser, const wchar_t *data,
-                                         void *options, void *handler)
+static HRESULT start_environment(const wchar_t *browser, const wchar_t *data, void *options, void *handler)
 {
     setvbuf(stdout, NULL, _IONBF, 0);
     if (browser != NULL || options != NULL) printf("FAIL environment args\n");
@@ -387,4 +385,19 @@ CreateCoreWebView2EnvironmentWithOptions(const wchar_t *browser, const wchar_t *
     g_request_vt[5] = (void *)request_get_method;
     complete(handler, &g_env);
     return S_OK;
+}
+
+__declspec(dllexport) HRESULT __stdcall
+CreateCoreWebView2EnvironmentWithOptions(const wchar_t *browser, const wchar_t *data, void *options, void *handler)
+{
+    return start_environment(browser, data, options, handler);
+}
+
+__declspec(dllexport) HRESULT __stdcall
+CreateWebViewEnvironmentWithOptionsInternal(int check_running, int runtime_type, const wchar_t *data, void *options,
+                                            void *handler)
+{
+    setvbuf(stdout, NULL, _IONBF, 0);
+    printf("internal loader check=%d runtime=%d\n", check_running != 0, runtime_type);
+    return start_environment(NULL, data, options, handler);
 }

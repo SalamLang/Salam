@@ -26,7 +26,7 @@ permissions:
 
 concurrency:
   group: desktop-${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  cancel-in-progress: false
 
 jobs:
   stage:
@@ -121,6 +121,39 @@ jobs:
           sudo dpkg -i dist/salam-sample_*.deb
           timeout 60 xvfb-run -a salam-sample --self-test
 
+  wine:
+    name: Windows services under wine
+    needs: stage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download the compiler
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: desktop-stage
+
+      - name: Install wine and mingw
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y mingw-w64 wine64 xvfb
+          WINE_BIN="$(command -v wine64 || command -v wine)"
+          sudo ln -sf "$WINE_BIN" /usr/local/bin/wine
+
+      - name: Run the services test
+        env:
+          SALAM_STD: ${{ github.workspace }}/std
+          DESKTOP_WINE_ARCHES: x86_64
+          WINEDEBUG: -all
+        run: |
+          chmod +x salam
+          timeout 60 wineboot --init || true
+          sh tools/bash/desktop-wine-check.sh ./salam
+
   windows:
     name: Windows x64
     needs: stage
@@ -131,6 +164,18 @@ jobs:
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: desktop-stage
+
+      - name: Make sure the WebView2 runtime is there
+        shell: pwsh
+        run: |
+          $key = 'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          if (Test-Path $key) {
+            Get-ItemProperty $key | Select-Object pv, location | Format-List
+          } else {
+            Write-Output 'WebView2 is missing, installing it'
+            Invoke-WebRequest 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile setup.exe
+            Start-Process -Wait -FilePath .\setup.exe -ArgumentList '/silent', '/install'
+          }
 
       - name: Run the smoke test
         shell: bash

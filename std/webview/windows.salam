@@ -148,6 +148,8 @@ if SALAM_OS_WINDOWS and not SALAM_WEBVIEW_CEF:
         func salam_env_completed(_this: void*, error_code: i32, environment: void*): i32:
             if error_code == 0:
                 _win_env = environment
+            else:
+                _wv_last_error = "WebView2 could not create its environment, HRESULT " + _win_hex(error_code)
             end
             _win_wait_done = true
             ret 0
@@ -155,6 +157,8 @@ if SALAM_OS_WINDOWS and not SALAM_WEBVIEW_CEF:
         func salam_ctrl_completed(_this: void*, error_code: i32, controller: void*): i32:
             if error_code == 0:
                 _win_ctrl = controller
+            else:
+                _wv_last_error = "WebView2 could not create its controller, HRESULT " + _win_hex(error_code)
             end
             _win_wait_done = true
             ret 0
@@ -493,6 +497,19 @@ if SALAM_OS_WINDOWS and not SALAM_WEBVIEW_CEF:
         ret buf as str
     end
 
+    func _win_hex(code: i32): str:
+        digits := "0123456789ABCDEF" as u8*
+        mut b := str.NewBuilder()
+        str.BufAppend(b, "0x")
+        value := code as u32
+        mut shift := 28
+        until shift >= 0:
+            str.BufAppendChar(b, digits[((value >> shift) & (15 as u32)) as int] as int)
+            shift -= 4
+        end
+        ret str.BufStr(b)
+    end
+
     func _win_scheme_of(url: str): str:
         start := str.IndexOf(url, "://")
         if start < 0:
@@ -527,9 +544,9 @@ if SALAM_OS_WINDOWS and not SALAM_WEBVIEW_CEF:
         end
     end
 
-    func _win_runtime_dir(root: void*): str:
-        sub_key := to_wide("SOFTWARE\\Microsoft\\EdgeUpdate\\ClientState\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}")
-        value := to_wide("EBWebView")
+    func _win_reg_text(root: void*, sub_key_text: str, value_name: str): str:
+        sub_key := to_wide(sub_key_text)
+        value := to_wide(value_name)
         defer mem.Free(sub_key)
         defer mem.Free(value)
         key_slot := (mem.AllocateZeroed(sizeof(Slot) as u64)) as Slot*
@@ -555,15 +572,7 @@ if SALAM_OS_WINDOWS and not SALAM_WEBVIEW_CEF:
         ret found
     end
 
-    func _win_runtime_dll(): str:
-        mut dir := _win_runtime_dir(((0x80000002 as u32) as size) as void*)
-        if dir.len() == 0:
-            mem.Free(dir as void*)
-            dir = _win_runtime_dir(((0x80000001 as u32) as size) as void*)
-        end
-        if dir.len() == 0:
-            ret dir
-        end
+    func _win_client_dll(dir: str): str:
         mut arch := "x64"
         if SALAM_ARCH_X86:
             arch = "x86"
@@ -572,6 +581,23 @@ if SALAM_OS_WINDOWS and not SALAM_WEBVIEW_CEF:
             arch = "arm64"
         end
         ret dir.concat("\\EBWebView\\").concat(arch).concat("\\EmbeddedBrowserWebView.dll")
+    end
+
+    func _win_runtime_dll(): str:
+        guid := "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}"
+        each value in [-2147483646, -2147483647]:
+            root := (value as size) as void*
+            dir := _win_reg_text(root, "SOFTWARE\\Microsoft\\EdgeUpdate\\ClientState\\".concat(guid), "EBWebView")
+            if dir.len() > 0:
+                ret _win_client_dll(dir)
+            end
+            location := _win_reg_text(root, "SOFTWARE\\Microsoft\\EdgeUpdate\\Clients\\".concat(guid), "location")
+            version := _win_reg_text(root, "SOFTWARE\\Microsoft\\EdgeUpdate\\Clients\\".concat(guid), "pv")
+            if location.len() > 0 and version.len() > 0:
+                ret _win_client_dll(location.concat("\\").concat(version))
+            end
+        end
+        ret str.Clone("")
     end
 
     func _win_data_dir_wide(): void*:
@@ -591,25 +617,36 @@ if SALAM_OS_WINDOWS and not SALAM_WEBVIEW_CEF:
             create := GetProcAddress(loader, "CreateCoreWebView2EnvironmentWithOptions")
             if create != null:
                 f := create as extern stdcall func (void*, void*, void*, void*) i32
-                ret f(null, data_dir, null, handler) == 0
+                result := f(null, data_dir, null, handler)
+                if result != 0:
+                    _wv_last_error = "WebView2Loader refused to start, HRESULT " + _win_hex(result)
+                end
+                ret result == 0
             end
         end
         dll_path := _win_runtime_dll()
         if dll_path.len() == 0:
+            _wv_last_error = "The WebView2 runtime is not installed. Get it from https://developer.microsoft.com/microsoft-edge/webview2/"
             ret false
         end
         wide_path := to_wide(dll_path)
         defer mem.Free(wide_path)
         client := LoadLibraryW(wide_path)
         if client == null:
+            _wv_last_error = "Could not load " + dll_path
             ret false
         end
         internal := GetProcAddress(client, "CreateWebViewEnvironmentWithOptionsInternal")
         if internal == null:
+            _wv_last_error = dll_path + " has no CreateWebViewEnvironmentWithOptionsInternal"
             ret false
         end
         g := internal as extern stdcall func (i32, i32, void*, void*, void*) i32
-        ret g(1, 0, data_dir, null, handler) == 0
+        result := g(1, 0, data_dir, null, handler)
+        if result != 0:
+            _wv_last_error = "WebView2 refused to start, HRESULT " + _win_hex(result)
+        end
+        ret result == 0
     end
 
     func _win_message_window():
@@ -664,6 +701,9 @@ if SALAM_OS_WINDOWS and not SALAM_WEBVIEW_CEF:
         end
         _win_pump_wait()
         if _win_env == null:
+            if _wv_last_error.len() == 0:
+                _wv_last_error = "WebView2 did not create its environment in time"
+            end
             _win_failed = true
             ret false
         end
@@ -697,11 +737,13 @@ if SALAM_OS_WINDOWS and not SALAM_WEBVIEW_CEF:
         if not _win_startup():
             ret false
         end
+        _wv_last_error = ""
         hwnd := CreateWindowExW(
             0 as u32, _win_class, null, 0x00CF0000 as u32, 100, 100, 800, 600, null, null,
             GetModuleHandleW(null), null
         )
         if hwnd == null:
+            _wv_last_error = "Windows could not create the window"
             ret false
         end
         _win_views[id] = _WinView { hwnd = hwnd }
@@ -711,6 +753,9 @@ if SALAM_OS_WINDOWS and not SALAM_WEBVIEW_CEF:
         create_ctrl(_win_env, hwnd, make_com_obj(_h_ctrl))
         _win_pump_wait()
         if _win_ctrl == null:
+            if _wv_last_error.len() == 0:
+                _wv_last_error = "WebView2 did not create its controller in time"
+            end
             DestroyWindow(hwnd)
             ret false
         end

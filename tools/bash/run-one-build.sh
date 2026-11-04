@@ -63,10 +63,18 @@ while [ "$_try" -le 4 ]; do
     case "$got" in *"Permission denied"* | "") sleep 1 ;; *) break ;; esac
     _try=$((_try + 1))
 done
-if [ "$got" = "$want" ]; then
+_rcok=1
+_rcfile="${f%.salam}.exit"
+if [ -f "$_rcfile" ] && [ "$_rc" != "$(tr -d '\r\n' <"$_rcfile")" ]; then
+    _rcok=0
+fi
+if [ "$got" = "$want" ] && [ "$_rcok" -eq 1 ]; then
     echo "PASS $label"
 else
     echo "FAIL $label"
+    if [ "$_rcok" -eq 0 ]; then
+        echo "  exit $_rc, want $(tr -d '\r\n' <"$_rcfile")"
+    fi
     if [ "$_timedout" -eq 1 ]; then
         echo "  timed out after ${SALAM_TEST_TIMEOUT:-30}s on attempt $_try of 4 - it hung, it did not finish and print this"
         echo "  anything it had not flushed died with it, so the text below may be short"

@@ -22,12 +22,13 @@ Each line is one of:
     AGREE            output matched the .out file
     DIVERGE          it ran and printed something else
     DIVERGE-TIMEOUT  it did not finish; output is whatever it flushed
+    DIVERGE-EXIT     it exited with something other than its .exit file says
     SKIP-NOEXP       no .out file to compare against
     SKIP-FAIL        the backend could not build or emit it at all
 
 Output is compared exactly the way run-tests.sh compares it, so that a pass
 here means the same thing a pass there does. A non-zero exit is not by itself
-a failure, since the runner does not treat it as one either.
+a failure unless the test has a .exit file, as in the runner.
 
 A DIVERGE is not automatically a bug: the JS backend has no 64-bit integers,
 sockets, sqlite or FFI, and the interpreter refuses variadic externs and is
@@ -200,6 +201,9 @@ for section in $SECTIONS; do
                 skipped=$((skipped + 1))
             elif [ "$rc" -eq 124 ]; then
                 echo "DIVERGE-TIMEOUT $f"
+                diverge=$((diverge + 1))
+            elif [ -f "$dir/$name.exit" ] && [ "$BACKEND" != js ] && [ "$rc" != "$(tr -d '\r\n' <"$dir/$name.exit")" ]; then
+                echo "DIVERGE-EXIT $f (exit $rc)"
                 diverge=$((diverge + 1))
             elif [ "$got" = "$want" ]; then
                 echo "AGREE $f"

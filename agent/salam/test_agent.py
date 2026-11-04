@@ -232,6 +232,7 @@ def main():
         browse("close", action="close")
         browse("closed", action="close")
     state.expected = len(state.calls)
+    trace_path = os.path.join(root, "webview-trace.log")
     env = dict(
         os.environ,
         HOME=home,
@@ -240,6 +241,7 @@ def main():
         LOCALAPPDATA=os.path.join(home, "local"),
         XDG_DATA_HOME=os.path.join(home, "data"),
         SALAM_AGENT_DEBUG="1",
+        SALAM_WEBVIEW_TRACE=trace_path,
         SALAM_APP_URL=url + "/",
         SALAM_API_URL=url,
     )
@@ -258,6 +260,9 @@ def main():
     try:
         finished = state.done.wait(240)
         check("every call answered", finished, sorted(state.results))
+        if not finished and sys.platform == "darwin":
+            stacks = subprocess.run(["sample", str(proc.pid), "2"], capture_output=True, text=True, errors="replace")
+            print(stacks.stdout[:6000])
         reports = dict(state.reports)
         info = reports.get("info", {})
         check("info", info.get("device") is None and info.get("os") and "version" in info, info)
@@ -344,6 +349,8 @@ def main():
         server.shutdown()
     if failures:
         print(open(log_path, encoding="utf-8", errors="replace").read()[-2000:])
+        if os.path.exists(trace_path):
+            print(open(trace_path, encoding="utf-8", errors="replace").read()[-2000:])
     shutil.rmtree(root, ignore_errors=True)
     print(f"{len(failures)} failed")
     return 1 if failures else 0

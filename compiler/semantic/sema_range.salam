@@ -71,7 +71,7 @@ pub struct Rg:
     pub ctx_pass: i64 = 0 as i64
     pub fname: Vector<str> = Vector {}
     pub fslot: HashMap<int, int> = HashMap {} as HashMap<int, int>
-    pub rto: bool = false
+    pub repeat_to: bool = false
     pub rdown: bool = false
     pub budget: int = 0
     pub mode: int = 1
@@ -667,7 +667,7 @@ func rg_repeat_hint(r &: Rg, help: str): str:
     if r.rdown:
         ret help + "; " + i18.Tr("'repeat a to b' counts down when b is below a, so 'repeat 0 to xs.len() - 1 in i:' runs with i = 0 and i = -1 when xs is empty; count with 'repeat xs.len() in i:' or 'each i, x in xs:'")
     end
-    if not r.rto:
+    if not r.repeat_to:
         ret help
     end
     ret help + "; " + i18.Tr("'repeat a to b' includes b itself, so count with 'repeat xs.len() in i:' or 'each i, x in xs:'")
@@ -871,19 +871,19 @@ end
 
 func rg_fit(r &: Rg, a &: at.Ast, nid: int, res: RgV, ts: str): RgV:
     mut tlo := 0 as i64
-    mut thi := 0 as i64
-    if not cv_int_range(ts, tlo, thi):
+    mut type_hi := 0 as i64
+    if not cv_int_range(ts, tlo, type_hi):
         ret RgV {}
     end
-    above := res.big > 0 or (res.hlo and res.lo > thi)
+    above := res.big > 0 or (res.hlo and res.lo > type_hi)
     below := res.big < 0 or (res.hhi and res.hi < tlo)
     if not rg_signed_ts(ts):
-        if above or below or (res.hhi and res.hi > thi) or (res.hlo and res.lo < tlo):
+        if above or below or (res.hhi and res.hi > type_hi) or (res.hlo and res.lo < tlo):
             ret RgV {}
         end
         ret res
     end
-    may_hi := res.hhi and res.hi > thi
+    may_hi := res.hhi and res.hi > type_hi
     may_lo := res.hlo and res.lo < tlo
     if not above and not below and not may_hi and not may_lo:
         ret res
@@ -893,7 +893,7 @@ func rg_fit(r &: Rg, a &: at.Ast, nid: int, res: RgV, ts: str): RgV:
     end
     ename := rg_text_or(a, nid, i18.Tr("this expression"))
     hint := co.Format3(
-        i18.Tr("'%s' holds %d to %d; cast an operand to a wider type such as 'i64' first. A release build assumes signed arithmetic never overflows, and only unsigned types wrap by design"), co.ArgStr(ts), co.ArgInt(tlo), co.ArgInt(thi)
+        i18.Tr("'%s' holds %d to %d; cast an operand to a wider type such as 'i64' first. A release build assumes signed arithmetic never overflows, and only unsigned types wrap by design"), co.ArgStr(ts), co.ArgInt(tlo), co.ArgInt(type_hi)
     )
     if above or below:
         rg_diag(
@@ -1188,8 +1188,8 @@ func rg_cast(r &: Rg, a &: at.Ast, nid: int, v: RgV): RgV:
         ret RgV {}
     end
     mut tlo := 0 as i64
-    mut thi := 0 as i64
-    _tr := cv_int_range(ts, tlo, thi)
+    mut type_hi := 0 as i64
+    _tr := cv_int_range(ts, tlo, type_hi)
     bits := fold_ts_bits(ts)
     if rg_lossy(ts, v) and rg_will(r, RG_WARN):
         vtext := rg_text(a, n.a, 0)
@@ -1204,7 +1204,7 @@ func rg_cast(r &: Rg, a &: at.Ast, nid: int, v: RgV): RgV:
             ) + got, i18.Tr("use a wider type, or mask the bits you want on purpose, for example '(x & 255) as u8'")
         )
     end
-    if v.hlo and v.hhi and v.lo >= tlo and v.hi <= thi and v.big == 0:
+    if v.hlo and v.hhi and v.lo >= tlo and v.hi <= type_hi and v.big == 0:
         ret v
     end
     if rg_is_exact(v):
@@ -1212,7 +1212,7 @@ func rg_cast(r &: Rg, a &: at.Ast, nid: int, v: RgV): RgV:
     end
     mut slo := 0 as i64
     mut shi := 0 as i64
-    if cv_int_range(src, slo, shi) and slo >= tlo and shi <= thi:
+    if cv_int_range(src, slo, shi) and slo >= tlo and shi <= type_hi:
         ret v
     end
     ret RgV {}
@@ -1234,13 +1234,13 @@ func rg_const_overflow(s &: Sema, a &: at.Ast, nid: int, ok: bool, v: i64, up: b
         ret false
     end
     mut tlo := 0 as i64
-    mut thi := 0 as i64
-    if not cv_int_range(ts, tlo, thi):
+    mut type_hi := 0 as i64
+    if not cv_int_range(ts, tlo, type_hi):
         ret false
     end
     mut res := RgV {}
     if ok:
-        if v >= tlo and v <= thi:
+        if v >= tlo and v <= type_hi:
             ret false
         end
         res = rg_exact(v)
@@ -1252,7 +1252,7 @@ func rg_const_overflow(s &: Sema, a &: at.Ast, nid: int, ok: bool, v: i64, up: b
         s, 148, span_of(a, nid), co.Format3(
             i18.Tr("integer overflow: '%s' gives %s, which does not fit in '%s'"), co.ArgStr(ename), co.ArgStr(rg_desc(res)), co.ArgStr(ts)
         ), co.Format3(
-            i18.Tr("'%s' holds %d to %d; cast an operand to a wider type such as 'i64' first. A release build assumes signed arithmetic never overflows, and only unsigned types wrap by design"), co.ArgStr(ts), co.ArgInt(tlo), co.ArgInt(thi)
+            i18.Tr("'%s' holds %d to %d; cast an operand to a wider type such as 'i64' first. A release build assumes signed arithmetic never overflows, and only unsigned types wrap by design"), co.ArgStr(ts), co.ArgInt(tlo), co.ArgInt(type_hi)
         )
     )
     ret true
@@ -1891,13 +1891,13 @@ func rg_peek(r &: Rg, a &: at.Ast, st &: RgSt, nid: int): RgV:
     if k == at.AST_CAST and rg_int_ts(n.type_str) and rg_int_ts(at.At(a, n.a).type_str):
         iv := rg_peek(r, a, st, n.a)
         mut tlo := 0 as i64
-        mut thi := 0 as i64
-        if cv_int_range(n.type_str, tlo, thi) and iv.hlo and iv.hhi and iv.lo >= tlo and iv.hi <= thi:
+        mut type_hi := 0 as i64
+        if cv_int_range(n.type_str, tlo, type_hi) and iv.hlo and iv.hhi and iv.lo >= tlo and iv.hi <= type_hi:
             ret iv
         end
         mut slo := 0 as i64
         mut shi := 0 as i64
-        if cv_int_range(at.At(a, n.a).type_str, slo, shi) and slo >= tlo and shi <= thi:
+        if cv_int_range(at.At(a, n.a).type_str, slo, shi) and slo >= tlo and shi <= type_hi:
             ret iv
         end
         ret RgV {}
@@ -2039,10 +2039,10 @@ func rg_refine_side(r &: Rg, a &: at.Ast, st &: RgSt, tnode: int, op: int, e: Rg
     tn := at.At(a, tnode)
     if tn.kind == at.AST_CAST and rg_int_ts(tn.type_str) and rg_int_ts(at.At(a, tn.a).type_str):
         mut tlo := 0 as i64
-        mut thi := 0 as i64
+        mut type_hi := 0 as i64
         mut slo := 0 as i64
         mut shi := 0 as i64
-        if cv_int_range(tn.type_str, tlo, thi) and cv_int_range(at.At(a, tn.a).type_str, slo, shi) and slo >= tlo and shi <= thi:
+        if cv_int_range(tn.type_str, tlo, type_hi) and cv_int_range(at.At(a, tn.a).type_str, slo, shi) and slo >= tlo and shi <= type_hi:
             rg_refine_side(r, a, st, tn.a, op, e)
         end
         ret
@@ -2550,7 +2550,7 @@ func rg_repeat(s &: Sema, r &: Rg, a &: at.Ast, st &: RgSt, nid: int):
     end
     k := rg_slot(r, n.name)
     prev := k >= 0 ? st.v.get(k) : RgV {}
-    saved_rto := r.rto
+    saved_repeat_to := r.repeat_to
     saved_down := r.rdown
     r.rdown = false
     mut iv := RgV {}
@@ -2558,7 +2558,7 @@ func rg_repeat(s &: Sema, r &: Rg, a &: at.Ast, st &: RgSt, nid: int):
     mut last := RgV {}
     mut pins := false
     if n.c == 0:
-        r.rto = false
+        r.repeat_to = false
         iv.lo = 0 as i64
         iv.hlo = true
         if va.hhi and va.big == 0:
@@ -2577,12 +2577,12 @@ func rg_repeat(s &: Sema, r &: Rg, a &: at.Ast, st &: RgSt, nid: int):
         if rg_is_exact(va) and va.lo >= 0 and va.lo <= RG_UNROLL and rg_size(r, a, n.b) * (va.lo as int) <= r.budget / 4:
             rg_unroll(s, r, a, st, nid, k, 0 as i64, va.lo as int, 1 as i64, n.b)
             rg_set_var(st, k, prev)
-            r.rto = saved_rto
+            r.repeat_to = saved_repeat_to
             r.rdown = saved_down
             ret
         end
     else:
-        r.rto = true
+        r.repeat_to = true
         step_one := n.d == 0 or (rg_is_exact(vd) and vd.lo == 1)
         if va.hlo and vc.hlo:
             iv.lo = rg_min(va.lo, vc.lo)
@@ -2623,14 +2623,14 @@ func rg_repeat(s &: Sema, r &: Rg, a &: at.Ast, st &: RgSt, nid: int):
                 dir := va.lo <= vc.lo ? stepv : 0 - stepv
                 rg_unroll(s, r, a, st, nid, k, va.lo, cnt as int, dir, n.b)
                 rg_set_var(st, k, prev)
-                r.rto = saved_rto
+                r.repeat_to = saved_repeat_to
                 ret
             end
         end
     end
     rg_loop(s, r, a, st, nid, 0, k, iv, n.b, 0, k, first, last, pins)
     rg_set_var(st, k, prev)
-    r.rto = saved_rto
+    r.repeat_to = saved_repeat_to
     r.rdown = saved_down
 end
 
@@ -2689,20 +2689,20 @@ func rg_each(s &: Sema, r &: Rg, a &: at.Ast, st &: RgSt, nid: int):
     if ek >= 0:
         rg_set_var(st, ek, RgV {})
     end
-    saved_rto := r.rto
-    r.rto = false
+    saved_repeat_to := r.repeat_to
+    r.repeat_to = false
     rg_loop(s, r, a, st, nid, 0, ik, iv, n.b, 0, ik, first, last, pins)
-    r.rto = saved_rto
+    r.repeat_to = saved_repeat_to
     rg_set_var(st, ik, iprev)
     rg_set_var(st, ek, eprev)
 end
 
 func rg_until(s &: Sema, r &: Rg, a &: at.Ast, st &: RgSt, nid: int):
     n := at.At(a, nid)
-    saved_rto := r.rto
-    r.rto = false
+    saved_repeat_to := r.repeat_to
+    r.repeat_to = false
     rg_loop(s, r, a, st, nid, n.a, 0 - 1, RgV {}, n.b, 0, 0 - 1, RgV {}, RgV {}, false)
-    r.rto = saved_rto
+    r.repeat_to = saved_repeat_to
 end
 
 func rg_counted_for(r &: Rg, a &: at.Ast, nid: int, seq &: int): int:
@@ -2740,8 +2740,8 @@ end
 func rg_for(s &: Sema, r &: Rg, a &: at.Ast, st &: RgSt, nid: int):
     n := at.At(a, nid)
     rg_stmt(s, r, a, st, n.a)
-    saved_rto := r.rto
-    r.rto = false
+    saved_repeat_to := r.repeat_to
+    r.repeat_to = false
     mut seq := 0
     pin_k := rg_counted_for(r, a, nid, seq)
     mut pins := false
@@ -2763,7 +2763,7 @@ func rg_for(s &: Sema, r &: Rg, a &: at.Ast, st &: RgSt, nid: int):
         end
     end
     rg_loop(s, r, a, st, nid, n.b, 0 - 1, RgV {}, n.d, n.c, pin_k, rg_exact(0 as i64), last, pins)
-    r.rto = saved_rto
+    r.repeat_to = saved_repeat_to
 end
 
 func rg_switch(s &: Sema, r &: Rg, a &: at.Ast, st &: RgSt, nid: int):

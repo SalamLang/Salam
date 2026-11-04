@@ -1520,6 +1520,40 @@ func xborrow_restore(g &: Ng, r: int, sl: int):
     g.mc.ymm[lw] = fn_has_ymm(g)
 end
 
+func spf_slot(g &: Ng, r: int): bool:
+    ret r >= 0 and spilled(g, r) and g.mc.vcls[r] == 0 and rm_kind(g, r) == 0 and not g.mc.vwide[r]
+end
+
+func spf_try(g &: Ng, o &: Mc, i: int, op: int, r0: int, r1: int): bool:
+    if g.off_spfold or o.mk[i] != MK_NONE or r0 < 0 or (g.arch != NG_ARCH_X64 and g.arch != NG_ARCH_X86):
+        ret false
+    end
+    if (op == M_ALU_RI and o.cc[i] == ALU_CMP) or (op == M_TEST_RR and r0 == r1):
+        if not spf_slot(g, r0):
+            ret false
+        end
+        cm := mi_new(g, M_ALU_MI, o.sz[i])
+        set_mem(g, cm, frame_mem(g.mc.vslot[r0], 0 as i64))
+        g.mc.imm[cm] = op == M_ALU_RI ? o.imm[i] : (0 as i64)
+        g.mc.cc[cm] = ALU_CMP
+        ret true
+    end
+    if spilled(g, r0) or not spf_slot(g, r1) or g.mc.vcls[r0] != 0:
+        ret false
+    end
+    if op == M_MOVZX_RR and (o.sz2[i] == 1 or o.sz2[i] == 2):
+        lz := e_rm(g, M_LDZX, 4, phys(g, r0), frame_mem(g.mc.vslot[r1], 0 as i64))
+        g.mc.sz2[lz] = o.sz2[i]
+        ret true
+    end
+    if (op == M_CMOV or op == M_IMUL_RR) and r0 != r1 and o.sz[i] >= 4:
+        fm := e_rm(g, op, o.sz[i], phys(g, r0), frame_mem(g.mc.vslot[r1], 0 as i64))
+        g.mc.cc[fm] = o.cc[i]
+        ret true
+    end
+    ret false
+end
+
 func rewrite(g &: Ng, ra &: Ra):
     mut o := mc_take(g)
     n := o.op.len()
@@ -1603,6 +1637,12 @@ func rewrite(g &: Ng, ra &: Ra):
                 g.mc.cc[ib] = o.cc[i]
                 continue
             end
+        end
+        if spf_try(g, o, i, op, r0, r1):
+            if rsp and r0 >= 0 and op != M_ALU_RI and op != M_TEST_RR:
+                rs_def_store(g, ra, op, o.cc[i], r0)
+            end
+            continue
         end
         rmf := op == M_VOP_RR and r1 >= 0 and spilled(g, r1) and r1 != mb and r1 != mi and rm_kind(g, r1) == 1 and rm_free_use(op, r0, r1, o.r2[i], o.mk[i], o.cc[i], r1, true)
         mut ngs := 0
@@ -2283,7 +2323,7 @@ func frame_read_only(op: int, cc: int): bool:
     if op == M_LD or op == M_LDZX or op == M_LDSX or op == M_FLD or op == M_VLD or op == M_VLD32 or op == M_ALU_RM or op == M_FOP_RM:
         ret true
     end
-    ret op == M_ALU_MI and cc == ALU_CMP
+    ret (op == M_ALU_MI and cc == ALU_CMP) or op == M_CMOV or op == M_IMUL_RR
 end
 
 func scratch_cse(g &: Ng):

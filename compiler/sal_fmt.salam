@@ -123,6 +123,9 @@ func need_space(pk: int, p_end: int, ck: int, c_begin: int, prev_unary: bool): b
     if prev_unary:
         ret false
     end
+    if ck == tok.TK_LPAREN and (pk == tok.TK_LT or pk == tok.TK_RPAREN):
+        ret gap_in_source(p_end, c_begin)
+    end
     if ck == tok.TK_LPAREN:
         ret not is_value_end(pk)
     end
@@ -309,6 +312,35 @@ func type_token(k: int): bool:
     ret k == tok.TK_IDENT or k == tok.TK_DOT or k == tok.TK_STAR or k == tok.TK_AMP or k == tok.TK_LT or k == tok.TK_GT or k == tok.TK_SHR or k == tok.TK_LBRACKET or k == tok.TK_RBRACKET or k == tok.TK_LPAREN or k == tok.TK_RPAREN or k == tok.TK_COMMA or k == tok.TK_INT or k == tok.TK_KW_FUNC or k == tok.TK_KW_THROWS
 end
 
+func tuple_type_end(ts: tok.TokenStream, open_idx: int): int:
+    n := tok.StreamCount(ts)
+    line := tok.StreamAt(ts, open_idx).end_line as int
+    mut depth := 0
+    mut commas := 0
+    mut j := open_idx
+    until j < n and j < open_idx + 64:
+        t := tok.StreamAt(ts, j)
+        if (t.begin_line as int) > line or not type_token(t.kind):
+            ret 0 - 1
+        end
+        if t.kind == tok.TK_LPAREN:
+            depth += 1
+        else t.kind == tok.TK_RPAREN:
+            depth -= 1
+            if depth == 0:
+                if commas > 0:
+                    ret j
+                end
+                ret 0 - 1
+            end
+        else t.kind == tok.TK_COMMA and depth == 1:
+            commas += 1
+        end
+        j += 1
+    end
+    ret 0 - 1
+end
+
 func colon_is_annotation(ts: tok.TokenStream, colon_idx: int): bool:
     n := tok.StreamCount(ts)
     line := tok.StreamAt(ts, colon_idx).end_line as int
@@ -328,7 +360,14 @@ func colon_is_annotation(ts: tok.TokenStream, colon_idx: int): bool:
             is_func_type = true
         end
         if t.kind == tok.TK_LPAREN and not is_func_type:
-            ret false
+            tend := tuple_type_end(ts, j)
+            if tend < 0:
+                ret false
+            end
+            saw_type = true
+            j = tend + 1
+            steps += 1
+            continue
         end
         if not type_token(t.kind):
             ret false

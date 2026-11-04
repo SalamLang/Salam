@@ -197,8 +197,9 @@ func led_call(p &: Ps, a &: at.Ast, lhs: int): int:
                 tend = spawn_targs_end(p)
             end
             if tend > 0:
-                at.AddChild(a, call, parse_primary(p, a))
-                skip_spawn_targs(p, tend)
+                spawn_fn := parse_primary(p, a)
+                at.AddChild(a, call, spawn_fn)
+                parse_spawn_targs(p, a, spawn_fn)
             else:
                 at.AddChild(a, call, parse_expr(p, a))
             end
@@ -255,12 +256,17 @@ func spawn_targs_end(p &: Ps): int:
     ret 0
 end
 
-func skip_spawn_targs(p &: Ps, e: int):
-    mut i := 0
-    until i < e:
-        p_advance(p)
-        i += 1
+func parse_spawn_targs(p &: Ps, a &: at.Ast, fn_id: int):
+    p_advance(p)
+    mut go := true
+    until go:
+        at.AddChild(a, fn_id, parse_type(p, a))
+        go = p_at(p, tok.TK_COMMA)
+        if go:
+            p_advance(p)
+        end
     end
+    p_close_angle(p, "'>' after type arguments")
 end
 
 func led_index(p &: Ps, a &: at.Ast, lhs: int): int:
@@ -307,9 +313,57 @@ func led_member(p &: Ps, a &: at.Ast, lhs: int): int:
     ps_set_a(a, m, lhs)
     p_advance(p)
 
+    if p_at(p, tok.TK_INT) and p_peek(p).begin_index == p_prev(p).end_index:
+        at.SetName(a, m, tuple_field_name_of(p_peek(p).value.ival as int))
+        p_advance(p)
+        p_fin(p, a, m)
+        ret m
+    end
+    if p_at(p, tok.TK_FLOAT) and p_peek(p).begin_index == p_prev(p).end_index:
+        dot := str.IndexOf(p_peek(p).lexeme, ".")
+        if dot > 0 and dot < str.Len(p_peek(p).lexeme) - 1:
+            first := ascii_digits(str.Substr(p_peek(p).lexeme, 0, dot))
+            second := ascii_digits(str.Substr(p_peek(p).lexeme, dot + 1, str.Len(p_peek(p).lexeme) - dot - 1))
+            at.SetName(a, m, "f" + first)
+            p_advance(p)
+            p_fin(p, a, m)
+            m2 := mk_from_node(a, at.AST_MEMBER, m)
+            ps_set_a(a, m2, m)
+            at.SetName(a, m2, "f" + second)
+            p_fin(p, a, m2)
+            ret m2
+        end
+    end
     at.SetName(a, m, p_munch_member_name(p, "expected member name after '.'"))
     p_fin(p, a, m)
     ret m
+end
+
+func ascii_digits(text: str): str:
+    mut out := ""
+    mut i := 0
+    n := str.Len(text)
+    until i < n:
+        c := byte_at(text, i) as int
+        if c >= 48 and c <= 57:
+            out = out + str.Substr(text, i, 1)
+            i += 1
+        else c == 219 and i + 1 < n and (byte_at(text, i + 1) as int) >= 176 and (byte_at(text, i + 1) as int) <= 185:
+            out = out + str.FromInt(((byte_at(text, i + 1) as int) - 176) as i64)
+            i += 2
+        else c == 217 and i + 1 < n and (byte_at(text, i + 1) as int) >= 160 and (byte_at(text, i + 1) as int) <= 169:
+            out = out + str.FromInt(((byte_at(text, i + 1) as int) - 160) as i64)
+            i += 2
+        else:
+            out = out + str.Substr(text, i, 1)
+            i += 1
+        end
+    end
+    ret out
+end
+
+func tuple_field_name_of(i: int): str:
+    ret "f" + str.FromInt(i as i64)
 end
 
 func led_cast(p &: Ps, a &: at.Ast, lhs: int): int:

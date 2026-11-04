@@ -835,7 +835,14 @@ module.exports = grammar({
 
     function_type: ($) =>
       prec.right(
-        seq(kw("func"), "(", commaSep($._type), ")", optional($._type)),
+        seq(
+          optional(seq(kw("extern"), optional(field("convention", $.name)))),
+          kw("func"),
+          "(",
+          commaSep($._type),
+          ")",
+          optional($._type),
+        ),
       ),
 
     dyn_type: ($) => seq(alias($._dyn_keyword, "dyn"), $._type),

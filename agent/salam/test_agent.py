@@ -5,6 +5,7 @@ Usage: test_agent.py <agent binary>
 Needs a display, for example under xvfb-run.
 """
 
+import glob
 import json
 import os
 import shutil
@@ -137,27 +138,33 @@ def call(cid, tool, args, ws):
 
 def main():
     binary = os.path.abspath(sys.argv[1])
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
     root = tempfile.mkdtemp(prefix="salam-agent-test-")
     workspace = os.path.realpath(os.path.join(root, "work"))
     home = os.path.join(root, "home")
     os.makedirs(workspace)
     os.makedirs(home)
-    with open(os.path.join(workspace, "a.txt"), "w") as f:
+    with open(os.path.join(workspace, "a.txt"), "w", encoding="utf-8", newline="\n") as f:
         f.write("hello world\nسلام\n")
-    with open(os.path.join(workspace, "AGENTS.md"), "w") as f:
+    with open(os.path.join(workspace, "AGENTS.md"), "w", encoding="utf-8", newline="\n") as f:
         f.write("be kind\n")
-    with open(os.path.join(workspace, ".gitignore"), "w") as f:
+    with open(os.path.join(workspace, ".gitignore"), "w", encoding="utf-8", newline="\n") as f:
         f.write("skipped/\n*.log\n")
     os.makedirs(os.path.join(workspace, "skipped"))
-    with open(os.path.join(workspace, "skipped", "b.txt"), "w") as f:
+    with open(os.path.join(workspace, "skipped", "b.txt"), "w", encoding="utf-8", newline="\n") as f:
         f.write("hello hidden\n")
-    with open(os.path.join(workspace, "x.log"), "w") as f:
+    with open(os.path.join(workspace, "x.log"), "w", encoding="utf-8", newline="\n") as f:
         f.write("hello log\n")
     outside = os.path.join(root, "outside.txt")
-    with open(outside, "w") as f:
+    with open(outside, "w", encoding="utf-8", newline="\n") as f:
         f.write("secret\n")
-    os.symlink(root, os.path.join(workspace, "escape"))
-    with open(os.path.join(workspace, "Makefile"), "w") as f:
+    try:
+        os.symlink(root, os.path.join(workspace, "escape"))
+        has_symlink = True
+    except OSError:
+        has_symlink = False
+    with open(os.path.join(workspace, "Makefile"), "w", encoding="utf-8", newline="\n") as f:
         f.write("test:\n\techo made-test\n")
     with open(os.path.join(workspace, "big.bin"), "wb") as f:
         f.write(b"\0\1\2binary")
@@ -225,7 +232,19 @@ def main():
         browse("close", action="close")
         browse("closed", action="close")
     state.expected = len(state.calls)
-    env = dict(os.environ, HOME=home, XDG_DATA_HOME=os.path.join(home, "data"), SALAM_AGENT_DEBUG="1", SALAM_APP_URL=url + "/", SALAM_API_URL=url)
+    env = dict(
+        os.environ,
+        HOME=home,
+        USERPROFILE=home,
+        APPDATA=os.path.join(home, "roaming"),
+        LOCALAPPDATA=os.path.join(home, "local"),
+        XDG_DATA_HOME=os.path.join(home, "data"),
+        SALAM_AGENT_DEBUG="1",
+        SALAM_APP_URL=url + "/",
+        SALAM_API_URL=url,
+    )
+    for folder in (env["APPDATA"], env["LOCALAPPDATA"]):
+        os.makedirs(folder, exist_ok=True)
     log_path = os.path.join(root, "agent.log")
     with open(log_path, "wb") as log:
         proc = subprocess.Popen([binary], env=env, stdout=log, stderr=log)
@@ -258,7 +277,7 @@ def main():
         grep = get("grep").get("output", "")
         check("grep ignores case and gitignore", "a.txt:1:" in grep and "hidden" not in grep and "x.log" not in grep, grep)
         shell = get("shell")
-        check("shell runs after approval", shell.get("status") == "ok" and "out" in shell.get("output", "") and "err" in shell.get("output", "") and workspace in shell.get("output", ""), shell)
+        check("shell runs after approval", shell.get("status") == "ok" and "out" in shell.get("output", "") and "err" in shell.get("output", "") and os.path.basename(workspace) in shell.get("output", ""), shell)
         check("write denied when asked", get("write").get("status") == "denied", get("write"))
         check("edit denied, diff previewed", get("edit").get("status") == "denied" and "+hello salam" in get("edit").get("detail", "") and "-hello world" in get("edit").get("detail", ""), get("edit"))
         check("git refused", get("git").get("status") == "error", get("git"))
@@ -303,9 +322,9 @@ def main():
             check("browser viewport", "400x600" in out("small"), out("small"))
             check("browser close", "Closed" in out("close"), out("close"))
             check("browser closes once", "No browser" in out("closed"), out("closed"))
-            left = subprocess.run(["sh", "-c", "ls -d /tmp/salam-agent-browser-* 2>/dev/null | wc -l"], capture_output=True, text=True).stdout.strip()
-            check("browser profile removed", left == "0", left)
-        check("symlink out is treated as outside", get("symlink").get("status") == "denied" and get("symlink").get("outside") is True, get("symlink"))
+            left = glob.glob(os.path.join(tempfile.gettempdir(), "salam-agent-browser-*"))
+            check("browser profile removed", not left, left)
+        check("symlink out is treated as outside", not has_symlink or get("symlink").get("status") == "denied" and get("symlink").get("outside") is True, get("symlink"))
         check("binary refused", get("binary").get("status") == "error" and "binary" in get("binary").get("output", ""), get("binary"))
         check("missing workspace explained", get("nofolder").get("status") == "error" and "does not exist" in get("nofolder").get("output", ""), get("nofolder"))
         check("run_tests finds make", "make test" in get("tests").get("detail", ""), get("tests"))
@@ -313,7 +332,7 @@ def main():
         check("output capped head and tail", "bytes cut" in loud and len(loud) < 32000, len(loud))
         check("timeout kills the tree", get("slow").get("status") == "error" and "timed out" in get("slow").get("output", "") and "never" not in get("slow").get("output", ""), get("slow"))
         check("stop kills a running command", "stopped by the user" in get("stopme").get("output", "") and "started-stopme" in get("stopme").get("output", ""), get("stopme"))
-        check("docker quotes its preview", "'a b'" in get("docker").get("detail", ""), get("docker"))
+        check("docker quotes its preview", ("'a b'" in get("docker").get("detail", "") or '"a b"' in get("docker").get("detail", "")), get("docker"))
         check("wsl refused off Windows", sys.platform == "win32" or get("wsl").get("status") == "error", get("wsl"))
         check("files untouched by denied calls", not os.path.exists(os.path.join(workspace, "new")) and "hello world" in open(os.path.join(workspace, "a.txt"), encoding="utf-8").read())
     finally:
@@ -324,7 +343,7 @@ def main():
             proc.kill()
         server.shutdown()
     if failures:
-        print(open(log_path, errors="replace").read()[-2000:])
+        print(open(log_path, encoding="utf-8", errors="replace").read()[-2000:])
     shutil.rmtree(root, ignore_errors=True)
     print(f"{len(failures)} failed")
     return 1 if failures else 0

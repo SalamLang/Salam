@@ -61,8 +61,9 @@ jobs:
           for target in x86_64-w64-windows-gnu arm64-apple-macos x86_64-apple-macos; do
             ./salam bundle tests/en/desktop/sample --target="$target" --output="stage/sample-$target"
           done
-          ./salam bundle agent/salam --target=x86_64-w64-windows-gnu --output=stage/agent-windows
-          ./salam bundle agent/salam --target=arm64-apple-macos --output=stage/agent-macos
+          ./salam bundle agent/salam --target=x86_64-w64-windows-gnu --output=stage/agent-x86_64-w64-windows-gnu
+          ./salam bundle agent/salam --target=arm64-apple-macos --output=stage/agent-arm64-apple-macos
+          ./salam bundle agent/salam --target=x86_64-apple-macos --output=stage/agent-x86_64-apple-macos
           ls -laR stage
 
       - name: Upload the smoke tests
@@ -72,6 +73,7 @@ jobs:
           path: |
             stage/
             salam
+            agent/salam/test_agent.py
           retention-days: 3
 
   linux:
@@ -158,7 +160,7 @@ jobs:
     name: Windows x64
     needs: stage
     runs-on: windows-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - name: Download the smoke test
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -192,11 +194,19 @@ jobs:
           unzip -q ./*.zip -d out
           timeout 60 out/*/salam-sample.exe --self-test
 
+      - name: Salam Agent against a fake backend
+        shell: bash
+        run: |
+          cd stage/agent-x86_64-w64-windows-gnu
+          unzip -q ./*.zip -d out
+          cd ../..
+          timeout 400 python -I agent/salam/test_agent.py "$(ls stage/agent-x86_64-w64-windows-gnu/out/*/*.exe | head -1)"
+
   macos:
     name: macOS ${{ matrix.arch }}
     needs: stage
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -223,3 +233,14 @@ jobs:
           cd "stage/sample-$TARGET"
           tar xzf ./*.tar.gz
           perl -e 'alarm 60; exec @ARGV' "./Salam Sample.app/Contents/MacOS/salam-sample" --self-test
+
+      - name: Salam Agent against a fake backend
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          cd "stage/agent-$TARGET"
+          tar xzf ./*.tar.gz
+          cd ../..
+          binary="$(ls stage/agent-"$TARGET"/*.app/Contents/MacOS/* | head -1)"
+          chmod +x "$binary"
+          perl -e 'alarm 400; exec @ARGV' python3 -I agent/salam/test_agent.py "$binary"

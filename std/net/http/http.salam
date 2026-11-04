@@ -162,7 +162,7 @@ pub struct Client:
     pub func SetCookie(name: str, value: str):
         this._lock()
         this.cookies.put(name, value)
-        this.cookie_hosts.remove(name)
+        this._forget_host(name)
         this.cookie_secure.remove(name)
         this._unlock()
     end
@@ -172,6 +172,7 @@ pub struct Client:
     pub func ClearCookies():
         this._lock()
         this.cookies = HashMap {} as HashMap<str, str>
+        this._free_hosts()
         this.cookie_hosts = HashMap {} as HashMap<str, str>
         this.cookie_secure = HashMap {} as HashMap<str, bool>
         this._unlock()
@@ -216,8 +217,24 @@ pub struct Client:
         this.mu = sync.Mutex {}
         this.cookies.free()
         this.headers.free()
+        this._free_hosts()
         this.cookie_hosts.free()
         this.cookie_secure.free()
+    end
+
+    func _forget_host(name: str):
+        if this.cookie_hosts.has(name):
+            mem.Free(this.cookie_hosts.get(name) as void*)
+            this.cookie_hosts.remove(name)
+        end
+    end
+
+    func _free_hosts():
+        it := this.cookie_hosts.iter()
+        until it.has_next():
+            mem.Free(it.value() as void*)
+            it.next()
+        end
     end
 
     func _opts(): RequestOptions:
@@ -231,7 +248,8 @@ pub struct Client:
 
     func _host_cookies(host: str, orig_host: str, secure: bool): str:
         if this.cookies.size() == 0: ret "" end
-        mut out := ""
+        mut out := str.NewBuilder()
+        defer str.BufFree(out)
         it := this.cookies.iter()
         until it.has_next():
             name := it.key()
@@ -242,12 +260,17 @@ pub struct Client:
             if owner.len() == 0: allow = host == orig_host end
             if not secure and this.cookie_secure.has(name): allow = false end
             if allow and _token_ok(name) and not _has_control(value) and value.find(";") < 0:
-                if out.len() > 0: out = out.concat("; ") end
-                out = out.concat(name).concat("=").concat(value)
+                if out.len > 0: str.BufAppend(out, "; ") end
+                str.BufAppend(out, name)
+                str.BufAppend(out, "=")
+                str.BufAppend(out, value)
             end
             it.next()
         end
-        ret out
+        if out.len == 0:
+            ret ""
+        end
+        ret str.BufStr(out)
     end
 
     func _jar_block(host: str, orig_host: str, secure: bool, user_block: str, bad &: str): str:
@@ -256,7 +279,12 @@ pub struct Client:
         base := _block_of(this.headers, bad)
         ck := this._host_cookies(host, orig_host, secure)
         if this.mu.handle != null: sync.Unlock(this.mu) end
-        if bad.len() > 0: ret "" end
+        if bad.len() > 0:
+            if ck.len() > 0:
+                mem.Free(ck as void*)
+            end
+            ret ""
+        end
         mut b := str.NewBuilder()
         defer str.BufFree(b)
         if cross:
@@ -272,6 +300,7 @@ pub struct Client:
             str.BufAppend(b, "Cookie: ")
             str.BufAppend(b, ck)
             str.BufAppend(b, "\r\n")
+            mem.Free(ck as void*)
         end
         if user_block.len() > 0:
             if cross:
@@ -303,20 +332,25 @@ pub struct Client:
                 mut attrs := ""
                 if semi >= 0:
                     pair = line.substr(0, semi)
-                    attrs = str.Replace(str.Lower(line.substr(semi, line.len() - semi)), " ", "")
+                    tail := line.substr(semi, line.len() - semi)
+                    low_tail := str.Lower(tail)
+                    attrs = str.Replace(low_tail, " ", "")
+                    mem.Free(tail as void*)
+                    mem.Free(low_tail as void*)
                 end
                 eqp := pair.find("=")
                 if eqp > 0:
-                    name := pair.substr(0, eqp).trim()
-                    value := pair.substr(eqp + 1, pair.len() - eqp - 1).trim()
+                    name := _trimmed_part(pair, 0, eqp)
+                    value := _trimmed_part(pair, eqp + 1, pair.len() - eqp - 1)
                     gone := str.Contains(attrs, ";max-age=0") or str.Contains(attrs, ";max-age=-")
                     if gone:
                         this.cookies.remove(name)
-                        this.cookie_hosts.remove(name)
+                        this._forget_host(name)
                         this.cookie_secure.remove(name)
                     else _token_ok(name) and not _has_control(value):
                         if this.cookies.has(name) or this.cookies.size() < MAX_COOKIES:
                             this.cookies.put(name, value)
+                            this._forget_host(name)
                             this.cookie_hosts.put(name, str.Clone(host))
                             if str.Contains(attrs + ";", ";secure;"):
                                 this.cookie_secure.put(name, true)
@@ -325,6 +359,10 @@ pub struct Client:
                             end
                         end
                     end
+                end
+                if semi >= 0:
+                    mem.Free(pair as void*)
+                    mem.Free(attrs as void*)
                 end
             end
             if this.mu.handle != null: sync.Unlock(this.mu) end
@@ -380,7 +418,11 @@ pub struct Client:
                 end
                 hop_block = stripped
             else cur_body.len() > 0 and _header_at(hop_block, "Content-Type") < 0:
-                hop_block = hop_block.concat("Content-Type: application/x-www-form-urlencoded\r\n")
+                with_type := hop_block.concat("Content-Type: application/x-www-form-urlencoded\r\n")
+                if hop_block.len() > 0:
+                    mem.Free(hop_block as void*)
+                end
+                hop_block = with_type
             end
             mut rep := _hop(cur_method, u, hop_block, cur_body, total_ms, o)
             if hop_block.len() > 0:
@@ -515,6 +557,13 @@ func _header_at(headers: str, name: str): int:
     ret nl + 2
 end
 
+func _trimmed_part(text: str, start: int, count: int): str:
+    part := text.substr(start, count)
+    out := part.trim()
+    mem.Free(part as void*)
+    ret out
+end
+
 func _header_value(headers: str, name: str, fallback: str): str:
     at := _header_at(headers, name)
     if at < 0:
@@ -525,8 +574,11 @@ func _header_value(headers: str, name: str, fallback: str): str:
     if stop < 0:
         stop = headers.len()
     end
-    value := str.Trim(headers.substr(start, stop - start))
+    part := headers.substr(start, stop - start)
+    value := str.Trim(part)
+    mem.Free(part as void*)
     if value.len() == 0:
+        mem.Free(value as void*)
         ret fallback
     end
     ret value
@@ -689,10 +741,8 @@ func _build_head(method: str, u: url.URL, raw_headers: str, body_len: int): str:
     target := _request_target(u)
     headers := _drop_transport_headers(raw_headers)
     mut host := _header_value(raw_headers, "Host", "")
-    mut own_host := ""
     if host.len() == 0:
-        own_host = _host_header(u)
-        host = own_host
+        host = _host_header(u)
     end
     mut b := str.NewBuilder()
     str.BufAppend(b, method)
@@ -701,8 +751,8 @@ func _build_head(method: str, u: url.URL, raw_headers: str, body_len: int): str:
     str.BufAppend(b, " HTTP/1.1\r\nHost: ")
     str.BufAppend(b, host)
     str.BufAppend(b, "\r\n")
-    if own_host.len() > 0:
-        mem.Free(own_host as void*)
+    if host.len() > 0:
+        mem.Free(host as void*)
     end
     if _header_at(headers, "User-Agent") < 0:
         str.BufAppend(b, "User-Agent: Salam/1.0\r\n")

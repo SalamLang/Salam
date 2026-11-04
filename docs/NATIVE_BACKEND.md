@@ -18,6 +18,7 @@ salam build app.salam --backend=native --target=riscv64-linux-musl
 salam build app.salam --backend=native --target=arm64-apple-macos
 salam build app.salam --backend=native --target=universal-apple-macos  # arm64 + x86_64
 salam build app.salam --backend=native --emit-asm     # also writes app.s
+salam build app.salam --backend=native --cpu=x86-64-v2 # SSSE3 and SSE4.1 vector code
 salam build app.salam --backend=native --cpu=x86-64-v3 # 256-bit AVX2 loops
 salam obj app.salam --backend=native                  # object file only
 ```
@@ -742,10 +743,43 @@ then goes through:
    it keeps them out of `xmm6`-`xmm15`, whose upper halves a callee may
    clobber. `SALAM_NATIVE_CPU` sets the level when `--cpu` is not given, so a
    whole test sweep can run with AVX2. The default stays the x86-64 baseline
-   (SSE2), and `x86-64-v2` changes nothing yet; a program built for
-   `x86-64-v3` needs a CPU with AVX2 and stops with an illegal instruction
-   on one without it. `--cpu` also reaches LLVM (`-march` for clang, the
-   target machine's CPU in-process) when the backend is `llvm`.
+   (SSE2); a program built for `x86-64-v3` needs a CPU with AVX2 and stops
+   with an illegal instruction on one without it, and a program built for
+   `x86-64-v2` needs SSE4.1 the same way. `--cpu` also reaches LLVM (`-march`
+   for clang, the target machine's CPU in-process) when the backend is `llvm`.
+   `--cpu=x86-64-v2` keeps 128-bit vectors and legacy (non-VEX) encoding and
+   replaces SSE2 sequences in the vectorizers' output with the SSSE3 and
+   SSE4.1 instruction that does the same job. At this level:
+   - A vector select is one `pblendvb`. Its mask has to sit in `xmm0`, so
+     instruction selection copies the mask there right before the blend and
+     the allocator sees `xmm0` as a fixed use, the way a shift sees `rcx`.
+     The mask's own register gets `xmm0` as a hint, so a mask that is only
+     used by the blend is computed in place and the copy disappears. In a
+     function with such a blend the allocator hands out `xmm0` last, so other
+     values do not take it and get moved out again. A select is then at most
+     three instructions (the copy of the mask, the copy of the tied first
+     source, the blend) against five for `pand`, `pandn` and `por` with their
+     copies. A spilled or rematerialized second source is read straight from
+     its stack slot or the constant pool: legacy encoding wants 16-byte
+     alignment there, which both have.
+   - A select that picks one of the two values it compares is one `pminsd`,
+     `pmaxud`, `pminsb`, `pmaxuw` or similar, at 8, 16 and 32 bits, and the
+     compare goes away when nothing else uses it. Minimum and maximum
+     reductions use the same instructions, on 256-bit values too at
+     `x86-64-v3`.
+   - Loads that widen are one `pmovzx*` or `pmovsx*` from memory, an
+     absolute value is one `pabsb`, `pabsw` or `pabsd`, a 32-bit multiply is
+     one `pmulld`, an equal compare of 64-bit lanes is one `pcmpeqq`, and
+     stores that narrow lanes to bytes are one `pshufb` with a mask from the
+     constant pool (`pand` and packs before).
+
+   `SALAM_NG_OFF=sse41` turns all of it off, and `SALAM_NG_OFF=vblend` just
+   the blends. With `sse41` off, `--cpu=x86-64-v2` writes the same bytes as
+   the default level, and so does `--cpu=x86-64-v3` as before this level had
+   any code. `blendvps` and `blendvpd` are not used: `pblendvb` does the job
+   for every lane width because the masks come from compares and are all
+   ones or all zeros per lane. Measured numbers are under "Where it stands"
+   below.
    On the machine these numbers come from (an AMD EPYC of the first Zen
    generation, which splits each 256-bit operation into two 128-bit halves,
    so it shows the low end of the gain) the minimum CPU time of five runs of
@@ -1154,7 +1188,7 @@ ret end` at the top of a recursive AST walk) tests that parameter before
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing, and a comma-separated list dumps several functions.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,vnarrow,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,loopinl,cpelim,tord,vrev,cdown,tfold,mexit,sqself,vsign,redinv,ldcmp,phix,selinc,wweb,wwdep,wwtr,tdup,padjmp,dtst,zins,ndiv,niv,cmp64,adc64,rvc,avx2,rasp,hotpath,inlnest,spromo,ypack,ysum,winv,zxcmp,cpspill,scdead,yzext,uswsel,vex3,vabs,vdemor,lvnsw,vblend,xfree,lvunr,vtail,vkpool,remat`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,vnarrow,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,loopinl,cpelim,tord,vrev,cdown,tfold,mexit,sqself,vsign,redinv,ldcmp,phix,selinc,wweb,wwdep,wwtr,tdup,padjmp,dtst,zins,ndiv,niv,cmp64,adc64,rvc,avx2,rasp,hotpath,inlnest,spromo,ypack,ysum,winv,zxcmp,cpspill,scdead,yzext,uswsel,vex3,vabs,vdemor,lvnsw,vblend,xfree,lvunr,vtail,vkpool,remat,sse41`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator and `rasp` the
@@ -1166,8 +1200,9 @@ ret end` at the top of a recursive AST walk) tests that parameter before
   a switch value, `vex3` the three-operand VEX rewrite, `vabs` the vector
   absolute value, `vdemor` the swapped compares under `and` and `or`,
   `lvnsw` the no-overflow flag on vector index math, `vblend` the AVX2
-  `vpblendvb` selects, `xfree` the allocation of `xmm14` and `lvunr` the
-  unrolling of vectorized loops.
+  `vpblendvb` and `x86-64-v2` `pblendvb` selects, `xfree` the allocation of
+  `xmm14`, `lvunr` the unrolling of vectorized loops and `sse41` the SSSE3 and
+  SSE4.1 code of `--cpu=x86-64-v2`.
 - `SALAM_NG_OFF_RANGE=lo:hi` limits `SALAM_NG_OFF` to the functions compiled
   in that range (1-based, in compile order), and `SALAM_NG_OFF_BASE` names
   passes to turn off everywhere. Halving the range finds the one function a
@@ -1419,8 +1454,8 @@ Not there yet:
   add reductions run in vector lanes too (and gives LLVM `reassoc nsz`).
   AVX2 is opt-in (`--cpu=x86-64-v3`) and the loop, SLP and sum-reduction
   vectorizers use it; loops that count bytes or reverse stay at 128 bits.
-  Only AVX2 selects use a blend: `x86-64-v2` does not enable the SSE4.1
-  `pblendvb`, whose mask has to sit in `xmm0`. There is no
+  `x86-64-v2` stays at 128 bits and uses no SSE4.2 (`pcmpgtq`), so ordered
+  64-bit compares stay out of its loops too. There is no
   AVX-512 or FMA code,
   no 64-bit ordered compare even with AVX2, and no runtime dispatch, so a
   build is either baseline everywhere or needs AVX2 everywhere.

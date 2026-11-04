@@ -54,8 +54,10 @@ _timedout=0
 _try=1
 _runout="$jobdir/run.out"
 while [ "$_try" -le 4 ]; do
-    { timeout "${SALAM_TEST_TIMEOUT:-30}" "$exe" 2>&1; } >"$_runout" 2>/dev/null
+    exec 3>&2 2>/dev/null
+    (timeout "${SALAM_TEST_TIMEOUT:-30}" "$exe" 2>&1 3>&-) >"$_runout"
     _rc=$?
+    exec 2>&3 3>&-
     got=$(tr -d '\r' <"$_runout" 2>/dev/null)
     _timedout=0
     [ "$_rc" -eq 124 ] && _timedout=1

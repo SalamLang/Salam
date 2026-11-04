@@ -159,10 +159,12 @@ for section in $SECTIONS; do
             rc=0
             case "$BACKEND" in
             exec)
+                exec 3>&2 2>/dev/null
                 # shellcheck disable=SC2086
-                { timeout "${SALAM_SWEEP_TIMEOUT:-150}" "$SALAM_BIN" exec "$ROOT/$f" $defs \
-                    --no-color --log-level=error --lang="$lang" </dev/null 2>&1; } >"$WORK/run.out" 2>/dev/null
+                (timeout "${SALAM_SWEEP_TIMEOUT:-150}" "$SALAM_BIN" exec "$ROOT/$f" $defs \
+                    --no-color --log-level=error --lang="$lang" </dev/null 2>&1 3>&-) >"$WORK/run.out"
                 rc=$?
+                exec 2>&3 3>&-
                 got=$(tr -d '\r' <"$WORK/run.out")
                 ;;
             js)
@@ -187,8 +189,10 @@ for section in $SECTIONS; do
                 if (cd "$WORK" && timeout "${SALAM_SWEEP_TIMEOUT:-200}" "$SALAM_BIN" build "$ROOT/$f" $defs \
                     --backend="$BACKEND" --output=sweep.exe --no-color --log-level=error --lang="$lang") >/dev/null 2>&1 &&
                     [ -x "$WORK/sweep.exe" ]; then
-                    (cd "$ROOT" && timeout 90 "$WORK/sweep.exe" </dev/null 2>&1) >"$WORK/run.out" 2>/dev/null
+                    exec 3>&2 2>/dev/null
+                    (cd "$ROOT" && timeout 90 "$WORK/sweep.exe" </dev/null 2>&1 3>&-) >"$WORK/run.out"
                     rc=$?
+                    exec 2>&3 3>&-
                     got=$(tr -d '\r' <"$WORK/run.out")
                 else
                     ok=0

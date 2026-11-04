@@ -57,10 +57,11 @@ for exe in "$DIR"/*/*; do
     chmod +x "$exe" 2>/dev/null
     # shellcheck disable=SC2086
     (cd "$ROOT" && limited $RUNNER "$exe" </dev/null >"$got" 2>&1)
+    rc=$?
     if [ "$(tr -d '\r' <"$got")" = "$(tr -d '\r' <"$exp")" ]; then
         ok=$((ok + 1))
     else
-        echo "DIFF $id"
+        echo "DIFF $id (exit $rc)"
         tr -d '\r' <"$got" | diff "$exp" - | head -6
         bad=$((bad + 1))
     fi

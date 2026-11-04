@@ -1,0 +1,383 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "events"
+@fa "رویدادها"
+package events
+
+import mem
+import str
+import sync
+
+const _NEXT := 0
+const _CLOSED := 1
+const _PENDING := 3
+const _COUNT := 4
+const _CAP := 5
+const _QHEAD := 6
+const _QLEN := 7
+const _QCAP := 8
+
+@en "Event"
+@fa "رویداد"
+pub struct Event<T>:
+    @en "topic"
+    @fa "موضوع"
+    pub topic: str = ""
+    @en "data"
+    @fa "داده"
+    pub data: T
+end
+
+@en "Handler"
+@fa "کنشگر"
+pub struct Handler<T>:
+    @en "id"
+    @fa "شناسه"
+    pub id: int = 0
+    @en "pattern"
+    @fa "الگو"
+    pub pattern: str = ""
+    @en "once"
+    @fa "یک بار"
+    pub once: bool = false
+    @en "cb"
+    @fa "تابع"
+    pub cb: func (Event<T>)
+end
+
+@en "Emitter"
+@fa "انتشاردهنده"
+pub struct Emitter<T>:
+    @en "hs"
+    @fa "کنشگرها"
+    pub hs: Handler<T>* = null
+    @en "mu"
+    @fa "قفل"
+    pub mu: sync.Mutex = sync.Mutex {}
+    @en "ctl"
+    @fa "وضعیت درونی"
+    pub ctl: i64* = null
+    @en "async"
+    @fa "ناهمگام"
+    pub async: bool = false
+    @en "qbuf"
+    @fa "صف"
+    pub qbuf: Event<T>* = null
+    @en "cv"
+    @fa "شرط"
+    pub cv: sync.CondVar = sync.CondVar {}
+end
+
+func _make<T>(): Emitter<T>:
+    mut e := Emitter {} as Emitter<T>
+    e.mu = sync.NewMutex()
+    e.ctl = mem.AllocateZeroed(64 as u64) as i64*
+    e.ctl[_CAP] = 8
+    e.hs = mem.AllocateZeroed((8 * (sizeof(Handler<T>) as i64)) as u64) as Handler<T>*
+    ret e
+end
+
+func _push<T>(e: Emitter<T>, h: Handler<T>):
+    if e.ctl[_COUNT] >= e.ctl[_CAP]:
+        e.ctl[_CAP] = e.ctl[_CAP] * 2
+        e.hs = mem.Reallocate(e.hs as void*, (e.ctl[_CAP] * (sizeof(Handler<T>) as i64)) as u64) as Handler<T>*
+    end
+    e.hs[e.ctl[_COUNT] as int] = h
+    e.ctl[_COUNT] = e.ctl[_COUNT] + 1
+end
+
+func _remove_at<T>(e: Emitter<T>, at: int):
+    mut i := at
+    until i < (e.ctl[_COUNT] as int) - 1:
+        e.hs[i] = e.hs[i + 1]
+        i = i + 1
+    end
+    e.ctl[_COUNT] = e.ctl[_COUNT] - 1
+end
+
+func _match(pattern: str, topic: str): bool:
+    if pattern == topic:
+        ret true
+    end
+    ps := str.Split(pattern, ".")
+    ts := str.Split(topic, ".")
+    mut ok := true
+    mut i := 0
+    mut done := false
+    until not done:
+        if i >= ps.len():
+            ok = i >= ts.len()
+            done = true
+        else i >= 0 and ps.get(i) == "#":
+            ok = true
+            done = true
+        else i >= ts.len():
+            ok = false
+            done = true
+        else ps.get(i) != "*" and ps.get(i) != ts.get(i):
+            ok = false
+            done = true
+        else:
+            i = i + 1
+        end
+    end
+    ps.free()
+    ts.free()
+    ret ok
+end
+
+func _dispatch<T>(e: Emitter<T>, ev: Event<T>): int:
+    sync.Lock(e.mu)
+    snap := mem.AllocateZeroed(((e.ctl[_COUNT] + 1) * (sizeof(Handler<T>) as i64)) as u64) as Handler<T>*
+    mut n := 0
+    mut i := 0
+    until i < (e.ctl[_COUNT] as int):
+        h := e.hs[i]
+        if _match(h.pattern, ev.topic):
+            snap[n] = h
+            n = n + 1
+            if h.once:
+                _remove_at(e, i)
+            else:
+                i = i + 1
+            end
+        else:
+            i = i + 1
+        end
+    end
+    sync.Unlock(e.mu)
+    repeat n in k:
+        h := snap[k]
+        h.cb(ev)
+    end
+    mem.Free(snap as void*)
+    ret n
+end
+
+func _add<T>(e: Emitter<T>, pattern: str, once: bool, cb: func (Event<T>)): int:
+    sync.Lock(e.mu)
+    e.ctl[_NEXT] = e.ctl[_NEXT] + 1
+    id := e.ctl[_NEXT] as int
+    _push(e, Handler { id = id, pattern = pattern, once = once, cb = cb } as Handler<T>)
+    sync.Unlock(e.mu)
+    ret id
+end
+
+@en "New"
+@fa "جدید"
+pub func New<T>(): Emitter<T>:
+    ret _make()
+end
+
+@en "On"
+@fa "روی"
+pub func On<T>(e: Emitter<T>, pattern: str, cb: func (Event<T>)): int:
+    ret _add(e, pattern, false, cb)
+end
+
+@en "Once"
+@fa "یک‌بار"
+pub func Once<T>(e: Emitter<T>, pattern: str, cb: func (Event<T>)): int:
+    ret _add(e, pattern, true, cb)
+end
+
+@en "OnAny"
+@fa "روی همه"
+pub func OnAny<T>(e: Emitter<T>, cb: func (Event<T>)): int:
+    ret _add(e, "#", false, cb)
+end
+
+@en "Off"
+@fa "خاموش"
+pub func Off<T>(e: Emitter<T>, id: int): bool:
+    mut found := false
+    sync.Lock(e.mu)
+    mut i := 0
+    until i < (e.ctl[_COUNT] as int) and not found:
+        if e.hs[i].id == id:
+            _remove_at(e, i)
+            found = true
+        else:
+            i = i + 1
+        end
+    end
+    sync.Unlock(e.mu)
+    ret found
+end
+
+@en "OffTopic"
+@fa "خاموش موضوع"
+pub func OffTopic<T>(e: Emitter<T>, pattern: str): int:
+    mut removed := 0
+    sync.Lock(e.mu)
+    mut i := 0
+    until i < (e.ctl[_COUNT] as int):
+        if e.hs[i].pattern == pattern:
+            _remove_at(e, i)
+            removed = removed + 1
+        else:
+            i = i + 1
+        end
+    end
+    sync.Unlock(e.mu)
+    ret removed
+end
+
+@en "Count"
+@fa "شمار"
+pub func Count<T>(e: Emitter<T>, topic: str): int:
+    mut n := 0
+    sync.Lock(e.mu)
+    repeat (e.ctl[_COUNT] as int) in i:
+        if _match(e.hs[i].pattern, topic):
+            n = n + 1
+        end
+    end
+    sync.Unlock(e.mu)
+    ret n
+end
+
+@en "Len"
+@fa "تعداد"
+pub func Len<T>(e: Emitter<T>): int:
+    sync.Lock(e.mu)
+    n := (e.ctl[_COUNT] as int)
+    sync.Unlock(e.mu)
+    ret n
+end
+
+@en "Emit"
+@fa "انتشار"
+pub func Emit<T>(e: Emitter<T>, topic: str, data: T): int:
+    ev := Event { topic = topic, data = data } as Event<T>
+    ret _dispatch(e, ev)
+end
+
+@en "NewAsync"
+@fa "جدید ناهمگام"
+pub func NewAsync<T>(capacity: int): Emitter<T>:
+    mut e := _make() as Emitter<T>
+    mut cap := capacity as i64
+    if cap < 1:
+        cap = 1
+    end
+    e.async = true
+    e.cv = sync.NewCondVar()
+    e.ctl[_QCAP] = cap
+    e.qbuf = mem.AllocateZeroed((cap * (sizeof(Event<T>) as i64)) as u64) as Event<T>*
+    ret e
+end
+
+@en "EmitAsync"
+@fa "انتشار ناهمگام"
+pub func EmitAsync<T>(e: Emitter<T>, topic: str, data: T): bool:
+    if not e.async:
+        ret false
+    end
+    ev := Event { topic = topic, data = data } as Event<T>
+    sync.Lock(e.mu)
+    until e.ctl[_QLEN] >= e.ctl[_QCAP] and e.ctl[_CLOSED] == 0:
+        sync.WaitCond(e.cv, e.mu)
+    end
+    if e.ctl[_CLOSED] != 0:
+        sync.Unlock(e.mu)
+        ret false
+    end
+    at := (e.ctl[_QHEAD] + e.ctl[_QLEN]) % e.ctl[_QCAP]
+    e.qbuf[at as int] = ev
+    e.ctl[_QLEN] = e.ctl[_QLEN] + 1
+    e.ctl[_PENDING] = e.ctl[_PENDING] + 1
+    sync.Broadcast(e.cv)
+    sync.Unlock(e.mu)
+    ret true
+end
+
+@en "Pending"
+@fa "در انتظار"
+pub func Pending<T>(e: Emitter<T>): int:
+    sync.Lock(e.mu)
+    n := e.ctl[_PENDING] as int
+    sync.Unlock(e.mu)
+    ret n
+end
+
+@en "Flush"
+@fa "تخلیه"
+pub func Flush<T>(e: Emitter<T>):
+    if not e.async:
+        ret
+    end
+    sync.Lock(e.mu)
+    until e.ctl[_PENDING] > 0:
+        sync.WaitCond(e.cv, e.mu)
+    end
+    sync.Unlock(e.mu)
+end
+
+@en "Drain"
+@fa "پردازش صف"
+pub func Drain<T>(e: Emitter<T>):
+    mut running := true
+    until running:
+        sync.Lock(e.mu)
+        until e.ctl[_QLEN] == 0 and e.ctl[_CLOSED] == 0:
+            sync.WaitCond(e.cv, e.mu)
+        end
+        if e.ctl[_QLEN] == 0:
+            sync.Unlock(e.mu)
+            running = false
+        else:
+            ev := e.qbuf[e.ctl[_QHEAD] as int]
+            e.ctl[_QHEAD] = (e.ctl[_QHEAD] + 1) % e.ctl[_QCAP]
+            e.ctl[_QLEN] = e.ctl[_QLEN] - 1
+            sync.Broadcast(e.cv)
+            sync.Unlock(e.mu)
+            _dispatch(e, ev)
+            sync.Lock(e.mu)
+            e.ctl[_PENDING] = e.ctl[_PENDING] - 1
+            sync.Broadcast(e.cv)
+            sync.Unlock(e.mu)
+        end
+    end
+end
+
+@en "Close"
+@fa "بستن"
+pub func Close<T>(e: Emitter<T>):
+    if not e.async:
+        ret
+    end
+    sync.Lock(e.mu)
+    if e.ctl[_CLOSED] != 0:
+        sync.Unlock(e.mu)
+        ret
+    end
+    e.ctl[_CLOSED] = 1
+    sync.Broadcast(e.cv)
+    sync.Unlock(e.mu)
+end
+
+@en "Free"
+@fa "آزادکن"
+pub func Free<T>(e: Emitter<T>):
+    Close(e)
+    if e.async:
+        mem.Free(e.qbuf as void*)
+        sync.DestroyCondVar(e.cv)
+    end
+    mem.Free(e.hs as void*)
+    mem.Free(e.ctl as void*)
+    sync.Destroy(e.mu)
+end

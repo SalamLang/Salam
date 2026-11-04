@@ -30,11 +30,42 @@ else:
     end
 end
 
+const C_COUNT := 0
+const C_RUN := 1
+const C_STOP := 2
+const C_CAP := 3
+const C_HEAD := 4
+const C_TAIL := 5
+const C_CELLS := 6
+
+struct Node:
+    pub task: func () = (): end
+    pub next: i64 = 0
+end
+
+struct State:
+    pub mu: sync.Mutex = sync.Mutex {}
+    pub nonempty: sync.CondVar = sync.CondVar {}
+    pub nonfull: sync.CondVar = sync.CondVar {}
+    pub idle: sync.CondVar = sync.CondVar {}
+    pub c: i64* = null
+    pub handles: i64* = null
+    pub workers: i64 = 0
+end
+
 struct Range:
     pub body: func (i64) = (_i: i64): end
     pub next: i64* = null
     pub n: i64 = 0
     pub mu: sync.Mutex = sync.Mutex {}
+end
+
+@en "Pool"
+@fa "استخر نخ"
+pub struct Pool:
+    @en "state"
+    @fa "وضعیت"
+    pub state: void* = null
 end
 
 func range_worker(rp: Range*):
@@ -67,6 +98,55 @@ else:
     else:
         func cpu_count_os(): i64: ret sysconf(84) end
     end
+end
+
+func pool_worker(sp: State*):
+    s := sp[0]
+    c := s.c
+    until true:
+        sync.Lock(s.mu)
+        until c[C_COUNT] == 0 and c[C_STOP] == 0:
+            sync.WaitCond(s.nonempty, s.mu)
+        end
+        if c[C_COUNT] == 0:
+            sync.Unlock(s.mu)
+            break
+        end
+        np := c[C_HEAD] as Node*
+        node := np[0]
+        c[C_HEAD] = node.next
+        if node.next == 0:
+            c[C_TAIL] = 0
+        end
+        c[C_COUNT] = c[C_COUNT] - 1
+        c[C_RUN] = c[C_RUN] + 1
+        sync.Signal(s.nonfull)
+        sync.Unlock(s.mu)
+        mem.Free(np as void*)
+        node.task()
+        sync.Lock(s.mu)
+        c[C_RUN] = c[C_RUN] - 1
+        if c[C_COUNT] == 0 and c[C_RUN] == 0:
+            sync.Broadcast(s.idle)
+        end
+        sync.Unlock(s.mu)
+    end
+end
+
+func enqueue(s: State, task: func ()): bool:
+    c := s.c
+    np := mem.AllocateZeroed(sizeof(Node) as u64) as Node*
+    np[0] = Node { task = task, next = 0 }
+    if c[C_TAIL] == 0:
+        c[C_HEAD] = np as i64
+    else:
+        tp := c[C_TAIL] as Node*
+        tp[0].next = np as i64
+    end
+    c[C_TAIL] = np as i64
+    c[C_COUNT] = c[C_COUNT] + 1
+    sync.Signal(s.nonempty)
+    ret true
 end
 
 @en "CPUCount"
@@ -111,4 +191,133 @@ end
 @fa "برای موازی خودکار"
 pub func ParallelForAuto(n: i64, body: func (i64)):
     ParallelFor(n, CPUCount(), body)
+end
+
+@en "New"
+@fa "جدید"
+pub func New(workers: i64, queue: i64): Pool:
+    mut w := workers
+    if w < 1: w = 1 end
+    mut q := queue
+    if q < 1: q = 1 end
+    sp := mem.AllocateZeroed(sizeof(State) as u64) as State*
+    c := mem.AllocateZeroed((C_CELLS * 8) as u64) as i64*
+    hs := mem.AllocateZeroed((w * 8) as u64) as i64*
+    c[C_CAP] = q
+    sp[0] = State { mu = sync.NewMutex(), nonempty = sync.NewCondVar(), nonfull = sync.NewCondVar(), idle = sync.NewCondVar(), c = c, handles = hs, workers = w }
+    mut k := 0 as i64
+    until k < w:
+        hs[k] = spawn(pool_worker, sp)
+        k = k + 1
+    end
+    ret Pool { state = sp as void* }
+end
+
+@en "NewAuto"
+@fa "جدید خودکار"
+pub func NewAuto(): Pool:
+    w := CPUCount()
+    ret New(w, w * 4)
+end
+
+@en "Submit"
+@fa "ارسال"
+pub func Submit(p: Pool, task: func ()): bool:
+    sp := p.state as State*
+    s := sp[0]
+    c := s.c
+    sync.Lock(s.mu)
+    until c[C_COUNT] >= c[C_CAP] and c[C_STOP] == 0:
+        sync.WaitCond(s.nonfull, s.mu)
+    end
+    if c[C_STOP] != 0:
+        sync.Unlock(s.mu)
+        ret false
+    end
+    enqueue(s, task)
+    sync.Unlock(s.mu)
+    ret true
+end
+
+@en "TrySubmit"
+@fa "تلاش برای ارسال"
+pub func TrySubmit(p: Pool, task: func ()): bool:
+    sp := p.state as State*
+    s := sp[0]
+    c := s.c
+    sync.Lock(s.mu)
+    if c[C_STOP] != 0 or c[C_COUNT] >= c[C_CAP]:
+        sync.Unlock(s.mu)
+        ret false
+    end
+    enqueue(s, task)
+    sync.Unlock(s.mu)
+    ret true
+end
+
+@en "Wait"
+@fa "انتظار"
+pub func Wait(p: Pool):
+    sp := p.state as State*
+    s := sp[0]
+    c := s.c
+    sync.Lock(s.mu)
+    until c[C_COUNT] > 0 or c[C_RUN] > 0:
+        sync.WaitCond(s.idle, s.mu)
+    end
+    sync.Unlock(s.mu)
+end
+
+@en "Stop"
+@fa "توقف"
+pub func Stop(p: Pool):
+    sp := p.state as State*
+    s := sp[0]
+    c := s.c
+    sync.Lock(s.mu)
+    c[C_STOP] = 1
+    sync.Broadcast(s.nonempty)
+    sync.Broadcast(s.nonfull)
+    sync.Unlock(s.mu)
+    mut k := 0 as i64
+    until k < s.workers:
+        thread.Join(thread.New(s.handles[k]))
+        k = k + 1
+    end
+    sync.Destroy(s.mu)
+    sync.DestroyCondVar(s.nonempty)
+    sync.DestroyCondVar(s.nonfull)
+    sync.DestroyCondVar(s.idle)
+    mem.Free(s.handles as void*)
+    mem.Free(c as void*)
+    mem.Free(sp as void*)
+end
+
+@en "Running"
+@fa "در حال اجرا"
+pub func Running(p: Pool): i64:
+    sp := p.state as State*
+    s := sp[0]
+    sync.Lock(s.mu)
+    n := s.c[C_RUN]
+    sync.Unlock(s.mu)
+    ret n
+end
+
+@en "Pending"
+@fa "در صف"
+pub func Pending(p: Pool): i64:
+    sp := p.state as State*
+    s := sp[0]
+    sync.Lock(s.mu)
+    n := s.c[C_COUNT]
+    sync.Unlock(s.mu)
+    ret n
+end
+
+@en "Workers"
+@fa "کارگرها"
+pub func Workers(p: Pool): i64:
+    sp := p.state as State*
+    ret sp[0].workers
 end

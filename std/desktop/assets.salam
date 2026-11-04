@@ -16,6 +16,7 @@ package desktop
 
 mut _the_pack := pack.Pack {}
 mut _asset_cache := HashMap {} as HashMap<str, pack.Blob>
+mut _uncached := null as void*
 
 func _hex_value(c: int): int:
     if c >= 48 and c <= 57:
@@ -59,6 +60,13 @@ func _decode_path(path: str): str:
     ret decoded
 end
 
+func _keep_until_next(blob: pack.Blob):
+    if _uncached != null:
+        mem.Free(_uncached)
+    end
+    _uncached = blob.data
+end
+
 func _load_asset(rel: str): pack.Blob:
     if _asset_cache.has(rel):
         ret _asset_cache.get(rel)
@@ -66,18 +74,25 @@ func _load_asset(rel: str): pack.Blob:
     mut blob := pack.Blob {}
     if _cfg.assets_dir.len() > 0:
         full := filepath.Join(_cfg.assets_dir, rel)
+        defer mem.Free(full as void*)
         if os.Exists(full) and not os.IsDir(full):
             size := os.FileSize(full)
             data := pack.ReadRange(full, 0 as i64, size)
             if data != null:
-                ret pack.Blob { data = data, size = size }
+                blob = pack.Blob { data = data, size = size }
+                _keep_until_next(blob)
+                ret blob
             end
         end
     end
     if _the_pack.Count() > 0:
         blob = _the_pack.Read(rel)
-        if blob.data != null and blob.size <= (4 * 1024 * 1024 as i64):
-            _asset_cache.put(str.Clone(rel), blob)
+        if blob.data != null:
+            if blob.size <= (4 * 1024 * 1024 as i64):
+                _asset_cache.put(str.Clone(rel), blob)
+            else:
+                _keep_until_next(blob)
+            end
         end
     end
     ret blob
@@ -128,12 +143,15 @@ pub func SafeAssetPath(request_path: str): str:
         ret str.Clone("")
     end
     parts := str.Split(rel, "/")
-    defer parts.free()
+    mut climbs := false
     each part in parts:
-        if part == "..":
-            mem.Free(rel as void*)
-            ret str.Clone("")
-        end
+        climbs = climbs or part == ".."
+        mem.Free(part as void*)
+    end
+    parts.free()
+    if climbs:
+        mem.Free(rel as void*)
+        ret str.Clone("")
     end
     if rel.len() == 0 or str.EndsWith(rel, "/"):
         full := rel.concat("index.html")

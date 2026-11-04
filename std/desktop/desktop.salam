@@ -22,6 +22,7 @@ import mem
 import os
 import filepath
 import crypto
+import sync
 import pool
 import desktop.pack
 import encoding.json
@@ -39,6 +40,10 @@ mut _wins := Vector {} as Vector<_Win>
 mut _commands := Vector {} as Vector<_Command>
 mut _rules := Vector {} as Vector<_Rule>
 mut _listeners := Vector {} as Vector<_Listener>
+mut _pending := HashMap {} as HashMap<i64, _Owned>
+mut _pending_lock := sync.NewMutex()
+mut _call_serial := 0 as i64
+mut _local_origin_text := ""
 
 struct _Win:
     pub label: str = ""
@@ -46,6 +51,13 @@ struct _Win:
     pub start_origin: str = ""
     pub inline_html: bool = false
     pub allow_navigation: Vector<str> = Vector {}
+end
+
+struct _Owned:
+    pub command: str = ""
+    pub args: str = ""
+    pub origin: str = ""
+    pub id: str = ""
 end
 
 struct _Command:
@@ -165,6 +177,29 @@ pub struct Call:
     @fa "پنجره"
     pub window: int = -1
     id: str = ""
+    serial: i64 = 0
+
+    func finish(ok: bool, raw_json: str):
+        sync.Lock(_pending_lock)
+        known := _pending.has(this.serial)
+        mut owned := _Owned {}
+        if known:
+            owned = _pending.get(this.serial)
+            _gone := _pending.remove(this.serial)
+        end
+        sync.Unlock(_pending_lock)
+        if not known:
+            ret
+        end
+        _reply(this.window, owned.origin, owned.id, ok, raw_json)
+        this.command = ""
+        this.args = "{}"
+        this.origin = ""
+        mem.Free(owned.command as void*)
+        mem.Free(owned.args as void*)
+        mem.Free(owned.origin as void*)
+        mem.Free(owned.id as void*)
+    end
 
     @en "Str"
     @fa "متن"
@@ -195,14 +230,14 @@ pub struct Call:
     @en "Resolve"
     @fa "پاسخ"
     pub func Resolve(raw_json: str):
-        _reply(this.window, this.origin, this.id, true, raw_json)
+        this.finish(true, raw_json)
     end
 
     @en "ResolveStr"
     @fa "پاسخ متنی"
     pub func ResolveStr(value: str):
         encoded := json.Str(value)
-        _reply(this.window, this.origin, this.id, true, encoded)
+        this.finish(true, encoded)
         mem.Free(encoded as void*)
     end
 
@@ -210,27 +245,27 @@ pub struct Call:
     @fa "پاسخ عددی"
     pub func ResolveInt(value: i64):
         encoded := str.FromInt(value)
-        _reply(this.window, this.origin, this.id, true, encoded)
+        this.finish(true, encoded)
         mem.Free(encoded as void*)
     end
 
     @en "ResolveBool"
     @fa "پاسخ درستی"
     pub func ResolveBool(value: bool):
-        _reply(this.window, this.origin, this.id, true, value ? "true" : "false")
+        this.finish(true, value ? "true" : "false")
     end
 
     @en "ResolveNull"
     @fa "پاسخ خالی"
     pub func ResolveNull():
-        _reply(this.window, this.origin, this.id, true, "null")
+        this.finish(true, "null")
     end
 
     @en "Reject"
     @fa "رد"
     pub func Reject(message: str):
         encoded := json.Str(message)
-        _reply(this.window, this.origin, this.id, false, encoded)
+        this.finish(false, encoded)
         mem.Free(encoded as void*)
     end
 end
@@ -423,7 +458,10 @@ func _emit_to(index: int, event: str, raw_json: str):
 end
 
 func _local_origin(): str:
-    ret webview.SchemeOrigin(_cfg.scheme)
+    if _local_origin_text.len() == 0:
+        _local_origin_text = webview.SchemeOrigin(_cfg.scheme)
+    end
+    ret _local_origin_text
 end
 
 func _origins_json(index: int): str:
@@ -500,15 +538,20 @@ func _on_message(index: int, text: str):
     id := json.Get(text, "id")
     command := json.Get(text, "cmd")
     args := json.Get(text, "args")
-    c := Call { command = command, args = args, origin = origin, window = index, id = id }
+    sync.Lock(_pending_lock)
+    _call_serial += 1
+    serial := _call_serial
+    _pending.put(serial, _Owned { command = command, args = args, origin = origin, id = id })
+    sync.Unlock(_pending_lock)
+    mut c := Call { command = command, args = args, origin = origin, window = index, id = id, serial = serial }
     inline_ok := origin == "null" and _wins[index].inline_html
     if not inline_ok and not Allowed(origin, command):
-        c.Reject("not allowed: ".concat(command))
+        c.Reject("not allowed: " + command)
         ret
     end
     found := _find_command(command)
     if found < 0:
-        c.Reject("unknown command: ".concat(command))
+        c.Reject("unknown command: " + command)
         ret
     end
     entry := _commands[found]
@@ -523,7 +566,9 @@ func _on_emit(index: int, text: str, origin: str):
     inline_ok := origin == "null" and _wins[index].inline_html
     name := json.Get(text, "name")
     defer mem.Free(name as void*)
-    if not inline_ok and not Allowed(origin, "event:".concat(name)):
+    pattern := "event:".concat(name)
+    defer mem.Free(pattern as void*)
+    if not inline_ok and not Allowed(origin, pattern):
         ret
     end
     data := json.Get(text, "data")
@@ -660,7 +705,12 @@ pub func OriginOf(url: str): str:
         mem.Free(host_only as void*)
         host_only = str.Substr(lower_host, 0, str.Len(lower_host) - 3)
     end
-    out := lower_scheme.concat("://").concat(host_only)
+    mut b := str.NewBuilder()
+    str.BufAppend(b, lower_scheme)
+    str.BufAppend(b, "://")
+    str.BufAppend(b, host_only)
+    out := str.BufStr(b)
+    str.BufFree(b)
     mem.Free(host_only as void*)
     ret out
 end

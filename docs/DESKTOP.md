@@ -46,7 +46,9 @@ const text = await salam.invoke('greet', { name: 'Sara' });
 | `salam.emit(name, data)`         | `desktop.On(name, handler)`                                                 |
 | `salam.listen(name, fn)`         | `desktop.Emit(name, json)`, `win.Emit`                                      |
 
-A command finishes with one `Resolve` method or `Reject`, from any thread.
+A command finishes with one `Resolve` method or `Reject`, from any thread. A
+second answer is ignored, and the text in a `Call` is freed by the answer, so
+read what you need first. `Str` returns a copy the caller frees.
 Arguments and results are JSON. `desktop.Dispatch` runs code on the UI thread
 from a worker, which is where every window call belongs.
 

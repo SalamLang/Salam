@@ -271,6 +271,24 @@ end
 `func main:` returns the process exit code: `ret 3` exits with 3, and a `main`
 that ends without `ret` (or with a bare `ret`) exits with 0.
 
+A function returns several values as a tuple: the return type is `(A, B)`
+(2 to 8 elements), `ret a, b` builds it and `a, b := f()` takes it apart.
+Use `_` for an element you do not need (every other name must be used), write
+`mut` per name (`q, mut r := f()`), and read a kept tuple with `t.0`, `t.1`.
+`a, b = b, a` assigns several `mut` targets at once. A wrong number of names is
+`E158`. There is no `f(g())` spreading.
+
+```salam
+func divmod(a: int, b: int): (int, int):
+    ret a / b, a % b
+end
+
+func main:
+    q, r := divmod(17, 5)
+    println q, r
+end
+```
+
 Parameter and variable names cannot be keywords. `in`, `to`, `by`, `on`,
 `type`, `each`, `match`, `eq`, `lt`, `gt` and the other words in
 `salam_keywords` are all reserved, so `func scale(v: f64, by: f64)` does not

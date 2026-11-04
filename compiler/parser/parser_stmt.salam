@@ -259,6 +259,11 @@ func parse_statement(p &: Ps, a &: at.Ast): int:
         ret parse_print_stmt(p, a)
     end
     if k == tok.TK_KW_MUT:
+        if p_destructure_ahead(p):
+            dn := parse_destructure(p, a)
+            p_term(p)
+            ret dn
+        end
         n := parse_var_decl(p, a)
         p_term(p)
         ret n
@@ -323,6 +328,11 @@ func parse_statement(p &: Ps, a &: at.Ast): int:
         if handled:
             ret fs
         end
+        if p_destructure_ahead(p):
+            dn := parse_destructure(p, a)
+            p_term(p)
+            ret dn
+        end
         m := p_ident_run_len(p)
         after := p_peekn(p, m).kind
         if after == tok.TK_COLON or after == tok.TK_COLON_ASSIGN:
@@ -332,6 +342,11 @@ func parse_statement(p &: Ps, a &: at.Ast): int:
         end
     end
     e := parse_expr(p, a)
+    if e != 0 and p_at(p, tok.TK_COMMA) and p_is_assign_target(a, e):
+        ds := parse_destructure_assign(p, a, e)
+        p_term(p)
+        ret ds
+    end
     mut stmt := 0
     if e != 0 and at.KindOf(a, e) == at.AST_ASSIGN:
         stmt = e
@@ -405,7 +420,7 @@ func parse_return(p &: Ps, a &: at.Ast): int:
     n := p_mk(p, a, at.AST_RETURN)
     p_advance(p)
     if not p_at(p, tok.TK_STMT_END) and not p_at(p, tok.TK_KW_END) and not p_at(p, tok.TK_KW_ELSE) and not p_at_eof(p):
-        ps_set_a(a, n, parse_expr(p, a))
+        ps_set_a(a, n, parse_expr_or_tuple(p, a))
     end
     p_fin(p, a, n)
     p_term(p)
@@ -556,6 +571,46 @@ func parse_pattern_struct(p &: Ps, a &: at.Ast, pat: int):
     p_expect(p, tok.TK_RBRACE, "'}' to close the pattern")
 end
 
+func parse_tuple_pattern(p &: Ps, a &: at.Ast, pat: int):
+    start := p_peek(p)
+    p_advance(p)
+    mut count := 0
+    mut go := true
+    until go:
+        p_skip_terminators(p)
+        run := p_ident_run_len(p)
+        after := p_peekn(p, run).kind
+        if run > 0 and (after == tok.TK_COMMA or after == tok.TK_RPAREN):
+            bind := p_mk(p, a, at.AST_IDENTIFIER)
+            at.SetName(a, bind, p_munch_name(p))
+            p_fin(p, a, bind)
+            if not str.Equals(at.Get(a, bind).name, "_"):
+                fi := mk_from_node(a, at.AST_FIELD_INIT, bind)
+                at.SetName(a, fi, tuple_field_name_of(count))
+                ps_set_b(a, fi, bind)
+                at.AddChild(a, pat, fi)
+            end
+        else:
+            e := parse_expr(p, a)
+            fi := mk_from_node(a, at.AST_FIELD_INIT, e)
+            at.SetName(a, fi, tuple_field_name_of(count))
+            ps_set_a(a, fi, e)
+            at.AddChild(a, pat, fi)
+        end
+        count += 1
+        p_skip_terminators(p)
+        go = p_match(p, tok.TK_COMMA) and not p.panic
+    end
+    p_expect(p, tok.TK_RPAREN, "')' to close the tuple pattern")
+    if count < 2 or count > TUPLE_MAX:
+        p_error_at(p, start, "a tuple pattern needs between 2 and 8 elements, like '(0, y)'")
+    end
+    head := mk_from_node(a, at.AST_IDENTIFIER, pat)
+    at.SetName(a, head, "Tuple" + str.FromInt(count as i64))
+    ps_set_a(a, pat, head)
+    at.SetOp(a, pat, tok.TK_LBRACE)
+end
+
 func parse_match_pattern(p &: Ps, a &: at.Ast): int:
     pat := p_mk(p, a, at.AST_MATCH_PATTERN)
     if tk_is_pattern_literal(p_peek(p).kind):
@@ -604,6 +659,8 @@ func parse_match_pattern(p &: Ps, a &: at.Ast): int:
             at.SetName(a, pat, p_peek(p).lexeme)
             p_advance(p)
         end
+    else p_at(p, tok.TK_LPAREN):
+        parse_tuple_pattern(p, a, pat)
     else:
         p_error(p, "expected a pattern (literal, identifier, or type name) in match arm")
         ps_set_a(a, pat, p_error_node(p, a))

@@ -1089,6 +1089,14 @@ an aligned loop costs one instruction.
   bytes comes back in `r0`. On RISC-V a struct of up to 16 bytes goes in
   `a`/`fa` registers (one or two floats, or a float and an integer, use the
   float registers while enough are free), a larger one by reference.
+- llvmgen writes an explicit `ccc` on a `define` or `call` whose struct
+  arguments or result it lowered for C: calls through `extern func (...)`
+  pointers, `export:` functions, and the `salam_cabi.*` wrapper that `&fn`
+  yields for a Salam function taking or returning a struct. To LLVM that is the
+  default convention. To native it means C rules on that edge even when the
+  callee has a body, so `ng_cabi.salam` also receives byval, array and sret
+  parameters and returns aggregates in registers. Such a function is never
+  inlined.
 - On Linux frames are addressed from `rsp` and `rbp` is a sixth callee-saved
   register. Each function gets an `.eh_frame` entry, so gdb, perf and other
   unwinders can walk native frames. On Windows `rbp` is the frame pointer and

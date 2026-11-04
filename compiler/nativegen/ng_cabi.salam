@@ -7,7 +7,7 @@ const CA_ARM_C4 := 1000
 const CA_ARM_C8 := 2000
 const CA_ARM_HS := 3000
 const CA_ARM_HD := 4000
-const CA_MAX_WORDS := 64
+const CA_MAX_WORDS := 1024
 
 const CP_GP := 0
 const CP_FP := 1
@@ -354,14 +354,15 @@ func ca_arg(g &: Ng, src: Mem, t: int, byval: bool, va: bool, regs &: Vector<int
     end
     mut f := CaParts {}
     defer ca_free(f)
-    if not ca_flat(g, t, 0, f):
+    flat := ca_flat(g, t, 0, f)
+    if not flat and size <= 64:
         ret false
     end
     mut gi := 0
     mut fi := 0
     ca_used(cls, gi, fi)
     if a == NG_ARCH_ARM:
-        es := va ? 0 : ca_hfa(f)
+        es := va or not flat ? 0 : ca_hfa(f)
         if es > 0:
             n := f.off.len()
             repeat n in j:
@@ -412,7 +413,7 @@ func ca_arg(g &: Ng, src: Mem, t: int, byval: bool, va: bool, regs &: Vector<int
         ret true
     end
     if a == NG_ARCH_A64:
-        es2 := va and g.os == NG_OS_WINDOWS ? 0 : ca_hfa(f)
+        es2 := (va and g.os == NG_OS_WINDOWS) or not flat ? 0 : ca_hfa(f)
         if va and g.os == NG_OS_MACOS and (es2 > 0 or size <= 16):
             ca_words(g, src, size, 8, 0, regs, cls)
             ret true
@@ -466,4 +467,237 @@ func ca_arg(g &: Ng, src: Mem, t: int, byval: bool, va: bool, regs &: Vector<int
         end
     end
     ret true
+end
+
+func ca_arg_mem(g &: Ng, v: int, m: Mem):
+    r := lea_reg(g, m)
+    if is_agg(g, g.v_ty[v]):
+        g.vak[v] = AK_PTR
+        g.var_[v] = r
+        g.vao[v] = 0
+    end
+    g.vv[v] = r
+end
+
+func ca_arg_slot(g &: Ng, v: int): Mem:
+    t := g.v_ty[v]
+    slot := new_slot(g, align_up(tsize(g, t), 8), talign(g, t) < 8 ? 8 : talign(g, t))
+    g.vak[v] = AK_FRAME
+    g.var_[v] = slot
+    g.vao[v] = 0
+    g.vown[v] = true
+    ret frame_mem(slot, 0 as i64)
+end
+
+func ca_byval_size(g &: Ng, v: int): int:
+    repeat g.f_bv_val.len() in k:
+        if g.f_bv_val[k] == v:
+            ret tsize(g, g.f_bv_ty[k])
+        end
+    end
+    fail(g, "native backend: a C byval parameter has no type")
+    ret 0
+end
+
+func ca_entry_sret(g &: Ng):
+    if g.f_cabi and g.f_sret and g.f_args.len() > 0:
+        g.retp = g.vv[g.f_args[0]]
+    end
+end
+
+func ca_store_reg(g &: Ng, m: Mem, w: int, inreg: int):
+    r := gpr(g)
+    _c := e_copy(g, r, inreg)
+    _s := e_mr(g, M_ST, w, m, r)
+end
+
+func ca_entry_regs(g &: Ng, v: int, fl: int, gi &: int, fi &: int, stk &: int): bool:
+    if (fl & IF_SRET) != 0 and g.arch == NG_ARCH_A64:
+        r := gpr(g)
+        _c := e_copy(g, r, A64_SRET)
+        g.vv[v] = r
+        ret true
+    end
+    if (fl & IF_BYVAL) != 0:
+        ca_arg_mem(g, v, Mem { k = MK_ARG, d = stk as i64 })
+        stk += align_up(ca_byval_size(g, v), 8)
+        ret true
+    end
+    t := g.v_ty[v]
+    if not is_agg(g, t):
+        ret false
+    end
+    size := tsize(g, t)
+    mut f := CaParts {}
+    defer ca_free(f)
+    if not ca_flat(g, t, 0, f) or f.off.len() == 0:
+        fail(g, "native backend: a C parameter has a type the native backend cannot receive; use --backend=llvm")
+        ret true
+    end
+    if f.kind[0] == CP_FP:
+        n := f.off.len()
+        if fi + n > 8:
+            fi = 8
+            ca_arg_mem(g, v, Mem { k = MK_ARG, d = stk as i64 })
+            stk += align_up(size, 8)
+            ret true
+        end
+        m := ca_arg_slot(g, v)
+        repeat n in j:
+            x := xmm(g)
+            _cx := e_copy(g, x, XMM0 + fi)
+            _sx := e_mr(g, M_FST, f.sz[j], mem_add(m, f.off[j]), x)
+            fi += 1
+        end
+        ret true
+    end
+    nw := (size + 7) / 8
+    if gi + nw > 8 and (g.arch != NG_ARCH_RV64 or gi >= 8):
+        gi = 8
+        ca_arg_mem(g, v, Mem { k = MK_ARG, d = stk as i64 })
+        stk += nw * 8
+        ret true
+    end
+    m2 := ca_arg_slot(g, v)
+    repeat nw in w:
+        if gi < 8:
+            ca_store_reg(g, mem_add(m2, w * 8), 8, k_a64_gp[gi])
+            gi += 1
+        else:
+            r2 := gpr(g)
+            _l := e_rm(g, M_LD, 8, r2, Mem { k = MK_ARG, d = stk as i64 })
+            _s2 := e_mr(g, M_ST, 8, mem_add(m2, w * 8), r2)
+            stk += 8
+        end
+    end
+    ret true
+end
+
+func ca_entry_arm(g &: Ng, v: int, fl: int, used &: Vector<bool>, vstk &: bool, ncrn &: int, nsaa &: int): bool:
+    byv := (fl & IF_BYVAL) != 0
+    t := g.v_ty[v]
+    if not byv and not is_agg(g, t):
+        ret false
+    end
+    mut size := 0
+    mut al := 4
+    if byv:
+        size = ca_byval_size(g, v)
+        repeat g.f_bv_val.len() in q:
+            if g.f_bv_val[q] == v:
+                al = talign(g, g.f_bv_ty[q])
+            end
+        end
+    else:
+        size = tsize(g, t)
+        al = talign(g, t)
+        mut f := CaParts {}
+        defer ca_free(f)
+        ok := ca_flat(g, t, 0, f)
+        es := ok ? ca_hfa(f) : 0
+        if es > 0:
+            n := f.off.len()
+            dbl := es == 8
+            mut base := 0 - 1
+            if not vstk:
+                base = arm_vfp_run(used, n, dbl)
+            end
+            if base < 0:
+                vstk = true
+                repeat 16 in u:
+                    used[u] = true
+                end
+                if dbl:
+                    nsaa = align_up(nsaa, 8)
+                end
+                ca_arg_mem(g, v, Mem { k = MK_ARG, d = (8 + nsaa) as i64 })
+                nsaa += n * es
+                ret true
+            end
+            m := ca_arg_slot(g, v)
+            repeat n in h:
+                sl := base + (dbl ? 2 * h : h)
+                x := xmm(g)
+                if (sl & 1) == 1:
+                    so := e_rr(g, M_ARM_SODD, 4, x, XMM0 + (sl >> 1))
+                    g.mc.cc[so] = 1
+                else:
+                    _cf := e_copy(g, x, XMM0 + (sl >> 1))
+                end
+                _sf := e_mr(g, M_FST, es, mem_add(m, h * es), x)
+            end
+            ret true
+        end
+    end
+    nw := (size + 3) / 4
+    al8 := al >= 8
+    if al8 and (ncrn & 1) == 1:
+        ncrn += 1
+    end
+    if ncrn + nw > 4 and nsaa > 0:
+        ncrn = 4
+    end
+    if al8 and ncrn >= 4:
+        nsaa = align_up(nsaa, 8)
+    end
+    if ncrn >= 4:
+        ca_arg_mem(g, v, Mem { k = MK_ARG, d = (8 + nsaa) as i64 })
+        nsaa += nw * 4
+        ret true
+    end
+    mut m2 := frame_mem(0, 0 as i64)
+    if byv:
+        m2 = frame_mem(new_slot(g, nw * 4, al8 ? 8 : 4), 0 as i64)
+    else:
+        m2 = ca_arg_slot(g, v)
+    end
+    repeat nw in w:
+        if ncrn < 4:
+            ca_store_reg(g, mem_add(m2, w * 4), 4, ncrn)
+            ncrn += 1
+        else:
+            r := gpr(g)
+            _l := e_rm(g, M_LD, 4, r, Mem { k = MK_ARG, d = (8 + nsaa) as i64 })
+            _s := e_mr(g, M_ST, 4, mem_add(m2, w * 4), r)
+            nsaa += 4
+        end
+    end
+    if byv:
+        g.vv[v] = lea_reg(g, m2)
+    end
+    ret true
+end
+
+func ca_ret_load(g &: Ng, t: int, a: int): i64:
+    mut p := CaParts {}
+    defer ca_free(p)
+    if ca_ret(g, t, false, p) != 1:
+        fail(g, "native backend: a C function returns a struct the native backend cannot return; use --backend=llvm")
+        ret 0
+    end
+    src := agg_mem(g, a)
+    mut vals := Vector {} as Vector<int>
+    defer vals.free()
+    repeat p.off.len() in j:
+        if p.kind[j] == CP_GP:
+            vals.push(ca_int(g, src, p.off[j], p.sz[j]))
+        else:
+            vals.push(ca_fp(g, src, p.off[j], p.sz[j] == 4 ? 4 : 8))
+        end
+    end
+    mut mask := 0 as i64
+    repeat p.off.len() in j2:
+        if p.kind[j2] != CP_SODD:
+            _c := e_copy(g, p.reg[j2], vals[j2])
+            mask = mask | ((1 as i64) << (p.reg[j2] as i64))
+        end
+    end
+    repeat p.off.len() in j3:
+        if p.kind[j3] == CP_SODD:
+            so := e_rr(g, M_ARM_SODD, 4, p.reg[j3], vals[j3])
+            g.mc.cc[so] = 0
+            mask = mask | ((1 as i64) << (p.reg[j3] as i64))
+        end
+    end
+    ret mask
 end

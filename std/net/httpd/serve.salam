@@ -716,6 +716,25 @@ func _serve_fastcgi(ctx: i64, site: int, loc: int, root: str, rel: str, path: st
     ret r.status
 end
 
+func _origin_form(ctx: i64, target: str): str:
+    mut start := 0
+    if _starts_at(target, 0, "http://"):
+        start = 7
+    else _starts_at(target, 0, "https://"):
+        start = 8
+    end
+    if start == 0: ret target end
+    rest := target.substr(start, target.len() - start)
+    slash := rest.indexOf("/")
+    if slash < 0:
+        mem.Free(rest as void *)
+        ret "/"
+    end
+    out := rest.substr(slash, rest.len() - slash)
+    mem.Free(rest as void *)
+    ret http.Own(ctx, out)
+end
+
 func _handle(ctx: i64):
     host := http.Header(ctx, "Host")
     mut port := _only_port
@@ -729,7 +748,12 @@ func _handle(ctx: i64):
         _log_line(host, method, raw, 404)
         ret
     end
-    dec := http.UrlDecode(raw)
+    if str.Contains(raw, "%00"):
+        _reply(ctx, 400, "400 Bad Request")
+        _log_line(host, method, raw, 400)
+        ret
+    end
+    dec := http.UrlDecode(_origin_form(ctx, raw))
     path := http.Own(ctx, _norm_path(dec))
     mem.Free(dec as void *)
     mut status := 200

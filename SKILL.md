@@ -1965,8 +1965,8 @@ points you to `export:`.
 On 32-bit Windows, Win32 functions reached through a pointer (the
 `GetProcAddress` pattern) need `extern stdcall func (...) R`: the call then
 uses stdcall on every backend. Everywhere else `stdcall` changes nothing.
-Persian: `درون‌داد فراخوان استاندارد تابع (...) R`. The seed release has to
-know the word before `std/` or `compiler/` can use it.
+Persian: `درون‌داد فراخوان استاندارد تابع (...) R`. Releases know the word since
+0.6.1. `compiler/` and what it imports need a seed that does.
 
 `link` REQUIRES an explicit kind before the library name - there is no bare
 `link "X"` and no `@link(...)` attribute form, only one way to write this:

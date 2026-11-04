@@ -16,9 +16,14 @@ package webview
 
 if SALAM_OS_LINUX and not SALAM_WEBVIEW_CEF:
     link dynamic "gtk-3"
+    link dynamic "gdk-3"
+    link dynamic "gdk_pixbuf-2.0"
     link dynamic "gobject-2.0"
     link dynamic "glib-2.0"
+    link dynamic "gio-2.0"
+    link dynamic "soup-3.0"
     link dynamic "webkit2gtk-4.1"
+    link dynamic "javascriptcoregtk-4.1"
 
     extern:
         func gtk_init_check(argc: void*, argv: void*): int
@@ -27,140 +32,373 @@ if SALAM_OS_LINUX and not SALAM_WEBVIEW_CEF:
         func gtk_window_resize(window: void*, width: int, height: int)
         func gtk_window_set_title(window: void*, title: str)
         func gtk_window_set_resizable(window: void*, resizable: int)
-        func webkit_web_view_new(): void*
+        func gtk_window_set_position(window: void*, position: int)
+        func gtk_window_set_icon_from_file(window: void*, path: str, error: void*): int
+        func gtk_window_present(window: void*)
+        func gtk_window_iconify(window: void*)
+        func gtk_window_maximize(window: void*)
+        func gtk_window_is_active(window: void*): int
         func gtk_container_add(container: void*, widget: void*)
         func gtk_widget_show_all(widget: void*)
-        func gtk_widget_in_destruction(widget: void*): int
+        func gtk_widget_hide(widget: void*)
+        func gtk_widget_destroy(widget: void*)
+        func gtk_widget_set_size_request(widget: void*, width: int, height: int)
         func gtk_main_iteration_do(blocking: int): int
+        func g_signal_connect_data(instance: void*, signal: str, handler: void*, data: void*, destroy: void*, flags: int): u64
+        func g_idle_add(handler: void*, data: void*): u32
+        func g_set_prgname(name: str)
+        func g_set_application_name(name: str)
+        func g_free(p: void*)
+        func g_malloc(n: u64): void*
+        func g_object_unref(obj: void*)
+        func g_memory_input_stream_new_from_data(data: void*, len: i64, destroy: void*): void*
+        func soup_message_headers_new(kind: int): void*
+        func soup_message_headers_append(headers: void*, name: str, value: str)
+        func jsc_value_to_string(value: void*): void*
+        func webkit_web_view_new_with_context(context: void*): void*
         func webkit_web_view_load_html(webview: void*, content: str, base_uri: void*)
         func webkit_web_view_load_uri(webview: void*, uri: str)
         func webkit_web_view_run_javascript(webview: void*, script: str, cancellable: void*, callback: void*, user_data: void*)
-        func g_object_unref(obj: void*)
+        func webkit_web_view_get_uri(webview: void*): void*
+        func webkit_web_view_get_settings(webview: void*): void*
+        func webkit_web_view_get_inspector(webview: void*): void*
+        func webkit_web_view_get_user_content_manager(webview: void*): void*
+        func webkit_web_inspector_show(inspector: void*)
+        func webkit_settings_set_enable_developer_extras(settings: void*, enabled: int)
+        func webkit_user_content_manager_register_script_message_handler(manager: void*, name: str): int
+        func webkit_user_content_manager_add_script(manager: void*, script: void*)
+        func webkit_user_script_new(source: str, frames: int, when: int, allow: void*, block: void*): void*
+        func webkit_user_script_unref(script: void*)
+        func webkit_javascript_result_get_js_value(result: void*): void*
+        func webkit_web_context_get_default(): void*
+        func webkit_web_context_new_with_website_data_manager(manager: void*): void*
+        func webkit_web_context_register_uri_scheme(context: void*, scheme: str, callback: void*, data: void*, destroy: void*)
+        func webkit_web_context_get_security_manager(context: void*): void*
+        func webkit_security_manager_register_uri_scheme_as_secure(manager: void*, scheme: str)
+        func webkit_security_manager_register_uri_scheme_as_cors_enabled(manager: void*, scheme: str)
+        func webkit_website_data_manager_new(first: str, ...): void*
+        func webkit_uri_scheme_request_get_scheme(request: void*): str
+        func webkit_uri_scheme_request_get_uri(request: void*): str
+        func webkit_uri_scheme_request_get_http_method(request: void*): void*
+        func webkit_uri_scheme_request_finish_with_response(request: void*, response: void*)
+        func webkit_uri_scheme_response_new(stream: void*, length: i64): void*
+        func webkit_uri_scheme_response_set_content_type(response: void*, mime: str)
+        func webkit_uri_scheme_response_set_status(response: void*, status: u32, reason: void*)
+        func webkit_uri_scheme_response_set_http_headers(response: void*, headers: void*)
+        func webkit_navigation_policy_decision_get_navigation_action(decision: void*): void*
+        func webkit_navigation_action_get_request(action: void*): void*
+        func webkit_uri_request_get_uri(request: void*): str
+        func webkit_policy_decision_ignore(decision: void*)
     end
 
-    @en "HintNone"
-    @fa "بدون اشاره"
-    pub const HINT_NONE := 0
+    mut _lx_ready := false
+    mut _lx_context := null as void*
+    mut _lx_pending := Vector {} as Vector<str>
+    mut _lx_views := Vector {} as Vector<_LxView>
 
-    @en "HintFixed"
-    @fa "اشاره ثابت"
-    pub const HINT_FIXED := 1
-
-    @en "WebView"
-    @fa "نمایش وب"
-    pub struct WebView:
-        @en "handle"
-        @fa "دسته"
-        pub handle: void* = null
-        @en "window"
-        @fa "پنجره"
+    struct _LxView:
         pub window: void* = null
-        @en "closed"
-        @fa "بسته‌شده"
-        pub closed: bool = false
+        pub view: void* = null
+        pub context_menu: bool = true
+    end
 
-        @en "destroy"
-        @fa "نابود کردن"
-        pub func Destroy():
-            if this.window != null and not this.closed:
-                g_object_unref(this.window)
-                this.window = null
-                this.handle = null
-                this.closed = true
+    export:
+        func salam_wv_lx_drain(_data: void*): int:
+            _wv_drain()
+            ret 0
+        end
+
+        func salam_wv_lx_on_message(_manager: void*, result: void*, data: void*):
+            value := webkit_javascript_result_get_js_value(result)
+            raw := jsc_value_to_string(value)
+            if raw != null:
+                _wv_fire_message((data as i64) as int, raw as str)
+                g_free(raw)
             end
         end
 
-        @en "run"
-        @fa "اجرا"
-        pub func Run():
-            if this.window == null or this.closed:
-                ret
+        func salam_wv_lx_on_delete(_widget: void*, _event: void*, data: void*): int:
+            ret _wv_fire_close((data as i64) as int) ? 0 : 1
+        end
+
+        func salam_wv_lx_on_destroy(_widget: void*, data: void*):
+            _wv_mark_closed((data as i64) as int)
+        end
+
+        func salam_wv_lx_on_policy(_view: void*, decision: void*, kind: int, data: void*): int:
+            id := (data as i64) as int
+            if kind > 1:
+                ret 0
             end
-            until not this.closed:
-                gtk_main_iteration_do(1)
-                if gtk_widget_in_destruction(this.window) != 0:
-                    this.closed = true
+            action := webkit_navigation_policy_decision_get_navigation_action(decision)
+            url := webkit_uri_request_get_uri(webkit_navigation_action_get_request(action))
+            if kind == 1:
+                webkit_policy_decision_ignore(decision)
+                _wv_fire_new_window(id, url)
+                ret 1
+            end
+            if _wv_fire_navigate(id, url):
+                ret 0
+            end
+            webkit_policy_decision_ignore(decision)
+            ret 1
+        end
+
+        func salam_wv_lx_on_load(view: void*, event: int, data: void*):
+            if event == 0 or event == 3:
+                raw := webkit_web_view_get_uri(view)
+                _wv_fire_load((data as i64) as int, raw == null ? "" : (raw as str), event == 3)
+            end
+        end
+
+        func salam_wv_lx_on_crash(_view: void*, _reason: int, data: void*):
+            _wv_fire_crash((data as i64) as int)
+        end
+
+        func salam_wv_lx_on_configure(_widget: void*, event: void*, data: void*): int:
+            fields := event as i32*
+            _wv_fire_resize((data as i64) as int, fields[7], fields[8])
+            ret 0
+        end
+
+        func salam_wv_lx_on_context_menu(_view: void*, _menu: void*, _event: void*, _hit: void*, data: void*): int:
+            id := (data as i64) as int
+            if _wv_alive(id) and not _lx_views[id].context_menu:
+                ret 1
+            end
+            ret 0
+        end
+
+        func salam_wv_lx_on_scheme(request: void*, _data: void*):
+            method_raw := webkit_uri_scheme_request_get_http_method(request)
+            req := _wv_split_url(
+                webkit_uri_scheme_request_get_uri(request), webkit_uri_scheme_request_get_scheme(request),
+                method_raw == null ? "GET" : (method_raw as str)
+            )
+            res := _wv_scheme_answer(req)
+            mut copy := null as void*
+            if res.size > 0:
+                copy = g_malloc(res.size as u64)
+                mem.Copy(copy, res.data, res.size as u64)
+            end
+            stream := g_memory_input_stream_new_from_data(copy, res.size, &g_free)
+            response := webkit_uri_scheme_response_new(stream, res.size)
+            webkit_uri_scheme_response_set_content_type(response, res.mime)
+            webkit_uri_scheme_response_set_status(response, res.status as u32, null)
+            if res.headers.len() > 0:
+                headers := soup_message_headers_new(1)
+                mut h := 0
+                until h + 1 < res.headers.len():
+                    soup_message_headers_append(headers, res.headers[h], res.headers[h + 1])
+                    h += 2
                 end
+                webkit_uri_scheme_response_set_http_headers(response, headers)
             end
-        end
-
-        @en "terminate"
-        @fa "پایان دادن"
-        pub func Terminate():
-            this.closed = true
-        end
-
-        @en "SetTitle"
-        @fa "تنظیم عنوان"
-        pub func SetTitle(title: str):
-            if this.window != null and not this.closed:
-                gtk_window_set_title(this.window, title)
-            end
-        end
-
-        @en "SetSize"
-        @fa "تنظیم اندازه"
-        pub func SetSize(width: int, height: int, hints: int = HINT_NONE):
-            if this.window != null and not this.closed:
-                gtk_window_set_default_size(this.window, width, height)
-                gtk_window_resize(this.window, width, height)
-                gtk_window_set_resizable(this.window, hints == HINT_FIXED ? 0 : 1)
-            end
-        end
-
-        @en "SetHTML"
-        @fa "تنظیم اچ تی ام ال"
-        pub func SetHTML(html: str):
-            if this.handle != null and not this.closed:
-                webkit_web_view_load_html(this.handle, html, null)
-            end
-        end
-
-        @en "Navigate"
-        @fa "پیمایش"
-        pub func Navigate(url: str):
-            if this.handle != null and not this.closed:
-                webkit_web_view_load_uri(this.handle, url)
-            end
-        end
-
-        @en "Eval"
-        @fa "ارزیابی"
-        pub func Eval(js: str):
-            if this.handle != null and not this.closed:
-                webkit_web_view_run_javascript(this.handle, js, null, null, null)
-            end
-        end
-
-        @en "Init"
-        @fa "اولیه‌سازی"
-        pub func Init(js: str):
-            this.Eval(js)
-        end
-
-        @en "IsClosed"
-        @fa "بسته شده است"
-        pub func IsClosed(): bool:
-            ret this.closed
+            webkit_uri_scheme_request_finish_with_response(request, response)
+            g_object_unref(response)
+            g_object_unref(stream)
         end
     end
 
-    @en "create"
-    @fa "ایجاد"
-    pub func Create(_debug: bool = false): WebView:
+    func _lx_add_scheme(name: str):
+        webkit_web_context_register_uri_scheme(_lx_context, name, &salam_wv_lx_on_scheme, null, null)
+        security := webkit_web_context_get_security_manager(_lx_context)
+        webkit_security_manager_register_uri_scheme_as_secure(security, name)
+        webkit_security_manager_register_uri_scheme_as_cors_enabled(security, name)
+    end
+
+    func _lx_startup(): bool:
+        if _lx_ready:
+            ret true
+        end
+        if _wv_app_id.len() > 0:
+            g_set_prgname(_wv_app_id)
+        end
         if gtk_init_check(null, null) == 0:
-            ret WebView { handle = null, window = null, closed = true }
+            ret false
+        end
+        if _wv_app_name.len() > 0:
+            g_set_application_name(_wv_app_name)
+        end
+        if _wv_data_dir.len() > 0:
+            cache := _wv_data_dir.concat("/cache")
+            data := webkit_website_data_manager_new("base-data-directory", _wv_data_dir, "base-cache-directory", cache, null)
+            _lx_context = webkit_web_context_new_with_website_data_manager(data)
+        else:
+            _lx_context = webkit_web_context_get_default()
+        end
+        each name in _lx_pending:
+            _lx_add_scheme(name)
+        end
+        _lx_pending.clear()
+        _lx_ready = true
+        ret true
+    end
+
+    func _lx_slot(id: int): _LxView:
+        ret _lx_views[id]
+    end
+
+    func _lx_connect(target: void*, signal: str, handler: void*, id: int):
+        g_signal_connect_data(target, signal, handler, id as i64 as void*, null, 0)
+    end
+
+    func _wv_bk_create(id: int, debug: bool, visible: bool): bool:
+        until _lx_views.len() <= id:
+            _lx_views.push(_LxView {})
+        end
+        if not _lx_startup():
+            ret false
         end
         window := gtk_window_new(0)
         if window == null:
-            ret WebView { handle = null, window = null, closed = true }
+            ret false
         end
-        wkview := webkit_web_view_new()
-        if wkview == null:
-            ret WebView { handle = null, window = null, closed = true }
+        view := webkit_web_view_new_with_context(_lx_context)
+        if view == null:
+            gtk_widget_destroy(window)
+            ret false
         end
-        gtk_container_add(window, wkview)
+        manager := webkit_web_view_get_user_content_manager(view)
+        _lx_connect(manager, "script-message-received::salam", &salam_wv_lx_on_message, id)
+        webkit_user_content_manager_register_script_message_handler(manager, "salam")
+        _lx_connect(window, "delete-event", &salam_wv_lx_on_delete, id)
+        _lx_connect(window, "destroy", &salam_wv_lx_on_destroy, id)
+        _lx_connect(window, "configure-event", &salam_wv_lx_on_configure, id)
+        _lx_connect(view, "decide-policy", &salam_wv_lx_on_policy, id)
+        _lx_connect(view, "load-changed", &salam_wv_lx_on_load, id)
+        _lx_connect(view, "web-process-terminated", &salam_wv_lx_on_crash, id)
+        _lx_connect(view, "context-menu", &salam_wv_lx_on_context_menu, id)
+        if debug:
+            webkit_settings_set_enable_developer_extras(webkit_web_view_get_settings(view), 1)
+        end
+        gtk_window_set_default_size(window, 800, 600)
+        gtk_container_add(window, view)
+        _lx_views[id] = _LxView { window = window, view = view }
+        if visible:
+            gtk_widget_show_all(window)
+        end
+        ret true
+    end
+
+    func _wv_bk_destroy(id: int):
+        gtk_widget_destroy(_lx_slot(id).window)
+    end
+
+    func _wv_bk_iter():
+        gtk_main_iteration_do(1)
+    end
+
+    func _wv_bk_wake():
+        if _lx_ready:
+            g_idle_add(&salam_wv_lx_drain, null)
+        end
+    end
+
+    func _wv_bk_set_title(id: int, title: str):
+        gtk_window_set_title(_lx_slot(id).window, title)
+    end
+
+    func _wv_bk_set_size(id: int, width: int, height: int, hints: int):
+        window := _lx_slot(id).window
+        gtk_window_set_default_size(window, width, height)
+        gtk_window_resize(window, width, height)
+        gtk_window_set_resizable(window, hints == HINT_FIXED ? 0 : 1)
+    end
+
+    func _wv_bk_set_min_size(id: int, width: int, height: int):
+        gtk_widget_set_size_request(_lx_slot(id).view, width, height)
+    end
+
+    func _wv_bk_set_icon(id: int, path: str):
+        _ok := gtk_window_set_icon_from_file(_lx_slot(id).window, path, null)
+    end
+
+    func _wv_bk_set_html(id: int, html: str):
+        webkit_web_view_load_html(_lx_slot(id).view, html, null)
+    end
+
+    func _wv_bk_navigate(id: int, url: str):
+        webkit_web_view_load_uri(_lx_slot(id).view, url)
+    end
+
+    func _wv_bk_eval(id: int, js: str):
+        webkit_web_view_run_javascript(_lx_slot(id).view, js, null, null, null)
+    end
+
+    func _wv_bk_add_script(id: int, js: str, all_frames: bool):
+        script := webkit_user_script_new(js, all_frames ? 0 : 1, 0, null, null)
+        webkit_user_content_manager_add_script(webkit_web_view_get_user_content_manager(_lx_slot(id).view), script)
+        webkit_user_script_unref(script)
+    end
+
+    func _wv_bk_url(id: int): str:
+        raw := webkit_web_view_get_uri(_lx_slot(id).view)
+        if raw == null:
+            ret str.Clone("")
+        end
+        ret str.Clone(raw as str)
+    end
+
+    func _wv_bk_show(id: int):
+        window := _lx_slot(id).window
         gtk_widget_show_all(window)
-        ret WebView { handle = wkview, window = window, closed = false }
+        gtk_window_present(window)
+    end
+
+    func _wv_bk_hide(id: int):
+        gtk_widget_hide(_lx_slot(id).window)
+    end
+
+    func _wv_bk_focus(id: int):
+        gtk_window_present(_lx_slot(id).window)
+    end
+
+    func _wv_bk_minimize(id: int):
+        gtk_window_iconify(_lx_slot(id).window)
+    end
+
+    func _wv_bk_maximize(id: int):
+        gtk_window_maximize(_lx_slot(id).window)
+    end
+
+    func _wv_bk_center(id: int):
+        gtk_window_set_position(_lx_slot(id).window, 1)
+    end
+
+    func _wv_bk_is_active(id: int): bool:
+        ret gtk_window_is_active(_lx_slot(id).window) != 0
+    end
+
+    func _wv_bk_native(id: int): void*:
+        ret _lx_slot(id).window
+    end
+
+    func _wv_bk_devtools(id: int):
+        view := _lx_slot(id).view
+        webkit_settings_set_enable_developer_extras(webkit_web_view_get_settings(view), 1)
+        webkit_web_inspector_show(webkit_web_view_get_inspector(view))
+    end
+
+    func _wv_bk_context_menu(id: int, enabled: bool):
+        mut v := _lx_views[id]
+        v.context_menu = enabled
+        _lx_views[id] = v
+    end
+
+    func _wv_bk_register_scheme(name: str):
+        if _lx_ready:
+            _lx_add_scheme(name)
+        else:
+            _lx_pending.push(str.Clone(name))
+        end
+    end
+
+    func _wv_bk_scheme_origin(name: str): str:
+        ret name.concat("://localhost")
+    end
+
+    func _wv_bk_post_script(): str:
+        ret str.Clone("(s)=>window.webkit.messageHandlers.salam.postMessage(s)")
     end
 end

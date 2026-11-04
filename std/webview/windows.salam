@@ -17,28 +17,48 @@ package webview
 if SALAM_OS_WINDOWS and not SALAM_WEBVIEW_CEF:
     link dynamic "user32"
     link dynamic "kernel32"
-    link dynamic "WebView2Loader"
 
     extern:
-        func CreateWindowExA(
-            ex_style: u32, class_name: str, window_name: str, style: u32, x: int, y: int, width: int, height: int, parent: void*, menu: void*, instance: void*, param: void*
+        func GetModuleHandleW(name: void*): void*
+        func LoadLibraryW(name: void*): void*
+        func GetProcAddress(module: void*, name: str): void*
+        func RegisterClassExW(cls: void*): u16
+        func CreateWindowExW(
+            ex_style: u32, class_name: void*, window_name: void*, style: u32, x: int, y: int, width: int,
+            height: int, parent: void*, menu: void*, instance: void*, param: void*
         ): void*
+        func DefWindowProcW(hwnd: void*, msg: u32, wparam: usize, lparam: size): size
         func DestroyWindow(hwnd: void*): int
-        func IsWindow(hwnd: void*): int
-        func PeekMessageA(
+        func ShowWindow(hwnd: void*, cmd: int): int
+        func SetForegroundWindow(hwnd: void*): int
+        func GetForegroundWindow(): void*
+        func GetMessageW(msg: void*, hwnd: void*, filter_min: u32, filter_max: u32): int
+        func PeekMessageW(
             msg: void*, hwnd: void*, filter_min: u32, filter_max: u32, remove: u32
         ): int
+        func PostMessageW(hwnd: void*, msg: u32, wparam: usize, lparam: size): int
+        func SendMessageW(hwnd: void*, msg: u32, wparam: usize, lparam: size): size
+        func MsgWaitForMultipleObjects(count: u32, handles: void*, wait_all: int, ms: u32, mask: u32): u32
         func TranslateMessage(msg: void*): int
-        func DispatchMessageA(msg: void*): i64
-        func SetWindowTextA(hwnd: void*, text: str): int
+        func DispatchMessageW(msg: void*): size
+        func SetWindowTextW(hwnd: void*, text: void*): int
         func SetWindowPos(
             hwnd: void*, insert_after: void*, x: int, y: int, width: int, height: int, flags: u32
         ): int
+        func GetClientRect(hwnd: void*, rect: void*): int
+        func GetWindowRect(hwnd: void*, rect: void*): int
+        func AdjustWindowRect(rect: void*, style: u32, menu: int): int
+        func GetWindowLongW(hwnd: void*, index: int): i32
+        func SetWindowLongW(hwnd: void*, index: int, value: i32): i32
+        func GetSystemMetrics(index: int): int
+        func LoadCursorW(instance: void*, name: void*): void*
+        func LoadImageW(instance: void*, name: void*, kind: u32, cx: int, cy: int, flags: u32): void*
         func MultiByteToWideChar(
             code_page: u32, flags: u32, mb_str: str, mb_len: i32, wide_buf: void*, wide_len: i32
         ): i32
-        func CreateCoreWebView2EnvironmentWithOptions(
-            browser_exe_folder: void*, user_data_folder: void*, environment_options: void*, handler: void*
+        func WideCharToMultiByte(
+            code_page: u32, flags: u32, wide: void*, wide_len: i32, out: void*, out_len: i32, def: void*,
+            used: void*
         ): i32
     end
     if SALAM_ARCH_X86:
@@ -48,22 +68,33 @@ if SALAM_OS_WINDOWS and not SALAM_WEBVIEW_CEF:
         end
     end
 
-    @en "HintNone"
-    @fa "بدون اشاره"
-    pub const HINT_NONE := 0
-
-    @en "HintFixed"
-    @fa "اشاره ثابت"
-    pub const HINT_FIXED := 1
-
-    mut _wv2_env := null as void*
-    mut _wv2_ctrl := null as void*
+    mut _win_views := Vector {} as Vector<_WinView>
+    mut _win_ready := false
+    mut _win_failed := false
+    mut _win_class := null as void*
+    mut _win_wake_hwnd := null as void*
+    mut _win_env := null as void*
+    mut _win_ctrl := null as void*
+    mut _win_wait_done := false
+    mut _win_msg := null as void*
+    mut _win_token := null as void*
+    mut _win_exec_handler := null as void*
+    mut _win_script_handler := null as void*
+    mut _win_task_free := null as void*
     mut _h_qi := null as void*
     mut _h_addref := null as void*
     mut _h_release := null as void*
     mut _h_env := null as void*
     mut _h_ctrl := null as void*
     mut _h_exec := null as void*
+    mut _h_script := null as void*
+    mut _h_wndproc := null as void*
+    mut _h_message := null as void*
+    mut _h_nav_start := null as void*
+    mut _h_nav_done := null as void*
+    mut _h_new_window := null as void*
+    mut _h_resource := null as void*
+    mut _h_crash := null as void*
 
     struct Slot:
         pub v: void* = null
@@ -76,127 +107,28 @@ if SALAM_OS_WINDOWS and not SALAM_WEBVIEW_CEF:
         pub bottom: i32 = 0
     end
 
-    @en "WebView"
-    @fa "نمایش وب"
-    pub struct WebView:
-        @en "hwnd"
-        @fa "دسته پنجره"
+    struct _WndClass:
+        pub size: u32 = 0
+        pub style: u32 = 0
+        pub proc: void* = null
+        pub class_extra: i32 = 0
+        pub window_extra: i32 = 0
+        pub instance: void* = null
+        pub icon: void* = null
+        pub cursor: void* = null
+        pub background: void* = null
+        pub menu_name: void* = null
+        pub class_name: void* = null
+        pub icon_small: void* = null
+    end
+
+    struct _WinView:
         pub hwnd: void* = null
-        @en "controller"
-        @fa "کنترل‌گر"
         pub controller: void* = null
-        @en "webview"
-        @fa "دسته مرورگر"
         pub webview: void* = null
-        @en "closed"
-        @fa "بسته‌شده"
-        pub closed: bool = false
-
-        @en "destroy"
-        @fa "نابود کردن"
-        pub func Destroy():
-            if this.hwnd != null and not this.closed:
-                if this.controller != null:
-                    close_fn := (com_vtbl_slot(this.controller, 24)) as extern stdcall func (void*) i32
-                    close_fn(this.controller)
-                end
-                DestroyWindow(this.hwnd)
-                this.hwnd = null
-                this.controller = null
-                this.webview = null
-                this.closed = true
-            end
-        end
-
-        @en "run"
-        @fa "اجرا"
-        pub func Run():
-            if this.hwnd == null or this.closed:
-                ret
-            end
-            msg := mem.Allocate(48 as u64)
-            until not this.closed:
-                got := PeekMessageA(msg, null, 0 as u32, 0 as u32, 1 as u32)
-                if got != 0:
-                    TranslateMessage(msg)
-                    DispatchMessageA(msg)
-                end
-                if IsWindow(this.hwnd) == 0:
-                    this.closed = true
-                end
-            end
-        end
-
-        @en "terminate"
-        @fa "پایان دادن"
-        pub func Terminate():
-            this.closed = true
-        end
-
-        @en "SetTitle"
-        @fa "تنظیم عنوان"
-        pub func SetTitle(title: str):
-            if this.hwnd != null and not this.closed:
-                SetWindowTextA(this.hwnd, title)
-            end
-        end
-
-        @en "SetSize"
-        @fa "تنظیم اندازه"
-        pub func SetSize(width: int, height: int, _hints: int = HINT_NONE):
-            if this.hwnd != null and not this.closed:
-                SetWindowPos(this.hwnd, null, 0, 0, width, height, 2 as u32)
-                if this.controller != null:
-                    com_put_bounds(this.controller, width, height)
-                end
-            end
-        end
-
-        @en "SetHTML"
-        @fa "تنظیم اچ تی ام ال"
-        pub func SetHTML(html: str):
-            if this.webview != null and not this.closed:
-                wide := to_wide(html)
-                nav_fn := (com_vtbl_slot(this.webview, 6)) as extern stdcall func (void*, void*) i32
-                nav_fn(this.webview, wide)
-                mem.Free(wide)
-            end
-        end
-
-        @en "Navigate"
-        @fa "پیمایش"
-        pub func Navigate(url: str):
-            if this.webview != null and not this.closed:
-                wide := to_wide(url)
-                nav_fn := (com_vtbl_slot(this.webview, 5)) as extern stdcall func (void*, void*) i32
-                nav_fn(this.webview, wide)
-                mem.Free(wide)
-            end
-        end
-
-        @en "Eval"
-        @fa "ارزیابی"
-        pub func Eval(js: str):
-            if this.webview != null and not this.closed:
-                wide := to_wide(js)
-                exec_handler := make_com_obj(_h_exec)
-                exec_fn := (com_vtbl_slot(this.webview, 29)) as extern stdcall func (void*, void*, void*) i32
-                exec_fn(this.webview, wide, exec_handler)
-                mem.Free(wide)
-            end
-        end
-
-        @en "Init"
-        @fa "اولیه‌سازی"
-        pub func Init(js: str):
-            this.Eval(js)
-        end
-
-        @en "IsClosed"
-        @fa "بسته شده است"
-        pub func IsClosed(): bool:
-            ret this.closed
-        end
+        pub settings: void* = null
+        pub min_width: int = 0
+        pub min_height: int = 0
     end
 
     export:
@@ -213,16 +145,166 @@ if SALAM_OS_WINDOWS and not SALAM_WEBVIEW_CEF:
         func salam_com_release(_this: void*): u32:
             ret 1
         end
-        func salam_env_completed(_this: void*, _error_code: i32, environment: void*): i32:
-            _wv2_env = environment
+        func salam_env_completed(_this: void*, error_code: i32, environment: void*): i32:
+            if error_code == 0:
+                _win_env = environment
+            end
+            _win_wait_done = true
             ret 0
         end
-        func salam_ctrl_completed(_this: void*, _error_code: i32, controller: void*): i32:
-            _wv2_ctrl = controller
+        func salam_ctrl_completed(_this: void*, error_code: i32, controller: void*): i32:
+            if error_code == 0:
+                _win_ctrl = controller
+            end
+            _win_wait_done = true
             ret 0
         end
         func salam_exec_completed(_this: void*, _error_code: i32, _result_json: void*): i32:
             ret 0
+        end
+        func salam_script_completed(_this: void*, _error_code: i32, _id: void*): i32:
+            _win_wait_done = true
+            ret 0
+        end
+        func salam_wv_win_on_message(this_: void*, _sender: void*, args: void*): i32:
+            id := com_handler_id(this_)
+            out := (mem.AllocateZeroed(sizeof(Slot) as u64)) as Slot*
+            f := (com_vtbl_slot(args, 5)) as extern stdcall func (void*, void*) i32
+            if f(args, out as void*) == 0 and out[0].v != null:
+                text := from_wide(out[0].v)
+                com_task_free(out[0].v)
+                _wv_fire_message(id, text)
+                mem.Free(text as void*)
+            end
+            mem.Free(out as void*)
+            ret 0
+        end
+        func salam_wv_win_on_nav_start(this_: void*, _sender: void*, args: void*): i32:
+            id := com_handler_id(this_)
+            uri := com_get_wide(args, 3)
+            defer mem.Free(uri as void*)
+            if not _wv_fire_navigate(id, uri):
+                f := (com_vtbl_slot(args, 8)) as extern stdcall func (void*, i32) i32
+                f(args, 1)
+                ret 0
+            end
+            _wv_fire_load(id, uri, false)
+            ret 0
+        end
+        func salam_wv_win_on_nav_done(this_: void*, sender: void*, _args: void*): i32:
+            id := com_handler_id(this_)
+            uri := com_get_wide(sender, 4)
+            defer mem.Free(uri as void*)
+            _wv_fire_load(id, uri, true)
+            ret 0
+        end
+        func salam_wv_win_on_new_window(this_: void*, _sender: void*, args: void*): i32:
+            id := com_handler_id(this_)
+            uri := com_get_wide(args, 3)
+            defer mem.Free(uri as void*)
+            f := (com_vtbl_slot(args, 6)) as extern stdcall func (void*, i32) i32
+            f(args, 1)
+            _wv_fire_new_window(id, uri)
+            ret 0
+        end
+        func salam_wv_win_on_crash(this_: void*, _sender: void*, args: void*): i32:
+            id := com_handler_id(this_)
+            kind := (mem.AllocateZeroed(8 as u64)) as i32*
+            f := (com_vtbl_slot(args, 3)) as extern stdcall func (void*, void*) i32
+            f(args, kind as void*)
+            what := kind[0]
+            mem.Free(kind as void*)
+            if what == 0 or what == 1:
+                _wv_fire_crash(id)
+            end
+            ret 0
+        end
+        func salam_wv_win_on_resource(_this: void*, _sender: void*, args: void*): i32:
+            req_slot := (mem.AllocateZeroed(sizeof(Slot) as u64)) as Slot*
+            defer mem.Free(req_slot as void*)
+            get_req := (com_vtbl_slot(args, 3)) as extern stdcall func (void*, void*) i32
+            if get_req(args, req_slot as void*) != 0 or req_slot[0].v == null:
+                ret 0
+            end
+            request := req_slot[0].v
+            uri := com_get_wide(request, 3)
+            method := com_get_wide(request, 5)
+            scheme := _win_scheme_of(uri)
+            res := _wv_scheme_answer(_wv_split_url(uri, scheme, method))
+            mut head := "Content-Type: ".concat(res.mime)
+            mut h := 0
+            until h + 1 < res.headers.len():
+                head = head.concat("\r\n").concat(res.headers[h]).concat(": ").concat(res.headers[h + 1])
+                h += 2
+            end
+            stream := _win_mem_stream(res.data, res.size as u32)
+            wide_head := to_wide(head)
+            wide_reason := to_wide(res.status < 400 ? "OK" : "Error")
+            out := (mem.AllocateZeroed(sizeof(Slot) as u64)) as Slot*
+            make := (com_vtbl_slot(_win_env, 4)) as extern stdcall func (void*, void*, i32, void*, void*, void*) i32
+            if make(_win_env, stream, res.status, wide_reason, wide_head, out as void*) == 0:
+                put := (com_vtbl_slot(args, 5)) as extern stdcall func (void*, void*) i32
+                put(args, out[0].v)
+                com_release(out[0].v)
+            end
+            com_release(stream)
+            com_release(request)
+            mem.Free(out as void*)
+            mem.Free(wide_head)
+            mem.Free(wide_reason)
+            mem.Free(uri as void*)
+            mem.Free(method as void*)
+            mem.Free(scheme as void*)
+            ret 0
+        end
+        func salam_wv_win_wndproc(hwnd: void*, msg: u32, wparam: usize, lparam: size): size:
+            if msg == (0x8000 as u32):
+                _wv_drain()
+                ret 0
+            end
+            id := _win_find(hwnd)
+            if id < 0:
+                ret DefWindowProcW(hwnd, msg, wparam, lparam)
+            end
+            if msg == (5 as u32):
+                width := ((lparam as i64) & (0xFFFF as i64)) as int
+                height := (((lparam as i64) >> 16) & (0xFFFF as i64)) as int
+                ctrl := _win_views[id].controller
+                if ctrl != null:
+                    com_put_bounds(ctrl, width, height)
+                end
+                _wv_fire_resize(id, width, height)
+                ret 0
+            else msg == (7 as u32):
+                ctrl := _win_views[id].controller
+                if ctrl != null:
+                    f := (com_vtbl_slot(ctrl, 12)) as extern stdcall func (void*, i32) i32
+                    f(ctrl, 0)
+                end
+                ret 0
+            else msg == (0x24 as u32):
+                v := _win_views[id]
+                if v.min_width > 0:
+                    points := (lparam as i64) as i32*
+                    points[6] = v.min_width
+                    points[7] = v.min_height
+                end
+                ret 0
+            else msg == (16 as u32):
+                if _wv_fire_close(id):
+                    DestroyWindow(hwnd)
+                end
+                ret 0
+            else msg == (2 as u32):
+                ctrl := _win_views[id].controller
+                if ctrl != null:
+                    f := (com_vtbl_slot(ctrl, 24)) as extern stdcall func (void*) i32
+                    f(ctrl)
+                end
+                _wv_mark_closed(id)
+                ret 0
+            end
+            ret DefWindowProcW(hwnd, msg, wparam, lparam)
         end
     end
 
@@ -243,14 +325,14 @@ if SALAM_OS_WINDOWS and not SALAM_WEBVIEW_CEF:
                 ret fn
             end
             code := page as u8*
-            size := words * 4
+            size_bytes := words * 4
             mut at := index * 32
             start := at
             repeat words:
                 code[at] = 0xFF as u8
                 code[at + 1] = 0x74 as u8
                 code[at + 2] = 0x24 as u8
-                code[at + 3] = size as u8
+                code[at + 3] = size_bytes as u8
                 at += 4
             end
             addr := fn as i64
@@ -262,9 +344,9 @@ if SALAM_OS_WINDOWS and not SALAM_WEBVIEW_CEF:
             code[at + 6] = 0xD0 as u8
             code[at + 7] = 0x83 as u8
             code[at + 8] = 0xC4 as u8
-            code[at + 9] = size as u8
+            code[at + 9] = size_bytes as u8
             code[at + 10] = 0xC2 as u8
-            code[at + 11] = size as u8
+            code[at + 11] = size_bytes as u8
             code[at + 12] = 0 as u8
             ret ((page as i64) + (start as i64)) as void*
         end
@@ -298,25 +380,86 @@ if SALAM_OS_WINDOWS and not SALAM_WEBVIEW_CEF:
         _h_env = com_handler(page, 3, &salam_env_completed, 3)
         _h_ctrl = com_handler(page, 4, &salam_ctrl_completed, 3)
         _h_exec = com_handler(page, 5, &salam_exec_completed, 3)
+        _h_script = com_handler(page, 6, &salam_script_completed, 3)
+        _h_wndproc = com_handler(page, 7, &salam_wv_win_wndproc, 4)
+        _h_message = com_handler(page, 8, &salam_wv_win_on_message, 3)
+        _h_nav_start = com_handler(page, 9, &salam_wv_win_on_nav_start, 3)
+        _h_nav_done = com_handler(page, 10, &salam_wv_win_on_nav_done, 3)
+        _h_new_window = com_handler(page, 11, &salam_wv_win_on_new_window, 3)
+        _h_resource = com_handler(page, 12, &salam_wv_win_on_resource, 3)
+        _h_crash = com_handler(page, 13, &salam_wv_win_on_crash, 3)
         if page != null:
             _closed := com_page_close(page)
         end
     end
 
-    func make_com_obj(invoke: void*): void*:
+    func make_com_obj(invoke: void*, id: int = -1): void*:
         vtbl := (mem.Allocate(32 as u64)) as Slot*
         vtbl[0].v = _h_qi
         vtbl[1].v = _h_addref
         vtbl[2].v = _h_release
         vtbl[3].v = invoke
-        obj := (mem.Allocate(8 as u64)) as Slot*
+        obj := (mem.Allocate((sizeof(Slot) as u64) * (2 as u64))) as Slot*
         obj[0].v = vtbl as void*
+        obj[1].v = (id as size) as void*
         ret obj as void*
+    end
+
+    func com_handler_id(obj: void*): int:
+        ret ((obj as Slot*)[1].v as size) as int
     end
 
     func com_vtbl_slot(obj: void*, slot: int): void*:
         vtbl := (obj as Slot*)[0].v
         ret (vtbl as Slot*)[slot].v
+    end
+
+    func _win_proc(library: str, name: str): void*:
+        wide := to_wide(library)
+        module := LoadLibraryW(wide)
+        mem.Free(wide)
+        if module == null:
+            ret null
+        end
+        ret GetProcAddress(module, name)
+    end
+
+    func com_task_free(p: void*):
+        if _win_task_free == null:
+            _win_task_free = _win_proc("ole32.dll", "CoTaskMemFree")
+        end
+        f := _win_task_free as extern stdcall func (void*)
+        f(p)
+    end
+
+    func _win_mem_stream(data: void*, length: u32): void*:
+        make := _win_proc("shlwapi.dll", "SHCreateMemStream")
+        f := make as extern stdcall func (void*, u32) void*
+        ret f(data, length)
+    end
+
+    func com_release(obj: void*):
+        if obj != null:
+            f := (com_vtbl_slot(obj, 2)) as extern stdcall func (void*) u32
+            _left := f(obj)
+        end
+    end
+
+    func com_get_wide(obj: void*, slot: int): str:
+        out := (mem.AllocateZeroed(sizeof(Slot) as u64)) as Slot*
+        defer mem.Free(out as void*)
+        f := (com_vtbl_slot(obj, slot)) as extern stdcall func (void*, void*) i32
+        if f(obj, out as void*) != 0 or out[0].v == null:
+            ret str.Clone("")
+        end
+        text := from_wide(out[0].v)
+        com_task_free(out[0].v)
+        ret text
+    end
+
+    func com_add_handler(webview: void*, slot: int, handler: void*):
+        f := (com_vtbl_slot(webview, slot)) as extern stdcall func (void*, void*, void*) i32
+        f(webview, handler, _win_token)
     end
 
     func to_wide(s: str): void*:
@@ -326,60 +469,444 @@ if SALAM_OS_WINDOWS and not SALAM_WEBVIEW_CEF:
         ret buf
     end
 
-    @en "create"
-    @fa "ایجاد"
-    pub func Create(_debug: bool = false): WebView:
-        hwnd := CreateWindowExA(
-            0 as u32, "STATIC", "", 282001408 as u32, 100, 100, 800, 600, null, null, null, null
+    func from_wide(wide: void*): str:
+        needed := WideCharToMultiByte(65001 as u32, 0 as u32, wide, 0 - 1, null, 0, null, null)
+        buf := mem.Allocate((needed + 1) as u64)
+        WideCharToMultiByte(65001 as u32, 0 as u32, wide, 0 - 1, buf, needed + 1, null, null)
+        (buf as u8*)[needed] = 0 as u8
+        ret buf as str
+    end
+
+    func _win_scheme_of(url: str): str:
+        start := str.IndexOf(url, "://")
+        if start < 0:
+            ret str.Clone("")
+        end
+        host_start := start + 3
+        dot := str.IndexFrom(url, ".localhost", host_start)
+        if dot < 0:
+            ret str.Clone("")
+        end
+        ret str.Substr(url, host_start, dot - host_start)
+    end
+
+    func _win_find(hwnd: void*): int:
+        repeat _win_views.len() in i:
+            if _win_views[i].hwnd == hwnd:
+                ret i
+            end
+        end
+        ret -1
+    end
+
+    func _win_pump_wait():
+        mut loops := 0
+        until not _win_wait_done and loops < 6000:
+            MsgWaitForMultipleObjects(0 as u32, null, 0, 10 as u32, 0x4FF as u32)
+            until PeekMessageW(_win_msg, null, 0 as u32, 0 as u32, 1 as u32) != 0:
+                TranslateMessage(_win_msg)
+                DispatchMessageW(_win_msg)
+            end
+            loops += 1
+        end
+    end
+
+    func _win_runtime_dir(root: void*): str:
+        sub_key := to_wide("SOFTWARE\\Microsoft\\EdgeUpdate\\ClientState\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}")
+        value := to_wide("EBWebView")
+        defer mem.Free(sub_key)
+        defer mem.Free(value)
+        key_slot := (mem.AllocateZeroed(sizeof(Slot) as u64)) as Slot*
+        defer mem.Free(key_slot as void*)
+        open_key := _win_proc("advapi32.dll", "RegOpenKeyExW") as extern stdcall func (void*, void*, u32, u32, void*) i32
+        query := _win_proc("advapi32.dll", "RegQueryValueExW") as extern stdcall func (void*, void*, void*, void*, void*, void*) i32
+        close_key := _win_proc("advapi32.dll", "RegCloseKey") as extern stdcall func (void*) i32
+        if open_key(root, sub_key, 0 as u32, 0x20219 as u32, key_slot as void*) != 0:
+            ret str.Clone("")
+        end
+        key := key_slot[0].v
+        size_ptr := (mem.AllocateZeroed(8 as u64)) as u32*
+        size_ptr[0] = 4096 as u32
+        data := mem.AllocateZeroed(4098 as u64)
+        mut found := str.Clone("")
+        if query(key, value, null, null, data, size_ptr as void*) == 0:
+            mem.Free(found as void*)
+            found = from_wide(data)
+        end
+        close_key(key)
+        mem.Free(data)
+        mem.Free(size_ptr as void*)
+        ret found
+    end
+
+    func _win_runtime_dll(): str:
+        mut dir := _win_runtime_dir(((0x80000002 as u32) as size) as void*)
+        if dir.len() == 0:
+            mem.Free(dir as void*)
+            dir = _win_runtime_dir(((0x80000001 as u32) as size) as void*)
+        end
+        if dir.len() == 0:
+            ret dir
+        end
+        mut arch := "x64"
+        if SALAM_ARCH_X86:
+            arch = "x86"
+        end
+        if SALAM_ARCH_ARM64:
+            arch = "arm64"
+        end
+        ret dir.concat("\\EBWebView\\").concat(arch).concat("\\EmbeddedBrowserWebView.dll")
+    end
+
+    func _win_data_dir_wide(): void*:
+        if _wv_data_dir.len() > 0:
+            ret to_wide(_wv_data_dir)
+        end
+        ret null
+    end
+
+    func _win_start_env(handler: void*): bool:
+        data_dir := _win_data_dir_wide()
+        defer mem.Free(data_dir)
+        loader_name := to_wide("WebView2Loader.dll")
+        defer mem.Free(loader_name)
+        loader := LoadLibraryW(loader_name)
+        if loader != null:
+            create := GetProcAddress(loader, "CreateCoreWebView2EnvironmentWithOptions")
+            if create != null:
+                f := create as extern stdcall func (void*, void*, void*, void*) i32
+                ret f(null, data_dir, null, handler) == 0
+            end
+        end
+        dll_path := _win_runtime_dll()
+        if dll_path.len() == 0:
+            ret false
+        end
+        wide_path := to_wide(dll_path)
+        defer mem.Free(wide_path)
+        client := LoadLibraryW(wide_path)
+        if client == null:
+            ret false
+        end
+        internal := GetProcAddress(client, "CreateWebViewEnvironmentWithOptionsInternal")
+        if internal == null:
+            ret false
+        end
+        g := internal as extern stdcall func (i32, i32, void*, void*, void*) i32
+        ret g(1, 0, data_dir, null, handler) == 0
+    end
+
+    func _win_startup(): bool:
+        if _win_ready:
+            ret true
+        end
+        if _win_failed:
+            ret false
+        end
+        com_handlers_init()
+        co_init := _win_proc("ole32.dll", "CoInitializeEx") as extern stdcall func (void*, u32) i32
+        co_init(null, 2 as u32)
+        _win_msg = mem.AllocateZeroed(64 as u64)
+        _win_token = mem.AllocateZeroed(16 as u64)
+        user32_name := to_wide("user32.dll")
+        user32 := GetModuleHandleW(user32_name)
+        mem.Free(user32_name)
+        if user32 != null:
+            aware := GetProcAddress(user32, "SetProcessDpiAwarenessContext")
+            if aware != null:
+                f := aware as extern stdcall func (void*) i32
+                _set := f(((0 - 4) as size) as void*)
+            end
+        end
+        cls := (mem.AllocateZeroed(sizeof(_WndClass) as u64)) as _WndClass*
+        _win_class = to_wide("SalamWebView")
+        cls[0].size = sizeof(_WndClass) as u32
+        cls[0].proc = _h_wndproc
+        cls[0].instance = GetModuleHandleW(null)
+        cls[0].cursor = LoadCursorW(null, ((32512 as size) as void*))
+        cls[0].background = ((6 as size) as void*)
+        cls[0].class_name = _win_class
+        RegisterClassExW(cls as void*)
+        mem.Free(cls as void*)
+        _win_wake_hwnd = CreateWindowExW(
+            0 as u32, _win_class, null, 0 as u32, 0, 0, 0, 0, ((0 - 3) as size) as void*, null,
+            GetModuleHandleW(null), null
+        )
+        _win_exec_handler = make_com_obj(_h_exec)
+        _win_script_handler = make_com_obj(_h_script)
+        _win_wait_done = false
+        if not _win_start_env(make_com_obj(_h_env)):
+            _win_failed = true
+            ret false
+        end
+        _win_pump_wait()
+        if _win_env == null:
+            _win_failed = true
+            ret false
+        end
+        _win_ready = true
+        ret true
+    end
+
+    func _win_view(id: int): _WinView:
+        ret _win_views[id]
+    end
+
+    func _win_add_scheme_filter(webview: void*, name: str):
+        filter := to_wide("https://".concat(name).concat(".localhost/*"))
+        f := (com_vtbl_slot(webview, 57)) as extern stdcall func (void*, void*, i32) i32
+        f(webview, filter, 0)
+        mem.Free(filter)
+    end
+
+    func _win_client_rect(hwnd: void*): WvRect:
+        out := (mem.AllocateZeroed(sizeof(WvRect) as u64)) as WvRect*
+        GetClientRect(hwnd, out as void*)
+        r := out[0]
+        mem.Free(out as void*)
+        ret r
+    end
+
+    func _wv_bk_create(id: int, debug: bool, visible: bool): bool:
+        until _win_views.len() <= id:
+            _win_views.push(_WinView {})
+        end
+        if not _win_startup():
+            ret false
+        end
+        hwnd := CreateWindowExW(
+            0 as u32, _win_class, null, 0x00CF0000 as u32, 100, 100, 800, 600, null, null,
+            GetModuleHandleW(null), null
         )
         if hwnd == null:
-            ret WebView { hwnd = null, controller = null, webview = null, closed = true }
+            ret false
         end
-
-        _wv2_env = null as void*
-        _wv2_ctrl = null as void*
-
-        com_handlers_init()
-        env_handler := make_com_obj(_h_env)
-        CreateCoreWebView2EnvironmentWithOptions(null, null, null, env_handler)
-
-        msg := mem.Allocate(48 as u64)
-        mut spins := 0
-        until _wv2_env == null and spins <= 200000:
-            PeekMessageA(msg, null, 0 as u32, 0 as u32, 1 as u32)
-            TranslateMessage(msg)
-            DispatchMessageA(msg)
-            spins += 1
-        end
-        if _wv2_env == null:
+        _win_views[id] = _WinView { hwnd = hwnd }
+        _win_ctrl = null as void*
+        _win_wait_done = false
+        create_ctrl := (com_vtbl_slot(_win_env, 3)) as extern stdcall func (void*, void*, void*) i32
+        create_ctrl(_win_env, hwnd, make_com_obj(_h_ctrl))
+        _win_pump_wait()
+        if _win_ctrl == null:
             DestroyWindow(hwnd)
-            ret WebView { hwnd = null, controller = null, webview = null, closed = true }
+            ret false
         end
-
-        ctrl_handler := make_com_obj(_h_ctrl)
-        create_ctrl_fn := (com_vtbl_slot(_wv2_env, 3)) as extern stdcall func (void*, void*, void*) i32
-        create_ctrl_fn(_wv2_env, hwnd, ctrl_handler)
-
-        spins = 0
-        until _wv2_ctrl == null and spins <= 200000:
-            PeekMessageA(msg, null, 0 as u32, 0 as u32, 1 as u32)
-            TranslateMessage(msg)
-            DispatchMessageA(msg)
-            spins += 1
+        controller := _win_ctrl
+        rect := _win_client_rect(hwnd)
+        com_put_bounds(controller, rect.right - rect.left, rect.bottom - rect.top)
+        slot := (mem.AllocateZeroed(sizeof(Slot) as u64)) as Slot*
+        get_webview := (com_vtbl_slot(controller, 25)) as extern stdcall func (void*, void*) i32
+        get_webview(controller, slot as void*)
+        webview := slot[0].v
+        slot[0].v = null
+        get_settings := (com_vtbl_slot(webview, 3)) as extern stdcall func (void*, void*) i32
+        get_settings(webview, slot as void*)
+        settings := slot[0].v
+        mem.Free(slot as void*)
+        if settings != null:
+            put_dev := (com_vtbl_slot(settings, 12)) as extern stdcall func (void*, i32) i32
+            put_dev(settings, debug ? 1 : 0)
+            put_status := (com_vtbl_slot(settings, 10)) as extern stdcall func (void*, i32) i32
+            put_status(settings, 0)
         end
-        if _wv2_ctrl == null:
-            DestroyWindow(hwnd)
-            ret WebView { hwnd = null, controller = null, webview = null, closed = true }
+        _win_views[id] = _WinView { hwnd = hwnd, controller = controller, webview = webview, settings = settings }
+        com_add_handler(webview, 34, make_com_obj(_h_message, id))
+        com_add_handler(webview, 7, make_com_obj(_h_nav_start, id))
+        com_add_handler(webview, 15, make_com_obj(_h_nav_done, id))
+        com_add_handler(webview, 44, make_com_obj(_h_new_window, id))
+        com_add_handler(webview, 25, make_com_obj(_h_crash, id))
+        com_add_handler(webview, 55, make_com_obj(_h_resource, id))
+        each s in _wv_schemes:
+            _win_add_scheme_filter(webview, s.name)
         end
+        if visible:
+            ShowWindow(hwnd, 5)
+        end
+        ret true
+    end
 
-        com_put_bounds(_wv2_ctrl, 800, 600)
+    func _wv_bk_destroy(id: int):
+        DestroyWindow(_win_view(id).hwnd)
+    end
 
-        webview_slot := (mem.Allocate(8 as u64)) as Slot*
-        get_wv_fn := (com_vtbl_slot(_wv2_ctrl, 25)) as extern stdcall func (void*, void*) i32
-        get_wv_fn(_wv2_ctrl, webview_slot as void*)
+    func _wv_bk_iter():
+        got := GetMessageW(_win_msg, null, 0 as u32, 0 as u32)
+        if got <= 0:
+            _wv_quit = true
+            ret
+        end
+        TranslateMessage(_win_msg)
+        DispatchMessageW(_win_msg)
+    end
 
-        ret WebView {
-            hwnd = hwnd, controller = _wv2_ctrl, webview = webview_slot[0].v, closed = false
-        }
+    func _wv_bk_wake():
+        if _win_wake_hwnd != null:
+            PostMessageW(_win_wake_hwnd, 0x8000 as u32, 0 as usize, 0 as size)
+        end
+    end
+
+    func _wv_bk_set_title(id: int, title: str):
+        wide := to_wide(title)
+        SetWindowTextW(_win_view(id).hwnd, wide)
+        mem.Free(wide)
+    end
+
+    func _wv_bk_set_size(id: int, width: int, height: int, hints: int):
+        hwnd := _win_view(id).hwnd
+        mut style := GetWindowLongW(hwnd, -16)
+        if hints == HINT_FIXED:
+            style = style & ~(0x00050000 as i32)
+        else:
+            style = style | (0x00050000 as i32)
+        end
+        SetWindowLongW(hwnd, -16, style)
+        out := (mem.AllocateZeroed(sizeof(WvRect) as u64)) as WvRect*
+        out[0].right = width
+        out[0].bottom = height
+        AdjustWindowRect(out as void*, style as u32, 0)
+        r := out[0]
+        mem.Free(out as void*)
+        SetWindowPos(hwnd, null, 0, 0, r.right - r.left, r.bottom - r.top, 0x26 as u32)
+    end
+
+    func _wv_bk_set_min_size(id: int, width: int, height: int):
+        mut v := _win_views[id]
+        v.min_width = width
+        v.min_height = height
+        _win_views[id] = v
+    end
+
+    func _wv_bk_set_icon(id: int, path: str):
+        wide := to_wide(path)
+        icon := LoadImageW(null, wide, 1 as u32, 0, 0, 0x10 as u32)
+        mem.Free(wide)
+        if icon != null:
+            hwnd := _win_view(id).hwnd
+            value := (icon as size)
+            SendMessageW(hwnd, 0x80 as u32, 0 as usize, value)
+            SendMessageW(hwnd, 0x80 as u32, 1 as usize, value)
+        end
+    end
+
+    func _wv_bk_set_html(id: int, html: str):
+        wide := to_wide(html)
+        webview := _win_view(id).webview
+        f := (com_vtbl_slot(webview, 6)) as extern stdcall func (void*, void*) i32
+        f(webview, wide)
+        mem.Free(wide)
+    end
+
+    func _wv_bk_navigate(id: int, url: str):
+        wide := to_wide(url)
+        webview := _win_view(id).webview
+        f := (com_vtbl_slot(webview, 5)) as extern stdcall func (void*, void*) i32
+        f(webview, wide)
+        mem.Free(wide)
+    end
+
+    func _wv_bk_eval(id: int, js: str):
+        wide := to_wide(js)
+        webview := _win_view(id).webview
+        f := (com_vtbl_slot(webview, 29)) as extern stdcall func (void*, void*, void*) i32
+        f(webview, wide, _win_exec_handler)
+        mem.Free(wide)
+    end
+
+    func _wv_bk_add_script(id: int, js: str, all_frames: bool):
+        mut code := str.Clone(js)
+        if not all_frames:
+            wrapped := "if(window===window.top){".concat(js).concat("}")
+            mem.Free(code as void*)
+            code = wrapped
+        end
+        wide := to_wide(code)
+        webview := _win_view(id).webview
+        _win_wait_done = false
+        f := (com_vtbl_slot(webview, 27)) as extern stdcall func (void*, void*, void*) i32
+        f(webview, wide, _win_script_handler)
+        _win_pump_wait()
+        mem.Free(wide)
+        mem.Free(code as void*)
+    end
+
+    func _wv_bk_url(id: int): str:
+        ret com_get_wide(_win_view(id).webview, 4)
+    end
+
+    func _wv_bk_show(id: int):
+        ShowWindow(_win_view(id).hwnd, 5)
+        SetForegroundWindow(_win_view(id).hwnd)
+    end
+
+    func _wv_bk_hide(id: int):
+        ShowWindow(_win_view(id).hwnd, 0)
+    end
+
+    func _wv_bk_focus(id: int):
+        ShowWindow(_win_view(id).hwnd, 9)
+        SetForegroundWindow(_win_view(id).hwnd)
+    end
+
+    func _wv_bk_minimize(id: int):
+        ShowWindow(_win_view(id).hwnd, 6)
+    end
+
+    func _wv_bk_maximize(id: int):
+        ShowWindow(_win_view(id).hwnd, 3)
+    end
+
+    func _wv_bk_center(id: int):
+        hwnd := _win_view(id).hwnd
+        out := (mem.AllocateZeroed(sizeof(WvRect) as u64)) as WvRect*
+        GetWindowRect(hwnd, out as void*)
+        r := out[0]
+        mem.Free(out as void*)
+        width := r.right - r.left
+        height := r.bottom - r.top
+        x := (GetSystemMetrics(0) - width) / 2
+        y := (GetSystemMetrics(1) - height) / 2
+        SetWindowPos(hwnd, null, x, y, 0, 0, 0x15 as u32)
+    end
+
+    func _wv_bk_is_active(id: int): bool:
+        ret GetForegroundWindow() == _win_view(id).hwnd
+    end
+
+    func _wv_bk_native(id: int): void*:
+        ret _win_view(id).hwnd
+    end
+
+    func _wv_bk_devtools(id: int):
+        v := _win_view(id)
+        if v.settings != null:
+            put_dev := (com_vtbl_slot(v.settings, 12)) as extern stdcall func (void*, i32) i32
+            put_dev(v.settings, 1)
+        end
+        f := (com_vtbl_slot(v.webview, 51)) as extern stdcall func (void*) i32
+        f(v.webview)
+    end
+
+    func _wv_bk_context_menu(id: int, enabled: bool):
+        settings := _win_view(id).settings
+        if settings != null:
+            f := (com_vtbl_slot(settings, 14)) as extern stdcall func (void*, i32) i32
+            f(settings, enabled ? 1 : 0)
+        end
+    end
+
+    func _wv_bk_register_scheme(name: str):
+        each v in _win_views:
+            if v.webview != null:
+                _win_add_scheme_filter(v.webview, name)
+            end
+        end
+    end
+
+    func _wv_bk_scheme_origin(name: str): str:
+        ret "https://".concat(name).concat(".localhost")
+    end
+
+    func _wv_bk_post_script(): str:
+        ret str.Clone("(s)=>window.chrome.webview.postMessage(s)")
     end
 end

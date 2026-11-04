@@ -1078,7 +1078,8 @@ pixel in `_extract_block`. Counted with callgrind: `image_rtl_card` 142.36 to
 141.40 million instructions (x86-64-v3: 115.80 to 114.85), `image_basics`
 553.80 to 544.50 (515.25 to 505.96). 39 of the 42 benchmarks are the same
 binary; `41_matrix_stdlib_smallops` runs 1.2% fewer instructions and the
-geometric mean is 0.9998.
+geometric mean is 0.9998. A compile job runs 0.15% fewer instructions and
+the compiler is 1.8% smaller.
 
 ### Conventions worth knowing
 

@@ -13,6 +13,8 @@ already has, and the program is one native executable.
 
 ## A first application
 
+`salam new notes --desktop` writes this project for you (`--lang=fa` for Persian).
+
 ```salam
 import desktop
 

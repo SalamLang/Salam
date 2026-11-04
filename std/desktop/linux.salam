@@ -24,6 +24,16 @@ if SALAM_OS_LINUX and not SALAM_WEBVIEW_CEF:
         func g_free(p: void*)
         func g_error_free(error: void*)
         func g_variant_new(format: str, ...): void*
+        func g_variant_new_string(text: str): void*
+        func g_variant_new_boolean(value: int): void*
+        func g_variant_type_new(text: str): void*
+        func g_variant_builder_new(kind: void*): void*
+        func g_variant_builder_add(builder: void*, format: str, ...)
+        func g_variant_builder_unref(builder: void*)
+        func g_dbus_connection_signal_subscribe(
+            connection: void*, sender: void*, iface: str, member: str, path: str, arg0: void*,
+            flags: int, callback: void*, data: void*, free_data: void*
+        ): u32
         func g_variant_unref(value: void*)
         func g_bus_get_sync(kind: int, cancellable: void*, error: void*): void*
         func g_dbus_connection_call_sync(
@@ -75,10 +85,15 @@ if SALAM_OS_LINUX and not SALAM_WEBVIEW_CEF:
     mut _lx_tray_status := null as void*
     mut _lx_tray_indicator := null as void*
     mut _lx_instance_fd := -1
+    mut _lx_click_listening := false
 
     export:
         func salam_desktop_lx_menu(_item: void*, data: void*):
             _fire_menu((data as i64) as int)
+        end
+
+        func salam_desktop_lx_notify_action(_connection: void*, _sender: str, _path: str, _iface: str, _signal: str, _params: void*, _data: void*):
+            _on_notify_click()
         end
 
         func salam_desktop_lx_tray_activate(_icon: void*, _data: void*):
@@ -197,13 +212,33 @@ if SALAM_OS_LINUX and not SALAM_WEBVIEW_CEF:
         ret answer == -8 or answer == -5
     end
 
-    func _os_notify(title: str, body: str): bool:
+    func _os_notify(title: str, body: str, sound: str): bool:
         bus := g_bus_get_sync(2, null, null)
         if bus == null:
             ret false
         end
-        name := _cfg.name.len() > 0 ? _cfg.name : _secret_id()
-        params := g_variant_new("(susssasa{sv}i)", name, 0 as u32, "", title, body, null, null, -1)
+        if not _lx_click_listening:
+            _lx_click_listening = true
+            _id := g_dbus_connection_signal_subscribe(
+                bus, null, "org.freedesktop.Notifications", "ActionInvoked",
+                "/org/freedesktop/Notifications", null, 0, &salam_desktop_lx_notify_action, null,
+                null
+            )
+        end
+        actions := g_variant_builder_new(g_variant_type_new("as"))
+        g_variant_builder_add(actions, "s", "default")
+        g_variant_builder_add(actions, "s", "Open")
+        hints := g_variant_builder_new(g_variant_type_new("a{sv}"))
+        if sound.len() == 0:
+            g_variant_builder_add(hints, "{sv}", "suppress-sound", g_variant_new_boolean(1))
+        else:
+            name := sound == "alert" ? "dialog-warning" : "message-new-instant"
+            g_variant_builder_add(hints, "{sv}", "sound-name", g_variant_new_string(name))
+        end
+        app_name := _cfg.name.len() > 0 ? _cfg.name : _secret_id()
+        params := g_variant_new("(susssasa{sv}i)", app_name, 0 as u32, _cfg.icon, title, body, actions, hints, -1)
+        g_variant_builder_unref(actions)
+        g_variant_builder_unref(hints)
         reply := g_dbus_connection_call_sync(
             bus, "org.freedesktop.Notifications", "/org/freedesktop/Notifications",
             "org.freedesktop.Notifications", "Notify", params, null, 0, 5000, null, null
@@ -397,7 +432,7 @@ if SALAM_WEBVIEW_CEF:
         ret false
     end
 
-    func _os_notify(_title: str, _body: str): bool:
+    func _os_notify(_title: str, _body: str, _sound: str): bool:
         ret false
     end
 

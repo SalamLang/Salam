@@ -15,13 +15,23 @@ import threading
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
+SITE = """<!doctype html><meta charset=utf-8><title>site</title>
+<h1>Site heading</h1><p id=copy>سلام from the site</p>
+<a id=next href="/site2">Second page</a>
+<button id=btn onclick="document.getElementById('copy').textContent='clicked';console.warn('warned')">Press me</button>
+<input id=name name=name placeholder="your name"><select id=pick><option value=a>Apple</option><option value=b>Berry</option></select>
+<img src="/missing.png"><div id=late></div><div style="height:3000px"></div>
+<script>console.log("hello log");setTimeout(()=>{document.getElementById('late').textContent='ready now'},300);</script>"""
+
+SITE2 = """<!doctype html><meta charset=utf-8><title>second</title><h2>Second</h2>"""
+
 PAGE = """<!doctype html><meta charset=utf-8><title>fake app</title><script>
 (async () => {
   const report = (name, value) => fetch("/report", {method: "POST", body: JSON.stringify({name, value})});
   try {
     salam.listen("agent://call", (c) => {
       report("call:" + c.tool + ":" + c.state, c.output || c.summary);
-      if (c.state === "pending") salam.invoke("agent_decide", {callId: c.call_id, answer: c.tool === "shell" ? "allow" : "deny"});
+      if (c.state === "pending") salam.invoke("agent_decide", {callId: c.call_id, answer: c.tool === "shell" || c.tool === "browser" ? "allow" : "deny"});
     });
     salam.listen("agent://output", (o) => report("output", o.chunk));
     salam.listen("agent://connection", (v) => report("connection", v));
@@ -69,6 +79,13 @@ def make_handler(state):
         def do_GET(self):
             if self.path == "/":
                 body = PAGE.replace("%WS%", json.dumps(state.workspace)).encode()
+                self.send_response(200)
+                self.send_header("Content-Type", "text/html; charset=utf-8")
+                self.send_header("Content-Length", str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+            elif self.path == "/site" or self.path == "/site2":
+                body = (SITE if self.path == "/site" else SITE2).encode()
                 self.send_response(200)
                 self.send_header("Content-Type", "text/html; charset=utf-8")
                 self.send_header("Content-Length", str(len(body)))
@@ -156,11 +173,42 @@ def main():
         call("fail", "shell", {"command": "exit 3", "shell": "sh"}, workspace),
         call("missing", "nope", {}, workspace),
     ]
-    state.expected = len(state.calls)
     server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
     port = server.server_address[1]
     threading.Thread(target=server.serve_forever, daemon=True).start()
     url = f"http://127.0.0.1:{port}"
+    has_browser = bool(os.environ.get("SALAM_AGENT_BROWSER"))
+    if has_browser:
+
+        def browse(cid, **args):
+            state.calls.append(call("b_" + cid, "browser", args, workspace))
+
+        browse("badact", action="dance")
+        browse("badkey", action="press", key="Hyper+x")
+        browse("badurl", action="open", url="javascript:alert(1)")
+        browse("open", action="open", url=url + "/site")
+        browse("text", action="text")
+        browse("click", action="click", selector="#btn")
+        browse("eval", action="eval", script="document.getElementById('copy').textContent")
+        browse("evalret", action="eval", script="return 40 + 2;")
+        browse("evalbad", action="eval", script="throw new Error('boom')")
+        browse("type", action="type", selector="#name", text="سارا")
+        browse("select", action="select", selector="#pick", text="Berry")
+        browse("selectbad", action="select", selector="#pick", text="Nope")
+        browse("wait", action="wait", text="ready now")
+        browse("missing", action="click", selector="#none")
+        browse("hover", action="hover", selector="#btn")
+        browse("scroll", action="scroll", y=500)
+        browse("shot", action="screenshot", full_page=True)
+        browse("console", action="console")
+        browse("network", action="network")
+        browse("next", action="click", selector="#next")
+        browse("back", action="back")
+        browse("reload", action="reload")
+        browse("small", action="screenshot", width=400, height=600)
+        browse("close", action="close")
+        browse("closed", action="close")
+    state.expected = len(state.calls)
     env = dict(os.environ, HOME=home, XDG_DATA_HOME=os.path.join(home, "data"), SALAM_AGENT_DEBUG="1", SALAM_APP_URL=url + "/", SALAM_API_URL=url)
     log_path = os.path.join(root, "agent.log")
     with open(log_path, "wb") as log:
@@ -173,7 +221,7 @@ def main():
             failures.append(name)
 
     try:
-        finished = state.done.wait(90)
+        finished = state.done.wait(240)
         check("every call answered", finished, sorted(state.results))
         reports = dict(state.reports)
         info = reports.get("info", {})
@@ -208,6 +256,39 @@ def main():
         check("call events", "call:shell:pending" in names and "call:shell:done" in names, names)
         check("output streamed", "output" in names, names)
         check("connected", any(n == "connection" and v is True for n, v in state.reports), names)
+        if has_browser:
+            out = lambda k: get("b_" + k).get("output", "")
+            st = lambda k: get("b_" + k).get("status")
+            check("browser refuses a bad action", st("badact") == "error", get("b_badact"))
+            check("browser refuses a bad key", st("badkey") == "error", get("b_badkey"))
+            check("browser refuses javascript links", st("badurl") == "error", get("b_badurl"))
+            check("browser open", st("open") == "ok" and "(200)" in out("open") and '"site"' in out("open"), out("open"))
+            check("browser open sends a screenshot", len(get("b_open").get("image", "")) > 1000 and get("b_open").get("image_mime") == "image/jpeg", get("b_open").get("image_mime"))
+            check("browser reports the 404 image", "missing.png" in out("open") or "missing.png" in out("text"), out("open"))
+            check("browser text outline", "سلام from the site" in out("text") and "Site heading" in out("text") and "Second page" in out("text") and "Press me" in out("text"), out("text"))
+            check("browser click", st("click") == "ok" and "button" in out("click"), out("click"))
+            check("browser click ran the page", "clicked" in out("eval"), out("eval"))
+            check("browser eval asks first", "call:browser:pending" in names, names)
+            check("browser eval accepts return", "42" in out("evalret"), out("evalret"))
+            check("browser eval reports errors", st("evalbad") == "error" and "boom" in out("evalbad"), out("evalbad"))
+            check("browser type", st("type") == "ok" and "سارا" in out("type"), out("type"))
+            check("browser select", "Berry" in out("select"), out("select"))
+            check("browser select lists options", st("selectbad") == "error" and "Apple" in out("selectbad"), out("selectbad"))
+            check("browser wait", "Found" in out("wait"), out("wait"))
+            check("browser missing selector", st("missing") == "error" and "#none" in out("missing"), out("missing"))
+            check("browser hover", st("hover") == "ok", out("hover"))
+            check("browser scroll", "y=500" in out("scroll"), out("scroll"))
+            check("browser full page shot", "x" in out("shot") and len(get("b_shot").get("image", "")) > 1000, out("shot"))
+            check("browser console", "hello log" in out("console") and "warned" in out("console"), out("console"))
+            check("browser network", "/site" in out("network") and "GET 200" in out("network"), out("network"))
+            check("browser follows a link", '"second"' in out("next"), out("next"))
+            check("browser back", '"site"' in out("back"), out("back"))
+            check("browser reload", st("reload") == "ok", out("reload"))
+            check("browser viewport", "400x600" in out("small"), out("small"))
+            check("browser close", "Closed" in out("close"), out("close"))
+            check("browser closes once", "No browser" in out("closed"), out("closed"))
+            left = subprocess.run(["sh", "-c", "ls -d /tmp/salam-agent-browser-* 2>/dev/null | wc -l"], capture_output=True, text=True).stdout.strip()
+            check("browser profile removed", left == "0", left)
         check("files untouched by denied calls", not os.path.exists(os.path.join(workspace, "new")) and "hello world" in open(os.path.join(workspace, "a.txt"), encoding="utf-8").read())
     finally:
         proc.terminate()

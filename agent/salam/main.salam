@@ -31,6 +31,8 @@ import str
 import sync
 import time
 
+include browser "browser.salam"
+
 if SALAM_OS_WINDOWS:
     extern:
         func _fullpath(out: void*, path: str, size: usize): void*
@@ -283,6 +285,7 @@ struct Action:
     pub slug: str = ""
     pub title: str = ""
     pub description: str = ""
+    pub browser_request: browser.Request = browser.Request {}
 end
 
 struct Plan:
@@ -2504,15 +2507,32 @@ func tool_plan(id: str, tool: str, args: str, chat: str, ws: Workspace): Plan:
         p.detail = old_content(path)
         p.lang = "markdown"
     else tool == "browser":
-        ret plan_error("The browser tool is not available in this build of Salam Agent yet.")
+        root := ws
+        r := browser.Parse(
+            args, chat, (raw: str): mut unused := true ret root.resolve(raw, unused) end
+        )
+        if r.error.len() > 0:
+            ret plan_error(r.error)
+        end
+        a.browser_request = r
+        p.kind = browser.KindOf(r)
+        p.summary = browser.Summary(r)
+        p.detail = browser.Detail(r)
+        p.lang = browser.Lang(r)
     else:
         ret plan_error("This version of Salam Agent does not know the tool " + tool + ". Ask the user to update Salam Agent.")
     end
     ret Plan { preview = p, action = a }
 end
 
-func tool_run(a: Action, ws: Workspace, call_id: str, failed &: bool): str:
+func tool_run(a: Action, ws: Workspace, call_id: str, failed &: bool, image &: str): str:
     tool := a.tool
+    if tool == "browser":
+        out := browser.Execute(a.browser_request, (): ret approvals_cancelled(call_id) end)
+        failed = out.failed
+        image = out.image
+        ret out.text
+    end
     if tool == "shell" or tool == "run_tests" or tool == "docker" or tool == "wsl":
         ret exec_run(a.program, a.args, a.raw_args, a.cwd, a.timeout, call_id, failed)
     end
@@ -2602,12 +2622,16 @@ func set_connected(value: bool):
     offline_later(flip)
 end
 
-func report(secret: str, call_id: str, status: str, output: str, p: Preview, has_preview: bool):
+func report(secret: str, call_id: str, status: str, output: str, p: Preview, has_preview: bool, image: str = ""):
     mut members := Vector {} as Vector<str>
     defer members.free()
     members.push(json.Member("call_id", call_id))
     members.push(json.Member("status", status))
     members.push(json.Member("output", output))
+    if image.len() > 0:
+        members.push(json.Member("image", image))
+        members.push(json.Member("image_mime", "image/jpeg"))
+    end
     if has_preview:
         members.push(json.Member("tool", p.tool))
         members.push(json.Member("kind", p.kind))
@@ -2662,10 +2686,14 @@ func handle_call(secret: str, call_text: str):
     emit_call(p, "running", "")
     approvals_start(id)
     mut failed := false
-    output := tool_run(plan.action, ws, id, failed)
+    mut image := ""
+    output := tool_run(plan.action, ws, id, failed, image)
     approvals_finish(id)
     emit_call(p, failed ? "error" : "done", output)
-    report(secret, id, failed ? "error" : "ok", output, p, true)
+    report(secret, id, failed ? "error" : "ok", output, p, true, image)
+    if image.len() > 0:
+        mem.Free(image as void*)
+    end
 end
 
 func connection_monitor():
@@ -3153,4 +3181,5 @@ func main:
     _connect := spawn(connect_main)
     _watchdog := spawn(watchdog_loop)
     desktop.Run()
+    browser.CloseAll()
 end

@@ -19,6 +19,10 @@ package chan
 import mem
 import sync
 
+mut sel_mu := sync.NewMutex()
+mut sel_cv := sync.NewCondVar()
+mut sel_cells := mem.AllocateZeroed(16 as u64) as i64*
+
 struct TimerArg:
     pub ch: Chan<i64> = Chan {} as Chan<i64>
     pub cancel: i64* = null
@@ -117,6 +121,7 @@ pub struct Chan<T>:
             mine := c[4] + 1
             c[4] = mine
             sync.Signal(this.not_empty)
+            wake_selectors()
             until c[3] == 0 and c[5] < mine and not expired:
                 if timed:
                     left := deadline - sync.NowMs()
@@ -144,6 +149,7 @@ pub struct Chan<T>:
         c[2] = c[2] + 1
         sync.Signal(this.not_empty)
         sync.Unlock(this.mu)
+        wake_selectors()
         ret true
     end
 
@@ -219,6 +225,7 @@ pub struct Chan<T>:
         c[2] = c[2] + 1
         sync.Signal(this.not_empty)
         sync.Unlock(this.mu)
+        wake_selectors()
         ret true
     end
 
@@ -259,6 +266,7 @@ pub struct Chan<T>:
         sync.Broadcast(this.not_full)
         sync.Broadcast(this.taken)
         sync.Unlock(this.mu)
+        wake_selectors()
     end
 
     @en "is_closed"
@@ -312,6 +320,16 @@ pub struct Timer:
     @en "handle"
     @fa "دسته"
     pub handle: i64 = 0
+end
+
+func wake_selectors():
+    if atomic_load(sel_cells) == 0:
+        ret
+    end
+    sync.Lock(sel_mu)
+    sel_cells[1] = sel_cells[1] + 1
+    sync.Broadcast(sel_cv)
+    sync.Unlock(sel_mu)
 end
 
 func timer_run(ap: TimerArg*):
@@ -372,8 +390,11 @@ end
 @fa "گزینش"
 pub func Select<T>(cs: Vector<Chan<T>>, v &: T, ms: i64): i64:
     start := sync.NowMs()
-    mut nap := 0 as i64
+    atomic_add(sel_cells, 1 as i64)
     until true:
+        sync.Lock(sel_mu)
+        seen := sel_cells[1]
+        sync.Unlock(sel_mu)
         mut open := 0 as i64
         mut i := 0 as i64
         until i < (cs.len() as i64):
@@ -382,6 +403,7 @@ pub func Select<T>(cs: Vector<Chan<T>>, v &: T, ms: i64): i64:
             got := c.try_recv(ok)
             if ok:
                 v = got
+                atomic_add(sel_cells, 0 as i64 - 1)
                 ret i
             end
             if not c.is_closed():
@@ -390,14 +412,23 @@ pub func Select<T>(cs: Vector<Chan<T>>, v &: T, ms: i64): i64:
             i = i + 1
         end
         if open == 0:
+            atomic_add(sel_cells, 0 as i64 - 1)
             ret 0 as i64 - 2
         end
-        if ms >= 0 and sync.NowMs() - start >= ms:
-            ret 0 as i64 - 1
+        sync.Lock(sel_mu)
+        if sel_cells[1] == seen:
+            if ms < 0:
+                sync.WaitCond(sel_cv, sel_mu)
+            else:
+                left := ms - (sync.NowMs() - start)
+                if left <= 0:
+                    sync.Unlock(sel_mu)
+                    atomic_add(sel_cells, 0 as i64 - 1)
+                    ret 0 as i64 - 1
+                end
+                _ := sync.WaitCondTimeout(sel_cv, sel_mu, left)
+            end
         end
-        if nap < 2:
-            nap = nap + 1
-        end
-        sync.SleepMs(nap as int)
+        sync.Unlock(sel_mu)
     end
 end

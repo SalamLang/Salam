@@ -12,9 +12,6 @@ include lg "../logger.salam"
 include at "../ast.salam"
 include i18 "../i18n.salam"
 include lp "../langpack.salam"
-include lx "../lexer/lexer.salam"
-include ps "../parser/parser.salam"
-include cc "../condcomp.salam"
 include sm "../semantic/semantic.salam"
 include cg "../codegen/codegen.salam"
 include co "../sal_core.salam"
@@ -312,13 +309,7 @@ func build_impl(opt &: Dr): int:
 
     mut defs := Vector {} as Vector<str>
     defer defs.free()
-    repeat opt.defines.len() in di0:
-        defs.push(opt.defines.get(di0))
-    end
-    if opt.asan:
-        defs.push("SALAM_MEM_DEBUG")
-        defs.push("SALAM_ASAN")
-    end
+    front_defs(opt, defs)
     use_tcc := str.Contains(opt.cc, "tcc")
     mut cc_def := "SALAM_CC_GCC"
     if use_tcc:
@@ -378,93 +369,19 @@ func build_impl(opt &: Dr): int:
             continue
         end
 
-        mut sf := src.New()
-        _pt_source := pf.Begin(pf.TP_SOURCE, path)
-        src_ok := src.Load(path, sf)
-        pf.End(pf.TP_SOURCE, _pt_source)
-        if not src_ok:
-            lg.Log(
-                lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("cannot read source file '%s'"), co.ArgStr(path))
-            )
-            all_ok = false
-            failed_files.push(path)
+        mut fm := FrontModule {}
+        sok := front_module(opt, lgr, s, a, pack, defs, path, true, failed_files, all_ok, fm)
+        if not sok:
             wi += 1
             continue
         end
-
-        mut table := cc.TableBuild(opt.llvm_target, defs)
-        modpack := lx.Detect(sf, pack)
-        cc.TableSetPack(table, modpack)
+        modpack := fm.pack
         modentry := lp.Entry(modpack)
-
-        lg.SetDiagSource(lgr, sf.text, sf.len, opt.diag_style, opt.diag_format)
-        lg.AddDiagSource(lgr, path, sf.text, sf.len)
-        sm.SetLogger(s, lgr)
-
+        prog := fm.prog
+        gscope := fm.gscope
         module := module_of(path)
         if str.Len(first_module) == 0:
             first_module = module
-        end
-        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "compiling " + path + " -> " + module + ".c")
-
-        mut toks := tok.StreamNew(path)
-        _pt_lexer := pf.Begin(pf.TP_LEXER, path)
-        mut lok := lx.Run(lgr, modpack, sf, toks)
-        pf.End(pf.TP_LEXER, _pt_lexer)
-        pf.Count(pf.TC_TOKENS, tok.StreamCount(toks) as i64)
-        mut prog := 0
-        _pt_parser := pf.Begin(pf.TP_PARSER, path)
-        mut pok := ps.Run(lgr, toks, a, prog)
-        tok.StreamFree(toks)
-        if not cc.PruneProgram(a, lgr, path, table, prog):
-            pok = false
-        end
-        pf.End(pf.TP_PARSER, _pt_parser)
-
-        mut pfiles := sm.PackageFiles(path)
-        mut pi := 1
-        until pi < pfiles.len():
-            ppath := pfiles.get(pi)
-            mut psf := src.New()
-            if src.Load(ppath, psf):
-                lg.AddDiagSource(lgr, ppath, psf.text, psf.len)
-                mut ptoks := tok.StreamNew(ppath)
-                if not lx.Run(lgr, modpack, psf, ptoks):
-                    lok = false
-                end
-                mut pprog := 0
-                if not ps.Run(lgr, ptoks, a, pprog):
-                    pok = false
-                end
-                tok.StreamFree(ptoks)
-                if not cc.PruneProgram(a, lgr, ppath, table, pprog):
-                    pok = false
-                end
-                sm.MergeProgram(a, prog, pprog)
-            else:
-                lg.Log(
-                    lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("cannot read source file '%s'"), co.ArgStr(ppath))
-                )
-                all_ok = false
-                failed_files.push(ppath)
-            end
-            pi += 1
-        end
-        pfiles.free()
-
-        _vw := lo.PrepareViews(lgr, modpack, table, a, prog, path)
-        gscope := sm.Rebind(s, path, lp.Code(modpack))
-        sm.SetCc(s, table)
-        _pt_sema := pf.Begin(pf.TP_SEMANTIC, path)
-        sok := sm.Run(s, a, prog)
-        pf.End(pf.TP_SEMANTIC, _pt_sema)
-        pf.Count(pf.TC_SYMBOLS, sm.ScopeAt(s, gscope).symbols.len() as i64)
-
-        if not lok or not pok or not sok:
-            all_ok = false
-            failed_files.push(path)
-            wi += 1
-            continue
         end
 
         prog_n := at.Get(a, prog)
@@ -584,26 +501,8 @@ func build_impl(opt &: Dr): int:
         wi += 1
     end
 
-    repeat w_prog.len() in ci:
-        mut cj := ci + 1
-        until cj < w_prog.len():
-            same_pkg := str.Equals(w_pkg.get(ci), w_pkg.get(cj))
-            same_mod := str.Equals(w_module.get(ci), w_module.get(cj))
-            if not str.Equals(w_path.get(ci), w_path.get(cj)) and (same_pkg or same_mod):
-                lg.Log(
-                    lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format3(
-                        i18.Tr(
-                            "package name '%s' is claimed by two different files ('%s' and '%s'); rename one of them"
-                        ), co.ArgStr(same_pkg ? w_pkg.get(ci) : w_module.get(ci)), co.ArgStr(w_path.get(ci)), co.ArgStr(w_path.get(cj))
-                    )
-                )
-                if str.Contains(w_path.get(ci), "@v") and str.Contains(w_path.get(cj), "@v"):
-                    io.EPrintln(i18.Tr("  two major versions of one package are in this build; to be used beside the older one, the newer major needs its own entry file and package name (for example greet2.salam with 'package greet2')"))
-                end
-                all_ok = false
-            end
-            cj += 1
-        end
+    if not front_claims(lgr, w_pkg, w_module, w_path):
+        all_ok = false
     end
 
     sm.DceFinish()

@@ -1,0 +1,311 @@
+package driver
+
+import io
+import str
+
+include pth "../sal_path.salam"
+include tok "../token.salam"
+include src "../source.salam"
+include lg "../logger.salam"
+include at "../ast.salam"
+include i18 "../i18n.salam"
+include lp "../langpack.salam"
+include lx "../lexer/lexer.salam"
+include ps "../parser/parser.salam"
+include cc "../condcomp.salam"
+include sm "../semantic/semantic.salam"
+include co "../sal_core.salam"
+include pm "../pkgmgr/pkgmgr.salam"
+include pf "../prof_self.salam"
+include lo "../sal_layout/sal_layout.salam"
+
+struct FrontModule:
+    pub pack: lp.Langpack = 0
+    pub prog: int = 0
+    pub gscope: int = 0
+end
+
+func front_defs(opt &: Dr, defs &: Vector<str>):
+    repeat opt.defines.len() in i:
+        defs.push(opt.defines.get(i))
+    end
+    if opt.asan:
+        defs.push("SALAM_MEM_DEBUG")
+        defs.push("SALAM_ASAN")
+    end
+end
+
+func front_module(
+    opt &: Dr, lgr &: lg.Logger, s &: sm.Sema, a &: at.Ast, pack: lp.Langpack, defs: Vector<str>,
+    path: str, siblings: bool, failed_files &: Vector<str>, all_ok &: bool, fm &: FrontModule
+): bool:
+    mut sf := src.New()
+    _pt_source := pf.Begin(pf.TP_SOURCE, path)
+    src_ok := src.Load(path, sf)
+    pf.End(pf.TP_SOURCE, _pt_source)
+    if not src_ok:
+        lg.Log(
+            lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("cannot read source file '%s'"), co.ArgStr(path))
+        )
+        all_ok = false
+        failed_files.push(path)
+        ret false
+    end
+
+    mut table := cc.TableBuild(opt.llvm_target, defs)
+    modpack := lx.Detect(sf, pack)
+    cc.TableSetPack(table, modpack)
+
+    lg.SetDiagSource(lgr, sf.text, sf.len, opt.diag_style, opt.diag_format)
+    lg.AddDiagSource(lgr, path, sf.text, sf.len)
+    sm.SetLogger(s, lgr)
+
+    lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "compiling " + path + " -> " + module_of(path) + ".c")
+
+    mut toks := tok.StreamNew(path)
+    _pt_lexer := pf.Begin(pf.TP_LEXER, path)
+    mut lok := lx.Run(lgr, modpack, sf, toks)
+    pf.End(pf.TP_LEXER, _pt_lexer)
+    pf.Count(pf.TC_TOKENS, tok.StreamCount(toks) as i64)
+    mut prog := 0
+    _pt_parser := pf.Begin(pf.TP_PARSER, path)
+    mut pok := ps.Run(lgr, toks, a, prog)
+    tok.StreamFree(toks)
+    if not cc.PruneProgram(a, lgr, path, table, prog):
+        pok = false
+    end
+    pf.End(pf.TP_PARSER, _pt_parser)
+
+    if siblings:
+        mut pfiles := sm.PackageFiles(path)
+        mut pi := 1
+        until pi < pfiles.len():
+            ppath := pfiles.get(pi)
+            mut psf := src.New()
+            if src.Load(ppath, psf):
+                lg.AddDiagSource(lgr, ppath, psf.text, psf.len)
+                mut ptoks := tok.StreamNew(ppath)
+                if not lx.Run(lgr, modpack, psf, ptoks):
+                    lok = false
+                end
+                mut pprog := 0
+                if not ps.Run(lgr, ptoks, a, pprog):
+                    pok = false
+                end
+                tok.StreamFree(ptoks)
+                if not cc.PruneProgram(a, lgr, ppath, table, pprog):
+                    pok = false
+                end
+                sm.MergeProgram(a, prog, pprog)
+            else:
+                lg.Log(
+                    lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("cannot read source file '%s'"), co.ArgStr(ppath))
+                )
+                all_ok = false
+                failed_files.push(ppath)
+            end
+            pi += 1
+        end
+        pfiles.free()
+    end
+
+    _vw := lo.PrepareViews(lgr, modpack, table, a, prog, path)
+    gscope := sm.Rebind(s, path, lp.Code(modpack))
+    sm.SetCc(s, table)
+    _pt_sema := pf.Begin(pf.TP_SEMANTIC, path)
+    sok := sm.Run(s, a, prog)
+    pf.End(pf.TP_SEMANTIC, _pt_sema)
+    pf.Count(pf.TC_SYMBOLS, sm.ScopeAt(s, gscope).symbols.len() as i64)
+
+    if not lok or not pok or not sok:
+        all_ok = false
+        failed_files.push(path)
+        ret false
+    end
+    fm.pack = modpack
+    fm.prog = prog
+    fm.gscope = gscope
+    ret true
+end
+
+func front_claims(lgr: lg.Logger, w_pkg: Vector<str>, w_module: Vector<str>, w_path: Vector<str>): bool:
+    mut ok := true
+    repeat w_pkg.len() in ci:
+        mut cj := ci + 1
+        until cj < w_pkg.len():
+            same_pkg := str.Equals(w_pkg.get(ci), w_pkg.get(cj))
+            same_mod := str.Equals(w_module.get(ci), w_module.get(cj))
+            if not str.Equals(w_path.get(ci), w_path.get(cj)) and (same_pkg or same_mod):
+                lg.Log(
+                    lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format3(
+                        i18.Tr(
+                            "package name '%s' is claimed by two different files ('%s' and '%s'); rename one of them"
+                        ), co.ArgStr(same_pkg ? w_pkg.get(ci) : w_module.get(ci)), co.ArgStr(w_path.get(ci)),
+                        co.ArgStr(w_path.get(cj))
+                    )
+                )
+                if str.Contains(w_path.get(ci), "@v") and str.Contains(w_path.get(cj), "@v"):
+                    io.EPrintln(i18.Tr("  two major versions of one package are in this build; to be used beside the older one, the newer major needs its own entry file and package name (for example greet2.salam with 'package greet2')"))
+                end
+                ok = false
+            end
+            cj += 1
+        end
+    end
+    ret ok
+end
+
+func check_uses_c_path(opt &: Dr): bool:
+    if str.Len(opt.lib_kind) > 0 and not str.Equals(opt.backend, "c"):
+        ret not (str.Equals(opt.backend, "llvm") or str.Equals(opt.backend, "native") or (str.Len(opt.llvm_target) > 0 and not opt.cc_explicit))
+    end
+    if str.Equals(opt.backend, "c") or opt.cc_explicit:
+        ret true
+    end
+    if str.Len(opt.llvm_target) > 0 or str.Equals(opt.backend, "native"):
+        ret false
+    end
+    if str.Equals(opt.backend, "auto") and native_by_default():
+        ret false
+    end
+    ret not use_llvm_backend(opt)
+end
+
+func check_needs_entry(opt &: Dr, a &: at.Ast, prog: int, path: str): bool:
+    if str.Len(opt.lib_kind) > 0 or target_is_freestanding(opt.llvm_target):
+        ret false
+    end
+    prog_n := at.Get(a, prog)
+    if str.Len(prog_n.name) > 0 and not str.Equals(prog_n.name, "main"):
+        ret false
+    end
+    if str.EndsWith(path, "_test.salam"):
+        ret false
+    end
+    repeat prog_n.list.len() in i:
+        k := at.Get(a, prog_n.list.get(i)).kind
+        if k == at.AST_LAYOUT_BLOCK or k == at.AST_LAYOUT_COMPONENT:
+            ret false
+        end
+    end
+    ret true
+end
+
+func check_pkg_has_func(s &: sm.Sema, name: str): bool:
+    repeat sm.PackageCount(s) in i:
+        if sm.PackageHasFunc(s, i, name):
+            ret true
+        end
+    end
+    ret false
+end
+
+func check_modules(opt &: Dr, lgr &: lg.Logger, pack: lp.Langpack): int:
+    c_path := check_uses_c_path(opt)
+    mut work := Vector {} as Vector<str>
+    defer work.free()
+    work.push(opt.input)
+    if c_path:
+        repeat opt.inputs.len() in ii:
+            if not str.Equals(opt.inputs.get(ii), opt.input):
+                work.push(opt.inputs.get(ii))
+            end
+        end
+    end
+    mut defs := Vector {} as Vector<str>
+    defer defs.free()
+    front_defs(opt, defs)
+    if opt.cc_explicit:
+        if str.Contains(opt.cc, "tcc"):
+            defs.push("SALAM_CC_TCC")
+        else str.Contains(opt.cc, "clang"):
+            defs.push("SALAM_CC_CLANG")
+        else:
+            defs.push("SALAM_CC_GCC")
+        end
+    end
+    mut failed_files := Vector {} as Vector<str>
+    mut w_module := Vector {} as Vector<str>
+    mut w_pkg := Vector {} as Vector<str>
+    mut w_path := Vector {} as Vector<str>
+    defer failed_files.free()
+    defer w_module.free()
+    defer w_pkg.free()
+    defer w_path.free()
+
+    sm.SetStrictPackages(c_path)
+    mut a := at.NewAst()
+    mut s := sm.New(lgr, "", "en")
+    mut all_ok := true
+    mut has_entry := false
+    mut needs_entry := false
+    mut first_entry := ""
+    repeat work.len() in wi:
+        path := work.get(wi)
+        mut fm := FrontModule {}
+        if front_module(opt, lgr, s, a, pack, defs, path, c_path, failed_files, all_ok, fm):
+            prog_n := at.Get(a, fm.prog)
+            modentry := lp.Entry(fm.pack)
+            if wi == 0:
+                needs_entry = check_needs_entry(opt, a, fm.prog, path)
+                first_entry = modentry
+            end
+            if program_has_func(a, fm.prog, modentry):
+                has_entry = true
+            end
+            w_module.push(module_of(path))
+            w_pkg.push(str.Len(prog_n.name) > 0 ? prog_n.name : "main")
+            w_path.push(pth.PathNormalize(path))
+        end
+    end
+    if c_path and all_ok:
+        repeat sm.PackageCount(s) in pi:
+            ppath := sm.PackagePathAt(s, pi)
+            w_module.push(module_of(ppath))
+            w_pkg.push(sm.PackageNameAt(s, pi))
+            w_path.push(pth.PathNormalize(ppath))
+        end
+        if not front_claims(lgr, w_pkg, w_module, w_path):
+            all_ok = false
+        end
+        if needs_entry and not has_entry and check_pkg_has_func(s, first_entry):
+            has_entry = true
+        end
+    end
+    sm.SetStrictPackages(false)
+    sm.Free(s)
+    at.FreeAst(a)
+    if not all_ok:
+        ret 1
+    end
+    if needs_entry and not has_entry:
+        lg.Log(
+            lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(
+                i18.Tr("no entry point: define a '%s' function"), co.ArgStr(first_entry)
+            )
+        )
+        ret 1
+    end
+    ret 0
+end
+
+func check_program(opt &: Dr, lgr &: lg.Logger, pack: lp.Langpack): int:
+    mut sf := src.New()
+    if not src.Load(opt.input, sf):
+        lg.Log(
+            lgr, lg.PH_DRIVER, lg.LOG_ERROR, co.Format1(i18.Tr("cannot read source file '%s'"), co.ArgStr(opt.input))
+        )
+        ret 2
+    end
+    lg.ResetErrorTotal()
+    sm.SetProjectRootFrom(opt.input)
+    defer sm.UnpinProjectRoot()
+    mut rc := check_modules(opt, lgr, pack)
+    if rc == 0 and lg.ErrorTotal() > 0:
+        rc = 1
+    end
+    if rc == 0 and opt.log_level < lg.LOG_ERROR:
+        println co.Format1(i18.Tr("%s: no errors"), co.ArgStr(opt.input))
+    end
+    ret rc
+end

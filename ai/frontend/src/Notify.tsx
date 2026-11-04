@@ -122,7 +122,7 @@ export function NotifyMenu({ os }: { os: AgentInfo["os"] | undefined }) {
     pushToast({
       tone: "info",
       title: t("اعلان آزمایشی", "Test notification"),
-      body: t("اگر این پیام را می‌بینید، اعلان‌های ایجنت سلام کار می‌کنند.", "If you can see this, Salam Agent notifications work."),
+      body: t("اگر این پیام را می‌بینید، اعلان‌های دستیار زبان سلام کار می‌کنند.", "If you can see this, Salam Agent notifications work."),
       seconds: 8,
     });
     chime("info");
@@ -159,7 +159,7 @@ export function NotifyMenu({ os }: { os: AgentInfo["os"] | undefined }) {
       {open && (
         <div className="notify-pop" role="dialog" aria-label={t("اعلان‌ها", "Notifications")}>
           <strong>{t("اعلان‌های سیستم", "System notifications")}</strong>
-          <p>{t("وقتی پاسخ آماده شد، خطایی پیش آمد، ارتباط قطع شد یا دستیار منتظر اجازه‌ی شما بود، اگر پنجره جلوی چشم شما نباشد خبر می‌دهیم؛ حتی وقتی پنجره کوچک شده یا ایجنت در پس‌زمینه است.", "When a reply is ready, something fails, the connection drops, or the assistant waits for your approval, we let you know if this window is not in front of you, even when it is minimized or the agent is in the background.")}</p>
+          <p>{t("وقتی پاسخ آماده شد، خطایی پیش آمد، ارتباط قطع شد یا دستیار منتظر اجازه‌ی شما بود، اگر پنجره جلوی چشم شما نباشد خبر می‌دهیم؛ حتی وقتی پنجره کوچک شده یا دستیار زبان سلام در پس‌زمینه است.", "When a reply is ready, something fails, the connection drops, or the assistant waits for your approval, we let you know if this window is not in front of you, even when it is minimized or the agent is in the background.")}</p>
           <Checkbox checked={on} onChange={(v) => change({ enabled: v })} label={t("نمایش اعلان", "Show notifications")} disabled={!current} />
           <Checkbox checked={current?.sound ?? true} onChange={(v) => change({ sound: v })} label={t("پخش صدا", "Play a sound")} disabled={!current || !on} />
           <Checkbox

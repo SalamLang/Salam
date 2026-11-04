@@ -1,4 +1,4 @@
-# Salam Agent (ایجنت سلام)
+# Salam Agent (دستیار زبان سلام)
 
 A desktop app for Windows, macOS and Linux that opens <https://ai.salamlang.ir>
 and lets the assistant work on your computer. With your approval it can run
@@ -178,7 +178,7 @@ These variables are ignored in release builds.
 ## Names and icons
 
 The window title and the product name are `Salam Agent`. The loader page and
-the installer descriptions are Persian (ایجنت سلام). Filenames stay ASCII:
+the installer descriptions are Persian (دستیار زبان سلام). Filenames stay ASCII:
 the binary is `salam-agent` and the identifier is `ir.salamlang.agent`.
 
 The icons in `src-tauri/icons/` (including the multi-size `icon.ico` used for

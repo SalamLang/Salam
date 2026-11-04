@@ -43,7 +43,7 @@ shift 3
 TEST_GROUPS=${*:-basics features types data games match switch llvm general stdlib}
 DEFAULT_SKIP="general/condcomp_toplevel general/condcomp_pruned_lints general/const_define general/preproc
 general/dbfile general/dbparams general/dbtest general/linkkind general/sqlite_* stdlib/db_extra
-llvm/ll_div_zero_runtime llvm/ll_mod_zero_compound stdlib/os_platform_demo"
+llvm/ll_div_zero_runtime llvm/ll_mod_zero_compound llvm/ll_str_oom stdlib/os_platform_demo"
 case "$TRIPLE" in
 aarch64* | arm64* | riscv*) ;;
 *) DEFAULT_SKIP="$DEFAULT_SKIP general/div_zero_compound general/div_zero_runtime general/mod_zero_runtime_i64" ;;
@@ -144,10 +144,12 @@ for spec in $TEST_GROUPS; do
             continue
         fi
         (cd "$ROOT" && timeout "$LIMIT" $RUNNER "$exe" </dev/null >"$work/got" 2>&1)
+        rc=$?
         if [ "$(tr -d '\r' <"$work/got")" = "$(tr -d '\r' <"$exp")" ]; then
             ok=$((ok + 1))
         else
-            echo "DIFF $id"
+            echo "DIFF $id (exit $rc)"
+            tr -d '\r' <"$work/got" | diff "$exp" - | head -20
             bad=$((bad + 1))
         fi
     done

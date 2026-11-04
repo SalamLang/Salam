@@ -42,6 +42,40 @@ struct ExArg:
     pub align: int = 8
 end
 
+struct ExSig:
+    pub params: Vector<str> = Vector {}
+    pub refs: Vector<bool> = Vector {}
+    pub rts: str = ""
+    pub variadic: bool = false
+end
+
+func ex_sig_of(s &: sm.Sema, a &: at.Ast, sig: int): ExSig:
+    sg := sm.SigAt(s, sig)
+    mut x := ExSig {}
+    repeat sg.params.len() in i:
+        x.params.push(sm.ToString(s, sg.params.get(i)))
+        x.refs.push(param_is_ref(s, a, sig, i))
+    end
+    x.rts = sm.ToString(s, sg.ret_type)
+    x.variadic = sg.variadic
+    ret x
+end
+
+func ex_sig_ptr(fts: str): ExSig:
+    mut x := ExSig {}
+    x.params = func_params(fts)
+    repeat x.params.len():
+        x.refs.push(false)
+    end
+    x.rts = func_ret(fts)
+    ret x
+end
+
+func ex_sig_free(x &: ExSig):
+    x.params.free()
+    x.refs.free()
+end
+
 func ex_host_arch(): str:
     if SALAM_ARCH_X64:
         ret "x86_64"
@@ -444,7 +478,10 @@ end
 
 func ex_ret(v &: Lv, s &: sm.Sema, a &: at.Ast, sig: int): ExArg:
     sg := sm.SigAt(s, sig)
-    ts := sm.ToString(s, sg.ret_type)
+    ret ex_ret_ts(v, s, a, sm.ToString(s, sg.ret_type), sg.variadic)
+end
+
+func ex_ret_ts(v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str, variadic: bool): ExArg:
     arch := ex_arch(v)
     if arch != EXA_X86 and arch != EXA_ARM:
         ret ex_classify(v, s, a, ts)
@@ -464,7 +501,7 @@ func ex_ret(v &: Lv, s &: sm.Sema, a &: at.Ast, sig: int): ExArg:
         ret ExArg {}
     end
     if arch == EXA_ARM:
-        if not sg.variadic and ex_hfa(v, s, a, ts, r):
+        if not variadic and ex_hfa(v, s, a, ts, r):
             ret r
         end
         if size <= 4:
@@ -495,19 +532,18 @@ func ex_ret(v &: Lv, s &: sm.Sema, a &: at.Ast, sig: int): ExArg:
     ret r
 end
 
-func ex_rv_param(v &: Lv, s &: sm.Sema, a &: at.Ast, sig: int, j: int): ExArg:
-    sg := sm.SigAt(s, sig)
+func ex_rv_param(v &: Lv, s &: sm.Sema, a &: at.Ast, x &: ExSig, j: int): ExArg:
     mut gl := 8
     mut fl := 8
-    rm := ex_ret(v, s, a, sig).mode
+    rm := ex_ret_ts(v, s, a, x.rts, x.variadic).mode
     if rm != EXM_NONE and rm != EXM_REGS:
         gl -= 1
     end
     mut out := ExArg {}
     repeat j + 1 in k:
-        kts := sm.ToString(s, sg.params.get(k))
+        kts := x.params.get(k)
         mut e := ExArg {}
-        if param_is_ref(s, a, sig, k):
+        if x.refs.get(k):
             gl -= 1
         else:
             e = ex_classify(v, s, a, kts)
@@ -602,30 +638,45 @@ func ex_sysv_take(v &: Lv, s &: sm.Sema, a &: at.Ast, ts: str, is_ref: bool, gi 
     end
 end
 
-func ex_sysv_fixed(v &: Lv, s &: sm.Sema, a &: at.Ast, sig: int, upto: int, gi &: int, fi &: int):
-    sg := sm.SigAt(s, sig)
+func ex_sysv_fixed(v &: Lv, s &: sm.Sema, a &: at.Ast, x &: ExSig, upto: int, gi &: int, fi &: int):
     gi = 6
     fi = 8
-    if ex_ret(v, s, a, sig).mode == EXM_BYVAL:
+    if ex_ret_ts(v, s, a, x.rts, x.variadic).mode == EXM_BYVAL:
         gi -= 1
     end
     repeat upto in k:
-        ex_sysv_take(v, s, a, sm.ToString(s, sg.params.get(k)), param_is_ref(s, a, sig, k), gi, fi)
+        ex_sysv_take(v, s, a, x.params.get(k), x.refs.get(k), gi, fi)
     end
 end
 
 func ex_param(v &: Lv, s &: sm.Sema, a &: at.Ast, sig: int, j: int): ExArg:
-    sg := sm.SigAt(s, sig)
-    if ex_arch(v) == EXA_RV64:
-        ret ex_rv_param(v, s, a, sig, j)
+    arch := ex_arch(v)
+    if arch != EXA_RV64 and arch != EXA_SYSV:
+        ret ex_classify(v, s, a, sm.ToString(s, sm.SigAt(s, sig).params.get(j)))
     end
-    mut e := ex_classify(v, s, a, sm.ToString(s, sg.params.get(j)))
+    if arch == EXA_SYSV:
+        e := ex_classify(v, s, a, sm.ToString(s, sm.SigAt(s, sig).params.get(j)))
+        if e.mode != EXM_REGS:
+            ret e
+        end
+    end
+    mut x := ex_sig_of(s, a, sig)
+    r := ex_param_of(v, s, a, x, j)
+    ex_sig_free(x)
+    ret r
+end
+
+func ex_param_of(v &: Lv, s &: sm.Sema, a &: at.Ast, x &: ExSig, j: int): ExArg:
+    if ex_arch(v) == EXA_RV64:
+        ret ex_rv_param(v, s, a, x, j)
+    end
+    mut e := ex_classify(v, s, a, x.params.get(j))
     if e.mode != EXM_REGS or ex_arch(v) != EXA_SYSV:
         ret e
     end
     mut gi := 0
     mut fi := 0
-    ex_sysv_fixed(v, s, a, sig, j, gi, fi)
+    ex_sysv_fixed(v, s, a, x, j, gi, fi)
     if not ex_sysv_fits(e, gi, fi):
         e.mode = EXM_BYVAL
     end
@@ -685,7 +736,9 @@ func ex_va_arg(v &: Lv, s &: sm.Sema, a &: at.Ast, sig: int, call: int, i: int, 
     mut gi := 0
     mut fi := 0
     np := sm.SigAt(s, sig).params.len()
-    ex_sysv_fixed(v, s, a, sig, np, gi, fi)
+    mut x := ex_sig_of(s, a, sig)
+    ex_sysv_fixed(v, s, a, x, np, gi, fi)
+    ex_sig_free(x)
     if call != 0:
         cl := at.Get(a, call).list
         mut j := np
@@ -832,7 +885,7 @@ func ex_emit_arg(v &: Lv, ab &: str.StringBuilder, e: ExArg, lty: str, ref2: str
 end
 
 func ex_emit_call(
-    v &: Lv, s &: sm.Sema, a &: at.Ast, e: ExArg, rts: str, cc: str, callty: str, fname: str, argsx: str
+    v &: Lv, s &: sm.Sema, a &: at.Ast, e: ExArg, rts: str, cc: str, callty: str, callee: str, argsx: str
 ): Llv:
     lty := ty_of(v, s, a, rts)
     res := new_tmp(v)
@@ -840,7 +893,7 @@ func ex_emit_call(
         slot := ex_slot(v, e.size)
         rty := ex_ret_ty(e)
         r := new_tmp(v)
-        emit(v, r + " = call" + cc + " " + rty + callty + " " + gsym(fname) + "(" + argsx + ")")
+        emit(v, r + " = call" + cc + " " + rty + callty + " " + callee + "(" + argsx + ")")
         if e.pieces.len() == 1:
             emit(v, "store " + rty + " " + r + ", ptr " + slot)
         else:
@@ -860,11 +913,134 @@ func ex_emit_call(
     if str.Len(argsx) > 0:
         full = full + ", " + argsx
     end
-    emit(v, "call" + cc + " void" + callty + " " + gsym(fname) + "(" + full + ")")
+    emit(v, "call" + cc + " void" + callty + " " + callee + "(" + full + ")")
     emit(v, res + " = load " + lty + ", ptr " + slot2)
     ret make_llv(res, rts)
 end
 
 func sig_is_extern(s &: sm.Sema, a &: at.Ast, sig: int): bool:
     ret sig != 0 and sm.SigAt(s, sig).decl != 0 and at.Get(a, sm.SigAt(s, sig).decl).is_extern
+end
+
+func ex_needs_abi(v &: Lv, s &: sm.Sema, a &: at.Ast, sig: int): bool:
+    if ex_ret(v, s, a, sig).mode != EXM_NONE:
+        ret true
+    end
+    repeat sm.SigAt(s, sig).params.len() in j:
+        if not param_is_ref(s, a, sig, j) and ex_param(v, s, a, sig, j).mode != EXM_NONE:
+            ret true
+        end
+    end
+    ret false
+end
+
+func ex_call_cc(v &: Lv, s &: sm.Sema, a &: at.Ast, sig: int, fname: str): str:
+    cc := StdcallCc(v, fname)
+    if str.Len(cc) > 0 or not ex_needs_abi(v, s, a, sig):
+        ret cc
+    end
+    ret " ccc"
+end
+
+func ex_thunk(v &: Lv, s &: sm.Sema, a &: at.Ast, sig: int, target: str, name: str, local: bool):
+    sg := sm.SigAt(s, sig)
+    rts := sm.ToString(s, sg.ret_type)
+    lrt := ty_of(v, s, a, rts)
+    rex := ex_ret(v, s, a, sig)
+    mut hd := co.SbNew()
+    mut body := co.SbNew()
+    mut ab := co.SbNew()
+    mut outer := lrt
+    if rex.mode != EXM_NONE:
+        outer = ex_ret_ty(rex)
+    end
+    co.SbPuts(hd, "define " + (local ? "internal " : "") + "ccc " + outer + " " + gsym(name) + "(")
+    mut first := true
+    if rex.mode == EXM_BYVAL or rex.mode == EXM_COPY:
+        co.SbPuts(hd, ex_sret_param(rex, lrt) + " %sret")
+        first = false
+    end
+    repeat sg.params.len() in j:
+        idx := co.I64Toa(j as i64)
+        pts := sm.ToString(s, sg.params.get(j))
+        lty := ty_of(v, s, a, pts)
+        if not first:
+            co.SbPuts(hd, ", ")
+        end
+        first = false
+        if j > 0:
+            co.SbPuts(ab, ", ")
+        end
+        if param_is_ref(s, a, sig, j):
+            co.SbPuts(hd, "ptr %p" + idx)
+            co.SbPuts(ab, "ptr noundef nonnull %p" + idx)
+            continue
+        end
+        e := ex_param(v, s, a, sig, j)
+        if e.mode == EXM_NONE:
+            co.SbPuts(hd, (str.Equals(lty, "i1") ? "i1 zeroext" : lty) + " %p" + idx)
+            co.SbPuts(ab, lty + " %p" + idx)
+            continue
+        end
+        if e.mode == EXM_REGS:
+            co.SbPuts(body, "  %s" + idx + " = alloca [" + co.I64Toa(ex_align_up(e.size, 16) as i64) + " x i8], align 16\n")
+            repeat e.pieces.len() in k:
+                pn := "%p" + idx + "." + co.I64Toa(k as i64)
+                if k > 0:
+                    co.SbPuts(hd, ", ")
+                end
+                co.SbPuts(hd, e.pieces.get(k) + " " + pn)
+                mut at_slot := "%s" + idx
+                if e.offs.get(k) != 0:
+                    at_slot = "%g" + idx + "." + co.I64Toa(k as i64)
+                    co.SbPuts(body, "  " + at_slot + " = getelementptr i8, ptr %s" + idx + ", i64 " + co.I64Toa(e.offs.get(k) as i64) + "\n")
+                end
+                co.SbPuts(body, "  store " + e.pieces.get(k) + " " + pn + ", ptr " + at_slot + "\n")
+            end
+            co.SbPuts(body, "  %v" + idx + " = load " + lty + ", ptr %s" + idx + "\n")
+        else:
+            co.SbPuts(hd, ex_param_text(e, lty) + " %p" + idx)
+            co.SbPuts(body, "  %v" + idx + " = load " + lty + ", ptr %p" + idx + "\n")
+        end
+        co.SbPuts(ab, lty + " %v" + idx)
+    end
+    co.SbPuts(hd, ") nounwind")
+    if v.freestanding:
+        co.SbPuts(hd, " \"no-builtins\"")
+    end
+    co.SbPuts(hd, " {\nentry:\n")
+    argsx := co.SbCstr(ab)
+    if str.Equals(lrt, "void"):
+        co.SbPuts(body, "  call void " + gsym(target) + "(" + argsx + ")\n  ret void\n")
+    else:
+        co.SbPuts(body, "  %r = call " + lrt + " " + gsym(target) + "(" + argsx + ")\n")
+        if rex.mode == EXM_NONE:
+            co.SbPuts(body, "  ret " + lrt + " %r\n")
+        else rex.mode == EXM_REGS:
+            co.SbPuts(body, "  %rs = alloca [" + co.I64Toa(ex_align_up(rex.size, 16) as i64) + " x i8], align 16\n")
+            co.SbPuts(body, "  store " + lrt + " %r, ptr %rs\n")
+            co.SbPuts(body, "  %x = load " + outer + ", ptr %rs\n  ret " + outer + " %x\n")
+        else:
+            co.SbPuts(body, "  store " + lrt + " %r, ptr %sret\n  ret void\n")
+        end
+    end
+    out_hg(v, co.SbCstr(hd) + co.SbCstr(body) + "}\n\n")
+    co.SbFree(hd)
+    co.SbFree(body)
+    co.SbFree(ab)
+end
+
+func ex_addr_symbol(v &: Lv, s &: sm.Sema, a &: at.Ast, sig: int, fname: str): str:
+    if not ex_needs_abi(v, s, a, sig):
+        ret fname
+    end
+    name := "salam_cabi." + fname
+    each done in v.stdthunks:
+        if str.Equals(done, name):
+            ret name
+        end
+    end
+    v.stdthunks.push(name)
+    ex_thunk(v, s, a, sig, fname, name, true)
+    ret name
 end

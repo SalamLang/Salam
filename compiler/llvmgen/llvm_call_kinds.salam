@@ -464,26 +464,48 @@ func call_raw_ptr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, callee: int): Llv:
         emit(v, fn + " = inttoptr " + ty_of(v, s, a, fv.ts) + " " + fv.ref + " to ptr")
     end
     rts := func_ret(fts)
-    mut pts := func_params(fts)
+    mut x := ex_sig_ptr(fts)
+    defer ex_sig_free(x)
+    rex := ex_ret_ts(v, s, a, rts, false)
+    mut cabi := rex.mode != EXM_NONE
     nn := at.Get(a, n)
     mut ab := co.SbNew()
     repeat nn.list.len() in i:
         av := lv_expr(v, s, a, nn.list.get(i))
         mut pt := av.ts
-        if i < pts.len():
-            pt = pts.get(i)
+        if i < x.params.len():
+            pt = x.params.get(i)
         end
         if i > 0:
             co.SbPuts(ab, ", ")
         end
-        co.SbPuts(ab, ty_of(v, s, a, pt) + " " + conv(v, s, a, av, pt))
+        pty := ty_of(v, s, a, pt)
+        pref := conv(v, s, a, av, pt)
+        mut e := ExArg {}
+        if i < x.params.len():
+            e = ex_param_of(v, s, a, x, i)
+        end
+        if e.mode != EXM_NONE:
+            cabi = true
+            ex_emit_arg(v, ab, e, pty, pref)
+        else str.Equals(pty, "i1"):
+            co.SbPuts(ab, "i1 zeroext " + pref)
+        else:
+            co.SbPuts(ab, pty + " " + pref)
+        end
     end
     argsx := co.SbCstr(ab)
     co.SbFree(ab)
-    cc := StdcallPtrCc(v, fts)
+    mut cc := StdcallPtrCc(v, fts)
+    if cabi and str.Len(cc) == 0:
+        cc = " ccc"
+    end
     if str.Equals(rts, "void"):
         emit(v, "call" + cc + " void " + fn + "(" + argsx + ")")
         ret make_llv("0", "void")
+    end
+    if rex.mode != EXM_NONE:
+        ret ex_emit_call(v, s, a, rex, rts, cc, "", fn, argsx)
     end
     r := new_tmp(v)
     emit(v, r + " = call" + cc + " " + ty_of(v, s, a, rts) + " " + fn + "(" + argsx + ")")

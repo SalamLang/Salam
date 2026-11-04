@@ -895,7 +895,7 @@ func cg_func_addr_pkg(g &: Cg, s &: sm.Sema, a &: at.Ast, pkgid: int, name: str)
                 end
                 mpkg := str.Len(mv.pkgname) > 0 ? mv.pkgname : sm.SymAt(s, pk).pkgname
                 if msig != 0:
-                    ret "((void*)(&" + cg_mangle_in(s, mpkg, "", name, sm.SigAt(s, msig).params) + "))"
+                    ret cg_cabi_addr(g, s, a, msig, cg_mangle_in(s, mpkg, "", name, sm.SigAt(s, msig).params))
                 end
                 mut mempty := Vector {} as Vector<int>
                 mraw := cg_mangle_in(s, mpkg, "", name, mempty)
@@ -922,6 +922,45 @@ func cg_home_sym(g &: Cg, s &: sm.Sema, name: str, kind: int): int:
         end
     end
     ret 0
+end
+
+func cg_cabi_addr(g &: Cg, s &: sm.Sema, a &: at.Ast, sig: int, target: str): str:
+    sg := sm.SigAt(s, sig)
+    rts := sm.ToString(s, sg.ret_type)
+    if not type_is_byval_agg(s, sg.ret_type) or str.Len(cg_array_ctype(rts)) > 0:
+        ret "((void*)(&" + target + "))"
+    end
+    name := "_Salam_cabi_" + target
+    repeat g.cabi_thunks.len() in i:
+        if str.Equals(g.cabi_thunks.get(i), name):
+            ret "((void*)(&" + name + "))"
+        end
+    end
+    g.cabi_thunks.push(name)
+    rets := cg_ctype(rts)
+    mut ps := co.SbNew()
+    mut asb := co.SbNew()
+    repeat sg.params.len() in p:
+        pts := sm.ToString(s, sg.params.get(p))
+        pact := sig_param_is_ref(s, a, sig, p) ? "" : cg_array_ctype(pts)
+        co.SbPuts(ps, p > 0 ? ", " : "")
+        if str.Len(pact) > 0:
+            co.SbPuts(ps, cg_decl_cn(pts, "__a" + p))
+        else:
+            co.SbPuts(ps, cg_ctype(pts) + (sig_param_is_ref(s, a, sig, p) ? "*" : "") + " __a" + p)
+        end
+        co.SbPuts(asb, "__a" + p + ", ")
+    end
+    head := "static " + rets + " " + name + "(" + (sg.params.len() > 0 ? co.SbCstr(ps) : "void") + ")"
+    saved := g.cur
+    g.cur = CG_OUT_LAMD
+    out(g, head + ";\n")
+    g.cur = CG_OUT_LAMF
+    out(g, head + " { " + rets + " __r; " + target + "(" + co.SbCstr(asb) + "&__r); return __r; }\n")
+    g.cur = saved
+    co.SbFree(ps)
+    co.SbFree(asb)
+    ret "((void*)(&" + name + "))"
 end
 
 func cg_func_addr(g &: Cg, s &: sm.Sema, a &: at.Ast, name: str): str:
@@ -954,7 +993,7 @@ func cg_func_addr(g &: Cg, s &: sm.Sema, a &: at.Ast, name: str): str:
     end
     pkg2 := str.Len(home_pkg) > 0 ? home_pkg : g.pkg
     if sig != 0:
-        ret "((void*)(&" + cg_mangle_in(s, pkg2, "", name, sm.SigAt(s, sig).params) + "))"
+        ret cg_cabi_addr(g, s, a, sig, cg_mangle_in(s, pkg2, "", name, sm.SigAt(s, sig).params))
     end
     mut empty := Vector {} as Vector<int>
     raw := cg_mangle_in(s, pkg2, "", name, empty)

@@ -1078,8 +1078,9 @@ converted to a float skips the move that clears the top of a 64-bit register,
 since the zero-extended value is already a non-negative `i32`
 (`SALAM_NG_OFF=uifz`), and a multiply by 4 or 8 is an index-only `lea` instead
 of an `imul` (`SALAM_NG_OFF=mulp2`). Counted with callgrind, all three
-together: `image_rtl_card` 141.40 to 140.92 million instructions (x86-64-v3:
-114.85 to 114.36), `image_basics` 544.50 to 529.92 (505.96 to 493.78).
+together: `image_rtl_card` 139.65 to 139.17 million instructions (x86-64-v3:
+113.12 to 112.63), `image_basics` 495.72 to 488.83 (452.41 to 445.55). A compile
+job runs 0.13% fewer instructions, and the compiler is 0.13% smaller.
 
 A loop that tests its counter against its constant start value runs that test
 false from the second iteration on, so the first iteration is peeled off and

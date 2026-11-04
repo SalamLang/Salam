@@ -168,7 +168,7 @@ export function Sidebar(p: Props) {
           {!isDesktop && (
             <a href="https://www.salamlang.ir/agent/" className="chat-link" target="_blank" rel="noreferrer">
               <IconMonitor width={16} height={16} />
-              <span>{t("دریافت ایجنت سلام", "Get Salam Agent")}</span>
+              <span>{t("دریافت دستیار زبان سلام", "Get Salam Agent")}</span>
             </a>
           )}
           {p.user.admin && (

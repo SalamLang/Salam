@@ -31,6 +31,7 @@ PAGE = """<!doctype html><meta charset=utf-8><title>fake app</title><script>
   try {
     salam.listen("agent://call", (c) => {
       report("call:" + c.tool + ":" + c.state, c.output || c.summary);
+      if (c.state === "running" && c.call_id === "stopme") setTimeout(() => salam.invoke("agent_stop", {callId: "stopme"}), 600);
       if (c.state === "pending") salam.invoke("agent_decide", {callId: c.call_id, answer: c.tool === "shell" || c.tool === "browser" ? "allow" : "deny"});
     });
     salam.listen("agent://output", (o) => report("output", o.chunk));
@@ -155,6 +156,11 @@ def main():
     outside = os.path.join(root, "outside.txt")
     with open(outside, "w") as f:
         f.write("secret\n")
+    os.symlink(root, os.path.join(workspace, "escape"))
+    with open(os.path.join(workspace, "Makefile"), "w") as f:
+        f.write("test:\n\techo made-test\n")
+    with open(os.path.join(workspace, "big.bin"), "wb") as f:
+        f.write(b"\0\1\2binary")
 
     state = State(workspace)
     state.calls = [
@@ -172,6 +178,16 @@ def main():
         call("badslug", "forget_memory", {"slug": "../x"}, workspace),
         call("fail", "shell", {"command": "exit 3", "shell": "sh"}, workspace),
         call("missing", "nope", {}, workspace),
+        call("symlink", "read_file", {"path": "escape/outside.txt"}, workspace),
+        call("binary", "read_file", {"path": "big.bin"}, workspace),
+        call("nofolder", "read_file", {"path": "a.txt"}, os.path.join(root, "no-such-folder")),
+        call("tests", "run_tests", {"shell": "sh"}, workspace),
+        call("loud", "shell", {"command": "yes 0123456789 | head -c 200000", "shell": "sh"}, workspace),
+        call("slow", "shell", {"command": "sleep 30 & sleep 30; echo never", "shell": "sh", "timeout": 1}, workspace),
+        call("stopme", "shell", {"command": "echo started-stopme; sleep 30", "shell": "sh"}, workspace),
+        call("noprog", "shell", {"command": "exit 0", "shell": "no-such-shell-xyz"}, workspace),
+        call("docker", "docker", {"args": ["ps", "a b"], "cwd": "."}, workspace),
+        call("wsl", "wsl", {"command": "ls"}, workspace),
     ]
     server = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(state))
     port = server.server_address[1]
@@ -289,6 +305,16 @@ def main():
             check("browser closes once", "No browser" in out("closed"), out("closed"))
             left = subprocess.run(["sh", "-c", "ls -d /tmp/salam-agent-browser-* 2>/dev/null | wc -l"], capture_output=True, text=True).stdout.strip()
             check("browser profile removed", left == "0", left)
+        check("symlink out is treated as outside", get("symlink").get("status") == "denied" and get("symlink").get("outside") is True, get("symlink"))
+        check("binary refused", get("binary").get("status") == "error" and "binary" in get("binary").get("output", ""), get("binary"))
+        check("missing workspace explained", get("nofolder").get("status") == "error" and "does not exist" in get("nofolder").get("output", ""), get("nofolder"))
+        check("run_tests finds make", "make test" in get("tests").get("detail", ""), get("tests"))
+        loud = get("loud").get("output", "")
+        check("output capped head and tail", "bytes cut" in loud and len(loud) < 32000, len(loud))
+        check("timeout kills the tree", get("slow").get("status") == "error" and "timed out" in get("slow").get("output", "") and "never" not in get("slow").get("output", ""), get("slow"))
+        check("stop kills a running command", "stopped by the user" in get("stopme").get("output", "") and "started-stopme" in get("stopme").get("output", ""), get("stopme"))
+        check("docker quotes its preview", "'a b'" in get("docker").get("detail", ""), get("docker"))
+        check("wsl refused off Windows", sys.platform == "win32" or get("wsl").get("status") == "error", get("wsl"))
         check("files untouched by denied calls", not os.path.exists(os.path.join(workspace, "new")) and "hello world" in open(os.path.join(workspace, "a.txt"), encoding="utf-8").read())
     finally:
         proc.terminate()

@@ -242,6 +242,13 @@ inside loops, `break`, `continue` and `switch` arms need nothing special: the
 free sits right before the assignment it belongs to, and the scope-end `defer`
 already runs on every exit.
 
+Measured on 2026-11-04, compiling `compiler/main.salam`: the compiler rewrites
+547 locals at 934 assignment sites. Peak memory of `build --emit-c` fell from
+1037 MB to 854 MB, `--backend=native --emit-asm` from 2032 MB to 1892 MB and
+`--backend=llvm --emit-llvm` from 1459 MB to 1378 MB. The ASan leak counts for
+`salam build hello.salam` fell from 175,730 to 172,030: most of what is left is
+not an overwritten string but a finished value that nobody frees.
+
 What this does not cover: parameters (`mut s: str` reassigned in the callee),
 fields and elements (`this.buf = this.buf + x`), a name declared twice in one
 function, and the final value of a local that is returned (it leaks only if

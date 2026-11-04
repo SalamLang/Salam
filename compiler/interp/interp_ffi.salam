@@ -8,6 +8,7 @@ include at "../ast.salam"
 include tok "../token.salam"
 include i18 "../i18n.salam"
 include net "interp_net.salam"
+include st "interp_static.salam"
 
 if SALAM_OS_WINDOWS or SALAM_OS_WASM:
     func ffi_sym(_ip &: Interp, _a &: at.Ast, _name: str): void*:
@@ -87,6 +88,144 @@ else:
     end
 end
 
+if SALAM_OS_LINUX:
+    func ffi_core_addr(name: str): void*:
+        if str.Equals(name, "abort"):
+            ret &abort
+        end
+        if str.Equals(name, "access"):
+            ret &access
+        end
+        if str.Equals(name, "calloc"):
+            ret &calloc
+        end
+        if str.Equals(name, "chdir"):
+            ret &chdir
+        end
+        if str.Equals(name, "clock_gettime"):
+            ret &clock_gettime
+        end
+        if str.Equals(name, "closedir"):
+            ret &closedir
+        end
+        if str.Equals(name, "exit"):
+            ret &exit
+        end
+        if str.Equals(name, "fclose"):
+            ret &fclose
+        end
+        if str.Equals(name, "fflush"):
+            ret &fflush
+        end
+        if str.Equals(name, "fgetc"):
+            ret &fgetc
+        end
+        if str.Equals(name, "fgets"):
+            ret &fgets
+        end
+        if str.Equals(name, "fopen"):
+            ret &fopen
+        end
+        if str.Equals(name, "fread"):
+            ret &fread
+        end
+        if str.Equals(name, "free"):
+            ret &free
+        end
+        if str.Equals(name, "fseek"):
+            ret &fseek
+        end
+        if str.Equals(name, "fseeko"):
+            ret &fseeko
+        end
+        if str.Equals(name, "ftell"):
+            ret &ftell
+        end
+        if str.Equals(name, "fwrite"):
+            ret &fwrite
+        end
+        if str.Equals(name, "getcwd"):
+            ret &getcwd
+        end
+        if str.Equals(name, "getenv"):
+            ret &getenv
+        end
+        if str.Equals(name, "getpid"):
+            ret &getpid
+        end
+        if str.Equals(name, "malloc"):
+            ret &malloc
+        end
+        if str.Equals(name, "memcpy"):
+            ret &memcpy
+        end
+        if str.Equals(name, "memmove"):
+            ret &memmove
+        end
+        if str.Equals(name, "memset"):
+            ret &memset
+        end
+        if str.Equals(name, "mkdir"):
+            ret &mkdir
+        end
+        if str.Equals(name, "opendir"):
+            ret &opendir
+        end
+        if str.Equals(name, "pclose"):
+            ret &pclose
+        end
+        if str.Equals(name, "popen"):
+            ret &popen
+        end
+        if str.Equals(name, "readdir"):
+            ret &readdir
+        end
+        if str.Equals(name, "realloc"):
+            ret &realloc
+        end
+        if str.Equals(name, "remove"):
+            ret &remove
+        end
+        if str.Equals(name, "rename"):
+            ret &rename
+        end
+        if str.Equals(name, "rmdir"):
+            ret &rmdir
+        end
+        if str.Equals(name, "system"):
+            ret &system
+        end
+        ret null
+    end
+
+    func ffi_is_static(ip &: Interp): bool:
+        if ip.ffi_static == 0:
+            ip.ffi_static = dlsym((0 as i64) as void*, "malloc") == null ? 1 : 2
+        end
+        ret ip.ffi_static == 1
+    end
+
+    func ffi_fn(ip &: Interp, a &: at.Ast, name: str): void*:
+        if ffi_is_static(ip):
+            mut p := st.FnAddr(name)
+            if p == null:
+                p = net.NetAddr(name)
+            end
+            ret p != null ? p : ffi_core_addr(name)
+        end
+        ret ffi_sym(ip, a, name)
+    end
+
+else:
+    func ffi_is_static(_ip &: Interp): bool:
+        ret false
+    end
+
+    func ffi_fn(ip &: Interp, a &: at.Ast, name: str): void*:
+        ret ffi_sym(ip, a, name)
+    end
+end
+
 if SALAM_OS_WINDOWS:
     if SALAM_ARCH_X86 or SALAM_ARCH_X64:
         func ffi_exec_page(code: int[], n: int): void*:
@@ -127,11 +266,14 @@ else:
     end
 
     func ffi_addr(ip &: Interp, a &: at.Ast, name: str): void*:
-        ret ffi_sym(ip, a, name)
+        ret ffi_fn(ip, a, name)
     end
 end
 
 func extern_var_value(ip &: Interp, a &: at.Ast, name: str, ts: str): Value:
+    if ffi_is_static(ip):
+        ret str.Equals(name, "environ") ? val_ptr(st.Environ() as i64, PTR_OPAQUE) : val_null()
+    end
     addr := ffi_sym(ip, a, name)
     if addr == null:
         ret val_null()
@@ -647,13 +789,9 @@ func call_native_extern(
             ret ffi_ret_value(r, rts)
         end
     end
-    fp := ffi_sym(ip, a, dn.name)
+    fp := ffi_fn(ip, a, dn.name)
     if fp == null:
-        rt_error(
-            ip, a, call, co.Format1(
-                i18.Tr("extern function '%s' is not supported by the interpreter (use 'salam run' instead)"), co.ArgStr(dn.name)
-            )
-        )
+        ffi_no_symbol(ip, a, call, dn.name)
         ret val_null()
     end
     mut result := val_null()
@@ -873,6 +1011,22 @@ func ffi_call_words(ip &: Interp, a &: at.Ast, call: int, fp: void*, fn_sig: str
     ret result
 end
 
+func ffi_no_symbol(ip &: Interp, a &: at.Ast, call: int, name: str):
+    if ffi_is_static(ip):
+        rt_error(
+            ip, a, call, co.Format1(
+                i18.Tr("this salam is statically linked, so the interpreter can only reach the C functions built into it, and '%s' is not one of them (use 'salam run', or a dynamically linked salam)"), co.ArgStr(name)
+            )
+        )
+        ret
+    end
+    rt_error(
+        ip, a, call, co.Format1(
+            i18.Tr("extern function '%s' is not supported by the interpreter (use 'salam run' instead)"), co.ArgStr(name)
+        )
+    )
+end
+
 func ffi_decl_ptypes(a &: at.Ast, decl: int): Vector<str>:
     mut ptypes := Vector {} as Vector<str>
     repeat at.ChildCount(a, decl) in i:
@@ -1016,13 +1170,9 @@ func ffi_call_variadic(ip &: Interp, a &: at.Ast, call: int, decl: int, args: Ve
             ni += 1
         end
     end
-    fp := ffi_sym(ip, a, dn.name)
+    fp := ffi_fn(ip, a, dn.name)
     if fp == null:
-        rt_error(
-            ip, a, call, co.Format1(
-                i18.Tr("extern function '%s' is not supported by the interpreter (use 'salam run' instead)"), co.ArgStr(dn.name)
-            )
-        )
+        ffi_no_symbol(ip, a, call, dn.name)
         ret val_null()
     end
     if host_is_32():

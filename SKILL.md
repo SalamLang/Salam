@@ -1526,10 +1526,10 @@ end
     Saturday = 0 and takes a JDN, the other `Weekday*` count from Sunday = 0.
     Conversions do not validate (month 13 gives a wrong date): check with
     `IsValidJalaliDate` first.
-- **`mem`**: `Allocate AllocateZeroed AllocateArray Reallocate Free Copy Set MemMove`, arenas `NewArena ArenaAlloc ArenaReset ArenaFree`, fixed-size
+- **`mem`**: `Allocate AllocateZeroed AllocateArray Reallocate Free Copy Set MemMove` (these return null on failure), `MustAllocate MustAllocateZeroed MustReallocate OutOfMemory` (these abort with `salam: out of memory`), arenas `NewArena ArenaAlloc ArenaReset ArenaFree`, fixed-size
   pools `NewPool PoolAlloc PoolFree PoolDestroy`; leak tooling `CheckLeaks LiveBytes AllocCount PeakBytes`. Nothing is checked (overruns and double
   frees corrupt silently; `salam memcheck` finds them for `Allocate`
-  blocks), every allocator can return null, and memory from a C library
+  blocks), every allocator except the `Must*` forms can return null, and memory from a C library
   goes back to that library's free, never `mem.Free`.
 - **`testing`**: `AssertTrue AssertFalse AssertEqInt AssertEqStr AssertEqFloat AssertEqBool AssertEqInt64 AssertNeInt AssertNeStr AssertContains AssertNil AssertNotNil AssertMsg Passed Failed Reset Summary()` (`ret testing.Summary()` from `main`). A failure says what differed, not where
   (put the case name in `AssertMsg`); an exit code keeps 8 bits, so 256

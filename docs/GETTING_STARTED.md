@@ -189,6 +189,48 @@ flag needed: `SALAM_VERSION`, `SALAM_VERSION_CODE`, `SALAM_GIT_COMMIT`,
 the moment your program was compiled, so a binary can print its own build
 stamp.
 
+### 🔎 Checking without building: `salam check`
+
+```sh
+salam check app.salam                  # exit 0: no errors, exit 1: errors, exit 2: could not start
+salam check app.salam --error-format=json
+salam check app.salam --backend=native # the rules of that backend, as `salam build` applies them
+salam check app.salam --target=x86_64-windows-gnu   # the Windows branches of the program
+```
+
+`salam check` runs the part of `salam build` that comes before code generation,
+with the same flags, and answers for the build you would get from them. It
+exits non-zero whenever it prints an error, in plain and in JSON output alike.
+
+It reports:
+
+- lexer, parser and conditional compilation errors in the entry file and in
+  every package it imports, standard library packages too
+- type, ownership and range errors in all of those files
+- the sibling files of a package entry (`demo/demo.salam` with
+  `demo/helpers.salam`) on the C backend; the LLVM and native backends read the
+  entry file alone, so `salam check --backend=native` does too
+- a package name claimed by two files, on the C backend
+- a program with no entry function
+
+These stay out, because they only exist once code is generated or a toolchain
+runs, and finding them would cost a full build:
+
+- errors from the LLVM and native code generators (`LLVM backend: ...`) and the
+  C compiler failures of the C backend
+- link errors: a missing library, an undefined `extern` symbol
+- fetching and compiling native libraries (`link` and `[native.x]` in
+  `salam.toml`), so the `SALAM_LINK_*` flags they set are not defined either
+- options only the build reads: `--export`, `--cpu`, `--subsystem`, `--icon`,
+  `--manifest`, `--version-info`
+- `SALAM_CC_*` is only defined when you pass `--cc`, since no C compiler is
+  chosen otherwise
+
+One difference is deliberate. A library has no entry function, and `salam check`
+accepts one: a file whose package is not `main`, a `*_test.salam` file, a page
+file, `--lib`, or a project with `kind = "lib"`. `salam build` on such a file
+without `--lib` says there is no entry point.
+
 ### 📁 Project entry file: `main.salam`
 
 Passing a single file always compiles exactly that file. When you pass a

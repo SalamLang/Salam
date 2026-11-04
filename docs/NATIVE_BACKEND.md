@@ -1084,6 +1084,17 @@ overlap checks to a trip count test. Counted with callgrind: `image_basics`
 `image_rtl_card` and all 42 benchmarks are the same binary, and a compile job
 is unchanged (6.126 billion).
 
+A phi of a small struct whose only uses are field reads becomes one phi per
+field (`SALAM_NG_OFF=aggphi`). Inlining a function with several returns, such
+as `GetPixel` with its transparent early return, leaves that shape; the struct
+used to go through a stack slot on every path, five byte stores and loads per
+pixel in `_extract_block`. Counted with callgrind: `image_rtl_card` 142.36 to
+141.40 million instructions (x86-64-v3: 115.80 to 114.85), `image_basics`
+553.80 to 544.50 (515.25 to 505.96). 39 of the 42 benchmarks are the same
+binary; `41_matrix_stdlib_smallops` runs 1.2% fewer instructions and the
+geometric mean is 0.9998. A compile job runs 0.15% fewer instructions and
+the compiler is 1.8% smaller.
+
 ### Conventions worth knowing
 
 - Scalars follow the C ABI of the target, so calls to and from C code just
@@ -1103,6 +1114,14 @@ is unchanged (6.126 billion).
   bytes comes back in `r0`. On RISC-V a struct of up to 16 bytes goes in
   `a`/`fa` registers (one or two floats, or a float and an integer, use the
   float registers while enough are free), a larger one by reference.
+- llvmgen writes an explicit `ccc` on a `define` or `call` whose struct
+  arguments or result it lowered for C: calls through `extern func (...)`
+  pointers, `export:` functions, and the `salam_cabi.*` wrapper that `&fn`
+  yields for a Salam function taking or returning a struct. To LLVM that is the
+  default convention. To native it means C rules on that edge even when the
+  callee has a body, so `ng_cabi.salam` also receives byval, array and sret
+  parameters and returns aggregates in registers. Such a function is never
+  inlined.
 - On Linux frames are addressed from `rsp` and `rbp` is a sixth callee-saved
   register. Each function gets an `.eh_frame` entry, so gdb, perf and other
   unwinders can walk native frames. On Windows `rbp` is the frame pointer and
@@ -1229,7 +1248,7 @@ ret end` at the top of a recursive AST walk) tests that parameter before
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing, and a comma-separated list dumps several functions.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,vnarrow,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,loopinl,cpelim,tord,vrev,cdown,tfold,mexit,sqself,vsign,redinv,ldcmp,phix,selinc,wweb,wwdep,wwtr,tdup,padjmp,dtst,zins,ndiv,niv,cmp64,adc64,rvc,avx2,rasp,hotpath,inlnest,spromo,ypack,ysum,winv,zxcmp,cpspill,scdead,yzext,uswsel,vex3,vabs,vdemor,lvnsw,vblend,xfree,lvunr,vtail,vkpool,remat,sse41,shbudg,lhloc`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,vnarrow,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,loopinl,cpelim,tord,vrev,cdown,tfold,mexit,sqself,vsign,redinv,ldcmp,phix,selinc,wweb,wwdep,wwtr,tdup,padjmp,dtst,zins,ndiv,niv,cmp64,adc64,rvc,avx2,rasp,hotpath,inlnest,spromo,ypack,ysum,winv,zxcmp,cpspill,scdead,yzext,uswsel,vex3,vabs,vdemor,lvnsw,vblend,xfree,lvunr,vtail,vkpool,remat,sse41,shbudg,lhloc,aggphi`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator and `rasp` the

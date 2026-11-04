@@ -16,7 +16,7 @@ SALAM=$1
 TRIPLE=$2
 DIR=$3
 HERE=$(dirname "$0")
-ABI="general/extern_variadic_va_struct general/extern_struct_abi general/extern_struct_byval
+ABI="general/extern_variadic_va_struct general/extern_struct_abi general/extern_fnptr_struct general/extern_struct_byval
 general/extern_struct_overflow general/extern_variadic_struct interop/ffi_struct_value"
 ICF="stdlib/archive_demo stdlib/json_errors_demo stdlib/autograd_demo
 llvm/ll_hashmap llvm/generic_struct_pkg_types llvm/ll_closure_counter"

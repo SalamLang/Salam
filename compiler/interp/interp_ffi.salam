@@ -88,7 +88,7 @@ else:
 end
 
 if SALAM_OS_WINDOWS:
-    if SALAM_ARCH_X86:
+    if SALAM_ARCH_X86 or SALAM_ARCH_X64:
         func ffi_exec_page(code: int[], n: int): void*:
             page := VirtualAlloc(null, (4096 as i64) as void*, 0x3000 as u32, 4 as u32)
             if page == null:
@@ -578,6 +578,8 @@ func call_native_extern(
     mut ref_slot := Vector {} as Vector<i64>
     defer ref_idx.free()
     defer ref_slot.free()
+    mut wargs := Vector {} as Vector<Value>
+    defer wargs.free()
     until mi < np and mi < args.len():
         pn := at.At(a, at.Child(a, decl, mi))
         pts := pn.ty != 0 ? at.At(a, pn.ty).type_str : ""
@@ -597,13 +599,16 @@ func call_native_extern(
             )
             ret val_null()
         end
-        if typestr_is_float(pts):
+        if typestr_is_float(pts) and not pn.is_ref:
             if nf >= 8:
                 break
             end
             x := to_float(av)
             fv[nf] = str.Equals(base_typename(pts), "f32") ? f32_in_f64_bits(x) : x
             nf += 1
+            if host_is_32():
+                wargs.push(av)
+            end
         else:
             if ni >= 8:
                 break
@@ -619,6 +624,9 @@ func call_native_extern(
             end
             iv[ni] = mv
             ni += 1
+            if host_is_32():
+                wargs.push(av.kind == VAL_ARRAY ? val_ptr(mv, PTR_OPAQUE) : av)
+            end
         end
         mi += 1
     end
@@ -649,17 +657,23 @@ func call_native_extern(
         ret val_null()
     end
     mut result := val_null()
-    gts2 := gil_release(ip)
-    if ret_float:
-        ff := fp as extern func (i64, i64, i64, i64, i64, i64, i64, i64, f64, f64, f64, f64, f64, f64, f64, f64) f64
-        d := ff(iv[0], iv[1], iv[2], iv[3], iv[4], iv[5], iv[6], iv[7], fv[0], fv[1], fv[2], fv[3], fv[4], fv[5], fv[6], fv[7])
-        result = val_float(str.Equals(base_typename(rts), "f32") ? f32_from_f64_bits(d) : d)
+    if host_is_32():
+        mut dtypes := ffi_decl_ptypes(a, decl)
+        result = ffi_call_words(ip, a, call, fp, dn.name, dtypes, rts, wargs, false)
+        dtypes.free()
     else:
-        fi := fp as extern func (i64, i64, i64, i64, i64, i64, i64, i64, f64, f64, f64, f64, f64, f64, f64, f64) i64
-        r2 := fi(iv[0], iv[1], iv[2], iv[3], iv[4], iv[5], iv[6], iv[7], fv[0], fv[1], fv[2], fv[3], fv[4], fv[5], fv[6], fv[7])
-        result = ffi_ret_value(r2, rts)
+        gts2 := gil_release(ip)
+        if ret_float:
+            ff := fp as extern func (i64, i64, i64, i64, i64, i64, i64, i64, f64, f64, f64, f64, f64, f64, f64, f64) f64
+            d := ff(iv[0], iv[1], iv[2], iv[3], iv[4], iv[5], iv[6], iv[7], fv[0], fv[1], fv[2], fv[3], fv[4], fv[5], fv[6], fv[7])
+            result = val_float(str.Equals(base_typename(rts), "f32") ? f32_from_f64_bits(d) : d)
+        else:
+            fi := fp as extern func (i64, i64, i64, i64, i64, i64, i64, i64, f64, f64, f64, f64, f64, f64, f64, f64) i64
+            r2 := fi(iv[0], iv[1], iv[2], iv[3], iv[4], iv[5], iv[6], iv[7], fv[0], fv[1], fv[2], fv[3], fv[4], fv[5], fv[6], fv[7])
+            result = ffi_ret_value(r2, rts)
+        end
+        gil_acquire(ip, gts2)
     end
-    gil_acquire(ip, gts2)
     repeat ref_idx.len() in ri:
         k := ref_idx.get(ri)
         rpn := at.At(a, at.Child(a, decl, k))
@@ -681,31 +695,150 @@ func ffi_x86_thunk(ip &: Interp): void*:
     ret ip.ffi_thunk
 end
 
-func ffi_call_x86(ip &: Interp, a &: at.Ast, call: int, fp: void*, fn_sig: str, ptypes: Vector<str>, rts: str, args: Vector<Value>): Value:
-    thunk := ffi_x86_thunk(ip)
+func ffi_x64_thunk(ip &: Interp): void*:
+    if ip.ffi_thunk == null:
+        code := [
+            0x55, 0x48, 0x89, 0xE5, 0x48, 0x89, 0xC8, 0x49, 0x89, 0xD2, 0x4C, 0x89, 0xC1, 0x4C, 0x8D, 0x1C, 0xCD, 0x00, 0x00, 0x00, 0x00, 0x4C, 0x29, 0xDC, 0x48, 0x83, 0xE4, 0xF0, 0x48, 0x85, 0xC9, 0x74, 0x0D, 0x48, 0xFF, 0xC9, 0x4D, 0x8B, 0x1C, 0xCA, 0x4C, 0x89, 0x1C, 0xCC, 0xEB, 0xEE, 0x48, 0x8B, 0x0C, 0x24, 0x48, 0x8B, 0x54, 0x24, 0x08, 0x4C, 0x8B, 0x44, 0x24, 0x10, 0x4C, 0x8B, 0x4C, 0x24, 0x18, 0x66, 0x48, 0x0F, 0x6E, 0xC1, 0x66, 0x48, 0x0F, 0x6E, 0xCA, 0x66, 0x49, 0x0F, 0x6E, 0xD0, 0x66, 0x49, 0x0F, 0x6E, 0xD9, 0xFF, 0xD0, 0xC9, 0xC3
+        ]
+        ip.ffi_thunk = ffi_exec_page(code, code.len())
+    end
+    ret ip.ffi_thunk
+end
+
+func ffi_float_word(pts: str, v: Value): u64:
+    if str.Equals(pts, "f32"):
+        ret f32_word(to_float(v))
+    end
+    ret f64_bits(to_float(v))
+end
+
+func ffi_call_win64(ip &: Interp, a &: at.Ast, call: int, fp: void*, ptypes: Vector<str>, rts: str, args: Vector<Value>): Value:
+    thunk := ffi_x64_thunk(ip)
     if thunk == null:
+        rt_error(ip, a, call, i18.Tr("the interpreter cannot pass a floating-point argument through a function pointer on 64-bit Windows (use 'salam run' instead)"))
+        ret val_null()
+    end
+    if args.len() > 32:
+        rt_error(ip, a, call, i18.Tr("too many arguments for a native call in the interpreter"))
+        ret val_null()
+    end
+    slots := mem.AllocateZeroed(256 as u64) as u64*
+    defer mem.Free(slots as void*)
+    repeat args.len() in k:
+        pts := k < ptypes.len() ? ptypes.get(k) : ""
+        av := args.get(k)
+        slots[k] = typestr_is_float(pts) ? ffi_float_word(pts, av) : (marshal_arg(ip, av) as u64)
+    end
+    n := args.len() < 4 ? 4 : args.len() + args.len() % 2
+    gts := gil_release(ip)
+    mut result := val_null()
+    if str.Len(rts) != 0 and typestr_is_float(rts):
+        ff := thunk as extern func (void*, u64*, i64) f64
+        d := ff(fp, slots, n as i64)
+        result = val_float(str.Equals(rts, "f32") ? f32_from_f64_bits(d) : d)
+    else:
+        fi := thunk as extern func (void*, u64*, i64) i64
+        result = ffi_ret_value(fi(fp, slots, n as i64), rts)
+    end
+    gil_acquire(ip, gts)
+    ret result
+end
+
+func ffi_abi_probe(x: f64): u32:
+    ret (f64_bits(x) >> 32) as u32
+end
+
+func ffi_arm_hard(ip &: Interp): bool:
+    if ip.ffi_arm_abi == 0:
+        probe := (&ffi_abi_probe) as extern func (u32, u32, f64) u32
+        high := probe(0x11111111 as u32, 0x22222222 as u32, 1.0)
+        ip.ffi_arm_abi = high == (0x3FF00000 as u32) ? 1 : 2
+    end
+    ret ip.ffi_arm_abi == 1
+end
+
+func ffi_vfp_slot(used: int, double: bool): int:
+    mut s := 0
+    until s < 16:
+        if double:
+            if ((used >> s) & 3) == 0:
+                ret s
+            end
+            s += 2
+        else:
+            if ((used >> s) & 1) == 0:
+                ret s
+            end
+            s += 1
+        end
+    end
+    ret 0 - 1
+end
+
+func ffi_int_wide(pts: str, v: Value): bool:
+    if str.Len(pts) == 0:
+        ret v.kind == VAL_INT and (v.ity == ITY_I64 or v.ity == ITY_U64)
+    end
+    ret str.Equals(pts, "i64") or str.Equals(pts, "u64")
+end
+
+func ffi_cast_int(fp: void*, w: u32*, d: f64*): i64:
+    f := fp as extern func (u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, f64, f64, f64, f64, f64, f64, f64, f64) i64
+    ret f(w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7], w[8], w[9], w[10], w[11], w[12], w[13], w[14], w[15], w[16], w[17], w[18], w[19], w[20], w[21], w[22], w[23], w[24], w[25], w[26], w[27], w[28], w[29], w[30], w[31], d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7])
+end
+
+func ffi_cast_float(fp: void*, w: u32*, d: f64*): f64:
+    f := fp as extern func (u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, u32, f64, f64, f64, f64, f64, f64, f64, f64) f64
+    ret f(w[0], w[1], w[2], w[3], w[4], w[5], w[6], w[7], w[8], w[9], w[10], w[11], w[12], w[13], w[14], w[15], w[16], w[17], w[18], w[19], w[20], w[21], w[22], w[23], w[24], w[25], w[26], w[27], w[28], w[29], w[30], w[31], d[0], d[1], d[2], d[3], d[4], d[5], d[6], d[7])
+end
+
+func ffi_call_words(ip &: Interp, a &: at.Ast, call: int, fp: void*, fn_sig: str, ptypes: Vector<str>, rts: str, args: Vector<Value>, variadic: bool): Value:
+    thunk := host_is_win32() ? ffi_x86_thunk(ip) : null
+    if host_is_win32() and thunk == null:
         rt_error(ip, a, call, co.Format1(i18.Tr("extern function '%s' is not supported by the interpreter (use 'salam run' instead)"), co.ArgStr(fn_sig)))
         ret val_null()
     end
+    arm := SALAM_ARCH_ARM
+    vfp := arm and not variadic and ffi_arm_hard(ip)
     words := mem.AllocateZeroed(128 as u64) as u32*
     defer mem.Free(words as void*)
+    regs := mem.AllocateZeroed(64 as u64) as u32*
+    defer mem.Free(regs as void*)
     mut n := 0
+    mut used := 0
     low := 0xFFFFFFFF as i64
     repeat args.len() in k:
         pts := k < ptypes.len() ? ptypes.get(k) : ""
         av := args.get(k)
-        wide := str.Equals(pts, "f64") or str.Equals(pts, "i64") or str.Equals(pts, "u64")
+        is_float := typestr_is_float(pts) or (str.Len(pts) == 0 and av.kind == VAL_FLOAT)
+        double := is_float and not str.Equals(pts, "f32")
+        mut bits := 0 as i64
+        if is_float:
+            bits = ffi_float_word(pts, av) as i64
+        else:
+            bits = marshal_arg(ip, av)
+        end
+        if vfp and is_float:
+            s := ffi_vfp_slot(used, double)
+            if s < 0:
+                rt_error(ip, a, call, i18.Tr("too many arguments for a native call in the interpreter"))
+                ret val_null()
+            end
+            regs[s] = (bits & low) as u32
+            used = used | (1 << s)
+            if double:
+                regs[s + 1] = ((bits >> 32) & low) as u32
+                used = used | (2 << s)
+            end
+            continue
+        end
+        wide := double or (not is_float and ffi_int_wide(pts, av))
+        if arm and wide and n % 2 == 1:
+            n += 1
+        end
         if n + (wide ? 2 : 1) > 32:
             rt_error(ip, a, call, i18.Tr("too many arguments for a native call in the interpreter"))
             ret val_null()
-        end
-        mut bits := 0 as i64
-        if str.Equals(pts, "f32"):
-            bits = f32_word(to_float(av)) as i64
-        else str.Equals(pts, "f64"):
-            bits = f64_bits(to_float(av)) as i64
-        else:
-            bits = marshal_arg(ip, av)
         end
         words[n] = (bits & low) as u32
         n += 1
@@ -717,16 +850,36 @@ func ffi_call_x86(ip &: Interp, a &: at.Ast, call: int, fp: void*, fn_sig: str, 
     gts := gil_release(ip)
     mut result := val_null()
     if str.Len(rts) != 0 and typestr_is_float(rts):
-        ff := thunk as extern func (void*, u32*, int) f64
-        result = val_float(ff(fp, words, n))
+        mut d := 0.0
+        if thunk != null:
+            ff := thunk as extern func (void*, u32*, int) f64
+            d = ff(fp, words, n)
+        else:
+            d = ffi_cast_float(fp, words, regs as f64*)
+        end
+        result = val_float(arm and str.Equals(rts, "f32") ? f32_from_f64_bits(d) : d)
     else:
-        fi := thunk as extern func (void*, u32*, int) i64
-        r := fi(fp, words, n)
+        mut r := 0 as i64
+        if thunk != null:
+            fi := thunk as extern func (void*, u32*, int) i64
+            r = fi(fp, words, n)
+        else:
+            r = ffi_cast_int(fp, words, regs as f64*)
+        end
         full := str.Equals(rts, "i64") or str.Equals(rts, "u64")
         result = ffi_ret_value(full ? r : r & low, rts)
     end
     gil_acquire(ip, gts)
     ret result
+end
+
+func ffi_decl_ptypes(a &: at.Ast, decl: int): Vector<str>:
+    mut ptypes := Vector {} as Vector<str>
+    repeat at.ChildCount(a, decl) in i:
+        pn := at.At(a, at.Child(a, decl, i))
+        ptypes.push(pn.is_ref ? "void*" : (pn.ty != 0 ? at.At(a, pn.ty).type_str : ""))
+    end
+    ret ptypes
 end
 
 func ffi_call_sig(ip &: Interp, a &: at.Ast, call: int, fp: void*, sig: str, args: Vector<Value>): Value:
@@ -754,14 +907,13 @@ func ffi_call_sig(ip &: Interp, a &: at.Ast, call: int, fp: void*, sig: str, arg
             ret val_null()
         end
     end
-    if host_is_win32():
-        ret ffi_call_x86(ip, a, call, fp, sig, ptypes, rts, args)
+    if host_is_32():
+        ret ffi_call_words(ip, a, call, fp, sig, ptypes, rts, args, false)
     end
     if host_is_win64():
         each pt in ptypes:
             if typestr_is_float(pt):
-                rt_error(ip, a, call, i18.Tr("the interpreter cannot pass a floating-point argument through a function pointer on 64-bit Windows (use 'salam run' instead)"))
-                ret val_null()
+                ret ffi_call_win64(ip, a, call, fp, ptypes, rts, args)
             end
         end
     end
@@ -826,6 +978,9 @@ func ffi_call_variadic(ip &: Interp, a &: at.Ast, call: int, decl: int, args: Ve
             )
             ret val_null()
         end
+        if host_is_32():
+            continue
+        end
         mut is_f := false
         if k < np:
             pn := at.At(a, at.Child(a, decl, k))
@@ -869,6 +1024,12 @@ func ffi_call_variadic(ip &: Interp, a &: at.Ast, call: int, decl: int, args: Ve
             )
         )
         ret val_null()
+    end
+    if host_is_32():
+        mut dtypes := ffi_decl_ptypes(a, decl)
+        vr := ffi_call_words(ip, a, call, fp, dn.name, dtypes, rts, args, true)
+        dtypes.free()
+        ret vr
     end
     gts := gil_release(ip)
     fi := fp as extern func (i64, i64, i64, i64, i64, i64, i64, i64, f64, f64, f64, f64, f64, f64, f64, f64, i64, i64, i64, i64, i64, i64, i64, i64) i64

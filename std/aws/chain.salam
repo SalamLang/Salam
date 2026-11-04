@@ -100,16 +100,22 @@ func _imds_disabled(): bool:
     ret env.Get("AWS_EC2_METADATA_DISABLED").lower() == "true"
 end
 
-func _imds_token(timeout_ms: int): str:
-    mut status := 0
-    ret _http_get(
-        _IMDS_HOST, "/latest/api/token", "X-aws-ec2-metadata-token-ttl-seconds: " + _IMDS_TTL + "\r\n", "PUT", timeout_ms, status
-    ).trim()
+func _imds_host(): str:
+    endpoint := env.Get("AWS_EC2_METADATA_SERVICE_ENDPOINT")
+    ret endpoint.len() > 0 ? endpoint : _IMDS_HOST
+end
+
+func _imds_token(timeout_ms: int, status &: int): str:
+    body := _http_get(
+        _imds_host(), "/latest/api/token", "X-aws-ec2-metadata-token-ttl-seconds: " + _IMDS_TTL + "\r\n", "PUT", timeout_ms, status
+    )
+    if status != 200: ret "" end
+    ret body.trim()
 end
 
 func _imds_get(token: str, path: str, timeout_ms: int, status &: int): str:
     ret _http_get(
-        _IMDS_HOST, path, "X-aws-ec2-metadata-token: " + token + "\r\n", "GET", timeout_ms, status
+        _imds_host(), path, "X-aws-ec2-metadata-token: " + token + "\r\n", "GET", timeout_ms, status
     )
 end
 
@@ -317,13 +323,18 @@ pub func FromInstanceCredentials(timeout_ms: int): Credentials:
     end
     mut ms := timeout_ms
     if ms <= 0: ms = _IMDS_TIMEOUT_MS end
-    token := _imds_token(ms)
+    mut status := 0
+    token := _imds_token(ms, status)
     if token.len() == 0:
+        if status != 0 and status != 200:
+            ret Credentials {
+                error = "the metadata service answered " + status + " for the token request", code = "NoCredentials", source = SOURCE_INSTANCE
+            }
+        end
         ret Credentials {
             error = "no instance metadata service answered; this is probably not an EC2 instance", code = "NoCredentials", source = SOURCE_INSTANCE
         }
     end
-    mut status := 0
     role := _imds_get(
         token, "/latest/meta-data/iam/security-credentials/", ms, status
     ).trim()
@@ -352,9 +363,9 @@ pub func InstanceRegion(timeout_ms: int): str:
     if _imds_disabled(): ret "" end
     mut ms := timeout_ms
     if ms <= 0: ms = _IMDS_TIMEOUT_MS end
-    token := _imds_token(ms)
-    if token.len() == 0: ret "" end
     mut status := 0
+    token := _imds_token(ms, status)
+    if token.len() == 0: ret "" end
     where := _imds_get(token, "/latest/meta-data/placement/region", ms, status)
     if status != 200: ret "" end
     ret where.trim()

@@ -1,0 +1,119 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+package main
+
+import aws
+import env
+import mem
+import str
+import sync
+import net.tcp
+
+mut PORT := 0
+mut wg := sync.NewWaitGroup()
+mut token_reply := ""
+mut gets := 0
+
+func read_head(c: tcp.Conn): str:
+    buf := mem.Allocate(4096 as u64)
+    defer mem.Free(buf)
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    until not str.Contains(str.BufStr(sb), "\r\n\r\n"):
+        got := tcp.ReadBytes(c, buf, 4096)
+        if got <= 0: break end
+        repeat got in i:
+            str.BufAppendChar(sb, (buf as u8*)[i] as int)
+        end
+    end
+    ret str.BufStr(sb)
+end
+
+func http(status: int, body: str): str:
+    ret "HTTP/1.1 " + status + " X\r\nContent-Length: " + body.len() + "\r\nConnection: close\r\n\r\n" + body
+end
+
+func answer(head: str): str:
+    if str.StartsWith(head, "PUT /latest/api/token "):
+        ret token_reply
+    end
+    gets += 1
+    if not str.Contains(head, "X-aws-ec2-metadata-token: tok-1\r\n"):
+        ret http(401, "")
+    end
+    if str.StartsWith(head, "GET /latest/meta-data/iam/security-credentials/ "):
+        ret http(200, "role-a\n")
+    end
+    if str.StartsWith(head, "GET /latest/meta-data/iam/security-credentials/role-a "):
+        ret http(200, `{"AccessKeyId":"AK","SecretAccessKey":"SK","Token":"ST"}`)
+    end
+    if str.StartsWith(head, "GET /latest/meta-data/placement/region "):
+        ret http(200, "eu-west-1\n")
+    end
+    ret http(404, "")
+end
+
+func serve():
+    srv := tcp.Bind(0)
+    PORT = tcp.Port(srv)
+    sync.Done(wg)
+    mut running := true
+    until running:
+        c := tcp.Accept(srv)
+        head := read_head(c)
+        if str.StartsWith(head, "GET /__stop "):
+            running = false
+        else:
+            tcp.Write(c, answer(head))
+        end
+        tcp.Close(c)
+    end
+    tcp.CloseServer(srv)
+end
+
+func show(label: str):
+    gets = 0
+    creds := aws.FromInstanceCredentials(2000)
+    println label, "ok", creds.ok, "key", creds.access_key, "code", creds.code
+    println label, "error", creds.error
+    println label, "region", aws.InstanceRegion(2000)
+    println label, "metadata reads", gets
+end
+
+func main:
+    sync.Add(wg, 1 as i64)
+    t := spawn(serve)
+    sync.Wait(wg)
+    base := "http://127.0.0.1:" + PORT
+    env.Set("AWS_EC2_METADATA_DISABLED", "")
+    env.Set("AWS_EC2_METADATA_SERVICE_ENDPOINT", base)
+
+    token_reply = http(200, "tok-1\n")
+    show("good")
+
+    token_reply = http(403, "<html>denied\r\nX-Bad: yes</html>")
+    show("denied")
+
+    token_reply = http(503, "tok-1")
+    show("unavailable")
+
+    token_reply = http(200, "")
+    show("empty")
+
+    c := tcp.Dial("127.0.0.1", PORT)
+    tcp.Write(c, "GET /__stop HTTP/1.1\r\n\r\n")
+    tcp.Close(c)
+    join(t)
+    ret 0
+end

@@ -1070,6 +1070,25 @@ otherwise it gets 32-byte alignment. Padding uses NOPs of up to 15 bytes,
 and padding longer than that is a short `jmp` over the gap, so falling into
 an aligned loop costs one instruction.
 
+A loop that tests its counter against its constant start value runs that test
+false from the second iteration on, so the first iteration is peeled off and
+the test is gone from the loop (`SALAM_NG_OFF=lpeel`; `n == 0 ? dc : ac` in the
+WebP quantizer, `u == 0 ? inv : 1.0` in the JPEG DCT). A division whose operands
+do not change in a loop is hoisted when the first iteration is certain to reach
+it (`SALAM_NG_OFF=divh`), since it would have trapped there anyway, and a
+compare for equality with a value outside the known range of its operand folds
+(`SALAM_NG_OFF=eqrng`). Runtime unrolling skips loops that divide by a
+non-constant (`SALAM_NG_OFF=runfdiv`): the division dwarfs the branch it saves,
+and the doubled body put `_vp8_quant` over the inline limit, which is what keeps
+those folds from firing at its call sites. The vectorizer may hoist up to eight
+loads from an arbitrary pointer when the first iteration reaches them
+(`SALAM_NG_OFF=lvfi`), which covers the second pass of `_fdct8x8` once its first
+iteration is peeled. Counted with callgrind, all together: `image_basics` 524.85
+to 495.72 million instructions (x86-64-v3: 485.66 to 452.41). `image_rtl_card`
+gains 0.07% (139.54 to 139.65; a loop with a rarely run division stays
+ununrolled), all 42 benchmarks are the same binary, and a compile job is
+unchanged.
+
 The last optimizer step turns a branch on an `and` or `or` of two conditions
 back into two branches (`SALAM_NG_OFF=andbr`). The branch chains get folded
 into one condition earlier so that loops stay single-block for the
@@ -1262,7 +1281,7 @@ ret end` at the top of a recursive AST walk) tests that parameter before
 - `SALAM_NG_DUMP=main salam build app.salam --backend=native` prints the
   optimized IR of `main`. Function names are the mangled ones you see in the
   listing, and a comma-separated list dumps several functions.
-- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,vnarrow,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,loopinl,cpelim,tord,vrev,cdown,tfold,mexit,sqself,vsign,redinv,ldcmp,phix,selinc,wweb,wwdep,wwtr,tdup,padjmp,dtst,zins,ndiv,niv,cmp64,adc64,rvc,avx2,rasp,hotpath,inlnest,spromo,ypack,ysum,winv,zxcmp,cpspill,scdead,yzext,uswsel,vex3,vabs,vdemor,lvnsw,vblend,xfree,lvunr,vtail,vkpool,remat,sse41,shbudg,andbr,lhloc,aggphi`
+- `SALAM_NG_OFF=gvn,ifc,slp,thread,inline,sroa,tailrec,selfinl,unroll,licm,unswitch,lle,dbits,idiom,rvec,iss,runroll,widen,sink,lhoist,mlp,ipcp,belady,aload,lsr,lcse,range,split,mmchain,inl1,afwd,lpro,lsf,scse,lpre,dtest,fch,p2div,aggbonus,rot,bitsimp,xsplit,lreas,swtab,allocep,dse,sxadd,rmw,mtie,usim,inlunr,chain,selhoist,mpre,dloop,lvec,vnarrow,shoist,asplit,pst,sfld,isite,chst,fastx,sscale,ccse,kstr,nowr,crng,jload,mxun,gbase,bcmp,mreas,dcse,aggres,tiny,kbr,paddr,izero,istore,stfwd,seltie,cpref,llphi,memaddr,vshv,lvhoist,vcount,viv,loopinl,cpelim,tord,vrev,cdown,tfold,mexit,sqself,vsign,redinv,ldcmp,phix,selinc,wweb,wwdep,wwtr,tdup,padjmp,dtst,zins,ndiv,niv,cmp64,adc64,rvc,avx2,rasp,hotpath,inlnest,spromo,ypack,ysum,winv,zxcmp,cpspill,scdead,yzext,uswsel,vex3,vabs,vdemor,lvnsw,vblend,xfree,lvunr,vtail,vkpool,remat,sse41,shbudg,lhloc,aggphi,runfdiv,eqrng,lpeel,divh,lvfi,andbr`
   turns optimizer passes off, which is the quickest way to find the pass
   behind a wrong result. `lcse` is the load part of value numbering and
   `split` the loop live-range splitting in the allocator and `rasp` the

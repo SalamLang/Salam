@@ -2,6 +2,7 @@ package nativegen
 
 const UNR_MAX_TRIP := 32
 const UNR_MAX_SIZE := 320
+const PEEL_MAX_SIZE := 160
 
 pub struct Unr:
     pub inl: Vector<bool> = Vector {}
@@ -835,4 +836,223 @@ func once_loop(g &: Ng, u &: Unr, h: int, latch: int): bool:
         g.i_c[lterm] = ex
     end
     ret true
+end
+
+func peel_iv_test(g &: Ng, h: int, pre: int, latch: int, i: int): bool:
+    if g.i_op[i] != OP_ICMP or (g.i_x[i] != CC_EQ and g.i_x[i] != CC_NE):
+        ret false
+    end
+    a := g.i_a[i]
+    b := g.i_b[i]
+    if a < 0 or b < 0 or g.v_kind[a] != VK_INS or not is_cint(g, b):
+        ret false
+    end
+    d := g.v_def[a]
+    if g.i_op[d] != OP_PHI or g.i_blk[d] != h:
+        ret false
+    end
+    s0 := phi_val_for(g, d, pre)
+    nx := phi_val_for(g, d, latch)
+    if s0 < 0 or nx < 0 or not is_cint(g, s0) or g.v_kind[nx] != VK_INS:
+        ret false
+    end
+    sd := g.v_def[nx]
+    if g.i_op[sd] != OP_ADD or (g.i_f[sd] & IF_NSW) == 0 or g.i_a[sd] != a or not is_cint(g, g.i_b[sd]) or g.v_i[g.i_b[sd]] <= (0 as i64):
+        ret false
+    end
+    ret norm_int(g, g.v_ty[a], g.v_i[s0]) == norm_int(g, g.v_ty[a], g.v_i[b])
+end
+
+func peel_shape_ok(g &: Ng, u &: Unr, h: int, latch: int, pre: int): bool:
+    t := g.b_last[h]
+    if t < 0 or g.i_op[t] != OP_CBR or u.inl[g.i_b[t]] == u.inl[g.i_c[t]]:
+        ret false
+    end
+    mut cst := 0 as i64
+    if not entry_const(g, h, pre, g.i_a[t], cst):
+        ret false
+    end
+    if (cst != (0 as i64)) != u.inl[g.i_b[t]]:
+        ret false
+    end
+    mut n := 0
+    mut hit := false
+    mut succ := Vector {} as Vector<int>
+    each b in u.blocks:
+        if b != h and g.b_order[b] < g.b_order[h]:
+            succ.free()
+            ret false
+        end
+        if b != h:
+            blk_succs(g, b, succ)
+            each s in succ:
+                if not u.inl[s] or (s == h and b != latch):
+                    succ.free()
+                    ret false
+                end
+            end
+        end
+        mut i := g.b_first[b]
+        until i >= 0:
+            op := g.i_op[i]
+            if op == OP_ALLOCA:
+                succ.free()
+                ret false
+            end
+            if b != h and op == OP_PHI:
+                ps := g.i_ps[i]
+                repeat g.i_pcount[i] in q:
+                    if g.pool[ps + 2 * q + 1] == h:
+                        succ.free()
+                        ret false
+                    end
+                end
+            end
+            if peel_iv_test(g, h, pre, latch, i):
+                hit = true
+            end
+            n += 1
+            i = g.i_next[i]
+        end
+    end
+    succ.free()
+    ret hit and n <= PEEL_MAX_SIZE
+end
+
+func peel_one(g &: Ng, u &: Unr, h: int, latch: int, pre: int):
+    t := g.b_last[h]
+    in_succ := u.inl[g.i_b[t]] ? g.i_b[t] : g.i_c[t]
+    n0 := g.v_kind.len()
+    u.vmap.clear()
+    repeat n0:
+        u.vmap.push(0 - 1)
+    end
+    mut order := Vector {} as Vector<int>
+    each b in g.b_rpo:
+        if b != h and u.inl[b]:
+            order.push(b)
+        end
+    end
+    u.bmap.clear()
+    repeat g.b_first.len():
+        u.bmap.push(0 - 1)
+    end
+    hk := new_blk(g)
+    each b2 in order:
+        u.bmap[b2] = new_blk(g)
+    end
+    mut i := g.b_first[h]
+    until i >= 0 and g.i_op[i] == OP_PHI:
+        u.vmap[g.i_res[i]] = phi_val_for(g, i, pre)
+        i = g.i_next[i]
+    end
+    until i >= 0:
+        if i == t:
+            br := ins_new(g, OP_BR, T_VOID)
+            g.i_b[br] = u.bmap[in_succ]
+            ins_append(g, hk, br)
+        else:
+            _c := clone_into(g, u, i, hk, h, h, hk)
+        end
+        i = g.i_next[i]
+    end
+    each b3 in order:
+        mut j := g.b_first[b3]
+        until j >= 0:
+            _c2 := clone_into(g, u, j, u.bmap[b3], h, h, hk)
+            j = g.i_next[j]
+        end
+    end
+    repeat g.dq_ni.len() in dq:
+        dv_ev_add(g, g.dq_ni[dq], g.dq_fv[dq], unr_val(u, g.dq_v[dq]))
+    end
+    dv_queue_clear(g)
+    replace_succ(g, g.b_last[pre], h, hk)
+    each b4 in u.blocks:
+        mut k := g.b_first[b4]
+        until k >= 0:
+            if peel_iv_test(g, h, pre, latch, k):
+                r := g.i_res[k]
+                repl_grow(g)
+                g.v_repl[r] = const_int(g, T_I1, g.i_x[k] == CC_NE ? (1 as i64) : (0 as i64))
+            end
+            k = g.i_next[k]
+        end
+    end
+    mut pi := g.b_first[h]
+    until pi >= 0 and g.i_op[pi] == OP_PHI:
+        ps := g.i_ps[pi]
+        repeat g.i_pcount[pi] in q:
+            if g.pool[ps + 2 * q + 1] == pre:
+                g.pool[ps + 2 * q] = unr_val(u, phi_val_for(g, pi, latch))
+                g.pool[ps + 2 * q + 1] = u.bmap[latch]
+            end
+        end
+        pi = g.i_next[pi]
+    end
+    order.free()
+end
+
+func peel_loops(g &: Ng): bool:
+    build_dom(g)
+    mut u := Unr {}
+    mut succ := Vector {} as Vector<int>
+    mut done := false
+    each b in g.b_rpo:
+        if done:
+            break
+        end
+        blk_succs(g, b, succ)
+        each h in succ:
+            if done or not dominates(g, h, b) or g.b_npred[h] != 2 or b == h:
+                continue
+            end
+            mut pre := g.b_pred[g.b_ps[h]]
+            if pre == b:
+                pre = g.b_pred[g.b_ps[h] + 1]
+            end
+            pt := g.b_last[pre]
+            if pt < 0 or g.i_op[pt] != OP_BR:
+                continue
+            end
+            if not loop_blocks(g, u, h, b):
+                continue
+            end
+            mut inner := false
+            each lb in u.blocks:
+                if lb != h:
+                    blk_succs(g, lb, u.wl)
+                    each s in u.wl:
+                        if s != h and u.inl[s] and g.b_order[s] <= g.b_order[lb]:
+                            inner = true
+                        end
+                    end
+                end
+            end
+            if inner or not peel_shape_ok(g, u, h, b, pre):
+                continue
+            end
+            peel_one(g, u, h, b, pre)
+            done = true
+        end
+    end
+    succ.free()
+    u.inl.free()
+    u.blocks.free()
+    u.vmap.free()
+    u.pmap.free()
+    u.bmap.free()
+    u.heads.free()
+    u.wl.free()
+    u.ivals.free()
+    u.xphi.free()
+    u.xval.free()
+    u.xblk.free()
+    if done:
+        ensure_terms(g)
+        build_cfg(g)
+        remap_all(g)
+        simplify_phis(g)
+    end
+    ret done
 end

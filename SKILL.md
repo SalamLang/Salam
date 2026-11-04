@@ -1997,8 +1997,9 @@ C pointer types (`void*`, `u16*`, `T*`) and `null` are available for interop.
 Structs can be passed to and returned from `extern:` functions by value; the
 compiler follows the C ABI of the target (System V and Windows on x86-64,
 AArch64), so `func ClearBackground(c: Color)` matches a C `Color`. Field order and
-types must match the C struct. `--backend=native` refuses such calls. A function in
-an extern block may be `pub`, carry `@en`/`@fa`, and then be called as
+types must match the C struct. The same holds for `extern func (...)` pointers, for
+`export:` functions, and for `&fn` handed to C as a callback, on every backend. A
+function in an extern block may be `pub`, carry `@en`/`@fa`, and then be called as
 `pkg.Name`; the C symbol is always the declared name.
 
 **Exporting Salam functions to C (`export:`):** `extern:` only _declares_

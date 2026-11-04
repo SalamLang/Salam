@@ -180,6 +180,18 @@ pub struct Options:
     @en "inbox_prefix"
     @fa "پیشوند صندوق"
     pub inbox_prefix: str = "_INBOX"
+    @en "servers"
+    @fa "کارگزارها"
+    pub servers: Vector<str> = Vector {} as Vector<str>
+    @en "max_reconnects"
+    @fa "بیشینه اتصال دوباره"
+    pub max_reconnects: int = 0
+    @en "reconnect_wait_ms"
+    @fa "انتظار اتصال دوباره میلی‌ثانیه"
+    pub reconnect_wait_ms: int = 2000
+    @en "reconnect_buffer"
+    @fa "بافر اتصال دوباره"
+    pub reconnect_buffer: int = 8388608
 end
 
 @en "Stats"
@@ -226,49 +238,51 @@ pub struct Conn:
     @en "stats"
     @fa "آمار"
     pub stats: Stats = Stats {}
-    pub plain: tcp.Conn = tcp.Conn {}
-    pub tc: tls.Conn = tls.Conn {}
-    pub secure: bool = false
-    pub buf: str = ""
-    pub pos: int = 0
-    pub next_sid: int = 1
-    pub pings_sent: int = 0
-    pub pongs_recv: int = 0
-    pub last_activity: i64 = 0
-    pub sub_sid: Vector<int> = Vector {} as Vector<int>
-    pub sub_subject: Vector<str> = Vector {} as Vector<str>
-    pub sub_queue: Vector<str> = Vector {} as Vector<str>
-    pub sub_kind: Vector<int> = Vector {} as Vector<int>
-    pub sub_max: Vector<int> = Vector {} as Vector<int>
-    pub sub_count: Vector<int> = Vector {} as Vector<int>
-    pub sub_slot: Vector<int> = Vector {} as Vector<int>
-    pub handlers: Vector<func (Msg)> = Vector {} as Vector<func (Msg)>
-    pub repliers: Vector<func (Msg) str> = Vector {} as Vector<func (Msg) str>
-    pub inbox: Vector<Msg> = Vector {} as Vector<Msg>
+    pub _plain: tcp.Conn = tcp.Conn {}
+    pub _tc: tls.Conn = tls.Conn {}
+    pub _secure: bool = false
+    pub _buf: str = ""
+    pub _pos: int = 0
+    pub _next_sid: int = 1
+    pub _pings_sent: int = 0
+    pub _pongs_recv: int = 0
+    pub _last_activity: i64 = 0
+    pub _sub_sid: Vector<int> = Vector {} as Vector<int>
+    pub _sub_subject: Vector<str> = Vector {} as Vector<str>
+    pub _sub_queue: Vector<str> = Vector {} as Vector<str>
+    pub _sub_kind: Vector<int> = Vector {} as Vector<int>
+    pub _sub_max: Vector<int> = Vector {} as Vector<int>
+    pub _sub_count: Vector<int> = Vector {} as Vector<int>
+    pub _sub_slot: Vector<int> = Vector {} as Vector<int>
+    pub _handlers: Vector<func (Msg)> = Vector {} as Vector<func (Msg)>
+    pub _repliers: Vector<func (Msg) str> = Vector {} as Vector<func (Msg) str>
+    pub _inbox: Vector<Msg> = Vector {} as Vector<Msg>
+    pub _pool: Vector<str> = Vector {} as Vector<str>
+    pub _sockopen: bool = false
+    pub _opening: bool = false
+    pub _reconnecting: bool = false
+    pub _reconnects: int = 0
+    pub _attempts: int = 0
+    pub _last_attempt: i64 = 0
+    pub _srv_idx: int = 0
+    pub _pending: str = ""
 end
 
 func _now(): i64:
     ret sync.NowMs()
 end
 
-func _write(nc &: Conn, data: str): bool:
-    if nc.closed:
-        nc.err = "connection closed"
-        ret false
+func _close_sock(nc &: Conn):
+    if not nc._sockopen:
+        ret
     end
-    mut n := 0
-    if nc.secure:
-        n = tls.Write(nc.tc, data)
+    nc._sockopen = false
+    if nc._secure:
+        tls.Close(nc._tc)
     else:
-        n = tcp.Write(nc.plain, data)
+        tcp.Close(nc._plain)
     end
-    if n < data.len():
-        nc.err = "write failed"
-        _shutdown(nc)
-        ret false
-    end
-    nc.last_activity = _now()
-    ret true
+    nc._secure = false
 end
 
 func _shutdown(nc &: Conn):
@@ -277,46 +291,107 @@ func _shutdown(nc &: Conn):
     end
     nc.closed = true
     nc.ok = false
-    if nc.secure:
-        tls.Close(nc.tc)
-    else:
-        tcp.Close(nc.plain)
+    nc._reconnecting = false
+    nc._pending = ""
+    _close_sock(nc)
+end
+
+func _lost(nc &: Conn):
+    if nc._opening:
+        nc.ok = false
+        _close_sock(nc)
+        ret
     end
+    if nc.closed or nc._reconnecting:
+        ret
+    end
+    if nc.draining or nc.opts.max_reconnects == 0:
+        _shutdown(nc)
+        ret
+    end
+    _close_sock(nc)
+    nc.ok = false
+    nc._reconnecting = true
+    nc._attempts = 0
+    nc._last_attempt = 0
+    nc._buf = ""
+    nc._pos = 0
+end
+
+func _write(nc &: Conn, data: str): bool:
+    if nc.closed:
+        nc.err = "connection closed"
+        ret false
+    end
+    if (nc._reconnecting and not nc._opening) or not nc._sockopen:
+        nc.err = "reconnecting"
+        ret false
+    end
+    mut n := 0
+    if nc._secure:
+        n = tls.Write(nc._tc, data)
+    else:
+        n = tcp.Write(nc._plain, data)
+    end
+    if n < data.len():
+        nc.err = "write failed"
+        _lost(nc)
+        ret false
+    end
+    nc._last_activity = _now()
+    ret true
+end
+
+func _write_pub(nc &: Conn, frame: str): bool:
+    if not nc._reconnecting:
+        if _write(nc, frame):
+            ret true
+        end
+        if not nc._reconnecting:
+            ret false
+        end
+    end
+    if nc._pending.len() + frame.len() > nc.opts.reconnect_buffer:
+        nc.err = "reconnect buffer full"
+        ret false
+    end
+    nc._pending += frame
+    ret true
 end
 
 func _fill(nc &: Conn, timeout_ms: int): int:
-    if nc.closed:
+    if nc.closed or (nc._reconnecting and not nc._opening) or not nc._sockopen:
         ret 0 - 1
     end
     mut chunk := ""
-    if nc.secure:
-        if not tls.Readable(nc.tc):
-            if not rawsock.WaitReadable(rawsock.FromFd(tls.Fd(nc.tc)), timeout_ms):
+    if nc._secure:
+        if not tls.Readable(nc._tc):
+            if not rawsock.WaitReadable(rawsock.FromFd(tls.Fd(nc._tc)), timeout_ms):
                 ret 0
             end
         end
-        chunk = tls.Read(nc.tc, 65536)
+        chunk = tls.Read(nc._tc, 65536)
     else:
-        if not rawsock.WaitReadable(rawsock.FromFd(nc.plain.fd), timeout_ms):
+        if not rawsock.WaitReadable(rawsock.FromFd(nc._plain.fd), timeout_ms):
             ret 0
         end
-        chunk = tcp.Read(nc.plain, 65536)
+        chunk = tcp.Read(nc._plain, 65536)
     end
     if chunk.len() == 0:
         if nc.err.len() == 0:
             nc.err = "connection lost"
         end
-        _shutdown(nc)
+        _lost(nc)
         ret 0 - 1
     end
-    nc.buf += chunk
-    nc.last_activity = _now()
+    nc._buf += chunk
+    nc._last_activity = _now()
     ret chunk.len()
 end
 
 func _find_sub(nc: Conn, sid: int): int:
-    repeat nc.sub_sid.len() in i:
-        if nc.sub_sid.get(i) == sid:
+    repeat nc._sub_sid.len() in i:
+        if nc._sub_sid.get(i) == sid:
             ret i
         end
     end
@@ -324,7 +399,7 @@ func _find_sub(nc: Conn, sid: int): int:
 end
 
 func _tombstone(nc &: Conn, idx: int):
-    nc.sub_sid.set(idx, 0 - nc.sub_sid.get(idx))
+    nc._sub_sid.set(idx, 0 - nc._sub_sid.get(idx))
 end
 
 func _deliver(nc &: Conn, m: Msg):
@@ -334,25 +409,25 @@ func _deliver(nc &: Conn, m: Msg):
     end
     nc.stats.in_msgs += 1
     nc.stats.in_bytes += m.data.len() as i64
-    cnt := nc.sub_count.get(idx) + 1
-    nc.sub_count.set(idx, cnt)
-    kind := nc.sub_kind.get(idx)
-    slot := nc.sub_slot.get(idx)
-    mx := nc.sub_max.get(idx)
+    cnt := nc._sub_count.get(idx) + 1
+    nc._sub_count.set(idx, cnt)
+    kind := nc._sub_kind.get(idx)
+    slot := nc._sub_slot.get(idx)
+    mx := nc._sub_max.get(idx)
     if mx > 0 and cnt >= mx:
         _tombstone(nc, idx)
     end
     if kind == KIND_HANDLER:
-        h := nc.handlers.get(slot)
+        h := nc._handlers.get(slot)
         h(m)
     else kind == KIND_REPLIER:
-        r := nc.repliers.get(slot)
+        r := nc._repliers.get(slot)
         answer := r(m)
         if m.reply.len() > 0:
             _publish_raw(nc, m.reply, "", Header {}, false, answer)
         end
     else:
-        nc.inbox.push(m)
+        nc._inbox.push(m)
     end
 end
 
@@ -397,11 +472,11 @@ end
 func _process(nc &: Conn): int:
     mut handled := 0
     until true:
-        eol := str.IndexFrom(nc.buf, "\r\n", nc.pos)
+        eol := str.IndexFrom(nc._buf, "\r\n", nc._pos)
         if eol < 0:
             break
         end
-        line := nc.buf.substr(nc.pos, eol - nc.pos)
+        line := nc._buf.substr(nc._pos, eol - nc._pos)
         after := eol + 2
         if line.starts_with("MSG ") or line.starts_with("HMSG "):
             hm := line.starts_with("HMSG ")
@@ -427,7 +502,7 @@ func _process(nc &: Conn): int:
                 _shutdown(nc)
                 break
             end
-            if nc.buf.len() - after < total + 2:
+            if nc._buf.len() - after < total + 2:
                 break
             end
             mut m := Msg {}
@@ -438,61 +513,61 @@ func _process(nc &: Conn): int:
                 m.reply = args.get(3)
             end
             if hm:
-                block := nc.buf.substr(after, hlen)
+                block := nc._buf.substr(after, hlen)
                 mut st := 0
                 mut stt := ""
                 m.header = HeaderParse(block, st, stt)
                 m.status = st
                 m.status_text = stt
             end
-            m.data = nc.buf.substr(after + hlen, total - hlen)
-            nc.pos = after + total + 2
+            m.data = nc._buf.substr(after + hlen, total - hlen)
+            nc._pos = after + total + 2
             handled += 1
             _deliver(nc, m)
             if nc.closed:
                 break
             end
         else line.starts_with("PING"):
-            nc.pos = after
+            nc._pos = after
             _write(nc, "PONG\r\n")
         else line.starts_with("PONG"):
-            nc.pos = after
-            nc.pongs_recv += 1
+            nc._pos = after
+            nc._pongs_recv += 1
         else line.starts_with("+OK"):
-            nc.pos = after
+            nc._pos = after
         else line.starts_with("-ERR"):
-            nc.pos = after
+            nc._pos = after
             _handle_err(nc, line)
             if nc.closed:
                 break
             end
         else line.starts_with("INFO "):
-            nc.pos = after
+            nc._pos = after
             nc.info = _parse_info(line)
         else:
-            nc.pos = after
+            nc._pos = after
         end
     end
-    if nc.pos > 0:
-        nc.buf = nc.buf.substr(nc.pos, nc.buf.len() - nc.pos)
-        nc.pos = 0
+    if nc._pos > 0:
+        nc._buf = nc._buf.substr(nc._pos, nc._buf.len() - nc._pos)
+        nc._pos = 0
     end
     ret handled
 end
 
 func _keepalive(nc &: Conn):
-    if nc.closed or nc.opts.ping_interval_ms <= 0:
+    if nc.closed or nc._reconnecting or nc.opts.ping_interval_ms <= 0:
         ret
     end
-    if _now() - nc.last_activity < nc.opts.ping_interval_ms as i64:
+    if _now() - nc._last_activity < nc.opts.ping_interval_ms as i64:
         ret
     end
-    if nc.pings_sent - nc.pongs_recv > nc.opts.max_pings_out:
+    if nc._pings_sent - nc._pongs_recv > nc.opts.max_pings_out:
         nc.err = "stale connection"
-        _shutdown(nc)
+        _lost(nc)
         ret
     end
-    nc.pings_sent += 1
+    nc._pings_sent += 1
     _write(nc, "PING\r\n")
 end
 
@@ -547,7 +622,7 @@ func _connect_json(nc: Conn, user: str, pass: str, token: str): str:
     defer members.free()
     members.push(json.MemberBool("verbose", o.verbose))
     members.push(json.MemberBool("pedantic", o.pedantic))
-    members.push(json.MemberBool("tls_required", nc.secure))
+    members.push(json.MemberBool("tls_required", nc._secure))
     if o.name.len() > 0:
         members.push(json.Member("name", o.name))
     end
@@ -600,7 +675,7 @@ func _publish_raw(nc &: Conn, subject: str, reply: str, h: Header, with_header: 
         nc.err = "maximum payload exceeded"
         ret false
     end
-    if not _write(nc, frame):
+    if not _write_pub(nc, frame):
         ret false
     end
     nc.stats.out_msgs += 1
@@ -618,19 +693,23 @@ func _add_sub(nc &: Conn, subject: str, queue: str, kind: int, slot: int): Subsc
         nc.err = "invalid subject"
         ret s
     end
-    sid := nc.next_sid
+    sid := nc._next_sid
     line := "SUB " + subject + (queue.len() > 0 ? " " + queue : "") + " " + conv.FormatInt(sid as i64) + "\r\n"
-    if not _write(nc, line):
-        ret s
+    if not nc._reconnecting:
+        if not _write(nc, line):
+            if not nc._reconnecting:
+                ret s
+            end
+        end
     end
-    nc.next_sid += 1
-    nc.sub_sid.push(sid)
-    nc.sub_subject.push(subject)
-    nc.sub_queue.push(queue)
-    nc.sub_kind.push(kind)
-    nc.sub_max.push(0)
-    nc.sub_count.push(0)
-    nc.sub_slot.push(slot)
+    nc._next_sid += 1
+    nc._sub_sid.push(sid)
+    nc._sub_subject.push(subject)
+    nc._sub_queue.push(queue)
+    nc._sub_kind.push(kind)
+    nc._sub_max.push(0)
+    nc._sub_count.push(0)
+    nc._sub_slot.push(slot)
     s.ok = true
     s.sid = sid
     s.subject = subject
@@ -639,24 +718,212 @@ func _add_sub(nc &: Conn, subject: str, queue: str, kind: int, slot: int): Subsc
 end
 
 func _drop_inbox(nc &: Conn, sid: int):
-    mut i := nc.inbox.len() - 1
+    mut i := nc._inbox.len() - 1
     until i >= 0:
-        if nc.inbox.get(i).sid == sid:
-            nc.inbox.remove_at(i)
+        if nc._inbox.get(i).sid == sid:
+            nc._inbox.remove_at(i)
         end
         i -= 1
     end
 end
 
 func _take(nc &: Conn, sid: int): Msg:
-    repeat nc.inbox.len() in i:
-        if nc.inbox.get(i).sid == sid:
-            m := nc.inbox.get(i)
-            nc.inbox.remove_at(i)
+    repeat nc._inbox.len() in i:
+        if nc._inbox.get(i).sid == sid:
+            m := nc._inbox.get(i)
+            nc._inbox.remove_at(i)
             ret m
         end
     end
     ret Msg {}
+end
+
+func _open(nc &: Conn, url: str): bool:
+    opts := nc.opts
+    mut host := ""
+    mut port := DEFAULT_PORT
+    mut user := opts.user
+    mut pass := opts.password
+    mut token := opts.token
+    mut want_tls := opts.secure
+    mut url_tls := false
+    if not _parse_url(url, host, port, user, pass, token, url_tls):
+        nc.err = "invalid url"
+        ret false
+    end
+    if url_tls:
+        want_tls = true
+    end
+    tmo := opts.timeout_ms > 0 ? opts.timeout_ms : 5000
+    nc._buf = ""
+    nc._pos = 0
+    nc._secure = false
+    nc._plain = tcp.DialTimeout(host, port, tmo)
+    if not tcp.ConnOk(nc._plain):
+        nc.err = "could not connect to " + host + ":" + conv.FormatInt(port as i64)
+        ret false
+    end
+    nc._sockopen = true
+    nc._opening = true
+    nc.url = url
+    deadline := _now() + tmo as i64
+    until true:
+        if str.IndexFrom(nc._buf, "\r\n", 0) >= 0:
+            if not nc._buf.starts_with("INFO "):
+                nc.err = "expected INFO from server"
+                _close_sock(nc)
+                nc._opening = false
+                ret false
+            end
+            eol := nc._buf.find("\r\n")
+            nc.info = _parse_info(nc._buf.substr(0, eol))
+            nc._buf = nc._buf.substr(eol + 2, nc._buf.len() - eol - 2)
+            break
+        end
+        left := deadline - _now()
+        if left <= 0:
+            nc.err = "timeout waiting for INFO"
+            _close_sock(nc)
+            nc._opening = false
+            ret false
+        end
+        if _fill(nc, left as int) < 0:
+            nc.err = "connection lost before INFO"
+            _close_sock(nc)
+            nc._opening = false
+            ret false
+        end
+    end
+    if nc.info.tls_required or want_tls:
+        mut cfg := tls.NewConfig(host)
+        cfg.insecure_skip_verify = opts.insecure_skip_verify
+        nc._tc = tcp.UpgradeTLS(nc._plain, cfg)
+        if not tls.ConnOk(nc._tc):
+            nc.err = "tls handshake failed: " + tls.ConnError(nc._tc)
+            _close_sock(nc)
+            nc._opening = false
+            ret false
+        end
+        nc._secure = true
+    end
+    if nc.info.auth_required and user.len() == 0 and token.len() == 0:
+        nc.err = "authorization required"
+        _close_sock(nc)
+        nc._opening = false
+        ret false
+    end
+    cj := _connect_json(nc, user, pass, token)
+    nc._pings_sent = 1
+    nc._pongs_recv = 0
+    if not _write(nc, "CONNECT " + cj + "\r\nPING\r\n"):
+        nc._opening = false
+        ret false
+    end
+    until nc._pongs_recv >= 1:
+        left := deadline - _now()
+        if left <= 0:
+            nc.err = "timeout waiting for PONG"
+            _close_sock(nc)
+            nc._opening = false
+            ret false
+        end
+        _process(nc)
+        if nc.closed:
+            nc._opening = false
+            ret false
+        end
+        if nc._pongs_recv < 1:
+            if _fill(nc, left as int) < 0:
+                if nc.err.len() == 0 or nc.err == "connection lost":
+                    nc.err = "connection lost during handshake"
+                end
+                nc._opening = false
+                ret false
+            end
+        end
+    end
+    nc._opening = false
+    nc.ok = true
+    nc._last_activity = _now()
+    ret true
+end
+
+func _resubscribe(nc &: Conn): bool:
+    mut out := ""
+    repeat nc._sub_sid.len() in i:
+        sid := nc._sub_sid.get(i)
+        if sid <= 0:
+            continue
+        end
+        out += "SUB " + nc._sub_subject.get(i) + (nc._sub_queue.get(i).len() > 0 ? " " + nc._sub_queue.get(i) : "") + " " + conv.FormatInt(sid as i64) + "\r\n"
+        mx := nc._sub_max.get(i)
+        if mx > 0:
+            left := mx - nc._sub_count.get(i)
+            if left > 0:
+                out += "UNSUB " + conv.FormatInt(sid as i64) + " " + conv.FormatInt(left as i64) + "\r\n"
+            end
+        end
+    end
+    if nc._pending.len() > 0:
+        out += nc._pending
+    end
+    if out.len() == 0:
+        ret true
+    end
+    if not _write(nc, out):
+        ret false
+    end
+    nc._pending = ""
+    ret true
+end
+
+func _reconnect(nc &: Conn, timeout_ms: int): bool:
+    deadline := _now() + timeout_ms as i64
+    if not nc._reconnecting or nc.closed:
+        ret nc.ok
+    end
+    until true:
+        mx := nc.opts.max_reconnects
+        if mx > 0 and nc._attempts >= mx:
+            nc.err = "maximum reconnects exceeded"
+            _shutdown(nc)
+            ret false
+        end
+        wait := nc.opts.reconnect_wait_ms
+        since := _now() - nc._last_attempt
+        if nc._last_attempt > 0 and since < wait as i64:
+            mut pause := wait as i64 - since
+            left := deadline - _now()
+            if pause > left:
+                pause = left
+            end
+            if pause > 0:
+                sync.SleepMs(pause as int)
+            end
+            if _now() - nc._last_attempt < wait as i64:
+                ret false
+            end
+        end
+        nc._last_attempt = _now()
+        url := nc._pool.get(nc._srv_idx % nc._pool.len())
+        nc._srv_idx += 1
+        nc._attempts += 1
+        if _open(nc, url):
+            nc._reconnecting = false
+            nc._reconnects += 1
+            nc._attempts = 0
+            if not _resubscribe(nc):
+                ret false
+            end
+            ret true
+        end
+        if nc.closed:
+            ret false
+        end
+        if _now() >= deadline:
+            ret false
+        end
+    end
 end
 
 @en "DefaultOptions"
@@ -832,6 +1099,10 @@ end
 @en "Pump"
 @fa "پردازش"
 pub func Pump(nc &: Conn, timeout_ms: int): int:
+    if nc._reconnecting:
+        _reconnect(nc, timeout_ms)
+        ret 0
+    end
     mut handled := _process(nc)
     if handled > 0 or nc.closed:
         ret handled
@@ -857,82 +1128,22 @@ pub func ConnectWith(url: str, opts: Options): Conn:
     mut nc := Conn {}
     nc.url = url
     nc.opts = opts
-    mut host := ""
-    mut port := DEFAULT_PORT
-    mut user := opts.user
-    mut pass := opts.password
-    mut token := opts.token
-    mut want_tls := opts.secure
-    mut url_tls := false
-    if not _parse_url(url, host, port, user, pass, token, url_tls):
-        ret _fail(nc, "invalid url")
+    nc._pool.push(url)
+    each sv in opts.servers:
+        nc._pool.push(sv)
     end
-    if url_tls:
-        want_tls = true
-    end
-    tmo := opts.timeout_ms > 0 ? opts.timeout_ms : 5000
-    nc.plain = tcp.DialTimeout(host, port, tmo)
-    if not tcp.ConnOk(nc.plain):
-        nc.closed = false
-        ret _fail(nc, "could not connect to " + host + ":" + conv.FormatInt(port as i64))
-    end
-    deadline := _now() + tmo as i64
-    until true:
-        if str.IndexFrom(nc.buf, "\r\n", 0) >= 0:
-            if not nc.buf.starts_with("INFO "):
-                ret _fail(nc, "expected INFO from server")
-            end
-            eol := nc.buf.find("\r\n")
-            nc.info = _parse_info(nc.buf.substr(0, eol))
-            nc.buf = nc.buf.substr(eol + 2, nc.buf.len() - eol - 2)
-            break
+    mut last := ""
+    repeat nc._pool.len() in i:
+        if _open(nc, nc._pool.get(i)):
+            nc._srv_idx = i + 1
+            ret nc
         end
-        left := deadline - _now()
-        if left <= 0:
-            ret _fail(nc, "timeout waiting for INFO")
-        end
-        if _fill(nc, left as int) < 0:
-            ret _fail(nc, "connection lost before INFO")
-        end
-    end
-    if nc.info.tls_required or want_tls:
-        mut cfg := tls.NewConfig(host)
-        cfg.insecure_skip_verify = opts.insecure_skip_verify
-        nc.tc = tcp.UpgradeTLS(nc.plain, cfg)
-        if not tls.ConnOk(nc.tc):
-            ret _fail(nc, "tls handshake failed: " + tls.ConnError(nc.tc))
-        end
-        nc.secure = true
-    end
-    if nc.info.auth_required and user.len() == 0 and token.len() == 0:
-        ret _fail(nc, "authorization required")
-    end
-    cj := _connect_json(nc, user, pass, token)
-    nc.pings_sent = 1
-    if not _write(nc, "CONNECT " + cj + "\r\nPING\r\n"):
-        ret nc
-    end
-    nc.ok = true
-    until nc.pongs_recv >= 1:
-        left := deadline - _now()
-        if left <= 0:
-            ret _fail(nc, "timeout waiting for PONG")
-        end
-        _process(nc)
+        last = nc.err
         if nc.closed:
             ret nc
         end
-        if nc.pongs_recv < 1:
-            if _fill(nc, left as int) < 0:
-                if nc.err.len() == 0 or nc.err == "connection lost":
-                    nc.err = "connection lost during handshake"
-                end
-                ret nc
-            end
-        end
     end
-    nc.last_activity = _now()
-    ret nc
+    ret _fail(nc, last)
 end
 
 @en "IsConnected"
@@ -1024,16 +1235,16 @@ end
 @en "SubscribeHandler"
 @fa "اشتراک با دستگیره"
 pub func SubscribeHandler(nc &: Conn, subject: str, queue: str, handler: func (Msg)): Subscription:
-    slot := nc.handlers.len()
-    nc.handlers.push(handler)
+    slot := nc._handlers.len()
+    nc._handlers.push(handler)
     ret _add_sub(nc, subject, queue, KIND_HANDLER, slot)
 end
 
 @en "SubscribeReplier"
 @fa "اشتراک پاسخگو"
 pub func SubscribeReplier(nc &: Conn, subject: str, queue: str, handler: func (Msg) str): Subscription:
-    slot := nc.repliers.len()
-    nc.repliers.push(handler)
+    slot := nc._repliers.len()
+    nc._repliers.push(handler)
     ret _add_sub(nc, subject, queue, KIND_REPLIER, slot)
 end
 
@@ -1046,6 +1257,9 @@ pub func Unsubscribe(nc &: Conn, s: Subscription): bool:
     end
     _tombstone(nc, idx)
     _drop_inbox(nc, s.sid)
+    if nc._reconnecting:
+        ret true
+    end
     ret _write(nc, "UNSUB " + conv.FormatInt(s.sid as i64) + "\r\n")
 end
 
@@ -1056,9 +1270,12 @@ pub func AutoUnsubscribe(nc &: Conn, s: Subscription, max: int): bool:
     if idx < 0 or max <= 0:
         ret false
     end
-    nc.sub_max.set(idx, max)
-    if nc.sub_count.get(idx) >= max:
+    nc._sub_max.set(idx, max)
+    if nc._sub_count.get(idx) >= max:
         _tombstone(nc, idx)
+    end
+    if nc._reconnecting:
+        ret true
     end
     ret _write(nc, "UNSUB " + conv.FormatInt(s.sid as i64) + " " + conv.FormatInt(max as i64) + "\r\n")
 end
@@ -1072,9 +1289,9 @@ end
 @en "Delivered"
 @fa "تحویل شده"
 pub func Delivered(nc: Conn, s: Subscription): int:
-    repeat nc.sub_sid.len() in i:
-        if nc.sub_sid.get(i) == s.sid or nc.sub_sid.get(i) == 0 - s.sid:
-            ret nc.sub_count.get(i)
+    repeat nc._sub_sid.len() in i:
+        if nc._sub_sid.get(i) == s.sid or nc._sub_sid.get(i) == 0 - s.sid:
+            ret nc._sub_count.get(i)
         end
     end
     ret 0
@@ -1084,8 +1301,8 @@ end
 @fa "صف مانده"
 pub func Pending(nc: Conn, s: Subscription): int:
     mut n := 0
-    repeat nc.inbox.len() in i:
-        if nc.inbox.get(i).sid == s.sid:
+    repeat nc._inbox.len() in i:
+        if nc._inbox.get(i).sid == s.sid:
             n += 1
         end
     end
@@ -1124,15 +1341,22 @@ pub func Flush(nc &: Conn, timeout_ms: int): bool:
     if nc.closed:
         ret false
     end
-    nc.pings_sent += 1
-    target := nc.pings_sent
-    if not _write(nc, "PING\r\n"):
-        ret false
-    end
     deadline := _now() + timeout_ms as i64
-    until nc.pongs_recv < target:
+    mut seen := nc._reconnects
+    mut target := 0
+    mut sent := false
+    until true:
         if nc.closed:
             ret false
+        end
+        if not nc._reconnecting and (not sent or seen != nc._reconnects):
+            seen = nc._reconnects
+            nc._pings_sent += 1
+            target = nc._pings_sent
+            sent = _write(nc, "PING\r\n")
+        end
+        if sent and not nc._reconnecting and seen == nc._reconnects and nc._pongs_recv >= target:
+            break
         end
         left := deadline - _now()
         if left <= 0:
@@ -1183,9 +1407,13 @@ pub func Drain(nc &: Conn, timeout_ms: int): bool:
     if nc.closed:
         ret false
     end
+    if nc._reconnecting:
+        _shutdown(nc)
+        ret false
+    end
     nc.draining = true
-    repeat nc.sub_sid.len() in i:
-        sid := nc.sub_sid.get(i)
+    repeat nc._sub_sid.len() in i:
+        sid := nc._sub_sid.get(i)
         if sid > 0:
             _write(nc, "UNSUB " + conv.FormatInt(sid as i64) + "\r\n")
         end
@@ -1205,10 +1433,28 @@ end
 @fa "شمار اشتراک"
 pub func SubscriptionCount(nc: Conn): int:
     mut n := 0
-    repeat nc.sub_sid.len() in i:
-        if nc.sub_sid.get(i) > 0:
+    repeat nc._sub_sid.len() in i:
+        if nc._sub_sid.get(i) > 0:
             n += 1
         end
     end
     ret n
+end
+
+@en "IsReconnecting"
+@fa "در حال اتصال دوباره"
+pub func IsReconnecting(nc: Conn): bool:
+    ret nc._reconnecting and not nc.closed
+end
+
+@en "Reconnects"
+@fa "شمار اتصال دوباره"
+pub func Reconnects(nc: Conn): int:
+    ret nc._reconnects
+end
+
+@en "BufferedBytes"
+@fa "بایت‌های بافر شده"
+pub func BufferedBytes(nc: Conn): int:
+    ret nc._pending.len()
 end

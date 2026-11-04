@@ -1083,9 +1083,11 @@ and the doubled body put `_vp8_quant` over the inline limit, which is what keeps
 those folds from firing at its call sites. The vectorizer may hoist up to eight
 loads from an arbitrary pointer when the first iteration reaches them
 (`SALAM_NG_OFF=lvfi`), which covers the second pass of `_fdct8x8` once its first
-iteration is peeled. Counted with callgrind, all together: `image_basics` 529.31
-to 502.36 million instructions (x86-64-v3: 490.08 to 459.02); `image_rtl_card`
-141.40 either way.
+iteration is peeled. Counted with callgrind, all together: `image_basics` 524.85
+to 495.72 million instructions (x86-64-v3: 485.66 to 452.41). `image_rtl_card`
+gains 0.07% (139.54 to 139.65; a loop with a rarely run division stays
+ununrolled), all 42 benchmarks are the same binary, and a compile job is
+unchanged.
 
 The last optimizer step turns a branch on an `and` or `or` of two conditions
 back into two branches (`SALAM_NG_OFF=andbr`). The branch chains get folded

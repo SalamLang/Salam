@@ -154,8 +154,8 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
             ret sema_decorate(s, a, n, sema_ty(s, TY_I64))
         end
         fnid := at.Child(a, n, 0)
-        fname := at.Get(a, fnid).name
-        fsym := scope_lookup(s, s.cur, fname)
+        mut fname := at.Get(a, fnid).name
+        mut fsym := scope_lookup(s, s.cur, fname)
         mut is_fn := fsym != 0
         if is_fn and sym_at(s, fsym).kind != SYM_FUNC:
             is_fn = false
@@ -168,14 +168,32 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
             )
             ret sema_decorate(s, a, n, sema_ty(s, TY_I64))
         end
-        mut fsv := sym_at(s, fsym)
-        fsv.used = true
-        sym_put(s, fsym, fsv)
-        dce_mark_root(s.pkg, fname)
         mut argt := TYPE_NONE
         if has_arg:
             argt = sema_check_expr(s, a, at.Child(a, n, 1))
         end
+        if sym_at(s, fsym).decl != 0 and at.TyparamCount(a, sym_at(s, fsym).decl) > 0:
+            mut sargs := Vector {} as Vector<int>
+            if has_arg:
+                sargs.push(argt)
+            end
+            sinst := g_infer_call(s, a, fsym, sargs, sp, TYPE_NONE)
+            sargs.free()
+            if sinst == 0:
+                ret sema_decorate(s, a, n, sema_ty(s, TY_I64))
+            end
+            mut tsv := sym_at(s, fsym)
+            tsv.used = true
+            sym_put(s, fsym, tsv)
+            dce_note(s, a, str.Len(tsv.pkgname) > 0 ? tsv.pkgname : s.pkg, fname)
+            fsym = sinst
+            fname = sym_at(s, sinst).name
+            at.SetName(a, fnid, fname)
+        end
+        mut fsv := sym_at(s, fsym)
+        fsv.used = true
+        sym_put(s, fsym, fsv)
+        dce_mark_root(s.pkg, fname)
         mut sok := false
         mut want := TYPE_NONE
         fsv2 := sym_at(s, fsym)

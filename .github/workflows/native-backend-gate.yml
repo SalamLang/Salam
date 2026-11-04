@@ -284,6 +284,38 @@ jobs:
           name: host-stage-${{ matrix.target }}
           path: host-stage
 
+      - name: Loop the wss loopback test
+        if: matrix.target == 'windows-x64'
+        shell: pwsh
+        run: |
+          $exe = (Resolve-Path "host-stage/tests/general/websocket_wss_loopback.exe").Path
+          $exp = (Get-Content tests/en/general/websocket_wss_loopback.out -Raw) -replace "`r", ""
+          $counts = @{}
+          $sw = [Diagnostics.Stopwatch]::StartNew()
+          $n = 0
+          while ($n -lt 800 -and $sw.Elapsed.TotalMinutes -lt 12) {
+            $n++
+            $o = Join-Path $env:RUNNER_TEMP "o.txt"
+            $e = Join-Path $env:RUNNER_TEMP "e.txt"
+            $p = Start-Process -FilePath $exe -NoNewWindow -PassThru -RedirectStandardOutput $o -RedirectStandardError $e
+            $null = $p.Handle
+            if (-not $p.WaitForExit(20000)) {
+              $p.Kill()
+              $null = $p.WaitForExit(5000)
+              $k = "hang"
+            } else {
+              $k = "{0:X8}" -f $p.ExitCode
+            }
+            $got = ""
+            if (Test-Path $o) { $got = (Get-Content $o -Raw) -replace "`r", "" }
+            if ($got -ne $exp) { $k = "$k-diff" }
+            if (-not $counts.ContainsKey($k)) { $counts[$k] = 0; Write-Output "first $k at run $n" }
+            $counts[$k]++
+          }
+          Write-Output "runs $n in $($sw.Elapsed.TotalSeconds)s"
+          $counts.GetEnumerator() | ForEach-Object { Write-Output "$($_.Key): $($_.Value)" }
+          Get-WinEvent -FilterHashtable @{LogName='Application'; Id=1000,1001} -MaxEvents 6 -ErrorAction SilentlyContinue | ForEach-Object { Write-Output $_.Message }
+
       - name: Test programs built by the native backend run on the host
         shell: bash
         env:

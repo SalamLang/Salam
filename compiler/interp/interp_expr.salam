@@ -244,12 +244,8 @@ func eval_call(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
                 bcl := ip.closures.get(bfid)
                 ret invoke(ip, a, env, n, bcl.fn, bcl.env, false, val_null(), args)
             end
-            bnk := native_fnptr(ip, a, n, bv)
-            if bnk == 1:
+            if native_fnptr(a, n, bv):
                 ret call_native_fnptr(ip, a, n, bv, args)
-            end
-            if bnk == 2:
-                ret val_null()
             end
         end
         fn := find_func(ip, a, nm, na)
@@ -364,11 +360,7 @@ func eval_call(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
         vcl := ip.closures.get(fv2.id)
         ret invoke(ip, a, env, n, vcl.fn, vcl.env, false, val_null(), args)
     end
-    nk := native_fnptr(ip, a, n, fv2)
-    if nk == 2:
-        ret val_null()
-    end
-    if nk == 1:
+    if native_fnptr(a, n, fv2):
         eval_args(ip, a, env, n, args)
         if ip.failed:
             ret val_null()
@@ -932,7 +924,7 @@ func eval_func_addr(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
         ret val_ptr(to_int(fv), PTR_OPAQUE)
     end
     if find_extern_decl(ip, node.name) != 0:
-        sp := ffi_sym(ip, a, node.name)
+        sp := ffi_addr(ip, a, node.name)
         if sp != null:
             ret val_ptr(sp as i64, PTR_OPAQUE)
         end
@@ -1150,12 +1142,8 @@ func method_call_values(
                 fcl2 := ip.closures.get(ffid)
                 ret invoke(ip, a, env, n, fcl2.fn, fcl2.env, false, val_null(), args)
             end
-            fnk := native_fnptr(ip, a, n, fv)
-            if fnk == 1:
+            if native_fnptr(a, n, fv):
                 ret call_native_fnptr(ip, a, n, fv, args)
-            end
-            if fnk == 2:
-                ret val_null()
             end
         end
         im2 := find_impl_method(ip, a, stv.type_name, method, na2)
@@ -1185,19 +1173,12 @@ func method_call_values(
     ret call_builtin_method(ip, a, n, recvr, method, args)
 end
 
-func native_fnptr(ip &: Interp, a &: at.Ast, n: int, fv: Value): int:
-    if fv.kind != VAL_PTR:
-        ret 0
+func native_fnptr(a &: at.Ast, n: int, fv: Value): bool:
+    if fv.kind != VAL_PTR or fv.pa == (0 as i64):
+        ret false
     end
     cts := at.At(a, at.At(a, n).a).type_str
-    if str.StartsWith(cts, "stdcallfunc(") and host_is_win32():
-        rt_error(ip, a, n, i18.Tr("the interpreter cannot call a stdcall function pointer on 32-bit Windows (use 'salam run' instead)"))
-        ret 2
-    end
-    if fv.pa != (0 as i64) and (str.StartsWith(cts, "externfunc(") or str.StartsWith(cts, "stdcallfunc(")):
-        ret 1
-    end
-    ret 0
+    ret str.StartsWith(cts, "externfunc(") or str.StartsWith(cts, "stdcallfunc(")
 end
 
 func call_native_fnptr(ip &: Interp, a &: at.Ast, n: int, fv: Value, args: Vector<Value>): Value:
@@ -1208,6 +1189,16 @@ func host_is_win32(): bool:
     mut r := false
     if SALAM_OS_WINDOWS:
         if SALAM_ARCH_X86:
+            r = true
+        end
+    end
+    ret r
+end
+
+func host_is_win64(): bool:
+    mut r := false
+    if SALAM_OS_WINDOWS:
+        if SALAM_ARCH_X64:
             r = true
         end
     end

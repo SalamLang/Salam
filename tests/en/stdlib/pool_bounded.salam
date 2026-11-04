@@ -1,0 +1,82 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import mem
+import pool
+import sync
+
+mut cur := null as i64*
+mut top := null as i64*
+mut fin := null as i64*
+
+mut gate := null as i64*
+
+func work():
+    now := atomic_add(cur, 1 as i64)
+    mut peak := atomic_load(top)
+    until now > peak:
+        if atomic_cas(top, peak, now): break end
+        peak = atomic_load(top)
+    end
+    sync.SleepMs(2)
+    atomic_add(cur, 0 as i64 - 1)
+    atomic_add(fin, 1 as i64)
+end
+
+func blocker():
+    until atomic_load(gate) != 0:
+        sync.SleepMs(1)
+    end
+end
+
+func main:
+    cur = mem.AllocateZeroed(8 as u64) as i64*
+    top = mem.AllocateZeroed(8 as u64) as i64*
+    fin = mem.AllocateZeroed(8 as u64) as i64*
+    p := pool.New(4 as i64, 8 as i64)
+    println "workers: ", pool.Workers(p)
+    repeat 200:
+        pool.Submit(p, (): work() end)
+    end
+    pool.Wait(p)
+    println "done: ", atomic_load(fin)
+    println "peak within limit: ", atomic_load(top) <= (4 as i64)
+    println "idle: ", pool.Running(p), pool.Pending(p)
+
+    repeat 20:
+        pool.Submit(p, (): work() end)
+    end
+    pool.Stop(p)
+    gate = mem.AllocateZeroed(8 as u64) as i64*
+    atomic_store(gate, 1 as i64)
+    q := pool.New(1 as i64, 1 as i64)
+    pool.Submit(q, (): blocker() end)
+    until pool.Running(q) == 0:
+        sync.SleepMs(1)
+    end
+    println "queued while full: ", pool.TrySubmit(q, (): work() end)
+    println "rejected when full: ", pool.TrySubmit(q, (): work() end)
+    println "pending: ", pool.Pending(q)
+    atomic_store(gate, 0 as i64)
+    pool.Wait(q)
+    println "pending after wait: ", pool.Pending(q)
+    pool.Stop(q)
+    mem.Free(gate as void*)
+    println "after stop: ", atomic_load(fin)
+    mem.Free(cur as void*)
+    mem.Free(top as void*)
+    mem.Free(fin as void*)
+end

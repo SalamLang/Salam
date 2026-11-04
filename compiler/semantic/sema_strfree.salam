@@ -2,6 +2,7 @@ package semantic
 
 import str
 
+include co "../sal_core.salam"
 include at "../ast.salam"
 include tok "../token.salam"
 
@@ -18,6 +19,10 @@ pub struct SfCand:
     pub use: int = 0
     pub ok: bool = true
     pub kind: int = 0
+    pub acc: bool = false
+    pub keep: bool = false
+    pub fresh: bool = false
+    pub nasg: int = 0
 end
 
 func sf_is_concat(a &: at.Ast, nid: int): bool:
@@ -39,10 +44,12 @@ end
 
 func sf_kill(cs &: Vector<SfCand>, name: str):
     i := sf_find(cs, name)
-    if i >= 0:
-        mut c := cs.get(i)
-        c.ok = false
-        cs.set(i, c)
+    repeat cs.len() in j:
+        mut c := cs.get(j)
+        if j == i or (c.acc and str.Equals(c.name, name)):
+            c.ok = false
+            cs.set(j, c)
+        end
     end
 end
 
@@ -123,10 +130,15 @@ func sf_collect(s &: Sema, a &: at.Ast, nid: int, arm: bool, cs &: Vector<SfCand
     if k == at.AST_BLOCK and not arm:
         repeat at.ChildCount(a, nid) in j:
             c := at.Child(a, nid, j)
-            if c != 0 and at.KindOf(a, c) == at.AST_VAR_DECL and not sf_has_decl(cs, c) and sf_fresh_init(s, a, at.At(a, c).a):
-                ck := sf_cont_kind(at.At(a, at.At(a, c).a).type_str)
-                if ck != 0 or not at.At(a, c).is_mut:
-                    cs.push(SfCand { name = at.At(a, c).name, decl = c, blk = nid, idx = j, kind = ck })
+            if c != 0 and at.KindOf(a, c) == at.AST_VAR_DECL and not sf_has_decl(cs, c):
+                ci0 := at.At(a, c).a
+                if at.At(a, c).is_mut and ci0 != 0 and str.Equals(at.At(a, ci0).type_str, "str"):
+                    cs.push(SfCand { name = at.At(a, c).name, decl = c, blk = nid, idx = j, kind = 3, acc = true, fresh = sf_fresh_init(s, a, ci0) })
+                else sf_fresh_init(s, a, ci0):
+                    ck := sf_cont_kind(at.At(a, ci0).type_str)
+                    if ck != 0 or not at.At(a, c).is_mut:
+                        cs.push(SfCand { name = at.At(a, c).name, decl = c, blk = nid, idx = j, kind = ck })
+                    end
                 end
             end
         end
@@ -598,6 +610,28 @@ func sf_tmp_hoist(s &: Sema, a &: at.Ast, blk: int, idx: int): int:
     ret added
 end
 
+func sf_elif_hoist(s &: Sema, a &: at.Ast, st: int):
+    if st == 0 or at.KindOf(a, st) != at.AST_IF:
+        ret
+    end
+    mut cur := st
+    until cur != 0:
+        e := at.At(a, cur).c
+        if e == 0 or at.KindOf(a, e) != at.AST_IF:
+            ret
+        end
+        blk := ea_node(a, at.AST_BLOCK, span_of(a, e))
+        at.AddChild(a, blk, e)
+        if sf_tmp_hoist(s, a, blk, 0) > 0:
+            mut cv := at.Get(a, cur)
+            cv.c = blk
+            at.Put(a, cur, cv)
+            ret
+        end
+        cur = e
+    end
+end
+
 func sf_hoist(s &: Sema, a &: at.Ast, nid: int, arm: bool):
     if nid == 0:
         ret
@@ -611,7 +645,8 @@ func sf_hoist(s &: Sema, a &: at.Ast, nid: int, arm: bool):
         until j > 0:
             j -= 1
             hl := sf_hoist_stmt(s, a, nid, j)
-            _h := sf_tmp_hoist(s, a, nid, j + hl)
+            th := sf_tmp_hoist(s, a, nid, j + hl)
+            sf_elif_hoist(s, a, at.Child(a, nid, j + hl + th))
         end
     end
     na := at.At(a, nid).a
@@ -675,6 +710,226 @@ func sf_insert(a &: at.Ast, c: SfCand):
     end
 end
 
+func sf_typed(a &: at.Ast, id: int, ts: str, st: int):
+    mut v := at.Get(a, id)
+    v.type_str = ts
+    v.sema_type = st
+    at.Put(a, id, v)
+end
+
+func sf_acc_flag(c: SfCand): str:
+    ret "__own" + str.FromInt(c.decl as i64)
+end
+
+func sf_flag_ident(s &: Sema, a &: at.Ast, name: str, sp: co.SrcSpan): int:
+    id := ea_ident(a, name, sp)
+    sf_typed(a, id, "bool", sema_ty(s, TY_BOOL))
+    ret id
+end
+
+func sf_bool_lit(s &: Sema, a &: at.Ast, val: bool, sp: co.SrcSpan): int:
+    id := ea_node(a, at.AST_LITERAL, sp)
+    mut v := at.Get(a, id)
+    v.op = val ? tok.TK_KW_TRUE : tok.TK_KW_FALSE
+    v.value_kind = tok.TV_BOOL
+    v.value_bool = val
+    v.value_int = val ? 1 as u64 : 0 as u64
+    v.type_str = "bool"
+    v.sema_type = sema_ty(s, TY_BOOL)
+    at.Put(a, id, v)
+    ret id
+end
+
+func sf_free_if(s &: Sema, a &: at.Ast, c: SfCand, sp: co.SrcSpan): int:
+    un := at.Get(a, c.use)
+    idn := ea_ident(a, c.name, sp)
+    sf_typed(a, idn, un.type_str, un.sema_type)
+    mk := ea_node(a, at.AST_EXPR_STMT, sp)
+    mut mv := at.Get(a, mk)
+    mv.name = SF_MARK
+    mv.a = idn
+    at.Put(a, mk, mv)
+    blk := ea_node(a, at.AST_BLOCK, sp)
+    at.AddChild(a, blk, mk)
+    ifn := ea_node(a, at.AST_IF, sp)
+    mut iv := at.Get(a, ifn)
+    iv.a = sf_flag_ident(s, a, sf_acc_flag(c), sp)
+    iv.b = blk
+    at.Put(a, ifn, iv)
+    ret ifn
+end
+
+func sf_insert_acc(s &: Sema, a &: at.Ast, c: SfCand):
+    sp := span_of(a, c.decl)
+    fd := ea_decl(a, sf_acc_flag(c), sf_bool_lit(s, a, c.fresh, sp), true, sp)
+    sf_typed(a, fd, "bool", sema_ty(s, TY_BOOL))
+    mut df := 0
+    if not c.keep:
+        df = ea_node(a, at.AST_DEFER, sp)
+        mut dv := at.Get(a, df)
+        dv.a = sf_free_if(s, a, c, sp)
+        at.Put(a, df, dv)
+    end
+    mut bv := at.Get(a, c.blk)
+    pos := c.idx + 1
+    if pos >= bv.list.len():
+        bv.list.push(fd)
+    else:
+        bv.list.insert(pos, fd)
+    end
+    if df != 0:
+        if pos + 1 >= bv.list.len():
+            bv.list.push(df)
+        else:
+            bv.list.insert(pos + 1, df)
+        end
+    end
+    at.Put(a, c.blk, bv)
+end
+
+func sf_fresh_rhs(s &: Sema, a &: at.Ast, e: int): bool:
+    if e == 0:
+        ret false
+    end
+    if sf_is_concat(a, e):
+        ret true
+    end
+    ret at.KindOf(a, e) == at.AST_CALL and str.Equals(at.At(a, e).type_str, "str") and su_call_fresh(s, a, e)
+end
+
+func sf_acc_assign_ok(s &: Sema, a &: at.Ast, pm &: HashMap<int, int>, p: int, name: str): bool:
+    n := at.At(a, p)
+    if n.b == 0 or (n.op != tok.TK_ASSIGN and n.op != tok.TK_PLUS_EQ):
+        ret false
+    end
+    blk := su_parent(pm, p)
+    if blk == 0 or at.KindOf(a, blk) != at.AST_BLOCK:
+        ret false
+    end
+    bp := su_parent(pm, blk)
+    if bp != 0 and at.KindOf(a, bp) == at.AST_MATCH_ARM:
+        ret false
+    end
+    if n.op == tok.TK_PLUS_EQ:
+        ret str.Equals(at.At(a, n.b).type_str, "str")
+    end
+    mut inner := Vector {} as Vector<int>
+    su_collect_refs(a, n.b, name, inner)
+    reads := inner.len() > 0
+    inner.free()
+    ret not reads or sf_fresh_rhs(s, a, n.b)
+end
+
+func sf_acc_eval(s &: Sema, a &: at.Ast, pm &: HashMap<int, int>, body: int, c: SfCand): SfCand:
+    mut r2 := c
+    mut refs := Vector {} as Vector<int>
+    su_collect_refs(a, body, c.name, refs)
+    repeat refs.len() in ri:
+        r := refs.get(ri)
+        if r2.use == 0:
+            r2.use = r
+        end
+        rn := at.At(a, r)
+        if su_in_lambda(a, pm, r) or rn.ref_arg or rn.ref_arg_ptr:
+            r2.ok = false
+            continue
+        end
+        p := su_parent(pm, r)
+        if p != 0 and at.KindOf(a, p) == at.AST_ASSIGN and at.At(a, p).a == r:
+            r2.nasg += 1
+            if not sf_acc_assign_ok(s, a, pm, p, c.name):
+                r2.ok = false
+            end
+            continue
+        end
+        cl := su_classify(s, a, pm, r)
+        if cl == SU_RET:
+            r2.keep = true
+        else cl != SU_READ:
+            r2.ok = false
+        end
+    end
+    refs.free()
+    if r2.nasg == 0:
+        r2.ok = false
+    end
+    ret r2
+end
+
+func sf_acc_rewrite(s &: Sema, a &: at.Ast, pm &: HashMap<int, int>, body: int, c: SfCand):
+    mut refs := Vector {} as Vector<int>
+    su_collect_refs(a, body, c.name, refs)
+    flag := sf_acc_flag(c)
+    repeat refs.len() in ri:
+        r := refs.get(ri)
+        p := su_parent(pm, r)
+        if p == 0 or at.KindOf(a, p) != at.AST_ASSIGN or at.At(a, p).a != r:
+            continue
+        end
+        blk := su_parent(pm, p)
+        sp := span_of(a, p)
+        rn := at.Get(a, r)
+        pn := at.Get(a, p)
+        mut rhs := pn.b
+        mut fresh := false
+        if pn.op == tok.TK_PLUS_EQ:
+            lhs2 := ea_ident(a, c.name, sp)
+            sf_typed(a, lhs2, rn.type_str, rn.sema_type)
+            rhs = ea_binary(a, tok.TK_PLUS, lhs2, rhs, sp)
+            sf_typed(a, rhs, "str", rn.sema_type)
+            fresh = true
+        else:
+            fresh = sf_fresh_rhs(s, a, rhs)
+        end
+        mut pre := Vector {} as Vector<int>
+        mut newb := rhs
+        if at.KindOf(a, rhs) != at.AST_LITERAL:
+            nm := "__ac" + str.FromInt(p as i64)
+            rts := at.At(a, rhs).type_str
+            rst := at.At(a, rhs).sema_type
+            d := ea_decl(a, nm, rhs, false, sp)
+            sf_typed(a, d, rts, rst)
+            idn := ea_ident(a, nm, sp)
+            sf_typed(a, idn, rts, rst)
+            pre.push(d)
+            newb = idn
+        end
+        cu := SfCand { name = c.name, decl = c.decl, use = r }
+        pre.push(sf_free_if(s, a, cu, sp))
+        mut pw := at.Get(a, p)
+        pw.b = newb
+        pw.op = tok.TK_ASSIGN
+        at.Put(a, p, pw)
+        post := ea_node(a, at.AST_ASSIGN, sp)
+        mut qv := at.Get(a, post)
+        qv.op = tok.TK_ASSIGN
+        qv.a = sf_flag_ident(s, a, flag, sp)
+        qv.b = sf_bool_lit(s, a, fresh, sp)
+        qv.type_str = "bool"
+        qv.sema_type = sema_ty(s, TY_BOOL)
+        at.Put(a, post, qv)
+        mut bv := at.Get(a, blk)
+        mut pos := 0
+        repeat bv.list.len() in q:
+            if bv.list.get(q) == p:
+                pos = q
+            end
+        end
+        repeat pre.len() in w:
+            bv.list.insert(pos + w, pre.get(w))
+        end
+        after := pos + pre.len() + 1
+        if after >= bv.list.len():
+            bv.list.push(post)
+        else:
+            bv.list.insert(after, post)
+        end
+        at.Put(a, blk, bv)
+        pre.free()
+    end
+    refs.free()
+end
+
 pub func SemaAutoFreeStrings(s &: Sema, a &: at.Ast, fnid: int):
     if g_sm_ownership == 0 or fnid == 0 or s.in_derive or s.requal:
         ret
@@ -707,7 +962,10 @@ pub func SemaAutoFreeStrings(s &: Sema, a &: at.Ast, fnid: int):
     su_par_build(a, body, 0, pm)
     repeat cs.len() in ci:
         mut c := cs.get(ci)
-        if c.ok:
+        if c.ok and c.acc:
+            c = sf_acc_eval(s, a, pm, body, c)
+            cs.set(ci, c)
+        else c.ok:
             mut refs := Vector {} as Vector<int>
             su_collect_refs(a, body, c.name, refs)
             repeat refs.len() in ri:
@@ -724,15 +982,25 @@ pub func SemaAutoFreeStrings(s &: Sema, a &: at.Ast, fnid: int):
             cs.set(ci, c)
         end
     end
-    pm.free()
     mut i := cs.len()
     until i > 0:
         i -= 1
         c := cs.get(i)
         if c.ok and c.use != 0:
-            sf_insert(a, c)
+            if c.acc:
+                sf_insert_acc(s, a, c)
+            else:
+                sf_insert(a, c)
+            end
         end
     end
+    repeat cs.len() in ai:
+        ac := cs.get(ai)
+        if ac.ok and ac.use != 0 and ac.acc:
+            sf_acc_rewrite(s, a, pm, body, ac)
+        end
+    end
+    pm.free()
     cs.free()
     seen.free()
     dup.free()

@@ -14,136 +14,101 @@
 
 package desktop
 
-if SALAM_OS_LINUX:
-    extern:
-        func g_app_info_launch_default_for_uri(uri: str, context: void*, error: void*): int
-        func readlink(path: str, buf: void*, size: u64): i64
-    end
+mut _menu_ids := Vector {} as Vector<str>
+mut _on_menu := (_id: str): ret end
+mut _on_tray_click := (): ret end
+mut _on_second := (_args: Vector<str>): ret end
 
-    func _exe_path(): str:
-        buf := mem.AllocateZeroed(4097 as u64)
-        n := readlink("/proc/self/exe", buf, 4096 as u64)
-        if n <= 0:
-            mem.Free(buf)
-            ret str.Clone("")
-        end
-        ret buf as str
-    end
+@en "MenuItem"
+@fa "مورد منو"
+pub struct MenuItem:
+    @en "id"
+    @fa "شناسه"
+    pub id: str = ""
+    @en "label"
+    @fa "برچسب"
+    pub label: str = ""
+    @en "separator"
+    @fa "جداکننده"
+    pub separator: bool = false
+    @en "children"
+    @fa "زیرمنو"
+    pub children: Vector<MenuItem> = Vector {}
+end
 
-    func _open_external(url: str): bool:
-        ret g_app_info_launch_default_for_uri(url, null, null) != 0
+func _menu_id(id: str): int:
+    _menu_ids.push(str.Clone(id))
+    ret _menu_ids.len() + 999
+end
+
+func _fire_menu(native: int):
+    at := native - 1000
+    if at >= 0 and at < _menu_ids.len():
+        _on_menu(_menu_ids[at])
     end
 end
 
-if SALAM_OS_WINDOWS:
-    extern:
-        func GetModuleFileNameW(module: void*, buf: void*, size: u32): u32
-        func WideCharToMultiByte(
-            code_page: u32, flags: u32, wide: void*, wide_len: i32, out: void*, out_len: i32, def: void*,
-            used: void*
-        ): i32
-        func MultiByteToWideChar(
-            code_page: u32, flags: u32, mb_str: str, mb_len: i32, wide_buf: void*, wide_len: i32
-        ): i32
-        func LoadLibraryW(name: void*): void*
-        func GetProcAddress(module: void*, name: str): void*
-    end
-
-    func _wide(s: str): void*:
-        needed := MultiByteToWideChar(65001 as u32, 0 as u32, s, 0 - 1, null, 0)
-        buf := mem.Allocate(((needed + 1) as u64) * (2 as u64))
-        MultiByteToWideChar(65001 as u32, 0 as u32, s, 0 - 1, buf, needed + 1)
-        ret buf
-    end
-
-    func _narrow(wide: void*): str:
-        needed := WideCharToMultiByte(65001 as u32, 0 as u32, wide, 0 - 1, null, 0, null, null)
-        buf := mem.Allocate((needed + 1) as u64)
-        WideCharToMultiByte(65001 as u32, 0 as u32, wide, 0 - 1, buf, needed + 1, null, null)
-        (buf as u8*)[needed] = 0 as u8
-        ret buf as str
-    end
-
-    func _proc(library: str, name: str): void*:
-        wide := _wide(library)
-        module := LoadLibraryW(wide)
-        mem.Free(wide)
-        if module == null:
-            ret null
+func _parent_native(): void*:
+    mut last := null as void*
+    each w in _wins:
+        if not w.view.IsClosed():
+            if w.view.IsActive():
+                ret w.view.Native()
+            end
+            last = w.view.Native()
         end
-        ret GetProcAddress(module, name)
     end
-
-    func _exe_path(): str:
-        buf := mem.AllocateZeroed(65536 as u64)
-        defer mem.Free(buf)
-        n := GetModuleFileNameW(null, buf, 32000 as u32)
-        if n == (0 as u32):
-            ret str.Clone("")
-        end
-        ret _narrow(buf)
-    end
-
-    func _open_external(url: str): bool:
-        shell := _proc("shell32.dll", "ShellExecuteW")
-        if shell == null:
-            ret false
-        end
-        verb := _wide("open")
-        target := _wide(url)
-        defer mem.Free(verb)
-        defer mem.Free(target)
-        f := shell as extern stdcall func (void*, void*, void*, void*, void*, int) void*
-        result := f(null, verb, target, null, null, 1)
-        ret (result as size) > 32
-    end
+    ret last
 end
 
-if SALAM_OS_MAC:
-    extern:
-        func _NSGetExecutablePath(buf: void*, size: void*): int
-        func objc_getClass(name: str): void*
-        func sel_registerName(name: str): void*
-        func objc_msgSend(receiver: void*, selector: void*): void*
-    end
+func _secret_file(key: str): str:
+    dir := DataDir()
+    defer mem.Free(dir as void*)
+    folder := filepath.Join(dir, "secrets")
+    _mk := os.MkdirAll(folder)
+    _private := fs.Chmod(folder, 0o700)
+    name := crypto.Sha256Hex(key)
+    defer mem.Free(name as void*)
+    out := filepath.Join(folder, name)
+    mem.Free(folder as void*)
+    ret out
+end
 
-    func _objc0(recv: void*, name: str): void*:
-        fn := (&objc_msgSend) as extern func (void*, void*) void*
-        ret fn(recv, sel_registerName(name))
-    end
+func _secret_id(): str:
+    ret _cfg.id.len() > 0 ? _cfg.id : "ir.salamlang.app"
+end
 
-    func _objc1(recv: void*, name: str, a1: void*): void*:
-        fn := (&objc_msgSend) as extern func (void*, void*, void*) void*
-        ret fn(recv, sel_registerName(name), a1)
-    end
-
-    func _ns(s: str): void*:
-        fn := (&objc_msgSend) as extern func (void*, void*, str) void*
-        ret fn(objc_getClass("NSString"), sel_registerName("stringWithUTF8String:"), s)
-    end
-
-    func _exe_path(): str:
-        buf := mem.AllocateZeroed(4097 as u64)
-        size_ptr := (mem.AllocateZeroed(8 as u64)) as u32*
-        size_ptr[0] = 4096 as u32
-        ok := _NSGetExecutablePath(buf, size_ptr as void*)
-        mem.Free(size_ptr as void*)
-        if ok != 0:
-            mem.Free(buf)
-            ret str.Clone("")
+func _split_args(data: void*, size: int): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    bytes := data as u8*
+    mut start := 0
+    repeat size in i:
+        if bytes[i] == (0 as u8):
+            piece := mem.Allocate((i - start + 1) as u64)
+            mem.Copy(piece, ((data as i64) + (start as i64)) as void*, (i - start) as u64)
+            (piece as u8*)[i - start] = 0 as u8
+            out.push(piece as str)
+            start = i + 1
         end
-        ret buf as str
     end
+    ret out
+end
 
-    func _open_external(url: str): bool:
-        workspace := _objc0(objc_getClass("NSWorkspace"), "sharedWorkspace")
-        target := _objc1(objc_getClass("NSURL"), "URLWithString:", _ns(url))
-        if target == null:
-            ret false
-        end
-        fn := (&objc_msgSend) as extern func (void*, void*, void*) i8
-        ret fn(workspace, sel_registerName("openURL:"), target) != (0 as i8)
+func _join_args(size_out &: int): void*:
+    args := os.Args()
+    mut total := 0
+    each a in args:
+        total += str.Len(a) + 1
     end
+    buf := mem.AllocateZeroed((total + 1) as u64)
+    mut at := 0
+    each a in args:
+        n := str.Len(a)
+        mem.Copy(((buf as i64) + (at as i64)) as void*, a as void*, n as u64)
+        at += n + 1
+    end
+    size_out = total
+    ret buf
 end
 
 @en "OpenURL"
@@ -153,4 +118,150 @@ pub func OpenURL(url: str): bool:
         ret _open_external(url)
     end
     ret false
+end
+
+@en "PickFolder"
+@fa "انتخاب پوشه"
+pub func PickFolder(title: str = "Select a folder"): str:
+    ret _os_pick(title, 1, "", "", "")
+end
+
+@en "PickFile"
+@fa "انتخاب پرونده"
+pub func PickFile(title: str = "Open", filter_name: str = "", patterns: str = ""): str:
+    ret _os_pick(title, 0, "", filter_name, patterns)
+end
+
+@en "SaveFile"
+@fa "ذخیره پرونده"
+pub func SaveFile(title: str = "Save", default_name: str = ""): str:
+    ret _os_pick(title, 2, default_name, "", "")
+end
+
+@en "Message"
+@fa "پیام"
+pub func Message(title: str, text: str):
+    _ignored := _os_message(title, text, false)
+end
+
+@en "Confirm"
+@fa "تایید"
+pub func Confirm(title: str, text: str): bool:
+    ret _os_message(title, text, true)
+end
+
+@en "Notify"
+@fa "اعلان"
+pub func Notify(title: str, body: str): bool:
+    ret _os_notify(title, body)
+end
+
+@en "RequestAttention"
+@fa "درخواست توجه"
+pub func RequestAttention(window: Window):
+    _os_attention(window.Native())
+end
+
+@en "SecretSet"
+@fa "ذخیره راز"
+pub func SecretSet(key: str, value: str): bool:
+    path := _secret_file(key)
+    defer mem.Free(path as void*)
+    if _os_secret_set(_secret_id(), key, value):
+        if os.Exists(path):
+            _removed := os.Remove(path)
+        end
+        ret true
+    end
+    if file.WriteBytes(path, value) < 0:
+        ret false
+    end
+    _private := fs.Chmod(path, 0o600)
+    ret true
+end
+
+@en "SecretGet"
+@fa "خواندن راز"
+pub func SecretGet(key: str): str:
+    stored := _os_secret_get(_secret_id(), key)
+    if stored.len() > 0:
+        ret stored
+    end
+    path := _secret_file(key)
+    defer mem.Free(path as void*)
+    if os.Exists(path):
+        mem.Free(stored as void*)
+        ret io.ReadFile(path)
+    end
+    ret stored
+end
+
+@en "SecretDelete"
+@fa "حذف راز"
+pub func SecretDelete(key: str):
+    _gone := _os_secret_delete(_secret_id(), key)
+    path := _secret_file(key)
+    defer mem.Free(path as void*)
+    if os.Exists(path):
+        _removed := os.Remove(path)
+    end
+end
+
+@en "Item"
+@fa "مورد"
+pub func Item(id: str, label: str): MenuItem:
+    ret MenuItem { id = id, label = label }
+end
+
+@en "Separator"
+@fa "خط جداکننده"
+pub func Separator(): MenuItem:
+    ret MenuItem { separator = true }
+end
+
+@en "Submenu"
+@fa "زیرمنوی تازه"
+pub func Submenu(label: str, items: Vector<MenuItem>): MenuItem:
+    ret MenuItem { label = label, children = items }
+end
+
+@en "OnMenu"
+@fa "هنگام منو"
+pub func OnMenu(handler: func (str)):
+    _on_menu = handler
+    webview.OnCommand((native: int): _fire_menu(native) end)
+end
+
+@en "SetMenu"
+@fa "تنظیم منو"
+pub func SetMenu(window: Window, items: Vector<MenuItem>):
+    if window.index >= 0 and window.index < _wins.len():
+        _os_set_menu(_wins[window.index].view, items)
+    end
+end
+
+@en "SetTray"
+@fa "تنظیم سینی"
+pub func SetTray(icon: str, tooltip: str, items: Vector<MenuItem>): bool:
+    _startup()
+    ret _os_set_tray(icon, tooltip, items)
+end
+
+@en "RemoveTray"
+@fa "حذف سینی"
+pub func RemoveTray():
+    _os_remove_tray()
+end
+
+@en "OnTrayClick"
+@fa "هنگام کلیک سینی"
+pub func OnTrayClick(handler: func ()):
+    _on_tray_click = handler
+end
+
+@en "SingleInstance"
+@fa "نمونه یکتا"
+pub func SingleInstance(on_second: func (Vector<str>)): bool:
+    _on_second = on_second
+    ret _os_single_instance()
 end

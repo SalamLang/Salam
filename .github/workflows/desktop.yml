@@ -1,0 +1,135 @@
+---
+name: 🖥️ Desktop apps
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - std/desktop/**
+      - std/webview/**
+      - tests/en/desktop/**
+      - .github/workflows/desktop.yml
+  push:
+    branches:
+      - main
+    paths:
+      - std/desktop/**
+      - std/webview/**
+      - tests/en/desktop/**
+      - .github/workflows/desktop.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: desktop-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  stage:
+    name: Cross-build the smoke test
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install a seed compiler
+        uses: ./.github/actions/setup-salam # zizmor: ignore[self-repository]
+
+      - name: Build the compiler
+        run: sh tools/bash/build-selfhost.sh
+
+      - name: Build the smoke test for every target
+        run: |
+          set -eu
+          mkdir -p stage
+          for target in x86_64-w64-windows-gnu arm64-apple-macos x86_64-apple-macos; do
+            ./salam build tests/en/desktop/smoke.salam --backend=native --target="$target" \
+              --output="stage/smoke-$target" --log-level=error
+          done
+          ls -la stage
+
+      - name: Upload the smoke tests
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: desktop-stage
+          path: |
+            stage/
+            salam
+          retention-days: 3
+
+  linux:
+    name: Linux x64
+    needs: stage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download the compiler
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: desktop-stage
+
+      - name: Install GTK and WebKitGTK
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev xvfb
+
+      - name: Run the smoke test
+        env:
+          SALAM_STD: ${{ github.workspace }}/std
+        run: |
+          chmod +x salam
+          mkdir run
+          cd run
+          ../salam build ../tests/en/desktop/smoke.salam --output=smoke --log-level=error
+          timeout 150 xvfb-run -a ./smoke
+
+  windows:
+    name: Windows x64
+    needs: stage
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - name: Download the smoke test
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: desktop-stage
+
+      - name: Run the smoke test
+        shell: bash
+        run: |
+          ls -la stage
+          timeout 150 ./stage/smoke-x86_64-w64-windows-gnu.exe
+
+  macos:
+    name: macOS ${{ matrix.arch }}
+    needs: stage
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-latest, arch: arm64, target: arm64-apple-macos }
+          - { os: macos-15-intel, arch: x64, target: x86_64-apple-macos }
+    steps:
+      - name: Download the smoke test
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: desktop-stage
+
+      - name: Run the smoke test
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          chmod +x "stage/smoke-$TARGET"
+          perl -e 'alarm 150; exec @ARGV' "./stage/smoke-$TARGET"

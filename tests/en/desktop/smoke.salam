@@ -1,0 +1,157 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import desktop
+import filepath
+import io
+import os
+import str
+import sync
+
+const PAGE := `<!doctype html><html dir="rtl"><meta charset="utf-8"><title>smoke</title>
+<link rel="stylesheet" href="style.css">
+<body><h1>سلام</h1><iframe src="frame.html"></iframe>
+<script src="sub/app.js"></script>`
+
+const STYLE := `body { color: rgb(1, 2, 3) }`
+
+const FRAME := `<!doctype html><script>parent.postMessage(typeof window.salam, "*")</script>`
+
+const APP := `(async function () {
+  var report = function (name, value) { return salam.invoke("report", { name: name, value: String(value) }); };
+  var frame = new Promise(function (done) { window.addEventListener("message", function (e) { done(e.data); }); });
+  try {
+    await report("invoke", await salam.invoke("add", { a: 40, b: 2 }));
+    await report("worker", await salam.invoke("worker", {}));
+    await report("unicode", await salam.invoke("echo", { text: "سلام \"دنیا\"\n" }));
+    await report("unknown", await salam.invoke("missing").catch(function (e) { return e.message; }));
+    await report("origin", location.origin === salam_expected_origin());
+    await report("css", getComputedStyle(document.body).color);
+    await report("mime", (await fetch("sub/app.js")).headers.get("content-type"));
+    await report("header", (await fetch("style.css")).headers.get("x-content-type-options"));
+    await report("notfound", (await fetch("missing.txt")).status);
+    await report("escape", (await fetch("../../etc/hosts")).status);
+    await report("storage", (localStorage.setItem("k", "v"), localStorage.getItem("k")));
+    await report("frame", await frame);
+    var heard = new Promise(function (done) { var off = salam.listen("tick", function (d) { off(); done(d.n); }); });
+    salam.emit("ping", { n: 7 });
+    await report("event", await heard);
+    await report("frozen", (function () { try { window.salam = 1; } catch (e) {} return typeof window.salam; })());
+    location.href = "https://blocked.example/";
+    await new Promise(function (done) { setTimeout(done, 400); });
+    await report("stayed", location.origin === salam_expected_origin());
+    salam.emit("finish", {});
+  } catch (e) {
+    await report("exception", e && e.message);
+    salam.emit("finish", {});
+  }
+})();`
+
+mut g_failed := 0
+mut g_passed := 0
+mut g_win := desktop.Window {}
+
+func expect(name: str, got: str, want: str):
+    if got == want:
+        g_passed += 1
+        println "ok   " + name
+    else:
+        g_failed += 1
+        println "FAIL " + name + ": got [" + got + "] want [" + want + "]"
+    end
+end
+
+func watchdog():
+    sync.SleepMs(90000)
+    println "FAIL timed out"
+    os.Exit(2)
+end
+
+func write_tree(root: str):
+    _a := os.MkdirAll(filepath.Join(root, "sub"))
+    _b := io.WriteFile(filepath.Join(root, "index.html"), PAGE)
+    _c := io.WriteFile(filepath.Join(root, "style.css"), STYLE)
+    _d := io.WriteFile(filepath.Join(root, "frame.html"), FRAME)
+    _e := io.WriteFile(filepath.Join(root, "sub/app.js"), APP)
+end
+
+func report(c: desktop.Call):
+    name := c.Str("name")
+    value := c.Str("value")
+    if name == "invoke":
+        expect(name, value, "42")
+    else name == "worker":
+        expect(name, value, "from a worker")
+    else name == "unicode":
+        expect(name, value, "سلام \"دنیا\"\n")
+    else name == "unknown":
+        expect(name, value, "unknown command: missing")
+    else name == "origin" or name == "stayed":
+        expect(name, value, "true")
+    else name == "css":
+        expect(name, value, "rgb(1, 2, 3)")
+    else name == "mime":
+        expect(name, value, "application/javascript")
+    else name == "header":
+        expect(name, value, "nosniff")
+    else name == "notfound":
+        expect(name, value, "404")
+    else name == "escape":
+        expect(name, value == "404" or value == "403" ? "refused" : value, "refused")
+    else name == "storage":
+        expect(name, value, "v")
+    else name == "frame":
+        expect(name, value, "undefined")
+    else name == "event":
+        expect(name, value, "7")
+    else name == "frozen":
+        expect(name, value, "object")
+    else:
+        expect(name, value, "?")
+    end
+    c.ResolveNull()
+end
+
+func main:
+    _dog := spawn(watchdog)
+    root := filepath.Join(os.TempDir(), "salam-desktop-smoke")
+    write_tree(root)
+    pack := filepath.Join(os.TempDir(), "salam-desktop-smoke.pack")
+    expect("pack", str.FromInt(desktop.PackDir(root, pack, "ir.salamlang.smoke") as i64), "4")
+    _gone := os.RemoveAll(root)
+    desktop.Init(desktop.Config { id = "ir.salamlang.smoke", name = "Smoke", pack_path = pack, external_links = false })
+    desktop.Command("add", (c: desktop.Call): c.ResolveInt((c.Int("a") + c.Int("b")) as i64) end)
+    desktop.CommandAsync("worker", (c: desktop.Call): c.ResolveStr("from a worker") end)
+    desktop.Command("echo", (c: desktop.Call): c.ResolveStr(c.Str("text")) end)
+    desktop.Command("report", (c: desktop.Call): report(c) end)
+    desktop.On("ping", (data: str): desktop.Emit("tick", data) end)
+    desktop.On("finish", (_data: str): desktop.Quit() end)
+    mut scripts := Vector {} as Vector<str>
+    origin := desktop.AssetURL("")
+    scripts.push("window.salam_expected_origin = function () { return \"" + origin + "\"; };")
+    g_win = desktop.Open(desktop.WindowOptions { title = "سلام smoke", width = 640, height = 480, scripts = scripts })
+    if g_win.IsClosed():
+        println "FAIL no window"
+        ret 1
+    end
+    desktop.Run()
+    secret := "شناسه-" + origin
+    expect("secret set", desktop.SecretSet("smoke", secret) ? "yes" : "no", "yes")
+    expect("secret get", desktop.SecretGet("smoke"), secret)
+    desktop.SecretDelete("smoke")
+    expect("secret gone", desktop.SecretGet("smoke"), "")
+    g_win.Close()
+    println "passed " + str.FromInt(g_passed as i64) + " failed " + str.FromInt(g_failed as i64)
+    ret g_failed == 0 ? 0 : 1
+end

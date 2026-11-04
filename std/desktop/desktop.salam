@@ -1,0 +1,833 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "desktop"
+@fa "برنامه رومیزی"
+package desktop
+
+import webview
+import str
+import mem
+import os
+import filepath
+import crypto
+import pool
+import compress
+import encoding.json
+import net.mime
+import os.user
+
+mut _cfg := Config {}
+mut _inited := false
+mut _token := ""
+mut _wins := Vector {} as Vector<_Win>
+mut _commands := Vector {} as Vector<_Command>
+mut _rules := Vector {} as Vector<_Rule>
+mut _listeners := Vector {} as Vector<_Listener>
+
+struct _Win:
+    pub label: str = ""
+    pub view: webview.WebView = webview.WebView {}
+    pub start_origin: str = ""
+    pub inline_html: bool = false
+    pub allow_navigation: Vector<str> = Vector {}
+end
+
+struct _Command:
+    pub name: str = ""
+    pub handler: func (Call)
+    pub threaded: bool = false
+end
+
+struct _Rule:
+    pub origin: str = ""
+    pub patterns: Vector<str> = Vector {}
+end
+
+struct _Listener:
+    pub name: str = ""
+    pub handler: func (str)
+end
+
+@en "Config"
+@fa "پیکربندی"
+pub struct Config:
+    @en "id"
+    @fa "شناسه"
+    pub id: str = ""
+    @en "name"
+    @fa "نام"
+    pub name: str = ""
+    @en "version"
+    @fa "نگارش"
+    pub version: str = ""
+    @en "scheme"
+    @fa "طرح"
+    pub scheme: str = "app"
+    @en "assets_dir"
+    @fa "پوشه دارایی ها"
+    pub assets_dir: str = ""
+    @en "pack_path"
+    @fa "مسیر بسته"
+    pub pack_path: str = ""
+    @en "csp"
+    @fa "سیاست محتوا"
+    pub csp: str = ""
+    @en "spa"
+    @fa "تک صفحه ای"
+    pub spa: bool = false
+    @en "debug"
+    @fa "اشکال زدایی"
+    pub debug: bool = false
+    @en "external_links"
+    @fa "پیوندهای بیرونی"
+    pub external_links: bool = true
+end
+
+@en "WindowOptions"
+@fa "گزینه های پنجره"
+pub struct WindowOptions:
+    @en "label"
+    @fa "برچسب"
+    pub label: str = "main"
+    @en "title"
+    @fa "عنوان"
+    pub title: str = ""
+    @en "width"
+    @fa "پهنا"
+    pub width: int = 1024
+    @en "height"
+    @fa "بلندی"
+    pub height: int = 768
+    @en "min_width"
+    @fa "کمترین پهنا"
+    pub min_width: int = 0
+    @en "min_height"
+    @fa "کمترین بلندی"
+    pub min_height: int = 0
+    @en "url"
+    @fa "نشانی"
+    pub url: str = ""
+    @en "html"
+    @fa "اچ تی ام ال"
+    pub html: str = ""
+    @en "icon"
+    @fa "نماد"
+    pub icon: str = ""
+    @en "resizable"
+    @fa "تغییرپذیر"
+    pub resizable: bool = true
+    @en "center"
+    @fa "وسط"
+    pub center: bool = true
+    @en "visible"
+    @fa "نمایان"
+    pub visible: bool = true
+    @en "context_menu"
+    @fa "منوی زمینه"
+    pub context_menu: bool = true
+    @en "scripts"
+    @fa "اسکریپت ها"
+    pub scripts: Vector<str> = Vector {}
+    @en "allow_navigation"
+    @fa "پیمایش مجاز"
+    pub allow_navigation: Vector<str> = Vector {}
+end
+
+@en "Call"
+@fa "فراخوان"
+pub struct Call:
+    @en "command"
+    @fa "فرمان"
+    pub command: str = ""
+    @en "args"
+    @fa "آرگومان ها"
+    pub args: str = "{}"
+    @en "origin"
+    @fa "مبدا"
+    pub origin: str = ""
+    @en "window"
+    @fa "پنجره"
+    pub window: int = -1
+    id: str = ""
+
+    @en "Str"
+    @fa "رشته"
+    pub func Str(key: str): str:
+        ret json.Get(this.args, key)
+    end
+
+    @en "Int"
+    @fa "صحیح"
+    pub func Int(key: str): int:
+        ret json.GetInt(this.args, key)
+    end
+
+    @en "Bool"
+    @fa "منطقی"
+    pub func Bool(key: str): bool:
+        raw := json.Get(this.args, key)
+        defer mem.Free(raw as void*)
+        ret raw == "true"
+    end
+
+    @en "Has"
+    @fa "دارد"
+    pub func Has(key: str): bool:
+        ret json.Has(this.args, key)
+    end
+
+    @en "Resolve"
+    @fa "پاسخ"
+    pub func Resolve(raw_json: str):
+        _reply(this.window, this.origin, this.id, true, raw_json)
+    end
+
+    @en "ResolveStr"
+    @fa "پاسخ رشته"
+    pub func ResolveStr(value: str):
+        encoded := json.Str(value)
+        _reply(this.window, this.origin, this.id, true, encoded)
+        mem.Free(encoded as void*)
+    end
+
+    @en "ResolveInt"
+    @fa "پاسخ صحیح"
+    pub func ResolveInt(value: i64):
+        encoded := str.FromInt(value)
+        _reply(this.window, this.origin, this.id, true, encoded)
+        mem.Free(encoded as void*)
+    end
+
+    @en "ResolveBool"
+    @fa "پاسخ منطقی"
+    pub func ResolveBool(value: bool):
+        _reply(this.window, this.origin, this.id, true, value ? "true" : "false")
+    end
+
+    @en "ResolveNull"
+    @fa "پاسخ پوچ"
+    pub func ResolveNull():
+        _reply(this.window, this.origin, this.id, true, "null")
+    end
+
+    @en "Reject"
+    @fa "رد"
+    pub func Reject(message: str):
+        encoded := json.Str(message)
+        _reply(this.window, this.origin, this.id, false, encoded)
+        mem.Free(encoded as void*)
+    end
+end
+
+@en "Window"
+@fa "پنجره"
+pub struct Window:
+    @en "index"
+    @fa "شماره"
+    pub index: int = -1
+
+    func view(): webview.WebView:
+        if this.index < 0 or this.index >= _wins.len():
+            ret webview.WebView {}
+        end
+        ret _wins[this.index].view
+    end
+
+    @en "Navigate"
+    @fa "پیمایش"
+    pub func Navigate(url: str):
+        this.view().Navigate(url)
+    end
+
+    @en "SetHTML"
+    @fa "تنظیم اچ تی ام ال"
+    pub func SetHTML(html: str):
+        this.view().SetHTML(html)
+    end
+
+    @en "Eval"
+    @fa "ارزیابی"
+    pub func Eval(js: str):
+        this.view().EvalLater(js)
+    end
+
+    @en "Emit"
+    @fa "رویداد فرستادن"
+    pub func Emit(event: str, raw_json: str = "null"):
+        _emit_to(this.index, event, raw_json)
+    end
+
+    @en "SetTitle"
+    @fa "تنظیم عنوان"
+    pub func SetTitle(title: str):
+        this.view().SetTitle(title)
+    end
+
+    @en "SetSize"
+    @fa "تنظیم اندازه"
+    pub func SetSize(width: int, height: int):
+        this.view().SetSize(width, height)
+    end
+
+    @en "Show"
+    @fa "نمایش"
+    pub func Show():
+        this.view().Show()
+    end
+
+    @en "Hide"
+    @fa "پنهان کردن"
+    pub func Hide():
+        this.view().Hide()
+    end
+
+    @en "Focus"
+    @fa "تمرکز"
+    pub func Focus():
+        this.view().Focus()
+    end
+
+    @en "Minimize"
+    @fa "کمینه کردن"
+    pub func Minimize():
+        this.view().Minimize()
+    end
+
+    @en "Maximize"
+    @fa "بیشینه کردن"
+    pub func Maximize():
+        this.view().Maximize()
+    end
+
+    @en "Close"
+    @fa "بستن"
+    pub func Close():
+        this.view().Destroy()
+    end
+
+    @en "URL"
+    @fa "نشانی فعلی"
+    pub func URL(): str:
+        ret this.view().URL()
+    end
+
+    @en "IsActive"
+    @fa "فعال است"
+    pub func IsActive(): bool:
+        ret this.view().IsActive()
+    end
+
+    @en "IsClosed"
+    @fa "بسته شده است"
+    pub func IsClosed(): bool:
+        ret this.view().IsClosed()
+    end
+
+    @en "OpenDevTools"
+    @fa "باز کردن ابزار توسعه"
+    pub func OpenDevTools():
+        this.view().OpenDevTools()
+    end
+
+    @en "OnClose"
+    @fa "هنگام بستن"
+    pub func OnClose(handler: func () bool):
+        this.view().OnClose(handler)
+    end
+
+    @en "OnLoad"
+    @fa "هنگام بارگذاری"
+    pub func OnLoad(handler: func (str, bool)):
+        this.view().OnLoad(handler)
+    end
+
+    @en "OnCrash"
+    @fa "هنگام از کار افتادن"
+    pub func OnCrash(handler: func ()):
+        this.view().OnCrash(handler)
+    end
+
+    @en "OnResize"
+    @fa "هنگام تغییر اندازه"
+    pub func OnResize(handler: func (int, int)):
+        this.view().OnResize(handler)
+    end
+
+    @en "Native"
+    @fa "دسته بومی"
+    pub func Native(): void*:
+        ret this.view().Native()
+    end
+end
+
+func _js_string(s: str): str:
+    ret json.Str(s)
+end
+
+func _reply(window: int, origin: str, id: str, ok: bool, raw_json: str):
+    if window < 0 or window >= _wins.len():
+        ret
+    end
+    mut b := str.NewBuilder()
+    str.BufAppend(b, "if(location.origin===")
+    quoted := _js_string(origin)
+    str.BufAppend(b, quoted)
+    mem.Free(quoted as void*)
+    str.BufAppend(b, "&&window.__salamBridge)window.__salamBridge.reply(")
+    str.BufAppend(b, id)
+    str.BufAppend(b, ok ? ",true," : ",false,")
+    str.BufAppend(b, raw_json)
+    str.BufAppend(b, ")")
+    code := str.BufStr(b)
+    _wins[window].view.EvalLater(code)
+    mem.Free(code as void*)
+    str.BufFree(b)
+end
+
+func _emit_to(index: int, event: str, raw_json: str):
+    if index < 0 or index >= _wins.len():
+        ret
+    end
+    mut b := str.NewBuilder()
+    str.BufAppend(b, "if(")
+    origins := _origins_json(index)
+    str.BufAppend(b, origins)
+    mem.Free(origins as void*)
+    str.BufAppend(b, ".includes(location.origin)&&window.__salamBridge)window.__salamBridge.event(")
+    name := _js_string(event)
+    str.BufAppend(b, name)
+    mem.Free(name as void*)
+    str.BufAppend(b, ",")
+    str.BufAppend(b, raw_json)
+    str.BufAppend(b, ")")
+    code := str.BufStr(b)
+    _wins[index].view.EvalLater(code)
+    mem.Free(code as void*)
+    str.BufFree(b)
+end
+
+func _local_origin(): str:
+    ret webview.SchemeOrigin(_cfg.scheme)
+end
+
+func _origins_json(index: int): str:
+    mut items := Vector {} as Vector<str>
+    defer items.free()
+    items.push(_js_string(_local_origin()))
+    each rule in _rules:
+        items.push(_js_string(rule.origin))
+    end
+    if index >= 0 and index < _wins.len() and _wins[index].inline_html:
+        items.push(_js_string("null"))
+    end
+    ret json.Array(items)
+end
+
+func _matches(pattern: str, name: str): bool:
+    if pattern == "*" or pattern == name:
+        ret true
+    end
+    if str.EndsWith(pattern, "*"):
+        prefix := str.Substr(pattern, 0, str.Len(pattern) - 1)
+        defer mem.Free(prefix as void*)
+        ret str.StartsWith(name, prefix)
+    end
+    ret false
+end
+
+func _bridge_script(index: int): str:
+    origins := _origins_json(index)
+    post := webview.PostScript()
+    token := _js_string(_token)
+    code := str.Replace(
+        str.Replace(str.Replace(_BRIDGE_JS, "%ORIGINS%", origins), "%POST%", post), "%TOKEN%",
+        token
+    )
+    mem.Free(origins as void*)
+    mem.Free(post as void*)
+    mem.Free(token as void*)
+    ret code
+end
+
+func _find_command(name: str): int:
+    repeat _commands.len() in i:
+        if _commands[i].name == name:
+            ret i
+        end
+    end
+    ret -1
+end
+
+func _on_message(index: int, text: str):
+    if not json.Valid(text):
+        ret
+    end
+    sent := json.Get(text, "t")
+    defer mem.Free(sent as void*)
+    if not crypto.SecretEquals(sent, _token):
+        ret
+    end
+    url := _wins[index].view.URL()
+    defer mem.Free(url as void*)
+    origin := OriginOf(url)
+    kind := json.Get(text, "k")
+    defer mem.Free(kind as void*)
+    if kind == "emit":
+        _on_emit(index, text, origin)
+        mem.Free(origin as void*)
+        ret
+    end
+    if kind != "call":
+        mem.Free(origin as void*)
+        ret
+    end
+    id := json.Get(text, "id")
+    command := json.Get(text, "cmd")
+    args := json.Get(text, "args")
+    c := Call { command = command, args = args, origin = origin, window = index, id = id }
+    inline_ok := origin == "null" and _wins[index].inline_html
+    if not inline_ok and not Allowed(origin, command):
+        c.Reject("not allowed: ".concat(command))
+        ret
+    end
+    found := _find_command(command)
+    if found < 0:
+        c.Reject("unknown command: ".concat(command))
+        ret
+    end
+    entry := _commands[found]
+    if entry.threaded:
+        pool.Go((): entry.handler(c) end)
+    else:
+        entry.handler(c)
+    end
+end
+
+func _on_emit(index: int, text: str, origin: str):
+    inline_ok := origin == "null" and _wins[index].inline_html
+    name := json.Get(text, "name")
+    defer mem.Free(name as void*)
+    if not inline_ok and not Allowed(origin, "event:".concat(name)):
+        ret
+    end
+    data := json.Get(text, "data")
+    defer mem.Free(data as void*)
+    each l in _listeners:
+        if l.name == name:
+            l.handler(data)
+        end
+    end
+end
+
+func _nav_allowed(index: int, url: str): bool:
+    if str.StartsWith(url, "about:") or str.StartsWith(url, "data:") or str.StartsWith(url, "blob:"):
+        ret true
+    end
+    origin := OriginOf(url)
+    defer mem.Free(origin as void*)
+    if origin == _local_origin() or origin == _wins[index].start_origin:
+        ret true
+    end
+    each rule in _rules:
+        if rule.origin == origin:
+            ret true
+        end
+    end
+    each allowed in _wins[index].allow_navigation:
+        if allowed == origin:
+            ret true
+        end
+    end
+    ret false
+end
+
+func _on_navigate(index: int, url: str): bool:
+    if _nav_allowed(index, url):
+        ret true
+    end
+    if _cfg.external_links and webview.NavigationIsMainFrame():
+        OpenURL(url)
+    end
+    ret false
+end
+
+func _on_new_window(url: str):
+    if _cfg.external_links:
+        OpenURL(url)
+    end
+end
+
+func _startup():
+    if _inited:
+        ret
+    end
+    _inited = true
+    if _cfg.id.len() == 0:
+        _cfg.id = "ir.salamlang.app"
+    end
+    if _cfg.name.len() == 0:
+        _cfg.name = _cfg.id
+    end
+    _token = crypto.RandomHex(16)
+    webview.SetApp(_cfg.id, _cfg.name)
+    dir := DataDir()
+    _mk := os.MkdirAll(dir)
+    webview.SetDataDir(dir)
+    mem.Free(dir as void*)
+    webview.RegisterScheme(_cfg.scheme, (req: webview.Request): ret _serve_asset(req) end)
+    if _cfg.pack_path.len() > 0:
+        _opened := _open_pack(_cfg.pack_path, _cfg.id)
+    else:
+        _open_default_pack()
+    end
+end
+
+func _open_default_pack():
+    exe := _exe_path()
+    defer mem.Free(exe as void*)
+    if exe.len() == 0:
+        ret
+    end
+    if _open_pack(exe, _cfg.id):
+        ret
+    end
+    sibling := exe.concat(".pack")
+    defer mem.Free(sibling as void*)
+    if os.Exists(sibling) and _open_pack(sibling, _cfg.id):
+        ret
+    end
+    if SALAM_OS_MAC:
+        dir := filepath.Dir(exe)
+        defer mem.Free(dir as void*)
+        resources := dir.concat("/../Resources/app.pack")
+        defer mem.Free(resources as void*)
+        if os.Exists(resources):
+            _opened := _open_pack(resources, _cfg.id)
+        end
+    end
+end
+
+@en "OriginOf"
+@fa "مبدا نشانی"
+pub func OriginOf(url: str): str:
+    start := str.IndexOf(url, "://")
+    if start <= 0:
+        ret str.Clone("null")
+    end
+    scheme := str.Substr(url, 0, start)
+    defer mem.Free(scheme as void*)
+    if str.EqualFold(scheme, "file"):
+        ret str.Clone("file://")
+    end
+    rest := start + 3
+    mut stop := str.Len(url)
+    each sep in ["/", "?", "#"]:
+        at := str.IndexFrom(url, sep, rest)
+        if at >= 0 and at < stop:
+            stop = at
+        end
+    end
+    authority := str.Substr(url, rest, stop - rest)
+    defer mem.Free(authority as void*)
+    at_sign := str.LastIndex(authority, "@")
+    host := at_sign >= 0 ? str.Substr(authority, at_sign + 1, str.Len(authority) - at_sign - 1) : str.Clone(authority)
+    defer mem.Free(host as void*)
+    lower_scheme := str.Lower(scheme)
+    defer mem.Free(lower_scheme as void*)
+    lower_host := str.Lower(host)
+    defer mem.Free(lower_host as void*)
+    mut host_only := str.Clone(lower_host)
+    if lower_scheme == "https" and str.EndsWith(lower_host, ":443"):
+        mem.Free(host_only as void*)
+        host_only = str.Substr(lower_host, 0, str.Len(lower_host) - 4)
+    else lower_scheme == "http" and str.EndsWith(lower_host, ":80"):
+        mem.Free(host_only as void*)
+        host_only = str.Substr(lower_host, 0, str.Len(lower_host) - 3)
+    end
+    out := lower_scheme.concat("://").concat(host_only)
+    mem.Free(host_only as void*)
+    ret out
+end
+
+@en "Allowed"
+@fa "مجاز است"
+pub func Allowed(origin: str, command: str): bool:
+    if origin == _local_origin():
+        ret true
+    end
+    each rule in _rules:
+        if rule.origin == origin:
+            each pattern in rule.patterns:
+                if _matches(pattern, command):
+                    ret true
+                end
+            end
+        end
+    end
+    ret false
+end
+
+@en "Init"
+@fa "آغاز"
+pub func Init(config: Config):
+    _cfg = config
+    _inited = false
+end
+
+@en "CurrentConfig"
+@fa "پیکربندی فعلی"
+pub func CurrentConfig(): Config:
+    ret _cfg
+end
+
+@en "DataDir"
+@fa "پوشه داده"
+pub func DataDir(): str:
+    id := _cfg.id.len() > 0 ? _cfg.id : "ir.salamlang.app"
+    if SALAM_OS_WINDOWS:
+        ret filepath.Join(user.CacheDir(), id)
+    else SALAM_OS_MAC:
+        ret filepath.Join(user.HomeDir(), "Library/Application Support/".concat(id))
+    else:
+        xdg := os.Env("XDG_DATA_HOME")
+        if xdg.len() > 0:
+            ret filepath.Join(xdg, id)
+        end
+        ret filepath.Join(user.HomeDir(), ".local/share/".concat(id))
+    end
+end
+
+@en "Allow"
+@fa "اجازه دادن"
+pub func Allow(origin: str, commands: Vector<str>):
+    normalized := OriginOf(origin)
+    _rules.push(_Rule { origin = normalized, patterns = commands })
+end
+
+@en "Command"
+@fa "فرمان"
+pub func Command(name: str, handler: func (Call)):
+    _commands.push(_Command { name = str.Clone(name), handler = handler })
+end
+
+@en "CommandAsync"
+@fa "فرمان ناهمگام"
+pub func CommandAsync(name: str, handler: func (Call)):
+    _commands.push(_Command { name = str.Clone(name), handler = handler, threaded = true })
+end
+
+@en "On"
+@fa "هنگام رویداد"
+pub func On(event: str, handler: func (str)):
+    _listeners.push(_Listener { name = str.Clone(event), handler = handler })
+end
+
+@en "Emit"
+@fa "رویداد فرستادن"
+pub func Emit(event: str, raw_json: str = "null"):
+    repeat _wins.len() in i:
+        _emit_to(i, event, raw_json)
+    end
+end
+
+@en "AssetURL"
+@fa "نشانی دارایی"
+pub func AssetURL(path: str): str:
+    ret webview.SchemeURL(_cfg.scheme, path)
+end
+
+@en "Open"
+@fa "باز کردن"
+pub func Open(options: WindowOptions): Window:
+    _startup()
+    view := webview.Create(_cfg.debug, false)
+    if view.IsClosed():
+        ret Window {}
+    end
+    index := _wins.len()
+    mut start := options.url
+    if start.len() == 0 and options.html.len() == 0:
+        start = AssetURL("/index.html")
+    end
+    _wins.push(
+        _Win {
+            label = str.Clone(options.label), view = view, start_origin = start.len() > 0 ? OriginOf(start) : str.Clone("null"),
+            inline_html = options.html.len() > 0, allow_navigation = options.allow_navigation
+        }
+    )
+    if options.title.len() > 0:
+        view.SetTitle(options.title)
+    end
+    view.SetSize(options.width, options.height, options.resizable ? webview.HINT_NONE : webview.HINT_FIXED)
+    if options.min_width > 0 or options.min_height > 0:
+        view.SetMinSize(options.min_width, options.min_height)
+    end
+    if options.icon.len() > 0:
+        view.SetIcon(options.icon)
+    end
+    if not options.context_menu:
+        view.SetContextMenu(false)
+    end
+    bridge := _bridge_script(index)
+    view.Init(bridge)
+    mem.Free(bridge as void*)
+    each script in options.scripts:
+        view.Init(script, true)
+    end
+    view.OnMessage((text: str): _on_message(index, text) end)
+    view.OnNavigate((url: str): ret _on_navigate(index, url) end)
+    view.OnNewWindow((url: str): _on_new_window(url) end)
+    if options.center:
+        view.Center()
+    end
+    if options.html.len() > 0:
+        view.SetHTML(options.html)
+    else:
+        view.Navigate(start)
+    end
+    if options.visible:
+        view.Show()
+    end
+    ret Window { index = index }
+end
+
+@en "GetWindow"
+@fa "گرفتن پنجره"
+pub func GetWindow(label: str): Window:
+    repeat _wins.len() in i:
+        if _wins[i].label == label:
+            ret Window { index = i }
+        end
+    end
+    ret Window {}
+end
+
+@en "Dispatch"
+@fa "ارسال به رشته رابط"
+pub func Dispatch(work: func ()):
+    webview.Dispatch(work)
+end
+
+@en "Run"
+@fa "اجرا"
+pub func Run():
+    webview.RunAll()
+end
+
+@en "Quit"
+@fa "خروج"
+pub func Quit():
+    webview.Quit()
+end

@@ -1,0 +1,455 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package desktop
+
+extern:
+    func fread(ptr: void*, size: u64, count: u64, stream: void*): u64
+    func fwrite(ptr: void*, size: u64, count: u64, stream: void*): u64
+end
+
+const _PACK_MAGIC := "SLMPACK1"
+const _FOOTER_SIZE := 16
+const _METHOD_RAW := 0
+const _METHOD_DEFLATE := 1
+
+mut _pack_path := ""
+mut _pack_start := 0 as i64
+mut _pack_entries := Vector {} as Vector<_PackEntry>
+mut _pack_key := ""
+mut _asset_cache := HashMap {} as HashMap<str, _Blob>
+
+struct _PackEntry:
+    pub path: str = ""
+    pub offset: i64 = 0
+    pub stored: i64 = 0
+    pub plain: i64 = 0
+    pub method: int = 0
+end
+
+struct _Blob:
+    pub data: void* = null
+    pub size: i64 = 0
+end
+
+func _fnv(text: str): u64:
+    mut h := 0xCBF29CE484222325 as u64
+    bytes := text as u8*
+    n := str.Len(text)
+    repeat n in i:
+        h = h ^ (bytes[i] as u64)
+        h = h * (0x100000001B3 as u64)
+    end
+    ret h
+end
+
+func _scramble(data: void*, n: i64, seed: u64):
+    mut x := seed
+    if x == (0 as u64):
+        x = 0x9E3779B97F4A7C15 as u64
+    end
+    bytes := data as u8*
+    mut i := 0 as i64
+    until i < n:
+        x = x ^ (x << 13)
+        x = x ^ (x >> 7)
+        x = x ^ (x << 17)
+        bytes[i] = bytes[i] ^ ((x & (0xFF as u64)) as u8)
+        i += 1
+    end
+end
+
+func _put_u32(buf &: compress.ByteBuf, v: i64):
+    compress.BufPush(buf, (v & 0xFF) as int)
+    compress.BufPush(buf, ((v >> 8) & 0xFF) as int)
+    compress.BufPush(buf, ((v >> 16) & 0xFF) as int)
+    compress.BufPush(buf, ((v >> 24) & 0xFF) as int)
+end
+
+func _put_u64(buf &: compress.ByteBuf, v: i64):
+    _put_u32(buf, v & 0xFFFFFFFF)
+    _put_u32(buf, (v >> 32) & 0xFFFFFFFF)
+end
+
+func _get_u32(bytes: u8*, at: i64): i64:
+    mut v := 0 as i64
+    repeat 4 in i:
+        v = v | ((bytes[at + (i as i64)] as i64) << (i * 8))
+    end
+    ret v
+end
+
+func _get_u64(bytes: u8*, at: i64): i64:
+    ret _get_u32(bytes, at) | (_get_u32(bytes, at + 4) << 32)
+end
+
+func _read_range(path: str, offset: i64, n: i64): void*:
+    f := os.Open(path, "rb")
+    if f == null:
+        ret null
+    end
+    defer f.close()
+    if offset > 0:
+        _moved := f.seek(offset, 0)
+    end
+    buf := mem.Allocate((n + 1) as u64)
+    got := fread(buf, 1 as u64, n as u64, f as void*)
+    if got != (n as u64):
+        mem.Free(buf)
+        ret null
+    end
+    (buf as u8*)[n] = 0 as u8
+    ret buf
+end
+
+func _worth_compressing(path: str): bool:
+    ext := filepath.Ext(path)
+    defer mem.Free(ext as void*)
+    each skip in ["png", "jpg", "jpeg", "gif", "webp", "woff", "woff2", "mp3", "mp4", "webm", "zip", "gz", "ico"]:
+        if str.EqualFold(ext, skip) or str.EqualFold(ext, ".".concat(skip)):
+            ret false
+        end
+    end
+    ret true
+end
+
+func _walk_assets(root: str, rel: str, out &: Vector<str>):
+    full := rel.len() == 0 ? root : filepath.Join(root, rel)
+    names := os.ListDir(full)
+    defer names.free()
+    each name in names:
+        if name == "." or name == ".." or name == ".DS_Store":
+            continue
+        end
+        child := rel.len() == 0 ? str.Clone(name) : rel.concat("/").concat(name)
+        if os.IsDir(filepath.Join(root, child)):
+            _walk_assets(root, child, out)
+        else:
+            out.push(child)
+        end
+    end
+end
+
+func _open_pack(path: str, key: str): bool:
+    size := os.FileSize(path)
+    if size < (_FOOTER_SIZE as i64) + 4:
+        ret false
+    end
+    foot := _read_range(path, size - (_FOOTER_SIZE as i64), _FOOTER_SIZE as i64)
+    if foot == null:
+        ret false
+    end
+    defer mem.Free(foot)
+    foot_bytes := foot as u8*
+    magic := _PACK_MAGIC as u8*
+    repeat 8 in i:
+        if foot_bytes[8 + i] != magic[i]:
+            ret false
+        end
+    end
+    total := _get_u64(foot_bytes, 0 as i64)
+    start := size - (_FOOTER_SIZE as i64) - total
+    if total < 4 or start < 0:
+        ret false
+    end
+    head := _read_range(path, start, 4 as i64)
+    if head == null:
+        ret false
+    end
+    table_size := _get_u32(head as u8*, 0 as i64)
+    mem.Free(head)
+    if table_size < 4 or table_size + 4 > total:
+        ret false
+    end
+    table := _read_range(path, start + 4, table_size)
+    if table == null:
+        ret false
+    end
+    defer mem.Free(table)
+    seed := _fnv(key)
+    _scramble(table, table_size, seed)
+    bytes := table as u8*
+    count := _get_u32(bytes, 0 as i64)
+    mut at := 4 as i64
+    mut entries := Vector {} as Vector<_PackEntry>
+    mut n := 0 as i64
+    until n < count:
+        if at + 4 > table_size:
+            entries.free()
+            ret false
+        end
+        name_size := _get_u32(bytes, at)
+        at += 4
+        if name_size <= 0 or at + name_size + 28 > table_size:
+            entries.free()
+            ret false
+        end
+        name := mem.Allocate((name_size + 1) as u64)
+        mem.Copy(name, ((bytes as i64) + at) as void*, name_size as u64)
+        (name as u8*)[name_size] = 0 as u8
+        at += name_size
+        entries.push(
+            _PackEntry {
+                path = name as str, offset = _get_u64(bytes, at), stored = _get_u64(bytes, at + 8),
+                plain = _get_u64(bytes, at + 16), method = _get_u32(bytes, at + 24) as int
+            }
+        )
+        at += 28
+        n += 1
+    end
+    _pack_entries = entries
+    _pack_path = str.Clone(path)
+    _pack_start = start + 4 + table_size
+    _pack_key = str.Clone(key)
+    ret true
+end
+
+func _pack_read(name: str): _Blob:
+    each e in _pack_entries:
+        if e.path == name:
+            raw := _read_range(_pack_path, _pack_start + e.offset, e.stored)
+            if raw == null:
+                ret _Blob {}
+            end
+            _scramble(raw, e.stored, _fnv(_pack_key) ^ _fnv(name))
+            if e.method == _METHOD_DEFLATE:
+                out := compress.Decompress(compress.MethodDeflate, raw, e.stored as int)
+                mem.Free(raw)
+                ret _Blob { data = out.data, size = out.len as i64 }
+            end
+            ret _Blob { data = raw, size = e.stored }
+        end
+    end
+    ret _Blob {}
+end
+
+func _hex_value(c: int): int:
+    if c >= 48 and c <= 57:
+        ret c - 48
+    else c >= 65 and c <= 70:
+        ret c - 55
+    else c >= 97 and c <= 102:
+        ret c - 87
+    end
+    ret -1
+end
+
+func _decode_path(path: str): str:
+    n := str.Len(path)
+    bytes := path as u8*
+    out := mem.Allocate((n + 1) as u64) as u8*
+    mut j := 0
+    mut i := 0
+    until i < n:
+        c := bytes[i] as int
+        if c == 37 and i + 2 < n:
+            hi := _hex_value(bytes[i + 1] as int)
+            lo := _hex_value(bytes[i + 2] as int)
+            if hi >= 0 and lo >= 0:
+                out[j] = ((hi * 16) + lo) as u8
+                j += 1
+                i += 3
+                continue
+            end
+        end
+        out[j] = c as u8
+        j += 1
+        i += 1
+    end
+    out[j] = 0 as u8
+    decoded := out as str
+    if str.Len(decoded) != j:
+        mem.Free(out as void*)
+        ret str.Clone("")
+    end
+    ret decoded
+end
+
+func _load_asset(rel: str): _Blob:
+    if _asset_cache.has(rel):
+        ret _asset_cache.get(rel)
+    end
+    mut blob := _Blob {}
+    if _cfg.assets_dir.len() > 0:
+        full := filepath.Join(_cfg.assets_dir, rel)
+        if os.Exists(full) and not os.IsDir(full):
+            size := os.FileSize(full)
+            data := _read_range(full, 0 as i64, size)
+            if data != null:
+                ret _Blob { data = data, size = size }
+            end
+        end
+    end
+    if _pack_entries.len() > 0:
+        blob = _pack_read(rel)
+        if blob.data != null and blob.size <= (4 * 1024 * 1024 as i64):
+            _asset_cache.put(str.Clone(rel), blob)
+        end
+    end
+    ret blob
+end
+
+func _is_cached(rel: str): bool:
+    ret _asset_cache.has(rel)
+end
+
+func _serve_asset(req: webview.Request): webview.Response:
+    rel := SafeAssetPath(req.path)
+    defer mem.Free(rel as void*)
+    if rel.len() == 0:
+        ret webview.Response { status = 403, mime = "text/plain" }
+    end
+    mut blob := _load_asset(rel)
+    if blob.data == null and _cfg.spa and not str.Contains(rel, "."):
+        blob = _load_asset("index.html")
+        if blob.data != null:
+            mut res := webview.Response { mime = "text/html; charset=utf-8", data = blob.data, size = blob.size }
+            _add_headers(res)
+            ret res
+        end
+    end
+    if blob.data == null:
+        ret webview.Response { status = 404, mime = "text/plain" }
+    end
+    mut res := webview.Response { mime = mime.MimeType(rel), data = blob.data, size = blob.size }
+    _add_headers(res)
+    ret res
+end
+
+func _add_headers(res &: webview.Response):
+    if _cfg.csp.len() > 0:
+        res.Header("Content-Security-Policy", _cfg.csp)
+    end
+    res.Header("X-Content-Type-Options", "nosniff")
+end
+
+@en "PackDir"
+@fa "بسته کردن پوشه"
+pub func PackDir(dir: str, out_path: str, key: str): int:
+    if not os.IsDir(dir):
+        ret -1
+    end
+    mut names := Vector {} as Vector<str>
+    defer names.free()
+    _walk_assets(dir, "", names)
+    mut body := compress.NewByteBuf()
+    mut table := compress.NewByteBuf()
+    defer compress.BufFree(body)
+    defer compress.BufFree(table)
+    _put_u32(table, names.len() as i64)
+    seed := _fnv(key)
+    each name in names:
+        full := filepath.Join(dir, name)
+        plain := os.FileSize(full)
+        raw := _read_range(full, 0 as i64, plain)
+        if raw == null:
+            ret -1
+        end
+        mut method := _METHOD_RAW
+        mut stored := raw
+        mut stored_size := plain
+        mut packed := compress.NewByteBuf()
+        if plain > 256 and _worth_compressing(name):
+            packed = compress.Compress(compress.MethodDeflate, raw, plain as int)
+            if (packed.len as i64) < plain:
+                method = _METHOD_DEFLATE
+                stored = packed.data
+                stored_size = packed.len as i64
+            end
+        end
+        offset := compress.BufLen(body) as i64
+        copy := mem.Allocate((stored_size + 1) as u64)
+        mem.Copy(copy, stored, stored_size as u64)
+        _scramble(copy, stored_size, seed ^ _fnv(name))
+        compress.BufPushBytes(body, copy, stored_size as int)
+        mem.Free(copy)
+        mem.Free(raw)
+        compress.BufFree(packed)
+        name_size := str.Len(name) as i64
+        _put_u32(table, name_size)
+        compress.BufPushBytes(table, name as void*, name_size as int)
+        _put_u64(table, offset)
+        _put_u64(table, stored_size)
+        _put_u64(table, plain)
+        _put_u32(table, method as i64)
+    end
+    table_size := compress.BufLen(table) as i64
+    _scramble(table.data, table_size, seed)
+    mut head := compress.NewByteBuf()
+    defer compress.BufFree(head)
+    _put_u32(head, table_size)
+    total := 4 + table_size + (compress.BufLen(body) as i64)
+    mut foot := compress.NewByteBuf()
+    defer compress.BufFree(foot)
+    _put_u64(foot, total)
+    f := os.Open(out_path, "wb")
+    if f == null:
+        ret -1
+    end
+    defer f.close()
+    fp := f as void*
+    fwrite(head.data, 1 as u64, 4 as u64, fp)
+    fwrite(table.data, 1 as u64, table_size as u64, fp)
+    fwrite(body.data, 1 as u64, compress.BufLen(body) as u64, fp)
+    fwrite(foot.data, 1 as u64, 8 as u64, fp)
+    fwrite(_PACK_MAGIC as void*, 1 as u64, 8 as u64, fp)
+    ret names.len()
+end
+
+@en "AppendPack"
+@fa "افزودن بسته"
+pub func AppendPack(exe_path: str, pack_path: str): bool:
+    size := os.FileSize(pack_path)
+    data := _read_range(pack_path, 0 as i64, size)
+    if data == null:
+        ret false
+    end
+    defer mem.Free(data)
+    f := os.Open(exe_path, "ab")
+    if f == null:
+        ret false
+    end
+    defer f.close()
+    ret fwrite(data, 1 as u64, size as u64, f as void*) == (size as u64)
+end
+
+@en "SafeAssetPath"
+@fa "مسیر امن دارایی"
+pub func SafeAssetPath(request_path: str): str:
+    decoded := _decode_path(request_path)
+    defer mem.Free(decoded as void*)
+    mut start := 0
+    until start < str.Len(decoded) and (decoded as u8*)[start] == (47 as u8):
+        start += 1
+    end
+    mut rel := str.Substr(decoded, start, str.Len(decoded) - start)
+    if str.Contains(rel, "\\") or str.Contains(rel, ":"):
+        mem.Free(rel as void*)
+        ret str.Clone("")
+    end
+    parts := str.Split(rel, "/")
+    defer parts.free()
+    each part in parts:
+        if part == "..":
+            mem.Free(rel as void*)
+            ret str.Clone("")
+        end
+    end
+    if rel.len() == 0 or str.EndsWith(rel, "/"):
+        full := rel.concat("index.html")
+        mem.Free(rel as void*)
+        rel = full
+    end
+    ret rel
+end

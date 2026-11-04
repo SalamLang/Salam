@@ -1,0 +1,156 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package desktop
+
+if SALAM_OS_LINUX:
+    extern:
+        func g_app_info_launch_default_for_uri(uri: str, context: void*, error: void*): int
+        func readlink(path: str, buf: void*, size: u64): i64
+    end
+
+    func _exe_path(): str:
+        buf := mem.AllocateZeroed(4097 as u64)
+        n := readlink("/proc/self/exe", buf, 4096 as u64)
+        if n <= 0:
+            mem.Free(buf)
+            ret str.Clone("")
+        end
+        ret buf as str
+    end
+
+    func _open_external(url: str): bool:
+        ret g_app_info_launch_default_for_uri(url, null, null) != 0
+    end
+end
+
+if SALAM_OS_WINDOWS:
+    extern:
+        func GetModuleFileNameW(module: void*, buf: void*, size: u32): u32
+        func WideCharToMultiByte(
+            code_page: u32, flags: u32, wide: void*, wide_len: i32, out: void*, out_len: i32, def: void*,
+            used: void*
+        ): i32
+        func MultiByteToWideChar(
+            code_page: u32, flags: u32, mb_str: str, mb_len: i32, wide_buf: void*, wide_len: i32
+        ): i32
+        func LoadLibraryW(name: void*): void*
+        func GetProcAddress(module: void*, name: str): void*
+    end
+
+    func _wide(s: str): void*:
+        needed := MultiByteToWideChar(65001 as u32, 0 as u32, s, 0 - 1, null, 0)
+        buf := mem.Allocate(((needed + 1) as u64) * (2 as u64))
+        MultiByteToWideChar(65001 as u32, 0 as u32, s, 0 - 1, buf, needed + 1)
+        ret buf
+    end
+
+    func _narrow(wide: void*): str:
+        needed := WideCharToMultiByte(65001 as u32, 0 as u32, wide, 0 - 1, null, 0, null, null)
+        buf := mem.Allocate((needed + 1) as u64)
+        WideCharToMultiByte(65001 as u32, 0 as u32, wide, 0 - 1, buf, needed + 1, null, null)
+        (buf as u8*)[needed] = 0 as u8
+        ret buf as str
+    end
+
+    func _proc(library: str, name: str): void*:
+        wide := _wide(library)
+        module := LoadLibraryW(wide)
+        mem.Free(wide)
+        if module == null:
+            ret null
+        end
+        ret GetProcAddress(module, name)
+    end
+
+    func _exe_path(): str:
+        buf := mem.AllocateZeroed(65536 as u64)
+        defer mem.Free(buf)
+        n := GetModuleFileNameW(null, buf, 32000 as u32)
+        if n == (0 as u32):
+            ret str.Clone("")
+        end
+        ret _narrow(buf)
+    end
+
+    func _open_external(url: str): bool:
+        shell := _proc("shell32.dll", "ShellExecuteW")
+        if shell == null:
+            ret false
+        end
+        verb := _wide("open")
+        target := _wide(url)
+        defer mem.Free(verb)
+        defer mem.Free(target)
+        f := shell as extern stdcall func (void*, void*, void*, void*, void*, int) void*
+        result := f(null, verb, target, null, null, 1)
+        ret (result as size) > 32
+    end
+end
+
+if SALAM_OS_MAC:
+    extern:
+        func _NSGetExecutablePath(buf: void*, size: void*): int
+        func objc_getClass(name: str): void*
+        func sel_registerName(name: str): void*
+        func objc_msgSend(receiver: void*, selector: void*): void*
+    end
+
+    func _objc0(recv: void*, name: str): void*:
+        fn := (&objc_msgSend) as extern func (void*, void*) void*
+        ret fn(recv, sel_registerName(name))
+    end
+
+    func _objc1(recv: void*, name: str, a1: void*): void*:
+        fn := (&objc_msgSend) as extern func (void*, void*, void*) void*
+        ret fn(recv, sel_registerName(name), a1)
+    end
+
+    func _ns(s: str): void*:
+        fn := (&objc_msgSend) as extern func (void*, void*, str) void*
+        ret fn(objc_getClass("NSString"), sel_registerName("stringWithUTF8String:"), s)
+    end
+
+    func _exe_path(): str:
+        buf := mem.AllocateZeroed(4097 as u64)
+        size_ptr := (mem.AllocateZeroed(8 as u64)) as u32*
+        size_ptr[0] = 4096 as u32
+        ok := _NSGetExecutablePath(buf, size_ptr as void*)
+        mem.Free(size_ptr as void*)
+        if ok != 0:
+            mem.Free(buf)
+            ret str.Clone("")
+        end
+        ret buf as str
+    end
+
+    func _open_external(url: str): bool:
+        workspace := _objc0(objc_getClass("NSWorkspace"), "sharedWorkspace")
+        target := _objc1(objc_getClass("NSURL"), "URLWithString:", _ns(url))
+        if target == null:
+            ret false
+        end
+        fn := (&objc_msgSend) as extern func (void*, void*, void*) i8
+        ret fn(workspace, sel_registerName("openURL:"), target) != (0 as i8)
+    end
+end
+
+@en "OpenURL"
+@fa "باز کردن نشانی"
+pub func OpenURL(url: str): bool:
+    if str.StartsWith(url, "http://") or str.StartsWith(url, "https://") or str.StartsWith(url, "mailto:") or str.StartsWith(url, "tel:"):
+        ret _open_external(url)
+    end
+    ret false
+end

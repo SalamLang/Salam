@@ -36,6 +36,9 @@ func fn_reset(g &: Ng):
     g.f_noinline = false
     g.f_always = false
     g.f_sret = false
+    g.f_cabi = false
+    g.f_bv_val.clear()
+    g.f_bv_ty.clear()
     g.cb = 0 - 1
 end
 
@@ -468,11 +471,15 @@ func parse_call(g &: Ng): int:
     p0 := g.p
     skip_attrs_to_type(g)
     mut stdc := false
+    mut ccc := false
     mut q0 := p0
     until q0 < g.p:
         if src_at(g, q0, "x86_stdcallcc"):
             stdc = true
             break
+        end
+        if src_at(g, q0, "ccc ") and (q0 == p0 or g.src[q0 - 1] == (32 as u8)):
+            ccc = true
         end
         q0 += 1
     end
@@ -561,6 +568,9 @@ func parse_call(g &: Ng): int:
     end
     if stdc:
         g.i_f[i] = g.i_f[i] | IF_STDCALL
+    end
+    if ccc:
+        g.i_f[i] = g.i_f[i] | IF_CCC
     end
     mut nr := false
     until true:
@@ -844,6 +854,7 @@ func parse_params(g &: Ng):
         t := parse_type(g)
         mut flags := 0
         mut nm := 0 - 1
+        mut bvt := 0 - 1
         until g.ok:
             skip_ws(g)
             c := cur(g)
@@ -863,12 +874,20 @@ func parse_params(g &: Ng):
             end
             if k == KW_BYVAL:
                 flags = flags | IF_BYVAL
+                skip_sp(g)
+                if cur(g) == 40:
+                    expect(g, 40)
+                    bvt = parse_type(g)
+                    expect(g, 41)
+                end
+                continue
             end
             if k == KW_NONNULL:
                 flags = flags | IF_NONNULL
             end
             if k == KW_SRET:
                 g.f_sret = true
+                flags = flags | IF_SRET
             end
             skip_sp(g)
             if cur(g) == 40:
@@ -884,6 +903,10 @@ func parse_params(g &: Ng):
         g.v_i[v] = idx as i64
         g.f_args.push(v)
         g.f_argf.push(flags)
+        if bvt >= 0:
+            g.f_bv_val.push(v)
+            g.f_bv_ty.push(bvt)
+        end
         idx += 1
     end
 end
@@ -914,6 +937,18 @@ func parse_define(g &: Ng):
     g.sy_local[s] = local
     parse_params(g)
     g.f_popn = 0
+    mut qc := dv_fstart
+    until qc < g.p and g.src[qc] != (64 as u8):
+        if src_at(g, qc, " ccc "):
+            g.f_cabi = true
+            g.f_noinline = true
+            break
+        end
+        qc += 1
+    end
+    if g.f_cabi and g.f_sret and g.arch == NG_ARCH_X86 and g.os != NG_OS_WINDOWS:
+        g.f_popn = 4
+    end
     if g.arch == NG_ARCH_X86:
         mut q0 := dv_fstart
         until q0 < g.p and g.src[q0] != (64 as u8):

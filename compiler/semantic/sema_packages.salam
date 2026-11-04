@@ -32,6 +32,13 @@ func pkg_cache_get(s &: Sema, path: str): int:
     ret 0
 end
 
+func pkg_in_stdlib(path: str): bool:
+    if str.Len(g_sm_stdlib_root) == 0:
+        ret str.StartsWith(path, "std/")
+    end
+    ret str.StartsWith(path, g_sm_stdlib_root + "/std/")
+end
+
 func load_package(s &: Sema, a &: at.Ast, path: str, imp: int): int:
     cached := pkg_cache_get(s, path)
     if cached != 0:
@@ -73,15 +80,18 @@ func load_package(s &: Sema, a &: at.Ast, path: str, imp: int): int:
     end
     pack := lx.Detect(sf, fb)
     mut toks := tok.StreamNew(path)
-    _lx_ok := lx.Run(s.log, pack, sf, toks)
+    lx_ok := lx.Run(s.log, pack, sf, toks)
     mut prog := 0
-    _ps_ok := ps.Run(s.log, toks, a, prog)
+    ps_ok := ps.Run(s.log, toks, a, prog)
     tok.StreamFree(toks)
     entry_pack := s.cctab.pack
     SetFilePack(s, path, pack)
     cc.TableSetPack(s.cctab, pack)
-    _cc_ok := cc.PruneProgram(a, s.log, path, s.cctab, prog)
+    cc_ok := cc.PruneProgram(a, s.log, path, s.cctab, prog)
     cc.TableSetPack(s.cctab, entry_pack)
+    if not lx_ok or not ps_ok or not cc_ok:
+        s.pkg_source_failed = true
+    end
     sema_check_toplevel_order_in_file(s, a, prog, path)
 
     files := package_files(path)
@@ -95,15 +105,18 @@ func load_package(s &: Sema, a &: at.Ast, path: str, imp: int): int:
             lg.AddDiagSource(s_log2, fpath, fsf.text, fsf.len)
             s.log = s_log2
             mut ftoks := tok.StreamNew(fpath)
-            _f1 := lx.Run(s.log, pack, fsf, ftoks)
+            f_lx_ok := lx.Run(s.log, pack, fsf, ftoks)
             mut fprog := 0
-            _f2 := ps.Run(s.log, ftoks, a, fprog)
+            f_ps_ok := ps.Run(s.log, ftoks, a, fprog)
             tok.StreamFree(ftoks)
             fentry_pack := s.cctab.pack
             SetFilePack(s, fpath, pack)
             cc.TableSetPack(s.cctab, pack)
-            _f3 := cc.PruneProgram(a, s.log, fpath, s.cctab, fprog)
+            f_cc_ok := cc.PruneProgram(a, s.log, fpath, s.cctab, fprog)
             cc.TableSetPack(s.cctab, fentry_pack)
+            if not f_lx_ok or not f_ps_ok or not f_cc_ok:
+                s.pkg_source_failed = true
+            end
             sema_check_toplevel_order_in_file(s, a, fprog, fpath)
             merge_program(a, prog, fprog)
         end
@@ -178,6 +191,13 @@ func load_package(s &: Sema, a &: at.Ast, path: str, imp: int): int:
     err_prelude_scan(s, a, prog)
     sema_collect(s, a, prog)
     sema_check_pass(s, a, prog)
+    if g_sm_strict_pkgs and not pkg_in_stdlib(path):
+        CheckDomRefs(s, a, prog)
+        if not s.relax_unused:
+            sema_check_unused_funcs(s, a)
+            sema_check_unused_imports(s, a)
+        end
+    end
     _lp0 := s.loading.pop()
     s.in_pkg = save_in_pkg
     s.global = save_global
@@ -293,6 +313,7 @@ func load_import_file(s &: Sema, a &: at.Ast, imp: int):
         ret
     end
     at.SetTypeStr(a, imp, path)
+    s.pkg_imported.push(path)
     pk := load_package(s, a, path, imp)
     if pk == 0:
         ret
@@ -518,6 +539,7 @@ func sema_load_prelude(s &: Sema, a &: at.Ast):
     if str.Len(path) == 0:
         ret
     end
+    s.pkg_prelude_path = path
     imp := scratch_import_node(a)
     pk := load_package(s, a, path, imp)
     if pk != 0:

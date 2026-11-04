@@ -808,7 +808,7 @@ end
 
 func entry_args_x86(g &: Ng):
     mut stk := 8
-    if is_agg(g, g.f_ret):
+    if is_agg(g, g.f_ret) and not g.f_cabi:
         g.retp = gpr(g)
         _lr := e_rm(g, M_LD, 4, g.retp, Mem { k = MK_ARG, d = stk as i64 })
         stk += 4
@@ -817,7 +817,10 @@ func entry_args_x86(g &: Ng):
         v := g.f_args[k]
         t := g.v_ty[v]
         agg := is_agg(g, t)
-        if is_flt(g, t) and not agg:
+        if g.f_cabi and (g.f_argf[k] & IF_BYVAL) != 0:
+            ca_arg_mem(g, v, Mem { k = MK_ARG, d = stk as i64 })
+            stk += align_up(ca_byval_size(g, v), 4)
+        else is_flt(g, t) and not agg:
             r := vnew(g, 1)
             fs := fsz(t)
             _lf := e_rm(g, M_FLD, fs, r, Mem { k = MK_ARG, d = stk as i64 })
@@ -837,6 +840,7 @@ func entry_args_x86(g &: Ng):
             g.vv[v] = r2
         end
     end
+    ca_entry_sret(g)
 end
 
 func hi_reg(g &: Ng): int:
@@ -1040,7 +1044,7 @@ func entry_args_arm(g &: Ng):
     mut vstk := false
     mut ncrn := 0
     mut nsaa := 0
-    if is_agg(g, g.f_ret):
+    if is_agg(g, g.f_ret) and not g.f_cabi:
         g.retp = gpr(g)
         _c := e_copy(g, g.retp, RAX)
         ncrn = 1
@@ -1050,6 +1054,9 @@ func entry_args_arm(g &: Ng):
         t := g.v_ty[v]
         fl := k < g.f_argf.len() ? g.f_argf[k] : 0
         agg := is_agg(g, t)
+        if g.f_cabi and ca_entry_arm(g, v, fl, used, vstk, ncrn, nsaa):
+            continue
+        end
         if is_flt(g, t) and not agg:
             dbl := fsz(t) == 8
             r := vnew(g, 1)
@@ -1093,6 +1100,7 @@ func entry_args_arm(g &: Ng):
             g.vv[v] = r2
         end
     end
+    ca_entry_sret(g)
 end
 
 func entry_args(g &: Ng):
@@ -1109,7 +1117,7 @@ func entry_args(g &: Ng):
     mut fi := 0
     mut pos := 0
     w64 := g.os == NG_OS_WINDOWS and g.arch == NG_ARCH_X64
-    if is_agg(g, g.f_ret):
+    if is_agg(g, g.f_ret) and not g.f_cabi:
         g.retp = gpr(g)
         if w64:
             _c := e_copy(g, g.retp, RCX)
@@ -1131,6 +1139,9 @@ func entry_args(g &: Ng):
     repeat g.f_args.len() in k:
         v := g.f_args[k]
         t := g.v_ty[v]
+        if g.f_cabi and ca_entry_regs(g, v, g.f_argf[k], gi, fi, stk):
+            continue
+        end
         mut cls := vcls_ty(g, t)
         agg := is_agg(g, t)
         if agg:
@@ -1188,6 +1199,7 @@ func entry_args(g &: Ng):
         end
         g.vv[v] = r
     end
+    ca_entry_sret(g)
     win_main_init(g)
 end
 
@@ -4568,8 +4580,9 @@ func isel_call(g &: Ng, i: int):
     if sym >= 0 and isel_intrinsic(g, i, sym):
         ret
     end
-    mut cabi := false
-    if sym >= 0 and not g.sy_def[sym]:
+    ccall := (g.i_f[i] & (IF_CCC | IF_STDCALL)) != 0
+    mut cabi := ccall
+    if not cabi and sym >= 0 and not g.sy_def[sym]:
         cabi = is_agg(g, rt)
         repeat na in k0:
             if (g.pool[ps + 3 * k0 + 1] & IF_BYVAL) != 0 or is_agg(g, g.v_ty[g.pool[ps + 3 * k0]]):
@@ -4588,7 +4601,7 @@ func isel_call(g &: Ng, i: int):
     if cabi and is_agg(g, rt):
         rmode = ca_ret(g, rt, (g.i_f[i] & IF_VARARG) != 0, rparts)
         if rmode < 0:
-            fail(g, "native backend: '" + tab_str(g.syms, sym) + "' returns a struct the native backend cannot return from C code; use --backend=llvm")
+            fail(g, "native backend: '" + (sym >= 0 ? tab_str(g.syms, sym) : "a function pointer") + "' returns a struct the native backend cannot return from C code; use --backend=llvm")
             ret
         end
     end
@@ -4636,7 +4649,7 @@ func isel_call(g &: Ng, i: int):
             byv := (fl & IF_BYVAL) != 0 and aux >= 0
             va := (g.i_f[i] & IF_VARARG) != 0 and g.i_x[i] >= 0 and (k >= g.i_x[i] or g.arch == NG_ARCH_ARM)
             if not ca_arg(g, byv ? mem_of(g, v, 0 as i64) : agg_mem(g, v), byv ? aux : t, byv, va, regs, cls):
-                fail(g, "native backend: '" + tab_str(g.syms, sym) + "' takes a struct the native backend cannot pass to C code; use --backend=llvm")
+                fail(g, "native backend: '" + (sym >= 0 ? tab_str(g.syms, sym) : "a function pointer") + "' takes a struct the native backend cannot pass to C code; use --backend=llvm")
                 ret
             end
         else (fl & IF_BYVAL) != 0 and aux >= 0:
@@ -4647,7 +4660,7 @@ func isel_call(g &: Ng, i: int):
         else is_agg(g, t):
             regs.push(lea_reg(g, agg_mem(g, v)))
             cls.push(0)
-        else (fl & IF_SRET) != 0 and g.arch == NG_ARCH_A64 and sym >= 0 and not g.sy_def[sym]:
+        else (fl & IF_SRET) != 0 and g.arch == NG_ARCH_A64 and (ccall or (sym >= 0 and not g.sy_def[sym])):
             regs.push(use_reg(g, v))
             cls.push(2)
         else is_flt(g, t) and g.arch == NG_ARCH_RV64 and (g.i_f[i] & IF_VARARG) != 0 and g.i_x[i] >= 0 and k >= g.i_x[i]:
@@ -4698,7 +4711,7 @@ func isel_call(g &: Ng, i: int):
             g.mc.sz2[ci] = g.last_argsz
         else g.arch == NG_ARCH_X86 and cabi and is_agg(g, rt) and rmode == 0 and g.os != NG_OS_WINDOWS:
             g.mc.sz2[ci] = 4
-        else g.arch == NG_ARCH_X86 and g.os != NG_OS_WINDOWS and not g.sy_def[sym] and na > 0 and (g.pool[ps + 1] & IF_SRET) != 0:
+        else g.arch == NG_ARCH_X86 and g.os != NG_OS_WINDOWS and (ccall or not g.sy_def[sym]) and na > 0 and (g.pool[ps + 1] & IF_SRET) != 0:
             g.mc.sz2[ci] = 4
         end
         if g.sy_kind[sym] == SY_UNKNOWN:
@@ -4708,6 +4721,8 @@ func isel_call(g &: Ng, i: int):
         ci = e_rr(g, M_CALLR, 8, 0 - 1, cr)
         if g.arch == NG_ARCH_X86 and (g.i_f[i] & IF_STDCALL) != 0:
             g.mc.sz2[ci] = g.last_argsz
+        else g.arch == NG_ARCH_X86 and g.os != NG_OS_WINDOWS and ccall and na > 0 and (g.pool[ps + 1] & IF_SRET) != 0:
+            g.mc.sz2[ci] = 4
         end
     end
     g.mc.imm[ci] = mask
@@ -4909,9 +4924,15 @@ end
 func isel_ret(g &: Ng, i: int):
     a := g.i_a[i]
     mut mask := 0 as i64
+    if a < 0 and g.f_cabi and g.f_sret and g.retp >= 0:
+        _cs := e_copy(g, RAX, g.retp)
+        mask = 1 as i64
+    end
     if a >= 0:
         t := g.v_ty[a]
-        if is_agg(g, t):
+        if is_agg(g, t) and g.f_cabi:
+            mask = ca_ret_load(g, t, a)
+        else is_agg(g, t):
             in_place := g.v_kind[a] == VK_INS and g.vak[a] == AK_PTR and g.var_[a] == g.retp and g.vao[a] == 0
             if g.v_kind[a] == VK_ZERO:
                 zero_fill(g, mem_bi(g.retp, 0 as i64), tsize(g, t))

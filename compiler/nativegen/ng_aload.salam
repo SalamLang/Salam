@@ -28,7 +28,48 @@ func field_load_after(g &: Ng, ld: int, off: i64, ty: int): int:
     ret nv
 end
 
-func scalarize_extv(g &: Ng, e: int): int:
+func aggphi_arm_ok(g &: Ng, x: int): bool:
+    if x < 0:
+        ret false
+    end
+    k := g.v_kind[x]
+    ret k == VK_ZERO or k == VK_UNDEF or k == VK_INS or k == VK_ARG
+end
+
+func aggphi_field(g &: Ng, ph: int, a: int, off: i64, t: int, ex: Vector<int>): int:
+    if g.off_aggphi or a >= ex.len() or g.v_uses[a] != ex[a] or g.i_pcount[ph] > 8:
+        ret 0 - 1
+    end
+    ps := g.i_ps[ph]
+    repeat g.i_pcount[ph] in k:
+        if not aggphi_arm_ok(g, g.pool[ps + 2 * k]):
+            ret 0 - 1
+        end
+    end
+    np := ins_new(g, OP_PHI, t)
+    g.i_ps[np] = g.pool.len()
+    g.i_pcount[np] = g.i_pcount[ph]
+    repeat g.i_pcount[ph] in k2:
+        g.pool.push(0 - 1)
+        g.pool.push(g.pool[ps + 2 * k2 + 1])
+    end
+    nps := g.i_ps[np]
+    repeat g.i_pcount[ph] in k3:
+        x := g.pool[ps + 2 * k3]
+        pb := g.pool[ps + 2 * k3 + 1]
+        xi := ins_new(g, OP_EXTV, t)
+        g.i_a[xi] = x
+        g.i_d[xi] = off
+        xv := new_res(g, xi)
+        ins_before(g, g.b_last[pb], xi)
+        g.pool[nps + 2 * k3] = xv
+    end
+    pv := new_res(g, np)
+    ins_before(g, ph, np)
+    ret pv
+end
+
+func scalarize_extv(g &: Ng, e: int, ex: Vector<int>): int:
     t := g.i_ty[e]
     if is_agg(g, t) or is_vec(g, t):
         ret 0 - 1
@@ -51,7 +92,7 @@ func scalarize_extv(g &: Ng, e: int): int:
         x := g.pool[ps + 2 * k]
         lx := agg_load_of(g, x)
         if lx < 0 or g.v_uses[x] != 1:
-            ret 0 - 1
+            ret aggphi_field(g, ph, a, off, t, ex)
         end
     end
     np := ins_new(g, OP_PHI, t)
@@ -71,13 +112,26 @@ end
 func agg_scalarize(g &: Ng): bool:
     count_uses(g)
     repl_grow(g)
+    mut ex := Vector {} as Vector<int>
+    repeat g.v_kind.len():
+        ex.push(0)
+    end
+    each b0 in g.b_rpo:
+        mut i0 := g.b_first[b0]
+        until i0 >= 0:
+            if g.i_op[i0] == OP_EXTV and g.i_a[i0] >= 0:
+                ex[g.i_a[i0]] += 1
+            end
+            i0 = g.i_next[i0]
+        end
+    end
     mut changed := false
     each b in g.b_rpo:
         mut i := g.b_first[b]
         until i >= 0:
             nx := g.i_next[i]
             if g.i_op[i] == OP_EXTV and g.i_res[i] >= 0:
-                r := scalarize_extv(g, i)
+                r := scalarize_extv(g, i, ex)
                 if r >= 0:
                     repl_grow(g)
                     g.v_repl[g.i_res[i]] = r
@@ -88,6 +142,7 @@ func agg_scalarize(g &: Ng): bool:
             i = nx
         end
     end
+    ex.free()
     if changed:
         remap_all(g)
         dce(g)

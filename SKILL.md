@@ -1997,8 +1997,9 @@ C pointer types (`void*`, `u16*`, `T*`) and `null` are available for interop.
 Structs can be passed to and returned from `extern:` functions by value; the
 compiler follows the C ABI of the target (System V and Windows on x86-64,
 AArch64), so `func ClearBackground(c: Color)` matches a C `Color`. Field order and
-types must match the C struct. `--backend=native` refuses such calls. A function in
-an extern block may be `pub`, carry `@en`/`@fa`, and then be called as
+types must match the C struct. The same holds for `extern func (...)` pointers, for
+`export:` functions, and for `&fn` handed to C as a callback, on every backend. A
+function in an extern block may be `pub`, carry `@en`/`@fa`, and then be called as
 `pkg.Name`; the C symbol is always the declared name.
 
 **Exporting Salam functions to C (`export:`):** `extern:` only _declares_
@@ -2394,7 +2395,7 @@ merged `style.css`/`script.js`.
 ## 10. Tooling & verification
 
 ```sh
-salam check app.salam                   # lex, parse and type-check only: the fast loop after every edit
+salam check app.salam                   # all of build before code generation, imports included: the fast loop after every edit
 salam check app.salam --switch-lint=warn   # also flag if-chains that could be a switch (W145; off by default)
 salam exec app.salam                    # run with the interpreter (pure compute, no C toolchain)
 salam run app.salam                     # build + run, keep nothing

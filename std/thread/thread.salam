@@ -40,6 +40,9 @@ else:
     end
 end
 
+mut tcells := mem.AllocateZeroed(8 as u64) as i64*
+mut tlimit := mem.AllocateZeroed(8 as u64) as i64*
+
 @en "Thread"
 @fa "نخ"
 pub struct Thread:
@@ -53,15 +56,15 @@ if SALAM_OS_WINDOWS:
         func salam_thread_spawn(fn: void*): i64:
             ret salam_thread_spawn_arg(fn, null)
         end
-        func salam_thread_spawn_arg(fn: void*, arg: void*): i64:
+        func raw_spawn_arg(fn: void*, arg: void*): i64:
             if fn == null: ret 0 end
             ret _beginthreadex(null, 0 as u32, fn, arg, 0 as u32, null) as i64
         end
-        func salam_thread_spawn_stack(fn: void*, arg: void*, stack: u64): i64:
+        func raw_spawn_stack(fn: void*, arg: void*, stack: u64): i64:
             if fn == null: ret 0 end
             ret _beginthreadex(null, stack as u32, fn, arg, 0x10000 as u32, null) as i64
         end
-        func salam_thread_join(h: i64):
+        func raw_join(h: i64):
             if h == 0: ret end
             WaitForSingleObject(h as void*, 0 - 1)
             CloseHandle(h as void*)
@@ -72,7 +75,7 @@ else:
         func salam_thread_spawn(fn: void*): i64:
             ret salam_thread_spawn_arg(fn, null)
         end
-        func salam_thread_spawn_arg(fn: void*, arg: void*): i64:
+        func raw_spawn_arg(fn: void*, arg: void*): i64:
             if fn == null: ret 0 end
             t := mem.AllocateZeroed(8 as u64)
             if pthread_create(t, null, fn, arg) != 0:
@@ -81,7 +84,7 @@ else:
             end
             ret t as i64
         end
-        func salam_thread_spawn_stack(fn: void*, arg: void*, stack: u64): i64:
+        func raw_spawn_stack(fn: void*, arg: void*, stack: u64): i64:
             if fn == null: ret 0 end
             t := mem.AllocateZeroed(8 as u64)
             attr := mem.AllocateZeroed(256 as u64)
@@ -105,12 +108,41 @@ else:
             end
             ret t as i64
         end
-        func salam_thread_join(h: i64):
+        func raw_join(h: i64):
             if h == 0: ret end
             tp := (h as void*) as i64*
             pthread_join(tp[0] as void*, null)
             mem.Free(h as void*)
         end
+    end
+end
+
+func slot_take(): bool:
+    lim := atomic_load(tlimit)
+    if lim > 0 as i64 and atomic_load(tcells) >= lim:
+        ret false
+    end
+    atomic_add(tcells, 1 as i64)
+    ret true
+end
+
+export:
+    func salam_thread_spawn_arg(fn: void*, arg: void*): i64:
+        if not slot_take(): ret 0 end
+        h := raw_spawn_arg(fn, arg)
+        if h == 0: atomic_add(tcells, 0 as i64 - 1) end
+        ret h
+    end
+    func salam_thread_spawn_stack(fn: void*, arg: void*, stack: u64): i64:
+        if not slot_take(): ret 0 end
+        h := raw_spawn_stack(fn, arg, stack)
+        if h == 0: atomic_add(tcells, 0 as i64 - 1) end
+        ret h
+    end
+    func salam_thread_join(h: i64):
+        if h == 0: ret end
+        raw_join(h)
+        atomic_add(tcells, 0 as i64 - 1)
     end
 end
 
@@ -157,4 +189,16 @@ end
 pub func Collect(threads: Vector<Thread>, h: i64): Vector<Thread>:
     threads.push(Thread { handle = h })
     ret threads
+end
+
+@en "SetLimit"
+@fa "تعیین سقف"
+pub func SetLimit(n: i64):
+    atomic_store(tlimit, n)
+end
+
+@en "Live"
+@fa "نخ‌های زنده"
+pub func Live(): i64:
+    ret atomic_load(tcells)
 end

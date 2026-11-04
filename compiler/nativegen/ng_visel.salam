@@ -7,6 +7,8 @@ const VOP_CMPGT64 := 0x1E1
 const VOP_CMPHI64 := 0x1E2
 const VOP_CMPHI32 := 0x1E3
 const VOP_PMULLD := 0x3840
+const VOP_PSHUFB := 0x3800
+const VOP_PCMPEQQ := 0x3829
 const VUN_BCD := 0x58
 const VUN_BCQ := 0x59
 const VUN_BCB := 0x78
@@ -14,6 +16,10 @@ const VUN_BCW := 0x79
 const VUN_BCSS := 0x18
 const VUN_BCSD := 0x19
 const VUN_EXT := 0x39
+
+func v41(g &: Ng): bool:
+    ret g.sse41 and not g.off_sse41 and g.arch == NG_ARCH_X64
+end
 
 func ybcast(g &: Ng, x: int, kind: int): int:
     d := wide_reg(g)
@@ -219,7 +225,7 @@ end
 func isel_vmul32(g &: Ng, i: int):
     b := use_reg(g, g.i_b[i])
     lo := vcopy(g, g.i_a[i])
-    if g.isy:
+    if g.isy or v41(g):
         vop(g, VOP_PMULLD, lo, b)
         set_res(g, i, lo)
         ret
@@ -320,6 +326,10 @@ func vcmp_eq(g &: Ng, e: int, a: int, b: int): int:
         vop(g, VOP_CMPEQ64, r, use_reg(g, b))
         ret r
     end
+    if e == T_I64 and v41(g):
+        vop(g, VOP_PCMPEQQ, r, use_reg(g, b))
+        ret r
+    end
     vop(g, 0x76, r, use_reg(g, b))
     if e == T_I64:
         t := wide_reg(g)
@@ -376,7 +386,46 @@ func vgt_regs(g &: Ng, e: int, ra: int, rb: int, uns: bool): int:
     ret ba
 end
 
+func vblend_on(g &: Ng): bool:
+    ret g.arch == NG_ARCH_X64 and not g.off_vblend and (g.avx2 or v41(g))
+end
+
+func vblend(g &: Ng, m: int, tv: int, fr: int):
+    if g.avx2:
+        mb := e_rr(g, M_VBLEND, 8, fr, tv)
+        g.mc.r2[mb] = m
+        ret
+    end
+    g.mc.vhint[m] = XMM0
+    _c := e_copy(g, XMM0, m)
+    _b := e_rr(g, M_VBLEND, 8, fr, tv)
+end
+
+func vmm_opc(e: int, mx: bool, uns: bool): int:
+    if e == T_I32:
+        ret mx ? (uns ? 0x383F : 0x383D) : (uns ? 0x383B : 0x3839)
+    end
+    if e == T_I16:
+        ret mx ? (uns ? 0x383E : 0xEE) : (uns ? 0x383A : 0xEA)
+    end
+    if e == T_I8:
+        ret mx ? (uns ? 0xDE : 0x383C) : (uns ? 0xDA : 0x3838)
+    end
+    ret 0 - 1
+end
+
+func vmm_step(g &: Ng, opc: int, a: int, b: int): int:
+    r := rcopy(g, a)
+    vop(g, opc, r, b)
+    ret r
+end
+
 func vpick(g &: Ng, m: int, a: int, b: int): int:
+    if v41(g) and vblend_on(g):
+        r := rcopy(g, b)
+        vblend(g, m, a, r)
+        ret r
+    end
     x := rcopy(g, m)
     vop(g, 0xDB, x, a)
     y := rcopy(g, m)
@@ -391,16 +440,25 @@ func isel_vredmm(g &: Ng, i: int):
     kind := g.i_x[i]
     uns := kind >= 3
     mx := kind == 1 or kind == 3
+    mo := v41(g) ? vmm_opc(e, mx, uns) : 0 - 1
     mut acc := use_reg(g, a)
     if is_ymm(g, g.v_ty[a]):
         hi := yext_hi(g, acc)
-        m0 := mx ? vgt_regs(g, e, acc, hi, uns) : vgt_regs(g, e, hi, acc, uns)
-        acc = vpick(g, m0, acc, hi)
+        if mo >= 0:
+            acc = vmm_step(g, mo, acc, hi)
+        else:
+            m0 := mx ? vgt_regs(g, e, acc, hi, uns) : vgt_regs(g, e, hi, acc, uns)
+            acc = vpick(g, m0, acc, hi)
+        end
     end
     repeat (e == T_I64 ? 1 : 2) in st:
         sh := wide_reg(g)
         s := e_rr(g, M_PSHUFD, 16, sh, acc)
         g.mc.imm[s] = (st == 0 ? 0x4E : 0xB1) as i64
+        if mo >= 0:
+            acc = vmm_step(g, mo, acc, sh)
+            continue
+        end
         m := mx ? vgt_regs(g, e, acc, sh, uns) : vgt_regs(g, e, sh, acc, uns)
         acc = vpick(g, m, acc, sh)
     end
@@ -457,7 +515,7 @@ func vabs_src(g &: Ng, i: int): int:
     end
     e := g.t_elem[g.i_ty[i]]
     m := g.i_a[i]
-    if (e != T_I32 and e != T_I16 and (e != T_I8 or not g.avx2)) or m < 0 or g.v_kind[m] != VK_INS:
+    if (e != T_I32 and e != T_I16 and (e != T_I8 or not (g.avx2 or v41(g)))) or m < 0 or g.v_kind[m] != VK_INS:
         ret 0 - 1
     end
     d := g.v_def[m]
@@ -491,7 +549,36 @@ func vabs_src(g &: Ng, i: int): int:
     ret x
 end
 
+func vmm_of_sel(g &: Ng, i: int): int:
+    m := g.i_a[i]
+    if not v41(g) or m < 0 or g.v_kind[m] != VK_INS:
+        ret 0 - 1
+    end
+    d := g.v_def[m]
+    if g.i_op[d] != OP_ICMP:
+        ret 0 - 1
+    end
+    p := g.i_x[d]
+    up := p == CC_SGT or p == CC_SGE or p == CC_UGT or p == CC_UGE
+    dn := p == CC_SLT or p == CC_SLE or p == CC_ULT or p == CC_ULE
+    if not up and not dn:
+        ret 0 - 1
+    end
+    uns := p == CC_UGT or p == CC_UGE or p == CC_ULT or p == CC_ULE
+    e := g.t_elem[g.i_ty[i]]
+    if g.i_b[i] == g.i_a[d] and g.i_c[i] == g.i_b[d]:
+        ret vmm_opc(e, up, uns)
+    end
+    if g.i_b[i] == g.i_b[d] and g.i_c[i] == g.i_a[d]:
+        ret vmm_opc(e, dn, uns)
+    end
+    ret 0 - 1
+end
+
 func vabs_mark(g &: Ng, i: int):
+    if vmm_of_sel(g, i) >= 0 and g.v_uses[g.i_a[i]] == 1:
+        g.skipi[g.v_def[g.i_a[i]]] = true
+    end
     x := vabs_src(g, i)
     if x < 0:
         ret
@@ -511,7 +598,7 @@ func isel_vsel(g &: Ng, i: int):
     ax := vabs_src(g, i)
     if ax >= 0:
         e := g.t_elem[g.i_ty[i]]
-        if not g.avx2:
+        if not g.avx2 and not v41(g):
             sg := vcopy(g, ax)
             vshi(g, sg, e == T_I32 ? 0x72 : 0x71, 4, (e == T_I32 ? 31 : 15) as i64)
             rx := vcopy(g, ax)
@@ -528,12 +615,19 @@ func isel_vsel(g &: Ng, i: int):
     end
     m := g.i_a[i]
     bv := g.i_b[i]
-    if g.avx2 and g.arch == NG_ARCH_X64 and not g.off_vblend:
+    mo := vmm_of_sel(g, i)
+    if mo >= 0:
+        sw := dies_here(g, g.i_c[i], i) and not dies_here(g, bv, i)
+        rr := vcopy(g, sw ? g.i_c[i] : bv)
+        vop(g, mo, rr, use_reg(g, sw ? bv : g.i_c[i]))
+        set_res(g, i, rr)
+        ret
+    end
+    if vblend_on(g):
         rm := use_reg(g, m)
         rbv := use_reg(g, bv)
         rb := vcopy(g, g.i_c[i])
-        mb := e_rr(g, M_VBLEND, 8, rb, rbv)
-        g.mc.r2[mb] = rm
+        vblend(g, rm, rbv, rb)
         set_res(g, i, rb)
         ret
     end
@@ -613,6 +707,18 @@ func isel_vstore_w8(g &: Ng, i: int):
         ret
     end
     r := vcopy(g, g.i_a[i])
+    if v41(g):
+        w16 := g.t_elem[g.v_ty[g.i_a[i]]] == T_I16
+        mp := w16 ? vec_const(g, 0x0E0C0A0806040200 as i64, 0 as i64) : vec_const(g, 0x0C080400 as i64, 0 as i64)
+        ps := e_rm(g, M_VOP_RR, 8, r, mp)
+        g.mc.cc[ps] = VOP_PSHUFB
+        if w16:
+            _f8 := e_mr(g, M_FST, 8, mem_of(g, g.i_b[i], 0 as i64), r)
+        else:
+            _f4 := e_mr(g, M_VST32, 4, mem_of(g, g.i_b[i], 0 as i64), r)
+        end
+        ret
+    end
     if g.t_elem[g.v_ty[g.i_a[i]]] == T_I16:
         vop_k(g, 0xDB, r, 0x00FF00FF as i64)
         vop(g, 0x67, r, r)
@@ -639,6 +745,16 @@ func isel_vload_w8(g &: Ng, i: int, m: Mem):
     w := (g.i_x[i] & 3) == 2 ? 2 : 1
     sgn := (g.i_x[i] & 4) != 0
     r := wide_reg(g)
+    if v41(g):
+        mut kl := g.t_elem[g.i_ty[i]] == T_I16 ? 0x20 : (w == 2 ? 0x23 : 0x21)
+        if not sgn:
+            kl += 0x10
+        end
+        ml := e_rm(g, M_VUN, 16, r, m)
+        g.mc.cc[ml] = kl
+        set_res(g, i, r)
+        ret
+    end
     if g.t_elem[g.i_ty[i]] == T_I16:
         _l8 := e_rm(g, M_FLD, 8, r, m)
         if sgn:

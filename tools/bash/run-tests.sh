@@ -55,6 +55,48 @@ if [ "${1:-}" = "--worker" ]; then
         wk_check "$expabs" "$got"
     }
 
+    chk_errors() { # <stderr-file> -> error lines, sorted and without timestamps
+        sed -nE 's/^\[[^]]*\]\[DRIVER\]\[ERROR\] (.*)$/\1/p; /^(error|خطا)/p' "$1" | grep -vE '^(build aborted|ساخت متوقف)' | LC_ALL=C sort -u
+    }
+    wk_checkcmd() {
+        jobdir="$WORK/chkjob_${jobid}_$$"
+        mkdir -p "$jobdir"
+        cp -R "$fabs/." "$jobdir/"
+        entry=main.salam
+        [ -f "$jobdir/ENTRY" ] && entry=$(tr -d '\r\n' <"$jobdir/ENTRY")
+        (cd "$jobdir" && "$SALAM_ABS" check "$entry" --backend=c --no-color --lang="$lang") >"$jobdir/c.out" 2>"$jobdir/c.err"
+        crc=$?
+        (cd "$jobdir" && "$SALAM_ABS" check "$entry" --backend=c --error-format=json --lang="$lang") >/dev/null 2>"$jobdir/j.err"
+        jrc=$?
+        got="exit $crc"
+        cerrs=$(chk_errors "$jobdir/c.err")
+        [ -z "$cerrs" ] || got="$got
+$cerrs"
+        cfail=""
+        jerrs=$(grep -c '"level":"error"' "$jobdir/j.err")
+        if [ "$jrc" != "$crc" ]; then
+            cfail="json mode exits $jrc, plain mode $crc"
+        elif [ "$crc" = 0 ] && [ "$jerrs" != 0 ]; then
+            cfail="exit 0 with $jerrs errors in json"
+        elif [ "$crc" != 0 ] && [ "$jerrs" = 0 ]; then
+            cfail="exit $crc with no error in json"
+        elif [ ! -f "$jobdir/CHECK_ONLY" ]; then
+            (cd "$jobdir" && "$SALAM_ABS" build "$entry" --backend=c --output="$jobdir/a.exe" --no-color --log-level=error --lang="$lang") >"$jobdir/b.out" 2>"$jobdir/b.err"
+            brc=$?
+            if [ "$(chk_errors "$jobdir/b.err")" != "$(chk_errors "$jobdir/c.err")" ]; then
+                cfail="build reports other errors: $(chk_errors "$jobdir/b.err" | tr '\n' '|')"
+            elif { [ "$brc" = 0 ] && [ "$crc" != 0 ]; } || { [ "$brc" != 0 ] && [ "$crc" = 0 ]; }; then
+                cfail="check exits $crc, build $brc"
+            fi
+        fi
+        rm -rf "$jobdir"
+        if [ -n "$cfail" ]; then
+            echo "FAIL $label ($cfail)"
+        else
+            wk_check "$expabs" "$got"
+        fi
+    }
+
     wk_project() {
         jobdir="$WORK/projjob_${jobid}_$$"
         mkdir -p "$jobdir"
@@ -566,6 +608,7 @@ EOF_LAYOUT_NOT
         repl) wk_repl ;;
         new) wk_new ;;
         project) wk_project ;;
+        checkcmd) wk_checkcmd ;;
         lib) wk_lib ;;
         script) wk_script ;;
         expect) wk_expect ;;
@@ -807,6 +850,17 @@ if want project; then
             name=$(basename "$f" .out)
             [ -d "tests/$lang/project/$name" ] || continue
             add_job project "project/$lang/$name" "tests/$lang/project/$name" "$lang" "$f"
+        done
+    done
+fi
+
+if want check; then
+    for lang in $LANGS; do
+        for f in tests/"$lang"/check/*.out; do
+            [ -e "$f" ] || continue
+            name=$(basename "$f" .out)
+            [ -d "tests/$lang/check/$name" ] || continue
+            add_job checkcmd "check/$lang/$name" "tests/$lang/check/$name" "$lang" "$f"
         done
     done
 fi

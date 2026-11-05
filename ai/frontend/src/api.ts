@@ -50,7 +50,12 @@ export type TelegramStatus = {
   links: TelegramAccount[];
 };
 export type OutgoingFile = { name: string; data: string };
+export type SpeechLang = "fa" | "en";
 export type Capabilities = {
+  speech?: boolean;
+  speech_languages?: SpeechLang[];
+  speech_max_seconds?: number;
+  speech_max_bytes?: number;
   image: boolean;
   pdf: boolean;
   max_files: number;
@@ -606,11 +611,7 @@ export function handleUnauthorized(fn: () => void) {
   onUnauthorized = fn;
 }
 
-async function call<T>(
-  method: string,
-  path: string,
-  body?: unknown,
-): Promise<T> {
+function clientHeaders(): Record<string, string> {
   const headers: Record<string, string> = {
     "X-Salam-Client": isDesktop ? "agent" : "web",
     "X-Salam-Lang": lang,
@@ -622,6 +623,15 @@ async function call<T>(
   if (clientPlatform.arch) headers["X-Salam-Arch"] = clientPlatform.arch;
   const token = getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
+  return headers;
+}
+
+async function call<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+): Promise<T> {
+  const headers = clientHeaders();
   if (body !== undefined) headers["Content-Type"] = "application/json";
   let res: Response;
   try {
@@ -657,6 +667,53 @@ async function call<T>(
     );
   }
   return data as unknown as T;
+}
+
+export type SpokenText = { text: string; language: SpeechLang; seconds: number };
+
+export async function transcribe(
+  audio: Blob,
+  language: SpeechLang,
+  signal: AbortSignal,
+): Promise<SpokenText> {
+  const headers = clientHeaders();
+  headers["Content-Type"] = audio.type || "audio/webm";
+  let res: Response;
+  try {
+    res = await fetch(`${BASE}/speech/transcribe?lang=${language}`, {
+      method: "POST",
+      headers,
+      body: audio,
+      signal,
+    });
+  } catch (error) {
+    if (signal.aborted) throw error;
+    throw new ApiError(
+      0,
+      "network",
+      t(
+        "ارتباط با سرور برقرار نشد. اتصال اینترنت را بررسی کنید.",
+        "Could not reach the server. Check your internet connection.",
+      ),
+    );
+  }
+  let data: (SpokenText & { error?: string; message?: string }) | null = null;
+  try {
+    data = await res.json();
+  } catch {}
+  if (!res.ok || !data) {
+    if (res.status === 401) onUnauthorized();
+    throw new ApiError(
+      res.status,
+      data?.error || "server",
+      data?.message ||
+        t(
+          "تبدیل گفتار الان در دسترس نیست. کمی بعد دوباره تلاش کنید.",
+          "Voice input is not available right now. Please try again later.",
+        ),
+    );
+  }
+  return data;
 }
 
 export type StreamHandlers = {

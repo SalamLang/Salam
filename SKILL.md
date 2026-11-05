@@ -546,6 +546,11 @@ println a.balance
 Fields and methods are **private by default**; add `pub` to expose. `this` is the
 receiver.
 
+A field with no default is **required**: a literal that omits it fails with
+`E028`. A field with a default is optional: `pub host: str` must be set in every
+literal, `pub port: int = 443` can be left out. The check runs on struct literals
+only, so `mut c: Client` and generic `T {}` still zero the field.
+
 **`Self`** is the enclosing type, usable anywhere inside a `struct`, an
 `impl ... on T` block or a distinct type's body: as a return type, a parameter
 type, a field type, in a cast and as a struct literal. On a generic struct it

@@ -13,8 +13,8 @@
  */
 
 import crypto
-import gui.desktop
-import gui.desktop.pack
+import gui.webview
+import gui.webview.pack
 import encoding.json
 import filepath
 import fs
@@ -162,7 +162,7 @@ const WATCHDOG_RECOVER_GAP_MS := 120000
 mut g_mu := sync.NewMutex()
 mut g_cv := sync.NewCondVar()
 mut g_ready := false
-mut g_win := desktop.Window {}
+mut g_win := webview.Window {}
 mut g_os_version := ""
 mut g_device_id := ""
 mut g_device_name := ""
@@ -475,7 +475,7 @@ else:
 end
 
 func device_file(): str:
-    ret filepath.Join(desktop.DataDir(), "device.json")
+    ret filepath.Join(webview.DataDir(), "device.json")
 end
 
 func device_load():
@@ -489,7 +489,7 @@ func device_load():
     end
     id := json.Get(text, "device_id")
     name := json.Get(text, "device_name")
-    secret := desktop.SecretGet(bridge_url())
+    secret := webview.SecretGet(bridge_url())
     if id.len() > 0 and name.len() > 0 and secret.len() > 0:
         sync.Lock(g_mu)
         g_device_id = id
@@ -500,14 +500,14 @@ func device_load():
 end
 
 func device_save(id: str, name: str, secret: str): str:
-    if not desktop.SecretSet(bridge_url(), secret):
+    if not webview.SecretSet(bridge_url(), secret):
         ret "could not store the device secret"
     end
     mut members := Vector {} as Vector<str>
     defer members.free()
     members.push(json.Member("device_id", id))
     members.push(json.Member("device_name", name))
-    _mk := os.MkdirAll(desktop.DataDir())
+    _mk := os.MkdirAll(webview.DataDir())
     if io.WriteFile(device_file(), json.Object(members)) < 0:
         ret "could not write " + device_file()
     end
@@ -521,7 +521,7 @@ func device_save(id: str, name: str, secret: str): str:
 end
 
 func device_clear():
-    desktop.SecretDelete(bridge_url())
+    webview.SecretDelete(bridge_url())
     _gone := os.Remove(device_file())
     sync.Lock(g_mu)
     g_device_id = ""
@@ -1099,7 +1099,7 @@ func project_context_json(root: str): str:
 end
 
 func prefs_file(): str:
-    ret filepath.Join(desktop.DataDir(), "notifications.json")
+    ret filepath.Join(webview.DataDir(), "notifications.json")
 end
 
 func prefs_json(p: Prefs): str:
@@ -1143,7 +1143,7 @@ func prefs_save(p: Prefs):
     sync.Lock(g_mu)
     g_prefs = p
     sync.Unlock(g_mu)
-    _mk := os.MkdirAll(desktop.DataDir())
+    _mk := os.MkdirAll(webview.DataDir())
     _wrote := io.WriteFile(prefs_file(), prefs_json(p))
 end
 
@@ -1332,7 +1332,7 @@ func notify_deliver(kind: str, chat: str, text: str, mid: i64): str:
     if not test and not notify_due(kind, chat):
         ret "skipped"
     end
-    desktop.RequestAttention(g_win)
+    webview.RequestAttention(g_win)
     if not p.enabled and not test:
         ret "skipped"
     end
@@ -1340,7 +1340,7 @@ func notify_deliver(kind: str, chat: str, text: str, mid: i64): str:
     body := notify_compose(kind, chat, text, p, title)
     urgent := kind == "failed" or kind == "network" or kind == "offline" or kind == "unlinked" or kind == "approval"
     tone := p.sound ? (urgent ? "alert" : "default") : ""
-    if not desktop.Notify(title, body, tone):
+    if not webview.Notify(title, body, tone):
         if mid > 0:
             notify_release(mid)
         end
@@ -1350,7 +1350,7 @@ func notify_deliver(kind: str, chat: str, text: str, mid: i64): str:
 end
 
 func notify_post(kind: str, chat: str, text: str, mid: i64):
-    desktop.Dispatch(
+    webview.Dispatch(
         (): _result := notify_deliver(kind, chat, text, mid) end
     )
 end
@@ -1441,7 +1441,7 @@ func stream_new(path: str, offset &: i64, call_id: str):
     defer members.free()
     members.push(json.Member("call_id", call_id))
     members.push(json.Member("chunk", lossy_text(data, chunk)))
-    desktop.Emit("agent://output", json.Object(members))
+    webview.Emit("agent://output", json.Object(members))
 end
 
 func exec_run(program: str, args: Vector<str>, raw_args: str, cwd: str, timeout_s: i64, call_id: str, failed &: bool): str:
@@ -2598,7 +2598,7 @@ func free_auth(headers: HashMap<str, str>):
 end
 
 func emit_call(p: Preview, state: str, output: str):
-    desktop.Emit("agent://call", preview_json(p, state, output))
+    webview.Emit("agent://call", preview_json(p, state, output))
 end
 
 func offline_later(flip: int):
@@ -2626,7 +2626,7 @@ func set_connected(value: bool):
     if not changed:
         ret
     end
-    desktop.Emit("agent://connection", value ? "true" : "false")
+    webview.Emit("agent://connection", value ? "true" : "false")
     if value:
         if told:
             notify_post("online", "", "", 0 as i64)
@@ -2757,7 +2757,7 @@ func bridge_loop():
             device_clear()
             set_connected(false)
             notify_post("unlinked", "", "", 0 as i64)
-            desktop.Emit("agent://device", "null")
+            webview.Emit("agent://device", "null")
         else:
             set_connected(false)
             sync.SleepMs(backoff * 1000)
@@ -2781,7 +2781,7 @@ func probe_app(timeout_ms: int): str:
 end
 
 func navigate_main(url: str):
-    desktop.Dispatch((): g_win.Navigate(url) end)
+    webview.Dispatch((): g_win.Navigate(url) end)
 end
 
 func connect_main():
@@ -2795,7 +2795,7 @@ func connect_main():
         end
         attempts += 1
         if attempts >= 2 and shown != state:
-            navigate_main(desktop.AssetURL("/error.html#" + state))
+            navigate_main(webview.AssetURL("/error.html#" + state))
             shown = state
         end
         sync.SleepMs(5000)
@@ -2805,7 +2805,7 @@ end
 func ui_away(): bool:
     mut answer := (mem.AllocateZeroed(16 as u64)) as i64*
     answer[1] = 1 as i64
-    desktop.Dispatch(
+    webview.Dispatch(
         (): answer[1] = window_away() ? 1 as i64 : 0 as i64
         answer[0] = 1 as i64 end
     )
@@ -3044,7 +3044,7 @@ func watchdog_loop():
             navigate_main(app_url())
             continue
         end
-        navigate_main(desktop.AssetURL("/error.html#" + reason))
+        navigate_main(webview.AssetURL("/error.html#" + reason))
     end
 end
 
@@ -3089,9 +3089,9 @@ func valid_chat_id(chat: str): bool:
 end
 
 func register_commands():
-    desktop.Command("agent_info", (c: desktop.Call): c.Resolve(info_json()) end)
-    desktop.CommandAsync(
-        "agent_link", (c: desktop.Call): token := str.Trim(c.Str("token"))
+    webview.Command("agent_info", (c: webview.Call): c.Resolve(info_json()) end)
+    webview.CommandAsync(
+        "agent_link", (c: webview.Call): token := str.Trim(c.Str("token"))
         name := device_name() mut members := Vector {} as Vector<str> members.push(json.Member("name", name))
         members.push(json.Member("os", os_name())) mut client := new_client(40000)
         res := client.RequestWith("POST", api_url() + "/bridge/devices", json.Object(members), auth_headers(token))
@@ -3099,8 +3099,8 @@ func register_commands():
         members.free() if res.status <= 0: c.Reject("network: " + res.err) ret end if res.status < 200 or res.status >= 300: message := json.Valid(res.body) ? json.Get(res.body, "message") : ""
         c.Reject(message.len() > 0 ? message : "could not register this computer") ret end id := json.Get(json.Get(res.body, "device"), "id") if id.len() == 0: c.Reject("the server answered without a device id") ret end secret := json.Get(res.body, "secret") if secret.len() == 0: c.Reject("the server answered without a secret") ret end failed := device_save(id, name, secret) if failed.len() > 0: c.Reject(failed) ret end c.Resolve(info_json()) end
     )
-    desktop.CommandAsync(
-        "agent_unlink", (c: desktop.Call): token := c.Str("token")
+    webview.CommandAsync(
+        "agent_unlink", (c: webview.Call): token := c.Str("token")
         sync.Lock(g_mu)
         id := g_device_id
         sync.Unlock(g_mu) if token.len() > 0 and id.len() > 0: mut client := new_client(40000)
@@ -3110,43 +3110,43 @@ func register_commands():
         notify_forget_seen()
         c.Resolve(info_json()) end
     )
-    desktop.Command(
-        "agent_pick_folder", (c: desktop.Call): picked := desktop.PickFolder("پوشه‌ی کاری را انتخاب کنید") if picked.len() == 0: c.ResolveNull() else: c.ResolveStr(picked) end end
+    webview.Command(
+        "agent_pick_folder", (c: webview.Call): picked := webview.PickFolder("پوشه‌ی کاری را انتخاب کنید") if picked.len() == 0: c.ResolveNull() else: c.ResolveStr(picked) end end
     )
-    desktop.Command(
-        "agent_set_mode", (c: desktop.Call): approvals_set_mode(c.Str("chat"), c.Str("mode"))
+    webview.Command(
+        "agent_set_mode", (c: webview.Call): approvals_set_mode(c.Str("chat"), c.Str("mode"))
         c.ResolveNull() end
     )
-    desktop.Command(
-        "agent_decide", (c: desktop.Call): c.ResolveBool(approvals_answer(c.Str("callId"), c.Str("answer"))) end
+    webview.Command(
+        "agent_decide", (c: webview.Call): c.ResolveBool(approvals_answer(c.Str("callId"), c.Str("answer"))) end
     )
-    desktop.Command(
-        "agent_stop", (c: desktop.Call): c.ResolveBool(approvals_stop(c.Str("callId"))) end
+    webview.Command(
+        "agent_stop", (c: webview.Call): c.ResolveBool(approvals_stop(c.Str("callId"))) end
     )
-    desktop.Command("agent_pending", (c: desktop.Call): c.Resolve(approvals_pending_json()) end)
-    desktop.Command(
-        "agent_alive", (c: desktop.Call): watchdog_beat()
+    webview.Command("agent_pending", (c: webview.Call): c.Resolve(approvals_pending_json()) end)
+    webview.Command(
+        "agent_alive", (c: webview.Call): watchdog_beat()
         c.ResolveNull() end
     )
-    desktop.CommandAsync(
-        "agent_project_context", (c: desktop.Call): folder := str.Trim(c.Str("workspace")) if folder.len() == 0: c.Reject("No workspace folder is selected.") ret end ws := workspace_open(folder) if ws.error.len() > 0: c.Reject(ws.error) ret end c.Resolve(project_context_json(ws.root)) end
+    webview.CommandAsync(
+        "agent_project_context", (c: webview.Call): folder := str.Trim(c.Str("workspace")) if folder.len() == 0: c.Reject("No workspace folder is selected.") ret end ws := workspace_open(folder) if ws.error.len() > 0: c.Reject(ws.error) ret end c.Resolve(project_context_json(ws.root)) end
     )
-    desktop.Command(
-        "agent_notify", (c: desktop.Call): result := notify_deliver(c.Str("kind"), c.Str("chat"), c.Str("text"), c.Has("mid") ? c.Int("mid") as i64 : 0 as i64) if result == "failed": c.Reject("the system could not show the notification") else: c.ResolveStr(result) end end
+    webview.Command(
+        "agent_notify", (c: webview.Call): result := notify_deliver(c.Str("kind"), c.Str("chat"), c.Str("text"), c.Has("mid") ? c.Int("mid") as i64 : 0 as i64) if result == "failed": c.Reject("the system could not show the notification") else: c.ResolveStr(result) end end
     )
-    desktop.Command(
-        "agent_watch_reply", (c: desktop.Call): chat := c.Str("chat")
+    webview.Command(
+        "agent_watch_reply", (c: webview.Call): chat := c.Str("chat")
         mid := c.Int("mid") as i64
         token := str.Trim(c.Str("token"))
         title := c.Str("title") if not valid_chat_id(chat): c.Reject("invalid chat id") ret end if mid <= 0: c.Reject("invalid message id") ret end if token.len() == 0 or token.len() > 4096: c.Reject("invalid token") ret end job := watch_start(chat, mid) if job != null: pool.Go((): watch_run(chat, mid, token, title, job) end) end c.ResolveNull() end
     )
-    desktop.Command(
-        "agent_unwatch_reply", (c: desktop.Call): watch_stop(c.Str("chat"))
+    webview.Command(
+        "agent_unwatch_reply", (c: webview.Call): watch_stop(c.Str("chat"))
         c.ResolveNull() end
     )
-    desktop.Command("agent_notify_prefs", (c: desktop.Call): c.Resolve(prefs_json(prefs_now())) end)
-    desktop.Command(
-        "agent_set_notify_prefs", (c: desktop.Call): p := prefs_parse(json.Get(c.args, "prefs"))
+    webview.Command("agent_notify_prefs", (c: webview.Call): c.Resolve(prefs_json(prefs_now())) end)
+    webview.Command(
+        "agent_set_notify_prefs", (c: webview.Call): p := prefs_parse(json.Get(c.args, "prefs"))
         prefs_save(p)
         c.Resolve(prefs_json(p)) end
     )
@@ -3156,13 +3156,13 @@ func allow_remote(origin: str):
     mut commands := Vector {} as Vector<str>
     commands.push("agent_*")
     commands.push("event:agent_pong")
-    desktop.Allow(origin, commands)
+    webview.Allow(origin, commands)
 end
 
 func on_load(url: str, finished: bool):
     if not finished:
         watchdog_disarm()
-    else desktop.OriginOf(url) == desktop.OriginOf(app_url()):
+    else webview.OriginOf(url) == webview.OriginOf(app_url()):
         watchdog_arm()
     end
 end
@@ -3170,8 +3170,8 @@ end
 func main:
     import_login_path()
     g_os_version = os_version()
-    desktop.Init(desktop.Config { id = "ir.salamlang.agent", name = "Salam Agent", version = AGENT_VERSION })
-    primary := desktop.SingleInstance(
+    webview.Init(webview.Config { id = "ir.salamlang.agent", name = "Salam Agent", version = AGENT_VERSION })
+    primary := webview.SingleInstance(
         (_args: Vector<str>): g_win.Show()
         g_win.Focus() end
     )
@@ -3180,12 +3180,12 @@ func main:
     end
     allow_remote(app_url())
     register_commands()
-    desktop.On(
+    webview.On(
         "agent_pong", (_data: str): sync.Lock(g_mu)
         g_pong = true
         sync.Unlock(g_mu) end
     )
-    desktop.OnNotifyClick(():
+    webview.OnNotifyClick(():
         g_win.Show()
         g_win.Focus()
     end)
@@ -3195,25 +3195,25 @@ func main:
     if os.Env("SALAM_DEVTOOLS").len() == 0:
         scripts.push(LOCK_JS)
     end
-    g_win = desktop.Open(
-        desktop.WindowOptions {
+    g_win = webview.Open(
+        webview.WindowOptions {
             title = "Salam Agent", width = 1180, height = 800, min_width = 720, min_height = 520,
             scripts = scripts
         }
     )
     if g_win.IsClosed():
-        printerrln "Salam Agent could not open its window: " + desktop.LastError()
+        printerrln "Salam Agent could not open its window: " + webview.LastError()
         ret 1
     end
     g_win.OnLoad((url: str, finished: bool): on_load(url, finished) end)
     g_win.OnCrash(
         (): watchdog_disarm()
-        g_win.Navigate(desktop.AssetURL("/error.html#memory")) end
+        g_win.Navigate(webview.AssetURL("/error.html#memory")) end
     )
     _bridge := spawn(bridge_loop)
     _monitor := spawn(connection_monitor)
     _connect := spawn(connect_main)
     _watchdog := spawn(watchdog_loop)
-    desktop.Run()
+    webview.Run()
     browser.CloseAll()
 end

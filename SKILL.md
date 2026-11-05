@@ -1670,12 +1670,7 @@ SubscribeReplier` with `NextMsg(nc, sub, ms)`, `Unsubscribe AutoUnsubscribe`,
   (`Init Track Down Pressed`), **`node`** (Node.js interop: `Require GetProp CallS1 ...`; handles are `i64`, every number is f64). **`web`** itself
   holds the `Color Length Url` value types the layout DSL uses (§9); it is
   not a server.
-- **`webview`** (desktop windows: `Create SetTitle SetSize SetHTML Navigate Eval Init Run Destroy IsClosed`; `-DSALAM_WEBVIEW_CEF` renders with a
-  bundled Chromium instead of the OS webview, see
-  `std/webview/native/BUILD.md`). Put data into the HTML you pass to
-  `SetHTML`; the page cannot call back into Salam, `Eval` right after
-  `SetHTML` usually hits the old page, and a failed `Create` returns a window
-  that `IsClosed()` already.
+- **`gui.webview`** (import `gui.webview`; Persian `رابط گرافیکی.نمایش وب`) is one package for desktop windows and desktop applications. Low level: `Create SetTitle SetSize SetHTML Navigate Eval Init Run Destroy IsClosed OnMessage`; a failed `Create` returns a window that `IsClosed()` already, and `Eval` right after `SetHTML` usually hits the old page. Application layer (Tauri-like): `Init Config Command CommandAsync On Emit Open WindowOptions Allow Run Quit` plus dialogs, notifications, secrets, menus, tray and `SingleInstance`; pages call `await salam.invoke(name, args)`. `salam bundle` makes installers from the `[app]` table of `salam.toml`. The engine is the OS web view by default; `-DSALAM_WEBVIEW_CEF` (or `engine = "chromium"` in `[app]`, `--engine=chromium`) builds against Chromium instead, which has no commands yet (`webview.SupportsCommands()` is false). `webview.Engine()` and `webview.EngineName()` report the engine. Subpackages `gui.webview.pack` and `gui.webview.bundle`. Guide: `docs/DESKTOP.md`.
 - Native audio: **`audio`** holds a `Clip` of interleaved **f32** samples with `rate`, `channels`, `frames` and `bits`.
   Core: `New Sample SetSample Duration Peak RMS GainToDb DbToGain`.
   Editing: `Slice Trim Concat Mix MixAt Gain Scale Normalize Clamp FadeIn FadeOut Reverse Pad Repeat Split TrimSilence`.

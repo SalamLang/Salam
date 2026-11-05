@@ -1,0 +1,481 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package webview
+
+if SALAM_OS_WINDOWS and not SALAM_WEBVIEW_CEF:
+    extern:
+        func GetModuleFileNameW(module: void*, buf: void*, size: u32): u32
+        func MessageBoxW(parent: void*, text: void*, title: void*, kind: u32): int
+        func CreateMenu(): void*
+        func CreatePopupMenu(): void*
+        func AppendMenuW(menu: void*, flags: u32, id: usize, label: void*): int
+        func SetMenu(hwnd: void*, menu: void*): int
+        func DrawMenuBar(hwnd: void*): int
+        func TrackPopupMenu(menu: void*, flags: u32, x: int, y: int, reserved: int, hwnd: void*, rect: void*): int
+        func GetCursorPos(point: void*): int
+        func FlashWindow(hwnd: void*, invert: int): int
+        func LoadIconW(instance: void*, name: void*): void*
+        func CreateMutexW(security: void*, owner: int, name: void*): void*
+        func GetLastError(): u32
+        func FindWindowExW(parent: void*, after: void*, class_name: void*, title: void*): void*
+    end
+
+    mut _win_tray_on := false
+    mut _win_tray_menu := null as void*
+    mut _win_notify_on := false
+
+    struct _Slot:
+        pub v: void* = null
+    end
+
+    struct _FilterSpec:
+        pub name: void* = null
+        pub spec: void* = null
+    end
+
+    struct _Guid:
+        pub a: u32 = 0
+        pub b: u16 = 0
+        pub c: u16 = 0
+        pub d0: u8 = 0
+        pub d1: u8 = 0
+        pub d2: u8 = 0
+        pub d3: u8 = 0
+        pub d4: u8 = 0
+        pub d5: u8 = 0
+        pub d6: u8 = 0
+        pub d7: u8 = 0
+    end
+
+    struct _Credential:
+        pub flags: u32 = 0
+        pub kind: u32 = 1
+        pub target: void* = null
+        pub comment: void* = null
+        pub written_low: u32 = 0
+        pub written_high: u32 = 0
+        pub blob_size: u32 = 0
+        pub blob: void* = null
+        pub persist: u32 = 2
+        pub attribute_count: u32 = 0
+        pub attributes: void* = null
+        pub alias: void* = null
+        pub user: void* = null
+    end
+
+    struct _CopyData:
+        pub tag: void* = null
+        pub size: u32 = 0
+        pub data: void* = null
+    end
+
+    func _wide(s: str): void*:
+        needed := MultiByteToWideChar(65001 as u32, 0 as u32, s, 0 - 1, null, 0)
+        buf := mem.Allocate(((needed + 1) as u64) * (2 as u64))
+        MultiByteToWideChar(65001 as u32, 0 as u32, s, 0 - 1, buf, needed + 1)
+        ret buf
+    end
+
+    func _narrow(wide: void*): str:
+        needed := WideCharToMultiByte(65001 as u32, 0 as u32, wide, 0 - 1, null, 0, null, null)
+        buf := mem.Allocate((needed + 1) as u64)
+        WideCharToMultiByte(65001 as u32, 0 as u32, wide, 0 - 1, buf, needed + 1, null, null)
+        (buf as u8*)[needed] = 0 as u8
+        ret buf as str
+    end
+
+    func _proc(library: str, name: str): void*:
+        wide := _wide(library)
+        module := LoadLibraryW(wide)
+        mem.Free(wide)
+        if module == null:
+            ret null
+        end
+        ret GetProcAddress(module, name)
+    end
+
+    func _slot(obj: void*, index: int): void*:
+        vtbl := (obj as _Slot*)[0].v
+        ret (vtbl as _Slot*)[index].v
+    end
+
+    func _release(obj: void*):
+        if obj != null:
+            f := _slot(obj, 2) as extern stdcall func (void*) u32
+            _left := f(obj)
+        end
+    end
+
+    func _guid(a: u32, b: u16, c: u16, d0: u8, d1: u8, d2: u8, d3: u8, d4: u8, d5: u8, d6: u8, d7: u8): void*:
+        out := (mem.Allocate(sizeof(_Guid) as u64)) as _Guid*
+        out[0] = _Guid { a = a, b = b, c = c, d0 = d0, d1 = d1, d2 = d2, d3 = d3, d4 = d4, d5 = d5, d6 = d6, d7 = d7 }
+        ret out as void*
+    end
+
+    func _copy_wide_into(dest: void*, text: str, max_chars: int):
+        wide := _wide(text)
+        out := dest as u16*
+        source := wide as u16*
+        mut i := 0
+        until i < max_chars - 1 and source[i] != (0 as u16):
+            out[i] = source[i]
+            i += 1
+        end
+        out[i] = 0 as u16
+        mem.Free(wide)
+    end
+
+    func _nid(flags: u32): void*:
+        wide_ptr := sizeof(_Slot) as int
+        total := wide_ptr == 8 ? 976 : 956
+        data := mem.AllocateZeroed(total as u64)
+        (data as u32*)[0] = total as u32
+        hwnd_at := wide_ptr
+        id_at := wide_ptr * 2
+        ((data as i64 + hwnd_at as i64) as _Slot*)[0].v = MenuHost()
+        (((data as i64) + (id_at as i64)) as u32*)[0] = 1 as u32
+        (((data as i64) + (id_at as i64) + 4) as u32*)[0] = flags
+        (((data as i64) + (id_at as i64) + 8) as u32*)[0] = 0x8001 as u32
+        ret data
+    end
+
+    func _nid_icon_at(): i64:
+        ret sizeof(_Slot) as int == 8 ? 32 as i64 : 20 as i64
+    end
+
+    func _nid_tip_at(): i64:
+        ret _nid_icon_at() + (sizeof(_Slot) as i64)
+    end
+
+    func _nid_info_at(): i64:
+        ret sizeof(_Slot) as int == 8 ? 304 as i64 : 288 as i64
+    end
+
+    func _nid_title_at(): i64:
+        ret sizeof(_Slot) as int == 8 ? 820 as i64 : 804 as i64
+    end
+
+    func _shell_notify(action: u32, data: void*): bool:
+        f := _proc("shell32.dll", "Shell_NotifyIconW") as extern stdcall func (u32, void*) i32
+        ret f(action, data) != 0
+    end
+
+    func _win_icon(path: str): void*:
+        if path.len() > 0:
+            wide := _wide(path)
+            icon := LoadImageW(null, wide, 1 as u32, 0, 0, 0x10 as u32)
+            mem.Free(wide)
+            if icon != null:
+                ret icon
+            end
+        end
+        ret LoadIconW(null, (32512 as size) as void*)
+    end
+
+    func _win_fill_menu(menu: void*, items: Vector<MenuItem>):
+        each item in items:
+            if item.separator:
+                AppendMenuW(menu, 0x800 as u32, 0 as usize, null)
+                continue
+            end
+            label := _wide(item.label)
+            if item.children.len() > 0:
+                sub := CreatePopupMenu()
+                _win_fill_menu(sub, item.children)
+                AppendMenuW(menu, 0x10 as u32, (sub as size) as usize, label)
+            else:
+                AppendMenuW(menu, 0 as u32, _menu_id(item.id) as usize, label)
+            end
+            mem.Free(label)
+        end
+    end
+
+    func _win_tray_event(event: int):
+        if event == 0x405:
+            _on_notify_click()
+        else event == 0x202:
+            _on_tray_click()
+        else event == 0x205 and _win_tray_menu != null:
+            point := mem.AllocateZeroed(8 as u64)
+            GetCursorPos(point)
+            coords := point as i32*
+            host := MenuHost()
+            SetForegroundWindow(host)
+            TrackPopupMenu(_win_tray_menu, 0 as u32, coords[0], coords[1], 0, host, null)
+            mem.Free(point)
+        end
+    end
+
+    func _exe_path(): str:
+        buf := mem.AllocateZeroed(65536 as u64)
+        defer mem.Free(buf)
+        n := GetModuleFileNameW(null, buf, 32000 as u32)
+        if n == (0 as u32):
+            ret str.Clone("")
+        end
+        ret _narrow(buf)
+    end
+
+    func _open_external(url: str): bool:
+        shell := _proc("shell32.dll", "ShellExecuteW")
+        if shell == null:
+            ret false
+        end
+        verb := _wide("open")
+        target := _wide(url)
+        defer mem.Free(verb)
+        defer mem.Free(target)
+        f := shell as extern stdcall func (void*, void*, void*, void*, void*, int) void*
+        result := f(null, verb, target, null, null, 1)
+        ret (result as size) > 32
+    end
+
+    func _os_pick(title: str, mode: int, default_name: str, filter_name: str, patterns: str): str:
+        init := _proc("ole32.dll", "CoInitializeEx") as extern stdcall func (void*, u32) i32
+        _co := init(null, 2 as u32)
+        create := _proc("ole32.dll", "CoCreateInstance") as extern stdcall func (void*, void*, u32, void*, void*) i32
+        mut clsid := null as void*
+        mut iid := null as void*
+        if mode == 2:
+            clsid = _guid(0xC0B4E2F3 as u32, 0xBA21 as u16, 0x4773 as u16, 0x8D as u8, 0xBA as u8, 0x33 as u8, 0x5E as u8, 0xC9 as u8, 0x46 as u8, 0xEB as u8, 0x8B as u8)
+            iid = _guid(0x84BCCD23 as u32, 0x5FDE as u16, 0x4CDB as u16, 0xAE as u8, 0xA4 as u8, 0xAF as u8, 0x64 as u8, 0xB8 as u8, 0x3D as u8, 0x78 as u8, 0xAB as u8)
+        else:
+            clsid = _guid(0xDC1C5A9C as u32, 0xE88A as u16, 0x4DDE as u16, 0xA5 as u8, 0xA1 as u8, 0x60 as u8, 0xF8 as u8, 0x2A as u8, 0x20 as u8, 0xAE as u8, 0xF7 as u8)
+            iid = _guid(0xD57C7288 as u32, 0xD4AD as u16, 0x4768 as u16, 0xBE as u8, 0x02 as u8, 0x9D as u8, 0x96 as u8, 0x95 as u8, 0x32 as u8, 0xD9 as u8, 0x60 as u8)
+        end
+        defer mem.Free(clsid)
+        defer mem.Free(iid)
+        out := (mem.AllocateZeroed(sizeof(_Slot) as u64)) as _Slot*
+        defer mem.Free(out as void*)
+        if create(clsid, null, 1 as u32, iid, out as void*) != 0 or out[0].v == null:
+            ret str.Clone("")
+        end
+        dialog := out[0].v
+        defer _release(dialog)
+        wide_title := _wide(title)
+        set_title := _slot(dialog, 17) as extern stdcall func (void*, void*) i32
+        set_title(dialog, wide_title)
+        mem.Free(wide_title)
+        options_out := (mem.AllocateZeroed(8 as u64)) as u32*
+        get_options := _slot(dialog, 10) as extern stdcall func (void*, void*) i32
+        get_options(dialog, options_out as void*)
+        mut options := options_out[0] | (0x40 as u32)
+        mem.Free(options_out as void*)
+        if mode == 1:
+            options = options | (0x20 as u32)
+        end
+        set_options := _slot(dialog, 9) as extern stdcall func (void*, u32) i32
+        set_options(dialog, options)
+        if default_name.len() > 0:
+            wide_name := _wide(default_name)
+            set_name := _slot(dialog, 15) as extern stdcall func (void*, void*) i32
+            set_name(dialog, wide_name)
+            mem.Free(wide_name)
+        end
+        if patterns.len() > 0:
+            spec := (mem.AllocateZeroed(sizeof(_FilterSpec) as u64)) as _FilterSpec*
+            spec[0].name = _wide(filter_name.len() > 0 ? filter_name : patterns)
+            spec[0].spec = _wide(patterns)
+            set_types := _slot(dialog, 4) as extern stdcall func (void*, u32, void*) i32
+            set_types(dialog, 1 as u32, spec as void*)
+            mem.Free(spec[0].name)
+            mem.Free(spec[0].spec)
+            mem.Free(spec as void*)
+        end
+        show := _slot(dialog, 3) as extern stdcall func (void*, void*) i32
+        if show(dialog, _parent_native()) != 0:
+            ret str.Clone("")
+        end
+        out[0].v = null
+        get_result := _slot(dialog, 20) as extern stdcall func (void*, void*) i32
+        if get_result(dialog, out as void*) != 0 or out[0].v == null:
+            ret str.Clone("")
+        end
+        item := out[0].v
+        defer _release(item)
+        out[0].v = null
+        get_name := _slot(item, 5) as extern stdcall func (void*, i32, void*) i32
+        if get_name(item, 0x80058000 as i32, out as void*) != 0 or out[0].v == null:
+            ret str.Clone("")
+        end
+        path := _narrow(out[0].v)
+        task_free := _proc("ole32.dll", "CoTaskMemFree") as extern stdcall func (void*)
+        task_free(out[0].v)
+        ret path
+    end
+
+    func _os_message(title: str, text: str, question: bool): bool:
+        wide_title := _wide(title)
+        wide_text := _wide(text)
+        defer mem.Free(wide_title)
+        defer mem.Free(wide_text)
+        answer := MessageBoxW(_parent_native(), wide_text, wide_title, question ? 4 as u32 : 0 as u32)
+        ret answer == 6 or answer == 1
+    end
+
+    func _os_notify(title: str, body: str, sound: str): bool:
+        OnTrayMessage((event: int): _win_tray_event(event) end)
+        data := _nid(0x10 as u32)
+        defer mem.Free(data)
+        flags_at := sizeof(_Slot) as int == 8 ? 948 as i64 : 932 as i64
+        info_flags := sound.len() == 0 ? 0x10 as u32 : (sound == "alert" ? 2 as u32 : 1 as u32)
+        (((data as i64) + flags_at) as u32*)[0] = info_flags
+        _copy_wide_into(((data as i64) + _nid_info_at()) as void*, body, 256)
+        _copy_wide_into(((data as i64) + _nid_title_at()) as void*, title, 64)
+        if not _win_tray_on and not _win_notify_on:
+            setup := _nid(0x03 as u32)
+            ((setup as i64 + _nid_icon_at()) as _Slot*)[0].v = _win_icon(_cfg.icon)
+            _added := _shell_notify(0 as u32, setup)
+            mem.Free(setup)
+            _win_notify_on = true
+        end
+        ret _shell_notify(1 as u32, data)
+    end
+
+    func _os_attention(window: void*):
+        if window != null:
+            _flashed := FlashWindow(window, 1)
+        end
+    end
+
+    func _cred_target(service: str, key: str): void*:
+        ret _wide(service.concat("/").concat(key))
+    end
+
+    func _os_secret_set(service: str, key: str, value: str): bool:
+        write_fn := _proc("advapi32.dll", "CredWriteW")
+        if write_fn == null:
+            ret false
+        end
+        target := _cred_target(service, key)
+        user := _wide(service)
+        defer mem.Free(target)
+        defer mem.Free(user)
+        cred := (mem.AllocateZeroed(sizeof(_Credential) as u64)) as _Credential*
+        defer mem.Free(cred as void*)
+        cred[0] = _Credential { target = target, user = user, blob = value as void*, blob_size = str.Len(value) as u32 }
+        f := write_fn as extern stdcall func (void*, u32) i32
+        ret f(cred as void*, 0 as u32) != 0
+    end
+
+    func _os_secret_get(service: str, key: str): str:
+        read_fn := _proc("advapi32.dll", "CredReadW")
+        if read_fn == null:
+            ret str.Clone("")
+        end
+        target := _cred_target(service, key)
+        defer mem.Free(target)
+        out := (mem.AllocateZeroed(sizeof(_Slot) as u64)) as _Slot*
+        defer mem.Free(out as void*)
+        f := read_fn as extern stdcall func (void*, u32, u32, void*) i32
+        if f(target, 1 as u32, 0 as u32, out as void*) == 0 or out[0].v == null:
+            ret str.Clone("")
+        end
+        cred := out[0].v as _Credential*
+        size_bytes := cred[0].blob_size as u64
+        copy := mem.AllocateZeroed(size_bytes + (1 as u64))
+        mem.Copy(copy, cred[0].blob, size_bytes)
+        free_fn := _proc("advapi32.dll", "CredFree") as extern stdcall func (void*)
+        free_fn(out[0].v)
+        ret copy as str
+    end
+
+    func _os_secret_delete(service: str, key: str): bool:
+        delete_fn := _proc("advapi32.dll", "CredDeleteW")
+        if delete_fn == null:
+            ret false
+        end
+        target := _cred_target(service, key)
+        defer mem.Free(target)
+        f := delete_fn as extern stdcall func (void*, u32, u32) i32
+        ret f(target, 1 as u32, 0 as u32) != 0
+    end
+
+    func _os_set_menu(view: WebView, items: Vector<MenuItem>):
+        hwnd := view.Native()
+        if hwnd == null:
+            ret
+        end
+        bar := CreateMenu()
+        _win_fill_menu(bar, items)
+        SetMenu(hwnd, bar)
+        DrawMenuBar(hwnd)
+    end
+
+    func _os_set_tray(icon: str, tooltip: str, items: Vector<MenuItem>): bool:
+        _win_tray_menu = CreatePopupMenu()
+        _win_fill_menu(_win_tray_menu, items)
+        OnTrayMessage((event: int): _win_tray_event(event) end)
+        data := _nid(0x07 as u32)
+        defer mem.Free(data)
+        ((data as i64 + _nid_icon_at()) as _Slot*)[0].v = _win_icon(icon)
+        _copy_wide_into(((data as i64) + _nid_tip_at()) as void*, tooltip, 128)
+        if _win_notify_on:
+            _win_tray_on = _shell_notify(1 as u32, data)
+        else:
+            _win_tray_on = _shell_notify(0 as u32, data)
+        end
+        ret _win_tray_on
+    end
+
+    func _os_remove_tray():
+        if _win_tray_on or _win_notify_on:
+            data := _nid(0 as u32)
+            _removed := _shell_notify(2 as u32, data)
+            mem.Free(data)
+            _win_tray_on = false
+            _win_notify_on = false
+        end
+    end
+
+    func _os_single_instance(): bool:
+        title := "SalamInstance:".concat(_secret_id())
+        wide_class := _wide("SalamWebView")
+        wide_title := _wide(title)
+        defer mem.Free(wide_class)
+        defer mem.Free(wide_title)
+        mutex_name := _wide("Local\\".concat(title))
+        defer mem.Free(mutex_name)
+        _mutex := CreateMutexW(null, 0, mutex_name)
+        running := GetLastError() == (183 as u32)
+        mut other := FindWindowExW(((0 - 3) as size) as void*, null, wide_class, wide_title)
+        mut tries := 0
+        until running and other == null and tries < 40:
+            sync.SleepMs(50)
+            other = FindWindowExW(((0 - 3) as size) as void*, null, wide_class, wide_title)
+            tries += 1
+        end
+        if running and other == null:
+            ret false
+        end
+        if other != null:
+            mut total := 0
+            data := _join_args(total)
+            copy := (mem.AllocateZeroed(sizeof(_CopyData) as u64)) as _CopyData*
+            copy[0].size = total as u32
+            copy[0].data = data
+            _sent := SendMessageW(other, 0x4A as u32, 0 as usize, (copy as size))
+            mem.Free(copy as void*)
+            mem.Free(data)
+            ret false
+        end
+        NameMessageWindow(title)
+        OnCopyData(
+            (data: void*, total: int): args := _split_args(data, total)
+            _on_second(args) end
+        )
+        ret true
+    end
+end

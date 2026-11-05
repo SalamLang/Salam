@@ -1,0 +1,470 @@
+pkg.en = gui/webview
+pkg.name = gui/webview
+pkg.group = Web and browser
+pkg.summary = A native window around HTML, and a whole desktop application layer on top of it.
+pkg.title = The gui/webview package in Salam | Desktop applications with a web interface
+pkg.description = The gui/webview package in Salam: a native window with the web view of the operating system or Chromium, and a full application layer with commands, events, bundled files, dialogs, tray icons and installers for Windows, macOS and Linux.
+pkg.import = gui.webview
+pkg.flat = true
+pkg.intro <<
+<p>This package opens a native desktop window around HTML, and builds a whole desktop application on top of it, the kind you would build with Tauri or Electron, with no Rust and no second language. There are two levels in one package. The low level is a small window: you create it, show a page with <code>SetHTML</code> or <code>Navigate</code>, and <code>Run</code> keeps it open until the user closes it. The application level starts with <code>Init</code> and adds commands the page can call, events in both directions, packaged files, dialogs, notifications, the keychain, tray icons, menus, a single-instance lock and installers made by <code>salam bundle</code>.</p>
+<p>The interface is HTML, CSS and JavaScript. By default it runs in the web view the operating system already has, like Tauri: WebView2 on Windows, WKWebView on macOS and WebKitGTK on Linux, so the program stays one small native executable. The engine is chosen when the program is built; see <a href="#guide-engine">choosing the web engine</a> for the Chromium option.</p>
+<p>A page calls your Salam code with <code>salam.invoke</code>, which returns a promise. Pages can come from three places: files packed inside the executable, so nothing sits in a folder for users to edit; a remote site; or an HTML string. Use it for a small desktop tool, a viewer for data your program computed, or a native window around a web interface your program serves. For pages that run in the user's own browser, see <a href="/std/dom/">dom</a>; to generate the HTML, see <a href="/std/template/">template</a>.</p>
+<h3>How data moves, and what does not work</h3>
+<ul>
+<li><strong>Put the data in the page.</strong> The reliable way to give the page your data is to write it into the HTML you pass to <code>SetHTML</code>, as JSON inside a <code>&lt;script&gt;</code>.</li>
+<li><code>Init</code> installs a script for every page loaded later, before the page's own scripts run. <code>Eval</code> runs once, on whatever page is loaded at that moment.</li>
+<li>Pages load in the background, so code sent with <code>Eval</code> right after <code>SetHTML</code> or <code>Navigate</code> can run before the new page exists. Use <code>Init</code>, or wait for <code>OnLoad</code>.</li>
+<li>The page can talk back with <code>OnMessage</code>. For a whole application, with commands, events, packaged files and installers, use the application functions such as <code>Init</code>, <code>Command</code> and <code>Open</code>, described in the guides further down.</li>
+<li><code>Create</code> reports failure by returning a window that is already closed; check <code>IsClosed()</code> right after it, for example on a Linux server with no display.</li>
+</ul>
+<h3>What pages may do</h3>
+<ul>
+<li><strong>Local pages may run every command.</strong> Remote sites get nothing until you name them with <code>Allow</code>, command by command if you like.</li>
+<li>The bridge exists only in the top frame of an allowed origin, and every message carries a secret made for this run, so a frame or another site cannot call you. Answers carry the origin they belong to, so they never reach a page that replaced it.</li>
+<li>A link to any other site opens in the system browser. On Linux the engine cannot tell a frame from the page, so a cross-origin frame there needs its origin in <code>allow_navigation</code>.</li>
+<li>Files inside the executable are compressed and scrambled, which keeps them out of sight. They are not secret: anything a page can read, a determined user can extract. Keep real secrets on your server.</li>
+</ul>
+<p>A window needs a desktop session, so the site only compiles these programs; run them on your own machine with <code>salam run</code>. On Linux install <code>libgtk-3-dev</code> and <code>libwebkit2gtk-4.1-dev</code> (WebKitGTK 4.1) first. Windows 10 and 11 already ship WebView2, and macOS ships WKWebView. Building for another system needs nothing extra: <code>--target</code> works from any machine.</p>
+
+<h2 id="guide-report">Showing data your program computed</h2>
+<p>The simplest desktop program builds an HTML string and shows it. Everything the page needs, the style sheet included, can travel in that one string, so there are no files to ship next to the executable. <code>HINT_FIXED</code> keeps the window at the size you chose, which suits a small dialog like this order summary.</p>
+{{example.gui-webview-guide-report}}
+<p>The item names go into the HTML as they are. When the text comes from a user or a file, pass it through <code>EscapeHTML</code> from <a href="/std/template/"><code>template</code></a> first, or a name with a <code>&lt;</code> in it breaks the page.</p>
+
+<h2 id="guide-data">Handing structured data to the page</h2>
+<p>For anything bigger than a table, let JavaScript draw the page and give it the data as JSON. <code>Marshal</code> from <a href="/std/encoding/json/"><code>encoding/json</code></a> turns a vector of structs into a JSON array whose keys are the field names, and that text goes straight into a <code>&lt;script&gt;</code> in the page. The script runs as the page loads, so the data is there before anything is drawn.</p>
+{{example.gui-webview-guide-data}}
+<p>JSON is valid JavaScript, so no parsing step is needed. One caution: if a value could contain the text <code>&lt;/script&gt;</code>, it would end the script early; replace <code>&lt;/</code> with <code>&lt;\/</code> in the JSON first when the data comes from users.</p>
+
+<h2 id="guide-launch">Opening a site or a local server</h2>
+<p><code>Navigate</code> loads an address instead of a string, so the window can show a remote site or a web interface your own program serves on <code>127.0.0.1</code>. This one takes the address from the command line, so <code>salam run webview-guide-launch.salam http://127.0.0.1:8000</code> wraps a local development server in a native window.</p>
+{{example.gui-webview-guide-launch}}
+<p><code>Run</code> blocks until the user closes the window; the lines after it are where you save state and clean up. Call <code>Destroy</code> once at the end in every case. <code>Terminate</code> makes <code>Run</code> return at its next turn; on Linux and Windows that turn only comes with the next window event, such as a mouse move. On macOS it quits the whole application instead, so the lines after <code>Run</code> do not run there.</p>
+
+<h2 id="guide-start">An application with a page and a command</h2>
+<p>While developing, <code>assets_dir</code> serves your folder directly, so a reload shows your edits. Without it the files inside the executable are used.</p>
+{{example.gui-webview-guide-start}}
+<p>The page calls it like any other async function:</p>
+<pre><code>const text = await salam.invoke("greet", { name: "Sara" });
+const stop = salam.listen("saved", (data) =&gt; console.log(data));
+salam.emit("ready", {});</code></pre>
+<p>A command normally runs on the UI thread, so keep it short. Register slow work with <code>CommandAsync</code>; the page stays responsive and <code>Resolve</code> is safe from the worker.</p>
+
+<h2 id="guide-commands">Commands, errors and slow work</h2>
+<p>Arguments arrive as JSON. <code>Str</code>, <code>Int</code> and <code>Bool</code> read one by name and <code>Has</code> tells you whether the page sent it. Finish every call exactly once: with one <code>Resolve</code> method, or with <code>Reject</code>, which makes the page's promise throw an error carrying your message. A second answer is ignored.</p>
+<p>A <code>Command</code> runs on the UI thread, so a slow one freezes the window. Register it with <code>CommandAsync</code> and it runs on a worker, where <code>Resolve</code> is safe to call later. Every window call belongs on the UI thread, so a worker hands such work to <code>Dispatch</code>.</p>
+{{example.gui-webview-guide-commands}}
+<pre><code>try {
+  const sum = await salam.invoke("add", { a: 40, b: 2 });
+  const report = await salam.invoke("report", { name: "March" });
+} catch (e) {
+  console.log(e.message);
+}</code></pre>
+
+<h2 id="guide-windows">Windows, events and menus</h2>
+<p><code>Open</code> can be called many times. Give each window a <code>label</code> and find it again with <code>GetWindow</code>. <code>Emit</code> on a window reaches only that window, and <code>desktop.Emit</code> reaches all of them. <code>OnClose</code> runs when the user closes a window: return false and the window stays, which is the place to ask about unsaved work.</p>
+{{example.gui-webview-guide-windows}}
+<p>A menu is a list of items made with <code>Item</code>, <code>Separator</code> and <code>Submenu</code>. Every click arrives in <code>OnMenu</code> with the item's id, whichever menu it came from.</p>
+
+<h2 id="guide-services">Dialogs, notifications, secrets and the tray</h2>
+<p>These calls use whatever the system provides, so the same program behaves natively on each system. File dialogs return an empty string when the user cancels. <code>SecretSet</code> and <code>SecretGet</code> keep a small value, such as a login token, in the keychain instead of a file in your data folder. <code>SingleInstance</code> returns false when the program is already running, and the running copy gets the new arguments in its callback.</p>
+{{example.gui-webview-guide-services}}
+<p>Keep in mind that a page can call a command only if it is allowed to. Local pages may call all of them. If you load a remote site, list the dangerous commands, such as <code>choose_folder</code> above, only for origins you trust.</p>
+
+<h2 id="guide-remote">A window around a website</h2>
+<p>Give <code>url</code> an address to wrap a site you already run, and use <code>Allow</code> to give that one site access to chosen commands. Your local error page can stay in the assets.</p>
+{{example.gui-webview-guide-remote}}
+
+<h2 id="guide-bundle">Making installers</h2>
+<p>Describe the application in <code>salam.toml</code> and run <code>salam bundle</code>. The same command works from any system with <code>--target</code>, and the assets folder goes inside the application.</p>
+<pre><code>[app]
+id = "com.example.notes"
+name = "Notes"
+version = "1.0.0"
+assets = "www"
+icon = "icon.png"
+description = "Take notes"
+
+$ salam bundle
+$ salam bundle --target=x86_64-w64-windows-gnu
+$ salam bundle --target=arm64-apple-macos</code></pre>
+<p>On Linux you get a tar archive and a deb package, on Windows a zip with a windowed executable, on macOS an <code>.app</code>. <code>--format</code> also offers rpm, AppImage, NSIS and dmg, which need <code>rpmbuild</code>, <code>appimagetool</code>, <code>makensis</code> and <code>hdiutil</code>. Code signing is up to you.</p>
+
+<h2 id="guide-debug">When something does not work</h2>
+<ul>
+<li>If <code>Open</code> gives a closed window, <code>LastError</code> says why. A missing WebKitGTK or WebView2 runtime shows up here.</li>
+<li>A window that opens blank: set <code>SALAM_WEBVIEW_TRACE</code> to a file name and run again. Each line is one step: how the engine started, each navigation, resource and message, and every message the bridge refused. It also works in a program with no console.</li>
+<li>Set <code>debug = true</code> in <code>Config</code> and call <code>OpenDevTools</code> on the window to use the developer tools of the engine.</li>
+<li>A command that never answers leaves the page's promise pending forever. Make sure every path ends in a <code>Resolve</code> method or <code>Reject</code>.</li>
+</ul>
+
+<h2 id="guide-engine">Choosing the web engine</h2>
+<p>The engine is chosen when your program is <strong>built</strong>, not when it runs. By default a program uses the web view of the operating system: WebView2 on Windows, WKWebView on macOS and WebKitGTK on Linux. That is what keeps the executable small, and it is the engine every guide above assumes. Because the web view comes with the system, the same page can look slightly different from one system to another.</p>
+<p>For the same engine everywhere you can build against Chromium Embedded Framework (CEF) instead. Build the program with the <code>-DSALAM_WEBVIEW_CEF</code> flag, or let <code>salam bundle</code> do it: set <code>engine = "chromium"</code> and <code>runtime = "dir"</code> in the <code>[app]</code> table of <code>salam.toml</code>, or pass <code>--engine=chromium</code> and <code>--runtime=DIR</code> (the <code>SALAM_CEF_DIR</code> environment variable works too). The runtime folder holds the built <code>salam_webview_cef</code> library, <code>salam_cef_helper</code> and the CEF runtime files (see <code>std/gui/webview/native/CMakeLists.txt</code> in the Salam repository for how to build them). It is copied next to the program, and only for tar on Linux and zip on Windows.</p>
+<p>A program can ask which engine it got. <code>Engine</code> returns <code>ENGINE_SYSTEM</code> (<code>"system"</code>) or <code>ENGINE_CHROMIUM</code> (<code>"chromium"</code>), <code>EngineName</code> returns a name for people to read (WebKitGTK, WebView2, WKWebView or Chromium Embedded Framework), and <code>SupportsCommands</code> says whether commands work.</p>
+{{example.gui-webview-guide-engine}}
+<p><strong>Be aware of the limits.</strong> With the Chromium engine today, windows open and pages load, but commands, events, custom schemes and the system services (dialogs, notifications, keychain, tray) are not available yet, and <code>SupportsCommands()</code> returns false. Full parity with the system engine is planned. If your program depends on <code>salam.invoke</code>, build it with the default engine for now, or check <code>SupportsCommands()</code> and fall back.</p>
+>>
+
+doc.HINT_NONE = The user can resize the window.
+doc.HINT_FIXED = The window size is fixed.
+doc.Request = A request a custom scheme received from the page.
+doc.Request.url = The whole address.
+doc.Request.scheme = The scheme, such as <code>app</code>.
+doc.Request.method = The HTTP method, usually <code>GET</code>.
+doc.Request.path = The path, starting with a slash.
+doc.Request.query = The text after the question mark.
+doc.Response = What a custom scheme answers with. The data is copied, so the handler keeps ownership.
+doc.Response.status = The HTTP status, 200 by default.
+doc.Response.mime = The content type.
+doc.Response.data = A pointer to the body.
+doc.Response.size = The body size in bytes.
+doc.Response.headers = Extra headers, as name and value pairs.
+doc.Response.Header = Adds one header.
+doc.WebView = A window with a browser inside it.
+doc.WebView.id = The number of this window inside the package.
+doc.WebView.Destroy = Closes the window and frees the resources.
+doc.WebView.Run = Runs the event loop until this window is closed or <code>Terminate</code> is called.
+doc.WebView.Terminate = Asks <code>Run</code> to return. The window stays open until <code>Destroy</code>.
+doc.WebView.SetTitle = The window title.
+doc.WebView.SetSize = Resizes the window, with one of the <code>HINT</code> constants: <code>HINT_FIXED</code> stops the user from resizing it.
+doc.WebView.SetMinSize = The smallest size the user can drag the window to.
+doc.WebView.SetIcon = The window icon, from a file: any image GTK reads on Linux, <code>.ico</code> on Windows, any image on macOS.
+doc.WebView.SetHTML = Shows the HTML content.
+doc.WebView.Navigate = Opens the address.
+doc.WebView.Eval = Runs JavaScript in the page loaded right now, without waiting for a result. Call it on the UI thread.
+doc.WebView.EvalLater = The same as <code>Eval</code>, but safe from any thread: the code runs on the UI thread soon after.
+doc.WebView.Init = Installs JavaScript that runs at the start of every page loaded later, before the page's own scripts. Pass <code>true</code> to run it in frames too.
+doc.WebView.URL = The address of the page now. The caller frees the string.
+doc.WebView.Show = Shows the window and brings it forward.
+doc.WebView.Hide = Hides the window without closing it.
+doc.WebView.Focus = Brings the window forward.
+doc.WebView.Minimize = Minimizes the window.
+doc.WebView.Maximize = Maximizes the window.
+doc.WebView.Center = Moves the window to the middle of the screen.
+doc.WebView.IsActive = The window has the keyboard focus.
+doc.WebView.Native = The window handle in the operating system: <code>GtkWindow*</code>, <code>HWND</code> or <code>NSWindow*</code>.
+doc.WebView.Content = Where native widgets go: a <code>GtkBox</code> on Linux, the window elsewhere.
+doc.WebView.OpenDevTools = Opens the developer tools.
+doc.WebView.SetContextMenu = Turns the page's right-click menu on or off.
+doc.WebView.OnMessage = Called with the text a page posts with the function from <code>PostScript</code>.
+doc.WebView.OnNavigate = Called before a page loads. Return false to cancel it. On Linux frames come here too; see <code>NavigationIsMainFrame</code>.
+doc.WebView.OnNewWindow = Called when a page asks for a new window. No window opens; the address is handed to you.
+doc.WebView.OnClose = Called when the user closes the window. Return false to keep it open.
+doc.WebView.OnLoad = Called when a page starts loading (false) and when it finishes (true).
+doc.WebView.OnCrash = Called when the page process dies, for example out of memory.
+doc.WebView.OnResize = Called with the new size.
+doc.WebView.IsClosed = The window has been closed.
+doc.Dispatch = Runs a function on the UI thread, from any thread.
+doc.RunAll = Runs the event loop until every window is closed or <code>Quit</code> is called.
+doc.Quit = Makes the running event loop return.
+doc.SetApp = The application id and name. Call it before the first window.
+doc.SetDataDir = The folder for cookies and local storage. Call it before the first window.
+doc.RegisterScheme = Serves a custom address scheme from your own function, so pages can load from memory.
+doc.SchemeURL = The address of a path in a scheme, for this operating system: <code>app://localhost/x</code>, or <code>https://app.localhost/x</code> on Windows.
+doc.SchemeOrigin = The origin of a scheme, for this operating system.
+doc.OnCommand = Called with the number of a native menu item that was chosen.
+doc.OnTrayMessage = Windows only: called with tray icon events.
+doc.OnCopyData = Windows only: called with <code>WM_COPYDATA</code> data sent to the message window.
+doc.MenuHost = The object native menus report to: the message window on Windows, the application delegate on macOS.
+doc.NameMessageWindow = Windows only: the title of the hidden message window, so another process can find it.
+doc.NavigationIsMainFrame = Inside <code>OnNavigate</code>: whether the page itself is navigating. WebKitGTK cannot tell a frame from the page, so on Linux this reports a user gesture instead.
+doc.PostScript = JavaScript for a function that posts a string to <code>OnMessage</code>. The caller frees it.
+doc.Create = Makes a new window. The first flag turns on developer tools, the second shows the window at once. On failure the window it returns is already closed.
+doc.LastError = Why the last window could not open, or empty text.
+doc.Trace = Adds a line to the file named by the <code>SALAM_WEBVIEW_TRACE</code> environment variable, and does nothing when it is unset. The backends use it to record each startup step, navigation and message, so a window that stays blank can be diagnosed, including in an application with no console.
+doc.Config = Settings of the application. Pass it to <code>Init</code>.
+doc.Config.id = A reverse-domain identifier, such as <code>com.example.notes</code>. It names the data folder and scrambles the asset pack.
+doc.Config.name = The name people see.
+doc.Config.version = The version text.
+doc.Config.scheme = The scheme local pages load from, <code>app</code> by default.
+doc.Config.assets_dir = Serve pages from this folder. Handy while developing; when it is empty only the pack is used.
+doc.Config.pack_path = Read assets from this pack file. By default the pack inside the executable is used.
+doc.Config.csp = A Content-Security-Policy header for local pages.
+doc.Config.spa = Answer unknown paths with <code>index.html</code>, for single page apps.
+doc.Config.debug = Turn on developer tools.
+doc.Config.external_links = Open links to other sites in the system browser, on by default.
+doc.WindowOptions = How to open a window.
+doc.WindowOptions.label = A name to find the window by, <code>main</code> by default.
+doc.WindowOptions.title = The title.
+doc.WindowOptions.width = The width in pixels.
+doc.WindowOptions.height = The height in pixels.
+doc.WindowOptions.min_width = The smallest width.
+doc.WindowOptions.min_height = The smallest height.
+doc.WindowOptions.url = A remote site to load. Empty means <code>index.html</code> from the assets.
+doc.WindowOptions.html = HTML to show directly instead of an address.
+doc.WindowOptions.icon = The icon file.
+doc.WindowOptions.resizable = The user can resize the window.
+doc.WindowOptions.center = Start in the middle of the screen.
+doc.WindowOptions.visible = Show the window at once.
+doc.WindowOptions.context_menu = Allow the page right-click menu.
+doc.WindowOptions.scripts = JavaScript to install in every page and frame, before the page runs.
+doc.WindowOptions.allow_navigation = Other origins this window may navigate to. They get no access to commands.
+doc.Call = One call from JavaScript. Finish it with one of the <code>Resolve</code> methods or <code>Reject</code>, on any thread. A second answer is ignored, and the answer frees the text in the call, so read what you need first.
+doc.Call.command = The command name.
+doc.Call.args = The arguments, as JSON text.
+doc.Call.origin = The origin of the page that called.
+doc.Call.window = The number of the window that called.
+doc.Call.Str = Reads a text argument.
+doc.Call.Int = Reads a whole number argument.
+doc.Call.Bool = Reads a true or false argument.
+doc.Call.Has = The argument was sent.
+doc.Call.Resolve = Answers with JSON text.
+doc.Call.ResolveStr = Answers with text.
+doc.Call.ResolveInt = Answers with a number.
+doc.Call.ResolveBool = Answers with true or false.
+doc.Call.ResolveNull = Answers with null.
+doc.Call.Reject = Rejects the promise with this message.
+doc.Window = An open window.
+doc.Window.index = The number of the window.
+doc.Window.Navigate = Opens an address.
+doc.Window.SetHTML = Shows HTML.
+doc.Window.Eval = Runs JavaScript in the page; safe from any thread.
+doc.Window.Emit = Sends an event to this window. The data is JSON text.
+doc.Window.SetTitle = The title.
+doc.Window.SetSize = The size.
+doc.Window.Show = Shows the window.
+doc.Window.Hide = Hides the window.
+doc.Window.Focus = Brings the window forward.
+doc.Window.Minimize = Minimizes the window.
+doc.Window.Maximize = Maximizes the window.
+doc.Window.Close = Closes the window.
+doc.Window.URL = The current address. The caller frees it.
+doc.Window.IsActive = The window has the keyboard focus.
+doc.Window.IsClosed = The window is closed, or could not open.
+doc.Window.OpenDevTools = Opens the developer tools.
+doc.Window.OnClose = Called when the user closes the window. Return false to keep it open.
+doc.Window.OnLoad = Called when a page starts (false) and finishes (true) loading.
+doc.Window.OnCrash = Called when the page process dies.
+doc.Window.OnResize = Called with the new size.
+doc.Window.Native = The handle in the operating system.
+doc.MenuItem = One menu entry.
+doc.MenuItem.id = What <code>OnMenu</code> receives.
+doc.MenuItem.label = The text.
+doc.MenuItem.separator = This entry is a line.
+doc.MenuItem.children = The entries of a submenu.
+doc.SafeAssetPath = Turns a request path into a relative asset name, or empty text if it tries to leave the assets. The caller frees it.
+doc.OriginOf = The origin of an address, in the form browsers use.
+doc.Allowed = Whether a page from this origin may run this command.
+doc.PackDir = Packs a folder into an asset file and returns how many files it holds, or -1.
+doc.Init = Sets up the application. Call it first.
+doc.CurrentConfig = The settings in use.
+doc.DataDir = The folder for this application data, for the current user.
+doc.Allow = Lets a remote origin run these commands; a pattern may end in <code>*</code>. Call it before opening windows. Nothing remote can call anything by default.
+doc.Command = Registers a command that runs on the UI thread.
+doc.CommandAsync = Registers a command that runs on a worker thread, for slow work.
+doc.On = Called when a page emits this event. The data is JSON text.
+doc.Emit = Sends an event to every window; safe from any thread.
+doc.AssetURL = The address of an asset on this operating system.
+doc.Open = Opens a window. On failure it returns a closed one; check <code>IsClosed</code>.
+doc.GetWindow = Finds a window by its label.
+doc.Run = Runs until every window closes or <code>Quit</code> is called.
+doc.OpenURL = Opens an http, https, mailto or tel address in the system handler.
+doc.PickFolder = Asks the user for a folder. Empty text means cancelled.
+doc.PickFile = Asks the user for a file. Patterns look like <code>*.txt;*.md</code>.
+doc.SaveFile = Asks the user where to save.
+doc.Message = Shows a message.
+doc.Confirm = Asks a yes or no question.
+doc.Notify = Shows a desktop notification, silently or with the sound <code>default</code> or <code>alert</code>. False when the system has no way to show it.
+doc.RequestAttention = Flashes the taskbar entry or bounces the dock icon.
+doc.SecretSet = Stores a secret in the system keychain, or in a private file when there is none.
+doc.SecretGet = Reads a secret. Empty text when there is none.
+doc.SecretDelete = Removes a secret.
+doc.Item = Makes a menu entry.
+doc.Separator = Makes a line between menu entries.
+doc.Submenu = Makes a submenu.
+doc.OnMenu = Called with the id of the chosen menu entry.
+doc.SetMenu = Gives a window a menu bar. On macOS the entries join the application menu.
+doc.SetTray = Adds a tray icon with a menu.
+doc.RemoveTray = Removes the tray icon.
+doc.OnTrayClick = Called when the tray icon is clicked, where the system reports it.
+doc.SingleInstance = Keeps one running copy. True means this is the first copy; false means another one got your arguments and you should exit.
+doc.Config.icon = An icon file for notifications.
+doc.OnNotifyClick = Called when the user clicks a notification, on Linux and Windows. On macOS a click brings the application forward by itself.
+doc.ENGINE_SYSTEM = The engine name <code>"system"</code>: the web view of the operating system, the default.
+doc.ENGINE_CHROMIUM = The engine name <code>"chromium"</code>: Chromium Embedded Framework, chosen at build time with <code>-DSALAM_WEBVIEW_CEF</code>.
+doc.Engine = The engine this program was built with, <code>ENGINE_SYSTEM</code> or <code>ENGINE_CHROMIUM</code>.
+doc.EngineName = The engine in words for people: WebKitGTK, WebView2, WKWebView or Chromium Embedded Framework.
+doc.SupportsCommands = Whether commands, events and custom schemes work with this engine. False with the Chromium engine for now.
+
+ex.HINT_NONE = gui-webview-Window
+ex.HINT_FIXED = gui-webview-Window
+ex.Request = gui-webview-Window
+ex.Request.url = gui-webview-Window
+ex.Request.scheme = gui-webview-Window
+ex.Request.method = gui-webview-Window
+ex.Request.path = gui-webview-Window
+ex.Request.query = gui-webview-Window
+ex.Response = gui-webview-Window
+ex.Response.status = gui-webview-Window
+ex.Response.mime = gui-webview-Window
+ex.Response.data = gui-webview-Window
+ex.Response.size = gui-webview-Window
+ex.Response.headers = gui-webview-Window
+ex.Response.Header = gui-webview-Window
+ex.WebView = gui-webview-Window
+ex.WebView.id = gui-webview-Window
+ex.WebView.Destroy = gui-webview-Window
+ex.WebView.Run = gui-webview-Window
+ex.WebView.Terminate = gui-webview-Window
+ex.WebView.SetTitle = gui-webview-Window
+ex.WebView.SetSize = gui-webview-Window
+ex.WebView.SetMinSize = gui-webview-Window
+ex.WebView.SetIcon = gui-webview-Window
+ex.WebView.SetHTML = gui-webview-Window
+ex.WebView.Navigate = gui-webview-Navigate
+ex.WebView.Eval = gui-webview-Window
+ex.WebView.EvalLater = gui-webview-Window
+ex.WebView.Init = gui-webview-Window
+ex.WebView.URL = gui-webview-Window
+ex.WebView.Show = gui-webview-Window
+ex.WebView.Hide = gui-webview-Window
+ex.WebView.Focus = gui-webview-Window
+ex.WebView.Minimize = gui-webview-Window
+ex.WebView.Maximize = gui-webview-Window
+ex.WebView.Center = gui-webview-Window
+ex.WebView.IsActive = gui-webview-Window
+ex.WebView.Native = gui-webview-Window
+ex.WebView.Content = gui-webview-Window
+ex.WebView.OpenDevTools = gui-webview-Window
+ex.WebView.SetContextMenu = gui-webview-Window
+ex.WebView.OnMessage = gui-webview-Window
+ex.WebView.OnNavigate = gui-webview-Window
+ex.WebView.OnNewWindow = gui-webview-Window
+ex.WebView.OnClose = gui-webview-Window
+ex.WebView.OnLoad = gui-webview-Window
+ex.WebView.OnCrash = gui-webview-Window
+ex.WebView.OnResize = gui-webview-Window
+ex.WebView.IsClosed = gui-webview-Window
+ex.Dispatch = gui-webview-Window
+ex.RunAll = gui-webview-Window
+ex.Quit = gui-webview-Window
+ex.SetApp = gui-webview-Window
+ex.SetDataDir = gui-webview-Window
+ex.RegisterScheme = gui-webview-Window
+ex.SchemeURL = gui-webview-Window
+ex.SchemeOrigin = gui-webview-Window
+ex.OnCommand = gui-webview-Window
+ex.OnTrayMessage = gui-webview-Window
+ex.OnCopyData = gui-webview-Window
+ex.MenuHost = gui-webview-Window
+ex.NameMessageWindow = gui-webview-Window
+ex.NavigationIsMainFrame = gui-webview-Window
+ex.PostScript = gui-webview-Window
+ex.Create = gui-webview-Window
+ex.LastError = gui-webview-Window
+ex.Trace = gui-webview-Window
+ex.Config = gui-webview-App
+ex.Config.id = gui-webview-App
+ex.Config.name = gui-webview-App
+ex.Config.version = gui-webview-App
+ex.Config.scheme = gui-webview-App
+ex.Config.assets_dir = gui-webview-App
+ex.Config.pack_path = gui-webview-App
+ex.Config.csp = gui-webview-App
+ex.Config.spa = gui-webview-App
+ex.Config.debug = gui-webview-App
+ex.Config.external_links = gui-webview-App
+ex.WindowOptions = gui-webview-App
+ex.WindowOptions.label = gui-webview-App
+ex.WindowOptions.title = gui-webview-App
+ex.WindowOptions.width = gui-webview-App
+ex.WindowOptions.height = gui-webview-App
+ex.WindowOptions.min_width = gui-webview-App
+ex.WindowOptions.min_height = gui-webview-App
+ex.WindowOptions.url = gui-webview-App
+ex.WindowOptions.html = gui-webview-App
+ex.WindowOptions.icon = gui-webview-App
+ex.WindowOptions.resizable = gui-webview-App
+ex.WindowOptions.center = gui-webview-App
+ex.WindowOptions.visible = gui-webview-App
+ex.WindowOptions.context_menu = gui-webview-App
+ex.WindowOptions.scripts = gui-webview-App
+ex.WindowOptions.allow_navigation = gui-webview-App
+ex.Call = gui-webview-App
+ex.Call.command = gui-webview-App
+ex.Call.args = gui-webview-App
+ex.Call.origin = gui-webview-App
+ex.Call.window = gui-webview-App
+ex.Call.Str = gui-webview-App
+ex.Call.Int = gui-webview-App
+ex.Call.Bool = gui-webview-App
+ex.Call.Has = gui-webview-App
+ex.Call.Resolve = gui-webview-App
+ex.Call.ResolveStr = gui-webview-App
+ex.Call.ResolveInt = gui-webview-App
+ex.Call.ResolveBool = gui-webview-App
+ex.Call.ResolveNull = gui-webview-App
+ex.Call.Reject = gui-webview-App
+ex.Window = gui-webview-App
+ex.Window.index = gui-webview-App
+ex.Window.Navigate = gui-webview-App
+ex.Window.SetHTML = gui-webview-App
+ex.Window.Eval = gui-webview-App
+ex.Window.Emit = gui-webview-App
+ex.Window.SetTitle = gui-webview-App
+ex.Window.SetSize = gui-webview-App
+ex.Window.Show = gui-webview-App
+ex.Window.Hide = gui-webview-App
+ex.Window.Focus = gui-webview-App
+ex.Window.Minimize = gui-webview-App
+ex.Window.Maximize = gui-webview-App
+ex.Window.Close = gui-webview-App
+ex.Window.URL = gui-webview-App
+ex.Window.IsActive = gui-webview-App
+ex.Window.IsClosed = gui-webview-App
+ex.Window.OpenDevTools = gui-webview-App
+ex.Window.OnClose = gui-webview-App
+ex.Window.OnLoad = gui-webview-App
+ex.Window.OnCrash = gui-webview-App
+ex.Window.OnResize = gui-webview-App
+ex.Window.Native = gui-webview-App
+ex.MenuItem = gui-webview-App
+ex.MenuItem.id = gui-webview-App
+ex.MenuItem.label = gui-webview-App
+ex.MenuItem.separator = gui-webview-App
+ex.MenuItem.children = gui-webview-App
+ex.SafeAssetPath = gui-webview-App
+ex.OriginOf = gui-webview-App
+ex.Allowed = gui-webview-App
+ex.PackDir = gui-webview-App
+ex.Init = gui-webview-App
+ex.CurrentConfig = gui-webview-App
+ex.DataDir = gui-webview-App
+ex.Allow = gui-webview-App
+ex.Command = gui-webview-App
+ex.CommandAsync = gui-webview-App
+ex.On = gui-webview-App
+ex.Emit = gui-webview-App
+ex.AssetURL = gui-webview-App
+ex.Open = gui-webview-App
+ex.GetWindow = gui-webview-App
+ex.Run = gui-webview-App
+ex.OpenURL = gui-webview-App
+ex.PickFolder = gui-webview-App
+ex.PickFile = gui-webview-App
+ex.SaveFile = gui-webview-App
+ex.Message = gui-webview-App
+ex.Confirm = gui-webview-App
+ex.Notify = gui-webview-App
+ex.RequestAttention = gui-webview-App
+ex.SecretSet = gui-webview-App
+ex.SecretGet = gui-webview-App
+ex.SecretDelete = gui-webview-App
+ex.Item = gui-webview-App
+ex.Separator = gui-webview-App
+ex.Submenu = gui-webview-App
+ex.OnMenu = gui-webview-App
+ex.SetMenu = gui-webview-App
+ex.SetTray = gui-webview-App
+ex.RemoveTray = gui-webview-App
+ex.OnTrayClick = gui-webview-App
+ex.SingleInstance = gui-webview-App
+ex.Config.icon = gui-webview-App
+ex.OnNotifyClick = gui-webview-App
+ex.ENGINE_SYSTEM = gui-webview-Engine
+ex.ENGINE_CHROMIUM = gui-webview-Engine
+ex.Engine = gui-webview-Engine
+ex.EngineName = gui-webview-Engine
+ex.SupportsCommands = gui-webview-Engine

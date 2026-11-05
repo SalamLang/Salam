@@ -2515,6 +2515,11 @@ Read the real code; it is the specification:
   (`grep -rn "pub func" std/<pkg>`).
 - The precise semantic rules (what is and isn't allowed): the `.salam` cases in
   `tests/en/errors/`.
+- Adding to `std/`: every new package, function, struct, field, method or
+  constant needs `@en`/`@fa` names, a program in `tests/en/stdlib/` and its
+  twin in `tests/fa/stdlib/`, and `doc.`/`ex.` keys (plus `guide-*` sections
+  for a new package) in both `website/content/{en,fa}/std/` pages. Check with
+  `salam run tools/salam/check-std-coverage-docs.salam` (see CONTRIBUTING.md).
 
 ---
 

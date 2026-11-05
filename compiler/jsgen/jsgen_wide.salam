@@ -1,0 +1,111 @@
+package jsgen
+
+import str
+
+include co "../sal_core.salam"
+include tok "../token.salam"
+include at "../ast.salam"
+include sm "../semantic/semantic.salam"
+include wd "../wide.salam"
+
+func jsg_wide_ts(ts: str): bool:
+    ret str.Equals(ts, "i128") or str.Equals(ts, "u128")
+end
+
+func jsg_wide_wrap(e: str, ts: str): str:
+    ret (str.Equals(ts, "i128") ? "BigInt.asIntN(128, " : "BigInt.asUintN(128, ") + e + ")"
+end
+
+func jsg_wide_lit(ts: str, hi: u64, lo: u64): str:
+    v := wd.Make(hi, lo)
+    if str.Equals(ts, "i128") and wd.IsNeg(v):
+        ret "(" + wd.ToStringS(v) + "n)"
+    end
+    ret wd.ToStringU(v) + "n"
+end
+
+func jsg_wide_op(op: int, ts: str, x: str, y: str): str:
+    if op == tok.TK_SLASH or op == tok.TK_SLASH_EQ:
+        ret jsg_wide_wrap(x + " / __sal_wnz(" + y + ", 0)", ts)
+    end
+    if op == tok.TK_PERCENT or op == tok.TK_PERCENT_EQ:
+        ret jsg_wide_wrap(x + " % __sal_wnz(" + y + ", 1)", ts)
+    end
+    if op == tok.TK_SHL or op == tok.TK_SHL_EQ:
+        ret jsg_wide_wrap(x + " << __sal_wsh(" + y + ")", ts)
+    end
+    if op == tok.TK_SHR or op == tok.TK_SHR_EQ:
+        ret jsg_wide_wrap(x + " >> __sal_wsh(" + y + ")", ts)
+    end
+    mut sym := "+"
+    if op == tok.TK_MINUS or op == tok.TK_MINUS_EQ:
+        sym = "-"
+    else op == tok.TK_STAR or op == tok.TK_STAR_EQ:
+        sym = "*"
+    else op == tok.TK_AMP or op == tok.TK_AMP_EQ:
+        sym = "&"
+    else op == tok.TK_PIPE or op == tok.TK_PIPE_EQ:
+        sym = "|"
+    else op == tok.TK_CARET or op == tok.TK_CARET_EQ:
+        sym = "^"
+    end
+    ret jsg_wide_wrap(x + " " + sym + " " + y, ts)
+end
+
+func jsg_wide_binary(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, ts: str): str:
+    n := at.Get(a, id)
+    x := jsg_expr_p(g, s, a, n.a, 15)
+    y := jsg_expr_p(g, s, a, n.b, 15)
+    if jsg_op_is_cmp(n.op):
+        ret "(" + x + " " + jsg_op(n.op) + " " + y + ")"
+    end
+    ret jsg_wide_op(n.op, ts, x, y)
+end
+
+func jsg_wide_unary(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, ts: str): str:
+    n := at.Get(a, id)
+    x := jsg_expr_p(g, s, a, n.a, 15)
+    ret jsg_wide_wrap((n.op == tok.TK_MINUS ? "-" : "~") + x, ts)
+end
+
+func jsg_wide_incdec(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, ts: str): str:
+    n := at.Get(a, id)
+    lv := jsg_expr_p(g, s, a, n.a, JSP_MEMBER)
+    up := n.op == tok.TK_PLUS_PLUS
+    next := jsg_wide_wrap(lv + (up ? " + 1n" : " - 1n"), ts)
+    if n.is_prefix:
+        ret "(" + lv + " = " + next + ")"
+    end
+    ret "((" + lv + " = " + next + "), " + jsg_wide_wrap(lv + (up ? " - 1n" : " + 1n"), ts) + ")"
+end
+
+func jsg_wide_cast(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, sts: str, dts: str): str:
+    n := at.Get(a, id)
+    x := jsg_expr_p(g, s, a, n.a, 0)
+    if jsg_wide_ts(dts):
+        if jsg_wide_ts(sts):
+            ret jsg_wide_wrap(x, dts)
+        end
+        if str.Equals(sts, "f64") or str.Equals(sts, "f32"):
+            ret "__sal_wff(" + x + ", " + (str.Equals(dts, "u128") ? "1" : "0") + ")"
+        end
+        ret jsg_wide_wrap("__sal_wfrom(" + x + ")", dts)
+    end
+    if str.Equals(dts, "f64"):
+        ret "Number(" + x + ")"
+    end
+    if str.Equals(dts, "f32"):
+        ret "__sal_wf32(" + x + ")"
+    end
+    if str.Equals(dts, "bool"):
+        ret "(" + x + " !== 0n)"
+    end
+    if cg_is_int_typestr(dts):
+        bits := jsg_int_ts_bits(dts)
+        ret "Number(" + (cg_is_unsigned_typestr(dts) ? "BigInt.asUintN(" : "BigInt.asIntN(") + co.I64Toa(bits as i64) + ", " + x + "))"
+    end
+    if str.Equals(dts, "char"):
+        ret "Number(BigInt.asUintN(8, " + x + "))"
+    end
+    ret "Number(BigInt.asIntN(32, " + x + "))"
+end

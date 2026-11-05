@@ -1,0 +1,467 @@
+package semantic
+
+import str
+
+include tok "../token.salam"
+include at "../ast.salam"
+include co "../sal_core.salam"
+include i18 "../i18n.salam"
+include wd "../wide.salam"
+include cc "../condcomp.salam"
+
+func wide_ts(ts: str): bool:
+    ret str.Equals(ts, "i128") or str.Equals(ts, "u128")
+end
+
+func wide_node(a &: at.Ast, nid: int): bool:
+    ret nid != 0 and wide_ts(at.Get(a, nid).type_str)
+end
+
+func wide_node_type(s &: Sema, a &: at.Ast, nid: int): int:
+    k := type_prim_kind_from_name(at.Get(a, nid).type_str, "")
+    ret k >= 0 ? sema_ty(s, k) : TYPE_NONE
+end
+
+func wide_lit_value(a &: at.Ast, nid: int, out &: wd.W): bool:
+    if nid == 0:
+        ret false
+    end
+    n := at.Get(a, nid)
+    if n.kind != at.AST_LITERAL or n.op != tok.TK_INT:
+        ret false
+    end
+    if wide_ts(n.type_str) or n.value_hi != (0 as u64):
+        out = wd.Make(n.value_hi, n.value_int)
+        ret true
+    end
+    if str.StartsWith(n.type_str, "u"):
+        out = wd.FromU64(n.value_int)
+    else:
+        out = wd.FromI64(n.value_int as i64)
+    end
+    ret true
+end
+
+func wide_operand(s &: Sema, a &: at.Ast, nid: int, out &: wd.W): bool:
+    if wide_lit_value(a, nid, out):
+        ret true
+    end
+    ret wide_lit_value(a, const_ref_node(s, a, nid), out)
+end
+
+func fold_wide(a &: at.Ast, nid: int, v: wd.W):
+    mut n := at.Get(a, nid)
+    n.value_kind = tok.TV_INT
+    n.value_int = v.lo
+    n.value_hi = v.hi
+    at.Put(a, nid, n)
+    fold_done(a, nid, tok.TK_INT)
+end
+
+func wide_overflow_err(s &: Sema, a &: at.Ast, nid: int):
+    if g_sm_ranges == 0 or s.requal:
+        ret
+    end
+    ts := at.At(a, nid).type_str
+    serr_help(
+        s, 148, span_of(a, nid), co.Format2(
+            i18.Tr("integer overflow: '%s' does not fit in '%s'"), co.ArgStr(rg_text_or(a, nid, i18.Tr("this expression"))), co.ArgStr(ts)
+        ), i18.Tr("'i128' holds -170141183460469231731687303715884105728 to 170141183460469231731687303715884105727. A release build assumes signed arithmetic never overflows, and only unsigned types wrap by design")
+    )
+end
+
+func wide_add_overflows(x: wd.W, y: wd.W, r: wd.W): bool:
+    ret wd.IsNeg(x) == wd.IsNeg(y) and wd.IsNeg(r) != wd.IsNeg(x)
+end
+
+func wide_mul_overflows(x: wd.W, y: wd.W, r: wd.W): bool:
+    if wd.IsZero(x) or wd.IsZero(y):
+        ret false
+    end
+    mag_x := wd.IsNeg(x) ? wd.Neg(x) : x
+    mag_y := wd.IsNeg(y) ? wd.Neg(y) : y
+    q := wd.DivU(wd.IsNeg(r) ? wd.Neg(r) : r, mag_y)
+    if not wd.Eq(q, mag_x):
+        ret true
+    end
+    ret wd.IsNeg(r) != (wd.IsNeg(x) != wd.IsNeg(y))
+end
+
+func fold_wide_binary(s &: Sema, a &: at.Ast, nid: int): bool:
+    n := at.Get(a, nid)
+    res_wide := wide_ts(n.type_str)
+    if not res_wide and not wide_node(a, n.a) and not wide_node(a, n.b):
+        ret false
+    end
+    mut x := wd.Zero()
+    mut y := wd.Zero()
+    if not wide_operand(s, a, n.a, x) or not wide_operand(s, a, n.b, y):
+        ret true
+    end
+    op := n.op
+    sgn := str.Equals(res_wide ? n.type_str : at.Get(a, n.a).type_str, "i128")
+    if op == tok.TK_EQ:
+        fold_bool(a, nid, wd.Eq(x, y))
+        ret true
+    end
+    if op == tok.TK_NE:
+        fold_bool(a, nid, not wd.Eq(x, y))
+        ret true
+    end
+    if op == tok.TK_LT or op == tok.TK_GE:
+        lt_v := sgn ? wd.LtS(x, y) : wd.LtU(x, y)
+        fold_bool(a, nid, op == tok.TK_LT ? lt_v : not lt_v)
+        ret true
+    end
+    if op == tok.TK_GT or op == tok.TK_LE:
+        gt_v := sgn ? wd.LtS(y, x) : wd.LtU(y, x)
+        fold_bool(a, nid, op == tok.TK_GT ? gt_v : not gt_v)
+        ret true
+    end
+    if not res_wide:
+        ret true
+    end
+    if op == tok.TK_PLUS:
+        r := wd.Add(x, y)
+        if sgn and wide_add_overflows(x, y, r):
+            wide_overflow_err(s, a, nid)
+            ret true
+        end
+        fold_wide(a, nid, r)
+    else op == tok.TK_MINUS:
+        r2 := wd.Sub(x, y)
+        if sgn and wide_add_overflows(x, wd.Neg(y), r2) and not wd.Eq(y, wd.Make((1 as u64) << 63, 0 as u64)):
+            wide_overflow_err(s, a, nid)
+            ret true
+        end
+        fold_wide(a, nid, r2)
+    else op == tok.TK_STAR:
+        r3 := wd.Mul(x, y)
+        if sgn and wide_mul_overflows(x, y, r3):
+            wide_overflow_err(s, a, nid)
+            ret true
+        end
+        fold_wide(a, nid, r3)
+    else op == tok.TK_SLASH or op == tok.TK_PERCENT:
+        if wd.IsZero(y):
+            serr(s, 21, span_of(a, nid), i18.Tr("division by zero in constant expression"))
+            ret true
+        end
+        if sgn and wd.Eq(x, wd.Make((1 as u64) << 63, 0 as u64)) and wd.Eq(y, wd.Not(wd.Zero())):
+            ret true
+        end
+        if op == tok.TK_SLASH:
+            fold_wide(a, nid, sgn ? wd.DivS(x, y) : wd.DivU(x, y))
+        else:
+            fold_wide(a, nid, sgn ? wd.ModS(x, y) : wd.ModU(x, y))
+        end
+    else op == tok.TK_AMP:
+        fold_wide(a, nid, wd.And(x, y))
+    else op == tok.TK_PIPE:
+        fold_wide(a, nid, wd.Or(x, y))
+    else op == tok.TK_CARET:
+        fold_wide(a, nid, wd.Xor(x, y))
+    else op == tok.TK_SHL or op == tok.TK_SHR:
+        if y.hi != (0 as u64) or y.lo >= (128 as u64):
+            serr(
+                s, 21, span_of(a, nid), co.Format2(
+                    i18.Tr("shift count %s is outside the width of '%s'"), co.ArgStr(wd.ToStringS(y)), co.ArgStr(n.type_str)
+                )
+            )
+            ret true
+        end
+        cnt := y.lo as int
+        if op == tok.TK_SHL:
+            fold_wide(a, nid, wd.Shl(x, cnt))
+        else:
+            fold_wide(a, nid, sgn ? wd.ShrS(x, cnt) : wd.ShrU(x, cnt))
+        end
+    end
+    ret true
+end
+
+func fold_wide_unary(s &: Sema, a &: at.Ast, nid: int): bool:
+    n := at.Get(a, nid)
+    if not wide_ts(n.type_str):
+        ret false
+    end
+    mut x := wd.Zero()
+    if not wide_operand(s, a, n.a, x):
+        ret true
+    end
+    if n.op == tok.TK_MINUS:
+        if str.Equals(n.type_str, "i128") and wd.Eq(x, wd.Make((1 as u64) << 63, 0 as u64)):
+            wide_overflow_err(s, a, nid)
+            ret true
+        end
+        fold_wide(a, nid, wd.Neg(x))
+    else n.op == tok.TK_TILDE:
+        fold_wide(a, nid, wd.Not(x))
+    end
+    ret true
+end
+
+func wide_warn_lossy(s &: Sema, a &: at.Ast, nid: int, text: str, kept: str):
+    if g_sm_ranges == 0 or s.requal:
+        ret
+    end
+    ts := at.At(a, nid).type_str
+    swarn_help(
+        s, 154, span_of(a, nid), co.Format4(
+            i18.Tr("%s does not fit in '%s'; the cast keeps only the low %d bits, giving %s"), co.ArgStr(text), co.ArgStr(ts), co.ArgInt(fold_ts_bits(ts) as i64), co.ArgStr(kept)
+        ), i18.Tr("use a wider type, or mask the bits you want on purpose, for example '(x & 255) as u8'")
+    )
+end
+
+func wide_narrow_fits(ts: str, v: wd.W, sgn: bool): bool:
+    bits := fold_ts_bits(ts)
+    neg := sgn and wd.IsNeg(v)
+    if neg:
+        if str.StartsWith(ts, "u") or str.Equals(ts, "char"):
+            ret true
+        end
+        ret not wd.LtS(v, wd.Neg(wd.Shl(wd.FromU64(1 as u64), bits - 1)))
+    end
+    if str.StartsWith(ts, "u") or str.Equals(ts, "char"):
+        ret wd.LtU(v, wd.Shl(wd.FromU64(1 as u64), bits))
+    end
+    ret wd.LtU(v, wd.Shl(wd.FromU64(1 as u64), bits - 1))
+end
+
+func fold_wide_cast(s &: Sema, a &: at.Ast, nid: int): bool:
+    n := at.Get(a, nid)
+    ts := n.type_str
+    from_wide := wide_node(a, n.a)
+    if not wide_ts(ts) and not from_wide:
+        ret false
+    end
+    if wide_ts(ts):
+        mut x := wd.Zero()
+        if wide_operand(s, a, n.a, x):
+            if str.Equals(ts, "i128") and str.Equals(at.Get(a, n.a).type_str, "u128") and wd.IsNeg(x) and not wd.Eq(x, wd.Make((1 as u64) << 63, 0 as u64)):
+                wide_warn_lossy(s, a, nid, wd.ToStringU(x), wd.ToStringS(x))
+            end
+            fold_wide(a, nid, x)
+            ret true
+        end
+        mut fv := 0.0
+        if fold_operand_flt(s, a, n.a, fv) and fv == fv:
+            sgn_t := str.Equals(ts, "i128")
+            if sgn_t and fv < 170141183460469231731687303715884105728.0 and fv > -170141183460469231731687303715884105728.0:
+                mag := wd.FromF64U(fv < 0.0 ? 0.0 - fv : fv)
+                fold_wide(a, nid, fv < 0.0 ? wd.Neg(mag) : mag)
+            else not sgn_t and fv >= 0.0 and fv < 340282366920938463463374607431768211456.0:
+                fold_wide(a, nid, wd.FromF64U(fv))
+            end
+        end
+        ret true
+    end
+    mut x2 := wd.Zero()
+    if not wide_operand(s, a, n.a, x2):
+        ret true
+    end
+    sgn := str.Equals(at.Get(a, n.a).type_str, "i128")
+    if str.Equals(ts, "f64") or str.Equals(ts, "f32"):
+        fold_flt(a, nid, sgn ? wd.ToF64S(x2) : wd.ToF64U(x2))
+        ret true
+    end
+    if fold_int_ts(ts) or str.Equals(ts, "char"):
+        if not wide_narrow_fits(ts, x2, sgn):
+            wide_warn_lossy(s, a, nid, sgn ? wd.ToStringS(x2) : wd.ToStringU(x2), co.I64Toa(fold_wrap(ts, x2.lo as i64)))
+        end
+        fold_int_wrapped(a, nid, x2.lo as i64)
+        ret true
+    end
+    if str.Equals(ts, "bool"):
+        fold_bool(a, nid, not wd.IsZero(x2))
+    end
+    ret true
+end
+
+func fold_wide_ternary(s &: Sema, a &: at.Ast, nid: int): bool:
+    n := at.Get(a, nid)
+    if not wide_ts(n.type_str):
+        ret false
+    end
+    mut cv := false
+    if not fold_operand_bool(s, a, n.a, cv):
+        ret true
+    end
+    mut x := wd.Zero()
+    if wide_operand(s, a, cv ? n.b : n.c, x):
+        fold_wide(a, nid, x)
+    end
+    ret true
+end
+
+func sema_fold_wide(s &: Sema, a &: at.Ast, nid: int, k: int): bool:
+    if k == at.AST_BINARY:
+        ret fold_wide_binary(s, a, nid)
+    end
+    if k == at.AST_UNARY:
+        ret fold_wide_unary(s, a, nid)
+    end
+    if k == at.AST_CAST:
+        ret fold_wide_cast(s, a, nid)
+    end
+    if k == at.AST_TERNARY:
+        ret fold_wide_ternary(s, a, nid)
+    end
+    ret false
+end
+
+func wide_lit_retype(s &: Sema, a &: at.Ast, nid: int, dst: int):
+    mut v := wd.Zero()
+    _ok := wide_lit_value(a, nid, v)
+    mut nv := at.Get(a, nid)
+    nv.value_int = v.lo
+    nv.value_hi = v.hi
+    at.Put(a, nid, nv)
+    _d := sema_decorate(s, a, nid, dst)
+end
+
+func wide_coerce(s &: Sema, a &: at.Ast, nid: int, dst: int):
+    if nid == 0 or dst < 0:
+        ret
+    end
+    src := wide_node_type(s, a, nid)
+    if src < 0 or type_is_error(s, src) or type_is_error(s, dst) or type_equiv(s, src, dst):
+        ret
+    end
+    to_wide := type_is_wide(s, dst)
+    from_wide := type_is_wide(s, src)
+    if not to_wide and not (from_wide and type_is_float(s, dst)):
+        ret
+    end
+    if not type_is_numeric(s, src) and ty_at(s, src).kind != TY_CHAR:
+        ret
+    end
+    if to_wide and at.KindOf(a, nid) == at.AST_LITERAL and at.Get(a, nid).op == tok.TK_INT:
+        wide_lit_retype(s, a, nid, dst)
+        ret
+    end
+    wide_wrap_cast(s, a, nid, dst)
+    sema_fold_expr(s, a, nid)
+end
+
+func wide_wrap_cast(s &: Sema, a &: at.Ast, nid: int, dst: int):
+    inner := new_node_at(a, at.AST_LITERAL, span_of(a, nid))
+    at.Put(a, inner, at.Get(a, nid))
+    tn := preset_type_node(a, span_of(a, nid), dst)
+    at.SetTypeStr(a, tn, type_to_string(s, dst))
+    mut cv := at.Get(a, nid)
+    cv.kind = at.AST_CAST
+    cv.a = inner
+    cv.b = 0
+    cv.c = 0
+    cv.d = 0
+    cv.op = 0
+    cv.ty = tn
+    cv.name = ""
+    cv.list = Vector {} as Vector<int>
+    cv.ext = 0
+    cv.ovl_decl = 0
+    cv.value_kind = tok.TV_NONE
+    cv.synthetic = true
+    at.Put(a, nid, cv)
+    _d := sema_decorate(s, a, nid, dst)
+end
+
+func wide_coerce_shift(s &: Sema, a &: at.Ast, nid: int):
+    if wide_node(a, nid):
+        wide_wrap_cast(s, a, nid, sema_ty(s, TY_I32))
+        sema_fold_expr(s, a, nid)
+    end
+end
+
+func coerce_args_to_wide(
+    s &: Sema, a &: at.Ast, call: int, sigid: int
+):
+    if sigid == 0:
+        ret
+    end
+    sg := sig_at(s, sigid)
+    wide_variadic_check(s, a, call, sigid, span_of(a, call))
+    mut i := 0
+    until i < at.ChildCount(a, call) and i < sg.params.len():
+        if not param_is_ref(s, a, sigid, i):
+            wide_coerce(s, a, at.Child(a, call, i), sg.params.get(i))
+        end
+        i += 1
+    end
+end
+
+func wide_method_arg(s &: Sema, a &: at.Ast, call: int, i: int, want: int, sp: co.SrcSpan):
+    if i >= at.ChildCount(a, call):
+        ret
+    end
+    arg := at.Child(a, call, i)
+    at0 := wide_node_type(s, a, arg)
+    if type_is_wide(s, at0) and want >= 0 and not type_is_wide(s, want) and not type_is_float(s, want):
+        serr(
+            s, 2, sp, co.Format3(
+                i18.Tr("argument %zu: cannot pass '%s' to '%s'"), co.ArgUint((i + 1) as u64), co.ArgStr(type_disp(s, at0)), co.ArgStr(type_disp(s, want))
+            )
+        )
+        ret
+    end
+    wide_coerce(s, a, arg, want)
+end
+
+func wide_no_index(s &: Sema, a &: at.Ast, nid: int, what: str):
+    if wide_node(a, nid):
+        serr_help(
+            s, 159, span_of(a, nid), co.Format2(
+                i18.Tr("%s cannot be '%s': indexes and sizes are at most 64 bits"), co.ArgStr(what), co.ArgStr(at.Get(a, nid).type_str)
+            ), i18.Tr("cast it first, for example 'x as i64'")
+        )
+    end
+end
+
+func wide_target_has_abi(s &: Sema): bool:
+    mut i := cc.Lookup(s.cctab, "SALAM_ARCH_X86")
+    if i >= 0 and cc.EntryBool(s.cctab, i):
+        ret false
+    end
+    i = cc.Lookup(s.cctab, "SALAM_ARCH_ARM")
+    if i >= 0 and cc.EntryBool(s.cctab, i):
+        ret false
+    end
+    i = cc.Lookup(s.cctab, "SALAM_ARCH_WASM")
+    ret not (i >= 0 and cc.EntryBool(s.cctab, i))
+end
+
+func wide_extern_check(s &: Sema, a &: at.Ast, fnid: int, ret_t: int, params: Vector<int>):
+    fn := at.Get(a, fnid)
+    if not fn.is_extern or wide_target_has_abi(s):
+        ret
+    end
+    mut hit := type_is_wide(s, ret_t)
+    repeat params.len() in i:
+        if type_is_wide(s, params.get(i)):
+            hit = true
+        end
+    end
+    if hit:
+        serr_help(
+            s, 160, span_of(a, fnid), co.Format1(
+                i18.Tr("extern function '%s' uses a 128-bit integer, but this target has no C ABI for one"), co.ArgStr(fn.name)
+            ), i18.Tr("C compilers offer __int128 only on 64-bit targets; pass the value as two 'u64' halves instead")
+        )
+    end
+end
+
+func wide_variadic_check(s &: Sema, a &: at.Ast, call: int, sigid: int, sp: co.SrcSpan):
+    if sigid == 0 or not sig_at(s, sigid).variadic:
+        ret
+    end
+    mut i := sig_at(s, sigid).params.len()
+    until i < at.ChildCount(a, call):
+        if wide_node(a, at.Child(a, call, i)):
+            serr_help(
+                s, 160, sp, i18.Tr("a 128-bit integer cannot be passed to a variadic C function"), i18.Tr("pass it as two 'u64' halves, or convert it to a string first")
+            )
+        end
+        i += 1
+    end
+end

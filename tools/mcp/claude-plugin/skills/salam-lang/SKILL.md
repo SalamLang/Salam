@@ -109,6 +109,7 @@ lower upper repeat split to_int to_float`. Everything else is in `str`.
   flag; `salam --version` fails with `unknown command '--version'`.
 - `salam js` stores `i64`/`u64`/`size`/`usize` as JS numbers: 64-bit math is
   exact up to 2^53, but larger results or intermediates are rounded.
+  `i128`/`u128` are exact BigInts there, except through `i64`/`u64` casts.
 - Source files are keyed by **filename**, not package: two files named
   `io.salam` in one program, or your own `shell.salam` next to
   `import os.shell`, are rejected with "package name ... is claimed by two

@@ -49,6 +49,12 @@ func ptr_elem_from_typestr(ts: str): int:
     if str.Equals(base, "u64") or str.Equals(base, "usize"):
         ret PTR_U64
     end
+    if str.Equals(base, "i128"):
+        ret PTR_I128
+    end
+    if str.Equals(base, "u128"):
+        ret PTR_U128
+    end
     if str.Equals(base, "f32"):
         ret PTR_F32
     end
@@ -100,6 +106,10 @@ func ptr_load(pa: i64, elem: int, idx: i64): Value:
         p7 := pa as u64*
         ret val_int_ty(p7[idx] as i64, ITY_U64)
     end
+    if elem == PTR_I128 or elem == PTR_U128:
+        pw := pa as i64*
+        ret Value { kind = VAL_INT, ity = elem == PTR_I128 ? ITY_I128 : ITY_U128, i = pw[idx * 2], pa = pw[idx * 2 + 1] }
+    end
     if elem == PTR_F32:
         p8 := pa as f32*
         ret val_float(p8[idx] as f64)
@@ -130,6 +140,13 @@ func ptr_load(pa: i64, elem: int, idx: i64): Value:
 end
 
 func ptr_store(pa: i64, elem: int, idx: i64, v: Value):
+    if elem == PTR_I128 or elem == PTR_U128:
+        pw := pa as i64*
+        wv := wide_coerce_val(v, elem == PTR_I128 ? ITY_I128 : ITY_U128)
+        pw[idx * 2] = wv.i
+        pw[idx * 2 + 1] = wv.pa
+        ret
+    end
     if elem == PTR_I8:
         p0 := pa as i8*
         p0[idx] = to_int(v) as i8
@@ -206,7 +223,7 @@ func ptr_store(pa: i64, elem: int, idx: i64, v: Value):
 end
 
 func is_int_typename(b0: str): bool:
-    ret str.Equals(b0, "i8") or str.Equals(b0, "i16") or str.Equals(b0, "i32") or str.Equals(b0, "i64") or str.Equals(b0, "u8") or str.Equals(b0, "u16") or str.Equals(b0, "u32") or str.Equals(b0, "u64") or str.Equals(b0, "int") or str.Equals(b0, "byte") or str.Equals(b0, "char") or str.Equals(b0, "usize") or str.Equals(b0, "size")
+    ret str.Equals(b0, "i8") or str.Equals(b0, "i16") or str.Equals(b0, "i32") or str.Equals(b0, "i64") or str.Equals(b0, "u8") or str.Equals(b0, "u16") or str.Equals(b0, "u32") or str.Equals(b0, "u64") or str.Equals(b0, "int") or str.Equals(b0, "byte") or str.Equals(b0, "char") or str.Equals(b0, "usize") or str.Equals(b0, "size") or str.Equals(b0, "i128") or str.Equals(b0, "u128")
 end
 
 func is_float_typename(b0: str): bool:
@@ -441,6 +458,9 @@ func int_ty_from_typestr(ts: str): int:
         if str.Equals(ts, "int"):
             ret ITY_I32
         end
+        if str.Equals(ts, "i128"):
+            ret ITY_I128
+        end
         ret ITY_NONE
     end
     if c0 == 117:
@@ -458,6 +478,9 @@ func int_ty_from_typestr(ts: str): int:
         end
         if str.Equals(ts, "uint"):
             ret ITY_U32
+        end
+        if str.Equals(ts, "u128"):
+            ret ITY_U128
         end
         ret ITY_NONE
     end
@@ -495,6 +518,9 @@ end
 func coerce_int_ty(v: Value, t: int): Value:
     if t == ITY_NONE or v.kind != VAL_INT:
         ret v
+    end
+    if t >= ITY_I128 or v.ity >= ITY_I128:
+        ret wide_coerce_val(v, t)
     end
     mut r := v
     r.ity = t
@@ -549,6 +575,9 @@ func arith(ip &: Interp, a &: at.Ast, n: int, op: int, x0: Value, y0: Value): Va
     if op == tok.TK_POWER:
         pw := math.Pow(to_float(x), to_float(y))
         ret val_float(node_is_f32(a, n) ? f32_narrow(pw) : pw)
+    end
+    if is_intlike(x) and is_intlike(y) and (x.ity >= ITY_I128 or (y.ity >= ITY_I128 and op != tok.TK_SHL and op != tok.TK_SHR)):
+        ret wide_arith(ip, a, n, op, x, y)
     end
     if is_intlike(x) and is_intlike(y):
         shift := op == tok.TK_SHL or op == tok.TK_SHR
@@ -643,6 +672,9 @@ func value_cmp(x: Value, y: Value): int:
         c := str.Compare(x.s, y.s)
         ret c < 0 ? (0 - 1) : (c > 0 ? 1 : 0)
     end
+    if is_intlike(x) and is_intlike(y) and (x.ity >= ITY_I128 or y.ity >= ITY_I128):
+        ret wide_cmp(x, y)
+    end
     if is_intlike(x) and is_intlike(y):
         rt := int_ty_common(x.ity, y.ity)
         xi := int_ty_wrap(rt, x.i)
@@ -681,6 +713,9 @@ func value_eq(x: Value, y: Value): bool:
     end
     if x.kind == VAL_BOOL or y.kind == VAL_BOOL:
         ret to_bool(x) == to_bool(y)
+    end
+    if is_intlike(x) and is_intlike(y) and (x.ity >= ITY_I128 or y.ity >= ITY_I128):
+        ret wide_cmp(x, y) == 0
     end
     if is_intlike(x) and is_intlike(y):
         rt := int_ty_common(x.ity, y.ity)

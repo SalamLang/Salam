@@ -34,7 +34,7 @@
 (type_alias name: (name) @type)
 (component_definition name: (name) @type)
 (type_name (dotted_name) @type)
-(type_name (dotted_name (name) @type.builtin (#any-of? @type.builtin "void" "bool" "char" "str" "uchar" "i8" "i16" "i32" "int" "i64" "u8" "u16" "u32" "uint" "u64" "usize" "size" "f32" "float" "f64" "تهی" "منطقی" "نویسه" "رشته" "یونیکد" "صحیح۸" "صحیح۱۶" "صحیح۳۲" "صحیح" "صحیح۶۴" "صحیح8" "صحیح16" "صحیح32" "صحیح64" "طبیعی۸" "طبیعی۱۶" "طبیعی۳۲" "طبیعی" "طبیعی۶۴" "طبیعی8" "طبیعی16" "طبیعی32" "طبیعی64" "اندازه مثبت" "اندازه" "اعشار۳۲" "اعشار" "اعشار۶۴" "اعشار32" "اعشار64" "وکتور" "Vector" "نگاشت" "HashMap" "پیمایشگرنگاشت" "MapIter" "پرونده" "File" "گوناگون" "Variant")))
+(type_name (dotted_name (name) @type.builtin (#any-of? @type.builtin "void" "bool" "char" "str" "uchar" "i8" "i16" "i32" "int" "i64" "u8" "u16" "u32" "uint" "u64" "usize" "size" "f32" "float" "f64" "i128" "u128" "تهی" "منطقی" "نویسه" "رشته" "یونیکد" "صحیح۸" "صحیح۱۶" "صحیح۳۲" "صحیح" "صحیح۶۴" "صحیح8" "صحیح16" "صحیح32" "صحیح64" "طبیعی۸" "طبیعی۱۶" "طبیعی۳۲" "طبیعی" "طبیعی۶۴" "طبیعی8" "طبیعی16" "طبیعی32" "طبیعی64" "اندازه مثبت" "اندازه" "اعشار۳۲" "اعشار" "اعشار۶۴" "اعشار32" "اعشار64" "صحیح۱۲۸" "صحیح128" "طبیعی۱۲۸" "طبیعی128" "وکتور" "Vector" "نگاشت" "HashMap" "پیمایشگرنگاشت" "MapIter" "پرونده" "File" "گوناگون" "Variant")))
 (struct_literal type: (type_name) @type)
 (type_parameters (name) @type)
 
@@ -53,8 +53,6 @@
 ["if" "اگر" "else" "وگرنه" "match" "همخوان" "switch" "ترابرد"] @keyword.conditional
 ["until" "تا" "each" "هر" "repeat" "تکرار" "to" "by" "in" "در" "break" "بشکن" "continue" "گذر"] @keyword.repeat
 ["import" "واردسازی" "include" "فراخوانی" "package" "بسته"] @keyword.import
-(function_type convention: (name) @keyword.modifier)
-
 ["mut" "ناپایا" "const" "پایا" "pub" "همگانی" "inline" "درخط" "noinline" "نادرخط" "pure" "ناب" "noret" "نابرگشت" "deprecated" "بی‌کاره" "extern" "درون‌داد" "export" "برون‌داد" "static" "ایستا"] @keyword.modifier
 ["struct" "ساختار" "enum" "جداشمار" "interface" "میانجی" "type" "گونه" "impl" "کاربست" "on" "بر" "page" "component" "dyn" "use" "شامل"] @keyword.type
 ["end" "پایان" "defer" "دیرکن" "as" "برگردان"] @keyword

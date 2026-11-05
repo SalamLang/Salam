@@ -1,0 +1,168 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import io
+import net.http
+import net.router
+import net.tcp
+import str
+import sync
+import tls
+
+mut port := 0
+
+func hello(h: i64):
+    http.Text(http.Ctx(h), "hello")
+end
+
+func echo_len(h: i64):
+    ctx := http.Ctx(h)
+    http.Text(ctx, "body " + str.FromInt(http.Body(ctx).len()))
+end
+
+func serve():
+    mut r := router.NewRouter()
+    router.Get(r, "/", hello)
+    router.Post(r, "/echo", echo_len)
+    router.Static(r, "/files", "tests/fixtures/ssl")
+    mut s := http.NewServer(port)
+    http.Use(s, r)
+    http.RunTLS(s, "tests/fixtures/ssl/server.crt", "tests/fixtures/ssl/server.key")
+end
+
+func client(aes: bool): tls.Conn:
+    mut cfg := tls.NewConfig("localhost")
+    cfg.insecure_skip_verify = true
+    cfg.aes_only = aes
+    ret tls.Dial("127.0.0.1", port, cfg)
+end
+
+func read_response(c &: tls.Conn): str:
+    mut got := ""
+    until got.find("\r\n\r\n") < 0:
+        part := tls.Read(c, 8192)
+        if part.len() == 0:
+            ret got
+        end
+        got = got + part
+    end
+    head_end := got.find("\r\n\r\n") + 4
+    key := "Content-Length: "
+    at := got.find(key)
+    if at < 0:
+        ret got
+    end
+    tail := got.substr(at + key.len(), 12)
+    mut want := 0
+    mut i := 0
+    until i < tail.len() and (tail[i] as int) >= 48 and (tail[i] as int) <= 57:
+        want = want * 10 + (tail[i] as int) - 48
+        i += 1
+    end
+    until got.len() - head_end < want:
+        part := tls.Read(c, 8192)
+        if part.len() == 0:
+            ret got
+        end
+        got = got + part
+    end
+    ret got
+end
+
+func keep_alive(aes: bool):
+    mut c := client(aes)
+    println tls.ConnOk(c)
+    repeat 3:
+        tls.Write(c, "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        r := read_response(c)
+        println r.includes("HTTP/1.1 200"), r.includes("keep-alive"), r.includes("hello")
+    end
+    tls.Close(c)
+end
+
+func pipelined():
+    mut c := client(false)
+    one := "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n"
+    tls.Write(c, one + one + one)
+    repeat 3:
+        println read_response(c).includes("hello")
+    end
+    tls.Close(c)
+end
+
+func split_request():
+    mut c := client(false)
+    tls.Write(c, "GET / HT")
+    sync.SleepMs(20)
+    tls.Write(c, "TP/1.1\r\nHost: local")
+    sync.SleepMs(20)
+    tls.Write(c, "host\r\n\r\n")
+    println read_response(c).includes("hello")
+    tls.Close(c)
+end
+
+func big_post():
+    n := 200000
+    mut body := ""
+    mut block := ""
+    repeat 1000:
+        block = block + "x"
+    end
+    repeat n / 1000:
+        body = body + block
+    end
+    mut c := client(false)
+    tls.Write(c, "POST /echo HTTP/1.1\r\nHost: localhost\r\nContent-Length: " + str.FromInt(n) + "\r\n\r\n")
+    tls.Write(c, body)
+    println read_response(c).includes("body 200000")
+    tls.Write(c, "GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+    println read_response(c).includes("hello")
+    tls.Close(c)
+end
+
+func static_file():
+    want := io.ReadFile("tests/fixtures/ssl/server.crt")
+    mut c := client(false)
+    tls.Write(c, "GET /files/server.crt HTTP/1.1\r\nHost: localhost\r\n\r\n")
+    r := read_response(c)
+    println r.includes("HTTP/1.1 200"), r.includes(want)
+    tls.Close(c)
+end
+
+func many_connections():
+    mut ok := 0
+    repeat 40:
+        mut c := client(false)
+        tls.Write(c, "GET / HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+        if read_response(c).includes("hello"):
+            ok += 1
+        end
+        tls.Close(c)
+    end
+    println ok
+end
+
+func main:
+    port = tcp.FreePort()
+    _ := spawn(serve)
+    println tcp.WaitListening("127.0.0.1", port, 5000)
+    keep_alive(false)
+    keep_alive(true)
+    pipelined()
+    split_request()
+    big_post()
+    static_file()
+    many_connections()
+    ret 0
+end

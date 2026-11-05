@@ -138,6 +138,20 @@ branch to the panic per division by a non-constant.
 
 ## 32-bit x86
 
+Right after the control flow graph is built, on every target, `ng_w128.salam`
+splits each `i128` into two `i64` values, so no optimization pass ever sees a
+128-bit integer. An addition becomes two additions and a carry compare, and a
+variable shift becomes shifts and selects; multiplication uses `OP_MULHU` on
+64-bit targets and four 32-bit products elsewhere. Division calls
+`salam_w128_divmod` in `std/core`, on every target, so no libgcc routine is
+needed. Within the program an `i128` argument is two `i64` arguments and an
+`i128` result comes back through a hidden pointer argument, which inlining and
+SROA then remove. A call to an external function follows the C ABI instead:
+two registers (an even pair on AArch64, both on the stack when only one
+register is left on x86-64) and the result in two registers. On 32-bit targets
+and on Windows that call is refused with a clear error; a C-callable function
+that takes or returns `i128` is refused on every target.
+
 The `i686` targets reuse the x86-64 pipeline with three additions.
 
 - Before instruction selection, `ng_legal.salam` splits every 64-bit integer
@@ -322,6 +336,7 @@ All of it lives in `compiler/nativegen/`:
 | `ng_enc.salam`                                                     | x86-64 encoder, prologues and epilogues, branch relaxation, Windows unwind info                                                                                             |
 | `ng_a64.salam`                                                     | AArch64 encoder: machine instructions to A64 words, flag translation, frame records, relocations                                                                            |
 | `ng_legal.salam`                                                   | Splits 64-bit integers into 32-bit pairs for the 32-bit targets, and turns ARM divisions into library calls                                                                 |
+| `ng_w128.salam`                                                    | Splits 128-bit integers into 64-bit halves on every target, before optimization                                                                                             |
 | `ng_arm.salam`                                                     | 32-bit ARM encoder: machine instructions to A32/VFP words, frame, atomics, relocations                                                                                      |
 | `ng_rv64.salam`                                                    | RISC-V 64 encoder: machine instructions to RV64GC words, flag emulation, frame, atomics, relocations                                                                        |
 | `ng_elf.salam`, `ng_coff.salam`, `ng_macho.salam`                  | Object file writers                                                                                                                                                         |

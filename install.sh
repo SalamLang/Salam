@@ -12,6 +12,8 @@ INSTALL_DIR="${SALAM_INSTALL_DIR:-}"
 VERSION="${SALAM_VERSION:-}"
 PLATFORM="${SALAM_PLATFORM:-}"
 PLATFORM_FORCED=0
+OS_OPT="${SALAM_OS:-}"
+ARCH_OPT="${SALAM_ARCH:-}"
 GLIBC_VER=""
 GLIBC_FLOOR="2.38"
 
@@ -167,20 +169,25 @@ usage() {
 Salam installer for Linux, macOS and the BSDs
 
 Usage:
-    install.sh [--dir DIR] [--version X.Y.Z] [--platform NAME]
-        [--no-modify-path] [--no-color]
+    install.sh [--dir DIR] [--version X.Y.Z] [--os NAME] [--arch NAME]
+        [--platform NAME] [--no-modify-path] [--no-color]
 
 Options:
     -d, --dir DIR        install into DIR (default $HOME/.salam/bin)
     -v, --version X.Y.Z  install this exact release instead of the newest
-    -p, --platform NAME  force a release asset (linux, linux-i686,
-        linux-aarch64, linux-armhf, mac)
+    --os NAME            install the build for this system instead of the
+        detected one: linux, mac, freebsd, openbsd, netbsd, dragonfly
+    --arch NAME          install the build for this processor instead of the
+        detected one: x86_64, i686, aarch64 (arm64), armhf (armv7),
+        riscv64, ppc64le, s390x
+    -p, --platform NAME  name the exact release asset (linux, linux-i686,
+        linux-aarch64, linux-armhf, mac); overrides --os and --arch
     --no-modify-path     never touch your shell startup files
     --no-color           plain output, no colors
     -h, --help           show this help
 
 Environment:
-    SALAM_INSTALL_DIR, SALAM_VERSION, SALAM_PLATFORM,
+    SALAM_INSTALL_DIR, SALAM_VERSION, SALAM_OS, SALAM_ARCH, SALAM_PLATFORM,
     SALAM_NO_MODIFY_PATH, NO_COLOR, GITHUB_TOKEN
 
 USAGE
@@ -350,6 +357,28 @@ while [ $# -gt 0 ]; do
         ;;
     --version=*)
         VERSION="${1#--version=}"
+        shift
+        ;;
+    --os)
+        if [ $# -lt 2 ]; then
+            die "$1 requires a system name"
+        fi
+        OS_OPT="$2"
+        shift 2
+        ;;
+    --os=*)
+        OS_OPT="${1#--os=}"
+        shift
+        ;;
+    --arch)
+        if [ $# -lt 2 ]; then
+            die "$1 requires a processor name"
+        fi
+        ARCH_OPT="$2"
+        shift 2
+        ;;
+    --arch=*)
+        ARCH_OPT="${1#--arch=}"
         shift
         ;;
     --platform | -p)
@@ -844,6 +873,63 @@ SunOS | AIX | Haiku | GNU | *)
     ;;
 esac
 
+if [ -n "$OS_OPT" ]; then
+    _want=$(printf '%s' "$OS_OPT" | tr 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' 'abcdefghijklmnopqrstuvwxyz')
+    _kernel_before="$KERNEL"
+    case "$_want" in
+    linux)
+        KERNEL="linux"
+        ;;
+    mac | macos | darwin | osx)
+        KERNEL="mac"
+        ;;
+    freebsd | openbsd | netbsd | dragonfly)
+        KERNEL="bsd"
+        BSD_KIND="$_want"
+        ;;
+    *)
+        die "unknown --os value: $OS_OPT" \
+            "use one of: linux, mac, freebsd, openbsd, netbsd, dragonfly"
+        ;;
+    esac
+
+    if [ "$KERNEL" != "$_kernel_before" ] || [ "$KERNEL" = "bsd" ]; then
+        OS_LABEL="$_want (chosen with --os, this machine runs $OS_NAME)"
+        if [ "$KERNEL" = "linux" ] && [ -z "$LIBC" ]; then
+            LIBC="unknown"
+        fi
+    fi
+fi
+
+if [ -n "$ARCH_OPT" ]; then
+    _want=$(printf '%s' "$ARCH_OPT" | tr 'ABCDEFGHIJKLMNOPQRSTUVWXYZ' 'abcdefghijklmnopqrstuvwxyz')
+    case "$_want" in
+    x86_64 | x86-64 | x64 | amd64) ARCH="x86_64" ;;
+    i686 | i386 | x86 | ia32) ARCH="i686" ;;
+    aarch64 | arm64) ARCH="aarch64" ;;
+    armhf | armv7 | armv7l | arm) ARCH="armv7l" ;;
+    riscv64) ARCH="riscv64" ;;
+    ppc64le) ARCH="ppc64le" ;;
+    s390x) ARCH="s390x" ;;
+    *)
+        die "unknown --arch value: $ARCH_OPT" \
+            "use one of: x86_64, i686, aarch64 (arm64), armhf (armv7), riscv64, ppc64le, s390x"
+        ;;
+    esac
+fi
+
+if [ "$KERNEL" = "mac" ]; then
+    case "$ARCH" in
+    x86_64 | aarch64 | arm64) ;;
+    *)
+        if [ -n "$ARCH_OPT" ] || [ -n "$OS_OPT" ]; then
+            die "macOS builds exist for x86_64 and arm64 only, not $ARCH" \
+                "pick one with --arch x86_64 or --arch arm64"
+        fi
+        ;;
+    esac
+fi
+
 glibc_below_floor() {
     [ "$LIBC" = "glibc" ] || return 1
     [ -n "$GLIBC_VER" ] || return 1
@@ -904,7 +990,11 @@ else
 fi
 
 field "system" "$OS_LABEL"
-field "machine" "$ARCH"
+if [ -n "$ARCH_OPT" ]; then
+    field "machine" "$ARCH (chosen with --arch)"
+else
+    field "machine" "$ARCH"
+fi
 
 if [ -n "$LIBC" ]; then
     if [ -n "$GLIBC_VER" ]; then
@@ -919,6 +1009,7 @@ field "downloader" "$DL_TOOL"
 if [ -z "$PLATFORMS" ]; then
     die "no Salam build is published for $OS_NAME on $ARCH" \
         "if a build exists under another name, point at it directly:" \
+        "  install.sh --os NAME --arch NAME" \
         "  install.sh --platform NAME" \
         "otherwise please open an issue so we know it is wanted: $ISSUES_URL"
 fi
@@ -1431,7 +1522,7 @@ else
     case "$VERIFY_OUT" in
     *"cannot execute binary file"* | *"Exec format error"*)
         info "this archive is built for a different architecture than $ARCH"
-        info "pick another one with --platform NAME; see $RELEASES_URL"
+        info "pick another one with --os and --arch (or --platform NAME); see $RELEASES_URL"
         ;;
     *"Permission denied"*)
         info "the filesystem may be mounted noexec; install elsewhere with --dir DIR"

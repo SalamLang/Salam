@@ -188,4 +188,5 @@ and codeberg.org come from each host's API as a tar.gz that Salam unpacks
 itself; other hosts need Git. Git's own configuration applies, so private repositories work
 with the credentials Git already has, and `url.<base>.insteadOf` can point a
 module at a mirror. `tools/bash/test-packages.sh` uses that to test the
-whole flow offline.
+whole flow offline, with `salam serve` for the download and
+`tools/salam/freeport.salam` (prints a free local port) to pick its port.

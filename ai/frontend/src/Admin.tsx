@@ -8,6 +8,7 @@ import { Markdown } from "./Markdown";
 import { RequestList } from "./Requests";
 import { confirmDialog, Subject } from "./Confirm";
 import { t } from "./i18n";
+import { planName } from "./Plans";
 import { Checkbox } from "./Checkbox";
 
 type Picked = { id: number; name: string } | null;
@@ -866,10 +867,10 @@ function Subscriptions({ picked, notify }: { picked: Picked; notify: (msg: strin
   const cancel = async (row: AdminSubscription) => {
     const ok = await confirmDialog({
       title: t("لغو اشتراک", "Cancel subscription"),
-      subject: row.user?.email ?? row.plan_name,
+      subject: row.user?.email ?? planName(row.plan, row.plan_name),
       message: (
         <>
-          {t("اشتراک", "This user's")} <Subject>{row.plan_name}</Subject> {t("این کاربر لغو می‌شود و به پلن رایگان برمی‌گردد.", "subscription will be canceled and they go back to the free plan.")}
+          {t("اشتراک", "This user's")} <Subject>{planName(row.plan, row.plan_name)}</Subject> {t("این کاربر لغو می‌شود و به پلن رایگان برمی‌گردد.", "subscription will be canceled and they go back to the free plan.")}
         </>
       ),
       confirmLabel: t("لغو اشتراک", "Cancel subscription"),
@@ -985,7 +986,7 @@ function Subscriptions({ picked, notify }: { picked: Picked; notify: (msg: strin
                       {r.user?.email}
                     </span>
                   </td>
-                  <td>{r.plan_name}</td>
+                  <td>{planName(r.plan, r.plan_name)}</td>
                   <td>{fmtDate(r.started)}</td>
                   <td>{r.expires === 0 ? t("بدون پایان", "No end") : fmtDate(r.expires)}</td>
                   <td>{r.source === "admin" ? t("هدیه‌ی مدیر", "Admin gift") : t("پرداخت", "Payment")}</td>
@@ -1095,7 +1096,7 @@ function Payments({ picked }: { picked: Picked }) {
                       {r.user?.email}
                     </span>
                   </td>
-                  <td>{r.plan_name}</td>
+                  <td>{planName(r.plan, r.plan_name)}</td>
                   <td>{toman(r.amount)}</td>
                   <td>{GATEWAY_WORDS[r.gateway] ?? r.gateway}</td>
                   <td>

@@ -505,8 +505,8 @@ Every pull request gets one automated review comment from Salam AI, the assistan
 The comment is a **helper, not a decision**. It is written by a machine and can be wrong: verify its claims before you merge or close something. A maintainer always has the last word, and the comment is kept up to date on every push instead of being repeated.
 
 - Add the `ai-review:skip` label to a pull request to switch the bot off for it. Draft pull requests are skipped until they are marked ready for review.
-- The workflow is `.github/workflows/ai-pr-review.yml` and the reviewer is `.github/scripts/ai_pr_review.py`. It needs the `SALAM_AI_API_KEY` repository secret and never runs code from the pull request: it only reads the diff through the GitHub API.
-- To try it locally, set `GITHUB_TOKEN`, `GITHUB_REPOSITORY`, `PR_NUMBER`, `SALAM_AI_API_KEY` and `DRY_RUN=1`, then run `python3 .github/scripts/ai_pr_review.py` to print the review without posting it.
+- The workflow is `.github/workflows/ai-pr-review.yml` and the reviewer is `.github/scripts/ai_pr_review.salam`. It needs the `SALAM_AI_API_KEY` repository secret and never runs code from the pull request: it only reads the diff through the GitHub API.
+- To try it locally, set `GITHUB_TOKEN`, `GITHUB_REPOSITORY`, `PR_NUMBER`, `SALAM_AI_API_KEY` and `DRY_RUN=1`, then run `salam run .github/scripts/ai_pr_review.salam` to print the review without posting it.
 
 ## 💬 Feedback and Support
 

@@ -1,0 +1,396 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+/*
+ * Robustness sweep for the `salam lsp --analyze` worker.
+ *
+ * Runs the worker on every .salam file under the given directories (default:
+ * tests/ and std/) and reports each file where it crashes, times out or prints
+ * a snapshot that is not valid JSON. It does not judge the answers; the end to
+ * end tests do that.
+ *
+ *     salam run tools/lsp/sweep.salam path/to/salam [dir ...] [-j N] [--limit N] [--timeout N]
+ *
+ * Run it from the repository (any folder inside it works).
+ */
+
+import encoding.json
+import encoding.value
+import filepath
+import fs.file
+import os
+import os.process
+import os.temp
+import pool
+import sort
+import str
+import sync
+
+mut g_files := Vector {} as Vector<str>
+mut g_problem := Vector {} as Vector<str>
+mut g_done := Vector {} as Vector<int>
+mut g_next := 0
+mut g_bad := 0
+mut g_root := ""
+
+func jget(v: value.Value, key: str): value.Value:
+    if v.kind != value.KindObject:
+        ret value.ValueNull()
+    end
+    mut ok := false
+    r := value.ObjectGetOk(v, key, ok)
+    if not ok:
+        ret value.ValueNull()
+    end
+    ret r
+end
+
+func jidx(v: value.Value, i: int): value.Value:
+    if v.kind != value.KindArray or i < 0 or i >= value.ArrayLen(v):
+        ret value.ValueNull()
+    end
+    ret value.ArrayGet(v, i)
+end
+
+func jlen(v: value.Value): int:
+    if v.kind == value.KindArray:
+        ret value.ArrayLen(v)
+    end
+    ret 0
+end
+
+func jstr(v: value.Value): str:
+    if v.kind == value.KindString:
+        ret v.s
+    end
+    ret ""
+end
+
+func jint(v: value.Value): int:
+    if v.kind == value.KindInt:
+        ret v.i as int
+    end
+    ret -1
+end
+
+func sorted_names(names: Vector<str>): Vector<str>:
+    out := Vector {} as Vector<str>
+    each n in names:
+        out.push(n)
+    end
+    sort.Sort(out)
+    ret out
+end
+
+func collect(dir: str): Vector<str>:
+    names := sorted_names(os.ListDir(dir))
+    out := Vector {} as Vector<str>
+    subdirs := Vector {} as Vector<str>
+    each n in names:
+        full := dir + "/" + n
+        if os.IsDir(full):
+            if not n.starts_with("."):
+                subdirs.push(full)
+            end
+        else:
+            if n.ends_with(".salam"):
+                out.push(full)
+            end
+        end
+    end
+    each sub in subdirs:
+        each f in collect(sub):
+            out.push(f)
+        end
+    end
+    ret out
+end
+
+func files_under(dirs: Vector<str>, limit: int): Vector<str>:
+    out := Vector {} as Vector<str>
+    each d in dirs:
+        if os.Exists(d) and not os.IsDir(d):
+            out.push(filepath.Abs(d))
+        else:
+            if os.IsDir(d):
+                each f in collect(d):
+                    out.push(f)
+                end
+            end
+        end
+    end
+    if limit > 0 and out.len() > limit:
+        step := out.len() as f64 / limit as f64
+        picked := Vector {} as Vector<str>
+        repeat limit in i:
+            picked.push(out.get(((i as f64) * step) as int))
+        end
+        ret picked
+    end
+    ret out
+end
+
+func squash(s: str): str:
+    mut t := str.Replace(s, "‌", "")
+    t = str.Replace(t, " ", "")
+    t = str.Replace(t, "ي", "ی")
+    t = str.Replace(t, "ك", "ک")
+    ret t
+end
+
+func byte_at_unit(line: str, units: int): int:
+    b := line as u8*
+    n := line.len()
+    mut i := 0
+    mut u := 0
+    until u < units and i < n:
+        c := b[i] as int
+        if c >= 240:
+            u += 2
+            i += 4
+        else:
+            if c >= 224:
+                i += 3
+            else:
+                if c >= 192:
+                    i += 2
+                else:
+                    i += 1
+                end
+            end
+            u += 1
+        end
+    end
+    if i > n:
+        ret n
+    end
+    ret i
+end
+
+func mismatched_refs(text: str, data: value.Value): Vector<str>:
+    lines := str.Split(text, "\n")
+    out := Vector {} as Vector<str>
+    decls := jget(data, "decls")
+    refs := jget(data, "refs")
+    repeat jlen(refs) in k:
+        r := jidx(refs, k)
+        rng := jget(r, "r")
+        l1 := jint(jidx(rng, 0))
+        c1 := jint(jidx(rng, 1))
+        l2 := jint(jidx(rng, 2))
+        c2 := jint(jidx(rng, 3))
+        if l1 != l2 or l1 >= lines.len():
+            continue
+        end
+        line := lines.get(l1)
+        b1 := byte_at_unit(line, c1)
+        mut b2 := byte_at_unit(line, c2)
+        if b2 < b1:
+            b2 = b1
+        end
+        spelled := line.substr(b1, b2 - b1)
+        di := jint(jget(r, "d"))
+        mut name := ""
+        mut doc := ""
+        if di >= 0 and di < jlen(decls):
+            name = jstr(jget(jidx(decls, di), "name"))
+            doc = jstr(jget(jidx(decls, di), "doc"))
+        end
+        sq := squash(spelled)
+        if sq == squash(name) or squash(doc).includes("`" + sq + "`"):
+            continue
+        end
+        if name.starts_with(spelled + "_") or name.ends_with("_" + spelled):
+            continue
+        end
+        out.push((l1 + 1) + ":" + (c1 + 1) + " '" + spelled + "' -> " + name)
+    end
+    ret out
+end
+
+func last_line(text: str): str:
+    mut last := ""
+    each line in str.Split(text, "\n"):
+        if line.trim() != "":
+            last = line.trim()
+        end
+    end
+    ret last
+end
+
+func run_one(exe: str, path: str, timeout: int): str:
+    dir := temp.Directory()
+    defer temp.RemoveDir(dir)
+    req := dir + "/req.json"
+    snap := dir + "/snap.json"
+    if not file.Exists(path):
+        ret "unreadable: " + path
+    end
+    text := str.Replace(file.ReadText(path), "\r\n", "\n")
+    body := `{"path":` + json.Str(path) + `,"text":` + json.Str(text) + `,"stdlib":` + json.Str(g_root + "/std") + `,"out":` + json.Str(snap) + `}`
+    _w := file.WriteText(req, body)
+    args := Vector {} as Vector<str>
+    args.push("lsp")
+    args.push("--analyze")
+    args.push(req)
+    mut p := process.RunTimeout(exe, args, "", timeout * 1000)
+    defer p.Free()
+    if p.timed_out:
+        ret "timeout after " + timeout + "s"
+    end
+    if not p.started:
+        ret "exit -1: cannot start " + exe
+    end
+    code := p.status.ReturnCode()
+    if code != 0:
+        ret "exit " + code + ": " + head(last_line(p.stderr), 200)
+    end
+    mut data := value.ValueNull()
+    try:
+        data = json.Decode(file.ReadText(snap))
+    catch e:
+        ret "bad snapshot: " + e.to_str()
+    end
+    wrong := mismatched_refs(text, data)
+    if wrong.len() > 0:
+        ret wrong.len() + " reference(s) point at a name they do not spell, first: " + wrong.get(0)
+    end
+    ret ""
+end
+
+func head(text: str, limit: int): str:
+    if str.CharCount(text) <= limit:
+        ret text
+    end
+    ret str.CharSubstr(text, 0, limit)
+end
+
+func find_root(): str:
+    start := os.Cwd()
+    mut dir := start
+    until true:
+        if os.Exists(dir + "/tools/lsp/sweep.salam"):
+            ret dir
+        end
+        parent := filepath.Dir(dir)
+        if parent == dir or parent == "":
+            break
+        end
+        dir = parent
+    end
+    ret start
+end
+
+func usage():
+    printerrln "usage: sweep.salam salam [dir ...] [-j N] [--limit N] [--timeout N]"
+end
+
+func main:
+    g_root = find_root()
+    argv := os.Args()
+    mut positional := Vector {} as Vector<str>
+    mut jobs := pool.CPUCount() as int
+    mut limit := 0
+    mut timeout := 120
+    mut i := 1
+    until i < argv.len():
+        a := argv.get(i)
+        mut flag := ""
+        mut val := ""
+        mut has_val := false
+        if a.starts_with("--") and a.includes("="):
+            flag = a.substr(0, a.indexOf("="))
+            val = a.substr(a.indexOf("=") + 1, a.len() - a.indexOf("=") - 1)
+            has_val = true
+        else:
+            if a == "-j" or a == "--limit" or a == "--timeout":
+                flag = a
+                if i + 1 >= argv.len():
+                    usage()
+                    ret 2
+                end
+                i += 1
+                val = argv.get(i)
+                has_val = true
+            else:
+                if a.starts_with("-j") and a.len() > 2:
+                    flag = "-j"
+                    val = a.substr(2, a.len() - 2)
+                    has_val = true
+                end
+            end
+        end
+        if has_val:
+            switch flag:
+                "-j":
+                    jobs = str.ToInt(val)
+                    break
+                end
+                "--limit":
+                    limit = str.ToInt(val)
+                    break
+                end
+                "--timeout":
+                    timeout = str.ToInt(val)
+                    break
+                end
+                else:
+                    usage()
+                    ret 2
+                end
+            end
+        else:
+            positional.push(a)
+        end
+        i += 1
+    end
+    if positional.len() == 0:
+        usage()
+        ret 2
+    end
+    mut exe := positional.get(0)
+    if not filepath.IsAbs(exe):
+        exe = filepath.Join(os.Cwd(), exe)
+    end
+    mut dirs := Vector {} as Vector<str>
+    repeat positional.len() - 1 in k:
+        dirs.push(positional.get(k + 1))
+    end
+    if dirs.len() == 0:
+        dirs.push(g_root + "/tests")
+        dirs.push(g_root + "/std")
+    end
+    if jobs < 1:
+        jobs = 1
+    end
+    g_files = files_under(dirs, limit)
+    repeat g_files.len():
+        g_problem.push("")
+        g_done.push(0)
+    end
+    mutex := sync.NewMutex()
+    runner := exe
+    secs := timeout
+    pool.ParallelFor(
+        g_files.len() as i64, jobs as i64, (n: i64): idx := n as int
+        verdict := run_one(runner, g_files.get(idx), secs)
+        sync.Lock(mutex)
+        g_problem.set(idx, verdict)
+        g_done.set(idx, 1) until g_next < g_files.len() and g_done.get(g_next) == 1: if g_problem.get(g_next) != "": g_bad += 1 println "FAIL " + filepath.Rel(g_root, filepath.Abs(g_files.get(g_next))) + ": " + g_problem.get(g_next) end g_next += 1 end sync.Unlock(mutex) end
+    )
+    println "RESULT: " + g_files.len() + " files, " + g_bad + " failed"
+    if g_bad > 0:
+        ret 1
+    end
+end

@@ -25,12 +25,24 @@ function nextPath(): string {
 }
 
 function ProviderButtons({ setError }: { setError: (m: string) => void }) {
-  const [on, setOn] = useState<{ github: boolean; figma: boolean } | null>(null);
+  const [on, setOn] = useState<{ github: boolean; figma: boolean } | null>(() => {
+    try {
+      const saved = JSON.parse(localStorage.getItem("salam-ai-providers") || "null");
+      return saved && typeof saved.github === "boolean" && typeof saved.figma === "boolean" ? saved : null;
+    } catch {
+      return null;
+    }
+  });
   const [busy, setBusy] = useState("");
   useEffect(() => {
     api
       .authProviders()
-      .then(setOn)
+      .then((r) => {
+        setOn(r);
+        try {
+          localStorage.setItem("salam-ai-providers", JSON.stringify(r));
+        } catch {}
+      })
       .catch(() => {});
     const code = new URLSearchParams(location.search).get("login_error");
     if (code) {

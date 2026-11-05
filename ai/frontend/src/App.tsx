@@ -181,10 +181,6 @@ export function App() {
 
   const onAuth = useCallback((u: User) => {
     setUser(u);
-    api
-      .me()
-      .then((r) => setUser(r.user))
-      .catch(() => {});
   }, []);
 
   useEffect(() => {

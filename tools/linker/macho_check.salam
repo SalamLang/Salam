@@ -1,0 +1,222 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import os
+import str
+import mem
+import regex
+import crypto
+import archive
+import compress
+import encoding.binary
+import text.diff
+
+const USAGE := "Checks a Mach-O executable written by the built-in linker.\n\nsig <exe>              verify the ad-hoc code signature page hashes\ncmp <ours> <ref>       compare disassembly with an ld64.lld reference after\n                       taking out addresses, page numbers, local label\n                       names and lld's GOT relaxations\n"
+
+func rx(pattern: str): regex.Regex:
+    try:
+        ret regex.Compile(pattern)
+    catch:
+        printerrln "bad pattern", pattern
+        os.Exit(2)
+    end
+end
+
+func same_bytes(a: void*, b: void*, n: int): bool:
+    pa := a as u8*
+    pb := b as u8*
+    repeat n in i:
+        if pa[i] != pb[i]:
+            ret false
+        end
+    end
+    ret true
+end
+
+func check_sig(path: str): str:
+    mut ok := false
+    mut buf := archive.ReadBinaryFile(path, ok)
+    defer compress.BufFree(buf)
+    if not ok:
+        ret "cannot read " + path
+    end
+    d := binary.ViewOf(buf)
+    if not binary.Has(d, 0, 32):
+        ret "truncated Mach-O header"
+    end
+    ncmds := binary.GetU32LE(d, 16) as int
+    mut off := 32
+    mut found := false
+    mut sig_off := 0
+    repeat ncmds:
+        if not binary.Has(d, off, 16):
+            ret "truncated load commands"
+        end
+        cmd := binary.GetU32LE(d, off)
+        size := binary.GetU32LE(d, off + 4) as int
+        if cmd == 29:
+            found = true
+            sig_off = binary.GetU32LE(d, off + 8) as int
+        end
+        if size < 8:
+            ret "bad load command size"
+        end
+        off += size
+    end
+    if not found:
+        ret "no LC_CODE_SIGNATURE"
+    end
+    if not binary.Has(d, sig_off, 20) or binary.GetU32BE(d, sig_off) != 4208856256:
+        ret "bad SuperBlob magic"
+    end
+    cd := sig_off + (binary.GetU32BE(d, sig_off + 16) as int)
+    if not binary.Has(d, cd, 40) or binary.GetU32BE(d, cd) != 4208856066:
+        ret "bad CodeDirectory magic"
+    end
+    hashes := cd + (binary.GetU32BE(d, cd + 16) as int)
+    page := 1 << binary.GetU8(d, cd + 39)
+    slots := binary.GetU32BE(d, cd + 28) as int
+    limit := binary.GetU32BE(d, cd + 32) as int
+    digest := mem.Allocate(32 as u64)
+    defer mem.Free(digest)
+    repeat slots in i:
+        mut start := i * page
+        mut stop := start + page
+        if limit < stop:
+            stop = limit
+        end
+        if stop > d.len:
+            stop = d.len
+        end
+        if start > stop:
+            start = stop
+        end
+        crypto.Sha256Bytes(((d.data as i64) + (start as i64)) as void*, stop - start, digest)
+        h0 := hashes + 32 * i
+        if h0 + 32 > d.len or not same_bytes(digest, ((d.data as i64) + (h0 as i64)) as void*, 32):
+            ret "page " + str.FromInt(i as i64) + " hash mismatch"
+        end
+    end
+    ret ""
+end
+
+func in_word(c: u8): bool:
+    ret (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 95
+end
+
+func drop_rip_labels(line: str): str:
+    n := line.len()
+    bp := line as u8*
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    mut i := 0
+    mut run := 0
+    until i < n:
+        if (bp[i] == 108 or bp[i] == 76) and i + 1 < n and bp[i + 1] == 95 and (i == 0 or not in_word(bp[i - 1])):
+            mut j := i + 2
+            until j < n and (in_word(bp[j]) or bp[j] == 46 or bp[j] == 36):
+                j += 1
+            end
+            if j > i + 2 and str.StartsWith(line.substr(j, n - j), "(%rip)"):
+                str.BufAppend(sb, line.substr(run, i - run))
+                run = j
+                i = j
+                continue
+            end
+        end
+        i += 1
+    end
+    str.BufAppend(sb, line.substr(run, n - run))
+    ret str.BufStr(sb)
+end
+
+func norm(path: str): Vector<str>:
+    out := os.Output("llvm-objdump --macho -d --no-show-raw-insn --no-leading-addr '" + path + "'")
+    hex := rx("0x[0-9a-f]+")
+    num := rx("#-?[0-9]+")
+    adrp := rx("adrp\t(x[0-9]+), -?[0-9]+")
+    bracket := rx(", \\[(x[0-9]+), #\\]")
+    local := rx("^(l_|ltmp)")
+    mut lines := Vector {} as Vector<str>
+    rows := str.Split(out, "\n")
+    defer rows.free()
+    repeat rows.len() in i:
+        mut ln := rows.get(i)
+        ln = regex.ReplaceAll(hex, ln, "")
+        ln = regex.ReplaceAll(num, ln, "")
+        ln = regex.ReplaceAllExpand(adrp, ln, "adrp $1")
+        ln = str.Replace(ln, "__mh_execute_header", "")
+        ln = drop_rip_labels(ln)
+        ln = regex.ReplaceAllExpand(bracket, ln, ", [$1]")
+        if ln.len() == 0 or str.StartsWith(ln, "/") or regex.Match(local, ln) or (str.EndsWith(ln, ":") and str.StartsWith(ln, path)):
+            continue
+        end
+        lines.push(ln)
+    end
+    ret lines
+end
+
+func benign(line: str): bool:
+    each pattern in ["adrp", "ldr\tx[0-9]+, \\[x[0-9]+\\]$", "add\tx[0-9]+, x[0-9]+, #$", "movq\t\\(%rip\\), %r", "leaq\t\\(%rip\\), %r", "leaq\tl_[A-Za-z0-9_]+\\(%rip\\)", "leaq\t-\\(%rip\\)", ":$"]:
+        if regex.Match(rx(pattern), line):
+            ret true
+        end
+    end
+    ret false
+end
+
+func compare(ours: str, ref: str): Vector<str>:
+    a := norm(ours)
+    b := norm(ref)
+    defer a.free()
+    defer b.free()
+    lines := diff.Unified(a, b, "", "", 0)
+    defer lines.free()
+    mut bad := Vector {} as Vector<str>
+    each ln in lines:
+        changed := (str.StartsWith(ln, "+") or str.StartsWith(ln, "-")) and not str.StartsWith(ln, "+++") and not str.StartsWith(ln, "---")
+        if changed and not benign(ln):
+            bad.push(ln)
+        end
+    end
+    ret bad
+end
+
+func main:
+    args := os.Args()
+    if args.len() >= 3 and args.get(1) == "sig":
+        err := check_sig(args.get(2))
+        if err.len() > 0:
+            println err
+            ret 1
+        end
+        ret 0
+    end
+    if args.len() >= 4 and args.get(1) == "cmp":
+        bad := compare(args.get(2), args.get(3))
+        mut shown := 0
+        each ln in bad:
+            if shown < 5:
+                println ln
+            end
+            shown += 1
+        end
+        if bad.len() > 0:
+            ret 1
+        end
+        ret 0
+    end
+    print USAGE
+    ret 2
+end

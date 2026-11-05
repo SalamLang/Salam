@@ -359,7 +359,14 @@ if [ "$KIND" = macho ]; then
                 fail=1
             fi
         done
-        if ! python3 -I "$ROOT/tools/linker/macho_check.py" sig "$so" >"$work/sig.log" 2>&1; then
+        if [ ! -x "$work/macho_check" ]; then
+            mkdir -p "$work/mc"
+            (cd "$work/mc" && SALAM_STD="$ROOT/std" "$SALAM" build "$ROOT/tools/linker/macho_check.salam" --output="$work/macho_check" --log-level=error >"$work/mc.log" 2>&1) || {
+                echo "FAIL $TRIPLE: cannot build macho_check: $(head -c 300 "$work/mc.log")"
+                fail=1
+            }
+        fi
+        if ! "$work/macho_check" sig "$so" >"$work/sig.log" 2>&1; then
             echo "FAIL $TRIPLE: $name has a bad code signature: $(head -c 300 "$work/sig.log")"
             fail=1
         fi

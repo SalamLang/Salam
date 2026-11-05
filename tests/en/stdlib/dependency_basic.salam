@@ -1,0 +1,74 @@
+import dependency
+import str
+
+mut log := Vector {} as Vector<str>
+
+interface Store:
+    func Find(id: int): str
+end
+
+struct MemStore:
+    pub tag: str = ""
+    pub func Find(id: int): str:
+        ret this.tag + str.FromInt(id)
+    end
+end
+
+struct Service:
+    pub store: dyn Store = MemStore {}
+    pub name: str = ""
+end
+
+struct Handler:
+    pub svc: Service = Service {}
+end
+
+func main:
+    c := dependency.New()
+    dependency.Provide(c, "MemStore", "", MemStore {}, (_c: dependency.Container): ret MemStore { tag = "row-" } end)
+    dependency.Bind(c, "Store", "MemStore")
+    dependency.Provide(c, "Service", "Store", Service {}, (cx: dependency.Container):
+        mut s := MemStore {}
+        _ok := dependency.Get(cx, "MemStore", s)
+        ret Service { store = s, name = "svc" }
+    end)
+    dependency.Provide(c, "Handler", "Service", Handler {}, (cx: dependency.Container):
+        mut s := Service {}
+        _ok := dependency.Get(cx, "Service", s)
+        ret Handler { svc = s }
+    end)
+    dependency.OnClose(c, "MemStore", MemStore {}, (m: MemStore): log.push("close store " + m.tag) end)
+    dependency.OnClose(c, "Service", Service {}, (s: Service): log.push("close service " + s.name) end)
+    err := dependency.Build(c)
+    println "build:", err == "" ? "ok" : err
+    mut h := Handler {}
+    println dependency.Get(c, "Handler", h)
+    println h.svc.name, h.svc.store.Find(7)
+    order := dependency.Built(c)
+    defer order.free()
+    each n in order:
+        println "built", n
+    end
+    dependency.Close(c)
+    each l in log:
+        println l
+    end
+    log.free()
+
+    bad := dependency.New()
+    dependency.Provide(bad, "A", "B", Service {}, (_c: dependency.Container): ret Service {} end)
+    println dependency.Build(bad)
+    dependency.Close(bad)
+
+    cyc := dependency.New()
+    dependency.Provide(cyc, "A", "B", Service {}, (_c: dependency.Container): ret Service {} end)
+    dependency.Provide(cyc, "B", "A", Service {}, (_c: dependency.Container): ret Service {} end)
+    println dependency.Build(cyc)
+    dependency.Close(cyc)
+
+    dup := dependency.New()
+    dependency.Value(dup, "N", 1)
+    dependency.Value(dup, "N", 2)
+    println dependency.Build(dup)
+    dependency.Close(dup)
+end

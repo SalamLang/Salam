@@ -449,6 +449,25 @@ resolves, the other files in that directory join the same package.
 Importing a package links **all** of its public functions' external
 dependencies, not only the ones you call.
 
+Packages that other people publish in their own Git repositories are added
+with the package manager, not with `import name`: `salam init` makes a project
+(`main.salam` + `salam.toml`), `salam add github.com/owner/repo[@v1.2.0|@^1.2]`
+downloads one and records it in `salam.toml` and `salam.lock`, and the code
+imports it with a quoted address, `import "github.com/owner/repo"`, using the
+last part as its name. `salam remove`, `update`, `deps`, `search` and `install`
+complete the set. Every std package ships with the compiler and needs no
+`salam add`. There is no `salam publish`: publishing is pushing a `vX.Y.Z` Git
+tag. A library has no `main`; its entry file is at the repository root, named
+after the repository. Users see only `pub` names (`E017` otherwise), and an
+import of a package missing from `salam.toml` is `E008`. See `docs/PACKAGES.md`
+and the guide at <https://salamlang.github.io/Salam/packages/> (Persian:
+<https://www.salamlang.ir/packages/>).
+
+Each std page on those sites, `/std/<package>/`, opens with tutorials under
+`#guide-...` anchors. Desktop windows and desktop apps are one package,
+`import gui.webview` (Persian `رابط گرافیکی.نمایش وب`; the old `webview` and
+`gui.desktop` names are gone); see `docs/DESKTOP.md`.
+
 ## 9. Platform conditionals
 
 Platform macros are only valid as an `if` at top level:
@@ -475,6 +494,10 @@ use them:
 @fa "پیرایش"
 pub func Trim(s: str): str: ret s.trim() end
 ```
+
+In a Persian program the entry function is `تابع ریشه:` (English: `func main:`).
+Never write `تابع اصلی` or `بسته اصلی`: `تابع اصلی` compiles as an ordinary
+function, so the program builds and then has no entry point.
 
 Compile non-English source with `--lang=fa`, or start a Persian file with
 `// زبان: فارسی` (English files: `// lang: en`). Mixed forms such as

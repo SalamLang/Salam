@@ -298,7 +298,7 @@ range support, and `net/httpd` (see the std page) lists every setting.
 The whole library is installed with the compiler: the database clients
 (`db.sqlite`, `db.postgres`, `db.mysql`, `db.redis`, `db.opensearch`, ...),
 machine learning (`tensor`, `nn`, `llm`, ...), audio, the network services
-(`grpc`, `ftp`, `ssh`, `net.websocket`, `net.http.swagger`, ...), `webview`,
+(`grpc`, `ftp`, `ssh`, `net.websocket`, `net.http.swagger`, ...), `gui.webview`,
 `opencv` and `excel`. [`std/`](../std/) holds them all and `salam search`
 finds them. Import them like any other library; there is nothing to add or
 download first:
@@ -307,7 +307,7 @@ download first:
 import db.redis
 ```
 
-A package that wraps a C library (`db.sqlite`, `webview`, ...) finds or builds
+A package that wraps a C library (`db.sqlite`, `gui.webview`, ...) finds or builds
 that library the first time a program that imports it is compiled; see
 Native libraries below. Older projects may still list a library package in
 `salam.toml`, such as `"db.redis" = "v0.5.9"`. Salam ignores those lines, and
@@ -371,7 +371,8 @@ When a build meets that `link` line it uses the system library if
 pkg-config or the C compiler can find it. Otherwise it downloads the listed
 sources, checks the sha256, compiles them once per compiler and caches the
 objects under `~/.salam/pkg/native/`. With no sources it stops and prints the
-install command for this OS. `salam add db.sqlite` does the same work up front.
+install command for this OS. `salam add db.sqlite` prints that library's status up front
+(it adds nothing to `salam.toml`, since the package is part of the standard library).
 `SALAM_NATIVE=source` or `SALAM_NATIVE=system` forces one way.
 
 ### 📚 Building a library

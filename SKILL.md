@@ -35,11 +35,11 @@ This skill has two parts:
   Persian programs. Read Part I for semantics and Part II for spelling; the
   semantics never differ.
 
-There is also a 25-lesson human tutorial of the language, in Persian at
+There is also a 46-lesson human tutorial of the language, in Persian at
 **<https://www.salamlang.ir/learn/>** and in English at
 **<https://salamlang.github.io/Salam/learn/>** (one page per topic, every
 example compiled and run), and a reference page for every std package under
-`/std/<slug>/` on both sites (see §5).
+`/std/<slug>/` on both sites (see §5), and a package manager guide at `/packages/` (see §10).
 
 > **Source of truth.** When a detail is missing here, read real code:
 > `std/<pkg>/*.salam` for exact stdlib signatures, and
@@ -1006,9 +1006,15 @@ an exact signature, grep the package file.
 catch people out" list and a checked example for each function:
 `https://www.salamlang.ir/std/<slug>/` (Persian) and
 `https://salamlang.github.io/Salam/std/<slug>/` (English), where the slug is
-the import path with `/` as `-`: `str`, `db-sqlite`, `net-http`,
-`encoding-json`. The index is `/std/` on both sites. The `/learn/` course on
-both sites teaches the language only, not the libraries.
+the import path with its dots kept as folders: `str`, `db/sqlite`, `net/http`,
+`encoding/json`, `gui/webview`. The index is `/std/` on both sites. Nearly every
+page opens with short tutorials, sections whose anchor starts with `guide-`
+(for example `/std/net/httpd/#guide-...`, and the guides of `audio` and its
+`wav dsp codec aiff au flac tag music synth midi mp3`, `net/httpd`, `net/httpd/conf`,
+`net/fastcgi`, `db/clickhouse`, `wire`, `net/nats`, `events`, `gui/webview`,
+`gui/webview/pack` and `gui/webview/bundle`); read the guide before calling
+the functions. The `/learn/` course on both sites teaches the language only,
+not the libraries.
 
 **Rules that hold across the whole library:**
 
@@ -1787,7 +1793,7 @@ Each driver keeps its own full surface, and `Conn(d)` boxes one as a
   from each thread before its first query - `tests/en/apps/*api/_store.salam`
   is the worked example.
 - **`db.sql`** (read and check SQL without a database, the sqlc idea with your own DDL as the schema): `DialectOf DialectNamed` give a `Dialect` for `SQLITE MYSQL MARIADB POSTGRES`; `Lint(sql, d)` parses one statement or a whole `;` separated script and returns a `Report` of `Diag` values (`code message help line col offset length`, rendered by `ReportText`/`DiagText`); `ParamCount`/`Placeholders` count and list the placeholders. With a schema: `NewCatalog(d)` then `Apply(cat, ddl)` reads `CREATE TABLE`, `ALTER TABLE`, `DROP` and `CREATE VIEW` into a `Catalog` (so the migrations are the schema), `TableCount TableName HasTable ColumnCount ColumnAt HasColumn` look around it, and `Check(sql, cat)` resolves names: unknown table or column with the nearest real name offered, ambiguous column, INSERT arity, a NOT NULL column with no default left out, a write with no WHERE. `Analyze(sql, cat)` adds what the query takes and returns - `Param { marker ordinal table column kind not_null }` and `ResultCol { name table kind nullable }`, with outer joins making a whole side nullable - and `SalamType(kind, not_null)` names the Salam type to read it into (`option.Option<T>` when it can be null). Codes: `SQL0xx` lexical, `SQL1xx` syntax, `SQL2xx` a dialect rule (`?` in postgres, `AUTO_INCREMENT` in sqlite, `ILIKE` outside postgres, `::` outside postgres, `LIMIT a, b` in postgres, `ON DUPLICATE KEY` outside mysql, `TRUNCATE`/`PRAGMA` in the wrong engine), `SQL3xx` the schema. Messages are English in both language modes; match on `code`. Free with `FreeReport`, `FreeCatalog`, `FreeAnalysis`. Putting values in: the three drivers do not all prepare and bind (only `db.sqlite` has `Prepare`/`Bind*`), so `NewArgs` + `AddInt AddFloat AddText AddBool AddNull` + `Fill(query, args, d, err)` writes the values into the SQL properly - the query is lexed first, so a `?` inside a string literal is left alone, the count has to match (`SQL400`), quotes are doubled, backslashes are doubled on MySQL, and a boolean is `TRUE`/`FALSE` on postgres and `1`/`0` elsewhere. It is substitution, not a prepared statement; `ArgCount` and `FreeArgs` round it out. Code generation, the sqlc half: annotate a `.sql` file with `-- name: GetUser :one` (`:one :many :exec :execrows`), then `ParseQueries(src, err)` and `Generate(pkg, queries, cat, err)` write a row struct and a typed function per query - parameters named and typed from the column each placeholder binds against, nullable columns as `option.Option<T>` read through `IsNull`, every query analysed against the catalog first so a typo stops generation with the query's name. One `dyn db.Connection` signature serves all three engines. The command is `salam sql generate queries --schema=db --output=gen/store.salam --package=store`. The `salam sql check` command runs the same checks over `.sql` files and over every SQL string literal in `.salam` files (`--schema=` a file or a directory; without `--dialect=` each file is read with the engine it imports); a literal assembled from pieces (glued with `+` or `.concat`, or one that simply stops mid-statement) is a fragment, so it is counted in the summary and skipped instead of reported.
-- **The whole library is in `std/`** and ships with Salam, so no `salam add` is needed for any of it: `db.sqlite db.postgres db.mysql db.redis db.meilisearch db.elasticsearch db.typesense db.opensearch`, `audio` and every `audio.*`, `tensor autograd nn optim ml data gguf llm onnx npy`, `net.http.swagger net.http.middleware net.http.session net.http.validate net.http2 net.websocket net.socketio net.email net.proxy`, `grpc rpc graphql ftp ssh aws google webpush telegram.bot`, `webview opencv excel`. `salam add` is only for packages from GitHub and other hosts. Their API notes below still apply.
+- **The whole library is in `std/`** and ships with Salam, so no `salam add` is needed for any of it: `db.sqlite db.postgres db.mysql db.redis db.meilisearch db.elasticsearch db.typesense db.opensearch`, `audio` and every `audio.*`, `tensor autograd nn optim ml data gguf llm onnx npy`, `net.http.swagger net.http.middleware net.http.session net.http.validate net.http2 net.websocket net.socketio net.email net.proxy`, `grpc rpc graphql ftp ssh aws google webpush telegram.bot`, `gui.webview opencv excel`. `salam add` is only for packages from GitHub and other hosts. Their API notes below still apply.
 - **`db.redis`** (RESP over TCP): `Connect Ok Error Close Ping Auth Select Set SetEx Get Exists Del Expire TTL Incr IncrBy Decr Append Keys HSet HGet HDel HExists HGetAll LPush RPush LPop RPop LLen LRange SAdd SRem SIsMember SMembers Publish`, anything else via `Command` and `Reply*`. Failures come
   back as empty values (`""`, 0, false); `Command` shows the server's
   `REPLY_ERROR` text. A plain `Set` removes a key's TTL; `Auth` sends only
@@ -2405,6 +2411,8 @@ salam new name                          # scaffold a project: name/main.salam + 
 salam serve [dir] [--port=N]            # serve a folder over HTTP
 salam serve --config=web.salam [--test] # several sites from one config (std/net/httpd); --test only checks it
 salam init                              # same, in the current directory
+salam new name --desktop                # a desktop app with a web interface (gui.webview, docs/DESKTOP.md)
+salam bundle [dir] [--target=T] [--format=a,b]  # installers from the [app] table of salam.toml
 salam add github.com/owner/repo         # add a GitHub package (import "github.com/owner/repo"); remove/update/deps too
 salam install github.com/owner/tool     # build a program into ~/.salam/bin; salam search <word> finds packages
 salam update / salam update pkg@latest  # same-major updates by default; uninstall, deps clean too (docs/PACKAGES.md)
@@ -2414,6 +2422,56 @@ salam version                           # print the compiler version (NOT --vers
 salam upgrade [X.Y.Z] [--check]         # upgrade salam and std/ to the newest release (or X.Y.Z)
 salam inspect app.salam --emit-tokens | --emit-ast | --emit-symbol   # dump a stage as XML
 ```
+
+### Installing the compiler
+
+The latest release is v0.6.2. Linux and macOS: `{ curl -fsSL https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.sh || wget -qO- https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.sh; } | sh`
+(add `-s -- --version X.Y.Z` after the final `sh` to pick a release). Windows
+PowerShell: `irm https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.ps1 | iex`.
+Then `salam version`, and `salam upgrade` later. The standard library ships
+with the compiler.
+
+### Packages from GitHub (the package manager)
+
+Everything in §5 ships with the compiler and needs no command. The package
+manager is only for packages that other people keep in their own Git
+repositories. Full guide: `docs/PACKAGES.md`, `/packages/` on both sites.
+
+```sh
+salam init                                  # main.salam + salam.toml in this folder
+salam add github.com/owner/repo             # newest release; writes salam.toml and salam.lock
+salam add github.com/owner/repo@v1.2.0      # exact tag; ranges @^1.2 and @~1.2, and '@>=1.2' (quote it)
+salam update [pkg] / salam update pkg@latest   # newest release, same major / across majors
+salam remove github.com/owner/repo
+salam deps                                  # after a clone: download what salam.lock lists, verify sums
+salam deps sums                             # module@version sum lines for registry/sums.txt
+salam search words                          # std library + registry/index.toml
+salam test                                  # runs test_ functions of every *_test.salam
+salam install github.com/owner/tool         # build its main.salam into ~/.salam/bin; salam uninstall
+```
+
+```salam
+import "github.com/demo/slug"               // quoted address; the last part is the name
+func main:
+    println slug.Make("Hello, World!")
+end
+```
+
+- Commit `salam.toml` and `salam.lock`, not the downloads in `~/.salam/pkg`.
+- **There is no `salam publish`.** Publishing is pushing a Git tag `vX.Y.Z` to a
+  public repository (tags cannot be moved safely afterwards; release a new
+  version). Listing in `salam search` is by a pull request that appends an entry
+  to `registry/index.toml`; checksums go to `registry/sums.txt`.
+- **Layout.** A program has `main.salam` and nothing else is its entry. A library
+  has no `main`; its entry file sits at the repository root and is named after
+  the repository (`slug.salam` for `github.com/demo/slug`, `package slug`); a
+  package in a folder is `<folder>/<folder>.salam`. `[package] kind = "lib"`
+  marks a library; `salam = ">=0.6.1"` is the oldest compiler it builds with.
+- Only `pub` names are visible to users: calling a private one is `E017`
+  (`'x' is not exported by package 'p' (mark it 'pub')`); importing a package
+  that is not in `salam.toml` is `E008` (run `salam add`). Give public functions
+  both `@en` and `@fa` names so Persian programs can call them.
+- `import "github.com/owner/repo/v2"` is a separate module that takes only v2.x tags.
 
 > **Version check is `salam version`, a subcommand.** There is no `--version`
 > or `-v` flag: `salam --version` fails with `unknown command '--version'` and
@@ -3023,7 +3081,7 @@ join(ر)
 
 All of §6 applies. In addition:
 
-1. **Entry is `ریشه`.** A Persian file with `تابع main` has no entry point.
+1. **Entry is `ریشه`:** `تابع ریشه:` ... `پایان`. A Persian file with `تابع main`, `تابع اصلی` or a `بسته اصلی` line has no entry point (the first two compile as ordinary functions, so the program builds and then does nothing).
 2. **`«…»` is a string literal, in Persian files only.** It behaves exactly
    like `"…"`, including `\n` escapes and `+`, so pick whichever reads better:
    `سرچاپ «سلام دنیا»`. It does not nest, for the same reason `"` does not. In
@@ -3145,6 +3203,7 @@ when the site is built. Point Persian-speaking users to the matching lesson:
 | `گونه`, new types, operator overloading          | <https://www.salamlang.ir/learn/custom-types/> |
 | Generics, `میانجی`, `کاربست`, `پویا`             | <https://www.salamlang.ir/learn/generics/>     |
 | `بسته`, `واردسازی`, `فراخوانی`                   | <https://www.salamlang.ir/learn/packages/>     |
+| Package manager: `salam add`, `salam.toml`, tags | <https://www.salamlang.ir/packages/>           |
 | Compiler rules and error codes                   | <https://www.salamlang.ir/learn/rules/>        |
 | Values, references, memory                       | <https://www.salamlang.ir/learn/memory/>       |
 | Compile-time `اگر`                               | <https://www.salamlang.ir/learn/compile-time/> |

@@ -166,6 +166,42 @@ func tr_ctx_word_here(targetpack: int, name: str, prev_kind: int, next_kind: int
     ret at_line_start and next_kind == tok.TK_IDENT and (str.Equals(mapped, "use") or str.Equals(mapped, "شامل"))
 end
 
+func tr_rule_start(toks: tok.TokenStream, i: int, n: int, needs_at &: int, group_at &: int, group_last &: int): bool:
+    if not lp.RuleWordIsHead(tok.StreamAt(toks, i).lexeme):
+        ret false
+    end
+    mut j := i + 1
+    mut words := ""
+    until j < n and tok.StreamAt(toks, j).kind == tok.TK_IDENT:
+        w := tok.StreamAt(toks, j).lexeme
+        if lp.RuleWordIsNeeds(w):
+            if j == i + 1:
+                ret false
+            end
+            needs_at = j
+            ret true
+        end
+        words = words + (str.Len(words) > 0 ? " " : "") + w
+        j += 1
+    end
+    if j >= n or j == i + 1 or tok.StreamAt(toks, j).kind != tok.TK_LPAREN or str.Len(lp.RuleGroupCanon(words)) == 0:
+        ret false
+    end
+    group_at = i + 1
+    group_last = j - 1
+    ret true
+end
+
+func tr_rule_group_text(toks: tok.TokenStream, first: int, last: int): str:
+    mut words := ""
+    mut j := first
+    until j <= last:
+        words = words + (j > first ? " " : "") + tok.StreamAt(toks, j).lexeme
+        j += 1
+    end
+    ret words
+end
+
 func tr_is_link_word(name: str): bool:
     ret str.Equals(name, "link") or str.Equals(name, "پیوند")
 end
@@ -1055,6 +1091,9 @@ func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_root: s
     mut gaps := Vector {} as Vector<int>
     defer gaps.free()
     tr_compare_gaps(srcpack, sfile, gaps)
+    mut rule_needs_at := 0 - 1
+    mut rule_group_at := 0 - 1
+    mut rule_group_last := 0 - 1
     mut i := 0
     until i < n:
         t := tok.StreamAt(toks, i)
@@ -1086,6 +1125,14 @@ func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_root: s
             else:
                 skip_emit = true
             end
+        else i == rule_needs_at:
+            lexeme = targetpack == lp.LP_FA ? "نیازمند" : "needs"
+        else i == rule_group_at:
+            lexeme = lp.RuleGroupWord(lp.RuleGroupCanon(tr_rule_group_text(toks, i, rule_group_last)), targetpack == lp.LP_FA)
+            ei = tok.StreamAt(toks, rule_group_last).end_index as int
+            i = rule_group_last
+        else t.kind == tok.TK_IDENT and (prev_kind == tok.TK_STMT_END or prev_kind == tok.TK_COLON or prev_kind < 0) and tr_rule_start(toks, i, n, rule_needs_at, rule_group_at, rule_group_last):
+            lexeme = targetpack == lp.LP_FA ? "قاعده" : "rule"
         else t.kind == tok.TK_IDENT and prev_kind == tok.TK_KW_EXTERN and tr_callconv_end(toks, i, n) >= i:
             ce := tr_callconv_end(toks, i, n)
             lexeme = targetpack == lp.LP_FA ? lp.STDCALL_FA : "stdcall"

@@ -414,25 +414,48 @@ Current priorities in this repository are:
 
 Because the `manual` stage, `prek-audit.toml`, and `prek-infra.toml` run separately, only hooks in the command you execute are considered for ordering.
 
+## 📦 Adding to the standard library
+
+Every new package, function, struct, field, method or constant in `std/` ships with Persian names, tests and documentation in both languages, in the same pull request. The **Std Tests and Docs** check fails the pull request when one is missing.
+
+| What                    | Where                                                                                                                                                                    |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Names                   | `@en "Name"` and `@fa "نام"` on the line above every `pub` symbol (see `std/os` for the style: spaces in Persian names, never underscores)                               |
+| Tests                   | A program in `tests/en/stdlib/` that imports the package and calls every public function, and its Persian twin in `tests/fa/stdlib/` with the `.out` files               |
+| Page                    | `website/content/en/std/NN-name.txt` and `website/content/fa/std/NN-name.txt` with `pkg.intro`, at least two `guide-*` sections, and one `doc.` and one `ex.` per symbol |
+| Examples                | `website/content/{en,fa}/std-examples/` for the `ex.` keys and `website/content/{en,fa}/examples/` for the `{{example.NAME}}` programs in the guides                     |
+| Same keys in both pages | The `doc.` and `ex.` keys and the `guide-` section IDs must be identical in the English and Persian page                                                                 |
+
+Check your work before pushing:
+
+```sh
+salam run tools/salam/check-std-coverage-docs.salam
+salam run tools/salam/check-std-coverage-docs.salam table text/diff
+SALAM=salam sh website/check-example.sh website/content/en/examples/text-diff-guide-files.salam
+```
+
+Gaps that already existed when the check was added are listed in `tools/salam/std-coverage-docs-baseline.txt`. That file can only shrink: a new gap fails the check, and so does a listed gap that no longer exists. After fixing old gaps, run `salam run tools/salam/check-std-coverage-docs.salam prune` and commit the smaller file.
+
 ## ⚙️ Continuous Integration
 
 Every pull request triggers a suite of automated checks. Understanding what runs helps you resolve failures quickly.
 
-| Workflow                          | What it checks                                                                                                                                                           |
-| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **Compiler - Build & Test**       | Builds the compiler inside an Alpine + LLVM Docker image and runs the test suite.                                                                                        |
-| **Compiler - Clone & Build**      | Verifies that a fresh clone can build on Windows, macOS, and Linux.                                                                                                      |
-| **Compiler - Build & Release**    | Compiles release binaries for the supported distribution targets.                                                                                                        |
-| **Memory Leaks**                  | Runs the whole test corpus through AddressSanitizer/LeakSanitizer builds of both compilers. See [Memory leak checks](#-memory-leak-checks) below.                        |
-| **Editor - Build Playground**     | Builds the WebAssembly playground bundle on pull requests to catch editor or compiler integration regressions before merge.                                              |
-| **Books - Build & Validate PDFs** | Builds the language books and verifies the generated PDFs.                                                                                                               |
-| **Prek Standard Hooks**           | Runs `prek run --all-files` on Ubuntu, macOS, and Windows to verify formatting, spelling, linting, and security checks defined in `prek.toml`.                           |
-| **Prek Manual Hooks**             | Runs the `manual`-stage hooks (e.g. `shfmt`, `chmod`) across the same platform matrix.                                                                                   |
-| **Prek Audit Hooks**              | Runs `prek run --all-files --config prek-audit.toml` across the same platform matrix to perform security-focused audit checks defined in `prek-audit.toml`.              |
-| **Prek Infra Hooks**              | Runs `prek run --all-files --config prek-infra.toml` across the same platform matrix to perform infrastructure and dependency audit checks defined in `prek-infra.toml`. |
-| **Super-Linter**                  | Runs a broad set of language-specific linters across the repository.                                                                                                     |
-| **PR - Auto-Labeler**             | Applies labels automatically based on the files changed in the pull request.                                                                                             |
-| **PR - Salam AI Review**          | Posts an automated summary and merge verdict on every pull request. See [AI pull request review](#-ai-pull-request-review) below.                                        |
+| Workflow                          | What it checks                                                                                                                                                                                  |
+| --------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Compiler - Build & Test**       | Builds the compiler inside an Alpine + LLVM Docker image and runs the test suite.                                                                                                               |
+| **Compiler - Clone & Build**      | Verifies that a fresh clone can build on Windows, macOS, and Linux.                                                                                                                             |
+| **Compiler - Build & Release**    | Compiles release binaries for the supported distribution targets.                                                                                                                               |
+| **Memory Leaks**                  | Runs the whole test corpus through AddressSanitizer/LeakSanitizer builds of both compilers. See [Memory leak checks](#-memory-leak-checks) below.                                               |
+| **Editor - Build Playground**     | Builds the WebAssembly playground bundle on pull requests to catch editor or compiler integration regressions before merge.                                                                     |
+| **Books - Build & Validate PDFs** | Builds the language books and verifies the generated PDFs.                                                                                                                                      |
+| **Prek Standard Hooks**           | Runs `prek run --all-files` on Ubuntu, macOS, and Windows to verify formatting, spelling, linting, and security checks defined in `prek.toml`.                                                  |
+| **Prek Manual Hooks**             | Runs the `manual`-stage hooks (e.g. `shfmt`, `chmod`) across the same platform matrix.                                                                                                          |
+| **Prek Audit Hooks**              | Runs `prek run --all-files --config prek-audit.toml` across the same platform matrix to perform security-focused audit checks defined in `prek-audit.toml`.                                     |
+| **Prek Infra Hooks**              | Runs `prek run --all-files --config prek-infra.toml` across the same platform matrix to perform infrastructure and dependency audit checks defined in `prek-infra.toml`.                        |
+| **Std Tests and Docs**            | Fails when a std symbol has no `@fa` name, no test in `tests/en` and `tests/fa`, or no `doc.`/`ex.` in both site pages. See [Adding to the standard library](#-adding-to-the-standard-library). |
+| **Super-Linter**                  | Runs a broad set of language-specific linters across the repository.                                                                                                                            |
+| **PR - Auto-Labeler**             | Applies labels automatically based on the files changed in the pull request.                                                                                                                    |
+| **PR - Salam AI Review**          | Posts an automated summary and merge verdict on every pull request. See [AI pull request review](#-ai-pull-request-review) below.                                                               |
 
 All checks must pass before a pull request can be merged. If a check fails:
 
@@ -505,8 +528,8 @@ Every pull request gets one automated review comment from Salam AI, the assistan
 The comment is a **helper, not a decision**. It is written by a machine and can be wrong: verify its claims before you merge or close something. A maintainer always has the last word, and the comment is kept up to date on every push instead of being repeated.
 
 - Add the `ai-review:skip` label to a pull request to switch the bot off for it. Draft pull requests are skipped until they are marked ready for review.
-- The workflow is `.github/workflows/ai-pr-review.yml` and the reviewer is `.github/scripts/ai_pr_review.py`. It needs the `SALAM_AI_API_KEY` repository secret and never runs code from the pull request: it only reads the diff through the GitHub API.
-- To try it locally, set `GITHUB_TOKEN`, `GITHUB_REPOSITORY`, `PR_NUMBER`, `SALAM_AI_API_KEY` and `DRY_RUN=1`, then run `python3 .github/scripts/ai_pr_review.py` to print the review without posting it.
+- The workflow is `.github/workflows/ai-pr-review.yml` and the reviewer is `.github/scripts/ai_pr_review.salam`. It needs the `SALAM_AI_API_KEY` repository secret and never runs code from the pull request: it only reads the diff through the GitHub API.
+- To try it locally, set `GITHUB_TOKEN`, `GITHUB_REPOSITORY`, `PR_NUMBER`, `SALAM_AI_API_KEY` and `DRY_RUN=1`, then run `salam run .github/scripts/ai_pr_review.salam` to print the review without posting it.
 
 ## 💬 Feedback and Support
 

@@ -551,6 +551,40 @@ A field with no default is **required**: a literal that omits it fails with
 literal, `pub port: int = 443` can be left out. The check runs on struct literals
 only, so `mut c: Client` and generic `T {}` still zero the field.
 
+**Conditional fields:** a struct can state which fields depend on each other.
+The compiler checks every struct literal against the rules, using which fields
+the literal writes, not their values.
+
+```salam
+struct Client:
+    pub host: str
+    pub user: str = ""
+    pub pass: str = ""
+    pub token: str = ""
+    pub cert: str = ""
+    pub key: str = ""
+    rule user needs pass          // user given: pass must be given too
+    rule allornone(cert, key)     // both or neither
+    rule anyof(user, token)       // at least one
+end
+```
+
+Forms: `rule a needs b, c`, `rule allornone(a, b)`, `rule oneof(a, b)` (exactly
+one), `rule anyof(a, b)` (at least one), `rule atmostone(a, b)`. Persian: `قاعده`,
+`نیازمند`, `باهم`, `فقط یکی`, `دست کم یکی`, `حداکثر یکی`. `rule` stays a legal field
+name. `E159` is a literal that breaks a rule, `E160` an invalid rule (unknown
+field, or a private field in a `pub` struct), `E161` rules no literal can satisfy,
+`W159` a rule that can never fail.
+
+A literal must carry the whole group: `Client { user = "u" }` is an error even if
+`c.pass = "p"` follows, and assigning to a field later is not checked.
+`Client { user = "" }` counts as given. When a guarantee must survive mutation,
+use an enum with data (`Basic(user: str, pass: str)`) or a constructor.
+
+`json.Unmarshal` enforces the same rules, a field with a default that a rule names
+is an optional key, and `json.Schema` emits `dependentRequired`, `oneOf`, `anyOf`
+and `not`. `UnmarshalLenient` ignores them.
+
 **`Self`** is the enclosing type, usable anywhere inside a `struct`, an
 `impl ... on T` block or a distinct type's body: as a return type, a parameter
 type, a field type, in a cast and as a struct literal. On a generic struct it
@@ -2515,6 +2549,11 @@ Read the real code; it is the specification:
   (`grep -rn "pub func" std/<pkg>`).
 - The precise semantic rules (what is and isn't allowed): the `.salam` cases in
   `tests/en/errors/`.
+- Adding to `std/`: every new package, function, struct, field, method or
+  constant needs `@en`/`@fa` names, a program in `tests/en/stdlib/` and its
+  twin in `tests/fa/stdlib/`, and `doc.`/`ex.` keys (plus `guide-*` sections
+  for a new package) in both `website/content/{en,fa}/std/` pages. Check with
+  `salam run tools/salam/check-std-coverage-docs.salam` (see CONTRIBUTING.md).
 
 ---
 

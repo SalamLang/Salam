@@ -2591,6 +2591,12 @@ func auth_headers(token: str): HashMap<str, str>:
     ret h
 end
 
+func free_auth(headers: HashMap<str, str>):
+    mem.Free(headers.get("Authorization") as void*)
+    mut gone := headers
+    gone.free()
+end
+
 func emit_call(p: Preview, state: str, output: str):
     desktop.Emit("agent://call", preview_json(p, state, output))
 end
@@ -2653,9 +2659,12 @@ func report(secret: str, call_id: str, status: str, output: str, p: Preview, has
     mut c := new_client(40000)
     defer c.Free()
     h := auth_headers(secret)
+    defer free_auth(h)
     repeat 3:
         res := c.RequestWith("POST", bridge_url() + "/bridge/result", body, h)
-        if (res.status >= 200 and res.status < 300) or res.status == 404:
+        status := res.status
+        http.FreeResponse(res)
+        if (status >= 200 and status < 300) or status == 404:
             ret
         end
         sync.SleepMs(1000)
@@ -2730,6 +2739,7 @@ func bridge_loop():
         g_poll_started = sync.NowMs()
         sync.Unlock(g_mu)
         res := c.RequestWith("GET", bridge_url() + "/bridge/poll", "", h)
+        free_auth(h)
         sync.Lock(g_mu)
         g_poll_started = 0 as i64
         sync.Unlock(g_mu)
@@ -2753,6 +2763,7 @@ func bridge_loop():
             sync.SleepMs(backoff * 1000)
             backoff = backoff * 2 > 30 ? 30 : backoff * 2
         end
+        http.FreeResponse(res)
     end
 end
 
@@ -2761,10 +2772,12 @@ func probe_app(timeout_ms: int): str:
     defer c.Free()
     c.SetTimeout(timeout_ms)
     res := c.Get(app_url())
-    if res.status <= 0:
+    status := res.status
+    http.FreeResponse(res)
+    if status <= 0:
         ret "offline"
     end
-    ret res.status < 500 ? "ok" : "server"
+    ret status < 500 ? "ok" : "server"
 end
 
 func navigate_main(url: str):
@@ -2885,22 +2898,27 @@ end
 
 func next_reply(c &: http.Client, base: str, token: str, after: i64): i64:
     h := auth_headers(token)
+    defer free_auth(h)
     repeat 2 in attempt:
         if attempt > 0:
             sync.SleepMs(WATCH_STEP_MS)
         end
         res := c.RequestWith("GET", base, "", h)
         if res.status <= 0:
+            http.FreeResponse(res)
             continue
         end
         if res.status < 200 or res.status >= 300:
+            http.FreeResponse(res)
             ret 0
         end
+        mut next := 0 as i64
         if json.Valid(res.body):
-            next := pick_next(json.Get(res.body, "messages"), after)
-            if next > 0:
-                ret next
-            end
+            next = pick_next(json.Get(res.body, "messages"), after)
+        end
+        http.FreeResponse(res)
+        if next > 0:
+            ret next
         end
     end
     ret 0
@@ -2910,6 +2928,7 @@ func watch_run(chat: str, first_mid: i64, token: str, title: str, job: WatchJob*
     mut c := new_client(12000)
     defer c.Free()
     h := auth_headers(token)
+    defer free_auth(h)
     base := api_url() + "/chats/" + chat
     started := sync.NowMs()
     mut mid := first_mid
@@ -2928,18 +2947,22 @@ func watch_run(chat: str, first_mid: i64, token: str, title: str, job: WatchJob*
             end
             res := c.RequestWith("GET", url, "", h)
             if res.status == 401:
+                http.FreeResponse(res)
                 watch_done(chat, job)
                 ret
             end
             if res.status < 200 or res.status >= 300 or not json.Valid(res.body):
+                http.FreeResponse(res)
                 continue
             end
             status := json.Get(res.body, "status")
             if status.len() == 0 or status == "pending":
+                http.FreeResponse(res)
                 continue
             end
             body = json.Get(res.body, "body")
             kind = status == "error" ? "failed" : "done"
+            http.FreeResponse(res)
         end
         if kind.len() == 0:
             break

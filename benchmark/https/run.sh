@@ -26,7 +26,7 @@ if [ -n "${BASE_STD:-}" ]; then
     SALAM_STD=$BASE_STD "$SALAM" build "$HERE/server.salam" --output=salam-old $FLAGS --log-level=error 2>&1 | grep -v "override\|generated\|^$"
 fi
 
-mkdir -p nginx-s
+mkdir -p nginx-s nginx-tmp
 ln -sf ../10m.bin nginx-s/10m.bin
 printf '{"message":"Hello, World!"}' > nginx-s/json
 head -c 102400 /dev/zero | tr '\0' x > nginx-s/100k
@@ -37,6 +37,11 @@ error_log /dev/null;
 events { worker_connections 4096; }
 http {
     access_log off;
+    client_body_temp_path $WORK/nginx-tmp/body;
+    proxy_temp_path $WORK/nginx-tmp/proxy;
+    fastcgi_temp_path $WORK/nginx-tmp/fastcgi;
+    uwsgi_temp_path $WORK/nginx-tmp/uwsgi;
+    scgi_temp_path $WORK/nginx-tmp/scgi;
     keepalive_requests 100000000;
     default_type application/json;
     server {
@@ -48,6 +53,7 @@ http {
         ssl_session_tickets off;
         root $WORK/nginx-s;
         location /s/ { alias $WORK/nginx-s/; }
+        location = /json { default_type application/json; }
     }
 }
 CONF
@@ -78,6 +84,7 @@ printf '%-10s %-5s %-12s %-10s %10s %9s %8s %8s %5s\n' server cert scenario path
 row() {
     local server=$1 cert=$2 scen=$3 path=$4 addr=$5 secure=$6 keep=$7 out
     out=$(best -addr "$addr" -path "$path" -tls="$secure" -keep="$keep")
+    [ -n "$out" ] || out="- - - - failed"
     # shellcheck disable=SC2086
     printf '%-10s %-5s %-12s %-10s %10s %9s %8s %8s %5s\n' "$server" "$cert" "$scen" "$path" $out
 }

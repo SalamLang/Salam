@@ -33,7 +33,7 @@ PAGE = """<!doctype html><meta charset=utf-8><title>fake app</title><script>
     salam.listen("agent://call", (c) => {
       report("call:" + c.tool + ":" + c.state, c.output || c.summary);
       if (c.state === "running" && c.call_id === "stopme") setTimeout(() => salam.invoke("agent_stop", {callId: "stopme"}), 600);
-      if (c.state === "pending") salam.invoke("agent_decide", {callId: c.call_id, answer: c.tool === "shell" || c.tool === "browser" ? "allow" : "deny"});
+      if (c.state === "pending") salam.invoke("agent_decide", {callId: c.call_id, answer: c.tool === "shell" || (c.tool === "browser" && c.call_id !== "b_local") ? "allow" : "deny"});
     });
     salam.listen("agent://output", (o) => report("output", o.chunk));
     salam.listen("agent://connection", (v) => report("connection", v));
@@ -326,7 +326,7 @@ def main():
             check("browser back", '"site"' in out("back"), out("back"))
             check("browser reload", st("reload") == "ok", out("reload"))
             check("browser viewport", "400x600" in out("small"), out("small"))
-            check("browser asks before a local file", get("b_local").get("outside") is True, get("b_local"))
+            check("browser asks before a local file", st("local") == "denied" and get("b_local").get("outside") is True, get("b_local"))
             check("browser close", "Closed" in out("close"), out("close"))
             check("browser closes once", "No browser" in out("closed"), out("closed"))
             left = glob.glob(os.path.join(tempfile.gettempdir(), "salam-agent-browser-*"))

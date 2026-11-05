@@ -1,0 +1,233 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import os.process
+
+func sh(script: str): process.Command:
+    mut cmd := process.NewCommand("sh")
+    cmd.Arg("-c")
+    cmd.Arg(script)
+    ret cmd
+end
+
+func show(label: str, st: process.Status):
+    println label, "exited", st.exited, "code", st.code, "signaled", st.signaled, "signal", st.signal, "timed_out", st.timed_out
+end
+
+func echo_round_trip():
+    mut cmd := process.NewCommand("cat")
+    cmd.Piped()
+    mut ch := process.Launch(cmd)
+    println "started", ch.ok, ch.pid > 0
+    println "write", ch.Write("alpha\nbeta\n")
+    a := ch.ReadLine(5000)
+    println "line", a.data, a.len, a.eof, a.timed_out
+    b := ch.ReadLine(5000)
+    println "line", b.data, b.len
+    c := ch.ReadLine(100)
+    println "idle", c.timed_out, c.eof
+    println "running", ch.Poll()
+    ch.CloseStdin()
+    d := ch.ReadLine(5000)
+    println "eof", d.eof, d.len
+    st := ch.Wait(5000)
+    show("cat", st)
+    println "poll after", ch.Poll(), ch.finished
+    a.Free()
+    b.Free()
+    c.Free()
+    d.Free()
+    ch.Close()
+    cmd.Free()
+end
+
+func two_streams():
+    mut cmd := sh("echo to-out; echo to-err 1>&2; exit 0")
+    cmd.stdout_mode = process.Pipe
+    cmd.stderr_mode = process.Pipe
+    mut ch := process.Launch(cmd)
+    o := ch.ReadLine(5000)
+    e := ch.ReadErrLine(5000)
+    println "out:", o.data, "err:", e.data
+    show("two", ch.Wait(5000))
+    o.Free()
+    e.Free()
+    ch.Close()
+    cmd.Free()
+
+    mut mc := sh("echo one; echo two 1>&2")
+    mc.stdout_mode = process.Pipe
+    mc.stderr_mode = process.Merge
+    mut mh := process.Launch(mc)
+    all := mh.ReadFor(3000)
+    println "merged bytes", all.len
+    show("merge", mh.Wait(5000))
+    all.Free()
+    mh.Close()
+    mc.Free()
+end
+
+func exit_and_signals():
+    mut c3 := sh("exit 3")
+    mut h3 := process.Launch(c3)
+    s3 := h3.Wait(5000)
+    show("exit3", s3)
+    println "success", s3.Success(), "return code", s3.ReturnCode()
+    h3.Close()
+    c3.Free()
+
+    mut ck := sh("exec sleep 30")
+    mut hk := process.Launch(ck)
+    println "kill sent", hk.Kill()
+    sk := hk.Wait(5000)
+    show("kill", sk)
+    println "return code", sk.ReturnCode()
+    hk.Close()
+    ck.Free()
+
+    mut ct := sh("exec sleep 30")
+    mut ht := process.Launch(ct)
+    println "term sent", ht.Terminate()
+    show("term", ht.Wait(5000))
+    ht.Close()
+    ct.Free()
+
+    mut cs := sh("exec sleep 30")
+    mut hs := process.Launch(cs)
+    println "signal sent", hs.Signal(process.SigInt)
+    show("int", hs.Wait(5000))
+    hs.Close()
+    cs.Free()
+end
+
+func wait_timeout():
+    mut cmd := sh("exec sleep 30")
+    mut ch := process.Launch(cmd)
+    st := ch.Wait(150)
+    show("waiting", st)
+    println "still running", ch.Poll(), ch.finished
+    _k := ch.Kill()
+    show("after kill", ch.Wait(5000))
+    again := ch.Wait(0)
+    println "second wait", again.signaled, again.signal
+    ch.Close()
+    cmd.Free()
+end
+
+func env_and_cwd():
+    mut cmd := sh("echo $GREETING; echo ${DROPPED-unset}; pwd")
+    cmd.Env("GREETING", "salam")
+    cmd.Unset("DROPPED")
+    cmd.cwd = "/"
+    cmd.stdout_mode = process.Pipe
+    mut ch := process.Launch(cmd)
+    a := ch.ReadLine(5000)
+    b := ch.ReadLine(5000)
+    c := ch.ReadLine(5000)
+    println a.data, b.data, c.data
+    show("env", ch.Wait(5000))
+    a.Free()
+    b.Free()
+    c.Free()
+    ch.Close()
+    cmd.Free()
+
+    mut empty := sh("echo ${GREETING-gone}:${HOME-nohome}")
+    empty.clear_env = true
+    empty.Env("PATH", "/usr/bin:/bin")
+    empty.stdout_mode = process.Pipe
+    mut eh := process.Launch(empty)
+    r := eh.ReadLine(5000)
+    println r.data
+    r.Free()
+    _es := eh.Wait(5000)
+    eh.Close()
+    empty.Free()
+end
+
+func null_and_missing():
+    mut cmd := sh("echo hidden; echo hidden 1>&2; cat")
+    cmd.stdin_mode = process.Null
+    cmd.stdout_mode = process.Null
+    cmd.stderr_mode = process.Null
+    mut ch := process.Launch(cmd)
+    show("null", ch.Wait(5000))
+    println "write to none", ch.Write("x")
+    ch.Close()
+    cmd.Free()
+
+    mut bad := process.NewCommand("definitely-not-a-program-here")
+    bh := process.Launch(bad)
+    println "missing", bh.ok, bh.error
+    bad.Free()
+
+    mut cd := sh("true")
+    cd.cwd = "/definitely/not/a/folder"
+    dh := process.Launch(cd)
+    println "bad cwd", dh.ok, dh.error
+    cd.Free()
+end
+
+func reads():
+    mut cmd := sh("printf 'abcdefghij'; sleep 0.3; printf 'KLM:rest\\n'")
+    cmd.stdout_mode = process.Pipe
+    mut ch := process.Launch(cmd)
+    a := ch.Read(4, 5000)
+    println "read4", a.data, a.len
+    b := ch.ReadUntil(":", 5000)
+    println "until", b.data, b.len
+    c := ch.ReadAvailable(5000)
+    println "rest", c.len, c.eof
+    d := ch.ReadAvailable(5000)
+    println "end", d.eof, d.len
+    a.Free()
+    b.Free()
+    c.Free()
+    d.Free()
+    show("reads", ch.Wait(5000))
+    ch.Close()
+    cmd.Free()
+end
+
+func group_kill():
+    mut cmd := sh("sleep 30 & sleep 30 & wait")
+    cmd.new_group = true
+    cmd.stdout_mode = process.Pipe
+    mut ch := process.Launch(cmd)
+    println "group killed", ch.KillGroup()
+    show("group", ch.Wait(5000))
+    tail := ch.ReadAvailable(5000)
+    println "pipe closed", tail.eof
+    tail.Free()
+    ch.Close()
+    cmd.Free()
+end
+
+func main:
+    if SALAM_OS_WINDOWS:
+        println "skipped on Windows"
+        ret 0
+    end
+    echo_round_trip()
+    two_streams()
+    exit_and_signals()
+    wait_timeout()
+    env_and_cwd()
+    null_and_missing()
+    reads()
+    group_kill()
+    ret 0
+end

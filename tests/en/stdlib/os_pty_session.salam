@@ -1,0 +1,136 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import mem
+import str
+import os.process
+import os.pty
+
+func shell(script: str): process.Command:
+    mut cmd := process.NewCommand("sh")
+    cmd.Arg("-c")
+    cmd.Arg(script)
+    cmd.Env("TERM", "xterm")
+    ret cmd
+end
+
+func visible(text: str): str:
+    first := str.Replace(text, "\r", "\\r")
+    out := str.Replace(first, "\n", "\\n")
+    mem.Free(first as void*)
+    ret out
+end
+
+func window_size():
+    mut cmd := shell("stty size; echo $TERM")
+    mut ch := pty.Open(cmd, 30, 100)
+    println "opened", ch.ok
+    r := ch.ReadFor(1500)
+    v := visible(r.data)
+    println v
+    mem.Free(v as void*)
+    r.Free()
+    println "exit", ch.Wait(5000).code
+    ch.Close()
+    cmd.Free()
+end
+
+func echo_and_enter():
+    mut cmd := shell("cat")
+    mut ch := pty.Open(cmd, 24, 80)
+    println "write", ch.Write("typed text\r")
+    r := ch.ReadUntil("typed text\r\n", 5000)
+    v := visible(r.data)
+    println "echoed", v, r.timed_out
+    mem.Free(v as void*)
+    r.Free()
+    r2 := ch.ReadUntil("typed text\r\n", 5000)
+    v2 := visible(r2.data)
+    println "answer", v2, r2.timed_out
+    mem.Free(v2 as void*)
+    r2.Free()
+    ch.CloseStdin()
+    st := ch.Wait(5000)
+    println "ended", st.exited, st.code
+    ch.Close()
+    cmd.Free()
+end
+
+func raw_mode():
+    mut cmd := shell("stty raw -echo; printf 'ready\\n'; dd bs=1 count=2 2>/dev/null | od -An -c")
+    mut ch := pty.Open(cmd, 24, 80)
+    w := ch.ReadUntil("ready", 5000)
+    println "prompt", w.timed_out
+    w.Free()
+    println "typed", ch.Write("a\r")
+    r := ch.ReadUntil("\\r", 5000)
+    v := visible(r.data)
+    println "seen", v, r.timed_out
+    mem.Free(v as void*)
+    r.Free()
+    println "exit", ch.Wait(5000).code
+    ch.Close()
+    cmd.Free()
+end
+
+func resizing():
+    mut cmd := shell("read line; stty size")
+    mut ch := pty.Open(cmd, 10, 20)
+    before := pty.GetSize(ch)
+    println "before", before.rows, before.cols
+    println "resize", pty.Resize(ch, 33, 120)
+    after := pty.GetSize(ch)
+    println "after", after.rows, after.cols
+    ch.Write("go\r")
+    r := ch.ReadUntil("33 120", 5000)
+    println "child sees", r.timed_out
+    r.Free()
+    println "exit", ch.Wait(5000).code
+    ch.Close()
+    cmd.Free()
+end
+
+func hangup_and_missing():
+    mut cmd := shell("exec sleep 30")
+    mut ch := pty.Open(cmd, 24, 80)
+    println "kill", ch.Kill()
+    st := ch.Wait(5000)
+    println "signaled", st.signaled, st.signal
+    gone := ch.ReadAvailable(2000)
+    println "eof", gone.eof
+    gone.Free()
+    ch.Close()
+    cmd.Free()
+
+    mut bad := process.NewCommand("definitely-not-a-program-here")
+    bh := pty.Open(bad, 24, 80)
+    println "missing", bh.ok, bh.error
+    bad.Free()
+end
+
+func main:
+    if SALAM_OS_WINDOWS:
+        println "pty supported", pty.Supported()
+        ret 0
+    end
+    println "pty supported", pty.Supported()
+    window_size()
+    echo_and_enter()
+    raw_mode()
+    resizing()
+    hangup_and_missing()
+    ret 0
+end

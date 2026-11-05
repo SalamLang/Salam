@@ -1,0 +1,91 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import os
+import str
+import os.process
+import os.pty
+
+func shown(text: str): str:
+    out := str.Replace(text, "\r", "\\r")
+    ret str.Replace(out, "\n", "\\n")
+end
+
+func collect(term &: process.Child, want: str, seconds: int): str:
+    first := term.ReadUntil(want, seconds * 1000)
+    late := term.ReadFor(300)
+    rest := term.ReadAvailable(0)
+    out := first.data + late.data + rest.data
+    first.Free()
+    late.Free()
+    rest.Free()
+    ret out
+end
+
+func main:
+    argv := os.Args()
+    defer argv.free()
+    if argv.len() < 2:
+        println "usage: salam run tools/repl/test_repl_tty.salam /path/to/salam [SALAM_STD]"
+        ret 2
+    end
+    salam := argv.get(1)
+
+    mut cmd := process.NewCommand(salam)
+    cmd.Arg("cli")
+    cmd.Env("TERM", "xterm")
+    if argv.len() > 2:
+        cmd.Env("SALAM_STD", argv.get(2))
+    end
+    mut term := pty.Open(cmd, 24, 80)
+    if not term.ok:
+        println "FAIL cannot start", salam, term.error
+        ret 1
+    end
+
+    mut failed := 0
+    banner := collect(term, "salam>", 10)
+    if not banner.includes("salam>"):
+        println "FAIL no prompt:", shown(banner)
+        failed += 1
+    end
+
+    lines := ["1 + 1", "println \"hi\""]
+    wants := ["2", "hi"]
+    repeat 2 in i:
+        line := lines[i]
+        term.Write(line + "\r")
+        out := collect(term, wants[i], 10)
+        if out.includes("^M"):
+            println "FAIL Enter echoed ^M for", line, shown(out)
+            failed += 1
+        else not out.includes(wants[i]):
+            println "FAIL no result for", line, shown(out)
+            failed += 1
+        else:
+            println "ok  ", line
+        end
+    end
+
+    term.CloseStdin()
+    tail := term.ReadFor(1000)
+    tail.Free()
+    _status := term.Wait(5000)
+    term.Close()
+    cmd.Free()
+    if failed > 0: ret 1 end
+    ret 0
+end

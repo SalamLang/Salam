@@ -1,0 +1,133 @@
+package interp
+
+import str
+
+include at "../ast.salam"
+include tok "../token.salam"
+include i18 "../i18n.salam"
+include wd "../wide.salam"
+
+func wide_of(v: Value): wd.W:
+    if v.kind == VAL_BOOL:
+        ret wd.FromU64(v.b ? 1 as u64 : 0 as u64)
+    end
+    if v.kind == VAL_FLOAT:
+        ret wd.FromF64S(v.f)
+    end
+    if v.ity >= ITY_I128:
+        ret wd.Make(v.pa as u64, v.i as u64)
+    end
+    if v.kind == VAL_CHAR or int_ty_is_unsigned(v.ity):
+        ret wd.FromU64(val_int_bits(v))
+    end
+    ret wd.FromI64(v.i)
+end
+
+func wide_val(w: wd.W, t: int): Value:
+    ret Value { kind = VAL_INT, ity = t, i = w.lo as i64, pa = w.hi as i64 }
+end
+
+func wide_coerce_val(v: Value, t: int): Value:
+    if t < ITY_I128:
+        ret val_int_ty(v.i, t)
+    end
+    if v.kind == VAL_INT and v.ity == t:
+        ret v
+    end
+    ret wide_val(wide_of(v), t)
+end
+
+func wide_neg(v: Value): Value:
+    ret wide_val(wd.Neg(wide_of(v)), v.ity)
+end
+
+func wide_to_f64(v: Value): f64:
+    ret v.ity == ITY_I128 ? wd.ToF64S(wide_of(v)) : wd.ToF64U(wide_of(v))
+end
+
+func wide_to_f32(v: Value): f32:
+    ret v.ity == ITY_I128 ? wd.ToF32S(wide_of(v)) : wd.ToF32U(wide_of(v))
+end
+
+func wide_val_str(v: Value): str:
+    ret v.ity == ITY_I128 ? wd.ToStringS(wide_of(v)) : wd.ToStringU(wide_of(v))
+end
+
+func wide_cast(v: Value, t: int): Value:
+    if t >= ITY_I128:
+        if v.kind == VAL_FLOAT:
+            ret wide_val(t == ITY_I128 ? wd.FromF64S(v.f) : wd.FromF64U(v.f), t)
+        end
+        ret wide_coerce_val(v, t)
+    end
+    ret val_int_ty(v.i, t)
+end
+
+func wide_cmp(x: Value, y: Value): int:
+    rt := x.ity >= ITY_I128 ? x.ity : y.ity
+    wx := wide_of(x)
+    wy := wide_of(y)
+    if wd.Eq(wx, wy):
+        ret 0
+    end
+    lt_v := rt == ITY_I128 ? wd.LtS(wx, wy) : wd.LtU(wx, wy)
+    ret lt_v ? 0 - 1 : 1
+end
+
+func wide_arith(ip &: Interp, a &: at.Ast, n: int, op: int, x: Value, y: Value): Value:
+    shift := op == tok.TK_SHL or op == tok.TK_SHR
+    rt := (x.ity >= ITY_I128 or shift) ? x.ity : y.ity
+    sgn := rt == ITY_I128
+    wx := wide_of(x)
+    wy := wide_of(y)
+    if op == tok.TK_PLUS:
+        ret wide_val(wd.Add(wx, wy), rt)
+    end
+    if op == tok.TK_MINUS:
+        ret wide_val(wd.Sub(wx, wy), rt)
+    end
+    if op == tok.TK_STAR:
+        ret wide_val(wd.Mul(wx, wy), rt)
+    end
+    if op == tok.TK_AMP:
+        ret wide_val(wd.And(wx, wy), rt)
+    end
+    if op == tok.TK_PIPE:
+        ret wide_val(wd.Or(wx, wy), rt)
+    end
+    if op == tok.TK_CARET:
+        ret wide_val(wd.Xor(wx, wy), rt)
+    end
+    if op == tok.TK_SHL:
+        ret wide_val(wd.Shl(wx, wy.lo as int), rt)
+    end
+    if op == tok.TK_SHR:
+        ret wide_val(sgn ? wd.ShrS(wx, wy.lo as int) : wd.ShrU(wx, wy.lo as int), rt)
+    end
+    if op == tok.TK_SLASH or op == tok.TK_PERCENT:
+        if wd.IsZero(wy):
+            rt_error(ip, a, n, op == tok.TK_SLASH ? i18.Tr("division by zero") : i18.Tr("modulo by zero"))
+            ret val_null()
+        end
+        if op == tok.TK_SLASH:
+            ret wide_val(sgn ? wd.DivS(wx, wy) : wd.DivU(wx, wy), rt)
+        end
+        ret wide_val(sgn ? wd.ModS(wx, wy) : wd.ModU(wx, wy), rt)
+    end
+    rt_error(ip, a, n, i18.Tr("unsupported arithmetic operator"))
+    ret val_null()
+end
+
+func wide_hash(ip &: Interp, a &: at.Ast, n: int, v: Value): Value:
+    hefi := find_extern_fn(ip, "salam_w128_hash")
+    if hefi == 0:
+        rt_error(ip, a, n, i18.Tr("'hash' is not supported by the interpreter"))
+        ret val_null()
+    end
+    mut hargs := Vector {} as Vector<Value>
+    hargs.push(val_int_ty(v.i, ITY_U64))
+    hargs.push(val_int_ty(v.pa, ITY_U64))
+    hef := ip.extern_fns.get(hefi)
+    hcl := ip.closures.get(hef.id)
+    ret call_func(ip, a, hcl.fn, hcl.env, false, val_null(), hargs)
+end

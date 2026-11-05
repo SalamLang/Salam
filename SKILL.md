@@ -415,9 +415,19 @@ x, y = y, x                   // assign several targets at once (swap)
 
 ## 3. Types & data
 
-**Primitives:** `i8 i16 i32 i64`, `u8 u16 u32 u64`, `usize size`, `f32 f64`,
-`bool`, `char`, `str`, `void`. Aliases: `int`=`i32`, `uint`=`u32`,
+**Primitives:** `i8 i16 i32 i64 i128`, `u8 u16 u32 u64 u128`, `usize size`,
+`f32 f64`, `bool`, `char`, `str`, `void`. Aliases: `int`=`i32`, `uint`=`u32`,
 `float`=`f32`. Literals: `42` (int), `3.14` (f64), `true`/`false`, `null`.
+**128-bit integers:** `i128` and `u128` work on every backend and target, with
+the same operators as the other widths: `hi := ((a as u128) * (b as u128)) >> 64`
+compiles to one `mul` on 64-bit targets. A literal above `u64` takes the
+smallest of `i128`, `u128` that holds it; `x := 1 as u128 << 100`, `0xFF_FF as
+u128`. Mixed widths follow the usual rule (same signedness widens implicitly).
+Shift counts mask to 0-127. A float cast saturates and NaN gives 0. They cannot
+index, size or bound a `repeat` (E159: cast to `i64` first), `json` derive
+refuses them, and an `extern` function can use them only on 64-bit targets
+(E160). On `salam js` they are exact BigInts, but a value that passes through
+`i64`/`u64` there is still limited to 2^53.
 **Pointer-width integers:** `usize` is unsigned (C `size_t`; Persian
 `اندازه مثبت`), `size` is signed (C `intptr_t`; Persian `اندازه`). Both are 64
 bits on 64-bit targets and 32 bits on 32-bit ones (wasm32, arm32).
@@ -580,6 +590,12 @@ A literal must carry the whole group: `Client { user = "u" }` is an error even i
 `c.pass = "p"` follows, and assigning to a field later is not checked.
 `Client { user = "" }` counts as given. When a guarantee must survive mutation,
 use an enum with data (`Basic(user: str, pass: str)`) or a constructor.
+
+A `needs` rule can test a value: `rule use_key == true needs key_pem`, also with
+numbers, strings and plain enum members (`rule mode == Mode.Tls needs cert`). The
+value on the right must be a literal or an enum member. An omitted field uses its
+default. If the literal's value is not a constant, the compiler assumes it may
+match and requires the field.
 
 `json.Unmarshal` enforces the same rules, a field with a default that a rule names
 is an optional key, and `json.Schema` emits `dependentRequired`, `oneOf`, `anyOf`
@@ -1071,7 +1087,7 @@ the import path with its dots kept as folders: `str`, `db/sqlite`, `net/http`,
 page opens with short tutorials, sections whose anchor starts with `guide-`
 (for example `/std/net/httpd/#guide-...`, and the guides of `audio` and its
 `wav dsp codec aiff au flac tag music synth midi mp3`, `net/httpd`, `net/httpd/conf`,
-`net/fastcgi`, `db/clickhouse`, `wire`, `net/nats`, `events`, `gui/webview`,
+`net/fastcgi`, `db/clickhouse`, `dependency`, `net/nats`, `events`, `gui/webview`,
 `gui/webview/pack` and `gui/webview/bundle`); read the guide before calling
 the functions. The `/learn/` course on both sites teaches the language only,
 not the libraries.
@@ -1286,6 +1302,19 @@ learning half is `f32` on `std/tensor`; the classical half is `f64` on
 - **`os.process`**: `Start(path, args) StartCaptured Wait Kill Terminate ReadStdout ReadStderr Cleanup ExitCode Pid IsRunning`. `IsRunning` is a
   flag, not a live check; `Kill` only signals, so `Wait` after it (zombie);
   `Wait` has no timeout; `Cleanup` a captured run (two temp files).
+  For live pipes use `Command` (`NewCommand Arg Env Unset Piped`, fields
+  `cwd stdin_mode stdout_mode stderr_mode clear_env new_group`, modes
+  `Inherit Pipe Null Merge`) and `Launch(cmd): Child`; `Child` has `Write
+WriteBytes CloseStdin ReadAvailable ReadLine Read ReadUntil ReadFor
+ReadBytes ReadErr* Wait(ms) Poll Signal Kill Terminate SignalGroup
+KillGroup Close`. Reads take a time in ms (0 only looks, negative waits
+  for ever) and return a `Chunk` (`data len eof timed_out`, `Free` it);
+  `Wait(ms)` returns a `Status` (`exited code signaled signal timed_out`,
+  `Success ReturnCode`). `RunTimeout(program, args, text, ms)` and
+  `RunCommand` capture stdout and stderr without deadlock and kill on
+  timeout (`RunResult`, `Free` it). **`os.pty`** `Open(cmd, rows, cols):
+process.Child` runs a program on a pseudo terminal (POSIX only; type
+  `\r` for Enter), `Resize GetSize Supported`.
   **`os.shell`** `Run Exec System` (code, stdout and stderr together),
   **`os.temp`** `File Directory Remove RemoveDir` (`Directory` returns `""`
   on failure; `File` always returns a path), **`os.user`** `Username HomeDir ConfigDir CacheDir` (env based; never for permissions), **`os.platform`**
@@ -1400,9 +1429,9 @@ end
   `.present .value`. Never read `.value` unchecked: on an empty
   `Option<str>` it is a null pointer and printing it segfaults. No `match`
   and no `?` on an Option.
-- **`wire`**: dependency injection, google/wire style. Providers are keyed by a
+- **`dependency`**: dependency injection, google/wire style. Providers are keyed by a
   name you choose (no runtime type identity): `New()`,
-  `Provide(c, "Service", "Repo", Service {}, (cx: wire.Container): ... end)` (the
+  `Provide(c, "Service", "Repo", Service {}, (cx: dependency.Container): ... end)` (the
   second string lists the needs, the value only fixes the type), `Value`,
   `Bind(c, "Store", "MemStore")`, `OnClose(c, name, T {}, (v: T): ... end)`,
   `Build(c)` (returns "" or a missing/duplicate/cycle message), `Get(c, name, out)`
@@ -2852,6 +2881,7 @@ are fine.
 | `str`            | `رشته`                       | `int` (`i32`)    | `صحیح` (`صحیح۳۲`)        |
 | `i8` `i16` `i64` | `صحیح۸` `صحیح۱۶` `صحیح۶۴`    | `uint` (`u32`)   | `طبیعی` (`طبیعی۳۲`)      |
 | `u8` `u16` `u64` | `طبیعی۸` `طبیعی۱۶` `طبیعی۶۴` | `usize` / `size` | `اندازه مثبت` / `اندازه` |
+| `i128`           | `صحیح۱۲۸`                    | `u128`           | `طبیعی۱۲۸`               |
 | `float` (`f32`)  | `اعشار` (`اعشار۳۲`)          | `f64`            | `اعشار۶۴`                |
 | `Vector<T>`      | `وکتور<T>`                   | `HashMap<K, V>`  | `نگاشت<K, V>`            |
 | `MapIter`        | `پیمایشگرنگاشت`              | `File`           | `پرونده`                 |

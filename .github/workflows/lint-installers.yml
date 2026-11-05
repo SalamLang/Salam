@@ -1,0 +1,113 @@
+---
+name: 📦 Lint - Installers
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - install.sh
+      - install.ps1
+      - install.bat
+      - .github/workflows/lint-installers.yml
+  push:
+    branches:
+      - main
+    paths:
+      - install.sh
+      - install.ps1
+      - install.bat
+      - .github/workflows/lint-installers.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: installers-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  unix:
+    name: install.sh parses and rejects bad options
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Syntax
+        run: |
+          sh -n install.sh
+          bash -n install.sh
+
+      - name: Help lists the options
+        run: |
+          sh install.sh --help 2>&1 | grep -e '--os NAME' -e '--arch NAME' -e '--platform NAME'
+
+      - name: Bad values stop with a message
+        run: |
+          out=$(sh install.sh --os windows 2>&1) && exit 1
+          printf '%s' "$out" | grep -q 'unknown --os value'
+          out=$(sh install.sh --arch sparc 2>&1) && exit 1
+          printf '%s' "$out" | grep -q 'unknown --arch value'
+          out=$(sh install.sh --os mac --arch armhf 2>&1) && exit 1
+          printf '%s' "$out" | grep -q 'macOS builds exist'
+
+      - name: Chosen build is the one downloaded
+        run: |
+          out=$(timeout 20 sh install.sh --dir "$RUNNER_TEMP/salam-x" --no-modify-path --no-color --arch i686 2>&1 || true)
+          printf '%s\n' "$out" | grep -q 'asset *linux-i686'
+          out=$(timeout 20 sh install.sh --dir "$RUNNER_TEMP/salam-y" --no-modify-path --no-color --os mac --arch arm64 2>&1 || true)
+          printf '%s\n' "$out" | grep -q 'asset *macos-arm64'
+
+  windows:
+    name: install.ps1 and install.bat parse and honour the options
+    runs-on: windows-2025
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Parse in Windows PowerShell and PowerShell 7
+        shell: powershell
+        run: |
+          $errors = $null
+          $tokens = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile("$PWD\install.ps1", [ref]$tokens, [ref]$errors)
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Host $_.Message }
+            exit 1
+          }
+          pwsh -NoProfile -Command "`$e = `$null; `$t = `$null; [void][System.Management.Automation.Language.Parser]::ParseFile('$PWD\install.ps1', [ref]`$t, [ref]`$e); if (`$e.Count -gt 0) { `$e | ForEach-Object { Write-Host `$_.Message }; exit 1 }"
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Help lists the options
+        shell: cmd
+        run: |
+          install.bat --help > help.txt 2>&1
+          findstr /C:"--os NAME" help.txt
+          findstr /C:"--arch NAME" help.txt
+          findstr /C:"--platform NAME" help.txt
+
+      - name: Bad values stop with a message
+        shell: powershell
+        run: |
+          $out = & powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 --arch sparc 2>&1 | Out-String
+          if ($LASTEXITCODE -eq 0 -or $out -notmatch 'unknown --arch value') { Write-Host $out; exit 1 }
+          $out = & powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 --os linux 2>&1 | Out-String
+          if ($LASTEXITCODE -eq 0 -or $out -notmatch 'install.sh') { Write-Host $out; exit 1 }
+          $out = & powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 --arch armhf 2>&1 | Out-String
+          if ($LASTEXITCODE -eq 0 -or $out -notmatch '32-bit ARM') { Write-Host $out; exit 1 }
+
+      - name: Install the 32-bit build and run it
+        shell: powershell
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          $dir = Join-Path $env:RUNNER_TEMP 'salam32'
+          & powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 --arch i686 --dir $dir --no-modify-path 2>&1 | Out-String | Write-Host
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          & (Join-Path $dir 'salam.exe') version
+          if ($LASTEXITCODE -ne 0) { exit 1 }

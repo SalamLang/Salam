@@ -716,6 +716,7 @@ func call_native_extern(
     mut ni := 0
     mut nf := 0
     mut mi := 0
+    mut hole := 0 - 1
     mut ref_idx := Vector {} as Vector<int>
     mut ref_slot := Vector {} as Vector<i64>
     defer ref_idx.free()
@@ -751,6 +752,27 @@ func call_native_extern(
             if host_is_32():
                 wargs.push(av)
             end
+        else int_ty_from_typestr(pts) >= ITY_I128 and not pn.is_ref:
+            if host_is_win64():
+                rt_error(ip, a, call, i18.Tr("the interpreter cannot pass a 128-bit integer to a native function on Windows (use 'salam run' instead)"))
+                ret val_null()
+            end
+            if SALAM_ARCH_ARM64 and ni % 2 == 1:
+                ni += 1
+            else SALAM_ARCH_X64 and ni == 5:
+                hole = 5
+                ni = 6
+            end
+            if ni + 2 > 8:
+                break
+            end
+            wv := wide_coerce_val(av, int_ty_from_typestr(pts))
+            iv[ni] = wv.i
+            iv[ni + 1] = wv.pa
+            ni += 2
+        else hole >= 0:
+            iv[hole] = marshal_arg(ip, av)
+            hole = 0 - 1
         else:
             if ni >= 8:
                 break
@@ -805,6 +827,10 @@ func call_native_extern(
             ff := fp as extern func (i64, i64, i64, i64, i64, i64, i64, i64, f64, f64, f64, f64, f64, f64, f64, f64) f64
             d := ff(iv[0], iv[1], iv[2], iv[3], iv[4], iv[5], iv[6], iv[7], fv[0], fv[1], fv[2], fv[3], fv[4], fv[5], fv[6], fv[7])
             result = val_float(str.Equals(base_typename(rts), "f32") ? f32_from_f64_bits(d) : d)
+        else int_ty_from_typestr(base_typename(rts)) >= ITY_I128:
+            fw := fp as extern func (i64, i64, i64, i64, i64, i64, i64, i64, f64, f64, f64, f64, f64, f64, f64, f64) FfiWord2
+            wr := fw(iv[0], iv[1], iv[2], iv[3], iv[4], iv[5], iv[6], iv[7], fv[0], fv[1], fv[2], fv[3], fv[4], fv[5], fv[6], fv[7])
+            result = Value { kind = VAL_INT, ity = int_ty_from_typestr(base_typename(rts)), i = wr.lo, pa = wr.hi }
         else:
             fi := fp as extern func (i64, i64, i64, i64, i64, i64, i64, i64, f64, f64, f64, f64, f64, f64, f64, f64) i64
             r2 := fi(iv[0], iv[1], iv[2], iv[3], iv[4], iv[5], iv[6], iv[7], fv[0], fv[1], fv[2], fv[3], fv[4], fv[5], fv[6], fv[7])

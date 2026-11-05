@@ -1,9 +1,11 @@
-import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type ReactNode } from "react";
 import type { OutgoingFile } from "./api";
 import { acceptList, kindOf, PendingChips, toOutgoing, useCapabilities, type Pending } from "./Attach";
 import { EffortPicker } from "./effort";
 import { IconPaperclip, IconQueueAdd, IconSend, IconStop } from "./icons";
 import { t } from "./i18n";
+import { pushToast } from "./Toasts";
+import { useVoiceInput, VoiceBar, VoiceButton } from "./Voice";
 
 type Props = {
   busy: boolean;
@@ -22,6 +24,8 @@ type Props = {
 
 const RTL_FIRST = /^[^A-Za-z֐-ࣿיִ-﷿ﹰ-﻿]*[֐-ࣿיִ-﷿ﹰ-﻿]/;
 
+const MAX_TEXT = 12000;
+
 let seq = 0;
 
 export function Composer({ busy, disabled, onSend, onStop, onQueue, queueing, autoFocus, bar, placeholder, note, draft, onDraftUsed }: Props) {
@@ -33,6 +37,27 @@ export function Composer({ busy, disabled, onSend, onStop, onQueue, queueing, au
   const ref = useRef<HTMLTextAreaElement>(null);
   const picker = useRef<HTMLInputElement>(null);
   const caps = useCapabilities();
+  const addSpoken = useCallback((spoken: string) => {
+    const current = ref.current?.value ?? "";
+    const base = current.trimEnd();
+    const joined = base ? `${base}${current.endsWith("\n") ? "\n" : " "}${spoken}` : spoken;
+    if (joined.length > MAX_TEXT) {
+      pushToast({ tone: "failed", title: t("متن بلندتر از اندازه‌ی یک پیام است", "The text is longer than one message"), body: t("پایان آن کوتاه شد. آن را بررسی کنید.", "Its end was cut. Please review it.") });
+    }
+    const next = joined.slice(0, MAX_TEXT);
+    setText(next);
+    requestAnimationFrame(() => {
+      const el = ref.current;
+      if (!el) return;
+      el.scrollTop = el.scrollHeight;
+      if (matchMedia("(pointer: fine)").matches) {
+        el.focus();
+        el.setSelectionRange(next.length, next.length);
+      }
+    });
+  }, []);
+  const voice = useVoiceInput(caps, addSpoken);
+  const voiceActive = voice.stage !== "idle";
   const hint = placeholder || t("پرسش خود را درباره‌ی زبان سلام بنویسید…", "Ask anything about the Salam language…");
 
   useEffect(() => {
@@ -92,7 +117,7 @@ export function Composer({ busy, disabled, onSend, onStop, onQueue, queueing, au
   const send = async () => {
     const typed = text.trim();
     const later = !!onQueue && (busy || !!queueing);
-    if ((!typed && files.length === 0) || (busy && !later) || disabled || sending) return;
+    if ((!typed && files.length === 0) || (busy && !later) || disabled || sending || voiceActive) return;
     const keep = { text, files };
     setSending(true);
     try {
@@ -133,7 +158,7 @@ export function Composer({ busy, disabled, onSend, onStop, onQueue, queueing, au
   };
 
   const canAttach = !!caps && !disabled;
-  const ready = (text.trim().length > 0 || files.length > 0) && !disabled && !sending;
+  const ready = (text.trim().length > 0 || files.length > 0) && !disabled && !sending && !voiceActive;
 
   return (
     <div
@@ -157,6 +182,7 @@ export function Composer({ busy, disabled, onSend, onStop, onQueue, queueing, au
         }}
       >
         <PendingChips items={files} onRemove={remove} />
+        <VoiceBar voice={voice} />
         <div className="composer-row">
           {canAttach && caps && (
             <>
@@ -182,12 +208,13 @@ export function Composer({ busy, disabled, onSend, onStop, onQueue, queueing, au
               />
             </>
           )}
+          <VoiceButton voice={voice} disabled={disabled} />
           <textarea
             ref={ref}
             dir={text ? "auto" : RTL_FIRST.test(hint) ? "rtl" : "ltr"}
             rows={1}
             value={text}
-            maxLength={12000}
+            maxLength={MAX_TEXT}
             placeholder={hint}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={onKey}

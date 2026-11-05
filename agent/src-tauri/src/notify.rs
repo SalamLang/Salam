@@ -408,6 +408,15 @@ fn icon_file(app: &AppHandle) -> Option<PathBuf> {
     .clone()
 }
 
+#[cfg(all(unix, not(target_os = "macos")))]
+fn linux_sound(kind: Kind) -> &'static str {
+    if kind.failure() || kind.urgent() {
+        "dialog-warning"
+    } else {
+        "message-new-instant"
+    }
+}
+
 fn show(app: &AppHandle, kind: Kind, title: &str, body: &str, sound: bool) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     if !crate::config::bundled() {
@@ -445,20 +454,16 @@ fn show(app: &AppHandle, kind: Kind, title: &str, body: &str, sound: bool) -> Re
             if kind.failure() { "network.error" } else { "im.received" }.to_string(),
         ));
         if sound {
-            n.hint(Hint::SoundName(
-                (if kind.failure() || kind.urgent() {
-                    "dialog-warning"
-                } else {
-                    "message-new-instant"
-                })
-                .to_string(),
-            ));
+            n.hint(Hint::SoundName(linux_sound(kind).to_string()));
         } else {
             n.hint(Hint::SuppressSound(true));
         }
         n.action("default", "Open");
     }
-    let result = fire(app, &n);
+    #[cfg(all(unix, not(target_os = "macos")))]
+    let result = fire(app, &n, sound.then(|| linux_sound(kind)));
+    #[cfg(any(windows, target_os = "macos"))]
+    let result = fire(app, &n, None);
     #[cfg(target_os = "macos")]
     if result.is_err() {
         return script(title, body, kind, sound);
@@ -495,8 +500,46 @@ fn quoted(text: &str) -> String {
 }
 
 #[cfg(all(unix, not(target_os = "macos")))]
-fn fire(app: &AppHandle, n: &notify_rust::Notification) -> Result<(), String> {
+fn server_plays_sound() -> bool {
+    static SOUND: OnceLock<bool> = OnceLock::new();
+    *SOUND.get_or_init(|| {
+        notify_rust::get_capabilities()
+            .map(|caps| caps.iter().any(|c| c == "sound"))
+            .unwrap_or(false)
+    })
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn sound_script(name: &str) -> String {
+    let file = format!("/usr/share/sounds/freedesktop/stereo/{name}.oga");
+    format!(
+        "if command -v canberra-gtk-play >/dev/null 2>&1; then canberra-gtk-play -i {name} -d salam; \
+         elif command -v paplay >/dev/null 2>&1 && [ -r {file} ]; then paplay {file}; \
+         elif command -v pw-play >/dev/null 2>&1 && [ -r {file} ]; then pw-play {file}; fi"
+    )
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn play_sound(name: &'static str) {
+    std::thread::spawn(move || {
+        let _ = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(sound_script(name))
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .status();
+    });
+}
+
+#[cfg(all(unix, not(target_os = "macos")))]
+fn fire(app: &AppHandle, n: &notify_rust::Notification, sound: Option<&'static str>) -> Result<(), String> {
     let handle = n.show().map_err(|e| e.to_string())?;
+    if let Some(name) = sound {
+        if !server_plays_sound() {
+            play_sound(name);
+        }
+    }
     let app = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         handle.wait_for_action(|action| {
@@ -509,7 +552,7 @@ fn fire(app: &AppHandle, n: &notify_rust::Notification) -> Result<(), String> {
 }
 
 #[cfg(any(windows, target_os = "macos"))]
-fn fire(_app: &AppHandle, n: &notify_rust::Notification) -> Result<(), String> {
+fn fire(_app: &AppHandle, n: &notify_rust::Notification, _sound: Option<&'static str>) -> Result<(), String> {
     n.show().map(|_| ()).map_err(|e| e.to_string())
 }
 
@@ -676,6 +719,16 @@ mod tests {
     fn a_notice_can_carry_the_message_it_is_about() {
         assert_eq!(Notice::new(Kind::Done).mid, None);
         assert_eq!(Notice::new(Kind::Done).mid(12).mid, Some(12));
+    }
+
+    #[cfg(all(unix, not(target_os = "macos")))]
+    #[test]
+    fn linux_fallback_plays_a_freedesktop_sound() {
+        assert_eq!(linux_sound(Kind::Done), "message-new-instant");
+        assert_eq!(linux_sound(Kind::Approval), "dialog-warning");
+        let script = sound_script("message-new-instant");
+        assert!(script.contains("canberra-gtk-play -i message-new-instant"));
+        assert!(script.contains("/usr/share/sounds/freedesktop/stereo/message-new-instant.oga"));
     }
 
     #[cfg(target_os = "macos")]

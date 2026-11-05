@@ -14,7 +14,6 @@ type Item = {
 
 let items: Item[] = [];
 let next = 1;
-let sound = true;
 const listeners = new Set<() => void>();
 const timers = new Map<number, number>();
 
@@ -66,49 +65,121 @@ export function dismissToast(id: number) {
   emit();
 }
 
-export function setToastSound(on: boolean) {
-  sound = on;
+const CHIME_KEY = "salam-chime";
+
+function readChime(): boolean {
+  try {
+    return localStorage.getItem(CHIME_KEY) !== "off";
+  } catch {
+    return true;
+  }
+}
+
+let chimeOn = readChime();
+
+export function chimeEnabled(): boolean {
+  return chimeOn;
+}
+
+export function setChimeEnabled(on: boolean) {
+  chimeOn = on;
+  try {
+    if (on) localStorage.removeItem(CHIME_KEY);
+    else localStorage.setItem(CHIME_KEY, "off");
+  } catch {}
 }
 
 let audio: AudioContext | null = null;
 
-export function chime(tone: ToastTone = "info") {
-  if (!sound) return;
+function context(): AudioContext | null {
+  if (audio) return audio;
   try {
     const Ctor =
       window.AudioContext ??
       (window as unknown as { webkitAudioContext?: typeof AudioContext })
         .webkitAudioContext;
-    if (!Ctor) return;
-    audio ??= new Ctor();
-    const ctx = audio;
-    if (ctx.state === "suspended") void ctx.resume();
-    const notes =
-      tone === "failed"
-        ? [392, 294]
-        : tone === "approval"
-          ? [523.25, 659.25]
-          : tone === "done"
-            ? [659.25, 987.77]
-            : [783.99];
-    const start = ctx.currentTime + 0.01;
-    for (const [i, hz] of notes.entries()) {
-      const at = start + i * 0.12;
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.type = "sine";
-      osc.frequency.setValueAtTime(hz, at);
-      gain.gain.setValueAtTime(0.0001, at);
-      gain.gain.exponentialRampToValueAtTime(
-        tone === "failed" ? 0.1 : 0.13,
-        at + 0.02,
-      );
-      gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.34);
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.start(at);
-      osc.stop(at + 0.38);
+    if (!Ctor) return null;
+    audio = new Ctor();
+  } catch {
+    audio = null;
+  }
+  return audio;
+}
+
+function unlock() {
+  const ctx = context();
+  if (!ctx) return;
+  if (ctx.state === "suspended") ctx.resume().catch(() => {});
+  if (ctx.state === "running" || ctx.state === "suspended") {
+    try {
+      const silent = ctx.createBuffer(1, 1, 22050);
+      const src = ctx.createBufferSource();
+      src.buffer = silent;
+      src.connect(ctx.destination);
+      src.start(0);
+    } catch {}
+  }
+}
+
+const GESTURES = ["pointerdown", "keydown", "touchend"] as const;
+
+function armUnlock() {
+  if (typeof window === "undefined") return;
+  const once = () => {
+    unlock();
+    if (audio && audio.state === "running") {
+      for (const g of GESTURES) window.removeEventListener(g, once, true);
     }
+  };
+  for (const g of GESTURES) window.addEventListener(g, once, true);
+}
+
+armUnlock();
+
+function play(ctx: AudioContext, tone: ToastTone) {
+  const notes =
+    tone === "failed"
+      ? [392, 294]
+      : tone === "approval"
+        ? [523.25, 659.25]
+        : tone === "done"
+          ? [659.25, 987.77]
+          : [783.99];
+  const start = ctx.currentTime + 0.01;
+  for (const [i, hz] of notes.entries()) {
+    const at = start + i * 0.12;
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(hz, at);
+    gain.gain.setValueAtTime(0.0001, at);
+    gain.gain.exponentialRampToValueAtTime(
+      tone === "failed" ? 0.1 : 0.13,
+      at + 0.02,
+    );
+    gain.gain.exponentialRampToValueAtTime(0.0001, at + 0.34);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start(at);
+    osc.stop(at + 0.38);
+  }
+}
+
+export function chime(tone: ToastTone = "info") {
+  if (!chimeOn) return;
+  try {
+    const ctx = context();
+    if (!ctx) return;
+    if (ctx.state === "running") {
+      play(ctx, tone);
+      return;
+    }
+    ctx
+      .resume()
+      .then(() => {
+        if (ctx.state === "running") play(ctx, tone);
+      })
+      .catch(() => {});
   } catch {}
 }
 

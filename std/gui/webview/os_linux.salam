@@ -34,6 +34,7 @@ if SALAM_OS_LINUX and not SALAM_WEBVIEW_CEF:
             flags: int, callback: void*, data: void*, free_data: void*
         ): u32
         func g_variant_unref(value: void*)
+        func g_variant_print(value: void*, annotate: int): void*
         func g_bus_get_sync(kind: int, cancellable: void*, error: void*): void*
         func g_dbus_connection_call_sync(
             connection: void*, destination: str, path: str, iface: str, method: str, params: void*,
@@ -82,6 +83,7 @@ if SALAM_OS_LINUX and not SALAM_WEBVIEW_CEF:
     mut _lx_tray_lib := null as void*
     mut _lx_instance_fd := -1
     mut _lx_click_listening := false
+    mut _lx_server_sounds := -1
 
     export:
         func salam_desktop_lx_menu(_item: void*, data: void*):
@@ -208,6 +210,38 @@ if SALAM_OS_LINUX and not SALAM_WEBVIEW_CEF:
         ret answer == -8 or answer == -5
     end
 
+    func _lx_server_plays_sound(bus: void*): bool:
+        if _lx_server_sounds >= 0:
+            ret _lx_server_sounds == 1
+        end
+        reply := g_dbus_connection_call_sync(
+            bus, "org.freedesktop.Notifications", "/org/freedesktop/Notifications",
+            "org.freedesktop.Notifications", "GetCapabilities", null, null, 0, 2000, null, null
+        )
+        if reply == null:
+            ret false
+        end
+        raw := g_variant_print(reply, 0)
+        g_variant_unref(reply)
+        mut found := false
+        if raw != null:
+            found = str.Contains(raw as str, "'sound'")
+            g_free(raw)
+        end
+        _lx_server_sounds = found ? 1 : 0
+        ret found
+    end
+
+    func _lx_play_sound(sound: str):
+        name := sound == "alert" ? "dialog-warning" : "message-new-instant"
+        script := "( if command -v canberra-gtk-play >/dev/null 2>&1; then canberra-gtk-play -i " + name + " -d salam; elif command -v paplay >/dev/null 2>&1 && [ -r /usr/share/sounds/freedesktop/stereo/" + name + ".oga ]; then paplay /usr/share/sounds/freedesktop/stereo/" + name + ".oga; elif command -v pw-play >/dev/null 2>&1 && [ -r /usr/share/sounds/freedesktop/stereo/" + name + ".oga ]; then pw-play /usr/share/sounds/freedesktop/stereo/" + name + ".oga; fi ) >/dev/null 2>&1 &"
+        mut args := Vector {} as Vector<str>
+        defer args.free()
+        args.push("-c")
+        args.push(script)
+        _result := shell.Run("/bin/sh", args)
+    end
+
     func _os_notify(title: str, body: str, sound: str): bool:
         bus := g_bus_get_sync(2, null, null)
         if bus == null:
@@ -243,6 +277,9 @@ if SALAM_OS_LINUX and not SALAM_WEBVIEW_CEF:
             ret false
         end
         g_variant_unref(reply)
+        if sound.len() > 0 and not _lx_server_plays_sound(bus):
+            _lx_play_sound(sound)
+        end
         ret true
     end
 

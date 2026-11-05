@@ -1,0 +1,318 @@
+package codegen
+
+import str
+
+include co "../sal_core.salam"
+include tok "../token.salam"
+include at "../ast.salam"
+include sm "../semantic/semantic.salam"
+include wd "../wide.salam"
+
+k_cg_wide_hdr := `
+#ifndef SALAM_W128_DEFINED
+#define SALAM_W128_DEFINED
+extern const char* salam_w128_str(uint64_t lo, uint64_t hi, int32_t sgn);
+extern void salam_w128_divmod(uint64_t a_lo, uint64_t a_hi, uint64_t b_lo, uint64_t b_hi, int32_t mode, uint64_t* out);
+extern double salam_w128_to_f64(uint64_t lo, uint64_t hi, int32_t sgn);
+extern float salam_w128_to_f32(uint64_t lo, uint64_t hi, int32_t sgn);
+extern void salam_w128_from_f64(double f, int32_t sgn, uint64_t* out);
+extern uint64_t salam_w128_hash(uint64_t lo, uint64_t hi);
+#if defined(__GNUC__) || defined(__clang__)
+#define SALAM_W_FN static inline __attribute__((always_inline, unused))
+#else
+#define SALAM_W_FN static inline
+#endif
+#if defined(__SIZEOF_INT128__) && !defined(SALAM_NO_INT128)
+__extension__ typedef __int128 salam_i128;
+__extension__ typedef unsigned __int128 salam_u128;
+#define SALAM_I128_C(hi, lo) ((salam_i128)(((salam_u128)(hi) << 64) | (salam_u128)(lo)))
+#define SALAM_U128_C(hi, lo) (((salam_u128)(hi) << 64) | (salam_u128)(lo))
+#define SALAM_W_AS(T, x) ((T)(x))
+SALAM_W_FN uint64_t salam_w_lo(salam_u128 a) { return (uint64_t)a; }
+SALAM_W_FN uint64_t salam_w_hi(salam_u128 a) { return (uint64_t)(a >> 64); }
+SALAM_W_FN salam_u128 salam_w_make(uint64_t hi, uint64_t lo) { return ((salam_u128)hi << 64) | lo; }
+SALAM_W_FN bool salam_w_nz(salam_u128 a) { return a != 0; }
+SALAM_W_FN salam_u128 salam_w_add(salam_u128 a, salam_u128 b) { return a + b; }
+SALAM_W_FN salam_u128 salam_w_sub(salam_u128 a, salam_u128 b) { return a - b; }
+SALAM_W_FN salam_u128 salam_w_mul(salam_u128 a, salam_u128 b) { return a * b; }
+SALAM_W_FN salam_u128 salam_w_and(salam_u128 a, salam_u128 b) { return a & b; }
+SALAM_W_FN salam_u128 salam_w_or(salam_u128 a, salam_u128 b) { return a | b; }
+SALAM_W_FN salam_u128 salam_w_xor(salam_u128 a, salam_u128 b) { return a ^ b; }
+SALAM_W_FN salam_u128 salam_w_not(salam_u128 a) { return ~a; }
+SALAM_W_FN salam_u128 salam_w_neg(salam_u128 a) { return 0 - a; }
+SALAM_W_FN salam_u128 salam_w_shl(salam_u128 a, int n) { return a << (n & 127); }
+SALAM_W_FN salam_u128 salam_w_lshr(salam_u128 a, int n) { return a >> (n & 127); }
+SALAM_W_FN salam_u128 salam_w_ashr(salam_u128 a, int n) { return (salam_u128)((salam_i128)a >> (n & 127)); }
+SALAM_W_FN bool salam_w_eq(salam_u128 a, salam_u128 b) { return a == b; }
+SALAM_W_FN bool salam_w_ult(salam_u128 a, salam_u128 b) { return a < b; }
+SALAM_W_FN bool salam_w_slt(salam_u128 a, salam_u128 b) { return (salam_i128)a < (salam_i128)b; }
+SALAM_W_FN salam_u128 salam_w_udiv(salam_u128 a, salam_u128 b) { if (b == 0) { salam_out_flush(); salam_div0(0); } return a / b; }
+SALAM_W_FN salam_u128 salam_w_umod(salam_u128 a, salam_u128 b) { if (b == 0) { salam_out_flush(); salam_div0(1); } return a % b; }
+SALAM_W_FN salam_u128 salam_w_sdiv(salam_u128 a, salam_u128 b) {
+    if (b == 0) { salam_out_flush(); salam_div0(0); }
+    if ((salam_i128)b == -1) return 0 - a;
+    return (salam_u128)((salam_i128)a / (salam_i128)b);
+}
+SALAM_W_FN salam_u128 salam_w_smod(salam_u128 a, salam_u128 b) {
+    if (b == 0) { salam_out_flush(); salam_div0(1); }
+    if ((salam_i128)b == -1) return 0;
+    return (salam_u128)((salam_i128)a % (salam_i128)b);
+}
+#else
+#if defined(_MSC_VER) && !defined(__clang__)
+typedef __declspec(align(16)) struct { uint64_t lo; uint64_t hi; } salam_u128;
+#elif defined(__arm__)
+typedef struct { uint64_t lo; uint64_t hi; } __attribute__((aligned(8))) salam_u128;
+#else
+typedef struct { uint64_t lo; uint64_t hi; } __attribute__((aligned(16))) salam_u128;
+#endif
+typedef salam_u128 salam_i128;
+#define SALAM_I128_C(hi_, lo_) ((salam_i128){ (uint64_t)(lo_), (uint64_t)(hi_) })
+#define SALAM_U128_C(hi_, lo_) ((salam_u128){ (uint64_t)(lo_), (uint64_t)(hi_) })
+#define SALAM_W_AS(T, x) (x)
+SALAM_W_FN uint64_t salam_w_lo(salam_u128 a) { return a.lo; }
+SALAM_W_FN uint64_t salam_w_hi(salam_u128 a) { return a.hi; }
+SALAM_W_FN salam_u128 salam_w_make(uint64_t hi, uint64_t lo) { salam_u128 r; r.lo = lo; r.hi = hi; return r; }
+SALAM_W_FN bool salam_w_nz(salam_u128 a) { return (a.lo | a.hi) != 0; }
+SALAM_W_FN salam_u128 salam_w_add(salam_u128 a, salam_u128 b) { uint64_t lo = a.lo + b.lo; return salam_w_make(a.hi + b.hi + (lo < a.lo), lo); }
+SALAM_W_FN salam_u128 salam_w_sub(salam_u128 a, salam_u128 b) { return salam_w_make(a.hi - b.hi - (a.lo < b.lo), a.lo - b.lo); }
+SALAM_W_FN salam_u128 salam_w_mul(salam_u128 a, salam_u128 b) {
+    uint64_t al = a.lo & 0xFFFFFFFFu, ah = a.lo >> 32, bl = b.lo & 0xFFFFFFFFu, bh = b.lo >> 32;
+    uint64_t ll = al * bl, lh = al * bh, hl = ah * bl, hh = ah * bh;
+    uint64_t mid = (ll >> 32) + (lh & 0xFFFFFFFFu) + (hl & 0xFFFFFFFFu);
+    uint64_t lo = (ll & 0xFFFFFFFFu) | (mid << 32);
+    return salam_w_make(hh + (lh >> 32) + (hl >> 32) + (mid >> 32) + a.lo * b.hi + a.hi * b.lo, lo);
+}
+SALAM_W_FN salam_u128 salam_w_and(salam_u128 a, salam_u128 b) { return salam_w_make(a.hi & b.hi, a.lo & b.lo); }
+SALAM_W_FN salam_u128 salam_w_or(salam_u128 a, salam_u128 b) { return salam_w_make(a.hi | b.hi, a.lo | b.lo); }
+SALAM_W_FN salam_u128 salam_w_xor(salam_u128 a, salam_u128 b) { return salam_w_make(a.hi ^ b.hi, a.lo ^ b.lo); }
+SALAM_W_FN salam_u128 salam_w_not(salam_u128 a) { return salam_w_make(~a.hi, ~a.lo); }
+SALAM_W_FN salam_u128 salam_w_neg(salam_u128 a) { return salam_w_make(0 - a.hi - (a.lo != 0), 0 - a.lo); }
+SALAM_W_FN salam_u128 salam_w_shl(salam_u128 a, int n) {
+    n &= 127;
+    if (n == 0) return a;
+    if (n >= 64) return salam_w_make(a.lo << (n - 64), 0);
+    return salam_w_make((a.hi << n) | (a.lo >> (64 - n)), a.lo << n);
+}
+SALAM_W_FN salam_u128 salam_w_lshr(salam_u128 a, int n) {
+    n &= 127;
+    if (n == 0) return a;
+    if (n >= 64) return salam_w_make(0, a.hi >> (n - 64));
+    return salam_w_make(a.hi >> n, (a.lo >> n) | (a.hi << (64 - n)));
+}
+SALAM_W_FN salam_u128 salam_w_ashr(salam_u128 a, int n) {
+    uint64_t fill = (a.hi >> 63) ? ~(uint64_t)0 : 0;
+    n &= 127;
+    if (n == 0) return a;
+    if (n == 64) return salam_w_make(fill, a.hi);
+    if (n > 64) return salam_w_make(fill, (a.hi >> (n - 64)) | (fill << (128 - n)));
+    return salam_w_make((a.hi >> n) | (fill << (64 - n)), (a.lo >> n) | (a.hi << (64 - n)));
+}
+SALAM_W_FN bool salam_w_eq(salam_u128 a, salam_u128 b) { return a.lo == b.lo && a.hi == b.hi; }
+SALAM_W_FN bool salam_w_ult(salam_u128 a, salam_u128 b) { return a.hi != b.hi ? a.hi < b.hi : a.lo < b.lo; }
+SALAM_W_FN bool salam_w_slt(salam_u128 a, salam_u128 b) { return a.hi != b.hi ? (int64_t)a.hi < (int64_t)b.hi : a.lo < b.lo; }
+SALAM_W_FN salam_u128 salam_w_udiv(salam_u128 a, salam_u128 b) { uint64_t o[4]; salam_w128_divmod(a.lo, a.hi, b.lo, b.hi, 0, o); return salam_w_make(o[1], o[0]); }
+SALAM_W_FN salam_u128 salam_w_umod(salam_u128 a, salam_u128 b) { uint64_t o[4]; salam_w128_divmod(a.lo, a.hi, b.lo, b.hi, 2, o); return salam_w_make(o[3], o[2]); }
+SALAM_W_FN salam_u128 salam_w_sdiv(salam_u128 a, salam_u128 b) { uint64_t o[4]; salam_w128_divmod(a.lo, a.hi, b.lo, b.hi, 1, o); return salam_w_make(o[1], o[0]); }
+SALAM_W_FN salam_u128 salam_w_smod(salam_u128 a, salam_u128 b) { uint64_t o[4]; salam_w128_divmod(a.lo, a.hi, b.lo, b.hi, 3, o); return salam_w_make(o[3], o[2]); }
+#endif
+SALAM_W_FN salam_u128 salam_w_from_i64(int64_t v) { return salam_w_make(v < 0 ? ~(uint64_t)0 : 0, (uint64_t)v); }
+SALAM_W_FN salam_u128 salam_w_from_u64(uint64_t v) { return salam_w_make(0, v); }
+SALAM_W_FN salam_u128 salam_w_from_f64(double f, int32_t sgn) { uint64_t o[2]; salam_w128_from_f64(f, sgn, o); return salam_w_make(o[1], o[0]); }
+SALAM_W_FN double salam_w_to_f64(salam_u128 a, int32_t sgn) { return salam_w128_to_f64(salam_w_lo(a), salam_w_hi(a), sgn); }
+SALAM_W_FN float salam_w_to_f32(salam_u128 a, int32_t sgn) { return salam_w128_to_f32(salam_w_lo(a), salam_w_hi(a), sgn); }
+SALAM_W_FN const char* salam_tostr_i128(salam_u128 a) { return salam_w128_str(salam_w_lo(a), salam_w_hi(a), 1); }
+SALAM_W_FN const char* salam_tostr_u128(salam_u128 a) { return salam_w128_str(salam_w_lo(a), salam_w_hi(a), 0); }
+SALAM_W_FN uint64_t salam_w_hash(salam_u128 a) { return salam_w128_hash(salam_w_lo(a), salam_w_hi(a)); }
+#endif
+`
+
+func cg_wide_ts(ts: str): bool:
+    ret str.Equals(ts, "i128") or str.Equals(ts, "u128")
+end
+
+func cg_wide_lit(ts: str, hi: u64, lo: u64): str:
+    mac := str.Equals(ts, "i128") ? "SALAM_I128_C(" : "SALAM_U128_C("
+    ret mac + co.U64Toa(hi) + "ULL, " + co.U64Toa(lo) + "ULL)"
+end
+
+func cg_wide_binary(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int, cts: str): str:
+    nn := at.Get(a, n)
+    op := nn.op
+    ct := cg_ctype(cts)
+    sgn := str.Equals(cts, "i128")
+    ea := cg_expr(g, s, a, nn.a)
+    if op == tok.TK_SHL or op == tok.TK_SHR:
+        eb := cg_wide_ts(at.Get(a, nn.b).type_str) ? "(int)salam_w_lo(" + cg_expr(g, s, a, nn.b) + ")" : "(int)(" + cg_expr(g, s, a, nn.b) + ")"
+        if op == tok.TK_SHL:
+            ret "SALAM_W_AS(" + ct + ", salam_w_shl(" + ea + ", " + eb + "))"
+        end
+        ret "SALAM_W_AS(" + ct + ", " + (sgn ? "salam_w_ashr(" : "salam_w_lshr(") + ea + ", " + eb + "))"
+    end
+    eb2 := cg_expr(g, s, a, nn.b)
+    if op == tok.TK_EQ:
+        ret "salam_w_eq(" + ea + ", " + eb2 + ")"
+    end
+    if op == tok.TK_NE:
+        ret "(!salam_w_eq(" + ea + ", " + eb2 + "))"
+    end
+    lt_fn := sgn ? "salam_w_slt(" : "salam_w_ult("
+    if op == tok.TK_LT:
+        ret lt_fn + ea + ", " + eb2 + ")"
+    end
+    if op == tok.TK_GE:
+        ret "(!" + lt_fn + ea + ", " + eb2 + "))"
+    end
+    if op == tok.TK_GT or op == tok.TK_LE:
+        g.tmpn += 1
+        t := g.tmpn
+        neg := op == tok.TK_LE ? "!" : ""
+        ret "({ " + ct + " __wa" + t + " = (" + ea + "); " + neg + lt_fn + eb2 + ", __wa" + t + "); })"
+    end
+    mut fnm := ""
+    if op == tok.TK_PLUS:
+        fnm = "salam_w_add"
+    else op == tok.TK_MINUS:
+        fnm = "salam_w_sub"
+    else op == tok.TK_STAR:
+        fnm = "salam_w_mul"
+    else op == tok.TK_AMP:
+        fnm = "salam_w_and"
+    else op == tok.TK_PIPE:
+        fnm = "salam_w_or"
+    else op == tok.TK_CARET:
+        fnm = "salam_w_xor"
+    else op == tok.TK_SLASH:
+        fnm = sgn ? "salam_w_sdiv" : "salam_w_udiv"
+    else op == tok.TK_PERCENT:
+        fnm = sgn ? "salam_w_smod" : "salam_w_umod"
+    else:
+        ret "0"
+    end
+    ret "SALAM_W_AS(" + ct + ", " + fnm + "(" + ea + ", " + eb2 + "))"
+end
+
+func cg_wide_compound(op: int, sgn: bool): str:
+    if op == tok.TK_PLUS_EQ:
+        ret "salam_w_add"
+    end
+    if op == tok.TK_MINUS_EQ:
+        ret "salam_w_sub"
+    end
+    if op == tok.TK_STAR_EQ:
+        ret "salam_w_mul"
+    end
+    if op == tok.TK_SLASH_EQ:
+        ret sgn ? "salam_w_sdiv" : "salam_w_udiv"
+    end
+    if op == tok.TK_PERCENT_EQ:
+        ret sgn ? "salam_w_smod" : "salam_w_umod"
+    end
+    if op == tok.TK_AMP_EQ:
+        ret "salam_w_and"
+    end
+    if op == tok.TK_PIPE_EQ:
+        ret "salam_w_or"
+    end
+    if op == tok.TK_CARET_EQ:
+        ret "salam_w_xor"
+    end
+    if op == tok.TK_SHL_EQ:
+        ret "salam_w_shl"
+    end
+    if op == tok.TK_SHR_EQ:
+        ret sgn ? "salam_w_ashr" : "salam_w_lshr"
+    end
+    ret ""
+end
+
+func cg_wide_assign(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): bool:
+    nn := at.Get(a, n)
+    ts := at.Get(a, nn.a).type_str
+    if nn.op == tok.TK_ASSIGN or not cg_wide_ts(ts):
+        ret false
+    end
+    ct := cg_ctype(ts)
+    fnm := cg_wide_compound(nn.op, str.Equals(ts, "i128"))
+    if str.Len(fnm) == 0:
+        ret false
+    end
+    g.tmpn += 1
+    t := g.tmpn
+    lhs := cg_expr(g, s, a, nn.a)
+    rhs := cg_expr(g, s, a, nn.b)
+    shift := nn.op == tok.TK_SHL_EQ or nn.op == tok.TK_SHR_EQ
+    cg_line(
+        g, "{ " + ct + " *__wp" + t + " = &(" + lhs + "); *__wp" + t + " = SALAM_W_AS(" + ct + ", " + fnm + "(*__wp" + t + ", " + (shift ? "(int)(" + rhs + ")" : rhs) + ")); }"
+    )
+    ret true
+end
+
+func cg_wide_incdec(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
+    nn := at.Get(a, n)
+    ts := at.Get(a, nn.a).type_str
+    ct := cg_ctype(ts)
+    g.tmpn += 1
+    t := g.tmpn
+    step := nn.op == tok.TK_PLUS_PLUS ? "salam_w_add" : "salam_w_sub"
+    upd := "*__wi" + t + " = SALAM_W_AS(" + ct + ", " + step + "(*__wi" + t + ", salam_w_make(0, 1)));"
+    if nn.is_prefix:
+        ret "({ " + ct + " *__wi" + t + " = &(" + cg_expr(g, s, a, nn.a) + "); " + upd + " *__wi" + t + "; })"
+    end
+    ret "({ " + ct + " *__wi" + t + " = &(" + cg_expr(g, s, a, nn.a) + "); " + ct + " __wo" + t + " = *__wi" + t + "; " + upd + " __wo" + t + "; })"
+end
+
+func cg_wide_cast(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int, sts: str, tgt: str): str:
+    nn := at.Get(a, n)
+    e := cg_expr(g, s, a, nn.a)
+    if cg_wide_ts(tgt):
+        ct := cg_ctype(tgt)
+        if cg_wide_ts(sts):
+            ret "SALAM_W_AS(" + ct + ", " + e + ")"
+        end
+        if str.Equals(sts, "f64") or str.Equals(sts, "f32"):
+            ret "SALAM_W_AS(" + ct + ", salam_w_from_f64((double)(" + e + "), " + (str.Equals(tgt, "i128") ? "1" : "0") + "))"
+        end
+        if cg_is_unsigned_typestr(sts) or str.Equals(sts, "bool"):
+            ret "SALAM_W_AS(" + ct + ", salam_w_from_u64((uint64_t)(" + e + ")))"
+        end
+        ret "SALAM_W_AS(" + ct + ", salam_w_from_i64((int64_t)(" + e + ")))"
+    end
+    sg := str.Equals(sts, "i128") ? "1" : "0"
+    if str.Equals(tgt, "f64"):
+        ret "salam_w_to_f64(" + e + ", " + sg + ")"
+    end
+    if str.Equals(tgt, "f32"):
+        ret "salam_w_to_f32(" + e + ", " + sg + ")"
+    end
+    if str.Equals(tgt, "bool"):
+        ret "salam_w_nz(" + e + ")"
+    end
+    ret "((" + cg_ctype(tgt) + ")salam_w_lo(" + e + "))"
+end
+
+func cg_wide_cond(subj_var: str, ts: str, op: int, val: str): str:
+    sgn := str.Equals(ts, "i128")
+    lt_fn := sgn ? "salam_w_slt(" : "salam_w_ult("
+    if op == tok.TK_EQ:
+        ret "salam_w_eq(" + subj_var + ", " + val + ")"
+    end
+    if op == tok.TK_NE:
+        ret "(!salam_w_eq(" + subj_var + ", " + val + "))"
+    end
+    if op == tok.TK_LT:
+        ret lt_fn + subj_var + ", " + val + ")"
+    end
+    if op == tok.TK_GE:
+        ret "(!" + lt_fn + subj_var + ", " + val + "))"
+    end
+    if op == tok.TK_GT:
+        ret lt_fn + val + ", " + subj_var + ")"
+    end
+    ret "(!" + lt_fn + val + ", " + subj_var + "))"
+end
+
+func cg_wide_lit_text(ts: str, hi: u64, lo: u64): str:
+    v := wd.Make(hi, lo)
+    ret str.Equals(ts, "i128") ? wd.ToStringS(v) : wd.ToStringU(v)
+end

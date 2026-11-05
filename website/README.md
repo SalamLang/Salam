@@ -125,14 +125,14 @@ is taken from `SALAM`, which `build.sh` always exports.
 The web lessons (`page-*`, `css-*`, `events-*`) end with a reference of every
 element, attribute, CSS property and event. Each row has a short example in an
 element with `class="snip"` (`<code class="snip">` in a table cell,
-`<pre class="code snip">` for a block). `check-snippets.py` compiles all of
+`<pre class="code snip">` for a block). `tools/salam/check-snippets.salam` compiles all of
 them in both languages, so a renamed attribute or a changed Persian name fails
 the build instead of shipping a wrong example. A snippet is an element
 expression such as `link: url = "/" content = "Home" end`; the checker wraps it
 in `page: ... end` and adds `import dom` when it calls `dom.`. A snippet that
 contains its own `page:` line is built as it stands.
 
-`SALAM=./salam python3 website/check-snippets.py [lesson.txt ...]` runs the
+`SALAM=./salam ./salam run tools/salam/check-snippets.salam [lesson.txt ...]` runs the
 check by hand.
 
 ## Adding English (salamlang.org)

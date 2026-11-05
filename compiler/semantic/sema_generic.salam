@@ -595,28 +595,44 @@ func coerce_to_variant(
     ret box
 end
 
-func coerce_args_to_dyn(
-    s &: Sema, a &: at.Ast, call: int, argtypes: Vector<int>, sigid: int
-):
-    if sigid == 0:
-        ret
+func coerce_box_value(s &: Sema, a &: at.Ast, pt: int, expr: int, att: int): int:
+    if pt < 0:
+        ret expr
     end
+    if ty_at(s, pt).kind == TY_DYN:
+        ret coerce_to_dyn(s, a, pt, expr, att)
+    end
+    if ty_at(s, pt).kind == TY_VARIANT and att >= 0 and ty_at(s, att).kind != TY_VARIANT:
+        tag := type_variant_tag(s, pt, att)
+        if tag >= 0:
+            ret coerce_to_variant(s, a, pt, expr, tag)
+        end
+    end
+    ret expr
+end
+
+func coerce_arg_box(s &: Sema, a &: at.Ast, call: int, i: int, pt: int, att: int):
+    nb := coerce_box_value(s, a, pt, at.Child(a, call, i), att)
+    mut cn := at.Get(a, call)
+    cn.list.set(i, nb)
+    at.Put(a, call, cn)
+end
+
+func note_dyn_default_call(s &: Sema, a &: at.Ast, call: int, sigid: int):
     sg := sig_at(s, sigid)
-    mut i := 0
-    until i < at.ChildCount(a, call) and i < sg.params.len() and i < argtypes.len():
+    mut i := at.ChildCount(a, call)
+    until sg.decl != 0 and i < sg.params.len():
         pt := sg.params.get(i)
         if pt >= 0 and ty_at(s, pt).kind == TY_DYN:
-            arg := at.Child(a, call, i)
-            nb := coerce_to_dyn(s, a, pt, arg, argtypes.get(i))
-            mut cn := at.Get(a, call)
-            cn.list.set(i, nb)
-            at.Put(a, call, cn)
+            s.dyn_default_calls.push(call)
+            s.dyn_default_decls.push(sg.decl)
+            ret
         end
         i += 1
     end
 end
 
-func coerce_args_to_variant(
+func coerce_call_args(
     s &: Sema, a &: at.Ast, call: int, argtypes: Vector<int>, sigid: int
 ):
     if sigid == 0:
@@ -627,18 +643,14 @@ func coerce_args_to_variant(
     until i < at.ChildCount(a, call) and i < sg.params.len() and i < argtypes.len():
         pt := sg.params.get(i)
         att := argtypes.get(i)
-        if not (not param_is_ref(s, a, sigid, i) and coerce_arg_to_opt(s, a, call, i, pt, att)) and pt >= 0 and ty_at(s, pt).kind == TY_VARIANT and att >= 0 and ty_at(s, att).kind != TY_VARIANT:
-            tag := type_variant_tag(s, pt, att)
-            if tag >= 0:
-                arg := at.Child(a, call, i)
-                nb := coerce_to_variant(s, a, pt, arg, tag)
-                mut cn := at.Get(a, call)
-                cn.list.set(i, nb)
-                at.Put(a, call, cn)
-            end
+        if param_is_ref(s, a, sigid, i) or not coerce_arg_to_opt(s, a, call, i, pt, att):
+            coerce_arg_box(s, a, call, i, pt, att)
         end
         i += 1
     end
+    coerce_args_to_wide(s, a, call, sigid)
+    coerce_args_to_slice(s, a, call, argtypes, sigid)
+    note_dyn_default_call(s, a, call, sigid)
 end
 
 func coerce_args_to_slice(

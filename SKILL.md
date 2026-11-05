@@ -1244,6 +1244,13 @@ learning half is `f32` on `std/tensor`; the classical half is `f64` on
   (`Join("a/b", "../c")` is `a/b/../c`) and an absolute second part is
   appended, not substituted; `Ext` is only the last extension; check user
   paths with `IsSafe` before using them.
+  Globbing: `filepath.Match(pattern, name)` (`* ? [a-c] [!a-c] \`, and `**` crosses `/`), `HasMeta`, `fs.dir.Glob(pattern)` and
+  `fs.dir.WalkMatch(root, pattern)` (sorted, free the vector).
+- **`text.diff`** `Lines Unified UnifiedText Opcodes GroupedOpcodes Ratio RatioText` (output equals `difflib.unified_diff`; equal inputs give
+  nothing, not even a header), **`encoding.html`** `Unescape Escape EscapeText` (same answers as Python's `html.unescape`),
+  **`encoding.binary`** `View` getters and setters at an offset (`GetU32LE(v, off)`, `PutU16BE`, `CStringAt`, `FixedStringAt`; out of range
+  reads 0), **`os.mmap`** `Alloc Protect Free PageSize` (`PROT_READ|PROT_WRITE|PROT_EXEC`; map writable, then `Protect` to execute) and
+  **`os.dl`** `Open OpenSelf Sym Close Error Call(fn, args: size[])` (up to 8 integer or pointer arguments, no floats or varargs; POSIX only).
 - **`env`**: `Get GetOr Has GetInt GetFloat GetBool Set Unset Mask GetMasked Profile IsProduction IsDevelopment Load Overload LoadDotEnv LoadProfile Expand`. `GetInt` turns `abc` into 0 and `12px` into 12; `GetBool` accepts
   only lower-case `true 1 yes on`; `Load` never overrides a set variable
   (`Overload`/`LoadDotEnv` do).

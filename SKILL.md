@@ -581,6 +581,12 @@ A literal must carry the whole group: `Client { user = "u" }` is an error even i
 `Client { user = "" }` counts as given. When a guarantee must survive mutation,
 use an enum with data (`Basic(user: str, pass: str)`) or a constructor.
 
+A `needs` rule can test a value: `rule use_key == true needs key_pem`, also with
+numbers, strings and plain enum members (`rule mode == Mode.Tls needs cert`). The
+value on the right must be a literal or an enum member. An omitted field uses its
+default. If the literal's value is not a constant, the compiler assumes it may
+match and requires the field.
+
 `json.Unmarshal` enforces the same rules, a field with a default that a rule names
 is an optional key, and `json.Schema` emits `dependentRequired`, `oneOf`, `anyOf`
 and `not`. `UnmarshalLenient` ignores them.

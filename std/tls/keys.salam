@@ -8,6 +8,7 @@ struct TrafficKeys:
     pub live: bool = false
     pub is12: bool = false
     pub explicit_len: int = 0
+    pub gcm: GcmCtx* = null
 end
 
 func _cipher_hash(c: int): int:
@@ -40,7 +41,15 @@ func _cipher_from_wire(w: int): int:
     ret CIPHER_NONE
 end
 
+func _tk_cipher_setup(t &: TrafficKeys):
+    if t.cipher != CIPHER_CHACHA20_SHA256:
+        t.gcm = _gcm_new(t.key.p, t.key.len)
+    end
+end
+
 func _tk_free(t &: TrafficKeys):
+    _gcm_free(t.gcm)
+    t.gcm = null
     _buf_wipe(t.key)
     _buf_wipe(t.iv)
     t.seq = 0 as u64
@@ -62,6 +71,9 @@ func _tk_derive(secret: void*, slen: int, cipher: int): TrafficKeys:
     end
     t.seq = 0 as u64
     t.live = ok
+    if ok:
+        _tk_cipher_setup(t)
+    end
     ret t
 end
 
@@ -84,6 +96,7 @@ func _tk_from_block(kb: Buf, koff: int, klen: int, ivoff: int, ivlen: int, ciphe
     end
     t.seq = 0 as u64
     t.live = true
+    _tk_cipher_setup(t)
     ret t
 end
 
@@ -137,14 +150,12 @@ func _aead_seal(t: TrafficKeys, nonce: Buf, aad: void*, aadlen: int, pt: void*, 
         _cha20poly_seal(t.key.p, nonce.p, aad, aadlen, pt, ct, n, tag)
         ret
     end
-    a := _aes_init(t.key.p, t.key.len)
-    _gcm_seal(a, nonce.p, aad, aadlen, pt, ct, n, tag)
+    _gcm_seal_with(t.gcm.aes, t.gcm.g, nonce.p, aad, aadlen, pt, ct, n, tag)
 end
 
 func _aead_open(t: TrafficKeys, nonce: Buf, aad: void*, aadlen: int, ct: void*, n: int, tag: void*, pt: void*): bool:
     if t.cipher == CIPHER_CHACHA20_SHA256:
         ret _cha20poly_open(t.key.p, nonce.p, aad, aadlen, ct, n, tag, pt)
     end
-    a := _aes_init(t.key.p, t.key.len)
-    ret _gcm_open(a, nonce.p, aad, aadlen, ct, n, tag, pt)
+    ret _gcm_open_with(t.gcm.aes, t.gcm.g, nonce.p, aad, aadlen, ct, n, tag, pt)
 end

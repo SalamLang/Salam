@@ -2114,7 +2114,6 @@ jobs:
   build-android:
     name: Build & sign Android AAB + APKs
     if: |
-      false &&
       github.ref == 'refs/heads/main' &&
       github.repository == 'SalamLang/Salam' &&
       ((github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release:')) ||
@@ -2604,6 +2603,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
           TAG_WAS_SIGNED: ${{ steps.signtag.outputs.signed }}
+          HEAD_MSG: ${{ github.event.head_commit.message }}
         run: |
           set -eu
           shopt -s nullglob
@@ -2688,6 +2688,54 @@ jobs:
             echo "\`install.sh\` reads the local glibc and picks between them."
             echo ""
           } > release-notes-preamble.md
+
+          if [ -z "${PRERELEASE_FLAG:-}" ]; then
+            this_names=$(mktemp)
+            for f in "${assets[@]}" "${sums[@]}" ${agent[@]+"${agent[@]}"}; do
+              basename "$f"
+            done | sed "s/${VERSION}/@V@/g" | sort -u > "$this_names"
+
+            missing_required=""
+            for need in "salam-@V@-android.aab" "salam-@V@-android-universal.apk"; do
+              grep -qx "$need" "$this_names" || missing_required="$missing_required$need"$'\n'
+            done
+
+            prev=$(gh release list --limit 30 --json tagName,isPrerelease,isDraft \
+              --jq "[.[] | select(.isPrerelease == false and .isDraft == false and .tagName != \"$TAG\")][0].tagName // empty")
+            missing_before=""
+            if [ -n "$prev" ]; then
+              prev_names=$(mktemp)
+              gh release view "$prev" --json assets --jq '.assets[].name' \
+                | sed "s/${prev#v}/@V@/g" | sort -u > "$prev_names"
+              missing_before=$(comm -23 "$prev_names" "$this_names" || true)
+            fi
+
+            if [ -n "$missing_required" ] || [ -n "$missing_before" ]; then
+              {
+                echo "### This release is missing files"
+                echo ""
+                if [ -n "$missing_required" ]; then
+                  echo "Always required:"
+                  printf '%s' "$missing_required" | sed 's/^/  - /'
+                fi
+                if [ -n "$missing_before" ]; then
+                  echo "Present in $prev but not here:"
+                  printf '%s\n' "$missing_before" | sed 's/^/  - /'
+                fi
+              } | tee -a "$GITHUB_STEP_SUMMARY"
+              case "$HEAD_MSG" in
+              *"[allow-fewer-assets]"*)
+                echo "::warning::publishing with fewer files because the commit says [allow-fewer-assets]"
+                ;;
+              *)
+                echo "::error::the release is missing files, see the summary. A published release is immutable, so it is stopped here. Put [allow-fewer-assets] in the commit message only when dropping a file on purpose."
+                exit 1
+                ;;
+              esac
+            else
+              echo "complete: every file of ${prev:-the required set} is here, plus the Android files"
+            fi
+          fi
 
           echo "Publishing ${#assets[@]} assets and ${#sums[@]} checksum files:"
           printf '  %s\n' "${assets[@]}" "${sums[@]}"

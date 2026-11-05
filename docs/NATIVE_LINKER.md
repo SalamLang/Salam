@@ -896,7 +896,7 @@ at a 16 KiB one, as `lipo` lays them out. Objects and libraries are built
 once per architecture; a universal target for them is an error. With
 `--backend=auto` a universal build uses the native backend.
 
-`tools/linker/machorun.py` and `machodylib.py` apply chained fixups as well
+`tools/linker/machorun.salam` and `machodylib.salam` (both on `machoload.salam`) apply chained fixups as well
 as opcodes and take the x86_64 slice of a universal binary, so the x86_64
 programs still run on Linux. Checks done here: `llvm-objdump --macho
 --dyld-info` decodes every chain, and for each test the classic and chained
@@ -924,7 +924,7 @@ Windows behaved the same with the built-in linker as with the reference
 linker. The few that differed (network servers and thread timing) changed
 from run to run with either linker. All 1238 Mach-O links matched
 `ld64.lld`. `tools/linker/cross-check.sh` runs the same comparison for one
-target at a time, and `tools/linker/macho_check.py` holds the Mach-O
+target at a time, and `tools/linker/macho_check.salam` holds the Mach-O
 signature and disassembly checks.
 
 ## Shared libraries
@@ -1027,8 +1027,8 @@ from `__TEXT`, and the code signature does not carry the main-binary flag.
 No macOS machine is available here, so a dylib is checked by
 `llvm-objdump --macho` (load commands and the export trie), by linking a
 program against it with `ld64.lld`, which reads its export trie, and, for
-x86-64, by `python3 -I tools/linker/machodylib.py`, which maps the dylib into
-a Linux process the way `machorun.py` maps an executable, binds its
+x86-64, by `tools/linker/machodylib.salam`, which maps the dylib into
+a Linux process the way `machorun.salam` maps an executable, binds its
 `libSystem` imports to glibc, runs its initialisers and calls its exports.
 
 ### Testing shared libraries
@@ -1204,7 +1204,7 @@ alignment units, 512 bytes in a PE and a page in Mach-O):
 
 The x86-64 and i686 Windows compilers print the same AST for a test under
 wine with and without `--icf`, and so does the x86_64 macOS one under
-`machorun.py`. The exception directory loses exactly the folded functions'
+`machorun.salam`. The exception directory loses exactly the folded functions'
 entries (3,464 to 3,445 on x86-64, 3,415 to 3,380 on ARM64) and stays in
 order. On arm64 macOS `__unwind_info` goes from 6,175 to 6,103 entries,
 sorted and without repeats, every `bl` lands on the start of a symbol and
@@ -1212,6 +1212,6 @@ every page hash of the signature verifies. Six test programs
 (`archive_demo`, `json_errors_demo` and `autograd_demo` from the stdlib
 tests, `ll_hashmap`, `generic_struct_pkg_types` and `ll_closure_counter`
 from the `llvm` group) print the same with and without `--icf` for x86-64
-and i686 Windows under wine and for x86_64 macOS under `machorun.py`
-(`archive_demo` does not run under `machorun.py` either way). They fold 0 to
+and i686 Windows under wine and for x86_64 macOS under `machorun.salam`
+(`archive_demo` does not run under `machorun.salam` either way). They fold 0 to
 6 functions each; ARM64 builds fold the most.

@@ -120,8 +120,8 @@ failing.
 Two of those engines can only be reached from their own runtime, so each gets
 a driver that does nothing but dump `[token, style]` pairs as JSON:
 `tools/check_textmate.mjs` for `vscode-textmate`, which is a JavaScript
-library, and `tools/check_gtksource.py` for GtkSourceView, which is reachable
-only through GObject introspection. Every decision the check makes lives in
+library, and `tools/check_gtksource.salam` for GtkSourceView, a Salam program that
+loads `libgtksourceview-4` at runtime and calls its C API. Every decision the check makes lives in
 `check_engines.salam`.
 
 `tools/syntaxcheck.salam` holds the checking logic that `validate.salam`

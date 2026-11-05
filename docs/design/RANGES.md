@@ -72,7 +72,7 @@ local and parameter, an abstract value (`RgV`):
 
 A `repeat` loop whose bounds are known and that runs at most 64 times is
 unrolled: each pass is analyzed with the exact counter value, so values that
-grow inside the loop are exact too. That is how `f = f * i` over
+grow inside the loop are exact too. That is how `f *= i` over
 `repeat 1 to 20 in i` is reported on pass 13, where `f` no longer fits in an
 `i32`.
 

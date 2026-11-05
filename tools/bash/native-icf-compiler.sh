@@ -27,7 +27,11 @@ if [ "$MODE" = build ]; then
     plain=$(tar -xzOf "$PKG" "$top/$EXE" | wc -c)
     folded=$(wc -c <"$DIR/$EXE")
     echo "compiler for $TRIPLE: $plain bytes, $folded with --icf"
-    [ "$folded" -lt "$plain" ]
+    case "$TRIPLE" in
+    # Segments are padded to 16 KiB here, so savings inside a page do not show.
+    arm64-apple-*) [ "$folded" -le "$plain" ] ;;
+    *) [ "$folded" -lt "$plain" ] ;;
+    esac
     exit
 fi
 DIR=$1

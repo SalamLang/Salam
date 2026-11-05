@@ -64,7 +64,7 @@ trap 'rm -rf "$work"' EXIT
 export WINEDEBUG=-all
 
 cat >"$work/main.salam" <<'SALAM'
-import webview
+import gui.webview
 import str
 
 func main():

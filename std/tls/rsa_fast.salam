@@ -1,0 +1,642 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package tls
+
+import crypto
+import mem
+import sync
+
+const MM_WINDOW := 5
+const MM_TABLE := 32
+const RSA_BLIND_USES := 64
+
+mut _rsa_blind_mu := sync.NewMutex()
+
+struct MontCtx:
+    pub n: int = 0
+    pub n0: u32 = 0 as u32
+    pub m: u32* = null
+    pub rr: u32* = null
+    pub one: u32* = null
+end
+
+struct RsaCrt:
+    pub nn: MontCtx* = null
+    pub np: MontCtx* = null
+    pub nq: MontCtx* = null
+    pub dp: u32* = null
+    pub dq: u32* = null
+    pub qinv: u32* = null
+    pub q: u32* = null
+    pub e: Buf = Buf {}
+    pub vi: u32* = null
+    pub vf: u32* = null
+    pub uses: int = 0
+end
+
+func _limbs(n: int): u32*:
+    ret mem.AllocateZeroed((n * 4) as u64) as u32*
+end
+
+func _limbs_free(p: u32*, n: int):
+    if p != null:
+        _wipe(p as void*, n * 4)
+        mem.Free(p as void*)
+    end
+end
+
+func _limbs_copy(dst: u32*, src: u32*, n: int):
+    mem.Copy(dst as void*, src as void*, (n * 4) as u64)
+end
+
+func _limbs_from_be(out: u32*, n: int, p: void*, len: int):
+    repeat n in i:
+        mut v := 0 as u32
+        repeat 4 in b:
+            o := len - 1 - i * 4 - b
+            if o >= 0:
+                v = v | ((_bget(p, o) as u32) << ((b * 8) as u32))
+            end
+        end
+        out[i] = v
+    end
+end
+
+func _limbs_to_be(a: u32*, n: int, out: void*, len: int):
+    repeat len in i:
+        limb := i / 4
+        mut v := 0
+        if limb < n:
+            v = ((a[limb] >> (((i % 4) * 8) as u32)) & (0xFF as u32)) as int
+        end
+        _bput(out, len - 1 - i, v)
+    end
+end
+
+func _limbs_ge(a: u32*, b: u32*, n: int): bool:
+    mut i := n - 1
+    until i >= 0:
+        if a[i] != b[i]:
+            ret a[i] > b[i]
+        end
+        i -= 1
+    end
+    ret true
+end
+
+func _limbs_sub(r: u32*, a: u32*, b: u32*, n: int): u32:
+    mut bw := 0 as u64
+    repeat n in i:
+        d := (a[i] as u64) - (b[i] as u64) - bw
+        r[i] = d as u32
+        bw = (d >> (32 as u64)) & (1 as u64)
+    end
+    ret bw as u32
+end
+
+func _mm_new(be: void*, len: int): MontCtx*:
+    mut start := 0
+    until start < len and _bget(be, start) == 0:
+        start += 1
+    end
+    if start == len or (_bget(be, len - 1) & 1) == 0:
+        ret null
+    end
+    n := (len - start + 3) / 4
+    c := mem.AllocateZeroed(sizeof(MontCtx) as u64) as MontCtx*
+    c.n = n
+    c.m = _limbs(n)
+    c.rr = _limbs(n)
+    c.one = _limbs(n)
+    _limbs_from_be(c.m, n, be, len)
+    m0 := c.m[0]
+    mut inv := 1 as u32
+    repeat 5:
+        inv = inv * ((2 as u32) - m0 * inv)
+    end
+    c.n0 = (0 as u32) - inv
+    top := c.m[n - 1]
+    mut topbits := 0
+    until topbits < 32 and (top >> (topbits as u32)) != (0 as u32):
+        topbits += 1
+    end
+    bits := (n - 1) * 32 + topbits
+    x := _limbs(n)
+    x[(bits - 1) / 32] = (1 as u32) << (((bits - 1) % 32) as u32)
+    mut e := bits - 1
+    until e < 64 * n:
+        if e == 32 * n:
+            _limbs_copy(c.one, x, n)
+        end
+        mut carry := 0 as u32
+        repeat n in i:
+            v := x[i]
+            x[i] = (v << (1 as u32)) | carry
+            carry = v >> (31 as u32)
+        end
+        if carry != (0 as u32) or _limbs_ge(x, c.m, n):
+            _limbs_sub(x, x, c.m, n)
+        end
+        e += 1
+    end
+    _limbs_copy(c.rr, x, n)
+    _limbs_free(x, n)
+    ret c
+end
+
+func _mm_free(c: MontCtx*):
+    if c == null:
+        ret
+    end
+    _limbs_free(c.m, c.n)
+    _limbs_free(c.rr, c.n)
+    _limbs_free(c.one, c.n)
+    mem.Free(c as void*)
+end
+
+func _mm_mul(c: MontCtx*, r: u32*, a: u32*, b: u32*, t: u32*):
+    n := c.n
+    m := c.m
+    n0 := c.n0
+    repeat n + 1 in i:
+        t[i] = 0 as u32
+    end
+    repeat n in i:
+        ai := a[i] as u64
+        p0 := (t[0] as u64) + ai * (b[0] as u64)
+        u := ((p0 as u32) * n0) as u64
+        q0 := (u * (m[0] as u64)) + ((p0 as u32) as u64)
+        mut c1 := p0 >> (32 as u64)
+        mut c2 := q0 >> (32 as u64)
+        mut j := 1
+        until j < n:
+            p1 := (t[j] as u64) + ai * (b[j] as u64) + c1
+            q1 := u * (m[j] as u64) + ((p1 as u32) as u64) + c2
+            t[j - 1] = q1 as u32
+            c1 = p1 >> (32 as u64)
+            c2 = q1 >> (32 as u64)
+            j += 1
+        end
+        top := (t[n] as u64) + c1 + c2
+        t[n - 1] = top as u32
+        t[n] = (top >> (32 as u64)) as u32
+    end
+    bw := _limbs_sub(r, t, m, n)
+    mask := (0 as u32) - (bw & (t[n] ^ (1 as u32)))
+    repeat n in i:
+        r[i] = (r[i] & ~mask) | (t[i] & mask)
+    end
+end
+
+func _mm_add(c: MontCtx*, r: u32*, a: u32*, b: u32*, t: u32*):
+    n := c.n
+    mut carry := 0 as u64
+    repeat n in i:
+        s := (a[i] as u64) + (b[i] as u64) + carry
+        t[i] = s as u32
+        carry = s >> (32 as u64)
+    end
+    bw := _limbs_sub(r, t, c.m, n)
+    mask := (0 as u32) - (bw & ((carry as u32) ^ (1 as u32)))
+    repeat n in i:
+        r[i] = (r[i] & ~mask) | (t[i] & mask)
+    end
+end
+
+func _mm_sub(c: MontCtx*, r: u32*, a: u32*, b: u32*):
+    n := c.n
+    bw := _limbs_sub(r, a, b, n)
+    mask := (0 as u32) - bw
+    mut carry := 0 as u64
+    repeat n in i:
+        s := (r[i] as u64) + ((c.m[i] & mask) as u64) + carry
+        r[i] = s as u32
+        carry = s >> (32 as u64)
+    end
+end
+
+func _mm_reduce(c: MontCtx*, out: u32*, src: u32*, slimbs: int):
+    n := c.n
+    t := _limbs(n + 2)
+    chunk := _limbs(n)
+    tmp := _limbs(n)
+    repeat n in i:
+        out[i] = 0 as u32
+    end
+    chunks := (slimbs + n - 1) / n
+    mut k := chunks - 1
+    until k >= 0:
+        _mm_mul(c, out, out, c.rr, t)
+        repeat n in i:
+            at := k * n + i
+            if at < slimbs:
+                chunk[i] = src[at]
+            else:
+                chunk[i] = 0 as u32
+            end
+        end
+        _mm_mul(c, tmp, chunk, c.rr, t)
+        _mm_add(c, out, out, tmp, t)
+        k -= 1
+    end
+    _limbs_free(t, n + 2)
+    _limbs_free(chunk, n)
+    _limbs_free(tmp, n)
+end
+
+func _mm_from(c: MontCtx*, r: u32*, a: u32*, t: u32*):
+    one := _limbs(c.n)
+    one[0] = 1 as u32
+    _mm_mul(c, r, a, one, t)
+    _limbs_free(one, c.n)
+end
+
+func _mm_exp(c: MontCtx*, r: u32*, base: u32*, e: u32*, elimbs: int):
+    n := c.n
+    t := _limbs(n + 2)
+    tab := _limbs(n * MM_TABLE)
+    acc := _limbs(n)
+    sel := _limbs(n)
+    _limbs_copy(tab, c.one, n)
+    _limbs_copy(((tab as i64) + ((n * 4) as i64)) as u32*, base, n)
+    mut i := 2
+    until i < MM_TABLE:
+        cur := ((tab as i64) + ((i * n * 4) as i64)) as u32*
+        prev := ((tab as i64) + (((i - 1) * n * 4) as i64)) as u32*
+        _mm_mul(c, cur, prev, base, t)
+        i += 1
+    end
+    _limbs_copy(acc, c.one, n)
+    bits := elimbs * 32
+    mut w := (bits + MM_WINDOW - 1) / MM_WINDOW - 1
+    until w >= 0:
+        repeat MM_WINDOW:
+            _mm_mul(c, acc, acc, acc, t)
+        end
+        o := w * MM_WINDOW
+        li := o / 32
+        sh := o % 32
+        mut v := e[li] >> (sh as u32)
+        if sh > 32 - MM_WINDOW and li + 1 < elimbs:
+            v = v | (e[li + 1] << ((32 - sh) as u32))
+        end
+        digit := v & ((MM_TABLE - 1) as u32)
+        repeat n in k:
+            sel[k] = 0 as u32
+        end
+        repeat MM_TABLE in q:
+            x := digit ^ (q as u32)
+            mask := (0 as u32) - ((((x as u64) - (1 as u64)) >> (63 as u64)) as u32)
+            row := ((tab as i64) + ((q * n * 4) as i64)) as u32*
+            repeat n in k:
+                sel[k] = sel[k] | (row[k] & mask)
+            end
+        end
+        _mm_mul(c, acc, acc, sel, t)
+        w -= 1
+    end
+    _limbs_copy(r, acc, n)
+    _limbs_free(t, n + 2)
+    _limbs_free(tab, n * MM_TABLE)
+    _limbs_free(acc, n)
+    _limbs_free(sel, n)
+end
+
+func _mm_exp_public(c: MontCtx*, r: u32*, base: u32*, e: void*, elen: int):
+    n := c.n
+    t := _limbs(n + 2)
+    acc := _limbs(n)
+    _limbs_copy(acc, c.one, n)
+    repeat elen in i:
+        b := _bget(e, i)
+        mut bit := 7
+        until bit >= 0:
+            _mm_mul(c, acc, acc, acc, t)
+            if ((b >> bit) & 1) == 1:
+                _mm_mul(c, acc, acc, base, t)
+            end
+            bit -= 1
+        end
+    end
+    _limbs_copy(r, acc, n)
+    _limbs_free(t, n + 2)
+    _limbs_free(acc, n)
+end
+
+func _rsa_garner(k: RsaCrt*, m1: u32*, m2: u32*, out: u32*):
+    np := k.np.n
+    nq := k.nq.n
+    nn := k.nn.n
+    t := _limbs(np + 2)
+    m2p := _limbs(np)
+    diff := _limbs(np)
+    h := _limbs(np)
+    _mm_reduce(k.np, m2p, m2, nq)
+    _mm_sub(k.np, diff, m1, m2p)
+    _mm_mul(k.np, h, diff, k.qinv, t)
+    prod := _limbs(np + nq + 1)
+    repeat np in i:
+        mut carry := 0 as u64
+        hi := h[i] as u64
+        repeat nq in j:
+            s := (prod[i + j] as u64) + hi * (k.q[j] as u64) + carry
+            prod[i + j] = s as u32
+            carry = s >> (32 as u64)
+        end
+        prod[i + nq] = carry as u32
+    end
+    mut c := 0 as u64
+    repeat np + nq + 1 in i:
+        mut s := (prod[i] as u64) + c
+        if i < nq:
+            s += m2[i] as u64
+        end
+        prod[i] = s as u32
+        c = s >> (32 as u64)
+    end
+    repeat nn in i:
+        out[i] = prod[i]
+    end
+    _limbs_free(t, np + 2)
+    _limbs_free(m2p, np)
+    _limbs_free(diff, np)
+    _limbs_free(h, np)
+    _limbs_free(prod, np + nq + 1)
+end
+
+func _rsa_crt_exp(k: RsaCrt*, x: u32*, out: u32*):
+    nn := k.nn.n
+    np := k.np.n
+    nq := k.nq.n
+    cp := _limbs(np)
+    cq := _limbs(nq)
+    m1 := _limbs(np)
+    m2 := _limbs(nq)
+    tq := _limbs(nq + 2)
+    _mm_reduce(k.np, cp, x, nn)
+    _mm_reduce(k.nq, cq, x, nn)
+    _mm_exp(k.np, m1, cp, k.dp, np)
+    _mm_exp(k.nq, m2, cq, k.dq, nq)
+    _mm_from(k.nq, m2, m2, tq)
+    _rsa_garner(k, m1, m2, out)
+    _limbs_free(cp, np)
+    _limbs_free(cq, nq)
+    _limbs_free(m1, np)
+    _limbs_free(m2, nq)
+    _limbs_free(tq, nq + 2)
+end
+
+func _rsa_blind_refresh(k: RsaCrt*):
+    nn := k.nn.n
+    np := k.np.n
+    nq := k.nq.n
+    t := _limbs(nn + 2)
+    rb := _limbs(nn)
+    crypto.RandomBytes(rb as void*, nn * 4)
+    r := _limbs(nn)
+    _mm_reduce(k.nn, r, rb, nn)
+    rp := _limbs(np)
+    rq := _limbs(nq)
+    pm2 := _limbs(np)
+    qm2 := _limbs(nq)
+    two := _limbs(np)
+    two[0] = 2 as u32
+    _limbs_sub(pm2, k.np.m, two, np)
+    _limbs_free(two, np)
+    two2 := _limbs(nq)
+    two2[0] = 2 as u32
+    _limbs_sub(qm2, k.nq.m, two2, nq)
+    _limbs_free(two2, nq)
+    _mm_reduce(k.np, rp, rb, nn)
+    _mm_reduce(k.nq, rq, rb, nn)
+    _mm_exp(k.np, rp, rp, pm2, np)
+    _mm_exp(k.nq, rq, rq, qm2, nq)
+    tq := _limbs(nq + 2)
+    _mm_from(k.nq, rq, rq, tq)
+    _limbs_free(tq, nq + 2)
+    rinv := _limbs(nn)
+    _rsa_garner(k, rp, rq, rinv)
+    _mm_mul(k.nn, rinv, rinv, k.nn.rr, t)
+    _mm_exp_public(k.nn, k.vi, rinv, k.e.p, k.e.len)
+    _limbs_copy(k.vf, r, nn)
+    k.uses = 0
+    _limbs_free(t, nn + 2)
+    _limbs_free(rb, nn)
+    _limbs_free(r, nn)
+    _limbs_free(rp, np)
+    _limbs_free(rq, nq)
+    _limbs_free(pm2, np)
+    _limbs_free(qm2, nq)
+    _limbs_free(rinv, nn)
+end
+
+func _rsa_blind_take(k: RsaCrt*, vi: u32*, vf: u32*):
+    nn := k.nn.n
+    sync.Lock(_rsa_blind_mu)
+    if k.uses == 0 or k.uses >= RSA_BLIND_USES:
+        _rsa_blind_refresh(k)
+    end
+    _limbs_copy(vi, k.vi, nn)
+    _limbs_copy(vf, k.vf, nn)
+    t := _limbs(nn + 2)
+    _mm_mul(k.nn, k.vi, k.vi, k.vi, t)
+    _mm_mul(k.nn, k.vf, k.vf, k.vf, t)
+    _limbs_free(t, nn + 2)
+    k.uses += 1
+    sync.Unlock(_rsa_blind_mu)
+end
+
+func _rsa_crt_new(n: Reader, e: Reader, d: Reader, p: Reader, q: Reader): RsaCrt*:
+    k := mem.AllocateZeroed(sizeof(RsaCrt) as u64) as RsaCrt*
+    k.nn = _mm_new(n.p, n.len)
+    k.np = _mm_new(p.p, p.len)
+    k.nq = _mm_new(q.p, q.len)
+    if k.nn == null or k.np == null or k.nq == null:
+        _rsa_crt_free(k)
+        ret null
+    end
+    k.e = _newbuf(e.len)
+    _putraw(k.e, e.p, e.len)
+    np := k.np.n
+    nq := k.nq.n
+    k.dp = _limbs(np)
+    k.dq = _limbs(nq)
+    k.qinv = _limbs(np)
+    k.q = _limbs(nq)
+    k.vi = _limbs(k.nn.n)
+    k.vf = _limbs(k.nn.n)
+    _limbs_copy(k.q, k.nq.m, nq)
+    if not _rsa_crt_exponent(d, p, k.dp, np) or not _rsa_crt_exponent(d, q, k.dq, nq):
+        _rsa_crt_free(k)
+        ret null
+    end
+    t := _limbs(np + 2)
+    qm := _limbs(np)
+    pm2 := _limbs(np)
+    two := _limbs(np)
+    two[0] = 2 as u32
+    _limbs_sub(pm2, k.np.m, two, np)
+    _mm_reduce(k.np, qm, k.q, nq)
+    _mm_exp(k.np, qm, qm, pm2, np)
+    _mm_from(k.np, k.qinv, qm, t)
+    _limbs_free(t, np + 2)
+    _limbs_free(qm, np)
+    _limbs_free(pm2, np)
+    _limbs_free(two, np)
+    ret k
+end
+
+func _rsa_crt_exponent(d: Reader, prime: Reader, out: u32*, limbs: int): bool:
+    mut db := _big_from_bytes(d.p, d.len)
+    defer _big_wipe_free(db)
+    mut pb := _big_from_bytes(prime.p, prime.len)
+    defer _big_wipe_free(pb)
+    mut one := _big_new(1)
+    defer _big_free(one)
+    _big_set_u32(one, 1 as u32)
+    mut pm1 := _big_new(pb.n + 1)
+    defer _big_wipe_free(pm1)
+    mut rem := _big_new(pb.n + 1)
+    defer _big_wipe_free(rem)
+    if db.bad or pb.bad or one.bad or pm1.bad or rem.bad:
+        ret false
+    end
+    if not _big_sub(pm1, pb, one) or not _big_mod(rem, db, pm1):
+        ret false
+    end
+    repeat limbs in i:
+        if i < rem.n:
+            out[i] = _limb(rem, i)
+        else:
+            out[i] = 0 as u32
+        end
+    end
+    ret true
+end
+
+func _rsa_crt_free(k: RsaCrt*):
+    if k == null:
+        ret
+    end
+    if k.np != null:
+        _limbs_free(k.dp, k.np.n)
+        _limbs_free(k.qinv, k.np.n)
+    end
+    if k.nq != null:
+        _limbs_free(k.dq, k.nq.n)
+        _limbs_free(k.q, k.nq.n)
+    end
+    if k.nn != null:
+        _limbs_free(k.vi, k.nn.n)
+        _limbs_free(k.vf, k.nn.n)
+    end
+    _buf_free(k.e)
+    _mm_free(k.nn)
+    _mm_free(k.np)
+    _mm_free(k.nq)
+    mem.Free(k as void*)
+end
+
+func _rsa_private_op(k: RsaCrt*, msg: void*, mlen: int, out: void*, klen: int): bool:
+    if k == null:
+        ret false
+    end
+    nn := k.nn.n
+    x := _limbs(nn)
+    _limbs_from_be(x, nn, msg, mlen)
+    if _limbs_ge(x, k.nn.m, nn):
+        _limbs_free(x, nn)
+        ret false
+    end
+    t := _limbs(nn + 2)
+    vi := _limbs(nn)
+    vf := _limbs(nn)
+    bl := _limbs(nn)
+    sb := _limbs(nn)
+    s := _limbs(nn)
+    chk := _limbs(nn)
+    _rsa_blind_take(k, vi, vf)
+    _mm_mul(k.nn, bl, x, k.nn.rr, t)
+    _mm_mul(k.nn, bl, bl, vi, t)
+    _mm_from(k.nn, bl, bl, t)
+    _rsa_crt_exp(k, bl, sb)
+    _mm_mul(k.nn, s, sb, k.nn.rr, t)
+    _mm_mul(k.nn, s, s, vf, t)
+    _mm_from(k.nn, s, s, t)
+    _mm_mul(k.nn, chk, s, k.nn.rr, t)
+    _mm_exp_public(k.nn, chk, chk, k.e.p, k.e.len)
+    _mm_from(k.nn, chk, chk, t)
+    good := _cteq(chk as void*, x as void*, nn * 4)
+    if good:
+        _limbs_to_be(s, nn, out, klen)
+    end
+    _limbs_free(x, nn)
+    _limbs_free(t, nn + 2)
+    _limbs_free(vi, nn)
+    _limbs_free(vf, nn)
+    _limbs_free(bl, nn)
+    _limbs_free(sb, nn)
+    _limbs_free(s, nn)
+    _limbs_free(chk, nn)
+    ret good
+end
+
+func _rsa_public_op(sig: void*, siglen: int, nmod: void*, nlen: int, expo: void*, elen: int, out: void*, klen: int): bool:
+    if elen <= 0:
+        ret false
+    end
+    mut enz := 0
+    repeat elen in i:
+        enz = enz | _bget(expo, i)
+    end
+    if enz == 0:
+        ret false
+    end
+    c := _mm_new(nmod, nlen)
+    if c == null:
+        ret false
+    end
+    n := c.n
+    x := _limbs(n)
+    sn := (siglen + 3) / 4
+    mut toolong := false
+    if sn > n:
+        wide := _limbs(sn)
+        _limbs_from_be(wide, sn, sig, siglen)
+        mut i := n
+        until i < sn:
+            if wide[i] != (0 as u32):
+                toolong = true
+            end
+            i += 1
+        end
+        _limbs_copy(x, wide, n)
+        _limbs_free(wide, sn)
+    else:
+        _limbs_from_be(x, n, sig, siglen)
+    end
+    ok := not toolong and not _limbs_ge(x, c.m, n)
+    if ok:
+        t := _limbs(n + 2)
+        _mm_mul(c, x, x, c.rr, t)
+        _mm_exp_public(c, x, x, expo, elen)
+        _mm_from(c, x, x, t)
+        _limbs_to_be(x, n, out, klen)
+        _limbs_free(t, n + 2)
+    end
+    _limbs_free(x, n)
+    _mm_free(c)
+    ret ok
+end

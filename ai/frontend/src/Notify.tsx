@@ -3,13 +3,12 @@ import { agent, isDesktop, type AgentInfo, type NotifyKind, type NotifyPrefs } f
 import { IconBell } from "./icons";
 import { Checkbox } from "./Checkbox";
 import { lang, t } from "./i18n";
-import { chime, pushToast, setToastSound } from "./Toasts";
+import { chime, chimeEnabled, pushToast, setChimeEnabled } from "./Toasts";
 
 let prefs: NotifyPrefs = { enabled: true, sound: true, preview: true, lang: "fa" };
 
 function apply(next: NotifyPrefs) {
   prefs = next;
-  setToastSound(next.sound);
   return next;
 }
 
@@ -39,9 +38,20 @@ export function announce(kind: NotifyKind, chat: string, text: string, mid?: num
         ? snippet(text) || chat
         : undefined;
   pushToast({ tone, title, body: body || undefined });
-  chime(tone);
-  if (!isDesktop) return;
-  agent.notify(kind, chat, text, mid).catch(() => {});
+  if (!isDesktop) {
+    chime(tone);
+    return;
+  }
+  agent
+    .notify(kind, chat, text, mid)
+    .then((shown) => {
+      if (!osSounded(shown)) chime(tone);
+    })
+    .catch(() => chime(tone));
+}
+
+function osSounded(shown: "shown" | "skipped"): boolean {
+  return shown === "shown" && prefs.sound && document.hidden;
 }
 
 export function announceApproval(summary: string) {
@@ -50,7 +60,7 @@ export function announceApproval(summary: string) {
     title: t("منتظر اجازه‌ی شما", "Waiting for your approval"),
     body: summary,
   });
-  chime("approval");
+  if (!(prefs.sound && document.hidden)) chime("approval");
 }
 
 export function syncNotifyLanguage() {
@@ -83,6 +93,7 @@ export function NotifyMenu({ os }: { os: AgentInfo["os"] | undefined }) {
   const [current, setCurrent] = useState<NotifyPrefs | null>(null);
   const [result, setResult] = useState("");
   const [testing, setTesting] = useState(false);
+  const [chimeOn, setChimeOn] = useState(chimeEnabled());
   const box = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -162,6 +173,16 @@ export function NotifyMenu({ os }: { os: AgentInfo["os"] | undefined }) {
           <p>{t("وقتی پاسخ آماده شد، خطایی پیش آمد، ارتباط قطع شد یا دستیار منتظر اجازه‌ی شما بود، اگر پنجره جلوی چشم شما نباشد خبر می‌دهیم؛ حتی وقتی پنجره کوچک شده یا دستیار زبان سلام در پس‌زمینه است.", "When a reply is ready, something fails, the connection drops, or the assistant waits for your approval, we let you know if this window is not in front of you, even when it is minimized or the agent is in the background.")}</p>
           <Checkbox checked={on} onChange={(v) => change({ enabled: v })} label={t("نمایش اعلان", "Show notifications")} disabled={!current} />
           <Checkbox checked={current?.sound ?? true} onChange={(v) => change({ sound: v })} label={t("پخش صدا", "Play a sound")} disabled={!current || !on} />
+          <Checkbox
+            checked={chimeOn}
+            onChange={(v) => {
+              setChimeOn(v);
+              setChimeEnabled(v);
+              if (v) chime("info");
+            }}
+            label={t("صدای داخل برنامه", "In-app chime")}
+            hint={t("وقتی پنجره باز است یا اعلان سیستم صدا ندارد، یک صدای کوتاه پخش می‌شود.", "A short chime plays while this window is open or when the system notification makes no sound.")}
+          />
           <Checkbox
             checked={current?.preview ?? true}
             onChange={(v) => change({ preview: v })}

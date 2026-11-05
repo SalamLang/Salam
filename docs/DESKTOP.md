@@ -1,6 +1,6 @@
 # Desktop applications
 
-`std/gui/desktop` builds desktop applications in Salam alone, the kind you would
+`std/gui/webview` builds desktop applications in Salam alone, the kind you would
 build with Tauri or Electron. There is no Rust and no bundled browser: the
 interface is HTML, CSS and JavaScript in the engine the operating system
 already has, and the program is one native executable.
@@ -16,19 +16,19 @@ already has, and the program is one native executable.
 `salam new notes --desktop` writes this project for you (`--lang=fa` for Persian).
 
 ```salam
-import gui.desktop
+import gui.webview
 
 func main:
-    desktop.Init(desktop.Config { id = "com.example.notes", name = "Notes", assets_dir = "www" })
-    desktop.Command("greet", (c: desktop.Call):
+    webview.Init(webview.Config { id = "com.example.notes", name = "Notes", assets_dir = "www" })
+    webview.Command("greet", (c: webview.Call):
         c.ResolveStr("Hello " + c.Str("name"))
     end)
-    win := desktop.Open(desktop.WindowOptions { title = "Notes", width = 900, height = 600 })
+    win := webview.Open(webview.WindowOptions { title = "Notes", width = 900, height = 600 })
     if win.IsClosed():
         println "could not open a window"
         ret 1
     end
-    desktop.Run()
+    webview.Run()
 end
 ```
 
@@ -44,21 +44,21 @@ const text = await salam.invoke('greet', { name: 'Sara' });
 
 | From the page                    | In Salam                                                                    |
 | -------------------------------- | --------------------------------------------------------------------------- |
-| `await salam.invoke(name, args)` | `desktop.Command` runs on the UI thread, `desktop.CommandAsync` on a worker |
-| `salam.emit(name, data)`         | `desktop.On(name, handler)`                                                 |
-| `salam.listen(name, fn)`         | `desktop.Emit(name, json)`, `win.Emit`                                      |
+| `await salam.invoke(name, args)` | `webview.Command` runs on the UI thread, `webview.CommandAsync` on a worker |
+| `salam.emit(name, data)`         | `webview.On(name, handler)`                                                 |
+| `salam.listen(name, fn)`         | `webview.Emit(name, json)`, `win.Emit`                                      |
 
 A command finishes with one `Resolve` method or `Reject`, from any thread. A
 second answer is ignored, and the text in a `Call` is freed by the answer, so
 read what you need first. `Str` returns a copy the caller frees.
-Arguments and results are JSON. `desktop.Dispatch` runs code on the UI thread
+Arguments and results are JSON. `webview.Dispatch` runs code on the UI thread
 from a worker, which is where every window call belongs.
 
 ## Where pages come from
 
 - **Files inside the program.** The default: `index.html` from the asset pack,
   served at `app://localhost` (`https://app.localhost` on Windows, so use
-  relative paths or `desktop.AssetURL`).
+  relative paths or `webview.AssetURL`).
 - **A folder.** `assets_dir` in `Config`, for development. A reload shows your
   edits.
 - **A site.** `url` in `WindowOptions`.
@@ -72,7 +72,7 @@ server.
 ## What a page may do
 
 - Local pages may run every command. Remote origins may run nothing until you
-  name them with `desktop.Allow(origin, commands)`. A pattern may end in `*`.
+  name them with `webview.Allow(origin, commands)`. A pattern may end in `*`.
   Call it before opening windows, because the list is built into the script
   each window installs.
 - The bridge is installed only in the top frame of an allowed origin. Every
@@ -146,25 +146,54 @@ Nothing is signed. macOS binaries get the ad-hoc signature the compiler
 writes, which is enough to run them after removing the quarantine flag with
 `xattr -d com.apple.quarantine`. Sign and notarize for real distribution.
 
-## Lower level
+## Low level and high level in one package
 
-`std/webview` is the layer underneath, and the right choice for a small window
-with no commands. It has one public API over the backend files
-`linux.salam`, `windows.salam`, `macos.salam` and `cef.salam`.
+`gui.webview` holds both layers. `webview.Create` gives a plain window around
+HTML, the right choice for a small tool with no commands. `webview.Init`,
+`Command`, `Open` and the rest add an application on top of it: commands,
+events, packed files, dialogs and installers. Both share one event loop, so
+`webview.Run` drives either.
 
-Windows does not link `WebView2Loader`. If the DLL is next to the program it is
-used, otherwise the runtime is found in the registry. The backend supports
-x86-64, ARM64 and 32-bit Windows.
+The backends are the `engine_*.salam` files and the system services are the
+`os_*.salam` files. Windows does not link `WebView2Loader`. If the DLL is next
+to the program it is used, otherwise the runtime is found in the registry. The
+backend supports x86-64, ARM64 and 32-bit Windows.
 
-The CEF build (`-DSALAM_WEBVIEW_CEF`) has no message channel or custom schemes,
-so `std/gui/desktop` does not support it.
+## Choosing the engine
+
+The default engine is the web view of the operating system, as in Tauri, so the
+program stays one small executable. A second engine, Chromium through the
+Chromium Embedded Framework, is available when you build:
+
+```sh
+salam build main.salam -DSALAM_WEBVIEW_CEF
+salam bundle --engine=chromium --runtime=cef-dist
+```
+
+`engine = "chromium"` and `runtime = "cef-dist"` can also go in the `[app]`
+table, and `SALAM_CEF_DIR` names the runtime folder. The folder holds the built
+`salam_webview_cef` library, `salam_cef_helper` and the CEF runtime files; the
+recipe is `std/gui/webview/native/CMakeLists.txt`. `salam bundle` copies them
+next to the program, which works for `tar` on Linux and `zip` on Windows.
+
+The program can ask which engine it got:
+
+```salam
+println webview.Engine(), webview.EngineName(), webview.SupportsCommands()
+```
+
+The Chromium engine is not complete yet. Windows open and pages load, but there
+is no message channel, no custom scheme and none of the system services, so
+`SupportsCommands()` is false there and a page cannot call `Command`. The
+choice is made when the program is built, because linking both engines would
+make every program need both.
 
 ## When a window stays blank
 
 Set `SALAM_WEBVIEW_TRACE` to a filename and run the application again. Each line
 records one step: how the runtime was started, each navigation, resource and
 message, and any message the bridge refused. It works in an application with no
-console. `desktop.LastError()` says why a window could not open at all.
+console. `webview.LastError()` says why a window could not open at all.
 
 ## Testing
 

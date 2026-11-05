@@ -36,6 +36,12 @@ Builds the app described by the [app] table of salam.toml into installable packa
                    app, tar, dmg on macOS (default: tar,deb / zip / app,tar)
   --output=DIR     Where the packages go (default: dist)
   --backend=NAME   Compiler backend (default: native for Windows and macOS)
+  --engine=NAME    system (the web view of the operating system, the default)
+                   or chromium (Chromium Embedded Framework)
+  --runtime=DIR    With chromium: the folder holding the built salam_webview_cef
+                   library, salam_cef_helper and the CEF runtime files; copied
+                   next to the program (tar on Linux, zip on Windows). Also read
+                   from SALAM_CEF_DIR
 
 salam.toml:
 
@@ -74,6 +80,7 @@ struct _Build:
     pub exe: str = ""
     pub pack: str = ""
     pub base: str = ""
+    pub runtime: str = ""
 end
 
 @en "Manifest"
@@ -109,6 +116,12 @@ pub struct Manifest:
     @en "slug"
     @fa "نام کوتاه"
     pub slug: str = ""
+    @en "engine"
+    @fa "موتور"
+    pub engine: str = "system"
+    @en "runtime"
+    @fa "پوشه موتور"
+    pub runtime: str = ""
 end
 
 func _say(text: str):
@@ -312,6 +325,18 @@ func _desktop_entry(b: _Build, exec_path: str, icon_name: str): str:
     ret out + "\nCategories=" + m.category + ";\nTerminal=false\nStartupWMClass=" + m.id + "\n"
 end
 
+func _runtime_files(b: _Build): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    if b.runtime.len() == 0:
+        ret out
+    end
+    prefix := b.runtime.len() + 1
+    each full in os.Walk(b.runtime):
+        out.push(str.Substr(full, prefix, str.Len(full) - prefix))
+    end
+    ret out
+end
+
 func _package_tar_linux(b: _Build): bool:
     mut files := Vector {} as Vector<archive.TarFileInput>
     defer files.free()
@@ -325,6 +350,12 @@ func _package_tar_linux(b: _Build): bool:
         end
     end
     _tar_add_text(files, b.base + "/" + b.manifest.id + ".desktop", _desktop_entry(b, b.manifest.slug, "icon"))
+    each rel in _runtime_files(b):
+        mode := rel == "salam_cef_helper" ? 0o755 : 0o644
+        if not _tar_add_file(files, b.base + "/" + rel, filepath.Join(b.runtime, rel), mode):
+            ret false
+        end
+    end
     ret _write_targz(files, filepath.Join(b.output, b.base + ".tar.gz"))
 end
 
@@ -444,8 +475,26 @@ func _package_zip_windows(b: _Build): bool:
         ret false
     end
     files.push(archive.MakeZipFileInput(b.base + "/" + b.manifest.slug + ".exe", data, size as int, 8))
+    mut extra := Vector {} as Vector<void*>
+    defer extra.free()
+    each rel in _runtime_files(b):
+        mut extra_size := 0 as i64
+        blob := _read_bytes(filepath.Join(b.runtime, rel), extra_size)
+        if blob == null:
+            mem.Free(data)
+            each p in extra:
+                mem.Free(p)
+            end
+            ret false
+        end
+        extra.push(blob)
+        files.push(archive.MakeZipFileInput(b.base + "/" + rel, blob, extra_size as int, 8))
+    end
     ok := archive.ZipCreateFile(files, filepath.Join(b.output, b.base + ".zip"))
     mem.Free(data)
+    each p in extra:
+        mem.Free(p)
+    end
     ret ok
 end
 
@@ -659,6 +708,9 @@ func _compile(b &: _Build): bool:
     if b.target.len() > 0:
         args.push("--target=" + b.target)
     end
+    if m.engine == "chromium":
+        args.push("-DSALAM_WEBVIEW_CEF")
+    end
     backend := b.backend.len() > 0 ? b.backend : (b.os_name == "linux" ? "" : "native")
     if backend.len() > 0:
         args.push("--backend=" + backend)
@@ -739,6 +791,10 @@ pub func ReadManifest(path: str, out &: Manifest): bool:
             out.publisher = value
         else key == "category":
             out.category = value
+        else key == "engine":
+            out.engine = value
+        else key == "runtime":
+            out.runtime = value
         end
     end
     if out.name.len() == 0:
@@ -754,6 +810,8 @@ pub func Main(args: Vector<str>): int:
     mut project := ""
     mut target := ""
     mut backend := ""
+    mut engine := ""
+    mut runtime := ""
     mut output := "dist"
     mut formats := ""
     mut caller := ""
@@ -770,6 +828,10 @@ pub func Main(args: Vector<str>): int:
             target = str.Substr(arg, 9, str.Len(arg) - 9)
         else str.StartsWith(arg, "--backend="):
             backend = str.Substr(arg, 10, str.Len(arg) - 10)
+        else str.StartsWith(arg, "--engine="):
+            engine = str.Substr(arg, 9, str.Len(arg) - 9)
+        else str.StartsWith(arg, "--runtime="):
+            runtime = str.Substr(arg, 10, str.Len(arg) - 10)
         else str.StartsWith(arg, "--output="):
             output = str.Substr(arg, 9, str.Len(arg) - 9)
         else str.StartsWith(arg, "--format="):
@@ -802,9 +864,30 @@ pub func Main(args: Vector<str>): int:
     if m.icon.len() > 0:
         m.icon = filepath.Join(root, m.icon)
     end
+    if engine.len() > 0:
+        m.engine = engine
+    end
+    if m.engine != "system" and m.engine != "chromium":
+        ret _fail("engine must be system or chromium, not " + m.engine)
+    end
+    if runtime.len() > 0:
+        m.runtime = runtime
+    end
+    if m.runtime.len() == 0:
+        m.runtime = os.Env("SALAM_CEF_DIR")
+    end
+    if m.engine == "chromium":
+        if m.runtime.len() == 0:
+            ret _fail("the chromium engine needs the folder with the built salam_webview_cef library and the CEF runtime: runtime = \"dir\" in [app], --runtime=DIR or SALAM_CEF_DIR (see std/gui/webview/native/CMakeLists.txt)")
+        end
+        m.runtime = filepath.IsAbs(m.runtime) ? m.runtime : filepath.Join(root, m.runtime)
+        if not os.IsDir(m.runtime):
+            ret _fail("runtime folder not found: " + m.runtime)
+        end
+    end
     mut b := _Build {
         manifest = m, project = root, output = filepath.IsAbs(output) ? output : filepath.Join(os.Cwd(), output),
-        target = target, os_name = _os_of(target), arch = _arch_of(target), backend = backend,
+        target = target, os_name = _os_of(target), arch = _arch_of(target), backend = backend, runtime = m.engine == "chromium" ? m.runtime : "",
         salam = self_path.len() > 0 ? self_path : "salam"
     }
     b.base = m.slug + "-" + m.version + "-" + b.os_name + "-" + b.arch
@@ -846,6 +929,9 @@ pub func Main(args: Vector<str>): int:
     defer wanted.free()
     each format in wanted:
         mut ok := false
+        if b.runtime.len() > 0 and not ((b.os_name == "linux" and format == "tar") or (b.os_name == "windows" and format == "zip")):
+            ret _fail("the chromium engine can be packed as tar on Linux or zip on Windows, not " + format + " on " + b.os_name)
+        end
         if b.os_name == "linux" and format == "tar":
             ok = _package_tar_linux(b)
         else b.os_name == "linux" and format == "deb":

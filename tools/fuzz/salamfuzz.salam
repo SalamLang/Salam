@@ -1,0 +1,872 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import str
+import os
+import os.process
+import os.temp
+import filepath
+import flag
+
+const M := "1000003"
+
+const PRE_TYPES := `interface Sh:
+    func val(): i64
+end
+
+struct Acc:
+    pub x: i64 = 0
+    pub y: i64 = 0
+end
+
+struct Pr<T>:
+    pub a: T
+    pub b: T
+    pub func sum(): T:
+        ret this.a + this.b
+    end
+end
+
+struct Sq:
+    pub k: i64 = 0
+    pub func val(): i64:
+        ret this.k * this.k % 1000003
+    end
+end
+
+struct Ln:
+    pub k: i64 = 0
+    pub func val(): i64:
+        ret this.k * 3 + 1
+    end
+end`
+
+const PRE_GENS := `func gmax<T>(a: T, b: T): T:
+    if a > b:
+        ret a
+    end
+    ret b
+end
+
+func gfold<T>(v: Vector<T>, z: T): T:
+    mut s := z
+    each e in v:
+        s = s + e
+    end
+    ret s
+end
+
+func gcount<T>(v: Vector<T>): int:
+    ret v.len()
+end`
+
+const PRE_LAMBDAS := `noinline func app(f: func (i64) i64, n: i64): i64:
+    ret f(n)
+end`
+
+mut g_rng := 0 as u64
+
+struct Run:
+    pub rc: int = 0
+    pub out: str = ""
+    pub err: str = ""
+end
+
+func rnd_seed(seed: i64):
+    g_rng = (seed as u64) * 2654435761 + 12345
+    repeat 4:
+        _x := rnd_next()
+    end
+end
+
+func rnd_next(): u64:
+    g_rng = g_rng * 6364136223846793005 + 1442695040888963407
+    ret g_rng
+end
+
+func rnd_n(n: int): int:
+    ret (((rnd_next() >> 33) % (n as u64))) as int
+end
+
+func rnd_int(lo: int, hi: int): int:
+    ret lo + rnd_n(hi - lo + 1)
+end
+
+func rnd_f(): f64:
+    ret ((rnd_next() >> 11) as f64) / 9007199254740992.0
+end
+
+func pick_i(v: int[]): int:
+    ret v[rnd_n(len(v))]
+end
+
+func pick_s(v: str[]): str:
+    ret v[rnd_n(len(v))]
+end
+
+func pick_v(v: Vector<str>): str:
+    ret v.get(rnd_n(v.len()))
+end
+
+func I(n: i64): str:
+    ret str.FromInt(n)
+end
+
+func ind_of(n: int): str:
+    ret str.Repeat("    ", n)
+end
+
+func leaf(vs: Vector<str>): str:
+    r := rnd_f()
+    if r < 0.6 and vs.len() > 0:
+        ret pick_v(vs)
+    end
+    k := pick_i([0, 1, 2, 3, 5, 7, 13, 255, 1000, 65535, -1, -7])
+    if k >= 0:
+        ret "(" + I(k) + " as i64)"
+    end
+    ret "(0 - " + I(0 - k) + " as i64)"
+end
+
+func expr(vs: Vector<str>, d: int): str:
+    if d <= 0 or rnd_f() < 0.25:
+        ret leaf(vs)
+    end
+    a := expr(vs, d - 1)
+    b := expr(vs, d - 1)
+    k := rnd_n(13)
+    switch k:
+        0:
+            ret "((" + a + " + " + b + ") % " + M + ")"
+        end
+        1:
+            ret "((" + a + " - " + b + ") % " + M + ")"
+        end
+        2:
+            ret "(((" + a + " % 46337) * (" + b + " % 46337)) % " + M + ")"
+        end
+        3:
+            ret "(" + a + " / ((" + b + " % 7) + 8))"
+        end
+        4:
+            ret "(" + a + " % ((" + b + " % 11) + 13))"
+        end
+        5:
+            ret "((" + a + " & 65535) << (" + b + " & 15))"
+        end
+        6:
+            ret "(" + a + " >> (" + b + " & 31))"
+        end
+        7:
+            ret "(" + a + " & " + b + ")"
+        end
+        8:
+            ret "(" + a + " | " + b + ")"
+        end
+        9:
+            ret "(" + a + " ^ " + b + ")"
+        end
+        10:
+            c := expr(vs, d - 1)
+            op := pick_s(["<", "<=", ">", ">=", "==", "!="])
+            ret "(" + a + " " + op + " " + b + " ? " + c + " : " + a + ")"
+        end
+        11:
+            ret "((" + a + " as i32) as i64)"
+        end
+    end
+    ret "(((" + a + " as u8) as i64) + ((" + b + " as i16) as i64))"
+end
+
+func block(vs: Vector<str>, depth: int, lines &: Vector<str>, ind: int, loopvar: str):
+    n := rnd_int(1, 4)
+    repeat n:
+        k := rnd_n(9)
+        sp := ind_of(ind)
+        mut use := Vector {} as Vector<str>
+        each s in vs:
+            use.push(s)
+        end
+        if loopvar != "":
+            use.push(loopvar)
+        end
+        if k <= 3 or depth <= 0:
+            t := pick_s(["x", "y", "z"])
+            lines.push(sp + t + " = " + expr(use, 3))
+        else k == 4:
+            lines.push(sp + "if " + expr(use, 2) + " + x > " + expr(use, 2) + ":")
+            block(vs, depth - 1, lines, ind + 1, loopvar)
+            lines.push(sp + "else:")
+            block(vs, depth - 1, lines, ind + 1, loopvar)
+            lines.push(sp + "end")
+        else k == 5 and loopvar == "":
+            lv := "i" + I(ind)
+            cnt := pick_i([1, 3, 4, 5, 8, 9, 16, 17, 33])
+            lines.push(sp + "repeat " + I(cnt) + " in " + lv + ":")
+            lines.push(sp + "    z = (z + (" + lv + " as i64)) % " + M)
+            block(vs, depth - 1, lines, ind + 1, "(" + lv + " as i64)")
+            lines.push(sp + "end")
+        else k == 6:
+            lines.push(sp + "v.push(" + expr(use, 2) + ")")
+        else k == 7:
+            ix := expr(use, 2)
+            lines.push(sp + "if v.len() > 0:")
+            vlen := "(v.len() as i64)"
+            idx_expr := "(((" + ix + " % " + vlen + ") + " + vlen + ") % " + vlen + ") as int"
+            lines.push(sp + "    v.set(" + idx_expr + ", " + expr(use, 2) + ")")
+            lines.push(sp + "end")
+        else:
+            lines.push(sp + "each e in v:")
+            lines.push(sp + "    y = (y + e * 3) % " + M)
+            lines.push(sp + "end")
+        end
+        use.free()
+    end
+end
+
+func gen_func(idx: int): str:
+    mut lines := Vector {} as Vector<str>
+    lines.push("noinline func f" + I(idx) + "(a: i64, b: i64): i64:")
+    lines.push("    mut x := a")
+    lines.push("    mut y := b")
+    lines.push("    mut z := a ^ b")
+    lines.push("    mut v := Vector {} as Vector<i64>")
+    lines.push("    v.push(a)")
+    mut vs := Vector {} as Vector<str>
+    vs.push("x")
+    vs.push("y")
+    vs.push("z")
+    vs.push("a")
+    vs.push("b")
+    block(vs, 3, lines, 1, "")
+    vs.free()
+    lines.push("    x = x + 1")
+    lines.push("    y = y + 1")
+    lines.push("    z = z + 1")
+    lines.push("    v.push(0 as i64)")
+    lines.push("    mut s := x * 7 + y * 3 + z")
+    lines.push("    each w in v:")
+    lines.push("        s = (s * 31 + w) % " + M)
+    lines.push("    end")
+    lines.push("    v.free()")
+    lines.push("    ret s")
+    lines.push("end")
+    out := str.Join(lines, "\n")
+    lines.free()
+    ret out
+end
+
+func k_to(ty: str, e: str): str:
+    if ty == "i64":
+        ret e
+    end
+    ret "((" + e + ") as " + ty + ")"
+end
+
+func k_wide(ty: str, e: str): str:
+    if ty == "i64":
+        ret e
+    end
+    ret "(" + e + " as i64)"
+end
+
+func k_lit(ty: str, v: int): str:
+    ret "(" + I(v) + " as " + ty + ")"
+end
+
+func gen_kernel(idx: int): str:
+    mut ty := "int"
+    mut lim := 1000
+    kt := rnd_n(4)
+    switch kt:
+        1:
+            ty = "u8"
+            lim = 256
+        end
+        2:
+            ty = "i16"
+            lim = 1000
+        end
+        3:
+            ty = "i64"
+            lim = 100000
+        end
+    end
+    L := I(lim)
+    n := pick_i([0, 1, 3, 4, 7, 8, 15, 16, 17, 31, 33, 64])
+    mut lines := Vector {} as Vector<str>
+    lines.push("noinline func k" + I(idx) + "(a: i64, b: i64): i64:")
+    lines.push("    n := " + I(n) + " + ((a - a) as int)")
+    lines.push("    mut x := Vector {} as Vector<" + ty + ">")
+    lines.push("    mut y := Vector {} as Vector<" + ty + ">")
+    lines.push("    mut o := Vector {} as Vector<" + ty + ">")
+    lines.push("    repeat n in i:")
+    lines.push("        x.push(" + k_to(ty, "((a + (i as i64) * 7919) % " + L + " + " + L + ") % " + L) + ")")
+    lines.push("        y.push(" + k_to(ty, "((b + (i as i64) * 104729) % " + L + " + " + L + ") % " + L) + ")")
+    lines.push("        o.push(" + k_lit(ty, 0) + ")")
+    lines.push("    end")
+    k := rnd_n(7)
+    if k == 0:
+        op := pick_s(["+", "-", "&", "|", "^"])
+        lines.push("    repeat n in j:")
+        lines.push("        o.set(j, x.get(j) " + op + " y.get(j))")
+        lines.push("    end")
+    else k == 1 and ty != "u8":
+        lines.push("    repeat n in j:")
+        lines.push("        o.set(j, x.get(j) * " + k_lit(ty, 3) + " - y.get(j))")
+        lines.push("    end")
+    else k == 2:
+        cmp := pick_s(["<", "<=", ">", ">=", "==", "!="])
+        lines.push("    repeat n in j:")
+        lines.push("        o.set(j, x.get(j) " + cmp + " y.get(j) ? x.get(j) : y.get(j))")
+        lines.push("    end")
+    else k == 3:
+        lines.push("    mut m := 0 as i64")
+        lines.push("    repeat n in j:")
+        lines.push("        if " + k_wide(ty, "x.get(j)") + " > m:")
+        lines.push("            m = " + k_wide(ty, "x.get(j)"))
+        lines.push("        end")
+        lines.push("    end")
+        lines.push("    o.push(" + k_to(ty, "m") + ")")
+    else k == 4:
+        lines.push("    mut t := 0 as i64")
+        lines.push("    repeat n in j:")
+        lines.push("        t = t + " + k_wide(ty, "x.get(j)") + " + " + k_wide(ty, "y.get(j)"))
+        lines.push("    end")
+        lines.push("    o.push(" + k_to(ty, "(t % " + L + ")") + ")")
+    else k == 5 and (ty == "int" or ty == "i64"):
+        sh := rnd_int(1, 3)
+        lines.push("    repeat n in j:")
+        lines.push("        o.set(j, (x.get(j) >> " + k_lit(ty, sh) + ") + (y.get(j) << " + k_lit(ty, sh) + "))")
+        lines.push("    end")
+    else:
+        lines.push("    mut jj := 0")
+        lines.push("    until jj <= n - 1:")
+        lines.push("        o.set(jj, x.get(jj) & y.get(jj))")
+        lines.push("        jj = jj + 1")
+        lines.push("    end")
+    end
+    lines.push("    mut s := 0 as i64")
+    lines.push("    each v in o:")
+    lines.push("        s = (s * 31 + " + k_wide(ty, "v") + ") % " + M)
+    lines.push("    end")
+    lines.push("    x.free()")
+    lines.push("    y.free()")
+    lines.push("    o.free()")
+    lines.push("    ret s")
+    lines.push("end")
+    out := str.Join(lines, "\n")
+    lines.free()
+    ret out
+end
+
+func gen_floats(idx: int): str:
+    mut lines := Vector {} as Vector<str>
+    lines.push("noinline func d" + I(idx) + "(a: i64, b: i64): i64:")
+    lines.push("    mut p := ((a % 1000) as f64) * 0.5 + 1.25")
+    lines.push("    mut q := ((b % 1000) as f64) * 0.25 - 3.5")
+    cnt := rnd_int(2, 6)
+    repeat cnt:
+        t := pick_s(["p", "q"])
+        o := pick_s(["p + q", "p - q", "p * 0.75 + q", "q / (p * p + 1.0)", "p > q ? p - 1.5 : q + 2.25", "(p + q) * 0.5"])
+        lines.push("    " + t + " = " + o)
+        lines.push("    " + t + " = " + t + " > 100000.0 ? 100000.0 : (" + t + " < 0.0 - 100000.0 ? 0.0 - 100000.0 : " + t + ")")
+    end
+    lines.push("    p = p + 0.5")
+    lines.push("    q = q - 0.25")
+    lines.push("    ret ((p * 1000.0) as i64) + ((q * 1000.0) as i64)")
+    lines.push("end")
+    out := str.Join(lines, "\n")
+    lines.free()
+    ret out
+end
+
+func gen_calls(idx: int): str:
+    mut parts := Vector {} as Vector<str>
+    repeat 8 in i:
+        parts.push(I(pick_i([1, 3, 5, 7])) + " * v" + I(i))
+    end
+    e := str.Join(parts, " + ")
+    parts.free()
+    mut lines := Vector {} as Vector<str>
+    lines.push("noinline func h" + I(idx) + "(acc &: Acc, v0: i64, v1: i64, v2: i64, v3: i64, v4: i64, v5: i64, v6: i64, v7: i64): i64:")
+    lines.push("    acc.x = (acc.x + " + e + ") % " + M)
+    lines.push("    acc.y = acc.y + 1")
+    lines.push("    ret acc.x * 3 + acc.y")
+    lines.push("end")
+    lines.push("")
+    lines.push("noinline func c" + I(idx) + "(a: i64, b: i64): i64:")
+    lines.push("    mut acc := Acc {}")
+    lines.push("    mut r := 0 as i64")
+    lines.push("    repeat 3 in i:")
+    lines.push("        r = r + h" + I(idx) + "(acc, a, b, a + (i as i64), b - 1, a * 2, b * 3, a ^ b, (i as i64))")
+    lines.push("    end")
+    lines.push("    ret (r + acc.x + acc.y) % " + M)
+    lines.push("end")
+    out := str.Join(lines, "\n")
+    lines.free()
+    ret out
+end
+
+func gen_strs(idx: int): str:
+    mut lines := Vector {} as Vector<str>
+    lines.push("noinline func s" + I(idx) + "(a: i64, b: i64): i64:")
+    lines.push("    mut t := str.FromInt(a % 1000)")
+    lines.push("    mut u := " + pick_s([`"q"`, `"سلام"`, `" Ab "`]) + " + str.FromInt(b % 100)")
+    lines.push("    mut h := 0 as i64")
+    cnt := rnd_int(3, 8)
+    repeat cnt:
+        k := rnd_n(12)
+        switch k:
+            0:
+                lines.push("    t = t + u")
+            end
+            1:
+                lines.push("    u = u + str.FromInt(h % " + I(pick_i([10, 1000, 65536])) + ")")
+            end
+            2:
+                lines.push("    t = t." + pick_s(["upper", "lower", "trim"]) + "()")
+            end
+            3:
+                st := rnd_int(0, 3)
+                lines.push("    if t.len() > " + I(st * 2 + 2) + ":")
+                lines.push("        u = t.substr(" + I(st) + ", t.len() - " + I(st * 2) + ")")
+                lines.push("    end")
+            end
+            4:
+                lines.push("    if u.len() < 40:")
+                lines.push("        u = u.repeat(" + I(rnd_int(1, 3)) + ")")
+                lines.push("    end")
+            end
+            5:
+                lines.push("    h = h + (t.find(" + pick_s(["u", `"q"`, `"1"`, `"ل"`]) + ") as i64)")
+            end
+            6:
+                m := pick_s(["starts_with", "ends_with", "includes"])
+                lines.push("    if t." + m + "(" + pick_s(["u", `"1"`, `"Q"`, `"م"`]) + "):")
+                lines.push("        h = h + " + I(rnd_int(1, 9)))
+                lines.push("    end")
+            end
+            7:
+                op := pick_s(["==", "!="])
+                lines.push("    if t " + op + " u:")
+                lines.push("        h = h + 11")
+                lines.push("    end")
+            end
+            8:
+                lines.push("    each c in t.bytes():")
+                lines.push("        h = (h * 31 + (c as i64)) % " + M)
+                lines.push("    end")
+            end
+            9:
+                lines.push("    each ch in u:")
+                lines.push("        h = (h * 7 + (ch.len() as i64)) % " + M)
+                lines.push("    end")
+            end
+            10:
+                lines.push("    h = h + (t.char_count() as i64) * 3 + (u.len() as i64)")
+            end
+            else:
+                lines.push(`    t = " " + t + u.substr(0, u.len() / 2) + " "`)
+            end
+        end
+        lines.push("    if t.len() > 64:")
+        lines.push("        t = t.substr(0, 32)")
+        lines.push("    end")
+    end
+    lines.push("    h = h + (t.len() as i64) * 5 + (u.len() as i64)")
+    lines.push("    each c in t.bytes():")
+    lines.push("        h = (h * 31 + (c as i64)) % " + M)
+    lines.push("    end")
+    lines.push("    each c in u.bytes():")
+    lines.push("        h = (h * 37 + (c as i64)) % " + M)
+    lines.push("    end")
+    lines.push("    ret h")
+    lines.push("end")
+    out := str.Join(lines, "\n")
+    lines.free()
+    ret out
+end
+
+func gen_gens(idx: int): str:
+    mut ty := "i64"
+    mut lim := 100000
+    kt := rnd_n(5)
+    switch kt:
+        1:
+            ty = "int"
+            lim = 10000
+        end
+        2:
+            ty = "i16"
+            lim = 100
+        end
+        3:
+            ty = "u8"
+            lim = 100
+        end
+        4:
+            ty = "f64"
+            lim = 1000
+        end
+    end
+    L := I(lim)
+    zero := ty == "int" ? "0" : "(0 as " + ty + ")"
+    mut lines := Vector {} as Vector<str>
+    lines.push("noinline func g" + I(idx) + "(a: i64, b: i64): i64:")
+    lines.push("    mut v := Vector {} as Vector<" + ty + ">")
+    lines.push("    repeat " + I(rnd_int(1, 9)) + " in i:")
+    lines.push("        v.push(" + k_to(ty, "((a + (i as i64) * 7919) % " + L + " + " + L + ") % " + L) + ")")
+    lines.push("    end")
+    lines.push("    p := Pr { a = " + k_to(ty, "((a % " + L + ") + " + L + ") % " + L) + ", b = " + k_to(ty, "((b % " + L + ") + " + L + ") % " + L) + " } as Pr<" + ty + ">")
+    lines.push("    mut r := " + k_wide(ty, "(gfold(v, " + zero + ") + p.sum())") + " % " + M + " + (gcount(v) as i64) + " + k_wide(ty, "gmax(p.a, p.b)"))
+    cnt := rnd_int(1, 4)
+    repeat cnt in n:
+        k := rnd_n(4)
+        if k == 0:
+            lines.push("    r = (r + " + k_wide(ty, "gmax(p.a, p.b)") + ") % " + M)
+        else k == 1:
+            lines.push("    each e in v:")
+            lines.push("        r = (r * 3 + " + k_wide(ty, "gmax(e, p.b)") + ") % " + M)
+            lines.push("    end")
+        else k == 2:
+            lines.push("    r = (r + gmax(r, (gcount(v) as i64))) % " + M)
+        else:
+            lines.push("    q" + I(n) + " := Pr { a = r % 1000, b = (gcount(v) as i64) } as Pr<i64>")
+            lines.push("    r = (r + q" + I(n) + ".sum() * 7) % " + M)
+        end
+    end
+    lines.push("    v.free()")
+    lines.push("    ret r")
+    lines.push("end")
+    out := str.Join(lines, "\n")
+    lines.free()
+    ret out
+end
+
+func gen_lambdas(idx: int): str:
+    k1 := pick_s(["b % 97", "a ^ b", "(a + b) % 1000", "b & 255"])
+    mut lines := Vector {} as Vector<str>
+    lines.push("noinline func l" + I(idx) + "(a: i64, b: i64): i64:")
+    lines.push("    k := " + k1)
+    lines.push("    f := (x: i64): ret (x * " + I(pick_i([1, 3, 7])) + " + k) % " + M + " end")
+    lines.push("    mut s := app(f, a)")
+    lines.push("    mut fs := Vector {} as Vector<func (i64) i64>")
+    lines.push("    fs.push(f)")
+    c1 := rnd_int(0, 3)
+    repeat c1:
+        body := pick_s(["x ^ k", "(x + a) % 65536", "x > k ? x - k : k - x", "(x * x) % " + M])
+        lines.push("    fs.push((x: i64): ret " + body + " end)")
+    end
+    lines.push("    each g in fs:")
+    lines.push("        s = (s + g(s % 46337)) % " + M)
+    lines.push("    end")
+    lines.push("    mut ds := Vector {} as Vector<dyn Sh>")
+    c2 := rnd_int(1, 4)
+    repeat c2:
+        lines.push("    ds.push(" + pick_s(["Sq", "Ln"]) + " { k = " + pick_s(["a", "b", "s"]) + " % 1000 })")
+    end
+    lines.push("    each d in ds:")
+    lines.push("        s = (s * 5 + d.val()) % " + M)
+    lines.push("    end")
+    lines.push("    fs.free()")
+    lines.push("    ds.free()")
+    lines.push("    ret s")
+    lines.push("end")
+    out := str.Join(lines, "\n")
+    lines.free()
+    ret out
+end
+
+func gen_threads(idx: int): str:
+    nw := rnd_int(2, 4)
+    mut parts := Vector {} as Vector<str>
+    repeat nw in k:
+        n := pick_i([1, 7, 64, 500, 1000])
+        mut ev := Vector {} as Vector<str>
+        ev.push("x")
+        ev.push("s")
+        ev.push("(i as i64)")
+        mut lines := Vector {} as Vector<str>
+        lines.push("func tw" + I(idx) + "_" + I(k) + "():")
+        lines.push("    mut x := (fz_seed * " + I(pick_i([1, 3, 7])) + " + " + I(k) + ") % " + M)
+        lines.push("    mut s := 0 as i64")
+        lines.push("    repeat " + I(n) + " in i:")
+        lines.push("        x = " + expr(ev, 2))
+        lines.push("        s = (s * 3 + x + (i as i64)) % " + M)
+        lines.push("    end")
+        lines.push("    sync.Lock(fz_mu)")
+        lines.push("    fz_total = ((fz_total + s) % " + M + " + " + M + ") % " + M)
+        lines.push("    sync.Unlock(fz_mu)")
+        lines.push("end")
+        parts.push(str.Join(lines, "\n"))
+        lines.free()
+        ev.free()
+    end
+    mut body := Vector {} as Vector<str>
+    body.push("noinline func t" + I(idx) + "(a: i64, b: i64): i64:")
+    body.push("    fz_seed = ((a ^ b) % " + M + " + " + M + ") % " + M)
+    body.push("    fz_total = 0")
+    repeat nw in k:
+        body.push("    hd" + I(k) + " := spawn(tw" + I(idx) + "_" + I(k) + ")")
+    end
+    repeat nw in k:
+        body.push("    join(hd" + I(k) + ")")
+    end
+    body.push("    ret fz_total")
+    body.push("end")
+    parts.push(str.Join(body, "\n"))
+    body.free()
+    out := str.Join(parts, "\n\n")
+    parts.free()
+    ret out
+end
+
+func gen_program(nf: int): str:
+    mut parts := Vector {} as Vector<str>
+    mut names := Vector {} as Vector<str>
+    mut u_strs := false
+    mut u_gens := false
+    mut u_lambdas := false
+    mut u_threads := false
+    repeat nf in k:
+        parts.push(gen_func(k))
+        names.push("f" + I(k))
+        kind := rnd_n(7)
+        switch kind:
+            0:
+                parts.push(gen_kernel(k))
+                names.push("k" + I(k))
+            end
+            1:
+                parts.push(gen_floats(k))
+                names.push("d" + I(k))
+            end
+            2:
+                parts.push(gen_calls(k))
+                names.push("c" + I(k))
+            end
+            3:
+                parts.push(gen_strs(k))
+                u_strs = true
+                names.push("s" + I(k))
+            end
+            4:
+                parts.push(gen_gens(k))
+                u_gens = true
+                names.push("g" + I(k))
+            end
+            5:
+                parts.push(gen_lambdas(k))
+                u_lambdas = true
+                names.push("l" + I(k))
+            end
+            else:
+                parts.push(gen_threads(k))
+                u_threads = true
+                names.push("t" + I(k))
+            end
+        end
+    end
+    mut head := Vector {} as Vector<str>
+    if u_strs:
+        head.push("import str")
+    end
+    if u_threads:
+        head.push("import sync")
+        head.push("mut fz_mu := sync.NewMutex()\n\nmut fz_total := 0 as i64\n\nmut fz_seed := 0 as i64")
+    end
+    head.push(PRE_TYPES)
+    if u_gens:
+        head.push(PRE_GENS)
+    end
+    if u_lambdas:
+        head.push(PRE_LAMBDAS)
+    end
+    each p in parts:
+        head.push(p)
+    end
+    mut main_lines := Vector {} as Vector<str>
+    main_lines.push("func main:")
+    each nm in names:
+        mut ab := Vector {} as Vector<str>
+        ab.push("(0 as i64)|(0 as i64)")
+        ab.push("(1 as i64)|(2 as i64)")
+        ab.push("(0 - 5 as i64)|(7 as i64)")
+        ab.push("(123456 as i64)|(0 - 987 as i64)")
+        ab.push("(65535 as i64)|(3 as i64)")
+        each pair in ab:
+            sp := pair.split("|")
+            main_lines.push("    println " + nm + "(" + sp.get(0) + ", " + sp.get(1) + ")")
+            sp.free()
+        end
+        ab.free()
+    end
+    main_lines.push("end")
+    out := str.Join(head, "\n\n") + "\n\n" + str.Join(main_lines, "\n") + "\n"
+    head.free()
+    main_lines.free()
+    parts.free()
+    names.free()
+    ret out
+end
+
+func run_cmd(argv: Vector<str>, cwd: str): Run:
+    mut cmd := process.NewCommand(argv.get(0))
+    repeat argv.len() - 1 in i:
+        cmd.Arg(argv.get(i + 1))
+    end
+    cmd.cwd = cwd
+    mut r := process.RunCommand(cmd, "", 120000)
+    cmd.Free()
+    if not r.started:
+        r.Free()
+        ret Run { rc = 0 - 998, err = "cannot start " + argv.get(0) }
+    end
+    if r.timed_out:
+        r.Free()
+        ret Run { rc = 0 - 999, err = "timeout" }
+    end
+    res := Run { rc = r.status.ReturnCode(), out = str.Concat(r.stdout, ""), err = str.Concat(r.stderr, "") }
+    r.Free()
+    ret res
+end
+
+func clip(s: str, n: int): str:
+    t := str.Trim(s)
+    if t.len() > n:
+        ret t.substr(0, n)
+    end
+    ret t
+end
+
+func main(): int:
+    mut fs := flag.New("salamfuzz", "Random differential testing of Salam backends")
+    flag.AddInt(fs, "count", "", 50, "number of programs")
+    flag.AddInt(fs, "seed", "", 1, "first seed")
+    flag.AddInt(fs, "funcs", "", 3, "functions per program")
+    flag.AddStr(fs, "ref", "", "c", "reference backend")
+    flag.AddStr(fs, "target", "", "", "target triple")
+    flag.AddStr(fs, "runner", "", "", "command that runs the target binary")
+    flag.AddStr(fs, "keep", "", "", "directory for failing programs")
+    all := os.Args()
+    mut rest := Vector {} as Vector<str>
+    mut ai := 1
+    until ai < all.len():
+        rest.push(all.get(ai))
+        ai += 1
+    end
+    if not flag.Parse(fs, rest):
+        printerrln "salamfuzz: error: " + flag.Error(fs)
+        ret 2
+    end
+    pos := flag.Positional(fs)
+    if pos.len() != 1:
+        printerrln "usage: salamfuzz <salam> [--count N] [--seed S] [--funcs N] [--ref c|llvm] [--target TRIPLE] [--runner CMD] [--keep DIR]"
+        printerrln "salamfuzz: error: the following arguments are required: salam"
+        ret 2
+    end
+    salam := filepath.Abs(pos.get(0))
+    count := flag.GetInt(fs, "count") as int
+    first := flag.GetInt(fs, "seed")
+    funcs := flag.GetInt(fs, "funcs") as int
+    ref := flag.GetStr(fs, "ref")
+    target := flag.GetStr(fs, "target")
+    runner := flag.GetStr(fs, "runner")
+    keep := flag.GetStr(fs, "keep")
+    work := temp.Directory()
+    if work == "":
+        printerrln "salamfuzz: cannot create a temporary directory"
+        ret 2
+    end
+    mut bad := 0
+    repeat count in n:
+        seed := first + (n as i64)
+        rnd_seed(seed)
+        src := gen_program(funcs)
+        d := filepath.Join(work, "s" + I(seed))
+        _m := os.MkdirAll(d)
+        _w := os.WriteFile(filepath.Join(d, "p.salam"), src)
+        mut a1 := Vector {} as Vector<str>
+        a1.push(salam)
+        a1.push("build")
+        a1.push("p.salam")
+        a1.push("--backend=" + ref)
+        a1.push("--release")
+        a1.push("--output=ref")
+        a1.push("--log-level=error")
+        r1 := run_cmd(a1, d)
+        a1.free()
+        if r1.rc != 0:
+            bad += 1
+            println "FAIL seed " + I(seed) + ": reference build failed: " + clip(r1.err, 300)
+            continue
+        end
+        mut a2 := Vector {} as Vector<str>
+        a2.push(salam)
+        a2.push("build")
+        a2.push("p.salam")
+        a2.push("--backend=native")
+        a2.push("--release")
+        a2.push("--output=nat")
+        a2.push("--log-level=error")
+        if target != "":
+            a2.push("--target=" + target)
+        end
+        r2 := run_cmd(a2, d)
+        a2.free()
+        if r2.rc != 0:
+            bad += 1
+            println "FAIL seed " + I(seed) + ": native build failed: " + clip(r2.err, 300)
+            continue
+        end
+        mut b1 := Vector {} as Vector<str>
+        b1.push(filepath.Join(d, "ref"))
+        x1 := run_cmd(b1, d)
+        b1.free()
+        mut b2 := Vector {} as Vector<str>
+        if runner != "":
+            each w in str.Fields(runner):
+                b2.push(w)
+            end
+            b2.push("./nat")
+        else:
+            b2.push(filepath.Join(d, "nat"))
+        end
+        x2 := run_cmd(b2, d)
+        b2.free()
+        differ := x1.out != x2.out
+        if x1.rc != 0 or x2.rc != 0:
+            bad += 1
+            msg := x1.rc != 0 ? x1.err : x2.err
+            println "FAIL seed " + I(seed) + ": run failed, exit " + I(x1.rc) + " vs " + I(x2.rc) + ": " + clip(msg, 200)
+        else differ:
+            bad += 1
+            println "DIFF seed " + I(seed) + ": output differs"
+        end
+        if (x1.rc != 0 or x2.rc != 0 or differ) and keep != "":
+            _k := os.MkdirAll(keep)
+            _c := os.Copy(filepath.Join(d, "p.salam"), filepath.Join(keep, "diff_" + I(seed) + ".salam"))
+        end
+        _r := temp.RemoveDir(d)
+    end
+    _rw := temp.RemoveDir(work)
+    println "salamfuzz: " + I((count - bad) as i64) + " agree, " + I(bad as i64) + " failed"
+    if bad > 0:
+        ret 1
+    end
+    ret 0
+end

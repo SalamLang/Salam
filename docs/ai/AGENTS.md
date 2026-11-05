@@ -559,6 +559,12 @@ advice. Each one silently produces wrong behaviour rather than a diagnostic.
   `i128`/`u128` are BigInts and stay exact, but a value that passes through
   `i64` or `u64` on the way in or out is still limited to 2^53 there.
 
+- **`i128` and `u128` have a few limits of their own.** They cannot index an
+  array, bound a slice, size a string repeat or count a `repeat` (`E159`: cast
+  to `i64` first). An `extern` function can use them only on 64-bit targets,
+  and a variadic one never (`E160`). `json` derive refuses them. A float cast
+  saturates and NaN gives 0.
+
 - **A file's module is keyed by its filename.** Two included files with the
   same name (`a/io.salam` and `b/io.salam`), or one of your files named after a
   std package you import (`shell.salam` next to `import os.shell`), clash. The

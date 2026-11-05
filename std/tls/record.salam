@@ -13,8 +13,7 @@ const REC_MAX_CIPHERTEXT := 16640
 const REC_HEADER := 5
 const REC_RX_CAP := 16645 + 16384
 const REC_SEAL_ROOM := 64
-const REC_TX_BATCH := 65536
-const REC_TX_KEEP := 32768
+const REC_TX_BATCH := 33024
 const REC_IPPROTO_TCP := 6
 const REC_TCP_QUICKACK := 12
 
@@ -48,8 +47,10 @@ struct RecordLayer:
     pub rpos: int = 0
     pub tx: Buf = Buf {}
     pub corked: bool = false
-    pub nonce: Buf = Buf {}
-    pub aad: Buf = Buf {}
+    pub rnonce: Buf = Buf {}
+    pub raad: Buf = Buf {}
+    pub tnonce: Buf = Buf {}
+    pub taad: Buf = Buf {}
     pub rxk: TrafficKeys = TrafficKeys {}
     pub txk: TrafficKeys = TrafficKeys {}
     pub eof: bool = false
@@ -63,8 +64,10 @@ func _rec_new(fd: i64): RecordLayer:
     r.fd = fd
     r.rx = _newbuf(REC_RX_CAP)
     r.tx = _newbuf(REC_MAX_PLAINTEXT + REC_SEAL_ROOM)
-    r.nonce = _newbuf(12)
-    r.aad = _newbuf(16)
+    r.rnonce = _newbuf(12)
+    r.raad = _newbuf(16)
+    r.tnonce = _newbuf(12)
+    r.taad = _newbuf(16)
     r.corked = true
     ret r
 end
@@ -72,8 +75,10 @@ end
 func _rec_free(r &: RecordLayer):
     _buf_wipe(r.rx)
     _buf_wipe(r.tx)
-    _buf_free(r.nonce)
-    _buf_free(r.aad)
+    _buf_free(r.rnonce)
+    _buf_free(r.raad)
+    _buf_free(r.tnonce)
+    _buf_free(r.taad)
     _tk_free(r.rxk)
     _tk_free(r.txk)
 end
@@ -92,10 +97,6 @@ func _rec_flush(r &: RecordLayer): bool:
     n := r.tx.len
     sent := rawsock.SendBytes(rawsock.FromFd(r.fd), r.tx.p, n)
     r.tx.len = 0
-    if r.tx.cap > REC_TX_KEEP:
-        _buf_wipe(r.tx)
-        r.tx = _newbuf(REC_MAX_PLAINTEXT + REC_SEAL_ROOM)
-    end
     if sent != n:
         _rec_fail(r, "short write")
         ret false
@@ -118,7 +119,7 @@ func _rec_ack_now(r: RecordLayer):
 end
 
 func _rec_fill(r &: RecordLayer): bool:
-    if not _rec_flush(r):
+    if r.corked and not _rec_flush(r):
         r.eof = true
         ret false
     end
@@ -217,18 +218,18 @@ func _rec_open(r &: RecordLayer, typ &: int, out &: void*, out_len &: int): bool
             ret false
         end
         content_len := length - exp - 16
-        _bufreset(r.nonce)
+        _bufreset(r.rnonce)
         if exp > 0:
-            _putraw(r.nonce, r.rxk.iv.p, 4)
-            _putraw(r.nonce, body, 8)
+            _putraw(r.rnonce, r.rxk.iv.p, 4)
+            _putraw(r.rnonce, body, 8)
         else:
-            _putzeros(r.nonce, 12)
-            _tk_nonce(r.rxk, r.nonce)
+            _putzeros(r.rnonce, 12)
+            _tk_nonce(r.rxk, r.rnonce)
         end
-        _tk12_aad(r.rxk.seq, ctype, content_len, r.aad)
+        _tk12_aad(r.rxk.seq, ctype, content_len, r.raad)
         cp := ((body as i64) + (exp as i64)) as void*
         tp := ((cp as i64) + (content_len as i64)) as void*
-        if not _aead_open(r.rxk, r.nonce, r.aad.p, r.aad.len, cp, content_len, tp, cp):
+        if not _aead_open(r.rxk, r.rnonce, r.raad.p, r.raad.len, cp, content_len, tp, cp):
             _rec_fail(r, "bad record MAC")
             ret false
         end
@@ -243,11 +244,11 @@ func _rec_open(r &: RecordLayer, typ &: int, out &: void*, out_len &: int): bool
     end
 
     ctlen := length - 16
-    _bufreset(r.nonce)
-    _putzeros(r.nonce, 12)
-    _tk_nonce(r.rxk, r.nonce)
+    _bufreset(r.rnonce)
+    _putzeros(r.rnonce, 12)
+    _tk_nonce(r.rxk, r.rnonce)
     tagp := ((body as i64) + (ctlen as i64)) as void*
-    if not _aead_open(r.rxk, r.nonce, _bufptr(r.rx, base), REC_HEADER, body, ctlen, tagp, body):
+    if not _aead_open(r.rxk, r.rnonce, _bufptr(r.rx, base), REC_HEADER, body, ctlen, tagp, body):
         _rec_fail(r, "bad record MAC")
         ret false
     end
@@ -305,15 +306,15 @@ func _rec_append(r &: RecordLayer, typ: int, p: void*, n: int): bool:
     if r.txk.is12:
         exp := r.txk.explicit_len
         _rec_header(r, typ, exp + n + 16)
-        _bufreset(r.nonce)
-        _putzeros(r.nonce, 12)
-        _tk_nonce(r.txk, r.nonce)
+        _bufreset(r.tnonce)
+        _putzeros(r.tnonce, 12)
+        _tk_nonce(r.txk, r.tnonce)
         if exp > 0:
-            _putraw(r.tx, _bufptr(r.nonce, 4), 8)
+            _putraw(r.tx, _bufptr(r.tnonce, 4), 8)
         end
-        _tk12_aad(r.txk.seq, typ, n, r.aad)
+        _tk12_aad(r.txk.seq, typ, n, r.taad)
         ctp := _bufptr(r.tx, r.tx.len)
-        _aead_seal(r.txk, r.nonce, r.aad.p, r.aad.len, p, ctp, n, ((ctp as i64) + (n as i64)) as void*)
+        _aead_seal(r.txk, r.tnonce, r.taad.p, r.taad.len, p, ctp, n, ((ctp as i64) + (n as i64)) as void*)
         r.tx.len += n + 16
     else:
         hdr := _bufptr(r.tx, r.tx.len)
@@ -323,10 +324,10 @@ func _rec_append(r &: RecordLayer, typ: int, p: void*, n: int): bool:
             mem.Copy(ctp, p, n as u64)
         end
         _bput(ctp, n, typ)
-        _bufreset(r.nonce)
-        _putzeros(r.nonce, 12)
-        _tk_nonce(r.txk, r.nonce)
-        _aead_seal(r.txk, r.nonce, hdr, REC_HEADER, ctp, ctp, n + 1, ((ctp as i64) + ((n + 1) as i64)) as void*)
+        _bufreset(r.tnonce)
+        _putzeros(r.tnonce, 12)
+        _tk_nonce(r.txk, r.tnonce)
+        _aead_seal(r.txk, r.tnonce, hdr, REC_HEADER, ctp, ctp, n + 1, ((ctp as i64) + ((n + 1) as i64)) as void*)
         r.tx.len += n + 17
     end
     if not _tk_advance(r.txk):

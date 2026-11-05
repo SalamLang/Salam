@@ -556,6 +556,8 @@ advice. Each one silently produces wrong behaviour rather than a diagnostic.
   value) beyond 2^53 is rounded: `0 - 1` as `u64` prints
   `18446744073709552000`. `sizeof` throws. Check wide 64-bit math, such as
   hashes, with `salam run`.
+  `i128`/`u128` are BigInts and stay exact, but a value that passes through
+  `i64` or `u64` on the way in or out is still limited to 2^53 there.
 
 - **A file's module is keyed by its filename.** Two included files with the
   same name (`a/io.salam` and `b/io.salam`), or one of your files named after a

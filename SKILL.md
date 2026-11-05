@@ -415,9 +415,19 @@ x, y = y, x                   // assign several targets at once (swap)
 
 ## 3. Types & data
 
-**Primitives:** `i8 i16 i32 i64`, `u8 u16 u32 u64`, `usize size`, `f32 f64`,
-`bool`, `char`, `str`, `void`. Aliases: `int`=`i32`, `uint`=`u32`,
+**Primitives:** `i8 i16 i32 i64 i128`, `u8 u16 u32 u64 u128`, `usize size`,
+`f32 f64`, `bool`, `char`, `str`, `void`. Aliases: `int`=`i32`, `uint`=`u32`,
 `float`=`f32`. Literals: `42` (int), `3.14` (f64), `true`/`false`, `null`.
+**128-bit integers:** `i128` and `u128` work on every backend and target, with
+the same operators as the other widths: `hi := ((a as u128) * (b as u128)) >> 64`
+compiles to one `mul` on 64-bit targets. A literal above `u64` takes the
+smallest of `i128`, `u128` that holds it; `x := 1 as u128 << 100`, `0xFF_FF as
+u128`. Mixed widths follow the usual rule (same signedness widens implicitly).
+Shift counts mask to 0-127. A float cast saturates and NaN gives 0. They cannot
+index, size or bound a `repeat` (E159: cast to `i64` first), `json` derive
+refuses them, and an `extern` function can use them only on 64-bit targets
+(E160). On `salam js` they are exact BigInts, but a value that passes through
+`i64`/`u64` there is still limited to 2^53.
 **Pointer-width integers:** `usize` is unsigned (C `size_t`; Persian
 `اندازه مثبت`), `size` is signed (C `intptr_t`; Persian `اندازه`). Both are 64
 bits on 64-bit targets and 32 bits on 32-bit ones (wasm32, arm32).
@@ -2780,6 +2790,7 @@ are fine.
 | `str`            | `رشته`                       | `int` (`i32`)    | `صحیح` (`صحیح۳۲`)        |
 | `i8` `i16` `i64` | `صحیح۸` `صحیح۱۶` `صحیح۶۴`    | `uint` (`u32`)   | `طبیعی` (`طبیعی۳۲`)      |
 | `u8` `u16` `u64` | `طبیعی۸` `طبیعی۱۶` `طبیعی۶۴` | `usize` / `size` | `اندازه مثبت` / `اندازه` |
+| `i128`           | `صحیح۱۲۸`                    | `u128`           | `طبیعی۱۲۸`               |
 | `float` (`f32`)  | `اعشار` (`اعشار۳۲`)          | `f64`            | `اعشار۶۴`                |
 | `Vector<T>`      | `وکتور<T>`                   | `HashMap<K, V>`  | `نگاشت<K, V>`            |
 | `MapIter`        | `پیمایشگرنگاشت`              | `File`           | `پرونده`                 |

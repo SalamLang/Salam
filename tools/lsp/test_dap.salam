@@ -1,0 +1,349 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+/*
+ * End to end test for `salam dap`.
+ *
+ * Drives a real debug session: build tests/lsp/dap/hello.salam with debug
+ * information, stop at a breakpoint inside it, read the stack and a local,
+ * then run to the end. Needs gdb 14+ or lldb-dap on PATH.
+ *
+ *     salam run tools/lsp/test_dap.salam [path/to/salam]
+ *
+ * Run it from the repository (any folder inside it works).
+ */
+
+import encoding.json
+import encoding.value
+import filepath
+import fs.file
+import os
+import os.process
+import str
+import time
+
+mut g_failed := 0
+mut g_root := ""
+
+struct Dap:
+    pub ch: process.Child = process.Child {}
+    pub seen: Vector<value.Value> = Vector {} as Vector<value.Value>
+    pub seq: int = 1
+
+    pub func send(command: str, args: str): int:
+        seq := this.seq
+        this.seq += 1
+        mut a := args
+        if a == "":
+            a = "{}"
+        end
+        body := `{"seq":` + seq + `,"type":"request","command":` + json.Str(command) + `,"arguments":` + a + `}`
+        hdr := "Content-Length: " + body.len() + "\r\n\r\n"
+        if not this.ch.Write(hdr + body):
+            fatal("cannot write to salam dap")
+        end
+        ret seq
+    end
+
+    pub func next_msg(deadline: i64, ok &: bool): value.Value:
+        mut n := 0
+        mut done := false
+        until not done:
+            mut ms := (deadline - time.NowMillis()) as int
+            if ms < 50:
+                ms = 50
+            end
+            line := this.ch.ReadLine(ms)
+            if line.timed_out or line.eof:
+                line.Free()
+                ok = false
+                ret value.ValueNull()
+            end
+            text := line.data
+            if text.len() == 0:
+                done = true
+            else:
+                low := text.lower()
+                if low.starts_with("content-length"):
+                    n = str.ToInt(text.substr(text.indexOf(":") + 1, text.len() - text.indexOf(":") - 1).trim())
+                end
+            end
+            line.Free()
+        end
+        body := this.ch.Read(n, 10000)
+        if body.timed_out or body.eof:
+            ok = false
+            ret value.ValueNull()
+        end
+        mut msg := value.ValueNull()
+        try:
+            msg = json.Decode(body.data)
+        catch e:
+            fatal("salam dap sent bad JSON: " + e.to_str())
+        end
+        body.Free()
+        ret msg
+    end
+
+    pub func wait(kind: int, name: str, name2: str, rseq: int, ok &: bool): value.Value:
+        ok = true
+        mut i := 0
+        until i < this.seen.len():
+            m := this.seen.get(i)
+            if matches(m, kind, name, name2, rseq):
+                this.seen.remove_at(i)
+                ret m
+            end
+            i += 1
+        end
+        deadline := time.NowMillis() + 120000
+        until time.NowMillis() < deadline:
+            mut got := true
+            m := this.next_msg(deadline, got)
+            if not got:
+                ok = false
+                ret value.ValueNull()
+            end
+            if matches(m, kind, name, name2, rseq):
+                ret m
+            end
+            this.seen.push(m)
+        end
+        ok = false
+        ret value.ValueNull()
+    end
+
+    pub func wait_hard(kind: int, name: str, name2: str, rseq: int): value.Value:
+        mut ok := true
+        m := this.wait(kind, name, name2, rseq, ok)
+        if not ok:
+            fatal("no matching DAP message (salam dap exited or timed out)")
+        end
+        ret m
+    end
+
+    pub func call(command: str, args: str): value.Value:
+        seq := this.send(command, args)
+        ret this.wait_hard(0, "", "", seq)
+    end
+end
+
+func fatal(msg: str):
+    printerrln "test_dap: " + msg
+    os.Exit(1)
+end
+
+func head(text: str, limit: int): str:
+    if str.CharCount(text) <= limit:
+        ret text
+    end
+    ret str.CharSubstr(text, 0, limit)
+end
+
+func jget(v: value.Value, key: str): value.Value:
+    if v.kind != value.KindObject:
+        ret value.ValueNull()
+    end
+    mut ok := false
+    r := value.ObjectGetOk(v, key, ok)
+    if not ok:
+        ret value.ValueNull()
+    end
+    ret r
+end
+
+func jidx(v: value.Value, i: int): value.Value:
+    if v.kind != value.KindArray or i < 0 or i >= value.ArrayLen(v):
+        ret value.ValueNull()
+    end
+    ret value.ArrayGet(v, i)
+end
+
+func jlen(v: value.Value): int:
+    if v.kind == value.KindArray:
+        ret value.ArrayLen(v)
+    end
+    ret 0
+end
+
+func jstr(v: value.Value): str:
+    if v.kind == value.KindString:
+        ret v.s
+    end
+    ret ""
+end
+
+func jint(v: value.Value): int:
+    if v.kind == value.KindInt:
+        ret v.i as int
+    end
+    ret -1
+end
+
+func jtext(v: value.Value): str:
+    if v.kind == value.KindString:
+        ret v.s
+    end
+    if v.kind == value.KindNull:
+        ret ""
+    end
+    ret json.EncodeDefault(v)
+end
+
+func matches(m: value.Value, kind: int, name: str, name2: str, rseq: int): bool:
+    t := jstr(jget(m, "type"))
+    if kind == 0:
+        ret t == "response" and jint(jget(m, "request_seq")) == rseq
+    end
+    ev := jstr(jget(m, "event"))
+    ret t == "event" and (ev == name or (name2 != "" and ev == name2))
+end
+
+func check(name: str, ok: bool, detail: str):
+    if ok:
+        println "PASS " + name
+    else:
+        g_failed += 1
+        println "FAIL " + name + ": " + detail
+    end
+end
+
+func succeeded(r: value.Value): bool:
+    v := jget(r, "success")
+    ret v.kind == value.KindBool and v.b
+end
+
+func find_root(): str:
+    start := os.Cwd()
+    mut dir := start
+    until true:
+        if os.Exists(dir + "/tests/lsp/dap/hello.salam"):
+            ret dir
+        end
+        parent := filepath.Dir(dir)
+        if parent == dir or parent == "":
+            break
+        end
+        dir = parent
+    end
+    ret start
+end
+
+func main:
+    g_root = find_root()
+    prog := g_root + "/tests/lsp/dap/hello.salam"
+    argv := os.Args()
+    mut exe := g_root + "/salam"
+    if argv.len() > 1:
+        exe = filepath.Join(os.Cwd(), argv.get(1))
+        if filepath.IsAbs(argv.get(1)):
+            exe = argv.get(1)
+        end
+    end
+    lines := str.Split(file.ReadText(prog), "\n")
+    mut bp_line := 0
+    repeat lines.len() in i:
+        if lines.get(i) == "    c := a + b":
+            bp_line = i + 1
+            break
+        end
+    end
+    if bp_line == 0:
+        fatal("the breakpoint line is missing from " + prog)
+    end
+
+    mut cmd := process.NewCommand(exe)
+    cmd.Arg("dap")
+    if os.Env("SALAM_STD") == "":
+        cmd.Env("SALAM_STD", g_root + "/std")
+    end
+    cmd.stdin_mode = process.Pipe
+    cmd.stdout_mode = process.Pipe
+    cmd.stderr_mode = process.Null
+    ch := process.Launch(cmd)
+    if not ch.ok:
+        fatal("cannot start " + exe + ": " + ch.error)
+    end
+    mut d := Dap { ch = ch }
+
+    mut r := d.call("initialize", `{"clientID":"test","adapterID":"salam","linesStartAt1":true,"columnsStartAt1":true,"pathFormat":"path"}`)
+    check("initialize", succeeded(r), head(json.EncodeDefault(r), 300))
+    launch_seq := d.send("launch", `{"program":` + json.Str(prog) + `}`)
+    _init := d.wait_hard(1, "initialized", "", 0)
+    r = d.call("setBreakpoints", `{"source":{"path":` + json.Str(prog) + `},"breakpoints":[{"line":` + bp_line + `}]}`)
+    check("a breakpoint in a .salam file is accepted", succeeded(r) and jlen(jget(jget(r, "body"), "breakpoints")) == 1, head(json.EncodeDefault(r), 300))
+    _cd := d.call("configurationDone", "")
+    lr := d.wait_hard(0, "", "", launch_seq)
+    check("launch builds and starts the program", succeeded(lr), head(json.EncodeDefault(lr), 300))
+    st := d.wait_hard(1, "stopped", "", 0)
+    mut tid := jint(jget(jget(st, "body"), "threadId"))
+    if jget(jget(st, "body"), "threadId").kind == value.KindNull:
+        tid = jint(jget(jidx(jget(jget(d.call("threads", ""), "body"), "threads"), 0), "id"))
+    end
+    frames := jget(jget(d.call("stackTrace", `{"threadId":` + tid + `}`), "body"), "stackFrames")
+    top := jidx(frames, 0)
+    mut src := jstr(jget(jget(top, "source"), "path"))
+    if src == "":
+        src = jstr(jget(jget(top, "source"), "name"))
+    end
+    check("stopped at the breakpoint in the Salam source", src.ends_with("hello.salam") and jint(jget(top, "line")) == bp_line, head(json.EncodeDefault(top), 300))
+    mut caller_main := false
+    mut names := Vector {} as Vector<str>
+    repeat jlen(frames) in i:
+        n := jstr(jget(jidx(frames, i), "name"))
+        names.push(n)
+        if i >= 1 and n.ends_with("main"):
+            caller_main = true
+        end
+    end
+    check("the caller is main", caller_main, head("[" + str.Join(names, ", ") + "]", 300))
+    scopes := jget(jget(d.call("scopes", `{"frameId":` + jtext(jget(top, "id")) + `}`), "body"), "scopes")
+    mut a_val := ""
+    mut b_val := ""
+    mut seen_names := Vector {} as Vector<str>
+    repeat jlen(scopes) in i:
+        vars := jget(jget(d.call("variables", `{"variablesReference":` + jtext(jget(jidx(scopes, i), "variablesReference")) + `}`), "body"), "variables")
+        repeat jlen(vars) in k:
+            v := jidx(vars, k)
+            nm := jstr(jget(v, "name"))
+            seen_names.push(nm + "=" + jtext(jget(v, "value")))
+            if nm == "a":
+                a_val = jtext(jget(v, "value"))
+            end
+            if nm == "b":
+                b_val = jtext(jget(v, "value"))
+            end
+        end
+    end
+    check("locals are visible", a_val == "2" and b_val == "3", head("{" + str.Join(seen_names, ", ") + "}", 300))
+    _c := d.call("continue", `{"threadId":` + tid + `}`)
+
+    mut fin_ok := true
+    fin := d.wait(1, "exited", "terminated", 0, fin_ok)
+    if not fin_ok:
+        fatal("salam dap exited or timed out before the program finished")
+    end
+    check("the program runs to the end", jstr(jget(fin, "event")) == "exited" or jstr(jget(fin, "event")) == "terminated", head(json.EncodeDefault(fin), 200))
+    if d.ch.Poll():
+        seq := d.send("disconnect", `{"terminateDebuggee":true}`)
+        mut dok := true
+        _dm := d.wait(0, "", "", seq, dok)
+    end
+    _k := d.ch.Kill()
+    _w := d.ch.Wait(5000)
+    println "RESULT: " + g_failed + " failed"
+    if g_failed > 0:
+        ret 1
+    end
+end

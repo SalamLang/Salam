@@ -1,0 +1,1235 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+/*
+ * End to end tests for `salam lsp`.
+ *
+ * Starts the server over stdio, drives it like an editor would, and checks the
+ * answers against the fixtures in tests/lsp.
+ *
+ *     salam run tools/lsp/test_lsp.salam [path/to/salam]
+ *
+ * Run it from the repository (any folder inside it works).
+ */
+
+import encoding.json
+import encoding.value
+import filepath
+import fs.file
+import os
+import os.process
+import os.temp
+import sort
+import str
+import time
+
+const QF_PARSE_COUNT := 6
+
+const QF_SEMA := `import math
+
+struct P:
+    x: int = 0
+end
+
+func main:
+    mut count := 1
+    println count
+    unused := 2
+    println cuont
+    p := P { }
+    println p.x
+    println json.Encode(1)
+end
+`
+
+const SWITCH_LINT_SRC := `func pick(ty: int): int:
+    if ty == 7:
+        ret 1
+    end
+    if ty == 8:
+        ret 2
+    end
+    if ty == 9:
+        ret 3
+    end
+    if ty == 11:
+        ret 4
+    end
+    ret 0
+end
+
+func main:
+    println pick(8)
+end
+`
+
+const FIX_IN := `import math
+
+func main:
+    mut count := 1
+    println str.FromInt(count)
+end
+`
+
+const FIX_OUT := `import str
+
+func main:
+    count := 1
+    println str.FromInt(count)
+end
+`
+
+mut g_passed := 0
+mut g_failed := 0
+mut g_root := ""
+mut g_std := ""
+mut g_en := ""
+mut g_fa := ""
+mut g_pkg := ""
+mut g_proj := ""
+mut g_iface := ""
+
+struct Pos:
+    pub line: int = 0
+    pub ch: int = 0
+end
+
+struct Fixes:
+    pub texts: HashMap<str, str> = HashMap {} as HashMap<str, str>
+    pub diags: value.Value = value.ValueNull()
+end
+
+struct Server:
+    pub ch: process.Child = process.Child {}
+    pub notes: Vector<value.Value> = Vector {} as Vector<value.Value>
+    pub next_id: int = 1
+
+    pub func send(body: str):
+        hdr := "Content-Length: " + body.len() + "\r\n\r\n"
+        if not this.ch.Write(hdr + body):
+            fatal("cannot write to the server")
+        end
+    end
+
+    pub func notify(method: str, params: str):
+        this.send(`{"jsonrpc":"2.0","method":` + json.Str(method) + `,"params":` + params + `}`)
+    end
+
+    pub func next_msg(deadline: i64): value.Value:
+        mut n := 0
+        mut done := false
+        until not done:
+            mut ms := (deadline - time.NowMillis()) as int
+            if ms < 50:
+                ms = 50
+            end
+            line := this.ch.ReadLine(ms)
+            if line.timed_out:
+                fatal("timed out waiting for the server")
+            end
+            if line.eof:
+                fatal("the server exited")
+            end
+            text := line.data
+            if text.len() == 0:
+                done = true
+            else:
+                low := text.lower()
+                if low.starts_with("content-length:"):
+                    n = str.ToInt(text.substr(15, text.len() - 15).trim())
+                end
+            end
+            line.Free()
+        end
+        mut ms2 := (deadline - time.NowMillis()) as int
+        if ms2 < 10000:
+            ms2 = 10000
+        end
+        body := this.ch.Read(n, ms2)
+        if body.timed_out or body.eof:
+            fatal("the server stopped in the middle of a message")
+        end
+        mut msg := value.ValueNull()
+        try:
+            msg = json.Decode(body.data)
+        catch e:
+            fatal("the server sent bad JSON: " + e.to_str())
+        end
+        body.Free()
+        ret msg
+    end
+
+    pub func request(method: str, params: str): value.Value:
+        rid := this.next_id
+        this.next_id += 1
+        this.send(`{"jsonrpc":"2.0","id":` + rid + `,"method":` + json.Str(method) + `,"params":` + params + `}`)
+        deadline := time.NowMillis() + 120000
+        until true:
+            m := this.next_msg(deadline)
+            id := jget(m, "id")
+            if id.kind == value.KindInt and id.i == rid as i64 and not jhas(m, "method"):
+                ret m
+            end
+            this.notes.push(m)
+        end
+    end
+
+    pub func diagnostics(uri: str): value.Value:
+        deadline := time.NowMillis() + 120000
+        until true:
+            mut i := 0
+            until i < this.notes.len():
+                m := this.notes.get(i)
+                if jstr(jget(m, "method")) == "textDocument/publishDiagnostics" and jstr(jpath(m, "params.uri")) == uri:
+                    this.notes.remove_at(i)
+                    ret jget(m, "params")
+                end
+                i += 1
+            end
+            this.notes.push(this.next_msg(deadline))
+        end
+    end
+
+    pub func stop(): int:
+        _r := this.request("shutdown", "null")
+        this.notify("exit", "null")
+        st := this.ch.Wait(10000)
+        if st.timed_out:
+            fatal("the server did not exit")
+        end
+        ret st.ReturnCode()
+    end
+end
+
+func fatal(msg: str):
+    printerrln "test_lsp: " + msg
+    os.Exit(1)
+end
+
+func head(text: str, limit: int): str:
+    if str.CharCount(text) <= limit:
+        ret text
+    end
+    ret str.CharSubstr(text, 0, limit)
+end
+
+func check(name: str, ok: bool, detail: str):
+    if ok:
+        g_passed += 1
+        println "PASS " + name
+    else:
+        g_failed += 1
+        if detail == "":
+            println "FAIL " + name
+        else:
+            println "FAIL " + name + ": " + detail
+        end
+    end
+end
+
+func jget(v: value.Value, key: str): value.Value:
+    if v.kind != value.KindObject:
+        ret value.ValueNull()
+    end
+    mut ok := false
+    r := value.ObjectGetOk(v, key, ok)
+    if not ok:
+        ret value.ValueNull()
+    end
+    ret r
+end
+
+func jhas(v: value.Value, key: str): bool:
+    if v.kind != value.KindObject:
+        ret false
+    end
+    ret value.ObjectHas(v, key)
+end
+
+func jidx(v: value.Value, i: int): value.Value:
+    if v.kind != value.KindArray or i < 0 or i >= value.ArrayLen(v):
+        ret value.ValueNull()
+    end
+    ret value.ArrayGet(v, i)
+end
+
+func jlen(v: value.Value): int:
+    switch v.kind:
+        value.KindArray:
+            ret value.ArrayLen(v)
+        end
+        value.KindObject:
+            ret value.ObjectLen(v)
+        end
+        value.KindString:
+            ret str.CharCount(v.s)
+        end
+        else:
+            ret 0
+        end
+    end
+    ret 0
+end
+
+func all_digits(s: str): bool:
+    if s.len() == 0:
+        ret false
+    end
+    b := s as u8*
+    repeat s.len() in i:
+        c := b[i] as int
+        if c < 48 or c > 57:
+            ret false
+        end
+    end
+    ret true
+end
+
+func jpath(v: value.Value, path: str): value.Value:
+    mut cur := v
+    each seg in str.Split(path, "."):
+        if all_digits(seg) and cur.kind == value.KindArray:
+            cur = jidx(cur, str.ToInt(seg))
+        else:
+            cur = jget(cur, seg)
+        end
+    end
+    ret cur
+end
+
+func jstr(v: value.Value): str:
+    if v.kind == value.KindString:
+        ret v.s
+    end
+    ret ""
+end
+
+func jint(v: value.Value): int:
+    if v.kind == value.KindInt:
+        ret v.i as int
+    end
+    ret -1
+end
+
+func jfloat(v: value.Value): f64:
+    if v.kind == value.KindInt:
+        ret v.i as f64
+    end
+    if v.kind == value.KindFloat:
+        ret v.n
+    end
+    ret -1000.0
+end
+
+func jtruthy(v: value.Value): bool:
+    switch v.kind:
+        value.KindNull:
+            ret false
+        end
+        value.KindBool:
+            ret v.b
+        end
+        value.KindInt:
+            ret v.i != 0
+        end
+        value.KindFloat:
+            ret v.n != 0.0
+        end
+        else:
+            ret jlen(v) > 0
+        end
+    end
+    ret false
+end
+
+func dump(v: value.Value): str:
+    ret head(json.EncodeDefault(v), 300)
+end
+
+func res(m: value.Value): value.Value:
+    ret jget(m, "result")
+end
+
+func joined(items: Vector<str>): str:
+    ret "[" + str.Join(items, ", ") + "]"
+end
+
+func utf16_len(s: str): int:
+    b := s as u8*
+    mut n := 0
+    repeat s.len() in i:
+        c := b[i] as int
+        if c < 128 or c >= 192:
+            n += 1
+        end
+        if c >= 240:
+            n += 1
+        end
+    end
+    ret n
+end
+
+func uri_of(path: str): str:
+    ret "file://" + path
+end
+
+func pos(text: str, needle: str, shift: int = 0, nth: int = 0): Pos:
+    mut found := -1
+    mut k := 0
+    until k <= nth:
+        found = str.IndexFrom(text, needle, found + 1)
+        if found < 0:
+            fatal("pos: '" + needle + "' is not in the text")
+        end
+        k += 1
+    end
+    b := text as u8*
+    n := text.len()
+    mut moved := 0
+    until moved < shift:
+        found += 1
+        until found < n and ((b[found] as int) & 192) == 128:
+            found += 1
+        end
+        moved += 1
+    end
+    mut line := 0
+    mut start := 0
+    repeat found in i:
+        if (b[i] as int) == 10:
+            line += 1
+            start = i + 1
+        end
+    end
+    ret Pos { line = line, ch = utf16_len(text.substr(start, found - start)) }
+end
+
+func pj(p: Pos): str:
+    ret `{"line":` + p.line + `,"character":` + p.ch + `}`
+end
+
+func pos_of(v: value.Value): Pos:
+    ret Pos { line = jint(jget(v, "line")), ch = jint(jget(v, "character")) }
+end
+
+func same_pos(a: Pos, b: Pos): bool:
+    ret a.line == b.line and a.ch == b.ch
+end
+
+func doc_id(uri: str): str:
+    ret `{"textDocument":{"uri":` + json.Str(uri) + `}}`
+end
+
+func at(uri: str, p: Pos): str:
+    ret `{"textDocument":{"uri":` + json.Str(uri) + `},"position":` + pj(p) + `}`
+end
+
+func at_refs(uri: str, p: Pos): str:
+    ret `{"textDocument":{"uri":` + json.Str(uri) + `},"position":` + pj(p) + `,"context":{"includeDeclaration":true}}`
+end
+
+func at_rename(uri: str, p: Pos, new_name: str): str:
+    ret `{"textDocument":{"uri":` + json.Str(uri) + `},"position":` + pj(p) + `,"newName":` + json.Str(new_name) + `}`
+end
+
+func did_open(s: Server, uri: str, text: str):
+    s.notify("textDocument/didOpen", `{"textDocument":{"uri":` + json.Str(uri) + `,"languageId":"salam","version":1,"text":` + json.Str(text) + `}}`)
+end
+
+func did_change(s: Server, uri: str, version: int, text: str):
+    s.notify("textDocument/didChange", `{"textDocument":{"uri":` + json.Str(uri) + `,"version":` + version + `},"contentChanges":[{"text":` + json.Str(text) + `}]}`)
+end
+
+func did_edit(s: Server, uri: str, version: int, a: Pos, b: Pos, text: str):
+    s.notify("textDocument/didChange", `{"textDocument":{"uri":` + json.Str(uri) + `,"version":` + version + `},"contentChanges":[{"range":{"start":` + pj(a) + `,"end":` + pj(b) + `},"text":` + json.Str(text) + `}]}`)
+end
+
+func labels(result: value.Value): Vector<str>:
+    mut items := result
+    if result.kind == value.KindObject:
+        items = jget(result, "items")
+    end
+    out := Vector {} as Vector<str>
+    repeat jlen(items) in i:
+        out.push(jstr(jget(jidx(items, i), "label")))
+    end
+    ret out
+end
+
+func names_of(v: value.Value): Vector<str>:
+    out := Vector {} as Vector<str>
+    repeat jlen(v) in i:
+        out.push(jstr(jget(jidx(v, i), "name")))
+    end
+    ret out
+end
+
+func has_all(have: Vector<str>, want_csv: str): bool:
+    each w in str.Split(want_csv, ","):
+        mut found := false
+        each h in have:
+            if h == w:
+                found = true
+            end
+        end
+        if not found:
+            ret false
+        end
+    end
+    ret true
+end
+
+func has_item(have: Vector<str>, w: str): bool:
+    each h in have:
+        if h == w:
+            ret true
+        end
+    end
+    ret false
+end
+
+func sorted_strs(items: Vector<str>): Vector<str>:
+    out := Vector {} as Vector<str>
+    each x in items:
+        out.push(x)
+    end
+    sort.Sort(out)
+    ret out
+end
+
+func sorted_lines(v: value.Value, path: str): Vector<int>:
+    out := Vector {} as Vector<int>
+    repeat jlen(v) in i:
+        out.push(jint(jpath(jidx(v, i), path)))
+    end
+    sort.Sort(out)
+    ret out
+end
+
+func same_ints(a: Vector<int>, b: Vector<int>): bool:
+    if a.len() != b.len():
+        ret false
+    end
+    repeat a.len() in i:
+        if a.get(i) != b.get(i):
+            ret false
+        end
+    end
+    ret true
+end
+
+func pad6(n: int): str:
+    s := str.FromInt(n as i64)
+    ret str.Repeat("0", 6 - s.len()) + s
+end
+
+func line_starts(text: str): Vector<int>:
+    out := Vector {} as Vector<int>
+    out.push(0)
+    b := text as u8*
+    repeat text.len() in i:
+        if (b[i] as int) == 10:
+            out.push(i + 1)
+        end
+    end
+    ret out
+end
+
+func char_len(c: int): int:
+    if c >= 240:
+        ret 4
+    end
+    if c >= 224:
+        ret 3
+    end
+    if c >= 192:
+        ret 2
+    end
+    ret 1
+end
+
+func offset_of(text: str, starts: Vector<int>, p: Pos): int:
+    if p.line >= starts.len():
+        ret text.len()
+    end
+    b := text as u8*
+    n := text.len()
+    mut i := starts.get(p.line)
+    mut units := 0
+    until units < p.ch and i < n and (b[i] as int) != 10:
+        c := b[i] as int
+        if c >= 240:
+            units += 2
+        else:
+            units += 1
+        end
+        i += char_len(c)
+    end
+    if i > n:
+        ret n
+    end
+    ret i
+end
+
+func apply_edits(text: str, edits: value.Value): str:
+    starts := line_starts(text)
+    mut begins := Vector {} as Vector<int>
+    mut ends := Vector {} as Vector<int>
+    mut news := Vector {} as Vector<str>
+    repeat jlen(edits) in i:
+        e := jidx(edits, i)
+        b := offset_of(text, starts, pos_of(jpath(e, "range.start")))
+        f := offset_of(text, starts, pos_of(jpath(e, "range.end")))
+        mut at_i := 0
+        until at_i < begins.len():
+            if begins.get(at_i) < b or (begins.get(at_i) == b and ends.get(at_i) < f):
+                break
+            end
+            at_i += 1
+        end
+        begins.insert(at_i, b)
+        ends.insert(at_i, f)
+        news.insert(at_i, jstr(jget(e, "newText")))
+    end
+    mut out := text
+    repeat begins.len() in i:
+        out = out.substr(0, begins.get(i)) + news.get(i) + out.substr(ends.get(i), out.len() - ends.get(i))
+    end
+    ret out
+end
+
+func fixes_for(s: Server, uri: str, text: str): Fixes:
+    did_open(s, uri, text)
+    d := s.diagnostics(uri)
+    mut out := Fixes { diags = jget(d, "diagnostics") }
+    diags := jget(d, "diagnostics")
+    repeat jlen(diags) in i:
+        diag := jidx(diags, i)
+        acts := res(s.request("textDocument/codeAction", `{"textDocument":{"uri":` + json.Str(uri) + `},"range":` + json.EncodeDefault(jget(diag, "range")) + `,"context":{"diagnostics":[` + json.EncodeDefault(diag) + `]}}`))
+        repeat jlen(acts) in k:
+            a := jidx(acts, k)
+            out.texts.put(jstr(jget(a, "title")), apply_edits(text, jget(jpath(a, "edit.changes"), uri)))
+        end
+    end
+    s.notify("textDocument/didClose", doc_id(uri))
+    ret out
+end
+
+func fix_titles(f: Fixes): str:
+    keys := Vector {} as Vector<str>
+    each k, _ in f.texts:
+        keys.push(k)
+    end
+    ret joined(sorted_strs(keys))
+end
+
+func fix_has(f: Fixes, title: str, sub: str): bool:
+    if not f.texts.has(title):
+        ret false
+    end
+    ret f.texts.get(title).includes(sub)
+end
+
+func initialize(s: Server, root_uri: str, capabilities: str, extra: str): value.Value:
+    mut params := `{"processId":null,"rootUri":` + root_uri + `,"capabilities":` + capabilities
+    if extra != "":
+        params = params + "," + extra
+    end
+    r := s.request("initialize", params + "}")
+    s.notify("initialized", "{}")
+    ret r
+end
+
+func start_server(exe: str, extra: Vector<str>): Server:
+    mut cmd := process.NewCommand(exe)
+    cmd.Arg("lsp")
+    each a in extra:
+        cmd.Arg(a)
+    end
+    cmd.stdin_mode = process.Pipe
+    cmd.stdout_mode = process.Pipe
+    cmd.stderr_mode = process.Null
+    ch := process.Launch(cmd)
+    if not ch.ok:
+        fatal("cannot start " + exe + ": " + ch.error)
+    end
+    ret Server { ch = ch }
+end
+
+func start_std(exe: str): Server:
+    extra := Vector {} as Vector<str>
+    extra.push("--stdlib-path=" + g_std)
+    ret start_server(exe, extra)
+end
+
+func english(s: Server):
+    text := file.ReadText(g_en)
+    uri := uri_of(g_en)
+    did_open(s, uri, text)
+    mut d := s.diagnostics(uri)
+    check("en: a clean file has no diagnostics", jlen(jget(d, "diagnostics")) == 0, dump(jget(d, "diagnostics")))
+
+    mut h := res(s.request("textDocument/hover", at(uri, pos(text, "make(3)", 1))))
+    check("en: hover shows the signature", jtruthy(h) and jstr(jpath(h, "contents.value")).includes("func make(n: int): Point"), dump(h))
+
+    h = res(s.request("textDocument/hover", at(uri, pos(text, "FromInt", 2))))
+    v := jstr(jpath(h, "contents.value"))
+    check("en: hover on a std function", v.includes("FromInt") and v.includes("standard library"), head(v, 300))
+
+    mut df := res(s.request("textDocument/definition", at(uri, pos(text, "make(3)", 1))))
+    want := pos(text, "func make", 5)
+    check("en: definition in the same file", jtruthy(df) and jstr(jget(df, "uri")) == uri and same_pos(pos_of(jpath(df, "range.start")), want), dump(df))
+
+    df = res(s.request("textDocument/definition", at(uri, pos(text, "FromInt", 2))))
+    check("en: definition into std", jtruthy(df) and jstr(jget(df, "uri")).ends_with("/std/str/basic.salam"), dump(df))
+
+    df = res(s.request("textDocument/typeDefinition", at(uri, pos(text, "p := make", 0))))
+    check("en: type definition of a local", jtruthy(df) and same_pos(pos_of(jpath(df, "range.start")), pos(text, "struct Point", 7)), dump(df))
+
+    mut r := res(s.request("textDocument/references", at_refs(uri, pos(text, "x: int", 0))))
+    check("en: references of a field", jlen(r) == 4, str.FromInt(jlen(r) as i64))
+
+    hl := res(s.request("textDocument/documentHighlight", at(uri, pos(text, "p := make", 0))))
+    check("en: highlight of a local", jlen(hl) == 3, str.FromInt(jlen(hl) as i64))
+
+    sy := res(s.request("textDocument/documentSymbol", doc_id(uri)))
+    names := names_of(sy)
+    kids := names_of(jget(jidx(sy, 0), "children"))
+    check("en: outline", joined(names) == `[Point, make, label, main]` and joined(kids) == `[x, y, sum]`, joined(names) + joined(kids))
+
+    f := res(s.request("textDocument/foldingRange", doc_id(uri)))
+    check("en: folding ranges", jlen(f) >= 5, str.FromInt(jlen(f) as i64))
+
+    st := jpath(s.request("textDocument/semanticTokens/full", doc_id(uri)), "result.data")
+    check("en: semantic tokens", jlen(st) > 0 and jlen(st) % 5 == 0, str.FromInt(jlen(st) as i64))
+
+    sig := res(s.request("textDocument/signatureHelp", at(uri, pos(text, `"sum="`, 0))))
+    check("en: signature help", jtruthy(sig) and jstr(jpath(sig, "signatures.0.label")).starts_with("func label(") and jint(jget(sig, "activeParameter")) == 1, dump(sig))
+
+    lines := str.Split(text, "\n")
+    mut li := -1
+    repeat lines.len() in i:
+        if lines.get(i) == `    println label(p, "sum="), p.x`:
+            li = i
+            break
+        end
+    end
+    if li < 0:
+        fatal("the println line is missing from " + g_en)
+    end
+    did_edit(s, uri, 2, Pos { line = li, ch = 4 }, Pos { line = li, ch = 4 }, "p.\n    ")
+    d = s.diagnostics(uri)
+    check("en: an edit is analyzed and versioned", jint(jget(d, "version")) == 2 and jlen(jget(d, "diagnostics")) > 0, dump(d))
+    mut c := res(s.request("textDocument/completion", at(uri, Pos { line = li, ch = 6 })))
+    check("en: member completion", has_all(labels(c), "x,y,sum"), head(joined(labels(c)), 300))
+
+    did_edit(s, uri, 3, Pos { line = li, ch = 4 }, Pos { line = li + 1, ch = 4 }, "")
+    d = s.diagnostics(uri)
+    check("en: undoing the edit clears the errors", jint(jget(d, "version")) == 3 and jlen(jget(d, "diagnostics")) == 0, dump(d))
+
+    c = res(s.request("textDocument/completion", at(uri, pos(text, "FromInt", 0))))
+    check("en: package member completion", has_all(labels(c), "FromInt,Len"), head(joined(labels(c)), 200))
+
+    c = res(s.request("textDocument/completion", at(uri, pos(text, "p := make", 0))))
+    check("en: scope completion", has_all(labels(c), "make,label,Point,each,until"), head(joined(sorted_strs(labels(c))), 300))
+
+    r = res(s.request("textDocument/rename", at_rename(uri, pos(text, "func make", 6), "build")))
+    edits := jget(jget(r, "changes"), uri)
+    mut all_build := true
+    repeat jlen(edits) in i:
+        if jstr(jget(jidx(edits, i), "newText")) != "build":
+            all_build = false
+        end
+    end
+    check("en: rename", jlen(edits) == 2 and all_build, dump(r))
+
+    rr := s.request("textDocument/rename", at_rename(uri, pos(text, "func make", 6), "each"))
+    check("en: rename refuses a keyword", jhas(rr, "error"), dump(rr))
+
+    bad := str.Replace(text, "p.sum()", "p.summ()")
+    did_change(s, uri, 4, bad)
+    d = s.diagnostics(uri)
+    codes := Vector {} as Vector<str>
+    repeat jlen(jget(d, "diagnostics")) in i:
+        codes.push(jstr(jget(jidx(jget(d, "diagnostics"), i), "code")))
+    end
+    check("en: a type error is reported with its code", has_item(codes, "E017"), dump(jget(d, "diagnostics")))
+    did_change(s, uri, 5, text)
+    _d5 := s.diagnostics(uri)
+
+    messy := str.Replace(text, "    ret p\n", "        ret p\n")
+    did_change(s, uri, 6, messy)
+    _d6 := s.diagnostics(uri)
+    fm := res(s.request("textDocument/formatting", `{"textDocument":{"uri":` + json.Str(uri) + `},"options":{"tabSize":4,"insertSpaces":true}}`))
+    check("en: formatting returns a minimal edit", jtruthy(fm) and jlen(fm) == 1 and jstr(jpath(fm, "0.newText")) == "    ret p\n", dump(fm))
+
+    did_change(s, uri, 7, text)
+    _d7 := s.diagnostics(uri)
+    ih := res(s.request("textDocument/inlayHint", `{"textDocument":{"uri":` + json.Str(uri) + `},"range":{"start":{"line":0,"character":0},"end":{"line":999,"character":0}}}`))
+    got := Vector {} as Vector<str>
+    repeat jlen(ih) in i:
+        it := jidx(ih, i)
+        got.push(pad6(jint(jpath(it, "position.line"))) + ":" + jstr(jget(it, "label")))
+    end
+    wanted := Vector {} as Vector<str>
+    wanted.push(pad6(pos(text, "p := Point").line) + ":: Point")
+    wanted.push(pad6(pos(text, "p := make").line) + ":: Point")
+    check("en: inlay hints show inferred types", joined(sorted_strs(got)) == joined(sorted_strs(wanted)), joined(sorted_strs(got)))
+
+    w := res(s.request("workspace/symbol", `{"query":"lab"}`))
+    check("en: workspace symbols", joined(names_of(w)) == "[label]", head(dump(w), 200))
+end
+
+func qf_parse(i: int): Vector<str>:
+    out := Vector {} as Vector<str>
+    switch i:
+        0:
+            out.push("let")
+            out.push("func main:\n    let total = 5\n    println total\nend\n")
+            out.push("Write 'name := value'")
+            out.push("    total := 5\n")
+        end
+        1:
+            out.push("var")
+            out.push("func main:\n    var total = 5\n    total = 6\n    println total\nend\n")
+            out.push("Write 'mut name := value'")
+            out.push("    mut total := 5\n")
+        end
+        2:
+            out.push("return")
+            out.push("func two(): int:\n    return 2\nend\n\nfunc main:\n    println two()\nend\n")
+            out.push("Write 'ret'")
+            out.push("    ret 2\n")
+        end
+        3:
+            out.push("while")
+            out.push("func main:\n    mut n := 3\n    while n > 0:\n        n -= 1\n    end\nend\n")
+            out.push("Write 'until'")
+            out.push("    until n > 0:\n")
+        end
+        4:
+            out.push("elif")
+            out.push("func main:\n    n := 3\n    if n > 5:\n        println 1\n    elif n > 2:\n        println 2\n    end\nend\n")
+            out.push("Write 'else'")
+            out.push("    else n > 2:\n")
+        end
+        else:
+            out.push("for")
+            out.push("func main:\n    v := [1, 2]\n    for x in v:\n        println x\n    end\nend\n")
+            out.push("Write 'each'")
+            out.push("    each x in v:\n")
+        end
+    end
+    ret out
+end
+
+func quick_fixes(s: Server):
+    base := g_root + "/tests/lsp/qf"
+    got := fixes_for(s, uri_of(base + "/sema.salam"), QF_SEMA)
+    seen := fix_titles(got) + dump(got.diags)
+    check("fix: unused mut", fix_has(got, "Remove 'mut'", "    count := 1\n"), seen)
+    check("fix: unused variable", fix_has(got, "Prefix the name with '_'", "    _unused := 2\n"), seen)
+    check("fix: did you mean", fix_has(got, "Change to 'count'", "    unused := 2\n    println count\n"), seen)
+    check("fix: private field", fix_has(got, "Add 'pub'", "    pub x: int = 0\n"), seen)
+    check("fix: missing import", fix_has(got, "Add 'import encoding.json'", "import math\nimport encoding.json\n"), seen)
+    repeat QF_PARSE_COUNT in i:
+        row := qf_parse(i)
+        g := fixes_for(s, uri_of(base + "/" + row.get(0) + ".salam"), row.get(1))
+        check("fix: foreign '" + row.get(0) + "'", fix_has(g, row.get(2), row.get(3)), fix_titles(g) + dump(g.diags))
+    end
+end
+
+func switch_lint(exe: str):
+    path := g_root + "/tests/lsp/qf/switch_lint.salam"
+    repeat 2 in m:
+        mut s := start_std(exe)
+        mut extra := ""
+        if m == 1:
+            extra = `"initializationOptions":{"salam":{"switchLint":"warn"}}`
+        end
+        _i := initialize(s, json.Str(uri_of(g_root)), "{}", extra)
+        got := fixes_for(s, uri_of(path), SWITCH_LINT_SRC)
+        mut hits := 0
+        repeat jlen(got.diags) in i:
+            if json.EncodeDefault(jget(jidx(got.diags, i), "code")).includes("145"):
+                hits += 1
+            end
+        end
+        if m == 0:
+            check("switch lint is off by default", hits == 0, dump(got.diags))
+        else:
+            title := "Rewrite as a 'switch' statement"
+            check("switch lint reports W145 when on", hits == 1, dump(got.diags))
+            check("switch lint offers the rewrite", got.texts.has(title) and got.texts.get(title).includes("switch ty:") and got.texts.get(title).includes("        7:\n"), fix_titles(got))
+        end
+        _c := s.stop()
+    end
+end
+
+func persian(s: Server):
+    text := file.ReadText(g_fa)
+    uri := uri_of(g_fa)
+    did_open(s, uri, text)
+    mut d := s.diagnostics(uri)
+    check("fa: a clean file has no diagnostics", jlen(jget(d, "diagnostics")) == 0, dump(jget(d, "diagnostics")))
+
+    p := pos(text, "دودویی(عدد", 2)
+    h := res(s.request("textDocument/hover", at(uri, p)))
+    check("fa: hover after Persian text", jtruthy(h) and jstr(jpath(h, "contents.value")).includes("تابع دودویی(ن: صحیح, پهنا: صحیح): رشته"), dump(h))
+    want := pos(text, "دودویی(ن", 0)
+    check("fa: hover range in UTF-16", jtruthy(h) and same_pos(pos_of(jpath(h, "range.start")), pos(text, "دودویی(عدد", 0)), dump(jget(h, "range")))
+
+    df := res(s.request("textDocument/definition", at(uri, p)))
+    check("fa: definition", jtruthy(df) and same_pos(pos_of(jpath(df, "range.start")), want), dump(df))
+
+    r := res(s.request("textDocument/references", at_refs(uri, pos(text, "عدد اول :=", 1))))
+    check("fa: references of a two-word name", jlen(r) == 3, dump(r))
+    if jlen(r) > 0:
+        rg := jget(jidx(r, jlen(r) - 1), "range")
+        check("fa: a two-word name has one range", jint(jpath(rg, "end.character")) - jint(jpath(rg, "start.character")) == utf16_len("عدد اول"), dump(rg))
+    end
+
+    sy := res(s.request("textDocument/documentSymbol", doc_id(uri)))
+    check("fa: outline", joined(names_of(sy)) == "[دودویی, ریشه]", head(dump(sy), 200))
+
+    c := res(s.request("textDocument/completion", at(uri, pos(text, "سرچاپ", 0))))
+    check("fa: Persian keywords and names in completion", has_all(labels(c), "اگر,تابع,دودویی,عدد اول"), head(joined(sorted_strs(labels(c))), 300))
+
+    bad := str.Replace(text, "دودویی(عدد اول, 8)", "دودوی(عدد اول, 8)")
+    did_change(s, uri, 2, bad)
+    d = s.diagnostics(uri)
+    mut found := false
+    msgs := Vector {} as Vector<str>
+    repeat jlen(jget(d, "diagnostics")) in i:
+        m := jstr(jget(jidx(jget(d, "diagnostics"), i), "message"))
+        msgs.push(m)
+        if m.includes("دودوی") and m.includes("تابع"):
+            found = true
+        end
+    end
+    check("fa: Persian diagnostics", found, head(joined(msgs), 300))
+
+    fa_text := "تابع ریشه:\n    ناپایا شمارنده := 1\n    سرچاپ شمارنده\nپایان\n"
+    mut got := fixes_for(s, uri_of(g_root + "/tests/lsp/qf/fa.salam"), fa_text)
+    mut title := "حذف 'ناپایا'"
+    check("fa: the fix is titled and spelled in Persian", fix_has(got, title, "    شمارنده := 1\n"), fix_titles(got) + head(dump(got.diags), 300))
+    name_text := "واردسازی شبکه.اچ تی تی پی\n\nتابع ریشه:\n    ن := اچ تی تی پی.تجزیه نقطه پایانی(\"https://a.b\")\n    سرچاپ ن.host\nپایان\n"
+    got = fixes_for(s, uri_of(g_root + "/tests/lsp/qf/name.salam"), name_text)
+    title = "نوشتن 'میزبان'"
+    check("fa: an English member name is offered the Persian one", fix_has(got, title, "    سرچاپ ن.میزبان\n"), fix_titles(got) + head(dump(got.diags), 300))
+end
+
+func interfaces(s: Server):
+    text := file.ReadText(g_iface)
+    uri := uri_of(g_iface)
+    did_open(s, uri, text)
+    _d := s.diagnostics(uri)
+    mut impls := res(s.request("textDocument/implementation", at(uri, pos(text, "interface Shape", 11))))
+    mut lines := sorted_lines(impls, "range.start.line")
+    mut want := Vector {} as Vector<int>
+    want.push(pos(text, "struct Sq").line)
+    want.push(pos(text, "struct Rect").line)
+    sort.Sort(want)
+    check("iface: implementations of an interface", same_ints(lines, want), head(dump(impls), 300))
+
+    impls = res(s.request("textDocument/implementation", at(uri, pos(text, "func Area", 6))))
+    lines = sorted_lines(impls, "range.start.line")
+    want = Vector {} as Vector<int>
+    want.push(pos(text, "func Area", 0, 1).line)
+    want.push(pos(text, "func Area", 0, 2).line)
+    sort.Sort(want)
+    check("iface: implementations of an interface method", same_ints(lines, want), head(dump(impls), 300))
+
+    mut item := res(s.request("textDocument/prepareTypeHierarchy", at(uri, pos(text, "interface Shape", 11))))
+    mut subs := value.ValueNull()
+    if jtruthy(item):
+        subs = res(s.request("typeHierarchy/subtypes", `{"item":` + json.EncodeDefault(jidx(item, 0)) + `}`))
+    end
+    check("iface: subtypes", joined(sorted_strs(names_of(subs))) == "[Rect, Sq]", head(dump(subs), 300))
+
+    item = res(s.request("textDocument/prepareTypeHierarchy", at(uri, pos(text, "struct Sq", 8))))
+    mut sups := value.ValueNull()
+    if jtruthy(item):
+        sups = res(s.request("typeHierarchy/supertypes", `{"item":` + json.EncodeDefault(jidx(item, 0)) + `}`))
+    end
+    check("iface: supertypes", joined(names_of(sups)) == "[Shape]", head(dump(sups), 300))
+end
+
+func package_check(s: Server):
+    text := file.ReadText(g_pkg)
+    uri := uri_of(g_pkg)
+    did_open(s, uri, text)
+    d := s.diagnostics(uri)
+    check("pkg: a file of a folder package checks with its siblings", jlen(jget(d, "diagnostics")) == 0, dump(jget(d, "diagnostics")))
+    sy := res(s.request("textDocument/documentSymbol", doc_id(uri)))
+    check("pkg: outline", has_item(names_of(sy), "Len"), head(dump(sy), 200))
+end
+
+func rel_to(base: str, p: str): str:
+    if p.starts_with(base + "/"):
+        ret p.substr(base.len() + 1, p.len() - base.len() - 1)
+    end
+    ret p
+end
+
+func project(exe: str):
+    mut s := start_std(exe)
+    _i := initialize(s, json.Str(uri_of(g_proj)), "{}", `"clientInfo":{"name":"test"}`)
+    upath := g_proj + "/util.salam"
+    mpath := g_proj + "/main.salam"
+    utext := file.ReadText(upath)
+    mtext := file.ReadText(mpath)
+    uuri := uri_of(upath)
+    muri := uri_of(mpath)
+    did_open(s, uuri, utext)
+    _d1 := s.diagnostics(uuri)
+    twice := pos(utext, "Twice", 1)
+    mut refs := value.ValueNull()
+    deadline := time.NowMillis() + 120000
+    until time.NowMillis() < deadline:
+        refs = res(s.request("textDocument/references", at_refs(uuri, twice)))
+        if jlen(refs) >= 3:
+            break
+        end
+        time.Sleep(300)
+    end
+    mut in_main := false
+    repeat jlen(refs) in i:
+        if jstr(jget(jidx(refs, i), "uri")) == muri:
+            in_main = true
+        end
+    end
+    check("proj: references reach a file that is not open", jlen(refs) == 3 and in_main, head(dump(refs), 300))
+
+    r := res(s.request("textDocument/rename", at_rename(uuri, twice, "Double")))
+    ch := jget(r, "changes")
+    check("proj: rename edits every file", jlen(jget(ch, uuri)) == 1 and jlen(jget(ch, muri)) == 2, head(dump(ch), 300))
+
+    lens := res(s.request("textDocument/codeLens", doc_id(uuri)))
+    titles := Vector {} as Vector<str>
+    repeat jlen(lens) in i:
+        titles.push(jstr(jpath(jidx(lens, i), "command.title")))
+    end
+    check("proj: code lens counts references", joined(titles) == "[2 references]", head(dump(lens), 300))
+
+    did_open(s, muri, mtext)
+    _d2 := s.diagnostics(muri)
+    links := res(s.request("textDocument/documentLink", doc_id(muri)))
+    targets := Vector {} as Vector<str>
+    repeat jlen(links) in i:
+        targets.push(jstr(jget(jidx(links, i), "target")))
+    end
+    expect := Vector {} as Vector<str>
+    expect.push(uuri)
+    expect.push(uri_of(g_proj + "/geo/geo.salam"))
+    check("proj: include paths are links", joined(targets) == joined(expect), head(dump(links), 300))
+
+    item := res(s.request("textDocument/prepareCallHierarchy", at(muri, pos(mtext, "Twice(n)", 1))))
+    check("proj: call hierarchy item", jtruthy(item) and jstr(jpath(item, "0.name")) == "Twice" and jstr(jpath(item, "0.uri")) == uuri, head(dump(item), 300))
+    if jtruthy(item):
+        inc := res(s.request("callHierarchy/incomingCalls", `{"item":` + json.EncodeDefault(jidx(item, 0)) + `}`))
+        check("proj: incoming calls", jlen(inc) == 1 and jstr(jpath(inc, "0.from.name")) == "run" and jlen(jpath(inc, "0.fromRanges")) == 2, head(dump(inc), 300))
+    end
+    run_item := res(s.request("textDocument/prepareCallHierarchy", at(muri, pos(mtext, "run(2)", 1))))
+    if jtruthy(run_item):
+        out := res(s.request("callHierarchy/outgoingCalls", `{"item":` + json.EncodeDefault(jidx(run_item, 0)) + `}`))
+        check("proj: outgoing calls", jlen(out) == 1 and jstr(jpath(out, "0.to.name")) == "Twice" and jlen(jpath(out, "0.fromRanges")) == 2, head(dump(out), 300))
+    else:
+        check("proj: outgoing calls", false, "no item for run")
+    end
+
+    inside := labels(res(s.request("textDocument/completion", at(muri, pos(mtext, "println inner", 0)))))
+    after := labels(res(s.request("textDocument/completion", at(muri, pos(mtext, "println x", 0)))))
+    check("proj: completion sees block scope", has_item(inside, "inner") and has_item(after, "x") and not has_item(after, "inner"), head(joined(sorted_strs(after)), 200))
+
+    bad := str.Replace(mtext, "    if x > 0:", "    while x > 0:")
+    did_change(s, muri, 2, bad)
+    d := s.diagnostics(muri)
+    acts := res(s.request("textDocument/codeAction", `{"textDocument":{"uri":` + json.Str(muri) + `},"range":{"start":` + pj(pos(bad, "while")) + `,"end":` + pj(pos(bad, "while", 5)) + `},"context":{"diagnostics":` + json.EncodeDefault(jget(d, "diagnostics")) + `}}`))
+    act_titles := Vector {} as Vector<str>
+    repeat jlen(acts) in i:
+        act_titles.push(jstr(jget(jidx(acts, i), "title")))
+    end
+    check("proj: quick fix for a foreign keyword", has_item(act_titles, "Write 'until'"), joined(act_titles) + head(dump(jget(d, "diagnostics")), 200))
+
+    epath := g_proj + "/geo/extra.salam"
+    etext := file.ReadText(epath)
+    euri := uri_of(epath)
+    did_open(s, euri, etext)
+    _d3 := s.diagnostics(euri)
+    area := pos(etext, "Area", 1)
+    deadline2 := time.NowMillis() + 120000
+    mut r2 := value.ValueNull()
+    until true:
+        r2 = res(s.request("textDocument/references", at_refs(euri, area)))
+        if jlen(r2) >= 3 or time.NowMillis() > deadline2:
+            break
+        end
+        time.Sleep(300)
+    end
+    got := Vector {} as Vector<str>
+    repeat jlen(r2) in i:
+        got.push(rel_to(g_proj, jstr(jget(jidx(r2, i), "uri")).substr(7, jstr(jget(jidx(r2, i), "uri")).len() - 7)))
+    end
+    check("proj: references across a folder package", joined(sorted_strs(got)) == "[geo/extra.salam, geo/geo.salam, main.salam]", joined(sorted_strs(got)))
+
+    _c := s.stop()
+end
+
+func pull_and_colors(exe: str):
+    mut s := start_std(exe)
+    init := initialize(s, "null", `{"textDocument":{"diagnostic":{"dynamicRegistration":false}}}`, "")
+    check("pull: the server offers pull diagnostics", jhas(jpath(init, "result.capabilities"), "diagnosticProvider"), "")
+    text := str.Replace(file.ReadText(g_en), "p.sum()", "p.summ()") + "\nconst ACCENT := \"#ff8800\"\n"
+    uri := uri_of(g_root + "/tests/lsp/en/pull_probe.salam")
+    did_open(s, uri, text)
+    r := res(s.request("textDocument/diagnostic", doc_id(uri)))
+    codes := Vector {} as Vector<str>
+    repeat jlen(jget(r, "items")) in i:
+        codes.push(jstr(jget(jidx(jget(r, "items"), i), "code")))
+    end
+    check("pull: textDocument/diagnostic reports the error", has_item(codes, "E017"), head(dump(r), 300))
+    mut pushed := 0
+    each m in s.notes:
+        if jstr(jget(m, "method")) == "textDocument/publishDiagnostics" and jstr(jpath(m, "params.uri")) == uri:
+            pushed += 1
+        end
+    end
+    check("pull: nothing is pushed for an open file", pushed == 0, "")
+    cols := res(s.request("textDocument/documentColor", doc_id(uri)))
+    diff := jfloat(jpath(cols, "0.color.red")) - 1.0
+    check("colors: a hex colour is found", jlen(cols) == 1 and diff < 0.01 and diff > -0.01, head(dump(cols), 300))
+    if jlen(cols) > 0:
+        presentation := res(s.request("textDocument/colorPresentation", `{"textDocument":{"uri":` + json.Str(uri) + `},"color":` + json.EncodeDefault(jpath(cols, "0.color")) + `,"range":` + json.EncodeDefault(jpath(cols, "0.range")) + `}`))
+        check("colors: presentation", jtruthy(presentation) and jstr(jpath(presentation, "0.label")) == "#ff8800", dump(presentation))
+    end
+    _c := s.stop()
+end
+
+func run_salam(exe: str, args: Vector<str>): process.RunResult:
+    mut cmd := process.NewCommand(exe)
+    each a in args:
+        cmd.Arg(a)
+    end
+    cmd.Env("SALAM_STD", g_std)
+    ret process.RunCommand(cmd, "", 600000)
+end
+
+func check_cli(exe: str):
+    dir := temp.Directory()
+    path := dir + "/fixme.salam"
+    _w := file.WriteText(path, FIX_IN)
+    mut a1 := Vector {} as Vector<str>
+    a1.push("check")
+    a1.push(path)
+    a1.push("--error-format=json")
+    p := run_salam(exe, a1)
+    titles := Vector {} as Vector<str>
+    each line in str.Split(p.stderr, "\n"):
+        if line.starts_with("{"):
+            try:
+                row := json.Decode(line)
+                fx := jget(row, "fixes")
+                repeat jlen(fx) in i:
+                    titles.push(jstr(jget(jidx(fx, i), "title")))
+                end
+            catch e:
+                fatal("bad JSON from salam check: " + e.to_str())
+            end
+        end
+    end
+    check("check: JSON diagnostics carry fixes", has_item(titles, "Remove 'mut'") and has_item(titles, "Add 'import str'"), head(p.stderr, 400))
+    mut a2 := Vector {} as Vector<str>
+    a2.push("check")
+    a2.push(path)
+    p2 := run_salam(exe, a2)
+    check("check: human output lists the fix", p2.stderr.includes("= fix: Remove 'mut'"), head(p2.stderr, 400))
+    mut a3 := Vector {} as Vector<str>
+    a3.push("check")
+    a3.push(path)
+    a3.push("--fix")
+    p3 := run_salam(exe, a3)
+    got := file.ReadText(path)
+    check("check --fix applies the safe fixes and checks again", got == FIX_OUT and p3.stdout.includes("no errors") and p3.status.ReturnCode() == 0, got + head(p3.stdout, 200) + head(p3.stderr, 300))
+    _r := temp.RemoveDir(dir)
+end
+
+func find_root(): str:
+    start := os.Cwd()
+    mut dir := start
+    until true:
+        if os.Exists(dir + "/tests/lsp/en/shapes.salam"):
+            ret dir
+        end
+        parent := filepath.Dir(dir)
+        if parent == dir or parent == "":
+            break
+        end
+        dir = parent
+    end
+    ret start
+end
+
+func main:
+    g_root = find_root()
+    g_std = g_root + "/std"
+    g_en = g_root + "/tests/lsp/en/shapes.salam"
+    g_fa = g_root + "/tests/lsp/fa/binary.salam"
+    g_pkg = g_root + "/std/str/basic.salam"
+    g_proj = g_root + "/tests/lsp/proj"
+    g_iface = g_root + "/tests/lsp/en/iface.salam"
+    argv := os.Args()
+    mut exe := g_root + "/salam"
+    if argv.len() > 1:
+        exe = filepath.Join(os.Cwd(), argv.get(1))
+        if filepath.IsAbs(argv.get(1)):
+            exe = argv.get(1)
+        end
+    end
+
+    mut s := start_std(exe)
+    init := initialize(s, json.Str(uri_of(g_root)), "{}", "")
+    caps := jpath(init, "result.capabilities")
+    mut all_caps := true
+    each k in str.Split("hoverProvider,definitionProvider,referencesProvider,renameProvider,completionProvider,documentSymbolProvider,semanticTokensProvider,documentFormattingProvider,signatureHelpProvider,inlayHintProvider", ","):
+        if not jhas(caps, k):
+            all_caps = false
+        end
+    end
+    check("initialize advertises the features", all_caps, dump(caps))
+    english(s)
+    quick_fixes(s)
+    interfaces(s)
+    package_check(s)
+    code := s.stop()
+    check("shutdown then exit ends with status 0", code == 0, "")
+
+    extra := Vector {} as Vector<str>
+    extra.push("--stdlib-path=" + g_std)
+    extra.push("--messages=fa")
+    mut f := start_server(exe, extra)
+    _fi := initialize(f, json.Str(uri_of(g_root)), "{}", "")
+    persian(f)
+    _fc := f.stop()
+
+    switch_lint(exe)
+    project(exe)
+    pull_and_colors(exe)
+    check_cli(exe)
+
+    println "RESULT: " + g_passed + " passed, " + g_failed + " failed"
+    if g_failed > 0:
+        ret 1
+    end
+end

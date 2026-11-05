@@ -1,0 +1,299 @@
+@en "dependency"
+@fa "وابستگی"
+package dependency
+
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import mem
+import str
+
+struct Provider:
+    pub deps: Vector<str> = Vector {}
+    pub make: func (void*) void* = (_c: void*): ret null as void* end
+    pub close: func (void*) = (_b: void*): end
+    pub has_close: bool = false
+    pub is_alias: bool = false
+    pub target: str = ""
+end
+
+struct State:
+    pub providers: HashMap<str, Provider> = HashMap {}
+    pub names: Vector<str> = Vector {}
+    pub dupes: Vector<str> = Vector {}
+    pub boxes: HashMap<str, void*> = HashMap {}
+    pub order: Vector<str> = Vector {}
+    pub resolving: Vector<str> = Vector {}
+    pub error: str = ""
+    pub closed: bool = false
+end
+
+@en "Container"
+@fa "ظرف"
+pub struct Container:
+    @en "st"
+    @fa "وضعیت"
+    pub st: State* = null
+end
+
+func split_deps(spec: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    parts := str.Split(spec, ",")
+    each p in parts:
+        t := str.Trim(p)
+        if str.Len(t) > 0:
+            out.push(t)
+        end
+    end
+    parts.free()
+    ret out
+end
+
+func register(c: Container, name: str, p: Provider):
+    st := c.st
+    if st[0].providers.has(name):
+        st[0].dupes.push(name)
+        ret
+    end
+    st[0].providers.put(name, p)
+    st[0].names.push(name)
+end
+
+func dfs(st: State*, name: str, path &: Vector<str>, state &: HashMap<str, int>): str:
+    if not st[0].providers.has(name):
+        ret ""
+    end
+    if state.has(name):
+        if state.get(name) == 1:
+            mut chain := ""
+            each n in path:
+                chain = chain + n + " -> "
+            end
+            ret "dependency cycle: " + chain + name
+        end
+        ret ""
+    end
+    state.put(name, 1)
+    path.push(name)
+    p := st[0].providers.get(name)
+    mut err := ""
+    each d in p.deps:
+        if str.Len(err) == 0:
+            err = dfs(st, d, path, state)
+        end
+    end
+    path.pop()
+    state.put(name, 2)
+    ret err
+end
+
+func construct(c: Container, name: str): void*:
+    st := c.st
+    if st[0].boxes.has(name):
+        ret st[0].boxes.get(name)
+    end
+    if not st[0].providers.has(name):
+        st[0].error = "missing provider: " + name
+        ret null
+    end
+    each r in st[0].resolving:
+        if str.Equals(r, name):
+            st[0].error = "dependency cycle at " + name
+            ret null
+        end
+    end
+    p := st[0].providers.get(name)
+    st[0].resolving.push(name)
+    mut b := null as void*
+    if p.is_alias:
+        b = construct(c, p.target)
+    else:
+        b = p.make(null)
+    end
+    st[0].resolving.pop()
+    if b == null:
+        ret null
+    end
+    st[0].boxes.put(name, b)
+    if not p.is_alias:
+        st[0].order.push(name)
+    end
+    ret b
+end
+
+@en "New"
+@fa "ساخت"
+pub func New(): Container:
+    p := mem.AllocateZeroed(sizeof(State)) as State*
+    p[0].providers = HashMap {} as HashMap<str, Provider>
+    p[0].names = Vector {} as Vector<str>
+    p[0].dupes = Vector {} as Vector<str>
+    p[0].boxes = HashMap {} as HashMap<str, void*>
+    p[0].order = Vector {} as Vector<str>
+    p[0].resolving = Vector {} as Vector<str>
+    p[0].error = ""
+    ret Container { st = p }
+end
+
+@en "Provide"
+@fa "فراهم کردن"
+pub func Provide<T>(c: Container, name: str, needs: str, _witness: T, factory: func (Container) T):
+    mut p := Provider {}
+    p.deps = split_deps(needs)
+    cc := c
+    p.make = (_cx: void*):
+        v := factory(cc)
+        b := mem.Allocate(sizeof(T)) as T*
+        b[0] = v
+        ret b as void*
+    end
+    register(c, name, p)
+end
+
+@en "Value"
+@fa "مقدار"
+pub func Value<T>(c: Container, name: str, v: T):
+    mut p := Provider {}
+    p.make = (_cx: void*):
+        b := mem.Allocate(sizeof(T)) as T*
+        b[0] = v
+        ret b as void*
+    end
+    register(c, name, p)
+end
+
+@en "Bind"
+@fa "پیوند"
+pub func Bind(c: Container, iface: str, concrete: str):
+    mut p := Provider {}
+    p.is_alias = true
+    p.target = concrete
+    p.deps.push(concrete)
+    register(c, iface, p)
+end
+
+@en "OnClose"
+@fa "هنگام بستن"
+pub func OnClose<T>(c: Container, name: str, _witness: T, f: func (T)):
+    st := c.st
+    if not st[0].providers.has(name):
+        st[0].error = "OnClose: no provider named " + name
+        ret
+    end
+    mut p := st[0].providers.get(name)
+    p.close = (b: void*):
+        f((b as T*)[0])
+    end
+    p.has_close = true
+    st[0].providers.put(name, p)
+end
+
+@en "Build"
+@fa "ساختن گراف"
+pub func Build(c: Container): str:
+    st := c.st
+    if str.Len(st[0].error) > 0:
+        ret st[0].error
+    end
+    if st[0].dupes.len() > 0:
+        ret "duplicate provider: " + st[0].dupes.get(0)
+    end
+    each n in st[0].names:
+        p := st[0].providers.get(n)
+        each d in p.deps:
+            if not st[0].providers.has(d):
+                ret "missing dependency: " + n + " needs " + d
+            end
+        end
+    end
+    mut state := HashMap {} as HashMap<str, int>
+    defer state.free()
+    mut path := Vector {} as Vector<str>
+    defer path.free()
+    each n in st[0].names:
+        err := dfs(st, n, path, state)
+        if str.Len(err) > 0:
+            ret err
+        end
+    end
+    ret ""
+end
+
+@en "Get"
+@fa "گرفتن"
+pub func Get<T>(c: Container, name: str, out &: T): bool:
+    b := construct(c, name)
+    if b == null:
+        ret false
+    end
+    out = (b as T*)[0]
+    ret true
+end
+
+@en "Error"
+@fa "خطا"
+pub func Error(c: Container): str:
+    st := c.st
+    ret st[0].error
+end
+
+@en "Count"
+@fa "تعداد"
+pub func Count(c: Container): int:
+    st := c.st
+    ret st[0].names.len()
+end
+
+@en "Built"
+@fa "ساخته شده"
+pub func Built(c: Container): Vector<str>:
+    st := c.st
+    mut out := Vector {} as Vector<str>
+    each n in st[0].order:
+        out.push(n)
+    end
+    ret out
+end
+
+@en "Close"
+@fa "بستن"
+pub func Close(c: Container):
+    st := c.st
+    if st[0].closed:
+        ret
+    end
+    st[0].closed = true
+    mut i := st[0].order.len() - 1
+    until i >= 0:
+        n := st[0].order.get(i)
+        p := st[0].providers.get(n)
+        b := st[0].boxes.get(n)
+        if p.has_close:
+            p.close(b)
+        end
+        mem.Free(b)
+        i = i - 1
+    end
+    each pn in st[0].names:
+        pv := st[0].providers.get(pn)
+        pv.deps.free()
+    end
+    st[0].providers.free()
+    st[0].names.free()
+    st[0].dupes.free()
+    st[0].boxes.free()
+    st[0].order.free()
+    st[0].resolving.free()
+    mem.Free(st as void*)
+end

@@ -22,6 +22,7 @@ esac
 
 "$SALAM" run tools/salam/check-fa-names.salam --no-color --log-level=error
 "$SALAM" run website/check-std-coverage.salam --no-color --log-level=error
+"$SALAM" run website/check-code-words.salam --no-color --log-level=error
 
 jobs=$(nproc 2>/dev/null || echo 4)
 if [ "$examples" != skip ]; then
@@ -32,7 +33,7 @@ if [ "$examples" != skip ]; then
         echo "website: example output does not match its .out file" >&2
         exit 1
     }
-    python3 website/check-snippets.py || {
+    "$SALAM" run tools/salam/check-snippets.salam --no-color --log-level=error || {
         echo "website: a lesson snippet does not compile" >&2
         exit 1
     }
@@ -97,3 +98,19 @@ if ! wait "$gen_pid"; then
     exit 1
 fi
 "$work/generator" "$@"
+
+for want in \
+    'en/std/wire/index.html|<span class="tok-k">import</span> wire' \
+    'en/std/wire/index.html|<span class="tok-t">str</span>' \
+    'fa/std/wire/index.html|<span class="tok-k">واردسازی</span> تزریق' \
+    'fa/std/wire/index.html|<span class="tok-b">سرچاپ</span>' \
+    'en/std/wire/index.html|<span class="tok-k">interface</span> <span class="tok-t">Greeter</span>:' \
+    'en/std/wire/index.html|<span class="tok-k">func</span> <span class="tok-f">main</span>:' \
+    'fa/std/wire/index.html|<span class="tok-k">تابع</span> <span class="tok-f">ریشه</span>:'; do
+    page=${want%%|*}
+    text=${want#*|}
+    if [ -f "website/dist/$page" ] && ! grep -qF "$text" "website/dist/$page"; then
+        echo "website: $page lacks the highlighted code '$text'" >&2
+        exit 1
+    fi
+done

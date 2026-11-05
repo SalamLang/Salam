@@ -24,6 +24,36 @@ const RESULTS: Record<string, { tone: "ok" | "warn"; text: string }> = {
   pending: { tone: "warn", text: t("پرداخت شما در حال بررسی است. چند لحظه بعد این صفحه را تازه کنید.", "Your payment is being checked. Refresh this page in a moment.") },
 };
 
+export function planName(id: PlanId, fallback: string): string {
+  switch (id) {
+    case "free":
+      return t("رایگان", "Free");
+    case "plus":
+      return t("پلاس", "Plus");
+    case "pro":
+      return t("حرفه‌ای", "Pro");
+    case "unlimited":
+      return t("نامحدود", "Unlimited");
+    default:
+      return fallback;
+  }
+}
+
+function planNote(id: PlanId, fallback: string): string {
+  switch (id) {
+    case "free":
+      return t("برای آشنایی با دستیار سلام و کارهای کوچک", "To get to know the Salam assistant and for small tasks");
+    case "plus":
+      return t("برای کار روزمره با دستیار و کلید API", "For everyday work with the assistant and an API key");
+    case "pro":
+      return t("برای کار سنگین‌تر و ایجنت‌هایی مثل Cline", "For heavier work and agents like Cline");
+    case "unlimited":
+      return t("بدون هیچ محدودیتی، بدون انقضا", "No limits at all, no expiry");
+    default:
+      return fallback;
+  }
+}
+
 function errText(e: unknown, fallback: string) {
   return e instanceof ApiError ? e.message : fallback;
 }
@@ -123,7 +153,7 @@ export function Plans({ notify }: { notify: (msg: string) => void }) {
           </div>
           <div className="plan-now">
             <strong className="plan-now-name">
-              <IconSpark width={18} height={18} /> {current.plan.name}
+              <IconSpark width={18} height={18} /> {planName(current.plan.id, current.plan.name)}
             </strong>
             <span className="muted">
               {current.expires === 0 ? t("بدون تاریخ پایان", "No end date") : t(`تا ${fmtDate(current.expires)}`, `Until ${fmtDate(current.expires)}`)}
@@ -168,14 +198,14 @@ export function Plans({ notify }: { notify: (msg: string) => void }) {
                   <span className="plan-icon" aria-hidden="true">
                     <IconSpark width={20} height={20} />
                   </span>
-                  <h3>{p.name}</h3>
+                  <h3>{planName(p.id, p.name)}</h3>
                 </header>
                 <div className="plan-priceblock">
                   <span className="plan-price">{price}</span>
                   {unit && <span className="plan-unit">{unit}</span>}
                 </div>
                 <p className="plan-period">{period}</p>
-                {p.note && <p className="plan-note">{p.note}</p>}
+                {p.note && <p className="plan-note">{planNote(p.id, p.note)}</p>}
                 <ul className="plan-features">
                   {features(p).map((f) => (
                     <li key={f}>
@@ -237,7 +267,7 @@ export function Plans({ notify }: { notify: (msg: string) => void }) {
                 {payments.map((p) => (
                   <tr key={p.id}>
                     <td>{fmtDate(p.created)}</td>
-                    <td>{p.plan_name}</td>
+                    <td>{planName(p.plan, p.plan_name)}</td>
                     <td>{toman(p.amount)}</td>
                     <td>{GATEWAY_NAMES[p.gateway] ?? p.gateway}</td>
                     <td>

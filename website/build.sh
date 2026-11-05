@@ -101,10 +101,12 @@ fi
 
 for want in \
     'en/std/wire/index.html|<span class="tok-k">import</span> wire' \
-    'en/std/wire/index.html|<span class="tok-k">interface</span> Greeter:' \
     'en/std/wire/index.html|<span class="tok-t">str</span>' \
     'fa/std/wire/index.html|<span class="tok-k">واردسازی</span> تزریق' \
-    'fa/std/wire/index.html|<span class="tok-b">سرچاپ</span>'; do
+    'fa/std/wire/index.html|<span class="tok-b">سرچاپ</span>' \
+    'en/std/wire/index.html|<span class="tok-k">interface</span> <span class="tok-t">Greeter</span>:' \
+    'en/std/wire/index.html|<span class="tok-k">func</span> <span class="tok-f">main</span>:' \
+    'fa/std/wire/index.html|<span class="tok-k">تابع</span> <span class="tok-f">ریشه</span>:'; do
     page=${want%%|*}
     text=${want#*|}
     if [ -f "website/dist/$page" ] && ! grep -qF "$text" "website/dist/$page"; then

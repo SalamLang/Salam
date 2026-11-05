@@ -132,6 +132,16 @@ func rule_is_plain_value(a &: at.Ast, nid: int): bool:
     ret false
 end
 
+func rule_lit_bool(a &: at.Ast, nid: int, name: str): bool:
+    repeat at.ChildCount(a, nid) in i:
+        fi := at.Get(a, at.Child(a, nid, i))
+        if str.Equals(fi.name, name) and fi.a != 0:
+            ret at.Get(a, fi.a).value_bool
+        end
+    end
+    ret false
+end
+
 func rule_root_ok(s &: Sema, a &: at.Ast, nid: int): bool:
     mut cur := nid
     until cur != 0 and at.KindOf(a, cur) == at.AST_MEMBER:
@@ -170,6 +180,19 @@ func rule_value_key_at(s &: Sema, a &: at.Ast, nid: int, fty: int, names_ok: boo
         ret ""
     end
     n := at.Get(a, nid)
+    opt := opt_inner(s, fty)
+    if opt != TYPE_NONE:
+        if n.kind == at.AST_LITERAL and n.op == tok.TK_KW_NULL:
+            ret "n"
+        end
+        if n.kind == at.AST_STRUCT_LIT and n.synthetic:
+            if not rule_lit_bool(a, nid, "present"):
+                ret "n"
+            end
+            ret rule_value_key_at(s, a, rule_lit_value(a, nid, "value"), opt, names_ok, depth + 1)
+        end
+        ret rule_value_key_at(s, a, nid, opt, names_ok, depth + 1)
+    end
     if names_ok:
         init := rule_const_init(s, a, nid)
         if init != 0:
@@ -253,6 +276,9 @@ func rule_value_plain(key: str): str:
     if str.Equals(key, "b0"):
         ret "false"
     end
+    if str.Equals(key, "n"):
+        ret "null"
+    end
     ret rule_value_body(key)
 end
 
@@ -263,6 +289,9 @@ func rule_value_show(key: str): str:
     end
     if str.Equals(key, "b0"):
         ret fa ? "نادرست" : "false"
+    end
+    if str.Equals(key, "n"):
+        ret fa ? "پوچ" : "null"
     end
     if str.Len(key) > 0 and byte_at(key, 0) == 115:
         ret "\"" + rule_value_body(key) + "\""
@@ -450,15 +479,17 @@ func rule_shape_ok(s &: Sema, a &: at.Ast, did: int, rid: int): bool:
     if r.a != 0 and at.Typarams(a, d.ext).len() == 0:
         fty := rule_cond_type(s, a, did, r)
         key := rule_value_key(s, a, r.a, fty, false)
-        if fty != TYPE_NONE and at.KindOf(a, r.a) == at.AST_LITERAL:
-            s.expected = fty
+        opt := opt_inner(s, fty)
+        base := opt != TYPE_NONE ? opt : fty
+        if base != TYPE_NONE and at.KindOf(a, r.a) == at.AST_LITERAL:
+            s.expected = base
         end
         vt := sema_check_expr(s, a, r.a)
-        float_ok := fty != TYPE_NONE and type_is_float(s, fty) and vt >= 0 and type_is_float(s, vt)
+        float_ok := base != TYPE_NONE and type_is_float(s, base) and vt >= 0 and type_is_float(s, vt)
         if str.Len(key) == 0 or (at.KindOf(a, r.a) == at.AST_MEMBER and not rule_root_ok(s, a, r.a)):
             serr(s, 160, span_of(a, r.a), i18.Tr("the value in a rule must be a literal or a plain enum member"))
             ok = false
-        else fty != TYPE_NONE and not float_ok and not type_assignable(s, fty, vt):
+        else fty != TYPE_NONE and not float_ok and not type_assignable(s, fty, vt) and not opt_wraps(s, fty, vt):
             serr(
                 s, 160, span_of(a, r.a), co.Format3(
                     i18.Tr("rule value for field '%s': cannot assign '%s' to '%s'"), co.ArgStr(at.Get(a, r.list.get(0)).name), co.ArgStr(type_disp(s, vt)), co.ArgStr(type_disp(s, fty))
@@ -690,9 +721,15 @@ func jd_dec_value_rule(s &: Sema, a &: at.Ast, sym: int, r: at.Node, keys: Vecto
     if str.Len(want) == 0:
         ret ""
     end
-    code := rule_value_code(s, want, fty)
+    opt := opt_inner(s, fty)
     trig := jd_flag_for(s, a, sym, flags, keys.get(0), sp)
-    same := JD_OUT + "." + derive_ident(name) + " == " + code
+    fld := JD_OUT + "." + derive_ident(name)
+    mut same := fld + " == " + rule_value_code(s, want, fty)
+    if str.Equals(want, "n"):
+        same = fld + ".present == false"
+    else opt != TYPE_NONE:
+        same = fld + ".present and " + fld + ".value == " + rule_value_code(s, want, opt)
+    end
     mut test := "(" + trig + " and " + same + ")"
     if str.Equals(rule_default_key(s, a, sym, f, fty), want):
         test = "(" + trig + " == false or " + same + ")"
@@ -837,7 +874,9 @@ func js_value_rule(s &: Sema, a &: at.Ast, sym: int, r: at.Node, keys: Vector<st
     c := byte_at(want, 0)
     body := rule_value_body(want)
     mut lit := body
-    if c == 115 or c == 101:
+    if str.Equals(want, "n"):
+        lit = "null"
+    else c == 115 or c == 101:
         lit = js_qs(body)
     else str.Equals(want, "b1"):
         lit = "true"

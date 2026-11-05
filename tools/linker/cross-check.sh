@@ -100,8 +100,17 @@ for dir in $DIRS; do
                 fail=$((fail + 1))
                 continue
             fi
-            chk=$R/tools/linker/macho_check.py
-            if ! python3 "$chk" sig "$w/out" >/dev/null || ! python3 "$chk" cmp "$w/out" "$w/ref" >"$w/cmp"; then
+            chk=$W/macho_check
+            if [ ! -x "$chk" ]; then
+                mkdir -p "$W/mc"
+                (cd "$W/mc" && SALAM_STD="$R/std" "$SALAM" build "$R/tools/linker/macho_check.salam" --output="$chk" --log-level=error >"$W/mc.log" 2>&1) || {
+                    echo "FAIL $id (cannot build macho_check)"
+                    head -3 "$W/mc.log"
+                    fail=$((fail + 1))
+                    continue
+                }
+            fi
+            if ! "$chk" sig "$w/out" >/dev/null || ! "$chk" cmp "$w/out" "$w/ref" >"$w/cmp"; then
                 echo "FAIL $id (Mach-O check)"
                 head -3 "$w/cmp"
                 fail=$((fail + 1))

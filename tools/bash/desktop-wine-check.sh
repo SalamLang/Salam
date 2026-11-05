@@ -23,7 +23,7 @@ for arch in ${DESKTOP_WINE_ARCHES:-x86_64 i686}; do
         fail=1
         continue
     fi
-    (cd "$d" && python3 -I -c "import zipfile,glob;zipfile.ZipFile(glob.glob('*.zip')[0]).extractall('.')")
+    (cd "$d" && unzip -q -o ./*.zip)
     app=$(dirname "$(find "$d" -name '*.exe' | head -1)")
     "$arch-w64-mingw32-gcc" -shared "$root/std/gui/webview/native/mock/webview2_mock.c" -o "$app/WebView2Loader.dll" -Wl,--kill-at -lole32
     (cd "$app" && timeout 120 xvfb-run -a wine ./salam-services.exe </dev/null >got 2>/dev/null)

@@ -21,7 +21,7 @@ check | skip | only) ;;
 esac
 
 "$SALAM" run tools/salam/check-fa-names.salam --no-color --log-level=error
-python3 website/check-std-coverage.py
+"$SALAM" run website/check-std-coverage.salam --no-color --log-level=error
 
 jobs=$(nproc 2>/dev/null || echo 4)
 if [ "$examples" != skip ]; then
@@ -83,8 +83,9 @@ for page in website/content/*/std/*.txt; do
     fi
     printf '%s\n%s\n%s\n' "$src" "$out" "$pkg" >>"$work/docs"
 done
-doc_cmd='"$SALAM" doc "$1" --output="$2" >/dev/null || { echo "website: salam doc failed for std/$3" >&2; exit 1; }'
-if [ -s "$work/docs" ] && ! tr '\n' '\0' <"$work/docs" | xargs -0 -n 3 -P "$jobs" sh -c "$doc_cmd" sh; then
+if [ -s "$work/docs" ] &&
+    ! tr '\n' '\0' <"$work/docs" |
+        xargs -0 -n 3 -P "$jobs" sh -c '"$SALAM" doc "$1" --output="$2" >/dev/null || { echo "website: salam doc failed for std/$3" >&2; exit 1; }' sh; then
     kill "$gen_pid" 2>/dev/null || true
     exit 1
 fi

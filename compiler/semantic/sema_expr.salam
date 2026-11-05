@@ -6,6 +6,7 @@ include co "../sal_core.salam"
 include tok "../token.salam"
 include at "../ast.salam"
 include i18 "../i18n.salam"
+include wd "../wide.salam"
 
 func sema_div_zero_check(s &: Sema, a &: at.Ast, op: int, left: int, divisor: int, ct: int, sp: co.SrcSpan):
     if op != tok.TK_SLASH and op != tok.TK_PERCENT:
@@ -16,6 +17,14 @@ func sema_div_zero_check(s &: Sema, a &: at.Ast, op: int, left: int, divisor: in
         ret
     end
     if ct < 0 or not type_is_integer(s, ct):
+        ret
+    end
+    if type_is_wide(s, ct):
+        mut wl := wd.Zero()
+        mut wv := wd.Zero()
+        if not (left != 0 and wide_operand(s, a, left, wl)) and wide_operand(s, a, divisor, wv) and wd.IsZero(wv):
+            serr(s, 21, sp, i18.Tr("division by zero: the right operand is always 0"))
+        end
         ret
     end
     mut dv := 1 as i64
@@ -32,7 +41,16 @@ func sema_tk_is_bitwise(k: int): bool:
     ret k == tok.TK_AMP or k == tok.TK_PIPE or k == tok.TK_CARET or k == tok.TK_SHL or k == tok.TK_SHR
 end
 
-func int_lit_fits(u: u64, k: int): bool:
+func int_lit_fits(u: u64, hi: u64, k: int): bool:
+    if k == TY_I128:
+        ret (hi >> 63) == (0 as u64)
+    end
+    if k == TY_U128:
+        ret true
+    end
+    if hi != (0 as u64):
+        ret false
+    end
     if k == TY_I8:
         ret u <= 127 as u64
     end
@@ -205,7 +223,7 @@ func check_binary(s &: Sema, a &: at.Ast, nid: int): int:
     mut r := TYPE_NONE
     if r_lit and not l_lit:
         l = sema_check_expr(s, a, n.a)
-        if type_is_integer(s, l):
+        if type_is_integer(s, l) and not (type_is_wide(s, l) and (n.op == tok.TK_SHL or n.op == tok.TK_SHR)):
             s.expected = l
         end
         r = sema_check_expr(s, a, n.b)
@@ -280,6 +298,8 @@ func check_binary(s &: Sema, a &: at.Ast, nid: int): int:
         if not type_is_numeric(s, l) or not type_is_numeric(s, r):
             serr(s, 21, sp, i18.Tr("operator '**' requires numeric operands"))
         end
+        wide_coerce(s, a, n.a, sema_ty(s, TY_F64))
+        wide_coerce(s, a, n.b, sema_ty(s, TY_F64))
         ret sema_decorate(s, a, nid, sema_ty(s, TY_F64))
     end
     if op == tok.TK_AND or op == tok.TK_OR:
@@ -305,6 +325,7 @@ func check_binary(s &: Sema, a &: at.Ast, nid: int): int:
             ret sema_decorate(s, a, nid, sema_err_ty(s))
         end
         if op == tok.TK_STAR and (lk == TY_STR or rk == TY_STR):
+            wide_no_index(s, a, lk == TY_STR ? n.b : n.a, i18.Tr("a string repeat count"))
             if (lk == TY_STR and type_is_integer(s, r)) or (rk == TY_STR and type_is_integer(s, l)):
                 ret sema_decorate(s, a, nid, sema_ty(s, TY_STR))
             end
@@ -330,6 +351,8 @@ func check_binary(s &: Sema, a &: at.Ast, nid: int): int:
             )
         end
         sema_div_zero_check(s, a, op, n.a, n.b, c, sp)
+        wide_coerce(s, a, n.a, c)
+        wide_coerce(s, a, n.b, c)
         ret sema_decorate(s, a, nid, c)
     end
     if sema_tk_is_bitwise(op):
@@ -355,6 +378,7 @@ func check_binary(s &: Sema, a &: at.Ast, nid: int): int:
                     )
                 end
             end
+            wide_coerce_shift(s, a, n.b)
             ret sema_decorate(s, a, nid, rt)
         end
         c2 := type_common_arith(s, l, r)
@@ -366,6 +390,8 @@ func check_binary(s &: Sema, a &: at.Ast, nid: int): int:
             )
             ret sema_decorate(s, a, nid, sema_err_ty(s))
         end
+        wide_coerce(s, a, n.a, c2)
+        wide_coerce(s, a, n.b, c2)
         ret sema_decorate(s, a, nid, c2)
     end
     if tk_is_eq(op) and enum_data_sym(s, l) != 0 and type_equiv(s, l, r):
@@ -424,6 +450,9 @@ func check_binary(s &: Sema, a &: at.Ast, nid: int): int:
         mut cok := false
         if type_is_numeric(s, l) and type_is_numeric(s, r) and type_common_arith(s, l, r) >= 0:
             cok = true
+            cmp_t := type_common_arith(s, l, r)
+            wide_coerce(s, a, n.a, cmp_t)
+            wide_coerce(s, a, n.b, cmp_t)
         else type_equiv(s, l, r) or types_text_pair(s, l, r):
             cok = true
         else tk_is_eq(op) and (
@@ -447,7 +476,7 @@ func check_binary(s &: Sema, a &: at.Ast, nid: int): int:
 end
 
 func sema_kind_is_comparable(k: int): bool:
-    ret k == TY_BOOL or k == TY_CHAR or k == TY_UCHAR or k == TY_STR or k == TY_PTR or k == TY_NULL or k == TY_ENUM or k == TY_FUNC or k == TY_I8 or k == TY_I16 or k == TY_I32 or k == TY_I64 or k == TY_U8 or k == TY_U16 or k == TY_U32 or k == TY_U64 or k == TY_USIZE or k == TY_SIZE or k == TY_F32 or k == TY_F64
+    ret k == TY_BOOL or k == TY_CHAR or k == TY_UCHAR or k == TY_STR or k == TY_PTR or k == TY_NULL or k == TY_ENUM or k == TY_FUNC or k == TY_I8 or k == TY_I16 or k == TY_I32 or k == TY_I64 or k == TY_U8 or k == TY_U16 or k == TY_U32 or k == TY_U64 or k == TY_USIZE or k == TY_SIZE or k == TY_F32 or k == TY_F64 or k == TY_I128 or k == TY_U128
 end
 
 func check_ternary(s &: Sema, a &: at.Ast, nid: int): int:
@@ -492,6 +521,8 @@ func check_ternary(s &: Sema, a &: at.Ast, nid: int): int:
     if type_is_numeric(s, tt) and type_is_numeric(s, tf):
         common := type_common_arith(s, tt, tf)
         if common >= 0:
+            wide_coerce(s, a, n.b, common)
+            wide_coerce(s, a, n.c, common)
             ret sema_decorate(s, a, nid, common)
         end
     end

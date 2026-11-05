@@ -21,11 +21,12 @@ produces binaries for them.
 "32-bit" refers to the **pointer / word width**, not the widest value you can
 compute with. Nothing about 64-bit numeric types is lost on a 32-bit CPU:
 
-| Type           | On a 32-bit target                                                                                                                                                                                                                  |
-| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `i64` / `u64`  | Fully supported. Add/sub are inlined as 32-bit register **pairs**; multiply/divide/modulo call the compiler's runtime helpers (`__divdi3`, `__moddi3`, `__udivdi3`, …). Correct, just a few instructions slower than native 64-bit. |
-| `f64` (double) | Fully supported and usually **native** - the FPU (x87 / SSE2 / NEON) operates on 64-bit doubles regardless of pointer width.                                                                                                        |
-| `i32` / `f32`  | Native.                                                                                                                                                                                                                             |
+| Type            | On a 32-bit target                                                                                                                                                                                                                                            |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `i64` / `u64`   | Fully supported. Add/sub are inlined as 32-bit register **pairs**; multiply/divide/modulo call the compiler's runtime helpers (`__divdi3`, `__moddi3`, `__udivdi3`, …). Correct, just a few instructions slower than native 64-bit.                           |
+| `i128` / `u128` | Fully supported. Add, subtract, multiply and shift are inlined over 64-bit halves. Divide and float conversion call Salam's own helpers in `std/core`, because 32-bit libgcc has no `__udivti3`. No C ABI, so `extern` functions cannot use them here (E160). |
+| `f64` (double)  | Fully supported and usually **native** - the FPU (x87 / SSE2 / NEON) operates on 64-bit doubles regardless of pointer width.                                                                                                                                  |
+| `i32` / `f32`   | Native.                                                                                                                                                                                                                                                       |
 
 What actually changes on 32-bit is only:
 

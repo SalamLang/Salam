@@ -375,6 +375,8 @@ func cg_match_arm_cond(
                 co.SbPuts(
                     b, "(strcmp(" + subj_var + ", " + cg_expr(g, s, a, patn.a) + ") == 0)"
                 )
+            else cg_wide_ts(subj_ts):
+                co.SbPuts(b, cg_wide_cond(subj_var, subj_ts, tok.TK_EQ, cg_expr(g, s, a, patn.a)))
             else:
                 co.SbPuts(
                     b, "((" + subj_var + ") == (" + cg_expr(g, s, a, patn.a) + "))"
@@ -440,9 +442,15 @@ func cg_case_item_cond(g &: Cg, s &: sm.Sema, a &: at.Ast, item: int, subj_var: 
         if is_str:
             ret "(strcmp(" + subj_var + ", " + lo + ") >= 0 && strcmp(" + subj_var + ", " + hi + ") <= 0)"
         end
+        if cg_wide_ts(subj_ts):
+            ret "(" + cg_wide_cond(subj_var, subj_ts, tok.TK_GE, lo) + " && " + cg_wide_cond(subj_var, subj_ts, tok.TK_LE, hi) + ")"
+        end
         ret "((" + subj_var + ") >= (" + lo + ") && (" + subj_var + ") <= (" + hi + "))"
     end
     val := cg_expr(g, s, a, itn.a)
+    if cg_wide_ts(subj_ts):
+        ret cg_wide_cond(subj_var, subj_ts, itn.op == 0 ? tok.TK_EQ : itn.op, val)
+    end
     if itn.op == 0:
         if is_str:
             ret "(strcmp(" + subj_var + ", " + val + ") == 0)"
@@ -1027,6 +1035,9 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
         if nn.op == tok.TK_INT:
             u := nn.value_int
             ts := nn.type_str
+            if cg_wide_ts(ts):
+                ret cg_wide_lit(ts, nn.value_hi, u)
+            end
             if str.Equals(ts, "f32") or str.Equals(ts, "f64"):
                 ret "((" + cg_ctype(ts) + ")" + co.U64Toa(u) + (u > (2147483647 as u64) ? "LL" : "") + ")"
             end
@@ -1202,6 +1213,9 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
                 ret "(strcmp(" + ea2 + ", " + eb2 + ") " + opv + " 0)"
             end
         end
+        if cg_wide_ts(an.type_str) and (nn.op == tok.TK_SHL or nn.op == tok.TK_SHR or cg_wide_ts(bn.type_str)):
+            ret cg_wide_binary(g, s, a, n, an.type_str)
+        end
         shift := nn.op == tok.TK_SHL or nn.op == tok.TK_SHR
         mut cts := ""
         if cg_is_int_typestr(an.type_str) and cg_is_int_typestr(bn.type_str):
@@ -1264,6 +1278,9 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
                 end
             end
         end
+        if (nn.op == tok.TK_MINUS or nn.op == tok.TK_TILDE) and nn.a != 0 and cg_wide_ts(at.Get(a, nn.a).type_str):
+            ret "SALAM_W_AS(" + cg_ctype(at.Get(a, nn.a).type_str) + ", " + (nn.op == tok.TK_MINUS ? "salam_w_neg(" : "salam_w_not(") + cg_expr(g, s, a, nn.a) + "))"
+        end
         if (nn.op == tok.TK_MINUS or nn.op == tok.TK_TILDE) and nn.a != 0 and cg_is_int_typestr(at.Get(a, nn.a).type_str):
             ucty := cg_ctype(at.Get(a, nn.a).type_str)
             mut oty := ucty
@@ -1275,6 +1292,9 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
         ret "(" + cg_op(nn.op) + cg_expr(g, s, a, nn.a) + ")"
     end
     if k == at.AST_INCDEC:
+        if nn.a != 0 and cg_wide_ts(at.Get(a, nn.a).type_str):
+            ret cg_wide_incdec(g, s, a, n)
+        end
         opc := nn.op == tok.TK_PLUS_PLUS ? "++" : "--"
         operand := cg_expr(g, s, a, nn.a)
         if nn.is_prefix:
@@ -1299,6 +1319,9 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
         dptr := str.Len(dts) > 0 and str.EndsWith(dts, "*")
         sptr := str.Len(sts) > 0 and str.EndsWith(sts, "*")
         tgt := str.Len(dts) > 0 ? dts : nn.type_str
+        if cg_wide_ts(tgt) or cg_wide_ts(sts):
+            ret cg_wide_cast(g, s, a, n, sts, tgt)
+        end
         if str.Equals(sts, "uchar") and not dptr and cg_is_int_typestr(tgt):
             ret "((" + cg_ctype(tgt) + ")salam_uchar_code(" + cg_expr(g, s, a, nn.a) + "))"
         end

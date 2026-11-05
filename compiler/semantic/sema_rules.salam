@@ -50,6 +50,20 @@ func rule_field_suggest(a &: at.Ast, did: int, name: str): str:
     ret sema_suggest_list(name, cands)
 end
 
+func struct_rules_resolve_all(s &: Sema, a &: at.Ast, program: int):
+    save_file := s.file
+    repeat at.ChildCount(a, program) in i:
+        did := at.Child(a, program, i)
+        if at.KindOf(a, did) == at.AST_STRUCT_DEF and not at.Get(a, did).synthetic:
+            if at.Rules(a, at.Get(a, did).ext).len() > 0:
+                _sf := sema_use_decl_file(s, a, did)
+                struct_rules_resolve(s, a, did)
+            end
+        end
+    end
+    s.file = save_file
+end
+
 func struct_rules_resolve(s &: Sema, a &: at.Ast, did: int):
     d := at.Get(a, did)
     rules := at.Rules(a, d.ext)
@@ -118,13 +132,52 @@ func rule_is_plain_value(a &: at.Ast, nid: int): bool:
     ret false
 end
 
-func rule_value_key(s &: Sema, a &: at.Ast, nid: int, fty: int, names_ok: bool): str:
-    if nid == 0:
+func rule_root_ok(s &: Sema, a &: at.Ast, nid: int): bool:
+    mut cur := nid
+    until cur != 0 and at.KindOf(a, cur) == at.AST_MEMBER:
+        cur = at.Get(a, cur).a
+    end
+    if cur == 0 or at.KindOf(a, cur) != at.AST_IDENTIFIER:
+        ret false
+    end
+    sy := scope_lookup(s, s.cur, at.Get(a, cur).name)
+    if sy == 0:
+        ret true
+    end
+    k := sym_at(s, sy).kind
+    ret k == SYM_ENUM or k == SYM_ALIAS or k == SYM_PACKAGE
+end
+
+func rule_const_init(s &: Sema, a &: at.Ast, nid: int): int:
+    n := at.Get(a, nid)
+    mut sy := 0
+    if n.kind == at.AST_IDENTIFIER:
+        sy = scope_lookup(s, s.cur, n.name)
+    else n.kind == at.AST_MEMBER and n.a != 0 and at.KindOf(a, n.a) == at.AST_IDENTIFIER:
+        pk := scope_lookup(s, s.cur, at.Get(a, n.a).name)
+        if pk != 0 and sym_at(s, pk).kind == SYM_PACKAGE and sym_at(s, pk).members != 0:
+            sy = scope_lookup_local(s, sym_at(s, pk).members, n.name)
+        end
+    end
+    if sy == 0 or sym_at(s, sy).kind != SYM_CONST or sym_at(s, sy).is_mut or sym_at(s, sy).decl == 0:
+        ret 0
+    end
+    ret at.Get(a, sym_at(s, sy).decl).a
+end
+
+func rule_value_key_at(s &: Sema, a &: at.Ast, nid: int, fty: int, names_ok: bool, depth: int): str:
+    if nid == 0 or depth > 16:
         ret ""
     end
     n := at.Get(a, nid)
+    if names_ok:
+        init := rule_const_init(s, a, nid)
+        if init != 0:
+            ret rule_value_key_at(s, a, init, fty, true, depth + 1)
+        end
+    end
     if fty >= 0 and ty_at(s, fty).kind == TY_ENUM:
-        if n.kind != at.AST_MEMBER:
+        if n.kind != at.AST_MEMBER or (names_ok and not rule_root_ok(s, a, nid)):
             ret ""
         end
         esym := ty_at(s, fty).decl
@@ -136,6 +189,17 @@ func rule_value_key(s &: Sema, a &: at.Ast, nid: int, fty: int, names_ok: bool):
     end
     if n.kind == at.AST_LITERAL and n.value_kind == tok.TV_STRING:
         ret "s" + n.value_str
+    end
+    if n.kind == at.AST_UNARY and n.op == tok.TK_MINUS:
+        inner := rule_value_key_at(s, a, n.a, fty, names_ok, depth + 1)
+        if str.Len(inner) == 0 or (byte_at(inner, 0) != 105 and byte_at(inner, 0) != 102):
+            ret ""
+        end
+        body := str.Substr(inner, 1, str.Len(inner) - 1)
+        if str.Equals(body, "0") or str.Equals(body, "0.0"):
+            ret inner
+        end
+        ret str.Substr(inner, 0, 1) + "-" + body
     end
     if not names_ok and not rule_is_plain_value(a, nid):
         ret ""
@@ -157,6 +221,25 @@ func rule_value_key(s &: Sema, a &: at.Ast, nid: int, fty: int, names_ok: bool):
         ret "f" + cv.f
     end
     ret ""
+end
+
+func rule_value_key(s &: Sema, a &: at.Ast, nid: int, fty: int, names_ok: bool): str:
+    ret rule_value_key_at(s, a, nid, fty, names_ok, 0)
+end
+
+func rule_default_key(s &: Sema, a &: at.Ast, ssym: int, f: int, fty: int): str:
+    fd := sym_at(s, f).decl
+    if fd == 0 or at.Get(a, fd).a == 0:
+        ret ""
+    end
+    save := s.cur
+    owner := scope_at(s, sym_at(s, ssym).members).parent
+    if owner != 0:
+        s.cur = owner
+    end
+    key := rule_value_key(s, a, at.Get(a, fd).a, fty, true)
+    s.cur = save
+    ret key
 end
 
 func rule_value_body(key: str): str:
@@ -245,6 +328,11 @@ func rule_lit_value(a &: at.Ast, nid: int, name: str): int:
     ret 0
 end
 
+func rule_struct_name(s &: Sema, ssym: int): str:
+    sv := sym_at(s, ssym)
+    ret str.Len(sv.generic_base) > 0 ? type_disp(s, sv.ty) : sv.name
+end
+
 func rule_check_value(s &: Sema, a &: at.Ast, nid: int, ssym: int, r: at.Node, sp: co.SrcSpan):
     sv := sym_at(s, ssym)
     name := at.Get(a, r.list.get(0)).name
@@ -259,7 +347,7 @@ func rule_check_value(s &: Sema, a &: at.Ast, nid: int, ssym: int, r: at.Node, s
         ret
     end
     want := rule_value_key(s, a, r.a, fty, false)
-    got := rule_value_key(s, a, val, fty, provided)
+    got := provided ? rule_value_key(s, a, val, fty, true) : rule_default_key(s, a, ssym, f, fty)
     if str.Len(want) == 0 or (str.Len(got) > 0 and not str.Equals(got, want)):
         ret
     end
@@ -272,13 +360,13 @@ func rule_check_value(s &: Sema, a &: at.Ast, nid: int, ssym: int, r: at.Node, s
             if str.Len(got) > 0:
                 serr_help(
                     s, 159, sp, co.Format4(
-                        i18.Tr("struct literal '%s' has '%s' equal to %s, which needs '%s'"), co.ArgStr(sv.name), co.ArgStr(name), co.ArgStr(shown), co.ArgStr(tgt)
+                        i18.Tr("struct literal '%s' has '%s' equal to %s, which needs '%s'"), co.ArgStr(rule_struct_name(s, ssym)), co.ArgStr(name), co.ArgStr(shown), co.ArgStr(tgt)
                     ), help
                 )
             else:
                 serr_help(
                     s, 159, sp, co.Format4(
-                        i18.Tr("struct literal '%s' must set '%s' because '%s' may equal %s (its value is not a constant)"), co.ArgStr(sv.name), co.ArgStr(tgt), co.ArgStr(name), co.ArgStr(shown)
+                        i18.Tr("struct literal '%s' must set '%s' because '%s' may equal %s (its value is not a constant)"), co.ArgStr(rule_struct_name(s, ssym)), co.ArgStr(tgt), co.ArgStr(name), co.ArgStr(shown)
                     ), help
                 )
             end
@@ -346,7 +434,7 @@ func check_struct_rules(s &: Sema, a &: at.Ast, nid: int, ssym: int, sp: co.SrcS
         end
         first := rule_lit_has(a, nid, at.Get(a, r.list.get(0)).name)
         if not rule_holds(r.name, first, rest_all, count, r.list.len()):
-            rule_report(s, a, nid, sv.name, r, sp)
+            rule_report(s, a, nid, rule_struct_name(s, ssym), r, sp)
         end
     end
 end
@@ -362,11 +450,15 @@ func rule_shape_ok(s &: Sema, a &: at.Ast, did: int, rid: int): bool:
     if r.a != 0 and at.Typarams(a, d.ext).len() == 0:
         fty := rule_cond_type(s, a, did, r)
         key := rule_value_key(s, a, r.a, fty, false)
+        if fty != TYPE_NONE and at.KindOf(a, r.a) == at.AST_LITERAL:
+            s.expected = fty
+        end
         vt := sema_check_expr(s, a, r.a)
-        if str.Len(key) == 0:
+        float_ok := fty != TYPE_NONE and type_is_float(s, fty) and vt >= 0 and type_is_float(s, vt)
+        if str.Len(key) == 0 or (at.KindOf(a, r.a) == at.AST_MEMBER and not rule_root_ok(s, a, r.a)):
             serr(s, 160, span_of(a, r.a), i18.Tr("the value in a rule must be a literal or a plain enum member"))
             ok = false
-        else fty != TYPE_NONE and not type_assignable(s, fty, vt):
+        else fty != TYPE_NONE and not float_ok and not type_assignable(s, fty, vt):
             serr(
                 s, 160, span_of(a, r.a), co.Format3(
                     i18.Tr("rule value for field '%s': cannot assign '%s' to '%s'"), co.ArgStr(at.Get(a, r.list.get(0)).name), co.ArgStr(type_disp(s, vt)), co.ArgStr(type_disp(s, fty))
@@ -599,11 +691,17 @@ func jd_dec_value_rule(s &: Sema, a &: at.Ast, sym: int, r: at.Node, keys: Vecto
         ret ""
     end
     code := rule_value_code(s, want, fty)
+    trig := jd_flag_for(s, a, sym, flags, keys.get(0), sp)
+    same := JD_OUT + "." + derive_ident(name) + " == " + code
+    mut test := "(" + trig + " and " + same + ")"
+    if str.Equals(rule_default_key(s, a, sym, f, fty), want):
+        test = "(" + trig + " == false or " + same + ")"
+    end
     mut out := ""
     mut i := 1
     until i < keys.len():
         flag := jd_flag_for(s, a, sym, flags, keys.get(i), sp)
-        out = out + JIND + "if " + JD_STRICT + " and " + JD_OUT + "." + derive_ident(name) + " == " + code + " and " + flag + " == false:\n"
+        out = out + JIND + "if " + JD_STRICT + " and " + test + " and " + flag + " == false:\n"
         out = out + jd_fail(JIND + JIND, "key '" + keys.get(0) + "' equal to " + rule_value_plain(want) + " needs key '" + keys.get(i) + "'", JD_START)
         out = out + JIND + "end\n"
         i += 1
@@ -719,7 +817,9 @@ end
 func js_dep_add(dep_keys &: Vector<str>, dep_vals &: Vector<str>, key: str, want: str):
     repeat dep_keys.len() in i:
         if str.Equals(dep_keys.get(i), key):
-            dep_vals.set(i, dep_vals.get(i) + "," + js_qs(want))
+            if not str.Contains(dep_vals.get(i), js_qs(want)):
+                dep_vals.set(i, dep_vals.get(i) + "," + js_qs(want))
+            end
             ret
         end
     end
@@ -727,7 +827,7 @@ func js_dep_add(dep_keys &: Vector<str>, dep_vals &: Vector<str>, key: str, want
     dep_vals.push(js_qs(want))
 end
 
-func js_value_rule(s &: Sema, a &: at.Ast, sym: int, r: at.Node, keys: Vector<str>): str:
+func js_value_rule(s &: Sema, a &: at.Ast, sym: int, r: at.Node, keys: Vector<str>, sp: co.SrcSpan): str:
     f := scope_lookup_local(s, sym_at(s, sym).members, at.Get(a, r.list.get(0)).name)
     fty := sym_at(s, f).ty
     want := rule_value_key(s, a, r.a, fty, false)
@@ -744,9 +844,11 @@ func js_value_rule(s &: Sema, a &: at.Ast, sym: int, r: at.Node, keys: Vector<st
     else str.Equals(want, "b0"):
         lit = "false"
     end
+    if jd_attr_of(s, a, f, sp).as_string:
+        lit = js_qs(rule_value_plain(want))
+    end
     mut cond := "{\"properties\":{" + js_qs(keys.get(0)) + ":{\"const\":" + lit + "}}"
-    dflt := rule_value_key(s, a, at.Get(a, sym_at(s, f).decl).a, fty, false)
-    if not str.Equals(dflt, want):
+    if not str.Equals(rule_default_key(s, a, sym, f, fty), want):
         cond = cond + ",\"required\":[" + js_qs(keys.get(0)) + "]"
     end
     ret "{\"if\":" + cond + "},\"then\":" + js_required_set(keys, 1, keys.len()) + "}"
@@ -777,7 +879,7 @@ func js_rules(s &: Sema, a &: at.Ast, sym: int, sp: co.SrcSpan): str:
             continue
         end
         if r.a != 0:
-            part := js_value_rule(s, a, sym, r, keys)
+            part := js_value_rule(s, a, sym, r, keys, sp)
             if str.Len(part) > 0:
                 groups = groups + (str.Len(groups) > 0 ? "," : "") + part
             end

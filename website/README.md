@@ -95,7 +95,11 @@ headings and descriptions come from the `llms.*` keys, the agent links from
 
 Examples: `examples/name.salam` becomes `{{example.name}}`, a code window with
 the highlighted code and, when `name.out` exists, its output. The highlighter
-takes its word lists from `code.keywords`, `code.types` and `code.builtins`.
+takes its word lists from `extensions/tree-sitter-salam/keywords.json`, which
+`extensions/tools/gen_syntaxes.salam` generates from the lexer tables, so
+`code.keywords`, `code.types` and `code.builtins` are filled at build time.
+`check-code-words.salam` fails the build when the lexer has a keyword the
+list lacks.
 Code in Persian script is shown right to left, other code left to right,
 whatever the page direction.
 

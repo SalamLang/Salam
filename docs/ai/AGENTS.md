@@ -125,6 +125,12 @@ rename those by hand.
 **7. Check your work.** `salam check` after every edit, `salam format`, then
 `salam test` or `salam run`. A program you did not compile is not finished.
 
+**8. Update a variable with the compound form.** Step by one with `x++` and
+`x--`; for any other amount write `x += n`, `x -= n`, `x *= n` and so on.
+`x = x + 1`, `x += 1`, `x = x + n` and `x = x` are compile error `E162`; the
+message names the form to write, and `salam check --fix` applies it. In a
+Persian file the same rule holds: `ک++`, `ک += ن`.
+
 Example. "Convert `def hex_to_decimal(hex): return int(hex, 16)`" is one line,
 because std already does it, and it keeps Python's behaviour of failing on bad
 input:
@@ -156,7 +162,7 @@ keyword in Salam at all - `until` is the only spelling this loop has.
 mut i := 0
 until i < n:        // reads "while i < n"
     // ...
-    i += 1
+    i++
 end
 ```
 
@@ -176,7 +182,7 @@ end
 
 n := 200 as u8
 repeat n in i:            // i is u8 here
-    total = total + v.get(i as int)   // ...so a signed parameter needs a cast
+    total += v.get(i as int)   // ...so a signed parameter needs a cast
 end
 ```
 
@@ -231,7 +237,7 @@ fix is to drop the binding rather than rename it. Write `repeat 20000:`, not
 
 ```salam
 each _, value in scores:     // iterate for the values alone
-    total = total + value
+    total += value
 end
 ```
 

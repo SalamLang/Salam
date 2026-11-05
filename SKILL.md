@@ -197,6 +197,17 @@ right-associative and tighter than unary minus (`2 ** 3 ** 2 == 512`,
 `x as i64 ** 2` is a cast then a power. There is no `&&`, `||`, `!` or `^^`:
 the compiler rejects them and names the word to write instead.
 `^` on its own remains bitwise XOR.
+**Update a variable in place, never by assigning it to itself.** Add or
+subtract exactly one with `x++` / `x--` (Persian `ک++`), and use `x += n`,
+`x -= n`, `x *= n`, ... for every other amount. The long forms are compile
+error `E162`: `x = x + 1`, `x = 1 + x`, `x += 1`, `x -= 1` (write `x++` /
+`x--`); `x = x + n`, `x = n + x`, `x = x * n`, `x = x << n`, `x = x | n`, ...
+(write `x += n`, `x *= n`, ...); and the statements that do nothing, `x = x`,
+`x = x + 0`, `x = x - 0`, `x = x * 1`, `x = x / 1`, `x += 0`, `x |= 0`,
+`x <<= 0` (remove them). It applies to numbers and to `str` (`s = s + t`
+becomes `s += t`; `s = t + s` is a prepend and stays), to plain variables,
+fields (`this.n`, `p.x`), arrays and pointers (`a[i]`, `p[0]`). `x = y - x`,
+`x = x * y + z` and `x = x + y + z` are not self-updates and stay legal.
 **Bitwise operators** (integer operands only): `& | ^ ~` and shifts `<< >>`, with
 compound forms `&= |= ^= <<= >>=`. Precedence follows C: shifts bind tighter than
 comparisons; `&` tighter than `^` tighter than `|`, all looser than `==`
@@ -211,7 +222,7 @@ else x == 0:  println "zero"          // "else <cond>" is else-if
 else:  println "negative"
 end
 
-until i < n:  i = i + 1  end          // loops WHILE the condition holds - "while" doesn't exist, see box below
+until i < n:  i++  end               // loops WHILE the condition holds - "while" doesn't exist, see box below
 repeat 3:  println "hi"  end          // do 3 times
 repeat n in i:  println i  end        // i = 0 .. n-1 ("in" binds the index)
 repeat 1 to 5:  ...  end              // 1..5 inclusive
@@ -336,7 +347,7 @@ end
   mutate the caller's value (in/out params, and to avoid copying big structs):
 
   ```salam
-  func bump(c &: Counter):  c.n = c.n + 1  end   // caller's Counter is modified
+  func bump(c &: Counter):  c.n++  end   // caller's Counter is modified
   func push_all(dst &: Vector<int>, src: Vector<int>): ... end
   ```
 
@@ -347,11 +358,11 @@ end
 - **Closures/lambdas** are first-class typed values, always written
   `(params): ... end` with an explicit `ret` for the value:
   `(x: int): ret x * 2 end`, or several statements
-  `(): n = n + 1  ret n  end`. Salam has no `=>` at all; it was removed in
+  `(): n++  ret n  end`. Salam has no `=>` at all; it was removed in
   0.5.0. Function-typed parameters: `func () int`, `func (int, int) bool`.
   - **Lambdas capture by value.** Each lambda gets its own copy of the outer
     variables at creation time: after `mut n := 1  g := (): ret n end  n = 5`,
-    `g()` is still `1`, and a block lambda that does `n = n + 1` changes its
+    `g()` is still `1`, and a block lambda that does `n++` changes its
     own copy (it counts across calls), never the caller's `n`. Share state
     through a pointer, a heap collection or a `mut` global.
   - **Never write a return type on a lambda.** `(x: int): int: ... end`
@@ -546,7 +557,7 @@ len(a)                                // length builtin: arrays, slices, str (a 
 ```salam
 struct Account:
     pub balance: int = 0              // pub = visible/usable outside; default value
-    pub func deposit(n: int):  this.balance = this.balance + n  end
+    pub func deposit(n: int):  this.balance += n  end
 end
 mut a := Account { balance = 100 }    // struct literal; omitted fields use defaults
 a.deposit(50)
@@ -649,7 +660,7 @@ combined with `pure`.
 struct Counter:
     n: int = 0
     pub func Count(): int:  ret this.n  end     // this is read-only here
-    pub mut func Tick():  this.n += 1  end
+    pub mut func Tick():  this.n++  end
 end
 mut c := Counter {}
 c.Tick()
@@ -672,7 +683,7 @@ struct RangeIter:
     pub stop: int = 0
     pub func has_next(): bool:  ret this.cur < this.stop  end
     pub func value(): int:      ret this.cur              end
-    pub func next():            this.cur = this.cur + 1   end
+    pub func next():            this.cur++   end
 end
 struct Range:
     pub lo: int = 0
@@ -3007,7 +3018,7 @@ Give your own `pub` API both spellings the same way:
         سرچاپ "دیگر"
     پایان
     تا ک < ۳:                            // while
-        ک += ۱
+        ک++
     پایان
     تکرار ۳:                             // three times
         چاپ "*"

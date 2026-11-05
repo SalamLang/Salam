@@ -581,6 +581,10 @@ A literal must carry the whole group: `Client { user = "u" }` is an error even i
 `Client { user = "" }` counts as given. When a guarantee must survive mutation,
 use an enum with data (`Basic(user: str, pass: str)`) or a constructor.
 
+`json.Unmarshal` enforces the same rules, a field with a default that a rule names
+is an optional key, and `json.Schema` emits `dependentRequired`, `oneOf`, `anyOf`
+and `not`. `UnmarshalLenient` ignores them.
+
 **`Self`** is the enclosing type, usable anywhere inside a `struct`, an
 `impl ... on T` block or a distinct type's body: as a return type, a parameter
 type, a field type, in a cast and as a struct literal. On a generic struct it

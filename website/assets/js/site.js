@@ -291,6 +291,17 @@
         }
       }
     }
+    const decls = new Map();
+    for (const [attr, cls] of [
+      ["data-declf", "f"],
+      ["data-decltype", "t"],
+    ]) {
+      for (const w of (salamat.getAttribute(attr) || "").split(/\s+/)) {
+        if (w) {
+          decls.set(w, cls);
+        }
+      }
+    }
     const DIGIT = /[0-9\u06f0-\u06f9\u0660-\u0669]/;
     const identCp = (ch) =>
       ch === "_" ||
@@ -304,9 +315,13 @@
       const n = cps.length;
       let out = "";
       let i = 0;
+      let pending = "";
       while (i < n) {
         const ch = cps[i];
         let j = i + 1;
+        if (!identCp(ch) && ch !== " " && ch !== "\t") {
+          pending = "";
+        }
         if (ch === "/" && cps[i + 1] === "/") {
           out += span("c", cps.slice(i).join(""));
           break;
@@ -338,8 +353,12 @@
           while (k < n && (cps[k] === " " || cps[k] === "\t")) {
             k += 1;
           }
-          if (words.has(word)) {
+          if (pending) {
+            out += span(pending, word);
+            pending = "";
+          } else if (words.has(word)) {
             out += span(words.get(word), word);
+            pending = decls.get(word) || "";
           } else if (cps[k] === "(") {
             out += span("f", word);
           } else {

@@ -763,8 +763,20 @@ export const api = {
   createChat: (
     options?: { device_id: string; workspace: string } | { cloud: true },
   ) => call<{ chat: Chat }>("POST", "/chats", options),
-  authProviders: () =>
-    call<{ github: boolean; figma: boolean }>("GET", "/auth/providers"),
+  authProviders: async () => {
+    const early = (
+      window as unknown as {
+        __salamProviders?: Promise<{ github: boolean; figma: boolean } | null>;
+      }
+    ).__salamProviders;
+    if (early) {
+      (window as unknown as { __salamProviders?: unknown }).__salamProviders =
+        undefined;
+      const r = await early;
+      if (r) return r;
+    }
+    return call<{ github: boolean; figma: boolean }>("GET", "/auth/providers");
+  },
   startProvider: (provider: string, next: string) =>
     call<{ url: string; state: string }>(
       "POST",

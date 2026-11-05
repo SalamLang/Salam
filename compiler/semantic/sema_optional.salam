@@ -106,6 +106,14 @@ func opt_field_init(s &: Sema, a &: at.Ast, lit: int, name: str, value: int, t: 
     at.AddChild(a, lit, fi)
 end
 
+func opt_container_name(s &: Sema, t: int): str:
+    if t < 0 or ty_at(s, t).kind != TY_STRUCT or ty_at(s, t).decl == 0:
+        ret ""
+    end
+    base := sym_at(s, ty_at(s, t).decl).generic_base
+    ret str.Equals(base, "Vector") or str.Equals(base, "HashMap") ? base : ""
+end
+
 func coerce_to_opt(s &: Sema, a &: at.Ast, dst: int, expr: int, src: int): int:
     sp := span_of(a, expr)
     is_none := ty_at(s, src).kind == TY_NULL
@@ -123,12 +131,14 @@ func coerce_to_opt(s &: Sema, a &: at.Ast, dst: int, expr: int, src: int): int:
         empty := th_str_lit(a, sp, "")
         _e := sema_decorate(s, a, empty, inner)
         opt_field_init(s, a, lit, "value", empty, inner, sp)
-    else inner >= 0 and (ty_at(s, inner).kind == TY_VEC or ty_at(s, inner).kind == TY_MAP):
+    else str.Len(opt_container_name(s, inner)) > 0:
         box := new_node_at(a, at.AST_STRUCT_LIT, sp)
-        at.SetName(a, box, ty_at(s, inner).kind == TY_VEC ? "Vector" : "HashMap")
-        if stamp_empty_intrinsic(s, a, box, inner):
-            opt_field_init(s, a, lit, "value", box, inner, sp)
-        end
+        at.SetName(a, box, opt_container_name(s, inner))
+        save_exp := s.expected
+        s.expected = inner
+        _b := sema_check_expr(s, a, box)
+        s.expected = save_exp
+        opt_field_init(s, a, lit, "value", box, inner, sp)
     end
     flag := new_node_at(a, at.AST_LITERAL, sp)
     mut gv := at.Get(a, flag)

@@ -28,6 +28,13 @@ or `docker build ai/backend`. It is configured through environment variables:
 | `AI_ENGINE_EFFORT_VARIANTS`                                       | comma separated `level=variant` pairs, the engine's reasoning variant for that level (for example `high=high`); server only                                           | empty                                           |
 | `AI_REDACT_WORDS`                                                 | comma separated words, in any letter case, kept out of reasoning, traces and sentences where the assistant describes itself; server only                              | empty                                           |
 | `AI_UPLOAD_DIR`                                                   | where attachments are written; mount a volume here                                                                                                                    | `/data/uploads`                                 |
+| `AI_STT_URL`                                                      | the private speech service; unset turns voice input off everywhere (see below)                                                                                        | empty                                           |
+| `AI_STT_SECRET`                                                   | bearer token for the speech service, when it sets `STT_SECRET`                                                                                                        | empty                                           |
+| `AI_STT_MAX_BYTES`                                                | largest recording the API accepts                                                                                                                                     | `4194304`                                       |
+| `AI_STT_TIMEOUT_SECONDS`                                          | how long one conversion may take, queue included; keep it under the proxy timeouts                                                                                    | `90`                                            |
+| `AI_STT_CONCURRENCY`                                              | conversions in flight from this API, across all users; more answer 503                                                                                                | `4`                                             |
+| `AI_STT_HOURLY`, `AI_STT_SECONDS_HOURLY`                          | each user's conversions and seconds of audio per hour (0 turns a limit off)                                                                                           | `30`, `600`                                     |
+| `AI_STT_HEALTH_SECONDS`                                           | how long a look at the speech service's health is remembered                                                                                                          | `30`                                            |
 | `AI_BRIDGE_SECRET`                                                | bearer token the engine sends to `/bridge/mcp`; at least 16 characters                                                                                                | empty (the bridge refuses every call)           |
 | `AI_ALLOWED_ORIGINS`                                              | comma separated origins allowed by CORS                                                                                                                               | `https://ai.salamlang.ir,http://localhost:3000` |
 | `AI_ADMIN_IDS`                                                    | comma separated account IDs that may open `/admin`; preferred over emails                                                                                             | empty                                           |
@@ -108,6 +115,7 @@ The API:
 | `POST /billing/checkout`                                                                       | `{plan, gateway}` gives `{url}` to send the browser to                                                                                                                                                                                       |
 | `GET /billing/callback/:gateway`                                                               | where the gateway returns; it verifies, activates and redirects to the app                                                                                                                                                                   |
 | `GET /apps`, `DELETE /apps/:id`, `GET /apps/:id/events`                                        | the signed-in user's connected apps, disconnecting one, and its recorded calls                                                                                                                                                               |
+| `POST /speech/transcribe`                                                                      | turns a recording into text for the signed-in user, when voice input is on (see Voice input)                                                                                                                                                 |
 | `GET /admin/summary`, `/admin/users`, `/admin/events`, `/admin/apps`, `DELETE /admin/apps/:id` | usage across all accounts, for `AI_ADMIN_EMAILS` only                                                                                                                                                                                        |
 | `GET /admin/subscriptions`, `POST /admin/subscriptions`, `DELETE /admin/subscriptions/:id`     | every live subscription (`?latest=1` for the last one of each account), giving a plan away, taking one back                                                                                                                                  |
 | `GET /admin/payments`                                                                          | every payment, with `?status=` and `?user=`                                                                                                                                                                                                  |
@@ -116,6 +124,50 @@ The API:
 | `GET /admin/files`, `GET /admin/files/:id`                                                     | every uploaded file with its owner and path, and one file's bytes as base64                                                                                                                                                                  |
 | `GET /admin/keys`, `PATCH /admin/keys/:id`                                                     | every API key with its owner and behavior (`?user=`, `?custom=1`, `?active=1`, `?before=`), and changing one key's `{salam_prompt, salam_tools, system_prompt}`; the list also says whether the engine has the plain profile (`plain_ready`) |
 | `GET /admin/messages/:id/trace`                                                                | the whole turn behind an answer, in order: prompts, reasoning, every tool call with full input and output                                                                                                                                    |
+
+### Voice input
+
+The composer can record from the microphone, turn the speech into text and put that
+text into the message box for the user to review. Nothing is sent by itself, and the
+text then takes the normal message path. The Salam Agent desktop app does not show the
+button yet.
+
+Speech runs in `ai/stt/`, a separate small service, because the API cannot hold a model
+in memory. The API proxies to it over the internal network. Without `AI_STT_URL` the
+button stays hidden, `GET /capabilities` says `"speech": false` and the route answers
+`503 speech_off`. The same happens to the button while the service is unreachable or
+offers no language, so `/capabilities` looks at its health at most once every
+`AI_STT_HEALTH_SECONDS`.
+
+- `POST /speech/transcribe?lang=fa|en` takes the raw recording with an `audio/*`
+  content type, from signed-in users only. The API checks the container by its first
+  bytes (WebM, Ogg or MP4), and the service decodes it to be sure and to measure its
+  length. The answer is `{text, language, seconds}`.
+- Audio stays in memory for the length of the request, on both sides, and transcripts
+  are never logged or stored. `speech_usage` keeps only who, when and how many seconds,
+  for the hourly limits; rows older than an hour are removed on the user's next upload.
+- The proxy in front of this route needs a body limit above `AI_STT_MAX_BYTES` and a read
+  timeout above `AI_STT_TIMEOUT_SECONDS`.
+
+The service is configured through its own environment. No model ships in this
+repository: mount them read only and point these variables at them.
+
+| Variable                                            | Meaning                                                                                  | Default                 |
+| --------------------------------------------------- | ---------------------------------------------------------------------------------------- | ----------------------- |
+| `STT_MODEL_FA`, `STT_MODEL_EN`                      | model path per language; a language with no model is not offered                         | empty                   |
+| `STT_ENGINE`, `STT_ENGINE_FA`, `STT_ENGINE_EN`      | `module:factory` of the engine, for all languages or one (see `engines.py`)              | `engines:SegmentEngine` |
+| `STT_RUNTIME`                                       | `module:Class` of the runtime `SegmentEngine` loads                                      | empty                   |
+| `STT_LOAD_OPTIONS`, `STT_RUN_OPTIONS`               | JSON keyword arguments for the runtime's constructor and its transcribe call             | empty                   |
+| `STT_MAX_SECONDS`, `STT_MAX_BYTES`                  | longest and largest recording; the app shows and enforces what the service reports       | `120`, `4194304`        |
+| `STT_CONCURRENCY`, `STT_QUEUE`                      | conversions at once and how many may wait; more answer `503 busy`                        | `1`, `2`                |
+| `STT_QUEUE_WAIT_SECONDS`, `STT_TIMEOUT_SECONDS`     | longest wait in the queue and longest conversion                                         | `20`, `80`              |
+| `STT_MAX_LOADED`, `STT_PRELOAD`                     | models kept in memory at once, and a language to load at start                           | `2`, empty              |
+| `STT_SECRET`, `STT_HOST`, `STT_PORT`                | optional bearer token and where to listen                                                | empty, `0.0.0.0`, `8090` |
+
+The Docker build takes the runtime's packages as a build argument, `STT_PIP_PACKAGES`.
+`python bench.py --model DIR --audio DIR --language fa --refs refs.tsv` measures one model:
+real-time factor, peak memory and, with references, word and character error rates.
+`python -m unittest test_service` tests the service without a model.
 
 ### Answer style and effort levels
 

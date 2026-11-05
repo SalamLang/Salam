@@ -19,9 +19,9 @@ import service  # noqa: E402
 RATE = 48000
 
 
-def encode(seconds, container, codec, frame_size=960):
+def encode(seconds, container, codec, frame_size=960, options=None):
     out = io.BytesIO()
-    with av.open(out, mode="w", format=container) as target:
+    with av.open(out, mode="w", format=container, options=options or {}) as target:
         stream = target.add_stream(codec, rate=RATE, layout="mono")
         stream.bit_rate = 16000
         for i in range(int(seconds * RATE / frame_size)):
@@ -95,8 +95,9 @@ class ServiceTest(unittest.TestCase):
 
     def test_every_browser_format_decodes(self):
         run = self.running()
-        for container, codec, frame in (("webm", "libopus", 960), ("ogg", "libopus", 960), ("mp4", "aac", 1024)):
-            body = encode(1, container, codec, frame)
+        fragmented = {"movflags": "frag_keyframe+empty_moov+default_base_moof"}
+        for container, codec, frame, options in (("webm", "libopus", 960, None), ("ogg", "libopus", 960, None), ("mp4", "aac", 1024, None), ("mp4", "aac", 1024, fragmented)):
+            body = encode(1, container, codec, frame, options)
             status, data = run.request("POST", "/transcribe?language=fa", body=body)
             self.assertEqual(status, 200, container)
             self.assertTrue(data["text"].startswith("stub fa "), container)

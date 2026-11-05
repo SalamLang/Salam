@@ -1,0 +1,143 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import os
+import io
+import str
+import sort
+import fs.dir
+import filepath
+
+const SKIP_PREFIX_LAYOUT := "layout/"
+const SKIP_PREFIX_NET := "net/internal/"
+
+func skipped(rel: str): bool:
+    each name in ["console", "conv/numfmt", "gui", "layout", "layoutgen", "map", "net", "net/internal", "web", "telegram"]:
+        if rel == name:
+            ret true
+        end
+    end
+    ret str.StartsWith(rel, SKIP_PREFIX_LAYOUT) or str.StartsWith(rel, SKIP_PREFIX_NET)
+end
+
+func pages(root: str, lang: str): HashMap<str, bool>:
+    mut found := HashMap {} as HashMap<str, bool>
+    directory := root + "/website/content/" + lang + "/std"
+    names := dir.ListFiles(directory)
+    defer names.free()
+    sort.Sort(names)
+    repeat names.len() in i:
+        name := names.get(i)
+        if not str.EndsWith(name, ".txt"):
+            continue
+        end
+        text := io.ReadFile(directory + "/" + name)
+        lines := str.Split(text, "\n")
+        repeat lines.len() in k:
+            line := lines.get(k)
+            if str.StartsWith(line, "pkg.en = "):
+                at := str.IndexOf(line, "=")
+                found.put(str.Trim(line.substr(at + 1, line.len() - at - 1)), true)
+                break
+            end
+        end
+        lines.free()
+    end
+    ret found
+end
+
+func packages(root: str): HashMap<str, bool>:
+    mut found := HashMap {} as HashMap<str, bool>
+    base := root + "/std"
+    mut text := HashMap {} as HashMap<str, str>
+    defer text.free()
+    mut order := Vector {} as Vector<str>
+    defer order.free()
+    files := os.Walk(base)
+    defer files.free()
+    sort.Sort(files)
+    repeat files.len() in i:
+        path := files.get(i)
+        if not str.EndsWith(path, ".salam"):
+            continue
+        end
+        folder := filepath.Dir(path)
+        rel := folder.substr(base.len() + 1, folder.len() - base.len() - 1)
+        if folder.len() <= base.len():
+            continue
+        end
+        if not text.has(rel):
+            text.put(rel, "")
+            order.push(rel)
+        end
+        text.put(rel, text.get(rel) + io.ReadFile(path))
+    end
+    repeat order.len() in i:
+        rel := order.get(i)
+        if str.IndexOf(text.get(rel), "package ") < 0:
+            continue
+        end
+        if skipped(rel):
+            continue
+        end
+        found.put(rel, true)
+    end
+    ret found
+end
+
+func missing(want: HashMap<str, bool>, have: HashMap<str, bool>): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    each name, _ in want:
+        if not have.has(name):
+            out.push(name)
+        end
+    end
+    sort.Sort(out)
+    ret out
+end
+
+func differing(a: HashMap<str, bool>, b: HashMap<str, bool>): Vector<str>:
+    mut out := missing(a, b)
+    each name in missing(b, a):
+        out.push(name)
+    end
+    sort.Sort(out)
+    ret out
+end
+
+func main:
+    mut root := os.Cwd()
+    if not os.IsDir(root + "/std") and os.IsDir(root + "/../std"):
+        root = filepath.Clean(root + "/..")
+    end
+    en := pages(root, "en")
+    fa := pages(root, "fa")
+    expected := packages(root)
+    missing_en := missing(expected, en)
+    missing_fa := missing(expected, fa)
+    one_sided := differing(en, fa)
+    if missing_en.len() > 0:
+        printerrln "website: std packages without an English page:", str.Join(missing_en, ", ")
+    end
+    if missing_fa.len() > 0:
+        printerrln "website: std packages without a Persian page:", str.Join(missing_fa, ", ")
+    end
+    if one_sided.len() > 0:
+        printerrln "website: std pages only in one language:", str.Join(one_sided, ", ")
+    end
+    if missing_en.len() > 0 or missing_fa.len() > 0 or one_sided.len() > 0:
+        ret 1
+    end
+    println "std coverage: " + str.FromInt(expected.size() as i64) + " packages, " + str.FromInt(en.size() as i64) + " English and " + str.FromInt(fa.size() as i64) + " Persian pages"
+end

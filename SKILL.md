@@ -546,6 +546,11 @@ println a.balance
 Fields and methods are **private by default**; add `pub` to expose. `this` is the
 receiver.
 
+A field with no default is **required**: a literal that omits it fails with
+`E028`. A field with a default is optional: `pub host: str` must be set in every
+literal, `pub port: int = 443` can be left out. The check runs on struct literals
+only, so `mut c: Client` and generic `T {}` still zero the field.
+
 **`Self`** is the enclosing type, usable anywhere inside a `struct`, an
 `impl ... on T` block or a distinct type's body: as a return type, a parameter
 type, a field type, in a cast and as a struct literal. On a generic struct it
@@ -1244,6 +1249,13 @@ learning half is `f32` on `std/tensor`; the classical half is `f64` on
   (`Join("a/b", "../c")` is `a/b/../c`) and an absolute second part is
   appended, not substituted; `Ext` is only the last extension; check user
   paths with `IsSafe` before using them.
+  Globbing: `filepath.Match(pattern, name)` (`* ? [a-c] [!a-c] \`, and `**` crosses `/`), `HasMeta`, `fs.dir.Glob(pattern)` and
+  `fs.dir.WalkMatch(root, pattern)` (sorted, free the vector).
+- **`text.diff`** `Lines Unified UnifiedText Opcodes GroupedOpcodes Ratio RatioText` (output equals `difflib.unified_diff`; equal inputs give
+  nothing, not even a header), **`encoding.html`** `Unescape Escape EscapeText` (same answers as Python's `html.unescape`),
+  **`encoding.binary`** `View` getters and setters at an offset (`GetU32LE(v, off)`, `PutU16BE`, `CStringAt`, `FixedStringAt`; out of range
+  reads 0), **`os.mmap`** `Alloc Protect Free PageSize` (`PROT_READ|PROT_WRITE|PROT_EXEC`; map writable, then `Protect` to execute) and
+  **`os.dl`** `Open OpenSelf Sym Close Error Call(fn, args: size[])` (up to 8 integer or pointer arguments, no floats or varargs; POSIX only).
 - **`env`**: `Get GetOr Has GetInt GetFloat GetBool Set Unset Mask GetMasked Profile IsProduction IsDevelopment Load Overload LoadDotEnv LoadProfile Expand`. `GetInt` turns `abc` into 0 and `12px` into 12; `GetBool` accepts
   only lower-case `true 1 yes on`; `Load` never overrides a set variable
   (`Overload`/`LoadDotEnv` do).
@@ -2503,6 +2515,11 @@ Read the real code; it is the specification:
   (`grep -rn "pub func" std/<pkg>`).
 - The precise semantic rules (what is and isn't allowed): the `.salam` cases in
   `tests/en/errors/`.
+- Adding to `std/`: every new package, function, struct, field, method or
+  constant needs `@en`/`@fa` names, a program in `tests/en/stdlib/` and its
+  twin in `tests/fa/stdlib/`, and `doc.`/`ex.` keys (plus `guide-*` sections
+  for a new package) in both `website/content/{en,fa}/std/` pages. Check with
+  `salam run tools/salam/check-std-coverage-docs.salam` (see CONTRIBUTING.md).
 
 ---
 

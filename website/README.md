@@ -39,7 +39,7 @@ Delete `website/.cache/` to force a full rebuild.
 `build.sh` first runs every example and compares its output with the `.out`
 file next to it, so the site never shows code that does not compile or output
 that is out of date. It also refuses a std package that has no page in both
-languages, with `check-std-coverage.py`. The generator fails on any `{{key}}` a
+languages, with `check-std-coverage.salam`. The generator fails on any `{{key}}` a
 template uses that the content does not define.
 
 ## Content files

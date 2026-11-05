@@ -188,7 +188,7 @@ sh compiler/tools/bash/editor-serve.sh        # http://localhost:8080  (no rebui
 sh compiler/tools/bash/editor-serve.sh 9000   # ... on a custom port
 ```
 
-Or serve it directly: `cd editor && python -m http.server 8080`.
+Or serve it directly: `salam serve editor --port=8080`.
 
 ## 🧪 Trying the interpreter without the browser
 

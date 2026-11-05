@@ -17,7 +17,7 @@
 #
 # For a macOS triple the dylibs are checked with llvm-objdump and the code
 # signature check, linked against by ld64.lld, and on x86-64 Linux loaded into
-# the process by tools/linker/machodylib.py, which calls their exports.
+# the process by tools/linker/machodylib.salam, which calls their exports.
 #
 # Usage: tools/bash/native-shared-lib-check.sh <salam> <triple|host> <runner> [libc]
 #   e.g. tools/bash/native-shared-lib-check.sh ./salam host env
@@ -390,13 +390,20 @@ if [ "$KIND" = macho ]; then
         fi
     fi
     if [ "$ARCH" = x86_64 ] && [ "$(uname -s)-$(uname -m)" = Linux-x86_64 ]; then
-        got=$(python3 -I "$ROOT/tools/linker/machodylib.py" "$work/m/libmathlib.dylib" i:_salam_add:ii:40,2 \
+        if [ ! -x "$work/machodylib" ]; then
+            mkdir -p "$work/md"
+            (cd "$work/md" && SALAM_STD="$ROOT/std" "$SALAM" build "$ROOT/tools/linker/machodylib.salam" --output="$work/machodylib" --log-level=error >"$work/md.log" 2>&1) || {
+                echo "FAIL $TRIPLE: cannot build machodylib: $(head -c 300 "$work/md.log")"
+                fail=1
+            }
+        fi
+        got=$("$work/machodylib" "$work/m/libmathlib.dylib" i:_salam_add:ii:40,2 \
             i:_salam_add:ii:1,1 i:_salam_calls:: v:_salam_greet:: 2>&1 | tr '\n' ' ')
         if [ "$got" != "42 2 2 hello from salam " ]; then
             echo "FAIL $TRIPLE: libmathlib.dylib loaded on Linux printed: $got"
             fail=1
         fi
-        got=$(python3 -I "$ROOT/tools/linker/machodylib.py" "$work/r/librichlib.dylib" i:_rich_add_word:s:alpha \
+        got=$("$work/machodylib" "$work/r/librichlib.dylib" i:_rich_add_word:s:alpha \
             i:_rich_add_word:s:Alpha i:_rich_count:s:ALPHA s:_rich_join:: d:_rich_hyp:dd:3,4 i:_rich_fib:i:40 \
             v:_rich_report:: 2>&1 | tr '\n' ' ')
         if [ "$got" != "1 2 2 richlib: ALPHA ALPHA 20.000 102334155 words=2   ALPHA   ALPHA " ]; then

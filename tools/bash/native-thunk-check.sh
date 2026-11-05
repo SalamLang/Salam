@@ -8,8 +8,8 @@
 # and so is an arm64 Mach-O image with a far call and a far stub; for that
 # one each bl is followed through its thunk and must reach its target.
 #
-# Needs clang for the assembly and python3 for the Mach-O case. The far cases
-# write images of 20 to 130 MB.
+# Needs clang for the assembly. The far cases write images of 20 to 130 MB, and
+# tools/linker/thunk_check.salam reads the ARM unwind table and the Mach-O image.
 #
 # Usage: tools/bash/native-thunk-check.sh <salam> <arm|aarch64> <runner>
 #   e.g. tools/bash/native-thunk-check.sh ./salam arm qemu-arm-static
@@ -47,6 +47,11 @@ EOF
 if ! "$SALAM" build link.salam --output=link --log-level=error >build.log 2>&1; then
     cat build.log
     echo "native thunk check: the link driver did not build"
+    exit 1
+fi
+if ! SALAM_STD="$ROOT/std" "$SALAM" build "$ROOT/tools/linker/thunk_check.salam" --output=thunk_check --log-level=error >build.log 2>&1; then
+    cat build.log
+    echo "native thunk check: the image checker did not build"
     exit 1
 fi
 
@@ -124,26 +129,6 @@ far:
     bx lr
 .fnend
 EOF
-cat >exidx.py <<'EOF'
-import struct
-import sys
-
-b = open(sys.argv[1], "rb").read()
-shoff, = struct.unpack_from("<I", b, 32)
-shentsize, shnum = struct.unpack_from("<HH", b, 46)
-ents = []
-for k in range(shnum):
-    sh = shoff + k * shentsize
-    stype, = struct.unpack_from("<I", b, sh + 4)
-    if stype == 0x70000001:
-        addr, off, size = struct.unpack_from("<III", b, sh + 12)
-        for e in range(0, size, 8):
-            w0, w1 = struct.unpack_from("<II", b, off + e)
-            fn = (addr + e + (w0 - (w0 >> 30 << 31))) & 0xFFFFFFFF
-            ents.append((fn, w1))
-ok = len(ents) == 3 and ents[0][0] < ents[1][0] < ents[2][0] and ents[1][1] == 0x80B0B0B0
-sys.exit(0 if ok else 1)
-EOF
 cat >thfar.s <<'EOF'
 .syntax unified
 .thumb
@@ -202,54 +187,6 @@ _far:
     mov x0, #47
     ret
 EOF
-cat >macfar.py <<'EOF'
-import struct
-import sys
-
-b = open(sys.argv[1], "rb").read()
-base = 0x100000000
-ncmds = struct.unpack_from("<I", b, 16)[0]
-at = 32
-syms = {}
-stubs = None
-for _ in range(ncmds):
-    cmd, size = struct.unpack_from("<II", b, at)
-    if cmd == 0x19:
-        nsect = struct.unpack_from("<I", b, at + 64)[0]
-        for k in range(nsect):
-            sh = at + 72 + 80 * k
-            if b[sh : sh + 7] == b"__stubs":
-                stubs = struct.unpack_from("<Q", b, sh + 32)[0]
-    if cmd == 0x2:
-        symoff, nsyms, stroff = struct.unpack_from("<III", b, at + 8)
-        for k in range(nsyms):
-            strx, _t, _s, _d, val = struct.unpack_from("<IBBHQ", b, symoff + 16 * k)
-            name = b[stroff + strx : b.index(b"\0", stroff + strx)].decode()
-            syms[name] = val
-    at += size
-
-
-def word(a):
-    return struct.unpack_from("<I", b, a - base)[0]
-
-
-def sx(v, n):
-    return v - (1 << n) if (v >> (n - 1)) & 1 else v
-
-
-def follow(a):
-    i = word(a)
-    assert i >> 26 == 0x25, hex(i)
-    t = a + sx(i & 0x3FFFFFF, 26) * 4
-    i1, i2, i3 = word(t), word(t + 4), word(t + 8)
-    assert i1 & 0x9F00001F == 0x90000010 and i2 & 0xFFC003FF == 0x91000210 and i3 == 0xD61F0200
-    pg = ((i1 >> 29) & 3) | (((i1 >> 5) & 0x7FFFF) << 2)
-    return (t & ~0xFFF) + sx(pg, 21) * 4096 + ((i2 >> 10) & 0xFFF)
-
-
-m = syms["_main"]
-sys.exit(0 if follow(m + 4) == syms["_far"] and follow(m + 8) == stubs else 1)
-EOF
 
 ok=0
 bad=0
@@ -289,7 +226,7 @@ arm)
         "$RUNNER" ./exfar.out
         got=$?
     fi
-    if [ "$got" = 48 ] && python3 exidx.py exfar.out; then
+    if [ "$got" = 48 ] && ./thunk_check exidx exfar.out; then
         ok=$((ok + 1))
     else
         echo "FAIL exfar: the thunk area has no .ARM.exidx entry of its own"
@@ -304,7 +241,7 @@ aarch64)
         echo "FAIL pefar"
         bad=$((bad + 1))
     fi
-    if clang --target=arm64-apple-macos11 -c macfar.s -o macfar.o && ./link elf macfar.out macfar.o && python3 macfar.py macfar.out; then
+    if clang --target=arm64-apple-macos11 -c macfar.s -o macfar.o && ./link elf macfar.out macfar.o && ./thunk_check macfar macfar.out; then
         ok=$((ok + 1))
     else
         echo "FAIL macfar"

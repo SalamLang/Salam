@@ -23,6 +23,7 @@ import template
 import encoding.json
 
 const ROOT := "website"
+const KEYWORD_TABLE := "extensions/tree-sitter-salam/keywords.json"
 const PREVIEW_SCRIPT := `<script>(function(){function s(){parent.postMessage({salamPreview:1,n:window.name,h:document.documentElement.scrollHeight},"*")}addEventListener("load",s);addEventListener("resize",s);if(window.ResizeObserver){new ResizeObserver(s).observe(document.documentElement)}document.addEventListener("click",function(e){var a=e.target&&e.target.closest&&e.target.closest("a[href]");if(a&&a.getAttribute("href").charAt(0)!=="#"){e.preventDefault()}});document.addEventListener("submit",function(e){e.preventDefault()},true)})();</script>`
 
 struct Lesson:
@@ -207,10 +208,14 @@ func highlight_with(code: str, classes: HashMap<str, str>, slash: bool, hash: bo
     mut b := str.NewBuilder()
     defer str.BufFree(b)
     mut i := 0
+    mut pending := ""
     until i < n:
         cp := cps.get(i)
         nx := i + 1 < n ? cps.get(i + 1) : 0 - 1
         mut j := i + 1
+        if not is_ident_cp(cp) and cp != 32 and cp != 9:
+            pending = ""
+        end
         if slash and cp == 47 and nx == 47:
             until j < n and cps.get(j) != 10:
                 j += 1
@@ -260,8 +265,12 @@ func highlight_with(code: str, classes: HashMap<str, str>, slash: bool, hash: bo
                 j += 1
             end
             word := text_of(cps, i, j)
-            if classes.has(word):
+            if pending != "":
+                wrap(b, pending, cps, i, j)
+                pending = ""
+            else classes.has(word):
                 wrap(b, classes.get(word), cps, i, j)
+                pending = classes.has("decl:" + word) ? classes.get("decl:" + word) : ""
             else next_visible(cps, j) == 40:
                 wrap(b, "f", cps, i, j)
             else:
@@ -444,11 +453,59 @@ func example_block(name: str, src: str, code_html: str, out_html: str, page_html
     ret str.BufStr(b)
 end
 
+func add_table_words(out &: Vector<str>, raw: str):
+    each item in json.Items(raw):
+        word := json.Unquote(item)
+        if not str.Contains(word, " "):
+            out.push(word)
+        end
+    end
+end
+
+func load_code_words(ctx &: HashMap<str, str>, errs &: Vector<str>):
+    if not file.Exists(KEYWORD_TABLE):
+        errs.push(KEYWORD_TABLE + " is missing")
+        ret
+    end
+    table := io.ReadFile(KEYWORD_TABLE)
+    mut kw := Vector {} as Vector<str>
+    mut ty := Vector {} as Vector<str>
+    mut bi := Vector {} as Vector<str>
+    mut df := Vector {} as Vector<str>
+    mut dt := Vector {} as Vector<str>
+    each key in json.Keys(table):
+        raw := json.Get(table, key)
+        if key == "func":
+            add_table_words(df, raw)
+        else key == "struct" or key == "enum" or key == "interface" or key == "type" or key == "package" or key == "component" or key == "impl":
+            add_table_words(dt, raw)
+        end
+        if key == "types" or key == "intrinsic_types":
+            add_table_words(ty, raw)
+        else key == "print" or key == "println" or key == "printerr" or key == "printerrln" or key == "input":
+            add_table_words(bi, raw)
+        else key != "contextual":
+            add_table_words(kw, raw)
+        end
+    end
+    ctx.put("code.keywords", str.Join(kw, " "))
+    ctx.put("code.types", str.Join(ty, " "))
+    ctx.put("code.builtins", str.Join(bi, " "))
+    ctx.put("code.decl_func", str.Join(df, " "))
+    ctx.put("code.decl_type", str.Join(dt, " "))
+end
+
 func code_classes(ctx: HashMap<str, str>): HashMap<str, str>:
     mut classes := HashMap {} as HashMap<str, str>
     add_class_words(classes, ctx.has("code.keywords") ? ctx.get("code.keywords") : "", "k")
     add_class_words(classes, ctx.has("code.types") ? ctx.get("code.types") : "", "t")
     add_class_words(classes, ctx.has("code.builtins") ? ctx.get("code.builtins") : "", "b")
+    each w in str.Fields(ctx.has("code.decl_func") ? ctx.get("code.decl_func") : ""):
+        classes.put("decl:" + w, "f")
+    end
+    each w in str.Fields(ctx.has("code.decl_type") ? ctx.get("code.decl_type") : ""):
+        classes.put("decl:" + w, "t")
+    end
     ret classes
 end
 
@@ -1752,6 +1809,7 @@ func build_lang(lang: str, errs &: Vector<str>): int:
             load_strings(lang_dir + "/" + name, ctx, errs)
         end
     end
+    load_code_words(ctx, errs)
     load_examples(lang_dir, ctx, errs)
     alt := ctx_or(ctx, "site.alt", "")
     mut alt_ctx := HashMap {} as HashMap<str, str>

@@ -1,0 +1,566 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package machoload
+
+import os
+import str
+import mem
+import archive
+import compress
+import encoding.binary
+import os.dl
+import os.mmap
+
+extern:
+    func readdir(d: void*): void*
+end
+
+mut libc_handle := null as void*
+mut libm_handle := null as void*
+mut dirents := HashMap {} as HashMap<i64, i64>
+
+pub struct Seg:
+    pub name: str = ""
+    pub vmaddr: i64 = 0
+    pub vmsize: i64 = 0
+    pub fileoff: i64 = 0
+    pub filesize: i64 = 0
+end
+
+pub struct Dyld:
+    pub has_info: bool = false
+    pub rb_off: int = 0
+    pub rb_size: int = 0
+    pub bd_off: int = 0
+    pub bd_size: int = 0
+    pub lz_off: int = 0
+    pub lz_size: int = 0
+    pub has_chained: bool = false
+    pub chained_off: int = 0
+    pub exp_off: int = 0
+    pub exp_size: int = 0
+end
+
+pub struct Parsed:
+    pub segs: Vector<Seg> = Vector {}
+    pub dyld: Dyld = Dyld {}
+    pub entry: i64 = 0 - 1
+end
+
+pub struct Image:
+    pub lo: i64 = 0
+    pub slide: i64 = 0
+    pub size: int = 0
+    pub base: void* = null
+    pub segs: Vector<Seg> = Vector {}
+end
+
+pub struct Section:
+    pub seg: str = ""
+    pub name: str = ""
+    pub addr: i64 = 0
+    pub size: i64 = 0
+end
+
+export:
+    func machoload_readdir(d: void*): void*:
+        e := readdir(d)
+        if e == null:
+            ret null
+        end
+        src := binary.NewView(e, 280)
+        key := d as i64
+        mut slot := 0 as i64
+        if dirents.has(key):
+            slot = dirents.get(key)
+        else:
+            slot = (mem.AllocateZeroed(1048 as u64) as i64)
+            dirents.put(key, slot)
+        end
+        out := binary.NewView(slot as void*, 1048)
+        name := binary.CStringAt(src, 19)
+        n := str.Len(name)
+        binary.PutU64LE(out, 0, binary.GetU64LE(src, 0))
+        binary.PutU64LE(out, 8, binary.GetU64LE(src, 8))
+        binary.PutU16LE(out, 16, 1048 as i64)
+        binary.PutU16LE(out, 18, n as i64)
+        binary.PutU8(out, 20, binary.GetU8(src, 18) as i64)
+        mem.Copy(((slot + 21) as void*), name as void*, (n + 1) as u64)
+        ret slot as void*
+    end
+end
+
+func lib_addr(name: str): i64:
+    if libc_handle == null:
+        libc_handle = dl.OpenSelf()
+    end
+    a := dl.Sym(libc_handle, name) as i64
+    if a != 0:
+        ret a
+    end
+    if libm_handle == null:
+        libm_handle = dl.Open("libm.so.6")
+    end
+    ret dl.Sym(libm_handle, name) as i64
+end
+
+func special_var(name: str): str:
+    if name == "___stdoutp":
+        ret "stdout"
+    end
+    if name == "___stderrp":
+        ret "stderr"
+    end
+    if name == "___stdinp":
+        ret "stdin"
+    end
+    if name == "_environ":
+        ret "environ"
+    end
+    ret ""
+end
+
+func special_fn(name: str): str:
+    if name == "___error":
+        ret "__errno_location"
+    end
+    if name == "___exit":
+        ret "_exit"
+    end
+    if name == "dyld_stub_binder":
+        ret "abort"
+    end
+    if name == "_atexit":
+        ret "on_exit"
+    end
+    ret ""
+end
+
+func iv(img: Image): binary.View:
+    ret binary.NewView(img.base, img.size)
+end
+
+func seg_addr(img: Image, i: int): i64:
+    ret img.segs.get(i).vmaddr
+end
+
+func rebase_at(img: Image, a: i64):
+    Put64(img, a, Get64(img, a) + img.slide)
+end
+
+func rebase(img: Image, b: binary.View, start: int, end_at: int):
+    mut p := start
+    mut a := 0 as i64
+    until p < end_at:
+        x := binary.GetU8(b, p)
+        op := x & 240
+        imm := x & 15
+        p++
+        if op == 0:
+            break
+        end
+        if op == 32:
+            o := Uleb(b, p)
+            a = seg_addr(img, imm) + o
+        else op == 48:
+            a += Uleb(b, p)
+        else op == 64:
+            a += (imm * 8) as i64
+        else op == 80 or op == 96:
+            mut n := imm as i64
+            if op == 96:
+                n = Uleb(b, p)
+            end
+            mut k := 0 as i64
+            until k < n:
+                rebase_at(img, a)
+                a += 8
+                k++
+            end
+        else op == 112:
+            rebase_at(img, a)
+            o := Uleb(b, p)
+            a += 8 + o
+        else op == 128:
+            n := Uleb(b, p)
+            sk := Uleb(b, p)
+            mut k := 0 as i64
+            until k < n:
+                rebase_at(img, a)
+                a += 8 + sk
+                k++
+            end
+        else op != 16:
+            Fail("bad rebase opcode " + op)
+        end
+    end
+end
+
+func bind(img: Image, b: binary.View, start: int, end_at: int, lazy: bool):
+    mut p := start
+    mut sym := ""
+    mut addend := 0 as i64
+    mut a := 0 as i64
+    until p < end_at:
+        x := binary.GetU8(b, p)
+        op := x & 240
+        imm := x & 15
+        p++
+        if op == 0:
+            if lazy:
+                continue
+            end
+            break
+        end
+        if op == 32:
+            _ := Uleb(b, p)
+        else op == 64:
+            sym = binary.CStringAt(b, p)
+            p += str.Len(sym) + 1
+        else op == 96:
+            addend = Sleb(b, p)
+        else op == 112 or op == 128:
+            o := Uleb(b, p)
+            if op == 112:
+                a = seg_addr(img, imm) + o
+            else:
+                a += o
+            end
+        else op == 144 or op == 160 or op == 176:
+            Put64(img, a, Resolve(sym) + addend)
+            a += 8
+            if op == 160:
+                a += Uleb(b, p)
+            else op == 176:
+                a += (imm * 8) as i64
+            end
+        else op == 192:
+            n := Uleb(b, p)
+            sk := Uleb(b, p)
+            mut k := 0 as i64
+            until k < n:
+                Put64(img, a, Resolve(sym) + addend)
+                a += 8 + sk
+                k++
+            end
+        else op != 16 and op != 48 and op != 80:
+            Fail("bad bind opcode " + op)
+        end
+    end
+end
+
+func chained(img: Image, d: binary.View, off: int):
+    starts := binary.GetU32LE(d, off + 4) as int
+    imports := binary.GetU32LE(d, off + 8) as int
+    symbols := binary.GetU32LE(d, off + 12) as int
+    count := binary.GetU32LE(d, off + 16) as int
+    fmt := binary.GetU32LE(d, off + 20)
+    mut targets := Vector {} as Vector<i64>
+    defer targets.free()
+    repeat count in k:
+        mut addend := 0 as i64
+        mut name_off := 0
+        if fmt == 1:
+            name_off = (binary.GetU32LE(d, off + imports + 4 * k) >> 9) as int
+        else fmt == 2:
+            name_off = (binary.GetU32LE(d, off + imports + 8 * k) >> 9) as int
+            addend = binary.GetU32LE(d, off + imports + 8 * k + 4)
+            if addend >= 2147483648:
+                addend -= 4294967296
+            end
+        else fmt == 3:
+            name_off = ((binary.GetU64LE(d, off + imports + 16 * k) >> 32) & 4294967295) as int
+            addend = binary.GetU64LE(d, off + imports + 16 * k + 8)
+        else:
+            Fail("unknown chained import format " + fmt)
+        end
+        targets.push(Resolve(binary.CStringAt(d, off + symbols + name_off)) + addend)
+    end
+    si := off + starts
+    nseg := binary.GetU32LE(d, si) as int
+    repeat nseg in s:
+        so := binary.GetU32LE(d, si + 4 + 4 * s) as int
+        if so == 0:
+            continue
+        end
+        sb := si + so
+        page_size := binary.GetU16LE(d, sb + 4)
+        pfmt := binary.GetU16LE(d, sb + 6)
+        seg_off := binary.GetU64LE(d, sb + 8)
+        npages := binary.GetU16LE(d, sb + 20)
+        if pfmt != 2 and pfmt != 6:
+            Fail("unknown chained pointer format " + pfmt)
+        end
+        repeat npages in p:
+            start := binary.GetU16LE(d, sb + 22 + 2 * p)
+            if start == 65535:
+                continue
+            end
+            mut a := img.lo + seg_off + (p * page_size) as i64 + start as i64
+            until true:
+                v := Get64(img, a)
+                nxt := (v >> 51) & 4095
+                if ((v >> 63) & 1) != 0:
+                    Put64(img, a, targets.get((v & 16777215) as int) + ((v >> 24) & 255))
+                else:
+                    mut tgt := v & 68719476735
+                    if pfmt == 6:
+                        tgt += img.lo
+                    end
+                    Put64(img, a, ((((v >> 36) & 255) << 56) | tgt) + img.slide)
+                end
+                if nxt == 0:
+                    break
+                end
+                a += 4 * nxt
+            end
+        end
+    end
+end
+
+func walk(d: binary.View, start: int, node: int, prefix: str, found &: HashMap<str, i64>):
+    mut p := start + node
+    tsize := Uleb(d, p)
+    if tsize != 0:
+        mut q := p
+        _ := Uleb(d, q)
+        found.put(prefix, Uleb(d, q))
+    end
+    p += tsize as int
+    n := binary.GetU8(d, p)
+    p++
+    repeat n:
+        edge := binary.CStringAt(d, p)
+        p += str.Len(edge) + 1
+        child := Uleb(d, p)
+        walk(d, start, child as int, prefix + edge, found)
+    end
+end
+
+pub func Fail(msg: str):
+    printerrln "machorun: " + msg
+    os.Exit(1)
+end
+
+pub func Uleb(d: binary.View, p &: int): i64:
+    mut r := 0 as i64
+    mut s := 0 as i64
+    until true:
+        x := binary.GetU8(d, p)
+        p++
+        r |= (((x & 127) as i64) << s)
+        s += 7
+        if x < 128:
+            ret r
+        end
+    end
+end
+
+pub func Sleb(d: binary.View, p &: int): i64:
+    mut r := 0 as i64
+    mut s := 0 as i64
+    until true:
+        x := binary.GetU8(d, p)
+        p++
+        r |= (((x & 127) as i64) << s)
+        s += 7
+        if x < 128:
+            if (x & 64) != 0:
+                r -= 1 as i64 << s
+            end
+            ret r
+        end
+    end
+end
+
+pub func Resolve(name: str): i64:
+    if name == "_readdir$INODE64":
+        ret (&machoload_readdir) as i64
+    end
+    sv := special_var(name)
+    if str.Len(sv) > 0:
+        a := lib_addr(sv)
+        if a != 0:
+            ret a
+        end
+    end
+    sf := special_fn(name)
+    if str.Len(sf) > 0:
+        a := lib_addr(sf)
+        if a != 0:
+            ret a
+        end
+    end
+    mut n := name
+    if str.StartsWith(name, "_"):
+        n = str.Substr(name, 1, str.Len(name) - 1)
+    end
+    a := lib_addr(n)
+    if a != 0:
+        ret a
+    end
+    m := str.Replace(str.Replace(n, "$INODE64", ""), "$UNIX2003", "")
+    b := lib_addr(m)
+    if b != 0:
+        ret b
+    end
+    printerrln "machorun: unresolved import " + name
+    ret 0
+end
+
+pub func ReadThin(path: str): binary.View:
+    mut ok := false
+    buf := archive.ReadBinaryFile(path, ok)
+    if not ok:
+        Fail("cannot read " + path)
+    end
+    d := binary.ViewOf(buf)
+    if binary.GetU32BE(d, 0) != 3405691582:
+        ret d
+    end
+    n := binary.GetU32BE(d, 4) as int
+    repeat n in k:
+        cpu := binary.GetU32BE(d, 8 + 20 * k)
+        if cpu == 16777223:
+            off := binary.GetU32BE(d, 16 + 20 * k) as int
+            size := binary.GetU32BE(d, 20 + 20 * k) as int
+            ret binary.NewView(((d.data as i64) + (off as i64)) as void*, size)
+        end
+    end
+    Fail("no x86_64 slice in the universal binary")
+    ret d
+end
+
+pub func Parse(d: binary.View): Parsed:
+    mut out := Parsed {}
+    magic := binary.GetU32LE(d, 0)
+    cpu := binary.GetU32LE(d, 4)
+    ncmds := binary.GetU32LE(d, 16) as int
+    if magic != 4277009103 or cpu != 16777223:
+        Fail("not an x86_64 Mach-O")
+    end
+    mut off := 32
+    repeat ncmds:
+        cmd := binary.GetU32LE(d, off)
+        csize := binary.GetU32LE(d, off + 4) as int
+        if cmd == 25:
+            out.segs.push(Seg { name = binary.FixedStringAt(d, off + 8, 16), vmaddr = binary.GetU64LE(d, off + 24), vmsize = binary.GetU64LE(d, off + 32), fileoff = binary.GetU64LE(d, off + 40), filesize = binary.GetU64LE(d, off + 48) })
+        end
+        if cmd == 34 or cmd == 2147483682:
+            out.dyld.has_info = true
+            out.dyld.rb_off = binary.GetU32LE(d, off + 8) as int
+            out.dyld.rb_size = binary.GetU32LE(d, off + 12) as int
+            out.dyld.bd_off = binary.GetU32LE(d, off + 16) as int
+            out.dyld.bd_size = binary.GetU32LE(d, off + 20) as int
+            out.dyld.lz_off = binary.GetU32LE(d, off + 32) as int
+            out.dyld.lz_size = binary.GetU32LE(d, off + 36) as int
+            out.dyld.exp_off = binary.GetU32LE(d, off + 40) as int
+            out.dyld.exp_size = binary.GetU32LE(d, off + 44) as int
+        end
+        if cmd == 2147483700:
+            out.dyld.has_chained = true
+            out.dyld.chained_off = binary.GetU32LE(d, off + 8) as int
+        end
+        if cmd == 2147483699:
+            out.dyld.exp_off = binary.GetU32LE(d, off + 8) as int
+            out.dyld.exp_size = binary.GetU32LE(d, off + 12) as int
+        end
+        if cmd == 2147483688:
+            out.entry = binary.GetU64LE(d, off + 8)
+        end
+        off += csize
+    end
+    ret out
+end
+
+pub func NewImage(d: binary.View, segs: Vector<Seg>): Image:
+    mut img := Image {}
+    img.segs = segs
+    mut first := true
+    mut lo := 0 as i64
+    mut hi := 0 as i64
+    each s in segs:
+        if s.name != "__PAGEZERO":
+            if first or s.vmaddr < lo:
+                lo = s.vmaddr
+            end
+            if first or s.vmaddr + s.vmsize > hi:
+                hi = s.vmaddr + s.vmsize
+            end
+            first = false
+        end
+    end
+    size := (((hi - lo) + 4095) & ~(4095 as i64)) as int
+    img.lo = lo
+    img.size = size
+    img.base = mmap.Alloc(size, mmap.PROT_READ | mmap.PROT_WRITE | mmap.PROT_EXEC)
+    if img.base == null:
+        Fail("cannot map " + size + " bytes")
+    end
+    img.slide = (img.base as i64) - lo
+    each s in segs:
+        if s.name != "__PAGEZERO":
+            mem.Copy(((img.base as i64) + (s.vmaddr - lo)) as void*, ((d.data as i64) + s.fileoff) as void*, s.filesize as u64)
+        end
+    end
+    ret img
+end
+
+pub func Put64(img: Image, vaddr: i64, v: i64):
+    binary.PutU64LE(iv(img), (vaddr - img.lo) as int, v)
+end
+
+pub func Get64(img: Image, vaddr: i64): i64:
+    ret binary.GetU64LE(iv(img), (vaddr - img.lo) as int)
+end
+
+pub func Link(img: Image, d: binary.View, y: Dyld):
+    if y.has_chained:
+        chained(img, d, y.chained_off)
+    end
+    if not y.has_info:
+        ret
+    end
+    rebase(img, d, y.rb_off, y.rb_off + y.rb_size)
+    bind(img, d, y.bd_off, y.bd_off + y.bd_size, false)
+    bind(img, d, y.lz_off, y.lz_off + y.lz_size, true)
+end
+
+pub func Sections(d: binary.View): Vector<Section>:
+    mut out := Vector {} as Vector<Section>
+    ncmds := binary.GetU32LE(d, 16) as int
+    mut off := 32
+    repeat ncmds:
+        cmd := binary.GetU32LE(d, off)
+        csize := binary.GetU32LE(d, off + 4) as int
+        if cmd == 25:
+            nsect := binary.GetU32LE(d, off + 64) as int
+            repeat nsect in k:
+                s := off + 72 + 80 * k
+                out.push(Section { name = binary.FixedStringAt(d, s, 16), seg = binary.FixedStringAt(d, s + 16, 16), addr = binary.GetU64LE(d, s + 32), size = binary.GetU64LE(d, s + 40) })
+            end
+        end
+        off += csize
+    end
+    ret out
+end
+
+pub func Exports(d: binary.View, y: Dyld): HashMap<str, i64>:
+    mut found := HashMap {} as HashMap<str, i64>
+    if y.exp_size != 0:
+        walk(d, y.exp_off, 0, "", found)
+    end
+    ret found
+end

@@ -54,6 +54,16 @@ function osSounded(shown: "shown" | "skipped"): boolean {
   return shown === "shown" && prefs.sound && document.hidden;
 }
 
+export function announceGuest(name: string, chat: string, text: string) {
+  if (!prefs.enabled) return;
+  pushToast({
+    tone: "info",
+    title: t(`${name} در گفت‌وگوی «${chat}» پیام فرستاد`, `${name} sent a message in "${chat}"`),
+    body: prefs.preview ? snippet(text) || undefined : undefined,
+  });
+  chime("done");
+}
+
 export function announceApproval(summary: string) {
   pushToast({
     tone: "approval",

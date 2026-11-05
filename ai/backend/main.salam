@@ -47,6 +47,7 @@ include aitelegram "telegram.salam"
 include aicloud "cloud.salam"
 include ailogin "login.salam"
 include ailimits "limits.salam"
+include aishare "share.salam"
 
 const SESSION_DAYS := 30
 const PASS_ROUNDS := 120000
@@ -77,8 +78,33 @@ mut AGENT_TURN_SECONDS := 3600 as i64
 mut CHAT_TURN_SECONDS := 600 as i64
 mut UNLIMITED_TURN_SECONDS := 43200 as i64
 mut QUEUE_MAX := 20
+mut SHARE_BASE := "https://ai.salamlang.ir"
+mut SHARE_DEFAULT_HOURS := 24
+mut SHARE_DEFAULT_CAP := 100
+mut SHARE_DEFAULT_DAILY := 50
+mut SHARE_CEILING := 1000
+mut SHARE_SEND_RATE := 6
+mut SHARE_READ_RATE := 90
+mut SHARE_MAX_CHARS := 2000
 mut CONTEXT_LOCK := sync.Mutex {}
 mut CONTEXT_SENT := HashMap {} as HashMap<str, str>
+
+pub struct ShareRow:
+    pub id: str = ""
+    pub chat: str = ""
+    pub uid: str = ""
+    pub kind: str = ""
+    pub paused: bool = false
+    pub reason: str = ""
+    pub expires: i64 = 0
+    pub cap: int = 0
+    pub daily: int = 0
+    pub label: str = ""
+    pub created: i64 = 0
+    pub last_used: i64 = 0
+    pub views: i64 = 0
+    pub enc: str = ""
+end
 
 func env_or(name: str, fallback: str): str:
     v := os.Env(name)
@@ -124,6 +150,17 @@ func main:
     CHAT_TURN_SECONDS = env_or("AI_CHAT_TURN_SECONDS", "600").to_int() as i64
     UNLIMITED_TURN_SECONDS = env_or("AI_UNLIMITED_TURN_SECONDS", "43200").to_int() as i64
     QUEUE_MAX = env_or("AI_QUEUE_MAX", "20").to_int()
+    SHARE_BASE = str.TrimSuffix(env_or("AI_APP_URL", "https://ai.salamlang.ir"), "/")
+    SHARE_DEFAULT_HOURS = env_or("AI_SHARE_DEFAULT_HOURS", "24").to_int()
+    if not aishare.ValidHours(SHARE_DEFAULT_HOURS):
+        SHARE_DEFAULT_HOURS = 24
+    end
+    SHARE_DEFAULT_CAP = env_or("AI_SHARE_MAX_MESSAGES", "100").to_int()
+    SHARE_DEFAULT_DAILY = env_or("AI_SHARE_DAILY_MESSAGES", "50").to_int()
+    SHARE_SEND_RATE = env_or("AI_SHARE_RATE_PER_MINUTE", "6").to_int()
+    SHARE_READ_RATE = env_or("AI_SHARE_READ_PER_MINUTE", "90").to_int()
+    SHARE_MAX_CHARS = env_or("AI_SHARE_MAX_CHARS", "2000").to_int()
+    aishare.Init()
     if not aistore.Open(env_or("AI_DB_HOST", "127.0.0.1"), env_or("AI_DB_USER", "salam_ai"), os.Env("AI_DB_PASSWORD"), env_or("AI_DB_NAME", "salam_ai"), env_or("AI_DB_PORT", "3306").to_int()):
         println "cannot open the database:", aistore.Error()
         ret 1
@@ -201,6 +238,13 @@ func main:
     router.Delete(r, "/chats/:id/queue", clear_queue)
     router.Delete(r, "/chats/:id/queue/:qid", remove_queued)
     router.Post(r, "/chats/:id/queue/:qid/now", run_queued_now)
+    router.Get(r, "/chats/:id/shares", list_shares)
+    router.Post(r, "/chats/:id/shares", create_share)
+    router.Patch(r, "/chats/:id/shares/:kind", patch_share)
+    router.Post(r, "/chats/:id/shares/:kind/regenerate", regenerate_share)
+    router.Delete(r, "/chats/:id/shares/:kind", delete_share)
+    router.Get(r, "/shares/:token", share_view)
+    router.Post(r, "/shares/:token/messages", share_send)
     aioauth.Routes(r)
     aiadmin.Routes(r)
     aiopenai.Routes(r)
@@ -211,7 +255,7 @@ func main:
     aitelegram.Routes(r)
     aicloud.Routes(r)
     ailogin.Routes(r)
-    each path in ["/auth/register", "/auth/login", "/auth/logout", "/me", "/chats", "/chats/:id", "/chats/:id/messages", "/chats/:id/messages/:mid", "/chats/:id/stop", "/chats/:id/queue", "/chats/:id/queue/:qid", "/chats/:id/queue/:qid/now", "/capabilities", "/chats/:id/files/:fid", "/chats/:id/calls/:cid/image"]:
+    each path in ["/auth/register", "/auth/login", "/auth/logout", "/me", "/chats", "/chats/:id", "/chats/:id/messages", "/chats/:id/messages/:mid", "/chats/:id/stop", "/chats/:id/queue", "/chats/:id/queue/:qid", "/chats/:id/queue/:qid/now", "/chats/:id/shares", "/chats/:id/shares/:kind", "/chats/:id/shares/:kind/regenerate", "/shares/:token", "/shares/:token/messages", "/capabilities", "/chats/:id/files/:fid", "/chats/:id/calls/:cid/image"]:
         router.Options(r, path, preflight)
     end
     mut s := http.NewServer(port)
@@ -484,6 +528,26 @@ func with_effort(obj: str, effort: str): str:
     ret obj.substr(0, obj.len() - 1) + `, "effort": ` + json.Str(effort) + "}"
 end
 
+func with_shared(obj: str, kinds: str): str:
+    if kinds.len() == 0 or not str.EndsWith(obj, "}"):
+        ret obj
+    end
+    mut items := Vector {} as Vector<str>
+    each k in kinds.split(","):
+        if aishare.ValidKind(k):
+            items.push(json.Str(k))
+        end
+    end
+    ret obj.substr(0, obj.len() - 1) + `, "shared": ` + json.Array(items) + "}"
+end
+
+func with_guest(obj: str, guest: str): str:
+    if guest.len() == 0 or not str.EndsWith(obj, "}"):
+        ret obj
+    end
+    ret obj.substr(0, obj.len() - 1) + `, "guest": ` + json.Str(guest) + "}"
+end
+
 func with_files(obj: str, files: str): str:
     if files.len() == 0 or not str.EndsWith(obj, "}"):
         ret obj
@@ -522,9 +586,9 @@ func list_chats(ctx: i64):
     end
     mut items := Vector {} as Vector<str>
     aistore.Lock()
-    mut rows := aistore.Stmt("SELECT id, title, updated, device_id, workspace, cloud FROM chats WHERE user_id = ?1 ORDER BY updated DESC LIMIT 200", one(i64s(uid)))
+    mut rows := aistore.Stmt("SELECT id, title, updated, device_id, workspace, cloud, COALESCE((SELECT GROUP_CONCAT(kind) FROM shares s WHERE s.chat_id = chats.id), '') FROM chats WHERE user_id = ?1 ORDER BY updated DESC LIMIT 200", one(i64s(uid)))
     until aistore.Next(rows):
-        items.push(chat_json(aistore.Text(rows, 0), aistore.Text(rows, 1), aistore.Text(rows, 2), aistore.Text(rows, 3), aistore.Text(rows, 4), aistore.Text(rows, 5)))
+        items.push(with_shared(chat_json(aistore.Text(rows, 0), aistore.Text(rows, 1), aistore.Text(rows, 2), aistore.Text(rows, 3), aistore.Text(rows, 4), aistore.Text(rows, 5)), aistore.Text(rows, 6)))
     end
     aistore.Finish(rows)
     aistore.Unlock()
@@ -661,15 +725,15 @@ func get_chat(ctx: i64):
     mut items := Vector {} as Vector<str>
     mut head := ""
     aistore.Lock()
-    mut crow := aistore.Stmt("SELECT id, title, updated, device_id, workspace, cloud FROM chats WHERE id = ?1", one(id))
+    mut crow := aistore.Stmt("SELECT id, title, updated, device_id, workspace, cloud, COALESCE((SELECT GROUP_CONCAT(kind) FROM shares s WHERE s.chat_id = chats.id), '') FROM chats WHERE id = ?1", one(id))
     if aistore.Next(crow):
-        head = chat_json(aistore.Text(crow, 0), aistore.Text(crow, 1), aistore.Text(crow, 2), aistore.Text(crow, 3), aistore.Text(crow, 4), aistore.Text(crow, 5))
+        head = with_shared(chat_json(aistore.Text(crow, 0), aistore.Text(crow, 1), aistore.Text(crow, 2), aistore.Text(crow, 3), aistore.Text(crow, 4), aistore.Text(crow, 5)), aistore.Text(crow, 6))
     end
     aistore.Finish(crow)
-    mut rows := aistore.Stmt("SELECT id, role, body, status, created, COALESCE(activity, ''), ms, effort FROM messages WHERE chat_id = ?1 ORDER BY id", one(id))
+    mut rows := aistore.Stmt("SELECT id, role, body, status, created, COALESCE(activity, ''), ms, effort, guest FROM messages WHERE chat_id = ?1 ORDER BY id", one(id))
     until aistore.Next(rows):
         mid := aistore.Text(rows, 0)
-        items.push(with_files(with_effort(message_json(mid, aistore.Text(rows, 1), aistore.Text(rows, 2), aistore.Text(rows, 3), aistore.Text(rows, 4), aistore.Text(rows, 5), aistore.Text(rows, 6)), aistore.Text(rows, 7)), attached.has(mid) ? attached.get(mid) : ""))
+        items.push(with_guest(with_files(with_effort(message_json(mid, aistore.Text(rows, 1), aistore.Text(rows, 2), aistore.Text(rows, 3), aistore.Text(rows, 4), aistore.Text(rows, 5), aistore.Text(rows, 6)), aistore.Text(rows, 7)), attached.has(mid) ? attached.get(mid) : ""), aistore.Text(rows, 8)))
     end
     aistore.Finish(rows)
     mut calls := Vector {} as Vector<str>
@@ -769,7 +833,7 @@ func send_message(ctx: i64):
     mut code := ""
     mut message := ""
     mut out := ""
-    if not launch_turn(uid, id, str.TrimSuffix(owned, "|"), text, files, aiweb.UiLangNote(ctx), body, "", status, code, message, out):
+    if not launch_turn(uid, id, str.TrimSuffix(owned, "|"), text, files, aiweb.UiLangNote(ctx), body, "", "0", "", status, code, message, out):
         fail(ctx, status, code, message)
         ret
     end
@@ -791,7 +855,7 @@ func read_files(ctx: i64, body: str, files &: Vector<aifiles.Upload>): bool:
     ret true
 end
 
-func launch_turn(uid: i64, id: str, sid_in: str, text: str, files &: Vector<aifiles.Upload>, ui_note: str, body: str, qid: str, status &: int, code &: str, message &: str, out &: str): bool:
+func launch_turn(uid: i64, id: str, sid_in: str, text: str, files &: Vector<aifiles.Upload>, ui_note: str, body: str, qid: str, share: str, guest: str, status &: int, code &: str, message &: str, out &: str): bool:
     mut sid := sid_in
     sync_pending(id, sid)
     t := i64s(aistore.Now())
@@ -861,9 +925,12 @@ func launch_turn(uid: i64, id: str, sid_in: str, text: str, files &: Vector<aifi
         message = "هنوز پاسخ پیام قبلی کامل نشده است."
         ret false
     end
-    _a := aistore.Run("INSERT INTO messages (chat_id, role, body, status, created, effort) VALUES (?1, 'user', ?2, 'done', ?3, ?4)", four(id, text, t, effort))
+    mut ua := four(id, text, t, effort)
+    ua.push(share)
+    ua.push(guest)
+    _a := aistore.Run("INSERT INTO messages (chat_id, role, body, status, created, effort, share_id, guest) VALUES (?1, 'user', ?2, 'done', ?3, ?4, ?5, ?6)", ua)
     umid := aistore.LastId()
-    _b := aistore.Run("INSERT INTO messages (chat_id, role, body, status, created, via_queue) VALUES (?1, 'assistant', '', 'pending', ?2, ?3)", three(id, t, qid.len() > 0 ? "1" : "0"))
+    _b := aistore.Run("INSERT INTO messages (chat_id, role, body, status, created, via_queue, share_id) VALUES (?1, 'assistant', '', 'pending', ?2, ?3, ?4)", four(id, t, qid.len() > 0 ? "1" : "0", share))
     amid := aistore.LastId()
     _c := aistore.Run("UPDATE chats SET title = ?1, updated = ?2 WHERE id = ?3", three(new_title, t, id))
     if qid.len() > 0:
@@ -915,6 +982,557 @@ func launch_turn(uid: i64, id: str, sid_in: str, text: str, files &: Vector<aifi
     m.push(json.Member("title", new_title))
     out = json.Object(m)
     ret true
+end
+
+func sh_digits(v: str): str:
+    if v.len() == 0 or v.len() > 18:
+        ret "0"
+    end
+    mut i := 0
+    until i < v.len():
+        c := v.substr(i, 1)
+        if c < "0" or c > "9":
+            ret "0"
+        end
+        i++
+    end
+    ret v
+end
+
+func sh_headers(ctx: i64):
+    http.SetHeader(ctx, "X-Robots-Tag", "noindex, nofollow, noarchive")
+    http.SetHeader(ctx, "Referrer-Policy", "no-referrer")
+end
+
+func sh_reply(ctx: i64, status: int, body: str):
+    sh_headers(ctx)
+    reply(ctx, status, body)
+end
+
+func sh_fail(ctx: i64, status: int, code: str, message: str):
+    sh_headers(ctx)
+    fail(ctx, status, code, message)
+end
+
+func load_share(cond: str, args: Vector<str>, row &: ShareRow): bool:
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT id, chat_id, user_id, kind, paused, pause_reason, expires, max_messages, max_daily, label, created, last_used, views, token_enc FROM shares WHERE " + cond, args)
+    mut found := false
+    if aistore.Next(rows):
+        found = true
+        row.id = aistore.Text(rows, 0)
+        row.chat = aistore.Text(rows, 1)
+        row.uid = aistore.Text(rows, 2)
+        row.kind = aistore.Text(rows, 3)
+        row.paused = aistore.Text(rows, 4) != "0"
+        row.reason = aistore.Text(rows, 5)
+        row.expires = aistore.Int64(rows, 6)
+        row.cap = aistore.Text(rows, 7).to_int()
+        row.daily = aistore.Text(rows, 8).to_int()
+        row.label = aistore.Text(rows, 9)
+        row.created = aistore.Int64(rows, 10)
+        row.last_used = aistore.Int64(rows, 11)
+        row.views = aistore.Int64(rows, 12)
+        row.enc = aistore.Text(rows, 13)
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    ret found
+end
+
+func share_usage(sid: str, now: i64, sent &: int, today &: int, tokens &: i64):
+    aistore.Lock()
+    sent = aistore.OneText("SELECT COUNT(*) FROM messages WHERE share_id = ?1 AND role = 'user'", one(sid)).to_int()
+    today = aistore.OneText("SELECT COUNT(*) FROM messages WHERE share_id = ?1 AND role = 'user' AND created > ?2", two(sid, i64s(now - 86400))).to_int()
+    tokens = aistore.OneText("SELECT CAST(COALESCE(SUM(tokens_in + tokens_out), 0) AS CHAR) FROM messages WHERE share_id = ?1 AND role = 'assistant'", one(sid)).to_int() as i64
+    aistore.Unlock()
+end
+
+func share_state(row: ShareRow): str:
+    mut sent := 0
+    mut today := 0
+    mut tokens := 0 as i64
+    share_usage(row.id, aistore.Now(), sent, today, tokens)
+    ret aishare.State(row.paused, row.reason, row.expires, aistore.Now(), row.cap, sent, row.daily, today)
+end
+
+func chat_flags(id: str, device &: bool, cloud &: bool, title &: str, sid &: str):
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT device_id, cloud, title, engine_sid FROM chats WHERE id = ?1", one(id))
+    if aistore.Next(rows):
+        dev := aistore.Text(rows, 0)
+        device = dev.len() > 0 and dev != "0"
+        cloud = aistore.Text(rows, 1) == "1"
+        title = aistore.Text(rows, 2)
+        sid = aistore.Text(rows, 3)
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+end
+
+func share_token_of(row: ShareRow): str:
+    if row.enc.len() == 0 or not aicloud.SealReady():
+        ret ""
+    end
+    ret aicloud.Unseal(row.enc)
+end
+
+func share_json(row: ShareRow, fresh: str): str:
+    now := aistore.Now()
+    mut sent := 0
+    mut today := 0
+    mut tokens := 0 as i64
+    share_usage(row.id, now, sent, today, tokens)
+    state := aishare.State(row.paused, row.reason, row.expires, now, row.cap, sent, row.daily, today)
+    mut token := fresh
+    if token.len() == 0:
+        token = share_token_of(row)
+    end
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("kind", row.kind))
+    m.push(json.Member("state", state))
+    m.push(json.MemberBool("paused", row.paused))
+    m.push(json.Member("reason", row.reason))
+    m.push(json.MemberRaw("expires", i64s(row.expires)))
+    m.push(json.MemberRaw("created", i64s(row.created)))
+    m.push(json.MemberRaw("last_used", i64s(row.last_used)))
+    m.push(json.MemberRaw("views", i64s(row.views)))
+    m.push(json.MemberRaw("max_messages", "" + row.cap))
+    m.push(json.MemberRaw("max_daily", "" + row.daily))
+    m.push(json.Member("label", row.label))
+    m.push(json.MemberRaw("messages", "" + sent))
+    m.push(json.MemberRaw("today", "" + today))
+    m.push(json.MemberRaw("tokens", i64s(tokens)))
+    m.push(json.MemberBool("can_copy", token.len() > 0))
+    if token.len() > 0:
+        m.push(json.Member("token", token))
+        m.push(json.Member("url", SHARE_BASE + "/s/" + token))
+    end
+    mut guests := Vector {} as Vector<str>
+    if row.kind == aishare.KIND_COLLAB:
+        aistore.Lock()
+        mut rows := aistore.Stmt("SELECT guest, COUNT(*), MAX(created) FROM messages WHERE share_id = ?1 AND role = 'user' GROUP BY guest ORDER BY MAX(created) DESC LIMIT 20", one(row.id))
+        until aistore.Next(rows):
+            mut g := Vector {} as Vector<str>
+            g.push(json.Member("name", aistore.Text(rows, 0)))
+            g.push(json.MemberRaw("count", aistore.Text(rows, 1)))
+            g.push(json.MemberRaw("last", aistore.Text(rows, 2)))
+            guests.push(json.Object(g))
+        end
+        aistore.Finish(rows)
+        aistore.Unlock()
+    end
+    m.push(json.MemberRaw("guests", json.Array(guests)))
+    ret json.Object(m)
+end
+
+func shares_reply(ctx: i64, status: int, id: str, fresh_kind: str, fresh: str):
+    mut items := Vector {} as Vector<str>
+    each kind in [aishare.KIND_VIEW, aishare.KIND_COLLAB]:
+        mut row := ShareRow {}
+        if load_share("chat_id = ?1 AND kind = ?2", two(id, kind), row):
+            items.push(share_json(row, kind == fresh_kind ? fresh : ""))
+        end
+    end
+    mut device := false
+    mut cloud := false
+    mut title := ""
+    mut sid := ""
+    chat_flags(id, device, cloud, title, sid)
+    refusal := aishare.CollabRefusal(device, cloud)
+    mut m := Vector {} as Vector<str>
+    m.push(json.MemberRaw("shares", json.Array(items)))
+    m.push(json.MemberBool("collab_allowed", refusal.len() == 0))
+    m.push(json.Member("collab_refusal", refusal))
+    m.push(json.MemberBool("hide_tools", aishare.HideTools(device, cloud)))
+    m.push(json.MemberRaw("default_hours", "" + SHARE_DEFAULT_HOURS))
+    m.push(json.MemberRaw("default_cap", "" + SHARE_DEFAULT_CAP))
+    m.push(json.MemberRaw("default_daily", "" + SHARE_DEFAULT_DAILY))
+    m.push(json.MemberRaw("ceiling", "" + SHARE_CEILING))
+    sh_reply(ctx, status, json.Object(m))
+end
+
+func owner_share_chat(ctx: i64, uid: i64): str:
+    id := http.Param(ctx, "id")
+    if own_chat(uid, id).len() == 0:
+        sh_fail(ctx, 404, "not_found", "این گفت‌وگو پیدا نشد.")
+        ret ""
+    end
+    ret id
+end
+
+func list_shares(ctx: i64):
+    uid := need_user(ctx)
+    if uid == 0:
+        ret
+    end
+    id := owner_share_chat(ctx, uid)
+    if id.len() == 0:
+        ret
+    end
+    shares_reply(ctx, 200, id, "", "")
+end
+
+func refuse_collab(ctx: i64, device: bool, cloud: bool): bool:
+    refusal := aishare.CollabRefusal(device, cloud)
+    if refusal == "device":
+        sh_fail(ctx, 409, "collab_device", "پیوند همکاری برای گفت‌وگوهای متصل به رایانه‌ی شما ساخته نمی‌شود، چون مهمان می‌تواند روی رایانه‌ی شما کار کند. پیوند فقط‌دیدنی ممکن است.")
+        ret true
+    end
+    if refusal == "cloud":
+        sh_fail(ctx, 409, "collab_cloud", "پیوند همکاری برای گفت‌وگوهای محیط ابری ساخته نمی‌شود، چون مهمان به حساب‌های متصل شما دسترسی پیدا می‌کند. پیوند فقط‌دیدنی ممکن است.")
+        ret true
+    end
+    ret false
+end
+
+func create_share(ctx: i64):
+    uid := need_user(ctx)
+    if uid == 0:
+        ret
+    end
+    id := owner_share_chat(ctx, uid)
+    if id.len() == 0:
+        ret
+    end
+    body := http.Body(ctx)
+    kind := json.Get(body, "kind")
+    if not aishare.ValidKind(kind):
+        sh_fail(ctx, 400, "bad_share", "نوع پیوند درست نیست.")
+        ret
+    end
+    mut device := false
+    mut cloud := false
+    mut title := ""
+    mut sid := ""
+    chat_flags(id, device, cloud, title, sid)
+    if kind == aishare.KIND_COLLAB and refuse_collab(ctx, device, cloud):
+        ret
+    end
+    mut row := ShareRow {}
+    if load_share("chat_id = ?1 AND kind = ?2", two(id, kind), row):
+        shares_reply(ctx, 200, id, "", "")
+        ret
+    end
+    mut hours := kind == aishare.KIND_COLLAB ? SHARE_DEFAULT_HOURS : 0
+    if json.Has(body, "hours"):
+        hours = json.Get(body, "hours").to_int()
+        if not aishare.ValidHours(hours):
+            sh_fail(ctx, 400, "bad_share", "مدت اعتبار پیوند درست نیست.")
+            ret
+        end
+    end
+    now := aistore.Now()
+    token := aishare.NewToken()
+    enc := aicloud.SealReady() ? aicloud.Seal(token) : ""
+    mut a := four(id, i64s(uid), kind, token_hash(token))
+    a.push(enc)
+    a.push(i64s(now))
+    a.push(i64s(aishare.ExpiryFor(hours, now)))
+    a.push("" + (kind == aishare.KIND_COLLAB ? SHARE_DEFAULT_CAP : 0))
+    a.push("" + (kind == aishare.KIND_COLLAB ? SHARE_DEFAULT_DAILY : 0))
+    aistore.Lock()
+    ok := aistore.Run("INSERT INTO shares (chat_id, user_id, kind, token_hash, token_enc, created, expires, max_messages, max_daily) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)", a)
+    aistore.Unlock()
+    if not ok:
+        if load_share("chat_id = ?1 AND kind = ?2", two(id, kind), row):
+            shares_reply(ctx, 200, id, "", "")
+            ret
+        end
+        sh_fail(ctx, 500, "server", "ساخت پیوند ناموفق بود.")
+        ret
+    end
+    shares_reply(ctx, 201, id, kind, token)
+end
+
+func patch_share(ctx: i64):
+    uid := need_user(ctx)
+    if uid == 0:
+        ret
+    end
+    id := owner_share_chat(ctx, uid)
+    if id.len() == 0:
+        ret
+    end
+    kind := http.Param(ctx, "kind")
+    mut row := ShareRow {}
+    if not aishare.ValidKind(kind) or not load_share("chat_id = ?1 AND kind = ?2", two(id, kind), row):
+        sh_fail(ctx, 404, "not_found", "این پیوند پیدا نشد.")
+        ret
+    end
+    body := http.Body(ctx)
+    if json.Has(body, "hours") and not aishare.ValidHours(json.Get(body, "hours").to_int()):
+        sh_fail(ctx, 400, "bad_share", "مدت اعتبار پیوند درست نیست.")
+        ret
+    end
+    if json.Has(body, "max_messages") and (json.Get(body, "max_messages").to_int() < 0 or json.Get(body, "max_messages").to_int() > SHARE_CEILING):
+        sh_fail(ctx, 400, "bad_share", "سقف پیام درست نیست.")
+        ret
+    end
+    if json.Has(body, "max_daily") and (json.Get(body, "max_daily").to_int() < 0 or json.Get(body, "max_daily").to_int() > SHARE_CEILING):
+        sh_fail(ctx, 400, "bad_share", "سقف پیام درست نیست.")
+        ret
+    end
+    aistore.Lock()
+    if json.Has(body, "paused"):
+        if json.Get(body, "paused") == "true":
+            _p := aistore.Run("UPDATE shares SET paused = 1, pause_reason = 'owner' WHERE id = ?1", one(row.id))
+        else:
+            _p := aistore.Run("UPDATE shares SET paused = 0, pause_reason = '' WHERE id = ?1", one(row.id))
+        end
+    end
+    if json.Has(body, "hours"):
+        _h := aistore.Run("UPDATE shares SET expires = ?1 WHERE id = ?2", two(i64s(aishare.ExpiryFor(json.Get(body, "hours").to_int(), aistore.Now())), row.id))
+    end
+    if json.Has(body, "max_messages"):
+        _m := aistore.Run("UPDATE shares SET max_messages = ?1 WHERE id = ?2", two(json.Get(body, "max_messages"), row.id))
+    end
+    if json.Has(body, "max_daily"):
+        _d := aistore.Run("UPDATE shares SET max_daily = ?1 WHERE id = ?2", two(json.Get(body, "max_daily"), row.id))
+    end
+    if json.Has(body, "label"):
+        _l := aistore.Run("UPDATE shares SET label = ?1 WHERE id = ?2", two(aishare.CleanLabel(json.Get(body, "label")), row.id))
+    end
+    aistore.Unlock()
+    shares_reply(ctx, 200, id, "", "")
+end
+
+func regenerate_share(ctx: i64):
+    uid := need_user(ctx)
+    if uid == 0:
+        ret
+    end
+    id := owner_share_chat(ctx, uid)
+    if id.len() == 0:
+        ret
+    end
+    kind := http.Param(ctx, "kind")
+    mut row := ShareRow {}
+    if not aishare.ValidKind(kind) or not load_share("chat_id = ?1 AND kind = ?2", two(id, kind), row):
+        sh_fail(ctx, 404, "not_found", "این پیوند پیدا نشد.")
+        ret
+    end
+    token := aishare.NewToken()
+    enc := aicloud.SealReady() ? aicloud.Seal(token) : ""
+    aistore.Lock()
+    _u := aistore.Run("UPDATE shares SET token_hash = ?1, token_enc = ?2 WHERE id = ?3", three(token_hash(token), enc, row.id))
+    aistore.Unlock()
+    shares_reply(ctx, 200, id, kind, token)
+end
+
+func delete_share(ctx: i64):
+    uid := need_user(ctx)
+    if uid == 0:
+        ret
+    end
+    id := owner_share_chat(ctx, uid)
+    if id.len() == 0:
+        ret
+    end
+    kind := http.Param(ctx, "kind")
+    if not aishare.ValidKind(kind):
+        sh_fail(ctx, 404, "not_found", "این پیوند پیدا نشد.")
+        ret
+    end
+    aistore.Lock()
+    _d := aistore.Run("DELETE FROM shares WHERE chat_id = ?1 AND kind = ?2", two(id, kind))
+    aistore.Unlock()
+    shares_reply(ctx, 200, id, "", "")
+end
+
+func resolve_share(ctx: i64, row &: ShareRow): bool:
+    ip := clip(aiweb.ClientIp(ctx), 64)
+    if not aishare.Hit("rd:" + ip, SHARE_READ_RATE, 60):
+        sh_fail(ctx, 429, "slow_down", "درخواست‌ها زیاد است. چند لحظه بعد دوباره تلاش کنید.")
+        ret false
+    end
+    token := http.Param(ctx, "token")
+    if not aishare.ValidToken(token):
+        sh_fail(ctx, 404, "gone", "این پیوند وجود ندارد یا حذف شده است.")
+        ret false
+    end
+    hash := token_hash(token)
+    if not aishare.Hit("rt:" + hash, SHARE_READ_RATE * 6, 60):
+        sh_fail(ctx, 429, "slow_down", "درخواست‌ها زیاد است. چند لحظه بعد دوباره تلاش کنید.")
+        ret false
+    end
+    if not load_share("token_hash = ?1", one(hash), row):
+        sh_fail(ctx, 404, "gone", "این پیوند وجود ندارد یا حذف شده است.")
+        ret false
+    end
+    ret true
+end
+
+func share_view(ctx: i64):
+    mut row := ShareRow {}
+    if not resolve_share(ctx, row):
+        ret
+    end
+    state := share_state(row)
+    readable := state != "expired" and not (row.kind == aishare.KIND_VIEW and row.paused)
+    mut device := false
+    mut cloud := false
+    mut title := ""
+    mut sid := ""
+    chat_flags(row.chat, device, cloud, title, sid)
+    hide := aishare.HideTools(device, cloud)
+    after := sh_digits(http.Query(ctx, "after"))
+    mut items := Vector {} as Vector<str>
+    mut phase := "done"
+    if readable:
+        if after == "0":
+            aistore.Lock()
+            _v := aistore.Run("UPDATE shares SET views = views + 1 WHERE id = ?1", one(row.id))
+            aistore.Unlock()
+        end
+        sync_pending(row.chat, sid)
+        aistore.Lock()
+        mut rows := aistore.Stmt("SELECT id, role, body, status, created, COALESCE(activity, ''), ms, share_id, guest FROM (SELECT * FROM messages WHERE chat_id = ?1 AND id > ?2 ORDER BY id DESC LIMIT 300) t ORDER BY id", two(row.chat, after))
+        mut ids := Vector {} as Vector<str>
+        mut roles := Vector {} as Vector<str>
+        mut bodies := Vector {} as Vector<str>
+        mut states := Vector {} as Vector<str>
+        mut stamps := Vector {} as Vector<str>
+        mut acts := Vector {} as Vector<str>
+        mut spans := Vector {} as Vector<str>
+        mut guests := Vector {} as Vector<str>
+        until aistore.Next(rows):
+            ids.push(aistore.Text(rows, 0))
+            roles.push(aistore.Text(rows, 1))
+            bodies.push(aistore.Text(rows, 2))
+            states.push(aistore.Text(rows, 3))
+            stamps.push(aistore.Text(rows, 4))
+            acts.push(aistore.Text(rows, 5))
+            spans.push(aistore.Text(rows, 6))
+            guests.push(aistore.Text(rows, 7) != "0" ? aistore.Text(rows, 8) : "")
+        end
+        aistore.Finish(rows)
+        aistore.Unlock()
+        mut i := 0
+        until i < ids.len():
+            mut body := bodies.get(i)
+            mut status := states.get(i)
+            mut activity := acts.get(i)
+            if roles.get(i) == "assistant" and status == "pending":
+                r := settle(ids.get(i), sid, stamps.get(i).to_int() as i64, turn_seconds(row.chat))
+                body = r.text
+                activity = r.activity
+                if r.done:
+                    status = r.failed ? "error" : "done"
+                else:
+                    phase = r.phase
+                    status = "pending"
+                end
+            end
+            mut m := Vector {} as Vector<str>
+            m.push(json.MemberRaw("id", ids.get(i)))
+            m.push(json.Member("role", roles.get(i)))
+            m.push(json.Member("body", roles.get(i) == "assistant" ? aiturn.Plain(body) : body))
+            m.push(json.Member("status", status))
+            m.push(json.MemberRaw("created", stamps.get(i)))
+            m.push(json.MemberRaw("activity", roles.get(i) == "assistant" ? aishare.RedactActivity(activity_raw(activity), hide) : "[]"))
+            m.push(json.MemberRaw("ms", spans.get(i).len() > 0 ? spans.get(i) : "0"))
+            if guests.get(i).len() > 0:
+                m.push(json.Member("guest", guests.get(i)))
+            end
+            items.push(json.Object(m))
+            i++
+        end
+    end
+    mut sm := Vector {} as Vector<str>
+    sm.push(json.Member("kind", row.kind))
+    sm.push(json.Member("state", state))
+    sm.push(json.MemberBool("collab", row.kind == aishare.KIND_COLLAB and state == "ok"))
+    sm.push(json.MemberBool("readable", readable))
+    sm.push(json.MemberRaw("expires", i64s(row.expires)))
+    sm.push(json.MemberBool("hide_tools", hide))
+    sm.push(json.Member("label", row.label))
+    mut cm := Vector {} as Vector<str>
+    cm.push(json.Member("title", readable ? title : ""))
+    mut m := Vector {} as Vector<str>
+    m.push(json.MemberRaw("share", json.Object(sm)))
+    m.push(json.MemberRaw("chat", json.Object(cm)))
+    m.push(json.MemberRaw("messages", json.Array(items)))
+    m.push(json.Member("phase", phase))
+    sh_reply(ctx, 200, json.Object(m))
+end
+
+func share_send(ctx: i64):
+    mut row := ShareRow {}
+    if not resolve_share(ctx, row):
+        ret
+    end
+    ip := clip(aiweb.ClientIp(ctx), 64)
+    if not aishare.Hit("sd:" + ip, SHARE_SEND_RATE, 60) or not aishare.Hit("st:" + row.id, SHARE_SEND_RATE * 3, 60):
+        sh_fail(ctx, 429, "slow_down", "پیام‌ها خیلی پشت‌سرهم است. چند لحظه بعد دوباره بفرستید.")
+        ret
+    end
+    if row.kind != aishare.KIND_COLLAB:
+        sh_fail(ctx, 403, "view_only", "این پیوند فقط برای دیدن است.")
+        ret
+    end
+    state := share_state(row)
+    if state == "expired":
+        sh_fail(ctx, 410, "expired", "این پیوند منقضی شده است.")
+        ret
+    else state == "paused":
+        sh_fail(ctx, 403, "paused", "صاحب گفت‌وگو فعلا ارسال پیام را متوقف کرده است.")
+        ret
+    else state == "limit":
+        sh_fail(ctx, 429, "owner_limit", "فعلا امکان ارسال پیام از این پیوند نیست. بعدا دوباره تلاش کنید.")
+        ret
+    else state == "cap":
+        sh_fail(ctx, 429, "cap", "سقف پیام‌های این پیوند پر شده است.")
+        ret
+    else state == "daily":
+        sh_fail(ctx, 429, "daily", "سقف پیام‌های امروز این پیوند پر شده است.")
+        ret
+    end
+    mut device := false
+    mut cloud := false
+    mut title := ""
+    mut sid := ""
+    chat_flags(row.chat, device, cloud, title, sid)
+    if aishare.CollabRefusal(device, cloud).len() > 0:
+        sh_fail(ctx, 403, "view_only", "این پیوند فقط برای دیدن است.")
+        ret
+    end
+    body := http.Body(ctx)
+    if body.find(`"files"`) >= 0:
+        sh_fail(ctx, 400, "no_files", "از طریق این پیوند فایل نمی‌توان فرستاد.")
+        ret
+    end
+    text := str.Trim(json.Get(body, "text"))
+    if text.len() == 0:
+        sh_fail(ctx, 400, "empty", "پیام خالی است.")
+        ret
+    end
+    if str.CharCount(text) > SHARE_MAX_CHARS:
+        sh_fail(ctx, 400, "too_long", "پیام خیلی بلند است. آن را کوتاه‌تر کنید.")
+        ret
+    end
+    name := aishare.CleanName(json.Get(body, "name"))
+    note := aiweb.UiLangNote(ctx) + aishare.GuestNote(name)
+    mut files := Vector {} as Vector<aifiles.Upload>
+    mut status := 0
+    mut code := ""
+    mut message := ""
+    mut out := ""
+    if not launch_turn(row.uid.to_int(), row.chat, sid, text, files, note, "{}", "", row.id, name, status, code, message, out):
+        if code == "rate":
+            aistore.Lock()
+            _p := aistore.Run("UPDATE shares SET paused = 1, pause_reason = 'limit' WHERE id = ?1 AND paused = 0", one(row.id))
+            aistore.Unlock()
+            sh_fail(ctx, 429, "owner_limit", "فعلا امکان ارسال پیام از این پیوند نیست. بعدا دوباره تلاش کنید.")
+            ret
+        end
+        sh_fail(ctx, status, code, message)
+        ret
+    end
+    aistore.Lock()
+    _t := aistore.Run("UPDATE shares SET last_used = ?1 WHERE id = ?2", two(i64s(aistore.Now()), row.id))
+    aistore.Unlock()
+    sh_reply(ctx, 201, out)
 end
 
 func queue_json(id: str): str:
@@ -1151,7 +1769,7 @@ func queue_step(id: str, launched &: str): bool:
     mut code := ""
     mut message := ""
     body := `{"effort": ` + json.Str(effort) + (project.len() > 0 ? `, "project": ` + project : "") + "}"
-    if launch_turn(uid.to_int(), id, sid, text, files, note, body, qid, status, code, message, launched):
+    if launch_turn(uid.to_int(), id, sid, text, files, note, body, qid, "0", "", status, code, message, launched):
         ret true
     end
     if status == 500:

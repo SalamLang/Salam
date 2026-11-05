@@ -132,6 +132,8 @@ pub struct Client:
     @fa "میزبان‌های‌کوکی"
     pub cookie_hosts: HashMap<str, str> = HashMap {} as HashMap<str, str>
     _host_copies: HashMap<str, str> = HashMap {} as HashMap<str, str>
+    _own_vals: HashMap<str, str> = HashMap {} as HashMap<str, str>
+    _own_keys: HashMap<str, str> = HashMap {} as HashMap<str, str>
     @en "cookie_secure"
     @fa "امنیت‌کوکی"
     pub cookie_secure: HashMap<str, bool> = HashMap {} as HashMap<str, bool>
@@ -165,6 +167,7 @@ pub struct Client:
         this.cookies.put(name, value)
         this.cookie_hosts.remove(name)
         this.cookie_secure.remove(name)
+        this._drop_owned(name)
         this._unlock()
     end
 
@@ -175,6 +178,8 @@ pub struct Client:
         this.cookies.free()
         this.cookie_hosts.free()
         this.cookie_secure.free()
+        this._free_owned()
+        this._free_host_copies()
         this.cookies = HashMap {} as HashMap<str, str>
         this.cookie_hosts = HashMap {} as HashMap<str, str>
         this.cookie_secure = HashMap {} as HashMap<str, bool>
@@ -221,8 +226,37 @@ pub struct Client:
         this.cookies.free()
         this.headers.free()
         this.cookie_hosts.free()
+        this._free_owned()
         this._free_host_copies()
         this.cookie_secure.free()
+    end
+
+    func _drop_owned(name: str):
+        if this._own_vals.has(name):
+            v := this._own_vals.get(name)
+            this._own_vals.remove(name)
+            mem.Free(v as void*)
+        end
+        if this._own_keys.has(name):
+            k := this._own_keys.get(name)
+            this._own_keys.remove(name)
+            mem.Free(k as void*)
+        end
+    end
+
+    func _free_owned():
+        it := this._own_vals.iter()
+        until it.has_next():
+            mem.Free(it.value() as void*)
+            it.next()
+        end
+        this._own_vals.free()
+        kt := this._own_keys.iter()
+        until kt.has_next():
+            mem.Free(kt.value() as void*)
+            kt.next()
+        end
+        this._own_keys.free()
     end
 
     func _host_copy(host: str): str:
@@ -348,20 +382,43 @@ pub struct Client:
                     name := _trimmed_part(pair, 0, eqp)
                     value := _trimmed_part(pair, eqp + 1, pair.len() - eqp - 1)
                     gone := str.Contains(attrs, ";max-age=0") or str.Contains(attrs, ";max-age=-")
+                    mut kept := false
                     if gone:
                         this.cookies.remove(name)
                         this.cookie_hosts.remove(name)
                         this.cookie_secure.remove(name)
+                        this._drop_owned(name)
                     else _token_ok(name) and not _has_control(value):
                         if this.cookies.has(name) or this.cookies.size() < MAX_COOKIES:
+                            had := this._own_vals.has(name)
+                            mut oldv := ""
+                            mut oldk := ""
+                            if had:
+                                oldv = this._own_vals.get(name)
+                                oldk = this._own_keys.get(name)
+                            end
+                            kept = true
                             this.cookies.put(name, value)
+                            this._own_vals.put(name, value)
+                            this._own_keys.put(name, name)
                             this.cookie_hosts.put(name, this._host_copy(host))
-                            if str.Contains(attrs + ";", ";secure;"):
+                            tagged := attrs.concat(";")
+                            is_secure := str.Contains(tagged, ";secure;")
+                            mem.Free(tagged as void*)
+                            if is_secure:
                                 this.cookie_secure.put(name, true)
                             else:
                                 this.cookie_secure.remove(name)
                             end
+                            if had:
+                                mem.Free(oldv as void*)
+                                mem.Free(oldk as void*)
+                            end
                         end
+                    end
+                    if not kept:
+                        mem.Free(name as void*)
+                        mem.Free(value as void*)
                     end
                 end
                 if semi >= 0:
@@ -465,6 +522,8 @@ pub struct Client:
                 cur_block = _strip_body_headers(cur_block)
             end
             cur_url = url.String(next)
+            if rep.head.len() > 0: mem.Free(rep.head as void*) end
+            mem.Free(loc as void*)
             hops += 1
         end
     end
@@ -638,6 +697,10 @@ func _keep_lines(headers: str, keep: func (str) bool): str:
         mem.Free(low as void*)
     end
     _free_lines(lines)
+    if b.len == 0:
+        str.BufFree(b)
+        ret ""
+    end
     out := str.BufStr(b)
     str.BufFree(b)
     ret out
@@ -850,6 +913,10 @@ func _as_response(rep: _Reply): Response:
     mut r := Response { status = rep.status, head = rep.head, err = rep.err, url = rep.url }
     mut buf := rep.body
     r.body = compress.BufToStrUnsafe(buf)
+    if buf.len > 0 and r.body.len() == 0:
+        mem.Free(r.body as void*)
+        r.body = ""
+    end
     compress.BufFree(buf)
     ret r
 end
@@ -949,18 +1016,21 @@ if SALAM_OS_WINDOWS and not SALAM_NATIVE_TLS:
         hlen[0] = 0
         WinHttpQueryHeaders(req, 22, null, null, hlen as void*, null)
         hsize := hlen[0] as int
-        mut hdr_str := "HTTP/1.1 0 \r\n\r\n"
+        mut hdr_str := str.Clone("HTTP/1.1 0 \r\n\r\n")
         if hsize > 0:
             wh := mem.Allocate((hsize + 4) as u64)
             q2 := WinHttpQueryHeaders(req, 22, null, wh, hlen as void*, null)
             if q2 != 0:
+                mem.Free(hdr_str as void*)
                 hdr_str = _wide_to_str(wh)
             end
             mem.Free(wh)
         end
         hend := hdr_str.len() - 4
         if hend < 0 or hdr_str.substr(hend, 4) != "\r\n\r\n":
-            hdr_str = hdr_str.concat("\r\n\r\n")
+            grown := hdr_str.concat("\r\n\r\n")
+            if hdr_str.len() > 0: mem.Free(hdr_str as void*) end
+            hdr_str = grown
         end
         buf := mem.Allocate(2050 as u64)
         defer mem.Free(buf)

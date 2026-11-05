@@ -928,9 +928,12 @@ println option.UnwrapOr(o, 0)         // Some/None/IsSome/IsNone/Unwrap/UnwrapOr
 **`T?`** is short for `option.Option<T>` and needs no import. A struct field of
 type `T?` may be omitted from a literal (it starts empty). Plain values wrap
 automatically in struct literals, assignments, arguments, returns and defaults,
-and `null` means empty. Locals: `x := 5 as int?`. In Persian `صحیح؟` works the
-same. Read with `is_some()`, `is_none()`, `unwrap_or(f)`, `unwrap()`, or the
-fields `present` and `value`; `value` on an empty one is the zero value. JSON:
+and `null` means empty. Locals: `x := 5 as int?`, or `mut x: int?` assigned before
+it is read (reading it first is `E089`). In Persian `صحیح؟` works the same. Read
+with `is_some()`, `is_none()`, `unwrap_or(f)`, `unwrap()`, or the fields `present`
+and `value`. Check `is_some()` before using `value`: on an empty one it means
+nothing, and a `str` from `option.None()` is a null pointer that crashes. A `&: T?`
+parameter needs a `T?` variable, not a plain value. JSON:
 a `T?` field is an optional key, `null` decodes to empty, and an empty one
 encodes as `null` (or is left out with `@json "" "omitempty"`).
 

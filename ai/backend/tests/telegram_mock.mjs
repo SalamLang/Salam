@@ -7,6 +7,8 @@ let calls = [];
 let nextUpdate = 100;
 let nextMessage = 500;
 const waiters = new Set();
+const files = new Map();
+let downloads = [];
 
 const wake = () => {
   for (const w of [...waiters]) w();
@@ -27,9 +29,31 @@ http
         wake();
         return send(200, { ok: true });
       }
+      if (url.pathname === "/_file" && req.method === "POST") {
+        const f = JSON.parse(body);
+        files.set(f.file_id, { ...f, bytes: Buffer.from(f.b64 ?? "", "base64") });
+        return send(200, { ok: true });
+      }
+      if (url.pathname === "/_downloads") return send(200, downloads);
       if (url.pathname === "/_log") return send(200, calls);
+      const dl = /^\/file\/bot([^/]+)\/(.+)$/.exec(url.pathname);
+      if (dl) {
+        const entry = [...files.values()].find((f) => f.path === dl[2]);
+        downloads.push({ path: dl[2], tokenOk: dl[1] === TOKEN });
+        if (dl[1] !== TOKEN || !entry) {
+          res.writeHead(404, { "Content-Type": "application/json" });
+          return res.end(JSON.stringify({ ok: false, error_code: 404, description: "Not Found" }));
+        }
+        if (entry.status && entry.status !== 200) {
+          res.writeHead(entry.status, { "Content-Type": "text/plain", "Content-Length": 4 });
+          return res.end("fail");
+        }
+        res.writeHead(200, { "Content-Type": "application/octet-stream", "Content-Length": entry.bytes.length });
+        return res.end(entry.bytes);
+      }
       if (url.pathname === "/_reset") {
         calls = [];
+        downloads = [];
         return send(200, { ok: true });
       }
       const m = /^\/bot([^/]+)\/(\w+)$/.exec(url.pathname);
@@ -53,6 +77,13 @@ http
         };
         waiters.add(done);
         return;
+      }
+      if (method === "getFile") {
+        const entry = files.get(args.file_id);
+        if (!entry) return send(400, { ok: false, error_code: 400, description: "Bad Request: wrong file_id" });
+        const result = { file_id: entry.file_id, file_unique_id: "u", file_path: entry.path };
+        result.file_size = entry.declared ?? entry.bytes.length;
+        return send(200, { ok: true, result });
       }
       if (method === "getMe") return send(200, { ok: true, result: { id: 1, is_bot: true, username: "MockBot" } });
       if (method === "sendMessage") return send(200, { ok: true, result: { message_id: nextMessage++, chat: { id: args.chat_id }, text: args.text } });

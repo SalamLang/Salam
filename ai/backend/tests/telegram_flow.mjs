@@ -1,6 +1,7 @@
 const API = (process.env.API ?? "http://127.0.0.1:18090").replace(/\/$/, "");
 const TG = (process.env.TG ?? "http://127.0.0.1:18097").replace(/\/$/, "");
 const GUEST_LIMIT = Number(process.env.GUEST_LIMIT ?? 2);
+const SPEECH = (process.env.SPEECH ?? "http://127.0.0.1:18088").replace(/\/$/, "");
 
 let passed = 0;
 const failures = [];
@@ -51,6 +52,193 @@ const lastText = async (chat, pattern) => {
   });
   return found;
 };
+
+
+async function voiceSection() {
+  console.log("voice messages");
+  const mode = async (m) => (await fetch(`${SPEECH}/mode?mode=${m}`)).json();
+  const file = (file_id, path, bytes, extra = {}) => fetch(`${TG}/_file`, { method: "POST", body: JSON.stringify({ file_id, path, b64: bytes.toString("base64"), ...extra }) });
+  const ogg = Buffer.concat([Buffer.from("OggS"), Buffer.alloc(300, 7)]);
+  const mp3 = Buffer.concat([Buffer.from("ID3"), Buffer.alloc(500, 9)]);
+  const wav = Buffer.concat([Buffer.from("RIFF\0\0\0\0WAVEfmt "), Buffer.alloc(200, 3)]);
+  const mp4 = Buffer.concat([Buffer.alloc(4), Buffer.from("ftypisom"), Buffer.alloc(200, 5)]);
+  let mid = 9000;
+  const media = (id, field, obj, extra = {}, chat = { id, type: "private" }) => {
+    mid += 1;
+    return inject({ message: { message_id: mid, from: user(id), chat, [field]: obj, ...extra } });
+  };
+  const sent = async (chat, from, pattern) =>
+    until(async () => (await log()).slice(from).find((c) => ["sendMessage", "editMessageText"].includes(c.method) && String(c.args.chat_id) === String(chat) && pattern.test(c.args.text)), 20000);
+  const mark = async () => (await log()).length;
+  const downloads = async () => (await fetch(`${TG}/_downloads`)).json();
+  const served = async () => (await mode("ok")).served;
+
+  await mode("ok");
+  await file("v1", "voice/file_1.oga", ogg);
+  await file("a1", "music/file_2.mp3", mp3);
+  await file("w1", "documents/file_3.wav", wav);
+  await file("n1", "video_notes/file_4.mp4", mp4);
+  await file("pdf", "documents/file_5.pdf", Buffer.from("%PDF-1.4 hello"));
+  await file("junk", "voice/file_6.oga", Buffer.from("this is plainly not audio at all"));
+  await file("evil", "../../etc/passwd", ogg);
+  await file("lie", "voice/file_7.oga", Buffer.alloc(400000, 1), { declared: 900 });
+  await file("huge", "voice/file_8.oga", ogg, { declared: 400000 });
+  await file("broken", "voice/file_9.oga", ogg, { status: 500 });
+
+  const linkUser = async (id, name) => {
+    const reg = await api("POST", "/auth/register", null, { name, email: `voice-${id}-${Date.now()}@test.ir`, password: "password123" });
+    const token = reg.json?.token;
+    const code = await api("POST", "/telegram/code", token);
+    const start = /start=link_([0-9a-f]{32})$/.exec(code.json?.url ?? "")?.[1];
+    await say(id, `/start link_${start}`);
+    await lastText(id, /Choose your language/);
+    await press(id, "l:en");
+    await until(async () => sentTo(await log(), id).find((c) => c.args.reply_markup?.inline_keyboard?.some((r) => r[0]?.callback_data === `y:${start}`)));
+    await press(id, `y:${start}`);
+    check(`${name} linked`, !!(await lastText(id, /Connected\. Your Salam account/)));
+    return token;
+  };
+  const token = await linkUser(7007, "Voice User");
+
+  let from = await mark();
+  await media(7007, "voice", { file_id: "v1", file_size: ogg.length, duration: 3 });
+  const heard = await sent(7007, from, /^I heard: "hello "world", this is a test"$/);
+  check("a voice note is transcribed and shown back", !!heard, textsTo(await log(), 7007).slice(-3));
+  check("the transcript is a reply to the voice message", heard?.args.reply_parameters?.message_id === mid, heard?.args);
+  check("the transcript is then answered like a typed message", !!(await sent(7007, from, /Echo: hello/)));
+  const first = (await mode("ok")).last;
+  check("the speech service got the exact audio in the bot language", first?.size === ogg.length && first.language === "en" && first.authorized, first);
+  check("a voice note was fetched from the file endpoint", (await downloads()).some((d) => d.path === "voice/file_1.oga" && d.tokenOk));
+  const typingSeen = (await log()).slice(from).some((c) => c.method === "sendChatAction" && c.args.action === "typing");
+  check("typing is shown while the voice message is worked on", typingSeen);
+
+  await until(async () => (await api("GET", "/chats", token)).json?.chats?.length === 1);
+  const chats = (await api("GET", "/chats", token)).json?.chats ?? [];
+  check("the transcript is the chat title and history entry", chats[0]?.title.startsWith("hello"), chats);
+
+  from = await mark();
+  await media(7007, "audio", { file_id: "a1", file_size: mp3.length, duration: 20, title: "Song", performer: "Band", mime_type: "audio/mpeg", file_name: "song.mp3" });
+  check("an mp3 audio file is accepted", !!(await sent(7007, from, /^I heard: /)));
+  await lastText(7007, /Echo: hello/);
+
+  from = await mark();
+  await media(7007, "document", { file_id: "w1", file_size: wav.length, mime_type: "audio/x-wav", file_name: "clip.wav" });
+  check("an audio document is accepted", !!(await sent(7007, from, /^I heard: /)));
+  from = await mark();
+  await media(7007, "video_note", { file_id: "n1", file_size: mp4.length, duration: 5, length: 240 });
+  check("a video note is accepted", !!(await sent(7007, from, /^I heard: /)));
+  await lastText(7007, /Echo: hello/);
+
+  from = await mark();
+  await media(7007, "document", { file_id: "pdf", file_size: 14, mime_type: "application/pdf", file_name: "a.pdf" });
+  check("other documents still get the text only message", !!(await sent(7007, from, /Only text and voice messages/)));
+
+  await mode("empty");
+  from = await mark();
+  await media(7007, "voice", { file_id: "v1", file_size: ogg.length, duration: 3 });
+  check("silence gets a clear message", !!(await sent(7007, from, /Nothing could be recognised\. Try again closer/)));
+  from = await mark();
+  await media(7007, "audio", { file_id: "a1", file_size: mp3.length, duration: 20, mime_type: "audio/mpeg" });
+  check("music with no speech says lyrics may be missed", !!(await sent(7007, from, /Only speech is converted into text, so song lyrics may be missed/)));
+  check("an empty transcript is not sent to the assistant", !(await log()).slice(from).some((c) => c.method === "sendMessage" && /Echo/.test(c.args.text ?? "")));
+
+  await mode("ok");
+  from = await mark();
+  await media(7007, "voice", { file_id: "v1", file_size: ogg.length, duration: 3 }, { caption: "/fa" });
+  await sent(7007, from, /^I heard/);
+  check("a caption with a language code picks that language", (await mode("ok")).last.language === "fa");
+
+  await mode("too_long");
+  from = await mark();
+  await media(7007, "voice", { file_id: "v1", file_size: ogg.length, duration: 3 });
+  check("the service saying too long is explained", !!(await sent(7007, from, /longer than 120 seconds/)));
+  await mode("ok");
+
+  const sttBefore = await served();
+  from = await mark();
+  const dlBefore = (await downloads()).length;
+  await media(7007, "voice", { file_id: "v1", file_size: ogg.length, duration: 600 });
+  check("a voice note over the length limit is refused", !!(await sent(7007, from, /longer than 120 seconds/)));
+  await media(7007, "voice", { file_id: "huge", file_size: 400000, duration: 3 });
+  check("a file over the size limit is refused", !!(await sent(7007, from, /larger than 292 KB/)));
+  await media(7007, "voice", { file_id: "huge", duration: 3 });
+  check("a size only known from getFile is refused too", (await until(async () => (await log()).slice(from).filter((c) => /larger than/.test(c.args.text ?? "")).length >= 2)) === true);
+  await sleep(300);
+  check("refused files are not downloaded and not converted", (await downloads()).length === dlBefore && (await served()) === sttBefore);
+
+  from = await mark();
+  await media(7007, "voice", { file_id: "nope", duration: 3 });
+  check("a file Telegram cannot give out is explained", !!(await sent(7007, from, /Fetching the file from Telegram failed/)));
+  from = await mark();
+  await media(7007, "voice", { file_id: "broken", duration: 3 });
+  check("a failing download is explained", !!(await sent(7007, from, /Fetching the file from Telegram failed/)));
+  from = await mark();
+  await media(7007, "voice", { file_id: "evil", duration: 3 });
+  await sent(7007, from, /Fetching the file from Telegram failed/);
+  check("a path with dots is never requested", !(await downloads()).some((d) => d.path.includes("..")));
+  from = await mark();
+  await media(7007, "voice", { file_id: "lie", duration: 3 });
+  check("a file larger than Telegram declared is cut off", !!(await sent(7007, from, /Fetching the file from Telegram failed/)));
+  from = await mark();
+  await media(7007, "voice", { file_id: "junk", duration: 3 });
+  check("bytes that are not audio are explained", !!(await sent(7007, from, /could not be read/)));
+  check("none of those reached the speech service", (await served()) === sttBefore);
+
+  const token2 = await linkUser(9009, "Second Voice");
+  check("the second account is separate", token2 !== token);
+  await mode("busy");
+  from = await mark();
+  await media(9009, "voice", { file_id: "v1", file_size: ogg.length, duration: 3 });
+  check("a busy service is explained", !!(await sent(9009, from, /busy right now/)));
+  await mode("broken");
+  from = await mark();
+  await media(9009, "voice", { file_id: "v1", file_size: ogg.length, duration: 3 });
+  check("a broken service is explained", !!(await sent(9009, from, /not available right now\. Please send your message as text/)));
+
+  await mode("down");
+  await sleep(1500);
+  from = await mark();
+  await media(9009, "voice", { file_id: "v1", file_size: ogg.length, duration: 3 });
+  check("with the speech service down the user is told to send text", !!(await sent(9009, from, /Voice messages are not available right now\. Please send your message as text/)));
+  check("nothing is fetched while voice is off", !(await log()).slice(from).some((c) => c.method === "getFile"));
+  await say(9009, "typed text still works");
+  check("typed messages keep working while voice is off", !!(await lastText(9009, /Echo: typed text still works/)));
+  await mode("ok");
+  await sleep(1500);
+
+  from = await mark();
+  await media(9009, "voice", { file_id: "v1", file_size: ogg.length, duration: 3 }, {}, { id: -4004, type: "group" });
+  await sleep(1200);
+  check("voice in a group is ignored like text", !(await log()).slice(from).some((c) => String(c.args.chat_id) === "-4004"));
+
+  for (let n = 0; n < 7; n += 1) {
+    from = await mark();
+    await media(9009, "voice", { file_id: "v1", file_size: ogg.length, duration: 3 });
+    await sent(9009, from, /^I heard/);
+    await sleep(500);
+  }
+  from = await mark();
+  await media(9009, "voice", { file_id: "v1", file_size: ogg.length, duration: 3 });
+  check("the hourly voice allowance of a linked user ends", !!(await sent(9009, from, /used this hour's voice messages/)));
+
+  await press(8008, "l:fa");
+  from = await mark();
+  await media(8008, "voice", { file_id: "v1", file_size: ogg.length, duration: 3 });
+  check("a guest in Persian is answered in Persian", !!(await sent(8008, from, /^شنیدم: «/)));
+  check("the language sent to the service follows the bot language", (await mode("ok")).last.language === "fa");
+  await lastText(8008, /Echo:/);
+  await sleep(500);
+  for (const n of [1, 2]) {
+    from = await mark();
+    await media(8008, "voice", { file_id: "v1", file_size: ogg.length, duration: 3 });
+    await sent(8008, from, /^شنیدم/);
+    await sleep(800);
+  }
+  from = await mark();
+  await media(8008, "voice", { file_id: "v1", file_size: ogg.length, duration: 3 });
+  const guestLimit = await sent(8008, from, /سهم پیام صوتی مهمان/);
+  check("guests get a smaller voice allowance with a sign in button", !!guestLimit && !!guestLimit.args.reply_markup?.inline_keyboard?.[0]?.[0]?.url, guestLimit?.args);
+}
 
 async function main() {
   const boot = await until(async () => (await log()).some((c) => c.method === "getMe"));
@@ -177,6 +365,8 @@ async function main() {
   await say(5005, "slow: 8 explain");
   check("a slow answer shows a live status", !!(await until(async () => textsTo(await log(), 5005).find((t) => /^Thinking\.\.\. \(5s\)/.test(t)), 30000)), textsTo(await log(), 5005));
   check("the final answer replaces the status", !!(await lastText(5005, /Echo: slow: 8/)));
+
+  await voiceSection();
 
   console.log(`\n${passed} passed, ${failures.length} failed`);
   if (failures.length) {

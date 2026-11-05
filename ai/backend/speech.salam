@@ -65,6 +65,23 @@ func stt_pair(a: str, b: str): Vector<str>:
     ret v
 end
 
+func stt_content_length(head: str): int:
+    at := head.find("content-length:")
+    if at < 0:
+        ret -1
+    end
+    mut i := at + 15
+    until i < head.len() and head[i] as int == 32:
+        i += 1
+    end
+    mut n := 0
+    until i < head.len() and head[i] as int >= 48 and head[i] as int <= 57:
+        n = n * 10 + (head[i] as int - 48)
+        i += 1
+    end
+    ret n
+end
+
 func stt_exchange(head: str, ptr: void*, n: int, wait_ms: int): SttAnswer:
     mut out := SttAnswer {}
     c := tcp.DialTimeout(STT_HOST, STT_PORT, DIAL_MS)
@@ -82,33 +99,33 @@ func stt_exchange(head: str, ptr: void*, n: int, wait_ms: int): SttAnswer:
     end
     mut b := str.NewBuilder()
     defer str.BufFree(b)
-    until true:
-        got := tcp.Read(c, CHUNK)
-        if got.len() == 0 or str.BufLen(b) > (MAX_REPLY as i64):
+    buf := mem.Allocate((CHUNK + 1) as u64)
+    until str.BufLen(b) <= (MAX_REPLY as i64):
+        got := tcp.ReadBytes(c, buf, CHUNK)
+        if got <= 0:
             break
         end
-        str.BufAppend(b, got)
+        (buf as u8*)[got] = 0 as u8
+        str.BufAppend(b, buf as str)
     end
+    mem.Free(buf)
     tcp.Close(c)
     raw := str.BufStr(b)
+    defer mem.Free(raw as void*)
     he := raw.find("\r\n\r\n")
     sp := raw.find(" ")
     if he < 0 or sp < 0 or sp > he:
         ret out
     end
-    rest := raw.substr(he + 4, raw.len() - he - 4)
-    head_lower := str.Lower(raw.substr(0, he))
-    cl := head_lower.find("content-length:")
-    if cl >= 0:
-        tail := head_lower.substr(cl + 15, head_lower.len() - cl - 15)
-        le := tail.find("\r\n")
-        want := str.Trim(le >= 0 ? tail.substr(0, le) : tail).to_int()
-        if rest.len() < want:
-            ret out
-        end
+    head := str.Lower(raw.substr(0, he))
+    defer mem.Free(head as void*)
+    want := stt_content_length(head)
+    body_len := raw.len() - he - 4
+    if want >= 0 and body_len < want:
+        ret out
     end
     out.status = raw.substr(sp + 1, 3).to_int()
-    out.body = rest
+    out.body = raw.substr(he + 4, body_len)
     ret out
 end
 

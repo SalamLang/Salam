@@ -1,4 +1,4 @@
-"""Measure one model: real-time factor, peak memory and, with references, WER and CER.
+"""Measure one model: real-time factor, CPU cost, peak memory and, with references, WER and CER.
 
     python bench.py --model /models/x --audio clips/ --language fa [--refs refs.tsv]
 
@@ -84,6 +84,7 @@ def main():
 
     audio_seconds = 0.0
     work_seconds = 0.0
+    cpu_seconds = 0.0
     word_edits = word_total = char_edits = char_total = 0
     worst_rtf = 0.0
     names = sorted(n for n in os.listdir(args.audio) if os.path.isfile(os.path.join(args.audio, n)))
@@ -91,8 +92,10 @@ def main():
         samples = read_audio(os.path.join(args.audio, name))
         seconds = samples.size / RATE
         begun = time.monotonic()
+        cpu_begun = time.process_time()
         text = engine.transcribe(samples, args.language, time.monotonic() + 3600)
         took = time.monotonic() - begun
+        cpu_seconds += time.process_time() - cpu_begun
         audio_seconds += seconds
         work_seconds += took
         worst_rtf = max(worst_rtf, took / seconds)
@@ -113,6 +116,7 @@ def main():
         "load_seconds": round(load_seconds, 1),
         "rtf": round(work_seconds / audio_seconds, 3) if audio_seconds else None,
         "worst_rtf": round(worst_rtf, 3),
+        "cpu_seconds_per_audio_second": round(cpu_seconds / audio_seconds, 3) if audio_seconds else None,
         "peak_mb_after_load": round(load_peak),
         "peak_mb": round(peak_mb()),
         "cpus": os.cpu_count(),

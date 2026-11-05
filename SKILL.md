@@ -886,6 +886,24 @@ o := option.Some(99)
 println option.UnwrapOr(o, 0)         // Some/None/IsSome/IsNone/Unwrap/UnwrapOr/Expect
 ```
 
+**`T?`** is short for `option.Option<T>` and needs no import. A struct field of
+type `T?` may be omitted from a literal (it starts empty). Plain values wrap
+automatically in struct literals, assignments, arguments, returns and defaults,
+and `null` means empty. Locals: `x := 5 as int?`. In Persian `صحیح؟` works the
+same. Read with `is_some()`, `is_none()`, `unwrap_or(f)`, `unwrap()`, or the
+fields `present` and `value`; `value` on an empty one is the zero value. JSON:
+a `T?` field is an optional key, `null` decodes to empty, and an empty one
+encodes as `null` (or is left out with `@json "" "omitempty"`).
+
+```salam
+struct Client:
+    pub host: str
+    pub timeout: int?
+end
+c := Client { host = "x", timeout = 30 }
+println c.timeout.unwrap_or(5)
+```
+
 **Pointers & `null`:** `T*` is a pointer, `p[0]` dereferences, `null` is the
 null pointer. Used with FFI and `mem`: `p := mem.Allocate(8 as u64) as i64*`;
 `p[0] = 0`; `mem.Free(p as void*)`.

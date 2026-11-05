@@ -6,6 +6,7 @@ include co "../sal_core.salam"
 include at "../ast.salam"
 include i18 "../i18n.salam"
 include lp "../langpack.salam"
+include tok "../token.salam"
 
 const RULE_SEARCH_MAX := 16
 
@@ -106,11 +107,95 @@ func rule_plain_names(a &: at.Ast, r: at.Node, start: int): str:
     ret out
 end
 
-func rule_text(a &: at.Ast, r: at.Node): str:
+func rule_is_plain_value(a &: at.Ast, nid: int): bool:
+    k := at.KindOf(a, nid)
+    if k == at.AST_LITERAL:
+        ret true
+    end
+    if k == at.AST_UNARY or k == at.AST_CAST:
+        ret rule_is_plain_value(a, at.Get(a, nid).a)
+    end
+    ret false
+end
+
+func rule_value_key(s &: Sema, a &: at.Ast, nid: int, fty: int, names_ok: bool): str:
+    if nid == 0:
+        ret ""
+    end
+    n := at.Get(a, nid)
+    if fty >= 0 and ty_at(s, fty).kind == TY_ENUM:
+        if n.kind != at.AST_MEMBER:
+            ret ""
+        end
+        esym := ty_at(s, fty).decl
+        if esym == 0 or sym_at(s, esym).members == 0:
+            ret ""
+        end
+        em := enum_member_find(s, a, sym_at(s, esym).members, nid)
+        ret em == 0 ? "" : "e" + sym_at(s, em).name
+    end
+    if n.kind == at.AST_LITERAL and n.value_kind == tok.TV_STRING:
+        ret "s" + n.value_str
+    end
+    if not names_ok and not rule_is_plain_value(a, nid):
+        ret ""
+    end
+    mut cv := ConstVal {}
+    if not const_eval(s, a, nid, cv, 0):
+        ret ""
+    end
+    if cv.kind == CV_BOOL:
+        ret cv.b ? "b1" : "b0"
+    end
+    if fty >= 0 and type_is_float(s, fty):
+        ret "f" + cv_as_flt(cv)
+    end
+    if cv.kind == CV_INT:
+        ret "i" + cv.i
+    end
+    if cv.kind == CV_FLOAT:
+        ret "f" + cv.f
+    end
+    ret ""
+end
+
+func rule_value_body(key: str): str:
+    ret str.Substr(key, 1, str.Len(key) - 1)
+end
+
+func rule_value_show(key: str): str:
+    fa := str.Equals(i18.Lang(), "fa")
+    if str.Equals(key, "b1"):
+        ret fa ? "درست" : "true"
+    end
+    if str.Equals(key, "b0"):
+        ret fa ? "نادرست" : "false"
+    end
+    if str.Len(key) > 0 and byte_at(key, 0) == 115:
+        ret "\"" + rule_value_body(key) + "\""
+    end
+    ret rule_value_body(key)
+end
+
+func rule_cond_type(s &: Sema, a &: at.Ast, did: int, r: at.Node): int:
+    ssym := scope_lookup_local(s, s.global, at.Get(a, did).name)
+    if ssym == 0 or sym_at(s, ssym).members == 0 or r.list.len() == 0:
+        ret TYPE_NONE
+    end
+    f := scope_lookup_local(s, sym_at(s, ssym).members, at.Get(a, r.list.get(0)).name)
+    ret f == 0 ? TYPE_NONE : sym_at(s, f).ty
+end
+
+func rule_text(s &: Sema, a &: at.Ast, r: at.Node, fty: int): str:
     fa := str.Equals(i18.Lang(), "fa")
     head := fa ? "قاعده " : "rule "
     if rule_is_needs(r):
-        ret head + at.Get(a, r.list.get(0)).name + (fa ? " نیازمند " : " needs ") + rule_plain_names(a, r, 1)
+        mut cond := ""
+        if r.a != 0:
+            shown := rule_value_show(rule_value_key(s, a, r.a, fty, false))
+            cond = (fa ? " برابر " : " == ") + shown
+        end
+        ret head + at.Get(a, r.list.get(0)).name + cond + (fa ? " نیازمند " : " needs ") + rule_plain_names(a, r, 1)
     end
     ret head + lp.RuleGroupWord(r.name, fa) + "(" + rule_plain_names(a, r, 0) + ")"
 end
@@ -140,8 +225,60 @@ func rule_lit_has(a &: at.Ast, nid: int, name: str): bool:
     ret false
 end
 
+func rule_lit_value(a &: at.Ast, nid: int, name: str): int:
+    repeat at.ChildCount(a, nid) in i:
+        fi := at.Get(a, at.Child(a, nid, i))
+        if str.Equals(fi.name, name):
+            ret fi.a
+        end
+    end
+    ret 0
+end
+
+func rule_check_value(s &: Sema, a &: at.Ast, nid: int, ssym: int, r: at.Node, sp: co.SrcSpan):
+    sv := sym_at(s, ssym)
+    name := at.Get(a, r.list.get(0)).name
+    f := scope_lookup_local(s, sv.members, name)
+    if f == 0:
+        ret
+    end
+    fty := sym_at(s, f).ty
+    provided := rule_lit_has(a, nid, name)
+    val := provided ? rule_lit_value(a, nid, name) : at.Get(a, sym_at(s, f).decl).a
+    if val == 0:
+        ret
+    end
+    want := rule_value_key(s, a, r.a, fty, false)
+    got := rule_value_key(s, a, val, fty, provided)
+    if str.Len(want) == 0 or (str.Len(got) > 0 and not str.Equals(got, want)):
+        ret
+    end
+    shown := rule_value_show(want)
+    help := co.Format1(i18.Tr("the struct declares: %s"), co.ArgStr(rule_text(s, a, r, fty)))
+    mut i := 1
+    until i < r.list.len():
+        tgt := at.Get(a, r.list.get(i)).name
+        if not rule_lit_has(a, nid, tgt):
+            if str.Len(got) > 0:
+                serr_help(
+                    s, 159, sp, co.Format4(
+                        i18.Tr("struct literal '%s' has '%s' equal to %s, which needs '%s'"), co.ArgStr(sv.name), co.ArgStr(name), co.ArgStr(shown), co.ArgStr(tgt)
+                    ), help
+                )
+            else:
+                serr_help(
+                    s, 159, sp, co.Format4(
+                        i18.Tr("struct literal '%s' must set '%s' because '%s' may equal %s (its value is not a constant)"), co.ArgStr(sv.name), co.ArgStr(tgt), co.ArgStr(name), co.ArgStr(shown)
+                    ), help
+                )
+            end
+        end
+        i += 1
+    end
+end
+
 func rule_report(s &: Sema, a &: at.Ast, nid: int, sname: str, r: at.Node, sp: co.SrcSpan):
-    help := co.Format1(i18.Tr("the struct declares: %s"), co.ArgStr(rule_text(a, r)))
+    help := co.Format1(i18.Tr("the struct declares: %s"), co.ArgStr(rule_text(s, a, r, TYPE_NONE)))
     if rule_is_needs(r):
         first := at.Get(a, r.list.get(0)).name
         mut i := 1
@@ -183,6 +320,10 @@ func check_struct_rules(s &: Sema, a &: at.Ast, nid: int, ssym: int, sp: co.SrcS
         if str.Len(r.name) == 0 or r.list.len() == 0:
             continue
         end
+        if r.a != 0:
+            rule_check_value(s, a, nid, ssym, r, sp)
+            continue
+        end
         mut count := 0
         mut rest_all := true
         repeat r.list.len() in j:
@@ -208,6 +349,22 @@ func rule_shape_ok(s &: Sema, a &: at.Ast, did: int, rid: int): bool:
         ret false
     end
     mut ok := true
+    if r.a != 0 and at.Typarams(a, d.ext).len() == 0:
+        fty := rule_cond_type(s, a, did, r)
+        key := rule_value_key(s, a, r.a, fty, false)
+        vt := sema_check_expr(s, a, r.a)
+        if str.Len(key) == 0:
+            serr(s, 160, span_of(a, r.a), i18.Tr("the value in a rule must be a literal or a plain enum member"))
+            ok = false
+        else fty != TYPE_NONE and not type_assignable(s, fty, vt):
+            serr(
+                s, 160, span_of(a, r.a), co.Format3(
+                    i18.Tr("rule value for field '%s': cannot assign '%s' to '%s'"), co.ArgStr(at.Get(a, r.list.get(0)).name), co.ArgStr(type_disp(s, vt)), co.ArgStr(type_disp(s, fty))
+                )
+            )
+            ok = false
+        end
+    end
     repeat r.list.len() in i:
         nid := r.list.get(i)
         nm := at.Get(a, nid).name
@@ -285,7 +442,7 @@ func struct_rules_validate(s &: Sema, a &: at.Ast, did: int):
     repeat rules.len() in i:
         rid := rules.get(i)
         r := at.Get(a, rid)
-        if str.Len(r.name) == 0 or not rule_shape_ok(s, a, did, rid):
+        if str.Len(r.name) == 0 or not rule_shape_ok(s, a, did, rid) or r.a != 0:
             continue
         end
         live.push(rid)
@@ -405,6 +562,45 @@ func rule_quoted_keys(keys: Vector<str>): str:
     ret out
 end
 
+func rule_value_code(s &: Sema, key: str, fty: int): str:
+    if str.Equals(key, "b1"):
+        ret "true"
+    end
+    if str.Equals(key, "b0"):
+        ret "false"
+    end
+    body := rule_value_body(key)
+    c := byte_at(key, 0)
+    if c == 115:
+        ret jd_quote(body)
+    end
+    if c == 101:
+        ret derive_type_spelling(s, fty) + "." + body
+    end
+    ret body
+end
+
+func jd_dec_value_rule(s &: Sema, a &: at.Ast, sym: int, r: at.Node, keys: Vector<str>, flags: Vector<str>, sp: co.SrcSpan): str:
+    name := at.Get(a, r.list.get(0)).name
+    f := scope_lookup_local(s, sym_at(s, sym).members, name)
+    fty := sym_at(s, f).ty
+    want := rule_value_key(s, a, r.a, fty, false)
+    if str.Len(want) == 0:
+        ret ""
+    end
+    code := rule_value_code(s, want, fty)
+    mut out := ""
+    mut i := 1
+    until i < keys.len():
+        flag := jd_flag_for(s, a, sym, flags, keys.get(i), sp)
+        out = out + JIND + "if " + JD_STRICT + " and " + JD_OUT + "." + derive_ident(name) + " == " + code + " and " + flag + " == false:\n"
+        out = out + jd_fail(JIND + JIND, "key '" + keys.get(0) + "' equal to " + rule_value_body(want) + " needs key '" + keys.get(i) + "'", JD_START)
+        out = out + JIND + "end\n"
+        i += 1
+    end
+    ret out
+end
+
 func jd_dec_rule(s &: Sema, a &: at.Ast, sym: int, r: at.Node, flags: Vector<str>, sp: co.SrcSpan): str:
     mut keys := rule_keys(s, a, sym, r, sp)
     defer keys.free()
@@ -412,6 +608,9 @@ func jd_dec_rule(s &: Sema, a &: at.Ast, sym: int, r: at.Node, flags: Vector<str
         ret ""
     end
     mut out := ""
+    if r.a != 0:
+        ret jd_dec_value_rule(s, a, sym, r, keys, flags, sp)
+    end
     if rule_is_needs(r):
         first := jd_flag_for(s, a, sym, flags, keys.get(0), sp)
         mut i := 1
@@ -518,6 +717,31 @@ func js_dep_add(dep_keys &: Vector<str>, dep_vals &: Vector<str>, key: str, want
     dep_vals.push(js_qs(want))
 end
 
+func js_value_rule(s &: Sema, a &: at.Ast, sym: int, r: at.Node, keys: Vector<str>): str:
+    f := scope_lookup_local(s, sym_at(s, sym).members, at.Get(a, r.list.get(0)).name)
+    fty := sym_at(s, f).ty
+    want := rule_value_key(s, a, r.a, fty, false)
+    if str.Len(want) == 0:
+        ret ""
+    end
+    c := byte_at(want, 0)
+    body := rule_value_body(want)
+    mut lit := body
+    if c == 115 or c == 101:
+        lit = js_qs(body)
+    else str.Equals(want, "b1"):
+        lit = "true"
+    else str.Equals(want, "b0"):
+        lit = "false"
+    end
+    mut cond := "{\"properties\":{" + js_qs(keys.get(0)) + ":{\"const\":" + lit + "}}"
+    dflt := rule_value_key(s, a, at.Get(a, sym_at(s, f).decl).a, fty, false)
+    if not str.Equals(dflt, want):
+        cond = cond + ",\"required\":[" + js_qs(keys.get(0)) + "]"
+    end
+    ret "{\"if\":" + cond + "},\"then\":" + js_required_set(keys, 1, keys.len()) + "}"
+end
+
 func js_rules(s &: Sema, a &: at.Ast, sym: int, sp: co.SrcSpan): str:
     decl := rule_decl_of(s, sym)
     if decl == 0:
@@ -542,7 +766,12 @@ func js_rules(s &: Sema, a &: at.Ast, sym: int, sp: co.SrcSpan): str:
         if keys.len() == 0:
             continue
         end
-        if rule_is_needs(r):
+        if r.a != 0:
+            part := js_value_rule(s, a, sym, r, keys)
+            if str.Len(part) > 0:
+                groups = groups + (str.Len(groups) > 0 ? "," : "") + part
+            end
+        else rule_is_needs(r):
             mut k := 1
             until k < keys.len():
                 js_dep_add(dep_keys, dep_vals, keys.get(0), keys.get(k))

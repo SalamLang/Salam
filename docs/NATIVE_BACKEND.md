@@ -1259,7 +1259,7 @@ ret end` at the top of a recursive AST walk) tests that parameter before
   with `--icf` reproduce the reference IR too.
   Windows on Arm also runs the `general` and `stdlib` tests through
   `native-cross-check.sh`'s stage, and
-  `tools/bash/native-windows-webview-check.sh` builds `std/webview` against a
+  `tools/bash/native-windows-webview-check.sh` builds `std/gui/webview` against a
   mock WebView2 loader for AArch64, i686 and x86-64 with both backends and runs
   all six there, the last two under Windows' x86 and x64 emulation.
 - Those native-built compilers are kept for internal use (they are not

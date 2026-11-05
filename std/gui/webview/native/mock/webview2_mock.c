@@ -1,6 +1,6 @@
 /*
  * A stand-in for WebView2Loader.dll and the COM objects behind it, for testing
- * std/webview on Windows without the WebView2 runtime. Its methods are stdcall,
+ * std/gui/webview on Windows without the WebView2 runtime. Its methods are stdcall,
  * as COM methods are on 32-bit Windows, and it checks that the handlers it calls
  * back pop their own arguments there.
  *

@@ -116,7 +116,7 @@ built-in work:
 ### Also fixed (second pass)
 
 - **Raw C function pointers** (`externfunc(...)`, from
-  `x as extern func (i32, i32) i32` and std/webview's COM vtable slot
+  `x as extern func (i32, i32) i32` and std/gui/webview's COM vtable slot
   casts). The LLVM backend had no case for them at all. Unlike a `func(...)`
   closure - env pointer whose first word is the code pointer - an
   externfunc _is_ the code pointer and takes no hidden argument, so it needs

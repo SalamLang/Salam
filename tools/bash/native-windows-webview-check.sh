@@ -1,6 +1,6 @@
 #!/bin/sh
-# Builds a std/webview program for Windows against a mock WebView2Loader.dll
-# (std/webview/native/mock/webview2_mock.c) and runs it under wine, which checks
+# Builds a std/gui/webview program for Windows against a mock WebView2Loader.dll
+# (std/gui/webview/native/mock/webview2_mock.c) and runs it under wine, which checks
 # the COM calling convention both ways: the program's vtable calls, and the
 # handlers the mock calls back, which must pop their own arguments on i686.
 #
@@ -53,7 +53,7 @@ fi
 
 SALAM=$1
 case "$SALAM" in /*) ;; */*) SALAM="$(pwd)/$SALAM" ;; esac
-MOCK="$(cd "$(dirname "$0")/../.." && pwd)/std/webview/native/mock/webview2_mock.c"
+MOCK="$(cd "$(dirname "$0")/../.." && pwd)/std/gui/webview/native/mock/webview2_mock.c"
 STAGE=${NATIVE_WEBVIEW_STAGE:-}
 if [ -n "$STAGE" ]; then
     mkdir -p "$STAGE"

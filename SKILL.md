@@ -1672,7 +1672,7 @@ SubscribeReplier` with `NextMsg(nc, sub, ms)`, `Unsubscribe AutoUnsubscribe`,
   not a server.
 - **`webview`** (desktop windows: `Create SetTitle SetSize SetHTML Navigate Eval Init Run Destroy IsClosed`; `-DSALAM_WEBVIEW_CEF` renders with a
   bundled Chromium instead of the OS webview, see
-  `std/webview/native/BUILD.md`). Put data into the HTML you pass to
+  `std/gui/webview/native/BUILD.md`). Put data into the HTML you pass to
   `SetHTML`; the page cannot call back into Salam, `Eval` right after
   `SetHTML` usually hits the old page, and a failed `Create` returns a window
   that `IsClosed()` already.

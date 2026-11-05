@@ -178,4 +178,4 @@ console. `desktop.LastError()` says why a window could not open at all.
   along with the `agent/salam` test, every package format, and `salam bundle` on
   Windows and macOS themselves.
 - `tools/bash/native-windows-webview-check.sh` tests the Windows backend under
-  wine against the WebView2 mock in `std/webview/native/mock`.
+  wine against the WebView2 mock in `std/gui/webview/native/mock`.

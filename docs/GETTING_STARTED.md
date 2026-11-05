@@ -32,8 +32,12 @@ The fastest way to get `salam` on your machine:
 The installer detects your OS and architecture and adds Salam to your PATH; open a new terminal afterwards.
 
 Options go after `sh -s --`, for example `... | sh -s -- --dir ./bin --version 0.5.0`.
-The shell installer takes `--dir DIR`, `--version X.Y.Z`, `--platform NAME`,
-`--no-modify-path` and `--help`; run it with `--help` for the full list.
+The shell installer takes `--dir DIR`, `--version X.Y.Z`, `--os NAME`, `--arch NAME`,
+`--platform NAME`, `--no-modify-path` and `--help`. It detects your system and
+processor by itself; `--os` (linux, mac, freebsd, openbsd, netbsd, dragonfly) and
+`--arch` (x86_64, i686, aarch64, armhf, riscv64, ppc64le, s390x) pick another
+build, and `--platform` names the exact release file. Run it with `--help` for
+the full list.
 
 **Windows** (PowerShell):
 

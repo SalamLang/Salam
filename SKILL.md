@@ -1046,7 +1046,7 @@ the import path with its dots kept as folders: `str`, `db/sqlite`, `net/http`,
 page opens with short tutorials, sections whose anchor starts with `guide-`
 (for example `/std/net/httpd/#guide-...`, and the guides of `audio` and its
 `wav dsp codec aiff au flac tag music synth midi mp3`, `net/httpd`, `net/httpd/conf`,
-`net/fastcgi`, `db/clickhouse`, `wire`, `net/nats`, `events`, `gui/webview`,
+`net/fastcgi`, `db/clickhouse`, `dependency`, `net/nats`, `events`, `gui/webview`,
 `gui/webview/pack` and `gui/webview/bundle`); read the guide before calling
 the functions. The `/learn/` course on both sites teaches the language only,
 not the libraries.
@@ -1375,9 +1375,9 @@ end
   `.present .value`. Never read `.value` unchecked: on an empty
   `Option<str>` it is a null pointer and printing it segfaults. No `match`
   and no `?` on an Option.
-- **`wire`**: dependency injection, google/wire style. Providers are keyed by a
+- **`dependency`**: dependency injection, google/wire style. Providers are keyed by a
   name you choose (no runtime type identity): `New()`,
-  `Provide(c, "Service", "Repo", Service {}, (cx: wire.Container): ... end)` (the
+  `Provide(c, "Service", "Repo", Service {}, (cx: dependency.Container): ... end)` (the
   second string lists the needs, the value only fixes the type), `Value`,
   `Bind(c, "Store", "MemStore")`, `OnClose(c, name, T {}, (v: T): ... end)`,
   `Build(c)` (returns "" or a missing/duplicate/cycle message), `Get(c, name, out)`

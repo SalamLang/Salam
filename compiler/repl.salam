@@ -75,13 +75,17 @@ const VK_UP := 38
 const VK_DOWN := 40
 
 const TCSAFLUSH := 2
+const TERMIOS_CAP := 128
 const CC_VTIME_IDX := 5
 const CC_VMIN_IDX := 6
-const IFLAG_CLEAR_BITS := 1330
+const CC_VTIME_IDX_BSD := 17
+const CC_VMIN_IDX_BSD := 16
 const IFLAG_KEEP_MASK := 4294965965
-const LFLAG_CLEAR_BITS := 32779
 const LFLAG_KEEP_MASK := 4294934516
+const IFLAG_KEEP_MASK_BSD := 4294966477
+const LFLAG_KEEP_MASK_BSD := 4294965879
 const CFLAG_CS8 := 48
+const CFLAG_CS8_BSD := 768
 
 const RS_PKG := 0
 const RS_IMPORT := 1
@@ -284,22 +288,80 @@ if SALAM_OS_WINDOWS:
         ret line
     end
 else:
+    func tty_cflag_off(): int:
+        if SALAM_OS_MAC: ret 16
+        else:
+            ret 8
+        end
+    end
+
+    func tty_lflag_off(): int:
+        if SALAM_OS_MAC: ret 24
+        else:
+            ret 12
+        end
+    end
+
+    func tty_cc_off(): int:
+        if SALAM_OS_MAC: ret 32
+        else SALAM_OS_BSD: ret 16
+        else:
+            ret 17
+        end
+    end
+
+    func tty_vmin_idx(): int:
+        if SALAM_OS_MAC or SALAM_OS_BSD: ret CC_VMIN_IDX_BSD
+        else:
+            ret CC_VMIN_IDX
+        end
+    end
+
+    func tty_vtime_idx(): int:
+        if SALAM_OS_MAC or SALAM_OS_BSD: ret CC_VTIME_IDX_BSD
+        else:
+            ret CC_VTIME_IDX
+        end
+    end
+
+    func tty_iflag_keep(): i64:
+        if SALAM_OS_MAC or SALAM_OS_BSD: ret IFLAG_KEEP_MASK_BSD
+        else:
+            ret IFLAG_KEEP_MASK
+        end
+    end
+
+    func tty_lflag_keep(): i64:
+        if SALAM_OS_MAC or SALAM_OS_BSD: ret LFLAG_KEEP_MASK_BSD
+        else:
+            ret LFLAG_KEEP_MASK
+        end
+    end
+
+    func tty_cs8(): i64:
+        if SALAM_OS_MAC or SALAM_OS_BSD: ret CFLAG_CS8_BSD
+        else:
+            ret CFLAG_CS8
+        end
+    end
+
     func posix_readline(prompt: str, ok &: bool): str:
         if isatty(0) == 0:
             ret fallback_readline(prompt, ok)
         end
-        orig := mem.Allocate(60 as u64)
+        orig := mem.Allocate(TERMIOS_CAP as u64)
+        mem.Set(orig, 0, TERMIOS_CAP as u64)
         _gt := tcgetattr(0, orig)
-        raw := mem.Allocate(60 as u64)
-        mem.Copy(raw, orig, 60 as u64)
+        raw := mem.Allocate(TERMIOS_CAP as u64)
+        mem.Copy(raw, orig, TERMIOS_CAP as u64)
         iflag_p := raw as u32*
-        cflag_p := ((raw as i64) + 8) as u32*
-        lflag_p := ((raw as i64) + 12) as u32*
-        iflag_p[0] = iflag_p[0] & (IFLAG_KEEP_MASK as u32)
-        cflag_p[0] = cflag_p[0] | (CFLAG_CS8 as u32)
-        lflag_p[0] = lflag_p[0] & (LFLAG_KEEP_MASK as u32)
-        vmin_p := ((raw as i64) + 17 + CC_VMIN_IDX) as i8*
-        vtime_p := ((raw as i64) + 17 + CC_VTIME_IDX) as i8*
+        cflag_p := ((raw as i64) + tty_cflag_off()) as u32*
+        lflag_p := ((raw as i64) + tty_lflag_off()) as u32*
+        iflag_p[0] = iflag_p[0] & (tty_iflag_keep() as u32)
+        cflag_p[0] = cflag_p[0] | (tty_cs8() as u32)
+        lflag_p[0] = lflag_p[0] & (tty_lflag_keep() as u32)
+        vmin_p := ((raw as i64) + tty_cc_off() + tty_vmin_idx()) as i8*
+        vtime_p := ((raw as i64) + tty_cc_off() + tty_vtime_idx()) as i8*
         vmin_p[0] = 1 as i8
         vtime_p[0] = 0 as i8
         _st := tcsetattr(0, TCSAFLUSH, raw)

@@ -1,0 +1,104 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import mem
+import net.tcp
+import str
+import sync
+import tls
+
+const ROUNDS := 800
+const MAX_SIZE := 9000
+
+mut port := 0
+mut ready := sync.NewWaitGroup()
+mut sent_total := 0
+mut echo_total := 0
+mut client_conn := tls.Conn {}
+
+func size_of(i: int): int:
+    ret 1 + (i * 37) % MAX_SIZE
+end
+
+func echo_server():
+    srv := tcp.Bind(0)
+    port = tcp.Port(srv)
+    sync.Done(ready)
+    c := tcp.Accept(srv)
+    cfg := tls.NewServerConfig("tests/fixtures/ssl/server.crt", "tests/fixtures/ssl/server.key")
+    mut conn := tls.WrapServer(c.fd, cfg)
+    buf := mem.Allocate(65536 as u64)
+    until tls.ConnOk(conn):
+        n := tls.ReadBytes(conn, buf, 65536)
+        if n <= 0:
+            break
+        end
+        tls.WriteBytes(conn, buf, n)
+    end
+    mem.Free(buf)
+    tls.Close(conn)
+    tcp.CloseServer(srv)
+end
+
+
+func writer():
+    buf := mem.AllocateZeroed(MAX_SIZE as u64)
+    repeat ROUNDS in i:
+        n := size_of(i)
+        if tls.WriteBytes(client_conn, buf, n) != n:
+            println "write failed: " + tls.ConnError(client_conn)
+            break
+        end
+        sent_total += n
+    end
+    mem.Free(buf)
+end
+
+func run(aes: bool):
+    ready = sync.NewWaitGroup()
+    sync.Add(ready, 1 as i64)
+    s := spawn(echo_server)
+    sync.Wait(ready)
+    mut cfg := tls.NewConfig("localhost")
+    cfg.insecure_skip_verify = true
+    cfg.aes_only = aes
+    client_conn = tls.Dial("127.0.0.1", port, cfg)
+    println tls.CipherName(client_conn)
+    mut want := 0
+    repeat ROUNDS in i:
+        want += size_of(i)
+    end
+    sent_total = 0
+    echo_total = 0
+    w := spawn(writer)
+    buf := mem.Allocate(65536 as u64)
+    until echo_total < want:
+        n := tls.ReadBytes(client_conn, buf, 65536)
+        if n <= 0:
+            println "read failed: " + tls.ConnError(client_conn)
+            break
+        end
+        echo_total += n
+    end
+    mem.Free(buf)
+    join(w)
+    println str.FromInt(echo_total) == str.FromInt(want)
+    tls.Close(client_conn)
+    join(s)
+end
+
+func main:
+    run(false)
+    run(true)
+end

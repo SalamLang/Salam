@@ -323,6 +323,21 @@ func _strptr(s: str): i64:
     ret v as i64
 end
 
+func _w128_div_small(lo: u64, hi: u64, d: u64, ql &: u64, qh &: u64, r &: u64):
+    mask := 4294967295 as u64
+    c3 := hi >> 32
+    q3 := c3 / d
+    c2 := ((c3 % d) << 32) | (hi & mask)
+    q2 := c2 / d
+    c1 := ((c2 % d) << 32) | (lo >> 32)
+    q1 := c1 / d
+    c0 := ((c1 % d) << 32) | (lo & mask)
+    q0 := c0 / d
+    ql = (q1 << 32) | q0
+    qh = (q3 << 32) | q2
+    r = c0 % d
+end
+
 export:
     func salam_str_hash(s: str): u64:
         bp := (s as void*) as i8*
@@ -358,6 +373,197 @@ export:
         else:
             exit(1)
         end
+    end
+    func salam_w128_str(lo: u64, hi: u64, sgn: int): str:
+        mut a := lo
+        mut b := hi
+        neg := sgn != 0 and (hi >> 63) != 0
+        if neg:
+            a = 0 - lo
+            b = (0 - hi) - (lo != 0 ? 1 as u64 : 0 as u64)
+        end
+        if b == 0 and not neg:
+            ret numfmt.FormatUint(a)
+        end
+        buf := mem.MustAllocate(48 as u64) as char*
+        mut i := 47
+        buf[i] = 0 as char
+        until (a | b) != 0 or i == 47:
+            mut piece := 0 as u64
+            _w128_div_small(a, b, 1000000000 as u64, a, b, piece)
+            mut left := 9
+            until left > 0 and (piece != 0 or (a | b) != 0):
+                i -= 1
+                buf[i] = (48 + ((piece % 10) as int)) as char
+                piece = piece / 10
+                left -= 1
+            end
+        end
+        if neg:
+            i -= 1
+            buf[i] = 45 as char
+        end
+        mut j := 0
+        until i <= 47:
+            buf[j] = buf[i]
+            j += 1
+            i += 1
+        end
+        ret buf as str
+    end
+    func salam_w128_divmod(a_lo: u64, a_hi: u64, b_lo: u64, b_hi: u64, mode: int, out: u64*):
+        if (b_lo | b_hi) == 0:
+            _r := salam_div0((mode >> 1) & 1)
+        end
+        sgn := (mode & 1) != 0
+        na := sgn and (a_hi >> 63) != 0
+        nb := sgn and (b_hi >> 63) != 0
+        mut xl := a_lo
+        mut xh := a_hi
+        mut yl := b_lo
+        mut yh := b_hi
+        if na:
+            xl = 0 - a_lo
+            xh = (0 - a_hi) - (a_lo != 0 ? 1 as u64 : 0 as u64)
+        end
+        if nb:
+            yl = 0 - b_lo
+            yh = (0 - b_hi) - (b_lo != 0 ? 1 as u64 : 0 as u64)
+        end
+        mut ql := 0 as u64
+        mut qh := 0 as u64
+        mut rl := 0 as u64
+        mut rh := 0 as u64
+        if yh == 0 and xh == 0:
+            ql = xl / yl
+            rl = xl % yl
+        else yh == 0 and yl <= 4294967295:
+            _w128_div_small(xl, xh, yl, ql, qh, rl)
+        else:
+            mut i := 127
+            until i >= 0:
+                carry := rh >> 63
+                rh = (rh << 1) | (rl >> 63)
+                rl = (rl << 1) | ((i >= 64 ? xh >> (i - 64) : xl >> i) & 1)
+                if carry != 0 or rh > yh or (rh == yh and rl >= yl):
+                    borrow := rl < yl ? 1 as u64 : 0 as u64
+                    rl = rl - yl
+                    rh = rh - yh - borrow
+                    if i >= 64:
+                        qh = qh | ((1 as u64) << (i - 64))
+                    else:
+                        ql = ql | ((1 as u64) << i)
+                    end
+                end
+                i -= 1
+            end
+        end
+        if na != nb:
+            nql := 0 - ql
+            qh = (0 - qh) - (ql != 0 ? 1 as u64 : 0 as u64)
+            ql = nql
+        end
+        if na:
+            nrl := 0 - rl
+            rh = (0 - rh) - (rl != 0 ? 1 as u64 : 0 as u64)
+            rl = nrl
+        end
+        out[0] = ql
+        out[1] = qh
+        out[2] = rl
+        out[3] = rh
+    end
+    func salam_w128_to_f64(lo: u64, hi: u64, sgn: int): f64:
+        mut a := lo
+        mut b := hi
+        neg := sgn != 0 and (hi >> 63) != 0
+        if neg:
+            a = 0 - lo
+            b = (0 - hi) - (lo != 0 ? 1 as u64 : 0 as u64)
+        end
+        mut n := 0
+        until (b >> n) != 0 and n < 64:
+            n += 1
+        end
+        mut kept := a
+        if n == 64:
+            kept = b | (a != 0 ? 1 as u64 : 0 as u64)
+        else n > 0:
+            kept = (b << (64 - n)) | (a >> n) | ((a << (64 - n)) != 0 ? 1 as u64 : 0 as u64)
+        end
+        mut r := kept as f64
+        repeat n:
+            r = r * 2.0
+        end
+        ret neg ? 0.0 - r : r
+    end
+    func salam_w128_to_f32(lo: u64, hi: u64, sgn: int): f32:
+        mut a := lo
+        mut b := hi
+        neg := sgn != 0 and (hi >> 63) != 0
+        if neg:
+            a = 0 - lo
+            b = (0 - hi) - (lo != 0 ? 1 as u64 : 0 as u64)
+        end
+        mut n := 0
+        until (b >> n) != 0 and n < 64:
+            n += 1
+        end
+        mut kept := a
+        if n == 64:
+            kept = b | (a != 0 ? 1 as u64 : 0 as u64)
+        else n > 0:
+            kept = (b << (64 - n)) | (a >> n) | ((a << (64 - n)) != 0 ? 1 as u64 : 0 as u64)
+        end
+        mut r := kept as f32
+        two := 2.0 as f32
+        repeat n:
+            r = r * two
+        end
+        ret neg ? (0.0 as f32) - r : r
+    end
+    func salam_w128_from_f64(f: f64, sgn: int, out: u64*):
+        mut lo := 0 as u64
+        mut hi := 0 as u64
+        if f == f:
+            neg := f < 0.0
+            mag := neg ? 0.0 - f : f
+            if sgn != 0 and mag >= 170141183460469231731687303715884105728.0:
+                lo = neg ? 0 as u64 : ~(0 as u64)
+                hi = neg ? (1 as u64) << 63 : ~(0 as u64) >> 1
+            else sgn == 0 and neg:
+                lo = 0 as u64
+            else mag >= 340282366920938463463374607431768211456.0:
+                lo = ~(0 as u64)
+                hi = ~(0 as u64)
+            else mag >= 1.0:
+                mut e := 0
+                mut m := mag
+                until m >= 18446744073709551616.0:
+                    m = m / 2.0
+                    e += 1
+                end
+                v := m as u64
+                if e == 0:
+                    lo = v
+                else e >= 64:
+                    hi = v << (e - 64)
+                else:
+                    lo = v << e
+                    hi = v >> (64 - e)
+                end
+                if neg:
+                    nl := 0 - lo
+                    hi = (0 - hi) - (lo != 0 ? 1 as u64 : 0 as u64)
+                    lo = nl
+                end
+            end
+        end
+        out[0] = lo
+        out[1] = hi
+    end
+    func salam_w128_hash(lo: u64, hi: u64): u64:
+        ret salam_hash_int(salam_hash_int(hi) ^ lo)
     end
     noret func salam_panic(msg: str):
         printerrln "salam panic: ".concat(msg)

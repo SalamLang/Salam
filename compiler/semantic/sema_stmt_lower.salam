@@ -7,6 +7,7 @@ include tok "../token.salam"
 include at "../ast.salam"
 include lg "../logger.salam"
 include i18 "../i18n.salam"
+include wd "../wide.salam"
 
 func ret_slice_local(s &: Sema, a &: at.Ast, e: int): str:
     if e != 0 and at.KindOf(a, e) == at.AST_IDENTIFIER:
@@ -711,7 +712,7 @@ func check_stmt_body(s &: Sema, a &: at.Ast, nid: int):
         sv.decl = nid
         if n.a != 0:
             av := at.Get(a, n.a)
-            if av.kind == at.AST_LITERAL and av.value_kind == tok.TV_INT:
+            if av.kind == at.AST_LITERAL and av.value_kind == tok.TV_INT and av.value_hi == (0 as u64) and not wide_ts(av.type_str) and not (n.ty != 0 and wide_ts(at.Get(a, n.ty).name)):
                 sv.has_ival = true
                 sv.ival = av.value_int as i64
             end
@@ -859,12 +860,21 @@ func check_stmt_body(s &: Sema, a &: at.Ast, nid: int):
                 end
             end
         end
-        if op_valid and not type_assignable(s, tt, vt):
+        if op_valid and n2.op == tok.TK_ASSIGN and opt_wraps(s, tt, vt):
+            nbo := coerce_to_opt(s, a, tt, at.Get(a, nid).b, vt)
+            mut nvo := at.Get(a, nid)
+            nvo.b = nbo
+            at.Put(a, nid, nvo)
+        else op_valid and not type_assignable(s, tt, vt):
             serr(
                 s, 2, sp, co.Format2(
                     i18.Tr("cannot assign '%s' to '%s'"), co.ArgStr(type_disp(s, vt)), co.ArgStr(type_disp(s, tt))
                 )
             )
+        else op_valid and (n2.op == tok.TK_SHL_EQ or n2.op == tok.TK_SHR_EQ):
+            wide_coerce_shift(s, a, n2.b)
+        else op_valid and (type_is_wide(s, tt) or type_is_wide(s, vt)):
+            wide_coerce(s, a, n2.b, tt)
         else op_valid and n2.op == tok.TK_ASSIGN and tt >= 0 and ty_at(s, tt).kind == TY_DYN and vt >= 0 and ty_at(s, vt).kind != TY_DYN:
             nbd := coerce_to_dyn(s, a, tt, at.Get(a, nid).b, vt)
             mut nvd := at.Get(a, nid)
@@ -1005,6 +1015,7 @@ func check_stmt_body(s &: Sema, a &: at.Ast, nid: int):
         mut iv_ty := TYPE_NONE
         mut iv_fits := true
         mut iv_wide := false
+        wide_no_index(s, a, n5.a, i18.Tr("a repeat bound"))
         repeat_idx_note(s, c5, iv_ty, iv_fits, iv_wide)
         if n5.c != 0:
             e5 := sema_check_expr(s, a, n5.c)
@@ -1015,6 +1026,7 @@ func check_stmt_body(s &: Sema, a &: at.Ast, nid: int):
                     )
                 )
             end
+            wide_no_index(s, a, n5.c, i18.Tr("a repeat bound"))
             repeat_idx_note(s, e5, iv_ty, iv_fits, iv_wide)
         end
         if n5.d != 0:
@@ -1038,6 +1050,7 @@ func check_stmt_body(s &: Sema, a &: at.Ast, nid: int):
                     s, 63, span_of(a, n5.d), i18.Tr("repeat step must be a positive number (the direction comes from the bounds)")
                 )
             end
+            wide_no_index(s, a, n5.d, i18.Tr("a repeat bound"))
             repeat_idx_note(s, st5, iv_ty, iv_fits, iv_wide)
         end
         ivty := repeat_idx_type(s, iv_ty, iv_fits, iv_wide)
@@ -1194,6 +1207,11 @@ func check_stmt_body(s &: Sema, a &: at.Ast, nid: int):
                 serr(
                     s, 49, sp, i18.Tr("cannot return a value from a void function")
                 )
+            else opt_wraps(s, retty, vt7):
+                nao := coerce_to_opt(s, a, retty, at.Get(a, nid).a, vt7)
+                mut nvo7 := at.Get(a, nid)
+                nvo7.a = nao
+                at.Put(a, nid, nvo7)
             else not type_assignable(s, retty, vt7) and not widens_nonneg(s, a, n7.a, retty, vt7):
                 mut inferred := false
                 if s.cur_func != 0:
@@ -1425,7 +1443,7 @@ func sema_check_var_decl(s &: Sema, a &: at.Ast, nid: int): int:
         mut ln := at.Get(a, n.a)
         if ln.op == tok.TK_INT:
             ln.value_kind = tok.TV_FLOAT
-            ln.value_float = ln.value_int as f64
+            ln.value_float = ln.value_hi != (0 as u64) ? wd.ToF64U(wd.Make(ln.value_hi, ln.value_int)) : ln.value_int as f64
             ln.op = tok.TK_FLOAT
             at.Put(a, n.a, ln)
         end
@@ -1492,12 +1510,19 @@ func sema_check_var_decl(s &: Sema, a &: at.Ast, nid: int): int:
     end
     mut t := TYPE_NONE
     if declared >= 0 and initt >= 0:
-        if not type_assignable(s, declared, initt):
+        if opt_wraps(s, declared, initt):
+            nao := coerce_to_opt(s, a, declared, at.Get(a, nid).a, initt)
+            mut nvo := at.Get(a, nid)
+            nvo.a = nao
+            at.Put(a, nid, nvo)
+        else not type_assignable(s, declared, initt):
             serr(
                 s, 2, sp, co.Format3(
                     i18.Tr("cannot assign '%s' to '%s' in declaration of '%s'"), co.ArgStr(type_disp(s, initt)), co.ArgStr(type_disp(s, declared)), co.ArgStr(n.name)
                 ) + alias_note(s, a, n.ty)
             )
+        else:
+            wide_coerce(s, a, at.Get(a, nid).a, declared)
         end
         if ty_at(s, declared).kind == TY_DYN:
             na := coerce_to_dyn(s, a, declared, at.Get(a, nid).a, initt)

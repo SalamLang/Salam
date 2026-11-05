@@ -1,0 +1,672 @@
+package nativegen
+
+import str
+
+include wd "../wide.salam"
+
+func w128_read(g &: Ng, lo &: i64, hi &: i64):
+    skip_ws(g)
+    mut neg := false
+    if cur(g) == 45:
+        neg = true
+        g.p += 1
+    end
+    mut v := wd.Zero()
+    ten := wd.FromU64(10 as u64)
+    until g.p < g.sn and is_dig(g.src[g.p] as int):
+        v = wd.Add(wd.Mul(v, ten), wd.FromU64(((g.src[g.p] as int) - 48) as u64))
+        g.p += 1
+    end
+    if neg:
+        v = wd.Neg(v)
+    end
+    lo = v.lo as i64
+    hi = v.hi as i64
+end
+
+func w128_const(g &: Ng, ty: int): int:
+    mut lo := 0 as i64
+    mut hi := 0 as i64
+    w128_read(g, lo, hi)
+    v := new_val(g, VK_INT, ty, lo)
+    g.w128_hi.put(v, hi)
+    ret v
+end
+
+func wl_c(g &: Ng, v: i64): int:
+    ret const_int(g, T_I64, v)
+end
+
+func wl_pair(g &: Ng, l &: Lg, v: int, lo &: int, hi &: int):
+    lg_grow(g, l)
+    if v < 0:
+        lo = wl_c(g, 0 as i64)
+        hi = lo
+        ret
+    end
+    if l.lo[v] >= 0:
+        lo = l.lo[v]
+        hi = l.hi[v]
+        ret
+    end
+    k := g.v_kind[v]
+    if k == VK_INT:
+        lo = wl_c(g, g.v_i[v])
+        hi = wl_c(g, g.w128_hi.has(v) ? g.w128_hi.get(v) : g.v_i[v] >> (63 as i64))
+        lg_set(g, l, v, lo, hi)
+        ret
+    end
+    lo = wl_c(g, 0 as i64)
+    hi = lo
+    if k == VK_UNDEF:
+        lo = new_val(g, VK_UNDEF, T_I64, 0 as i64)
+        hi = lo
+    else k != VK_ZERO:
+        fail(g, "native backend: 128-bit value without halves in " + tab_str(g.syms, g.f_sym) + " k" + str_of_int(k) + " op" + str_of_int(k == VK_INS ? g.i_op[g.v_def[v]] : 0 - 1))
+    end
+    lg_set(g, l, v, lo, hi)
+end
+
+func wl_addr8(g &: Ng, at: int, base: int): int:
+    r := lg_ins(g, at, OP_ADDR, T_PTR, base, 0 - 1)
+    d := g.v_def[r]
+    g.i_x[d] = 1
+    g.i_d[d] = 8 as i64
+    ret r
+end
+
+func wl_shift_const(g &: Ng, at: int, op: int, al: int, ah: int, c: int, lo &: int, hi &: int):
+    n := c & 127
+    if n == 0:
+        lo = al
+        hi = ah
+        ret
+    end
+    if op == OP_SHL:
+        if n >= 64:
+            lo = wl_c(g, 0 as i64)
+            hi = n == 64 ? al : lg_ins(g, at, OP_SHL, T_I64, al, wl_c(g, (n - 64) as i64))
+            ret
+        end
+        lo = lg_ins(g, at, OP_SHL, T_I64, al, wl_c(g, n as i64))
+        t1 := lg_ins(g, at, OP_SHL, T_I64, ah, wl_c(g, n as i64))
+        t2 := lg_ins(g, at, OP_LSHR, T_I64, al, wl_c(g, (64 - n) as i64))
+        hi = lg_ins(g, at, OP_OR, T_I64, t1, t2)
+        ret
+    end
+    if n >= 64:
+        if op == OP_LSHR:
+            hi = wl_c(g, 0 as i64)
+        else:
+            hi = lg_ins(g, at, OP_ASHR, T_I64, ah, wl_c(g, 63 as i64))
+        end
+        lo = n == 64 ? ah : lg_ins(g, at, op, T_I64, ah, wl_c(g, (n - 64) as i64))
+        ret
+    end
+    hi = lg_ins(g, at, op, T_I64, ah, wl_c(g, n as i64))
+    u1 := lg_ins(g, at, OP_LSHR, T_I64, al, wl_c(g, n as i64))
+    u2 := lg_ins(g, at, OP_SHL, T_I64, ah, wl_c(g, (64 - n) as i64))
+    lo = lg_ins(g, at, OP_OR, T_I64, u1, u2)
+end
+
+func wl_shift_var(g &: Ng, at: int, op: int, al: int, ah: int, cnt: int, lo &: int, hi &: int):
+    n := lg_ins(g, at, OP_AND, T_I64, cnt, wl_c(g, 63 as i64))
+    big := lg_ins(g, at, OP_AND, T_I64, cnt, wl_c(g, 64 as i64))
+    is_big := lg_icmp(g, at, CC_NE, big, wl_c(g, 0 as i64))
+    inv := lg_ins(g, at, OP_XOR, T_I64, n, wl_c(g, 63 as i64))
+    if op == OP_SHL:
+        l1 := lg_ins(g, at, OP_SHL, T_I64, al, n)
+        c1 := lg_ins(g, at, OP_LSHR, T_I64, al, wl_c(g, 1 as i64))
+        c2 := lg_ins(g, at, OP_LSHR, T_I64, c1, inv)
+        h0 := lg_ins(g, at, OP_SHL, T_I64, ah, n)
+        h1 := lg_ins(g, at, OP_OR, T_I64, h0, c2)
+        lo = lg_sel(g, at, is_big, wl_c(g, 0 as i64), l1)
+        hi = lg_sel(g, at, is_big, l1, h1)
+        ret
+    end
+    h2 := lg_ins(g, at, op, T_I64, ah, n)
+    c3 := lg_ins(g, at, OP_SHL, T_I64, ah, wl_c(g, 1 as i64))
+    c4 := lg_ins(g, at, OP_SHL, T_I64, c3, inv)
+    l0 := lg_ins(g, at, OP_LSHR, T_I64, al, n)
+    l2 := lg_ins(g, at, OP_OR, T_I64, l0, c4)
+    fill := op == OP_LSHR ? wl_c(g, 0 as i64) : lg_ins(g, at, OP_ASHR, T_I64, ah, wl_c(g, 63 as i64))
+    lo = lg_sel(g, at, is_big, h2, l2)
+    hi = lg_sel(g, at, is_big, fill, h2)
+end
+
+func wl_mulhu(g &: Ng, at: int, a: int, b: int): int:
+    if g.wsz == 8:
+        ret lg_ins(g, at, OP_MULHU, T_I64, a, b)
+    end
+    mask := wl_c(g, 4294967295 as i64)
+    thirty2 := wl_c(g, 32 as i64)
+    al := lg_ins(g, at, OP_AND, T_I64, a, mask)
+    ah := lg_ins(g, at, OP_LSHR, T_I64, a, thirty2)
+    bl := lg_ins(g, at, OP_AND, T_I64, b, mask)
+    bh := lg_ins(g, at, OP_LSHR, T_I64, b, thirty2)
+    ll := lg_ins(g, at, OP_MUL, T_I64, al, bl)
+    lh := lg_ins(g, at, OP_MUL, T_I64, al, bh)
+    hl := lg_ins(g, at, OP_MUL, T_I64, ah, bl)
+    hh := lg_ins(g, at, OP_MUL, T_I64, ah, bh)
+    m0 := lg_ins(g, at, OP_LSHR, T_I64, ll, thirty2)
+    m1 := lg_ins(g, at, OP_AND, T_I64, lh, mask)
+    m2 := lg_ins(g, at, OP_AND, T_I64, hl, mask)
+    mid := lg_ins(g, at, OP_ADD, T_I64, lg_ins(g, at, OP_ADD, T_I64, m0, m1), m2)
+    h1 := lg_ins(g, at, OP_LSHR, T_I64, lh, thirty2)
+    h2 := lg_ins(g, at, OP_LSHR, T_I64, hl, thirty2)
+    h3 := lg_ins(g, at, OP_LSHR, T_I64, mid, thirty2)
+    ret lg_ins(g, at, OP_ADD, T_I64, lg_ins(g, at, OP_ADD, T_I64, lg_ins(g, at, OP_ADD, T_I64, hh, h1), h2), h3)
+end
+
+func wl_slot(g &: Ng, words: int): int:
+    b0 := g.b_rpo[0]
+    a := ins_new(g, OP_ALLOCA, T_PTR)
+    g.i_x[a] = T_I64
+    g.i_d[a] = words as i64
+    first := g.b_first[b0]
+    ins_before(g, first, a)
+    ret new_res(g, a)
+end
+
+func wl_divmod(g &: Ng, l &: Lg, i: int, op: int, a: int, b: int, lo &: int, hi &: int):
+    mut al := 0
+    mut ah := 0
+    mut bl := 0
+    mut bh := 0
+    wl_pair(g, l, a, al, ah)
+    wl_pair(g, l, b, bl, bh)
+    slot := wl_slot(g, 4)
+    sgn := op == OP_SDIV or op == OP_SREM
+    is_mod := op == OP_SREM or op == OP_UREM
+    mode := (sgn ? 1 : 0) + (is_mod ? 2 : 0)
+    mut args := Vector {} as Vector<int>
+    args.push(al)
+    args.push(ah)
+    args.push(bl)
+    args.push(bh)
+    args.push(const_int(g, T_I32, mode as i64))
+    args.push(slot)
+    mut hz := 0
+    _r := lg_call(g, i, "salam_w128_divmod", args, T_VOID, hz)
+    args.free()
+    base := is_mod ? wl_addr8(g, i, wl_addr8(g, i, slot)) : slot
+    lo = lg_load(g, i, base, T_I64, i)
+    hi = lg_load(g, i, wl_addr8(g, i, base), T_I64, i)
+end
+
+func wl_ext_to64(g &: Ng, at: int, v: int, signed: bool): int:
+    t := g.v_ty[v]
+    if t == T_I64:
+        ret v
+    end
+    ret lg_cast(g, at, signed ? OP_SEXT : OP_ZEXT, T_I64, v, t)
+end
+
+func wl_sym_external(g &: Ng, fv: int): bool:
+    if fv < 0 or g.v_kind[fv] != VK_GLB:
+        ret false
+    end
+    s := g.v_def[fv]
+    ret not (s < g.sy_body.len() and g.sy_body[s])
+end
+
+func wl_is_int_class(g &: Ng, v: int): bool:
+    if v < 0:
+        ret false
+    end
+    t := g.v_ty[v]
+    ret t != T_F32 and t != T_F64 and not is_vec(g, t)
+end
+
+func wl_cabi_pad(g &: Ng, ints: int, vals &: Vector<int>, fls &: Vector<int>, aux &: Vector<int>, hole &: int):
+    mut pad := false
+    if g.arch == NG_ARCH_A64 and ints % 2 == 1:
+        pad = true
+    end
+    if g.arch == NG_ARCH_X64 and ints == 5:
+        hole = vals.len()
+        pad = true
+    end
+    if pad:
+        vals.push(new_val(g, VK_UNDEF, T_I64, 0 as i64))
+        fls.push(0)
+        aux.push(0 - 1)
+    end
+end
+
+func wl_fix_call(g &: Ng, l &: Lg, i: int):
+    ps := g.i_ps[i]
+    n := g.i_pcount[i]
+    wide_ret := g.i_ty[i] == T_I128
+    mut any := wide_ret
+    repeat n in k:
+        v := g.pool[ps + 3 * k]
+        if v >= 0 and g.v_ty[v] == T_I128:
+            any = true
+        end
+    end
+    if not any:
+        ret
+    end
+    ext := wl_sym_external(g, g.i_a[i])
+    if ext and (g.wsz != 8 or g.os == NG_OS_WINDOWS):
+        fail(g, "native backend: this target has no C ABI for a 128-bit integer argument or result")
+        ret
+    end
+    mut vals := Vector {} as Vector<int>
+    mut fls := Vector {} as Vector<int>
+    mut aux := Vector {} as Vector<int>
+    mut slot := 0 - 1
+    if wide_ret and not ext:
+        slot = wl_slot(g, 2)
+        vals.push(slot)
+        fls.push(0)
+        aux.push(0 - 1)
+    end
+    mut ints := 0
+    mut hole := 0 - 1
+    repeat n in k2:
+        v2 := g.pool[ps + 3 * k2]
+        if v2 >= 0 and g.v_ty[v2] == T_I128:
+            if ext:
+                wl_cabi_pad(g, ints, vals, fls, aux, hole)
+                if (g.arch == NG_ARCH_A64 and ints % 2 == 1) or hole >= 0:
+                    ints += 1
+                end
+            end
+            mut lo := 0
+            mut hi := 0
+            wl_pair(g, l, v2, lo, hi)
+            vals.push(lo)
+            vals.push(hi)
+            fls.push(0)
+            fls.push(0)
+            aux.push(0 - 1)
+            aux.push(0 - 1)
+            ints += 2
+        else ext and hole >= 0 and wl_is_int_class(g, v2):
+            vals[hole] = v2
+            fls[hole] = g.pool[ps + 3 * k2 + 1]
+            aux[hole] = g.pool[ps + 3 * k2 + 2]
+            hole = 0 - 1
+        else:
+            if wl_is_int_class(g, v2):
+                ints += 1
+            end
+            vals.push(v2)
+            fls.push(g.pool[ps + 3 * k2 + 1])
+            aux.push(g.pool[ps + 3 * k2 + 2])
+        end
+    end
+    g.i_ps[i] = g.pool.len()
+    g.i_pcount[i] = vals.len()
+    repeat vals.len() in k3:
+        g.pool.push(vals[k3])
+        g.pool.push(fls[k3])
+        g.pool.push(aux[k3])
+    end
+    vals.free()
+    fls.free()
+    aux.free()
+    if not wide_ret:
+        ret
+    end
+    r := g.i_res[i]
+    nx := g.i_next[i]
+    if ext:
+        g.i_ty[i] = T_I64
+        nr := new_val(g, VK_INS, T_I64, 0 as i64)
+        g.v_def[nr] = i
+        g.i_res[i] = nr
+        hi2 := lg_ins(g, nx, OP_RETHI, T_I64, 0 - 1, 0 - 1)
+        if r >= 0:
+            lg_set(g, l, r, nr, hi2)
+        end
+        ret
+    end
+    g.i_ty[i] = T_VOID
+    g.i_res[i] = 0 - 1
+    if r >= 0:
+        rl := lg_ins(g, nx, OP_LOAD, T_I64, slot, 0 - 1)
+        rh := lg_ins(g, nx, OP_LOAD, T_I64, wl_addr8(g, nx, slot), 0 - 1)
+        lg_set(g, l, r, rl, rh)
+    end
+end
+
+func wl_split_args(g &: Ng, l &: Lg):
+    mut any := g.f_ret == T_I128
+    each v0 in g.f_args:
+        if v0 >= 0 and g.v_ty[v0] == T_I128:
+            any = true
+        end
+    end
+    if not any:
+        ret
+    end
+    g.f_w128 = true
+    if g.f_cabi:
+        fail(g, "native backend: a C-callable function cannot take or return a 128-bit integer on this backend: " + tab_str(g.syms, g.f_sym))
+        ret
+    end
+    mut na := Vector {} as Vector<int>
+    mut nf := Vector {} as Vector<int>
+    mut pos := 0
+    if g.f_ret == T_I128:
+        g.w128_ret = new_val(g, VK_ARG, T_PTR, 0 as i64)
+        na.push(g.w128_ret)
+        nf.push(0)
+        pos = 1
+        g.f_ret = T_VOID
+    end
+    repeat g.f_args.len() in k:
+        v := g.f_args[k]
+        fl := k < g.f_argf.len() ? g.f_argf[k] : 0
+        if v >= 0 and g.v_ty[v] == T_I128:
+            lo := new_val(g, VK_ARG, T_I64, pos as i64)
+            hi := new_val(g, VK_ARG, T_I64, (pos + 1) as i64)
+            lg_set(g, l, v, lo, hi)
+            na.push(lo)
+            na.push(hi)
+            nf.push(0)
+            nf.push(0)
+            pos += 2
+        else:
+            if v >= 0:
+                g.v_i[v] = pos as i64
+            end
+            na.push(v)
+            nf.push(fl)
+            pos += 1
+        end
+    end
+    g.f_args.clear()
+    g.f_argf.clear()
+    each a in na:
+        g.f_args.push(a)
+    end
+    each f in nf:
+        g.f_argf.push(f)
+    end
+    na.free()
+    nf.free()
+end
+
+func wl_one(g &: Ng, l &: Lg, i: int):
+    op := g.i_op[i]
+    ty := g.i_ty[i]
+    r := g.i_res[i]
+    a := g.i_a[i]
+    b := g.i_b[i]
+    w := ty == T_I128
+    if op == OP_CALL:
+        wl_fix_call(g, l, i)
+        ret
+    end
+    if op == OP_RET:
+        if a >= 0 and g.v_ty[a] == T_I128:
+            mut rl := 0
+            mut rh := 0
+            wl_pair(g, l, a, rl, rh)
+            lg_store(g, i, rl, g.w128_ret, i)
+            lg_store(g, i, rh, wl_addr8(g, i, g.w128_ret), i)
+            g.i_a[i] = 0 - 1
+            g.i_ty[i] = T_VOID
+        end
+        ret
+    end
+    if op == OP_STORE:
+        if a >= 0 and g.v_ty[a] == T_I128:
+            mut sl := 0
+            mut sh := 0
+            wl_pair(g, l, a, sl, sh)
+            lg_store(g, i, sl, b, i)
+            lg_store(g, i, sh, wl_addr8(g, i, b), i)
+            ins_unlink(g, i)
+        end
+        ret
+    end
+    if op == OP_ICMP:
+        if a >= 0 and g.v_ty[a] == T_I128:
+            mut al := 0
+            mut ah := 0
+            mut bl := 0
+            mut bh := 0
+            wl_pair(g, l, a, al, ah)
+            wl_pair(g, l, b, bl, bh)
+            pred := g.i_x[i]
+            if pred == CC_EQ or pred == CC_NE:
+                x1 := lg_ins(g, i, OP_XOR, T_I64, al, bl)
+                x2 := lg_ins(g, i, OP_XOR, T_I64, ah, bh)
+                o := lg_ins(g, i, OP_OR, T_I64, x1, x2)
+                replace_res(g, i, lg_icmp(g, i, pred, o, wl_c(g, 0 as i64)))
+                ret
+            end
+            eqh := lg_icmp(g, i, CC_EQ, ah, bh)
+            lc := lg_icmp(g, i, lg_unsigned(pred), al, bl)
+            hc := lg_icmp(g, i, lg_strict(pred), ah, bh)
+            replace_res(g, i, lg_sel(g, i, eqh, lc, hc))
+        end
+        ret
+    end
+    if op == OP_INSV:
+        if b >= 0 and g.v_ty[b] == T_I128:
+            mut vl := 0
+            mut vh := 0
+            wl_pair(g, l, b, vl, vh)
+            i1 := lg_ins(g, i, OP_INSV, ty, a, vl)
+            g.i_x[g.v_def[i1]] = T_I64
+            g.i_d[g.v_def[i1]] = g.i_d[i]
+            i2 := lg_ins(g, i, OP_INSV, ty, i1, vh)
+            g.i_x[g.v_def[i2]] = T_I64
+            g.i_d[g.v_def[i2]] = g.i_d[i] + (8 as i64)
+            replace_res(g, i, i2)
+        end
+        ret
+    end
+    if op == OP_TRUNC and a >= 0 and g.v_ty[a] == T_I128:
+        mut tl := 0
+        mut th := 0
+        wl_pair(g, l, a, tl, th)
+        if ty == T_I64:
+            replace_res(g, i, tl)
+        else:
+            replace_res(g, i, lg_cast(g, i, OP_TRUNC, ty, tl, T_I64))
+        end
+        ret
+    end
+    if not w or r < 0:
+        ret
+    end
+    mut lo := 0 - 1
+    mut hi := 0 - 1
+    switch op:
+        OP_ADD, OP_SUB:
+            mut al2 := 0
+            mut ah2 := 0
+            mut bl2 := 0
+            mut bh2 := 0
+            wl_pair(g, l, a, al2, ah2)
+            wl_pair(g, l, b, bl2, bh2)
+            lo = lg_ins(g, i, op, T_I64, al2, bl2)
+            h0 := lg_ins(g, i, op, T_I64, ah2, bh2)
+            mut cy := 0
+            if op == OP_ADD:
+                cy = lg_icmp(g, i, CC_ULT, lo, al2)
+            else:
+                cy = lg_icmp(g, i, CC_ULT, al2, bl2)
+            end
+            cz := lg_cast(g, i, OP_ZEXT, T_I64, cy, T_I1)
+            hi = lg_ins(g, i, op, T_I64, h0, cz)
+            break
+        end
+        OP_AND, OP_OR, OP_XOR:
+            mut al3 := 0
+            mut ah3 := 0
+            mut bl3 := 0
+            mut bh3 := 0
+            wl_pair(g, l, a, al3, ah3)
+            wl_pair(g, l, b, bl3, bh3)
+            lo = lg_ins(g, i, op, T_I64, al3, bl3)
+            hi = lg_ins(g, i, op, T_I64, ah3, bh3)
+            break
+        end
+        OP_SHL, OP_LSHR, OP_ASHR:
+            mut al4 := 0
+            mut ah4 := 0
+            wl_pair(g, l, a, al4, ah4)
+            if b >= 0 and g.v_kind[b] == VK_INT:
+                wl_shift_const(g, i, op, al4, ah4, (g.v_i[b] as int), lo, hi)
+            else:
+                mut bl4 := 0
+                mut bh4 := 0
+                wl_pair(g, l, b, bl4, bh4)
+                wl_shift_var(g, i, op, al4, ah4, bl4, lo, hi)
+            end
+            break
+        end
+        OP_MUL:
+            mut ml := 0
+            mut mh := 0
+            mut nl := 0
+            mut nh := 0
+            wl_pair(g, l, a, ml, mh)
+            wl_pair(g, l, b, nl, nh)
+            lo = lg_ins(g, i, OP_MUL, T_I64, ml, nl)
+            mut h := wl_mulhu(g, i, ml, nl)
+            if not lg_zero(g, nh) and not lg_zero(g, ml):
+                h = lg_ins(g, i, OP_ADD, T_I64, h, lg_ins(g, i, OP_MUL, T_I64, ml, nh))
+            end
+            if not lg_zero(g, mh) and not lg_zero(g, nl):
+                h = lg_ins(g, i, OP_ADD, T_I64, h, lg_ins(g, i, OP_MUL, T_I64, mh, nl))
+            end
+            hi = h
+            break
+        end
+        OP_SDIV, OP_UDIV, OP_SREM, OP_UREM:
+            wl_divmod(g, l, i, op, a, b, lo, hi)
+            break
+        end
+        OP_SEXT, OP_ZEXT:
+            lo = wl_ext_to64(g, i, a, op == OP_SEXT)
+            if op == OP_SEXT:
+                hi = lg_ins(g, i, OP_ASHR, T_I64, lo, wl_c(g, 63 as i64))
+            else:
+                hi = wl_c(g, 0 as i64)
+            end
+            break
+        end
+        OP_LOAD:
+            lo = lg_load(g, i, a, T_I64, i)
+            hi = lg_load(g, i, wl_addr8(g, i, a), T_I64, i)
+            break
+        end
+        OP_SELECT:
+            mut xl := 0
+            mut xh := 0
+            mut yl := 0
+            mut yh := 0
+            wl_pair(g, l, b, xl, xh)
+            wl_pair(g, l, g.i_c[i], yl, yh)
+            lo = lg_sel(g, i, a, xl, yl)
+            hi = lg_sel(g, i, a, xh, yh)
+            break
+        end
+        OP_COPY:
+            wl_pair(g, l, a, lo, hi)
+            break
+        end
+        OP_EXTV:
+            lo = lg_ins(g, i, OP_EXTV, T_I64, a, 0 - 1)
+            g.i_d[g.v_def[lo]] = g.i_d[i]
+            hi = lg_ins(g, i, OP_EXTV, T_I64, a, 0 - 1)
+            g.i_d[g.v_def[hi]] = g.i_d[i] + (8 as i64)
+            break
+        end
+        OP_PHI:
+            np1 := ins_new(g, OP_PHI, T_I64)
+            np2 := ins_new(g, OP_PHI, T_I64)
+            g.i_pcount[np1] = g.i_pcount[i]
+            g.i_pcount[np2] = g.i_pcount[i]
+            ins_before(g, i, np1)
+            ins_before(g, i, np2)
+            lo = new_res(g, np1)
+            hi = new_res(g, np2)
+            l.ph_old.push(i)
+            l.ph_lo.push(np1)
+            l.ph_hi.push(np2)
+            lg_set(g, l, r, lo, hi)
+            ret
+        end
+        else:
+            fail(g, "native backend: cannot split 128-bit " + tab_str(g.syms, g.f_sym) + " op " + str_of_int(op))
+            ret
+        end
+    end
+    lg_set(g, l, r, lo, hi)
+    ins_unlink(g, i)
+end
+
+func legalize128(g &: Ng):
+    g.f_w128 = false
+    if not g.w128_seen:
+        ret
+    end
+    mut l := Lg {}
+    lg_grow(g, l)
+    build_dom(g)
+    wl_split_args(g, l)
+    if not g.ok:
+        ret
+    end
+    mut order := Vector {} as Vector<int>
+    each b in g.b_rpo:
+        mut i := g.b_first[b]
+        until i >= 0:
+            order.push(i)
+            i = g.i_next[i]
+        end
+    end
+    repl_grow(g)
+    each i2 in order:
+        if g.i_op[i2] == OP_NOP:
+            continue
+        end
+        remap_ins(g, i2)
+        wl_one(g, l, i2)
+        repl_grow(g)
+        if not g.ok:
+            break
+        end
+    end
+    repeat l.ph_old.len() in k:
+        old := l.ph_old[k]
+        ps := g.i_ps[old]
+        n := g.i_pcount[old]
+        p1 := l.ph_lo[k]
+        p2 := l.ph_hi[k]
+        g.i_ps[p1] = g.pool.len()
+        repeat n in q:
+            mut lo := 0
+            mut hi := 0
+            wl_pair(g, l, resolve(g, g.pool[ps + 2 * q]), lo, hi)
+            g.pool.push(lo)
+            g.pool.push(g.pool[ps + 2 * q + 1])
+        end
+        g.i_ps[p2] = g.pool.len()
+        repeat n in q2:
+            mut lo2 := 0
+            mut hi2 := 0
+            wl_pair(g, l, resolve(g, g.pool[ps + 2 * q2]), lo2, hi2)
+            g.pool.push(hi2)
+            g.pool.push(g.pool[ps + 2 * q2 + 1])
+        end
+        ins_unlink(g, old)
+    end
+    remap_all(g)
+    order.free()
+    l.lo.free()
+    l.hi.free()
+    l.ph_old.free()
+    l.ph_lo.free()
+    l.ph_hi.free()
+end

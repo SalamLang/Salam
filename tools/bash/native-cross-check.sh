@@ -8,6 +8,7 @@
 # relative path. Output is compared the way run-tests.sh compares it, ignoring
 # trailing newlines.
 #
+# stdlib/jit_demo and stdlib/jit_calls_demo need dlopen, which a static musl program cannot do.
 # stdlib/os_api is skipped under qemu, which prints a message when the forked child aborts.
 # Some tests cannot pass on a cross target and are skipped: they need -D flags
 # from their test harness, a database library, or a trapping integer division
@@ -49,10 +50,13 @@ aarch64* | arm64* | riscv*) ;;
 *) DEFAULT_SKIP="$DEFAULT_SKIP general/div_zero_compound general/div_zero_runtime general/mod_zero_runtime_i64" ;;
 esac
 case "$TRIPLE" in
-i686* | i386* | arm-* | armv7*) DEFAULT_SKIP="$DEFAULT_SKIP types/size_type llvm/size_type general/extern_builtin_protos" ;;
+i686* | i386* | arm-* | armv7*) DEFAULT_SKIP="$DEFAULT_SKIP types/size_type llvm/size_type general/extern_builtin_protos general/extern_int128" ;;
 esac
 case "$TRIPLE" in
-*windows*) DEFAULT_SKIP="$DEFAULT_SKIP general/extern_builtin_protos" ;;
+*windows*) DEFAULT_SKIP="$DEFAULT_SKIP general/extern_builtin_protos general/extern_int128" ;;
+esac
+case "$TRIPLE" in
+*musl*) DEFAULT_SKIP="$DEFAULT_SKIP stdlib/jit_demo stdlib/jit_calls_demo" ;;
 esac
 case "$RUNNER" in
 qemu*) DEFAULT_SKIP="$DEFAULT_SKIP stdlib/os_api" ;;

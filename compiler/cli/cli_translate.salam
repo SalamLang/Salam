@@ -36,11 +36,11 @@ const K_TR_METHOD_COUNT := 38
 const K_TR_CTX_COUNT := 5
 
 k_tr_type := [
-    "تهی", "void", "منطقی", "bool", "نویسه", "char", "رشته", "str", "یونیکد", "uchar", "صحیح۸", "i8", "صحیح۱۶", "i16", "صحیح۳۲", "i32", "صحیح", "int", "صحیح۶۴", "i64", "طبیعی۸", "u8", "طبیعی۱۶", "u16", "طبیعی۳۲", "u32", "طبیعی", "uint", "طبیعی۶۴", "u64", "اندازه مثبت", "usize", "اندازه", "size", "اعشار۳۲", "f32", "اعشار", "float", "اعشار۶۴", "f64", "وکتور", "Vector", "نگاشت", "HashMap", "پیمایشگرنگاشت", "MapIter", "پرونده", "File", "گوناگون", "Variant"
+    "تهی", "void", "منطقی", "bool", "نویسه", "char", "رشته", "str", "یونیکد", "uchar", "صحیح۸", "i8", "صحیح۱۶", "i16", "صحیح۳۲", "i32", "صحیح", "int", "صحیح۶۴", "i64", "طبیعی۸", "u8", "طبیعی۱۶", "u16", "طبیعی۳۲", "u32", "طبیعی", "uint", "طبیعی۶۴", "u64", "اندازه مثبت", "usize", "اندازه", "size", "اعشار۳۲", "f32", "اعشار", "float", "اعشار۶۴", "f64", "صحیح۱۲۸", "i128", "طبیعی۱۲۸", "u128", "وکتور", "Vector", "نگاشت", "HashMap", "پیمایشگرنگاشت", "MapIter", "پرونده", "File", "گوناگون", "Variant"
 ]
 
 k_tr_type_alt := [
-    "صحیح8", "i8", "صحیح16", "i16", "صحیح32", "i32", "صحیح64", "i64", "طبیعی8", "u8", "طبیعی16", "u16", "طبیعی32", "u32", "طبیعی64", "u64", "اعشار32", "f32", "اعشار64", "f64"
+    "صحیح8", "i8", "صحیح16", "i16", "صحیح32", "i32", "صحیح64", "i64", "طبیعی8", "u8", "طبیعی16", "u16", "طبیعی32", "u32", "طبیعی64", "u64", "اعشار32", "f32", "اعشار64", "f64", "صحیح128", "i128", "طبیعی128", "u128"
 ]
 
 k_tr_method := [
@@ -164,6 +164,86 @@ func tr_ctx_word_here(targetpack: int, name: str, prev_kind: int, next_kind: int
     end
     at_line_start := prev_kind == tok.TK_STMT_END or prev_kind == tok.TK_KW_PUB or prev_kind == tok.TK_COLON
     ret at_line_start and next_kind == tok.TK_IDENT and (str.Equals(mapped, "use") or str.Equals(mapped, "شامل"))
+end
+
+func tr_struct_header_at(toks: tok.TokenStream, i: int, n: int): bool:
+    k := tok.StreamAt(toks, i).kind
+    ret k == tok.TK_KW_STRUCT or (k == tok.TK_KW_PUB and i + 1 < n and tok.StreamAt(toks, i + 1).kind == tok.TK_KW_STRUCT)
+end
+
+func tr_in_struct_body(toks: tok.TokenStream, i: int, n: int): bool:
+    t := tok.StreamAt(toks, i)
+    col := t.begin_col as int
+    mut cand := i
+    mut j := i - 1
+    until j >= 0:
+        tj := tok.StreamAt(toks, j)
+        if tj.kind != tok.TK_STMT_END and tj.kind != tok.TK_COMMENT_LINE and tj.kind != tok.TK_COMMENT_BLOCK:
+            c := tok.StreamAt(toks, cand)
+            if tj.begin_line != c.begin_line and cand != i and (c.begin_line == t.begin_line or (c.begin_col as int) < col):
+                ret tr_struct_header_at(toks, cand, n)
+            end
+            cand = j
+        end
+        j -= 1
+    end
+    c0 := tok.StreamAt(toks, cand)
+    ret cand != i and (c0.begin_line == t.begin_line or (c0.begin_col as int) < col) and tr_struct_header_at(toks, cand, n)
+end
+
+func tr_rule_start(toks: tok.TokenStream, i: int, n: int, needs_at &: int, group_at &: int, group_last &: int): bool:
+    if not lp.RuleWordIsHead(tok.StreamAt(toks, i).lexeme) or i + 1 >= n:
+        ret false
+    end
+    k1 := tok.StreamAt(toks, i + 1).kind
+    if k1 != tok.TK_IDENT and not tok.IsKeyword(k1):
+        ret false
+    end
+    mut f := i + 2
+    until f < n and tok.StreamAt(toks, f).kind == tok.TK_IDENT:
+        f += 1
+    end
+    if (f < n and tok.StreamAt(toks, f).kind == tok.TK_COLON) or not tr_in_struct_body(toks, i, n):
+        ret false
+    end
+    mut words := k1 == tok.TK_IDENT ? tok.StreamAt(toks, i + 1).lexeme : ""
+    mut j := i + 2
+    until j < n and tok.StreamAt(toks, j).kind == tok.TK_IDENT:
+        w := tok.StreamAt(toks, j).lexeme
+        if lp.RuleWordIsNeeds(w):
+            needs_at = j
+            ret true
+        end
+        words = words + " " + w
+        j += 1
+    end
+    if j < n and tok.StreamAt(toks, j).kind == tok.TK_EQ:
+        until j < n and tok.StreamAt(toks, j).kind != tok.TK_STMT_END:
+            jt := tok.StreamAt(toks, j)
+            if jt.kind == tok.TK_IDENT and lp.RuleWordIsNeeds(jt.lexeme):
+                needs_at = j
+                ret true
+            end
+            j += 1
+        end
+        ret false
+    end
+    if j >= n or tok.StreamAt(toks, j).kind != tok.TK_LPAREN or str.Len(lp.RuleGroupCanon(words)) == 0:
+        ret false
+    end
+    group_at = i + 1
+    group_last = j - 1
+    ret true
+end
+
+func tr_rule_group_text(toks: tok.TokenStream, first: int, last: int): str:
+    mut words := ""
+    mut j := first
+    until j <= last:
+        words = words + (j > first ? " " : "") + tok.StreamAt(toks, j).lexeme
+        j += 1
+    end
+    ret words
 end
 
 func tr_is_link_word(name: str): bool:
@@ -1055,6 +1135,9 @@ func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_root: s
     mut gaps := Vector {} as Vector<int>
     defer gaps.free()
     tr_compare_gaps(srcpack, sfile, gaps)
+    mut rule_needs_at := 0 - 1
+    mut rule_group_at := 0 - 1
+    mut rule_group_last := 0 - 1
     mut i := 0
     until i < n:
         t := tok.StreamAt(toks, i)
@@ -1086,6 +1169,14 @@ func translate_source(lgr: lg.Logger, srcpack: int, targetpack: int, std_root: s
             else:
                 skip_emit = true
             end
+        else i == rule_needs_at:
+            lexeme = targetpack == lp.LP_FA ? "نیازمند" : "needs"
+        else i == rule_group_at:
+            lexeme = lp.RuleGroupWord(lp.RuleGroupCanon(tr_rule_group_text(toks, i, rule_group_last)), targetpack == lp.LP_FA)
+            ei = tok.StreamAt(toks, rule_group_last).end_index as int
+            i = rule_group_last
+        else t.kind == tok.TK_IDENT and (prev_kind == tok.TK_STMT_END or prev_kind == tok.TK_COLON or prev_kind < 0) and tr_rule_start(toks, i, n, rule_needs_at, rule_group_at, rule_group_last):
+            lexeme = targetpack == lp.LP_FA ? "قاعده" : "rule"
         else t.kind == tok.TK_IDENT and prev_kind == tok.TK_KW_EXTERN and tr_callconv_end(toks, i, n) >= i:
             ce := tr_callconv_end(toks, i, n)
             lexeme = targetpack == lp.LP_FA ? lp.STDCALL_FA : "stdcall"

@@ -1,0 +1,166 @@
+import os.dl
+import os.mmap
+
+func report(label: str, ok: bool):
+    println label, ok
+end
+
+func low(x: size): i64:
+    ret (x as i64) & 0xFFFFFFFF
+end
+
+func stub(n: int, out: u8*, at: int): int:
+    mut k := at
+    if n == 0:
+        out[k] = 0xb8 as u8
+        out[k + 1] = 77 as u8
+        out[k + 2] = 0 as u8
+        out[k + 3] = 0 as u8
+        out[k + 4] = 0 as u8
+        out[k + 5] = 0xc3 as u8
+        ret 6
+    end
+    head := [0x48, 0x89, 0xf8]
+    regs := [0x48, 0x01, 0xf0, 0x48, 0x01, 0xd0, 0x48, 0x01, 0xc8, 0x4c, 0x01, 0xc0, 0x4c, 0x01, 0xc8]
+    seventh := [0x48, 0x03, 0x44, 0x24, 0x08]
+    eighth := [0x48, 0x03, 0x44, 0x24, 0x10]
+    repeat 3 in i:
+        out[k + i] = head[i] as u8
+    end
+    k += 3
+    if n > 1:
+        count := (n > 6 ? 6 : n) - 1
+        repeat count * 3 in i:
+            out[k + i] = regs[i] as u8
+        end
+        k += count * 3
+    end
+    if n >= 7:
+        repeat 5 in i:
+            out[k + i] = seventh[i] as u8
+        end
+        k += 5
+    end
+    if n >= 8:
+        repeat 5 in i:
+            out[k + i] = eighth[i] as u8
+        end
+        k += 5
+    end
+    out[k] = 0xc3 as u8
+    ret k + 1 - at
+end
+
+func main:
+    page := mmap.PageSize()
+    report("page size", page >= 4096 and page % 1024 == 0)
+
+    if not SALAM_OS_WINDOWS:
+        one := mmap.Alloc(1, mmap.PROT_READ | mmap.PROT_WRITE)
+        report("one byte maps", one != null)
+        bytes := one as u8*
+        mut zero := true
+        repeat page in i:
+            if bytes[i] != 0:
+                zero = false
+            end
+        end
+        report("fresh pages are zero", zero)
+        bytes[0] = 7 as u8
+        bytes[page - 1] = 9 as u8
+        report("whole page is writable", bytes[0] == 7 and bytes[page - 1] == 9)
+        report("make read only", mmap.Protect(one, 1, mmap.PROT_READ))
+        report("value kept", bytes[0] == 7)
+        report("make writable again", mmap.Protect(one, page, mmap.PROT_READ | mmap.PROT_WRITE))
+        report("free with the small size", mmap.Free(one, 1))
+
+        many := mmap.Alloc(3 * page, mmap.PROT_READ | mmap.PROT_WRITE)
+        report("three pages", many != null)
+        mb := many as u8*
+        mb[3 * page - 1] = 5 as u8
+        report("last byte", mb[3 * page - 1] == 5)
+        report("no access", mmap.Protect(many, 3 * page, mmap.PROT_NONE))
+        report("access again", mmap.Protect(many, 3 * page, mmap.PROT_READ))
+        report("read after protect", mb[3 * page - 1] == 5)
+        report("free", mmap.Free(many, 3 * page))
+
+        none := mmap.Alloc(page, mmap.PROT_NONE)
+        report("no-access mapping", none != null)
+        report("open it up", mmap.Protect(none, page, mmap.PROT_READ | mmap.PROT_WRITE))
+        report("free again", mmap.Free(none, page))
+
+        report("zero size", mmap.Alloc(0, mmap.PROT_READ) == null)
+        report("negative size", mmap.Alloc(0 - 1, mmap.PROT_READ) == null)
+        report("null free", not mmap.Free(null, page))
+        report("null protect", not mmap.Protect(null, page, mmap.PROT_READ))
+    else:
+        each label in ["one byte maps", "fresh pages are zero", "whole page is writable", "make read only", "value kept", "make writable again", "free with the small size", "three pages", "last byte", "no access", "access again", "read after protect", "free", "no-access mapping", "open it up", "free again", "zero size", "negative size", "null free", "null protect"]:
+            report(label, true)
+        end
+    end
+
+    if dl.Supported():
+        lib := dl.OpenSelf()
+        again := dl.OpenSelf()
+        report("open self twice", lib != null and again != null)
+        report("null library has no symbols", dl.Sym(null, "strlen") == null)
+        report("empty name", dl.Sym(lib, "") == null)
+        report("close null", not dl.Close(null))
+        report("close", dl.Close(again))
+
+        text := "abc"
+        other := "abz"
+        report("strlen", dl.Call(dl.Sym(lib, "strlen"), [(text as void*) as size]) == 3)
+        report("abs", low(dl.Call(dl.Sym(lib, "abs"), [(0 - 5) as size])) == 5)
+        report("toupper", low(dl.Call(dl.Sym(lib, "toupper"), [97 as size])) == 65)
+        report("strcmp", low(dl.Call(dl.Sym(lib, "strcmp"), [(text as void*) as size, (other as void*) as size])) != 0)
+        report("strncmp", low(dl.Call(dl.Sym(lib, "strncmp"), [(text as void*) as size, (other as void*) as size, 2 as size])) == 0)
+        report("memcmp", low(dl.Call(dl.Sym(lib, "memcmp"), [(text as void*) as size, (other as void*) as size, 3 as size])) != 0)
+        report("null function", dl.Call(null, [1 as size, 2]) == 0)
+        report("nine arguments", dl.Call(dl.Sym(lib, "strlen"), [1 as size, 2, 3, 4, 5, 6, 7, 8, 9]) == 0)
+
+        missing := dl.Open("libsalam-no-such-library.so.1")
+        report("missing library", missing == null)
+        report("error text", dl.Error().len() > 0)
+        report("missing close", not dl.Close(missing))
+        report("missing symbol", dl.Sym(lib, "salam_no_such_symbol") == null)
+        report("close self", dl.Close(lib))
+    else:
+        each label in ["open self twice", "null library has no symbols", "empty name", "close null", "close", "strlen", "abs", "toupper", "strcmp", "strncmp", "memcmp", "null function", "nine arguments", "missing library", "error text", "missing close", "missing symbol", "close self"]:
+            report(label, true)
+        end
+    end
+
+    if SALAM_ARCH_X64 and dl.Supported() and mmap.Supported():
+        code := mmap.Alloc(page, mmap.PROT_READ | mmap.PROT_WRITE)
+        out := code as u8*
+        mut used := 0
+        mut starts := Vector {} as Vector<int>
+        defer starts.free()
+        repeat 0 to 8 in n:
+            starts.push(used)
+            used += stub(n, out, used)
+            used = (used + 15) & (0 - 16)
+        end
+        report("stubs fit", used < page)
+        report("run them", mmap.Protect(code, page, mmap.PROT_READ | mmap.PROT_EXEC))
+        base := code as i64
+        none := [0 as size]
+        report("0 arguments", dl.Call((base + starts.get(0) as i64) as void*, none[: 0]) == 77)
+        report("1 argument", dl.Call((base + starts.get(1) as i64) as void*, [5 as size]) == 5)
+        report("2 arguments", dl.Call((base + starts.get(2) as i64) as void*, [1 as size, 2]) == 3)
+        report("3 arguments", dl.Call((base + starts.get(3) as i64) as void*, [1 as size, 2, 3]) == 6)
+        report("4 arguments", dl.Call((base + starts.get(4) as i64) as void*, [1 as size, 2, 3, 4]) == 10)
+        report("5 arguments", dl.Call((base + starts.get(5) as i64) as void*, [1 as size, 2, 3, 4, 5]) == 15)
+        report("6 arguments", dl.Call((base + starts.get(6) as i64) as void*, [1 as size, 2, 3, 4, 5, 6]) == 21)
+        report("7 arguments", dl.Call((base + starts.get(7) as i64) as void*, [1 as size, 2, 3, 4, 5, 6, 7]) == 28)
+        report("8 arguments", dl.Call((base + starts.get(8) as i64) as void*, [1 as size, 2, 3, 4, 5, 6, 7, 8]) == 36)
+        report("negative argument", dl.Call((base + starts.get(2) as i64) as void*, [(0 - 3) as size, 1]) == (0 - 2) as size)
+        report("9 arguments", dl.Call((base + starts.get(8) as i64) as void*, [1 as size, 2, 3, 4, 5, 6, 7, 8, 9]) == 0)
+        report("free code", mmap.Free(code, page))
+    else:
+        each label in ["stubs fit", "run them", "0 arguments", "1 argument", "2 arguments", "3 arguments", "4 arguments", "5 arguments", "6 arguments", "7 arguments", "8 arguments", "negative argument", "9 arguments", "free code"]:
+            report(label, true)
+        end
+    end
+end

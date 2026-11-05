@@ -669,7 +669,11 @@ async function call<T>(
   return data as unknown as T;
 }
 
-export type SpokenText = { text: string; language: SpeechLang; seconds: number };
+export type SpokenText = {
+  text: string;
+  language: SpeechLang;
+  seconds: number;
+};
 
 export async function transcribe(
   audio: Blob,

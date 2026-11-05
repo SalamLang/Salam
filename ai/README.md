@@ -152,17 +152,17 @@ offers no language, so `/capabilities` looks at its health at most once every
 The service is configured through its own environment. No model ships in this
 repository: mount them read only and point these variables at them.
 
-| Variable                                            | Meaning                                                                                  | Default                 |
-| --------------------------------------------------- | ---------------------------------------------------------------------------------------- | ----------------------- |
-| `STT_MODEL_FA`, `STT_MODEL_EN`                      | model path per language; a language with no model is not offered                         | empty                   |
-| `STT_ENGINE`, `STT_ENGINE_FA`, `STT_ENGINE_EN`      | `module:factory` of the engine, for all languages or one (see `engines.py`)              | `engines:SegmentEngine` |
-| `STT_RUNTIME`                                       | `module:Class` of the runtime `SegmentEngine` loads                                      | empty                   |
-| `STT_LOAD_OPTIONS`, `STT_RUN_OPTIONS`               | JSON keyword arguments for the runtime's constructor and its transcribe call             | empty                   |
-| `STT_MAX_SECONDS`, `STT_MAX_BYTES`                  | longest and largest recording; the app shows and enforces what the service reports       | `120`, `4194304`        |
-| `STT_CONCURRENCY`, `STT_QUEUE`                      | conversions at once and how many may wait; more answer `503 busy`                        | `1`, `2`                |
-| `STT_QUEUE_WAIT_SECONDS`, `STT_TIMEOUT_SECONDS`     | longest wait in the queue and longest conversion                                         | `20`, `80`              |
-| `STT_MAX_LOADED`, `STT_PRELOAD`                     | models kept in memory at once, and a language to load at start                           | `2`, empty              |
-| `STT_SECRET`, `STT_HOST`, `STT_PORT`                | optional bearer token and where to listen                                                | empty, `0.0.0.0`, `8090` |
+| Variable                                        | Meaning                                                                            | Default                  |
+| ----------------------------------------------- | ---------------------------------------------------------------------------------- | ------------------------ |
+| `STT_MODEL_FA`, `STT_MODEL_EN`                  | model path per language; a language with no model is not offered                   | empty                    |
+| `STT_ENGINE`, `STT_ENGINE_FA`, `STT_ENGINE_EN`  | `module:factory` of the engine, for all languages or one (see `engines.py`)        | `engines:SegmentEngine`  |
+| `STT_RUNTIME`                                   | `module:Class` of the runtime `SegmentEngine` loads                                | empty                    |
+| `STT_LOAD_OPTIONS`, `STT_RUN_OPTIONS`           | JSON keyword arguments for the runtime's constructor and its transcribe call       | empty                    |
+| `STT_MAX_SECONDS`, `STT_MAX_BYTES`              | longest and largest recording; the app shows and enforces what the service reports | `120`, `4194304`         |
+| `STT_CONCURRENCY`, `STT_QUEUE`                  | conversions at once and how many may wait; more answer `503 busy`                  | `1`, `2`                 |
+| `STT_QUEUE_WAIT_SECONDS`, `STT_TIMEOUT_SECONDS` | longest wait in the queue and longest conversion                                   | `20`, `80`               |
+| `STT_MAX_LOADED`, `STT_PRELOAD`                 | models kept in memory at once, and a language to load at start                     | `2`, empty               |
+| `STT_SECRET`, `STT_HOST`, `STT_PORT`            | optional bearer token and where to listen                                          | empty, `0.0.0.0`, `8090` |
 
 The Docker build takes the runtime's packages as a build argument, `STT_PIP_PACKAGES`.
 `python bench.py --model DIR --audio DIR --language fa --refs refs.tsv` measures one model:

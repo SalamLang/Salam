@@ -57,7 +57,7 @@ function micProblem(error: unknown) {
   };
 }
 
-export function useVoiceInput(caps: Capabilities | null, onText: (text: string) => void) {
+export function useVoiceInput(caps: Capabilities | null, onSpoken: (text: string) => void) {
   const enabled = !isDesktop && caps?.speech === true && (caps.speech_languages?.length ?? 0) > 0;
   const languages = caps?.speech_languages ?? [];
   const limit = caps?.speech_max_seconds ?? 0;
@@ -70,8 +70,8 @@ export function useVoiceInput(caps: Capabilities | null, onText: (text: string) 
   const recorder = useRef<MediaRecorder | null>(null);
   const ticker = useRef(0);
   const aborter = useRef<AbortController | null>(null);
-  const textSink = useRef(onText);
-  textSink.current = onText;
+  const textSink = useRef(onSpoken);
+  textSink.current = onSpoken;
   const chosen = language ?? savedLang(languages);
   const chosenRef = useRef(chosen);
   chosenRef.current = chosen;

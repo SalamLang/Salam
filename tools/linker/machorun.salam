@@ -1,0 +1,62 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import os
+import io
+import os.dl
+import mem
+import encoding.binary
+
+include ml "machoload.salam"
+
+const USAGE := "Runs a linked x86_64 Mach-O executable on x86_64 Linux by loading it into\nthis process and binding its libSystem imports to glibc.\n\nmachorun <exe> [args...]\n\nThe rebase and bind opcodes of LC_DYLD_INFO_ONLY and the pointer chains of\nLC_DYLD_CHAINED_FIXUPS are both applied. From a universal binary the x86_64\nslice is run.\n"
+
+func run(path: str, rest: Vector<str>):
+    d := ml.ReadThin(path)
+    p := ml.Parse(d)
+    img := ml.NewImage(d, p.segs)
+    ml.Link(img, d, p.dyld)
+    mut text_addr := 0 as i64
+    each s in p.segs:
+        if s.name == "__TEXT":
+            text_addr = s.vmaddr
+        end
+    end
+    fn := ((img.base as i64) + (text_addr - img.lo) + p.entry) as void*
+    argc := rest.len() + 1
+    table := mem.AllocateZeroed(((argc + 1) * 8) as u64)
+    tv := binary.NewView(table, (argc + 1) * 8)
+    binary.PutU64LE(tv, 0, (path as void*) as i64)
+    repeat rest.len() in i:
+        binary.PutU64LE(tv, 8 * (i + 1), (rest.get(i) as void*) as i64)
+    end
+    io.Flush()
+    rc := dl.Call(fn, [argc as size, (table as i64) as size])
+    os.Exit(rc as int)
+end
+
+func main:
+    args := os.Args()
+    if args.len() < 2:
+        print USAGE
+        ret 2
+    end
+    mut rest := Vector {} as Vector<str>
+    defer rest.free()
+    repeat args.len() - 2 in i:
+        rest.push(args.get(i + 2))
+    end
+    run(args.get(1), rest)
+    ret 0
+end

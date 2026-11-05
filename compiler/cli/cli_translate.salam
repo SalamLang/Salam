@@ -166,25 +166,58 @@ func tr_ctx_word_here(targetpack: int, name: str, prev_kind: int, next_kind: int
     ret at_line_start and next_kind == tok.TK_IDENT and (str.Equals(mapped, "use") or str.Equals(mapped, "شامل"))
 end
 
+func tr_struct_header_at(toks: tok.TokenStream, i: int, n: int): bool:
+    k := tok.StreamAt(toks, i).kind
+    ret k == tok.TK_KW_STRUCT or (k == tok.TK_KW_PUB and i + 1 < n and tok.StreamAt(toks, i + 1).kind == tok.TK_KW_STRUCT)
+end
+
+func tr_in_struct_body(toks: tok.TokenStream, i: int, n: int): bool:
+    t := tok.StreamAt(toks, i)
+    col := t.begin_col as int
+    mut cand := i
+    mut j := i - 1
+    until j >= 0:
+        tj := tok.StreamAt(toks, j)
+        if tj.kind != tok.TK_STMT_END and tj.kind != tok.TK_COMMENT_LINE and tj.kind != tok.TK_COMMENT_BLOCK:
+            c := tok.StreamAt(toks, cand)
+            if tj.begin_line != c.begin_line and cand != i and (c.begin_line == t.begin_line or (c.begin_col as int) < col):
+                ret tr_struct_header_at(toks, cand, n)
+            end
+            cand = j
+        end
+        j -= 1
+    end
+    c0 := tok.StreamAt(toks, cand)
+    ret cand != i and (c0.begin_line == t.begin_line or (c0.begin_col as int) < col) and tr_struct_header_at(toks, cand, n)
+end
+
 func tr_rule_start(toks: tok.TokenStream, i: int, n: int, needs_at &: int, group_at &: int, group_last &: int): bool:
-    if not lp.RuleWordIsHead(tok.StreamAt(toks, i).lexeme):
+    if not lp.RuleWordIsHead(tok.StreamAt(toks, i).lexeme) or i + 1 >= n:
         ret false
     end
-    mut j := i + 1
-    mut words := ""
+    k1 := tok.StreamAt(toks, i + 1).kind
+    if k1 != tok.TK_IDENT and not tok.IsKeyword(k1):
+        ret false
+    end
+    mut f := i + 2
+    until f < n and tok.StreamAt(toks, f).kind == tok.TK_IDENT:
+        f += 1
+    end
+    if (f < n and tok.StreamAt(toks, f).kind == tok.TK_COLON) or not tr_in_struct_body(toks, i, n):
+        ret false
+    end
+    mut words := k1 == tok.TK_IDENT ? tok.StreamAt(toks, i + 1).lexeme : ""
+    mut j := i + 2
     until j < n and tok.StreamAt(toks, j).kind == tok.TK_IDENT:
         w := tok.StreamAt(toks, j).lexeme
         if lp.RuleWordIsNeeds(w):
-            if j == i + 1:
-                ret false
-            end
             needs_at = j
             ret true
         end
-        words = words + (str.Len(words) > 0 ? " " : "") + w
+        words = words + " " + w
         j += 1
     end
-    if j < n and j > i + 1 and tok.StreamAt(toks, j).kind == tok.TK_EQ:
+    if j < n and tok.StreamAt(toks, j).kind == tok.TK_EQ:
         until j < n and tok.StreamAt(toks, j).kind != tok.TK_STMT_END:
             jt := tok.StreamAt(toks, j)
             if jt.kind == tok.TK_IDENT and lp.RuleWordIsNeeds(jt.lexeme):
@@ -195,7 +228,7 @@ func tr_rule_start(toks: tok.TokenStream, i: int, n: int, needs_at &: int, group
         end
         ret false
     end
-    if j >= n or j == i + 1 or tok.StreamAt(toks, j).kind != tok.TK_LPAREN or str.Len(lp.RuleGroupCanon(words)) == 0:
+    if j >= n or tok.StreamAt(toks, j).kind != tok.TK_LPAREN or str.Len(lp.RuleGroupCanon(words)) == 0:
         ret false
     end
     group_at = i + 1

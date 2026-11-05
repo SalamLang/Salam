@@ -2610,7 +2610,7 @@ course at **<https://www.salamlang.ir/learn/>** (§19 maps its lessons).
 - **Language directive:** a Persian file may state its language with
   `// زبان: فارسی` in its first 8 lines; an English file uses `// lang: en`.
   Mixed forms such as `// lang: fa` or `// زبان: en` are a compile error.
-- **The entry function is `ریشه`**, not `main`: `تابع ریشه:` ... `پایان`.
+- **The entry function is `ریشه`**, not `main`: `تابع ریشه:` ... `پایان`. There is no `اصلی` (`تابع اصلی` compiles as an ordinary function but the program has no entry point), and no `بسته اصلی` line is needed.
   Its return value is the exit code, as in English (`برگشت ۱` to fail).
 - **Digits:** Persian `۰۱۲۳۴۵۶۷۸۹` and Arabic-Indic `٠١٢٣٤٥٦٧٨٩` digits work in
   number literals, mixed freely with ASCII. The decimal point is always `.`

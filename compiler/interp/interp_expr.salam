@@ -219,6 +219,9 @@ func eval_call(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
         end
         if not plain and str.Equals(nm, "hash") and na == 1:
             ha := args.get(0)
+            if ha.kind == VAL_INT and ha.ity >= ITY_I128:
+                ret wide_hash(ip, a, n, ha)
+            end
             hname := ha.kind == VAL_STR ? "salam_str_hash" : "salam_hash_int"
             hefi := find_extern_fn(ip, hname)
             if hefi == 0:
@@ -455,6 +458,9 @@ func eval_node(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
             end
             if str.Equals(node.type_str, "char"):
                 ret val_char(node.value_int as i64)
+            end
+            if str.Equals(node.type_str, "i128") or str.Equals(node.type_str, "u128"):
+                ret Value { kind = VAL_INT, ity = str.Equals(node.type_str, "i128") ? ITY_I128 : ITY_U128, i = node.value_int as i64, pa = node.value_hi as i64 }
             end
             ret val_int(node.value_int as i64)
         end
@@ -980,12 +986,18 @@ func unary_value(ip &: Interp, a &: at.Ast, op: int, uav: Value): Value:
         if uav.kind == VAL_FLOAT:
             ret val_float(0.0 - uav.f)
         end
+        if uav.ity >= ITY_I128:
+            ret wide_neg(uav)
+        end
         ret val_int_ty(((0 as u64) - (to_int(uav) as u64)) as i64, uav.ity)
     end
     if op == tok.TK_NOT:
         ret val_bool(not to_bool(uav))
     end
     if op == tok.TK_TILDE:
+        if uav.ity >= ITY_I128:
+            ret Value { kind = VAL_INT, ity = uav.ity, i = (~(uav.i as u64)) as i64, pa = (~(uav.pa as u64)) as i64 }
+        end
         ret val_int_ty((~(to_int(uav) as u64)) as i64, uav.ity)
     end
     ret uav
@@ -1042,6 +1054,9 @@ func cast_value(ip &: Interp, a &: at.Ast, n: int, cav: Value): Value:
     end
     if is_int_typename(base):
         cty := int_ty_from_typestr(base)
+        if cty >= ITY_I128 or (cav.kind == VAL_INT and cav.ity >= ITY_I128):
+            ret wide_cast(cav, cty)
+        end
         if cav.kind == VAL_FLOAT and int_ty_is_unsigned(cty):
             ret val_int_ty((cav.f as u64) as i64, cty)
         end
@@ -1049,6 +1064,9 @@ func cast_value(ip &: Interp, a &: at.Ast, n: int, cav: Value): Value:
     end
     if is_float_typename(base):
         if str.Equals(base, "f32"):
+            if cav.kind == VAL_INT and cav.ity >= ITY_I128:
+                ret val_float(wide_to_f32(cav) as f64)
+            end
             ret val_float((to_float(cav) as f32) as f64)
         end
         ret val_float(to_float(cav))

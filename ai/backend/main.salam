@@ -46,12 +46,14 @@ include aimemory "memory.salam"
 include aitelegram "telegram.salam"
 include aicloud "cloud.salam"
 include ailogin "login.salam"
+include ailimits "limits.salam"
 
 const SESSION_DAYS := 30
 const PASS_ROUNDS := 120000
 const DEFAULT_TITLE := "گفت‌وگوی تازه"
 const MAX_MESSAGE := 12000
 const PENDING_SECONDS := 600
+const TIMED_OUT_PARTIAL := "\n\n---\n\nاین نوبت به سقف زمانی خودش رسید و همین‌جا متوقف شد. بنویسید «ادامه بده» تا از همین‌جا ادامه دهد."
 const TIMED_OUT := "این نوبت بیش از حد طول کشید و متوقف شد. بنویسید «ادامه بده» تا از همین‌جا ادامه دهد."
 const STREAM_WORKERS := 128
 const BRIDGE_SLOTS := 48
@@ -72,6 +74,8 @@ mut STREAM_COUNT := HashMap {} as HashMap<str, str>
 mut MEM_SOFT_MB := 1200
 mut MEM_HARD_MB := 2600
 mut AGENT_TURN_SECONDS := 3600 as i64
+mut CHAT_TURN_SECONDS := 600 as i64
+mut UNLIMITED_TURN_SECONDS := 43200 as i64
 mut QUEUE_MAX := 20
 mut CONTEXT_LOCK := sync.Mutex {}
 mut CONTEXT_SENT := HashMap {} as HashMap<str, str>
@@ -115,7 +119,10 @@ func main:
         println "salam-ai has", aiengine.Fallbacks(), "fallback models for failed turns"
     end
     aibridge.Configure(os.Env("AI_BRIDGE_SECRET"), BRIDGE_SLOTS, env_or("AI_BRIDGE_HOLD_SECONDS", "40").to_int())
+    aibridge.SetCallSeconds(env_or("AI_BRIDGE_CALL_SECONDS", "600").to_int())
     AGENT_TURN_SECONDS = env_or("AI_AGENT_TURN_SECONDS", "3600").to_int() as i64
+    CHAT_TURN_SECONDS = env_or("AI_CHAT_TURN_SECONDS", "600").to_int() as i64
+    UNLIMITED_TURN_SECONDS = env_or("AI_UNLIMITED_TURN_SECONDS", "43200").to_int() as i64
     QUEUE_MAX = env_or("AI_QUEUE_MAX", "20").to_int()
     if not aistore.Open(env_or("AI_DB_HOST", "127.0.0.1"), env_or("AI_DB_USER", "salam_ai"), os.Env("AI_DB_PASSWORD"), env_or("AI_DB_NAME", "salam_ai"), env_or("AI_DB_PORT", "3306").to_int()):
         println "cannot open the database:", aistore.Error()
@@ -595,11 +602,13 @@ end
 func turn_seconds(id: str): i64:
     aistore.Lock()
     device := aistore.OneText("SELECT device_id FROM chats WHERE id = ?1", one(id))
+    owner := aistore.OneText("SELECT user_id FROM chats WHERE id = ?1", one(id))
     aistore.Unlock()
-    if device.len() > 0 and device != "0":
-        ret AGENT_TURN_SECONDS
+    mut plan := "free"
+    if owner.len() > 0:
+        plan = aibilling.LimitsOf(owner).plan
     end
-    ret PENDING_SECONDS
+    ret ailimits.Pick(device.len() > 0 and device != "0", plan, CHAT_TURN_SECONDS, AGENT_TURN_SECONDS, UNLIMITED_TURN_SECONDS)
 end
 
 func settle(mid: str, sid: str, created: i64, limit: i64): aiengine.Reply:
@@ -610,6 +619,8 @@ func settle(mid: str, sid: str, created: i64, limit: i64): aiengine.Reply:
         if r.failed and body.len() == 0:
             status = "error"
             body = r.timed_out ? TIMED_OUT : "دستیار الان نتوانست پاسخ بدهد. چند لحظه بعد دوباره بپرسید."
+        else r.timed_out and body.len() > 0:
+            body = body + TIMED_OUT_PARTIAL
         end
         aistore.Lock()
         _u := aistore.Run("UPDATE messages SET body = ?1, status = ?2, activity = ?4 WHERE id = ?3 AND status = 'pending'", four(body, status, mid, activity_raw(r.activity)))

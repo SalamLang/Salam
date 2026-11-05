@@ -221,7 +221,7 @@ export function App() {
     const pending = messagesRef.current.find((m) => m.role === "assistant" && m.status === "pending");
     if (!isDesktop || !chatId || !pending || pending.id <= 0 || watching.current.has(pending.id)) return;
     const mid = pending.id;
-    const until = Date.now() + 30 * 60 * 1000;
+    const until = Date.now() + 12 * 60 * 60 * 1000;
     watching.current.add(mid);
     const tick = async () => {
       if (announced.current.has(mid) || activeRef.current === chatId || Date.now() > until) {
@@ -298,6 +298,17 @@ export function App() {
         setMessages((ms) => ms.map((m) => (m.id === mid ? fn(m) : m)));
       };
       let finished = false;
+      const opened = Date.now();
+      const again = () => {
+        if (finished || ctrl.signal.aborted) return;
+        if (Date.now() - opened > 60000 && activeRef.current === chatId) {
+          window.setTimeout(() => {
+            if (ctrl.signal.aborted || activeRef.current !== chatId) return;
+            setMessages((ms) => ms.map((m) => (m.id === mid ? { ...m, body: "" } : m)));
+            follow(chatId, mid, title);
+          }, 500);
+        } else poll(chatId, mid);
+      };
       streamMessage(
         chatId,
         mid,
@@ -323,10 +334,10 @@ export function App() {
         ctrl.signal,
       )
         .then((ok) => {
-          if (!ok && !finished && !ctrl.signal.aborted) poll(chatId, mid);
+          if (!ok) again();
         })
         .catch(() => {
-          if (!finished && !ctrl.signal.aborted) poll(chatId, mid);
+          again();
         });
     },
     [poll, finish],

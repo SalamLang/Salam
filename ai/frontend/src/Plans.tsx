@@ -204,6 +204,18 @@ export function Plans({ notify }: { notify: (msg: string) => void }) {
         </div>
       )}
 
+      <section className="card panel">
+        <div className="panel-head">
+          <h3>{t("محدودیت‌ها، صادقانه", "Limits, honestly")}</h3>
+        </div>
+        <ul className="plan-limits">
+          <li>{t("پلن نامحدود سقف پیام و درخواست در ساعت و سقف درخواست هم‌زمان ندارد.", "The Unlimited plan has no per-hour message or request cap and no cap on parallel requests.")}</li>
+          <li>{t("هر نوبت در پلن نامحدود تا ۱۲ ساعت می‌تواند ادامه پیدا کند. پلن‌های دیگر: گفت‌وگو ۱۰ دقیقه و ایجنت رومیزی ۱ ساعت برای هر نوبت.", "On Unlimited a single turn can run up to 12 hours. Other plans: 10 minutes per chat turn and 1 hour per desktop agent turn.")}</li>
+          <li>{t("اگر نوبتی به سقف زمانی برسد، متن تا آن لحظه می‌ماند و با نوشتن «ادامه بده» از همان‌جا ادامه پیدا می‌کند.", "If a turn reaches its time limit, the text so far is kept and you can write \"continue\" to pick up from there.")}</li>
+          <li>{t("هر ابزار روی رایانه شما تا ۱۰ دقیقه برای پاسخ مهلت دارد و سرور برای دادن حافظه گاهی دوباره راه‌اندازی می‌شود. بستن برنامه یا قطع اینترنت رایانه شما کار را متوقف می‌کند، اما صفحه پس از وصل شدن دوباره به نوبت در حال اجرا برمی‌گردد.", "Each tool on your computer gets up to 10 minutes to answer, and the server sometimes restarts to free memory. Closing the app or losing your computer's internet pauses the work, but the page reattaches to the running turn when it reconnects.")}</li>
+        </ul>
+      </section>
+
       {payments.length > 0 && (
         <section className="card panel">
           <div className="panel-head">

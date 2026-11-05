@@ -33,7 +33,7 @@ if SALAM_OS_WINDOWS:
         func CloseHandle(h: void*): int
         func GetLastError(): int
         noret func ExitProcess(code: int)
-        func CreateFileA(path: str, access: u32, share: u32, sattr: void*, disp: u32, flags: u32, template: void*): void*
+        func CreateFileW(path: void*, access: u32, share: u32, security: void*, disposition: u32, flags: u32, template: void*): void*
     end
 else:
     extern:
@@ -89,8 +89,33 @@ if SALAM_OS_WINDOWS:
     end
 
     func _ptr_at(base: void*, off: i64): void*:
-        p := ((base as i64) + off) as i64*
-        ret (p[0]) as void*
+        p := ((base as i64) + off) as void**
+        ret p[0]
+    end
+
+    func _ptr_set(base: void*, off: i64, v: void*):
+        p := ((base as i64) + off) as void**
+        p[0] = v
+    end
+
+    func _word(): i64:
+        ret sizeof(void*) as i64
+    end
+
+    func _si_size(): i64:
+        ret _word() == 8 ? 104 as i64 : 68 as i64
+    end
+
+    func _si_flags_at(): i64:
+        ret _word() == 8 ? 60 as i64 : 44 as i64
+    end
+
+    func _si_handles_at(): i64:
+        ret _word() == 8 ? 80 as i64 : 56 as i64
+    end
+
+    func _pi_pid_at(): i64:
+        ret _word() * 2
     end
 
     func _needs_quotes(s: str): bool:
@@ -124,18 +149,20 @@ if SALAM_OS_WINDOWS:
     end
 
     func _build_sa(): void*:
+        word := _word()
         sa := mem.AllocateZeroed(24 as u64)
-        _u32_set(sa, 0, 24 as u32)
-        _u32_set(sa, 16, 1 as u32)
+        _u32_set(sa, 0, (word * 3) as u32)
+        _u32_set(sa, word * 2, 1 as u32)
         ret sa
     end
 
     func _open_inheritable(path: str, access: u32, disp: u32): void*:
         sa := _build_sa()
-        h := CreateFileA(path, access, 3 as u32, sa, disp, 128 as u32, null)
+        wide := _spawn_wide(path)
+        h := CreateFileW(wide, access, 3 as u32, sa, disp, 128 as u32, null)
+        mem.Free(wide)
         mem.Free(sa)
-        invalid := (0 - 1) as i64
-        if (h as i64) == invalid: ret null end
+        if (h as size) == -1: ret null end
         ret h
     end
 else:
@@ -165,7 +192,7 @@ if SALAM_OS_WINDOWS:
     pub func Start(path: str, args: Vector<str>): Process:
         cmdline := _build_cmdline(path, args)
         si := mem.AllocateZeroed(104 as u64)
-        _u32_set(si, 0, 104 as u32)
+        _u32_set(si, 0, _si_size() as u32)
         pi := mem.AllocateZeroed(24 as u64)
         ok := CreateProcessA(null, cmdline as void*, null, null, 0, 0, null, null, si, pi)
         mem.Free(si)
@@ -175,9 +202,9 @@ if SALAM_OS_WINDOWS:
             mem.Free(pi)
             ret p
         end
-        p.pid = _u32_at(pi, 16) as int
+        p.pid = _u32_at(pi, _pi_pid_at()) as int
         p.handle = _ptr_at(pi, 0)
-        th := _ptr_at(pi, 8)
+        th := _ptr_at(pi, _word())
         CloseHandle(th)
         mem.Free(pi)
         p.running = true
@@ -195,14 +222,11 @@ if SALAM_OS_WINDOWS:
 
         cmdline := _build_cmdline(path, args)
         si := mem.AllocateZeroed(104 as u64)
-        _u32_set(si, 0, 104 as u32)
-        _u32_set(si, 60, 256 as u32)
-        p80 := ((si as i64) + 80) as i64*
-        p80[0] = in_h as i64
-        p88 := ((si as i64) + 88) as i64*
-        p88[0] = out_h as i64
-        p96 := ((si as i64) + 96) as i64*
-        p96[0] = err_h as i64
+        _u32_set(si, 0, _si_size() as u32)
+        _u32_set(si, _si_flags_at(), 256 as u32)
+        _ptr_set(si, _si_handles_at(), in_h)
+        _ptr_set(si, _si_handles_at() + _word(), out_h)
+        _ptr_set(si, _si_handles_at() + _word() * 2, err_h)
 
         pi := mem.AllocateZeroed(24 as u64)
         ok := CreateProcessA(null, cmdline as void*, null, null, 1, 0, null, null, si, pi)
@@ -219,9 +243,9 @@ if SALAM_OS_WINDOWS:
             mem.Free(pi)
             ret p
         end
-        p.pid = _u32_at(pi, 16) as int
+        p.pid = _u32_at(pi, _pi_pid_at()) as int
         p.handle = _ptr_at(pi, 0)
-        th := _ptr_at(pi, 8)
+        th := _ptr_at(pi, _word())
         CloseHandle(th)
         mem.Free(pi)
         p.running = true

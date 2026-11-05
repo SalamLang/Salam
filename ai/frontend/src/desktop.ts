@@ -1,7 +1,18 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
-export const isDesktop = isTauri();
+type SalamBridge = {
+  invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
+  listen(event: string, handler: (data: unknown) => void): () => void;
+};
+
+const salam = (window as unknown as { salam?: SalamBridge }).salam;
+
+export const isDesktop = isTauri() || Boolean(salam);
+
+function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  return salam ? salam.invoke<T>(command, args) : invoke<T>(command, args);
+}
 
 export type AgentMode = "ask" | "auto" | "readonly" | "everything";
 export type AgentAnswer = "allow" | "always" | "deny";
@@ -49,26 +60,26 @@ export type NotifyPrefs = {
 };
 
 export const agent = {
-  info: () => invoke<AgentInfo>("agent_info"),
-  link: (token: string) => invoke<AgentInfo>("agent_link", { token }),
-  unlink: (token: string) => invoke<AgentInfo>("agent_unlink", { token }),
-  pickFolder: () => invoke<string | null>("agent_pick_folder"),
+  info: () => call<AgentInfo>("agent_info"),
+  link: (token: string) => call<AgentInfo>("agent_link", { token }),
+  unlink: (token: string) => call<AgentInfo>("agent_unlink", { token }),
+  pickFolder: () => call<string | null>("agent_pick_folder"),
   setMode: (chat: string, mode: AgentMode) =>
-    invoke<void>("agent_set_mode", { chat, mode }),
+    call<void>("agent_set_mode", { chat, mode }),
   decide: (callId: string, answer: AgentAnswer) =>
-    invoke<boolean>("agent_decide", { callId, answer }),
-  stop: (callId: string) => invoke<boolean>("agent_stop", { callId }),
-  pending: () => invoke<Omit<AgentCall, "state" | "output">[]>("agent_pending"),
+    call<boolean>("agent_decide", { callId, answer }),
+  stop: (callId: string) => call<boolean>("agent_stop", { callId }),
+  pending: () => call<Omit<AgentCall, "state" | "output">[]>("agent_pending"),
   projectContext: (workspace: string) =>
-    invoke<ProjectContext>("agent_project_context", { workspace }),
+    call<ProjectContext>("agent_project_context", { workspace }),
   notify: (kind: NotifyKind, chat?: string, text?: string, mid?: number) =>
-    invoke<"shown" | "skipped">("agent_notify", { kind, chat, text, mid }),
+    call<"shown" | "skipped">("agent_notify", { kind, chat, text, mid }),
   watchReply: (chat: string, mid: number, token: string, title: string) =>
-    invoke<void>("agent_watch_reply", { chat, mid, token, title }),
-  unwatchReply: (chat: string) => invoke<void>("agent_unwatch_reply", { chat }),
-  notifyPrefs: () => invoke<NotifyPrefs>("agent_notify_prefs"),
+    call<void>("agent_watch_reply", { chat, mid, token, title }),
+  unwatchReply: (chat: string) => call<void>("agent_unwatch_reply", { chat }),
+  notifyPrefs: () => call<NotifyPrefs>("agent_notify_prefs"),
   setNotifyPrefs: (prefs: NotifyPrefs) =>
-    invoke<NotifyPrefs>("agent_set_notify_prefs", { prefs }),
+    call<NotifyPrefs>("agent_set_notify_prefs", { prefs }),
 };
 
 export function onAgent(handlers: {
@@ -77,6 +88,22 @@ export function onAgent(handlers: {
   connection: (online: boolean) => void;
   device: () => void;
 }): () => void {
+  if (salam) {
+    const stops = [
+      salam.listen("agent://call", (data) => handlers.call(data as AgentCall)),
+      salam.listen("agent://output", (data) => {
+        const { call_id, chunk } = data as { call_id: string; chunk: string };
+        handlers.output(call_id, chunk);
+      }),
+      salam.listen("agent://connection", (data) =>
+        handlers.connection(data as boolean),
+      ),
+      salam.listen("agent://device", () => handlers.device()),
+    ];
+    return () => {
+      for (const stop of stops) stop();
+    };
+  }
   const subs: Promise<UnlistenFn>[] = [
     listen<AgentCall>("agent://call", (e) => handlers.call(e.payload)),
     listen<{ call_id: string; chunk: string }>("agent://output", (e) =>

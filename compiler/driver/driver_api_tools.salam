@@ -3,6 +3,8 @@ package driver
 import os
 import io
 import str
+import filepath
+import os.process
 
 include tok "../token.salam"
 include lg "../logger.salam"
@@ -312,4 +314,52 @@ pub func Repl(opt &: Dr): int:
     end
     println "bye."
     ret 0
+end
+
+pub func Bundle(args: Vector<str>): int:
+    work := os.TempDir() + "/salam-bundle-tool"
+    if os.MkdirAll(work) != 0 and not os.IsDir(work):
+        io.EPrintln("salam: cannot create " + work)
+        ret 1
+    end
+    if io.WriteFile(work + "/main.salam", "import desktop.bundle\nimport os\n\nfunc main:\n    ret bundle.Main(os.Args())\nend\n") < 0:
+        io.EPrintln("salam: cannot write " + work + "/main.salam")
+        ret 1
+    end
+    here := os.Cwd()
+    mut self_path := args.get(0)
+    if str.Contains(self_path, "/") or str.Contains(self_path, "\\"):
+        if not filepath.IsAbs(self_path):
+            self_path = filepath.Join(here, self_path)
+        end
+    end
+    mut run_args := Vector {} as Vector<str>
+    defer run_args.free()
+    run_args.push("run")
+    run_args.push("main.salam")
+    run_args.push("--log-level=error")
+    if not SALAM_ARCH_ARM:
+        run_args.push("--backend=native")
+    end
+    run_args.push("--")
+    run_args.push("--cwd=" + here)
+    run_args.push("--salam=" + self_path)
+    repeat args.len() in i:
+        if i >= 2:
+            run_args.push(args.get(i))
+        end
+    end
+    if os.Chdir(work) != 0:
+        ret 1
+    end
+    mut child := process.Start(self_path, run_args)
+    if child.pid <= 0:
+        _back := os.Chdir(here)
+        io.EPrintln("salam: cannot start " + self_path)
+        ret 1
+    end
+    code := process.Wait(child)
+    process.Cleanup(child)
+    _back := os.Chdir(here)
+    ret code
 end

@@ -10,10 +10,10 @@ pkg.intro <<
 <p>Use it for a small desktop tool, a viewer for data your program computed, or a native window around a web interface your program serves. For pages that run in the user's own browser, see <a href="/std/dom/">dom</a>; to generate the HTML, see <a href="/std/template/">template</a>.</p>
 <h3>How data moves, and what does not work</h3>
 <ul>
-<li><strong>Put the data in the page.</strong> The reliable way to give the page your data is to write it into the HTML you pass to <code>SetHTML</code>, as JSON inside a <code>&lt;script&gt;</code>. There is no way for the page to call back into Salam.</li>
-<li><code>Init</code> does not install a script for later pages. On every platform it runs the code once, at once, exactly like <code>Eval</code>, so a variable it sets is gone when <code>SetHTML</code> loads the new page.</li>
-<li><code>Eval</code> runs on whatever page is loaded at that moment. Pages load in the background, so code sent right after <code>SetHTML</code> or <code>Navigate</code> usually reaches the old page and is lost.</li>
-<li>The <code>debug</code> flag of <code>Create</code> only opens developer tools in the Chromium (CEF) build; the system webviews ignore it.</li>
+<li><strong>Put the data in the page.</strong> The reliable way to give the page your data is to write it into the HTML you pass to <code>SetHTML</code>, as JSON inside a <code>&lt;script&gt;</code>.</li>
+<li><code>Init</code> installs a script for every page loaded later, before the page's own scripts run. <code>Eval</code> runs once, on whatever page is loaded at that moment.</li>
+<li>Pages load in the background, so code sent with <code>Eval</code> right after <code>SetHTML</code> or <code>Navigate</code> can run before the new page exists. Use <code>Init</code>, or wait for <code>OnLoad</code>.</li>
+<li>The page can talk back with <code>OnMessage</code>. For a whole application, with commands, events, packaged files and installers, use <a href="/std/desktop/"><code>desktop</code></a>, which is built on this package.</li>
 <li><code>Create</code> reports failure by returning a window that is already closed; check <code>IsClosed()</code> right after it, for example on a Linux server with no display.</li>
 </ul>
 <p>A window needs a desktop session, so the site only compiles these programs; run them on your own machine with <code>salam run</code>. On Linux install the WebKitGTK development package first (<code>libwebkit2gtk-4.1-dev</code> on Debian and Ubuntu); Windows 10 and 11 already ship WebView2, and macOS ships WKWebView.</p>
@@ -36,38 +36,136 @@ pkg.intro <<
 
 doc.HINT_NONE = The user can resize the window.
 doc.HINT_FIXED = The window size is fixed.
+doc.Request = A request a custom scheme received from the page.
+doc.Request.url = The whole address.
+doc.Request.scheme = The scheme, such as <code>app</code>.
+doc.Request.method = The HTTP method, usually <code>GET</code>.
+doc.Request.path = The path, starting with a slash.
+doc.Request.query = The text after the question mark.
+doc.Response = What a custom scheme answers with. The data is copied, so the handler keeps ownership.
+doc.Response.status = The HTTP status, 200 by default.
+doc.Response.mime = The content type.
+doc.Response.data = A pointer to the body.
+doc.Response.size = The body size in bytes.
+doc.Response.headers = Extra headers, as name and value pairs.
+doc.Response.Header = Adds one header.
 doc.WebView = A window with a browser inside it.
-doc.WebView.handle = The handle of the browser on Linux and CEF.
-doc.WebView.window = The handle of the window in the operating system.
-doc.WebView.webview = The handle of the browser on macOS.
-doc.WebView.closed = The window has been closed.
+doc.WebView.id = The number of this window inside the package.
 doc.WebView.Destroy = Closes the window and frees the resources.
-doc.WebView.Run = Runs the event loop until the window is closed or <code>Terminate</code> is called.
-doc.WebView.Terminate = Asks <code>Run</code> to return; it does so after the next window event. On macOS it quits the application.
+doc.WebView.Run = Runs the event loop until this window is closed or <code>Terminate</code> is called.
+doc.WebView.Terminate = Asks <code>Run</code> to return. The window stays open until <code>Destroy</code>.
 doc.WebView.SetTitle = The window title.
 doc.WebView.SetSize = Resizes the window, with one of the <code>HINT</code> constants: <code>HINT_FIXED</code> stops the user from resizing it.
+doc.WebView.SetMinSize = The smallest size the user can drag the window to.
+doc.WebView.SetIcon = The window icon, from a file: any image GTK reads on Linux, <code>.ico</code> on Windows, any image on macOS.
 doc.WebView.SetHTML = Shows the HTML content.
 doc.WebView.Navigate = Opens the address.
-doc.WebView.Eval = Runs JavaScript in the page loaded right now, without waiting for a result. Code sent while a new page is still loading is lost.
-doc.WebView.Init = Runs JavaScript once, at once; the same as <code>Eval</code> on every platform. It is not kept for pages loaded later.
+doc.WebView.Eval = Runs JavaScript in the page loaded right now, without waiting for a result. Call it on the UI thread.
+doc.WebView.EvalLater = The same as <code>Eval</code>, but safe from any thread: the code runs on the UI thread soon after.
+doc.WebView.Init = Installs JavaScript that runs at the start of every page loaded later, before the page's own scripts. Pass <code>true</code> to run it in frames too.
+doc.WebView.URL = The address of the page now. The caller frees the string.
+doc.WebView.Show = Shows the window and brings it forward.
+doc.WebView.Hide = Hides the window without closing it.
+doc.WebView.Focus = Brings the window forward.
+doc.WebView.Minimize = Minimizes the window.
+doc.WebView.Maximize = Maximizes the window.
+doc.WebView.Center = Moves the window to the middle of the screen.
+doc.WebView.IsActive = The window has the keyboard focus.
+doc.WebView.Native = The window handle in the operating system: <code>GtkWindow*</code>, <code>HWND</code> or <code>NSWindow*</code>.
+doc.WebView.Content = Where native widgets go: a <code>GtkBox</code> on Linux, the window elsewhere.
+doc.WebView.OpenDevTools = Opens the developer tools.
+doc.WebView.SetContextMenu = Turns the page's right-click menu on or off.
+doc.WebView.OnMessage = Called with the text a page posts with the function from <code>PostScript</code>.
+doc.WebView.OnNavigate = Called before a page loads. Return false to cancel it. On Linux frames come here too; see <code>NavigationIsMainFrame</code>.
+doc.WebView.OnNewWindow = Called when a page asks for a new window. No window opens; the address is handed to you.
+doc.WebView.OnClose = Called when the user closes the window. Return false to keep it open.
+doc.WebView.OnLoad = Called when a page starts loading (false) and when it finishes (true).
+doc.WebView.OnCrash = Called when the page process dies, for example out of memory.
+doc.WebView.OnResize = Called with the new size.
 doc.WebView.IsClosed = The window has been closed.
-doc.Create = Makes a new window and shows it. The debug flag opens developer tools only in the CEF build. On failure the window it returns is already closed.
+doc.Dispatch = Runs a function on the UI thread, from any thread.
+doc.RunAll = Runs the event loop until every window is closed or <code>Quit</code> is called.
+doc.Quit = Makes the running event loop return.
+doc.SetApp = The application id and name. Call it before the first window.
+doc.SetDataDir = The folder for cookies and local storage. Call it before the first window.
+doc.RegisterScheme = Serves a custom address scheme from your own function, so pages can load from memory.
+doc.SchemeURL = The address of a path in a scheme, for this operating system: <code>app://localhost/x</code>, or <code>https://app.localhost/x</code> on Windows.
+doc.SchemeOrigin = The origin of a scheme, for this operating system.
+doc.OnCommand = Called with the number of a native menu item that was chosen.
+doc.OnTrayMessage = Windows only: called with tray icon events.
+doc.OnCopyData = Windows only: called with <code>WM_COPYDATA</code> data sent to the message window.
+doc.MenuHost = The object native menus report to: the message window on Windows, the application delegate on macOS.
+doc.NameMessageWindow = Windows only: the title of the hidden message window, so another process can find it.
+doc.NavigationIsMainFrame = Inside <code>OnNavigate</code>: whether the page itself is navigating. WebKitGTK cannot tell a frame from the page, so on Linux this reports a user gesture instead.
+doc.PostScript = JavaScript for a function that posts a string to <code>OnMessage</code>. The caller frees it.
+doc.Create = Makes a new window. The first flag turns on developer tools, the second shows the window at once. On failure the window it returns is already closed.
+doc.LastError = Why the last window could not open, or empty text.
+doc.Trace = Adds a line to the file named by the <code>SALAM_WEBVIEW_TRACE</code> environment variable, and does nothing when it is unset. The backends use it to record each startup step, navigation and message, so a window that stays blank can be diagnosed, including in an application with no console.
 
 ex.HINT_NONE = webview-Window
 ex.HINT_FIXED = webview-Window
+ex.Request = webview-Window
+ex.Request.url = webview-Window
+ex.Request.scheme = webview-Window
+ex.Request.method = webview-Window
+ex.Request.path = webview-Window
+ex.Request.query = webview-Window
+ex.Response = webview-Window
+ex.Response.status = webview-Window
+ex.Response.mime = webview-Window
+ex.Response.data = webview-Window
+ex.Response.size = webview-Window
+ex.Response.headers = webview-Window
+ex.Response.Header = webview-Window
 ex.WebView = webview-Window
-ex.WebView.handle = webview-Window
-ex.WebView.window = webview-Window
-ex.WebView.webview = webview-Window
-ex.WebView.closed = webview-Window
+ex.WebView.id = webview-Window
 ex.WebView.Destroy = webview-Window
 ex.WebView.Run = webview-Window
 ex.WebView.Terminate = webview-Window
 ex.WebView.SetTitle = webview-Window
 ex.WebView.SetSize = webview-Window
+ex.WebView.SetMinSize = webview-Window
+ex.WebView.SetIcon = webview-Window
 ex.WebView.SetHTML = webview-Window
 ex.WebView.Navigate = webview-Navigate
 ex.WebView.Eval = webview-Window
+ex.WebView.EvalLater = webview-Window
 ex.WebView.Init = webview-Window
+ex.WebView.URL = webview-Window
+ex.WebView.Show = webview-Window
+ex.WebView.Hide = webview-Window
+ex.WebView.Focus = webview-Window
+ex.WebView.Minimize = webview-Window
+ex.WebView.Maximize = webview-Window
+ex.WebView.Center = webview-Window
+ex.WebView.IsActive = webview-Window
+ex.WebView.Native = webview-Window
+ex.WebView.Content = webview-Window
+ex.WebView.OpenDevTools = webview-Window
+ex.WebView.SetContextMenu = webview-Window
+ex.WebView.OnMessage = webview-Window
+ex.WebView.OnNavigate = webview-Window
+ex.WebView.OnNewWindow = webview-Window
+ex.WebView.OnClose = webview-Window
+ex.WebView.OnLoad = webview-Window
+ex.WebView.OnCrash = webview-Window
+ex.WebView.OnResize = webview-Window
 ex.WebView.IsClosed = webview-Window
+ex.Dispatch = webview-Window
+ex.RunAll = webview-Window
+ex.Quit = webview-Window
+ex.SetApp = webview-Window
+ex.SetDataDir = webview-Window
+ex.RegisterScheme = webview-Window
+ex.SchemeURL = webview-Window
+ex.SchemeOrigin = webview-Window
+ex.OnCommand = webview-Window
+ex.OnTrayMessage = webview-Window
+ex.OnCopyData = webview-Window
+ex.MenuHost = webview-Window
+ex.NameMessageWindow = webview-Window
+ex.NavigationIsMainFrame = webview-Window
+ex.PostScript = webview-Window
 ex.Create = webview-Window
+ex.LastError = webview-Window
+ex.Trace = webview-Window

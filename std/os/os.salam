@@ -46,6 +46,9 @@ if SALAM_OS_WINDOWS:
         func _wchdir(path: void*): int
         func GetCurrentDirectoryW(sz: int, buf: void*): int
         func GetFileAttributesW(path: void*): int
+        func CreateFileW(path: void*, access: u32, share: u32, security: void*, disposition: u32, flags: u32, template: void*): void*
+        func GetFinalPathNameByHandleW(handle: void*, buf: void*, size: u32, flags: u32): u32
+        func CloseHandle(h: void*): int
         func DeleteFileW(path: void*): int
         func MoveFileExW(old: void*, new_path: void*, flags: u32): int
         func _wopen(path: void*, flags: int, mode: int): int
@@ -66,6 +69,7 @@ else:
         func opendir(path: str): void*
         func closedir(d: void*): int
         func readlink(path: str, buf: void*, sz: u64): int
+        func realpath(path: str, out: void*): void*
         func popen(cmd: str, mode: str): void*
         func pclose(fp: void*): int
         func getpid(): int
@@ -235,6 +239,36 @@ if SALAM_OS_WINDOWS:
         if _os_is_dir(path): ret _os_rmdir(path) end
         ret Remove(path)
     end
+
+    func _os_real_path(path: str): str:
+        w := _str_to_wide(path)
+        handle := CreateFileW(w, 0 as u32, 7 as u32, null, 3 as u32, 0x02000000 as u32, null)
+        mem.Free(w)
+        if (handle as size) == (0 - 1):
+            ret str.Clone("")
+        end
+        buf := mem.AllocateZeroed(65536 as u64)
+        got := GetFinalPathNameByHandleW(handle, buf, 32767 as u32, 0 as u32)
+        CloseHandle(handle)
+        if got == (0 as u32) or got >= (32767 as u32):
+            mem.Free(buf)
+            ret str.Clone("")
+        end
+        full := _wide_to_str(buf)
+        mem.Free(buf)
+        mut plain := str.Clone(full)
+        if str.StartsWith(full, "\\\\?\\UNC\\"):
+            mem.Free(plain as void*)
+            tail := full.substr(8, full.len() - 8)
+            plain = "\\\\" + tail
+            mem.Free(tail as void*)
+        else str.StartsWith(full, "\\\\?\\"):
+            mem.Free(plain as void*)
+            plain = full.substr(4, full.len() - 4)
+        end
+        mem.Free(full as void*)
+        ret plain
+    end
 else:
     func _os_mkdir(path: str): int: if mkdir(path, 511) == 0: ret 0 end ret -1 end
 
@@ -271,6 +305,14 @@ else:
 
     func _os_remove_link(path: str): int:
         ret Remove(path)
+    end
+
+    func _os_real_path(path: str): str:
+        raw := realpath(path, null)
+        if raw == null:
+            ret str.Clone("")
+        end
+        ret raw as str
     end
 end
 
@@ -411,6 +453,10 @@ pub func Exists(path: str): bool: ret _os_exists(path) end
 @en "Cwd"
 @fa "پوشه جاری"
 pub func Cwd(): str: ret _os_cwd() end
+
+@en "RealPath"
+@fa "مسیر واقعی"
+pub func RealPath(path: str): str: ret _os_real_path(path) end
 
 @en "Chdir"
 @fa "تغییر پوشه"

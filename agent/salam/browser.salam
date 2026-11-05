@@ -1,0 +1,1957 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package browser
+
+import crypto
+import encoding.json
+import filepath
+import io
+import mem
+import net.websocket
+import os
+import os.process
+import pool
+import str
+import sync
+
+const BUFFER := 200
+const IDLE_MS := 600000
+const MAX_IMAGE := 1500000
+const MAX_PAGE_HEIGHT := 8000.0
+const MAX_TEXT := 20000
+const DEFAULT_WAIT := 1500
+const MAX_WAIT := 15000
+const MAX_WAIT_FOR := 30000
+const CALL_WAIT_MS := 20000
+const NOT_FOUND := "No Chrome-family browser was found on this computer. Install Google Chrome or Microsoft Edge, or set SALAM_AGENT_BROWSER to the path of a Chrome, Chromium, Edge or Brave program."
+const ONE_TAB := `document.addEventListener('click', e => { const a = e.target && e.target.closest && e.target.closest('a[target]'); if (a) a.removeAttribute('target'); }, true); window.open = u => { if (u) location.assign(u); return null; };`
+const OUTLINE := `(() => {
+  const vis = e => { const r = e.getBoundingClientRect(); const s = getComputedStyle(e); return r.width > 0 && r.height > 0 && s.visibility !== 'hidden'; };
+  const t = (s, n) => (s || '').replace(/\s+/g, ' ').trim().slice(0, n || 100);
+  const out = { text: document.body ? document.body.innerText : '', headings: [], links: [], buttons: [], inputs: [], images: [] };
+  const add = (list, v) => { if (list.length < 100) list.push(v); };
+  for (const h of document.querySelectorAll('h1,h2,h3,h4,h5,h6')) if (vis(h)) add(out.headings, h.tagName.toLowerCase() + ' ' + t(h.innerText));
+  for (const a of document.querySelectorAll('a[href]')) if (vis(a)) add(out.links, [t(a.innerText || a.getAttribute('aria-label') || a.title, 80), a.href.slice(0, 200)]);
+  for (const b of document.querySelectorAll('button,[role=button],input[type=submit],input[type=button]')) if (vis(b)) add(out.buttons, t(b.innerText || b.value || b.getAttribute('aria-label') || b.title, 80) + (b.disabled ? ' (disabled)' : ''));
+  for (const i of document.querySelectorAll('input:not([type=hidden]):not([type=submit]):not([type=button]),textarea,select')) if (vis(i)) add(out.inputs, { tag: i.tagName.toLowerCase(), type: i.type || '', name: i.name || i.id || '', placeholder: i.placeholder || '', label: t(i.labels && i.labels[0] ? i.labels[0].innerText : i.getAttribute('aria-label'), 60) });
+  for (const im of document.images) { const broken = im.complete && im.naturalWidth === 0 && !!(im.currentSrc || im.src); const noalt = !im.hasAttribute('alt'); if (broken || noalt) add(out.images, { src: (im.currentSrc || im.src || '').slice(0, 200), broken, noalt }); }
+  return out;
+})()`
+const SELECT_JS := `((selector, want) => {
+  const e = document.querySelector(selector);
+  if (!e) return null;
+  if (e.tagName !== 'SELECT') return { tag: e.tagName.toLowerCase() };
+  const opts = Array.from(e.options);
+  const o = opts.find(o => o.value === want) || opts.find(o => o.text.trim() === want) || opts.find(o => o.text.trim().toLowerCase() === want.toLowerCase());
+  if (!o) return { options: opts.map(o => o.text.trim() === o.value ? o.value : o.text.trim() + ' (' + o.value + ')') };
+  e.scrollIntoView({ block: 'center', behavior: 'instant' });
+  e.focus();
+  Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value').set.call(e, o.value);
+  e.dispatchEvent(new Event('input', { bubbles: true }));
+  e.dispatchEvent(new Event('change', { bubbles: true }));
+  return { selected: o.text.trim() };
+})`
+const VISIBLE_JS := `(selector => { const e = document.querySelector(selector); if (!e) return false; const r = e.getBoundingClientRect(); const s = getComputedStyle(e); return r.width > 0 && r.height > 0 && s.visibility !== 'hidden' && s.display !== 'none'; })`
+
+mut g_lock := sync.NewMutex()
+mut g_sessions := HashMap {} as HashMap<str, Session*>
+mut g_launching := HashMap {} as HashMap<str, bool>
+mut g_reaper := false
+mut g_profiles := 0
+
+struct Entry:
+    pub level: str = ""
+    pub text: str = ""
+    pub count: int = 1
+end
+
+struct NetEntry:
+    pub method: str = ""
+    pub status: i64 = -1
+    pub kind: str = ""
+    pub url: str = ""
+    pub ms: i64 = -1
+    pub error: str = ""
+end
+
+struct Req:
+    pub method: str = ""
+    pub url: str = ""
+    pub kind: str = ""
+    pub start: f64 = 0.0
+    pub status: i64 = -1
+end
+
+struct Key:
+    pub key: str = ""
+    pub code: str = ""
+    pub key_code: int = 0
+    pub text: str = ""
+    pub modifiers: int = 0
+end
+
+struct Target:
+    pub x: f64 = 0.0
+    pub y: f64 = 0.0
+    pub left: f64 = 0.0
+    pub top: f64 = 0.0
+    pub w: f64 = 0.0
+    pub h: f64 = 0.0
+    pub label: str = ""
+end
+
+struct Shot:
+    pub data: str = ""
+    pub width: int = 0
+    pub height: int = 0
+end
+
+struct Session:
+    pub key: str = ""
+    pub child: process.Process = process.Process {}
+    pub dir: str = ""
+    pub ws: websocket.Conn = websocket.Conn {}
+    pub closed: bool = false
+    pub busy: bool = false
+    pub used: i64 = 0
+    pub next_id: i64 = 1
+    pub answer: str = ""
+    pub answer_error: str = ""
+    pub answer_id: i64 = 0
+    pub deadline: i64 = 0
+    pub cancelled: func () bool
+    pub page: str = ""
+    pub main_frame: str = ""
+    pub url: str = ""
+    pub main_request: str = ""
+    pub status: i64 = -1
+    pub doc_error: str = ""
+    pub loaded: bool = false
+    pub navs: i64 = 0
+    pub inflight: HashMap<str, bool> = HashMap {} as HashMap<str, bool>
+    pub activity: i64 = 0
+    pub requests: HashMap<str, Req> = HashMap {} as HashMap<str, Req>
+    pub net: Vector<NetEntry> = Vector {}
+    pub log: Vector<Entry> = Vector {}
+    pub unseen: Vector<Entry> = Vector {}
+    pub width: int = 1280
+    pub height: int = 800
+    pub user_agent: str = ""
+    pub version: str = "130"
+end
+
+@en "Request"
+pub struct Request:
+    pub key: str = ""
+    pub act: str = ""
+    pub url: str = ""
+    pub selector: str = ""
+    pub text: str = ""
+    pub key_name: str = ""
+    pub script: str = ""
+    pub has_x: bool = false
+    pub x: f64 = 0.0
+    pub has_y: bool = false
+    pub y: f64 = 0.0
+    pub full_page: bool = false
+    pub width: int = 0
+    pub height: int = 0
+    pub wait_ms: i64 = -1
+    pub timeout_ms: i64 = 30000
+    pub error: str = ""
+end
+
+@en "Outcome"
+pub struct Outcome:
+    pub text: str = ""
+    pub image: str = ""
+    pub failed: bool = false
+end
+
+func fail(text: str): Outcome:
+    ret Outcome { text = text, failed = true }
+end
+
+func clip(text: str, max: int): str:
+    if str.CharCount(text) <= max:
+        ret text
+    end
+    bytes := text as u8*
+    n := str.Len(text)
+    mut chars := 0
+    mut at := 0
+    until at < n and chars < max:
+        at += 1
+        until at < n and ((bytes[at] as int) & 0xC0) == 0x80:
+            at += 1
+        end
+        chars += 1
+    end
+    ret str.Substr(text, 0, at) + " …"
+end
+
+func first_line(text: str, max: int): str:
+    lines := str.Split(text, "\n")
+    defer lines.free()
+    mut line := ""
+    mut seen := 0
+    each raw in lines:
+        t := str.Trim(raw)
+        if t.len() > 0:
+            seen += 1
+            if line.len() == 0:
+                line = t
+            end
+        end
+    end
+    mut out := clip(line, max)
+    if seen > 1 and not str.EndsWith(out, "…"):
+        out = out + " …"
+    end
+    ret out
+end
+
+func to_f64(text: str): f64:
+    ret str.ToFloat(text)
+end
+
+func to_i64(text: str): i64:
+    if text.len() == 0 or text == "null":
+        ret -1
+    end
+    ret str.ToFloat(text) as i64
+end
+
+func num(value: f64): str:
+    whole := value as i64
+    if (whole as f64) == value:
+        ret str.FromInt(whole)
+    end
+    ret str.FromFloat(value)
+end
+
+func quote(text: str): str:
+    ret json.Str(text)
+end
+
+func path2(text: str, a: str, b: str): str:
+    ret json.Get(json.Get(text, a), b)
+end
+
+func is_null(raw: str): bool:
+    ret raw.len() == 0 or raw == "null"
+end
+
+func normalize_act(raw: str): str:
+    name := str.Lower(str.Trim(raw))
+    if name == "open" or name == "goto" or name == "navigate":
+        ret "open"
+    else name == "type" or name == "fill":
+        ret "type"
+    else name == "eval" or name == "evaluate":
+        ret "eval"
+    else name == "network" or name == "requests":
+        ret "network"
+    else name == "reload" or name == "refresh":
+        ret "reload"
+    end
+    each known in ["screenshot", "click", "press", "scroll", "text", "console", "hover", "select", "wait", "back", "close"]:
+        if name == known:
+            ret name
+        end
+    end
+    ret ""
+end
+
+func scheme_of(raw: str): str:
+    colon := str.IndexOf(raw, ":")
+    if colon <= 0:
+        ret ""
+    end
+    bytes := raw as u8*
+    repeat colon in i:
+        c := bytes[i] as int
+        alpha := (c >= 97 and c <= 122) or (c >= 65 and c <= 90)
+        digit := c >= 48 and c <= 57
+        if i == 0 and not alpha:
+            ret ""
+        end
+        if not (alpha or digit or c == 43 or c == 45 or c == 46):
+            ret ""
+        end
+    end
+    ret str.Lower(str.Substr(raw, 0, colon))
+end
+
+func file_url(path: str): str:
+    mut b := str.NewBuilder()
+    unified := str.Replace(path, "\\", "/")
+    str.BufAppend(b, str.StartsWith(unified, "/") ? "file://" : "file:///")
+    bytes := unified as u8*
+    hex := "0123456789ABCDEF" as u8*
+    repeat str.Len(unified) in i:
+        c := bytes[i] as int
+        safe := (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122) or c == 45 or c == 95 or c == 46 or c == 47 or c == 126 or c == 58
+        if safe:
+            str.BufAppendChar(b, c)
+        else:
+            str.BufAppendChar(b, 37)
+            str.BufAppendChar(b, hex[c >> 4] as int)
+            str.BufAppendChar(b, hex[c & 15] as int)
+        end
+    end
+    ret str.BufStr(b)
+end
+
+func normalize_url(raw_in: str, resolve: func (str) str, error &: str): str:
+    raw := str.Trim(raw_in)
+    if raw.len() == 0:
+        error = "url is empty."
+        ret ""
+    end
+    lower := str.Lower(raw)
+    if str.StartsWith(lower, "data:") or lower == "about:blank":
+        ret raw
+    end
+    scheme := scheme_of(raw)
+    if scheme == "http" or scheme == "https" or scheme == "file":
+        ret raw
+    end
+    named := scheme == "javascript" or scheme == "chrome" or scheme == "about" or scheme == "blob" or scheme == "view-source"
+    if str.Len(scheme) > 1 and (str.Contains(raw, "://") or named):
+        error = "Only http, https and file pages can be opened, not " + scheme + ": links."
+        ret ""
+    end
+    local := resolve(raw)
+    if filepath.IsAbs(raw) or (os.Exists(local) and not os.IsDir(local)):
+        if not os.Exists(local):
+            error = local + " does not exist."
+            ret ""
+        end
+        ret file_url(local)
+    end
+    slash := str.IndexOf(lower, "/")
+    mut host := slash >= 0 ? str.Substr(lower, 0, slash) : lower
+    port := str.IndexOf(host, ":")
+    if port >= 0:
+        host = str.Substr(host, 0, port)
+    end
+    if host == "localhost" or host == "0.0.0.0" or str.StartsWith(host, "127.") or str.StartsWith(lower, "[::1]"):
+        ret "http://" + raw
+    end
+    ret "https://" + raw
+end
+
+func parse_key(spec: str, error &: str): Key:
+    parts := str.Split(spec, "+")
+    defer parts.free()
+    mut name := str.Trim(parts[parts.len() - 1])
+    mut count := parts.len() - 1
+    if name.len() == 0 and parts.len() >= 2:
+        name = "+"
+        count = parts.len() - 2
+    end
+    mut modifiers := 0
+    repeat count in i:
+        word := str.Lower(str.Trim(parts[i]))
+        if word == "alt" or word == "option":
+            modifiers = modifiers | 1
+        else word == "ctrl" or word == "control":
+            modifiers = modifiers | 2
+        else word == "meta" or word == "cmd" or word == "command" or word == "super":
+            modifiers = modifiers | 4
+        else word == "shift":
+            modifiers = modifiers | 8
+        else:
+            error = "Unknown modifier " + str.Trim(parts[i]) + " in key " + spec + "; use Alt, Control, Meta or Shift."
+            ret Key {}
+        end
+    end
+    mut alias := str.Lower(name)
+    if alias == "return":
+        alias = "enter"
+    else alias == "esc":
+        alias = "escape"
+    else alias == "del":
+        alias = "delete"
+    else alias == "space" or alias == "spacebar":
+        alias = " "
+    else alias == "up" or alias == "down" or alias == "left" or alias == "right":
+        alias = "arrow" + alias
+    end
+    mut k := Key { modifiers = modifiers }
+    named := ["Enter", "Tab", "Escape", "Backspace", "Delete", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", "Home", "End", "PageUp", "PageDown", "Insert"]
+    codes := [13, 9, 27, 8, 46, 38, 40, 37, 39, 36, 35, 33, 34, 45]
+    mut found := false
+    repeat 14 in i:
+        if str.Lower(named[i]) == alias:
+            k.key = named[i]
+            k.code = named[i]
+            k.key_code = codes[i]
+            k.text = named[i] == "Enter" ? "\r" : ""
+            found = true
+        end
+    end
+    if not found and alias == " ":
+        k.key = " "
+        k.code = "Space"
+        k.key_code = 32
+        k.text = " "
+        found = true
+    end
+    if not found and str.StartsWith(alias, "f") and str.Len(alias) <= 3 and str.Len(alias) >= 2:
+        digits := str.Substr(alias, 1, str.Len(alias) - 1)
+        n := str.ToInt(digits)
+        if n >= 1 and n <= 12 and str.FromInt(n as i64) == digits:
+            k.key = "F" + digits
+            k.code = k.key
+            k.key_code = 111 + n
+            found = true
+        end
+    end
+    if not found:
+        if str.CharCount(name) != 1:
+            error = "Unknown key " + name + "; use a single character or Enter, Tab, Escape, Backspace, Delete, ArrowUp, ArrowDown, ArrowLeft, ArrowRight, Home, End, PageUp, PageDown, Space or F1 to F12."
+            ret Key {}
+        end
+        c := (name as u8*)[0] as int
+        lower := c >= 97 and c <= 122
+        upper := c >= 65 and c <= 90
+        up := str.Upper(name)
+        if lower or upper:
+            k.code = "Key" + up
+            k.key_code = (up as u8*)[0] as int
+        else c >= 48 and c <= 57:
+            k.code = "Digit" + name
+            k.key_code = c
+        end
+        k.key = (modifiers & 8) != 0 ? up : name
+        k.text = k.key
+    end
+    if (modifiers & 7) != 0:
+        k.text = ""
+    end
+    ret k
+end
+
+func console_level(kind: str): str:
+    if kind == "warning" or kind == "warn":
+        ret "warn"
+    else kind == "error" or kind == "assert":
+        ret "error"
+    else kind == "info":
+        ret "info"
+    else kind == "debug" or kind == "verbose":
+        ret "debug"
+    end
+    ret "log"
+end
+
+func is_problem(level: str): bool:
+    ret level == "error" or level == "warn" or level == "exception" or level == "failed"
+end
+
+func push_capped(list &: Vector<Entry>, level: str, text: str):
+    n := list.len()
+    if n > 0 and list[n - 1].level == level and list[n - 1].text == text:
+        mut last := list[n - 1]
+        last.count += 1
+        list[n - 1] = last
+        ret
+    end
+    if n >= BUFFER:
+        list.remove_at(0)
+    end
+    list.push(Entry { level = level, text = text })
+end
+
+func format_requests(entries: Vector<NetEntry>): str:
+    mut lines := Vector {} as Vector<str>
+    defer lines.free()
+    total := entries.len()
+    skip := total > BUFFER ? total - BUFFER : 0
+    if skip > 0:
+        lines.push("[... " + str.FromInt(skip as i64) + " earlier requests ...]")
+    end
+    mut i := skip
+    until i < total:
+        e := entries[i]
+        mut status := "-"
+        if e.status >= 0:
+            status = str.FromInt(e.status)
+        else e.error.len() > 0:
+            status = "failed"
+        else e.ms < 0:
+            status = "pending"
+        end
+        mut line := e.method + " " + status + " " + e.kind + " " + clip(e.url, 200)
+        if e.ms >= 0:
+            line = line + " " + str.FromInt(e.ms) + "ms"
+        end
+        if e.error.len() > 0:
+            line = line + " " + e.error
+        end
+        lines.push(line)
+        i += 1
+    end
+    ret str.Join(lines, "\n")
+end
+
+func format_entries(entries: Vector<Entry>, max: int, prefix: str): str:
+    mut lines := Vector {} as Vector<str>
+    defer lines.free()
+    total := entries.len()
+    skip := total > max ? total - max : 0
+    if skip > 0:
+        lines.push(prefix + "[... " + str.FromInt(skip as i64) + " earlier entries ...]")
+    end
+    mut i := skip
+    until i < total:
+        e := entries[i]
+        times := e.count > 1 ? " (x" + str.FromInt(e.count as i64) + ")" : ""
+        lines.push(prefix + e.level + ": " + clip(e.text, 500) + times)
+        i += 1
+    end
+    ret str.Join(lines, "\n")
+end
+
+func state_line(url: str, status: i64, error: str, title: str, loading: bool): str:
+    mut s := url.len() == 0 ? "about:blank" : clip(url, 300)
+    if error.len() > 0:
+        s = s + " (" + error + ")"
+    else status > 0:
+        s = s + " (" + str.FromInt(status) + ")"
+    end
+    s = s + ` "` + clip(str.Trim(title), 120) + `"`
+    if loading:
+        s = s + " (still loading)"
+    end
+    ret s
+end
+
+func remote_text(v: str): str:
+    if json.Has(v, "value"):
+        ret json.Get(v, "value")
+    end
+    props := path2(v, "preview", "properties")
+    if not is_null(props):
+        items := json.Items(props)
+        defer items.free()
+        mut inner := Vector {} as Vector<str>
+        defer inner.free()
+        each item in items:
+            inner.push(json.Get(item, "name") + ": " + json.Get(item, "value"))
+        end
+        joined := str.Join(inner, ", ")
+        ret json.Get(v, "subtype") == "array" ? "[" + joined + "]" : "{" + joined + "}"
+    end
+    description := json.Get(v, "description")
+    if description.len() > 0:
+        ret description
+    end
+    unserializable := json.Get(v, "unserializableValue")
+    ret unserializable.len() > 0 ? unserializable : json.Get(v, "type")
+end
+
+func place(url: str, line: str): str:
+    if url.len() == 0:
+        ret ""
+    end
+    if is_null(line):
+        ret " (" + url + ")"
+    end
+    ret " (" + url + ":" + str.FromInt(to_i64(line) + 1) + ")"
+end
+
+func exception_text(d: str): str:
+    ex := json.Get(d, "exception")
+    mut description := json.Get(ex, "description")
+    if description.len() == 0 and json.Has(ex, "value"):
+        description = json.Get(ex, "value")
+    end
+    where := place(json.Get(d, "url"), json.Get(d, "lineNumber"))
+    if description.len() == 0:
+        text := json.Get(d, "text")
+        ret (text.len() > 0 ? text : "Uncaught exception") + where
+    end
+    lines := str.Split(description, "\n")
+    defer lines.free()
+    mut message := str.Trim(lines[0])
+    if not str.StartsWith(message, "Uncaught"):
+        message = "Uncaught " + message
+    end
+    mut i := 1
+    until i < lines.len():
+        t := str.Trim(lines[i])
+        if str.StartsWith(t, "at "):
+            ret message + " " + t
+        end
+        i += 1
+    end
+    ret message + where
+end
+
+func page_push(s: Session*, level: str, text: str):
+    if is_problem(level):
+        push_capped(s[0].unseen, level, text)
+    end
+    push_capped(s[0].log, level, text)
+end
+
+func net_record(s: Session*, r: Req, has_end: bool, stop_time: f64, error: str):
+    mut ms := -1 as i64
+    if has_end and r.start > 0.0:
+        delta := stop_time - r.start
+        ms = ((delta < 0.0 ? 0.0 : delta) * 1000.0 + 0.5) as i64
+    end
+    if s[0].net.len() >= BUFFER:
+        s[0].net.remove_at(0)
+    end
+    s[0].net.push(NetEntry { method = r.method, status = r.status, kind = r.kind, url = r.url, ms = ms, error = error })
+end
+
+func on_event(s: Session*, method: str, p: str):
+    id := json.Get(p, "requestId")
+    if method == "Runtime.consoleAPICalled":
+        items := json.Items(json.Get(p, "args"))
+        defer items.free()
+        mut shown := Vector {} as Vector<str>
+        defer shown.free()
+        each item in items:
+            shown.push(remote_text(item))
+        end
+        frames := json.Items(path2(p, "stackTrace", "callFrames"))
+        defer frames.free()
+        at := frames.len() > 0 ? place(json.Get(frames[0], "url"), json.Get(frames[0], "lineNumber")) : ""
+        page_push(s, console_level(json.Get(p, "type")), str.Join(shown, " ") + at)
+    else method == "Runtime.exceptionThrown":
+        page_push(s, "exception", exception_text(json.Get(p, "exceptionDetails")))
+    else method == "Log.entryAdded":
+        e := json.Get(p, "entry")
+        if json.Get(e, "source") != "network":
+            page_push(s, console_level(json.Get(e, "level")), json.Get(e, "text") + place(json.Get(e, "url"), json.Get(e, "lineNumber")))
+        end
+    else method == "Network.requestWillBeSent":
+        at := to_f64(json.Get(p, "timestamp"))
+        redirect := json.Get(p, "redirectResponse")
+        if not is_null(redirect) and s[0].requests.has(id):
+            mut old := s[0].requests.get(id)
+            old.status = to_i64(json.Get(redirect, "status"))
+            _gone := s[0].requests.remove(id)
+            net_record(s, old, true, at, "")
+        end
+        req := json.Get(p, "request")
+        kind := json.Get(p, "type")
+        s[0].requests.put(id, Req { method = json.Get(req, "method"), url = json.Get(req, "url"), kind = str.Lower(kind), start = at })
+        s[0].inflight.put(id, true)
+        s[0].activity = sync.NowMs()
+        if kind == "Document" and json.Get(p, "frameId") == s[0].main_frame and json.Get(p, "loaderId") == id:
+            s[0].main_request = id
+            s[0].status = -1
+            s[0].doc_error = ""
+        end
+    else method == "Network.responseReceived":
+        response := json.Get(p, "response")
+        status := to_i64(json.Get(response, "status"))
+        if id == s[0].main_request:
+            s[0].status = status
+        end
+        mut req := s[0].requests.has(id) ? s[0].requests.get(id) : Req {}
+        req.status = status
+        if req.url.len() == 0:
+            req.url = json.Get(response, "url")
+        end
+        s[0].requests.put(id, req)
+        if status >= 400:
+            page_push(s, "failed", str.FromInt(status) + " " + req.method + " " + clip(req.url, 300))
+        end
+    else method == "Network.loadingFinished":
+        _a := s[0].inflight.remove(id)
+        s[0].activity = sync.NowMs()
+        if s[0].requests.has(id):
+            req := s[0].requests.get(id)
+            _b := s[0].requests.remove(id)
+            net_record(s, req, true, to_f64(json.Get(p, "timestamp")), "")
+        end
+    else method == "Network.loadingFailed":
+        _a := s[0].inflight.remove(id)
+        s[0].activity = sync.NowMs()
+        raw_error := json.Get(p, "errorText")
+        error := raw_error.len() > 0 ? raw_error : "failed"
+        if id == s[0].main_request:
+            s[0].doc_error = error
+        end
+        req := s[0].requests.has(id) ? s[0].requests.get(id) : Req {}
+        _b := s[0].requests.remove(id)
+        if json.Get(p, "canceled") != "true" and is_null(json.Get(p, "blockedReason")):
+            page_push(s, "failed", req.method + " " + clip(req.url, 300) + " " + error)
+        end
+        net_record(s, req, true, to_f64(json.Get(p, "timestamp")), error)
+    else method == "Page.frameStartedLoading":
+        if json.Get(p, "frameId") == s[0].main_frame:
+            s[0].loaded = false
+            s[0].navs += 1
+        end
+    else method == "Page.loadEventFired":
+        s[0].loaded = true
+    else method == "Page.frameNavigated":
+        frame := json.Get(p, "frame")
+        if is_null(json.Get(frame, "parentId")):
+            s[0].url = json.Get(frame, "url")
+        end
+    else method == "Page.navigatedWithinDocument":
+        if json.Get(p, "frameId") == s[0].main_frame:
+            s[0].url = json.Get(p, "url")
+        end
+    else method == "Page.javascriptDialogOpening":
+        raw_kind := json.Get(p, "type")
+        page_push(s, "info", (raw_kind.len() > 0 ? raw_kind : "alert") + ` dialog "` + clip(json.Get(p, "message"), 300) + `" was accepted`)
+        mut members := Vector {} as Vector<str>
+        defer members.free()
+        members.push(json.MemberBool("accept", true))
+        members.push(json.Member("promptText", json.Get(p, "defaultPrompt")))
+        send_message(s, s[0].page, "Page.handleJavaScriptDialog", json.Object(members))
+    end
+end
+
+func send_message(s: Session*, session: str, method: str, params: str): i64:
+    id := s[0].next_id
+    s[0].next_id = id + 1
+    mut members := Vector {} as Vector<str>
+    defer members.free()
+    members.push(json.MemberInt("id", id))
+    members.push(json.Member("method", method))
+    members.push(json.MemberRaw("params", params))
+    if session.len() > 0:
+        members.push(json.Member("sessionId", session))
+    end
+    text := json.Object(members)
+    sent := websocket.SendText(s[0].ws, text)
+    mem.Free(text as void*)
+    if sent < 0:
+        s[0].closed = true
+    end
+    ret id
+end
+
+func pump_once(s: Session*, wait_ms: int):
+    m := websocket.Poll(s[0].ws, wait_ms)
+    if m.kind == websocket.TIMEOUT:
+        ret
+    end
+    if m.kind == websocket.CLOSE or m.kind == websocket.NONE:
+        s[0].closed = true
+        ret
+    end
+    if m.kind != websocket.TEXT:
+        ret
+    end
+    text := m.text
+    if not json.Valid(text):
+        ret
+    end
+    raw_id := json.Get(text, "id")
+    if raw_id.len() > 0:
+        s[0].answer_id = to_i64(raw_id)
+        error := json.Get(text, "error")
+        s[0].answer_error = is_null(error) ? "" : json.Get(error, "message")
+        if not is_null(error) and s[0].answer_error.len() == 0:
+            s[0].answer_error = "unknown error"
+        end
+        s[0].answer = json.Get(text, "result")
+        ret
+    end
+    if json.Get(text, "sessionId") == s[0].page and s[0].page.len() > 0:
+        on_event(s, json.Get(text, "method"), json.Get(text, "params"))
+    end
+end
+
+func stop_requested(s: Session*): bool:
+    ret s[0].cancelled() or (s[0].deadline > 0 and sync.NowMs() > s[0].deadline)
+end
+
+func pump_for(s: Session*, ms: i64):
+    until_time := sync.NowMs() + ms
+    until sync.NowMs() < until_time and not s[0].closed and not stop_requested(s):
+        remaining := until_time - sync.NowMs()
+        pump_once(s, remaining > 50 ? 50 : (remaining < 1 ? 1 : remaining as int))
+    end
+end
+
+func raw_call(s: Session*, session: str, method: str, params: str, error &: str): str:
+    if s[0].closed:
+        error = "The browser closed the connection."
+        ret ""
+    end
+    id := send_message(s, session, method, params)
+    limit := sync.NowMs() + (CALL_WAIT_MS as i64)
+    until sync.NowMs() < limit:
+        pump_once(s, 50)
+        if s[0].closed:
+            error = "The browser closed the connection."
+            ret ""
+        end
+        if s[0].answer_id == id:
+            if s[0].answer_error.len() > 0:
+                error = method + " failed: " + s[0].answer_error
+                ret ""
+            end
+            ret s[0].answer
+        end
+        if stop_requested(s):
+            error = "stopped"
+            ret ""
+        end
+    end
+    error = "The browser did not answer " + method + " in time."
+    ret ""
+end
+
+func page_call(s: Session*, method: str, params: str, error &: str): str:
+    ret raw_call(s, s[0].page, method, params, error)
+end
+
+func find_on_path(name: str): str:
+    separator := SALAM_OS_WINDOWS ? ";" : ":"
+    dirs := str.Split(os.Env("PATH"), separator)
+    defer dirs.free()
+    each dir in dirs:
+        if dir.len() == 0:
+            continue
+        end
+        full := filepath.Join(dir, name)
+        if os.Exists(full) and not os.IsDir(full):
+            ret full
+        end
+        if SALAM_OS_WINDOWS and os.Exists(full + ".exe"):
+            ret full + ".exe"
+        end
+    end
+    ret ""
+end
+
+func candidates(): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    if SALAM_OS_WINDOWS:
+        each base_name in ["PROGRAMFILES", "PROGRAMFILES(X86)", "LOCALAPPDATA"]:
+            base := os.Env(base_name)
+            if base.len() > 0:
+                each rel in ["Google\\Chrome\\Application\\chrome.exe", "Chromium\\Application\\chrome.exe", "Microsoft\\Edge\\Application\\msedge.exe", "BraveSoftware\\Brave-Browser\\Application\\brave.exe"]:
+                    out.push(base + "\\" + rel)
+                end
+            end
+        end
+    else SALAM_OS_MAC:
+        each app in ["Google Chrome", "Chromium", "Microsoft Edge", "Brave Browser"]:
+            out.push("/Applications/" + app + ".app/Contents/MacOS/" + app)
+            out.push(os.Env("HOME") + "/Applications/" + app + ".app/Contents/MacOS/" + app)
+        end
+    else:
+        each name in ["google-chrome", "google-chrome-stable", "chromium", "chromium-browser", "microsoft-edge", "microsoft-edge-stable", "brave-browser"]:
+            found := find_on_path(name)
+            if found.len() > 0:
+                out.push(found)
+            end
+        end
+    end
+    ret out
+end
+
+func find_browser(error &: str): str:
+    chosen := str.Trim(os.Env("SALAM_AGENT_BROWSER"))
+    if chosen.len() > 0:
+        if os.Exists(chosen):
+            ret chosen
+        end
+        found := find_on_path(chosen)
+        if found.len() == 0:
+            error = "SALAM_AGENT_BROWSER is set to " + chosen + ", but no browser program was found there."
+        end
+        ret found
+    end
+    all := candidates()
+    defer all.free()
+    each path in all:
+        if os.Exists(path) and not os.IsDir(path):
+            ret path
+        end
+    end
+    error = NOT_FOUND
+    ret ""
+end
+
+func without_sandbox(): bool:
+    if os.Env("SALAM_AGENT_BROWSER_NO_SANDBOX") == "1":
+        ret true
+    end
+    if SALAM_OS_LINUX:
+        ret os.Env("USER") == "root"
+    else:
+        ret false
+    end
+end
+
+func read_active_port(path: str, port &: int, ws_path &: str): bool:
+    if not os.Exists(path):
+        ret false
+    end
+    lines := str.Split(io.ReadFile(path), "\n")
+    defer lines.free()
+    if lines.len() < 2:
+        ret false
+    end
+    port = str.ToInt(str.Trim(lines[0]))
+    ws_path = str.Trim(lines[1])
+    ret port > 0 and str.StartsWith(ws_path, "/devtools/")
+end
+
+func remove_profile(dir: str):
+    repeat 20:
+        _gone := os.RemoveAll(dir)
+        if not os.Exists(dir):
+            ret
+        end
+        sync.SleepMs(250)
+    end
+end
+
+func session_close(s: Session*):
+    if not s[0].closed:
+        websocket.Close(s[0].ws)
+        s[0].closed = true
+    end
+    process.KillTree(s[0].child)
+    mut waited := 0
+    until waited < 100 and not process.TryWait(s[0].child):
+        sync.SleepMs(20)
+        waited += 1
+    end
+    remove_profile(s[0].dir)
+end
+
+func session_dead(s: Session*): bool:
+    ret s[0].closed or process.TryWait(s[0].child)
+end
+
+func apply_viewport(s: Session*, error &: str):
+    mobile := s[0].width <= 500
+    mut metrics := Vector {} as Vector<str>
+    defer metrics.free()
+    metrics.push(json.MemberInt("width", s[0].width as i64))
+    metrics.push(json.MemberInt("height", s[0].height as i64))
+    metrics.push(json.MemberInt("deviceScaleFactor", 1))
+    metrics.push(json.MemberBool("mobile", mobile))
+    _a := page_call(s, "Emulation.setDeviceMetricsOverride", json.Object(metrics), error)
+    if error.len() > 0:
+        ret
+    end
+    _b := page_call(s, "Emulation.setTouchEmulationEnabled", mobile ? `{"enabled":true,"maxTouchPoints":5}` : `{"enabled":false}`, error)
+    if error.len() > 0:
+        ret
+    end
+    agent := mobile ? "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/" + s[0].version + ".0.0.0 Mobile Safari/537.36" : s[0].user_agent
+    if agent.len() > 0:
+        mut params := Vector {} as Vector<str>
+        defer params.free()
+        params.push(json.Member("userAgent", agent))
+        _c := page_call(s, "Emulation.setUserAgentOverride", json.Object(params), error)
+    end
+end
+
+func session_launch(key: str, cancelled: func () bool, error &: str): Session*:
+    exe := find_browser(error)
+    if error.len() > 0:
+        ret null as Session*
+    end
+    sync.Lock(g_lock)
+    g_profiles += 1
+    serial := g_profiles
+    sync.Unlock(g_lock)
+    dir := filepath.Join(os.TempDir(), "salam-agent-browser-" + crypto.RandomHex(6) + "-" + str.FromInt(serial as i64))
+    if os.MkdirAll(dir) != 0 and not os.IsDir(dir):
+        error = "Could not create a browser profile folder."
+        ret null as Session*
+    end
+    log_path := filepath.Join(dir, "browser-errors.log")
+    mut args := Vector {} as Vector<str>
+    defer args.free()
+    each flag in ["--headless=new", "--remote-debugging-port=0", "--no-first-run", "--no-default-browser-check", "--disable-extensions", "--hide-scrollbars", "--mute-audio", "--disable-crash-reporter", "--window-size=1280,800"]:
+        args.push(flag)
+    end
+    args.push("--user-data-dir=" + dir)
+    args.push("--crash-dumps-dir=" + filepath.Join(dir, "crashes"))
+    if without_sandbox():
+        args.push("--no-sandbox")
+    end
+    args.push("about:blank")
+    mut child := process.Spawn(process.SpawnOptions { path = exe, args = args, output = log_path })
+    if child.pid <= 0:
+        remove_profile(dir)
+        error = "Could not start the browser " + exe + "."
+        ret null as Session*
+    end
+    port_file := filepath.Join(dir, "DevToolsActivePort")
+    started := sync.NowMs()
+    mut port := 0
+    mut ws_path := ""
+    until not read_active_port(port_file, port, ws_path):
+        if process.TryWait(child):
+            errors := io.ReadFile(log_path)
+            if str.Contains(errors, "No usable sandbox"):
+                error = "The browser " + exe + " cannot start its sandbox on this computer (Ubuntu and some other Linux systems block it for browsers that are not installed as a package). Install Google Chrome or Chromium from a package, or set SALAM_AGENT_BROWSER_NO_SANDBOX=1 to run it without the sandbox."
+            else:
+                error = "The browser " + exe + " stopped right after starting (exit code " + str.FromInt(child.exit_code as i64) + ")."
+            end
+            remove_profile(dir)
+            ret null as Session*
+        end
+        if sync.NowMs() - started > (20000 as i64) or cancelled():
+            process.KillTree(child)
+            remove_profile(dir)
+            error = cancelled() ? "[stopped by the user]" : "The browser " + exe + " did not start within 20 seconds."
+            ret null as Session*
+        end
+        sync.SleepMs(100)
+    end
+    conn := websocket.Dial("127.0.0.1", port, ws_path)
+    if not conn.open:
+        process.KillTree(child)
+        remove_profile(dir)
+        error = "Could not connect to the browser."
+        ret null as Session*
+    end
+    s := mem.AllocateZeroed(sizeof(Session) as u64) as Session*
+    s[0] = Session { key = key, child = child, dir = dir, ws = conn, cancelled = cancelled, used = sync.NowMs() }
+    created := raw_call(s, "", "Target.createTarget", `{"url":"about:blank"}`, error)
+    if error.len() == 0:
+        mut members := Vector {} as Vector<str>
+        defer members.free()
+        members.push(json.Member("targetId", json.Get(created, "targetId")))
+        members.push(json.MemberBool("flatten", true))
+        attached := raw_call(s, "", "Target.attachToTarget", json.Object(members), error)
+        s[0].page = json.Get(attached, "sessionId")
+        if error.len() == 0 and s[0].page.len() == 0:
+            error = "The browser did not open a page."
+        end
+    end
+    if error.len() == 0:
+        tree := page_call(s, "Page.getFrameTree", "{}", error)
+        s[0].main_frame = json.Get(json.Get(json.Get(tree, "frameTree"), "frame"), "id")
+    end
+    each method in ["Page.enable", "Runtime.enable", "Log.enable", "Network.enable"]:
+        if error.len() == 0:
+            _r := page_call(s, method, "{}", error)
+        end
+    end
+    if error.len() == 0:
+        mut members := Vector {} as Vector<str>
+        defer members.free()
+        members.push(json.Member("source", ONE_TAB))
+        _r := page_call(s, "Page.addScriptToEvaluateOnNewDocument", json.Object(members), error)
+    end
+    if error.len() == 0:
+        version := raw_call(s, "", "Browser.getVersion", "{}", error)
+        s[0].user_agent = str.Replace(json.Get(version, "userAgent"), "HeadlessChrome", "Chrome")
+        product := json.Get(version, "product")
+        slash := str.IndexOf(product, "/")
+        if slash >= 0:
+            rest := str.Substr(product, slash + 1, str.Len(product) - slash - 1)
+            dot := str.IndexOf(rest, ".")
+            s[0].version = dot > 0 ? str.Substr(rest, 0, dot) : rest
+        end
+    end
+    if error.len() == 0:
+        apply_viewport(s, error)
+    end
+    if error.len() > 0:
+        session_close(s)
+        ret null as Session*
+    end
+    ret s
+end
+
+func evaluate(s: Session*, expression: str, repl: bool, error &: str): str:
+    mut members := Vector {} as Vector<str>
+    defer members.free()
+    members.push(json.Member("expression", expression))
+    members.push(json.MemberBool("awaitPromise", true))
+    members.push(json.MemberBool("returnByValue", true))
+    members.push(json.MemberBool("userGesture", true))
+    members.push(json.MemberBool("replMode", repl))
+    r := page_call(s, "Runtime.evaluate", json.Object(members), error)
+    if error.len() > 0:
+        ret ""
+    end
+    details := json.Get(r, "exceptionDetails")
+    if not is_null(details):
+        error = exception_text(details)
+        ret ""
+    end
+    ret json.Get(r, "result")
+end
+
+func value_of(s: Session*, expression: str, error &: str): str:
+    result := evaluate(s, expression, false, error)
+    if error.len() > 0:
+        ret ""
+    end
+    ret json.Has(result, "value") ? json.Get(result, "value") : "null"
+end
+
+func wait_load(s: Session*, max_ms: i64):
+    started := sync.NowMs()
+    until not s[0].loaded and sync.NowMs() - started < max_ms and not s[0].closed and not stop_requested(s):
+        pump_for(s, 50 as i64)
+    end
+end
+
+func settle(s: Session*, max_ms: i64):
+    started := sync.NowMs()
+    until true:
+        pump_for(s, 100 as i64)
+        idle := s[0].activity == 0 or sync.NowMs() - s[0].activity >= (500 as i64)
+        quiet := s[0].inflight.size() == 0 and idle
+        elapsed := sync.NowMs() - started
+        if (quiet and elapsed >= 300) or elapsed >= max_ms or s[0].closed or stop_requested(s):
+            ret
+        end
+    end
+end
+
+func after_action(s: Session*, navs: i64, wait: i64):
+    pump_for(s, 250 as i64)
+    if s[0].navs != navs:
+        wait_load(s, 10000 as i64)
+    end
+    settle(s, wait)
+end
+
+func locate(s: Session*, selector: str, error &: str): Target:
+    script := `(() => { const e = document.querySelector(` + quote(selector) + `); if (!e) return null; e.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' }); const r = e.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2, left: r.left + scrollX, top: r.top + scrollY, w: r.width, h: r.height, label: e.tagName.toLowerCase() + ' "' + (e.innerText || e.value || e.getAttribute('aria-label') || '').replace(/\s+/g, ' ').trim().slice(0, 60) + '"' }; })()`
+    mut inner := ""
+    v := value_of(s, script, inner)
+    if inner.len() > 0:
+        error = "The selector " + selector + " did not work: " + inner
+        ret Target {}
+    end
+    if is_null(v):
+        error = "No element matches the selector " + selector + "."
+        ret Target {}
+    end
+    t := Target {
+        x = to_f64(json.Get(v, "x")), y = to_f64(json.Get(v, "y")), left = to_f64(json.Get(v, "left")),
+        top = to_f64(json.Get(v, "top")), w = to_f64(json.Get(v, "w")), h = to_f64(json.Get(v, "h")),
+        label = json.Get(v, "label")
+    }
+    if t.w <= 0.0 or t.h <= 0.0:
+        error = "The element " + selector + " is not visible (it has no size)."
+    end
+    ret t
+end
+
+func mouse(s: Session*, kind: str, x: f64, y: f64, buttons: int, error &: str):
+    mut members := Vector {} as Vector<str>
+    defer members.free()
+    members.push(json.Member("type", kind))
+    members.push(json.MemberRaw("x", num(x)))
+    members.push(json.MemberRaw("y", num(y)))
+    if kind != "mouseMoved":
+        members.push(json.Member("button", "left"))
+        members.push(json.MemberInt("buttons", buttons as i64))
+        members.push(json.MemberInt("clickCount", 1))
+    end
+    _r := page_call(s, "Input.dispatchMouseEvent", json.Object(members), error)
+end
+
+func click_at(s: Session*, x: f64, y: f64, error &: str):
+    mouse(s, "mouseMoved", x, y, 0, error)
+    if error.len() == 0:
+        mouse(s, "mousePressed", x, y, 1, error)
+    end
+    if error.len() == 0:
+        mouse(s, "mouseReleased", x, y, 0, error)
+    end
+end
+
+func press_key(s: Session*, spec: str, error &: str):
+    k := parse_key(spec, error)
+    if error.len() > 0:
+        ret
+    end
+    mut down := Vector {} as Vector<str>
+    defer down.free()
+    down.push(json.Member("type", k.text.len() == 0 ? "rawKeyDown" : "keyDown"))
+    down.push(json.MemberInt("modifiers", k.modifiers as i64))
+    down.push(json.Member("key", k.key))
+    down.push(json.Member("code", k.code))
+    down.push(json.MemberInt("windowsVirtualKeyCode", k.key_code as i64))
+    if k.text.len() > 0:
+        down.push(json.Member("text", k.text))
+        down.push(json.Member("unmodifiedText", k.text))
+    end
+    _a := page_call(s, "Input.dispatchKeyEvent", json.Object(down), error)
+    if error.len() > 0:
+        ret
+    end
+    mut up := Vector {} as Vector<str>
+    defer up.free()
+    up.push(json.Member("type", "keyUp"))
+    up.push(json.MemberInt("modifiers", k.modifiers as i64))
+    up.push(json.Member("key", k.key))
+    up.push(json.Member("code", k.code))
+    up.push(json.MemberInt("windowsVirtualKeyCode", k.key_code as i64))
+    _b := page_call(s, "Input.dispatchKeyEvent", json.Object(up), error)
+end
+
+func capture(s: Session*, full: bool, selector: str, error &: str): Shot:
+    mut w := s[0].width as f64
+    mut h := s[0].height as f64
+    mut has_clip := false
+    mut clip_x := 0.0
+    mut clip_y := 0.0
+    if selector.len() > 0:
+        t := locate(s, selector, error)
+        if error.len() > 0:
+            ret Shot {}
+        end
+        w = t.w > 4000.0 ? 4000.0 : t.w
+        h = t.h > MAX_PAGE_HEIGHT ? MAX_PAGE_HEIGHT : t.h
+        has_clip = true
+        clip_x = t.left
+        clip_y = t.top
+    else full:
+        m := page_call(s, "Page.getLayoutMetrics", "{}", error)
+        if error.len() > 0:
+            ret Shot {}
+        end
+        css := json.Get(m, "cssContentSize")
+        box := is_null(css) ? json.Get(m, "contentSize") : css
+        raw_height := json.Get(box, "height")
+        h = raw_height.len() > 0 ? to_f64(raw_height) : h
+        h = h < 1.0 ? 1.0 : (h > MAX_PAGE_HEIGHT ? MAX_PAGE_HEIGHT : h)
+        has_clip = true
+    end
+    qualities := [70, 50, 35, 35, 25]
+    scales := [1.0, 1.0, 1.0, 0.5, 0.35]
+    repeat 5 in i:
+        scale := scales[i]
+        mut members := Vector {} as Vector<str>
+        members.push(json.Member("format", "jpeg"))
+        members.push(json.MemberInt("quality", qualities[i] as i64))
+        members.push(json.MemberBool("fromSurface", true))
+        if has_clip or scale < 1.0:
+            mut box := Vector {} as Vector<str>
+            box.push(json.MemberRaw("x", num(clip_x)))
+            box.push(json.MemberRaw("y", num(clip_y)))
+            box.push(json.MemberRaw("width", num(w)))
+            box.push(json.MemberRaw("height", num(h)))
+            box.push(json.MemberRaw("scale", num(scale)))
+            members.push(json.MemberRaw("clip", json.Object(box)))
+            members.push(json.MemberBool("captureBeyondViewport", has_clip))
+            box.free()
+        end
+        r := page_call(s, "Page.captureScreenshot", json.Object(members), error)
+        members.free()
+        if error.len() > 0:
+            ret Shot {}
+        end
+        data := json.Get(r, "data")
+        if data.len() == 0:
+            error = "The browser returned an empty screenshot."
+            ret Shot {}
+        end
+        if str.Len(data) <= MAX_IMAGE:
+            ret Shot { data = data, width = ((w * scale) + 0.5) as int, height = ((h * scale) + 0.5) as int }
+        end
+    end
+    error = "The screenshot is too large to send even at low quality; try a smaller viewport or a selector."
+    ret Shot {}
+end
+
+func finish(s: Session*, body: str, shot: Shot): Outcome:
+    mut inner := ""
+    here := value_of(s, "[location.href, document.title]", inner)
+    mut url := s[0].url
+    mut title := ""
+    if inner.len() == 0:
+        items := json.Items(here)
+        if items.len() >= 2:
+            url = json.Unquote(items[0])
+            title = json.Unquote(items[1])
+        end
+        items.free()
+    end
+    mut text := state_line(url, s[0].status, s[0].doc_error, title, not s[0].loaded)
+    if body.len() > 0:
+        text = text + "\n" + body
+    end
+    if shot.data.len() > 0:
+        text = text + "\nScreenshot attached (" + str.FromInt(shot.width as i64) + "x" + str.FromInt(shot.height as i64) + " px, JPEG)."
+    end
+    if s[0].unseen.len() > 0:
+        text = text + "\n\nProblems seen:\n" + format_entries(s[0].unseen, 30, "- ")
+        s[0].unseen.free()
+        s[0].unseen = Vector {} as Vector<Entry>
+    end
+    ret Outcome { text = text, image = shot.data }
+end
+
+func reset_page(s: Session*):
+    s[0].unseen.free()
+    s[0].unseen = Vector {} as Vector<Entry>
+    s[0].loaded = false
+    s[0].status = -1
+    s[0].doc_error = ""
+end
+
+func format_page_text(v: str): str:
+    mut outline := Vector {} as Vector<str>
+    defer outline.free()
+    headings := json.Items(json.Get(v, "headings"))
+    if headings.len() > 0:
+        outline.push("Headings:")
+        each h in headings:
+            outline.push("  " + json.Unquote(h))
+        end
+    end
+    links := json.Items(json.Get(v, "links"))
+    if links.len() > 0:
+        outline.push("Links (" + str.FromInt(links.len() as i64) + "):")
+        each l in links:
+            parts := json.Items(l)
+            label := parts.len() > 0 ? json.Unquote(parts[0]) : ""
+            target := parts.len() > 1 ? json.Unquote(parts[1]) : ""
+            outline.push("  " + (label.len() > 0 ? label : "(no text)") + " -> " + target)
+            parts.free()
+        end
+    end
+    buttons := json.Items(json.Get(v, "buttons"))
+    if buttons.len() > 0:
+        outline.push("Buttons:")
+        each b in buttons:
+            shown := json.Unquote(b)
+            outline.push(shown.len() > 0 ? "  " + shown : "  (no text)")
+        end
+    end
+    inputs := json.Items(json.Get(v, "inputs"))
+    if inputs.len() > 0:
+        outline.push("Inputs:")
+        each i in inputs:
+            raw_tag := json.Get(i, "tag")
+            mut line := "  " + (raw_tag.len() > 0 ? raw_tag : "input")
+            each field in ["type", "name", "placeholder", "label"]:
+                value := json.Get(i, field)
+                if value.len() > 0:
+                    line = line + " " + field + `="` + value + `"`
+                end
+            end
+            outline.push(line)
+        end
+    end
+    images := json.Items(json.Get(v, "images"))
+    if images.len() > 0:
+        outline.push("Images with problems:")
+        each i in images:
+            mut why := Vector {} as Vector<str>
+            if json.Get(i, "broken") == "true":
+                why.push("failed to load")
+            end
+            if json.Get(i, "noalt") == "true":
+                why.push("no alt text")
+            end
+            outline.push("  " + json.Get(i, "src") + " (" + str.Join(why, ", ") + ")")
+            why.free()
+        end
+    end
+    headings.free()
+    links.free()
+    buttons.free()
+    inputs.free()
+    images.free()
+    joined := clip(str.Join(outline, "\n"), 8000)
+    mut b := str.NewBuilder()
+    mut blank := 0
+    lines := str.Split(json.Get(v, "text"), "\n")
+    defer lines.free()
+    each raw in lines:
+        line := str.TrimRight(raw)
+        blank = str.Trim(line).len() == 0 ? blank + 1 : 0
+        if blank < 2:
+            str.BufAppend(b, line)
+            str.BufAppendChar(b, 10)
+        end
+    end
+    left := MAX_TEXT - str.CharCount(joined)
+    body := clip(str.Trim(str.BufStr(b)), left < 4000 ? 4000 : left)
+    mut out := "Visible text:\n" + (body.len() > 0 ? body : "(none)")
+    if joined.len() > 0:
+        out = out + "\n\n" + joined
+    end
+    ret out
+end
+
+func pick_wait(r: Request, fallback: i64): i64:
+    ret r.wait_ms >= 0 ? r.wait_ms : fallback
+end
+
+func run_action(s: Session*, r: Request): Outcome:
+    mut error := ""
+    empty := Shot {}
+    if r.width > 0 or r.height > 0:
+        if r.width > 0:
+            s[0].width = r.width
+        end
+        if r.height > 0:
+            s[0].height = r.height
+        end
+        apply_viewport(s, error)
+        if error.len() > 0:
+            ret fail(error)
+        end
+    end
+    navs := s[0].navs
+    act := r.act
+    if act == "open":
+        reset_page(s)
+        mut members := Vector {} as Vector<str>
+        defer members.free()
+        members.push(json.Member("url", r.url))
+        nav := page_call(s, "Page.navigate", json.Object(members), error)
+        if error.len() > 0:
+            ret fail(error)
+        end
+        failure := json.Get(nav, "errorText")
+        if failure.len() > 0:
+            ret fail("Could not open " + r.url + ": " + failure + ".")
+        end
+        if json.Get(nav, "loaderId").len() > 0:
+            wait_load(s, 20000 as i64)
+        else:
+            s[0].loaded = true
+        end
+        settle(s, pick_wait(r, DEFAULT_WAIT as i64))
+        shot := capture(s, false, "", error)
+        if error.len() > 0:
+            ret fail(error)
+        end
+        ret finish(s, "", shot)
+    else act == "screenshot":
+        shot := capture(s, r.full_page, r.selector, error)
+        if error.len() > 0:
+            ret fail(error)
+        end
+        ret finish(s, "", shot)
+    else act == "click" or act == "hover":
+        mut x := r.x
+        mut y := r.y
+        verb := act == "click" ? "Clicked" : "Hovered"
+        mut what := verb + (act == "click" ? " at (" : " at (") + num(x) + ", " + num(y) + ")."
+        if r.selector.len() > 0:
+            t := locate(s, r.selector, error)
+            if error.len() > 0:
+                ret fail(error)
+            end
+            x = t.x
+            y = t.y
+            what = verb + (act == "click" ? " " : " over ") + t.label + " at (" + num((x + 0.5) as i64 as f64) + ", " + num((y + 0.5) as i64 as f64) + ")."
+        end
+        if act == "click":
+            click_at(s, x, y, error)
+        else:
+            mouse(s, "mouseMoved", x, y, 0, error)
+        end
+        if error.len() > 0:
+            ret fail(error)
+        end
+        after_action(s, navs, pick_wait(r, act == "click" ? 1000 as i64 : 300 as i64))
+        shot := capture(s, false, "", error)
+        if error.len() > 0:
+            ret fail(error)
+        end
+        ret finish(s, what, shot)
+    else act == "type":
+        mut what := ""
+        if r.selector.len() > 0:
+            script := `(() => { const e = document.querySelector(` + quote(r.selector) + `); if (!e) return null; e.scrollIntoView({ block: 'center', behavior: 'instant' }); e.focus(); if (typeof e.value === 'string' && typeof e.setSelectionRange === 'function') { try { e.setSelectionRange(e.value.length, e.value.length); } catch (_) {} } return document.activeElement === e || e.contains(document.activeElement); })()`
+            mut inner := ""
+            focused := value_of(s, script, inner)
+            if inner.len() > 0:
+                ret fail("The selector " + r.selector + " did not work: " + inner)
+            end
+            if is_null(focused):
+                ret fail("No element matches the selector " + r.selector + ".")
+            end
+            if focused != "true":
+                ret fail(r.selector + " could not take the keyboard focus.")
+            end
+        end
+        if r.text.len() > 0:
+            mut members := Vector {} as Vector<str>
+            defer members.free()
+            members.push(json.Member("text", r.text))
+            _typed := page_call(s, "Input.insertText", json.Object(members), error)
+            if error.len() > 0:
+                ret fail(error)
+            end
+            count := str.CharCount(r.text)
+            what = "Typed " + str.FromInt(count as i64) + " character" + (count == 1 ? "" : "s")
+            if r.selector.len() > 0:
+                what = what + " into " + r.selector
+            end
+            mut inner := ""
+            current := value_of(s, "document.activeElement && document.activeElement.value", inner)
+            if inner.len() == 0 and current != "null":
+                what = what + `; its value is now "` + clip(current, 200) + `"`
+            end
+            what = what + "."
+        end
+        if r.key_name.len() > 0:
+            press_key(s, r.key_name, error)
+            if error.len() > 0:
+                ret fail(error)
+            end
+            what = what + " Pressed " + r.key_name + "."
+        end
+        after_action(s, navs, pick_wait(r, 600 as i64))
+        shot := capture(s, false, "", error)
+        if error.len() > 0:
+            ret fail(error)
+        end
+        ret finish(s, str.Trim(what), shot)
+    else act == "press":
+        press_key(s, r.key_name, error)
+        if error.len() > 0:
+            ret fail(error)
+        end
+        after_action(s, navs, pick_wait(r, 600 as i64))
+        ret finish(s, "Pressed " + r.key_name + ".", empty)
+    else act == "scroll":
+        if r.selector.len() > 0:
+            _t := locate(s, r.selector, error)
+        else:
+            dy := r.has_y ? num(r.y) : "innerHeight"
+            _v := value_of(s, "window.scrollBy(" + num(r.x) + ", " + dy + ")", error)
+        end
+        if error.len() > 0:
+            ret fail(error)
+        end
+        settle(s, pick_wait(r, 400 as i64))
+        mut inner := ""
+        pos := value_of(s, "[Math.round(scrollY), innerHeight, document.documentElement.scrollHeight]", inner)
+        items := json.Items(pos)
+        defer items.free()
+        at := (i: int): ret items.len() > i ? items[i] : "0" end
+        what := "Scrolled to y=" + at(0) + " (viewport " + at(1) + " px, page " + at(2) + " px tall)."
+        shot := capture(s, false, "", error)
+        if error.len() > 0:
+            ret fail(error)
+        end
+        ret finish(s, what, shot)
+    else act == "eval":
+        mut members := Vector {} as Vector<str>
+        defer members.free()
+        members.push(json.Member("expression", r.script))
+        members.push(json.Member("sourceURL", ""))
+        members.push(json.MemberBool("persistScript", false))
+        compiled := page_call(s, "Runtime.compileScript", json.Object(members), error)
+        if error.len() > 0:
+            ret fail(error)
+        end
+        details := json.Get(compiled, "exceptionDetails")
+        description := path2(details, "exception", "description")
+        complaint := description.len() > 0 ? description : json.Get(details, "text")
+        mut inner := ""
+        result := str.Contains(complaint, "Illegal return statement") ? evaluate(s, "(async () => {\n" + r.script + "\n})()", false, inner) : evaluate(s, r.script, true, inner)
+        if inner.len() > 0:
+            ret fail("The script failed: " + inner)
+        end
+        mut shown := ""
+        if json.Has(result, "value"):
+            raw := json.Get(result, "value")
+            shown = json.Valid(raw) ? json.Indent(raw) : quote(raw)
+        else json.Get(result, "type") == "undefined":
+            shown = "undefined"
+        else:
+            shown = remote_text(result)
+        end
+        ret finish(s, "Result:\n" + clip(shown, MAX_TEXT), empty)
+    else act == "text":
+        v := value_of(s, OUTLINE, error)
+        if error.len() > 0:
+            ret fail(error)
+        end
+        ret finish(s, format_page_text(v), empty)
+    else act == "console":
+        body := s[0].log.len() == 0 ? "No console messages since the last check." : "Console since the last check (every level):\n" + format_entries(s[0].log, BUFFER, "")
+        s[0].unseen.free()
+        s[0].unseen = Vector {} as Vector<Entry>
+        s[0].log.free()
+        s[0].log = Vector {} as Vector<Entry>
+        ret finish(s, body, empty)
+    else act == "network":
+        each _, pending in s[0].requests:
+            net_record(s, pending, false, 0.0, "")
+        end
+        body := s[0].net.len() == 0 ? "No requests since the last check." : "Requests since the last check (method, status, type, url, time):\n" + format_requests(s[0].net)
+        s[0].net.free()
+        s[0].net = Vector {} as Vector<NetEntry>
+        ret finish(s, body, empty)
+    else act == "select":
+        v := value_of(s, SELECT_JS + "(" + quote(r.selector) + ", " + quote(str.Trim(r.text)) + ")", error)
+        if error.len() > 0:
+            ret fail("The selector " + r.selector + " did not work: " + error)
+        end
+        if is_null(v):
+            ret fail("No element matches the selector " + r.selector + ".")
+        end
+        tag := json.Get(v, "tag")
+        if tag.len() > 0:
+            ret fail(r.selector + " is a <" + tag + "> element, not a <select>.")
+        end
+        if json.Has(v, "options"):
+            options := json.Items(json.Get(v, "options"))
+            defer options.free()
+            mut names := Vector {} as Vector<str>
+            defer names.free()
+            each option in options:
+                names.push(json.Unquote(option))
+            end
+            ret fail("No option of " + r.selector + ` matches "` + str.Trim(r.text) + `". The options are: ` + str.Join(names, "; ") + ".")
+        end
+        after_action(s, navs, pick_wait(r, 600 as i64))
+        shot := capture(s, false, "", error)
+        if error.len() > 0:
+            ret fail(error)
+        end
+        ret finish(s, "selected " + json.Get(v, "selected"), shot)
+    else act == "wait":
+        max := pick_wait(r, 10000 as i64)
+        by_text := r.selector.len() == 0
+        check := by_text ? "!!document.body && document.body.innerText.includes(" + quote(r.text) + ")" : VISIBLE_JS + "(" + quote(r.selector) + ")"
+        shown := by_text ? `"` + clip(r.text, 100) + `"` : r.selector
+        started := sync.NowMs()
+        until true:
+            mut inner := ""
+            found := value_of(s, check, inner)
+            if inner.len() == 0 and found == "true":
+                ret finish(s, "Found " + shown + " after " + str.FromInt(sync.NowMs() - started) + " ms.", empty)
+            end
+            if str.Contains(inner, "is not a valid selector"):
+                ret fail("The selector " + r.selector + " did not work: " + inner)
+            end
+            if sync.NowMs() - started >= max or s[0].closed or stop_requested(s):
+                break
+            end
+            pump_for(s, 200 as i64)
+        end
+        shot := capture(s, false, "", error)
+        if error.len() > 0:
+            ret fail(error)
+        end
+        ret finish(s, "Still not there after " + str.FromInt(sync.NowMs() - started) + " ms: " + shown + ".", shot)
+    else act == "reload":
+        reset_page(s)
+        _r := page_call(s, "Page.reload", "{}", error)
+        if error.len() > 0:
+            ret fail(error)
+        end
+        wait_load(s, 20000 as i64)
+        settle(s, pick_wait(r, DEFAULT_WAIT as i64))
+        shot := capture(s, false, "", error)
+        if error.len() > 0:
+            ret fail(error)
+        end
+        ret finish(s, "Reloaded.", shot)
+    else act == "back":
+        h := page_call(s, "Page.getNavigationHistory", "{}", error)
+        if error.len() > 0:
+            ret fail(error)
+        end
+        index := str.ToInt(json.Get(h, "currentIndex"))
+        if index <= 0:
+            ret fail("There is no earlier page in this tab's history.")
+        end
+        entries := json.Items(json.Get(h, "entries"))
+        defer entries.free()
+        mut members := Vector {} as Vector<str>
+        defer members.free()
+        members.push(json.MemberRaw("entryId", json.Get(entries[index - 1], "id")))
+        _r := page_call(s, "Page.navigateToHistoryEntry", json.Object(members), error)
+        if error.len() > 0:
+            ret fail(error)
+        end
+        after_action(s, navs, pick_wait(r, DEFAULT_WAIT as i64))
+        ret finish(s, "Went back one page.", empty)
+    end
+    ret fail("Unknown browser action " + act + ".")
+end
+
+func reaper():
+    until true:
+        sync.SleepMs(60000)
+        sync.Lock(g_lock)
+        mut stale := Vector {} as Vector<str>
+        now := sync.NowMs()
+        each key, s in g_sessions:
+            if not s[0].busy and now - s[0].used >= (IDLE_MS as i64):
+                stale.push(key)
+            end
+        end
+        mut closing := Vector {} as Vector<Session*>
+        each key in stale:
+            closing.push(g_sessions.get(key))
+            _gone := g_sessions.remove(key)
+        end
+        sync.Unlock(g_lock)
+        each s in closing:
+            session_close(s)
+        end
+        stale.free()
+        closing.free()
+    end
+end
+
+@en "Parse"
+pub func Parse(args: str, chat: str, resolve: func (str) str): Request:
+    name := json.Get(args, "action")
+    act := normalize_act(name)
+    if act.len() == 0:
+        ret Request { error = `Unknown browser action "` + name + `"; use open, screenshot, click, type, press, scroll, eval, text, console, network, hover, select, wait, reload, back or close.` }
+    end
+    session := clip(str.Trim(json.Get(args, "session")), 64)
+    mut r := Request {
+        key = session.len() == 0 ? chat : chat + "#" + session, act = act, selector = str.Trim(json.Get(args, "selector")),
+        text = json.Get(args, "text"), key_name = str.Trim(json.Get(args, "key")), script = json.Get(args, "script"),
+        full_page = json.Get(args, "full_page") == "true"
+    }
+    raw_x := json.Get(args, "x")
+    raw_y := json.Get(args, "y")
+    if not is_null(raw_x):
+        r.has_x = true
+        r.x = to_f64(raw_x)
+    end
+    if not is_null(raw_y):
+        r.has_y = true
+        r.y = to_f64(raw_y)
+    end
+    each field in ["width", "height"]:
+        raw := json.Get(args, field)
+        if not is_null(raw):
+            n := str.ToInt(raw)
+            if n < 100 or n > 4000:
+                ret Request { error = field + " " + raw + " is out of range; use 100 to 4000 pixels." }
+            end
+            if field == "width":
+                r.width = n
+            else:
+                r.height = n
+            end
+        end
+    end
+    raw_wait := json.Get(args, "wait_ms")
+    if not is_null(raw_wait):
+        limit := act == "wait" ? MAX_WAIT_FOR : MAX_WAIT
+        wanted := to_i64(raw_wait)
+        r.wait_ms = wanted > limit ? limit as i64 : wanted
+    end
+    raw_timeout := json.Get(args, "timeout")
+    if not is_null(raw_timeout):
+        seconds := to_i64(raw_timeout)
+        r.timeout_ms = (seconds < 5 ? 5 as i64 : (seconds > 120 ? 120 as i64 : seconds)) * 1000
+    end
+    if act == "open":
+        mut error := ""
+        r.url = normalize_url(json.Get(args, "url"), resolve, error)
+        if error.len() > 0:
+            ret Request { error = error }
+        end
+    else (act == "click" or act == "hover") and r.selector.len() == 0 and not (r.has_x and r.has_y):
+        ret Request { error = act + " needs a selector, or both x and y." }
+    else act == "select" and r.selector.len() == 0:
+        ret Request { error = "select needs the selector of a <select> element." }
+    else act == "select" and str.Trim(r.text).len() == 0:
+        ret Request { error = "select needs text: the option's value or visible text." }
+    else act == "wait" and r.selector.len() == 0 and str.Trim(r.text).len() == 0:
+        ret Request { error = "wait needs a selector, or text to look for on the page." }
+    else act == "type" and r.text.len() == 0 and r.key_name.len() == 0:
+        ret Request { error = "type needs text." }
+    else act == "press" and r.key_name.len() == 0:
+        ret Request { error = "press needs key, for example Enter." }
+    else act == "eval" and str.Trim(r.script).len() == 0:
+        ret Request { error = "eval needs script." }
+    end
+    if r.key_name.len() > 0:
+        mut error := ""
+        _k := parse_key(r.key_name, error)
+        if error.len() > 0:
+            ret Request { error = error }
+        end
+    end
+    ret r
+end
+
+@en "KindOf"
+pub func KindOf(r: Request): str:
+    ret r.act == "eval" ? "exec" : "read"
+end
+
+@en "IsLocalFile"
+pub func IsLocalFile(r: Request): bool:
+    ret r.act == "open" and str.StartsWith(str.Lower(r.url), "file:")
+end
+
+@en "Summary"
+pub func Summary(r: Request): str:
+    selector := r.selector
+    a := r.act
+    mut line := "browser " + a
+    if a == "open":
+        line = "browser open " + r.url
+    else a == "screenshot":
+        line = selector.len() > 0 ? "browser screenshot " + selector : (r.full_page ? "browser screenshot (full page)" : "browser screenshot")
+    else a == "click" or a == "hover":
+        line = selector.len() > 0 ? "browser " + a + " " + selector : "browser " + a + " at " + num(r.x) + ", " + num(r.y)
+    else a == "type":
+        line = selector.len() > 0 ? "browser type into " + selector : "browser type"
+    else a == "press":
+        line = "browser press " + r.key_name
+    else a == "scroll" and selector.len() > 0:
+        line = "browser scroll to " + selector
+    else a == "eval":
+        line = "browser eval " + str.Trim(r.script)
+    else a == "select":
+        line = "browser select " + str.Trim(r.text) + " in " + selector
+    else a == "wait":
+        line = selector.len() > 0 ? "browser wait for " + selector : `browser wait for text "` + str.Trim(r.text) + `"`
+    end
+    ret first_line(line, 160)
+end
+
+@en "Detail"
+pub func Detail(r: Request): str:
+    if r.act == "type":
+        ret r.text
+    else r.act == "eval":
+        ret r.script
+    end
+    ret ""
+end
+
+@en "Lang"
+pub func Lang(r: Request): str:
+    ret r.act == "eval" ? "javascript" : ""
+end
+
+@en "Execute"
+pub func Execute(r: Request, cancelled: func () bool): Outcome:
+    if r.act == "close":
+        sync.Lock(g_lock)
+        found := g_sessions.has(r.key)
+        s := found ? g_sessions.get(r.key) : null as Session*
+        if found:
+            _gone := g_sessions.remove(r.key)
+        end
+        sync.Unlock(g_lock)
+        if not found:
+            ret Outcome { text = "No browser was open for this chat." }
+        end
+        session_close(s)
+        ret Outcome { text = "Closed the browser for this chat." }
+    end
+    sync.Lock(g_lock)
+    if not g_reaper:
+        g_reaper = true
+        _thread := spawn(reaper)
+    end
+    until g_launching.has(r.key) or (g_sessions.has(r.key) and g_sessions.get(r.key)[0].busy):
+        sync.Unlock(g_lock)
+        if cancelled():
+            ret fail("[stopped by the user]")
+        end
+        sync.SleepMs(50)
+        sync.Lock(g_lock)
+    end
+    mut s := null as Session*
+    if g_sessions.has(r.key):
+        s = g_sessions.get(r.key)
+        s[0].busy = true
+    else:
+        g_launching.put(r.key, true)
+    end
+    sync.Unlock(g_lock)
+    if s != null and session_dead(s):
+        sync.Lock(g_lock)
+        _gone := g_sessions.remove(r.key)
+        g_launching.put(r.key, true)
+        sync.Unlock(g_lock)
+        session_close(s)
+        s = null as Session*
+    end
+    if s == null:
+        mut error := ""
+        s = session_launch(r.key, cancelled, error)
+        sync.Lock(g_lock)
+        _done := g_launching.remove(r.key)
+        if s != null:
+            s[0].busy = true
+            g_sessions.put(r.key, s)
+        end
+        sync.Unlock(g_lock)
+        if s == null:
+            ret fail(error)
+        end
+    end
+    s[0].cancelled = cancelled
+    s[0].answer_id = 0
+    budget := r.timeout_ms + (r.wait_ms > 0 ? r.wait_ms : 0 as i64)
+    s[0].deadline = sync.NowMs() + budget
+    out := run_action(s, r)
+    timed_out := sync.NowMs() > s[0].deadline
+    stopped := cancelled()
+    s[0].used = sync.NowMs()
+    if timed_out or s[0].closed:
+        sync.Lock(g_lock)
+        _gone := g_sessions.remove(r.key)
+        sync.Unlock(g_lock)
+        session_close(s)
+        if timed_out:
+            ret fail("The browser did not finish within " + str.FromInt(budget / 1000) + " seconds, so Salam Agent closed it; the next browser call starts a fresh one.")
+        end
+        ret out
+    end
+    sync.Lock(g_lock)
+    s[0].busy = false
+    sync.Unlock(g_lock)
+    if stopped:
+        ret fail("[stopped by the user]")
+    end
+    ret out
+end
+
+@en "CloseAll"
+pub func CloseAll():
+    sync.Lock(g_lock)
+    mut all := Vector {} as Vector<Session*>
+    each _, s in g_sessions:
+        all.push(s)
+    end
+    g_sessions.free()
+    g_sessions = HashMap {} as HashMap<str, Session*>
+    sync.Unlock(g_lock)
+    each s in all:
+        session_close(s)
+    end
+    all.free()
+end

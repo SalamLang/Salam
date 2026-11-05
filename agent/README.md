@@ -8,6 +8,18 @@ create and edit files in a folder you choose, and run your tests.
 It is a [Tauri 2](https://tauri.app) app written in Rust. It uses the
 system webview (WebView2, WKWebView or WebKitGTK), not Electron.
 
+`salam/` holds a port written entirely in Salam on
+[`std/desktop`](../docs/DESKTOP.md). It behaves like the Rust app. Build it with
+`salam bundle agent/salam`, and test it with
+`xvfb-run python3 agent/salam/test_agent.py <binary>`, which drives it from a
+real page against a fake backend. Set `SALAM_AGENT_BROWSER` to also test the
+`browser` tool against Chrome. Set `SALAM_AGENT_DEBUG=1` to use `SALAM_APP_URL`,
+`SALAM_API_URL` and `SALAM_BRIDGE_URL`.
+
+`.github/workflows/desktop.yml` runs that test on real Linux, Windows and macOS
+(arm64 and x64), with the `browser` tool only on Linux. The releases still ship
+the Rust app.
+
 ## How it works
 
 ```text

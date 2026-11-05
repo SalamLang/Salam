@@ -65,13 +65,34 @@ export WINEDEBUG=-all
 
 cat >"$work/main.salam" <<'SALAM'
 import webview
+import str
 
 func main():
+    webview.RegisterScheme("app", (r: webview.Request):
+        println "scheme", r.scheme, r.method, r.path, r.query
+        body := "hello"
+        mut res := webview.Response { mime = "text/plain", data = body as void*, size = 5 as i64 }
+        res.Header("X-Salam", "1")
+        ret res
+    end)
     mut w := webview.Create(false)
     println "closed", w.IsClosed()
     w.SetTitle("title")
     w.SetSize(640, 480)
-    w.Navigate("https://example.com/")
+    w.SetContextMenu(false)
+    w.Init("window.a = 1")
+    w.Init("window.b = 2", true)
+    w.OnMessage((m: str): println "message", m end)
+    w.OnNavigate((u: str):
+        println "guard", u
+        ret not str.Contains(u, "blocked")
+    end)
+    w.OnNewWindow((u: str): println "popup", u end)
+    w.OnLoad((u: str, done: bool): println "load", u, done end)
+    w.OnCrash((): println "crash" end)
+    w.Navigate(webview.SchemeURL("app", "/index.html?x=1"))
+    w.Navigate("https://blocked.example/")
+    println "url", w.URL()
     w.SetHTML("<p>سلام</p>")
     repeat 1000:
         w.Eval("1 + 1")
@@ -82,25 +103,38 @@ end
 SALAM
 
 cat >"$work/expect" <<'OUT'
-bounds 0 0 800 600
+filter https://app.localhost/*
 closed false
-bounds 0 0 640 480
-navigate https://example.com/
+script if(window===window.top){window.a = 1}
+script window.b = 2
+navigate https://app.localhost/index.html?x=1
+guard https://app.localhost/index.html?x=1
+load https://app.localhost/index.html?x=1 false
+scheme app GET /index.html x=1
+response 200 body=hello
+reason OK
+headers Content-Type: text/plain
+X-Salam: 1
+message {"hello":1}
+new window handled 1
+popup https://popup.example/
+crash
+load https://app.localhost/index.html?x=1 true
+navigate https://blocked.example/
+guard https://blocked.example/
+navigation cancelled
+url https://app.localhost/index.html?x=1
 html <p>سلام</p>
 exec 1 + 1
-close exec=1000 bad_stack=0
+close exec=1000 bad_stack=0 bounds=1
 done true
 OUT
 
 for triple in ${NATIVE_WEBVIEW_TRIPLES:-i686-w64-windows-gnu x86_64-w64-windows-gnu}; do
     tool=${triple%%-*}-w64-mingw32
-    decorated=
-    case "$triple" in i686-*) decorated=@16 ;; esac
     d="$work/$triple"
     mkdir -p "$d"
-    printf 'LIBRARY WebView2Loader.dll\nEXPORTS\nCreateCoreWebView2EnvironmentWithOptions%s\n' "$decorated" >"$d/mock.def"
-    if ! "$tool-gcc" -shared "$MOCK" -o "$d/WebView2Loader.dll" -Wl,--kill-at >"$d/mock.log" 2>&1 ||
-        ! "$tool-dlltool" -d "$d/mock.def" -k -l "$d/libWebView2Loader.dll.a" >>"$d/mock.log" 2>&1; then
+    if ! "$tool-gcc" -shared "$MOCK" -o "$d/WebView2Loader.dll" -Wl,--kill-at -lole32 >"$d/mock.log" 2>&1; then
         echo "FAIL $triple mock does not build"
         head -5 "$d/mock.log"
         fail=$((fail + 1))

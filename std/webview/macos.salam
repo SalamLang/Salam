@@ -17,20 +17,30 @@ package webview
 if SALAM_OS_MAC and not SALAM_WEBVIEW_CEF:
     link framework "Cocoa"
     link framework "WebKit"
+    link dynamic "objc"
 
     extern:
         func objc_getClass(name: str): void*
         func sel_registerName(name: str): void*
         func objc_msgSend(receiver: void*, selector: void*): void*
+        func objc_allocateClassPair(superclass: void*, name: str, extra: usize): void*
+        func objc_registerClassPair(cls: void*)
+        func objc_getProtocol(name: str): void*
+        func class_addMethod(cls: void*, selector: void*, imp: void*, types: str): i8
+        func class_addProtocol(cls: void*, protocol: void*): i8
+        func objc_autoreleasePoolPush(): void*
+        func objc_autoreleasePoolPop(pool: void*)
+        func dispatch_async_f(queue: void*, context: void*, work: void*)
+        func dlsym(handle: void*, name: str): void*
     end
 
-    @en "HintNone"
-    @fa "بدون اشاره"
-    pub const HINT_NONE := 0
-
-    @en "HintFixed"
-    @fa "اشاره ثابت"
-    pub const HINT_FIXED := 1
+    mut _mac_views := Vector {} as Vector<_MacView>
+    mut _mac_ready := false
+    mut _mac_app := null as void*
+    mut _mac_delegate_cls := null as void*
+    mut _mac_webview_cls := null as void*
+    mut _mac_main_queue := null as void*
+    mut _mac_app_delegate := null as void*
 
     struct NSRect:
         pub x: f64 = 0.0
@@ -39,177 +49,574 @@ if SALAM_OS_MAC and not SALAM_WEBVIEW_CEF:
         pub h: f64 = 0.0
     end
 
-    @en "WebView"
-    @fa "نمایش وب"
-    pub struct WebView:
-        @en "window"
-        @fa "پنجره"
-        pub window: void* = null
-        @en "webview"
-        @fa "دسته مرورگر"
-        pub webview: void* = null
-        @en "closed"
-        @fa "بسته‌شده"
-        pub closed: bool = false
+    struct NSSize:
+        pub w: f64 = 0.0
+        pub h: f64 = 0.0
+    end
 
-        @en "destroy"
-        @fa "نابود کردن"
-        pub func Destroy():
-            if this.window != null and not this.closed:
-                objc_call0(this.window, sel_registerName("close"))
-                this.window = null
-                this.webview = null
-                this.closed = true
-            end
+    struct NSPoint:
+        pub x: f64 = 0.0
+        pub y: f64 = 0.0
+    end
+
+    struct _MacView:
+        pub window: void* = null
+        pub webview: void* = null
+        pub delegate: void* = null
+        pub config: void* = null
+        pub context_menu: bool = true
+    end
+
+    export:
+        func salam_wv_mac_drain(_context: void*):
+            _wv_drain()
+            _mac_post_wake()
         end
 
-        @en "run"
-        @fa "اجرا"
-        pub func Run():
-            if this.window == null or this.closed:
+        func salam_wv_mac_on_message(this_: void*, _cmd: void*, _controller: void*, message: void*):
+            frame := _mac_call0(message, "frameInfo")
+            if not _mac_bool0(frame, "isMainFrame"):
                 ret
             end
-            app_cls := objc_getClass("NSApplication")
-            app := objc_call0(app_cls, sel_registerName("sharedApplication"))
-            objc_call0(app, sel_registerName("run"))
-        end
-
-        @en "terminate"
-        @fa "پایان دادن"
-        pub func Terminate():
-            app_cls := objc_getClass("NSApplication")
-            app := objc_call0(app_cls, sel_registerName("sharedApplication"))
-            objc_call1(app, sel_registerName("terminate:"), null)
-            this.closed = true
-        end
-
-        @en "SetTitle"
-        @fa "تنظیم عنوان"
-        pub func SetTitle(title: str):
-            if this.window != null and not this.closed:
-                objc_call1(this.window, sel_registerName("setTitle:"), ns_string(title))
+            body := _mac_call0(message, "body")
+            if body != null and _mac_is_string(body):
+                _wv_fire_message(_mac_find_delegate(this_), _mac_str(body))
             end
         end
 
-        @en "SetSize"
-        @fa "تنظیم اندازه"
-        pub func SetSize(width: int, height: int, _hints: int = HINT_NONE):
-            if this.window != null and not this.closed:
-                frame := NSRect { x = 100.0, y = 100.0, w = width as f64, h = height as f64 }
-                objc_call_rect_bool(this.window, sel_registerName("setFrame:display:"), frame, 1 as i8)
+        func salam_wv_mac_should_close(this_: void*, _cmd: void*, _window: void*): i8:
+            ret _wv_fire_close(_mac_find_delegate(this_)) ? 1 as i8 : 0 as i8
+        end
+
+        func salam_wv_mac_will_close(this_: void*, _cmd: void*, _note: void*):
+            _wv_mark_closed(_mac_find_delegate(this_))
+        end
+
+        func salam_wv_mac_did_resize(this_: void*, _cmd: void*, _note: void*):
+            id := _mac_find_delegate(this_)
+            if id >= 0:
+                rect := _mac_rect0(_mac_views[id].webview, "bounds")
+                _wv_fire_resize(id, rect.w as int, rect.h as int)
             end
         end
 
-        @en "SetHTML"
-        @fa "تنظیم اچ تی ام ال"
-        pub func SetHTML(html: str):
-            if this.webview != null and not this.closed:
-                objc_call2(this.webview, sel_registerName("loadHTMLString:baseURL:"), ns_string(html), null)
+        func salam_wv_mac_decide_policy(this_: void*, _cmd: void*, _view: void*, action: void*, decision: void*):
+            id := _mac_find_delegate(this_)
+            target := _mac_call0(action, "targetFrame")
+            mut allow := true
+            if target != null and _mac_bool0(target, "isMainFrame"):
+                request := _mac_call0(action, "request")
+                url := _mac_str(_mac_call0(_mac_call0(request, "URL"), "absoluteString"))
+                allow = _wv_fire_navigate(id, url)
             end
+            _mac_call_block_long(decision, allow ? 1 : 0)
         end
 
-        @en "Navigate"
-        @fa "پیمایش"
-        pub func Navigate(url: str):
-            if this.webview != null and not this.closed:
-                url_obj := objc_call1(objc_getClass("NSURL"), sel_registerName("URLWithString:"), ns_string(url))
-                request := objc_call1(objc_getClass("NSURLRequest"), sel_registerName("requestWithURL:"), url_obj)
-                objc_call1(this.webview, sel_registerName("loadRequest:"), request)
+        func salam_wv_mac_create_view(this_: void*, _cmd: void*, _view: void*, _config: void*, action: void*, _features: void*): void*:
+            request := _mac_call0(action, "request")
+            url := _mac_str(_mac_call0(_mac_call0(request, "URL"), "absoluteString"))
+            _wv_fire_new_window(_mac_find_delegate(this_), url)
+            ret null
+        end
+
+        func salam_wv_mac_nav_start(this_: void*, _cmd: void*, view: void*, _nav: void*):
+            _mac_fire_load(this_, view, false)
+        end
+
+        func salam_wv_mac_nav_done(this_: void*, _cmd: void*, view: void*, _nav: void*):
+            _mac_fire_load(this_, view, true)
+        end
+
+        func salam_wv_mac_crashed(this_: void*, _cmd: void*, _view: void*):
+            _wv_fire_crash(_mac_find_delegate(this_))
+        end
+
+        func salam_wv_mac_alert(_this: void*, _cmd: void*, _view: void*, message: void*, _frame: void*, done: void*):
+            alert := _mac_new("NSAlert")
+            _mac_call1(alert, "setMessageText:", message)
+            _mac_call0(alert, "runModal")
+            _mac_call_block(done)
+        end
+
+        func salam_wv_mac_confirm(_this: void*, _cmd: void*, _view: void*, message: void*, _frame: void*, done: void*):
+            alert := _mac_new("NSAlert")
+            _mac_call1(alert, "setMessageText:", message)
+            _mac_call1(alert, "addButtonWithTitle:", ns_string("OK"))
+            _mac_call1(alert, "addButtonWithTitle:", ns_string("Cancel"))
+            answer := _mac_long0(alert, "runModal")
+            _mac_call_block_bool(done, answer == (1000 as i64))
+        end
+
+        func salam_wv_mac_scheme_start(_this: void*, _cmd: void*, _view: void*, task: void*):
+            request := _mac_call0(task, "request")
+            url_obj := _mac_call0(request, "URL")
+            url := _mac_str(_mac_call0(url_obj, "absoluteString"))
+            scheme := _mac_str(_mac_call0(url_obj, "scheme"))
+            method := _mac_str(_mac_call0(request, "HTTPMethod"))
+            req := _wv_split_url(url, scheme, method)
+            mut res := _wv_scheme_answer(req)
+            headers := _mac_new("NSMutableDictionary")
+            _mac_call2(headers, "setObject:forKey:", ns_string(res.mime), ns_string("Content-Type"))
+            mut h := 0
+            until h + 1 < res.headers.len():
+                _mac_call2(headers, "setObject:forKey:", ns_string(res.headers[h + 1]), ns_string(res.headers[h]))
+                h += 2
             end
-        end
-
-        @en "Eval"
-        @fa "ارزیابی"
-        pub func Eval(js: str):
-            if this.webview != null and not this.closed:
-                objc_call2(this.webview, sel_registerName("evaluateJavaScript:completionHandler:"), ns_string(js), null)
+            alloc := _mac_call0(objc_getClass("NSHTTPURLResponse"), "alloc")
+            make := (&objc_msgSend) as extern func (void*, void*, void*, i64, void*, void*) void*
+            response := make(
+                alloc, sel_registerName("initWithURL:statusCode:HTTPVersion:headerFields:"),
+                url_obj, res.status as i64, ns_string("HTTP/1.1"), headers
+            )
+            _mac_call1(task, "didReceiveResponse:", response)
+            if res.size > 0:
+                bytes := (&objc_msgSend) as extern func (void*, void*, void*, u64) void*
+                data := bytes(objc_getClass("NSData"), sel_registerName("dataWithBytes:length:"), res.data, res.size as u64)
+                _mac_call1(task, "didReceiveData:", data)
             end
+            _mac_call0(task, "didFinish")
+            _wv_request_free(req)
+            res.headers.free()
         end
 
-        @en "Init"
-        @fa "اولیه‌سازی"
-        pub func Init(js: str):
-            this.Eval(js)
+        func salam_wv_mac_scheme_stop(_this: void*, _cmd: void*, _view: void*, _task: void*):
+            _wv_touch()
         end
 
-        @en "IsClosed"
-        @fa "بسته شده است"
-        pub func IsClosed(): bool:
-            ret this.closed
+        func salam_wv_mac_should_terminate(_this: void*, _cmd: void*, _app: void*): u64:
+            Quit()
+            ret 0
+        end
+
+        func salam_wv_mac_menu_item(_this: void*, _cmd: void*, sender: void*):
+            _wv_on_command(_mac_long0(sender, "tag") as int)
+        end
+
+        func salam_wv_mac_will_open_menu(this_: void*, _cmd: void*, menu: void*, _event: void*):
+            repeat _mac_views.len() in i:
+                if _mac_views[i].webview == this_ and not _mac_views[i].context_menu:
+                    _mac_call0(menu, "removeAllItems")
+                end
+            end
         end
     end
 
-    func objc_call0(recv: void*, sel: void*): void*:
+    func _mac_call0(recv: void*, name: str): void*:
         fn := (&objc_msgSend) as extern func (void*, void*) void*
-        ret fn(recv, sel)
+        ret fn(recv, sel_registerName(name))
     end
 
-    func objc_call1(recv: void*, sel: void*, a1: void*): void*:
+    func _mac_call1(recv: void*, name: str, a1: void*): void*:
         fn := (&objc_msgSend) as extern func (void*, void*, void*) void*
-        ret fn(recv, sel, a1)
+        ret fn(recv, sel_registerName(name), a1)
     end
 
-    func objc_call2(recv: void*, sel: void*, a1: void*, a2: void*): void*:
+    func _mac_call2(recv: void*, name: str, a1: void*, a2: void*): void*:
         fn := (&objc_msgSend) as extern func (void*, void*, void*, void*) void*
-        ret fn(recv, sel, a1, a2)
+        ret fn(recv, sel_registerName(name), a1, a2)
     end
 
-    func objc_call_str(recv: void*, sel: void*, s: str): void*:
-        fn := (&objc_msgSend) as extern func (void*, void*, str) void*
-        ret fn(recv, sel, s)
+    func _mac_call_i(recv: void*, name: str, a1: i64): void*:
+        fn := (&objc_msgSend) as extern func (void*, void*, i64) void*
+        ret fn(recv, sel_registerName(name), a1)
     end
 
-    func objc_call_rect_init(
-        recv: void*, sel: void*, r: NSRect, style: u64, backing: u64, defr: i8
-    ): void*:
-        fn := (&objc_msgSend) as extern func (void*, void*, NSRect, u64, u64, i8) void*
-        ret fn(recv, sel, r, style, backing, defr)
+    func _mac_call_b(recv: void*, name: str, a1: bool):
+        fn := (&objc_msgSend) as extern func (void*, void*, i8) void*
+        _r := fn(recv, sel_registerName(name), a1 ? 1 as i8 : 0 as i8)
     end
 
-    func objc_call_rect_config(recv: void*, sel: void*, r: NSRect, cfg: void*): void*:
-        fn := (&objc_msgSend) as extern func (void*, void*, NSRect, void*) void*
-        ret fn(recv, sel, r, cfg)
+    func _mac_call_size(recv: void*, name: str, value: NSSize):
+        fn := (&objc_msgSend) as extern func (void*, void*, NSSize) void*
+        _r := fn(recv, sel_registerName(name), value)
     end
 
-    func objc_call_rect_bool(recv: void*, sel: void*, r: NSRect, flag: i8): void*:
-        fn := (&objc_msgSend) as extern func (void*, void*, NSRect, i8) void*
-        ret fn(recv, sel, r, flag)
+    func _mac_bool0(recv: void*, name: str): bool:
+        fn := (&objc_msgSend) as extern func (void*, void*) i8
+        ret fn(recv, sel_registerName(name)) != (0 as i8)
+    end
+
+    func _mac_long0(recv: void*, name: str): i64:
+        fn := (&objc_msgSend) as extern func (void*, void*) i64
+        ret fn(recv, sel_registerName(name))
+    end
+
+    func _mac_rect0(recv: void*, name: str): NSRect:
+        if SALAM_ARCH_ARM64:
+            fn := (&objc_msgSend) as extern func (void*, void*) NSRect
+            ret fn(recv, sel_registerName(name))
+        else:
+            stret := dlsym(((0 - 2) as size) as void*, "objc_msgSend_stret")
+            fn := stret as extern func (void*, void*) NSRect
+            ret fn(recv, sel_registerName(name))
+        end
+    end
+
+    func _mac_new(cls: str): void*:
+        ret _mac_call0(_mac_call0(objc_getClass(cls), "alloc"), "init")
+    end
+
+    func _mac_is_string(object: void*): bool:
+        fn := (&objc_msgSend) as extern func (void*, void*, void*) i8
+        ret fn(object, sel_registerName("isKindOfClass:"), objc_getClass("NSString")) != (0 as i8)
+    end
+
+    func _mac_str(ns: void*): str:
+        if ns == null:
+            ret ""
+        end
+        ret _mac_call0(ns, "UTF8String") as str
     end
 
     func ns_string(s: str): void*:
-        cls := objc_getClass("NSString")
-        ret objc_call_str(cls, sel_registerName("stringWithUTF8String:"), s)
+        fn := (&objc_msgSend) as extern func (void*, void*, str) void*
+        ret fn(objc_getClass("NSString"), sel_registerName("stringWithUTF8String:"), s)
     end
 
-    @en "create"
-    @fa "ایجاد"
-    pub func Create(_debug: bool = false): WebView:
-        sel_alloc := sel_registerName("alloc")
-        frame := NSRect { x = 100.0, y = 100.0, w = 800.0, h = 600.0 }
+    func _mac_block_invoke(block: void*): void*:
+        ret (block as void**)[2]
+    end
 
-        win_alloc := objc_call0(objc_getClass("NSWindow"), sel_alloc)
-        window := objc_call_rect_init(
-            win_alloc, sel_registerName("initWithContentRect:styleMask:backing:defer:"), frame, 15 as u64, 2 as u64, 0 as i8
+    func _mac_call_block(block: void*):
+        f := _mac_block_invoke(block) as extern func (void*)
+        f(block)
+    end
+
+    func _mac_call_block_long(block: void*, value: i64):
+        f := _mac_block_invoke(block) as extern func (void*, i64)
+        f(block, value)
+    end
+
+    func _mac_call_block_bool(block: void*, value: bool):
+        f := _mac_block_invoke(block) as extern func (void*, i8)
+        f(block, value ? 1 as i8 : 0 as i8)
+    end
+
+    func _mac_find_delegate(delegate: void*): int:
+        repeat _mac_views.len() in i:
+            if _mac_views[i].delegate == delegate:
+                ret i
+            end
+        end
+        ret -1
+    end
+
+    func _mac_fire_load(delegate: void*, view: void*, finished: bool):
+        url := _mac_call0(view, "URL")
+        text := url == null ? "" : _mac_str(_mac_call0(url, "absoluteString"))
+        _wv_fire_load(_mac_find_delegate(delegate), text, finished)
+    end
+
+    func _mac_add(cls: void*, name: str, imp: void*, types: str):
+        _added := class_addMethod(cls, sel_registerName(name), imp, types)
+    end
+
+    func _mac_conform(cls: void*, name: str):
+        protocol := objc_getProtocol(name)
+        if protocol != null:
+            _added := class_addProtocol(cls, protocol)
+        end
+    end
+
+    func _mac_make_classes():
+        base := objc_getClass("NSObject")
+        cls := objc_allocateClassPair(base, "SalamWebViewDelegate", 0 as usize)
+        _mac_conform(cls, "WKScriptMessageHandler")
+        _mac_conform(cls, "WKNavigationDelegate")
+        _mac_conform(cls, "WKUIDelegate")
+        _mac_conform(cls, "WKURLSchemeHandler")
+        _mac_conform(cls, "NSWindowDelegate")
+        _mac_conform(cls, "NSApplicationDelegate")
+        _mac_add(cls, "userContentController:didReceiveScriptMessage:", &salam_wv_mac_on_message, "v@:@@")
+        _mac_add(cls, "windowShouldClose:", &salam_wv_mac_should_close, "c@:@")
+        _mac_add(cls, "windowWillClose:", &salam_wv_mac_will_close, "v@:@")
+        _mac_add(cls, "windowDidResize:", &salam_wv_mac_did_resize, "v@:@")
+        _mac_add(cls, "webView:decidePolicyForNavigationAction:decisionHandler:", &salam_wv_mac_decide_policy, "v@:@@@?")
+        _mac_add(cls, "webView:createWebViewWithConfiguration:forNavigationAction:windowFeatures:", &salam_wv_mac_create_view, "@@:@@@@")
+        _mac_add(cls, "webView:didStartProvisionalNavigation:", &salam_wv_mac_nav_start, "v@:@@")
+        _mac_add(cls, "webView:didFinishNavigation:", &salam_wv_mac_nav_done, "v@:@@")
+        _mac_add(cls, "webViewWebContentProcessDidTerminate:", &salam_wv_mac_crashed, "v@:@")
+        _mac_add(cls, "webView:runJavaScriptAlertPanelWithMessage:initiatedByFrame:completionHandler:", &salam_wv_mac_alert, "v@:@@@@?")
+        _mac_add(cls, "webView:runJavaScriptConfirmPanelWithMessage:initiatedByFrame:completionHandler:", &salam_wv_mac_confirm, "v@:@@@@?")
+        _mac_add(cls, "webView:startURLSchemeTask:", &salam_wv_mac_scheme_start, "v@:@@")
+        _mac_add(cls, "webView:stopURLSchemeTask:", &salam_wv_mac_scheme_stop, "v@:@@")
+        _mac_add(cls, "applicationShouldTerminate:", &salam_wv_mac_should_terminate, "Q@:@")
+        _mac_add(cls, "salamMenuItem:", &salam_wv_mac_menu_item, "v@:@")
+        objc_registerClassPair(cls)
+        _mac_delegate_cls = cls
+        view_cls := objc_allocateClassPair(objc_getClass("WKWebView"), "SalamWKWebView", 0 as usize)
+        _mac_add(view_cls, "willOpenMenu:withEvent:", &salam_wv_mac_will_open_menu, "v@:@@")
+        objc_registerClassPair(view_cls)
+        _mac_webview_cls = view_cls
+    end
+
+    func _mac_menu_item(menu: void*, title: str, action: str, key: str):
+        alloc := _mac_call0(objc_getClass("NSMenuItem"), "alloc")
+        make := (&objc_msgSend) as extern func (void*, void*, void*, void*, void*) void*
+        item := make(
+            alloc, sel_registerName("initWithTitle:action:keyEquivalent:"), ns_string(title),
+            sel_registerName(action), ns_string(key)
+        )
+        _mac_call1(menu, "addItem:", item)
+    end
+
+    func _mac_submenu(bar: void*, title: str): void*:
+        holder := _mac_new("NSMenuItem")
+        menu := _mac_call1(_mac_call0(objc_getClass("NSMenu"), "alloc"), "initWithTitle:", ns_string(title))
+        _mac_call1(holder, "setSubmenu:", menu)
+        _mac_call1(bar, "addItem:", holder)
+        ret menu
+    end
+
+    func _mac_make_menu():
+        bar := _mac_new("NSMenu")
+        name := _wv_app_name.len() > 0 ? _wv_app_name : "Salam"
+        app_menu := _mac_submenu(bar, name)
+        _mac_menu_item(app_menu, "Hide ".concat(name), "hide:", "h")
+        _mac_menu_item(app_menu, "Quit ".concat(name), "terminate:", "q")
+        edit := _mac_submenu(bar, "Edit")
+        _mac_menu_item(edit, "Undo", "undo:", "z")
+        _mac_menu_item(edit, "Redo", "redo:", "Z")
+        _mac_menu_item(edit, "Cut", "cut:", "x")
+        _mac_menu_item(edit, "Copy", "copy:", "c")
+        _mac_menu_item(edit, "Paste", "paste:", "v")
+        _mac_menu_item(edit, "Select All", "selectAll:", "a")
+        window := _mac_submenu(bar, "Window")
+        _mac_menu_item(window, "Minimize", "performMiniaturize:", "m")
+        _mac_menu_item(window, "Close", "performClose:", "w")
+        _mac_call1(_mac_app, "setMainMenu:", bar)
+    end
+
+    func _mac_startup():
+        if _mac_ready:
+            ret
+        end
+        _mac_app = _mac_call0(objc_getClass("NSApplication"), "sharedApplication")
+        _mac_call_i(_mac_app, "setActivationPolicy:", 0 as i64)
+        _mac_make_classes()
+        _mac_make_menu()
+        _mac_app_delegate = _mac_new("SalamWebViewDelegate")
+        _mac_call1(_mac_app, "setDelegate:", _mac_app_delegate)
+        _mac_call0(_mac_app, "finishLaunching")
+        _mac_call_b(_mac_app, "activateIgnoringOtherApps:", true)
+        _mac_main_queue = dlsym(((0 - 2) as size) as void*, "_dispatch_main_q")
+        _mac_ready = true
+    end
+
+    func _mac_post_wake():
+        make := (&objc_msgSend) as extern func (void*, void*, u64, NSPoint, u64, f64, i64, void*, i16, i64, i64) void*
+        event := make(
+            objc_getClass("NSEvent"), sel_registerName("otherEventWithType:location:modifierFlags:timestamp:windowNumber:context:subtype:data1:data2:"),
+            15 as u64, NSPoint {}, 0 as u64, 0.0, 0 as i64, null, 0 as i16, 0 as i64, 0 as i64
+        )
+        post := (&objc_msgSend) as extern func (void*, void*, void*, i8) void*
+        _r := post(_mac_app, sel_registerName("postEvent:atStart:"), event, 0 as i8)
+    end
+
+    func _mac_view(id: int): _MacView:
+        ret _mac_views[id]
+    end
+
+    func _wv_bk_create(id: int, debug: bool, visible: bool): bool:
+        until _mac_views.len() <= id:
+            _mac_views.push(_MacView {})
+        end
+        _mac_startup()
+        frame := NSRect { x = 100.0, y = 100.0, w = 800.0, h = 600.0 }
+        win_alloc := _mac_call0(objc_getClass("NSWindow"), "alloc")
+        make_win := (&objc_msgSend) as extern func (void*, void*, NSRect, u64, u64, i8) void*
+        window := make_win(
+            win_alloc, sel_registerName("initWithContentRect:styleMask:backing:defer:"), frame, 15 as u64,
+            2 as u64, 0 as i8
         )
         if window == null:
-            ret WebView { window = null, webview = null, closed = true }
+            _wv_last_error = "macOS could not create the window"
+            ret false
         end
-
-        cfg_alloc := objc_call0(objc_getClass("WKWebViewConfiguration"), sel_alloc)
-        config := objc_call0(cfg_alloc, sel_registerName("init"))
-
-        wk_alloc := objc_call0(objc_getClass("WKWebView"), sel_alloc)
-        webview := objc_call_rect_config(
-            wk_alloc, sel_registerName("initWithFrame:configuration:"), frame, config
-        )
+        _mac_call_b(window, "setReleasedWhenClosed:", false)
+        delegate := _mac_new("SalamWebViewDelegate")
+        config := _mac_new("WKWebViewConfiguration")
+        each s in _wv_schemes:
+            _mac_call2(config, "setURLSchemeHandler:forURLScheme:", delegate, ns_string(s.name))
+        end
+        controller := _mac_call0(config, "userContentController")
+        _mac_call2(controller, "addScriptMessageHandler:name:", delegate, ns_string("salam"))
+        if debug:
+            prefs := _mac_call0(config, "preferences")
+            yes := _mac_call_i(objc_getClass("NSNumber"), "numberWithLong:", 1 as i64)
+            _mac_call2(prefs, "setValue:forKey:", yes, ns_string("developerExtrasEnabled"))
+        end
+        view_alloc := _mac_call0(_mac_webview_cls, "alloc")
+        make_view := (&objc_msgSend) as extern func (void*, void*, NSRect, void*) void*
+        webview := make_view(view_alloc, sel_registerName("initWithFrame:configuration:"), frame, config)
         if webview == null:
-            ret WebView { window = window, webview = null, closed = true }
+            _wv_last_error = "macOS could not create the web view"
+            ret false
         end
+        _mac_views[id] = _MacView { window = window, webview = webview, delegate = delegate, config = config }
+        _mac_call1(webview, "setNavigationDelegate:", delegate)
+        _mac_call1(webview, "setUIDelegate:", delegate)
+        _mac_call_i(webview, "setAutoresizingMask:", 18 as i64)
+        _mac_call1(window, "setContentView:", webview)
+        _mac_call1(window, "setDelegate:", delegate)
+        if visible:
+            _mac_call1(window, "makeKeyAndOrderFront:", null)
+        end
+        ret true
+    end
 
-        content_view := objc_call0(window, sel_registerName("contentView"))
-        objc_call1(content_view, sel_registerName("addSubview:"), webview)
-        objc_call1(window, sel_registerName("makeKeyAndOrderFront:"), null)
+    func _wv_bk_destroy(id: int):
+        _mac_call0(_mac_view(id).window, "close")
+    end
 
-        ret WebView { window = window, webview = webview, closed = false }
+    func _wv_bk_iter():
+        pool := objc_autoreleasePoolPush()
+        future := _mac_call0(objc_getClass("NSDate"), "distantFuture")
+        next := (&objc_msgSend) as extern func (void*, void*, u64, void*, void*, i8) void*
+        event := next(
+            _mac_app, sel_registerName("nextEventMatchingMask:untilDate:inMode:dequeue:"),
+            0xFFFFFFFFFFFFFFFF as u64, future, ns_string("kCFRunLoopDefaultMode"), 1 as i8
+        )
+        if event != null:
+            _mac_call1(_mac_app, "sendEvent:", event)
+            _mac_call0(_mac_app, "updateWindows")
+        end
+        objc_autoreleasePoolPop(pool)
+    end
+
+    func _wv_bk_wake():
+        if _mac_ready:
+            dispatch_async_f(_mac_main_queue, null, &salam_wv_mac_drain)
+        end
+    end
+
+    func _wv_bk_set_title(id: int, title: str):
+        _mac_call1(_mac_view(id).window, "setTitle:", ns_string(title))
+    end
+
+    func _wv_bk_set_size(id: int, width: int, height: int, hints: int):
+        window := _mac_view(id).window
+        _mac_call_i(window, "setStyleMask:", hints == HINT_FIXED ? 7 as i64 : 15 as i64)
+        _mac_call_size(window, "setContentSize:", NSSize { w = width as f64, h = height as f64 })
+    end
+
+    func _wv_bk_set_min_size(id: int, width: int, height: int):
+        _mac_call_size(_mac_view(id).window, "setContentMinSize:", NSSize { w = width as f64, h = height as f64 })
+    end
+
+    func _wv_bk_set_icon(_id: int, path: str):
+        image := _mac_call1(_mac_call0(objc_getClass("NSImage"), "alloc"), "initWithContentsOfFile:", ns_string(path))
+        if image != null:
+            _mac_call1(_mac_app, "setApplicationIconImage:", image)
+        end
+    end
+
+    func _wv_bk_set_html(id: int, html: str):
+        _mac_call2(_mac_view(id).webview, "loadHTMLString:baseURL:", ns_string(html), null)
+    end
+
+    func _wv_bk_navigate(id: int, url: str):
+        url_obj := _mac_call1(objc_getClass("NSURL"), "URLWithString:", ns_string(url))
+        request := _mac_call1(objc_getClass("NSURLRequest"), "requestWithURL:", url_obj)
+        _mac_call1(_mac_view(id).webview, "loadRequest:", request)
+    end
+
+    func _wv_bk_eval(id: int, js: str):
+        _mac_call2(_mac_view(id).webview, "evaluateJavaScript:completionHandler:", ns_string(js), null)
+    end
+
+    func _wv_bk_add_script(id: int, js: str, all_frames: bool):
+        alloc := _mac_call0(objc_getClass("WKUserScript"), "alloc")
+        make := (&objc_msgSend) as extern func (void*, void*, void*, i64, i8) void*
+        script := make(
+            alloc, sel_registerName("initWithSource:injectionTime:forMainFrameOnly:"), ns_string(js),
+            0 as i64, all_frames ? 0 as i8 : 1 as i8
+        )
+        controller := _mac_call0(_mac_view(id).config, "userContentController")
+        _mac_call1(controller, "addUserScript:", script)
+    end
+
+    func _wv_bk_url(id: int): str:
+        url := _mac_call0(_mac_view(id).webview, "URL")
+        if url == null:
+            ret str.Clone("")
+        end
+        ret str.Clone(_mac_str(_mac_call0(url, "absoluteString")))
+    end
+
+    func _wv_bk_show(id: int):
+        _mac_call1(_mac_view(id).window, "makeKeyAndOrderFront:", null)
+    end
+
+    func _wv_bk_hide(id: int):
+        _mac_call1(_mac_view(id).window, "orderOut:", null)
+    end
+
+    func _wv_bk_focus(id: int):
+        _mac_call_b(_mac_app, "activateIgnoringOtherApps:", true)
+        _mac_call1(_mac_view(id).window, "makeKeyAndOrderFront:", null)
+    end
+
+    func _wv_bk_minimize(id: int):
+        _mac_call1(_mac_view(id).window, "miniaturize:", null)
+    end
+
+    func _wv_bk_maximize(id: int):
+        _mac_call1(_mac_view(id).window, "zoom:", null)
+    end
+
+    func _wv_bk_center(id: int):
+        _mac_call0(_mac_view(id).window, "center")
+    end
+
+    func _wv_bk_is_active(id: int): bool:
+        ret _mac_bool0(_mac_view(id).window, "isKeyWindow")
+    end
+
+    func _wv_bk_native(id: int): void*:
+        ret _mac_view(id).window
+    end
+
+    func _wv_bk_devtools(id: int):
+        webview := _mac_view(id).webview
+        if _mac_bool_sel(webview, "setInspectable:"):
+            _mac_call_b(webview, "setInspectable:", true)
+        end
+    end
+
+    func _mac_bool_sel(recv: void*, name: str): bool:
+        fn := (&objc_msgSend) as extern func (void*, void*, void*) i8
+        ret fn(recv, sel_registerName("respondsToSelector:"), sel_registerName(name)) != (0 as i8)
+    end
+
+    func _wv_bk_context_menu(id: int, enabled: bool):
+        mut v := _mac_views[id]
+        v.context_menu = enabled
+        _mac_views[id] = v
+    end
+
+    func _wv_bk_register_scheme(_name: str):
+        _wv_touch()
+    end
+
+    func _wv_bk_content(id: int): void*:
+        ret _mac_view(id).window
+    end
+
+    func _wv_bk_menu_host(): void*:
+        _mac_startup()
+        ret _mac_app_delegate
+    end
+
+    func _wv_bk_name_message_window(_title: str):
+        _wv_touch()
+    end
+
+    func _wv_bk_scheme_origin(name: str): str:
+        ret name.concat("://localhost")
+    end
+
+    func _wv_bk_post_script(): str:
+        ret str.Clone("(s)=>window.webkit.messageHandlers.salam.postMessage(s)")
     end
 end

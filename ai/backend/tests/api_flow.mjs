@@ -332,6 +332,29 @@ check("a conversation past the limit drops its oldest turns instead of failing",
 const trimmedLog = (await api("GET", "/keys/requests", longSession)).json.requests[0];
 check("the newest turns survive the trim and the client is told", trimmedLog.prompt.includes("Earlier messages were left out") && trimmedLog.prompt_chars <= 1048576, trimmedLog.prompt_chars);
 
+console.log("turn time limits");
+const TURN = Number(process.env.CHAT_TURN_SECONDS ?? 0);
+if (TURN > 0) {
+  async function slowTurn(token) {
+    const c = await api("POST", "/chats", token, {});
+    const sent = await api("POST", `/chats/${c.json.chat.id}/messages`, token, { text: `slow: ${TURN * 2} please` });
+    let p;
+    for (let i = 0; i < TURN * 2 * 4 + 40; i += 1) {
+      p = await api("GET", `/chats/${c.json.chat.id}/messages/${sent.json.assistant.id}`, token);
+      if (p.json.status !== "pending") break;
+      await new Promise((res) => setTimeout(res, 500));
+    }
+    return p.json;
+  }
+  const cut = await slowTurn(await account("turn-free@test.ir", "Turn Free"));
+  check("a chat turn on a limited plan stops at its time limit with a clear message", cut.status === "error" && cut.body.includes("ادامه بده"), cut);
+  const longSub = await account("turn-unlimited@test.ir", "Turn Unlimited");
+  const gift = await api("POST", "/admin/subscriptions", session, { email: "turn-unlimited@test.ir", plan: "unlimited", note: "turn limit test" });
+  check("an unlimited plan is granted for the turn test", gift.res.status === 201, gift.json);
+  const kept = await slowTurn(longSub);
+  check("the same turn on the unlimited plan runs past that limit to the end", kept.status === "done" && kept.body.startsWith("Echo: slow:"), kept);
+}
+
 console.log("identity");
 const idSession = await account("identity@test.ir", "Identity");
 const idKey = (await api("POST", "/keys", idSession, { name: "identity-bot" })).json.secret;

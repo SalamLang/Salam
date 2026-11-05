@@ -14,6 +14,66 @@ export type Chat = {
   cloud?: boolean;
   device_id?: number;
   workspace?: string;
+  shared?: ShareKind[];
+};
+export type ShareKind = "view" | "collab";
+export type ShareState =
+  | "ok"
+  | "paused"
+  | "limit"
+  | "expired"
+  | "cap"
+  | "daily";
+export type Share = {
+  kind: ShareKind;
+  state: ShareState;
+  paused: boolean;
+  reason: string;
+  expires: number;
+  created: number;
+  last_used: number;
+  views: number;
+  max_messages: number;
+  max_daily: number;
+  label: string;
+  messages: number;
+  today: number;
+  tokens: number;
+  can_copy: boolean;
+  token?: string;
+  url?: string;
+  guests: { name: string; count: number; last: number }[];
+};
+export type ShareList = {
+  shares: Share[];
+  collab_allowed: boolean;
+  collab_refusal: "" | "device" | "cloud";
+  hide_tools: boolean;
+  default_hours: number;
+  default_cap: number;
+  default_daily: number;
+  ceiling: number;
+};
+export type SharePatch = {
+  paused?: boolean;
+  hours?: number;
+  max_messages?: number;
+  max_daily?: number;
+  label?: string;
+};
+export type PublicShare = {
+  share: {
+    kind: ShareKind;
+    state: ShareState;
+    collab: boolean;
+    readable: boolean;
+    expires: number;
+    hide_tools: boolean;
+    label: string;
+  };
+  chat: { title: string };
+  messages: Message[];
+  phase: Phase;
 };
 export type FileMeta = {
   id: number;
@@ -140,6 +200,7 @@ export type Message = {
   ms?: number;
   files?: FileMeta[];
   effort?: "low" | "medium" | "high";
+  guest?: string;
 };
 export type QueueItem = {
   id: number;
@@ -610,6 +671,7 @@ async function call<T>(
   method: string,
   path: string,
   body?: unknown,
+  anonymous = false,
 ): Promise<T> {
   const headers: Record<string, string> = {
     "X-Salam-Client": isDesktop ? "agent" : "web",
@@ -620,7 +682,7 @@ async function call<T>(
   if (clientPlatform.version)
     headers["X-Salam-OS-Version"] = clientPlatform.version;
   if (clientPlatform.arch) headers["X-Salam-Arch"] = clientPlatform.arch;
-  const token = getToken();
+  const token = anonymous ? "" : getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
   if (body !== undefined) headers["Content-Type"] = "application/json";
   let res: Response;
@@ -645,7 +707,8 @@ async function call<T>(
     data = await res.json();
   } catch {}
   if (!res.ok) {
-    if (res.status === 401 && path !== "/auth/login") onUnauthorized();
+    if (res.status === 401 && path !== "/auth/login" && !anonymous)
+      onUnauthorized();
     throw new ApiError(
       res.status,
       data?.error || "server",
@@ -813,6 +876,33 @@ export const api = {
       calls?: MessageCall[];
       queue?: QueueItem[];
     }>("GET", `/chats/${id}`),
+  shares: (id: string) => call<ShareList>("GET", `/chats/${id}/shares`),
+  createShare: (id: string, kind: ShareKind, hours?: number) =>
+    call<ShareList>(
+      "POST",
+      `/chats/${id}/shares`,
+      hours === undefined ? { kind } : { kind, hours },
+    ),
+  patchShare: (id: string, kind: ShareKind, patch: SharePatch) =>
+    call<ShareList>("PATCH", `/chats/${id}/shares/${kind}`, patch),
+  regenerateShare: (id: string, kind: ShareKind) =>
+    call<ShareList>("POST", `/chats/${id}/shares/${kind}/regenerate`),
+  deleteShare: (id: string, kind: ShareKind) =>
+    call<ShareList>("DELETE", `/chats/${id}/shares/${kind}`),
+  sharedChat: (token: string, after: number) =>
+    call<PublicShare>(
+      "GET",
+      `/shares/${token}${after > 0 ? `?after=${after}` : ""}`,
+      undefined,
+      true,
+    ),
+  sharedSend: (token: string, text: string, name: string) =>
+    call<{ user: Message; assistant: Message; title: string }>(
+      "POST",
+      `/shares/${token}/messages`,
+      { text, name },
+      true,
+    ),
   renameChat: (id: string, title: string) =>
     call<{ title: string }>("PATCH", `/chats/${id}`, { title }),
   deleteChat: (id: string) => call<{ ok: boolean }>("DELETE", `/chats/${id}`),

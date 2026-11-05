@@ -86,7 +86,7 @@ for page in website/content/*/std/*.txt; do
 done
 if [ -s "$work/docs" ] &&
     ! tr '\n' '\0' <"$work/docs" |
-        xargs -0 -n 3 -P "$jobs" sh -c '"$SALAM" doc "$1" --output="$2" >/dev/null || { echo "website: salam doc failed for std/$3" >&2; exit 1; }' sh; then
+    xargs -0 -n 3 -P "$jobs" sh -c '"$SALAM" doc "$1" --output="$2" >/dev/null || { echo "website: salam doc failed for std/$3" >&2; exit 1; }' sh; then
     kill "$gen_pid" 2>/dev/null || true
     exit 1
 fi
@@ -100,13 +100,13 @@ fi
 "$work/generator" "$@"
 
 for want in \
-    'en/std/wire/index.html|<span class="tok-k">import</span> wire' \
-    'en/std/wire/index.html|<span class="tok-t">str</span>' \
-    'fa/std/wire/index.html|<span class="tok-k">واردسازی</span> تزریق' \
-    'fa/std/wire/index.html|<span class="tok-b">سرچاپ</span>' \
-    'en/std/wire/index.html|<span class="tok-k">interface</span> <span class="tok-t">Greeter</span>:' \
-    'en/std/wire/index.html|<span class="tok-k">func</span> <span class="tok-f">main</span>:' \
-    'fa/std/wire/index.html|<span class="tok-k">تابع</span> <span class="tok-f">ریشه</span>:'; do
+    'en/std/dependency/index.html|<span class="tok-k">import</span> dependency' \
+    'en/std/dependency/index.html|<span class="tok-t">str</span>' \
+    'fa/std/dependency/index.html|<span class="tok-k">واردسازی</span> وابستگی' \
+    'fa/std/dependency/index.html|<span class="tok-b">سرچاپ</span>' \
+    'en/std/dependency/index.html|<span class="tok-k">interface</span> <span class="tok-t">Greeter</span>:' \
+    'en/std/dependency/index.html|<span class="tok-k">func</span> <span class="tok-f">main</span>:' \
+    'fa/std/dependency/index.html|<span class="tok-k">تابع</span> <span class="tok-f">ریشه</span>:'; do
     page=${want%%|*}
     text=${want#*|}
     if [ -f "website/dist/$page" ] && ! grep -qF "$text" "website/dist/$page"; then

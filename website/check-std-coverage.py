@@ -12,10 +12,11 @@ SKIP = {
     "map",
     "net",
     "net/internal",
+    "os/internal",
     "web",
     "telegram",
 }
-SKIP_PREFIX = ("layout/", "net/internal/")
+SKIP_PREFIX = ("layout/", "net/internal/", "os/internal/")
 
 
 def pages(lang):

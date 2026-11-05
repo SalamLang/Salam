@@ -1,0 +1,346 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package wide
+
+import conv.numfmt
+import str
+
+pub struct W:
+    pub lo: u64 = 0 as u64
+    pub hi: u64 = 0 as u64
+end
+
+func sticky_top(a: W, n &: int): u64:
+    n = 0
+    until (a.hi >> n) != (0 as u64) and n < 64:
+        n += 1
+    end
+    if n == 0:
+        ret a.lo
+    end
+    if n == 64:
+        ret a.hi | (a.lo != (0 as u64) ? 1 as u64 : 0 as u64)
+    end
+    ret (a.hi << (64 - n)) | (a.lo >> n) | ((a.lo << (64 - n)) != (0 as u64) ? 1 as u64 : 0 as u64)
+end
+
+func to_f64_mag(a: W): f64:
+    mut n := 0
+    mut r := sticky_top(a, n) as f64
+    repeat n:
+        r = r * 2.0
+    end
+    ret r
+end
+
+func to_f32_mag(a: W): f32:
+    mut n := 0
+    mut r := sticky_top(a, n) as f32
+    two := 2.0 as f32
+    repeat n:
+        r = r * two
+    end
+    ret r
+end
+
+pub func Zero(): W:
+    ret W {}
+end
+
+pub func Make(hi: u64, lo: u64): W:
+    ret W { lo = lo, hi = hi }
+end
+
+pub func FromU64(v: u64): W:
+    ret W { lo = v, hi = 0 as u64 }
+end
+
+pub func FromI64(v: i64): W:
+    ret W { lo = v as u64, hi = v < (0 as i64) ? ~(0 as u64) : 0 as u64 }
+end
+
+pub func IsZero(a: W): bool:
+    ret (a.lo | a.hi) == (0 as u64)
+end
+
+pub func IsNeg(a: W): bool:
+    ret (a.hi >> 63) != (0 as u64)
+end
+
+pub func Eq(a: W, b: W): bool:
+    ret a.lo == b.lo and a.hi == b.hi
+end
+
+pub func LtU(a: W, b: W): bool:
+    if a.hi != b.hi:
+        ret a.hi < b.hi
+    end
+    ret a.lo < b.lo
+end
+
+pub func LtS(a: W, b: W): bool:
+    if a.hi != b.hi:
+        ret (a.hi as i64) < (b.hi as i64)
+    end
+    ret a.lo < b.lo
+end
+
+pub func Add(a: W, b: W): W:
+    lo := a.lo + b.lo
+    carry := lo < a.lo ? 1 as u64 : 0 as u64
+    ret W { lo = lo, hi = a.hi + b.hi + carry }
+end
+
+pub func Sub(a: W, b: W): W:
+    borrow := a.lo < b.lo ? 1 as u64 : 0 as u64
+    ret W { lo = a.lo - b.lo, hi = a.hi - b.hi - borrow }
+end
+
+pub func Neg(a: W): W:
+    ret Sub(W {}, a)
+end
+
+pub func Not(a: W): W:
+    ret W { lo = ~a.lo, hi = ~a.hi }
+end
+
+pub func And(a: W, b: W): W:
+    ret W { lo = a.lo & b.lo, hi = a.hi & b.hi }
+end
+
+pub func Or(a: W, b: W): W:
+    ret W { lo = a.lo | b.lo, hi = a.hi | b.hi }
+end
+
+pub func Xor(a: W, b: W): W:
+    ret W { lo = a.lo ^ b.lo, hi = a.hi ^ b.hi }
+end
+
+pub func Shl(a: W, n: int): W:
+    c := n & 127
+    if c == 0:
+        ret a
+    end
+    if c >= 64:
+        ret W { lo = 0 as u64, hi = a.lo << (c - 64) }
+    end
+    ret W { lo = a.lo << c, hi = (a.hi << c) | (a.lo >> (64 - c)) }
+end
+
+pub func ShrU(a: W, n: int): W:
+    c := n & 127
+    if c == 0:
+        ret a
+    end
+    if c >= 64:
+        ret W { lo = a.hi >> (c - 64), hi = 0 as u64 }
+    end
+    ret W { lo = (a.lo >> c) | (a.hi << (64 - c)), hi = a.hi >> c }
+end
+
+pub func ShrS(a: W, n: int): W:
+    c := n & 127
+    if c == 0:
+        ret a
+    end
+    fill := IsNeg(a) ? ~(0 as u64) : 0 as u64
+    if c >= 64:
+        low := c == 64 ? a.hi : ((a.hi >> (c - 64)) | (fill << (128 - c)))
+        ret W { lo = low, hi = fill }
+    end
+    ret W { lo = (a.lo >> c) | (a.hi << (64 - c)), hi = (a.hi >> c) | (fill << (64 - c)) }
+end
+
+pub func MulWide(a: u64, b: u64): W:
+    mask := 4294967295 as u64
+    al := a & mask
+    ah := a >> 32
+    bl := b & mask
+    bh := b >> 32
+    ll := al * bl
+    lh := al * bh
+    hl := ah * bl
+    hh := ah * bh
+    mid := (ll >> 32) + (lh & mask) + (hl & mask)
+    ret W { lo = (ll & mask) | (mid << 32), hi = hh + (lh >> 32) + (hl >> 32) + (mid >> 32) }
+end
+
+pub func Mul(a: W, b: W): W:
+    r := MulWide(a.lo, b.lo)
+    ret W { lo = r.lo, hi = r.hi + a.lo * b.hi + a.hi * b.lo }
+end
+
+pub func DivModU(a: W, b: W, rem &: W): W:
+    mut q := W {}
+    mut r := W {}
+    mut i := 127
+    until i >= 0:
+        r = Shl(r, 1)
+        if ((i >= 64 ? a.hi >> (i - 64) : a.lo >> i) & (1 as u64)) != (0 as u64):
+            r.lo = r.lo | (1 as u64)
+        end
+        if not LtU(r, b):
+            r = Sub(r, b)
+            if i >= 64:
+                q.hi = q.hi | ((1 as u64) << (i - 64))
+            else:
+                q.lo = q.lo | ((1 as u64) << i)
+            end
+        end
+        i -= 1
+    end
+    rem = r
+    ret q
+end
+
+pub func DivU(a: W, b: W): W:
+    mut r := W {}
+    ret DivModU(a, b, r)
+end
+
+pub func ModU(a: W, b: W): W:
+    mut r := W {}
+    _q := DivModU(a, b, r)
+    ret r
+end
+
+pub func DivS(a: W, b: W): W:
+    na := IsNeg(a)
+    nb := IsNeg(b)
+    q := DivU(na ? Neg(a) : a, nb ? Neg(b) : b)
+    ret na != nb ? Neg(q) : q
+end
+
+pub func ModS(a: W, b: W): W:
+    na := IsNeg(a)
+    r := ModU(na ? Neg(a) : a, IsNeg(b) ? Neg(b) : b)
+    ret na ? Neg(r) : r
+end
+
+pub func ToStringU(a: W): str:
+    if a.hi == (0 as u64):
+        ret numfmt.FormatUint(a.lo)
+    end
+    chunk := W { lo = 10000000000000000000 as u64, hi = 0 as u64 }
+    mut rest := a
+    mut parts := Vector {} as Vector<u64>
+    until not IsZero(rest):
+        mut r := W {}
+        rest = DivModU(rest, chunk, r)
+        parts.push(r.lo)
+    end
+    mut out := numfmt.FormatUint(parts.get(parts.len() - 1))
+    mut i := parts.len() - 2
+    until i >= 0:
+        piece := numfmt.FormatUint(parts.get(i))
+        out = out + str.Repeat("0", 19 - str.Len(piece)) + piece
+        i -= 1
+    end
+    parts.free()
+    ret out
+end
+
+pub func ToStringS(a: W): str:
+    if IsNeg(a):
+        ret "-" + ToStringU(Neg(a))
+    end
+    ret ToStringU(a)
+end
+
+pub func ToF64U(a: W): f64:
+    ret to_f64_mag(a)
+end
+
+pub func ToF64S(a: W): f64:
+    if IsNeg(a):
+        ret 0.0 - to_f64_mag(Neg(a))
+    end
+    ret to_f64_mag(a)
+end
+
+pub func ToF32U(a: W): f32:
+    ret to_f32_mag(a)
+end
+
+pub func ToF32S(a: W): f32:
+    if IsNeg(a):
+        ret (0.0 as f32) - to_f32_mag(Neg(a))
+    end
+    ret to_f32_mag(a)
+end
+
+pub func FromF64U(f: f64): W:
+    if f != f or f < 1.0:
+        ret W {}
+    end
+    if f >= 340282366920938463463374607431768211456.0:
+        ret Not(W {})
+    end
+    mut e := 0
+    mut m := f
+    until m >= 18446744073709551616.0:
+        m = m / 2.0
+        e += 1
+    end
+    ret Shl(W { lo = m as u64, hi = 0 as u64 }, e)
+end
+
+pub func ParseDigits(d: str, from: int, base: int, overflow &: bool): W:
+    mut v := W {}
+    overflow = false
+    b := W { lo = base as u64, hi = 0 as u64 }
+    n := str.Len(d)
+    mut i := from
+    until i < n:
+        c := d[i] as int
+        mut digit := 0 - 1
+        if c >= 48 and c <= 57:
+            digit = c - 48
+        else c >= 97 and c <= 102:
+            digit = c - 87
+        else c >= 65 and c <= 70:
+            digit = c - 55
+        end
+        if digit < 0 or digit >= base:
+            break
+        end
+        if v.hi != (0 as u64) or (v.lo >> 58) != (0 as u64):
+            limit := DivU(Sub(Not(W {}), W { lo = digit as u64, hi = 0 as u64 }), b)
+            if LtU(limit, v):
+                overflow = true
+                ret Not(W {})
+            end
+        end
+        v = Add(Mul(v, b), W { lo = digit as u64, hi = 0 as u64 })
+        i += 1
+    end
+    ret v
+end
+
+pub func FromF64S(f: f64): W:
+    if f != f:
+        ret W {}
+    end
+    if f >= 170141183460469231731687303715884105728.0:
+        ret W { lo = ~(0 as u64), hi = ~(0 as u64) >> 1 }
+    end
+    if f <= -170141183460469231731687303715884105728.0:
+        ret W { lo = 0 as u64, hi = (1 as u64) << 63 }
+    end
+    if f < 0.0:
+        ret Neg(FromF64U(0.0 - f))
+    end
+    ret FromF64U(f)
+end

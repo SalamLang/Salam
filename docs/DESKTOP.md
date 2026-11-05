@@ -1,6 +1,6 @@
 # Desktop applications
 
-`std/desktop` builds desktop applications in Salam alone, the kind you would
+`std/gui/desktop` builds desktop applications in Salam alone, the kind you would
 build with Tauri or Electron. There is no Rust and no bundled browser: the
 interface is HTML, CSS and JavaScript in the engine the operating system
 already has, and the program is one native executable.
@@ -16,7 +16,7 @@ already has, and the program is one native executable.
 `salam new notes --desktop` writes this project for you (`--lang=fa` for Persian).
 
 ```salam
-import desktop
+import gui.desktop
 
 func main:
     desktop.Init(desktop.Config { id = "com.example.notes", name = "Notes", assets_dir = "www" })
@@ -157,7 +157,7 @@ used, otherwise the runtime is found in the registry. The backend supports
 x86-64, ARM64 and 32-bit Windows.
 
 The CEF build (`-DSALAM_WEBVIEW_CEF`) has no message channel or custom schemes,
-so `std/desktop` does not support it.
+so `std/gui/desktop` does not support it.
 
 ## When a window stays blank
 

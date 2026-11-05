@@ -9,6 +9,25 @@ pkg.intro <<
 <p>ClickHouse is a column oriented database for analytics: it scans billions of rows fast, and takes inserts in large batches. This package talks to it over its HTTP interface (port 8123, or 8443 with TLS) with <code>net.http</code>, so there is no driver library to install and no native protocol to speak. Results arrive as <code>JSONCompact</code>, with 64 bit integers quoted so that none of them loses digits.</p>
 <p>Open a connection with <code>Open</code> or <code>OpenURL</code>, send statements with <code>Exec</code>, read rows with <code>Query</code>, and load many rows at once with a batch. Values go into the SQL through the argument functions, such as <code>StrArg</code> and <code>IntArg</code>, which escape them, or through ClickHouse's own typed <code>{name:Type}</code> placeholders. <code>AsDb</code> adapts a connection to the shared <a href="/std/db/">db</a> interface. A statement that fails behind a 200 status, because the server hit an exception while already streaming the reply, is caught too: it shows in <code>Error</code> and <code>Code</code> like any other failure.</p>
 <p>The package does not speak the native TCP protocol or RowBinary, does not compress, and has no SQL dialect in <a href="/std/db/sql/">db/sql</a> yet. Each page section below is one part of the API, and each has a runnable example.</p>
+<h2 id="guide-args">Put values into SQL safely</h2>
+<p>Never build SQL by joining strings. Make each value with an argument function, which quotes and escapes it, and let <code>Bind</code> put the values into the <code>?</code> places in order. <code>Bind</code> does not run anything, so it is also a good way to see the final text. A <code>?</code> inside quotes or a comment is not a place, and when the number of values differs from the number of places the result is empty.</p>
+{{example.db-clickhouse-guide-args}}
+<p>The quote in <code>o'brien</code> is escaped for you. Table and column names are not values, so they go through <code>QuoteIdent</code>. <code>Exec</code> and <code>Query</code> do the same binding when you give them the values.</p>
+
+<h2 id="guide-connect">Connect and create a table</h2>
+<p>Start from <code>DefaultOptions</code> (a server on this machine, user <code>default</code>) and change what differs. <code>Open</code> sends nothing yet, so call <code>Ping</code> to see whether the server answers. <code>Exec</code> runs a statement that returns no rows and gives true on success; on failure <code>Error</code> and <code>Code</code> say why.</p>
+{{example.db-clickhouse-guide-connect}}
+<p>The table uses the <code>MergeTree</code> engine, the usual one, and its <code>ORDER BY</code> is the sort key that makes queries on day and page fast. ClickHouse has no auto increment key and no transactions to wait for; a statement is done when <code>Exec</code> returns.</p>
+
+<h2 id="guide-insert">Insert in batches</h2>
+<p>ClickHouse likes a few large inserts, not many small ones. <code>PrepareBatch</code> takes the <code>INSERT INTO table (columns)</code> part, <code>Append</code> adds one row of ready SQL values, and <code>SendBatch</code> sends all the rows in one request. <code>Append</code> returns false if the row has a different number of values than there are columns.</p>
+{{example.db-clickhouse-guide-insert}}
+<p>Hundreds or thousands of rows per batch is a good size to start with. A batch with no rows, or one that already has an error, is not sent.</p>
+
+<h2 id="guide-query">Read the rows back</h2>
+<p><code>Query</code> returns a <code>Rows</code>. Check <code>Ok</code>, then call <code>Next</code> in a loop and read the current row by column number with <code>Text</code>, <code>Int64</code> and the other readers; <code>Close</code> it when done. The loop is <code>until rows.Next():</code> because <code>until</code> runs while its condition is true. For a value that comes from outside, the typed placeholders <code>{name:Type}</code> of <code>QueryParams</code> let the server check the type.</p>
+{{example.db-clickhouse-guide-query}}
+<p>An aggregate such as <code>sum(hits)</code> is a 64 bit integer in ClickHouse, which arrives quoted in the JSON and is read back without losing digits by <code>Int64</code>.</p>
 >>
 
 doc.DEFAULT_PORT = The default HTTP port, 8123.

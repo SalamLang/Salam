@@ -1,0 +1,159 @@
+package llvmgen
+
+import str
+
+include co "../sal_core.salam"
+include at "../ast.salam"
+include sm "../semantic/semantic.salam"
+include tok "../token.salam"
+include wd "../wide.salam"
+
+func is_wide_ts(ts: str): bool:
+    ret str.Equals(ts, "i128") or str.Equals(ts, "u128")
+end
+
+func wide_literal(hi: u64, lo: u64): str:
+    ret wd.ToStringS(wd.Make(hi, lo))
+end
+
+func wide_align(v &: Lv): i64:
+    ret (str.StartsWith(v.triple, "arm") or str.StartsWith(v.triple, "thumb")) ? 8 as i64 : 16 as i64
+end
+
+func wide_rt(v &: Lv, s &: sm.Sema, a &: at.Ast, name: str):
+    mut pk := 0
+    sig := runtime_fn(s, name, pk)
+    if sig == 0 or sm.SigAt(s, sig).decl == 0:
+        ret
+    end
+    touch_pkg_named(v, s, a, sm.SymAt(s, pk).pkgname)
+    ensure_fn(v, s, a, sm.SigAt(s, sig).decl, 0, sm.SymAt(s, pk).members)
+end
+
+func wide_lo(v &: Lv, ref: str): str:
+    r := new_tmp(v)
+    emit(v, r + " = trunc i128 " + ref + " to i64")
+    ret r
+end
+
+func wide_hi(v &: Lv, ref: str): str:
+    sh := new_tmp(v)
+    emit(v, sh + " = lshr i128 " + ref + ", 64")
+    r := new_tmp(v)
+    emit(v, r + " = trunc i128 " + sh + " to i64")
+    ret r
+end
+
+func wide_load_pair(v &: Lv, out: str, off: int): str:
+    lp := new_tmp(v)
+    emit(v, lp + " = getelementptr i64, ptr " + out + ", i32 " + (off as i64))
+    lo := new_tmp(v)
+    emit(v, lo + " = load i64, ptr " + lp)
+    hp := new_tmp(v)
+    emit(v, hp + " = getelementptr i64, ptr " + out + ", i32 " + ((off + 1) as i64))
+    hi := new_tmp(v)
+    emit(v, hi + " = load i64, ptr " + hp)
+    zl := new_tmp(v)
+    emit(v, zl + " = zext i64 " + lo + " to i128")
+    zh := new_tmp(v)
+    emit(v, zh + " = zext i64 " + hi + " to i128")
+    sh := new_tmp(v)
+    emit(v, sh + " = shl i128 " + zh + ", 64")
+    r := new_tmp(v)
+    emit(v, r + " = or i128 " + sh + ", " + zl)
+    ret r
+end
+
+func wide_to_float(v &: Lv, s &: sm.Sema, a &: at.Ast, ref: str, sgn: bool, f32: bool): str:
+    name := f32 ? "salam_w128_to_f32" : "salam_w128_to_f64"
+    wide_rt(v, s, a, name)
+    lo := wide_lo(v, ref)
+    hi := wide_hi(v, ref)
+    r := new_tmp(v)
+    emit(v, r + " = call " + (f32 ? "float @" : "double @") + name + "(i64 " + lo + ", i64 " + hi + ", i32 " + (sgn ? "1" : "0") + ")")
+    ret r
+end
+
+func wide_from_float(v &: Lv, s &: sm.Sema, a &: at.Ast, ref: str, sgn: bool, f32: bool): str:
+    wide_rt(v, s, a, "salam_w128_from_f64")
+    mut d := ref
+    if f32:
+        d = new_tmp(v)
+        emit(v, d + " = fpext float " + ref + " to double")
+    end
+    out := new_tmp(v)
+    emit_alloca(v, out + " = alloca [2 x i64], align 8")
+    emit(v, "call void @salam_w128_from_f64(double " + d + ", i32 " + (sgn ? "1" : "0") + ", ptr " + out + ")")
+    ret wide_load_pair(v, out, 0)
+end
+
+func wide_tostr(v &: Lv, s &: sm.Sema, a &: at.Ast, ref: str, sgn: bool): str:
+    wide_rt(v, s, a, "salam_w128_str")
+    lo := wide_lo(v, ref)
+    hi := wide_hi(v, ref)
+    r := new_tmp(v)
+    emit(v, r + " = call ptr @salam_w128_str(i64 " + lo + ", i64 " + hi + ", i32 " + (sgn ? "1" : "0") + ")")
+    ret r
+end
+
+func wide_hash(v &: Lv, s &: sm.Sema, a &: at.Ast, ref: str): str:
+    wide_rt(v, s, a, "salam_w128_hash")
+    lo := wide_lo(v, ref)
+    hi := wide_hi(v, ref)
+    r := new_tmp(v)
+    emit(v, r + " = call i64 @salam_w128_hash(i64 " + lo + ", i64 " + hi + ")")
+    ret r
+end
+
+func wide_div_native(v &: Lv): bool:
+    ret v.ptr_bits == 64 and not str.StartsWith(v.triple, "wasm")
+end
+
+func wide_divmod(v &: Lv, s &: sm.Sema, a &: at.Ast, op: int, sgn: bool, x: str, y: str): str:
+    is_mod := op == tok.TK_PERCENT
+    if not wide_div_native(v):
+        wide_rt(v, s, a, "salam_w128_divmod")
+        out := new_tmp(v)
+        emit_alloca(v, out + " = alloca [4 x i64], align 8")
+        xl := wide_lo(v, x)
+        xh := wide_hi(v, x)
+        yl := wide_lo(v, y)
+        yh := wide_hi(v, y)
+        mode := (sgn ? 1 : 0) + (is_mod ? 2 : 0)
+        emit(v, "call void @salam_w128_divmod(i64 " + xl + ", i64 " + xh + ", i64 " + yl + ", i64 " + yh + ", i32 " + (mode as i64) + ", ptr " + out + ")")
+        ret wide_load_pair(v, out, is_mod ? 2 : 0)
+    end
+    if not sgn:
+        r := new_tmp(v)
+        emit(v, r + " = " + (is_mod ? "urem" : "udiv") + " i128 " + x + ", " + y)
+        ret r
+    end
+    m1 := new_tmp(v)
+    emit(v, m1 + " = icmp eq i128 " + y + ", -1")
+    safe := new_tmp(v)
+    emit(v, safe + " = select i1 " + m1 + ", i128 1, i128 " + y)
+    q := new_tmp(v)
+    emit(v, q + " = " + (is_mod ? "srem" : "sdiv") + " i128 " + x + ", " + safe)
+    if is_mod:
+        ret q
+    end
+    nq := new_tmp(v)
+    emit(v, nq + " = sub i128 0, " + x)
+    r2 := new_tmp(v)
+    emit(v, r2 + " = select i1 " + m1 + ", i128 " + nq + ", i128 " + q)
+    ret r2
+end
+
+func wide_zero_check(v &: Lv, y: str, op: int):
+    nzL := new_lbl(v, "dz_ok")
+    zL := new_lbl(v, "dz_zero")
+    zc := new_tmp(v)
+    emit(v, zc + " = icmp eq i128 " + y + ", 0")
+    emit_term(v, "br i1 " + zc + ", label %" + zL + ", label %" + nzL)
+    emit_label(v, zL)
+    need(v, LV_H_OUTBUF)
+    emit(v, "call void @salam_out_flush()")
+    emit(v, new_tmp(v) + " = call i64 @salam_div0(i32 " + (op == tok.TK_PERCENT ? "1" : "0") + ")")
+    emit_term(v, "unreachable")
+    emit_label(v, nzL)
+end

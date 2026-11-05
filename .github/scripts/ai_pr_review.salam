@@ -1,0 +1,578 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import encoding.json
+import env
+import net.http
+import str
+import time
+
+const MARKER := "<!-- salam-ai-review -->"
+const SKIP_LABEL := "ai-review:skip"
+const MAX_PATCH_PER_FILE := 6000
+const MAX_BODY_CHARS := 6000
+const MAX_COMMITS := 20
+const MAX_FILES := 300
+const RETRIES := 3
+const AGENT := "salam-ai-review/1.0"
+
+const SYSTEM_PROMPT := """You are the automated code reviewer of the Salam repository (SalamLang/Salam).
+
+Salam is a statically typed, compiled systems language. Every keyword, type and
+standard library package has an English and a Persian spelling, and both compile
+to the same native program. You know the language and its standard library well.
+
+You receive the metadata and the unified diff of one pull request. Review it the
+way a careful maintainer would. Answer with one JSON object and nothing else,
+with exactly these three keys:
+
+{
+  "summary": "...",
+  "decision": "merge" | "changes" | "close",
+  "comment": "..."
+}
+
+Rules for "summary":
+- Two to four plain sentences in English.
+- What the pull request changes, and whether it does it correctly.
+- No headings, no bullet lists, no code.
+
+Rules for "decision":
+- "merge": correct, focused, tested or trivially safe, follows the project's
+  conventions, nothing blocking.
+- "changes": the idea is fine but there are concrete problems to fix (bugs,
+  missing tests, broken conventions, CI that cannot pass).
+- "close": wrong direction, duplicate, unrelated churn, spam, or it breaks the
+  project's rules with no reasonable fix. Prefer "changes" whenever unsure.
+- Judge the change itself. For a docs, CI or tooling pull request, judge whether
+  that change is correct rather than looking for compiler bugs.
+
+Rules for "comment":
+- Markdown in English, about 200 to 400 words, no HTML comments.
+- Sections in this order, each only when it has content: "What changed",
+  "Review", "Tests", "Risks".
+- "Review" lists at most six findings, the most important first, each one naming
+  the file and, when the diff shows it, the line: a real problem, why it
+  matters, and the fix.
+- Only claim what the diff supports. When a point depends on files or behaviour
+  you cannot see, write it as a question instead of a fact, and never invent how
+  a third-party tool, workflow or API behaves.
+- Do not pad with praise and do not repeat the summary word for word.
+- Never claim that you ran a build, a test or a command.
+- If the diff was truncated, say which files or parts you could not see.
+- If the change adds Salam code, check the language rules you know: `until` is a
+  while loop, the declaration order is package, import, include, globals, types,
+  private functions, then public functions, unused names are errors, and every
+  source file starts with `// lang: en` or `// زبان: فارسی`. Flag standard
+  library or API names that do not exist.
+"""
+
+struct Review:
+    pub summary: str = ""
+    pub decision: str = "unknown"
+    pub comment: str = ""
+end
+
+struct GitHub:
+    pub token: str = ""
+    pub base: str = ""
+end
+
+func ignored_suffixes(): Vector<str>:
+    out := Vector {} as Vector<str>
+    out.push("bun.lock")
+    out.push("package-lock.json")
+    out.push("pnpm-lock.yaml")
+    out.push("Cargo.lock")
+    out.push("yarn.lock")
+    out.push(".min.js")
+    out.push(".min.css")
+    out.push(".map")
+    out.push(".svg")
+    out.push(".png")
+    out.push(".jpg")
+    out.push(".jpeg")
+    out.push(".gif")
+    out.push(".ico")
+    out.push(".pdf")
+    out.push(".woff")
+    out.push(".woff2")
+    out.push(".ttf")
+    ret out
+end
+
+func decision_icon(decision: str): str:
+    switch decision:
+        "merge":
+            ret "✅"
+        end
+        "changes":
+            ret "\U0001F6E0️"
+        end
+        "close":
+            ret "⛔"
+        end
+    end
+    ret "⚠️"
+end
+
+func decision_label(decision: str): str:
+    switch decision:
+        "merge":
+            ret "Good to merge"
+        end
+        "changes":
+            ret "Changes needed before merging"
+        end
+        "close":
+            ret "Not worth continuing as it is"
+        end
+    end
+    ret "Review could not be parsed"
+end
+
+func is_decision(decision: str): bool:
+    ret decision == "merge" or decision == "changes" or decision == "close"
+end
+
+func max_total_patch(): int:
+    ret env.GetInt("SALAM_AI_MAX_DIFF", 90000 as i64) as int
+end
+
+func clip(text: str, limit: int): str:
+    if str.CharCount(text) <= limit:
+        ret text
+    end
+    ret str.CharSubstr(text, 0, limit)
+end
+
+func field(text: str, path: str): str:
+    value := json.GetPath(text, path)
+    if value == "null":
+        ret ""
+    end
+    ret value
+end
+
+func python_bool(value: str): str:
+    if value == "true":
+        ret "True"
+    end
+    ret "False"
+end
+
+func api_headers(token: str): HashMap<str, str>:
+    mut headers := http.NewHeaders()
+    headers.put("Authorization", "Bearer " + token)
+    headers.put("Accept", "application/vnd.github+json")
+    headers.put("X-GitHub-Api-Version", "2022-11-28")
+    headers.put("Content-Type", "application/json")
+    ret headers
+end
+
+func request(url: str, method: str, body: str, extra: HashMap<str, str>, timeout: int): str throws:
+    mut headers := http.NewHeaders()
+    headers.put("User-Agent", AGENT)
+    each key, value in extra:
+        headers.put(key, value)
+    end
+    mut opts := http.RequestOptions {}
+    opts.timeout_ms = timeout * 1000
+    opts.idle_ms = timeout * 1000
+    opts.max_redirects = 10
+    mut attempt := 1
+    until attempt <= RETRIES:
+        r := http.Do(method, url, headers, body, opts)
+        status := r.status
+        text := str.Clone(r.body)
+        problem := str.Clone(r.err)
+        retry_after := http.GetHeader(r, "Retry-After").to_int()
+        http.FreeResponse(r)
+        mut failure := ""
+        mut wait := 0
+        if status == 0:
+            failure = "network error for " + url + ": " + problem
+        else status == 429 or status >= 500:
+            failure = "HTTP " + str.FromInt(status) + " from " + url + ": " + clip(text, 800)
+            wait = retry_after
+        else status >= 400:
+            throw "HTTP " + str.FromInt(status) + " from " + url + ": " + clip(text, 800)
+        else:
+            if text.len() == 0:
+                ret ""
+            end
+            if json.Valid(text) == false:
+                throw "invalid JSON from " + url
+            end
+            ret text
+        end
+        if attempt == RETRIES:
+            throw failure
+        end
+        if wait == 0:
+            wait = 10 * attempt
+        end
+        if wait > 60:
+            wait = 60
+        end
+        println failure + "; retrying in " + str.FromInt(wait) + "s"
+        time.Sleep(wait * 1000)
+        attempt += 1
+    end
+    ret ""
+end
+
+func github_call(gh: GitHub, method: str, path: str, body: str): str throws:
+    ret try request(gh.base + path, method, body, api_headers(gh.token), 60)
+end
+
+func github_paged(gh: GitHub, path: str, limit: int): Vector<str> throws:
+    items := Vector {} as Vector<str>
+    mut page := 1
+    mut separator := "?"
+    if path.includes("?"):
+        separator = "&"
+    end
+    until items.len() < limit:
+        text := try github_call(gh, "GET", path + separator + "per_page=100&page=" + str.FromInt(page), "")
+        batch := json.Items(text)
+        each item in batch:
+            items.push(item)
+        end
+        if batch.len() < 100:
+            break
+        end
+        page += 1
+    end
+    if items.len() > limit:
+        trimmed := Vector {} as Vector<str>
+        repeat limit in i:
+            trimmed.push(items.get(i))
+        end
+        ret trimmed
+    end
+    ret items
+end
+
+func is_ignored(filename: str): bool:
+    each suffix in ignored_suffixes():
+        if filename.ends_with(suffix):
+            ret true
+        end
+    end
+    ret filename.includes("/node_modules/")
+end
+
+func first_line(text: str): str:
+    mut line := text
+    cut := line.find("\n")
+    if cut >= 0:
+        line = line.substr(0, cut)
+    end
+    if line.ends_with("\r"):
+        line = line.substr(0, line.len() - 1)
+    end
+    ret line
+end
+
+func build_prompt(repo: str, pr: str, files: Vector<str>, commits: Vector<str>): str:
+    mut body := field(pr, "body")
+    if body == "":
+        body = "(empty)"
+    end
+    lines := Vector {} as Vector<str>
+    lines.push("# Pull request")
+    lines.push("Repository: " + repo)
+    lines.push("Number: #" + field(pr, "number"))
+    lines.push("Title: " + field(pr, "title"))
+    lines.push("Author: " + field(pr, "user.login"))
+    lines.push("Base: " + field(pr, "base.ref") + " (" + clip(field(pr, "base.sha"), 10) + ")")
+    lines.push("Head: " + field(pr, "head.ref") + " (" + clip(field(pr, "head.sha"), 10) + ")")
+    lines.push("State: " + field(pr, "state") + ", draft: " + python_bool(field(pr, "draft")))
+    lines.push(
+        "Size: " + field(pr, "changed_files") + " files, +" + field(pr, "additions") + " -"
+            + field(pr, "deletions") + ", " + field(pr, "commits") + " commits"
+    )
+    lines.push("")
+    lines.push("## Description")
+    lines.push(clip(body, MAX_BODY_CHARS))
+    lines.push("")
+    lines.push("## Commits")
+    mut shown := 0
+    each commit in commits:
+        if shown >= MAX_COMMITS:
+            break
+        end
+        message := clip(first_line(field(commit, "commit.message")), 160)
+        lines.push("- " + message + " (" + field(commit, "commit.author.name") + ")")
+        shown += 1
+    end
+    if commits.len() > MAX_COMMITS:
+        lines.push("- ... and " + str.FromInt(commits.len() - MAX_COMMITS) + " more commits")
+    end
+    lines.push("")
+    lines.push("## Files")
+    each entry in files:
+        lines.push(
+            "- " + field(entry, "status") + ": " + field(entry, "filename") + " (+"
+                + field(entry, "additions") + " -" + field(entry, "deletions") + ")"
+        )
+    end
+    lines.push("")
+    lines.push("## Diff")
+    mut budget := max_total_patch()
+    omitted := Vector {} as Vector<str>
+    each entry in files:
+        name := field(entry, "filename")
+        patch := field(entry, "patch")
+        if patch == "" or is_ignored(name) or budget <= 0:
+            omitted.push(name)
+            continue
+        end
+        mut limit := MAX_PATCH_PER_FILE
+        if budget < limit:
+            limit = budget
+        end
+        chunk := clip(patch, limit)
+        budget -= str.CharCount(chunk)
+        lines.push("")
+        lines.push("### " + name + " (" + field(entry, "status") + ")")
+        lines.push("```diff")
+        lines.push(chunk)
+        if str.CharCount(chunk) < str.CharCount(patch):
+            lines.push("... diff truncated ...")
+        end
+        lines.push("```")
+    end
+    if omitted.len() > 0:
+        lines.push("")
+        lines.push(
+            "Files without a diff (binary, ignored or over the size budget): "
+                + str.Join(omitted, ", ")
+        )
+    end
+    ret str.Join(lines, "\n")
+end
+
+func model_name(): str:
+    ret env.GetOr("SALAM_AI_MODEL", "salam")
+end
+
+func chat_body(prompt: str): str:
+    mut system := Vector {} as Vector<str>
+    system.push(json.MemberRaw("role", json.Str("system")))
+    system.push(json.MemberRaw("content", json.Str(SYSTEM_PROMPT)))
+    mut user := Vector {} as Vector<str>
+    user.push(json.MemberRaw("role", json.Str("user")))
+    user.push(json.MemberRaw("content", json.Str(prompt)))
+    mut messages := Vector {} as Vector<str>
+    messages.push(json.Object(system))
+    messages.push(json.Object(user))
+    mut members := Vector {} as Vector<str>
+    members.push(json.MemberRaw("model", json.Str(model_name())))
+    members.push(json.MemberRaw("stream", "false"))
+    members.push(json.MemberRaw("messages", json.Array(messages)))
+    ret json.Object(members)
+end
+
+func ask_model(prompt: str): str throws:
+    api_url := env.GetOr("SALAM_AI_API_URL", "https://ai-api.salamlang.ir")
+    mut base := api_url
+    until base.ends_with("/"):
+        base = base.substr(0, base.len() - 1)
+    end
+    mut headers := http.NewHeaders()
+    headers.put("Authorization", "Bearer " + env.Get("SALAM_AI_API_KEY"))
+    headers.put("Content-Type", "application/json")
+    headers.put("X-Salam-Project", env.GetOr("SALAM_AI_PROJECT", "salam-pr-review"))
+    response := try request(base + "/chat/completions", "POST", chat_body(prompt), headers, 300)
+    content := json.GetPath(response, "choices.0.message.content")
+    if content == "":
+        throw "unexpected API response: " + clip(response, 1200)
+    end
+    ret content
+end
+
+func parse_review(text: str): Review:
+    mut cleaned := text.trim()
+    if cleaned.starts_with("```"):
+        cut := cleaned.find("\n")
+        if cut >= 0:
+            cleaned = cleaned.substr(cut + 1, cleaned.len() - cut - 1)
+        end
+        if str.TrimRight(cleaned).ends_with("```"):
+            tidy := str.TrimRight(cleaned)
+            cleaned = tidy.substr(0, tidy.len() - 3)
+        end
+    end
+    start := cleaned.find("{")
+    stop := str.LastIndex(cleaned, "}")
+    if start < 0 or stop <= start:
+        ret Review { comment = cleaned }
+    end
+    data := cleaned.substr(start, stop - start + 1)
+    if json.Valid(data) == false:
+        ret Review { comment = cleaned }
+    end
+    mut decision := field(data, "decision").trim().lower()
+    if is_decision(decision) == false:
+        decision = "unknown"
+    end
+    comment := str.Replace(field(data, "comment"), MARKER, "").trim()
+    summary := field(data, "summary").trim()
+    ret Review { summary = summary, decision = decision, comment = comment }
+end
+
+func render(pr: str, review: Review, head_sha: str, truncated: bool): str:
+    short := clip(head_sha, 7)
+    parts := Vector {} as Vector<str>
+    parts.push(MARKER + " sha=" + head_sha)
+    parts.push("## \U0001F916 Salam AI review")
+    parts.push("")
+    parts.push("**Verdict:** " + decision_icon(review.decision) + " " + decision_label(review.decision))
+    parts.push("")
+    parts.push(
+        "<sub>commit `" + short + "` · " + field(pr, "changed_files") + " files · +"
+            + field(pr, "additions") + " −" + field(pr, "deletions") + " · model `"
+            + model_name() + "`</sub>"
+    )
+    parts.push("")
+    if review.summary != "":
+        parts.push("### Summary")
+        parts.push("")
+        parts.push(review.summary)
+        parts.push("")
+    end
+    if review.comment != "":
+        parts.push(review.comment)
+        parts.push("")
+    end
+    if truncated:
+        parts.push("> The diff was too large for the model, so some files were not analysed.")
+        parts.push("")
+    end
+    parts.push("---")
+    parts.push("")
+    parts.push(
+        "> ⚠️ **This review was written automatically by an AI and may contain mistakes.** "
+            + "It is a helper for maintainers, not a replacement for a human review: check the code "
+            + "yourself before merging."
+    )
+    ret str.Join(parts, "\n")
+end
+
+func find_comment(gh: GitHub, number: str): str throws:
+    comments := try github_paged(gh, "/issues/" + number + "/comments", 500)
+    each comment in comments:
+        if field(comment, "body").includes(MARKER):
+            ret comment
+        end
+    end
+    ret ""
+end
+
+func skip_reason(pr: str, allow_draft: bool): str:
+    each label in json.Items(json.Get(pr, "labels")):
+        if field(label, "name") == SKIP_LABEL:
+            ret "label " + SKIP_LABEL + " present"
+        end
+    end
+    if field(pr, "draft") == "true" and allow_draft == false:
+        ret "draft pull request"
+    end
+    ret ""
+end
+
+func compose(gh: GitHub, repo: str, pr: str, dry_run: bool): str throws:
+    number := field(pr, "number")
+    files := try github_paged(gh, "/pulls/" + number + "/files", MAX_FILES)
+    commits := try github_paged(gh, "/pulls/" + number + "/commits", 100)
+    prompt := build_prompt(repo, pr, files, commits)
+    if dry_run:
+        println "=".repeat(70)
+        println prompt
+        println "=".repeat(70)
+    end
+    println "asking the model about " + str.FromInt(str.CharCount(prompt)) + " characters"
+    review := parse_review(try ask_model(prompt))
+    truncated := field(pr, "changed_files").to_int() > files.len()
+    body := render(pr, review, field(pr, "head.sha"), truncated)
+    println "decision: " + review.decision
+    ret body
+end
+
+func publish(gh: GitHub, number: str, existing: str, body: str) throws:
+    mut members := Vector {} as Vector<str>
+    members.push(json.MemberRaw("body", json.Str(body)))
+    payload := json.Object(members)
+    if existing != "":
+        id := field(existing, "id")
+        _reply := try github_call(gh, "PATCH", "/issues/comments/" + id, payload)
+        println "updated review comment " + id
+    else:
+        _reply := try github_call(gh, "POST", "/issues/" + number + "/comments", payload)
+        println "posted review comment"
+    end
+end
+
+func review_pull_request(gh: GitHub, repo: str, number: str) throws:
+    dry_run := env.GetOr("DRY_RUN", "") != ""
+    manual := env.GetOr("GITHUB_EVENT_NAME", "") == "workflow_dispatch"
+    pr := try github_call(gh, "GET", "/pulls/" + number, "")
+    reason := skip_reason(pr, manual)
+    if reason != "" and dry_run == false:
+        println reason + "; skipping"
+        ret
+    end
+    head_sha := field(pr, "head.sha")
+    mut existing := ""
+    if dry_run == false:
+        existing = try find_comment(gh, number)
+    end
+    if existing != "" and field(existing, "body").includes("sha=" + head_sha):
+        println "already reviewed " + clip(head_sha, 7) + "; nothing to do"
+        ret
+    end
+    body := try compose(gh, repo, pr, dry_run)
+    if dry_run:
+        println body
+    else:
+        try publish(gh, number, existing, body)
+    end
+end
+
+func main(): int:
+    token := env.GetOr("GITHUB_TOKEN", "")
+    repo := env.GetOr("GITHUB_REPOSITORY", "")
+    number := env.GetOr("PR_NUMBER", "")
+    if token == "" or repo == "" or number == "":
+        println "GITHUB_TOKEN, GITHUB_REPOSITORY and PR_NUMBER are required"
+        ret 2
+    end
+    if env.GetOr("SALAM_AI_API_KEY", "") == "":
+        println "SALAM_AI_API_KEY is not set; skipping the review"
+        ret 0
+    end
+    api := env.GetOr("GITHUB_API_URL", "https://api.github.com")
+    gh := GitHub { token = token, base = api + "/repos/" + repo }
+    try:
+        review_pull_request(gh, repo, number)
+    catch e:
+        println "::error::Salam AI review failed: " + e.to_str()
+        ret 1
+    end
+    ret 0
+end

@@ -1241,7 +1241,7 @@ ret end` at the top of a recursive AST walk) tests that parameter before
   adjust it. The same seed gives the same programs on every run. The gate
   runs 30 on x86-64 and 15 per emulated target, seeded with the run number,
   so each run tries new programs.
-- `python3 -I tools/linker/machorun.py <exe>` runs a linked x86-64 macOS
+- `tools/linker/machorun.salam` (build it with `salam build tools/linker/machorun.salam --output=machorun`, then `machorun <exe>`) runs a linked x86-64 macOS
   executable on x86-64 Linux: it maps the segments into this process, applies
   the rebase and bind opcodes against glibc (Darwin names such as `___error`
   and `___stdoutp` map to their glibc counterparts) and calls `_main`.

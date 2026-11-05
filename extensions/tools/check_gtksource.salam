@@ -1,0 +1,209 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import os
+import io
+import str
+import mem
+import conv
+import os.dl
+import encoding.json
+import encoding.binary
+
+const MODULES_MISSING := 3
+const USAGE := "usage: check_gtksource <definition-dir> <file...>\n       check_gtksource --probe-modules\n"
+
+mut lib := null as void*
+
+func fn(name: str): void*:
+    p := dl.Sym(lib, name)
+    if p == null:
+        printerrln "GtkSourceView lacks " + name
+        os.Exit(1)
+    end
+    ret p
+end
+
+func ptr(p: void*): size:
+    ret p as size
+end
+
+func call(name: str, args: size[]): size:
+    ret dl.Call(fn(name), args)
+end
+
+func text_of(p: size): str:
+    if p == 0:
+        ret ""
+    end
+    out := str.Clone((p as void*) as str)
+    _ := call("g_free", [p])
+    ret out
+end
+
+func property_ptr(tag: size, prop: str, slot: void*): size:
+    mem.Set(slot, 0, 8 as u64)
+    _ := call("g_object_get", [tag, ptr(prop as void*), ptr(slot), 0 as size])
+    ret binary.GetU64LE(binary.NewView(slot, 8), 0)
+end
+
+func property_int(tag: size, prop: str, slot: void*): int:
+    _ := property_ptr(tag, prop, slot)
+    ret binary.GetU32LE(binary.NewView(slot, 8), 0) as int
+end
+
+func signature(iter: void*, slot: void*): str:
+    mut parts := Vector {} as Vector<str>
+    defer parts.free()
+    mut node := call("gtk_text_iter_get_tags", [ptr(iter)])
+    first := node
+    until node != 0:
+        nv := binary.NewView(node as void*, 16)
+        tag := binary.GetU64LE(nv, 0) as size
+        node = binary.GetU64LE(nv, 8) as size
+        name := text_of(property_ptr(tag, "name", slot))
+        if str.Len(name) > 0:
+            if not str.StartsWith(name, "gtksourceview:context-classes:"):
+                parts.push(name)
+            end
+            continue
+        end
+        if property_int(tag, "foreground-set", slot) != 0:
+            rgba := property_ptr(tag, "foreground-rgba", slot)
+            c := (rgba as void*) as f64*
+            parts.push("fg=" + conv.FormatFloatPrec(c[0], 2) + "," + conv.FormatFloatPrec(c[1], 2) + "," + conv.FormatFloatPrec(c[2], 2))
+            _ := call("gdk_rgba_free", [rgba])
+        end
+        if property_int(tag, "weight-set", slot) != 0:
+            parts.push("weight=" + property_int(tag, "weight", slot))
+        end
+    end
+    if first != 0:
+        _ := call("g_slist_free", [first])
+    end
+    ret str.Join(parts, " ")
+end
+
+func styles(source: str, buffer: size, slot: void*): str:
+    content := io.ReadFile(source)
+    _ := call("gtk_text_buffer_set_text", [buffer, ptr(content as void*), (0 - 1) as size])
+    position := mem.AllocateZeroed(256 as u64)
+    following := mem.AllocateZeroed(256 as u64)
+    end_iter := mem.AllocateZeroed(256 as u64)
+    _ := call("gtk_text_buffer_get_start_iter", [buffer, ptr(position)])
+    _ := call("gtk_text_buffer_get_end_iter", [buffer, ptr(end_iter)])
+    _ := call("gtk_source_buffer_ensure_highlight", [buffer, ptr(position), ptr(end_iter)])
+    seen := HashMap {} as HashMap<str, bool>
+    mut out := "["
+    mut count := 0
+    until call("gtk_text_iter_is_end", [ptr(position)]) == 0:
+        mem.Copy(following, position, 80 as u64)
+        if call("gtk_text_iter_forward_to_tag_toggle", [ptr(following), 0 as size]) == 0:
+            _ := call("gtk_text_buffer_get_end_iter", [buffer, ptr(following)])
+        end
+        text := str.Trim(text_of(call("gtk_text_buffer_get_text", [buffer, ptr(position), ptr(following), 0 as size])))
+        if str.Len(text) > 0 and not seen.has(text):
+            seen.put(text, true)
+            if count > 0:
+                out = out + ", "
+            end
+            out = out + "[" + json.Str(text) + ", " + json.Str(signature(position, slot)) + "]"
+            count += 1
+        end
+        if call("gtk_text_iter_equal", [ptr(position), ptr(following)]) != 0:
+            if call("gtk_text_iter_forward_char", [ptr(position)]) == 0:
+                break
+            end
+        else:
+            mem.Copy(position, following, 80 as u64)
+        end
+    end
+    mem.Free(position)
+    mem.Free(following)
+    mem.Free(end_iter)
+    ret out + "]"
+end
+
+func load(): bool:
+    lib = dl.Open("libgtksourceview-4.so.0")
+    if lib == null:
+        printerrln "the GtkSourceView bindings are not installed: " + dl.Error()
+        ret false
+    end
+    ret true
+end
+
+func run(args: Vector<str>): int:
+    if not load():
+        ret MODULES_MISSING
+    end
+    if args.len() >= 1 and args.get(0) == "--probe-modules":
+        ret 0
+    end
+    if args.len() < 2:
+        printerr USAGE
+        ret 1
+    end
+    for_types := ["gdk_rgba_get_type", "pango_font_description_get_type", "pango_tab_array_get_type", "pango_attr_list_get_type", "gdk_color_get_type", "pango_color_get_type", "gtk_text_iter_get_type"]
+    each type_getter in for_types:
+        _ := call(type_getter, [0 as size])
+    end
+    slot := mem.AllocateZeroed(16 as u64)
+    manager := call("gtk_source_language_manager_new", [0 as size])
+    paths := call("gtk_source_language_manager_get_search_path", [manager])
+    mut n := 0
+    until paths != 0 and binary.GetU64LE(binary.NewView(paths as void*, (n + 1) * 8), n * 8) != 0:
+        n += 1
+    end
+    list := mem.AllocateZeroed(((n + 2) * 8) as u64)
+    lv := binary.NewView(list, (n + 2) * 8)
+    binary.PutU64LE(lv, 0, (args.get(0) as void*) as i64)
+    repeat n in i:
+        binary.PutU64LE(lv, 8 * (i + 1), binary.GetU64LE(binary.NewView(paths as void*, (n + 1) * 8), 8 * i))
+    end
+    _ := call("gtk_source_language_manager_set_search_path", [manager, ptr(list)])
+    language := call("gtk_source_language_manager_get_language", [manager, ptr("salam" as void*)])
+    if language == 0:
+        printerrln "the engine did not load a language with id 'salam'"
+        ret 1
+    end
+    buffer := call("gtk_source_buffer_new", [0 as size])
+    schemes := call("gtk_source_style_scheme_manager_get_default", [0 as size])
+    scheme := call("gtk_source_style_scheme_manager_get_scheme", [schemes, ptr("classic" as void*)])
+    if scheme != 0:
+        _ := call("gtk_source_buffer_set_style_scheme", [buffer, scheme])
+    end
+    _ := call("gtk_source_buffer_set_language", [buffer, language])
+    _ := call("gtk_source_buffer_set_highlight_syntax", [buffer, 1 as size])
+    mut out := "{"
+    repeat args.len() - 1 in i:
+        source := args.get(i + 1)
+        if i > 0:
+            out = out + ", "
+        end
+        out = out + json.Str(source) + ": " + styles(source, buffer, slot)
+    end
+    println out + "}"
+    ret 0
+end
+
+func main:
+    args := os.Args()
+    mut rest := Vector {} as Vector<str>
+    defer rest.free()
+    repeat args.len() - 1 in i:
+        rest.push(args.get(i + 1))
+    end
+    ret run(rest)
+end

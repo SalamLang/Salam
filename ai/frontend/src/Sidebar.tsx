@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { Chat, User } from "./api";
 import { isDesktop } from "./desktop";
-import { IconChat, IconClose, IconEdit, IconGlobe, IconKey, IconLogout, IconMemory, IconMonitor, IconMoon, IconPlug, IconPlus, IconShield, IconSpark, IconSun, IconTrash } from "./icons";
+import { IconChat, IconClose, IconEdit, IconGlobe, IconKey, IconLogout, IconMemory, IconMonitor, IconMoon, IconPlug, IconPlus, IconShield, IconShare, IconSpark, IconSun, IconTrash } from "./icons";
 import type { Theme } from "./theme";
 import { confirmDialog } from "./Confirm";
 import { isFa, setLang, t } from "./i18n";
@@ -92,6 +92,9 @@ export function Sidebar(p: Props) {
                     <button type="button" className="chat-link" onClick={() => p.onSelect(c.id)} title={c.title}>
                       <IconChat width={16} height={16} />
                       <span dir="auto">{c.title}</span>
+                      {c.shared && c.shared.length > 0 && (
+                        <IconShare className="chat-shared" width={13} height={13} aria-label={t("اشتراکی", "Shared")} role="img" />
+                      )}
                     </button>
                   )}
                   <div className="chat-actions">

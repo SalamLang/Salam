@@ -28,6 +28,7 @@
  * library, default "std"), CHECK_JOBS (parallel builds, default: CPU count).
  */
 
+import encoding.html
 import env
 import fs.file
 import os
@@ -38,16 +39,24 @@ import regex
 import str
 import sync
 
-const SNIP := `<(code|pre)[^>]*class="[^"]*snip[^"]*"[^>]*>(.*?)</(code|pre)>`
+const SNIP_CODE := `<code[^>]*\sclass="([^"]*\s)?snip(\s[^"]*)?"[^>]*>([\s\S]*?)</code>`
+const SNIP_PRE := `<pre[^>]*\sclass="([^"]*\s)?snip(\s[^"]*)?"[^>]*>([\s\S]*?)</pre>`
 const TAGS := `<[^>]+>`
 const BODY_OPEN := "lesson.body <<"
 const BODY_CLOSE := ">>"
 const SHOWN := 20
 
+mut failed := Vector {} as Vector<str>
+
 struct Snippet:
     pub path: str = ""
     pub lang: str = ""
     pub src: str = ""
+end
+
+struct Found:
+    pub start: int = 0
+    pub inner: str = ""
 end
 
 struct Run:
@@ -61,7 +70,7 @@ func sorted_names(names: Vector<str>): Vector<str>:
     mut out := Vector {} as Vector<str>
     each name in names:
         mut at := 0
-        until at >= out.len():
+        until at < out.len():
             if out.get(at) > name:
                 break
             end
@@ -87,22 +96,6 @@ func trim_newlines(text: str): str:
         out = out.substr(0, out.len() - 1)
     end
     ret out
-end
-
-func tail(text: str, limit: int): str:
-    if text.len() <= limit:
-        ret text
-    end
-    ret text.substr(text.len() - limit, limit)
-end
-
-func unescape(text: str): str:
-    mut out := str.Replace(text, "&quot;", `"`)
-    out = str.Replace(out, "&#x27;", `'`)
-    out = str.Replace(out, "&#39;", `'`)
-    out = str.Replace(out, "&lt;", "<")
-    out = str.Replace(out, "&gt;", ">")
-    ret str.Replace(out, "&amp;", "&")
 end
 
 func quote_shell(text: str): str:
@@ -138,19 +131,37 @@ func body_lines(path: str): Vector<str>:
     ret empty
 end
 
+func found_in(pattern: str, text: str): Vector<Found> throws:
+    out := Vector {} as Vector<Found>
+    re := try regex.Compile(pattern)
+    each m in regex.FindAllMatches(re, text, 1000000):
+        out.push(Found { start = m.start, inner = regex.Group(m, 3) })
+    end
+    ret out
+end
+
 func snippets(path: str): Vector<str> throws:
     out := Vector {} as Vector<str>
     body := body_lines(path)
     if body.len() == 0:
         ret out
     end
-    re := try regex.Compile(SNIP)
-    each m in regex.FindAllMatches(re, str.Join(body, "\n"), 1000000):
-        if regex.Group(m, 1) != regex.Group(m, 3):
-            continue
+    text := str.Join(body, "\n")
+    spans := try found_in(SNIP_CODE, text)
+    blocks := try found_in(SNIP_PRE, text)
+    mut at_code := 0
+    mut at_pre := 0
+    until at_code < spans.len() or at_pre < blocks.len():
+        mut inner := ""
+        if at_pre >= blocks.len() or (at_code < spans.len() and spans.get(at_code).start < blocks.get(at_pre).start):
+            inner = spans.get(at_code).inner
+            at_code += 1
+        else:
+            inner = blocks.get(at_pre).inner
+            at_pre += 1
         end
-        inner := try regex.ReplaceStr(TAGS, regex.Group(m, 2), "")
-        out.push(trim_newlines(unescape(inner)))
+        plain := try regex.ReplaceAllStr(TAGS, inner, "")
+        out.push(trim_newlines(html.Unescape(plain)))
     end
     ret out
 end
@@ -225,23 +236,28 @@ func build(salam: str, dir: str): Run:
     ret Run { code = code, out = out }
 end
 
-func problem(snippet: Snippet, salam: str): str:
+func head(text: str, limit: int): str:
+    if str.CharCount(text) <= limit:
+        ret text
+    end
+    ret str.CharSubstr(text, 0, limit)
+end
+
+func problem(snippet: Snippet, salam: str): Run:
     dir := temp.Directory()
     defer temp.RemoveDir(dir)
     file.WriteText(dir + "/snip.salam", wrap(snippet.src, snippet.lang))
     run := build(salam, dir)
-    if run.code != 0:
-        ret "exit " + str.FromInt(run.code) + ": " + tail(run.out, 200)
-    end
-    if file.Exists(dir + "/snip.html") == false:
-        ret "the build produced no snip.html"
-    end
     mut noise := str.Replace(run.out.lower(), "0 error", "")
     noise = str.Replace(noise, "0 warning", "")
+    mut bad := run.code != 0 or file.Exists(dir + "/snip.html") == false
     if noise.includes("error") or noise.includes("warning"):
-        ret tail(run.out, 300)
+        bad = true
     end
-    ret ""
+    if bad:
+        ret Run { code = 1, out = head(run.out, 300) }
+    end
+    ret Run {}
 end
 
 // ---------------------------------------------------------------- entry point
@@ -279,6 +295,9 @@ func collect(paths: Vector<str>): Vector<Snippet> throws:
         if path.includes("/fa/"):
             lang = "fa"
         end
+        if file.Exists(path) == false:
+            throw "cannot read " + path
+        end
         found := try snippets(path)
         each src in found:
             out.push(Snippet { path = path, lang = lang, src = src })
@@ -309,13 +328,12 @@ func main:
     end
 
     mutex := sync.NewMutex()
-    failed := Vector {} as Vector<str>
     pool.ParallelFor(jobs.len() as i64, workers, (i: i64):
         snippet := jobs.get(i as int)
-        reason := problem(snippet, salam)
-        if reason != "":
+        verdict := problem(snippet, salam)
+        if verdict.code != 0:
             sync.Lock(mutex)
-            failed.push("FAIL " + snippet.path + "\n" + snippet.src + "\n--> " + reason + "\n")
+            failed.push("FAIL " + snippet.path + "\n" + snippet.src + "\n--> " + verdict.out + "\n")
             sync.Unlock(mutex)
         end
     end)
@@ -328,7 +346,7 @@ func main:
         println message
         shown += 1
     end
-    println "snippets: ", jobs.len(), " checked, ", failed.len(), " failed"
+    println "snippets: " + str.FromInt(jobs.len()) + " checked, " + str.FromInt(failed.len()) + " failed"
     if failed.len() > 0:
         ret 1
     end

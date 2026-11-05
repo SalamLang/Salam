@@ -1225,7 +1225,7 @@ ret end` at the top of a recursive AST walk) tests that parameter before
   skips its level with a warning). It also disassembles a test to confirm
   `pblendvb` and `ymm` appear at those levels, from both `--cpu` and
   `SALAM_NATIVE_CPU`, and not in the baseline build.
-- `python3 -I tools/fuzz/salamfuzz.py <salam>` generates random programs
+- `salam run tools/fuzz/salamfuzz.salam -- <salam>` generates random programs
   (integer code with loops and vectors, vector kernels over `int`, `u8`,
   `i16` and `i64`, clamped `f64` code, calls with eight arguments and a
   struct passed by reference, string building, slicing and UTF-8 walks,
@@ -1238,8 +1238,9 @@ ret end` at the top of a recursive AST walk) tests that parameter before
   wrapped into range), builds each with the reference backend and the native
   backend, and compares their output. `--count`, `--seed`, `--target` with
   `--runner`, `--ref` and `--keep` (which saves the programs that differ)
-  adjust it. The gate runs 30 on x86-64 and 15 per emulated target, seeded
-  with the run number, so each run tries new programs.
+  adjust it. The same seed gives the same programs on every run. The gate
+  runs 30 on x86-64 and 15 per emulated target, seeded with the run number,
+  so each run tries new programs.
 - `python3 -I tools/linker/machorun.py <exe>` runs a linked x86-64 macOS
   executable on x86-64 Linux: it maps the segments into this process, applies
   the rebase and bind opcodes against glibc (Darwin names such as `___error`

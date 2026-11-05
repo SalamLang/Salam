@@ -1,0 +1,182 @@
+package semantic
+
+import str
+
+include co "../sal_core.salam"
+include at "../ast.salam"
+include tok "../token.salam"
+include i18 "../i18n.salam"
+
+func opt_instantiate(s &: Sema, a &: at.Ast, targs: Vector<int>, sp: co.SrcSpan): int:
+    sema_load_opt_prelude(s, a)
+    mut tsym := 0
+    if s.prelude_opt != 0:
+        tsym = scope_lookup_local(s, s.prelude_opt, "Option")
+    end
+    if tsym == 0 or sym_at(s, tsym).decl == 0:
+        serr(s, 1, sp, i18.Tr("'T?' is built on the 'option' package, which could not be loaded"))
+        ret sema_err_ty(s)
+    end
+    save_cur := s.cur
+    save_gp := s.gen_pkg
+    s.cur = s.prelude_opt
+    s.gen_pkg = s.prelude_opt
+    inst := g_instantiate_struct(s, a, sym_at(s, tsym).decl, targs, sp)
+    s.cur = save_cur
+    s.gen_pkg = save_gp
+    if inst == 0:
+        ret sema_err_ty(s)
+    end
+    ret sym_at(s, inst).ty
+end
+
+func opt_inner(s &: Sema, t: int): int:
+    if t < 0 or s.prelude_opt == 0 or ty_at(s, t).kind != TY_STRUCT:
+        ret TYPE_NONE
+    end
+    sy := ty_at(s, t).decl
+    if sy == 0:
+        ret TYPE_NONE
+    end
+    sv := sym_at(s, sy)
+    if sv.home != s.prelude_opt or not str.Equals(sv.generic_base, "Option") or sv.generic_args.len() != 1:
+        ret TYPE_NONE
+    end
+    ret sv.generic_args.get(0)
+end
+
+func opt_field_default(s &: Sema, a &: at.Ast, mid: int, ft: int):
+    m := at.Get(a, mid)
+    if m.a != 0 or m.ty == 0 or at.Get(a, m.ty).list.len() != 0 or opt_inner(s, ft) == TYPE_NONE:
+        ret
+    end
+    none := new_node_at(a, at.AST_LITERAL, span_of(a, mid))
+    at.SetOp(a, none, tok.TK_KW_NULL)
+    mut nv := at.Get(a, none)
+    nv.synthetic = true
+    at.Put(a, none, nv)
+    mut mv := at.Get(a, mid)
+    mv.a = none
+    at.Put(a, mid, mv)
+end
+
+func opt_wraps(s &: Sema, dst: int, src: int): bool:
+    if src < 0 or type_is_error(s, src):
+        ret false
+    end
+    inner := opt_inner(s, dst)
+    if inner == TYPE_NONE or type_equiv(s, dst, src):
+        ret false
+    end
+    ret ty_at(s, src).kind == TY_NULL or type_assignable(s, inner, src)
+end
+
+func coerce_arg_to_opt(s &: Sema, a &: at.Ast, call: int, i: int, pt: int, att: int): bool:
+    if not opt_wraps(s, pt, att):
+        ret false
+    end
+    nbo := coerce_to_opt(s, a, pt, at.Child(a, call, i), att)
+    mut cn := at.Get(a, call)
+    cn.list.set(i, nbo)
+    at.Put(a, call, cn)
+    ret true
+end
+
+func coerce_args_to_opt(s &: Sema, a &: at.Ast, call: int, argtypes: Vector<int>, sigid: int):
+    if sigid == 0:
+        ret
+    end
+    sg := sig_at(s, sigid)
+    mut i := 0
+    until i < at.ChildCount(a, call) and i < sg.params.len() and i < argtypes.len():
+        if not param_is_ref(s, a, sigid, i):
+            _w := coerce_arg_to_opt(s, a, call, i, sg.params.get(i), argtypes.get(i))
+        end
+        i += 1
+    end
+end
+
+func opt_field_init(s &: Sema, a &: at.Ast, lit: int, name: str, value: int, t: int, sp: co.SrcSpan):
+    fi := new_node_at(a, at.AST_FIELD_INIT, sp)
+    at.SetName(a, fi, name)
+    mut fv := at.Get(a, fi)
+    fv.a = value
+    at.Put(a, fi, fv)
+    _d := sema_decorate(s, a, fi, t)
+    at.AddChild(a, lit, fi)
+end
+
+func opt_container_name(s &: Sema, t: int): str:
+    if t < 0 or ty_at(s, t).kind != TY_STRUCT or ty_at(s, t).decl == 0:
+        ret ""
+    end
+    base := sym_at(s, ty_at(s, t).decl).generic_base
+    ret str.Equals(base, "Vector") or str.Equals(base, "HashMap") ? base : ""
+end
+
+func opt_has_zero(s &: Sema, t: int): bool:
+    if t < 0:
+        ret false
+    end
+    k := ty_at(s, t).kind
+    ret k == TY_STR or k == TY_BOOL or k == TY_CHAR or k == TY_UCHAR or k == TY_ENUM or k == TY_PTR or k == TY_FUNC or type_is_integer(s, t) or type_is_float(s, t)
+end
+
+func opt_zero_value(s &: Sema, a &: at.Ast, t: int, sp: co.SrcSpan): int:
+    tnode := new_node_at(a, at.AST_TYPE, sp)
+    mut tv := at.Get(a, tnode)
+    tv.sema_type = t
+    tv.name = type_to_string(s, t)
+    at.Put(a, tnode, tv)
+    zv := new_node_at(a, at.AST_STRUCT_LIT, sp)
+    mut zvv := at.Get(a, zv)
+    zvv.ty = tnode
+    zvv.name = tv.name
+    zvv.synthetic = true
+    at.Put(a, zv, zvv)
+    save_skip := s.skip_lang
+    s.skip_lang = true
+    _z := check_type_param_zero(s, a, zv)
+    s.skip_lang = save_skip
+    ret zv
+end
+
+func coerce_to_opt(s &: Sema, a &: at.Ast, dst: int, expr: int, src: int): int:
+    sp := span_of(a, expr)
+    is_none := ty_at(s, src).kind == TY_NULL
+    lit := new_node_at(a, at.AST_STRUCT_LIT, sp)
+    mut lv := at.Get(a, lit)
+    lv.name = ty_at(s, dst).name
+    lv.sema_type = dst
+    lv.synthetic = true
+    at.Put(a, lit, lv)
+    note_ref(lit, ty_at(s, dst).decl)
+    inner := opt_inner(s, dst)
+    if not is_none:
+        opt_field_init(s, a, lit, "value", expr, inner, sp)
+    else opt_has_zero(s, inner):
+        opt_field_init(s, a, lit, "value", opt_zero_value(s, a, inner, sp), inner, sp)
+    else str.Len(opt_container_name(s, inner)) > 0:
+        box := new_node_at(a, at.AST_STRUCT_LIT, sp)
+        at.SetName(a, box, opt_container_name(s, inner))
+        save_exp := s.expected
+        save_skip := s.skip_lang
+        s.expected = inner
+        s.skip_lang = true
+        _b := sema_check_expr(s, a, box)
+        s.expected = save_exp
+        s.skip_lang = save_skip
+        opt_field_init(s, a, lit, "value", box, inner, sp)
+    end
+    flag := new_node_at(a, at.AST_LITERAL, sp)
+    mut gv := at.Get(a, flag)
+    gv.op = is_none ? tok.TK_KW_FALSE : tok.TK_KW_TRUE
+    gv.value_kind = tok.TV_BOOL
+    gv.value_bool = not is_none
+    at.Put(a, flag, gv)
+    bt := sema_ty(s, TY_BOOL)
+    _f := sema_decorate(s, a, flag, bt)
+    opt_field_init(s, a, lit, "present", flag, bt, sp)
+    _l := sema_decorate(s, a, lit, dst)
+    ret lit
+end

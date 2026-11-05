@@ -942,8 +942,8 @@ println option.UnwrapOr(o, 0)         // Some/None/IsSome/IsNone/Unwrap/UnwrapOr
 ```
 
 **`T?`** is short for `option.Option<T>` and needs no import. A struct field of
-type `T?` may be omitted from a literal (it starts empty). Plain values wrap
-automatically in struct literals, assignments, arguments, returns and defaults,
+type `T?` may be omitted from a literal (it starts empty, unless it has its own
+default such as `retries: int? = 3`). Plain values wrap automatically in struct literals, assignments, arguments, returns and defaults,
 and `null` means empty. Locals: `x := 5 as int?`, or `mut x: int?` assigned before
 it is read (reading it first is `E089`). In Persian `صحیح؟` works the same. Read
 with `is_some()`, `is_none()`, `unwrap_or(f)`, `unwrap()`, or the fields `present`

@@ -68,7 +68,12 @@ curl -fsSLo "%TEMP%\salam-install.bat" https://raw.githubusercontent.com/SalamLa
 Both land in `%USERPROFILE%\.salam\bin` and put that directory on your user
 PATH; open a new terminal afterwards so the change is visible. `--dir DIR`
 installs somewhere else, `--version X.Y.Z` picks an exact release, and
-`--no-modify-path` leaves PATH untouched.
+`--no-modify-path` leaves PATH untouched. The installer finds your processor by itself;
+`--arch` (`x86_64`, `i686`, `arm64`) picks another build, `--os windows` is accepted
+(Linux, macOS and the BSDs use `install.sh`, and the error prints the command), and
+`--platform` names the exact release file (`windows-x86_64`, `windows-i686`,
+`windows-arm64`). `SALAM_OS`, `SALAM_ARCH` and `SALAM_PLATFORM` do the same for the
+piped form, for example `$env:SALAM_ARCH = "i686"` before `irm ... | iex`.
 
 On Windows 7 and 8, where `curl.exe` and `irm` do not exist yet, bootstrap
 with `certutil` instead:

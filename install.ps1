@@ -7,6 +7,7 @@
 #   .\install.ps1 --dir C:\Tools\Salam
 #   .\install.ps1 --version 1.2.3
 #   .\install.ps1 --no-modify-path
+#   .\install.ps1 --arch i686
 #
 # The piped form (irm | iex) runs fine under the default Restricted
 # execution policy: iex evaluates the script text in the current
@@ -19,6 +20,9 @@
 # Environment variables:
 #   SALAM_INSTALL_DIR      same as --dir
 #   SALAM_VERSION          same as --version
+#   SALAM_OS               same as --os
+#   SALAM_ARCH             same as --arch
+#   SALAM_PLATFORM         same as --platform
 #   SALAM_NO_MODIFY_PATH   set to 1 to never touch the user PATH
 #
 # Default installation directory:
@@ -27,6 +31,7 @@
 # Release assets this understands:
 #   windows-x86_64  Windows x86_64
 #   windows-i686    Windows 32-bit, and ARM through x86 emulation
+#   windows-arm64   Windows on ARM64
 #
 # Written against PowerShell 2.0 so a stock Windows 7 SP1 box can run it
 # unchanged: no Invoke-WebRequest, no Expand-Archive, no ConvertFrom-Json,
@@ -43,6 +48,9 @@ $UserAgent = "SalamInstaller/2.0"
 
 $InstallDir = $env:SALAM_INSTALL_DIR
 $Version = $env:SALAM_VERSION
+$OsOpt = $env:SALAM_OS
+$ArchOpt = $env:SALAM_ARCH
+$PlatformOpt = $env:SALAM_PLATFORM
 $ModifyPath = $true
 
 if ($null -ne $env:SALAM_NO_MODIFY_PATH -and $env:SALAM_NO_MODIFY_PATH -ne "") {
@@ -141,16 +149,24 @@ function Show-Usage {
     Write-Host "Salam installer for Windows"
     Write-Host ""
     Write-Host "Usage:"
-    Write-Host "  install.ps1 [--dir DIR] [--version X.Y.Z] [--no-modify-path]"
+    Write-Host "  install.ps1 [--dir DIR] [--version X.Y.Z] [--os NAME] [--arch NAME]"
+    Write-Host "      [--platform NAME] [--no-modify-path]"
     Write-Host ""
     Write-Host "Options:"
     Write-Host "  --dir DIR          install into DIR (default %USERPROFILE%\.salam\bin)"
     Write-Host "  --version X.Y.Z    install this exact release instead of the latest"
+    Write-Host "  --os NAME          the system to install for: windows (the only one this"
+    Write-Host "                     script installs; Linux, macOS and the BSDs use install.sh)"
+    Write-Host "  --arch NAME        install the build for this processor instead of the"
+    Write-Host "                     detected one: x86_64 (x64), i686 (x86), arm64 (aarch64)"
+    Write-Host "  --platform NAME    name the exact release asset (windows-x86_64,"
+    Write-Host "                     windows-i686, windows-arm64); overrides --os and --arch"
     Write-Host "  --no-modify-path   never touch the user PATH"
     Write-Host "  -h, --help         show this help"
     Write-Host ""
     Write-Host "Environment:"
-    Write-Host "  SALAM_INSTALL_DIR, SALAM_VERSION, SALAM_NO_MODIFY_PATH"
+    Write-Host "  SALAM_INSTALL_DIR, SALAM_VERSION, SALAM_OS, SALAM_ARCH, SALAM_PLATFORM,"
+    Write-Host "  SALAM_NO_MODIFY_PATH"
     Write-Host ""
 }
 
@@ -356,7 +372,70 @@ function Get-Platform {
     }
 
     Fail ("unsupported processor architecture: $arch. Salam publishes " +
-        "windows-x86_64 and windows-i686 builds only.")
+        "windows-x86_64, windows-i686 and windows-arm64 builds only.")
+}
+
+# Turns the value of --arch into a release asset name.
+function Resolve-ArchOption {
+    param([string]$Value)
+
+    $want = $Value.Trim().ToLower()
+
+    if ($want -eq "x86_64" -or $want -eq "x86-64" -or $want -eq "x64" -or
+        $want -eq "amd64") {
+        return "windows-x86_64"
+    }
+
+    if ($want -eq "i686" -or $want -eq "i386" -or $want -eq "x86" -or
+        $want -eq "ia32") {
+        return "windows-i686"
+    }
+
+    if ($want -eq "aarch64" -or $want -eq "arm64") {
+        return "windows-arm64"
+    }
+
+    if ($want -eq "armhf" -or $want -eq "armv7" -or $want -eq "armv7l" -or
+        $want -eq "arm") {
+        Fail ("32-bit ARM Windows cannot run any published Salam build. " +
+            "Build from source: https://github.com/$Repo")
+    }
+
+    Fail ("unknown --arch value: $Value`n" +
+        "use one of: x86_64 (x64), i686 (x86), aarch64 (arm64)")
+}
+
+# Checks the value of --os. This script only installs Windows builds, so
+# the other systems are sent to install.sh with the command spelled out.
+function Test-OsOption {
+    param([string]$Value)
+
+    $want = $Value.Trim().ToLower()
+
+    if ($want -eq "windows" -or $want -eq "win" -or $want -eq "win32" -or
+        $want -eq "win64") {
+        return
+    }
+
+    $others = @("linux", "mac", "macos", "darwin", "osx", "freebsd",
+        "openbsd", "netbsd", "dragonfly")
+
+    if ($others -contains $want) {
+        $shName = $want
+
+        if ($want -eq "macos" -or $want -eq "darwin" -or $want -eq "osx") {
+            $shName = "mac"
+        }
+
+        $url = "https://raw.githubusercontent.com/$Repo/refs/heads/main/install.sh"
+
+        Fail ("install.ps1 installs the Windows build only. For $Value " +
+            "run install.sh from a shell on that system:`n" +
+            "  { curl -fsSL $url || wget -qO- $url; } | sh -s -- --os $shName")
+    }
+
+    Fail ("unknown --os value: $Value`n" +
+        "use windows; linux, mac and the BSDs are installed with install.sh")
 }
 
 # ---------------------------------------------------------------------
@@ -1228,6 +1307,54 @@ while ($index -lt $args.Length) {
         continue
     }
 
+    if ($arg -ieq "--os") {
+        if (($index + 1) -ge $args.Length) {
+            Fail "$arg requires a system name"
+        }
+
+        $OsOpt = [string]$args[$index + 1]
+        $index = $index + 2
+        continue
+    }
+
+    if ($arg -ilike "--os=*") {
+        $OsOpt = $arg.Substring(5)
+        $index = $index + 1
+        continue
+    }
+
+    if ($arg -ieq "--arch") {
+        if (($index + 1) -ge $args.Length) {
+            Fail "$arg requires a processor name"
+        }
+
+        $ArchOpt = [string]$args[$index + 1]
+        $index = $index + 2
+        continue
+    }
+
+    if ($arg -ilike "--arch=*") {
+        $ArchOpt = $arg.Substring(7)
+        $index = $index + 1
+        continue
+    }
+
+    if ($arg -ieq "--platform" -or $arg -ieq "-p") {
+        if (($index + 1) -ge $args.Length) {
+            Fail "$arg requires a platform name"
+        }
+
+        $PlatformOpt = [string]$args[$index + 1]
+        $index = $index + 2
+        continue
+    }
+
+    if ($arg -ilike "--platform=*") {
+        $PlatformOpt = $arg.Substring(11)
+        $index = $index + 1
+        continue
+    }
+
     if ($arg -ieq "--no-modify-path") {
         $ModifyPath = $false
         $index = $index + 1
@@ -1255,7 +1382,31 @@ Write-Host "  ------------------------------------"
 Write-Step "Checking this machine"
 
 $os = Get-OsInfo
-$platform = Get-Platform -OsInfo $os
+$chosen = ""
+
+if ($null -ne $PlatformOpt -and "$PlatformOpt".Trim() -ne "") {
+    $platform = "$PlatformOpt".Trim().ToLower()
+
+    if ($platform -ne "windows" -and $platform -notlike "windows-*") {
+        Fail ("unknown --platform value: $PlatformOpt`n" +
+            "use one of: windows-x86_64, windows-i686, windows-arm64")
+    }
+
+    $chosen = " (chosen with --platform)"
+}
+else {
+    if ($null -ne $OsOpt -and "$OsOpt".Trim() -ne "") {
+        Test-OsOption -Value $OsOpt
+    }
+
+    if ($null -ne $ArchOpt -and "$ArchOpt".Trim() -ne "") {
+        $platform = Resolve-ArchOption -Value $ArchOpt
+        $chosen = " (chosen with --arch)"
+    }
+    else {
+        $platform = Get-Platform -OsInfo $os
+    }
+}
 
 # Assets carry an explicit architecture from 0.3.7 on: what used to be
 # "windows" is "windows-x86_64". The old spelling stays in the list so an
@@ -1274,7 +1425,7 @@ if ($os.Build -gt 0) {
 
 Write-Info ("windows    : " + $osLabel)
 Write-Info ("powershell : " + $PSVersionTable.PSVersion)
-Write-Info ("target     : " + $platform)
+Write-Info ("target     : " + $platform + $chosen)
 
 if (!(Enable-Tls12)) {
     Write-Warn "this PowerShell cannot negotiate TLS 1.2; falling back to BITS/certutil"

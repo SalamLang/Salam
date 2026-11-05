@@ -539,6 +539,14 @@ enum Color:
 end
 ```
 
+## Changing the standard library
+
+If the task adds to `std/`, the change is not done until every public symbol
+has `@en` and `@fa` names, tests in `tests/en/stdlib/` and `tests/fa/stdlib/`,
+and `doc.` and `ex.` keys in both site std pages (new packages also need
+`guide-*` sections). Run `salam run tools/salam/check-std-coverage-docs.salam`;
+CONTRIBUTING.md has the full list.
+
 ---
 
 ## Known traps

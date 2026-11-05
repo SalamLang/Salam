@@ -338,3 +338,244 @@ func struct_rules_validate(s &: Sema, a &: at.Ast, did: int):
         end
     end
 end
+
+func rule_decl_of(s &: Sema, sym: int): int:
+    ret sym_at(s, sym).decl
+end
+
+func rule_optional_field_decl(a &: at.Ast, did: int, name: str): bool:
+    rules := at.Rules(a, at.Get(a, did).ext)
+    repeat rules.len() in i:
+        r := at.Get(a, rules.get(i))
+        repeat r.list.len() in j:
+            if str.Equals(at.Get(a, r.list.get(j)).name, name):
+                fid := rule_field_node(a, did, name)
+                ret fid != 0 and at.Get(a, fid).a != 0
+            end
+        end
+    end
+    ret false
+end
+
+func rule_key_of(s &: Sema, a &: at.Ast, sym: int, name: str, sp: co.SrcSpan): str:
+    f := scope_lookup_local(s, sym_at(s, sym).members, name)
+    if f == 0:
+        ret ""
+    end
+    fa := jd_attr_of(s, a, f, sp)
+    ret fa.skip or not fa.ok ? "" : fa.name
+end
+
+func rule_keys(s &: Sema, a &: at.Ast, sym: int, r: at.Node, sp: co.SrcSpan): Vector<str>:
+    mut keys := Vector {} as Vector<str>
+    repeat r.list.len() in i:
+        key := rule_key_of(s, a, sym, at.Get(a, r.list.get(i)).name, sp)
+        if str.Len(key) == 0:
+            keys.clear()
+            ret keys
+        end
+        keys.push(key)
+    end
+    ret keys
+end
+
+func jd_flag_for(s &: Sema, a &: at.Ast, sym: int, flags: Vector<str>, key: str, sp: co.SrcSpan): str:
+    mems := scope_at(s, sym_at(s, sym).members).symbols
+    mut n := 0
+    repeat mems.len() in i:
+        f := mems.get(i)
+        if sym_at(s, f).kind == SYM_FIELD:
+            fa := jd_attr_of(s, a, f, sp)
+            if fa.ok and not fa.skip:
+                if str.Equals(fa.name, key):
+                    ret flags.get(n)
+                end
+                n += 1
+            end
+        end
+    end
+    ret ""
+end
+
+func rule_quoted_keys(keys: Vector<str>): str:
+    mut out := ""
+    repeat keys.len() in i:
+        out = out + (i > 0 ? ", " : "") + "'" + keys.get(i) + "'"
+    end
+    ret out
+end
+
+func jd_dec_rule(s &: Sema, a &: at.Ast, sym: int, r: at.Node, flags: Vector<str>, sp: co.SrcSpan): str:
+    mut keys := rule_keys(s, a, sym, r, sp)
+    defer keys.free()
+    if keys.len() == 0:
+        ret ""
+    end
+    mut out := ""
+    if rule_is_needs(r):
+        first := jd_flag_for(s, a, sym, flags, keys.get(0), sp)
+        mut i := 1
+        until i < keys.len():
+            flag := jd_flag_for(s, a, sym, flags, keys.get(i), sp)
+            out = out + JIND + "if " + JD_STRICT + " and " + first + " and " + flag + " == false:\n"
+            out = out + jd_fail(JIND + JIND, "key '" + keys.get(0) + "' needs key '" + keys.get(i) + "'", JD_START)
+            out = out + JIND + "end\n"
+            i += 1
+        end
+        ret out
+    end
+    mut count := ""
+    repeat keys.len() in j:
+        count = count + (j > 0 ? " + " : "") + "(" + jd_flag_for(s, a, sym, flags, keys.get(j), sp) + " ? 1 : 0)"
+    end
+    mut test := "(" + count + ") > 1"
+    mut msg := "at most one of the keys " + rule_quoted_keys(keys) + " can be set"
+    if str.Equals(r.name, "allornone"):
+        test = "(" + count + ") != 0 and (" + count + ") != " + keys.len()
+        msg = "set all or none of the keys " + rule_quoted_keys(keys)
+    else str.Equals(r.name, "oneof"):
+        test = "(" + count + ") != 1"
+        msg = "set exactly one of the keys " + rule_quoted_keys(keys)
+    else str.Equals(r.name, "anyof"):
+        test = "(" + count + ") == 0"
+        msg = "set at least one of the keys " + rule_quoted_keys(keys)
+    end
+    out = out + JIND + "if " + JD_STRICT + " and " + test + ":\n"
+    out = out + jd_fail(JIND + JIND, msg, JD_START)
+    ret out + JIND + "end\n"
+end
+
+func jd_dec_rules(s &: Sema, a &: at.Ast, sym: int, flags: Vector<str>, sp: co.SrcSpan): str:
+    decl := rule_decl_of(s, sym)
+    if decl == 0:
+        ret ""
+    end
+    rules := at.Rules(a, at.Get(a, decl).ext)
+    mut out := ""
+    repeat rules.len() in i:
+        r := at.Get(a, rules.get(i))
+        if str.Len(r.name) > 0 and r.list.len() > 0:
+            out = out + jd_dec_rule(s, a, sym, r, flags, sp)
+        end
+    end
+    ret out
+end
+
+func js_rule_optional_key(s &: Sema, a &: at.Ast, sym: int, key: str, sp: co.SrcSpan): bool:
+    decl := rule_decl_of(s, sym)
+    if decl == 0 or at.Rules(a, at.Get(a, decl).ext).len() == 0:
+        ret false
+    end
+    mems := scope_at(s, sym_at(s, sym).members).symbols
+    repeat mems.len() in i:
+        f := mems.get(i)
+        if sym_at(s, f).kind == SYM_FIELD and str.Equals(jd_attr_of(s, a, f, sp).name, key):
+            ret rule_optional_field_decl(a, decl, sym_at(s, f).name)
+        end
+    end
+    ret false
+end
+
+func js_required_set(keys: Vector<str>, from_i: int, to_i: int): str:
+    mut out := "{\"required\":["
+    mut i := from_i
+    until i < to_i:
+        out = out + (i > from_i ? "," : "") + js_qs(keys.get(i))
+        i += 1
+    end
+    ret out + "]}"
+end
+
+func js_one_each(keys: Vector<str>): str:
+    mut out := ""
+    repeat keys.len() in i:
+        out = out + (i > 0 ? "," : "") + js_required_set(keys, i, i + 1)
+    end
+    ret out
+end
+
+func js_pairs(keys: Vector<str>): str:
+    mut out := ""
+    repeat keys.len() in i:
+        mut j := i + 1
+        until j < keys.len():
+            pair := "{\"required\":[" + js_qs(keys.get(i)) + "," + js_qs(keys.get(j)) + "]}"
+            out = out + (str.Len(out) > 0 ? "," : "") + pair
+            j += 1
+        end
+    end
+    ret out
+end
+
+func js_dep_add(dep_keys &: Vector<str>, dep_vals &: Vector<str>, key: str, want: str):
+    repeat dep_keys.len() in i:
+        if str.Equals(dep_keys.get(i), key):
+            dep_vals.set(i, dep_vals.get(i) + "," + js_qs(want))
+            ret
+        end
+    end
+    dep_keys.push(key)
+    dep_vals.push(js_qs(want))
+end
+
+func js_rules(s &: Sema, a &: at.Ast, sym: int, sp: co.SrcSpan): str:
+    decl := rule_decl_of(s, sym)
+    if decl == 0:
+        ret ""
+    end
+    rules := at.Rules(a, at.Get(a, decl).ext)
+    if rules.len() == 0:
+        ret ""
+    end
+    mut dep_keys := Vector {} as Vector<str>
+    defer dep_keys.free()
+    mut dep_vals := Vector {} as Vector<str>
+    defer dep_vals.free()
+    mut groups := ""
+    repeat rules.len() in i:
+        r := at.Get(a, rules.get(i))
+        if str.Len(r.name) == 0 or r.list.len() == 0:
+            continue
+        end
+        mut keys := rule_keys(s, a, sym, r, sp)
+        defer keys.free()
+        if keys.len() == 0:
+            continue
+        end
+        if rule_is_needs(r):
+            mut k := 1
+            until k < keys.len():
+                js_dep_add(dep_keys, dep_vals, keys.get(0), keys.get(k))
+                k += 1
+            end
+        else str.Equals(r.name, "allornone"):
+            repeat keys.len() in x:
+                repeat keys.len() in y:
+                    if x != y:
+                        js_dep_add(dep_keys, dep_vals, keys.get(x), keys.get(y))
+                    end
+                end
+            end
+        else:
+            mut part := "{\"anyOf\":[" + js_one_each(keys) + "]}"
+            if str.Equals(r.name, "oneof"):
+                part = "{\"oneOf\":[" + js_one_each(keys) + "]}"
+            else str.Equals(r.name, "atmostone"):
+                part = "{\"not\":{\"anyOf\":[" + js_pairs(keys) + "]}}"
+            end
+            groups = groups + (str.Len(groups) > 0 ? "," : "") + part
+        end
+    end
+    mut out := ""
+    if dep_keys.len() > 0:
+        out = out + ",\"dependentRequired\":{"
+        repeat dep_keys.len() in d:
+            out = out + (d > 0 ? "," : "") + js_qs(dep_keys.get(d)) + ":[" + dep_vals.get(d) + "]"
+        end
+        out = out + "}"
+    end
+    if str.Len(groups) > 0:
+        out = out + ",\"allOf\":[" + groups + "]"
+    end
+    ret out
+end

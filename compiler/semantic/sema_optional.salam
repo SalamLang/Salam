@@ -114,6 +114,33 @@ func opt_container_name(s &: Sema, t: int): str:
     ret str.Equals(base, "Vector") or str.Equals(base, "HashMap") ? base : ""
 end
 
+func opt_has_zero(s &: Sema, t: int): bool:
+    if t < 0:
+        ret false
+    end
+    k := ty_at(s, t).kind
+    ret k == TY_STR or k == TY_BOOL or k == TY_CHAR or k == TY_UCHAR or k == TY_ENUM or k == TY_PTR or k == TY_FUNC or type_is_integer(s, t) or type_is_float(s, t)
+end
+
+func opt_zero_value(s &: Sema, a &: at.Ast, t: int, sp: co.SrcSpan): int:
+    tnode := new_node_at(a, at.AST_TYPE, sp)
+    mut tv := at.Get(a, tnode)
+    tv.sema_type = t
+    tv.name = type_to_string(s, t)
+    at.Put(a, tnode, tv)
+    zv := new_node_at(a, at.AST_STRUCT_LIT, sp)
+    mut zvv := at.Get(a, zv)
+    zvv.ty = tnode
+    zvv.name = tv.name
+    zvv.synthetic = true
+    at.Put(a, zv, zvv)
+    save_skip := s.skip_lang
+    s.skip_lang = true
+    _z := check_type_param_zero(s, a, zv)
+    s.skip_lang = save_skip
+    ret zv
+end
+
 func coerce_to_opt(s &: Sema, a &: at.Ast, dst: int, expr: int, src: int): int:
     sp := span_of(a, expr)
     is_none := ty_at(s, src).kind == TY_NULL
@@ -127,17 +154,18 @@ func coerce_to_opt(s &: Sema, a &: at.Ast, dst: int, expr: int, src: int): int:
     inner := opt_inner(s, dst)
     if not is_none:
         opt_field_init(s, a, lit, "value", expr, inner, sp)
-    else inner >= 0 and ty_at(s, inner).kind == TY_STR:
-        empty := th_str_lit(a, sp, "")
-        _e := sema_decorate(s, a, empty, inner)
-        opt_field_init(s, a, lit, "value", empty, inner, sp)
+    else opt_has_zero(s, inner):
+        opt_field_init(s, a, lit, "value", opt_zero_value(s, a, inner, sp), inner, sp)
     else str.Len(opt_container_name(s, inner)) > 0:
         box := new_node_at(a, at.AST_STRUCT_LIT, sp)
         at.SetName(a, box, opt_container_name(s, inner))
         save_exp := s.expected
+        save_skip := s.skip_lang
         s.expected = inner
+        s.skip_lang = true
         _b := sema_check_expr(s, a, box)
         s.expected = save_exp
+        s.skip_lang = save_skip
         opt_field_init(s, a, lit, "value", box, inner, sp)
     end
     flag := new_node_at(a, at.AST_LITERAL, sp)

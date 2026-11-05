@@ -224,14 +224,18 @@ Linux-aarch64) platform=linux-aarch64 ;;
 Darwin-arm64) platform=macos-aarch64 ;;
 Darwin-x86_64) platform=macos-x86_64 ;;
 esac
-if [ -n "$platform" ] && command -v python3 >/dev/null 2>&1 && command -v cc >/dev/null 2>&1 && command -v ar >/dev/null 2>&1; then
+if [ -n "$platform" ] && { command -v sha256sum >/dev/null 2>&1 || command -v shasum >/dev/null 2>&1; } && command -v cc >/dev/null 2>&1 && command -v ar >/dev/null 2>&1; then
     mkdir -p "$work/nat/lib" "$work/natsrv"
     printf 'int fastc_twice(int x) { return 2 * x; }\n' >"$work/nat/fastc.c"
     cc -c -fPIC "$work/nat/fastc.c" -o "$work/nat/fastc.o" && ar rcs "$work/nat/lib/libfastc.a" "$work/nat/fastc.o"
     (cd "$work/nat" && tar -czf "$work/natsrv/libfastc.tar.gz" lib)
-    nsum=$(python3 -c 'import hashlib, sys; print(hashlib.sha256(open(sys.argv[1], "rb").read()).hexdigest())' "$work/natsrv/libfastc.tar.gz")
-    nport=$(python3 -c 'import socket; s = socket.socket(); s.bind(("127.0.0.1", 0)); print(s.getsockname()[1])')
-    (cd "$work/natsrv" && exec python3 -m http.server "$nport" --bind 127.0.0.1 >/dev/null 2>&1) &
+    if command -v sha256sum >/dev/null 2>&1; then
+        nsum=$(sha256sum "$work/natsrv/libfastc.tar.gz" | cut -d" " -f1)
+    else
+        nsum=$(shasum -a 256 "$work/natsrv/libfastc.tar.gz" | cut -d" " -f1)
+    fi
+    nport=$("$salam" run "$root/tools/salam/freeport.salam" --log-level=error)
+    "$salam" serve "$work/natsrv" --port="$nport" --host=127.0.0.1 >/dev/null 2>&1 &
     nserver=$!
     sleep 1
     repo github.com/fixture/fast

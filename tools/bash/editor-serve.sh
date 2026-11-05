@@ -12,13 +12,9 @@ if ! ls "$EDITOR_DIR"/salam-wa-*.js >/dev/null 2>&1; then
 fi
 
 echo "==> Serving $EDITOR_DIR/ at http://localhost:$PORT/  (Ctrl-C to stop)"
-cd "$EDITOR_DIR"
 if command -v php >/dev/null 2>&1; then
+    cd "$EDITOR_DIR"
     exec php -S "0.0.0.0:$PORT"
 fi
-PY="$(salam_python)"
-[ -n "$PY" ] || {
-    echo "error: neither php nor python found on PATH" >&2
-    exit 1
-}
-exec "$PY" -m http.server "$PORT"
+salam_ensure_compiler
+exec "$SALAM" serve "$EDITOR_DIR" --host=0.0.0.0 --port="$PORT"

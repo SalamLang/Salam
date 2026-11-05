@@ -43,6 +43,19 @@ limited() {
         perl -e 'alarm shift; exec @ARGV' "$LIMIT" "$@"
     fi
 }
+case "$(uname -s)" in
+MINGW* | MSYS* | CYGWIN*) host_os=windows ;;
+Darwin) host_os=mac ;;
+*) host_os=linux ;;
+esac
+[ "${OS:-}" = "Windows_NT" ] && host_os=windows
+case "$(uname -m)" in
+x86_64 | amd64) host_arch=x64 ;;
+aarch64 | arm64) host_arch=arm64 ;;
+i386 | i486 | i586 | i686 | x86) host_arch=x86 ;;
+armv6l | armv7l | armv7 | arm) host_arch=arm ;;
+*) host_arch=other ;;
+esac
 for exe in "$DIR"/*/*; do
     [ -f "$exe" ] || continue
     grp=$(basename "$(dirname "$exe")")
@@ -50,6 +63,12 @@ for exe in "$DIR"/*/*; do
     id=$grp/$name
     exp=$ROOT/tests/en/$id.out
     [ -f "$exp" ] || continue
+    for variant in "$ROOT/tests/en/$id.$host_os.$host_arch.out" "$ROOT/tests/en/$id.$host_os.out"; do
+        if [ -f "$variant" ]; then
+            exp=$variant
+            break
+        fi
+    done
     if skip_of "$id"; then
         skipped=$((skipped + 1))
         continue

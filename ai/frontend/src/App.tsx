@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, getToken, handleUnauthorized, setClientPlatform, setClientVersion, setToken, streamMessage, uiText, type Chat, type FileMeta, type Message, type OutgoingFile, type QueueItem, type User } from "./api";
 import { Admin, NoAccess } from "./Admin";
 import { AdminChat } from "./AdminChat";
@@ -15,14 +15,17 @@ import { Connections, TelegramLink } from "./Telegram";
 import { OAuthCallback, providerFromPath } from "./OAuthCallback";
 import { agent, isDesktop, saveMode, savedMode, savedWorkspace, saveWorkspace, type AgentMode } from "./desktop";
 import { Keys } from "./Keys";
-import { announce } from "./Notify";
+import { announce, announceGuest } from "./Notify";
 import { Plans } from "./Plans";
-import { IconGlobe, IconCode, IconMenu, IconMoon, IconPlus, IconSun, IconSwap, IconBook, IconBug, IconFolder, IconSearch, IconTerminal } from "./icons";
+import { IconGlobe, IconCode, IconMenu, IconMoon, IconPlus, IconSun, IconSwap, IconBook, IconBug, IconFolder, IconSearch, IconTerminal, IconShare } from "./icons";
 import { MessageView } from "./Messages";
 import { Sidebar } from "./Sidebar";
 import { useTheme } from "./theme";
 import { t } from "./i18n";
 import { Checkbox } from "./Checkbox";
+
+const ShareDialog = lazy(() => import("./ShareDialog").then((m) => ({ default: m.ShareDialog })));
+const SharedPage = lazy(() => import("./SharedPage").then((m) => ({ default: m.SharedPage })));
 
 const SUGGESTIONS = [
   { icon: IconCode, title: t("اولین برنامه", "First program"), text: t("یک برنامه‌ی سلام بنویس که نام کاربر را بپرسد و به او خوشامد بگوید.", "Write a Salam program that asks for the user's name and greets them.") },
@@ -43,7 +46,11 @@ function chatIdFromPath(): string | null {
   return m ? m[1] : null;
 }
 
-type Route = "chat" | "connect" | "telegram" | "connections" | "keys" | "plans" | "memory" | "admin" | "admin-chat";
+function shareTokenFromPath(): string | null {
+  return /^\/s\/([a-f0-9]{40})\/?$/.exec(location.pathname)?.[1] ?? null;
+}
+
+type Route = "share" | "chat" | "connect" | "telegram" | "connections" | "keys" | "plans" | "memory" | "admin" | "admin-chat";
 
 function adminChatIdFromPath(): string {
   return /^\/admin\/chats\/([a-f0-9]{24})\/?$/.exec(location.pathname)?.[1] ?? "";
@@ -51,6 +58,7 @@ function adminChatIdFromPath(): string {
 
 function routeFromPath(): Route {
   const p = location.pathname.replace(/\/+$/, "");
+  if (shareTokenFromPath()) return "share";
   if (p === "/connect") return "connect";
   if (p === "/telegram") return "telegram";
   if (p === "/connections") return "connections";
@@ -64,6 +72,7 @@ function routeFromPath(): Route {
 }
 
 const PAGE_TITLES: Record<Route, string> = {
+  share: t("گفت‌وگوی اشتراکی", "Shared chat"),
   chat: t("دستیار سلام", "Salam AI"),
   connect: t("اتصال برنامه", "Connect an app"),
   telegram: t("اتصال تلگرام", "Connect Telegram"),
@@ -125,6 +134,8 @@ export function App() {
   const [mode, setMode] = useState<AgentMode>("ask");
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [cloudOk, setCloudOk] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
+  const guestSeen = useRef(new Map<string, number>());
   const [cloud, setCloud] = useState(() => {
     try {
       return localStorage.getItem("salam-ai-cloud") === "1";
@@ -356,6 +367,7 @@ export function App() {
       ),
     );
     setQueue(r.queue ?? []);
+    setChats((cs) => (cs.some((c) => c.id === r.chat.id) ? cs.map((c) => (c.id === r.chat.id ? { ...c, shared: r.chat.shared } : c)) : [r.chat, ...cs]));
     return r.messages.find((m) => m.status === "pending");
   }, []);
 
@@ -502,6 +514,38 @@ export function App() {
       document.removeEventListener("visibilitychange", check);
     };
   }, [signedIn]);
+
+  const sharedChats = chats.filter((c) => c.shared?.includes("collab")).map((c) => c.id).join(",");
+  useEffect(() => {
+    if (!signedIn || !sharedChats) return;
+    let stopped = false;
+    const look = async () => {
+      if (stopped || document.visibilityState !== "visible") return;
+      for (const id of sharedChats.split(",")) {
+        try {
+          const r = await api.chat(id);
+          if (stopped) return;
+          const newest = r.messages.filter((m) => m.guest).reduce((n, m) => Math.max(n, m.id), 0);
+          const seen = guestSeen.current.get(id);
+          guestSeen.current.set(id, newest);
+          if (seen === undefined || newest <= seen) continue;
+          const last = r.messages.find((m) => m.id === newest);
+          const title = chatsRef.current.find((c) => c.id === id)?.title ?? r.chat.title;
+          if (last) announceGuest(last.guest ?? "", title, last.body);
+          if (id === activeRef.current) {
+            const pending = applyChat(r);
+            if (pending && followed.current !== pending.id) follow(id, pending.id);
+          }
+        } catch {}
+      }
+    };
+    look();
+    const timer = window.setInterval(look, 5000);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [signedIn, sharedChats, applyChat, follow]);
 
   const loadFile = useMemo(() => fileLoader((fid) => api.chatFile(activeId ?? "", fid)), [activeId]);
   const waitingElsewhere = tools.calls.find((c) => c.state === "pending" && c.chat !== activeId);
@@ -694,6 +738,21 @@ export function App() {
     signOut();
   };
 
+  const sharedToken = route === "share" ? shareTokenFromPath() : null;
+  if (sharedToken) {
+    return (
+      <Suspense
+        fallback={
+          <div className="boot">
+            <img src="/logo.svg" alt="" width={64} height={64} />
+          </div>
+        }
+      >
+        <SharedPage token={sharedToken} theme={theme} toggleTheme={toggleTheme} />
+      </Suspense>
+    );
+  }
+
   if (booting) {
     return (
       <div className="boot">
@@ -737,6 +796,19 @@ export function App() {
             <IconMenu />
           </button>
           <h1 dir="auto">{uiText(title)}</h1>
+          {route === "chat" && activeId && (
+            <button
+              type="button"
+              className={`icon-button share-button${activeChat?.shared && activeChat.shared.length > 0 ? " on" : ""}`}
+              disabled={!activeChat}
+              onClick={() => setShareOpen(true)}
+              aria-label={t("اشتراک‌گذاری گفت‌وگو", "Share this chat")}
+              title={activeChat ? t("اشتراک‌گذاری با پیوند", "Share with a link") : t("این گفت‌وگو را نمی‌شود به اشتراک گذاشت", "This chat cannot be shared")}
+            >
+              <IconShare width={18} height={18} />
+              <span className="share-button-label">{t("اشتراک", "Share")}</span>
+            </button>
+          )}
           <button type="button" className="icon-button only-mobile" onClick={() => openChat(null)} aria-label={t("گفت‌وگوی تازه", "New chat")}>
             <IconPlus />
           </button>
@@ -791,9 +863,18 @@ export function App() {
               ) : (
                 <div className="thread">
                   {loadingChat && messages.length === 0 && <div className="loading-chat"><span className="spinner" /></div>}
-                  {messages.map((m) => (
-                    <MessageView key={m.id} m={m} name={user.name} loadFile={loadFile} calls={m.role === "assistant" ? callsFor(m.id) : undefined} onDecide={tools.decide} onStop={tools.stop} />
-                  ))}
+                  {messages.map((m) =>
+                    m.guest && m.role === "user" ? (
+                      <div key={m.id} className="shared-msg">
+                        <span className="shared-guest">
+                          {t("از راه پیوند", "Via link")}: <bdi dir="auto">{m.guest}</bdi>
+                        </span>
+                        <MessageView m={m} name={m.guest} loadFile={loadFile} />
+                      </div>
+                    ) : (
+                      <MessageView key={m.id} m={m} name={user.name} loadFile={loadFile} calls={m.role === "assistant" ? callsFor(m.id) : undefined} onDecide={tools.decide} onStop={tools.stop} />
+                    ),
+                  )}
                 </div>
               )}
             </div>
@@ -836,6 +917,16 @@ export function App() {
           </>
         )}
       </main>
+      {shareOpen && activeId && activeChat && (
+        <Suspense fallback={null}>
+          <ShareDialog
+            chatId={activeId}
+            title={activeChat.title}
+            onClose={() => setShareOpen(false)}
+            onChange={(kinds) => setChats((cs) => cs.map((c) => (c.id === activeId ? { ...c, shared: kinds.length > 0 ? kinds : undefined } : c)))}
+          />
+        </Suspense>
+      )}
       {toast && (
         <div className="toast" role="status">
           {toast}

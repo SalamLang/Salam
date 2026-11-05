@@ -283,3 +283,28 @@ export const IconBrain = (p: P) => (
     <path d="M8 10h2M14 10h2M8.5 14H10M14 14h1.5" />
   </Base>
 );
+
+export const IconShare = (p: P) => (
+  <Base {...p}>
+    <circle cx="18" cy="5" r="2.6" />
+    <circle cx="6" cy="12" r="2.6" />
+    <circle cx="18" cy="19" r="2.6" />
+    <path d="M8.3 10.8l7.4-4.2M8.3 13.2l7.4 4.2" />
+  </Base>
+);
+export const IconPause = (p: P) => (
+  <Base {...p}>
+    <path d="M9 5v14M15 5v14" />
+  </Base>
+);
+export const IconRefresh = (p: P) => (
+  <Base {...p}>
+    <path d="M20 11a8 8 0 0 0-14.5-4M4 5v3.5h3.5M4 13a8 8 0 0 0 14.5 4M20 19v-3.5h-3.5" />
+  </Base>
+);
+export const IconUsers = (p: P) => (
+  <Base {...p}>
+    <circle cx="9" cy="8" r="3.2" />
+    <path d="M3 19c0-3.2 2.7-5.5 6-5.5s6 2.3 6 5.5M16 5a3 3 0 0 1 0 6M18 14c2 .6 3.5 2.2 3.5 5" />
+  </Base>
+);

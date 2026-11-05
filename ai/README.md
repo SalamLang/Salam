@@ -51,6 +51,12 @@ or `docker build ai/backend`. It is configured through environment variables:
 | `AI_BILLING_SWEEP_SECONDS`                                        | how often to settle payments the gateway never returned from, and how long a payment may sit first                                                                    | `600`                                           |
 | `AI_MEMORY_SOFT_MB`, `AI_MEMORY_HARD_MB`                          | restart to give memory back once past the first with nothing in flight, or past the second regardless                                                                 | `1200`, `2600`                                  |
 | `AI_QUEUE_MAX`                                                    | how many messages one chat may keep waiting in its queue                                                                                                              | `20`                                            |
+| `AI_SHARE_DEFAULT_HOURS`                                          | how long a new collaborate link lives: 1, 24, 168 or 0 for never (view links never expire)                                                                            | `24`                                            |
+| `AI_SHARE_MAX_MESSAGES`                                           | default total message cap of a collaborate link, 0 for none (the owner can change it)                                                                                 | `100`                                           |
+| `AI_SHARE_DAILY_MESSAGES`                                         | default messages per 24 hours for a collaborate link, 0 for none                                                                                                      | `50`                                            |
+| `AI_SHARE_RATE_PER_MINUTE`                                        | guest sends per minute from one IP (three times that per link)                                                                                                        | `6`                                             |
+| `AI_SHARE_READ_PER_MINUTE`                                        | shared page reads per minute from one IP (six times that per link)                                                                                                    | `90`                                            |
+| `AI_SHARE_MAX_CHARS`                                              | longest message a guest may send, in characters                                                                                                                       | `2000`                                          |
 | `AI_CHAT_TURN_SECONDS`                                            | how long one web chat turn may run before it is stopped with a note to write "continue" (ceiling 43200)                                                               | `600`                                           |
 | `AI_AGENT_TURN_SECONDS`                                           | the same for a desktop agent turn (ceiling 43200)                                                                                                                     | `3600`                                          |
 | `AI_UNLIMITED_TURN_SECONDS`                                       | the same for accounts on the unlimited plan, chat and agent (hard ceiling 43200, twelve hours)                                                                        | `43200`                                         |
@@ -208,6 +214,22 @@ laptop does not stop the queue, and neither does an answer nobody is watching.
   going on the server.
 
 `node ai/backend/tests/queue_flow.mjs` tests it against a running API and the engine mock.
+
+### Sharing a chat
+
+The owner opens Share in the chat header and makes a view link or a collaborate link
+(`https://ai.salamlang.ir/s/<token>`). View lets anyone read the chat live. Collaborate
+also lets them send messages; each one is answered by the assistant and counts against
+the owner's plan, so the owner can stop it at any moment, cap it, set how long it
+lives and see who used it. Chats bound to the owner's computer or to the cloud sandbox
+only get view links, and those hide tool details. Tokens are stored as SHA-256 hashes
+and, when `AI_SECRET_KEY` is set, a sealed copy so the owner can copy the link again.
+Design, threat model, API and schema: `docs/design/SHARING.md`. The static host must
+serve `index.html` for `/s/<token>`.
+
+`node ai/backend/tests/share_flow.mjs` tests it against a running API and the engine
+mock; `SHARE_SQL` (a `mariadb` command line) also runs the expiry by clock check.
+`salam exec ai/backend/tests/share_test.salam` tests the pure helpers.
 
 ### Telegram bot
 

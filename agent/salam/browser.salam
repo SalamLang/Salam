@@ -67,6 +67,7 @@ const VISIBLE_JS := `(selector => { const e = document.querySelector(selector); 
 
 mut g_lock := sync.NewMutex()
 mut g_sessions := HashMap {} as HashMap<str, Session*>
+mut g_launching := HashMap {} as HashMap<str, bool>
 mut g_reaper := false
 mut g_profiles := 0
 
@@ -1019,7 +1020,7 @@ func session_launch(key: str, cancelled: func () bool, error &: str): Session*:
         if sync.NowMs() - started > (20000 as i64) or cancelled():
             process.KillTree(child)
             remove_profile(dir)
-            error = "The browser " + exe + " did not start within 20 seconds."
+            error = cancelled() ? "[stopped by the user]" : "The browser " + exe + " did not start within 20 seconds."
             ret null as Session*
         end
         sync.SleepMs(100)
@@ -1806,6 +1807,11 @@ pub func KindOf(r: Request): str:
     ret r.act == "eval" ? "exec" : "read"
 end
 
+@en "IsLocalFile"
+pub func IsLocalFile(r: Request): bool:
+    ret r.act == "open" and str.StartsWith(str.Lower(r.url), "file:")
+end
+
 @en "Summary"
 pub func Summary(r: Request): str:
     selector := r.selector
@@ -1869,7 +1875,7 @@ pub func Execute(r: Request, cancelled: func () bool): Outcome:
         g_reaper = true
         _thread := spawn(reaper)
     end
-    until g_sessions.has(r.key) and g_sessions.get(r.key)[0].busy:
+    until g_launching.has(r.key) or (g_sessions.has(r.key) and g_sessions.get(r.key)[0].busy):
         sync.Unlock(g_lock)
         if cancelled():
             ret fail("[stopped by the user]")
@@ -1881,11 +1887,14 @@ pub func Execute(r: Request, cancelled: func () bool): Outcome:
     if g_sessions.has(r.key):
         s = g_sessions.get(r.key)
         s[0].busy = true
+    else:
+        g_launching.put(r.key, true)
     end
     sync.Unlock(g_lock)
     if s != null and session_dead(s):
         sync.Lock(g_lock)
         _gone := g_sessions.remove(r.key)
+        g_launching.put(r.key, true)
         sync.Unlock(g_lock)
         session_close(s)
         s = null as Session*
@@ -1893,13 +1902,16 @@ pub func Execute(r: Request, cancelled: func () bool): Outcome:
     if s == null:
         mut error := ""
         s = session_launch(r.key, cancelled, error)
+        sync.Lock(g_lock)
+        _done := g_launching.remove(r.key)
+        if s != null:
+            s[0].busy = true
+            g_sessions.put(r.key, s)
+        end
+        sync.Unlock(g_lock)
         if s == null:
             ret fail(error)
         end
-        s[0].busy = true
-        sync.Lock(g_lock)
-        g_sessions.put(r.key, s)
-        sync.Unlock(g_lock)
     end
     s[0].cancelled = cancelled
     s[0].answer_id = 0

@@ -12,28 +12,26 @@
  *
  */
 
-#include <stdint.h>
-
 __int128 w_add(__int128 a, __int128 b) {
     return a + b;
 }
 
-unsigned __int128 w_mul(uint64_t a, uint64_t b) {
+unsigned __int128 w_mul(unsigned long long a, unsigned long long b) {
     return (unsigned __int128)a * b;
 }
 
-int64_t w_high(unsigned __int128 v) {
-    return (int64_t)(v >> 64);
+long long w_high(unsigned __int128 v) {
+    return (long long)(v >> 64);
 }
 
-int64_t w_tail(int64_t a, int64_t b, int64_t c, int64_t d, int64_t e, __int128 f, int64_t g) {
-    return a + b * 10 + c * 100 + d * 1000 + e * 10000 + (int64_t)(f >> 64) * 100000 + g * 1000000;
+long long w_tail(long long a, long long b, long long c, long long d, long long e, __int128 f, long long g) {
+    return a + b * 10 + c * 100 + d * 1000 + e * 10000 + (long long)(f >> 64) * 100000 + g * 1000000;
 }
 
 double w_mix(double x, __int128 v, double y) {
     return x + (double)v + y;
 }
 
-int64_t w_odd(int64_t a, __int128 v) {
-    return a + (int64_t)(v >> 64);
+long long w_odd(long long a, __int128 v) {
+    return a + (long long)(v >> 64);
 }

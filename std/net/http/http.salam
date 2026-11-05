@@ -164,10 +164,24 @@ pub struct Client:
     @fa "تنظیم کوکی"
     pub func SetCookie(name: str, value: str):
         this._lock()
-        this.cookies.put(name, value)
+        mut n := name
+        mut v := value
+        mut cv := false
+        if this._tracked(value):
+            v = str.Clone(value)
+            cv = true
+        end
+        mut cn := cv
+        if cn or this._tracked(name):
+            n = str.Clone(name)
+            cn = true
+        end
+        this.cookies.put(n, v)
         this.cookie_hosts.remove(name)
         this.cookie_secure.remove(name)
         this._drop_owned(name)
+        if cv: this._own_vals.put(n, v) end
+        if cn: this._own_keys.put(n, n) end
         this._unlock()
     end
 
@@ -229,6 +243,21 @@ pub struct Client:
         this._free_owned()
         this._free_host_copies()
         this.cookie_secure.free()
+    end
+
+    func _tracked(p: str): bool:
+        if p.len() == 0: ret false end
+        it := this._own_vals.iter()
+        until it.has_next():
+            if (it.value() as void*) == (p as void*): ret true end
+            it.next()
+        end
+        kt := this._own_keys.iter()
+        until kt.has_next():
+            if (kt.value() as void*) == (p as void*): ret true end
+            kt.next()
+        end
+        ret false
     end
 
     func _drop_owned(name: str):
@@ -492,26 +521,32 @@ pub struct Client:
             if rep.err.len() == 0: this._jar_absorb(low_host, rep.head) end
             loc := _redirect_target(rep)
             if rep.err.len() > 0 or loc.len() == 0 or o.max_redirects <= 0:
+                if loc.len() > 0: mem.Free(loc as void*) end
                 ret _finish(rep, o, cur_url)
             end
             compress.BufFree(rep.body)
             if hops >= o.max_redirects:
+                mem.Free(loc as void*)
                 ret _Reply { status = rep.status, head = rep.head, err = "stopped after " + hops + " redirects", url = cur_url }
             end
             if _has_space_or_control(loc):
+                mem.Free(loc as void*)
                 ret _Reply { status = rep.status, head = rep.head, err = "the redirect target is not a valid URL", url = cur_url }
             end
             mut next := url.URL {}
             try:
                 next = url.Join(u, loc)
             catch e:
+                mem.Free(loc as void*)
                 ret _Reply { status = rep.status, head = rep.head, err = "redirect: " + e.to_str(), url = cur_url }
             end
             ne := _scheme_ok(next)
             if ne.len() > 0:
+                mem.Free(loc as void*)
                 ret _Reply { status = rep.status, head = rep.head, err = "redirect: " + ne, url = cur_url }
             end
             if str.EqualFold(u.scheme, "https") and str.EqualFold(next.scheme, "http"):
+                mem.Free(loc as void*)
                 ret _Reply { status = rep.status, head = rep.head, err = "refusing to follow a redirect from https to http", url = cur_url }
             end
             if _origin_of(u) != _origin_of(next): cur_block = _strip_sensitive(cur_block) end

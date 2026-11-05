@@ -38,6 +38,68 @@ func eval_args(
     end
 end
 
+func enum_of_member(ip &: Interp, a &: at.Ast, n: int): int:
+    node := at.At(a, n)
+    if node.a == 0:
+        ret 0
+    end
+    onn := at.At(a, node.a)
+    if onn.sema_type < 0 or str.Len(onn.type_str) == 0:
+        ret 0
+    end
+    edef := find_enum(ip, onn.type_str)
+    if edef == 0:
+        ret 0
+    end
+    repeat at.ChildCount(a, edef) in i:
+        if str.Equals(at.At(a, at.Child(a, edef, i)).name, node.name):
+            ret edef
+        end
+    end
+    ret 0
+end
+
+func enum_member_val(ip &: Interp, a &: at.Ast, n: int, edef: int): Value:
+    node := at.At(a, n)
+    mut backing := tok.TV_INT
+    repeat at.ChildCount(a, edef) in bi:
+        bm := at.At(a, at.Child(a, edef, bi))
+        if bm.a != 0 and at.At(a, bm.a).kind == at.AST_LITERAL:
+            backing = at.At(a, bm.a).value_kind
+            break
+        end
+    end
+    mut next := 0 as i64
+    repeat at.ChildCount(a, edef) in i:
+        m := at.Child(a, edef, i)
+        mn := at.At(a, m)
+        mut val := val_int(next)
+        if mn.a != 0 and at.At(a, mn.a).kind == at.AST_LITERAL and at.At(a, mn.a).value_kind == backing:
+            man := at.At(a, mn.a)
+            if backing == tok.TV_FLOAT:
+                val = val_float(man.value_float)
+            else if backing == tok.TV_STRING:
+                val = val_str(man.value_str)
+            else:
+                next = man.value_int as i64
+                val = val_int(next)
+            end
+        end
+        if str.Len(mn.name) != 0 and str.Equals(mn.name, node.name):
+            ret val
+        end
+        if backing == tok.TV_INT:
+            next += 1 as i64
+        end
+    end
+    rt_error(
+        ip, a, n, co.Format2(
+            i18.Tr("enum '%s' has no member '%s'"), co.ArgStr(at.At(a, edef).name), co.ArgStr(node.name)
+        )
+    )
+    ret val_null()
+end
+
 func struct_home_env(ip &: Interp, a &: at.Ast, sdef: int): int:
     e := find_def_env(ip, sdef)
     if e != 0:
@@ -632,6 +694,10 @@ func eval_node(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
     if k == at.AST_MEMBER:
         obj := node.a
         onn := at.At(a, obj)
+        checked_enum := enum_of_member(ip, a, n)
+        if checked_enum != 0:
+            ret enum_member_val(ip, a, n, checked_enum)
+        end
         mut obj_is_pkg_qualified := false
         if onn.kind == at.AST_MEMBER and onn.a != 0 and at.KindOf(a, onn.a) == at.AST_IDENTIFIER:
             mut pw := 0
@@ -649,43 +715,7 @@ func eval_node(ip &: Interp, a &: at.Ast, env: int, n: int): Value:
         if bare_unbound or obj_is_pkg_qualified:
             edef := find_enum(ip, onn.name)
             if edef != 0:
-                mut backing := tok.TV_INT
-                repeat at.ChildCount(a, edef) in bi:
-                    bm := at.At(a, at.Child(a, edef, bi))
-                    if bm.a != 0 and at.At(a, bm.a).kind == at.AST_LITERAL:
-                        backing = at.At(a, bm.a).value_kind
-                        break
-                    end
-                end
-                mut next := 0 as i64
-                repeat at.ChildCount(a, edef) in i:
-                    m := at.Child(a, edef, i)
-                    mn := at.At(a, m)
-                    mut val := val_int(next)
-                    if mn.a != 0 and at.At(a, mn.a).kind == at.AST_LITERAL and at.At(a, mn.a).value_kind == backing:
-                        man := at.At(a, mn.a)
-                        if backing == tok.TV_FLOAT:
-                            val = val_float(man.value_float)
-                        else if backing == tok.TV_STRING:
-                            val = val_str(man.value_str)
-                        else:
-                            next = man.value_int as i64
-                            val = val_int(next)
-                        end
-                    end
-                    if str.Len(mn.name) != 0 and str.Equals(mn.name, node.name):
-                        ret val
-                    end
-                    if backing == tok.TV_INT:
-                        next += 1 as i64
-                    end
-                end
-                rt_error(
-                    ip, a, n, co.Format2(
-                        i18.Tr("enum '%s' has no member '%s'"), co.ArgStr(onn.name), co.ArgStr(node.name)
-                    )
-                )
-                ret val_null()
+                ret enum_member_val(ip, a, n, edef)
             end
         end
         recvr := eval(ip, a, env, obj)

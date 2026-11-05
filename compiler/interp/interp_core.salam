@@ -554,6 +554,14 @@ func collect_module_funcs(ip &: Interp, a &: at.Ast, mid: int, prog: int):
                 register_method_envs(ip, a, d, md.env)
             end
         else dn.kind == at.AST_ENUM_DEF:
+            if str.Len(dn.name) != 0 and str.Len(md.name) != 0 and not str.Equals(md.name, "main"):
+                qual := md.name + "_" + dn.name
+                if find_enum(ip, qual) == 0:
+                    mut teq := ip.tab_enums
+                    itab_put(teq, qual, d)
+                    ip.tab_enums = teq
+                end
+            end
             if find_enum(ip, dn.name) == 0:
                 ip.enums.push(d)
                 if str.Len(dn.name) != 0:
@@ -621,6 +629,39 @@ func pkg_name_of(a &: at.Ast, sem &: sm.Sema, pkid: int): str:
     ret ""
 end
 
+func rehome_module_synthetics(ip &: Interp, a &: at.Ast, mid: int, prog: int):
+    menv := ip.mods.get(mid).env
+    repeat at.ChildCount(a, prog) in i:
+        d := at.Child(a, prog, i)
+        dn := at.At(a, d)
+        if dn.kind != at.AST_FUNC_DEF or not dn.synthetic or str.Len(dn.name) == 0 or str.Len(dn.home_pkg) == 0:
+            continue
+        end
+        home := find_module(ip, dn.home_pkg)
+        if home == 0 or home == mid:
+            continue
+        end
+        slot := env_find_local(ip, menv, dn.name)
+        if slot < 0:
+            continue
+        end
+        bv := env_slot_val(ip, menv, slot)
+        if bv.kind != VAL_FUNC:
+            continue
+        end
+        mut cl := ip.closures.get(bv.id)
+        if cl.fn != d:
+            continue
+        end
+        henv := ip.mods.get(home).env
+        cl.env = henv
+        ip.closures.set(bv.id, cl)
+        if env_find_local(ip, henv, dn.name) < 0:
+            env_define(ip, henv, dn.name, bv)
+        end
+    end
+end
+
 func build_modules(ip &: Interp, a &: at.Ast, sem &: sm.Sema):
     npk := sm.PackageCount(sem)
     repeat npk in i:
@@ -646,6 +687,7 @@ func build_modules(ip &: Interp, a &: at.Ast, sem &: sm.Sema):
         if mid2 != 0:
             md := ip.mods.get(mid2)
             wire_imports(ip, sem, md.env, pk2.members)
+            rehome_module_synthetics(ip, a, mid2, pk2.decl)
         end
     end
     wire_imports(ip, sem, ip.globals, sem.global)

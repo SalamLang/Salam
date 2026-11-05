@@ -15,6 +15,29 @@ func jsg_unsupported(g &: Jg, what: str): str:
     ret `__salam_unsupported("` + what + `")`
 end
 
+func jsg_decl_enter(g &: Jg, c &: JgDeclCtx, home: int):
+    c.fn_home = g.cur_fn_home
+    c.owner = g.cur_struct
+    repeat g.locals.len() in i:
+        c.locals.push(g.locals.get(i))
+    end
+    g.locals.clear()
+    g.cur_struct = 0
+    if home != 0:
+        g.cur_fn_home = home
+    end
+end
+
+func jsg_decl_leave(g &: Jg, c &: JgDeclCtx):
+    g.cur_fn_home = c.fn_home
+    g.cur_struct = c.owner
+    g.locals.clear()
+    repeat c.locals.len() in i:
+        g.locals.push(c.locals.get(i))
+    end
+    c.locals.free()
+end
+
 func jsg_call_args(
     g &: Jg, s &: sm.Sema, a &: at.Ast, call: int, sig: int
 ): str:
@@ -34,20 +57,29 @@ func jsg_call_args(
         if sgv.decl != 0:
             dv := at.Get(a, sgv.decl)
             np := dv.list.len()
-            mut emitted := nargs
-            mut i2 := nargs
-            until i2 < np:
-                pv := at.Get(a, dv.list.get(i2))
-                if pv.a == 0:
+            if nargs < np:
+                mut emitted := nargs
+                mut i2 := nargs
+                mut dhome := sgv.home
+                if sgv.owner != 0:
+                    dhome = sm.SymAt(s, sgv.owner).home
+                end
+                mut dctx := JgDeclCtx {}
+                jsg_decl_enter(g, dctx, dhome)
+                until i2 < np:
+                    pv := at.Get(a, dv.list.get(i2))
+                    if pv.a == 0:
+                        i2 += 1
+                        continue
+                    end
+                    if emitted > 0:
+                        str.BufAppend(b, ", ")
+                    end
+                    str.BufAppend(b, jsg_expr_p(g, s, a, pv.a, 0))
+                    emitted += 1
                     i2 += 1
-                    continue
                 end
-                if emitted > 0:
-                    str.BufAppend(b, ", ")
-                end
-                str.BufAppend(b, jsg_expr_p(g, s, a, pv.a, 0))
-                emitted += 1
-                i2 += 1
+                jsg_decl_leave(g, dctx)
             end
         end
     end

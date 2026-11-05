@@ -32,6 +32,7 @@ salam build my-change.salam --output=test
 - [ ] Unnecessary comments and debug code have been removed.
 - [ ] Documentation has been updated (if applicable).
 - [ ] New tests have been added or existing tests updated (if applicable).
+- [ ] New std symbols have `@fa` names, tests in `tests/en` and `tests/fa`, and `doc.`/`ex.` in both site std pages (`salam run tools/salam/check-std-coverage-docs.salam`).
 
 ### 💬 Additional Notes
 

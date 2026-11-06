@@ -32,6 +32,8 @@ export type AgentCall = {
   state: CallState;
   output: string;
   image?: boolean;
+  image_data?: string;
+  image_mime?: string;
 };
 
 export type AgentInfo = {

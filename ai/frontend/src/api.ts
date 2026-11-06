@@ -282,6 +282,8 @@ export type MessageCall = {
   state: CallState;
   output: string;
   image?: boolean;
+  image_data?: string;
+  image_mime?: string;
 };
 
 export type PlanId = "free" | "plus" | "pro" | "unlimited";

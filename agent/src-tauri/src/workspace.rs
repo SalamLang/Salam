@@ -156,6 +156,9 @@ fn target(token: &str, cwd: &Path) -> Option<Target> {
     if path.is_absolute() {
         return Some(Target::Path(path.to_path_buf()));
     }
+    if path.components().any(|c| matches!(c, Component::ParentDir)) {
+        return Some(Target::Path(cwd.join(path)));
+    }
     if token.contains('/') || token.contains('\\') {
         return Some(Target::Path(cwd.join(path)));
     }
@@ -256,7 +259,9 @@ mod tests {
 
         assert_eq!(ws.outside_paths(&format!("cat {}", secret.display()), ws.root()).len(), 1);
         assert_eq!(ws.outside_paths("cat ../secret.txt", ws.root()).len(), 1);
+        assert_eq!(ws.outside_paths("cd .. && cat secret.txt", ws.root()).len(), 1);
         assert!(ws.outside_paths("cat src/main.rs", ws.root()).is_empty());
+        assert!(ws.outside_paths("cat ../main.rs", ws.root().join("src").as_path()).is_empty());
         assert!(ws.outside_paths("cat ./src/../src/main.rs", ws.root()).is_empty());
         assert!(ws.outside_paths("curl https://example.com/a -o src/out.txt", ws.root()).is_empty());
         let inside = ws.root().join("src/new.txt");

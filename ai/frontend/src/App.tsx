@@ -913,7 +913,7 @@ export function App() {
                         <MessageView m={m} name={m.guest} loadFile={loadFile} />
                       </div>
                     ) : (
-                      <MessageView key={m.id} m={m} name={user.name} loadFile={loadFile} calls={m.role === "assistant" ? callsFor(m.id) : undefined} onDecide={tools.decide} onStop={tools.stop} />
+                      <MessageView key={m.id} m={m} name={user.name} loadFile={loadFile} calls={m.role === "assistant" ? callsFor(m.id) : undefined} cloud={activeChat?.cloud === true} onDecide={tools.decide} onStop={tools.stop} />
                     ),
                   )}
                 </div>

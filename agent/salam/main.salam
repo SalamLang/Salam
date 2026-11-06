@@ -683,7 +683,7 @@ func approvals_ask(p: Preview, reason &: str): bool:
     sync.Lock(g_mu)
     g_pending.put(p.call_id, entry)
     sync.Unlock(g_mu)
-    emit_call(p, "pending", "")
+    emit_call(p, "pending", "", "")
     notify_post("approval", "", p.summary, 0 as i64)
     deadline := sync.NowMs() + (ANSWER_WAIT_MS as i64)
     sync.Lock(g_mu)
@@ -725,7 +725,7 @@ func approvals_pending_json(): str:
     defer items.free()
     sync.Lock(g_mu)
     each _, entry in g_pending:
-        items.push(preview_json(entry[0].preview, "", ""))
+        items.push(preview_json(entry[0].preview, "", "", ""))
     end
     sync.Unlock(g_mu)
     ret json.Array(items)
@@ -2201,7 +2201,7 @@ func unified_diff(path: str, before: str, after: str): str:
     ret text
 end
 
-func preview_json(p: Preview, state: str, output: str): str:
+func preview_json(p: Preview, state: str, output: str, shot: str): str:
     mut members := Vector {} as Vector<str>
     defer members.free()
     members.push(json.Member("call_id", p.call_id))
@@ -2214,6 +2214,11 @@ func preview_json(p: Preview, state: str, output: str): str:
     members.push(json.MemberBool("outside", p.outside))
     members.push(json.Member("cwd", p.cwd))
     members.push(json.MemberBool("memory", p.memory))
+    members.push(json.MemberBool("image", shot.len() > 0))
+    if shot.len() > 0:
+        members.push(json.Member("image_data", shot))
+        members.push(json.Member("image_mime", "image/jpeg"))
+    end
     if state.len() > 0:
         members.push(json.Member("state", state))
         members.push(json.Member("output", output))
@@ -2597,8 +2602,8 @@ func free_auth(headers: HashMap<str, str>):
     gone.free()
 end
 
-func emit_call(p: Preview, state: str, output: str):
-    webview.Emit("agent://call", preview_json(p, state, output))
+func emit_call(p: Preview, state: str, output: str, image: str):
+    webview.Emit("agent://call", preview_json(p, state, output, image))
 end
 
 func offline_later(flip: int):
@@ -2695,17 +2700,17 @@ func handle_call(secret: str, call_text: str):
         allowed = approvals_ask(p, reason)
     end
     if not allowed:
-        emit_call(p, "denied", reason)
+        emit_call(p, "denied", reason, "")
         report(secret, id, "denied", reason, p, true)
         ret
     end
-    emit_call(p, "running", "")
+    emit_call(p, "running", "", "")
     approvals_start(id)
     mut failed := false
     mut image := ""
     output := tool_run(plan.action, ws, id, failed, image)
     approvals_finish(id)
-    emit_call(p, failed ? "error" : "done", output)
+    emit_call(p, failed ? "error" : "done", output, image)
     report(secret, id, failed ? "error" : "ok", output, p, true, image)
     if image.len() > 0:
         mem.Free(image as void*)

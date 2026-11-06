@@ -90,7 +90,16 @@ const DESKTOP_TOOLS = new Set([
 function withCalls(m: Message, live: CallView[]): CallView[] {
   const all = new Map<string, CallView>();
   for (const c of m.calls ?? []) all.set(c.call_id, c as CallView);
-  for (const c of live) all.set(c.call_id, c);
+  for (const c of live) {
+    const old = all.get(c.call_id);
+    all.set(c.call_id, {
+      ...old,
+      ...c,
+      image: c.image || old?.image,
+      image_data: c.image_data || old?.image_data,
+      image_mime: c.image_mime || old?.image_mime,
+    });
+  }
   return [...all.values()];
 }
 

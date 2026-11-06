@@ -32,6 +32,11 @@ struct CallEvent<'a> {
     preview: &'a Preview,
     state: &'a str,
     output: &'a str,
+    image: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    image_data: Option<&'a str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    image_mime: Option<&'a str>,
 }
 
 #[derive(Clone, Serialize)]
@@ -124,8 +129,18 @@ pub async fn run(app: AppHandle) {
     }
 }
 
-fn emit_call(app: &AppHandle, preview: &Preview, state: &str, output: &str) {
-    let _ = app.emit("agent://call", CallEvent { preview, state, output });
+fn emit_call(app: &AppHandle, preview: &Preview, state: &str, output: &str, image: Option<&Image>) {
+    let _ = app.emit(
+        "agent://call",
+        CallEvent {
+            preview,
+            state,
+            output,
+            image: image.is_some(),
+            image_data: image.map(|i| i.data.as_str()),
+            image_mime: image.map(|i| i.mime),
+        },
+    );
 }
 
 async fn report(
@@ -180,15 +195,15 @@ async fn handle(app: AppHandle, http: reqwest::Client, secret: String, call: Cal
         Policy::Allow => Decision::Allow,
         Policy::Deny(reason) => Decision::Deny(reason.to_string()),
         Policy::Ask => {
-            emit_call(&app, &preview, "pending", "");
+            emit_call(&app, &preview, "pending", "", None);
             approvals.ask(&app, &preview).await
         }
     };
     if let Decision::Deny(reason) = decision {
-        emit_call(&app, &preview, "denied", &reason);
+        emit_call(&app, &preview, "denied", &reason, None);
         return report(&http, &secret, &call.id, "denied", &reason, Some(&preview), None).await;
     }
-    emit_call(&app, &preview, "running", "");
+    emit_call(&app, &preview, "running", "", None);
     let cancel = approvals.start(&call.id);
     let out_app = app.clone();
     let id = call.id.clone();
@@ -207,6 +222,67 @@ async fn handle(app: AppHandle, http: reqwest::Client, secret: String, call: Cal
         Ok((o, image)) => ("ok", o.as_str(), image.as_ref()),
         Err(e) => ("error", e.as_str(), None),
     };
-    emit_call(&app, &preview, if status == "ok" { "done" } else { "error" }, output);
+    emit_call(&app, &preview, if status == "ok" { "done" } else { "error" }, output, image);
     report(&http, &secret, &call.id, status, output, Some(&preview), image).await;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tools::Kind;
+
+    fn preview() -> Preview {
+        Preview {
+            call_id: "call-1".into(),
+            chat: "chat-1".into(),
+            tool: "browser".into(),
+            kind: Kind::Read,
+            summary: "browser open http://localhost:3000/".into(),
+            detail: String::new(),
+            lang: String::new(),
+            outside: false,
+            cwd: "/work".into(),
+            memory: false,
+        }
+    }
+
+    #[test]
+    fn a_screenshot_travels_with_the_finished_call() {
+        let p = preview();
+        let shot = Image {
+            data: "QUJD".into(),
+            mime: "image/jpeg",
+        };
+        let event = serde_json::to_value(CallEvent {
+            preview: &p,
+            state: "done",
+            output: "http://localhost:3000/ (200) \"Salam AI\"\nScreenshot attached (1440x1000 px, JPEG).",
+            image: true,
+            image_data: Some(shot.data.as_str()),
+            image_mime: Some(shot.mime),
+        })
+        .unwrap();
+        assert_eq!(event["call_id"], "call-1");
+        assert_eq!(event["tool"], "browser");
+        assert_eq!(event["image"], true);
+        assert_eq!(event["image_data"], "QUJD");
+        assert_eq!(event["image_mime"], "image/jpeg");
+    }
+
+    #[test]
+    fn a_call_without_a_screenshot_carries_no_image_data() {
+        let p = preview();
+        let event = serde_json::to_value(CallEvent {
+            preview: &p,
+            state: "running",
+            output: "",
+            image: false,
+            image_data: None,
+            image_mime: None,
+        })
+        .unwrap();
+        assert_eq!(event["image"], false);
+        assert!(event.get("image_data").is_none());
+        assert!(event.get("image_mime").is_none());
+    }
 }

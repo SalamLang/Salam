@@ -15,6 +15,11 @@ export type Chat = {
   device_id?: number;
   workspace?: string;
   shared?: ShareKind[];
+  state?: "working" | "queued" | "waiting" | "idle" | "offline";
+  phase?: "thinking" | "writing" | "tool";
+  queued?: number;
+  online?: boolean;
+  last_error?: boolean;
 };
 export type ShareKind = "view" | "collab";
 export type ShareState =

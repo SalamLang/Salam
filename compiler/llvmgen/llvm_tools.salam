@@ -215,9 +215,57 @@ func nt_wasi_sdk_clang(): str:
     ret ""
 end
 
+func nt_triple_is_freestanding(t: str): bool:
+    if str.Len(t) == 0:
+        ret false
+    end
+    ret str.Contains(t, "uefi") or str.Contains(t, "salamos") or str.Contains(t, "-none")
+end
+
+func nt_bare_arch(t: str): str:
+    dash := str.IndexOf(t, "-")
+    mut arch := dash > 0 ? str.Substr(t, 0, dash) : t
+    if str.Equals(arch, "amd64"):
+        arch = "x86_64"
+    else str.Equals(arch, "i386") or str.Equals(arch, "i486") or str.Equals(arch, "i586") or str.Equals(arch, "i686") or str.Equals(arch, "x86"):
+        arch = "i686"
+    else str.Equals(arch, "arm64"):
+        arch = "aarch64"
+    end
+    ret arch
+end
+
+func nt_clang_target(t: str): str:
+    if str.Contains(t, "uefi"):
+        ret t
+    end
+    ret nt_bare_arch(t) + "-unknown-none-elf"
+end
+
+func nt_lld_emulation(t: str): str:
+    arch := nt_bare_arch(t)
+    if str.Equals(arch, "x86_64"):
+        ret "elf_x86_64"
+    else str.Equals(arch, "i686"):
+        ret "elf_i386"
+    else str.Equals(arch, "aarch64"):
+        ret "aarch64elf"
+    else str.Equals(arch, "riscv64"):
+        ret "elf64lriscv"
+    else str.StartsWith(arch, "riscv"):
+        ret "elf32lriscv"
+    else str.StartsWith(arch, "arm"):
+        ret "armelf"
+    end
+    ret ""
+end
+
 func nt_clang_link_triple(t: str): str:
     if str.Equals(t, "wasm32-wasi") or str.Equals(t, "wasm32-unknown-wasi"):
         ret "wasm32-wasip1"
+    end
+    if nt_triple_is_freestanding(t):
+        ret nt_clang_target(t)
     end
     ret t
 end
@@ -235,6 +283,8 @@ func nt_emit_tool_cmd(opts: Options): str:
     o_flag := nt_opt_flag(opts.opt_level)
     clang_flags := o_flag + " -Wno-override-module"
     triple := opts.target_triple
+    freestanding := nt_triple_is_freestanding(triple)
+    clang_triple := freestanding ? nt_clang_target(triple) : triple
     mut jit_args := ""
     mut ai := 1
     until ai < opts.run_args.len():
@@ -249,69 +299,106 @@ func nt_emit_tool_cmd(opts: Options): str:
 
     if opts.output_mode == LV_OUT_ASM:
         out += `"` + clang_tool + `" ` + clang_flags
-        if str.Len(triple) > 0:
-            out += " --target=" + triple
+        if str.Len(clang_triple) > 0:
+            out += " --target=" + clang_triple
         else opts.native_cpu:
             out += " -march=native"
         end
         out += nt_cpu_flag(opts)
+        if freestanding:
+            out += " -ffreestanding -fno-stack-protector -fno-pic"
+        end
         out += " -S \"$IN\" -o \"$OUT\"\n"
     else opts.output_mode == LV_OUT_OBJ:
         out += `"` + clang_tool + `" ` + clang_flags
-        if str.Len(triple) > 0:
-            out += " --target=" + triple
+        if str.Len(clang_triple) > 0:
+            out += " --target=" + clang_triple
         else opts.native_cpu:
             out += " -march=native"
         end
         out += nt_cpu_flag(opts)
+        if freestanding:
+            out += " -ffreestanding -fno-stack-protector -fno-pic"
+        end
         out += " -c \"$IN\" -o \"$OUT\"\n"
     else opts.output_mode == LV_OUT_BITCODE:
         out += `"` + opt_tool + `" ` + o_flag + " \"$IN\" -o \"$OUT\"\n"
     else opts.output_mode == LV_OUT_EXEC:
         win := nt_triple_is_windows(triple)
         wasm := nt_triple_is_wasm(triple)
-        out += `"` + clang_tool + `" ` + clang_flags
-        if str.Len(triple) > 0:
-            out += " --target=" + nt_clang_link_triple(triple)
-        else opts.native_cpu:
-            out += " -march=native"
-        end
-        out += nt_cpu_flag(opts)
-        if opts.debug_info:
-            out += " -g"
-        end
-        if str.Len(opts.sysroot) > 0:
-            out += ` --sysroot="$SYSROOT"`
-        end
-        if win:
-            out += " -fuse-ld=lld"
-            out += " -Wl,--stack,8388608"
-        end
-        repeat opts.lib_paths.len() in lp2:
-            out += ` -L"` + opts.lib_paths.get(lp2) + `"`
-        end
-        out += ` "$IN"`
-        repeat opts.link_libs.len() in li:
-            spec := opts.link_libs.get(li)
-            mut kind := ""
-            if li < opts.link_kinds.len():
-                kind = opts.link_kinds.get(li)
+        bare := freestanding and not wasm and not str.Contains(triple, "uefi")
+        if bare:
+            entry := str.Len(opts.entry_symbol) > 0 ? opts.entry_symbol : "_start"
+            mut extras := ""
+            repeat opts.extra_objects.len() in eo:
+                extras += " " + nt_shell_arg(opts.extra_objects.get(eo))
             end
-            out += nt_emit_llvm_link(spec, kind)
-        end
-        if not win and not wasm:
-            out += " -lm"
-        end
-        if wasm:
-            out += " -Wno-override-module"
-            if not opts.debug_info:
-                out += " -Wl,--strip-all"
+            mut script := ""
+            if str.Len(opts.linker_script) > 0:
+                script = nt_shell_arg(opts.linker_script)
             end
+            emu := nt_lld_emulation(triple)
+            if win or str.Len(emu) == 0:
+                out += `"` + clang_tool + `" ` + clang_flags + " --target=" + clang_triple
+                out += " -nostdlib -static -ffreestanding -fno-stack-protector -fno-pic"
+                out += " -Wl,--build-id=none -Wl,-e," + nt_shell_arg(entry)
+                if str.Len(script) > 0:
+                    out += " -Wl,-T," + script
+                end
+                out += ` "$IN"` + extras + ` -o "$OUT"` + "\n"
+            else:
+                out += `"` + clang_tool + `" ` + clang_flags + " --target=" + clang_triple + " -ffreestanding -fno-stack-protector -fno-pic -c \"$IN\" -o \"$IN.o\"" + "\n"
+                out += `"` + nt_resolve_tool("ld.lld", "ld.lld-22") + `" -m ` + emu + " -static --build-id=none -e " + nt_shell_arg(entry)
+                if str.Len(script) > 0:
+                    out += " -T " + script
+                end
+                out += " -o \"$OUT\" \"$IN.o\"" + extras + "\n"
+                out += "rm -f \"$IN.o\"\n"
+            end
+        else:
+            out += `"` + clang_tool + `" ` + clang_flags
+            if str.Len(triple) > 0:
+                out += " --target=" + nt_clang_link_triple(triple)
+            else opts.native_cpu:
+                out += " -march=native"
+            end
+            out += nt_cpu_flag(opts)
+            if opts.debug_info:
+                out += " -g"
+            end
+            if str.Len(opts.sysroot) > 0:
+                out += ` --sysroot="$SYSROOT"`
+            end
+            if win:
+                out += " -fuse-ld=lld"
+                out += " -Wl,--stack,8388608"
+            end
+            repeat opts.lib_paths.len() in lp2:
+                out += ` -L"` + opts.lib_paths.get(lp2) + `"`
+            end
+            out += ` "$IN"`
+            repeat opts.link_libs.len() in li:
+                spec := opts.link_libs.get(li)
+                mut kind := ""
+                if li < opts.link_kinds.len():
+                    kind = opts.link_kinds.get(li)
+                end
+                out += nt_emit_llvm_link(spec, kind)
+            end
+            if not win and not wasm:
+                out += " -lm"
+            end
+            if wasm:
+                out += " -Wno-override-module"
+                if not opts.debug_info:
+                    out += " -Wl,--strip-all"
+                end
+            end
+            if wasm and str.Contains(triple, "wasi"):
+                out += " -lwasi-emulated-signal"
+            end
+            out += " -o \"$OUT\"\n"
         end
-        if wasm and str.Contains(triple, "wasi"):
-            out += " -lwasi-emulated-signal"
-        end
-        out += " -o \"$OUT\"\n"
     else opts.output_mode == LV_OUT_JIT:
         if opts.opt_level != LV_OPT_O0:
             out += `"` + opt_tool + `" ` + o_flag + ` "$IN" -o - | "` + lli_tool + "\" -" + jit_args + "\n"

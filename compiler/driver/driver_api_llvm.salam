@@ -11,6 +11,7 @@ include lg "../logger.salam"
 include at "../ast.salam"
 include i18 "../i18n.salam"
 include lp "../langpack.salam"
+include pth "../sal_path.salam"
 include pm "../pkgmgr/pkgmgr.salam"
 include lx "../lexer/lexer.salam"
 include ps "../parser/parser.salam"
@@ -41,6 +42,48 @@ func program_has_func(a &: at.Ast, prog: int, name: str): bool:
         end
     end
     ret false
+end
+
+func freestanding_runtime_source(): str:
+    root := sm.GetStdlibRoot()
+    if str.Len(root) == 0:
+        ret ""
+    end
+    p := pth.PathJoin(pth.PathJoin(pth.PathJoin(root, "std"), "baremetal"), "runtime.c")
+    if os.Exists(p):
+        ret p
+    end
+    ret ""
+end
+
+func freestanding_runtime_arch(t: str): bool:
+    ret str.Contains(t, "x86_64") or str.Contains(t, "amd64") or str.Contains(t, "i386") or str.Contains(t, "i686") or str.Contains(t, "aarch64") or str.Contains(t, "arm64")
+end
+
+func build_freestanding_runtime(lgr: lg.Logger, triple: str, out_obj &: str): bool:
+    src := freestanding_runtime_source()
+    if str.Len(src) == 0:
+        lg.Log(
+            lgr, lg.PH_DRIVER, lg.LOG_ERROR, i18.Tr("freestanding build: the bare-metal runtime (std/baremetal/runtime.c) was not found; pass --no-freestanding-runtime and link your own")
+        )
+        ret false
+    end
+    mut cc := "clang"
+    mut resolved := ""
+    if sm.FindBundledTool("clang", resolved):
+        cc = resolved
+    else sm.FindPathTool("clang", resolved):
+        cc = resolved
+    end
+    obj := scratch_dir() + "/salam-baremetal-" + sanitize_ident(triple) + ".o"
+    cmd := shell_arg(cc) + " --target=" + lv.ClangTargetFor(triple) + " -ffreestanding -fno-builtin -fno-stack-protector -fno-pic -fno-pie -O2 -c " + shell_arg(src) + " -o " + shell_arg(obj)
+    lg.Log(lgr, lg.PH_DRIVER, lg.LOG_INFO, "compiling bare-metal runtime: " + cmd)
+    if os.Run(cmd) != 0:
+        lg.Log(lgr, lg.PH_DRIVER, lg.LOG_ERROR, i18.Tr("freestanding build: cannot compile the bare-metal runtime"))
+        ret false
+    end
+    out_obj = obj
+    ret true
 end
 
 func build_opt_level(opt &: Dr): int:
@@ -142,6 +185,15 @@ pub func Llvm(opt &: Dr): int:
     o.release = not opt.safe
     o.target_triple = opt.llvm_target
     o.lib_paths = opt.lib_paths
+    o.entry_symbol = opt.entry_symbol
+    o.linker_script = opt.linker_script
+    if str.Len(o.linker_script) > 0 and not pth.PathIsAbs(o.linker_script):
+        o.linker_script = pth.PathJoin(os.Cwd(), o.linker_script)
+    end
+    repeat opt.link_objects.len() in lo:
+        p := opt.link_objects.get(lo)
+        o.extra_objects.push(pth.PathIsAbs(p) ? p : pth.PathJoin(os.Cwd(), p))
+    end
     if opt.llvm_emit == lv.LV_OUT_JIT:
         o.run_args.push(opt.input)
         each ra in opt.run_args:
@@ -209,6 +261,16 @@ pub func Llvm(opt &: Dr): int:
                 end
             end
         end
+    end
+
+    if o.output_mode == lv.LV_OUT_EXEC and target_is_freestanding(opt.llvm_target) and not opt.no_freestanding_runtime and not str.Contains(opt.llvm_target, "uefi") and freestanding_runtime_arch(opt.llvm_target):
+        mut rtobj := ""
+        if not build_freestanding_runtime(lgr, opt.llvm_target, rtobj):
+            sm.Free(s)
+            at.FreeAst(a)
+            ret 2
+        end
+        o.extra_objects.push(rtobj)
     end
 
     _pt_cg := pf.Begin(pf.TP_CODEGEN, sf.path)

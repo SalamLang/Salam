@@ -142,7 +142,7 @@ func remember(w: str):
     else:
         g_counts.put(w, 1)
     end
-    g_total += 1
+    g_total++
 end
 
 export:

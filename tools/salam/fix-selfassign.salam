@@ -1,0 +1,386 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import encoding.json
+import env
+import fs.file
+import filepath
+import os
+import os.process
+import os.temp
+import pool
+import str
+import sync
+
+mut g_found := Vector {} as Vector<Edit>
+mut g_mutex := sync.NewMutex()
+mut g_tmp := ""
+
+struct Edit:
+    pub file: str = ""
+    pub offset: int = 0
+    pub length: int = 0
+    pub text: str = ""
+end
+
+struct Counter:
+    pub key: str = ""
+    pub count: int = 0
+end
+
+func quote_shell(text: str): str:
+    ret "'" + str.Replace(text, "'", `'\''`) + "'"
+end
+
+func skipped(name: str): bool:
+    if str.StartsWith(name, "."):
+        ret true
+    end
+    ret name == "node_modules" or name == "books" or name == "target"
+end
+
+func expects_error(path: str): bool:
+    if not os.Exists(path) or os.IsDir(path):
+        ret false
+    end
+    text := file.ReadText(path)
+    ret str.Contains(text, "EXPECT: E162") or str.Contains(text, "انتظار: خطا۱۶۲")
+end
+
+func walk(path: str, out &: Vector<str>):
+    if os.IsDir(path):
+        mut names := os.ListDir(path)
+        mut i := 0
+        until i < names.len():
+            name := names.get(i)
+            if not skipped(name):
+                walk(path + "/" + name, out)
+            end
+            i++
+        end
+        ret
+    end
+    if str.EndsWith(path, ".salam") and not expects_error(path):
+        out.push(path)
+    end
+end
+
+func relative(path: str, cwd: str): str:
+    if str.StartsWith(path, cwd + "/"):
+        ret str.Substr(path, str.Len(cwd) + 1, str.Len(path) - str.Len(cwd) - 1)
+    end
+    ret path
+end
+
+func target_flag(): str:
+    t := env.GetOr("FIX_TARGET", "")
+    if t == "":
+        ret ""
+    end
+    ret " --target=" + t
+end
+
+func run_check(salam: str, path: str): str:
+    log := g_tmp + "/" + str.Replace(path, "/", "_") + ".json"
+    args := Vector {} as Vector<str>
+    args.push("-c")
+    args.push(quote_shell(salam) + " check " + quote_shell(path) + target_flag() + " --error-format=json --no-color --log-level=error > " + quote_shell(log) + " 2>&1")
+    mut child := process.StartCaptured("/bin/sh", args)
+    process.Wait(child)
+    process.Cleanup(child)
+    out := file.ReadText(log)
+    os.Remove(log)
+    ret out
+end
+
+func parse_edits(output: str, cwd: str, found &: Vector<Edit>):
+    lines := str.Split(output, "\n")
+    each line in lines:
+        if not str.StartsWith(line, "{") or not (str.Contains(line, `"code":"E162"`) or str.Contains(line, `"code":"خطا۱۶۲"`)):
+            continue
+        end
+        fixes := json.Items(json.Get(line, "fixes"))
+        if fixes.len() == 0:
+            continue
+        end
+        edits := json.Items(json.Get(fixes.get(0), "edits"))
+        each item in edits:
+            file := relative(json.Get(item, "file"), cwd)
+            if str.StartsWith(file, "/") or expects_error(file):
+                continue
+            end
+            found.push(
+                Edit {
+                    file = file,
+                    offset = json.GetInt(item, "offset"),
+                    length = json.GetInt(item, "length"),
+                    text = json.Get(item, "text")
+                }
+            )
+        end
+    end
+end
+
+func is_page_file(path: str): bool:
+    text := file.ReadText(path)
+    ret str.StartsWith(text, "page:") or str.Contains(text, "\npage:") or str.Contains(text, "\nlayout:") or str.Contains(text, "\nصفحه:") or str.Contains(text, "\nچیدمان:")
+end
+
+func between(line: str, open: str, close: str): str:
+    start := str.Find(line, open)
+    if start < 0:
+        ret ""
+    end
+    from := start + str.Len(open)
+    stop := str.IndexFrom(line, close, from)
+    if stop < 0:
+        ret ""
+    end
+    ret str.Substr(line, from, stop - from)
+end
+
+func line_start(text: str, line: int): int:
+    mut at := 0
+    mut n := 1
+    until n < line and at >= 0:
+        at = str.IndexFrom(text, "\n", at)
+        if at >= 0:
+            at++
+        end
+        n++
+    end
+    ret at
+end
+
+func run_page(salam: str, path: str): str:
+    log := g_tmp + "/" + str.Replace(path, "/", "_") + ".page.log"
+    dir := filepath.Dir(path)
+    args := Vector {} as Vector<str>
+    args.push("-c")
+    args.push("cd " + quote_shell(dir) + " && " + quote_shell(salam) + " page build " + quote_shell(filepath.Base(path)) + " --inline --output=" + quote_shell(g_tmp + "/page.html") + " --no-color --log-level=error > " + quote_shell(log) + " 2>&1")
+    mut child := process.StartCaptured("/bin/sh", args)
+    process.Wait(child)
+    process.Cleanup(child)
+    out := file.ReadText(log)
+    os.Remove(log)
+    ret out
+end
+
+func parse_page_edits(output: str, path: str, found &: Vector<Edit>):
+    text := file.ReadText(path)
+    lines := str.Split(output, "\n")
+    each line in lines:
+        if not str.Contains(line, "E162: '") or not str.Contains(line, "' (") or not (str.Contains(line, "' is not allowed: write '") or str.Contains(line, "' مجاز نیست: بنویسید '")):
+            continue
+        end
+        mut stmt := between(line, "E162: '", "' is not allowed: write '")
+        mut repl := between(line, "' is not allowed: write '", "' (")
+        if str.Len(stmt) == 0:
+            stmt = between(line, "E162: '", "' مجاز نیست: بنویسید '")
+            repl = between(line, "' مجاز نیست: بنویسید '", "' (")
+        end
+        pos := str.Split(between(line, "' (", ")"), ":")
+        if str.Len(stmt) == 0 or str.Len(repl) == 0 or pos.len() < 3:
+            continue
+        end
+        ln := str.ToInt(pos.get(pos.len() - 2))
+        base := line_start(text, ln)
+        if base < 0:
+            continue
+        end
+        at := str.IndexFrom(text, stmt, base)
+        stop := str.IndexFrom(text, "\n", base)
+        if at < 0 or (stop >= 0 and at >= stop):
+            continue
+        end
+        found.push(Edit { file = path, offset = at, length = str.Len(stmt), text = repl })
+    end
+end
+
+func has_edit(all: Vector<Edit>, e: Edit): bool:
+    each x in all:
+        if x.file == e.file and x.offset == e.offset and x.length == e.length and x.text == e.text:
+            ret true
+        end
+    end
+    ret false
+end
+
+func category(e: Edit): str:
+    if e.text == "":
+        ret "no-op removed"
+    end
+    if str.EndsWith(e.text, "++"):
+        ret "x++"
+    end
+    if str.EndsWith(e.text, "--"):
+        ret "x--"
+    end
+    ops := ["**=", "<<=", ">>=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^="]
+    each op in ops:
+        if str.Contains(e.text, " " + op + " "):
+            ret op
+        end
+    end
+    ret "other"
+end
+
+func area(file: str): str:
+    parts := str.Split(file, "/")
+    if parts.len() >= 3 and (parts.get(0) == "tests" or parts.get(0) == "std" or parts.get(0) == "website"):
+        ret parts.get(0) + "/" + parts.get(1)
+    end
+    ret parts.get(0)
+end
+
+func bump(counts &: Vector<Counter>, key: str):
+    mut i := 0
+    until i < counts.len():
+        if counts.get(i).key == key:
+            counts.set(i, Counter { key = key, count = counts.get(i).count + 1 })
+            ret
+        end
+        i++
+    end
+    counts.push(Counter { key = key, count = 1 })
+end
+
+func apply_file(path: str, edits: Vector<Edit>): int:
+    text := file.ReadText(path)
+    mut mine := Vector {} as Vector<Edit>
+    each e in edits:
+        if e.file != path:
+            continue
+        end
+        mut at := 0
+        until at < mine.len() and mine.get(at).offset > e.offset:
+            at++
+        end
+        mine.insert(at, e)
+    end
+    mut out := text
+    mut applied := 0
+    mut fence := str.Len(text) + 1
+    each e in mine:
+        if e.offset + e.length > fence or e.offset + e.length > str.Len(text):
+            continue
+        end
+        out = str.Substr(out, 0, e.offset) + e.text + str.Substr(out, e.offset + e.length, str.Len(out) - e.offset - e.length)
+        fence = e.offset
+        applied++
+    end
+    if applied > 0:
+        file.WriteText(path, out)
+    end
+    ret applied
+end
+
+func collect_all(salam: str, files: Vector<str>, cwd: str, jobs: i64): Vector<Edit>:
+    g_found = Vector {} as Vector<Edit>
+    pool.ParallelFor(files.len() as i64, jobs, (i: i64):
+        output := run_check(salam, files.get(i as int))
+        mut mine := Vector {} as Vector<Edit>
+        parse_edits(output, cwd, mine)
+        if is_page_file(files.get(i as int)):
+            parse_page_edits(run_page(salam, files.get(i as int)), files.get(i as int), mine)
+        end
+        if mine.len() > 0:
+            sync.Lock(g_mutex)
+            each e in mine:
+                if not has_edit(g_found, e):
+                    g_found.push(e)
+                end
+            end
+            sync.Unlock(g_mutex)
+        end
+    end)
+    ret g_found
+end
+
+func main:
+    salam := env.GetOr("SALAM", "salam")
+    env.Set("SALAM_STD", env.GetOr("SALAM_STD", "std"))
+    mut dry := false
+    mut roots := Vector {} as Vector<str>
+    argv := os.Args()
+    mut i := 1
+    until i < argv.len():
+        arg := argv.get(i)
+        if arg == "--dry-run":
+            dry = true
+        else:
+            roots.push(arg)
+        end
+        i++
+    end
+    if roots.len() == 0:
+        printerrln "usage: fix-selfassign [--dry-run] <file.salam|dir>..."
+        ret 2
+    end
+    mut files := Vector {} as Vector<str>
+    each root in roots:
+        walk(root, files)
+    end
+    mut jobs := env.GetInt("FIX_JOBS", 0)
+    if jobs <= 0:
+        jobs = 4
+    end
+    cwd := os.Cwd()
+    g_tmp = temp.Directory()
+    mut counts := Vector {} as Vector<Counter>
+    mut total := 0
+    mut pass := 1
+    until pass <= 8:
+        found := collect_all(salam, files, cwd, jobs)
+        if found.len() == 0:
+            break
+        end
+        each e in found:
+            bump(counts, area(e.file) + "  " + category(e))
+        end
+        if dry:
+            total += found.len()
+            break
+        end
+        mut touched := Vector {} as Vector<str>
+        each e in found:
+            mut seen := false
+            each t in touched:
+                if t == e.file:
+                    seen = true
+                end
+            end
+            if not seen:
+                touched.push(e.file)
+            end
+        end
+        mut applied := 0
+        each f in touched:
+            applied += apply_file(f, found)
+        end
+        println "pass", pass, ":", found.len(), "edits,", applied, "applied in", touched.len(), "files"
+        total += applied
+        if applied == 0:
+            break
+        end
+        pass++
+    end
+    println ""
+    each c in counts:
+        println c.count, c.key
+    end
+    println "total", total
+    temp.RemoveDir(g_tmp)
+    ret 0
+end

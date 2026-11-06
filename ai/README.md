@@ -167,6 +167,7 @@ repository: mount them read only and point these variables at them.
 | `STT_ENGINE`, `STT_ENGINE_FA`, `STT_ENGINE_EN`  | `module:factory` of the engine, for all languages or one (see `engines.py`)        | `engines:SegmentEngine`  |
 | `STT_RUNTIME`                                   | `module:Class` of the runtime `SegmentEngine` loads                                | empty                    |
 | `STT_LOAD_OPTIONS`, `STT_RUN_OPTIONS`           | JSON keyword arguments for the runtime's constructor and its transcribe call       | empty                    |
+| `STT_SPLIT_SECONDS`                             | decode long clips in pieces of at most this length, for models that stop early     | `0`, off                 |
 | `STT_MAX_SECONDS`, `STT_MAX_BYTES`              | longest and largest recording; the app shows and enforces what the service reports | `120`, `4194304`         |
 | `STT_CONCURRENCY`, `STT_QUEUE`                  | conversions at once and how many may wait; more answer `503 busy`                  | `1`, `2`                 |
 | `STT_QUEUE_WAIT_SECONDS`, `STT_TIMEOUT_SECONDS` | longest wait in the queue and longest conversion                                   | `20`, `80`               |

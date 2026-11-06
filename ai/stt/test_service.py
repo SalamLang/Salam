@@ -243,6 +243,58 @@ class ServiceTest(unittest.TestCase):
         with self.assertRaises(engines.TimedOut):
             engine.transcribe(np.zeros(10), "fa", time.monotonic() + 0.05)
 
+    def test_long_clips_split_at_the_quietest_moment(self):
+        samples = np.full(25 * engines.RATE, 0.5, dtype=np.float32)
+        samples[8 * engines.RATE : 8 * engines.RATE + 8000] = 0
+        samples[17 * engines.RATE : 17 * engines.RATE + 8000] = 0
+        pieces = engines.split_at_quiet(samples, 10)
+        self.assertEqual(pieces[0][0], 0)
+        self.assertEqual(pieces[-1][1], samples.size)
+        for (_, end), (start, _) in zip(pieces, pieces[1:]):
+            self.assertEqual(end, start)
+        for start, end in pieces:
+            self.assertLessEqual(end - start, 10 * engines.RATE)
+        self.assertAlmostEqual(pieces[0][1] / engines.RATE, 8.25, delta=0.3)
+        self.assertAlmostEqual(pieces[1][1] / engines.RATE, 17.25, delta=0.3)
+        self.assertEqual(engines.split_at_quiet(samples[: 9 * engines.RATE], 10), [(0, 9 * engines.RATE)])
+
+    def test_a_shallow_dip_beats_the_edges_of_the_search_window(self):
+        samples = np.full(25 * engines.RATE, 0.5, dtype=np.float32)
+        samples[7 * engines.RATE : 7 * engines.RATE + 8000] = 0.4
+        self.assertAlmostEqual(engines.split_at_quiet(samples, 10)[0][1] / engines.RATE, 7.25, delta=0.3)
+
+    def test_a_tiny_split_length_still_advances(self):
+        samples = np.ones(3 * engines.RATE, dtype=np.float32)
+        pieces = engines.split_at_quiet(samples, 0.01)
+        self.assertEqual(pieces[-1][1], samples.size)
+        self.assertLessEqual(len(pieces), 6)
+
+    def test_segment_engine_joins_the_split_pieces(self):
+        class Segment:
+            def __init__(self, text):
+                self.text = text
+
+        lengths = []
+
+        class Runtime:
+            def __init__(self, path):
+                self.path = path
+
+            def transcribe(self, samples, language):
+                lengths.append(samples.size)
+                return [Segment(f"p{len(lengths)}")], None
+
+        engines.Runtime = Runtime
+        os.environ["STT_RUNTIME"] = "engines:Runtime"
+        os.environ["STT_SPLIT_SECONDS"] = "10"
+        self.addCleanup(lambda: os.environ.pop("STT_RUNTIME", None))
+        self.addCleanup(lambda: os.environ.pop("STT_SPLIT_SECONDS", None))
+        samples = np.ones(25 * engines.RATE, dtype=np.float32)
+        text = engines.SegmentEngine("/models/a").transcribe(samples, "fa", time.monotonic() + 5)
+        self.assertEqual(text, " ".join(f"p{i + 1}" for i in range(len(lengths))))
+        self.assertEqual(sum(lengths), samples.size)
+        self.assertGreater(len(lengths), 2)
+
 
 if __name__ == "__main__":
     unittest.main()

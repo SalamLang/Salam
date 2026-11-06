@@ -17,6 +17,7 @@ import { agent, isDesktop, saveMode, savedMode, savedWorkspace, saveWorkspace, t
 import { Keys } from "./Keys";
 import { announce, announceGuest } from "./Notify";
 import { Plans } from "./Plans";
+import { Usage } from "./Usage";
 import { IconGlobe, IconCode, IconMenu, IconMoon, IconPlus, IconSun, IconSwap, IconBook, IconBug, IconFolder, IconSearch, IconTerminal, IconShare } from "./icons";
 import { MessageView } from "./Messages";
 import { Sidebar } from "./Sidebar";
@@ -51,7 +52,7 @@ function shareTokenFromPath(): string | null {
   return /^\/s\/([a-f0-9]{40})\/?$/.exec(location.pathname)?.[1] ?? null;
 }
 
-type Route = "share" | "chat" | "connect" | "telegram" | "connections" | "keys" | "plans" | "memory" | "admin" | "admin-chat";
+type Route = "share" | "chat" | "connect" | "telegram" | "connections" | "keys" | "plans" | "usage" | "memory" | "admin" | "admin-chat";
 
 function adminChatIdFromPath(): string {
   return /^\/admin\/chats\/([a-f0-9]{24})\/?$/.exec(location.pathname)?.[1] ?? "";
@@ -66,6 +67,7 @@ function routeFromPath(): Route {
   if (p === "/apps") return "connections";
   if (p === "/keys") return "keys";
   if (p === "/plans") return "plans";
+  if (p === "/usage") return "usage";
   if (p === "/memory") return "memory";
   if (p === "/admin") return "admin";
   if (adminChatIdFromPath()) return "admin-chat";
@@ -80,6 +82,7 @@ const PAGE_TITLES: Record<Route, string> = {
   connections: t("اتصال‌ها و برنامه‌ها", "Connections and apps"),
   keys: t("کلیدهای API", "API keys"),
   plans: t("اشتراک‌ها", "Plans"),
+  usage: t("مصرف و توکن‌ها", "Usage and tokens"),
   memory: t("حافظه", "Memory"),
   admin: t("مدیریت", "Admin"),
   "admin-chat": t("گفت‌وگو در مدیریت", "Admin chat view"),
@@ -817,9 +820,9 @@ export function App() {
         </header>
         {route === "admin-chat" ? (
           <div className="scroller page-scroller">{user.admin ? <AdminChat id={adminChatIdFromPath()} /> : <NoAccess />}</div>
-        ) : route === "connections" || route === "keys" || route === "plans" || route === "memory" || route === "admin" ? (
+        ) : route === "connections" || route === "keys" || route === "plans" || route === "usage" || route === "memory" || route === "admin" ? (
           <div className="scroller page-scroller" ref={pageScroller}>
-            {route === "connections" ? <Connections notify={notify} /> : route === "keys" ? <Keys notify={notify} /> : route === "plans" ? <Plans notify={notify} /> : route === "memory" ? <Memory notify={notify} /> : user.admin ? <Admin notify={notify} /> : <NoAccess />}
+            {route === "connections" ? <Connections notify={notify} /> : route === "keys" ? <Keys notify={notify} /> : route === "plans" ? <Plans notify={notify} /> : route === "usage" ? <Usage onNavigate={navigate} /> : route === "memory" ? <Memory notify={notify} /> : user.admin ? <Admin notify={notify} /> : <NoAccess />}
           </div>
         ) : (
           <>

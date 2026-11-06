@@ -244,6 +244,9 @@ pub fn plan(call: &Call, ws: &Workspace) -> Result<Plan, String> {
                 return Err("command is empty.".to_string());
             }
             let (program, args, raw, lang) = shell_parts(&text(a, "shell"), &command);
+            if !preview.outside && !ws.outside_paths(&command, &cwd).is_empty() {
+                preview.outside = true;
+            }
             preview.kind = Kind::Exec;
             preview.summary = first_line(&command, 120);
             preview.detail = command;
@@ -267,6 +270,9 @@ pub fn plan(call: &Call, ws: &Workspace) -> Result<Plan, String> {
                 return Err("args is empty; pass the docker arguments as a list.".to_string());
             }
             let shown = format!("docker {}", args.iter().map(|x| quote(x)).collect::<Vec<_>>().join(" "));
+            if !preview.outside && !ws.outside_paths(&shown, &cwd).is_empty() {
+                preview.outside = true;
+            }
             preview.kind = Kind::Exec;
             preview.summary = first_line(&shown, 120);
             preview.detail = shown;
@@ -304,6 +310,9 @@ pub fn plan(call: &Call, ws: &Workspace) -> Result<Plan, String> {
                 args.push(cwd.to_string_lossy().to_string());
                 args.extend(["-e".to_string(), "bash".into(), "-lc".into(), command.clone()]);
                 preview.kind = Kind::Exec;
+                if !preview.outside && !ws.outside_paths(&command, &cwd).is_empty() {
+                    preview.outside = true;
+                }
                 preview.summary = first_line(&command, 120);
                 preview.detail = command;
                 preview.lang = "bash".into();
@@ -579,6 +588,28 @@ mod tests {
                 .preview
                 .outside
         );
+    }
+
+    #[test]
+    fn shell_paths_outside_the_workspace_ask() {
+        let (_d, w) = ws();
+        let other = tempfile::tempdir().unwrap();
+        let secret = other.path().join("secret.txt");
+        std::fs::write(&secret, "s").unwrap();
+
+        let outside = plan(
+            &call("shell", json!({"command": format!("cat {}", secret.display()), "shell": "sh"})),
+            &w,
+        )
+        .unwrap();
+        assert!(outside.preview.outside);
+        assert_eq!(outside.preview.kind, Kind::Exec);
+
+        let inside = plan(&call("shell", json!({"command": "cat a.txt", "shell": "sh"})), &w).unwrap();
+        assert!(!inside.preview.outside);
+
+        let escape = plan(&call("shell", json!({"command": "cat ../secret.txt", "shell": "sh"})), &w).unwrap();
+        assert!(escape.preview.outside);
     }
 
     #[test]

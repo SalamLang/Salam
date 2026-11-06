@@ -125,6 +125,12 @@ The last level accepts every tool call everywhere on the computer. Choosing
 it asks for confirmation first, and the select marks it in red while it is
 active. It is meant for a task you fully trust, not as a default.
 
+"Outside" means any path outside the chosen folder, whether a file tool names
+it directly or a command mentions it (`cat /tmp/report`, `cd ~`, `-o /tmp/x`,
+`..`, or a symlink that leads out). Shell, test, Docker and WSL calls are
+checked the same way as `read_file` and `write_file`, so `/tmp/report` asks in
+the same levels however the assistant reaches it.
+
 Writes inside `.git/` are always refused. A running command can be stopped
 from its card. Output is capped at 30 KB (head and tail are kept), and
 commands time out after 120 seconds unless the model asks for up to 30

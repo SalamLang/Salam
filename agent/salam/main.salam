@@ -2341,6 +2341,103 @@ func set_shell(act &: Action, pv &: Preview, shell_name: str, command: str):
     end
 end
 
+func path_outside(ws: Workspace, path: str, cwd: str): bool:
+    joined := is_absolute(path) ? path : filepath.Join(cwd, path)
+    ret not path_inside(canonical_prefix(normalize_path(joined)), ws.root)
+end
+
+func token_outside(ws: Workspace, token: str, cwd: str): bool:
+    if str.Contains(token, "://"):
+        ret false
+    end
+    if str.StartsWith(token, "~"):
+        rest := str.TrimPrefix(token, "~")
+        if rest.len() > 0 and not str.StartsWith(rest, "/") and not str.StartsWith(rest, "\\"):
+            ret true
+        end
+        mut home := os.Env("HOME")
+        if home.len() == 0:
+            home = os.Env("USERPROFILE")
+        end
+        if home.len() == 0:
+            ret true
+        end
+        mut rel := str.TrimPrefix(rest, "/")
+        rel = str.TrimPrefix(rel, "\\")
+        if rel.len() == 0:
+            ret path_outside(ws, home, cwd)
+        end
+        ret path_outside(ws, filepath.Join(home, rel), cwd)
+    else str.StartsWith(token, "$"):
+        body := str.TrimPrefix(token, "$")
+        mut name := ""
+        mut tail := ""
+        if str.StartsWith(body, "{"):
+            close := str.IndexOf(body, "}")
+            if close < 1:
+                ret false
+            end
+            name = str.Substr(body, 1, close - 1)
+            tail = str.Substr(body, close + 1, str.Len(body) - close - 1)
+        else:
+            mut i := 0
+            until i >= str.Len(body) or not str.Contains("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_", str.Substr(body, i, 1)):
+                i++
+            end
+            name = str.Substr(body, 0, i)
+            tail = str.Substr(body, i, str.Len(body) - i)
+        end
+        if name.len() == 0:
+            ret false
+        end
+        if tail.len() == 0 and name != "HOME" and name != "USERPROFILE" and name != "TMPDIR" and name != "TEMP" and name != "TMP":
+            ret false
+        end
+        if tail.len() > 0 and not str.StartsWith(tail, "/") and not str.StartsWith(tail, "\\"):
+            ret false
+        end
+        value := os.Env(name)
+        if value.len() == 0:
+            ret true
+        end
+        mut rel := str.TrimPrefix(tail, "/")
+        rel = str.TrimPrefix(rel, "\\")
+        ret path_outside(ws, filepath.Join(value, rel), cwd)
+    end
+    if is_absolute(token):
+        ret path_outside(ws, token, cwd)
+    end
+    if str.StartsWith(token, "-"):
+        slash := str.IndexOf(token, "/")
+        if slash >= 0:
+            rest := str.Substr(token, slash, str.Len(token) - slash)
+            if is_absolute(rest):
+                ret path_outside(ws, rest, cwd)
+            end
+        end
+    end
+    if str.Contains(token, "/") or str.Contains(token, "\\"):
+        ret path_outside(ws, token, cwd)
+    end
+    ret false
+end
+
+func command_outside(ws: Workspace, text: str, cwd: str): bool:
+    mut clean := text
+    each sep in [" ", "\t", "\n", "\r", "\"", "'", "`", ";", "|", "&", "<", ">", "(", ")", "{", "}", "[", "]", ",", "="]:
+        clean = str.Replace(clean, sep, " ")
+    end
+    tokens := str.Split(clean, " ")
+    defer tokens.free()
+    each token in tokens:
+        word := str.Trim(token)
+        if word.len() > 0 and token_outside(ws, word, cwd):
+            ret true
+        end
+    end
+    ret false
+end
+
 func plan_error(text: str): Plan:
     ret Plan { error = text }
 end
@@ -2367,6 +2464,9 @@ func tool_plan(id: str, tool: str, args: str, chat: str, ws: Workspace): Plan:
             ret plan_error("command is empty.")
         end
         set_shell(a, p, json.Get(args, "shell"), command)
+        if not p.outside and command_outside(ws, command, cwd):
+            p.outside = true
+        end
         p.kind = "exec"
         p.summary = first_line(command, 120)
         p.detail = command
@@ -2388,6 +2488,9 @@ func tool_plan(id: str, tool: str, args: str, chat: str, ws: Workspace): Plan:
         end
         a.program = "docker"
         a.cwd = cwd
+        if not p.outside and command_outside(ws, shown, cwd):
+            p.outside = true
+        end
         p.kind = "exec"
         p.summary = first_line(shown, 120)
         p.detail = shown
@@ -2421,6 +2524,9 @@ func tool_plan(id: str, tool: str, args: str, chat: str, ws: Workspace): Plan:
             end
             a.args.push(command)
             p.kind = "exec"
+            if not p.outside and command_outside(ws, command, cwd):
+                p.outside = true
+            end
             p.summary = first_line(command, 120)
             p.detail = command
         end

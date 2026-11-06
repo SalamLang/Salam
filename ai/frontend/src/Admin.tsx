@@ -419,7 +419,12 @@ function Users({ picked, onPick, notify }: { picked: Picked; onPick: (p: Picked)
   const [q, setQ] = useState("");
   const [query, setQuery] = useState("");
   const [offset, setOffset] = useState(0);
-  const [data, setData] = useState<{ users: AdminUser[]; total: number } | null>(null);
+  const [data, setData] = useState<{
+    users: AdminUser[];
+    total: number;
+    plain_ready?: boolean;
+    desktop_plain_ready?: boolean;
+  } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -483,6 +488,16 @@ function Users({ picked, onPick, notify }: { picked: Picked; onPick: (p: Picked)
           <input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("جست‌وجوی نام یا ایمیل", "Search name or email")} />
         </label>
       </div>
+      {data && data.plain_ready === false && (
+        <p className="policy-warn" role="status">
+          {t("موتور پروفایل ساده ندارد (AI_ENGINE_AGENT_RAW)، پس حساب‌هایی که محدودیت فقط-سلام‌شان برداشته شده هنوز با پروفایل سلام پاسخ می‌گیرند.", "The engine has no plain profile (AI_ENGINE_AGENT_RAW), so accounts whose Salam-only limit is lifted are still answered by the Salam profile.")}
+        </p>
+      )}
+      {data && data.desktop_plain_ready === false && (
+        <p className="policy-warn" role="status">
+          {t("برای ایجنت، AI_ENGINE_AGENT_DESKTOP_RAW تنظیم نشده؛ حساب آزاد در ایجنت یا ابزارهای دسکتاپ را از دست می‌دهد یا همان سیاست سلام را می‌گیرد.", "AI_ENGINE_AGENT_DESKTOP_RAW is not configured; a lifted account in the desktop agent either loses its desktop tools or keeps the Salam policy.")}
+        </p>
+      )}
       {error && (
         <div className="form-error" role="alert">
           {error}

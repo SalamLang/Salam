@@ -540,6 +540,42 @@ func with_effort(obj: str, effort: str): str:
     ret obj.substr(0, obj.len() - 1) + `, "effort": ` + json.Str(effort) + "}"
 end
 
+func with_chat_state(obj: str, pending: str, phase: str, queued: str, waiting: str, device: str, last: str): str:
+    if not str.EndsWith(obj, "}"):
+        ret obj
+    end
+    has_device := device.len() > 0 and device != "0"
+    mut online := false
+    if has_device:
+        online = aibridge.Online(device)
+    end
+    mut state := "idle"
+    if waiting != "0" and waiting.len() > 0:
+        state = "waiting"
+    else if pending != "0" and pending.len() > 0:
+        state = "working"
+    else if queued != "0" and queued.len() > 0:
+        state = "queued"
+    else if has_device and not online:
+        state = "offline"
+    end
+    mut extra := `, "state": ` + json.Str(state)
+    if state == "working":
+        p := phase == "tool" ? "tool" : phase == "text" ? "writing" : "thinking"
+        extra += `, "phase": ` + json.Str(p)
+    end
+    if queued != "0" and queued.len() > 0:
+        extra += `, "queued": ` + queued
+    end
+    if last == "error":
+        extra += `, "last_error": true`
+    end
+    if has_device:
+        extra += `, "online": ` + (online ? "true" : "false")
+    end
+    ret obj.substr(0, obj.len() - 1) + extra + "}"
+end
+
 func with_shared(obj: str, kinds: str): str:
     if kinds.len() == 0 or not str.EndsWith(obj, "}"):
         ret obj
@@ -598,9 +634,12 @@ func list_chats(ctx: i64):
     end
     mut items := Vector {} as Vector<str>
     aistore.Lock()
-    mut rows := aistore.Stmt("SELECT id, title, updated, device_id, workspace, cloud, COALESCE((SELECT GROUP_CONCAT(kind) FROM shares s WHERE s.chat_id = chats.id), '') FROM chats WHERE user_id = ?1 ORDER BY updated DESC LIMIT 200", one(i64s(uid)))
+    sql := "SELECT id, title, updated, device_id, workspace, cloud, " + "COALESCE((SELECT GROUP_CONCAT(kind) FROM shares s WHERE s.chat_id = chats.id), ''), " + "COALESCE((SELECT COUNT(*) FROM messages m WHERE m.chat_id = chats.id AND m.role = 'assistant' AND m.status = 'pending'), 0), " + "COALESCE((SELECT SUBSTRING_INDEX(SUBSTRING_INDEX(activity, '\"kind\":\"', -1), '\"', 1) FROM messages m WHERE m.chat_id = chats.id AND m.role = 'assistant' AND m.status = 'pending' ORDER BY id DESC LIMIT 1), ''), " + "COALESCE((SELECT COUNT(*) FROM chat_queue q WHERE q.chat_id = chats.id), 0), " + "COALESCE((SELECT COUNT(*) FROM bridge_calls b WHERE b.chat_id = chats.id AND b.state = 'pending'), 0), " + "COALESCE((SELECT status FROM messages m WHERE m.chat_id = chats.id AND m.role = 'assistant' ORDER BY id DESC LIMIT 1), '') " + "FROM chats WHERE user_id = ?1 ORDER BY updated DESC LIMIT 200"
+    mut rows := aistore.Stmt(sql, one(i64s(uid)))
     until aistore.Next(rows):
-        items.push(with_shared(chat_json(aistore.Text(rows, 0), aistore.Text(rows, 1), aistore.Text(rows, 2), aistore.Text(rows, 3), aistore.Text(rows, 4), aistore.Text(rows, 5)), aistore.Text(rows, 6)))
+        mut item := with_shared(chat_json(aistore.Text(rows, 0), aistore.Text(rows, 1), aistore.Text(rows, 2), aistore.Text(rows, 3), aistore.Text(rows, 4), aistore.Text(rows, 5)), aistore.Text(rows, 6))
+        item = with_chat_state(item, aistore.Text(rows, 7), aistore.Text(rows, 8), aistore.Text(rows, 9), aistore.Text(rows, 10), aistore.Text(rows, 3), aistore.Text(rows, 11))
+        items.push(item)
     end
     aistore.Finish(rows)
     aistore.Unlock()

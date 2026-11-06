@@ -387,6 +387,7 @@ export type UsageTotals = {
   cost: number;
   cost_in: number;
   cost_out: number;
+  tools?: number;
 };
 export type UsagePeriodKey = "today" | "week" | "month" | "last_month" | "all";
 export type UsagePeriod = {
@@ -395,6 +396,43 @@ export type UsagePeriod = {
   to: number;
   chat: UsageTotals;
   api: UsageTotals;
+};
+export type UsageDay = {
+  day: string;
+  chat_count: number;
+  chat_in: number;
+  chat_out: number;
+  api_count: number;
+  api_in: number;
+  api_out: number;
+};
+export type UsageBreakdown = {
+  kind?: "chat" | "api";
+  name: string;
+  count: number;
+  input: number;
+  output: number;
+};
+export type UsageReport = {
+  now: number;
+  plan: {
+    id: string;
+    name: string;
+    expires: number;
+    chat_hourly: number;
+    api_hourly: number;
+    parallel: number;
+  };
+  hourly: {
+    chat_used: number;
+    api_used: number;
+    window_seconds: number;
+  };
+  periods: UsagePeriod[];
+  daily: UsageDay[];
+  sources: UsageBreakdown[];
+  keys: UsageBreakdown[];
+  projects: UsageBreakdown[];
 };
 export type RequestUsage = {
   input: number;
@@ -1170,6 +1208,7 @@ export const api = {
       { plan, gateway },
     ),
   payments: () => call<{ payments: Payment[] }>("GET", "/billing/payments"),
+  usage: () => call<UsageReport>("GET", "/usage"),
   adminSubscriptions: (latest?: boolean, user?: number) =>
     call<{
       subscriptions: AdminSubscription[];

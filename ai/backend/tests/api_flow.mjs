@@ -457,6 +457,17 @@ check("users show tokens, last login and login count", urow.tokens_in > 0 && uro
 const other = await account("someone-else@test.ir", "Other");
 const theirs = await api("GET", "/keys/requests", other);
 check("another user does not see these requests", theirs.json.requests.length === 0);
+const mineUsage = await api("GET", "/usage?days=30", session);
+const mineToday = mineUsage.json.periods?.find((p) => p.key === "today");
+const mineAll = mineUsage.json.periods?.find((p) => p.key === "all");
+check("user usage has today, week, month, last month and all", ["today", "week", "month", "last_month", "all"].every((k) => mineUsage.json.periods?.some((p) => p.key === k)), mineUsage.json.periods?.map((p) => p.key));
+check("user usage counts chat and API tokens separately", mineToday?.chat?.count >= 1 && mineToday.chat.input >= 100 && mineToday.chat.cache_read >= 300 && mineToday.api.input >= 100 && mineToday.api.output >= 20, mineToday);
+check("user usage has one row per day for the last 30 days", mineUsage.json.daily?.length === 30 && mineUsage.json.daily.at(-1).chat_in >= 100, mineUsage.json.daily?.at(-1));
+check("user usage lists API keys and projects", mineUsage.json.keys?.some((k) => k.name === "test-bot") && mineUsage.json.projects?.some((p) => p.name === "website-bot"), { keys: mineUsage.json.keys, projects: mineUsage.json.projects });
+check("user usage reports the plan and this hour's use", mineUsage.json.plan?.chat_hourly >= 0 && mineUsage.json.hourly?.chat_used >= 1 && mineUsage.json.hourly?.api_used >= 1, { plan: mineUsage.json.plan, hourly: mineUsage.json.hourly });
+const otherUsage = await api("GET", "/usage", other);
+check("user usage only covers the signed-in account", otherUsage.json.periods?.find((p) => p.key === "all")?.chat?.count === 0 && otherUsage.json.keys?.length === 0, otherUsage.json);
+check("user usage needs a signed-in account", (await api("GET", "/usage", "")).res.status === 401);
 
 console.log("sessions");
 const signIn = async (email, headers) => {

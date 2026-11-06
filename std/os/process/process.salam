@@ -37,15 +37,19 @@ if SALAM_OS_WINDOWS:
     end
 else:
     extern:
-        environ: void*
-        func posix_spawnp(pid: void*, file: str, file_actions: void*, attrp: void*, argv: void*, envp: void*): int
         func waitpid(pid: int, status: void*, options: int): int
         func kill(pid: int, sig: int): int
-        func posix_spawn_file_actions_init(actions: void*): int
-        func posix_spawn_file_actions_destroy(actions: void*): int
-        func posix_spawn_file_actions_addopen(actions: void*, fd: int, path: str, flags: int, mode: int): int
         func fork(): int
         noret func _exit(code: int)
+    end
+    if not SALAM_OS_ANDROID:
+        extern:
+            environ: void*
+            func posix_spawnp(pid: void*, file: str, file_actions: void*, attrp: void*, argv: void*, envp: void*): int
+            func posix_spawn_file_actions_init(actions: void*): int
+            func posix_spawn_file_actions_destroy(actions: void*): int
+            func posix_spawn_file_actions_addopen(actions: void*, fd: int, path: str, flags: int, mode: int): int
+        end
     end
 end
 
@@ -184,6 +188,56 @@ else:
             ret 1 + 64 + 512
         end
     end
+
+    if SALAM_OS_ANDROID:
+        func _spawn_posix(path: str, argv: void*, capture: bool, out_path: str, err_path: str): int:
+            mut in_fd := 0 - 1
+            mut out_fd := 0 - 1
+            mut err_fd := 0 - 1
+            if capture:
+                in_fd = open("/dev/null", 0, 0)
+                out_fd = open(out_path, _open_flags(), 420)
+                err_fd = open(err_path, _open_flags(), 420)
+            end
+            pid := fork()
+            if pid == 0:
+                if capture:
+                    _i0 := dup2(in_fd, 0)
+                    _o1 := dup2(out_fd, 1)
+                    _e2 := dup2(err_fd, 2)
+                end
+                _gone := execvp(path, argv)
+                _exit(127)
+            end
+            if in_fd >= 0: close(in_fd) end
+            if out_fd >= 0: close(out_fd) end
+            if err_fd >= 0: close(err_fd) end
+            if pid < 0: ret 0 - 1 end
+            ret pid
+        end
+    else:
+        func _spawn_posix(path: str, argv: void*, capture: bool, out_path: str, err_path: str): int:
+            pidbuf := mem.AllocateZeroed(4 as u64)
+            mut actions := null as void*
+            if capture:
+                actions = mem.AllocateZeroed(256 as u64)
+                posix_spawn_file_actions_init(actions)
+                posix_spawn_file_actions_addopen(actions, 0, "/dev/null", 0, 0)
+                posix_spawn_file_actions_addopen(actions, 1, out_path, _open_flags(), 420)
+                posix_spawn_file_actions_addopen(actions, 2, err_path, _open_flags(), 420)
+            end
+            rc := posix_spawnp(pidbuf, path, actions, null, argv, environ)
+            if capture:
+                posix_spawn_file_actions_destroy(actions)
+                mem.Free(actions)
+            end
+            pidp := pidbuf as int*
+            pid := pidp[0]
+            mem.Free(pidbuf)
+            if rc != 0: ret 0 - rc end
+            ret pid
+        end
+    end
 end
 
 if SALAM_OS_WINDOWS:
@@ -303,18 +357,14 @@ else:
     @fa "شروع"
     pub func Start(path: str, args: Vector<str>): Process:
         argv := _build_argv(path, args)
-        pidbuf := mem.AllocateZeroed(4 as u64)
-        rc := posix_spawnp(pidbuf, path, null, null, argv, environ)
+        pid := _spawn_posix(path, argv, false, "", "")
         mem.Free(argv)
         mut p := Process {}
-        if rc != 0:
-            error.Set(error.ProcessFailed, "posix_spawnp failed", "Start", path, rc)
-            mem.Free(pidbuf)
+        if pid <= 0:
+            error.Set(error.ProcessFailed, "posix_spawnp failed", "Start", path, 0 - pid)
             ret p
         end
-        pidp := pidbuf as int*
-        p.pid = pidp[0]
-        mem.Free(pidbuf)
+        p.pid = pid
         p.running = true
         ret p
     end
@@ -325,27 +375,16 @@ else:
         out_path := temp.File()
         err_path := temp.File()
         argv := _build_argv(path, args)
-        actions := mem.AllocateZeroed(256 as u64)
-        posix_spawn_file_actions_init(actions)
-        posix_spawn_file_actions_addopen(actions, 0, "/dev/null", 0, 0)
-        posix_spawn_file_actions_addopen(actions, 1, out_path, _open_flags(), 420)
-        posix_spawn_file_actions_addopen(actions, 2, err_path, _open_flags(), 420)
-        pidbuf := mem.AllocateZeroed(4 as u64)
-        rc := posix_spawnp(pidbuf, path, actions, null, argv, environ)
-        posix_spawn_file_actions_destroy(actions)
-        mem.Free(actions)
+        pid := _spawn_posix(path, argv, true, out_path, err_path)
         mem.Free(argv)
         mut p := Process {}
         p.stdout_path = out_path
         p.stderr_path = err_path
-        if rc != 0:
-            error.Set(error.ProcessFailed, "posix_spawnp failed", "StartCaptured", path, rc)
-            mem.Free(pidbuf)
+        if pid <= 0:
+            error.Set(error.ProcessFailed, "posix_spawnp failed", "StartCaptured", path, 0 - pid)
             ret p
         end
-        pidp2 := pidbuf as int*
-        p.pid = pidp2[0]
-        mem.Free(pidbuf)
+        p.pid = pid
         p.running = true
         ret p
     end

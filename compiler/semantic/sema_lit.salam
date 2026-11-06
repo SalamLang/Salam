@@ -57,6 +57,11 @@ func finish_struct_lit(s &: Sema, a &: at.Ast, nid: int, ssym: int): int:
                     i18.Tr("field '%s' is private in struct '%s' (mark it 'pub')"), co.ArgStr(fnm), co.ArgStr(ssv.name)
                 )
             )
+        else opt_wraps(s, fty, vt):
+            nbo := coerce_to_opt(s, a, fty, at.Get(a, fid).a, vt)
+            mut fnode0 := at.Get(a, fid)
+            fnode0.a = nbo
+            at.Put(a, fid, fnode0)
         else not type_assignable(s, fty, vt):
             if tuple_arity_of(s, ssv.ty) > 0:
                 serr(
@@ -71,6 +76,8 @@ func finish_struct_lit(s &: Sema, a &: at.Ast, nid: int, ssym: int): int:
                     )
                 )
             end
+        else type_is_wide(s, fty) or (type_is_wide(s, vt) and type_is_float(s, fty)):
+            wide_coerce(s, a, at.Get(a, fid).a, fty)
         else fty >= 0 and ty_at(s, fty).kind == TY_DYN:
             nb := coerce_to_dyn(s, a, fty, at.Get(a, fid).a, vt)
             mut fnode := at.Get(a, fid)
@@ -110,7 +117,7 @@ func finish_struct_lit(s &: Sema, a &: at.Ast, nid: int, ssym: int): int:
                 break
             end
         end
-        if not provided and not s.in_derive:
+        if not provided and not s.in_derive and not (at.Get(a, nid).synthetic and opt_inner(s, ssv.ty) != TYPE_NONE):
             serr(
                 s, 28, sp, co.Format2(
                     i18.Tr("struct literal '%s' requires field '%s'"), co.ArgStr(ssv.name), co.ArgStr(f2.name)
@@ -118,6 +125,7 @@ func finish_struct_lit(s &: Sema, a &: at.Ast, nid: int, ssym: int): int:
             )
         end
     end
+    check_struct_rules(s, a, nid, ssym, sp)
     mut litv := at.Get(a, nid)
     litv.sema_type = ssv.ty
     at.Put(a, nid, litv)
@@ -263,9 +271,9 @@ func check_struct_lit(s &: Sema, a &: at.Ast, nid: int): int:
             mut targs := ""
             repeat at.TyparamCount(a, td) in ti:
                 if ti > 0:
-                    targs = targs + ", "
+                    targs += ", "
                 end
-                targs = targs + at.Typaram(a, td, ti)
+                targs += at.Typaram(a, td, ti)
             end
             serr(
                 s, 71, sp, co.Format4(
@@ -327,7 +335,7 @@ func check_array_lit(s &: Sema, a &: at.Ast, nid: int): int:
                 serr(s, 56, sp, i18.Tr("array elements have incompatible types"))
             end
         end
-        i2 += 1
+        i2++
     end
     if elem >= 0 and ty_at(s, elem).kind == TY_NULL:
         if exp_elem >= 0 and ty_at(s, exp_elem).kind == TY_PTR:
@@ -341,6 +349,11 @@ func check_array_lit(s &: Sema, a &: at.Ast, nid: int): int:
                 )
             )
             ret sema_decorate(s, a, nid, sema_err_ty(s))
+        end
+    end
+    if type_is_wide(s, elem):
+        repeat at.ChildCount(a, nid) in wi:
+            wide_coerce(s, a, at.Child(a, nid, wi), elem)
         end
     end
     ret sema_decorate(
@@ -387,7 +400,7 @@ func record_capture(s &: Sema, a &: at.Ast, id: int, t: int):
             at.Put(a, cap, cv)
             at.AddCapture(a, lc.node, cap)
         end
-        li -= 1
+        li--
     end
 end
 

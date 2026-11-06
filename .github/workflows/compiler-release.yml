@@ -2507,17 +2507,36 @@ jobs:
             echo "::error::rpm packaging failed - the release will ship without .rpm files"
             echo "built=0" >> "$GITHUB_OUTPUT"
           fi
-      - name: Summarize .deb/.rpm packaging
+      - name: Build Arch (pacman) packages
+        id: build_pacman
+        run: |
+          set -eu
+          mkdir -p ./pacman
+          if sh packaging/arch/build-pacman.sh --version "$VERSION" --input ./release --output ./pacman; then
+            n=$(find ./pacman -name '*.pkg.tar.zst' | wc -l)
+            if [ "$n" -gt 0 ]; then
+              cp ./pacman/*.pkg.tar.zst ./release/
+            else
+              echo "::error::pacman packaging produced no files"
+            fi
+            echo "built=$n" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::pacman packaging failed - the release will ship without .pkg.tar.zst files"
+            echo "built=0" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Summarize .deb/.rpm/.pkg.tar.zst packaging
         if: always()
         env:
           DEB_COUNT: ${{ steps.build_deb.outputs.built || 0 }}
           RPM_COUNT: ${{ steps.build_rpm.outputs.built || 0 }}
+          PACMAN_COUNT: ${{ steps.build_pacman.outputs.built || 0 }}
         run: |
           {
             echo "### Distro packages"
             echo ""
             echo "- .deb: $DEB_COUNT file(s)"
             echo "- .rpm: $RPM_COUNT file(s)"
+            echo "- .pkg.tar.zst (Arch): $PACMAN_COUNT file(s)"
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Delete existing release and tag if found
         env:
@@ -2616,6 +2635,7 @@ jobs:
             release/salam-*-android-*.apk
             release/salam-*.deb
             release/salam-*.rpm
+            release/salam-*.pkg.tar.zst
           )
           assets=()
           for c in "${candidates[@]}"; do
@@ -2767,6 +2787,29 @@ jobs:
     permissions:
       contents: read
     uses: ./.github/workflows/agent-release.yml # zizmor: ignore[self-repository]
+
+  package-distros:
+    name: Publish distro packages
+    if: |
+      !cancelled() && needs.create-release.result == 'success' &&
+      github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release:')
+    needs: [create-release]
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Start the packaging workflow
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          VERSION=$(tr -d ' \t\r\n' < VERSION)
+          gh workflow run packaging-release.yml --ref main -f version="$VERSION"
+          echo "started packaging-release.yml for v$VERSION" >> "$GITHUB_STEP_SUMMARY"
 
   nightly-report:
     name: Report nightly outcome

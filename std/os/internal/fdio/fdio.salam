@@ -1,0 +1,515 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "os/internal/fdio"
+@fa "ورودی خروجی توصیف‌گر"
+package fdio
+
+import mem
+import str
+import time
+
+if SALAM_OS_WINDOWS:
+    link dynamic "kernel32"
+    extern:
+        func PeekNamedPipe(h: void*, buf: void*, n: u32, got: void*, avail: void*, left: void*): int
+        func ReadFile(h: void*, buf: void*, n: u32, got: void*, overlapped: void*): int
+        func WriteFile(h: void*, buf: void*, n: u32, wrote: void*, overlapped: void*): int
+        func CloseHandle(h: void*): int
+        func Sleep(ms: int)
+    end
+else:
+    extern:
+        func poll(fds: void*, nfds: usize, timeout: int): int
+        func close(fd: int): int
+        func pipe(fds: void*): int
+        func fcntl(fd: int, cmd: int, ...): int
+        func dup2(from_fd: int, to_fd: int): int
+        func execve(path: str, argv: void*, envp: void*): int
+        func access(path: str, mode: int): int
+        func getenv(name: str): void*
+        environ: void*
+    end
+end
+
+if not SALAM_OS_WINDOWS:
+    if SALAM_ARCH_X86 or SALAM_ARCH_ARM or SALAM_ARCH_WASM:
+        extern:
+            func read(fd: int, buf: void*, n: u32): int
+            func write(fd: int, buf: void*, n: u32): int
+        end
+    else:
+        extern:
+            func read(fd: int, buf: void*, n: u64): i64
+            func write(fd: int, buf: void*, n: u64): i64
+        end
+    end
+end
+
+@en "Buf"
+@fa "میان‌گیر"
+pub struct Buf:
+    @en "data"
+    @fa "داده"
+    pub data: void* = null
+    @en "len"
+    @fa "طول"
+    pub len: int = 0
+    @en "cap"
+    @fa "ظرفیت"
+    pub cap: int = 0
+end
+
+@en "Pipe"
+@fa "لوله"
+pub struct Pipe:
+    @en "r"
+    @fa "خواندن"
+    pub r: i64 = -1
+    @en "w"
+    @fa "نوشتن"
+    pub w: i64 = -1
+    @en "ok"
+    @fa "موفق"
+    pub ok: bool = false
+end
+
+if not SALAM_OS_WINDOWS:
+    if SALAM_ARCH_X86 or SALAM_ARCH_ARM or SALAM_ARCH_WASM:
+        func _sys_read(fd: int, buf: void*, n: int): int: ret read(fd, buf, n as u32) end
+
+        func _sys_write(fd: int, buf: void*, n: int): int: ret write(fd, buf, n as u32) end
+    else:
+        func _sys_read(fd: int, buf: void*, n: int): int: ret read(fd, buf, n as u64) as int end
+
+        func _sys_write(fd: int, buf: void*, n: int): int: ret write(fd, buf, n as u64) as int end
+    end
+end
+
+func _handle(h: i64): void*:
+    ret h as void*
+end
+
+func _grow(b &: Buf, need: int):
+    if b.cap - b.len >= need: ret end
+    mut cap := b.cap
+    if cap < 4096: cap = 4096 end
+    until cap - b.len < need:
+        cap *= 2
+    end
+    if b.data == null:
+        b.data = mem.Allocate(cap as u64)
+    else:
+        b.data = mem.Reallocate(b.data, cap as u64)
+    end
+    b.cap = cap
+end
+
+if SALAM_OS_WINDOWS:
+    func _poll_once(h: i64): int:
+        avail := mem.AllocateZeroed(8 as u64)
+        ok := PeekNamedPipe(_handle(h), null, 0 as u32, null, avail, null)
+        n := (avail as u32*)[0]
+        mem.Free(avail)
+        if ok == 0: ret 1 end
+        if n > (0 as u32): ret 1 end
+        ret 0
+    end
+
+    @en "PollRead"
+    @fa "پایش خواندن"
+    pub func PollRead(h: i64, ms: int): int:
+        start := time.NowMillis()
+        mut r := 0
+        until true:
+            if _poll_once(h) == 1:
+                r = 1
+                break
+            end
+            if ms == 0: break end
+            if ms > 0 and time.NowMillis() - start >= (ms as i64): break end
+            Sleep(2)
+        end
+        ret r
+    end
+
+    @en "ReadRaw"
+    @fa "خواندن خام"
+    pub func ReadRaw(h: i64, buf: void*, n: int): int:
+        got := mem.AllocateZeroed(8 as u64)
+        ok := ReadFile(_handle(h), buf, n as u32, got, null)
+        r := (got as u32*)[0] as int
+        mem.Free(got)
+        if ok == 0 or r <= 0: ret 0 - 1 end
+        ret r
+    end
+
+    @en "WriteRaw"
+    @fa "نوشتن خام"
+    pub func WriteRaw(h: i64, buf: void*, n: int): int:
+        wrote := mem.AllocateZeroed(8 as u64)
+        ok := WriteFile(_handle(h), buf, n as u32, wrote, null)
+        r := (wrote as u32*)[0] as int
+        mem.Free(wrote)
+        if ok == 0: ret 0 - 1 end
+        ret r
+    end
+
+    @en "PollTwo"
+    @fa "پایش دو دسته"
+    pub func PollTwo(a: i64, b: i64, ms: int): int:
+        start := time.NowMillis()
+        mut r := 0
+        until true:
+            if a >= 0 and _poll_once(a) == 1: r |= 1 end
+            if b >= 0 and _poll_once(b) == 1: r |= 2 end
+            if r != 0: break end
+            if ms == 0: break end
+            if ms > 0 and time.NowMillis() - start >= (ms as i64): break end
+            Sleep(2)
+        end
+        ret r
+    end
+
+    @en "PollWrite"
+    @fa "پایش نوشتن"
+    pub func PollWrite(_h: i64, _ms: int): int:
+        ret 1
+    end
+
+    @en "Close"
+    @fa "بستن"
+    pub func Close(h: i64):
+        if h != 0 - 1 and h != 0:
+            _ignored := CloseHandle(_handle(h))
+        end
+    end
+else:
+    func _listed(list: Vector<str>, name: str): bool:
+        mut i := 0
+        until i < list.len():
+            if list.get(i) == name: ret true end
+            i++
+        end
+        ret false
+    end
+
+    func _lookup(program: str, path_env: str): str:
+        if str.Contains(program, "/"): ret str.Clone(program) end
+        parts := path_env.split(":")
+        defer parts.free()
+        mut found := ""
+        mut i := 0
+        until i < parts.len():
+            dir := parts.get(i)
+            cand := dir.len() == 0 ? "./" + program : dir + "/" + program
+            if access(cand, 1) == 0:
+                found = cand
+                break
+            end
+            mem.Free(cand as void*)
+            i++
+        end
+        each part in parts:
+            mem.Free(part as void*)
+        end
+        ret found.len() > 0 ? found : str.Clone("")
+    end
+
+    @en "PollRead"
+    @fa "پایش خواندن"
+    pub func PollRead(h: i64, ms: int): int:
+        pfd := mem.AllocateZeroed(8 as u64)
+        defer mem.Free(pfd)
+        (pfd as int*)[0] = h as int
+        (pfd as i16*)[2] = 1 as i16
+        r := poll(pfd, 1 as usize, ms)
+        if r < 0: ret 0 - 1 end
+        ret r
+    end
+
+    @en "ReadRaw"
+    @fa "خواندن خام"
+    pub func ReadRaw(h: i64, buf: void*, n: int): int:
+        r := _sys_read(h as int, buf, n)
+        if r <= 0: ret 0 - 1 end
+        ret r
+    end
+
+    @en "WriteRaw"
+    @fa "نوشتن خام"
+    pub func WriteRaw(h: i64, buf: void*, n: int): int:
+        r := _sys_write(h as int, buf, n)
+        if r < 0: ret 0 - 1 end
+        ret r
+    end
+
+    @en "PollTwo"
+    @fa "پایش دو دسته"
+    pub func PollTwo(a: i64, b: i64, ms: int): int:
+        pfd := mem.AllocateZeroed(16 as u64)
+        defer mem.Free(pfd)
+        (pfd as int*)[0] = a as int
+        (pfd as i16*)[2] = 1 as i16
+        (pfd as int*)[2] = b as int
+        (pfd as i16*)[6] = 1 as i16
+        r := poll(pfd, 2 as usize, ms)
+        if r < 0: ret 0 - 1 end
+        mut mask := 0
+        if a >= 0 and (pfd as i16*)[3] != (0 as i16): mask |= 1 end
+        if b >= 0 and (pfd as i16*)[7] != (0 as i16): mask |= 2 end
+        ret mask
+    end
+
+    @en "PollWrite"
+    @fa "پایش نوشتن"
+    pub func PollWrite(h: i64, ms: int): int:
+        pfd := mem.AllocateZeroed(8 as u64)
+        defer mem.Free(pfd)
+        (pfd as int*)[0] = h as int
+        (pfd as i16*)[2] = 4 as i16
+        r := poll(pfd, 1 as usize, ms)
+        if r < 0: ret 0 - 1 end
+        ret r
+    end
+
+    @en "MakePipe"
+    @fa "ساخت لوله"
+    pub func MakePipe(): Pipe:
+        fds := mem.AllocateZeroed(8 as u64)
+        defer mem.Free(fds)
+        if pipe(fds) != 0: ret Pipe {} end
+        p := fds as int*
+        _a := fcntl(p[0], 2, 1)
+        _b := fcntl(p[1], 2, 1)
+        ret Pipe { r = p[0] as i64, w = p[1] as i64, ok = true }
+    end
+
+    @en "Redirect"
+    @fa "تغییر مسیر"
+    pub func Redirect(from_fd: int, to_fd: int):
+        if from_fd == to_fd:
+            _c := fcntl(from_fd, 2, 0)
+        else:
+            _d := dup2(from_fd, to_fd)
+        end
+    end
+
+    @en "Environ"
+    @fa "محیط فرآیند"
+    pub func Environ(): void*:
+        ret environ
+    end
+
+    @en "ExecVe"
+    @fa "اجرای برنامه"
+    pub func ExecVe(path: str, argv: void*, envp: void*): int:
+        ret execve(path, argv, envp)
+    end
+
+    @en "Resolve"
+    @fa "یافتن برنامه"
+    pub func Resolve(program: str, env: HashMap<str, str>, clear_env: bool): str:
+        mut path_env := "/usr/bin:/bin"
+        mut owned := false
+        if env.has("PATH"):
+            path_env = env.get("PATH")
+        else not clear_env:
+            v := getenv("PATH")
+            if v != null:
+                path_env = str.Clone(v as str)
+                owned = true
+            end
+        end
+        out := _lookup(program, path_env)
+        if owned: mem.Free(path_env as void*) end
+        ret out
+    end
+
+    @en "BuildArgv"
+    @fa "ساخت آرگومان ها"
+    pub func BuildArgv(program: str, args: Vector<str>): void*:
+        n := args.len()
+        arr := mem.Allocate(((n + 2) as u64) * (sizeof(str) as u64)) as str*
+        arr[0] = program
+        mut i := 0
+        until i < n:
+            arr[i + 1] = args.get(i)
+            i++
+        end
+        arr[n + 1] = (null as void*) as str
+        ret arr as void*
+    end
+
+    @en "BuildEnvp"
+    @fa "ساخت محیط"
+    pub func BuildEnvp(clear_env: bool, env: HashMap<str, str>, unset_env: Vector<str>, owned &: Vector<str>): void*:
+        if not clear_env and env.size() == 0 and unset_env.len() == 0: ret null end
+        mut items := Vector {} as Vector<str>
+        defer items.free()
+        if not clear_env:
+            pv := environ as void**
+            mut i := 0
+            until pv[i] != null:
+                entry := pv[i] as str
+                bytes := entry as u8*
+                mut k := 0
+                until bytes[k] != (0 as u8) and bytes[k] != (61 as u8):
+                    k++
+                end
+                key := str.Substr(entry, 0, k)
+                if not env.has(key) and not _listed(unset_env, key):
+                    items.push(entry)
+                end
+                mem.Free(key as void*)
+                i++
+            end
+        end
+        each name, value in env:
+            line := name + "=" + value
+            owned.push(line)
+            items.push(line)
+        end
+        n := items.len()
+        arr := mem.Allocate(((n + 1) as u64) * (sizeof(str) as u64)) as str*
+        mut j := 0
+        until j < n:
+            arr[j] = items.get(j)
+            j++
+        end
+        arr[n] = (null as void*) as str
+        ret arr as void*
+    end
+
+    @en "Close"
+    @fa "بستن"
+    pub func Close(h: i64):
+        if h >= 0:
+            _ignored := close(h as int)
+        end
+    end
+end
+
+@en "WriteAll"
+@fa "نوشتن همه"
+pub func WriteAll(h: i64, ptr: void*, n: int): bool:
+    mut sent := 0
+    until sent < n:
+        r := WriteRaw(h, (ptr as i64 + sent as i64) as void*, n - sent)
+        if r <= 0: ret false end
+        sent += r
+    end
+    ret true
+end
+
+@en "Empty"
+@fa "تهی"
+pub func Empty(): str:
+    out := mem.AllocateZeroed(1 as u64)
+    ret out as str
+end
+
+@en "Fill"
+@fa "پر کردن"
+pub func Fill(b &: Buf, h: i64, ms: int): int:
+    if h < 0: ret 0 - 1 end
+    r := PollRead(h, ms)
+    if r == 0: ret 0 end
+    if r < 0: ret 0 - 1 end
+    _grow(b, 4096)
+    n := ReadRaw(h, (b.data as i64 + b.len as i64) as void*, b.cap - b.len)
+    if n <= 0: ret 0 - 1 end
+    b.len += n
+    ret n
+end
+
+@en "Append"
+@fa "افزودن"
+pub func Append(b &: Buf, ptr: void*, n: int):
+    _grow(b, n + 1)
+    mem.Copy((b.data as i64 + b.len as i64) as void*, ptr, n as u64)
+    b.len += n
+end
+
+@en "IndexByte"
+@fa "جایگاه بایت"
+pub func IndexByte(b: Buf, value: int, from: int): int:
+    if b.data == null: ret 0 - 1 end
+    p := b.data as u8*
+    mut i := from
+    until i < b.len:
+        if (p[i] as int) == value: ret i end
+        i++
+    end
+    ret 0 - 1
+end
+
+@en "IndexStr"
+@fa "جایگاه متن"
+pub func IndexStr(b: Buf, needle: str): int:
+    m := needle.len()
+    if m == 0: ret 0 end
+    if b.data == null or b.len < m: ret 0 - 1 end
+    p := b.data as u8*
+    q := needle as u8*
+    mut i := 0
+    until i + m <= b.len:
+        mut j := 0
+        until j < m and p[i + j] == q[j]:
+            j++
+        end
+        if j == m: ret i end
+        i++
+    end
+    ret 0 - 1
+end
+
+@en "Take"
+@fa "برداشتن"
+pub func Take(b &: Buf, n: int): str:
+    mut k := n
+    if k > b.len: k = b.len end
+    out := mem.Allocate((k + 1) as u64) as u8*
+    if k > 0: mem.Copy(out as void*, b.data, k as u64) end
+    out[k] = 0 as u8
+    rest := b.len - k
+    if rest > 0:
+        _moved := mem.MemMove(b.data, (b.data as i64 + k as i64) as void*, rest as u64)
+    end
+    b.len = rest
+    ret out as str
+end
+
+@en "TakeInto"
+@fa "برداشتن در حافظه"
+pub func TakeInto(b &: Buf, dst: void*, max: int): int:
+    mut k := max
+    if k > b.len: k = b.len end
+    if k > 0: mem.Copy(dst, b.data, k as u64) end
+    rest := b.len - k
+    if rest > 0:
+        _moved := mem.MemMove(b.data, (b.data as i64 + k as i64) as void*, rest as u64)
+    end
+    b.len = rest
+    ret k
+end
+
+@en "Release"
+@fa "رها کردن"
+pub func Release(b &: Buf):
+    if b.data != null: mem.Free(b.data) end
+    b.data = null
+    b.len = 0
+    b.cap = 0
+end

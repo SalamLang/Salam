@@ -15,6 +15,29 @@ func jsg_unsupported(g &: Jg, what: str): str:
     ret `__salam_unsupported("` + what + `")`
 end
 
+func jsg_decl_enter(g &: Jg, c &: JgDeclCtx, home: int):
+    c.fn_home = g.cur_fn_home
+    c.owner = g.cur_struct
+    repeat g.locals.len() in i:
+        c.locals.push(g.locals.get(i))
+    end
+    g.locals.clear()
+    g.cur_struct = 0
+    if home != 0:
+        g.cur_fn_home = home
+    end
+end
+
+func jsg_decl_leave(g &: Jg, c &: JgDeclCtx):
+    g.cur_fn_home = c.fn_home
+    g.cur_struct = c.owner
+    g.locals.clear()
+    repeat c.locals.len() in i:
+        g.locals.push(c.locals.get(i))
+    end
+    c.locals.free()
+end
+
 func jsg_call_args(
     g &: Jg, s &: sm.Sema, a &: at.Ast, call: int, sig: int
 ): str:
@@ -27,27 +50,36 @@ func jsg_call_args(
             str.BufAppend(b, ", ")
         end
         str.BufAppend(b, jsg_expr_p(g, s, a, cv.list.get(i), 0))
-        i += 1
+        i++
     end
     if sig != 0:
         sgv := sm.SigAt(s, sig)
         if sgv.decl != 0:
             dv := at.Get(a, sgv.decl)
             np := dv.list.len()
-            mut emitted := nargs
-            mut i2 := nargs
-            until i2 < np:
-                pv := at.Get(a, dv.list.get(i2))
-                if pv.a == 0:
-                    i2 += 1
-                    continue
+            if nargs < np:
+                mut emitted := nargs
+                mut i2 := nargs
+                mut dhome := sgv.home
+                if sgv.owner != 0:
+                    dhome = sm.SymAt(s, sgv.owner).home
                 end
-                if emitted > 0:
-                    str.BufAppend(b, ", ")
+                mut dctx := JgDeclCtx {}
+                jsg_decl_enter(g, dctx, dhome)
+                until i2 < np:
+                    pv := at.Get(a, dv.list.get(i2))
+                    if pv.a == 0:
+                        i2++
+                        continue
+                    end
+                    if emitted > 0:
+                        str.BufAppend(b, ", ")
+                    end
+                    str.BufAppend(b, jsg_expr_p(g, s, a, pv.a, 0))
+                    emitted++
+                    i2++
                 end
-                str.BufAppend(b, jsg_expr_p(g, s, a, pv.a, 0))
-                emitted += 1
-                i2 += 1
+                jsg_decl_leave(g, dctx)
             end
         end
     end
@@ -70,7 +102,7 @@ func jsg_call_finish(
                 any_ref = true
                 break
             end
-            i += 1
+            i++
         end
     end
     if not any_ref:
@@ -123,14 +155,14 @@ func jsg_call_finish(
         until i3 < np:
             param3 := at.Get(a, dv.list.get(i3))
             if param3.a == 0:
-                i3 += 1
+                i3++
                 continue
             end
             if i3 > 0 or str.Len(recv) > 0:
                 str.BufAppend(argb, ", ")
             end
             str.BufAppend(argb, jsg_expr_p(g, s, a, param3.a, 0))
-            i3 += 1
+            i3++
         end
     end
     r := "(() => { " + str.BufStr(pre) + "const " + rvar + " = " + fn_expr + "(" + str.BufStr(argb) + ");" + str.BufStr(post) + " return " + rvar + "; })()"
@@ -157,7 +189,7 @@ func jsg_handler_base(a &: at.Ast, extname: str, args: Vector<int>): str:
                 break
             end
         end
-        i += 1
+        i++
     end
     if str.Len(ev) > 0:
         mut b := str.NewBuilder()
@@ -169,12 +201,12 @@ func jsg_handler_base(a &: at.Ast, extname: str, args: Vector<int>): str:
             ch := byte_at(ev, p)
             if not is_alnum(ch):
                 up = true
-                p += 1
+                p++
                 continue
             end
             str.BufAppendChar(b, up ? to_upper(ch) : ch)
             up = false
-            p += 1
+            p++
         end
         r := str.BufStr(b)
         str.BufFree(b)
@@ -236,7 +268,7 @@ func jsg_emit_extern_call(
         else:
             rendered.push(jsg_expr_p(g, s, a, aid, 0))
         end
-        i += 1
+        i++
     end
     tmpl := host_lookup(extname)
     if str.Len(tmpl) == 0 and no_browser_equivalent(extname):
@@ -255,7 +287,7 @@ func jsg_emit_extern_call(
                 str.BufAppend(b, ", ")
             end
             str.BufAppend(b, rendered.get(i2))
-            i2 += 1
+            i2++
         end
         str.BufAppendChar(b, 41)
         r := str.BufStr(b)
@@ -269,10 +301,10 @@ func jsg_emit_extern_call(
         c := byte_at(tmpl, p)
         if c != 37:
             str.BufAppendChar(b2, c)
-            p += 1
+            p++
             continue
         end
-        p += 1
+        p++
         if p >= tn:
             break
         end
@@ -281,14 +313,14 @@ func jsg_emit_extern_call(
             str.BufAppendChar(b2, 37)
         else c2 == 43 and p + 1 < tn and byte_at(tmpl, p + 1) >= 48 and byte_at(tmpl, p + 1) <= 57:
             start := byte_at(tmpl, p + 1) - 48
-            p += 1
+            p++
             mut k := start
             until k < nargs and k < 12:
                 if k > start:
                     str.BufAppend(b2, ", ")
                 end
                 str.BufAppend(b2, rendered.get(k))
-                k += 1
+                k++
             end
         else c2 >= 48 and c2 <= 57:
             idx := c2 - 48
@@ -298,7 +330,7 @@ func jsg_emit_extern_call(
                 str.BufAppend(b2, "undefined")
             end
         end
-        p += 1
+        p++
     end
     r2 := str.BufStr(b2)
     str.BufFree(b2)
@@ -395,14 +427,14 @@ func jsg_try_inline(
                 found = true
                 break
             end
-            i += 1
+            i++
         end
         if not found:
             map.free()
             used.free()
             ret ""
         end
-        k += 1
+        k++
     end
     mut i2 := 0
     until i2 < nparams:
@@ -411,7 +443,7 @@ func jsg_try_inline(
             used.free()
             ret ""
         end
-        i2 += 1
+        i2++
     end
     mut outer := Vector {} as Vector<int>
     mut i3 := 0
@@ -428,13 +460,13 @@ func jsg_try_inline(
             end
             outer.push(pv3.a)
         end
-        i3 += 1
+        i3++
     end
     mut slots := Vector {} as Vector<int>
     mut k2 := 0
     until k2 < ninner:
         slots.push(outer.get(map.get(k2)))
-        k2 += 1
+        k2++
     end
     result := jsg_emit_extern_call(g, s, a, calleev.name, slots)
     slots.free()
@@ -453,7 +485,7 @@ func jsg_call_extern_direct(
     mut i := 0
     until i < cnt and i < 12:
         args.push(nv.list.get(i))
-        i += 1
+        i++
     end
     result := jsg_emit_extern_call(g, s, a, name, args)
     args.free()
@@ -488,10 +520,12 @@ func jsg_print(
             str.BufAppend(
                 b, "String.fromCharCode(" + jsg_expr_p(g, s, a, aid, 0) + ")"
             )
+        else jsg_wide_ts(ats):
+            str.BufAppend(b, "String(" + jsg_expr_p(g, s, a, aid, 0) + ")")
         else:
             str.BufAppend(b, jsg_expr_p(g, s, a, aid, 0))
         end
-        i += 1
+        i++
     end
     if cnt > 1:
         str.BufAppend(b, `].join(" ")`)
@@ -581,6 +615,9 @@ func jsg_call_ident(
             ats := at.Get(a, a0).type_str
             if str.Equals(ats, "str"):
                 ret "salam_str_hash(" + jsg_expr_p(g, s, a, a0, 0) + ")"
+            end
+            if jsg_wide_ts(ats):
+                ret "__sal_whash(" + jsg_expr_p(g, s, a, a0, 0) + ")"
             end
             ret "salam_hash_int(" + jsg_expr_p(g, s, a, a0, 0) + ")"
         end
@@ -1063,7 +1100,7 @@ func jsg_iface_sym(s &: sm.Sema, name: str): int:
     mut i := 0
     until i < gsc.symbols.len():
         pv := sm.SymAt(s, gsc.symbols.get(i))
-        i += 1
+        i++
         if pv.kind != sm.SYM_PACKAGE or pv.members == 0:
             continue
         end
@@ -1072,7 +1109,7 @@ func jsg_iface_sym(s &: sm.Sema, name: str): int:
         until j < msc.symbols.len():
             sy := msc.symbols.get(j)
             sv := sm.SymAt(s, sy)
-            j += 1
+            j++
             if sv.members == 0:
                 continue
             end
@@ -1083,7 +1120,21 @@ func jsg_iface_sym(s &: sm.Sema, name: str): int:
             end
         end
     end
-    ret sm.OwnPackageSym(s, name, sm.SYM_INTERFACE)
+    own := sm.OwnPackageSym(s, name, sm.SYM_INTERFACE)
+    if own != 0:
+        ret own
+    end
+    repeat sm.PackageCount(s) in p:
+        pv := sm.SymAt(s, sm.PackageAt(s, p))
+        prefix := pv.pkgname + "_"
+        if pv.members != 0 and str.Len(pv.pkgname) > 0 and str.StartsWith(name, prefix):
+            sy := sm.LookupLocal(s, pv.members, str.Substr(name, str.Len(prefix), str.Len(name) - str.Len(prefix)))
+            if sy != 0 and sm.SymAt(s, sy).kind == sm.SYM_INTERFACE:
+                ret sy
+            end
+        end
+    end
+    ret 0
 end
 
 func jsg_dyn_box(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, dts: str): str:
@@ -1111,7 +1162,7 @@ func jsg_dyn_box(g &: Jg, s &: sm.Sema, a &: at.Ast, id: int, dts: str): str:
     until i < imems.symbols.len():
         msym0 := imems.symbols.get(i)
         mv := sm.SymAt(s, msym0)
-        i += 1
+        i++
         if mv.kind != sm.SYM_METHOD and mv.kind != sm.SYM_FUNC:
             continue
         end

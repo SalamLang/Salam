@@ -54,7 +54,15 @@ else:
         func isatty(fd: int): int
         func tcgetattr(fd: int, buf: void*): int
         func tcsetattr(fd: int, action: int, buf: void*): int
-        func read(fd: int, buf: void*, n: u64): i64
+    end
+    if SALAM_ARCH_X86 or SALAM_ARCH_ARM or SALAM_ARCH_WASM:
+        extern:
+            func read(fd: int, buf: void*, n: u32): int
+        end
+    else:
+        extern:
+            func read(fd: int, buf: void*, n: u64): i64
+        end
     end
 end
 
@@ -112,6 +120,18 @@ struct Session:
     pub has_main: bool = false
 end
 
+if not SALAM_OS_WINDOWS:
+    if SALAM_ARCH_X86 or SALAM_ARCH_ARM or SALAM_ARCH_WASM:
+        func _read_bytes(fd: int, buf: void*, n: int): i64:
+            ret read(fd, buf, n as u32)
+        end
+    else:
+        func _read_bytes(fd: int, buf: void*, n: int): i64:
+            ret read(fd, buf, n as u64)
+        end
+    end
+end
+
 func stderr_is_tty(): bool:
     if SALAM_OS_WINDOWS:
         ret _isatty(2) != 0
@@ -151,7 +171,7 @@ func hist_push(line: str):
         mut i := 0
         until i < HIST_MAX - 1:
             g_hist.set(i, g_hist.get(i + 1))
-            i += 1
+            i++
         end
         _p := g_hist.pop()
     end
@@ -221,16 +241,16 @@ if SALAM_OS_WINDOWS:
                         done = true
                     else vk == VK_BACK and pos > 0:
                         line = line.substr(0, pos - 1) + line.substr(pos, len - pos)
-                        pos -= 1
+                        pos--
                         print "\r" + prompt + line + " " + "\r" + prompt + line.substr(0, pos)
                     else vk == VK_DELETE and pos < len:
                         line = line.substr(0, pos) + line.substr(pos + 1, len - pos - 1)
                         print "\r" + prompt + line + " " + "\r" + prompt + line.substr(0, pos)
                     else vk == VK_LEFT and pos > 0:
-                        pos -= 1
+                        pos--
                         print "\r" + prompt + line.substr(0, pos)
                     else vk == VK_RIGHT and pos < len:
-                        pos += 1
+                        pos++
                         print "\r" + prompt + line.substr(0, pos)
                     else vk == VK_HOME:
                         pos = 0
@@ -243,7 +263,7 @@ if SALAM_OS_WINDOWS:
                             saved = line
                         end
                         if hi > 0:
-                            hi -= 1
+                            hi--
                             hline := g_hist.get(hi)
                             print "\r" + prompt + " ".repeat(len + 1) + "\r" + prompt + hline
                             line = hline
@@ -251,7 +271,7 @@ if SALAM_OS_WINDOWS:
                         end
                     else vk == VK_DOWN:
                         if hi < g_hist.len():
-                            hi += 1
+                            hi++
                             mut hline := saved
                             if hi < g_hist.len():
                                 hline = g_hist.get(hi)
@@ -276,7 +296,7 @@ if SALAM_OS_WINDOWS:
                         done = true
                     else ch >= 32 and ch < 256 and str.Len(line) < 4095:
                         line = line.substr(0, pos) + char_from_code(ch) + line.substr(pos, len - pos)
-                        pos += 1
+                        pos++
                         print "\r" + prompt + line + " " + "\r" + prompt + line.substr(0, pos)
                     end
                 end
@@ -376,7 +396,7 @@ else:
         mut done := false
         until not done:
             cb := mem.Allocate(1 as u64)
-            nr := read(0, cb, 1 as u64)
+            nr := _read_bytes(0, cb, 1)
             mut c := 0 - 1
             if nr > (0 as i64):
                 c = (cb as u8*)[0] as int
@@ -394,7 +414,7 @@ else:
             else c == 127 or c == 8:
                 if pos > 0:
                     line = line.substr(0, pos - 1) + line.substr(pos, len - pos)
-                    pos -= 1
+                    pos--
                     print "\b" + line.substr(pos, len - 1 - pos) + " " + "\b".repeat(len - pos)
                 end
             else c == 1:
@@ -413,12 +433,12 @@ else:
                 done = true
             else c == 27:
                 s1b := mem.Allocate(1 as u64)
-                n1 := read(0, s1b, 1 as u64)
+                n1 := _read_bytes(0, s1b, 1)
                 s1 := n1 > (0 as i64) ? ((s1b as u8*)[0] as int) : 0
                 mem.Free(s1b)
                 if n1 > (0 as i64) and s1 == 91:
                     s2b := mem.Allocate(1 as u64)
-                    n2 := read(0, s2b, 1 as u64)
+                    n2 := _read_bytes(0, s2b, 1)
                     s2 := n2 > (0 as i64) ? ((s2b as u8*)[0] as int) : 0
                     mem.Free(s2b)
                     if n2 > (0 as i64) and s2 == 65:
@@ -426,7 +446,7 @@ else:
                             saved = line
                         end
                         if hi > 0:
-                            hi -= 1
+                            hi--
                             hline := g_hist.get(hi)
                             print "\b".repeat(pos) + " ".repeat(len) + "\b".repeat(len) + hline
                             line = hline
@@ -434,7 +454,7 @@ else:
                         end
                     else s2 == 66:
                         if hi < g_hist.len():
-                            hi += 1
+                            hi++
                             mut hline := saved
                             if hi < g_hist.len():
                                 hline = g_hist.get(hi)
@@ -445,13 +465,13 @@ else:
                         end
                     else s2 == 67 and pos < len:
                         print line.substr(pos, 1)
-                        pos += 1
+                        pos++
                     else s2 == 68 and pos > 0:
                         print "\b"
-                        pos -= 1
+                        pos--
                     else s2 == 51:
                         tb := mem.Allocate(1 as u64)
-                        nt := read(0, tb, 1 as u64)
+                        nt := _read_bytes(0, tb, 1)
                         tch := nt > (0 as i64) ? ((tb as u8*)[0] as int) : 0
                         mem.Free(tb)
                         if nt > (0 as i64) and tch == 126 and pos < len:
@@ -462,7 +482,7 @@ else:
                 end
             else c >= 32 and c < 256 and str.Len(line) < 4095:
                 line = line.substr(0, pos) + char_from_code(c) + line.substr(pos, len - pos)
-                pos += 1
+                pos++
                 print line.substr(pos - 1, len + 1 - pos) + "\b".repeat(len - pos)
             end
         end
@@ -488,7 +508,7 @@ func skip_ws(s: str, i: int): int:
         if c != 32 and c != 9:
             ret p
         end
-        p += 1
+        p++
     end
     ret p
 end
@@ -503,7 +523,7 @@ func word_len(s: str, i: int): int:
     n := str.Len(s)
     mut e := i
     until e < n and ident_byte(byte_at(s, e)):
-        e += 1
+        e++
     end
     ret e - i
 end
@@ -513,13 +533,13 @@ func line_as_name(line: str): str:
     n := str.Len(line)
     mut e := p
     until e < n and byte_at(line, e) != 10 and byte_at(line, e) != 13:
-        e += 1
+        e++
     end
     until e > p and (byte_at(line, e - 1) == 32 or byte_at(line, e - 1) == 9):
-        e -= 1
+        e--
     end
     if e > p and byte_at(line, e - 1) == 58:
-        e -= 1
+        e--
     end
     ret str.Substr(line, p, e - p)
 end
@@ -534,7 +554,7 @@ func subject_name(s: str, after_kw: int): str:
         if not ident_byte(c) and not dotted:
             break
         end
-        e += 1
+        e++
     end
     ret str.Substr(s, p, e - p)
 end
@@ -586,7 +606,7 @@ func after_metas(text: str): str:
         end
         mut e := ls
         until e < n and byte_at(text, e) != 10:
-            e += 1
+            e++
         end
         if e >= n:
             ret ""
@@ -620,7 +640,7 @@ func classify(pack: int, text: str, name &: str): int:
         k := word_kind(pack, line, p, n)
         if is_modifier(k):
             p = skip_ws(line, p + n)
-            guard += 1
+            guard++
         else:
             if k == tok.TK_IDENT and n == 4 and str.Equals(str.Substr(line, p, n), "link"):
                 name = line_as_name(line)
@@ -660,7 +680,7 @@ func has_assignment(s: str, from: int): bool:
         if c == 61 and nxt != 61 and not assign_prev_byte(prev):
             ret true
         end
-        q += 1
+        q++
     end
     ret false
 end
@@ -673,7 +693,7 @@ func is_expr_line(pack: int, line: str): bool:
     end
     mut nl := p
     until nl < n and byte_at(line, nl) != 10:
-        nl += 1
+        nl++
     end
     if nl < n and skip_ws(line, nl + 1) < n:
         ret false
@@ -742,7 +762,7 @@ func session_defines(s &: Session, name: str): bool:
         if str.Equals(s.defs.get(i).name, name):
             ret true
         end
-        i += 1
+        i++
     end
     ret false
 end
@@ -756,7 +776,7 @@ func refresh_has_main(s &: Session, pack: int):
         if e.kind == RS_DEF and str.Equals(e.name, entry):
             s.has_main = true
         end
-        i += 1
+        i++
     end
 end
 
@@ -822,7 +842,8 @@ func entry_is_pub(pack: int, text: str): bool:
 end
 
 func put_bucket(
-    sb &: str.StringBuilder, s &: Session, pack: int, kind: int, cand: Entry, has_cand: bool, pubsel: int
+    sb &: str.StringBuilder, s &: Session, pack: int, kind: int, cand: Entry, has_cand: bool,
+    pubsel: int
 ):
     repeat s.defs.len() in i:
         e := s.defs.get(i)
@@ -868,7 +889,7 @@ func render(s &: Session, pack: int, cand: Entry, has_cand: bool): str:
     mut k := 0
     until k < RS_DEF:
         put_bucket(sb, s, pack, k, cand, has_cand, 0 - 1)
-        k += 1
+        k++
     end
     put_bucket(sb, s, pack, RS_DEF, cand, has_cand, 0)
     put_bucket(sb, s, pack, RS_DEF, cand, has_cand, 1)
@@ -1078,7 +1099,7 @@ func echo_wrap(pack: int, block: str): str:
     kw := lp.Spelling(pack, tok.TK_KW_PRINTLN)
     mut n := str.Len(block)
     until n > 0 and (byte_at(block, n - 1) == 10 or byte_at(block, n - 1) == 13):
-        n -= 1
+        n--
     end
     ret (str.Len(kw) > 0 ? kw : "println") + " " + str.Substr(block, 0, n) + "\n"
 end
@@ -1285,7 +1306,7 @@ func load_session(opt &: dr.Dr, s &: Session, pack: int, is_layout: bool, arg: s
         else:
             turn_stmt(opt, s, pack, block)
         end
-        turns += 1
+        turns++
         block = ""
     end
     if str.Len(str.TrimLeft(block)) > 0:

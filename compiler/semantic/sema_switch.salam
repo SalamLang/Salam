@@ -51,7 +51,7 @@ func sw_lit_equal(a &: at.Ast, x: int, y: int): bool:
         ret false
     end
     if xv.value_kind == tok.TV_INT:
-        ret xv.value_int == yv.value_int
+        ret xv.value_int == yv.value_int and xv.value_hi == yv.value_hi
     end
     if xv.value_kind == tok.TV_STRING:
         ret str.Equals(xv.value_str, yv.value_str)
@@ -121,12 +121,15 @@ func check_switch_item(
             mut iv2 := at.Get(a, item)
             iv2.a = mem
             at.Put(a, item, iv2)
+            _rm := resolve_enum_member(s, a, mem, syd)
+            ret
         end
         _mt := sema_check_expr(s, a, at.Get(a, item).a)
         ret
     end
     vt := sw_check_label(s, a, itn.a, subj)
-    if itn.op == 0 and not subj_is_enum and ak == at.AST_IDENTIFIER and type_is_integer(s, subj):
+    wide_coerce(s, a, itn.a, subj)
+    if itn.op == 0 and not subj_is_enum and ak == at.AST_IDENTIFIER and type_is_integer(s, subj) and not type_is_wide(s, subj):
         mut cv := 0 as i64
         if fold_operand_int(s, a, itn.a, cv):
             fold_int(a, itn.a, cv)
@@ -157,6 +160,7 @@ func check_switch_item(
     end
     if itn.op == tok.TK_KW_TO:
         ht := sw_check_label(s, a, at.Get(a, item).c, subj)
+        wide_coerce(s, a, at.Get(a, item).c, subj)
         if not sw_types_comparable(s, subj, ht):
             serr(
                 s, 21, span_of(a, at.Get(a, item).c), co.Format2(
@@ -189,10 +193,10 @@ func sw_check_enum_exhaustive(s &: Sema, a &: at.Ast, nid: int, subj: int, seen_
         end
         if not covered:
             if nmissing > 0:
-                missing = missing + ", "
+                missing += ", "
             end
-            missing = missing + sym_at(s, mid).name
-            nmissing += 1
+            missing += sym_at(s, mid).name
+            nmissing++
         end
     end
     if nmissing == 0:
@@ -225,18 +229,18 @@ func sema_check_switch(s &: Sema, a &: at.Ast, nid: int):
     mut has_else := false
     mut only_members := true
     errs_before := s.diag.errors
-    s.switch_depth += 1
+    s.switch_depth++
     mut ci := 0
     until ci < at.ChildCount(a, nid):
         cs := at.Child(a, nid, ci)
-        ci += 1
+        ci++
         if at.Get(a, cs).op == tok.TK_KW_ELSE:
             has_else = true
         else:
             mut ii := 0
             until ii < at.ChildCount(a, cs):
                 item := at.Child(a, cs, ii)
-                ii += 1
+                ii++
                 itk := at.KindOf(a, at.Get(a, item).a)
                 if at.Get(a, item).op != 0 or (itk != at.AST_IDENTIFIER and itk != at.AST_MEMBER):
                     only_members = false
@@ -248,7 +252,7 @@ func sema_check_switch(s &: Sema, a &: at.Ast, nid: int):
         end
         sema_check_block(s, a, at.Get(a, cs).b)
     end
-    s.switch_depth -= 1
+    s.switch_depth--
     if subj_is_enum and not has_else and only_members and s.diag.errors == errs_before:
         sw_check_enum_exhaustive(s, a, nid, subj, seen_members)
         if s.diag.errors == errs_before:

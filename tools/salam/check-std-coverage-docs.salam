@@ -1,0 +1,737 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import os
+import io
+import str
+import sort
+import fs.dir
+import filepath
+
+const BASELINE := "tools/salam/std-coverage-docs-baseline.txt"
+const ZWNJ := "‌"
+
+struct Sym:
+    pub pkg: str = ""
+    pub key: str = ""
+    pub kind: str = ""
+    pub base: str = ""
+    pub fa: str = ""
+    pub has_fa: bool = false
+    pub member_of_enum: bool = false
+end
+
+struct Page:
+    pub ok: bool = false
+    pub docs: HashMap<str, bool>
+    pub exs: HashMap<str, bool>
+    pub guides: HashMap<str, bool>
+    pub has_intro: bool = false
+    pub import_path: str = ""
+end
+
+struct Imp:
+    pub rel: str = ""
+    pub file: int = 0
+end
+
+struct Corpus:
+    pub texts: Vector<str>
+    pub imps: Vector<Imp>
+end
+
+func skipped(rel: str): bool:
+    each name in ["console", "conv/numfmt", "gui", "layout", "layoutgen", "map", "net", "net/internal", "os/internal", "web", "telegram"]:
+        if rel == name:
+            ret true
+        end
+    end
+    ret str.StartsWith(rel, "layout/") or str.StartsWith(rel, "net/internal/") or str.StartsWith(rel, "os/internal/")
+end
+
+func norm(s: str): str:
+    ret str.Replace(str.Trim(s), ZWNJ, " ")
+end
+
+func lines_of(text: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    parts := str.Split(text, "\n")
+    defer parts.free()
+    each p in parts:
+        out.push(str.TrimSuffix(p, "\r"))
+    end
+    ret out
+end
+
+func quoted(line: str): str:
+    a := str.IndexOf(line, `"`)
+    if a < 0:
+        ret ""
+    end
+    b := str.IndexFrom(line, `"`, a + 1)
+    if b < 0:
+        ret ""
+    end
+    ret line.substr(a + 1, b - a - 1)
+end
+
+func ident_end(s: str, from: int): int:
+    mut i := from
+    until i < s.len():
+        c := s.substr(i, 1)
+        if c == "(" or c == "<" or c == ":" or c == "=":
+            break
+        end
+        i++
+    end
+    ret i
+end
+
+func strip_mods(s: str): str:
+    mut rest := s
+    mut again := true
+    until again:
+        again = false
+        each m in ["pub ", "inline ", "noinline ", "pure ", "noret ", "deprecated ", "mut ", "static "]:
+            if str.StartsWith(rest, m):
+                rest = rest.substr(m.len(), rest.len() - m.len())
+                again = true
+            end
+        end
+    end
+    ret rest
+end
+
+func decl_name(rest: str, kw: str): str:
+    body := rest.substr(kw.len(), rest.len() - kw.len())
+    stop := ident_end(body, 0)
+    ret str.Trim(body.substr(0, stop))
+end
+
+func leading_ident(s: str): str:
+    mut i := 0
+    until i < s.len():
+        c := s.substr(i, 1)
+        if c == " " or c == "(" or c == "," or c == ":" or c == "=":
+            break
+        end
+        i++
+    end
+    ret s.substr(0, i)
+end
+
+func add_sym(syms &: Vector<Sym>, pkg: str, key: str, kind: str, base: str, fa: str, has_fa: bool, enum_member: bool):
+    if str.StartsWith(base, "_"):
+        ret
+    end
+    syms.push(Sym { pkg = pkg, key = key, kind = kind, base = base, fa = fa, has_fa = has_fa, member_of_enum = enum_member })
+end
+
+func parse_file(path: str, pkg: str, syms &: Vector<Sym>):
+    lines := lines_of(io.ReadFile(path))
+    defer lines.free()
+    mut fa := ""
+    mut has_fa := false
+    mut owner := ""
+    mut owner_enum := false
+    repeat lines.len() in i:
+        line := lines.get(i)
+        t := str.Trim(line)
+        if str.StartsWith(t, "@fa "):
+            fa = quoted(t)
+            has_fa = true
+            continue
+        end
+        if str.StartsWith(t, "@"):
+            continue
+        end
+        top := not (str.StartsWith(line, " ") or str.StartsWith(line, "\t"))
+        if top and line == "end":
+            owner = ""
+            owner_enum = false
+        end
+        if owner != "" and owner_enum and not top and t != "" and not str.StartsWith(t, "//") and not str.StartsWith(t, "end"):
+            member := leading_ident(t)
+            if member != "":
+                add_sym(syms, pkg, owner + "." + member, "member", member, fa, has_fa, true)
+            end
+            fa = ""
+            has_fa = false
+            continue
+        end
+        if not str.StartsWith(t, "pub "):
+            if t != "":
+                fa = ""
+                has_fa = false
+            end
+            continue
+        end
+        rest := strip_mods(t)
+        if str.StartsWith(rest, "use "):
+            fa = ""
+            has_fa = false
+            continue
+        end
+        if top:
+            if str.StartsWith(rest, "func "):
+                name := decl_name(rest, "func ")
+                add_sym(syms, pkg, name, "func", name, fa, has_fa, false)
+            else str.StartsWith(rest, "struct "):
+                name := decl_name(rest, "struct ")
+                add_sym(syms, pkg, name, "struct", name, fa, has_fa, false)
+                owner = name
+                owner_enum = false
+            else str.StartsWith(rest, "enum "):
+                name := decl_name(rest, "enum ")
+                add_sym(syms, pkg, name, "enum", name, fa, has_fa, false)
+                owner = name
+                owner_enum = true
+            else str.StartsWith(rest, "const "):
+                name := decl_name(rest, "const ")
+                add_sym(syms, pkg, name, "const", name, fa, has_fa, false)
+            else str.StartsWith(rest, "type "):
+                name := decl_name(rest, "type ")
+                add_sym(syms, pkg, name, "type", name, fa, has_fa, false)
+            else str.StartsWith(rest, "interface "):
+                name := decl_name(rest, "interface ")
+                add_sym(syms, pkg, name, "interface", name, fa, has_fa, false)
+            else:
+                name := leading_ident(rest)
+                add_sym(syms, pkg, name, "var", name, fa, has_fa, false)
+            end
+        else owner != "" and not owner_enum:
+            if str.StartsWith(rest, "func "):
+                name := decl_name(rest, "func ")
+                add_sym(syms, pkg, owner + "." + name, "method", name, fa, has_fa, false)
+            else str.StartsWith(rest, "const "):
+                name := decl_name(rest, "const ")
+                add_sym(syms, pkg, owner + "." + name, "const", name, fa, has_fa, false)
+            else:
+                name := leading_ident(rest)
+                add_sym(syms, pkg, owner + "." + name, "field", name, fa, has_fa, false)
+            end
+        end
+        fa = ""
+        has_fa = false
+    end
+end
+
+func package_fa(path: str): str:
+    lines := lines_of(io.ReadFile(path))
+    defer lines.free()
+    mut fa := ""
+    each line in lines:
+        t := str.Trim(line)
+        if str.StartsWith(t, "@fa "):
+            fa = quoted(t)
+        else str.StartsWith(t, "package "):
+            ret fa
+        else not str.StartsWith(t, "@"):
+            fa = ""
+        end
+    end
+    ret ""
+end
+
+func collect(root: str, only: HashMap<str, bool>, syms &: Vector<Sym>, fa_names &: HashMap<str, str>): Vector<str>:
+    mut pkgs := Vector {} as Vector<str>
+    mut seen := HashMap {} as HashMap<str, bool>
+    defer seen.free()
+    base := root + "/std"
+    files := os.Walk(base)
+    defer files.free()
+    sort.Sort(files)
+    repeat files.len() in i:
+        path := files.get(i)
+        if not str.EndsWith(path, ".salam"):
+            continue
+        end
+        folder := filepath.Dir(path)
+        if folder.len() <= base.len():
+            continue
+        end
+        rel := folder.substr(base.len() + 1, folder.len() - base.len() - 1)
+        if skipped(rel):
+            continue
+        end
+        text := io.ReadFile(path)
+        if str.IndexOf(text, "\npackage ") < 0 and not str.StartsWith(text, "package "):
+            continue
+        end
+        if only.size() > 0 and not only.has(rel):
+            continue
+        end
+        if not seen.has(rel):
+            seen.put(rel, true)
+            pkgs.push(rel)
+        end
+        pf := package_fa(path)
+        if pf != "":
+            fa_names.put(rel, pf)
+        end
+        parse_file(path, rel, syms)
+    end
+    ret pkgs
+end
+
+func parse_page(path: str): Page:
+    mut p := Page { docs = HashMap {} as HashMap<str, bool>, exs = HashMap {} as HashMap<str, bool>, guides = HashMap {} as HashMap<str, bool> }
+    p.ok = true
+    lines := lines_of(io.ReadFile(path))
+    defer lines.free()
+    each line in lines:
+        if str.StartsWith(line, "doc."):
+            p.docs.put(line.substr(4, key_end(line) - 4), true)
+        else str.StartsWith(line, "ex."):
+            p.exs.put(line.substr(3, key_end(line) - 3), true)
+        else str.StartsWith(line, "pkg.import"):
+            at := str.IndexOf(line, "=")
+            if at > 0:
+                p.import_path = norm(line.substr(at + 1, line.len() - at - 1))
+            end
+        else str.StartsWith(line, "pkg.intro"):
+            p.has_intro = true
+        end
+        mut at := str.IndexOf(line, `id="guide-`)
+        until at >= 0:
+            e := str.IndexFrom(line, `"`, at + 4)
+            if e < 0:
+                break
+            end
+            p.guides.put(line.substr(at + 4, e - at - 4), true)
+            at = str.IndexFrom(line, `id="guide-`, e)
+        end
+    end
+    ret p
+end
+
+func key_end(line: str): int:
+    mut i := 0
+    until i < line.len():
+        c := line.substr(i, 1)
+        if c == " " or c == "=" or c == "<":
+            break
+        end
+        i++
+    end
+    ret i
+end
+
+func load_pages(root: str, lang: str): HashMap<str, Page>:
+    mut out := HashMap {} as HashMap<str, Page>
+    directory := root + "/website/content/" + lang + "/std"
+    names := dir.ListFiles(directory)
+    defer names.free()
+    sort.Sort(names)
+    each name in names:
+        if not str.EndsWith(name, ".txt"):
+            continue
+        end
+        path := directory + "/" + name
+        lines := lines_of(io.ReadFile(path))
+        mut rel := ""
+        each line in lines:
+            if str.StartsWith(line, "pkg.en = "):
+                rel = str.Trim(line.substr(9, line.len() - 9))
+                break
+            end
+        end
+        lines.free()
+        if rel != "":
+            out.put(rel, parse_page(path))
+        end
+    end
+    ret out
+end
+
+func import_of(t: str, kw: str): str:
+    if not str.StartsWith(t, kw + " "):
+        ret ""
+    end
+    ret norm(t.substr(kw.len() + 1, t.len() - kw.len() - 1))
+end
+
+func load_corpus(root: str, lang: str, kw: str, wanted: HashMap<str, str>): Corpus:
+    mut c := Corpus { texts = Vector {} as Vector<str>, imps = Vector {} as Vector<Imp> }
+    files := os.Walk(root + "/tests/" + lang)
+    defer files.free()
+    sort.Sort(files)
+    each path in files:
+        if not str.EndsWith(path, ".salam"):
+            continue
+        end
+        text := io.ReadFile(path)
+        lines := lines_of(text)
+        mut idx := -1
+        mut got := HashMap {} as HashMap<str, bool>
+        each line in lines:
+            imp := import_of(str.Trim(line), kw)
+            if imp != "" and wanted.has(imp) and not got.has(imp):
+                got.put(imp, true)
+                if idx < 0:
+                    idx = c.texts.len()
+                    c.texts.push(text)
+                end
+                c.imps.push(Imp { rel = wanted.get(imp), file = idx })
+            end
+        end
+        got.free()
+        lines.free()
+    end
+    ret c
+end
+
+func mentions(c: Corpus, rel: str, base: str): bool:
+    mut names := Vector {} as Vector<str>
+    defer names.free()
+    names.push("." + base + "(")
+    if str.Contains(base, " "):
+        names.push("." + str.Replace(base, " ", ZWNJ) + "(")
+    end
+    each imp in c.imps:
+        if imp.rel != rel:
+            continue
+        end
+        text := c.texts.get(imp.file)
+        each n in names:
+            if str.Contains(text, n):
+                ret true
+            end
+        end
+    end
+    ret false
+end
+
+func has_importer(c: Corpus, rel: str): bool:
+    each imp in c.imps:
+        if imp.rel == rel:
+            ret true
+        end
+    end
+    ret false
+end
+
+func add_gap(gaps &: HashMap<str, bool>, a: str, b: str, c: str):
+    mut line := a + "|" + b
+    if c != "":
+        line = line + "|" + c
+    end
+    gaps.put(line, true)
+end
+
+func doc_key_needs_ex(s: Sym): bool:
+    ret not s.member_of_enum
+end
+
+func compare_sets(gaps &: HashMap<str, bool>, rel: str, tag: str, en: HashMap<str, bool>, fa: HashMap<str, bool>):
+    each k, _ in en:
+        if not fa.has(k):
+            add_gap(gaps, "mismatch", rel, tag + k + ":en-only")
+        end
+    end
+    each k, _ in fa:
+        if not en.has(k):
+            add_gap(gaps, "mismatch", rel, tag + k + ":fa-only")
+        end
+    end
+end
+
+func compute(root: str, only: HashMap<str, bool>, syms &: Vector<Sym>, pkgs &: Vector<str>): HashMap<str, bool>:
+    mut gaps := HashMap {} as HashMap<str, bool>
+    mut fa_names := HashMap {} as HashMap<str, str>
+    defer fa_names.free()
+    pkgs = collect(root, only, syms, fa_names)
+    pages_en := load_pages(root, "en")
+    pages_fa := load_pages(root, "fa")
+    mut want_en := HashMap {} as HashMap<str, str>
+    mut want_fa := HashMap {} as HashMap<str, str>
+    each rel in pkgs:
+        want_en.put(str.Replace(rel, "/", "."), rel)
+        mut fa_import := ""
+        if pages_fa.has(rel) and pages_fa.get(rel).import_path != "":
+            fa_import = pages_fa.get(rel).import_path
+        else:
+            mut parts := Vector {} as Vector<str>
+            mut cur := ""
+            mut ok := true
+            each seg in str.Split(rel, "/"):
+                if cur == "":
+                    cur = seg
+                else:
+                    cur = cur + "/" + seg
+                end
+                if fa_names.has(cur):
+                    parts.push(norm(fa_names.get(cur)))
+                else:
+                    ok = false
+                end
+            end
+            if ok:
+                fa_import = str.Join(parts, ".")
+            end
+            parts.free()
+        end
+        if fa_import != "":
+            want_fa.put(fa_import, rel)
+        end
+    end
+    en_corpus := load_corpus(root, "en", "import", want_en)
+    fa_corpus := load_corpus(root, "fa", "واردسازی", want_fa)
+    each rel in pkgs:
+        tested_en := has_importer(en_corpus, rel)
+        tested_fa := has_importer(fa_corpus, rel)
+        if not tested_en:
+            add_gap(gaps, "no-test-en", rel, "")
+        end
+        if not tested_fa:
+            add_gap(gaps, "no-test-fa", rel, "")
+        end
+        has_en := pages_en.has(rel)
+        has_fa := pages_fa.has(rel)
+        if not has_en:
+            add_gap(gaps, "no-page-en", rel, "")
+        end
+        if not has_fa:
+            add_gap(gaps, "no-page-fa", rel, "")
+        end
+        mut pen := Page { docs = HashMap {} as HashMap<str, bool>, exs = HashMap {} as HashMap<str, bool>, guides = HashMap {} as HashMap<str, bool> }
+        mut pfa := Page { docs = HashMap {} as HashMap<str, bool>, exs = HashMap {} as HashMap<str, bool>, guides = HashMap {} as HashMap<str, bool> }
+        if has_en:
+            pen = pages_en.get(rel)
+            if not pen.has_intro:
+                add_gap(gaps, "no-intro-en", rel, "")
+            end
+            if pen.guides.size() < 2:
+                add_gap(gaps, "few-guides-en", rel, "")
+            end
+        end
+        if has_fa:
+            pfa = pages_fa.get(rel)
+            if not pfa.has_intro:
+                add_gap(gaps, "no-intro-fa", rel, "")
+            end
+            if pfa.guides.size() < 2:
+                add_gap(gaps, "few-guides-fa", rel, "")
+            end
+        end
+        if has_en and has_fa:
+            compare_sets(gaps, rel, "doc.", pen.docs, pfa.docs)
+            compare_sets(gaps, rel, "ex.", pen.exs, pfa.exs)
+            compare_sets(gaps, rel, "", pen.guides, pfa.guides)
+        end
+        each s in syms:
+            if s.pkg != rel:
+                continue
+            end
+            if not s.has_fa:
+                add_gap(gaps, "no-fa-name", rel, s.key)
+            end
+            if has_en:
+                if not pen.docs.has(s.key):
+                    add_gap(gaps, "no-doc-en", rel, s.key)
+                end
+                if doc_key_needs_ex(s) and not pen.exs.has(s.key):
+                    add_gap(gaps, "no-ex-en", rel, s.key)
+                end
+            end
+            if has_fa:
+                if not pfa.docs.has(s.key):
+                    add_gap(gaps, "no-doc-fa", rel, s.key)
+                end
+                if doc_key_needs_ex(s) and not pfa.exs.has(s.key):
+                    add_gap(gaps, "no-ex-fa", rel, s.key)
+                end
+            end
+            if s.kind == "func" or s.kind == "method":
+                if tested_en and not mentions(en_corpus, rel, s.base):
+                    add_gap(gaps, "untested-en", rel, s.key)
+                end
+                if tested_fa and s.has_fa and not mentions(fa_corpus, rel, s.fa):
+                    add_gap(gaps, "untested-fa", rel, s.key)
+                end
+            end
+        end
+    end
+    ret gaps
+end
+
+func sorted_keys(m: HashMap<str, bool>): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    each k, _ in m:
+        out.push(k)
+    end
+    sort.Sort(out)
+    ret out
+end
+
+func read_baseline(root: str): HashMap<str, bool>:
+    mut out := HashMap {} as HashMap<str, bool>
+    path := root + "/" + BASELINE
+    if not os.Exists(path):
+        ret out
+    end
+    each line in lines_of(io.ReadFile(path)):
+        t := str.Trim(line)
+        if t != "" and not str.StartsWith(t, "#"):
+            out.put(t, true)
+        end
+    end
+    ret out
+end
+
+func yn(b: bool): str:
+    if b:
+        ret "yes"
+    end
+    ret "NO"
+end
+
+func show_counts(gaps: HashMap<str, bool>):
+    mut cats := HashMap {} as HashMap<str, int>
+    each g, _ in gaps:
+        parts := str.Split(g, "|")
+        cats.put(parts.get(0), cats.get(parts.get(0)) + 1)
+        parts.free()
+    end
+    mut counts := HashMap {} as HashMap<str, int>
+    each g, _ in gaps:
+        parts := str.Split(g, "|")
+        counts.put(parts.get(1), counts.get(parts.get(1)) + 1)
+        parts.free()
+    end
+    mut names := Vector {} as Vector<str>
+    each k, _ in counts:
+        names.push(k)
+    end
+    sort.Sort(names)
+    each n in names:
+        println str.FromInt(counts.get(n) as i64) + "\t" + n
+    end
+    println "--- by category"
+    mut cn := Vector {} as Vector<str>
+    each k, _ in cats:
+        cn.push(k)
+    end
+    sort.Sort(cn)
+    each n in cn:
+        println str.FromInt(cats.get(n) as i64) + "\t" + n
+    end
+    println "total", gaps.size()
+end
+
+func show_table(syms: Vector<Sym>, gaps: HashMap<str, bool>):
+    each s in syms:
+        p := s.pkg
+        k := s.key
+        mut kinds := "fa=" + yn(not gaps.has("no-fa-name|" + p + "|" + k))
+        kinds = kinds + " docEn=" + yn(not gaps.has("no-doc-en|" + p + "|" + k))
+        kinds = kinds + " exEn=" + yn(not gaps.has("no-ex-en|" + p + "|" + k) or s.member_of_enum)
+        kinds = kinds + " docFa=" + yn(not gaps.has("no-doc-fa|" + p + "|" + k))
+        kinds = kinds + " exFa=" + yn(not gaps.has("no-ex-fa|" + p + "|" + k) or s.member_of_enum)
+        if s.kind == "func" or s.kind == "method":
+            kinds = kinds + " testEn=" + yn(not gaps.has("untested-en|" + p + "|" + k) and not gaps.has("no-test-en|" + p))
+            kinds = kinds + " testFa=" + yn(not gaps.has("untested-fa|" + p + "|" + k) and not gaps.has("no-test-fa|" + p))
+        end
+        println p + "\t" + s.kind + "\t" + k + "\t" + kinds
+    end
+end
+
+func usage(): int:
+    printerrln "usage: check-std-coverage-docs.salam [check | list | counts | prune | table <package>...]"
+    ret 2
+end
+
+func main:
+    mut root := os.Cwd()
+    if not os.IsDir(root + "/std") and os.IsDir(root + "/../std"):
+        root = filepath.Clean(root + "/..")
+    end
+    args := os.Args()
+    defer args.free()
+    mut mode := "check"
+    if args.len() > 1:
+        mode = args.get(1)
+    end
+    mut only := HashMap {} as HashMap<str, bool>
+    if mode == "table":
+        repeat args.len() - 2 in i:
+            only.put(args.get(i + 2), true)
+        end
+        if only.size() == 0:
+            ret usage()
+        end
+    else mode != "check" and mode != "list" and mode != "counts" and mode != "prune":
+        ret usage()
+    end
+    mut syms := Vector {} as Vector<Sym>
+    mut pkgs := Vector {} as Vector<str>
+    gaps := compute(root, only, syms, pkgs)
+    if mode == "list":
+        each g in sorted_keys(gaps):
+            println g
+        end
+        ret 0
+    end
+    if mode == "counts":
+        show_counts(gaps)
+        ret 0
+    end
+    if mode == "table":
+        show_table(syms, gaps)
+        each g in sorted_keys(gaps):
+            if not str.StartsWith(g, "no-fa-name") and not str.StartsWith(g, "no-doc") and not str.StartsWith(g, "no-ex") and not str.StartsWith(g, "untested"):
+                println "gap", g
+            end
+        end
+        ret 0
+    end
+    known := read_baseline(root)
+    mut fresh := Vector {} as Vector<str>
+    mut stale := Vector {} as Vector<str>
+    each g in sorted_keys(gaps):
+        if not known.has(g):
+            fresh.push(g)
+        end
+    end
+    each g in sorted_keys(known):
+        if not gaps.has(g):
+            stale.push(g)
+        end
+    end
+    if mode == "prune":
+        if fresh.len() > 0:
+            printerrln "refusing to prune: there are new gaps"
+            ret 1
+        end
+        io.WriteFile(root + "/" + BASELINE, str.Join(sorted_keys(gaps), "\n") + "\n")
+        println "baseline now has", gaps.size(), "lines"
+        ret 0
+    end
+    if fresh.len() > 0:
+        printerrln "std coverage: " + str.FromInt(fresh.len() as i64) + " new gap(s). Fix them (tests in tests/en and tests/fa, @fa names, doc. and ex. keys in both website languages):"
+        each g in fresh:
+            printerrln "  " + g
+        end
+    end
+    if stale.len() > 0:
+        printerrln "std coverage: " + str.FromInt(stale.len() as i64) + " gap(s) in " + BASELINE + " no longer exist. Remove those lines (run `salam run tools/salam/check-std-coverage-docs.salam prune`):"
+        each g in stale:
+            printerrln "  " + g
+        end
+    end
+    if fresh.len() > 0 or stale.len() > 0:
+        ret 1
+    end
+    println "std coverage docs: " + str.FromInt(pkgs.len() as i64) + " packages, " + str.FromInt(syms.len() as i64) + " public symbols, " + str.FromInt(known.size() as i64) + " known gaps"
+end

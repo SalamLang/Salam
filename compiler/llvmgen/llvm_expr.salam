@@ -180,7 +180,7 @@ func lv_concat_chain(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): str:
         nx := new_tmp(v)
         emit(v, nx + " = add " + u + " " + sum + ", " + lens.get(k))
         sum = nx
-        k += 1
+        k++
     end
     tot := new_tmp(v)
     emit(v, tot + " = add " + u + " " + sum + ", 1")
@@ -264,6 +264,8 @@ func str_operand(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): str:
                 v, r + " = call ptr @salam_ll_f64str(double " + dref + ")"
             )
         end
+    else is_wide_ts(ts):
+        r = wide_tostr(v, s, a, val.ref, str.Equals(ts, "i128"))
     else is_int_ts(ts):
         if is_signed_ts(ts):
             need(v, LV_H_I64STR)
@@ -600,6 +602,10 @@ func lv_binary(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
         )
         rcs = rmask
     end
+    if is_wide_ts(rt) and (op == tok.TK_SLASH or op == tok.TK_PERCENT):
+        wide_zero_check(v, rcs, op)
+        ret make_llv(wide_divmod(v, s, a, op, str.Equals(rt, "i128"), lc3, rcs), rt)
+    end
     if v.div_check and (op == tok.TK_SLASH or op == tok.TK_PERCENT) and is_int_ts(rt) and not lv_is_int_lit(a, node.b):
         nzL := new_lbl(v, "dz_ok")
         zL := new_lbl(v, "dz_zero")
@@ -725,7 +731,7 @@ func lower_print_free(
                     emit(v, "call void @salam_out_write(ptr " + lit + ", i64 " + co.I64Toa(n as i64) + ")")
                 end
             end
-            i += 1
+            i++
             continue
         end
         val := lv_expr(v, s, a, sg.expr)
@@ -744,6 +750,8 @@ func lower_print_free(
             ref = call_runtime_val(v, s, a, "salam_tostr_i64", "i64", conv(v, s, a, val, "i64"), "ptr")
         else sg.kind == cg.PF_U64 or sg.kind == cg.PF_SIZE:
             ref = call_runtime_val(v, s, a, "salam_tostr_u64", "i64", conv(v, s, a, val, "u64"), "ptr")
+        else sg.kind == cg.PF_I128 or sg.kind == cg.PF_U128:
+            ref = wide_tostr(v, s, a, val.ref, sg.kind == cg.PF_I128)
         else:
             ref = strconst(v, "<f64>")
         end
@@ -754,7 +762,7 @@ func lower_print_free(
         if sg.kind == cg.PF_STR and lv_is_derived_call(a, sg.expr):
             emit(v, "call void @free(ptr " + ref + ")")
         end
-        i += 1
+        i++
     end
 end
 
@@ -777,6 +785,8 @@ func lower_print_buf(
             refs.push(conv(v, s, a, val, "i32"))
         else sg.kind == cg.PF_F64:
             refs.push(call_runtime_val(v, s, a, "salam_fmt_f64", "double", conv(v, s, a, val, "f64"), "ptr"))
+        else sg.kind == cg.PF_I128 or sg.kind == cg.PF_U128:
+            refs.push(wide_tostr(v, s, a, val.ref, sg.kind == cg.PF_I128))
         else sg.kind == cg.PF_U32 or sg.kind == cg.PF_U64 or sg.kind == cg.PF_SIZE:
             refs.push(conv(v, s, a, val, "u64"))
         else:
@@ -795,7 +805,7 @@ func lower_print_buf(
             if tn > 0:
                 emit(v, "call void @salam_out_write(ptr " + strconst(v, sg.text) + ", i64 " + co.I64Toa(tn as i64) + ")")
             end
-        else sg.kind == cg.PF_STR or sg.kind == cg.PF_F64:
+        else sg.kind == cg.PF_STR or sg.kind == cg.PF_F64 or sg.kind == cg.PF_I128 or sg.kind == cg.PF_U128:
             emit(v, "call void @salam_out_str(ptr " + r + ")")
         else sg.kind == cg.PF_BOOL:
             sp := new_tmp(v)
@@ -819,7 +829,7 @@ func lower_print_buf(
     emit(v, "call void @salam_out_unlock()")
     repeat segs.len() in fi:
         fsg := segs.get(fi)
-        if fsg.kind == cg.PF_STR and lv_is_derived_call(a, fsg.expr):
+        if (fsg.kind == cg.PF_STR and lv_is_derived_call(a, fsg.expr)) or fsg.kind == cg.PF_I128 or fsg.kind == cg.PF_U128:
             emit(v, "call void @free(ptr " + refs.get(fi) + ")")
         end
     end
@@ -849,7 +859,7 @@ func lv_lower_print(
             if segs.get(i).kind != cg.PF_LIT:
                 all_lit = false
             end
-            i += 1
+            i++
         end
         if all_lit:
             mut raw := co.SbNew()
@@ -892,7 +902,7 @@ func lv_lower_print(
                     co.SbPutc(fmt, 37)
                 end
                 co.SbPutc(fmt, ch)
-                ti += 1
+                ti++
             end
         else:
             val := lv_expr(v, s, a, sg.expr)
@@ -903,6 +913,10 @@ func lv_lower_print(
                 if lv_is_derived_call(a, sg.expr):
                     dfree.push(val.ref)
                 end
+            else sg.kind == cg.PF_I128 or sg.kind == cg.PF_U128:
+                wide_s := wide_tostr(v, s, a, val.ref, sg.kind == cg.PF_I128)
+                av = ", ptr " + wide_s
+                dfree.push(wide_s)
             else sg.kind == cg.PF_BOOL:
                 t2 := strconst(v, "true")
                 f2 := strconst(v, "false")

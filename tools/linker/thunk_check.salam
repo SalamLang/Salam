@@ -1,0 +1,151 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import os
+import archive
+import compress
+import encoding.binary
+
+const USAGE := "Checks images written by the built-in linker's thunk tests.\n\nexidx <elf>     an ARM image has exactly three .ARM.exidx entries in address\n                order, the middle one for the thunk area (0x80B0B0B0)\nmacfar <macho>  every bl in _main of an arm64 Mach-O image reaches its target\n                through its thunk: _far, and the __stubs entry\n"
+
+func check_exidx(path: str): bool:
+    mut ok := false
+    mut buf := archive.ReadBinaryFile(path, ok)
+    defer compress.BufFree(buf)
+    if not ok:
+        ret false
+    end
+    d := binary.ViewOf(buf)
+    shoff := binary.GetU32LE(d, 32) as int
+    shentsize := binary.GetU16LE(d, 46)
+    shnum := binary.GetU16LE(d, 48)
+    mut fns := Vector {} as Vector<i64>
+    defer fns.free()
+    mut last := Vector {} as Vector<i64>
+    defer last.free()
+    repeat shnum in k:
+        sh := shoff + k * shentsize
+        if binary.GetU32LE(d, sh + 4) == 1879048193:
+            addr := binary.GetU32LE(d, sh + 12)
+            off := binary.GetU32LE(d, sh + 16) as int
+            size := binary.GetU32LE(d, sh + 20) as int
+            mut e := 0
+            until e < size:
+                w0 := binary.GetU32LE(d, off + e)
+                w1 := binary.GetU32LE(d, off + e + 4)
+                mut rel := w0
+                if (w0 >> 30) != 0:
+                    rel = w0 - 2147483648
+                end
+                fns.push((addr + (e as i64) + rel) & 4294967295)
+                last.push(w1)
+                e += 8
+            end
+        end
+    end
+    if fns.len() != 3:
+        ret false
+    end
+    ret fns.get(0) < fns.get(1) and fns.get(1) < fns.get(2) and last.get(1) == 2159063216
+end
+
+func sx(v: i64, n: int): i64:
+    if ((v >> ((n - 1) as i64)) & 1) != 0:
+        ret v - (1 as i64 << (n as i64))
+    end
+    ret v
+end
+
+func follow(d: binary.View, a: i64): i64:
+    base := 4294967296 as i64
+    i := binary.GetU32LE(d, (a - base) as int)
+    if (i >> 26) != 37:
+        ret 0 - 1
+    end
+    t := a + sx(i & 67108863, 26) * 4
+    i1 := binary.GetU32LE(d, (t - base) as int)
+    i2 := binary.GetU32LE(d, (t - base) as int + 4)
+    i3 := binary.GetU32LE(d, (t - base) as int + 8)
+    if (i1 & 2667577375) != 2415919120 or (i2 & 4290774015) != 2432696848 or i3 != 3592356352:
+        ret 0 - 1
+    end
+    pg := ((i1 >> 29) & 3) | (((i1 >> 5) & 524287) << 2)
+    ret (t & ~(4095 as i64)) + sx(pg, 21) * 4096 + ((i2 >> 10) & 4095)
+end
+
+func check_macfar(path: str): bool:
+    mut ok := false
+    mut buf := archive.ReadBinaryFile(path, ok)
+    defer compress.BufFree(buf)
+    if not ok:
+        ret false
+    end
+    d := binary.ViewOf(buf)
+    ncmds := binary.GetU32LE(d, 16) as int
+    mut at := 32
+    mut main_at := 0 as i64
+    mut far_at := 0 as i64
+    mut stubs := 0 as i64
+    repeat ncmds:
+        cmd := binary.GetU32LE(d, at)
+        size := binary.GetU32LE(d, at + 4) as int
+        if cmd == 25:
+            nsect := binary.GetU32LE(d, at + 64) as int
+            repeat nsect in k:
+                sh := at + 72 + 80 * k
+                if binary.FixedStringAt(d, sh, 16) == "__stubs":
+                    stubs = binary.GetU64LE(d, sh + 32)
+                end
+            end
+        end
+        if cmd == 2:
+            symoff := binary.GetU32LE(d, at + 8) as int
+            nsyms := binary.GetU32LE(d, at + 12) as int
+            stroff := binary.GetU32LE(d, at + 16) as int
+            repeat nsyms in k:
+                strx := binary.GetU32LE(d, symoff + 16 * k) as int
+                name := binary.CStringAt(d, stroff + strx)
+                if name == "_main":
+                    main_at = binary.GetU64LE(d, symoff + 16 * k + 8)
+                end
+                if name == "_far":
+                    far_at = binary.GetU64LE(d, symoff + 16 * k + 8)
+                end
+            end
+        end
+        at += size
+    end
+    if main_at == 0 or far_at == 0 or stubs == 0:
+        ret false
+    end
+    ret follow(d, main_at + 4) == far_at and follow(d, main_at + 8) == stubs
+end
+
+func main:
+    args := os.Args()
+    if args.len() >= 3 and args.get(1) == "exidx":
+        if check_exidx(args.get(2)):
+            ret 0
+        end
+        ret 1
+    end
+    if args.len() >= 3 and args.get(1) == "macfar":
+        if check_macfar(args.get(2)):
+            ret 0
+        end
+        ret 1
+    end
+    print USAGE
+    ret 2
+end

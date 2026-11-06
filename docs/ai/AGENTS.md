@@ -125,6 +125,12 @@ rename those by hand.
 **7. Check your work.** `salam check` after every edit, `salam format`, then
 `salam test` or `salam run`. A program you did not compile is not finished.
 
+**8. Update a variable with the compound form.** Step by one with `x++` and
+`x--`; for any other amount write `x += n`, `x -= n`, `x *= n` and so on.
+`x = x + 1`, `x += 1`, `x = x + n` and `x = x` are compile error `E162`; the
+message names the form to write, and `salam check --fix` applies it. In a
+Persian file the same rule holds: `ک++`, `ک += ن`.
+
 Example. "Convert `def hex_to_decimal(hex): return int(hex, 16)`" is one line,
 because std already does it, and it keeps Python's behaviour of failing on bad
 input:
@@ -156,7 +162,7 @@ keyword in Salam at all - `until` is the only spelling this loop has.
 mut i := 0
 until i < n:        // reads "while i < n"
     // ...
-    i += 1
+    i++
 end
 ```
 
@@ -176,7 +182,7 @@ end
 
 n := 200 as u8
 repeat n in i:            // i is u8 here
-    total = total + v.get(i as int)   // ...so a signed parameter needs a cast
+    total += v.get(i as int)   // ...so a signed parameter needs a cast
 end
 ```
 
@@ -231,7 +237,7 @@ fix is to drop the binding rather than rename it. Write `repeat 20000:`, not
 
 ```salam
 each _, value in scores:     // iterate for the values alone
-    total = total + value
+    total += value
 end
 ```
 
@@ -539,6 +545,14 @@ enum Color:
 end
 ```
 
+## Changing the standard library
+
+If the task adds to `std/`, the change is not done until every public symbol
+has `@en` and `@fa` names, tests in `tests/en/stdlib/` and `tests/fa/stdlib/`,
+and `doc.` and `ex.` keys in both site std pages (new packages also need
+`guide-*` sections). Run `salam run tools/salam/check-std-coverage-docs.salam`;
+CONTRIBUTING.md has the full list.
+
 ---
 
 ## Known traps
@@ -556,6 +570,14 @@ advice. Each one silently produces wrong behaviour rather than a diagnostic.
   value) beyond 2^53 is rounded: `0 - 1` as `u64` prints
   `18446744073709552000`. `sizeof` throws. Check wide 64-bit math, such as
   hashes, with `salam run`.
+  `i128`/`u128` are BigInts and stay exact, but a value that passes through
+  `i64` or `u64` on the way in or out is still limited to 2^53 there.
+
+- **`i128` and `u128` have a few limits of their own.** They cannot index an
+  array, bound a slice, size a string repeat or count a `repeat` (`E159`: cast
+  to `i64` first). An `extern` function can use them only on 64-bit targets,
+  and a variadic one never (`E160`). `json` derive refuses them. A float cast
+  saturates and NaN gives 0.
 
 - **A file's module is keyed by its filename.** Two included files with the
   same name (`a/io.salam` and `b/io.salam`), or one of your files named after a

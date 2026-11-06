@@ -138,6 +138,20 @@ branch to the panic per division by a non-constant.
 
 ## 32-bit x86
 
+Right after the control flow graph is built, on every target, `ng_w128.salam`
+splits each `i128` into two `i64` values, so no optimization pass ever sees a
+128-bit integer. An addition becomes two additions and a carry compare, and a
+variable shift becomes shifts and selects; multiplication uses `OP_MULHU` on
+64-bit targets and four 32-bit products elsewhere. Division calls
+`salam_w128_divmod` in `std/core`, on every target, so no libgcc routine is
+needed. Within the program an `i128` argument is two `i64` arguments and an
+`i128` result comes back through a hidden pointer argument, which inlining and
+SROA then remove. A call to an external function follows the C ABI instead:
+two registers (an even pair on AArch64, both on the stack when only one
+register is left on x86-64) and the result in two registers. On 32-bit targets
+and on Windows that call is refused with a clear error; a C-callable function
+that takes or returns `i128` is refused on every target.
+
 The `i686` targets reuse the x86-64 pipeline with three additions.
 
 - Before instruction selection, `ng_legal.salam` splits every 64-bit integer
@@ -322,6 +336,7 @@ All of it lives in `compiler/nativegen/`:
 | `ng_enc.salam`                                                     | x86-64 encoder, prologues and epilogues, branch relaxation, Windows unwind info                                                                                             |
 | `ng_a64.salam`                                                     | AArch64 encoder: machine instructions to A64 words, flag translation, frame records, relocations                                                                            |
 | `ng_legal.salam`                                                   | Splits 64-bit integers into 32-bit pairs for the 32-bit targets, and turns ARM divisions into library calls                                                                 |
+| `ng_w128.salam`                                                    | Splits 128-bit integers into 64-bit halves on every target, before optimization                                                                                             |
 | `ng_arm.salam`                                                     | 32-bit ARM encoder: machine instructions to A32/VFP words, frame, atomics, relocations                                                                                      |
 | `ng_rv64.salam`                                                    | RISC-V 64 encoder: machine instructions to RV64GC words, flag emulation, frame, atomics, relocations                                                                        |
 | `ng_elf.salam`, `ng_coff.salam`, `ng_macho.salam`                  | Object file writers                                                                                                                                                         |
@@ -578,7 +593,7 @@ then goes through:
    and any number of integer add reductions and min or max reductions
    (`m = x > m ? x : m`, or the same as an `if`, either sign; 64-bit ones
    on AArch64 only), which end in a shuffle-and-select tree, and counts of bytes that match a
-   compare (`if b[i] == 0: n += 1`, either polarity), which mask each match
+   compare (`if b[i] == 0: n++`, either polarity), which mask each match
    to 1 and sum sixteen at a time with `psadbw` (`uaddlv` on AArch64) into
    64-bit lanes. A loop that stores gets a
    runtime check that each stored range is disjoint from every range it
@@ -815,7 +830,7 @@ then goes through:
    the range where they all hold, and the original loop runs the iterations
    at the edges.
    Small innermost loops whose trip count is only known at runtime
-   (`until j < i:` with `j += 1`, or counting down) run two iterations per
+   (`until j < i:` with `j++`, or counting down) run two iterations per
    test, four when the body is tiny, with the original loop finishing the
    rest. The test compares the
    counter with a limit adjusted once before the loop, so it never computes a
@@ -1210,7 +1225,7 @@ ret end` at the top of a recursive AST walk) tests that parameter before
   skips its level with a warning). It also disassembles a test to confirm
   `pblendvb` and `ymm` appear at those levels, from both `--cpu` and
   `SALAM_NATIVE_CPU`, and not in the baseline build.
-- `python3 -I tools/fuzz/salamfuzz.py <salam>` generates random programs
+- `salam run tools/fuzz/salamfuzz.salam -- <salam>` generates random programs
   (integer code with loops and vectors, vector kernels over `int`, `u8`,
   `i16` and `i64`, clamped `f64` code, calls with eight arguments and a
   struct passed by reference, string building, slicing and UTF-8 walks,
@@ -1223,9 +1238,10 @@ ret end` at the top of a recursive AST walk) tests that parameter before
   wrapped into range), builds each with the reference backend and the native
   backend, and compares their output. `--count`, `--seed`, `--target` with
   `--runner`, `--ref` and `--keep` (which saves the programs that differ)
-  adjust it. The gate runs 30 on x86-64 and 15 per emulated target, seeded
-  with the run number, so each run tries new programs.
-- `python3 -I tools/linker/machorun.py <exe>` runs a linked x86-64 macOS
+  adjust it. The same seed gives the same programs on every run. The gate
+  runs 30 on x86-64 and 15 per emulated target, seeded with the run number,
+  so each run tries new programs.
+- `tools/linker/machorun.salam` (build it with `salam build tools/linker/machorun.salam --output=machorun`, then `machorun <exe>`) runs a linked x86-64 macOS
   executable on x86-64 Linux: it maps the segments into this process, applies
   the rebase and bind opcodes against glibc (Darwin names such as `___error`
   and `___stdoutp` map to their glibc counterparts) and calls `_main`.

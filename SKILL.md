@@ -197,6 +197,17 @@ right-associative and tighter than unary minus (`2 ** 3 ** 2 == 512`,
 `x as i64 ** 2` is a cast then a power. There is no `&&`, `||`, `!` or `^^`:
 the compiler rejects them and names the word to write instead.
 `^` on its own remains bitwise XOR.
+**Update a variable in place, never by assigning it to itself.** Add or
+subtract exactly one with `x++` / `x--` (Persian `ک++`), and use `x += n`,
+`x -= n`, `x *= n`, ... for every other amount. The long forms are compile
+error `E162`: `x = x + 1`, `x = 1 + x`, `x += 1`, `x -= 1` (write `x++` /
+`x--`); `x = x + n`, `x = n + x`, `x = x * n`, `x = x << n`, `x = x | n`, ...
+(write `x += n`, `x *= n`, ...); and the statements that do nothing, `x = x`,
+`x = x + 0`, `x = x - 0`, `x = x * 1`, `x = x / 1`, `x += 0`, `x |= 0`,
+`x <<= 0` (remove them). It applies to numbers and to `str` (`s = s + t`
+becomes `s += t`; `s = t + s` is a prepend and stays), to plain variables,
+fields (`this.n`, `p.x`), arrays and pointers (`a[i]`, `p[0]`). `x = y - x`,
+`x = x * y + z` and `x = x + y + z` are not self-updates and stay legal.
 **Bitwise operators** (integer operands only): `& | ^ ~` and shifts `<< >>`, with
 compound forms `&= |= ^= <<= >>=`. Precedence follows C: shifts bind tighter than
 comparisons; `&` tighter than `^` tighter than `|`, all looser than `==`
@@ -211,7 +222,7 @@ else x == 0:  println "zero"          // "else <cond>" is else-if
 else:  println "negative"
 end
 
-until i < n:  i = i + 1  end          // loops WHILE the condition holds - "while" doesn't exist, see box below
+until i < n:  i++  end               // loops WHILE the condition holds - "while" doesn't exist, see box below
 repeat 3:  println "hi"  end          // do 3 times
 repeat n in i:  println i  end        // i = 0 .. n-1 ("in" binds the index)
 repeat 1 to 5:  ...  end              // 1..5 inclusive
@@ -336,7 +347,7 @@ end
   mutate the caller's value (in/out params, and to avoid copying big structs):
 
   ```salam
-  func bump(c &: Counter):  c.n = c.n + 1  end   // caller's Counter is modified
+  func bump(c &: Counter):  c.n++  end   // caller's Counter is modified
   func push_all(dst &: Vector<int>, src: Vector<int>): ... end
   ```
 
@@ -347,11 +358,11 @@ end
 - **Closures/lambdas** are first-class typed values, always written
   `(params): ... end` with an explicit `ret` for the value:
   `(x: int): ret x * 2 end`, or several statements
-  `(): n = n + 1  ret n  end`. Salam has no `=>` at all; it was removed in
+  `(): n++  ret n  end`. Salam has no `=>` at all; it was removed in
   0.5.0. Function-typed parameters: `func () int`, `func (int, int) bool`.
   - **Lambdas capture by value.** Each lambda gets its own copy of the outer
     variables at creation time: after `mut n := 1  g := (): ret n end  n = 5`,
-    `g()` is still `1`, and a block lambda that does `n = n + 1` changes its
+    `g()` is still `1`, and a block lambda that does `n++` changes its
     own copy (it counts across calls), never the caller's `n`. Share state
     through a pointer, a heap collection or a `mut` global.
   - **Never write a return type on a lambda.** `(x: int): int: ... end`
@@ -415,9 +426,19 @@ x, y = y, x                   // assign several targets at once (swap)
 
 ## 3. Types & data
 
-**Primitives:** `i8 i16 i32 i64`, `u8 u16 u32 u64`, `usize size`, `f32 f64`,
-`bool`, `char`, `str`, `void`. Aliases: `int`=`i32`, `uint`=`u32`,
+**Primitives:** `i8 i16 i32 i64 i128`, `u8 u16 u32 u64 u128`, `usize size`,
+`f32 f64`, `bool`, `char`, `str`, `void`. Aliases: `int`=`i32`, `uint`=`u32`,
 `float`=`f32`. Literals: `42` (int), `3.14` (f64), `true`/`false`, `null`.
+**128-bit integers:** `i128` and `u128` work on every backend and target, with
+the same operators as the other widths: `hi := ((a as u128) * (b as u128)) >> 64`
+compiles to one `mul` on 64-bit targets. A literal above `u64` takes the
+smallest of `i128`, `u128` that holds it; `x := 1 as u128 << 100`, `0xFF_FF as
+u128`. Mixed widths follow the usual rule (same signedness widens implicitly).
+Shift counts mask to 0-127. A float cast saturates and NaN gives 0. They cannot
+index, size or bound a `repeat` (E159: cast to `i64` first), `json` derive
+refuses them, and an `extern` function can use them only on 64-bit targets
+(E160). On `salam js` they are exact BigInts, but a value that passes through
+`i64`/`u64` there is still limited to 2^53.
 **Pointer-width integers:** `usize` is unsigned (C `size_t`; Persian
 `اندازه مثبت`), `size` is signed (C `intptr_t`; Persian `اندازه`). Both are 64
 bits on 64-bit targets and 32 bits on 32-bit ones (wasm32, arm32).
@@ -536,7 +557,7 @@ len(a)                                // length builtin: arrays, slices, str (a 
 ```salam
 struct Account:
     pub balance: int = 0              // pub = visible/usable outside; default value
-    pub func deposit(n: int):  this.balance = this.balance + n  end
+    pub func deposit(n: int):  this.balance += n  end
 end
 mut a := Account { balance = 100 }    // struct literal; omitted fields use defaults
 a.deposit(50)
@@ -545,6 +566,51 @@ println a.balance
 
 Fields and methods are **private by default**; add `pub` to expose. `this` is the
 receiver.
+
+A field with no default is **required**: a literal that omits it fails with
+`E028`. A field with a default is optional: `pub host: str` must be set in every
+literal, `pub port: int = 443` can be left out. The check runs on struct literals
+only, so `mut c: Client` and generic `T {}` still zero the field.
+
+**Conditional fields:** a struct can state which fields depend on each other.
+The compiler checks every struct literal against the rules, using which fields
+the literal writes, not their values.
+
+```salam
+struct Client:
+    pub host: str
+    pub user: str = ""
+    pub pass: str = ""
+    pub token: str = ""
+    pub cert: str = ""
+    pub key: str = ""
+    rule user needs pass          // user given: pass must be given too
+    rule allornone(cert, key)     // both or neither
+    rule anyof(user, token)       // at least one
+end
+```
+
+Forms: `rule a needs b, c`, `rule allornone(a, b)`, `rule oneof(a, b)` (exactly
+one), `rule anyof(a, b)` (at least one), `rule atmostone(a, b)`. Persian: `قاعده`,
+`نیازمند`, `باهم`, `فقط یکی`, `دست کم یکی`, `حداکثر یکی`. `rule` stays a legal field
+name. `E159` is a literal that breaks a rule, `E160` an invalid rule (unknown
+field, or a private field in a `pub` struct), `E161` rules no literal can satisfy,
+`W159` a rule that can never fail.
+
+A literal must carry the whole group: `Client { user = "u" }` is an error even if
+`c.pass = "p"` follows, and assigning to a field later is not checked.
+`Client { user = "" }` counts as given. When a guarantee must survive mutation,
+use an enum with data (`Basic(user: str, pass: str)`) or a constructor.
+
+A `needs` rule can test a value: `rule use_key == true needs key_pem`, also with
+numbers, strings and plain enum members (`rule mode == Mode.Tls needs cert`). The
+value on the right must be a literal or an enum member. An omitted field uses its
+default. If the literal's value is not a constant, the compiler assumes it may
+match and requires the field.
+
+`json.Unmarshal` enforces the same rules, a field with a default that a rule names
+is an optional key, and `json.Schema` emits `dependentRequired`, `oneOf`, `anyOf`
+and `not`. `UnmarshalLenient` ignores them.
 
 **`Self`** is the enclosing type, usable anywhere inside a `struct`, an
 `impl ... on T` block or a distinct type's body: as a return type, a parameter
@@ -594,7 +660,7 @@ combined with `pure`.
 struct Counter:
     n: int = 0
     pub func Count(): int:  ret this.n  end     // this is read-only here
-    pub mut func Tick():  this.n += 1  end
+    pub mut func Tick():  this.n++  end
 end
 mut c := Counter {}
 c.Tick()
@@ -617,7 +683,7 @@ struct RangeIter:
     pub stop: int = 0
     pub func has_next(): bool:  ret this.cur < this.stop  end
     pub func value(): int:      ret this.cur              end
-    pub func next():            this.cur = this.cur + 1   end
+    pub func next():            this.cur++   end
 end
 struct Range:
     pub lo: int = 0
@@ -886,6 +952,27 @@ o := option.Some(99)
 println option.UnwrapOr(o, 0)         // Some/None/IsSome/IsNone/Unwrap/UnwrapOr/Expect
 ```
 
+**`T?`** is short for `option.Option<T>` and needs no import. A struct field of
+type `T?` may be omitted from a literal (it starts empty, unless it has its own
+default such as `retries: int? = 3`). Plain values wrap automatically in struct literals, assignments, arguments, returns and defaults,
+and `null` means empty. Locals: `x := 5 as int?`, or `mut x: int?` assigned before
+it is read (reading it first is `E089`). In Persian `صحیح؟` works the same. Read
+with `is_some()`, `is_none()`, `unwrap_or(f)`, `unwrap()`, or the fields `present`
+and `value`. Check `is_some()` before using `value`: on an empty one it means
+nothing, and a `str` from `option.None()` is a null pointer that crashes. A `&: T?`
+parameter needs a `T?` variable, not a plain value. JSON:
+a `T?` field is an optional key, `null` decodes to empty, and an empty one
+encodes as `null` (or is left out with `@json "" "omitempty"`).
+
+```salam
+struct Client:
+    pub host: str
+    pub timeout: int?
+end
+c := Client { host = "x", timeout = 30 }
+println c.timeout.unwrap_or(5)
+```
+
 **Pointers & `null`:** `T*` is a pointer, `p[0]` dereferences, `null` is the
 null pointer. Used with FFI and `mem`: `p := mem.Allocate(8 as u64) as i64*`;
 `p[0] = 0`; `mem.Free(p as void*)`.
@@ -1011,7 +1098,7 @@ the import path with its dots kept as folders: `str`, `db/sqlite`, `net/http`,
 page opens with short tutorials, sections whose anchor starts with `guide-`
 (for example `/std/net/httpd/#guide-...`, and the guides of `audio` and its
 `wav dsp codec aiff au flac tag music synth midi mp3`, `net/httpd`, `net/httpd/conf`,
-`net/fastcgi`, `db/clickhouse`, `wire`, `net/nats`, `events`, `gui/webview`,
+`net/fastcgi`, `db/clickhouse`, `dependency`, `net/nats`, `events`, `gui/webview`,
 `gui/webview/pack` and `gui/webview/bundle`); read the guide before calling
 the functions. The `/learn/` course on both sites teaches the language only,
 not the libraries.
@@ -1226,6 +1313,19 @@ learning half is `f32` on `std/tensor`; the classical half is `f64` on
 - **`os.process`**: `Start(path, args) StartCaptured Wait Kill Terminate ReadStdout ReadStderr Cleanup ExitCode Pid IsRunning`. `IsRunning` is a
   flag, not a live check; `Kill` only signals, so `Wait` after it (zombie);
   `Wait` has no timeout; `Cleanup` a captured run (two temp files).
+  For live pipes use `Command` (`NewCommand Arg Env Unset Piped`, fields
+  `cwd stdin_mode stdout_mode stderr_mode clear_env new_group`, modes
+  `Inherit Pipe Null Merge`) and `Launch(cmd): Child`; `Child` has `Write
+WriteBytes CloseStdin ReadAvailable ReadLine Read ReadUntil ReadFor
+ReadBytes ReadErr* Wait(ms) Poll Signal Kill Terminate SignalGroup
+KillGroup Close`. Reads take a time in ms (0 only looks, negative waits
+  for ever) and return a `Chunk` (`data len eof timed_out`, `Free` it);
+  `Wait(ms)` returns a `Status` (`exited code signaled signal timed_out`,
+  `Success ReturnCode`). `RunTimeout(program, args, text, ms)` and
+  `RunCommand` capture stdout and stderr without deadlock and kill on
+  timeout (`RunResult`, `Free` it). **`os.pty`** `Open(cmd, rows, cols):
+process.Child` runs a program on a pseudo terminal (POSIX only; type
+  `\r` for Enter), `Resize GetSize Supported`.
   **`os.shell`** `Run Exec System` (code, stdout and stderr together),
   **`os.temp`** `File Directory Remove RemoveDir` (`Directory` returns `""`
   on failure; `File` always returns a path), **`os.user`** `Username HomeDir ConfigDir CacheDir` (env based; never for permissions), **`os.platform`**
@@ -1244,6 +1344,13 @@ learning half is `f32` on `std/tensor`; the classical half is `f64` on
   (`Join("a/b", "../c")` is `a/b/../c`) and an absolute second part is
   appended, not substituted; `Ext` is only the last extension; check user
   paths with `IsSafe` before using them.
+  Globbing: `filepath.Match(pattern, name)` (`* ? [a-c] [!a-c] \`, and `**` crosses `/`), `HasMeta`, `fs.dir.Glob(pattern)` and
+  `fs.dir.WalkMatch(root, pattern)` (sorted, free the vector).
+- **`text.diff`** `Lines Unified UnifiedText Opcodes GroupedOpcodes Ratio RatioText` (output equals `difflib.unified_diff`; equal inputs give
+  nothing, not even a header), **`encoding.html`** `Unescape Escape EscapeText` (same answers as Python's `html.unescape`),
+  **`encoding.binary`** `View` getters and setters at an offset (`GetU32LE(v, off)`, `PutU16BE`, `CStringAt`, `FixedStringAt`; out of range
+  reads 0), **`os.mmap`** `Alloc Protect Free PageSize` (`PROT_READ|PROT_WRITE|PROT_EXEC`; map writable, then `Protect` to execute) and
+  **`os.dl`** `Open OpenSelf Sym Close Error Call(fn, args: size[])` (up to 8 integer or pointer arguments, no floats or varargs; POSIX only).
 - **`env`**: `Get GetOr Has GetInt GetFloat GetBool Set Unset Mask GetMasked Profile IsProduction IsDevelopment Load Overload LoadDotEnv LoadProfile Expand`. `GetInt` turns `abc` into 0 and `12px` into 12; `GetBool` accepts
   only lower-case `true 1 yes on`; `Load` never overrides a set variable
   (`Overload`/`LoadDotEnv` do).
@@ -1333,9 +1440,9 @@ end
   `.present .value`. Never read `.value` unchecked: on an empty
   `Option<str>` it is a null pointer and printing it segfaults. No `match`
   and no `?` on an Option.
-- **`wire`**: dependency injection, google/wire style. Providers are keyed by a
+- **`dependency`**: dependency injection, google/wire style. Providers are keyed by a
   name you choose (no runtime type identity): `New()`,
-  `Provide(c, "Service", "Repo", Service {}, (cx: wire.Container): ... end)` (the
+  `Provide(c, "Service", "Repo", Service {}, (cx: dependency.Container): ... end)` (the
   second string lists the needs, the value only fixes the type), `Value`,
   `Bind(c, "Store", "MemStore")`, `OnClose(c, name, T {}, (v: T): ... end)`,
   `Build(c)` (returns "" or a missing/duplicate/cycle message), `Get(c, name, out)`
@@ -2503,6 +2610,11 @@ Read the real code; it is the specification:
   (`grep -rn "pub func" std/<pkg>`).
 - The precise semantic rules (what is and isn't allowed): the `.salam` cases in
   `tests/en/errors/`.
+- Adding to `std/`: every new package, function, struct, field, method or
+  constant needs `@en`/`@fa` names, a program in `tests/en/stdlib/` and its
+  twin in `tests/fa/stdlib/`, and `doc.`/`ex.` keys (plus `guide-*` sections
+  for a new package) in both `website/content/{en,fa}/std/` pages. Check with
+  `salam run tools/salam/check-std-coverage-docs.salam` (see CONTRIBUTING.md).
 
 ---
 
@@ -2780,6 +2892,7 @@ are fine.
 | `str`            | `رشته`                       | `int` (`i32`)    | `صحیح` (`صحیح۳۲`)        |
 | `i8` `i16` `i64` | `صحیح۸` `صحیح۱۶` `صحیح۶۴`    | `uint` (`u32`)   | `طبیعی` (`طبیعی۳۲`)      |
 | `u8` `u16` `u64` | `طبیعی۸` `طبیعی۱۶` `طبیعی۶۴` | `usize` / `size` | `اندازه مثبت` / `اندازه` |
+| `i128`           | `صحیح۱۲۸`                    | `u128`           | `طبیعی۱۲۸`               |
 | `float` (`f32`)  | `اعشار` (`اعشار۳۲`)          | `f64`            | `اعشار۶۴`                |
 | `Vector<T>`      | `وکتور<T>`                   | `HashMap<K, V>`  | `نگاشت<K, V>`            |
 | `MapIter`        | `پیمایشگرنگاشت`              | `File`           | `پرونده`                 |
@@ -2905,7 +3018,7 @@ Give your own `pub` API both spellings the same way:
         سرچاپ "دیگر"
     پایان
     تا ک < ۳:                            // while
-        ک += ۱
+        ک++
     پایان
     تکرار ۳:                             // three times
         چاپ "*"

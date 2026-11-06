@@ -1,0 +1,124 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import os
+import io
+import str
+import conv
+import os.dl
+import encoding.binary
+
+include ml "machoload.salam"
+
+const USAGE := "Loads an x86_64 Mach-O dylib on x86_64 Linux, runs its initialisers and calls\nits exported functions.\n\nmachodylib <dylib> RET:NAME:ARGS:VALUES...\n\nRET and every letter of ARGS is one of i (int), d (double), s (string) or v\n(void, RET only); VALUES is a comma separated list. The result of every\nnon-void call is printed on its own line, then the process exits through libc\nso the library's atexit handlers run.\n\n    machodylib libm.dylib i:_salam_add:ii:40,2\n"
+
+func call(fn: void*, ret_kind: str, kinds: str, values: Vector<str>): size:
+    mut ints := Vector {} as Vector<size>
+    mut dbls := Vector {} as Vector<f64>
+    defer ints.free()
+    defer dbls.free()
+    repeat str.Len(kinds) in i:
+        k := str.Substr(kinds, i, 1)
+        v := values.get(i)
+        if k == "d":
+            dbls.push(str.ToFloat(v))
+        else k == "i":
+            ints.push(str.ToInt(v) as size)
+        else:
+            ints.push((v as void*) as size)
+        end
+    end
+    mut ia := [0 as size, 0, 0, 0, 0, 0]
+    mut da := [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    repeat ints.len() in i:
+        ia[i] = ints.get(i)
+    end
+    repeat dbls.len() in i:
+        da[i] = dbls.get(i)
+    end
+    if ret_kind == "d":
+        println conv.FormatFloatPrec(dl.CallMixedF64(fn, ia[: ints.len()], da[: dbls.len()]), 3)
+        ret 0
+    end
+    ret dl.CallMixed(fn, ia[: ints.len()], da[: dbls.len()])
+end
+
+func run(path: str, specs: Vector<str>):
+    d := ml.ReadThin(path)
+    if binary.GetU32LE(d, 12) != 6:
+        ml.Fail("not a dylib")
+    end
+    p := ml.Parse(d)
+    img := ml.NewImage(d, p.segs)
+    ml.Link(img, d, p.dyld)
+    z := [0 as size]
+    each s in ml.Sections(d):
+        if s.name == "__mod_init_func":
+            repeat (s.size / 8) as int in k:
+                _ := dl.Call(ml.Get64(img, s.addr + (8 * k) as i64) as void*, z[: 0])
+            end
+        end
+    end
+    table := ml.Exports(d, p.dyld)
+    each spec in specs:
+        parts := str.Split(spec, ":")
+        if parts.len() < 3:
+            ml.Fail("bad call " + spec)
+        end
+        kind := parts.get(0)
+        name := parts.get(1)
+        kinds := parts.get(2)
+        mut joined := ""
+        repeat parts.len() - 3 in i:
+            if i > 0:
+                joined += ":"
+            end
+            joined += parts.get(i + 3)
+        end
+        if not table.has(name):
+            ml.Fail(name + " is not exported")
+        end
+        mut values := Vector {} as Vector<str>
+        if str.Len(kinds) > 0:
+            values = str.Split(joined, ",")
+        end
+        fn := (img.slide + table.get(name)) as void*
+        io.Flush()
+        r := call(fn, kind, kinds, values)
+        if kind == "s":
+            text := (r as void*) as str
+            println text
+        else kind == "i":
+            shown := (r & 4294967295) as i32
+            println shown
+        end
+        io.Flush()
+    end
+    os.Exit(0)
+end
+
+func main:
+    args := os.Args()
+    if args.len() < 2:
+        print USAGE
+        ret 2
+    end
+    mut specs := Vector {} as Vector<str>
+    defer specs.free()
+    repeat args.len() - 2 in i:
+        specs.push(args.get(i + 2))
+    end
+    run(args.get(1), specs)
+    ret 0
+end

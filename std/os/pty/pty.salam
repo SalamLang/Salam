@@ -1,0 +1,214 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "pty"
+@fa "پایانه مجازی"
+package pty
+
+import mem
+import str
+import os.error
+import os.internal.fdio
+import os.process
+
+if SALAM_OS_WINDOWS:
+    link dynamic "kernel32"
+else:
+    extern:
+        func posix_openpt(flags: int): int
+        func grantpt(fd: int): int
+        func unlockpt(fd: int): int
+        func ptsname(fd: int): str
+        func ioctl(fd: int, req: usize, ...): int
+        func setsid(): int
+        func fork(): int
+        func waitpid(pid: int, status: void*, options: int): int
+        func chdir(path: str): int
+        func open(path: str, flags: int, ...): int
+        func fcntl(fd: int, cmd: int, ...): int
+        noret func _exit(code: int)
+    end
+end
+
+if SALAM_OS_LINUX:
+    const _OPEN_FLAGS := 258
+    const _TIOCSWINSZ := 0x5414
+    const _TIOCGWINSZ := 0x5413
+    const _TIOCSCTTY := 0x540E
+else SALAM_OS_MAC:
+    const _OPEN_FLAGS := 131074
+    const _TIOCSWINSZ := 0x80087467
+    const _TIOCGWINSZ := 0x40087468
+    const _TIOCSCTTY := 0x20007461
+else SALAM_OS_BSD:
+    const _OPEN_FLAGS := 32770
+    const _TIOCSWINSZ := 0x80087467
+    const _TIOCGWINSZ := 0x40087468
+    const _TIOCSCTTY := 0x20007461
+end
+
+@en "Size"
+@fa "اندازه پنجره"
+pub struct Size:
+    @en "rows"
+    @fa "سطرها"
+    pub rows: int = 0
+    @en "cols"
+    @fa "ستون ها"
+    pub cols: int = 0
+end
+
+func _fail(message: str, program: str): process.Child:
+    error.Set(error.ProcessFailed, message, "Open", program, 0 - 1)
+    ret process.Child { error = message }
+end
+
+if SALAM_OS_WINDOWS:
+    func _open_impl(c: process.Command, _rows: int, _cols: int): process.Child:
+        ret _fail("a pseudo terminal is not available on Windows", c.program)
+    end
+
+    @en "Resize"
+    @fa "تغییر اندازه"
+    pub func Resize(_c: process.Child, _rows: int, _cols: int): bool:
+        ret false
+    end
+
+    @en "GetSize"
+    @fa "گرفتن اندازه"
+    pub func GetSize(_c: process.Child): Size:
+        ret Size {}
+    end
+else:
+    func _set_size(fd: int, rows: int, cols: int): bool:
+        ws := mem.AllocateZeroed(8 as u64)
+        defer mem.Free(ws)
+        p := ws as u16*
+        p[0] = rows as u16
+        p[1] = cols as u16
+        ret ioctl(fd, _TIOCSWINSZ as usize, ws) == 0
+    end
+
+    func _open_impl(c: process.Command, rows: int, cols: int): process.Child:
+        if c.program.len() == 0: ret _fail("no program given", c.program) end
+        resolved := fdio.Resolve(c.program, c.env, c.clear_env)
+        if resolved.len() == 0:
+            mem.Free(resolved as void*)
+            ret _fail("program not found", c.program)
+        end
+        master := posix_openpt(_OPEN_FLAGS)
+        if master < 0:
+            mem.Free(resolved as void*)
+            ret _fail("cannot open a pseudo terminal", c.program)
+        end
+        _g := grantpt(master)
+        _u := unlockpt(master)
+        slave_name := str.Clone(ptsname(master))
+        _c := fcntl(master, 2, 1)
+        mut r := rows
+        mut w := cols
+        if r <= 0: r = 24 end
+        if w <= 0: w = 80 end
+        _s := _set_size(master, r, w)
+        ep := fdio.MakePipe()
+        argv := fdio.BuildArgv(c.program, c.args)
+        mut owned := Vector {} as Vector<str>
+        envp := fdio.BuildEnvp(c.clear_env, c.env, c.unset_env, owned)
+        use_env := envp == null ? fdio.Environ() : envp
+        wmark := mem.AllocateZeroed(1 as u64)
+        pid := fork()
+        if pid == 0:
+            _sid := setsid()
+            slave := open(slave_name, 2, 0)
+            mut stage := 0
+            if slave < 0:
+                stage = 2
+            end
+            if stage == 0:
+                _ct := ioctl(slave, _TIOCSCTTY as usize, 0)
+                fdio.Redirect(slave, 0)
+                fdio.Redirect(slave, 1)
+                fdio.Redirect(slave, 2)
+                if slave > 2: fdio.Close(slave as i64) end
+                if c.cwd.len() > 0 and chdir(c.cwd) != 0: stage = 1 end
+            end
+            if stage == 0:
+                _gone := fdio.ExecVe(resolved, argv, use_env)
+                stage = 2
+            end
+            (wmark as u8*)[0] = stage as u8
+            _wr := fdio.WriteRaw(ep.w, wmark, 1)
+            _exit(127)
+        end
+        fdio.Close(ep.w)
+        mem.Free(argv)
+        mem.Free(wmark)
+        if envp != null: mem.Free(envp) end
+        each line in owned:
+            mem.Free(line as void*)
+        end
+        owned.free()
+        mem.Free(resolved as void*)
+        mem.Free(slave_name as void*)
+        if pid < 0:
+            fdio.Close(master as i64)
+            fdio.Close(ep.r)
+            ret _fail("fork failed", c.program)
+        end
+        mark := mem.AllocateZeroed(1 as u64)
+        got := fdio.ReadRaw(ep.r, mark, 1)
+        stage := (mark as u8*)[0] as int
+        mem.Free(mark)
+        fdio.Close(ep.r)
+        if got > 0:
+            sb := mem.AllocateZeroed(4 as u64)
+            _reaped := waitpid(pid, sb, 0)
+            mem.Free(sb)
+            fdio.Close(master as i64)
+            if stage == 1: ret _fail("cannot enter the folder", c.program) end
+            ret _fail("cannot run the program", c.program)
+        end
+        ret process.Child { pid = pid, ok = true, h_in = master as i64, h_out = master as i64 }
+    end
+
+    @en "Resize"
+    @fa "تغییر اندازه"
+    pub func Resize(c: process.Child, rows: int, cols: int): bool:
+        if c.h_out < 0: ret false end
+        ret _set_size(c.h_out as int, rows, cols)
+    end
+
+    @en "GetSize"
+    @fa "گرفتن اندازه"
+    pub func GetSize(c: process.Child): Size:
+        if c.h_out < 0: ret Size {} end
+        ws := mem.AllocateZeroed(8 as u64)
+        defer mem.Free(ws)
+        if ioctl(c.h_out as int, _TIOCGWINSZ as usize, ws) != 0: ret Size {} end
+        p := ws as u16*
+        ret Size { rows = p[0] as int, cols = p[1] as int }
+    end
+end
+
+@en "Supported"
+@fa "پشتیبانی می شود"
+pub func Supported(): bool:
+    ret not SALAM_OS_WINDOWS
+end
+
+@en "Open"
+@fa "باز کردن"
+pub func Open(c: process.Command, rows: int, cols: int): process.Child:
+    ret _open_impl(c, rows, cols)
+end

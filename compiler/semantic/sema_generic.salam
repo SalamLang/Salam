@@ -23,15 +23,15 @@ func g_sanitize(ts: str): str:
     repeat n in i:
         b := byte_at(ts, i)
         if b == 42:
-            out = out + "_ptr"
+            out += "_ptr"
         else b == 91:
-            out = out + "_arr"
+            out += "_arr"
         else b == 60 or b == 44:
-            out = out + "_"
+            out += "_"
         else b == 62 or b == 32 or b == 93:
             continue
         else:
-            out = out + str.Substr(ts, i, 1)
+            out += str.Substr(ts, i, 1)
         end
     end
     ret out
@@ -314,7 +314,7 @@ func g_pre_resolve_targs(s &: Sema, a &: at.Ast, targ_nodes: Vector<int>): Vecto
                 mut k := 0
                 until k < depth and ty_at(s, base).kind == TY_PTR:
                     base = ty_at(s, base).pointee
-                    k += 1
+                    k++
                 end
                 cv.sema_base_type = base
             end
@@ -365,7 +365,7 @@ func g_unique_instance_name(s &: Sema, a &: at.Ast, tmpl: int, base: str): str:
     mut n := 2
     until g_name_taken(s, name, key):
         name = stem + "_" + n
-        n += 1
+        n++
     end
     ret name
 end
@@ -393,7 +393,7 @@ func g_type_to_ast_bare(s &: Sema, a &: at.Ast, t: int, sp: co.SrcSpan): int:
     if v.kind == TY_PTR and v.pointee >= 0:
         p := g_type_to_ast(s, a, v.pointee, sp)
         mut pv := at.Get(a, p)
-        pv.ptr_depth += 1
+        pv.ptr_depth++
         pv.is_pointer = true
         at.Put(a, p, pv)
         ret p
@@ -595,28 +595,44 @@ func coerce_to_variant(
     ret box
 end
 
-func coerce_args_to_dyn(
-    s &: Sema, a &: at.Ast, call: int, argtypes: Vector<int>, sigid: int
-):
-    if sigid == 0:
-        ret
+func coerce_box_value(s &: Sema, a &: at.Ast, pt: int, expr: int, att: int): int:
+    if pt < 0:
+        ret expr
     end
+    if ty_at(s, pt).kind == TY_DYN:
+        ret coerce_to_dyn(s, a, pt, expr, att)
+    end
+    if ty_at(s, pt).kind == TY_VARIANT and att >= 0 and ty_at(s, att).kind != TY_VARIANT:
+        tag := type_variant_tag(s, pt, att)
+        if tag >= 0:
+            ret coerce_to_variant(s, a, pt, expr, tag)
+        end
+    end
+    ret expr
+end
+
+func coerce_arg_box(s &: Sema, a &: at.Ast, call: int, i: int, pt: int, att: int):
+    nb := coerce_box_value(s, a, pt, at.Child(a, call, i), att)
+    mut cn := at.Get(a, call)
+    cn.list.set(i, nb)
+    at.Put(a, call, cn)
+end
+
+func note_dyn_default_call(s &: Sema, a &: at.Ast, call: int, sigid: int):
     sg := sig_at(s, sigid)
-    mut i := 0
-    until i < at.ChildCount(a, call) and i < sg.params.len() and i < argtypes.len():
+    mut i := at.ChildCount(a, call)
+    until sg.decl != 0 and i < sg.params.len():
         pt := sg.params.get(i)
         if pt >= 0 and ty_at(s, pt).kind == TY_DYN:
-            arg := at.Child(a, call, i)
-            nb := coerce_to_dyn(s, a, pt, arg, argtypes.get(i))
-            mut cn := at.Get(a, call)
-            cn.list.set(i, nb)
-            at.Put(a, call, cn)
+            s.dyn_default_calls.push(call)
+            s.dyn_default_decls.push(sg.decl)
+            ret
         end
-        i += 1
+        i++
     end
 end
 
-func coerce_args_to_variant(
+func coerce_call_args(
     s &: Sema, a &: at.Ast, call: int, argtypes: Vector<int>, sigid: int
 ):
     if sigid == 0:
@@ -627,18 +643,14 @@ func coerce_args_to_variant(
     until i < at.ChildCount(a, call) and i < sg.params.len() and i < argtypes.len():
         pt := sg.params.get(i)
         att := argtypes.get(i)
-        if pt >= 0 and ty_at(s, pt).kind == TY_VARIANT and att >= 0 and ty_at(s, att).kind != TY_VARIANT:
-            tag := type_variant_tag(s, pt, att)
-            if tag >= 0:
-                arg := at.Child(a, call, i)
-                nb := coerce_to_variant(s, a, pt, arg, tag)
-                mut cn := at.Get(a, call)
-                cn.list.set(i, nb)
-                at.Put(a, call, cn)
-            end
+        if param_is_ref(s, a, sigid, i) or not coerce_arg_to_opt(s, a, call, i, pt, att):
+            coerce_arg_box(s, a, call, i, pt, att)
         end
-        i += 1
+        i++
     end
+    coerce_args_to_wide(s, a, call, sigid)
+    coerce_args_to_slice(s, a, call, argtypes, sigid)
+    note_dyn_default_call(s, a, call, sigid)
 end
 
 func coerce_args_to_slice(
@@ -677,7 +689,7 @@ func coerce_args_to_slice(
             cn.list.set(i, sl)
             at.Put(a, call, cn)
         end
-        i += 1
+        i++
     end
 end
 
@@ -766,6 +778,15 @@ func g_unify(s &: Sema, a &: at.Ast, pty: int, att: int, tname: str): int:
             ret TYPE_NONE
         end
         ret att
+    end
+    if p.is_tuple and p.list.len() == 1:
+        sema_load_opt_prelude(s, a)
+        if v.kind == TY_NULL:
+            ret TYPE_NONE
+        end
+        if opt_inner(s, att) == TYPE_NONE:
+            ret g_unify(s, a, p.list.get(0), att, tname)
+        end
     end
     mut vt := att
     if p.is_pointer and p.list.len() > 0 and not p.is_slice and p.ptr_depth <= 1:
@@ -869,11 +890,11 @@ func g_infer_call(
         if param.kind != at.AST_PARAM:
             continue
         end
-        total += 1
+        total++
         if param.a != 0:
             seen_default = true
         else not seen_default:
-            required += 1
+            required++
         end
     end
     if argtypes.len() < required or (not tv.is_variadic and argtypes.len() > total):
@@ -916,7 +937,7 @@ func g_infer_call(
                     break
                 end
             end
-            pi += 1
+            pi++
         end
         if bound < 0 and expected >= 0 and tv.ty != 0:
             bound = g_unify(s, a, tv.ty, expected, tpn)
@@ -931,7 +952,7 @@ func g_infer_call(
                         break
                     end
                 end
-                pi2 += 1
+                pi2++
             end
         end
         if bound < 0:

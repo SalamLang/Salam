@@ -12,6 +12,9 @@ func key_eq(ka: Value, kb: Value): bool:
         ret str.Equals(ka.s, kb.s)
     end
     if ka.kind == VAL_INT or ka.kind == VAL_CHAR:
+        if ka.ity >= ITY_I128 or kb.ity >= ITY_I128:
+            ret wide_cmp(ka, kb) == 0
+        end
         ret ka.i == kb.i
     end
     if ka.kind == VAL_BOOL:
@@ -28,10 +31,10 @@ func key_hash(k: Value): u64:
         ret itab_hash(k.s)
     end
     if k.kind == VAL_INT or k.kind == VAL_CHAR:
-        mut x := k.i as u64
-        x = x ^ (x >> (33 as u64))
-        x = x * (0xff51afd7ed558ccd as u64)
-        x = x ^ (x >> (33 as u64))
+        mut x := k.ity >= ITY_I128 ? (k.i as u64) ^ ((k.pa as u64) * (0xc4ceb9fe1a85ec53 as u64)) : k.i as u64
+        x ^= (x >> (33 as u64))
+        x *= (0xff51afd7ed558ccd as u64)
+        x ^= (x >> (33 as u64))
         ret x
     end
     if k.kind == VAL_BOOL:
@@ -40,9 +43,9 @@ func key_hash(k: Value): u64:
     if k.kind == VAL_FLOAT:
         d := k.f == 0.0 ? 0.0 : k.f
         mut bits := f64_bits(d)
-        bits = bits ^ (bits >> (33 as u64))
-        bits = bits * (0xff51afd7ed558ccd as u64)
-        bits = bits ^ (bits >> (33 as u64))
+        bits ^= (bits >> (33 as u64))
+        bits *= (0xff51afd7ed558ccd as u64)
+        bits ^= (bits >> (33 as u64))
         ret bits
     end
     ret 0
@@ -55,7 +58,7 @@ func map_index_insert(m &: SMap, hash: u64, entry_idx: int):
         s0 := m.index.get(i)
         if s0 == 0 or s0 == 1:
             if s0 == 0:
-                m.index_used += 1
+                m.index_used++
             end
             m.index.set(i, entry_idx + 2)
             ret
@@ -138,17 +141,17 @@ func map_put(ip &: Interp, mid: int, k: Value, v: Value):
             m.keys.push(val_null())
             m.vals.push(val_null())
             m.used.push(false)
-            m.cap += 1
+            m.cap++
         end
     end
     mut i := m.free_hint
     until i < m.cap and m.used.get(i):
-        i += 1
+        i++
     end
     m.keys.set(i, k)
     m.vals.set(i, v)
     m.used.set(i, true)
-    m.count += 1
+    m.count++
     m.free_hint = i + 1
     if (m.index_used + 1) * 4 >= m.index_cap * 3:
         map_index_rebuild(m, m.count)
@@ -166,7 +169,7 @@ func map_remove(ip &: Interp, mid: int, k: Value): bool:
     end
     ei := m.index.get(pos) - 2
     m.used.set(ei, false)
-    m.count -= 1
+    m.count--
     if ei < m.free_hint:
         m.free_hint = ei
     end

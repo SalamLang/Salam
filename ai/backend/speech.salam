@@ -1,0 +1,474 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package aispeech
+
+import net.http
+import net.router
+import net.tcp
+import encoding.json
+import encoding.value
+import mem
+import str
+import sync
+import time
+
+include aistore "store.salam"
+include aiweb "web.salam"
+include ailimits "limits.salam"
+
+const DIAL_MS := 3000
+const HEALTH_MS := 2000
+const WRITE_MS := 30000
+const CHUNK := 16384
+const MAX_REPLY := 262144
+const WINDOW_SECONDS := 3600
+
+mut STT_ON := false
+mut STT_HOST := ""
+mut STT_PORT := 80
+mut STT_AUTH := ""
+mut STT_MAX_BYTES := 4194304
+mut STT_WAIT_MS := 90000
+mut STT_HOURLY := 30
+mut STT_SECONDS_HOURLY := 600
+mut STT_HEALTH_SECONDS := 30
+mut STT_LOCK := sync.Mutex {}
+mut STT_RUNNING := Vector {} as Vector<i64>
+mut STT_SLOTS := 4
+mut STT_CHECKED_AT := 0 as i64
+mut STT_READY := false
+mut STT_LANGS := "[]"
+mut STT_MAX_SECONDS := 0
+mut STT_SERVICE_BYTES := 0
+
+pub struct Outcome:
+    pub kind: str = ""
+    pub text: str = ""
+    pub seconds: int = 0
+end
+
+struct SttAnswer:
+    pub status: int = 0
+    pub body: str = ""
+end
+
+func stt_pair(a: str, b: str): Vector<str>:
+    mut v := Vector {} as Vector<str>
+    v.push(a)
+    v.push(b)
+    ret v
+end
+
+func stt_content_length(head: str): int:
+    at := head.find("content-length:")
+    if at < 0:
+        ret -1
+    end
+    mut i := at + 15
+    until i < head.len() and head[i] as int == 32:
+        i++
+    end
+    mut n := 0
+    until i < head.len() and head[i] as int >= 48 and head[i] as int <= 57:
+        n = n * 10 + (head[i] as int - 48)
+        i++
+    end
+    ret n
+end
+
+func stt_exchange(head: str, ptr: void*, n: int, wait_ms: int): SttAnswer:
+    mut out := SttAnswer {}
+    c := tcp.DialTimeout(STT_HOST, STT_PORT, DIAL_MS)
+    if not tcp.ConnOk(c):
+        tcp.Close(c)
+        out.status = -1
+        ret out
+    end
+    tcp.SetWriteDeadline(c, WRITE_MS)
+    tcp.SetReadDeadline(c, wait_ms)
+    if tcp.Write(c, head) != head.len() or (n > 0 and tcp.WriteBytes(c, ptr, n) != n):
+        tcp.Close(c)
+        out.status = -1
+        ret out
+    end
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    buf := mem.Allocate((CHUNK + 1) as u64)
+    until str.BufLen(b) <= (MAX_REPLY as i64):
+        got := tcp.ReadBytes(c, buf, CHUNK)
+        if got <= 0:
+            break
+        end
+        (buf as u8*)[got] = 0 as u8
+        str.BufAppend(b, buf as str)
+    end
+    mem.Free(buf)
+    tcp.Close(c)
+    raw := str.BufStr(b)
+    defer mem.Free(raw as void*)
+    he := raw.find("\r\n\r\n")
+    sp := raw.find(" ")
+    if he < 0 or sp < 0 or sp > he:
+        ret out
+    end
+    head := str.Lower(raw.substr(0, he))
+    defer mem.Free(head as void*)
+    want := stt_content_length(head)
+    body_len := raw.len() - he - 4
+    if want >= 0 and body_len < want:
+        ret out
+    end
+    out.status = raw.substr(sp + 1, 3).to_int()
+    out.body = raw.substr(he + 4, body_len)
+    ret out
+end
+
+func stt_head(method: str, path: str, n: int): str:
+    mut h := method + " " + path + " HTTP/1.1\r\nHost: " + STT_HOST + "\r\nUser-Agent: salam-ai\r\nAccept: application/json\r\nConnection: close\r\n"
+    if STT_AUTH.len() > 0:
+        h = h + "Authorization: " + STT_AUTH + "\r\n"
+    end
+    if method == "POST":
+        h = h + "Content-Type: application/octet-stream\r\nContent-Length: " + n + "\r\n"
+    end
+    ret h + "\r\n"
+end
+
+func stt_probe():
+    r := stt_exchange(stt_head("GET", "/health", 0), 0 as void*, 0, HEALTH_MS)
+    mut ready := false
+    mut langs := "[]"
+    mut seconds := 0
+    mut bytes := 0
+    if r.status == 200:
+        mut root := try json.Decode(r.body) catch value.ValueNull()
+        if value.IsObject(root):
+            mut ok := false
+            list := value.ObjectGetOk(root, "languages", ok)
+            mut names := Vector {} as Vector<str>
+            if ok and value.IsArray(list):
+                mut i := 0
+                until i < value.ArrayLen(list):
+                    item := value.ArrayGet(list, i)
+                    if value.IsString(item) and (value.AsString(item) == "fa" or value.AsString(item) == "en"):
+                        names.push(json.Str(value.AsString(item)))
+                    end
+                    i++
+                end
+            end
+            seconds = json.Get(r.body, "max_seconds").to_int()
+            bytes = json.Get(r.body, "max_bytes").to_int()
+            ready = names.len() > 0 and seconds > 0 and bytes > 0
+            langs = json.Array(names)
+        end
+        value.ValueFree(root)
+    end
+    _l := sync.Lock(STT_LOCK)
+    STT_READY = ready
+    STT_LANGS = langs
+    STT_MAX_SECONDS = seconds
+    STT_SERVICE_BYTES = bytes
+    _u := sync.Unlock(STT_LOCK)
+end
+
+func stt_refresh():
+    now := time.Now()
+    _l := sync.Lock(STT_LOCK)
+    due := now - STT_CHECKED_AT >= (STT_HEALTH_SECONDS as i64)
+    if due:
+        STT_CHECKED_AT = now
+    end
+    _u := sync.Unlock(STT_LOCK)
+    if due:
+        stt_probe()
+    end
+end
+
+func stt_enter(uid: i64): int:
+    _l := sync.Lock(STT_LOCK)
+    mut verdict := 0
+    each running in STT_RUNNING:
+        if running == uid:
+            verdict = 1
+        end
+    end
+    if verdict == 0 and STT_RUNNING.len() >= STT_SLOTS:
+        verdict = 2
+    end
+    if verdict == 0:
+        STT_RUNNING.push(uid)
+    end
+    _u := sync.Unlock(STT_LOCK)
+    ret verdict
+end
+
+func stt_leave(uid: i64):
+    _l := sync.Lock(STT_LOCK)
+    mut left := Vector {} as Vector<i64>
+    each running in STT_RUNNING:
+        if running != uid:
+            left.push(running)
+        end
+    end
+    STT_RUNNING = left
+    _u := sync.Unlock(STT_LOCK)
+end
+
+func stt_table(guest: bool): str:
+    ret guest ? "telegram_speech_usage" : "speech_usage"
+end
+
+func stt_owner(guest: bool): str:
+    ret guest ? "tg_id" : "user_id"
+end
+
+func stt_reserve(owner: i64, guest: bool, row &: str): bool:
+    user := aiweb.I64s(owner)
+    table := stt_table(guest)
+    column := stt_owner(guest)
+    args := stt_pair(user, aiweb.I64s(time.Now() - (WINDOW_SECONDS as i64)))
+    hourly := guest ? ailimits.GuestShare(STT_HOURLY, 3) : STT_HOURLY
+    seconds_hourly := guest ? ailimits.GuestShare(STT_SECONDS_HOURLY, 60) : STT_SECONDS_HOURLY
+    aistore.Lock()
+    used := aistore.OneText("SELECT COUNT(*) FROM " + table + " WHERE " + column + " = ?1 AND created > ?2", args)
+    seconds := aistore.OneText("SELECT COALESCE(SUM(seconds), 0) FROM " + table + " WHERE " + column + " = ?1 AND created > ?2", args)
+    allowed := ailimits.SpeechVerdict(used.to_int(), seconds.to_int(), hourly, seconds_hourly).len() == 0
+    if allowed:
+        _d := aistore.Run("DELETE FROM " + table + " WHERE " + column + " = ?1 AND created <= ?2", args)
+        _i := aistore.Run("INSERT INTO " + table + " (" + column + ", created, seconds) VALUES (?1, ?2, 0)", stt_pair(user, aiweb.I64s(time.Now())))
+        row = aistore.LastId()
+    end
+    aistore.Unlock()
+    ret allowed
+end
+
+func stt_settle(row: str, guest: bool, seconds: int):
+    aistore.Lock()
+    _r := aistore.Run("UPDATE " + stt_table(guest) + " SET seconds = ?2 WHERE id = ?1", stt_pair(row, "" + seconds))
+    aistore.Unlock()
+end
+
+func stt_refund(row: str, guest: bool):
+    mut args := Vector {} as Vector<str>
+    args.push(row)
+    aistore.Lock()
+    _r := aistore.Run("DELETE FROM " + stt_table(guest) + " WHERE id = ?1", args)
+    aistore.Unlock()
+end
+
+func stt_kind(answer: SttAnswer): str:
+    code := json.Get(answer.body, "error")
+    if answer.status == 400 and code == "language":
+        ret "language"
+    else answer.status == 400:
+        ret "bad_audio"
+    else answer.status == 413 and code == "too_long":
+        ret "too_long"
+    else answer.status == 413:
+        ret "too_large"
+    else answer.status == 503 and code == "busy":
+        ret "busy"
+    else answer.status == 0 or answer.status == 504:
+        ret "timeout"
+    end
+    ret "unavailable"
+end
+
+func stt_run(owner: i64, guest: bool, audio: void*, n: int, lang: str): Outcome:
+    mut out := Outcome {}
+    if ailimits.AudioContainer(audio, n).len() == 0:
+        out.kind = "bad_audio"
+        ret out
+    end
+    key := guest ? (0 as i64) - owner : owner
+    entered := stt_enter(key)
+    if entered == 1:
+        out.kind = "in_progress"
+        ret out
+    end
+    if entered == 2:
+        out.kind = "busy"
+        ret out
+    end
+    mut row := ""
+    if not stt_reserve(owner, guest, row):
+        stt_leave(key)
+        out.kind = "limit"
+        ret out
+    end
+    answer := stt_exchange(stt_head("POST", "/transcribe?language=" + lang, n), audio, n, STT_WAIT_MS)
+    stt_leave(key)
+    if answer.status != 200:
+        if answer.status == -1 or answer.status == 503:
+            stt_refund(row, guest)
+        end
+        out.kind = answer.status == -1 ? "unavailable" : stt_kind(answer)
+        ret out
+    end
+    out.seconds = json.Get(answer.body, "seconds").to_int() + 1
+    stt_settle(row, guest, out.seconds)
+    out.kind = "ok"
+    out.text = str.Trim(json.Get(answer.body, "text"))
+    ret out
+end
+
+func stt_fail(ctx: i64, kind: str):
+    if kind == "language":
+        aiweb.Fail(ctx, 400, "language", aiweb.Pick(ctx, "این زبان برای ورودی صوتی پشتیبانی نمی‌شود.", "This language is not supported for voice input."))
+    else kind == "bad_audio":
+        aiweb.Fail(ctx, 400, "bad_audio", aiweb.Pick(ctx, "این ضبط خوانده نشد. لطفا دوباره ضبط کنید.", "This recording could not be read. Please record again."))
+    else kind == "too_long":
+        aiweb.Fail(ctx, 413, "audio_too_long", aiweb.Pick(ctx, "این ضبط طولانی‌تر از حد مجاز است.", "This recording is longer than the limit."))
+    else kind == "too_large":
+        aiweb.Fail(ctx, 413, "audio_too_large", aiweb.Pick(ctx, "حجم این ضبط بیشتر از حد مجاز است.", "This recording is larger than the limit."))
+    else kind == "busy":
+        aiweb.Fail(ctx, 503, "speech_busy", aiweb.Pick(ctx, "تبدیل گفتار الان شلوغ است. چند لحظه بعد دوباره تلاش کنید.", "Voice input is busy right now. Try again in a moment."))
+    else kind == "in_progress":
+        aiweb.Fail(ctx, 429, "speech_in_progress", aiweb.Pick(ctx, "ضبط قبلی شما هنوز در حال تبدیل است.", "Your previous recording is still being converted."))
+    else kind == "limit":
+        aiweb.Fail(ctx, 429, "speech_limit", aiweb.Pick(ctx, "سهم ورودی صوتی این ساعت شما تمام شده است. کمی بعد دوباره تلاش کنید.", "You have used this hour's voice input. Try again a little later."))
+    else kind == "timeout":
+        aiweb.Fail(ctx, 504, "speech_timeout", aiweb.Pick(ctx, "تبدیل گفتار بیش از حد طول کشید. دوباره تلاش کنید.", "Voice input took too long. Please try again."))
+    else:
+        aiweb.Fail(ctx, 503, "speech_unavailable", aiweb.Pick(ctx, "تبدیل گفتار الان در دسترس نیست. کمی بعد دوباره تلاش کنید.", "Voice input is not available right now. Please try again later."))
+    end
+end
+
+func speech_transcribe(ctx: i64):
+    uid := aiweb.NeedUser(ctx)
+    if uid == 0:
+        ret
+    end
+    if not STT_ON:
+        aiweb.Fail(ctx, 503, "speech_off", aiweb.Pick(ctx, "ورودی صوتی فعال نیست.", "Voice input is not turned on."))
+        ret
+    end
+    n := http.BodyLen(ctx)
+    if not str.StartsWith(str.Lower(http.Header(ctx, "Content-Type")), "audio/"):
+        aiweb.Fail(ctx, 415, "not_audio", aiweb.Pick(ctx, "فقط صدا پذیرفته می‌شود.", "Only audio is accepted."))
+        ret
+    end
+    lang := http.Query(ctx, "lang")
+    if lang != "fa" and lang != "en":
+        stt_fail(ctx, "language")
+        ret
+    end
+    if n > STT_MAX_BYTES:
+        stt_fail(ctx, "too_large")
+        ret
+    end
+    out := stt_run(uid, false, http.BodyBytes(ctx), n, lang)
+    if out.kind != "ok":
+        stt_fail(ctx, out.kind)
+        ret
+    end
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("text", out.text))
+    m.push(json.Member("language", lang))
+    m.push(json.MemberInt("seconds", out.seconds as i64))
+    aiweb.Reply(ctx, 200, json.Object(m))
+end
+
+pub func Configure(url: str, secret: str, max_bytes: int, wait_seconds: int, slots: int, hourly: int, seconds_hourly: int, health_seconds: int):
+    STT_LOCK = sync.NewMutex()
+    trimmed := str.TrimSuffix(str.Trim(url), "/")
+    if trimmed.len() == 0:
+        ret
+    end
+    mut host := str.TrimPrefix(trimmed, "http://")
+    mut port := 80
+    colon := host.find(":")
+    if colon > 0:
+        port = host.substr(colon + 1, host.len() - colon - 1).to_int()
+        host = host.substr(0, colon)
+    end
+    STT_HOST = host
+    STT_PORT = port
+    if secret.len() > 0:
+        STT_AUTH = "Bearer " + secret
+    end
+    if max_bytes > 0:
+        STT_MAX_BYTES = max_bytes
+    end
+    if wait_seconds > 0:
+        STT_WAIT_MS = wait_seconds * 1000
+    end
+    if slots > 0:
+        STT_SLOTS = slots
+    end
+    STT_HOURLY = hourly
+    STT_SECONDS_HOURLY = seconds_hourly
+    if health_seconds > 0:
+        STT_HEALTH_SECONDS = health_seconds
+    end
+    STT_ON = true
+end
+
+pub func Ready(): bool:
+    if not STT_ON:
+        ret false
+    end
+    stt_refresh()
+    _l := sync.Lock(STT_LOCK)
+    ready := STT_READY
+    _u := sync.Unlock(STT_LOCK)
+    ret ready
+end
+
+pub func MaxSeconds(): int:
+    _l := sync.Lock(STT_LOCK)
+    seconds := STT_MAX_SECONDS
+    _u := sync.Unlock(STT_LOCK)
+    ret seconds
+end
+
+pub func MaxBytes(): int:
+    _l := sync.Lock(STT_LOCK)
+    bytes := STT_SERVICE_BYTES < STT_MAX_BYTES ? STT_SERVICE_BYTES : STT_MAX_BYTES
+    _u := sync.Unlock(STT_LOCK)
+    ret bytes
+end
+
+pub func Transcribe(owner: i64, guest: bool, audio: void*, n: int, lang: str): Outcome:
+    if lang != "fa" and lang != "en":
+        mut bad := Outcome {}
+        bad.kind = "language"
+        ret bad
+    end
+    ret stt_run(owner, guest, audio, n, lang)
+end
+
+pub func Caps(members &: Vector<str>):
+    if STT_ON:
+        stt_refresh()
+    end
+    _l := sync.Lock(STT_LOCK)
+    ready := STT_ON and STT_READY
+    langs := STT_LANGS
+    seconds := STT_MAX_SECONDS
+    bytes := STT_SERVICE_BYTES < STT_MAX_BYTES ? STT_SERVICE_BYTES : STT_MAX_BYTES
+    _u := sync.Unlock(STT_LOCK)
+    members.push(json.MemberBool("speech", ready))
+    if ready:
+        members.push(json.MemberRaw("speech_languages", langs))
+        members.push(json.MemberInt("speech_max_seconds", seconds as i64))
+        members.push(json.MemberInt("speech_max_bytes", bytes as i64))
+    end
+end
+
+pub func Routes(r &: router.Router):
+    router.Post(r, "/speech/transcribe", speech_transcribe)
+    router.Options(r, "/speech/transcribe", aiweb.Preflight)
+end

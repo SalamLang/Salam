@@ -1471,7 +1471,7 @@ func main:
     mut s := 0
     until i < 10:
         s += i
-        i += 1
+        i++
     end
     println s
     ret 0

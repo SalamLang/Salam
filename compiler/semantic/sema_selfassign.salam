@@ -1,0 +1,616 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package semantic
+
+import str
+
+include co "../sal_core.salam"
+include tok "../token.salam"
+include at "../ast.salam"
+include i18 "../i18n.salam"
+include lg "../logger.salam"
+include src "../source.salam"
+
+pub const SELFASSIGN_CODE := 162
+
+const SA_NONE := 0
+const SA_INC := 1
+const SA_DEC := 2
+const SA_NOOP := 3
+const SA_COMPOUND := 4
+
+const SA_V_OTHER := 0
+const SA_V_ONE := 1
+const SA_V_MINUS_ONE := 2
+const SA_V_ZERO := 3
+
+mut g_sa_seen := HashMap {} as HashMap<str, bool>
+
+struct SaHit:
+    pub kind: int = 0
+    pub op: int = 0
+    pub commuted: bool = false
+    pub left: int = 0
+end
+
+func sa_pure(a &: at.Ast, n: int): bool:
+    if n == 0:
+        ret false
+    end
+    k := at.KindOf(a, n)
+    if k == at.AST_IDENTIFIER or k == at.AST_THIS or k == at.AST_LITERAL:
+        ret true
+    end
+    nd := at.Get(a, n)
+    if k == at.AST_MEMBER or k == at.AST_UNARY or k == at.AST_CAST:
+        if k == at.AST_UNARY and nd.op != tok.TK_MINUS and nd.op != tok.TK_TILDE:
+            ret false
+        end
+        ret sa_pure(a, nd.a)
+    end
+    if k == at.AST_BINARY or k == at.AST_INDEX:
+        ret sa_pure(a, nd.a) and sa_pure(a, nd.b)
+    end
+    ret false
+end
+
+func sa_same(a &: at.Ast, x: int, y: int): bool:
+    if x == 0 or y == 0:
+        ret false
+    end
+    k := at.KindOf(a, x)
+    if k != at.KindOf(a, y):
+        ret false
+    end
+    nx := at.Get(a, x)
+    ny := at.Get(a, y)
+    if k == at.AST_THIS:
+        ret true
+    end
+    if k == at.AST_IDENTIFIER:
+        ret str.Equals(nx.name, ny.name)
+    end
+    if k == at.AST_MEMBER:
+        ret str.Equals(nx.name, ny.name) and sa_same(a, nx.a, ny.a)
+    end
+    if k == at.AST_INDEX:
+        ret sa_same(a, nx.a, ny.a) and sa_same(a, nx.b, ny.b)
+    end
+    if k == at.AST_LITERAL:
+        ret nx.op == ny.op and nx.value_int == ny.value_int and nx.value_float == ny.value_float
+    end
+    if k == at.AST_UNARY:
+        ret nx.op == ny.op and sa_same(a, nx.a, ny.a)
+    end
+    if k == at.AST_BINARY:
+        ret nx.op == ny.op and sa_same(a, nx.a, ny.a) and sa_same(a, nx.b, ny.b)
+    end
+    if k == at.AST_CAST:
+        ret str.Equals(nx.type_str, ny.type_str) and sa_same(a, nx.a, ny.a)
+    end
+    ret false
+end
+
+func sa_target_ok(s &: Sema, a &: at.Ast, n: int, step: bool): bool:
+    if n == 0:
+        ret false
+    end
+    k := at.KindOf(a, n)
+    if k == at.AST_IDENTIFIER or k == at.AST_THIS:
+        ret true
+    end
+    nd := at.Get(a, n)
+    if k == at.AST_MEMBER:
+        ret sa_target_ok(s, a, nd.a, step)
+    end
+    if k == at.AST_INDEX:
+        bts := at.Get(a, nd.a).type_str
+        is_vec := str.StartsWith(bts, "Vector_") and not str.EndsWith(bts, "*")
+        if is_vec and step:
+            ret false
+        end
+        if not is_vec and not str.EndsWith(bts, "]") and not str.EndsWith(bts, "*"):
+            ret false
+        end
+        ret sa_pure(a, nd.b) and sa_target_ok(s, a, nd.a, step)
+    end
+    ret false
+end
+
+func sa_value(s &: Sema, a &: at.Ast, e: int): int:
+    mut iv := 0 as i64
+    if fold_operand_int(s, a, e, iv):
+        if iv == 1:
+            ret SA_V_ONE
+        end
+        if iv == 0:
+            ret SA_V_ZERO
+        end
+        if iv == 0 - 1:
+            ret SA_V_MINUS_ONE
+        end
+        ret SA_V_OTHER
+    end
+    mut fv := 0.0
+    if fold_operand_flt(s, a, e, fv):
+        if fv == 1.0:
+            ret SA_V_ONE
+        end
+        if fv == 0.0:
+            ret SA_V_ZERO
+        end
+        if fv == 0.0 - 1.0:
+            ret SA_V_MINUS_ONE
+        end
+    end
+    ret SA_V_OTHER
+end
+
+func sa_rule(op: int, c: int, commuted: bool, integer: bool, signed: bool): int:
+    if op == tok.TK_PLUS:
+        if c == SA_V_ONE:
+            ret SA_INC
+        end
+        if c == SA_V_MINUS_ONE:
+            ret SA_DEC
+        end
+        if c == SA_V_ZERO:
+            ret SA_NOOP
+        end
+        ret SA_NONE
+    end
+    if op == tok.TK_MINUS and not commuted:
+        if c == SA_V_ONE:
+            ret SA_DEC
+        end
+        if c == SA_V_MINUS_ONE:
+            ret SA_INC
+        end
+        if c == SA_V_ZERO:
+            ret SA_NOOP
+        end
+        ret SA_NONE
+    end
+    if op == tok.TK_STAR and c == SA_V_ONE:
+        ret SA_NOOP
+    end
+    if (op == tok.TK_SLASH or op == tok.TK_POWER) and not commuted and c == SA_V_ONE:
+        ret SA_NOOP
+    end
+    if not integer:
+        ret SA_NONE
+    end
+    if (op == tok.TK_PIPE or op == tok.TK_CARET) and c == SA_V_ZERO:
+        ret SA_NOOP
+    end
+    if (op == tok.TK_SHL or op == tok.TK_SHR) and not commuted and c == SA_V_ZERO:
+        ret SA_NOOP
+    end
+    if op == tok.TK_AMP and signed and c == SA_V_MINUS_ONE:
+        ret SA_NOOP
+    end
+    ret SA_NONE
+end
+
+func sa_commutes(op: int): bool:
+    ret op == tok.TK_PLUS or op == tok.TK_STAR or op == tok.TK_PIPE or op == tok.TK_CARET or op == tok.TK_AMP
+end
+
+func sa_rhs_safe(a &: at.Ast, n: int): bool:
+    if n == 0:
+        ret false
+    end
+    k := at.KindOf(a, n)
+    if k == at.AST_IDENTIFIER or k == at.AST_THIS or k == at.AST_LITERAL:
+        ret true
+    end
+    nd := at.Get(a, n)
+    if k == at.AST_MEMBER or k == at.AST_UNARY or k == at.AST_CAST:
+        ret sa_rhs_safe(a, nd.a)
+    end
+    if k == at.AST_BINARY or k == at.AST_INDEX:
+        ret sa_rhs_safe(a, nd.a) and sa_rhs_safe(a, nd.b)
+    end
+    if k == at.AST_TERNARY:
+        ret sa_rhs_safe(a, nd.a) and sa_rhs_safe(a, nd.b) and sa_rhs_safe(a, nd.c)
+    end
+    ret false
+end
+
+func sa_mentions(a &: at.Ast, n: int, name: str): bool:
+    if n == 0:
+        ret false
+    end
+    nd := at.Get(a, n)
+    if nd.kind == at.AST_IDENTIFIER and str.Equals(nd.name, name):
+        ret true
+    end
+    if sa_mentions(a, nd.a, name) or sa_mentions(a, nd.b, name) or sa_mentions(a, nd.c, name) or sa_mentions(a, nd.d, name):
+        ret true
+    end
+    repeat nd.list.len() in i:
+        if sa_mentions(a, nd.list.get(i), name):
+            ret true
+        end
+    end
+    ret false
+end
+
+func sa_local_ident(s &: Sema, a &: at.Ast, n: int): bool:
+    if n == 0 or at.KindOf(a, n) != at.AST_IDENTIFIER:
+        ret false
+    end
+    mut w := 0
+    sid := scope_lookup_where(s, s.cur, at.Get(a, n).name, w)
+    if sid == 0 or sym_at(s, sid).kind != SYM_VAR or sym_at(s, sid).is_ref:
+        ret false
+    end
+    k := scope_at(s, w).kind
+    ret k == SCOPE_FUNC or k == SCOPE_BLOCK
+end
+
+func sa_operand_ok(s &: Sema, a &: at.Ast, target: int, operand: int): bool:
+    if sa_rhs_safe(a, operand):
+        ret true
+    end
+    if not sa_local_ident(s, a, target):
+        ret false
+    end
+    ret not sa_mentions(a, operand, at.Get(a, target).name)
+end
+
+func sa_op_text(op: int): str:
+    if op == tok.TK_PLUS:
+        ret "+"
+    end
+    if op == tok.TK_MINUS:
+        ret "-"
+    end
+    if op == tok.TK_STAR:
+        ret "*"
+    end
+    if op == tok.TK_SLASH:
+        ret "/"
+    end
+    if op == tok.TK_PERCENT:
+        ret "%"
+    end
+    if op == tok.TK_POWER:
+        ret "**"
+    end
+    if op == tok.TK_AMP:
+        ret "&"
+    end
+    if op == tok.TK_PIPE:
+        ret "|"
+    end
+    if op == tok.TK_CARET:
+        ret "^"
+    end
+    if op == tok.TK_SHL:
+        ret "<<"
+    end
+    if op == tok.TK_SHR:
+        ret ">>"
+    end
+    ret ""
+end
+
+func sa_general_ok(op: int, integer: bool): bool:
+    if str.Len(sa_op_text(op)) == 0:
+        ret false
+    end
+    if op == tok.TK_AMP or op == tok.TK_PIPE or op == tok.TK_CARET or op == tok.TK_SHL or op == tok.TK_SHR or op == tok.TK_PERCENT:
+        ret integer
+    end
+    ret true
+end
+
+func sa_classify(s &: Sema, a &: at.Ast, n: at.Node, tt: int, hit &: SaHit): int:
+    if n.a == 0 or n.b == 0 or at.Get(a, n.a).synthetic or at.Get(a, n.b).synthetic:
+        ret SA_NONE
+    end
+    if tt < 0 or type_is_error(s, tt):
+        ret SA_NONE
+    end
+    if n.op == tok.TK_ASSIGN and sa_same(a, n.a, n.b):
+        if sa_pure(a, n.a) and sa_target_ok(s, a, n.a, false):
+            ret SA_NOOP
+        end
+        ret SA_NONE
+    end
+    if ty_at(s, tt).kind == TY_STR:
+        if n.op != tok.TK_ASSIGN or at.KindOf(a, n.b) != at.AST_BINARY:
+            ret SA_NONE
+        end
+        sb := at.Get(a, n.b)
+        if sb.op == tok.TK_PLUS and sa_same(a, n.a, sb.a) and sa_operand_ok(s, a, n.a, sb.b) and sa_pure(a, n.a) and sa_target_ok(s, a, n.a, false):
+            hit.op = sb.op
+            hit.left = sb.a
+            ret SA_COMPOUND
+        end
+        ret SA_NONE
+    end
+    if not type_is_numeric(s, tt) or type_distinct_sym(s, tt) != 0:
+        ret SA_NONE
+    end
+    integer := type_is_integer(s, tt)
+    signed := type_is_signed(s, tt)
+    mut kind := SA_NONE
+    if n.op == tok.TK_ASSIGN:
+        if at.KindOf(a, n.b) != at.AST_BINARY:
+            ret SA_NONE
+        end
+        b := at.Get(a, n.b)
+        hit.op = b.op
+        if sa_same(a, n.a, b.a):
+            kind = sa_rule(b.op, sa_value(s, a, b.b), false, integer, signed)
+            hit.left = b.a
+            if kind == SA_NONE and sa_general_ok(b.op, integer) and sa_operand_ok(s, a, n.a, b.b):
+                kind = SA_COMPOUND
+            end
+        else sa_same(a, n.a, b.b) and sa_commutes(b.op):
+            kind = sa_rule(b.op, sa_value(s, a, b.a), true, integer, signed)
+            hit.commuted = true
+            hit.left = b.a
+            if kind == SA_NONE and sa_general_ok(b.op, integer) and sa_operand_ok(s, a, n.a, b.a):
+                kind = SA_COMPOUND
+            end
+        end
+    else:
+        base := sema_compound_base(n.op)
+        if base == 0:
+            ret SA_NONE
+        end
+        kind = sa_rule(base, sa_value(s, a, n.b), false, integer, signed)
+    end
+    if kind == SA_NONE:
+        ret SA_NONE
+    end
+    if kind == SA_NOOP:
+        if sa_pure(a, n.a) and sa_target_ok(s, a, n.a, false):
+            ret SA_NOOP
+        end
+        ret SA_NONE
+    end
+    if kind == SA_COMPOUND:
+        if sa_pure(a, n.a) and sa_target_ok(s, a, n.a, false):
+            ret SA_COMPOUND
+        end
+        ret SA_NONE
+    end
+    if sa_pure(a, n.a) and sa_target_ok(s, a, n.a, true):
+        ret kind
+    end
+    ret SA_NONE
+end
+
+func sa_is_blank(c: int): bool:
+    ret c == 32 or c == 9
+end
+
+func sa_close(text: str, b: int, e: int): int:
+    mut depth := sa_depth(text, b, e)
+    mut end_at := e
+    until depth > 0:
+        mut j := end_at
+        until j < str.Len(text) and sa_is_blank(byte_at(text, j)):
+            j++
+        end
+        if j >= str.Len(text) or byte_at(text, j) != 41:
+            ret 0 - 1
+        end
+        end_at = j + 1
+        depth--
+    end
+    ret end_at
+end
+
+func sa_depth(text: str, b: int, e: int): int:
+    mut depth := 0
+    mut i := b
+    until i < e:
+        c := byte_at(text, i)
+        if c == 34 or c == 39 or c == 96:
+            i++
+            until i < e and byte_at(text, i) != c:
+                if byte_at(text, i) == 92 and c != 96:
+                    i++
+                end
+                i++
+            end
+        else c == 40:
+            depth++
+        else c == 41:
+            depth--
+        end
+        i++
+    end
+    ret depth
+end
+
+func sa_line_start(text: str, i: int): int:
+    mut k := i
+    until k > 0 and byte_at(text, k - 1) != 10:
+        k--
+    end
+    ret k
+end
+
+func sa_line_end(text: str, i: int): int:
+    mut k := i
+    until k < str.Len(text) and byte_at(text, k) != 10:
+        k++
+    end
+    ret k
+end
+
+func sa_all_blank(text: str, b: int, e: int): bool:
+    mut i := b
+    until i < e:
+        c := byte_at(text, i)
+        if c != 32 and c != 9 and c != 13:
+            ret false
+        end
+        i++
+    end
+    ret true
+end
+
+func sa_trim(text: str, b: int, e: int): str:
+    mut x := b
+    mut y := e
+    until x < y and (sa_is_blank(byte_at(text, x)) or byte_at(text, x) == 10 or byte_at(text, x) == 13):
+        x++
+    end
+    until y > x and (sa_is_blank(byte_at(text, y - 1)) or byte_at(text, y - 1) == 10 or byte_at(text, y - 1) == 13):
+        y--
+    end
+    ret str.Substr(text, x, y - x)
+end
+
+func sa_operand_text(text: str, a &: at.Ast, n: at.Node, hit: SaHit, rhs_end: int): str:
+    optext := sa_op_text(hit.op)
+    left := at.Get(a, hit.left)
+    mut p := left.end_index as int
+    until p < str.Len(text) and (sa_is_blank(byte_at(text, p)) or byte_at(text, p) == 41):
+        p++
+    end
+    if p + str.Len(optext) > str.Len(text) or not str.Equals(str.Substr(text, p, str.Len(optext)), optext):
+        ret ""
+    end
+    if not hit.commuted:
+        mut oe := rhs_end
+        oe = sa_close(text, p + str.Len(optext), oe)
+        if oe < 0:
+            ret ""
+        end
+        ret sa_trim(text, p + str.Len(optext), oe)
+    end
+    lhs := at.Get(a, n.a)
+    mut q := lhs.end_index as int
+    until q < str.Len(text) and (sa_is_blank(byte_at(text, q)) or byte_at(text, q) == 41):
+        q++
+    end
+    if q >= str.Len(text):
+        ret ""
+    end
+    q++
+    until q < p and (sa_is_blank(byte_at(text, q)) or byte_at(text, q) == 10):
+        q++
+    end
+    mut d := sa_depth(text, q, p)
+    until d > 0 and q < p:
+        if byte_at(text, q) == 40:
+            d--
+        end
+        q++
+    end
+    if d != 0:
+        ret ""
+    end
+    ret sa_trim(text, q, p)
+end
+
+pub func SemaCheckSelfAssign(s &: Sema, a &: at.Ast, nid: int, tt: int):
+    if s.requal or s.in_derive:
+        ret
+    end
+    n := at.Get(a, nid)
+    if n.synthetic or n.a == 0 or n.b == 0:
+        ret
+    end
+    key := s.file + ":" + n.begin_index
+    if g_sa_seen.has(key):
+        ret
+    end
+    mut hit := SaHit {}
+    kind := sa_classify(s, a, n, tt, hit)
+    if kind == SA_NONE:
+        ret
+    end
+    g_sa_seen.put(key, true)
+    text := src.Peek(s.file)
+    lhs := at.Get(a, n.a)
+    b := lhs.begin_index as int
+    rhs_end := at.Get(a, n.b).end_index as int
+    mut e := rhs_end
+    if str.Len(text) == 0 or e > str.Len(text) or b >= e:
+        e = 0 - 1
+    else:
+        e = sa_close(text, b, e)
+    end
+    mut sp := span_of(a, nid)
+    mut stmt_text := "?"
+    mut target := "?"
+    if e > b:
+        sp.length = (e - b) as u32
+        stmt_text = str.Substr(text, b, e - b)
+        target = str.Substr(text, b, (lhs.end_index as int) - b)
+    end
+    mut repl := ""
+    if e > b and kind == SA_INC:
+        repl = target + "++"
+    else e > b and kind == SA_DEC:
+        repl = target + "--"
+    else e > b and kind == SA_COMPOUND:
+        operand := sa_operand_text(text, a, n, hit, rhs_end)
+        if str.Len(operand) > 0:
+            repl = target + " " + sa_op_text(hit.op) + "= " + operand
+        end
+    end
+    if e > b and (kind == SA_NOOP or str.Len(repl) > 0):
+        mut fx := fix_at(sp)
+        if kind == SA_NOOP:
+            fx.title = i18.Tr("Remove this statement")
+            ls := sa_line_start(text, b)
+            le := sa_line_end(text, e)
+            if sa_all_blank(text, ls, b) and sa_all_blank(text, e, le):
+                fx.mode = lg.FIX_LINES
+            else:
+                fx.text = ""
+            end
+            fx.preferred = true
+            fx.safe = false
+        else:
+            fx.title = co.Format1(i18.Tr("Write '%s'"), co.ArgStr(repl))
+            fx.text = repl
+            fx.preferred = true
+            fx.safe = true
+        end
+        queue_fix(fx)
+    end
+    if kind == SA_NOOP:
+        serr(
+            s, SELFASSIGN_CODE, sp, co.Format1(i18.Tr("'%s' does nothing: remove this statement"), co.ArgStr(stmt_text))
+        )
+        ret
+    end
+    if str.Len(repl) == 0:
+        repl = kind == SA_COMPOUND ? "a " + sa_op_text(hit.op) + "= b" : "a++"
+    end
+    mut help := i18.Tr("a compound assignment updates a variable in place: write the operator before '='")
+    if kind != SA_COMPOUND:
+        help = i18.Tr("'++' and '--' are the only way to step a number by one; '+=' and '-=' are for other amounts")
+    end
+    serr_help(
+        s, SELFASSIGN_CODE, sp, co.Format2(i18.Tr("'%s' is not allowed: write '%s'"), co.ArgStr(stmt_text), co.ArgStr(repl)), help
+    )
+end
+
+pub func SemaSelfAssignReset():
+    g_sa_seen.free()
+    g_sa_seen = HashMap {} as HashMap<str, bool>
+end

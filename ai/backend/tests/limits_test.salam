@@ -13,6 +13,8 @@
  */
 
 
+import mem
+
 include ailimits "../limits.salam"
 
 mut FAILED := 0
@@ -20,8 +22,37 @@ mut FAILED := 0
 func same(name: str, got: i64, want: i64):
     if got != want:
         println "FAIL", name, "got", got, "want", want
-        FAILED += 1
+        FAILED++
     end
+end
+
+func same_text(name: str, got: str, want: str):
+    if got != want:
+        println "FAIL", name, "got", got, "want", want
+        FAILED++
+    end
+end
+
+func audio_kind(head: str): str:
+    buf := mem.AllocateZeroed(16 as u64)
+    mut i := 0
+    until i < head.len():
+        (buf as u8*)[i] = head[i] as u8
+        i++
+    end
+    kind := ailimits.AudioContainer(buf, head.len())
+    mem.Free(buf)
+    ret kind
+end
+
+func frame_kind(b0: int, b1: int, b2: int): str:
+    buf := mem.AllocateZeroed(16 as u64)
+    (buf as u8*)[0] = b0 as u8
+    (buf as u8*)[1] = b1 as u8
+    (buf as u8*)[2] = b2 as u8
+    kind := ailimits.AudioContainer(buf, 12)
+    mem.Free(buf)
+    ret kind
 end
 
 func main(): int:
@@ -34,6 +65,45 @@ func main(): int:
     same("unlimited env zero", ailimits.Pick(false, "unlimited", 600 as i64, 3600 as i64, 0 as i64), 43200 as i64)
     same("agent env too high", ailimits.Pick(true, "plus", 600 as i64, 999999 as i64, 43200 as i64), 43200 as i64)
     same("chat env zero", ailimits.Pick(false, "plus", 0 as i64, 3600 as i64, 43200 as i64), 600 as i64)
+    same_text("speech within limits", ailimits.SpeechVerdict(29, 599, 30, 600), "")
+    same_text("speech requests used up", ailimits.SpeechVerdict(30, 0, 30, 600), "requests")
+    same_text("speech seconds used up", ailimits.SpeechVerdict(1, 600, 30, 600), "seconds")
+    same_text("speech limits off", ailimits.SpeechVerdict(1000, 100000, 0, 0), "")
+    same_text("webm is audio", audio_kind("\x1a\x45\xdf\xa3........"), "matroska")
+    same_text("ogg is audio", audio_kind("OggS........"), "ogg")
+    same_text("mp4 is audio", audio_kind("....ftypisom"), "mp4")
+    same_text("short is not audio", audio_kind("OggS"), "")
+    same_text("png is not audio", audio_kind("PNGPNGPNGPNG"), "")
+    same_text("text is not audio", audio_kind("hello, this is text"), "")
+    same_text("flac is audio", audio_kind("fLaC........"), "flac")
+    same_text("wav is audio", audio_kind("RIFF....WAVEfmt "), "wav")
+    same_text("avi is not audio", audio_kind("RIFF....AVI LIST"), "")
+    same_text("tagged mp3 is audio", audio_kind("ID3........."), "mp3")
+    same_text("bare mp3 is audio", frame_kind(255, 251, 144), "mp3")
+    same_text("aac frames are not mp3", frame_kind(255, 241, 80), "")
+    same_text("reserved version", frame_kind(255, 235, 144), "")
+    same_text("bad bitrate is not mp3", frame_kind(255, 251, 240), "")
+    same("guest share a third", ailimits.GuestShare(30, 3) as i64, 10 as i64)
+    same("guest share floor", ailimits.GuestShare(4, 3) as i64, 3 as i64)
+    same("guest share off", ailimits.GuestShare(0, 3) as i64, 0 as i64)
+    same("path ok", ailimits.SafeFilePath("voice/file_12.oga") ? 1 : 0, 1)
+    same("path dots", ailimits.SafeFilePath("voice/../x.oga") ? 1 : 0, 0)
+    same("path absolute", ailimits.SafeFilePath("/etc/passwd") ? 1 : 0, 0)
+    same("path query", ailimits.SafeFilePath("voice/a.oga?x=1") ? 1 : 0, 0)
+    same("path newline", ailimits.SafeFilePath("voice/a.oga\r\nHost: x") ? 1 : 0, 0)
+    same("path space", ailimits.SafeFilePath("voice/a b.oga") ? 1 : 0, 0)
+    same("path empty", ailimits.SafeFilePath("") ? 1 : 0, 0)
+    same_text("cut short", ailimits.CutUtf8("abc", 10), "abc")
+    same_text("cut ascii", ailimits.CutUtf8("abcdef", 3), "abc")
+    same_text("cut persian on a letter", ailimits.CutUtf8("سلام", 3), "س")
+    same_text("caption en", ailimits.CaptionLang(" /EN "), "en")
+    same_text("caption fa", ailimits.CaptionLang("fa"), "fa")
+    same_text("caption other", ailimits.CaptionLang("hello"), "")
+    same("doc audio mime", ailimits.VoiceDocument("audio/mpeg", "x") ? 1 : 0, 1)
+    same("doc video mime", ailimits.VoiceDocument("video/mp4", "x") ? 1 : 0, 1)
+    same("doc octet by extension", ailimits.VoiceDocument("application/octet-stream", "Song.FLAC") ? 1 : 0, 1)
+    same("doc pdf", ailimits.VoiceDocument("application/pdf", "a.mp3") ? 1 : 0, 0)
+    same("doc unknown", ailimits.VoiceDocument("", "notes.txt") ? 1 : 0, 0)
     if FAILED > 0:
         println FAILED, "failed"
         ret 1

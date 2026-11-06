@@ -23,7 +23,7 @@ import numpy as np
 import engines
 
 RATE = 16000
-CODECS = {"opus", "vorbis", "aac"}
+CODECS = {"opus", "vorbis", "aac", "mp3", "mp3float", "flac", "pcm_u8", "pcm_s16le", "pcm_s24le", "pcm_s32le", "pcm_f32le"}
 LANGUAGES = ("fa", "en")
 
 log = logging.getLogger("stt")
@@ -72,7 +72,24 @@ def container_of(body):
         return "ogg"
     if body[4:8] == b"ftyp":
         return "mov"
+    if body[:4] == b"fLaC":
+        return "flac"
+    if body[:4] == b"RIFF" and body[8:12] == b"WAVE":
+        return "wav"
+    if body[:3] == b"ID3" or mp3_frame(body):
+        return "mp3"
     return None
+
+
+def mp3_frame(body):
+    """True for an MPEG audio frame header, which is what a bare mp3 starts with."""
+    if body[0] != 0xFF or body[1] & 0xE0 != 0xE0:
+        return False
+    version = (body[1] >> 3) & 3
+    layer = (body[1] >> 1) & 3
+    bitrate = body[2] >> 4
+    rate = (body[2] >> 2) & 3
+    return version != 1 and layer != 0 and bitrate not in (0, 15) and rate != 3
 
 
 def decode(body, container, max_seconds):

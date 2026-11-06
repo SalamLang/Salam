@@ -2346,6 +2346,30 @@ func path_outside(ws: Workspace, path: str, cwd: str): bool:
     ret not path_inside(canonical_prefix(normalize_path(joined)), ws.root)
 end
 
+func env_token_outside(ws: Workspace, name: str, tail: str, cwd: str): bool:
+    if name.len() == 0:
+        ret false
+    end
+    as_path := str.StartsWith(tail, "/") or str.StartsWith(tail, "\\")
+    if not as_path and not (tail.len() == 0 and (name == "HOME" or name == "USERPROFILE" or name == "TMPDIR" or name == "TEMP" or name == "TMP")):
+        ret false
+    end
+    value := os.Env(name)
+    if value.len() == 0:
+        ret true
+    end
+    mut rel := str.TrimPrefix(tail, "/")
+    rel = str.TrimPrefix(rel, "\\")
+    if rel.len() == 0:
+        ret path_outside(ws, value, cwd)
+    end
+    ret path_outside(ws, filepath.Join(value, rel), cwd)
+end
+
+func path_value(value: str): bool:
+    ret value == ".." or str.StartsWith(value, "/") or str.StartsWith(value, "\\") or str.StartsWith(value, "~") or str.StartsWith(value, "$") or str.StartsWith(value, "%") or str.Contains(value, "/") or str.Contains(value, "\\")
+end
+
 func token_outside(ws: Workspace, token: str, cwd: str): bool:
     if str.Contains(token, "://"):
         ret false
@@ -2368,6 +2392,13 @@ func token_outside(ws: Workspace, token: str, cwd: str): bool:
             ret path_outside(ws, home, cwd)
         end
         ret path_outside(ws, filepath.Join(home, rel), cwd)
+    else str.StartsWith(token, "$env:"):
+        body := str.Substr(token, 5, str.Len(token) - 5)
+        mut i := 0
+        until i < str.Len(body) and str.Contains("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_", str.Substr(body, i, 1)):
+            i++
+        end
+        ret env_token_outside(ws, str.Substr(body, 0, i), str.Substr(body, i, str.Len(body) - i), cwd)
     else str.StartsWith(token, "$"):
         body := str.TrimPrefix(token, "$")
         mut name := ""
@@ -2381,53 +2412,34 @@ func token_outside(ws: Workspace, token: str, cwd: str): bool:
             tail = str.Substr(body, close + 1, str.Len(body) - close - 1)
         else:
             mut i := 0
-            until i >= str.Len(body) or not str.Contains("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_", str.Substr(body, i, 1)):
+            until i < str.Len(body) and str.Contains("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_", str.Substr(body, i, 1)):
                 i++
             end
             name = str.Substr(body, 0, i)
             tail = str.Substr(body, i, str.Len(body) - i)
         end
-        if name.len() == 0:
+        ret env_token_outside(ws, name, tail, cwd)
+    else str.StartsWith(token, "%"):
+        rest := str.Substr(token, 1, str.Len(token) - 1)
+        close := str.IndexOf(rest, "%")
+        if close < 0:
             ret false
         end
-        if tail.len() == 0 and name != "HOME" and name != "USERPROFILE" and name != "TMPDIR" and name != "TEMP" and name != "TMP":
-            ret false
+        ret env_token_outside(ws, str.Substr(rest, 0, close), str.Substr(rest, close + 1, str.Len(rest) - close - 1), cwd)
+    end
+    if str.StartsWith(token, "-") and not str.StartsWith(token, "--") and str.Len(token) > 2:
+        value := str.Substr(token, 2, str.Len(token) - 2)
+        if path_value(value):
+            ret token_outside(ws, value, cwd)
         end
-        if tail.len() > 0 and not str.StartsWith(tail, "/") and not str.StartsWith(tail, "\\"):
-            ret false
-        end
-        value := os.Env(name)
-        if value.len() == 0:
-            ret true
-        end
-        mut rel := str.TrimPrefix(tail, "/")
-        rel = str.TrimPrefix(rel, "\\")
-        ret path_outside(ws, filepath.Join(value, rel), cwd)
+        ret false
     end
-    if is_absolute(token):
-        ret path_outside(ws, token, cwd)
-    end
-    if str.StartsWith(token, "-"):
-        slash := str.IndexOf(token, "/")
-        if slash >= 0:
-            rest := str.Substr(token, slash, str.Len(token) - slash)
-            if is_absolute(rest):
-                ret path_outside(ws, rest, cwd)
-            end
-        end
-    end
-    if token == ".." or str.StartsWith(token, "../") or str.StartsWith(token, "..\\"):
-        ret path_outside(ws, token, cwd)
-    end
-    if str.Contains(token, "/") or str.Contains(token, "\\"):
-        ret path_outside(ws, token, cwd)
-    end
-    ret false
+    ret path_outside(ws, token, cwd)
 end
 
 func command_outside(ws: Workspace, text: str, cwd: str): bool:
     mut clean := text
-    each sep in [" ", "\t", "\n", "\r", "\"", "'", "`", ";", "|", "&", "<", ">", "(", ")", "{", "}", "[", "]", ",", "="]:
+    each sep in [" ", "\t", "\n", "\r", "\"", "'", "`", ";", "|", "&", "<", ">", "(", ")", "[", "]", ",", "="]:
         clean = str.Replace(clean, sep, " ")
     end
     tokens := str.Split(clean, " ")

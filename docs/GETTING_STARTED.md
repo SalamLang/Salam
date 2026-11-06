@@ -203,6 +203,7 @@ stamp.
 ```sh
 salam check app.salam                  # exit 0: no errors, exit 1: errors, exit 2: could not start
 salam check app.salam --error-format=json
+salam check app.salam --error-lang=fa   # English source, Persian diagnostics
 salam check app.salam --backend=native # the rules of that backend, as `salam build` applies them
 salam check app.salam --target=x86_64-windows-gnu   # the Windows branches of the program
 ```
@@ -210,6 +211,11 @@ salam check app.salam --target=x86_64-windows-gnu   # the Windows branches of th
 `salam check` runs the part of `salam build` that comes before code generation,
 with the same flags, and answers for the build you would get from them. It
 exits non-zero whenever it prints an error, in plain and in JSON output alike.
+
+`--error-lang=fa` (or `en`) picks the language of diagnostics and tool messages
+independently of the source language: an English file keeps its English
+keywords and identifiers and is still compiled as English, while its errors
+are printed in Persian. Without the flag, messages follow the source language.
 
 It reports:
 

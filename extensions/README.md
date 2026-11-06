@@ -145,12 +145,13 @@ YASnippet, which all use the same `${1:placeholder}` syntax.
 
 ## Useful compiler flags
 
-The integrations lean on three compiler options:
+The integrations lean on these compiler options:
 
 | Flag                                                                     | Why                                                                                                             |
 | ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------- |
 | `--error-style=gcc`                                                      | One-line `file:line:col: error: message` diagnostics, which every editor's error parser already understands.    |
 | `--error-format=json`                                                    | One JSON object per diagnostic, for editors that build structured diagnostics.                                  |
+| `--error-lang=fa`                                                        | Print Persian diagnostics for English source; keywords and identifiers stay English.                            |
 | `salam inspect FILE --emit-symbol --xml-out=/dev/null --log-level=error` | Lex, parse and analyze without running the program or writing an artifact: the check every "lint on save" uses. |
 
 ## Licensing

@@ -11,6 +11,11 @@ ENV SALAM_STD=/srv/salam/std
 RUN mkdir -p /out && /opt/salam-linux-x86_64/salam build main.salam --output=/out/salam-mcp --log-level=error
 
 FROM debian:trixie-slim
+# ca-certificates is what salam_web_fetch uses to verify HTTPS; without it the
+# MCP server cannot read any https page.
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
 RUN useradd --system --uid 10001 --no-create-home salam
 COPY --from=build /opt/salam-linux-x86_64/salam /srv/salam/salam
 COPY --from=build /srv/salam/std /srv/salam/std

@@ -57,7 +57,7 @@ example compiled and run), and a reference page for every std package under
 7. Translating from PHP / TS-JS / Python / C-Go-Rust
 8. FFI, concurrency, conditional compilation
 9. Layout DSL (HTML/CSS/JS)
-10. Tooling & verification
+10. Tooling & verification (download links, Cloudflare Workers)
 11. When a detail is missing
 12. **Porting C → Salam & self-hosting the compiler** (bit ops, unions, the module map)
 13. **Persian:** source basics (digits, commas, detection, the entry `ریشه`)
@@ -2561,6 +2561,32 @@ PowerShell: `irm https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/ma
 Then `salam version`, and `salam upgrade` later. The standard library ships
 with the compiler.
 
+### Download links for people
+
+Everything is published on GitHub and the site links to the same files:
+releases at <https://github.com/SalamLang/Salam/releases>, the compiler page at
+<https://www.salamlang.ir/install/> and the desktop agent page at
+<https://www.salamlang.ir/agent/> (English under
+<https://salamlang.github.io/Salam/>).
+
+A direct file is
+`https://github.com/SalamLang/Salam/releases/download/v<version>/<file>`. File
+names carry the version, so `releases/latest/download/<file>` does not work for
+them: give the versioned URL (the version is in `salam version`, `VERSION`, or
+the releases page) or the releases page itself.
+
+- Compiler: `salam-<version>-linux-x86_64.tar.gz`, `-linux-aarch64.deb`,
+  `-linux-x86_64-musl.zip` (Alpine), `-linux-i686.tar.gz`, `-macos-arm64.zip`,
+  `-windows-x86_64.zip`, `-windows-arm64.zip`, `-windows-i686.zip`, with
+  `.deb`, `.rpm` and a `.sha256` beside each.
+- Desktop agent: `salam-agent-<version>-windows-x86_64-setup.exe` (also
+  `-windows-x86_64.msi` and the portable `-windows-x86_64.exe`),
+  `-windows-aarch64-setup.exe`, `-windows-i686-setup.exe`,
+  `-macos-universal.dmg` (`-macos-arm64.dmg`, `-macos-x86_64.dmg`,
+  `-macos-universal.zip`), `-linux-x86_64.AppImage` (also `.deb`, `.rpm`),
+  `-linux-aarch64.AppImage`, `-linux-i686.deb`.
+- Android: `salam-<version>-android-universal.apk`.
+
 ### Packages from GitHub (the package manager)
 
 Everything in §5 ships with the compiler and needs no command. The package
@@ -2606,6 +2632,48 @@ end
 > **Version check is `salam version`, a subcommand.** There is no `--version`
 > or `-v` flag: `salam --version` fails with `unknown command '--version'` and
 > suggests `salam version`.
+
+### Cloudflare Workers (a whole Salam web app at the edge)
+
+A normal `net/http` + `net/router` program deploys to Cloudflare Workers
+unchanged; there is no JavaScript rewrite. Build it to WebAssembly and give
+wrangler a three-line entry point:
+
+```sh
+salam build main.salam --target=wasm32-wasi --release --output=build/app.wasm
+```
+
+```js
+import { createWorker } from '../../std/net/http/cloudflare/worker.js';
+import app from './build/app.wasm';
+export default createWorker(app);
+```
+
+That relative path is for a Salam checkout; in a project of your own, copy
+`std/net/http/cloudflare/worker.js` (installed at
+`~/.salam/bin/std/net/http/cloudflare/worker.js`) next to `worker.js` and
+import `./worker-host.js`.
+
+`wrangler.toml` needs `main = "worker.js"`, a `[build]` command running
+`build.sh`, and `[[rules]] type = "CompiledWasm"` with
+`globs = ["**/*.wasm"]`. On this target `http.Run` serves one request per
+process: the raw HTTP/1.1 request arrives on stdin, the response leaves on
+fd 3, `println` goes to `wrangler tail`, `os.Env("X")` reads wrangler `[vars]`
+and secrets, and `http.IsEdge()` is true.
+
+Limits: one process per request, so globals do not survive (keep state in
+cookies, KV, D1 or an HTTP API); no filesystem (`router.Static` has nothing to
+serve, use Workers static assets); no outbound sockets, so `http.Get` cannot
+call another server from the module. A program that must call out uses a few
+lines of `fetch` in `worker.js` or a native host. `salam js` is for browsers,
+not a Worker module.
+
+Complete examples, built by CI: `tests/en/apps/cloudflare-worker-router`,
+`-hello`, `-pure` (CGI style, without `net/http`) and `-telegram-bot` (webhook
+answers with the Bot API call itself, so no outbound call and no token at
+runtime; `setup/setup.salam` calls `setWebhook` from a native machine). The
+target needs wasi-sdk (`$WASI_SDK_PATH`, `~/.salam/wasi-sdk` or
+`/opt/wasi-sdk`) and `wrangler` to deploy.
 
 **Always verify a converted program.** Run `salam check file.salam` after every
 edit (exit 1 on any error, `--error-format=json` for one JSON object per

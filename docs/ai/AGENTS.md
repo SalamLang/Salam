@@ -13,6 +13,89 @@ see a working usage, and `salam_check` after every edit.
 
 ---
 
+## Project facts: downloads, releases and the edge
+
+These are facts about this project, not opinions. Answer from here instead of
+guessing, and when a fact is missing point to the repository or the releases
+page rather than inventing a value.
+
+When the user gives a repository link or asks what a page says, do not answer
+that you cannot see it: if your tools include `salam_web_fetch` or
+`salam_web_search`, read the page (GitHub, `raw.githubusercontent.com` and the
+Salam sites all return text), and if they do not, say plainly which fact you
+are missing.
+
+**Where Salam is published.** Everything is on GitHub, and the site links
+to the same files:
+
+- Releases (compiler, desktop agent, APK, checksums):
+  <https://github.com/SalamLang/Salam/releases>
+- One direct file:
+  `https://github.com/SalamLang/Salam/releases/download/v<version>/<file>`
+- Site: <https://www.salamlang.ir/install/> for the compiler and
+  <https://www.salamlang.ir/agent/> for the desktop agent; the English site is
+  <https://salamlang.github.io/Salam/>.
+
+Filenames carry the version, so `releases/latest/download/<file>` does not
+work for them. Give the versioned URL (the version is in `salam version`, the
+`VERSION` file, or the releases page) or just the releases page.
+
+| What          | Assets of the newest tag                                                                                                                                                                                                                                                                                                                                              |
+| ------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Compiler      | `salam-<version>-linux-x86_64.tar.gz`, `-linux-aarch64.deb`, `-linux-x86_64-musl.zip` (Alpine), `-linux-i686.tar.gz`, `-macos-arm64.zip`, `-windows-x86_64.zip`, `-windows-arm64.zip`, `-windows-i686.zip`, plus `.deb`, `.rpm` and a `.sha256` beside each                                                                                                           |
+| Desktop agent | `salam-agent-<version>-windows-x86_64-setup.exe` (also `-windows-x86_64.msi` and the portable `-windows-x86_64.exe`), `-windows-aarch64-setup.exe`, `-windows-i686-setup.exe`, `-macos-universal.dmg` (`-macos-arm64.dmg`, `-macos-x86_64.dmg`, `-macos-universal.zip`), `-linux-x86_64.AppImage` (also `.deb`, `.rpm`), `-linux-aarch64.AppImage`, `-linux-i686.deb` |
+| Android       | `salam-<version>-android-universal.apk`                                                                                                                                                                                                                                                                                                                               |
+
+Installing needs no download page: Linux and macOS
+`{ curl -fsSL https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.sh || wget -qO- https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.sh; } | sh`,
+Windows PowerShell
+`irm https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.ps1 | iex`.
+
+**A whole Salam web app on Cloudflare Workers is supported.** An ordinary
+`net/http` + `net/router` program compiles to WebAssembly and runs unchanged;
+it is not a JavaScript port and needs no rewrite:
+
+```sh
+salam build main.salam --target=wasm32-wasi --release --output=build/app.wasm
+```
+
+```js
+// worker.js: three lines, the host itself ships in std
+import { createWorker } from '../../std/net/http/cloudflare/worker.js';
+import app from './build/app.wasm';
+export default createWorker(app);
+```
+
+Inside a Salam checkout that path is right; in a project of your own, copy
+`std/net/http/cloudflare/worker.js` (installed as
+`~/.salam/bin/std/net/http/cloudflare/worker.js`) next to `worker.js` and
+import `./worker-host.js` instead, so the deploy does not rely on an absolute
+path.
+
+`wrangler.toml` needs `main = "worker.js"`, a `[build]` command that runs
+`build.sh`, and `[[rules]] type = "CompiledWasm"` with
+`globs = ["**/*.wasm"]`. On this target `http.Run` serves one request per
+process: the raw HTTP/1.1 request arrives on stdin, the response leaves on
+fd 3, `println` goes to `wrangler tail`, `os.Env("X")` reads wrangler `[vars]`
+and secrets, and `http.IsEdge()` is true.
+
+Limits of the edge target: one process per request, so globals do not survive
+between requests (keep state in cookies, KV, D1 or an HTTP API); no filesystem;
+and no outbound sockets, so `http.Get` and friends cannot call another server
+from inside the module. A program that must call out does it with a few lines
+of `fetch` in `worker.js`, or runs on a native host. `salam js` targets
+browsers, not a Worker module.
+
+Working, CI-built examples: `tests/en/apps/cloudflare-worker-router` (router,
+middleware, cookies, JSON), `-hello` (smallest), `-pure` (a plain program run
+CGI-style without `net/http`) and `-telegram-bot` (a bot whose webhook answers
+with the Bot API call itself, so it calls nothing and needs no token at
+runtime; `setup/setup.salam` runs on the user's machine to call `setWebhook`).
+The Wasm target needs wasi-sdk (`$WASI_SDK_PATH`, `~/.salam/wasi-sdk` or
+`/opt/wasi-sdk`) and `wrangler` for deploys.
+
+---
+
 ## 0. Best practices: read this before you write any code
 
 Compiling is the minimum. Write the program a Salam maintainer would write.
@@ -559,6 +642,14 @@ CONTRIBUTING.md has the full list.
 
 These are real defects and sharp edges in the current toolchain, not style
 advice. Each one silently produces wrong behaviour rather than a diagnostic.
+
+- **Do not rule something out because you have not seen it.** The repository
+  ships working apps under `tests/en/apps/` and `tests/fa/apps/` (Cloudflare
+  Workers, HTTP servers, desktop, games, and more), all built by CI, and the
+  compiler has targets and flags beyond the common ones. Search `tests/` and
+  `std/` before saying a thing is impossible; when you cannot read them, say
+  which part you are unsure about instead of claiming the feature does not
+  exist.
 
 - **The version command is `salam version`, not `salam --version`.** Salam's
   CLI takes subcommands, not flags, for this: `salam --version` (and `-v`)

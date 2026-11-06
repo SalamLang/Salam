@@ -57,7 +57,7 @@ example compiled and run), and a reference page for every std package under
 7. Translating from PHP / TS-JS / Python / C-Go-Rust
 8. FFI, concurrency, conditional compilation
 9. Layout DSL (HTML/CSS/JS)
-10. Tooling & verification (download links, Cloudflare Workers)
+10. Tooling & verification (downloads, what Salam can do, Cloudflare Workers)
 11. When a detail is missing
 12. **Porting C → Salam & self-hosting the compiler** (bit ops, unions, the module map)
 13. **Persian:** source basics (digits, commas, detection, the entry `ریشه`)
@@ -2555,7 +2555,9 @@ salam inspect app.salam --emit-tokens | --emit-ast | --emit-symbol   # dump a st
 
 ### Installing the compiler
 
-The latest release is v0.6.2. Linux and macOS: `{ curl -fsSL https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.sh || wget -qO- https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.sh; } | sh`
+The newest release is whatever
+<https://github.com/SalamLang/Salam/releases> lists (v0.6.2 when this was
+written). Linux and macOS: `{ curl -fsSL https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.sh || wget -qO- https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.sh; } | sh`
 (add `-s -- --version X.Y.Z` after the final `sh` to pick a release). Windows
 PowerShell: `irm https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.ps1 | iex`.
 Then `salam version`, and `salam upgrade` later. The standard library ships
@@ -2572,20 +2574,62 @@ releases at <https://github.com/SalamLang/Salam/releases>, the compiler page at
 A direct file is
 `https://github.com/SalamLang/Salam/releases/download/v<version>/<file>`. File
 names carry the version, so `releases/latest/download/<file>` does not work for
-them: give the versioned URL (the version is in `salam version`, `VERSION`, or
-the releases page) or the releases page itself.
+them. Check the release and its asset list before giving a URL: `VERSION` is
+the version in development, not the last release (`VERSION` says 0.6.3 while
+the newest release is v0.6.2), so never build a URL from it alone. When you
+cannot check, give the releases page and name the asset.
 
-- Compiler: `salam-<version>-linux-x86_64.tar.gz`, `-linux-aarch64.deb`,
-  `-linux-x86_64-musl.zip` (Alpine), `-linux-i686.tar.gz`, `-macos-arm64.zip`,
-  `-windows-x86_64.zip`, `-windows-arm64.zip`, `-windows-i686.zip`, with
-  `.deb`, `.rpm` and a `.sha256` beside each.
-- Desktop agent: `salam-agent-<version>-windows-x86_64-setup.exe` (also
-  `-windows-x86_64.msi` and the portable `-windows-x86_64.exe`),
-  `-windows-aarch64-setup.exe`, `-windows-i686-setup.exe`,
-  `-macos-universal.dmg` (`-macos-arm64.dmg`, `-macos-x86_64.dmg`,
-  `-macos-universal.zip`), `-linux-x86_64.AppImage` (also `.deb`, `.rpm`),
-  `-linux-aarch64.AppImage`, `-linux-i686.deb`.
-- Android: `salam-<version>-android-universal.apk`.
+- Compiler: Linux `x86_64` and `aarch64` have `.tar.gz`, `.zip`, `.deb` and
+  `.rpm`; Linux `i686` has `.tar.gz`, `.zip` and `.deb` (no rpm); Linux
+  `x86_64-musl` (Alpine) has `.tar.gz` and `.zip`; `macos-arm64`,
+  `windows-x86_64`, `windows-arm64` and `windows-i686` have `.tar.gz` and
+  `.zip`.
+- Desktop agent: Windows `x86_64` and `i686` have `-setup.exe`, `.msi` and the
+  portable `.exe`; Windows `aarch64` has `-setup.exe` and the portable `.exe`;
+  macOS has `-macos-universal.dmg`, `-macos-arm64.dmg`, `-macos-x86_64.dmg`
+  and `.zip`; Linux `x86_64` and `aarch64` have `.AppImage`, `.deb` and `.rpm`;
+  Linux `i686` has `.deb` and `.rpm`.
+- Android: `salam-<version>-android-universal.apk`, only in releases that
+  published it; check first and point to the releases page when it is absent
+  (v0.6.2 has no APK).
+
+Every published file has a `.sha256` beside it, and the agent release also has
+`salam-agent-<version>-SHA256SUMS` and `-SHA512SUMS`.
+
+### What Salam can do
+
+Before calling anything impossible, look in `tests/`, `std/` and `docs/`:
+
+- `salam help` lists every command: `build`, `check`, `test`, `obj`, `llvm`,
+  `js`, `web`, `serve`, `bundle`, `run`, `exec`, `new`, `init`, `add`,
+  `remove`, `update`, `deps`, `install`, `uninstall`, `search`, `format`,
+  `doc`, `translate`, `page`, `debug`, `memcheck`, `inspect`, `cli`,
+  `upgrade`, `version`, plus the two SQL commands (schema check and typed
+  query generation).
+- Targets: the C backend is the default (`build`, `run`, `obj`, cross-compile
+  with `--target=<triple>`); `salam llvm` emits LLVM IR and `--backend=llvm`
+  builds with it (32-bit aware, `docs/PLATFORMS.md`); `--target=wasm32-wasi`
+  builds WebAssembly; `salam js` and `salam web` target browsers;
+  `--target=<arch>-unknown-none` with `--entry`, `--linker-script` and
+  `--link-object` builds freestanding kernels (`docs/FREESTANDING.md`).
+- Beyond the terminal: `gui.webview` for desktop apps (`docs/DESKTOP.md`,
+  `salam new name --desktop`, installers with `salam bundle`),
+  `std/gui/raylib` for games, the layout DSL (`salam page build`), the
+  `android/`, `ios/` and `mobile/` projects.
+- Servers: `net/http` + `net/router`, middleware, cookies, sessions, swagger,
+  validation, `salam serve --config` (virtual hosts, redirects, FastCGI PHP
+  backends), `net.http2`, `net.websocket`, `grpc`, `graphql`, `net.proxy`, and
+  the `db.*` drivers.
+- Data and ML: `ml`, `tensor`, `nn`, `autograd`, `onnx`, `gguf`, `opencv`,
+  `image`, `matrix`, `excel`, `stats`.
+- `tests/en` is the living feature index, mirrored by `tests/fa`:
+  `apps` (21 projects such as `httpbench`, `crawler`, `blogapi`, `jsonapi`,
+  `swaggerapi` and the four Workers apps, plus about 40 standalone programs),
+  `basics`, `features`, `types`, `stdlib`,
+  `interop`, `data`, `db`, `games`, `cross`, `llvm`, `js`, `page`, `desktop`,
+  `opencv`, `raylib`, `ssh`, `ssl`, `tls`, `packages`, `project`, `fmt`,
+  `lint`, `errors`, `repl`, `webframework`, `webview_cef`; also `tests/kernel`,
+  `tests/lsp` and `tests/fixtures`.
 
 ### Packages from GitHub (the package manager)
 
@@ -2640,19 +2684,22 @@ unchanged; there is no JavaScript rewrite. Build it to WebAssembly and give
 wrangler a three-line entry point:
 
 ```sh
+mkdir -p build
 salam build main.salam --target=wasm32-wasi --release --output=build/app.wasm
 ```
 
 ```js
-import { createWorker } from '../../std/net/http/cloudflare/worker.js';
+import { createWorker } from './worker-host.js';
 import app from './build/app.wasm';
 export default createWorker(app);
 ```
 
-That relative path is for a Salam checkout; in a project of your own, copy
-`std/net/http/cloudflare/worker.js` (installed at
-`~/.salam/bin/std/net/http/cloudflare/worker.js`) next to `worker.js` and
-import `./worker-host.js`.
+The examples inside the repository import the host by a relative path; from
+`tests/en/apps/cloudflare-worker-router/worker.js` it is
+`../../../../std/net/http/cloudflare/worker.js` (four levels up). In a project
+of your own, copy `std/net/http/cloudflare/worker.js` (installed at
+`~/.salam/bin/std/net/http/cloudflare/worker.js`) next to `worker.js`, name the
+copy `worker-host.js`, and the import above works.
 
 `wrangler.toml` needs `main = "worker.js"`, a `[build]` command running
 `build.sh`, and `[[rules]] type = "CompiledWasm"` with
@@ -2661,12 +2708,13 @@ process: the raw HTTP/1.1 request arrives on stdin, the response leaves on
 fd 3, `println` goes to `wrangler tail`, `os.Env("X")` reads wrangler `[vars]`
 and secrets, and `http.IsEdge()` is true.
 
-Limits: one process per request, so globals do not survive (keep state in
-cookies, KV, D1 or an HTTP API); no filesystem (`router.Static` has nothing to
-serve, use Workers static assets); no outbound sockets, so `http.Get` cannot
-call another server from the module. A program that must call out uses a few
-lines of `fetch` in `worker.js` or a native host. `salam js` is for browsers,
-not a Worker module.
+Limits: one process per request, so globals do not survive. Cookies work
+directly; Workers storage (KV, D1, R2) and HTTP APIs are asynchronous bindings,
+so the host `worker.js` must exchange that data with the Salam module. There is
+no filesystem (`router.Static` has nothing to serve, use Workers static
+assets), and no outbound sockets, so `http.Get` cannot call another server from
+the module. A program that must call out uses a few lines of `fetch` in
+`worker.js` or a native host. `salam js` is for browsers, not a Worker module.
 
 Complete examples, built by CI: `tests/en/apps/cloudflare-worker-router`,
 `-hello`, `-pure` (CGI style, without `net/http`) and `-telegram-bot` (webhook

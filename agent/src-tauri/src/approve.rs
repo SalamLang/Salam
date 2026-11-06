@@ -172,6 +172,8 @@ mod tests {
     #[test]
     fn auto_mode_still_asks_outside_the_workspace() {
         assert_eq!(policy(Mode::Auto, Kind::Exec, false, false, false), Policy::Allow);
+        assert_eq!(policy(Mode::Auto, Kind::Exec, true, false, false), Policy::Ask);
+        assert_eq!(policy(Mode::Auto, Kind::Exec, true, true, false), Policy::Ask);
         assert_eq!(policy(Mode::Auto, Kind::Write, true, false, false), Policy::Ask);
     }
 

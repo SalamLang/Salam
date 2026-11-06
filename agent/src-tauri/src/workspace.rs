@@ -85,6 +85,110 @@ pub fn in_git_dir(path: &Path) -> bool {
     path.components().any(|c| c.as_os_str() == ".git")
 }
 
+const TOKEN_BREAK: &[char] = &[
+    ' ', '\t', '\n', '\r', '"', '\'', '`', ';', '|', '&', '<', '>', '(', ')', '{', '}', '[', ']', ',', '=',
+];
+
+enum Target {
+    Path(PathBuf),
+    Unknown,
+}
+
+fn home_dir() -> Option<PathBuf> {
+    #[cfg(windows)]
+    let home = std::env::var_os("USERPROFILE");
+    #[cfg(not(windows))]
+    let home = std::env::var_os("HOME");
+    home.filter(|v| !v.is_empty()).map(PathBuf::from)
+}
+
+fn join_rest(mut base: PathBuf, rest: &str) -> PathBuf {
+    for part in rest.split(['/', '\\']).filter(|p| !p.is_empty()) {
+        base.push(part);
+    }
+    base
+}
+
+fn env_target(token: &str) -> Option<Target> {
+    let body = token.strip_prefix('$')?;
+    let (name, tail) = if let Some(inner) = body.strip_prefix('{') {
+        let (name, tail) = inner.split_once('}')?;
+        (name, tail)
+    } else {
+        let end = body.find(|c: char| !(c.is_ascii_alphanumeric() || c == '_')).unwrap_or(body.len());
+        (&body[..end], &body[end..])
+    };
+    if name.is_empty() {
+        return None;
+    }
+    let as_path = tail.starts_with('/') || tail.starts_with('\\');
+    if !as_path && !(tail.is_empty() && matches!(name, "HOME" | "USERPROFILE" | "TMPDIR" | "TEMP" | "TMP")) {
+        return None;
+    }
+    match std::env::var_os(name) {
+        Some(value) if !value.is_empty() => Some(Target::Path(join_rest(PathBuf::from(value), tail))),
+        _ => Some(Target::Unknown),
+    }
+}
+
+fn target(token: &str, cwd: &Path) -> Option<Target> {
+    if token.is_empty() || token == "-" || token.contains("://") {
+        return None;
+    }
+    if let Some(rest) = token.strip_prefix('~') {
+        if !rest.is_empty() && !(rest.starts_with('/') || rest.starts_with('\\')) {
+            return Some(Target::Unknown);
+        }
+        return Some(Target::Path(join_rest(home_dir()?, rest)));
+    }
+    if token.starts_with('$') {
+        return env_target(token);
+    }
+    if token.starts_with('-') {
+        if let Some(i) = token.find(['/', '\\']) {
+            let path = Path::new(&token[i..]);
+            if path.is_absolute() {
+                return Some(Target::Path(path.to_path_buf()));
+            }
+        }
+    }
+    let path = Path::new(token);
+    if path.is_absolute() {
+        return Some(Target::Path(path.to_path_buf()));
+    }
+    if path.components().any(|c| matches!(c, Component::ParentDir)) {
+        return Some(Target::Path(cwd.join(path)));
+    }
+    if token.contains('/') || token.contains('\\') {
+        return Some(Target::Path(cwd.join(path)));
+    }
+    None
+}
+
+impl Workspace {
+    /// Host paths named in a command that live outside the workspace.
+    ///
+    /// Approval decisions use this for shell, docker and WSL calls, so a
+    /// command such as `cat /tmp/report` asks like `read_file` would, and a
+    /// relative path through a symlink out of the workspace is caught too.
+    pub fn outside_paths(&self, command: &str, cwd: &Path) -> Vec<String> {
+        let mut out = Vec::new();
+        for token in command.split(|c: char| TOKEN_BREAK.contains(&c)) {
+            let token = token.trim_matches(|c: char| c == '\'' || c == '"' || c == '`');
+            match target(token, cwd) {
+                Some(Target::Unknown) => out.push(token.to_string()),
+                Some(Target::Path(p)) if !canonical_prefix(&normalize(&p)).starts_with(&self.root) => {
+                    out.push(token.to_string());
+                }
+                _ => {}
+            }
+        }
+        out.sort();
+        out.dedup();
+        out
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -144,5 +248,53 @@ mod tests {
     fn git_internals_are_detected() {
         assert!(in_git_dir(Path::new("/w/.git/config")));
         assert!(!in_git_dir(Path::new("/w/.github/ci.yml")));
+    }
+
+    #[test]
+    fn commands_naming_outside_paths_are_found() {
+        let (_d, ws) = setup();
+        let other = tempfile::tempdir().unwrap();
+        let secret = other.path().join("secret.txt");
+        std::fs::write(&secret, "s").unwrap();
+
+        assert_eq!(ws.outside_paths(&format!("cat {}", secret.display()), ws.root()).len(), 1);
+        assert_eq!(ws.outside_paths("cat ../secret.txt", ws.root()).len(), 1);
+        assert_eq!(ws.outside_paths("cd .. && cat secret.txt", ws.root()).len(), 1);
+        assert!(ws.outside_paths("cat src/main.rs", ws.root()).is_empty());
+        assert!(ws.outside_paths("cat ../main.rs", ws.root().join("src").as_path()).is_empty());
+        assert!(ws.outside_paths("cat ./src/../src/main.rs", ws.root()).is_empty());
+        assert!(ws.outside_paths("curl https://example.com/a -o src/out.txt", ws.root()).is_empty());
+        let inside = ws.root().join("src/new.txt");
+        assert!(ws.outside_paths(&format!("echo hi > {}", inside.display()), ws.root()).is_empty());
+        assert_eq!(ws.outside_paths(&format!("echo hi > {}", secret.display()), ws.root()).len(), 1);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn commands_through_a_symlink_out_are_found() {
+        let (d, ws) = setup();
+        let other = tempfile::tempdir().unwrap();
+        std::fs::write(other.path().join("x.txt"), "x").unwrap();
+        std::os::unix::fs::symlink(other.path(), d.path().join("link")).unwrap();
+        assert_eq!(ws.outside_paths("cat link/x.txt", ws.root()).len(), 1);
+    }
+
+    #[test]
+    fn home_and_temp_variables_are_resolved() {
+        let (_d, ws) = setup();
+        if home_dir().is_some_and(|h| !ws.root().starts_with(&h)) {
+            assert_eq!(ws.outside_paths("cat $HOME/x", ws.root()).len(), 1);
+            assert_eq!(ws.outside_paths("cat ~/x", ws.root()).len(), 1);
+        }
+        assert!(ws.outside_paths("echo $PATH", ws.root()).is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn attached_option_paths_are_found() {
+        let (_d, ws) = setup();
+        assert_eq!(ws.outside_paths("gcc -I/tmp/inc -c a.c", ws.root()).len(), 1);
+        assert_eq!(ws.outside_paths("gcc -o/tmp/a.out -c a.c", ws.root()).len(), 1);
+        assert!(ws.outside_paths("gcc -Isrc -c a.c", ws.root()).is_empty());
     }
 }

@@ -42,6 +42,14 @@ else:
         func fork(): int
         noret func _exit(code: int)
     end
+    if SALAM_OS_ANDROID:
+        extern:
+            func pipe2(fds: void*, flags: int): int
+            func read(fd: int, buf: void*, n: size): i64
+            func write(fd: int, buf: void*, n: size): i64
+            func __errno(): int*
+        end
+    end
     if not SALAM_OS_ANDROID:
         extern:
             environ: void*
@@ -199,20 +207,56 @@ else:
                 out_fd = open(out_path, _open_flags(), 420)
                 err_fd = open(err_path, _open_flags(), 420)
             end
+            status := mem.AllocateZeroed(8 as u64)
+            sp := status as int*
+            sp[0] = 0 - 1
+            sp[1] = 0 - 1
+            if pipe2(status, 524288) != 0:
+                sp[0] = 0 - 1
+                sp[1] = 0 - 1
+            end
             pid := fork()
             if pid == 0:
                 if capture:
                     _i0 := dup2(in_fd, 0)
                     _o1 := dup2(out_fd, 1)
                     _e2 := dup2(err_fd, 2)
+                    if in_fd > 2: close(in_fd) end
+                    if out_fd > 2: close(out_fd) end
+                    if err_fd > 2: close(err_fd) end
                 end
                 _gone := execvp(path, argv)
+                eno := __errno()
+                eb := mem.Allocate(4 as u64) as int*
+                eb[0] = eno[0]
+                _w := write(sp[1], eb as void*, 4 as size)
                 _exit(127)
             end
             if in_fd >= 0: close(in_fd) end
             if out_fd >= 0: close(out_fd) end
             if err_fd >= 0: close(err_fd) end
+            rfd := sp[0]
+            wfd := sp[1]
+            if wfd >= 0: close(wfd) end
+            mut failed := 0
+            if pid > 0 and rfd >= 0:
+                eb := mem.AllocateZeroed(4 as u64)
+                n := read(rfd, eb, 4 as size)
+                if n == (4 as i64):
+                    failed = (eb as int*)[0]
+                    if failed == 0: failed = 1 end
+                end
+                mem.Free(eb)
+            end
+            if rfd >= 0: close(rfd) end
+            mem.Free(status)
             if pid < 0: ret 0 - 1 end
+            if failed != 0:
+                reaped := mem.AllocateZeroed(4 as u64)
+                waitpid(pid, reaped, 0)
+                mem.Free(reaped)
+                ret 0 - failed
+            end
             ret pid
         end
     else:

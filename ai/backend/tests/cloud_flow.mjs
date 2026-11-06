@@ -139,6 +139,9 @@ async function main() {
 
   const detail = await api("GET", `/chats/${chat}`, token);
   const calls = detail.json?.calls ?? [];
+  const steps = (detail.json?.messages ?? []).flatMap((m) => (Array.isArray(m.activity) ? m.activity : []));
+  const shellStep = steps.find((s) => s.kind === "tool" && s.tool === "shell");
+  check("a sandbox shell step does not claim the user's computer", shellStep?.title === "اجرای فرمان" && shellStep?.title_en === "Running a command", shellStep);
   check("every tool call is recorded", calls.length >= 16, calls.length);
   const shotCall = calls.find((c) => c.tool === "browser");
   check("the browser call is marked as having a screenshot", shotCall?.image === true && !calls.some((c) => c.tool === "shell" && c.image), shotCall);

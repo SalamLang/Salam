@@ -116,7 +116,7 @@ export function AdminChat({ id }: { id: string }) {
       </header>
       {data.messages.map((m) => (
         <div key={m.id} className="admin-turn">
-          <MessageView m={m} name={data.user?.name ?? ""} calls={m.calls} loadFile={loadFile} />
+          <MessageView m={m} name={data.user?.name ?? ""} calls={m.calls} cloud={data.chat.cloud === true} loadFile={loadFile} />
           {m.role === "assistant" && m.status !== "done" && (
             <p className={`admin-turn-status ${m.status}`}>{m.status === "pending" ? t("این پاسخ هنوز تمام نشده است.", "This answer is not finished yet.") : t("این پاسخ با خطا تمام شد.", "This answer ended with an error.")}</p>
           )}

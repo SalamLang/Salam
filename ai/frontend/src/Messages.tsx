@@ -12,6 +12,7 @@ const PHASE_TEXT: Record<string, string> = {
   thinking: t("در حال فکر کردن", "Thinking"),
   searching: t("در حال بررسی مستندات سلام", "Checking the Salam docs"),
   working: t("در حال کار روی رایانه‌ی شما", "Working on your computer"),
+  cloud_working: t("در حال کار در محیط ابری", "Working in the cloud sandbox"),
   writing: t("در حال نوشتن", "Writing"),
   checking: t("در حال اصلاح کد با کامپایلر سلام", "Fixing the code with the Salam compiler"),
 };
@@ -64,6 +65,7 @@ function useSmoothText(target: string, animate: boolean): string {
 
 type Tools = {
   calls?: CallView[];
+  cloud?: boolean;
   onDecide?: (id: string, a: AgentAnswer) => void;
   onStop?: (id: string) => void;
 };
@@ -151,13 +153,14 @@ function TextGroupView({ text, live }: { text: string; live: boolean }) {
   );
 }
 
-function AssistantMessage({ m, calls = [], onDecide = () => {}, onStop = () => {} }: { m: Message } & Tools) {
+function AssistantMessage({ m, calls = [], cloud = false, onDecide = () => {}, onStop = () => {} }: { m: Message } & Tools) {
   const pending = m.status === "pending";
   const phase = m.phase || "thinking";
   const all = withCalls(m, calls);
   const waiting = all.some((c) => c.state === "pending" || c.state === "running");
   const steps = m.activity ?? [];
   const items = timeline(steps, uiText(m.body), all);
+  const working = cloud ? PHASE_TEXT.cloud_working : PHASE_TEXT.working;
   const showPhase = pending && all.length > 0 && !waiting && m.body.length === 0;
   return (
     <div className={`msg assistant ${m.status}`}>
@@ -189,7 +192,7 @@ function AssistantMessage({ m, calls = [], onDecide = () => {}, onStop = () => {
               <i />
               <i />
             </span>
-            {all.length > 0 ? PHASE_TEXT.working : PHASE_TEXT[phase] || PHASE_TEXT.thinking}
+            {all.length > 0 ? working : PHASE_TEXT[phase] || PHASE_TEXT.thinking}
           </div>
         )}
         {!pending && m.body && (

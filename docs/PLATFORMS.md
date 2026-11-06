@@ -88,6 +88,24 @@ same way, but there is no 32-bit or arm code generator behind it. Any other
 `--target` is rejected with a pointer to `--backend=llvm`. See
 [NATIVE_BACKEND.md](NATIVE_BACKEND.md).
 
+## 🧱 Freestanding targets (`*-none`, `*-salamos*`)
+
+Those triples are for programs that run without an operating system: kernels,
+unikernels and bootloader payloads. The LLVM backend emits the object with
+`-ffreestanding -fno-stack-protector -fno-pic`, links it with `ld.lld` and
+never adds libc, crt files or `-lm`. `SALAM_FREESTANDING` and `SALAM_KERNEL`
+are defined, and the compiler links its own small runtime from
+`std/baremetal` unless `--no-freestanding-runtime` is passed.
+
+```sh
+salam build kernel.salam --target=i686-unknown-none \
+    --entry=_start --linker-script=linker.ld \
+    --link-object=boot.o --output=kernel.elf
+```
+
+See [FREESTANDING.md](FREESTANDING.md) for the runtime, the `std/baremetal`
+API and a bootable Multiboot example in `tests/kernel/`.
+
 ## 📦 Release Matrix
 
 > GitHub Actions workflow: `.github/workflows/compiler-release.yml`

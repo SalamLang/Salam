@@ -2246,7 +2246,8 @@ A declared function of the same name shadows an intrinsic.
 There is no `async`/`await`.
 
 **Conditional compilation** (a top-level or inline `if` on a compile-time
-constant). Predefined: `SALAM_OS_WINDOWS/MAC/LINUX/UNIX/FREEBSD/ANDROID/WASM`,
+constant). Predefined: `SALAM_OS_WINDOWS/MAC/LINUX/UNIX/FREEBSD/ANDROID/WASM/NONE`,
+`SALAM_FREESTANDING`, `SALAM_KERNEL`,
 `SALAM_ARCH_X64/ARM64/X86/ARM/WASM`, string forms `SALAM_OS`/`SALAM_ARCH`; plus
 your own `-DNAME` defines from the build command. The predefined `SALAM_*`
 names are also ordinary constant values anywhere else - `switch SALAM_OS:`,
@@ -2264,13 +2265,14 @@ has no upper case, so a leading `سلام` is what marks a name as the language'
 own rather than yours; the rest of the words follow it separated by spaces, the
 way multi-word names already are elsewhere:
 
-| English                                          | Persian                                          |
-| ------------------------------------------------ | ------------------------------------------------ |
-| `SALAM_OS_WINDOWS` / `_LINUX` / `_MAC` / `_UNIX` | `سلام سیستم ویندوز` / `لینوکس` / `مک` / `یونیکس` |
-| `SALAM_ARCH_X64` / `_ARM64`                      | `سلام معماری ایکس۶۴` / `آرم۶۴`                   |
-| `SALAM_OS` / `SALAM_ARCH`                        | `سلام سیستم` / `سلام معماری`                     |
-| `SALAM_VERSION` / `SALAM_GIT_COMMIT`             | `سلام نگارش` / `سلام کامیت گیت`                  |
-| `defined(X)`                                     | `تعریف‌شده(X)`                                   |
+| English                                                 | Persian                                          |
+| ------------------------------------------------------- | ------------------------------------------------ |
+| `SALAM_OS_WINDOWS` / `_LINUX` / `_MAC` / `_UNIX`        | `سلام سیستم ویندوز` / `لینوکس` / `مک` / `یونیکس` |
+| `SALAM_OS_NONE` / `SALAM_FREESTANDING` / `SALAM_KERNEL` | `سلام سیستم هیچ` / `سلام خودایستا` / `سلام هسته` |
+| `SALAM_ARCH_X64` / `_ARM64`                             | `سلام معماری ایکس۶۴` / `آرم۶۴`                   |
+| `SALAM_OS` / `SALAM_ARCH`                               | `سلام سیستم` / `سلام معماری`                     |
+| `SALAM_VERSION` / `SALAM_GIT_COMMIT`                    | `سلام نگارش` / `سلام کامیت گیت`                  |
+| `defined(X)`                                            | `تعریف‌شده(X)`                                   |
 
 These names are matched the way Persian keywords are, so a ZWNJ, a space, an
 Arabic yeh for a Persian one and an Arabic kaf for a keheh are all the same
@@ -2298,6 +2300,27 @@ English. A bare `if SALAM_JS:` is an unknown identifier on a native build.
 Cross-compile by passing an LLVM triple: `salam build app.salam
 --target=x86_64-w64-windows-gnu --output=app.exe` (routes through LLVM;
 `link dynamic "user32"` → `-luser32`).
+
+**Freestanding kernels.** A `*-none` or `*-salamos*` triple builds without libc,
+crt files or `-lm`, and links the small runtime in `std/baremetal`:
+
+```sh
+salam build kernel.salam --target=i686-unknown-none \
+    --entry=_start --linker-script=linker.ld \
+    --link-object=boot.o --output=kernel.elf
+```
+
+`--entry` defaults to `_start`; `--link-object` is repeatable;
+`--no-freestanding-runtime` leaves every symbol to your own runtime.
+In a freestanding build the Salam entry function is emitted as `void main()`
+with no `argc`/`argv`, so the boot stub calls `main` directly. The build
+defines `SALAM_FREESTANDING`, `SALAM_KERNEL` and `SALAM_OS_NONE`
+(Persian: `سلام خودایستا`, `سلام هسته`, `سلام سیستم هیچ`). `std/baremetal`
+gives `Halt`, `Exit`, `Out8`, `In8`, `Clear`, `WriteAt`, `SerialWrite`,
+`Panic`, `ExitQemu`, `HeapUsed` and `HeapSize`; `println` still works through
+COM1, VGA text and the QEMU debug console. `tests/kernel/` is a complete
+bootable Multiboot example. A `*-uefi` triple is freestanding but keeps the
+UEFI object format. See `docs/FREESTANDING.md`.
 
 ---
 

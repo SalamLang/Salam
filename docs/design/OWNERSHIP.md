@@ -196,7 +196,7 @@ rebuilding the loop or the expression.
 
 ### Reassigned string locals
 
-`out = out + chunk`, `out += chunk` and `s = f(s)` drop the old value of a
+`out += chunk` and `s = f(s)` drop the old value of a
 `mut` string local on every step. Freeing it needs proof that the old value is
 heap owned by that local, and a literal initial value (`mut out := ""`) is not.
 No runtime check can tell a literal from a heap block, so the proof is a flag

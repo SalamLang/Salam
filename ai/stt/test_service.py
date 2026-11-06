@@ -105,6 +105,48 @@ class ServiceTest(unittest.TestCase):
             self.assertAlmostEqual(data["seconds"], 1, delta=0.2)
             self.assertEqual(set(data), {"text", "language", "seconds"})
 
+    def test_music_and_wav_formats_decode(self):
+        run = self.running()
+        for container, codec, options in (("mp3", "libmp3lame", None), ("flac", "flac", None), ("wav", "pcm_s16le", None), ("wav", "pcm_s24le", None)):
+            body = encode(1, container, codec, 1152 if container == "mp3" else 960, options)
+            self.assertEqual(service.container_of(body), container, codec)
+            status, data = run.request("POST", "/transcribe?language=en", body=body)
+            self.assertEqual(status, 200, codec)
+            self.assertTrue(data["text"].startswith("stub en "), codec)
+            self.assertAlmostEqual(data["seconds"], 1, delta=0.3)
+
+    def test_mp3_with_a_tag_and_without_one_are_both_recognised(self):
+        body = encode(1, "mp3", "libmp3lame", 1152)
+        tagged = b"ID3\x04\x00\x00\x00\x00\x00\x00" + body
+        self.assertEqual(service.container_of(tagged), "mp3")
+        bare = body[body.index(b"\xff"):] if body[:3] == b"ID3" else body
+        self.assertEqual(service.container_of(bare), "mp3")
+        status, data = self.running().request("POST", "/transcribe?language=fa", body=tagged)
+        self.assertEqual(status, 200)
+
+    def test_sniffing_rejects_lookalikes(self):
+        pad = bytes(32)
+        for head in (b"RIFF\x00\x00\x00\x00AVI ", b"RIFF\x00\x00\x00\x00WAVX", b"\xff\xf1\x50\x80", b"\xff\xe2\xff\x00", b"\xff\xfb\xf0\x00", b"\xff\xfb\x00\x00", b"fLaX", b"ID"):
+            self.assertIsNone(service.container_of(head + pad), head)
+
+    def test_unlisted_codecs_in_known_containers_are_refused(self):
+        run = self.running()
+        body = encode(1, "wav", "pcm_alaw")
+        status, data = run.request("POST", "/transcribe?language=fa", body=body)
+        self.assertEqual((status, data["error"]), (400, "bad_audio"))
+
+    def test_long_wav_stops_at_the_limit(self):
+        body = encode(8, "wav", "pcm_s16le")
+        status, data = self.running(max_bytes=10_000_000).request("POST", "/transcribe?language=fa", body=body)
+        self.assertEqual((status, data["error"]), (413, "too_long"))
+
+    def test_truncated_music_files_are_refused(self):
+        run = self.running()
+        for container, codec in (("flac", "flac"), ("wav", "pcm_s16le"), ("mp3", "libmp3lame")):
+            body = encode(1, container, codec)
+            status, data = run.request("POST", "/transcribe?language=fa", body=body[:20])
+            self.assertEqual((status, data["error"]), (400, "bad_audio"), container)
+
     def test_language_goes_to_its_own_engine(self):
         status, data = self.running().request("POST", "/transcribe?language=en", body=encode(1, "webm", "libopus"))
         self.assertEqual(status, 200)
@@ -200,6 +242,58 @@ class ServiceTest(unittest.TestCase):
         engine = engines.SegmentEngine("/models/a")
         with self.assertRaises(engines.TimedOut):
             engine.transcribe(np.zeros(10), "fa", time.monotonic() + 0.05)
+
+    def test_long_clips_split_at_the_quietest_moment(self):
+        samples = np.full(25 * engines.RATE, 0.5, dtype=np.float32)
+        samples[8 * engines.RATE : 8 * engines.RATE + 8000] = 0
+        samples[17 * engines.RATE : 17 * engines.RATE + 8000] = 0
+        pieces = engines.split_at_quiet(samples, 10)
+        self.assertEqual(pieces[0][0], 0)
+        self.assertEqual(pieces[-1][1], samples.size)
+        for (_, end), (start, _) in zip(pieces, pieces[1:]):
+            self.assertEqual(end, start)
+        for start, end in pieces:
+            self.assertLessEqual(end - start, 10 * engines.RATE)
+        self.assertAlmostEqual(pieces[0][1] / engines.RATE, 8.25, delta=0.3)
+        self.assertAlmostEqual(pieces[1][1] / engines.RATE, 17.25, delta=0.3)
+        self.assertEqual(engines.split_at_quiet(samples[: 9 * engines.RATE], 10), [(0, 9 * engines.RATE)])
+
+    def test_a_shallow_dip_beats_the_edges_of_the_search_window(self):
+        samples = np.full(25 * engines.RATE, 0.5, dtype=np.float32)
+        samples[7 * engines.RATE : 7 * engines.RATE + 8000] = 0.4
+        self.assertAlmostEqual(engines.split_at_quiet(samples, 10)[0][1] / engines.RATE, 7.25, delta=0.3)
+
+    def test_a_tiny_split_length_still_advances(self):
+        samples = np.ones(3 * engines.RATE, dtype=np.float32)
+        pieces = engines.split_at_quiet(samples, 0.01)
+        self.assertEqual(pieces[-1][1], samples.size)
+        self.assertLessEqual(len(pieces), 6)
+
+    def test_segment_engine_joins_the_split_pieces(self):
+        class Segment:
+            def __init__(self, text):
+                self.text = text
+
+        lengths = []
+
+        class Runtime:
+            def __init__(self, path):
+                self.path = path
+
+            def transcribe(self, samples, language):
+                lengths.append(samples.size)
+                return [Segment(f"p{len(lengths)}")], None
+
+        engines.Runtime = Runtime
+        os.environ["STT_RUNTIME"] = "engines:Runtime"
+        os.environ["STT_SPLIT_SECONDS"] = "10"
+        self.addCleanup(lambda: os.environ.pop("STT_RUNTIME", None))
+        self.addCleanup(lambda: os.environ.pop("STT_SPLIT_SECONDS", None))
+        samples = np.ones(25 * engines.RATE, dtype=np.float32)
+        text = engines.SegmentEngine("/models/a").transcribe(samples, "fa", time.monotonic() + 5)
+        self.assertEqual(text, " ".join(f"p{i + 1}" for i in range(len(lengths))))
+        self.assertEqual(sum(lengths), samples.size)
+        self.assertGreater(len(lengths), 2)
 
 
 if __name__ == "__main__":

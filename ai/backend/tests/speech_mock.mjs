@@ -44,6 +44,7 @@ const service = http.createServer((req, res) => {
       else if (mode === "too_long") reply(res, 413, { error: "too_long" });
       else if (mode === "bad_audio") reply(res, 400, { error: "bad_audio", detail: "SecretModelName could not decode" });
       else if (mode === "broken") reply(res, 500, { error: "failed", detail: "/models/SecretModelName missing" });
+      else if (mode === "empty") reply(res, 200, { text: "  ", language: last.language, seconds: 3.1 });
       else if (mode === "hang") return;
       else if (mode === "slow") {
         await new Promise((r) => setTimeout(r, 800));

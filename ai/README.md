@@ -147,8 +147,11 @@ offers no language, so `/capabilities` looks at its health at most once every
 
 - `POST /speech/transcribe?lang=fa|en` takes the raw recording with an `audio/*`
   content type, from signed-in users only. The API checks the container by its first
-  bytes (WebM, Ogg or MP4), and the service decodes it to be sure and to measure its
-  length. The answer is `{text, language, seconds}`.
+  bytes (WebM, Ogg, MP4, MP3, FLAC or WAV), and the service decodes it to be sure and to
+  measure its length. The answer is `{text, language, seconds}`. Browsers record WebM,
+  Ogg or MP4; MP3, FLAC and WAV exist for files sent through the Telegram bot. Each
+  container has its demuxer pinned and a short codec list (Opus, Vorbis, AAC, MP3, FLAC
+  and plain PCM), and the size and running length caps apply to all of them.
 - Audio stays in memory for the length of the request, on both sides, and transcripts
   are never logged or stored. `speech_usage` keeps only who, when and how many seconds,
   for the hourly limits; rows older than an hour are removed on the user's next upload.
@@ -164,6 +167,7 @@ repository: mount them read only and point these variables at them.
 | `STT_ENGINE`, `STT_ENGINE_FA`, `STT_ENGINE_EN`  | `module:factory` of the engine, for all languages or one (see `engines.py`)        | `engines:SegmentEngine`  |
 | `STT_RUNTIME`                                   | `module:Class` of the runtime `SegmentEngine` loads                                | empty                    |
 | `STT_LOAD_OPTIONS`, `STT_RUN_OPTIONS`           | JSON keyword arguments for the runtime's constructor and its transcribe call       | empty                    |
+| `STT_SPLIT_SECONDS`                             | decode long clips in pieces of at most this length, for models that stop early     | `0`, off                 |
 | `STT_MAX_SECONDS`, `STT_MAX_BYTES`              | longest and largest recording; the app shows and enforces what the service reports | `120`, `4194304`         |
 | `STT_CONCURRENCY`, `STT_QUEUE`                  | conversions at once and how many may wait; more answer `503 busy`                  | `1`, `2`                 |
 | `STT_QUEUE_WAIT_SECONDS`, `STT_TIMEOUT_SECONDS` | longest wait in the queue and longest conversion                                   | `20`, `80`               |
@@ -231,6 +235,45 @@ serve `index.html` for `/s/<token>`.
 mock; `SHARE_SQL` (a `mariadb` command line) also runs the expiry by clock check.
 `salam exec ai/backend/tests/share_test.salam` tests the pure helpers.
 
+### Voice messages in the Telegram bot
+
+The bot understands voice notes, audio files (mp3, m4a, ogg, flac, wav sent as audio or
+as a document), video notes and videos by turning the speech into text with the same
+service and the same code path as the site's voice button (`Transcribe` in
+`speech.salam`), and then answering that text like a typed message.
+
+- **When it works.** Exactly when voice input works on the site: `AI_STT_URL` is set and
+  the service passed its health check (the one behind `speech` in `GET /capabilities`,
+  cached for `AI_STT_HEALTH_SECONDS`). Otherwise the bot replies once, in the user's
+  language, that voice messages are not available right now and to send text. It never
+  stays silent and never fetches the file in that case.
+- **Language.** The bot's own language for that user: the `/lang` choice (stored per
+  Telegram account), which starts from the Telegram `language_code` (Persian when it is
+  missing or `fa`, otherwise English). A caption of `en`, `/en`, `fa` or `/fa` on the
+  voice message overrides it for that message. One conversion per message.
+- **What the user sees.** A reply to the voice message with `I heard: "..."` (Persian
+  `شنیدم: «...»`) so recognition mistakes are visible, then the normal answer to that
+  text. Silence gives a short "nothing could be recognised" message; for audio files
+  and documents it adds that only speech is converted and song lyrics may be missed.
+  The text passed on is cut at 4000 bytes (2000 for guests).
+- **Limits.** Linked users share the website's allowance (`AI_STT_HOURLY`,
+  `AI_STT_SECONDS_HOURLY`, rows in `speech_usage`). Guests get a third of both (at least
+  3 conversions and 60 seconds an hour), counted per Telegram id in
+  `telegram_speech_usage`, and see the sign in button when it runs out. The global slots
+  (`AI_STT_CONCURRENCY`), one conversion per person at a time and the refund when the
+  service is unreachable or busy are the same as on the site. A conversion that reached
+  the service and failed is not refunded, as on the site.
+- **Before downloading.** `file_size` and `duration` from the update are checked against
+  what the service reports (`max_bytes`, `max_seconds`, never above Telegram's 20 MB
+  bot limit); then `getFile` is called, its `file_size` is checked again, and
+  `file_path` must be plain letters, digits and `-_./` without `..`, a leading slash or
+  `//`. The download keeps a hard byte cap, ignores a body that is longer than it was
+  declared, has a 30 second overall deadline and a 15 second idle timeout, and lives in
+  memory only. Neither audio nor transcripts are stored beyond the chat message the text
+  becomes, and neither the transcript nor the file URL (which contains the bot token) is
+  logged.
+- **Chats.** Private chats only, like text; voice sent in a group is ignored.
+
 ### Telegram bot
 
 The API runs the Telegram bot itself (`telegram.salam`): it long-polls `getUpdates`,
@@ -254,7 +297,8 @@ in Persian and English and starts answering.
 - Answers stream into the chat by editing one message; Markdown becomes Telegram
   HTML (`tgmd.salam`), long answers are split on line boundaries and code fences
   are kept balanced. Private chats only. At most 5 Telegram accounts per Salam
-  account.
+  account. Voice messages and audio files are converted to text first (see Voice
+  messages in the Telegram bot above).
 
 | Method and path            | Purpose                                                |
 | -------------------------- | ------------------------------------------------------ |

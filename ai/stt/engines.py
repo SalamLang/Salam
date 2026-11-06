@@ -14,6 +14,7 @@ import time
 import numpy as np
 
 RATE = 16000
+SMOOTH_FRAMES = 15
 
 
 class TimedOut(Exception):
@@ -35,7 +36,7 @@ def json_env(name):
 def split_at_quiet(samples, max_seconds):
     """Cut samples into pieces of at most max_seconds, at the quietest moment
     in the second half of each piece, so that a word is rarely cut in two."""
-    longest = int(max_seconds * RATE)
+    longest = max(int(max_seconds * RATE), RATE)
     frame = int(0.02 * RATE)
     pieces = []
     start = 0
@@ -44,8 +45,8 @@ def split_at_quiet(samples, max_seconds):
         window = samples[first : start + longest]
         count = window.size // frame
         energy = np.square(window[: count * frame]).reshape(count, frame).mean(axis=1)
-        smooth = np.convolve(energy, np.ones(15) / 15, mode="same")
-        cut = first + int(np.argmin(smooth)) * frame
+        smooth = np.convolve(energy, np.ones(SMOOTH_FRAMES) / SMOOTH_FRAMES, mode="valid")
+        cut = first + (int(np.argmin(smooth)) + SMOOTH_FRAMES // 2) * frame
         pieces.append((start, cut))
         start = cut
     pieces.append((start, samples.size))

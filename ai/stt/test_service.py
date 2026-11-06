@@ -216,6 +216,17 @@ class ServiceTest(unittest.TestCase):
         self.assertAlmostEqual(pieces[1][1] / engines.RATE, 17.25, delta=0.3)
         self.assertEqual(engines.split_at_quiet(samples[: 9 * engines.RATE], 10), [(0, 9 * engines.RATE)])
 
+    def test_a_shallow_dip_beats_the_edges_of_the_search_window(self):
+        samples = np.full(25 * engines.RATE, 0.5, dtype=np.float32)
+        samples[7 * engines.RATE : 7 * engines.RATE + 8000] = 0.4
+        self.assertAlmostEqual(engines.split_at_quiet(samples, 10)[0][1] / engines.RATE, 7.25, delta=0.3)
+
+    def test_a_tiny_split_length_still_advances(self):
+        samples = np.ones(3 * engines.RATE, dtype=np.float32)
+        pieces = engines.split_at_quiet(samples, 0.01)
+        self.assertEqual(pieces[-1][1], samples.size)
+        self.assertLessEqual(len(pieces), 6)
+
     def test_segment_engine_joins_the_split_pieces(self):
         class Segment:
             def __init__(self, text):

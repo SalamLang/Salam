@@ -1768,7 +1768,7 @@ jobs:
 
   build-linux-armhf:
     needs: changes
-    if: false && needs.changes.outputs.run == 'true'
+    if: needs.changes.outputs.run == 'true'
     name: Build Salam for Linux (armhf, embedded LLVM+LLD)
     runs-on: ubuntu-24.04
     timeout-minutes: 300
@@ -1795,10 +1795,21 @@ jobs:
           key: ccache-linux-armhf-v2-${{ github.run_id }}
           restore-keys: |
             ccache-linux-armhf-v2-
-      - name: Fetch a seed compiler for the container
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: sh tools/bash/fetch-seed.sh --slug linux-armhf --out "$GITHUB_WORKSPACE/seed"
+      # Stable releases no longer carry an armhf seed (v0.6.0 onward), and a
+      # release older than 0.6.1 cannot parse compiler/. Build the seed for the
+      # target from this checkout with the runner's own compiler instead.
+      - name: Install a seed compiler
+        uses: ./.github/actions/setup-salam # zizmor: ignore[self-repository]
+
+      - name: Cross-build an armhf seed from this checkout
+        run: |
+          set -eu
+          export SALAM_STD="$PWD/std"
+          mkdir -p seed
+          salam build compiler/main.salam --target=arm-linux-musleabihf \
+            -o seed/salam --log-level=warn
+          chmod +x seed/salam
+          file seed/salam
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
@@ -1836,7 +1847,7 @@ jobs:
                 --musl-x86_64 "$MUSL_SR" --mingw-x86_64 "$MINGW_SR" \
                 --wasi /work/sysroots/wasm32-wasi
               sh tools/bash/build-selfhost.sh --seed=/work/seed/salam \
-                --llvm=/work --embed=/work --output=/work/salam
+                --llvm=/work --embed=/work --output=/work/salam --seed-is-builder
               echo 1 > /work/.self_contained
               file /work/salam
               /work/salam version

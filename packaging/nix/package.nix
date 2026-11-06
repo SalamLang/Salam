@@ -20,6 +20,11 @@ let
       hash = "@SRI_LINUX_AARCH64@";
       dir = "salam-linux-aarch64";
     };
+    armv7l-linux = {
+      url = "https://github.com/SalamLang/Salam/releases/download/v${version}/salam-${version}-linux-armhf.tar.gz";
+      hash = "@SRI_LINUX_ARMHF@";
+      dir = "salam-linux-armhf";
+    };
     aarch64-darwin = {
       url = "https://github.com/SalamLang/Salam/releases/download/v${version}/salam-${version}-macos-arm64.tar.gz";
       hash = "@SRI_MACOS_ARM64@";

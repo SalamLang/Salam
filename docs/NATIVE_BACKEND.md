@@ -593,7 +593,7 @@ then goes through:
    and any number of integer add reductions and min or max reductions
    (`m = x > m ? x : m`, or the same as an `if`, either sign; 64-bit ones
    on AArch64 only), which end in a shuffle-and-select tree, and counts of bytes that match a
-   compare (`if b[i] == 0: n += 1`, either polarity), which mask each match
+   compare (`if b[i] == 0: n++`, either polarity), which mask each match
    to 1 and sum sixteen at a time with `psadbw` (`uaddlv` on AArch64) into
    64-bit lanes. A loop that stores gets a
    runtime check that each stored range is disjoint from every range it
@@ -830,7 +830,7 @@ then goes through:
    the range where they all hold, and the original loop runs the iterations
    at the edges.
    Small innermost loops whose trip count is only known at runtime
-   (`until j < i:` with `j += 1`, or counting down) run two iterations per
+   (`until j < i:` with `j++`, or counting down) run two iterations per
    test, four when the body is tiny, with the original loop finishing the
    rest. The test compares the
    counter with a limit adjusted once before the loop, so it never computes a

@@ -23,6 +23,7 @@ import { Sidebar } from "./Sidebar";
 import { useTheme } from "./theme";
 import { t } from "./i18n";
 import { Checkbox } from "./Checkbox";
+import { pushToast } from "./Toasts";
 
 const ShareDialog = lazy(() => import("./ShareDialog").then((m) => ({ default: m.ShareDialog })));
 const SharedPage = lazy(() => import("./SharedPage").then((m) => ({ default: m.SharedPage })));
@@ -129,7 +130,6 @@ export function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loadingChat, setLoadingChat] = useState(false);
   const [sidebar, setSidebar] = useState(false);
-  const [toast, setToast] = useState("");
   const [workspace, setWorkspace] = useState(isDesktop ? savedWorkspace() : "");
   const [mode, setMode] = useState<AgentMode>("ask");
   const [queue, setQueue] = useState<QueueItem[]>([]);
@@ -177,8 +177,7 @@ export function App() {
   const onConnect = route === "connect" || route === "telegram";
 
   const notify = useCallback((msg: string) => {
-    setToast(msg);
-    window.setTimeout(() => setToast(""), 4000);
+    pushToast({ tone: "failed", title: msg });
   }, []);
 
   const signOut = useCallback(() => {
@@ -926,11 +925,6 @@ export function App() {
             onChange={(kinds) => setChats((cs) => cs.map((c) => (c.id === activeId ? { ...c, shared: kinds.length > 0 ? kinds : undefined } : c)))}
           />
         </Suspense>
-      )}
-      {toast && (
-        <div className="toast" role="status">
-          {toast}
-        </div>
       )}
     </div>
   );

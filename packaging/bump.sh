@@ -116,6 +116,7 @@ sri() {
 
 SHA256_LINUX_X86_64=$(sum_for "salam-$VERSION-linux-x86_64.tar.gz")
 SHA256_LINUX_AARCH64=$(sum_for "salam-$VERSION-linux-aarch64.tar.gz")
+SHA256_LINUX_ARMHF=$(sum_for "salam-$VERSION-linux-armhf.tar.gz")
 SHA256_LINUX_I686=$(sum_opt "salam-$VERSION-linux-i686.tar.gz")
 SHA256_MACOS_ARM64=$(sum_for "salam-$VERSION-macos-arm64.tar.gz")
 SHA256_WINDOWS_X86_64=$(sum_for "salam-$VERSION-windows-x86_64.zip")
@@ -143,6 +144,7 @@ render() {
         -e "s|@SHA256_SRC@|$SHA256_SRC|g" \
         -e "s|@SHA256_LINUX_X86_64@|$SHA256_LINUX_X86_64|g" \
         -e "s|@SHA256_LINUX_AARCH64@|$SHA256_LINUX_AARCH64|g" \
+        -e "s|@SHA256_LINUX_ARMHF@|$SHA256_LINUX_ARMHF|g" \
         -e "s|@SHA256_LINUX_I686@|$SHA256_LINUX_I686|g" \
         -e "s|@SHA256_MACOS_ARM64@|$SHA256_MACOS_ARM64|g" \
         -e "s|@SHA256_WINDOWS_X86_64@|$s256_x64|g" \
@@ -153,6 +155,7 @@ render() {
         -e "s|@SHA512_LINUX_MUSL@|$SHA512_LINUX_MUSL|g" \
         -e "s|@SRI_LINUX_X86_64@|$(sri "$SHA256_LINUX_X86_64")|g" \
         -e "s|@SRI_LINUX_AARCH64@|$(sri "$SHA256_LINUX_AARCH64")|g" \
+        -e "s|@SRI_LINUX_ARMHF@|$(sri "$SHA256_LINUX_ARMHF")|g" \
         -e "s|@SRI_MACOS_ARM64@|$(sri "$SHA256_MACOS_ARM64")|g" \
         "$src" >"$dst"
 }

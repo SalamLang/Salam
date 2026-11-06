@@ -10,6 +10,7 @@ use serde::Serialize;
 use serde_json::json;
 use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_opener::OpenerExt;
 
 #[derive(Serialize)]
 pub struct Info {
@@ -182,4 +183,45 @@ pub fn agent_notify_prefs(app: AppHandle) -> Prefs {
 #[tauri::command]
 pub fn agent_set_notify_prefs(app: AppHandle, prefs: Prefs) -> Prefs {
     app.state::<Notifier>().set_prefs(prefs)
+}
+
+/// The only URLs a click inside the app may hand to the system browser.
+fn external_link(url: &str) -> Option<String> {
+    let parsed = tauri::Url::parse(url).ok()?;
+    let ok = matches!(parsed.scheme(), "http" | "https" | "mailto");
+    if ok { Some(parsed.to_string()) } else { None }
+}
+
+/// Opens a link from a message in the user's own browser.
+///
+/// The site does this itself, because `target="_blank"` in a WKWebView on
+/// macOS opens nothing at all (the webview never creates the new window).
+#[tauri::command]
+pub fn agent_open_url(app: AppHandle, url: String) -> Result<(), String> {
+    let link = external_link(&url).ok_or_else(|| "only http, https and mailto links open outside the app".to_string())?;
+    app.opener()
+        .open_url(link, None::<&str>)
+        .map_err(|e| format!("could not open the link: {e}"))
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn only_web_and_mail_links_leave_the_app() {
+        for link in [
+            "https://github.com/SalamLang/Salam/pull/2785",
+            "http://localhost:3000/chat",
+            "mailto:hello@salamlang.ir",
+        ] {
+            assert!(super::external_link(link).is_some(), "{link} should open externally");
+        }
+        for link in [
+            "tauri://localhost/index.html",
+            "file:///etc/passwd",
+            "javascript:alert(1)",
+            "not a url",
+        ] {
+            assert!(super::external_link(link).is_none(), "{link} must stay blocked");
+        }
+    }
 }

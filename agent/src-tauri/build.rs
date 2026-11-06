@@ -14,6 +14,7 @@ const COMMANDS: &[&str] = &[
     "agent_set_notify_prefs",
     "agent_watch_reply",
     "agent_unwatch_reply",
+    "agent_open_url",
 ];
 
 fn main() {

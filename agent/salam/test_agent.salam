@@ -59,7 +59,8 @@ const PAGE := `<!doctype html><meta charset=utf-8><title>fake app</title><script
       if (c.state === "done" && c.call_id === "b_open") report("shot:b_open", c.image && (c.image_data || "").length > 1000 ? "yes" : "no");
       if (c.state === "running" && c.call_id === "stopme") setTimeout(() => salam.invoke("agent_stop", {callId: "stopme"}), 600);
       if (c.state === "pending") {
-        const allow = (c.tool === "shell" && c.call_id !== "shellout" && c.call_id !== "shellrel") || (c.tool === "browser" && c.call_id !== "b_local");
+        const denied = new Set(["shellout", "shellrel", "shellparent", "shelllink", "shellhome", "shellbrace", "shelloptout", "shellwin", "shellps"]);
+        const allow = (c.tool === "shell" && !denied.has(c.call_id)) || (c.tool === "browser" && c.call_id !== "b_local");
         salam.invoke("agent_decide", {callId: c.call_id, answer: allow ? "allow" : "deny"});
       }
     });
@@ -299,6 +300,7 @@ func main(): int:
     ws := g_workspace
     home := filepath.Join(root, "home")
     _b := os.MkdirAll(home)
+    write_text(filepath.Join(home, "hidden.txt"), "home secret\n")
     write_text(filepath.Join(ws, "a.txt"), "hello world\nسلام\n")
     write_text(filepath.Join(ws, "AGENTS.md"), "be kind\n")
     write_text(filepath.Join(ws, ".gitignore"), "skipped/\n*.log\n")
@@ -324,6 +326,19 @@ func main(): int:
     g_calls.push(call_json("up", "read_file", `{"path": "../outside.txt"}`, ws))
     g_calls.push(call_json("shellout", "shell", `{"command": ` + json.Str("cat " + outside) + `, "shell": "sh"}`, ws))
     g_calls.push(call_json("shellrel", "shell", `{"command": "cd .. && cat outside.txt", "shell": "sh"}`, ws))
+    g_calls.push(call_json("shellparent", "shell", `{"command": "ls ..", "shell": "sh"}`, ws))
+    if has_symlink:
+        g_calls.push(call_json("shelllink", "shell", `{"command": "cat escape", "shell": "sh"}`, ws))
+    end
+    g_calls.push(call_json("shellhome", "shell", `{"command": "cat $HOME/hidden.txt", "shell": "sh"}`, ws))
+    g_calls.push(call_json("shellbrace", "shell", `{"command": "cat ${HOME}/hidden.txt", "shell": "sh"}`, ws))
+    g_calls.push(call_json("shelldollar", "shell", `{"command": "echo $?", "shell": "sh"}`, ws))
+    g_calls.push(call_json("shelloptin", "shell", `{"command": "echo -Isrc/include", "shell": "sh"}`, ws))
+    g_calls.push(call_json("shelloptout", "shell", `{"command": "echo -I/tmp/inc", "shell": "sh"}`, ws))
+    if SALAM_OS_WINDOWS:
+        g_calls.push(call_json("shellwin", "shell", `{"command": "echo hi > %TEMP%\\salam-agent-outside.txt", "shell": "cmd"}`, ws))
+        g_calls.push(call_json("shellps", "shell", `{"command": "echo hi > $env:TEMP\\salam-agent-outside.txt", "shell": "powershell"}`, ws))
+    end
     g_calls.push(call_json("save", "save_memory", `{"title": "Build steps", "description": "how", "content": "run it"}`, ws))
     g_calls.push(call_json("forget", "forget_memory", `{"slug": "keep"}`, ws))
     g_calls.push(call_json("badslug", "forget_memory", `{"slug": "../x"}`, ws))
@@ -467,6 +482,17 @@ func main(): int:
     verdict("outside asks and is denied", rf("up", "status") == "denied" and rf("up", "outside") == "true", result_of("up"))
     verdict("outside shell asks and is denied", rf("shellout", "status") == "denied" and rf("shellout", "outside") == "true", result_of("shellout"))
     verdict("parent shell path asks and is denied", rf("shellrel", "status") == "denied" and rf("shellrel", "outside") == "true", result_of("shellrel"))
+    verdict("bare parent asks and is denied", rf("shellparent", "status") == "denied" and rf("shellparent", "outside") == "true", result_of("shellparent"))
+    verdict("bare symlink asks and is denied", not has_symlink or (rf("shelllink", "status") == "denied" and rf("shelllink", "outside") == "true"), result_of("shelllink"))
+    verdict("home variable asks and is denied", rf("shellhome", "status") == "denied" and rf("shellhome", "outside") == "true", result_of("shellhome"))
+    verdict("braced home variable asks and is denied", rf("shellbrace", "status") == "denied" and rf("shellbrace", "outside") == "true", result_of("shellbrace"))
+    verdict("dollar alone is not a hang or a path", rf("shelldollar", "status") == "ok" and rf("shelldollar", "outside") == "false", result_of("shelldollar"))
+    verdict("relative option value stays inside", rf("shelloptin", "status") == "ok" and rf("shelloptin", "outside") == "false", result_of("shelloptin"))
+    verdict("absolute option value asks and is denied", rf("shelloptout", "status") == "denied" and rf("shelloptout", "outside") == "true", result_of("shelloptout"))
+    if SALAM_OS_WINDOWS:
+        verdict("cmd variable asks and is denied", rf("shellwin", "status") == "denied" and rf("shellwin", "outside") == "true", result_of("shellwin"))
+        verdict("powershell variable asks and is denied", rf("shellps", "status") == "denied" and rf("shellps", "outside") == "true", result_of("shellps"))
+    end
     verdict("memory saved without asking", rf("save", "status") == "ok" and has(rf("save", "output"), "build-steps"), result_of("save"))
     verdict("memory forgotten", rf("forget", "status") == "ok", result_of("forget"))
     verdict("bad slug refused", rf("badslug", "status") == "error", result_of("badslug"))

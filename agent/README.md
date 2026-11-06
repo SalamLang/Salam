@@ -131,6 +131,10 @@ it directly or a command mentions it (`cat /tmp/report`, `cd ~`, `-o /tmp/x`,
 checked the same way as `read_file` and `write_file`, so `/tmp/report` asks in
 the same levels however the assistant reaches it.
 
+The command check reads the command text. A path that a script or a shell
+expression builds at runtime can still get past it, so the access level is the
+real boundary; choose it for what the task may touch.
+
 Writes inside `.git/` are always refused. A running command can be stopped
 from its card. Output is capped at 30 KB (head and tail are kept), and
 commands time out after 120 seconds unless the model asks for up to 30

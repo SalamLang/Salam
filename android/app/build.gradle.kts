@@ -203,7 +203,7 @@ android {
 
     splits {
         abi {
-            isEnable = true
+            isEnable = project.findProperty("abiSplits")?.toString() != "false"
             reset()
             include(*requestedAbis.toTypedArray())
             isUniversalApk = true

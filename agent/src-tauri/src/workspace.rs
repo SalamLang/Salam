@@ -96,13 +96,7 @@ enum Target {
 
 fn home_dir() -> Option<PathBuf> {
     #[cfg(windows)]
-    let home = std::env::var_os("USERPROFILE").or_else(|| {
-        let drive = std::env::var_os("HOMEDRIVE")?;
-        let path = std::env::var_os("HOMEPATH")?;
-        let mut joined = PathBuf::from(drive);
-        joined.push(path);
-        Some(joined.into_os_string())
-    });
+    let home = std::env::var_os("USERPROFILE");
     #[cfg(not(windows))]
     let home = std::env::var_os("HOME");
     home.filter(|v| !v.is_empty()).map(PathBuf::from)

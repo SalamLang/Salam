@@ -434,6 +434,9 @@ for (let i = 0; i < 40; i += 1) {
   await new Promise((r) => setTimeout(r, 300));
 }
 check("a chat answer completes", polled.json.status === "done", polled.json);
+const liveList = (await api("GET", "/chats", session)).json.chats ?? [];
+const liveListChat = liveList.find((c) => c.id === chatRes.json.chat.id);
+check("the chat list says whether each chat is working or idle", liveListChat !== undefined && ["working", "queued", "waiting", "idle", "offline"].includes(liveListChat.state) && liveList.every((c) => typeof c.state === "string"), liveListChat);
 const traced = await api("GET", `/admin/messages/${sent.json.assistant.id}/trace`, session);
 const steps = traced.json?.trace ?? [];
 const toolStep = steps.find((t) => t.kind === "tool");

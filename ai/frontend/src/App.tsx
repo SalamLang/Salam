@@ -211,7 +211,29 @@ export function App() {
 
   useEffect(() => {
     if (!signedIn || onConnect) return;
-    api.chats().then((r) => setChats(r.chats)).catch((e) => notify(e.message));
+    let stopped = false;
+    const tick = (first: boolean) => {
+      if (document.visibilityState !== "visible") return;
+      api
+        .chats()
+        .then((r) => {
+          if (!stopped) setChats(r.chats);
+        })
+        .catch((e) => {
+          if (first) notify(e.message);
+        });
+    };
+    tick(true);
+    const timer = window.setInterval(() => tick(false), 10000);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") tick(false);
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [signedIn, onConnect, notify]);
 
   const midFor = useCallback((chat: string) => {
@@ -283,7 +305,10 @@ export function App() {
             ),
           );
           if (r.status === "pending") pollTimer.current = window.setTimeout(tick, 500);
-          else finish(chatId, mid, r.status, r.body);
+          else {
+            setChats((cs) => cs.map((c) => (c.id === chatId ? { ...c, state: "idle", phase: undefined, last_error: r.status === "error" } : c)));
+            finish(chatId, mid, r.status, r.body);
+          }
         } catch (e) {
           if (e instanceof ApiError && e.status === 401) return;
           netFails.current += 1;
@@ -334,6 +359,7 @@ export function App() {
             finished = true;
             if (followed.current === mid) followed.current = 0;
             finish(chatId, mid, status, body);
+            setChats((cs) => cs.map((c) => (c.id === chatId ? { ...c, state: "idle", phase: undefined, last_error: status === "error" } : c)));
             update((m) => ({
               ...m,
               body,
@@ -487,6 +513,15 @@ export function App() {
   };
 
   const busy = messages.some((m) => m.status === "pending");
+  const pending = messages.find((m) => m.role === "assistant" && m.status === "pending");
+  const activePhase: Chat["phase"] | undefined = !pending
+    ? undefined
+    : pending.phase === "writing"
+      ? "writing"
+      : pending.phase === "thinking" || !pending.phase
+        ? "thinking"
+        : "tool";
+  const activeWaiting = tools.calls.some((c) => c.chat === activeId && c.state === "pending");
   const activeChat = chats.find((c) => c.id === activeId);
   const agentChat = isDesktop && (activeChat ? activeChat.agent === true : workspace !== "");
   const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant")?.id;
@@ -622,7 +657,7 @@ export function App() {
       setChats((cs) => {
         const cur = cs.find((c) => c.id === id);
         const rest = cs.filter((c) => c.id !== id);
-        return cur ? [{ ...cur, title: r.title, updated: now }, ...rest] : cs;
+        return cur ? [{ ...cur, title: r.title, updated: now, state: "working", phase: "thinking", last_error: false }, ...rest] : cs;
       });
       follow(id, r.assistant.id, r.title);
       return true;
@@ -708,6 +743,7 @@ export function App() {
     try {
       const r = await api.stop(activeId);
       setMessages((ms) => ms.map((m) => (m.status === "pending" ? { ...m, status: "done", body: r.body } : m)));
+      setChats((cs) => cs.map((c) => (c.id === activeId ? { ...c, state: "idle", phase: undefined } : c)));
     } catch (e) {
       if (e instanceof ApiError) notify(e.message);
     }
@@ -791,6 +827,9 @@ export function App() {
         onDelete={remove}
         onLogout={logout}
         onToggleTheme={toggleTheme}
+        activeBusy={busy}
+        activeWaiting={activeWaiting}
+        activePhase={activePhase}
       />
       <main className="main">
         <header className="topbar">

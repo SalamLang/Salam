@@ -8,7 +8,7 @@ const BRIDGE_SECRET = process.env.BRIDGE_SECRET ?? "";
 const FENCE = "`".repeat(3);
 const code = (body) => `${FENCE}salam\n${body}\n${FENCE}`;
 const foreign = (lang, n) => `${FENCE}${lang}\n${Array.from({ length: n }, (_, i) => `line ${i}`).join("\n")}\n${FENCE}`;
-const AGENTS = () => (process.env.MOCK_AGENTS ?? "salam,salam-agent,raw").split(",");
+const AGENTS = () => (process.env.MOCK_AGENTS ?? "salam,salam-agent,raw,salam-agent-raw").split(",");
 const memoryAnswer = (s) => {
   const first = /\n\nUser: ([^\n]*)/.exec(s.prompt)?.[1] ?? "";
   const memories = s.prompt.includes("remember that my favorite color is teal") ? [{ slug: "Favorite Color", title: "Favorite color", description: "What color the user likes", content: "The user likes **teal**." }] : [];

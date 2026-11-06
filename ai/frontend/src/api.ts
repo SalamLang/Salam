@@ -1149,10 +1149,12 @@ export const api = {
     ),
   adminSummary: () => call<AdminSummary>("GET", "/admin/summary"),
   adminUsers: (q: string, offset: number) =>
-    call<{ users: AdminUser[]; total: number }>(
-      "GET",
-      `/admin/users${query({ q, offset: offset || undefined })}`,
-    ),
+    call<{
+      users: AdminUser[];
+      total: number;
+      plain_ready?: boolean;
+      desktop_plain_ready?: boolean;
+    }>("GET", `/admin/users${query({ q, offset: offset || undefined })}`),
   adminTelegram: () => call<AdminTelegram>("GET", "/admin/telegram"),
   adminUserPolicy: (
     id: number,

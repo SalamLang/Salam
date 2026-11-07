@@ -23316,7 +23316,7 @@ func main:
 end
 ```
 
-The program starts a server and has no output, so it is only checked here. Run it, open `http://localhost:8080/?name=Ada&plan=Duo` and you get the page. Text that arrives in a parameter is escaped for you, so a visitor who sends `?name=<b>` sees the characters and no markup. For the server side, the `net.http` and `net.router` packages handle requests, query strings and answers, and net.http.validate checks the form data that project 3 collected in the browser. A static page like projects 1 to 6 is also complete as it is: `salam page build page.salam --inline` writes it to a single HTML file that any web host will serve.
+The program starts a server and has no output, so it is only checked here. Run it, open `http://localhost:8080/?name=Ada&plan=Duo` and you get the page. Text that arrives in a parameter is escaped for you, so a visitor who sends `?name=<b>` sees the characters and no markup. For the server side, the `net.http` and `net.router` packages handle requests, query strings and answers, and net.http.validate checks the form data that project 3 collected in the browser. A static page like projects 1 to 6 is also complete as it is: `salam page build page.salam --inline` writes it to a single HTML file that any web host will serve. To serve the site, run several domains, connect PHP and deploy, the salam serve web server lesson covers all of it.
 
 ## Try it yourself
 
@@ -23826,6 +23826,561 @@ Run these after every change. They are quick, and the compiler is strict on purp
 - `salam run app.salam` builds and runs the program.
 
 One file is fine when the task is small or you were asked for it. The first rule still applies: even a ten line script should call `conv.ParseHex` rather than reinvent it.
+
+
+---
+
+# The salam serve web server: from one folder to many domains
+
+https://salamlang.github.io/Salam/learn/serve/
+
+salam serve does two things: it serves one folder over HTTP for development, or it runs several real sites from a config file with virtual hosts, locations, redirects, caching and a PHP backend. This lesson covers both modes, then several domains and subdomains, PHP, Python and Go, and finally HTTPS and production deployment.
+
+## What salam serve actually is
+
+The web server is written in Salam itself: the net/httpd package is an HTTP server with virtual host selection from the `Host` header, location rules, redirects, error pages, caching, an access log and a FastCGI backend. The `salam serve` command is only a thin shell around that package, so everything in this lesson is also available from inside a Salam program.
+
+It has two modes that must not be confused:
+
+| Mode | Command | What it is for |
+| --- | --- | --- |
+| Serve one folder | `salam serve [dir]` | Quick preview of a static site, checking the output of `salam web` and `salam page build`, local development |
+| Several sites from a config | `salam serve --config=web.salam` | Several domains and subdomains, locations, redirects, caching, an access log, PHP and FastCGI |
+| Check the config only | `salam serve --config=web.salam --test` | Before deploying or in CI; it opens no port |
+
+The first mode is deliberately simple: no TLS, no `ETag`, no byte ranges and no location rules. The second mode is what you want for a real site. If you only have a static folder and need no rules, the first mode is enough; but you can move it to the second mode with a tiny config and gain caching, `ETag` and dotfile blocking.
+
+Know the boundaries first. In this version `salam serve` has no TLS, no `proxy_pass`, no CGI and no Unix socket for FastCGI. A TLS terminator such as Caddy or nginx handles HTTPS, and HTTP applications in Python, Go and Node sit behind it too. The details are in HTTPS and Python and Go.
+
+## The simple mode: serving a folder
+
+With no file at all, this command serves the current folder at `http://127.0.0.1:8000/`:
+
+```salam
+salam serve
+```
+
+You can give a folder and change the port and address:
+
+```salam
+salam serve dist
+salam serve dist --port=8080
+salam serve dist --host=0.0.0.0 --port=8080
+```
+
+The default is `127.0.0.1:8000`, so only the same computer can see it. To open it from a phone or the local network use `--host=0.0.0.0`, but know that this mode serves dotfiles too.
+
+- It sends `index.html` for a folder. If there is none, it shows an HTML directory listing.
+
+- It only knows `index.html`; there is no custom `index` list and no custom 404 page.
+
+- It keeps files in memory and reads a file again when it changes; that is good for a quick preview.
+
+- It has no `ETag`, `Last-Modified`, 304 response or byte ranges. The config mode has all of those.
+
+- It serves dotfiles such as `.env`. `..` cannot escape the folder, but do not put a folder with secrets on the network in this mode.
+
+- The access log is printed as `GET /path -> 200`.
+
+- It does not rebuild anything and does not watch for changes; rebuild and refresh after an edit.
+
+## Building a site with Salam and serving it
+
+Salam pages compile to HTML. A page project becomes one complete page with `salam web`, and a folder becomes one HTML file per page with `salam page build`. Put the output in a folder such as `dist` and serve it:
+
+```salam
+mkdir -p dist
+salam web --output=dist/index.html
+salam serve dist --port=8080
+```
+
+For a multi-page site, `salam page build` writes each page to its own HTML file and puts the CSS and JS next to it. If you built with `--split`, the CSS and JS are separate files that can get a long cache. Static pages are complete as they are; for dynamic parts go to using Salam itself.
+
+The Salam website itself previews its output the same way: `salam serve website/dist/fa`.
+
+## Configuration: from one site to several
+
+The config is a text file in Salam's block syntax, but it is not a Salam program: it is data, not code. A setting is `name = value`, a block opens with `name:` and closes with `end`, a comment starts with `//` or `/* ... */`, and each setting and its value stay on one line. Strings sit between double quotes; for a value with backslashes, such as a regular expression, use backticks: ``~ \.php$``.
+
+```salam
+server:
+    log: access = "/var/log/salam/access.log" end
+    site:
+        listen = 80
+        names = "example.com www.example.com"
+        root = "/srv/example/public"
+        index = "index.html index.htm"
+        error page = 404 "404.html"
+        location "/assets/": cache = 30d end
+        location "= /health": return = 200 "ok" end
+        location "/old/": redirect = "https://www.example.com$uri" code = 301 end
+    end
+end
+```
+
+Everything lives under the `server:` block. Inside it, a `log:` block holds the access log and `site:` blocks hold each site. Every site has a `root` and can have several `location` blocks. Blocks can also be one line: `location "= /health": return = 200 "ok" end`.
+
+A site is chosen by the `Host` header. An exact name beats a wildcard, a longer wildcard suffix beats a shorter one, and a request that no site claims goes to the site with `default = true`, otherwise to the first site on that port. A site without `listen` listens on port 80; do not forget that in a multi-site config.
+
+Check the file before every deployment:
+
+```salam
+salam serve --config=web.salam --test
+```
+
+A successful run prints one line: `configuration is ok: 3 site(s), 2 listener(s)` and exits 0. If something is wrong, each problem is printed as `file:line:column` and the exit code is 1. A real run with a bad config does not start and exits 2. `--test` without `--config` is an error too.
+
+## Setting reference
+
+This table lists every config setting. The "where" column says whether it applies at site level, location level, or both.
+
+| Setting | Where | Meaning |
+| --- | --- | --- |
+| `listen = 80` | site | The port, optionally with an address: `listen = "127.0.0.1:8080"`. It can be repeated so one site listens on several ports. Without it, port 80. |
+| `names = "a.com www.a.com"` | site | Host names separated by spaces. `*.a.com` matches every host ending in `.a.com`, even several subdomain levels. |
+| `default = true` | site | The default site on that port for names no other site claims. |
+| `root = "/srv/site"` | site and location | The folder the request path is appended to. A location `root` replaces the site root. |
+| `alias = "/srv/files"` | prefix location only | Replaces the matched prefix: with `location "/dl/": alias = "/srv/files" end` the path `/dl/a.zip` becomes `/srv/files/a.zip`. It does not work with `=` or `~`. |
+| `index = "index.html index.htm"` | site and location | Files tried in order for a folder. The default is `index.html`. |
+| `return = 200 "ok"` | site and location | Answers immediately with a status and an optional text. Good for health checks and maintenance pages. |
+| `redirect = "https://$host$request_uri"` | site and location | Redirects; `code` changes the status (301 by default). Variables: `$host`, `$uri`, `$args`, `$request_uri` and `$scheme`. `$scheme` is always `http`. |
+| `code = 302` | site and location | Sets the redirect status code from 100 to 599. |
+| `cache = 30d` | site and location | Sends `Cache-Control: public, max-age=...` with static files. Units: `s`, `m`, `h`, `d`, `w`, `y`. |
+| `header = "Name" "value"` | site and location | Adds one response header; exactly two strings. It can be repeated. Site headers apply to every response and location headers only to that location; when the name is the same, the header that appears later in the file wins. |
+| `error page = 404 "404.html"` | site and location | A file relative to `root` sent with the same error status. The code is 400 to 599. |
+| `fastcgi_pass = "127.0.0.1:9000"` | site and location | Hands matching requests to a FastCGI backend such as php-fpm. TCP only; Unix sockets are not supported. |
+| `fastcgi_index = "index.php"` | site and location | The script used for a path ending in `/`. The default is `index.php`. |
+| `fastcgi_timeout = 30s` | site and location | The maximum time for one request to the backend; 30 seconds by default. It covers the whole exchange. |
+| `fastcgi_param = "NAME" "value"` | site and location | Adds or overrides a CGI variable; it can be repeated. It understands `$uri` and `$header:Name`. |
+| `log: access = "..."` | server level | The access log in a file, or `"stdout"` / `"stderr"`. The server will not start if it cannot open it. |
+
+## Location rules and the matching order
+
+Inside a site, the request path is compared with `location` blocks the way nginx does. There are four forms:
+
+- `location "= /health"`: exactly this path, nothing else is tried. The fastest and most predictable.
+
+- `location "/assets/"`: every path that starts with this prefix; the longest prefix wins.
+
+- `location "^~ /static/"`: a prefix that, when it wins, stops regular expressions from being tried.
+
+- `location "~ \.php$"` and `"~* \.png$"`: a regular expression; the second ignores case. They are tried in file order and the first match wins.
+
+The overall order is: an exact match first; then the longest prefix; if that prefix is `^~`, stop there; otherwise regular expressions in file order; and if none matches, the longest prefix. The path is URL-decoded and cleaned before matching; `..` cannot climb above `root` and a path containing `%00` gets a 400.
+
+A few behaviours that matter in practice:
+
+- Static files answer only `GET` and `HEAD`; any other method gets a 405 with an `Allow` header. A FastCGI location answers every method, because the application decides.
+
+- Files go out with `ETag` and `Last-Modified`; a fresh request gets a 304 with no body and `Range` gets a 206 with that part. A range outside the file gets 416. Several ranges in one request are answered with the whole file.
+
+- A folder requested without a trailing `/` is redirected with a 301 to the slash form.
+
+- Any path segment starting with a dot, such as `.env` or `.git`, gets a 404; the only exception is `.well-known`, for ACME and domain verification.
+
+- For files, the path is always read relative to the effective `root`; `alias` only swaps the path prefix for a folder.
+
+## Several domains and several sites on one server
+
+All sites live in one file and one `salam serve` process runs them. Each site has its own names, root and rules:
+
+```salam
+server:
+    log: access = "/var/log/salam/access.log" end
+
+    site:
+        listen = 80
+        names = "example.com www.example.com"
+        root = "/srv/example/public"
+        location "/assets/": cache = 30d end
+        location "= /health": return = 200 "ok" end
+    end
+
+    site:
+        listen = 80
+        names = "shop.example.com"
+        root = "/srv/shop/public"
+        location "/media/": cache = 7d end
+    end
+
+    site:
+        listen = 80
+        names = "blog.example.com"
+        root = "/srv/blog"
+        default = true
+    end
+end
+```
+
+Notes on this config:
+
+- All three sites are on port 80, but only one listener is created; the `Host` chooses the site. Different ports create different listeners.
+
+- Two names for one site go in one string: `"example.com www.example.com"`. DNS for both must point at this server.
+
+- The third site is `default = true`, so a request with an unknown name reaches it. That is a good pattern for a "site not found" page or the main site. Do not put more than one default on a port.
+
+- A duplicate name on one port is a config error: `name 'x' is used by two sites on port 80`. The same name on another port is fine.
+
+If several completely different domains must show one project and one root, put them all in one site's `names`: `names = "a.com www.a.com b.com c.com"`. Their DNS must all point at this server, and the content is the same. If each domain needs its own content, create a separate site for each.
+
+### Redirecting the bare domain to www
+
+At site level, `redirect` runs for every request of that site, so give the bare domain its own site and keep the main site separate:
+
+```salam
+    site:
+        listen = 80
+        names = "example.com"
+        redirect = "https://www.example.com$request_uri"
+    end
+
+    site:
+        listen = 80
+        names = "www.example.com"
+        root = "/srv/example/public"
+    end
+```
+
+A redirect-only site needs no `root`, because the site level redirects before any location. Because a proxy in front handles TLS, the target says `https://` explicitly; `$scheme` in Salam is always `http`. To test locally, pass `Host` by hand:
+
+```salam
+curl -H "Host: shop.example.com" http://127.0.0.1:8080/
+```
+
+On your own computer you can point these names at `127.0.0.1` in `/etc/hosts` (or the Windows hosts file) and open the browser.
+
+## Several subdomains for one project
+
+If every subdomain uses the same code and the same root, build one site with all the names:
+
+```salam
+    site:
+        listen = 80
+        names = "app.example.com *.app.example.com"
+        root = "/srv/app/public"
+    end
+```
+
+The `*.app.example.com` pattern matches every host ending in `.app.example.com`, even `a.b.app.example.com`. If you want only one subdomain level, list the names explicitly or check in the application. DNS must also point `*.app.example.com` at the server.
+
+The application now knows which subdomain the visitor opened from the `Host` header. For a static site the same content appears on all of them; if each subdomain has different content, there are two ways:
+
+- One root, dynamic content: the Salam application (or PHP) uses `Host` and builds the content for that subdomain. One site with wildcard names is enough.
+
+- A separate root for each: create one `site:` block per subdomain with its own `root`. An exact name beats a wildcard, so you can keep one wildcard site for the rest and pull out one or two special subdomains:
+
+```salam
+    site:
+        listen = 80
+        names = "admin.app.example.com"
+        root = "/srv/admin/public"
+    end
+
+    site:
+        listen = 80
+        names = "*.app.example.com"
+        root = "/srv/app/public"
+        default = true
+    end
+```
+
+In this example `admin` has its own root and the other subdomains come from the main project. For TLS on these names, get a wildcard certificate or list every name in Caddy; salam serve does not obtain certificates itself.
+
+## Connecting PHP with php-fpm
+
+PHP connects to Salam over FastCGI. First make php-fpm listen on a TCP port, because Unix sockets are not supported. In the pool file, for example `/etc/php/8.3/fpm/pool.d/www.conf`:
+
+```salam
+listen = 127.0.0.1:9000
+; if only this server connects:
+listen.allowed_clients = 127.0.0.1
+```
+
+Then restart php-fpm. A PHP site with real files looks like this:
+
+```salam
+server:
+    site:
+        listen = 80
+        names = "php.example.com www.php.example.com"
+        root = "/srv/php/public"
+        index = "index.html"
+
+        location "= /":
+            fastcgi_pass = "127.0.0.1:9000"
+            fastcgi_index = "index.php"
+            fastcgi_timeout = 30s
+            fastcgi_param = "APP_ENV" "production"
+        end
+
+        location "~ \.php(/|$)":
+            fastcgi_pass = "127.0.0.1:9000"
+            fastcgi_timeout = 30s
+            fastcgi_param = "APP_ENV" "production"
+        end
+
+        location "/assets/":
+            cache = 30d
+        end
+    end
+end
+```
+
+The exact `/` location goes to php-fpm and runs `index.php`. The expression `~ \.php(/|$)` catches every path that ends in `.php` or has more path after it, so `/index.php/a/b` runs with `PATH_INFO=/a/b` and a PHP file is never sent as plain text. The other static files are read from `root`.
+
+Never put a PHP file in the `index` list. If you set `index = "index.php"` and a path does not go to FastCGI, Salam sends that file as a static file and the PHP source leaks. Keep `index` on `index.html`, send `/` to FastCGI with an exact location, and keep only PHP entry files under `root`.
+
+Salam fills these CGI variables itself: `GATEWAY_INTERFACE`, `SERVER_SOFTWARE`, `SERVER_PROTOCOL`, `REQUEST_METHOD`, `REQUEST_URI`, `SCRIPT_NAME`, `SCRIPT_FILENAME`, `PATH_INFO`, `DOCUMENT_ROOT`, `DOCUMENT_URI`, `QUERY_STRING`, `CONTENT_TYPE`, `CONTENT_LENGTH`, `SERVER_NAME`, `SERVER_PORT`, `REMOTE_ADDR`, `REDIRECT_STATUS` and `HTTP_*` for common headers. `fastcgi_param` adds or overrides one and understands `$uri`, `$request_uri`, `$args`, `$document_root`, `$script_name`, `$server_port`, `$remote_addr` and `$header:Name`.
+
+An important framework limit. For FastCGI, Salam looks for a real file under `root`; a path that reaches no file is answered with 404 before PHP is contacted. So `/index.php`, `/index.php/a/b` and real files work, but a pretty URL such as `/login` in Laravel or WordPress permalinks does not work without a proxy in front. If you want pretty URLs without `index.php`, put Caddy or nginx in front and rewrite there; or give URLs with `index.php` for now. A third option is WordPress's plain `?p=123` permalink.
+
+The response is exactly what PHP sends: the `Status:` line sets the status, the other headers go out as they are (several `Set-Cookie` too) and the body is passed byte for byte. If the backend is unreachable or dies halfway, the answer is 502. Each request opens its own connection and `REMOTE_ADDR` is `127.0.0.1` by default; behind a proxy override it with `fastcgi_param = "REMOTE_ADDR" "$header:X-Real-IP"` and tell the application that TLS ends in front.
+
+## Python, Go, Node and the rest
+
+I have to be direct here: `salam serve` has no HTTP reverse proxy and understands only static files and FastCGI. So Python, Go and Node have two real options.
+
+### Option one, recommended: a reverse proxy in front
+
+Run the Python or Go application on a local port and put Caddy in front. That solves TLS, WebSocket and path rewriting in one place. A sample Caddyfile when Salam serves part of the site too:
+
+```salam
+example.com {
+    encode gzip
+
+    handle /api/* {
+        reverse_proxy 127.0.0.1:8001
+    }
+
+    handle {
+        reverse_proxy 127.0.0.1:8080
+    }
+}
+```
+
+Here `8001` is the Python or Go application and `8080` is `salam serve`. If you have no Salam part, keep only the `reverse_proxy` to the application. Caddy obtains the Let's Encrypt certificate itself and passes `Host` through untouched.
+
+### Option two: FastCGI with an entry file
+
+If your application speaks FastCGI you can connect it directly. The trick is to place an empty file at the mount point under `root` so Salam sees a "script" and sends the rest of the path as `PATH_INFO`. For example an empty `/srv/app/api` and this location:
+
+```salam
+        location "/api":
+            fastcgi_pass = "127.0.0.1:9100"
+            fastcgi_timeout = 60s
+        end
+```
+
+Now `/api/users` reaches the backend: `SCRIPT_NAME=/api`, `PATH_INFO=/users`. One small exception: because `fastcgi_index` is designed for PHP, a request for exactly `/api/` becomes `/api/index.php`; use `/api` or `/api/...`. For Python, uWSGI can speak the same protocol over TCP:
+
+```salam
+pip install uwsgi
+uwsgi --fastcgi-socket 127.0.0.1:9100 \
+      --wsgi-file /srv/app/app.py \
+      --callable app \
+      --processes 4
+```
+
+And the smallest WSGI application that echoes the path:
+
+```salam
+def app(environ, start_response):
+    path = environ.get("PATH_INFO", "/")
+    body = ("hello from python: " + path + "\n").encode()
+    start_response("200 OK", [
+        ("Content-Type", "text/plain; charset=utf-8"),
+        ("Content-Length", str(len(body))),
+    ])
+    return [body]
+```
+
+For Go, `net/http/fcgi` provides a FastCGI server. Note that this package is marked deprecated in newer Go versions but still works:
+
+```salam
+package main
+
+import (
+    "fmt"
+    "net"
+    "net/http"
+    "net/http/fcgi"
+)
+
+func main() {
+    ln, err := net.Listen("tcp", "127.0.0.1:9100")
+    if err != nil {
+        panic(err)
+    }
+    h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        fmt.Fprintf(w, "hello from go: %s\n", r.URL.Path)
+    })
+    if err := fcgi.Serve(ln, h); err != nil {
+        panic(err)
+    }
+}
+```
+
+For Node, if you have a package such as `node-fastcgi`, the same pattern works; otherwise take option one. Take the limits seriously: Salam matches the path against an entry file, each request opens a new connection, there is no Unix socket, and every request under that location goes to one backend. A proxy in front is the more normal deployment.
+
+## Using Salam itself, and compatibility
+
+Salam's compatibility with salam serve works in two directions. First, the config uses Salam's block syntax and is read by the `net/httpd/conf` parser: blocks close with `end` (or `پایان` in Persian), comments are the same `//`, and errors carry a line and column. Second, the server is a standard library package, so you can start it from inside a Salam program:
+
+serve-embed.salam
+
+```salam
+import net.httpd
+
+func main:
+    if httpd.Check("web.salam") != 0:
+        ret 1
+    end
+    if not httpd.LoadFile("web.salam"):
+        ret 2
+    end
+    ret httpd.Run()
+end
+```
+
+This program does exactly what `salam serve --config=web.salam` does: it checks and loads the file and starts the server. To test a config without running it, `httpd.Check` is the `--test` mode; to ask which site or location a host and path reach, use `SiteFor`, `LocationFor`, `SiteCount` and `SiteNames`, with no port opened.
+
+Three common patterns:
+
+- A static site built with Salam: `salam web` or `salam page build`, then `salam serve dist`. This is the simplest and fastest case.
+
+- A dynamic application with `net/http`: the Salam program runs its own server on a port and can also serve static files with `router.Static`. Run it directly or put it behind Caddy; salam serve does not mount it, because it has no reverse proxy.
+
+- Static and PHP together: salam serve serves static files and hands PHP to php-fpm; if you also have a Python or Go application, Caddy sends `/api` to it and the rest to Salam.
+
+One subtle point: config keys stay English, like JSON keys, even when the API has Persian names. The functions and types of `net.httpd` also have Persian names (`بررسی`, `بارگذاری پرونده`, `اجرا`, `توقف`), but the config is data and is read with fixed keys.
+
+## HTTPS, behind Caddy or nginx
+
+In this version `listen = 443 tls` is read but rejected with `tls is not available yet`. Give TLS to a terminator. The shortest path is Caddy:
+
+```salam
+example.com, www.example.com {
+    reverse_proxy 127.0.0.1:8080
+}
+```
+
+This obtains and renews the certificate, redirects HTTP to HTTPS and passes the request to Salam with the right `Host`. If you prefer nginx, `proxy_pass http://127.0.0.1:8080;` and `proxy_set_header Host $host;` is enough.
+
+Behind a proxy, set two things. For PHP, take `REMOTE_ADDR` from the proxy header and tell the application that TLS has ended:
+
+```salam
+            fastcgi_param = "REMOTE_ADDR" "$header:X-Real-IP"
+            fastcgi_param = "HTTPS" "on"
+            fastcgi_param = "HTTP_X_FORWARDED_PROTO" "https"
+```
+
+For static files, Salam's access log records the host and path but not the client address; keep the Caddy or nginx log if you need it. And remember that a site-level redirect with `$scheme` always builds `http`, so write the https target explicitly.
+
+## Errors, debugging and checking before deployment
+
+Anything that can be wrong in the file is found at load time, not on the first request. Sample `--test` output for a broken file:
+
+```salam
+web.salam:3:18: port must be a number from 1 to 65535
+web.salam:6:9: header needs two strings: the name and the value
+web.salam:7:9: '[' is not a valid regular expression
+web.salam:8:13: unknown setting 'returx' in a location (did you mean 'return'?)
+web.salam:2:5: root '/srv/does-not-exist' is not a directory
+configuration is not valid
+```
+
+| Message or symptom | Meaning and fix |
+| --- | --- |
+| `root '...' is not a directory` | The folder must exist at load time. Fix the path or create it first. |
+| `name '...' is used by two sites on port ...` | Two sites claim one name on one port. Rename one or use a different port. |
+| `site number N has no names and is not the default site` | Every site needs either `names` or `default = true`. |
+| `a location path must start with '/'` | A prefix path must start with a slash. Use `~` for a regular expression. |
+| `fastcgi_pass cannot read a unix socket yet` | Put php-fpm on TCP: `listen = 127.0.0.1:9000`. |
+| `tls is not available yet` | Do not put TLS in Salam; put Caddy or nginx in front. |
+| A 502 response | The FastCGI backend is unreachable, the address is wrong, or the backend died. Check the TCP connection and the php-fpm log. |
+| A 404 for an extensionless PHP path | Salam could not find a script file. Use `index.php` in the URL or put a rewriting proxy in front. |
+| A 405 response | A method other than GET or HEAD on a static file. Check `Allow`; use FastCGI or a Salam application for an API. |
+| A 404 for `.env` and dotfiles | Config mode blocks them; the only exception is `.well-known`. Keep secrets outside `root`. |
+
+A few debugging notes that cost a lot of time:
+
+- `--test` checks only the config, the existence of `root` and `alias`; it does not check that php-fpm is healthy, that a script exists for each request, or that a port is free.
+
+- If the server will not start and prints `cannot listen on ...`, the port is taken. Check with `lsof -i :80` or `ss -ltnp`.
+
+- If you change the config, a running server keeps the sites it started with; start it again.
+
+- Host names are lowercased and lose the port and a trailing dot; `WWW.Example.COM.` is `www.example.com`.
+
+- The access log has time, host, method, path and status; it has no client IP and no response time. Keep the proxy log in front if you need those.
+
+## Production deployment and a checklist
+
+On a Linux server, keep the server running with systemd. A simple unit:
+
+```salam
+[Unit]
+Description=Salam web server
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=www-data
+Group=www-data
+WorkingDirectory=/srv
+ExecStart=/usr/local/bin/salam serve --config=/srv/web.salam
+Restart=on-failure
+RestartSec=2
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```salam
+sudo systemctl daemon-reload
+sudo systemctl enable --now salam-web
+sudo systemctl status salam-web
+sudo journalctl -u salam-web -f
+```
+
+If you give port 80 to a non-root user, the `AmbientCapabilities` line above is enough; or run the server on `127.0.0.1:8080` and put Caddy on 80 and 443. The service user needs read access to the roots and the log path (and write access if an application writes there).
+
+A short checklist before release:
+
+- Run `salam serve --config=web.salam --test` in CI or before every deployment; the exit code must be 0.
+
+- Keep secrets, `.env`, `.git` and backups outside `root`. Config mode blocks dotfiles, but the best place for them is somewhere else entirely.
+
+- Give versioned assets (CSS and JS with a hash) `cache = 30d` or more; do not cache HTML.
+
+- Add `location "= /health": return = 200 "ok" end` for probes.
+
+- Rotate the access log with `logrotate`; Salam does not rotate it itself.
+
+- Let Caddy or nginx do HTTPS and pass `X-Forwarded-Proto` to the application.
+
+- Give every port a meaningful `default` site; an unowned default makes a wrong domain answer 200 as well.
+
+- If you use FastCGI, set `fastcgi_timeout` from the real response time of the application and remember that every request opens a new connection.
+
+## Which option should I choose?
+
+| Need | Recommended option |
+| --- | --- |
+| Quick preview of a folder in development | `salam serve dir` |
+| A real static site with caching and a 404 page | Config mode with one `site:` and `cache` |
+| Several domains on one server | One file with several `site:` blocks and separate `names` |
+| Several subdomains for one project | One `site:` with wildcard names and one `root`; pull special subdomains out with exact sites |
+| PHP | `fastcgi_pass` to php-fpm on TCP |
+| Python, Go, Node | Caddy or nginx as a reverse proxy; FastCGI only if the app supports it |
+| A dynamic application written in Salam | Run the `net/http` program directly or put it behind Caddy |
+| HTTPS | Caddy or nginx; salam serve does not obtain certificates |
+| WebSocket | In the Salam application with `net/websocket`; salam serve is not a WebSocket proxy |
+
+In the end, `salam serve` is a small, readable server for static sites and FastCGI, not a full nginx replacement. For a static site or several static domains with PHP, everything fits in one command and one text file. For other HTTP applications and TLS, put a simple proxy in front and let each tool do its own job.
 
 
 ---

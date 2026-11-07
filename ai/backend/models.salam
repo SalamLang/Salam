@@ -1,0 +1,141 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+
+package aimodels
+
+import str
+import sync
+
+mut LOCK := sync.Mutex {}
+mut READY := false
+mut POOL := Vector {} as Vector<str>
+mut COOL_UNTIL := HashMap {} as HashMap<str, i64>
+mut FAILS := HashMap {} as HashMap<str, int>
+
+func has_model(name: str): bool:
+    each m in POOL:
+        if m == name:
+            ret true
+        end
+    end
+    ret false
+end
+
+func add(list: str):
+    each part in str.Split(list, ","):
+        m := str.Trim(part)
+        slash := m.find("/")
+        if slash > 0 and slash < m.len() - 1 and not has_model(m):
+            POOL.push(m)
+        end
+    end
+end
+
+func hold_seconds(fails: int): i64:
+    if fails <= 1:
+        ret 120
+    else fails == 2:
+        ret 300
+    else fails == 3:
+        ret 900
+    else fails == 4:
+        ret 3600
+    end
+    ret 21600
+end
+
+pub func Configure(preferred: str, fallbacks: str):
+    if not READY:
+        LOCK = sync.NewMutex()
+        READY = true
+    end
+    _l := sync.Lock(LOCK)
+    POOL = Vector {} as Vector<str>
+    COOL_UNTIL = HashMap {} as HashMap<str, i64>
+    FAILS = HashMap {} as HashMap<str, int>
+    add(preferred)
+    if POOL.len() > 0:
+        add(fallbacks)
+    end
+    _u := sync.Unlock(LOCK)
+end
+
+pub func Count(): int:
+    _l := sync.Lock(LOCK)
+    n := POOL.len()
+    _u := sync.Unlock(LOCK)
+    ret n
+end
+
+pub func Managed(): bool:
+    ret Count() > 0
+end
+
+pub func Owns(model: str): bool:
+    _l := sync.Lock(LOCK)
+    r := has_model(model)
+    _u := sync.Unlock(LOCK)
+    ret r
+end
+
+pub func Ready(now: i64): str:
+    _l := sync.Lock(LOCK)
+    mut out := ""
+    each m in POOL:
+        if out.len() == 0 and (not COOL_UNTIL.has(m) or COOL_UNTIL.get(m) <= now):
+            out = m
+        end
+    end
+    _u := sync.Unlock(LOCK)
+    ret out
+end
+
+pub func Pick(now: i64): str:
+    r := Ready(now)
+    if r.len() > 0:
+        ret r
+    end
+    _l := sync.Lock(LOCK)
+    mut out := ""
+    mut soonest := 0 as i64
+    each m in POOL:
+        expires := COOL_UNTIL.has(m) ? COOL_UNTIL.get(m) : 0
+        if out.len() == 0 or expires < soonest:
+            out = m
+            soonest = expires
+        end
+    end
+    _u := sync.Unlock(LOCK)
+    ret out
+end
+
+pub func Fail(model: str, now: i64):
+    _l := sync.Lock(LOCK)
+    if has_model(model):
+        n := (FAILS.has(model) ? FAILS.get(model) : 0) + 1
+        FAILS.put(model, n)
+        COOL_UNTIL.put(model, now + hold_seconds(n) * 1000)
+    end
+    _u := sync.Unlock(LOCK)
+end
+
+pub func Ok(model: str):
+    _l := sync.Lock(LOCK)
+    if FAILS.has(model):
+        _a := FAILS.remove(model)
+        _b := COOL_UNTIL.remove(model)
+    end
+    _u := sync.Unlock(LOCK)
+end

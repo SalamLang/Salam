@@ -78,10 +78,10 @@ lowering from surface syntax down to them was absent.
 - **`str.split`** - 51 errors. Returns `Vector<str>`, built as
   `{ ptr, i32, i32 }` matching `std/collections/vector.salam`.
 - **Built-in functions** - 150 errors: `char_code`, `spawn`,
-  `listdir`, `args`, `input`, `lang`, `callhandler`, plus a generic fallback
+  `input`, `lang`, `callhandler`, plus a generic fallback
   through `salam_builtin_lookup()` so the shared `k_builtins` table
-  (`join` -> `salam_thread_join`, `strcmp`) reaches both backends from one
-  edit.
+  (`join` -> `salam_thread_join`, `char_from_code`) reaches both backends from
+  one edit.
 - **Package-qualified constants** (`dns.TypeA`) - new `ll_pkg_value()`. The
   key detail is that the package must be _touched_ first; `ll_touch_pkg`
   emits its globals and only then can `ll_global_find` see them.
@@ -551,7 +551,7 @@ Zero differing files. The self-hosted compiler also passes 73/73 on
 | -------------------------------------------------------------------------------- | ------------------------------------------ |
 | `ll_runtime_fn` / `ll_call_runtime`                                              | `runtime_fn` / `call_runtime`              |
 | `ll_call_file`                                                                   | `call_file`                                |
-| `ll_call_vec_str` (split/args/listdir)                                           | `call_vec_str`                             |
+| `ll_call_vec_str` (split)                                                        | `call_vec_str`                             |
 | `ll_pkg_value`                                                                   | `pkg_value`                                |
 | built-ins (`char_code`, `spawn`, `input`, `lang`, `callhandler`, table fallback) | same, in `call_intrinsic`                  |
 | `ll_sym_qualified` mangled-name scan                                             | `sym_qualified` + `scan_mangled`           |

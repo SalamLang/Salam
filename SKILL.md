@@ -2987,14 +2987,10 @@ them** - the English spelling is an error (`E001`):
 | ---------------- | ----------------- |
 | `len`            | `طول`             |
 | `sizeof`         | `اندازه‌گونه`     |
-| `args`           | `آرگومان‌ها`      |
-| `env`            | `متغیر‌محیطی`     |
 | `lang`           | `زبان`            |
-| `listdir`        | `فهرست‌پوشه`      |
 | `hash`           | `درهم`            |
 | `char_code`      | `کدنویسه`         |
 | `char_from_code` | `نویسه‌ازکد`      |
-| `strcmp`         | `مقایسه‌رشته`     |
 | `spawn`          | `نخ‌ساز`          |
 | `join`           | `نخ‌پیوند`        |
 | `callhandler`    | `فراخوان‌دستگیره` |
@@ -3003,6 +2999,13 @@ them** - the English spelling is an error (`E001`):
 | `atomic_add`     | `اتمی‌بیفزا`      |
 | `atomic_swap`    | `اتمی‌جابجا`      |
 | `atomic_cas`     | `اتمی‌مقایسه`     |
+
+The free functions `listdir` and `strcmp` were removed from the language:
+use `os.ListDir` (or `fs.dir.List`) and `str.Equals` / the string comparison
+operators instead. `open` is gone as well: file IO is `import fs.file`, then
+`file.Open`. `env` and `args` stay built-ins because the JavaScript target and
+the interpreter implement them in their own runtimes; prefer `os.Env` and
+`os.Args` in new code.
 
 **Stay English in Persian files:** the compile-time constants (`SALAM_OS`,
 `SALAM_OS_WINDOWS`, ...) and C names declared in `درون‌داد`.

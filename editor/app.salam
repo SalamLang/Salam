@@ -75,6 +75,7 @@ mut fn_emit := (_a: str, _b: str, _c: str): ret "" end
 mut fn_syntax_ok := (_a: str, _b: str): ret "" end
 mut run_timer := 0 as i64
 mut dd_open := false
+mut dd_sel := 0 - 1
 mut menu_open := false
 mut copy_flash_timer := 0 as i64
 mut wasm_timer := 0 as i64
@@ -1108,6 +1109,7 @@ end
 func on_dd_item_click(id: str):
     set_dropdown(false)
     select_example(id)
+    dom.Call0(query("#dd-button"), "focus")
 end
 
 func rebuild_dropdown():
@@ -1125,7 +1127,7 @@ func rebuild_dropdown():
         until i < n:
             if examples_data.EXAMPLES[i].mode == "app":
                 sel := examples_data.EXAMPLES[i].id == g_example_id ? " sel" : ""
-                html = html + "<li class=\"dd-item" + sel + "\" role=\"menuitem\" data-id=\"" + examples_data.EXAMPLES[i].id + "\">" + esc_html(ex_title(i)) + "</li>"
+                html = html + "<li class=\"dd-item" + sel + "\" id=\"dd-opt-" + examples_data.EXAMPLES[i].id + "\" role=\"menuitem\" data-id=\"" + examples_data.EXAMPLES[i].id + "\">" + esc_html(ex_title(i)) + "</li>"
             end
             i++
         end
@@ -1142,13 +1144,13 @@ func rebuild_dropdown():
         until i < n:
             if examples_data.EXAMPLES[i].mode == "layout":
                 sel := examples_data.EXAMPLES[i].id == g_example_id ? " sel" : ""
-                html = html + "<li class=\"dd-item is-web" + sel + "\" role=\"menuitem\" data-id=\"" + examples_data.EXAMPLES[i].id + "\">" + esc_html(ex_title(i)) + "<span class=\"dd-badge\">" + T("badge_web") + "</span></li>"
+                html = html + "<li class=\"dd-item is-web" + sel + "\" id=\"dd-opt-" + examples_data.EXAMPLES[i].id + "\" role=\"menuitem\" data-id=\"" + examples_data.EXAMPLES[i].id + "\">" + esc_html(ex_title(i)) + "<span class=\"dd-badge\">" + T("badge_web") + "</span></li>"
             end
             i++
         end
     end
     if g_example_id == "custom":
-        html = html + "<li class=\"dd-item sel custom\" role=\"menuitem\" data-id=\"custom\">" + esc_html(T("custom")) + "</li>"
+        html = html + "<li class=\"dd-item sel custom\" id=\"dd-opt-custom\" role=\"menuitem\" data-id=\"custom\">" + esc_html(T("custom")) + "</li>"
     end
     dom.SetHtml(el_dd_list, html)
     idx := find_example(g_example_id)
@@ -1165,14 +1167,94 @@ func rebuild_dropdown():
     end
 end
 
+func dd_items(): i64: ret dom.QueryAll("#dd-list .dd-item") end
+
+func dd_pick(idx: int):
+    items := dd_items()
+    n := dom.CountOf(items)
+    if n == 0: ret end
+    mut pos := idx
+    if pos < 0: pos = (n - 1) as int end
+    if pos >= n: pos = 0 end
+    dd_sel = pos
+    mut i := 0
+    until i < n:
+        item := dom.ItemAt(items, i)
+        if i == pos:
+            dom.AddClass(item, "focus")
+            dom.SetAttr(el_dd_list, "aria-activedescendant", "dd-opt-" + dom.GetAttr(item, "data-id"))
+        else:
+            dom.RemoveClass(item, "focus")
+        end
+        i++
+    end
+end
+
+func dd_pick_selected():
+    items := dd_items()
+    n := dom.CountOf(items)
+    mut i := 0
+    until i < n:
+        if dom.GetAttr(dom.ItemAt(items, i), "data-id") == g_example_id:
+            dd_pick(i)
+            ret
+        end
+        i++
+    end
+    dd_pick(0)
+end
+
+func dd_activate():
+    items := dd_items()
+    n := dom.CountOf(items)
+    if dd_sel < 0 or dd_sel >= n: ret end
+    on_dd_item_click(dom.GetAttr(dom.ItemAt(items, dd_sel), "data-id"))
+end
+
+func on_dd_keydown(ev: i64):
+    key := dom.EventKey(ev)
+    if key == "ArrowDown":
+        dom.PreventDefault(ev)
+        dd_pick(dd_sel + 1)
+    else key == "ArrowUp":
+        dom.PreventDefault(ev)
+        dd_pick(dd_sel - 1)
+    else key == "Home":
+        dom.PreventDefault(ev)
+        dd_pick(0)
+    else key == "End":
+        dom.PreventDefault(ev)
+        dd_pick((dom.CountOf(dd_items()) - 1) as int)
+    else key == "Enter" or key == " ":
+        dom.PreventDefault(ev)
+        dd_activate()
+    else key == "Escape":
+        dom.PreventDefault(ev)
+        set_dropdown(false)
+        dom.Call0(query("#dd-button"), "focus")
+    else key == "Tab":
+        set_dropdown(false)
+    end
+end
+
 func set_dropdown(open: bool):
     dd_open = open
     dom.SetBool(el_dd_list, "hidden", open == false)
     dom.SetAttr(query("#dd-button"), "aria-expanded", open ? "true" : "false")
     if open:
         dom.AddClass(el_dropdown, "open")
+        dd_pick_selected()
+        dom.Call0(el_dd_list, "focus")
     else:
         dom.RemoveClass(el_dropdown, "open")
+        items := dd_items()
+        n := dom.CountOf(items)
+        mut i := 0
+        until i < n:
+            dom.RemoveClass(dom.ItemAt(items, i), "focus")
+            i++
+        end
+        dd_sel = 0 - 1
     end
 end
 
@@ -1746,6 +1828,7 @@ func wire_events():
     dom.OnEvent(el_menu_toggle, "click", (): ret on_menu_toggle_click() end)
     dom.OnEvent(el_scrim, "click", (): ret on_scrim_click() end)
     dom.OnEvent(by_id("dd-button"), "click", (): ret on_dd_button_click() end)
+    dom.OnEventE(el_dd_list, "keydown", (ev: i64): ret on_dd_keydown(ev) end)
     dom.OnEvent(el_theme_btn, "click", (): ret on_theme_click() end)
     dom.OnEvent(el_autorun_btn, "click", (): ret on_autorun_click() end)
     dom.OnEvent(el_run_btn, "click", (): ret on_run_click() end)

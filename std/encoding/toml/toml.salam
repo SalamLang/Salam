@@ -141,12 +141,183 @@ func _unterminated(err &: Error, n: int, start: int, stop: int):
     end
 end
 
+func _skip_toml_newline(bp: i8*, n: int, p: int): int:
+    if p >= n: ret p end
+    c := _ub(bp, p)
+    if c == 10: ret p + 1 end
+    if c == 13 and p + 1 < n and _ub(bp, p + 1) == 10: ret p + 2 end
+    ret p
+end
+
+func _skip_toml_ws_nl(bp: i8*, n: int, p: int): int:
+    mut q := p
+    until q < n:
+        c := _ub(bp, q)
+        if c != 32 and c != 9 and c != 10 and c != 13: break end
+        q++
+    end
+    ret q
+end
+
+func _append_basic_escape(s: str, n: int, p: int, sb &: str.StringBuilder, err &: Error): int:
+    // p points at the backslash, returns the next unread byte (or n on error).
+    if p + 1 >= n:
+        _fail(err, ErrorKind.UnexpectedEnd, "the string is not closed", p, "toml.unterminated_string")
+        ret n
+    end
+    e := _ub(_bp(s), p + 1)
+    if e == 34: str.BufAppendChar(sb, 34)
+    else e == 92: str.BufAppendChar(sb, 92)
+    else e == 110: str.BufAppendChar(sb, 10)
+    else e == 116: str.BufAppendChar(sb, 9)
+    else e == 114: str.BufAppendChar(sb, 13)
+    else e == 98: str.BufAppendChar(sb, 8)
+    else e == 102: str.BufAppendChar(sb, 12)
+    else e == 117 or e == 85:
+        cnt := e == 117 ? 4 : 8
+        cp := _hexn(s, n, p + 2, cnt)
+        if cp < 0 or cp > 0x10FFFF or (cp >= 0xD800 and cp <= 0xDFFF):
+            _fail(err, ErrorKind.Syntax, "invalid unicode escape '" + _tsub(s, p, 2) + "'", p, "toml.invalid_escape")
+            ret n
+        end
+        str.BufAppendCp(sb, cp)
+        ret p + 2 + cnt
+    else:
+        _fail(err, ErrorKind.Syntax, "invalid escape '" + _tsub(s, p, 2) + "'", p, "toml.invalid_escape")
+        ret n
+    end
+    ret p + 2
+end
+
+func _parse_basic_multiline(s: str, n: int, i: int, endpos &: int, err &: Error): str:
+    bp := _bp(s)
+    endpos = n
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    mut p := _skip_toml_newline(bp, n, i + 3)
+    until p < n:
+        c := _ub(bp, p)
+        if c == 34:
+            mut q := p
+            until q < n and _ub(bp, q) == 34:
+                q++
+            end
+            run := q - p
+            if run >= 3:
+                if run > 5:
+                    _fail(err, ErrorKind.Syntax, "too many quotes close a multi-line string", p, "toml.invalid_string")
+                    ret ""
+                end
+                mut extra := 0
+                until extra < run - 3:
+                    str.BufAppendChar(sb, 34)
+                    extra++
+                end
+                endpos = q
+                ret str.BufStr(sb)
+            end
+            mut k := 0
+            until k < run:
+                str.BufAppendChar(sb, 34)
+                k++
+            end
+            p = q
+            continue
+        end
+        if c == 92:
+            e := _ub(bp, p + 1)
+            if e == 10 or (e == 13 and p + 2 < n and _ub(bp, p + 2) == 10):
+                p = _skip_toml_ws_nl(bp, n, p + 2)
+                continue
+            end
+            p = _append_basic_escape(s, n, p, sb, err)
+            if err.message != "": ret "" end
+            continue
+        end
+        if c == 13:
+            if p + 1 < n and _ub(bp, p + 1) == 10:
+                p++
+            end
+            str.BufAppendChar(sb, 10)
+            p++
+            continue
+        end
+        if c == 10:
+            str.BufAppendChar(sb, 10)
+            p++
+            continue
+        end
+        if c < 32 and c != 9:
+            _fail(err, ErrorKind.Syntax, "a control character is not allowed in a string", p, "toml.invalid_string")
+            ret ""
+        end
+        str.BufAppendChar(sb, c)
+        p++
+    end
+    _unterminated(err, n, i, p)
+    ret ""
+end
+
+func _parse_literal_multiline(s: str, n: int, i: int, endpos &: int, err &: Error): str:
+    bp := _bp(s)
+    endpos = n
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    mut p := _skip_toml_newline(bp, n, i + 3)
+    until p < n:
+        c := _ub(bp, p)
+        if c == 39:
+            mut q := p
+            until q < n and _ub(bp, q) == 39:
+                q++
+            end
+            run := q - p
+            if run >= 3:
+                if run > 5:
+                    _fail(err, ErrorKind.Syntax, "too many quotes close a multi-line string", p, "toml.invalid_string")
+                    ret ""
+                end
+                mut extra := 0
+                until extra < run - 3:
+                    str.BufAppendChar(sb, 39)
+                    extra++
+                end
+                endpos = q
+                ret str.BufStr(sb)
+            end
+            mut k := 0
+            until k < run:
+                str.BufAppendChar(sb, 39)
+                k++
+            end
+            p = q
+            continue
+        end
+        if c == 13:
+            if p + 1 < n and _ub(bp, p + 1) == 10:
+                p++
+            end
+            str.BufAppendChar(sb, 10)
+            p++
+            continue
+        end
+        if c == 10:
+            str.BufAppendChar(sb, 10)
+            p++
+            continue
+        end
+        str.BufAppendChar(sb, c)
+        p++
+    end
+    _unterminated(err, n, i, p)
+    ret ""
+end
+
 func _parse_basic_string(s: str, n: int, i: int, endpos &: int, err &: Error): str:
     bp := _bp(s)
     endpos = n
     if i + 2 < n and _ub(bp, i + 1) == 34 and _ub(bp, i + 2) == 34:
-        _fail(err, ErrorKind.Unsupported, `multi-line strings (""") are not supported`, i, "toml.unsupported")
-        ret ""
+        ret _parse_basic_multiline(s, n, i, endpos, err)
     end
     mut sb := str.NewBuilder()
     defer str.BufFree(sb)
@@ -198,8 +369,7 @@ func _parse_literal_string(s: str, n: int, i: int, endpos &: int, err &: Error):
     bp := _bp(s)
     endpos = n
     if i + 2 < n and _ub(bp, i + 1) == 39 and _ub(bp, i + 2) == 39:
-        _fail(err, ErrorKind.Unsupported, "multi-line strings (''') are not supported", i, "toml.unsupported")
-        ret ""
+        ret _parse_literal_multiline(s, n, i, endpos, err)
     end
     mut p := i + 1
     start := p
@@ -808,6 +978,12 @@ func _encode_inline_value(v: value.Value, path: str, err &: Error): str:
         ret f.concat(".0")
     end
     if value.IsString(v): ret `"`.concat(_escape_toml_string(value.AsString(v))).concat(`"`) end
+    if value.IsBytes(v) or value.IsExt(v):
+        if err.message == "":
+            err = Error.New(ErrorKind.Unsupported, "TOML has no binary or extension value").with_code("toml.unsupported_value").with_path(path)
+        end
+        ret ""
+    end
     if value.IsArray(v):
         mut sb := str.NewBuilder()
         str.BufAppendChar(sb, 91)

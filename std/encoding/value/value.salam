@@ -2,6 +2,7 @@
 @fa "مقدار"
 package value
 
+import compress
 import mem
 
 @en "KindNull"
@@ -25,6 +26,12 @@ pub const KindArray := 5
 @en "KindObject"
 @fa "نوع شیء"
 pub const KindObject := 6
+@en "KindBytes"
+@fa "نوع بایت‌ها"
+pub const KindBytes := 7
+@en "KindExt"
+@fa "نوع داده افزونه"
+pub const KindExt := 8
 
 @en "Value"
 @fa "مقدار"
@@ -53,6 +60,9 @@ pub struct Value:
     @en "order"
     @fa "ترتیب کلیدها"
     pub order: i64 = 0
+    @en "bin"
+    @fa "بایت‌ها"
+    pub bin: Vector<u8> = Vector {} as Vector<u8>
 
     @en "field"
     @fa "عضو"
@@ -141,6 +151,12 @@ func _kind_text(kind: int): str:
         KindArray:
             ret "an array"
         end
+        KindBytes:
+            ret "binary data"
+        end
+        KindExt:
+            ret "an extension value"
+        end
     end
     ret "an object"
 end
@@ -199,6 +215,21 @@ func _ord_free(o: i64):
     mem.Free(o as void *)
 end
 
+func _fill_bin(p: void*, n: int): Vector<u8>:
+    mut out := Vector {} as Vector<u8>
+    bp := p as u8*
+    mut i := 0
+    until i < n:
+        out.push(bp[i])
+        i++
+    end
+    ret out
+end
+
+func _fill_bin_str(s: str): Vector<u8>:
+    ret _fill_bin(s as void*, s.len())
+end
+
 @en "ValueNull"
 @fa "مقدار تهی"
 pub func ValueNull(): Value: ret Value { kind = KindNull } end
@@ -214,6 +245,38 @@ pub func ValueFloat(n: f64): Value: ret Value { kind = KindFloat, n = n } end
 @en "ValueString"
 @fa "مقدار رشته"
 pub func ValueString(s: str): Value: ret Value { kind = KindString, s = s } end
+
+@en "ValueBinary"
+@fa "مقدار دودویی"
+pub func ValueBinary(p: void*, n: int): Value:
+    mut v := Value { kind = KindBytes }
+    v.bin = _fill_bin(p, n)
+    ret v
+end
+
+@en "ValueBinaryStr"
+@fa "مقدار دودویی رشته"
+pub func ValueBinaryStr(s: str): Value:
+    mut v := Value { kind = KindBytes }
+    v.bin = _fill_bin_str(s)
+    ret v
+end
+
+@en "ValueExt"
+@fa "مقدار افزونه"
+pub func ValueExt(typeId: int, p: void*, n: int): Value:
+    mut v := Value { kind = KindExt, i = typeId as i64 }
+    v.bin = _fill_bin(p, n)
+    ret v
+end
+
+@en "ValueExtStr"
+@fa "مقدار افزونه رشته"
+pub func ValueExtStr(typeId: int, s: str): Value:
+    mut v := Value { kind = KindExt, i = typeId as i64 }
+    v.bin = _fill_bin_str(s)
+    ret v
+end
 
 @en "ValueArray"
 @fa "مقدار آرایه"
@@ -272,6 +335,70 @@ pub func IsArray(v: Value): bool: ret v.kind == KindArray end
 @en "IsObject"
 @fa "شیء است"
 pub func IsObject(v: Value): bool: ret v.kind == KindObject end
+@en "IsBytes"
+@fa "بایتی است"
+pub func IsBytes(v: Value): bool: ret v.kind == KindBytes end
+@en "IsExt"
+@fa "افزونه است"
+pub func IsExt(v: Value): bool: ret v.kind == KindExt end
+
+@en "BytesLen"
+@fa "طول بایت‌ها"
+pub func BytesLen(v: Value): int: ret v.bin.len() end
+@en "BytesGet"
+@fa "بایت"
+pub func BytesGet(v: Value, i: int): int:
+    if i < 0 or i >= v.bin.len(): ret 0 end
+    ret v.bin.get(i) as int
+end
+@en "BytesToBuf"
+@fa "بایت‌ها به بافر"
+pub func BytesToBuf(v: Value): compress.ByteBuf:
+    mut out := compress.NewByteBufCap(v.bin.len())
+    mut i := 0
+    until i < v.bin.len():
+        compress.BufPush(out, v.bin.get(i) as int)
+        i++
+    end
+    ret out
+end
+@en "BytesToStr"
+@fa "بایت‌ها به رشته"
+pub func BytesToStr(v: Value): str:
+    mut b := BytesToBuf(v)
+    defer compress.BufFree(b)
+    ret compress.BufToStrUnsafe(b)
+end
+@en "ExtType"
+@fa "نوع افزونه"
+pub func ExtType(v: Value): int: ret v.i as int end
+@en "ExtDataLen"
+@fa "طول داده افزونه"
+pub func ExtDataLen(v: Value): int: ret v.bin.len() end
+@en "ExtDataGet"
+@fa "داده افزونه"
+pub func ExtDataGet(v: Value, i: int): int:
+    if i < 0 or i >= v.bin.len(): ret 0 end
+    ret v.bin.get(i) as int
+end
+@en "ExtDataToBuf"
+@fa "داده افزونه به بافر"
+pub func ExtDataToBuf(v: Value): compress.ByteBuf:
+    mut out := compress.NewByteBufCap(v.bin.len())
+    mut i := 0
+    until i < v.bin.len():
+        compress.BufPush(out, v.bin.get(i) as int)
+        i++
+    end
+    ret out
+end
+@en "ExtDataToStr"
+@fa "داده افزونه به رشته"
+pub func ExtDataToStr(v: Value): str:
+    mut b := ExtDataToBuf(v)
+    defer compress.BufFree(b)
+    ret compress.BufToStrUnsafe(b)
+end
 
 @en "AsBool"
 @fa "به منطقی"
@@ -376,6 +503,16 @@ end
 @en "ValueClone"
 @fa "رونوشت مقدار"
 pub func ValueClone(v: Value): Value:
+    if v.kind == KindBytes or v.kind == KindExt:
+        mut out := v
+        out.bin = Vector {} as Vector<u8>
+        mut bi := 0
+        until bi < v.bin.len():
+            out.bin.push(v.bin.get(bi))
+            bi++
+        end
+        ret out
+    end
     if v.kind == KindArray:
         mut out := Vector {} as Vector<Value>
         mut i := 0
@@ -400,6 +537,10 @@ end
 @en "ValueFree"
 @fa "آزادسازی مقدار"
 pub func ValueFree(v &: Value):
+    if v.kind == KindBytes or v.kind == KindExt:
+        v.bin.free()
+        ret
+    end
     if v.kind == KindArray:
         mut i := 0
         until i < v.arr.len():

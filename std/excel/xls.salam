@@ -14,6 +14,602 @@
 
 package excel
 
+import archive
+import compress
+import conv
+import mem
+import str
+
+const _XL_ENDCHAIN := 4294967294 as i64
+const _XL_FREE := 4294967295 as i64
+const _XL_MINI_CUTOFF_DEFAULT := 4096
+
+struct _OleEntry:
+    pub name: str = ""
+    pub kind: int = 0
+    pub start: i64 = 0
+    pub size: i64 = 0
+end
+
+struct _BiffSheet:
+    pub name: str = ""
+    pub offset: i64 = 0
+end
+
+struct _SstReader:
+    pub data: void* = null
+    pub starts: Vector<int> = Vector {}
+    pub lens: Vector<int> = Vector {}
+    pub seg: int = 0
+    pub pos: int = 0
+end
+
+inline func _xl_u8(p: void*, i: int): int:
+    bp := p as u8*
+    ret bp[i] as int
+end
+
+func _xl_u16(p: void*, i: int): int:
+    ret _xl_u8(p, i) | (_xl_u8(p, i + 1) << 8)
+end
+
+func _xl_u32(p: void*, i: int): i64:
+    ret (_xl_u8(p, i) as i64) | ((_xl_u8(p, i + 1) as i64) << 8) | ((_xl_u8(p, i + 2) as i64) << 16) | ((_xl_u8(p, i + 3) as i64) << 24)
+end
+
+func _xl_f64(p: void*, i: int): f64:
+    bits := (_xl_u32(p, i) | (_xl_u32(p, i + 4) << 32))
+    buf := mem.Allocate(8 as u64)
+    q := buf as i64*
+    q[0] = bits
+    d := buf as f64*
+    v := d[0]
+    mem.Free(buf)
+    ret v
+end
+
+func _xl_bits_f64(bits: i64): f64:
+    buf := mem.Allocate(8 as u64)
+    q := buf as i64*
+    q[0] = bits
+    d := buf as f64*
+    v := d[0]
+    mem.Free(buf)
+    ret v
+end
+
+func _xl_utf16_name(p: void*, off: int, chars: int): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    mut i := 0
+    until i < chars:
+        cp := _xl_u16(p, off + i * 2)
+        if cp == 0: break end
+        if cp < 128:
+            str.BufAppendChar(sb, cp)
+        else:
+            str.BufAppendChar(sb, 63)
+        end
+        i++
+    end
+    ret str.BufStr(sb)
+end
+
+func _xl_chain(fat: Vector<i64>, start: i64, limit: int): Vector<i64>:
+    mut out := Vector {} as Vector<i64>
+    mut sec := start
+    mut guard := 0
+    until sec >= 0 and sec != _XL_ENDCHAIN and sec != _XL_FREE and guard <= limit:
+        out.push(sec)
+        if sec >= fat.len() as i64: break end
+        sec = fat.get(sec as int)
+        guard++
+    end
+    ret out
+end
+
+func _xl_sector_ok(off: i64, size: int, n: int): bool:
+    ret off >= 0 and off + (size as i64) <= (n as i64)
+end
+
+func _xl_read_fat(data: void*, n: int, sector_size: int, first_difat: i64, num_difat: int): Vector<i64>:
+    mut fat := Vector {} as Vector<i64>
+    mut difat := Vector {} as Vector<i64>
+    mut i := 0
+    until i < 109:
+        s := _xl_u32(data, 76 + i * 4)
+        if s != _XL_FREE and s != _XL_ENDCHAIN: difat.push(s) end
+        i++
+    end
+    mut sec := first_difat
+    mut guard := 0
+    per := sector_size / 4 - 1
+    until sec < 0 or sec == _XL_ENDCHAIN or sec == _XL_FREE or guard > num_difat + 4:
+        off := (sec + 1) * (sector_size as i64)
+        if not _xl_sector_ok(off, sector_size, n): break end
+        mut k := 0
+        until k < per:
+            s := _xl_u32(data, (off + (k as i64) * 4) as int)
+            if s != _XL_FREE and s != _XL_ENDCHAIN: difat.push(s) end
+            k++
+        end
+        sec = _xl_u32(data, (off + (per as i64) * 4) as int)
+        guard++
+    end
+    mut fi := 0
+    until fi < difat.len():
+        off := (difat.get(fi) + 1) * (sector_size as i64)
+        if _xl_sector_ok(off, sector_size, n):
+            mut k := 0
+            until k < sector_size / 4:
+                fat.push(_xl_u32(data, (off + (k as i64) * 4) as int))
+                k++
+            end
+        end
+        fi++
+    end
+    difat.free()
+    ret fat
+end
+
+func _xl_read_dir(data: void*, n: int, fat: Vector<i64>, first_dir: i64, sector_size: int): Vector<_OleEntry>:
+    mut out := Vector {} as Vector<_OleEntry>
+    chain := _xl_chain(fat, first_dir, fat.len() + 4)
+    mut ci := 0
+    until ci < chain.len():
+        off := (chain.get(ci) + 1) * (sector_size as i64)
+        if not _xl_sector_ok(off, sector_size, n): break end
+        mut e := 0
+        until e < sector_size / 128:
+            base := (off + (e as i64) * 128) as int
+            name_len := _xl_u16(data, base + 64)
+            mut entry := _OleEntry {}
+            if name_len >= 2 and name_len <= 64:
+                entry.name = _xl_utf16_name(data, base, name_len / 2 - 1)
+            end
+            entry.kind = _xl_u8(data, base + 66)
+            entry.start = _xl_u32(data, base + 116)
+            entry.size = _xl_u32(data, base + 120)
+            if entry.kind != 0:
+                out.push(entry)
+            end
+            e++
+        end
+        ci++
+    end
+    chain.free()
+    ret out
+end
+
+func _xl_find_entry(entries: Vector<_OleEntry>, name: str): int:
+    mut i := 0
+    until i < entries.len():
+        if entries.get(i).name == name: ret i end
+        i++
+    end
+    ret -1
+end
+
+func _xl_read_chain(data: void*, n: int, fat: Vector<i64>, start: i64, size: i64, sector_size: int): compress.ByteBuf:
+    mut out := compress.NewByteBufCap(size as int)
+    if size <= 0: ret out end
+    chain := _xl_chain(fat, start, fat.len() + 4)
+    mut left := size
+    mut ci := 0
+    until ci < chain.len() and left > 0:
+        off := (chain.get(ci) + 1) * (sector_size as i64)
+        if not _xl_sector_ok(off, sector_size, n): break end
+        mut take := sector_size as i64
+        if take > left: take = left end
+        compress.BufPushBytes(out, ((data as i64) + off) as void*, take as int)
+        left -= take
+        ci++
+    end
+    chain.free()
+    ret out
+end
+
+func _xl_read_mini(mini_fat: Vector<i64>, mini_stream: compress.ByteBuf, start: i64, size: i64, mini_size: int): compress.ByteBuf:
+    mut out := compress.NewByteBufCap(size as int)
+    if size <= 0: ret out end
+    chain := _xl_chain(mini_fat, start, mini_fat.len() + 4)
+    mut left := size
+    mut ci := 0
+    until ci < chain.len() and left > 0:
+        off := chain.get(ci) * (mini_size as i64)
+        if off < 0 or off + (mini_size as i64) > (mini_stream.len as i64): break end
+        mut take := mini_size as i64
+        if take > left: take = left end
+        compress.BufPushBytes(out, ((mini_stream.data as i64) + off) as void*, take as int)
+        left -= take
+        ci++
+    end
+    chain.free()
+    ret out
+end
+
+func _xl_read_mini_fat(data: void*, n: int, fat: Vector<i64>, first_mini_fat: i64, num_mini_fat: int, sector_size: int): Vector<i64>:
+    mut out := Vector {} as Vector<i64>
+    chain := _xl_chain(fat, first_mini_fat, fat.len() + 4)
+    mut ci := 0
+    until ci < chain.len():
+        off := (chain.get(ci) + 1) * (sector_size as i64)
+        if not _xl_sector_ok(off, sector_size, n): break end
+        mut k := 0
+        until k < sector_size / 4:
+            out.push(_xl_u32(data, (off + (k as i64) * 4) as int))
+            k++
+        end
+        ci++
+    end
+    chain.free()
+    _unused := num_mini_fat
+    ret out
+end
+
+func _xl_stream_of(data: void*, n: int, fat: Vector<i64>, entries: Vector<_OleEntry>, which: int, sector_size: int, cutoff: int, mini_fat: Vector<i64>, mini_stream: compress.ByteBuf, mini_size: int): compress.ByteBuf:
+    e := entries.get(which)
+    if e.size < (cutoff as i64) and e.kind == 2:
+        ret _xl_read_mini(mini_fat, mini_stream, e.start, e.size, mini_size)
+    end
+    ret _xl_read_chain(data, n, fat, e.start, e.size, sector_size)
+end
+
+func _xl_biff_string(p: void*, n: int, off: int, next &: int): str:
+    if off + 3 > n: ret "" end
+    cch := _xl_u16(p, off)
+    flags := _xl_u8(p, off + 2)
+    mut o := off + 3
+    mut runs := 0
+    mut ext := 0
+    if (flags & 8) != 0:
+        if o + 2 > n: ret "" end
+        runs = _xl_u16(p, o)
+        o += 2
+    end
+    if (flags & 4) != 0:
+        if o + 4 > n: ret "" end
+        ext = _xl_u32(p, o) as int
+        o += 4
+    end
+    wide := (flags & 1) != 0
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    mut i := 0
+    until i < cch:
+        if wide:
+            if o + 2 > n: break end
+            str.BufAppendCp(sb, _xl_u16(p, o))
+            o += 2
+        else:
+            if o + 1 > n: break end
+            str.BufAppendChar(sb, _xl_u8(p, o))
+            o++
+        end
+        i++
+    end
+    next = o + runs * 4 + ext
+    ret str.BufStr(sb)
+end
+
+func _sst_fix(s &: _SstReader):
+    until s.seg < s.starts.len() and s.pos >= s.lens.get(s.seg):
+        if s.seg >= s.starts.len(): ret end
+        s.seg++
+        s.pos = 0
+    end
+end
+
+func _sst_u8(s &: _SstReader): int:
+    _sst_fix(s)
+    if s.seg >= s.starts.len(): ret 0 end
+    v := _xl_u8(s.data, s.starts.get(s.seg) + s.pos)
+    s.pos++
+    ret v
+end
+
+func _sst_u16(s &: _SstReader): int:
+    ret _sst_u8(s) | (_sst_u8(s) << 8)
+end
+
+func _sst_u32(s &: _SstReader): int:
+    ret _sst_u8(s) | (_sst_u8(s) << 8) | (_sst_u8(s) << 16) | (_sst_u8(s) << 24)
+end
+
+func _sst_skip(s &: _SstReader, count: int):
+    mut left := count
+    until left > 0:
+        _sst_fix(s)
+        if s.seg >= s.starts.len(): ret end
+        avail := s.lens.get(s.seg) - s.pos
+        if avail <= 0:
+            s.seg++
+            s.pos = 0
+            continue
+        end
+        mut take := avail
+        if take > left: take = left end
+        s.pos += take
+        left -= take
+    end
+end
+
+func _sst_string(s &: _SstReader): str:
+    cch := _sst_u16(s)
+    flags := _sst_u8(s)
+    mut wide := (flags & 1) != 0
+    mut runs := 0
+    mut ext := 0
+    if (flags & 8) != 0: runs = _sst_u16(s) end
+    if (flags & 4) != 0: ext = _sst_u32(s) end
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    mut i := 0
+    until i < cch:
+        _sst_fix(s)
+        if s.seg >= s.starts.len(): break end
+        if s.pos >= s.lens.get(s.seg):
+            s.seg++
+            s.pos = 0
+            if s.seg >= s.starts.len(): break end
+            nf := _sst_u8(s)
+            wide = (nf & 1) != 0
+        end
+        if wide:
+            if s.pos + 2 > s.lens.get(s.seg):
+                cp := _sst_u8(s)
+                str.BufAppendChar(sb, cp)
+            else:
+                str.BufAppendCp(sb, _sst_u16(s))
+            end
+        else:
+            str.BufAppendChar(sb, _sst_u8(s))
+        end
+        i++
+    end
+    _sst_skip(s, runs * 4 + ext)
+    ret str.BufStr(sb)
+end
+
+func _xls_builtin_date(id: int): bool:
+    if id >= 14 and id <= 22: ret true end
+    if id >= 45 and id <= 47: ret true end
+    ret false
+end
+
+func _xls_format_date(code: str): bool:
+    if code.len() == 0: ret false end
+    lc := code.lower()
+    if str.Contains(lc, "y") or str.Contains(lc, "d") or str.Contains(lc, "h") or str.Contains(lc, "s"): ret true end
+    if str.Contains(lc, "mmm"): ret true end
+    ret false
+end
+
+func _xls_error_text(code: int): str:
+    if code == 0x00: ret "#NULL!" end
+    if code == 0x07: ret "#DIV/0!" end
+    if code == 0x0f: ret "#VALUE!" end
+    if code == 0x17: ret "#REF!" end
+    if code == 0x1d: ret "#NAME?" end
+    if code == 0x24: ret "#NUM!" end
+    if code == 0x2a: ret "#N/A" end
+    ret "#ERR"
+end
+
+func _xls_put(sheet &: Sheet, c: Cell):
+    sheet.cells.put(_cell_key(c.row, c.col), c)
+    if c.row > sheet.max_row: sheet.max_row = c.row end
+    if c.col > sheet.max_col: sheet.max_col = c.col end
+end
+
+func _xls_rk(raw: i64): f64:
+    rk := raw as int
+    mut v := 0.0
+    if (rk & 2) != 0:
+        v = ((rk >> 2) as f64)
+    else:
+        v = _xl_bits_f64((rk & (0 - 4)) as i64)
+    end
+    if (rk & 1) != 0: v /= 100.0 end
+    ret v
+end
+
+func _xls_cell_kind(sheet &: Sheet, row: int, col: int, xf: int, date_flags: Vector<bool>, date1904: bool, value: Cell):
+    mut c := value
+    c.row = row
+    c.col = col
+    c.style_id = xf
+    if c.kind == CellNumber and xf >= 0 and xf < date_flags.len() and date_flags.get(xf):
+        c.kind = CellDate
+        if date1904: c.num += 1462.0 end
+    end
+    _xls_put(sheet, c)
+end
+
+func _xls_sheet_into(p: void*, n: int, offset: int, sheet &: Sheet, sst: Vector<str>, date_flags: Vector<bool>, date1904: bool, err &: str):
+    if offset < 0 or offset + 8 > n:
+        err = "the sheet starts outside the workbook stream"
+        ret
+    end
+    if _xl_u16(p, offset) != 0x0809:
+        err = "missing the sheet start record"
+        ret
+    end
+    mut pos := offset + 4 + _xl_u16(p, offset + 2) as int
+    mut pending_row := 0 - 1
+    mut pending_col := 0
+    mut pending_xf := 0
+    until pos + 4 <= n:
+        id := _xl_u16(p, pos)
+        len := _xl_u16(p, pos + 2)
+        body := pos + 4
+        if body + len > n: break end
+        if id == 0x000a: break end
+        if id == 0x00fd and len >= 10:
+            row := _xl_u16(p, body)
+            col := _xl_u16(p, body + 2)
+            xf := _xl_u16(p, body + 4)
+            idx := _xl_u32(p, body + 6) as int
+            if idx >= 0 and idx < sst.len():
+                _xls_cell_kind(sheet, row, col, xf, date_flags, date1904, NewStringCell(row, col, sst.get(idx)))
+            end
+        else id == 0x0204 and len >= 6:
+            row := _xl_u16(p, body)
+            col := _xl_u16(p, body + 2)
+            xf := _xl_u16(p, body + 4)
+            mut next := 0
+            text := _xl_biff_string(p, body + len, body + 6, next)
+            _xls_cell_kind(sheet, row, col, xf, date_flags, date1904, NewStringCell(row, col, text))
+        else id == 0x0203 and len >= 14:
+            row := _xl_u16(p, body)
+            col := _xl_u16(p, body + 2)
+            xf := _xl_u16(p, body + 4)
+            _xls_cell_kind(sheet, row, col, xf, date_flags, date1904, NewNumberCell(row, col, _xl_f64(p, body + 6)))
+        else id == 0x027e and len >= 10:
+            row := _xl_u16(p, body)
+            col := _xl_u16(p, body + 2)
+            xf := _xl_u16(p, body + 4)
+            _xls_cell_kind(sheet, row, col, xf, date_flags, date1904, NewNumberCell(row, col, _xls_rk(_xl_u32(p, body + 6))))
+        else id == 0x00bd and len >= 12:
+            row := _xl_u16(p, body)
+            first := _xl_u16(p, body + 2)
+            mut off := body + 4
+            mut ci := 0
+            until off + 6 <= body + len - 2:
+                xf := _xl_u16(p, off)
+                _xls_cell_kind(sheet, row, first + ci, xf, date_flags, date1904, NewNumberCell(row, first + ci, _xls_rk(_xl_u32(p, off + 2))))
+                off += 6
+                ci++
+            end
+        else id == 0x0205 and len >= 8:
+            row := _xl_u16(p, body)
+            col := _xl_u16(p, body + 2)
+            xf := _xl_u16(p, body + 4)
+            val := _xl_u8(p, body + 6)
+            is_err := _xl_u8(p, body + 7)
+            if is_err != 0:
+                _xls_put(sheet, Cell { row = row, col = col, kind = CellError, text = _xls_error_text(val), style_id = xf })
+            else:
+                _xls_cell_kind(sheet, row, col, xf, date_flags, date1904, NewBoolCell(row, col, val != 0))
+            end
+        else id == 0x0006 and len >= 14:
+            row := _xl_u16(p, body)
+            col := _xl_u16(p, body + 2)
+            xf := _xl_u16(p, body + 4)
+            if _xl_u16(p, body + 12) == 0xffff:
+                kind := _xl_u8(p, body + 6)
+                if kind == 0:
+                    pending_row = row
+                    pending_col = col
+                    pending_xf = xf
+                else kind == 1:
+                    _xls_cell_kind(sheet, row, col, xf, date_flags, date1904, NewBoolCell(row, col, _xl_u8(p, body + 8) != 0))
+                else kind == 2:
+                    _xls_put(sheet, Cell { row = row, col = col, kind = CellError, text = _xls_error_text(_xl_u8(p, body + 8)), style_id = xf })
+                end
+            else:
+                _xls_cell_kind(sheet, row, col, xf, date_flags, date1904, NewNumberCell(row, col, _xl_f64(p, body + 6)))
+            end
+        else id == 0x0207 and len >= 3 and pending_row >= 0:
+            mut next := 0
+            text := _xl_biff_string(p, body + len, body, next)
+            _xls_cell_kind(sheet, pending_row, pending_col, pending_xf, date_flags, date1904, NewStringCell(pending_row, pending_col, text))
+            pending_row = 0 - 1
+        else id == 0x00e5 and len >= 2:
+            count := _xl_u16(p, body)
+            mut k := 0
+            mut off := body + 2
+            until k < count and off + 8 <= body + len:
+                r1 := _xl_u16(p, off)
+                r2 := _xl_u16(p, off + 2)
+                c1 := _xl_u16(p, off + 4)
+                c2 := _xl_u16(p, off + 6)
+                sheet.merge_cells(r1, c1, r2, c2)
+                off += 8
+                k++
+            end
+        end
+        pos = body + len
+    end
+end
+
+func _xl_bound_sheet_name(p: void*, body: int, len: int): str:
+    if len < 8: ret "" end
+    cch := _xl_u8(p, body + 6)
+    flags := _xl_u8(p, body + 7)
+    if (flags & 1) != 0:
+        ret _xl_utf16_name(p, body + 8, cch)
+    end
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    mut i := 0
+    until i < cch and 8 + i < len:
+        str.BufAppendChar(sb, _xl_u8(p, body + 8 + i))
+        i++
+    end
+    ret str.BufStr(sb)
+end
+
+func _xl_globals(p: void*, n: int, sheets &: Vector<_BiffSheet>, sst &: Vector<str>, xf_fmt &: Vector<int>, formats &: HashMap<int, str>, date1904 &: bool, err &: str):
+    if n < 8 or _xl_u16(p, 0) != 0x0809:
+        err = "not a BIFF workbook stream"
+        ret
+    end
+    if _xl_u16(p, 4) != 0x0600:
+        err = "only BIFF8 .xls workbooks are supported"
+        ret
+    end
+    mut pos := 4 + _xl_u16(p, 2) as int
+    until pos + 4 <= n:
+        id := _xl_u16(p, pos)
+        len := _xl_u16(p, pos + 2)
+        body := pos + 4
+        if body + len > n: break end
+        if id == 0x000a: break end
+        if id == 0x0085 and len >= 8:
+            off := _xl_u32(p, body)
+            name := _xl_bound_sheet_name(p, body, len)
+            sheets.push(_BiffSheet { name = name, offset = off })
+        else id == 0x00e0 and len >= 4:
+            xf_fmt.push(_xl_u16(p, body + 2))
+        else id == 0x041e and len >= 4:
+            ifmt := _xl_u16(p, body)
+            mut next := 0
+            text := _xl_biff_string(p, body + len, body + 2, next)
+            formats.put(ifmt, text)
+        else id == 0x0022 and len >= 2:
+            date1904 = _xl_u16(p, body) != 0
+        else id == 0x00fc and len >= 8:
+            total := _xl_u32(p, body)
+            unique := _xl_u32(p, body + 4) as int
+            mut reader := _SstReader { data = p }
+            reader.starts.push(body)
+            reader.lens.push(len)
+            mut q := body + len
+            until q + 4 <= n:
+                nid := _xl_u16(p, q)
+                nlen := _xl_u16(p, q + 2)
+                if nid != 0x003c or q + 4 + nlen > n: break end
+                reader.starts.push(q + 4)
+                reader.lens.push(nlen)
+                q += 4 + nlen
+            end
+            _sst_skip(reader, 8)
+            mut i := 0
+            until i < unique:
+                sst.push(_sst_string(reader))
+                i++
+            end
+            reader.starts.free()
+            reader.lens.free()
+            _unused := total
+            pos = q
+            continue
+        end
+        pos = body + len
+    end
+end
+
 func _ole2_sig_match(p: void*, n: int): bool:
     if n < 8: ret false end
     bp := p as u8*
@@ -30,6 +626,128 @@ end
 @fa "خواندن ایکس‌ال‌اس"
 pub func ReadXLS(path: str, ok &: bool, err &: str): Workbook:
     ok = false
-    err = "legacy .xls file '".concat(path).concat(`' is not supported (BIFF binary format); convert it to .xlsx or .ods (e.g. via LibreOffice or Excel's "Save As") and open that instead`)
-    ret NewWorkbook()
+    err = ""
+    mut book := NewWorkbook()
+    mut read_ok := false
+    mut data := archive.ReadBinaryFile(path, read_ok)
+    if not read_ok:
+        err = "cannot open file: " + path
+        compress.BufFree(data)
+        ret book
+    end
+    p := data.data
+    n := data.len
+    if not _ole2_sig_match(p, n):
+        err = "not a legacy .xls file (missing the OLE2 signature)"
+        compress.BufFree(data)
+        ret book
+    end
+    sector_size := 1 << _xl_u16(p, 30)
+    if sector_size < 128 or sector_size > 65536:
+        err = "the OLE2 sector size is invalid"
+        compress.BufFree(data)
+        ret book
+    end
+    mut mini_size := 1 << _xl_u16(p, 32)
+    if mini_size < 8 or mini_size > 4096: mini_size = 64 end
+    first_dir := _xl_u32(p, 48)
+    mut cutoff := _xl_u32(p, 56) as int
+    if cutoff <= 0: cutoff = _XL_MINI_CUTOFF_DEFAULT end
+    first_mini := _xl_u32(p, 60)
+    num_mini := _xl_u32(p, 64) as int
+    first_difat := _xl_u32(p, 68)
+    num_difat := _xl_u32(p, 72) as int
+
+    mut fat := _xl_read_fat(p, n, sector_size, first_difat, num_difat)
+    if fat.len() == 0:
+        err = "the .xls file has no allocation table"
+        fat.free()
+        compress.BufFree(data)
+        ret book
+    end
+    mut entries := _xl_read_dir(p, n, fat, first_dir, sector_size)
+    if entries.len() == 0:
+        err = "the .xls file has no directory"
+        entries.free()
+        fat.free()
+        compress.BufFree(data)
+        ret book
+    end
+
+    mut mini_stream := compress.NewByteBuf()
+    root := _xl_find_entry(entries, "Root Entry")
+    if root >= 0:
+        mini_stream = _xl_read_chain(p, n, fat, entries.get(root).start, entries.get(root).size, sector_size)
+    end
+    mut mini_fat := _xl_read_mini_fat(p, n, fat, first_mini, num_mini, sector_size)
+
+    mut wb := _xl_find_entry(entries, "Workbook")
+    if wb < 0: wb = _xl_find_entry(entries, "Book") end
+    if wb < 0:
+        err = "the .xls file has no Workbook stream"
+        mini_fat.free()
+        compress.BufFree(mini_stream)
+        entries.free()
+        fat.free()
+        compress.BufFree(data)
+        ret book
+    end
+
+    mut stream := _xl_stream_of(p, n, fat, entries, wb, sector_size, cutoff, mini_fat, mini_stream, mini_size)
+    mut sheets := Vector {} as Vector<_BiffSheet>
+    mut sst := Vector {} as Vector<str>
+    mut xf_fmt := Vector {} as Vector<int>
+    mut formats := HashMap {} as HashMap<int, str>
+    mut date1904 := false
+    _xl_globals(stream.data, stream.len, sheets, sst, xf_fmt, formats, date1904, err)
+    if err != "":
+        formats.free()
+        xf_fmt.free()
+        sst.free()
+        sheets.free()
+        compress.BufFree(stream)
+        mini_fat.free()
+        compress.BufFree(mini_stream)
+        entries.free()
+        fat.free()
+        compress.BufFree(data)
+        ret book
+    end
+
+    mut date_flags := Vector {} as Vector<bool>
+    mut xi := 0
+    until xi < xf_fmt.len():
+        fid := xf_fmt.get(xi)
+        mut is_date := _xls_builtin_date(fid)
+        if not is_date and formats.has(fid): is_date = _xls_format_date(formats.get(fid)) end
+        date_flags.push(is_date)
+        xi++
+    end
+
+    mut si := 0
+    until si < sheets.len():
+        mut sh := NewSheet(sheets.get(si).name)
+        mut sheet_err := ""
+        _xls_sheet_into(stream.data, stream.len, sheets.get(si).offset as int, sh, sst, date_flags, date1904, sheet_err)
+        if sheet_err == "": book.sheets.push(sh) end
+        si++
+    end
+
+    book.format = FormatXLS
+    book.source_path = path
+    book.active_sheet = 0
+    ok = true
+
+    date_flags.free()
+    formats.free()
+    xf_fmt.free()
+    sst.free()
+    sheets.free()
+    compress.BufFree(stream)
+    mini_fat.free()
+    compress.BufFree(mini_stream)
+    entries.free()
+    fat.free()
+    compress.BufFree(data)
+    ret book
 end

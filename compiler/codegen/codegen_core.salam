@@ -62,10 +62,18 @@ func emit_deferred_globals(g &: Cg, s &: sm.Sema, a &: at.Ast):
             continue
         end
         is_array := str.IndexOf(ts, "[") >= 0
-        array_copy := is_array and d.a != 0 and cg_is_array_place(a, d.a)
+        prot_arr := g.protect and is_array and d.a != 0 and cg_has_string_lit(a, d.a)
+        array_copy := is_array and d.a != 0 and (cg_is_array_place(a, d.a) or prot_arr)
         act := array_copy ? cg_array_ctype(ts) : ""
         if array_copy and str.Len(act) > 0:
-            out(g, "    salam_arrcpy(" + gname + ", " + cg_expr(g, s, a, d.a) + ", sizeof(" + act + "));\n")
+            if prot_arr and not cg_is_array_place(a, d.a):
+                g.tmpn++
+                tv := "__salam_arr" + co.I64Toa(g.tmpn as i64)
+                out(g, "    " + cg_decl_cn(ts, tv) + " = " + cg_expr(g, s, a, d.a) + ";\n")
+                out(g, "    salam_arrcpy(" + gname + ", " + tv + ", sizeof(" + act + "));\n")
+            else:
+                out(g, "    salam_arrcpy(" + gname + ", " + cg_expr(g, s, a, d.a) + ", sizeof(" + act + "));\n")
+            end
         else:
             out(g, "    " + gname + " = " + cg_expr(g, s, a, d.a) + ";\n")
         end
@@ -111,6 +119,30 @@ func emit_module_init(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
     out(g, "}\n\n")
 end
 
+func cg_has_string_lit(a &: at.Ast, id: int): bool:
+    if id == 0:
+        ret false
+    end
+    n := at.Get(a, id)
+    if n.kind == at.AST_LITERAL and (n.op == tok.TK_STRING or n.op == tok.TK_TRIPLE_STRING or n.op == tok.TK_RAW_STRING or n.op == tok.TK_UTF8_CHAR):
+        ret true
+    end
+    if cg_has_string_lit(a, n.a) or cg_has_string_lit(a, n.b) or cg_has_string_lit(a, n.c) or cg_has_string_lit(a, n.d):
+        ret true
+    end
+    repeat n.list.len() in i:
+        if cg_has_string_lit(a, n.list.get(i)):
+            ret true
+        end
+    end
+    repeat at.Dims(a, n.ext).len() in di:
+        if cg_has_string_lit(a, at.Dims(a, n.ext).get(di)):
+            ret true
+        end
+    end
+    ret false
+end
+
 func emit_globals(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
     prog := at.Get(a, program)
     repeat prog.list.len() in i:
@@ -126,14 +158,19 @@ func emit_globals(g &: Cg, s &: sm.Sema, a &: at.Ast, program: int):
         gname := cg_global_cname(g.pkg, d.name)
         decl := cg_decl_cn(ts, gname)
         is_array := str.IndexOf(ts, "[") >= 0
-        array_copy := is_array and d.a != 0 and cg_is_array_place(a, d.a)
+        prot_str := g.protect and d.a != 0 and cg_has_string_lit(a, d.a)
+        prot_arr := prot_str and is_array
+        array_copy := (is_array and d.a != 0 and cg_is_array_place(a, d.a)) or prot_arr
         act := array_copy ? cg_array_ctype(ts) : ""
-        can_defer := (d.kind == at.AST_VAR_DECL and d.a != 0 and at.KindOf(a, d.a) != at.AST_LITERAL and not is_array) or (array_copy and str.Len(act) > 0)
+        can_defer := (d.kind == at.AST_VAR_DECL and d.a != 0 and at.KindOf(a, d.a) != at.AST_LITERAL and not is_array) or (array_copy and str.Len(act) > 0) or (prot_str and not is_array)
         if can_defer:
             out(g, decl + ";\n")
             g.deferred_globals.push(did)
         else:
-            want_const := d.kind == at.AST_CONST_DECL and not is_array and not type_is_callable(ts)
+            mut want_const := d.kind == at.AST_CONST_DECL and not is_array and not type_is_callable(ts)
+            if prot_str:
+                want_const = false
+            end
             gct_const := want_const and str.StartsWith(cg_ctype(ts), "const ")
             pfx := (want_const and not gct_const) ? "const " : ""
             if d.a != 0:
@@ -788,6 +825,8 @@ func cg_free(g &: Cg):
     str.BufFree(g.bc)
     str.BufFree(g.blamd)
     str.BufFree(g.blamf)
+    str.BufFree(g.bprotc)
+    str.BufFree(g.bproth)
     g.locals.free()
     g.vec_types.free()
     g.variant_types.free()

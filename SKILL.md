@@ -2990,7 +2990,6 @@ them** - the English spelling is an error (`E001`):
 | `args`           | `آرگومان‌ها`      |
 | `env`            | `متغیر‌محیطی`     |
 | `lang`           | `زبان`            |
-| `open`           | `بازکردن`         |
 | `listdir`        | `فهرست‌پوشه`      |
 | `hash`           | `درهم`            |
 | `char_code`      | `کدنویسه`         |

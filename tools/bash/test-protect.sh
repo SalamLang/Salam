@@ -1,6 +1,7 @@
 #!/bin/sh
-# Tests `salam protect` and `salam build --protect`: the program still runs,
-# while string literals and symbol names are not visible in the executable.
+# Tests `salam build --protect` and its `--obfuscate` alias: the program still
+# runs, while string literals and symbol names are not visible in the
+# executable.
 
 set -u
 
@@ -38,8 +39,8 @@ func main:
 end
 EOF
 
-echo "== protect build"
-"$salam" protect secret.salam --cc="$cc" --no-color >build.log 2>&1
+echo "== --protect"
+"$salam" build secret.salam --protect --cc="$cc" --no-color >build.log 2>&1
 rc=$?
 if [ "$rc" -ne 0 ]; then
     echo "protect: build failed"
@@ -83,16 +84,16 @@ else
     echo "protect: symbols skipped (no nm tool)"
 fi
 
-echo "== --protect flag"
-if ! "$salam" build secret.salam --protect --cc="$cc" -o flagged --no-color >flag.log 2>&1; then
-    echo "protect: --protect build failed"
+echo "== --obfuscate alias"
+if ! "$salam" build secret.salam --obfuscate --cc="$cc" -o flagged --no-color >flag.log 2>&1; then
+    echo "protect: --obfuscate build failed"
     sed 's/^/  /' flag.log | head -20
     exit 1
 fi
 out=$(./flagged 2>&1)
 if [ "$out" = "$want" ]; then
-    echo "protect: --protect ok"
+    echo "protect: --obfuscate ok"
 else
-    echo "protect: --protect run mismatch"
+    echo "protect: --obfuscate run mismatch"
     exit 1
 fi

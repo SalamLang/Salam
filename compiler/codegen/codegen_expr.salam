@@ -353,6 +353,73 @@ func cg_cescape(sv: str): str:
     ret r
 end
 
+func cg_prot_hash(sv: str): u64:
+    mut h := 14695981039346656037 as u64
+    n := str.Len(sv)
+    repeat n in i:
+        h = (h ^ (byte_at(sv, i) as u64)) * (1099511628211 as u64)
+    end
+    ret h
+end
+
+func cg_prot_write(b &: str.StringBuilder, sv: str, name: str, key: u64, n: int):
+    co.SbPuts(b, "static SALAM_PROTECT_TLS char " + name + "_b[" + co.I64Toa((n + 1) as i64) + "];\n")
+    co.SbPuts(b, "static const char *" + name + "(void) {\n")
+    co.SbPuts(b, "    static SALAM_PROTECT_TLS int " + name + "_d = 0;\n")
+    co.SbPuts(b, "    if (!" + name + "_d) {\n")
+    mut encbuf := str.NewBuilder()
+    defer str.BufFree(encbuf)
+    repeat n in i:
+        if i > 0:
+            co.SbPuts(encbuf, ", ")
+        end
+        shift := ((i % 8) * 8) as u64
+        kb := ((key >> shift) & (255 as u64)) as int
+        eb := byte_at(sv, i) ^ kb
+        co.SbPuts(encbuf, co.Format1("0x%02x", co.ArgInt(eb as i64)))
+    end
+    if n == 0:
+        co.SbPuts(encbuf, "0")
+    end
+    co.SbPuts(
+        b, "        static const unsigned char " + name + "_e[" + co.I64Toa((n > 0 ? n : 1) as i64) + "] = {" + co.SbCstr(encbuf) + "};\n"
+    )
+    co.SbPuts(b, "        int i;\n")
+    co.SbPuts(b, "        for (i = 0; i < " + co.I64Toa(n as i64) + "; i++)\n")
+    co.SbPuts(
+        b, "            " + name + "_b[i] = (char)(" + name + "_e[i] ^ (unsigned char)((" + co.Format1("0x%016llx", co.ArgUint(key)) + "ULL >> ((i & 7) * 8)) & 0xFFULL));\n"
+    )
+    co.SbPuts(b, "        " + name + "_b[" + co.I64Toa(n as i64) + "] = 0;\n")
+    co.SbPuts(b, "        " + name + "_d = 1;\n")
+    co.SbPuts(b, "    }\n")
+    co.SbPuts(b, "    return " + name + "_b;\n")
+    co.SbPuts(b, "}\n")
+end
+
+func cg_strlit(g &: Cg, sv: str): str:
+    if not g.protect:
+        ret cg_cescape(sv)
+    end
+    mut n := 0
+    total := str.Len(sv)
+    until n < total:
+        if byte_at(sv, n) == 0:
+            break
+        end
+        n++
+    end
+    g.prot_n++
+    id := g.prot_n
+    key := cg_prot_hash(sv) ^ ((id as u64) * (0x9E3779B97F4A7C15 as u64))
+    name := "__salam_" + cg_cident(g.module) + "_p" + co.I64Toa(id as i64)
+    if g.cur == CG_OUT_H:
+        cg_prot_write(g.bproth, sv, name, key, n)
+    else:
+        cg_prot_write(g.bprotc, sv, name, key, n)
+    end
+    ret name + "()"
+end
+
 func cg_match_arm_cond(
     g &: Cg, s &: sm.Sema, a &: at.Ast, arm: int, subj_var: str, subj_ts: str
 ): str:
@@ -1090,7 +1157,7 @@ func cg_expr(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): str:
             ret buf
         end
         if nn.op == tok.TK_STRING or nn.op == tok.TK_TRIPLE_STRING or nn.op == tok.TK_RAW_STRING or nn.op == tok.TK_UTF8_CHAR:
-            ret cg_cescape(nn.value_str)
+            ret cg_strlit(g, nn.value_str)
         end
         if nn.op == tok.TK_CHAR:
             ret co.U64Toa(nn.value_int)

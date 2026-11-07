@@ -23,8 +23,13 @@ include ps "../parser/parser.salam"
 include sm "../semantic/semantic.salam"
 include pth "../sal_path.salam"
 
+const kTestTimeoutSlackMs := 300000
+const kTestOutputClip := 4000
+const kTestMaxJobs := 256
+
 mut g_rt_paths := Vector {} as Vector<str>
 mut g_rt_reports := Vector {} as Vector<str>
+mut g_rt_builds := Vector {} as Vector<str>
 mut g_rt_results := Vector {} as Vector<JobResult>
 mut g_rt_next := 0
 mut g_rt_mu := sync.Mutex {}
@@ -65,6 +70,7 @@ struct Expectations:
     pub timeout_ms: int = 0
     pub args: str = ""
     pub has_check: bool = false
+    pub error: str = ""
 end
 
 struct TestReport:
@@ -251,6 +257,32 @@ func parse_int_text(s: str): int:
     ret conv.ParseIntOr(num, 0 - 1) as int
 end
 
+func is_int_text(s: str): bool:
+    t := normalize_digits(str.Trim(s))
+    mut start := 0
+    if str.StartsWith(t, "E") or str.StartsWith(t, "e") or str.StartsWith(t, "W") or str.StartsWith(t, "w"):
+        start = 1
+    else str.StartsWith(t, "خطا") or str.StartsWith(t, "هشدار"):
+        start = "خطا".len()
+    end
+    n := str.Len(t)
+    mut i := start
+    if i < n and co.ByteAt(t, i) == 45:
+        i++
+    end
+    if i >= n:
+        ret false
+    end
+    until i < n:
+        c := co.ByteAt(t, i)
+        if c < 48 or c > 57:
+            ret false
+        end
+        i++
+    end
+    ret true
+end
+
 func looks_like_code(s: str): bool:
     t := str.Trim(s)
     if str.StartsWith(t, "E") or str.StartsWith(t, "e") or str.StartsWith(t, "خطا"):
@@ -275,9 +307,30 @@ func parse_expectations(text: str): Expectations:
     mut ex := Expectations {}
     lines := str.Split(text, "\n")
     defer lines.free()
+    mut scanning := true
+    mut in_block := false
     each raw in lines:
+        if not scanning:
+            continue
+        end
         line := str.Trim(raw)
+        if str.Len(line) == 0:
+            continue
+        end
+        if in_block:
+            if str.Contains(line, "*/"):
+                in_block = false
+            end
+            continue
+        end
+        if str.StartsWith(line, "/*"):
+            if not str.Contains(str.Substr(line, 2, str.Len(line) - 2), "*/"):
+                in_block = true
+            end
+            continue
+        end
         if not str.StartsWith(line, "//"):
+            scanning = false
             continue
         end
         body := str.Trim(str.Substr(line, 2, str.Len(line) - 2))
@@ -299,20 +352,35 @@ func parse_expectations(text: str): Expectations:
         else is_expect(name, upper, "EXPECT-STDERR-NOT", "انتظار-خطا-نه", "توقع-خطا-نه"):
             ex.items.push(ExpectItem { kind = "errnot", text = value })
         else is_expect(name, upper, "EXPECT-EXIT", "انتظار-کد", "توقع-کد"):
+            if not is_int_text(value):
+                ex.error = name + " needs a number, got '" + value + "'"
+            end
             ex.items.push(ExpectItem { kind = "exit", num = parse_int_text(value) })
         else is_expect(name, upper, "EXPECT-CODE", "انتظار-کد-خطا", "توقع-کد-خطا"):
+            if not is_int_text(value):
+                ex.error = name + " needs a diagnostic code, got '" + value + "'"
+            end
             ex.has_check = true
             ex.items.push(ExpectItem { kind = "code", num = parse_int_text(value) })
         else is_expect(name, upper, "EXPECT-ERROR", "انتظار-خطا-کد", "توقع-خطا-کد"):
+            if not is_int_text(value):
+                ex.error = name + " needs a diagnostic code, got '" + value + "'"
+            end
             ex.has_check = true
             ex.items.push(ExpectItem { kind = "code", num = parse_int_text(value) })
         else is_expect_msg(name, upper):
             ex.has_check = true
             ex.items.push(ExpectItem { kind = "msg", text = value })
         else is_expect(name, upper, "EXPECT-WARNINGS", "انتظار-هشدارها", "توقع-هشدارها"):
+            if not is_int_text(value):
+                ex.error = name + " needs a number, got '" + value + "'"
+            end
             ex.has_check = true
             ex.items.push(ExpectItem { kind = "warnings", num = parse_int_text(value) })
         else is_expect_fixes(name, upper):
+            if not is_int_text(value):
+                ex.error = name + " needs a number, got '" + value + "'"
+            end
             ex.has_check = true
             ex.items.push(ExpectItem { kind = "fixes", num = parse_int_text(value) })
         else is_expect(name, upper, "EXPECT-FILE", "انتظار-پرونده", "توقع-پرونده"):
@@ -328,6 +396,9 @@ func parse_expectations(text: str): Expectations:
         else is_expect(name, upper, "SKIP-ARCH", "رد-معماری", "رد معماری"):
             ex.skip_arch = value
         else is_expect(name, upper, "TIMEOUT", "مهلت", "مهلت"):
+            if not is_int_text(value):
+                ex.error = name + " needs a number of milliseconds, got '" + value + "'"
+            end
             ex.timeout_ms = parse_int_text(value)
         else is_expect(name, upper, "ARGS", "آرگومانها", "آرگومان ها"):
             ex.args = value
@@ -512,9 +583,9 @@ end
 
 func parent_timeout(ms: int): int:
     if ms > 0:
-        ret ms + 300000
+        ret ms + kTestTimeoutSlackMs
     end
-    ret 1800000
+    ret 0 - 1
 end
 
 func write_report(opt &: Dr, status: str, tests: int, passed: int, failed: int, reason: str):
@@ -941,7 +1012,7 @@ func run_script_file(opt &: Dr, path: str, ex: Expectations): int:
             end
             if str.Len(res.stdout) + str.Len(res.stderr) > 0:
                 println "  --- output ---"
-                print_indented(clip_text(res.stdout + res.stderr, 4000))
+                print_indented(clip_text(res.stdout + res.stderr, kTestOutputClip))
             end
         end
     else:
@@ -1006,7 +1077,7 @@ func run_check_file(opt &: Dr, path: str, ex: Expectations): int:
                 print c.detail
             end
             println "  --- compiler output ---"
-            print_indented(clip_text(combined, 4000))
+            print_indented(clip_text(combined, kTestOutputClip))
         end
     else:
         if opt.test_verbose and str.Len(combined) > 0:
@@ -1112,7 +1183,7 @@ func run_unit_file(opt &: Dr, path: str, tf: TestFile, ex: Expectations): int:
                 println "FAIL " + path + ": " + conv.FormatInt(failed as i64) + " check(s) failed"
                 print c.detail
                 println "  --- output ---"
-                print_indented(clip_text(res.stdout + res.stderr, 4000))
+                print_indented(clip_text(res.stdout + res.stderr, kTestOutputClip))
             else res.timed_out or not res.started or (str.Len(res.stdout) == 0 and str.Len(res.stderr) == 0):
                 println "FAIL " + path + ": " + reason
             end
@@ -1125,7 +1196,7 @@ func run_unit_file(opt &: Dr, path: str, tf: TestFile, ex: Expectations): int:
     ret failed > 0 ? 1 : 0
 end
 
-func test_worker():
+func run_worker():
     mut running := true
     until running:
         sync.Lock(g_rt_mu)
@@ -1148,7 +1219,7 @@ func test_worker():
             cmd.Arg("--report=" + report)
             cmd.Arg("--log-level=warn")
             cmd.Arg("--no-color")
-            cmd.Env("SALAM_BUILD_DIR", test_temp(".build"))
+            cmd.Env("SALAM_BUILD_DIR", g_rt_builds.get(idx))
             if str.Len(g_rt_opt.test_format) > 0:
                 cmd.Arg("--format=" + g_rt_opt.test_format)
             end
@@ -1243,6 +1314,21 @@ func show_build_errors(opt &: Dr, path: str): bool:
     ret crc != 0
 end
 
+func write_aggregate_report(opt &: Dr, files: Vector<str>, results: Vector<JobResult>):
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    repeat files.len() in i:
+        r := results.get(i)
+        status := str.Len(r.status) > 0 ? r.status : "notrun"
+        reason := str.Replace(str.Replace(r.reason, "\n", " "), "\t", " ")
+        path := str.Replace(files.get(i), "\t", " ")
+        str.BufAppend(
+            b, status + "\t" + path + "\t" + conv.FormatInt(r.tests as i64) + "\t" + conv.FormatInt(r.passed as i64) + "\t" + conv.FormatInt(r.failed as i64) + "\t" + reason + "\n"
+        )
+    end
+    _w := io.WriteFile(opt.test_report, str.BufStr(b))
+end
+
 func valid_test_format(f: str): bool:
     ret str.Len(f) == 0 or str.Equals(f, "teamcity") or str.Equals(f, "pretty") or str.Equals(f, "plain")
 end
@@ -1265,6 +1351,11 @@ pub func TestOne(opt &: Dr): int:
         end
         write_report(opt, "skip", 0, 0, 0, skip_reason)
         ret 0
+    end
+    if str.Len(ex.error) > 0:
+        io.EPrintln("salam test: " + path + ": " + ex.error)
+        write_report(opt, "fail", 0, 0, 1, ex.error)
+        ret 2
     end
     if ex.has_check or has_code_expectation(ex):
         ret run_check_file(opt, path, ex)
@@ -1317,7 +1408,6 @@ pub func Test(opt &: Dr): int:
             ret 2
         end
     end
-    sort_paths(raw)
     if str.Equals(opt.test_format, "teamcity"):
         cwd := os.Cwd()
         repeat raw.len() in fi:
@@ -1326,6 +1416,7 @@ pub func Test(opt &: Dr): int:
             end
         end
     end
+    sort_paths(raw)
     files := dedupe_paths(raw)
     defer files.free()
     if opt.test_list:
@@ -1347,6 +1438,9 @@ pub func Test(opt &: Dr): int:
     if jobs < 1:
         jobs = 1
     end
+    if jobs > kTestMaxJobs:
+        jobs = kTestMaxJobs
+    end
     if jobs > files.len():
         jobs = files.len()
     end
@@ -1363,9 +1457,13 @@ pub func Test(opt &: Dr): int:
     repeat files.len():
         g_rt_reports.push(test_temp(".report"))
     end
+    g_rt_builds = Vector {} as Vector<str>
+    repeat files.len():
+        g_rt_builds.push(test_temp(".build"))
+    end
     mut threads := Vector {} as Vector<thread.Thread>
     repeat jobs:
-        threads.push(thread.New(spawn(test_worker)))
+        threads.push(thread.New(spawn(run_worker)))
     end
     thread.JoinAll(threads)
     threads.free()
@@ -1380,7 +1478,7 @@ pub func Test(opt &: Dr): int:
         if str.Len(r.status) == 0:
             not_run++
             if not teamcity:
-                println "?    " + r.path + ": not run"
+                println "?    " + files.get(i) + ": not run"
             end
         else:
             if str.Len(r.out) > 0:
@@ -1406,9 +1504,14 @@ pub func Test(opt &: Dr): int:
             mem.Free(r.err as void*)
         end
         _rm := os.Remove(g_rt_reports.get(i))
+        _rmb := os.RemoveAll(g_rt_builds.get(i))
+    end
+    if str.Len(opt.test_report) > 0:
+        write_aggregate_report(opt, files, g_rt_results)
     end
     g_rt_results.free()
     g_rt_reports.free()
+    g_rt_builds.free()
     ran := files.len() - skipped - unmatched - not_run
     if str.Len(opt.test_run) > 0 and ran == 0:
         io.EPrintln(co.Format1(i18.Tr("salam test: no test matches --run=%s"), co.ArgStr(opt.test_run)))

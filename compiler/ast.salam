@@ -146,7 +146,9 @@ pub const AST_TUPLE := 60
 
 pub const AST_DESTRUCT := 61
 
-pub const AST_COUNT := 62
+pub const AST_STRUCT_RULE := 62
+
+pub const AST_COUNT := 63
 
 pub const AST_ORDER_IMPORT := 0
 
@@ -165,7 +167,7 @@ const NODE_PAGE_SHIFT := 15
 const NODE_PAGE_MASK := 32767
 
 k_ast_names := [
-    "Program", "Import", "Link", "TypeAlias", "ConstDecl", "FunctionDef", "Param", "StructDef", "Field", "InterfaceDef", "ImplDef", "EnumDef", "EnumMember", "Block", "VariableDecl", "Assignment", "IfStmt", "UntilStmt", "ForStmt", "RepeatStmt", "EachStmt", "ReturnStmt", "BreakStmt", "ContinueStmt", "DeferStmt", "ExprStmt", "BinaryExpr", "UnaryExpr", "IncDecExpr", "Cast", "Literal", "Identifier", "FuncAddr", "This", "Call", "MemberAccess", "ArrayAccess", "SliceExpr", "TernaryExpr", "Lambda", "ArrayLiteral", "StructLiteral", "FieldInit", "Type", "LayoutBlock", "LayoutElement", "LayoutAttribute", "LayoutComponent", "MatchExpr", "MatchArm", "MatchPattern", "VariantBox", "VariantUnwrap", "SwitchStmt", "CaseClause", "CaseItem", "Try", "ThrowStmt", "TryPrefix", "TryBlock", "TupleLiteral", "Destructure"
+    "Program", "Import", "Link", "TypeAlias", "ConstDecl", "FunctionDef", "Param", "StructDef", "Field", "InterfaceDef", "ImplDef", "EnumDef", "EnumMember", "Block", "VariableDecl", "Assignment", "IfStmt", "UntilStmt", "ForStmt", "RepeatStmt", "EachStmt", "ReturnStmt", "BreakStmt", "ContinueStmt", "DeferStmt", "ExprStmt", "BinaryExpr", "UnaryExpr", "IncDecExpr", "Cast", "Literal", "Identifier", "FuncAddr", "This", "Call", "MemberAccess", "ArrayAccess", "SliceExpr", "TernaryExpr", "Lambda", "ArrayLiteral", "StructLiteral", "FieldInit", "Type", "LayoutBlock", "LayoutElement", "LayoutAttribute", "LayoutComponent", "MatchExpr", "MatchArm", "MatchPattern", "VariantBox", "VariantUnwrap", "SwitchStmt", "CaseClause", "CaseItem", "Try", "ThrowStmt", "TryPrefix", "TryBlock", "TupleLiteral", "Destructure", "StructRule"
 ]
 
 pub type AstKind = int
@@ -184,10 +186,11 @@ pub struct Node:
     pub src_file: str = ""
     pub name: str = ""
     pub value_kind: int = 0
+    pub value_bool: bool = false
     pub value_int: u64 = 0 as u64
+    pub value_hi: u64 = 0 as u64
     pub value_float: f64 = 0.0
     pub value_str: str = ""
-    pub value_bool: bool = false
     pub op: int = 0
     pub is_mut: bool = false
     pub is_pointer: bool = false
@@ -241,6 +244,7 @@ pub struct NodeExt:
     pub typaram_bounds: Vector<str> = Vector {}
     pub aliases: Vector<str> = Vector {}
     pub captures: Vector<int> = Vector {}
+    pub rules: Vector<int> = Vector {}
 end
 
 pub struct Ast:
@@ -274,7 +278,7 @@ func node_push(a &: Ast, n: Node):
         page_add(a)
     end
     page_push(a, n)
-    a.total += 1
+    a.total++
 end
 
 func ensure_ext(a &: Ast, id: NodeId): int:
@@ -300,6 +304,9 @@ func emit_value(w &: x.Writer, n: Node):
     x.Open(w, "value")
     if n.value_kind == tok.TV_INT:
         x.Attr(w, "kind", "int")
+        if n.value_hi != (0 as u64):
+            x.Attr(w, "hi", co.U64Toa(n.value_hi))
+        end
         x.Text(w, co.U64Toa(n.value_int))
     else n.value_kind == tok.TV_FLOAT:
         x.Attr(w, "kind", "float")
@@ -363,6 +370,7 @@ pub func FreeAst(a &: Ast):
         e.typaram_bounds.free()
         e.aliases.free()
         e.captures.free()
+        e.rules.free()
     end
     repeat a.pages.len() in pj:
         pp := a.pages.ref(pj)
@@ -446,6 +454,7 @@ pub func SetTokenValue(a &: Ast, id: NodeId, v: tok.TokenValue):
     n := node_ref(a, id)
     n[0].value_kind = v.kind
     n[0].value_int = v.ival
+    n[0].value_hi = v.ihi
     n[0].value_float = v.fval
     n[0].value_str = v.sval
     n[0].value_bool = v.bval
@@ -486,6 +495,7 @@ pub func ValueOf(a &: Ast, id: NodeId): tok.TokenValue:
     mut v := tok.ValueNone()
     v.kind = n.value_kind
     v.ival = n.value_int
+    v.ihi = n.value_hi
     v.fval = n.value_float
     v.sval = n.value_str
     v.bval = n.value_bool
@@ -620,6 +630,20 @@ pub func Captures(a &: Ast, ext: int): Vector<int>:
     end
     e := a.exts.ref(ext)
     ret e.captures
+end
+
+pub func Rules(a &: Ast, ext: int): Vector<int>:
+    if ext == 0:
+        ret Vector {}
+    end
+    e := a.exts.ref(ext)
+    ret e.rules
+end
+
+pub func AddRule(a &: Ast, id: NodeId, rule: NodeId):
+    x := ensure_ext(a, id)
+    e := a.exts.ref(x)
+    e.rules.push(rule)
 end
 
 pub func AddDim(a &: Ast, id: NodeId, dim: NodeId):
@@ -809,6 +833,10 @@ pub func Clone(a &: Ast, id: NodeId): NodeId:
     repeat Captures(a, src.ext).len() in i2:
         ccaps.push(Clone(a, Captures(a, src.ext).get(i2)))
     end
+    mut crules := Vector {} as Vector<int>
+    repeat Rules(a, src.ext).len() in i6:
+        crules.push(Clone(a, Rules(a, src.ext).get(i6)))
+    end
     nid := a.total
     node_push(a, c)
     if src.ext != 0:
@@ -817,6 +845,9 @@ pub func Clone(a &: Ast, id: NodeId): NodeId:
         end
         repeat ccaps.len() in k2:
             AddCapture(a, nid, ccaps.get(k2))
+        end
+        repeat crules.len() in k3:
+            AddRule(a, nid, crules.get(k3))
         end
         repeat Typarams(a, src.ext).len() in i3:
             AddTyparam(a, nid, Typarams(a, src.ext).get(i3), TyparamBounds(a, src.ext).get(i3))
@@ -827,6 +858,7 @@ pub func Clone(a &: Ast, id: NodeId): NodeId:
     end
     cdims.free()
     ccaps.free()
+    crules.free()
     ret nid
 end
 

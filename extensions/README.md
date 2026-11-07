@@ -120,8 +120,8 @@ failing.
 Two of those engines can only be reached from their own runtime, so each gets
 a driver that does nothing but dump `[token, style]` pairs as JSON:
 `tools/check_textmate.mjs` for `vscode-textmate`, which is a JavaScript
-library, and `tools/check_gtksource.py` for GtkSourceView, which is reachable
-only through GObject introspection. Every decision the check makes lives in
+library, and `tools/check_gtksource.salam` for GtkSourceView, a Salam program that
+loads `libgtksourceview-4` at runtime and calls its C API. Every decision the check makes lives in
 `check_engines.salam`.
 
 `tools/syntaxcheck.salam` holds the checking logic that `validate.salam`
@@ -145,12 +145,13 @@ YASnippet, which all use the same `${1:placeholder}` syntax.
 
 ## Useful compiler flags
 
-The integrations lean on three compiler options:
+The integrations lean on these compiler options:
 
 | Flag                                                                     | Why                                                                                                             |
 | ------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------- |
 | `--error-style=gcc`                                                      | One-line `file:line:col: error: message` diagnostics, which every editor's error parser already understands.    |
 | `--error-format=json`                                                    | One JSON object per diagnostic, for editors that build structured diagnostics.                                  |
+| `--error-lang=fa`                                                        | Print Persian diagnostics for English source; keywords and identifiers stay English.                            |
 | `salam inspect FILE --emit-symbol --xml-out=/dev/null --log-level=error` | Lex, parse and analyze without running the program or writing an artifact: the check every "lint on save" uses. |
 
 ## Licensing

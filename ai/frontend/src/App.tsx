@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { api, ApiError, getToken, handleUnauthorized, setClientPlatform, setClientVersion, setToken, streamMessage, uiText, type Chat, type FileMeta, type Message, type OutgoingFile, type QueueItem, type User } from "./api";
 import { Admin, NoAccess } from "./Admin";
 import { AdminChat } from "./AdminChat";
@@ -15,14 +15,19 @@ import { Connections, TelegramLink } from "./Telegram";
 import { OAuthCallback, providerFromPath } from "./OAuthCallback";
 import { agent, isDesktop, saveMode, savedMode, savedWorkspace, saveWorkspace, type AgentMode } from "./desktop";
 import { Keys } from "./Keys";
-import { announce } from "./Notify";
+import { announce, announceGuest } from "./Notify";
 import { Plans } from "./Plans";
-import { IconGlobe, IconCode, IconMenu, IconMoon, IconPlus, IconSun, IconSwap, IconBook, IconBug, IconFolder, IconSearch, IconTerminal } from "./icons";
+import { Usage } from "./Usage";
+import { IconGlobe, IconCode, IconMenu, IconMoon, IconPlus, IconSun, IconSwap, IconBook, IconBug, IconFolder, IconSearch, IconTerminal, IconShare } from "./icons";
 import { MessageView } from "./Messages";
 import { Sidebar } from "./Sidebar";
 import { useTheme } from "./theme";
 import { t } from "./i18n";
 import { Checkbox } from "./Checkbox";
+import { pushToast } from "./Toasts";
+
+const ShareDialog = lazy(() => import("./ShareDialog").then((m) => ({ default: m.ShareDialog })));
+const SharedPage = lazy(() => import("./SharedPage").then((m) => ({ default: m.SharedPage })));
 
 const SUGGESTIONS = [
   { icon: IconCode, title: t("اولین برنامه", "First program"), text: t("یک برنامه‌ی سلام بنویس که نام کاربر را بپرسد و به او خوشامد بگوید.", "Write a Salam program that asks for the user's name and greets them.") },
@@ -43,7 +48,11 @@ function chatIdFromPath(): string | null {
   return m ? m[1] : null;
 }
 
-type Route = "chat" | "connect" | "telegram" | "connections" | "keys" | "plans" | "memory" | "admin" | "admin-chat";
+function shareTokenFromPath(): string | null {
+  return /^\/s\/([a-f0-9]{40})\/?$/.exec(location.pathname)?.[1] ?? null;
+}
+
+type Route = "share" | "chat" | "connect" | "telegram" | "connections" | "keys" | "plans" | "usage" | "memory" | "admin" | "admin-chat";
 
 function adminChatIdFromPath(): string {
   return /^\/admin\/chats\/([a-f0-9]{24})\/?$/.exec(location.pathname)?.[1] ?? "";
@@ -51,12 +60,14 @@ function adminChatIdFromPath(): string {
 
 function routeFromPath(): Route {
   const p = location.pathname.replace(/\/+$/, "");
+  if (shareTokenFromPath()) return "share";
   if (p === "/connect") return "connect";
   if (p === "/telegram") return "telegram";
   if (p === "/connections") return "connections";
   if (p === "/apps") return "connections";
   if (p === "/keys") return "keys";
   if (p === "/plans") return "plans";
+  if (p === "/usage") return "usage";
   if (p === "/memory") return "memory";
   if (p === "/admin") return "admin";
   if (adminChatIdFromPath()) return "admin-chat";
@@ -64,12 +75,14 @@ function routeFromPath(): Route {
 }
 
 const PAGE_TITLES: Record<Route, string> = {
+  share: t("گفت‌وگوی اشتراکی", "Shared chat"),
   chat: t("دستیار سلام", "Salam AI"),
   connect: t("اتصال برنامه", "Connect an app"),
   telegram: t("اتصال تلگرام", "Connect Telegram"),
   connections: t("اتصال‌ها و برنامه‌ها", "Connections and apps"),
   keys: t("کلیدهای API", "API keys"),
   plans: t("اشتراک‌ها", "Plans"),
+  usage: t("مصرف و توکن‌ها", "Usage and tokens"),
   memory: t("حافظه", "Memory"),
   admin: t("مدیریت", "Admin"),
   "admin-chat": t("گفت‌وگو در مدیریت", "Admin chat view"),
@@ -120,11 +133,12 @@ export function App() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [loadingChat, setLoadingChat] = useState(false);
   const [sidebar, setSidebar] = useState(false);
-  const [toast, setToast] = useState("");
   const [workspace, setWorkspace] = useState(isDesktop ? savedWorkspace() : "");
   const [mode, setMode] = useState<AgentMode>("ask");
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [cloudOk, setCloudOk] = useState(false);
+  const [shareOpen, setShareOpen] = useState(false);
+  const guestSeen = useRef(new Map<string, number>());
   const [cloud, setCloud] = useState(() => {
     try {
       return localStorage.getItem("salam-ai-cloud") === "1";
@@ -166,8 +180,7 @@ export function App() {
   const onConnect = route === "connect" || route === "telegram";
 
   const notify = useCallback((msg: string) => {
-    setToast(msg);
-    window.setTimeout(() => setToast(""), 4000);
+    pushToast({ tone: "failed", title: msg });
   }, []);
 
   const signOut = useCallback(() => {
@@ -181,10 +194,6 @@ export function App() {
 
   const onAuth = useCallback((u: User) => {
     setUser(u);
-    api
-      .me()
-      .then((r) => setUser(r.user))
-      .catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -202,7 +211,29 @@ export function App() {
 
   useEffect(() => {
     if (!signedIn || onConnect) return;
-    api.chats().then((r) => setChats(r.chats)).catch((e) => notify(e.message));
+    let stopped = false;
+    const tick = (first: boolean) => {
+      if (document.visibilityState !== "visible") return;
+      api
+        .chats()
+        .then((r) => {
+          if (!stopped) setChats(r.chats);
+        })
+        .catch((e) => {
+          if (first) notify(e.message);
+        });
+    };
+    tick(true);
+    const timer = window.setInterval(() => tick(false), 10000);
+    const onVisible = () => {
+      if (document.visibilityState === "visible") tick(false);
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
   }, [signedIn, onConnect, notify]);
 
   const midFor = useCallback((chat: string) => {
@@ -225,7 +256,7 @@ export function App() {
     const pending = messagesRef.current.find((m) => m.role === "assistant" && m.status === "pending");
     if (!isDesktop || !chatId || !pending || pending.id <= 0 || watching.current.has(pending.id)) return;
     const mid = pending.id;
-    const until = Date.now() + 30 * 60 * 1000;
+    const until = Date.now() + 12 * 60 * 60 * 1000;
     watching.current.add(mid);
     const tick = async () => {
       if (announced.current.has(mid) || activeRef.current === chatId || Date.now() > until) {
@@ -274,7 +305,10 @@ export function App() {
             ),
           );
           if (r.status === "pending") pollTimer.current = window.setTimeout(tick, 500);
-          else finish(chatId, mid, r.status, r.body);
+          else {
+            setChats((cs) => cs.map((c) => (c.id === chatId ? { ...c, state: "idle", phase: undefined, last_error: r.status === "error" } : c)));
+            finish(chatId, mid, r.status, r.body);
+          }
         } catch (e) {
           if (e instanceof ApiError && e.status === 401) return;
           netFails.current += 1;
@@ -302,6 +336,17 @@ export function App() {
         setMessages((ms) => ms.map((m) => (m.id === mid ? fn(m) : m)));
       };
       let finished = false;
+      const opened = Date.now();
+      const again = () => {
+        if (finished || ctrl.signal.aborted) return;
+        if (Date.now() - opened > 60000 && activeRef.current === chatId) {
+          window.setTimeout(() => {
+            if (ctrl.signal.aborted || activeRef.current !== chatId) return;
+            setMessages((ms) => ms.map((m) => (m.id === mid ? { ...m, body: "" } : m)));
+            follow(chatId, mid, title);
+          }, 500);
+        } else poll(chatId, mid);
+      };
       streamMessage(
         chatId,
         mid,
@@ -314,6 +359,7 @@ export function App() {
             finished = true;
             if (followed.current === mid) followed.current = 0;
             finish(chatId, mid, status, body);
+            setChats((cs) => cs.map((c) => (c.id === chatId ? { ...c, state: "idle", phase: undefined, last_error: status === "error" } : c)));
             update((m) => ({
               ...m,
               body,
@@ -327,10 +373,10 @@ export function App() {
         ctrl.signal,
       )
         .then((ok) => {
-          if (!ok && !finished && !ctrl.signal.aborted) poll(chatId, mid);
+          if (!ok) again();
         })
         .catch(() => {
-          if (!finished && !ctrl.signal.aborted) poll(chatId, mid);
+          again();
         });
     },
     [poll, finish],
@@ -349,6 +395,7 @@ export function App() {
       ),
     );
     setQueue(r.queue ?? []);
+    setChats((cs) => (cs.some((c) => c.id === r.chat.id) ? cs.map((c) => (c.id === r.chat.id ? { ...c, shared: r.chat.shared } : c)) : [r.chat, ...cs]));
     return r.messages.find((m) => m.status === "pending");
   }, []);
 
@@ -466,6 +513,15 @@ export function App() {
   };
 
   const busy = messages.some((m) => m.status === "pending");
+  const pending = messages.find((m) => m.role === "assistant" && m.status === "pending");
+  const activePhase: Chat["phase"] | undefined = !pending
+    ? undefined
+    : pending.phase === "writing"
+      ? "writing"
+      : pending.phase === "thinking" || !pending.phase
+        ? "thinking"
+        : "tool";
+  const activeWaiting = tools.calls.some((c) => c.chat === activeId && c.state === "pending");
   const activeChat = chats.find((c) => c.id === activeId);
   const agentChat = isDesktop && (activeChat ? activeChat.agent === true : workspace !== "");
   const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant")?.id;
@@ -495,6 +551,38 @@ export function App() {
       document.removeEventListener("visibilitychange", check);
     };
   }, [signedIn]);
+
+  const sharedChats = chats.filter((c) => c.shared?.includes("collab")).map((c) => c.id).join(",");
+  useEffect(() => {
+    if (!signedIn || !sharedChats) return;
+    let stopped = false;
+    const look = async () => {
+      if (stopped || document.visibilityState !== "visible") return;
+      for (const id of sharedChats.split(",")) {
+        try {
+          const r = await api.chat(id);
+          if (stopped) return;
+          const newest = r.messages.filter((m) => m.guest).reduce((n, m) => Math.max(n, m.id), 0);
+          const seen = guestSeen.current.get(id);
+          guestSeen.current.set(id, newest);
+          if (seen === undefined || newest <= seen) continue;
+          const last = r.messages.find((m) => m.id === newest);
+          const title = chatsRef.current.find((c) => c.id === id)?.title ?? r.chat.title;
+          if (last) announceGuest(last.guest ?? "", title, last.body);
+          if (id === activeRef.current) {
+            const pending = applyChat(r);
+            if (pending && followed.current !== pending.id) follow(id, pending.id);
+          }
+        } catch {}
+      }
+    };
+    look();
+    const timer = window.setInterval(look, 5000);
+    return () => {
+      stopped = true;
+      window.clearInterval(timer);
+    };
+  }, [signedIn, sharedChats, applyChat, follow]);
 
   const loadFile = useMemo(() => fileLoader((fid) => api.chatFile(activeId ?? "", fid)), [activeId]);
   const waitingElsewhere = tools.calls.find((c) => c.state === "pending" && c.chat !== activeId);
@@ -569,7 +657,7 @@ export function App() {
       setChats((cs) => {
         const cur = cs.find((c) => c.id === id);
         const rest = cs.filter((c) => c.id !== id);
-        return cur ? [{ ...cur, title: r.title, updated: now }, ...rest] : cs;
+        return cur ? [{ ...cur, title: r.title, updated: now, state: "working", phase: "thinking", last_error: false }, ...rest] : cs;
       });
       follow(id, r.assistant.id, r.title);
       return true;
@@ -655,6 +743,7 @@ export function App() {
     try {
       const r = await api.stop(activeId);
       setMessages((ms) => ms.map((m) => (m.status === "pending" ? { ...m, status: "done", body: r.body } : m)));
+      setChats((cs) => cs.map((c) => (c.id === activeId ? { ...c, state: "idle", phase: undefined } : c)));
     } catch (e) {
       if (e instanceof ApiError) notify(e.message);
     }
@@ -686,6 +775,21 @@ export function App() {
     } catch {}
     signOut();
   };
+
+  const sharedToken = route === "share" ? shareTokenFromPath() : null;
+  if (sharedToken) {
+    return (
+      <Suspense
+        fallback={
+          <div className="boot">
+            <img src="/logo.svg" alt="" width={64} height={64} />
+          </div>
+        }
+      >
+        <SharedPage token={sharedToken} theme={theme} toggleTheme={toggleTheme} />
+      </Suspense>
+    );
+  }
 
   if (booting) {
     return (
@@ -723,6 +827,9 @@ export function App() {
         onDelete={remove}
         onLogout={logout}
         onToggleTheme={toggleTheme}
+        activeBusy={busy}
+        activeWaiting={activeWaiting}
+        activePhase={activePhase}
       />
       <main className="main">
         <header className="topbar">
@@ -730,6 +837,19 @@ export function App() {
             <IconMenu />
           </button>
           <h1 dir="auto">{uiText(title)}</h1>
+          {route === "chat" && activeId && (
+            <button
+              type="button"
+              className={`icon-button share-button${activeChat?.shared && activeChat.shared.length > 0 ? " on" : ""}`}
+              disabled={!activeChat}
+              onClick={() => setShareOpen(true)}
+              aria-label={t("اشتراک‌گذاری گفت‌وگو", "Share this chat")}
+              title={activeChat ? t("اشتراک‌گذاری با پیوند", "Share with a link") : t("این گفت‌وگو را نمی‌شود به اشتراک گذاشت", "This chat cannot be shared")}
+            >
+              <IconShare width={18} height={18} />
+              <span className="share-button-label">{t("اشتراک", "Share")}</span>
+            </button>
+          )}
           <button type="button" className="icon-button only-mobile" onClick={() => openChat(null)} aria-label={t("گفت‌وگوی تازه", "New chat")}>
             <IconPlus />
           </button>
@@ -739,9 +859,9 @@ export function App() {
         </header>
         {route === "admin-chat" ? (
           <div className="scroller page-scroller">{user.admin ? <AdminChat id={adminChatIdFromPath()} /> : <NoAccess />}</div>
-        ) : route === "connections" || route === "keys" || route === "plans" || route === "memory" || route === "admin" ? (
+        ) : route === "connections" || route === "keys" || route === "plans" || route === "usage" || route === "memory" || route === "admin" ? (
           <div className="scroller page-scroller" ref={pageScroller}>
-            {route === "connections" ? <Connections notify={notify} /> : route === "keys" ? <Keys notify={notify} /> : route === "plans" ? <Plans notify={notify} /> : route === "memory" ? <Memory notify={notify} /> : user.admin ? <Admin notify={notify} /> : <NoAccess />}
+            {route === "connections" ? <Connections notify={notify} /> : route === "keys" ? <Keys notify={notify} /> : route === "plans" ? <Plans notify={notify} /> : route === "usage" ? <Usage onNavigate={navigate} /> : route === "memory" ? <Memory notify={notify} /> : user.admin ? <Admin notify={notify} /> : <NoAccess />}
           </div>
         ) : (
           <>
@@ -784,9 +904,18 @@ export function App() {
               ) : (
                 <div className="thread">
                   {loadingChat && messages.length === 0 && <div className="loading-chat"><span className="spinner" /></div>}
-                  {messages.map((m) => (
-                    <MessageView key={m.id} m={m} name={user.name} loadFile={loadFile} calls={m.role === "assistant" ? callsFor(m.id) : undefined} onDecide={tools.decide} onStop={tools.stop} />
-                  ))}
+                  {messages.map((m) =>
+                    m.guest && m.role === "user" ? (
+                      <div key={m.id} className="shared-msg">
+                        <span className="shared-guest">
+                          {t("از راه پیوند", "Via link")}: <bdi dir="auto">{m.guest}</bdi>
+                        </span>
+                        <MessageView m={m} name={m.guest} loadFile={loadFile} />
+                      </div>
+                    ) : (
+                      <MessageView key={m.id} m={m} name={user.name} loadFile={loadFile} calls={m.role === "assistant" ? callsFor(m.id) : undefined} cloud={activeChat?.cloud === true} onDecide={tools.decide} onStop={tools.stop} />
+                    ),
+                  )}
                 </div>
               )}
             </div>
@@ -829,10 +958,15 @@ export function App() {
           </>
         )}
       </main>
-      {toast && (
-        <div className="toast" role="status">
-          {toast}
-        </div>
+      {shareOpen && activeId && activeChat && (
+        <Suspense fallback={null}>
+          <ShareDialog
+            chatId={activeId}
+            title={activeChat.title}
+            onClose={() => setShareOpen(false)}
+            onChange={(kinds) => setChats((cs) => cs.map((c) => (c.id === activeId ? { ...c, shared: kinds.length > 0 ? kinds : undefined } : c)))}
+          />
+        </Suspense>
       )}
     </div>
   );

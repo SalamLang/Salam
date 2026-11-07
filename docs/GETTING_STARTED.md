@@ -32,8 +32,12 @@ The fastest way to get `salam` on your machine:
 The installer detects your OS and architecture and adds Salam to your PATH; open a new terminal afterwards.
 
 Options go after `sh -s --`, for example `... | sh -s -- --dir ./bin --version 0.5.0`.
-The shell installer takes `--dir DIR`, `--version X.Y.Z`, `--platform NAME`,
-`--no-modify-path` and `--help`; run it with `--help` for the full list.
+The shell installer takes `--dir DIR`, `--version X.Y.Z`, `--os NAME`, `--arch NAME`,
+`--platform NAME`, `--no-modify-path` and `--help`. It detects your system and
+processor by itself; `--os` (`linux`, `mac`, `freebsd`, `openbsd`, `netbsd`, `dragonfly`) and
+`--arch` (`x86_64`, `i686`, `aarch64`, `armhf`, `riscv64`, `ppc64le`, `s390x`)
+pick another build, and `--platform` names the exact release file. Run it with `--help` for
+the full list.
 
 **Windows** (PowerShell):
 
@@ -64,7 +68,12 @@ curl -fsSLo "%TEMP%\salam-install.bat" https://raw.githubusercontent.com/SalamLa
 Both land in `%USERPROFILE%\.salam\bin` and put that directory on your user
 PATH; open a new terminal afterwards so the change is visible. `--dir DIR`
 installs somewhere else, `--version X.Y.Z` picks an exact release, and
-`--no-modify-path` leaves PATH untouched.
+`--no-modify-path` leaves PATH untouched. The installer finds your processor by itself;
+`--arch` (`x86_64`, `i686`, `arm64`) picks another build, `--os windows` is accepted
+(Linux, macOS and the BSDs use `install.sh`, and the error prints the command), and
+`--platform` names the exact release file (`windows-x86_64`, `windows-i686`,
+`windows-arm64`). `SALAM_OS`, `SALAM_ARCH` and `SALAM_PLATFORM` do the same for the
+piped form, for example `$env:SALAM_ARCH = "i686"` before `irm ... | iex`.
 
 On Windows 7 and 8, where `curl.exe` and `irm` do not exist yet, bootstrap
 with `certutil` instead:
@@ -194,6 +203,7 @@ stamp.
 ```sh
 salam check app.salam                  # exit 0: no errors, exit 1: errors, exit 2: could not start
 salam check app.salam --error-format=json
+salam check app.salam --error-lang=fa   # English source, Persian diagnostics
 salam check app.salam --backend=native # the rules of that backend, as `salam build` applies them
 salam check app.salam --target=x86_64-windows-gnu   # the Windows branches of the program
 ```
@@ -201,6 +211,11 @@ salam check app.salam --target=x86_64-windows-gnu   # the Windows branches of th
 `salam check` runs the part of `salam build` that comes before code generation,
 with the same flags, and answers for the build you would get from them. It
 exits non-zero whenever it prints an error, in plain and in JSON output alike.
+
+`--error-lang=fa` (or `en`) picks the language of diagnostics and tool messages
+independently of the source language: an English file keeps its English
+keywords and identifiers and is still compiled as English, while its errors
+are printed in Persian. Without the flag, messages follow the source language.
 
 It reports:
 
@@ -298,7 +313,7 @@ range support, and `net/httpd` (see the std page) lists every setting.
 The whole library is installed with the compiler: the database clients
 (`db.sqlite`, `db.postgres`, `db.mysql`, `db.redis`, `db.opensearch`, ...),
 machine learning (`tensor`, `nn`, `llm`, ...), audio, the network services
-(`grpc`, `ftp`, `ssh`, `net.websocket`, `net.http.swagger`, ...), `webview`,
+(`grpc`, `ftp`, `ssh`, `net.websocket`, `net.http.swagger`, ...), `gui.webview`,
 `opencv` and `excel`. [`std/`](../std/) holds them all and `salam search`
 finds them. Import them like any other library; there is nothing to add or
 download first:
@@ -307,7 +322,7 @@ download first:
 import db.redis
 ```
 
-A package that wraps a C library (`db.sqlite`, `webview`, ...) finds or builds
+A package that wraps a C library (`db.sqlite`, `gui.webview`, ...) finds or builds
 that library the first time a program that imports it is compiled; see
 Native libraries below. Older projects may still list a library package in
 `salam.toml`, such as `"db.redis" = "v0.5.9"`. Salam ignores those lines, and
@@ -371,7 +386,8 @@ When a build meets that `link` line it uses the system library if
 pkg-config or the C compiler can find it. Otherwise it downloads the listed
 sources, checks the sha256, compiles them once per compiler and caches the
 objects under `~/.salam/pkg/native/`. With no sources it stops and prints the
-install command for this OS. `salam add db.sqlite` does the same work up front.
+install command for this OS. `salam add db.sqlite` prints that library's status up front
+(it adds nothing to `salam.toml`, since the package is part of the standard library).
 `SALAM_NATIVE=source` or `SALAM_NATIVE=system` forces one way.
 
 ### 📚 Building a library

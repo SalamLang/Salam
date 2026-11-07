@@ -13,7 +13,7 @@ func ovr_find(v &: Lv, n: int): int:
         if v.ovr_node.get(i) == n:
             ret i
         end
-        i -= 1
+        i--
     end
     ret 0 - 1
 end
@@ -101,7 +101,7 @@ func lv_addr_of(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): LvAddr:
         mut tpi := 0
         until tpi < sm.PackageCount(s):
             tpk := sm.PackageAt(s, tpi)
-            tpi += 1
+            tpi++
             if tpk == 0 or sm.SymAt(s, tpk).kind != sm.SYM_PACKAGE:
                 continue
             end
@@ -147,7 +147,7 @@ func lv_addr_of(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): LvAddr:
                     end
                 end
             end
-            pgi += 1
+            pgi++
         end
         xgi := global_find(v, nm)
         if xgi >= 0:
@@ -172,7 +172,7 @@ func lv_addr_of(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): LvAddr:
     end
     val := lv_expr(v, s, a, n)
     p := "%agg." + co.I64Toa(v.tmp as i64)
-    v.tmp += 1
+    v.tmp++
     emit_alloca(v, p + " = alloca " + ty_of(v, s, a, val.ts))
     emit(v, "store " + ty_of(v, s, a, val.ts) + " " + val.ref + ", ptr " + p)
     mut ra5 := LvAddr {}
@@ -352,13 +352,16 @@ func lv_struct_lit(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
                 if prov == 0 and str.Len(fi.name) > 0 and str.Equals(fi.name, f.name):
                     prov = nn.list.get(j)
                 end
-                j += 1
+                j++
             end
             mut val := ""
             if prov != 0:
                 val = conv(v, s, a, lv_expr(v, s, a, at.Get(a, prov).a), fts)
             else f.decl != 0 and at.Get(a, f.decl).a != 0:
+                mut dctx := LvDeclCtx {}
+                lv_decl_enter(v, s, dctx, sm.SymAt(s, ss).home)
                 val = conv(v, s, a, lv_expr(v, s, a, at.Get(a, f.decl).a), fts)
+                lv_decl_leave(v, dctx)
             else:
                 val = zero_of(s, fts)
             end
@@ -367,7 +370,7 @@ func lv_struct_lit(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
                 v, r + " = insertvalue " + sty + " " + cur + ", " + ty_of(v, s, a, fts) + " " + val + ", " + co.I64Toa(idx as i64)
             )
             cur = r
-            idx += 1
+            idx++
         end
     end
     ret make_llv(idx != 0 ? cur : "zeroinitializer", sname2)
@@ -470,7 +473,7 @@ func lv_lambda_value(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
         emit(
             v, "store " + ty_of(v, s, a, c.type_str) + " " + conv(v, s, a, cv, c.type_str) + ", ptr " + fp
         )
-        i += 1
+        i++
     end
     ret make_llv(env, node.type_str)
 end
@@ -487,6 +490,9 @@ func lv_literal(v &: Lv, a &: at.Ast, n: int): Llv:
     node := at.Get(a, n)
     if node.op == tok.TK_INT:
         ts := str.Len(node.type_str) > 0 ? node.type_str : "i32"
+        if is_wide_ts(ts):
+            ret make_llv(wide_literal(node.value_hi, node.value_int), ts)
+        end
         ret make_llv(co.I64Toa(node.value_int as i64), ts)
     end
     if node.op == tok.TK_FLOAT:
@@ -697,7 +703,7 @@ func lv_match_expr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
     is_variant := str.StartsWith(subj.ts, "Variant<")
     rts := str.Len(nn.type_str) > 0 ? nn.type_str : "i32"
     resptr := "%mres." + co.I64Toa(v.tmp as i64)
-    v.tmp += 1
+    v.tmp++
     endL := new_lbl(v, "mend")
     fallbackL := new_lbl(v, "mtrap")
     saved_ptr := v.match_result_ptr
@@ -1064,6 +1070,10 @@ func lv_expr(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int): Llv:
             rmf := new_tmp(v)
             emit(v, rmf + " = ptrtoint ptr " + gsym(mfsym) + " to i64")
             ret make_llv(rmf, "i64")
+        end
+        em := sm.EnumOfMember(s, a, n)
+        if em != 0:
+            ret enum_member_value(v, s, sm.LookupLocal(s, sm.SymAt(s, em).members, node.name))
         end
         if node.a != 0 and at.KindOf(a, node.a) == at.AST_IDENTIFIER:
             e := enum_sym(v, s, a, at.Get(a, node.a).name)

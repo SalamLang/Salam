@@ -34,6 +34,10 @@ async function account(email, name) {
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 async function ask(token, text) {
   const chat = (await api("POST", "/chats", token, {})).json.chat.id;
+  return ask_in(token, chat, text);
+}
+
+async function ask_in(token, chat, text) {
   const sent = await api("POST", `/chats/${chat}/messages`, token, { text });
   const mid = sent.json?.assistant?.id;
   for (let i = 0; i < 150; i += 1) {
@@ -62,13 +66,23 @@ const free = await ask(user, "show policy");
 check("the user is answered by the plain profile", /agent=raw/.test(free), free);
 check("without the Salam policy text", !/system=salam/.test(free) && /reminder=false/.test(free), free);
 
+const freeDevice = await api("POST", "/bridge/devices", user, { name: "Policy desktop", os: "macos" });
+const freeAgentChat = await api("POST", "/chats", user, { device_id: freeDevice.json?.device.id, workspace: "/tmp/ws" });
+const freeAgent = await ask_in(user, freeAgentChat.json?.chat.id, "show policy");
+check("a lifted account's desktop chat uses the desktop plain profile", /agent=salam-agent-raw/.test(freeAgent), freeAgent);
+check("without the Salam policy text in the desktop chat", !/system=salam/.test(freeAgent), freeAgent);
+
 const other = await account(`policy-other-${Date.now()}@test.ir`, "Other User");
 check("other users keep the limit", /agent=salam system=salam .*reminder=false/.test(await ask(other, "show policy")));
+
+const otherDevice = await api("POST", "/bridge/devices", other, { name: "Policy desktop", os: "linux" });
+const otherAgentChat = await api("POST", "/chats", other, { device_id: otherDevice.json?.device.id, workspace: "/tmp/ws" });
+check("other users keep the limit in the desktop agent too", /agent=salam-agent system=salam/.test(await ask_in(other, otherAgentChat.json?.chat.id, "show policy")));
 
 const listed = await api("GET", `/admin/users?q=${encodeURIComponent(email)}`, admin);
 const row = listed.json?.users?.[0];
 check("the admin list shows the lifted limit", row?.policy_free === true, row);
-check("the admin list splits the dollar cost", row?.cost_in > 0 && row?.cost_out > 0 && Math.abs(row.cost_in + row.cost_out - 0.0024) < 0.0001, row);
+check("the admin list splits the dollar cost", row?.cost_in > 0 && row?.cost_out > 0 && Math.abs(row.cost_in + row.cost_out - 0.0036) < 0.0001, row);
 
 const summary = await api("GET", "/admin/summary", admin);
 const all = summary.json?.usage?.find((p) => p.key === "all");

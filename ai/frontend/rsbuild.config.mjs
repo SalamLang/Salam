@@ -14,6 +14,9 @@ export default defineConfig({
   },
   html: {
     template: "./index.html",
+    templateParameters: {
+      apiUrl: (process.env.PUBLIC_API_URL || "https://ai-api.salamlang.ir").replace(/\/$/, ""),
+    },
   },
   output: {
     distPath: { root: "dist" },

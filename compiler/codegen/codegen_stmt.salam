@@ -10,7 +10,7 @@ func cg_emit_defers_from(g &: Cg, s &: sm.Sema, a &: at.Ast, mark: int):
     mut i := g.fn_defers.len()
     until i > mark:
         cg_stmt(g, s, a, g.fn_defers.get(i - 1))
-        i -= 1
+        i--
     end
 end
 
@@ -49,7 +49,7 @@ func cg_scoped_stmts(g &: Cg, s &: sm.Sema, a &: at.Ast, blockid: int):
 end
 
 func cg_loop_push(g &: Cg):
-    g.tmpn += 1
+    g.tmpn++
     g.loop_dmark.push(g.fn_defers.len())
     g.brk_goto.push("!__lpend" + str.FromInt(g.tmpn as i64))
 end
@@ -168,22 +168,22 @@ func cg_unparen(e: str): str:
     until i < n:
         c := byte_at(e, i)
         if c == 34 or c == 39:
-            i += 1
+            i++
             until i < n and byte_at(e, i) != c:
                 if byte_at(e, i) == 92:
-                    i += 1
+                    i++
                 end
-                i += 1
+                i++
             end
         else c == 40:
-            depth += 1
+            depth++
         else c == 41:
-            depth -= 1
+            depth--
             if depth == 0 and i + 1 != n:
                 ret e
             end
         end
-        i += 1
+        i++
     end
     if depth != 0:
         ret e
@@ -225,7 +225,7 @@ func cg_str_fill_code(s &: sm.Sema, lv: str, ts: str, depth: int): str:
     end
     if str.Equals(base, "str"):
         inner = lv + idx + " = \"\";"
-    else cg_is_int_typestr(base) or str.Equals(base, "bool") or str.Equals(base, "char") or str.Equals(base, "f32") or str.Equals(base, "f64") or str.Equals(base, "int") or str.Equals(base, "float"):
+    else cg_is_int_typestr(base) or cg_wide_ts(base) or str.Equals(base, "bool") or str.Equals(base, "char") or str.Equals(base, "f32") or str.Equals(base, "f64") or str.Equals(base, "int") or str.Equals(base, "float"):
         ret ""
     else:
         ssym := struct_by_name(s, base)
@@ -254,7 +254,7 @@ func cg_str_fill_code(s &: sm.Sema, lv: str, ts: str, depth: int): str:
     mut code := inner
     mut k := dims.len()
     until k > 0:
-        k -= 1
+        k--
         iv := "__zf" + depth + "_" + k
         code = "for (int64_t " + iv + " = 0; " + iv + " < " + dims.get(k) + "; " + iv + "++) { " + code + " }"
     end
@@ -309,6 +309,9 @@ end
 
 func cg_assign_tail(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
     nn := at.Get(a, n)
+    if cg_wide_assign(g, s, a, n):
+        ret
+    end
     if nn.op != tok.TK_ASSIGN and nn.a != 0 and str.Len(at.Get(a, nn.a).type_str) > 0:
         base_op := cg_compound_base(nn.op)
         if base_op != tok.TK_EOF:
@@ -340,7 +343,7 @@ func cg_assign_tail(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
     if nn.op == tok.TK_POWER_EQ:
         a_ts := at.Get(a, nn.a).type_str
         ct2 := cg_ctype(str.Len(a_ts) > 0 ? a_ts : "double")
-        g.tmpn += 1
+        g.tmpn++
         t2 := g.tmpn
         lhs := cg_expr(g, s, a, nn.a)
         rhs := cg_expr(g, s, a, nn.b)
@@ -385,7 +388,7 @@ func cg_compound_index_set(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): bool:
     mangled := cg_mangle_method(
         g, s, sname, ssym, "operator_index_set", sm.SigAt(s, sig).params
     )
-    g.tmpn += 1
+    g.tmpn++
     t := g.tmpn
     rv := "__ixr" + t
     iv := "__ixi" + t
@@ -393,7 +396,7 @@ func cg_compound_index_set(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): bool:
     ct := cg_ctype(cts)
     its := at.Get(a, ixn.b).type_str
     cg_line(g, "{")
-    g.indent += 1
+    g.indent++
     if cg_addressable(s, a, ixn.a):
         cg_line(g, ct + " *" + rv + " = &(" + cg_expr(g, s, a, ixn.a) + ");")
     else:
@@ -412,7 +415,7 @@ func cg_compound_index_set(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int): bool:
     cg_assign_tail(g, s, a, n)
     g.arg_ovr.remove(nn.a)
     cg_line(g, mangled + "(" + rv + ", " + iv + ", " + vv + ");")
-    g.indent -= 1
+    g.indent--
     cg_line(g, "}")
     ret true
 end
@@ -528,7 +531,7 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
                                     g, mangled + "(" + recv + ", " + idx_c + ", " + val_c + ");"
                                 )
                             else:
-                                g.tmpn += 1
+                                g.tmpn++
                                 t := g.tmpn
                                 cts2 := at.Get(a, container).type_str
                                 ct := cg_ctype(str.Len(cts2) > 0 ? cts2 : sname)
@@ -593,7 +596,7 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
             expr := cg_expr_value(g, s, a, nn.a)
             r_ts := at.Get(a, nn.a).type_str
             r_act := cg_array_ctype(r_ts)
-            g.tmpn += 1
+            g.tmpn++
             t := g.tmpn
             tmp := "__retv" + t
             if str.Len(r_act) > 0:
@@ -637,11 +640,11 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
     end
     if k == at.AST_MATCH:
         subj_ts := at.Get(a, nn.a).type_str
-        g.tmpn += 1
+        g.tmpn++
         t := g.tmpn
         subj_var := "__msubj" + t
         cg_line(g, "{")
-        g.indent += 1
+        g.indent++
         cg_line(
             g, cg_ctype(str.Len(subj_ts) > 0 ? subj_ts : "int32_t") + " " + subj_var + " = (" + cg_expr(g, s, a, nn.a) + ");"
         )
@@ -650,27 +653,27 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
             armid := nn.list.get(i)
             cond := cg_unparen(cg_match_arm_cond(g, s, a, armid, subj_var, subj_ts))
             cg_line(g, (i > 0 ? "} else " : "") + "if (" + cond + ") {")
-            g.indent += 1
+            g.indent++
             cg_scoped_stmts(g, s, a, at.Get(a, armid).b)
-            g.indent -= 1
+            g.indent--
         end
         _ms := g.match_subj.pop()
         if nn.list.len() > 0:
             cg_line(g, "}")
         end
-        g.indent -= 1
+        g.indent--
         cg_line(g, "}")
         ret
     end
     if k == at.AST_SWITCH:
         subj_ts2 := at.Get(a, nn.a).type_str
-        g.tmpn += 1
+        g.tmpn++
         t2 := g.tmpn
         subj_var2 := "__swsubj" + t2
         matched_var := "__swmatched" + t2
         end_lbl := "__swend" + t2
         cg_line(g, "{")
-        g.indent += 1
+        g.indent++
         cg_line(
             g, cg_ctype(str.Len(subj_ts2) > 0 ? subj_ts2 : "int32_t") + " " + subj_var2 + " = (" + cg_expr(g, s, a, nn.a) + ");"
         )
@@ -689,15 +692,15 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
                     end
                     cg_line(g, labels + "{")
                 end
-                g.indent += 1
+                g.indent++
                 cg_scoped_stmts(g, s, a, cs3.b)
-                g.indent -= 1
+                g.indent--
                 cg_line(g, "}")
             end
             cg_line(g, "}")
             cg_switch_pop(g)
             cg_line(g, "goto " + end_lbl + "; " + end_lbl + ": ;")
-            g.indent -= 1
+            g.indent--
             cg_line(g, "}")
             ret
         end
@@ -710,14 +713,14 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
                 g, "if (!" + matched_var + " && (" + cond2 + ")) { " + matched_var + " = true; }"
             )
             cg_line(g, "if (" + matched_var + ") {")
-            g.indent += 1
+            g.indent++
             cg_scoped_stmts(g, s, a, at.Get(a, csid).b)
-            g.indent -= 1
+            g.indent--
             cg_line(g, "}")
         end
         cg_switch_pop(g)
         cg_line(g, "goto " + end_lbl + "; " + end_lbl + ": ;")
-        g.indent -= 1
+        g.indent--
         cg_line(g, "}")
         ret
     end
@@ -749,29 +752,29 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
     end
     if k == at.AST_IF:
         cg_line(g, "if (" + cg_cond(g, s, a, nn.a) + ") {")
-        g.indent += 1
+        g.indent++
         cg_scoped_stmts(g, s, a, nn.b)
-        g.indent -= 1
+        g.indent--
         if nn.c != 0 and at.KindOf(a, nn.c) == at.AST_IF:
             cg_indent(g)
             out(g, "} else ")
             en := at.Get(a, nn.c)
             out(g, "if (" + cg_cond(g, s, a, en.a) + ") {\n")
-            g.indent += 1
+            g.indent++
             cg_scoped_stmts(g, s, a, en.b)
-            g.indent -= 1
+            g.indent--
             if en.c != 0:
                 cg_line(g, "} else {")
-                g.indent += 1
+                g.indent++
                 cg_stmt(g, s, a, en.c)
-                g.indent -= 1
+                g.indent--
             end
             cg_line(g, "}")
         else nn.c != 0:
             cg_line(g, "} else {")
-            g.indent += 1
+            g.indent++
             cg_scoped_stmts(g, s, a, nn.c)
-            g.indent -= 1
+            g.indent--
             cg_line(g, "}")
         else:
             cg_line(g, "}")
@@ -780,17 +783,17 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
     end
     if k == at.AST_UNTIL:
         cg_line(g, "while (" + cg_cond(g, s, a, nn.a) + ") {")
-        g.indent += 1
+        g.indent++
         cg_loop_push(g)
         cg_scoped_stmts(g, s, a, nn.b)
         cg_loop_pop(g)
-        g.indent -= 1
+        g.indent--
         cg_line(g, "}")
         cg_loop_close(g)
         ret
     end
     if k == at.AST_REPEAT:
-        g.tmpn += 1
+        g.tmpn++
         t := g.tmpn
         if nn.c != 0:
             from_c := cg_expr(g, s, a, nn.a)
@@ -808,7 +811,7 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
                 g, "for (" + ctl + " __rep" + t + " = 0, __repn" + t + " = (" + ctl + ")(" + cg_expr(g, s, a, nn.a) + "); __rep" + t + " < __repn" + t + "; __rep" + t + "++) {"
             )
         end
-        g.indent += 1
+        g.indent++
         cg_loop_push(g)
         mark := g.locals.len()
         if str.Len(nn.name) > 0:
@@ -822,7 +825,7 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
         cg_scoped_stmts(g, s, a, nn.b)
         locals_trunc(g, mark)
         cg_loop_pop(g)
-        g.indent -= 1
+        g.indent--
         cg_line(g, "}")
         cg_loop_close(g)
         ret
@@ -842,11 +845,11 @@ func cg_stmt(g &: Cg, s &: sm.Sema, a &: at.Ast, n: int):
             post = cg_simple_inline(g, s, a, nn.c)
         end
         cg_line(g, "for (" + init + "; " + cond + "; " + post + ") {")
-        g.indent += 1
+        g.indent++
         cg_loop_push(g)
         cg_scoped_stmts(g, s, a, nn.d)
         cg_loop_pop(g)
-        g.indent -= 1
+        g.indent--
         cg_line(g, "}")
         cg_loop_close(g)
         locals_trunc(g, mark)

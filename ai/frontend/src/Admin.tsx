@@ -8,6 +8,7 @@ import { Markdown } from "./Markdown";
 import { RequestList } from "./Requests";
 import { confirmDialog, Subject } from "./Confirm";
 import { t } from "./i18n";
+import { planName } from "./Plans";
 import { Checkbox } from "./Checkbox";
 
 type Picked = { id: number; name: string } | null;
@@ -418,7 +419,12 @@ function Users({ picked, onPick, notify }: { picked: Picked; onPick: (p: Picked)
   const [q, setQ] = useState("");
   const [query, setQuery] = useState("");
   const [offset, setOffset] = useState(0);
-  const [data, setData] = useState<{ users: AdminUser[]; total: number } | null>(null);
+  const [data, setData] = useState<{
+    users: AdminUser[];
+    total: number;
+    plain_ready?: boolean;
+    desktop_plain_ready?: boolean;
+  } | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
 
@@ -482,6 +488,16 @@ function Users({ picked, onPick, notify }: { picked: Picked; onPick: (p: Picked)
           <input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("جست‌وجوی نام یا ایمیل", "Search name or email")} />
         </label>
       </div>
+      {data && data.plain_ready === false && (
+        <p className="policy-warn" role="status">
+          {t("موتور پروفایل ساده ندارد (AI_ENGINE_AGENT_RAW)، پس حساب‌هایی که محدودیت فقط-سلام‌شان برداشته شده هنوز با پروفایل سلام پاسخ می‌گیرند.", "The engine has no plain profile (AI_ENGINE_AGENT_RAW), so accounts whose Salam-only limit is lifted are still answered by the Salam profile.")}
+        </p>
+      )}
+      {data && data.desktop_plain_ready === false && (
+        <p className="policy-warn" role="status">
+          {t("برای ایجنت، AI_ENGINE_AGENT_DESKTOP_RAW تنظیم نشده؛ حساب آزاد در ایجنت یا ابزارهای دسکتاپ را از دست می‌دهد یا همان سیاست سلام را می‌گیرد.", "AI_ENGINE_AGENT_DESKTOP_RAW is not configured; a lifted account in the desktop agent either loses its desktop tools or keeps the Salam policy.")}
+        </p>
+      )}
       {error && (
         <div className="form-error" role="alert">
           {error}
@@ -866,10 +882,10 @@ function Subscriptions({ picked, notify }: { picked: Picked; notify: (msg: strin
   const cancel = async (row: AdminSubscription) => {
     const ok = await confirmDialog({
       title: t("لغو اشتراک", "Cancel subscription"),
-      subject: row.user?.email ?? row.plan_name,
+      subject: row.user?.email ?? planName(row.plan, row.plan_name),
       message: (
         <>
-          {t("اشتراک", "This user's")} <Subject>{row.plan_name}</Subject> {t("این کاربر لغو می‌شود و به پلن رایگان برمی‌گردد.", "subscription will be canceled and they go back to the free plan.")}
+          {t("اشتراک", "This user's")} <Subject>{planName(row.plan, row.plan_name)}</Subject> {t("این کاربر لغو می‌شود و به پلن رایگان برمی‌گردد.", "subscription will be canceled and they go back to the free plan.")}
         </>
       ),
       confirmLabel: t("لغو اشتراک", "Cancel subscription"),
@@ -985,7 +1001,7 @@ function Subscriptions({ picked, notify }: { picked: Picked; notify: (msg: strin
                       {r.user?.email}
                     </span>
                   </td>
-                  <td>{r.plan_name}</td>
+                  <td>{planName(r.plan, r.plan_name)}</td>
                   <td>{fmtDate(r.started)}</td>
                   <td>{r.expires === 0 ? t("بدون پایان", "No end") : fmtDate(r.expires)}</td>
                   <td>{r.source === "admin" ? t("هدیه‌ی مدیر", "Admin gift") : t("پرداخت", "Payment")}</td>
@@ -1095,7 +1111,7 @@ function Payments({ picked }: { picked: Picked }) {
                       {r.user?.email}
                     </span>
                   </td>
-                  <td>{r.plan_name}</td>
+                  <td>{planName(r.plan, r.plan_name)}</td>
                   <td>{toman(r.amount)}</td>
                   <td>{GATEWAY_WORDS[r.gateway] ?? r.gateway}</td>
                   <td>

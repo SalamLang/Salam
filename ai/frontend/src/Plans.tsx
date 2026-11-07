@@ -24,6 +24,36 @@ const RESULTS: Record<string, { tone: "ok" | "warn"; text: string }> = {
   pending: { tone: "warn", text: t("پرداخت شما در حال بررسی است. چند لحظه بعد این صفحه را تازه کنید.", "Your payment is being checked. Refresh this page in a moment.") },
 };
 
+export function planName(id: PlanId, fallback: string): string {
+  switch (id) {
+    case "free":
+      return t("رایگان", "Free");
+    case "plus":
+      return t("پلاس", "Plus");
+    case "pro":
+      return t("حرفه‌ای", "Pro");
+    case "unlimited":
+      return t("نامحدود", "Unlimited");
+    default:
+      return fallback;
+  }
+}
+
+function planNote(id: PlanId, fallback: string): string {
+  switch (id) {
+    case "free":
+      return t("برای آشنایی با دستیار سلام و کارهای کوچک", "To get to know the Salam assistant and for small tasks");
+    case "plus":
+      return t("برای کار روزمره با دستیار و کلید API", "For everyday work with the assistant and an API key");
+    case "pro":
+      return t("برای کار سنگین‌تر و ایجنت‌هایی مثل Cline", "For heavier work and agents like Cline");
+    case "unlimited":
+      return t("بدون هیچ محدودیتی، بدون انقضا", "No limits at all, no expiry");
+    default:
+      return fallback;
+  }
+}
+
 function errText(e: unknown, fallback: string) {
   return e instanceof ApiError ? e.message : fallback;
 }
@@ -123,7 +153,7 @@ export function Plans({ notify }: { notify: (msg: string) => void }) {
           </div>
           <div className="plan-now">
             <strong className="plan-now-name">
-              <IconSpark width={18} height={18} /> {current.plan.name}
+              <IconSpark width={18} height={18} /> {planName(current.plan.id, current.plan.name)}
             </strong>
             <span className="muted">
               {current.expires === 0 ? t("بدون تاریخ پایان", "No end date") : t(`تا ${fmtDate(current.expires)}`, `Until ${fmtDate(current.expires)}`)}
@@ -168,14 +198,14 @@ export function Plans({ notify }: { notify: (msg: string) => void }) {
                   <span className="plan-icon" aria-hidden="true">
                     <IconSpark width={20} height={20} />
                   </span>
-                  <h3>{p.name}</h3>
+                  <h3>{planName(p.id, p.name)}</h3>
                 </header>
                 <div className="plan-priceblock">
                   <span className="plan-price">{price}</span>
                   {unit && <span className="plan-unit">{unit}</span>}
                 </div>
                 <p className="plan-period">{period}</p>
-                {p.note && <p className="plan-note">{p.note}</p>}
+                {p.note && <p className="plan-note">{planNote(p.id, p.note)}</p>}
                 <ul className="plan-features">
                   {features(p).map((f) => (
                     <li key={f}>
@@ -204,6 +234,19 @@ export function Plans({ notify }: { notify: (msg: string) => void }) {
         </div>
       )}
 
+      <section className="card panel">
+        <div className="panel-head">
+          <h3>{t("محدودیت‌ها، صادقانه", "Limits, honestly")}</h3>
+        </div>
+        <ul className="plan-limits">
+          <li>{t("پلن نامحدود سقف پیام و درخواست در ساعت و سقف درخواست هم‌زمان ندارد.", "The Unlimited plan has no per-hour message or request cap and no cap on parallel requests.")}</li>
+          <li>{t("هر نوبت در پلن نامحدود تا ۱۲ ساعت می‌تواند ادامه پیدا کند. پلن‌های دیگر: گفت‌وگو ۱۰ دقیقه و ایجنت رومیزی ۱ ساعت برای هر نوبت.", "On Unlimited a single turn can run up to 12 hours. Other plans: 10 minutes per chat turn and 1 hour per desktop agent turn.")}</li>
+          <li>{t("اگر نوبتی به سقف زمانی برسد، متن تا آن لحظه می‌ماند و با نوشتن «ادامه بده» از همان‌جا ادامه پیدا می‌کند.", "If a turn reaches its time limit, the text so far is kept and you can write \"continue\" to pick up from there.")}</li>
+          <li>{t("پیام‌هایی که مهمان‌ها از راه یک پیوند همکاری می‌فرستند هم از پیام‌ها و سهمیه‌ی پلن صاحب گفت‌وگو کم می‌شود. با رسیدن به سقف ساعتی، پیوند خودکار متوقف می‌شود.", "Messages guests send through a collaborate link also count against the chat owner's plan and limits. When the hourly limit is reached the link pauses itself.")}</li>
+          <li>{t("هر ابزار روی رایانه شما تا ۱۰ دقیقه برای پاسخ مهلت دارد و سرور برای دادن حافظه گاهی دوباره راه‌اندازی می‌شود. بستن برنامه یا قطع اینترنت رایانه شما کار را متوقف می‌کند، اما صفحه پس از وصل شدن دوباره به نوبت در حال اجرا برمی‌گردد.", "Each tool on your computer gets up to 10 minutes to answer, and the server sometimes restarts to free memory. Closing the app or losing your computer's internet pauses the work, but the page reattaches to the running turn when it reconnects.")}</li>
+        </ul>
+      </section>
+
       {payments.length > 0 && (
         <section className="card panel">
           <div className="panel-head">
@@ -225,7 +268,7 @@ export function Plans({ notify }: { notify: (msg: string) => void }) {
                 {payments.map((p) => (
                   <tr key={p.id}>
                     <td>{fmtDate(p.created)}</td>
-                    <td>{p.plan_name}</td>
+                    <td>{planName(p.plan, p.plan_name)}</td>
                     <td>{toman(p.amount)}</td>
                     <td>{GATEWAY_NAMES[p.gateway] ?? p.gateway}</td>
                     <td>

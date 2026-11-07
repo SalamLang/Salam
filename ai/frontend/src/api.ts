@@ -14,6 +14,71 @@ export type Chat = {
   cloud?: boolean;
   device_id?: number;
   workspace?: string;
+  shared?: ShareKind[];
+  state?: "working" | "queued" | "waiting" | "idle" | "offline";
+  phase?: "thinking" | "writing" | "tool";
+  queued?: number;
+  online?: boolean;
+  last_error?: boolean;
+};
+export type ShareKind = "view" | "collab";
+export type ShareState =
+  | "ok"
+  | "paused"
+  | "limit"
+  | "expired"
+  | "cap"
+  | "daily";
+export type Share = {
+  kind: ShareKind;
+  state: ShareState;
+  paused: boolean;
+  reason: string;
+  expires: number;
+  created: number;
+  last_used: number;
+  views: number;
+  max_messages: number;
+  max_daily: number;
+  label: string;
+  messages: number;
+  today: number;
+  tokens: number;
+  can_copy: boolean;
+  token?: string;
+  url?: string;
+  guests: { name: string; count: number; last: number }[];
+};
+export type ShareList = {
+  shares: Share[];
+  collab_allowed: boolean;
+  collab_refusal: "" | "device" | "cloud";
+  hide_tools: boolean;
+  default_hours: number;
+  default_cap: number;
+  default_daily: number;
+  ceiling: number;
+};
+export type SharePatch = {
+  paused?: boolean;
+  hours?: number;
+  max_messages?: number;
+  max_daily?: number;
+  label?: string;
+};
+export type PublicShare = {
+  share: {
+    kind: ShareKind;
+    state: ShareState;
+    collab: boolean;
+    readable: boolean;
+    expires: number;
+    hide_tools: boolean;
+    label: string;
+  };
+  chat: { title: string };
+  messages: Message[];
+  phase: Phase;
 };
 export type FileMeta = {
   id: number;
@@ -50,7 +115,12 @@ export type TelegramStatus = {
   links: TelegramAccount[];
 };
 export type OutgoingFile = { name: string; data: string };
+export type SpeechLang = "fa" | "en";
 export type Capabilities = {
+  speech?: boolean;
+  speech_languages?: SpeechLang[];
+  speech_max_seconds?: number;
+  speech_max_bytes?: number;
   image: boolean;
   pdf: boolean;
   max_files: number;
@@ -140,6 +210,7 @@ export type Message = {
   ms?: number;
   files?: FileMeta[];
   effort?: "low" | "medium" | "high";
+  guest?: string;
 };
 export type QueueItem = {
   id: number;
@@ -216,6 +287,8 @@ export type MessageCall = {
   state: CallState;
   output: string;
   image?: boolean;
+  image_data?: string;
+  image_mime?: string;
 };
 
 export type PlanId = "free" | "plus" | "pro" | "unlimited";
@@ -321,6 +394,7 @@ export type UsageTotals = {
   cost: number;
   cost_in: number;
   cost_out: number;
+  tools?: number;
 };
 export type UsagePeriodKey = "today" | "week" | "month" | "last_month" | "all";
 export type UsagePeriod = {
@@ -329,6 +403,43 @@ export type UsagePeriod = {
   to: number;
   chat: UsageTotals;
   api: UsageTotals;
+};
+export type UsageDay = {
+  day: string;
+  chat_count: number;
+  chat_in: number;
+  chat_out: number;
+  api_count: number;
+  api_in: number;
+  api_out: number;
+};
+export type UsageBreakdown = {
+  kind?: "chat" | "api";
+  name: string;
+  count: number;
+  input: number;
+  output: number;
+};
+export type UsageReport = {
+  now: number;
+  plan: {
+    id: string;
+    name: string;
+    expires: number;
+    chat_hourly: number;
+    api_hourly: number;
+    parallel: number;
+  };
+  hourly: {
+    chat_used: number;
+    api_used: number;
+    window_seconds: number;
+  };
+  periods: UsagePeriod[];
+  daily: UsageDay[];
+  sources: UsageBreakdown[];
+  keys: UsageBreakdown[];
+  projects: UsageBreakdown[];
 };
 export type RequestUsage = {
   input: number;
@@ -606,11 +717,7 @@ export function handleUnauthorized(fn: () => void) {
   onUnauthorized = fn;
 }
 
-async function call<T>(
-  method: string,
-  path: string,
-  body?: unknown,
-): Promise<T> {
+function clientHeaders(anonymous = false): Record<string, string> {
   const headers: Record<string, string> = {
     "X-Salam-Client": isDesktop ? "agent" : "web",
     "X-Salam-Lang": lang,
@@ -620,8 +727,18 @@ async function call<T>(
   if (clientPlatform.version)
     headers["X-Salam-OS-Version"] = clientPlatform.version;
   if (clientPlatform.arch) headers["X-Salam-Arch"] = clientPlatform.arch;
-  const token = getToken();
+  const token = anonymous ? "" : getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
+  return headers;
+}
+
+async function call<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+  anonymous = false,
+): Promise<T> {
+  const headers = clientHeaders(anonymous);
   if (body !== undefined) headers["Content-Type"] = "application/json";
   let res: Response;
   try {
@@ -645,7 +762,8 @@ async function call<T>(
     data = await res.json();
   } catch {}
   if (!res.ok) {
-    if (res.status === 401 && path !== "/auth/login") onUnauthorized();
+    if (res.status === 401 && path !== "/auth/login" && !anonymous)
+      onUnauthorized();
     throw new ApiError(
       res.status,
       data?.error || "server",
@@ -657,6 +775,57 @@ async function call<T>(
     );
   }
   return data as unknown as T;
+}
+
+export type SpokenText = {
+  text: string;
+  language: SpeechLang;
+  seconds: number;
+};
+
+export async function transcribe(
+  audio: Blob,
+  language: SpeechLang,
+  signal: AbortSignal,
+): Promise<SpokenText> {
+  const headers = clientHeaders();
+  headers["Content-Type"] = audio.type || "audio/webm";
+  let res: Response;
+  try {
+    res = await fetch(`${BASE}/speech/transcribe?lang=${language}`, {
+      method: "POST",
+      headers,
+      body: audio,
+      signal,
+    });
+  } catch (error) {
+    if (signal.aborted) throw error;
+    throw new ApiError(
+      0,
+      "network",
+      t(
+        "ارتباط با سرور برقرار نشد. اتصال اینترنت را بررسی کنید.",
+        "Could not reach the server. Check your internet connection.",
+      ),
+    );
+  }
+  let data: (SpokenText & { error?: string; message?: string }) | null = null;
+  try {
+    data = await res.json();
+  } catch {}
+  if (!res.ok || !data) {
+    if (res.status === 401) onUnauthorized();
+    throw new ApiError(
+      res.status,
+      data?.error || "server",
+      data?.message ||
+        t(
+          "تبدیل گفتار الان در دسترس نیست. کمی بعد دوباره تلاش کنید.",
+          "Voice input is not available right now. Please try again later.",
+        ),
+    );
+  }
+  return data;
 }
 
 export type StreamHandlers = {
@@ -763,8 +932,20 @@ export const api = {
   createChat: (
     options?: { device_id: string; workspace: string } | { cloud: true },
   ) => call<{ chat: Chat }>("POST", "/chats", options),
-  authProviders: () =>
-    call<{ github: boolean; figma: boolean }>("GET", "/auth/providers"),
+  authProviders: async () => {
+    const early = (
+      window as unknown as {
+        __salamProviders?: Promise<{ github: boolean; figma: boolean } | null>;
+      }
+    ).__salamProviders;
+    if (early) {
+      (window as unknown as { __salamProviders?: unknown }).__salamProviders =
+        undefined;
+      const r = await early;
+      if (r) return r;
+    }
+    return call<{ github: boolean; figma: boolean }>("GET", "/auth/providers");
+  },
   startProvider: (provider: string, next: string) =>
     call<{ url: string; state: string }>(
       "POST",
@@ -801,6 +982,33 @@ export const api = {
       calls?: MessageCall[];
       queue?: QueueItem[];
     }>("GET", `/chats/${id}`),
+  shares: (id: string) => call<ShareList>("GET", `/chats/${id}/shares`),
+  createShare: (id: string, kind: ShareKind, hours?: number) =>
+    call<ShareList>(
+      "POST",
+      `/chats/${id}/shares`,
+      hours === undefined ? { kind } : { kind, hours },
+    ),
+  patchShare: (id: string, kind: ShareKind, patch: SharePatch) =>
+    call<ShareList>("PATCH", `/chats/${id}/shares/${kind}`, patch),
+  regenerateShare: (id: string, kind: ShareKind) =>
+    call<ShareList>("POST", `/chats/${id}/shares/${kind}/regenerate`),
+  deleteShare: (id: string, kind: ShareKind) =>
+    call<ShareList>("DELETE", `/chats/${id}/shares/${kind}`),
+  sharedChat: (token: string, after: number) =>
+    call<PublicShare>(
+      "GET",
+      `/shares/${token}${after > 0 ? `?after=${after}` : ""}`,
+      undefined,
+      true,
+    ),
+  sharedSend: (token: string, text: string, name: string) =>
+    call<{ user: Message; assistant: Message; title: string }>(
+      "POST",
+      `/shares/${token}/messages`,
+      { text, name },
+      true,
+    ),
   renameChat: (id: string, title: string) =>
     call<{ title: string }>("PATCH", `/chats/${id}`, { title }),
   deleteChat: (id: string) => call<{ ok: boolean }>("DELETE", `/chats/${id}`),
@@ -948,10 +1156,12 @@ export const api = {
     ),
   adminSummary: () => call<AdminSummary>("GET", "/admin/summary"),
   adminUsers: (q: string, offset: number) =>
-    call<{ users: AdminUser[]; total: number }>(
-      "GET",
-      `/admin/users${query({ q, offset: offset || undefined })}`,
-    ),
+    call<{
+      users: AdminUser[];
+      total: number;
+      plain_ready?: boolean;
+      desktop_plain_ready?: boolean;
+    }>("GET", `/admin/users${query({ q, offset: offset || undefined })}`),
   adminTelegram: () => call<AdminTelegram>("GET", "/admin/telegram"),
   adminUserPolicy: (
     id: number,
@@ -1007,6 +1217,7 @@ export const api = {
       { plan, gateway },
     ),
   payments: () => call<{ payments: Payment[] }>("GET", "/billing/payments"),
+  usage: () => call<UsageReport>("GET", "/usage"),
   adminSubscriptions: (latest?: boolean, user?: number) =>
     call<{
       subscriptions: AdminSubscription[];

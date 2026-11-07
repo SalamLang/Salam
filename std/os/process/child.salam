@@ -1,0 +1,1039 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import os.internal.fdio
+import time
+
+if SALAM_OS_WINDOWS:
+    extern:
+        func CreatePipe(rd: void*, wr: void*, attr: void*, size: u32): int
+        func SetHandleInformation(h: void*, mask: u32, flags: u32): int
+        func GetStdHandle(which: i32): void*
+        func SetEnvironmentVariableA(name: str, value: void*): int
+        func GetEnvironmentVariableA(name: str, buf: void*, size: u32): u32
+        func Sleep(ms: int)
+    end
+else:
+    extern:
+        func fcntl(fd: int, cmd: int, ...): int
+        func usleep(us: u32): int
+        func signal(sig: int, handler: void*): void*
+    end
+end
+
+@en "Inherit"
+@fa "به ارث"
+pub const Inherit := 0
+
+@en "Pipe"
+@fa "لوله"
+pub const Pipe := 1
+
+@en "Null"
+@fa "تهی"
+pub const Null := 2
+
+@en "Merge"
+@fa "ادغام"
+pub const Merge := 3
+
+@en "SigHup"
+@fa "سیگنال قطع"
+pub const SigHup := 1
+
+@en "SigInt"
+@fa "سیگنال وقفه"
+pub const SigInt := 2
+
+@en "SigQuit"
+@fa "سیگنال خروج"
+pub const SigQuit := 3
+
+@en "SigKill"
+@fa "سیگنال کشتن"
+pub const SigKill := 9
+
+@en "SigTerm"
+@fa "سیگنال خاتمه"
+pub const SigTerm := 15
+
+mut _sigpipe_ignored := false
+
+@en "Command"
+@fa "فرمان"
+pub struct Command:
+    @en "program"
+    @fa "برنامه"
+    pub program: str = ""
+    @en "args"
+    @fa "آرگومان ها"
+    pub args: Vector<str> = Vector {}
+    @en "cwd"
+    @fa "پوشه کاری"
+    pub cwd: str = ""
+    @en "env"
+    @fa "محیط"
+    pub env: HashMap<str, str> = HashMap {}
+    @en "unset_env"
+    @fa "حذف از محیط"
+    pub unset_env: Vector<str> = Vector {}
+    @en "clear_env"
+    @fa "محیط خالی"
+    pub clear_env: bool = false
+    @en "stdin_mode"
+    @fa "حالت ورودی"
+    pub stdin_mode: int = 0
+    @en "stdout_mode"
+    @fa "حالت خروجی"
+    pub stdout_mode: int = 0
+    @en "stderr_mode"
+    @fa "حالت خطا"
+    pub stderr_mode: int = 0
+    @en "new_group"
+    @fa "گروه تازه"
+    pub new_group: bool = false
+
+    @en "Arg"
+    @fa "افزودن آرگومان"
+    pub func Arg(a: str):
+        this.args.push(a)
+    end
+
+    @en "Env"
+    @fa "تنظیم محیط"
+    pub func Env(name: str, value: str):
+        this.env.put(name, value)
+    end
+
+    @en "Unset"
+    @fa "حذف محیط"
+    pub func Unset(name: str):
+        this.unset_env.push(name)
+    end
+
+    @en "Piped"
+    @fa "همه لوله"
+    pub func Piped():
+        this.stdin_mode = 1
+        this.stdout_mode = 1
+        this.stderr_mode = 1
+    end
+
+    @en "Free"
+    @fa "آزادسازی"
+    pub func Free():
+        this.args.free()
+        this.env.free()
+        this.unset_env.free()
+    end
+end
+
+@en "Status"
+@fa "وضعیت"
+pub struct Status:
+    @en "exited"
+    @fa "خارج شد"
+    pub exited: bool = false
+    @en "code"
+    @fa "کد"
+    pub code: int = 0
+    @en "signaled"
+    @fa "سیگنال خورد"
+    pub signaled: bool = false
+    @en "signal"
+    @fa "سیگنال"
+    pub signal: int = 0
+    @en "timed_out"
+    @fa "مهلت تمام شد"
+    pub timed_out: bool = false
+
+    @en "Success"
+    @fa "موفق"
+    pub func Success(): bool:
+        ret this.exited and this.code == 0
+    end
+
+    @en "ReturnCode"
+    @fa "کد بازگشت"
+    pub func ReturnCode(): int:
+        if this.signaled: ret 0 - this.signal end
+        if this.exited: ret this.code end
+        ret 0 - 1000
+    end
+end
+
+@en "Chunk"
+@fa "تکه"
+pub struct Chunk:
+    @en "data"
+    @fa "داده"
+    pub data: str = ""
+    @en "len"
+    @fa "طول"
+    pub len: int = 0
+    @en "eof"
+    @fa "پایان"
+    pub eof: bool = false
+    @en "timed_out"
+    @fa "مهلت تمام شد"
+    pub timed_out: bool = false
+
+    @en "Free"
+    @fa "آزادسازی"
+    pub func Free():
+        mem.Free(this.data as void*)
+        this.data = ""
+        this.len = 0
+    end
+end
+
+@en "RunResult"
+@fa "نتیجه اجرا"
+pub struct RunResult:
+    @en "started"
+    @fa "راه افتاد"
+    pub started: bool = false
+    @en "status"
+    @fa "وضعیت"
+    pub status: Status = Status {}
+    @en "stdout"
+    @fa "خروجی"
+    pub stdout: str = ""
+    @en "stderr"
+    @fa "خروجی خطا"
+    pub stderr: str = ""
+    @en "timed_out"
+    @fa "مهلت تمام شد"
+    pub timed_out: bool = false
+
+    @en "Free"
+    @fa "آزادسازی"
+    pub func Free():
+        if this.started:
+            mem.Free(this.stdout as void*)
+            mem.Free(this.stderr as void*)
+        end
+        this.stdout = ""
+        this.stderr = ""
+    end
+end
+
+@en "Child"
+@fa "فرزند"
+pub struct Child:
+    @en "pid"
+    @fa "شناسه"
+    pub pid: int = 0
+    @en "ok"
+    @fa "راه افتاد"
+    pub ok: bool = false
+    @en "error"
+    @fa "خطا"
+    pub error: str = ""
+    @en "finished"
+    @fa "تمام شده"
+    pub finished: bool = false
+    @en "status"
+    @fa "وضعیت"
+    pub status: Status = Status {}
+    @en "h_in"
+    @fa "دسته ورودی"
+    pub h_in: i64 = -1
+    @en "h_out"
+    @fa "دسته خروجی"
+    pub h_out: i64 = -1
+    @en "h_err"
+    @fa "دسته خطا"
+    pub h_err: i64 = -1
+    @en "h_proc"
+    @fa "دسته فرآیند"
+    pub h_proc: i64 = -1
+    @en "sent_signal"
+    @fa "سیگنال فرستاده"
+    pub sent_signal: int = 0
+    @en "out_buf"
+    @fa "میان گیر خروجی"
+    pub out_buf: fdio.Buf = fdio.Buf {}
+    @en "err_buf"
+    @fa "میان گیر خطا"
+    pub err_buf: fdio.Buf = fdio.Buf {}
+
+    @en "Write"
+    @fa "نوشتن"
+    pub func Write(text: str): bool:
+        if this.h_in < 0: ret false end
+        ret fdio.WriteAll(this.h_in, text as void*, text.len())
+    end
+
+    @en "WriteBytes"
+    @fa "نوشتن بایت"
+    pub func WriteBytes(data: void*, n: int): bool:
+        if this.h_in < 0: ret false end
+        ret fdio.WriteAll(this.h_in, data, n)
+    end
+
+    @en "CloseStdin"
+    @fa "بستن ورودی"
+    pub func CloseStdin():
+        if this.h_in >= 0 and this.h_in == this.h_out:
+            _ignored := this.Write("\x04")
+            ret
+        end
+        fdio.Close(this.h_in)
+        this.h_in = -1
+    end
+
+    @en "ReadAvailable"
+    @fa "خواندن موجود"
+    pub func ReadAvailable(ms: int): Chunk:
+        ret _read_avail(this.out_buf, this.h_out, ms)
+    end
+
+    @en "ReadLine"
+    @fa "خواندن خط"
+    pub func ReadLine(ms: int): Chunk:
+        ret _read_line(this.out_buf, this.h_out, ms)
+    end
+
+    @en "Read"
+    @fa "خواندن تعداد"
+    pub func Read(n: int, ms: int): Chunk:
+        ret _read_exact(this.out_buf, this.h_out, n, ms)
+    end
+
+    @en "ReadUntil"
+    @fa "خواندن برای متن"
+    pub func ReadUntil(text: str, ms: int): Chunk:
+        ret _read_until(this.out_buf, this.h_out, text, ms)
+    end
+
+    @en "ReadFor"
+    @fa "خواندن به مدت"
+    pub func ReadFor(ms: int): Chunk:
+        ret _read_for(this.out_buf, this.h_out, ms)
+    end
+
+    @en "ReadBytes"
+    @fa "خواندن بایت"
+    pub func ReadBytes(dst: void*, max: int, ms: int): int:
+        if this.out_buf.len > 0: ret fdio.TakeInto(this.out_buf, dst, max) end
+        r := fdio.Fill(this.out_buf, this.h_out, ms)
+        if r == 0: ret 0 end
+        if r < 0: ret 0 - 1 end
+        ret fdio.TakeInto(this.out_buf, dst, max)
+    end
+
+    @en "ReadErrAvailable"
+    @fa "خواندن خطای موجود"
+    pub func ReadErrAvailable(ms: int): Chunk:
+        ret _read_avail(this.err_buf, this.h_err, ms)
+    end
+
+    @en "ReadErrLine"
+    @fa "خواندن خط خطا"
+    pub func ReadErrLine(ms: int): Chunk:
+        ret _read_line(this.err_buf, this.h_err, ms)
+    end
+
+    @en "ReadErrUntil"
+    @fa "خواندن خطا برای متن"
+    pub func ReadErrUntil(text: str, ms: int): Chunk:
+        ret _read_until(this.err_buf, this.h_err, text, ms)
+    end
+
+    @en "ReadErrFor"
+    @fa "خواندن خطا به مدت"
+    pub func ReadErrFor(ms: int): Chunk:
+        ret _read_for(this.err_buf, this.h_err, ms)
+    end
+
+    @en "Wait"
+    @fa "انتظار"
+    pub func Wait(ms: int): Status:
+        if this.finished: ret this.status end
+        if this.pid <= 0: ret Status {} end
+        st := _wait_child(this.pid, this.h_proc, ms, this.sent_signal)
+        if not st.timed_out:
+            this.status = st
+            this.finished = true
+            if this.h_proc >= 0:
+                fdio.Close(this.h_proc)
+                this.h_proc = -1
+            end
+        end
+        ret st
+    end
+
+    @en "Poll"
+    @fa "در حال اجرا"
+    pub func Poll(): bool:
+        if this.finished: ret false end
+        _st := this.Wait(0)
+        ret not this.finished
+    end
+
+    @en "Signal"
+    @fa "فرستادن سیگنال"
+    pub func Signal(sig: int): bool:
+        if this.pid <= 0 or this.finished: ret false end
+        this.sent_signal = sig
+        ret _send_signal(this.pid, this.h_proc, sig, false)
+    end
+
+    @en "Kill"
+    @fa "کشتن"
+    pub func Kill(): bool:
+        ret this.Signal(9)
+    end
+
+    @en "Terminate"
+    @fa "پایان دادن"
+    pub func Terminate(): bool:
+        ret this.Signal(15)
+    end
+
+    @en "SignalGroup"
+    @fa "سیگنال گروه"
+    pub func SignalGroup(sig: int): bool:
+        if this.pid <= 0: ret false end
+        this.sent_signal = sig
+        ret _send_signal(this.pid, this.h_proc, sig, true)
+    end
+
+    @en "KillGroup"
+    @fa "کشتن گروه"
+    pub func KillGroup(): bool:
+        ret this.SignalGroup(9)
+    end
+
+    @en "Close"
+    @fa "بستن"
+    pub func Close():
+        if this.h_in != this.h_out: fdio.Close(this.h_in) end
+        fdio.Close(this.h_out)
+        fdio.Close(this.h_err)
+        fdio.Close(this.h_proc)
+        this.h_in = -1
+        this.h_out = -1
+        this.h_err = -1
+        this.h_proc = -1
+        fdio.Release(this.out_buf)
+        fdio.Release(this.err_buf)
+    end
+end
+
+func _now(): i64:
+    ret time.NowMillis()
+end
+
+func _left(deadline: i64, ms: int): int:
+    if ms < 0: ret 0 - 1 end
+    left := deadline - _now()
+    if left < 0: ret 0 end
+    ret left as int
+end
+
+func _chunk(data: str, n: int, eof: bool, timed_out: bool): Chunk:
+    ret Chunk { data = data, len = n, eof = eof, timed_out = timed_out }
+end
+
+func _take_all(b &: fdio.Buf, eof: bool): Chunk:
+    n := b.len
+    ret _chunk(fdio.Take(b, n), n, eof, false)
+end
+
+func _read_avail(b &: fdio.Buf, h: i64, ms: int): Chunk:
+    if b.len > 0: ret _take_all(b, false) end
+    r := fdio.Fill(b, h, ms)
+    if r == 0: ret _chunk(fdio.Empty(), 0, false, true) end
+    if r < 0: ret _chunk(fdio.Empty(), 0, true, false) end
+    ret _take_all(b, false)
+end
+
+func _read_line(b &: fdio.Buf, h: i64, ms: int): Chunk:
+    deadline := _now() + (ms as i64)
+    mut out := Chunk {}
+    until true:
+        i := fdio.IndexByte(b, 10, 0)
+        if i >= 0:
+            line := fdio.Take(b, i + 1)
+            bytes := line as u8*
+            mut n := i
+            bytes[n] = 0 as u8
+            if n > 0 and (bytes[n - 1] as int) == 13:
+                n--
+                bytes[n] = 0 as u8
+            end
+            out = _chunk(line, n, false, false)
+            break
+        end
+        r := fdio.Fill(b, h, _left(deadline, ms))
+        if r == 0:
+            out = _chunk(fdio.Empty(), 0, false, true)
+            break
+        end
+        if r < 0:
+            out = _take_all(b, true)
+            break
+        end
+    end
+    ret out
+end
+
+func _read_exact(b &: fdio.Buf, h: i64, n: int, ms: int): Chunk:
+    deadline := _now() + (ms as i64)
+    mut out := Chunk {}
+    until true:
+        if b.len >= n:
+            out = _chunk(fdio.Take(b, n), n, false, false)
+            break
+        end
+        r := fdio.Fill(b, h, _left(deadline, ms))
+        if r == 0:
+            out = _chunk(fdio.Empty(), 0, false, true)
+            break
+        end
+        if r < 0:
+            out = _take_all(b, true)
+            break
+        end
+    end
+    ret out
+end
+
+func _read_until(b &: fdio.Buf, h: i64, text: str, ms: int): Chunk:
+    deadline := _now() + (ms as i64)
+    m := text.len()
+    mut out := Chunk {}
+    until true:
+        i := fdio.IndexStr(b, text)
+        if i >= 0:
+            out = _chunk(fdio.Take(b, i + m), i + m, false, false)
+            break
+        end
+        r := fdio.Fill(b, h, _left(deadline, ms))
+        if r == 0:
+            out = _chunk(fdio.Empty(), 0, false, true)
+            break
+        end
+        if r < 0:
+            out = _take_all(b, true)
+            break
+        end
+    end
+    ret out
+end
+
+func _read_for(b &: fdio.Buf, h: i64, ms: int): Chunk:
+    deadline := _now() + (ms as i64)
+    mut eof := false
+    until true:
+        r := fdio.Fill(b, h, _left(deadline, ms))
+        if r == 0: break end
+        if r < 0:
+            eof = true
+            break
+        end
+    end
+    ret _take_all(b, eof)
+end
+
+func _decode(raw: int): Status:
+    low := raw & 127
+    if low == 0:
+        ret Status { exited = true, code = (raw >> 8) & 255 }
+    end
+    ret Status { signaled = true, signal = low }
+end
+
+if SALAM_OS_WINDOWS:
+    func _nap(ms: int):
+        Sleep(ms)
+    end
+
+    func _wait_child(_pid: int, handle: i64, ms: int, sent: int): Status:
+        if handle < 0: ret Status {} end
+        h := handle as void*
+        wait_ms := ms < 0 ? 0 - 1 : ms
+        r := WaitForSingleObject(h, wait_ms)
+        if r != 0: ret Status { timed_out = true } end
+        buf := mem.AllocateZeroed(4 as u64)
+        _ok := GetExitCodeProcess(h, buf)
+        code := (buf as u32*)[0] as int
+        mem.Free(buf)
+        if sent != 0 and code == 1:
+            ret Status { signaled = true, signal = sent }
+        end
+        ret Status { exited = true, code = code }
+    end
+
+    func _send_signal(pid: int, handle: i64, _sig: int, group: bool): bool:
+        if group:
+            mut args := Vector {} as Vector<str>
+            defer args.free()
+            args.push("/PID")
+            args.push(str.FromInt(pid as i64))
+            args.push("/T")
+            args.push("/F")
+            mut killer := Spawn(SpawnOptions { path = "taskkill", args = args })
+            _code := Wait(killer)
+            ret true
+        end
+        if handle < 0: ret false end
+        ret TerminateProcess(handle as void*, 1) != 0
+    end
+else:
+    func _nap(ms: int):
+        _ignored := usleep((ms * 1000) as u32)
+    end
+
+    func _wait_child(pid: int, _handle: i64, ms: int, _sent: int): Status:
+        buf := mem.AllocateZeroed(4 as u64)
+        defer mem.Free(buf)
+        start := _now()
+        mut delay := 1
+        mut out := Status { timed_out = true }
+        until true:
+            flags := ms < 0 ? 0 : 1
+            rc := waitpid(pid, buf, flags)
+            if rc == pid:
+                out = _decode((buf as int*)[0])
+                break
+            end
+            if rc < 0:
+                if ms < 0 and kill(pid, 0) == 0: continue end
+                out = Status { code = 0 - 1 }
+                break
+            end
+            if ms >= 0 and _now() - start >= (ms as i64): break end
+            _nap(delay)
+            if delay < 10: delay *= 2 end
+        end
+        ret out
+    end
+
+    func _send_signal(pid: int, _handle: i64, sig: int, group: bool): bool:
+        if group: ret kill(0 - pid, sig) == 0 end
+        ret kill(pid, sig) == 0
+    end
+end
+
+func _fail(c: Child, message: str, program: str): Child:
+    mut out := c
+    out.error = message
+    error.Set(error.ProcessFailed, message, "Launch", program, 0 - 1)
+    ret out
+end
+
+if SALAM_OS_WINDOWS:
+    func _mkpipe(parent_reads: bool): fdio.Pipe:
+        ends := mem.AllocateZeroed((_word() * 2) as u64)
+        defer mem.Free(ends)
+        sa := _build_sa()
+        defer mem.Free(sa)
+        rd := ends
+        wr := (ends as i64 + _word()) as void*
+        if CreatePipe(rd, wr, sa, 0 as u32) == 0: ret fdio.Pipe {} end
+        r := _ptr_at(ends, 0)
+        w := _ptr_at(ends, _word())
+        if parent_reads:
+            _a := SetHandleInformation(r, 1 as u32, 0 as u32)
+        else:
+            _b := SetHandleInformation(w, 1 as u32, 0 as u32)
+        end
+        ret fdio.Pipe { r = r as i64, w = w as i64, ok = true }
+    end
+
+    func _win_std(mode: int, which: i32, access: u32): i64:
+        if mode == 0: ret GetStdHandle(which) as i64 end
+        h := _open_inheritable("NUL", access, 3 as u32)
+        ret h as i64
+    end
+
+    func _win_env_block(c: Command): void*:
+        mut total := 2
+        each name, value in c.env:
+            total += name.len() + value.len() + 2
+        end
+        block := mem.AllocateZeroed(((total + 2) * 2) as u64) as u16*
+        mut pos := 0
+        each name, value in c.env:
+            w := _spawn_wide(name + "=" + value) as u16*
+            mut k := 0
+            until w[k] != (0 as u16):
+                block[pos] = w[k]
+                pos++
+                k++
+            end
+            block[pos] = 0 as u16
+            pos++
+            mem.Free(w as void*)
+        end
+        block[pos] = 0 as u16
+        ret block as void*
+    end
+
+    func _win_env_apply(c: Command): Vector<str>:
+        mut saved := Vector {} as Vector<str>
+        buf := mem.AllocateZeroed(32768 as u64)
+        each name, value in c.env:
+            n := GetEnvironmentVariableA(name, buf, 32767 as u32)
+            saved.push(name)
+            saved.push(n > (0 as u32) ? str.Clone(buf as str) : "")
+            saved.push(n > (0 as u32) ? "1" : "0")
+            _s := SetEnvironmentVariableA(name, value as void*)
+        end
+        each name in c.unset_env:
+            n := GetEnvironmentVariableA(name, buf, 32767 as u32)
+            saved.push(name)
+            saved.push(n > (0 as u32) ? str.Clone(buf as str) : "")
+            saved.push(n > (0 as u32) ? "1" : "0")
+            _u := SetEnvironmentVariableA(name, null)
+        end
+        mem.Free(buf)
+        ret saved
+    end
+
+    func _win_env_restore(saved: Vector<str>):
+        mut i := 0
+        until i + 2 < saved.len():
+            name := saved.get(i)
+            if saved.get(i + 2) == "1":
+                _r := SetEnvironmentVariableA(name, saved.get(i + 1) as void*)
+            else:
+                _r2 := SetEnvironmentVariableA(name, null)
+            end
+            i += 3
+        end
+    end
+
+    func _launch(c: Command): Child:
+        mut ch := Child {}
+        if c.program.len() == 0: ret _fail(ch, "no program given", c.program) end
+        cmdline := _spawn_wide(_spawn_cmdline(SpawnOptions { path = c.program, args = c.args }))
+        defer mem.Free(cmdline)
+        wide_cwd := c.cwd.len() > 0 ? _spawn_wide(c.cwd) : null
+        si := mem.AllocateZeroed(104 as u64)
+        defer mem.Free(si)
+        _u32_set(si, 0, _si_size() as u32)
+        _u32_set(si, _si_flags_at(), 256 as u32)
+        mut h_in := 0 as i64
+        mut h_out := 0 as i64
+        mut h_err := 0 as i64
+        mut p_in := (0 - 1) as i64
+        mut p_out := (0 - 1) as i64
+        mut p_err := (0 - 1) as i64
+        own_in := c.stdin_mode != 0
+        own_out := c.stdout_mode != 0
+        own_err := c.stderr_mode != 0 and c.stderr_mode != 3
+        if c.stdin_mode == 1:
+            pp := _mkpipe(false)
+            h_in = pp.r
+            p_in = pp.w
+        else:
+            h_in = _win_std(c.stdin_mode, -10, 2147483648 as u32)
+        end
+        if c.stdout_mode == 1:
+            pp := _mkpipe(true)
+            h_out = pp.w
+            p_out = pp.r
+        else:
+            h_out = _win_std(c.stdout_mode, -11, 1073741824 as u32)
+        end
+        if c.stderr_mode == 1:
+            pp := _mkpipe(true)
+            h_err = pp.w
+            p_err = pp.r
+        else c.stderr_mode == 3:
+            h_err = h_out
+        else:
+            h_err = _win_std(c.stderr_mode, -12, 1073741824 as u32)
+        end
+        _ptr_set(si, _si_handles_at(), h_in as void*)
+        _ptr_set(si, _si_handles_at() + _word(), h_out as void*)
+        _ptr_set(si, _si_handles_at() + _word() * 2, h_err as void*)
+        mut flags := 0x08000000 as u32
+        if c.new_group: flags |= (0x200 as u32) end
+        mut env_block := null as void*
+        mut saved := Vector {} as Vector<str>
+        if c.clear_env:
+            env_block = _win_env_block(c)
+            flags |= (0x400 as u32)
+        else:
+            saved.free()
+            saved = _win_env_apply(c)
+        end
+        pi := mem.AllocateZeroed(24 as u64)
+        defer mem.Free(pi)
+        ok := CreateProcessW(null, cmdline, null, null, 1, flags, env_block, wide_cwd, si, pi)
+        if not c.clear_env: _win_env_restore(saved) end
+        saved.free()
+        if env_block != null: mem.Free(env_block) end
+        if wide_cwd != null: mem.Free(wide_cwd) end
+        if own_in: fdio.Close(h_in) end
+        if own_out: fdio.Close(h_out) end
+        if own_err: fdio.Close(h_err) end
+        if ok == 0:
+            fdio.Close(p_in)
+            fdio.Close(p_out)
+            fdio.Close(p_err)
+            ret _fail(ch, "CreateProcess failed", c.program)
+        end
+        ch.pid = _u32_at(pi, _pi_pid_at()) as int
+        ch.h_proc = _ptr_at(pi, 0) as i64
+        _t := CloseHandle(_ptr_at(pi, _word()))
+        ch.ok = true
+        ch.h_in = p_in
+        ch.h_out = p_out
+        ch.h_err = p_err
+        ret ch
+    end
+else:
+    func _open_null(flags: int): int:
+        fd := open("/dev/null", flags, 0)
+        if fd >= 0:
+            _c := fcntl(fd, 2, 1)
+        end
+        ret fd
+    end
+
+    func _launch(c: Command): Child:
+        mut ch := Child {}
+        if c.program.len() == 0: ret _fail(ch, "no program given", c.program) end
+        if not _sigpipe_ignored:
+            _prev := signal(13, (1 as i64) as void*)
+            _sigpipe_ignored = true
+        end
+        resolved := fdio.Resolve(c.program, c.env, c.clear_env)
+        if resolved.len() == 0:
+            mem.Free(resolved as void*)
+            ret _fail(ch, "program not found", c.program)
+        end
+        mut c_in := -1
+        mut c_out := -1
+        mut c_err := -1
+        mut p_in := -1
+        mut p_out := -1
+        mut p_err := -1
+        mut bad := false
+        if c.stdin_mode == 1:
+            pp := fdio.MakePipe()
+            if pp.ok:
+                c_in = pp.r as int
+                p_in = pp.w as int
+            else:
+                bad = true
+            end
+        else c.stdin_mode == 2:
+            c_in = _open_null(0)
+        end
+        if c.stdout_mode == 1:
+            pp := fdio.MakePipe()
+            if pp.ok:
+                c_out = pp.w as int
+                p_out = pp.r as int
+            else:
+                bad = true
+            end
+        else c.stdout_mode == 2:
+            c_out = _open_null(1)
+        end
+        if c.stderr_mode == 1:
+            pp := fdio.MakePipe()
+            if pp.ok:
+                c_err = pp.w as int
+                p_err = pp.r as int
+            else:
+                bad = true
+            end
+        else c.stderr_mode == 2:
+            c_err = _open_null(1)
+        end
+        ep := fdio.MakePipe()
+        if not ep.ok: bad = true end
+        if bad:
+            fdio.Close(c_in as i64)
+            fdio.Close(c_out as i64)
+            fdio.Close(c_err as i64)
+            fdio.Close(p_in as i64)
+            fdio.Close(p_out as i64)
+            fdio.Close(p_err as i64)
+            fdio.Close(ep.r)
+            fdio.Close(ep.w)
+            mem.Free(resolved as void*)
+            ret _fail(ch, "cannot create the pipes", c.program)
+        end
+        argv := fdio.BuildArgv(c.program, c.args)
+        mut owned := Vector {} as Vector<str>
+        envp := fdio.BuildEnvp(c.clear_env, c.env, c.unset_env, owned)
+        use_env := envp == null ? fdio.Environ() : envp
+        merge := c.stderr_mode == 3
+        wmark := mem.AllocateZeroed(1 as u64)
+        pid := fork()
+        if pid == 0:
+            if c.new_group:
+                _g := setpgid(0, 0)
+            end
+            mut stage := 0
+            if c.cwd.len() > 0 and chdir(c.cwd) != 0:
+                stage = 1
+            end
+            if stage == 0:
+                if c_in >= 0: fdio.Redirect(c_in, 0) end
+                if c_out >= 0: fdio.Redirect(c_out, 1) end
+                if merge:
+                    fdio.Redirect(1, 2)
+                else c_err >= 0:
+                    fdio.Redirect(c_err, 2)
+                end
+                _gone := fdio.ExecVe(resolved, argv, use_env)
+                stage = 2
+            end
+            (wmark as u8*)[0] = stage as u8
+            _w := fdio.WriteRaw(ep.w, wmark, 1)
+            _exit(127)
+        end
+        fdio.Close(c_in as i64)
+        fdio.Close(c_out as i64)
+        fdio.Close(c_err as i64)
+        fdio.Close(ep.w)
+        mem.Free(argv)
+        mem.Free(wmark)
+        if envp != null: mem.Free(envp) end
+        each line in owned:
+            mem.Free(line as void*)
+        end
+        owned.free()
+        mem.Free(resolved as void*)
+        if pid < 0:
+            fdio.Close(p_in as i64)
+            fdio.Close(p_out as i64)
+            fdio.Close(p_err as i64)
+            fdio.Close(ep.r)
+            ret _fail(ch, "fork failed", c.program)
+        end
+        if c.new_group:
+            _g2 := setpgid(pid, pid)
+        end
+        mark := mem.AllocateZeroed(1 as u64)
+        got := fdio.ReadRaw(ep.r, mark, 1)
+        fail_stage := (mark as u8*)[0] as int
+        mem.Free(mark)
+        fdio.Close(ep.r)
+        if got > 0:
+            statusbuf := mem.AllocateZeroed(4 as u64)
+            _reaped := waitpid(pid, statusbuf, 0)
+            mem.Free(statusbuf)
+            fdio.Close(p_in as i64)
+            fdio.Close(p_out as i64)
+            fdio.Close(p_err as i64)
+            if fail_stage == 1: ret _fail(ch, "cannot enter the folder", c.program) end
+            ret _fail(ch, "cannot run the program", c.program)
+        end
+        ch.pid = pid
+        ch.ok = true
+        ch.h_in = p_in as i64
+        ch.h_out = p_out as i64
+        ch.h_err = p_err as i64
+        ret ch
+    end
+end
+
+@en "Launch"
+@fa "اجرای فرزند"
+pub func Launch(c: Command): Child:
+    ret _launch(c)
+end
+
+@en "NewCommand"
+@fa "فرمان تازه"
+pub func NewCommand(program: str): Command:
+    ret Command { program = program }
+end
+
+@en "RunCommand"
+@fa "اجرای فرمان با مهلت"
+pub func RunCommand(c: Command, text: str, timeout_ms: int): RunResult:
+    mut cmd := c
+    cmd.stdin_mode = 1
+    cmd.stdout_mode = 1
+    if cmd.stderr_mode != 3: cmd.stderr_mode = 1 end
+    cmd.new_group = true
+    mut ch := Launch(cmd)
+    if not ch.ok: ret RunResult {} end
+    deadline := _now() + (timeout_ms as i64)
+    in_len := text.len()
+    mut in_off := 0
+    mut out_eof := ch.h_out < 0
+    mut err_eof := ch.h_err < 0
+    mut timed_out := false
+    if in_len == 0: ch.CloseStdin() end
+    until true:
+        if ch.h_in >= 0:
+            if fdio.PollWrite(ch.h_in, 0) > 0:
+                mut piece := in_len - in_off
+                if piece > 512: piece = 512 end
+                w := fdio.WriteRaw(ch.h_in, ((text as void*) as i64 + in_off as i64) as void*, piece)
+                if w <= 0:
+                    in_off = in_len
+                else:
+                    in_off += w
+                end
+            end
+            if in_off >= in_len: ch.CloseStdin() end
+        end
+        if out_eof and err_eof: break end
+        left := _left(deadline, timeout_ms)
+        if timeout_ms >= 0 and left == 0:
+            timed_out = true
+            break
+        end
+        mut slice := left
+        if ch.h_in >= 0 and (slice < 0 or slice > 2): slice = 2 end
+        mask := fdio.PollTwo(out_eof ? -1 : ch.h_out, err_eof ? -1 : ch.h_err, slice)
+        if mask < 0: break end
+        if (mask & 1) != 0 and fdio.Fill(ch.out_buf, ch.h_out, 0) < 0: out_eof = true end
+        if (mask & 2) != 0 and fdio.Fill(ch.err_buf, ch.h_err, 0) < 0: err_eof = true end
+    end
+    if not timed_out:
+        st := ch.Wait(_left(deadline, timeout_ms))
+        if st.timed_out: timed_out = true end
+    end
+    if timed_out:
+        _k := ch.KillGroup()
+        _k2 := ch.Kill()
+        _st := ch.Wait(0 - 1)
+        mut more := true
+        until more:
+            more = fdio.Fill(ch.out_buf, ch.h_out, 0) > 0
+        end
+        more = true
+        until more:
+            more = fdio.Fill(ch.err_buf, ch.h_err, 0) > 0
+        end
+    end
+    mut status := ch.status
+    status.timed_out = timed_out
+    out := _take_all(ch.out_buf, true)
+    err := _take_all(ch.err_buf, true)
+    ch.Close()
+    ret RunResult { started = true, status = status, stdout = out.data, stderr = err.data, timed_out = timed_out }
+end
+
+@en "RunTimeout"
+@fa "اجرا با مهلت"
+pub func RunTimeout(program: str, args: Vector<str>, text: str, timeout_ms: int): RunResult:
+    cmd := Command { program = program, args = args }
+    ret RunCommand(cmd, text, timeout_ms)
+end

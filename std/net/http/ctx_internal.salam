@@ -46,6 +46,8 @@ const _SRV_SHIFT := 32 as i64
 
 const _SRV_MASK := 4294967295 as i64
 
+const _TLS_TAB_MAX := 65536
+
 mut _reqctx_size := 0 as i64
 
 mut _keepalive_idle_ms := 5000
@@ -63,6 +65,8 @@ mut _srv_hide := Vector {} as Vector<bool>
 mut _srv_log := Vector {} as Vector<bool>
 
 mut _srv_tls := Vector {} as Vector<tls.ServerConfig>
+mut _srv_is_tls := Vector {} as Vector<bool>
+mut _tls_tab := 0 as i64
 
 mut _srv_shdr := Vector {} as Vector<str>
 
@@ -144,6 +148,7 @@ func _srv_init():
         _srv_hide.push(false)
         _srv_log.push(false)
         _srv_tls.push(tls.NewServerConfig("", ""))
+        _srv_is_tls.push(false)
         _srv_shdr.push("Salam")
         _srv_hka.push("")
         _srv_hcl.push("")
@@ -159,7 +164,7 @@ func _srv_claim(r: router.Router, hide: bool, log: bool): int:
         ret 0 - 1
     end
     slot := _srv_count
-    _srv_count += 1
+    _srv_count++
     _srv_routers.set(slot, r)
     _srv_hide.set(slot, hide)
     _srv_log.set(slot, log)
@@ -224,7 +229,7 @@ func _scan_crlf(s: str, from: int, lim: int): int:
             if p[i] == (13 as i8): ret i end
             i += 2
         else c == (13 as i8):
-            i += 1
+            i++
         else:
             i += 2
         end
@@ -238,7 +243,7 @@ func _scan_byte(s: str, from: int, lim: int, c: int): int:
     mut i := from
     until i < lim:
         if p[i] == b: ret i end
-        i += 1
+        i++
     end
     ret 0 - 1
 end
@@ -251,7 +256,7 @@ func _eq_at(s: str, pos: int, lit: str): bool:
     mut i := 0
     until i < m:
         if sp[pos + i] != lp[i]: ret false end
-        i += 1
+        i++
     end
     ret true
 end
@@ -274,7 +279,7 @@ func _eq_at_ifold(s: str, pos: int, name: str): bool:
         if a >= 65 and a <= 90: a += 32 end
         if b >= 65 and b <= 90: b += 32 end
         if a != b: ret false end
-        i += 1
+        i++
     end
     ret true
 end
@@ -289,7 +294,7 @@ func _eq_at_fold(s: str, pos: int, lit: str): bool:
         mut a := sp[pos + i] as int
         if a >= 65 and a <= 90: a += 32 end
         if a != (lp[i] as int): ret false end
-        i += 1
+        i++
     end
     ret true
 end
@@ -315,7 +320,7 @@ func _ctx_own_once(h: i64, s: str): str:
         if c.owned.get(i) == p:
             ret s
         end
-        i += 1
+        i++
     end
     c.owned.push(p)
     ret s
@@ -327,7 +332,7 @@ func salam_ctx_reset(h: i64):
     mut i := 0
     until i < n:
         mem.Free(c.owned.get(i) as void *)
-        i += 1
+        i++
     end
     until c.owned.len() > 0:
         c.owned.pop()
@@ -361,7 +366,7 @@ func salam_ctx_free(h: i64):
     mut i := 0
     until i < n:
         mem.Free(c.owned.get(i) as void *)
-        i += 1
+        i++
     end
     c.owned.free()
     c.req_hdrs.free()
@@ -450,7 +455,7 @@ func _kvl_set_cookie(l &: Vector<_KV>, cookie_name: str, val: str):
         if kv.k == "Set-Cookie" and kv.v.len() >= prefix.len() and kv.v.substr(0, prefix.len()) == prefix:
             l.remove_at(i)
         else:
-            i += 1
+            i++
         end
     end
     l.push(_KV { k = "Set-Cookie", v = val })
@@ -476,7 +481,7 @@ func _hdr_lookup(h: i64, name: str): str:
         if colon >= 0 and colon < line_end and colon - pos == nlen and _eq_at_ifold(raw, pos, name):
             mut vs := colon + 1
             until vs < line_end and _ows_at(raw, vs):
-                vs += 1
+                vs++
             end
             ret _ctx_own(h, raw.substr(vs, line_end - vs))
         end
@@ -634,7 +639,7 @@ func _parse_http(ctx: i64, req: str, req_len: int):
         if colon >= 0 and colon < line_end and colon - pos == 10 and _eq_at_fold(req, pos, "connection"):
             mut vs := colon + 1
             until vs < line_end and _ows_at(req, vs):
-                vs += 1
+                vs++
             end
             if _eq_at_fold(req, vs, "close"): c.keep_alive = false
             else _eq_at_fold(req, vs, "keep-alive"): c.keep_alive = true end
@@ -794,7 +799,7 @@ func _dispatch(r: router.Router, ctx: i64): bool:
     until i < n:
         kv := m.params.items.get(i)
         salam_ctx_kv_add(ctx, 1, _ctx_own(ctx, kv.key), _ctx_own(ctx, kv.value))
-        i += 1
+        i++
     end
     m.params.items.free()
     m.params = router.ParamList {}
@@ -834,7 +839,7 @@ func _bad_cl_value(head: str, colon: int, line_end: int, seen &: bool, first &: 
             mem.Free(t as void *)
             ret true
         end
-        k += 1
+        k++
     end
     if t.len() > 15:
         mem.Free(t as void *)
@@ -866,7 +871,7 @@ func _content_length(head: str, head_len: int): int:
                 until valid and k < t.len():
                     c := tp[k] as int
                     if c < 48 or c > 57: valid = false end
-                    k += 1
+                    k++
                 end
                 mut v := 0
                 if valid: v = t.to_int() end
@@ -904,11 +909,10 @@ end
 // Reads one request. Lengths are tracked explicitly (req_len, pending_len)
 // so bodies may carry NUL bytes; header scanning stops before the body.
 func _read_request(fd: i64, scratch: void *, pending &: str, pending_len &: int, req_len &: int, owned &: bool, oversize &: int): str:
-    sock := rawsock.FromFd(fd)
     owned = false
     req_len = 0
     if pending_len == 0:
-        got := rawsock.RecvBytes(sock, scratch, _RD_CHUNK)
+        got := _io_recv(fd, scratch, _RD_CHUNK)
         if got <= 0: ret "" end
         sp0 := scratch as i8 *
         sp0[got] = 0 as i8
@@ -952,7 +956,7 @@ func _read_request(fd: i64, scratch: void *, pending &: str, pending_len &: int,
             oversize = 431
             ret ""
         end
-        got := rawsock.RecvBytes(sock, scratch, _RD_CHUNK)
+        got := _io_recv(fd, scratch, _RD_CHUNK)
         if got <= 0:
             mem.Free(buf as void *)
             ret ""
@@ -987,7 +991,7 @@ func _read_request(fd: i64, scratch: void *, pending &: str, pending_len &: int,
             until blen < need:
                 mut want := need - blen
                 if want > _RD_CHUNK: want = _RD_CHUNK end
-                got := rawsock.RecvBytes(sock, (full as i64 + blen) as void *, want)
+                got := _io_recv(fd, (full as i64 + blen) as void *, want)
                 if got <= 0: break end
                 blen += got
             end
@@ -1007,11 +1011,79 @@ func _read_request(fd: i64, scratch: void *, pending &: str, pending_len &: int,
     ret out
 end
 
+func _tls_conn(fd: i64): tls.Conn *:
+    if _tls_tab == (0 as i64) or fd < (0 as i64) or fd >= (_TLS_TAB_MAX as i64):
+        ret null
+    end
+    ret _evg(_tls_tab, fd as int) as tls.Conn *
+end
+
+func _tls_begin(slot: int, fd: i64): bool:
+    if fd < (0 as i64) or fd >= (_TLS_TAB_MAX as i64):
+        ret false
+    end
+    c := mem.AllocateZeroed(sizeof(tls.Conn) as u64) as tls.Conn *
+    c[0] = tls.WrapServer(fd, _srv_tls.get(slot))
+    if not tls.ConnOk(c[0]):
+        tls.Detach(c[0])
+        mem.Free(c as void *)
+        ret false
+    end
+    _evs(_tls_tab, fd as int, c as i64)
+    ret true
+end
+
+func _tls_end(fd: i64):
+    c := _tls_conn(fd)
+    if c == null:
+        ret
+    end
+    _evs(_tls_tab, fd as int, 0 as i64)
+    tls.Detach(c[0])
+    mem.Free(c as void *)
+end
+
+func _io_recv(fd: i64, buf: void *, n: int): int:
+    c := _tls_conn(fd)
+    if c != null:
+        ret tls.ReadBytes(c[0], buf, n)
+    end
+    ret rawsock.RecvBytes(rawsock.FromFd(fd), buf, n)
+end
+
+func _io_send(fd: i64, p: void *, n: int): int:
+    c := _tls_conn(fd)
+    if c != null:
+        ret tls.WriteBytes(c[0], p, n)
+    end
+    ret tcp.WriteBytes(tcp.ConnFromFd(fd), p, n)
+end
+
+func _io_buffered(fd: i64): bool:
+    c := _tls_conn(fd)
+    ret c != null and tls.Readable(c[0])
+end
+
+func _io_cork(fd: i64):
+    c := _tls_conn(fd)
+    if c != null:
+        tls.Cork(c[0])
+    end
+end
+
+func _io_flush(fd: i64):
+    c := _tls_conn(fd)
+    if c != null:
+        tls.Flush(c[0])
+    end
+end
+
 func _net_send_all(fd: i64, data: str):
-    tcp.Write(tcp.ConnFromFd(fd), data)
+    _io_send(fd, data as void *, data.len())
 end
 
 func _net_close(fd: i64):
+    _tls_end(fd)
     tcp.Close(tcp.ConnFromFd(fd))
 end
 
@@ -1048,7 +1120,6 @@ func _send_file(fd: i64, path: str, ct: str, server_hdr: str, keep: bool): int:
     chunk_cap := 65536 as u64
     buf := mem.Allocate(chunk_cap)
     defer mem.Free(buf)
-    conn := tcp.ConnFromFd(fd)
     mut remaining := sz
     until remaining > 0:
         want := remaining < (chunk_cap as i64) ? (remaining as u64) : chunk_cap
@@ -1056,7 +1127,7 @@ func _send_file(fd: i64, path: str, ct: str, server_hdr: str, keep: bool): int:
         if got == (0 as u64):
             break
         end
-        if tcp.WriteBytes(conn, buf, got as int) <= 0:
+        if _io_send(fd, buf, got as int) <= 0:
             break
         end
         remaining -= got as i64
@@ -1176,7 +1247,7 @@ func _insertion_sort_strs(v &: Vector<str>):
             b := v.get(j)
             v.set(j - 1, b)
             v.set(j, a)
-            j -= 1
+            j--
         end
     end
 end
@@ -1269,12 +1340,11 @@ func _serve_request(slot: int, fd: i64, ctx: i64, req: str, req_len: int, keep &
     if salam_ctx_is_sent(ctx) == 0:
         mut b := str.NewBuilder()
         _fill_response(b, ctx, slot, keep)
-        conn := tcp.ConnFromFd(fd)
-        tcp.WriteBytes(conn, b.data, b.len as int)
+        _io_send(fd, b.data, b.len as int)
         str.BufFree(b)
         mut n := 0
         p := _binary_body(ctx, n)
-        if n > 0: tcp.WriteBytes(conn, p, n) end
+        if n > 0: _io_send(fd, p, n) end
         fl := _rc(ctx).resp_file_len
         if fl > 0 and salam_ctx_get(ctx, 0) != "HEAD":
             _stream_file_body(fd, _rc(ctx).resp_file, _rc(ctx).resp_file_off, fl)
@@ -1298,10 +1368,12 @@ func _conn_step(slot: int, fd: i64, ctx: i64, scratch: void *, pending &: str, p
     end
     if req_len == 0: ret false end
     mut keep := true
+    _io_cork(fd)
     ok := _serve_request(slot, fd, ctx, req, req_len, keep)
+    _io_flush(fd)
     if owned: mem.Free(req as void *) end
     if ok == false: ret false end
-    served += 1
+    served++
     if keep == false or served >= _keepalive_max_reqs: ret false end
     ret true
 end
@@ -1312,6 +1384,10 @@ func _web_conn_handler(packed: i64):
     sock := rawsock.FromFd(fd)
     rawsock.SetNoDelay(sock, true)
     rawsock.SetTimeout(sock, _keepalive_idle_ms)
+    if _srv_is_tls.get(slot) and not _tls_begin(slot, fd):
+        _net_close(fd)
+        ret
+    end
     scratch := mem.Allocate((_RD_CHUNK + 1) as u64)
     ctx := salam_ctx_new(fd)
     mut pending := ""
@@ -1326,86 +1402,6 @@ func _web_conn_handler(packed: i64):
     _net_close(fd)
 end
 
-func _web_tls_conn_handler(packed: i64):
-    slot := _srv_slot_of(packed)
-    fd := _srv_fd_of(packed)
-    mut c := tls.WrapServer(fd, _srv_tls.get(slot))
-    if not tls.ConnOk(c):
-        tls.Close(c)
-        ret
-    end
-    req := tls.Read(c, 32768)
-    if req.len() == 0:
-        mem.Free(req as void *)
-        tls.Close(c)
-        ret
-    end
-    ctx := salam_ctx_new(fd)
-    defer salam_ctx_free(ctx)
-    defer mem.Free(req as void *)
-    _parse_http(ctx, req, req.len())
-    r := _srv_routers.get(slot)
-    shdr := _srv_shdr.get(slot)
-    mut static_handled := false
-    if r.has_static:
-        prefix := r.static_prefix
-        path := salam_ctx_get(ctx, 1)
-        if _eq_at(path, 0, prefix):
-            relraw := path.substr(prefix.len(), path.len() - prefix.len())
-            rel := UrlDecode(relraw)
-            mem.Free(relraw as void *)
-            target := _safe_static_path(r.static_dir, rel)
-            mem.Free(rel as void *)
-            if target.len() > 0:
-                if os.IsDir(target) and str.EndsWith(path, "/") == false:
-                    _static_dir_redirect(ctx, path)
-                    static_handled = true
-                else os.IsDir(target):
-                    idx := filepath.Join(target, "index.html")
-                    if os.Exists(idx) and os.IsDir(idx) == false:
-                        _tls_send_file(c, idx, mime.MimeType(idx), shdr)
-                        _ctx_mark_sent(ctx)
-                        static_handled = true
-                    else r.static_listing:
-                        salam_ctx_set_status(ctx, 200)
-                        salam_ctx_set(ctx, 4, "text/html; charset=utf-8")
-                        salam_ctx_set(ctx, 5, _ctx_own(ctx, _dir_listing_html(path, target)))
-                        static_handled = true
-                    end
-                    mem.Free(idx as void *)
-                else os.Exists(target):
-                    _tls_send_file(c, target, mime.MimeType(target), shdr)
-                    _ctx_mark_sent(ctx)
-                    static_handled = true
-                end
-            end
-            mem.Free(target as void *)
-        end
-    end
-    if static_handled == false:
-        dispatched := _dispatch(r, ctx)
-        if dispatched == false:
-            salam_ctx_set_status(ctx, 404)
-            salam_ctx_set(ctx, 4, "text/plain; charset=utf-8")
-            salam_ctx_set(ctx, 5, "404 Not Found")
-        end
-    end
-    _log_access(slot, salam_ctx_get(ctx, 0), salam_ctx_get(ctx, 1), salam_ctx_get_status(ctx))
-    if salam_ctx_is_sent(ctx) == 0:
-        resp := _build_response(ctx, slot)
-        tls.Write(c, resp)
-        mem.Free(resp as void *)
-        mut n := 0
-        p := _binary_body(ctx, n)
-        if n > 0: tls.WriteBytes(c, p, n) end
-        fl := _rc(ctx).resp_file_len
-        if fl > 0 and salam_ctx_get(ctx, 0) != "HEAD":
-            _tls_file_body(c, _rc(ctx).resp_file, _rc(ctx).resp_file_off, fl)
-        end
-    end
-    tls.Close(c)
-end
-
 func _stream_file_body(fd: i64, path: str, off: int, size: int):
     f := fopen(path, "rb")
     if f == null: ret end
@@ -1414,7 +1410,6 @@ func _stream_file_body(fd: i64, path: str, off: int, size: int):
     chunk_cap := 65536 as u64
     buf := mem.Allocate(chunk_cap)
     defer mem.Free(buf)
-    conn := tcp.ConnFromFd(fd)
     mut remaining := size as i64
     until remaining > 0:
         want := remaining < (chunk_cap as i64) ? (remaining as u64) : chunk_cap
@@ -1422,59 +1417,10 @@ func _stream_file_body(fd: i64, path: str, off: int, size: int):
         if got == (0 as u64):
             break
         end
-        if tcp.WriteBytes(conn, buf, got as int) <= 0:
+        if _io_send(fd, buf, got as int) <= 0:
             break
         end
         remaining -= got as i64
-    end
-end
-
-func _tls_file_body(c &: tls.Conn, path: str, off: int, size: int):
-    f := fopen(path, "rb")
-    if f == null: ret end
-    defer fclose(f)
-    if off > 0: fseek(f, off, 0) end
-    chunk_cap := 65536 as u64
-    buf := mem.Allocate(chunk_cap)
-    defer mem.Free(buf)
-    mut remaining := size as i64
-    until remaining > 0:
-        want := remaining < (chunk_cap as i64) ? (remaining as u64) : chunk_cap
-        got := fread(buf, 1 as u64, want, f)
-        if got == (0 as u64):
-            break
-        end
-        tls.WriteBytes(c, buf, got as int)
-        remaining -= got as i64
-    end
-end
-
-func _tls_send_file(c &: tls.Conn, path: str, ct: str, server_hdr: str):
-    f := fopen(path, "rb")
-    if f == null: ret end
-    fseek(f, 0, 2)
-    sz := ftell(f) as i64
-    fseek(f, 0, 0)
-    if sz < 0:
-        fclose(f)
-        ret
-    end
-    mut hdr := "HTTP/1.1 200 OK\r\nContent-Length: "
-    hdr = hdr.concat(conv.FormatInt(sz))
-    hdr = hdr.concat("\r\nContent-Type: ")
-    hdr = hdr.concat(ct)
-    hdr = hdr.concat("\r\nConnection: close\r\nServer: ")
-    hdr = hdr.concat(server_hdr)
-    hdr = hdr.concat("\r\nX-Powered-By: ")
-    hdr = hdr.concat(server_hdr)
-    hdr = hdr.concat("\r\n\r\n")
-    tls.Write(c, hdr)
-    buf := mem.Allocate((sz + 1) as u64)
-    defer mem.Free(buf)
-    got := fread(buf, 1 as u64, sz as u64, f)
-    fclose(f)
-    if got > (0 as u64):
-        tls.WriteBytes(c, buf, got as int)
     end
 end
 

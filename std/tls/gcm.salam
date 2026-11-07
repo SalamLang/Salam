@@ -14,163 +14,202 @@
 
 package tls
 
+import mem
+
 struct Ghash:
-    pub h: u8[16] = [
-        0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8
-        0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8
-    ]
-    pub y: u8[16] = [
-        0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8
-        0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8, 0 as u8
-    ]
+    pub h0: u64 = 0 as u64
+    pub h1: u64 = 0 as u64
+    pub h0r: u64 = 0 as u64
+    pub h1r: u64 = 0 as u64
+    pub h2: u64 = 0 as u64
+    pub h2r: u64 = 0 as u64
+    pub y0: u64 = 0 as u64
+    pub y1: u64 = 0 as u64
 end
 
-func _ghash_mul(g &: Ghash):
-    mut z: int[16]
-    mut v: int[16]
-    repeat 16 in i:
-        z[i] = 0
-        v[i] = g.h[i] as int
-    end
-    repeat 128 in i:
-        bit := ((g.y[i / 8] as int) >> (7 - (i % 8))) & 1
-        mask := 0 - bit
-        repeat 16 in j:
-            z[j] = z[j] ^ (v[j] & mask)
-        end
-        lsb := v[15] & 1
-        mut carry := 0
-        repeat 16 in j:
-            b := v[j]
-            v[j] = ((b >> 1) | (carry << 7)) & 0xFF
-            carry = b & 1
-        end
-        v[0] = v[0] ^ (0xe1 & (0 - lsb))
-    end
-    repeat 16 in i:
-        g.y[i] = z[i] as u8
-    end
+struct GcmCtx:
+    pub aes: Aes = Aes {}
+    pub g: Ghash = Ghash {}
 end
 
-func _ghash_init(hkey: void*): Ghash:
-    mut g := Ghash {}
-    repeat 16 in i:
-        g.h[i] = _bget(hkey, i) as u8
-        g.y[i] = 0 as u8
-    end
-    ret g
+inline func _be64(p: void*, o: int): u64:
+    bp := p as u8*
+    ret ((bp[o] as u64) << (56 as u64)) | ((bp[o + 1] as u64) << (48 as u64)) | ((bp[o + 2] as u64) << (40 as u64)) | ((bp[o + 3] as u64) << (32 as u64)) | ((bp[o + 4] as u64) << (24 as u64)) | ((bp[o + 5] as u64) << (16 as u64)) | ((bp[o + 6] as u64) << (8 as u64)) | (bp[o + 7] as u64)
 end
 
-func _ghash_block(g &: Ghash, p: void*, n: int):
-    repeat 16 in i:
-        if i < n:
-            g.y[i] = ((g.y[i] as int) ^ _bget(p, i)) as u8
-        end
-    end
-    _ghash_mul(g)
+inline func _pbe64(v: u64, p: void*, o: int):
+    bp := p as u8*
+    bp[o] = (v >> (56 as u64)) as u8
+    bp[o + 1] = (v >> (48 as u64)) as u8
+    bp[o + 2] = (v >> (40 as u64)) as u8
+    bp[o + 3] = (v >> (32 as u64)) as u8
+    bp[o + 4] = (v >> (24 as u64)) as u8
+    bp[o + 5] = (v >> (16 as u64)) as u8
+    bp[o + 6] = (v >> (8 as u64)) as u8
+    bp[o + 7] = v as u8
+end
+
+inline func _rev64(v: u64): u64:
+    mut x := v
+    x = ((x & (0x5555555555555555 as u64)) << (1 as u64)) | ((x >> (1 as u64)) & (0x5555555555555555 as u64))
+    x = ((x & (0x3333333333333333 as u64)) << (2 as u64)) | ((x >> (2 as u64)) & (0x3333333333333333 as u64))
+    x = ((x & (0x0F0F0F0F0F0F0F0F as u64)) << (4 as u64)) | ((x >> (4 as u64)) & (0x0F0F0F0F0F0F0F0F as u64))
+    x = ((x & (0x00FF00FF00FF00FF as u64)) << (8 as u64)) | ((x >> (8 as u64)) & (0x00FF00FF00FF00FF as u64))
+    x = ((x & (0x0000FFFF0000FFFF as u64)) << (16 as u64)) | ((x >> (16 as u64)) & (0x0000FFFF0000FFFF as u64))
+    ret (x << (32 as u64)) | (x >> (32 as u64))
+end
+
+inline func _bmul64(x: u64, y: u64): u64:
+    x0 := x & AES_M1
+    x1 := x & AES_M2
+    x2 := x & AES_M4
+    x3 := x & AES_M8
+    y0 := y & AES_M1
+    y1 := y & AES_M2
+    y2 := y & AES_M4
+    y3 := y & AES_M8
+    z0 := (x0 * y0) ^ (x1 * y3) ^ (x2 * y2) ^ (x3 * y1)
+    z1 := (x0 * y1) ^ (x1 * y0) ^ (x2 * y3) ^ (x3 * y2)
+    z2 := (x0 * y2) ^ (x1 * y1) ^ (x2 * y0) ^ (x3 * y3)
+    z3 := (x0 * y3) ^ (x1 * y2) ^ (x2 * y1) ^ (x3 * y0)
+    ret (z0 & AES_M1) | (z1 & AES_M2) | (z2 & AES_M4) | (z3 & AES_M8)
+end
+
+inline func _ghash_mix(g &: Ghash, w1: u64, w0: u64):
+    y1 := g.y1 ^ w1
+    y0 := g.y0 ^ w0
+    y0r := _rev64(y0)
+    y1r := _rev64(y1)
+    y2 := y0 ^ y1
+    y2r := y0r ^ y1r
+    z0 := _bmul64(y0, g.h0)
+    z1 := _bmul64(y1, g.h1)
+    z2 := _bmul64(y2, g.h2) ^ z0 ^ z1
+    z0h := _bmul64(y0r, g.h0r)
+    z1h := _bmul64(y1r, g.h1r)
+    z2h := _bmul64(y2r, g.h2r) ^ z0h ^ z1h
+    r0 := _rev64(z0h) >> (1 as u64)
+    r1 := _rev64(z1h) >> (1 as u64)
+    r2 := _rev64(z2h) >> (1 as u64)
+    a1 := r0 ^ z2
+    a2 := z1 ^ r2
+    b3 := (r1 << (1 as u64)) | (a2 >> (63 as u64))
+    b2 := (a2 << (1 as u64)) | (a1 >> (63 as u64))
+    b1 := (a1 << (1 as u64)) | (z0 >> (63 as u64))
+    b0 := z0 << (1 as u64)
+    c2 := b2 ^ b0 ^ (b0 >> (1 as u64)) ^ (b0 >> (2 as u64)) ^ (b0 >> (7 as u64))
+    c1 := b1 ^ (b0 << (63 as u64)) ^ (b0 << (62 as u64)) ^ (b0 << (57 as u64))
+    g.y1 = b3 ^ c1 ^ (c1 >> (1 as u64)) ^ (c1 >> (2 as u64)) ^ (c1 >> (7 as u64))
+    g.y0 = c2 ^ (c1 << (63 as u64)) ^ (c1 << (62 as u64)) ^ (c1 << (57 as u64))
 end
 
 func _ghash_data(g &: Ghash, p: void*, n: int):
     mut off := 0
-    until off < n:
-        mut take := n - off
-        if take > 16:
-            take = 16
+    until n - off >= 16:
+        _ghash_mix(g, _be64(p, off), _be64(p, off + 8))
+        off += 16
+    end
+    if off < n:
+        bp := p as u8*
+        mut w1 := 0 as u64
+        mut w0 := 0 as u64
+        repeat n - off in i:
+            if i < 8:
+                w1 |= ((bp[off + i] as u64) << ((56 - i * 8) as u64))
+            else:
+                w0 |= ((bp[off + i] as u64) << ((120 - i * 8) as u64))
+            end
         end
-        _ghash_block(g, ((p as i64) + (off as i64)) as void*, take)
-        off += take
+        _ghash_mix(g, w1, w0)
     end
 end
 
-func _gcm_ctr(a: Aes, icb: void*, inp: void*, out: void*, n: int):
-    mut cb := _newbuf(16)
-    defer _buf_free(cb)
-    _putraw(cb, icb, 16)
-    mut ks := _newbuf(16)
-    defer _buf_wipe(ks)
-    _putzeros(ks, 16)
+func _ghash_key(a: Aes): Ghash:
+    mem.Set(a.ks, 0, 16 as u64)
+    _aes_encrypt_block(a, a.ks, a.ks)
+    mut g := Ghash {}
+    g.h1 = _be64(a.ks, 0)
+    g.h0 = _be64(a.ks, 8)
+    g.h0r = _rev64(g.h0)
+    g.h1r = _rev64(g.h1)
+    g.h2 = g.h0 ^ g.h1
+    g.h2r = g.h0r ^ g.h1r
+    ret g
+end
+
+func _gcm_new(key: void*, keylen: int): GcmCtx*:
+    c := mem.AllocateZeroed(sizeof(GcmCtx) as u64) as GcmCtx*
+    c.aes = _aes_init(key, keylen)
+    c.g = _ghash_key(c.aes)
+    ret c
+end
+
+func _gcm_free(c: GcmCtx*):
+    if c == null:
+        ret
+    end
+    _aes_free(c.aes)
+    _wipe(c as void*, sizeof(GcmCtx) as int)
+    mem.Free(c as void*)
+end
+
+func _gcm_ctr(a: Aes, nonce: void*, inp: void*, out: void*, n: int):
     mut off := 0
+    mut skip := 16
+    mut ctr := 1 as u32
     until off < n:
-        _aes_encrypt_block(a, cb.p, ks.p)
-        mut take := n - off
-        if take > 16:
-            take = 16
+        mut take := AES_BATCH - skip
+        if take > n - off:
+            take = n - off
         end
-        repeat take in i:
-            _bput(out, off + i, _bget(inp, off + i) ^ _bufat(ks, i))
-        end
-        mut c := 1
-        mut i := 15
-        until i > 11:
-            v := _bufat(cb, i) + c
-            _bufset(cb, i, v & 0xFF)
-            c = (v >> 8) & 1
-            i -= 1
-        end
+        _xor3(((out as i64) + (off as i64)) as void*, ((inp as i64) + (off as i64)) as void*, ((a.ks as i64) + (skip as i64)) as void*, take)
         off += take
+        skip = 0
+        if off < n:
+            ctr += 4 as u32
+            _aes_ctr_batch(a, nonce, ctr)
+        end
     end
 end
 
-func _gcm_lenblock(g &: Ghash, aadlen: int, ctlen: int):
-    mut lb := _newbuf(16)
-    defer _buf_free(lb)
-    _put64(lb, (aadlen as u64) * (8 as u64))
-    _put64(lb, (ctlen as u64) * (8 as u64))
-    _ghash_block(g, lb.p, 16)
-end
-
-func _gcm_tag(a: Aes, nonce: void*, aad: void*, aadlen: int, ct: void*, ctlen: int, tag: void*):
-    mut hk := _newbuf(16)
-    defer _buf_wipe(hk)
-    _putzeros(hk, 16)
-    mut zero := _newbuf(16)
-    defer _buf_free(zero)
-    _putzeros(zero, 16)
-    _aes_encrypt_block(a, zero.p, hk.p)
-
-    mut g := _ghash_init(hk.p)
+func _gcm_hash(g &: Ghash, aad: void*, aadlen: int, ct: void*, n: int):
     if aadlen > 0:
         _ghash_data(g, aad, aadlen)
     end
-    if ctlen > 0:
-        _ghash_data(g, ct, ctlen)
+    if n > 0:
+        _ghash_data(g, ct, n)
     end
-    _gcm_lenblock(g, aadlen, ctlen)
+    _ghash_mix(g, (aadlen as u64) * (8 as u64), (n as u64) * (8 as u64))
+end
 
-    mut j0 := _newbuf(16)
-    defer _buf_free(j0)
-    _putraw(j0, nonce, 12)
-    _put32(j0, 1 as i64)
-    mut ej0 := _newbuf(16)
-    defer _buf_wipe(ej0)
-    _putzeros(ej0, 16)
-    _aes_encrypt_block(a, j0.p, ej0.p)
-    repeat 16 in i:
-        _bput(tag, i, (g.y[i] as int) ^ _bufat(ej0, i))
+func _gcm_seal_with(a: Aes, g0: Ghash, nonce: void*, aad: void*, aadlen: int, pt: void*, ct: void*, n: int, tag: void*):
+    mut g := g0
+    _aes_ctr_batch(a, nonce, 1 as u32)
+    m1 := _be64(a.ks, 0)
+    m0 := _be64(a.ks, 8)
+    _gcm_ctr(a, nonce, pt, ct, n)
+    _gcm_hash(g, aad, aadlen, ct, n)
+    _pbe64(g.y1 ^ m1, tag, 0)
+    _pbe64(g.y0 ^ m0, tag, 8)
+end
+
+func _gcm_open_with(a: Aes, g0: Ghash, nonce: void*, aad: void*, aadlen: int, ct: void*, n: int, tag: void*, pt: void*): bool:
+    mut g := g0
+    _gcm_hash(g, aad, aadlen, ct, n)
+    _aes_ctr_batch(a, nonce, 1 as u32)
+    d1 := g.y1 ^ _be64(a.ks, 0) ^ _be64(tag, 0)
+    d0 := g.y0 ^ _be64(a.ks, 8) ^ _be64(tag, 8)
+    if (d1 | d0) != (0 as u64):
+        ret false
     end
+    _gcm_ctr(a, nonce, ct, pt, n)
+    ret true
 end
 
 func _gcm_seal(a: Aes, nonce: void*, aad: void*, aadlen: int, pt: void*, ct: void*, n: int, tag: void*):
-    mut icb := _newbuf(16)
-    defer _buf_free(icb)
-    _putraw(icb, nonce, 12)
-    _put32(icb, 2 as i64)
-    _gcm_ctr(a, icb.p, pt, ct, n)
-    _gcm_tag(a, nonce, aad, aadlen, ct, n, tag)
+    _gcm_seal_with(a, _ghash_key(a), nonce, aad, aadlen, pt, ct, n, tag)
 end
 
 func _gcm_open(a: Aes, nonce: void*, aad: void*, aadlen: int, ct: void*, n: int, tag: void*, pt: void*): bool:
-    mut want := _newbuf(16)
-    defer _buf_free(want)
-    _putzeros(want, 16)
-    _gcm_tag(a, nonce, aad, aadlen, ct, n, want.p)
-    if not _cteq(want.p, tag, 16):
-        ret false
-    end
-    mut icb := _newbuf(16)
-    defer _buf_free(icb)
-    _putraw(icb, nonce, 12)
-    _put32(icb, 2 as i64)
-    _gcm_ctr(a, icb.p, ct, pt, n)
-    ret true
+    ret _gcm_open_with(a, _ghash_key(a), nonce, aad, aadlen, ct, n, tag, pt)
 end

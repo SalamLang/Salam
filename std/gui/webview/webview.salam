@@ -1,0 +1,733 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "webview"
+@fa "نمایش وب"
+package webview
+
+import io
+import mem
+import os
+import str
+import sync
+
+@en "HintNone"
+@fa "بدون اشاره"
+pub const HINT_NONE := 0
+
+@en "HintFixed"
+@fa "اشاره ثابت"
+pub const HINT_FIXED := 1
+
+@en "ENGINE_SYSTEM"
+@fa "موتور سیستم"
+pub const ENGINE_SYSTEM := "system"
+
+@en "ENGINE_CHROMIUM"
+@fa "موتور کرومیوم"
+pub const ENGINE_CHROMIUM := "chromium"
+
+mut _wv_hooks := Vector {} as Vector<_Hooks>
+mut _wv_open := 0
+mut _wv_quit := false
+mut _wv_tasks := Vector {} as Vector<_Task>
+mut _wv_lock := sync.NewMutex()
+mut _wv_schemes := Vector {} as Vector<_Scheme>
+mut _wv_data_dir := ""
+mut _wv_app_id := ""
+mut _wv_app_name := ""
+mut _wv_touches := 0
+mut _wv_nav_main := true
+mut _wv_last_error := ""
+mut _wv_trace_path := ""
+mut _wv_trace_read := false
+mut _wv_on_command := (_id: int): ret end
+mut _wv_on_tray := (_event: int): ret end
+mut _wv_on_copy_data := (_data: void*, _size: int): ret end
+
+struct _Hooks:
+    pub on_message: func (str)
+    pub on_navigate: func (str) bool
+    pub on_new_window: func (str)
+    pub on_close: func () bool
+    pub on_load: func (str, bool)
+    pub on_crash: func ()
+    pub on_resize: func (int, int)
+    pub closed: bool = false
+end
+
+struct _Task:
+    pub view: int = -1
+    pub js: str = ""
+    pub run: func ()
+    pub has_run: bool = false
+end
+
+struct _Scheme:
+    pub name: str = ""
+    pub handler: func (Request) Response
+end
+
+@en "Request"
+@fa "درخواست"
+pub struct Request:
+    @en "url"
+    @fa "نشانی"
+    pub url: str = ""
+    @en "scheme"
+    @fa "طرح"
+    pub scheme: str = ""
+    @en "method"
+    @fa "روش"
+    pub method: str = "GET"
+    @en "path"
+    @fa "مسیر"
+    pub path: str = "/"
+    @en "query"
+    @fa "پرسش"
+    pub query: str = ""
+end
+
+@en "Response"
+@fa "پاسخ"
+pub struct Response:
+    @en "status"
+    @fa "وضعیت"
+    pub status: int = 200
+    @en "mime"
+    @fa "نوع محتوا"
+    pub mime: str = "text/html"
+    @en "data"
+    @fa "داده"
+    pub data: void* = null
+    @en "size"
+    @fa "اندازه"
+    pub size: i64 = 0
+    @en "headers"
+    @fa "سرآیندها"
+    pub headers: Vector<str> = Vector {}
+
+    @en "Header"
+    @fa "افزودن سرآیند"
+    pub func Header(name: str, value: str):
+        this.headers.push(name)
+        this.headers.push(value)
+    end
+end
+
+@en "WebView"
+@fa "نمایش وب"
+pub struct WebView:
+    @en "id"
+    @fa "شناسه"
+    pub id: int = -1
+
+    @en "destroy"
+    @fa "نابود کردن"
+    pub func Destroy():
+        if _wv_alive(this.id):
+            _wv_bk_destroy(this.id)
+            _wv_mark_closed(this.id)
+        end
+    end
+
+    @en "run"
+    @fa "اجرا"
+    pub func Run():
+        _wv_drain()
+        until _wv_alive(this.id) and not _wv_quit:
+            _wv_bk_iter()
+            _wv_drain()
+        end
+        _wv_quit = false
+    end
+
+    @en "terminate"
+    @fa "پایان دادن"
+    pub func Terminate():
+        Quit()
+    end
+
+    @en "SetTitle"
+    @fa "تنظیم عنوان"
+    pub func SetTitle(title: str):
+        if _wv_alive(this.id):
+            _wv_bk_set_title(this.id, title)
+        end
+    end
+
+    @en "SetSize"
+    @fa "تنظیم اندازه"
+    pub func SetSize(width: int, height: int, hints: int = HINT_NONE):
+        if _wv_alive(this.id):
+            _wv_bk_set_size(this.id, width, height, hints)
+        end
+    end
+
+    @en "SetMinSize"
+    @fa "تنظیم کمترین اندازه"
+    pub func SetMinSize(width: int, height: int):
+        if _wv_alive(this.id):
+            _wv_bk_set_min_size(this.id, width, height)
+        end
+    end
+
+    @en "SetIcon"
+    @fa "تنظیم نماد"
+    pub func SetIcon(path: str):
+        if _wv_alive(this.id):
+            _wv_bk_set_icon(this.id, path)
+        end
+    end
+
+    @en "SetHTML"
+    @fa "تنظیم اچ تی ام ال"
+    pub func SetHTML(html: str):
+        if _wv_alive(this.id):
+            _wv_bk_set_html(this.id, html)
+        end
+    end
+
+    @en "Navigate"
+    @fa "پیمایش"
+    pub func Navigate(url: str):
+        if _wv_alive(this.id):
+            _wv_bk_navigate(this.id, url)
+        end
+    end
+
+    @en "Eval"
+    @fa "ارزیابی"
+    pub func Eval(js: str):
+        if _wv_alive(this.id):
+            _wv_bk_eval(this.id, js)
+        end
+    end
+
+    @en "EvalLater"
+    @fa "ارزیابی با تاخیر"
+    pub func EvalLater(js: str):
+        _wv_enqueue(_Task { view = this.id, js = str.Clone(js), run = (): ret end })
+    end
+
+    @en "Init"
+    @fa "اولیه‌سازی"
+    pub func Init(js: str, all_frames: bool = false):
+        if _wv_alive(this.id):
+            _wv_bk_add_script(this.id, js, all_frames)
+        end
+    end
+
+    @en "URL"
+    @fa "نشانی فعلی"
+    pub func URL(): str:
+        if _wv_alive(this.id):
+            ret _wv_bk_url(this.id)
+        end
+        ret str.Clone("")
+    end
+
+    @en "Show"
+    @fa "نمایش"
+    pub func Show():
+        if _wv_alive(this.id):
+            _wv_bk_show(this.id)
+        end
+    end
+
+    @en "Hide"
+    @fa "پنهان کردن"
+    pub func Hide():
+        if _wv_alive(this.id):
+            _wv_bk_hide(this.id)
+        end
+    end
+
+    @en "Focus"
+    @fa "تمرکز"
+    pub func Focus():
+        if _wv_alive(this.id):
+            _wv_bk_focus(this.id)
+        end
+    end
+
+    @en "Minimize"
+    @fa "کمینه کردن"
+    pub func Minimize():
+        if _wv_alive(this.id):
+            _wv_bk_minimize(this.id)
+        end
+    end
+
+    @en "Maximize"
+    @fa "بیشینه کردن"
+    pub func Maximize():
+        if _wv_alive(this.id):
+            _wv_bk_maximize(this.id)
+        end
+    end
+
+    @en "Center"
+    @fa "وسط چین کردن"
+    pub func Center():
+        if _wv_alive(this.id):
+            _wv_bk_center(this.id)
+        end
+    end
+
+    @en "IsActive"
+    @fa "فعال است"
+    pub func IsActive(): bool:
+        if _wv_alive(this.id):
+            ret _wv_bk_is_active(this.id)
+        end
+        ret false
+    end
+
+    @en "Native"
+    @fa "دسته بومی"
+    pub func Native(): void*:
+        if _wv_alive(this.id):
+            ret _wv_bk_native(this.id)
+        end
+        ret null
+    end
+
+    @en "Content"
+    @fa "محتوای بومی"
+    pub func Content(): void*:
+        if _wv_alive(this.id):
+            ret _wv_bk_content(this.id)
+        end
+        ret null
+    end
+
+    @en "OpenDevTools"
+    @fa "باز کردن ابزار توسعه"
+    pub func OpenDevTools():
+        if _wv_alive(this.id):
+            _wv_bk_devtools(this.id)
+        end
+    end
+
+    @en "SetContextMenu"
+    @fa "تنظیم منوی زمینه"
+    pub func SetContextMenu(enabled: bool):
+        if _wv_alive(this.id):
+            _wv_bk_context_menu(this.id, enabled)
+        end
+    end
+
+    @en "OnMessage"
+    @fa "هنگام پیام"
+    pub func OnMessage(handler: func (str)):
+        if _wv_alive(this.id):
+            _wv_hooks[this.id].on_message = handler
+        end
+    end
+
+    @en "OnNavigate"
+    @fa "هنگام پیمایش"
+    pub func OnNavigate(handler: func (str) bool):
+        if _wv_alive(this.id):
+            _wv_hooks[this.id].on_navigate = handler
+        end
+    end
+
+    @en "OnNewWindow"
+    @fa "هنگام پنجره تازه"
+    pub func OnNewWindow(handler: func (str)):
+        if _wv_alive(this.id):
+            _wv_hooks[this.id].on_new_window = handler
+        end
+    end
+
+    @en "OnClose"
+    @fa "هنگام بستن"
+    pub func OnClose(handler: func () bool):
+        if _wv_alive(this.id):
+            _wv_hooks[this.id].on_close = handler
+        end
+    end
+
+    @en "OnLoad"
+    @fa "هنگام بارگذاری"
+    pub func OnLoad(handler: func (str, bool)):
+        if _wv_alive(this.id):
+            _wv_hooks[this.id].on_load = handler
+        end
+    end
+
+    @en "OnCrash"
+    @fa "هنگام از کار افتادن"
+    pub func OnCrash(handler: func ()):
+        if _wv_alive(this.id):
+            _wv_hooks[this.id].on_crash = handler
+        end
+    end
+
+    @en "OnResize"
+    @fa "هنگام تغییر اندازه"
+    pub func OnResize(handler: func (int, int)):
+        if _wv_alive(this.id):
+            _wv_hooks[this.id].on_resize = handler
+        end
+    end
+
+    @en "IsClosed"
+    @fa "بسته شده است"
+    pub func IsClosed(): bool:
+        ret not _wv_alive(this.id)
+    end
+end
+
+if SALAM_WEBVIEW_CEF:
+    func _wv_is_cef(): bool:
+        ret true
+    end
+end
+
+if not SALAM_WEBVIEW_CEF:
+    func _wv_is_cef(): bool:
+        ret false
+    end
+end
+
+func _wv_touch():
+    _wv_touches++
+end
+
+func _wv_alive(id: int): bool:
+    if id < 0 or id >= _wv_hooks.len():
+        ret false
+    end
+    ret not _wv_hooks[id].closed
+end
+
+func _wv_register(): int:
+    _wv_hooks.push(
+        _Hooks {
+            on_message = (_text: str): ret end, on_navigate = (_url: str): ret true end,
+            on_new_window = (_url: str): ret end, on_close = (): ret true end, on_load = (_url: str, _done: bool): ret end,
+            on_crash = (): ret end, on_resize = (_w: int, _h: int): ret end
+        }
+    )
+    _wv_open++
+    ret _wv_hooks.len() - 1
+end
+
+func _wv_mark_closed(id: int):
+    if _wv_alive(id):
+        _wv_hooks[id].closed = true
+        _wv_open--
+        _wv_bk_wake()
+    end
+end
+
+func _wv_enqueue(task: _Task):
+    sync.Lock(_wv_lock)
+    _wv_tasks.push(task)
+    sync.Unlock(_wv_lock)
+    _wv_bk_wake()
+end
+
+func _wv_drain():
+    sync.Lock(_wv_lock)
+    n := _wv_tasks.len()
+    if n == 0:
+        sync.Unlock(_wv_lock)
+        ret
+    end
+    mut batch := _wv_tasks
+    _wv_tasks = Vector {} as Vector<_Task>
+    sync.Unlock(_wv_lock)
+    repeat n in i:
+        t := batch[i]
+        if t.has_run:
+            t.run()
+        else _wv_alive(t.view):
+            _wv_bk_eval(t.view, t.js)
+        end
+        if t.js.len() > 0:
+            mem.Free(t.js as void*)
+        end
+    end
+    batch.free()
+end
+
+func _wv_tracing(): bool:
+    if not _wv_trace_read:
+        _wv_trace_path = os.Env("SALAM_WEBVIEW_TRACE")
+        _wv_trace_read = true
+    end
+    ret _wv_trace_path.len() > 0
+end
+
+func _wv_fire_message(id: int, text: str):
+    if _wv_tracing():
+        Trace("message, " + str.FromInt(text.len() as i64) + " bytes")
+    end
+    if _wv_alive(id):
+        _wv_hooks[id].on_message(text)
+    end
+end
+
+func _wv_fire_navigate(id: int, url: str): bool:
+    if _wv_tracing():
+        Trace("navigation to " + url)
+    end
+    if _wv_alive(id):
+        ret _wv_hooks[id].on_navigate(url)
+    end
+    ret true
+end
+
+func _wv_fire_new_window(id: int, url: str):
+    if _wv_alive(id):
+        _wv_hooks[id].on_new_window(url)
+    end
+end
+
+func _wv_fire_close(id: int): bool:
+    if _wv_alive(id):
+        ret _wv_hooks[id].on_close()
+    end
+    ret true
+end
+
+func _wv_fire_load(id: int, url: str, finished: bool):
+    if _wv_alive(id):
+        _wv_hooks[id].on_load(url, finished)
+    end
+end
+
+func _wv_fire_crash(id: int):
+    if _wv_alive(id):
+        _wv_hooks[id].on_crash()
+    end
+end
+
+func _wv_fire_resize(id: int, width: int, height: int):
+    if _wv_alive(id):
+        _wv_hooks[id].on_resize(width, height)
+    end
+end
+
+func _wv_scheme_answer(req: Request): Response:
+    each s in _wv_schemes:
+        if str.EqualFold(s.name, req.scheme):
+            answer := s.handler(req)
+            if _wv_tracing():
+                Trace("resource " + req.path + ": " + str.FromInt(answer.status as i64))
+            end
+            ret answer
+        end
+    end
+    ret Response { status = 404, mime = "text/plain" }
+end
+
+func _wv_request_free(req: Request):
+    if req.path != "/":
+        mem.Free(req.path as void*)
+    end
+    if req.query.len() > 0:
+        mem.Free(req.query as void*)
+    end
+end
+
+func _wv_split_url(url: str, scheme: str, method: str): Request:
+    mut r := Request { url = url, scheme = scheme, method = method }
+    start := str.IndexOf(url, "://")
+    if start < 0:
+        ret r
+    end
+    after := str.Substr(url, start + 3, str.Len(url) - start - 3)
+    defer mem.Free(after as void*)
+    slash := str.IndexOf(after, "/")
+    if slash < 0:
+        ret r
+    end
+    mut rest := str.Substr(after, slash, str.Len(after) - slash)
+    hash := str.IndexOf(rest, "#")
+    if hash >= 0:
+        cut := str.Substr(rest, 0, hash)
+        mem.Free(rest as void*)
+        rest = cut
+    end
+    q := str.IndexOf(rest, "?")
+    if q >= 0:
+        r.path = str.Substr(rest, 0, q)
+        r.query = str.Substr(rest, q + 1, str.Len(rest) - q - 1)
+        mem.Free(rest as void*)
+    else:
+        r.path = rest
+    end
+    ret r
+end
+
+@en "Dispatch"
+@fa "ارسال به رشته رابط"
+pub func Dispatch(work: func ()):
+    _wv_enqueue(_Task { run = work, has_run = true })
+end
+
+@en "RunAll"
+@fa "اجرای همه"
+pub func RunAll():
+    _wv_drain()
+    until _wv_open > 0 and not _wv_quit:
+        _wv_bk_iter()
+        _wv_drain()
+    end
+    _wv_quit = false
+end
+
+@en "Quit"
+@fa "خروج"
+pub func Quit():
+    _wv_quit = true
+    _wv_bk_wake()
+end
+
+@en "SetApp"
+@fa "تنظیم برنامه"
+pub func SetApp(id: str, name: str):
+    _wv_app_id = str.Clone(id)
+    _wv_app_name = str.Clone(name)
+end
+
+@en "SetDataDir"
+@fa "تنظیم پوشه داده"
+pub func SetDataDir(dir: str):
+    _wv_data_dir = str.Clone(dir)
+end
+
+@en "RegisterScheme"
+@fa "ثبت طرح"
+pub func RegisterScheme(name: str, handler: func (Request) Response):
+    _wv_schemes.push(_Scheme { name = str.Clone(name), handler = handler })
+    _wv_bk_register_scheme(name)
+end
+
+@en "SchemeURL"
+@fa "نشانی طرح"
+pub func SchemeURL(name: str, path: str): str:
+    ret _wv_bk_scheme_origin(name).concat(path)
+end
+
+@en "SchemeOrigin"
+@fa "مبدا طرح"
+pub func SchemeOrigin(name: str): str:
+    ret _wv_bk_scheme_origin(name)
+end
+
+@en "LastError"
+@fa "آخرین خطا"
+pub func LastError(): str:
+    ret _wv_last_error
+end
+
+@en "Trace"
+@fa "ثبت رد"
+pub func Trace(text: str):
+    if _wv_tracing():
+        _written := io.AppendFile(_wv_trace_path, text.concat("\n"))
+    end
+end
+
+@en "OnCommand"
+@fa "هنگام فرمان"
+pub func OnCommand(handler: func (int)):
+    _wv_on_command = handler
+end
+
+@en "OnTrayMessage"
+@fa "هنگام پیام سینی"
+pub func OnTrayMessage(handler: func (int)):
+    _wv_on_tray = handler
+end
+
+@en "OnCopyData"
+@fa "هنگام داده کپی"
+pub func OnCopyData(handler: func (void*, int)):
+    _wv_on_copy_data = handler
+end
+
+@en "MenuHost"
+@fa "میزبان منو"
+pub func MenuHost(): void*:
+    ret _wv_bk_menu_host()
+end
+
+@en "NameMessageWindow"
+@fa "نام پنجره پیام"
+pub func NameMessageWindow(title: str):
+    _wv_bk_name_message_window(title)
+end
+
+@en "NavigationIsMainFrame"
+@fa "پیمایش قاب اصلی است"
+pub func NavigationIsMainFrame(): bool:
+    ret _wv_nav_main
+end
+
+@en "PostScript"
+@fa "اسکریپت ارسال"
+pub func PostScript(): str:
+    ret _wv_bk_post_script()
+end
+
+@en "create"
+@fa "ایجاد"
+pub func Create(debug: bool = false, visible: bool = true): WebView:
+    id := _wv_register()
+    if not _wv_bk_create(id, debug, visible):
+        _wv_mark_closed(id)
+    end
+    ret WebView { id = id }
+end
+
+@en "Engine"
+@fa "موتور"
+pub func Engine(): str:
+    if _wv_is_cef():
+        ret ENGINE_CHROMIUM
+    else:
+        ret ENGINE_SYSTEM
+    end
+end
+
+@en "EngineName"
+@fa "نام موتور"
+pub func EngineName(): str:
+    if _wv_is_cef():
+        ret "Chromium Embedded Framework"
+    else SALAM_OS_WINDOWS:
+        ret "WebView2"
+    else SALAM_OS_MAC:
+        ret "WKWebView"
+    else:
+        ret "WebKitGTK"
+    end
+end
+
+@en "SupportsCommands"
+@fa "پشتیبانی از فرمان"
+pub func SupportsCommands(): bool:
+    if _wv_is_cef():
+        ret false
+    else:
+        ret true
+    end
+end

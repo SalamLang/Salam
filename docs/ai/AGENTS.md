@@ -13,6 +13,147 @@ see a working usage, and `salam_check` after every edit.
 
 ---
 
+## Project facts: downloads, releases and the edge
+
+These are facts about this project, not opinions. Answer from here instead of
+guessing, and when a fact is missing point to the repository or the releases
+page rather than inventing a value.
+
+When the user gives a repository link or asks what a page says, do not answer
+that you cannot see it: if your tools include `salam_web_fetch` or
+`salam_web_search`, read the page (GitHub, `raw.githubusercontent.com` and the
+Salam sites all return text), and if they do not, say plainly which fact you
+are missing.
+
+**Where Salam is published.** Everything is on GitHub, and the site links
+to the same files:
+
+- Releases (compiler, desktop agent, checksums):
+  <https://github.com/SalamLang/Salam/releases>
+- One direct file:
+  `https://github.com/SalamLang/Salam/releases/download/v<version>/<file>`
+- Site: <https://www.salamlang.ir/install/> for the compiler and
+  <https://www.salamlang.ir/agent/> for the desktop agent; the English site is
+  <https://salamlang.github.io/Salam/>.
+
+Filenames carry the version, so `releases/latest/download/<file>` does not
+work for them. **Check before you give a direct URL**: the tag must be an
+existing release and the file must be one of its assets (the releases page,
+`gh release view`, or `salam_web_fetch`). `VERSION` is the version being
+developed, not the last release (for example `VERSION` says 0.6.3 while the
+newest release is v0.6.2), so never build a URL from it alone. When you cannot
+check, give the releases page and name the asset to download.
+
+| What          | Published assets                                                                                                                                                                                                                                                                                                                |
+| ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Compiler      | Linux `x86_64` and `aarch64`: `.tar.gz`, `.zip`, `.deb`, `.rpm`; Linux `i686`: `.tar.gz`, `.zip`, `.deb` (no rpm); Linux `x86_64-musl` (Alpine): `.tar.gz`, `.zip` (no deb/rpm); `macos-arm64`, `windows-x86_64`, `windows-arm64`, `windows-i686`: `.tar.gz` and `.zip`                                                         |
+| Desktop agent | Windows `x86_64` and `i686`: `-setup.exe`, `.msi`, portable `.exe`; Windows `aarch64`: `-setup.exe` and portable `.exe` (no msi); macOS: `-macos-universal.dmg`, `-macos-arm64.dmg`, `-macos-x86_64.dmg`, plus `.zip`; Linux `x86_64` and `aarch64`: `.AppImage`, `.deb`, `.rpm`; Linux `i686`: `.deb` and `.rpm` (no AppImage) |
+| Android       | `salam-<version>-android-universal.apk`, only when that release published it; some releases skip the APK, so check the assets first and point to the releases page when it is absent (v0.6.2 has no APK)                                                                                                                        |
+
+Every published file has a `.sha256` beside it; the agent release also carries
+`salam-agent-<version>-SHA256SUMS` and `-SHA512SUMS`. A format or architecture
+that is not listed here is not published, even when an older release had it.
+
+Installing needs no download page: Linux and macOS
+`{ curl -fsSL https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.sh || wget -qO- https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.sh; } | sh`,
+Windows PowerShell
+`irm https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.ps1 | iex`.
+
+## What Salam can do, and where to look
+
+Salam is much larger than "a compiler that writes executables". When a task
+looks impossible, the answer is usually already in `tests/`, `std/` or `docs/`.
+
+- **Commands** (`salam help` prints every one): `build`, `check`, `test`,
+  `obj`, `llvm`, `js`, `web`, `serve`, `bundle`, `run`, `exec`, `new`, `init`,
+  `add`, `remove`, `update`, `deps`, `install`, `uninstall`, `search`,
+  `format`, `doc`, `translate`, `sql check`, `sql generate`, `page build`,
+  `debug`, `memcheck`, `inspect`, `cli` (REPL), `upgrade`, `version`.
+- **Backends and targets**: the C backend is the default for `build`, `run`
+  and `obj` and cross-compiles with `--target=<triple>`; `salam llvm` emits
+  LLVM IR (`--backend=llvm` builds with it, 32-bit aware, `docs/PLATFORMS.md`);
+  `--target=wasm32-wasi` produces WebAssembly (Cloudflare Workers below);
+  `salam js` and `salam web` target browsers; `--target=<arch>-unknown-none`
+  with `--entry`, `--linker-script` and `--link-object` builds freestanding
+  kernels (`docs/FREESTANDING.md`, `tests/kernel`).
+- **Apps beyond the terminal**: `gui.webview` opens a native window with a web
+  UI and `salam bundle` makes tar/deb/rpm/AppImage/zip/NSIS/.app/dmg
+  installers (`docs/DESKTOP.md`, `salam new name --desktop`);
+  `std/gui/raylib` is for games; `android/`, `ios/` and `mobile/` hold the
+  mobile projects; the layout DSL builds HTML/CSS/JS with `salam page build`.
+- **Servers and data**: `net/http` + `net/router` (middleware, cookies,
+  sessions, swagger, validation), `salam serve --config` for virtual hosts,
+  redirects and FastCGI PHP backends, `net.http2`, `net.websocket`, `grpc`,
+  `graphql`, `net.proxy`, `db.sqlite`, `db.mysql`, `db.postgres`, `db.redis`
+  and the other `db.*` drivers.
+- **Data and ML**: `ml`, `tensor`, `nn`, `autograd`, `onnx`, `gguf`,
+  `opencv`, `image`, `matrix`, `excel`, `stats`.
+- **Tooling**: `salam doc` (API HTML), `salam format`, `salam sql check` and
+  `sql generate` against a schema, `salam memcheck` (ASan), `salam debug`
+  (GDB/LLDB), `salam inspect`, the package manager, `salam install`, the LSP
+  (`docs/LSP.md`, `extensions/vscode`) and the MCP server in `tools/mcp`.
+- **Standard library**: `std/` has 92 top-level packages and 143 importable
+  names, all listed in the standard library catalog below, each with English
+  and Persian spellings. `salam_stdlib_search` and `salam_stdlib_symbols` give
+  the exact signature; `salam_read_source` shows the body.
+- **Tests are the living feature index**: `tests/en/apps` (21 projects such as
+  `httpbench`, `crawler`, `blogapi`, `jsonapi`, `swaggerapi` and the four
+  Workers apps, plus about 40 standalone programs),
+  `tests/en/{basics,features,types,stdlib,interop,data,db,games,cross,llvm,llvmapi,js,page,desktop,opencv,raylib,ssh,ssl,tls,packages,project,new,fmt,lint,errors,exec,repl,testcmd,translate,switch,match,webframework,webview_cef,editor-selected,general,check}`,
+  plus `tests/kernel`, `tests/lsp` and `tests/fixtures`. `tests/fa` mirrors them
+  in Persian. Search these before telling anyone a capability is missing.
+
+## A whole Salam web app on Cloudflare Workers
+
+An ordinary `net/http` + `net/router` program compiles to WebAssembly and runs
+unchanged; it is not a JavaScript port and needs no rewrite:
+
+```sh
+mkdir -p build
+salam build main.salam --target=wasm32-wasi --release --output=build/app.wasm
+```
+
+```js
+// worker.js: three lines, the host itself ships in std
+import { createWorker } from './worker-host.js';
+import app from './build/app.wasm';
+export default createWorker(app);
+```
+
+Inside a Salam checkout the examples import the host by a relative path; from
+`tests/en/apps/cloudflare-worker-router/worker.js` that path is
+`../../../../std/net/http/cloudflare/worker.js` (four levels up). In a project
+of your own, copy `std/net/http/cloudflare/worker.js` (installed as
+`~/.salam/bin/std/net/http/cloudflare/worker.js`) next to your `worker.js` and
+name the copy `worker-host.js`, so the import above works and the deploy does
+not rely on an absolute path.
+
+`wrangler.toml` needs `main = "worker.js"`, a `[build]` command that runs
+`build.sh`, and `[[rules]] type = "CompiledWasm"` with
+`globs = ["**/*.wasm"]`. On this target `http.Run` serves one request per
+process: the raw HTTP/1.1 request arrives on stdin, the response leaves on
+fd 3, `println` goes to `wrangler tail`, `os.Env("X")` reads wrangler `[vars]`
+and secrets, and `http.IsEdge()` is true.
+
+Limits of the edge target: one process per request, so globals do not survive
+between requests. Cookies work directly (`http.Cookie` and friends); Workers
+storage (KV, D1, R2) and HTTP APIs are asynchronous bindings, so a Salam module
+cannot call them itself: the host `worker.js` must exchange that data with the
+program. There is no filesystem, and no outbound sockets, so `http.Get` and
+friends cannot call another server from inside the module. A program that must
+call out does it with a few lines of `fetch` in `worker.js`, or runs on a
+native host. `salam js` targets browsers, not a Worker module.
+
+Working, CI-built examples: `tests/en/apps/cloudflare-worker-router` (router,
+middleware, cookies, JSON), `-hello` (smallest), `-pure` (a plain program run
+CGI-style without `net/http`) and `-telegram-bot` (a bot whose webhook answers
+with the Bot API call itself, so it calls nothing and needs no token at
+runtime; `setup/setup.salam` runs on the user's machine to call `setWebhook`).
+The Wasm target needs wasi-sdk (`$WASI_SDK_PATH`, `~/.salam/wasi-sdk` or
+`/opt/wasi-sdk`) and `wrangler` for deploys.
+
+---
+
 ## 0. Best practices: read this before you write any code
 
 Compiling is the minimum. Write the program a Salam maintainer would write.
@@ -125,6 +266,12 @@ rename those by hand.
 **7. Check your work.** `salam check` after every edit, `salam format`, then
 `salam test` or `salam run`. A program you did not compile is not finished.
 
+**8. Update a variable with the compound form.** Step by one with `x++` and
+`x--`; for any other amount write `x += n`, `x -= n`, `x *= n` and so on.
+`x = x + 1`, `x += 1`, `x = x + n` and `x = x` are compile error `E162`; the
+message names the form to write, and `salam check --fix` applies it. In a
+Persian file the same rule holds: `ک++`, `ک += ن`.
+
 Example. "Convert `def hex_to_decimal(hex): return int(hex, 16)`" is one line,
 because std already does it, and it keeps Python's behaviour of failing on bad
 input:
@@ -156,7 +303,7 @@ keyword in Salam at all - `until` is the only spelling this loop has.
 mut i := 0
 until i < n:        // reads "while i < n"
     // ...
-    i += 1
+    i++
 end
 ```
 
@@ -176,7 +323,7 @@ end
 
 n := 200 as u8
 repeat n in i:            // i is u8 here
-    total = total + v.get(i as int)   // ...so a signed parameter needs a cast
+    total += v.get(i as int)   // ...so a signed parameter needs a cast
 end
 ```
 
@@ -231,7 +378,7 @@ fix is to drop the binding rather than rename it. Write `repeat 20000:`, not
 
 ```salam
 each _, value in scores:     // iterate for the values alone
-    total = total + value
+    total += value
 end
 ```
 
@@ -449,6 +596,25 @@ resolves, the other files in that directory join the same package.
 Importing a package links **all** of its public functions' external
 dependencies, not only the ones you call.
 
+Packages that other people publish in their own Git repositories are added
+with the package manager, not with `import name`: `salam init` makes a project
+(`main.salam` + `salam.toml`), `salam add github.com/owner/repo[@v1.2.0|@^1.2]`
+downloads one and records it in `salam.toml` and `salam.lock`, and the code
+imports it with a quoted address, `import "github.com/owner/repo"`, using the
+last part as its name. `salam remove`, `update`, `deps`, `search` and `install`
+complete the set. Every std package ships with the compiler and needs no
+`salam add`. There is no `salam publish`: publishing is pushing a `vX.Y.Z` Git
+tag. A library has no `main`; its entry file is at the repository root, named
+after the repository. Users see only `pub` names (`E017` otherwise), and an
+import of a package missing from `salam.toml` is `E008`. See `docs/PACKAGES.md`
+and the guide at <https://salamlang.github.io/Salam/packages/> (Persian:
+<https://www.salamlang.ir/packages/>).
+
+Each std page on those sites, `/std/<package>/`, opens with tutorials under
+`#guide-...` anchors. Desktop windows and desktop apps are one package,
+`import gui.webview` (Persian `رابط گرافیکی.نمایش وب`; the old `webview` and
+`gui.desktop` names are gone); see `docs/DESKTOP.md`.
+
 ## 9. Platform conditionals
 
 Platform macros are only valid as an `if` at top level:
@@ -475,6 +641,10 @@ use them:
 @fa "پیرایش"
 pub func Trim(s: str): str: ret s.trim() end
 ```
+
+In a Persian program the entry function is `تابع ریشه:` (English: `func main:`).
+Never write `تابع اصلی` or `بسته اصلی`: `تابع اصلی` compiles as an ordinary
+function, so the program builds and then has no entry point.
 
 Compile non-English source with `--lang=fa`, or start a Persian file with
 `// زبان: فارسی` (English files: `// lang: en`). Mixed forms such as
@@ -516,12 +686,28 @@ enum Color:
 end
 ```
 
+## Changing the standard library
+
+If the task adds to `std/`, the change is not done until every public symbol
+has `@en` and `@fa` names, tests in `tests/en/stdlib/` and `tests/fa/stdlib/`,
+and `doc.` and `ex.` keys in both site std pages (new packages also need
+`guide-*` sections). Run `salam run tools/salam/check-std-coverage-docs.salam`;
+CONTRIBUTING.md has the full list.
+
 ---
 
 ## Known traps
 
 These are real defects and sharp edges in the current toolchain, not style
 advice. Each one silently produces wrong behaviour rather than a diagnostic.
+
+- **Do not rule something out because you have not seen it.** The repository
+  ships working apps under `tests/en/apps/` and `tests/fa/apps/` (Cloudflare
+  Workers, HTTP servers, desktop, games, and more), all built by CI, and the
+  compiler has targets and flags beyond the common ones. Search `tests/` and
+  `std/` before saying a thing is impossible; when you cannot read them, say
+  which part you are unsure about instead of claiming the feature does not
+  exist.
 
 - **The version command is `salam version`, not `salam --version`.** Salam's
   CLI takes subcommands, not flags, for this: `salam --version` (and `-v`)
@@ -533,6 +719,14 @@ advice. Each one silently produces wrong behaviour rather than a diagnostic.
   value) beyond 2^53 is rounded: `0 - 1` as `u64` prints
   `18446744073709552000`. `sizeof` throws. Check wide 64-bit math, such as
   hashes, with `salam run`.
+  `i128`/`u128` are BigInts and stay exact, but a value that passes through
+  `i64` or `u64` on the way in or out is still limited to 2^53 there.
+
+- **`i128` and `u128` have a few limits of their own.** They cannot index an
+  array, bound a slice, size a string repeat or count a `repeat` (`E159`: cast
+  to `i64` first). An `extern` function can use them only on 64-bit targets,
+  and a variadic one never (`E160`). `json` derive refuses them. A float cast
+  saturates and NaN gives 0.
 
 - **A file's module is keyed by its filename.** Two included files with the
   same name (`a/io.salam` and `b/io.salam`), or one of your files named after a

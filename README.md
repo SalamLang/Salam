@@ -245,6 +245,23 @@ The target is fully wired through the pipeline: the OS/arch predefined macros
 framework "..."` directives are passed to the cross-linker (e.g.
 `link dynamic "user32"` → `-luser32`).
 
+### Bare-metal kernels
+
+A `*-none` or `*-salamos*` target builds without an operating system: no libc,
+no crt files and no syscalls. The compiler links its small freestanding runtime
+and accepts a boot stub and a linker script:
+
+```sh
+salam build kernel.salam --target=i686-unknown-none \
+    --entry=_start --linker-script=linker.ld \
+    --link-object=boot.o --output=kernel.elf
+```
+
+`println` still works through COM1, the VGA text buffer and the QEMU debug
+console, and `std/baremetal` adds port I/O, `Halt`, `Panic`, direct VGA writes
+and a heap. `tests/kernel/` is a complete bootable Multiboot example; see
+[docs/FREESTANDING.md](docs/FREESTANDING.md).
+
 **Prerequisites.** Cross-compilation drives the LLVM toolchain, so you need a
 recent `clang`/`llc` (v22 is what the toolchain invokes) plus, for Windows
 targets, the LLVM linker `lld` and a **sysroot** (the target's CRT, system

@@ -13,7 +13,12 @@
 #
 # Usage:
 #   tools/bash/build-selfhost.sh [--output FILE] [--seed PROG] [--llvm DIR]
-#                                [--embed DIR] [-- <extra salam build args>]
+#                                [--embed DIR] [--seed-is-builder]
+#                                [-- <extra salam build args>]
+#
+# --seed-is-builder skips the intermediate C-backend stage when the seed was
+# already built from this checkout for the target, so an embedded build needs
+# one compile instead of two (a large saving inside QEMU).
 #
 # Env:
 #   SALAM_SEED   same as --seed
@@ -24,10 +29,15 @@ OUT=$(pwd)/salam
 SEED=${SALAM_SEED:-}
 LLVM_DIR=
 EMBED_DIR=
+SEED_IS_BUILDER=0
 EXTRA=
 
 while [ $# -gt 0 ]; do
     case $1 in
+    --seed-is-builder)
+        SEED_IS_BUILDER=1
+        shift
+        ;;
     --output=*)
         OUT=${1#*=}
         shift
@@ -66,7 +76,7 @@ while [ $# -gt 0 ]; do
         break
         ;;
     -h | --help)
-        sed -n '2,19p' "$0"
+        sed -n '2,25p' "$0"
         exit 0
         ;;
     *)
@@ -122,11 +132,14 @@ fi
 echo "seed   : $SEED ($("$SEED" version 2>/dev/null | head -1))"
 echo "output : $OUT"
 
-if [ -n "$EMBED_DIR" ]; then
+if [ -n "$EMBED_DIR" ] && [ "$SEED_IS_BUILDER" = 0 ]; then
     echo "stage 1: a plain compiler, to build the embedded one with"
     "$SEED" build --backend=c "$ROOT/compiler/main.salam" --output="$OUT.stage1" $OWN
     BUILDER=$OUT.stage1
 else
+    if [ "$SEED_IS_BUILDER" = 1 ]; then
+        echo "seed   : already built from this checkout; skipping stage 1"
+    fi
     BUILDER=$SEED
 fi
 

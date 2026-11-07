@@ -45,7 +45,7 @@ func check_operator_arity(s &: Sema, a &: at.Ast, fnid: int, fsp: co.SrcSpan):
     mut np := 0
     repeat fn.list.len() in i:
         if at.KindOf(a, fn.list.get(i)) == at.AST_PARAM:
-            np += 1
+            np++
         end
     end
     if str.Equals(fn.name, "operator_sub"):
@@ -216,12 +216,21 @@ func check_function(s &: Sema, a &: at.Ast, fnid: int, owner: int, sigid: int):
             s.expected = pt
         end
         dt := sema_check_expr(s, a, param.a)
-        if pt >= 0 and dt >= 0 and not type_assignable(s, pt, dt):
+        if opt_wraps(s, pt, dt):
+            mut pvo := at.Get(a, pid)
+            pvo.a = coerce_to_opt(s, a, pt, param.a, dt)
+            at.Put(a, pid, pvo)
+        else pt >= 0 and dt >= 0 and not type_assignable(s, pt, dt):
             serr(
                 s, 2, span_of(a, pid), co.Format3(
                     i18.Tr("default for parameter '%s': cannot assign '%s' to '%s'"), co.ArgStr(param.name), co.ArgStr(type_disp(s, dt)), co.ArgStr(type_disp(s, pt))
                 )
             )
+        else:
+            wide_coerce(s, a, param.a, pt)
+            mut pvb := at.Get(a, pid)
+            pvb.a = coerce_box_value(s, a, pt, param.a, dt)
+            at.Put(a, pid, pvb)
         end
     end
     if owner != 0:
@@ -307,7 +316,7 @@ func check_function(s &: Sema, a &: at.Ast, fnid: int, owner: int, sigid: int):
                 until sgl.ret_widened and rounds < 3:
                     sgl.ret_widened = false
                     sig_put(s, sigid, sgl)
-                    rounds += 1
+                    rounds++
                     lg.Log(
                         s.log, lg.PH_SEMANTIC, lg.LOG_DEBUG, "re-check '" + fn.name + "' with widened return type '" + type_to_string(s, sig_at(s, sigid).ret_type) + "'"
                     )
@@ -447,6 +456,7 @@ func check_toplevel_body(s &: Sema, a &: at.Ast, did: int):
         fsym := scope_lookup_local(s, s.global, d.name)
         check_function(s, a, did, 0, find_sig(s, fsym, did))
     else d.kind == at.AST_STRUCT_DEF:
+        struct_rules_validate(s, a, did)
         ssym := scope_lookup_local(s, s.global, d.name)
         if ssym == 0:
             ret
@@ -488,12 +498,18 @@ func check_toplevel_body(s &: Sema, a &: at.Ast, did: int):
                     s.cur = save_cur
                     s.gen_pkg = save_gp
                 end
-                if f != 0 and not type_assignable(s, ftv, vt):
+                if f != 0 and opt_wraps(s, ftv, vt):
+                    mut mvo := at.Get(a, mid)
+                    mvo.a = coerce_to_opt(s, a, ftv, m.a, vt)
+                    at.Put(a, mid, mvo)
+                else f != 0 and not type_assignable(s, ftv, vt):
                     serr(
                         s, 2, span_of(a, mid), co.Format3(
                             i18.Tr("default for field '%s': cannot assign '%s' to '%s'"), co.ArgStr(m.name), co.ArgStr(type_disp(s, vt)), co.ArgStr(type_disp(s, ftv))
                         )
                     )
+                else f != 0 and type_is_wide(s, ftv):
+                    wide_coerce(s, a, m.a, ftv)
                 else f != 0 and ftv >= 0 and ty_at(s, ftv).kind == TY_DYN and vt >= 0 and ty_at(s, vt).kind != TY_DYN:
                     mut mvd := at.Get(a, mid)
                     mvd.a = coerce_to_dyn(s, a, ftv, m.a, vt)
@@ -574,7 +590,7 @@ func sema_check_pass(s &: Sema, a &: at.Ast, program: int):
     mut i := 0
     until i < at.ChildCount(a, program):
         did := at.Child(a, program, i)
-        i += 1
+        i++
         mut d := at.Get(a, did)
         if str.Len(d.origin_lang) == 0:
             d.origin_lang = s.lang
@@ -590,7 +606,7 @@ func sema_check_pass(s &: Sema, a &: at.Ast, program: int):
     mut ic := 0
     until ic < at.ChildCount(a, program):
         didc := at.Child(a, program, ic)
-        ic += 1
+        ic++
         dc := at.Get(a, didc)
         if dc.synthetic or at.Typarams(a, dc.ext).len() > 0:
             continue
@@ -602,7 +618,7 @@ func sema_check_pass(s &: Sema, a &: at.Ast, program: int):
     mut i2 := 0
     until i2 < at.ChildCount(a, program):
         did2 := at.Child(a, program, i2)
-        i2 += 1
+        i2++
         d2 := at.Get(a, did2)
         if d2.synthetic or at.Typarams(a, d2.ext).len() > 0:
             continue
@@ -626,7 +642,7 @@ func sema_check_pass(s &: Sema, a &: at.Ast, program: int):
         check_toplevel(s, a, did3)
         s.in_derive = false
         s.lang = save_lang
-        pi += 1
+        pi++
     end
     s.in_generic_inst = save_gi
 end

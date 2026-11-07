@@ -20,7 +20,6 @@ need() { command -v "$1" >/dev/null 2>&1 || {
     exit 1
 }; }
 need curl
-need python3
 
 sha256_of() {
     if command -v sha256sum >/dev/null 2>&1; then
@@ -61,28 +60,15 @@ sum_opt() {
 if [ -z "$SEED_VERSION" ]; then
     echo "==> resolving the bootstrap seed release"
     SEED_VERSION=$(curl -fsSL "https://api.github.com/repos/$REPO/releases?per_page=100" |
-        python3 -c '
-import json, sys
-target = sys.argv[1]
-
-def key(v):
-    return tuple(int(p) for p in v.split("."))
-
-want = key(target)
-best = None
-for rel in json.load(sys.stdin):
-    tag = rel.get("tag_name", "")
-    if not tag.startswith("v") or "-nightly-" in tag or rel.get("draft"):
-        continue
-    v = tag[1:]
-    try:
-        k = key(v)
-    except ValueError:
-        continue
-    if k < want and (best is None or k > key(best)):
-        best = v
-print(best or "")
-' "$VERSION")
+        grep -o '"tag_name": *"[^"]*"' |
+        sed 's/.*"v\([^"]*\)"$/\1/' |
+        grep -E '^[0-9]+(\.[0-9]+)*$' |
+        awk -v target="$VERSION" '
+            function key(v,    p, n, i, k) { n = split(v, p, "."); k = 0; for (i = 1; i <= 4; i++) k = k * 1000 + (i <= n ? p[i] : 0); return k }
+            BEGIN { want = key(target); bestk = -1 }
+            { k = key($0); if (k < want && k > bestk) { bestk = k; best = $0 } }
+            END { print best }
+        ')
     [ -n "$SEED_VERSION" ] || {
         echo "bump.sh: could not find a seed release older than $VERSION" >&2
         exit 1
@@ -125,7 +111,7 @@ curl -fsSL -o "$TMP/$MUSL" "https://github.com/$REPO/releases/download/v$VERSION
 SHA512_LINUX_MUSL=$(sha512_of "$TMP/$MUSL")
 
 sri() {
-    python3 -c 'import base64,binascii,sys; print("sha256-"+base64.b64encode(binascii.unhexlify(sys.argv[1])).decode())' "$1"
+    printf 'sha256-%s\n' "$(printf '%b' "$(printf '%s' "$1" | sed 's/../\\x&/g')" | base64 | tr -d '\n')"
 }
 
 SHA256_LINUX_X86_64=$(sum_for "salam-$VERSION-linux-x86_64.tar.gz")
@@ -137,7 +123,7 @@ SHA256_WINDOWS_X86_64=$(sum_for "salam-$VERSION-windows-x86_64.zip")
 SHA256_WINDOWS_I686=$(sum_for "salam-$VERSION-windows-i686.zip")
 
 RELEASE_DATE=$(curl -fsSL "https://api.github.com/repos/$REPO/releases/tags/v$VERSION" |
-    python3 -c 'import json,sys; print((json.load(sys.stdin).get("published_at") or "")[:10])')
+    { grep -o '"published_at": *"[^"]*"' || true; } | sed -n '1s/.*"\([0-9-]\{10\}\)T.*/\1/p')
 [ -n "$RELEASE_DATE" ] || RELEASE_DATE=$(date -u +%Y-%m-%d)
 RPM_DATE=$(LC_ALL=C date -u -d "$RELEASE_DATE" "+%a %b %d %Y" 2>/dev/null ||
     LC_ALL=C date -u -j -f %Y-%m-%d "$RELEASE_DATE" "+%a %b %d %Y")
@@ -169,6 +155,7 @@ render() {
         -e "s|@SHA512_LINUX_MUSL@|$SHA512_LINUX_MUSL|g" \
         -e "s|@SRI_LINUX_X86_64@|$(sri "$SHA256_LINUX_X86_64")|g" \
         -e "s|@SRI_LINUX_AARCH64@|$(sri "$SHA256_LINUX_AARCH64")|g" \
+        -e "s|@SRI_LINUX_ARMHF@|$(sri "$SHA256_LINUX_ARMHF")|g" \
         -e "s|@SRI_MACOS_ARM64@|$(sri "$SHA256_MACOS_ARM64")|g" \
         "$src" >"$dst"
 }

@@ -1,10 +1,13 @@
 import { useState } from "react";
 import type { Chat, User } from "./api";
 import { isDesktop } from "./desktop";
-import { IconChat, IconClose, IconEdit, IconGlobe, IconKey, IconLogout, IconMemory, IconMonitor, IconMoon, IconPlug, IconPlus, IconShield, IconSpark, IconSun, IconTrash } from "./icons";
+import { IconChart, IconClose, IconEdit, IconGlobe, IconKey, IconLogout, IconMemory, IconMonitor, IconMoon, IconPlug, IconPlus, IconShield, IconShare, IconSpark, IconSun, IconTrash } from "./icons";
 import type { Theme } from "./theme";
 import { confirmDialog } from "./Confirm";
 import { isFa, setLang, t } from "./i18n";
+import { fmtNum } from "./format";
+
+type Filter = "all" | "active" | "idle";
 
 function groupOf(updated: number): string {
   const now = new Date();
@@ -14,6 +17,35 @@ function groupOf(updated: number): string {
   if (updated >= start - 7 * 86400) return t("۷ روز گذشته", "Previous 7 days");
   if (updated >= start - 30 * 86400) return t("۳۰ روز گذشته", "Previous 30 days");
   return t("قدیمی‌تر", "Older");
+}
+
+function isLive(c: Chat): boolean {
+  return c.state === "working" || c.state === "waiting" || c.state === "queued";
+}
+
+function stateOf(c: Chat): string {
+  return c.state ?? "idle";
+}
+
+function statusText(c: Chat): string {
+  switch (stateOf(c)) {
+    case "working":
+      if (c.phase === "writing") return t("در حال نوشتن", "Writing");
+      if (c.phase === "tool") return t("در حال اجرای ابزار", "Running tools");
+      return t("در حال فکر کردن", "Thinking");
+    case "waiting":
+      return t("منتظر تأیید شما", "Waiting for you");
+    case "queued": {
+      const n = c.queued ?? 1;
+      return n > 1 ? t(`${fmtNum(n)} پیام در صف`, `${fmtNum(n)} queued`) : t("در صف", "Queued");
+    }
+    case "offline":
+      return t("دستگاه آفلاین است", "Device offline");
+    default:
+      if (c.last_error) return t("آخرین پاسخ ناموفق بود", "Last reply failed");
+      if (c.agent && c.online) return t("دستگاه متصل است", "Device connected");
+      return "";
+  }
 }
 
 type Props = {
@@ -31,13 +63,25 @@ type Props = {
   onToggleTheme: () => void;
   page: string;
   onNavigate: (path: string) => void;
+  activeBusy?: boolean;
+  activeWaiting?: boolean;
+  activePhase?: Chat["phase"];
 };
 
 export function Sidebar(p: Props) {
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState("");
+  const [filter, setFilter] = useState<Filter>("all");
+  const items = p.chats.map((c) => {
+    if (c.id !== p.activeId) return c;
+    if (p.activeWaiting) return { ...c, state: "waiting" as const };
+    if (p.activeBusy) return { ...c, state: "working" as const, phase: p.activePhase ?? c.phase ?? "thinking" };
+    return c;
+  });
+  const liveCount = items.filter(isLive).length;
+  const seen = filter === "all" ? items : filter === "active" ? items.filter(isLive) : items.filter((c) => !isLive(c));
   const groups: { name: string; items: Chat[] }[] = [];
-  for (const c of p.chats) {
+  for (const c of seen) {
     const g = groupOf(c.updated);
     const last = groups[groups.length - 1];
     if (last && last.name === g) last.items.push(c);
@@ -48,6 +92,11 @@ export function Sidebar(p: Props) {
     if (title) p.onRename(id, title);
     setEditing(null);
   };
+  const filters: { id: Filter; label: string; count: number }[] = [
+    { id: "all", label: t("همه", "All"), count: items.length },
+    { id: "active", label: t("فعال", "Active"), count: liveCount },
+    { id: "idle", label: t("بی‌کار", "Idle"), count: items.length - liveCount },
+  ];
   return (
     <>
       <div className={`scrim ${p.open ? "show" : ""}`} onClick={p.onClose} aria-hidden="true" />
@@ -68,63 +117,96 @@ export function Sidebar(p: Props) {
           <IconPlus width={18} height={18} />
           {t("گفت‌وگوی تازه", "New chat")}
         </button>
+        <div className="chat-filters" role="group" aria-label={t("صافی گفت‌وگوها", "Filter chats")}>
+          {filters.map((f) => (
+            <button
+              key={f.id}
+              type="button"
+              className={`chat-filter ${filter === f.id ? "on" : ""}`}
+              aria-pressed={filter === f.id}
+              onClick={() => setFilter(f.id)}
+            >
+              {f.id === "active" && f.count > 0 && <span className="live-dot" aria-hidden="true" />}
+              <span>{f.label}</span>
+              <b>{fmtNum(f.count)}</b>
+            </button>
+          ))}
+        </div>
         <nav className="chat-list">
           {p.chats.length === 0 && <p className="empty-list">{t("هنوز گفت‌وگویی ندارید. اولین پرسش خود را بنویسید.", "No chats yet. Ask your first question.")}</p>}
+          {p.chats.length > 0 && seen.length === 0 && (
+            <p className="empty-list">
+              {filter === "active"
+                ? t("هیچ گفت‌وگویی در حال کار نیست. همه بی‌کارند.", "No chat is working right now. All are idle.")
+                : t("همه‌ی گفت‌وگوها در حال کارند.", "Every chat is working right now.")}
+            </p>
+          )}
           {groups.map((g) => (
             <div key={g.name} className="chat-group">
               <h3>{g.name}</h3>
-              {g.items.map((c) => (
-                <div key={c.id} className={`chat-item ${c.id === p.activeId ? "active" : ""}`}>
-                  {editing === c.id ? (
-                    <input
-                      className="rename"
-                      value={draft}
-                      autoFocus
-                      maxLength={80}
-                      onChange={(e) => setDraft(e.target.value)}
-                      onBlur={() => commit(c.id)}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter") commit(c.id);
-                        if (e.key === "Escape") setEditing(null);
-                      }}
-                    />
-                  ) : (
-                    <button type="button" className="chat-link" onClick={() => p.onSelect(c.id)} title={c.title}>
-                      <IconChat width={16} height={16} />
-                      <span dir="auto">{c.title}</span>
-                    </button>
-                  )}
-                  <div className="chat-actions">
-                    <button
-                      type="button"
-                      className="icon-button tiny"
-                      aria-label={t("تغییر نام", "Rename")}
-                      onClick={() => {
-                        setDraft(c.title);
-                        setEditing(c.id);
-                      }}
-                    >
-                      <IconEdit width={15} height={15} />
-                    </button>
-                    <button
-                      type="button"
-                      className="icon-button tiny danger"
-                      aria-label={t("حذف گفت‌وگو", "Delete chat")}
-                      onClick={async () => {
-                        const ok = await confirmDialog({
-                          title: t("حذف گفت‌وگو", "Delete chat"),
-                          subject: c.title,
-                          message: t("این گفت‌وگو و همه‌ی پیام‌هایش برای همیشه حذف می‌شود و برگرداندنش ممکن نیست.", "This chat and all its messages will be deleted for good. This cannot be undone."),
-                          confirmLabel: t("حذف", "Delete"),
-                        });
-                        if (ok) p.onDelete(c.id);
-                      }}
-                    >
-                      <IconTrash width={15} height={15} />
-                    </button>
+              {g.items.map((c) => {
+                const state = stateOf(c);
+                const status = statusText(c);
+                const tip = `${c.title}${status ? ` — ${status}` : ` — ${t("بی‌کار", "Idle")}`}`;
+                return (
+                  <div key={c.id} className={`chat-item ${c.id === p.activeId ? "active" : ""} state-${state}${c.last_error ? " last-error" : ""}`}>
+                    {editing === c.id ? (
+                      <input
+                        className="rename"
+                        value={draft}
+                        autoFocus
+                        maxLength={80}
+                        onChange={(e) => setDraft(e.target.value)}
+                        onBlur={() => commit(c.id)}
+                        onKeyDown={(e) => {
+                          if (e.key === "Enter") commit(c.id);
+                          if (e.key === "Escape") setEditing(null);
+                        }}
+                      />
+                    ) : (
+                      <button type="button" className="chat-link" onClick={() => p.onSelect(c.id)} title={tip} aria-label={tip}>
+                        <span className={`chat-state ${state}`} aria-hidden="true" />
+                        <span className="chat-main">
+                          <span className="chat-title" dir="auto">{c.title}</span>
+                          {status && <span className={`chat-status ${state}${c.last_error ? " failed" : ""}`}>{status}</span>}
+                        </span>
+                        {c.shared && c.shared.length > 0 && (
+                          <IconShare className="chat-shared" width={13} height={13} aria-label={t("اشتراکی", "Shared")} role="img" />
+                        )}
+                      </button>
+                    )}
+                    <div className="chat-actions">
+                      <button
+                        type="button"
+                        className="icon-button tiny"
+                        aria-label={t("تغییر نام", "Rename")}
+                        onClick={() => {
+                          setDraft(c.title);
+                          setEditing(c.id);
+                        }}
+                      >
+                        <IconEdit width={15} height={15} />
+                      </button>
+                      <button
+                        type="button"
+                        className="icon-button tiny danger"
+                        aria-label={t("حذف گفت‌وگو", "Delete chat")}
+                        onClick={async () => {
+                          const ok = await confirmDialog({
+                            title: t("حذف گفت‌وگو", "Delete chat"),
+                            subject: c.title,
+                            message: t("این گفت‌وگو و همه‌ی پیام‌هایش برای همیشه حذف می‌شود و برگرداندنش ممکن نیست.", "This chat and all its messages will be deleted for good. This cannot be undone."),
+                            confirmLabel: t("حذف", "Delete"),
+                          });
+                          if (ok) p.onDelete(c.id);
+                        }}
+                      >
+                        <IconTrash width={15} height={15} />
+                      </button>
+                    </div>
                   </div>
-                </div>
-              ))}
+                );
+              })}
             </div>
           ))}
         </nav>
@@ -146,6 +228,15 @@ export function Sidebar(p: Props) {
           >
             <IconSpark width={16} height={16} />
             <span>{t("اشتراک‌ها", "Plans")}</span>
+          </a>
+          <a
+            href="/usage"
+            className={`chat-link ${p.page === "usage" ? "active" : ""}`}
+            aria-current={p.page === "usage" ? "page" : undefined}
+            onClick={(e) => (e.preventDefault(), p.onNavigate("/usage"))}
+          >
+            <IconChart width={16} height={16} />
+            <span>{t("مصرف و توکن‌ها", "Usage and tokens")}</span>
           </a>
           <a
             href="/keys"

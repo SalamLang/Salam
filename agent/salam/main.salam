@@ -13,8 +13,8 @@
  */
 
 import crypto
-import gui.desktop
-import gui.desktop.pack
+import gui.webview
+import gui.webview.pack
 import encoding.json
 import filepath
 import fs
@@ -162,7 +162,7 @@ const WATCHDOG_RECOVER_GAP_MS := 120000
 mut g_mu := sync.NewMutex()
 mut g_cv := sync.NewCondVar()
 mut g_ready := false
-mut g_win := desktop.Window {}
+mut g_win := webview.Window {}
 mut g_os_version := ""
 mut g_device_id := ""
 mut g_device_name := ""
@@ -356,7 +356,7 @@ func header_safe(text: str): str:
         alnum := (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
         if (alnum or c == 32 or c == 46 or c == 45 or c == 43 or c == 95 or c == 40 or c == 41) and kept < 64:
             str.BufAppendChar(b, c)
-            kept += 1
+            kept++
         end
     end
     ret str.Trim(str.BufStr(b))
@@ -394,7 +394,7 @@ func parse_windows_ver(text: str): str:
             break
         end
         str.BufAppendChar(b, c)
-        i += 1
+        i++
     end
     version := str.BufStr(b)
     parts := str.Split(version, ".")
@@ -475,7 +475,7 @@ else:
 end
 
 func device_file(): str:
-    ret filepath.Join(desktop.DataDir(), "device.json")
+    ret filepath.Join(webview.DataDir(), "device.json")
 end
 
 func device_load():
@@ -489,7 +489,7 @@ func device_load():
     end
     id := json.Get(text, "device_id")
     name := json.Get(text, "device_name")
-    secret := desktop.SecretGet(bridge_url())
+    secret := webview.SecretGet(bridge_url())
     if id.len() > 0 and name.len() > 0 and secret.len() > 0:
         sync.Lock(g_mu)
         g_device_id = id
@@ -500,14 +500,14 @@ func device_load():
 end
 
 func device_save(id: str, name: str, secret: str): str:
-    if not desktop.SecretSet(bridge_url(), secret):
+    if not webview.SecretSet(bridge_url(), secret):
         ret "could not store the device secret"
     end
     mut members := Vector {} as Vector<str>
     defer members.free()
     members.push(json.Member("device_id", id))
     members.push(json.Member("device_name", name))
-    _mk := os.MkdirAll(desktop.DataDir())
+    _mk := os.MkdirAll(webview.DataDir())
     if io.WriteFile(device_file(), json.Object(members)) < 0:
         ret "could not write " + device_file()
     end
@@ -521,7 +521,7 @@ func device_save(id: str, name: str, secret: str): str:
 end
 
 func device_clear():
-    desktop.SecretDelete(bridge_url())
+    webview.SecretDelete(bridge_url())
     _gone := os.Remove(device_file())
     sync.Lock(g_mu)
     g_device_id = ""
@@ -599,7 +599,7 @@ func canonical_prefix(path: str): str:
             mut i := rest.len() - 1
             until i >= 0:
                 out = filepath.Join(out, rest[i])
-                i -= 1
+                i--
             end
             ret SALAM_OS_WINDOWS ? str.Replace(out, "/", "\\") : out
         end
@@ -683,7 +683,7 @@ func approvals_ask(p: Preview, reason &: str): bool:
     sync.Lock(g_mu)
     g_pending.put(p.call_id, entry)
     sync.Unlock(g_mu)
-    emit_call(p, "pending", "")
+    emit_call(p, "pending", "", "")
     notify_post("approval", "", p.summary, 0 as i64)
     deadline := sync.NowMs() + (ANSWER_WAIT_MS as i64)
     sync.Lock(g_mu)
@@ -725,7 +725,7 @@ func approvals_pending_json(): str:
     defer items.free()
     sync.Lock(g_mu)
     each _, entry in g_pending:
-        items.push(preview_json(entry[0].preview, "", ""))
+        items.push(preview_json(entry[0].preview, "", "", ""))
     end
     sync.Unlock(g_mu)
     ret json.Array(items)
@@ -811,13 +811,13 @@ func slugify(title: str): str:
         if letter:
             if pending and str.BufLen(b) > 0 and count < MAX_SLUG:
                 str.BufAppendChar(b, 45)
-                count += 1
+                count++
             end
             pending = false
             if count < MAX_SLUG or (c >= 128 and c < 192):
                 str.BufAppendChar(b, c)
                 if c < 128 or c >= 192:
-                    count += 1
+                    count++
                 end
             end
         else:
@@ -875,7 +875,7 @@ func memory_parse(slug: str, raw: str): Memory:
                 close = i
                 break
             end
-            i += 1
+            i++
         end
     end
     mut body := text
@@ -896,14 +896,14 @@ func memory_parse(slug: str, raw: str): Memory:
                     m.updated = value
                 end
             end
-            i += 1
+            i++
         end
         mut rest := Vector {} as Vector<str>
         defer rest.free()
         i = close + 1
         until i < lines.len():
             rest.push(lines[i])
-            i += 1
+            i++
         end
         body = str.Join(rest, "\n")
     end
@@ -948,10 +948,10 @@ func memory_list(root: str): Vector<Memory>:
         mut j := i - 1
         until j >= 0 and str.Compare(out[j].updated, item.updated) < 0:
             out[j + 1] = out[j]
-            j -= 1
+            j--
         end
         out[j + 1] = item
-        i += 1
+        i++
     end
     ret out
 end
@@ -972,7 +972,7 @@ func memory_rebuild_index(root: str): int:
     defer memories.free()
     mut out := "# Salam Agent memory\n\nWhat Salam Agent remembers about this project. Each memory is one file under memory/.\n\n"
     if memories.len() == 0:
-        out = out + "No memories yet.\n"
+        out += "No memories yet.\n"
     end
     each m in memories:
         title := str.Replace(str.Replace(one_line(m.title), "[", "\\["), "]", "\\]")
@@ -984,7 +984,7 @@ func memory_rebuild_index(root: str): int:
         if str.Trim(m.updated).len() > 0:
             out = out + " (updated " + shown_time(str.Trim(m.updated)) + ")"
         end
-        out = out + "\n"
+        out += "\n"
     end
     _mk := os.MkdirAll(filepath.Join(root, MEMORY_DIR))
     _wrote := io.WriteFile(index_path(root), out)
@@ -1068,7 +1068,7 @@ func read_capped(path: str, max: int): str:
     mut cut := max - str.Len(MEMORY_CUT) - 1
     bytes := text as u8*
     until cut > 0 and ((bytes[cut] as int) & 0xC0) == 0x80:
-        cut -= 1
+        cut--
     end
     head := str.Substr(text, 0, cut)
     ret head + (str.EndsWith(head, "\n") ? "" : "\n") + MEMORY_CUT
@@ -1099,7 +1099,7 @@ func project_context_json(root: str): str:
 end
 
 func prefs_file(): str:
-    ret filepath.Join(desktop.DataDir(), "notifications.json")
+    ret filepath.Join(webview.DataDir(), "notifications.json")
 end
 
 func prefs_json(p: Prefs): str:
@@ -1143,7 +1143,7 @@ func prefs_save(p: Prefs):
     sync.Lock(g_mu)
     g_prefs = p
     sync.Unlock(g_mu)
-    _mk := os.MkdirAll(desktop.DataDir())
+    _mk := os.MkdirAll(webview.DataDir())
     _wrote := io.WriteFile(prefs_file(), prefs_json(p))
 end
 
@@ -1162,11 +1162,11 @@ func cut_chars(text: str, max: int): str:
     mut chars := 0
     mut at := 0
     until at < str.Len(text) and chars < max - 1:
-        at += 1
+        at++
         until at < str.Len(text) and ((bytes[at] as int) & 0xC0) == 0x80:
-            at += 1
+            at++
         end
-        chars += 1
+        chars++
     end
     ret str.TrimRight(str.Substr(text, 0, at)) + "…"
 end
@@ -1213,7 +1213,7 @@ func snippet(markdown: str, max: int): str:
             if not (c == 35 or c == 62 or c == 45 or c == 42 or c == 32):
                 break
             end
-            start += 1
+            start++
         end
         line = str.Substr(line, start, str.Len(line) - start)
         line = strip_links(line)
@@ -1222,9 +1222,9 @@ func snippet(markdown: str, max: int): str:
             continue
         end
         if out.len() > 0:
-            out = out + " "
+            out += " "
         end
-        out = out + line
+        out += line
         if str.CharCount(out) > max:
             break
         end
@@ -1332,7 +1332,7 @@ func notify_deliver(kind: str, chat: str, text: str, mid: i64): str:
     if not test and not notify_due(kind, chat):
         ret "skipped"
     end
-    desktop.RequestAttention(g_win)
+    webview.RequestAttention(g_win)
     if not p.enabled and not test:
         ret "skipped"
     end
@@ -1340,7 +1340,7 @@ func notify_deliver(kind: str, chat: str, text: str, mid: i64): str:
     body := notify_compose(kind, chat, text, p, title)
     urgent := kind == "failed" or kind == "network" or kind == "offline" or kind == "unlinked" or kind == "approval"
     tone := p.sound ? (urgent ? "alert" : "default") : ""
-    if not desktop.Notify(title, body, tone):
+    if not webview.Notify(title, body, tone):
         if mid > 0:
             notify_release(mid)
         end
@@ -1350,7 +1350,7 @@ func notify_deliver(kind: str, chat: str, text: str, mid: i64): str:
 end
 
 func notify_post(kind: str, chat: str, text: str, mid: i64):
-    desktop.Dispatch(
+    webview.Dispatch(
         (): _result := notify_deliver(kind, chat, text, mid) end
     )
 end
@@ -1364,7 +1364,7 @@ func lossy_text(data: void*, n: i64): str:
         mut need := 0
         if c < 128:
             str.BufAppendChar(b, c == 0 ? 32 : c)
-            i += 1
+            i++
             continue
         else c >= 0xC2 and c <= 0xDF:
             need = 1
@@ -1389,7 +1389,7 @@ func lossy_text(data: void*, n: i64): str:
             i += (need + 1) as i64
         else:
             str.BufAppend(b, "\xEF\xBF\xBD")
-            i += 1
+            i++
         end
     end
     ret str.BufStr(b)
@@ -1441,7 +1441,7 @@ func stream_new(path: str, offset &: i64, call_id: str):
     defer members.free()
     members.push(json.Member("call_id", call_id))
     members.push(json.Member("chunk", lossy_text(data, chunk)))
-    desktop.Emit("agent://output", json.Object(members))
+    webview.Emit("agent://output", json.Object(members))
 end
 
 func exec_run(program: str, args: Vector<str>, raw_args: str, cwd: str, timeout_s: i64, call_id: str, failed &: bool): str:
@@ -1482,7 +1482,7 @@ func exec_run(program: str, args: Vector<str>, raw_args: str, cwd: str, timeout_
         end
         text = "(no output)"
     end
-    text = text + note
+    text += note
     if code == 0 and note.len() == 0:
         ret text
     end
@@ -1500,7 +1500,7 @@ func is_binary(data: void*, n: i64): bool:
         if bytes[i] == (0 as u8):
             ret true
         end
-        i += 1
+        i++
     end
     ret false
 end
@@ -1576,8 +1576,8 @@ func read_file(path: str, offset_in: i64, limit_in: i64, failed &: bool): str:
         str.BufAppendChar(b, 9)
         str.BufAppend(b, str.CharCount(lines[i]) > 2000 ? cut_chars(lines[i], 2000) : lines[i])
         str.BufAppendChar(b, 10)
-        i += 1
-        shown += 1
+        i++
+        shown++
     end
     mut out := str.BufStr(b)
     if i < lines.len():
@@ -1607,7 +1607,7 @@ func count_matches(text: str, needle: str): int:
     mut n := 0
     mut at := str.IndexOf(text, needle)
     until at >= 0:
-        n += 1
+        n++
         at = str.IndexFrom(text, needle, at + str.Len(needle))
     end
     ret n
@@ -1664,13 +1664,13 @@ func list_dir(ws: Workspace, path: str, failed &: bool): str:
     each name in dirs:
         if shown < MAX_ENTRIES:
             out = out + "\n" + name
-            shown += 1
+            shown++
         end
     end
     each name in plain:
         if shown < MAX_ENTRIES:
             out = out + "\n" + name
-            shown += 1
+            shown++
         end
     end
     if total > MAX_ENTRIES:
@@ -1683,7 +1683,7 @@ func glob_class(pattern: u8*, p: int, n: int, c: int, next &: int): bool:
     mut i := p + 1
     negate := i < n and (pattern[i] == (33 as u8) or pattern[i] == (94 as u8))
     if negate:
-        i += 1
+        i++
     end
     mut matched := false
     until i < n and pattern[i] != (93 as u8):
@@ -1698,7 +1698,7 @@ func glob_class(pattern: u8*, p: int, n: int, c: int, next &: int): bool:
             if c == low:
                 matched = true
             end
-            i += 1
+            i++
         end
     end
     next = i + 1
@@ -1714,7 +1714,7 @@ func glob_rec(pattern: u8*, pn: int, p_in: int, text: u8*, tn: int, t_in: int): 
             if p + 1 < pn and pattern[p + 1] == (42 as u8):
                 mut after := p + 2
                 if after < pn and pattern[after] == (47 as u8):
-                    after += 1
+                    after++
                 end
                 mut k := t
                 until k <= tn:
@@ -1723,7 +1723,7 @@ func glob_rec(pattern: u8*, pn: int, p_in: int, text: u8*, tn: int, t_in: int): 
                             ret true
                         end
                     end
-                    k += 1
+                    k++
                 end
                 ret false
             end
@@ -1735,7 +1735,7 @@ func glob_rec(pattern: u8*, pn: int, p_in: int, text: u8*, tn: int, t_in: int): 
                 if k < tn and text[k] == (47 as u8):
                     break
                 end
-                k += 1
+                k++
             end
             ret false
         end
@@ -1747,21 +1747,21 @@ func glob_rec(pattern: u8*, pn: int, p_in: int, text: u8*, tn: int, t_in: int): 
             if ch == 47:
                 ret false
             end
-            p += 1
-            t += 1
+            p++
+            t++
         else c == 91:
             mut next := p
             if not glob_class(pattern, p, pn, ch, next):
                 ret false
             end
             p = next
-            t += 1
+            t++
         else:
             if c != ch:
                 ret false
             end
-            p += 1
-            t += 1
+            p++
+            t++
         end
     end
     ret t == tn
@@ -1882,7 +1882,7 @@ func glob_search(ws: Workspace, base: str, pattern_in: str): str:
             if hits.len() < MAX_FILES:
                 hits.push(ws.display(filepath.Join(base, rel)))
             else:
-                more += 1
+                more++
             end
         end
     end
@@ -1932,7 +1932,7 @@ func ignore_case_pattern(pattern: str): str:
         else:
             str.BufAppendChar(b, c)
         end
-        i += 1
+        i++
     end
     ret str.BufStr(b)
 end
@@ -2062,11 +2062,11 @@ func unified_diff(path: str, before: str, after: str): str:
     defer new.free()
     mut prefix := 0
     until prefix < old.len() and prefix < new.len() and old[prefix] == new[prefix]:
-        prefix += 1
+        prefix++
     end
     mut suffix := 0
     until suffix < old.len() - prefix and suffix < new.len() - prefix and old[old.len() - 1 - suffix] == new[new.len() - 1 - suffix]:
-        suffix += 1
+        suffix++
     end
     if prefix == old.len() and prefix == new.len():
         ret ""
@@ -2090,23 +2090,23 @@ func unified_diff(path: str, before: str, after: str): str:
                     right := table[i * width + j + 1]
                     table[i * width + j] = down > right ? down : right
                 end
-                j -= 1
+                j--
             end
-            i -= 1
+            i--
         end
         i = 0
         mut j := 0
         until i < n or j < m:
             if i < n and j < m and old[prefix + i] == new[prefix + j]:
                 ops.push(0)
-                i += 1
-                j += 1
+                i++
+                j++
             else j < m and (i == n or table[i * width + j + 1] >= table[(i + 1) * width + j]):
                 ops.push(2)
-                j += 1
+                j++
             else:
                 ops.push(1)
-                i += 1
+                i++
             end
         end
     else:
@@ -2136,9 +2136,9 @@ func unified_diff(path: str, before: str, after: str): str:
     mut ni := 0
     until at < total:
         if all_ops[at] == 0:
-            oi += 1
-            ni += 1
-            at += 1
+            oi++
+            ni++
+            at++
             continue
         end
         mut stop := at
@@ -2147,7 +2147,7 @@ func unified_diff(path: str, before: str, after: str): str:
             if all_ops[stop] != 0:
                 last_change = stop
             end
-            stop += 1
+            stop++
         end
         hunk_end := last_change + 4 > total ? total : last_change + 4
         back := at >= 3 ? 3 : at
@@ -2159,12 +2159,12 @@ func unified_diff(path: str, before: str, after: str): str:
         mut k := hunk_start
         until k < hunk_end:
             if all_ops[k] != 2:
-                oc += 1
+                oc++
             end
             if all_ops[k] != 1:
-                nc += 1
+                nc++
             end
-            k += 1
+            k++
         end
         str.BufAppend(out, "@@ -" + range_text(o0, oc) + " +" + range_text(n0, nc) + " @@\n")
         mut op_i := o0
@@ -2174,16 +2174,16 @@ func unified_diff(path: str, before: str, after: str): str:
             op := all_ops[k]
             if op == 0:
                 str.BufAppend(out, " " + old[op_i] + "\n")
-                op_i += 1
-                op_n += 1
+                op_i++
+                op_n++
             else op == 1:
                 str.BufAppend(out, "-" + old[op_i] + "\n")
-                op_i += 1
+                op_i++
             else:
                 str.BufAppend(out, "+" + new[op_n] + "\n")
-                op_n += 1
+                op_n++
             end
-            k += 1
+            k++
         end
         oi = op_i
         ni = op_n
@@ -2194,14 +2194,14 @@ func unified_diff(path: str, before: str, after: str): str:
         mut cut := MAX_DIFF
         bytes := text as u8*
         until cut > 0 and ((bytes[cut] as int) & 0xC0) == 0x80:
-            cut -= 1
+            cut--
         end
         ret str.Substr(text, 0, cut) + "\n[... diff cut ...]"
     end
     ret text
 end
 
-func preview_json(p: Preview, state: str, output: str): str:
+func preview_json(p: Preview, state: str, output: str, shot: str): str:
     mut members := Vector {} as Vector<str>
     defer members.free()
     members.push(json.Member("call_id", p.call_id))
@@ -2214,6 +2214,11 @@ func preview_json(p: Preview, state: str, output: str): str:
     members.push(json.MemberBool("outside", p.outside))
     members.push(json.Member("cwd", p.cwd))
     members.push(json.MemberBool("memory", p.memory))
+    members.push(json.MemberBool("image", shot.len() > 0))
+    if shot.len() > 0:
+        members.push(json.Member("image_data", shot))
+        members.push(json.Member("image_mime", "image/jpeg"))
+    end
     if state.len() > 0:
         members.push(json.Member("state", state))
         members.push(json.Member("output", output))
@@ -2264,7 +2269,7 @@ func first_line(text: str, max: int): str:
     each raw in lines:
         t := str.Trim(raw)
         if t.len() > 0:
-            non_empty += 1
+            non_empty++
             if line.len() == 0:
                 line = t
             end
@@ -2272,7 +2277,7 @@ func first_line(text: str, max: int): str:
     end
     mut out := str.CharCount(line) > max ? cut_chars(line, max + 1) : line
     if not str.EndsWith(out, "…") and non_empty > 1:
-        out = out + " …"
+        out += " …"
     end
     ret out
 end
@@ -2336,6 +2341,118 @@ func set_shell(act &: Action, pv &: Preview, shell_name: str, command: str):
     end
 end
 
+func path_outside(ws: Workspace, path: str, cwd: str): bool:
+    joined := is_absolute(path) ? path : filepath.Join(cwd, path)
+    ret not path_inside(canonical_prefix(normalize_path(joined)), ws.root)
+end
+
+func env_token_outside(ws: Workspace, name: str, tail: str, cwd: str): bool:
+    if name.len() == 0:
+        ret false
+    end
+    as_path := str.StartsWith(tail, "/") or str.StartsWith(tail, "\\")
+    if not as_path and not (tail.len() == 0 and (name == "HOME" or name == "USERPROFILE" or name == "TMPDIR" or name == "TEMP" or name == "TMP")):
+        ret false
+    end
+    value := os.Env(name)
+    if value.len() == 0:
+        ret true
+    end
+    mut rel := str.TrimPrefix(tail, "/")
+    rel = str.TrimPrefix(rel, "\\")
+    if rel.len() == 0:
+        ret path_outside(ws, value, cwd)
+    end
+    ret path_outside(ws, filepath.Join(value, rel), cwd)
+end
+
+func path_value(value: str): bool:
+    ret value == ".." or str.StartsWith(value, "/") or str.StartsWith(value, "\\") or str.StartsWith(value, "~") or str.StartsWith(value, "$") or str.StartsWith(value, "%") or str.Contains(value, "/") or str.Contains(value, "\\")
+end
+
+func token_outside(ws: Workspace, token: str, cwd: str): bool:
+    if str.Contains(token, "://"):
+        ret false
+    end
+    if str.StartsWith(token, "~"):
+        rest := str.TrimPrefix(token, "~")
+        if rest.len() > 0 and not str.StartsWith(rest, "/") and not str.StartsWith(rest, "\\"):
+            ret true
+        end
+        mut home := os.Env("HOME")
+        if home.len() == 0:
+            home = os.Env("USERPROFILE")
+        end
+        if home.len() == 0:
+            ret true
+        end
+        mut rel := str.TrimPrefix(rest, "/")
+        rel = str.TrimPrefix(rel, "\\")
+        if rel.len() == 0:
+            ret path_outside(ws, home, cwd)
+        end
+        ret path_outside(ws, filepath.Join(home, rel), cwd)
+    else str.StartsWith(token, "$env:"):
+        body := str.Substr(token, 5, str.Len(token) - 5)
+        mut i := 0
+        until i < str.Len(body) and str.Contains("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_", str.Substr(body, i, 1)):
+            i++
+        end
+        ret env_token_outside(ws, str.Substr(body, 0, i), str.Substr(body, i, str.Len(body) - i), cwd)
+    else str.StartsWith(token, "$"):
+        body := str.TrimPrefix(token, "$")
+        mut name := ""
+        mut tail := ""
+        if str.StartsWith(body, "{"):
+            close := str.IndexOf(body, "}")
+            if close < 1:
+                ret false
+            end
+            name = str.Substr(body, 1, close - 1)
+            tail = str.Substr(body, close + 1, str.Len(body) - close - 1)
+        else:
+            mut i := 0
+            until i < str.Len(body) and str.Contains("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_", str.Substr(body, i, 1)):
+                i++
+            end
+            name = str.Substr(body, 0, i)
+            tail = str.Substr(body, i, str.Len(body) - i)
+        end
+        ret env_token_outside(ws, name, tail, cwd)
+    else str.StartsWith(token, "%"):
+        rest := str.Substr(token, 1, str.Len(token) - 1)
+        close := str.IndexOf(rest, "%")
+        if close < 0:
+            ret false
+        end
+        ret env_token_outside(ws, str.Substr(rest, 0, close), str.Substr(rest, close + 1, str.Len(rest) - close - 1), cwd)
+    end
+    if str.StartsWith(token, "-") and not str.StartsWith(token, "--") and str.Len(token) > 2:
+        value := str.Substr(token, 2, str.Len(token) - 2)
+        if path_value(value):
+            ret token_outside(ws, value, cwd)
+        end
+        ret false
+    end
+    ret path_outside(ws, token, cwd)
+end
+
+func command_outside(ws: Workspace, text: str, cwd: str): bool:
+    mut clean := text
+    each sep in [" ", "\t", "\n", "\r", "\"", "'", "`", ";", "|", "&", "<", ">", "(", ")", "[", "]", ",", "="]:
+        clean = str.Replace(clean, sep, " ")
+    end
+    tokens := str.Split(clean, " ")
+    defer tokens.free()
+    each token in tokens:
+        word := str.Trim(token)
+        if word.len() > 0 and token_outside(ws, word, cwd):
+            ret true
+        end
+    end
+    ret false
+end
+
 func plan_error(text: str): Plan:
     ret Plan { error = text }
 end
@@ -2362,6 +2479,9 @@ func tool_plan(id: str, tool: str, args: str, chat: str, ws: Workspace): Plan:
             ret plan_error("command is empty.")
         end
         set_shell(a, p, json.Get(args, "shell"), command)
+        if not p.outside and command_outside(ws, command, cwd):
+            p.outside = true
+        end
         p.kind = "exec"
         p.summary = first_line(command, 120)
         p.detail = command
@@ -2383,6 +2503,9 @@ func tool_plan(id: str, tool: str, args: str, chat: str, ws: Workspace): Plan:
         end
         a.program = "docker"
         a.cwd = cwd
+        if not p.outside and command_outside(ws, shown, cwd):
+            p.outside = true
+        end
         p.kind = "exec"
         p.summary = first_line(shown, 120)
         p.detail = shown
@@ -2416,6 +2539,9 @@ func tool_plan(id: str, tool: str, args: str, chat: str, ws: Workspace): Plan:
             end
             a.args.push(command)
             p.kind = "exec"
+            if not p.outside and command_outside(ws, command, cwd):
+                p.outside = true
+            end
             p.summary = first_line(command, 120)
             p.detail = command
         end
@@ -2597,8 +2723,8 @@ func free_auth(headers: HashMap<str, str>):
     gone.free()
 end
 
-func emit_call(p: Preview, state: str, output: str):
-    desktop.Emit("agent://call", preview_json(p, state, output))
+func emit_call(p: Preview, state: str, output: str, image: str):
+    webview.Emit("agent://call", preview_json(p, state, output, image))
 end
 
 func offline_later(flip: int):
@@ -2616,7 +2742,7 @@ func set_connected(value: bool):
     g_connected = value
     told := g_told_offline
     if changed:
-        g_flips += 1
+        g_flips++
         if value:
             g_told_offline = false
         end
@@ -2626,7 +2752,7 @@ func set_connected(value: bool):
     if not changed:
         ret
     end
-    desktop.Emit("agent://connection", value ? "true" : "false")
+    webview.Emit("agent://connection", value ? "true" : "false")
     if value:
         if told:
             notify_post("online", "", "", 0 as i64)
@@ -2695,17 +2821,17 @@ func handle_call(secret: str, call_text: str):
         allowed = approvals_ask(p, reason)
     end
     if not allowed:
-        emit_call(p, "denied", reason)
+        emit_call(p, "denied", reason, "")
         report(secret, id, "denied", reason, p, true)
         ret
     end
-    emit_call(p, "running", "")
+    emit_call(p, "running", "", "")
     approvals_start(id)
     mut failed := false
     mut image := ""
     output := tool_run(plan.action, ws, id, failed, image)
     approvals_finish(id)
-    emit_call(p, failed ? "error" : "done", output)
+    emit_call(p, failed ? "error" : "done", output, image)
     report(secret, id, failed ? "error" : "ok", output, p, true, image)
     if image.len() > 0:
         mem.Free(image as void*)
@@ -2757,7 +2883,7 @@ func bridge_loop():
             device_clear()
             set_connected(false)
             notify_post("unlinked", "", "", 0 as i64)
-            desktop.Emit("agent://device", "null")
+            webview.Emit("agent://device", "null")
         else:
             set_connected(false)
             sync.SleepMs(backoff * 1000)
@@ -2781,7 +2907,7 @@ func probe_app(timeout_ms: int): str:
 end
 
 func navigate_main(url: str):
-    desktop.Dispatch((): g_win.Navigate(url) end)
+    webview.Dispatch((): g_win.Navigate(url) end)
 end
 
 func connect_main():
@@ -2793,9 +2919,9 @@ func connect_main():
             navigate_main(app_url())
             ret
         end
-        attempts += 1
+        attempts++
         if attempts >= 2 and shown != state:
-            navigate_main(desktop.AssetURL("/error.html#" + state))
+            navigate_main(webview.AssetURL("/error.html#" + state))
             shown = state
         end
         sync.SleepMs(5000)
@@ -2805,7 +2931,7 @@ end
 func ui_away(): bool:
     mut answer := (mem.AllocateZeroed(16 as u64)) as i64*
     answer[1] = 1 as i64
-    desktop.Dispatch(
+    webview.Dispatch(
         (): answer[1] = window_away() ? 1 as i64 : 0 as i64
         answer[0] = 1 as i64 end
     )
@@ -2840,7 +2966,7 @@ func watch_start(chat: str, mid: i64): WatchJob*:
             _removed := g_watchers.remove(oldest_chat)
         end
     end
-    g_watch_seq += 1
+    g_watch_seq++
     job := mem.AllocateZeroed(sizeof(WatchJob) as u64) as WatchJob*
     job[0] = WatchJob { mid = mid, started = g_watch_seq }
     g_watchers.put(chat, job)
@@ -3044,7 +3170,7 @@ func watchdog_loop():
             navigate_main(app_url())
             continue
         end
-        navigate_main(desktop.AssetURL("/error.html#" + reason))
+        navigate_main(webview.AssetURL("/error.html#" + reason))
     end
 end
 
@@ -3089,9 +3215,9 @@ func valid_chat_id(chat: str): bool:
 end
 
 func register_commands():
-    desktop.Command("agent_info", (c: desktop.Call): c.Resolve(info_json()) end)
-    desktop.CommandAsync(
-        "agent_link", (c: desktop.Call): token := str.Trim(c.Str("token"))
+    webview.Command("agent_info", (c: webview.Call): c.Resolve(info_json()) end)
+    webview.CommandAsync(
+        "agent_link", (c: webview.Call): token := str.Trim(c.Str("token"))
         name := device_name() mut members := Vector {} as Vector<str> members.push(json.Member("name", name))
         members.push(json.Member("os", os_name())) mut client := new_client(40000)
         res := client.RequestWith("POST", api_url() + "/bridge/devices", json.Object(members), auth_headers(token))
@@ -3099,8 +3225,8 @@ func register_commands():
         members.free() if res.status <= 0: c.Reject("network: " + res.err) ret end if res.status < 200 or res.status >= 300: message := json.Valid(res.body) ? json.Get(res.body, "message") : ""
         c.Reject(message.len() > 0 ? message : "could not register this computer") ret end id := json.Get(json.Get(res.body, "device"), "id") if id.len() == 0: c.Reject("the server answered without a device id") ret end secret := json.Get(res.body, "secret") if secret.len() == 0: c.Reject("the server answered without a secret") ret end failed := device_save(id, name, secret) if failed.len() > 0: c.Reject(failed) ret end c.Resolve(info_json()) end
     )
-    desktop.CommandAsync(
-        "agent_unlink", (c: desktop.Call): token := c.Str("token")
+    webview.CommandAsync(
+        "agent_unlink", (c: webview.Call): token := c.Str("token")
         sync.Lock(g_mu)
         id := g_device_id
         sync.Unlock(g_mu) if token.len() > 0 and id.len() > 0: mut client := new_client(40000)
@@ -3110,43 +3236,43 @@ func register_commands():
         notify_forget_seen()
         c.Resolve(info_json()) end
     )
-    desktop.Command(
-        "agent_pick_folder", (c: desktop.Call): picked := desktop.PickFolder("پوشه‌ی کاری را انتخاب کنید") if picked.len() == 0: c.ResolveNull() else: c.ResolveStr(picked) end end
+    webview.Command(
+        "agent_pick_folder", (c: webview.Call): picked := webview.PickFolder("پوشه‌ی کاری را انتخاب کنید") if picked.len() == 0: c.ResolveNull() else: c.ResolveStr(picked) end end
     )
-    desktop.Command(
-        "agent_set_mode", (c: desktop.Call): approvals_set_mode(c.Str("chat"), c.Str("mode"))
+    webview.Command(
+        "agent_set_mode", (c: webview.Call): approvals_set_mode(c.Str("chat"), c.Str("mode"))
         c.ResolveNull() end
     )
-    desktop.Command(
-        "agent_decide", (c: desktop.Call): c.ResolveBool(approvals_answer(c.Str("callId"), c.Str("answer"))) end
+    webview.Command(
+        "agent_decide", (c: webview.Call): c.ResolveBool(approvals_answer(c.Str("callId"), c.Str("answer"))) end
     )
-    desktop.Command(
-        "agent_stop", (c: desktop.Call): c.ResolveBool(approvals_stop(c.Str("callId"))) end
+    webview.Command(
+        "agent_stop", (c: webview.Call): c.ResolveBool(approvals_stop(c.Str("callId"))) end
     )
-    desktop.Command("agent_pending", (c: desktop.Call): c.Resolve(approvals_pending_json()) end)
-    desktop.Command(
-        "agent_alive", (c: desktop.Call): watchdog_beat()
+    webview.Command("agent_pending", (c: webview.Call): c.Resolve(approvals_pending_json()) end)
+    webview.Command(
+        "agent_alive", (c: webview.Call): watchdog_beat()
         c.ResolveNull() end
     )
-    desktop.CommandAsync(
-        "agent_project_context", (c: desktop.Call): folder := str.Trim(c.Str("workspace")) if folder.len() == 0: c.Reject("No workspace folder is selected.") ret end ws := workspace_open(folder) if ws.error.len() > 0: c.Reject(ws.error) ret end c.Resolve(project_context_json(ws.root)) end
+    webview.CommandAsync(
+        "agent_project_context", (c: webview.Call): folder := str.Trim(c.Str("workspace")) if folder.len() == 0: c.Reject("No workspace folder is selected.") ret end ws := workspace_open(folder) if ws.error.len() > 0: c.Reject(ws.error) ret end c.Resolve(project_context_json(ws.root)) end
     )
-    desktop.Command(
-        "agent_notify", (c: desktop.Call): result := notify_deliver(c.Str("kind"), c.Str("chat"), c.Str("text"), c.Has("mid") ? c.Int("mid") as i64 : 0 as i64) if result == "failed": c.Reject("the system could not show the notification") else: c.ResolveStr(result) end end
+    webview.Command(
+        "agent_notify", (c: webview.Call): result := notify_deliver(c.Str("kind"), c.Str("chat"), c.Str("text"), c.Has("mid") ? c.Int("mid") as i64 : 0 as i64) if result == "failed": c.Reject("the system could not show the notification") else: c.ResolveStr(result) end end
     )
-    desktop.Command(
-        "agent_watch_reply", (c: desktop.Call): chat := c.Str("chat")
+    webview.Command(
+        "agent_watch_reply", (c: webview.Call): chat := c.Str("chat")
         mid := c.Int("mid") as i64
         token := str.Trim(c.Str("token"))
         title := c.Str("title") if not valid_chat_id(chat): c.Reject("invalid chat id") ret end if mid <= 0: c.Reject("invalid message id") ret end if token.len() == 0 or token.len() > 4096: c.Reject("invalid token") ret end job := watch_start(chat, mid) if job != null: pool.Go((): watch_run(chat, mid, token, title, job) end) end c.ResolveNull() end
     )
-    desktop.Command(
-        "agent_unwatch_reply", (c: desktop.Call): watch_stop(c.Str("chat"))
+    webview.Command(
+        "agent_unwatch_reply", (c: webview.Call): watch_stop(c.Str("chat"))
         c.ResolveNull() end
     )
-    desktop.Command("agent_notify_prefs", (c: desktop.Call): c.Resolve(prefs_json(prefs_now())) end)
-    desktop.Command(
-        "agent_set_notify_prefs", (c: desktop.Call): p := prefs_parse(json.Get(c.args, "prefs"))
+    webview.Command("agent_notify_prefs", (c: webview.Call): c.Resolve(prefs_json(prefs_now())) end)
+    webview.Command(
+        "agent_set_notify_prefs", (c: webview.Call): p := prefs_parse(json.Get(c.args, "prefs"))
         prefs_save(p)
         c.Resolve(prefs_json(p)) end
     )
@@ -3156,13 +3282,13 @@ func allow_remote(origin: str):
     mut commands := Vector {} as Vector<str>
     commands.push("agent_*")
     commands.push("event:agent_pong")
-    desktop.Allow(origin, commands)
+    webview.Allow(origin, commands)
 end
 
 func on_load(url: str, finished: bool):
     if not finished:
         watchdog_disarm()
-    else desktop.OriginOf(url) == desktop.OriginOf(app_url()):
+    else webview.OriginOf(url) == webview.OriginOf(app_url()):
         watchdog_arm()
     end
 end
@@ -3170,8 +3296,8 @@ end
 func main:
     import_login_path()
     g_os_version = os_version()
-    desktop.Init(desktop.Config { id = "ir.salamlang.agent", name = "Salam Agent", version = AGENT_VERSION })
-    primary := desktop.SingleInstance(
+    webview.Init(webview.Config { id = "ir.salamlang.agent", name = "Salam Agent", version = AGENT_VERSION })
+    primary := webview.SingleInstance(
         (_args: Vector<str>): g_win.Show()
         g_win.Focus() end
     )
@@ -3180,12 +3306,12 @@ func main:
     end
     allow_remote(app_url())
     register_commands()
-    desktop.On(
+    webview.On(
         "agent_pong", (_data: str): sync.Lock(g_mu)
         g_pong = true
         sync.Unlock(g_mu) end
     )
-    desktop.OnNotifyClick(():
+    webview.OnNotifyClick(():
         g_win.Show()
         g_win.Focus()
     end)
@@ -3195,25 +3321,25 @@ func main:
     if os.Env("SALAM_DEVTOOLS").len() == 0:
         scripts.push(LOCK_JS)
     end
-    g_win = desktop.Open(
-        desktop.WindowOptions {
+    g_win = webview.Open(
+        webview.WindowOptions {
             title = "Salam Agent", width = 1180, height = 800, min_width = 720, min_height = 520,
             scripts = scripts
         }
     )
     if g_win.IsClosed():
-        printerrln "Salam Agent could not open its window: " + desktop.LastError()
+        printerrln "Salam Agent could not open its window: " + webview.LastError()
         ret 1
     end
     g_win.OnLoad((url: str, finished: bool): on_load(url, finished) end)
     g_win.OnCrash(
         (): watchdog_disarm()
-        g_win.Navigate(desktop.AssetURL("/error.html#memory")) end
+        g_win.Navigate(webview.AssetURL("/error.html#memory")) end
     )
     _bridge := spawn(bridge_loop)
     _monitor := spawn(connection_monitor)
     _connect := spawn(connect_main)
     _watchdog := spawn(watchdog_loop)
-    desktop.Run()
+    webview.Run()
     browser.CloseAll()
 end

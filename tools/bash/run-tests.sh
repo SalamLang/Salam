@@ -1193,7 +1193,7 @@ if want webview_cef; then
         }
     done
     cefmockc=""
-    [ -f "std/webview/native/mock/cef_mock.c" ] && cefmockc="std/webview/native/mock/cef_mock.c"
+    [ -f "std/gui/webview/native/mock/cef_mock.c" ] && cefmockc="std/gui/webview/native/mock/cef_mock.c"
     cefok=0
     if [ -n "$CEFCC" ] && [ -n "$cefmockc" ] && command -v "$MOCK_AR" >/dev/null 2>&1; then
         mkdir -p "$WORK/cefwork/.work"
@@ -1471,7 +1471,7 @@ func main:
     mut s := 0
     until i < 10:
         s += i
-        i += 1
+        i++
     end
     println s
     ret 0

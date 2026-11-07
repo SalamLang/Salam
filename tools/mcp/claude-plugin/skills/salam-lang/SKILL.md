@@ -109,6 +109,7 @@ lower upper repeat split to_int to_float`. Everything else is in `str`.
   flag; `salam --version` fails with `unknown command '--version'`.
 - `salam js` stores `i64`/`u64`/`size`/`usize` as JS numbers: 64-bit math is
   exact up to 2^53, but larger results or intermediates are rounded.
+  `i128`/`u128` are exact BigInts there, except through `i64`/`u64` casts.
 - Source files are keyed by **filename**, not package: two files named
   `io.salam` in one program, or your own `shell.salam` next to
   `import os.shell`, are rejected with "package name ... is claimed by two
@@ -117,6 +118,23 @@ lower upper repeat split to_int to_float`. Everything else is in `str`.
   next arm too, including `else:`.
 - A side-effect-free endless loop can be deleted by clang on the C backend, so
   the program segfaults instead of spinning; give a busy-wait a real effect.
+
+## Packages and documentation
+
+Every standard library package ships with the compiler; never `salam add` one.
+`salam add github.com/owner/repo` (also `remove`, `update`, `deps`, `search`,
+`install`) is only for packages other people keep in their own Git
+repositories, and it writes `salam.toml` and `salam.lock`. Import one with a
+quoted address, `import "github.com/owner/repo"`. There is no `salam publish`:
+a package is published by pushing a `vX.Y.Z` Git tag. A library's entry file is
+at the repository root and named after the repository; only `pub` names are
+visible to users. Guide: `docs/PACKAGES.md`, or `/packages/` on
+<https://salamlang.github.io/Salam/> and <https://www.salamlang.ir/>.
+
+Each page under `/std/<package>/` of those sites opens with tutorials (anchors
+`#guide-...`); read them before using an unfamiliar package. Desktop windows
+and desktop apps are the single package `gui.webview` (`import gui.webview`,
+Persian `رابط گرافیکی.نمایش وب`), with `salam new --desktop` and `salam bundle`.
 
 ## Multilingual source
 
@@ -134,7 +152,8 @@ The language is detected from the keywords; `--lang=fa` forces Persian.
 ## Persian source
 
 Persian Salam has the same grammar and rules with Persian spellings. The
-entry function is `ریشه`, blocks end with `پایان`, and `،` works as a comma.
+entry function is `ریشه` (`تابع ریشه:`; `تابع اصلی` builds as an ordinary
+function but leaves the program with no entry point), blocks end with `پایان`, and `،` works as a comma.
 The most used words:
 
 | English                        | Persian                               | English                    | Persian                   |

@@ -56,9 +56,9 @@ func rt_error(ip &: Interp, a &: at.Ast, n: int, msg: str):
         tf := ip.tb_file.get(k)
         if str.Len(tf) > 0:
             tb = tb + "\n" + co.Format3(i18.Tr("  from %s:%u:%u"), co.ArgStr(tf), co.ArgUint(cn.begin_line as u64), co.ArgUint(cn.begin_col as u64))
-            shown += 1
+            shown++
         end
-        k -= 1
+        k--
     end
     ip.errtrace = tb
     if n != 0:
@@ -68,7 +68,7 @@ func rt_error(ip &: Interp, a &: at.Ast, n: int, msg: str):
 end
 
 func tick(ip &: Interp):
-    ip.steps = ip.steps + (1 as u64)
+    ip.steps++
     if (ip.steps & (0xFFF as u64)) == (0 as u64):
         if g_threads_on:
             gil_yield(ip)
@@ -86,17 +86,17 @@ func itab_hash(s: str): u64:
     mut h := 1469598103934665603 as u64
     n := str.Len(s)
     repeat n in i:
-        h = h ^ (byte_at(s, i) as u64)
-        h = h * (1099511628211 as u64)
+        h ^= (byte_at(s, i) as u64)
+        h *= (1099511628211 as u64)
     end
     ret h
 end
 
 func ptab_hash(k: int): u64:
     mut x := k as u64
-    x = x ^ (x >> (33 as u64))
-    x = x * (0xff51afd7ed558ccd as u64)
-    x = x ^ (x >> (33 as u64))
+    x ^= (x >> (33 as u64))
+    x *= (0xff51afd7ed558ccd as u64)
+    x ^= (x >> (33 as u64))
     ret x
 end
 
@@ -163,7 +163,7 @@ func itab_put(t &: Itab, key: str, val: int):
     end
     t.keys.set(i, key)
     t.vals.set(i, val)
-    t.count += 1
+    t.count++
 end
 
 func ptab_get(t: Ptab, key: int): int:
@@ -225,7 +225,7 @@ func ptab_put(t &: Ptab, key: int, val: int):
     end
     t.keys.set(i, key)
     t.vals.set(i, val)
-    t.count += 1
+    t.count++
 end
 
 func env_mark(ip &: Interp): EnvMark:
@@ -554,6 +554,14 @@ func collect_module_funcs(ip &: Interp, a &: at.Ast, mid: int, prog: int):
                 register_method_envs(ip, a, d, md.env)
             end
         else dn.kind == at.AST_ENUM_DEF:
+            if str.Len(dn.name) != 0 and str.Len(md.name) != 0 and not str.Equals(md.name, "main"):
+                qual := md.name + "_" + dn.name
+                if find_enum(ip, qual) == 0:
+                    mut teq := ip.tab_enums
+                    itab_put(teq, qual, d)
+                    ip.tab_enums = teq
+                end
+            end
             if find_enum(ip, dn.name) == 0:
                 ip.enums.push(d)
                 if str.Len(dn.name) != 0:
@@ -621,6 +629,39 @@ func pkg_name_of(a &: at.Ast, sem &: sm.Sema, pkid: int): str:
     ret ""
 end
 
+func rehome_module_synthetics(ip &: Interp, a &: at.Ast, mid: int, prog: int):
+    menv := ip.mods.get(mid).env
+    repeat at.ChildCount(a, prog) in i:
+        d := at.Child(a, prog, i)
+        dn := at.At(a, d)
+        if dn.kind != at.AST_FUNC_DEF or not dn.synthetic or str.Len(dn.name) == 0 or str.Len(dn.home_pkg) == 0:
+            continue
+        end
+        home := find_module(ip, dn.home_pkg)
+        if home == 0 or home == mid:
+            continue
+        end
+        slot := env_find_local(ip, menv, dn.name)
+        if slot < 0:
+            continue
+        end
+        bv := env_slot_val(ip, menv, slot)
+        if bv.kind != VAL_FUNC:
+            continue
+        end
+        mut cl := ip.closures.get(bv.id)
+        if cl.fn != d:
+            continue
+        end
+        henv := ip.mods.get(home).env
+        cl.env = henv
+        ip.closures.set(bv.id, cl)
+        if env_find_local(ip, henv, dn.name) < 0:
+            env_define(ip, henv, dn.name, bv)
+        end
+    end
+end
+
 func build_modules(ip &: Interp, a &: at.Ast, sem &: sm.Sema):
     npk := sm.PackageCount(sem)
     repeat npk in i:
@@ -646,6 +687,7 @@ func build_modules(ip &: Interp, a &: at.Ast, sem &: sm.Sema):
         if mid2 != 0:
             md := ip.mods.get(mid2)
             wire_imports(ip, sem, md.env, pk2.members)
+            rehome_module_synthetics(ip, a, mid2, pk2.decl)
         end
     end
     wire_imports(ip, sem, ip.globals, sem.global)

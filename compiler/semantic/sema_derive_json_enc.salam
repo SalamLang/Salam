@@ -35,6 +35,9 @@ func jd_scalar_call(s &: Sema, t: int, expr: str): str:
     if type_is_float(s, t):
         ret "__jdf((" + expr + ") as f64)"
     end
+    if type_is_wide(s, t):
+        ret ""
+    end
     if type_is_integer(s, t):
         if jd_is_unsigned(s, t):
             ret "__jdu((" + expr + ") as u64)"
@@ -71,7 +74,7 @@ func jd_enc_enum(s &: Sema, t: int, expr: str, ind: str): str:
         if m.kind == SYM_ENUM_MEMBER:
             head := first ? "if" : "else"
             out = out + ind + head + " (" + expr + ") as i64 == " + m.enum_value + ":\n"
-            out = out + jd_add(ind + JIND, jd_quote(jd_quote(m.name)))
+            out += jd_add(ind + JIND, jd_quote(jd_quote(m.name)))
             first = false
         end
     end
@@ -79,7 +82,7 @@ func jd_enc_enum(s &: Sema, t: int, expr: str, ind: str): str:
         ret ""
     end
     out = out + ind + "else:\n"
-    out = out + jd_add(ind + JIND, "__jdi((" + expr + ") as i64)")
+    out += jd_add(ind + JIND, "__jdi((" + expr + ") as i64)")
     ret out + ind + "end\n"
 end
 
@@ -92,7 +95,21 @@ func jd_enc_ptr(
         ret ""
     end
     mut out := ind + "if (" + expr + ") == null:\n"
-    out = out + jd_add(deep, "\"null\"")
+    out += jd_add(deep, "\"null\"")
+    out = out + ind + "else:\n" + inner
+    ret out + ind + "end\n"
+end
+
+func jd_enc_opt(
+    s &: Sema, a &: at.Ast, t: int, expr: str, ind: str, as_string: bool, home: int, sp: co.SrcSpan
+): str:
+    deep := ind + JIND
+    inner := jd_enc_value(s, a, opt_inner(s, t), "(" + expr + ").value", deep, as_string, home, sp)
+    if str.Len(inner) == 0:
+        ret ""
+    end
+    mut out := ind + "if (" + expr + ").present == false:\n"
+    out += jd_add(deep, "\"null\"")
     out = out + ind + "else:\n" + inner
     ret out + ind + "end\n"
 end
@@ -102,6 +119,9 @@ func jd_enc_value(
 ): str:
     if t < 0:
         ret ""
+    end
+    if opt_inner(s, t) != TYPE_NONE:
+        ret jd_enc_opt(s, a, t, expr, ind, as_string, home, sp)
     end
     call := jd_scalar_call(s, t, expr)
     if str.Len(call) > 0:
@@ -127,6 +147,9 @@ end
 func jd_empty_test(s &: Sema, t: int, expr: str): str:
     if t < 0:
         ret ""
+    end
+    if opt_inner(s, t) != TYPE_NONE:
+        ret "(" + expr + ").present"
     end
     k := ty_at(s, t).kind
     if k == TY_STR or k == TY_UCHAR or k == TY_VEC:
@@ -200,7 +223,7 @@ func jd_enc_struct(s &: Sema, a &: at.Ast, t: int, home: int, sp: co.SrcSpan): s
         mut nfields := 0
         repeat mems.len() in i:
             if sym_at(s, mems.get(i)).kind == SYM_FIELD:
-                nfields += 1
+                nfields++
             end
         end
         mut out := jd_add(JIND, "\"{\"")
@@ -215,7 +238,7 @@ func jd_enc_struct(s &: Sema, a &: at.Ast, t: int, home: int, sp: co.SrcSpan): s
                 if str.Len(part) == 0:
                     ret ""
                 end
-                out = out + (str.Equals(part, JIND) ? "" : part)
+                out += (str.Equals(part, JIND) ? "" : part)
             end
         end
         ret out + jd_add(JIND, "\"}\"")
@@ -244,7 +267,7 @@ func jd_enc_struct(s &: Sema, a &: at.Ast, t: int, home: int, sp: co.SrcSpan): s
         if k == TY_STR or k == TY_UCHAR:
             ret "__jdqs(_it.key())"
         end
-        if type_is_integer(s, key):
+        if type_is_integer(s, key) and not type_is_wide(s, key):
             ret "__jdqso(__jdi(_it.key() as i64))"
         end
         ret ""
@@ -325,7 +348,7 @@ func jd_enc_struct(s &: Sema, a &: at.Ast, t: int, home: int, sp: co.SrcSpan): s
             fields.free()
             out = out + i2 + derive_ident(mname) + " _c:\n"
             if nf == 0:
-                out = out + jd_add(i3, jd_quote(jd_quote(mname)))
+                out += jd_add(i3, jd_quote(jd_quote(mname)))
             else:
                 val := jd_enc_value(s, a, sym_at(s, cs).ty, "_c", i3, false, home, sp)
                 if str.Len(val) == 0:

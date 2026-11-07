@@ -1,0 +1,354 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package aiusage
+
+import net.http
+import net.router
+import encoding.json
+import calendar
+import time
+import db.mysql
+
+include aistore "store.salam"
+include aiweb "web.salam"
+include aibilling "billing.salam"
+
+const TEHRAN := 12600
+const EPOCH_JDN := 2440588
+const DAY := 86400
+const MIN_DAYS := 7
+const MAX_DAYS := 90
+const DEFAULT_DAYS := 30
+const TOP := 8
+
+func n(v: i64): str:
+    ret aiweb.I64s(v)
+end
+
+func one(v: str): Vector<str>:
+    mut a := Vector {} as Vector<str>
+    a.push(v)
+    ret a
+end
+
+func two(v: str, w: str): Vector<str>:
+    mut a := one(v)
+    a.push(w)
+    ret a
+end
+
+func three(v: str, w: str, x: str): Vector<str>:
+    mut a := two(v, w)
+    a.push(x)
+    ret a
+end
+
+func num(v: str): str:
+    if v.len() == 0:
+        ret "0"
+    end
+    ret v
+end
+
+func local_day(t: i64): i64:
+    ret (t + TEHRAN) / DAY
+end
+
+func day_start(day: i64): i64:
+    ret day * DAY - TEHRAN
+end
+
+func jalali_month_start(year: int, month: int): i64:
+    jdn := calendar.JalaliToJDN(calendar.JalaliDate { year = year, month = month, day = 1 })
+    ret day_start(jdn - EPOCH_JDN)
+end
+
+func days_of(raw: str): int:
+    if raw.len() == 0:
+        ret DEFAULT_DAYS
+    end
+    d := raw.to_int()
+    if d < MIN_DAYS:
+        ret MIN_DAYS
+    end
+    if d > MAX_DAYS:
+        ret MAX_DAYS
+    end
+    ret d
+end
+
+func totals_at(rows: mysql.Result, off: int): str:
+    mut m := Vector {} as Vector<str>
+    m.push(json.MemberRaw("count", num(aistore.Text(rows, off))))
+    m.push(json.MemberRaw("input", num(aistore.Text(rows, off + 1))))
+    m.push(json.MemberRaw("output", num(aistore.Text(rows, off + 2))))
+    m.push(json.MemberRaw("reasoning", num(aistore.Text(rows, off + 3))))
+    m.push(json.MemberRaw("cache_read", num(aistore.Text(rows, off + 4))))
+    m.push(json.MemberRaw("cache_write", num(aistore.Text(rows, off + 5))))
+    m.push(json.MemberRaw("cost", num(aistore.Text(rows, off + 6))))
+    m.push(json.MemberRaw("cost_in", num(aistore.Text(rows, off + 7))))
+    m.push(json.MemberRaw("cost_out", num(aistore.Text(rows, off + 8))))
+    m.push(json.MemberRaw("tools", num(aistore.Text(rows, off + 9))))
+    ret json.Object(m)
+end
+
+func chat_totals(who: str, from: i64, upto: i64): str:
+    a := three(who, n(from), n(upto))
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT COUNT(*), COALESCE(SUM(m.tokens_in), 0), COALESCE(SUM(m.tokens_out), 0), COALESCE(SUM(m.tokens_reasoning), 0), COALESCE(SUM(m.cache_read), 0), COALESCE(SUM(m.cache_write), 0), COALESCE(SUM(m.cost), 0), COALESCE(SUM(m.cost_in), 0), COALESCE(SUM(m.cost_out), 0), COALESCE(SUM(m.tools), 0) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = ?1 AND m.role = 'assistant' AND m.created >= ?2 AND m.created < ?3", a)
+    mut out := "{}"
+    if aistore.Next(rows):
+        out = totals_at(rows, 0)
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    ret out
+end
+
+func api_totals(who: str, from: i64, upto: i64): str:
+    a := three(who, n(from), n(upto))
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT COUNT(*), COALESCE(SUM(tokens_in), 0), COALESCE(SUM(tokens_out), 0), COALESCE(SUM(tokens_reasoning), 0), COALESCE(SUM(cache_read), 0), COALESCE(SUM(cache_write), 0), COALESCE(SUM(cost), 0), COALESCE(SUM(cost_in), 0), COALESCE(SUM(cost_out), 0), COALESCE(SUM(tools), 0) FROM api_requests WHERE user_id = ?1 AND created >= ?2 AND created < ?3", a)
+    mut out := "{}"
+    if aistore.Next(rows):
+        out = totals_at(rows, 0)
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    ret out
+end
+
+func period_json(who: str, key: str, from: i64, upto: i64): str:
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("key", key))
+    m.push(json.MemberRaw("from", n(from)))
+    m.push(json.MemberRaw("to", n(upto)))
+    m.push(json.MemberRaw("chat", chat_totals(who, from, upto)))
+    m.push(json.MemberRaw("api", api_totals(who, from, upto)))
+    ret json.Object(m)
+end
+
+func periods_json(who: str, t: i64): str:
+    today := local_day(t)
+    start := day_start(today)
+    week := start - ((today + 5) % 7) * DAY
+    j := calendar.JDNToJalali(today + EPOCH_JDN)
+    month := jalali_month_start(j.year, j.month)
+    mut py := j.year
+    mut pm := j.month - 1
+    if pm == 0:
+        pm = 12
+        py--
+    end
+    last := jalali_month_start(py, pm)
+    future := t + DAY
+    mut items := Vector {} as Vector<str>
+    items.push(period_json(who, "today", start, future))
+    items.push(period_json(who, "week", week, future))
+    items.push(period_json(who, "month", month, future))
+    items.push(period_json(who, "last_month", last, month))
+    items.push(period_json(who, "all", 0, future))
+    ret json.Array(items)
+end
+
+func daily_chat(who: str, from: i64): HashMap<str, str>:
+    mut out := HashMap {} as HashMap<str, str>
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT FROM_UNIXTIME(m.created - MOD(m.created, 86400), '%Y-%m-%d') AS d, COUNT(*), COALESCE(SUM(m.tokens_in + m.cache_read + m.cache_write), 0), COALESCE(SUM(m.tokens_out + m.tokens_reasoning), 0) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = ?1 AND m.role = 'assistant' AND m.created >= ?2 GROUP BY d", two(who, n(from)))
+    until aistore.Next(rows):
+        out.put(aistore.Text(rows, 0), aistore.Text(rows, 1) + "|" + aistore.Text(rows, 2) + "|" + aistore.Text(rows, 3))
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    ret out
+end
+
+func daily_api(who: str, from: i64): HashMap<str, str>:
+    mut out := HashMap {} as HashMap<str, str>
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT FROM_UNIXTIME(created - MOD(created, 86400), '%Y-%m-%d') AS d, COUNT(*), COALESCE(SUM(tokens_in + cache_read + cache_write), 0), COALESCE(SUM(tokens_out + tokens_reasoning), 0) FROM api_requests WHERE user_id = ?1 AND created >= ?2 GROUP BY d", two(who, n(from)))
+    until aistore.Next(rows):
+        out.put(aistore.Text(rows, 0), aistore.Text(rows, 1) + "|" + aistore.Text(rows, 2) + "|" + aistore.Text(rows, 3))
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    ret out
+end
+
+func daily_values(item: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    if item.len() == 0:
+        out.push("0")
+        out.push("0")
+        out.push("0")
+        ret out
+    end
+    mut rest := item
+    until true:
+        at := rest.find("|")
+        if at < 0:
+            out.push(rest)
+            break
+        end
+        out.push(rest.substr(0, at))
+        rest = rest.substr(at + 1, rest.len() - at - 1)
+    end
+    ret out
+end
+
+func daily_json(who: str, t: i64, days: int): str:
+    from := t - (days as i64) * DAY
+    chat := daily_chat(who, from)
+    api := daily_api(who, from)
+    mut items := Vector {} as Vector<str>
+    mut i := days - 1
+    until i >= 0:
+        stamp := t - (i as i64) * DAY
+        label := time.FormatDate(stamp)
+        cv := daily_values(chat.has(label) ? chat.get(label) : "")
+        av := daily_values(api.has(label) ? api.get(label) : "")
+        mut d := Vector {} as Vector<str>
+        d.push(json.Member("day", label))
+        d.push(json.MemberRaw("chat_count", num(cv.get(0))))
+        d.push(json.MemberRaw("chat_in", num(cv.get(1))))
+        d.push(json.MemberRaw("chat_out", num(cv.get(2))))
+        d.push(json.MemberRaw("api_count", num(av.get(0))))
+        d.push(json.MemberRaw("api_in", num(av.get(1))))
+        d.push(json.MemberRaw("api_out", num(av.get(2))))
+        items.push(json.Object(d))
+        i--
+    end
+    ret json.Array(items)
+end
+
+func sources_json(who: str, from: i64): str:
+    mut items := Vector {} as Vector<str>
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT CASE WHEN c.device_id != 0 THEN 'agent' WHEN c.cloud = 1 THEN 'cloud' ELSE COALESCE(NULLIF(c.source, ''), 'web') END AS s, COUNT(*), COALESCE(SUM(m.tokens_in + m.cache_read + m.cache_write), 0), COALESCE(SUM(m.tokens_out + m.tokens_reasoning), 0) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = ?1 AND m.role = 'assistant' AND m.created >= ?2 GROUP BY s ORDER BY 2 DESC", two(who, n(from)))
+    until aistore.Next(rows):
+        mut m := Vector {} as Vector<str>
+        m.push(json.Member("kind", "chat"))
+        m.push(json.Member("name", aistore.Text(rows, 0)))
+        m.push(json.MemberRaw("count", num(aistore.Text(rows, 1))))
+        m.push(json.MemberRaw("input", num(aistore.Text(rows, 2))))
+        m.push(json.MemberRaw("output", num(aistore.Text(rows, 3))))
+        items.push(json.Object(m))
+    end
+    aistore.Finish(rows)
+    mut arows := aistore.Stmt("SELECT COUNT(*), COALESCE(SUM(tokens_in + cache_read + cache_write), 0), COALESCE(SUM(tokens_out + tokens_reasoning), 0) FROM api_requests WHERE user_id = ?1 AND created >= ?2", two(who, n(from)))
+    if aistore.Next(arows):
+        mut m := Vector {} as Vector<str>
+        m.push(json.Member("kind", "api"))
+        m.push(json.Member("name", "api"))
+        m.push(json.MemberRaw("count", num(aistore.Text(arows, 0))))
+        m.push(json.MemberRaw("input", num(aistore.Text(arows, 1))))
+        m.push(json.MemberRaw("output", num(aistore.Text(arows, 2))))
+        items.push(json.Object(m))
+    end
+    aistore.Finish(arows)
+    aistore.Unlock()
+    ret json.Array(items)
+end
+
+func keys_json(who: str, from: i64): str:
+    mut items := Vector {} as Vector<str>
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT COALESCE(NULLIF(k.name, ''), '?'), COUNT(*), COALESCE(SUM(r.tokens_in + r.cache_read + r.cache_write), 0), COALESCE(SUM(r.tokens_out + r.tokens_reasoning), 0) FROM api_requests r LEFT JOIN api_keys k ON k.id = r.key_id WHERE r.user_id = ?1 AND r.created >= ?2 GROUP BY k.id, k.name ORDER BY 2 DESC LIMIT " + n(TOP as i64), two(who, n(from)))
+    until aistore.Next(rows):
+        mut m := Vector {} as Vector<str>
+        m.push(json.Member("name", aistore.Text(rows, 0)))
+        m.push(json.MemberRaw("count", num(aistore.Text(rows, 1))))
+        m.push(json.MemberRaw("input", num(aistore.Text(rows, 2))))
+        m.push(json.MemberRaw("output", num(aistore.Text(rows, 3))))
+        items.push(json.Object(m))
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    ret json.Array(items)
+end
+
+func projects_json(who: str, from: i64): str:
+    mut items := Vector {} as Vector<str>
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT project, COUNT(*), COALESCE(SUM(tokens_in + cache_read + cache_write), 0), COALESCE(SUM(tokens_out + tokens_reasoning), 0) FROM api_requests WHERE user_id = ?1 AND created >= ?2 AND project != '' GROUP BY project ORDER BY 2 DESC LIMIT " + n(TOP as i64), two(who, n(from)))
+    until aistore.Next(rows):
+        mut m := Vector {} as Vector<str>
+        m.push(json.Member("name", aistore.Text(rows, 0)))
+        m.push(json.MemberRaw("count", num(aistore.Text(rows, 1))))
+        m.push(json.MemberRaw("input", num(aistore.Text(rows, 2))))
+        m.push(json.MemberRaw("output", num(aistore.Text(rows, 3))))
+        items.push(json.Object(m))
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    ret json.Array(items)
+end
+
+func plan_json(who: str): str:
+    lim := aibilling.LimitsOf(who)
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("id", lim.plan))
+    m.push(json.Member("name", lim.name))
+    m.push(json.MemberInt("expires", lim.expires))
+    m.push(json.MemberInt("chat_hourly", lim.chat_hourly as i64))
+    m.push(json.MemberInt("api_hourly", lim.api_hourly as i64))
+    m.push(json.MemberInt("parallel", lim.parallel as i64))
+    ret json.Object(m)
+end
+
+func hourly_json(who: str): str:
+    hour := aistore.Now() - 3600
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT (SELECT COUNT(*) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = ?1 AND m.role = 'user' AND m.created > ?2), (SELECT COUNT(*) FROM api_requests WHERE user_id = ?1 AND created > ?2)", two(who, n(hour)))
+    mut chat_used := "0"
+    mut api_used := "0"
+    if aistore.Next(rows):
+        chat_used = num(aistore.Text(rows, 0))
+        api_used = num(aistore.Text(rows, 1))
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    mut m := Vector {} as Vector<str>
+    m.push(json.MemberRaw("chat_used", chat_used))
+    m.push(json.MemberRaw("api_used", api_used))
+    m.push(json.MemberRaw("window_seconds", n(3600)))
+    ret json.Object(m)
+end
+
+func report(ctx: i64):
+    uid := aiweb.NeedUser(ctx)
+    if uid == 0:
+        ret
+    end
+    who := n(uid)
+    t := aistore.Now()
+    days := days_of(http.Query(ctx, "days"))
+    from := t - (days as i64) * DAY
+    mut m := Vector {} as Vector<str>
+    m.push(json.MemberRaw("now", n(t)))
+    m.push(json.MemberRaw("plan", plan_json(who)))
+    m.push(json.MemberRaw("hourly", hourly_json(who)))
+    m.push(json.MemberRaw("periods", periods_json(who, t)))
+    m.push(json.MemberRaw("daily", daily_json(who, t, days)))
+    m.push(json.MemberRaw("sources", sources_json(who, from)))
+    m.push(json.MemberRaw("keys", keys_json(who, from)))
+    m.push(json.MemberRaw("projects", projects_json(who, from)))
+    aiweb.Reply(ctx, 200, json.Object(m))
+end
+
+pub func Routes(r &: router.Router):
+    router.Get(r, "/usage", report)
+    router.Options(r, "/usage", aiweb.Preflight)
+end

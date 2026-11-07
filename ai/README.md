@@ -13,52 +13,70 @@ salam build ai/backend/main.salam --output=salam-ai
 
 or `docker build ai/backend`. It is configured through environment variables:
 
-| Variable                                                          | Meaning                                                                                                                                                               | Default                                         |
-| ----------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------- |
-| `AI_PORT`, `AI_HOST`                                              | where the API listens                                                                                                                                                 | `8080`, `0.0.0.0`                               |
-| `AI_DB_HOST`, `AI_DB_PORT`                                        | MariaDB server                                                                                                                                                        | `127.0.0.1`, `3306`                             |
-| `AI_DB_NAME`, `AI_DB_USER`, `AI_DB_PASSWORD`                      | MariaDB database and account                                                                                                                                          | `salam_ai`, `salam_ai`, empty                   |
-| `AI_ENGINE_URL`                                                   | the private assistant engine                                                                                                                                          | `http://127.0.0.1:4096`                         |
-| `AI_ENGINE_USER`, `AI_ENGINE_PASSWORD`                            | basic auth for the engine, when set                                                                                                                                   | `salam`, empty                                  |
-| `AI_ENGINE_AGENT`                                                 | the engine profile to answer with                                                                                                                                     | `salam`                                         |
-| `AI_ENGINE_AGENT_DESKTOP`                                         | the engine profile for desktop agent chats; it needs the bridge MCP server (see below)                                                                                | `salam-agent`                                   |
-| `AI_ENGINE_AGENT_RAW`                                             | the engine profile for API keys an admin took off the Salam prompt; give it no prompt of its own beyond a neutral line, and no tools except `salam_*`                 | `raw`                                           |
-| `AI_ENGINE_FALLBACK_MODELS`                                       | comma separated `provider/model` list tried in order when a turn fails before writing anything                                                                        | empty                                           |
-| `AI_ENGINE_EFFORT_MODELS`                                         | comma separated `level=provider/model` pairs (levels `low`, `medium`, `high`) that answer a turn at that effort level instead of the profile's own model; server only | empty                                           |
-| `AI_ENGINE_EFFORT_VARIANTS`                                       | comma separated `level=variant` pairs, the engine's reasoning variant for that level (for example `high=high`); server only                                           | empty                                           |
-| `AI_REDACT_WORDS`                                                 | comma separated words, in any letter case, kept out of reasoning, traces and sentences where the assistant describes itself; server only                              | empty                                           |
-| `AI_UPLOAD_DIR`                                                   | where attachments are written; mount a volume here                                                                                                                    | `/data/uploads`                                 |
-| `AI_BRIDGE_SECRET`                                                | bearer token the engine sends to `/bridge/mcp`; at least 16 characters                                                                                                | empty (the bridge refuses every call)           |
-| `AI_ALLOWED_ORIGINS`                                              | comma separated origins allowed by CORS                                                                                                                               | `https://ai.salamlang.ir,http://localhost:3000` |
-| `AI_ADMIN_IDS`                                                    | comma separated account IDs that may open `/admin`; preferred over emails                                                                                             | empty                                           |
-| `AI_ADMIN_EMAILS`                                                 | comma separated emails that may open `/admin`; these emails can no longer be used to sign up, so add them only after the account exists                               | empty                                           |
-| `AI_OAUTH_ISSUER`                                                 | the public URL of this API, the OAuth issuer                                                                                                                          | `https://ai-api.salamlang.ir`                   |
-| `AI_APP_URL`                                                      | the web app, where people sign in and approve apps                                                                                                                    | `https://ai.salamlang.ir`                       |
-| `AI_OAUTH_RESOURCES`                                              | comma separated MCP server URIs tokens may be issued for                                                                                                              | `https://mcp.salamlang.ir/mcp`                  |
-| `AI_RESOURCE_SECRET`                                              | shared with the MCP server for introspection and activity reports; at least 16 characters                                                                             | empty (both endpoints refuse every call)        |
-| `AI_API_HOURLY`                                                   | API requests per hour on the free plan                                                                                                                                | `100`                                           |
-| `AI_CHAT_HOURLY`                                                  | chat messages per hour on the free plan                                                                                                                               | `60`                                            |
-| `AI_ZARINPAL_MERCHANT`, `AI_ZIBAL_MERCHANT`                       | the merchant IDs of the payment gateways; a gateway with no id is not offered                                                                                         | empty                                           |
-| `AI_ZARINPAL_BASE`, `AI_ZIBAL_BASE`                               | where those gateways live, for a sandbox or the test mock                                                                                                             | the real gateways                               |
-| `AI_BILLING_CALLBACK`                                             | the public URL of this API, where the gateway sends the browser back                                                                                                  | `AI_OAUTH_ISSUER`                               |
-| `AI_BILLING_SWEEP_SECONDS`                                        | how often to settle payments the gateway never returned from, and how long a payment may sit first                                                                    | `600`                                           |
-| `AI_MEMORY_SOFT_MB`, `AI_MEMORY_HARD_MB`                          | restart to give memory back once past the first with nothing in flight, or past the second regardless                                                                 | `1200`, `2600`                                  |
-| `AI_QUEUE_MAX`                                                    | how many messages one chat may keep waiting in its queue                                                                                                              | `20`                                            |
-| `AI_API_ANSWER_SECONDS`                                           | how long one API answer may take before it is cut off                                                                                                                 | `3600`                                          |
-| `AI_CHAT_MEMORY`                                                  | `off` stops remembering chats and recalling them                                                                                                                      | `on`                                            |
-| `AI_CHAT_MEMORY_IDLE_SECONDS`                                     | how long a chat stays quiet before its new turns are summarized, so a quick back and forth costs one pass                                                             | `60`                                            |
-| `AI_CHAT_MEMORY_DAYS`                                             | how far back chats are picked up, which also bounds the first pass over old chats after an upgrade                                                                    | `30`                                            |
-| `AI_CHAT_MEMORY_PAUSE_SECONDS`                                    | the pause between memory passes; they run one at a time                                                                                                               | `10`                                            |
-| `AI_API_START_SECONDS`                                            | how long the engine may stay quiet, before it starts an API answer or in the middle of one, before the turn is given up                                               | `180`                                           |
-| `AI_TELEGRAM_TOKEN`                                               | the Telegram bot token from BotFather; empty switches the bot off. Keep it in the server's env file, never in the repository                                          | empty                                           |
-| `AI_TELEGRAM_GUEST_LIMIT`                                         | messages a Telegram guest may send before being asked to sign in                                                                                                      | `15`                                            |
-| `AI_TELEGRAM_API`                                                 | where the Bot API lives, for the test mock                                                                                                                            | `https://api.telegram.org`                      |
-| `AI_SANDBOX_URL`, `AI_SANDBOX_SECRET`                             | the sandbox manager (see `sandbox/`) and its bearer token; without them chats have no command sandbox                                                                 | empty                                           |
-| `AI_SECRET_KEY`                                                   | key that encrypts GitHub and Figma tokens at rest; at least 16 characters, falls back to `AI_BRIDGE_SECRET`                                                           | `AI_BRIDGE_SECRET`                              |
-| `AI_GITHUB_CLIENT_ID`, `AI_GITHUB_CLIENT_SECRET`                  | a GitHub OAuth app (callback `AI_OAUTH_ISSUER/integrations/github/callback`) for "Sign in with GitHub"; tokens can be pasted without it                               | empty                                           |
-| `AI_FIGMA_CLIENT_ID`, `AI_FIGMA_CLIENT_SECRET`, `AI_FIGMA_SCOPES` | the same for Figma (callback `.../integrations/figma/callback`)                                                                                                       | empty                                           |
-| `AI_GITHUB_SCOPES`                                                | the classic OAuth scopes the "Connect with GitHub" flow asks for (space separated); the default is everything except `delete_repo` and `delete:packages`              | see `cloud.salam`                               |
-| `AI_GITHUB_API`, `AI_GITHUB_WEB`, `AI_FIGMA_API`, `AI_FIGMA_WEB`  | where those services live, for the test mock                                                                                                                          | the real services                               |
+| Variable                                                          | Meaning                                                                                                                                                               | Default                                                               |
+| ----------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| `AI_PORT`, `AI_HOST`                                              | where the API listens                                                                                                                                                 | `8080`, `0.0.0.0`                                                     |
+| `AI_DB_HOST`, `AI_DB_PORT`                                        | MariaDB server                                                                                                                                                        | `127.0.0.1`, `3306`                                                   |
+| `AI_DB_NAME`, `AI_DB_USER`, `AI_DB_PASSWORD`                      | MariaDB database and account                                                                                                                                          | `salam_ai`, `salam_ai`, empty                                         |
+| `AI_ENGINE_URL`                                                   | the private assistant engine                                                                                                                                          | `http://127.0.0.1:4096`                                               |
+| `AI_ENGINE_USER`, `AI_ENGINE_PASSWORD`                            | basic auth for the engine, when set                                                                                                                                   | `salam`, empty                                                        |
+| `AI_ENGINE_AGENT`                                                 | the engine profile to answer with                                                                                                                                     | `salam`                                                               |
+| `AI_ENGINE_AGENT_DESKTOP`                                         | the engine profile for desktop agent chats; it needs the bridge MCP server (see below)                                                                                | `salam-agent`                                                         |
+| `AI_ENGINE_AGENT_RAW`                                             | the engine profile for API keys an admin took off the Salam prompt; give it no prompt of its own beyond a neutral line, and no tools except `salam_*`                 | `raw`                                                                 |
+| `AI_ENGINE_AGENT_DESKTOP_RAW`                                     | the engine profile for a lifted account's desktop agent chat: the same tools as the desktop profile, but no Salam prompt of its own                                   | empty (falls back to `AI_ENGINE_AGENT_RAW`, then the desktop profile) |
+| `AI_ENGINE_FALLBACK_MODELS`                                       | comma separated `provider/model` list tried in order when a turn fails before writing anything                                                                        | empty                                                                 |
+| `AI_ENGINE_EFFORT_MODELS`                                         | comma separated `level=provider/model` pairs (levels `low`, `medium`, `high`) that answer a turn at that effort level instead of the profile's own model; server only | empty                                                                 |
+| `AI_ENGINE_EFFORT_VARIANTS`                                       | comma separated `level=variant` pairs, the engine's reasoning variant for that level (for example `high=high`); server only                                           | empty                                                                 |
+| `AI_REDACT_WORDS`                                                 | comma separated words, in any letter case, kept out of reasoning, traces and sentences where the assistant describes itself; server only                              | empty                                                                 |
+| `AI_UPLOAD_DIR`                                                   | where attachments are written; mount a volume here                                                                                                                    | `/data/uploads`                                                       |
+| `AI_STT_URL`                                                      | the private speech service; unset turns voice input off everywhere (see below)                                                                                        | empty                                                                 |
+| `AI_STT_SECRET`                                                   | bearer token for the speech service, when it sets `STT_SECRET`                                                                                                        | empty                                                                 |
+| `AI_STT_MAX_BYTES`                                                | largest recording the API accepts                                                                                                                                     | `4194304`                                                             |
+| `AI_STT_TIMEOUT_SECONDS`                                          | how long one conversion may take, queue included; keep it under the proxy timeouts                                                                                    | `90`                                                                  |
+| `AI_STT_CONCURRENCY`                                              | conversions in flight from this API, across all users; more answer 503                                                                                                | `4`                                                                   |
+| `AI_STT_HOURLY`, `AI_STT_SECONDS_HOURLY`                          | each user's conversions and seconds of audio per hour (0 turns a limit off)                                                                                           | `30`, `600`                                                           |
+| `AI_STT_HEALTH_SECONDS`                                           | how long a look at the speech service's health is remembered                                                                                                          | `30`                                                                  |
+| `AI_BRIDGE_SECRET`                                                | bearer token the engine sends to `/bridge/mcp`; at least 16 characters                                                                                                | empty (the bridge refuses every call)                                 |
+| `AI_ALLOWED_ORIGINS`                                              | comma separated origins allowed by CORS                                                                                                                               | `https://ai.salamlang.ir,http://localhost:3000`                       |
+| `AI_ADMIN_IDS`                                                    | comma separated account IDs that may open `/admin`; preferred over emails                                                                                             | empty                                                                 |
+| `AI_ADMIN_EMAILS`                                                 | comma separated emails that may open `/admin`; these emails can no longer be used to sign up, so add them only after the account exists                               | empty                                                                 |
+| `AI_OAUTH_ISSUER`                                                 | the public URL of this API, the OAuth issuer                                                                                                                          | `https://ai-api.salamlang.ir`                                         |
+| `AI_APP_URL`                                                      | the web app, where people sign in and approve apps                                                                                                                    | `https://ai.salamlang.ir`                                             |
+| `AI_OAUTH_RESOURCES`                                              | comma separated MCP server URIs tokens may be issued for                                                                                                              | `https://mcp.salamlang.ir/mcp`                                        |
+| `AI_RESOURCE_SECRET`                                              | shared with the MCP server for introspection and activity reports; at least 16 characters                                                                             | empty (both endpoints refuse every call)                              |
+| `AI_API_HOURLY`                                                   | API requests per hour on the free plan                                                                                                                                | `100`                                                                 |
+| `AI_CHAT_HOURLY`                                                  | chat messages per hour on the free plan                                                                                                                               | `60`                                                                  |
+| `AI_ZARINPAL_MERCHANT`, `AI_ZIBAL_MERCHANT`                       | the merchant IDs of the payment gateways; a gateway with no id is not offered                                                                                         | empty                                                                 |
+| `AI_ZARINPAL_BASE`, `AI_ZIBAL_BASE`                               | where those gateways live, for a sandbox or the test mock                                                                                                             | the real gateways                                                     |
+| `AI_BILLING_CALLBACK`                                             | the public URL of this API, where the gateway sends the browser back                                                                                                  | `AI_OAUTH_ISSUER`                                                     |
+| `AI_BILLING_SWEEP_SECONDS`                                        | how often to settle payments the gateway never returned from, and how long a payment may sit first                                                                    | `600`                                                                 |
+| `AI_MEMORY_SOFT_MB`, `AI_MEMORY_HARD_MB`                          | restart to give memory back once past the first with nothing in flight, or past the second regardless                                                                 | `1200`, `2600`                                                        |
+| `AI_QUEUE_MAX`                                                    | how many messages one chat may keep waiting in its queue                                                                                                              | `20`                                                                  |
+| `AI_SHARE_DEFAULT_HOURS`                                          | how long a new collaborate link lives: 1, 24, 168 or 0 for never (view links never expire)                                                                            | `24`                                                                  |
+| `AI_SHARE_MAX_MESSAGES`                                           | default total message cap of a collaborate link, 0 for none (the owner can change it)                                                                                 | `100`                                                                 |
+| `AI_SHARE_DAILY_MESSAGES`                                         | default messages per 24 hours for a collaborate link, 0 for none                                                                                                      | `50`                                                                  |
+| `AI_SHARE_RATE_PER_MINUTE`                                        | guest sends per minute from one IP (three times that per link)                                                                                                        | `6`                                                                   |
+| `AI_SHARE_READ_PER_MINUTE`                                        | shared page reads per minute from one IP (six times that per link)                                                                                                    | `90`                                                                  |
+| `AI_SHARE_MAX_CHARS`                                              | longest message a guest may send, in characters                                                                                                                       | `2000`                                                                |
+| `AI_CHAT_TURN_SECONDS`                                            | how long one web chat turn may run before it is stopped with a note to write "continue" (ceiling 43200)                                                               | `600`                                                                 |
+| `AI_AGENT_TURN_SECONDS`                                           | the same for a desktop agent turn (ceiling 43200)                                                                                                                     | `3600`                                                                |
+| `AI_UNLIMITED_TURN_SECONDS`                                       | the same for accounts on the unlimited plan, chat and agent (hard ceiling 43200, twelve hours)                                                                        | `43200`                                                               |
+| `AI_BRIDGE_CALL_SECONDS`                                          | how long one tool call on the user's computer may take to answer                                                                                                      | `600`                                                                 |
+| `AI_API_ANSWER_SECONDS`                                           | how long one API answer may take before it is cut off                                                                                                                 | `3600`                                                                |
+| `AI_CHAT_MEMORY`                                                  | `off` stops remembering chats and recalling them                                                                                                                      | `on`                                                                  |
+| `AI_CHAT_MEMORY_IDLE_SECONDS`                                     | how long a chat stays quiet before its new turns are summarized, so a quick back and forth costs one pass                                                             | `60`                                                                  |
+| `AI_CHAT_MEMORY_DAYS`                                             | how far back chats are picked up, which also bounds the first pass over old chats after an upgrade                                                                    | `30`                                                                  |
+| `AI_CHAT_MEMORY_PAUSE_SECONDS`                                    | the pause between memory passes; they run one at a time                                                                                                               | `10`                                                                  |
+| `AI_API_START_SECONDS`                                            | how long the engine may stay quiet, before it starts an API answer or in the middle of one, before the turn is given up                                               | `180`                                                                 |
+| `AI_TELEGRAM_TOKEN`                                               | the Telegram bot token from BotFather; empty switches the bot off. Keep it in the server's env file, never in the repository                                          | empty                                                                 |
+| `AI_TELEGRAM_GUEST_LIMIT`                                         | messages a Telegram guest may send before being asked to sign in                                                                                                      | `15`                                                                  |
+| `AI_TELEGRAM_API`                                                 | where the Bot API lives, for the test mock                                                                                                                            | `https://api.telegram.org`                                            |
+| `AI_SANDBOX_URL`, `AI_SANDBOX_SECRET`                             | the sandbox manager (see `sandbox/`) and its bearer token; without them chats have no command sandbox                                                                 | empty                                                                 |
+| `AI_SECRET_KEY`                                                   | key that encrypts GitHub and Figma tokens at rest; at least 16 characters, falls back to `AI_BRIDGE_SECRET`                                                           | `AI_BRIDGE_SECRET`                                                    |
+| `AI_GITHUB_CLIENT_ID`, `AI_GITHUB_CLIENT_SECRET`                  | a GitHub OAuth app (callback `AI_OAUTH_ISSUER/integrations/github/callback`) for "Sign in with GitHub"; tokens can be pasted without it                               | empty                                                                 |
+| `AI_FIGMA_CLIENT_ID`, `AI_FIGMA_CLIENT_SECRET`, `AI_FIGMA_SCOPES` | the same for Figma (callback `.../integrations/figma/callback`)                                                                                                       | empty                                                                 |
+| `AI_GITHUB_SCOPES`                                                | the classic OAuth scopes the "Connect with GitHub" flow asks for (space separated); the default is everything except `delete_repo` and `delete:packages`              | see `cloud.salam`                                                     |
+| `AI_GITHUB_API`, `AI_GITHUB_WEB`, `AI_FIGMA_API`, `AI_FIGMA_WEB`  | where those services live, for the test mock                                                                                                                          | the real services                                                     |
 
 The API keeps a stream open for as long as an answer takes, so give the
 container room: it ran into a 512 MB limit in production and was killed by the
@@ -101,9 +119,11 @@ The API:
 | `GET /bridge/devices`, `POST /bridge/devices`, `DELETE /bridge/devices/:id`                    | list, register (`{name, os}` gives `{device, secret}`) or remove Salam Agent installs                                                                                                                                                        |
 | `GET /plans`                                                                                   | the four plans, with prices and limits, and the gateways that are on                                                                                                                                                                         |
 | `GET /billing/subscription`, `GET /billing/payments`                                           | the signed-in account's plan with this hour's usage, and its payments                                                                                                                                                                        |
+| `GET /usage`                                                                                   | the signed-in account's own usage: today, week, month, last month and all time, plus per day, per source, per API key and per project                                                                                                        |
 | `POST /billing/checkout`                                                                       | `{plan, gateway}` gives `{url}` to send the browser to                                                                                                                                                                                       |
 | `GET /billing/callback/:gateway`                                                               | where the gateway returns; it verifies, activates and redirects to the app                                                                                                                                                                   |
 | `GET /apps`, `DELETE /apps/:id`, `GET /apps/:id/events`                                        | the signed-in user's connected apps, disconnecting one, and its recorded calls                                                                                                                                                               |
+| `POST /speech/transcribe`                                                                      | turns a recording into text for the signed-in user, when voice input is on (see Voice input)                                                                                                                                                 |
 | `GET /admin/summary`, `/admin/users`, `/admin/events`, `/admin/apps`, `DELETE /admin/apps/:id` | usage across all accounts, for `AI_ADMIN_EMAILS` only                                                                                                                                                                                        |
 | `GET /admin/subscriptions`, `POST /admin/subscriptions`, `DELETE /admin/subscriptions/:id`     | every live subscription (`?latest=1` for the last one of each account), giving a plan away, taking one back                                                                                                                                  |
 | `GET /admin/payments`                                                                          | every payment, with `?status=` and `?user=`                                                                                                                                                                                                  |
@@ -112,6 +132,54 @@ The API:
 | `GET /admin/files`, `GET /admin/files/:id`                                                     | every uploaded file with its owner and path, and one file's bytes as base64                                                                                                                                                                  |
 | `GET /admin/keys`, `PATCH /admin/keys/:id`                                                     | every API key with its owner and behavior (`?user=`, `?custom=1`, `?active=1`, `?before=`), and changing one key's `{salam_prompt, salam_tools, system_prompt}`; the list also says whether the engine has the plain profile (`plain_ready`) |
 | `GET /admin/messages/:id/trace`                                                                | the whole turn behind an answer, in order: prompts, reasoning, every tool call with full input and output                                                                                                                                    |
+
+### Voice input
+
+The composer can record from the microphone, turn the speech into text and put that
+text into the message box for the user to review. Nothing is sent by itself, and the
+text then takes the normal message path. The Salam Agent desktop app does not show the
+button yet.
+
+Speech runs in `ai/stt/`, a separate small service, because the API cannot hold a model
+in memory. The API proxies to it over the internal network. Without `AI_STT_URL` the
+button stays hidden, `GET /capabilities` says `"speech": false` and the route answers
+`503 speech_off`. The same happens to the button while the service is unreachable or
+offers no language, so `/capabilities` looks at its health at most once every
+`AI_STT_HEALTH_SECONDS`.
+
+- `POST /speech/transcribe?lang=fa|en` takes the raw recording with an `audio/*`
+  content type, from signed-in users only. The API checks the container by its first
+  bytes (WebM, Ogg, MP4, MP3, FLAC or WAV), and the service decodes it to be sure and to
+  measure its length. The answer is `{text, language, seconds}`. Browsers record WebM,
+  Ogg or MP4; MP3, FLAC and WAV exist for files sent through the Telegram bot. Each
+  container has its demuxer pinned and a short codec list (Opus, Vorbis, AAC, MP3, FLAC
+  and plain PCM), and the size and running length caps apply to all of them.
+- Audio stays in memory for the length of the request, on both sides, and transcripts
+  are never logged or stored. `speech_usage` keeps only who, when and how many seconds,
+  for the hourly limits; rows older than an hour are removed on the user's next upload.
+- The proxy in front of this route needs a body limit above `AI_STT_MAX_BYTES` and a read
+  timeout above `AI_STT_TIMEOUT_SECONDS`.
+
+The service is configured through its own environment. No model ships in this
+repository: mount them read only and point these variables at them.
+
+| Variable                                        | Meaning                                                                            | Default                  |
+| ----------------------------------------------- | ---------------------------------------------------------------------------------- | ------------------------ |
+| `STT_MODEL_FA`, `STT_MODEL_EN`                  | model path per language; a language with no model is not offered                   | empty                    |
+| `STT_ENGINE`, `STT_ENGINE_FA`, `STT_ENGINE_EN`  | `module:factory` of the engine, for all languages or one (see `engines.py`)        | `engines:SegmentEngine`  |
+| `STT_RUNTIME`                                   | `module:Class` of the runtime `SegmentEngine` loads                                | empty                    |
+| `STT_LOAD_OPTIONS`, `STT_RUN_OPTIONS`           | JSON keyword arguments for the runtime's constructor and its transcribe call       | empty                    |
+| `STT_SPLIT_SECONDS`                             | decode long clips in pieces of at most this length, for models that stop early     | `0`, off                 |
+| `STT_MAX_SECONDS`, `STT_MAX_BYTES`              | longest and largest recording; the app shows and enforces what the service reports | `120`, `4194304`         |
+| `STT_CONCURRENCY`, `STT_QUEUE`                  | conversions at once and how many may wait; more answer `503 busy`                  | `1`, `2`                 |
+| `STT_QUEUE_WAIT_SECONDS`, `STT_TIMEOUT_SECONDS` | longest wait in the queue and longest conversion                                   | `20`, `80`               |
+| `STT_MAX_LOADED`, `STT_PRELOAD`                 | models kept in memory at once, and a language to load at start                     | `2`, empty               |
+| `STT_SECRET`, `STT_HOST`, `STT_PORT`            | optional bearer token and where to listen                                          | empty, `0.0.0.0`, `8090` |
+
+The Docker build takes the runtime's packages as a build argument, `STT_PIP_PACKAGES`.
+`python bench.py --model DIR --audio DIR --language fa --refs refs.tsv` measures one model:
+real-time factor, peak memory and, with references, word and character error rates.
+`python -m unittest test_service` tests the service without a model.
 
 ### Answer style and effort levels
 
@@ -153,6 +221,61 @@ laptop does not stop the queue, and neither does an answer nobody is watching.
 
 `node ai/backend/tests/queue_flow.mjs` tests it against a running API and the engine mock.
 
+### Sharing a chat
+
+The owner opens Share in the chat header and makes a view link or a collaborate link
+(`https://ai.salamlang.ir/s/<token>`). View lets anyone read the chat live. Collaborate
+also lets them send messages; each one is answered by the assistant and counts against
+the owner's plan, so the owner can stop it at any moment, cap it, set how long it
+lives and see who used it. Chats bound to the owner's computer or to the cloud sandbox
+only get view links, and those hide tool details. Tokens are stored as SHA-256 hashes
+and, when `AI_SECRET_KEY` is set, a sealed copy so the owner can copy the link again.
+Design, threat model, API and schema: `docs/design/SHARING.md`. The static host must
+serve `index.html` for `/s/<token>`.
+
+`node ai/backend/tests/share_flow.mjs` tests it against a running API and the engine
+mock; `SHARE_SQL` (a `mariadb` command line) also runs the expiry by clock check.
+`salam exec ai/backend/tests/share_test.salam` tests the pure helpers.
+
+### Voice messages in the Telegram bot
+
+The bot understands voice notes, audio files (mp3, m4a, ogg, flac, wav sent as audio or
+as a document), video notes and videos by turning the speech into text with the same
+service and the same code path as the site's voice button (`Transcribe` in
+`speech.salam`), and then answering that text like a typed message.
+
+- **When it works.** Exactly when voice input works on the site: `AI_STT_URL` is set and
+  the service passed its health check (the one behind `speech` in `GET /capabilities`,
+  cached for `AI_STT_HEALTH_SECONDS`). Otherwise the bot replies once, in the user's
+  language, that voice messages are not available right now and to send text. It never
+  stays silent and never fetches the file in that case.
+- **Language.** The bot's own language for that user: the `/lang` choice (stored per
+  Telegram account), which starts from the Telegram `language_code` (Persian when it is
+  missing or `fa`, otherwise English). A caption of `en`, `/en`, `fa` or `/fa` on the
+  voice message overrides it for that message. One conversion per message.
+- **What the user sees.** A reply to the voice message with `I heard: "..."` (Persian
+  `شنیدم: «...»`) so recognition mistakes are visible, then the normal answer to that
+  text. Silence gives a short "nothing could be recognised" message; for audio files
+  and documents it adds that only speech is converted and song lyrics may be missed.
+  The text passed on is cut at 4000 bytes (2000 for guests).
+- **Limits.** Linked users share the website's allowance (`AI_STT_HOURLY`,
+  `AI_STT_SECONDS_HOURLY`, rows in `speech_usage`). Guests get a third of both (at least
+  3 conversions and 60 seconds an hour), counted per Telegram id in
+  `telegram_speech_usage`, and see the sign in button when it runs out. The global slots
+  (`AI_STT_CONCURRENCY`), one conversion per person at a time and the refund when the
+  service is unreachable or busy are the same as on the site. A conversion that reached
+  the service and failed is not refunded, as on the site.
+- **Before downloading.** `file_size` and `duration` from the update are checked against
+  what the service reports (`max_bytes`, `max_seconds`, never above Telegram's 20 MB
+  bot limit); then `getFile` is called, its `file_size` is checked again, and
+  `file_path` must be plain letters, digits and `-_./` without `..`, a leading slash or
+  `//`. The download keeps a hard byte cap, ignores a body that is longer than it was
+  declared, has a 30 second overall deadline and a 15 second idle timeout, and lives in
+  memory only. Neither audio nor transcripts are stored beyond the chat message the text
+  becomes, and neither the transcript nor the file URL (which contains the bot token) is
+  logged.
+- **Chats.** Private chats only, like text; voice sent in a group is ignored.
+
 ### Telegram bot
 
 The API runs the Telegram bot itself (`telegram.salam`): it long-polls `getUpdates`,
@@ -176,7 +299,8 @@ in Persian and English and starts answering.
 - Answers stream into the chat by editing one message; Markdown becomes Telegram
   HTML (`tgmd.salam`), long answers are split on line boundaries and code fences
   are kept balanced. Private chats only. At most 5 Telegram accounts per Salam
-  account.
+  account. Voice messages and audio files are converted to text first (see Voice
+  messages in the Telegram bot above).
 
 | Method and path            | Purpose                                                |
 | -------------------------- | ------------------------------------------------------ |
@@ -251,6 +375,14 @@ of it with `sandbox_mock.mjs` and `provider_mock.mjs`; set `REAL_SANDBOX=1` and 
   checks and the agent's foreign-code limits are skipped. Everyone else, including
   other keys, keeps the policy. Per API key switches already existed (`/admin/keys`).
   The Users table in the admin page has a toggle for it.
+
+  Site, Telegram and API turns use the plain `AI_ENGINE_AGENT_RAW` profile. A
+  desktop or cloud agent turn needs a profile that keeps the bridge MCP tools and
+  has no Salam prompt of its own: set `AI_ENGINE_AGENT_DESKTOP_RAW` to it. Without
+  that setting the turn uses `AI_ENGINE_AGENT_RAW` and loses the desktop tools; if
+  that profile is missing too, the engine falls back to the Salam profile and the
+  policy stays. The admin page warns in both cases.
+
 - Every answer stores its dollar cost split into input (cached tokens included) and
   output (reasoning included), `messages.cost_in/cost_out` and `api_requests.cost_in/cost_out`.
   The split uses the model's price table from the engine; without prices it weighs a

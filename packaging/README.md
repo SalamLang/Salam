@@ -139,6 +139,17 @@ git push origin master
 After that the `publish-aur` job updates both on every release.
 Users install with `yay -S salam-bin` or `yay -S salamlang`.
 
+Every stable release also ships ready-made pacman packages,
+`salam-<version>-linux-{x86_64,aarch64,armv7h}.pkg.tar.zst`, built by
+`packaging/arch/build-pacman.sh` inside an `archlinux` container during the
+release job (install with `sudo pacman -U <file>`). They have to be built
+there because releases are immutable, so files cannot be added afterwards.
+The armv7h package is built from the `linux-armhf` tarball for Arch Linux ARM.
+
+The release job starts `packaging-release.yml` itself once the release exists
+(`package-distros`), because a release created with the default token does not
+fire the `release: published` trigger.
+
 **The plain `salam` name is already taken on the AUR** by an unrelated,
 actively-maintained package (a different, MIT-licensed project, last updated
 recently - not abandoned, so orphan-requesting it isn't an option). The

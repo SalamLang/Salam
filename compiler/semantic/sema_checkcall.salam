@@ -22,7 +22,7 @@ func check_enum_static_call(
         mut cnt := 0
         repeat mems.len() in i:
             if sym_at(s, mems.get(i)).kind == SYM_ENUM_MEMBER:
-                cnt += 1
+                cnt++
             end
         end
         mut nv := at.Get(a, n)
@@ -383,7 +383,7 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
             )
         else:
             repeat argtypes.len() in fi:
-                if not type_assignable(
+                if not coerce_arg_to_opt(s, a, n, fi, ftv.params.get(fi), argtypes.get(fi)) and not type_assignable(
                     s, ftv.params.get(fi), argtypes.get(fi)
                 ):
                     serr(
@@ -391,6 +391,9 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
                             i18.Tr("argument %zu: cannot pass '%s' to '%s'"), co.ArgUint((fi + 1) as u64), co.ArgStr(type_disp(s, argtypes.get(fi))), co.ArgStr(type_disp(s, ftv.params.get(fi)))
                         )
                     )
+                else:
+                    wide_coerce(s, a, at.Child(a, n, fi), ftv.params.get(fi))
+                    coerce_arg_box(s, a, n, fi, ftv.params.get(fi), argtypes.get(fi))
                 end
             end
         end
@@ -593,9 +596,7 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
         note_overload_choice(s, a, n, sym, sig)
         mark_ref_args(s, a, n, sig)
         note_noret_call(s, a, n, sig)
-        coerce_args_to_dyn(s, a, n, argtypes, sig)
-        coerce_args_to_variant(s, a, n, argtypes, sig)
-        coerce_args_to_slice(s, a, n, argtypes, sig)
+        coerce_call_args(s, a, n, argtypes, sig)
         _dk2 := sema_decorate(s, a, callee, sym_at(s, sym).ty)
         if sig == 0:
             ret sema_decorate(s, a, n, sema_err_ty(s))
@@ -664,7 +665,7 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
                 at.Put(a, callee, cv)
                 sig2 := resolve_overload(s, a, inst2, argtypes, sp, fname3)
                 mark_ref_args(s, a, n, sig2)
-                coerce_args_to_slice(s, a, n, argtypes, sig2)
+                coerce_call_args(s, a, n, argtypes, sig2)
                 note_noret_call(s, a, n, sig2)
                 _dl2 := sema_decorate(s, a, callee, sym_at(s, inst2).ty)
                 if sig2 == 0:
@@ -677,7 +678,7 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
             sig3 := resolve_overload(s, a, fn, argtypes, sp, fname3)
             note_overload_choice(s, a, n, fn, sig3)
             mark_ref_args(s, a, n, sig3)
-            coerce_args_to_slice(s, a, n, argtypes, sig3)
+            coerce_call_args(s, a, n, argtypes, sig3)
             note_noret_call(s, a, n, sig3)
             _dm2 := sema_decorate(s, a, at.Get(a, callee).a, pkv.ty)
             _dn2 := sema_decorate(s, a, callee, sym_at(s, fn).ty)
@@ -762,18 +763,22 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
                 if argtypes.len() != 2:
                     serr(s, 12, sp, i18.Tr("put(key,value) takes 2 args"))
                 end
+                wide_method_arg(s, a, n, 0, ov.key, sp)
+                wide_method_arg(s, a, n, 1, ov.elem, sp)
                 ret sema_decorate(s, a, n, sema_ty(s, TY_VOID))
             end
             if str.Equals(m, "get"):
                 if argtypes.len() != 1:
                     serr(s, 12, sp, i18.Tr("get(key) takes 1 arg"))
                 end
+                wide_method_arg(s, a, n, 0, ov.key, sp)
                 ret sema_decorate(s, a, n, ov.elem)
             end
             if str.Equals(m, "has"):
                 if argtypes.len() != 1:
                     serr(s, 12, sp, i18.Tr("has(key) takes 1 arg"))
                 end
+                wide_method_arg(s, a, n, 0, ov.key, sp)
                 ret sema_decorate(s, a, n, sema_ty(s, TY_BOOL))
             end
             if str.Equals(m, "remove"):
@@ -781,6 +786,7 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
                 if argtypes.len() != 1:
                     serr(s, 12, sp, i18.Tr("remove(key) takes 1 arg"))
                 end
+                wide_method_arg(s, a, n, 0, ov.key, sp)
                 ret sema_decorate(s, a, n, sema_ty(s, TY_BOOL))
             end
             if str.Equals(m, "size"):
@@ -834,6 +840,7 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
                 if argtypes.len() != 1:
                     serr(s, 12, sp, i18.Tr("push(value) takes 1 arg"))
                 end
+                wide_method_arg(s, a, n, 0, ov.elem, sp)
                 ret sema_decorate(s, a, n, sema_ty(s, TY_VOID))
             end
             if str.Equals(m3, "pop"):
@@ -844,12 +851,14 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
                 if argtypes.len() != 1:
                     serr(s, 12, sp, i18.Tr("get(index) takes 1 arg"))
                 end
+                wide_no_index(s, a, at.Child(a, n, 0), i18.Tr("an index"))
                 ret sema_decorate(s, a, n, ov.elem)
             end
             if str.Equals(m3, "ref"):
                 if argtypes.len() != 1:
                     serr(s, 12, sp, i18.Tr("ref(index) takes 1 arg"))
                 end
+                wide_no_index(s, a, at.Child(a, n, 0), i18.Tr("an index"))
                 ret sema_decorate(s, a, n, type_ptr(s, ov.elem))
             end
             if str.Equals(m3, "set"):
@@ -857,6 +866,8 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
                 if argtypes.len() != 2:
                     serr(s, 12, sp, i18.Tr("set(index,value) takes 2 args"))
                 end
+                wide_no_index(s, a, at.Child(a, n, 0), i18.Tr("an index"))
+                wide_method_arg(s, a, n, 1, ov.elem, sp)
                 ret sema_decorate(s, a, n, sema_ty(s, TY_VOID))
             end
             if str.Equals(m3, "len"):
@@ -1126,9 +1137,7 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
             sig4 := resolve_overload(s, a, md, argtypes, sp, im)
             mark_ref_args(s, a, n, sig4)
             note_noret_call(s, a, n, sig4)
-            coerce_args_to_dyn(s, a, n, argtypes, sig4)
-            coerce_args_to_variant(s, a, n, argtypes, sig4)
-            coerce_args_to_slice(s, a, n, argtypes, sig4)
+            coerce_call_args(s, a, n, argtypes, sig4)
             ret sema_decorate(s, a, n, sig_ret_or_err(s, sig4))
         end
         ssym := struct_sym_of(s, objt)
@@ -1207,7 +1216,7 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
                 )
             else:
                 repeat argtypes.len() in gi:
-                    if not type_assignable(
+                    if not coerce_arg_to_opt(s, a, n, gi, fftv.params.get(gi), argtypes.get(gi)) and not type_assignable(
                         s, fftv.params.get(gi), argtypes.get(gi)
                     ):
                         serr(
@@ -1223,6 +1232,9 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
                                 )
                             )
                         )
+                    else:
+                        wide_coerce(s, a, at.Child(a, n, gi), fftv.params.get(gi))
+                        coerce_arg_box(s, a, n, gi, fftv.params.get(gi), argtypes.get(gi))
                     end
                 end
             end
@@ -1274,9 +1286,7 @@ func check_call(s &: Sema, a &: at.Ast, n: int): int:
         sema_check_mut_call(s, a, at.Get(a, callee).a, sig5, mname, sp)
         mark_ref_args(s, a, n, sig5)
         note_noret_call(s, a, n, sig5)
-        coerce_args_to_dyn(s, a, n, argtypes, sig5)
-        coerce_args_to_variant(s, a, n, argtypes, sig5)
-        coerce_args_to_slice(s, a, n, argtypes, sig5)
+        coerce_call_args(s, a, n, argtypes, sig5)
         _dw2 := sema_decorate(s, a, callee, sym_at(s, m7).ty)
         if sig5 == 0:
             ret sema_decorate(s, a, n, sema_err_ty(s))

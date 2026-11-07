@@ -25,6 +25,7 @@ import sync
 import time
 import chan
 import conv
+import mem
 
 include aistore "store.salam"
 include aiweb "web.salam"
@@ -37,6 +38,8 @@ include aibilling "billing.salam"
 include aimemory "memory.salam"
 include aitgmd "tgmd.salam"
 include aicloud "cloud.salam"
+include aispeech "speech.salam"
+include ailimits "limits.salam"
 
 const DEFAULT_TITLE := "گفت‌وگوی تازه"
 const WORKERS := 12
@@ -55,6 +58,11 @@ const FLOOD_PER_MINUTE := 20
 const PENDING_SECONDS := 600
 const MAX_LINKS := 5
 const CLOUD_SECONDS := 3600
+const FILE_HEAD := 8192
+const FILE_MS := 30000
+const FILE_IDLE_MS := 15000
+const TG_FILE_MAX := 20971520
+const VOICE_TEXT := 4000
 
 mut TOKEN := ""
 mut HOST := "api.telegram.org"
@@ -80,6 +88,21 @@ struct Who:
     pub uid: str = ""
     pub cur: str = ""
     pub known: bool = false
+end
+
+struct Fetched:
+    pub ok: bool = false
+    pub base: void* = null
+    pub data: void* = null
+    pub n: int = 0
+end
+
+struct Media:
+    pub kind: str = ""
+    pub file_id: str = ""
+    pub size: int = 0
+    pub seconds: int = 0
+    pub music: bool = false
 end
 
 func one(v: str): Vector<str>:
@@ -161,7 +184,7 @@ func hex_value(s: str): int:
             ret -1
         end
         v = v * 16 + d
-        i += 1
+        i++
     end
     if i == 0:
         ret -1
@@ -234,7 +257,7 @@ func exchange(req: str, wait_ms: int): str:
                 break
             end
             str.BufAppend(b, got)
-            seen = seen + got
+            seen += got
             if complete(seen):
                 break
             end
@@ -258,7 +281,7 @@ func exchange(req: str, wait_ms: int): str:
                 break
             end
             str.BufAppend(b, got)
-            seen = seen + got
+            seen += got
             if complete(seen):
                 break
             end
@@ -315,6 +338,22 @@ func send_plain(chat: str, text: str, markup: str): str:
     m.push(json.MemberRaw("link_preview_options", `{"is_disabled": true}`))
     if markup.len() > 0:
         m.push(json.MemberRaw("reply_markup", markup))
+    end
+    resp := api("sendMessage", json.Object(m))
+    if is_ok(resp):
+        ret json.GetPath(resp, "result.message_id")
+    end
+    log_fail("sendMessage", resp)
+    ret ""
+end
+
+func send_reply(chat: str, text: str, reply_to: str): str:
+    mut m := Vector {} as Vector<str>
+    m.push(json.MemberRaw("chat_id", chat))
+    m.push(json.Member("text", text))
+    m.push(json.MemberRaw("link_preview_options", `{"is_disabled": true}`))
+    if reply_to.len() > 0:
+        m.push(json.MemberRaw("reply_parameters", "{" + json.MemberRaw("message_id", reply_to) + `, "allow_sending_without_reply": true}`))
     end
     resp := api("sendMessage", json.Object(m))
     if is_ok(resp):
@@ -436,7 +475,7 @@ func plus_one(s: str): str:
     until i >= 0 and carry:
         if digs.get(i) == 9:
             digs.set(i, 0)
-            i -= 1
+            i--
         else:
             digs.set(i, digs.get(i) + 1)
             carry = false
@@ -444,7 +483,7 @@ func plus_one(s: str): str:
     end
     mut out := carry ? "1" : ""
     each d in digs:
-        out = out + d
+        out += d
     end
     ret out
 end
@@ -522,7 +561,7 @@ func flooded(chat: str): bool:
             count = v.substr(bar + 1, v.len() - bar - 1).to_int()
         end
     end
-    count += 1
+    count++
     if FLOOD.size() > 5000:
         FLOOD = HashMap {} as HashMap<str, str>
     end
@@ -874,6 +913,9 @@ func user_turn(w: Who, text: str):
     recall := fresh ? aimemory.Recall(w.uid, id) : ""
     mut free_system := ""
     free := aiweb.PolicyOf(w.uid, free_system)
+    if free:
+        free_system = aipolicy.FreeSystem(free_system)
+    end
     prompt := aiweb.LangNote(w.en) + aipolicy.Defang(text) + recall
     ailive.Begin(sid)
     aiturn.Forget(sid)
@@ -897,6 +939,284 @@ func user_turn(w: Who, text: str):
     queue_watch(token.len() > 0 ? "c" : "u", w, mid, sid, now, w.uid)
 end
 
+func spot(p: void*, at: int): void*:
+    ret ((p as i64) + (at as i64)) as void*
+end
+
+func byte_at(p: void*, at: int): int:
+    ret (p as u8*)[at] as int
+end
+
+func head_end(buf: void*, filled: int): int:
+    mut i := 0
+    until i + 3 < filled and i < FILE_HEAD:
+        if byte_at(buf, i) == 13 and byte_at(buf, i + 1) == 10 and byte_at(buf, i + 2) == 13 and byte_at(buf, i + 3) == 10:
+            ret i
+        end
+        i += 1
+    end
+    ret -1
+end
+
+func head_text(buf: void*, he: int): str:
+    saved := byte_at(buf, he)
+    (buf as u8*)[he] = 0 as u8
+    text := str.Lower(buf as str)
+    (buf as u8*)[he] = saved as u8
+    ret text
+end
+
+func length_of(head: str): int:
+    at := head.find("content-length:")
+    if at < 0:
+        ret -1
+    end
+    mut i := at + 15
+    until i < head.len() and head[i] as int == 32:
+        i += 1
+    end
+    mut n := 0
+    until i < head.len() and head[i] as int >= 48 and head[i] as int <= 57 and n < 100000000:
+        n = n * 10 + (head[i] as int - 48)
+        i += 1
+    end
+    ret n
+end
+
+func file_complete(buf: void*, filled: int, cap: int): bool:
+    he := head_end(buf, filled)
+    if he < 0:
+        ret false
+    end
+    head := head_text(buf, he)
+    want := length_of(head)
+    mem.Free(head as void*)
+    got := filled - he - 4
+    if got > cap:
+        ret true
+    end
+    ret want >= 0 and got >= want
+end
+
+func file_request(path: str): str:
+    ret "GET " + PREFIX + "/file/bot" + TOKEN + "/" + path + " HTTP/1.1\r\nHost: " + HOST + "\r\nUser-Agent: salam-ai\r\nAccept: */*\r\nConnection: close\r\n\r\n"
+end
+
+func fetch_filled(req: str, buf: void*, total: int, cap: int): int:
+    deadline := time.NowMillis() + (FILE_MS as i64)
+    mut filled := 0
+    if SECURE:
+        mut c := tls.Dial(HOST, PORT, tls.NewConfig(HOST))
+        if not tls.ConnOk(c):
+            tls.Close(c)
+            ret -1
+        end
+        tcp.SetDeadline(tcp.ConnFromFd(tls.Fd(c)), FILE_IDLE_MS)
+        if tls.Write(c, req) <= 0:
+            tls.Close(c)
+            ret -1
+        end
+        until filled < total and time.NowMillis() < deadline:
+            got := tls.ReadBytes(c, spot(buf, filled), total - filled)
+            if got <= 0:
+                break
+            end
+            filled += got
+            if file_complete(buf, filled, cap):
+                break
+            end
+        end
+        tls.Close(c)
+    else:
+        c := tcp.Dial(HOST, PORT)
+        if not tcp.ConnOk(c):
+            tcp.Close(c)
+            ret -1
+        end
+        tcp.SetDeadline(c, FILE_IDLE_MS)
+        if tcp.Write(c, req) <= 0:
+            tcp.Close(c)
+            ret -1
+        end
+        until filled < total and time.NowMillis() < deadline:
+            got := tcp.ReadBytes(c, spot(buf, filled), total - filled)
+            if got <= 0:
+                break
+            end
+            filled += got
+            if file_complete(buf, filled, cap):
+                break
+            end
+        end
+        tcp.Close(c)
+    end
+    ret filled
+end
+
+func fetch_file(path: str, cap: int): Fetched:
+    mut out := Fetched {}
+    total := FILE_HEAD + cap + 1
+    buf := mem.Allocate(total as u64)
+    out.base = buf
+    filled := fetch_filled(file_request(path), buf, total, cap)
+    if filled <= 12:
+        ret out
+    end
+    he := head_end(buf, filled)
+    if he < 12:
+        ret out
+    end
+    head := head_text(buf, he)
+    defer mem.Free(head as void*)
+    if not str.StartsWith(head, "http/1.1 200") and not str.StartsWith(head, "http/1.0 200"):
+        ret out
+    end
+    if head.find("transfer-encoding:") >= 0:
+        ret out
+    end
+    want := length_of(head)
+    got := filled - he - 4
+    if got <= 0 or got > cap or (want >= 0 and got != want):
+        ret out
+    end
+    out.data = spot(buf, he + 4)
+    out.n = got
+    out.ok = true
+    ret out
+end
+
+func media_from(kind: str, obj: str, music: bool): Media:
+    mut m := Media { kind = kind, music = music }
+    m.file_id = json.Get(obj, "file_id")
+    m.size = json.Get(obj, "file_size").to_int()
+    m.seconds = json.Get(obj, "duration").to_int()
+    ret m
+end
+
+func media_of(msg: str): Media:
+    voice := json.Get(msg, "voice")
+    if voice.len() > 0:
+        ret media_from("voice", voice, false)
+    end
+    audio := json.Get(msg, "audio")
+    if audio.len() > 0:
+        ret media_from("audio", audio, true)
+    end
+    note := json.Get(msg, "video_note")
+    if note.len() > 0:
+        ret media_from("video_note", note, false)
+    end
+    video := json.Get(msg, "video")
+    if video.len() > 0:
+        ret media_from("video", video, false)
+    end
+    doc := json.Get(msg, "document")
+    if doc.len() > 0 and ailimits.VoiceDocument(json.Get(doc, "mime_type"), json.Get(doc, "file_name")):
+        ret media_from("document", doc, true)
+    end
+    ret Media {}
+end
+
+func voice_text(en: bool, kind: str): str:
+    if kind == "off":
+        ret tr(en, "پیام صوتی الان در دسترس نیست. لطفا پیام خود را به صورت متن بفرستید.", "Voice messages are not available right now. Please send your message as text.")
+    end
+    if kind == "busy":
+        ret tr(en, "تبدیل گفتار الان شلوغ است. چند لحظه بعد دوباره بفرستید یا متن بنویسید.", "Voice conversion is busy right now. Send it again in a moment, or write your message.")
+    end
+    if kind == "in_progress":
+        ret tr(en, "پیام صوتی قبلی شما هنوز در حال تبدیل است. کمی صبر کنید.", "Your previous voice message is still being converted. Please wait a moment.")
+    end
+    if kind == "bad_audio":
+        ret tr(en, "این فایل خوانده نشد. یک پیام صوتی یا فایل mp3، m4a، ogg، flac یا wav بفرستید، یا متن بنویسید.", "This file could not be read. Send a voice message or an mp3, m4a, ogg, flac or wav file, or write your message.")
+    end
+    if kind == "fetch":
+        ret tr(en, "دریافت فایل از تلگرام ناموفق بود. دوباره بفرستید.", "Fetching the file from Telegram failed. Please send it again.")
+    end
+    if kind == "timeout":
+        ret tr(en, "تبدیل گفتار بیش از حد طول کشید. کوتاه‌تر بفرستید یا متن بنویسید.", "Voice conversion took too long. Send a shorter one, or write your message.")
+    end
+    ret tr(en, "تبدیل گفتار الان در دسترس نیست. لطفا پیام خود را به صورت متن بفرستید.", "Voice conversion is not available right now. Please send your message as text.")
+end
+
+func voice_turn(w: Who, msg: str, m: Media):
+    mid := json.Get(msg, "message_id")
+    if not aispeech.Ready():
+        _m := send_reply(w.chat, voice_text(w.en, "off"), mid)
+        ret
+    end
+    max_seconds := aispeech.MaxSeconds()
+    max_bytes := aispeech.MaxBytes() < TG_FILE_MAX ? aispeech.MaxBytes() : TG_FILE_MAX
+    if m.seconds > max_seconds:
+        _m := send_reply(w.chat, tr(w.en, "این فایل از " + digits(false, max_seconds) + " ثانیه بلندتر است. کوتاه‌تر بفرستید یا متن بنویسید.", "This is longer than " + digits(true, max_seconds) + " seconds. Send a shorter one, or write your message."), mid)
+        ret
+    end
+    too_large := tr(w.en, "حجم فایل بیشتر از " + digits(false, max_bytes / 1024) + " کیلوبایت است. فایل کوچک‌تر بفرستید یا متن بنویسید.", "The file is larger than " + digits(true, max_bytes / 1024) + " KB. Send a smaller one, or write your message.")
+    if m.size > max_bytes:
+        _m := send_reply(w.chat, too_large, mid)
+        ret
+    end
+    typing(w.chat)
+    mut q := Vector {} as Vector<str>
+    q.push(json.Member("file_id", m.file_id))
+    info := api("getFile", json.Object(q))
+    path := json.GetPath(info, "result.file_path")
+    if not is_ok(info) or not ailimits.SafeFilePath(path):
+        _m := send_reply(w.chat, voice_text(w.en, "fetch"), mid)
+        ret
+    end
+    if json.GetPath(info, "result.file_size").to_int() > max_bytes:
+        _m := send_reply(w.chat, too_large, mid)
+        ret
+    end
+    got := fetch_file(path, max_bytes)
+    if not got.ok:
+        mem.Free(got.base)
+        _m := send_reply(w.chat, voice_text(w.en, "fetch"), mid)
+        ret
+    end
+    guest := w.uid.len() == 0
+    owner := guest ? conv.ParseIntOr(w.tg, 0 as i64) : conv.ParseIntOr(w.uid, 0 as i64)
+    lang := ailimits.CaptionLang(json.Get(msg, "caption"))
+    out := aispeech.Transcribe(owner, guest, got.data, got.n, lang.len() > 0 ? lang : (w.en ? "en" : "fa"))
+    mem.Free(got.base)
+    if out.kind == "limit":
+        if guest:
+            login_prompt(w, tr(w.en, "سهم پیام صوتی مهمان در این ساعت تمام شد. برای سهم بیشتر، رایگان ثبت‌نام کنید یا وارد شوید، یا متن بنویسید.", "The guest voice allowance for this hour is used up. Sign up for free or sign in for more, or write your message."))
+        else:
+            _m := send_reply(w.chat, tr(w.en, "سهم پیام صوتی این ساعت شما تمام شده است. کمی بعد دوباره تلاش کنید یا متن بنویسید.", "You have used this hour's voice messages. Try again a little later, or write your message."), mid)
+        end
+        ret
+    end
+    if out.kind == "too_long":
+        _m := send_reply(w.chat, tr(w.en, "این فایل از " + digits(false, max_seconds) + " ثانیه بلندتر است. کوتاه‌تر بفرستید یا متن بنویسید.", "This is longer than " + digits(true, max_seconds) + " seconds. Send a shorter one, or write your message."), mid)
+        ret
+    end
+    if out.kind == "too_large":
+        _m := send_reply(w.chat, too_large, mid)
+        ret
+    end
+    if out.kind != "ok":
+        _m := send_reply(w.chat, voice_text(w.en, out.kind), mid)
+        ret
+    end
+    text := ailimits.CutUtf8(out.text, guest ? MAX_GUEST_TEXT : VOICE_TEXT)
+    if text.len() == 0:
+        if m.music:
+            _m := send_reply(w.chat, tr(w.en, "چیزی تشخیص داده نشد. فقط گفتار به متن تبدیل می‌شود و متن آهنگ‌ها ممکن است تشخیص داده نشود. پیام صوتی واضح‌تری بفرستید یا متن بنویسید.", "Nothing could be recognised. Only speech is converted into text, so song lyrics may be missed. Send a clearer voice message, or write your message."), mid)
+        else:
+            _m := send_reply(w.chat, tr(w.en, "چیزی تشخیص داده نشد. واضح‌تر و نزدیک‌تر به میکروفون بفرستید یا متن بنویسید.", "Nothing could be recognised. Try again closer to the microphone, or write your message."), mid)
+        end
+        ret
+    end
+    _e := send_reply(w.chat, tr(w.en, "شنیدم: «" + text + "»", "I heard: \"" + text + "\""), mid)
+    if guest:
+        guest_turn(w, text)
+    else:
+        user_turn(w, text)
+    end
+end
+
 func show(chat: str, text: str, ids &: Vector<str>, texts &: Vector<str>, markup: str):
     chunks := aitgmd.Split(text, CHUNK)
     n := chunks.len()
@@ -918,7 +1238,7 @@ func show(chat: str, text: str, ids &: Vector<str>, texts &: Vector<str>, markup
                 texts.push(chunk)
             end
         end
-        i += 1
+        i++
     end
 end
 
@@ -961,7 +1281,7 @@ func steps_text(mid: str): str:
     mut i := lines.len() - 1
     until i >= 0:
         ordered.push(lines.get(i))
-        i -= 1
+        i--
     end
     ret str.Join(ordered, "\n")
 end
@@ -996,7 +1316,7 @@ func tail_text(s: str, max: int): str:
     end
     mut cut := t.len() - max
     until cut < t.len() and ((t[cut] as int) < 128 or (t[cut] as int) >= 192):
-        cut += 1
+        cut++
     end
     ret "…" + t.substr(cut, t.len() - cut)
 end
@@ -1020,13 +1340,13 @@ func activity_text(sid: str, en: bool): str:
         else kind == "think" and thought.len() == 0:
             thought = tail_text(json.Get(it, "text"), 280)
         end
-        i -= 1
+        i--
     end
     mut ordered := Vector {} as Vector<str>
     mut k := tools.len() - 1
     until k >= 0:
         ordered.push(tools.get(k))
-        k -= 1
+        k--
     end
     if thought.len() > 0:
         ordered.push("💭 " + thought)
@@ -1051,7 +1371,7 @@ func status_text(sid: str, mid: str, kind: str, phase: str, secs: i64, en: bool)
         if limit_note.len() > 0 and limit_note.len() <= 140:
             head = head + "\n" + limit_note
         end
-        head = head + "..."
+        head += "..."
     end
     if secs >= 5:
         head = head + " (" + digits(en, (secs / 5 * 5) as int) + tr(en, " ثانیه", "s") + ")"
@@ -1240,7 +1560,7 @@ func aitgmd_cut(s: str, max: int): int:
         if b < 128 or b >= 192:
             break
         end
-        cut -= 1
+        cut--
     end
     ret cut
 end
@@ -1576,8 +1896,17 @@ func on_message(msg: str):
         ask_language(w, payload)
         ret
     end
+    media := media_of(msg)
+    if media.kind.len() > 0:
+        voice_turn(w, msg, media)
+        ret
+    end
     if text.len() == 0:
-        _m := send_plain(w.chat, tr(w.en, "فعلا فقط پیام متنی پشتیبانی می‌شود. کد یا متن را داخل پیام بفرستید.", "Only text messages are supported for now. Paste your code or text into the message."), "")
+        if aispeech.Ready():
+            _m := send_plain(w.chat, tr(w.en, "فعلا فقط پیام متنی و صوتی پشتیبانی می‌شود. کد یا متن را داخل پیام بفرستید.", "Only text and voice messages are supported for now. Paste your code or text into the message."), "")
+        else:
+            _m := send_plain(w.chat, tr(w.en, "فعلا فقط پیام متنی پشتیبانی می‌شود. کد یا متن را داخل پیام بفرستید.", "Only text messages are supported for now. Paste your code or text into the message."), "")
+        end
         ret
     end
     if (text.substr(0, 1)) == "/":
@@ -1652,7 +1981,7 @@ func worker():
         mut got := claim(chat)
         until not got and tries < 400:
             sync.SleepMs(40)
-            tries += 1
+            tries++
             got = claim(chat)
         end
         if got:
@@ -1739,7 +2068,7 @@ func poll_loop():
                 break
             end
             sync.SleepMs(pause)
-            pause = pause * 2
+            pause *= 2
             if pause > 30000:
                 pause = 30000
             end

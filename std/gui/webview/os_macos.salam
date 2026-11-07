@@ -1,0 +1,395 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package webview
+
+if SALAM_OS_MAC and not SALAM_WEBVIEW_CEF:
+    link framework "Security"
+    link framework "CoreFoundation"
+
+    extern:
+        func _NSGetExecutablePath(buf: void*, size: void*): int
+        func SecKeychainAddGenericPassword(chain: void*, service_len: u32, service: str, account_len: u32, account: str, password_len: u32, password: void*, item: void*): i32
+        func SecKeychainFindGenericPassword(chain: void*, service_len: u32, service: str, account_len: u32, account: str, password_len: void*, password: void*, item: void*): i32
+        func SecKeychainItemModifyAttributesAndData(item: void*, attrs: void*, length: u32, data: void*): i32
+        func SecKeychainItemFreeContent(attrs: void*, data: void*): i32
+        func SecKeychainItemDelete(item: void*): i32
+        func SecKeychainCopyDefault(out: void*): i32
+        func SecKeychainGetStatus(keychain: void*, out: void*): i32
+        func CFRelease(value: void*)
+        func socket(domain: int, kind: int, protocol: int): int
+        func bind(fd: int, addr: void*, size: int): int
+        func listen(fd: int, backlog: int): int
+        func accept(fd: int, addr: void*, size: void*): int
+        func connect(fd: int, addr: void*, size: int): int
+        func read(fd: int, buf: void*, size: u64): i64
+        func write(fd: int, buf: void*, size: u64): i64
+        func close(fd: int): int
+        func unlink(path: str): int
+        func flock(fd: int, operation: int): int
+        func open(path: str, flags: int, ...): int
+    end
+
+    mut _mac_status_item := null as void*
+    mut _mac_instance_fd := -1
+
+    struct _Slot:
+        pub v: void* = null
+    end
+
+    func _objc0(recv: void*, name: str): void*:
+        fn := (&objc_msgSend) as extern func (void*, void*) void*
+        ret fn(recv, sel_registerName(name))
+    end
+
+    func _objc1(recv: void*, name: str, a1: void*): void*:
+        fn := (&objc_msgSend) as extern func (void*, void*, void*) void*
+        ret fn(recv, sel_registerName(name), a1)
+    end
+
+    func _objc2(recv: void*, name: str, a1: void*, a2: void*): void*:
+        fn := (&objc_msgSend) as extern func (void*, void*, void*, void*) void*
+        ret fn(recv, sel_registerName(name), a1, a2)
+    end
+
+    func _objc_bool(recv: void*, name: str, value: bool):
+        fn := (&objc_msgSend) as extern func (void*, void*, i8) void*
+        _r := fn(recv, sel_registerName(name), value ? 1 as i8 : 0 as i8)
+    end
+
+    func _objc_long(recv: void*, name: str): i64:
+        fn := (&objc_msgSend) as extern func (void*, void*) i64
+        ret fn(recv, sel_registerName(name))
+    end
+
+    func _ns(s: str): void*:
+        fn := (&objc_msgSend) as extern func (void*, void*, str) void*
+        ret fn(objc_getClass("NSString"), sel_registerName("stringWithUTF8String:"), s)
+    end
+
+    func _ns_text(value: void*): str:
+        if value == null:
+            ret str.Clone("")
+        end
+        ret str.Clone(_objc0(value, "UTF8String") as str)
+    end
+
+    func _new(cls: str): void*:
+        ret _objc0(_objc0(objc_getClass(cls), "alloc"), "init")
+    end
+
+    func _mac_fill_menu(menu: void*, items: Vector<MenuItem>):
+        target := MenuHost()
+        each item in items:
+            if item.separator:
+                _objc1(menu, "addItem:", _objc0(objc_getClass("NSMenuItem"), "separatorItem"))
+                continue
+            end
+            alloc := _objc0(objc_getClass("NSMenuItem"), "alloc")
+            make := (&objc_msgSend) as extern func (void*, void*, void*, void*, void*) void*
+            action := item.children.len() > 0 ? null : sel_registerName("salamMenuItem:")
+            entry := make(alloc, sel_registerName("initWithTitle:action:keyEquivalent:"), _ns(item.label), action, _ns(""))
+            if item.children.len() > 0:
+                sub := _objc1(_objc0(objc_getClass("NSMenu"), "alloc"), "initWithTitle:", _ns(item.label))
+                _mac_fill_menu(sub, item.children)
+                _objc1(entry, "setSubmenu:", sub)
+            else:
+                set_tag := (&objc_msgSend) as extern func (void*, void*, i64) void*
+                _t := set_tag(entry, sel_registerName("setTag:"), _menu_id(item.id) as i64)
+                _objc1(entry, "setTarget:", target)
+            end
+            _objc1(menu, "addItem:", entry)
+        end
+    end
+
+    func _mac_instance_thread(arg: void*):
+        fd := (arg as i64) as int
+        until true:
+            client := accept(fd, null, null)
+            if client < 0:
+                break
+            end
+            buf := mem.AllocateZeroed(65537 as u64)
+            mut total := 0 as i64
+            until total < (65536 as i64):
+                got := read(client, ((buf as i64) + total) as void*, (65536 as i64 - total) as u64)
+                if got <= 0:
+                    break
+                end
+                total += got
+            end
+            close(client)
+            args := _split_args(buf, total as int)
+            mem.Free(buf)
+            Dispatch((): _on_second(args) end)
+        end
+    end
+
+    func _mac_sockaddr(path: str): void*:
+        addr := mem.AllocateZeroed(112 as u64)
+        (addr as u8*)[1] = 1 as u8
+        mem.Copy(((addr as i64) + 2) as void*, path as void*, (str.Len(path) + 1) as u64)
+        ret addr
+    end
+
+    func _exe_path(): str:
+        buf := mem.AllocateZeroed(4097 as u64)
+        size_ptr := (mem.AllocateZeroed(8 as u64)) as u32*
+        size_ptr[0] = 4096 as u32
+        ok := _NSGetExecutablePath(buf, size_ptr as void*)
+        mem.Free(size_ptr as void*)
+        if ok != 0:
+            mem.Free(buf)
+            ret str.Clone("")
+        end
+        ret buf as str
+    end
+
+    func _open_external(url: str): bool:
+        workspace := _objc0(objc_getClass("NSWorkspace"), "sharedWorkspace")
+        target := _objc1(objc_getClass("NSURL"), "URLWithString:", _ns(url))
+        if target == null:
+            ret false
+        end
+        fn := (&objc_msgSend) as extern func (void*, void*, void*) i8
+        ret fn(workspace, sel_registerName("openURL:"), target) != (0 as i8)
+    end
+
+    func _os_pick(title: str, mode: int, default_name: str, _filter_name: str, patterns: str): str:
+        panel := _objc0(objc_getClass(mode == 2 ? "NSSavePanel" : "NSOpenPanel"), mode == 2 ? "savePanel" : "openPanel")
+        _objc1(panel, "setMessage:", _ns(title))
+        if mode == 2:
+            if default_name.len() > 0:
+                _objc1(panel, "setNameFieldStringValue:", _ns(default_name))
+            end
+        else:
+            _objc_bool(panel, "setCanChooseDirectories:", mode == 1)
+            _objc_bool(panel, "setCanChooseFiles:", mode == 0)
+        end
+        if patterns.len() > 0:
+            kinds := _new("NSMutableArray")
+            parts := str.Split(patterns, ";")
+            each part in parts:
+                dot := str.LastIndex(part, ".")
+                ext := dot >= 0 ? str.Substr(part, dot + 1, str.Len(part) - dot - 1) : str.Clone(part)
+                _objc1(kinds, "addObject:", _ns(ext))
+                mem.Free(ext as void*)
+            end
+            parts.free()
+            _objc1(panel, "setAllowedFileTypes:", kinds)
+        end
+        if _objc_long(panel, "runModal") != (1 as i64):
+            ret str.Clone("")
+        end
+        ret _ns_text(_objc0(_objc0(panel, "URL"), "path"))
+    end
+
+    func _os_message(title: str, text: str, question: bool): bool:
+        alert := _new("NSAlert")
+        _objc1(alert, "setMessageText:", _ns(title))
+        _objc1(alert, "setInformativeText:", _ns(text))
+        _objc1(alert, "addButtonWithTitle:", _ns("OK"))
+        if question:
+            _objc1(alert, "addButtonWithTitle:", _ns("Cancel"))
+        end
+        ret _objc_long(alert, "runModal") == (1000 as i64)
+    end
+
+    func _os_notify(title: str, body: str, sound: str): bool:
+        mac_sound := sound == "alert" ? "Basso" : "Glass"
+        center_cls := objc_getClass("NSUserNotificationCenter")
+        if center_cls != null:
+            center := _objc0(center_cls, "defaultUserNotificationCenter")
+            if center != null:
+                note := _new("NSUserNotification")
+                _objc1(note, "setTitle:", _ns(title))
+                _objc1(note, "setInformativeText:", _ns(body))
+                if sound.len() > 0:
+                    _objc1(note, "setSoundName:", _ns(mac_sound))
+                end
+                _objc1(center, "deliverNotification:", note)
+                ret true
+            end
+        end
+        mut args := Vector {} as Vector<str>
+        defer args.free()
+        escaped_body := str.Replace(str.Replace(body, "\\", "\\\\"), `"`, `\"`)
+        escaped_title := str.Replace(str.Replace(title, "\\", "\\\\"), `"`, `\"`)
+        args.push("-e")
+        mut line := `display notification "` + escaped_body + `" with title "` + escaped_title + `"`
+        if sound.len() > 0:
+            line = line + ` sound name "` + mac_sound + `"`
+        end
+        args.push(line)
+        result := shell.Run("/usr/bin/osascript", args)
+        ret result.code == 0
+    end
+
+    func _os_attention(_window: void*):
+        app := _objc0(objc_getClass("NSApplication"), "sharedApplication")
+        fn := (&objc_msgSend) as extern func (void*, void*, u64) i64
+        _r := fn(app, sel_registerName("requestUserAttention:"), 10 as u64)
+    end
+
+    func _mac_has_keychain(): bool:
+        slot := (mem.AllocateZeroed(sizeof(_Slot) as u64)) as _Slot*
+        defer mem.Free(slot as void*)
+        status := (mem.AllocateZeroed(8 as u64)) as u32*
+        defer mem.Free(status as void*)
+        if SecKeychainCopyDefault(slot as void*) != 0 or slot[0].v == null:
+            ret false
+        end
+        usable := SecKeychainGetStatus(slot[0].v, status as void*) == 0
+        CFRelease(slot[0].v)
+        ret usable
+    end
+
+    func _os_secret_set(service: str, key: str, value: str): bool:
+        if not _mac_has_keychain():
+            ret false
+        end
+        item_out := (mem.AllocateZeroed(sizeof(_Slot) as u64)) as _Slot*
+        defer mem.Free(item_out as void*)
+        size_out := (mem.AllocateZeroed(8 as u64)) as u32*
+        defer mem.Free(size_out as void*)
+        data_out := (mem.AllocateZeroed(sizeof(_Slot) as u64)) as _Slot*
+        defer mem.Free(data_out as void*)
+        service_len := str.Len(service) as u32
+        key_len := str.Len(key) as u32
+        value_len := str.Len(value) as u32
+        found := SecKeychainFindGenericPassword(null, service_len, service, key_len, key, size_out as void*, data_out as void*, item_out as void*)
+        if found == 0:
+            SecKeychainItemFreeContent(null, data_out[0].v)
+            changed := SecKeychainItemModifyAttributesAndData(item_out[0].v, null, value_len, value as void*)
+            CFRelease(item_out[0].v)
+            ret changed == 0
+        end
+        ret SecKeychainAddGenericPassword(null, service_len, service, key_len, key, value_len, value as void*, null) == 0
+    end
+
+    func _os_secret_get(service: str, key: str): str:
+        if not _mac_has_keychain():
+            ret str.Clone("")
+        end
+        size_out := (mem.AllocateZeroed(8 as u64)) as u32*
+        defer mem.Free(size_out as void*)
+        data_out := (mem.AllocateZeroed(sizeof(_Slot) as u64)) as _Slot*
+        defer mem.Free(data_out as void*)
+        found := SecKeychainFindGenericPassword(
+            null, str.Len(service) as u32, service, str.Len(key) as u32, key, size_out as void*,
+            data_out as void*, null
+        )
+        if found != 0:
+            ret str.Clone("")
+        end
+        size_bytes := size_out[0] as u64
+        copy := mem.AllocateZeroed(size_bytes + (1 as u64))
+        mem.Copy(copy, data_out[0].v, size_bytes)
+        SecKeychainItemFreeContent(null, data_out[0].v)
+        ret copy as str
+    end
+
+    func _os_secret_delete(service: str, key: str): bool:
+        if not _mac_has_keychain():
+            ret false
+        end
+        item_out := (mem.AllocateZeroed(sizeof(_Slot) as u64)) as _Slot*
+        defer mem.Free(item_out as void*)
+        found := SecKeychainFindGenericPassword(null, str.Len(service) as u32, service, str.Len(key) as u32, key, null, null, item_out as void*)
+        if found != 0:
+            ret false
+        end
+        gone := SecKeychainItemDelete(item_out[0].v)
+        CFRelease(item_out[0].v)
+        ret gone == 0
+    end
+
+    func _os_set_menu(_view: WebView, items: Vector<MenuItem>):
+        app := _objc0(objc_getClass("NSApplication"), "sharedApplication")
+        bar := _objc0(app, "mainMenu")
+        if bar != null:
+            _mac_fill_menu(bar, items)
+        end
+    end
+
+    func _os_set_tray(icon: str, tooltip: str, items: Vector<MenuItem>): bool:
+        bar := _objc0(objc_getClass("NSStatusBar"), "systemStatusBar")
+        make := (&objc_msgSend) as extern func (void*, void*, f64) void*
+        _mac_status_item = make(bar, sel_registerName("statusItemWithLength:"), -1.0)
+        if _mac_status_item == null:
+            ret false
+        end
+        button := _objc0(_mac_status_item, "button")
+        if button != null:
+            image := _objc1(_objc0(objc_getClass("NSImage"), "alloc"), "initWithContentsOfFile:", _ns(icon))
+            if image != null:
+                _objc1(button, "setImage:", image)
+            else:
+                _objc1(button, "setTitle:", _ns(tooltip))
+            end
+            _objc1(button, "setToolTip:", _ns(tooltip))
+        end
+        menu := _new("NSMenu")
+        _mac_fill_menu(menu, items)
+        _objc1(_mac_status_item, "setMenu:", menu)
+        ret true
+    end
+
+    func _os_remove_tray():
+        if _mac_status_item != null:
+            bar := _objc0(objc_getClass("NSStatusBar"), "systemStatusBar")
+            _objc1(bar, "removeStatusItem:", _mac_status_item)
+            _mac_status_item = null
+        end
+    end
+
+    func _os_single_instance(): bool:
+        dir := DataDir()
+        defer mem.Free(dir as void*)
+        _mk := os.MkdirAll(dir)
+        lock_path := filepath.Join(dir, "instance.lock")
+        defer mem.Free(lock_path as void*)
+        sock_name := crypto.Sha256Hex(dir)
+        defer mem.Free(sock_name as void*)
+        short := str.Substr(sock_name, 0, 24)
+        defer mem.Free(short as void*)
+        sock_path := "/tmp/salam-".concat(short).concat(".sock")
+        defer mem.Free(sock_path as void*)
+        fd := open(lock_path, 0x200 | 2 | 0x1000000, 0o600)
+        if fd < 0:
+            ret true
+        end
+        addr := _mac_sockaddr(sock_path)
+        defer mem.Free(addr)
+        if flock(fd, 2 | 4) != 0:
+            close(fd)
+            client := socket(1, 1, 0)
+            if client >= 0 and connect(client, addr, 106) == 0:
+                mut size := 0
+                data := _join_args(size)
+                _sent := write(client, data, size as u64)
+                mem.Free(data)
+                close(client)
+            end
+            ret false
+        end
+        _mac_instance_fd = fd
+        _gone := unlink(sock_path)
+        server := socket(1, 1, 0)
+        if server >= 0 and bind(server, addr, 106) == 0 and listen(server, 8) == 0:
+            _t := spawn(_mac_instance_thread, (server as i64) as void*)
+        end
+        ret true
+    end
+end

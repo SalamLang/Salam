@@ -1768,7 +1768,7 @@ jobs:
 
   build-linux-armhf:
     needs: changes
-    if: false && needs.changes.outputs.run == 'true'
+    if: needs.changes.outputs.run == 'true'
     name: Build Salam for Linux (armhf, embedded LLVM+LLD)
     runs-on: ubuntu-24.04
     timeout-minutes: 300
@@ -1795,10 +1795,21 @@ jobs:
           key: ccache-linux-armhf-v2-${{ github.run_id }}
           restore-keys: |
             ccache-linux-armhf-v2-
-      - name: Fetch a seed compiler for the container
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: sh tools/bash/fetch-seed.sh --slug linux-armhf --out "$GITHUB_WORKSPACE/seed"
+      # Stable releases no longer carry an armhf seed (v0.6.0 onward), and a
+      # release older than 0.6.1 cannot parse compiler/. Build the seed for the
+      # target from this checkout with the runner's own compiler instead.
+      - name: Install a seed compiler
+        uses: ./.github/actions/setup-salam # zizmor: ignore[self-repository]
+
+      - name: Cross-build an armhf seed from this checkout
+        run: |
+          set -eu
+          export SALAM_STD="$PWD/std"
+          mkdir -p seed
+          salam build compiler/main.salam --target=arm-linux-musleabihf \
+            -o seed/salam --log-level=warn
+          chmod +x seed/salam
+          file seed/salam
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
@@ -1836,7 +1847,7 @@ jobs:
                 --musl-x86_64 "$MUSL_SR" --mingw-x86_64 "$MINGW_SR" \
                 --wasi /work/sysroots/wasm32-wasi
               sh tools/bash/build-selfhost.sh --seed=/work/seed/salam \
-                --llvm=/work --embed=/work --output=/work/salam
+                --llvm=/work --embed=/work --output=/work/salam --seed-is-builder
               echo 1 > /work/.self_contained
               file /work/salam
               /work/salam version
@@ -2114,7 +2125,6 @@ jobs:
   build-android:
     name: Build & sign Android AAB + APKs
     if: |
-      false &&
       github.ref == 'refs/heads/main' &&
       github.repository == 'SalamLang/Salam' &&
       ((github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release:')) ||
@@ -2508,17 +2518,36 @@ jobs:
             echo "::error::rpm packaging failed - the release will ship without .rpm files"
             echo "built=0" >> "$GITHUB_OUTPUT"
           fi
-      - name: Summarize .deb/.rpm packaging
+      - name: Build Arch (pacman) packages
+        id: build_pacman
+        run: |
+          set -eu
+          mkdir -p ./pacman
+          if sh packaging/arch/build-pacman.sh --version "$VERSION" --input ./release --output ./pacman; then
+            n=$(find ./pacman -name '*.pkg.tar.zst' | wc -l)
+            if [ "$n" -gt 0 ]; then
+              cp ./pacman/*.pkg.tar.zst ./release/
+            else
+              echo "::error::pacman packaging produced no files"
+            fi
+            echo "built=$n" >> "$GITHUB_OUTPUT"
+          else
+            echo "::error::pacman packaging failed - the release will ship without .pkg.tar.zst files"
+            echo "built=0" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Summarize .deb/.rpm/.pkg.tar.zst packaging
         if: always()
         env:
           DEB_COUNT: ${{ steps.build_deb.outputs.built || 0 }}
           RPM_COUNT: ${{ steps.build_rpm.outputs.built || 0 }}
+          PACMAN_COUNT: ${{ steps.build_pacman.outputs.built || 0 }}
         run: |
           {
             echo "### Distro packages"
             echo ""
             echo "- .deb: $DEB_COUNT file(s)"
             echo "- .rpm: $RPM_COUNT file(s)"
+            echo "- .pkg.tar.zst (Arch): $PACMAN_COUNT file(s)"
           } >> "$GITHUB_STEP_SUMMARY"
       - name: Delete existing release and tag if found
         env:
@@ -2604,6 +2633,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.RELEASE_TOKEN || secrets.GITHUB_TOKEN }}
           TAG_WAS_SIGNED: ${{ steps.signtag.outputs.signed }}
+          HEAD_MSG: ${{ github.event.head_commit.message }}
         run: |
           set -eu
           shopt -s nullglob
@@ -2616,6 +2646,7 @@ jobs:
             release/salam-*-android-*.apk
             release/salam-*.deb
             release/salam-*.rpm
+            release/salam-*.pkg.tar.zst
           )
           assets=()
           for c in "${candidates[@]}"; do
@@ -2689,6 +2720,54 @@ jobs:
             echo ""
           } > release-notes-preamble.md
 
+          if [ -z "${PRERELEASE_FLAG:-}" ]; then
+            this_names=$(mktemp)
+            for f in "${assets[@]}" "${sums[@]}" ${agent[@]+"${agent[@]}"}; do
+              basename "$f"
+            done | sed "s/${VERSION}/@V@/g" | sort -u > "$this_names"
+
+            missing_required=""
+            for need in "salam-@V@-android.aab" "salam-@V@-android-universal.apk"; do
+              grep -qx "$need" "$this_names" || missing_required="$missing_required$need"$'\n'
+            done
+
+            prev=$(gh release list --limit 30 --json tagName,isPrerelease,isDraft \
+              --jq "[.[] | select(.isPrerelease == false and .isDraft == false and .tagName != \"$TAG\")][0].tagName // empty")
+            missing_before=""
+            if [ -n "$prev" ]; then
+              prev_names=$(mktemp)
+              gh release view "$prev" --json assets --jq '.assets[].name' \
+                | sed "s/${prev#v}/@V@/g" | sort -u > "$prev_names"
+              missing_before=$(comm -23 "$prev_names" "$this_names" || true)
+            fi
+
+            if [ -n "$missing_required" ] || [ -n "$missing_before" ]; then
+              {
+                echo "### This release is missing files"
+                echo ""
+                if [ -n "$missing_required" ]; then
+                  echo "Always required:"
+                  printf '%s' "$missing_required" | sed 's/^/  - /'
+                fi
+                if [ -n "$missing_before" ]; then
+                  echo "Present in $prev but not here:"
+                  printf '%s\n' "$missing_before" | sed 's/^/  - /'
+                fi
+              } | tee -a "$GITHUB_STEP_SUMMARY"
+              case "$HEAD_MSG" in
+              *"[allow-fewer-assets]"*)
+                echo "::warning::publishing with fewer files because the commit says [allow-fewer-assets]"
+                ;;
+              *)
+                echo "::error::the release is missing files, see the summary. A published release is immutable, so it is stopped here. Put [allow-fewer-assets] in the commit message only when dropping a file on purpose."
+                exit 1
+                ;;
+              esac
+            else
+              echo "complete: every file of ${prev:-the required set} is here, plus the Android files"
+            fi
+          fi
+
           echo "Publishing ${#assets[@]} assets and ${#sums[@]} checksum files:"
           printf '  %s\n' "${assets[@]}" "${sums[@]}"
           {
@@ -2719,6 +2798,29 @@ jobs:
     permissions:
       contents: read
     uses: ./.github/workflows/agent-release.yml # zizmor: ignore[self-repository]
+
+  package-distros:
+    name: Publish distro packages
+    if: |
+      !cancelled() && needs.create-release.result == 'success' &&
+      github.event_name == 'push' && startsWith(github.event.head_commit.message, 'release:')
+    needs: [create-release]
+    runs-on: ubuntu-24.04
+    permissions:
+      actions: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Start the packaging workflow
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          VERSION=$(tr -d ' \t\r\n' < VERSION)
+          gh workflow run packaging-release.yml --ref main -f version="$VERSION"
+          echo "started packaging-release.yml for v$VERSION" >> "$GITHUB_STEP_SUMMARY"
 
   nightly-report:
     name: Report nightly outcome

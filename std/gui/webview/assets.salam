@@ -1,0 +1,162 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package webview
+
+mut _the_pack := pack.Pack {}
+mut _asset_cache := HashMap {} as HashMap<str, pack.Blob>
+mut _uncached := null as void*
+
+func _hex_value(c: int): int:
+    if c >= 48 and c <= 57:
+        ret c - 48
+    else c >= 65 and c <= 70:
+        ret c - 55
+    else c >= 97 and c <= 102:
+        ret c - 87
+    end
+    ret -1
+end
+
+func _decode_path(path: str): str:
+    n := str.Len(path)
+    bytes := path as u8*
+    out := mem.Allocate((n + 1) as u64) as u8*
+    mut j := 0
+    mut i := 0
+    until i < n:
+        c := bytes[i] as int
+        if c == 37 and i + 2 < n:
+            hi := _hex_value(bytes[i + 1] as int)
+            lo := _hex_value(bytes[i + 2] as int)
+            if hi >= 0 and lo >= 0:
+                out[j] = ((hi * 16) + lo) as u8
+                j++
+                i += 3
+                continue
+            end
+        end
+        out[j] = c as u8
+        j++
+        i++
+    end
+    out[j] = 0 as u8
+    decoded := out as str
+    if str.Len(decoded) != j:
+        mem.Free(out as void*)
+        ret str.Clone("\\")
+    end
+    ret decoded
+end
+
+func _keep_until_next(blob: pack.Blob):
+    if _uncached != null:
+        mem.Free(_uncached)
+    end
+    _uncached = blob.data
+end
+
+func _load_asset(rel: str): pack.Blob:
+    if _asset_cache.has(rel):
+        ret _asset_cache.get(rel)
+    end
+    mut blob := pack.Blob {}
+    if _cfg.assets_dir.len() > 0 and _the_pack.Count() == 0:
+        full := filepath.Join(_cfg.assets_dir, rel)
+        defer mem.Free(full as void*)
+        if os.Exists(full) and not os.IsDir(full):
+            size := os.FileSize(full)
+            data := pack.ReadRange(full, 0 as i64, size)
+            if data != null:
+                blob = pack.Blob { data = data, size = size }
+                _keep_until_next(blob)
+                ret blob
+            end
+        end
+    end
+    if _the_pack.Count() > 0:
+        blob = _the_pack.Read(rel)
+        if blob.data != null:
+            if blob.size <= (4 * 1024 * 1024 as i64):
+                _asset_cache.put(str.Clone(rel), blob)
+            else:
+                _keep_until_next(blob)
+            end
+        end
+    end
+    ret blob
+end
+
+func _serve_asset(req: Request): Response:
+    rel := SafeAssetPath(req.path)
+    defer mem.Free(rel as void*)
+    if rel.len() == 0:
+        ret Response { status = 403, mime = "text/plain" }
+    end
+    mut blob := _load_asset(rel)
+    if blob.data == null and _cfg.spa and not str.Contains(rel, "."):
+        blob = _load_asset("index.html")
+        if blob.data != null:
+            mut res := Response { mime = "text/html; charset=utf-8", data = blob.data, size = blob.size }
+            _add_headers(res)
+            ret res
+        end
+    end
+    if blob.data == null:
+        ret Response { status = 404, mime = "text/plain" }
+    end
+    mut res := Response { mime = mime.MimeType(rel), data = blob.data, size = blob.size }
+    _add_headers(res)
+    ret res
+end
+
+func _add_headers(res &: Response):
+    if _cfg.csp.len() > 0:
+        res.Header("Content-Security-Policy", _cfg.csp)
+    end
+    res.Header("X-Content-Type-Options", "nosniff")
+end
+
+@en "SafeAssetPath"
+@fa "مسیر امن دارایی"
+pub func SafeAssetPath(request_path: str): str:
+    decoded := _decode_path(request_path)
+    defer mem.Free(decoded as void*)
+    mut start := 0
+    until start < str.Len(decoded) and (decoded as u8*)[start] == (47 as u8):
+        start++
+    end
+    mut rel := str.Substr(decoded, start, str.Len(decoded) - start)
+    if str.Contains(rel, "\\") or str.Contains(rel, ":"):
+        mem.Free(rel as void*)
+        ret str.Clone("")
+    end
+    parts := str.Split(rel, "/")
+    mut climbs := false
+    each part in parts:
+        climbs = climbs or part == ".."
+        mem.Free(part as void*)
+    end
+    parts.free()
+    if climbs:
+        mem.Free(rel as void*)
+        ret str.Clone("")
+    end
+    if rel.len() == 0 or str.EndsWith(rel, "/"):
+        full := rel.concat("index.html")
+        mem.Free(rel as void*)
+        rel = full
+    end
+    ret rel
+end

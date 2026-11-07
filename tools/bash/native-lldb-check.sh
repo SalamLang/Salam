@@ -44,7 +44,7 @@ noinline func walk(n: int, name: str): int:
     mut k := 3
     repeat n in i:
         s += i * k
-        k += 1
+        k++
     end
     println name
     ret s

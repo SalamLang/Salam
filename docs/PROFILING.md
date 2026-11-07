@@ -649,21 +649,21 @@ if not _on: ret end
 _stack[_sp].id = id
 _stack[_sp].t0 = time.MonoNanos()
 _stack[_sp].child = 0
-_sp += 1
-_slots[id].depth += 1
+_sp++
+_slots[id].depth++
 ```
 
 `Exit(id)`:
 
 ```
 if not _on: ret end
-_sp -= 1
+_sp--
 dt := time.MonoNanos() - _stack[_sp].t0
 s := &_slots[id]
-s.calls += 1
+s.calls++
 s.self_ns += dt - _stack[_sp].child
 if s.depth == 1: s.total_ns += dt end    // only the outermost frame of a recursion
-s.depth -= 1
+s.depth--
 if _sp > 0: _stack[_sp-1].child += dt end
 ```
 
@@ -1077,7 +1077,7 @@ func BenchFibRecursive(b &: bench.B):
     mut i := 0 as i64
     until i < b.n:
         bench.Keep(fib(30))
-        i += 1
+        i++
     end
 end
 ```
@@ -1209,7 +1209,7 @@ noise-aware to be useful.
 ```json
 {
   "schema": "salam.bench.v1",
-  "salam_version": "0.6.2",
+  "salam_version": "0.6.3",
   "backend": "c",
   "cc": "gcc",
   "flags": "-O2",

@@ -39,7 +39,7 @@ Delete `website/.cache/` to force a full rebuild.
 `build.sh` first runs every example and compares its output with the `.out`
 file next to it, so the site never shows code that does not compile or output
 that is out of date. It also refuses a std package that has no page in both
-languages, with `check-std-coverage.py`. The generator fails on any `{{key}}` a
+languages, with `check-std-coverage.salam`. The generator fails on any `{{key}}` a
 template uses that the content does not define.
 
 ## Content files
@@ -95,7 +95,11 @@ headings and descriptions come from the `llms.*` keys, the agent links from
 
 Examples: `examples/name.salam` becomes `{{example.name}}`, a code window with
 the highlighted code and, when `name.out` exists, its output. The highlighter
-takes its word lists from `code.keywords`, `code.types` and `code.builtins`.
+takes its word lists from `extensions/tree-sitter-salam/keywords.json`, which
+`extensions/tools/gen_syntaxes.salam` generates from the lexer tables, so
+`code.keywords`, `code.types` and `code.builtins` are filled at build time.
+`check-code-words.salam` fails the build when the lexer has a keyword the
+list lacks.
 Code in Persian script is shown right to left, other code left to right,
 whatever the page direction.
 
@@ -125,14 +129,14 @@ is taken from `SALAM`, which `build.sh` always exports.
 The web lessons (`page-*`, `css-*`, `events-*`) end with a reference of every
 element, attribute, CSS property and event. Each row has a short example in an
 element with `class="snip"` (`<code class="snip">` in a table cell,
-`<pre class="code snip">` for a block). `check-snippets.py` compiles all of
+`<pre class="code snip">` for a block). `tools/salam/check-snippets.salam` compiles all of
 them in both languages, so a renamed attribute or a changed Persian name fails
 the build instead of shipping a wrong example. A snippet is an element
 expression such as `link: url = "/" content = "Home" end`; the checker wraps it
 in `page: ... end` and adds `import dom` when it calls `dom.`. A snippet that
 contains its own `page:` line is built as it stands.
 
-`SALAM=./salam python3 website/check-snippets.py [lesson.txt ...]` runs the
+`SALAM="$PWD/salam" ./salam run tools/salam/check-snippets.salam [lesson.txt ...]` runs the
 check by hand.
 
 ## Adding English (salamlang.org)

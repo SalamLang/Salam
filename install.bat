@@ -9,6 +9,7 @@ rem Usage:
 rem   install.bat
 rem   install.bat --dir C:\Tools\Salam
 rem   install.bat --version 1.2.3
+rem   install.bat --arch i686
 rem   install.bat --no-modify-path
 rem   install.bat --help
 rem
@@ -18,6 +19,9 @@ rem
 rem Environment variables:
 rem   SALAM_INSTALL_DIR    install directory, default %USERPROFILE%\.salam\bin
 rem   SALAM_VERSION        exact version to install
+rem   SALAM_OS             same as --os (windows)
+rem   SALAM_ARCH           same as --arch (x86_64, i686, arm64)
+rem   SALAM_PLATFORM       same as --platform (exact release asset)
 rem   SALAM_NO_MODIFY_PATH set to 1 to leave PATH alone
 rem   SALAM_NO_PAUSE       set to 1 to never wait for a key at the end
 rem
@@ -50,11 +54,19 @@ if defined SALAM_HELP (
     echo   Salam Programming Language installer for Windows
     echo.
     echo   Usage:
-    echo     install.bat [--dir DIR] [--version X.Y.Z] [--no-modify-path]
+    echo     install.bat [--dir DIR] [--version X.Y.Z] [--os NAME] [--arch NAME]
+    echo         [--platform NAME] [--no-modify-path]
     echo.
     echo   Options:
     echo     --dir DIR          install into DIR
     echo     --version X.Y.Z    install this exact release instead of the latest
+    echo     --os NAME          the system to install for: windows ^(the only one
+    echo                        this installer handles; Linux, macOS and the BSDs
+    echo                        use install.sh^)
+    echo     --arch NAME        install the build for this processor instead of the
+    echo                        detected one: x86_64 ^(x64^), i686 ^(x86^), arm64 ^(aarch64^)
+    echo     --platform NAME    name the exact release asset ^(windows-x86_64,
+    echo                        windows-i686, windows-arm64^); overrides --os and --arch
     echo     --no-modify-path   never touch the user PATH
     echo     --help             show this help
     echo.
@@ -62,7 +74,8 @@ if defined SALAM_HELP (
     echo     %USERPROFILE%\.salam\bin
     echo.
     echo   Environment:
-    echo     SALAM_INSTALL_DIR, SALAM_VERSION, SALAM_NO_MODIFY_PATH, SALAM_NO_PAUSE
+    echo     SALAM_INSTALL_DIR, SALAM_VERSION, SALAM_OS, SALAM_ARCH, SALAM_PLATFORM,
+    echo     SALAM_NO_MODIFY_PATH, SALAM_NO_PAUSE
     echo.
     echo   This launcher runs install.ps1, downloading it first when it is
     echo   not next to this file. Releases: %SALAM_RELEASES%

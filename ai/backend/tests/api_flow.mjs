@@ -1,3 +1,4 @@
+import crypto from "node:crypto";
 import fs from "node:fs";
 import zlib from "node:zlib";
 const API = (process.env.API ?? "http://127.0.0.1:18090").replace(/\/$/, "");
@@ -65,6 +66,35 @@ async function account(email, name) {
 
 async function chat(key, body, headers = {}) {
   return fetch(`${V1}/chat/completions`, { method: "POST", headers: { "Content-Type": "application/json", Authorization: `Bearer ${key}`, ...headers }, body: JSON.stringify(body) });
+}
+
+async function transcribe(token, body, { lang = "fa", type = "audio/webm", origin, english } = {}) {
+  const headers = { "Content-Type": type };
+  if (token) headers.Authorization = `Bearer ${token}`;
+  if (origin) headers.Origin = origin;
+  if (english) headers["X-Salam-Lang"] = "en";
+  const res = await fetch(`${API}/speech/transcribe?lang=${lang}`, { method: "POST", headers, body });
+  const text = await res.text();
+  let json = null;
+  try {
+    json = JSON.parse(text);
+  } catch {}
+  return { status: res.status, json, text, res };
+}
+const clip = (n = 4096) => Buffer.concat([Buffer.from([0x1a, 0x45, 0xdf, 0xa3]), Buffer.alloc(32), crypto.randomBytes(n)]);
+
+if (process.env.SPEECH_OFF_ONLY) {
+  console.log("voice input without a speech service");
+  const offSession = await account("speech-off@test.ir", "Off");
+  const caps = await api("GET", "/capabilities");
+  check("capabilities say voice input is off", caps.res.status === 200 && caps.json.speech === false, caps.json);
+  check("capabilities keep everything else", typeof caps.json.max_files === "number" && Array.isArray(caps.json.text));
+  check("no voice limits are offered when off", !("speech_languages" in caps.json) && !("speech_max_seconds" in caps.json));
+  const off = await transcribe(offSession, clip());
+  check("the route answers cleanly when off", off.status === 503 && off.json?.error === "speech_off", off.text);
+  check("signed out still gets 401 when off", (await transcribe(undefined, clip())).status === 401);
+  console.log(`\n${passed} passed, ${failures.length} failed`);
+  process.exit(failures.length ? 1 : 0);
 }
 
 console.log("keys");
@@ -332,6 +362,29 @@ check("a conversation past the limit drops its oldest turns instead of failing",
 const trimmedLog = (await api("GET", "/keys/requests", longSession)).json.requests[0];
 check("the newest turns survive the trim and the client is told", trimmedLog.prompt.includes("Earlier messages were left out") && trimmedLog.prompt_chars <= 1048576, trimmedLog.prompt_chars);
 
+console.log("turn time limits");
+const TURN = Number(process.env.CHAT_TURN_SECONDS ?? 0);
+if (TURN > 0) {
+  async function slowTurn(token) {
+    const c = await api("POST", "/chats", token, {});
+    const sent = await api("POST", `/chats/${c.json.chat.id}/messages`, token, { text: `slow: ${TURN * 2} please` });
+    let p;
+    for (let i = 0; i < TURN * 2 * 4 + 40; i += 1) {
+      p = await api("GET", `/chats/${c.json.chat.id}/messages/${sent.json.assistant.id}`, token);
+      if (p.json.status !== "pending") break;
+      await new Promise((res) => setTimeout(res, 500));
+    }
+    return p.json;
+  }
+  const cut = await slowTurn(await account("turn-free@test.ir", "Turn Free"));
+  check("a chat turn on a limited plan stops at its time limit with a clear message", cut.status === "error" && cut.body.includes("ادامه بده"), cut);
+  const longSub = await account("turn-unlimited@test.ir", "Turn Unlimited");
+  const gift = await api("POST", "/admin/subscriptions", session, { email: "turn-unlimited@test.ir", plan: "unlimited", note: "turn limit test" });
+  check("an unlimited plan is granted for the turn test", gift.res.status === 201, gift.json);
+  const kept = await slowTurn(longSub);
+  check("the same turn on the unlimited plan runs past that limit to the end", kept.status === "done" && kept.body.startsWith("Echo: slow:"), kept);
+}
+
 console.log("identity");
 const idSession = await account("identity@test.ir", "Identity");
 const idKey = (await api("POST", "/keys", idSession, { name: "identity-bot" })).json.secret;
@@ -381,6 +434,9 @@ for (let i = 0; i < 40; i += 1) {
   await new Promise((r) => setTimeout(r, 300));
 }
 check("a chat answer completes", polled.json.status === "done", polled.json);
+const liveList = (await api("GET", "/chats", session)).json.chats ?? [];
+const liveListChat = liveList.find((c) => c.id === chatRes.json.chat.id);
+check("the chat list says whether each chat is working or idle", liveListChat !== undefined && ["working", "queued", "waiting", "idle", "offline"].includes(liveListChat.state) && liveList.every((c) => typeof c.state === "string"), liveListChat);
 const traced = await api("GET", `/admin/messages/${sent.json.assistant.id}/trace`, session);
 const steps = traced.json?.trace ?? [];
 const toolStep = steps.find((t) => t.kind === "tool");
@@ -404,6 +460,17 @@ check("users show tokens, last login and login count", urow.tokens_in > 0 && uro
 const other = await account("someone-else@test.ir", "Other");
 const theirs = await api("GET", "/keys/requests", other);
 check("another user does not see these requests", theirs.json.requests.length === 0);
+const mineUsage = await api("GET", "/usage?days=30", session);
+const mineToday = mineUsage.json.periods?.find((p) => p.key === "today");
+const mineAll = mineUsage.json.periods?.find((p) => p.key === "all");
+check("user usage has today, week, month, last month and all", ["today", "week", "month", "last_month", "all"].every((k) => mineUsage.json.periods?.some((p) => p.key === k)), mineUsage.json.periods?.map((p) => p.key));
+check("user usage counts chat and API tokens separately", mineToday?.chat?.count >= 1 && mineToday.chat.input >= 100 && mineToday.chat.cache_read >= 300 && mineToday.api.input >= 100 && mineToday.api.output >= 20, mineToday);
+check("user usage has one row per day for the last 30 days", mineUsage.json.daily?.length === 30 && mineUsage.json.daily.at(-1).chat_in >= 100, mineUsage.json.daily?.at(-1));
+check("user usage lists API keys and projects", mineUsage.json.keys?.some((k) => k.name === "test-bot") && mineUsage.json.projects?.some((p) => p.name === "website-bot"), { keys: mineUsage.json.keys, projects: mineUsage.json.projects });
+check("user usage reports the plan and this hour's use", mineUsage.json.plan?.chat_hourly >= 0 && mineUsage.json.hourly?.chat_used >= 1 && mineUsage.json.hourly?.api_used >= 1, { plan: mineUsage.json.plan, hourly: mineUsage.json.hourly });
+const otherUsage = await api("GET", "/usage", other);
+check("user usage only covers the signed-in account", otherUsage.json.periods?.find((p) => p.key === "all")?.chat?.count === 0 && otherUsage.json.keys?.length === 0, otherUsage.json);
+check("user usage needs a signed-in account", (await api("GET", "/usage", "")).res.status === 401);
 
 console.log("sessions");
 const signIn = async (email, headers) => {
@@ -626,6 +693,125 @@ check("memory can be turned off", (await api("PATCH", "/memory", memSession, { e
 const off = await memChat("what do you remember");
 check("with memory off nothing is recalled", off.answer.body === "Memory: false chats=0", off.answer);
 check("clearing memory removes every summary", (await api("DELETE", "/memory", memSession)).res.status === 200 && (await api("GET", "/memory", memSession)).json.chats.length === 0);
+
+console.log("voice input");
+{
+  const SPEECH = (process.env.SPEECH_CONTROL ?? "http://127.0.0.1:18088").replace(/\/$/, "");
+  const SPEECH_SECONDS = Number(process.env.SPEECH_HOURLY_SECONDS ?? 600);
+  const SPEECH_HOURLY = Number(process.env.SPEECH_HOURLY ?? 8);
+  const speechMode = async (mode) => (await fetch(`${SPEECH}/mode?mode=${mode}`)).json();
+  const speechState = async () => (await fetch(`${SPEECH}/mode`)).json();
+  const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+  await speechMode("ok");
+  const voice = await account("voice@test.ir", "Voice");
+  const voiceCaps = await api("GET", "/capabilities");
+  check("capabilities offer voice input", voiceCaps.json.speech === true, voiceCaps.json);
+  check("capabilities list the languages and limits", JSON.stringify(voiceCaps.json.speech_languages) === '["fa","en"]' && voiceCaps.json.speech_max_seconds === 120, voiceCaps.json);
+  check("the smaller byte limit wins", voiceCaps.json.speech_max_bytes === 300000, voiceCaps.json);
+  check("capabilities do not name the model", !JSON.stringify(voiceCaps.json).includes("SecretModelName"));
+  const voicePre = await fetch(`${API}/speech/transcribe`, { method: "OPTIONS", headers: { Origin: "http://localhost:3000", "Access-Control-Request-Method": "POST", "Access-Control-Request-Headers": "content-type,authorization" } });
+  check("the browser preflight passes", voicePre.status === 204 && voicePre.headers.get("access-control-allow-origin") === "http://localhost:3000", voicePre.status);
+  check("signed out is refused", (await transcribe(undefined, clip())).status === 401);
+  check("a bad token is refused", (await transcribe("nope", clip())).status === 401);
+  const servedBefore = (await speechState()).served;
+  const wrongType = await transcribe(voice, clip(), { type: "application/json" });
+  check("a body that is not labelled audio is refused", wrongType.status === 415 && wrongType.json?.error === "not_audio", wrongType.text);
+  const faked = await transcribe(voice, Buffer.from("this is plain text pretending to be audio, long enough"));
+  check("text labelled as audio is refused by content", faked.status === 400 && faked.json?.error === "bad_audio", faked.text);
+  const png = await transcribe(voice, Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), crypto.randomBytes(64)]), { type: "audio/ogg" });
+  check("an image labelled as audio is refused by content", png.status === 400 && png.json?.error === "bad_audio", png.text);
+  const empty = await transcribe(voice, Buffer.alloc(0));
+  check("an empty upload is refused", empty.status === 400 && empty.json?.error === "bad_audio", empty.text);
+  const wrongLang = await transcribe(voice, clip(), { lang: "de" });
+  check("an unknown language is refused", wrongLang.status === 400 && wrongLang.json?.error === "language", wrongLang.text);
+  const bigClip = await transcribe(voice, clip(Number(process.env.SPEECH_MAX_BYTES ?? 1048576) + 1));
+  check("an upload over the size limit is refused", bigClip.status === 413 && bigClip.json?.error === "audio_too_large", bigClip.text);
+  check("refused uploads never reach the service", (await speechState()).served === servedBefore, await speechState());
+  const sent = clip(200000);
+  const heard = await transcribe(voice, sent, { origin: "http://localhost:3000" });
+  const seen = await speechState();
+  check("audio becomes text", heard.status === 200 && heard.json?.text === 'سلام دنیا، این یک "آزمایش" است', heard.text);
+  check("the reply carries only text, language and seconds", heard.json && Object.keys(heard.json).sort().join() === "language,seconds,text" && heard.json.language === "fa" && heard.json.seconds === 3, heard.text);
+  check("the reply does not name the model", !heard.text.includes("SecretModelName"));
+  check("the reply has CORS for the app", heard.res.headers.get("access-control-allow-origin") === "http://localhost:3000");
+  check("binary audio reaches the service intact", seen.last.size === sent.length && seen.last.sha === crypto.createHash("sha256").update(sent).digest("hex"), seen.last);
+  check("the language picks the route", seen.last.path === "/transcribe" && seen.last.language === "fa");
+  check("the shared secret is sent", seen.last.authorized === true, seen.last);
+  const heardEn = await transcribe(voice, Buffer.concat([Buffer.from("....ftypisom"), crypto.randomBytes(2048)]), { lang: "en", type: "audio/mp4" });
+  check("english audio in mp4 goes to english", heardEn.status === 200 && heardEn.json.text === 'hello "world", this is a test' && (await speechState()).last.language === "en", heardEn.text);
+  const oggAudio = await transcribe(voice, Buffer.concat([Buffer.from("OggS"), crypto.randomBytes(2048)]), { type: "audio/ogg;codecs=opus" });
+  check("ogg audio with a codec in its type is accepted", oggAudio.status === 200, oggAudio.text);
+  const voice2 = await account("voice2@test.ir", "Voice Two");
+  await speechMode("bad_audio");
+  const badAudio = await transcribe(voice2, clip());
+  check("audio the service cannot decode is a 400 with no detail", badAudio.status === 400 && badAudio.json?.error === "bad_audio" && !badAudio.text.includes("SecretModelName"), badAudio.text);
+  await speechMode("too_long");
+  const tooLong = await transcribe(voice2, clip());
+  check("audio over the length limit is a 413", tooLong.status === 413 && tooLong.json?.error === "audio_too_long", tooLong.text);
+  await speechMode("busy");
+  const busyOnce = await transcribe(voice2, clip());
+  check("a busy service is a clean 503", busyOnce.status === 503 && busyOnce.json?.error === "speech_busy" && !busyOnce.text.includes("SecretModelName"), busyOnce.text);
+  await speechMode("broken");
+  const broken = await transcribe(voice2, clip());
+  check("a service error leaks no detail", broken.status === 503 && broken.json?.error === "speech_unavailable" && !broken.text.includes("SecretModelName"), broken.text);
+  await speechMode("hang");
+  const hangAt = Date.now();
+  const hung = await transcribe(voice2, clip());
+  check("a hung service times out cleanly", hung.status === 504 && hung.json?.error === "speech_timeout", hung.text);
+  check("the timeout is the configured one", Date.now() - hangAt < 10000, Date.now() - hangAt);
+  const crowd = await Promise.all(["a", "b", "c", "d", "e"].map((n) => account(`voice-crowd-${n}@test.ir`, "Crowd")));
+  const crowdAt = Date.now();
+  const crowding = Promise.all(crowd.map((token) => transcribe(token, clip())));
+  await pause(500);
+  const meStart = Date.now();
+  const meDuring = await api("GET", "/me", voice2);
+  check("conversions in flight do not hold up the rest of the API", meDuring.res.status === 200 && Date.now() - meStart < 1000, Date.now() - meStart);
+  const crowded = await crowding;
+  check("the API's own in-flight limit answers 503", crowded.filter((r) => r.status === 503 && r.json?.error === "speech_busy").length === 1 && crowded.filter((r) => r.status === 504).length === 4, crowded.map((r) => r.status));
+  check("the in-flight limit does not wait", Date.now() - crowdAt < 10000, Date.now() - crowdAt);
+  await speechMode("down");
+  const down = await transcribe(voice2, clip());
+  check("a service that is down is a clean 503", down.status === 503 && down.json?.error === "speech_unavailable", down.text);
+  await pause(1200);
+  const capsDown = await api("GET", "/capabilities");
+  check("capabilities turn voice input off while the service is down", capsDown.json.speech === false, capsDown.json);
+  check("everything else works while the service is down", (await api("GET", "/chats", voice2)).res.status === 200);
+  await speechMode("ok");
+  await pause(1200);
+  await api("GET", "/capabilities");
+  await pause(300);
+  check("capabilities come back with the service", (await api("GET", "/capabilities")).json.speech === true);
+  const fa = await transcribe(voice2, clip(), { english: true, lang: "de" });
+  check("errors follow the interface language", fa.status === 400 && /[A-Za-z]/.test(fa.json.message) && !/[\u0600-\u06ff]/.test(fa.json.message), fa.text);
+  await speechMode("slow");
+  const voice3 = await account("voice3@test.ir", "Voice Three");
+  const overlap = await Promise.all([transcribe(voice3, clip()), (async () => {
+    await pause(200);
+    return transcribe(voice3, clip());
+  })()]);
+  check("one user runs one conversion at a time", overlap[0].status === 200 && overlap[1].status === 429 && overlap[1].json?.error === "speech_in_progress", overlap.map((o) => o.text));
+  const voice4 = await account("voice4@test.ir", "Voice Four");
+  await speechMode("ok");
+  let voiceLimited = 0;
+  for (let i = 0; i < SPEECH_HOURLY + 1; i += 1) {
+    const r = await transcribe(voice4, clip());
+    if (r.status === 429 && r.json?.error === "speech_limit") voiceLimited += 1;
+  }
+  check("the hourly request limit answers 429", voiceLimited === 1, voiceLimited);
+  const voice5 = await account("voice5@test.ir", "Voice Five");
+  await speechMode("long");
+  check("a long clip is allowed", (await transcribe(voice5, clip())).status === 200);
+  await speechMode("ok");
+  const overSeconds = await transcribe(voice5, clip());
+  check("the hourly seconds limit answers 429", overSeconds.status === 429 && overSeconds.json?.error === "speech_limit" && SPEECH_SECONDS <= 901, overSeconds.text);
+  const dbText = await api("GET", "/chats", voice);
+  check("voice input leaves no chat behind", dbText.json.chats.length === 0, dbText.json);
+  if (process.env.UPLOAD_DIR) {
+    const walk = (d) => (fs.existsSync(d) ? fs.readdirSync(d, { withFileTypes: true }).flatMap((e) => (e.isDirectory() ? walk(`${d}/${e.name}`) : [`${d}/${e.name}`])) : []);
+    const leftovers = walk(process.env.UPLOAD_DIR).filter((f) => fs.statSync(f).mtimeMs > hangAt - 60000 && /webm|ogg|mp4|audio/.test(f));
+    check("voice input stores no audio", leftovers.length === 0, leftovers);
+  }
+}
 
 console.log("limits and revocation");
 let limited = 0;

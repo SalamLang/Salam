@@ -106,7 +106,7 @@ func build_sig(s &: Sema, a &: at.Ast, fnid: int, owner: int): int:
         if param.a != 0:
             seen_default = true
         else not seen_default:
-            required += 1
+            required++
         end
     end
     mut owner_name := ""
@@ -117,6 +117,7 @@ func build_sig(s &: Sema, a &: at.Ast, fnid: int, owner: int): int:
     sg.ret_type = ret_t
     sg.decl = fnid
     sg.owner = owner
+    sg.home = s.gen_pkg != 0 ? s.gen_pkg : s.global
     sg.variadic = fn.is_variadic
     if fn.ty == 0 and not fn.is_extern and not fn.is_noret and fn.a != 0 and block_has_valued_ret(a, fn.a):
         sg.infer_ret = true
@@ -127,6 +128,7 @@ func build_sig(s &: Sema, a &: at.Ast, fnid: int, owner: int): int:
     end
     sg.mangled = mangle_func(s, owner_name, fn.name, params)
     sig_put(s, sigid, sg)
+    wide_extern_check(s, a, fnid, ret_t, params)
     ret sigid
 end
 
@@ -245,7 +247,7 @@ func struct_value_target(s &: Sema, t0: int): int:
             ret 0
         end
         t = v.elem
-        guard += 1
+        guard++
     end
     ret 0
 end
@@ -280,7 +282,7 @@ func check_struct_cycles(s &: Sema, a &: at.Ast, program: int):
     mut i := 0
     until i < at.ChildCount(a, program):
         did := at.Child(a, program, i)
-        i += 1
+        i++
         d := at.Get(a, did)
         if d.synthetic or d.kind != at.AST_STRUCT_DEF or at.Typarams(a, d.ext).len() > 0:
             continue
@@ -320,10 +322,11 @@ end
 
 func sema_collect(s &: Sema, a &: at.Ast, program: int):
     save_file := s.file
+    struct_rules_resolve_all(s, a, program)
     mut i := 0
     until i < at.ChildCount(a, program):
         did := at.Child(a, program, i)
-        i += 1
+        i++
         d := at.Get(a, did)
         if d.synthetic:
             continue
@@ -420,7 +423,7 @@ func sema_collect(s &: Sema, a &: at.Ast, program: int):
     mut i2 := 0
     until i2 < at.ChildCount(a, program):
         did := at.Child(a, program, i2)
-        i2 += 1
+        i2++
         d := at.Get(a, did)
         if d.synthetic:
             continue
@@ -480,6 +483,7 @@ func sema_collect(s &: Sema, a &: at.Ast, program: int):
                 if m.kind == at.AST_FIELD:
                     f := symbol_new(s, SYM_FIELD, m.name)
                     ft := sema_resolve_type(s, a, m.ty)
+                    opt_field_default(s, a, mid, ft)
                     mut fv := sym_at(s, f)
                     fv.ty = ft
                     fv.decl = mid
@@ -653,6 +657,9 @@ func sema_collect(s &: Sema, a &: at.Ast, program: int):
                             )
                         )
                     else if backing == tok.TV_INT:
+                        if ma.value_hi != (0 as u64):
+                            serr(s, 91, span_of(a, mid4), i18.Tr("an enum value must fit in 64 bits"))
+                        end
                         next = ma.value_int as i64
                     else if backing == tok.TV_FLOAT:
                         ev.enum_value_f = ma.value_float
@@ -668,7 +675,7 @@ func sema_collect(s &: Sema, a &: at.Ast, program: int):
                 end
                 if backing == tok.TV_INT:
                     ev.enum_value = next
-                    next = next + (1 as i64)
+                    next++
                 end
                 ev.ty = sym_at(s, esym).ty
                 sym_put(s, em, ev)
@@ -726,7 +733,7 @@ func sema_collect(s &: Sema, a &: at.Ast, program: int):
             gv.home = s.global
             if d.kind == at.AST_CONST_DECL and d.a != 0:
                 da := at.Get(a, d.a)
-                if da.kind == at.AST_LITERAL and da.value_kind == tok.TV_INT:
+                if da.kind == at.AST_LITERAL and da.value_kind == tok.TV_INT and da.value_hi == (0 as u64) and not (d.ty != 0 and wide_ts(at.Get(a, d.ty).name)):
                     gv.has_ival = true
                     gv.ival = da.value_int as i64
                 end
@@ -758,7 +765,7 @@ func sema_is_builtin_type_name(name: str): bool:
         if str.Equals(name, k_sm_intr_types[i]):
             ret true
         end
-        i += 1
+        i++
     end
     ret false
 end

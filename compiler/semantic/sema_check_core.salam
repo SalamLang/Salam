@@ -155,9 +155,9 @@ end
 
 func sema_check_expr(s &: Sema, a &: at.Ast, nid: int): int:
     if nid != 0 and at.Get(a, nid).view_glue:
-        s.pure_off += 1
+        s.pure_off++
         rty := sema_check_expr_body(s, a, nid)
-        s.pure_off -= 1
+        s.pure_off--
         ret rty
     end
     ret sema_check_expr_body(s, a, nid)
@@ -181,8 +181,12 @@ func sema_check_expr_body(s &: Sema, a &: at.Ast, nid: int): int:
         mut t := sema_err_ty(s)
         if n.op == tok.TK_INT:
             u := n.value_int
-            if exp >= 0 and type_is_integer(s, exp) and int_lit_fits(u, ty_at(s, exp).kind):
+            if wide_ts(n.type_str):
+                t = sema_ty(s, str.Equals(n.type_str, "i128") ? TY_I128 : TY_U128)
+            else exp >= 0 and type_is_integer(s, exp) and int_lit_fits(u, n.value_hi, ty_at(s, exp).kind):
                 t = exp
+            else n.value_hi != (0 as u64):
+                t = sema_ty(s, (n.value_hi >> 63) == (0 as u64) ? TY_I128 : TY_U128)
             else u <= 2147483647 as u64:
                 t = sema_ty(s, TY_I32)
             else u <= 9223372036854775807 as u64:
@@ -537,6 +541,10 @@ func sema_check_expr_body(s &: Sema, a &: at.Ast, nid: int): int:
         if target < 0:
             ret sema_decorate(s, a, nid, o3)
         end
+        if opt_wraps(s, target, o3):
+            th_move(a, nid, coerce_to_opt(s, a, target, n4.a, o3))
+            ret sema_decorate(s, a, nid, target)
+        end
         check_cast_in_context(s, a, n4.a, sp, cast_ctx, target, o3)
         if ty_at(s, target).kind == TY_DYN and o3 >= 0 and ty_at(s, o3).kind == TY_STRUCT:
             _dynok := iface_satisfied(
@@ -616,6 +624,9 @@ func sema_check_expr_body(s &: Sema, a &: at.Ast, nid: int): int:
         arr := sema_check_expr(s, a, n5.a)
         idx := sema_check_expr(s, a, n5.b)
         ssym2 := ty_at(s, arr).kind == TY_STRUCT ? struct_sym_of(s, arr) : 0
+        if ssym2 == 0:
+            wide_no_index(s, a, n5.b, i18.Tr("an index"))
+        end
         if ssym2 != 0:
             ovl2 := sema_try_op_overload(
                 s, a, nid, ssym2, "operator_index", idx
@@ -684,6 +695,7 @@ func sema_check_expr_body(s &: Sema, a &: at.Ast, nid: int): int:
         base := sema_check_expr(s, a, n6.a)
         if n6.b != 0:
             lo := sema_check_expr(s, a, n6.b)
+            wide_no_index(s, a, n6.b, i18.Tr("a slice bound"))
             if not type_is_error(s, lo) and not type_is_integer(s, lo):
                 serr(
                     s, 21, sp, co.Format1(
@@ -694,6 +706,7 @@ func sema_check_expr_body(s &: Sema, a &: at.Ast, nid: int): int:
         end
         if n6.c != 0:
             hi := sema_check_expr(s, a, n6.c)
+            wide_no_index(s, a, n6.c, i18.Tr("a slice bound"))
             if not type_is_error(s, hi) and not type_is_integer(s, hi):
                 serr(
                     s, 21, sp, co.Format1(

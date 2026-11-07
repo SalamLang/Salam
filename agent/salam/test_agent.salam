@@ -1,0 +1,596 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import str
+import mem
+import io
+import os
+import os.process
+import os.temp
+import filepath
+import sync
+import encoding.json
+import net.http
+import net.router
+
+if SALAM_OS_WINDOWS:
+    extern:
+        func CreateSymbolicLinkA(link: str, target: str, flags: u32): u8
+    end
+else:
+    extern:
+        func symlink(target: str, link: str): int
+    end
+end
+
+extern:
+    func fwrite(ptr: void*, size: u64, count: u64, stream: void*): u64
+end
+
+const SITE := `<!doctype html><meta charset=utf-8><title>site</title>
+<h1>Site heading</h1><p id=copy>سلام from the site</p>
+<a id=next href="/site2">Second page</a>
+<button id=btn onclick="document.getElementById('copy').textContent='clicked';console.warn('warned')">Press me</button>
+<input id=name name=name placeholder="your name"><select id=pick><option value=a>Apple</option><option value=b>Berry</option></select>
+<img src="/missing.png"><div id=late></div><div style="height:3000px"></div>
+<script>console.log("hello log");setTimeout(()=>{document.getElementById('late').textContent='ready now'},300);</script>`
+
+const SITE2 := `<!doctype html><meta charset=utf-8><title>second</title><h2>Second</h2>`
+
+const PAGE := `<!doctype html><meta charset=utf-8><title>fake app</title><script>
+(async () => {
+  const report = (name, value) => fetch("/report", {method: "POST", body: JSON.stringify({name, value})});
+  try {
+    salam.listen("agent://call", (c) => {
+      report("call:" + c.tool + ":" + c.state, c.output || c.summary);
+      if (c.state === "done" && c.call_id === "b_open") report("shot:b_open", c.image && (c.image_data || "").length > 1000 ? "yes" : "no");
+      if (c.state === "running" && c.call_id === "stopme") setTimeout(() => salam.invoke("agent_stop", {callId: "stopme"}), 600);
+      if (c.state === "pending") {
+        const denied = new Set(["shellout", "shellrel", "shellparent", "shelllink", "shellhome", "shellbrace", "shelloptout", "shellwin", "shellps"]);
+        const allow = (c.tool === "shell" && !denied.has(c.call_id)) || (c.tool === "browser" && c.call_id !== "b_local");
+        salam.invoke("agent_decide", {callId: c.call_id, answer: allow ? "allow" : "deny"});
+      }
+    });
+    salam.listen("agent://output", (o) => report("output", o.chunk));
+    salam.listen("agent://connection", (v) => report("connection", v));
+    salam.listen("agent://device", () => report("device", "gone"));
+    await report("info", await salam.invoke("agent_info"));
+    await report("link", await salam.invoke("agent_link", {token: "user-token"}));
+    await report("prefs", await salam.invoke("agent_notify_prefs"));
+    await report("setprefs", await salam.invoke("agent_set_notify_prefs", {prefs: {enabled: false, sound: false, preview: false, lang: "en"}}));
+    await report("badwatch", await salam.invoke("agent_watch_reply", {chat: "bad id", mid: 1, token: "t"}).catch((e) => e.message));
+    await report("context", await salam.invoke("agent_project_context", {workspace: WS}));
+    await report("ready", true);
+  } catch (e) {
+    await report("exception", String(e));
+  }
+})();
+const WS = %WS%;
+</script>`
+
+mut g_lock := sync.NewMutex()
+mut g_names := Vector {} as Vector<str>
+mut g_values := Vector {} as Vector<str>
+mut g_calls := Vector {} as Vector<str>
+mut g_result_ids := Vector {} as Vector<str>
+mut g_result_bodies := Vector {} as Vector<str>
+mut g_failures := Vector {} as Vector<str>
+mut g_workspace := ""
+mut g_expected := 0
+mut g_ready := false
+mut g_done := false
+mut g_linked := false
+
+func send_json(h: i64, code: int, body: str):
+    http.Json(h, body)
+    http.SetStatus(h, code)
+end
+
+func page_handler(h: i64):
+    http.Html(h, str.Replace(PAGE, "%WS%", json.Str(g_workspace)))
+end
+
+func site_handler(h: i64):
+    http.Html(h, SITE)
+end
+
+func site2_handler(h: i64):
+    http.Html(h, SITE2)
+end
+
+func poll_handler(h: i64):
+    if http.Header(h, "Authorization") != "Bearer device-secret":
+        send_json(h, 401, "{}")
+        ret
+    end
+    deadline := sync.NowMs() + 3000
+    until sync.NowMs() < deadline:
+        sync.Lock(g_lock)
+        if g_calls.len() > 0 and g_ready:
+            first := g_calls.get(0)
+            g_calls.remove_at(0)
+            sync.Unlock(g_lock)
+            send_json(h, 200, `{"call": ` + first + `}`)
+            ret
+        end
+        sync.Unlock(g_lock)
+        sync.SleepMs(50)
+    end
+    http.SetStatus(h, 204)
+end
+
+func report_handler(h: i64):
+    body := http.Body(h)
+    name := json.Get(body, "name")
+    value := json.Get(body, "value")
+    sync.Lock(g_lock)
+    g_names.push(name)
+    g_values.push(value)
+    if name == "ready":
+        g_ready = true
+    end
+    sync.Unlock(g_lock)
+    send_json(h, 200, "{}")
+end
+
+func devices_handler(h: i64):
+    if http.Header(h, "Authorization") != "Bearer user-token":
+        send_json(h, 401, `{"message": "bad token"}`)
+        ret
+    end
+    sync.Lock(g_lock)
+    g_linked = true
+    sync.Unlock(g_lock)
+    send_json(h, 200, `{"device": {"id": 7}, "secret": "device-secret"}`)
+end
+
+func result_handler(h: i64):
+    body := http.Body(h)
+    id := json.Get(body, "call_id")
+    sync.Lock(g_lock)
+    g_result_ids.push(id)
+    g_result_bodies.push(str.Concat(body, ""))
+    if g_result_ids.len() == g_expected:
+        g_done = true
+    end
+    sync.Unlock(g_lock)
+    send_json(h, 200, "{}")
+end
+
+func call_json(cid: str, tool: str, args: str, ws: str): str:
+    ret `{"id": ` + json.Str(cid) + `, "tool": ` + json.Str(tool) + `, "args": ` + args + `, "chat": "chat1", "workspace": ` + json.Str(ws) + `}`
+end
+
+func report_of(name: str): str:
+    sync.Lock(g_lock)
+    mut found := ""
+    repeat g_names.len() in i:
+        if g_names.get(i) == name:
+            found = g_values.get(i)
+        end
+    end
+    sync.Unlock(g_lock)
+    ret found
+end
+
+func report_has(name: str): bool:
+    sync.Lock(g_lock)
+    mut found := false
+    repeat g_names.len() in i:
+        if g_names.get(i) == name:
+            found = true
+        end
+    end
+    sync.Unlock(g_lock)
+    ret found
+end
+
+func result_of(cid: str): str:
+    sync.Lock(g_lock)
+    mut found := ""
+    repeat g_result_ids.len() in i:
+        if g_result_ids.get(i) == cid:
+            found = g_result_bodies.get(i)
+        end
+    end
+    sync.Unlock(g_lock)
+    ret found
+end
+
+func rf(cid: str, field: str): str:
+    ret json.Get(result_of(cid), field)
+end
+
+func clip(s: str, n: int): str:
+    if s.len() > n:
+        ret s.substr(0, n)
+    end
+    ret s
+end
+
+func verdict(name: str, good: bool, detail: str):
+    if good:
+        println "ok   " + name
+    else:
+        println "FAIL " + name + ": " + clip(detail, 400)
+        g_failures.push(name)
+    end
+end
+
+func has(s: str, sub: str): bool:
+    ret str.Contains(s, sub)
+end
+
+func write_text(path: str, data: str):
+    _n := io.WriteFile(path, data)
+end
+
+func write_binary(path: str):
+    p := mem.Allocate(9 as u64) as u8*
+    p[0] = 0 as u8
+    p[1] = 1 as u8
+    p[2] = 2 as u8
+    p[3] = 98 as u8
+    p[4] = 105 as u8
+    p[5] = 110 as u8
+    p[6] = 97 as u8
+    p[7] = 114 as u8
+    p[8] = 121 as u8
+    f := os.Open(path, "wb")
+    _w := fwrite(p as void*, 1 as u64, 9 as u64, f as void*)
+    io.Close(f)
+    mem.Free(p as void*)
+end
+
+func make_link(target: str, link: str): bool:
+    if SALAM_OS_WINDOWS:
+        ret CreateSymbolicLinkA(link, target, 3 as u32) != (0 as u8)
+    else:
+        ret symlink(target, link) == 0
+    end
+end
+
+func browser_leftovers(): Vector<str>:
+    mut left := Vector {} as Vector<str>
+    base := os.TempDir()
+    entries := os.ListDir(base)
+    each e in entries:
+        if str.StartsWith(e, "salam-agent-browser-"):
+            left.push(filepath.Join(base, e))
+        end
+    end
+    ret left
+end
+
+func tail(s: str, n: int): str:
+    if s.len() > n:
+        ret s.substr(s.len() - n, n)
+    end
+    ret s
+end
+
+func main(): int:
+    all := os.Args()
+    if all.len() < 2:
+        printerrln "usage: test_agent <agent binary>"
+        ret 2
+    end
+    binary := filepath.Abs(all.get(1))
+    root := temp.Directory()
+    if root == "":
+        printerrln "test_agent: cannot create a temporary directory"
+        ret 2
+    end
+    _a := os.MkdirAll(filepath.Join(root, "work"))
+    workspace_real := os.RealPath(filepath.Join(root, "work"))
+    g_workspace = workspace_real
+    ws := g_workspace
+    home := filepath.Join(root, "home")
+    _b := os.MkdirAll(home)
+    write_text(filepath.Join(home, "hidden.txt"), "home secret\n")
+    write_text(filepath.Join(ws, "a.txt"), "hello world\nسلام\n")
+    write_text(filepath.Join(ws, "AGENTS.md"), "be kind\n")
+    write_text(filepath.Join(ws, ".gitignore"), "skipped/\n*.log\n")
+    _c := os.MkdirAll(filepath.Join(ws, "skipped"))
+    write_text(filepath.Join(filepath.Join(ws, "skipped"), "b.txt"), "hello hidden\n")
+    write_text(filepath.Join(ws, "x.log"), "hello log\n")
+    _k := os.MkdirAll(filepath.Join(ws, ".salam-agent/memory"))
+    write_text(filepath.Join(ws, ".salam-agent/memory/keep.md"), "---\ntitle: Keep\n---\nkept\n")
+    outside := filepath.Join(root, "outside.txt")
+    write_text(outside, "secret\n")
+    has_symlink := make_link(root, filepath.Join(ws, "escape"))
+    write_text(filepath.Join(ws, "Makefile"), "test:\n\techo made-test\n")
+    write_binary(filepath.Join(ws, "big.bin"))
+
+    g_calls.push(call_json("read", "read_file", `{"path": "a.txt"}`, ws))
+    g_calls.push(call_json("list", "list_dir", `{"path": "."}`, ws))
+    g_calls.push(call_json("glob", "glob", `{"pattern": "**/*.txt"}`, ws))
+    g_calls.push(call_json("grep", "grep", `{"pattern": "HELLO", "ignore_case": true}`, ws))
+    g_calls.push(call_json("shell", "shell", `{"command": "echo out; echo err >&2; pwd", "shell": "sh"}`, ws))
+    g_calls.push(call_json("write", "write_file", `{"path": "new/dir/b.txt", "content": "made\n"}`, ws))
+    g_calls.push(call_json("edit", "edit_file", `{"path": "a.txt", "old_text": "world", "new_text": "salam"}`, ws))
+    g_calls.push(call_json("git", "write_file", `{"path": ".git/config", "content": ""}`, ws))
+    g_calls.push(call_json("up", "read_file", `{"path": "../outside.txt"}`, ws))
+    g_calls.push(call_json("shellout", "shell", `{"command": ` + json.Str("cat " + outside) + `, "shell": "sh"}`, ws))
+    g_calls.push(call_json("shellrel", "shell", `{"command": "cd .. && cat outside.txt", "shell": "sh"}`, ws))
+    g_calls.push(call_json("shellparent", "shell", `{"command": "ls ..", "shell": "sh"}`, ws))
+    if has_symlink:
+        g_calls.push(call_json("shelllink", "shell", `{"command": "cat escape", "shell": "sh"}`, ws))
+    end
+    g_calls.push(call_json("shellhome", "shell", `{"command": "cat $HOME/hidden.txt", "shell": "sh"}`, ws))
+    g_calls.push(call_json("shellbrace", "shell", `{"command": "cat ${HOME}/hidden.txt", "shell": "sh"}`, ws))
+    g_calls.push(call_json("shelldollar", "shell", `{"command": "echo $?", "shell": "sh"}`, ws))
+    g_calls.push(call_json("shelloptin", "shell", `{"command": "echo -Isrc/include", "shell": "sh"}`, ws))
+    g_calls.push(call_json("shelloptout", "shell", `{"command": "echo -I/tmp/inc", "shell": "sh"}`, ws))
+    if SALAM_OS_WINDOWS:
+        g_calls.push(call_json("shellwin", "shell", `{"command": "echo hi > %TEMP%\\salam-agent-outside.txt", "shell": "cmd"}`, ws))
+        g_calls.push(call_json("shellps", "shell", `{"command": "echo hi > $env:TEMP\\salam-agent-outside.txt", "shell": "powershell"}`, ws))
+    end
+    g_calls.push(call_json("save", "save_memory", `{"title": "Build steps", "description": "how", "content": "run it"}`, ws))
+    g_calls.push(call_json("forget", "forget_memory", `{"slug": "keep"}`, ws))
+    g_calls.push(call_json("badslug", "forget_memory", `{"slug": "../x"}`, ws))
+    g_calls.push(call_json("fail", "shell", `{"command": "exit 3", "shell": "sh"}`, ws))
+    g_calls.push(call_json("missing", "nope", "{}", ws))
+    g_calls.push(call_json("symlink", "read_file", `{"path": "escape/outside.txt"}`, ws))
+    g_calls.push(call_json("binary", "read_file", `{"path": "big.bin"}`, ws))
+    g_calls.push(call_json("nofolder", "read_file", `{"path": "a.txt"}`, filepath.Join(root, "no-such-folder")))
+    g_calls.push(call_json("tests", "run_tests", `{"shell": "sh"}`, ws))
+    g_calls.push(call_json("loud", "shell", `{"command": "yes 0123456789 | head -c 200000", "shell": "sh"}`, ws))
+    g_calls.push(call_json("slow", "shell", `{"command": "sleep 30 & sleep 30; echo never", "shell": "sh", "timeout": 1}`, ws))
+    g_calls.push(call_json("stopme", "shell", `{"command": "echo started-stopme; sleep 30", "shell": "sh"}`, ws))
+    g_calls.push(call_json("noprog", "shell", `{"command": "exit 0", "shell": "no-such-shell-xyz"}`, ws))
+    g_calls.push(call_json("docker", "docker", `{"args": ["ps", "a b"], "cwd": "."}`, ws))
+    g_calls.push(call_json("wsl", "wsl", `{"command": "ls"}`, ws))
+
+    mut r := router.NewRouter()
+    router.Get(r, "/", page_handler)
+    router.Get(r, "/site", site_handler)
+    router.Get(r, "/site2", site2_handler)
+    router.Get(r, "/bridge/poll", poll_handler)
+    router.Post(r, "/report", report_handler)
+    router.Post(r, "/bridge/devices", devices_handler)
+    router.Post(r, "/bridge/result", result_handler)
+    mut server := http.NewServer(0)
+    http.HideTokens(server)
+    http.SetHost(server, "127.0.0.1")
+    http.Use(server, r)
+    port := http.RunBackgroundPort(server)
+    if port <= 0:
+        printerrln "test_agent: cannot start the fake backend"
+        ret 2
+    end
+    url := "http://127.0.0.1:" + str.FromInt(port as i64)
+
+    has_browser := os.Env("SALAM_AGENT_BROWSER") != ""
+    if has_browser:
+        g_calls.push(call_json("b_badact", "browser", `{"action": "dance"}`, ws))
+        g_calls.push(call_json("b_badkey", "browser", `{"action": "press", "key": "Hyper+x"}`, ws))
+        g_calls.push(call_json("b_badurl", "browser", `{"action": "open", "url": "javascript:alert(1)"}`, ws))
+        g_calls.push(call_json("b_open", "browser", `{"action": "open", "url": ` + json.Str(url + "/site") + `}`, ws))
+        g_calls.push(call_json("b_text", "browser", `{"action": "text"}`, ws))
+        g_calls.push(call_json("b_click", "browser", `{"action": "click", "selector": "#btn"}`, ws))
+        g_calls.push(call_json("b_eval", "browser", `{"action": "eval", "script": "document.getElementById('copy').textContent"}`, ws))
+        g_calls.push(call_json("b_evalret", "browser", `{"action": "eval", "script": "return 40 + 2;"}`, ws))
+        g_calls.push(call_json("b_evalbad", "browser", `{"action": "eval", "script": "throw new Error('boom')"}`, ws))
+        g_calls.push(call_json("b_type", "browser", `{"action": "type", "selector": "#name", "text": "سارا"}`, ws))
+        g_calls.push(call_json("b_select", "browser", `{"action": "select", "selector": "#pick", "text": "Berry"}`, ws))
+        g_calls.push(call_json("b_selectbad", "browser", `{"action": "select", "selector": "#pick", "text": "Nope"}`, ws))
+        g_calls.push(call_json("b_wait", "browser", `{"action": "wait", "text": "ready now"}`, ws))
+        g_calls.push(call_json("b_missing", "browser", `{"action": "click", "selector": "#none"}`, ws))
+        g_calls.push(call_json("b_hover", "browser", `{"action": "hover", "selector": "#btn"}`, ws))
+        g_calls.push(call_json("b_scroll", "browser", `{"action": "scroll", "y": 500}`, ws))
+        g_calls.push(call_json("b_shot", "browser", `{"action": "screenshot", "full_page": true}`, ws))
+        g_calls.push(call_json("b_console", "browser", `{"action": "console"}`, ws))
+        g_calls.push(call_json("b_network", "browser", `{"action": "network"}`, ws))
+        g_calls.push(call_json("b_next", "browser", `{"action": "click", "selector": "#next"}`, ws))
+        g_calls.push(call_json("b_back", "browser", `{"action": "back"}`, ws))
+        g_calls.push(call_json("b_reload", "browser", `{"action": "reload"}`, ws))
+        g_calls.push(call_json("b_small", "browser", `{"action": "screenshot", "width": 400, "height": 600}`, ws))
+        g_calls.push(call_json("b_local", "browser", `{"action": "open", "url": ` + json.Str("file://" + str.Replace(outside, "\\", "/")) + `}`, ws))
+        g_calls.push(call_json("b_close", "browser", `{"action": "close"}`, ws))
+        g_calls.push(call_json("b_closed", "browser", `{"action": "close"}`, ws))
+    end
+    g_expected = g_calls.len()
+    trace_path := filepath.Join(root, "webview-trace.log")
+
+    mut cmd := process.NewCommand(binary)
+    cmd.stdout_mode = process.Pipe
+    cmd.stderr_mode = process.Merge
+    home_s := home
+    cmd.Env("HOME", home_s)
+    cmd.Env("USERPROFILE", home_s)
+    cmd.Env("APPDATA", filepath.Join(home, "roaming"))
+    cmd.Env("LOCALAPPDATA", filepath.Join(home, "local"))
+    cmd.Env("XDG_DATA_HOME", filepath.Join(home, "data"))
+    cmd.Env("SALAM_AGENT_DEBUG", "1")
+    cmd.Env("SALAM_WEBVIEW_TRACE", trace_path)
+    cmd.Env("SALAM_APP_URL", url + "/")
+    cmd.Env("SALAM_API_URL", url)
+    _d := os.MkdirAll(filepath.Join(home, "roaming"))
+    _e := os.MkdirAll(filepath.Join(home, "local"))
+    mut ch := process.Launch(cmd)
+    cmd.Free()
+    if not ch.ok:
+        printerrln "test_agent: cannot start " + binary + ": " + ch.error
+        ret 2
+    end
+
+    mut log := ""
+    deadline := sync.NowMs() + 240000
+    mut finished := false
+    until not finished and sync.NowMs() < deadline:
+        mut c := ch.ReadAvailable(25)
+        if c.len > 0:
+            log = tail(log + c.data, 65536)
+        end
+        c.Free()
+        sync.Lock(g_lock)
+        finished = g_done
+        sync.Unlock(g_lock)
+    end
+
+    sync.Lock(g_lock)
+    mut answered := ""
+    each id in g_result_ids:
+        answered = answered + id + " "
+    end
+    sync.Unlock(g_lock)
+    verdict("every call answered", finished, answered)
+    if not finished and SALAM_OS_MAC:
+        mut sargs := Vector {} as Vector<str>
+        sargs.push(str.FromInt(ch.pid as i64))
+        sargs.push("2")
+        mut sr := process.RunTimeout("sample", sargs, "", 30000)
+        println clip(sr.stdout, 6000)
+        sr.Free()
+        sargs.free()
+    end
+
+    info := report_of("info")
+    verdict("info", (json.Get(info, "device") == "" or json.Get(info, "device") == "null") and json.Get(info, "os") != "" and json.Has(info, "version"), info)
+    link := report_of("link")
+    verdict("link", g_linked and json.Get(link, "device") != "" and json.Get(json.Get(link, "device"), "id") == "7", link)
+    verdict("prefs default", json.Get(report_of("prefs"), "lang") == "fa", report_of("prefs"))
+    verdict("prefs set", json.Get(report_of("setprefs"), "lang") == "en", report_of("setprefs"))
+    verdict("watch rejects a bad chat", report_of("badwatch") == "invalid chat id", report_of("badwatch"))
+    ctx := report_of("context")
+    verdict("project context", json.Get(ctx, "instructions_file") == "AGENTS.md" and has(json.Get(ctx, "instructions"), "be kind"), ctx)
+    verdict("no page exception", not report_has("exception"), report_of("exception"))
+    verdict("read", rf("read", "status") == "ok" and has(rf("read", "output"), "سلام"), result_of("read"))
+    verdict("list", has(rf("list", "output"), "a.txt"), result_of("list"))
+    verdict("glob skips gitignored", has(rf("glob", "output"), "a.txt") and not has(rf("glob", "output"), "skipped"), result_of("glob"))
+    grep := rf("grep", "output")
+    verdict("grep ignores case and gitignore", has(grep, "a.txt:1:") and not has(grep, "hidden") and not has(grep, "x.log"), grep)
+    sh := rf("shell", "output")
+    verdict("shell runs after approval", rf("shell", "status") == "ok" and has(sh, "out") and has(sh, "err") and has(sh, filepath.Base(ws)), result_of("shell"))
+    verdict("write denied when asked", rf("write", "status") == "denied", result_of("write"))
+    verdict("edit denied, diff previewed", rf("edit", "status") == "denied" and has(rf("edit", "detail"), "+hello salam") and has(rf("edit", "detail"), "-hello world"), result_of("edit"))
+    verdict("git refused", rf("git", "status") == "error", result_of("git"))
+    verdict("outside asks and is denied", rf("up", "status") == "denied" and rf("up", "outside") == "true", result_of("up"))
+    verdict("outside shell asks and is denied", rf("shellout", "status") == "denied" and rf("shellout", "outside") == "true", result_of("shellout"))
+    verdict("parent shell path asks and is denied", rf("shellrel", "status") == "denied" and rf("shellrel", "outside") == "true", result_of("shellrel"))
+    verdict("bare parent asks and is denied", rf("shellparent", "status") == "denied" and rf("shellparent", "outside") == "true", result_of("shellparent"))
+    verdict("bare symlink asks and is denied", not has_symlink or (rf("shelllink", "status") == "denied" and rf("shelllink", "outside") == "true"), result_of("shelllink"))
+    verdict("home variable asks and is denied", rf("shellhome", "status") == "denied" and rf("shellhome", "outside") == "true", result_of("shellhome"))
+    verdict("braced home variable asks and is denied", rf("shellbrace", "status") == "denied" and rf("shellbrace", "outside") == "true", result_of("shellbrace"))
+    verdict("dollar alone is not a hang or a path", rf("shelldollar", "status") == "ok" and rf("shelldollar", "outside") == "false", result_of("shelldollar"))
+    verdict("relative option value stays inside", rf("shelloptin", "status") == "ok" and rf("shelloptin", "outside") == "false", result_of("shelloptin"))
+    verdict("absolute option value asks and is denied", rf("shelloptout", "status") == "denied" and rf("shelloptout", "outside") == "true", result_of("shelloptout"))
+    if SALAM_OS_WINDOWS:
+        verdict("cmd variable asks and is denied", rf("shellwin", "status") == "denied" and rf("shellwin", "outside") == "true", result_of("shellwin"))
+        verdict("powershell variable asks and is denied", rf("shellps", "status") == "denied" and rf("shellps", "outside") == "true", result_of("shellps"))
+    end
+    verdict("memory saved without asking", rf("save", "status") == "ok" and has(rf("save", "output"), "build-steps"), result_of("save"))
+    verdict("memory forgotten", rf("forget", "status") == "ok", result_of("forget"))
+    verdict("bad slug refused", rf("badslug", "status") == "error", result_of("badslug"))
+    verdict("exit code reported", rf("fail", "status") == "error" and has(rf("fail", "output"), "exit code 3"), result_of("fail"))
+    verdict("unknown tool", rf("missing", "status") == "error", result_of("missing"))
+    sync.Lock(g_lock)
+    mut names := ""
+    mut saw_pending := false
+    mut saw_done := false
+    mut saw_output := false
+    mut saw_browser_pending := false
+    mut connected := false
+    repeat g_names.len() in i:
+        n := g_names.get(i)
+        names = names + n + " "
+        if n == "call:shell:pending": saw_pending = true end
+        if n == "call:shell:done": saw_done = true end
+        if n == "output": saw_output = true end
+        if n == "call:browser:pending": saw_browser_pending = true end
+        if n == "connection" and g_values.get(i) == "true": connected = true end
+    end
+    sync.Unlock(g_lock)
+    verdict("call events", saw_pending and saw_done, names)
+    verdict("output streamed", saw_output, names)
+    verdict("connected", connected, names)
+    if has_browser:
+        verdict("browser refuses a bad action", rf("b_badact", "status") == "error", result_of("b_badact"))
+        verdict("browser refuses a bad key", rf("b_badkey", "status") == "error", result_of("b_badkey"))
+        verdict("browser refuses javascript links", rf("b_badurl", "status") == "error", result_of("b_badurl"))
+        verdict("browser open", rf("b_open", "status") == "ok" and has(rf("b_open", "output"), "(200)") and has(rf("b_open", "output"), `"site"`), rf("b_open", "output"))
+        verdict("browser open sends a screenshot", rf("b_open", "image").len() > 1000 and rf("b_open", "image_mime") == "image/jpeg", rf("b_open", "image_mime"))
+        verdict("browser done event announces its screenshot", report_of("shot:b_open") == "yes", report_of("shot:b_open"))
+        verdict("browser reports the 404 image", has(rf("b_open", "output"), "missing.png") or has(rf("b_text", "output"), "missing.png"), rf("b_open", "output"))
+        t := rf("b_text", "output")
+        verdict("browser text outline", has(t, "سلام from the site") and has(t, "Site heading") and has(t, "Second page") and has(t, "Press me"), t)
+        verdict("browser click", rf("b_click", "status") == "ok" and has(rf("b_click", "output"), "button"), rf("b_click", "output"))
+        verdict("browser click ran the page", has(rf("b_eval", "output"), "clicked"), rf("b_eval", "output"))
+        verdict("browser eval asks first", saw_browser_pending, names)
+        verdict("browser eval accepts return", has(rf("b_evalret", "output"), "42"), rf("b_evalret", "output"))
+        verdict("browser eval reports errors", rf("b_evalbad", "status") == "error" and has(rf("b_evalbad", "output"), "boom"), rf("b_evalbad", "output"))
+        verdict("browser type", rf("b_type", "status") == "ok" and has(rf("b_type", "output"), "سارا"), rf("b_type", "output"))
+        verdict("browser select", has(rf("b_select", "output"), "Berry"), rf("b_select", "output"))
+        verdict("browser select lists options", rf("b_selectbad", "status") == "error" and has(rf("b_selectbad", "output"), "Apple"), rf("b_selectbad", "output"))
+        verdict("browser wait", has(rf("b_wait", "output"), "Found"), rf("b_wait", "output"))
+        verdict("browser missing selector", rf("b_missing", "status") == "error" and has(rf("b_missing", "output"), "#none"), rf("b_missing", "output"))
+        verdict("browser hover", rf("b_hover", "status") == "ok", rf("b_hover", "output"))
+        verdict("browser scroll", has(rf("b_scroll", "output"), "y=500"), rf("b_scroll", "output"))
+        verdict("browser full page shot", has(rf("b_shot", "output"), "x") and rf("b_shot", "image").len() > 1000, rf("b_shot", "output"))
+        con := rf("b_console", "output")
+        verdict("browser console", has(con, "hello log") and has(con, "warned"), con)
+        net := rf("b_network", "output")
+        verdict("browser network", has(net, "/site") and has(net, "GET 200"), net)
+        verdict("browser follows a link", has(rf("b_next", "output"), `"second"`), rf("b_next", "output"))
+        verdict("browser back", has(rf("b_back", "output"), `"site"`), rf("b_back", "output"))
+        verdict("browser reload", rf("b_reload", "status") == "ok", rf("b_reload", "output"))
+        verdict("browser viewport", has(rf("b_small", "output"), "400x600"), rf("b_small", "output"))
+        verdict("browser asks before a local file", rf("b_local", "status") == "denied" and rf("b_local", "outside") == "true", result_of("b_local"))
+        verdict("browser close", has(rf("b_close", "output"), "Closed"), rf("b_close", "output"))
+        verdict("browser closes once", has(rf("b_closed", "output"), "No browser"), rf("b_closed", "output"))
+        left := browser_leftovers()
+        verdict("browser profile removed", left.len() == 0, str.Join(left, " "))
+        left.free()
+    end
+    verdict("symlink out is treated as outside", not has_symlink or (rf("symlink", "status") == "denied" and rf("symlink", "outside") == "true"), result_of("symlink"))
+    verdict("binary refused", rf("binary", "status") == "error" and has(rf("binary", "output"), "binary"), result_of("binary"))
+    verdict("missing workspace explained", rf("nofolder", "status") == "error" and has(rf("nofolder", "output"), "does not exist"), result_of("nofolder"))
+    verdict("run_tests finds make", has(rf("tests", "detail"), "make test"), result_of("tests"))
+    loud := rf("loud", "output")
+    verdict("output capped head and tail", has(loud, "bytes cut") and loud.len() < 32000, str.FromInt(loud.len() as i64))
+    slow := rf("slow", "output")
+    verdict("timeout kills the tree", rf("slow", "status") == "error" and has(slow, "timed out") and not has(slow, "never"), result_of("slow"))
+    stopme := rf("stopme", "output")
+    verdict("stop kills a running command", has(stopme, "stopped by the user") and has(stopme, "started-stopme"), result_of("stopme"))
+    verdict("docker quotes its preview", has(rf("docker", "detail"), "'a b'") or has(rf("docker", "detail"), `"a b"`), result_of("docker"))
+    verdict("wsl refused off Windows", SALAM_OS_WINDOWS or rf("wsl", "status") == "error", result_of("wsl"))
+    verdict("files untouched by denied calls", not os.Exists(filepath.Join(ws, "new")) and has(io.ReadFile(filepath.Join(ws, "a.txt")), "hello world"), "")
+
+    _t := ch.Terminate()
+    st := ch.Wait(5000)
+    if st.timed_out:
+        _k := ch.Kill()
+        _w := ch.Wait(5000)
+    end
+    mut rest := ch.ReadFor(100)
+    log = tail(log + rest.data, 65536)
+    rest.Free()
+    ch.Close()
+    nfail := g_failures.len()
+    if nfail > 0:
+        println tail(log, 2000)
+        if os.Exists(trace_path):
+            println tail(io.ReadFile(trace_path), 2000)
+        end
+    end
+    _rm := temp.RemoveDir(root)
+    println str.FromInt(nfail as i64) + " failed"
+    if nfail > 0:
+        ret 1
+    end
+    ret 0
+end

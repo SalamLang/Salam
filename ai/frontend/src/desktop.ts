@@ -32,6 +32,8 @@ export type AgentCall = {
   state: CallState;
   output: string;
   image?: boolean;
+  image_data?: string;
+  image_mime?: string;
 };
 
 export type AgentInfo = {
@@ -61,6 +63,7 @@ export type NotifyPrefs = {
 
 export const agent = {
   info: () => call<AgentInfo>("agent_info"),
+  openUrl: (url: string) => call<void>("agent_open_url", { url }),
   link: (token: string) => call<AgentInfo>("agent_link", { token }),
   unlink: (token: string) => call<AgentInfo>("agent_unlink", { token }),
   pickFolder: () => call<string | null>("agent_pick_folder"),
@@ -81,6 +84,48 @@ export const agent = {
   setNotifyPrefs: (prefs: NotifyPrefs) =>
     call<NotifyPrefs>("agent_set_notify_prefs", { prefs }),
 };
+
+const EXTERNAL = /^(https?:|mailto:)/i;
+
+export function openExternal(url: string): void {
+  if (isDesktop) {
+    call<void>("agent_open_url", { url }).catch(() => {
+      // Older agents have no such command: a same-window navigation still
+      // reaches on_navigation, which opens the browser and cancels the load.
+      // Only http(s) and mailto reach here, so the app cannot leave its origin.
+      window.location.href = url;
+    });
+    return;
+  }
+  window.open(url, "_blank", "noopener");
+}
+
+/**
+ * In the desktop app a `target="_blank"` link does nothing on macOS: the
+ * WKWebView never asks the app to open the new window, so the click is lost.
+ * Route every external link through the native command instead; the browser
+ * build keeps its normal anchors.
+ */
+export function installLinkHandler(): void {
+  if (!isDesktop) return;
+  document.addEventListener(
+    "click",
+    (event) => {
+      if (event.defaultPrevented || event.button !== 0) return;
+      if (event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)
+        return;
+      const target = event.target as Element | null;
+      const anchor = target?.closest?.("a[href]") as HTMLAnchorElement | null;
+      if (!anchor) return;
+      const href = anchor.getAttribute("href") || "";
+      if (!EXTERNAL.test(href)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      openExternal(href);
+    },
+    true,
+  );
+}
 
 export function onAgent(handlers: {
   call: (c: AgentCall) => void;

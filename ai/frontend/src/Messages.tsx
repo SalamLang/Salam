@@ -12,6 +12,7 @@ const PHASE_TEXT: Record<string, string> = {
   thinking: t("در حال فکر کردن", "Thinking"),
   searching: t("در حال بررسی مستندات سلام", "Checking the Salam docs"),
   working: t("در حال کار روی رایانه‌ی شما", "Working on your computer"),
+  cloud_working: t("در حال کار در محیط ابری", "Working in the cloud sandbox"),
   writing: t("در حال نوشتن", "Writing"),
   checking: t("در حال اصلاح کد با کامپایلر سلام", "Fixing the code with the Salam compiler"),
 };
@@ -64,6 +65,7 @@ function useSmoothText(target: string, animate: boolean): string {
 
 type Tools = {
   calls?: CallView[];
+  cloud?: boolean;
   onDecide?: (id: string, a: AgentAnswer) => void;
   onStop?: (id: string) => void;
 };
@@ -90,15 +92,52 @@ const DESKTOP_TOOLS = new Set([
 function withCalls(m: Message, live: CallView[]): CallView[] {
   const all = new Map<string, CallView>();
   for (const c of m.calls ?? []) all.set(c.call_id, c as CallView);
-  for (const c of live) all.set(c.call_id, c);
+  for (const c of live) {
+    const old = all.get(c.call_id);
+    all.set(c.call_id, {
+      ...old,
+      ...c,
+      image: c.image || old?.image,
+      image_data: c.image_data || old?.image_data,
+      image_mime: c.image_mime || old?.image_mime,
+    });
+  }
   return [...all.values()];
 }
 
-function timeline(steps: ActivityStep[], body: string, calls: CallView[]): TimelineItem[] {
+// The message body is the turn's final text, so it belongs after every step
+// and tool card. A finished turn often ends with an error body (the engine
+// failed after the tools ran) and has no text step; before, that body was
+// drawn above the cards, as if it had been added first. When the narration
+// steps already say the same thing, only the tail that they do not cover is
+// shown, so a final answer is never printed twice.
+//
+// While the turn streams, a body that is still growing is covered as soon as
+// the narration contains it. Once it is final, it only counts as covered when
+// it is the last thing the narration says: the same text that appeared before
+// a tool card is drawn again under that card, where the turn ends. An error
+// body is always drawn there, and a narration step that repeats it is dropped,
+// so the error closes the message exactly once.
+function tailText(steps: ActivityStep[], body: string, status: Message["status"]): string {
+  const rest = body.trim();
+  if (!rest) return "";
+  if (status === "error") return rest;
+  const whole = steps
+    .filter((s) => s.kind === "text")
+    .map((s) => s.text)
+    .join("\n\n")
+    .trim();
+  if (!whole) return rest;
+  if (status === "pending" ? whole.includes(rest) : whole.endsWith(rest)) return "";
+  if (rest.startsWith(whole)) return rest.slice(whole.length).trim();
+  return rest;
+}
+
+function timeline(steps: ActivityStep[], body: string, calls: CallView[], status: Message["status"]): TimelineItem[] {
   const items: TimelineItem[] = [];
   const used = new Set<string>();
+  const closing = status === "error" ? body.trim() : "";
   let boxes: (ThinkStep | ToolStep)[] = [];
-  let sawText = false;
   const flush = () => {
     if (boxes.length > 0) {
       items.push({ kind: "boxes", items: boxes });
@@ -107,8 +146,10 @@ function timeline(steps: ActivityStep[], body: string, calls: CallView[]): Timel
   };
   for (const s of steps) {
     if (s.kind === "text") {
+      // An error body is drawn once, at the end. When a narration step already
+      // repeats it, that step would show the same sentence above the cards.
+      if (closing && s.text.trim() === closing) continue;
       flush();
-      sawText = true;
       items.push({ kind: "text", text: s.text });
       continue;
     }
@@ -124,9 +165,10 @@ function timeline(steps: ActivityStep[], body: string, calls: CallView[]): Timel
     boxes.push(s);
   }
   flush();
-  if (!sawText && body) items.push({ kind: "text", text: body });
   const rest = calls.filter((c) => !used.has(c.call_id));
   if (rest.length > 0) items.push({ kind: "calls", calls: rest });
+  const tail = tailText(steps, body, status);
+  if (tail) items.push({ kind: "text", text: tail });
   return items;
 }
 
@@ -142,13 +184,14 @@ function TextGroupView({ text, live }: { text: string; live: boolean }) {
   );
 }
 
-function AssistantMessage({ m, calls = [], onDecide = () => {}, onStop = () => {} }: { m: Message } & Tools) {
+function AssistantMessage({ m, calls = [], cloud = false, onDecide = () => {}, onStop = () => {} }: { m: Message } & Tools) {
   const pending = m.status === "pending";
   const phase = m.phase || "thinking";
   const all = withCalls(m, calls);
   const waiting = all.some((c) => c.state === "pending" || c.state === "running");
   const steps = m.activity ?? [];
-  const items = timeline(steps, uiText(m.body), all);
+  const items = timeline(steps, uiText(m.body), all, m.status);
+  const working = cloud ? PHASE_TEXT.cloud_working : PHASE_TEXT.working;
   const showPhase = pending && all.length > 0 && !waiting && m.body.length === 0;
   return (
     <div className={`msg assistant ${m.status}`}>
@@ -180,7 +223,7 @@ function AssistantMessage({ m, calls = [], onDecide = () => {}, onStop = () => {
               <i />
               <i />
             </span>
-            {all.length > 0 ? PHASE_TEXT.working : PHASE_TEXT[phase] || PHASE_TEXT.thinking}
+            {all.length > 0 ? working : PHASE_TEXT[phase] || PHASE_TEXT.thinking}
           </div>
         )}
         {!pending && m.body && (

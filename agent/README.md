@@ -9,10 +9,11 @@ It is a [Tauri 2](https://tauri.app) app written in Rust. It uses the
 system webview (WebView2, WKWebView or WebKitGTK), not Electron.
 
 `salam/` holds a port written entirely in Salam on
-[`std/gui/desktop`](../docs/DESKTOP.md). It behaves like the Rust app. Build it with
+[`std/gui/webview`](../docs/DESKTOP.md). It behaves like the Rust app. Build it with
 `salam bundle agent/salam`, and test it with
-`xvfb-run python3 agent/salam/test_agent.py <binary>`, which drives it from a
-real page against a fake backend. Set `SALAM_AGENT_BROWSER` to also test the
+`salam build agent/salam/test_agent.salam --output=test-agent` and then
+`xvfb-run ./test-agent <binary>`, which drives it from a real page against a
+fake backend. Set `SALAM_AGENT_BROWSER` to also test the
 `browser` tool against Chrome. Set `SALAM_AGENT_DEBUG=1` to use `SALAM_APP_URL`,
 `SALAM_API_URL` and `SALAM_BRIDGE_URL`.
 
@@ -123,6 +124,16 @@ You pick one per chat in the composer.
 The last level accepts every tool call everywhere on the computer. Choosing
 it asks for confirmation first, and the select marks it in red while it is
 active. It is meant for a task you fully trust, not as a default.
+
+"Outside" means any path outside the chosen folder, whether a file tool names
+it directly or a command mentions it (`cat /tmp/report`, `cd ~`, `-o /tmp/x`,
+`..`, or a symlink that leads out). Shell, test, Docker and WSL calls are
+checked the same way as `read_file` and `write_file`, so `/tmp/report` asks in
+the same levels however the assistant reaches it.
+
+The command check reads the command text. A path that a script or a shell
+expression builds at runtime can still get past it, so the access level is the
+real boundary; choose it for what the task may touch.
 
 Writes inside `.git/` are always refused. A running command can be stopped
 from its card. Output is capped at 30 KB (head and tail are kept), and

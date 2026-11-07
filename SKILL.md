@@ -35,11 +35,11 @@ This skill has two parts:
   Persian programs. Read Part I for semantics and Part II for spelling; the
   semantics never differ.
 
-There is also a 25-lesson human tutorial of the language, in Persian at
+There is also a 46-lesson human tutorial of the language, in Persian at
 **<https://www.salamlang.ir/learn/>** and in English at
 **<https://salamlang.github.io/Salam/learn/>** (one page per topic, every
 example compiled and run), and a reference page for every std package under
-`/std/<slug>/` on both sites (see §5).
+`/std/<slug>/` on both sites (see §5), and a package manager guide at `/packages/` (see §10).
 
 > **Source of truth.** When a detail is missing here, read real code:
 > `std/<pkg>/*.salam` for exact stdlib signatures, and
@@ -57,7 +57,7 @@ example compiled and run), and a reference page for every std package under
 7. Translating from PHP / TS-JS / Python / C-Go-Rust
 8. FFI, concurrency, conditional compilation
 9. Layout DSL (HTML/CSS/JS)
-10. Tooling & verification
+10. Tooling & verification (downloads, what Salam can do, Cloudflare Workers)
 11. When a detail is missing
 12. **Porting C → Salam & self-hosting the compiler** (bit ops, unions, the module map)
 13. **Persian:** source basics (digits, commas, detection, the entry `ریشه`)
@@ -197,6 +197,17 @@ right-associative and tighter than unary minus (`2 ** 3 ** 2 == 512`,
 `x as i64 ** 2` is a cast then a power. There is no `&&`, `||`, `!` or `^^`:
 the compiler rejects them and names the word to write instead.
 `^` on its own remains bitwise XOR.
+**Update a variable in place, never by assigning it to itself.** Add or
+subtract exactly one with `x++` / `x--` (Persian `ک++`), and use `x += n`,
+`x -= n`, `x *= n`, ... for every other amount. The long forms are compile
+error `E162`: `x = x + 1`, `x = 1 + x`, `x += 1`, `x -= 1` (write `x++` /
+`x--`); `x = x + n`, `x = n + x`, `x = x * n`, `x = x << n`, `x = x | n`, ...
+(write `x += n`, `x *= n`, ...); and the statements that do nothing, `x = x`,
+`x = x + 0`, `x = x - 0`, `x = x * 1`, `x = x / 1`, `x += 0`, `x |= 0`,
+`x <<= 0` (remove them). It applies to numbers and to `str` (`s = s + t`
+becomes `s += t`; `s = t + s` is a prepend and stays), to plain variables,
+fields (`this.n`, `p.x`), arrays and pointers (`a[i]`, `p[0]`). `x = y - x`,
+`x = x * y + z` and `x = x + y + z` are not self-updates and stay legal.
 **Bitwise operators** (integer operands only): `& | ^ ~` and shifts `<< >>`, with
 compound forms `&= |= ^= <<= >>=`. Precedence follows C: shifts bind tighter than
 comparisons; `&` tighter than `^` tighter than `|`, all looser than `==`
@@ -211,7 +222,7 @@ else x == 0:  println "zero"          // "else <cond>" is else-if
 else:  println "negative"
 end
 
-until i < n:  i = i + 1  end          // loops WHILE the condition holds - "while" doesn't exist, see box below
+until i < n:  i++  end               // loops WHILE the condition holds - "while" doesn't exist, see box below
 repeat 3:  println "hi"  end          // do 3 times
 repeat n in i:  println i  end        // i = 0 .. n-1 ("in" binds the index)
 repeat 1 to 5:  ...  end              // 1..5 inclusive
@@ -336,7 +347,7 @@ end
   mutate the caller's value (in/out params, and to avoid copying big structs):
 
   ```salam
-  func bump(c &: Counter):  c.n = c.n + 1  end   // caller's Counter is modified
+  func bump(c &: Counter):  c.n++  end   // caller's Counter is modified
   func push_all(dst &: Vector<int>, src: Vector<int>): ... end
   ```
 
@@ -347,11 +358,11 @@ end
 - **Closures/lambdas** are first-class typed values, always written
   `(params): ... end` with an explicit `ret` for the value:
   `(x: int): ret x * 2 end`, or several statements
-  `(): n = n + 1  ret n  end`. Salam has no `=>` at all; it was removed in
+  `(): n++  ret n  end`. Salam has no `=>` at all; it was removed in
   0.5.0. Function-typed parameters: `func () int`, `func (int, int) bool`.
   - **Lambdas capture by value.** Each lambda gets its own copy of the outer
     variables at creation time: after `mut n := 1  g := (): ret n end  n = 5`,
-    `g()` is still `1`, and a block lambda that does `n = n + 1` changes its
+    `g()` is still `1`, and a block lambda that does `n++` changes its
     own copy (it counts across calls), never the caller's `n`. Share state
     through a pointer, a heap collection or a `mut` global.
   - **Never write a return type on a lambda.** `(x: int): int: ... end`
@@ -415,9 +426,19 @@ x, y = y, x                   // assign several targets at once (swap)
 
 ## 3. Types & data
 
-**Primitives:** `i8 i16 i32 i64`, `u8 u16 u32 u64`, `usize size`, `f32 f64`,
-`bool`, `char`, `str`, `void`. Aliases: `int`=`i32`, `uint`=`u32`,
+**Primitives:** `i8 i16 i32 i64 i128`, `u8 u16 u32 u64 u128`, `usize size`,
+`f32 f64`, `bool`, `char`, `str`, `void`. Aliases: `int`=`i32`, `uint`=`u32`,
 `float`=`f32`. Literals: `42` (int), `3.14` (f64), `true`/`false`, `null`.
+**128-bit integers:** `i128` and `u128` work on every backend and target, with
+the same operators as the other widths: `hi := ((a as u128) * (b as u128)) >> 64`
+compiles to one `mul` on 64-bit targets. A literal above `u64` takes the
+smallest of `i128`, `u128` that holds it; `x := 1 as u128 << 100`, `0xFF_FF as
+u128`. Mixed widths follow the usual rule (same signedness widens implicitly).
+Shift counts mask to 0-127. A float cast saturates and NaN gives 0. They cannot
+index, size or bound a `repeat` (E159: cast to `i64` first), `json` derive
+refuses them, and an `extern` function can use them only on 64-bit targets
+(E160). On `salam js` they are exact BigInts, but a value that passes through
+`i64`/`u64` there is still limited to 2^53.
 **Pointer-width integers:** `usize` is unsigned (C `size_t`; Persian
 `اندازه مثبت`), `size` is signed (C `intptr_t`; Persian `اندازه`). Both are 64
 bits on 64-bit targets and 32 bits on 32-bit ones (wasm32, arm32).
@@ -536,7 +557,7 @@ len(a)                                // length builtin: arrays, slices, str (a 
 ```salam
 struct Account:
     pub balance: int = 0              // pub = visible/usable outside; default value
-    pub func deposit(n: int):  this.balance = this.balance + n  end
+    pub func deposit(n: int):  this.balance += n  end
 end
 mut a := Account { balance = 100 }    // struct literal; omitted fields use defaults
 a.deposit(50)
@@ -545,6 +566,51 @@ println a.balance
 
 Fields and methods are **private by default**; add `pub` to expose. `this` is the
 receiver.
+
+A field with no default is **required**: a literal that omits it fails with
+`E028`. A field with a default is optional: `pub host: str` must be set in every
+literal, `pub port: int = 443` can be left out. The check runs on struct literals
+only, so `mut c: Client` and generic `T {}` still zero the field.
+
+**Conditional fields:** a struct can state which fields depend on each other.
+The compiler checks every struct literal against the rules, using which fields
+the literal writes, not their values.
+
+```salam
+struct Client:
+    pub host: str
+    pub user: str = ""
+    pub pass: str = ""
+    pub token: str = ""
+    pub cert: str = ""
+    pub key: str = ""
+    rule user needs pass          // user given: pass must be given too
+    rule allornone(cert, key)     // both or neither
+    rule anyof(user, token)       // at least one
+end
+```
+
+Forms: `rule a needs b, c`, `rule allornone(a, b)`, `rule oneof(a, b)` (exactly
+one), `rule anyof(a, b)` (at least one), `rule atmostone(a, b)`. Persian: `قاعده`,
+`نیازمند`, `باهم`, `فقط یکی`, `دست کم یکی`, `حداکثر یکی`. `rule` stays a legal field
+name. `E159` is a literal that breaks a rule, `E160` an invalid rule (unknown
+field, or a private field in a `pub` struct), `E161` rules no literal can satisfy,
+`W159` a rule that can never fail.
+
+A literal must carry the whole group: `Client { user = "u" }` is an error even if
+`c.pass = "p"` follows, and assigning to a field later is not checked.
+`Client { user = "" }` counts as given. When a guarantee must survive mutation,
+use an enum with data (`Basic(user: str, pass: str)`) or a constructor.
+
+A `needs` rule can test a value: `rule use_key == true needs key_pem`, also with
+numbers, strings and plain enum members (`rule mode == Mode.Tls needs cert`). The
+value on the right must be a literal or an enum member. An omitted field uses its
+default. If the literal's value is not a constant, the compiler assumes it may
+match and requires the field.
+
+`json.Unmarshal` enforces the same rules, a field with a default that a rule names
+is an optional key, and `json.Schema` emits `dependentRequired`, `oneOf`, `anyOf`
+and `not`. `UnmarshalLenient` ignores them.
 
 **`Self`** is the enclosing type, usable anywhere inside a `struct`, an
 `impl ... on T` block or a distinct type's body: as a return type, a parameter
@@ -594,7 +660,7 @@ combined with `pure`.
 struct Counter:
     n: int = 0
     pub func Count(): int:  ret this.n  end     // this is read-only here
-    pub mut func Tick():  this.n += 1  end
+    pub mut func Tick():  this.n++  end
 end
 mut c := Counter {}
 c.Tick()
@@ -617,7 +683,7 @@ struct RangeIter:
     pub stop: int = 0
     pub func has_next(): bool:  ret this.cur < this.stop  end
     pub func value(): int:      ret this.cur              end
-    pub func next():            this.cur = this.cur + 1   end
+    pub func next():            this.cur++   end
 end
 struct Range:
     pub lo: int = 0
@@ -886,6 +952,27 @@ o := option.Some(99)
 println option.UnwrapOr(o, 0)         // Some/None/IsSome/IsNone/Unwrap/UnwrapOr/Expect
 ```
 
+**`T?`** is short for `option.Option<T>` and needs no import. A struct field of
+type `T?` may be omitted from a literal (it starts empty, unless it has its own
+default such as `retries: int? = 3`). Plain values wrap automatically in struct literals, assignments, arguments, returns and defaults,
+and `null` means empty. Locals: `x := 5 as int?`, or `mut x: int?` assigned before
+it is read (reading it first is `E089`). In Persian `صحیح؟` works the same. Read
+with `is_some()`, `is_none()`, `unwrap_or(f)`, `unwrap()`, or the fields `present`
+and `value`. Check `is_some()` before using `value`: on an empty one it means
+nothing, and a `str` from `option.None()` is a null pointer that crashes. A `&: T?`
+parameter needs a `T?` variable, not a plain value. JSON:
+a `T?` field is an optional key, `null` decodes to empty, and an empty one
+encodes as `null` (or is left out with `@json "" "omitempty"`).
+
+```salam
+struct Client:
+    pub host: str
+    pub timeout: int?
+end
+c := Client { host = "x", timeout = 30 }
+println c.timeout.unwrap_or(5)
+```
+
 **Pointers & `null`:** `T*` is a pointer, `p[0]` dereferences, `null` is the
 null pointer. Used with FFI and `mem`: `p := mem.Allocate(8 as u64) as i64*`;
 `p[0] = 0`; `mem.Free(p as void*)`.
@@ -1006,9 +1093,15 @@ an exact signature, grep the package file.
 catch people out" list and a checked example for each function:
 `https://www.salamlang.ir/std/<slug>/` (Persian) and
 `https://salamlang.github.io/Salam/std/<slug>/` (English), where the slug is
-the import path with `/` as `-`: `str`, `db-sqlite`, `net-http`,
-`encoding-json`. The index is `/std/` on both sites. The `/learn/` course on
-both sites teaches the language only, not the libraries.
+the import path with its dots kept as folders: `str`, `db/sqlite`, `net/http`,
+`encoding/json`, `gui/webview`. The index is `/std/` on both sites. Nearly every
+page opens with short tutorials, sections whose anchor starts with `guide-`
+(for example `/std/net/httpd/#guide-...`, and the guides of `audio` and its
+`wav dsp codec aiff au flac tag music synth midi mp3`, `net/httpd`, `net/httpd/conf`,
+`net/fastcgi`, `db/clickhouse`, `dependency`, `net/nats`, `events`, `gui/webview`,
+`gui/webview/pack` and `gui/webview/bundle`); read the guide before calling
+the functions. The `/learn/` course on both sites teaches the language only,
+not the libraries.
 
 **Rules that hold across the whole library:**
 
@@ -1220,6 +1313,19 @@ learning half is `f32` on `std/tensor`; the classical half is `f64` on
 - **`os.process`**: `Start(path, args) StartCaptured Wait Kill Terminate ReadStdout ReadStderr Cleanup ExitCode Pid IsRunning`. `IsRunning` is a
   flag, not a live check; `Kill` only signals, so `Wait` after it (zombie);
   `Wait` has no timeout; `Cleanup` a captured run (two temp files).
+  For live pipes use `Command` (`NewCommand Arg Env Unset Piped`, fields
+  `cwd stdin_mode stdout_mode stderr_mode clear_env new_group`, modes
+  `Inherit Pipe Null Merge`) and `Launch(cmd): Child`; `Child` has `Write
+WriteBytes CloseStdin ReadAvailable ReadLine Read ReadUntil ReadFor
+ReadBytes ReadErr* Wait(ms) Poll Signal Kill Terminate SignalGroup
+KillGroup Close`. Reads take a time in ms (0 only looks, negative waits
+  for ever) and return a `Chunk` (`data len eof timed_out`, `Free` it);
+  `Wait(ms)` returns a `Status` (`exited code signaled signal timed_out`,
+  `Success ReturnCode`). `RunTimeout(program, args, text, ms)` and
+  `RunCommand` capture stdout and stderr without deadlock and kill on
+  timeout (`RunResult`, `Free` it). **`os.pty`** `Open(cmd, rows, cols):
+process.Child` runs a program on a pseudo terminal (POSIX only; type
+  `\r` for Enter), `Resize GetSize Supported`.
   **`os.shell`** `Run Exec System` (code, stdout and stderr together),
   **`os.temp`** `File Directory Remove RemoveDir` (`Directory` returns `""`
   on failure; `File` always returns a path), **`os.user`** `Username HomeDir ConfigDir CacheDir` (env based; never for permissions), **`os.platform`**
@@ -1238,6 +1344,13 @@ learning half is `f32` on `std/tensor`; the classical half is `f64` on
   (`Join("a/b", "../c")` is `a/b/../c`) and an absolute second part is
   appended, not substituted; `Ext` is only the last extension; check user
   paths with `IsSafe` before using them.
+  Globbing: `filepath.Match(pattern, name)` (`* ? [a-c] [!a-c] \`, and `**` crosses `/`), `HasMeta`, `fs.dir.Glob(pattern)` and
+  `fs.dir.WalkMatch(root, pattern)` (sorted, free the vector).
+- **`text.diff`** `Lines Unified UnifiedText Opcodes GroupedOpcodes Ratio RatioText` (output equals `difflib.unified_diff`; equal inputs give
+  nothing, not even a header), **`encoding.html`** `Unescape Escape EscapeText` (same answers as Python's `html.unescape`),
+  **`encoding.binary`** `View` getters and setters at an offset (`GetU32LE(v, off)`, `PutU16BE`, `CStringAt`, `FixedStringAt`; out of range
+  reads 0), **`os.mmap`** `Alloc Protect Free PageSize` (`PROT_READ|PROT_WRITE|PROT_EXEC`; map writable, then `Protect` to execute) and
+  **`os.dl`** `Open OpenSelf Sym Close Error Call(fn, args: size[])` (up to 8 integer or pointer arguments, no floats or varargs; POSIX only).
 - **`env`**: `Get GetOr Has GetInt GetFloat GetBool Set Unset Mask GetMasked Profile IsProduction IsDevelopment Load Overload LoadDotEnv LoadProfile Expand`. `GetInt` turns `abc` into 0 and `12px` into 12; `GetBool` accepts
   only lower-case `true 1 yes on`; `Load` never overrides a set variable
   (`Overload`/`LoadDotEnv` do).
@@ -1327,9 +1440,9 @@ end
   `.present .value`. Never read `.value` unchecked: on an empty
   `Option<str>` it is a null pointer and printing it segfaults. No `match`
   and no `?` on an Option.
-- **`wire`**: dependency injection, google/wire style. Providers are keyed by a
+- **`dependency`**: dependency injection, google/wire style. Providers are keyed by a
   name you choose (no runtime type identity): `New()`,
-  `Provide(c, "Service", "Repo", Service {}, (cx: wire.Container): ... end)` (the
+  `Provide(c, "Service", "Repo", Service {}, (cx: dependency.Container): ... end)` (the
   second string lists the needs, the value only fixes the type), `Value`,
   `Bind(c, "Store", "MemStore")`, `OnClose(c, name, T {}, (v: T): ... end)`,
   `Build(c)` (returns "" or a missing/duplicate/cycle message), `Get(c, name, out)`
@@ -1670,12 +1783,7 @@ SubscribeReplier` with `NextMsg(nc, sub, ms)`, `Unsubscribe AutoUnsubscribe`,
   (`Init Track Down Pressed`), **`node`** (Node.js interop: `Require GetProp CallS1 ...`; handles are `i64`, every number is f64). **`web`** itself
   holds the `Color Length Url` value types the layout DSL uses (§9); it is
   not a server.
-- **`webview`** (desktop windows: `Create SetTitle SetSize SetHTML Navigate Eval Init Run Destroy IsClosed`; `-DSALAM_WEBVIEW_CEF` renders with a
-  bundled Chromium instead of the OS webview, see
-  `std/webview/native/BUILD.md`). Put data into the HTML you pass to
-  `SetHTML`; the page cannot call back into Salam, `Eval` right after
-  `SetHTML` usually hits the old page, and a failed `Create` returns a window
-  that `IsClosed()` already.
+- **`gui.webview`** (import `gui.webview`; Persian `رابط گرافیکی.نمایش وب`) is one package for desktop windows and desktop applications. Low level: `Create SetTitle SetSize SetHTML Navigate Eval Init Run Destroy IsClosed OnMessage`; a failed `Create` returns a window that `IsClosed()` already, and `Eval` right after `SetHTML` usually hits the old page. Application layer (Tauri-like): `Init Config Command CommandAsync On Emit Open WindowOptions Allow Run Quit` plus dialogs, notifications, secrets, menus, tray and `SingleInstance`; pages call `await salam.invoke(name, args)`. `salam bundle` makes installers from the `[app]` table of `salam.toml`. The engine is the OS web view by default; `-DSALAM_WEBVIEW_CEF` (or `engine = "chromium"` in `[app]`, `--engine=chromium`) builds against Chromium instead, which has no commands yet (`webview.SupportsCommands()` is false). `webview.Engine()` and `webview.EngineName()` report the engine. Subpackages `gui.webview.pack` and `gui.webview.bundle`. Guide: `docs/DESKTOP.md`.
 - Native audio: **`audio`** holds a `Clip` of interleaved **f32** samples with `rate`, `channels`, `frames` and `bits`.
   Core: `New Sample SetSample Duration Peak RMS GainToDb DbToGain`.
   Editing: `Slice Trim Concat Mix MixAt Gain Scale Normalize Clamp FadeIn FadeOut Reverse Pad Repeat Split TrimSilence`.
@@ -1792,7 +1900,7 @@ Each driver keeps its own full surface, and `Conn(d)` boxes one as a
   from each thread before its first query - `tests/en/apps/*api/_store.salam`
   is the worked example.
 - **`db.sql`** (read and check SQL without a database, the sqlc idea with your own DDL as the schema): `DialectOf DialectNamed` give a `Dialect` for `SQLITE MYSQL MARIADB POSTGRES`; `Lint(sql, d)` parses one statement or a whole `;` separated script and returns a `Report` of `Diag` values (`code message help line col offset length`, rendered by `ReportText`/`DiagText`); `ParamCount`/`Placeholders` count and list the placeholders. With a schema: `NewCatalog(d)` then `Apply(cat, ddl)` reads `CREATE TABLE`, `ALTER TABLE`, `DROP` and `CREATE VIEW` into a `Catalog` (so the migrations are the schema), `TableCount TableName HasTable ColumnCount ColumnAt HasColumn` look around it, and `Check(sql, cat)` resolves names: unknown table or column with the nearest real name offered, ambiguous column, INSERT arity, a NOT NULL column with no default left out, a write with no WHERE. `Analyze(sql, cat)` adds what the query takes and returns - `Param { marker ordinal table column kind not_null }` and `ResultCol { name table kind nullable }`, with outer joins making a whole side nullable - and `SalamType(kind, not_null)` names the Salam type to read it into (`option.Option<T>` when it can be null). Codes: `SQL0xx` lexical, `SQL1xx` syntax, `SQL2xx` a dialect rule (`?` in postgres, `AUTO_INCREMENT` in sqlite, `ILIKE` outside postgres, `::` outside postgres, `LIMIT a, b` in postgres, `ON DUPLICATE KEY` outside mysql, `TRUNCATE`/`PRAGMA` in the wrong engine), `SQL3xx` the schema. Messages are English in both language modes; match on `code`. Free with `FreeReport`, `FreeCatalog`, `FreeAnalysis`. Putting values in: the three drivers do not all prepare and bind (only `db.sqlite` has `Prepare`/`Bind*`), so `NewArgs` + `AddInt AddFloat AddText AddBool AddNull` + `Fill(query, args, d, err)` writes the values into the SQL properly - the query is lexed first, so a `?` inside a string literal is left alone, the count has to match (`SQL400`), quotes are doubled, backslashes are doubled on MySQL, and a boolean is `TRUE`/`FALSE` on postgres and `1`/`0` elsewhere. It is substitution, not a prepared statement; `ArgCount` and `FreeArgs` round it out. Code generation, the sqlc half: annotate a `.sql` file with `-- name: GetUser :one` (`:one :many :exec :execrows`), then `ParseQueries(src, err)` and `Generate(pkg, queries, cat, err)` write a row struct and a typed function per query - parameters named and typed from the column each placeholder binds against, nullable columns as `option.Option<T>` read through `IsNull`, every query analysed against the catalog first so a typo stops generation with the query's name. One `dyn db.Connection` signature serves all three engines. The command is `salam sql generate queries --schema=db --output=gen/store.salam --package=store`. The `salam sql check` command runs the same checks over `.sql` files and over every SQL string literal in `.salam` files (`--schema=` a file or a directory; without `--dialect=` each file is read with the engine it imports); a literal assembled from pieces (glued with `+` or `.concat`, or one that simply stops mid-statement) is a fragment, so it is counted in the summary and skipped instead of reported.
-- **The whole library is in `std/`** and ships with Salam, so no `salam add` is needed for any of it: `db.sqlite db.postgres db.mysql db.redis db.meilisearch db.elasticsearch db.typesense db.opensearch`, `audio` and every `audio.*`, `tensor autograd nn optim ml data gguf llm onnx npy`, `net.http.swagger net.http.middleware net.http.session net.http.validate net.http2 net.websocket net.socketio net.email net.proxy`, `grpc rpc graphql ftp ssh aws google webpush telegram.bot`, `webview opencv excel`. `salam add` is only for packages from GitHub and other hosts. Their API notes below still apply.
+- **The whole library is in `std/`** and ships with Salam, so no `salam add` is needed for any of it: `db.sqlite db.postgres db.mysql db.redis db.meilisearch db.elasticsearch db.typesense db.opensearch`, `audio` and every `audio.*`, `tensor autograd nn optim ml data gguf llm onnx npy`, `net.http.swagger net.http.middleware net.http.session net.http.validate net.http2 net.websocket net.socketio net.email net.proxy`, `grpc rpc graphql ftp ssh aws google webpush telegram.bot`, `gui.webview opencv excel`. `salam add` is only for packages from GitHub and other hosts. Their API notes below still apply.
 - **`db.redis`** (RESP over TCP): `Connect Ok Error Close Ping Auth Select Set SetEx Get Exists Del Expire TTL Incr IncrBy Decr Append Keys HSet HGet HDel HExists HGetAll LPush RPush LPop RPop LLen LRange SAdd SRem SIsMember SMembers Publish`, anything else via `Command` and `Reply*`. Failures come
   back as empty values (`""`, 0, false); `Command` shows the server's
   `REPLY_ERROR` text. A plain `Set` removes a key's TTL; `Auth` sends only
@@ -2138,7 +2246,8 @@ A declared function of the same name shadows an intrinsic.
 There is no `async`/`await`.
 
 **Conditional compilation** (a top-level or inline `if` on a compile-time
-constant). Predefined: `SALAM_OS_WINDOWS/MAC/LINUX/UNIX/FREEBSD/ANDROID/WASM`,
+constant). Predefined: `SALAM_OS_WINDOWS/MAC/LINUX/UNIX/FREEBSD/ANDROID/WASM/NONE`,
+`SALAM_FREESTANDING`, `SALAM_KERNEL`,
 `SALAM_ARCH_X64/ARM64/X86/ARM/WASM`, string forms `SALAM_OS`/`SALAM_ARCH`; plus
 your own `-DNAME` defines from the build command. The predefined `SALAM_*`
 names are also ordinary constant values anywhere else - `switch SALAM_OS:`,
@@ -2156,13 +2265,14 @@ has no upper case, so a leading `سلام` is what marks a name as the language'
 own rather than yours; the rest of the words follow it separated by spaces, the
 way multi-word names already are elsewhere:
 
-| English                                          | Persian                                          |
-| ------------------------------------------------ | ------------------------------------------------ |
-| `SALAM_OS_WINDOWS` / `_LINUX` / `_MAC` / `_UNIX` | `سلام سیستم ویندوز` / `لینوکس` / `مک` / `یونیکس` |
-| `SALAM_ARCH_X64` / `_ARM64`                      | `سلام معماری ایکس۶۴` / `آرم۶۴`                   |
-| `SALAM_OS` / `SALAM_ARCH`                        | `سلام سیستم` / `سلام معماری`                     |
-| `SALAM_VERSION` / `SALAM_GIT_COMMIT`             | `سلام نگارش` / `سلام کامیت گیت`                  |
-| `defined(X)`                                     | `تعریف‌شده(X)`                                   |
+| English                                                 | Persian                                          |
+| ------------------------------------------------------- | ------------------------------------------------ |
+| `SALAM_OS_WINDOWS` / `_LINUX` / `_MAC` / `_UNIX`        | `سلام سیستم ویندوز` / `لینوکس` / `مک` / `یونیکس` |
+| `SALAM_OS_NONE` / `SALAM_FREESTANDING` / `SALAM_KERNEL` | `سلام سیستم هیچ` / `سلام خودایستا` / `سلام هسته` |
+| `SALAM_ARCH_X64` / `_ARM64`                             | `سلام معماری ایکس۶۴` / `آرم۶۴`                   |
+| `SALAM_OS` / `SALAM_ARCH`                               | `سلام سیستم` / `سلام معماری`                     |
+| `SALAM_VERSION` / `SALAM_GIT_COMMIT`                    | `سلام نگارش` / `سلام کامیت گیت`                  |
+| `defined(X)`                                            | `تعریف‌شده(X)`                                   |
 
 These names are matched the way Persian keywords are, so a ZWNJ, a space, an
 Arabic yeh for a Persian one and an Arabic kaf for a keheh are all the same
@@ -2190,6 +2300,27 @@ English. A bare `if SALAM_JS:` is an unknown identifier on a native build.
 Cross-compile by passing an LLVM triple: `salam build app.salam
 --target=x86_64-w64-windows-gnu --output=app.exe` (routes through LLVM;
 `link dynamic "user32"` → `-luser32`).
+
+**Freestanding kernels.** A `*-none` or `*-salamos*` triple builds without libc,
+crt files or `-lm`, and links the small runtime in `std/baremetal`:
+
+```sh
+salam build kernel.salam --target=i686-unknown-none \
+    --entry=_start --linker-script=linker.ld \
+    --link-object=boot.o --output=kernel.elf
+```
+
+`--entry` defaults to `_start`; `--link-object` is repeatable;
+`--no-freestanding-runtime` leaves every symbol to your own runtime.
+In a freestanding build the Salam entry function is emitted as `void main()`
+with no `argc`/`argv`, so the boot stub calls `main` directly. The build
+defines `SALAM_FREESTANDING`, `SALAM_KERNEL` and `SALAM_OS_NONE`
+(Persian: `سلام خودایستا`, `سلام هسته`, `سلام سیستم هیچ`). `std/baremetal`
+gives `Halt`, `Exit`, `Out8`, `In8`, `Clear`, `WriteAt`, `SerialWrite`,
+`Panic`, `ExitQemu`, `HeapUsed` and `HeapSize`; `println` still works through
+COM1, VGA text and the QEMU debug console. `tests/kernel/` is a complete
+bootable Multiboot example. A `*-uefi` triple is freestanding but keeps the
+UEFI object format. See `docs/FREESTANDING.md`.
 
 ---
 
@@ -2410,6 +2541,8 @@ salam new name                          # scaffold a project: name/main.salam + 
 salam serve [dir] [--port=N]            # serve a folder over HTTP
 salam serve --config=web.salam [--test] # several sites from one config (std/net/httpd); --test only checks it
 salam init                              # same, in the current directory
+salam new name --desktop                # a desktop app with a web interface (gui.webview, docs/DESKTOP.md)
+salam bundle [dir] [--target=T] [--format=a,b]  # installers from the [app] table of salam.toml
 salam add github.com/owner/repo         # add a GitHub package (import "github.com/owner/repo"); remove/update/deps too
 salam install github.com/owner/tool     # build a program into ~/.salam/bin; salam search <word> finds packages
 salam update / salam update pkg@latest  # same-major updates by default; uninstall, deps clean too (docs/PACKAGES.md)
@@ -2420,9 +2553,175 @@ salam upgrade [X.Y.Z] [--check]         # upgrade salam and std/ to the newest r
 salam inspect app.salam --emit-tokens | --emit-ast | --emit-symbol   # dump a stage as XML
 ```
 
+### Installing the compiler
+
+The newest release is whatever
+<https://github.com/SalamLang/Salam/releases> lists (v0.6.2 when this was
+written). Linux and macOS: `{ curl -fsSL https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.sh || wget -qO- https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.sh; } | sh`
+(add `-s -- --version X.Y.Z` after the final `sh` to pick a release). Windows
+PowerShell: `irm https://raw.githubusercontent.com/SalamLang/Salam/refs/heads/main/install.ps1 | iex`.
+Then `salam version`, and `salam upgrade` later. The standard library ships
+with the compiler.
+
+### Download links for people
+
+Everything is published on GitHub and the site links to the same files:
+releases at <https://github.com/SalamLang/Salam/releases>, the compiler page at
+<https://www.salamlang.ir/install/> and the desktop agent page at
+<https://www.salamlang.ir/agent/> (English under
+<https://salamlang.github.io/Salam/>).
+
+A direct file is
+`https://github.com/SalamLang/Salam/releases/download/v<version>/<file>`. File
+names carry the version, so `releases/latest/download/<file>` does not work for
+them. Check the release and its asset list before giving a URL: `VERSION` is
+the version in development, not the last release (`VERSION` says 0.6.3 while
+the newest release is v0.6.2), so never build a URL from it alone. When you
+cannot check, give the releases page and name the asset.
+
+- Compiler: Linux `x86_64` and `aarch64` have `.tar.gz`, `.zip`, `.deb` and
+  `.rpm`; Linux `i686` has `.tar.gz`, `.zip` and `.deb` (no rpm); Linux
+  `x86_64-musl` (Alpine) has `.tar.gz` and `.zip`; `macos-arm64`,
+  `windows-x86_64`, `windows-arm64` and `windows-i686` have `.tar.gz` and
+  `.zip`.
+- Desktop agent: Windows `x86_64` and `i686` have `-setup.exe`, `.msi` and the
+  portable `.exe`; Windows `aarch64` has `-setup.exe` and the portable `.exe`;
+  macOS has `-macos-universal.dmg`, `-macos-arm64.dmg`, `-macos-x86_64.dmg`
+  and `.zip`; Linux `x86_64` and `aarch64` have `.AppImage`, `.deb` and `.rpm`;
+  Linux `i686` has `.deb` and `.rpm`.
+- Android: `salam-<version>-android-universal.apk`, only in releases that
+  published it; check first and point to the releases page when it is absent
+  (v0.6.2 has no APK).
+
+Every published file has a `.sha256` beside it, and the agent release also has
+`salam-agent-<version>-SHA256SUMS` and `-SHA512SUMS`.
+
+### What Salam can do
+
+Before calling anything impossible, look in `tests/`, `std/` and `docs/`:
+
+- `salam help` lists every command: `build`, `check`, `test`, `obj`, `llvm`,
+  `js`, `web`, `serve`, `bundle`, `run`, `exec`, `new`, `init`, `add`,
+  `remove`, `update`, `deps`, `install`, `uninstall`, `search`, `format`,
+  `doc`, `translate`, `page`, `debug`, `memcheck`, `inspect`, `cli`,
+  `upgrade`, `version`, plus the two SQL commands (schema check and typed
+  query generation).
+- Targets: the C backend is the default (`build`, `run`, `obj`, cross-compile
+  with `--target=<triple>`); `salam llvm` emits LLVM IR and `--backend=llvm`
+  builds with it (32-bit aware, `docs/PLATFORMS.md`); `--target=wasm32-wasi`
+  builds WebAssembly; `salam js` and `salam web` target browsers;
+  `--target=<arch>-unknown-none` with `--entry`, `--linker-script` and
+  `--link-object` builds freestanding kernels (`docs/FREESTANDING.md`).
+- Beyond the terminal: `gui.webview` for desktop apps (`docs/DESKTOP.md`,
+  `salam new name --desktop`, installers with `salam bundle`),
+  `std/gui/raylib` for games, the layout DSL (`salam page build`), the
+  `android/`, `ios/` and `mobile/` projects.
+- Servers: `net/http` + `net/router`, middleware, cookies, sessions, swagger,
+  validation, `salam serve --config` (virtual hosts, redirects, FastCGI PHP
+  backends), `net.http2`, `net.websocket`, `grpc`, `graphql`, `net.proxy`, and
+  the `db.*` drivers.
+- Data and ML: `ml`, `tensor`, `nn`, `autograd`, `onnx`, `gguf`, `opencv`,
+  `image`, `matrix`, `excel`, `stats`.
+- `tests/en` is the living feature index, mirrored by `tests/fa`:
+  `apps` (21 projects such as `httpbench`, `crawler`, `blogapi`, `jsonapi`,
+  `swaggerapi` and the four Workers apps, plus about 40 standalone programs),
+  `basics`, `features`, `types`, `stdlib`,
+  `interop`, `data`, `db`, `games`, `cross`, `llvm`, `js`, `page`, `desktop`,
+  `opencv`, `raylib`, `ssh`, `ssl`, `tls`, `packages`, `project`, `fmt`,
+  `lint`, `errors`, `repl`, `webframework`, `webview_cef`; also `tests/kernel`,
+  `tests/lsp` and `tests/fixtures`.
+
+### Packages from GitHub (the package manager)
+
+Everything in §5 ships with the compiler and needs no command. The package
+manager is only for packages that other people keep in their own Git
+repositories. Full guide: `docs/PACKAGES.md`, `/packages/` on both sites.
+
+```sh
+salam init                                  # main.salam + salam.toml in this folder
+salam add github.com/owner/repo             # newest release; writes salam.toml and salam.lock
+salam add github.com/owner/repo@v1.2.0      # exact tag; ranges @^1.2 and @~1.2, and '@>=1.2' (quote it)
+salam update [pkg] / salam update pkg@latest   # newest release, same major / across majors
+salam remove github.com/owner/repo
+salam deps                                  # after a clone: download what salam.lock lists, verify sums
+salam deps sums                             # module@version sum lines for registry/sums.txt
+salam search words                          # std library + registry/index.toml
+salam test                                  # runs test_ functions of every *_test.salam
+salam install github.com/owner/tool         # build its main.salam into ~/.salam/bin; salam uninstall
+```
+
+```salam
+import "github.com/demo/slug"               // quoted address; the last part is the name
+func main:
+    println slug.Make("Hello, World!")
+end
+```
+
+- Commit `salam.toml` and `salam.lock`, not the downloads in `~/.salam/pkg`.
+- **There is no `salam publish`.** Publishing is pushing a Git tag `vX.Y.Z` to a
+  public repository (tags cannot be moved safely afterwards; release a new
+  version). Listing in `salam search` is by a pull request that appends an entry
+  to `registry/index.toml`; checksums go to `registry/sums.txt`.
+- **Layout.** A program has `main.salam` and nothing else is its entry. A library
+  has no `main`; its entry file sits at the repository root and is named after
+  the repository (`slug.salam` for `github.com/demo/slug`, `package slug`); a
+  package in a folder is `<folder>/<folder>.salam`. `[package] kind = "lib"`
+  marks a library; `salam = ">=0.6.1"` is the oldest compiler it builds with.
+- Only `pub` names are visible to users: calling a private one is `E017`
+  (`'x' is not exported by package 'p' (mark it 'pub')`); importing a package
+  that is not in `salam.toml` is `E008` (run `salam add`). Give public functions
+  both `@en` and `@fa` names so Persian programs can call them.
+- `import "github.com/owner/repo/v2"` is a separate module that takes only v2.x tags.
+
 > **Version check is `salam version`, a subcommand.** There is no `--version`
 > or `-v` flag: `salam --version` fails with `unknown command '--version'` and
 > suggests `salam version`.
+
+### Cloudflare Workers (a whole Salam web app at the edge)
+
+A normal `net/http` + `net/router` program deploys to Cloudflare Workers
+unchanged; there is no JavaScript rewrite. Build it to WebAssembly and give
+wrangler a three-line entry point:
+
+```sh
+mkdir -p build
+salam build main.salam --target=wasm32-wasi --release --output=build/app.wasm
+```
+
+```js
+import { createWorker } from './worker-host.js';
+import app from './build/app.wasm';
+export default createWorker(app);
+```
+
+The examples inside the repository import the host by a relative path; from
+`tests/en/apps/cloudflare-worker-router/worker.js` it is
+`../../../../std/net/http/cloudflare/worker.js` (four levels up). In a project
+of your own, copy `std/net/http/cloudflare/worker.js` (installed at
+`~/.salam/bin/std/net/http/cloudflare/worker.js`) next to `worker.js`, name the
+copy `worker-host.js`, and the import above works.
+
+`wrangler.toml` needs `main = "worker.js"`, a `[build]` command running
+`build.sh`, and `[[rules]] type = "CompiledWasm"` with
+`globs = ["**/*.wasm"]`. On this target `http.Run` serves one request per
+process: the raw HTTP/1.1 request arrives on stdin, the response leaves on
+fd 3, `println` goes to `wrangler tail`, `os.Env("X")` reads wrangler `[vars]`
+and secrets, and `http.IsEdge()` is true.
+
+Limits: one process per request, so globals do not survive. Cookies work
+directly; Workers storage (KV, D1, R2) and HTTP APIs are asynchronous bindings,
+so the host `worker.js` must exchange that data with the Salam module. There is
+no filesystem (`router.Static` has nothing to serve, use Workers static
+assets), and no outbound sockets, so `http.Get` cannot call another server from
+the module. A program that must call out uses a few lines of `fetch` in
+`worker.js` or a native host. `salam js` is for browsers, not a Worker module.
+
+Complete examples, built by CI: `tests/en/apps/cloudflare-worker-router`,
+`-hello`, `-pure` (CGI style, without `net/http`) and `-telegram-bot` (webhook
+answers with the Bot API call itself, so no outbound call and no token at
+runtime; `setup/setup.salam` calls `setWebhook` from a native machine). The
+target needs wasi-sdk (`$WASI_SDK_PATH`, `~/.salam/wasi-sdk` or
+`/opt/wasi-sdk`) and `wrangler` to deploy.
 
 **Always verify a converted program.** Run `salam check file.salam` after every
 edit (exit 1 on any error, `--error-format=json` for one JSON object per
@@ -2450,6 +2749,11 @@ Read the real code; it is the specification:
   (`grep -rn "pub func" std/<pkg>`).
 - The precise semantic rules (what is and isn't allowed): the `.salam` cases in
   `tests/en/errors/`.
+- Adding to `std/`: every new package, function, struct, field, method or
+  constant needs `@en`/`@fa` names, a program in `tests/en/stdlib/` and its
+  twin in `tests/fa/stdlib/`, and `doc.`/`ex.` keys (plus `guide-*` sections
+  for a new package) in both `website/content/{en,fa}/std/` pages. Check with
+  `salam run tools/salam/check-std-coverage-docs.salam` (see CONTRIBUTING.md).
 
 ---
 
@@ -2606,7 +2910,8 @@ course at **<https://www.salamlang.ir/learn/>** (§19 maps its lessons).
 
 - **Language detection is automatic** from the keywords in the file; pass
   `--lang=fa` to force it (`salam build app.salam --lang=fa`). Diagnostics are
-  printed in Persian for Persian files.
+  printed in Persian for Persian files. Add `--error-lang=fa` to print them in
+  Persian for an English file too; the source stays English.
 - **Language directive:** a Persian file may state its language with
   `// زبان: فارسی` in its first 8 lines; an English file uses `// lang: en`.
   Mixed forms such as `// lang: fa` or `// زبان: en` are a compile error.
@@ -2727,6 +3032,7 @@ are fine.
 | `str`            | `رشته`                       | `int` (`i32`)    | `صحیح` (`صحیح۳۲`)        |
 | `i8` `i16` `i64` | `صحیح۸` `صحیح۱۶` `صحیح۶۴`    | `uint` (`u32`)   | `طبیعی` (`طبیعی۳۲`)      |
 | `u8` `u16` `u64` | `طبیعی۸` `طبیعی۱۶` `طبیعی۶۴` | `usize` / `size` | `اندازه مثبت` / `اندازه` |
+| `i128`           | `صحیح۱۲۸`                    | `u128`           | `طبیعی۱۲۸`               |
 | `float` (`f32`)  | `اعشار` (`اعشار۳۲`)          | `f64`            | `اعشار۶۴`                |
 | `Vector<T>`      | `وکتور<T>`                   | `HashMap<K, V>`  | `نگاشت<K, V>`            |
 | `MapIter`        | `پیمایشگرنگاشت`              | `File`           | `پرونده`                 |
@@ -2852,7 +3158,7 @@ Give your own `pub` API both spellings the same way:
         سرچاپ "دیگر"
     پایان
     تا ک < ۳:                            // while
-        ک += ۱
+        ک++
     پایان
     تکرار ۳:                             // three times
         چاپ "*"
@@ -3028,7 +3334,7 @@ join(ر)
 
 All of §6 applies. In addition:
 
-1. **Entry is `ریشه`.** A Persian file with `تابع main` has no entry point.
+1. **Entry is `ریشه`:** `تابع ریشه:` ... `پایان`. A Persian file with `تابع main`, `تابع اصلی` or a `بسته اصلی` line has no entry point (the first two compile as ordinary functions, so the program builds and then does nothing).
 2. **`«…»` is a string literal, in Persian files only.** It behaves exactly
    like `"…"`, including `\n` escapes and `+`, so pick whichever reads better:
    `سرچاپ «سلام دنیا»`. It does not nest, for the same reason `"` does not. In
@@ -3150,6 +3456,7 @@ when the site is built. Point Persian-speaking users to the matching lesson:
 | `گونه`, new types, operator overloading          | <https://www.salamlang.ir/learn/custom-types/> |
 | Generics, `میانجی`, `کاربست`, `پویا`             | <https://www.salamlang.ir/learn/generics/>     |
 | `بسته`, `واردسازی`, `فراخوانی`                   | <https://www.salamlang.ir/learn/packages/>     |
+| Package manager: `salam add`, `salam.toml`, tags | <https://www.salamlang.ir/packages/>           |
 | Compiler rules and error codes                   | <https://www.salamlang.ir/learn/rules/>        |
 | Values, references, memory                       | <https://www.salamlang.ir/learn/memory/>       |
 | Compile-time `اگر`                               | <https://www.salamlang.ir/learn/compile-time/> |

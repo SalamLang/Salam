@@ -49,7 +49,15 @@ function upsert(list: CallView[], c: CallView): CallView[] {
   if (i < 0) return [...list, c];
   const old = list[i];
   const output = c.output || (c.state === "running" ? old.output : c.output);
-  const next = { ...old, ...c, mid: old.mid ?? c.mid, output };
+  const next = {
+    ...old,
+    ...c,
+    mid: old.mid ?? c.mid,
+    output,
+    image: c.image || old.image,
+    image_data: c.image_data || old.image_data,
+    image_mime: c.image_mime || old.image_mime,
+  };
   return [...list.slice(0, i), next, ...list.slice(i + 1)];
 }
 
@@ -165,26 +173,61 @@ function ToolIcon({ c }: { c: AgentCall }) {
   return <IconFile width={16} height={16} />;
 }
 
-function CallShot({ chat, id }: { chat: string; id: string }) {
-  const [src, setSrc] = useState("");
+function CallShot({ chat, id, data, mime }: { chat: string; id: string; data?: string; mime?: string }) {
+  const direct = data ? `data:${mime || "image/jpeg"};base64,${data}` : "";
+  const [src, setSrc] = useState(direct);
   const [failed, setFailed] = useState(false);
   const [big, setBig] = useState(false);
   useEffect(() => {
+    if (direct) {
+      setSrc(direct);
+      setFailed(false);
+      return;
+    }
     let alive = true;
-    api
-      .callImage(chat, id)
-      .then((r) => alive && setSrc(`data:${r.mime};base64,${r.data}`))
-      .catch(() => alive && setFailed(true));
+    let timer = 0;
+    let tries = 0;
+    setSrc("");
+    setFailed(false);
+    const load = () => {
+      api
+        .callImage(chat, id)
+        .then((r) => {
+          if (!alive) return;
+          setSrc(`data:${r.mime};base64,${r.data}`);
+        })
+        .catch(() => {
+          if (!alive) return;
+          tries += 1;
+          if (tries < 30) timer = window.setTimeout(load, 500);
+          else setFailed(true);
+        });
+    };
+    load();
     return () => {
       alive = false;
+      window.clearTimeout(timer);
     };
-  }, [chat, id]);
+  }, [chat, id, direct]);
   if (failed) return null;
-  if (!src) return <div className="call-shot loading" />;
+  if (!src)
+    return (
+      <div className="call-shot loading" role="status">
+        <span className="spinner tiny" />
+      </div>
+    );
   return (
     <button type="button" className={`call-shot${big ? " big" : ""}`} onClick={() => setBig((b) => !b)} title={big ? t("کوچک کردن", "Shrink") : t("بزرگ کردن", "Enlarge")}>
       <img src={src} alt={t("تصویر صفحه از مرورگر", "Browser screenshot")} />
     </button>
+  );
+}
+
+export function hasShot(c: AgentCall): boolean {
+  return (
+    c.image === true ||
+    (c.image_data ?? "").length > 0 ||
+    (c.tool === "browser" && c.output.includes("Screenshot attached ("))
   );
 }
 
@@ -211,7 +254,7 @@ export function ToolCard({ c, onDecide, onStop }: { c: CallView; onDecide: (id: 
         </span>
         <IconChevronDown className={`tool-chevron${open ? " open" : ""}`} width={16} height={16} />
       </button>
-      {open && (showDetail || c.output || c.outside || c.kind === "exec" || c.image) && (
+      {open && (showDetail || c.output || c.outside || c.kind === "exec" || hasShot(c)) && (
         <div className="tool-body">
           {c.outside && (
             <p className="tool-warn">
@@ -225,7 +268,7 @@ export function ToolCard({ c, onDecide, onStop }: { c: CallView; onDecide: (id: 
             </p>
           )}
           {showDetail && (c.lang === "diff" ? <DiffView text={c.detail} /> : <CodeView text={c.detail} lang={c.lang} />)}
-          {c.image && c.chat && <CallShot chat={c.chat} id={c.call_id} />}
+          {hasShot(c) && c.chat && <CallShot chat={c.chat} id={c.call_id} data={c.image_data} mime={c.image_mime} />}
           {c.output && c.state !== "pending" && <Output text={c.output} live={live} />}
         </div>
       )}

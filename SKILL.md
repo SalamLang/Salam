@@ -2203,6 +2203,16 @@ v := jobs.recv(ok)                            // ok = false once closed AND drai
 v2 := jobs.recv_timeout(ok, 500 as i64)       // ok = false: timed out OR closed
 jobs.send_timeout(v, 500 as i64)              // false if it could not be delivered
 jobs.close()   jobs.free()                    // also: try_send/try_recv/len/is_closed
+// constructor and free functions (T on the result):
+c := chan.New(8) as chan.Chan<i64>            // initialized, no separate init
+chan.Send(c, v)   chan.Recv(c, ok)            // Send/SendTimeout/TrySend, Recv/RecvTimeout/TryRecv
+chan.Close(c)   chan.Len(c)   chan.Capacity(c)   chan.IsClosed(c)
+chan.SendAll(c, values)                       // false at the first value it could not send
+chan.Drain(c)   chan.Take(c, 4 as i64)        // vectors; both wait, Drain until closed and empty
+// select: -1 timeout, -2 every channel closed
+chan.SelectRecv(cs, v, ok, 500 as i64)        // Select plus ok (false on timeout/all closed)
+chan.TrySelect(cs, v)                         // one non-blocking Select
+chan.TrySelectSend(cs, v)                     // first buffered channel with room, or -1
 
 pool.ParallelFor(n, 8 as i64, (i: i64): body(i) end)   // self-scheduling workers
 pool.ParallelForAuto(n, (i: i64): body(i) end)         // one worker per CPU

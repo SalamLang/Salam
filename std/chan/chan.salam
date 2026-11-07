@@ -204,6 +204,7 @@ pub struct Chan<T>:
         ok = true
         sync.Signal(this.not_full)
         sync.Unlock(this.mu)
+        wake_selectors()
         ret v
     end
 
@@ -253,6 +254,7 @@ pub struct Chan<T>:
         ok = true
         sync.Signal(this.not_full)
         sync.Unlock(this.mu)
+        wake_selectors()
         ret v
     end
 
@@ -364,6 +366,119 @@ func timer_start(ms: i64, again: i64): Timer:
     ret t
 end
 
+@en "New"
+@fa "جدید"
+pub func New<T>(capacity: i64): Chan<T>:
+    mut c := Chan {} as Chan<T>
+    c.init(capacity)
+    ret c
+end
+
+@en "Send"
+@fa "فرستادن"
+pub func Send<T>(c: Chan<T>, v: T): bool:
+    ret c.send(v)
+end
+
+@en "SendTimeout"
+@fa "فرستادن با مهلت"
+pub func SendTimeout<T>(c: Chan<T>, v: T, ms: i64): bool:
+    ret c.send_timeout(v, ms)
+end
+
+@en "TrySend"
+@fa "کوشش برای فرستادن"
+pub func TrySend<T>(c: Chan<T>, v: T): bool:
+    ret c.try_send(v)
+end
+
+@en "SendAll"
+@fa "فرستادن همه"
+pub func SendAll<T>(c: Chan<T>, values: Vector<T>): bool:
+    mut ok := true
+    repeat values.len() in i:
+        if not c.send(values.get(i)):
+            ok = false
+            break
+        end
+    end
+    ret ok
+end
+
+@en "Recv"
+@fa "دریافت"
+pub func Recv<T>(c: Chan<T>, ok &: bool): T:
+    ret c.recv(ok)
+end
+
+@en "RecvTimeout"
+@fa "دریافت با مهلت"
+pub func RecvTimeout<T>(c: Chan<T>, ok &: bool, ms: i64): T:
+    ret c.recv_timeout(ok, ms)
+end
+
+@en "TryRecv"
+@fa "کوشش برای دریافت"
+pub func TryRecv<T>(c: Chan<T>, ok &: bool): T:
+    ret c.try_recv(ok)
+end
+
+@en "Drain"
+@fa "تخلیه"
+pub func Drain<T>(c: Chan<T>): Vector<T>:
+    mut out := Vector {} as Vector<T>
+    mut ok := true
+    until true:
+        v := c.recv(ok)
+        if not ok:
+            break
+        end
+        out.push(v)
+    end
+    ret out
+end
+
+@en "Take"
+@fa "برداشتن"
+pub func Take<T>(c: Chan<T>, n: i64): Vector<T>:
+    mut out := Vector {} as Vector<T>
+    mut ok := true
+    mut i := 0 as i64
+    until i < n:
+        v := c.recv(ok)
+        if not ok:
+            break
+        end
+        out.push(v)
+        i++
+    end
+    ret out
+end
+
+@en "Close"
+@fa "بستن"
+pub func Close<T>(c: Chan<T>):
+    c.close()
+end
+
+@en "Len"
+@fa "طول"
+pub func Len<T>(c: Chan<T>): i64:
+    ret c.len()
+end
+
+@en "Capacity"
+@fa "ظرفیت"
+pub func Capacity<T>(c: Chan<T>): i64:
+    ret c.capacity()
+end
+
+@en "IsClosed"
+@fa "بسته است"
+pub func IsClosed<T>(c: Chan<T>): bool:
+    ret c.is_closed()
+end
+
 @en "After"
 @fa "پس از"
 pub func After(ms: i64): Timer:
@@ -431,4 +546,72 @@ pub func Select<T>(cs: Vector<Chan<T>>, v &: T, ms: i64): i64:
         end
         sync.Unlock(sel_mu)
     end
+end
+
+@en "SelectRecv"
+@fa "گزینش دریافت"
+pub func SelectRecv<T>(cs: Vector<Chan<T>>, v &: T, ok &: bool, ms: i64): i64:
+    idx := Select(cs, v, ms)
+    if idx < 0:
+        ok = false
+        ret idx
+    end
+    ok = true
+    ret idx
+end
+
+@en "TrySelect"
+@fa "کوشش برای گزینش"
+pub func TrySelect<T>(cs: Vector<Chan<T>>, v &: T): i64:
+    ret Select(cs, v, 0 as i64)
+end
+
+@en "SelectSend"
+@fa "گزینش فرستادن"
+pub func SelectSend<T>(cs: Vector<Chan<T>>, v: T, ms: i64): i64:
+    start := sync.NowMs()
+    atomic_add(sel_cells, 1 as i64)
+    until true:
+        sync.Lock(sel_mu)
+        seen := sel_cells[1]
+        sync.Unlock(sel_mu)
+        mut open := 0 as i64
+        mut i := 0 as i64
+        until i < (cs.len() as i64):
+            c := cs.get(i as int)
+            if c.try_send(v):
+                atomic_add(sel_cells, 0 as i64 - 1)
+                ret i
+            end
+            if not c.is_closed():
+                open++
+            end
+            i++
+        end
+        if open == 0:
+            atomic_add(sel_cells, 0 as i64 - 1)
+            ret 0 as i64 - 2
+        end
+        sync.Lock(sel_mu)
+        if sel_cells[1] == seen:
+            if ms < 0:
+                sync.WaitCond(sel_cv, sel_mu)
+            else:
+                left := ms - (sync.NowMs() - start)
+                if left <= 0:
+                    sync.Unlock(sel_mu)
+                    atomic_add(sel_cells, 0 as i64 - 1)
+                    ret 0 as i64 - 1
+                end
+                _ := sync.WaitCondTimeout(sel_cv, sel_mu, left)
+            end
+        end
+        sync.Unlock(sel_mu)
+    end
+end
+
+@en "TrySelectSend"
+@fa "کوشش برای گزینش فرستادن"
+pub func TrySelectSend<T>(cs: Vector<Chan<T>>, v: T): i64:
+    ret SelectSend(cs, v, 0 as i64)
 end

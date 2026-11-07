@@ -47,17 +47,8 @@ else
 fi
 
 cache="$root/website/.cache"
-stamp=$({
-    $sha "$SALAM"
-    find std -type f -exec $sha {} + | LC_ALL=C sort
-} | $sha | cut -d ' ' -f 1)
-if [ "$(cat "$cache/stamp" 2>/dev/null)" != "$stamp" ]; then
-    rm -rf "$cache"
-    mkdir -p "$cache"
-    fresh=1
-else
-    fresh=0
-fi
+mkdir -p "$cache/api"
+compiler_stamp=$($sha "$SALAM" | cut -d ' ' -f 1)
 SITE_PREVIEW_CACHE="$cache/preview"
 export SITE_PREVIEW_CACHE
 
@@ -67,21 +58,29 @@ mkdir -p "$work/gen"
 (cd "$work/gen" && "$SALAM" build "$root/website/build.salam" --output="$work/generator" --no-color --log-level=error >"$work/gen.log" 2>&1) &
 gen_pid=$!
 
-mkdir -p website/dist/api "$cache/api"
+mkdir -p website/dist/api
 : >"$work/docs"
+: >"$work/seen"
 for page in website/content/*/std/*.txt; do
     [ -f "$page" ] || continue
     pkg=$(sed -n 's/^pkg\.en = //p' "$page")
     slug=$(printf '%s' "$pkg" | tr '/' '-')
     out="$cache/api/$slug.json"
-    grep -qxF "$out" "$work/seen" 2>/dev/null && continue
+    grep -qxF "$out" "$work/seen" && continue
     printf '%s\n' "$out" >>"$work/seen"
-    [ "$fresh" -eq 0 ] && [ -s "$out" ] && continue
+    pkg_stamp=$({
+        printf '%s\n' "$compiler_stamp"
+        find "std/$pkg" -type f -exec $sha {} + | LC_ALL=C sort
+    } | $sha | cut -d ' ' -f 1)
+    if [ -s "$out" ] && [ "$(cat "$out.stamp" 2>/dev/null)" = "$pkg_stamp" ]; then
+        continue
+    fi
     src="std/$pkg"
     if grep -q '^pkg\.flat = true' "$page"; then
         src=$(mktemp -d "$work/flat.XXXXXX")
         cp "std/$pkg"/*.salam "$src/"
     fi
+    printf '%s\n' "$pkg_stamp" >"$out.stamp.want"
     printf '%s\n%s\n%s\n' "$src" "$out" "$pkg" >>"$work/docs"
 done
 if [ -s "$work/docs" ] &&
@@ -90,7 +89,11 @@ if [ -s "$work/docs" ] &&
     kill "$gen_pid" 2>/dev/null || true
     exit 1
 fi
-printf '%s\n' "$stamp" >"$cache/stamp"
+for want_stamp in "$cache/api"/*.json.stamp.want; do
+    [ -f "$want_stamp" ] || continue
+    [ -s "${want_stamp%.stamp.want}" ] || continue
+    mv "$want_stamp" "${want_stamp%.want}"
+done
 cp "$cache/api"/*.json website/dist/api/
 
 if ! wait "$gen_pid"; then

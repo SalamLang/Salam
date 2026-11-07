@@ -105,11 +105,30 @@ function withCalls(m: Message, live: CallView[]): CallView[] {
   return [...all.values()];
 }
 
+// The message body is the turn's final text, so it belongs after every step
+// and tool card. A finished turn often ends with an error body (the engine
+// failed after the tools ran) and has no text step; before, that body was
+// drawn above the cards, as if it had been added first. When the narration
+// steps already say the same thing, only the tail that they do not cover is
+// shown, so a final answer is never printed twice.
+function tailText(steps: ActivityStep[], body: string): string {
+  if (!body) return "";
+  const said = steps
+    .filter((s) => s.kind === "text")
+    .map((s) => s.text)
+    .join("\n\n");
+  if (!said) return body;
+  const whole = said.trim();
+  const rest = body.trim();
+  if (!rest || whole === rest || whole.includes(rest)) return "";
+  if (rest.startsWith(whole)) return rest.slice(whole.length).trim();
+  return body;
+}
+
 function timeline(steps: ActivityStep[], body: string, calls: CallView[]): TimelineItem[] {
   const items: TimelineItem[] = [];
   const used = new Set<string>();
   let boxes: (ThinkStep | ToolStep)[] = [];
-  let sawText = false;
   const flush = () => {
     if (boxes.length > 0) {
       items.push({ kind: "boxes", items: boxes });
@@ -119,7 +138,6 @@ function timeline(steps: ActivityStep[], body: string, calls: CallView[]): Timel
   for (const s of steps) {
     if (s.kind === "text") {
       flush();
-      sawText = true;
       items.push({ kind: "text", text: s.text });
       continue;
     }
@@ -135,9 +153,10 @@ function timeline(steps: ActivityStep[], body: string, calls: CallView[]): Timel
     boxes.push(s);
   }
   flush();
-  if (!sawText && body) items.push({ kind: "text", text: body });
   const rest = calls.filter((c) => !used.has(c.call_id));
   if (rest.length > 0) items.push({ kind: "calls", calls: rest });
+  const tail = tailText(steps, body);
+  if (tail) items.push({ kind: "text", text: tail });
   return items;
 }
 

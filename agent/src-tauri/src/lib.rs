@@ -35,6 +35,7 @@ const REMOTE_COMMANDS: &[&str] = &[
     "allow-agent-set-notify-prefs",
     "allow-agent-watch-reply",
     "allow-agent-unwatch-reply",
+    "allow-agent-open-url",
 ];
 
 #[cfg(target_os = "macos")]
@@ -184,6 +185,7 @@ pub fn run() {
             commands::agent_set_notify_prefs,
             commands::agent_watch_reply,
             commands::agent_unwatch_reply,
+            commands::agent_open_url,
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]

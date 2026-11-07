@@ -44,6 +44,8 @@ const XP_FILTER := 8
 
 const XP_UNION := 9
 
+const XP_VARIABLE := 10
+
 const AX_CHILD := 0
 
 const AX_DESCENDANT := 1
@@ -113,6 +115,7 @@ struct XPEngine:
     pub at: int = 0
     pub exprs: Vector<XPExpr> = Vector {}
     pub sets: Vector<NodeList> = Vector {}
+    pub vars: XPathVariables = XPathVariables {}
     pub order: Vector<int> = Vector {}
     pub failed: bool = false
     pub message: str = ""
@@ -139,6 +142,79 @@ pub struct XPathValue:
     @en "flag"
     @fa "منطقی"
     pub flag: bool = false
+end
+
+@en "XPathVariables"
+@fa "متغیرهای اکس‌پث"
+pub struct XPathVariables:
+    @en "names"
+    @fa "نام‌ها"
+    pub names: Vector<str> = Vector {} as Vector<str>
+    @en "values"
+    @fa "مقدارها"
+    pub values: Vector<XPathValue> = Vector {} as Vector<XPathValue>
+
+    @en "index_of"
+    @fa "اندیس"
+    pub func index_of(name: str): int:
+        mut i := 0
+        until i < this.names.len():
+            if this.names.get(i) == name: ret i end
+            i++
+        end
+        ret -1
+    end
+
+    @en "set"
+    @fa "تنظیم"
+    pub func set(name: str, value: XPathValue):
+        idx := this.index_of(name)
+        if idx < 0:
+            this.names.push(name)
+            this.values.push(value)
+            ret
+        end
+        mut old := this.values.get(idx)
+        FreeValue(old)
+        this.values.set(idx, value)
+    end
+
+    @en "set_string"
+    @fa "تنظیم رشته"
+    pub func set_string(name: str, text: str):
+        this.set(name, XPathValue { kind = ValueString, text = text })
+    end
+
+    @en "set_number"
+    @fa "تنظیم عدد"
+    pub func set_number(name: str, number: f64):
+        this.set(name, XPathValue { kind = ValueNumber, number = number })
+    end
+
+    @en "set_boolean"
+    @fa "تنظیم منطقی"
+    pub func set_boolean(name: str, flag: bool):
+        this.set(name, XPathValue { kind = ValueBoolean, flag = flag })
+    end
+
+    @en "set_nodes"
+    @fa "تنظیم گره‌ها"
+    pub func set_nodes(name: str, nodes: NodeList):
+        this.set(name, XPathValue { kind = ValueNodeSet, nodes = nodes })
+    end
+
+    @en "free"
+    @fa "آزادسازی"
+    pub func free():
+        mut i := 0
+        until i < this.values.len():
+            mut v := this.values.get(i)
+            FreeValue(v)
+            i++
+        end
+        this.values.free()
+        this.names.free()
+    end
 end
 
 func xp_fail_kind(e &: XPEngine, offset: int, kind: ErrorKind, code: str, message: str):
@@ -511,8 +587,17 @@ func parse_primary(e &: XPEngine): int:
         ret inner
     end
     if tk_is_op(e, "$"):
-        xp_fail_kind(e, tk_offset(e), ErrorKind.Unsupported, "xpath.unsupported", "variable references are not supported")
-        ret new_expr(e, XP_LITERAL)
+        tk_take(e)
+        if tk_kind(e, 0) != TK_NAME:
+            xp_fail(e, tk_offset(e), "a variable name was expected after \"$\"")
+            ret new_expr(e, XP_LITERAL)
+        end
+        id := new_expr(e, XP_VARIABLE)
+        mut node := e.exprs.get(id)
+        node.name = tk_text(e, 0)
+        e.exprs.set(id, node)
+        tk_take(e)
+        ret id
     end
     if tk_kind(e, 0) == TK_NAME and tk_kind(e, 1) == TK_OP and tk_text(e, 1) == "(":
         id := new_expr(e, XP_CALL)
@@ -1380,11 +1465,32 @@ func run_path(e &: XPEngine, d: Document, path_id: int, start: int): XPVal:
     ret node_set(current)
 end
 
+func xpath_value_to_xpval(e &: XPEngine, v: XPathValue): XPVal:
+    if v.kind == ValueString: ret string_val(v.text) end
+    if v.kind == ValueNumber: ret number_val(v.number) end
+    if v.kind == ValueBoolean: ret boolean_val(v.flag) end
+    set := new_set(e)
+    mut i := 0
+    until i < v.nodes.items.len():
+        set_push(e, set, v.nodes.items.get(i))
+        i++
+    end
+    ret node_set(set)
+end
+
 func evaluate(e &: XPEngine, d: Document, id: int, ctx: int, position: int, size: int): XPVal:
     if e.failed or id < 0: ret string_val("") end
     node := e.exprs.get(id)
     if node.kind == XP_LITERAL: ret string_val(node.text) end
     if node.kind == XP_NUMBER: ret number_val(node.number) end
+    if node.kind == XP_VARIABLE:
+        idx := e.vars.index_of(node.name)
+        if idx < 0:
+            xp_fail_kind(e, 0, ErrorKind.NotFound, "xpath.unknown_variable", "there is no XPath variable called $" + node.name)
+            ret string_val("")
+        end
+        ret xpath_value_to_xpval(e, e.vars.values.get(idx))
+    end
     if node.kind == XP_PATH: ret run_path(e, d, id, ctx) end
     if node.kind == XP_NEGATE: ret number_val(0.0 - as_number(e, d, evaluate(e, d, node.a, ctx, position, size))) end
     if node.kind == XP_UNION:
@@ -1511,8 +1617,8 @@ func engine_free(e &: XPEngine):
     e.order.free()
 end
 
-func run_query(d: Document, context: int, expression: str, err &: Error, out &: XPathValue):
-    mut e := XPEngine {}
+func run_query(d: Document, context: int, expression: str, variables: XPathVariables, err &: Error, out &: XPathValue):
+    mut e := XPEngine { vars = variables }
     out = XPathValue { kind = ValueNodeSet }
     xp_lex(e, expression)
     mut root := 0 - 1
@@ -1554,9 +1660,15 @@ end
 @en "Evaluate"
 @fa "ارزیابی"
 pub func Evaluate(d: Document, context: int, expression: str): XPathValue throws:
+    ret try EvaluateWith(d, context, expression, XPathVariables {})
+end
+
+@en "EvaluateWith"
+@fa "ارزیابی با متغیرها"
+pub func EvaluateWith(d: Document, context: int, expression: str, variables: XPathVariables): XPathValue throws:
     mut err := Error {}
     mut out := XPathValue {}
-    run_query(d, context, expression, err, out)
+    run_query(d, context, expression, variables, err, out)
     if err.message != "": throw err end
     ret out
 end
@@ -1623,6 +1735,73 @@ end
 @fa "انتخاب منطقی"
 pub func SelectBoolean(d: Document, context: int, expression: str): bool throws:
     mut v := try Evaluate(d, context, expression)
+    mut out := false
+    if v.kind == ValueBoolean: out = v.flag
+    else v.kind == ValueString: out = str.Len(v.text) > 0
+    else v.kind == ValueNumber: out = not math.IsNaN(v.number) and v.number != 0.0
+    else:
+        out = v.nodes.items.len() > 0
+    end
+    FreeValue(v)
+    ret out
+end
+
+@en "SelectWith"
+@fa "انتخاب با متغیرها"
+pub func SelectWith(d: Document, context: int, expression: str, variables: XPathVariables): NodeList throws:
+    mut v := try EvaluateWith(d, context, expression, variables)
+    if v.kind != ValueNodeSet:
+        FreeValue(v)
+        throw Error.At(ErrorKind.TypeMismatch, "the expression does not produce a node-set", 0).with_code("xpath.not_node_set").locate(expression).wrap("xpath")
+    end
+    ret v.nodes
+end
+
+@en "SelectFirstWith"
+@fa "انتخاب نخستین با متغیرها"
+pub func SelectFirstWith(d: Document, context: int, expression: str, variables: XPathVariables): int throws:
+    mut list := try SelectWith(d, context, expression, variables)
+    mut out := 0 - 1
+    if list.items.len() > 0: out = list.items.get(0) end
+    list.items.free()
+    ret out
+end
+
+@en "SelectStringWith"
+@fa "انتخاب رشته با متغیرها"
+pub func SelectStringWith(d: Document, context: int, expression: str, variables: XPathVariables): str throws:
+    mut v := try EvaluateWith(d, context, expression, variables)
+    mut out := ""
+    if v.kind == ValueString: out = v.text
+    else v.kind == ValueNumber: out = number_to_string(v.number)
+    else v.kind == ValueBoolean: out = boolean_text(v.flag)
+    else v.nodes.items.len() > 0: out = string_of_node(d, v.nodes.items.get(0))
+    end
+    FreeValue(v)
+    ret out
+end
+
+@en "SelectNumberWith"
+@fa "انتخاب عدد با متغیرها"
+pub func SelectNumberWith(d: Document, context: int, expression: str, variables: XPathVariables): f64 throws:
+    mut v := try EvaluateWith(d, context, expression, variables)
+    mut out := 0.0
+    if v.kind == ValueNumber: out = v.number
+    else v.kind == ValueString: out = string_to_number(v.text)
+    else v.kind == ValueBoolean:
+        if v.flag: out = 1.0 end
+    else v.nodes.items.len() > 0: out = string_to_number(string_of_node(d, v.nodes.items.get(0)))
+    else:
+        out = math.NaN()
+    end
+    FreeValue(v)
+    ret out
+end
+
+@en "SelectBooleanWith"
+@fa "انتخاب منطقی با متغیرها"
+pub func SelectBooleanWith(d: Document, context: int, expression: str, variables: XPathVariables): bool throws:
+    mut v := try EvaluateWith(d, context, expression, variables)
     mut out := false
     if v.kind == ValueBoolean: out = v.flag
     else v.kind == ValueString: out = str.Len(v.text) > 0

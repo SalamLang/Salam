@@ -12,6 +12,12 @@ pub const WT_FIXED64 := 1
 @en "WT_LEN"
 @fa "نوع سیم طول‌دار"
 pub const WT_LEN := 2
+@en "WT_START_GROUP"
+@fa "آغاز گروه"
+pub const WT_START_GROUP := 3
+@en "WT_END_GROUP"
+@fa "گروه ختم"
+pub const WT_END_GROUP := 4
 @en "WT_FIXED32"
 @fa "نوع سیم ثابت۳۲"
 pub const WT_FIXED32 := 5
@@ -34,6 +40,48 @@ func _pb_len(r &: compress.ByteReader): int throws:
         throw _pb_err(ErrorKind.UnexpectedEnd, "length-prefixed field needs " + n + " bytes, " + left + " left", start, "protobuf.truncated")
     end
     ret n as int
+end
+
+func _pb_skip_group(r &: compress.ByteReader, fieldNum: int, depth: int) throws:
+    if depth > 64:
+        throw _pb_err(ErrorKind.OutOfRange, "groups are nested deeper than 64 levels", r.pos, "protobuf.group_depth")
+    end
+    until compress.RdLeft(r) > 0:
+        at := r.pos
+        mut num := 0
+        mut wt := 0
+        try ReadTag(r, num, wt)
+        if wt == WT_END_GROUP:
+            if fieldNum != 0 and num != fieldNum:
+                throw _pb_err(ErrorKind.Syntax, "group " + fieldNum + " ends as group " + num, at, "protobuf.group_mismatch")
+            end
+            ret
+        end
+        try _pb_skip_field(r, num, wt, depth + 1)
+    end
+    throw _pb_err(ErrorKind.UnexpectedEnd, "a group is never closed", r.pos, "protobuf.truncated")
+end
+
+func _pb_skip_field(r &: compress.ByteReader, fieldNum: int, wireType: int, depth: int) throws:
+    start := r.pos
+    if wireType == WT_VARINT:
+        try ReadVarint(r)
+    else wireType == WT_FIXED64:
+        try _pb_need(r, 8, "fixed64")
+        r.pos += 8
+    else wireType == WT_FIXED32:
+        try _pb_need(r, 4, "fixed32")
+        r.pos += 4
+    else wireType == WT_LEN:
+        n := try _pb_len(r)
+        r.pos += n
+    else wireType == WT_START_GROUP:
+        try _pb_skip_group(r, fieldNum, depth)
+    else wireType == WT_END_GROUP:
+        throw _pb_err(ErrorKind.Syntax, "an end-group tag appears outside a group", start, "protobuf.group_mismatch")
+    else:
+        throw _pb_err(ErrorKind.Syntax, "invalid wire type " + wireType, start, "protobuf.bad_wire_type")
+    end
 end
 
 @en "MakeTag"
@@ -87,6 +135,18 @@ end
 @fa "نوشتن برچسب"
 pub func WriteTag(buf &: compress.ByteBuf, fieldNum: int, wireType: int):
     WriteVarint(buf, MakeTag(fieldNum, wireType))
+end
+
+@en "WriteStartGroup"
+@fa "نوشتن آغاز گروه"
+pub func WriteStartGroup(buf &: compress.ByteBuf, fieldNum: int):
+    WriteTag(buf, fieldNum, WT_START_GROUP)
+end
+
+@en "WriteEndGroup"
+@fa "نوشتن ختم گروه"
+pub func WriteEndGroup(buf &: compress.ByteBuf, fieldNum: int):
+    WriteTag(buf, fieldNum, WT_END_GROUP)
 end
 
 @en "ReadTag"
@@ -196,24 +256,14 @@ pub func ReadLenPrefixedStr(r &: compress.ByteReader): str throws:
     ret out
 end
 
+@en "SkipFieldFor"
+@fa "رد کردن فیلد با شماره"
+pub func SkipFieldFor(r &: compress.ByteReader, fieldNum: int, wireType: int) throws:
+    try _pb_skip_field(r, fieldNum, wireType, 0)
+end
+
 @en "SkipField"
 @fa "رد کردن فیلد"
 pub func SkipField(r &: compress.ByteReader, wireType: int) throws:
-    start := r.pos
-    if wireType == WT_VARINT:
-        try ReadVarint(r)
-    else wireType == WT_FIXED64:
-        try _pb_need(r, 8, "fixed64")
-        r.pos += 8
-    else wireType == WT_FIXED32:
-        try _pb_need(r, 4, "fixed32")
-        r.pos += 4
-    else wireType == WT_LEN:
-        n := try _pb_len(r)
-        r.pos += n
-    else wireType == 3 or wireType == 4:
-        throw _pb_err(ErrorKind.Unsupported, "groups (wire type " + wireType + ") are not supported", start, "protobuf.group")
-    else:
-        throw _pb_err(ErrorKind.Syntax, "invalid wire type " + wireType, start, "protobuf.bad_wire_type")
-    end
+    try SkipFieldFor(r, 0, wireType)
 end

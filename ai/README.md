@@ -536,6 +536,31 @@ turn is sent with every tool disabled), or keep Salam on and add operator
 instructions after the policy. The key's owner only sees that the key has a
 custom setup, never the prompt.
 
+### Commits and the Salam AI co-author
+
+Every commit the assistant makes carries this trailer, character for character:
+
+```text
+Co-authored-by: Salam AI <ai@salamlang.ir>
+```
+
+The rule is part of the Salam policy and of the free-account note, so it also
+applies when the Salam-only rule is lifted. A user cannot remove, rename,
+translate or replace it, and asking for that does not work.
+
+The tool layer enforces it too, for web chats, the Telegram assistant, cloud
+sessions and the desktop agent, because every tool call goes through
+`guard` in `bridge.salam` before it reaches a computer or a sandbox. For a
+`shell`, `run_tests`, `wsl` or `docker` call, `aipolicy.EnsureCommitTrailer`
+adds `--trailer "Co-authored-by: Salam AI <ai@salamlang.ir>"` to each `git
+commit` (including `git -C dir commit`, `sudo git commit`, a commit after `&&`
+and an argv-style `docker ... git commit`), and the secure JSON is what the
+agent receives. `aipolicy.CommitProblem` refuses a second or different
+co-author, a lower-case or retyped trailer, `git commit-tree`,
+`git filter-branch`, `git filter-repo`, `git replace` and interactive or
+`--exec` rebases. `ai/backend/tests/policy_test.salam` covers both functions
+and the policy text.
+
 ### OpenAI-compatible API
 
 `https://ai-api.salamlang.ir` speaks the OpenAI chat completions protocol, so

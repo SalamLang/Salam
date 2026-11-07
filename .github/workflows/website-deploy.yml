@@ -19,6 +19,7 @@ jobs:
     with:
       paths: |
         website/*
+        tools/salam/check-*.salam
         VERSION
         .github/actions/deploy-ssh/*
         .github/actions/publish-gh-pages/*
@@ -42,6 +43,12 @@ jobs:
 
       - name: Set up pinned tcc
         uses: ./.github/actions/setup-tcc # zizmor: ignore[self-repository]
+
+      - name: Restore the self-hosted compiler
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: salam
+          key: selfhost-${{ runner.os }}-${{ steps.seed.outputs.version }}-${{ hashFiles('compiler/**', 'std/**', 'tools/bash/build-selfhost.sh', 'salam.cfg', 'VERSION') }}
 
       - name: Cache generated site data
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
@@ -120,8 +127,16 @@ jobs:
   examples:
     needs: changes
     if: needs.changes.outputs.run == 'true'
-    name: Check the examples
+    name: Examples ${{ matrix.shard }}/${{ strategy.job-total }}
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # About 3400 examples and 2000 lesson snippets used to run on one runner and
+    # took around an hour. Eight slices plus the compiler cache below bring the
+    # job down to a few minutes; raise the list when the corpus grows a lot.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6, 7, 8]
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -129,18 +144,38 @@ jobs:
           persist-credentials: false
 
       - name: Install a seed compiler
+        id: seed
         uses: ./.github/actions/setup-salam # zizmor: ignore[self-repository]
 
       - name: Set up pinned tcc
         uses: ./.github/actions/setup-tcc # zizmor: ignore[self-repository]
 
+      - name: Restore the self-hosted compiler
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: salam
+          key: selfhost-${{ runner.os }}-${{ steps.seed.outputs.version }}-${{ hashFiles('compiler/**', 'std/**', 'tools/bash/build-selfhost.sh', 'salam.cfg', 'VERSION') }}
+
       - name: Install SQLite for the database examples
         run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
 
-      - name: Build the compiler and run every example
+      - name: Build the compiler and run this shard's examples
         run: sh website/build.sh
         env:
           WEBSITE_EXAMPLES: only
+          WEBSITE_EXAMPLE_SHARD: ${{ matrix.shard }}/${{ strategy.job-total }}
+
+  check-examples:
+    name: Check the examples
+    needs: examples
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Fail when a shard failed
+        if: needs.examples.result != 'success' && needs.examples.result != 'skipped'
+        run: |
+          echo "a shard of the examples check did not pass: ${{ needs.examples.result }}" >&2
+          exit 1
 
   deploy-fa:
     name: Deploy the Persian site to salamlang.ir

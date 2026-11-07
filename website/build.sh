@@ -20,6 +20,35 @@ check | skip | only) ;;
     ;;
 esac
 
+# CI splits the examples and the lesson snippets over several runners and gives
+# each one a slice with WEBSITE_EXAMPLE_SHARD=N/M. The slices are round-robin,
+# so a shard gets the same mix of heavy and light files as the others.
+shard=${WEBSITE_EXAMPLE_SHARD:-}
+shard_index=1
+shard_total=1
+if [ -n "$shard" ]; then
+    case "$shard" in
+    */*/* | /* | */ | *[!0-9/]*)
+        echo "website: WEBSITE_EXAMPLE_SHARD must be N/M, not '$shard'" >&2
+        exit 2
+        ;;
+    esac
+    shard_index=${shard%/*}
+    shard_total=${shard#*/}
+    if [ "$shard_index" -lt 1 ] || [ "$shard_total" -lt 1 ] || [ "$shard_index" -gt "$shard_total" ]; then
+        echo "website: WEBSITE_EXAMPLE_SHARD needs 1 <= N <= M, not '$shard'" >&2
+        exit 2
+    fi
+fi
+
+shard_list() {
+    if [ "$shard_total" -gt 1 ]; then
+        awk -v part="$shard_index" -v total="$shard_total" 'NR % total == (part - 1) % total' "$1"
+    else
+        cat "$1"
+    fi
+}
+
 "$SALAM" run tools/salam/check-fa-names.salam --no-color --log-level=error
 "$SALAM" run website/check-std-coverage.salam --no-color --log-level=error
 "$SALAM" run website/check-code-words.salam --no-color --log-level=error
@@ -27,16 +56,30 @@ esac
 jobs=$(nproc 2>/dev/null || echo 4)
 if [ "$examples" != skip ]; then
     fail=0
-    printf '%s\0' website/content/*/examples/*.salam website/content/*/std-examples/*/*.salam |
+    list=$(mktemp)
+    printf '%s\n' website/content/*/examples/*.salam website/content/*/std-examples/*/*.salam >"$list"
+    shard_list "$list" >"$list.shard"
+    echo "website: checking $(wc -l <"$list.shard" | tr -d ' ') examples (shard $shard_index/$shard_total, $jobs at a time)"
+    tr '\n' '\0' <"$list.shard" |
         xargs -0 -P "$jobs" -n 1 sh website/check-example.sh || fail=1
+    rm -f "$list" "$list.shard"
     [ "$fail" -eq 0 ] || {
         echo "website: example output does not match its .out file" >&2
         exit 1
     }
-    "$SALAM" run tools/salam/check-snippets.salam --no-color --log-level=error || {
-        echo "website: a lesson snippet does not compile" >&2
-        exit 1
-    }
+    lessons=$(mktemp)
+    printf '%s\n' website/content/*/learn/*.txt >"$lessons"
+    shard_list "$lessons" >"$lessons.shard"
+    if [ -s "$lessons.shard" ]; then
+        echo "website: checking the snippets of $(wc -l <"$lessons.shard" | tr -d ' ') lessons (shard $shard_index/$shard_total)"
+        # shellcheck disable=SC2046 # lesson paths never contain spaces
+        CHECK_JOBS="$jobs" "$SALAM" run tools/salam/check-snippets.salam $(cat "$lessons.shard") --no-color --log-level=error || {
+            echo "website: a lesson snippet does not compile" >&2
+            rm -f "$lessons" "$lessons.shard"
+            exit 1
+        }
+    fi
+    rm -f "$lessons" "$lessons.shard"
 fi
 [ "$examples" = only ] && exit 0
 

@@ -758,49 +758,73 @@ function clientHeaders(anonymous = false): Record<string, string> {
   return headers;
 }
 
+const RETRY_WINDOW_MS = 75000;
+
+function pause(ms: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
 async function call<T>(
   method: string,
   path: string,
   body?: unknown,
   anonymous = false,
 ): Promise<T> {
-  const headers = clientHeaders(anonymous);
-  if (body !== undefined) headers["Content-Type"] = "application/json";
-  let res: Response;
-  try {
-    res = await fetch(BASE + path, {
-      method,
-      headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
-  } catch {
-    throw new ApiError(
-      0,
-      "network",
-      t(
-        "ارتباط با سرور برقرار نشد. اتصال اینترنت را بررسی کنید.",
-        "Could not reach the server. Check your internet connection.",
-      ),
-    );
-  }
-  let data: { error?: string; message?: string } | null = null;
-  try {
-    data = await res.json();
-  } catch {}
-  if (!res.ok) {
-    if (res.status === 401 && path !== "/auth/login" && !anonymous)
-      onUnauthorized();
-    throw new ApiError(
-      res.status,
-      data?.error || "server",
-      data?.message ||
+  const started = Date.now();
+  let wait = 1000;
+  const again = () => Date.now() - started + wait < RETRY_WINDOW_MS;
+  for (;;) {
+    const headers = clientHeaders(anonymous);
+    if (body !== undefined) headers["Content-Type"] = "application/json";
+    let res: Response;
+    try {
+      res = await fetch(BASE + path, {
+        method,
+        headers,
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+    } catch {
+      if (method === "GET" && again()) {
+        await pause(wait);
+        wait = Math.min(wait * 2, 8000);
+        continue;
+      }
+      throw new ApiError(
+        0,
+        "network",
         t(
-          "خطایی پیش آمد. دوباره تلاش کنید.",
-          "Something went wrong. Please try again.",
+          "ارتباط با سرور برقرار نشد. اتصال اینترنت را بررسی کنید.",
+          "Could not reach the server. Check your internet connection.",
         ),
-    );
+      );
+    }
+    let data: { error?: string; message?: string } | null = null;
+    try {
+      data = await res.json();
+    } catch {}
+    const restarting =
+      (res.status === 503 && data?.error === "down") ||
+      (method === "GET" && (res.status === 502 || res.status === 504));
+    if (restarting && again()) {
+      await pause(wait);
+      wait = Math.min(wait * 2, 8000);
+      continue;
+    }
+    if (!res.ok) {
+      if (res.status === 401 && path !== "/auth/login" && !anonymous)
+        onUnauthorized();
+      throw new ApiError(
+        res.status,
+        data?.error || "server",
+        data?.message ||
+          t(
+            "خطایی پیش آمد. دوباره تلاش کنید.",
+            "Something went wrong. Please try again.",
+          ),
+      );
+    }
+    return data as unknown as T;
   }
-  return data as unknown as T;
 }
 
 export type SpokenText = {

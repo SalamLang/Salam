@@ -28,6 +28,9 @@ include aimodels "models.salam"
 
 const CALL_MS := 20000
 const SEND_MS := 60000
+const RESUME_MAX := 3
+const RESUME_PREFIX := "(automatic continuation)"
+const RESUME_NOTE := "(automatic continuation) Your previous reply was cut off by a technical interruption, not by the user. Continue exactly where you stopped. Do not repeat what you already wrote or did; if you were in the middle of a task, carry on with it and finish it. Answer in the same language as before."
 const TRACE_FIELD_MAX := 200000
 
 mut ENGINE_HOST := "127.0.0.1"
@@ -59,6 +62,8 @@ mut SESSION_EFFORT := HashMap {} as HashMap<str, str>
 mut SESSION_VARIANT := HashMap {} as HashMap<str, str>
 mut FALLBACKS := Vector {} as Vector<str>
 mut POOL_CAPS_AT := 0 as i64
+mut SESSION_RESUMES := HashMap {} as HashMap<str, int>
+mut SESSION_RESUME_AT := HashMap {} as HashMap<str, i64>
 
 struct Answer:
     pub status: int = 0
@@ -227,6 +232,20 @@ func field(v: value.Value, key: str): value.Value:
     ret got
 end
 
+func is_resume(msg: value.Value): bool:
+    parts := field(msg, "parts")
+    if not value.IsArray(parts):
+        ret false
+    end
+    repeat value.ArrayLen(parts) in j:
+        p := value.ArrayGet(parts, j)
+        if text_of(p, "type") == "text" and str.StartsWith(text_of(p, "text"), RESUME_PREFIX):
+            ret true
+        end
+    end
+    ret false
+end
+
 func text_of(v: value.Value, key: str): str:
     f := field(v, key)
     if value.IsString(f):
@@ -246,6 +265,25 @@ end
 func flag(v: value.Value, key: str): bool:
     f := field(v, key)
     ret value.IsBool(f) and value.AsBool(f)
+end
+
+func agent_in_engine(sid: str): str:
+    r := call("GET", "/session/" + sid + "/message", "", SEND_MS)
+    if not ok_status(r):
+        ret ""
+    end
+    mut list := try json.Decode(r.body) catch value.ValueNull()
+    mut found := ""
+    if value.IsArray(list):
+        repeat value.ArrayLen(list) in i:
+            info := field(value.ArrayGet(list, i), "info")
+            if text_of(info, "role") == "user" and text_of(info, "agent").len() > 0:
+                found = text_of(info, "agent")
+            end
+        end
+    end
+    value.ValueFree(list)
+    ret found
 end
 
 func agent_exists(name: str): bool:
@@ -308,6 +346,7 @@ func remember(sid: str, agent: str, text: str, model: str, fresh: bool, parts: s
         SESSION_PARTS.put(sid, parts)
         SESSION_TRY.put(sid, 0)
         _r := SESSION_RETRY_AT.remove(sid)
+        _q := SESSION_RESUMES.remove(sid)
     end
     _u := sync.Unlock(LOCK)
 end
@@ -829,6 +868,51 @@ pub func Retry(sid: str): bool:
     ret post_prompt(sid, agent, text, model, parts, system, tools, "")
 end
 
+pub func Resume(sid: str, interrupted: bool): bool:
+    now := time.NowMillis()
+    _l := sync.Lock(LOCK)
+    if SESSION_RESUME_AT.has(sid) and now - SESSION_RESUME_AT.get(sid) < 4000:
+        _e := sync.Unlock(LOCK)
+        ret true
+    end
+    used := SESSION_RESUMES.has(sid) ? SESSION_RESUMES.get(sid) : 0
+    if used >= RESUME_MAX:
+        _f := sync.Unlock(LOCK)
+        ret false
+    end
+    SESSION_RESUMES.put(sid, used + 1)
+    SESSION_RESUME_AT.put(sid, now)
+    mut agent := SESSION_AGENT.has(sid) ? SESSION_AGENT.get(sid) : ""
+    mut model := SESSION_MODEL.has(sid) ? SESSION_MODEL.get(sid) : ""
+    system := SESSION_SYSTEM.has(sid) ? SESSION_SYSTEM.get(sid) : SYSTEM
+    tools := SESSION_TOOLS.has(sid) ? SESSION_TOOLS.get(sid) : ""
+    variant := SESSION_VARIANT.has(sid) ? SESSION_VARIANT.get(sid) : ""
+    _u := sync.Unlock(LOCK)
+    if agent.len() == 0:
+        agent = agent_in_engine(sid)
+        if agent.len() == 0:
+            agent = ENGINE_AGENT
+        end
+    end
+    if aimodels.Managed():
+        aimodels.Refresh(now)
+        if not interrupted and model.len() > 0:
+            aimodels.Fail(model, now)
+        end
+        next := aimodels.Ready(now, false, false)
+        if next.len() == 0 and not interrupted:
+            ret false
+        end
+        if next.len() > 0:
+            model = next
+        end
+    end
+    _a := call("POST", "/session/" + sid + "/abort", "{}", CALL_MS)
+    println "engine turn cut off, resuming it", used + 1, "of", RESUME_MAX
+    remember(sid, agent, RESUME_NOTE, model, false, "", system, tools, variant)
+    ret post_prompt(sid, agent, RESUME_NOTE, model, "", system, tools, variant)
+end
+
 pub func SetRedactions(words: str):
     aiact.Configure(words)
 end
@@ -850,8 +934,11 @@ pub func Transcript(sid: str, from_ms: i64, upto_ms: i64, mask: str, ok &: bool)
         info := field(msg, "info")
         at := millis(field(info, "time"), "created")
         if at >= from_ms and (upto_ms <= 0 or at < upto_ms):
-            role := text_of(info, "role")
+            mut role := text_of(info, "role")
             parts := field(msg, "parts")
+            if role == "user" and is_resume(msg):
+                role = "resume"
+            end
             if role == "user":
                 mut pieces := Vector {} as Vector<str>
                 if value.IsArray(parts):
@@ -1018,7 +1105,7 @@ pub func Poll(sid: str): Reply:
     n := value.ArrayLen(list)
     mut start := 0
     repeat n in i:
-        if text_of(field(value.ArrayGet(list, i), "info"), "role") == "user":
+        if text_of(field(value.ArrayGet(list, i), "info"), "role") == "user" and not is_resume(value.ArrayGet(list, i)):
             start = i + 1
         end
     end

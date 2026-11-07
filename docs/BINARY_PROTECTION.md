@@ -8,10 +8,12 @@ lets you remove the first two and makes the third less useful, so a casual
 `strings`, `nm`, `objdump` or decompiler pass learns much less.
 
 ```sh
-salam protect main.salam --release -o myapp
-# the same thing as a build option:
 salam build main.salam --protect --release -o myapp
 ```
+
+`--protect` works on `salam build`, `salam run` and the other commands that
+compile through the C backend (`--obfuscate` is an alias). It is off by
+default, so a build without the flag behaves exactly as before.
 
 ## What `--protect` does
 
@@ -65,7 +67,7 @@ determined reverse engineer.
 ## Recommended release recipe
 
 ```sh
-salam protect src/main.salam --release --lto -o dist/myapp
+salam build src/main.salam --protect --release --lto -o dist/myapp
 ```
 
 - `--release` removes the safety checks.
@@ -76,7 +78,7 @@ salam protect src/main.salam --release --lto -o dist/myapp
   executable you publish.
 
 On macOS the compiler re-signs the stripped binary ad-hoc. If you sign your
-releases with a Developer ID, sign after `salam protect` has finished, not
+releases with a Developer ID, sign after the protected build has finished, not
 before.
 
 ## Checking the result

@@ -33,7 +33,7 @@ const ICONS: Record<string, (p: { width?: number; height?: number }) => ReactNod
   web: IconGlobe,
 };
 
-function seconds(ms: number): string {
+export function seconds(ms: number): string {
   const s = Math.max(1, Math.round(ms / 1000));
   if (s < 60) return t(`${toPersianDigits(s)} ثانیه`, `${s}s`);
   const m = Math.floor(s / 60);
@@ -47,7 +47,7 @@ function lastLine(text: string): string {
   return last.length > 160 ? `…${last.slice(-160)}` : last;
 }
 
-function useElapsed(active: boolean, createdSec: number): number {
+export function useElapsed(active: boolean, createdSec: number): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!active) return;

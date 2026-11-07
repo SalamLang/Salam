@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { ToolCard, type CallView } from "./Agent";
 import { uiText, type ActivityStep, type Message, type ThinkStep, type ToolStep } from "./api";
 import type { AgentAnswer } from "./desktop";
-import { ActivityPanel } from "./Activity";
+import { ActivityPanel, seconds, useElapsed } from "./Activity";
 import { MessageFiles } from "./Attach";
 import { EffortBadge } from "./effort";
 import { CopyButton, Markdown } from "./Markdown";
@@ -16,6 +16,36 @@ const PHASE_TEXT: Record<string, string> = {
   writing: t("در حال نوشتن", "Writing"),
   checking: t("در حال اصلاح کد با کامپایلر سلام", "Fixing the code with the Salam compiler"),
 };
+
+const SLOW_AFTER_MS = 25000;
+const VERY_SLOW_AFTER_MS = 90000;
+
+function WaitPhase({ label, created }: { label: string; created: number }) {
+  const elapsed = useElapsed(true, created);
+  const note =
+    elapsed > VERY_SLOW_AFTER_MS
+      ? t(
+          "این پرسش سنگین‌تر از معمول است یا سرویس شلوغ است. هنوز در حال کار است و لازم نیست دوباره بفرستید.",
+          "This one is heavier than usual or the service is busy. It is still working, you do not need to send it again.",
+        )
+      : elapsed > SLOW_AFTER_MS
+        ? t("پاسخ‌های طولانی چند لحظه زمان می‌برند. هنوز در حال کار است.", "Longer answers take a moment. It is still working.")
+        : "";
+  return (
+    <div className="phase-wrap">
+      <div className="phase" aria-live="polite">
+        <span className="dots">
+          <i />
+          <i />
+          <i />
+        </span>
+        {label}
+        {elapsed > 3000 && <span className="activity-time">{seconds(elapsed)}</span>}
+      </div>
+      {note && <div className="phase-note">{note}</div>}
+    </div>
+  );
+}
 
 const FRAME_MS = 33;
 const CATCH_UP_MS = 260;
@@ -192,7 +222,7 @@ function AssistantMessage({ m, calls = [], cloud = false, onDecide = () => {}, o
   const steps = m.activity ?? [];
   const items = timeline(steps, uiText(m.body), all, m.status);
   const working = cloud ? PHASE_TEXT.cloud_working : PHASE_TEXT.working;
-  const showPhase = pending && all.length > 0 && !waiting && m.body.length === 0;
+  const showPhase = pending && !waiting && m.body.length === 0 && (all.length > 0 || items.length === 0);
   return (
     <div className={`msg assistant ${m.status}`}>
       <img src="/logo.svg" alt="" className="msg-avatar" width={28} height={28} />
@@ -216,16 +246,7 @@ function AssistantMessage({ m, calls = [], cloud = false, onDecide = () => {}, o
             );
           return <ActivityPanel key={i} steps={g.items} pending={pending && isLast} ms={isLast ? m.ms : undefined} created={m.created} />;
         })}
-        {showPhase && (
-          <div className="phase" aria-live="polite">
-            <span className="dots">
-              <i />
-              <i />
-              <i />
-            </span>
-            {all.length > 0 ? working : PHASE_TEXT[phase] || PHASE_TEXT.thinking}
-          </div>
-        )}
+        {showPhase && <WaitPhase label={all.length > 0 ? working : PHASE_TEXT[phase] || PHASE_TEXT.thinking} created={m.created} />}
         {!pending && m.body && (
           <div className="msg-tools">
             <CopyButton text={uiText(m.body)} label={t("رونوشت پاسخ", "Copy answer")} />

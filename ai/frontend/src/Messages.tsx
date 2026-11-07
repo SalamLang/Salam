@@ -111,23 +111,32 @@ function withCalls(m: Message, live: CallView[]): CallView[] {
 // drawn above the cards, as if it had been added first. When the narration
 // steps already say the same thing, only the tail that they do not cover is
 // shown, so a final answer is never printed twice.
-function tailText(steps: ActivityStep[], body: string): string {
-  if (!body) return "";
-  const said = steps
+//
+// While the turn streams, a body that is still growing is covered as soon as
+// the narration contains it. Once it is final, it only counts as covered when
+// it is the last thing the narration says: the same text that appeared before
+// a tool card is drawn again under that card, where the turn ends. An error
+// body is always drawn there, and a narration step that repeats it is dropped,
+// so the error closes the message exactly once.
+function tailText(steps: ActivityStep[], body: string, status: Message["status"]): string {
+  const rest = body.trim();
+  if (!rest) return "";
+  if (status === "error") return rest;
+  const whole = steps
     .filter((s) => s.kind === "text")
     .map((s) => s.text)
-    .join("\n\n");
-  if (!said) return body;
-  const whole = said.trim();
-  const rest = body.trim();
-  if (!rest || whole === rest || whole.includes(rest)) return "";
+    .join("\n\n")
+    .trim();
+  if (!whole) return rest;
+  if (status === "pending" ? whole.includes(rest) : whole.endsWith(rest)) return "";
   if (rest.startsWith(whole)) return rest.slice(whole.length).trim();
-  return body;
+  return rest;
 }
 
-function timeline(steps: ActivityStep[], body: string, calls: CallView[]): TimelineItem[] {
+function timeline(steps: ActivityStep[], body: string, calls: CallView[], status: Message["status"]): TimelineItem[] {
   const items: TimelineItem[] = [];
   const used = new Set<string>();
+  const closing = status === "error" ? body.trim() : "";
   let boxes: (ThinkStep | ToolStep)[] = [];
   const flush = () => {
     if (boxes.length > 0) {
@@ -137,6 +146,9 @@ function timeline(steps: ActivityStep[], body: string, calls: CallView[]): Timel
   };
   for (const s of steps) {
     if (s.kind === "text") {
+      // An error body is drawn once, at the end. When a narration step already
+      // repeats it, that step would show the same sentence above the cards.
+      if (closing && s.text.trim() === closing) continue;
       flush();
       items.push({ kind: "text", text: s.text });
       continue;
@@ -155,7 +167,7 @@ function timeline(steps: ActivityStep[], body: string, calls: CallView[]): Timel
   flush();
   const rest = calls.filter((c) => !used.has(c.call_id));
   if (rest.length > 0) items.push({ kind: "calls", calls: rest });
-  const tail = tailText(steps, body);
+  const tail = tailText(steps, body, status);
   if (tail) items.push({ kind: "text", text: tail });
   return items;
 }
@@ -178,7 +190,7 @@ function AssistantMessage({ m, calls = [], cloud = false, onDecide = () => {}, o
   const all = withCalls(m, calls);
   const waiting = all.some((c) => c.state === "pending" || c.state === "running");
   const steps = m.activity ?? [];
-  const items = timeline(steps, uiText(m.body), all);
+  const items = timeline(steps, uiText(m.body), all, m.status);
   const working = cloud ? PHASE_TEXT.cloud_working : PHASE_TEXT.working;
   const showPhase = pending && all.length > 0 && !waiting && m.body.length === 0;
   return (

@@ -24,6 +24,7 @@ import time
 
 include aiact "activity.salam"
 include aieffort "effort.salam"
+include aimodels "models.salam"
 
 const CALL_MS := 20000
 const SEND_MS := 60000
@@ -347,6 +348,9 @@ func send_as(sid: str, agent: str, text: str, parts: str, system_in: str, tools:
         model = aieffort.Model(effort)
         variant = aieffort.Variant(effort)
     end
+    if model.len() == 0 and aimodels.Managed():
+        model = aimodels.Pick(time.NowMillis())
+    end
     remember(sid, agent, text, model, true, parts, system, tools, variant)
     ret post_prompt(sid, agent, text, model, parts, system, tools, variant)
 end
@@ -649,11 +653,14 @@ end
 pub func Followup(sid: str, text: str): bool:
     _l := sync.Lock(LOCK)
     agent := SESSION_AGENT.has(sid) ? SESSION_AGENT.get(sid) : ENGINE_AGENT
-    model := SESSION_MODEL.has(sid) ? SESSION_MODEL.get(sid) : ""
+    mut model := SESSION_MODEL.has(sid) ? SESSION_MODEL.get(sid) : ""
     system := SESSION_SYSTEM.has(sid) ? SESSION_SYSTEM.get(sid) : SYSTEM
     tools := SESSION_TOOLS.has(sid) ? SESSION_TOOLS.get(sid) : ""
     variant := SESSION_VARIANT.has(sid) ? SESSION_VARIANT.get(sid) : ""
     _u := sync.Unlock(LOCK)
+    if aimodels.Managed() and (model.len() == 0 or aimodels.Owns(model)):
+        model = aimodels.Pick(time.NowMillis())
+    end
     remember(sid, agent, text, model, false, "", system, tools, variant)
     ret post_prompt(sid, agent, text, model, "", system, tools, variant)
 end
@@ -683,7 +690,14 @@ pub func SetFallbacks(list: str):
     FALLBACKS = found
 end
 
+pub func SetModels(preferred: str, fallbacks: str):
+    aimodels.Configure(preferred, fallbacks)
+end
+
 pub func Fallbacks(): int:
+    if aimodels.Managed():
+        ret aimodels.Count()
+    end
     ret FALLBACKS.len()
 end
 
@@ -694,8 +708,19 @@ pub func Retry(sid: str): bool:
         _e := sync.Unlock(LOCK)
         ret true
     end
-    tried := SESSION_TRY.has(sid) ? SESSION_TRY.get(sid) : FALLBACKS.len()
-    if tried >= FALLBACKS.len() or not SESSION_PROMPT.has(sid):
+    managed := aimodels.Managed()
+    pool := managed ? aimodels.Count() : FALLBACKS.len()
+    tried := SESSION_TRY.has(sid) ? SESSION_TRY.get(sid) : pool
+    mut model := ""
+    if managed and tried < pool:
+        if SESSION_MODEL.has(sid):
+            aimodels.Fail(SESSION_MODEL.get(sid), now)
+        end
+        model = aimodels.Ready(now)
+    else tried < pool:
+        model = FALLBACKS.get(tried)
+    end
+    if tried >= pool or model.len() == 0 or not SESSION_PROMPT.has(sid):
         _f := sync.Unlock(LOCK)
         ret false
     end
@@ -704,7 +729,6 @@ pub func Retry(sid: str): bool:
     agent := SESSION_AGENT.has(sid) ? SESSION_AGENT.get(sid) : ENGINE_AGENT
     text := SESSION_PROMPT.get(sid)
     parts := SESSION_PARTS.has(sid) ? SESSION_PARTS.get(sid) : ""
-    model := FALLBACKS.get(tried)
     system := SESSION_SYSTEM.has(sid) ? SESSION_SYSTEM.get(sid) : SYSTEM
     tools := SESSION_TOOLS.has(sid) ? SESSION_TOOLS.get(sid) : ""
     _u := sync.Unlock(LOCK)
@@ -713,7 +737,7 @@ pub func Retry(sid: str): bool:
         ret false
     end
     _a := call("POST", "/session/" + sid + "/abort", "{}", CALL_MS)
-    println "engine turn failed, retrying with fallback", tried + 1, "of", FALLBACKS.len()
+    println "engine turn failed, retrying with fallback", tried + 1, "of", pool
     remember(sid, agent, text, model, false, "", system, tools, "")
     ret post_prompt(sid, agent, text, model, parts, system, tools, "")
 end
@@ -959,6 +983,12 @@ pub func Poll(sid: str): Reply:
     end
     out.idle = not busy
     out.done = not busy and last_done and last_finish != "tool-calls"
+    if out.done and out.text.len() > 0 and aimodels.Managed():
+        _m := sync.Lock(LOCK)
+        used := SESSION_MODEL.has(sid) ? SESSION_MODEL.get(sid) : ""
+        _n := sync.Unlock(LOCK)
+        aimodels.Ok(used)
+    end
     out.interrupted = not busy and out.started and not last_done
     if searching:
         out.phase = "searching"

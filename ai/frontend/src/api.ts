@@ -14,12 +14,38 @@ export type Chat = {
   cloud?: boolean;
   device_id?: number;
   workspace?: string;
+  project_id?: string;
   shared?: ShareKind[];
   state?: "working" | "queued" | "waiting" | "idle" | "offline";
   phase?: "thinking" | "writing" | "tool";
   queued?: number;
   online?: boolean;
   last_error?: boolean;
+};
+export type Project = {
+  id: string;
+  name: string;
+  description: string;
+  color: string;
+  emoji: string;
+  pinned?: boolean;
+  created: number;
+  updated: number;
+  chats: number;
+  live: number;
+  last: number;
+};
+export type ProjectInput = {
+  name: string;
+  description?: string;
+  color?: string;
+  emoji?: string;
+};
+export type ChatStart = {
+  device_id?: string;
+  workspace?: string;
+  cloud?: boolean;
+  project_id?: string;
 };
 export type ShareKind = "view" | "collab";
 export type ShareState =
@@ -929,9 +955,19 @@ export const api = {
   logout: () => call<{ ok: boolean }>("POST", "/auth/logout"),
   me: () => call<{ user: User }>("GET", "/me"),
   chats: () => call<{ chats: Chat[] }>("GET", "/chats"),
-  createChat: (
-    options?: { device_id: string; workspace: string } | { cloud: true },
-  ) => call<{ chat: Chat }>("POST", "/chats", options),
+  projects: () => call<{ projects: Project[] }>("GET", "/projects"),
+  createProject: (body: ProjectInput) =>
+    call<{ project: Project }>("POST", "/projects", body),
+  updateProject: (id: string, body: ProjectInput) =>
+    call<{ project: Project }>("PATCH", `/projects/${id}`, body),
+  deleteProject: (id: string) =>
+    call<{ ok: boolean }>("DELETE", `/projects/${id}`),
+  moveChat: (id: string, projectId: string) =>
+    call<{ ok: boolean; project_id: string }>("PATCH", `/chats/${id}/project`, {
+      project_id: projectId,
+    }),
+  createChat: (options?: ChatStart) =>
+    call<{ chat: Chat }>("POST", "/chats", options),
   authProviders: async () => {
     const early = (
       window as unknown as {

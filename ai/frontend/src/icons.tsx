@@ -26,6 +26,11 @@ export const IconPlus = (p: P) => (
     <path d="M12 5v14M5 12h14" />
   </Base>
 );
+export const IconArrowLeft = (p: P) => (
+  <Base {...p}>
+    <path d="M19 12H5M12 19l-7-7 7-7" />
+  </Base>
+);
 export const IconSend = (p: P) => (
   <Base {...p}>
     <path d="M12 19V5M5 12l7-7 7 7" />

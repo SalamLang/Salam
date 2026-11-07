@@ -221,6 +221,37 @@ laptop does not stop the queue, and neither does an answer nobody is watching.
 
 `node ai/backend/tests/queue_flow.mjs` tests it against a running API and the engine mock.
 
+### Projects
+
+The web app and Salam Agent open on projects, not on a chat. A project has a
+name, a short description, a color and an icon, and it keeps one job's chats
+together. Chats that belong to no project live in **Others**, which is where a
+quick, temporary chat goes.
+
+| Method and path            | Purpose                                                             |
+| -------------------------- | ------------------------------------------------------------------- |
+| `GET /projects`            | the signed-in user's projects, with chat and live counts            |
+| `POST /projects`           | create one from `name`, optional `description`, `color` and `emoji` |
+| `PATCH /projects/:id`      | change those fields                                                 |
+| `DELETE /projects/:id`     | remove the project; its chats are kept and moved to Others          |
+| `GET /chats?project=<id>`  | only that project's chats (`project=none` for Others)               |
+| `POST /chats`              | `project_id` starts the chat inside a project                       |
+| `PATCH /chats/:id/project` | move a chat to a project, or to Others with an empty `project_id`   |
+
+- A project is per account; another account cannot read, edit or delete it, and
+  cannot move one of its chats into it.
+- A chat in a project carries the project's name and description to the
+  assistant as a `<project_context>` block, once per chat and again only when
+  the project changes. It is the same idea as the desktop `project_instructions`
+  block, for the work that has no folder.
+- The chat list in the app is filtered by the open space, and the project picker
+  in the chat header moves the current chat without leaving it.
+- Deleting a project is not deleting its work: the chats stay, they only lose
+  the project label.
+
+`node ai/backend/tests/projects_flow.mjs` tests all of it against a running API;
+it needs no assistant engine.
+
 ### Sharing a chat
 
 The owner opens Share in the chat header and makes a view link or a collaborate link

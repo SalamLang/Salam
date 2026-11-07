@@ -49851,6 +49851,42 @@ Output:
 
 The end of the example shows a trick for tests and quiet tools: a level above `LevelError` silences everything, and setting it back turns logging on again.
 
+## Log from many threads without blocking
+
+The sink writes are serialized, so several threads can call the log functions at once without mixing characters. For a hot path, go one step further: `StartAsync(capacity)` starts one writer thread and a channel of the given capacity. Each call then formats its line and hands it to the channel; when the channel is full the caller waits, which is the back pressure that keeps memory bounded. The writer drains the channel in order, so lines from one thread keep their order and lines from different threads interleave only between whole messages.
+
+log-Async.salam
+
+```salam
+import log
+
+func main:
+    log.ShowTime(false)
+    log.ToStdout()
+    log.SetPrefix("async")
+
+    started := log.StartAsync(4 as i64)
+    log.Info("one")
+    log.Info("two")
+    log.Flush()
+    log.StopAsync()
+
+    println "started:", started
+end
+```
+
+Output:
+
+```text
+[INFO] async one
+[INFO] async two
+started: true
+```
+
+`StartAsync` returns false when asynchronous mode is already on; the second call does not start another writer. `Flush` waits until every line emitted so far has reached the sink, and `StopAsync` stops the writer after draining the queue and then frees it. A zero capacity makes the queue a rendezvous, so each call waits for the writer to take its line. `Fatal` flushes before it exits.
+
+Configure the level, prefix, format and sink before starting the writer; they are still plain globals and are not meant to change while other threads are logging. If `StopAsync` is never called, the writer stays until the process exits; lines already flushed are safe, but the last queued lines may be lost on a crash, exactly like a buffered file.
+
 ## Which function for which job
 
 | You want | Use |
@@ -50149,6 +50185,72 @@ func CloseFile()
 Flushes and closes the log file and sends the log back to standard error.
 
 The example for this item is shown with the ones above: log-ToFile.salam
+
+### `StartAsync`
+
+```salam
+func StartAsync(capacity: i64): bool
+```
+
+Starts a background writer thread and a channel queue of the given capacity; every log call then enqueues its line and returns without touching the sink. A full queue makes the caller wait. Returns false when asynchronous mode is already on. Zero means an unbuffered handoff.
+
+log-Async.salam
+
+```salam
+import log
+
+func main:
+    log.ShowTime(false)
+    log.ToStdout()
+    log.SetPrefix("async")
+
+    started := log.StartAsync(4 as i64)
+    log.Info("one")
+    log.Info("two")
+    log.Flush()
+    log.StopAsync()
+
+    println "started:", started
+end
+```
+
+Output:
+
+```text
+[INFO] async one
+[INFO] async two
+started: true
+```
+
+### `StopAsync`
+
+```salam
+func StopAsync()
+```
+
+Stops asynchronous mode after draining the queue: closes the channel, joins the writer and frees it. Does nothing when asynchronous mode is off.
+
+The example for this item is shown with the ones above: log-Async.salam
+
+### `Flush`
+
+```salam
+func Flush()
+```
+
+Waits until every line emitted so far has been written to the sink. Lines emitted after the call are not covered; it returns immediately when asynchronous mode is off.
+
+The example for this item is shown with the ones above: log-Async.salam
+
+### `IsAsync`
+
+```salam
+func IsAsync(): bool
+```
+
+Whether asynchronous mode is on.
+
+The example for this item is shown with the ones above: log-Async.salam
 
 ### `Log`
 
@@ -60652,6 +60754,55 @@ Between the two extremes are `send_timeout` and `recv_timeout`, which wait at mo
 
 Two mistakes to avoid: receiving from a channel nobody will ever close or send to waits forever, and calling `free` while another thread is still using the channel. Join the threads first, then free.
 
+## A shorter way to spell it
+
+`New` builds an initialized channel, so the cast is the only extra spelling: `c := chan.New(8) as chan.Chan<i64>`. The free functions `Send`, `Recv`, `TrySend`, `TryRecv`, `Close`, `Len`, `Capacity` and `IsClosed` take the channel as their first argument and do exactly what the method of the same name does. `SendAll` sends a whole vector and stops at the first failure; `Take` receives up to a count; and `Drain` receives everything that is left until the channel is closed and empty.
+
+chan-API.salam
+
+```salam
+import chan
+
+func main:
+    c := chan.New(3) as chan.Chan<str>
+    println "capacity:", chan.Capacity(c), "len:", chan.Len(c)
+
+    words := Vector {} as Vector<str>
+    words.push("one")
+    words.push("two")
+    println "sent:", chan.SendAll(c, words)
+    println "queued:", chan.Len(c)
+    words.free()
+
+    mut ok := false
+    println "first:", chan.Recv(c, ok), ok
+    println "next:", chan.TryRecv(c, ok), ok
+    chan.Close(c)
+    println "closed:", chan.IsClosed(c), "send:", chan.TrySend(c, "late")
+
+    left := chan.Drain(c)
+    println "left:", left.len()
+    left.free()
+    c.free()
+end
+```
+
+Output:
+
+```text
+capacity: 3 len: 0
+sent: true
+queued: 2
+first: one true
+next: two true
+closed: true send: false
+left: 0
+```
+
+`SelectRecv` is `Select` with the `ok` result, and `SelectSend` waits for the first channel of the vector with room, returning its index, minus one on timeout or minus two when every channel is closed. A zero millisecond limit makes either one a single non-blocking attempt; `TrySelect` and `TrySelectSend` are the same thing with the zero already filled in.
+
+`Drain` and `Take` wait like `recv`, so close the channel before draining it and ask for no more values than will arrive. `SelectSend` only sends to a buffered channel with room: on an unbuffered channel `try_send` is always false, so give that channel a buffer or use a plain `send` from a thread.
+
 ## Types
 
 ### `Chan`
@@ -60963,6 +61114,185 @@ stopped early
 
 ## Functions
 
+### `New`
+
+```salam
+func New<T>(capacity: i64): Chan<T>
+```
+
+Creates a channel with the given capacity and returns it initialized; zero means unbuffered. Write the type on the result, as in `chan.New(4) as chan.Chan<i64>`.
+
+chan-API.salam
+
+```salam
+import chan
+
+func main:
+    c := chan.New(3) as chan.Chan<str>
+    println "capacity:", chan.Capacity(c), "len:", chan.Len(c)
+
+    words := Vector {} as Vector<str>
+    words.push("one")
+    words.push("two")
+    println "sent:", chan.SendAll(c, words)
+    println "queued:", chan.Len(c)
+    words.free()
+
+    mut ok := false
+    println "first:", chan.Recv(c, ok), ok
+    println "next:", chan.TryRecv(c, ok), ok
+    chan.Close(c)
+    println "closed:", chan.IsClosed(c), "send:", chan.TrySend(c, "late")
+
+    left := chan.Drain(c)
+    println "left:", left.len()
+    left.free()
+    c.free()
+end
+```
+
+Output:
+
+```text
+capacity: 3 len: 0
+sent: true
+queued: 2
+first: one true
+next: two true
+closed: true send: false
+left: 0
+```
+
+### `Send`
+
+```salam
+func Send<T>(c: Chan<T>, v: T): bool
+```
+
+The free-function form of `send`: sends a value and waits for room, returning false when the channel is closed.
+
+The example for this item is shown with the ones above: chan-API.salam
+
+### `SendTimeout`
+
+```salam
+func SendTimeout<T>(c: Chan<T>, v: T, ms: i64): bool
+```
+
+The free-function form of `send_timeout`.
+
+The example for this item is shown with the ones above: chan-API.salam
+
+### `TrySend`
+
+```salam
+func TrySend<T>(c: Chan<T>, v: T): bool
+```
+
+The free-function form of `try_send`.
+
+The example for this item is shown with the ones above: chan-API.salam
+
+### `SendAll`
+
+```salam
+func SendAll<T>(c: Chan<T>, values: Vector<T>): bool
+```
+
+Sends every value of the vector in order and returns false as soon as one send fails; the values after that one were not sent.
+
+The example for this item is shown with the ones above: chan-API.salam
+
+### `Recv`
+
+```salam
+func Recv<T>(c: Chan<T>, ok &: bool): T
+```
+
+The free-function form of `recv`.
+
+The example for this item is shown with the ones above: chan-API.salam
+
+### `RecvTimeout`
+
+```salam
+func RecvTimeout<T>(c: Chan<T>, ok &: bool, ms: i64): T
+```
+
+The free-function form of `recv_timeout`.
+
+The example for this item is shown with the ones above: chan-API.salam
+
+### `TryRecv`
+
+```salam
+func TryRecv<T>(c: Chan<T>, ok &: bool): T
+```
+
+The free-function form of `try_recv`.
+
+The example for this item is shown with the ones above: chan-API.salam
+
+### `Drain`
+
+```salam
+func Drain<T>(c: Chan<T>): Vector<T>
+```
+
+Receives values until the channel is closed and empty, and returns them as a vector. It waits like `recv`, so close the channel before calling it.
+
+The example for this item is shown with the ones above: chan-API.salam
+
+### `Take`
+
+```salam
+func Take<T>(c: Chan<T>, n: i64): Vector<T>
+```
+
+Receives at most `n` values and returns them as a vector; it stops early when the channel is closed and empty, and waits when neither is true.
+
+The example for this item is shown with the ones above: chan-API.salam
+
+### `Close`
+
+```salam
+func Close<T>(c: Chan<T>)
+```
+
+The free-function form of `close`.
+
+The example for this item is shown with the ones above: chan-API.salam
+
+### `Len`
+
+```salam
+func Len<T>(c: Chan<T>): i64
+```
+
+The free-function form of `len`.
+
+The example for this item is shown with the ones above: chan-API.salam
+
+### `Capacity`
+
+```salam
+func Capacity<T>(c: Chan<T>): i64
+```
+
+The free-function form of `capacity`.
+
+The example for this item is shown with the ones above: chan-API.salam
+
+### `IsClosed`
+
+```salam
+func IsClosed<T>(c: Chan<T>): bool
+```
+
+The free-function form of `is_closed`.
+
+The example for this item is shown with the ones above: chan-API.salam
+
 ### `After`
 
 ```salam
@@ -61038,6 +61368,46 @@ Output:
 -1
 -2
 ```
+
+### `SelectRecv`
+
+```salam
+func SelectRecv<T>(cs: Vector<Chan<T>>, v &: T, ok &: bool, ms: i64): i64
+```
+
+`Select` with a second result: `ok` is true when a value arrived, false on timeout or when every channel is closed and empty.
+
+The example for this item is shown with the ones above: chan-API.salam
+
+### `TrySelect`
+
+```salam
+func TrySelect<T>(cs: Vector<Chan<T>>, v &: T): i64
+```
+
+One non-blocking `Select`: returns the index of a ready channel, or minus one when none is ready now.
+
+The example for this item is shown with the ones above: chan-API.salam
+
+### `SelectSend`
+
+```salam
+func SelectSend<T>(cs: Vector<Chan<T>>, v: T, ms: i64): i64
+```
+
+Sends the value to the first channel of the vector that has room, without polling, and returns its index. Returns minus one on timeout and minus two when every channel is closed. It works on buffered channels; an unbuffered channel never has room for `try_send`.
+
+The example for this item is shown with the ones above: chan-API.salam
+
+### `TrySelectSend`
+
+```salam
+func TrySelectSend<T>(cs: Vector<Chan<T>>, v: T): i64
+```
+
+One non-blocking `SelectSend`: returns the index that took the value, or minus one when no channel has room now.
+
+The example for this item is shown with the ones above: chan-API.salam
 
 
 ---

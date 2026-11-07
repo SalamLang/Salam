@@ -106,7 +106,7 @@
           
           <div class="lesson-toc">
             <strong>On this page</strong>
-            <ol><li><a href="#guide-level">Choose the level from the settings</a></li><li><a href="#guide-json">JSON logs for a log collector</a></li><li><a href="#guide-rotation">Log to a file that does not grow forever</a></li><li><a href="#guide-fields">Key and value fields in text logs</a></li><li><a href="#guide-untrusted">Formatted messages and values from users</a></li><li><a href="#guide-which">Which function for which job</a></li><li><a href="#values">Constants and variables</a></li><li><a href="#funcs">Functions</a></li></ol>
+            <ol><li><a href="#guide-level">Choose the level from the settings</a></li><li><a href="#guide-json">JSON logs for a log collector</a></li><li><a href="#guide-rotation">Log to a file that does not grow forever</a></li><li><a href="#guide-fields">Key and value fields in text logs</a></li><li><a href="#guide-untrusted">Formatted messages and values from users</a></li><li><a href="#guide-async">Log from many threads without blocking</a></li><li><a href="#guide-which">Which function for which job</a></li><li><a href="#values">Constants and variables</a></li><li><a href="#funcs">Functions</a></li></ol>
           </div>
           
           <div class="lesson-body">
@@ -313,6 +313,28 @@ path=&quot;/a b&quot;</div></div>
 [INFO] logging is back on</div></div>
 <p>The end of the example shows a trick for tests and quiet tools: a level above <code>LevelError</code> silences everything, and setting it back turns logging on again.</p>
 
+<h2 id="guide-async">Log from many threads without blocking</h2>
+<p>The sink writes are serialized, so several threads can call the log functions at once without mixing characters. For a hot path, go one step further: <code>StartAsync(capacity)</code> starts one writer thread and a channel of the given capacity. Each call then formats its line and hands it to the channel; when the channel is full the caller waits, which is the back pressure that keeps memory bounded. The writer drains the channel in order, so lines from one thread keep their order and lines from different threads interleave only between whole messages.</p>
+<div class="code-window"><div class="code-bar"><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span><span class="file" dir="ltr">log-Async.salam</span><button type="button" class="copy-button" data-copy-target="ex-log-Async" data-copied="Copied ✓">Copy</button></div><pre class="code" dir="ltr"><code id="ex-log-Async"><span class="tok-k">import</span> log
+
+<span class="tok-k">func</span> <span class="tok-f">main</span>:
+    log.<span class="tok-f">ShowTime</span>(<span class="tok-k">false</span>)
+    log.<span class="tok-f">ToStdout</span>()
+    log.<span class="tok-f">SetPrefix</span>(<span class="tok-s">&quot;async&quot;</span>)
+
+    started := log.<span class="tok-f">StartAsync</span>(<span class="tok-n">4</span> <span class="tok-k">as</span> <span class="tok-t">i64</span>)
+    log.<span class="tok-f">Info</span>(<span class="tok-s">&quot;one&quot;</span>)
+    log.<span class="tok-f">Info</span>(<span class="tok-s">&quot;two&quot;</span>)
+    log.<span class="tok-f">Flush</span>()
+    log.<span class="tok-f">StopAsync</span>()
+
+    <span class="tok-b">println</span> <span class="tok-s">&quot;started:&quot;</span>, started
+<span class="tok-k">end</span></code></pre><div class="code-output" dir="ltr"><span class="label">Output</span>[INFO] async one
+[INFO] async two
+started: true</div></div>
+<p><code>StartAsync</code> returns false when asynchronous mode is already on; the second call does not start another writer. <code>Flush</code> waits until every line emitted so far has reached the sink, and <code>StopAsync</code> stops the writer after draining the queue and then frees it. A zero capacity makes the queue a rendezvous, so each call waits for the writer to take its line. <code>Fatal</code> flushes before it exits.</p>
+<p>Configure the level, prefix, format and sink before starting the writer; they are still plain globals and are not meant to change while other threads are logging. If <code>StopAsync</code> is never called, the writer stays until the process exits; lines already flushed are safe, but the last queued lines may be lost on a crash, exactly like a buffered file.</p>
+
 <h2 id="guide-which">Which function for which job</h2>
 <div class="table-wrap"><table>
 <thead><tr><th>You want</th><th>Use</th></tr></thead>
@@ -410,6 +432,26 @@ response path=/login status=200 cached=false</div></div></article>
 <article class="api-item"><h3 class="api-name" id="ToStdout"><code dir="ltr">ToStdout</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">ToStdout</span>()</code></pre><div class="api-doc">Write the log to standard output.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#LevelDebug">log-Info.salam</a></p></article>
 <article class="api-item"><h3 class="api-name" id="ToFile"><code dir="ltr">ToFile</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">ToFile</span>(path: <span class="tok-t">str</span>): <span class="tok-t">int</span></code></pre><div class="api-doc">Appends the log to a file and returns 0, or minus one when it cannot be opened. Writes are buffered until <code>CloseFile</code>.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#SetRotation">log-ToFile.salam</a></p></article>
 <article class="api-item"><h3 class="api-name" id="CloseFile"><code dir="ltr">CloseFile</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">CloseFile</span>()</code></pre><div class="api-doc">Flushes and closes the log file and sends the log back to standard error.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#SetRotation">log-ToFile.salam</a></p></article>
+<article class="api-item"><h3 class="api-name" id="StartAsync"><code dir="ltr">StartAsync</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">StartAsync</span>(capacity: <span class="tok-t">i64</span>): <span class="tok-t">bool</span></code></pre><div class="api-doc">Starts a background writer thread and a channel queue of the given capacity; every log call then enqueues its line and returns without touching the sink. A full queue makes the caller wait. Returns false when asynchronous mode is already on. Zero means an unbuffered handoff.</div><div class="code-window"><div class="code-bar"><span class="dots" aria-hidden="true"><span></span><span></span><span></span></span><span class="file" dir="ltr">log-Async.salam</span><button type="button" class="copy-button" data-copy-target="ex-log-Async" data-copied="Copied ✓">Copy</button></div><pre class="code" dir="ltr"><code id="ex-log-Async"><span class="tok-k">import</span> log
+
+<span class="tok-k">func</span> <span class="tok-f">main</span>:
+    log.<span class="tok-f">ShowTime</span>(<span class="tok-k">false</span>)
+    log.<span class="tok-f">ToStdout</span>()
+    log.<span class="tok-f">SetPrefix</span>(<span class="tok-s">&quot;async&quot;</span>)
+
+    started := log.<span class="tok-f">StartAsync</span>(<span class="tok-n">4</span> <span class="tok-k">as</span> <span class="tok-t">i64</span>)
+    log.<span class="tok-f">Info</span>(<span class="tok-s">&quot;one&quot;</span>)
+    log.<span class="tok-f">Info</span>(<span class="tok-s">&quot;two&quot;</span>)
+    log.<span class="tok-f">Flush</span>()
+    log.<span class="tok-f">StopAsync</span>()
+
+    <span class="tok-b">println</span> <span class="tok-s">&quot;started:&quot;</span>, started
+<span class="tok-k">end</span></code></pre><div class="code-output" dir="ltr"><span class="label">Output</span>[INFO] async one
+[INFO] async two
+started: true</div></div></article>
+<article class="api-item"><h3 class="api-name" id="StopAsync"><code dir="ltr">StopAsync</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">StopAsync</span>()</code></pre><div class="api-doc">Stops asynchronous mode after draining the queue: closes the channel, joins the writer and frees it. Does nothing when asynchronous mode is off.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#StartAsync">log-Async.salam</a></p></article>
+<article class="api-item"><h3 class="api-name" id="Flush"><code dir="ltr">Flush</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">Flush</span>()</code></pre><div class="api-doc">Waits until every line emitted so far has been written to the sink. Lines emitted after the call are not covered; it returns immediately when asynchronous mode is off.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#StartAsync">log-Async.salam</a></p></article>
+<article class="api-item"><h3 class="api-name" id="IsAsync"><code dir="ltr">IsAsync</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">IsAsync</span>(): <span class="tok-t">bool</span></code></pre><div class="api-doc">Whether asynchronous mode is on.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#StartAsync">log-Async.salam</a></p></article>
 <article class="api-item"><h3 class="api-name" id="Log"><code dir="ltr">Log</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">Log</span>(l: <span class="tok-t">int</span>, msg: <span class="tok-t">str</span>)</code></pre><div class="api-doc">Records a message at the level you choose.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#LevelDebug">log-Info.salam</a></p></article>
 <article class="api-item"><h3 class="api-name" id="Debug"><code dir="ltr">Debug</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">Debug</span>(msg: <span class="tok-t">str</span>)</code></pre><div class="api-doc">A debug message.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#LevelDebug">log-Info.salam</a></p></article>
 <article class="api-item"><h3 class="api-name" id="Info"><code dir="ltr">Info</code></h3><pre class="code api-sig" dir="ltr"><code><span class="tok-k">func</span> <span class="tok-f">Info</span>(msg: <span class="tok-t">str</span>)</code></pre><div class="api-doc">An info message.</div><p class="api-see">The example for this item is shown with the ones above: <a href="#LevelDebug">log-Info.salam</a></p></article>

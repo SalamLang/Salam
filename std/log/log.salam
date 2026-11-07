@@ -22,6 +22,8 @@ import fmt
 import io
 import os
 import conv
+import sync
+import chan
 import encoding.json
 
 extern:
@@ -63,6 +65,16 @@ mut _file_path := ""
 mut _rotate_max_bytes := 0 as i64
 mut _rotate_max_backups := 5
 mut _bytes_since_rotate := 0 as i64
+
+mut _write_mu := sync.NewMutex()
+mut _async_mu := sync.NewMutex()
+mut _async_life_mu := sync.NewMutex()
+mut _async_cv := sync.NewCondVar()
+mut _async_on := false
+mut _async_q := chan.Chan {} as chan.Chan<str>
+mut _async_handle := 0 as i64
+mut _async_pending := 0 as i64
+mut _async_users := 0 as i64
 
 func _level_name(l: int): str:
     if l <= 0: ret "DEBUG"
@@ -138,14 +150,8 @@ func _json_line(l: int, msg: str, keys: Vector<str>, vals: Vector<str>): str:
     ret str.BufStr(b)
 end
 
-func _emit_kv(l: int, msg: str, keys: Vector<str>, vals: Vector<str>):
-    if l < _level: ret end
-    mut line := ""
-    if _format == 1:
-        line = _json_line(l, msg, keys, vals)
-    else:
-        line = _text_line(l, msg, keys, vals)
-    end
+func _write_line(line: str):
+    sync.Lock(_write_mu)
     if _sink == 2 and _file != null:
         _rotate_if_needed()
         _file.write(line.concat("\n"))
@@ -157,11 +163,113 @@ func _emit_kv(l: int, msg: str, keys: Vector<str>, vals: Vector<str>):
             io.EPrintln(line)
         end
     end
+    sync.Unlock(_write_mu)
+end
+
+func _emit_kv(l: int, msg: str, keys: Vector<str>, vals: Vector<str>):
+    if l < _level: ret end
+    mut line := ""
+    if _format == 1:
+        line = _json_line(l, msg, keys, vals)
+    else:
+        line = _text_line(l, msg, keys, vals)
+    end
+    if _async_on:
+        sync.Lock(_async_mu)
+        if _async_on:
+            _async_pending++
+            _async_users++
+            sync.Unlock(_async_mu)
+            sent := _async_q.send(line)
+            if not sent:
+                _write_line(line)
+            end
+            sync.Lock(_async_mu)
+            _async_users--
+            if not sent:
+                _async_pending--
+            end
+            if _async_users <= 0:
+                sync.Broadcast(_async_cv)
+            end
+            sync.Unlock(_async_mu)
+            ret
+        end
+        sync.Unlock(_async_mu)
+    end
+    _write_line(line)
 end
 
 func _emit(l: int, msg: str):
     empty := Vector {} as Vector<str>
     _emit_kv(l, msg, empty, empty)
+end
+
+func _async_worker():
+    mut ok := true
+    until true:
+        line := _async_q.recv(ok)
+        if not ok:
+            break
+        end
+        _write_line(line)
+        sync.Lock(_async_mu)
+        _async_pending--
+        if _async_pending <= 0:
+            sync.Broadcast(_async_cv)
+        end
+        sync.Unlock(_async_mu)
+    end
+end
+
+func _flush():
+    if not _async_on:
+        ret
+    end
+    sync.Lock(_async_mu)
+    until _async_pending > 0:
+        _ := sync.WaitCondTimeout(_async_cv, _async_mu, 50 as i64)
+    end
+    sync.Unlock(_async_mu)
+end
+
+func _start_async(capacity: i64): bool:
+    sync.Lock(_async_life_mu)
+    sync.Lock(_async_mu)
+    if _async_on:
+        sync.Unlock(_async_mu)
+        sync.Unlock(_async_life_mu)
+        ret false
+    end
+    _async_q = chan.Chan {} as chan.Chan<str>
+    _async_q.init(capacity)
+    _async_pending = 0
+    _async_users = 0
+    _async_on = true
+    _async_handle = spawn(_async_worker)
+    sync.Unlock(_async_mu)
+    sync.Unlock(_async_life_mu)
+    ret true
+end
+
+func _stop_async():
+    sync.Lock(_async_life_mu)
+    sync.Lock(_async_mu)
+    if not _async_on:
+        sync.Unlock(_async_mu)
+        sync.Unlock(_async_life_mu)
+        ret
+    end
+    _async_on = false
+    until _async_users > 0:
+        _ := sync.WaitCondTimeout(_async_cv, _async_mu, 50 as i64)
+    end
+    _async_q.close()
+    sync.Unlock(_async_mu)
+    join(_async_handle)
+    _async_handle = 0
+    _async_q.free()
+    sync.Unlock(_async_life_mu)
 end
 
 @en "LevelName"
@@ -216,20 +324,28 @@ end
 @en "ToStderr"
 @fa "به خطای استاندارد"
 pub func ToStderr():
+    _flush()
+    sync.Lock(_write_mu)
     _sink = 0
+    sync.Unlock(_write_mu)
 end
 
 @en "ToStdout"
 @fa "به خروجی استاندارد"
 pub func ToStdout():
+    _flush()
+    sync.Lock(_write_mu)
     _sink = 1
+    sync.Unlock(_write_mu)
 end
 
 @en "ToFile"
 @fa "به پرونده"
 pub func ToFile(path: str): int:
+    _flush()
     f := salam_open(path, "ab")
     if f == null: ret 0 - 1 end
+    sync.Lock(_write_mu)
     if _sink == 2 and _file != null: _file.close() end
     _file = f
     _file_path = path
@@ -240,15 +356,46 @@ pub func ToFile(path: str): int:
     else:
         _bytes_since_rotate = 0 as i64
     end
+    sync.Unlock(_write_mu)
     ret 0
 end
 
 @en "CloseFile"
 @fa "بستن پرونده"
 pub func CloseFile():
+    _flush()
+    sync.Lock(_write_mu)
     if _sink == 2 and _file != null: _file.close() end
     _file = null
     _sink = 0
+    sync.Unlock(_write_mu)
+end
+
+@en "StartAsync"
+@fa "شروع ناهمگام"
+pub func StartAsync(capacity: i64): bool:
+    ret _start_async(capacity)
+end
+
+@en "StopAsync"
+@fa "توقف ناهمگام"
+pub func StopAsync():
+    _stop_async()
+end
+
+@en "Flush"
+@fa "تخلیه"
+pub func Flush():
+    _flush()
+end
+
+@en "IsAsync"
+@fa "ناهمگام است"
+pub func IsAsync(): bool:
+    sync.Lock(_async_mu)
+    v := _async_on
+    sync.Unlock(_async_mu)
+    ret v
 end
 
 @en "Log"
@@ -291,7 +438,10 @@ pub func Errorf(tmpl: str, args: Vector<str>): _emit(3, fmt.Sprintf(tmpl, args))
 @fa "مهلک"
 pub noret func Fatal(msg: str):
     _emit(3, msg)
+    _stop_async()
+    sync.Lock(_write_mu)
     if _sink == 2 and _file != null: _file.close() end
+    sync.Unlock(_write_mu)
     exit(1)
 end
 

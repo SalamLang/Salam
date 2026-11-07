@@ -41,6 +41,12 @@ pkg.intro <<
 {{example.log-untrusted}}
 <p>The end of the example shows a trick for tests and quiet tools: a level above <code>LevelError</code> silences everything, and setting it back turns logging on again.</p>
 
+<h2 id="guide-async">Log from many threads without blocking</h2>
+<p>The sink writes are serialized, so several threads can call the log functions at once without mixing characters. For a hot path, go one step further: <code>StartAsync(capacity)</code> starts one writer thread and a channel of the given capacity. Each call then formats its line and hands it to the channel; when the channel is full the caller waits, which is the back pressure that keeps memory bounded. The writer drains the channel in order, so lines from one thread keep their order and lines from different threads interleave only between whole messages.</p>
+{{example.log-Async}}
+<p><code>StartAsync</code> returns false when asynchronous mode is already on; the second call does not start another writer. <code>Flush</code> waits until every line emitted so far has reached the sink, and <code>StopAsync</code> stops the writer after draining the queue and then frees it. A zero capacity makes the queue a rendezvous, so each call waits for the writer to take its line. <code>Fatal</code> flushes before it exits.</p>
+<p>Configure the level, prefix, format and sink before starting the writer; they are still plain globals and are not meant to change while other threads are logging. If <code>StopAsync</code> is never called, the writer stays until the process exits; lines already flushed are safe, but the last queued lines may be lost on a crash, exactly like a buffered file.</p>
+
 <h2 id="guide-which">Which function for which job</h2>
 <div class="table-wrap"><table>
 <thead><tr><th>You want</th><th>Use</th></tr></thead>
@@ -74,6 +80,10 @@ doc.ToStderr = Write the log to standard error, which is the default.
 doc.ToStdout = Write the log to standard output.
 doc.ToFile = Appends the log to a file and returns 0, or minus one when it cannot be opened. Writes are buffered until <code>CloseFile</code>.
 doc.CloseFile = Flushes and closes the log file and sends the log back to standard error.
+doc.StartAsync = Starts a background writer thread and a channel queue of the given capacity; every log call then enqueues its line and returns without touching the sink. A full queue makes the caller wait. Returns false when asynchronous mode is already on. Zero means an unbuffered handoff.
+doc.StopAsync = Stops asynchronous mode after draining the queue: closes the channel, joins the writer and frees it. Does nothing when asynchronous mode is off.
+doc.Flush = Waits until every line emitted so far has been written to the sink. Lines emitted after the call are not covered; it returns immediately when asynchronous mode is off.
+doc.IsAsync = Whether asynchronous mode is on.
 doc.Log = Records a message at the level you choose.
 doc.Debug = A debug message.
 doc.Info = An info message.
@@ -125,3 +135,7 @@ ex.ErrorKV = log-InfoKV
 ex.SetRotation = log-ToFile
 ex.ToStderr = log-ToFile
 ex.CloseFile = log-ToFile
+ex.StartAsync = log-Async
+ex.StopAsync = log-Async
+ex.Flush = log-Async
+ex.IsAsync = log-Async

@@ -74,6 +74,7 @@ mut APP_URL := "https://ai.salamlang.ir"
 mut GUEST_LIMIT := 15
 mut JOBS := chan.Chan {} as chan.Chan<str>
 mut WATCH := chan.Chan {} as chan.Chan<str>
+mut RECOVER := Vector {} as Vector<str>
 mut STATE_LOCK := sync.Mutex {}
 mut BUSY := HashMap {} as HashMap<str, str>
 mut FLOOD := HashMap {} as HashMap<str, str>
@@ -2044,10 +2045,35 @@ func setup_bot():
 end
 
 func recover_pending():
+    since := aistore.Now() - 3600
+    mut jobs := Vector {} as Vector<str>
     aistore.Lock()
-    _a := aistore.Run("UPDATE messages m JOIN chats c ON c.id = m.chat_id SET m.status = 'error', m.body = 'پاسخ با راه‌اندازی دوباره‌ی سرویس قطع شد. دوباره بپرسید.' WHERE m.status = 'pending' AND c.source = 'telegram'", Vector {} as Vector<str>)
-    _b := aistore.Run("UPDATE guest_messages m JOIN telegram_guests t ON t.guest_id = m.guest_id SET m.status = 'error' WHERE m.status = 'pending'", Vector {} as Vector<str>)
+    mut rows := aistore.Stmt("SELECT m.id, c.engine_sid, m.created, c.user_id, l.tg_chat, l.lang, c.cloud FROM messages m JOIN chats c ON c.id = m.chat_id JOIN telegram_links l ON l.user_id = c.user_id WHERE m.role = 'assistant' AND m.status = 'pending' AND c.source = 'telegram' AND c.engine_sid <> '' AND m.created > ?1", one(i64s(since)))
+    mut seen := Vector {} as Vector<str>
+    until aistore.Next(rows):
+        mid := aistore.Text(rows, 0)
+        mut dup := false
+        each other in seen:
+            if other == mid:
+                dup = true
+            end
+        end
+        if dup:
+            continue
+        end
+        seen.push(mid)
+        jobs.push((aistore.Text(rows, 6) == "1" ? "c" : "u") + "|" + aistore.Text(rows, 4) + "|" + aistore.Text(rows, 0) + "|" + aistore.Text(rows, 1) + "|" + aistore.Text(rows, 2) + "|" + aistore.Text(rows, 3) + "|" + (aistore.Text(rows, 5) == "en" ? "1" : "0"))
+    end
+    aistore.Finish(rows)
+    mut grows := aistore.Stmt("SELECT g.id, s.engine_sid, g.created, g.guest_id, t.tg_chat, t.lang FROM guest_messages g JOIN telegram_guests t ON t.guest_id = g.guest_id JOIN guest_sessions s ON s.id = g.guest_id WHERE g.role = 'assistant' AND g.status = 'pending' AND s.engine_sid <> '' AND g.created > ?1", one(i64s(since)))
+    until aistore.Next(grows):
+        jobs.push("g|" + aistore.Text(grows, 4) + "|" + aistore.Text(grows, 0) + "|" + aistore.Text(grows, 1) + "|" + aistore.Text(grows, 2) + "|" + aistore.Text(grows, 3) + "|" + (aistore.Text(grows, 5) == "en" ? "1" : "0"))
+    end
+    aistore.Finish(grows)
+    _a := aistore.Run("UPDATE messages m JOIN chats c ON c.id = m.chat_id SET m.status = 'error', m.body = 'پاسخ با راه‌اندازی دوباره‌ی سرویس قطع شد. دوباره بپرسید.' WHERE m.status = 'pending' AND c.source = 'telegram' AND (c.engine_sid = '' OR m.created <= ?1)", one(i64s(since)))
+    _b := aistore.Run("UPDATE guest_messages m JOIN telegram_guests t ON t.guest_id = m.guest_id JOIN guest_sessions s ON s.id = m.guest_id SET m.status = 'error' WHERE m.status = 'pending' AND (s.engine_sid = '' OR m.created <= ?1)", one(i64s(since)))
     aistore.Unlock()
+    RECOVER = jobs
 end
 
 func poll_loop():
@@ -2272,6 +2298,16 @@ pub func Start():
         _t := spawn(watcher)
     end
     _p := spawn(poll_loop)
+end
+
+pub func ResumeRecovered():
+    each job in RECOVER:
+        WATCH.send(job)
+    end
+    if RECOVER.len() > 0:
+        println "telegram picked up", RECOVER.len(), "answers that were running when the service restarted"
+    end
+    RECOVER = Vector {} as Vector<str>
 end
 
 pub func Notify(chat: str, en: bool, text_fa: str, text_en: str):

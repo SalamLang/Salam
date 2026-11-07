@@ -166,7 +166,9 @@ async fn report(
         body["outside"] = json!(p.outside);
         body["cwd"] = json!(p.cwd);
     }
-    for _ in 0..3 {
+    let mut wait = 1u64;
+    let mut waited = 0u64;
+    loop {
         let sent = http
             .post(format!("{}/bridge/result", config::bridge_url()))
             .bearer_auth(secret)
@@ -176,7 +178,12 @@ async fn report(
         if matches!(&sent, Ok(r) if r.status().is_success() || r.status().as_u16() == 404) {
             return;
         }
-        tokio::time::sleep(Duration::from_secs(1)).await;
+        if waited >= 120 {
+            return;
+        }
+        tokio::time::sleep(Duration::from_secs(wait)).await;
+        waited += wait;
+        wait = (wait * 2).min(15);
     }
 }
 

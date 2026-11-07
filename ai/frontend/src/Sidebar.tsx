@@ -1,7 +1,7 @@
 import { useState } from "react";
-import type { Chat, User } from "./api";
+import type { Chat, Project, User } from "./api";
 import { isDesktop } from "./desktop";
-import { IconChart, IconClose, IconEdit, IconGlobe, IconKey, IconLogout, IconMemory, IconMonitor, IconMoon, IconPlug, IconPlus, IconShield, IconShare, IconSpark, IconSun, IconTrash } from "./icons";
+import { IconChart, IconChat, IconClose, IconEdit, IconFolder, IconGlobe, IconKey, IconLogout, IconMemory, IconMonitor, IconMoon, IconPlug, IconPlus, IconShield, IconShare, IconSpark, IconSun, IconTrash } from "./icons";
 import type { Theme } from "./theme";
 import { confirmDialog } from "./Confirm";
 import { isFa, setLang, t } from "./i18n";
@@ -51,6 +51,10 @@ function statusText(c: Chat): string {
 type Props = {
   user: User;
   chats: Chat[];
+  projects: Project[];
+  activeProject: string | null;
+  othersCount: number;
+  chatHeading: string;
   activeId: string | null;
   open: boolean;
   theme: Theme;
@@ -61,6 +65,10 @@ type Props = {
   onDelete: (id: string) => void;
   onLogout: () => void;
   onToggleTheme: () => void;
+  onOpenProjects: () => void;
+  onOpenProject: (id: string) => void;
+  onOpenOthers: () => void;
+  onNewProject: () => void;
   page: string;
   onNavigate: (path: string) => void;
   activeBusy?: boolean;
@@ -102,7 +110,7 @@ export function Sidebar(p: Props) {
       <div className={`scrim ${p.open ? "show" : ""}`} onClick={p.onClose} aria-hidden="true" />
       <aside className={`sidebar ${p.open ? "open" : ""}`} aria-label={t("فهرست گفت‌وگوها", "Chat list")}>
         <div className="sidebar-head">
-          <a className="brand" href="/" onClick={(e) => (e.preventDefault(), p.onNew())}>
+          <a className="brand" href="/" onClick={(e) => (e.preventDefault(), p.onOpenProjects())}>
             <img src="/logo.svg" alt="" width={30} height={30} />
             <span>
               {t("دستیار سلام", "Salam AI")}
@@ -117,6 +125,48 @@ export function Sidebar(p: Props) {
           <IconPlus width={18} height={18} />
           {t("گفت‌وگوی تازه", "New chat")}
         </button>
+        <div className="sidebar-projects">
+          <div className="sidebar-section-head">
+            <button type="button" className={`sidebar-section-title ${p.page === "projects" ? "active" : ""}`} onClick={p.onOpenProjects}>
+              <IconFolder width={14} height={14} />
+              <span>{t("پروژه‌ها", "Projects")}</span>
+            </button>
+            <button type="button" className="icon-button tiny" onClick={p.onNewProject} aria-label={t("پروژه‌ی تازه", "New project")} title={t("پروژه‌ی تازه", "New project")}>
+              <IconPlus width={15} height={15} />
+            </button>
+          </div>
+          <div className="project-nav">
+            {p.projects.map((project) => (
+              <button
+                key={project.id}
+                type="button"
+                className={`project-link ${p.activeProject === project.id ? "active" : ""}`}
+                onClick={() => p.onOpenProject(project.id)}
+                title={project.name}
+              >
+                <span className="project-link-icon" style={{ background: project.color ? `${project.color}22` : "var(--brand-soft)", color: project.color || "var(--brand)" }}>
+                  {project.emoji || <IconFolder width={15} height={15} />}
+                </span>
+                <span className="project-link-name" dir="auto">{project.name}</span>
+                {project.live > 0 ? (
+                  <span className="project-link-live" title={t("در حال کار", "Working")}>
+                    <span className="live-dot" aria-hidden="true" />
+                  </span>
+                ) : project.chats > 0 ? (
+                  <b>{fmtNum(project.chats)}</b>
+                ) : null}
+              </button>
+            ))}
+            <button type="button" className={`project-link others ${p.page === "others" ? "active" : ""}`} onClick={p.onOpenOthers}>
+              <span className="project-link-icon others">
+                <IconChat width={15} height={15} />
+              </span>
+              <span className="project-link-name">{t("سایر گفت‌وگوها", "Others")}</span>
+              <b>{fmtNum(p.othersCount)}</b>
+            </button>
+          </div>
+        </div>
+        <h3 className="sidebar-chats-title">{p.chatHeading}</h3>
         <div className="chat-filters" role="group" aria-label={t("صافی گفت‌وگوها", "Filter chats")}>
           {filters.map((f) => (
             <button

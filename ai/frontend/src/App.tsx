@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { api, ApiError, getToken, handleUnauthorized, setClientPlatform, setClientVersion, setToken, streamMessage, uiText, type Chat, type FileMeta, type Message, type OutgoingFile, type QueueItem, type User } from "./api";
+import { api, ApiError, getToken, handleUnauthorized, setClientPlatform, setClientVersion, setToken, streamMessage, uiText, type Chat, type ChatStart, type FileMeta, type Message, type OutgoingFile, type Project, type ProjectInput, type QueueItem, type User } from "./api";
 import { Admin, NoAccess } from "./Admin";
 import { AdminChat } from "./AdminChat";
 import { confirmDialog } from "./Confirm";
@@ -18,9 +18,10 @@ import { Keys } from "./Keys";
 import { announce, announceGuest } from "./Notify";
 import { Plans } from "./Plans";
 import { Usage } from "./Usage";
-import { IconGlobe, IconCode, IconMenu, IconMoon, IconPlus, IconSun, IconSwap, IconBook, IconBug, IconFolder, IconSearch, IconTerminal, IconShare } from "./icons";
+import { IconArrowLeft, IconBook, IconBug, IconCode, IconFolder, IconGlobe, IconMenu, IconMoon, IconPlus, IconSearch, IconShare, IconSun, IconSwap, IconTerminal } from "./icons";
 import { MessageView } from "./Messages";
 import { Sidebar } from "./Sidebar";
+import { ProjectDialog, ProjectPage, ProjectsHome, confirmDeleteProject } from "./Projects";
 import { useTheme } from "./theme";
 import { t } from "./i18n";
 import { Checkbox } from "./Checkbox";
@@ -43,40 +44,59 @@ const AGENT_SUGGESTIONS = [
   { icon: IconFolder, title: t("مستندسازی", "Documentation"), text: t("برای این پروژه یک README کوتاه و کاربردی بنویس.", "Write a short, practical README for this project.") },
 ];
 
-function chatIdFromPath(): string | null {
-  const m = /^\/c\/([a-f0-9]{24})\/?$/.exec(location.pathname);
-  return m ? m[1] : null;
-}
-
 function shareTokenFromPath(): string | null {
   return /^\/s\/([a-f0-9]{40})\/?$/.exec(location.pathname)?.[1] ?? null;
 }
 
-type Route = "share" | "chat" | "connect" | "telegram" | "connections" | "keys" | "plans" | "usage" | "memory" | "admin" | "admin-chat";
+type Route = "share" | "chat" | "projects" | "project" | "others" | "connect" | "telegram" | "connections" | "keys" | "plans" | "usage" | "memory" | "admin" | "admin-chat";
+
+type Place = { route: Route; chat: string | null; project: string | null };
 
 function adminChatIdFromPath(): string {
   return /^\/admin\/chats\/([a-f0-9]{24})\/?$/.exec(location.pathname)?.[1] ?? "";
 }
 
-function routeFromPath(): Route {
-  const p = location.pathname.replace(/\/+$/, "");
-  if (shareTokenFromPath()) return "share";
-  if (p === "/connect") return "connect";
-  if (p === "/telegram") return "telegram";
-  if (p === "/connections") return "connections";
-  if (p === "/apps") return "connections";
-  if (p === "/keys") return "keys";
-  if (p === "/plans") return "plans";
-  if (p === "/usage") return "usage";
-  if (p === "/memory") return "memory";
-  if (p === "/admin") return "admin";
-  if (adminChatIdFromPath()) return "admin-chat";
-  return "chat";
+function placeFromPath(): Place {
+  const p = location.pathname.replace(/\/+$/, "") || "/";
+  if (shareTokenFromPath()) return { route: "share", chat: null, project: null };
+  if (adminChatIdFromPath()) return { route: "admin-chat", chat: adminChatIdFromPath(), project: null };
+  if (p === "/connect") return { route: "connect", chat: null, project: null };
+  if (p === "/telegram") return { route: "telegram", chat: null, project: null };
+  if (p === "/connections" || p === "/apps") return { route: "connections", chat: null, project: null };
+  if (p === "/keys") return { route: "keys", chat: null, project: null };
+  if (p === "/plans") return { route: "plans", chat: null, project: null };
+  if (p === "/usage") return { route: "usage", chat: null, project: null };
+  if (p === "/memory") return { route: "memory", chat: null, project: null };
+  if (p === "/admin") return { route: "admin", chat: null, project: null };
+  const inside = /^\/p\/([a-f0-9]{24})\/c\/([a-f0-9]{24})$/.exec(p);
+  if (inside) return { route: "chat", chat: inside[2], project: inside[1] };
+  const fresh = /^\/p\/([a-f0-9]{24})\/new$/.exec(p);
+  if (fresh) return { route: "chat", chat: null, project: fresh[1] };
+  const project = /^\/p\/([a-f0-9]{24})$/.exec(p);
+  if (project) return { route: "project", chat: null, project: project[1] };
+  const otherChat = /^\/others\/c\/([a-f0-9]{24})$/.exec(p);
+  if (otherChat) return { route: "chat", chat: otherChat[1], project: null };
+  if (p === "/others/new") return { route: "chat", chat: null, project: null };
+  if (p === "/others") return { route: "others", chat: null, project: null };
+  const chat = /^\/c\/([a-f0-9]{24})$/.exec(p);
+  if (chat) return { route: "chat", chat: chat[1], project: null };
+  return { route: "projects", chat: null, project: null };
 }
+
+function routeFromPath(): Route {
+  return placeFromPath().route;
+}
+
+const INITIAL_PLACE: Place = new URLSearchParams(location.search).has("q")
+  ? { route: "chat", chat: null, project: null }
+  : placeFromPath();
 
 const PAGE_TITLES: Record<Route, string> = {
   share: t("گفت‌وگوی اشتراکی", "Shared chat"),
   chat: t("دستیار سلام", "Salam AI"),
+  projects: t("پروژه‌ها", "Projects"),
+  project: t("پروژه", "Project"),
+  others: t("سایر گفت‌وگوها", "Others"),
   connect: t("اتصال برنامه", "Connect an app"),
   telegram: t("اتصال تلگرام", "Connect Telegram"),
   connections: t("اتصال‌ها و برنامه‌ها", "Connections and apps"),
@@ -109,11 +129,23 @@ function takeDraft(): string {
   }
 }
 
-function go(id: string | null, replace = false) {
-  const url = id ? `/c/${id}` : "/";
+function goUrl(url: string, replace = false) {
   if (location.pathname === url) return;
   if (replace) history.replaceState(null, "", url);
   else history.pushState(null, "", url);
+}
+
+function chatPath(id: string, project: string | null | undefined): string {
+  if (project === undefined) return `/c/${id}`;
+  return project ? `/p/${project}/c/${id}` : `/others/c/${id}`;
+}
+
+function goChat(id: string, project: string | null | undefined, replace = false) {
+  goUrl(chatPath(id, project), replace);
+}
+
+function goNew(project: string | null, replace = false) {
+  goUrl(project ? `/p/${project}/new` : "/others/new", replace);
 }
 
 export function App() {
@@ -126,10 +158,15 @@ export function App() {
     } catch {}
     setDraft("");
   }, []);
-  const [route, setRoute] = useState<Route>(routeFromPath);
+  const [route, setRoute] = useState<Route>(INITIAL_PLACE.route);
   const [booting, setBooting] = useState(true);
   const [chats, setChats] = useState<Chat[]>([]);
-  const [activeId, setActiveId] = useState<string | null>(chatIdFromPath());
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [projectsReady, setProjectsReady] = useState(false);
+  const [projectScope, setProjectScope] = useState<string | null>(INITIAL_PLACE.project);
+  const [projectDialog, setProjectDialog] = useState<{ mode: "create" } | { mode: "edit"; project: Project } | null>(null);
+  const [projectBusy, setProjectBusy] = useState(false);
+  const [activeId, setActiveId] = useState<string | null>(INITIAL_PLACE.chat);
   const [messages, setMessages] = useState<Message[]>([]);
   const [loadingChat, setLoadingChat] = useState(false);
   const [sidebar, setSidebar] = useState(false);
@@ -163,6 +200,7 @@ export function App() {
   const announced = useRef(new Set<number>());
   const watching = useRef(new Set<number>());
   const netFails = useRef(0);
+  const initialRouteDone = useRef(false);
   const signedIn = user !== null;
   useEffect(() => {
     if (!signedIn || isDesktop) return;
@@ -189,7 +227,7 @@ export function App() {
     setChats([]);
     setMessages([]);
     setActiveId(null);
-    if (routeFromPath() === "chat") go(null, true);
+    if (routeFromPath() === "chat") goUrl("/", true);
   }, []);
 
   const onAuth = useCallback((u: User) => {
@@ -221,6 +259,17 @@ export function App() {
         })
         .catch((e) => {
           if (first) notify(e.message);
+        });
+      api
+        .projects()
+        .then((r) => {
+          if (!stopped) {
+            setProjects(r.projects);
+            setProjectsReady(true);
+          }
+        })
+        .catch(() => {
+          if (!stopped) setProjectsReady(true);
         });
     };
     tick(true);
@@ -395,7 +444,15 @@ export function App() {
       ),
     );
     setQueue(r.queue ?? []);
-    setChats((cs) => (cs.some((c) => c.id === r.chat.id) ? cs.map((c) => (c.id === r.chat.id ? { ...c, shared: r.chat.shared } : c)) : [r.chat, ...cs]));
+    setChats((cs) =>
+      cs.some((c) => c.id === r.chat.id)
+        ? cs.map((c) =>
+            c.id === r.chat.id
+              ? { ...c, title: r.chat.title, project_id: r.chat.project_id, agent: r.chat.agent, cloud: r.chat.cloud, device_id: r.chat.device_id, workspace: r.chat.workspace, shared: r.chat.shared }
+              : c,
+          )
+        : [r.chat, ...cs],
+    );
     return r.messages.find((m) => m.status === "pending");
   }, []);
 
@@ -412,14 +469,18 @@ export function App() {
   );
 
   const openChat = useCallback(
-    async (id: string | null, replace = false) => {
+    async (id: string | null, replace = false, projectId?: string | null) => {
       if (id !== activeRef.current) watchAway();
       stopPolling();
       netFails.current = 0;
       setSidebar(false);
       setRoute("chat");
       setActiveId(id);
-      go(id, replace);
+      const listed = id ? chatsRef.current.find((c) => c.id === id) : undefined;
+      const known = id === null ? (projectId ?? null) : projectId !== undefined ? projectId : listed?.project_id;
+      setProjectScope(known || null);
+      if (id) goChat(id, known, replace);
+      else goNew(known ?? null, replace);
       stick.current = true;
       if (isDesktop) {
         const m = id ? savedMode(id) : "ask";
@@ -435,13 +496,18 @@ export function App() {
       try {
         const r = await api.chat(id);
         if (activeRef.current !== id) return;
+        const actual = r.chat.project_id ?? "";
+        if (actual !== (known ?? "")) {
+          setProjectScope(actual || null);
+          goChat(id, actual, true);
+        }
         const pending = applyChat(r);
         if (pending) follow(id, pending.id);
       } catch (e) {
         if (e instanceof ApiError && e.status === 404) {
           notify(t("این گفت‌وگو پیدا نشد.", "This chat was not found."));
           setActiveId(null);
-          go(null, true);
+          goNew(null, true);
           setMessages([]);
         } else if (e instanceof ApiError) notify(e.message);
       } finally {
@@ -456,27 +522,38 @@ export function App() {
     stopPolling();
     setSidebar(false);
     setActiveId(null);
+    setProjectScope(null);
     setMessages([]);
   };
 
   const navigate = (path: string) => {
     leaveChat();
     if (location.pathname !== path) history.pushState(null, "", path);
-    setRoute(routeFromPath());
+    const place = placeFromPath();
+    setRoute(place.route);
+    setProjectScope(place.project);
   };
 
   useEffect(() => {
     if (!signedIn) return;
-    if (routeFromPath() === "chat") openChat(chatIdFromPath(), true);
+    const askedByLink = !initialRouteDone.current && INITIAL_PLACE.route === "chat";
+    initialRouteDone.current = true;
+    if (routeFromPath() === "chat" || askedByLink) {
+      const place = placeFromPath();
+      openChat(place.chat, true, /^\/c\//.test(location.pathname) ? undefined : (place.project ?? ""));
+    }
     const onPop = () => {
-      if (routeFromPath() === "chat") openChat(chatIdFromPath(), true);
-      else {
+      const place = placeFromPath();
+      if (place.route === "chat") {
+        openChat(place.chat, true, /^\/c\//.test(location.pathname) ? undefined : (place.project ?? ""));
+      } else {
         watchAway();
         stopPolling();
         setSidebar(false);
         setActiveId(null);
+        setProjectScope(place.project);
         setMessages([]);
-        setRoute(routeFromPath());
+        setRoute(place.route);
       }
     };
     window.addEventListener("popstate", onPop);
@@ -631,7 +708,15 @@ export function App() {
           notify(t("این رایانه هنوز به دستیار وصل نشده است. چند لحظه بعد دوباره تلاش کنید.", "This computer is not connected to the assistant yet. Please try again in a moment."));
           return false;
         }
-        const r = await api.createChat(isDesktop && workspace && device ? { device_id: device.id, workspace } : !isDesktop && cloudOk && cloud ? { cloud: true } : undefined);
+        const start: ChatStart = {};
+        if (isDesktop && workspace && device) {
+          start.device_id = device.id;
+          start.workspace = workspace;
+        } else if (!isDesktop && cloudOk && cloud) {
+          start.cloud = true;
+        }
+        if (projectScope) start.project_id = projectScope;
+        const r = await api.createChat(start);
         id = r.chat.id;
         if (r.chat.agent) {
           saveMode(id, mode);
@@ -640,7 +725,7 @@ export function App() {
         setChats((cs) => [r.chat, ...cs]);
         setActiveId(id);
         activeRef.current = id;
-        go(id);
+        goChat(id, projectScope ?? null);
       }
       const now = Math.floor(Date.now() / 1000);
       const local: FileMeta[] = previews.map((p, i) => ({ id: -(i + 1), name: p.file.name, kind: p.kind, mime: p.file.type, size: p.file.size, url: p.preview }));
@@ -763,11 +848,74 @@ export function App() {
       await api.deleteChat(id);
       if (isDesktop) agent.unwatchReply(id).catch(() => {});
       setChats((cs) => cs.filter((c) => c.id !== id));
-      if (id === activeId) openChat(null);
+      if (id === activeId) navigate(projectScope ? `/p/${projectScope}` : "/others");
     } catch (e) {
       if (e instanceof ApiError) notify(e.message);
     }
   };
+
+  const refreshProjects = useCallback(() => {
+    api
+      .projects()
+      .then((r) => {
+        setProjects(r.projects);
+        setProjectsReady(true);
+      })
+      .catch(() => {});
+  }, []);
+
+  const saveProject = async (input: ProjectInput) => {
+    setProjectBusy(true);
+    try {
+      if (projectDialog?.mode === "edit") {
+        const r = await api.updateProject(projectDialog.project.id, input);
+        setProjects((ps) => ps.map((p) => (p.id === r.project.id ? { ...p, ...r.project, created: p.created, chats: p.chats, live: p.live, last: p.last } : p)));
+        setProjectDialog(null);
+        refreshProjects();
+      } else {
+        const r = await api.createProject(input);
+        setProjects((ps) => [r.project, ...ps]);
+        setProjectDialog(null);
+        navigate(`/p/${r.project.id}`);
+        refreshProjects();
+      }
+    } catch (e) {
+      notify(e instanceof ApiError ? e.message : t("ذخیره‌ی پروژه ناموفق بود.", "Could not save the project."));
+    } finally {
+      setProjectBusy(false);
+    }
+  };
+
+  const removeProject = async (project: Project) => {
+    if (!(await confirmDeleteProject(project))) return;
+    try {
+      await api.deleteProject(project.id);
+      setProjects((ps) => ps.filter((p) => p.id !== project.id));
+      setChats((cs) => cs.map((c) => (c.project_id === project.id ? { ...c, project_id: undefined } : c)));
+      if (projectScope === project.id) navigate("/");
+      refreshProjects();
+    } catch (e) {
+      if (e instanceof ApiError) notify(e.message);
+    }
+  };
+
+  const moveChatTo = async (id: string, projectId: string) => {
+    try {
+      await api.moveChat(id, projectId);
+      setChats((cs) => cs.map((c) => (c.id === id ? { ...c, project_id: projectId || undefined } : c)));
+      if (id === activeId) {
+        setProjectScope(projectId || null);
+        goChat(id, projectId || null, true);
+      }
+      refreshProjects();
+    } catch (e) {
+      if (e instanceof ApiError) notify(e.message);
+    }
+  };
+
+  const openProject = (id: string) => navigate(`/p/${id}`);
+  const openOthers = () => navigate("/others");
+  const newChatHere = () => openChat(null, false, projectScope ?? "");
 
   const logout = async () => {
     try {
@@ -807,26 +955,45 @@ export function App() {
 
   if (!user) return <Auth onAuth={onAuth} theme={theme} toggleTheme={toggleTheme} />;
 
-  const title = route === "chat" ? chats.find((c) => c.id === activeId)?.title || t("دستیار سلام", "Salam AI") : PAGE_TITLES[route];
+  const activeProject = projects.find((p) => p.id === projectScope);
+  const sidebarChats = route === "projects" ? chats : projectScope ? chats.filter((c) => c.project_id === projectScope) : chats.filter((c) => !c.project_id);
+  const othersCount = chats.filter((c) => !c.project_id).length;
+  const heading = route === "projects" ? t("گفت‌وگوهای اخیر", "Recent chats") : activeProject ? activeProject.name : t("سایر گفت‌وگوها", "Others");
+  const title =
+    route === "chat"
+      ? chats.find((c) => c.id === activeId)?.title ||
+        (activeProject ? t(`گفت‌وگوی تازه در ${activeProject.name}`, `New chat in ${activeProject.name}`) : t("گفت‌وگوی تازه", "New chat"))
+      : route === "project"
+        ? activeProject?.name || PAGE_TITLES.project
+        : PAGE_TITLES[route];
   const firstName = user.name.trim().split(/\s+/)[0];
+  const backTo = route === "chat" ? (projectScope ? `/p/${projectScope}` : "/others") : route === "project" || route === "others" ? "/" : "";
 
   return (
     <div className="app">
       <Sidebar
         user={user}
-        chats={chats}
+        chats={sidebarChats}
+        projects={projects}
+        activeProject={projectScope}
+        othersCount={othersCount}
+        chatHeading={heading}
         activeId={route === "chat" ? activeId : null}
         page={route === "admin-chat" ? "admin" : route}
         onNavigate={navigate}
         open={sidebar}
         theme={theme}
         onClose={() => setSidebar(false)}
-        onNew={() => openChat(null)}
+        onNew={newChatHere}
         onSelect={(id) => openChat(id)}
         onRename={rename}
         onDelete={remove}
         onLogout={logout}
         onToggleTheme={toggleTheme}
+        onOpenProjects={() => navigate("/")}
+        onOpenProject={openProject}
+        onOpenOthers={openOthers}
+        onNewProject={() => setProjectDialog({ mode: "create" })}
         activeBusy={busy}
         activeWaiting={activeWaiting}
         activePhase={activePhase}
@@ -836,7 +1003,23 @@ export function App() {
           <button type="button" className="icon-button only-mobile" onClick={() => setSidebar(true)} aria-label={t("باز کردن فهرست", "Open menu")}>
             <IconMenu />
           </button>
+          {backTo && (
+            <button type="button" className="icon-button back-button" onClick={() => navigate(backTo)} aria-label={t("بازگشت", "Back")} title={t("بازگشت", "Back")}>
+              <IconArrowLeft width={18} height={18} />
+            </button>
+          )}
           <h1 dir="auto">{uiText(title)}</h1>
+          {route === "chat" && activeId && (
+            <label className="project-move" title={t("انتقال به پروژه", "Move to a project")}>
+              <IconFolder width={15} height={15} />
+              <select value={activeChat?.project_id ?? ""} onChange={(e) => activeChat && moveChatTo(activeChat.id, e.target.value)} aria-label={t("انتقال گفت‌وگو به پروژه", "Move chat to a project")}>
+                <option value="">{t("سایر گفت‌وگوها", "Others")}</option>
+                {projects.map((p) => (
+                  <option key={p.id} value={p.id}>{p.name}</option>
+                ))}
+              </select>
+            </label>
+          )}
           {route === "chat" && activeId && (
             <button
               type="button"
@@ -850,14 +1033,56 @@ export function App() {
               <span className="share-button-label">{t("اشتراک", "Share")}</span>
             </button>
           )}
-          <button type="button" className="icon-button only-mobile" onClick={() => openChat(null)} aria-label={t("گفت‌وگوی تازه", "New chat")}>
+          <button type="button" className="icon-button only-mobile" onClick={newChatHere} aria-label={t("گفت‌وگوی تازه", "New chat")}>
             <IconPlus />
           </button>
           <button type="button" className="icon-button only-desktop" onClick={toggleTheme} aria-label={t("تغییر پوسته", "Toggle theme")}>
             {theme === "dark" ? <IconSun /> : <IconMoon />}
           </button>
         </header>
-        {route === "admin-chat" ? (
+        {route === "projects" ? (
+          <div className="scroller page-scroller" ref={pageScroller}>
+            <ProjectsHome
+              projects={projects}
+              chats={chats}
+              onOpenProject={openProject}
+              onOpenChat={(id, pid) => openChat(id, false, pid)}
+              onOpenOthers={openOthers}
+              onNewProject={() => setProjectDialog({ mode: "create" })}
+              onEditProject={(project) => setProjectDialog({ mode: "edit", project })}
+              onDeleteProject={removeProject}
+            />
+          </div>
+        ) : route === "project" ? (
+          <div className="scroller page-scroller" ref={pageScroller}>
+            {activeProject ? (
+              <ProjectPage
+                project={activeProject}
+                chats={sidebarChats}
+                onOpenChat={(id, pid) => openChat(id, false, pid)}
+                onNewChat={() => openChat(null, false, activeProject.id)}
+                onEdit={() => setProjectDialog({ mode: "edit", project: activeProject })}
+                onDelete={() => removeProject(activeProject)}
+              />
+            ) : (
+              <div className="page">
+                <div className="card empty-card">
+                  <h3>{!projectsReady ? t("در حال بارگذاری پروژه…", "Loading project…") : t("این پروژه پیدا نشد.", "This project was not found.")}</h3>
+                  <button type="button" className="button ghost" onClick={() => navigate("/")}>{t("بازگشت به پروژه‌ها", "Back to projects")}</button>
+                </div>
+              </div>
+            )}
+          </div>
+        ) : route === "others" ? (
+          <div className="scroller page-scroller" ref={pageScroller}>
+            <ProjectPage
+              project={null}
+              chats={chats.filter((c) => !c.project_id)}
+              onOpenChat={(id, pid) => openChat(id, false, pid)}
+              onNewChat={() => openChat(null, false, "")}
+            />
+          </div>
+        ) : route === "admin-chat" ? (
           <div className="scroller page-scroller">{user.admin ? <AdminChat id={adminChatIdFromPath()} /> : <NoAccess />}</div>
         ) : route === "connections" || route === "keys" || route === "plans" || route === "usage" || route === "memory" || route === "admin" ? (
           <div className="scroller page-scroller" ref={pageScroller}>
@@ -870,6 +1095,12 @@ export function App() {
                 <div className="welcome">
                   <img src="/logo.svg" alt="" width={64} height={64} className="welcome-logo" />
                   <h2>{t(`سلام ${firstName}! چطور کمکتان کنم؟`, `Hi ${firstName}! How can I help?`)}</h2>
+                  {activeProject && (
+                    <p className="welcome-project">
+                      <IconFolder width={16} height={16} />
+                      {t("در پروژه‌ی", "In project")} <strong dir="auto">{activeProject.name}</strong>
+                    </p>
+                  )}
                   <p className="muted">
                     {agentChat
                       ? t(
@@ -958,6 +1189,14 @@ export function App() {
           </>
         )}
       </main>
+      {projectDialog && (
+        <ProjectDialog
+          project={projectDialog.mode === "edit" ? projectDialog.project : null}
+          busy={projectBusy}
+          onSave={saveProject}
+          onClose={() => setProjectDialog(null)}
+        />
+      )}
       {shareOpen && activeId && activeChat && (
         <Suspense fallback={null}>
           <ShareDialog

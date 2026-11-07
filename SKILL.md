@@ -2646,7 +2646,7 @@ salam remove github.com/owner/repo
 salam deps                                  # after a clone: download what salam.lock lists, verify sums
 salam deps sums                             # module@version sum lines for registry/sums.txt
 salam search words                          # std library + registry/index.toml
-salam test                                  # runs test_ functions of every *_test.salam
+salam test                                  # runs every *_test.salam and *.test.salam (parallel)
 salam install github.com/owner/tool         # build its main.salam into ~/.salam/bin; salam uninstall
 ```
 

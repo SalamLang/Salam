@@ -44,6 +44,13 @@ printf '// SKIP: not ready\nfunc main:\nend\n' >expect/skip.test.salam
 step test expect/skip.test.salam
 printf '// EXPECT-CODE: E059\nfunc main:\n    unused := 1\nend\n' >expect/err.test.salam
 step test expect/err.test.salam
+printf 'func main:\n    // skip: a comment in the body is not a directive\n    println "ok"\nend\n' >expect/bodycomment.test.salam
+step test expect/bodycomment.test.salam
+printf '// EXPECT-EXIT: nope\nfunc main:\nend\n' >expect/badnum.test.salam
+step test expect/badnum.test.salam
+"$salam" test expect/out.test.salam --report="$work/report.tsv" >/dev/null 2>&1
+printf 'report: '
+cat "$work/report.tsv"
 step test expect --list
 step test expect/out.test.salam --jobs=1
 cd "$work/fa" || exit 1

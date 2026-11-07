@@ -751,7 +751,7 @@ files`; give every source file a name unique across the whole project.
   for HTTPS. Plain `http://` has none of this cost, and `salam run` compiles
   the same TLS code to native speed.
 
-- **`open` and `input` are reserved built-ins.** Do not name anything after them.
+- **`input` is a reserved built-in.** Do not name anything after it.
 
 - **`input` and `print` always take a value and never parentheses.** Write
   `input ""` or `input "prompt"`, and `println ""` for an empty line. A bare

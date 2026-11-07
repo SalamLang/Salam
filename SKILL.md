@@ -1362,10 +1362,13 @@ process.Child` runs a program on a pseudo terminal (POSIX only; type
 - **`config`**: INI/env/YAML settings with dotted keys: `LoadINI LoadEnv LoadYAML Parse* Get GetOr GetInt GetFloat GetBool Has Set Remove Keys Section Merge Format* Free`. Nothing reports an error (a missing file is an
   empty config); in INI/env a `#` after a space starts a comment, so quote
   passwords.
-- **`log`**: `Debug Info Warn Error Fatal` + `*f` and `*KV` variants, `KV Field FieldInt FieldBool`, `SetLevel SetPrefix SetFormat(FormatText| FormatJSON) ShowTime ToFile ToStdout ToStderr SetRotation CloseFile`. A
+- **`log`**: `Debug Info Warn Error Fatal` + `*f` and `*KV` variants, `KV Field FieldInt FieldBool`, `SetLevel SetPrefix SetFormat(FormatText| FormatJSON) ShowTime ToFile ToStdout ToStderr SetRotation CloseFile StartAsync StopAsync Flush IsAsync`. A
   file log is buffered (call `CloseFile` on every exit path); settings are
   unlocked globals (set them at startup); text format does not escape line
-  breaks (use JSON for user input).
+  breaks (use JSON for user input). Sink writes are serialized, so threads
+  can log at once; `StartAsync(n)` additionally sends lines through a channel
+  of capacity `n` to one writer thread (a full queue waits), and `Flush` /
+  `StopAsync` wait for what was emitted.
 - **`debug`** `Assert Enter Exit Stack Trace StartTimer StopTimer MemStats`
   (`Assert` runs in release builds too), **`runtime`** `OS Arch CpuCount TotalMemory AvailableMemory UsedMemory MarkStart UptimeMs BuildFlags`
   (machine-wide figures, -1 when unknown, each call on Windows starts

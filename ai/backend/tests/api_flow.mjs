@@ -288,6 +288,11 @@ check("only admins list uploads", (await api("GET", "/admin/files", filesSession
 const imageCount = (await api("GET", "/admin/users?q=files@test.ir", session)).json.users[0];
 check("users show how many images they uploaded", imageCount?.images === 1 && imageCount.files === 3, imageCount);
 check("too many files are refused", (await (await api("POST", `/chats/${filesChat}/messages`, filesSession, { text: "x", files: Array.from({ length: 7 }, (_, i) => ({ name: `f${i}.txt`, data: b64("hi") })) })).res.status) === 400);
+const longText = "Long message line.\n".repeat(800);
+const adopted = await api("POST", `/chats/${filesChat}/messages`, filesSession, { text: longText });
+check("a message over the byte cap becomes a text attachment", adopted.res.status === 201 && adopted.json.user?.body === "" && adopted.json.user?.files?.[0]?.name === "pasted-message.txt", adopted.json);
+const adoptedAnswer = adopted.res.status === 201 ? await answerOf(adopted) : adopted.json;
+check("the adopted text still reaches the engine", adoptedAnswer.body?.includes("pasted-message.txt"), adoptedAnswer.body?.slice(0, 160));
 
 console.log("agent clients");
 const agentSession = await account("agent@test.ir", "Agent");

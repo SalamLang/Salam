@@ -1,9 +1,10 @@
-import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent, type ReactNode } from "react";
 import type { OutgoingFile } from "./api";
-import { acceptList, kindOf, PendingChips, toOutgoing, useCapabilities, type Pending } from "./Attach";
+import { acceptList, kindOf, PendingChips, splitText, textBytes, textFile, toOutgoing, useCapabilities, type Pending } from "./Attach";
 import { EffortPicker } from "./effort";
 import { IconPaperclip, IconQueueAdd, IconSend, IconStop } from "./icons";
 import { t } from "./i18n";
+import { toPersianDigits } from "./theme";
 import { pushToast } from "./Toasts";
 import { useVoiceInput, VoiceBar, VoiceButton } from "./Voice";
 
@@ -24,9 +25,32 @@ type Props = {
 
 const RTL_FIRST = /^[^A-Za-z֐-ࣿיִ-﷿ﹰ-﻿]*[֐-ࣿיִ-﷿ﹰ-﻿]/;
 
-const MAX_TEXT = 12000;
+// The server caps a message at 12000 *bytes* (Salam strings are UTF-8), so a
+// Persian message reaches the limit after about 6000 characters. Anything
+// longer is moved into an attached text file instead of being cut off.
+const MAX_MESSAGE_BYTES = 12000;
+// Keep each part under the server's 256 KB per-file text limit.
+const PART_BYTES = 240 * 1024;
 
 let seq = 0;
+let pasteSeq = 0;
+
+function pasteStamp(): string {
+  const d = new Date();
+  const two = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}${two(d.getMonth() + 1)}${two(d.getDate())}-${two(d.getHours())}${two(d.getMinutes())}${two(d.getSeconds())}`;
+}
+
+function clipboardFiles(data: DataTransfer): File[] {
+  const out: File[] = Array.from(data.files ?? []);
+  if (out.length > 0) return out;
+  for (const item of Array.from(data.items ?? [])) {
+    if (item.kind !== "file") continue;
+    const file = item.getAsFile();
+    if (file) out.push(file);
+  }
+  return out;
+}
 
 export function Composer({ busy, disabled, onSend, onStop, onQueue, queueing, autoFocus, bar, placeholder, note, draft, onDraftUsed }: Props) {
   const [text, setText] = useState(draft ?? "");
@@ -37,27 +61,6 @@ export function Composer({ busy, disabled, onSend, onStop, onQueue, queueing, au
   const ref = useRef<HTMLTextAreaElement>(null);
   const picker = useRef<HTMLInputElement>(null);
   const caps = useCapabilities();
-  const addSpoken = useCallback((spoken: string) => {
-    const current = ref.current?.value ?? "";
-    const base = current.trimEnd();
-    const joined = base ? `${base}${current.endsWith("\n") ? "\n" : " "}${spoken}` : spoken;
-    if (joined.length > MAX_TEXT) {
-      pushToast({ tone: "failed", title: t("متن بلندتر از اندازه‌ی یک پیام است", "The text is longer than one message"), body: t("پایان آن کوتاه شد. آن را بررسی کنید.", "Its end was cut. Please review it.") });
-    }
-    const next = joined.slice(0, MAX_TEXT);
-    setText(next);
-    requestAnimationFrame(() => {
-      const el = ref.current;
-      if (!el) return;
-      el.scrollTop = el.scrollHeight;
-      if (matchMedia("(pointer: fine)").matches) {
-        el.focus();
-        el.setSelectionRange(next.length, next.length);
-      }
-    });
-  }, []);
-  const voice = useVoiceInput(caps, addSpoken);
-  const voiceActive = voice.stage !== "idle";
   const hint = placeholder || t("پرسش خود را درباره‌ی زبان سلام بنویسید…", "Ask anything about the Salam language…");
 
   useEffect(() => {
@@ -114,18 +117,116 @@ export function Composer({ busy, disabled, onSend, onStop, onQueue, queueing, au
     setProblem("");
   };
 
+  // Safety net for text that got into the box without a paste (voice input, a
+  // draft, typing): it is attached as a file instead of being refused by the API.
+  const textAsPending = (raw: string, prefix: string): Pending[] | null => {
+    if (!caps || raw.length === 0) return null;
+    const slots = caps.max_files - files.length;
+    const room = caps.max_total - files.reduce((n, p) => n + p.file.size, 0);
+    if (slots <= 0 || room <= 0) return null;
+    const per = Math.max(1024, Math.min(caps.max_text || PART_BYTES, PART_BYTES));
+    const parts = splitText(raw, per);
+    if (parts.length > slots) return null;
+    const stamp = pasteStamp();
+    const n = ++pasteSeq;
+    const made: Pending[] = [];
+    let total = 0;
+    parts.forEach((part, i) => {
+      const name = parts.length === 1 ? `${prefix}-${stamp}-${n}.txt` : `${prefix}-${stamp}-${n}-${i + 1}.txt`;
+      const file = textFile(name, part);
+      total += file.size;
+      made.push({ key: `f${++seq}`, file, kind: "text" });
+    });
+    return total > room ? null : made;
+  };
+
+  const attachText = (raw: string) => {
+    const made = textAsPending(raw, "pasted-text");
+    if (!made) {
+      setProblem(
+        t(
+          "این متن در این پیام جا نمی‌شود. فایل‌های پیوست را کم کنید یا متن را به چند بخش تقسیم کنید.",
+          "This text does not fit in this message. Remove some attachments or split it into parts.",
+        ),
+      );
+      pushToast({
+        tone: "failed",
+        title: t("پیوست کردن متن ممکن نشد", "Could not attach the text"),
+        body: t("سقف تعداد یا حجم فایل‌های این پیام پر شده است.", "This message has reached its file count or size limit."),
+      });
+      return;
+    }
+    add(made.map((p) => p.file));
+    pushToast({
+      tone: "done",
+      title: t("متن بلند به فایل تبدیل شد", "The long text became a file"),
+      body:
+        made.length > 1
+          ? t(`متن به ${toPersianDigits(made.length)} فایل تقسیم و پیوست شد.`, `The text was split into ${made.length} files and attached.`)
+          : t(`«${made[0].file.name}» پیوست شد و متن داخل کادر دست‌نخورده ماند.`, `"${made[0].file.name}" was attached; the text already in the box was left as it is.`),
+      seconds: 8,
+    });
+  };
+
+  const addSpoken = (spoken: string) => {
+    const current = ref.current?.value ?? "";
+    const base = current.trimEnd();
+    const joined = base ? `${base}${current.endsWith("\n") ? "\n" : " "}${spoken}` : spoken;
+    setText(joined);
+    if (textBytes(joined) > MAX_MESSAGE_BYTES) {
+      pushToast({
+        tone: "info",
+        title: t("متن گفتار از سقف یک پیام بیشتر شد", "The speech is longer than one message"),
+        body: t("هنگام فرستادن، خودکار به فایل تبدیل می‌شود.", "It becomes a file automatically when you send."),
+      });
+    }
+    requestAnimationFrame(() => {
+      const el = ref.current;
+      if (!el) return;
+      el.scrollTop = el.scrollHeight;
+      if (matchMedia("(pointer: fine)").matches) {
+        el.focus();
+        el.setSelectionRange(joined.length, joined.length);
+      }
+    });
+  };
+
+  const voice = useVoiceInput(caps, addSpoken);
+  const voiceActive = voice.stage !== "idle";
+
   const send = async () => {
     const typed = text.trim();
     const later = !!onQueue && (busy || !!queueing);
     if ((!typed && files.length === 0) || (busy && !later) || disabled || sending || voiceActive) return;
+    let body = typed;
+    let previews = files;
+    if (textBytes(typed) > MAX_MESSAGE_BYTES) {
+      const made = textAsPending(typed, "message");
+      if (!made) {
+        setProblem(
+          t(
+            "این متن برای یک پیام بلند است و به‌صورت فایل هم در آن جا نمی‌شود. فایل‌های پیوست را کم کنید یا متن را به چند بخش تقسیم کنید.",
+            "This text is too long for one message and does not fit as a file either. Remove some attachments or split it into parts.",
+          ),
+        );
+        return;
+      }
+      body = "";
+      previews = [...files, ...made];
+      pushToast({
+        tone: "info",
+        title: t("متن به فایل تبدیل شد و فرستاده می‌شود", "The text became a file and is being sent"),
+        body: made.length > 1 ? t(`متن به ${toPersianDigits(made.length)} فایل تقسیم شد.`, `It was split into ${made.length} files.`) : undefined,
+      });
+    }
     const keep = { text, files };
     setSending(true);
     try {
-      const payload = files.length > 0 ? await toOutgoing(files) : [];
+      const payload = previews.length > 0 ? await toOutgoing(previews) : [];
       setText("");
       setFiles([]);
       setProblem("");
-      const ok = later && onQueue ? await onQueue(typed, payload, keep.files) : await onSend(typed, payload, keep.files);
+      const ok = later && onQueue ? await onQueue(body, payload, previews) : await onSend(body, payload, previews);
       if (ok === false) {
         setText(keep.text);
         setFiles(keep.files);
@@ -145,10 +246,21 @@ export function Composer({ busy, disabled, onSend, onStop, onQueue, queueing, au
   };
 
   const onPaste = (e: ClipboardEvent<HTMLTextAreaElement>) => {
-    if (e.clipboardData.files.length > 0) {
+    if (!caps) return;
+    const onClipboard = clipboardFiles(e.clipboardData);
+    if (onClipboard.length > 0) {
       e.preventDefault();
-      add(e.clipboardData.files);
+      add(onClipboard);
+      return;
     }
+    const pasted = e.clipboardData.getData("text/plain");
+    if (!pasted) return;
+    const el = e.currentTarget;
+    const before = text.slice(0, el.selectionStart ?? text.length);
+    const after = text.slice(el.selectionEnd ?? text.length);
+    if (textBytes(before + pasted + after) <= MAX_MESSAGE_BYTES) return;
+    e.preventDefault();
+    attachText(pasted);
   };
 
   const onDrop = (e: DragEvent<HTMLDivElement>) => {
@@ -214,7 +326,6 @@ export function Composer({ busy, disabled, onSend, onStop, onQueue, queueing, au
             dir={text ? "auto" : RTL_FIRST.test(hint) ? "rtl" : "ltr"}
             rows={1}
             value={text}
-            maxLength={MAX_TEXT}
             placeholder={hint}
             onChange={(e) => setText(e.target.value)}
             onKeyDown={onKey}

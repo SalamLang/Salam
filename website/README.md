@@ -53,9 +53,10 @@ HTML allowed
 >>
 ```
 
-A std page URL is the package name as it is imported, so `net/udp` is
-`/std/net/udp/` and not `/std/net-udp/`. The dashed form is only the folder
-under `std-examples/` and the API JSON file.
+A std page URL keeps the slashes of the package path, so `net/udp` is
+`/std/net/udp/` and not `/std/net-udp/`; the dashed form is only the folder
+under `std-examples/` and the API JSON file. The import name and the label on
+the page are dotted, though: `import net.udp`, shown as `net.udp`.
 
 Values are inserted as HTML. Keys ending in `_cmd` are shell commands and are
 escaped automatically. Keys containing `_code_<lang>`, for example `ai.api_code_python`, are

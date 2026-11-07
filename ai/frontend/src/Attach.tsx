@@ -70,6 +70,36 @@ export function kindOf(file: File, caps: Capabilities): { kind?: FileMeta["kind"
   return { problem: t(`قالب فایل «${file.name}» پشتیبانی نمی‌شود. تصویر، فایل متنی یا کد، و ZIP پذیرفته می‌شود.`, `The format of "${file.name}" is not supported. Images, text or code files, and ZIP are accepted.`) };
 }
 
+const encoder = new TextEncoder();
+const decoder = new TextDecoder();
+
+/** The API counts bytes, not UTF-16 characters, so limits must be byte based. */
+export function textBytes(text: string): number {
+  return encoder.encode(text).length;
+}
+
+export function textFile(name: string, text: string): File {
+  return new File([text], name, { type: "text/plain;charset=utf-8" });
+}
+
+/** Split on UTF-8 boundaries so every part is still valid text. */
+export function splitText(text: string, maxBytes: number): string[] {
+  const limit = Math.max(4, maxBytes);
+  const bytes = encoder.encode(text);
+  const parts: string[] = [];
+  let at = 0;
+  while (at < bytes.length) {
+    let end = Math.min(at + limit, bytes.length);
+    if (end < bytes.length) {
+      while (end > at && (bytes[end] & 0xc0) === 0x80) end--;
+      if (end === at) end = Math.min(at + limit, bytes.length);
+    }
+    parts.push(decoder.decode(bytes.subarray(at, end)));
+    at = end;
+  }
+  return parts.length > 0 ? parts : [""];
+}
+
 export function readBase64(file: File): Promise<string> {
   return new Promise((ok, fail) => {
     const r = new FileReader();

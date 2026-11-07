@@ -214,8 +214,9 @@ make the block a function with that name. Put private helpers above the first
 a project: `main.salam` with a tiny `main` that only wires things together, and
 one file or folder per concern (`model`, `parse`, `store`, `render`),
 joined with `include "name.salam"` or imported as a package folder. Each file
-has one reason to change. Tests live next to the code in `*_test.salam`, as
-`test_` functions, and run with `salam test`. `salam new name` scaffolds the
+has one reason to change. Tests live next to the code in `*_test.salam` or
+`*.test.salam`, as `test_` functions or as whole programs with `// EXPECT`
+directives, and run with `salam test`. `salam new name` scaffolds the
 layout. A script of under about 40 lines may stay in one file.
 
 **5. Use the language, not a transliteration.** `repeat`/`each` instead of
@@ -788,6 +789,8 @@ salam check  hello.salam     # all of build before codegen, imports included; ex
 salam check  hello.salam --fix                  # apply the safe compiler fixes in place
 salam check  hello.salam --error-format=json    # diagnostics with machine-readable fixes
 salam run    hello.salam     # build and execute
-salam test                   # run the test_ functions in every *_test.salam file
+salam test                   # run every *_test.salam and *.test.salam file (parallel)
+salam test --jobs=2 --list   # limit parallelism, or just list the files found
+salam test --run=parse --format=teamcity   # filter by name, CI output
 salam format hello.salam --check
 ```

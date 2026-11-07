@@ -4,6 +4,12 @@ import io
 import os
 import str
 import time
+import conv
+import mem
+import sync
+import thread
+import os.process
+import os.platform
 
 include lg "../logger.salam"
 include i18 "../i18n.salam"
@@ -16,6 +22,15 @@ include lx "../lexer/lexer.salam"
 include ps "../parser/parser.salam"
 include sm "../semantic/semantic.salam"
 include pth "../sal_path.salam"
+
+mut g_rt_paths := Vector {} as Vector<str>
+mut g_rt_reports := Vector {} as Vector<str>
+mut g_rt_results := Vector {} as Vector<JobResult>
+mut g_rt_next := 0
+mut g_rt_mu := sync.Mutex {}
+mut g_rt_stop := false
+mut g_rt_opt := Dr {}
+mut g_test_seq := 0
 
 struct TestFn:
     pub name: str = ""
@@ -34,21 +49,82 @@ struct TestFile:
     pub parsed: bool = true
 end
 
+struct ExpectItem:
+    pub kind: str = ""
+    pub text: str = ""
+    pub num: int = 0
+end
+
+struct Expectations:
+    pub items: Vector<ExpectItem> = Vector {}
+    pub skip_reason: str = ""
+    pub only_os: str = ""
+    pub skip_os: str = ""
+    pub only_arch: str = ""
+    pub skip_arch: str = ""
+    pub timeout_ms: int = 0
+    pub args: str = ""
+    pub has_check: bool = false
+end
+
+struct TestReport:
+    pub status: str = ""
+    pub tests: int = 0
+    pub passed: int = 0
+    pub failed: int = 0
+    pub reason: str = ""
+end
+
+struct CheckResult:
+    pub checked: int = 0
+    pub failed: int = 0
+    pub detail: str = ""
+end
+
+struct FileRun:
+    pub built: bool = true
+    pub res: process.RunResult = process.RunResult {}
+end
+
+struct JobResult:
+    pub path: str = ""
+    pub status: str = ""
+    pub reason: str = ""
+    pub out: str = ""
+    pub err: str = ""
+    pub tests: int = 0
+    pub passed: int = 0
+    pub failed: int = 0
+    pub ms: i64 = 0
+    pub timed_out: bool = false
+end
+
 func is_test_name(name: str): bool:
     ret str.StartsWith(name, "test_") or str.StartsWith(name, "آزمون")
+end
+
+func is_test_file_name(name: str): bool:
+    ret str.EndsWith(name, "_test.salam") or str.EndsWith(name, ".test.salam")
+end
+
+func skip_dir(name: str): bool:
+    if str.StartsWith(name, "."):
+        ret true
+    end
+    ret str.Equals(name, "node_modules") or str.Equals(name, "build") or str.Equals(name, "out") or str.Equals(name, "target") or str.Equals(name, "dist") or str.Equals(name, "vendor") or str.Equals(name, "bin") or str.Equals(name, "obj")
 end
 
 func test_files_under(dir: str, out &: Vector<str>):
     mut names := os.ListDir(dir)
     defer names.free()
     each n in names:
-        if str.StartsWith(n, ".") or str.Equals(n, "node_modules") or str.Equals(n, "build") or str.Equals(n, "out"):
+        if skip_dir(n):
             continue
         end
         full := str.Equals(dir, ".") ? n : pth.PathJoin(dir, n)
         if os.IsDir(full):
             test_files_under(full, out)
-        else str.EndsWith(n, "_test.salam"):
+        else is_test_file_name(n):
             out.push(full)
         end
     end
@@ -66,6 +142,16 @@ func sort_paths(v &: Vector<str>):
         v.set(j, x)
         i++
     end
+end
+
+func dedupe_paths(sorted: Vector<str>): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    each p in sorted:
+        if out.len() == 0 or not str.Equals(out.get(out.len() - 1), p):
+            out.push(p)
+        end
+    end
+    ret out
 end
 
 func param_count(a &: at.Ast, nid: int): int:
@@ -129,8 +215,222 @@ func discover_tests(path: str, tf &: TestFile): bool:
     ret true
 end
 
-func salam_quote(s: str): str:
-    ret "\"" + str.Replace(str.Replace(s, "\\", "\\\\"), "\"", "\\\"") + "\""
+func normalize_digits(s: str): str:
+    mut out := s
+    out = str.Replace(out, "۰", "0")
+    out = str.Replace(out, "۱", "1")
+    out = str.Replace(out, "۲", "2")
+    out = str.Replace(out, "۳", "3")
+    out = str.Replace(out, "۴", "4")
+    out = str.Replace(out, "۵", "5")
+    out = str.Replace(out, "۶", "6")
+    out = str.Replace(out, "۷", "7")
+    out = str.Replace(out, "۸", "8")
+    out = str.Replace(out, "۹", "9")
+    out = str.Replace(out, "٠", "0")
+    out = str.Replace(out, "١", "1")
+    out = str.Replace(out, "٢", "2")
+    out = str.Replace(out, "٣", "3")
+    out = str.Replace(out, "٤", "4")
+    out = str.Replace(out, "٥", "5")
+    out = str.Replace(out, "٦", "6")
+    out = str.Replace(out, "٧", "7")
+    out = str.Replace(out, "٨", "8")
+    ret str.Replace(out, "٩", "9")
+end
+
+func parse_int_text(s: str): int:
+    t := normalize_digits(str.Trim(s))
+    mut start := 0
+    if str.StartsWith(t, "E") or str.StartsWith(t, "e") or str.StartsWith(t, "W") or str.StartsWith(t, "w"):
+        start = 1
+    else str.StartsWith(t, "خطا") or str.StartsWith(t, "هشدار"):
+        start = "خطا".len()
+    end
+    num := str.Trim(str.Substr(t, start, str.Len(t) - start))
+    ret conv.ParseIntOr(num, 0 - 1) as int
+end
+
+func looks_like_code(s: str): bool:
+    t := str.Trim(s)
+    if str.StartsWith(t, "E") or str.StartsWith(t, "e") or str.StartsWith(t, "خطا"):
+        ret parse_int_text(t) >= 0
+    end
+    ret false
+end
+
+func is_expect(name: str, upper: str, en: str, fa1: str, fa2: str): bool:
+    ret str.Equals(upper, en) or str.Equals(name, fa1) or str.Equals(name, fa2)
+end
+
+func is_expect_msg(name: str, upper: str): bool:
+    ret is_expect(name, upper, "EXPECT-MSG", "انتظار-پیام", "توقع-پیام") or str.Equals(name, "انتظار پیام") or str.Equals(name, "توقع پیام")
+end
+
+func is_expect_fixes(name: str, upper: str): bool:
+    ret is_expect(name, upper, "EXPECT-FIXES", "انتظار-اصلاحها", "توقع-اصلاحها") or str.Equals(name, "انتظار-اصلاح ها")
+end
+
+func parse_expectations(text: str): Expectations:
+    mut ex := Expectations {}
+    lines := str.Split(text, "\n")
+    defer lines.free()
+    each raw in lines:
+        line := str.Trim(raw)
+        if not str.StartsWith(line, "//"):
+            continue
+        end
+        body := str.Trim(str.Substr(line, 2, str.Len(line) - 2))
+        colon := body.find(":")
+        if colon < 0:
+            continue
+        end
+        name := str.Trim(str.Substr(body, 0, colon))
+        value := str.Trim(str.Substr(body, colon + 1, str.Len(body) - colon - 1))
+        upper := name.upper()
+        if is_expect(name, upper, "EXPECT", "انتظار", "توقع"):
+            ex.items.push(ExpectItem { kind = "out", text = value })
+        else is_expect(name, upper, "EXPECT-NOT", "انتظار-نه", "توقع-نه"):
+            ex.items.push(ExpectItem { kind = "not", text = value })
+        else is_expect(name, upper, "EXPECT-LINE", "انتظار-خط", "توقع-خط"):
+            ex.items.push(ExpectItem { kind = "line", text = value })
+        else is_expect(name, upper, "EXPECT-STDERR", "انتظار-خطا", "توقع-خطا"):
+            ex.items.push(ExpectItem { kind = "err", text = value })
+        else is_expect(name, upper, "EXPECT-STDERR-NOT", "انتظار-خطا-نه", "توقع-خطا-نه"):
+            ex.items.push(ExpectItem { kind = "errnot", text = value })
+        else is_expect(name, upper, "EXPECT-EXIT", "انتظار-کد", "توقع-کد"):
+            ex.items.push(ExpectItem { kind = "exit", num = parse_int_text(value) })
+        else is_expect(name, upper, "EXPECT-CODE", "انتظار-کد-خطا", "توقع-کد-خطا"):
+            ex.has_check = true
+            ex.items.push(ExpectItem { kind = "code", num = parse_int_text(value) })
+        else is_expect(name, upper, "EXPECT-ERROR", "انتظار-خطا-کد", "توقع-خطا-کد"):
+            ex.has_check = true
+            ex.items.push(ExpectItem { kind = "code", num = parse_int_text(value) })
+        else is_expect_msg(name, upper):
+            ex.has_check = true
+            ex.items.push(ExpectItem { kind = "msg", text = value })
+        else is_expect(name, upper, "EXPECT-WARNINGS", "انتظار-هشدارها", "توقع-هشدارها"):
+            ex.has_check = true
+            ex.items.push(ExpectItem { kind = "warnings", num = parse_int_text(value) })
+        else is_expect_fixes(name, upper):
+            ex.has_check = true
+            ex.items.push(ExpectItem { kind = "fixes", num = parse_int_text(value) })
+        else is_expect(name, upper, "EXPECT-FILE", "انتظار-پرونده", "توقع-پرونده"):
+            ex.items.push(ExpectItem { kind = "file", text = value })
+        else is_expect(name, upper, "SKIP", "رد شدن", "ردشدن"):
+            ex.skip_reason = str.Len(value) > 0 ? value : "skipped"
+        else is_expect(name, upper, "ONLY-OS", "فقط-سیستم", "فقط سیستم"):
+            ex.only_os = value
+        else is_expect(name, upper, "SKIP-OS", "رد-سیستم", "رد سیستم"):
+            ex.skip_os = value
+        else is_expect(name, upper, "ONLY-ARCH", "فقط-معماری", "فقط معماری"):
+            ex.only_arch = value
+        else is_expect(name, upper, "SKIP-ARCH", "رد-معماری", "رد معماری"):
+            ex.skip_arch = value
+        else is_expect(name, upper, "TIMEOUT", "مهلت", "مهلت"):
+            ex.timeout_ms = parse_int_text(value)
+        else is_expect(name, upper, "ARGS", "آرگومانها", "آرگومان ها"):
+            ex.args = value
+        end
+    end
+    ret ex
+end
+
+func list_has_os(list: str, want: str): bool:
+    parts := str.Split(list, ",")
+    defer parts.free()
+    each raw in parts:
+        p := str.Trim(raw).lower()
+        if str.Equals(p, want):
+            ret true
+        end
+        if str.Equals(want, "mac") and (str.Equals(p, "macos") or str.Equals(p, "osx") or str.Equals(p, "darwin")):
+            ret true
+        end
+        if str.Equals(want, "windows") and (str.Equals(p, "win") or str.Equals(p, "win32")):
+            ret true
+        end
+        if str.Equals(want, "linux") and str.Equals(p, "gnu"):
+            ret true
+        end
+    end
+    ret false
+end
+
+func list_has_arch(list: str, want: str): bool:
+    parts := str.Split(list, ",")
+    defer parts.free()
+    each raw in parts:
+        p := str.Trim(raw).lower()
+        if str.Equals(p, want):
+            ret true
+        end
+        if str.Equals(want, "x64") and (str.Equals(p, "x86_64") or str.Equals(p, "amd64")):
+            ret true
+        end
+        if str.Equals(want, "arm64") and str.Equals(p, "aarch64"):
+            ret true
+        end
+        if str.Equals(want, "x86") and (str.Equals(p, "i386") or str.Equals(p, "i686")):
+            ret true
+        end
+    end
+    ret false
+end
+
+func skip_reason_for(ex: Expectations): str:
+    if str.Len(ex.skip_reason) > 0:
+        ret ex.skip_reason
+    end
+    cur_os := platform.OS()
+    if str.Len(ex.only_os) > 0 and not list_has_os(ex.only_os, cur_os):
+        ret "only runs on " + ex.only_os
+    end
+    if str.Len(ex.skip_os) > 0 and list_has_os(ex.skip_os, cur_os):
+        ret "does not run on " + cur_os
+    end
+    cur_arch := platform.Arch()
+    if str.Len(ex.only_arch) > 0 and not list_has_arch(ex.only_arch, cur_arch):
+        ret "only runs on " + ex.only_arch
+    end
+    if str.Len(ex.skip_arch) > 0 and list_has_arch(ex.skip_arch, cur_arch):
+        ret "does not run on " + cur_arch
+    end
+    ret ""
+end
+
+func tc_value(s: str): str:
+    mut out := str.Replace(s, "|", "||")
+    out = str.Replace(out, "'", "|'")
+    out = str.Replace(out, "[", "|[")
+    ret str.Replace(out, "]", "|]")
+end
+
+func test_selected(name: str, filter: str): bool:
+    if str.Len(filter) == 0:
+        ret true
+    end
+    mut f := filter
+    at_start := str.StartsWith(f, "^")
+    if at_start:
+        f = str.Substr(f, 1, str.Len(f) - 1)
+    end
+    at_end := str.EndsWith(f, "$")
+    if at_end:
+        f = str.Substr(f, 0, str.Len(f) - 1)
+    end
+    if at_start and at_end:
+        ret str.Equals(name, f)
+    else at_start:
+        ret str.StartsWith(name, f)
+    else at_end:
+        ret str.EndsWith(name, f)
+    end
+    ret str.Contains(name, f)
+end
+
+func tname(fa: bool, en: str, persian: str): str:
+    ret fa ? persian : en
 end
 
 func test_line_start(text: str, i: int): int:
@@ -150,8 +450,8 @@ func test_next_line(text: str, i: int): int:
     ret k < n ? k + 1 : n
 end
 
-func tname(fa: bool, en: str, persian: str): str:
-    ret fa ? persian : en
+func salam_quote(s: str): str:
+    ret "\"" + str.Replace(str.Replace(s, "\\", "\\\\"), "\"", "\\\"") + "\""
 end
 
 func test_harness(tf: TestFile, format: str, run: str, shown: str): str:
@@ -185,7 +485,7 @@ func test_harness(tf: TestFile, format: str, run: str, shown: str): str:
     if_kw := lp.Spelling(p, tok.TK_KW_IF)
     each f in tf.fns:
         str.BufAppend(b, "    " + if_kw + " " + pk + tname(fa, "Selected", "انتخاب شده") + "(" + salam_quote(f.name) + "):\n")
-        str.BufAppend(b, "        " + pk + tname(fa, "Begin", "شروع آزمون") + "(" + salam_quote(f.name) + ", " + f.line + ")\n")
+        str.BufAppend(b, "        " + pk + tname(fa, "Begin", "شروع آزمون") + "(" + salam_quote(f.name) + ", " + conv.FormatInt(f.line as i64) + ")\n")
         str.BufAppend(b, "        " + f.name + "()\n")
         str.BufAppend(b, "        " + pk + tname(fa, "End", "اتمام آزمون") + "()\n")
         str.BufAppend(b, "    " + lp.EndSpelling(p) + "\n")
@@ -196,76 +496,755 @@ func test_harness(tf: TestFile, format: str, run: str, shown: str): str:
     ret out
 end
 
-func tc_value(s: str): str:
-    mut out := str.Replace(s, "|", "||")
-    out = str.Replace(out, "'", "|'")
-    out = str.Replace(out, "[", "|[")
-    ret str.Replace(out, "]", "|]")
+func test_self_exe(): str:
+    mut exe := ""
+    if not sm.ExePath(exe):
+        exe = "salam"
+    end
+    ret exe
 end
 
-func test_selected(name: str, filter: str): bool:
-    if str.Len(filter) == 0:
-        ret true
-    end
-    mut f := filter
-    at_start := str.StartsWith(f, "^")
-    if at_start:
-        f = str.Substr(f, 1, str.Len(f) - 1)
-    end
-    at_end := str.EndsWith(f, "$")
-    if at_end:
-        f = str.Substr(f, 0, str.Len(f) - 1)
-    end
-    if at_start and at_end:
-        ret str.Equals(name, f)
-    else at_start:
-        ret str.StartsWith(name, f)
-    else at_end:
-        ret str.EndsWith(name, f)
-    end
-    ret str.Contains(name, f)
+func test_temp(suffix: str): str:
+    g_test_seq++
+    base := "salam-test-" + conv.FormatInt(driver_pid() as i64) + "-" + conv.FormatInt(time.NowMicros()) + "-" + conv.FormatInt(g_test_seq as i64)
+    ret pth.PathJoin(os.TempDir(), base + suffix)
 end
 
-func report_no_match(opt &: Dr, path: str): int:
-    if not str.Equals(opt.test_format, "teamcity"):
-        println co.Format1(i18.Tr("?    %s: no test matches"), co.ArgStr(path))
+func parent_timeout(ms: int): int:
+    if ms > 0:
+        ret ms + 300000
     end
-    if str.Len(opt.test_report) > 0:
-        _w := io.WriteFile(opt.test_report, "nomatch\n")
+    ret 1800000
+end
+
+func write_report(opt &: Dr, status: str, tests: int, passed: int, failed: int, reason: str):
+    if str.Len(opt.test_report) == 0:
+        ret
     end
+    safe := str.Replace(str.Replace(reason, "\n", " "), "\r", " ")
+    body := status + "\n" + conv.FormatInt(tests as i64) + " " + conv.FormatInt(passed as i64) + " " + conv.FormatInt(failed as i64) + "\n" + safe + "\n"
+    _w := io.WriteFile(opt.test_report, body)
+end
+
+func read_report(path: str): TestReport:
+    mut r := TestReport {}
+    if not os.Exists(path):
+        ret r
+    end
+    text := os.ReadFile(path)
+    lines := str.Split(text, "\n")
+    defer lines.free()
+    if lines.len() > 0:
+        r.status = str.Trim(lines.get(0))
+    end
+    if lines.len() > 1:
+        parts := str.Split(str.Trim(lines.get(1)), " ")
+        defer parts.free()
+        if parts.len() > 0: r.tests = conv.ParseIntOr(parts.get(0), 0) as int end
+        if parts.len() > 1: r.passed = conv.ParseIntOr(parts.get(1), 0) as int end
+        if parts.len() > 2: r.failed = conv.ParseIntOr(parts.get(2), 0) as int end
+    end
+    if lines.len() > 2:
+        r.reason = str.Trim(lines.get(2))
+    end
+    ret r
+end
+
+func report_nomatch(opt &: Dr, path: str, reason: str): int:
+    if str.Equals(opt.test_format, "teamcity"):
+        println "##teamcity[testIgnored name='" + tc_value(pth.PathBase(path)) + "' message='" + tc_value(reason) + "']"
+    else:
+        println "?    " + path + ": " + reason
+    end
+    write_report(opt, "nomatch", 0, 0, 0, reason)
     ret 0
 end
 
-func run_whole_file(opt &: Dr, path: str): int:
-    teamcity := str.Equals(opt.test_format, "teamcity")
-    name := pth.PathBase(path)
-    if not test_selected(name, opt.test_run):
-        ret report_no_match(opt, path)
+func split_args(s: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    parts := str.Split(s, " ")
+    defer parts.free()
+    each raw in parts:
+        p := str.Trim(raw)
+        if str.Len(p) > 0:
+            out.push(p)
+        end
     end
-    if teamcity:
-        println "##teamcity[testSuiteStarted name='" + tc_value(path) + "' locationHint='salam://" + tc_value(path) + "']"
-        println "##teamcity[testStarted name='" + tc_value(name) + "' locationHint='salam://" + tc_value(path) + ":1']"
+    ret out
+end
+
+func run_captured(opt &: Dr, path: str, timeout_ms: int): FileRun:
+    if opt.interp:
+        mut cmd := process.NewCommand(test_self_exe())
+        cmd.Arg("exec")
+        cmd.Arg(path)
+        cmd.Arg("--no-color")
+        cmd.Arg("--log-level=warn")
+        if timeout_ms > 0:
+            cmd.Arg("--timeout=" + conv.FormatInt(timeout_ms as i64))
+        end
+        r := process.RunCommand(cmd, "", parent_timeout(timeout_ms))
+        cmd.Free()
+        ret FileRun { built = true, res = r }
     end
+    mut exe_suffix := ""
+    if SALAM_OS_WINDOWS:
+        exe_suffix = ".exe"
+    end
+    tmp := test_temp(exe_suffix)
     mut child := opt
     child.input = path
     child.inputs = Vector {} as Vector<str>
     child.inputs.push(path)
-    child.command = CMD_RUN
-    rc := opt.interp ? Exec(child) : Run(child)
-    if teamcity:
-        if rc != 0:
-            println "##teamcity[testFailed name='" + tc_value(name) + "' message='exit code " + rc + "']"
+    child.output = tmp
+    child.command = CMD_BUILD
+    child.check_only = false
+    brc := Build(child)
+    if brc != 0:
+        _rm := os.Remove(tmp)
+        ret FileRun { built = false }
+    end
+    exe := str.Len(child.exe_path) > 0 ? child.exe_path : tmp
+    mut cmd := process.NewCommand(exe)
+    r := process.RunCommand(cmd, "", timeout_ms > 0 ? timeout_ms : 0 - 1)
+    cmd.Free()
+    _rm2 := os.Remove(exe)
+    ret FileRun { built = true, res = r }
+end
+
+func has_line(hay: str, want: str): bool:
+    lines := str.Split(hay, "\n")
+    defer lines.free()
+    each raw in lines:
+        mut line := raw
+        if str.EndsWith(line, "\r"):
+            line = str.Substr(line, 0, str.Len(line) - 1)
         end
-        println "##teamcity[testFinished name='" + tc_value(name) + "']"
-        println "##teamcity[testSuiteFinished name='" + tc_value(path) + "']"
+        if str.Equals(line, want):
+            ret true
+        end
+    end
+    ret false
+end
+
+func trim_end_newlines(s: str): str:
+    mut n := str.Len(s)
+    until n > 0 and (co.ByteAt(s, n - 1) == 10 or co.ByteAt(s, n - 1) == 13):
+        n--
+    end
+    ret str.Substr(s, 0, n)
+end
+
+func clip_text(text: str, max: int): str:
+    if str.Len(text) <= max:
+        ret text
+    end
+    ret str.Substr(text, 0, max) + "\n  ... (output truncated)"
+end
+
+func print_indented(text: str):
+    lines := str.Split(text, "\n")
+    defer lines.free()
+    each line in lines:
+        println "  " + line
+    end
+end
+
+func has_int(v: Vector<int>, n: int): bool:
+    each x in v:
+        if x == n:
+            ret true
+        end
+    end
+    ret false
+end
+
+func extract_codes(text: str): Vector<int>:
+    mut codes := Vector {} as Vector<int>
+    t := normalize_digits(text)
+    lines := str.Split(t, "\n")
+    defer lines.free()
+    each line in lines:
+        mut rest := line
+        until true:
+            e := rest.find("[E")
+            c := rest.find("[خطا")
+            if e < 0 and c < 0:
+                break
+            end
+            mut start := 0
+            mut at := 0
+            if e >= 0 and (c < 0 or e < c):
+                at = e
+                start = e + 2
+            else:
+                at = c
+                start = c + "[خطا".len()
+            end
+            mut k := start
+            until k < str.Len(rest) and co.ByteAt(rest, k) >= 48 and co.ByteAt(rest, k) <= 57:
+                k++
+            end
+            if k > start:
+                code := conv.ParseIntOr(str.Substr(rest, start, k - start), 0 - 1) as int
+                if code >= 0 and not has_int(codes, code):
+                    codes.push(code)
+                end
+            end
+            if at + 1 >= str.Len(rest):
+                break
+            end
+            rest = str.Substr(rest, at + 1, str.Len(rest) - at - 1)
+        end
+    end
+    ret codes
+end
+
+func count_warnings(text: str): int:
+    mut n := 0
+    t := normalize_digits(text)
+    lines := str.Split(t, "\n")
+    defer lines.free()
+    each raw in lines:
+        line := str.Trim(raw)
+        if str.StartsWith(line, "warning[") or str.StartsWith(line, "هشدار["):
+            n++
+        end
+    end
+    ret n
+end
+
+func count_fixes(text: str): int:
+    mut n := 0
+    lines := str.Split(text, "\n")
+    defer lines.free()
+    each raw in lines:
+        line := str.Trim(raw)
+        if str.StartsWith(line, "= fix:") or str.StartsWith(line, "= اصلاح:") or str.StartsWith(line, "= اصلاح :"):
+            n++
+        end
+    end
+    ret n
+end
+
+func expected_exit(ex: Expectations): int:
+    mut want := 0 - 1
+    each it in ex.items:
+        if str.Equals(it.kind, "exit"):
+            want = it.num
+        end
+    end
+    ret want
+end
+
+func has_code_expectation(ex: Expectations): bool:
+    each it in ex.items:
+        if looks_like_code(it.text):
+            ret true
+        end
+    end
+    ret false
+end
+
+func fail_line(b &: str.StringBuilder, text: str):
+    str.BufAppend(b, "  " + text + "\n")
+end
+
+func check_script_output(ex: Expectations, path: str, out: str, err: str): CheckResult:
+    mut r := CheckResult {}
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    each it in ex.items:
+        if str.Equals(it.kind, "out"):
+            r.checked++
+            if not str.Contains(out, it.text):
+                r.failed++
+                fail_line(b, "expected stdout to contain: " + it.text)
+            end
+        else str.Equals(it.kind, "not"):
+            r.checked++
+            if str.Contains(out, it.text):
+                r.failed++
+                fail_line(b, "expected stdout not to contain: " + it.text)
+            end
+        else str.Equals(it.kind, "line"):
+            r.checked++
+            if not has_line(out, it.text):
+                r.failed++
+                fail_line(b, "expected stdout line: " + it.text)
+            end
+        else str.Equals(it.kind, "err"):
+            r.checked++
+            if not str.Contains(err, it.text):
+                r.failed++
+                fail_line(b, "expected stderr to contain: " + it.text)
+            end
+        else str.Equals(it.kind, "errnot"):
+            r.checked++
+            if str.Contains(err, it.text):
+                r.failed++
+                fail_line(b, "expected stderr not to contain: " + it.text)
+            end
+        else str.Equals(it.kind, "file"):
+            r.checked++
+            mut fpath := it.text
+            if not pth.PathIsAbs(fpath):
+                mut base_dir := pth.PathDir(path)
+                if str.Len(base_dir) == 0:
+                    base_dir = "."
+                end
+                fpath = pth.PathJoin(base_dir, fpath)
+            end
+            if not os.Exists(fpath):
+                r.failed++
+                fail_line(b, "expected output file is missing: " + fpath)
+            else:
+                want := os.ReadFile(fpath)
+                got := str.Replace(str.Replace(out, "\r\n", "\n"), "\r", "\n")
+                want2 := str.Replace(str.Replace(want, "\r\n", "\n"), "\r", "\n")
+                if not str.Equals(trim_end_newlines(got), trim_end_newlines(want2)):
+                    r.failed++
+                    fail_line(b, "stdout does not match " + fpath)
+                end
+            end
+        end
+    end
+    r.detail = str.BufStr(b)
+    ret r
+end
+
+func check_compile_output(ex: Expectations, text: str): CheckResult:
+    mut r := CheckResult {}
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    codes := extract_codes(text)
+    defer codes.free()
+    warns := count_warnings(text)
+    fixes := count_fixes(text)
+    each it in ex.items:
+        if str.Equals(it.kind, "code"):
+            r.checked++
+            if not has_int(codes, it.num):
+                r.failed++
+                fail_line(b, "expected error code E" + conv.FormatInt(it.num as i64))
+            end
+        else str.Equals(it.kind, "out"):
+            if looks_like_code(it.text):
+                r.checked++
+                code := parse_int_text(it.text)
+                if not has_int(codes, code):
+                    r.failed++
+                    fail_line(b, "expected error code E" + conv.FormatInt(code as i64))
+                end
+            else:
+                r.checked++
+                if not str.Contains(text, it.text):
+                    r.failed++
+                    fail_line(b, "expected compiler output to contain: " + it.text)
+                end
+            end
+        else str.Equals(it.kind, "msg"):
+            r.checked++
+            if not str.Contains(text, it.text):
+                r.failed++
+                fail_line(b, "expected compiler message to contain: " + it.text)
+            end
+        else str.Equals(it.kind, "not"):
+            r.checked++
+            if str.Contains(text, it.text):
+                r.failed++
+                fail_line(b, "expected compiler output not to contain: " + it.text)
+            end
+        else str.Equals(it.kind, "warnings"):
+            r.checked++
+            if warns != it.num:
+                r.failed++
+                fail_line(b, "expected " + conv.FormatInt(it.num as i64) + " warning(s), got " + conv.FormatInt(warns as i64))
+            end
+        else str.Equals(it.kind, "fixes"):
+            r.checked++
+            if fixes != it.num:
+                r.failed++
+                fail_line(b, "expected " + conv.FormatInt(it.num as i64) + " fix(es), got " + conv.FormatInt(fixes as i64))
+            end
+        end
+    end
+    r.detail = str.BufStr(b)
+    ret r
+end
+
+func print_teamcity_fail(path: str, name: str, reason: str, detail: str):
+    println "##teamcity[testFailed name='" + tc_value(name) + "' message='" + tc_value(reason) + "' details='" + tc_value(detail) + "']"
+    println "##teamcity[testFinished name='" + tc_value(name) + "']"
+    println "##teamcity[testSuiteFinished name='" + tc_value(path) + "']"
+end
+
+func run_script_file(opt &: Dr, path: str, ex: Expectations): int:
+    name := pth.PathBase(path)
+    if not test_selected(name, opt.test_run):
+        ret report_nomatch(opt, path, "no test matches")
+    end
+    teamcity := str.Equals(opt.test_format, "teamcity")
+    if teamcity:
+        println "##teamcity[testSuiteStarted name='" + tc_value(path) + "' locationHint='salam://" + tc_value(path) + "']"
+        println "##teamcity[testStarted name='" + tc_value(name) + "' locationHint='salam://" + tc_value(path) + ":1']"
+    end
+    timeout := ex.timeout_ms > 0 ? ex.timeout_ms : opt.timeout_ms
+    fr := run_captured(opt, path, timeout)
+    if not fr.built:
+        if teamcity:
+            print_teamcity_fail(path, name, "build failed", "")
+        else:
+            if not show_build_errors(opt, path):
+                println "FAIL " + path + ": build failed"
+            end
+        end
+        write_report(opt, "fail", 1, 0, 1, "build failed")
+        ret 1
+    end
+    res := fr.res
+    c := check_script_output(ex, path, res.stdout, res.stderr)
+    want := expected_exit(ex)
+    mut failed := c.failed
+    mut reason := ""
+    if res.timed_out:
+        failed++
+        reason = "timed out"
+    else not res.started:
+        failed++
+        reason = "could not start"
+    else want >= 0:
+        if res.status.code != want:
+            failed++
+            reason = "exit code " + conv.FormatInt(res.status.code as i64)
+        end
+    else res.status.code != 0:
+        failed++
+        reason = "exit code " + conv.FormatInt(res.status.code as i64)
+    end
+    if failed > 0 and str.Len(reason) == 0:
+        reason = conv.FormatInt(failed as i64) + " check(s) failed"
+    end
+    if str.Len(res.stdout) > 0:
+        print res.stdout
+    end
+    if str.Len(res.stderr) > 0:
+        printerr res.stderr
+    end
+    if failed > 0:
+        if teamcity:
+            print_teamcity_fail(path, name, reason, c.detail)
+        else:
+            println "FAIL " + path + ": " + reason
+            if str.Len(c.detail) > 0:
+                print c.detail
+            end
+            if str.Len(res.stdout) + str.Len(res.stderr) > 0:
+                println "  --- output ---"
+                print_indented(clip_text(res.stdout + res.stderr, 4000))
+            end
+        end
     else:
-        if rc != 0:
-            println "FAIL " + path + ": exit code " + rc
+        if teamcity:
+            println "##teamcity[testFinished name='" + tc_value(name) + "']"
+            println "##teamcity[testSuiteFinished name='" + tc_value(path) + "']"
         else:
             println "ok   " + path
         end
     end
-    ret rc
+    if str.Len(opt.test_report) > 0:
+        tests := c.checked > 0 ? c.checked : 1
+        mut ok := tests - failed
+        if ok < 0:
+            ok = 0
+        end
+        write_report(opt, failed > 0 ? "fail" : "pass", tests, ok, failed, reason)
+    end
+    res.Free()
+    ret failed > 0 ? 1 : 0
+end
+
+func run_check_file(opt &: Dr, path: str, ex: Expectations): int:
+    name := pth.PathBase(path)
+    if not test_selected(name, opt.test_run):
+        ret report_nomatch(opt, path, "no test matches")
+    end
+    teamcity := str.Equals(opt.test_format, "teamcity")
+    if teamcity:
+        println "##teamcity[testSuiteStarted name='" + tc_value(path) + "' locationHint='salam://" + tc_value(path) + "']"
+        println "##teamcity[testStarted name='" + tc_value(name) + "' locationHint='salam://" + tc_value(path) + ":1']"
+    end
+    mut cmd := process.NewCommand(test_self_exe())
+    cmd.Arg("check")
+    cmd.Arg(path)
+    cmd.Arg("--no-color")
+    cmd.Arg("--log-level=warn")
+    args := split_args(ex.args)
+    each a in args:
+        cmd.Arg(a)
+    end
+    args.free()
+    timeout := ex.timeout_ms > 0 ? ex.timeout_ms : opt.timeout_ms
+    res := process.RunCommand(cmd, "", parent_timeout(timeout))
+    cmd.Free()
+    combined := res.stdout + res.stderr
+    c := check_compile_output(ex, combined)
+    mut failed := c.failed
+    if not res.started:
+        failed++
+    end
+    reason := failed > 0 ? conv.FormatInt(failed as i64) + " check(s) failed" : ""
+    if failed > 0:
+        if teamcity:
+            if str.Len(combined) > 0:
+                printerr combined
+            end
+            print_teamcity_fail(path, name, reason, c.detail)
+        else:
+            println "FAIL " + path + ": " + reason
+            if str.Len(c.detail) > 0:
+                print c.detail
+            end
+            println "  --- compiler output ---"
+            print_indented(clip_text(combined, 4000))
+        end
+    else:
+        if opt.test_verbose and str.Len(combined) > 0:
+            print combined
+        end
+        if teamcity:
+            println "##teamcity[testFinished name='" + tc_value(name) + "']"
+            println "##teamcity[testSuiteFinished name='" + tc_value(path) + "']"
+        else:
+            println "ok   " + path
+        end
+    end
+    if str.Len(opt.test_report) > 0:
+        tests := c.checked > 0 ? c.checked : 1
+        mut ok := tests - failed
+        if ok < 0:
+            ok = 0
+        end
+        write_report(opt, failed > 0 ? "fail" : "pass", tests, ok, failed, reason)
+    end
+    res.Free()
+    ret failed > 0 ? 1 : 0
+end
+
+func run_unit_file(opt &: Dr, path: str, tf: TestFile, ex: Expectations): int:
+    mut selected := 0
+    each f in tf.fns:
+        if test_selected(f.name, opt.test_run):
+            selected++
+        end
+    end
+    if selected == 0:
+        ret report_nomatch(opt, path, "no test matches")
+    end
+    dir := pth.PathDir(path)
+    stem := pth.PathBase(path)
+    mut base := ""
+    if str.EndsWith(stem, "_test.salam") or str.EndsWith(stem, ".test.salam"):
+        base = str.Substr(stem, 0, str.Len(stem) - 11)
+    else:
+        base = str.Substr(stem, 0, str.Len(stem) - 6)
+    end
+    base = str.Replace(base, ".", "_")
+    vpath := pth.PathJoin(str.Len(dir) > 0 ? dir : ".", base + "__salam_test.salam")
+    harness := test_harness(tf, opt.test_format, opt.test_run, path)
+    src.SetOverlay(vpath, harness)
+    timeout := ex.timeout_ms > 0 ? ex.timeout_ms : opt.timeout_ms
+    if opt.interp:
+        mut child := opt
+        child.input = vpath
+        child.inputs = Vector {} as Vector<str>
+        child.inputs.push(vpath)
+        child.command = CMD_RUN
+        rc := Exec(child)
+        if str.Len(opt.test_report) > 0:
+            write_report(opt, rc == 0 ? "pass" : "fail", selected, rc == 0 ? selected : 0, rc == 0 ? 0 : 1, "")
+        end
+        ret rc
+    end
+    fr := run_captured(opt, vpath, timeout)
+    if not fr.built:
+        if str.Equals(opt.test_format, "teamcity"):
+            print_teamcity_fail(path, pth.PathBase(path), "build failed", "")
+        else:
+            if not show_build_errors(opt, path):
+                println "FAIL " + path + ": build failed"
+            end
+        end
+        write_report(opt, "fail", selected, 0, selected, "build failed")
+        ret 1
+    end
+    res := fr.res
+    c := check_script_output(ex, path, res.stdout, res.stderr)
+    want := expected_exit(ex)
+    mut failed := c.failed
+    mut reason := ""
+    if res.timed_out:
+        failed++
+        reason = "timed out"
+    else not res.started:
+        failed++
+        reason = "could not start"
+    else want >= 0:
+        if res.status.code != want:
+            failed++
+            reason = "exit code " + conv.FormatInt(res.status.code as i64)
+        end
+    else res.status.code != 0:
+        failed++
+        reason = "tests failed"
+    end
+    if str.Len(res.stdout) > 0:
+        print res.stdout
+    end
+    if str.Len(res.stderr) > 0:
+        printerr res.stderr
+    end
+    if failed > 0:
+        if str.Equals(opt.test_format, "teamcity"):
+            print_teamcity_fail(path, pth.PathBase(path), reason, c.detail)
+        else:
+            if str.Len(c.detail) > 0:
+                println "FAIL " + path + ": " + conv.FormatInt(failed as i64) + " check(s) failed"
+                print c.detail
+                println "  --- output ---"
+                print_indented(clip_text(res.stdout + res.stderr, 4000))
+            else res.timed_out or not res.started or (str.Len(res.stdout) == 0 and str.Len(res.stderr) == 0):
+                println "FAIL " + path + ": " + reason
+            end
+        end
+    end
+    if str.Len(opt.test_report) > 0:
+        write_report(opt, failed > 0 ? "fail" : "pass", selected, failed > 0 ? 0 : selected, failed, reason)
+    end
+    res.Free()
+    ret failed > 0 ? 1 : 0
+end
+
+func test_worker():
+    mut running := true
+    until running:
+        sync.Lock(g_rt_mu)
+        mut idx := 0 - 1
+        if not g_rt_stop and g_rt_next < g_rt_paths.len():
+            idx = g_rt_next
+            g_rt_next++
+        end
+        sync.Unlock(g_rt_mu)
+        if idx < 0:
+            running = false
+        else:
+            start := time.NowMicros()
+            path := g_rt_paths.get(idx)
+            report := g_rt_reports.get(idx)
+            mut cmd := process.NewCommand(test_self_exe())
+            cmd.Arg("test")
+            cmd.Arg("--one")
+            cmd.Arg(path)
+            cmd.Arg("--report=" + report)
+            cmd.Arg("--log-level=warn")
+            cmd.Arg("--no-color")
+            cmd.Env("SALAM_BUILD_DIR", test_temp(".build"))
+            if str.Len(g_rt_opt.test_format) > 0:
+                cmd.Arg("--format=" + g_rt_opt.test_format)
+            end
+            if str.Len(g_rt_opt.test_run) > 0:
+                cmd.Arg("--run=" + g_rt_opt.test_run)
+            end
+            if g_rt_opt.interp:
+                cmd.Arg("--interp")
+            end
+            if g_rt_opt.test_verbose:
+                cmd.Arg("--verbose")
+            end
+            if str.Len(g_rt_opt.stdlib_path) > 0:
+                cmd.Arg("--stdlib-path=" + g_rt_opt.stdlib_path)
+            end
+            if g_rt_opt.timeout_ms > 0:
+                cmd.Arg("--timeout=" + conv.FormatInt(g_rt_opt.timeout_ms as i64))
+            end
+            if not str.Equals(g_rt_opt.backend, "auto"):
+                cmd.Arg("--backend=" + g_rt_opt.backend)
+            end
+            if str.Len(g_rt_opt.llvm_target) > 0:
+                cmd.Arg("--target=" + g_rt_opt.llvm_target)
+            end
+            if g_rt_opt.cc_explicit:
+                cmd.Arg("--cc=" + g_rt_opt.cc)
+            end
+            if not g_rt_opt.safe:
+                cmd.Arg("--release")
+            end
+            if g_rt_opt.ownership != 2:
+                cmd.Arg("--ownership=" + ownership_name(g_rt_opt.ownership))
+            end
+            if g_rt_opt.range_checks != 1:
+                cmd.Arg("--range-checks=" + range_name(g_rt_opt.range_checks))
+            end
+            each d in g_rt_opt.defines:
+                cmd.Arg("--define=" + d)
+            end
+            res := process.RunCommand(cmd, "", parent_timeout(g_rt_opt.timeout_ms))
+            cmd.Free()
+            rep := read_report(report)
+            mut status := rep.status
+            mut reason := rep.reason
+            if res.timed_out:
+                status = "fail"
+                reason = "timed out"
+            else str.Len(status) == 0:
+                status = res.status.code == 0 ? "pass" : "fail"
+                reason = status == "pass" ? "" : "exit code " + conv.FormatInt(res.status.code as i64)
+            end
+            mut r := JobResult {
+                path = path, status = status, reason = reason, out = str.Clone(res.stdout), err = str.Clone(res.stderr),
+                tests = rep.tests, passed = rep.passed, failed = rep.failed, ms = (time.NowMicros() - start) / 1000,
+                timed_out = res.timed_out
+            }
+            if str.Equals(status, "fail") and r.failed == 0:
+                r.failed = 1
+            end
+            res.Free()
+            sync.Lock(g_rt_mu)
+            g_rt_results.set(idx, r)
+            if str.Equals(status, "fail") and g_rt_opt.test_fail_fast:
+                g_rt_stop = true
+            end
+            sync.Unlock(g_rt_mu)
+        end
+    end
+end
+
+func ownership_name(n: int): str:
+    if n == 0: ret "off" end
+    if n == 1: ret "on" end
+    if n == 3: ret "error" end
+    ret "warn"
+end
+
+func range_name(n: int): str:
+    if n == 0: ret "off" end
+    if n == 2: ret "error" end
+    ret "on"
+end
+
+func show_build_errors(opt &: Dr, path: str): bool:
+    mut chk := opt
+    chk.input = path
+    chk.inputs = Vector {} as Vector<str>
+    chk.inputs.push(path)
+    chk.command = CMD_INSPECT
+    chk.check_only = true
+    crc := Inspect(chk)
+    ret crc != 0
+end
+
+func valid_test_format(f: str): bool:
+    ret str.Len(f) == 0 or str.Equals(f, "teamcity") or str.Equals(f, "pretty") or str.Equals(f, "plain")
 end
 
 pub func TestOne(opt &: Dr): int:
@@ -273,7 +1252,22 @@ pub func TestOne(opt &: Dr): int:
     mut tf := TestFile {}
     if not discover_tests(path, tf):
         io.EPrintln(co.Format1(i18.Tr("cannot read source file '%s'"), co.ArgStr(path)))
+        write_report(opt, "fail", 0, 0, 1, "cannot read source file")
         ret 2
+    end
+    ex := parse_expectations(tf.text)
+    skip_reason := skip_reason_for(ex)
+    if str.Len(skip_reason) > 0:
+        if str.Equals(opt.test_format, "teamcity"):
+            println "##teamcity[testIgnored name='" + tc_value(pth.PathBase(path)) + "' message='" + tc_value(skip_reason) + "']"
+        else:
+            println "skip " + path + ": " + skip_reason
+        end
+        write_report(opt, "skip", 0, 0, 0, skip_reason)
+        ret 0
+    end
+    if ex.has_check or has_code_expectation(ex):
+        ret run_check_file(opt, path, ex)
     end
     if not tf.parsed:
         mut broken := opt
@@ -282,48 +1276,32 @@ pub func TestOne(opt &: Dr): int:
         broken.inputs.push(path)
         broken.command = CMD_RUN
         brc := opt.interp ? Exec(broken) : Run(broken)
+        write_report(opt, "fail", 0, 0, 1, "the file does not parse")
         ret brc != 0 ? brc : 1
     end
-    if tf.fns.len() == 0:
+    if tf.fns.len() > 0:
         if tf.has_main:
-            ret run_whole_file(opt, path)
+            io.EPrintln(
+                co.Format1(i18.Tr("salam test: %s has test functions and a main function; remove main, salam test writes its own"), co.ArgStr(path))
+            )
+            write_report(opt, "fail", 0, 0, 1, "test functions and a main function")
+            ret 2
         end
-        if str.Len(opt.test_run) > 0:
-            ret report_no_match(opt, path)
-        end
-        println co.Format1(i18.Tr("?    %s: no test functions"), co.ArgStr(path))
-        ret 0
+        ret run_unit_file(opt, path, tf, ex)
     end
     if tf.has_main:
-        io.EPrintln(
-            co.Format1(i18.Tr("salam test: %s has test functions and a main function; remove main, salam test writes its own"), co.ArgStr(path))
-        )
-        ret 2
+        ret run_script_file(opt, path, ex)
     end
-    mut any := false
-    each f in tf.fns:
-        if test_selected(f.name, opt.test_run):
-            any = true
-        end
-    end
-    if not any:
-        ret report_no_match(opt, path)
-    end
-    dir := pth.PathDir(path)
-    stem := pth.PathBase(path)
-    vpath := pth.PathJoin(str.Len(dir) > 0 ? dir : ".", str.Substr(stem, 0, str.Len(stem) - 6) + "__salam_test.salam")
-    src.SetOverlay(vpath, test_harness(tf, opt.test_format, opt.test_run, path))
-    mut child := opt
-    child.input = vpath
-    child.inputs = Vector {} as Vector<str>
-    child.inputs.push(vpath)
-    child.command = CMD_RUN
-    ret opt.interp ? Exec(child) : Run(child)
+    ret report_nomatch(opt, path, "no test functions")
 end
 
 pub func Test(opt &: Dr): int:
-    mut files := Vector {} as Vector<str>
-    defer files.free()
+    if not valid_test_format(opt.test_format):
+        io.EPrintln(co.Format1(i18.Tr("salam test: unknown --format '%s' (expected 'pretty' or 'teamcity')"), co.ArgStr(opt.test_format)))
+        ret 2
+    end
+    mut raw := Vector {} as Vector<str>
+    defer raw.free()
     mut roots := opt.inputs
     if roots.len() == 0:
         roots = Vector {} as Vector<str>
@@ -331,70 +1309,122 @@ pub func Test(opt &: Dr): int:
     end
     each r in roots:
         if os.IsDir(r):
-            test_files_under(r, files)
+            test_files_under(r, raw)
         else os.Exists(r):
-            files.push(r)
+            raw.push(r)
         else:
             io.EPrintln(co.Format1(i18.Tr("cannot read source file '%s'"), co.ArgStr(r)))
             ret 2
         end
     end
-    sort_paths(files)
+    sort_paths(raw)
     if str.Equals(opt.test_format, "teamcity"):
         cwd := os.Cwd()
-        repeat files.len() in fi:
-            if not pth.PathIsAbs(files.get(fi)):
-                files.set(fi, pth.PathJoin(cwd, files.get(fi)))
+        repeat raw.len() in fi:
+            if not pth.PathIsAbs(raw.get(fi)):
+                raw.set(fi, pth.PathJoin(cwd, raw.get(fi)))
             end
         end
     end
-    if files.len() == 0:
-        println i18.Tr("salam test: no *_test.salam files found")
+    files := dedupe_paths(raw)
+    defer files.free()
+    if opt.test_list:
+        each f in files:
+            println f
+        end
         ret 0
     end
-    mut exe := ""
-    if not sm.ExePath(exe):
-        exe = "salam"
+    if files.len() == 0:
+        println i18.Tr("salam test: no *_test.salam or *.test.salam files found")
+        ret 0
     end
+    mut jobs := opt.test_jobs
+    if opt.test_no_parallel:
+        jobs = 1
+    else jobs == 0:
+        jobs = platform.CpuCount()
+    end
+    if jobs < 1:
+        jobs = 1
+    end
+    if jobs > files.len():
+        jobs = files.len()
+    end
+    g_rt_paths = files
+    g_rt_opt = opt
+    g_rt_next = 0
+    g_rt_stop = false
+    g_rt_mu = sync.NewMutex()
+    g_rt_results = Vector {} as Vector<JobResult>
+    repeat files.len():
+        g_rt_results.push(JobResult {})
+    end
+    g_rt_reports = Vector {} as Vector<str>
+    repeat files.len():
+        g_rt_reports.push(test_temp(".report"))
+    end
+    mut threads := Vector {} as Vector<thread.Thread>
+    repeat jobs:
+        threads.push(thread.New(spawn(test_worker)))
+    end
+    thread.JoinAll(threads)
+    threads.free()
+    teamcity := str.Equals(opt.test_format, "teamcity")
     mut failed := 0
+    mut passed := 0
+    mut skipped := 0
     mut unmatched := 0
-    report := pth.PathJoin(os.TempDir(), "salam-test-" + driver_pid() + "-" + time.NowMicros() + ".report")
-    each f in files:
-        _rm0 := os.Remove(report)
-        mut cmd := salam_quote(exe) + " test --one " + salam_quote(f) + " --report=" + salam_quote(report)
-        if str.Len(opt.test_format) > 0:
-            cmd = cmd + " --format=" + opt.test_format
+    mut not_run := 0
+    repeat files.len() in i:
+        r := g_rt_results.get(i)
+        if str.Len(r.status) == 0:
+            not_run++
+            if not teamcity:
+                println "?    " + r.path + ": not run"
+            end
+        else:
+            if str.Len(r.out) > 0:
+                print r.out
+            end
+            if str.Len(r.err) > 0:
+                printerr r.err
+            end
+            if str.Equals(r.status, "pass"):
+                passed++
+            else str.Equals(r.status, "fail"):
+                failed++
+            else str.Equals(r.status, "skip"):
+                skipped++
+            else str.Equals(r.status, "nomatch"):
+                unmatched++
+            end
         end
-        if str.Len(opt.test_run) > 0:
-            cmd = cmd + " --run=" + salam_quote(opt.test_run)
+        if str.Len(r.out) > 0:
+            mem.Free(r.out as void*)
         end
-        if opt.interp:
-            cmd += " --interp"
+        if str.Len(r.err) > 0:
+            mem.Free(r.err as void*)
         end
-        if str.Len(opt.stdlib_path) > 0:
-            cmd = cmd + " --stdlib-path=" + salam_quote(opt.stdlib_path)
-        end
-        if SALAM_OS_WINDOWS:
-            cmd = "\"" + cmd + "\""
-        end
-        rc := proc_status(system(cmd))
-        if os.Exists(report):
-            unmatched++
-            _rm1 := os.Remove(report)
-        else rc != 0:
-            failed++
-        end
+        _rm := os.Remove(g_rt_reports.get(i))
     end
-    ran := files.len() - unmatched
+    g_rt_results.free()
+    g_rt_reports.free()
+    ran := files.len() - skipped - unmatched - not_run
     if str.Len(opt.test_run) > 0 and ran == 0:
         io.EPrintln(co.Format1(i18.Tr("salam test: no test matches --run=%s"), co.ArgStr(opt.test_run)))
         ret 1
     end
-    if not str.Equals(opt.test_format, "teamcity"):
+    if not teamcity:
         if failed > 0:
             println co.Format2(i18.Tr("FAIL: %d of %d test files failed"), co.ArgInt(failed as i64), co.ArgInt(ran as i64))
         else:
             println co.Format1(i18.Tr("PASS: %d test files"), co.ArgInt(ran as i64))
+        end
+        if skipped > 0:
+            println co.Format1(i18.Tr("SKIP: %d test files"), co.ArgInt(skipped as i64))
+        end
+        if not_run > 0:
+            println co.Format1(i18.Tr("salam test: %d file(s) were not run (--fail-fast)"), co.ArgInt(not_run as i64))
         end
     end
     ret failed > 0 ? 1 : 0

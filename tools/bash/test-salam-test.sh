@@ -35,8 +35,22 @@ step test broken
 mkdir exits
 printf 'func main:\n    ret 3\nend\n' >exits/three_test.salam
 step test exits lib/strings_test.salam
+mkdir -p expect
+printf '// EXPECT: hello\n// EXPECT-NOT: goodbye\n// EXPECT-EXIT: 0\nfunc main:\n    println "hello"\nend\n' >expect/out.test.salam
+step test expect/out.test.salam
+printf '// EXPECT: never printed\nfunc main:\n    println "hello"\nend\n' >expect/bad.test.salam
+step test expect/bad.test.salam
+printf '// SKIP: not ready\nfunc main:\nend\n' >expect/skip.test.salam
+step test expect/skip.test.salam
+printf '// EXPECT-CODE: E059\nfunc main:\n    unused := 1\nend\n' >expect/err.test.salam
+step test expect/err.test.salam
+step test expect --list
+step test expect/out.test.salam --jobs=1
 cd "$work/fa" || exit 1
 step test
+mkdir -p exp
+printf '// انتظار: سلام\nfunc main:\n    println "سلام"\nend\n' >exp/fa_expect.test.salam
+step test exp
 cd "$work" || exit 1
 mkdir empty
 step test empty

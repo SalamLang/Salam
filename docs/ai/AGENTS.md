@@ -753,6 +753,16 @@ files`; give every source file a name unique across the whole project.
 
 - **`input` is a reserved built-in.** Do not name anything after it.
 
+- **`open`, `listdir` and `strcmp` are not built-ins.** `open` is `file.Open`
+  (`import fs.file`), `listdir` is `os.ListDir` or `fs.dir.List`, and `strcmp`
+  is `str.Equals` or a string comparison. `env` and `args` remain built-ins;
+  `os.Env` and `os.Args` are the documented wrappers around them.
+
+- **Releasing a binary:** `salam build app.salam --protect --release -o app`
+  encrypts the C backend's string literals and strips the symbol table. It is
+  obfuscation, not encryption, and there is no `salam protect` command. See
+  `docs/BINARY_PROTECTION.md`.
+
 - **`input` and `print` always take a value and never parentheses.** Write
   `input ""` or `input "prompt"`, and `println ""` for an empty line. A bare
   `input`/`println` and `input()`/`print()` are errors.

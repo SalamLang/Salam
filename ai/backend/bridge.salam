@@ -373,13 +373,23 @@ func tool_text(text: str, is_error: bool): str:
     ret json.Object(m)
 end
 
-func tool_shot(text: str, is_error: bool, image: str, mime: str): str:
+func tool_shot(text: str, is_error: bool, image: str, mime: str, chat: str): str:
     if image.len() == 0:
         ret tool_text(text, is_error)
     end
     mut image_ok := false
     mut pdf_ok := false
-    aiengine.Accepts(image_ok, pdf_ok)
+    mut sid := ""
+    if chat.len() > 0:
+        aistore.Lock()
+        sid = aistore.OneText("SELECT engine_sid FROM chats WHERE id = ?1", one(chat))
+        aistore.Unlock()
+    end
+    if sid.len() > 0:
+        aiengine.AcceptsFor(sid, image_ok, pdf_ok)
+    else:
+        aiengine.Accepts(image_ok, pdf_ok)
+    end
     if not image_ok:
         ret tool_text(text + "\n\nThe screenshot is shown to the user, but the current model cannot look at images: judge the page from its text, outline and console instead (browser action text and console).", is_error)
     end
@@ -464,6 +474,7 @@ func await_call(id: str, dev: str): str:
     end
     held := time.NowMillis()
     _a := sync.Lock(LOCK)
+    chat := CALLS.has(id) ? json.Get(CALLS.get(id), "chat") : ""
     began := STARTED.has(id) ? STARTED.get(id) : held
     _b := sync.Unlock(LOCK)
     mut got := ""
@@ -502,10 +513,10 @@ func await_call(id: str, dev: str): str:
     end
     mut mime := ""
     image := image_of(got, mime)
-    ret tool_shot(output, status != "ok", image, mime)
+    ret tool_shot(output, status != "ok", image, mime, chat)
 end
 
-func await_cloud(id: str): str:
+func await_cloud(id: str, chat: str): str:
     if not slot(1):
         ret tool_text("Too many tool calls are running. Call wait again with call_id \"" + id + "\" in a moment.", false)
     end
@@ -526,7 +537,7 @@ func await_cloud(id: str): str:
     end
     mut mime := ""
     image := image_of(got, mime)
-    ret tool_shot(clip(json.Get(got, "output"), MAX_OUTPUT), json.Get(got, "status") != "ok", image, mime)
+    ret tool_shot(clip(json.Get(got, "output"), MAX_OUTPUT), json.Get(got, "status") != "ok", image, mime, chat)
 end
 
 func cloud_call(name: str, args: str, session: str, chat: str, uid: str): str:
@@ -538,7 +549,7 @@ func cloud_call(name: str, args: str, session: str, chat: str, uid: str): str:
     id := crypto.RandomHex(12)
     start_call(id, chat, "0", name, args)
     aicloud.Submit(id, session, uid, name, args)
-    ret await_cloud(id)
+    ret await_cloud(id, chat)
 end
 
 func wait_call(args: str): str:
@@ -554,7 +565,7 @@ func wait_call(args: str): str:
         mut cchat := ""
         mut cuid := ""
         if aicloud.Owner(session, cchat, cuid) and aicloud.Known(id):
-            ret await_cloud(id)
+            ret await_cloud(id, cchat)
         end
     end
     _l := sync.Lock(LOCK)
@@ -857,6 +868,13 @@ func revoke_device(ctx: i64):
         ret
     end
     aiweb.Reply(ctx, 200, `{"ok": true}`)
+end
+
+pub func Active(): int:
+    _l := sync.Lock(LOCK)
+    running := ACTIVE
+    _u := sync.Unlock(LOCK)
+    ret running
 end
 
 pub func Configure(secret: str, slots: int, hold_seconds: int):

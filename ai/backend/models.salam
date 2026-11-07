@@ -1,0 +1,266 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+
+package aimodels
+
+import str
+import sync
+import io
+
+mut LOCK := sync.Mutex {}
+mut READY := false
+mut POOL := Vector {} as Vector<str>
+mut COOL_UNTIL := HashMap {} as HashMap<str, i64>
+mut FAILS := HashMap {} as HashMap<str, int>
+mut IMAGE := HashMap {} as HashMap<str, bool>
+mut PDF := HashMap {} as HashMap<str, bool>
+mut KNOWN := HashMap {} as HashMap<str, bool>
+mut FILE := ""
+mut TAIL := ""
+mut LOADED_AT := 0 as i64
+
+func has_model(name: str): bool:
+    each m in POOL:
+        if m == name:
+            ret true
+        end
+    end
+    ret false
+end
+
+func listed(found: Vector<str>, name: str): bool:
+    each m in found:
+        if m == name:
+            ret true
+        end
+    end
+    ret false
+end
+
+func add_to(found &: Vector<str>, list: str):
+    each part in str.Split(str.Replace(list, "\n", ","), ","):
+        m := str.Trim(part)
+        slash := m.find("/")
+        if slash > 0 and slash < m.len() - 1 and not listed(found, m):
+            found.push(m)
+        end
+    end
+end
+
+func hold_seconds(fails: int): i64:
+    if fails <= 1:
+        ret 120
+    else fails == 2:
+        ret 300
+    else fails == 3:
+        ret 900
+    else fails == 4:
+        ret 3600
+    end
+    ret 21600
+end
+
+func suits(m: str, image: bool, pdf: bool): bool:
+    if not KNOWN.has(m):
+        ret true
+    end
+    if image and not IMAGE.get(m):
+        ret false
+    end
+    if pdf and not PDF.get(m):
+        ret false
+    end
+    ret true
+end
+
+func init_lock():
+    if not READY:
+        LOCK = sync.NewMutex()
+        READY = true
+    end
+end
+
+pub func Configure(preferred: str, fallbacks: str):
+    init_lock()
+    _l := sync.Lock(LOCK)
+    mut found := Vector {} as Vector<str>
+    add_to(found, preferred)
+    TAIL = fallbacks
+    if found.len() > 0:
+        add_to(found, fallbacks)
+    end
+    POOL = found
+    COOL_UNTIL = HashMap {} as HashMap<str, i64>
+    FAILS = HashMap {} as HashMap<str, int>
+    _u := sync.Unlock(LOCK)
+end
+
+pub func WatchFile(path: str):
+    init_lock()
+    _l := sync.Lock(LOCK)
+    FILE = path
+    _u := sync.Unlock(LOCK)
+    Refresh(1000000000000)
+end
+
+pub func Refresh(now: i64):
+    init_lock()
+    _l := sync.Lock(LOCK)
+    if FILE.len() == 0 or now - LOADED_AT < 20000:
+        _e := sync.Unlock(LOCK)
+        ret
+    end
+    LOADED_AT = now
+    path := FILE
+    tail := TAIL
+    _u := sync.Unlock(LOCK)
+    text := io.ReadFile(path)
+    mut found := Vector {} as Vector<str>
+    add_to(found, text)
+    if found.len() == 0:
+        ret
+    end
+    add_to(found, tail)
+    _a := sync.Lock(LOCK)
+    POOL = found
+    _b := sync.Unlock(LOCK)
+end
+
+pub func Count(): int:
+    init_lock()
+    _l := sync.Lock(LOCK)
+    n := POOL.len()
+    _u := sync.Unlock(LOCK)
+    ret n
+end
+
+pub func Managed(): bool:
+    ret Count() > 0
+end
+
+pub func Owns(model: str): bool:
+    init_lock()
+    _l := sync.Lock(LOCK)
+    r := has_model(model)
+    _u := sync.Unlock(LOCK)
+    ret r
+end
+
+pub func Models(): Vector<str>:
+    init_lock()
+    _l := sync.Lock(LOCK)
+    mut out := Vector {} as Vector<str>
+    each m in POOL:
+        out.push(m)
+    end
+    _u := sync.Unlock(LOCK)
+    ret out
+end
+
+pub func SetCaps(model: str, image: bool, pdf: bool):
+    init_lock()
+    _l := sync.Lock(LOCK)
+    KNOWN.put(model, true)
+    IMAGE.put(model, image)
+    PDF.put(model, pdf)
+    _u := sync.Unlock(LOCK)
+end
+
+pub func Can(model: str, image: bool, pdf: bool): bool:
+    init_lock()
+    _l := sync.Lock(LOCK)
+    r := suits(model, image, pdf)
+    _u := sync.Unlock(LOCK)
+    ret r
+end
+
+pub func Ready(now: i64, image: bool, pdf: bool): str:
+    init_lock()
+    _l := sync.Lock(LOCK)
+    mut out := ""
+    each m in POOL:
+        if out.len() == 0 and (not COOL_UNTIL.has(m) or COOL_UNTIL.get(m) <= now) and suits(m, image, pdf):
+            out = m
+        end
+    end
+    _u := sync.Unlock(LOCK)
+    ret out
+end
+
+pub func Pick(now: i64, image: bool, pdf: bool): str:
+    r := Ready(now, image, pdf)
+    if r.len() > 0:
+        ret r
+    end
+    _l := sync.Lock(LOCK)
+    mut out := ""
+    mut soonest := 0 as i64
+    each m in POOL:
+        expires := COOL_UNTIL.has(m) ? COOL_UNTIL.get(m) : 0 as i64
+        if suits(m, image, pdf) and (out.len() == 0 or expires < soonest):
+            out = m
+            soonest = expires
+        end
+    end
+    _u := sync.Unlock(LOCK)
+    ret out
+end
+
+pub func Fail(model: str, now: i64):
+    init_lock()
+    _l := sync.Lock(LOCK)
+    if has_model(model):
+        n := (FAILS.has(model) ? FAILS.get(model) : 0) + 1
+        FAILS.put(model, n)
+        COOL_UNTIL.put(model, now + hold_seconds(n) * 1000)
+    end
+    _u := sync.Unlock(LOCK)
+end
+
+pub func Ok(model: str):
+    init_lock()
+    _l := sync.Lock(LOCK)
+    if FAILS.has(model):
+        _a := FAILS.remove(model)
+        _b := COOL_UNTIL.remove(model)
+    end
+    _u := sync.Unlock(LOCK)
+end
+
+pub func AnyImage(): bool:
+    init_lock()
+    _l := sync.Lock(LOCK)
+    mut r := false
+    each m in POOL:
+        if suits(m, true, false):
+            r = true
+        end
+    end
+    _u := sync.Unlock(LOCK)
+    ret r
+end
+
+pub func AnyPdf(): bool:
+    init_lock()
+    _l := sync.Lock(LOCK)
+    mut r := false
+    each m in POOL:
+        if suits(m, false, true):
+            r = true
+        end
+    end
+    _u := sync.Unlock(LOCK)
+    ret r
+end

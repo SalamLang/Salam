@@ -69,6 +69,7 @@ struct StdPkg:
     pub name: str = ""
     pub group: str = ""
     pub summary: str = ""
+    pub imp: str = ""
 end
 
 func report(errs &: Vector<str>, msg: str):
@@ -1275,7 +1276,7 @@ func alias_of_lang(ctx: HashMap<str, str>): str:
     ret ctx_or(ctx, "stdref.alias", "")
 end
 
-func sig_words(ctx: HashMap<str, str>, api: ApiDoc): HashMap<str, str>:
+func sig_words(ctx: HashMap<str, str>, api: ApiDoc, gwords: HashMap<str, str>): HashMap<str, str>:
     mut words := HashMap {} as HashMap<str, str>
     alias := alias_of_lang(ctx)
     if alias.len() == 0:
@@ -1293,6 +1294,11 @@ func sig_words(ctx: HashMap<str, str>, api: ApiDoc): HashMap<str, str>:
             if fa.len() > 0:
                 words.put(d.n, fa)
             end
+        end
+    end
+    each key, fa in gwords:
+        if not words.has(key):
+            words.put(key, fa)
         end
     end
     ret words
@@ -1314,16 +1320,29 @@ func alias_sig(sig: str, own_en: str, own_fa: str, words: HashMap<str, str>, sho
             until j < cps.len() and is_ascii_ident(cps.get(j)):
                 j++
             end
-            w := text_of(cps, i, j)
-            if not named and w == own_en and own_fa.len() > 0:
-                str.BufAppend(b, own_fa)
-                named = true
-            else words.has(w):
-                str.BufAppend(b, words.get(w))
-            else:
-                str.BufAppend(b, w)
+            mut k := j
+            until k + 1 < cps.len() and cps.get(k) == 46 and is_ascii_ident(cps.get(k + 1)):
+                k++
+                until k < cps.len() and is_ascii_ident(cps.get(k)):
+                    k++
+                end
             end
-            i = j
+            chain := text_of(cps, i, k)
+            w := text_of(cps, i, j)
+            if k > j and words.has(chain):
+                str.BufAppend(b, words.get(chain))
+                i = k
+            else:
+                if not named and w == own_en and own_fa.len() > 0:
+                    str.BufAppend(b, own_fa)
+                    named = true
+                else words.has(w):
+                    str.BufAppend(b, words.get(w))
+                else:
+                    str.BufAppend(b, w)
+                end
+                i = j
+            end
         else cp == 44:
             str.BufAppend(b, "،")
             i++
@@ -1368,7 +1387,7 @@ func load_std(lang_dir: str, errs &: Vector<str>): Vector<StdPkg>:
         en := ctx_or(m, "pkg.en", "")
         slug := str.Replace(en, "/", "-")
         disp := str.Replace(en, "/", ".")
-        out.push(StdPkg { path = path, slug = slug, url = "/std/" + en + "/", en = en, disp = disp, name = ctx_or(m, "pkg.name", ""), group = ctx_or(m, "pkg.group", ""), summary = ctx_or(m, "pkg.summary", "") })
+        out.push(StdPkg { path = path, slug = slug, url = "/std/" + en + "/", en = en, disp = disp, name = ctx_or(m, "pkg.name", ""), group = ctx_or(m, "pkg.group", ""), summary = ctx_or(m, "pkg.summary", ""), imp = ctx_or(m, "pkg.import", "") })
     end
     ret out
 end
@@ -1629,8 +1648,8 @@ func std_group_card(ctx: HashMap<str, str>, pkg: StdPkg, api: ApiDoc, group: Vec
     ret str.BufStr(b)
 end
 
-func std_api_html(ctx: HashMap<str, str>, pkg: StdPkg, api: ApiDoc, examples: HashMap<str, str>, errs &: Vector<str>): str:
-    words := sig_words(ctx, api)
+func std_api_html(ctx: HashMap<str, str>, pkg: StdPkg, api: ApiDoc, gwords: HashMap<str, str>, examples: HashMap<str, str>, errs &: Vector<str>): str:
+    words := sig_words(ctx, api, gwords)
     classes := code_classes(ctx)
     groups := std_groups(ctx)
     mut done_groups := HashMap {} as HashMap<str, str>
@@ -1769,6 +1788,46 @@ func load_api(p: StdPkg, errs &: Vector<str>): ApiDoc:
     ret api
 end
 
+func pkg_leaf(en: str): str:
+    dotted := str.Replace(en, "/", ".")
+    pos := str.LastIndex(dotted, ".")
+    if pos < 0:
+        ret dotted
+    end
+    ret dotted.substr(pos + 1, dotted.len() - pos - 1)
+end
+
+func std_gwords(pkgs: Vector<StdPkg>, alias: str): HashMap<str, str>:
+    mut out := HashMap {} as HashMap<str, str>
+    if alias.len() == 0:
+        ret out
+    end
+    mut ignored := Vector {} as Vector<str>
+    defer ignored.free()
+    each p in pkgs:
+        if p.name.len() == 0:
+            continue
+        end
+        api := load_api(p, ignored)
+        leaf := pkg_leaf(p.en)
+        full := str.Replace(p.en, "/", ".")
+        each d in api.decls:
+            if d.par >= 0 or (d.k != "struct" and d.k != "enum" and d.k != "type" and d.k != "interface"):
+                continue
+            end
+            fa := alias_of(d, alias)
+            if fa.len() == 0:
+                continue
+            end
+            out.put(leaf + "." + d.n, p.name + "." + fa)
+            if full != leaf and p.imp.len() > 0:
+                out.put(full + "." + d.n, p.imp + "." + fa)
+            end
+        end
+    end
+    ret out
+end
+
 func alt_urls(alt_dir: str): HashMap<str, str>:
     mut ignored := Vector {} as Vector<str>
     mut out := HashMap {} as HashMap<str, str>
@@ -1856,6 +1915,7 @@ func build_lang(lang: str, errs &: Vector<str>): int:
     ctx.put("learn.itemlist", course_itemlist(ctx, lessons))
     ctx.put("learn.count", digits(ctx, lessons.len()))
     pkgs := load_std(lang_dir, errs)
+    gwords := std_gwords(pkgs, alias_of_lang(ctx))
     ctx.put("std.cards", std_index_html(pkgs))
     ctx.put("std.count", digits(ctx, pkgs.len()))
     ctx.put("std.itemlist", std_itemlist(ctx, pkgs))
@@ -1956,7 +2016,7 @@ func build_lang(lang: str, errs &: Vector<str>): int:
         api := load_api(p, errs)
         examples := load_std_examples(lang_dir, p, pc, errs)
         intro := render(p.path, pc.get("pkg.intro"), pc, errs)
-        body := intro + "\n" + std_api_html(pc, p, api, examples, errs)
+        body := intro + "\n" + std_api_html(pc, p, api, gwords, examples, errs)
         pc.put("active.std", "true")
         pc.put("pkg.body_html", body)
         pc.put("pkg.disp", p.disp)

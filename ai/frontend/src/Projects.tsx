@@ -89,14 +89,28 @@ export function ProjectDialog({ project, busy, onSave, onClose }: DialogProps) {
   const [color, setColor] = useState(project?.color || PROJECT_COLORS[0]);
   const [emoji, setEmoji] = useState(project?.emoji ?? "");
   const nameRef = useRef<HTMLInputElement>(null);
+  // Keep the latest onClose without re-running the mount effect below: the
+  // parent re-renders on polling and passes a fresh inline callback, which
+  // used to re-focus the name field and yank the caret out of the description.
+  const closeRef = useRef(onClose);
   useEffect(() => {
+    closeRef.current = onClose;
+  }, [onClose]);
+  useEffect(() => {
+    const previous = document.activeElement as HTMLElement | null;
     nameRef.current?.focus();
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") {
+        e.preventDefault();
+        closeRef.current();
+      }
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      if (previous && document.contains(previous)) previous.focus();
+    };
+  }, []);
   const submit = (e: FormEvent) => {
     e.preventDefault();
     const trimmed = name.trim();

@@ -72,8 +72,10 @@ end
 
 ## Directives
 
-Directives are comments at the top of the file, one per line. English and
-Persian spellings are equivalent. Values are separated from the name by `:`.
+Directives are comments at the top of the file, one per line, before any code
+(license block comments are skipped). English and Persian spellings are
+equivalent. Values are separated from the name by `:`. A directive-shaped
+comment inside a function body is not a directive.
 
 | Directive (English / Persian) | Meaning |
 | --- | --- |
@@ -88,13 +90,13 @@ Persian spellings are equivalent. Values are separated from the name by `:`.
 | `EXPECT-MSG` / `انتظار-پیام` / `توقع-پیام` | The compiler output must contain this text (check mode) |
 | `EXPECT-WARNINGS` / `انتظار-هشدارها` / `توقع-هشدارها` | Exact number of compiler warnings (check mode) |
 | `EXPECT-FIXES` / `انتظار-اصلاحها` / `توقع-اصلاحها` | Exact number of suggested fixes (check mode) |
-| `EXPECT-FILE` / `انتظار-پرونده` / `توقع-پرونده` | Additional file to compile with the test |
+| `EXPECT-FILE` / `انتظار-پرونده` / `توقع-پرونده` | Standard output must equal the contents of this file (path relative to the test file) |
 | `SKIP` / `رد شدن` / `ردشدن` | Skip this file; the value is the reason |
 | `ONLY-OS` / `فقط-سیستم` / `فقط سیستم` | Run only on this OS (`linux`, `mac`, `windows`, ...) |
 | `SKIP-OS` / `رد-سیستم` / `رد سیستم` | Skip on this OS |
 | `ONLY-ARCH` / `فقط-معماری` / `فقط معماری` | Run only on this architecture (`x64`, `arm64`, ...) |
 | `SKIP-ARCH` / `رد-معماری` / `رد معماری` | Skip on this architecture |
-| `TIMEOUT` / `مهلت` | Per-file deadline in milliseconds |
+| `TIMEOUT` / `مهلت` | Deadline for running the file, in milliseconds (compilation gets up to five extra minutes) |
 | `ARGS` / `آرگومانها` / `آرگومان ها` | Extra arguments for the compiler in check mode |
 
 Persian digits are accepted in numeric values, so `// انتظار-کد: ۰` and
@@ -111,13 +113,13 @@ Persian digits are accepted in numeric values, so `// انتظار-کد: ۰` and
 | `--fail-fast` | Stop starting new files after the first failure |
 | `--list` | Print the discovered files and exit |
 | `--verbose` | Print the output of passing tests too |
-| `--timeout=MS` | Wall-clock deadline per file |
-| `--report=FILE` | Write a machine-readable summary to FILE |
+| `--timeout=MS` | Deadline for each test file: starting the compiler and running the file, in milliseconds (default: no limit) |
+| `--report=FILE` | Write a machine-readable summary to FILE (one tab-separated line per file) |
 | `--interp` | Run tests with the interpreter instead of compiling them |
 
 Parallel runs are deterministic: each file's output is printed in sorted file
 order after it finishes, so two runs produce the same text. Each test file is
-Each test file is compiled into its own temporary directory, so parallel builds never share state.
+compiled into its own temporary directory, so parallel builds never share state.
 
 ## Exit codes
 
@@ -130,5 +132,7 @@ Each test file is compiled into its own temporary directory, so parallel builds 
 
 `--format=teamcity` emits `testSuiteStarted`, `testStarted`, `testFailed`,
 `testFinished` and `testIgnored` messages for editors and CI. `--report=FILE`
-writes one line per file (`pass`/`fail`/`skip`/`nomatch`, the test counts, and
-a reason) and is useful from scripts that need a summary without parsing text.
+writes one tab-separated line per file: status (`pass`/`fail`/`skip`/`nomatch`/
+`notrun`), path, test count, passed, failed, and a reason. It is useful from
+scripts that need a summary without parsing text. A single-file run (`--one`)
+writes the same information in the older three-line form instead.

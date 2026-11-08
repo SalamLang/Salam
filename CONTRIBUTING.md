@@ -178,10 +178,11 @@ Invalid examples: `Add new feature` (missing type), `Fix: handle empty files`
 (uppercase type), and `fix: handle empty files.` (trailing period).
 
 Super-Linter validates new commit messages with commitlint using the root
-`.commitlintrc.json`. You can check a message locally with:
+`.commitlintrc.cjs`. Its parser rules are defined inline, so no separate
+parser preset dependency is needed. You can check a message locally with:
 
 ```bash
-printf '%s\n' 'fix(compiler): handle empty source' | npx --yes --package @commitlint/cli --package conventional-changelog-conventionalcommits commitlint
+printf '%s\n' 'fix(compiler): handle empty source' | npx --yes --package @commitlint/cli@21.2.3 commitlint --config .commitlintrc.cjs
 ```
 
 ### 5. Keep your branch up to date (optional but recommended)

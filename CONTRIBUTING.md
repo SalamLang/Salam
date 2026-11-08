@@ -164,13 +164,15 @@ for commit headers: `<type>(optional-scope): <subject>`. Use a lowercase type,
 a nonempty subject, and a header no longer than 100 characters. Do not end the
 subject with a period. The type is not limited to a fixed list: `feat`, `fix`,
 `docs`, and project-specific types such as `ai`, `editor`, or `llvm` are all valid.
-Keep the subject in the imperative mood.
+Keep the subject in the imperative mood. For breaking changes, put `!` before
+the colon, as in `feat(api)!: remove the deprecated endpoint`.
 
 Valid examples:
 
 - `feat(compiler): add pattern matching`
 - `fix: handle empty source files`
 - `ai(frontend): show a loading indicator`
+- `feat(api)!: remove the deprecated endpoint` (breaking change)
 
 Invalid examples: `Add new feature` (missing type), `Fix: handle empty files`
 (uppercase type), and `fix: handle empty files.` (trailing period).
@@ -179,7 +181,7 @@ Super-Linter validates new commit messages with commitlint using the root
 `.commitlintrc.json`. You can check a message locally with:
 
 ```bash
-printf '%s\n' 'fix(compiler): handle empty source' | npx --yes --package @commitlint/cli commitlint
+printf '%s\n' 'fix(compiler): handle empty source' | npx --yes --package @commitlint/cli --package conventional-changelog-conventionalcommits commitlint
 ```
 
 ### 5. Keep your branch up to date (optional but recommended)
@@ -209,7 +211,7 @@ Make the requested changes locally, commit them, and push to the same branch; th
 
 ```bash
 git add .
-git commit -m "address review: clarify error message"
+git commit -m "fix: address review feedback"
 git push origin fix/describe-the-fix
 ```
 

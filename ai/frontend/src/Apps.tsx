@@ -6,6 +6,9 @@ import { IconActivity, IconBadgeCheck, IconChevronDown, IconPlug } from "./icons
 import { CopyButton } from "./Markdown";
 import { confirmDialog } from "./Confirm";
 import { t } from "./i18n";
+import { sharedLoader } from "./shared";
+
+const appsLoader = sharedLoader(() => api.apps());
 
 export const MCP_COMMAND = "claude mcp add --transport http salam https://mcp.salamlang.ir/mcp";
 
@@ -63,7 +66,7 @@ export function ConnectHelp() {
 }
 
 export function AppsPanel({ notify }: { notify: (msg: string, ok?: boolean) => void }) {
-  const [apps, setApps] = useState<ConnectedApp[] | null>(null);
+  const [apps, setApps] = useState<ConnectedApp[] | null>(() => appsLoader.peek()?.apps ?? null);
   const [error, setError] = useState("");
   const [open, setOpen] = useState<number | null>(null);
   const [removing, setRemoving] = useState<number | null>(null);
@@ -71,10 +74,10 @@ export function AppsPanel({ notify }: { notify: (msg: string, ok?: boolean) => v
   const load = useCallback(async () => {
     setError("");
     try {
-      const r = await api.apps();
+      const r = await appsLoader.load();
       setApps(r.apps);
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : t("بارگذاری برنامه‌ها ناموفق بود.", "Could not load apps."));
+      if (!appsLoader.peek()) setError(e instanceof ApiError ? e.message : t("بارگذاری برنامه‌ها ناموفق بود.", "Could not load apps."));
     }
   }, []);
 
@@ -94,7 +97,12 @@ export function AppsPanel({ notify }: { notify: (msg: string, ok?: boolean) => v
     setRemoving(app.id);
     try {
       await api.revokeApp(app.id);
-      setApps((cur) => (cur ? cur.filter((a) => a.id !== app.id) : cur));
+      setApps((cur) => {
+        if (!cur) return cur;
+        const next = cur.filter((a) => a.id !== app.id);
+        appsLoader.set({ apps: next });
+        return next;
+      });
       notify(t(`اتصال «${app.client.name}» قطع شد.`, `Disconnected "${app.client.name}".`), true);
     } catch (e) {
       notify(e instanceof ApiError ? e.message : t("قطع اتصال ناموفق بود.", "Could not disconnect the app."));
@@ -144,9 +152,10 @@ export function AppsPanel({ notify }: { notify: (msg: string, ok?: boolean) => v
         </div>
       )}
       {apps === null && !error && (
-        <div className="loading-chat" role="status">
-          <span className="spinner" />
+        <div className="card app-skel conn-skel" role="status">
           <span className="sr-only">{t("در حال بارگذاری", "Loading")}</span>
+          <i className="w60" />
+          <i className="w90" />
         </div>
       )}
       {apps && apps.length === 0 && (

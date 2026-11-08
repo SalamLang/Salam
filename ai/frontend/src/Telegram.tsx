@@ -8,6 +8,10 @@ import { fmtDate, fmtNum, initial } from "./format";
 import { IconFigma, IconGithub, IconKey, IconTelegram, IconTerminal } from "./icons";
 import type { Theme } from "./theme";
 import { t } from "./i18n";
+import { sharedLoader } from "./shared";
+
+export const integrationsLoader = sharedLoader(() => api.integrations());
+const telegramLoader = sharedLoader(() => api.telegramStatus());
 
 type Props = {
   user: User | null;
@@ -205,7 +209,7 @@ const PROVIDERS = {
   },
 } as const;
 
-function ConnCard({ id, icon, title, on, label, highlight, children }: { id: string; icon: ReactNode; title: string; on: boolean; label: string; highlight?: boolean; children: ReactNode }) {
+function ConnCard({ id, icon, title, on, label, highlight, pending, onRetry, children }: { id: string; icon: ReactNode; title: string; on: boolean; label: string; highlight?: boolean; pending?: "loading" | "error"; onRetry?: () => void; children?: ReactNode }) {
   const ref = useRef<HTMLElement>(null);
   useEffect(() => {
     if (highlight) ref.current?.scrollIntoView({ block: "center" });
@@ -217,9 +221,26 @@ function ConnCard({ id, icon, title, on, label, highlight, children }: { id: str
           {icon}
         </span>
         <h3>{title}</h3>
-        <span className={`badge ${on ? "ok" : ""}`}>{label}</span>
+        {pending === "loading" ? <span className="conn-skel-badge" aria-hidden="true" /> : pending === "error" ? null : <span className={`badge ${on ? "ok" : ""}`}>{label}</span>}
       </header>
-      <div className="conn-body">{children}</div>
+      {pending === "loading" ? (
+        <div className="conn-body conn-skel" role="status">
+          <span className="sr-only">{t("در حال بارگذاری", "Loading")}</span>
+          <i className="w90" />
+          <i className="w75" />
+          <i className="w60" />
+          <i className="btn" />
+        </div>
+      ) : pending === "error" ? (
+        <div className="conn-body conn-skel-error">
+          <p className="muted small">{t("بارگذاری وضعیت ناموفق بود.", "Could not load the status.")}</p>
+          <button type="button" className="button ghost small" onClick={onRetry}>
+            {t("تلاش دوباره", "Try again")}
+          </button>
+        </div>
+      ) : (
+        <div className="conn-body">{children}</div>
+      )}
     </section>
   );
 }
@@ -352,27 +373,31 @@ function IntegrationCard({ item, storage, highlight, notify, onChange }: { item:
 }
 
 export function Connections({ notify }: { notify: (msg: string, ok?: boolean) => void }) {
-  const [integrations, setIntegrations] = useState<Integrations | null>(null);
-  const [status, setStatus] = useState<TelegramStatus | null>(null);
+  const [integrations, setIntegrations] = useState<Integrations | null>(() => integrationsLoader.peek());
+  const [status, setStatus] = useState<TelegramStatus | null>(() => telegramLoader.peek());
   const [error, setError] = useState("");
+  const [integError, setIntegError] = useState(false);
   const [busy, setBusy] = useState("");
   const [waiting, setWaiting] = useState<{ have: number; until: number } | null>(null);
   const focus = new URLSearchParams(location.search).get("connect") ?? "";
 
   const loadIntegrations = useCallback(async () => {
     try {
-      setIntegrations(await api.integrations());
-    } catch {}
+      setIntegrations(await integrationsLoader.load());
+      setIntegError(false);
+    } catch {
+      if (!integrationsLoader.peek()) setIntegError(true);
+    }
   }, []);
 
   const load = useCallback(async () => {
     try {
-      const r = await api.telegramStatus();
+      const r = await telegramLoader.load();
       setStatus(r);
       setError("");
       return r;
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : t("بارگذاری ناموفق بود.", "Could not load."));
+      if (!telegramLoader.peek()) setError(e instanceof ApiError ? e.message : t("بارگذاری ناموفق بود.", "Could not load."));
       return null;
     }
   }, []);
@@ -433,7 +458,12 @@ export function Connections({ notify }: { notify: (msg: string, ok?: boolean) =>
     setBusy(id);
     try {
       await api.telegramUnlink(id);
-      setStatus((cur) => (cur ? { ...cur, links: cur.links.filter((l) => l.id !== id) } : cur));
+      setStatus((cur) => {
+        if (!cur) return cur;
+        const next = { ...cur, links: cur.links.filter((l) => l.id !== id) };
+        telegramLoader.set(next);
+        return next;
+      });
       notify(t("تلگرام جدا شد.", "Telegram disconnected."), true);
     } catch (e) {
       notify(e instanceof ApiError ? e.message : t("جدا کردن ناموفق بود.", "Could not disconnect."));
@@ -450,16 +480,8 @@ export function Connections({ notify }: { notify: (msg: string, ok?: boolean) =>
         <h2>{t("اتصال‌ها و برنامه‌ها", "Connections and apps")}</h2>
         <p className="muted">{t("تلگرام، GitHub، Figma و برنامه‌هایی مانند Claude Code که به حساب سلام شما وصل‌اند.", "Telegram, GitHub, Figma and apps such as Claude Code connected to your Salam account.")}</p>
       </header>
-      {error && (
-        <div className="form-error" role="alert">
-          {error}{" "}
-          <button type="button" className="link" onClick={load}>
-            {t("تلاش دوباره", "Try again")}
-          </button>
-        </div>
-      )}
       <div className="conn-grid">
-        <ConnCard id="connect-telegram" icon={<IconTelegram width={22} height={22} />} title={t("ربات تلگرام", "Telegram bot")} on={links.length > 0} label={links.length > 0 ? t(`${fmtNum(links.length)} حساب وصل است`, `${fmtNum(links.length)} connected`) : t("وصل نیست", "Not connected")} highlight={focus === "telegram"}>
+        <ConnCard id="connect-telegram" icon={<IconTelegram width={22} height={22} />} title={t("ربات تلگرام", "Telegram bot")} on={links.length > 0} label={links.length > 0 ? t(`${fmtNum(links.length)} حساب وصل است`, `${fmtNum(links.length)} connected`) : t("وصل نیست", "Not connected")} highlight={focus === "telegram"} pending={status ? undefined : error ? "error" : "loading"} onRetry={load}>
           <p className="conn-about">
             {t(
               "با ربات تلگرام هر جا که هستید با دستیار سلام گفت‌وگو کنید. گفت‌وگوهای تلگرام و سایت یکی هستند: چیزی که در تلگرام می‌پرسید در تاریخچه‌ی سایت هم دیده می‌شود. می‌توانید چند حساب تلگرام را هم‌زمان وصل کنید.",
@@ -490,9 +512,11 @@ export function Connections({ notify }: { notify: (msg: string, ok?: boolean) =>
             </p>
           )}
         </ConnCard>
-        {integrations?.integrations.map((item) => (
-          <IntegrationCard key={item.provider} item={item} storage={integrations.storage} highlight={focus === item.provider} notify={notify} onChange={loadIntegrations} />
-        ))}
+        {integrations
+          ? integrations.integrations.map((item) => <IntegrationCard key={item.provider} item={item} storage={integrations.storage} highlight={focus === item.provider} notify={notify} onChange={loadIntegrations} />)
+          : (["github", "figma"] as const).map((id) => (
+              <ConnCard key={id} id={`connect-${id}`} icon={PROVIDERS[id].icon} title={PROVIDERS[id].name} on={false} label="" highlight={focus === id} pending={integError ? "error" : "loading"} onRetry={loadIntegrations} />
+            ))}
         {integrations?.sandbox && (
           <ConnCard id="sandbox" icon={<IconTerminal width={22} height={22} />} title={t("محیط اجرای ابری", "Cloud sandbox")} on label={t("فعال", "On")}>
             <p className="conn-about">{t("هر گفت‌وگو یک محیط لینوکسی خصوصی دارد که دستورها در آن اجرا می‌شوند. در تلگرام همه‌ی گفت‌وگوها و در سایت گفت‌وگوهایی که گزینه‌اش را روشن کنید از آن استفاده می‌کنند.", "Every chat has its own private Linux sandbox where commands run. In Telegram every chat uses it; on the site, chats where you turn the option on do.")}</p>

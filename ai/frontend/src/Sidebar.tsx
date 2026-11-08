@@ -1,8 +1,7 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { Project, User } from "./api";
 import { isDesktop } from "./desktop";
-import { IconChart, IconChat, IconClose, IconFolder, IconGlobe, IconKey, IconLogout, IconMemory, IconMonitor, IconMoon, IconPlug, IconPlus, IconShield, IconSpark, IconSun } from "./icons";
-import type { Theme } from "./theme";
+import { IconChart, IconChat, IconClose, IconFolder, IconGlobe, IconKey, IconLogout, IconMemory, IconMonitor, IconPlug, IconPlus, IconSettings, IconShield, IconSpark } from "./icons";
 import { isFa, setLang, t } from "./i18n";
 import { fmtNum } from "./format";
 
@@ -11,11 +10,9 @@ type Props = {
   projects: Project[];
   activeProject: string | null;
   open: boolean;
-  theme: Theme;
   onClose: () => void;
   onNew: () => void;
   onLogout: () => void;
-  onToggleTheme: () => void;
   onOpenProjects: () => void;
   onOpenProject: (id: string) => void;
   onOpenOthers: () => void;
@@ -30,6 +27,41 @@ export function Sidebar(p: Props) {
   useEffect(() => {
     scroller.current?.scrollTo({ top: 0 });
   }, [scope]);
+  const [menu, setMenu] = useState(false);
+  const wrap = useRef<HTMLDivElement>(null);
+  const gear = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!menu) return;
+    const down = (e: Event) => {
+      if (!wrap.current?.contains(e.target as Node)) setMenu(false);
+    };
+    const key = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      setMenu(false);
+      gear.current?.focus();
+    };
+    document.addEventListener("pointerdown", down);
+    document.addEventListener("keydown", key);
+    return () => {
+      document.removeEventListener("pointerdown", down);
+      document.removeEventListener("keydown", key);
+    };
+  }, [menu]);
+  useEffect(() => {
+    if (!p.open) setMenu(false);
+  }, [p.open]);
+  const pick = (go: () => void) => {
+    setMenu(false);
+    go();
+    p.onClose();
+  };
+  const items = [
+    { key: "connections", path: "/connections", icon: <IconPlug width={16} height={16} />, label: t("اتصال‌ها و برنامه‌ها", "Connections and apps") },
+    { key: "plans", path: "/plans", icon: <IconSpark width={16} height={16} />, label: t("اشتراک‌ها", "Plans") },
+    { key: "usage", path: "/usage", icon: <IconChart width={16} height={16} />, label: t("مصرف و توکن‌ها", "Usage and tokens") },
+    { key: "keys", path: "/keys", icon: <IconKey width={16} height={16} />, label: t("کلیدهای API", "API keys") },
+    { key: "memory", path: "/memory", icon: <IconMemory width={16} height={16} />, label: t("حافظه", "Memory") },
+  ];
   return (
     <>
       <div className={`scrim ${p.open ? "show" : ""}`} onClick={p.onClose} aria-hidden="true" />
@@ -91,70 +123,6 @@ export function Sidebar(p: Props) {
               </button>
             </div>
           </div>
-          <nav className="sidebar-links" aria-label={t("بخش‌های حساب", "Account sections")}>
-            <a
-              href="/connections"
-              className={`chat-link ${p.page === "connections" ? "active" : ""}`}
-              aria-current={p.page === "connections" ? "page" : undefined}
-              onClick={(e) => (e.preventDefault(), p.onNavigate("/connections"))}
-            >
-              <IconPlug width={16} height={16} />
-              <span>{t("اتصال‌ها و برنامه‌ها", "Connections and apps")}</span>
-            </a>
-            <a
-              href="/plans"
-              className={`chat-link ${p.page === "plans" ? "active" : ""}`}
-              aria-current={p.page === "plans" ? "page" : undefined}
-              onClick={(e) => (e.preventDefault(), p.onNavigate("/plans"))}
-            >
-              <IconSpark width={16} height={16} />
-              <span>{t("اشتراک‌ها", "Plans")}</span>
-            </a>
-            <a
-              href="/usage"
-              className={`chat-link ${p.page === "usage" ? "active" : ""}`}
-              aria-current={p.page === "usage" ? "page" : undefined}
-              onClick={(e) => (e.preventDefault(), p.onNavigate("/usage"))}
-            >
-              <IconChart width={16} height={16} />
-              <span>{t("مصرف و توکن‌ها", "Usage and tokens")}</span>
-            </a>
-            <a
-              href="/keys"
-              className={`chat-link ${p.page === "keys" ? "active" : ""}`}
-              aria-current={p.page === "keys" ? "page" : undefined}
-              onClick={(e) => (e.preventDefault(), p.onNavigate("/keys"))}
-            >
-              <IconKey width={16} height={16} />
-              <span>{t("کلیدهای API", "API keys")}</span>
-            </a>
-            <a
-              href="/memory"
-              className={`chat-link ${p.page === "memory" ? "active" : ""}`}
-              aria-current={p.page === "memory" ? "page" : undefined}
-              onClick={(e) => (e.preventDefault(), p.onNavigate("/memory"))}
-            >
-              <IconMemory width={16} height={16} />
-              <span>{t("حافظه", "Memory")}</span>
-            </a>
-            {!isDesktop && (
-              <a href="https://www.salamlang.ir/agent/" className="chat-link" target="_blank" rel="noreferrer">
-                <IconMonitor width={16} height={16} />
-                <span>{t("دریافت دستیار زبان سلام", "Get Salam Agent")}</span>
-              </a>
-            )}
-            {p.user.admin && (
-              <a
-                href="/admin"
-                className={`chat-link ${p.page === "admin" ? "active" : ""}`}
-                aria-current={p.page === "admin" ? "page" : undefined}
-                onClick={(e) => (e.preventDefault(), p.onNavigate("/admin"))}
-              >
-                <IconShield width={16} height={16} />
-                <span>{t("مدیریت", "Admin")}</span>
-              </a>
-            )}
-          </nav>
         </div>
         <div className="sidebar-foot">
           <div className="avatar" aria-hidden="true">
@@ -164,9 +132,54 @@ export function Sidebar(p: Props) {
             <strong dir="auto">{p.user.name}</strong>
             <span dir="ltr">{p.user.email}</span>
           </div>
-          <button type="button" className="icon-button" onClick={p.onToggleTheme} aria-label={t("تغییر پوسته", "Toggle theme")} title={p.theme === "dark" ? t("پوسته‌ی روشن", "Light theme") : t("پوسته‌ی تیره", "Dark theme")}>
-            {p.theme === "dark" ? <IconSun /> : <IconMoon />}
-          </button>
+          <div className="settings-wrap" ref={wrap}>
+            <button
+              type="button"
+              className={`icon-button ${menu ? "active" : ""}`}
+              onClick={() => setMenu(!menu)}
+              aria-label={t("تنظیمات", "Settings")}
+              title={t("تنظیمات", "Settings")}
+              aria-haspopup="true"
+              aria-expanded={menu}
+              aria-controls="settings-menu"
+              ref={gear}
+            >
+              <IconSettings />
+            </button>
+            {menu && (
+              <nav className="settings-menu" id="settings-menu" aria-label={t("تنظیمات", "Settings")}>
+                {items.map((item) => (
+                  <a
+                    key={item.path}
+                    href={item.path}
+                    className={`chat-link ${p.page === item.key ? "active" : ""}`}
+                    aria-current={p.page === item.key ? "page" : undefined}
+                    onClick={(e) => (e.preventDefault(), pick(() => p.onNavigate(item.path)))}
+                  >
+                    {item.icon}
+                    <span>{item.label}</span>
+                  </a>
+                ))}
+                {!isDesktop && (
+                  <a href="https://www.salamlang.ir/agent/" className="chat-link" target="_blank" rel="noreferrer" onClick={() => pick(() => {})}>
+                    <IconMonitor width={16} height={16} />
+                    <span>{t("دریافت دستیار زبان سلام", "Get Salam Agent")}</span>
+                  </a>
+                )}
+                {p.user.admin && (
+                  <a
+                    href="/admin"
+                    className={`chat-link ${p.page === "admin" ? "active" : ""}`}
+                    aria-current={p.page === "admin" ? "page" : undefined}
+                    onClick={(e) => (e.preventDefault(), pick(() => p.onNavigate("/admin")))}
+                  >
+                    <IconShield width={16} height={16} />
+                    <span>{t("مدیریت", "Admin")}</span>
+                  </a>
+                )}
+              </nav>
+            )}
+          </div>
           <button
             type="button"
             className="icon-button"

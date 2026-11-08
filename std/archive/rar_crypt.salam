@@ -1,0 +1,296 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package archive
+
+import compress
+import crypto
+import mem
+
+func _rar_blob(p: u8*, off: int, n: int): u8*:
+    b := mem.AllocateZeroed((n + 16) as u64) as u8*
+    repeat n in i:
+        b[i] = p[off + i]
+    end
+    ret b
+end
+
+func _rar_pw_utf16(password: str): compress.ByteBuf:
+    mut out := compress.NewByteBuf()
+    bp := password as u8*
+    n := password.len()
+    mut i := 0
+    until i < n:
+        c := bp[i] as int
+        mut cp := c
+        mut need := 0
+        if c >= 0xf0:
+            cp = c & 7
+            need = 3
+        else c >= 0xe0:
+            cp = c & 15
+            need = 2
+        else c >= 0xc0:
+            cp = c & 31
+            need = 1
+        end
+        i++
+        repeat need:
+            if i < n:
+                cp = (cp << 6) | ((bp[i] as int) & 63)
+                i++
+            end
+        end
+        if cp >= 0x10000:
+            v := cp - 0x10000
+            hi := 0xd800 + (v >> 10)
+            lo := 0xdc00 + (v & 0x3ff)
+            compress.BufPush(out, hi & 255)
+            compress.BufPush(out, hi >> 8)
+            compress.BufPush(out, lo & 255)
+            compress.BufPush(out, lo >> 8)
+        else:
+            compress.BufPush(out, cp & 255)
+            compress.BufPush(out, cp >> 8)
+        end
+    end
+    ret out
+end
+
+func _rar5_kdf(password: str, salt: u8*, lg2: int, key: u8*, hkey: u8*, chk: u8*):
+    count := 1 << lg2
+    pw := password as void*
+    plen := password.len()
+    sd := mem.AllocateZeroed(32 as u64) as u8*
+    repeat 16 in i:
+        sd[i] = salt[i]
+    end
+    sd[19] = 1 as u8
+    u := mem.AllocateZeroed(32 as u64) as u8*
+    u2 := mem.AllocateZeroed(32 as u64) as u8*
+    fn := mem.AllocateZeroed(32 as u64) as u8*
+    crypto.HmacSha256Raw(pw, plen, sd as void*, 20, u as void*)
+    repeat 32 in i:
+        fn[i] = u[i]
+    end
+    mut it := 1
+    until it < count:
+        crypto.HmacSha256Raw(pw, plen, u as void*, 32, u2 as void*)
+        repeat 32 in i:
+            u[i] = u2[i]
+            fn[i] = ((fn[i] as int) ^ (u[i] as int)) as u8
+        end
+        it++
+    end
+    repeat 32 in i:
+        key[i] = fn[i]
+    end
+    repeat 2 in phase:
+        repeat 16:
+            crypto.HmacSha256Raw(pw, plen, u as void*, 32, u2 as void*)
+            repeat 32 in i:
+                u[i] = u2[i]
+                fn[i] = ((fn[i] as int) ^ (u[i] as int)) as u8
+            end
+        end
+        if phase == 0:
+            repeat 32 in i:
+                hkey[i] = fn[i]
+            end
+        else:
+            repeat 8 in i:
+                chk[i] = 0 as u8
+            end
+            repeat 32 in i:
+                chk[i & 7] = ((chk[i & 7] as int) ^ (fn[i] as int)) as u8
+            end
+        end
+    end
+    mem.Free(sd as void*)
+    mem.Free(u as void*)
+    mem.Free(u2 as void*)
+    mem.Free(fn as void*)
+end
+
+func _rar3_kdf(password: str, salt: u8*, key: u8*, iv: u8*):
+    mut raw := _rar_pw_utf16(password)
+    rawlen := raw.len + 8
+    rb := mem.AllocateZeroed((rawlen + 16) as u64) as u8*
+    repeat raw.len in i:
+        rb[i] = compress.BufGet(raw, i) as u8
+    end
+    repeat 8 in i:
+        rb[raw.len + i] = salt[i]
+    end
+    compress.BufFree(raw)
+    mut c := _sha1_new()
+    mut cp := _sha1_new()
+    h := mem.AllocateZeroed(40 as u64) as i64*
+    pn := mem.AllocateZeroed(8 as u64) as u8*
+    mut r := 0
+    until r < 0x40000:
+        _sha1_update(c, rb, rawlen)
+        pn[0] = (r & 255) as u8
+        pn[1] = ((r >> 8) & 255) as u8
+        pn[2] = ((r >> 16) & 255) as u8
+        _sha1_update(c, pn, 3)
+        if r % 0x4000 == 0:
+            _sha1_copy(cp, c)
+            _sha1_final(cp, h)
+            iv[r / 0x4000] = (h[4] & 255) as u8
+        end
+        r++
+    end
+    _sha1_final(c, h)
+    repeat 4 in i:
+        repeat 4 in j:
+            key[i * 4 + j] = ((h[i] >> (j * 8)) & 255) as u8
+        end
+    end
+    mem.Free(rb as void*)
+    mem.Free(h as void*)
+    mem.Free(pn as void*)
+    _sha1_free(c)
+    _sha1_free(cp)
+end
+
+func _rar5_check(password: str, salt: u8*, lg2: int, chk: u8*, key: u8*, hkey: u8*): bool:
+    if lg2 > 24:
+        ret false
+    end
+    v := mem.AllocateZeroed(16 as u64) as u8*
+    _rar5_kdf(password, salt, lg2, key, hkey, v)
+    mut ok := true
+    if chk != null:
+        repeat 8 in i:
+            if v[i] != chk[i]:
+                ok = false
+            end
+        end
+    end
+    mem.Free(v as void*)
+    ret ok
+end
+
+func _rar_derive5(kc: u8*, password: str, f: _RarFile, key: u8*, hkey: u8*): bool:
+    mut hit := (kc[0] as int) == 1 and (kc[1] as int) == f.kdf
+    if hit:
+        repeat 16 in i:
+            if kc[2 + i] != f.salt[i]:
+                hit = false
+            end
+        end
+    end
+    if not hit:
+        if not _rar5_check(password, f.salt, f.kdf, f.chk, key, hkey):
+            ret false
+        end
+        kc[0] = 1 as u8
+        kc[1] = f.kdf as u8
+        repeat 16 in i:
+            kc[2 + i] = f.salt[i]
+        end
+        repeat 32 in i:
+            kc[18 + i] = key[i]
+            kc[50 + i] = hkey[i]
+        end
+        ret true
+    end
+    repeat 32 in i:
+        key[i] = kc[18 + i]
+        hkey[i] = kc[50 + i]
+    end
+    ret true
+end
+
+func _rar_derive3(kc: u8*, password: str, f: _RarFile, key: u8*, iv: u8*):
+    mut hit := (kc[96] as int) == 1
+    if hit:
+        repeat 8 in i:
+            if kc[97 + i] != f.salt[i]:
+                hit = false
+            end
+        end
+    end
+    if not hit:
+        _rar3_kdf(password, f.salt, key, iv)
+        kc[96] = 1 as u8
+        repeat 8 in i:
+            kc[97 + i] = f.salt[i]
+        end
+        repeat 16 in i:
+            kc[105 + i] = key[i]
+            kc[121 + i] = iv[i]
+        end
+        ret
+    end
+    repeat 16 in i:
+        key[i] = kc[105 + i]
+        iv[i] = kc[121 + i]
+    end
+end
+
+func _rar_decrypt_file(kc: u8*, password: str, f: _RarFile, src: u8*, n16: int, hk: u8*, status &: int): u8*:
+    key := mem.AllocateZeroed(64 as u64) as u8*
+    hkey := mem.AllocateZeroed(64 as u64) as u8*
+    dst := mem.AllocateZeroed((n16 + 32) as u64) as u8*
+    status = 0
+    if f.crypt == 5 and f.salt != null and f.iv != null:
+        if f.kdf > 24:
+            status = 2
+        else:
+            if not _rar_derive5(kc, password, f, key, hkey):
+                status = 9
+            else:
+                mut ka := _aes_new(key, 32)
+                _aes_cbc_decrypt(ka, f.iv, src, dst, n16)
+                _aes_free(ka)
+                repeat 32 in i:
+                    hk[i] = hkey[i]
+                end
+            end
+        end
+    else f.crypt == 3 and f.salt != null:
+        _rar_derive3(kc, password, f, key, hkey)
+        mut ka := _aes_new(key, 16)
+        _aes_cbc_decrypt(ka, hkey, src, dst, n16)
+        _aes_free(ka)
+    else:
+        status = 2
+    end
+    mem.Free(key as void*)
+    mem.Free(hkey as void*)
+    if status != 0:
+        mem.Free(dst as void*)
+        ret null
+    end
+    ret dst
+end
+
+func _rar_mac_crc(crc: u32, hk: u8*): u32:
+    raw := mem.AllocateZeroed(8 as u64) as u8*
+    raw[0] = ((crc as int) & 255) as u8
+    raw[1] = (((crc as int) >> 8) & 255) as u8
+    raw[2] = (((crc as int) >> 16) & 255) as u8
+    raw[3] = (((crc as int) >> 24) & 255) as u8
+    dg := mem.AllocateZeroed(40 as u64) as u8*
+    crypto.HmacSha256Raw(hk as void*, 32, raw as void*, 4, dg as void*)
+    mut v := 0 as u32
+    repeat 32 in i:
+        v = v ^ (((dg[i] as u32) & (255 as u32)) << ((i & 3) * 8))
+    end
+    mem.Free(raw as void*)
+    mem.Free(dg as void*)
+    ret v
+end

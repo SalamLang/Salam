@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { api, ApiError, type Gateway, type Payment, type Plan, type PlanId, type Subscription } from "./api";
 import { fmtDate, fmtNum } from "./format";
 import { IconBadgeCheck, IconCheck, IconSpark } from "./icons";
-import { t } from "./i18n";
+import { isFa, t } from "./i18n";
 
 const GATEWAY_NAMES: Record<Gateway, string> = {
   zarinpal: t("زرین‌پال", "Zarinpal"),
@@ -24,12 +24,20 @@ const RESULTS: Record<string, { tone: "ok" | "warn"; text: string }> = {
   pending: { tone: "warn", text: t("پرداخت شما در حال بررسی است. چند لحظه بعد این صفحه را تازه کنید.", "Your payment is being checked. Refresh this page in a moment.") },
 };
 
+const REGISTRY: Record<string, { fa: string; en: string; noteFa: string; noteEn: string }> = {};
+
+export function registerPlans(list: Plan[]) {
+  for (const p of list) REGISTRY[p.id] = { fa: p.name, en: p.name_en || p.name, noteFa: p.note, noteEn: p.note_en || p.note };
+}
+
 export function planName(id: PlanId, fallback: string): string {
+  const known = REGISTRY[id];
+  if (known) return isFa ? known.fa : known.en;
   switch (id) {
     case "free":
       return t("رایگان", "Free");
     case "plus":
-      return t("پلاس", "Plus");
+      return t("کارمندی", "Employee");
     case "pro":
       return t("حرفه‌ای", "Pro");
     case "unlimited":
@@ -40,15 +48,17 @@ export function planName(id: PlanId, fallback: string): string {
 }
 
 function planNote(id: PlanId, fallback: string): string {
+  const known = REGISTRY[id];
+  if (known && (known.noteFa || known.noteEn)) return isFa ? known.noteFa : known.noteEn;
   switch (id) {
     case "free":
       return t("برای آشنایی با دستیار سلام و کارهای کوچک", "To get to know the Salam assistant and for small tasks");
     case "plus":
-      return t("برای کار روزمره با دستیار و کلید API", "For everyday work with the assistant and an API key");
+      return t("یک روز کاری سبک، تا ۷ ساعت، یا ۳ تا ۴ ساعت کار سنگین", "A light workday of up to 7 hours, or 3 to 4 hours of heavy work");
     case "pro":
-      return t("برای کار سنگین‌تر و ایجنت‌هایی مثل Cline", "For heavier work and agents like Cline");
+      return t("هر روز دست‌کم ۸ ساعت کار کامل، با ایجنت‌هایی مثل Cline", "At least 8 full hours of work every day, with agents like Cline");
     case "unlimited":
-      return t("بدون هیچ محدودیتی، بدون انقضا", "No limits at all, no expiry");
+      return t("بدون سقف روزانه برای تیم‌ها و کار شبانه‌روزی", "No daily caps, for teams and round-the-clock work");
     default:
       return fallback;
   }
@@ -69,8 +79,12 @@ function limit(n: number, unit: string): string {
 
 function features(p: Plan): string[] {
   return [
-    t(`گفت‌وگو: ${limit(p.chat_hourly, "پیام در ساعت")}`, `Chat: ${limit(p.chat_hourly, "messages per hour")}`),
-    t(`کلید API: ${limit(p.api_hourly, "درخواست در ساعت")}`, `API key: ${limit(p.api_hourly, "requests per hour")}`),
+    t(`گفت‌وگو: ${limit(p.chat_daily, "پیام در روز")}`, `Chat: ${limit(p.chat_daily, "messages per day")}`),
+    ...(p.chat_weekly > 0 ? [t(`گفت‌وگو در هفته: ${fmtNum(p.chat_weekly)} پیام`, `Chat per week: ${fmtNum(p.chat_weekly)} messages`)] : []),
+    ...(p.chat_5h > 0 ? [t(`گفت‌وگو در ۵ ساعت: ${fmtNum(p.chat_5h)} پیام`, `Chat per 5 hours: ${fmtNum(p.chat_5h)} messages`)] : []),
+    t(`کلید API: ${limit(p.api_daily, "درخواست در روز")}`, `API key: ${limit(p.api_daily, "requests per day")}`),
+    ...(p.api_weekly > 0 ? [t(`کلید API در هفته: ${fmtNum(p.api_weekly)} درخواست`, `API key per week: ${fmtNum(p.api_weekly)} requests`)] : []),
+    ...(p.api_5h > 0 ? [t(`کلید API در ۵ ساعت: ${fmtNum(p.api_5h)} درخواست`, `API key per 5 hours: ${fmtNum(p.api_5h)} requests`)] : []),
     t(`درخواست هم‌زمان: ${limit(p.parallel, "درخواست")}`, `Parallel requests: ${limit(p.parallel, "at a time")}`),
     p.days === 0 ? t("بدون انقضا", "No expiry") : t(`${fmtNum(p.days)} روزه`, `${fmtNum(p.days)} days`),
   ];
@@ -90,6 +104,7 @@ export function Plans({ notify }: { notify: (msg: string) => void }) {
     setError("");
     try {
       const [list, mine, paid] = await Promise.all([api.plans(), api.subscription(), api.payments()]);
+      registerPlans(list.plans);
       setPlans(list.plans);
       setGateways(list.gateways);
       if (list.gateways.length > 0 && !list.gateways.includes(gateway)) setGateway(list.gateways[0]);
@@ -138,7 +153,7 @@ export function Plans({ notify }: { notify: (msg: string) => void }) {
     <div className="page plans-page">
       <header className="page-head">
         <h2>{t("اشتراک‌ها", "Subscriptions")}</h2>
-        <p className="muted">{t("با یک اشتراک، سقف ساعتی گفت‌وگو و کلید API شما بالا می‌رود. پرداخت از راه درگاه‌های داخلی انجام می‌شود.", "A subscription raises your hourly limits for chat and API keys. Payment goes through Iranian payment gateways.")}</p>
+        <p className="muted">{t("با یک اشتراک، سقف روزانه‌ی گفت‌وگو و کلید API شما بالا می‌رود و هر روز ساعت ۰۰:۰۰ به وقت تهران دوباره شارژ می‌شود. پرداخت از راه درگاه‌های داخلی انجام می‌شود.", "A subscription raises your daily limits for chat and API keys, and they reset every day at midnight Tehran time. Payment goes through Iranian payment gateways and is charged in toman.")}</p>
       </header>
 
       {result && (
@@ -170,10 +185,17 @@ export function Plans({ notify }: { notify: (msg: string) => void }) {
               {current.source === "admin" ? t(" (هدیه‌ی مدیر)", " (gift from an admin)") : ""}
             </span>
             <span className="muted">
-              {t("در این ساعت:", "This hour:")} {fmtNum(current.chat_used)} {t("پیام", "messages")}
-              {current.plan.chat_hourly > 0 ? t(` از ${fmtNum(current.plan.chat_hourly)}`, ` of ${fmtNum(current.plan.chat_hourly)}`) : ""} {t("و", "and")} {fmtNum(current.api_used)} {t("درخواست API", "API requests")}
-              {current.plan.api_hourly > 0 ? t(` از ${fmtNum(current.plan.api_hourly)}`, ` of ${fmtNum(current.plan.api_hourly)}`) : ""}
+              {t("امروز:", "Today:")} {fmtNum(current.chat_used)} {t("پیام", "messages")}
+              {current.plan.chat_daily > 0 ? t(` از ${fmtNum(current.plan.chat_daily)}`, ` of ${fmtNum(current.plan.chat_daily)}`) : ""} {t("و", "and")} {fmtNum(current.api_used)} {t("درخواست API", "API requests")}
+              {current.plan.api_daily > 0 ? t(` از ${fmtNum(current.plan.api_daily)}`, ` of ${fmtNum(current.plan.api_daily)}`) : ""}
             </span>
+            {(current.plan.chat_weekly > 0 || current.plan.api_weekly > 0) && (
+              <span className="muted">
+                {t("این هفته:", "This week:")} {fmtNum(current.chat_used_week)} {t("پیام", "messages")}
+                {current.plan.chat_weekly > 0 ? t(` از ${fmtNum(current.plan.chat_weekly)}`, ` of ${fmtNum(current.plan.chat_weekly)}`) : ""} {t("و", "and")} {fmtNum(current.api_used_week)} {t("درخواست API", "API requests")}
+                {current.plan.api_weekly > 0 ? t(` از ${fmtNum(current.plan.api_weekly)}`, ` of ${fmtNum(current.plan.api_weekly)}`) : ""}
+              </span>
+            )}
           </div>
         </section>
       )}
@@ -197,10 +219,10 @@ export function Plans({ notify }: { notify: (msg: string) => void }) {
         <div className="plan-grid">
           {plans?.map((p) => {
             const mine = active?.id === p.id;
-            const featured = p.id === "unlimited";
-            const price = p.price === 0 ? t("رایگان", "Free") : p.price >= 1000000 && p.price % 1000000 === 0 ? `${fmtNum(p.price / 1000000)}` : fmtNum(p.price);
-            const unit = p.price === 0 ? "" : p.price >= 1000000 && p.price % 1000000 === 0 ? t("میلیون تومان", "million toman") : t("تومان", "toman");
-            const period = p.price === 0 ? t("برای همیشه", "forever") : p.days === 0 ? t("یک‌بار پرداخت، بدون انقضا", "one payment, no expiry") : t(`برای ${fmtNum(p.days)} روز`, `for ${fmtNum(p.days)} days`);
+            const featured = p.price > 0 && p.chat_daily === 0 && p.api_daily === 0;
+            const price = p.price === 0 ? t("رایگان", "Free") : isFa ? (p.price % 1000000 === 0 ? fmtNum(p.price / 1000000) : fmtNum(p.price)) : `$${fmtNum(p.usd)}`;
+            const unit = p.price === 0 ? "" : isFa ? (p.price % 1000000 === 0 ? "میلیون تومان" : "تومان") : t("", "per month");
+            const period = p.price === 0 ? t("برای همیشه", "forever") : p.days === 0 ? t("یک‌بار پرداخت، بدون انقضا", "one payment, no expiry") : t(`برای ${fmtNum(p.days)} روز (حدود ${fmtNum(p.usd)} دلار)`, `${fmtNum(p.days)} days, charged in toman at checkout`);
             return (
               <section key={p.id} className={`plan-card ${featured ? "featured" : ""} ${mine ? "mine" : ""}`}>
                 {featured && <span className="plan-ribbon">{t("بیشترین امکانات", "Most capable")}</span>}
@@ -249,10 +271,10 @@ export function Plans({ notify }: { notify: (msg: string) => void }) {
           <h3>{t("محدودیت‌ها، صادقانه", "Limits, honestly")}</h3>
         </div>
         <ul className="plan-limits">
-          <li>{t("پلن نامحدود سقف پیام و درخواست در ساعت و سقف درخواست هم‌زمان ندارد.", "The Unlimited plan has no per-hour message or request cap and no cap on parallel requests.")}</li>
+          <li>{t("پلن نامحدود سقف پیام و درخواست در روز و سقف درخواست هم‌زمان ندارد.", "The Unlimited plan has no per-day message or request cap and no cap on parallel requests.")}</li>
           <li>{t("هر نوبت در پلن نامحدود تا ۱۲ ساعت می‌تواند ادامه پیدا کند. پلن‌های دیگر: گفت‌وگو ۱۰ دقیقه و ایجنت رومیزی ۱ ساعت برای هر نوبت.", "On Unlimited a single turn can run up to 12 hours. Other plans: 10 minutes per chat turn and 1 hour per desktop agent turn.")}</li>
           <li>{t("اگر نوبتی به سقف زمانی برسد، متن تا آن لحظه می‌ماند و با نوشتن «ادامه بده» از همان‌جا ادامه پیدا می‌کند.", "If a turn reaches its time limit, the text so far is kept and you can write \"continue\" to pick up from there.")}</li>
-          <li>{t("پیام‌هایی که مهمان‌ها از راه یک پیوند همکاری می‌فرستند هم از پیام‌ها و سهمیه‌ی پلن صاحب گفت‌وگو کم می‌شود. با رسیدن به سقف ساعتی، پیوند خودکار متوقف می‌شود.", "Messages guests send through a collaborate link also count against the chat owner's plan and limits. When the hourly limit is reached the link pauses itself.")}</li>
+          <li>{t("پیام‌هایی که مهمان‌ها از راه یک پیوند همکاری می‌فرستند هم از پیام‌ها و سهمیه‌ی پلن صاحب گفت‌وگو کم می‌شود. با رسیدن به سقف روزانه، پیوند خودکار متوقف می‌شود.", "Messages guests send through a collaborate link also count against the chat owner's plan and limits. When the daily limit is reached the link pauses itself.")}</li>
           <li>{t("هر ابزار روی رایانه شما تا ۱۰ دقیقه برای پاسخ مهلت دارد و سرور برای دادن حافظه گاهی دوباره راه‌اندازی می‌شود. بستن برنامه یا قطع اینترنت رایانه شما کار را متوقف می‌کند، اما صفحه پس از وصل شدن دوباره به نوبت در حال اجرا برمی‌گردد.", "Each tool on your computer gets up to 10 minutes to answer, and the server sometimes restarts to free memory. Closing the app or losing your computer's internet pauses the work, but the page reattaches to the running turn when it reconnects.")}</li>
         </ul>
       </section>

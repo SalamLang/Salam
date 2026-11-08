@@ -46,8 +46,8 @@ or `docker build ai/backend`. It is configured through environment variables:
 | `AI_APP_URL`                                                      | the web app, where people sign in and approve apps                                                                                                                    | `https://ai.salamlang.ir`                                             |
 | `AI_OAUTH_RESOURCES`                                              | comma separated MCP server URIs tokens may be issued for                                                                                                              | `https://mcp.salamlang.ir/mcp`                                        |
 | `AI_RESOURCE_SECRET`                                              | shared with the MCP server for introspection and activity reports; at least 16 characters                                                                             | empty (both endpoints refuse every call)                              |
-| `AI_API_HOURLY`                                                   | API requests per hour on the free plan                                                                                                                                | `100`                                                                 |
-| `AI_CHAT_HOURLY`                                                  | chat messages per hour on the free plan                                                                                                                               | `60`                                                                  |
+| `AI_API_DAILY`                                                    | API requests per day on the free plan                                                                                                                                 | `60`                                                                  |
+| `AI_CHAT_DAILY`                                                   | chat messages per day on the free plan                                                                                                                               | `60`                                                                  |
 | `AI_ZARINPAL_MERCHANT`, `AI_ZIBAL_MERCHANT`                       | the merchant IDs of the payment gateways; a gateway with no id is not offered                                                                                         | empty                                                                 |
 | `AI_ZARINPAL_BASE`, `AI_ZIBAL_BASE`                               | where those gateways live, for a sandbox or the test mock                                                                                                             | the real gateways                                                     |
 | `AI_BILLING_CALLBACK`                                             | the public URL of this API, where the gateway sends the browser back                                                                                                  | `AI_OAUTH_ISSUER`                                                     |
@@ -587,7 +587,7 @@ reply = client.chat.completions.create(
 | `GET /keys/requests`, `GET /admin/requests`   | the request log, the user's own or (for admins) everyone's                                         |
 
 - Keys look like `sk-salam-...` and are stored only as SHA-256 hashes. Each
-  account may hold 20 active keys and send `AI_API_HOURLY` requests an hour.
+  account may hold 20 active keys and send `AI_API_DAILY` requests a day on the free plan.
 - Every request is logged with its account, key, project, end user, the
   prompt and the answer (each up to 64 KB), duration, IP and user agent. The
   project is the `X-Salam-Project` header, else `metadata.project`, else the
@@ -628,7 +628,7 @@ reply = client.chat.completions.create(
   whose base URL already carries the version, and the proxy has to forward
   those prefixes to the streaming listener too.
 
-`HOURLY=<AI_API_HOURLY> START_SECONDS=<AI_API_START_SECONDS> node ai/backend/tests/api_flow.mjs`
+`HOURLY=<AI_API_DAILY> START_SECONDS=<AI_API_START_SECONDS> node ai/backend/tests/api_flow.mjs`
 tests it against a running API, with `ai/backend/tests/engine_mock.mjs` standing in for the
 assistant engine. The two idle cases wait for the backend to give up, so `START_SECONDS` has to
 be at least `AI_API_START_SECONDS`; set lower, they fail on a backend that is behaving.
@@ -637,12 +637,16 @@ be at least `AI_API_START_SECONDS`; set lower, they fail on a backend that is be
 
 Four plans, defined in one table in `billing.salam`:
 
-| Plan    | Price            | Lasts   | Chat                     | API                     | In flight |
-| ------- | ---------------- | ------- | ------------------------ | ----------------------- | --------- |
-| رایگان  | free             | forever | `AI_CHAT_HOURLY` an hour | `AI_API_HOURLY` an hour | 4         |
-| پلاس    | 1,000,000 toman  | 30 days | 300 an hour              | 500 an hour             | 8         |
-| حرفه‌ای | 2,000,000 toman  | 30 days | 1000 an hour             | 2000 an hour            | 16        |
-| نامحدود | 10,000,000 toman | forever | no limit                 | no limit                | no limit  |
+| Plan    | Price (toman / USD) | Lasts   | Chat per day         | API per day         | In flight |
+| ------- | ------------------- | ------- | -------------------- | ------------------- | --------- |
+| رایگان  | free                | forever | `AI_CHAT_DAILY` (15) | `AI_API_DAILY` (60) | 2         |
+| کارمندی | 3,000,000 / $20     | 30 days | 150                  | 1500                | 6         |
+| حرفه‌ای | 6,000,000 / $40     | 30 days | 500                  | 6000                | 12        |
+| نامحدود | 30,000,000 / $200   | 30 days | no limit             | no limit            | no limit  |
+
+Plans live in the `plans` table, seeded from these defaults and edited from the admin panel (limits per 5 hours, day and week, 0 means unlimited; changes apply at once). Daily limits reset at midnight Tehran time and weekly limits on Saturday. The internal ids stay
+`free`, `plus`, `pro` and `unlimited`, so existing subscriptions keep working.
+The USD price is for display; the gateway always charges the toman price.
 
 - The free plan keeps the limits the service had before plans existed, so nothing
   an account could do yesterday is refused today. The paid plans only add room,

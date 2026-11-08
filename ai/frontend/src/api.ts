@@ -700,10 +700,20 @@ const TOKEN_KEY = "salam-ai-token";
 export class ApiError extends Error {
   status: number;
   code: string;
-  constructor(status: number, code: string, message: string) {
+  detail: string;
+  handoff: boolean;
+  constructor(
+    status: number,
+    code: string,
+    message: string,
+    detail = "",
+    handoff = false,
+  ) {
     super(message);
     this.status = status;
     this.code = code;
+    this.detail = detail;
+    this.handoff = handoff;
   }
 }
 
@@ -730,6 +740,34 @@ export function takeOAuth(): PendingOAuth | null {
   } catch {
     return null;
   }
+}
+
+export function newPollSecret(): string {
+  const bytes = new Uint8Array(24);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
+}
+
+export async function awaitProviderLogin(
+  poll: string,
+): Promise<{ token: string; next: string }> {
+  const until = Date.now() + 16 * 60 * 1000;
+  while (Date.now() < until) {
+    await pause(2000);
+    let r;
+    try {
+      r = await api.pollProvider(poll);
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 0) continue;
+      throw e;
+    }
+    if (r.status === "done" && r.token)
+      return { token: r.token, next: r.next ?? "" };
+    if (r.status === "failed") throw new ApiError(400, r.error || "failed", "");
+    if (r.status !== "pending")
+      throw new ApiError(400, r.status === "expired" ? "expired" : "missing", "");
+  }
+  throw new ApiError(400, "expired", "");
 }
 
 export function getToken(): string {
@@ -832,7 +870,12 @@ async function call<T>(
         ),
       );
     }
-    let data: { error?: string; message?: string } | null = null;
+    let data: {
+      error?: string;
+      message?: string;
+      detail?: string;
+      handoff?: boolean;
+    } | null = null;
     try {
       data = await res.json();
     } catch {}
@@ -855,6 +898,8 @@ async function call<T>(
             "خطایی پیش آمد. دوباره تلاش کنید.",
             "Something went wrong. Please try again.",
           ),
+        data?.detail || "",
+        data?.handoff === true,
       );
     }
     return data as unknown as T;
@@ -1040,25 +1085,39 @@ export const api = {
     }
     return call<{ github: boolean; figma: boolean }>("GET", "/auth/providers");
   },
-  startProvider: (provider: string, next: string) =>
+  startProvider: (provider: string, next: string, poll = "") =>
     call<{ url: string; state: string }>(
       "POST",
       `/auth/provider/${provider}/start`,
-      { next },
+      poll ? { next, poll } : { next },
     ),
   completeProvider: (
     provider: string,
     code: string,
     state: string,
     error: string,
+    description: string,
+    bound: boolean,
   ) =>
     call<{
-      purpose: "login" | "connect";
+      purpose: "login" | "connect" | "handoff";
       token?: string;
       next?: string;
       ok?: boolean;
       reason?: string;
-    }>("POST", `/auth/provider/${provider}/complete`, { code, state, error }),
+    }>("POST", `/auth/provider/${provider}/complete`, {
+      code,
+      state,
+      error,
+      error_description: description,
+      bound,
+    }),
+  pollProvider: (poll: string) =>
+    call<{ status: string; token?: string; next?: string; error?: string }>(
+      "POST",
+      "/auth/provider-poll",
+      { poll },
+    ),
   integrations: () => call<Integrations>("GET", "/integrations"),
   saveIntegration: (provider: string, token: string) =>
     call<Integration>("POST", `/integrations/${provider}/token`, { token }),

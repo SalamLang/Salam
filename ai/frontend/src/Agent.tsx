@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { api, getToken } from "./api";
 import { agent, folderName, onAgent, type AgentAnswer, type AgentCall, type AgentInfo, type AgentMode } from "./desktop";
+import { Lightbox } from "./Lightbox";
 import { IconAlert, IconChevronDown, IconClose, IconEye, IconFile, IconFolder, IconGlobe, IconSearch, IconShield, IconSpark, IconTerminal } from "./icons";
 import { useHighlighted } from "./Markdown";
 import { NotifyMenu, announceApproval, syncNotifyLanguage } from "./Notify";
@@ -177,7 +178,7 @@ function CallShot({ chat, id, data, mime }: { chat: string; id: string; data?: s
   const direct = data ? `data:${mime || "image/jpeg"};base64,${data}` : "";
   const [src, setSrc] = useState(direct);
   const [failed, setFailed] = useState(false);
-  const [big, setBig] = useState(false);
+  const [open, setOpen] = useState(false);
   useEffect(() => {
     if (direct) {
       setSrc(direct);
@@ -216,10 +217,15 @@ function CallShot({ chat, id, data, mime }: { chat: string; id: string; data?: s
         <span className="spinner tiny" />
       </div>
     );
+  const ext = src.startsWith("data:image/png") ? "png" : src.startsWith("data:image/webp") ? "webp" : "jpg";
+  const name = `${t("تصویر-صفحه", "screenshot")}-${id}.${ext}`;
   return (
-    <button type="button" className={`call-shot${big ? " big" : ""}`} onClick={() => setBig((b) => !b)} title={big ? t("کوچک کردن", "Shrink") : t("بزرگ کردن", "Enlarge")}>
-      <img src={src} alt={t("تصویر صفحه از مرورگر", "Browser screenshot")} />
-    </button>
+    <>
+      <button type="button" className="call-shot" onClick={() => setOpen(true)} title={t("باز کردن تصویر", "Open image")} aria-label={t("باز کردن تصویر صفحه", "Open the screenshot")}>
+        <img src={src} alt={t("تصویر صفحه از مرورگر", "Browser screenshot")} draggable={false} data-user-image />
+      </button>
+      {open && <Lightbox items={[{ src, name }]} index={0} onIndex={() => {}} onClose={() => setOpen(false)} />}
+    </>
   );
 }
 

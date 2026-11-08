@@ -536,6 +536,7 @@ export type AdminSummary = {
     users: number;
     tokens_in: number;
     tokens_out: number;
+    tokens_cache?: number;
   }[];
   usage: UsagePeriod[];
 };
@@ -551,6 +552,7 @@ export type AdminUser = {
   api_requests: number;
   tokens_in: number;
   tokens_out: number;
+  tokens_cache?: number;
   last_login: number;
   logins: number;
   images?: number;

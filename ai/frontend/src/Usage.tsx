@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, ApiError, type UsageBreakdown, type UsageDay, type UsagePeriod, type UsagePeriodKey, type UsageReport, type UsageTotals } from "./api";
-import { fmtCompact, fmtCost, fmtDateTime, fmtDay, fmtMonth, fmtNum, tokenSplit } from "./format";
+import { fmtCompact, fmtDateTime, fmtDay, fmtMonth, fmtNum, tokenSplit } from "./format";
 import { t } from "./i18n";
 import { IconAlert } from "./icons";
 
@@ -331,7 +331,6 @@ export function Usage({ onNavigate }: { onNavigate: (path: string) => void }) {
         <Tile label={mode === "api" ? t("درخواست API", "API requests") : mode === "chat" ? t("پاسخ گفت‌وگو", "Chat replies") : t("پاسخ و درخواست", "Replies and requests")} value={current.count} />
         {split.cache > 0 && <Tile label={t("توکن کش", "Cached tokens")} value={split.cache} sub={t("خوانده و نوشته", "Read and written")} />}
         {(current.tools || 0) > 0 && <Tile label={t("فراخوانی ابزار", "Tool calls")} value={current.tools || 0} />}
-        {current.cost > 0 && <Tile label={t("هزینه‌ی تقریبی", "Approximate cost")} display={fmtCost(current.cost)} sub={t("دلار آمریکا", "US dollars")} />}
       </div>
 
       <section className="card panel usage-facts">
@@ -347,7 +346,6 @@ export function Usage({ onNavigate }: { onNavigate: (path: string) => void }) {
           <Fact label={t("توکن استدلال", "Reasoning tokens")} value={current.reasoning} />
           <Fact label={t("جمع کل", "Grand total")} value={split.total} />
           <Fact label={t("فراخوانی ابزار", "Tool calls")} value={current.tools || 0} />
-          {current.cost > 0 && <Fact label={t("هزینه‌ی تقریبی", "Approximate cost")} display={fmtCost(current.cost)} />}
         </div>
       </section>
 
@@ -367,7 +365,6 @@ export function Usage({ onNavigate }: { onNavigate: (path: string) => void }) {
                 <th scope="col">{t("خروجی", "Output")}</th>
                 <th scope="col">{t("کش", "Cache")}</th>
                 <th scope="col">{t("جمع", "Total")}</th>
-                {report.periods.some((p) => pick(p, "all").cost > 0) && <th scope="col">{t("هزینه", "Cost")}</th>}
               </tr>
             </thead>
             <tbody>
@@ -388,7 +385,6 @@ export function Usage({ onNavigate }: { onNavigate: (path: string) => void }) {
                     <td className="strong" title={fmtNum(sp.total)}>
                       {fmtCompact(sp.total)}
                     </td>
-                    {report.periods.some((x) => pick(x, "all").cost > 0) && <td dir="ltr">{all.cost > 0 ? fmtCost(all.cost) : <span className="muted">-</span>}</td>}
                   </tr>
                 );
               })}

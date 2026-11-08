@@ -179,10 +179,10 @@ func summary(ctx: i64):
         api_days.put(aistore.Text(api_rows, 0), aistore.Text(api_rows, 1))
     end
     aistore.Finish(api_rows)
-    mut tok_rows := aistore.Stmt("SELECT d, SUM(i), SUM(o) FROM (SELECT FROM_UNIXTIME(created - MOD(created, 86400), '%Y-%m-%d') AS d, tokens_in + cache_read + cache_write AS i, tokens_out + tokens_reasoning AS o FROM messages WHERE role = 'assistant' AND created >= ?1 UNION ALL SELECT FROM_UNIXTIME(created - MOD(created, 86400), '%Y-%m-%d'), tokens_in + cache_read + cache_write, tokens_out + tokens_reasoning FROM api_requests WHERE created >= ?1) x GROUP BY d", one(since))
+    mut tok_rows := aistore.Stmt("SELECT d, SUM(i), SUM(o), SUM(c) FROM (SELECT FROM_UNIXTIME(created - MOD(created, 86400), '%Y-%m-%d') AS d, tokens_in + cache_read + cache_write AS i, tokens_out + tokens_reasoning AS o, cache_read + cache_write AS c FROM messages WHERE role = 'assistant' AND created >= ?1 UNION ALL SELECT FROM_UNIXTIME(created - MOD(created, 86400), '%Y-%m-%d'), tokens_in + cache_read + cache_write, tokens_out + tokens_reasoning, cache_read + cache_write FROM api_requests WHERE created >= ?1) x GROUP BY d", one(since))
     mut tok_days := HashMap {} as HashMap<str, str>
     until aistore.Next(tok_rows):
-        tok_days.put(aistore.Text(tok_rows, 0), aistore.Text(tok_rows, 1) + "|" + aistore.Text(tok_rows, 2))
+        tok_days.put(aistore.Text(tok_rows, 0), aistore.Text(tok_rows, 1) + "|" + aistore.Text(tok_rows, 2) + "|" + aistore.Text(tok_rows, 3))
     end
     aistore.Finish(tok_rows)
     aistore.Unlock()
@@ -205,14 +205,19 @@ func summary(ctx: i64):
         d.push(json.MemberRaw("api", api_days.has(label) ? api_days.get(label) : "0"))
         mut tin := "0"
         mut tout := "0"
+        mut tcache := "0"
         if tok_days.has(label):
             tv := tok_days.get(label)
             tb := tv.find("|")
             tin = tv.substr(0, tb)
-            tout = tv.substr(tb + 1, tv.len() - tb - 1)
+            trest := tv.substr(tb + 1, tv.len() - tb - 1)
+            tb2 := trest.find("|")
+            tout = trest.substr(0, tb2)
+            tcache = trest.substr(tb2 + 1, trest.len() - tb2 - 1)
         end
         d.push(json.MemberRaw("tokens_in", tin))
         d.push(json.MemberRaw("tokens_out", tout))
+        d.push(json.MemberRaw("tokens_cache", tcache))
         days.push(json.Object(d))
         i++
     end
@@ -240,7 +245,7 @@ func list_users(ctx: i64):
     mut items := Vector {} as Vector<str>
     aistore.Lock()
     total := count("SELECT COUNT(*) FROM users WHERE name LIKE ?1 OR email LIKE ?1", one(like))
-    mut rows := aistore.Stmt("SELECT u.id, u.name, u.email, u.created, (SELECT COUNT(*) FROM chats c WHERE c.user_id = u.id), (SELECT COUNT(*) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = u.id AND m.role = 'user'), (SELECT COUNT(*) FROM oauth_grants g WHERE g.user_id = u.id AND g.revoked = 0), (SELECT COUNT(*) FROM mcp_events e WHERE e.user_id = u.id), COALESCE((SELECT MAX(updated) FROM chats c WHERE c.user_id = u.id AND c.device_id = 0), 0), GREATEST(COALESCE((SELECT MAX(updated) FROM chats c WHERE c.user_id = u.id AND c.device_id != 0), 0), COALESCE((SELECT MAX(created) FROM mcp_events e WHERE e.user_id = u.id), 0)), COALESCE((SELECT MAX(created) FROM api_requests r WHERE r.user_id = u.id), 0), (SELECT COUNT(*) FROM api_requests r WHERE r.user_id = u.id), (SELECT COALESCE(SUM(m.tokens_in), 0) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = u.id) + (SELECT COALESCE(SUM(r.tokens_in), 0) FROM api_requests r WHERE r.user_id = u.id), (SELECT COALESCE(SUM(m.tokens_out), 0) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = u.id) + (SELECT COALESCE(SUM(r.tokens_out), 0) FROM api_requests r WHERE r.user_id = u.id), u.last_login, u.logins, (SELECT COUNT(*) FROM message_files f WHERE f.user_id = u.id AND f.kind = 'image'), (SELECT COUNT(*) FROM message_files f WHERE f.user_id = u.id), (SELECT COUNT(*) FROM sessions s WHERE s.user_id = u.id AND s.expires > UNIX_TIMESTAMP()), COALESCE((SELECT s.client_version FROM sessions s WHERE s.user_id = u.id AND s.client = 'agent' AND s.client_version != '' ORDER BY s.last_used DESC LIMIT 1), ''), (SELECT COALESCE(SUM(m.cost_in), 0) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = u.id) + (SELECT COALESCE(SUM(r.cost_in), 0) FROM api_requests r WHERE r.user_id = u.id), (SELECT COALESCE(SUM(m.cost_out), 0) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = u.id) + (SELECT COALESCE(SUM(r.cost_out), 0) FROM api_requests r WHERE r.user_id = u.id), u.policy_free, COALESCE(u.policy_system, ''), (SELECT COUNT(*) FROM telegram_links t WHERE t.user_id = u.id) FROM users u WHERE u.name LIKE ?1 OR u.email LIKE ?1 ORDER BY u.id DESC LIMIT 50 OFFSET " + n(offset as i64), one(like))
+    mut rows := aistore.Stmt("SELECT u.id, u.name, u.email, u.created, (SELECT COUNT(*) FROM chats c WHERE c.user_id = u.id), (SELECT COUNT(*) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = u.id AND m.role = 'user'), (SELECT COUNT(*) FROM oauth_grants g WHERE g.user_id = u.id AND g.revoked = 0), (SELECT COUNT(*) FROM mcp_events e WHERE e.user_id = u.id), COALESCE((SELECT MAX(updated) FROM chats c WHERE c.user_id = u.id AND c.device_id = 0), 0), GREATEST(COALESCE((SELECT MAX(updated) FROM chats c WHERE c.user_id = u.id AND c.device_id != 0), 0), COALESCE((SELECT MAX(created) FROM mcp_events e WHERE e.user_id = u.id), 0)), COALESCE((SELECT MAX(created) FROM api_requests r WHERE r.user_id = u.id), 0), (SELECT COUNT(*) FROM api_requests r WHERE r.user_id = u.id), (SELECT COALESCE(SUM(m.tokens_in + m.cache_read + m.cache_write), 0) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = u.id) + (SELECT COALESCE(SUM(r.tokens_in + r.cache_read + r.cache_write), 0) FROM api_requests r WHERE r.user_id = u.id), (SELECT COALESCE(SUM(m.tokens_out), 0) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = u.id) + (SELECT COALESCE(SUM(r.tokens_out), 0) FROM api_requests r WHERE r.user_id = u.id), u.last_login, u.logins, (SELECT COUNT(*) FROM message_files f WHERE f.user_id = u.id AND f.kind = 'image'), (SELECT COUNT(*) FROM message_files f WHERE f.user_id = u.id), (SELECT COUNT(*) FROM sessions s WHERE s.user_id = u.id AND s.expires > UNIX_TIMESTAMP()), COALESCE((SELECT s.client_version FROM sessions s WHERE s.user_id = u.id AND s.client = 'agent' AND s.client_version != '' ORDER BY s.last_used DESC LIMIT 1), ''), (SELECT COALESCE(SUM(m.cost_in), 0) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = u.id) + (SELECT COALESCE(SUM(r.cost_in), 0) FROM api_requests r WHERE r.user_id = u.id), (SELECT COALESCE(SUM(m.cost_out), 0) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = u.id) + (SELECT COALESCE(SUM(r.cost_out), 0) FROM api_requests r WHERE r.user_id = u.id), u.policy_free, COALESCE(u.policy_system, ''), (SELECT COUNT(*) FROM telegram_links t WHERE t.user_id = u.id), (SELECT COALESCE(SUM(m.cache_read + m.cache_write), 0) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = u.id) + (SELECT COALESCE(SUM(r.cache_read + r.cache_write), 0) FROM api_requests r WHERE r.user_id = u.id) FROM users u WHERE u.name LIKE ?1 OR u.email LIKE ?1 ORDER BY u.id DESC LIMIT 50 OFFSET " + n(offset as i64), one(like))
     until aistore.Next(rows):
         mut m := Vector {} as Vector<str>
         m.push(json.MemberRaw("id", aistore.Text(rows, 0)))
@@ -268,6 +273,7 @@ func list_users(ctx: i64):
         m.push(json.MemberBool("policy_free", aistore.Text(rows, 22) != "0"))
         m.push(json.Member("policy_system", aistore.Text(rows, 23)))
         m.push(json.MemberRaw("telegram", aistore.Text(rows, 24)))
+        m.push(json.MemberRaw("tokens_cache", aistore.Text(rows, 25)))
         items.push(json.Object(m))
     end
     aistore.Finish(rows)

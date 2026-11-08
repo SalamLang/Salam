@@ -310,6 +310,9 @@ function DailyChart({ daily, mode }: { daily: AdminSummary["daily"]; mode: Chart
                 <i className={`swatch ${cb}`} />
                 {fmtNum(vb(hovered))} {t("توکن خروجی", "output tokens")}
               </span>
+              <span>
+                {fmtNum(hovered.tokens_cache || 0)} {t("توکن کش (از ورودی)", "cache tokens (part of input)")}
+              </span>
             </>
           ) : (
             <>
@@ -346,6 +349,7 @@ function DailyChart({ daily, mode }: { daily: AdminSummary["daily"]; mode: Chart
                   <th scope="col">{t("روز", "Day")}</th>
                   <th scope="col">{t("توکن ورودی", "Input tokens")}</th>
                   <th scope="col">{t("توکن خروجی", "Output tokens")}</th>
+                  <th scope="col">{t("از ورودی: کش", "Of input: cache")}</th>
                   <th scope="col">{t("جمع", "Total")}</th>
                 </tr>
               ) : (
@@ -364,6 +368,7 @@ function DailyChart({ daily, mode }: { daily: AdminSummary["daily"]; mode: Chart
                     <td>{fmtDay(d.day)}</td>
                     <td>{fmtNum(va(d))}</td>
                     <td>{fmtNum(vb(d))}</td>
+                    <td>{fmtNum(d.tokens_cache || 0)}</td>
                     <td>{fmtNum(va(d) + vb(d))}</td>
                   </tr>
                 ) : (
@@ -521,6 +526,7 @@ function Users({ picked, onPick, notify }: { picked: Picked; onPick: (p: Picked)
               <th scope="col">API</th>
               <th scope="col">{t("توکن ورودی", "Input tokens")}</th>
               <th scope="col">{t("توکن خروجی", "Output tokens")}</th>
+              <th scope="col">{t("از ورودی: کش", "Of input: cache")}</th>
               <th scope="col">{t("هزینه‌ی ورودی ($)", "Input cost ($)")}</th>
               <th scope="col">{t("هزینه‌ی خروجی ($)", "Output cost ($)")}</th>
               <th scope="col">{t("هزینه‌ی کل ($)", "Total cost ($)")}</th>
@@ -554,6 +560,7 @@ function Users({ picked, onPick, notify }: { picked: Picked; onPick: (p: Picked)
                 <td>{fmtNum(u.api_requests)}</td>
                 <td title={exactTitle(u.tokens_in || 0)}>{fmtCompact(u.tokens_in || 0)}</td>
                 <td title={exactTitle(u.tokens_out || 0)}>{fmtCompact(u.tokens_out || 0)}</td>
+                <td title={exactTitle(u.tokens_cache || 0)}>{fmtCompact(u.tokens_cache || 0)}</td>
                 <td dir="ltr">{(u.cost_in ?? 0) > 0 ? fmtCost(u.cost_in ?? 0) : <span className="muted">-</span>}</td>
                 <td dir="ltr">{(u.cost_out ?? 0) > 0 ? fmtCost(u.cost_out ?? 0) : <span className="muted">-</span>}</td>
                 <td dir="ltr" className="strong">{(u.cost_in ?? 0) + (u.cost_out ?? 0) > 0 ? fmtCost((u.cost_in ?? 0) + (u.cost_out ?? 0)) : <span className="muted">-</span>}</td>
@@ -571,7 +578,7 @@ function Users({ picked, onPick, notify }: { picked: Picked; onPick: (p: Picked)
             ))}
             {!data && !error && (
               <tr>
-                <td colSpan={22} className="empty-cell">
+                <td colSpan={23} className="empty-cell">
                   <span className="list-loading inline" role="status">
                     <span className="spinner" />
                     <span>{t("در حال بارگذاری کاربران…", "Loading users…")}</span>
@@ -581,7 +588,7 @@ function Users({ picked, onPick, notify }: { picked: Picked; onPick: (p: Picked)
             )}
             {data && data.users.length === 0 && !loading && (
               <tr>
-                <td colSpan={22} className="empty-cell">
+                <td colSpan={23} className="empty-cell">
                   {t("کاربری پیدا نشد.", "No users found.")}
                 </td>
               </tr>

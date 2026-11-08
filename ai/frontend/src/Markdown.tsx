@@ -133,16 +133,21 @@ function cellStyle(style: CSSProperties | undefined): CSSProperties | undefined 
 const TABLE_LINE = /^\s*\|?.*\|.*$/;
 const TABLE_RULE = /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$/;
 
+function cellCount(line: string): number {
+  const inner = line.trim().replace(/^\|/, "").replace(/\|$/, "");
+  return inner.split(/(?<!\\)\|/).length;
+}
+
 export function trimPartialTable(text: string): string {
   const boundary = text.lastIndexOf("\n\n");
   const cut = boundary < 0 ? 0 : boundary + 2;
   const tail = text.slice(cut);
   if (tail.includes("```")) return text;
   const lines = tail.split("\n");
-  const first = lines.findIndex((l) => TABLE_LINE.test(l) && l.trim().startsWith("|"));
+  const first = lines.findIndex((l) => TABLE_LINE.test(l) && (l.trim().startsWith("|") || cellCount(l) >= 2));
   if (first < 0) return text;
   const rest = lines.slice(first);
-  if (rest.length >= 2 && TABLE_RULE.test(rest[1])) return text;
+  if (rest.length >= 2 && TABLE_RULE.test(rest[1]) && cellCount(rest[1]) >= cellCount(rest[0])) return text;
   if (rest.length > 2) return text;
   if (rest.length === 2 && !/^[\s|:-]*$/.test(rest[1])) return text;
   return text.slice(0, cut) + lines.slice(0, first).join("\n");
@@ -164,7 +169,11 @@ const components: Components = {
     );
   },
   p: ({ children }) => <p dir="auto">{children}</p>,
-  li: ({ children }) => <li dir="auto">{children}</li>,
+  li: ({ children, className }) => (
+    <li dir="auto" className={className}>
+      {children}
+    </li>
+  ),
   h1: ({ children }) => <h3 dir="auto">{children}</h3>,
   h2: ({ children }) => <h3 dir="auto">{children}</h3>,
   h3: ({ children }) => <h4 dir="auto">{children}</h4>,
@@ -174,13 +183,13 @@ const components: Components = {
     </a>
   ),
   th: ({ children, style }) => (
-    <th dir="auto" style={cellStyle(style)}>
-      {children}
+    <th style={cellStyle(style)}>
+      <div dir="auto">{children}</div>
     </th>
   ),
   td: ({ children, style }) => (
-    <td dir="auto" style={cellStyle(style)}>
-      {children}
+    <td style={cellStyle(style)}>
+      <div dir="auto">{children}</div>
     </td>
   ),
   del: ({ children }) => <del>{children}</del>,

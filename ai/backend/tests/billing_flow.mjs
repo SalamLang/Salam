@@ -98,6 +98,16 @@ const ziBack = await back("zibal", `trackId=${tokenOf(zi.json.url)}&success=1&st
 const afterZi = await api("GET", "/billing/subscription", buyer);
 check("the zibal payment moves the account to the bigger plan", ziBack.status === 302 && afterZi.json.subscription.plan.id === "pro", afterZi.json.subscription);
 
+console.log("the hop page");
+const hop = await api("POST", "/billing/checkout", buyer, { plan: "plus", gateway: "zibal" });
+const hopGo = await fetch(`${API}/billing/pay/zibal/${tokenOf(hop.json.url)}`, { redirect: "manual" });
+check("a pending payment hops on to the gateway start page", hopGo.status === 302 && (hopGo.headers.get("location") ?? "").includes("/start/" + tokenOf(hop.json.url)), hopGo.headers.get("location"));
+const hopBad = await fetch(`${API}/billing/pay/zibal/999999999`, { redirect: "manual" });
+check("an unknown payment does not hop anywhere", hopBad.status === 302 && (hopBad.headers.get("location") ?? "").includes("payment=failed"), hopBad.headers.get("location"));
+await back("zibal", `trackId=${tokenOf(hop.json.url)}&success=0&status=3`);
+const hopDone = await fetch(`${API}/billing/pay/zibal/${tokenOf(hop.json.url)}`, { redirect: "manual" });
+check("a finished payment does not hop to the gateway again", hopDone.status === 302 && (hopDone.headers.get("location") ?? "").includes("payment=failed"), hopDone.headers.get("location"));
+
 console.log("a payment whose callback never arrives");
 const SWEEP = Number(process.env.SWEEP_SECONDS ?? 0);
 if (SWEEP > 0) {

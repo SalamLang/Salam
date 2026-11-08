@@ -40,6 +40,7 @@ mut ZIBAL_BASE := "https://gateway.zibal.ir"
 mut ZIBAL_START := "https://gateway.zibal.ir/start/"
 mut CALLBACK_BASE := "https://ai-api.salamlang.ir"
 mut APP_URL := "https://ai.salamlang.ir"
+mut PAY_URL := ""
 mut SWEEP_MS := 600000
 mut STALE_SECONDS := 600 as i64
 mut FREE_API_HOURLY := 100
@@ -701,7 +702,7 @@ func checkout(ctx: i64):
         aiweb.Fail(ctx, 500, "server", "ثبت پرداخت انجام نشد. دوباره تلاش کنید.")
         ret
     end
-    back := CALLBACK_BASE + "/billing/callback/" + gateway
+    back := (PAY_URL.len() > 0 ? PAY_URL : CALLBACK_BASE) + "/billing/callback/" + gateway
     about := "اشتراک " + p.name + " دستیار سلام"
     mut token := ""
     mut fail := ""
@@ -719,13 +720,37 @@ func checkout(ctx: i64):
     aistore.Lock()
     _u := aistore.Run("UPDATE payments SET token = ?1 WHERE id = ?2", two(token, pid))
     aistore.Unlock()
-    url := gateway == "zarinpal" ? ZARINPAL_START + token : ZIBAL_START + token
+    mut url := start_url(gateway, token)
+    if PAY_URL.len() > 0:
+        url = PAY_URL + "/billing/pay/" + gateway + "/" + token
+    end
     mut m := Vector {} as Vector<str>
     m.push(json.MemberRaw("payment_id", pid))
     m.push(json.Member("gateway", gateway))
     m.push(json.MemberInt("amount", p.price))
     m.push(json.Member("url", url))
     aiweb.Reply(ctx, 200, json.Object(m))
+end
+
+func start_url(gateway: str, token: str): str:
+    ret gateway == "zarinpal" ? ZARINPAL_START + token : ZIBAL_START + token
+end
+
+func pay_hop(ctx: i64):
+    gateway := str.Lower(http.Param(ctx, "gateway"))
+    token := str.Trim(http.Param(ctx, "token"))
+    if not gateway_ok(gateway) or token.len() == 0 or token.len() > 64:
+        redirect(ctx, done_url("failed", ""))
+        ret
+    end
+    aistore.Lock()
+    status := aistore.OneText("SELECT status FROM payments WHERE gateway = ?1 AND token = ?2 ORDER BY id DESC LIMIT 1", two(gateway, token))
+    aistore.Unlock()
+    if status != "pending":
+        redirect(ctx, done_url(status == "paid" ? "ok" : "failed", ""))
+        ret
+    end
+    redirect(ctx, start_url(gateway, token))
 end
 
 func done_url(result: str, plan: str): str:
@@ -972,7 +997,7 @@ func sweeper():
     end
 end
 
-pub func Configure(zarinpal: str, zibal: str, zarinpal_base: str, zibal_base: str, callback_base: str, app_url: str, free_api: int, free_chat: int, sweep_seconds: int):
+pub func Configure(zarinpal: str, zibal: str, zarinpal_base: str, zibal_base: str, callback_base: str, app_url: str, pay_url: str, free_api: int, free_chat: int, sweep_seconds: int):
     ZARINPAL_MERCHANT = str.Trim(zarinpal)
     ZIBAL_MERCHANT = str.Trim(zibal)
     if zarinpal_base.len() > 0:
@@ -988,6 +1013,9 @@ pub func Configure(zarinpal: str, zibal: str, zarinpal_base: str, zibal_base: st
     end
     if app_url.len() > 0:
         APP_URL = str.TrimSuffix(app_url, "/")
+    end
+    if pay_url.len() > 0:
+        PAY_URL = str.TrimSuffix(pay_url, "/")
     end
     if free_api > 0:
         FREE_API_HOURLY = free_api
@@ -1022,6 +1050,7 @@ pub func Routes(r &: router.Router):
     router.Get(r, "/billing/payments", my_payments)
     router.Post(r, "/billing/checkout", checkout)
     router.Get(r, "/billing/callback/:gateway", gateway_return)
+    router.Get(r, "/billing/pay/:gateway/:token", pay_hop)
     router.Get(r, "/admin/subscriptions", admin_subscriptions)
     router.Post(r, "/admin/subscriptions", admin_grant)
     router.Delete(r, "/admin/subscriptions/:id", admin_cancel)

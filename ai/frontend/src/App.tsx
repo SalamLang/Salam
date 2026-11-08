@@ -590,15 +590,6 @@ export function App() {
   };
 
   const busy = messages.some((m) => m.status === "pending");
-  const pending = messages.find((m) => m.role === "assistant" && m.status === "pending");
-  const activePhase: Chat["phase"] | undefined = !pending
-    ? undefined
-    : pending.phase === "writing"
-      ? "writing"
-      : pending.phase === "thinking" || !pending.phase
-        ? "thinking"
-        : "tool";
-  const activeWaiting = tools.calls.some((c) => c.chat === activeId && c.state === "pending");
   const activeChat = chats.find((c) => c.id === activeId);
   const agentChat = isDesktop && (activeChat ? activeChat.agent === true : workspace !== "");
   const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant")?.id;
@@ -957,8 +948,6 @@ export function App() {
 
   const activeProject = projects.find((p) => p.id === projectScope);
   const sidebarChats = route === "projects" ? chats : projectScope ? chats.filter((c) => c.project_id === projectScope) : chats.filter((c) => !c.project_id);
-  const othersCount = chats.filter((c) => !c.project_id).length;
-  const heading = route === "projects" ? t("گفت‌وگوهای اخیر", "Recent chats") : activeProject ? activeProject.name : t("سایر گفت‌وگوها", "Others");
   const title =
     route === "chat"
       ? chats.find((c) => c.id === activeId)?.title ||
@@ -973,30 +962,20 @@ export function App() {
     <div className="app">
       <Sidebar
         user={user}
-        chats={sidebarChats}
         projects={projects}
         activeProject={projectScope}
-        othersCount={othersCount}
-        chatHeading={heading}
-        activeId={route === "chat" ? activeId : null}
         page={route === "admin-chat" ? "admin" : route}
         onNavigate={navigate}
         open={sidebar}
         theme={theme}
         onClose={() => setSidebar(false)}
         onNew={newChatHere}
-        onSelect={(id) => openChat(id)}
-        onRename={rename}
-        onDelete={remove}
         onLogout={logout}
         onToggleTheme={toggleTheme}
         onOpenProjects={() => navigate("/")}
         onOpenProject={openProject}
         onOpenOthers={openOthers}
         onNewProject={() => setProjectDialog({ mode: "create" })}
-        activeBusy={busy}
-        activeWaiting={activeWaiting}
-        activePhase={activePhase}
       />
       <main className="main">
         <header className="topbar">
@@ -1063,6 +1042,8 @@ export function App() {
                 onNewChat={() => openChat(null, false, activeProject.id)}
                 onEdit={() => setProjectDialog({ mode: "edit", project: activeProject })}
                 onDelete={() => removeProject(activeProject)}
+                onRenameChat={rename}
+                onDeleteChat={remove}
               />
             ) : (
               <div className="page">
@@ -1080,6 +1061,8 @@ export function App() {
               chats={chats.filter((c) => !c.project_id)}
               onOpenChat={(id, pid) => openChat(id, false, pid)}
               onNewChat={() => openChat(null, false, "")}
+              onRenameChat={rename}
+              onDeleteChat={remove}
             />
           </div>
         ) : route === "admin-chat" ? (

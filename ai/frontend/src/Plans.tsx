@@ -81,7 +81,7 @@ export function Plans({ notify }: { notify: (msg: string) => void }) {
   const [gateways, setGateways] = useState<Gateway[]>([]);
   const [current, setCurrent] = useState<Subscription | null>(null);
   const [payments, setPayments] = useState<Payment[]>([]);
-  const [gateway, setGateway] = useState<Gateway>("zarinpal");
+  const [gateway, setGateway] = useState<Gateway>("zibal");
   const [busy, setBusy] = useState<PlanId | null>(null);
   const [error, setError] = useState("");
   const [result, setResult] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
@@ -109,6 +109,16 @@ export function Plans({ notify }: { notify: (msg: string) => void }) {
     void load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    const back = (e: PageTransitionEvent) => {
+      if (!e.persisted) return;
+      setBusy(null);
+      void load();
+    };
+    window.addEventListener("pageshow", back);
+    return () => window.removeEventListener("pageshow", back);
+  }, [load]);
 
   const buy = async (plan: Plan) => {
     if (gateways.length === 0) return;
@@ -225,7 +235,7 @@ export function Plans({ notify }: { notify: (msg: string) => void }) {
                 ) : (
                   <button type="button" className={`button wide plan-buy ${featured ? "primary" : "ghost brand"}`} disabled={busy !== null || gateways.length === 0} onClick={() => void buy(p)}>
                     {busy === p.id ? <span className="spinner" /> : null}
-                    {busy === p.id ? t("در حال رفتن به درگاه...", "Going to the gateway...") : gateways.length === 0 ? t("درگاه پرداخت فعال نیست", "No payment gateway available") : t(`خرید با ${GATEWAY_NAMES[gateway]}`, `Buy with ${GATEWAY_NAMES[gateway]}`)}
+                    {busy === p.id ? t("در حال انتقال...", "Redirecting...") : gateways.length === 0 ? t("درگاه پرداخت فعال نیست", "No payment gateway available") : t(`خرید با ${GATEWAY_NAMES[gateway]}`, `Buy with ${GATEWAY_NAMES[gateway]}`)}
                   </button>
                 )}
               </section>

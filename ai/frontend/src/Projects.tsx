@@ -438,6 +438,8 @@ type PageProps = {
   onNewChat: () => void;
   onEdit?: () => void;
   onDelete?: () => void;
+  onRenameChat?: (id: string, title: string) => void;
+  onDeleteChat?: (id: string) => void;
 };
 
 export function ProjectPage({
@@ -447,7 +449,16 @@ export function ProjectPage({
   onNewChat,
   onEdit,
   onDelete,
+  onRenameChat,
+  onDeleteChat,
 }: PageProps) {
+  const [renaming, setRenaming] = useState<string | null>(null);
+  const [draft, setDraft] = useState("");
+  const commit = (id: string) => {
+    const title = draft.trim();
+    if (title && onRenameChat) onRenameChat(id, title);
+    setRenaming(null);
+  };
   const live = chats.filter(
     (c) =>
       c.state === "working" || c.state === "waiting" || c.state === "queued",
@@ -545,29 +556,82 @@ export function ProjectPage({
       ) : (
         <ul className="project-chats project-chats-large">
           {chats.map((c) => (
-            <li key={c.id}>
-              <button
-                type="button"
-                className="project-chat-row"
-                onClick={() => onOpenChat(c.id, project?.id ?? "")}
-              >
-                <span
-                  className={`chat-state ${c.state ?? "idle"}`}
-                  aria-hidden="true"
+            <li key={c.id} className="project-chat-item">
+              {renaming === c.id ? (
+                <input
+                  className="rename"
+                  value={draft}
+                  autoFocus
+                  maxLength={80}
+                  onChange={(e) => setDraft(e.target.value)}
+                  onBlur={() => commit(c.id)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") commit(c.id);
+                    if (e.key === "Escape") setRenaming(null);
+                  }}
                 />
-                <span className="project-chat-main">
-                  <strong dir="auto">{c.title}</strong>
-                  <small>{stateText(c)}</small>
-                </span>
-                {c.shared && c.shared.length > 0 && (
-                  <span className="project-chat-badge">
-                    {t("اشتراکی", "Shared")}
+              ) : (
+                <button
+                  type="button"
+                  className="project-chat-row"
+                  onClick={() => onOpenChat(c.id, project?.id ?? "")}
+                >
+                  <span
+                    className={`chat-state ${c.state ?? "idle"}`}
+                    aria-hidden="true"
+                  />
+                  <span className="project-chat-main">
+                    <strong dir="auto">{c.title}</strong>
+                    <small>{stateText(c)}</small>
                   </span>
-                )}
-                <span className="project-chat-open" aria-hidden="true">
-                  ›
-                </span>
-              </button>
+                  {c.shared && c.shared.length > 0 && (
+                    <span className="project-chat-badge">
+                      {t("اشتراکی", "Shared")}
+                    </span>
+                  )}
+                  <span className="project-chat-open" aria-hidden="true">
+                    ›
+                  </span>
+                </button>
+              )}
+              {(onRenameChat || onDeleteChat) && renaming !== c.id && (
+                <div className="project-chat-actions">
+                  {onRenameChat && (
+                    <button
+                      type="button"
+                      className="icon-button tiny"
+                      aria-label={t("تغییر نام", "Rename")}
+                      onClick={() => {
+                        setDraft(c.title);
+                        setRenaming(c.id);
+                      }}
+                    >
+                      <IconEdit width={15} height={15} />
+                    </button>
+                  )}
+                  {onDeleteChat && (
+                    <button
+                      type="button"
+                      className="icon-button tiny danger"
+                      aria-label={t("حذف گفت‌وگو", "Delete chat")}
+                      onClick={async () => {
+                        const ok = await confirmDialog({
+                          title: t("حذف گفت‌وگو", "Delete chat"),
+                          subject: c.title,
+                          message: t(
+                            "این گفت‌وگو و همه‌ی پیام‌هایش برای همیشه حذف می‌شود و برگرداندنش ممکن نیست.",
+                            "This chat and all its messages will be deleted for good. This cannot be undone.",
+                          ),
+                          confirmLabel: t("حذف", "Delete"),
+                        });
+                        if (ok) onDeleteChat(c.id);
+                      }}
+                    >
+                      <IconTrash width={15} height={15} />
+                    </button>
+                  )}
+                </div>
+              )}
             </li>
           ))}
         </ul>

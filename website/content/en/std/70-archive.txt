@@ -1,9 +1,9 @@
 pkg.en = archive
 pkg.name = archive
 pkg.group = Encoding and data
-pkg.summary = Making and opening zip and tar archives, reading RAR, and gzipping a file.
+pkg.summary = Making and opening zip and tar archives, reading and writing RAR, and gzipping a file.
 pkg.title = The archive package in Salam | zip and tar
-pkg.description = The archive package in Salam: making, listing and extracting zip and tar, reading RAR and gzipping a file, with examples.
+pkg.description = The archive package in Salam: making, listing and extracting zip and tar, reading and writing RAR and gzipping a file, with examples.
 pkg.intro <<
 <p>An archive gathers several files into one. <strong>Zip</strong> compresses each file on its own; <strong>tar</strong> only puts the files one after another and is usually gzipped afterwards (<code>.tar.gz</code>).</p>
 <p>The functions work both in memory and on files. They take the archive data as an address and a length, such as <code>b.data</code> and <code>b.len</code> of a byte buffer.</p>
@@ -14,7 +14,7 @@ pkg.intro <<
 <li><strong>Zip:</strong> no zip64, so archives and entries must stay under 2 GB; only methods 0 (stored) and 8 (DEFLATE) are read, so entries packed with bzip2, LZMA or zstd fail to extract; encrypted entries are refused; the CRC-32 is not checked on extract.</li>
 <li><strong>Zip names and dates:</strong> new zips do not set the UTF-8 flag, so tools that assume the old DOS code page, such as Windows Explorer, may show Persian file names garbled, and every entry is dated 1 January 1980. <code>Entry.mtime</code> is always 0 for zip entries.</li>
 <li><strong>Tar:</strong> names longer than 100 bytes are cut, both when writing and reading, and the ustar prefix field and GNU or PAX long names are not used. Links and other special entries are listed as ordinary files of size 0. New entries get a time of 0, and the mode you set, or 644 for files and 755 for folders when you leave it at 0.</li>
-<li><strong>RAR:</strong> listing works for RAR 4 and 5, but only entries stored without compression can be extracted.</li>
+<li><strong>RAR:</strong> RAR 5 archives are read completely: every compression level, solid archives and the built-in filters, with each entry's CRC-32 checked. For RAR 3 and 4 archives (WinRAR before 5), listing works and entries stored without compression come out, but compressed entries fail with <code>RAR_UNSUPPORTED</code>. Encrypted entries (<code>RAR_ENCRYPTED</code>) and multi-volume archives (<code>RAR_MULTIVOLUME</code>) are refused. New archives are RAR 5 with the files stored, because only WinRAR itself can compress to RAR; any RAR tool opens them.</li>
 </ul>
 
 <p>The guide below shows the usual jobs: zipping a set of files, making and reading a <code>.tar.gz</code>, telling formats apart by their first bytes, and extracting without letting an archive write outside the target folder.</p>
@@ -48,6 +48,11 @@ pkg.intro <<
 {{example.archive-guide-extract}}
 <p>A false result from an extract call is therefore not always a disk error: check the entry names with <code>ZipList</code> or <code>TarList</code> when you need to tell the two apart.</p>
 
+<h2 id="guide-rar">Read and write a RAR</h2>
+<p>Reading goes through <code>RarList</code> and <code>RarExtract</code>, the same way as zip. The sample below is a small solid RAR 5 made by WinRAR: the second file is packed against the first, so <code>RarExtract</code> unpacks both to reach it. Every entry is checked against its CRC-32, and the <code>status</code> says what went wrong instead of returning silent garbage.</p>
+{{example.archive-guide-rar}}
+<p>Making a RAR is simpler: build <code>RarFileInput</code> values and call <code>RarCreate</code> or <code>RarCreateFile</code>. The result is a valid RAR 5 archive with the files stored uncompressed. If you need real compression, use zip, or <code>.tar.gz</code> as shown above. Passwords and multi-volume sets are not supported for reading, and the status codes tell you when you hit one.</p>
+
 <h2 id="guide-which">Which function for which job</h2>
 <div class="table-wrap"><table>
 <thead><tr><th>Job</th><th>Use</th></tr></thead>
@@ -57,7 +62,7 @@ pkg.intro <<
 <tr><td>See what is inside</td><td><code>ZipList</code>, <code>TarList</code>, <code>RarList</code>, then <code>FreeEntries</code></td></tr>
 <tr><td>One file out of an archive</td><td><code>ZipExtractByName</code>, <code>TarExtractByName</code></td></tr>
 <tr><td>Everything into a folder</td><td><code>ZipExtractAll</code>, <code>TarExtractAll</code></td></tr>
-<tr><td>A RAR file</td><td><code>RarList</code>; <code>RarExtractByName</code> only for entries stored without compression</td></tr>
+<tr><td>A RAR file</td><td><code>RarList</code>, <code>RarExtract</code> (or <code>RarExtractByName</code>), <code>RarExtractAll</code>; <code>RarCreate</code> to make one</td></tr>
 <tr><td>Bytes from and to disk</td><td><code>ReadBinaryFile</code>, <code>WriteBinaryFileBuf</code></td></tr>
 </tbody>
 </table></div>
@@ -98,8 +103,30 @@ doc.TarExtractByName = The contents of one tar entry.
 doc.TarExtractAll = Writes every tar entry into the target directory.
 doc.IsRar = True when the data starts with the RAR signature.
 doc.RarList = The entries of a RAR archive.
-doc.RarExtractByName = The contents of a RAR entry that was stored without compression.
-doc.RarExtractAll = Pulls out every RAR entry.
+doc.RarExtractByName = The contents of one RAR entry, found by its exact name. <code>ok</code> is false when it is missing, unsupported, encrypted or damaged; use <code>RarExtract</code> to learn which.
+doc.RarExtractAll = Pulls out every RAR entry, never writing outside the target directory.
+doc.RarFileInput = One file to put in a RAR.
+doc.RarFileInput.name = The name inside the archive; a directory name ends with <code>/</code>. Use <code>/</code> between folders, never <code>\</code>.
+doc.RarFileInput.data_ptr = The address of the contents.
+doc.RarFileInput.data_len = The length of the contents.
+doc.RarFileInput.is_dir = True for a directory entry; it has no contents.
+doc.RarFileInput.mtime = The modification time in seconds since the Unix epoch, or 0 to leave it out.
+doc.MakeRarFileInput = Makes one RAR input.
+doc.RarCreate = Builds a RAR 5 archive in memory. The files are stored without compression, with a CRC-32 each, and any RAR tool can open the result.
+doc.RarCreateFile = Writes the RAR 5 archive to disk and returns false when it cannot.
+doc.RarExtract = The contents of one RAR entry, found by its exact name. <code>status</code> is set to one of the <code>RAR_</code> codes: <code>RAR_OK</code> on success, otherwise the reason, and the buffer is empty. <code>max</code> caps the unpacked size, or 0 for no cap.
+doc.RarExtractByNameMax = Same as <code>RarExtractByName</code>, but <code>ok</code> becomes false when the entry is larger than <code>max</code> bytes, which is checked before anything is unpacked.
+doc.RarExtractAllStatus = Same as <code>RarExtractAll</code>, but returns how many entries were written and sets <code>status</code> to the first problem it met. An entry whose name would leave the target directory is skipped and reported as <code>RAR_UNSAFE_PATH</code>.
+doc.RarStatusText = A short English description of a <code>RAR_</code> status code.
+doc.RAR_OK = Status: the entry was unpacked and its checksum matched.
+doc.RAR_NOT_FOUND = Status: no entry has that name.
+doc.RAR_UNSUPPORTED = Status: a RAR version or method this package cannot unpack, such as a compressed entry in a RAR 3 or 4 archive.
+doc.RAR_ENCRYPTED = Status: the entry or the headers are encrypted; passwords are not supported.
+doc.RAR_CORRUPT = Status: the data is damaged or cut short.
+doc.RAR_BAD_CRC = Status: the entry unpacked but its CRC-32 does not match the one in the archive.
+doc.RAR_MULTIVOLUME = Status: the entry continues in another volume; multi-volume archives are not supported.
+doc.RAR_TOO_BIG = Status: the entry is larger than the <code>max</code> given, or needs more memory than the package will allocate.
+doc.RAR_UNSAFE_PATH = Status: the entry name would write outside the target directory, so it was skipped.
 doc.GzipCompressFile = Gzips a file.
 doc.GzipDecompressFile = Decompresses a gzip file.
 doc.ReadBinaryFile = Reads every byte of a file into a buffer.
@@ -125,6 +152,28 @@ ex.IsRar = archive-Zip
 ex.RarList = archive-Zip
 ex.RarExtractByName = archive-Zip
 ex.RarExtractAll = archive-Zip
+ex.RarFileInput = archive-Rar
+ex.RarFileInput.name = archive-Rar
+ex.RarFileInput.data_ptr = archive-Rar
+ex.RarFileInput.data_len = archive-Rar
+ex.RarFileInput.is_dir = archive-Rar
+ex.RarFileInput.mtime = archive-Rar
+ex.MakeRarFileInput = archive-Rar
+ex.RarCreate = archive-Rar
+ex.RarCreateFile = archive-Rar
+ex.RarExtract = archive-Rar
+ex.RarExtractByNameMax = archive-Rar
+ex.RarExtractAllStatus = archive-Rar
+ex.RarStatusText = archive-Rar
+ex.RAR_OK = archive-Rar
+ex.RAR_NOT_FOUND = archive-Rar
+ex.RAR_UNSUPPORTED = archive-Rar
+ex.RAR_ENCRYPTED = archive-Rar
+ex.RAR_CORRUPT = archive-Rar
+ex.RAR_BAD_CRC = archive-Rar
+ex.RAR_MULTIVOLUME = archive-Rar
+ex.RAR_TOO_BIG = archive-Rar
+ex.RAR_UNSAFE_PATH = archive-Rar
 ex.ReadBinaryFile = archive-Zip
 ex.TarFileInput = archive-Tar
 ex.TarFileInput.mode = archive-Tar

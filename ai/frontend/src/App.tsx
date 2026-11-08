@@ -13,7 +13,7 @@ import { QueuePanel } from "./Queue";
 import { Connect } from "./Connect";
 import { Connections, TelegramLink, integrationsLoader } from "./Telegram";
 import { OAuthCallback, providerFromPath } from "./OAuthCallback";
-import { agent, isDesktop, saveMode, savedMode, savedWorkspace, saveWorkspace, type AgentMode } from "./desktop";
+import { agent, isDesktop, saveMode, savedMode, savedWorkspace, saveWorkspace, mention, type AgentMode } from "./desktop";
 import { Keys } from "./Keys";
 import { announce, announceGuest } from "./Notify";
 import { Plans } from "./Plans";
@@ -594,6 +594,8 @@ export function App() {
   const busy = messages.some((m) => m.status === "pending");
   const activeChat = chats.find((c) => c.id === activeId);
   const agentChat = isDesktop && (activeChat ? activeChat.agent === true : workspace !== "");
+  const chatElsewhere = activeChat?.agent === true && tools.info?.device !== null && tools.info?.device !== undefined && String(activeChat.device_id) !== tools.info.device.id;
+  const mentionRoot = agentChat && !chatElsewhere ? (activeChat ? activeChat.workspace || "" : workspace) : "";
   const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant")?.id;
   const callsFor = (mid: number) => tools.calls.filter((c) => c.chat === activeId && (c.mid === mid || (c.mid === undefined && mid === lastAssistant)));
   const agentVersion = tools.info?.version ?? "";
@@ -1149,6 +1151,7 @@ export function App() {
               autoFocus={!activeId}
               draft={draft}
               onDraftUsed={dropDraft}
+              workspace={mentionRoot}
               placeholder={agentChat ? t("بگویید روی این پروژه چه کاری انجام شود…", "Tell me what to do in this project…") : undefined}
               note={agentChat ? t("دستیار پیش از تغییر فایل یا اجرای فرمان از شما اجازه می‌گیرد، مگر حالت خودکار یا «همه‌چیز» را انتخاب کنید.", "The assistant asks before changing files or running commands, unless you choose automatic or \"everything\" mode.") : undefined}
               bar={
@@ -1161,6 +1164,7 @@ export function App() {
                     mode={mode}
                     onPick={pickWorkspace}
                     onClear={() => {
+                      if (workspace) mention.close(workspace).catch(() => {});
                       setWorkspace("");
                       saveWorkspace("");
                     }}

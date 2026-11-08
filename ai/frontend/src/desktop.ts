@@ -85,6 +85,39 @@ export const agent = {
     call<NotifyPrefs>("agent_set_notify_prefs", { prefs }),
 };
 
+export type MentionHit = {
+  path: string;
+  is_dir: boolean;
+  name_at: number;
+  ranges: [number, number][];
+};
+
+export type MentionReply = {
+  hits: MentionHit[];
+  indexing: boolean;
+  count: number;
+  revision: number;
+  stale: boolean;
+};
+
+export const mention = {
+  open: (root: string) => call<unknown>("ws_index_open", { root }),
+  close: (root: string) => call<void>("ws_index_close", { root }),
+  search: (root: string, query: string, limit = 50) =>
+    call<MentionReply>("ws_search", { root, query, limit }),
+  picked: (root: string, path: string) =>
+    call<void>("ws_mention_picked", { root, path }),
+  onUpdated: (handler: () => void): (() => void) => {
+    if (salam) return salam.listen("ws-index-updated", () => handler());
+    const sub: Promise<UnlistenFn> = listen("ws-index-updated", () =>
+      handler(),
+    );
+    return () => {
+      sub.then((off) => off()).catch(() => {});
+    };
+  },
+};
+
 const EXTERNAL = /^(https?:|mailto:)/i;
 
 export function openExternal(url: string): void {

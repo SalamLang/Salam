@@ -7,6 +7,7 @@ import { t } from "./i18n";
 import { autoDir } from "./dir";
 import { toPersianDigits } from "./theme";
 import { pushToast } from "./Toasts";
+import { MentionPopup, useMention, type Trigger } from "./Mention";
 import { useVoiceInput, VoiceBar, VoiceButton } from "./Voice";
 
 type Props = {
@@ -22,6 +23,7 @@ type Props = {
   note?: string;
   draft?: string;
   onDraftUsed?: () => void;
+  workspace?: string;
 };
 
 // The server caps a message at 12000 *bytes* (Salam strings are UTF-8), so a
@@ -51,7 +53,7 @@ function clipboardFiles(data: DataTransfer): File[] {
   return out;
 }
 
-export function Composer({ busy, disabled, onSend, onStop, onQueue, queueing, autoFocus, bar, placeholder, note, draft, onDraftUsed }: Props) {
+export function Composer({ busy, disabled, onSend, onStop, onQueue, queueing, autoFocus, bar, placeholder, note, draft, onDraftUsed, workspace }: Props) {
   const [text, setText] = useState(draft ?? "");
   const [files, setFiles] = useState<Pending[]>([]);
   const [problem, setProblem] = useState("");
@@ -59,7 +61,21 @@ export function Composer({ busy, disabled, onSend, onStop, onQueue, queueing, au
   const [sending, setSending] = useState(false);
   const ref = useRef<HTMLTextAreaElement>(null);
   const picker = useRef<HTMLInputElement>(null);
+  const [caret, setCaret] = useState(0);
   const caps = useCapabilities();
+  const applyMention = (trigger: Trigger, insert: string) => {
+    const next = text.slice(0, trigger.start) + insert + text.slice(trigger.end);
+    const at = trigger.start + insert.length;
+    setText(next);
+    setCaret(at);
+    requestAnimationFrame(() => {
+      const el = ref.current;
+      if (!el) return;
+      el.focus();
+      el.setSelectionRange(at, at);
+    });
+  };
+  const mention = useMention(workspace ?? "", text, caret, applyMention);
   const hint = placeholder || t("پرسش خود را درباره‌ی زبان سلام بنویسید…", "Ask anything about the Salam language…");
 
   useEffect(() => {
@@ -238,6 +254,7 @@ export function Composer({ busy, disabled, onSend, onStop, onQueue, queueing, au
   };
 
   const onKey = (e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (mention.onKey(e)) return;
     if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing && matchMedia("(pointer: fine)").matches) {
       e.preventDefault();
       send();
@@ -285,6 +302,7 @@ export function Composer({ busy, disabled, onSend, onStop, onQueue, queueing, au
       onDrop={canAttach ? onDrop : undefined}
     >
       {bar}
+      <MentionPopup state={mention} id="mention-list" />
       <form
         className="composer"
         onSubmit={(e) => {
@@ -326,8 +344,13 @@ export function Composer({ busy, disabled, onSend, onStop, onQueue, queueing, au
             rows={1}
             value={text}
             placeholder={hint}
-            onChange={(e) => setText(e.target.value)}
+            onChange={(e) => {
+              setText(e.target.value);
+              setCaret(e.target.selectionStart ?? e.target.value.length);
+            }}
+            onSelect={(e) => setCaret(e.currentTarget.selectionStart ?? 0)}
             onKeyDown={onKey}
+            {...(mention.active ? { role: "combobox", "aria-expanded": true, "aria-controls": "mention-list", "aria-autocomplete": "list" as const, "aria-activedescendant": `mention-list-${mention.index}` } : {})}
             onPaste={canAttach ? onPaste : undefined}
             aria-label={t("پیام", "Message")}
           />

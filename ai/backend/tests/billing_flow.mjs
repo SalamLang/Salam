@@ -43,11 +43,11 @@ const back = (gateway, query) => fetch(`${API}/billing/callback/${gateway}?${que
 console.log("plans");
 const plans = await api("GET", "/plans");
 const ids = (plans.json?.plans ?? []).map((p) => p.id);
-check("the four plans are listed", plans.res.status === 200 && ids.join(",") === "free,plus,pro,unlimited", ids);
+check("the six plans are listed", plans.res.status === 200 && ids.join(",") === "free,plus,pro,unlimited,unlimited2,unlimited3", ids);
 const priced = Object.fromEntries((plans.json?.plans ?? []).map((p) => [p.id, p.price]));
-check("the prices are 0, 3, 6 and 30 million toman", priced.free === 0 && priced.plus === 3000000 && priced.pro === 6000000 && priced.unlimited === 30000000, priced);
+check("the prices are 0, 3, 6 and 30 million toman, and the free plan runs one request at a time", priced.free === 0 && priced.plus === 3000000 && priced.pro === 6000000 && priced.unlimited === 30000000 && plans.json.plans.find((p) => p.id === "free").parallel === 1, priced);
 const unlimited = plans.json.plans.find((p) => p.id === "unlimited");
-check("the unlimited plan has no daily limit", unlimited.api_daily === 0 && unlimited.chat_daily === 0 && unlimited.parallel === 0 && unlimited.days === 30, unlimited);
+check("the unlimited plan has no daily limit", unlimited.api_daily === 0 && unlimited.chat_daily === 0 && unlimited.parallel === 1 && unlimited.days === 30, unlimited);
 check("both gateways are on", (plans.json.gateways ?? []).includes("zarinpal") && plans.json.gateways.includes("zibal"), plans.json.gateways);
 
 console.log("a new account is free");

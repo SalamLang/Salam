@@ -46,11 +46,34 @@ func _rar_free_name(s: str):
     end
 end
 
+func _rar_free_blobs(files &: Vector<_RarFile>):
+    repeat files.len() in i:
+        fl := files.get(i)
+        if fl.salt != null:
+            mem.Free(fl.salt as void*)
+        end
+        if fl.iv != null:
+            mem.Free(fl.iv as void*)
+        end
+        if fl.chk != null:
+            mem.Free(fl.chk as void*)
+        end
+    end
+end
+
 func _rar_free_files(files &: Vector<_RarFile>):
+    _rar_free_blobs(files)
     repeat files.len() in i:
         _rar_free_name(files.get(i).name)
     end
     files.free()
+end
+
+func _rar_close_arc(a &: _RarArc):
+    mem.Free(a.hkey as void*)
+    mem.Free(a.kcache as void*)
+    a.hkey = null
+    a.kcache = null
 end
 
 func _rar_u32(p: u8*, off: int): i64:
@@ -233,227 +256,428 @@ func _rar4_name(p: u8*, off: int, size: int, unicode: bool, winsep: bool): str:
     ret s2
 end
 
+func _rar_align16(v: int): int:
+    ret (v + 15) & (~15)
+end
+
+func _rar5_one(a &: _RarArc, hp: u8*, hn: int, hoff: int, pos: int, disk0: int, next &: int): bool:
+    mut l := 0
+    hsize := _rar_vint(hp, hoff + 4, hn, l)
+    if l == 0 or hsize < 2:
+        ret false
+    end
+    hstart := hoff + 4 + l
+    if (hstart as i64) + hsize > (hn as i64):
+        ret false
+    end
+    hend := hstart + (hsize as int)
+    mut disk := disk0
+    if disk == 0:
+        disk = hend - hoff
+    end
+    mut cur := hstart
+    htype := _rar_vint(hp, cur, hn, l) as int
+    cur += l
+    hflags := _rar_vint(hp, cur, hn, l) as int
+    cur += l
+    mut extra_size := 0
+    if (hflags & 1) != 0:
+        extra_size = _rar_vint(hp, cur, hn, l) as int
+        cur += l
+    end
+    mut data_size := 0 as i64
+    if (hflags & 2) != 0:
+        data_size = _rar_vint(hp, cur, hn, l)
+        cur += l
+    end
+    if htype == 4:
+        ev := _rar_vint(hp, cur, hn, l)
+        cur += l
+        ef := _rar_vint(hp, cur, hn, l) as int
+        cur += l
+        if ev != 0 or cur + 17 > hend:
+            a.bad_password = true
+            ret false
+        end
+        if a.password.len() == 0:
+            a.enc_headers = true
+            ret false
+        end
+        lg2 := hp[cur] as int
+        salt := _poff(hp, cur + 1)
+        mut chk := null as u8*
+        if (ef & 1) != 0 and cur + 29 <= hend:
+            chk = _poff(hp, cur + 17)
+        end
+        key := mem.AllocateZeroed(64 as u64) as u8*
+        hk := mem.AllocateZeroed(64 as u64) as u8*
+        if not _rar5_check(a.password, salt, lg2, chk, key, hk):
+            a.bad_password = true
+            mem.Free(key as void*)
+            mem.Free(hk as void*)
+            ret false
+        end
+        mem.Free(hk as void*)
+        a.hkey = key
+        next = pos + disk
+        ret true
+    end
+    if htype == 5:
+        ret false
+    end
+    if htype == 1:
+        af := _rar_vint(hp, cur, hn, l) as int
+        if (af & 1) != 0:
+            a.multi = true
+        end
+    else htype == 2:
+        ff := _rar_vint(hp, cur, hn, l) as int
+        cur += l
+        mut unp := _rar_vint(hp, cur, hn, l)
+        cur += l
+        _rar_vint(hp, cur, hn, l)
+        cur += l
+        mut mtime := 0 as i64
+        if (ff & 2) != 0:
+            mtime = _rar_u32(hp, cur)
+            cur += 4
+        end
+        mut crc := 0 as u32
+        mut has_crc := false
+        if (ff & 4) != 0:
+            crc = _rar_u32(hp, cur) as u32
+            has_crc = true
+            cur += 4
+        end
+        ci := _rar_vint(hp, cur, hn, l) as int
+        cur += l
+        _rar_vint(hp, cur, hn, l)
+        cur += l
+        nl := _rar_vint(hp, cur, hn, l) as int
+        cur += l
+        if cur + nl > hend:
+            ret false
+        end
+        name := _rar_str(hp, cur, nl)
+        if (ff & 8) != 0:
+            unp = -1 as i64
+        end
+        mut enc := false
+        mut redirect := false
+        mut kdf := 0
+        mut cflags := 0
+        mut salt := null as u8*
+        mut iv := null as u8*
+        mut chk := null as u8*
+        mut xp := hend - extra_size
+        if extra_size > 0 and xp >= cur + nl:
+            until xp < hend:
+                rs := _rar_vint(hp, xp, hn, l) as int
+                if l == 0 or rs <= 0:
+                    break
+                end
+                rstart := xp + l
+                rend := rstart + rs
+                if rend > hend:
+                    break
+                end
+                mut rl := 0
+                rtype := _rar_vint(hp, rstart, hn, rl) as int
+                mut rc := rstart + rl
+                if rtype == 1:
+                    enc = true
+                    ev := _rar_vint(hp, rc, hn, rl)
+                    rc += rl
+                    cf := _rar_vint(hp, rc, hn, rl) as int
+                    rc += rl
+                    if ev == 0 and rc + 33 <= rend:
+                        cflags = cf
+                        kdf = hp[rc] as int
+                        salt = _rar_blob(hp, rc + 1, 16)
+                        iv = _rar_blob(hp, rc + 17, 16)
+                        if (cf & 1) != 0 and rc + 45 <= rend:
+                            chk = _rar_blob(hp, rc + 33, 12)
+                        end
+                    end
+                else rtype == 5:
+                    redirect = true
+                else rtype == 3:
+                    tf := _rar_vint(hp, rc, hn, rl) as int
+                    rc += rl
+                    if (tf & 2) != 0:
+                        if (tf & 1) != 0:
+                            mtime = _rar_u32(hp, rc)
+                        else:
+                            mtime = _rar_filetime(_rar_u32(hp, rc) | (_rar_u32(hp, rc + 4) << 32))
+                        end
+                    end
+                end
+                xp = rend
+            end
+        end
+        ver := ci & 0x3f
+        dlog := (ci >> 10) & 0x1f
+        base := (131072 as i64) << dlog
+        dict := base + (base >> 5) * (((ci >> 15) & 31) as i64)
+        mut dc := 64
+        if ver == 1:
+            dc = 80
+        end
+        a.files.push(_RarFile {
+            name = name
+            unp_size = unp
+            pack_size = data_size
+            data_off = pos + disk
+            crc = crc
+            has_crc = has_crc
+            mtime = mtime
+            is_dir = (ff & 1) != 0
+            solid = ((ci >> 6) & 1) != 0
+            method = (ci >> 7) & 7
+            ver = ver
+            dict = dict
+            encrypted = enc
+            split = (hflags & 0x18) != 0
+            redirect = redirect
+            dc = dc
+            crypt = enc ? 5 : 0
+            kdf = kdf
+            cflags = cflags
+            salt = salt
+            iv = iv
+            chk = chk
+        })
+    end
+    next = pos + disk + (data_size as int)
+    if data_size < 0 or next < pos + disk:
+        ret false
+    end
+    ret true
+end
+
 func _rar5_scan(a &: _RarArc):
     p := a.p
     n := a.n
     mut pos := _RAR5_SIG_LEN
     until pos + 7 <= n:
-        mut l := 0
-        hsize := _rar_vint(p, pos + 4, n, l)
-        if l == 0 or hsize < 2:
-            break
-        end
-        hstart := pos + 4 + l
-        if (hstart as i64) + hsize > (n as i64):
-            break
-        end
-        hend := hstart + (hsize as int)
-        mut cur := hstart
-        htype := _rar_vint(p, cur, n, l) as int
-        cur += l
-        hflags := _rar_vint(p, cur, n, l) as int
-        cur += l
-        mut extra_size := 0
-        if (hflags & 1) != 0:
-            extra_size = _rar_vint(p, cur, n, l) as int
-            cur += l
-        end
-        mut data_size := 0 as i64
-        if (hflags & 2) != 0:
-            data_size = _rar_vint(p, cur, n, l)
-            cur += l
-        end
-        if htype == 4:
-            a.enc_headers = true
-            break
-        end
-        if htype == 5:
-            break
-        end
-        if htype == 1:
-            af := _rar_vint(p, cur, n, l) as int
-            if (af & 1) != 0:
-                a.multi = true
-            end
-        else htype == 2:
-            ff := _rar_vint(p, cur, n, l) as int
-            cur += l
-            mut unp := _rar_vint(p, cur, n, l)
-            cur += l
-            _rar_vint(p, cur, n, l)
-            cur += l
-            mut mtime := 0 as i64
-            if (ff & 2) != 0:
-                mtime = _rar_u32(p, cur)
-                cur += 4
-            end
-            mut crc := 0 as u32
-            mut has_crc := false
-            if (ff & 4) != 0:
-                crc = _rar_u32(p, cur) as u32
-                has_crc = true
-                cur += 4
-            end
-            ci := _rar_vint(p, cur, n, l) as int
-            cur += l
-            _rar_vint(p, cur, n, l)
-            cur += l
-            nl := _rar_vint(p, cur, n, l) as int
-            cur += l
-            if cur + nl > hend:
+        mut hp := p
+        mut hn := n
+        mut hoff := pos
+        mut disk := 0
+        mut tmp := null as u8*
+        if a.hkey != null:
+            if pos + 32 > n:
                 break
             end
-            name := _rar_str(p, cur, nl)
-            if (ff & 8) != 0:
-                unp = -1 as i64
+            first := mem.AllocateZeroed(32 as u64) as u8*
+            mut ka := _aes_new(a.hkey, 32)
+            _aes_cbc_decrypt(ka, _poff(p, pos), _poff(p, pos + 16), first, 16)
+            mut vl := 0
+            hs := _rar_vint(first, 4, 16, vl)
+            mem.Free(first as void*)
+            if vl == 0 or hs < 2 or hs > 2097152:
+                a.bad_password = true
+                _aes_free(ka)
+                break
             end
-            mut enc := false
-            mut redirect := false
-            mut xp := hend - extra_size
-            if extra_size > 0 and xp >= cur + nl:
-                until xp < hend:
-                    rs := _rar_vint(p, xp, n, l) as int
-                    if l == 0 or rs <= 0:
-                        break
-                    end
-                    rstart := xp + l
-                    rend := rstart + rs
-                    if rend > hend:
-                        break
-                    end
-                    mut rl := 0
-                    rtype := _rar_vint(p, rstart, n, rl) as int
-                    mut rc := rstart + rl
-                    if rtype == 1:
-                        enc = true
-                    else rtype == 5:
-                        redirect = true
-                    else rtype == 3:
-                        tf := _rar_vint(p, rc, n, rl) as int
-                        rc += rl
-                        if (tf & 2) != 0:
-                            if (tf & 1) != 0:
-                                mtime = _rar_u32(p, rc)
-                            else:
-                                mtime = _rar_filetime(_rar_u32(p, rc) | (_rar_u32(p, rc + 4) << 32))
-                            end
-                        end
-                    end
-                    xp = rend
-                end
+            total := _rar_align16(4 + vl + (hs as int))
+            if pos + 16 + total > n:
+                a.bad_password = true
+                _aes_free(ka)
+                break
             end
-            ver := ci & 0x3f
-            dlog := (ci >> 10) & 0x1f
-            base := (131072 as i64) << dlog
-            dict := base + (base >> 5) * (((ci >> 15) & 31) as i64)
-            mut dc := 64
-            if ver == 1:
-                dc = 80
+            tmp = mem.AllocateZeroed((total + 16) as u64) as u8*
+            _aes_cbc_decrypt(ka, _poff(p, pos), _poff(p, pos + 16), tmp, total)
+            _aes_free(ka)
+            hp = tmp
+            hn = total
+            hoff = 0
+            disk = 16 + total
+            hend := 4 + vl + (hs as int)
+            if _rar_crc(_poff(tmp, 4) as void*, hend - 4) != (_rar_u32(tmp, 0) as u32):
+                a.bad_password = true
+                mem.Free(tmp as void*)
+                break
             end
-            a.files.push(_RarFile {
-                name = name
-                unp_size = unp
-                pack_size = data_size
-                data_off = hend
-                crc = crc
-                has_crc = has_crc
-                mtime = mtime
-                is_dir = (ff & 1) != 0
-                solid = ((ci >> 6) & 1) != 0
-                method = (ci >> 7) & 7
-                ver = ver
-                dict = dict
-                encrypted = enc
-                split = (hflags & 0x18) != 0
-                redirect = redirect
-                dc = dc
-            })
         end
-        pos = hend + (data_size as int)
-        if data_size < 0 or pos < hend:
+        mut next := 0
+        ok := _rar5_one(a, hp, hn, hoff, pos, disk, next)
+        mem.Free(tmp as void*)
+        if not ok:
             break
         end
+        pos = next
     end
+end
+
+func _rar4_one(a &: _RarArc, hp: u8*, hn: int, hoff: int, pos: int, disk0: int, next &: int): bool:
+    htype := hp[hoff + 2] as int
+    hflags := (hp[hoff + 3] as int) | ((hp[hoff + 4] as int) << 8)
+    hsize := (hp[hoff + 5] as int) | ((hp[hoff + 6] as int) << 8)
+    if hsize < 7 or hoff + hsize > hn:
+        ret false
+    end
+    mut disk := disk0
+    if disk == 0:
+        disk = hsize
+    end
+    if htype == 0x7b:
+        ret false
+    end
+    if htype == 0x73:
+        if (hflags & 0x0080) != 0:
+            if a.password.len() == 0:
+                a.enc_headers = true
+                ret false
+            end
+            a.h4 = true
+        end
+        if (hflags & 1) != 0:
+            a.multi = true
+        end
+    end
+    if htype == 0x74 and hsize >= 32:
+        f := hoff + 7
+        mut pack := _rar_u32(hp, f)
+        mut unp := _rar_u32(hp, f + 4)
+        host := hp[f + 8] as int
+        crc := _rar_u32(hp, f + 9) as u32
+        ftime := _rar_u32(hp, f + 13)
+        ver := hp[f + 17] as int
+        method := hp[f + 18] as int
+        nsize := (hp[f + 19] as int) | ((hp[f + 20] as int) << 8)
+        attr := _rar_u32(hp, f + 21)
+        mut cur := f + 25
+        if (hflags & 0x100) != 0 and cur + 8 <= hoff + hsize:
+            pack = pack | (_rar_u32(hp, cur) << 32)
+            unp = unp | (_rar_u32(hp, cur + 4) << 32)
+            cur += 8
+        end
+        if cur + nsize > hoff + hsize:
+            ret false
+        end
+        winsep := host <= 2
+        name := _rar4_name(hp, cur, nsize, (hflags & 0x200) != 0, winsep)
+        mut salt := null as u8*
+        if (hflags & 0x400) != 0 and cur + nsize + 8 <= hoff + hsize:
+            salt = _rar_blob(hp, cur + nsize, 8)
+        end
+        isdir := (hflags & 0xE0) == 0xE0
+        wl := (hflags >> 5) & 7
+        enc4 := (hflags & 0x04) != 0
+        a.files.push(_RarFile {
+            name = name
+            unp_size = unp
+            pack_size = pack
+            data_off = pos + disk
+            crc = crc
+            has_crc = true
+            mtime = _rar_dos_time(ftime)
+            is_dir = isdir
+            solid = (hflags & 0x10) != 0
+            method = method - 0x30
+            ver = ver
+            dict = (65536 as i64) << wl
+            encrypted = enc4
+            split = (hflags & 0x03) != 0
+            redirect = host == 3 and (attr & 0xF000) == 0xA000
+            dc = 0
+            crypt = enc4 ? 3 : 0
+            kdf = 0
+            cflags = 0
+            salt = salt
+            iv = null
+            chk = null
+        })
+        if (pos as i64) + (disk as i64) + pack > (a.n as i64):
+            ret false
+        end
+        next = pos + disk + (pack as int)
+        ret true
+    end
+    mut add := 0 as i64
+    if (hflags & 0x8000) != 0 and hoff + 11 <= hn:
+        add = _rar_u32(hp, hoff + 7)
+    end
+    if (pos as i64) + (disk as i64) + add > (a.n as i64):
+        ret false
+    end
+    next = pos + disk + (add as int)
+    ret true
 end
 
 func _rar4_scan(a &: _RarArc):
     p := a.p
     n := a.n
     mut pos := _RAR4_SIG_LEN
+    last_salt := mem.AllocateZeroed(16 as u64) as u8*
+    mut have_key := false
+    key := mem.AllocateZeroed(32 as u64) as u8*
+    iv := mem.AllocateZeroed(32 as u64) as u8*
     until pos + 7 <= n:
-        htype := p[pos + 2] as int
-        hflags := (p[pos + 3] as int) | ((p[pos + 4] as int) << 8)
-        hsize := (p[pos + 5] as int) | ((p[pos + 6] as int) << 8)
-        if hsize < 7 or pos + hsize > n:
+        mut hp := p
+        mut hn := n
+        mut hoff := pos
+        mut disk := 0
+        mut tmp := null as u8*
+        if a.h4:
+            if pos + 8 + 16 > n:
+                break
+            end
+            salt := _poff(p, pos)
+            mut same := have_key
+            if same:
+                repeat 8 in i:
+                    if last_salt[i] != salt[i]:
+                        same = false
+                    end
+                end
+            end
+            if not same:
+                _rar3_kdf(a.password, salt, key, iv)
+                repeat 8 in i:
+                    last_salt[i] = salt[i]
+                end
+                have_key = true
+            end
+            mut ka := _aes_new(key, 16)
+            first := mem.AllocateZeroed(32 as u64) as u8*
+            _aes_cbc_decrypt(ka, iv, _poff(p, pos + 8), first, 16)
+            hs := (first[5] as int) | ((first[6] as int) << 8)
+            mem.Free(first as void*)
+            if hs < 7 or hs > 65535:
+                a.bad_password = true
+                _aes_free(ka)
+                break
+            end
+            total := _rar_align16(hs)
+            if pos + 8 + total > n:
+                a.bad_password = true
+                _aes_free(ka)
+                break
+            end
+            tmp = mem.AllocateZeroed((total + 16) as u64) as u8*
+            _aes_cbc_decrypt(ka, iv, _poff(p, pos + 8), tmp, total)
+            _aes_free(ka)
+            hp = tmp
+            hn = total
+            hoff = 0
+            disk = 8 + total
+            if (_rar_crc(_poff(tmp, 2) as void*, hs - 2) & (0xffff as u32)) != ((_rar_u32(tmp, 0) & 0xffff) as u32):
+                a.bad_password = true
+                mem.Free(tmp as void*)
+                break
+            end
+        end
+        mut next := 0
+        ok := _rar4_one(a, hp, hn, hoff, pos, disk, next)
+        mem.Free(tmp as void*)
+        if not ok:
             break
         end
-        if htype == 0x7b:
-            break
-        end
-        if htype == 0x73:
-            if (hflags & 0x0080) != 0:
-                a.enc_headers = true
-                break
-            end
-            if (hflags & 1) != 0:
-                a.multi = true
-            end
-        end
-        if htype == 0x74 and hsize >= 32:
-            f := pos + 7
-            mut pack := _rar_u32(p, f)
-            mut unp := _rar_u32(p, f + 4)
-            host := p[f + 8] as int
-            crc := _rar_u32(p, f + 9) as u32
-            ftime := _rar_u32(p, f + 13)
-            ver := p[f + 17] as int
-            method := p[f + 18] as int
-            nsize := (p[f + 19] as int) | ((p[f + 20] as int) << 8)
-            attr := _rar_u32(p, f + 21)
-            mut cur := f + 25
-            if (hflags & 0x100) != 0 and cur + 8 <= pos + hsize:
-                pack = pack | (_rar_u32(p, cur) << 32)
-                unp = unp | (_rar_u32(p, cur + 4) << 32)
-                cur += 8
-            end
-            if cur + nsize > pos + hsize:
-                break
-            end
-            winsep := host <= 2
-            name := _rar4_name(p, cur, nsize, (hflags & 0x200) != 0, winsep)
-            isdir := (hflags & 0xE0) == 0xE0
-            wl := (hflags >> 5) & 7
-            a.files.push(_RarFile {
-                name = name
-                unp_size = unp
-                pack_size = pack
-                data_off = pos + hsize
-                crc = crc
-                has_crc = true
-                mtime = _rar_dos_time(ftime)
-                is_dir = isdir
-                solid = (hflags & 0x10) != 0
-                method = method - 0x30
-                ver = ver
-                dict = (65536 as i64) << wl
-                encrypted = (hflags & 0x04) != 0
-                split = (hflags & 0x03) != 0
-                redirect = host == 3 and (attr & 0xF000) == 0xA000
-                dc = 0
-            })
-            if (pos as i64) + (hsize as i64) + pack > (n as i64):
-                break
-            end
-            pos += hsize + (pack as int)
-        else:
-            mut add := 0 as i64
-            if (hflags & 0x8000) != 0 and pos + 11 <= n:
-                add = _rar_u32(p, pos + 7)
-            end
-            if (pos as i64) + (hsize as i64) + add > (n as i64):
-                break
-            end
-            pos += hsize + (add as int)
-        end
+        pos = next
     end
+    mem.Free(last_salt as void*)
+    mem.Free(key as void*)
+    mem.Free(iv as void*)
 end

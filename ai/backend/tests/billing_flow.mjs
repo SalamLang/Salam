@@ -45,9 +45,9 @@ const plans = await api("GET", "/plans");
 const ids = (plans.json?.plans ?? []).map((p) => p.id);
 check("the four plans are listed", plans.res.status === 200 && ids.join(",") === "free,plus,pro,unlimited", ids);
 const priced = Object.fromEntries((plans.json?.plans ?? []).map((p) => [p.id, p.price]));
-check("the prices are 0, 1, 2 and 10 million toman", priced.free === 0 && priced.plus === 1000000 && priced.pro === 2000000 && priced.unlimited === 10000000, priced);
+check("the prices are 0, 3, 6 and 30 million toman", priced.free === 0 && priced.plus === 3000000 && priced.pro === 6000000 && priced.unlimited === 30000000, priced);
 const unlimited = plans.json.plans.find((p) => p.id === "unlimited");
-check("the unlimited plan has no limit and no expiry", unlimited.api_hourly === 0 && unlimited.chat_hourly === 0 && unlimited.parallel === 0 && unlimited.days === 0, unlimited);
+check("the unlimited plan has no daily limit", unlimited.api_daily === 0 && unlimited.chat_daily === 0 && unlimited.parallel === 0 && unlimited.days === 30, unlimited);
 check("both gateways are on", (plans.json.gateways ?? []).includes("zarinpal") && plans.json.gateways.includes("zibal"), plans.json.gateways);
 
 console.log("a new account is free");
@@ -55,7 +55,7 @@ const admin = await account(ADMIN, "Admin");
 const buyer = await account(BUYER, "Buyer");
 const first = await api("GET", "/billing/subscription", buyer);
 check("a new account is on the free plan", first.json?.subscription?.plan?.id === "free" && first.json.subscription.expires === 0, first.json);
-check("the free plan reports its hourly room and what is used", typeof first.json.subscription.api_used === "number" && first.json.subscription.plan.api_hourly > 0, first.json.subscription);
+check("the free plan reports its daily room and what is used", typeof first.json.subscription.api_used === "number" && first.json.subscription.plan.api_daily > 0, first.json.subscription);
 
 console.log("checkout refuses what it should");
 check("an unknown plan is refused", (await api("POST", "/billing/checkout", buyer, { plan: "gold", gateway: "zarinpal" })).res.status === 400);
@@ -65,10 +65,10 @@ check("checkout needs a signed in account", (await api("POST", "/billing/checkou
 
 console.log("paying with zarinpal");
 const start = await api("POST", "/billing/checkout", buyer, { plan: "plus", gateway: "zarinpal" });
-check("checkout returns the gateway page and the amount", start.res.status === 200 && start.json.url.includes("/pg/StartPay/") && start.json.amount === 1000000, start.json);
+check("checkout returns the gateway page and the amount", start.res.status === 200 && start.json.url.includes("/pg/StartPay/") && start.json.amount === 3000000, start.json);
 const authority = tokenOf(start.json.url);
 const pendingList = await api("GET", "/billing/payments", buyer);
-check("the payment is written down as pending", pendingList.json.payments[0]?.status === "pending" && pendingList.json.payments[0].gateway === "zarinpal" && pendingList.json.payments[0].amount === 1000000, pendingList.json.payments[0]);
+check("the payment is written down as pending", pendingList.json.payments[0]?.status === "pending" && pendingList.json.payments[0].gateway === "zarinpal" && pendingList.json.payments[0].amount === 3000000, pendingList.json.payments[0]);
 const done = await back("zarinpal", `Authority=${authority}&Status=OK`);
 check("the gateway return sends the browser back to the app", done.status === 302 && (done.headers.get("location") ?? "").includes("payment=ok"), done.headers.get("location"));
 const afterPay = await api("GET", "/billing/subscription", buyer);
@@ -130,7 +130,7 @@ check("a normal account cannot see the subscriptions", forbidden.res.status === 
 const grant = await api("POST", "/admin/subscriptions", admin, { email: BUYER, plan: "unlimited", note: "تست مدیر" });
 check("an admin can give a paid plan away", grant.res.status === 201 && grant.json.plan === "unlimited", grant.json);
 const granted = await api("GET", "/billing/subscription", buyer);
-check("the gift is unlimited and never expires", granted.json.subscription.plan.id === "unlimited" && granted.json.subscription.expires === 0 && granted.json.subscription.source === "admin", granted.json.subscription);
+check("the gift is unlimited and lasts the plan days", granted.json.subscription.plan.id === "unlimited" && Math.abs(granted.json.subscription.expires - (now + 30 * DAY)) < 300 && granted.json.subscription.source === "admin", granted.json.subscription);
 check("an unlimited account is not asked to buy again", (await api("POST", "/billing/checkout", buyer, { plan: "pro", gateway: "zarinpal" })).res.status === 409);
 const active = await api("GET", "/admin/subscriptions", admin);
 const mine = active.json.subscriptions.find((s) => s.user?.email === BUYER);
@@ -157,11 +157,28 @@ for (let i = 0; i < HOURLY + 2; i += 1) {
   if (r.status === 429) limited += 1;
   await r.text();
 }
-check("the free plan stops at its hourly limit", limited > 0, limited);
+check("the free plan stops at its daily limit", limited > 0, limited);
 await api("POST", "/admin/subscriptions", admin, { email: HEAVY, plan: "unlimited" });
 const afterGift = await ask();
 const giftBody = await afterGift.text();
 check("the unlimited plan lifts the limit at once", afterGift.status === 200, `${afterGift.status} ${giftBody.slice(0, 120)}`);
 
+const adminPlans = await api("GET", "/admin/plans", admin);
+check("an admin lists every plan with its subscribers", adminPlans.res.status === 200 && adminPlans.json.plans.length >= 4 && typeof adminPlans.json.plans[0].subscribers === "number", adminPlans.json);
+const nonAdminPlans = await api("PUT", "/admin/plans/free", heavy, { chat_daily: 999 });
+check("a normal user cannot edit plans", nonAdminPlans.res.status === 403, nonAdminPlans.res.status);
+const edited = await api("PUT", "/admin/plans/plus", admin, { chat_weekly: 123, api_5h: 7, price: 3100000, name_en: "Staff" });
+check("an admin edits a plan", edited.res.status === 200 && edited.json.plan.chat_weekly === 123 && edited.json.plan.api_5h === 7, edited.json);
+const listed = await api("GET", "/plans", null);
+const plus = listed.json.plans.find((p) => p.id === "plus");
+check("the public list shows the edit at once", plus.chat_weekly === 123 && plus.price === 3100000 && plus.name_en === "Staff", plus);
+const created = await api("POST", "/admin/plans", admin, { id: "team", name: "تیم", price: 9000000, days: 30, chat_daily: 900, enabled: true });
+check("an admin creates a plan", created.res.status === 201 && created.json.plan.id === "team", created.json);
+check("a plan id cannot repeat", (await api("POST", "/admin/plans", admin, { id: "team", name: "x" })).res.status === 409);
+await api("PUT", "/admin/plans/team", admin, { enabled: false });
+const hidden = await api("GET", "/plans", null);
+check("a disabled plan leaves the public list", !hidden.json.plans.some((p) => p.id === "team"));
+const freeEdit = await api("PUT", "/admin/plans/free", admin, { price: 5, enabled: false });
+check("the free plan stays free and on", freeEdit.json.plan.price === 0 && freeEdit.json.plan.enabled === true, freeEdit.json);
 console.log(`\n${passed} passed, ${failures.length} failed`);
 if (failures.length) process.exit(1);

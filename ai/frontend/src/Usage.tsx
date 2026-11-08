@@ -267,8 +267,8 @@ export function Usage({ onNavigate }: { onNavigate: (path: string) => void }) {
   const upto = active ? Math.min(active.to, report.now) : report.now;
   const range = active && active.key !== "all" ? t(`${fmtDateTime(active.from)} تا ${fmtDateTime(upto)}`, `${fmtDateTime(active.from)} to ${fmtDateTime(upto)}`) : t("از آغاز تا امروز", "Since the beginning");
 
-  const chatLimit = report.plan.chat_hourly;
-  const apiLimit = report.plan.api_hourly;
+  const chatLimit = report.plan.chat_daily;
+  const apiLimit = report.plan.api_daily;
 
   return (
     <div className="page usage-page">
@@ -281,7 +281,7 @@ export function Usage({ onNavigate }: { onNavigate: (path: string) => void }) {
 
       <section className="card panel usage-plan">
         <div className="panel-head">
-          <h3>{t("پلن و سقف ساعتی", "Plan and hourly limits")}</h3>
+          <h3>{t("پلن و سقف‌ها", "Plan and limits")}</h3>
           <button type="button" className="link" onClick={() => onNavigate("/plans")}>
             {t("مدیریت اشتراک", "Manage plan")}
           </button>
@@ -294,8 +294,12 @@ export function Usage({ onNavigate }: { onNavigate: (path: string) => void }) {
               {report.plan.expires > 0 ? t(`تا ${fmtDateTime(report.plan.expires)}`, `Until ${fmtDateTime(report.plan.expires)}`) : t("پلن رایگان", "Free plan")}
             </span>
           </div>
-          <Quota label={t("پیام گفت‌وگو در ساعت گذشته", "Chat messages in the last hour")} used={report.hourly.chat_used} limit={chatLimit} />
-          <Quota label={t("درخواست API در ساعت گذشته", "API requests in the last hour")} used={report.hourly.api_used} limit={apiLimit} />
+          <Quota label={t("پیام گفت‌وگو امروز", "Chat messages today")} used={report.today.chat_used} limit={chatLimit} />
+          <Quota label={t("درخواست API امروز", "API requests today")} used={report.today.api_used} limit={apiLimit} />
+          {report.plan.chat_weekly > 0 && <Quota label={t("پیام گفت‌وگو این هفته", "Chat messages this week")} used={report.today.chat_used_week} limit={report.plan.chat_weekly} />}
+          {report.plan.api_weekly > 0 && <Quota label={t("درخواست API این هفته", "API requests this week")} used={report.today.api_used_week} limit={report.plan.api_weekly} />}
+          {report.plan.chat_5h > 0 && <Quota label={t("پیام گفت‌وگو در ۵ ساعت اخیر", "Chat messages, last 5 hours")} used={report.today.chat_used_5h} limit={report.plan.chat_5h} />}
+          {report.plan.api_5h > 0 && <Quota label={t("درخواست API در ۵ ساعت اخیر", "API requests, last 5 hours")} used={report.today.api_used_5h} limit={report.plan.api_5h} />}
           <div className="usage-quota">
             <div className="usage-quota-head">
               <span>{t("درخواست هم‌زمان", "Parallel requests")}</span>

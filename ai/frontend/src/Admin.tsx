@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
-import { api, ApiError, PAGE_SIZE, type AdminApp, type AdminChatRow, type AdminTelegram, type AdminKey, type AdminPlatforms, type AdminSubscription, type AdminGuest, type AdminSession, type AdminSummary, type GuestMessage, type AdminUpload, type AdminUser, type ApiRequest, type AppEvent, type Chat, type EventFilters, type Payment, type PlanId, type RequestFilters, type UsagePeriod, type UsagePeriodKey, type UsageTotals } from "./api";
+import { api, ApiError, PAGE_SIZE, type AdminApp, type AdminChatRow, type AdminPlan, type AdminTelegram, type AdminKey, type AdminPlatforms, type AdminSubscription, type AdminGuest, type AdminSession, type AdminSummary, type GuestMessage, type AdminUpload, type AdminUser, type ApiRequest, type AppEvent, type Chat, type EventFilters, type Payment, type PlanId, type RequestFilters, type UsagePeriod, type UsagePeriodKey, type UsageTotals } from "./api";
 import { EventList } from "./Events";
 import { fmtCompact, fmtCost, fmtDate, fmtDateTime, fmtDay, fmtMonth, fmtNum, fmtRelative, tokenSplit } from "./format";
 import { IconBadgeCheck, IconChevronDown, IconClose, IconSearch, IconShield } from "./icons";
@@ -9,7 +9,7 @@ import { RequestList } from "./Requests";
 import { confirmDialog, Subject } from "./Confirm";
 import { t } from "./i18n";
 import { autoDir } from "./dir";
-import { planName } from "./Plans";
+import { planName, registerPlans } from "./Plans";
 import { Checkbox } from "./Checkbox";
 
 type Picked = { id: number; name: string } | null;
@@ -829,6 +829,152 @@ const GATEWAY_WORDS: Record<string, string> = { zarinpal: t("زرین‌پال",
 
 function toman(n: number): string {
   return t(`${fmtNum(n)} تومان`, `${fmtNum(n)} toman`);
+}
+
+const PLAN_NUMBERS: { key: "price" | "usd" | "days" | "chat_5h" | "chat_daily" | "chat_weekly" | "api_5h" | "api_daily" | "api_weekly" | "parallel" | "sort"; fa: string; en: string }[] = [
+  { key: "price", fa: "قیمت (تومان)", en: "Price (toman)" },
+  { key: "usd", fa: "قیمت (دلار)", en: "Price (USD)" },
+  { key: "days", fa: "مدت (روز، ۰ بدون انقضا)", en: "Days (0 never expires)" },
+  { key: "chat_5h", fa: "پیام در ۵ ساعت (۰ نامحدود)", en: "Messages per 5 hours (0 unlimited)" },
+  { key: "chat_daily", fa: "پیام در روز (۰ نامحدود)", en: "Messages per day (0 unlimited)" },
+  { key: "chat_weekly", fa: "پیام در هفته (۰ نامحدود)", en: "Messages per week (0 unlimited)" },
+  { key: "api_5h", fa: "درخواست API در ۵ ساعت (۰ نامحدود)", en: "API requests per 5 hours (0 unlimited)" },
+  { key: "api_daily", fa: "درخواست API در روز (۰ نامحدود)", en: "API requests per day (0 unlimited)" },
+  { key: "api_weekly", fa: "درخواست API در هفته (۰ نامحدود)", en: "API requests per week (0 unlimited)" },
+  { key: "parallel", fa: "درخواست هم‌زمان (۰ نامحدود)", en: "In flight (0 unlimited)" },
+  { key: "sort", fa: "ترتیب نمایش", en: "Sort order" },
+];
+
+type PlanDraft = { id: string; name: string; name_en: string; note: string; note_en: string; enabled: boolean } & Record<(typeof PLAN_NUMBERS)[number]["key"], string>;
+
+function draftOf(p: Partial<AdminPlan>): PlanDraft {
+  const d = { id: p.id ?? "", name: p.name ?? "", name_en: p.name_en ?? "", note: p.note ?? "", note_en: p.note_en ?? "", enabled: p.enabled ?? false } as PlanDraft;
+  for (const f of PLAN_NUMBERS) d[f.key] = String(p[f.key] ?? 0);
+  return d;
+}
+
+function PlanEditor({ plan, onSaved, notify }: { plan: AdminPlan | null; onSaved: () => void; notify: (msg: string) => void }) {
+  const [d, setD] = useState<PlanDraft>(() => draftOf(plan ?? {}));
+  const [saving, setSaving] = useState(false);
+  const fresh = plan === null;
+  const free = plan?.id === "free";
+  const set = <K extends keyof PlanDraft>(k: K, v: PlanDraft[K]) => setD((old) => ({ ...old, [k]: v }));
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      const body: Record<string, unknown> = { name: d.name, name_en: d.name_en, note: d.note, note_en: d.note_en, enabled: d.enabled };
+      for (const f of PLAN_NUMBERS) body[f.key] = Number(d[f.key]) || 0;
+      if (fresh) {
+        body.id = d.id;
+        await api.adminPlanCreate(body as Partial<AdminPlan>);
+        setD(draftOf({}));
+      } else {
+        await api.adminPlanSave(plan.id, body as Partial<AdminPlan>);
+      }
+      notify(t("پلن ذخیره شد و همین حالا برای همه اعمال می‌شود.", "Plan saved and applied to everyone right now."));
+      onSaved();
+    } catch (err) {
+      notify(errText(err, t("ذخیره‌ی پلن ناموفق بود.", "Could not save the plan.")));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <form className="card panel plan-editor" onSubmit={submit}>
+      <div className="panel-head">
+        <h4>
+          {fresh ? t("پلن تازه", "New plan") : <bdi>{plan.name}</bdi>}
+          {!fresh && <span className="muted small"> {plan.id} · {fmtNum(plan.subscribers)} {t("مشترک فعال", "active subscribers")}</span>}
+        </h4>
+      </div>
+      <div className="grant-grid plan-editor-grid">
+        {fresh && (
+          <label className="grant-field">
+            <span>{t("شناسه (انگلیسی، یکتا)", "Id (latin, unique)")}</span>
+            <input dir="ltr" value={d.id} onChange={(e) => set("id", e.target.value)} placeholder="team" required />
+          </label>
+        )}
+        <label className="grant-field">
+          <span>{t("نام فارسی", "Persian name")}</span>
+          <input dir="auto" value={d.name} onChange={(e) => set("name", e.target.value)} required />
+        </label>
+        <label className="grant-field">
+          <span>{t("نام انگلیسی", "English name")}</span>
+          <input dir="auto" value={d.name_en} onChange={(e) => set("name_en", e.target.value)} />
+        </label>
+        <label className="grant-field">
+          <span>{t("توضیح فارسی", "Persian note")}</span>
+          <input dir="auto" value={d.note} onChange={(e) => set("note", e.target.value)} />
+        </label>
+        <label className="grant-field">
+          <span>{t("توضیح انگلیسی", "English note")}</span>
+          <input dir="auto" value={d.note_en} onChange={(e) => set("note_en", e.target.value)} />
+        </label>
+        {PLAN_NUMBERS.filter((f) => !(free && (f.key === "price" || f.key === "usd" || f.key === "days"))).map((f) => (
+          <label key={f.key} className="grant-field">
+            <span>{t(f.fa, f.en)}</span>
+            <input type="number" min={0} inputMode="numeric" dir="ltr" value={d[f.key]} onChange={(e) => set(f.key, e.target.value)} />
+          </label>
+        ))}
+      </div>
+      {!free && <Checkbox checked={d.enabled} onChange={(v) => set("enabled", v)} label={t("فعال و قابل خرید", "Active and on sale")} hint={t("پلن غیرفعال از صفحه‌ی اشتراک‌ها پنهان می‌شود، ولی مشترک‌های فعلی آن می‌مانند.", "A disabled plan is hidden from the plans page, but current subscribers keep it.")} />}
+      <div className="grant-actions">
+        <button type="submit" className="button primary" disabled={saving}>
+          {saving ? <span className="spinner" /> : null}
+          {fresh ? t("ساخت پلن", "Create plan") : t("ذخیره", "Save")}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function PlansAdmin({ notify }: { notify: (msg: string) => void }) {
+  const [plans, setPlans] = useState<AdminPlan[] | null>(null);
+  const [error, setError] = useState("");
+  const [adding, setAdding] = useState(false);
+
+  const load = useCallback(() => {
+    setError("");
+    api
+      .adminPlans()
+      .then((r) => {
+        registerPlans(r.plans);
+        setPlans(r.plans);
+      })
+      .catch((e) => setError(errText(e, t("بارگذاری پلن‌ها ناموفق بود.", "Could not load plans."))));
+  }, []);
+
+  useEffect(() => {
+    load();
+  }, [load]);
+
+  return (
+    <section className="card panel">
+      <div className="panel-head">
+        <h3>{t("مدیریت پلن‌ها", "Manage plans")}</h3>
+        <button type="button" className="button" onClick={() => setAdding((v) => !v)}>
+          {adding ? t("بستن", "Close") : t("پلن تازه", "New plan")}
+        </button>
+      </div>
+      <p className="muted">{t("هر تغییر همین حالا برای همه‌ی کاربران، کلیدهای API، ربات تلگرام و برنامه‌ها اعمال می‌شود. سقف روزانه ساعت ۰۰:۰۰ و سقف هفتگی شنبه ۰۰:۰۰ به وقت تهران صفر می‌شود. صفر یعنی نامحدود.", "Every change applies at once to all users, API keys, the Telegram bot and apps. Daily limits reset at midnight Tehran time and weekly limits on Saturday at midnight. Zero means unlimited.")}</p>
+      {error && (
+        <div className="form-error" role="alert">
+          {error}
+        </div>
+      )}
+      {adding && <PlanEditor plan={null} notify={notify} onSaved={() => { setAdding(false); load(); }} />}
+      {plans === null && !error ? (
+        <div className="list-loading" role="status">
+          <span className="spinner" />
+        </div>
+      ) : (
+        plans?.map((p) => <PlanEditor key={p.id + JSON.stringify(p)} plan={p} notify={notify} onSaved={load} />)
+      )}
+    </section>
+  );
 }
 
 function Subscriptions({ picked, notify }: { picked: Picked; notify: (msg: string) => void }) {
@@ -2525,6 +2671,7 @@ export function Admin({ notify }: { notify: (msg: string) => void }) {
           <Sessions picked={picked} notify={notify} />
           {!picked && <Guests />}
           {picked ? <Conversations picked={picked} /> : <LatestChats />}
+          <PlansAdmin notify={notify} />
           <Subscriptions picked={picked} notify={notify} />
           <Payments picked={picked} />
           <Uploads picked={picked} notify={notify} />

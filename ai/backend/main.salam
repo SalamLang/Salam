@@ -201,7 +201,7 @@ func main:
     aitelegram.Configure(os.Env("AI_TELEGRAM_TOKEN"), os.Env("AI_TELEGRAM_API"), env_or("AI_APP_URL", "https://ai.salamlang.ir"), env_or("AI_TELEGRAM_GUEST_LIMIT", "15").to_int())
     aitelegram.Start()
     aiopenai.Configure(env_or("AI_API_ANSWER_SECONDS", "3600").to_int(), env_or("AI_API_START_SECONDS", "180").to_int())
-    aibilling.Configure(os.Env("AI_ZARINPAL_MERCHANT"), os.Env("AI_ZIBAL_MERCHANT"), os.Env("AI_ZARINPAL_BASE"), os.Env("AI_ZIBAL_BASE"), env_or("AI_BILLING_CALLBACK", env_or("AI_OAUTH_ISSUER", "https://ai-api.salamlang.ir")), env_or("AI_APP_URL", "https://ai.salamlang.ir"), os.Env("AI_PAYMENT_URL"), env_or("AI_API_HOURLY", "100").to_int(), env_or("AI_CHAT_HOURLY", "60").to_int(), env_or("AI_BILLING_SWEEP_SECONDS", "600").to_int())
+    aibilling.Configure(os.Env("AI_ZARINPAL_MERCHANT"), os.Env("AI_ZIBAL_MERCHANT"), os.Env("AI_ZARINPAL_BASE"), os.Env("AI_ZIBAL_BASE"), env_or("AI_BILLING_CALLBACK", env_or("AI_OAUTH_ISSUER", "https://ai-api.salamlang.ir")), env_or("AI_APP_URL", "https://ai.salamlang.ir"), os.Env("AI_PAYMENT_URL"), env_or("AI_API_DAILY", "60").to_int(), env_or("AI_CHAT_DAILY", "15").to_int(), env_or("AI_BILLING_SWEEP_SECONDS", "600").to_int())
     mut engine_host := str.TrimPrefix(str.TrimPrefix(engine_url, "http://"), "https://")
     mut engine_port := 80
     colon := engine_host.find(":")
@@ -1120,7 +1120,6 @@ func launch_turn(uid: i64, id: str, sid_in: str, text: str, files &: Vector<aifi
     aistore.Lock()
     pending := aistore.OneText("SELECT COUNT(*) FROM messages WHERE chat_id = ?1 AND status = 'pending'", one(id))
     queued := qid.len() > 0 ? "0" : aistore.OneText("SELECT COUNT(*) FROM chat_queue WHERE chat_id = ?1", one(id))
-    recent := aistore.OneText("SELECT COUNT(*) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = ?1 AND m.role = 'user' AND m.created > ?2", two(i64s(uid), i64s(aistore.Now() - 3600)))
     title := aistore.OneText("SELECT title FROM chats WHERE id = ?1", one(id))
     mut rows := aistore.Stmt("SELECT device_id, workspace, bridge_token, cloud FROM chats WHERE id = ?1", one(id))
     mut device := "0"
@@ -1142,10 +1141,11 @@ func launch_turn(uid: i64, id: str, sid_in: str, text: str, files &: Vector<aifi
         ret false
     end
     limits := aibilling.LimitsOf(i64s(uid))
-    if limits.chat_hourly > 0 and recent.to_int() >= limits.chat_hourly:
+    over := aibilling.Over(i64s(uid), "chat", limits)
+    if over.len() > 0:
         status = 429
         code = "rate"
-        message = "پیام‌های این ساعت پلن «" + limits.name + "» تمام شد. کمی بعد دوباره تلاش کنید یا پلن را ارتقا دهید."
+        message = aibilling.RateMessage(over, limits.name, false, false)
         ret false
     end
     mut fresh := false

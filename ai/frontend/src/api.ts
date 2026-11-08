@@ -327,17 +327,27 @@ export type AdminChatRow = Chat & {
   messages: number;
 };
 
-export type PlanId = "free" | "plus" | "pro" | "unlimited";
+export type PlanId = string;
 export type Plan = {
   id: PlanId;
   name: string;
   note: string;
+  name_en: string;
+  note_en: string;
   price: number;
+  usd: number;
   days: number;
-  api_hourly: number;
-  chat_hourly: number;
+  chat_5h: number;
+  api_5h: number;
+  chat_daily: number;
+  api_daily: number;
+  chat_weekly: number;
+  api_weekly: number;
   parallel: number;
+  enabled: boolean;
+  sort: number;
 };
+export type AdminPlan = Plan & { subscribers: number };
 export type Gateway = "zarinpal" | "zibal";
 export type Subscription = {
   plan: Plan;
@@ -347,6 +357,10 @@ export type Subscription = {
   expires: number;
   api_used: number;
   chat_used: number;
+  api_used_week: number;
+  chat_used_week: number;
+  api_used_5h: number;
+  chat_used_5h: number;
 };
 export type Payment = {
   id: number;
@@ -462,13 +476,21 @@ export type UsageReport = {
     id: string;
     name: string;
     expires: number;
-    chat_hourly: number;
-    api_hourly: number;
+    chat_5h: number;
+    api_5h: number;
+    chat_daily: number;
+    api_daily: number;
+    chat_weekly: number;
+    api_weekly: number;
     parallel: number;
   };
-  hourly: {
+  today: {
     chat_used: number;
     api_used: number;
+    chat_used_week: number;
+    api_used_week: number;
+    chat_used_5h: number;
+    api_used_5h: number;
     window_seconds: number;
   };
   periods: UsagePeriod[];
@@ -1299,6 +1321,11 @@ export const api = {
       "GET",
       `/admin/subscriptions${query({ latest: latest ? 1 : undefined, user })}`,
     ),
+  adminPlans: () => call<{ plans: AdminPlan[] }>("GET", "/admin/plans"),
+  adminPlanSave: (id: string, body: Partial<Plan>) =>
+    call<{ plan: Plan }>("PUT", `/admin/plans/${encodeURIComponent(id)}`, body),
+  adminPlanCreate: (body: Partial<Plan>) =>
+    call<{ plan: Plan }>("POST", "/admin/plans", body),
   adminGrant: (body: {
     email?: string;
     user_id?: number;

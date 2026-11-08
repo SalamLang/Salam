@@ -31,6 +31,7 @@ const DAY := 86400
 const SWEEP_LIMIT := 50
 const PAGE := 50
 const MAX_NOTE := 200
+const PLAN_COLUMNS := "id, name, name_en, note, note_en, price, usd, days, chat_5h, api_5h, chat_daily, api_daily, chat_weekly, api_weekly, parallel, enabled, sort"
 
 mut ZARINPAL_MERCHANT := ""
 mut ZIBAL_MERCHANT := ""
@@ -41,27 +42,41 @@ mut ZIBAL_START := "https://gateway.zibal.ir/start/"
 mut CALLBACK_BASE := "https://ai-api.salamlang.ir"
 mut APP_URL := "https://ai.salamlang.ir"
 mut PAY_URL := ""
+mut PLAN_CACHE := Vector {} as Vector<str>
 mut SWEEP_MS := 600000
 mut STALE_SECONDS := 600 as i64
-mut FREE_API_HOURLY := 100
-mut FREE_CHAT_HOURLY := 60
+mut FREE_API_DAILY := 60
+mut FREE_CHAT_DAILY := 15
 
 pub struct Plan:
     pub id: str = "free"
     pub name: str = ""
+    pub name_en: str = ""
     pub note: str = ""
+    pub note_en: str = ""
     pub price: i64 = 0
+    pub usd: i64 = 0
     pub days: int = 0
-    pub api_hourly: int = 0
-    pub chat_hourly: int = 0
+    pub chat_5h: int = 0
+    pub api_5h: int = 0
+    pub chat_daily: int = 0
+    pub api_daily: int = 0
+    pub chat_weekly: int = 0
+    pub api_weekly: int = 0
     pub parallel: int = 0
+    pub enabled: bool = true
+    pub sort: int = 0
 end
 
 pub struct Limits:
     pub plan: str = "free"
     pub name: str = ""
-    pub api_hourly: int = 0
-    pub chat_hourly: int = 0
+    pub chat_5h: int = 0
+    pub api_5h: int = 0
+    pub chat_daily: int = 0
+    pub api_daily: int = 0
+    pub chat_weekly: int = 0
+    pub api_weekly: int = 0
     pub parallel: int = 0
     pub expires: i64 = 0
 end
@@ -82,19 +97,81 @@ func two(v: str, w: str): Vector<str>:
     ret a
 end
 
-func plans(): Vector<Plan>:
+func default_plans(): Vector<Plan>:
     mut all := Vector {} as Vector<Plan>
-    all.push(Plan { id = "free", name = "رایگان", note = "برای آشنایی با دستیار سلام و کارهای کوچک", price = 0, days = 0, api_hourly = FREE_API_HOURLY, chat_hourly = FREE_CHAT_HOURLY, parallel = 4 })
-    all.push(Plan { id = "plus", name = "پلاس", note = "برای کار روزمره با دستیار و کلید API", price = 1000000, days = 30, api_hourly = 500, chat_hourly = 300, parallel = 8 })
-    all.push(Plan { id = "pro", name = "حرفه‌ای", note = "برای کار سنگین‌تر و ایجنت‌هایی مثل Cline", price = 2000000, days = 30, api_hourly = 2000, chat_hourly = 1000, parallel = 16 })
-    all.push(Plan { id = "unlimited", name = "نامحدود", note = "بدون سقف پیام و درخواست در ساعت، بدون انقضا", price = 10000000, days = 0, api_hourly = 0, chat_hourly = 0, parallel = 0 })
+    all.push(Plan { id = "free", name = "رایگان", name_en = "Free", note = "برای آشنایی با دستیار سلام و کارهای کوچک", note_en = "To get to know the Salam assistant and for small tasks", price = 0, usd = 0, days = 0, chat_daily = FREE_CHAT_DAILY, api_daily = FREE_API_DAILY, chat_weekly = FREE_CHAT_DAILY * 4, api_weekly = FREE_API_DAILY * 4, parallel = 2, sort = 1 })
+    all.push(Plan { id = "plus", name = "کارمندی", name_en = "Employee", note = "یک روز کاری سبک، تا ۷ ساعت، یا ۳ تا ۴ ساعت کار سنگین", note_en = "A light workday of up to 7 hours, or 3 to 4 hours of heavy work", price = 3000000, usd = 20, days = 30, chat_daily = 150, api_daily = 1500, chat_weekly = 800, api_weekly = 8000, parallel = 6, sort = 2 })
+    all.push(Plan { id = "pro", name = "حرفه‌ای", name_en = "Pro", note = "هر روز دست‌کم ۸ ساعت کار کامل، با ایجنت‌هایی مثل Cline", note_en = "At least 8 full hours of work every day, with agents like Cline", price = 6000000, usd = 40, days = 30, chat_daily = 500, api_daily = 6000, chat_weekly = 3000, api_weekly = 30000, parallel = 12, sort = 3 })
+    all.push(Plan { id = "unlimited", name = "نامحدود", name_en = "Unlimited", note = "بدون سقف روزانه برای تیم‌ها و کار شبانه‌روزی", note_en = "No daily caps, for teams and round-the-clock work", price = 30000000, usd = 200, days = 30, sort = 4 })
     ret all
+end
+
+func plan_parse(js: str): Plan:
+    ret Plan { id = json.Get(js, "id"), name = json.Get(js, "name"), name_en = json.Get(js, "name_en"), note = json.Get(js, "note"), note_en = json.Get(js, "note_en"), price = json.Get(js, "price").to_int() as i64, usd = json.Get(js, "usd").to_int() as i64, days = json.Get(js, "days").to_int(), chat_5h = json.Get(js, "chat_5h").to_int(), api_5h = json.Get(js, "api_5h").to_int(), chat_daily = json.Get(js, "chat_daily").to_int(), api_daily = json.Get(js, "api_daily").to_int(), chat_weekly = json.Get(js, "chat_weekly").to_int(), api_weekly = json.Get(js, "api_weekly").to_int(), parallel = json.Get(js, "parallel").to_int(), enabled = json.Get(js, "enabled") == "true", sort = json.Get(js, "sort").to_int() }
+end
+
+func plans(): Vector<Plan>:
+    if PLAN_CACHE.len() == 0:
+        ret default_plans()
+    end
+    mut all := Vector {} as Vector<Plan>
+    each js in PLAN_CACHE:
+        all.push(plan_parse(js))
+    end
+    ret all
+end
+
+func plan_args(p: Plan): Vector<str>:
+    mut a := one(p.id)
+    a.push(p.name)
+    a.push(p.name_en)
+    a.push(p.note)
+    a.push(p.note_en)
+    a.push(n(p.price))
+    a.push(n(p.usd))
+    a.push(n(p.days as i64))
+    a.push(n(p.chat_5h as i64))
+    a.push(n(p.api_5h as i64))
+    a.push(n(p.chat_daily as i64))
+    a.push(n(p.api_daily as i64))
+    a.push(n(p.chat_weekly as i64))
+    a.push(n(p.api_weekly as i64))
+    a.push(n(p.parallel as i64))
+    a.push(p.enabled ? "1" : "0")
+    a.push(n(p.sort as i64))
+    ret a
+end
+
+func reload_plans():
+    mut fresh := Vector {} as Vector<str>
+    aistore.Lock()
+    each d in default_plans():
+        _ok := aistore.Run("INSERT IGNORE INTO plans (" + PLAN_COLUMNS + ") VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)", plan_args(d))
+    end
+    mut rows := aistore.Stmt("SELECT " + PLAN_COLUMNS + " FROM plans ORDER BY sort, id", Vector {} as Vector<str>)
+    until aistore.Next(rows):
+        fresh.push(plan_json(Plan { id = aistore.Text(rows, 0), name = aistore.Text(rows, 1), name_en = aistore.Text(rows, 2), note = aistore.Text(rows, 3), note_en = aistore.Text(rows, 4), price = aistore.Text(rows, 5).to_int() as i64, usd = aistore.Text(rows, 6).to_int() as i64, days = aistore.Text(rows, 7).to_int(), chat_5h = aistore.Text(rows, 8).to_int(), api_5h = aistore.Text(rows, 9).to_int(), chat_daily = aistore.Text(rows, 10).to_int(), api_daily = aistore.Text(rows, 11).to_int(), chat_weekly = aistore.Text(rows, 12).to_int(), api_weekly = aistore.Text(rows, 13).to_int(), parallel = aistore.Text(rows, 14).to_int(), enabled = aistore.Text(rows, 15) == "1", sort = aistore.Text(rows, 16).to_int() }))
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    if fresh.len() > 0:
+        PLAN_CACHE = fresh
+    end
 end
 
 func known(id: str): bool:
     each p in plans():
         if p.id == id:
             ret true
+        end
+    end
+    ret false
+end
+
+func buyable(id: str): bool:
+    each p in plans():
+        if p.id == id:
+            ret p.enabled and id != "free"
         end
     end
     ret false
@@ -115,11 +192,20 @@ func plan_json(p: Plan): str:
     m.push(json.Member("id", p.id))
     m.push(json.Member("name", p.name))
     m.push(json.Member("note", p.note))
+    m.push(json.Member("name_en", p.name_en))
+    m.push(json.Member("note_en", p.note_en))
     m.push(json.MemberInt("price", p.price))
+    m.push(json.MemberInt("usd", p.usd))
     m.push(json.MemberInt("days", p.days as i64))
-    m.push(json.MemberInt("api_hourly", p.api_hourly as i64))
-    m.push(json.MemberInt("chat_hourly", p.chat_hourly as i64))
+    m.push(json.MemberInt("chat_5h", p.chat_5h as i64))
+    m.push(json.MemberInt("api_5h", p.api_5h as i64))
+    m.push(json.MemberInt("chat_daily", p.chat_daily as i64))
+    m.push(json.MemberInt("api_daily", p.api_daily as i64))
+    m.push(json.MemberInt("chat_weekly", p.chat_weekly as i64))
+    m.push(json.MemberInt("api_weekly", p.api_weekly as i64))
     m.push(json.MemberInt("parallel", p.parallel as i64))
+    m.push(json.MemberBool("enabled", p.enabled))
+    m.push(json.MemberInt("sort", p.sort as i64))
     ret json.Object(m)
 end
 
@@ -605,7 +691,9 @@ end
 func list_plans(ctx: i64):
     mut items := Vector {} as Vector<str>
     each p in plans():
-        items.push(plan_json(p))
+        if p.enabled:
+            items.push(plan_json(p))
+        end
     end
     mut ways := Vector {} as Vector<str>
     each name in ["zarinpal", "zibal"]:
@@ -628,9 +716,14 @@ func my_subscription(ctx: i64):
     mut started := 0 as i64
     mut source := "free"
     _h := active_of(who, plan, expires, started, source)
-    hour := n(aistore.Now() - 3600)
-    api_used := aistore.OneText("SELECT COUNT(*) FROM api_requests WHERE user_id = ?1 AND created > ?2", two(who, hour))
-    chat_used := aistore.OneText("SELECT COUNT(*) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = ?1 AND m.role = 'user' AND m.created > ?2", two(who, hour))
+    mut ch5 := 0
+    mut cday := 0
+    mut cweek := 0
+    mut ah5 := 0
+    mut aday := 0
+    mut aweek := 0
+    Windows(who, "chat", ch5, cday, cweek)
+    Windows(who, "api", ah5, aday, aweek)
     aistore.Unlock()
     mut m := Vector {} as Vector<str>
     m.push(json.MemberRaw("plan", plan_json(plan_of(plan))))
@@ -638,8 +731,12 @@ func my_subscription(ctx: i64):
     m.push(json.Member("source", source))
     m.push(json.MemberInt("started", started))
     m.push(json.MemberInt("expires", expires))
-    m.push(json.MemberRaw("api_used", api_used.len() > 0 ? api_used : "0"))
-    m.push(json.MemberRaw("chat_used", chat_used.len() > 0 ? chat_used : "0"))
+    m.push(json.MemberInt("chat_used", cday as i64))
+    m.push(json.MemberInt("api_used", aday as i64))
+    m.push(json.MemberInt("chat_used_week", cweek as i64))
+    m.push(json.MemberInt("api_used_week", aweek as i64))
+    m.push(json.MemberInt("chat_used_5h", ch5 as i64))
+    m.push(json.MemberInt("api_used_5h", ah5 as i64))
     aiweb.Reply(ctx, 200, `{"subscription": ` + json.Object(m) + "}")
 end
 
@@ -667,7 +764,7 @@ func checkout(ctx: i64):
     body := http.Body(ctx)
     plan_id := str.Trim(json.Get(body, "plan"))
     gateway := str.Lower(str.Trim(json.Get(body, "gateway")))
-    if not known(plan_id) or plan_id == "free":
+    if not buyable(plan_id):
         aiweb.Fail(ctx, 400, "plan", "این پلن برای خرید نیست.")
         ret
     end
@@ -884,6 +981,165 @@ func admin_grant(ctx: i64):
     aiweb.Reply(ctx, 201, `{"subscription_id": ` + id + `, "plan": ` + json.Str(plan_id) + "}")
 end
 
+func clamp_num(v: str, top: i64): i64:
+    x := v.to_int() as i64
+    if x < 0:
+        ret 0
+    end
+    ret x > top ? top : x
+end
+
+func admin_plans(ctx: i64):
+    if aiweb.NeedAdmin(ctx) == 0:
+        ret
+    end
+    mut items := Vector {} as Vector<str>
+    each p in plans():
+        aistore.Lock()
+        subs := aistore.OneText("SELECT COUNT(*) FROM subscriptions WHERE plan = ?1 AND status = 'active' AND (expires = 0 OR expires > ?2)", two(p.id, n(aistore.Now())))
+        aistore.Unlock()
+        mut raw := plan_json(p)
+        raw = str.TrimSuffix(raw, "}") + `, "subscribers": ` + (subs.len() > 0 ? subs : "0") + "}"
+        items.push(raw)
+    end
+    aiweb.Reply(ctx, 200, `{"plans": ` + json.Array(items) + "}")
+end
+
+func plan_from(body: str, base: Plan): Plan:
+    mut p := base
+    if json.Has(body, "name"):
+        p.name = str.Trim(json.Get(body, "name"))
+    end
+    if json.Has(body, "name_en"):
+        p.name_en = str.Trim(json.Get(body, "name_en"))
+    end
+    if json.Has(body, "note"):
+        p.note = str.Trim(json.Get(body, "note"))
+    end
+    if json.Has(body, "note_en"):
+        p.note_en = str.Trim(json.Get(body, "note_en"))
+    end
+    if json.Has(body, "price"):
+        p.price = clamp_num(json.Get(body, "price"), 100000000000 as i64)
+    end
+    if json.Has(body, "usd"):
+        p.usd = clamp_num(json.Get(body, "usd"), 1000000 as i64)
+    end
+    if json.Has(body, "days"):
+        p.days = clamp_num(json.Get(body, "days"), 3650 as i64) as int
+    end
+    each f in ["chat_5h", "api_5h", "chat_daily", "api_daily", "chat_weekly", "api_weekly", "parallel", "sort"]:
+        if json.Has(body, f):
+            v := clamp_num(json.Get(body, f), 100000000 as i64) as int
+            if f == "chat_5h":
+                p.chat_5h = v
+            else f == "api_5h":
+                p.api_5h = v
+            else f == "chat_daily":
+                p.chat_daily = v
+            else f == "api_daily":
+                p.api_daily = v
+            else f == "chat_weekly":
+                p.chat_weekly = v
+            else f == "api_weekly":
+                p.api_weekly = v
+            else f == "parallel":
+                p.parallel = v
+            else:
+                p.sort = v
+            end
+        end
+    end
+    if json.Has(body, "enabled"):
+        e := str.Trim(json.Get(body, "enabled"))
+        p.enabled = e == "true" or e == "1"
+    end
+    ret p
+end
+
+func save_plan(p: Plan, fresh: bool): bool:
+    aistore.Lock()
+    mut ok := false
+    if fresh:
+        ok = aistore.Run("INSERT INTO plans (" + PLAN_COLUMNS + ") VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)", plan_args(p))
+    else:
+        ok = aistore.Run("UPDATE plans SET name = ?2, name_en = ?3, note = ?4, note_en = ?5, price = ?6, usd = ?7, days = ?8, chat_5h = ?9, api_5h = ?10, chat_daily = ?11, api_daily = ?12, chat_weekly = ?13, api_weekly = ?14, parallel = ?15, enabled = ?16, sort = ?17 WHERE id = ?1", plan_args(p))
+    end
+    aistore.Unlock()
+    if ok:
+        reload_plans()
+    end
+    ret ok
+end
+
+func valid_plan_id(id: str): bool:
+    if id.len() < 2 or id.len() > 32:
+        ret false
+    end
+    mut i := 0
+    until i < id.len():
+        c := id[i] as int
+        if not ((c >= 97 and c <= 122) or (c >= 48 and c <= 57) or c == 45 or c == 95):
+            ret false
+        end
+        i += 1
+    end
+    ret true
+end
+
+func admin_plan_update(ctx: i64):
+    if aiweb.NeedAdmin(ctx) == 0:
+        ret
+    end
+    id := str.Trim(http.Param(ctx, "id"))
+    if not known(id):
+        aiweb.Fail(ctx, 404, "plan", "این پلن را نمی‌شناسیم.")
+        ret
+    end
+    mut p := plan_from(http.Body(ctx), plan_of(id))
+    if id == "free":
+        p.enabled = true
+        p.price = 0
+        p.usd = 0
+        p.days = 0
+    end
+    if p.name.len() == 0:
+        aiweb.Fail(ctx, 400, "name", "نام پلن را بنویسید.")
+        ret
+    end
+    if not save_plan(p, false):
+        aiweb.Fail(ctx, 500, "save", "ذخیره‌ی پلن ناموفق بود.")
+        ret
+    end
+    aiweb.Reply(ctx, 200, `{"plan": ` + plan_json(p) + "}")
+end
+
+func admin_plan_create(ctx: i64):
+    if aiweb.NeedAdmin(ctx) == 0:
+        ret
+    end
+    body := http.Body(ctx)
+    id := str.Lower(str.Trim(json.Get(body, "id")))
+    if not valid_plan_id(id):
+        aiweb.Fail(ctx, 400, "id", "شناسه باید ۲ تا ۳۲ نویسه از حروف کوچک انگلیسی، عدد، خط تیره یا زیرخط باشد.")
+        ret
+    end
+    if known(id):
+        aiweb.Fail(ctx, 409, "id", "پلنی با این شناسه هست.")
+        ret
+    end
+    p := plan_from(body, Plan { id = id, enabled = false, sort = plans().len() + 1 })
+    if p.name.len() == 0:
+        aiweb.Fail(ctx, 400, "name", "نام پلن را بنویسید.")
+        ret
+    end
+    if not save_plan(p, true):
+        aiweb.Fail(ctx, 500, "save", "ذخیره‌ی پلن ناموفق بود.")
+        ret
+    end
+    aiweb.Reply(ctx, 201, `{"plan": ` + plan_json(p) + "}")
+end
+
 func admin_cancel(ctx: i64):
     if aiweb.NeedAdmin(ctx) == 0:
         ret
@@ -1018,18 +1274,90 @@ pub func Configure(zarinpal: str, zibal: str, zarinpal_base: str, zibal_base: st
         PAY_URL = str.TrimSuffix(pay_url, "/")
     end
     if free_api > 0:
-        FREE_API_HOURLY = free_api
+        FREE_API_DAILY = free_api
     end
     if sweep_seconds > 0:
         SWEEP_MS = sweep_seconds * 1000
         STALE_SECONDS = sweep_seconds as i64
     end
     if free_chat > 0:
-        FREE_CHAT_HOURLY = free_chat
+        FREE_CHAT_DAILY = free_chat
     end
+    reload_plans()
     if ZARINPAL_MERCHANT.len() > 0 or ZIBAL_MERCHANT.len() > 0:
         _t := spawn(sweeper)
     end
+end
+
+pub func Windows(uid: str, kind: str, h5 &: int, day &: int, week &: int):
+    t := aistore.Now()
+    h5_from := t - 18000
+    week_from := aistore.WeekStart()
+    low := h5_from < week_from ? h5_from : week_from
+    mut sql := "SELECT COALESCE(SUM(created > ?3), 0), COALESCE(SUM(created > ?4), 0), COALESCE(SUM(created > ?5), 0) FROM api_requests WHERE user_id = ?1 AND created > ?2"
+    if kind == "chat":
+        sql = "SELECT COALESCE(SUM(m.created > ?3), 0), COALESCE(SUM(m.created > ?4), 0), COALESCE(SUM(m.created > ?5), 0) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = ?1 AND m.role = 'user' AND m.created > ?2"
+    end
+    mut a := two(uid, n(low))
+    a.push(n(aistore.DayStart()))
+    a.push(n(week_from))
+    a.push(n(h5_from))
+    mut rows := aistore.Stmt(sql, a)
+    h5 = 0
+    day = 0
+    week = 0
+    if aistore.Next(rows):
+        day = aistore.Text(rows, 0).to_int()
+        week = aistore.Text(rows, 1).to_int()
+        h5 = aistore.Text(rows, 2).to_int()
+    end
+    aistore.Finish(rows)
+end
+
+pub func Over(uid: str, kind: str, limits: Limits): str:
+    cap_h5 := kind == "chat" ? limits.chat_5h : limits.api_5h
+    cap_day := kind == "chat" ? limits.chat_daily : limits.api_daily
+    cap_week := kind == "chat" ? limits.chat_weekly : limits.api_weekly
+    if cap_h5 <= 0 and cap_day <= 0 and cap_week <= 0:
+        ret ""
+    end
+    mut h5 := 0
+    mut day := 0
+    mut week := 0
+    aistore.Lock()
+    Windows(uid, kind, h5, day, week)
+    aistore.Unlock()
+    if cap_week > 0 and week >= cap_week:
+        ret "week"
+    end
+    if cap_day > 0 and day >= cap_day:
+        ret "day"
+    end
+    if cap_h5 > 0 and h5 >= cap_h5:
+        ret "5h"
+    end
+    ret ""
+end
+
+pub func RateMessage(reason: str, plan: str, en: bool, api: bool): str:
+    if en:
+        what := api ? "API requests" : "messages"
+        if reason == "week":
+            ret "You have used this week's " + what + " on the " + plan + " plan. They reset on Saturday at midnight Tehran time, or you can upgrade your plan at https://ai.salamlang.ir/plans"
+        end
+        if reason == "5h":
+            ret "You have used the " + what + " of the last 5 hours on the " + plan + " plan. Try again a little later or upgrade your plan at https://ai.salamlang.ir/plans"
+        end
+        ret "You have used today's " + what + " on the " + plan + " plan. They reset at midnight Tehran time, or you can upgrade your plan at https://ai.salamlang.ir/plans"
+    end
+    what := api ? "درخواست‌های" : "پیام‌های"
+    if reason == "week":
+        ret what + " این هفته پلن «" + plan + "» تمام شد. شنبه ساعت ۰۰:۰۰ به وقت تهران دوباره شارژ می‌شود یا پلن را ارتقا دهید."
+    end
+    if reason == "5h":
+        ret what + " ۵ ساعت اخیر پلن «" + plan + "» تمام شد. کمی بعد دوباره تلاش کنید یا پلن را ارتقا دهید."
+    end
+    ret what + " امروز پلن «" + plan + "» تمام شد. ساعت ۰۰:۰۰ به وقت تهران دوباره شارژ می‌شود یا پلن را ارتقا دهید."
 end
 
 pub func LimitsOf(uid: str): Limits:
@@ -1041,7 +1369,7 @@ pub func LimitsOf(uid: str): Limits:
     _h := active_of(uid, plan, expires, started, source)
     aistore.Unlock()
     p := plan_of(plan)
-    ret Limits { plan = p.id, name = p.name, api_hourly = p.api_hourly, chat_hourly = p.chat_hourly, parallel = p.parallel, expires = expires }
+    ret Limits { plan = p.id, name = p.name, chat_5h = p.chat_5h, api_5h = p.api_5h, chat_daily = p.chat_daily, api_daily = p.api_daily, chat_weekly = p.chat_weekly, api_weekly = p.api_weekly, parallel = p.parallel, expires = expires }
 end
 
 pub func Routes(r &: router.Router):
@@ -1055,7 +1383,10 @@ pub func Routes(r &: router.Router):
     router.Post(r, "/admin/subscriptions", admin_grant)
     router.Delete(r, "/admin/subscriptions/:id", admin_cancel)
     router.Get(r, "/admin/payments", admin_payments)
-    each path in ["/plans", "/billing/subscription", "/billing/payments", "/billing/checkout", "/admin/subscriptions", "/admin/subscriptions/:id", "/admin/payments"]:
+    router.Get(r, "/admin/plans", admin_plans)
+    router.Post(r, "/admin/plans", admin_plan_create)
+    router.Put(r, "/admin/plans/:id", admin_plan_update)
+    each path in ["/plans", "/billing/subscription", "/billing/payments", "/billing/checkout", "/admin/subscriptions", "/admin/subscriptions/:id", "/admin/payments", "/admin/plans", "/admin/plans/:id"]:
         router.Options(r, path, aiweb.Preflight)
     end
 end

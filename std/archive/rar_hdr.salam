@@ -1,0 +1,458 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package archive
+
+import compress
+import mem
+
+const _RAR4_SIG_LEN := 7
+const _RAR5_SIG_LEN := 8
+
+func _rar4_sig_match(p: void*, n: int): bool:
+    if n < _RAR4_SIG_LEN: ret false end
+    bp := p as u8*
+    ret bp[0] as int == 0x52 and bp[1] as int == 0x61 and bp[2] as int == 0x72 and bp[3] as int == 0x21 and bp[4] as int == 0x1a and bp[5] as int == 0x07 and bp[6] as int == 0x00
+end
+
+func _rar5_sig_match(p: void*, n: int): bool:
+    if n < _RAR5_SIG_LEN: ret false end
+    bp := p as u8*
+    ret bp[0] as int == 0x52 and bp[1] as int == 0x61 and bp[2] as int == 0x72 and bp[3] as int == 0x21 and bp[4] as int == 0x1a and bp[5] as int == 0x07 and bp[6] as int == 0x01 and bp[7] as int == 0x00
+end
+
+func _rar_str(p: u8*, off: int, n: int): str:
+    mut buf := compress.NewByteBuf()
+    compress.BufPushBytes(buf, ((p as i64) + (off as i64)) as void*, n)
+    s := compress.BufToStrUnsafe(buf)
+    compress.BufFree(buf)
+    ret s
+end
+
+func _rar_free_name(s: str):
+    if s.len() > 0:
+        mem.Free(s as void*)
+    end
+end
+
+func _rar_free_files(files &: Vector<_RarFile>):
+    repeat files.len() in i:
+        _rar_free_name(files.get(i).name)
+    end
+    files.free()
+end
+
+func _rar_u32(p: u8*, off: int): i64:
+    ret ((p[off] as i64) | ((p[off + 1] as i64) << 8) | ((p[off + 2] as i64) << 16) | ((p[off + 3] as i64) << 24)) & 0xffffffff
+end
+
+func _rar_vint(p: u8*, pos: int, n: int, len_out &: int): i64:
+    mut result := 0 as i64
+    mut shift := 0
+    mut i := 0
+    until i < 10 and pos + i < n:
+        b := p[pos + i] as int
+        result |= ((b & 0x7f) as i64) << shift
+        i++
+        if (b & 0x80) == 0:
+            len_out = i
+            ret result
+        end
+        shift += 7
+    end
+    len_out = 0
+    ret result
+end
+
+func _rar_days_from_civil(y0: int, m: int, d: int): i64:
+    mut y := y0
+    if m <= 2:
+        y--
+    end
+    era := (y >= 0 ? y : y - 399) / 400
+    yoe := y - era * 400
+    mp := m > 2 ? m - 3 : m + 9
+    doy := (153 * mp + 2) / 5 + d - 1
+    doe := yoe * 365 + yoe / 4 - yoe / 100 + doy
+    ret (era as i64) * 146097 + (doe as i64) - 719468
+end
+
+func _rar_dos_time(v: i64): i64:
+    t := (v & 0xffff) as int
+    dt := ((v >> 16) & 0xffff) as int
+    y := (dt >> 9) + 1980
+    mo := (dt >> 5) & 15
+    d := dt & 31
+    if mo < 1 or mo > 12 or d < 1:
+        ret 0
+    end
+    days := _rar_days_from_civil(y, mo, d)
+    ret days * 86400 + (((t >> 11) * 3600 + ((t >> 5) & 63) * 60 + (t & 31) * 2) as i64)
+end
+
+func _rar_filetime(v: i64): i64:
+    ret v / 10000000 - 11644473600
+end
+
+func _rar_utf8_push(b &: compress.ByteBuf, cp: int):
+    if cp < 0x80:
+        compress.BufPush(b, cp)
+    else cp < 0x800:
+        compress.BufPush(b, 0xc0 | (cp >> 6))
+        compress.BufPush(b, 0x80 | (cp & 0x3f))
+    else cp < 0x10000:
+        compress.BufPush(b, 0xe0 | (cp >> 12))
+        compress.BufPush(b, 0x80 | ((cp >> 6) & 0x3f))
+        compress.BufPush(b, 0x80 | (cp & 0x3f))
+    else:
+        compress.BufPush(b, 0xf0 | (cp >> 18))
+        compress.BufPush(b, 0x80 | ((cp >> 12) & 0x3f))
+        compress.BufPush(b, 0x80 | ((cp >> 6) & 0x3f))
+        compress.BufPush(b, 0x80 | (cp & 0x3f))
+    end
+end
+
+func _rar4_name(p: u8*, off: int, size: int, unicode: bool, winsep: bool): str:
+    mut raw := compress.NewByteBuf()
+    mut zero := -1
+    mut i := 0
+    until i < size:
+        if (p[off + i] as int) == 0:
+            zero = i
+            break
+        end
+        i++
+    end
+    if not unicode or zero < 0:
+        mut k := 0
+        until k < size:
+            c := p[off + k] as int
+            if c == 0:
+                break
+            end
+            if winsep and c == 92:
+                compress.BufPush(raw, 47)
+            else:
+                compress.BufPush(raw, c)
+            end
+            k++
+        end
+        s := compress.BufToStrUnsafe(raw)
+        compress.BufFree(raw)
+        ret s
+    end
+    enc := off + zero + 1
+    esize := size - zero - 1
+    mut wide := Vector {} as Vector<int>
+    if esize > 0:
+        high := (p[enc] as int) << 8
+        mut ep := 1
+        mut flags := 0
+        mut fbits := 0
+        until ep < esize:
+            if fbits == 0:
+                flags = p[enc + ep] as int
+                ep++
+                fbits = 8
+                if ep >= esize:
+                    break
+                end
+            end
+            mode := (flags >> 6) & 3
+            if mode == 0:
+                wide.push(p[enc + ep] as int)
+                ep++
+            else mode == 1:
+                wide.push((p[enc + ep] as int) + high)
+                ep++
+            else mode == 2:
+                if ep + 1 >= esize:
+                    break
+                end
+                wide.push((p[enc + ep] as int) | ((p[enc + ep + 1] as int) << 8))
+                ep += 2
+            else:
+                mut cnt := p[enc + ep] as int
+                ep++
+                if (cnt & 0x80) != 0:
+                    if ep >= esize:
+                        break
+                    end
+                    corr := p[enc + ep] as int
+                    ep++
+                    cnt = (cnt & 0x7f) + 2
+                    until cnt > 0 and wide.len() < zero:
+                        wide.push(((((p[off + wide.len()] as int) + corr) & 255)) + high)
+                        cnt--
+                    end
+                else:
+                    cnt += 2
+                    until cnt > 0 and wide.len() < zero:
+                        wide.push(p[off + wide.len()] as int)
+                        cnt--
+                    end
+                end
+            end
+            flags = (flags << 2) & 255
+            fbits -= 2
+        end
+    end
+    mut j := 0
+    until j < wide.len():
+        mut cp := wide.get(j)
+        j++
+        if cp >= 0xd800 and cp < 0xdc00 and j < wide.len():
+            lo := wide.get(j)
+            if lo >= 0xdc00 and lo < 0xe000:
+                cp = 0x10000 + ((cp - 0xd800) << 10) + (lo - 0xdc00)
+                j++
+            end
+        end
+        if cp == 0:
+            break
+        end
+        if winsep and cp == 92:
+            cp = 47
+        end
+        _rar_utf8_push(raw, cp)
+    end
+    wide.free()
+    s2 := compress.BufToStrUnsafe(raw)
+    compress.BufFree(raw)
+    ret s2
+end
+
+func _rar5_scan(a &: _RarArc):
+    p := a.p
+    n := a.n
+    mut pos := _RAR5_SIG_LEN
+    until pos + 7 <= n:
+        mut l := 0
+        hsize := _rar_vint(p, pos + 4, n, l)
+        if l == 0 or hsize < 2:
+            break
+        end
+        hstart := pos + 4 + l
+        if (hstart as i64) + hsize > (n as i64):
+            break
+        end
+        hend := hstart + (hsize as int)
+        mut cur := hstart
+        htype := _rar_vint(p, cur, n, l) as int
+        cur += l
+        hflags := _rar_vint(p, cur, n, l) as int
+        cur += l
+        mut extra_size := 0
+        if (hflags & 1) != 0:
+            extra_size = _rar_vint(p, cur, n, l) as int
+            cur += l
+        end
+        mut data_size := 0 as i64
+        if (hflags & 2) != 0:
+            data_size = _rar_vint(p, cur, n, l)
+            cur += l
+        end
+        if htype == 4:
+            a.enc_headers = true
+            break
+        end
+        if htype == 5:
+            break
+        end
+        if htype == 1:
+            af := _rar_vint(p, cur, n, l) as int
+            if (af & 1) != 0:
+                a.multi = true
+            end
+        else htype == 2:
+            ff := _rar_vint(p, cur, n, l) as int
+            cur += l
+            mut unp := _rar_vint(p, cur, n, l)
+            cur += l
+            _rar_vint(p, cur, n, l)
+            cur += l
+            mut mtime := 0 as i64
+            if (ff & 2) != 0:
+                mtime = _rar_u32(p, cur)
+                cur += 4
+            end
+            mut crc := 0 as u32
+            mut has_crc := false
+            if (ff & 4) != 0:
+                crc = _rar_u32(p, cur) as u32
+                has_crc = true
+                cur += 4
+            end
+            ci := _rar_vint(p, cur, n, l) as int
+            cur += l
+            _rar_vint(p, cur, n, l)
+            cur += l
+            nl := _rar_vint(p, cur, n, l) as int
+            cur += l
+            if cur + nl > hend:
+                break
+            end
+            name := _rar_str(p, cur, nl)
+            if (ff & 8) != 0:
+                unp = -1 as i64
+            end
+            mut enc := false
+            mut redirect := false
+            mut xp := hend - extra_size
+            if extra_size > 0 and xp >= cur + nl:
+                until xp < hend:
+                    rs := _rar_vint(p, xp, n, l) as int
+                    if l == 0 or rs <= 0:
+                        break
+                    end
+                    rstart := xp + l
+                    rend := rstart + rs
+                    if rend > hend:
+                        break
+                    end
+                    mut rl := 0
+                    rtype := _rar_vint(p, rstart, n, rl) as int
+                    mut rc := rstart + rl
+                    if rtype == 1:
+                        enc = true
+                    else rtype == 5:
+                        redirect = true
+                    else rtype == 3:
+                        tf := _rar_vint(p, rc, n, rl) as int
+                        rc += rl
+                        if (tf & 2) != 0:
+                            if (tf & 1) != 0:
+                                mtime = _rar_u32(p, rc)
+                            else:
+                                mtime = _rar_filetime(_rar_u32(p, rc) | (_rar_u32(p, rc + 4) << 32))
+                            end
+                        end
+                    end
+                    xp = rend
+                end
+            end
+            ver := ci & 0x3f
+            dlog := (ci >> 10) & 0x1f
+            base := (131072 as i64) << dlog
+            dict := base + (base >> 5) * (((ci >> 15) & 31) as i64)
+            mut dc := 64
+            if ver == 1:
+                dc = 80
+            end
+            a.files.push(_RarFile {
+                name = name
+                unp_size = unp
+                pack_size = data_size
+                data_off = hend
+                crc = crc
+                has_crc = has_crc
+                mtime = mtime
+                is_dir = (ff & 1) != 0
+                solid = ((ci >> 6) & 1) != 0
+                method = (ci >> 7) & 7
+                ver = ver
+                dict = dict
+                encrypted = enc
+                split = (hflags & 0x18) != 0
+                redirect = redirect
+                dc = dc
+            })
+        end
+        pos = hend + (data_size as int)
+        if data_size < 0 or pos < hend:
+            break
+        end
+    end
+end
+
+func _rar4_scan(a &: _RarArc):
+    p := a.p
+    n := a.n
+    mut pos := _RAR4_SIG_LEN
+    until pos + 7 <= n:
+        htype := p[pos + 2] as int
+        hflags := (p[pos + 3] as int) | ((p[pos + 4] as int) << 8)
+        hsize := (p[pos + 5] as int) | ((p[pos + 6] as int) << 8)
+        if hsize < 7 or pos + hsize > n:
+            break
+        end
+        if htype == 0x7b:
+            break
+        end
+        if htype == 0x73:
+            if (hflags & 0x0080) != 0:
+                a.enc_headers = true
+                break
+            end
+            if (hflags & 1) != 0:
+                a.multi = true
+            end
+        end
+        if htype == 0x74 and hsize >= 32:
+            f := pos + 7
+            mut pack := _rar_u32(p, f)
+            mut unp := _rar_u32(p, f + 4)
+            host := p[f + 8] as int
+            crc := _rar_u32(p, f + 9) as u32
+            ftime := _rar_u32(p, f + 13)
+            ver := p[f + 17] as int
+            method := p[f + 18] as int
+            nsize := (p[f + 19] as int) | ((p[f + 20] as int) << 8)
+            mut cur := f + 25
+            if (hflags & 0x100) != 0 and cur + 8 <= pos + hsize:
+                pack = pack | (_rar_u32(p, cur) << 32)
+                unp = unp | (_rar_u32(p, cur + 4) << 32)
+                cur += 8
+            end
+            if cur + nsize > pos + hsize:
+                break
+            end
+            winsep := host <= 2
+            name := _rar4_name(p, cur, nsize, (hflags & 0x200) != 0, winsep)
+            isdir := (hflags & 0xE0) == 0xE0
+            wl := (hflags >> 5) & 7
+            a.files.push(_RarFile {
+                name = name
+                unp_size = unp
+                pack_size = pack
+                data_off = pos + hsize
+                crc = crc
+                has_crc = true
+                mtime = _rar_dos_time(ftime)
+                is_dir = isdir
+                solid = (hflags & 0x10) != 0
+                method = method - 0x30
+                ver = ver
+                dict = (65536 as i64) << wl
+                encrypted = (hflags & 0x04) != 0
+                split = (hflags & 0x03) != 0
+                redirect = false
+                dc = 0
+            })
+            if (pos as i64) + (hsize as i64) + pack > (n as i64):
+                break
+            end
+            pos += hsize + (pack as int)
+        else:
+            mut add := 0 as i64
+            if (hflags & 0x8000) != 0 and pos + 11 <= n:
+                add = _rar_u32(p, pos + 7)
+            end
+            if (pos as i64) + (hsize as i64) + add > (n as i64):
+                break
+            end
+            pos += hsize + (add as int)
+        end
+    end
+end

@@ -14,7 +14,7 @@ pkg.intro <<
 <li><strong>Zip:</strong> no zip64, so archives and entries must stay under 2 GB; only methods 0 (stored) and 8 (DEFLATE) are read, so entries packed with bzip2, LZMA or zstd fail to extract; encrypted entries are refused; the CRC-32 is not checked on extract.</li>
 <li><strong>Zip names and dates:</strong> new zips do not set the UTF-8 flag, so tools that assume the old DOS code page, such as Windows Explorer, may show Persian file names garbled, and every entry is dated 1 January 1980. <code>Entry.mtime</code> is always 0 for zip entries.</li>
 <li><strong>Tar:</strong> names longer than 100 bytes are cut, both when writing and reading, and the ustar prefix field and GNU or PAX long names are not used. Links and other special entries are listed as ordinary files of size 0. New entries get a time of 0, and the mode you set, or 644 for files and 755 for folders when you leave it at 0.</li>
-<li><strong>RAR:</strong> RAR 5 archives are read completely: every compression level, solid archives and the built-in filters, with each entry's CRC-32 checked. Older archives (RAR 1.5 to 4.x) are read the same way, including PPMd text compression and the standard filters. Encrypted entries (<code>RAR_ENCRYPTED</code>) and multi-volume archives (<code>RAR_MULTIVOLUME</code>) are refused. New archives are RAR 5 with the files stored, because only WinRAR itself can compress to RAR; any RAR tool opens them.</li>
+<li><strong>RAR:</strong> RAR 5 archives are read completely: every compression level, solid archives and the built-in filters, with each entry's CRC-32 checked. Older archives (RAR 1.5 to 4.x) are read the same way, including PPMd text compression and the standard filters. Password-protected archives open with <code>RarOpen</code> and a password, including ones whose file names are encrypted; without it they report <code>RAR_ENCRYPTED</code>, and a wrong password reports <code>RAR_BAD_PASSWORD</code>. Multi-volume archives (<code>RAR_MULTIVOLUME</code>) are refused. New archives are RAR 5 with the files stored, because only WinRAR itself can compress to RAR; any RAR tool opens them.</li>
 </ul>
 
 <p>The guide below shows the usual jobs: zipping a set of files, making and reading a <code>.tar.gz</code>, telling formats apart by their first bytes, and extracting without letting an archive write outside the target folder.</p>
@@ -51,7 +51,10 @@ pkg.intro <<
 <h2 id="guide-rar">Read and write a RAR</h2>
 <p>Reading goes through <code>RarList</code> and <code>RarExtract</code>, the same way as zip. The sample below is a small solid RAR 5 made by WinRAR: the second file is packed against the first, so <code>RarExtract</code> unpacks both to reach it. Every entry is checked against its CRC-32, and the <code>status</code> says what went wrong instead of returning silent garbage.</p>
 {{example.archive-guide-rar}}
-<p>Making a RAR is simpler: build <code>RarFileInput</code> values and call <code>RarCreate</code> or <code>RarCreateFile</code>. The result is a valid RAR 5 archive with the files stored uncompressed. If you need real compression, use zip, or <code>.tar.gz</code> as shown above. Passwords and multi-volume sets are not supported for reading, and the status codes tell you when you hit one.</p>
+<p>Making a RAR is simpler: build <code>RarFileInput</code> values and call <code>RarCreate</code> or <code>RarCreateFile</code>. The result is a valid RAR 5 archive with the files stored uncompressed. If you need real compression, use zip, or <code>.tar.gz</code> as shown above. </p>
+<h2 id="guide-rar-password">Open a password-protected RAR</h2>
+<p>A <code>RarArchive</code> remembers the data and the password, so the list, a single read and a full extraction share them. With the wrong password the archive does not open (when the names are encrypted) or each read fails with <code>RAR_BAD_PASSWORD</code>; with none at all you get <code>RAR_ENCRYPTED</code>. RAR 5 checks the password up front. RAR 3 and 4 have no check value, so for them a wrong password shows up as a failed checksum, and it is reported the same way.</p>
+{{example.archive-guide-rar-password}}
 
 <h2 id="guide-which">Which function for which job</h2>
 <div class="table-wrap"><table>
@@ -121,12 +124,22 @@ doc.RarStatusText = A short English description of a <code>RAR_</code> status co
 doc.RAR_OK = Status: the entry was unpacked and its checksum matched.
 doc.RAR_NOT_FOUND = Status: no entry has that name.
 doc.RAR_UNSUPPORTED = Status: a RAR version or method this package cannot unpack, such as a format from a newer WinRAR than this package knows.
-doc.RAR_ENCRYPTED = Status: the entry or the headers are encrypted; passwords are not supported.
+doc.RAR_ENCRYPTED = Status: the entry or the headers are encrypted and no password was given.
 doc.RAR_CORRUPT = Status: the data is damaged or cut short.
 doc.RAR_BAD_CRC = Status: the entry unpacked but its CRC-32 does not match the one in the archive.
 doc.RAR_MULTIVOLUME = Status: the entry continues in another volume; multi-volume archives are not supported.
 doc.RAR_TOO_BIG = Status: the entry is larger than the <code>max</code> given, or needs more memory than the package will allocate.
 doc.RAR_UNSAFE_PATH = Status: the entry name would write outside the target directory, so it was skipped.
+doc.RAR_BAD_PASSWORD = Status: the password is wrong (or, for RAR 3 and 4, the data is damaged).
+doc.RarArchive = A RAR archive in memory together with the password to open it. Build one with <code>RarOpen</code>.
+doc.RarArchive.data = The address of the archive bytes.
+doc.RarArchive.len = The length of the archive.
+doc.RarArchive.password = The password, or an empty string for none.
+doc.RarArchive.status = The result of the last <code>RarEntries</code>, <code>RarRead</code> or <code>RarReadAll</code> call, one of the <code>RAR_</code> codes.
+doc.RarOpen = Wraps archive data and a password in a <code>RarArchive</code>. Nothing is copied or read yet.
+doc.RarEntries = The entries of the archive, using its password. Sets <code>status</code> to <code>RAR_ENCRYPTED</code> or <code>RAR_BAD_PASSWORD</code> when the names cannot be read.
+doc.RarRead = The contents of one entry, found by its exact name, decrypted with the password. <code>max</code> caps the unpacked size, or 0 for no cap. Sets <code>status</code>.
+doc.RarReadAll = Writes every entry into the target directory, never outside it, and returns how many were written. Sets <code>status</code> to the first problem.
 doc.GzipCompressFile = Gzips a file.
 doc.GzipDecompressFile = Decompresses a gzip file.
 doc.ReadBinaryFile = Reads every byte of a file into a buffer.
@@ -174,6 +187,16 @@ ex.RAR_BAD_CRC = archive-Rar
 ex.RAR_MULTIVOLUME = archive-Rar
 ex.RAR_TOO_BIG = archive-Rar
 ex.RAR_UNSAFE_PATH = archive-Rar
+ex.RAR_BAD_PASSWORD = archive-RarPassword
+ex.RarArchive = archive-RarPassword
+ex.RarArchive.data = archive-RarPassword
+ex.RarArchive.len = archive-RarPassword
+ex.RarArchive.password = archive-RarPassword
+ex.RarArchive.status = archive-RarPassword
+ex.RarOpen = archive-RarPassword
+ex.RarEntries = archive-RarPassword
+ex.RarRead = archive-RarPassword
+ex.RarReadAll = archive-RarPassword
 ex.ReadBinaryFile = archive-Zip
 ex.TarFileInput = archive-Tar
 ex.TarFileInput.mode = archive-Tar

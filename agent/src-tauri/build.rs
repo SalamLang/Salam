@@ -15,6 +15,10 @@ const COMMANDS: &[&str] = &[
     "agent_watch_reply",
     "agent_unwatch_reply",
     "agent_open_url",
+    "ws_index_open",
+    "ws_index_close",
+    "ws_search",
+    "ws_mention_picked",
 ];
 
 fn main() {

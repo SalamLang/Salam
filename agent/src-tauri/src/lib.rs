@@ -4,6 +4,7 @@ mod commands;
 mod config;
 mod device;
 mod memory;
+mod mention;
 mod notify;
 mod tools;
 mod watch;
@@ -36,6 +37,10 @@ const REMOTE_COMMANDS: &[&str] = &[
     "allow-agent-watch-reply",
     "allow-agent-unwatch-reply",
     "allow-agent-open-url",
+    "allow-ws-index-open",
+    "allow-ws-index-close",
+    "allow-ws-search",
+    "allow-ws-mention-picked",
 ];
 
 #[cfg(target_os = "macos")]
@@ -169,6 +174,7 @@ pub fn run() {
         .manage(bridge::Status::default())
         .manage(watch::Watchers::default())
         .manage(watchdog::Watchdog::default())
+        .manage(mention::Mentions::default())
         .invoke_handler(tauri::generate_handler![
             commands::agent_info,
             commands::agent_link,
@@ -186,6 +192,10 @@ pub fn run() {
             commands::agent_watch_reply,
             commands::agent_unwatch_reply,
             commands::agent_open_url,
+            mention::ws_index_open,
+            mention::ws_index_close,
+            mention::ws_search,
+            mention::ws_mention_picked,
         ])
         .setup(|app| {
             #[cfg(target_os = "macos")]
@@ -215,8 +225,9 @@ pub fn run() {
     builder
         .build(tauri::generate_context!())
         .expect("error while running Salam Agent")
-        .run(|_, event| {
+        .run(|app, event| {
             if let tauri::RunEvent::Exit = event {
+                app.state::<mention::Mentions>().stop_all();
                 tools::browser::close_all();
             }
         });

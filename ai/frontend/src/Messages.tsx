@@ -7,20 +7,14 @@ import { MessageFiles } from "./Attach";
 import { EffortBadge } from "./effort";
 import { CopyButton, Markdown } from "./Markdown";
 import { t } from "./i18n";
-
-const PHASE_TEXT: Record<string, string> = {
-  thinking: t("در حال فکر کردن", "Thinking"),
-  searching: t("در حال بررسی مستندات سلام", "Checking the Salam docs"),
-  working: t("در حال کار روی رایانه‌ی شما", "Working on your computer"),
-  cloud_working: t("در حال کار در محیط ابری", "Working in the cloud sandbox"),
-  writing: t("در حال نوشتن", "Writing"),
-  checking: t("در حال اصلاح کد با کامپایلر سلام", "Fixing the code with the Salam compiler"),
-};
+import { workLabel, type WorkInput, type WorkLabel } from "./workStatus";
+import { useWorkLabel } from "./useWorkLabel";
 
 const SLOW_AFTER_MS = 25000;
 const VERY_SLOW_AFTER_MS = 90000;
 
-function WaitPhase({ label, created }: { label: string; created: number }) {
+function WaitPhase({ next, created }: { next: WorkLabel; created: number }) {
+  const label = useWorkLabel(next);
   const elapsed = useElapsed(true, created);
   const note =
     elapsed > VERY_SLOW_AFTER_MS
@@ -39,7 +33,15 @@ function WaitPhase({ label, created }: { label: string; created: number }) {
           <i />
           <i />
         </span>
-        {label}
+        <span className="phase-text">
+          {label.text}
+          {label.subject && (
+            <>
+              {": "}
+              <bdi dir="auto">{label.subject}</bdi>
+            </>
+          )}
+        </span>
         {elapsed > 3000 && <span className="activity-time">{seconds(elapsed)}</span>}
       </div>
       {note && <div className="phase-note">{note}</div>}
@@ -214,6 +216,16 @@ function TextGroupView({ text, live }: { text: string; live: boolean }) {
   );
 }
 
+function currentWork(calls: CallView[], steps: ActivityStep[]): WorkInput {
+  const live = [...calls].reverse().find((c) => c.state === "running" || c.state === "pending") || calls[calls.length - 1];
+  if (live) return { tool: live.tool, kind: live.kind, summary: live.summary, detail: live.detail };
+  for (let i = steps.length - 1; i >= 0; i--) {
+    const s = steps[i];
+    if (s.kind === "tool" && s.tool) return { tool: s.tool, detail: s.detail };
+  }
+  return {};
+}
+
 function AssistantMessage({ m, calls = [], cloud = false, onDecide = () => {}, onStop = () => {} }: { m: Message } & Tools) {
   const pending = m.status === "pending";
   const phase = m.phase || "thinking";
@@ -221,7 +233,7 @@ function AssistantMessage({ m, calls = [], cloud = false, onDecide = () => {}, o
   const waiting = all.some((c) => c.state === "pending" || c.state === "running");
   const steps = m.activity ?? [];
   const items = timeline(steps, uiText(m.body), all, m.status);
-  const working = cloud ? PHASE_TEXT.cloud_working : PHASE_TEXT.working;
+  const next = workLabel({ ...currentWork(all, steps), phase, cloud });
   const showPhase = pending && !waiting && m.body.length === 0 && (all.length > 0 || items.length === 0);
   return (
     <div className={`msg assistant ${m.status}`}>
@@ -246,7 +258,7 @@ function AssistantMessage({ m, calls = [], cloud = false, onDecide = () => {}, o
             );
           return <ActivityPanel key={i} steps={g.items} pending={pending && isLast} ms={isLast ? m.ms : undefined} created={m.created} />;
         })}
-        {showPhase && <WaitPhase label={all.length > 0 ? working : PHASE_TEXT[phase] || PHASE_TEXT.thinking} created={m.created} />}
+        {showPhase && <WaitPhase next={next} created={m.created} />}
         {!pending && m.body && (
           <div className="msg-tools">
             <CopyButton text={uiText(m.body)} label={t("رونوشت پاسخ", "Copy answer")} />

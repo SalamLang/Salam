@@ -407,7 +407,7 @@ export function Connections({ notify }: { notify: (msg: string, ok?: boolean) =>
     load();
     const p = new URLSearchParams(location.search);
     if (p.get("connected")) {
-      notify(p.get("result") === "ok" ? t("اتصال انجام شد.", "Connected.") : t("اتصال انجام نشد. دوباره تلاش کنید.", "The connection did not complete. Try again."), p.get("result") === "ok");
+      notify(p.get("result") === "ok" ? t("اتصال انجام شد.", "Connected.") : t("اتصال انجام نشد. دوباره تلاش کنید.", "The connection did not complete. Try again.") + (p.get("reason") ? ` (${p.get("reason")})` : ""), p.get("result") === "ok");
       history.replaceState(null, "", "/connections");
     }
     const refresh = () => {

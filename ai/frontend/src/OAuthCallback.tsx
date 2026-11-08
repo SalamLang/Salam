@@ -35,7 +35,7 @@ export function OAuthCallback({ theme, toggleTheme }: { theme: Theme; toggleThem
       .completeProvider(provider, code, state, q.get("error") ?? "")
       .then((r) => {
         if (r.purpose === "connect") {
-          location.replace(`/connections?connected=${provider}&result=${r.ok ? "ok" : "failed"}`);
+          location.replace(`/connections?connected=${provider}&result=${r.ok ? "ok" : "failed"}${r.ok || !r.reason ? "" : `&reason=${encodeURIComponent(r.reason)}`}`);
           return;
         }
         if (r.token) setToken(r.token);

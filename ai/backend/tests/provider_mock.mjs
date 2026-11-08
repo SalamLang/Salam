@@ -4,6 +4,13 @@ const PORT = Number(process.env.PORT ?? 18095);
 const GH_TOKEN = "ghp_validtoken0123456789abcdef";
 const FG_TOKEN = "figd_validtoken0123456789abcdef";
 const seen = [];
+const exp = { access: new Set(), refresh: new Set(), seq: 0, refreshes: 0 };
+const issue = (secs) => {
+  exp.seq += 1;
+  exp.access.add(`ghu_exp${exp.seq}0123456789abcdefghij`);
+  exp.refresh.add(`ghr_exp${exp.seq}0123456789abcdefghij`);
+  return { access_token: `ghu_exp${exp.seq}0123456789abcdefghij`, refresh_token: `ghr_exp${exp.seq}0123456789abcdefghij`, expires_in: secs, refresh_token_expires_in: 15811200, token_type: "bearer" };
+};
 
 http
   .createServer((req, res) => {
@@ -19,14 +26,36 @@ http
       seen.push({ method: req.method, path: url.pathname + url.search, auth: req.headers.authorization ?? req.headers["x-figma-token"] ?? "", body });
       const bearer = (req.headers.authorization ?? "").replace("Bearer ", "");
       const fields = (token, prefix) => (token.startsWith(prefix) ? decodeURIComponent(token.slice(prefix.length)).split("|") : null);
+      if (url.pathname === "/_state") return send(200, { refreshes: exp.refreshes, access: exp.access.size, refresh: exp.refresh.size });
+      if (url.pathname === "/_expire") {
+        exp.access.clear();
+        return send(200, {});
+      }
+      if (url.pathname === "/_revoke") {
+        exp.access.clear();
+        exp.refresh.clear();
+        return send(200, {});
+      }
       if (url.pathname === "/login/oauth/access_token") {
-        const code = JSON.parse(body || "{}").code ?? "";
+        const sent = JSON.parse(body || "{}");
+        if (sent.grant_type === "refresh_token") {
+          if (!exp.refresh.has(sent.refresh_token)) return send(200, { error: "bad_refresh_token", error_description: "The refresh token passed is incorrect or expired." });
+          exp.refresh.delete(sent.refresh_token);
+          exp.refreshes += 1;
+          return send(200, issue(28800));
+        }
+        const code = sent.code ?? "";
+        if (code === "exp") return send(200, issue(28800));
+        if (code === "expsoon") return send(200, issue(1));
+        if (code === "denied") return send(200, { error: "bad_verification_code", error_description: "The code passed is incorrect or expired." });
         return send(200, code === "abc" ? { access_token: GH_TOKEN, token_type: "bearer" } : { access_token: `gho_${encodeURIComponent(code)}`, token_type: "bearer" });
       }
       if (url.pathname === "/v1/oauth/token") {
         const code = new URLSearchParams(body).get("code") ?? "";
         return send(200, code === "abc" ? { access_token: FG_TOKEN.replace("figd_", "figo"), refresh_token: "refresh-token-abc", expires_in: 7776000 } : { access_token: `figo_${encodeURIComponent(code)}`, refresh_token: "r", expires_in: 7776000 });
       }
+      if (url.pathname === "/user" && bearer.startsWith("ghu_")) return exp.access.has(bearer) ? send(200, { login: "octo-exp", id: 9 }) : send(401, { message: "Bad credentials" });
+      if (url.pathname === "/user/repos" && bearer.startsWith("ghu_")) return exp.access.has(bearer) ? send(200, [{ full_name: "octo-exp/rotating", private: true }]) : send(401, { message: "Bad credentials" });
       if (url.pathname === "/user") {
         if (bearer === GH_TOKEN) return send(200, { login: "octo-dev", id: 7 });
         const f = fields(bearer, "gho_");

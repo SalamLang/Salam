@@ -535,9 +535,10 @@ mod tests {
         fs::remove_file(root.join("change/two.txt")).unwrap();
         touch(&root.join("fresh/deep/new.txt"));
         let loaded = cache::load(&file, "r").unwrap();
-        let mut index = Index::default();
-        index.entries = loaded.entries;
-        let lock = RwLock::new(index);
+        let lock = RwLock::new(Index {
+            entries: loaded.entries,
+            ..Index::default()
+        });
         let walked = reconcile(&lock, &root, &AtomicBool::new(false));
         assert_eq!(walked, 2, "only the root and the changed directory are walked");
         let p = paths(&lock.read().unwrap());

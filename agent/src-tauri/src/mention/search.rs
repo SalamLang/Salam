@@ -477,8 +477,10 @@ fn default_listing(index: &Index, mru: &[(usize, i32)], limit: usize) -> Vec<Hit
 }
 
 pub fn scratch_index(entries: Vec<Entry>) -> Index {
-    let mut index = Index::default();
-    index.entries = entries;
+    let mut index = Index {
+        entries,
+        ..Index::default()
+    };
     index.entries.sort_by(|a, b| a.path.cmp(&b.path));
     index
 }

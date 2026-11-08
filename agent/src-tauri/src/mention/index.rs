@@ -309,8 +309,10 @@ pub mod tests {
     }
 
     pub fn build(root: &Path) -> Index {
-        let mut index = Index::default();
-        index.entries = walk_vec(root, "", None);
+        let mut index = Index {
+            entries: walk_vec(root, "", None),
+            ..Index::default()
+        };
         index.entries.sort_by(|a, b| a.path.cmp(&b.path));
         index
     }
@@ -363,10 +365,10 @@ pub mod tests {
     }
 
     fn refresh(index: &mut Index, root: &Path, dir: &str) {
-        let fresh = walk_vec(&root, dir, Some(1));
+        let fresh = walk_vec(root, dir, Some(1));
         let m = dir_mtime(&root.join(dir));
         for d in index.apply_dir_diff(dir, fresh, m) {
-            let sub = walk_vec(&root, &d, None);
+            let sub = walk_vec(root, &d, None);
             index.insert_many(sub);
         }
     }

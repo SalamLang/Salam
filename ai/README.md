@@ -635,14 +635,16 @@ be at least `AI_API_START_SECONDS`; set lower, they fail on a backend that is be
 
 ### Plans and payments
 
-Four plans, defined in one table in `billing.salam`:
+Six plans, defined in one table in `billing.salam`:
 
-| Plan    | Price (toman / USD) | Lasts   | Chat per day         | API per day         | In flight |
-| ------- | ------------------- | ------- | -------------------- | ------------------- | --------- |
-| رایگان  | free                | forever | `AI_CHAT_DAILY` (15) | `AI_API_DAILY` (60) | 2         |
-| کارمندی | 3,000,000 / $20     | 30 days | 150                  | 1500                | 6         |
-| حرفه‌ای | 6,000,000 / $40     | 30 days | 500                  | 6000                | 12        |
-| نامحدود | 30,000,000 / $200   | 30 days | no limit             | no limit            | no limit  |
+| Plan       | Price (toman / USD) | Lasts   | Chat per day         | API per day         | In flight |
+| ---------- | ------------------- | ------- | -------------------- | ------------------- | --------- |
+| رایگان     | free                | forever | `AI_CHAT_DAILY` (15) | `AI_API_DAILY` (60) | 1         |
+| کارمندی    | 3,000,000 / $20     | 30 days | 150                  | 1500                | 2         |
+| حرفه‌ای    | 6,000,000 / $40     | 30 days | 500                  | 6000                | 3         |
+| نامحدود    | 30,000,000 / $200   | 30 days | no limit             | no limit            | 1         |
+| نامحدود ۲  | 55,000,000 / $367   | 30 days | no limit             | no limit            | 2         |
+| نامحدود ۳  | 75,000,000 / $500   | 30 days | no limit             | no limit            | 3         |
 
 Plans live in the `plans` table, seeded from these defaults and edited from the admin panel (limits per 5 hours, day and week, 0 means unlimited; changes apply at once). Daily limits reset at midnight Tehran time and weekly limits on Saturday. The internal ids stay
 `free`, `plus`, `pro` and `unlimited`, so existing subscriptions keep working.

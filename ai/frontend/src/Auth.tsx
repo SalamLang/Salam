@@ -1,10 +1,11 @@
-import { useState, type FormEvent } from "react";
+import { useCallback, useRef, useState, type FormEvent } from "react";
 import { useEffect } from "react";
 import { api, ApiError, rememberOAuth, setToken, type User } from "./api";
 import { IconCode, IconFigma, IconGithub, IconEye, IconGlobe, IconEyeOff, IconMoon, IconSun, IconSwap, IconBook } from "./icons";
 import type { Theme } from "./theme";
 import { isFa, setLang, t } from "./i18n";
 import { autoDir } from "./dir";
+import { isDesktop, useReturnReset } from "./desktop";
 
 type Mode = "login" | "register";
 
@@ -34,7 +35,13 @@ function ProviderButtons({ setError }: { setError: (m: string) => void }) {
       return null;
     }
   });
-  const [busy, setBusy] = useState("");
+  const [attempt, setAttempt] = useState<{ provider: "github" | "figma"; phase: "start" | "wait" } | null>(null);
+  const seq = useRef(0);
+  const cancel = useCallback(() => {
+    seq.current += 1;
+    setAttempt(null);
+  }, []);
+  useReturnReset(attempt?.phase === "wait", cancel);
   useEffect(() => {
     api
       .authProviders()
@@ -57,16 +64,20 @@ function ProviderButtons({ setError }: { setError: (m: string) => void }) {
   }, [setError]);
   if (!on || (!on.github && !on.figma)) return null;
   const begin = async (provider: "github" | "figma") => {
-    setBusy(provider);
+    const mine = ++seq.current;
+    setAttempt({ provider, phase: "start" });
     setError("");
     try {
       const next = nextPath();
       const r = await api.startProvider(provider, next);
+      if (mine !== seq.current) return;
       rememberOAuth({ provider, state: r.state, purpose: "login", next });
       location.assign(r.url);
+      setAttempt({ provider, phase: "wait" });
     } catch (e) {
-      setBusy("");
-      setError(e instanceof ApiError ? (LOGIN_ERRORS[e.code] ?? e.message) : t("ورود انجام نشد.", "Sign in failed."));
+      if (mine !== seq.current) return;
+      setAttempt(null);
+      setError(e instanceof ApiError ? (LOGIN_ERRORS[e.code] ?? e.message) : t("ورود انجام نشد. دوباره تلاش کنید.", "Sign in failed. Try again."));
     }
   };
   return (
@@ -76,16 +87,24 @@ function ProviderButtons({ setError }: { setError: (m: string) => void }) {
       </div>
       <div className="auth-providers">
         {on.github && (
-          <button type="button" className="button ghost wide" disabled={busy !== ""} onClick={() => begin("github")}>
-            {busy === "github" ? <span className="spinner" /> : <IconGithub width={18} height={18} />}
+          <button type="button" className="button ghost wide" disabled={attempt?.provider === "github" && attempt.phase === "start"} onClick={() => begin("github")}>
+            {attempt?.provider === "github" ? <span className="spinner" /> : <IconGithub width={18} height={18} />}
             {t("ادامه با GitHub", "Continue with GitHub")}
           </button>
         )}
         {on.figma && (
-          <button type="button" className="button ghost wide" disabled={busy !== ""} onClick={() => begin("figma")}>
-            {busy === "figma" ? <span className="spinner" /> : <IconFigma width={18} height={18} />}
+          <button type="button" className="button ghost wide" disabled={attempt?.provider === "figma" && attempt.phase === "start"} onClick={() => begin("figma")}>
+            {attempt?.provider === "figma" ? <span className="spinner" /> : <IconFigma width={18} height={18} />}
             {t("ادامه با Figma", "Continue with Figma")}
           </button>
+        )}
+        {attempt?.phase === "wait" && isDesktop && (
+          <p className="auth-wait" role="status">
+            {t("منتظر تایید در مرورگر...", "Waiting for approval in the browser...")}{" "}
+            <button type="button" className="auth-wait-cancel" onClick={cancel}>
+              {t("لغو", "Cancel")}
+            </button>
+          </p>
         )}
       </div>
     </>

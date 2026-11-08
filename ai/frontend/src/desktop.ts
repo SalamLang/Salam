@@ -1,4 +1,5 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { useEffect } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 
 type SalamBridge = {
@@ -202,4 +203,27 @@ export function saveWorkspace(path: string) {
 export function folderName(path: string): string {
   const parts = path.split(/[\\/]+/).filter(Boolean);
   return parts[parts.length - 1] || path;
+}
+
+export function useReturnReset(active: boolean, reset: () => void, timeoutMs = 120000): void {
+  useEffect(() => {
+    if (!active) return;
+    const armed = Date.now() + 1500;
+    const back = () => {
+      if (Date.now() >= armed && document.visibilityState !== "hidden") reset();
+    };
+    const pageshow = (e: PageTransitionEvent) => {
+      if (e.persisted) reset();
+    };
+    window.addEventListener("focus", back);
+    document.addEventListener("visibilitychange", back);
+    window.addEventListener("pageshow", pageshow);
+    const timer = window.setTimeout(reset, timeoutMs);
+    return () => {
+      window.removeEventListener("focus", back);
+      document.removeEventListener("visibilitychange", back);
+      window.removeEventListener("pageshow", pageshow);
+      window.clearTimeout(timer);
+    };
+  }, [active, reset, timeoutMs]);
 }

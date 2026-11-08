@@ -217,8 +217,8 @@ export function App() {
   };
   const onConnect = route === "connect" || route === "telegram";
 
-  const notify = useCallback((msg: string) => {
-    pushToast({ tone: "failed", title: msg });
+  const notify = useCallback((msg: string, ok?: boolean) => {
+    pushToast({ tone: ok ? "done" : "failed", title: msg });
   }, []);
 
   const signOut = useCallback(() => {

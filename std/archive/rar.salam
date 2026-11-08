@@ -164,14 +164,8 @@ func _rar_win_size(a: _RarArc, s: int): i64:
         k++
     end
     mut w := total
-    if a.v5:
-        if maxdict < w:
-            w = maxdict
-        end
-    else:
-        if w > 4194304:
-            w = 4194304 as i64
-        end
+    if maxdict < w:
+        w = maxdict
     end
     mut sz := 131072 as i64
     until sz < w:
@@ -180,7 +174,7 @@ func _rar_win_size(a: _RarArc, s: int): i64:
     ret sz
 end
 
-func _rar_run(a: _RarArc, r5 &: _R5, r3 &: _R3, nx &: int, idx: int, limit: i64, out &: compress.ByteBuf): int:
+func _rar_run(a: _RarArc, r5 &: _R5, nx &: int, idx: int, limit: i64, out &: compress.ByteBuf): int:
     f := a.files.get(idx)
     if f.encrypted:
         ret RAR_ENCRYPTED
@@ -214,7 +208,7 @@ func _rar_run(a: _RarArc, r5 &: _R5, r3 &: _R3, nx &: int, idx: int, limit: i64,
         if a.v5 and f.ver > 1:
             ret RAR_UNSUPPORTED
         end
-        if not a.v5 and f.ver != 29 and f.ver != 36:
+        if not a.v5:
             ret RAR_UNSUPPORTED
         end
         if f.method > 5:
@@ -226,7 +220,7 @@ func _rar_run(a: _RarArc, r5 &: _R5, r3 &: _R3, nx &: int, idx: int, limit: i64,
             mut k := s
             until k < idx:
                 mut scratch := compress.NewByteBuf()
-                st := _rar_run(a, r5, r3, nx, k, 0 as i64, scratch)
+                st := _rar_run(a, r5, nx, k, 0 as i64, scratch)
                 compress.BufFree(scratch)
                 if st != RAR_OK:
                     nx = -1
@@ -237,30 +231,18 @@ func _rar_run(a: _RarArc, r5 &: _R5, r3 &: _R3, nx &: int, idx: int, limit: i64,
             nx = idx
         end
         lim := limit > 0 ? limit : (f.unp_size >= 0 ? f.unp_size : (1 as i64) << 40)
-        mut st := RAR_OK
-        if a.v5:
-            if not f.solid:
-                w := _rar_win_size(a, idx)
-                if w > 1073741824:
-                    ret RAR_TOO_BIG
-                end
-                if not _r5_setwin(r5, w as int):
-                    ret RAR_TOO_BIG
-                end
-                r5.dcsize = f.dc
-                _r5_reset(r5)
+        if not f.solid:
+            w := _rar_win_size(a, idx)
+            if w > 1073741824:
+                ret RAR_TOO_BIG
             end
-            st = _r5_decode(r5, src, f.pack_size as int, f.unp_size, lim, out)
-        else:
-            if not f.solid:
-                w := _rar_win_size(a, idx)
-                if not _r3_setwin(r3, w as int):
-                    ret RAR_TOO_BIG
-                end
-                _r3_reset(r3)
+            if not _r5_setwin(r5, w as int):
+                ret RAR_TOO_BIG
             end
-            st = _r3_decode(r3, src, f.pack_size as int, f.unp_size, lim, out)
+            r5.dcsize = f.dc
+            _r5_reset(r5)
         end
+        st := _r5_decode(r5, src, f.pack_size as int, f.unp_size, lim, out)
         if st != RAR_OK:
             out.len = base
             nx = -1
@@ -363,11 +345,9 @@ pub func RarExtract(p: void*, n: int, name: str, max: int, status &: int): compr
     idx := _rar_find(a, name)
     if idx >= 0:
         mut r5 := _r5_new(131072, 64)
-        mut r3 := _r3_new(131072)
         mut nx := -1
-        status = _rar_run(a, r5, r3, nx, idx, max as i64, out)
+        status = _rar_run(a, r5, nx, idx, max as i64, out)
         _r5_free(r5)
-        _r3_free(r3)
     end
     _rar_free_files(a.files)
     ret out
@@ -395,7 +375,6 @@ pub func RarExtractAllStatus(p: void*, n: int, destdir: str, status &: int): int
     mut extracted := 0
     mut a := _rar_open(p, n)
     mut r5 := _r5_new(131072, 64)
-    mut r3 := _r3_new(131072)
     mut nx := -1
     mut broken := false
     mut i := 0
@@ -423,7 +402,7 @@ pub func RarExtractAllStatus(p: void*, n: int, destdir: str, status &: int): int
                 EnsureDir(parent)
                 mem.Free(parent as void*)
                 mut data := compress.NewByteBuf()
-                st := _rar_run(a, r5, r3, nx, i - 1, 0 as i64, data)
+                st := _rar_run(a, r5, nx, i - 1, 0 as i64, data)
                 if st == RAR_OK:
                     if WriteBinaryFileBuf(outpath, data):
                         extracted++
@@ -445,7 +424,6 @@ pub func RarExtractAllStatus(p: void*, n: int, destdir: str, status &: int): int
         status = RAR_ENCRYPTED
     end
     _r5_free(r5)
-    _r3_free(r3)
     _rar_free_files(a.files)
     ret extracted
 end

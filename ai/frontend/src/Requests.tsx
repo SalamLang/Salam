@@ -165,7 +165,7 @@ function RequestItem({ r, showUser, onUser, onKey, onProject }: ItemProps) {
                   <dt>{t("فراخوانی ابزار", "Tool calls")}</dt>
                   <dd>{fmtNum(r.usage.tools || 0)}</dd>
                 </div>
-                {r.usage.cost > 0 && (
+                {showUser && r.usage.cost > 0 && (
                   <div>
                     <dt>{t("هزینه", "Cost")}</dt>
                     <dd>{fmtCost(r.usage.cost)}</dd>

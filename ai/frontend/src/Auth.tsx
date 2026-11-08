@@ -4,6 +4,7 @@ import { api, ApiError, rememberOAuth, setToken, type User } from "./api";
 import { IconCode, IconFigma, IconGithub, IconEye, IconGlobe, IconEyeOff, IconMoon, IconSun, IconSwap, IconBook } from "./icons";
 import type { Theme } from "./theme";
 import { isFa, setLang, t } from "./i18n";
+import { autoDir } from "./dir";
 
 type Mode = "login" | "register";
 
@@ -139,7 +140,7 @@ export function AuthForm({ onAuth, compact = false, intro }: { onAuth: (u: User)
       {mode === "register" && (
         <label className="field">
           <span>{t("نام", "Name")}</span>
-          <input value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" placeholder={t("مثلا سارا احمدی", "e.g. Sara Ahmadi")} maxLength={80} />
+          <input value={name} dir={autoDir(name, t("مثلا سارا احمدی", "e.g. Sara Ahmadi"))} onChange={(e) => setName(e.target.value)} autoComplete="name" placeholder={t("مثلا سارا احمدی", "e.g. Sara Ahmadi")} maxLength={80} />
         </label>
       )}
       <label className="field">

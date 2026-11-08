@@ -8,6 +8,7 @@ import { Markdown } from "./Markdown";
 import { RequestList } from "./Requests";
 import { confirmDialog, Subject } from "./Confirm";
 import { t } from "./i18n";
+import { autoDir } from "./dir";
 import { planName } from "./Plans";
 import { Checkbox } from "./Checkbox";
 
@@ -485,7 +486,7 @@ function Users({ picked, onPick, notify }: { picked: Picked; onPick: (p: Picked)
         <label className="search">
           <IconSearch width={16} height={16} />
           <span className="sr-only">{t("جست‌وجوی کاربر", "Search users")}</span>
-          <input type="search" value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("جست‌وجوی نام یا ایمیل", "Search name or email")} />
+          <input type="search" dir={autoDir(q, t("جست‌وجوی نام یا ایمیل", "Search name or email"))} value={q} onChange={(e) => setQ(e.target.value)} placeholder={t("جست‌وجوی نام یا ایمیل", "Search name or email")} />
         </label>
       </div>
       {data && data.plain_ready === false && (
@@ -948,13 +949,13 @@ function Subscriptions({ picked, notify }: { picked: Picked; notify: (msg: strin
             <span>
               {t("تعداد روز", "Days")} <span className="opt">{t("اختیاری", "optional")}</span>
             </span>
-            <input type="number" inputMode="numeric" min="1" max="3650" value={days} onChange={(e) => setDays(e.target.value)} placeholder={t("پیش‌فرض پلن", "Plan default")} />
+            <input type="number" dir={autoDir(days, t("پیش‌فرض پلن", "Plan default"))} inputMode="numeric" min="1" max="3650" value={days} onChange={(e) => setDays(e.target.value)} placeholder={t("پیش‌فرض پلن", "Plan default")} />
           </label>
           <label className="grant-field">
             <span>
               {t("یادداشت", "Note")} <span className="opt">{t("اختیاری", "optional")}</span>
             </span>
-            <input type="text" value={note} onChange={(e) => setNote(e.target.value)} placeholder={t("چرا رایگان داده شد", "Why it was given for free")} />
+            <input type="text" dir={autoDir(note, t("چرا رایگان داده شد", "Why it was given for free"))} value={note} onChange={(e) => setNote(e.target.value)} placeholder={t("چرا رایگان داده شد", "Why it was given for free")} />
           </label>
         </div>
         <div className="grant-actions">

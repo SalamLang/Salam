@@ -4,6 +4,7 @@ import type { Chat, Project, ProjectInput } from "./api";
 import { confirmDialog } from "./Confirm";
 import { fmtDate, fmtNum } from "./format";
 import { t } from "./i18n";
+import { autoDir } from "./dir";
 import {
   IconChat,
   IconClose,
@@ -165,6 +166,7 @@ export function ProjectDialog({ project, busy, onSave, onClose }: DialogProps) {
           <input
             ref={nameRef}
             value={name}
+            dir={autoDir(name, t("مثلاً بازطراحی سایت", "For example: website redesign"))}
             onChange={(e) => setName(e.target.value)}
             maxLength={120}
             placeholder={t(
@@ -178,6 +180,7 @@ export function ProjectDialog({ project, busy, onSave, onClose }: DialogProps) {
           <textarea
             className="project-textarea"
             value={description}
+            dir={autoDir(description, t("این پروژه چه کاری انجام می‌دهد؟", "What is this project about?"))}
             onChange={(e) => setDescription(e.target.value)}
             maxLength={1000}
             rows={3}
@@ -561,6 +564,7 @@ export function ProjectPage({
                 <input
                   className="rename"
                   value={draft}
+                  dir="auto"
                   autoFocus
                   maxLength={80}
                   onChange={(e) => setDraft(e.target.value)}

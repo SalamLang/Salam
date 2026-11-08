@@ -750,10 +750,12 @@ export function newPollSecret(): string {
 
 export async function awaitProviderLogin(
   poll: string,
+  alive: () => boolean,
 ): Promise<{ token: string; next: string }> {
   const until = Date.now() + 16 * 60 * 1000;
   while (Date.now() < until) {
     await pause(2000);
+    if (!alive()) throw new ApiError(0, "canceled", "");
     let r;
     try {
       r = await api.pollProvider(poll);

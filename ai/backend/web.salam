@@ -65,7 +65,6 @@ func fill_english():
     EN.put("ساخت پیوند ناموفق بود.", "Creating the link failed.")
     EN.put("پیوند همکاری برای گفت‌وگوهای متصل به رایانه‌ی شما ساخته نمی‌شود، چون مهمان می‌تواند روی رایانه‌ی شما کار کند. پیوند فقط‌دیدنی ممکن است.", "A collaboration link cannot be made for chats connected to your computer, because a guest could act on your computer. A view only link is possible.")
     EN.put("پیوند همکاری برای گفت‌وگوهای محیط ابری ساخته نمی‌شود، چون مهمان به حساب‌های متصل شما دسترسی پیدا می‌کند. پیوند فقط‌دیدنی ممکن است.", "A collaboration link cannot be made for cloud environment chats, because a guest would reach your connected accounts. A view only link is possible.")
-    EN.put("اشتراک شما نامحدود است و به خرید تازه نیازی ندارد.", "Your subscription is unlimited, so there is nothing to buy.")
     EN.put("ایمیل یا گذرواژه درست نیست.", "The email or password is not correct.")
     EN.put("این اتصال پیدا نشد.", "This connection was not found.")
     EN.put("این اشتراک فعال پیدا نشد.", "This active subscription was not found.")
@@ -171,6 +170,13 @@ func touch(ctx: i64, hash: str):
     aistore.Lock()
     _r := aistore.Run("UPDATE sessions SET last_used = ?1, ip = LEFT(?2, 64), client = IF(?3 = '', client, ?3), client_version = IF(?4 = '', client_version, ?4), os = IF(?7 = '', os, ?7), os_version = IF(?8 = '', os_version, ?8), arch = IF(?9 = '', arch, ?9) WHERE token = ?5 AND last_used < ?6", a)
     aistore.Unlock()
+end
+
+func paid_user(uid: str): bool:
+    aistore.Lock()
+    v := aistore.OneText("SELECT COUNT(*) FROM subscriptions WHERE user_id = ?1 AND status = 'active' AND plan <> 'free' AND (expires = 0 OR expires > ?2)", two(uid, I64s(aistore.Now())))
+    aistore.Unlock()
+    ret v.len() > 0 and v != "0"
 end
 
 pub func Enter():
@@ -398,11 +404,22 @@ pub func PolicyOf(uid: str, system &: str): bool:
     ret free
 end
 
+pub func PolicyLifted(uid: str, system &: str): bool:
+    if PolicyOf(uid, system):
+        ret true
+    end
+    ret paid_user(uid)
+end
+
 pub func ChatPolicyFree(chat: str): bool:
     aistore.Lock()
     v := aistore.OneText("SELECT u.policy_free FROM users u JOIN chats c ON c.user_id = u.id WHERE c.id = ?1", one(chat))
+    owner := aistore.OneText("SELECT user_id FROM chats WHERE id = ?1", one(chat))
     aistore.Unlock()
-    ret v.len() > 0 and v != "0"
+    if v.len() > 0 and v != "0":
+        ret true
+    end
+    ret owner.len() > 0 and paid_user(owner)
 end
 
 pub func NeedAdmin(ctx: i64): i64:

@@ -79,6 +79,7 @@ function limit(n: number, unit: string): string {
 
 function features(p: Plan): string[] {
   return [
+    p.price === 0 ? t("فقط کد زبان سلام می‌نویسد", "Writes Salam code only") : t("هر زبان برنامه‌نویسی و هر کاری", "Any programming language and any task"),
     t(`گفت‌وگو: ${limit(p.chat_daily, "پیام در روز")}`, `Chat: ${limit(p.chat_daily, "messages per day")}`),
     ...(p.chat_weekly > 0 ? [t(`گفت‌وگو در هفته: ${fmtNum(p.chat_weekly)} پیام`, `Chat per week: ${fmtNum(p.chat_weekly)} messages`)] : []),
     ...(p.chat_5h > 0 ? [t(`گفت‌وگو در ۵ ساعت: ${fmtNum(p.chat_5h)} پیام`, `Chat per 5 hours: ${fmtNum(p.chat_5h)} messages`)] : []),
@@ -271,8 +272,9 @@ export function Plans({ notify }: { notify: (msg: string, ok?: boolean) => void 
           <h3>{t("محدودیت‌ها، صادقانه", "Limits, honestly")}</h3>
         </div>
         <ul className="plan-limits">
-          <li>{t("پلن نامحدود سقف پیام و درخواست در روز و سقف درخواست هم‌زمان ندارد.", "The Unlimited plan has no per-day message or request cap and no cap on parallel requests.")}</li>
-          <li>{t("هر نوبت در پلن نامحدود تا ۱۲ ساعت می‌تواند ادامه پیدا کند. پلن‌های دیگر: گفت‌وگو ۱۰ دقیقه و ایجنت رومیزی ۱ ساعت برای هر نوبت.", "On Unlimited a single turn can run up to 12 hours. Other plans: 10 minutes per chat turn and 1 hour per desktop agent turn.")}</li>
+          <li>{t("پلن رایگان فقط برای زبان سلام است: دستیار در آن فقط کد سلام می‌نویسد. پلن‌های پولی محدودیت زبان ندارند و هر زبان برنامه‌نویسی و هر کار دیگری را انجام می‌دهند.", "The free plan is for the Salam language only: the assistant writes only Salam code. Paid plans have no language limit and handle any programming language and any other task.")}</li>
+          <li>{t("پلن‌های نامحدود سقف پیام و درخواست در روز و هفته ندارند. تعداد درخواست هم‌زمان هر پلن را روی کارت آن می‌بینید.", "Unlimited plans have no per-day or per-week message or request cap. Each plan's number of parallel requests is on its card.")}</li>
+          <li>{t("هر نوبت در پلن‌های نامحدود تا ۳۰ دقیقه می‌تواند ادامه پیدا کند. پلن‌های دیگر: گفت‌وگو ۱۰ دقیقه و ایجنت رومیزی ۱ ساعت برای هر نوبت.", "On Unlimited plans a single turn can run up to 30 minutes. Other plans: 10 minutes per chat turn and 1 hour per desktop agent turn.")}</li>
           <li>{t("اگر نوبتی به سقف زمانی برسد، متن تا آن لحظه می‌ماند و با نوشتن «ادامه بده» از همان‌جا ادامه پیدا می‌کند.", "If a turn reaches its time limit, the text so far is kept and you can write \"continue\" to pick up from there.")}</li>
           <li>{t("پیام‌هایی که مهمان‌ها از راه یک پیوند همکاری می‌فرستند هم از پیام‌ها و سهمیه‌ی پلن صاحب گفت‌وگو کم می‌شود. با رسیدن به سقف روزانه، پیوند خودکار متوقف می‌شود.", "Messages guests send through a collaborate link also count against the chat owner's plan and limits. When the daily limit is reached the link pauses itself.")}</li>
           <li>{t("هر ابزار روی رایانه شما تا ۱۰ دقیقه برای پاسخ مهلت دارد و سرور برای دادن حافظه گاهی دوباره راه‌اندازی می‌شود. بستن برنامه یا قطع اینترنت رایانه شما کار را متوقف می‌کند، اما صفحه پس از وصل شدن دوباره به نوبت در حال اجرا برمی‌گردد.", "Each tool on your computer gets up to 10 minutes to answer, and the server sometimes restarts to free memory. Closing the app or losing your computer's internet pauses the work, but the page reattaches to the running turn when it reconnects.")}</li>

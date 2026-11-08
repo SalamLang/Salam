@@ -11,7 +11,7 @@ import { Composer } from "./Composer";
 import { getEffort } from "./effort";
 import { QueuePanel } from "./Queue";
 import { Connect } from "./Connect";
-import { Connections, TelegramLink } from "./Telegram";
+import { Connections, TelegramLink, integrationsLoader } from "./Telegram";
 import { OAuthCallback, providerFromPath } from "./OAuthCallback";
 import { agent, isDesktop, saveMode, savedMode, savedWorkspace, saveWorkspace, type AgentMode } from "./desktop";
 import { Keys } from "./Keys";
@@ -204,8 +204,10 @@ export function App() {
   const signedIn = user !== null;
   useEffect(() => {
     if (!signedIn || isDesktop) return;
-    api
-      .integrations()
+    const known = integrationsLoader.peek();
+    if (known) setCloudOk(known.sandbox);
+    integrationsLoader
+      .load()
       .then((r) => setCloudOk(r.sandbox))
       .catch(() => {});
   }, [signedIn]);

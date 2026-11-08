@@ -110,6 +110,16 @@ export function Plans({ notify }: { notify: (msg: string) => void }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    const back = (e: PageTransitionEvent) => {
+      if (!e.persisted) return;
+      setBusy(null);
+      void load();
+    };
+    window.addEventListener("pageshow", back);
+    return () => window.removeEventListener("pageshow", back);
+  }, [load]);
+
   const buy = async (plan: Plan) => {
     if (gateways.length === 0) return;
     setBusy(plan.id);

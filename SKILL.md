@@ -1569,8 +1569,8 @@ end
   verify the CRC; the method is not stored in the output; free every buffer.
 - **`archive`**: `ZipCreate ZipCreateFile ZipList ZipExtractAll ZipExtractByName TarCreate TarList TarExtractAll RarCreate RarCreateFile RarList RarExtract RarExtractByName RarExtractAll RarStatusText GzipCompressFile ReadBinaryFile WriteBinaryFile`. No zip64 (under 2 GB),
   ZIP methods 0 and 8 only, CRC not checked, tar names over 100 bytes are
-  cut. RAR 5 is read fully (CRC checked, `RarExtract` reports a `RAR_*`
-  status); RAR 3/4 only stored entries; no passwords or multi-volume; `RarCreate`
+  cut. RAR 1.5 to 5 are read fully (CRC checked, `RarExtract` reports a
+  `RAR_*` status); no passwords or multi-volume; `RarCreate`
   writes stored RAR 5.
 - **`excel`**: xlsx, ods and csv workbooks: `Open Save New NewWorkbook NewSheet` with sheet methods `set_string set_number get_cell get_string row_count ...`, `CellRef ParseCellRef SheetToJSON SheetToCSV`. No `.xls`
   (`IsXLS` detects it); the format comes from the file extension; formulas

@@ -150,7 +150,7 @@ pub fn load(file: &Path, root: &str) -> Option<Loaded> {
 #[cfg(test)]
 mod tests {
     use super::super::index::tests::{build, touch};
-        use super::*;
+    use super::*;
 
     #[test]
     fn save_and_load_round_trip_with_mru() {

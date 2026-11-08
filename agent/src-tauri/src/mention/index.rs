@@ -113,15 +113,19 @@ impl Index {
     }
 
     pub fn dirs(&self) -> Vec<(Box<str>, u32)> {
-        self.entries.iter().filter(|e| e.is_dir).map(|e| (e.path.clone(), e.mtime)).collect()
+        self.entries
+            .iter()
+            .filter(|e| e.is_dir)
+            .map(|e| (e.path.clone(), e.mtime))
+            .collect()
     }
 
     pub fn set_mtime(&mut self, path: &str, mtime: u32) {
-        if let Ok(i) = self.find(path) {
-            if self.entries[i].mtime != mtime {
-                self.entries[i].mtime = mtime;
-                self.touch();
-            }
+        if let Ok(i) = self.find(path)
+            && self.entries[i].mtime != mtime
+        {
+            self.entries[i].mtime = mtime;
+            self.touch();
         }
     }
 
@@ -133,7 +137,11 @@ impl Index {
     }
 
     pub fn direct_children(&self, dir: &str) -> Vec<usize> {
-        let depth = if dir.is_empty() { 1 } else { dir.bytes().filter(|b| *b == b'/').count() + 2 };
+        let depth = if dir.is_empty() {
+            1
+        } else {
+            dir.bytes().filter(|b| *b == b'/').count() + 2
+        };
         self.subtree(dir).filter(|i| self.entries[*i].depth as usize == depth).collect()
     }
 
@@ -193,7 +201,11 @@ impl Index {
 pub fn rel_string(root: &Path, abs: &Path) -> Option<String> {
     let rel = abs.strip_prefix(root).ok()?;
     let s = rel.to_str()?;
-    if cfg!(windows) { Some(s.replace('\\', "/")) } else { Some(s.to_string()) }
+    if cfg!(windows) {
+        Some(s.replace('\\', "/"))
+    } else {
+        Some(s.to_string())
+    }
 }
 
 pub fn walker(root: &Path, rel: &str, max_rel_depth: Option<usize>) -> ignore::Walk {
@@ -242,7 +254,9 @@ pub fn walk(root: &Path, rel: &str, max_rel_depth: Option<usize>, stop: &AtomicB
         if path.len() > MAX_PATH {
             continue;
         }
-        let Ok(meta) = std::fs::symlink_metadata(item.path()) else { continue };
+        let Ok(meta) = std::fs::symlink_metadata(item.path()) else {
+            continue;
+        };
         let is_dir = meta.is_dir();
         sink(Entry::new(&path, mtime_of(&meta), is_dir));
         count += 1;
@@ -300,7 +314,15 @@ pub mod tests {
         assert!(p.contains(&"src/main.rs".to_string()));
         assert!(p.contains(&"src/vendor-utils/a.rs".to_string()));
         assert!(p.contains(&".gitignore".to_string()));
-        for gone in ["vendor", "vendor/lib/x.php", "packages/app/vendor", "apps/web/node_modules", "secret", "notes.log", "docs/a.zip"] {
+        for gone in [
+            "vendor",
+            "vendor/lib/x.php",
+            "packages/app/vendor",
+            "apps/web/node_modules",
+            "secret",
+            "notes.log",
+            "docs/a.zip",
+        ] {
             assert!(!p.contains(&gone.to_string()), "{gone} must not be indexed");
         }
         assert!(p.contains(&"packages/app".to_string()));
@@ -368,7 +390,14 @@ pub mod tests {
     #[test]
     fn subtree_ignores_lookalike_names() {
         let mut index = Index::default();
-        for (p, d) in [("a", true), ("a-b", false), ("a.txt", false), ("a/x", false), ("ab", true), ("ab/y", false)] {
+        for (p, d) in [
+            ("a", true),
+            ("a-b", false),
+            ("a.txt", false),
+            ("a/x", false),
+            ("ab", true),
+            ("ab/y", false),
+        ] {
             index.entries.push(Entry::new(p, 0, d));
         }
         index.entries.sort_by(|a, b| a.path.cmp(&b.path));

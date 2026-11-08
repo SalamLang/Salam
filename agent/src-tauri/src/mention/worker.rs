@@ -53,7 +53,6 @@ impl Handle {
         self.stop.store(true, Ordering::Relaxed);
         let _ = self.tx.send(Msg::Stop);
     }
-
 }
 
 struct Guard(Arc<AtomicBool>);
@@ -289,7 +288,10 @@ impl Worker {
             if ev.need_rescan() {
                 rescan = true;
             }
-            let content = matches!(ev.kind, EventKind::Modify(notify::event::ModifyKind::Data(_) | notify::event::ModifyKind::Metadata(_)));
+            let content = matches!(
+                ev.kind,
+                EventKind::Modify(notify::event::ModifyKind::Data(_) | notify::event::ModifyKind::Metadata(_))
+            );
             if matches!(ev.kind, EventKind::Access(_)) {
                 continue;
             }
@@ -482,7 +484,11 @@ mod tests {
         touch(&root.join("a/sub/two.txt"));
         let seen = Arc::new(AtomicU64::new(0));
         let s2 = seen.clone();
-        let h = spawn(root.clone(), tmp.path().join("c.idx"), Arc::new(move |r| s2.store(r, Ordering::Relaxed)));
+        let h = spawn(
+            root.clone(),
+            tmp.path().join("c.idx"),
+            Arc::new(move |r| s2.store(r, Ordering::Relaxed)),
+        );
         let wait = |ok: &dyn Fn(&Index) -> bool| {
             for _ in 0..100 {
                 if ok(&h.index.read().unwrap()) {
@@ -495,11 +501,15 @@ mod tests {
         assert!(wait(&|i| !i.scanning && i.find("a/sub/two.txt").is_ok()));
         std::thread::sleep(Duration::from_millis(500));
         fs::rename(root.join("a"), root.join("b")).unwrap();
-        assert!(wait(&|i| i.find("b/sub/two.txt").is_ok() && i.find("a").is_err() && i.find("a/one.txt").is_err()));
+        assert!(wait(&|i| i.find("b/sub/two.txt").is_ok()
+            && i.find("a").is_err()
+            && i.find("a/one.txt").is_err()));
         touch(&root.join("b/sub/more/deep.txt"));
         assert!(wait(&|i| i.find("b/sub/more/deep.txt").is_ok()));
         fs::remove_dir_all(root.join("b/sub")).unwrap();
-        assert!(wait(&|i| i.find("b/sub").is_err() && i.find("b/sub/more/deep.txt").is_err() && i.find("b/one.txt").is_ok()));
+        assert!(wait(&|i| i.find("b/sub").is_err()
+            && i.find("b/sub/more/deep.txt").is_err()
+            && i.find("b/one.txt").is_ok()));
         h.stop();
         for _ in 0..50 {
             if !h.alive() {

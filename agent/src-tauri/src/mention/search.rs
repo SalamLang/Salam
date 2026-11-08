@@ -68,7 +68,10 @@ impl Query {
             let exact = if smart && c.is_uppercase() { Some(fold_cs(c)) } else { None };
             chars.push((f, exact));
         }
-        Query { has_slash: chars.iter().any(|(c, _)| *c == '/'), chars }
+        Query {
+            has_slash: chars.iter().any(|(c, _)| *c == '/'),
+            chars,
+        }
     }
 
     pub fn len(&self) -> usize {
@@ -146,14 +149,18 @@ fn score_entry(e: &Entry, idx: usize, off: usize, q: &Query, ctx: &Ctx, s: &mut 
         s.folded.push(fold(c));
     }
     let n = s.orig.len();
-    let name_at = if (e.name_at as usize) >= off { e.path[off..e.name_at as usize].chars().count().min(n) } else { 0 };
+    let name_at = if (e.name_at as usize) >= off {
+        e.path[off..e.name_at as usize].chars().count().min(n)
+    } else {
+        0
+    };
     let mut qi = 0;
     let mut end = 0;
-    for i in 0..n {
-        if s.folded[i] == '\0' {
+    for (i, &f) in s.folded.iter().enumerate() {
+        if f == '\0' {
             continue;
         }
-        if qi < q.len() && q.matches(qi, s.orig[i], s.folded[i]) {
+        if qi < q.len() && q.matches(qi, s.orig[i], f) {
             qi += 1;
             if qi == q.len() {
                 end = i;
@@ -329,7 +336,10 @@ pub fn search(index: &Index, text: &str, limit: usize, cancel: &Cancel) -> Outco
     let limit = limit.clamp(1, 100);
     let text = text.trim_start();
     let mru = mru_bonuses(index);
-    let ctx = Ctx { now: now_secs(), mru: &mru };
+    let ctx = Ctx {
+        now: now_secs(),
+        mru: &mru,
+    };
     let (dir, rest) = match text.rfind(['/', '\\']) {
         Some(i) => (normalize_dir(&text[..i]), &text[i + 1..]),
         None => (String::new(), text),
@@ -354,7 +364,11 @@ pub fn search(index: &Index, text: &str, limit: usize, cancel: &Cancel) -> Outco
     }
     let slice = &index.entries[range.clone()];
     let staged: &[Entry] = if has_dir { &[] } else { &index.staging };
-    let workers = if slice.len() + staged.len() > 20_000 { std::thread::available_parallelism().map_or(2, |n| n.get().min(4)) } else { 1 };
+    let workers = if slice.len() + staged.len() > 20_000 {
+        std::thread::available_parallelism().map_or(2, |n| n.get().min(4))
+    } else {
+        1
+    };
     let chunk = (slice.len() / workers).max(1);
     let base = range.start;
     let results: Vec<Option<Vec<(i32, usize)>>> = std::thread::scope(|sc| {
@@ -400,7 +414,13 @@ pub fn search(index: &Index, text: &str, limit: usize, cancel: &Cancel) -> Outco
     if cancel.stale() {
         return Outcome::Stale;
     }
-    let entry_at = |i: usize| if i < index.entries.len() { &index.entries[i] } else { &index.staging[i - index.entries.len()] };
+    let entry_at = |i: usize| {
+        if i < index.entries.len() {
+            &index.entries[i]
+        } else {
+            &index.staging[i - index.entries.len()]
+        }
+    };
     let hits = all
         .into_iter()
         .map(|(score, i)| {
@@ -416,15 +436,22 @@ fn children_listing(index: &Index, dir: &str, limit: usize) -> Vec<Hit> {
     let mut kids = index.direct_children(dir);
     kids.sort_by(|a, b| {
         let (x, y) = (&index.entries[*a], &index.entries[*b]);
-        y.is_dir.cmp(&x.is_dir).then_with(|| x.name().to_lowercase().cmp(&y.name().to_lowercase()))
+        y.is_dir
+            .cmp(&x.is_dir)
+            .then_with(|| x.name().to_lowercase().cmp(&y.name().to_lowercase()))
     });
-    kids.into_iter().take(limit).map(|i| to_hit(&index.entries[i], 0, Vec::new())).collect()
+    kids.into_iter()
+        .take(limit)
+        .map(|i| to_hit(&index.entries[i], 0, Vec::new()))
+        .collect()
 }
 
 fn default_listing(index: &Index, mru: &[(usize, i32)], limit: usize) -> Vec<Hit> {
     let mut picked: Vec<usize> = mru.iter().map(|m| m.0).collect();
     picked.sort_by_key(|i| std::cmp::Reverse(mru.iter().find(|m| m.0 == *i).map_or(0, |m| m.1)));
-    let mut recent: Vec<usize> = (0..index.entries.len()).filter(|i| !index.entries[*i].is_dir && index.entries[*i].mtime > 0).collect();
+    let mut recent: Vec<usize> = (0..index.entries.len())
+        .filter(|i| !index.entries[*i].is_dir && index.entries[*i].mtime > 0)
+        .collect();
     let keep = 20.min(recent.len());
     if keep > 0 {
         recent.select_nth_unstable_by(keep - 1, |a, b| index.entries[*b].mtime.cmp(&index.entries[*a].mtime));
@@ -433,11 +460,20 @@ fn default_listing(index: &Index, mru: &[(usize, i32)], limit: usize) -> Vec<Hit
     }
     picked.extend(recent);
     for want_dir in [true, false] {
-        picked.extend(index.direct_children("").into_iter().filter(|i| index.entries[*i].is_dir == want_dir));
+        picked.extend(
+            index
+                .direct_children("")
+                .into_iter()
+                .filter(|i| index.entries[*i].is_dir == want_dir),
+        );
     }
     let mut seen = std::collections::HashSet::new();
     picked.retain(|i| seen.insert(*i));
-    picked.into_iter().take(limit).map(|i| to_hit(&index.entries[i], 0, Vec::new())).collect()
+    picked
+        .into_iter()
+        .take(limit)
+        .map(|i| to_hit(&index.entries[i], 0, Vec::new()))
+        .collect()
 }
 
 pub fn scratch_index(entries: Vec<Entry>) -> Index {
@@ -471,7 +507,14 @@ mod tests {
 
     #[test]
     fn basename_exact_and_prefix_beat_path_matches() {
-        let index = make(&["src/main.rs", "src/domain/rules.rs", "docs/mainly-about.md", "main.rs", "src/a/m/a/i/n.txt", "tests/main_test.rs"]);
+        let index = make(&[
+            "src/main.rs",
+            "src/domain/rules.rs",
+            "docs/mainly-about.md",
+            "main.rs",
+            "src/a/m/a/i/n.txt",
+            "tests/main_test.rs",
+        ]);
         let r = run(&index, "main.rs");
         assert_eq!(r[0], "main.rs");
         assert_eq!(r[1], "src/main.rs");
@@ -504,7 +547,9 @@ mod tests {
         assert_eq!(run(&index, "گزارشها")[0], "docs/گزارش\u{200c}ها.md");
         assert_eq!(run(&index, "كتاب")[0], "docs/کتاب.txt");
         let seq = AtomicU64::new(1);
-        let Outcome::Hits(h) = search(&index, "کتاب", 5, &Cancel { seq: &seq, mine: 1 }) else { panic!() };
+        let Outcome::Hits(h) = search(&index, "کتاب", 5, &Cancel { seq: &seq, mine: 1 }) else {
+            panic!()
+        };
         assert_eq!(h[0].ranges, vec![(h[0].name_at, h[0].name_at + 4)]);
     }
 

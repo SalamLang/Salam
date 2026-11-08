@@ -30,8 +30,14 @@ pub const DIR_RULES: &[DirRule] = &[
     always("build"),
     always("dist"),
     always("out"),
-    DirRule { name: "bin", when: When::SiblingExt(DOTNET) },
-    DirRule { name: "obj", when: When::SiblingExt(DOTNET) },
+    DirRule {
+        name: "bin",
+        when: When::SiblingExt(DOTNET),
+    },
+    DirRule {
+        name: "obj",
+        when: When::SiblingExt(DOTNET),
+    },
     always(".gradle"),
     always(".idea"),
     always(".vscode-test"),
@@ -47,7 +53,10 @@ pub const DIR_RULES: &[DirRule] = &[
     always("__pycache__"),
     always(".venv"),
     always("venv"),
-    DirRule { name: "env", when: When::InsideFile("pyvenv.cfg") },
+    DirRule {
+        name: "env",
+        when: When::InsideFile("pyvenv.cfg"),
+    },
     always(".tox"),
     always(".mypy_cache"),
     always(".pytest_cache"),
@@ -64,7 +73,10 @@ pub const DIR_RULES: &[DirRule] = &[
     always(".stack-work"),
     always("dist-newstyle"),
     always("_build"),
-    DirRule { name: "deps", when: When::SiblingFile("mix.exs") },
+    DirRule {
+        name: "deps",
+        when: When::SiblingFile("mix.exs"),
+    },
     always(".elixir_ls"),
     always(".bundle"),
     always(".sass-cache"),
@@ -85,7 +97,8 @@ fn has_ext(dir: &Path, exts: &[&str]) -> bool {
     read.flatten().any(|e| {
         let name = e.file_name();
         let name = name.to_string_lossy();
-        name.rsplit_once('.').is_some_and(|(_, ext)| exts.iter().any(|x| ext.eq_ignore_ascii_case(x)))
+        name.rsplit_once('.')
+            .is_some_and(|(_, ext)| exts.iter().any(|x| ext.eq_ignore_ascii_case(x)))
     })
 }
 
@@ -167,7 +180,19 @@ mod tests {
     #[test]
     fn normal_dirs_are_kept() {
         let tmp = tempfile::tempdir().unwrap();
-        for rel in ["src", "src/vendor-utils", "vendors", "my_vendor", "bin", "obj", "env", "deps", "lib/cache", "storage/app", "docs"] {
+        for rel in [
+            "src",
+            "src/vendor-utils",
+            "vendors",
+            "my_vendor",
+            "bin",
+            "obj",
+            "env",
+            "deps",
+            "lib/cache",
+            "storage/app",
+            "docs",
+        ] {
             assert!(!dir(rel, &tmp.path().join(rel)), "{rel} should be kept");
         }
     }
@@ -193,10 +218,32 @@ mod tests {
 
     #[test]
     fn junk_files_are_skipped_and_source_is_kept() {
-        for name in [".DS_Store", "Thumbs.db", "a.zip", "x.tar", "lib.so", "App.dll", "Main.class", "m.pyc", "x.o", "l.a", "setup.EXE", "x.jar"] {
+        for name in [
+            ".DS_Store",
+            "Thumbs.db",
+            "a.zip",
+            "x.tar",
+            "lib.so",
+            "App.dll",
+            "Main.class",
+            "m.pyc",
+            "x.o",
+            "l.a",
+            "setup.EXE",
+            "x.jar",
+        ] {
             assert!(skip_file(name), "{name}");
         }
-        for name in ["main.rs", "Cargo.lock", "package-lock.json", "a.zipper", "zip", "notes.md", ".gitignore", "فایل.txt"] {
+        for name in [
+            "main.rs",
+            "Cargo.lock",
+            "package-lock.json",
+            "a.zipper",
+            "zip",
+            "notes.md",
+            ".gitignore",
+            "فایل.txt",
+        ] {
             assert!(!skip_file(name), "{name}");
         }
     }

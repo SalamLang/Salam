@@ -18,277 +18,304 @@ import compress
 import filepath
 import mem
 
-const _RAR4_SIG_LEN := 7
-const _RAR5_SIG_LEN := 8
+@en "RAR_OK"
+@fa "آر ای آر موفق"
+pub const RAR_OK := 0
+@en "RAR_NOT_FOUND"
+@fa "آر ای آر یافت نشد"
+pub const RAR_NOT_FOUND := 1
+@en "RAR_UNSUPPORTED"
+@fa "آر ای آر پشتیبانی نمی شود"
+pub const RAR_UNSUPPORTED := 2
+@en "RAR_ENCRYPTED"
+@fa "آر ای آر رمزگذاری شده"
+pub const RAR_ENCRYPTED := 3
+@en "RAR_CORRUPT"
+@fa "آر ای آر خراب"
+pub const RAR_CORRUPT := 4
+@en "RAR_BAD_CRC"
+@fa "آر ای آر چک جمع ناهمخوان"
+pub const RAR_BAD_CRC := 5
+@en "RAR_MULTIVOLUME"
+@fa "آر ای آر چند بخشی"
+pub const RAR_MULTIVOLUME := 6
+@en "RAR_TOO_BIG"
+@fa "آر ای آر بیش از حد بزرگ"
+pub const RAR_TOO_BIG := 7
+@en "RAR_UNSAFE_PATH"
+@fa "آر ای آر مسیر ناایمن"
+pub const RAR_UNSAFE_PATH := 8
 
-func _rar4_sig_match(p: void*, n: int): bool:
-    if n < _RAR4_SIG_LEN: ret false end
-    bp := p as u8*
-    ret bp[0] as int == 0x52 and bp[1] as int == 0x61 and bp[2] as int == 0x72 and bp[3] as int == 0x21 and bp[4] as int == 0x1a and bp[5] as int == 0x07 and bp[6] as int == 0x00
+struct _RarFile:
+    pub name: str
+    pub unp_size: i64
+    pub pack_size: i64
+    pub data_off: int
+    pub crc: u32
+    pub has_crc: bool
+    pub mtime: i64
+    pub is_dir: bool
+    pub solid: bool
+    pub method: int
+    pub ver: int
+    pub dict: i64
+    pub encrypted: bool
+    pub split: bool
+    pub redirect: bool
+    pub dc: int
 end
 
-func _rar5_sig_match(p: void*, n: int): bool:
-    if n < _RAR5_SIG_LEN: ret false end
-    bp := p as u8*
-    ret bp[0] as int == 0x52 and bp[1] as int == 0x61 and bp[2] as int == 0x72 and bp[3] as int == 0x21 and bp[4] as int == 0x1a and bp[5] as int == 0x07 and bp[6] as int == 0x01 and bp[7] as int == 0x00
+struct _RarArc:
+    pub p: u8*
+    pub n: int
+    pub valid: bool
+    pub v5: bool
+    pub files: Vector<_RarFile>
+    pub enc_headers: bool
+    pub multi: bool
 end
 
-func _rar_bytes_to_str(p: void*, off: int, n: int): str:
-    mut buf := compress.NewByteBuf()
-    compress.BufPushBytes(buf, ((p as i64) + (off as i64)) as void*, n)
-    s := compress.BufToStrUnsafe(buf)
-    compress.BufFree(buf)
+@en "RarFileInput"
+@fa "ورودی پرونده آر ای آر"
+pub struct RarFileInput:
+    @en "name"
+    @fa "نام"
+    pub name: str = ""
+    @en "data_ptr"
+    @fa "نشانی داده"
+    pub data_ptr: void* = null
+    @en "data_len"
+    @fa "طول داده"
+    pub data_len: int = 0
+    @en "is_dir"
+    @fa "پوشه"
+    pub is_dir: bool = false
+    @en "mtime"
+    @fa "زمان تغییر"
+    pub mtime: i64 = 0 as i64
+end
+
+func _rar_crc_table(): u32*:
+    t := mem.Allocate(1024 as u64) as u32*
+    repeat 256 in i:
+        mut c := i as u32
+        repeat 8:
+            if (c & (1 as u32)) != (0 as u32):
+                c = (c >> 1) ^ (0xEDB88320 as u32)
+            else:
+                c = c >> 1
+            end
+        end
+        t[i] = c
+    end
+    ret t
+end
+
+func _rar_crc(p: void*, n: int): u32:
+    t := _rar_crc_table()
+    bp := p as u8*
+    mut c := 0xFFFFFFFF as u32
+    mut i := 0
+    until i < n:
+        c = t[((c ^ (bp[i] as u32)) & (255 as u32)) as int] ^ (c >> 8)
+        i++
+    end
+    mem.Free(t as void*)
+    ret c ^ (0xFFFFFFFF as u32)
+end
+
+func _rar_open(p: void*, n: int): _RarArc:
+    mut a := _RarArc {
+        p = p as u8*
+        n = n
+        valid = false
+        v5 = false
+        files = Vector {} as Vector<_RarFile>
+        enc_headers = false
+        multi = false
+    }
+    if _rar5_sig_match(p, n):
+        a.valid = true
+        a.v5 = true
+        _rar5_scan(a)
+    else _rar4_sig_match(p, n):
+        a.valid = true
+        _rar4_scan(a)
+    end
+    ret a
+end
+
+func _rar_transparent(f: _RarFile): bool:
+    ret f.is_dir or f.redirect or f.method == 0
+end
+
+func _rar_chain_start(a: _RarArc, idx: int): int:
+    mut s := idx
+    until s > 0:
+        cur := a.files.get(s)
+        if not cur.solid and not _rar_transparent(cur):
+            break
+        end
+        s--
+    end
     ret s
 end
 
-func _rar_free_name(s: str):
-    if s.len() > 0:
-        mem.Free(s as void*)
+func _rar_win_size(a: _RarArc, s: int): i64:
+    mut total := 0 as i64
+    mut maxdict := 0 as i64
+    mut k := s
+    until k < a.files.len():
+        f := a.files.get(k)
+        if k > s and not f.solid and not _rar_transparent(f):
+            break
+        end
+        if not _rar_transparent(f):
+            if f.unp_size >= 0:
+                total += f.unp_size
+            else:
+                total += f.dict
+            end
+            if f.dict > maxdict:
+                maxdict = f.dict
+            end
+        end
+        k++
     end
+    mut w := total
+    if maxdict < w:
+        w = maxdict
+    end
+    mut sz := 131072 as i64
+    until sz < w:
+        sz = sz << 1
+    end
+    ret sz
 end
 
-func _rar4_read_file_fields(p: void*, block_start: int, pack_size_out &: int, unp_size_out &: int, method_out &: int, flags_out &: int, name_out &: str): int:
-    bp := p as u8*
-    flags_out = (bp[block_start + 3] as int) | ((bp[block_start + 4] as int) << 8)
-    head_size := (bp[block_start + 5] as int) | ((bp[block_start + 6] as int) << 8)
-    f := block_start + 7
-    pack_size_out = LEGet32(p, f)
-    unp_size_out = LEGet32(p, f + 4)
-    method_out = bp[f + 18] as int
-    name_size := LEGet16(p, f + 19)
-    name_off := f + 25
-    name_out = _rar_bytes_to_str(p, name_off, name_size)
-    ret head_size
+func _rar_run(a: _RarArc, r5 &: _R5, nx &: int, idx: int, limit: i64, out &: compress.ByteBuf): int:
+    f := a.files.get(idx)
+    if f.encrypted:
+        ret RAR_ENCRYPTED
+    end
+    if f.split:
+        ret RAR_MULTIVOLUME
+    end
+    if f.is_dir or f.redirect:
+        if nx == idx:
+            nx = idx + 1
+        end
+        ret RAR_OK
+    end
+    if limit > 0 and f.unp_size > limit:
+        ret RAR_TOO_BIG
+    end
+    if f.pack_size < 0 or (f.data_off as i64) + f.pack_size > (a.n as i64):
+        ret RAR_CORRUPT
+    end
+    base := out.len
+    src := ((a.p as i64) + (f.data_off as i64)) as u8*
+    if f.unp_size == 0:
+        if nx == idx:
+            nx = idx + 1
+        end
+    else f.method == 0:
+        if f.unp_size >= 0 and f.unp_size != f.pack_size:
+            ret RAR_CORRUPT
+        end
+        compress.BufPushBytes(out, src as void*, f.pack_size as int)
+        if nx == idx:
+            nx = idx + 1
+        end
+    else:
+        if a.v5 and f.ver > 1:
+            ret RAR_UNSUPPORTED
+        end
+        if not a.v5:
+            ret RAR_UNSUPPORTED
+        end
+        if f.method > 5:
+            ret RAR_UNSUPPORTED
+        end
+        if f.solid and nx != idx:
+            s := _rar_chain_start(a, idx)
+            nx = s
+            mut k := s
+            until k < idx:
+                mut scratch := compress.NewByteBuf()
+                st := _rar_run(a, r5, nx, k, 0 as i64, scratch)
+                compress.BufFree(scratch)
+                if st != RAR_OK:
+                    nx = -1
+                    ret st
+                end
+                k++
+            end
+            nx = idx
+        end
+        lim := limit > 0 ? limit : (f.unp_size >= 0 ? f.unp_size : (1 as i64) << 40)
+        if not f.solid:
+            w := _rar_win_size(a, idx)
+            if w > 1073741824:
+                ret RAR_TOO_BIG
+            end
+            if not _r5_setwin(r5, w as int):
+                ret RAR_TOO_BIG
+            end
+            r5.dcsize = f.dc
+            _r5_reset(r5)
+        end
+        st := _r5_decode(r5, src, f.pack_size as int, f.unp_size, lim, out)
+        if st != RAR_OK:
+            out.len = base
+            nx = -1
+            ret st
+        end
+        nx = idx + 1
+    end
+    if f.has_crc:
+        c := _rar_crc(((out.data as i64) + (base as i64)) as void*, out.len - base)
+        if c != f.crc:
+            out.len = base
+            ret RAR_BAD_CRC
+        end
+    end
+    ret RAR_OK
 end
 
-func _rar5_vint(p: void*, pos: int, len_out &: int): i64:
-    bp := p as u8*
-    mut result := 0 as i64
-    mut shift := 0
+func _rar_find(a: _RarArc, name: str): int:
     mut i := 0
-    until i < 10:
-        b := bp[pos + i] as int
-        result |= (((b & 0x7f) as i64) << shift)
+    until i < a.files.len():
+        if a.files.get(i).name == name:
+            ret i
+        end
         i++
-        if (b & 0x80) == 0:
-            len_out = i
-            ret result
-        end
-        shift += 7
     end
-    len_out = i
-    ret result
+    ret -1
 end
 
-func _rar5_parse_block(p: void*, block_start: int, n: int, header_type_out &: int, total_size_out &: int, is_dir_out &: bool, unp_size_out &: int, method_out &: int, name_out &: str, data_offset_out &: int, data_size_out &: int): bool:
-    if block_start + 5 > n:
-        ret false
-    end
-    mut hsize_len := 0
-    hsize := _rar5_vint(p, block_start + 4, hsize_len) as int
-    header_data_start := block_start + 4 + hsize_len
-    if header_data_start + hsize > n:
-        ret false
-    end
-
-    mut cur := header_data_start
-    mut vlen := 0
-    header_type := _rar5_vint(p, cur, vlen) as int
-    cur += vlen
-    header_flags := _rar5_vint(p, cur, vlen) as int
-    cur += vlen
-
-    if (header_flags & 0x01) != 0:
-        _extra_size := _rar5_vint(p, cur, vlen)
-        cur += vlen
-    end
-    mut data_size := 0
-    if (header_flags & 0x02) != 0:
-        data_size = _rar5_vint(p, cur, vlen) as int
-        cur += vlen
-    end
-
-    header_type_out = header_type
-    data_size_out = data_size
-    is_dir_out = false
-    unp_size_out = 0
-    method_out = 0
-    name_out = ""
-    data_offset_out = header_data_start + hsize
-
-    if header_type == 2 or header_type == 3:
-        file_flags := _rar5_vint(p, cur, vlen) as int
-        cur += vlen
-        unp_size := _rar5_vint(p, cur, vlen) as int
-        cur += vlen
-        _attr := _rar5_vint(p, cur, vlen)
-        cur += vlen
-        if (file_flags & 0x02) != 0:
-            cur += 4
+func _rar_put_vint(b &: compress.ByteBuf, v0: i64):
+    mut v := v0
+    until true:
+        mut x := (v & 0x7f) as int
+        v = v >> 7
+        if v > 0:
+            x |= 0x80
         end
-        if (file_flags & 0x04) != 0:
-            cur += 4
-        end
-        compinfo := _rar5_vint(p, cur, vlen) as int
-        cur += vlen
-        _host_os := _rar5_vint(p, cur, vlen)
-        cur += vlen
-        name_size := _rar5_vint(p, cur, vlen) as int
-        cur += vlen
-        name_out = _rar_bytes_to_str(p, cur, name_size)
-
-        is_dir_out = (file_flags & 0x01) != 0
-        unp_size_out = unp_size
-        method_out = (compinfo >> 7) & 7
-    end
-
-    total_size_out = (header_data_start - block_start) + hsize + data_size
-    ret true
-end
-
-func _rar4_list(p: void*, n: int, out &: Vector<Entry>):
-    bp := p as u8*
-    mut pos := _RAR4_SIG_LEN
-    until pos + 7 <= n:
-        head_type := bp[pos + 2] as int
-        head_size := (bp[pos + 5] as int) | ((bp[pos + 6] as int) << 8)
-        if head_size < 7:
+        compress.BufPush(b, x)
+        if v == 0:
             break
-        end
-        if head_type == 0x7b:
-            break
-        end
-        if head_type == 0x74:
-            mut pack_size := 0
-            mut unp_size := 0
-            mut method := 0
-            mut flags := 0
-            mut name := ""
-            _rar4_read_file_fields(p, pos, pack_size, unp_size, method, flags, name)
-            e := Entry {
-                name = name
-                size = unp_size as i64
-                compressed_size = pack_size as i64
-                is_dir = false
-                method = method
-                crc32 = 0 as u32
-                mtime = 0 as i64
-            }
-            out.push(e)
-            pos += head_size + pack_size
-        else:
-            pos += head_size
         end
     end
 end
 
-func _rar5_list(p: void*, n: int, out &: Vector<Entry>):
-    mut pos := _RAR5_SIG_LEN
-    until pos < n:
-        mut header_type := 0
-        mut total_size := 0
-        mut is_dir := false
-        mut unp_size := 0
-        mut method := 0
-        mut name := ""
-        mut data_offset := 0
-        mut data_size := 0
-        good := _rar5_parse_block(p, pos, n, header_type, total_size, is_dir, unp_size, method, name, data_offset, data_size)
-        if good and total_size > 0 and header_type == 2 and name.len() > 0:
-            e := Entry {
-                name = name
-                size = unp_size as i64
-                compressed_size = data_size as i64
-                is_dir = is_dir
-                method = method
-                crc32 = 0 as u32
-                mtime = 0 as i64
-            }
-            out.push(e)
-        else:
-            _rar_free_name(name)
-        end
-        if not good or total_size <= 0:
-            break
-        end
-        if header_type == 5:
-            break
-        end
-        pos += total_size
-    end
-end
-
-func _rar4_extract(p: void*, n: int, name: str, out &: compress.ByteBuf, ok &: bool):
-    bp := p as u8*
-    mut pos := _RAR4_SIG_LEN
-    until pos + 7 <= n:
-        head_type := bp[pos + 2] as int
-        head_size := (bp[pos + 5] as int) | ((bp[pos + 6] as int) << 8)
-        if head_size < 7:
-            break
-        end
-        if head_type == 0x7b:
-            break
-        end
-        if head_type == 0x74:
-            mut pack_size := 0
-            mut unp_size := 0
-            mut method := 0
-            mut flags := 0
-            mut nm := ""
-            _rar4_read_file_fields(p, pos, pack_size, unp_size, method, flags, nm)
-            hit := nm == name
-            _rar_free_name(nm)
-            if hit:
-                if (flags & 0x0004) != 0:
-                    ret
-                end
-                if method != 0x30:
-                    ret
-                end
-                data_ptr := ((p as i64) + ((pos + head_size) as i64)) as void*
-                compress.BufPushBytes(out, data_ptr, pack_size)
-                ok = true
-                ret
-            end
-            pos += head_size + pack_size
-        else:
-            pos += head_size
-        end
-    end
-end
-
-func _rar5_extract(p: void*, n: int, name: str, out &: compress.ByteBuf, ok &: bool):
-    mut pos := _RAR5_SIG_LEN
-    until pos < n:
-        mut header_type := 0
-        mut total_size := 0
-        mut is_dir := false
-        mut unp_size := 0
-        mut method := 0
-        mut nm := ""
-        mut data_offset := 0
-        mut data_size := 0
-        good := _rar5_parse_block(p, pos, n, header_type, total_size, is_dir, unp_size, method, nm, data_offset, data_size)
-        hit := header_type == 2 and nm == name and not is_dir
-        _rar_free_name(nm)
-        if not good or total_size <= 0:
-            break
-        end
-        if header_type == 5:
-            break
-        end
-        if hit:
-            if method != 0:
-                ret
-            end
-            data_ptr := ((p as i64) + (data_offset as i64)) as void*
-            compress.BufPushBytes(out, data_ptr, data_size)
-            ok = true
-            ret
-        end
-        pos += total_size
-    end
+func _rar_put_header(out &: compress.ByteBuf, body: compress.ByteBuf):
+    mut head := compress.NewByteBuf()
+    _rar_put_vint(head, body.len as i64)
+    compress.BufPushBuf(head, body)
+    LEPut32(out, _rar_crc(head.data, head.len) as int)
+    compress.BufPushBuf(out, head)
+    compress.BufFree(head)
 end
 
 @en "IsRar"
@@ -297,69 +324,218 @@ pub func IsRar(p: void*, n: int): bool:
     ret _rar4_sig_match(p, n) or _rar5_sig_match(p, n)
 end
 
+@en "RarStatusText"
+@fa "متن وضعیت آر ای آر"
+pub func RarStatusText(status: int): str:
+    if status == RAR_OK: ret "ok" end
+    if status == RAR_NOT_FOUND: ret "entry not found" end
+    if status == RAR_UNSUPPORTED: ret "unsupported RAR version or method" end
+    if status == RAR_ENCRYPTED: ret "encrypted entry" end
+    if status == RAR_CORRUPT: ret "corrupt data" end
+    if status == RAR_BAD_CRC: ret "checksum mismatch" end
+    if status == RAR_MULTIVOLUME: ret "multi-volume archives are not supported" end
+    if status == RAR_TOO_BIG: ret "entry too large" end
+    if status == RAR_UNSAFE_PATH: ret "entry path leaves the target folder" end
+    ret "unknown error"
+end
+
 @en "RarList"
 @fa "فهرست آر ای آر"
 pub func RarList(p: void*, n: int): Vector<Entry>:
     mut out := Vector {} as Vector<Entry>
-    if _rar4_sig_match(p, n):
-        _rar4_list(p, n, out)
-    else:
-        if _rar5_sig_match(p, n):
-            _rar5_list(p, n, out)
-        end
+    mut a := _rar_open(p, n)
+    repeat a.files.len() in i:
+        f := a.files.get(i)
+        out.push(Entry {
+            name = f.name
+            size = f.unp_size < 0 ? 0 as i64 : f.unp_size
+            compressed_size = f.pack_size
+            is_dir = f.is_dir
+            method = f.method
+            crc32 = f.crc
+            mtime = f.mtime
+        })
     end
+    a.files.free()
+    ret out
+end
+
+@en "RarExtract"
+@fa "استخراج آر ای آر"
+pub func RarExtract(p: void*, n: int, name: str, max: int, status &: int): compress.ByteBuf:
+    mut out := compress.NewByteBuf()
+    mut a := _rar_open(p, n)
+    status = RAR_NOT_FOUND
+    idx := _rar_find(a, name)
+    if idx >= 0:
+        mut r5 := _r5_new(131072, 64)
+        mut nx := -1
+        status = _rar_run(a, r5, nx, idx, max as i64, out)
+        _r5_free(r5)
+    end
+    _rar_free_files(a.files)
+    ret out
+end
+
+@en "RarExtractByNameMax"
+@fa "استخراج با نام از آر ای آر با سقف"
+pub func RarExtractByNameMax(p: void*, n: int, name: str, max: int, ok &: bool): compress.ByteBuf:
+    mut st := 0
+    out := RarExtract(p, n, name, max, st)
+    ok = st == RAR_OK
     ret out
 end
 
 @en "RarExtractByName"
 @fa "استخراج با نام از آر ای آر"
 pub func RarExtractByName(p: void*, n: int, name: str, ok &: bool): compress.ByteBuf:
-    ok = false
-    mut out := compress.NewByteBuf()
-    if _rar4_sig_match(p, n):
-        _rar4_extract(p, n, name, out, ok)
-    else:
-        if _rar5_sig_match(p, n):
-            _rar5_extract(p, n, name, out, ok)
+    ret RarExtractByNameMax(p, n, name, 0, ok)
+end
+
+@en "RarExtractAllStatus"
+@fa "استخراج همه از آر ای آر با وضعیت"
+pub func RarExtractAllStatus(p: void*, n: int, destdir: str, status &: int): int:
+    status = RAR_OK
+    mut extracted := 0
+    mut a := _rar_open(p, n)
+    mut r5 := _r5_new(131072, 64)
+    mut nx := -1
+    mut broken := false
+    mut i := 0
+    until i < a.files.len():
+        f := a.files.get(i)
+        i++
+        if f.redirect:
+            continue
         end
+        if not _safe_entry_name(f.name):
+            status = RAR_UNSAFE_PATH
+            continue
+        end
+        outpath := filepath.Join(destdir, f.name)
+        if f.is_dir:
+            EnsureDir(outpath)
+            extracted++
+        else:
+            if broken and f.solid:
+                if status == RAR_OK:
+                    status = RAR_CORRUPT
+                end
+            else:
+                parent := filepath.Dir(outpath)
+                EnsureDir(parent)
+                mem.Free(parent as void*)
+                mut data := compress.NewByteBuf()
+                st := _rar_run(a, r5, nx, i - 1, 0 as i64, data)
+                if st == RAR_OK:
+                    if WriteBinaryFileBuf(outpath, data):
+                        extracted++
+                    else:
+                        status = RAR_CORRUPT
+                    end
+                else:
+                    broken = true
+                    if status == RAR_OK:
+                        status = st
+                    end
+                end
+                compress.BufFree(data)
+            end
+        end
+        mem.Free(outpath as void*)
     end
-    ret out
+    if a.enc_headers and status == RAR_OK:
+        status = RAR_ENCRYPTED
+    end
+    _r5_free(r5)
+    _rar_free_files(a.files)
+    ret extracted
 end
 
 @en "RarExtractAll"
 @fa "استخراج همه از آر ای آر"
 pub func RarExtractAll(p: void*, n: int, destdir: str): bool:
-    mut entries := RarList(p, n)
-    mut all_ok := true
-    mut i := 0
-    until i < entries.len():
-        e := entries.get(i)
-        if not _safe_entry_name(e.name):
-            all_ok = false
-            i++
-            continue
+    mut st := 0
+    _ := RarExtractAllStatus(p, n, destdir, st)
+    ret st == RAR_OK
+end
+
+@en "MakeRarFileInput"
+@fa "ساخت ورودی پرونده آر ای آر"
+pub func MakeRarFileInput(name: str, data_ptr: void*, data_len: int, is_dir: bool): RarFileInput:
+    ret RarFileInput { name = name, data_ptr = data_ptr, data_len = data_len, is_dir = is_dir }
+end
+
+@en "RarCreate"
+@fa "ساخت آر ای آر"
+pub func RarCreate(files: Vector<RarFileInput>): compress.ByteBuf:
+    mut out := compress.NewByteBuf()
+    compress.BufPush(out, 0x52)
+    compress.BufPush(out, 0x61)
+    compress.BufPush(out, 0x72)
+    compress.BufPush(out, 0x21)
+    compress.BufPush(out, 0x1a)
+    compress.BufPush(out, 0x07)
+    compress.BufPush(out, 0x01)
+    compress.BufPush(out, 0x00)
+    mut mh := compress.NewByteBuf()
+    _rar_put_vint(mh, 1 as i64)
+    _rar_put_vint(mh, 0 as i64)
+    _rar_put_vint(mh, 0 as i64)
+    _rar_put_header(out, mh)
+    compress.BufFree(mh)
+    repeat files.len() in i:
+        f := files.get(i)
+        isdir := f.is_dir or (f.name.len() > 0 and (f.name as u8*)[f.name.len() - 1] as int == 47)
+        mut nm := f.name
+        mut nlen := nm.len()
+        if isdir and nlen > 0 and (nm as u8*)[nlen - 1] as int == 47:
+            nlen--
         end
-        outpath := filepath.Join(destdir, e.name)
-        if e.is_dir:
-            EnsureDir(outpath)
-        else:
-            parent := filepath.Dir(outpath)
-            EnsureDir(parent)
-            mem.Free(parent as void*)
-            mut ok := false
-            mut data := RarExtractByName(p, n, e.name, ok)
-            if ok:
-                if not WriteBinaryFileBuf(outpath, data):
-                    all_ok = false
-                end
-            else:
-                all_ok = false
-            end
-            compress.BufFree(data)
+        dlen := isdir ? 0 : f.data_len
+        mut body := compress.NewByteBuf()
+        _rar_put_vint(body, 2 as i64)
+        _rar_put_vint(body, isdir ? 0 as i64 : 2 as i64)
+        if not isdir:
+            _rar_put_vint(body, dlen as i64)
         end
-        mem.Free(outpath as void*)
-        i++
+        mut ff := isdir ? 1 : 4
+        if f.mtime > 0 and f.mtime < 4294967296:
+            ff |= 2
+        end
+        _rar_put_vint(body, ff as i64)
+        _rar_put_vint(body, dlen as i64)
+        _rar_put_vint(body, isdir ? 0x41ed as i64 : 0x81a4 as i64)
+        if (ff & 2) != 0:
+            LEPut32(body, f.mtime as int)
+        end
+        if not isdir:
+            LEPut32(body, _rar_crc(f.data_ptr, dlen) as int)
+        end
+        _rar_put_vint(body, 0 as i64)
+        _rar_put_vint(body, 1 as i64)
+        _rar_put_vint(body, nlen as i64)
+        compress.BufPushBytes(body, nm as void*, nlen)
+        _rar_put_header(out, body)
+        compress.BufFree(body)
+        if dlen > 0:
+            compress.BufPushBytes(out, f.data_ptr, dlen)
+        end
     end
-    defer FreeEntries(entries)
-    ret all_ok
+    mut eh := compress.NewByteBuf()
+    _rar_put_vint(eh, 5 as i64)
+    _rar_put_vint(eh, 0 as i64)
+    _rar_put_vint(eh, 0 as i64)
+    _rar_put_header(out, eh)
+    compress.BufFree(eh)
+    ret out
+end
+
+@en "RarCreateFile"
+@fa "ساخت پرونده آر ای آر"
+pub func RarCreateFile(files: Vector<RarFileInput>, outpath: str): bool:
+    mut out := RarCreate(files)
+    ok := WriteBinaryFileBuf(outpath, out)
+    compress.BufFree(out)
+    ret ok
 end

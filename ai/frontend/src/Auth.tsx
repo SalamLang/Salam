@@ -1,17 +1,21 @@
-import { useState, type FormEvent } from "react";
+import { useCallback, useRef, useState, type FormEvent } from "react";
 import { useEffect } from "react";
-import { api, ApiError, rememberOAuth, setToken, type User } from "./api";
+import { api, ApiError, awaitProviderLogin, newPollSecret, rememberOAuth, setToken, type User } from "./api";
 import { IconCode, IconFigma, IconGithub, IconEye, IconGlobe, IconEyeOff, IconMoon, IconSun, IconSwap, IconBook } from "./icons";
 import type { Theme } from "./theme";
 import { isFa, setLang, t } from "./i18n";
 import { autoDir } from "./dir";
+import { isDesktop, useReturnReset } from "./desktop";
 
 type Mode = "login" | "register";
 
 export const LOGIN_ERRORS: Record<string, string> = {
   unavailable: t("ورود با این سرویس فعال نیست.", "Signing in with this service is not available."),
   denied: t("ورود لغو شد.", "Sign in was canceled."),
-  expired: t("نشست ورود منقضی شد. دوباره تلاش کنید.", "The sign in expired. Try again."),
+  expired: t("مهلت این ورود (۱۵ دقیقه) تمام شد. دوباره تلاش کنید.", "This sign in timed out after 15 minutes. Try again."),
+  used: t("این ورود قبلا استفاده شده است. اگر وارد نشده‌اید دوباره تلاش کنید.", "This sign in was already used. If you are not signed in, try again."),
+  missing: t("این ورود پیدا نشد. شاید پیوند قدیمی است. دوباره تلاش کنید.", "This sign in was not found. The link may be old. Try again."),
+  unbound: t("ورود باید در همان مرورگری که شروع کردید تمام شود. دوباره از همان‌جا شروع کنید.", "Sign in has to finish in the browser where you started it. Start again from there."),
   failed: t("سرویس ورود پاسخ درستی نداد. دوباره تلاش کنید.", "The sign in service did not answer correctly. Try again."),
   server: t("خطایی در سرور پیش آمد. دوباره تلاش کنید.", "Something went wrong on the server. Try again."),
   email_exists: t("با این ایمیل قبلا حساب ساخته شده است. با ایمیل و گذرواژه وارد شوید.", "An account with this email already exists. Sign in with your email and password."),
@@ -34,7 +38,13 @@ function ProviderButtons({ setError }: { setError: (m: string) => void }) {
       return null;
     }
   });
-  const [busy, setBusy] = useState("");
+  const [attempt, setAttempt] = useState<{ provider: "github" | "figma"; phase: "start" | "wait" } | null>(null);
+  const seq = useRef(0);
+  const cancel = useCallback(() => {
+    seq.current += 1;
+    setAttempt(null);
+  }, []);
+  useReturnReset(attempt?.phase === "wait", cancel);
   useEffect(() => {
     api
       .authProviders()
@@ -57,16 +67,34 @@ function ProviderButtons({ setError }: { setError: (m: string) => void }) {
   }, [setError]);
   if (!on || (!on.github && !on.figma)) return null;
   const begin = async (provider: "github" | "figma") => {
-    setBusy(provider);
+    const mine = ++seq.current;
+    setAttempt({ provider, phase: "start" });
     setError("");
     try {
       const next = nextPath();
-      const r = await api.startProvider(provider, next);
+      const poll = isDesktop ? newPollSecret() : "";
+      const r = await api.startProvider(provider, next, poll);
+      if (mine !== seq.current) return;
       rememberOAuth({ provider, state: r.state, purpose: "login", next });
       location.assign(r.url);
+      setAttempt({ provider, phase: "wait" });
+      if (poll) {
+        awaitProviderLogin(poll, () => mine === seq.current)
+          .then((done) => {
+            if (mine !== seq.current) return;
+            setToken(done.token);
+            location.replace(done.next.startsWith("/") && !done.next.startsWith("//") ? done.next : "/");
+          })
+          .catch((e) => {
+            if (mine !== seq.current) return;
+            setAttempt(null);
+            setError(e instanceof ApiError ? (LOGIN_ERRORS[e.code] ?? t("ورود انجام نشد. دوباره تلاش کنید.", "Sign in failed. Try again.")) : t("ورود انجام نشد. دوباره تلاش کنید.", "Sign in failed. Try again."));
+          });
+      }
     } catch (e) {
-      setBusy("");
-      setError(e instanceof ApiError ? (LOGIN_ERRORS[e.code] ?? e.message) : t("ورود انجام نشد.", "Sign in failed."));
+      if (mine !== seq.current) return;
+      setAttempt(null);
+      setError(e instanceof ApiError ? (LOGIN_ERRORS[e.code] ?? e.message) : t("ورود انجام نشد. دوباره تلاش کنید.", "Sign in failed. Try again."));
     }
   };
   return (
@@ -76,16 +104,24 @@ function ProviderButtons({ setError }: { setError: (m: string) => void }) {
       </div>
       <div className="auth-providers">
         {on.github && (
-          <button type="button" className="button ghost wide" disabled={busy !== ""} onClick={() => begin("github")}>
-            {busy === "github" ? <span className="spinner" /> : <IconGithub width={18} height={18} />}
+          <button type="button" className="button ghost wide" disabled={attempt?.provider === "github" && attempt.phase === "start"} onClick={() => begin("github")}>
+            {attempt?.provider === "github" ? <span className="spinner" /> : <IconGithub width={18} height={18} />}
             {t("ادامه با GitHub", "Continue with GitHub")}
           </button>
         )}
         {on.figma && (
-          <button type="button" className="button ghost wide" disabled={busy !== ""} onClick={() => begin("figma")}>
-            {busy === "figma" ? <span className="spinner" /> : <IconFigma width={18} height={18} />}
+          <button type="button" className="button ghost wide" disabled={attempt?.provider === "figma" && attempt.phase === "start"} onClick={() => begin("figma")}>
+            {attempt?.provider === "figma" ? <span className="spinner" /> : <IconFigma width={18} height={18} />}
             {t("ادامه با Figma", "Continue with Figma")}
           </button>
+        )}
+        {attempt?.phase === "wait" && isDesktop && (
+          <p className="auth-wait" role="status">
+            {t("منتظر تایید در مرورگر...", "Waiting for approval in the browser...")}{" "}
+            <button type="button" className="auth-wait-cancel" onClick={cancel}>
+              {t("لغو", "Cancel")}
+            </button>
+          </p>
         )}
       </div>
     </>

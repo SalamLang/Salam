@@ -9,6 +9,7 @@ import { IconFigma, IconGithub, IconKey, IconTelegram, IconTerminal } from "./ic
 import type { Theme } from "./theme";
 import { t } from "./i18n";
 import { sharedLoader } from "./shared";
+import { useReturnReset } from "./desktop";
 
 export const integrationsLoader = sharedLoader(() => api.integrations());
 const telegramLoader = sharedLoader(() => api.telegramStatus());
@@ -293,6 +294,9 @@ function IntegrationCard({ item, storage, highlight, notify, onChange }: { item:
       setBusy("");
     }
   };
+
+  const resetOauth = useCallback(() => setBusy((b) => (b === "oauth" ? "" : b)), []);
+  useReturnReset(busy === "oauth", resetOauth);
 
   const oauth = async () => {
     setBusy("oauth");

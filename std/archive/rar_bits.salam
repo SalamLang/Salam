@@ -1,0 +1,163 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package archive
+
+import mem
+
+const _RH_FAST := 12
+
+struct _RarBits:
+    pub p: u8*
+    pub n: int
+    pub pos: int
+end
+
+struct _RarHuff:
+    pub fast: u32*
+    pub syms: u16*
+    pub count: int*
+    pub first: int*
+    pub fidx: int*
+    pub nsyms: int
+end
+
+func _rb_peek(b &: _RarBits, count: int): int:
+    byte := b.pos >> 3
+    sh := b.pos & 7
+    mut v := 0 as i64
+    if byte + 4 <= b.n:
+        v = ((b.p[byte] as i64) << 24) | ((b.p[byte + 1] as i64) << 16) | ((b.p[byte + 2] as i64) << 8) | (b.p[byte + 3] as i64)
+    else:
+        mut i := 0
+        until i < 4:
+            v = v << 8
+            if byte + i < b.n:
+                v = v | (b.p[byte + i] as i64)
+            end
+            i++
+        end
+    end
+    v = (v << sh) & 0xffffffff
+    ret (v >> (32 - count)) as int
+end
+
+func _rb_read(b &: _RarBits, count: int): int:
+    if count == 0:
+        ret 0
+    end
+    v := _rb_peek(b, count)
+    b.pos += count
+    ret v
+end
+
+func _rb_read64(b &: _RarBits, count: int): i64:
+    if count <= 16:
+        ret _rb_read(b, count)
+    end
+    hi := _rb_read64(b, count - 16)
+    lo := _rb_read(b, 16)
+    ret (hi << 16) | (lo as i64)
+end
+
+func _rh_new(ns: int): _RarHuff:
+    ret _RarHuff {
+        fast = mem.AllocateZeroed((4096 * 4) as u64) as u32*
+        syms = mem.AllocateZeroed((ns * 2 + 2) as u64) as u16*
+        count = mem.AllocateZeroed(64 as u64) as int*
+        first = mem.AllocateZeroed(64 as u64) as int*
+        fidx = mem.AllocateZeroed(64 as u64) as int*
+        nsyms = ns
+    }
+end
+
+func _rh_free(h &: _RarHuff):
+    mem.Free(h.fast as void*)
+    mem.Free(h.syms as void*)
+    mem.Free(h.count as void*)
+    mem.Free(h.first as void*)
+    mem.Free(h.fidx as void*)
+end
+
+func _rh_build(h &: _RarHuff, lens: u8*, n: int): bool:
+    mut offs: int[17]
+    repeat 17 in i: offs[i] = 0 end
+    repeat 16 in i: h.count[i] = 0 end
+    repeat 4096 in i: h.fast[i] = 0 as u32 end
+    repeat n in s:
+        l := lens[s] as int
+        if l > 0:
+            h.count[l] = h.count[l] + 1
+        end
+    end
+    mut acc := 0
+    mut l := 1
+    until l <= 15:
+        offs[l] = acc
+        acc += h.count[l]
+        l++
+    end
+    repeat n in s:
+        l2 := lens[s] as int
+        if l2 > 0:
+            h.syms[offs[l2]] = s as u16
+            offs[l2] = offs[l2] + 1
+        end
+    end
+    mut code := 0
+    mut idx := 0
+    mut ln := 1
+    until ln <= 15:
+        c := h.count[ln]
+        h.first[ln] = code
+        h.fidx[ln] = idx
+        if code + c > (1 << ln):
+            ret false
+        end
+        if ln <= _RH_FAST:
+            repeat c in i:
+                sym := h.syms[idx + i] as int
+                base := (code + i) << (_RH_FAST - ln)
+                span := 1 << (_RH_FAST - ln)
+                entry := ((sym << 4) | ln) as u32
+                repeat span in j:
+                    h.fast[base + j] = entry
+                end
+            end
+        end
+        code = (code + c) << 1
+        idx += c
+        ln++
+    end
+    ret true
+end
+
+func _rh_decode(h &: _RarHuff, b &: _RarBits): int:
+    v := _rb_peek(b, 15)
+    e := h.fast[v >> 3] as int
+    if e != 0:
+        b.pos += e & 15
+        ret e >> 4
+    end
+    mut l := 13
+    until l <= 15:
+        d := (v >> (15 - l)) - h.first[l]
+        if d >= 0 and d < h.count[l]:
+            b.pos += l
+            ret h.syms[h.fidx[l] + d] as int
+        end
+        l++
+    end
+    ret -1
+end

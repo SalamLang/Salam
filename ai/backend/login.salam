@@ -26,6 +26,8 @@ include aiweb "web.salam"
 include aicloud "cloud.salam"
 
 const STATE_SECONDS := 900
+const STATE_KEEP_SECONDS := 3600
+const HANDOFF_SECONDS := 300
 const SESSION_DAYS := 30
 
 mut APP_URL := "https://ai.salamlang.ir"
@@ -81,9 +83,34 @@ func safe_next(next: str): str:
 end
 
 func refuse(ctx: i64, code: str):
+    refuse_why(ctx, code, "", false)
+end
+
+func refuse_why(ctx: i64, code: str, detail: str, handoff: bool):
     mut m := Vector {} as Vector<str>
     m.push(json.Member("error", code))
+    if detail.len() > 0:
+        m.push(json.Member("detail", detail))
+    end
+    if handoff:
+        m.push(json.MemberBool("handoff", true))
+    end
     aiweb.Reply(ctx, 400, json.Object(m))
+end
+
+func poll_secret_ok(p: str): bool:
+    if p.len() < 32 or p.len() > 64:
+        ret false
+    end
+    mut i := 0
+    until i < p.len():
+        c := p[i] as int
+        if not ((c >= 48 and c <= 57) or (c >= 97 and c <= 102)):
+            ret false
+        end
+        i++
+    end
+    ret true
 end
 
 func valid_email(email: str): bool:
@@ -103,18 +130,25 @@ end
 
 func start(ctx: i64):
     provider := http.Param(ctx, "provider")
-    next := safe_next(json.Get(http.Body(ctx), "next"))
+    body := http.Body(ctx)
+    next := safe_next(json.Get(body, "next"))
+    poll := json.Get(body, "poll")
     if not provider_ok(provider) or not aicloud.OauthReady(provider):
         refuse(ctx, "unavailable")
+        ret
+    end
+    if poll.len() > 0 and not poll_secret_ok(poll):
+        refuse(ctx, "server")
         ret
     end
     state := crypto.RandomHex(24)
     now := aistore.Now()
     mut a := four(aiweb.Hash(state), "0", provider, i64s(now + STATE_SECONDS))
     a.push(next)
+    a.push(poll.len() > 0 ? aiweb.Hash(poll) : "")
     aistore.Lock()
-    _d := aistore.Run("DELETE FROM integration_states WHERE expires < ?1", one(i64s(now)))
-    ok := aistore.Run("INSERT INTO integration_states (state, user_id, provider, expires, purpose, next_path) VALUES (?1, ?2, ?3, ?4, 'login', ?5)", a)
+    _d := aistore.Run("DELETE FROM integration_states WHERE expires < ?1", one(i64s(now - STATE_KEEP_SECONDS)))
+    ok := aistore.Run("INSERT INTO integration_states (state, user_id, provider, expires, purpose, next_path, poll) VALUES (?1, ?2, ?3, ?4, 'login', ?5, ?6)", a)
     aistore.Unlock()
     if not ok:
         refuse(ctx, "server")
@@ -147,20 +181,19 @@ func session_for(ctx: i64, uid: str): str:
     ret token
 end
 
-func finish_login(ctx: i64, provider: str, code: str, next: str):
+func identify(provider: str, code: str, uid &: str): str:
     mut subject := ""
     mut login := ""
     mut name := ""
     mut email := ""
     mut verified := false
     if not aicloud.Identity(provider, code, subject, login, name, email, verified):
-        refuse(ctx, "failed")
-        ret
+        ret "failed"
     end
     email = str.Lower(str.Trim(email))
     now := i64s(aistore.Now())
     aistore.Lock()
-    mut uid := aistore.OneText("SELECT user_id FROM identities WHERE provider = ?1 AND subject = ?2", two(provider, subject))
+    uid = aistore.OneText("SELECT user_id FROM identities WHERE provider = ?1 AND subject = ?2", two(provider, subject))
     mut problem := ""
     if uid.len() == 0:
         existing := email.len() > 0 ? aistore.OneText("SELECT id FROM users WHERE email = ?1", one(email)) : ""
@@ -197,8 +230,17 @@ func finish_login(ctx: i64, provider: str, code: str, next: str):
         end
     end
     aistore.Unlock()
-    if problem.len() > 0 or uid.len() == 0:
-        refuse(ctx, problem.len() > 0 ? problem : "server")
+    if problem.len() > 0:
+        ret problem
+    end
+    ret uid.len() == 0 ? "server" : ""
+end
+
+func finish_login(ctx: i64, provider: str, code: str, next: str):
+    mut uid := ""
+    problem := identify(provider, code, uid)
+    if problem.len() > 0:
+        refuse(ctx, problem)
         ret
     end
     mut m := Vector {} as Vector<str>
@@ -208,36 +250,67 @@ func finish_login(ctx: i64, provider: str, code: str, next: str):
     aiweb.Reply(ctx, 200, json.Object(m))
 end
 
+func park(hash: str, used: int, uid: str, note: str):
+    mut a := four(i64s(used), uid, note, i64s(aistore.Now() + HANDOFF_SECONDS))
+    a.push(hash)
+    aistore.Lock()
+    _p := aistore.Run("UPDATE integration_states SET used = ?1, user_id = ?2, next_path = ?3, expires = ?4 WHERE state = ?5", a)
+    aistore.Unlock()
+end
+
 func complete(ctx: i64):
     provider := http.Param(ctx, "provider")
     body := http.Body(ctx)
     code := json.Get(body, "code")
     state := json.Get(body, "state")
+    bound := json.Get(body, "bound") == "true"
     if not provider_ok(provider) or state.len() == 0:
-        refuse(ctx, "denied")
+        refuse(ctx, "missing")
         ret
     end
+    hash := aiweb.Hash(state)
+    now := aistore.Now()
     aistore.Lock()
-    mut q := aistore.Stmt("SELECT user_id, purpose, next_path FROM integration_states WHERE state = ?1 AND provider = ?2 AND expires > ?3", three(aiweb.Hash(state), provider, i64s(aistore.Now())))
-    mut found := false
+    mut q := aistore.Stmt("SELECT user_id, purpose, next_path, expires, used, poll FROM integration_states WHERE state = ?1 AND provider = ?2", two(hash, provider))
+    mut status := "missing"
     mut uid := ""
     mut purpose := ""
     mut next := ""
+    mut handoff := false
     if aistore.Next(q):
-        found = true
         uid = aistore.Text(q, 0)
         purpose = aistore.Text(q, 1)
         next = aistore.Text(q, 2)
+        handoff = aistore.Text(q, 5).len() > 0
+        if aistore.Text(q, 4) != "0":
+            status = "used"
+        else if aistore.Text(q, 3).to_int() <= now:
+            status = "expired"
+        else if purpose == "login" and not handoff and not bound:
+            status = "unbound"
+        else:
+            status = ""
+        end
     end
     aistore.Finish(q)
-    _d := aistore.Run("DELETE FROM integration_states WHERE state = ?1", one(aiweb.Hash(state)))
+    if status.len() == 0:
+        _u := aistore.Run("UPDATE integration_states SET used = 1 WHERE state = ?1", one(hash))
+    end
     aistore.Unlock()
-    if not found:
-        refuse(ctx, "expired")
+    if status.len() > 0:
+        refuse(ctx, status)
         ret
     end
-    if code.len() == 0 or json.Get(body, "error").len() > 0:
-        refuse(ctx, "denied")
+    perr := json.Get(body, "error")
+    if code.len() == 0 or perr.len() > 0:
+        mut detail := clip(json.Get(body, "error_description"), 200)
+        if detail.len() == 0:
+            detail = clip(perr, 80)
+        end
+        if handoff:
+            park(hash, 3, "0", "denied")
+        end
+        refuse_why(ctx, "denied", detail, handoff)
         ret
     end
     if purpose == "connect":
@@ -252,7 +325,66 @@ func complete(ctx: i64):
         aiweb.Reply(ctx, 200, json.Object(m))
         ret
     end
-    finish_login(ctx, provider, code, next)
+    if not handoff:
+        finish_login(ctx, provider, code, next)
+        ret
+    end
+    mut who := ""
+    problem := identify(provider, code, who)
+    if problem.len() > 0:
+        park(hash, 3, "0", problem)
+        refuse_why(ctx, problem, "", true)
+        ret
+    end
+    park(hash, 2, who, next)
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("purpose", "handoff"))
+    aiweb.Reply(ctx, 200, json.Object(m))
+end
+
+func poll_login(ctx: i64):
+    secret := json.Get(http.Body(ctx), "poll")
+    mut m := Vector {} as Vector<str>
+    if not poll_secret_ok(secret):
+        m.push(json.Member("status", "missing"))
+        aiweb.Reply(ctx, 200, json.Object(m))
+        ret
+    end
+    hash := aiweb.Hash(secret)
+    now := aistore.Now()
+    aistore.Lock()
+    mut q := aistore.Stmt("SELECT user_id, next_path, expires, used FROM integration_states WHERE poll = ?1 AND purpose = 'login'", one(hash))
+    mut status := "missing"
+    mut uid := ""
+    mut note := ""
+    if aistore.Next(q):
+        uid = aistore.Text(q, 0)
+        note = aistore.Text(q, 1)
+        used := aistore.Text(q, 3)
+        if aistore.Text(q, 2).to_int() <= now and used != "1":
+            status = "expired"
+        else if used == "0":
+            status = "pending"
+        else if used == "2":
+            status = "done"
+        else if used == "3":
+            status = "failed"
+        end
+    end
+    aistore.Finish(q)
+    if status == "done":
+        _c := aistore.Run("UPDATE integration_states SET used = 1, user_id = '0', next_path = '' WHERE poll = ?1", one(hash))
+    end
+    aistore.Unlock()
+    m.push(json.Member("status", status))
+    if status == "failed":
+        m.push(json.Member("error", note))
+    end
+    if status == "done":
+        m.push(json.Member("token", session_for(ctx, uid)))
+        m.push(json.Member("next", note))
+    end
+    aiweb.Reply(ctx, 200, json.Object(m))
 end
 
 pub func Configure(app_url: str):
@@ -265,7 +397,9 @@ pub func Routes(r &: router.Router):
     router.Get(r, "/auth/providers", providers)
     router.Post(r, "/auth/provider/:provider/start", start)
     router.Post(r, "/auth/provider/:provider/complete", complete)
+    router.Post(r, "/auth/provider-poll", poll_login)
     router.Options(r, "/auth/providers", aiweb.Preflight)
     router.Options(r, "/auth/provider/:provider/start", aiweb.Preflight)
     router.Options(r, "/auth/provider/:provider/complete", aiweb.Preflight)
+    router.Options(r, "/auth/provider-poll", aiweb.Preflight)
 end

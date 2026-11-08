@@ -1,0 +1,510 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package archive
+
+import mem
+import compress
+
+const _R5_NC := 306
+const _R5_LDC := 16
+const _R5_RC := 44
+const _R5_BC := 20
+
+struct _R5Filter:
+    pub start: i64
+    pub len: i64
+    pub kind: int
+    pub ch: int
+end
+
+struct _R5:
+    pub win: u8*
+    pub wsize: int
+    pub wmask: int
+    pub wp: int
+    pub fl: int
+    pub total: i64
+    pub od: i64*
+    pub last_len: int
+    pub ld: _RarHuff
+    pub dd: _RarHuff
+    pub ldd: _RarHuff
+    pub rd: _RarHuff
+    pub bd: _RarHuff
+    pub lens: u8*
+    pub dcsize: int
+    pub have_tables: bool
+    pub filters: Vector<_R5Filter>
+end
+
+func _poff(p: u8*, off: int): u8*:
+    ret ((p as i64) + (off as i64)) as u8*
+end
+
+func _r5_new(ws: int, dcs: int): _R5:
+    ret _R5 {
+        win = mem.AllocateZeroed(ws as u64) as u8*
+        wsize = ws
+        wmask = ws - 1
+        wp = 0
+        fl = 0
+        total = 0 as i64
+        od = mem.AllocateZeroed(32 as u64) as i64*
+        last_len = 0
+        ld = _rh_new(_R5_NC)
+        dd = _rh_new(80)
+        ldd = _rh_new(_R5_LDC)
+        rd = _rh_new(_R5_RC)
+        bd = _rh_new(_R5_BC)
+        lens = mem.AllocateZeroed(512 as u64) as u8*
+        dcsize = dcs
+        have_tables = false
+        filters = Vector {} as Vector<_R5Filter>
+    }
+end
+
+func _r5_free(d &: _R5):
+    mem.Free(d.win as void*)
+    mem.Free(d.od as void*)
+    mem.Free(d.lens as void*)
+    _rh_free(d.ld)
+    _rh_free(d.dd)
+    _rh_free(d.ldd)
+    _rh_free(d.rd)
+    _rh_free(d.bd)
+    d.filters.free()
+end
+
+func _r5_reset(d &: _R5):
+    d.wp = 0
+    d.fl = 0
+    d.total = 0 as i64
+    d.last_len = 0
+    d.have_tables = false
+    repeat 4 in i:
+        d.od[i] = 0 as i64
+    end
+end
+
+func _r5_flush(d &: _R5, out &: compress.ByteBuf):
+    if d.wp > d.fl:
+        compress.BufPushBytes(out, ((d.win as i64) + (d.fl as i64)) as void*, d.wp - d.fl)
+    else d.wp < d.fl:
+        compress.BufPushBytes(out, ((d.win as i64) + (d.fl as i64)) as void*, d.wsize - d.fl)
+        if d.wp > 0:
+            compress.BufPushBytes(out, d.win as void*, d.wp)
+        end
+    end
+    d.fl = d.wp
+end
+
+func _r5_read_tables(d &: _R5, b &: _RarBits): bool:
+    bl := _poff(d.lens, 480)
+    mut i := 0
+    until i < _R5_BC:
+        v := _rb_read(b, 4)
+        if v == 15:
+            z := _rb_read(b, 4)
+            if z == 0:
+                bl[i] = 15 as u8
+                i++
+            else:
+                mut zc := z + 2
+                until zc > 0 and i < _R5_BC:
+                    bl[i] = 0 as u8
+                    i++
+                    zc--
+                end
+            end
+        else:
+            bl[i] = v as u8
+            i++
+        end
+    end
+    if not _rh_build(d.bd, bl, _R5_BC):
+        ret false
+    end
+    total := _R5_NC + d.dcsize + _R5_LDC + _R5_RC
+    mut k := 0
+    until k < total:
+        if b.pos > b.n * 8:
+            ret false
+        end
+        s := _rh_decode(d.bd, b)
+        if s < 0:
+            ret false
+        end
+        if s < 16:
+            d.lens[k] = s as u8
+            k++
+        else s < 18:
+            mut cnt := 0
+            if s == 16:
+                cnt = _rb_read(b, 3) + 3
+            else:
+                cnt = _rb_read(b, 7) + 11
+            end
+            if k == 0:
+                ret false
+            end
+            prev := d.lens[k - 1]
+            until cnt > 0 and k < total:
+                d.lens[k] = prev
+                k++
+                cnt--
+            end
+        else:
+            mut cnt := 0
+            if s == 18:
+                cnt = _rb_read(b, 3) + 3
+            else:
+                cnt = _rb_read(b, 7) + 11
+            end
+            until cnt > 0 and k < total:
+                d.lens[k] = 0 as u8
+                k++
+                cnt--
+            end
+        end
+    end
+    if not _rh_build(d.ld, d.lens, _R5_NC):
+        ret false
+    end
+    if not _rh_build(d.dd, _poff(d.lens, _R5_NC), d.dcsize):
+        ret false
+    end
+    if not _rh_build(d.ldd, _poff(d.lens, _R5_NC + d.dcsize), _R5_LDC):
+        ret false
+    end
+    if not _rh_build(d.rd, _poff(d.lens, _R5_NC + d.dcsize + _R5_LDC), _R5_RC):
+        ret false
+    end
+    ret true
+end
+
+func _r5_slot_len(b &: _RarBits, slot: int): int:
+    if slot < 8:
+        ret 2 + slot
+    end
+    lb := (slot >> 2) - 1
+    base := 2 + ((4 | (slot & 3)) << lb)
+    ret base + _rb_read(b, lb)
+end
+
+func _r5_read_fdata(b &: _RarBits): i64:
+    cnt := _rb_read(b, 2) + 1
+    mut v := 0 as i64
+    repeat cnt in i:
+        v += (_rb_read(b, 8) as i64) << (i * 8)
+    end
+    ret v
+end
+
+func _r5_copy(d &: _R5, len: int, dist: i64): bool:
+    mut lim := d.total
+    if lim > (d.wsize as i64):
+        lim = d.wsize as i64
+    end
+    if dist <= 0 or dist > lim:
+        ret false
+    end
+    dd := dist as int
+    mut src := (d.wp - dd) & d.wmask
+    if dd >= len and src + len <= d.wsize and d.wp + len <= d.wsize:
+        mem.Copy(((d.win as i64) + (d.wp as i64)) as void*, ((d.win as i64) + (src as i64)) as void*, len as u64)
+        d.wp = (d.wp + len) & d.wmask
+    else:
+        mut wp := d.wp
+        repeat len:
+            d.win[wp] = d.win[src]
+            wp = (wp + 1) & d.wmask
+            src = (src + 1) & d.wmask
+        end
+        d.wp = wp
+    end
+    d.total += len as i64
+    ret true
+end
+
+func _r5_put32(p: u8*, off: int, v: int):
+    p[off] = (v & 255) as u8
+    p[off + 1] = ((v >> 8) & 255) as u8
+    p[off + 2] = ((v >> 16) & 255) as u8
+    p[off + 3] = ((v >> 24) & 255) as u8
+end
+
+func _r5_get32(p: u8*, off: int): i64:
+    ret (p[off] as i64) | ((p[off + 1] as i64) << 8) | ((p[off + 2] as i64) << 16) | ((p[off + 3] as i64) << 24)
+end
+
+func _r5_filter_e8(p: u8*, len: int, foff: i64, both: bool):
+    mut cur := 0
+    until cur + 4 < len:
+        c := p[cur] as int
+        cur++
+        if c == 0xe8 or (both and c == 0xe9):
+            offset := (cur as i64) + foff
+            addr := _r5_get32(p, cur)
+            if (addr & 0x80000000) != 0:
+                if ((addr + offset) & 0x80000000) == 0:
+                    _r5_put32(p, cur, (addr + 0x1000000) as int)
+                end
+            else:
+                if ((addr - 0x1000000) & 0x80000000) != 0:
+                    _r5_put32(p, cur, (addr - offset) as int)
+                end
+            end
+            cur += 4
+        end
+    end
+end
+
+func _r5_filter_arm(p: u8*, len: int, foff: i64):
+    mut cur := 0
+    until cur + 3 < len:
+        if (p[cur + 3] as int) == 0xeb:
+            mut off := (p[cur] as i64) | ((p[cur + 1] as i64) << 8) | ((p[cur + 2] as i64) << 16)
+            off -= (foff + (cur as i64)) / 4
+            p[cur] = (off & 255) as u8
+            p[cur + 1] = ((off >> 8) & 255) as u8
+            p[cur + 2] = ((off >> 16) & 255) as u8
+        end
+        cur += 4
+    end
+end
+
+func _r5_filter_delta(p: u8*, len: int, ch: int): bool:
+    tmp := mem.Allocate(len as u64) as u8*
+    if tmp == null:
+        ret false
+    end
+    mem.Copy(tmp as void*, p as void*, len as u64)
+    mut src := 0
+    mut c := 0
+    until c < ch:
+        mut prev := 0
+        mut dst := c
+        until dst < len:
+            prev = (prev - (tmp[src] as int)) & 255
+            p[dst] = prev as u8
+            src++
+            dst += ch
+        end
+        c++
+    end
+    mem.Free(tmp as void*)
+    ret true
+end
+
+func _r5_apply_filters(d &: _R5, out &: compress.ByteBuf, base: int, produced: i64): bool:
+    mut i := 0
+    until i < d.filters.len():
+        f := d.filters.get(i)
+        i++
+        if f.start < 0 or f.len <= 0 or f.start + f.len > produced:
+            continue
+        end
+        p := ((out.data as i64) + (base as i64) + f.start) as u8*
+        n := f.len as int
+        if f.kind == 0:
+            if not _r5_filter_delta(p, n, f.ch):
+                ret false
+            end
+        else f.kind == 1:
+            _r5_filter_e8(p, n, f.start, false)
+        else f.kind == 2:
+            _r5_filter_e8(p, n, f.start, true)
+        else f.kind == 3:
+            _r5_filter_arm(p, n, f.start)
+        end
+    end
+    ret true
+end
+
+func _r5_decode(d &: _R5, p: u8*, n: int, unp: i64, limit: i64, out &: compress.ByteBuf): int:
+    mut b := _RarBits { p = p, n = n, pos = 0 }
+    base := out.len
+    start_total := d.total
+    d.filters.clear()
+    d.fl = d.wp
+    mut last := false
+    until not last:
+        b.pos = (b.pos + 7) & (~7)
+        bp := b.pos >> 3
+        if bp + 3 > n:
+            ret 4
+        end
+        bf := p[bp] as int
+        ck := p[bp + 1] as int
+        cnt := ((bf >> 3) & 7) + 1
+        if bp + 2 + cnt > n:
+            ret 4
+        end
+        mut bsize := 0
+        mut chk := 0x5a ^ bf
+        repeat cnt in i:
+            sb := p[bp + 2 + i] as int
+            bsize |= sb << (i * 8)
+            chk ^= sb
+        end
+        if (chk & 255) != ck:
+            ret 4
+        end
+        bits := (bf & 7) + 1
+        last = (bf & 0x40) != 0
+        table := (bf & 0x80) != 0
+        start := bp + 2 + cnt
+        if bsize < 1 or start + bsize > n:
+            ret 4
+        end
+        bend := (start + bsize - 1) * 8 + bits
+        b.pos = start * 8
+        if table:
+            if not _r5_read_tables(d, b):
+                ret 4
+            end
+            d.have_tables = true
+        end
+        if not d.have_tables:
+            ret 4
+        end
+        until b.pos < bend:
+            sym := _rh_decode(d.ld, b)
+            if sym < 0:
+                ret 4
+            end
+            if sym < 256:
+                d.win[d.wp] = sym as u8
+                d.wp = (d.wp + 1) & d.wmask
+                d.total += 1 as i64
+            else sym == 256:
+                fs := _r5_read_fdata(b)
+                fl := _r5_read_fdata(b)
+                kind := _rb_read(b, 3)
+                mut ch := 0
+                if kind == 0:
+                    ch = _rb_read(b, 5) + 1
+                end
+                if fl > 0 and fl <= 0x400000:
+                    d.filters.push(_R5Filter { start = (d.total - start_total) + fs, len = fl, kind = kind, ch = ch })
+                end
+            else:
+                mut ml := 0
+                mut dist := 0 as i64
+                if sym == 257:
+                    ml = d.last_len
+                    dist = d.od[0]
+                    if ml == 0:
+                        continue
+                    end
+                else sym < 262:
+                    idx := sym - 258
+                    dist = d.od[idx]
+                    mut j := idx
+                    until j > 0:
+                        d.od[j] = d.od[j - 1]
+                        j--
+                    end
+                    d.od[0] = dist
+                    slot := _rh_decode(d.rd, b)
+                    if slot < 0:
+                        ret 4
+                    end
+                    ml = _r5_slot_len(b, slot)
+                    d.last_len = ml
+                else:
+                    ml = _r5_slot_len(b, sym - 262)
+                    dslot := _rh_decode(d.dd, b)
+                    if dslot < 0:
+                        ret 4
+                    end
+                    dist = 1 as i64
+                    if dslot < 4:
+                        dist += dslot as i64
+                    else:
+                        dbits := (dslot >> 1) - 1
+                        dist += ((2 | (dslot & 1)) as i64) << dbits
+                        if dbits >= 4:
+                            if dbits > 4:
+                                dist += _rb_read64(b, dbits - 4) << 4
+                            end
+                            low := _rh_decode(d.ldd, b)
+                            if low < 0:
+                                ret 4
+                            end
+                            dist += low as i64
+                        else:
+                            dist += _rb_read(b, dbits) as i64
+                        end
+                    end
+                    if dist > 0x100:
+                        ml++
+                        if dist > 0x2000:
+                            ml++
+                            if dist > 0x40000:
+                                ml++
+                            end
+                        end
+                    end
+                    mut j2 := 3
+                    until j2 > 0:
+                        d.od[j2] = d.od[j2 - 1]
+                        j2--
+                    end
+                    d.od[0] = dist
+                    d.last_len = ml
+                end
+                if not _r5_copy(d, ml, dist):
+                    ret 4
+                end
+            end
+            done := d.total - start_total
+            if done > limit:
+                ret 7
+            end
+            if unp >= 0 and done > unp:
+                ret 4
+            end
+            if ((d.wp - d.fl) & d.wmask) >= (d.wsize >> 1):
+                _r5_flush(d, out)
+            end
+        end
+    end
+    _r5_flush(d, out)
+    produced := d.total - start_total
+    if unp >= 0 and produced != unp:
+        ret 4
+    end
+    if not _r5_apply_filters(d, out, base, produced):
+        ret 4
+    end
+    ret 0
+end
+
+func _r5_setwin(d &: _R5, wsize: int): bool:
+    if wsize == d.wsize:
+        ret true
+    end
+    mem.Free(d.win as void*)
+    d.win = mem.AllocateZeroed(wsize as u64) as u8*
+    if d.win == null:
+        d.wsize = 0
+        d.wmask = 0
+        ret false
+    end
+    d.wsize = wsize
+    d.wmask = wsize - 1
+    ret true
+end

@@ -70,7 +70,7 @@ in all the relevant sections so maintainers can triage your report quickly.
 8. **Commit Your Changes**: Commit your changes with a clear and descriptive message.
 
    ```bash
-   git commit -am 'Add new feature'
+   git commit -am 'feat: add a new feature'
    ```
 
 9. **Push Your Branch**: Push your feature branch to your fork on GitHub.
@@ -159,7 +159,31 @@ git add .
 git commit -m "fix: describe what and why in plain terms"
 ```
 
-Write commit messages in the imperative mood: _"Add feature"_, _"Fix crash"_, _"Update docs"_.
+Follow [Conventional Commits](https://www.conventionalcommits.org/en/v1.0.0/)
+for commit headers: `<type>(optional-scope): <subject>`. Use a lowercase type,
+a nonempty subject, and a header no longer than 100 characters. Do not end the
+subject with a period. The type is not limited to a fixed list: `feat`, `fix`,
+`docs`, and project-specific types such as `ai`, `editor`, or `llvm` are all valid.
+Keep the subject in the imperative mood. For breaking changes, put `!` before
+the colon, as in `feat(api)!: remove the deprecated endpoint`.
+
+Valid examples:
+
+- `feat(compiler): add pattern matching`
+- `fix: handle empty source files`
+- `ai(frontend): show a loading indicator`
+- `feat(api)!: remove the deprecated endpoint` (breaking change)
+
+Invalid examples: `Add new feature` (missing type), `Fix: handle empty files`
+(uppercase type), and `fix: handle empty files.` (trailing period).
+
+Super-Linter validates new commit messages with commitlint using the root
+`.commitlintrc.cjs`. Its parser rules are defined inline, so no separate
+parser preset dependency is needed. You can check a message locally with:
+
+```bash
+printf '%s\n' 'fix(compiler): handle empty source' | npx --yes --package @commitlint/cli@21.2.3 commitlint --config .commitlintrc.cjs
+```
 
 ### 5. Keep your branch up to date (optional but recommended)
 
@@ -188,7 +212,7 @@ Make the requested changes locally, commit them, and push to the same branch; th
 
 ```bash
 git add .
-git commit -m "address review: clarify error message"
+git commit -m "fix: address review feedback"
 git push origin fix/describe-the-fix
 ```
 

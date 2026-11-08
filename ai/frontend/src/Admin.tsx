@@ -1148,20 +1148,25 @@ function LatestChats() {
   const [query, setQuery] = useState("");
   const [applied, setApplied] = useState("");
 
+  const seq = useRef(0);
+
   const load = useCallback((offset: number, q: string) => {
+    const mine = ++seq.current;
     setLoading(true);
     setError("");
     api
       .adminLatestChats(offset, q)
       .then((r) => {
+        if (mine !== seq.current) return;
         setRows((old) => (offset === 0 || !old ? r.chats : [...old, ...r.chats]));
         setMore(r.more);
       })
-      .catch((e) => setError(errText(e, t("بارگذاری گفت‌وگوها ناموفق بود.", "Could not load chats."))))
-      .finally(() => setLoading(false));
+      .catch((e) => mine === seq.current && setError(errText(e, t("بارگذاری گفت‌وگوها ناموفق بود.", "Could not load chats."))))
+      .finally(() => mine === seq.current && setLoading(false));
   }, []);
 
   useEffect(() => {
+    setRows(null);
     load(0, applied);
   }, [load, applied]);
 
@@ -1179,15 +1184,18 @@ function LatestChats() {
           <input className="input" type="search" dir="auto" value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t("جست‌وجوی کاربر یا عنوان", "Search user or title")} aria-label={t("جست‌وجوی گفت‌وگوها", "Search chats")} />
         </form>
       </div>
-      {error ? (
+      {error && (
         <div className="form-error" role="alert">
           {error}
         </div>
-      ) : rows === null ? (
+      )}
+      {rows === null ? (
+        error ? null : (
         <div className="list-loading" role="status">
           <span className="spinner" />
           <span className="sr-only">{t("در حال بارگذاری", "Loading")}</span>
         </div>
+        )
       ) : (
         <div className="latest-chats">
           {rows.map((c) => (

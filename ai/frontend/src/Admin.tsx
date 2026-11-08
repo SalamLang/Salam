@@ -415,7 +415,7 @@ function TopList({ title, items, ltr }: { title: string; items: { name: string; 
   );
 }
 
-function Users({ picked, onPick, notify }: { picked: Picked; onPick: (p: Picked) => void; notify: (msg: string) => void }) {
+function Users({ picked, onPick, notify }: { picked: Picked; onPick: (p: Picked) => void; notify: (msg: string, ok?: boolean) => void }) {
   const [saving, setSaving] = useState<number | null>(null);
   const [q, setQ] = useState("");
   const [query, setQuery] = useState("");
@@ -467,7 +467,7 @@ function Users({ picked, onPick, notify }: { picked: Picked; onPick: (p: Picked)
     try {
       const r = await api.adminUserPolicy(u.id, { policy_free: lift });
       setData((cur) => (cur ? { ...cur, users: cur.users.map((x) => (x.id === u.id ? { ...x, policy_free: r.user.policy_free } : x)) } : cur));
-      notify(lift ? t("محدودیت برای این کاربر برداشته شد.", "The limit was lifted for this user.") : t("محدودیت دوباره فعال شد.", "The limit is on again."));
+      notify(lift ? t("محدودیت برای این کاربر برداشته شد.", "The limit was lifted for this user.") : t("محدودیت دوباره فعال شد.", "The limit is on again."), true);
     } catch (e) {
       notify(errText(e, t("ذخیره ناموفق بود.", "Could not save.")));
     } finally {
@@ -853,7 +853,7 @@ function draftOf(p: Partial<AdminPlan>): PlanDraft {
   return d;
 }
 
-function PlanEditor({ plan, onSaved, notify }: { plan: AdminPlan | null; onSaved: () => void; notify: (msg: string) => void }) {
+function PlanEditor({ plan, onSaved, notify }: { plan: AdminPlan | null; onSaved: () => void; notify: (msg: string, ok?: boolean) => void }) {
   const [d, setD] = useState<PlanDraft>(() => draftOf(plan ?? {}));
   const [saving, setSaving] = useState(false);
   const fresh = plan === null;
@@ -873,7 +873,7 @@ function PlanEditor({ plan, onSaved, notify }: { plan: AdminPlan | null; onSaved
       } else {
         await api.adminPlanSave(plan.id, body as Partial<AdminPlan>);
       }
-      notify(t("پلن ذخیره شد و همین حالا برای همه اعمال می‌شود.", "Plan saved and applied to everyone right now."));
+      notify(t("پلن ذخیره شد و همین حالا برای همه اعمال می‌شود.", "Plan saved and applied to everyone right now."), true);
       onSaved();
     } catch (err) {
       notify(errText(err, t("ذخیره‌ی پلن ناموفق بود.", "Could not save the plan.")));
@@ -931,7 +931,7 @@ function PlanEditor({ plan, onSaved, notify }: { plan: AdminPlan | null; onSaved
   );
 }
 
-function PlansAdmin({ notify }: { notify: (msg: string) => void }) {
+function PlansAdmin({ notify }: { notify: (msg: string, ok?: boolean) => void }) {
   const [plans, setPlans] = useState<AdminPlan[] | null>(null);
   const [error, setError] = useState("");
   const [adding, setAdding] = useState(false);
@@ -977,7 +977,7 @@ function PlansAdmin({ notify }: { notify: (msg: string) => void }) {
   );
 }
 
-function Subscriptions({ picked, notify }: { picked: Picked; notify: (msg: string) => void }) {
+function Subscriptions({ picked, notify }: { picked: Picked; notify: (msg: string, ok?: boolean) => void }) {
   const [rows, setRows] = useState<AdminSubscription[] | null>(null);
   const [active, setActive] = useState(0);
   const [income, setIncome] = useState(0);
@@ -1014,7 +1014,7 @@ function Subscriptions({ picked, notify }: { picked: Picked; notify: (msg: strin
     setGranting(true);
     try {
       await api.adminGrant({ email: who, plan, days: days.trim() ? Number(days) : undefined, note: note.trim() || undefined });
-      notify(t("اشتراک داده شد.", "Subscription granted."));
+      notify(t("اشتراک داده شد.", "Subscription granted."), true);
       setEmail("");
       setNote("");
       setDays("");
@@ -1042,7 +1042,7 @@ function Subscriptions({ picked, notify }: { picked: Picked; notify: (msg: strin
     setBusy(row.id);
     try {
       await api.adminCancelSubscription(row.id);
-      notify(t("اشتراک لغو شد.", "Subscription canceled."));
+      notify(t("اشتراک لغو شد.", "Subscription canceled."), true);
       await load();
     } catch (e) {
       notify(errText(e, t("لغو اشتراک ناموفق بود.", "Could not cancel the subscription.")));
@@ -1459,7 +1459,7 @@ function policyBadges(k: AdminKey) {
   );
 }
 
-function KeyPolicyEditor({ k, onSaved, onClose, notify }: { k: AdminKey; onSaved: (k: AdminKey) => void; onClose: () => void; notify: (msg: string) => void }) {
+function KeyPolicyEditor({ k, onSaved, onClose, notify }: { k: AdminKey; onSaved: (k: AdminKey) => void; onClose: () => void; notify: (msg: string, ok?: boolean) => void }) {
   const [salam, setSalam] = useState(k.salam_prompt);
   const [tools, setTools] = useState(k.salam_tools);
   const [prompt, setPrompt] = useState(k.system_prompt);
@@ -1471,7 +1471,7 @@ function KeyPolicyEditor({ k, onSaved, onClose, notify }: { k: AdminKey; onSaved
     try {
       const r = await api.adminUpdateKey(k.id, { salam_prompt: salam, salam_tools: tools, system_prompt: prompt });
       onSaved(r.key);
-      notify(t("تنظیم کلید ذخیره شد.", "Key settings saved."));
+      notify(t("تنظیم کلید ذخیره شد.", "Key settings saved."), true);
     } catch (err) {
       notify(errText(err, t("ذخیره‌ی تنظیم کلید ناموفق بود.", "Could not save the key settings.")));
     } finally {
@@ -1518,7 +1518,7 @@ function KeyPolicyEditor({ k, onSaved, onClose, notify }: { k: AdminKey; onSaved
   );
 }
 
-function KeyPolicies({ picked, notify }: { picked: Picked; notify: (msg: string) => void }) {
+function KeyPolicies({ picked, notify }: { picked: Picked; notify: (msg: string, ok?: boolean) => void }) {
   const [keys, setKeys] = useState<AdminKey[] | null>(null);
   const [ready, setReady] = useState(true);
   const [error, setError] = useState("");
@@ -1669,7 +1669,7 @@ function KeyPolicies({ picked, notify }: { picked: Picked; notify: (msg: string)
   );
 }
 
-function AppsTable({ picked, notify }: { picked: Picked; notify: (msg: string) => void }) {
+function AppsTable({ picked, notify }: { picked: Picked; notify: (msg: string, ok?: boolean) => void }) {
   const [apps, setApps] = useState<AdminApp[] | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState<number | null>(null);
@@ -1725,7 +1725,7 @@ function AppsTable({ picked, notify }: { picked: Picked; notify: (msg: string) =
     try {
       await api.adminRevokeApp(a.id);
       setApps((cur) => (cur ? cur.map((x) => (x.id === a.id ? { ...x, revoked: true } : x)) : cur));
-      notify(t("اتصال قطع شد.", "App disconnected."));
+      notify(t("اتصال قطع شد.", "App disconnected."), true);
     } catch (e) {
       notify(errText(e, t("قطع اتصال ناموفق بود.", "Could not disconnect the app.")));
     } finally {
@@ -2196,7 +2196,7 @@ function PlatformsPanel() {
   );
 }
 
-function Sessions({ picked, notify }: { picked: Picked; notify: (msg: string) => void }) {
+function Sessions({ picked, notify }: { picked: Picked; notify: (msg: string, ok?: boolean) => void }) {
   const [rows, setRows] = useState<AdminSession[] | null>(null);
   const [total, setTotal] = useState(0);
   const [client, setClient] = useState("");
@@ -2241,7 +2241,7 @@ function Sessions({ picked, notify }: { picked: Picked; notify: (msg: string) =>
     setBusy(s.id);
     try {
       await api.revokeSession(s.id);
-      notify(t("نشست بسته شد.", "Session ended."));
+      notify(t("نشست بسته شد.", "Session ended."), true);
       setReload((n) => n + 1);
     } catch (e) {
       notify(errText(e, t("بستن نشست ناموفق بود.", "Could not end the session.")));
@@ -2262,7 +2262,7 @@ function Sessions({ picked, notify }: { picked: Picked; notify: (msg: string) =>
     if (!ok) return;
     try {
       const r = await api.revokeUserSessions(picked.id);
-      notify(t(`${fmtNum(r.revoked)} نشست بسته شد.`, `${fmtNum(r.revoked)} sessions ended.`));
+      notify(t(`${fmtNum(r.revoked)} نشست بسته شد.`, `${fmtNum(r.revoked)} sessions ended.`), true);
       setReload((n) => n + 1);
     } catch (e) {
       notify(errText(e, t("بستن نشست‌ها ناموفق بود.", "Could not end the sessions.")));
@@ -2385,7 +2385,7 @@ function Sessions({ picked, notify }: { picked: Picked; notify: (msg: string) =>
 
 const KIND_LABEL: Record<string, string> = { image: t("تصویر", "Image"), text: t("متن یا کد", "Text or code"), archive: "ZIP", pdf: "PDF" };
 
-async function saveUpload(f: AdminUpload, notify: (msg: string) => void) {
+async function saveUpload(f: AdminUpload, notify: (msg: string, ok?: boolean) => void) {
   try {
     const r = await api.adminFile(f.id);
     const bytes = Uint8Array.from(atob(r.data), (c) => c.charCodeAt(0));
@@ -2415,7 +2415,7 @@ function UploadPreview({ f }: { f: AdminUpload }) {
   return src ? <img src={src} alt={f.name} className="upload-preview" /> : <span className="spinner tiny" />;
 }
 
-function Uploads({ picked, notify }: { picked: Picked; notify?: (msg: string) => void }) {
+function Uploads({ picked, notify }: { picked: Picked; notify?: (msg: string, ok?: boolean) => void }) {
   const [rows, setRows] = useState<AdminUpload[] | null>(null);
   const [total, setTotal] = useState(0);
   const [kind, setKind] = useState("");
@@ -2581,7 +2581,7 @@ export function NoAccess() {
   );
 }
 
-export function Admin({ notify }: { notify: (msg: string) => void }) {
+export function Admin({ notify }: { notify: (msg: string, ok?: boolean) => void }) {
   const [summary, setSummary] = useState<AdminSummary | null>(null);
   const [error, setError] = useState("");
   const [forbidden, setForbidden] = useState(false);

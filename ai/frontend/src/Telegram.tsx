@@ -251,7 +251,7 @@ function Account({ name, handle, note, since, busy, onRemove }: { name: string; 
   );
 }
 
-function IntegrationCard({ item, storage, highlight, notify, onChange }: { item: Integration; storage: boolean; highlight: boolean; notify: (msg: string) => void; onChange: () => void }) {
+function IntegrationCard({ item, storage, highlight, notify, onChange }: { item: Integration; storage: boolean; highlight: boolean; notify: (msg: string, ok?: boolean) => void; onChange: () => void }) {
   const info = PROVIDERS[item.provider];
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState("");
@@ -264,7 +264,7 @@ function IntegrationCard({ item, storage, highlight, notify, onChange }: { item:
       const r = await api.saveIntegration(item.provider, token.trim());
       setToken("");
       setReplacing(false);
-      notify(t(`${info.name} وصل شد: ${r.login}`, `${info.name} connected: ${r.login}`));
+      notify(t(`${info.name} وصل شد: ${r.login}`, `${info.name} connected: ${r.login}`), true);
       onChange();
     } catch (err) {
       notify(err instanceof ApiError ? err.message : t("وصل کردن ناموفق بود.", "Could not connect."));
@@ -297,7 +297,7 @@ function IntegrationCard({ item, storage, highlight, notify, onChange }: { item:
     setBusy("remove");
     try {
       await api.removeIntegration(item.provider);
-      notify(t(`${info.name} جدا شد.`, `${info.name} disconnected.`));
+      notify(t(`${info.name} جدا شد.`, `${info.name} disconnected.`), true);
       onChange();
     } catch (err) {
       notify(err instanceof ApiError ? err.message : t("جدا کردن ناموفق بود.", "Could not disconnect."));
@@ -351,7 +351,7 @@ function IntegrationCard({ item, storage, highlight, notify, onChange }: { item:
   );
 }
 
-export function Connections({ notify }: { notify: (msg: string) => void }) {
+export function Connections({ notify }: { notify: (msg: string, ok?: boolean) => void }) {
   const [integrations, setIntegrations] = useState<Integrations | null>(null);
   const [status, setStatus] = useState<TelegramStatus | null>(null);
   const [error, setError] = useState("");
@@ -382,7 +382,7 @@ export function Connections({ notify }: { notify: (msg: string) => void }) {
     load();
     const p = new URLSearchParams(location.search);
     if (p.get("connected")) {
-      notify(p.get("result") === "ok" ? t("اتصال انجام شد.", "Connected.") : t("اتصال انجام نشد. دوباره تلاش کنید.", "The connection did not complete. Try again."));
+      notify(p.get("result") === "ok" ? t("اتصال انجام شد.", "Connected.") : t("اتصال انجام نشد. دوباره تلاش کنید.", "The connection did not complete. Try again."), p.get("result") === "ok");
       history.replaceState(null, "", "/connections");
     }
     const refresh = () => {
@@ -434,7 +434,7 @@ export function Connections({ notify }: { notify: (msg: string) => void }) {
     try {
       await api.telegramUnlink(id);
       setStatus((cur) => (cur ? { ...cur, links: cur.links.filter((l) => l.id !== id) } : cur));
-      notify(t("تلگرام جدا شد.", "Telegram disconnected."));
+      notify(t("تلگرام جدا شد.", "Telegram disconnected."), true);
     } catch (e) {
       notify(e instanceof ApiError ? e.message : t("جدا کردن ناموفق بود.", "Could not disconnect."));
     } finally {

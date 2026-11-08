@@ -1,0 +1,1018 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package archive
+
+import mem
+
+const _PP_MAX_FREQ := 124
+const _PP_UNIT := 12
+const _PP_NUM_INDEXES := 38
+const _PP_BIN_SCALE := 16384
+const _PP_PERIOD_BITS := 7
+const _PP_INIT_BIN_ESC := [0x3CDD, 0x1F3F, 0x59BF, 0x48F3, 0x64A1, 0x5ABC, 0x6632, 0x6051]
+const _PP_EXP_ESCAPE := [25, 14, 9, 7, 5, 5, 4, 4, 4, 3, 3, 3, 2, 2, 2, 2]
+
+struct _Ppmd:
+    pub base: u8*
+    pub size: int
+    pub align: int
+    pub text: int
+    pub units_start: int
+    pub lo_unit: int
+    pub hi_unit: int
+    pub glue_count: int
+    pub free_list: int*
+    pub i2u: u8*
+    pub u2i: u8*
+    pub ns2bs: u8*
+    pub ns2i: u8*
+    pub hb2f: u8*
+    pub bin_summ: u16*
+    pub see_summ: u16*
+    pub see_shift: u8*
+    pub see_count: u8*
+    pub min_ctx: int
+    pub max_ctx: int
+    pub found: int
+    pub order_fall: int
+    pub init_esc: int
+    pub prev_success: int
+    pub max_order: int
+    pub hi_bits: int
+    pub run_length: int
+    pub init_rl: int
+    pub rc_range: i64
+    pub rc_code: i64
+    pub rc_low: i64
+    pub mask: u8*
+    pub ps: int*
+    pub ready: bool
+end
+
+func _pp_g16(p: _Ppmd, o: int): int:
+    ret ((((p.base as i64) + (o as i64)) as u16*)[0]) as int
+end
+
+func _pp_g32(p: _Ppmd, o: int): int:
+    ret ((((p.base as i64) + (o as i64)) as u32*)[0]) as int
+end
+
+func _pp_s16(p: _Ppmd, o: int, v: int):
+    (((p.base as i64) + (o as i64)) as u16*)[0] = (v & 0xffff) as u16
+end
+
+func _pp_s32(p: _Ppmd, o: int, v: int):
+    (((p.base as i64) + (o as i64)) as u32*)[0] = v as u32
+end
+
+func _pp_ns(p: _Ppmd, c: int): int:
+    ret _pp_g16(p, c)
+end
+
+func _pp_sf(p: _Ppmd, c: int): int:
+    ret _pp_g16(p, c + 2)
+end
+
+func _pp_stats(p: _Ppmd, c: int): int:
+    ret _pp_g32(p, c + 4)
+end
+
+func _pp_suffix(p: _Ppmd, c: int): int:
+    ret _pp_g32(p, c + 8)
+end
+
+func _pp_succ(p: _Ppmd, s: int): int:
+    ret _pp_g16(p, s + 2) | (_pp_g16(p, s + 4) << 16)
+end
+
+func _pp_set_succ(p: _Ppmd, s: int, v: int):
+    _pp_s16(p, s + 2, v & 0xffff)
+    _pp_s16(p, s + 4, (v >> 16) & 0xffff)
+end
+
+func _pp_sym(p: _Ppmd, s: int): int:
+    ret p.base[s] as int
+end
+
+func _pp_freq(p: _Ppmd, s: int): int:
+    ret p.base[s + 1] as int
+end
+
+func _pp_set_freq(p: _Ppmd, s: int, v: int):
+    p.base[s + 1] = (v & 255) as u8
+end
+
+func _pp_copy_state(p: _Ppmd, dst: int, src: int):
+    repeat 6 in i:
+        p.base[dst + i] = p.base[src + i]
+    end
+end
+
+func _pp_swap_states(p: _Ppmd, a: int, b: int):
+    repeat 6 in i:
+        t := p.base[a + i]
+        p.base[a + i] = p.base[b + i]
+        p.base[b + i] = t
+    end
+end
+
+func _pp_new(): _Ppmd:
+    mut p := _Ppmd {
+        base = null
+        size = 0
+        align = 0
+        text = 0
+        units_start = 0
+        lo_unit = 0
+        hi_unit = 0
+        glue_count = 0
+        free_list = mem.AllocateZeroed((_PP_NUM_INDEXES * 4) as u64) as int*
+        i2u = mem.AllocateZeroed(_PP_NUM_INDEXES as u64) as u8*
+        u2i = mem.AllocateZeroed(128 as u64) as u8*
+        ns2bs = mem.AllocateZeroed(256 as u64) as u8*
+        ns2i = mem.AllocateZeroed(256 as u64) as u8*
+        hb2f = mem.AllocateZeroed(256 as u64) as u8*
+        bin_summ = mem.AllocateZeroed((128 * 64 * 2) as u64) as u16*
+        see_summ = mem.AllocateZeroed((404 * 2) as u64) as u16*
+        see_shift = mem.AllocateZeroed(404 as u64) as u8*
+        see_count = mem.AllocateZeroed(404 as u64) as u8*
+        min_ctx = 0
+        max_ctx = 0
+        found = 0
+        order_fall = 0
+        init_esc = 0
+        prev_success = 0
+        max_order = 0
+        hi_bits = 0
+        run_length = 0
+        init_rl = 0
+        rc_range = 0 as i64
+        rc_code = 0 as i64
+        rc_low = 0 as i64
+        mask = mem.AllocateZeroed(256 as u64) as u8*
+        ps = mem.AllocateZeroed((256 * 4) as u64) as int*
+        ready = false
+    }
+    mut k := 0
+    repeat _PP_NUM_INDEXES in i:
+        mut step := 4
+        if i < 12:
+            step = (i >> 2) + 1
+        end
+        repeat step:
+            p.u2i[k] = i as u8
+            k++
+        end
+        p.i2u[i] = k as u8
+    end
+    p.ns2bs[0] = 0 as u8
+    p.ns2bs[1] = 2 as u8
+    repeat 9 in i:
+        p.ns2bs[2 + i] = 4 as u8
+    end
+    repeat 245 in i:
+        p.ns2bs[11 + i] = 6 as u8
+    end
+    repeat 3 in i:
+        p.ns2i[i] = i as u8
+    end
+    mut m := 3
+    mut kk := 1
+    mut i2 := 3
+    until i2 < 256:
+        p.ns2i[i2] = m as u8
+        kk--
+        if kk == 0:
+            m++
+            kk = m - 2
+        end
+        i2++
+    end
+    repeat 256 in i:
+        p.hb2f[i] = (i >= 0x40 ? 8 : 0) as u8
+    end
+    ret p
+end
+
+func _pp_free(p &: _Ppmd):
+    mem.Free(p.base as void*)
+    mem.Free(p.free_list as void*)
+    mem.Free(p.i2u as void*)
+    mem.Free(p.u2i as void*)
+    mem.Free(p.ns2bs as void*)
+    mem.Free(p.ns2i as void*)
+    mem.Free(p.hb2f as void*)
+    mem.Free(p.bin_summ as void*)
+    mem.Free(p.see_summ as void*)
+    mem.Free(p.see_shift as void*)
+    mem.Free(p.see_count as void*)
+    mem.Free(p.mask as void*)
+    mem.Free(p.ps as void*)
+end
+
+func _pp_alloc(p &: _Ppmd, size: int): bool:
+    mem.Free(p.base as void*)
+    p.align = 4 - (size & 3)
+    p.size = size
+    p.base = mem.AllocateZeroed((p.align + size + _PP_UNIT) as u64) as u8*
+    ret p.base != null
+end
+
+func _pp_i2u(p: _Ppmd, i: int): int:
+    ret p.i2u[i] as int
+end
+
+func _pp_u2i(p: _Ppmd, nu: int): int:
+    ret p.u2i[nu - 1] as int
+end
+
+func _pp_insert_node(p &: _Ppmd, node: int, indx: int):
+    _pp_s32(p, node, p.free_list[indx])
+    p.free_list[indx] = node
+end
+
+func _pp_remove_node(p &: _Ppmd, indx: int): int:
+    node := p.free_list[indx]
+    p.free_list[indx] = _pp_g32(p, node)
+    ret node
+end
+
+func _pp_split_block(p &: _Ppmd, ptr0: int, old_i: int, new_i: int):
+    nu := _pp_i2u(p, old_i) - _pp_i2u(p, new_i)
+    ptr := ptr0 + _pp_i2u(p, new_i) * _PP_UNIT
+    mut i := _pp_u2i(p, nu)
+    if _pp_i2u(p, i) != nu:
+        i--
+        k := _pp_i2u(p, i)
+        _pp_insert_node(p, ptr + k * _PP_UNIT, nu - k - 1)
+    end
+    _pp_insert_node(p, ptr, i)
+end
+
+func _pp_glue(p &: _Ppmd):
+    head := p.align + p.size
+    mut n := head
+    p.glue_count = 255
+    repeat _PP_NUM_INDEXES in i:
+        nu := _pp_i2u(p, i)
+        mut next := p.free_list[i]
+        p.free_list[i] = 0
+        until next != 0:
+            node := next
+            _pp_s32(p, node + 4, n)
+            _pp_s32(p, n + 8, next)
+            n = next
+            next = _pp_g32(p, node)
+            _pp_s16(p, node, 0)
+            _pp_s16(p, node + 2, nu)
+        end
+    end
+    _pp_s16(p, head, 1)
+    _pp_s32(p, head + 4, n)
+    _pp_s32(p, n + 8, head)
+    if p.lo_unit != p.hi_unit:
+        _pp_s16(p, p.lo_unit, 1)
+    end
+    until n != head:
+        node := n
+        mut nu := _pp_g16(p, node + 2)
+        until true:
+            node2 := node + nu * _PP_UNIT
+            nu += _pp_g16(p, node2 + 2)
+            if _pp_g16(p, node2) != 0 or nu >= 0x10000:
+                break
+            end
+            _pp_s32(p, _pp_g32(p, node2 + 8) + 4, _pp_g32(p, node2 + 4))
+            _pp_s32(p, _pp_g32(p, node2 + 4) + 8, _pp_g32(p, node2 + 8))
+            _pp_s16(p, node + 2, nu)
+        end
+        n = _pp_g32(p, node + 4)
+    end
+    n = _pp_g32(p, head + 4)
+    until n != head:
+        mut node := n
+        next := _pp_g32(p, node + 4)
+        mut nu := _pp_g16(p, node + 2)
+        until nu > 128:
+            _pp_insert_node(p, node, _PP_NUM_INDEXES - 1)
+            nu -= 128
+            node += 128 * _PP_UNIT
+        end
+        mut i := _pp_u2i(p, nu)
+        if _pp_i2u(p, i) != nu:
+            i--
+            k := _pp_i2u(p, i)
+            _pp_insert_node(p, node + k * _PP_UNIT, nu - k - 1)
+        end
+        _pp_insert_node(p, node, i)
+        n = next
+    end
+end
+
+func _pp_alloc_units_rare(p &: _Ppmd, indx: int): int:
+    if p.glue_count == 0:
+        _pp_glue(p)
+        if p.free_list[indx] != 0:
+            ret _pp_remove_node(p, indx)
+        end
+    end
+    mut i := indx
+    until true:
+        i++
+        if i == _PP_NUM_INDEXES:
+            nb := _pp_i2u(p, indx) * _PP_UNIT
+            p.glue_count--
+            if p.units_start - p.text > nb:
+                p.units_start -= nb
+                ret p.units_start
+            end
+            ret 0
+        end
+        if p.free_list[i] != 0:
+            break
+        end
+    end
+    r := _pp_remove_node(p, i)
+    _pp_split_block(p, r, i, indx)
+    ret r
+end
+
+func _pp_alloc_units(p &: _Ppmd, indx: int): int:
+    if p.free_list[indx] != 0:
+        ret _pp_remove_node(p, indx)
+    end
+    nb := _pp_i2u(p, indx) * _PP_UNIT
+    if nb <= p.hi_unit - p.lo_unit:
+        r := p.lo_unit
+        p.lo_unit += nb
+        ret r
+    end
+    ret _pp_alloc_units_rare(p, indx)
+end
+
+func _pp_copy_units(p: _Ppmd, dst: int, src: int, nu: int):
+    mem.Copy(((p.base as i64) + (dst as i64)) as void*, ((p.base as i64) + (src as i64)) as void*, (nu * _PP_UNIT) as u64)
+end
+
+func _pp_shrink_units(p &: _Ppmd, old: int, old_nu: int, new_nu: int): int:
+    i0 := _pp_u2i(p, old_nu)
+    i1 := _pp_u2i(p, new_nu)
+    if i0 == i1:
+        ret old
+    end
+    if p.free_list[i1] != 0:
+        ptr := _pp_remove_node(p, i1)
+        _pp_copy_units(p, ptr, old, new_nu)
+        _pp_insert_node(p, old, i0)
+        ret ptr
+    end
+    _pp_split_block(p, old, i0, i1)
+    ret old
+end
+
+func _pp_restart(p &: _Ppmd):
+    repeat _PP_NUM_INDEXES in i:
+        p.free_list[i] = 0
+    end
+    p.text = p.align
+    p.hi_unit = p.text + p.size
+    p.units_start = p.hi_unit - (p.size / 8 / _PP_UNIT) * 7 * _PP_UNIT
+    p.lo_unit = p.units_start
+    p.glue_count = 0
+    p.order_fall = p.max_order
+    p.init_rl = -(p.max_order < 12 ? p.max_order : 12) - 1
+    p.run_length = p.init_rl
+    p.prev_success = 0
+    p.hi_unit -= _PP_UNIT
+    p.min_ctx = p.hi_unit
+    p.max_ctx = p.hi_unit
+    _pp_s32(p, p.min_ctx + 8, 0)
+    _pp_s16(p, p.min_ctx, 256)
+    _pp_s16(p, p.min_ctx + 2, 257)
+    p.found = p.lo_unit
+    p.lo_unit += (256 / 2) * _PP_UNIT
+    _pp_s32(p, p.min_ctx + 4, p.found)
+    repeat 256 in i:
+        s := p.found + i * 6
+        p.base[s] = i as u8
+        p.base[s + 1] = 1 as u8
+        _pp_set_succ(p, s, 0)
+    end
+    repeat 128 in i:
+        repeat 8 in k:
+            val := _PP_BIN_SCALE - _PP_INIT_BIN_ESC[k] / (i + 2)
+            mut m := 0
+            until m < 64:
+                p.bin_summ[i * 64 + k + m] = val as u16
+                m += 8
+            end
+        end
+    end
+    repeat 25 in i:
+        repeat 16 in k:
+            p.see_shift[i * 16 + k] = (_PP_PERIOD_BITS - 4) as u8
+            p.see_summ[i * 16 + k] = ((5 * i + 10) << (_PP_PERIOD_BITS - 4)) as u16
+            p.see_count[i * 16 + k] = 4 as u8
+        end
+    end
+end
+
+func _pp_init(p &: _Ppmd, max_order: int):
+    p.max_order = max_order
+    _pp_restart(p)
+    p.see_shift[400] = _PP_PERIOD_BITS as u8
+    p.see_summ[400] = 0 as u16
+    p.see_count[400] = 64 as u8
+    p.ready = true
+end
+
+func _pp_create_successors(p &: _Ppmd, skip: bool): int:
+    mut psl: int[64]
+    mut c := p.min_ctx
+    up_branch := _pp_succ(p, p.found)
+    mut nps := 0
+    fsym := _pp_sym(p, p.found)
+    if not skip:
+        psl[nps] = p.found
+        nps++
+    end
+    until _pp_suffix(p, c) != 0:
+        c = _pp_suffix(p, c)
+        mut s := 0
+        if _pp_ns(p, c) != 1:
+            s = _pp_stats(p, c)
+            until _pp_sym(p, s) != fsym:
+                s += 6
+            end
+        else:
+            s = c + 2
+        end
+        succ := _pp_succ(p, s)
+        if succ != up_branch:
+            c = succ
+            if nps == 0:
+                ret c
+            end
+            break
+        end
+        psl[nps] = s
+        nps++
+    end
+    up_sym := p.base[up_branch] as int
+    up_succ := up_branch + 1
+    mut up_freq := 0
+    if _pp_ns(p, c) == 1:
+        up_freq = _pp_freq(p, c + 2)
+    else:
+        mut s2 := _pp_stats(p, c)
+        until _pp_sym(p, s2) != up_sym:
+            s2 += 6
+        end
+        cf := _pp_freq(p, s2) - 1
+        s0 := _pp_sf(p, c) - _pp_ns(p, c) - cf
+        if 2 * cf <= s0:
+            up_freq = 1 + (5 * cf > s0 ? 1 : 0)
+        else:
+            up_freq = 1 + (2 * cf + 3 * s0 - 1) / (2 * s0)
+        end
+    end
+    until true:
+        mut c1 := 0
+        if p.hi_unit != p.lo_unit:
+            p.hi_unit -= _PP_UNIT
+            c1 = p.hi_unit
+        else p.free_list[0] != 0:
+            c1 = _pp_remove_node(p, 0)
+        else:
+            c1 = _pp_alloc_units_rare(p, 0)
+            if c1 == 0:
+                ret 0
+            end
+        end
+        _pp_s16(p, c1, 1)
+        p.base[c1 + 2] = up_sym as u8
+        p.base[c1 + 3] = (up_freq & 255) as u8
+        _pp_set_succ(p, c1 + 2, up_succ)
+        _pp_s32(p, c1 + 8, c)
+        nps--
+        _pp_set_succ(p, psl[nps], c1)
+        c = c1
+        if nps == 0:
+            break
+        end
+    end
+    ret c
+end
+
+func _pp_update_model(p &: _Ppmd):
+    fsym := _pp_sym(p, p.found)
+    ffreq := _pp_freq(p, p.found)
+    mut fsucc := _pp_succ(p, p.found)
+    if ffreq < _PP_MAX_FREQ / 4 and _pp_suffix(p, p.min_ctx) != 0:
+        c := _pp_suffix(p, p.min_ctx)
+        if _pp_ns(p, c) == 1:
+            s := c + 2
+            if _pp_freq(p, s) < 32:
+                _pp_set_freq(p, s, _pp_freq(p, s) + 1)
+            end
+        else:
+            mut s := _pp_stats(p, c)
+            if _pp_sym(p, s) != fsym:
+                until true:
+                    s += 6
+                    if _pp_sym(p, s) == fsym:
+                        break
+                    end
+                end
+                if _pp_freq(p, s) >= _pp_freq(p, s - 6):
+                    _pp_swap_states(p, s, s - 6)
+                    s -= 6
+                end
+            end
+            if _pp_freq(p, s) < _PP_MAX_FREQ - 9:
+                _pp_set_freq(p, s, _pp_freq(p, s) + 2)
+                _pp_s16(p, c + 2, _pp_sf(p, c) + 2)
+            end
+        end
+    end
+    if p.order_fall == 0:
+        p.min_ctx = _pp_create_successors(p, true)
+        p.max_ctx = p.min_ctx
+        if p.min_ctx == 0:
+            _pp_restart(p)
+            ret
+        end
+        _pp_set_succ(p, p.found, p.min_ctx)
+        ret
+    end
+    p.base[p.text] = fsym as u8
+    p.text++
+    mut successor := p.text
+    if p.text >= p.units_start:
+        _pp_restart(p)
+        ret
+    end
+    if fsucc != 0:
+        if fsucc <= successor:
+            cs := _pp_create_successors(p, false)
+            if cs == 0:
+                _pp_restart(p)
+                ret
+            end
+            fsucc = cs
+        end
+        p.order_fall--
+        if p.order_fall == 0:
+            successor = fsucc
+            if p.max_ctx != p.min_ctx:
+                p.text--
+            end
+        end
+    else:
+        _pp_set_succ(p, p.found, successor)
+        fsucc = p.min_ctx
+    end
+    ns := _pp_ns(p, p.min_ctx)
+    s0 := _pp_sf(p, p.min_ctx) - ns - (ffreq - 1)
+    mut c := p.max_ctx
+    until c != p.min_ctx:
+        ns1 := _pp_ns(p, c)
+        if ns1 != 1:
+            if (ns1 & 1) == 0:
+                old_nu := ns1 >> 1
+                i := _pp_u2i(p, old_nu)
+                if i != _pp_u2i(p, old_nu + 1):
+                    ptr := _pp_alloc_units(p, i + 1)
+                    if ptr == 0:
+                        _pp_restart(p)
+                        ret
+                    end
+                    old_ptr := _pp_stats(p, c)
+                    _pp_copy_units(p, ptr, old_ptr, old_nu)
+                    _pp_insert_node(p, old_ptr, i)
+                    _pp_s32(p, c + 4, ptr)
+                end
+            end
+            sf0 := _pp_sf(p, c)
+            add := (2 * ns1 < ns ? 1 : 0) + 2 * ((4 * ns1 <= ns and sf0 <= 8 * ns1) ? 1 : 0)
+            _pp_s16(p, c + 2, sf0 + add)
+        else:
+            s := _pp_alloc_units(p, 0)
+            if s == 0:
+                _pp_restart(p)
+                ret
+            end
+            _pp_copy_state(p, s, c + 2)
+            _pp_s32(p, c + 4, s)
+            mut fr := _pp_freq(p, s)
+            if fr < _PP_MAX_FREQ / 4 - 1:
+                fr = fr << 1
+            else:
+                fr = _PP_MAX_FREQ - 4
+            end
+            _pp_set_freq(p, s, fr)
+            _pp_s16(p, c + 2, fr + p.init_esc + (ns > 3 ? 1 : 0))
+        end
+        mut cf := 2 * ffreq * (_pp_sf(p, c) + 6)
+        sf := s0 + _pp_sf(p, c)
+        if cf < 6 * sf:
+            cf = 1 + (cf > sf ? 1 : 0) + (cf >= 4 * sf ? 1 : 0)
+            _pp_s16(p, c + 2, _pp_sf(p, c) + 3)
+        else:
+            cf = 4 + (cf >= 9 * sf ? 1 : 0) + (cf >= 12 * sf ? 1 : 0) + (cf >= 15 * sf ? 1 : 0)
+            _pp_s16(p, c + 2, _pp_sf(p, c) + cf)
+        end
+        ns2 := _pp_stats(p, c) + ns1 * 6
+        _pp_set_succ(p, ns2, successor)
+        p.base[ns2] = fsym as u8
+        p.base[ns2 + 1] = (cf & 255) as u8
+        _pp_s16(p, c, ns1 + 1)
+        c = _pp_suffix(p, c)
+    end
+    p.max_ctx = fsucc
+    p.min_ctx = fsucc
+end
+
+func _pp_rescale(p &: _Ppmd):
+    stats := _pp_stats(p, p.min_ctx)
+    mut s := p.found
+    if s != stats:
+        tmp0 := p.base[s]
+        tmp1 := p.base[s + 1]
+        tmp2 := p.base[s + 2]
+        tmp3 := p.base[s + 3]
+        tmp4 := p.base[s + 4]
+        tmp5 := p.base[s + 5]
+        until s != stats:
+            _pp_copy_state(p, s, s - 6)
+            s -= 6
+        end
+        p.base[s] = tmp0
+        p.base[s + 1] = tmp1
+        p.base[s + 2] = tmp2
+        p.base[s + 3] = tmp3
+        p.base[s + 4] = tmp4
+        p.base[s + 5] = tmp5
+    end
+    mut esc_freq := _pp_sf(p, p.min_ctx) - _pp_freq(p, s)
+    adder := p.order_fall != 0 ? 1 : 0
+    _pp_set_freq(p, s, (_pp_freq(p, s) + 4 + adder) >> 1)
+    mut sum_freq := _pp_freq(p, s)
+    mut i := _pp_ns(p, p.min_ctx) - 1
+    until true:
+        s += 6
+        esc_freq -= _pp_freq(p, s)
+        _pp_set_freq(p, s, (_pp_freq(p, s) + adder) >> 1)
+        sum_freq += _pp_freq(p, s)
+        if _pp_freq(p, s) > _pp_freq(p, s - 6):
+            mut s1 := s
+            t0 := p.base[s1]
+            t1 := p.base[s1 + 1]
+            t2 := p.base[s1 + 2]
+            t3 := p.base[s1 + 3]
+            t4 := p.base[s1 + 4]
+            t5 := p.base[s1 + 5]
+            tf := t1 as int
+            until true:
+                _pp_copy_state(p, s1, s1 - 6)
+                s1 -= 6
+                if s1 == stats or tf <= _pp_freq(p, s1 - 6):
+                    break
+                end
+            end
+            p.base[s1] = t0
+            p.base[s1 + 1] = t1
+            p.base[s1 + 2] = t2
+            p.base[s1 + 3] = t3
+            p.base[s1 + 4] = t4
+            p.base[s1 + 5] = t5
+        end
+        i--
+        if i == 0:
+            break
+        end
+    end
+    if _pp_freq(p, s) == 0:
+        num_stats := _pp_ns(p, p.min_ctx)
+        mut j := 0
+        until true:
+            j++
+            s -= 6
+            if _pp_freq(p, s) != 0:
+                break
+            end
+        end
+        esc_freq += j
+        _pp_s16(p, p.min_ctx, num_stats - j)
+        if _pp_ns(p, p.min_ctx) == 1:
+            mut tf2 := _pp_freq(p, stats)
+            t_sym := p.base[stats]
+            t_s2 := p.base[stats + 2]
+            t_s3 := p.base[stats + 3]
+            t_s4 := p.base[stats + 4]
+            t_s5 := p.base[stats + 5]
+            until true:
+                tf2 = tf2 - (tf2 >> 1)
+                esc_freq = esc_freq >> 1
+                if esc_freq <= 1:
+                    break
+                end
+            end
+            _pp_insert_node(p, stats, _pp_u2i(p, (num_stats + 1) >> 1))
+            p.found = p.min_ctx + 2
+            p.base[p.found] = t_sym
+            p.base[p.found + 1] = (tf2 & 255) as u8
+            p.base[p.found + 2] = t_s2
+            p.base[p.found + 3] = t_s3
+            p.base[p.found + 4] = t_s4
+            p.base[p.found + 5] = t_s5
+            ret
+        end
+        n0 := (num_stats + 1) >> 1
+        n1 := (_pp_ns(p, p.min_ctx) + 1) >> 1
+        if n0 != n1:
+            _pp_s32(p, p.min_ctx + 4, _pp_shrink_units(p, stats, n0, n1))
+        end
+    end
+    _pp_s16(p, p.min_ctx + 2, sum_freq + esc_freq - (esc_freq >> 1))
+    p.found = _pp_stats(p, p.min_ctx)
+end
+
+func _pp_make_esc_freq(p &: _Ppmd, num_masked: int, esc_out &: int): int:
+    ns := _pp_ns(p, p.min_ctx)
+    non_masked := ns - num_masked
+    if ns != 256:
+        suf := _pp_suffix(p, p.min_ctx)
+        mut idx := (p.ns2i[non_masked - 1] as int) * 16
+        idx += (non_masked < _pp_ns(p, suf) - ns ? 1 : 0)
+        idx += 2 * (_pp_sf(p, p.min_ctx) < 11 * ns ? 1 : 0)
+        idx += 4 * (num_masked > non_masked ? 1 : 0)
+        idx += p.hi_bits
+        r := (p.see_summ[idx] as int) >> (p.see_shift[idx] as int)
+        p.see_summ[idx] = ((p.see_summ[idx] as int) - r) as u16
+        esc_out = r + (r == 0 ? 1 : 0)
+        ret idx
+    end
+    esc_out = 1
+    ret 400
+end
+
+func _pp_next_context(p &: _Ppmd):
+    c := _pp_succ(p, p.found)
+    if p.order_fall == 0 and c > p.text:
+        p.min_ctx = c
+        p.max_ctx = c
+    else:
+        _pp_update_model(p)
+    end
+end
+
+func _pp_update1(p &: _Ppmd):
+    s := p.found
+    _pp_set_freq(p, s, _pp_freq(p, s) + 4)
+    _pp_s16(p, p.min_ctx + 2, _pp_sf(p, p.min_ctx) + 4)
+    if _pp_freq(p, s) > _pp_freq(p, s - 6):
+        _pp_swap_states(p, s, s - 6)
+        p.found = s - 6
+        if _pp_freq(p, p.found) > _PP_MAX_FREQ:
+            _pp_rescale(p)
+        end
+    end
+    _pp_next_context(p)
+end
+
+func _pp_update1_0(p &: _Ppmd):
+    p.prev_success = 2 * _pp_freq(p, p.found) > _pp_sf(p, p.min_ctx) ? 1 : 0
+    p.run_length += p.prev_success
+    _pp_s16(p, p.min_ctx + 2, _pp_sf(p, p.min_ctx) + 4)
+    nf := _pp_freq(p, p.found) + 4
+    _pp_set_freq(p, p.found, nf)
+    if nf > _PP_MAX_FREQ:
+        _pp_rescale(p)
+    end
+    _pp_next_context(p)
+end
+
+func _pp_update_bin(p &: _Ppmd):
+    f := _pp_freq(p, p.found)
+    _pp_set_freq(p, p.found, f + (f < 128 ? 1 : 0))
+    p.prev_success = 1
+    p.run_length++
+    _pp_next_context(p)
+end
+
+func _pp_update2(p &: _Ppmd):
+    _pp_s16(p, p.min_ctx + 2, _pp_sf(p, p.min_ctx) + 4)
+    nf := _pp_freq(p, p.found) + 4
+    _pp_set_freq(p, p.found, nf)
+    if nf > _PP_MAX_FREQ:
+        _pp_rescale(p)
+    end
+    p.run_length = p.init_rl
+    _pp_update_model(p)
+end
+
+func _pp_byte(b &: _RarBits): i64:
+    byte := b.pos >> 3
+    b.pos = (byte + 1) * 8
+    if byte < b.n:
+        ret b.p[byte] as i64
+    end
+    ret 0
+end
+
+func _pp_rc_init(p &: _Ppmd, b &: _RarBits):
+    p.rc_code = 0 as i64
+    p.rc_low = 0 as i64
+    p.rc_range = 0xffffffff as i64
+    repeat 4:
+        p.rc_code = ((p.rc_code << 8) | _pp_byte(b)) & 0xffffffff
+    end
+end
+
+func _pp_rc_norm(p &: _Ppmd, b &: _RarBits):
+    until true:
+        if ((p.rc_low ^ ((p.rc_low + p.rc_range) & 0xffffffff)) & 0xffffffff) >= 0x1000000:
+            if p.rc_range >= 0x8000:
+                break
+            end
+            p.rc_range = (0 - p.rc_low) & 0x7fff
+        end
+        p.rc_code = ((p.rc_code << 8) | _pp_byte(b)) & 0xffffffff
+        p.rc_range = (p.rc_range << 8) & 0xffffffff
+        p.rc_low = (p.rc_low << 8) & 0xffffffff
+    end
+end
+
+func _pp_rc_threshold(p &: _Ppmd, total: int): int:
+    p.rc_range = p.rc_range / (total as i64)
+    if p.rc_range == 0:
+        ret 0x7fffffff
+    end
+    ret (((p.rc_code - p.rc_low) & 0xffffffff) / p.rc_range) as int
+end
+
+func _pp_rc_decode(p &: _Ppmd, b &: _RarBits, start: int, size: int):
+    p.rc_low = (p.rc_low + (start as i64) * p.rc_range) & 0xffffffff
+    p.rc_range = (p.rc_range * (size as i64)) & 0xffffffff
+    _pp_rc_norm(p, b)
+end
+
+func _pp_see_update(p &: _Ppmd, see: int):
+    if (p.see_shift[see] as int) < _PP_PERIOD_BITS:
+        p.see_count[see] = ((p.see_count[see] as int) - 1) as u8
+        if (p.see_count[see] as int) == 0:
+            p.see_summ[see] = (((p.see_summ[see] as int) << 1) & 0xffff) as u16
+            sh := p.see_shift[see] as int
+            p.see_count[see] = ((3 << sh) & 255) as u8
+            p.see_shift[see] = (sh + 1) as u8
+        end
+    end
+end
+
+func _pp_decode(p &: _Ppmd, b &: _RarBits): int:
+    if _pp_ns(p, p.min_ctx) != 1:
+        mut s := _pp_stats(p, p.min_ctx)
+        sf := _pp_sf(p, p.min_ctx)
+        count := _pp_rc_threshold(p, sf)
+        mut hi_cnt := _pp_freq(p, s)
+        if count < hi_cnt:
+            _pp_rc_decode(p, b, 0, hi_cnt)
+            p.found = s
+            sym := _pp_sym(p, s)
+            _pp_update1_0(p)
+            ret sym
+        end
+        p.prev_success = 0
+        mut i := _pp_ns(p, p.min_ctx) - 1
+        until true:
+            s += 6
+            hi_cnt += _pp_freq(p, s)
+            if hi_cnt > count:
+                _pp_rc_decode(p, b, hi_cnt - _pp_freq(p, s), _pp_freq(p, s))
+                p.found = s
+                sym := _pp_sym(p, s)
+                _pp_update1(p)
+                ret sym
+            end
+            i--
+            if i == 0:
+                break
+            end
+        end
+        if count >= sf:
+            ret -2
+        end
+        p.hi_bits = p.hb2f[_pp_sym(p, p.found)] as int
+        _pp_rc_decode(p, b, hi_cnt, sf - hi_cnt)
+        repeat 256 in k:
+            p.mask[k] = 255 as u8
+        end
+        p.mask[_pp_sym(p, s)] = 0 as u8
+        mut j := _pp_ns(p, p.min_ctx) - 1
+        until true:
+            s -= 6
+            p.mask[_pp_sym(p, s)] = 0 as u8
+            j--
+            if j == 0:
+                break
+            end
+        end
+    else:
+        os := p.min_ctx + 2
+        suf := _pp_suffix(p, p.min_ctx)
+        p.hi_bits = p.hb2f[_pp_sym(p, p.found)] as int
+        idx := (_pp_freq(p, os) - 1) * 64 + p.prev_success + (p.ns2bs[_pp_ns(p, suf) - 1] as int) + p.hi_bits + 2 * (p.hb2f[_pp_sym(p, os)] as int) + ((p.run_length >> 26) & 0x20)
+        prob := p.bin_summ[idx] as int
+        r := p.rc_range >> 14
+        nb := r * (prob as i64)
+        if ((p.rc_code - p.rc_low) & 0xffffffff) < nb:
+            p.rc_range = nb
+            _pp_rc_norm(p, b)
+            p.bin_summ[idx] = (prob + 128 - ((prob + 32) >> 7)) as u16
+            p.found = os
+            sym := _pp_sym(p, os)
+            _pp_update_bin(p)
+            ret sym
+        end
+        p.rc_low = (p.rc_low + nb) & 0xffffffff
+        p.rc_range = (r * ((16384 - prob) as i64)) & 0xffffffff
+        _pp_rc_norm(p, b)
+        np := prob - ((prob + 32) >> 7)
+        p.bin_summ[idx] = np as u16
+        p.init_esc = _PP_EXP_ESCAPE[np >> 10]
+        repeat 256 in k:
+            p.mask[k] = 255 as u8
+        end
+        p.mask[_pp_sym(p, os)] = 0 as u8
+        p.prev_success = 0
+    end
+    until true:
+        num_masked := _pp_ns(p, p.min_ctx)
+        until true:
+            p.order_fall++
+            suf2 := _pp_suffix(p, p.min_ctx)
+            if suf2 == 0:
+                ret -1
+            end
+            p.min_ctx = suf2
+            if _pp_ns(p, p.min_ctx) != num_masked:
+                break
+            end
+        end
+        mut hi_cnt := 0
+        mut s := _pp_stats(p, p.min_ctx)
+        mut i := 0
+        num := _pp_ns(p, p.min_ctx) - num_masked
+        until i != num:
+            if p.mask[_pp_sym(p, s)] != 0:
+                hi_cnt += _pp_freq(p, s)
+                p.ps[i] = s
+                i++
+            end
+            s += 6
+        end
+        mut freq_sum := 0
+        see := _pp_make_esc_freq(p, num_masked, freq_sum)
+        freq_sum += hi_cnt
+        count := _pp_rc_threshold(p, freq_sum)
+        if count < hi_cnt:
+            mut k := 0
+            mut acc := 0
+            until true:
+                acc += _pp_freq(p, p.ps[k])
+                if acc > count:
+                    break
+                end
+                k++
+            end
+            s = p.ps[k]
+            _pp_rc_decode(p, b, acc - _pp_freq(p, s), _pp_freq(p, s))
+            _pp_see_update(p, see)
+            p.found = s
+            sym := _pp_sym(p, s)
+            _pp_update2(p)
+            ret sym
+        end
+        if count >= freq_sum:
+            ret -2
+        end
+        _pp_rc_decode(p, b, hi_cnt, freq_sum - hi_cnt)
+        p.see_summ[see] = (((p.see_summ[see] as int) + freq_sum) & 0xffff) as u16
+        repeat num in m:
+            p.mask[_pp_sym(p, p.ps[m])] = 0 as u8
+        end
+    end
+end

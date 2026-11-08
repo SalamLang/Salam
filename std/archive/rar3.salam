@@ -1,0 +1,983 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package archive
+
+import mem
+import compress
+
+const _R3_NC := 299
+const _R3_DC := 60
+const _R3_LDC := 17
+const _R3_RC := 28
+const _R3_BC := 20
+const _R3_TABLE := 404
+const _R3_LDEC := [0, 1, 2, 3, 4, 5, 6, 7, 8, 10, 12, 14, 16, 20, 24, 28, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224]
+const _R3_LBITS := [0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5]
+const _R3_SDEC := [0, 4, 8, 16, 32, 64, 128, 192]
+const _R3_SBITS := [2, 2, 3, 4, 5, 6, 6, 6]
+
+struct _R3Def:
+    pub kind: int
+    pub oldlen: i64
+end
+
+struct _R3Filter:
+    pub start: i64
+    pub len: i64
+    pub kind: int
+    pub r0: int
+    pub r1: int
+end
+
+struct _R3:
+    pub win: u8*
+    pub wsize: int
+    pub wmask: int
+    pub wp: int
+    pub fl: int
+    pub total: i64
+    pub od: int*
+    pub last_len: int
+    pub prev_low: int
+    pub low_rep: int
+    pub ld: _RarHuff
+    pub dd: _RarHuff
+    pub ldd: _RarHuff
+    pub rd: _RarHuff
+    pub bd: _RarHuff
+    pub old_table: u8*
+    pub tbl: u8*
+    pub ddec: int*
+    pub dbits: u8*
+    pub tables_read: bool
+    pub block_ppm: bool
+    pub esc: int
+    pub ppm: _Ppmd
+    pub defs: Vector<_R3Def>
+    pub last_filter: int
+    pub filters: Vector<_R3Filter>
+    pub unsup: bool
+end
+
+func _r3_new(ws: int): _R3:
+    mut d := _R3 {
+        win = mem.AllocateZeroed(ws as u64) as u8*
+        wsize = ws
+        wmask = ws - 1
+        wp = 0
+        fl = 0
+        total = 0 as i64
+        od = mem.AllocateZeroed(16 as u64) as int*
+        last_len = 0
+        prev_low = 0
+        low_rep = 0
+        ld = _rh_new(_R3_NC)
+        dd = _rh_new(_R3_DC)
+        ldd = _rh_new(_R3_LDC)
+        rd = _rh_new(_R3_RC)
+        bd = _rh_new(_R3_BC)
+        old_table = mem.AllocateZeroed(512 as u64) as u8*
+        tbl = mem.AllocateZeroed(512 as u64) as u8*
+        ddec = mem.AllocateZeroed((_R3_DC * 4) as u64) as int*
+        dbits = mem.AllocateZeroed(_R3_DC as u64) as u8*
+        tables_read = false
+        block_ppm = false
+        esc = 2
+        ppm = _pp_new()
+        defs = Vector {} as Vector<_R3Def>
+        last_filter = 0
+        filters = Vector {} as Vector<_R3Filter>
+        unsup = false
+    }
+    mut cum := 0
+    repeat _R3_DC in i:
+        mut bits := 18
+        if i < 4:
+            bits = 0
+        else i < 34:
+            bits = (i - 4) / 2 + 1
+        else i < 48:
+            bits = 16
+        end
+        d.ddec[i] = cum
+        d.dbits[i] = bits as u8
+        cum += 1 << bits
+    end
+    ret d
+end
+
+func _r3_free(d &: _R3):
+    mem.Free(d.win as void*)
+    mem.Free(d.od as void*)
+    mem.Free(d.old_table as void*)
+    mem.Free(d.tbl as void*)
+    mem.Free(d.ddec as void*)
+    mem.Free(d.dbits as void*)
+    _rh_free(d.ld)
+    _rh_free(d.dd)
+    _rh_free(d.ldd)
+    _rh_free(d.rd)
+    _rh_free(d.bd)
+    _pp_free(d.ppm)
+    d.defs.free()
+    d.filters.free()
+end
+
+func _r3_setwin(d &: _R3, wsize: int): bool:
+    if wsize == d.wsize:
+        ret true
+    end
+    mem.Free(d.win as void*)
+    d.win = mem.AllocateZeroed(wsize as u64) as u8*
+    if d.win == null:
+        d.wsize = 0
+        d.wmask = 0
+        ret false
+    end
+    d.wsize = wsize
+    d.wmask = wsize - 1
+    ret true
+end
+
+func _r3_reset(d &: _R3):
+    d.wp = 0
+    d.fl = 0
+    d.total = 0 as i64
+    d.last_len = 0
+    d.prev_low = 0
+    d.low_rep = 0
+    d.tables_read = false
+    d.block_ppm = false
+    d.esc = 2
+    d.last_filter = 0
+    d.defs.clear()
+    d.unsup = false
+    repeat 4 in i:
+        d.od[i] = 0
+    end
+    repeat _R3_TABLE in i:
+        d.old_table[i] = 0 as u8
+    end
+end
+
+func _r3_flush(d &: _R3, out &: compress.ByteBuf):
+    if d.wp > d.fl:
+        compress.BufPushBytes(out, ((d.win as i64) + (d.fl as i64)) as void*, d.wp - d.fl)
+    else d.wp < d.fl:
+        compress.BufPushBytes(out, ((d.win as i64) + (d.fl as i64)) as void*, d.wsize - d.fl)
+        if d.wp > 0:
+            compress.BufPushBytes(out, d.win as void*, d.wp)
+        end
+    end
+    d.fl = d.wp
+end
+
+func _r3_copy(d &: _R3, len: int, dist: int): bool:
+    mut lim := d.total
+    if lim > (d.wsize as i64):
+        lim = d.wsize as i64
+    end
+    if dist <= 0 or (dist as i64) > lim:
+        ret false
+    end
+    mut src := (d.wp - dist) & d.wmask
+    if dist >= len and src + len <= d.wsize and d.wp + len <= d.wsize:
+        mem.Copy(((d.win as i64) + (d.wp as i64)) as void*, ((d.win as i64) + (src as i64)) as void*, len as u64)
+        d.wp = (d.wp + len) & d.wmask
+    else:
+        mut wp := d.wp
+        repeat len:
+            d.win[wp] = d.win[src]
+            wp = (wp + 1) & d.wmask
+            src = (src + 1) & d.wmask
+        end
+        d.wp = wp
+    end
+    d.total += len as i64
+    ret true
+end
+
+func _r3_put(d &: _R3, c: int):
+    d.win[d.wp] = c as u8
+    d.wp = (d.wp + 1) & d.wmask
+    d.total += 1 as i64
+end
+
+func _r3_read_tables(d &: _R3, b &: _RarBits): bool:
+    b.pos = (b.pos + 7) & (~7)
+    bf := _rb_peek(b, 16)
+    if (bf & 0x8000) != 0:
+        d.block_ppm = true
+        mo := _pp_byte(b) as int
+        reset := (mo & 0x20) != 0
+        mut maxmb := 0
+        if reset:
+            maxmb = _pp_byte(b) as int
+        else:
+            if not d.ppm.ready:
+                ret false
+            end
+        end
+        if (mo & 0x40) != 0:
+            d.esc = _pp_byte(b) as int
+        end
+        _pp_rc_init(d.ppm, b)
+        if reset:
+            mut order := (mo & 0x1f) + 1
+            if order > 16:
+                order = 16 + (order - 16) * 3
+            end
+            if order == 1:
+                ret false
+            end
+            if not _pp_alloc(d.ppm, (maxmb + 1) << 20):
+                ret false
+            end
+            _pp_init(d.ppm, order)
+        end
+        ret d.ppm.ready
+    end
+    d.block_ppm = false
+    d.prev_low = 0
+    d.low_rep = 0
+    if (bf & 0x4000) == 0:
+        repeat _R3_TABLE in i:
+            d.old_table[i] = 0 as u8
+        end
+    end
+    b.pos += 2
+    bl := _poff(d.tbl, 450)
+    mut i := 0
+    until i < _R3_BC:
+        v := _rb_read(b, 4)
+        if v == 15:
+            z := _rb_read(b, 4)
+            if z == 0:
+                bl[i] = 15 as u8
+                i++
+            else:
+                mut zc := z + 2
+                until zc > 0 and i < _R3_BC:
+                    bl[i] = 0 as u8
+                    i++
+                    zc--
+                end
+            end
+        else:
+            bl[i] = v as u8
+            i++
+        end
+    end
+    if not _rh_build(d.bd, bl, _R3_BC):
+        ret false
+    end
+    mut k := 0
+    until k < _R3_TABLE:
+        if b.pos > b.n * 8:
+            ret false
+        end
+        s := _rh_decode(d.bd, b)
+        if s < 0:
+            ret false
+        end
+        if s < 16:
+            d.tbl[k] = ((s + (d.old_table[k] as int)) & 15) as u8
+            k++
+        else:
+            mut cnt := 0
+            mut zero := false
+            if s == 16:
+                cnt = _rb_read(b, 3) + 3
+            else s == 17:
+                cnt = _rb_read(b, 7) + 11
+            else s == 18:
+                cnt = _rb_read(b, 3) + 3
+                zero = true
+            else:
+                cnt = _rb_read(b, 7) + 11
+                zero = true
+            end
+            if not zero and k == 0:
+                ret false
+            end
+            until cnt > 0 and k < _R3_TABLE:
+                if zero:
+                    d.tbl[k] = 0 as u8
+                else:
+                    d.tbl[k] = d.tbl[k - 1]
+                end
+                k++
+                cnt--
+            end
+        end
+    end
+    d.tables_read = true
+    repeat _R3_TABLE in j:
+        d.old_table[j] = d.tbl[j]
+    end
+    if not _rh_build(d.ld, d.tbl, _R3_NC):
+        ret false
+    end
+    if not _rh_build(d.dd, _poff(d.tbl, _R3_NC), _R3_DC):
+        ret false
+    end
+    if not _rh_build(d.ldd, _poff(d.tbl, _R3_NC + _R3_DC), _R3_LDC):
+        ret false
+    end
+    if not _rh_build(d.rd, _poff(d.tbl, _R3_NC + _R3_DC + _R3_LDC), _R3_RC):
+        ret false
+    end
+    ret true
+end
+
+func _r3_vm_data(b &: _RarBits): i64:
+    v := _rb_peek(b, 16)
+    t := v & 0xc000
+    if t == 0:
+        b.pos += 6
+        ret (v >> 10) & 0xf
+    end
+    if t == 0x4000:
+        if (v & 0x3c00) == 0:
+            b.pos += 14
+            ret 0xffffff00 | ((v >> 2) & 0xff)
+        end
+        b.pos += 10
+        ret (v >> 6) & 0xff
+    end
+    if t == 0x8000:
+        b.pos += 2
+        r := _rb_peek(b, 16)
+        b.pos += 16
+        ret r
+    end
+    b.pos += 2
+    hi := _rb_peek(b, 16)
+    b.pos += 16
+    lo := _rb_peek(b, 16)
+    b.pos += 16
+    ret ((hi as i64) << 16) | (lo as i64)
+end
+
+func _r3_std_kind(code: u8*, n: int): int:
+    c := _rar_crc(code as void*, n) as i64
+    if n == 53 and c == 0xad576887:
+        ret 1
+    end
+    if n == 57 and c == 0x3cd7e57e:
+        ret 2
+    end
+    if n == 120 and c == 0x3769893f:
+        ret 3
+    end
+    if n == 29 and c == 0x0e06077d:
+        ret 4
+    end
+    if n == 149 and c == 0x1c2c5dc8:
+        ret 5
+    end
+    if n == 216 and c == 0xbc85e701:
+        ret 6
+    end
+    ret 0
+end
+
+func _r3_add_filter(d &: _R3, first: int, code: u8*, clen: int, produced: i64): bool:
+    mut cb := _RarBits { p = code, n = clen, pos = 0 }
+    mut fpos := 0
+    if (first & 0x80) != 0:
+        fp := _r3_vm_data(cb)
+        if fp == 0:
+            d.defs.clear()
+            d.last_filter = 0
+            fpos = 0
+        else:
+            if fp > 8192:
+                ret false
+            end
+            fpos = (fp - 1) as int
+        end
+    else:
+        fpos = d.last_filter
+    end
+    if fpos < 0 or fpos > d.defs.len() or fpos >= 8192:
+        ret false
+    end
+    d.last_filter = fpos
+    newf := fpos == d.defs.len()
+    if newf:
+        d.defs.push(_R3Def { kind = 0, oldlen = 0 as i64 })
+    end
+    mut bs := _r3_vm_data(cb)
+    if (first & 0x40) != 0:
+        bs += 258
+    end
+    mut blen := d.defs.get(fpos).oldlen
+    if (first & 0x20) != 0:
+        blen = _r3_vm_data(cb)
+    end
+    mut r0 := 0
+    mut r1 := 0
+    if (first & 0x10) != 0:
+        mask := _rb_read(cb, 7)
+        repeat 7 in i:
+            if (mask & (1 << i)) != 0:
+                v := _r3_vm_data(cb) as int
+                if i == 0:
+                    r0 = v
+                else i == 1:
+                    r1 = v
+                end
+            end
+        end
+    end
+    mut kind := d.defs.get(fpos).kind
+    if newf:
+        sz := _r3_vm_data(cb) as int
+        if sz >= 0x10000 or sz == 0:
+            ret false
+        end
+        buf := mem.Allocate(sz as u64) as u8*
+        repeat sz in i:
+            buf[i] = _rb_read(cb, 8) as u8
+        end
+        kind = _r3_std_kind(buf, sz)
+        mem.Free(buf as void*)
+    end
+    d.defs.set(fpos, _R3Def { kind = kind, oldlen = blen })
+    if (first & 8) != 0:
+        ds := _r3_vm_data(cb)
+        if ds > 0x1ffff:
+            ret false
+        end
+        cb.pos += (ds as int) * 8
+    end
+    if cb.pos > clen * 8 + 64:
+        ret false
+    end
+    if kind == 0:
+        d.unsup = true
+        ret true
+    end
+    d.filters.push(_R3Filter { start = produced + bs, len = blen, kind = kind, r0 = r0, r1 = r1 })
+    ret true
+end
+
+func _r3_abs(v: int): int:
+    ret v < 0 ? 0 - v : v
+end
+
+func _r3_s8(v: int): int:
+    ret v >= 128 ? v - 256 : v
+end
+
+func _r3_filter_itanium(p: u8*, len: int, foff: i64):
+    masks := [4, 4, 6, 6, 0, 0, 7, 7, 4, 4, 0, 0, 4, 4, 0, 0]
+    mut cur := 0
+    mut fo := foff >> 4
+    until cur < len - 21:
+        byte := ((p[cur] as int) & 0x1f) - 0x10
+        if byte >= 0:
+            cm := masks[byte]
+            if cm != 0:
+                repeat 3 in i:
+                    if (cm & (1 << i)) != 0:
+                        sp := i * 41 + 5
+                        if _r3_bits(p, cur, sp + 37, 4) == 5:
+                            off := _r3_bits(p, cur, sp + 13, 20)
+                            _r3_setbits(p, cur, ((off - (fo as int)) & 0xfffff), sp + 13, 20)
+                        end
+                    end
+                end
+            end
+        end
+        cur += 16
+        fo++
+    end
+end
+
+func _r3_bits(p: u8*, base: int, bitpos: int, count: int): int:
+    ia := base + (bitpos >> 3)
+    ib := bitpos & 7
+    mut v := (p[ia] as i64) | ((p[ia + 1] as i64) << 8) | ((p[ia + 2] as i64) << 16) | ((p[ia + 3] as i64) << 24)
+    v = v >> ib
+    ret (v & (0xffffffff >> (32 - count))) as int
+end
+
+func _r3_setbits(p: u8*, base: int, val: int, bitpos: int, count: int):
+    ia := base + (bitpos >> 3)
+    ib := bitpos & 7
+    mut am := 0xffffffff >> (32 - count)
+    am = (~(am << ib)) & 0xffffffff
+    mut bf := ((val as i64) << ib) & 0xffffffff
+    repeat 4 in i:
+        cur := (p[ia + i] as i64)
+        p[ia + i] = (((cur & (am & 255)) | (bf & 255)) & 255) as u8
+        am = ((am >> 8) | 0xff000000) & 0xffffffff
+        bf = bf >> 8
+    end
+end
+
+func _r3_filter_rgb(p: u8*, len: int, width: int, posr: int): bool:
+    src := mem.Allocate(len as u64) as u8*
+    dst := mem.Allocate(len as u64) as u8*
+    if src == null or dst == null:
+        mem.Free(src as void*)
+        mem.Free(dst as void*)
+        ret false
+    end
+    mem.Copy(src as void*, p as void*, len as u64)
+    mut sp := 0
+    mut ch := 0
+    until ch < 3:
+        mut prev := 0
+        mut i := ch
+        until i < len:
+            mut pred := prev
+            if i >= width + 3:
+                upper := dst[i - width] as int
+                ul := dst[i - width - 3] as int
+                pa := _r3_abs(upper - ul)
+                pb := _r3_abs(prev - ul)
+                pc := _r3_abs(prev + upper - 2 * ul)
+                if pa <= pb and pa <= pc:
+                    pred = prev
+                else pb <= pc:
+                    pred = upper
+                else:
+                    pred = ul
+                end
+            end
+            prev = (pred - (src[sp] as int)) & 255
+            dst[i] = prev as u8
+            sp++
+            i += 3
+        end
+        ch++
+    end
+    mut j := posr
+    until j < len - 2:
+        g := dst[j + 1] as int
+        dst[j] = (((dst[j] as int) + g) & 255) as u8
+        dst[j + 2] = (((dst[j + 2] as int) + g) & 255) as u8
+        j += 3
+    end
+    mem.Copy(p as void*, dst as void*, len as u64)
+    mem.Free(src as void*)
+    mem.Free(dst as void*)
+    ret true
+end
+
+func _r3_filter_audio(p: u8*, len: int, channels: int): bool:
+    src := mem.Allocate(len as u64) as u8*
+    dst := mem.Allocate(len as u64) as u8*
+    if src == null or dst == null:
+        mem.Free(src as void*)
+        mem.Free(dst as void*)
+        ret false
+    end
+    mem.Copy(src as void*, p as void*, len as u64)
+    mut sp := 0
+    mut ch := 0
+    until ch < channels:
+        mut prev_byte := 0
+        mut prev_delta := 0
+        mut dif: int[7]
+        repeat 7 in q:
+            dif[q] = 0
+        end
+        mut d1 := 0
+        mut d2 := 0
+        mut d3 := 0
+        mut k1 := 0
+        mut k2 := 0
+        mut k3 := 0
+        mut i := ch
+        mut bc := 0
+        until i < len:
+            d3 = d2
+            d2 = prev_delta - d1
+            d1 = prev_delta
+            mut pred := 8 * prev_byte + k1 * d1 + k2 * d2 + k3 * d3
+            pred = (pred >> 3) & 255
+            cur := src[sp] as int
+            sp++
+            pred = (pred - cur) & 255
+            dst[i] = pred as u8
+            prev_delta = _r3_s8((pred - prev_byte) & 255)
+            prev_byte = pred
+            d := _r3_s8(cur) << 3
+            dif[0] += _r3_abs(d)
+            dif[1] += _r3_abs(d - d1)
+            dif[2] += _r3_abs(d + d1)
+            dif[3] += _r3_abs(d - d2)
+            dif[4] += _r3_abs(d + d2)
+            dif[5] += _r3_abs(d - d3)
+            dif[6] += _r3_abs(d + d3)
+            if (bc & 0x1f) == 0:
+                mut mind := dif[0]
+                mut nm := 0
+                dif[0] = 0
+                mut jj := 1
+                until jj < 7:
+                    if dif[jj] < mind:
+                        mind = dif[jj]
+                        nm = jj
+                    end
+                    dif[jj] = 0
+                    jj++
+                end
+                if nm == 1 and k1 >= -16:
+                    k1--
+                else nm == 2 and k1 < 16:
+                    k1++
+                else nm == 3 and k2 >= -16:
+                    k2--
+                else nm == 4 and k2 < 16:
+                    k2++
+                else nm == 5 and k3 >= -16:
+                    k3--
+                else nm == 6 and k3 < 16:
+                    k3++
+                end
+            end
+            i += channels
+            bc++
+        end
+        ch++
+    end
+    mem.Copy(p as void*, dst as void*, len as u64)
+    mem.Free(src as void*)
+    mem.Free(dst as void*)
+    ret true
+end
+
+func _r3_apply_filters(d &: _R3, out &: compress.ByteBuf, base: int, produced: i64): int:
+    mut i := 0
+    until i < d.filters.len():
+        f := d.filters.get(i)
+        i++
+        if f.start < 0 or f.len <= 0 or f.start + f.len > produced:
+            continue
+        end
+        p := ((out.data as i64) + (base as i64) + f.start) as u8*
+        n := f.len as int
+        if n >= 0x3c000:
+            continue
+        end
+        if f.kind == 1:
+            _r5_filter_e8(p, n, f.start, false)
+        else f.kind == 2:
+            _r5_filter_e8(p, n, f.start, true)
+        else f.kind == 3:
+            if n >= 21:
+                _r3_filter_itanium(p, n, f.start)
+            end
+        else f.kind == 4:
+            if f.r0 > 0 and n < 0x1e000:
+                if not _r5_filter_delta(p, n, f.r0):
+                    ret 4
+                end
+            end
+        else f.kind == 5:
+            if f.r0 > 3 and n < 0x1e000:
+                if not _r3_filter_rgb(p, n, f.r0 - 3, f.r1):
+                    ret 4
+                end
+            end
+        else f.kind == 6:
+            if f.r0 > 0 and n < 0x1e000:
+                if not _r3_filter_audio(p, n, f.r0):
+                    ret 4
+                end
+            end
+        end
+    end
+    ret 0
+end
+
+func _r3_vm_lz(d &: _R3, b &: _RarBits, produced: i64): bool:
+    first := _rb_read(b, 8)
+    mut length := (first & 7) + 1
+    if length == 7:
+        length = _rb_read(b, 8) + 7
+    else length == 8:
+        length = _rb_read(b, 16)
+    end
+    if length <= 0 or b.pos + length * 8 > b.n * 8:
+        ret false
+    end
+    code := mem.Allocate(length as u64) as u8*
+    repeat length in i:
+        code[i] = _rb_read(b, 8) as u8
+    end
+    ok := _r3_add_filter(d, first, code, length, produced)
+    mem.Free(code as void*)
+    ret ok
+end
+
+func _r3_vm_ppm(d &: _R3, b &: _RarBits, produced: i64): bool:
+    first := _pp_decode(d.ppm, b)
+    if first < 0:
+        ret false
+    end
+    mut length := (first & 7) + 1
+    if length == 7:
+        b1 := _pp_decode(d.ppm, b)
+        if b1 < 0:
+            ret false
+        end
+        length = b1 + 7
+    else length == 8:
+        b1 := _pp_decode(d.ppm, b)
+        b2 := _pp_decode(d.ppm, b)
+        if b1 < 0 or b2 < 0:
+            ret false
+        end
+        length = b1 * 256 + b2
+    end
+    if length <= 0:
+        ret false
+    end
+    code := mem.Allocate(length as u64) as u8*
+    repeat length in i:
+        c := _pp_decode(d.ppm, b)
+        if c < 0:
+            mem.Free(code as void*)
+            ret false
+        end
+        code[i] = c as u8
+    end
+    ok := _r3_add_filter(d, first, code, length, produced)
+    mem.Free(code as void*)
+    ret ok
+end
+
+func _r3_decode(d &: _R3, p: u8*, n: int, unp: i64, limit: i64, out &: compress.ByteBuf): int:
+    mut b := _RarBits { p = p, n = n, pos = 0 }
+    base := out.len
+    start_total := d.total
+    d.filters.clear()
+    d.fl = d.wp
+    d.unsup = false
+    if not d.tables_read:
+        if not _r3_read_tables(d, b):
+            ret 4
+        end
+    end
+    until true:
+        if b.pos >= n * 8:
+            break
+        end
+        done := d.total - start_total
+        if done > limit:
+            ret 7
+        end
+        if unp >= 0 and done > unp:
+            ret 4
+        end
+        if ((d.wp - d.fl) & d.wmask) >= (d.wsize >> 1):
+            _r3_flush(d, out)
+        end
+        if d.block_ppm:
+            ch := _pp_decode(d.ppm, b)
+            if ch < 0:
+                break
+            end
+            mut handled := false
+            if ch == d.esc:
+                nx := _pp_decode(d.ppm, b)
+                if nx < 0 or nx == 2:
+                    break
+                end
+                if nx == 0:
+                    if not _r3_read_tables(d, b):
+                        ret 4
+                    end
+                    handled = true
+                else nx == 3:
+                    if not _r3_vm_ppm(d, b, d.total - start_total):
+                        ret 4
+                    end
+                    handled = true
+                else nx == 4:
+                    mut dist := 0
+                    mut ml := 0
+                    repeat 4 in i:
+                        c := _pp_decode(d.ppm, b)
+                        if c < 0:
+                            ret 4
+                        end
+                        if i == 3:
+                            ml = c
+                        else:
+                            dist = (dist << 8) + c
+                        end
+                    end
+                    if not _r3_copy(d, ml + 32, dist + 2):
+                        ret 4
+                    end
+                    d.last_len = ml + 32
+                    handled = true
+                else nx == 5:
+                    c := _pp_decode(d.ppm, b)
+                    if c < 0:
+                        ret 4
+                    end
+                    if not _r3_copy(d, c + 4, 1):
+                        ret 4
+                    end
+                    handled = true
+                end
+            end
+            if not handled:
+                _r3_put(d, ch)
+            end
+            continue
+        end
+        num := _rh_decode(d.ld, b)
+        if num < 0:
+            ret 4
+        end
+        if num < 256:
+            _r3_put(d, num)
+        else num >= 271:
+            sl := num - 271
+            mut ml := _R3_LDEC[sl] + 3
+            lb := _R3_LBITS[sl]
+            if lb > 0:
+                ml += _rb_read(b, lb)
+            end
+            dn := _rh_decode(d.dd, b)
+            if dn < 0:
+                ret 4
+            end
+            mut dist := d.ddec[dn] + 1
+            bits := d.dbits[dn] as int
+            if bits > 0:
+                if dn > 9:
+                    if bits > 4:
+                        dist += _rb_read(b, bits - 4) << 4
+                    end
+                    if d.low_rep > 0:
+                        d.low_rep--
+                        dist += d.prev_low
+                    else:
+                        ld := _rh_decode(d.ldd, b)
+                        if ld < 0:
+                            ret 4
+                        end
+                        if ld == 16:
+                            d.low_rep = 15
+                            dist += d.prev_low
+                        else:
+                            dist += ld
+                            d.prev_low = ld
+                        end
+                    end
+                else:
+                    dist += _rb_read(b, bits)
+                end
+            end
+            if dist >= 0x2000:
+                ml++
+                if dist >= 0x40000:
+                    ml++
+                end
+            end
+            d.od[3] = d.od[2]
+            d.od[2] = d.od[1]
+            d.od[1] = d.od[0]
+            d.od[0] = dist
+            d.last_len = ml
+            if not _r3_copy(d, ml, dist):
+                ret 4
+            end
+        else num == 256:
+            bf := _rb_peek(b, 16)
+            mut new_file := false
+            mut new_table := false
+            if (bf & 0x8000) != 0:
+                new_table = true
+                b.pos += 1
+            else:
+                new_file = true
+                new_table = (bf & 0x4000) != 0
+                b.pos += 2
+            end
+            d.tables_read = not new_table
+            if new_file:
+                break
+            end
+            if not _r3_read_tables(d, b):
+                ret 4
+            end
+        else num == 257:
+            if not _r3_vm_lz(d, b, d.total - start_total):
+                ret 4
+            end
+        else num == 258:
+            if d.last_len != 0:
+                if not _r3_copy(d, d.last_len, d.od[0]):
+                    ret 4
+                end
+            end
+        else num < 263:
+            dnum := num - 259
+            dist := d.od[dnum]
+            mut j := dnum
+            until j > 0:
+                d.od[j] = d.od[j - 1]
+                j--
+            end
+            d.od[0] = dist
+            ln := _rh_decode(d.rd, b)
+            if ln < 0:
+                ret 4
+            end
+            mut ml := _R3_LDEC[ln] + 2
+            lb := _R3_LBITS[ln]
+            if lb > 0:
+                ml += _rb_read(b, lb)
+            end
+            d.last_len = ml
+            if not _r3_copy(d, ml, dist):
+                ret 4
+            end
+        else:
+            sn := num - 263
+            mut dist := _R3_SDEC[sn] + 1
+            sb := _R3_SBITS[sn]
+            dist += _rb_read(b, sb)
+            d.od[3] = d.od[2]
+            d.od[2] = d.od[1]
+            d.od[1] = d.od[0]
+            d.od[0] = dist
+            d.last_len = 2
+            if not _r3_copy(d, 2, dist):
+                ret 4
+            end
+        end
+    end
+    _r3_flush(d, out)
+    produced := d.total - start_total
+    if unp >= 0 and produced != unp:
+        ret 4
+    end
+    if d.unsup:
+        ret 2
+    end
+    ret _r3_apply_filters(d, out, base, produced)
+end

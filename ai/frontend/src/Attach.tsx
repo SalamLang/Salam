@@ -1,6 +1,8 @@
 import { useEffect, useState } from "react";
 import { api, type Capabilities, type FileMeta, type OutgoingFile } from "./api";
-import { IconClose, IconFile, IconFolder } from "./icons";
+import { IconClose, IconDownload, IconFile, IconFolder } from "./icons";
+import { Lightbox, downloadUrl } from "./Lightbox";
+import { pushToast } from "./Toasts";
 import { toPersianDigits } from "./theme";
 import { t } from "./i18n";
 
@@ -140,7 +142,7 @@ export function PendingChips({ items, onRemove }: { items: Pending[]; onRemove: 
   );
 }
 
-function ImageThumb({ f, load }: { f: FileMeta; load: (id: number) => Promise<string> }) {
+function useFileSrc(f: FileMeta, load: (id: number) => Promise<string>): string {
   const [src, setSrc] = useState(f.url ?? "");
   useEffect(() => {
     if (src || f.id <= 0) return;
@@ -152,42 +154,105 @@ function ImageThumb({ f, load }: { f: FileMeta; load: (id: number) => Promise<st
       live = false;
     };
   }, [f.id, src, load]);
+  return src;
+}
+
+function ImageThumb({ f, load, onOpen }: { f: FileMeta; load: (id: number) => Promise<string>; onOpen: (src: string) => void }) {
+  const src = useFileSrc(f, load);
   return src ? (
-    <a href={src} target="_blank" rel="noopener" className="attach-thumb" title={f.name}>
-      <img src={src} alt={f.name} />
-    </a>
+    <button type="button" className="attach-thumb" title={f.name} aria-label={t(`باز کردن ${f.name}`, `Open ${f.name}`)} onClick={() => onOpen(src)}>
+      <img src={src} alt={f.name} draggable={false} data-user-image />
+    </button>
   ) : (
     <span className="attach-thumb loading" title={f.name} />
+  );
+}
+
+function FileChip({ f, load }: { f: FileMeta; load: (id: number) => Promise<string> }) {
+  const [busy, setBusy] = useState(false);
+  const save = async () => {
+    if (busy || f.id <= 0) return;
+    setBusy(true);
+    try {
+      downloadUrl(await load(f.id), f.name);
+    } catch {
+      pushToast({ tone: "failed", title: t("دریافت فایل ناموفق بود.", "Could not download the file.") });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <li className={`attach-chip ${f.kind}${f.id > 0 ? " file-button" : ""}`} onClick={() => void save()}>
+      <KindIcon kind={f.kind} />
+      <span className="attach-name" dir="auto" title={f.name}>
+        {f.name}
+      </span>
+      <span className="attach-size">{fmtSize(f.size)}</span>
+      {f.id > 0 && (
+        <button type="button" className="attach-dl" disabled={busy} aria-label={t(`دریافت ${f.name}`, `Download ${f.name}`)} title={t("دریافت فایل", "Download file")} onClick={(e) => {
+          e.stopPropagation();
+          void save();
+        }}>
+          {busy ? <span className="spinner tiny" /> : <IconDownload width={16} height={16} />}
+        </button>
+      )}
+    </li>
   );
 }
 
 export function MessageFiles({ files, load }: { files: FileMeta[]; load: (id: number) => Promise<string> }) {
   const images = files.filter((f) => f.kind === "image");
   const others = files.filter((f) => f.kind !== "image");
+  const [open, setOpen] = useState<number | null>(null);
+  const [srcs, setSrcs] = useState<Record<number, string>>({});
   return (
     <div className="msg-files">
       {images.length > 0 && (
         <div className="msg-images">
           {images.map((f) => (
-            <ImageThumb key={f.id} f={f} load={load} />
+            <ImageThumb
+              key={f.id}
+              f={f}
+              load={load}
+              onOpen={(src) => {
+                setSrcs((m) => ({ ...m, [f.id]: src }));
+                setOpen(f.id);
+              }}
+            />
           ))}
         </div>
       )}
       {others.length > 0 && (
         <ul className="attach-chips">
           {others.map((f) => (
-            <li key={f.id} className={`attach-chip ${f.kind}`}>
-              <KindIcon kind={f.kind} />
-              <span className="attach-name" dir="auto" title={f.name}>
-                {f.name}
-              </span>
-              <span className="attach-size">{fmtSize(f.size)}</span>
-            </li>
+            <FileChip key={f.id} f={f} load={load} />
           ))}
         </ul>
       )}
+      {open !== null && (
+        <LightboxFor images={images} load={load} srcs={srcs} start={open} onClose={() => setOpen(null)} />
+      )}
     </div>
   );
+}
+
+function LightboxFor({ images, load, srcs, start, onClose }: { images: FileMeta[]; load: (id: number) => Promise<string>; srcs: Record<number, string>; start: number; onClose: () => void }) {
+  const [urls, setUrls] = useState<Record<number, string>>(srcs);
+  const [index, setIndex] = useState(Math.max(0, images.findIndex((f) => f.id === start)));
+  useEffect(() => {
+    let live = true;
+    images.forEach((f) => {
+      if (urls[f.id] || f.url || f.id <= 0) return;
+      load(f.id)
+        .then((u) => live && setUrls((m) => ({ ...m, [f.id]: u })))
+        .catch(() => {});
+    });
+    return () => {
+      live = false;
+    };
+  }, [images, load, urls]);
+  const items = images.map((f) => ({ src: urls[f.id] ?? f.url ?? "", name: f.name }));
+  return <Lightbox items={items} index={index} onIndex={setIndex} onClose={onClose} />;
 }
 
 export function fileLoader(fetcher: (id: number) => Promise<{ mime: string; data: string }>): (id: number) => Promise<string> {

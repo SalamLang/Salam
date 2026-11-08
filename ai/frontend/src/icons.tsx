@@ -318,3 +318,36 @@ export const IconUsers = (p: P) => (
     <path d="M3 19c0-3.2 2.7-5.5 6-5.5s6 2.3 6 5.5M16 5a3 3 0 0 1 0 6M18 14c2 .6 3.5 2.2 3.5 5" />
   </Base>
 );
+
+export const IconDownload = (p: P) => (
+  <Base {...p}>
+    <path d="M12 4v11M7 11l5 5 5-5M5 20h14" />
+  </Base>
+);
+export const IconZoomIn = (p: P) => (
+  <Base {...p}>
+    <circle cx="11" cy="11" r="7" />
+    <path d="M21 21l-4.3-4.3M11 8v6M8 11h6" />
+  </Base>
+);
+export const IconZoomOut = (p: P) => (
+  <Base {...p}>
+    <circle cx="11" cy="11" r="7" />
+    <path d="M21 21l-4.3-4.3M8 11h6" />
+  </Base>
+);
+export const IconFit = (p: P) => (
+  <Base {...p}>
+    <path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5" />
+  </Base>
+);
+export const IconChevronLeft = (p: P) => (
+  <Base {...p}>
+    <path d="M15 5l-7 7 7 7" />
+  </Base>
+);
+export const IconChevronRight = (p: P) => (
+  <Base {...p}>
+    <path d="M9 5l7 7-7 7" />
+  </Base>
+);

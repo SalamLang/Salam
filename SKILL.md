@@ -1571,8 +1571,8 @@ end
   ZIP methods 0 and 8 only, CRC not checked, tar names over 100 bytes are
   cut. RAR 1.5 to 5 are read fully (CRC checked, `RarExtract` reports a
   `RAR_*` status); passwords through `RarOpen(p, n, password)` with
-  `RarEntries`/`RarRead`/`RarReadAll` (RAR 3 to 5, encrypted names too); no
-  multi-volume; `RarCreate`
+  `RarEntries`/`RarRead`/`RarReadAll` (RAR 3 to 5, encrypted names too); multi-volume
+  sets through `RarReadVolumes`/`RarOpenVolumes`; `RarCreate`
   writes stored RAR 5.
 - **`excel`**: xlsx, ods and csv workbooks: `Open Save New NewWorkbook NewSheet` with sheet methods `set_string set_number get_cell get_string row_count ...`, `CellRef ParseCellRef SheetToJSON SheetToCSV`. No `.xls`
   (`IsXLS` detects it); the format comes from the file extension; formulas

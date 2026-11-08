@@ -419,6 +419,39 @@ func list_user_chats(ctx: i64):
     aiweb.Reply(ctx, 200, `{"chats": ` + json.Array(items) + "}")
 end
 
+func list_latest_chats(ctx: i64):
+    if aiweb.NeedAdmin(ctx) == 0:
+        ret
+    end
+    mut offset := http.Query(ctx, "offset").to_int()
+    if offset < 0:
+        offset = 0
+    end
+    q := str.Trim(http.Query(ctx, "q"))
+    mut args := Vector {} as Vector<str>
+    mut where := "1 = 1"
+    if q.len() > 0:
+        args.push("%" + q + "%")
+        where = "(c.title LIKE ?1 OR u.name LIKE ?1 OR u.email LIKE ?1)"
+    end
+    mut items := Vector {} as Vector<str>
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT c.id, c.title, c.updated, c.device_id, c.workspace, u.id, u.name, u.email, COALESCE((SELECT LEFT(body, 240) FROM messages WHERE chat_id = c.id AND role = 'user' ORDER BY id LIMIT 1), ''), COALESCE((SELECT LEFT(body, 240) FROM messages WHERE chat_id = c.id AND body <> '' ORDER BY id DESC LIMIT 1), ''), COALESCE((SELECT role FROM messages WHERE chat_id = c.id AND body <> '' ORDER BY id DESC LIMIT 1), ''), (SELECT COUNT(*) FROM messages WHERE chat_id = c.id) FROM chats c JOIN users u ON u.id = c.user_id WHERE " + where + " ORDER BY c.updated DESC, c.id DESC LIMIT 51 OFFSET " + offset, args)
+    mut more := false
+    until aistore.Next(rows):
+        if items.len() >= 50:
+            more = true
+            break
+        end
+        mut one_chat := admin_chat_json(aistore.Text(rows, 0), aistore.Text(rows, 1), aistore.Text(rows, 2), aistore.Text(rows, 3), aistore.Text(rows, 4))
+        one_chat = str.TrimSuffix(one_chat, "}") + ", " + json.Member("user_name", aistore.Text(rows, 6)) + ", " + json.MemberRaw("user_id", aistore.Text(rows, 5)) + ", " + json.Member("user_email", aistore.Text(rows, 7)) + ", " + json.Member("first", aistore.Text(rows, 8)) + ", " + json.Member("last", aistore.Text(rows, 9)) + ", " + json.Member("last_role", aistore.Text(rows, 10)) + ", " + json.MemberRaw("messages", aistore.Text(rows, 11)) + "}"
+        items.push(one_chat)
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+    aiweb.Reply(ctx, 200, `{"chats": ` + json.Array(items) + `, "more": ` + (more ? "true" : "false") + "}")
+end
+
 func get_admin_chat(ctx: i64):
     if aiweb.NeedAdmin(ctx) == 0:
         ret
@@ -1010,6 +1043,7 @@ pub func Routes(r &: router.Router):
     router.Get(r, "/admin/summary", summary)
     router.Get(r, "/admin/users", list_users)
     router.Get(r, "/admin/users/:id/chats", list_user_chats)
+    router.Get(r, "/admin/chats", list_latest_chats)
     router.Get(r, "/admin/chats/:id", get_admin_chat)
     router.Get(r, "/admin/messages/:id/trace", get_trace)
     router.Get(r, "/admin/chats/:id/files/:fid", get_admin_file)
@@ -1029,7 +1063,7 @@ pub func Routes(r &: router.Router):
     router.Patch(r, "/admin/keys/:id", admin_update_key)
     router.Patch(r, "/admin/users/:id/policy", admin_user_policy)
     router.Get(r, "/admin/telegram", admin_telegram)
-    each path in ["/admin/summary", "/admin/users", "/admin/users/:id/chats", "/admin/chats/:id", "/admin/messages/:id/trace", "/admin/chats/:id/files/:fid", "/admin/files", "/admin/files/:id", "/admin/guests", "/admin/guests/:id", "/admin/sessions", "/admin/platforms", "/admin/sessions/:id", "/admin/users/:id/sessions", "/admin/events", "/admin/apps", "/admin/apps/:id", "/admin/requests", "/admin/keys", "/admin/keys/:id", "/admin/users/:id/policy", "/admin/telegram"]:
+    each path in ["/admin/summary", "/admin/users", "/admin/users/:id/chats", "/admin/chats", "/admin/chats/:id", "/admin/messages/:id/trace", "/admin/chats/:id/files/:fid", "/admin/files", "/admin/files/:id", "/admin/guests", "/admin/guests/:id", "/admin/sessions", "/admin/platforms", "/admin/sessions/:id", "/admin/users/:id/sessions", "/admin/events", "/admin/apps", "/admin/apps/:id", "/admin/requests", "/admin/keys", "/admin/keys/:id", "/admin/users/:id/policy", "/admin/telegram"]:
         router.Options(r, path, aiweb.Preflight)
     end
 end

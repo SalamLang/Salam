@@ -134,7 +134,8 @@ const TABLE_LINE = /^\s*\|?.*\|.*$/;
 const TABLE_RULE = /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$/;
 
 export function trimPartialTable(text: string): string {
-  const cut = text.lastIndexOf("\n\n") + 2;
+  const boundary = text.lastIndexOf("\n\n");
+  const cut = boundary < 0 ? 0 : boundary + 2;
   const tail = text.slice(cut);
   if (tail.includes("```")) return text;
   const lines = tail.split("\n");

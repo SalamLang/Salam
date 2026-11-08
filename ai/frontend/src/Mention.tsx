@@ -62,6 +62,8 @@ export function useMention(root: string, text: string, caret: number, apply: (tr
   const [dismissed, setDismissed] = useState(-1);
   const [broken, setBroken] = useState(false);
   const order = useRef(0);
+  const selected = useRef("");
+  const shownQuery = useRef<string | null>(null);
   const query = trigger ? trigger.query : null;
   const dead = broken || !enabled;
 
@@ -72,9 +74,11 @@ export function useMention(root: string, text: string, caret: number, apply: (tr
         .search(root, q, 50)
         .then((r) => {
           if (mine !== order.current || r.stale) return;
+          const keep = shownQuery.current === q ? r.hits.findIndex((h) => h.path === selected.current) : -1;
+          shownQuery.current = q;
           setHits(r.hits);
           setIndexing(r.indexing);
-          setIndex(0);
+          setIndex(Math.max(keep, 0));
         })
         .catch(() => {
           if (mine === order.current) setBroken(true);
@@ -84,6 +88,11 @@ export function useMention(root: string, text: string, caret: number, apply: (tr
   );
 
   useEffect(() => {
+    selected.current = hits[index]?.path ?? "";
+  }, [hits, index]);
+
+  useEffect(() => {
+    shownQuery.current = null;
     setBroken(false);
     setHits([]);
     if (enabled) mention.open(root).catch(() => setBroken(true));

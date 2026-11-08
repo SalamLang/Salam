@@ -46,6 +46,10 @@ pub struct Index {
     pub dirty: bool,
 }
 
+pub fn is_ignore_name(name: &str) -> bool {
+    name == ".gitignore" || name == ".ignore"
+}
+
 pub fn mtime_of(meta: &std::fs::Metadata) -> u32 {
     meta.modified()
         .ok()
@@ -110,6 +114,21 @@ impl Index {
         fresh.dedup_by(|later, earlier| later.path == earlier.path);
         self.entries = fresh;
         self.touch();
+    }
+
+    pub fn replace_subtree(&mut self, dir: &str, fresh: Vec<Entry>) {
+        let range = self.subtree(dir);
+        self.entries.drain(range);
+        self.touch();
+        self.insert_many(fresh);
+    }
+
+    pub fn ignore_files(&self) -> Vec<(Box<str>, u32)> {
+        self.entries
+            .iter()
+            .filter(|e| is_ignore_name(e.name()))
+            .map(|e| (e.path.clone(), e.mtime))
+            .collect()
     }
 
     pub fn dirs(&self) -> Vec<(Box<str>, u32)> {
@@ -290,8 +309,10 @@ pub mod tests {
     }
 
     pub fn build(root: &Path) -> Index {
-        let mut index = Index::default();
-        index.entries = walk_vec(root, "", None);
+        let mut index = Index {
+            entries: walk_vec(root, "", None),
+            ..Index::default()
+        };
         index.entries.sort_by(|a, b| a.path.cmp(&b.path));
         index
     }
@@ -344,10 +365,10 @@ pub mod tests {
     }
 
     fn refresh(index: &mut Index, root: &Path, dir: &str) {
-        let fresh = walk_vec(&root, dir, Some(1));
+        let fresh = walk_vec(root, dir, Some(1));
         let m = dir_mtime(&root.join(dir));
         for d in index.apply_dir_diff(dir, fresh, m) {
-            let sub = walk_vec(&root, &d, None);
+            let sub = walk_vec(root, &d, None);
             index.insert_many(sub);
         }
     }

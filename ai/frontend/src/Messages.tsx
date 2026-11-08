@@ -209,7 +209,7 @@ function TextGroupView({ text, live }: { text: string; live: boolean }) {
   if (!visible) return null;
   return (
     <div className={typing ? "streaming" : undefined}>
-      <Markdown text={visible} />
+      <Markdown text={visible} partial={typing} />
     </div>
   );
 }

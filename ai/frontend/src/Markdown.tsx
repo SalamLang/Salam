@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState, type ReactNode } from "react";
+import { memo, useEffect, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { codeDirection, highlight } from "./highlight";
@@ -124,6 +124,29 @@ function CodeBlock({ lang, code }: { lang: string; code: string }) {
   );
 }
 
+function cellStyle(style: CSSProperties | undefined): CSSProperties | undefined {
+  const align = style?.textAlign;
+  if (!align) return undefined;
+  return { textAlign: align === "left" ? "start" : align === "right" ? "end" : align };
+}
+
+const TABLE_LINE = /^\s*\|?.*\|.*$/;
+const TABLE_RULE = /^\s*\|?\s*:?-{3,}:?\s*(\|\s*:?-{3,}:?\s*)*\|?\s*$/;
+
+export function trimPartialTable(text: string): string {
+  const cut = text.lastIndexOf("\n\n") + 2;
+  const tail = text.slice(cut);
+  if (tail.includes("```")) return text;
+  const lines = tail.split("\n");
+  const first = lines.findIndex((l) => TABLE_LINE.test(l) && l.trim().startsWith("|"));
+  if (first < 0) return text;
+  const rest = lines.slice(first);
+  if (rest.length >= 2 && TABLE_RULE.test(rest[1])) return text;
+  if (rest.length > 2) return text;
+  if (rest.length === 2 && !/^[\s|:-]*$/.test(rest[1])) return text;
+  return text.slice(0, cut) + lines.slice(0, first).join("\n");
+}
+
 const components: Components = {
   pre({ children }) {
     const child = Array.isArray(children) ? children[0] : children;
@@ -149,6 +172,18 @@ const components: Components = {
       {children}
     </a>
   ),
+  th: ({ children, style }) => (
+    <th dir="auto" style={cellStyle(style)}>
+      {children}
+    </th>
+  ),
+  td: ({ children, style }) => (
+    <td dir="auto" style={cellStyle(style)}>
+      {children}
+    </td>
+  ),
+  del: ({ children }) => <del>{children}</del>,
+  input: ({ checked, disabled, type }) => <input type={type} checked={checked} disabled={disabled} readOnly />,
   table: ({ children }) => (
     <div className="table-wrap">
       <table>{children}</table>
@@ -156,7 +191,8 @@ const components: Components = {
   ),
 };
 
-export const Markdown = memo(function Markdown({ text }: { text: string }) {
+export const Markdown = memo(function Markdown({ text, partial = false }: { text: string; partial?: boolean }) {
+  if (partial) text = trimPartialTable(text);
   return (
     <div className="markdown">
       <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>

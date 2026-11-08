@@ -1057,6 +1057,7 @@ export const api = {
       token?: string;
       next?: string;
       ok?: boolean;
+      reason?: string;
     }>("POST", `/auth/provider/${provider}/complete`, { code, state, error }),
   integrations: () => call<Integrations>("GET", "/integrations"),
   saveIntegration: (provider: string, token: string) =>

@@ -9,6 +9,7 @@ import { IconFigma, IconGithub, IconKey, IconTelegram, IconTerminal } from "./ic
 import type { Theme } from "./theme";
 import { t } from "./i18n";
 import { sharedLoader } from "./shared";
+import { useReturnReset } from "./desktop";
 
 export const integrationsLoader = sharedLoader(() => api.integrations());
 const telegramLoader = sharedLoader(() => api.telegramStatus());
@@ -294,6 +295,9 @@ function IntegrationCard({ item, storage, highlight, notify, onChange }: { item:
     }
   };
 
+  const resetOauth = useCallback(() => setBusy((b) => (b === "oauth" ? "" : b)), []);
+  useReturnReset(busy === "oauth", resetOauth);
+
   const oauth = async () => {
     setBusy("oauth");
     try {
@@ -407,7 +411,7 @@ export function Connections({ notify }: { notify: (msg: string, ok?: boolean) =>
     load();
     const p = new URLSearchParams(location.search);
     if (p.get("connected")) {
-      notify(p.get("result") === "ok" ? t("اتصال انجام شد.", "Connected.") : t("اتصال انجام نشد. دوباره تلاش کنید.", "The connection did not complete. Try again."), p.get("result") === "ok");
+      notify(p.get("result") === "ok" ? t("اتصال انجام شد.", "Connected.") : t("اتصال انجام نشد. دوباره تلاش کنید.", "The connection did not complete. Try again.") + (p.get("reason") ? ` (${p.get("reason")})` : ""), p.get("result") === "ok");
       history.replaceState(null, "", "/connections");
     }
     const refresh = () => {

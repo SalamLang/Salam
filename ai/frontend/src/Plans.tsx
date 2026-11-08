@@ -219,7 +219,7 @@ export function Plans({ notify }: { notify: (msg: string, ok?: boolean) => void 
         <div className="plan-grid">
           {plans?.map((p) => {
             const mine = active?.id === p.id;
-            const featured = p.price > 0 && p.chat_daily === 0 && p.api_daily === 0;
+            const featured = p.price > 0 && p.chat_daily === 0 && p.api_daily === 0 && plans.find((q) => q.price > 0 && q.chat_daily === 0 && q.api_daily === 0)?.id === p.id;
             const price = p.price === 0 ? t("رایگان", "Free") : isFa ? (p.price % 1000000 === 0 ? fmtNum(p.price / 1000000) : fmtNum(p.price)) : `$${fmtNum(p.usd)}`;
             const unit = p.price === 0 ? "" : isFa ? (p.price % 1000000 === 0 ? "میلیون تومان" : "تومان") : t("", "per month");
             const period = p.price === 0 ? t("برای همیشه", "forever") : p.days === 0 ? t("یک‌بار پرداخت، بدون انقضا", "one payment, no expiry") : t(`برای ${fmtNum(p.days)} روز (حدود ${fmtNum(p.usd)} دلار)`, `${fmtNum(p.days)} days, charged in toman at checkout`);

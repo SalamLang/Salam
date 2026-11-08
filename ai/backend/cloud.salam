@@ -58,6 +58,7 @@ mut FG_SECRET := ""
 mut FG_SCOPES := DEFAULT_FIGMA_SCOPES
 mut GH_SCOPES := DEFAULT_GITHUB_SCOPES
 mut LOCK := sync.Mutex {}
+mut REFRESH_LOCK := sync.Mutex {}
 mut JOBS := chan.Chan {} as chan.Chan<str>
 mut JOB_DATA := HashMap {} as HashMap<str, str>
 mut RESULTS := HashMap {} as HashMap<str, str>
@@ -533,7 +534,88 @@ func integration_row(uid: str, provider: str, token &: str, login &: str, scope 
             token = fresh
         end
     end
+    if provider == "github" and refresh.len() > 0 and expires > 0 and expires - 300 < aistore.Now():
+        fresh := github_refresh(uid, token)
+        if fresh.len() > 0:
+            token = fresh
+        end
+    end
     ret token.len() > 0
+end
+
+func forget_check(uid: str, provider: str):
+    _l := sync.Lock(LOCK)
+    if CHECKED.has(uid + "|" + provider):
+        _r := CHECKED.remove(uid + "|" + provider)
+    end
+    _u := sync.Unlock(LOCK)
+end
+
+func github_refresh(uid: str, stale: str): str:
+    _l := sync.Lock(REFRESH_LOCK)
+    fresh := github_refresh_locked(uid, stale)
+    _u := sync.Unlock(REFRESH_LOCK)
+    ret fresh
+end
+
+func github_refresh_locked(uid: str, stale: str): str:
+    aistore.Lock()
+    mut q := aistore.Stmt("SELECT token_enc, refresh_enc FROM integrations WHERE user_id = ?1 AND provider = 'github'", one(uid))
+    mut blob := ""
+    mut refresh_blob := ""
+    mut found := false
+    if aistore.Next(q):
+        found = true
+        blob = aistore.Text(q, 0)
+        refresh_blob = aistore.Text(q, 1)
+    end
+    aistore.Finish(q)
+    aistore.Unlock()
+    if not found:
+        ret ""
+    end
+    current := unseal(blob)
+    if current.len() > 0 and current != stale:
+        ret current
+    end
+    refresh := refresh_blob.len() > 0 ? unseal(refresh_blob) : ""
+    if refresh.len() == 0 or GH_ID.len() == 0:
+        ret ""
+    end
+    mut h := Vector {} as Vector<str>
+    h.push("Accept: application/json")
+    h.push("Content-Type: application/json")
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("client_id", GH_ID))
+    m.push(json.Member("client_secret", GH_SECRET))
+    m.push(json.Member("grant_type", "refresh_token"))
+    m.push(json.Member("refresh_token", refresh))
+    r := fetch("POST", GITHUB_WEB + "/login/oauth/access_token", h, json.Object(m), CALL_MS)
+    fresh := json.Get(r.body, "access_token")
+    if fresh.len() == 0:
+        if r.status != 0 and json.Get(r.body, "error") == "bad_refresh_token":
+            aistore.Lock()
+            _c := aistore.Run("UPDATE integrations SET refresh_enc = '' WHERE user_id = ?1 AND provider = 'github' AND refresh_enc = ?2", two(uid, refresh_blob))
+            aistore.Unlock()
+        end
+        ret ""
+    end
+    next_refresh := json.Get(r.body, "refresh_token")
+    secs := json.Get(r.body, "expires_in").to_int()
+    mut a := Vector {} as Vector<str>
+    a.push(seal(fresh))
+    a.push(next_refresh.len() > 0 ? seal(next_refresh) : "")
+    a.push(i64s(secs > 0 ? aistore.Now() + (secs as i64) : 0))
+    a.push(uid)
+    a.push(refresh_blob)
+    aistore.Lock()
+    mut ok := aistore.Run("UPDATE integrations SET token_enc = ?1, refresh_enc = ?2, expires = ?3 WHERE user_id = ?4 AND provider = 'github' AND refresh_enc = ?5", a)
+    if not ok:
+        ok = aistore.Run("UPDATE integrations SET token_enc = ?1, refresh_enc = ?2, expires = ?3 WHERE user_id = ?4 AND provider = 'github' AND refresh_enc = ?5", a)
+    end
+    aistore.Unlock()
+    forget_check(uid, "github")
+    ret fresh
 end
 
 func save_integration(uid: str, provider: str, token: str, refresh: str, expires: i64, login: str, scope: str): bool:
@@ -542,9 +624,12 @@ func save_integration(uid: str, provider: str, token: str, refresh: str, expires
     a.push(login)
     a.push(scope)
     a.push(i64s(aistore.Now()))
+    _l := sync.Lock(REFRESH_LOCK)
     aistore.Lock()
     ok := aistore.Run("REPLACE INTO integrations (user_id, provider, token_enc, refresh_enc, expires, login, scope, created) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)", a)
     aistore.Unlock()
+    _u := sync.Unlock(REFRESH_LOCK)
+    forget_check(uid, provider)
     ret ok
 end
 
@@ -741,30 +826,50 @@ func github_blocked(method: str, path: str): str:
     ret ""
 end
 
-func token_ok(uid: str, provider: str, token: str): bool:
+func probe_status(provider: str, token: str): int:
+    if provider == "github":
+        ret fetch("GET", GITHUB_API + "/user", github_headers(token), "", CALL_MS).status
+    end
+    ret fetch("GET", FIGMA_API + "/v1/me", figma_headers(token, is_oauth_token(token)), "", CALL_MS).status
+end
+
+func status_rejected(provider: str, status: int): bool:
+    if provider == "github":
+        ret status == 401
+    end
+    ret status == 401 or status == 403
+end
+
+func token_ok(uid: str, provider: str, token &: str): bool:
     key := uid + "|" + provider
-    tag := crypto.HmacSha256Hex(MASTER, token).substr(0, 12)
     _l := sync.Lock(LOCK)
     cached := CHECKED.has(key) ? CHECKED.get(key) : ""
     _u := sync.Unlock(LOCK)
     if cached.len() > 0:
         parts := cached.split("|")
-        if parts.len() == 3 and parts.get(2) == tag and aistore.Now() - (parts.get(0).to_int() as i64) < 300:
-            ret parts.get(1) == "1"
+        tag := crypto.HmacSha256Hex(MASTER, token).substr(0, 12)
+        if parts.len() == 2 and parts.get(1) == tag and aistore.Now() - (parts.get(0).to_int() as i64) < 300:
+            ret true
         end
     end
-    mut ok := true
-    if provider == "github":
-        r := fetch("GET", GITHUB_API + "/user", github_headers(token), "", CALL_MS)
-        ok = r.status != 401
-    else:
-        r := fetch("GET", FIGMA_API + "/v1/me", figma_headers(token, is_oauth_token(token)), "", CALL_MS)
-        ok = r.status != 401 and r.status != 403
+    mut status := probe_status(provider, token)
+    if provider == "github" and status == 401:
+        fresh := github_refresh(uid, token)
+        if fresh.len() > 0:
+            token = fresh
+            status = probe_status(provider, token)
+        end
     end
-    _a := sync.Lock(LOCK)
-    CHECKED.put(key, aistore.Now() + "|" + (ok ? "1" : "0") + "|" + tag)
-    _b := sync.Unlock(LOCK)
-    ret ok
+    if status_rejected(provider, status):
+        forget_check(uid, provider)
+        ret false
+    end
+    if status == 200:
+        _a := sync.Lock(LOCK)
+        CHECKED.put(key, aistore.Now() + "|" + crypto.HmacSha256Hex(MASTER, token).substr(0, 12))
+        _b := sync.Unlock(LOCK)
+    end
+    ret true
 end
 
 func login_state(uid: str, provider: str): str:
@@ -863,7 +968,23 @@ func tool_github_api(uid: str, args: str): Outcome:
     if body.len() > 0:
         headers.push("Content-Type: application/json")
     end
-    r := fetch(method, GITHUB_API + path, headers, body, CALL_MS)
+    mut r := fetch(method, GITHUB_API + path, headers, body, CALL_MS)
+    if r.status == 401:
+        fresh := github_refresh(uid, token)
+        if fresh.len() > 0:
+            headers = github_headers(fresh)
+            if body.len() > 0:
+                headers.push("Content-Type: application/json")
+            end
+            r = fetch(method, GITHUB_API + path, headers, body, CALL_MS)
+        end
+        if r.status == 401:
+            forget_check(uid, "github")
+            o.ok = false
+            o.text = REVOKED_NOTE
+            ret o
+        end
+    end
     if r.status == 0:
         o.ok = false
         o.text = "GitHub did not answer."
@@ -1447,7 +1568,21 @@ func authorize_url(provider: str, state: str, sign_in: bool): str:
     ret FIGMA_WEB + "/oauth?" + form_encode(q)
 end
 
-func exchange_code(provider: str, code: str, token &: str, refresh &: str, expires &: i64):
+func exchange_failure(r: Reply): str:
+    mut why := json.Get(r.body, "error_description")
+    if why.len() == 0:
+        why = json.Get(r.body, "error")
+    end
+    if why.len() == 0:
+        why = json.Get(r.body, "message")
+    end
+    if why.len() == 0:
+        why = r.status == 0 ? "the provider did not answer" : "the provider answered " + r.status
+    end
+    ret clip(why, 200)
+end
+
+func exchange_code(provider: str, code: str, token &: str, refresh &: str, expires &: i64, why &: str):
     if provider == "github":
         mut h := Vector {} as Vector<str>
         h.push("Accept: application/json")
@@ -1459,6 +1594,12 @@ func exchange_code(provider: str, code: str, token &: str, refresh &: str, expir
         m.push(json.Member("redirect_uri", redirect_uri(provider)))
         r := fetch("POST", GITHUB_WEB + "/login/oauth/access_token", h, json.Object(m), CALL_MS)
         token = json.Get(r.body, "access_token")
+        refresh = json.Get(r.body, "refresh_token")
+        secs := json.Get(r.body, "expires_in").to_int()
+        expires = secs > 0 ? aistore.Now() + (secs as i64) : 0
+        if token.len() == 0:
+            why = exchange_failure(r)
+        end
         ret
     end
     mut h := Vector {} as Vector<str>
@@ -1476,6 +1617,9 @@ func exchange_code(provider: str, code: str, token &: str, refresh &: str, expir
     token = json.Get(r.body, "access_token")
     refresh = json.Get(r.body, "refresh_token")
     expires = aistore.Now() + json.Get(r.body, "expires_in").to_int()
+    if token.len() == 0:
+        why = exchange_failure(r)
+    end
 end
 
 func oauth_start(ctx: i64):
@@ -1585,11 +1729,13 @@ func remove_integration(ctx: i64):
     aistore.Lock()
     _d := aistore.Run("DELETE FROM integrations WHERE user_id = ?1 AND provider = ?2", two(i64s(uid), provider))
     aistore.Unlock()
+    forget_check(i64s(uid), provider)
     aiweb.Reply(ctx, 200, `{"ok": true}`)
 end
 
 pub func Configure(sandbox_url: str, sandbox_secret: str, secret_key: str, app_url: str, issuer: str, gh_id: str, gh_secret: str, fg_id: str, fg_secret: str, fg_scopes: str):
     LOCK = sync.NewMutex()
+    REFRESH_LOCK = sync.NewMutex()
     SANDBOX_SECRET = sandbox_secret
     MASTER = secret_key
     if app_url.len() > 0:
@@ -1753,15 +1899,20 @@ pub func AuthorizeUrl(provider: str, state: str, sign_in: bool): str:
     ret authorize_url(provider, state, sign_in)
 end
 
-pub func FinishConnect(uid: str, provider: str, code: str): bool:
+pub func FinishConnect(uid: str, provider: str, code: str, why &: str): bool:
     if not provider_ok(provider):
+        why = "unknown service"
         ret false
     end
     mut token := ""
     mut refresh := ""
     mut expires := 0 as i64
-    exchange_code(provider, code, token, refresh, expires)
+    exchange_code(provider, code, token, refresh, expires, why)
     if token.len() == 0:
+        ret false
+    end
+    if not token_chars(token):
+        why = "the provider returned an unusable token"
         ret false
     end
     mut login := ""
@@ -1773,7 +1924,15 @@ pub func FinishConnect(uid: str, provider: str, code: str): bool:
         valid = verify_figma(token, login)
         scope = FG_SCOPES
     end
-    ret valid and save_integration(uid, provider, token, refresh, expires, login, scope)
+    if not valid:
+        why = "the provider rejected the new token"
+        ret false
+    end
+    if not save_integration(uid, provider, token, refresh, expires, login, scope):
+        why = "the token could not be saved"
+        ret false
+    end
+    ret true
 end
 
 pub func Identity(provider: str, code: str, subject &: str, login &: str, name &: str, email &: str, verified &: bool): bool:
@@ -1783,7 +1942,8 @@ pub func Identity(provider: str, code: str, subject &: str, login &: str, name &
     mut token := ""
     mut refresh := ""
     mut expires := 0 as i64
-    exchange_code(provider, code, token, refresh, expires)
+    mut why := ""
+    exchange_code(provider, code, token, refresh, expires, why)
     if token.len() == 0:
         ret false
     end

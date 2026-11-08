@@ -225,7 +225,7 @@ export function Plans({ notify }: { notify: (msg: string) => void }) {
                 ) : (
                   <button type="button" className={`button wide plan-buy ${featured ? "primary" : "ghost brand"}`} disabled={busy !== null || gateways.length === 0} onClick={() => void buy(p)}>
                     {busy === p.id ? <span className="spinner" /> : null}
-                    {busy === p.id ? t("در حال رفتن به درگاه...", "Going to the gateway...") : gateways.length === 0 ? t("درگاه پرداخت فعال نیست", "No payment gateway available") : t(`خرید با ${GATEWAY_NAMES[gateway]}`, `Buy with ${GATEWAY_NAMES[gateway]}`)}
+                    {busy === p.id ? t("در حال انتقال...", "Redirecting...") : gateways.length === 0 ? t("درگاه پرداخت فعال نیست", "No payment gateway available") : t(`خرید با ${GATEWAY_NAMES[gateway]}`, `Buy with ${GATEWAY_NAMES[gateway]}`)}
                   </button>
                 )}
               </section>

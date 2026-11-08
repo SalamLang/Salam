@@ -969,11 +969,9 @@ export function App() {
         page={route === "admin-chat" ? "admin" : route}
         onNavigate={navigate}
         open={sidebar}
-        theme={theme}
         onClose={() => setSidebar(false)}
         onNew={newChatHere}
         onLogout={logout}
-        onToggleTheme={toggleTheme}
         onOpenProjects={() => navigate("/")}
         onOpenProject={openProject}
         onOpenOthers={openOthers}
@@ -1017,7 +1015,7 @@ export function App() {
           <button type="button" className="icon-button only-mobile" onClick={newChatHere} aria-label={t("گفت‌وگوی تازه", "New chat")}>
             <IconPlus />
           </button>
-          <button type="button" className="icon-button only-desktop" onClick={toggleTheme} aria-label={t("تغییر پوسته", "Toggle theme")}>
+          <button type="button" className="icon-button" onClick={toggleTheme} aria-label={t("تغییر پوسته", "Toggle theme")}>
             {theme === "dark" ? <IconSun /> : <IconMoon />}
           </button>
         </header>

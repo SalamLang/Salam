@@ -131,7 +131,7 @@ const grant = await api("POST", "/admin/subscriptions", admin, { email: BUYER, p
 check("an admin can give a paid plan away", grant.res.status === 201 && grant.json.plan === "unlimited", grant.json);
 const granted = await api("GET", "/billing/subscription", buyer);
 check("the gift is unlimited and lasts the plan days", granted.json.subscription.plan.id === "unlimited" && Math.abs(granted.json.subscription.expires - (now + 30 * DAY)) < 300 && granted.json.subscription.source === "admin", granted.json.subscription);
-check("an unlimited account is not asked to buy again", (await api("POST", "/billing/checkout", buyer, { plan: "pro", gateway: "zarinpal" })).res.status === 409);
+check("an account on a gifted plan can still buy or renew any plan", (await api("POST", "/billing/checkout", buyer, { plan: "unlimited2", gateway: "zarinpal" })).res.status === 200);
 const active = await api("GET", "/admin/subscriptions", admin);
 const mine = active.json.subscriptions.find((s) => s.user?.email === BUYER);
 check("active subscriptions carry the user and the plan", mine?.plan === "unlimited" && mine.status === "active" && mine.note === "تست مدیر", mine);

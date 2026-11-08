@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from "react";
-import { api, ApiError, PAGE_SIZE, type AdminApp, type AdminTelegram, type AdminKey, type AdminPlatforms, type AdminSubscription, type AdminGuest, type AdminSession, type AdminSummary, type GuestMessage, type AdminUpload, type AdminUser, type ApiRequest, type AppEvent, type Chat, type EventFilters, type Payment, type PlanId, type RequestFilters, type UsagePeriod, type UsagePeriodKey, type UsageTotals } from "./api";
+import { api, ApiError, PAGE_SIZE, type AdminApp, type AdminChatRow, type AdminTelegram, type AdminKey, type AdminPlatforms, type AdminSubscription, type AdminGuest, type AdminSession, type AdminSummary, type GuestMessage, type AdminUpload, type AdminUser, type ApiRequest, type AppEvent, type Chat, type EventFilters, type Payment, type PlanId, type RequestFilters, type UsagePeriod, type UsagePeriodKey, type UsageTotals } from "./api";
 import { EventList } from "./Events";
 import { fmtCompact, fmtCost, fmtDate, fmtDateTime, fmtDay, fmtMonth, fmtNum, fmtRelative, tokenSplit } from "./format";
 import { IconBadgeCheck, IconChevronDown, IconClose, IconSearch, IconShield } from "./icons";
@@ -1136,6 +1136,89 @@ function Payments({ picked }: { picked: Picked }) {
         </div>
       )}
       <div className="panel-foot muted">{t("مجموع پرداخت‌های موفق:", "Total successful payments:")} {toman(income)}</div>
+    </section>
+  );
+}
+
+function LatestChats() {
+  const [rows, setRows] = useState<AdminChatRow[] | null>(null);
+  const [more, setMore] = useState(false);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [query, setQuery] = useState("");
+  const [applied, setApplied] = useState("");
+
+  const load = useCallback((offset: number, q: string) => {
+    setLoading(true);
+    setError("");
+    api
+      .adminLatestChats(offset, q)
+      .then((r) => {
+        setRows((old) => (offset === 0 || !old ? r.chats : [...old, ...r.chats]));
+        setMore(r.more);
+      })
+      .catch((e) => setError(errText(e, t("بارگذاری گفت‌وگوها ناموفق بود.", "Could not load chats."))))
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(() => {
+    load(0, applied);
+  }, [load, applied]);
+
+  return (
+    <section className="card panel">
+      <div className="panel-head">
+        <h3>{t("آخرین گفت‌وگوها", "Latest chats")}</h3>
+        <form
+          className="panel-tools"
+          onSubmit={(e) => {
+            e.preventDefault();
+            setApplied(query.trim());
+          }}
+        >
+          <input className="input" type="search" dir="auto" value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t("جست‌وجوی کاربر یا عنوان", "Search user or title")} aria-label={t("جست‌وجوی گفت‌وگوها", "Search chats")} />
+        </form>
+      </div>
+      {error ? (
+        <div className="form-error" role="alert">
+          {error}
+        </div>
+      ) : rows === null ? (
+        <div className="list-loading" role="status">
+          <span className="spinner" />
+          <span className="sr-only">{t("در حال بارگذاری", "Loading")}</span>
+        </div>
+      ) : (
+        <div className="latest-chats">
+          {rows.map((c) => (
+            <a key={c.id} className="latest-chat" href={`/admin/chats/${c.id}`} target="_blank" rel="noopener noreferrer" title={t("باز کردن کامل این گفت‌وگو در زبانه‌ی تازه", "Open the full chat in a new tab")}>
+              <span className="latest-chat-head">
+                <strong dir="auto">{c.user_name}</strong>
+                <span className="muted" dir="ltr">{c.user_email}</span>
+                <span className="latest-chat-time muted" title={fmtDateTime(c.updated)}>
+                  {c.agent ? `${t("ایجنت", "Agent")} · ` : ""}
+                  {fmtNum(c.messages)} {t("پیام", "messages")} · {fmtRelative(c.updated)}
+                </span>
+              </span>
+              <span className="latest-chat-title" dir="auto">{c.title}</span>
+              <span className="latest-chat-line">
+                <b>{t("اولین پیام", "First")}</b>
+                <span dir="auto">{c.first || "-"}</span>
+              </span>
+              <span className="latest-chat-line">
+                <b>{c.last_role === "assistant" ? t("آخرین پاسخ", "Last reply") : t("آخرین پیام", "Last")}</b>
+                <span dir="auto">{c.last || "-"}</span>
+              </span>
+            </a>
+          ))}
+          {rows.length === 0 && <p className="muted">{t("گفت‌وگویی نیست.", "No chats.")}</p>}
+          {more && (
+            <button type="button" className="button" disabled={loading} onClick={() => load(rows.length, applied)}>
+              {loading ? t("در حال بارگذاری...", "Loading...") : t("بیشتر", "Load more")}
+            </button>
+          )}
+        </div>
+      )}
     </section>
   );
 }
@@ -2432,7 +2515,7 @@ export function Admin({ notify }: { notify: (msg: string) => void }) {
           )}
           <Sessions picked={picked} notify={notify} />
           {!picked && <Guests />}
-          <Conversations picked={picked} />
+          {picked ? <Conversations picked={picked} /> : <LatestChats />}
           <Subscriptions picked={picked} notify={notify} />
           <Payments picked={picked} />
           <Uploads picked={picked} notify={notify} />

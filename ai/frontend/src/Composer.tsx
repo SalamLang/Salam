@@ -4,6 +4,7 @@ import { acceptList, kindOf, PendingChips, splitText, textBytes, textFile, toOut
 import { EffortPicker } from "./effort";
 import { IconPaperclip, IconQueueAdd, IconSend, IconStop } from "./icons";
 import { t } from "./i18n";
+import { autoDir } from "./dir";
 import { toPersianDigits } from "./theme";
 import { pushToast } from "./Toasts";
 import { useVoiceInput, VoiceBar, VoiceButton } from "./Voice";
@@ -22,8 +23,6 @@ type Props = {
   draft?: string;
   onDraftUsed?: () => void;
 };
-
-const RTL_FIRST = /^[^A-Za-z֐-ࣿיִ-﷿ﹰ-﻿]*[֐-ࣿיִ-﷿ﹰ-﻿]/;
 
 // The server caps a message at 12000 *bytes* (Salam strings are UTF-8), so a
 // Persian message reaches the limit after about 6000 characters. Anything
@@ -323,7 +322,7 @@ export function Composer({ busy, disabled, onSend, onStop, onQueue, queueing, au
           <VoiceButton voice={voice} disabled={disabled} />
           <textarea
             ref={ref}
-            dir={text ? "auto" : RTL_FIRST.test(hint) ? "rtl" : "ltr"}
+            dir={autoDir(text, hint)}
             rows={1}
             value={text}
             placeholder={hint}

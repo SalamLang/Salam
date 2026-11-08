@@ -90,7 +90,7 @@ function features(p: Plan): string[] {
   ];
 }
 
-export function Plans({ notify }: { notify: (msg: string) => void }) {
+export function Plans({ notify }: { notify: (msg: string, ok?: boolean) => void }) {
   const [plans, setPlans] = useState<Plan[] | null>(null);
   const [gateways, setGateways] = useState<Gateway[]>([]);
   const [current, setCurrent] = useState<Subscription | null>(null);

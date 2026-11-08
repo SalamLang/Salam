@@ -328,7 +328,7 @@ function MyRequests() {
   );
 }
 
-export function Keys({ notify }: { notify: (msg: string) => void }) {
+export function Keys({ notify }: { notify: (msg: string, ok?: boolean) => void }) {
   const [keys, setKeys] = useState<ApiKey[] | null>(null);
   const [error, setError] = useState("");
   const [name, setName] = useState("");
@@ -386,7 +386,7 @@ export function Keys({ notify }: { notify: (msg: string) => void }) {
       await api.revokeKey(k.id);
       setKeys((cur) => (cur ? cur.filter((x) => x.id !== k.id) : cur));
       if (created?.key.id === k.id) setCreated(null);
-      notify(t(`کلید «${k.name}» باطل شد.`, `Key "${k.name}" was revoked.`));
+      notify(t(`کلید «${k.name}» باطل شد.`, `Key "${k.name}" was revoked.`), true);
     } catch (e) {
       notify(e instanceof ApiError ? e.message : t("باطل کردن کلید ناموفق بود.", "Could not revoke the key."));
     } finally {

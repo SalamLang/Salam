@@ -62,7 +62,7 @@ export function ConnectHelp() {
   );
 }
 
-export function AppsPanel({ notify }: { notify: (msg: string) => void }) {
+export function AppsPanel({ notify }: { notify: (msg: string, ok?: boolean) => void }) {
   const [apps, setApps] = useState<ConnectedApp[] | null>(null);
   const [error, setError] = useState("");
   const [open, setOpen] = useState<number | null>(null);
@@ -95,7 +95,7 @@ export function AppsPanel({ notify }: { notify: (msg: string) => void }) {
     try {
       await api.revokeApp(app.id);
       setApps((cur) => (cur ? cur.filter((a) => a.id !== app.id) : cur));
-      notify(t(`اتصال «${app.client.name}» قطع شد.`, `Disconnected "${app.client.name}".`));
+      notify(t(`اتصال «${app.client.name}» قطع شد.`, `Disconnected "${app.client.name}".`), true);
     } catch (e) {
       notify(e instanceof ApiError ? e.message : t("قطع اتصال ناموفق بود.", "Could not disconnect the app."));
     } finally {

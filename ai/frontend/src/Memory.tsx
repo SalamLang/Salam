@@ -22,7 +22,7 @@ function download(name: string, text: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-function MemoryRow({ item, onForget, notify }: { item: MemoryItem; onForget: (id: number) => void; notify: (msg: string) => void }) {
+function MemoryRow({ item, onForget, notify }: { item: MemoryItem; onForget: (id: number) => void; notify: (msg: string, ok?: boolean) => void }) {
   const [open, setOpen] = useState(false);
   const [full, setFull] = useState<MemoryItem | null>(null);
   const [busy, setBusy] = useState(false);
@@ -97,7 +97,7 @@ function MemoryRow({ item, onForget, notify }: { item: MemoryItem; onForget: (id
   );
 }
 
-function ChatCard({ chat, onForget, notify }: { chat: MemoryChat; onForget: (id: number) => void; notify: (msg: string) => void }) {
+function ChatCard({ chat, onForget, notify }: { chat: MemoryChat; onForget: (id: number) => void; notify: (msg: string, ok?: boolean) => void }) {
   const getIndex = async () => {
     try {
       const r = await api.chatMemory(chat.id);
@@ -138,7 +138,7 @@ function ChatCard({ chat, onForget, notify }: { chat: MemoryChat; onForget: (id:
   );
 }
 
-export function Memory({ notify }: { notify: (msg: string) => void }) {
+export function Memory({ notify }: { notify: (msg: string, ok?: boolean) => void }) {
   const [data, setData] = useState<MemoryOverview | null>(null);
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -161,7 +161,7 @@ export function Memory({ notify }: { notify: (msg: string) => void }) {
     try {
       await api.setMemory(enabled);
       setData((d) => (d ? { ...d, enabled } : d));
-      notify(enabled ? t("حافظه روشن شد.", "Memory is on.") : t("حافظه خاموش شد.", "Memory is off."));
+      notify(enabled ? t("حافظه روشن شد.", "Memory is on.") : t("حافظه خاموش شد.", "Memory is off."), true);
     } catch (e) {
       notify(errText(e, t("ذخیره ناموفق بود.", "Could not save.")));
     } finally {
@@ -179,7 +179,7 @@ export function Memory({ notify }: { notify: (msg: string) => void }) {
     if (!ok) return;
     try {
       await api.clearMemory();
-      notify(t("حافظه پاک شد.", "Memory cleared."));
+      notify(t("حافظه پاک شد.", "Memory cleared."), true);
       await load();
     } catch (e) {
       notify(errText(e, t("پاک کردن ناموفق بود.", "Could not clear memory.")));

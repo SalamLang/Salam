@@ -15,6 +15,11 @@ const RECONCILE_EVERY: Duration = Duration::from_secs(90);
 const IDLE_LIMIT: Duration = Duration::from_secs(20 * 60);
 const EMIT_EVERY: Duration = Duration::from_millis(300);
 const MAX_WATCHES: usize = 4096;
+const MAX_BACKOFF_STEPS: u32 = 6;
+
+pub fn save_delay(failures: u32) -> Duration {
+    SAVE_AFTER * (1u32 << failures.min(MAX_BACKOFF_STEPS))
+}
 
 pub type Notifier = Arc<dyn Fn(u64) + Send + Sync>;
 
@@ -85,6 +90,7 @@ pub fn spawn(root: PathBuf, cache_file: PathBuf, notifier: Notifier) -> Handle {
         last_emit: Instant::now() - EMIT_EVERY,
         saved_revision: 0,
         changed_at: Instant::now(),
+        save_failures: 0,
     };
     let guard = Guard(handle.alive.clone());
     let spawned = std::thread::Builder::new().name("mention-index".into()).spawn(move || {
@@ -109,10 +115,48 @@ struct Worker {
     last_emit: Instant,
     saved_revision: u64,
     changed_at: Instant,
+    save_failures: u32,
+}
+
+pub fn rebuild_dir(index: &RwLock<Index>, root: &Path, dir: &str, stop: &AtomicBool, on_new_dir: &mut dyn FnMut(&str)) {
+    let mut fresh = Vec::new();
+    index::walk(root, dir, None, stop, MAX_ENTRIES, &mut |e| fresh.push(e));
+    if stop.load(Ordering::Relaxed) {
+        return;
+    }
+    for e in fresh.iter().filter(|e| e.is_dir) {
+        on_new_dir(&e.path);
+    }
+    index.write().unwrap().replace_subtree(dir, fresh);
+}
+
+fn reconcile_ignore_files(index: &RwLock<Index>, root: &Path, stop: &AtomicBool) -> usize {
+    let before = index.read().unwrap().ignore_files();
+    let mut rebuilt: Vec<String> = Vec::new();
+    for (path, mtime) in &before {
+        let current = std::fs::symlink_metadata(root.join(&**path)).ok().map(|m| index::mtime_of(&m));
+        if current != Some(*mtime) {
+            rebuilt.push(path.rsplit_once('/').map_or("", |(a, _)| a).to_string());
+        }
+    }
+    rebuilt.sort();
+    rebuilt.dedup();
+    let mut count = 0;
+    for dir in rebuilt {
+        if stop.load(Ordering::Relaxed) {
+            break;
+        }
+        if dir.is_empty() || index.read().unwrap().is_dir(&dir) {
+            rebuild_dir(index, root, &dir, stop, &mut |_| {});
+            count += 1;
+        }
+    }
+    count
 }
 
 pub fn reconcile(index: &RwLock<Index>, root: &Path, stop: &AtomicBool) -> usize {
-    let mut walked = 0;
+    let mut walked = reconcile_ignore_files(index, root, stop);
+    let known: HashSet<Box<str>> = index.read().unwrap().ignore_files().into_iter().map(|f| f.0).collect();
     let mut todo: Vec<(String, Option<u32>)> = vec![(String::new(), None)];
     todo.extend(index.read().unwrap().dirs().into_iter().map(|(p, m)| (p.to_string(), Some(m))));
     for (dir, recorded) in todo {
@@ -134,6 +178,20 @@ pub fn reconcile(index: &RwLock<Index>, root: &Path, stop: &AtomicBool) -> usize
         }
         walked += 1;
         refresh(index, root, &dir, stop, &mut |_| {});
+    }
+    let mut fresh_ignores: Vec<String> = index
+        .read()
+        .unwrap()
+        .ignore_files()
+        .into_iter()
+        .filter(|f| !known.contains(&f.0))
+        .map(|f| f.0.rsplit_once('/').map_or("", |(a, _)| a).to_string())
+        .collect();
+    fresh_ignores.sort();
+    fresh_ignores.dedup();
+    for dir in fresh_ignores {
+        rebuild_dir(index, root, &dir, stop, &mut |_| {});
+        walked += 1;
     }
     walked
 }
@@ -185,12 +243,16 @@ impl Worker {
             let i = self.index.read().unwrap();
             cache::save(&self.cache_file, &self.root.to_string_lossy(), &i)
         };
-        if result.is_ok() {
-            self.saved_revision = revision;
-            let mut i = self.index.write().unwrap();
-            if i.revision == revision {
-                i.dirty = false;
-            }
+        if result.is_err() {
+            self.save_failures = self.save_failures.saturating_add(1);
+            self.changed_at = Instant::now();
+            return;
+        }
+        self.save_failures = 0;
+        self.saved_revision = revision;
+        let mut i = self.index.write().unwrap();
+        if i.revision == revision {
+            i.dirty = false;
         }
     }
 
@@ -277,6 +339,7 @@ impl Worker {
         let mut rescan = false;
         let mut dirty: HashSet<String> = HashSet::new();
         let mut touched: HashSet<String> = HashSet::new();
+        let mut ignore_dirs: HashSet<String> = HashSet::new();
         for ev in events {
             let ev = match ev {
                 Ok(ev) => ev,
@@ -300,10 +363,10 @@ impl Worker {
                 if rel.is_empty() {
                     continue;
                 }
-                if rel.ends_with(".gitignore") || rel.ends_with(".ignore") {
-                    rescan = true;
-                }
                 let parent = rel.rsplit_once('/').map_or("", |(a, _)| a).to_string();
+                if index::is_ignore_name(rel.rsplit('/').next().unwrap_or("")) {
+                    ignore_dirs.insert(parent.clone());
+                }
                 if content {
                     touched.insert(rel);
                 } else {
@@ -319,9 +382,18 @@ impl Worker {
             self.full_refresh();
             return;
         }
+        let mut added: Vec<String> = Vec::new();
         {
             let i = self.index.read().unwrap();
-            dirty.retain(|d| i.is_dir(d));
+            ignore_dirs.retain(|d| i.is_dir(d));
+        }
+        for d in &ignore_dirs {
+            let index = self.index.clone();
+            rebuild_dir(&index, &self.root, d, &self.stop, &mut |n| added.push(n.to_string()));
+        }
+        {
+            let i = self.index.read().unwrap();
+            dirty.retain(|d| i.is_dir(d) && !ignore_dirs.contains(d));
         }
         for t in touched {
             let abs = self.root.join(&t);
@@ -344,7 +416,6 @@ impl Worker {
                 }
             }
         }
-        let mut added: Vec<String> = Vec::new();
         for d in dirty {
             let index = self.index.clone();
             refresh(&index, &self.root, &d, &self.stop, &mut |n| added.push(n.to_string()));
@@ -397,7 +468,7 @@ impl Worker {
                 let due = (last_at + DEBOUNCE).min(first_at + MAX_WAIT);
                 wait = wait.min(due.saturating_duration_since(now));
             } else if dirty {
-                wait = wait.min((self.changed_at + SAVE_AFTER).saturating_duration_since(now));
+                wait = wait.min((self.changed_at + save_delay(self.save_failures)).saturating_duration_since(now));
             }
             wait = wait.min(Duration::from_secs(60));
             match rx.recv_timeout(wait) {
@@ -428,7 +499,7 @@ impl Worker {
                     self.emit(true);
                 }
             }
-            if self.index.read().unwrap().dirty && self.changed_at.elapsed() >= SAVE_AFTER {
+            if self.index.read().unwrap().dirty && self.changed_at.elapsed() >= save_delay(self.save_failures) {
                 self.save();
             }
             if Duration::from_millis(now_ms().saturating_sub(self.used.load(Ordering::Relaxed))) >= IDLE_LIMIT {
@@ -518,5 +589,39 @@ mod tests {
             std::thread::sleep(Duration::from_millis(50));
         }
         assert!(!h.alive());
+    }
+
+    #[test]
+    fn ignore_file_edits_rebuild_the_subtree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("ws");
+        touch(&root.join("src/main.rs"));
+        touch(&root.join("src/secret/k.txt"));
+        touch(&root.join("src/app.log"));
+        let lock = RwLock::new(build(&root));
+        let stop = AtomicBool::new(false);
+        std::thread::sleep(Duration::from_millis(1100));
+        fs::write(root.join(".gitignore"), "*.log\nsrc/secret/\n").unwrap();
+        assert!(reconcile(&lock, &root, &stop) >= 1);
+        let p = paths(&lock.read().unwrap());
+        assert!(p.contains(&"src/main.rs".to_string()) && p.contains(&".gitignore".to_string()));
+        assert!(!p.contains(&"src/app.log".to_string()) && !p.contains(&"src/secret/k.txt".to_string()));
+        std::thread::sleep(Duration::from_millis(1100));
+        fs::write(root.join(".gitignore"), "*.log\n").unwrap();
+        reconcile(&lock, &root, &stop);
+        let p = paths(&lock.read().unwrap());
+        assert!(p.contains(&"src/secret/k.txt".to_string()) && !p.contains(&"src/app.log".to_string()));
+        fs::write(root.join(".gitignore"), "").unwrap();
+        rebuild_dir(&lock, &root, "", &stop, &mut |_| {});
+        assert!(paths(&lock.read().unwrap()).contains(&"src/app.log".to_string()));
+    }
+
+    #[test]
+    fn save_retry_delay_grows_and_is_capped() {
+        assert_eq!(save_delay(0), SAVE_AFTER);
+        assert_eq!(save_delay(1), SAVE_AFTER * 2);
+        assert!(save_delay(3) > save_delay(2));
+        assert_eq!(save_delay(50), save_delay(MAX_BACKOFF_STEPS));
+        assert!(save_delay(0) > Duration::ZERO);
     }
 }

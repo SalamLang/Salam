@@ -317,6 +317,16 @@ export type MessageCall = {
   image_mime?: string;
 };
 
+export type AdminChatRow = Chat & {
+  user_id: number;
+  user_name: string;
+  user_email: string;
+  first: string;
+  last: string;
+  last_role: string;
+  messages: number;
+};
+
 export type PlanId = "free" | "plus" | "pro" | "unlimited";
 export type Plan = {
   id: PlanId;
@@ -1255,6 +1265,8 @@ export const api = {
     call<{ key: AdminKey }>("PATCH", `/admin/keys/${id}`, policy),
   adminUserChats: (id: number) =>
     call<{ chats: Chat[] }>("GET", `/admin/users/${id}/chats`),
+  adminLatestChats: (offset: number, q: string) =>
+    call<{ chats: AdminChatRow[]; more: boolean }>("GET", `/admin/chats?offset=${offset}${q ? `&q=${encodeURIComponent(q)}` : ""}`),
   adminChat: (id: string) =>
     call<{
       chat: Chat;

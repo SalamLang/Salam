@@ -1,0 +1,233 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "net/tunnel"
+@fa "تونل"
+package tunnel
+
+import mem
+import atomic
+import pool
+import net.tcp
+import net.internal.rawsock
+
+struct _AcceptJob:
+    pub server: AcceptServer = AcceptServer {}
+    pub proto: dyn InboundProtocol = NullProtocol {}
+    pub handler: dyn Handler = ForwardHandler {}
+end
+
+@en "Pending"
+@fa "اتصال در انتظار"
+pub interface Pending:
+    @en "Valid"
+    @fa "معتبر"
+    func Valid(): bool
+    @en "Open"
+    @fa "گشودن"
+    func Open(): dyn Stream
+    @en "Abort"
+    @fa "رها کردن"
+    func Abort()
+end
+
+@en "Acceptor"
+@fa "پذیرنده اتصال"
+pub interface Acceptor:
+    @en "Accept"
+    @fa "پذیرش"
+    func Accept(): dyn Pending
+    @en "Port"
+    @fa "درگاه"
+    func Port(): int
+    @en "Ok"
+    @fa "معتبر"
+    func Ok(): bool
+    @en "Close"
+    @fa "بستن"
+    func Close()
+end
+
+@en "ReadyConn"
+@fa "اتصال آماده"
+pub struct ReadyConn:
+    @en "stream"
+    @fa "جریان"
+    pub stream: dyn Stream = ClosedStream {}
+    @en "ok"
+    @fa "موفق"
+    pub ok: bool = false
+
+    @en "Valid"
+    @fa "معتبر"
+    pub func Valid(): bool:
+        ret this.ok
+    end
+
+    @en "Open"
+    @fa "گشودن"
+    pub func Open(): dyn Stream:
+        ret this.stream
+    end
+
+    @en "Abort"
+    @fa "رها کردن"
+    pub func Abort():
+        this.stream.Close()
+    end
+end
+
+@en "TcpAcceptor"
+@fa "پذیرنده تی سی پی"
+pub struct TcpAcceptor:
+    @en "server"
+    @fa "کارساز"
+    pub server: tcp.Server = tcp.Server {}
+
+    @en "Accept"
+    @fa "پذیرش"
+    pub func Accept(): dyn Pending:
+        c := tcp.Accept(this.server)
+        if not tcp.ConnOk(c): ret ReadyConn {} end
+        tcp.SetNoDelay(c, true)
+        ret ReadyConn { stream = TcpStream { conn = c }, ok = true }
+    end
+
+    @en "Port"
+    @fa "درگاه"
+    pub func Port(): int:
+        ret tcp.Port(this.server)
+    end
+
+    @en "Ok"
+    @fa "معتبر"
+    pub func Ok(): bool:
+        ret tcp.Ok(this.server)
+    end
+
+    @en "Close"
+    @fa "بستن"
+    pub func Close():
+        tcp.CloseServer(this.server)
+    end
+end
+
+@en "AcceptServer"
+@fa "کارساز پذیرش"
+pub struct AcceptServer:
+    @en "acceptor"
+    @fa "پذیرنده"
+    pub acceptor: dyn Acceptor = TcpAcceptor {}
+    @en "host"
+    @fa "میزبان"
+    pub host: str = "127.0.0.1"
+    @en "running"
+    @fa "فعال"
+    pub running: atomic.Flag = atomic.Flag {}
+    @en "workers"
+    @fa "کارگرها"
+    pub workers: pool.Pool = pool.Pool {}
+    @en "handshake_ms"
+    @fa "مهلت دست‌دهی"
+    pub handshake_ms: int = 15000
+
+    @en "Ok"
+    @fa "معتبر"
+    pub func Ok(): bool:
+        ret this.acceptor.Ok()
+    end
+
+    @en "Port"
+    @fa "درگاه"
+    pub func Port(): int:
+        ret this.acceptor.Port()
+    end
+
+    @en "Stop"
+    @fa "توقف"
+    pub func Stop():
+        atomic.Set(this.running, false)
+        mut wake_host := this.host
+        if wake_host.len() == 0 or wake_host == "0.0.0.0": wake_host = "127.0.0.1" end
+        wake := tcp.Dial(wake_host, this.acceptor.Port())
+        if tcp.ConnOk(wake): tcp.Close(wake) end
+        this.acceptor.Close()
+    end
+end
+
+func _accept_conn(p: dyn Pending, proto: dyn InboundProtocol, h: dyn Handler, handshake_ms: int):
+    up := p.Open()
+    if not up.Ok():
+        up.Close()
+        ret
+    end
+    up.SetDeadline(handshake_ms)
+    sess := proto.Handshake(up)
+    if not sess.ok:
+        up.Close()
+        ret
+    end
+    up.SetDeadline(0)
+    h.Handle(up, sess)
+end
+
+func _accept_loop(srv: AcceptServer, proto: dyn InboundProtocol, h: dyn Handler):
+    a := srv.acceptor
+    hs := srv.handshake_ms
+    until atomic.Get(srv.running):
+        p := a.Accept()
+        if not p.Valid(): continue end
+        if not atomic.Get(srv.running):
+            p.Abort()
+            break
+        end
+        pool.Submit(srv.workers, (): _accept_conn(p, proto, h, hs) end)
+    end
+end
+
+func _accept_thread(jp: _AcceptJob*):
+    j := jp[0]
+    mem.Free(jp as void*)
+    _accept_loop(j.server, j.proto, j.handler)
+end
+
+@en "NewAcceptServer"
+@fa "کارساز پذیرش جدید"
+pub func NewAcceptServer(a: dyn Acceptor, host: str): AcceptServer:
+    ret AcceptServer { acceptor = a, host = host, running = atomic.NewFlag(false), workers = pool.NewElastic(2 as i64, 512 as i64, 1024 as i64) }
+end
+
+@en "ListenTcpOn"
+@fa "شنود تی سی پی روی نشانی"
+pub func ListenTcpOn(host: str, port: int): AcceptServer:
+    s := rawsock.ListenOn(host, port, rawsock.SOCK_STREAM)
+    mut srv := tcp.Server { fd = s.fd }
+    if s.fd >= 0: srv.port = rawsock.LocalPort(s) end
+    ret NewAcceptServer(TcpAcceptor { server = srv }, host)
+end
+
+@en "ListenLocal"
+@fa "شنود محلی"
+pub func ListenLocal(port: int): AcceptServer:
+    ret ListenTcpOn("127.0.0.1", port)
+end
+
+@en "StartAccepting"
+@fa "شروع پذیرش"
+pub func StartAccepting(srv: AcceptServer, proto: dyn InboundProtocol, h: dyn Handler):
+    atomic.Set(srv.running, true)
+    jp := mem.AllocateZeroed(sizeof(_AcceptJob) as u64) as _AcceptJob*
+    jp[0] = _AcceptJob { server = srv, proto = proto, handler = h }
+    _t := spawn(_accept_thread, jp)
+end

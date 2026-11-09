@@ -44,6 +44,12 @@ pub struct Conn:
     @en "err"
     @fa "خطا"
     pub err: str = ""
+    @en "rdone"
+    @fa "پایان خواندن"
+    pub rdone: bool = false
+    @en "wdone"
+    @fa "پایان نوشتن"
+    pub wdone: bool = false
 end
 
 func _conn_fail(c &: Conn, msg: str): bool:
@@ -116,6 +122,9 @@ func _fill_pending(c &: Conn): bool:
             c.pending = frag
         else if typ == REC_ALERT:
             c.open = false
+            if _bufat(frag, 1) == ALERT_CLOSE_NOTIFY:
+                c.rdone = true
+            end
             if _bufat(frag, 1) != ALERT_CLOSE_NOTIFY:
                 c.err = _alert_text(frag)
             end
@@ -292,7 +301,7 @@ end
 @en "WriteBytes"
 @fa "نوشتن بایت"
 pub func WriteBytes(c &: Conn, ptr: void*, n: int): int:
-    if not c.open:
+    if c.wdone or (not c.open and not c.rdone):
         ret 0 - 1
     end
     if not _rec_write(c.h.rec, REC_APPLICATION_DATA, ptr, n):
@@ -385,10 +394,23 @@ pub func Fd(c: Conn): i64:
     ret c.h.rec.fd
 end
 
+@en "CloseWrite"
+@fa "بستن نوشتن"
+pub func CloseWrite(c &: Conn):
+    if c.wdone or (not c.open and not c.rdone):
+        ret
+    end
+    c.wdone = true
+    _rec_send_alert(c.h.rec, 1, ALERT_CLOSE_NOTIFY)
+    if c.h.rec.fd >= 0:
+        rawsock.ShutdownWrite(rawsock.FromFd(c.h.rec.fd))
+    end
+end
+
 @en "Detach"
 @fa "جداسازی اتصال"
 pub func Detach(c &: Conn):
-    if c.open:
+    if c.open and not c.wdone:
         _rec_send_alert(c.h.rec, 1, ALERT_CLOSE_NOTIFY)
     end
     c.open = false

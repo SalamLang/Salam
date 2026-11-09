@@ -8,6 +8,7 @@ import { fmtDate, fmtNum, initial } from "./format";
 import { IconFigma, IconGithub, IconKey, IconTelegram, IconTerminal } from "./icons";
 import type { Theme } from "./theme";
 import { t } from "./i18n";
+import { Select } from "./Select";
 import { sharedLoader } from "./shared";
 import { useReturnReset } from "./desktop";
 
@@ -393,15 +394,21 @@ function IntegrationCard({ item, storage, highlight, notify, onChange }: { item:
         </ul>
       )}
       {item.connected && !item.expired && item.mcp_available && (
-        <label className="field conn-mcp">
+        <div className="field conn-mcp">
           <span>{t("استفاده از سرور MCP گیت‌هاب", "Let the assistant use the GitHub MCP server")}</span>
-          <select value={item.mcp || "off"} disabled={busy !== ""} onChange={(e) => setMcp(e.target.value as "off" | "read" | "write")}>
-            <option value="off">{t("خاموش", "Off")}</option>
-            <option value="read">{t("فقط خواندن (مخزن‌ها، ایشوها، پول‌ریکوئست‌ها، جست‌وجوی کد)", "Read only (repositories, issues, pull requests, code search)")}</option>
-            <option value="write">{t("خواندن و نوشتن با تأیید شما (ایشو، نظر، پول‌ریکوئست، شاخه)", "Read and write with your yes (issues, comments, pull requests, branches)")}</option>
-          </select>
+          <Select<"off" | "read" | "write">
+            value={(item.mcp || "off") as "off" | "read" | "write"}
+            disabled={busy !== ""}
+            ariaLabel={t("استفاده از سرور MCP گیت‌هاب", "Let the assistant use the GitHub MCP server")}
+            onChange={setMcp}
+            options={[
+              { value: "off", label: t("خاموش", "Off") },
+              { value: "read", label: t("فقط خواندن", "Read only"), hint: t("مخزن‌ها، ایشوها، پول‌ریکوئست‌ها، جست‌وجوی کد", "Repositories, issues, pull requests, code search") },
+              { value: "write", label: t("خواندن و نوشتن", "Read and write"), hint: t("با تأیید شما: ایشو، نظر، پول‌ریکوئست، شاخه", "With your yes: issues, comments, pull requests, branches") },
+            ]}
+          />
           <small className="muted">{t("ادغام و حذف هرگز به دستیار داده نمی‌شود. با توکن شخصی (ghp_ یا github_pat_) بهتر کار می‌کند.", "Merging and deleting are never offered. Works best with a personal access token (ghp_ or github_pat_).")}</small>
-        </label>
+        </div>
       )}
       {item.connected && !replacing && storage && (
         <button type="button" className="link small-link conn-link" onClick={() => setReplacing(true)}>

@@ -37,6 +37,7 @@ end
 
 const _STREAM_CHUNK := 65536
 const _MULTI_MAGIC := 0x53414C4D56303031
+const _CB_MAGIC := 0x53414C4D43423031
 
 struct _Multi:
     pub magic: i64
@@ -44,6 +45,13 @@ struct _Multi:
     pub fps: void**
     pub starts: i64*
     pub total: i64
+end
+
+struct _CbRead:
+    pub magic: i64
+    pub total: i64
+    pub read: func (i64, void*, int, void*) int
+    pub ctx: void*
 end
 
 @en "FileSink"
@@ -91,6 +99,13 @@ func _is_multi(fp: void*): bool:
         ret false
     end
     ret (fp as i64*)[0] == _MULTI_MAGIC
+end
+
+func _is_cb(fp: void*): bool:
+    if fp == null:
+        ret false
+    end
+    ret (fp as i64*)[0] == _CB_MAGIC
 end
 
 func _multi_read(m: _Multi*, off: i64, dst: void*, n: int): int:
@@ -147,6 +162,10 @@ pub func FileClose(fp: void*):
     if fp == null:
         ret
     end
+    if _is_cb(fp):
+        mem.Free(fp)
+        ret
+    end
     if _is_multi(fp):
         m := fp as _Multi*
         repeat m[0].n in i:
@@ -163,12 +182,18 @@ end
 @en "FileSeek"
 @fa "جابجایی در پرونده"
 pub func FileSeek(fp: void*, off: i64): bool:
+    if _is_cb(fp):
+        ret true
+    end
     ret _seek64(fp, off, 0) == 0
 end
 
 @en "FileSize"
 @fa "اندازه پرونده"
 pub func FileSize(fp: void*): i64:
+    if _is_cb(fp):
+        ret (fp as _CbRead*)[0].total
+    end
     if _is_multi(fp):
         ret (fp as _Multi*)[0].total
     end
@@ -186,6 +211,10 @@ pub func FileReadAt(fp: void*, off: i64, dst: void*, n: int): int:
     if n <= 0:
         ret 0
     end
+    if _is_cb(fp):
+        c := fp as _CbRead*
+        ret c[0].read(off, dst, n, c[0].ctx)
+    end
     if _is_multi(fp):
         ret _multi_read(fp as _Multi*, off, dst, n)
     end
@@ -193,6 +222,26 @@ pub func FileReadAt(fp: void*, off: i64, dst: void*, n: int): int:
         ret 0
     end
     ret fread(dst, 1 as u64, n as u64, fp) as int
+end
+
+@en "CallbackOpenRead"
+@fa "بازکردن خواندن تابعی"
+pub func CallbackOpenRead(total: i64, read: func (i64, void*, int, void*) int, ctx: void*): void*:
+    c := mem.AllocateZeroed(sizeof(_CbRead)) as _CbRead*
+    c[0].magic = _CB_MAGIC
+    c[0].total = total
+    c[0].read = read
+    c[0].ctx = ctx
+    ret c as void*
+end
+
+@en "CallbackContext"
+@fa "بافت خواندن تابعی"
+pub func CallbackContext(fp: void*): void*:
+    if not _is_cb(fp):
+        ret null
+    end
+    ret (fp as _CbRead*)[0].ctx
 end
 
 @en "MultiOpenRead"

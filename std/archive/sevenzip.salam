@@ -139,16 +139,15 @@ func _sz_aes_key(password: str, salt: u8*, saltlen: int, cycles: int, key: u8*):
     compress.BufFree(pw)
 end
 
-func _sz_decrypt(c: _SzCoder, inp: _SzIn, out_size: int, password: str, status &: int): compress.ByteBuf:
-    mut out := compress.NewByteBuf()
+func _sz_aes_setup(c: _SzCoder, password: str, key: u8*, iv: u8*, status &: int): bool:
     pr := c.props
     if pr.len < 1:
         status = SEVENZIP_CORRUPT
-        ret out
+        ret false
     end
     if password.len() == 0:
         status = SEVENZIP_ENCRYPTED
-        ret out
+        ret false
     end
     pp := pr.data as u8*
     b0 := pp[0] as int
@@ -160,22 +159,34 @@ func _sz_decrypt(c: _SzCoder, inp: _SzIn, out_size: int, password: str, status &
     saltsize := ((b0 >> 7) & 1) + (b1 >> 4)
     if 2 + saltsize + ivsize > pr.len or ivsize > 16:
         status = SEVENZIP_CORRUPT
-        ret out
+        ret false
     end
     if (b0 & 63) > 24 and (b0 & 63) != 63:
         status = SEVENZIP_UNSUPPORTED
-        ret out
+        ret false
     end
-    key := mem.AllocateZeroed(32 as u64) as u8*
-    iv := mem.AllocateZeroed(16 as u64) as u8*
     repeat ivsize in i:
         iv[i] = pp[2 + saltsize + i]
     end
     salt := ((pr.data as i64) + 2) as u8*
     _sz_aes_key(password, salt, saltsize, b0 & 63, key)
+    ret true
+end
+
+func _sz_decrypt(c: _SzCoder, inp: _SzIn, out_size: int, password: str, status &: int): compress.ByteBuf:
+    mut out := compress.NewByteBuf()
+    key := mem.AllocateZeroed(32 as u64) as u8*
+    iv := mem.AllocateZeroed(16 as u64) as u8*
+    if not _sz_aes_setup(c, password, key, iv, status):
+        mem.Free(key as void*)
+        mem.Free(iv as void*)
+        ret out
+    end
     n16 := inp.n & (-16)
     if n16 < out_size or out_size < 0:
         status = SEVENZIP_CORRUPT
+        mem.Free(key as void*)
+        mem.Free(iv as void*)
         ret out
     end
     mut aes := _aes_new(key, 32)

@@ -491,13 +491,15 @@ EOF_LNOTS
     }
     wk_page_errors() {
         lcode=$(grep -oE '(EXPECT|انتظار|توقع): [^ ]*' "$f" | head -1 | sed -E 's/^(EXPECT|انتظار|توقع): //' | tr -d '\r')
+        ptflags=$(grep -oE '(FLAGS|پرچم): .*' "$f" | head -1 | sed -E 's/^(FLAGS|پرچم): //' | tr -d '\r')
         lfail=""
         extra_out=""
         case "$lcode" in
         E* | خطا*)
             html="$WORK/page_err_${jobid}_$$.html"
             rm -f "$html"
-            if extra_out=$("$SALAM_ABS" page build "$f" --inline --no-minify --output="$html" --no-color --log-level=error --lang="$lang" 2>&1); then
+            # shellcheck disable=SC2086
+            if extra_out=$("$SALAM_ABS" page build "$f" --inline --no-minify --output="$html" --no-color --log-level=error --lang="$lang" $ptflags 2>&1); then
                 lfail="page build exited 0 despite $lcode"
             elif [ -e "$html" ]; then
                 lfail="page build wrote output despite $lcode"

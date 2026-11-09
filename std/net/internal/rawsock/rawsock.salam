@@ -1021,6 +1021,50 @@ pub func ConnectTimeout(host: str, port: int, millis: int): Socket:
     ret out
 end
 
+@en "ConnectAnyTimeout"
+@fa "اتصال به یکی از چند نشانی"
+pub func ConnectAnyTimeout(hosts &: Vector<str>, port: int, millis: int): Socket:
+    if SALAM_OS_WINDOWS:
+        _net_init()
+    end
+    mut addrs := Vector {} as Vector<i64>
+    mut lens := Vector {} as Vector<int>
+    mut fams := Vector {} as Vector<int>
+    repeat hosts.len() in i:
+        mut alen := 0
+        sa := _sockaddr_for(hosts.get(i), port, alen)
+        if sa != null:
+            addrs.push(sa as i64)
+            lens.push(alen)
+            fams.push(_sa_family(sa))
+        end
+    end
+    mut order := _interleave(fams)
+    mut out := Socket { fd = 0 - 1, family = AF_INET }
+    if SALAM_OS_LINUX:
+        mut wait := millis
+        if wait <= 0:
+            wait = 10000
+        end
+        out = _race_connect(addrs, lens, fams, order, wait)
+    else:
+        repeat order.len() in j:
+            if out.fd < 0:
+                k := order.get(j)
+                out = _try_connect(addrs.get(k) as void*, lens.get(k), fams.get(k), SOCK_STREAM)
+            end
+        end
+    end
+    repeat addrs.len() in i:
+        mem.Free(addrs.get(i) as void*)
+    end
+    order.free()
+    addrs.free()
+    lens.free()
+    fams.free()
+    ret out
+end
+
 @en "ConnectProto"
 @fa "اتصال با نوع"
 pub func ConnectProto(host: str, port: int, socktype: int): Socket:
@@ -1207,6 +1251,70 @@ pub func HostPort(host: str, port: int): str:
         ret "[" + h + "]:" + port
     end
     ret h + ":" + port
+end
+
+@en "V6Prefix"
+@fa "پیشوند آی‌پی۶"
+pub func V6Prefix(host: str, bits: int): str:
+    h := _strip_brackets(host)
+    if not _is_v6_text(h):
+        ret str.Clone(h)
+    end
+    mut z := h
+    if _has_char(h, 37):
+        mut cut := 0
+        repeat h.len() in i:
+            if (h as u8*)[i] == 37 and cut == 0:
+                cut = i
+            end
+        end
+        z = h.substr(0, cut)
+    end
+    raw := mem.AllocateZeroed(16 as u64)
+    defer mem.Free(raw)
+    b := raw as u8*
+    if not _parse_ip6(z, b):
+        ret str.Clone(h)
+    end
+    mut keep := bits
+    if keep < 0:
+        keep = 0
+    end
+    if keep > 128:
+        keep = 128
+    end
+    repeat 16 in k:
+        lo := k * 8
+        if lo >= keep:
+            b[k] = 0 as u8
+        else keep - lo < 8:
+            mask := (255 << (8 - (keep - lo))) & 255
+            b[k] = ((b[k] as int) & mask) as u8
+        end
+    end
+    ret _fmt_ip6(b, 0)
+end
+
+@en "HexIPv6"
+@fa "هگزا آی‌پی۶"
+pub func HexIPv6(host: str): str:
+    h := _strip_brackets(host)
+    if not _is_v6_text(h) or _has_char(h, 37):
+        ret ""
+    end
+    raw := mem.AllocateZeroed(16 as u64)
+    defer mem.Free(raw)
+    b := raw as u8*
+    if not _parse_ip6(h, b):
+        ret ""
+    end
+    d := "0123456789abcdef"
+    mut out := ""
+    repeat 16 in i:
+        v := b[i] as int
+        out += d.substr(v >> 4, 1) + d.substr(v & 15, 1)
+    end
+    ret out
 end
 
 @en "ResolveAny"
@@ -1464,6 +1572,56 @@ pub func WaitReadable(sock: Socket, timeout_ms: int): bool:
         evp := ((p as i64) + 4) as i16*
         evp[0] = 1 as i16
         ret poll(p, 1 as usize, timeout_ms) > 0
+    end
+end
+
+@en "WaitReadable2"
+@fa "انتظار برای خواندن دو سوکت"
+pub func WaitReadable2(a: Socket, b: Socket, timeout_ms: int): int:
+    if a.fd < 0 or b.fd < 0:
+        ret 0
+    end
+    mut rc := 0
+    if SALAM_OS_WINDOWS:
+        pw := sizeof(void*) as i64
+        stride := (pw + 4 + pw - 1) / pw * pw
+        p := mem.AllocateZeroed((stride * 2) as u64)
+        defer mem.Free(p)
+        ((p as i64) as usize*)[0] = a.fd as usize
+        (((p as i64) + pw) as i16*)[0] = 256 as i16
+        (((p as i64) + stride) as usize*)[0] = b.fd as usize
+        (((p as i64) + stride + pw) as i16*)[0] = 256 as i16
+        rc = WSAPoll(p, 2 as u32, timeout_ms)
+        if rc <= 0:
+            ret 0
+        end
+        mut out := 0
+        if ((((p as i64) + pw + 2) as i16*)[0] as int) != 0:
+            out |= 1
+        end
+        if ((((p as i64) + stride + pw + 2) as i16*)[0] as int) != 0:
+            out |= 2
+        end
+        ret out
+    else:
+        p := mem.AllocateZeroed(16 as u64)
+        defer mem.Free(p)
+        ((p as i64) as i32*)[0] = a.fd as i32
+        (((p as i64) + 4) as i16*)[0] = 1 as i16
+        (((p as i64) + 8) as i32*)[0] = b.fd as i32
+        (((p as i64) + 12) as i16*)[0] = 1 as i16
+        rc = poll(p, 2 as usize, timeout_ms)
+        if rc <= 0:
+            ret 0
+        end
+        mut out := 0
+        if ((((p as i64) + 6) as i16*)[0] as int) != 0:
+            out |= 1
+        end
+        if ((((p as i64) + 14) as i16*)[0] as int) != 0:
+            out |= 2
+        end
+        ret out
     end
 end
 

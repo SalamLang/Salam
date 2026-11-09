@@ -1,0 +1,359 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package archive
+
+import compress
+import crypto
+import mem
+import os
+import str
+import time
+
+const _ZC_CHUNK := 65536
+
+struct _ZcKeys:
+    pub k0: i64
+    pub k1: i64
+    pub k2: i64
+    pub table: u32*
+end
+
+func _zc_table(): u32*:
+    t := mem.AllocateZeroed(1024 as u64) as u32*
+    repeat 256 in i:
+        mut c := i as i64
+        repeat 8:
+            if (c & (1 as i64)) != (0 as i64):
+                c = (c >> 1) ^ (0xEDB88320 as i64)
+            else:
+                c = c >> 1
+            end
+        end
+        t[i] = c as u32
+    end
+    ret t
+end
+
+func _zc_crc(k: _ZcKeys, crc: i64, b: int): i64:
+    idx := ((crc ^ (b as i64)) & (255 as i64)) as int
+    ret ((crc >> 8) & (0xFFFFFF as i64)) ^ (k.table[idx] as i64)
+end
+
+func _zc_update(k &: _ZcKeys, b: int):
+    k.k0 = _zc_crc(k, k.k0, b)
+    k.k1 = (k.k1 + (k.k0 & (255 as i64))) & (0xFFFFFFFF as i64)
+    k.k1 = (k.k1 * (134775813 as i64) + (1 as i64)) & (0xFFFFFFFF as i64)
+    k.k2 = _zc_crc(k, k.k2, ((k.k1 >> 24) & (255 as i64)) as int)
+end
+
+func _zc_next(k: _ZcKeys): int:
+    t := (k.k2 | (2 as i64)) & (0xFFFF as i64)
+    ret (((t * (t ^ (1 as i64))) >> 8) & (255 as i64)) as int
+end
+
+func _zc_init(password: str): _ZcKeys:
+    mut k := _ZcKeys { k0 = 0x12345678 as i64, k1 = 0x23456789 as i64, k2 = 0x34567890 as i64, table = _zc_table() }
+    pw := password as u8*
+    repeat password.len() in i:
+        _zc_update(k, pw[i] as int)
+    end
+    ret k
+end
+
+func _zc_aes_enc(a: _Aes, src: u8*, dst: u8*):
+    mut s: int[16]
+    mut t: int[16]
+    repeat 16 in i:
+        s[i] = (src[i] as int) ^ (a.rk[i] as int)
+    end
+    mut r := 1
+    until r <= a.rounds:
+        repeat 4 in c:
+            repeat 4 in row:
+                t[4 * c + row] = _AES_SBOX[s[4 * ((c + row) & 3) + row]]
+            end
+        end
+        if r < a.rounds:
+            repeat 4 in c:
+                a0 := t[4 * c]
+                a1 := t[4 * c + 1]
+                a2 := t[4 * c + 2]
+                a3 := t[4 * c + 3]
+                s[4 * c] = _aes_xtime(a0) ^ (_aes_xtime(a1) ^ a1) ^ a2 ^ a3
+                s[4 * c + 1] = a0 ^ _aes_xtime(a1) ^ (_aes_xtime(a2) ^ a2) ^ a3
+                s[4 * c + 2] = a0 ^ a1 ^ _aes_xtime(a2) ^ (_aes_xtime(a3) ^ a3)
+                s[4 * c + 3] = (_aes_xtime(a0) ^ a0) ^ a1 ^ a2 ^ _aes_xtime(a3)
+            end
+        else:
+            repeat 16 in i:
+                s[i] = t[i]
+            end
+        end
+        repeat 16 in i:
+            s[i] ^= (a.rk[r * 16 + i] as int)
+        end
+        r++
+    end
+    repeat 16 in i:
+        dst[i] = s[i] as u8
+    end
+end
+
+func _zc_pbkdf2(password: str, salt: u8*, saltlen: int, iters: int, out: u8*, outlen: int):
+    pw := password as void*
+    pwl := password.len()
+    msg := mem.AllocateZeroed((saltlen + 4) as u64) as u8*
+    repeat saltlen in i:
+        msg[i] = salt[i]
+    end
+    u := mem.AllocateZeroed(20 as u64) as u8*
+    u2 := mem.AllocateZeroed(20 as u64) as u8*
+    acc := mem.AllocateZeroed(20 as u64) as u8*
+    mut block := 1
+    mut done := 0
+    until done < outlen:
+        msg[saltlen] = ((block >> 24) & 255) as u8
+        msg[saltlen + 1] = ((block >> 16) & 255) as u8
+        msg[saltlen + 2] = ((block >> 8) & 255) as u8
+        msg[saltlen + 3] = (block & 255) as u8
+        crypto.HmacSha1Raw(pw, pwl, msg as void*, saltlen + 4, u as void*)
+        repeat 20 in i:
+            acc[i] = u[i]
+        end
+        mut it := 1
+        until it < iters:
+            crypto.HmacSha1Raw(pw, pwl, u as void*, 20, u2 as void*)
+            repeat 20 in i:
+                u[i] = u2[i]
+                acc[i] = ((acc[i] as int) ^ (u[i] as int)) as u8
+            end
+            it++
+        end
+        repeat 20 in i:
+            if done + i < outlen:
+                out[done + i] = acc[i]
+            end
+        end
+        done += 20
+        block++
+    end
+    mem.Free(msg as void*)
+    mem.Free(u as void*)
+    mem.Free(u2 as void*)
+    mem.Free(acc as void*)
+end
+
+func _zc_hmac_begin(key: u8*, klen: int, inner &: _Sha1, outer &: _Sha1):
+    inner = _sha1_new()
+    outer = _sha1_new()
+    ip := mem.AllocateZeroed(64 as u64) as u8*
+    op := mem.AllocateZeroed(64 as u64) as u8*
+    repeat 64 in i:
+        kb := i < klen ? (key[i] as int) : 0
+        ip[i] = (kb ^ 0x36) as u8
+        op[i] = (kb ^ 0x5c) as u8
+    end
+    _sha1_update(inner, ip, 64)
+    _sha1_update(outer, op, 64)
+    mem.Free(ip as void*)
+    mem.Free(op as void*)
+end
+
+func _zc_hmac_end(inner &: _Sha1, outer &: _Sha1, out: u8*):
+    h := mem.AllocateZeroed(40 as u64) as i64*
+    _sha1_final(inner, h)
+    d := mem.AllocateZeroed(20 as u64) as u8*
+    repeat 5 in i:
+        d[i * 4] = ((h[i] >> 24) & (255 as i64)) as u8
+        d[i * 4 + 1] = ((h[i] >> 16) & (255 as i64)) as u8
+        d[i * 4 + 2] = ((h[i] >> 8) & (255 as i64)) as u8
+        d[i * 4 + 3] = (h[i] & (255 as i64)) as u8
+    end
+    _sha1_update(outer, d, 20)
+    _sha1_final(outer, h)
+    repeat 5 in i:
+        out[i * 4] = ((h[i] >> 24) & (255 as i64)) as u8
+        out[i * 4 + 1] = ((h[i] >> 16) & (255 as i64)) as u8
+        out[i * 4 + 2] = ((h[i] >> 8) & (255 as i64)) as u8
+        out[i * 4 + 3] = (h[i] & (255 as i64)) as u8
+    end
+    mem.Free(h as void*)
+    mem.Free(d as void*)
+    _sha1_free(inner)
+    _sha1_free(outer)
+end
+
+func _zc_open_tmp(): str:
+    pid := str.FromInt(os.Pid() as i64)
+    stamp := str.FromInt(time.NowNanos())
+    name := "salam_zipdec_" + pid + "_" + stamp
+    full := os.TempDir() + "/" + name
+    mem.Free(pid as void*)
+    mem.Free(stamp as void*)
+    mem.Free(name as void*)
+    ret full
+end
+
+func _zc_classic(fp: void*, off: i64, comp: i64, r: _ZipRec, password: str, sink &: compress.FileSink): int:
+    if comp < (12 as i64):
+        ret ZIP_CORRUPT
+    end
+    mut k := _zc_init(password)
+    buf := mem.Allocate(_ZC_CHUNK as u64) as u8*
+    mut st := ZIP_OK
+    mut pos := 0 as i64
+    mut first := true
+    until pos < comp and st == ZIP_OK:
+        want := (comp - pos) > (_ZC_CHUNK as i64) ? _ZC_CHUNK : ((comp - pos) as int)
+        if compress.FileReadAt(fp, off + pos, buf as void*, want) != want:
+            st = ZIP_IO
+            break
+        end
+        repeat want in i:
+            c := (buf[i] as int) ^ _zc_next(k)
+            _zc_update(k, c)
+            buf[i] = c as u8
+        end
+        mut from := 0
+        if first:
+            first = false
+            want_byte := (r.flags & 8) != 0 ? ((r.dos_time >> 8) & 255) : (((r.crc >> 24) as int) & 255)
+            if (buf[11] as int) != want_byte:
+                st = ZIP_BAD_PASSWORD
+                break
+            end
+            from = 12
+        end
+        if want > from and not compress.SinkWrite(sink, ((buf as i64) + (from as i64)) as void*, want - from):
+            st = ZIP_IO
+        end
+        pos += want as i64
+    end
+    mem.Free(buf as void*)
+    mem.Free(k.table as void*)
+    ret st
+end
+
+func _zc_wzaes(fp: void*, off: i64, comp: i64, r: _ZipRec, password: str, sink &: compress.FileSink): int:
+    if r.aes < 1 or r.aes > 3:
+        ret ZIP_UNSUPPORTED
+    end
+    klen := 8 * (r.aes + 1)
+    slen := 4 * (r.aes + 1)
+    if comp < (slen + 12) as i64:
+        ret ZIP_CORRUPT
+    end
+    hdr := mem.AllocateZeroed((slen + 2) as u64) as u8*
+    if compress.FileReadAt(fp, off, hdr as void*, slen + 2) != slen + 2:
+        mem.Free(hdr as void*)
+        ret ZIP_IO
+    end
+    dk := mem.AllocateZeroed((2 * klen + 2) as u64) as u8*
+    _zc_pbkdf2(password, hdr, slen, 1000, dk, 2 * klen + 2)
+    if (dk[2 * klen] != hdr[slen]) or (dk[2 * klen + 1] != hdr[slen + 1]):
+        mem.Free(hdr as void*)
+        mem.Free(dk as void*)
+        ret ZIP_BAD_PASSWORD
+    end
+    mut a := _aes_new(dk, klen)
+    mut inner := _sha1_new()
+    mut outer := _sha1_new()
+    _zc_hmac_begin(((dk as i64) + (klen as i64)) as u8*, klen, inner, outer)
+    body := comp - (slen + 2 + 10) as i64
+    buf := mem.Allocate(_ZC_CHUNK as u64) as u8*
+    ctr := mem.AllocateZeroed(16 as u64) as u8*
+    ks := mem.AllocateZeroed(16 as u64) as u8*
+    mut st := ZIP_OK
+    mut pos := 0 as i64
+    mut blk := 0
+    until pos < body and st == ZIP_OK:
+        want := (body - pos) > (_ZC_CHUNK as i64) ? _ZC_CHUNK : ((body - pos) as int)
+        if compress.FileReadAt(fp, off + (slen + 2) as i64 + pos, buf as void*, want) != want:
+            st = ZIP_IO
+            break
+        end
+        _sha1_update(inner, buf, want)
+        mut i := 0
+        until i < want:
+            if blk == 0:
+                mut c := 0
+                until c < 16:
+                    v := (ctr[c] as int) + 1
+                    ctr[c] = (v & 255) as u8
+                    if v < 256:
+                        break
+                    end
+                    c++
+                end
+                _zc_aes_enc(a, ctr, ks)
+            end
+            buf[i] = ((buf[i] as int) ^ (ks[blk] as int)) as u8
+            blk = (blk + 1) & 15
+            i++
+        end
+        if not compress.SinkWrite(sink, buf as void*, want):
+            st = ZIP_IO
+        end
+        pos += want as i64
+    end
+    if st == ZIP_OK:
+        mac := mem.AllocateZeroed(20 as u64) as u8*
+        _zc_hmac_end(inner, outer, mac)
+        stored := mem.AllocateZeroed(10 as u64) as u8*
+        if compress.FileReadAt(fp, off + comp - (10 as i64), stored as void*, 10) != 10:
+            st = ZIP_IO
+        else:
+            repeat 10 in i:
+                if mac[i] != stored[i]:
+                    st = ZIP_BAD_CRC
+                end
+            end
+        end
+        mem.Free(mac as void*)
+        mem.Free(stored as void*)
+    else:
+        _sha1_free(inner)
+        _sha1_free(outer)
+    end
+    _aes_free(a)
+    mem.Free(hdr as void*)
+    mem.Free(dk as void*)
+    mem.Free(buf as void*)
+    mem.Free(ctr as void*)
+    mem.Free(ks as void*)
+    ret st
+end
+
+func _zc_decrypt_file(fp: void*, off: i64, comp: i64, r: _ZipRec, password: str, tmp: str): i64:
+    mut sink := compress.SinkOpen(tmp, 0 as i64)
+    if sink.failed:
+        ret (0 as i64) - (ZIP_IO as i64)
+    end
+    mut st := ZIP_OK
+    if r.method == 99:
+        st = _zc_wzaes(fp, off, comp, r, password, sink)
+    else:
+        st = _zc_classic(fp, off, comp, r, password, sink)
+    end
+    closed := compress.SinkClose(sink)
+    if st == ZIP_OK and not closed:
+        st = ZIP_IO
+    end
+    if st != ZIP_OK:
+        os.Remove(tmp)
+        ret (0 as i64) - (st as i64)
+    end
+    ret sink.written
+end

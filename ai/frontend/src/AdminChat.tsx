@@ -113,6 +113,11 @@ export function AdminChat({ id }: { id: string }) {
             {allOpen ? t("بستن همه‌ی جزئیات", "Close all details") : t("باز کردن جزئیات همه‌ی پاسخ‌ها", "Open details for all answers")}
           </button>
         )}
+        {data.chat.langfuse_url && (
+          <a className="button ghost small" href={data.chat.langfuse_url} target="_blank" rel="noreferrer">
+            {t("مشاهده در Langfuse", "Open in Langfuse")}
+          </a>
+        )}
       </header>
       {data.messages.map((m) => (
         <div key={m.id} className="admin-turn">

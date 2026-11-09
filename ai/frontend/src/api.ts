@@ -22,6 +22,7 @@ export type Chat = {
   queued?: number;
   online?: boolean;
   last_error?: boolean;
+  langfuse_url?: string;
 };
 export type Project = {
   id: string;

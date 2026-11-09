@@ -756,13 +756,6 @@ note_result() {
     printf '%s\n' "$1"
 }
 
-legacy_markers=$(grep -rIlE '^[[:space:]]*// انتظار-(پیام|نه):' "$TOOLS_DIR/../../tests" 2>/dev/null)
-if [ -n "$legacy_markers" ]; then
-    echo "FAIL a Persian test marker still has a hyphen (write 'انتظار پیام' and 'انتظار نه' with a space):"
-    printf '  %s\n' $legacy_markers
-    exit 1
-fi
-
 SECTIONS="$*"
 
 MOCK_AR=${AR:-ar}

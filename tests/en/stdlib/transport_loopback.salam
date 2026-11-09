@@ -1,0 +1,266 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import mem
+import sync
+import net.tcp
+import net.transport
+
+mut port := 0
+mut ready := sync.NewWaitGroup()
+mut srv_settings := transport.Settings {}
+mut srv_err := ""
+mut srv_path := ""
+mut srv_early := 0
+mut hello_reads := 0
+mut hello_total := 0
+mut hello_ok := false
+mut hello_sni := false
+mut hello_port := 0
+
+func echo_server():
+    l := transport.Listen(0, srv_settings)
+    port = transport.ListenerPort(l)
+    sync.Done(ready)
+    if not transport.ListenerOk(l):
+        srv_err = "listener failed"
+        ret
+    end
+    mut c := transport.Accept(l)
+    if transport.Ok(c):
+        srv_path = c.request_path
+        srv_early = c.pre.len
+        buf := mem.Allocate(65536 as u64)
+        until true:
+            n := transport.Read(c, buf, 65536)
+            if n <= 0:
+                break
+            end
+            transport.Write(c, buf, n)
+        end
+        mem.Free(buf)
+        transport.Close(c)
+    else:
+        srv_err = c.err
+    end
+    transport.CloseListener(l)
+end
+
+func hello_sink():
+    srv := tcp.Bind(0)
+    hello_port = tcp.Port(srv)
+    sync.Done(ready)
+    c := tcp.Accept(srv)
+    buf := mem.AllocateZeroed(4096 as u64)
+    bp := buf as u8*
+    mut got := 0
+    mut want := 5
+    tcp.SetReadDeadline(c, 3000)
+    until got < want:
+        n := tcp.ReadBytes(c, ((buf as i64) + (got as i64)) as void*, want - got)
+        if n <= 0:
+            break
+        end
+        hello_reads++
+        got += n
+        if got >= 5 and want == 5:
+            want = 5 + (bp[3] as int) * 256 + (bp[4] as int)
+        end
+    end
+    hello_total = got
+    hello_ok = got == want and (bp[0] as int) == 22 and (bp[1] as int) == 3
+    mut found := false
+    needle := "www.example.org"
+    nb := needle as u8*
+    repeat got - 15 in i:
+        mut same := true
+        repeat 15 in k:
+            if bp[i + k] != nb[k]:
+                same = false
+                break
+            end
+        end
+        if same:
+            found = true
+            break
+        end
+    end
+    hello_sni = found
+    mem.Free(buf)
+    tcp.Close(c)
+    tcp.CloseServer(srv)
+end
+
+func hello_check():
+    sync.Add(ready, 1 as i64)
+    t := spawn(hello_sink)
+    sync.Wait(ready)
+    mut s := transport.Settings {}
+    s.tls = true
+    s.allow_insecure = true
+    s.sni = "www.example.org"
+    s.fragment = true
+    s.fragment_min = 4
+    s.fragment_max = 8
+    s.fragment_delay_ms = 1
+    mut c := transport.Dial("127.0.0.1", hello_port, s)
+    join(t)
+    println "hello reassembled:", hello_ok, "sni intact:", hello_sni, "split into many reads:", hello_reads > 20, "record bytes:", hello_total > 100
+    if transport.Ok(c):
+        transport.Close(c)
+    end
+end
+
+func pattern(n: int, seed: int): transport.Bytes:
+    mut b := transport.NewBytes(n + 1)
+    repeat n in i:
+        transport.Put8(b, (i * 7 + seed) & 255)
+    end
+    ret b
+end
+
+func scenario(label: str, cs: transport.Settings, ss: transport.Settings, early: int):
+    srv_settings = ss
+    srv_err = ""
+    srv_path = ""
+    srv_early = 0
+    sync.Add(ready, 1 as i64)
+    t := spawn(echo_server)
+    sync.Wait(ready)
+    mut e := transport.Bytes {}
+    if early > 0:
+        e = pattern(early, 1)
+    end
+    mut c := transport.DialEarly("127.0.0.1", port, cs, e)
+    if not transport.Ok(c):
+        println label, "dial failed:", c.err
+        join(t)
+        ret
+    end
+    mut good := true
+    mut total := 0
+    if early > 0:
+        eb := mem.AllocateZeroed((early + 1) as u64)
+        if not transport.ReadFull(c, eb, early):
+            good = false
+        else:
+            ep := eb as u8*
+            repeat early in k:
+                if (ep[k] as int) != ((k * 7 + 1) & 255):
+                    good = false
+                end
+            end
+        end
+        mem.Free(eb)
+    end
+    mut sizes := Vector {} as Vector<int>
+    sizes.push(11)
+    sizes.push(300)
+    sizes.push(70000)
+    repeat sizes.len() in i:
+        n := sizes.get(i)
+        mut out := pattern(n, i + 5)
+        back := mem.AllocateZeroed((n + 1) as u64)
+        if not transport.Write(c, out.p, n):
+            good = false
+        end
+        if not transport.ReadFull(c, back, n):
+            good = false
+        else:
+            bp := back as u8*
+            repeat n in k:
+                if (bp[k] as int) != ((k * 7 + i + 5) & 255):
+                    good = false
+                    break
+                end
+            end
+        end
+        total += n
+        mem.Free(back)
+        transport.FreeBytes(out)
+    end
+    sizes.free()
+    transport.Close(c)
+    join(t)
+    println label, "echo ok:", good, "bytes:", total, "path:", srv_path, "early:", srv_early, srv_err
+end
+
+func check_fragments():
+    sizes := transport.FragmentSizes(100, 3, 9)
+    mut sum := 0
+    mut ok := true
+    repeat sizes.len() in i:
+        n := sizes.get(i)
+        sum += n
+        if n > 9 or (n < 3 and i != sizes.len() - 1):
+            ok = false
+        end
+    end
+    println "fragment sizes sum:", sum, "within bounds:", ok, "pieces:", sizes.len() >= 12
+    sizes.free()
+end
+
+func main:
+    check_fragments()
+    hello_check()
+    plain := transport.Settings {}
+    scenario("tcp", plain, plain, 0)
+
+    mut ws := transport.Settings {}
+    ws.network = "ws"
+    ws.path = "/vless-ws"
+    ws.host = "cdn.example.com"
+    ws.headers = "X-Test: 1"
+    scenario("ws", ws, ws, 0)
+
+    mut wse := ws
+    wse.early_data = 2048
+    scenario("ws early data", wse, wse, 100)
+
+    mut hu := transport.Settings {}
+    hu.network = "httpupgrade"
+    hu.path = "/up"
+    scenario("httpupgrade", hu, hu, 0)
+
+    mut tl := transport.Settings {}
+    tl.tls = true
+    tl.allow_insecure = true
+    tl.sni = "www.example.org"
+    mut tls_srv := transport.Settings {}
+    tls_srv.tls = true
+    tls_srv.cert_file = "tests/fixtures/ssl/server.crt"
+    tls_srv.key_file = "tests/fixtures/ssl/server.key"
+    scenario("tls", tl, tls_srv, 0)
+
+    mut wss := ws
+    wss.tls = true
+    wss.allow_insecure = true
+    wss.sni = "www.example.org"
+    mut wss_srv := ws
+    wss_srv.tls = true
+    wss_srv.cert_file = "tests/fixtures/ssl/server.crt"
+    wss_srv.key_file = "tests/fixtures/ssl/server.key"
+    scenario("wss", wss, wss_srv, 0)
+
+    mut frag := tl
+    frag.fragment = true
+    frag.fragment_min = 3
+    frag.fragment_max = 9
+    frag.fragment_delay_ms = 1
+    scenario("tls fragmented hello", frag, tls_srv, 0)
+
+    mut bad := ws
+    bad.path = "/elsewhere"
+    scenario("wrong path", bad, ws, 0)
+end

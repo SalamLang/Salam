@@ -1,0 +1,721 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ui
+
+import str
+import mem
+
+struct _Node:
+    pub tag: str = ""
+    pub text: str = ""
+    pub names: Vector<str> = Vector {}
+    pub values: Vector<str> = Vector {}
+    pub parent: int = -1
+    pub kids: Vector<int> = Vector {}
+    pub uid: int = 0
+end
+
+struct _Dom:
+    pub nodes: Vector<_Node> = Vector {}
+    pub html: int = -1
+    pub head: int = -1
+    pub body: int = -1
+    pub title: str = ""
+    pub lang: str = ""
+    pub dir: str = ""
+    pub css: str = ""
+    pub icon: str = ""
+end
+
+inline func _hb(p: u8*, i: int): int:
+    ret p[i] as int
+end
+
+func _sfree(s: str):
+    if s.len() > 0:
+        mem.Free(s as void*)
+    end
+end
+
+func _is_ws(c: int): bool:
+    ret c == 32 or c == 9 or c == 10 or c == 13 or c == 12
+end
+
+func _lower(s: str): str:
+    mut b := str.NewBuilder()
+    p := (s as void*) as u8*
+    repeat s.len() in i:
+        c := _hb(p, i)
+        if c >= 65 and c <= 90:
+            str.BufAppendChar(b, c + 32)
+        else:
+            str.BufAppendChar(b, c)
+        end
+    end
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
+
+func _slice(s: str, a: int, b: int): str:
+    if b <= a:
+        ret str.Clone("")
+    end
+    ret str.SubstrIn(s, a, b - a)
+end
+
+func _is_void(tag: str): bool:
+    switch tag:
+        "area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "source", "track", "wbr", "param", "keygen":
+            ret true
+        end
+        else:
+            ret false
+        end
+    end
+    ret false
+end
+
+func _is_raw(tag: str): bool:
+    ret tag == "style" or tag == "script" or tag == "title" or tag == "textarea" or tag == "xmp"
+end
+
+func _named_entity(name: str): int:
+    switch name:
+        "amp": ret 38 end
+        "lt": ret 60 end
+        "gt": ret 62 end
+        "quot": ret 34 end
+        "apos": ret 39 end
+        "nbsp": ret 160 end
+        "copy": ret 169 end
+        "reg": ret 174 end
+        "trade": ret 8482 end
+        "hellip": ret 8230 end
+        "mdash": ret 8212 end
+        "ndash": ret 8211 end
+        "laquo": ret 171 end
+        "raquo": ret 187 end
+        "lsquo": ret 8216 end
+        "rsquo": ret 8217 end
+        "ldquo": ret 8220 end
+        "rdquo": ret 8221 end
+        "middot": ret 183 end
+        "bull": ret 8226 end
+        "times": ret 215 end
+        "divide": ret 247 end
+        "deg": ret 176 end
+        "euro": ret 8364 end
+        "zwnj": ret 8204 end
+        "zwj": ret 8205 end
+        "lrm": ret 8206 end
+        "rlm": ret 8207 end
+        "shy": ret 173 end
+        "larr": ret 8592 end
+        "rarr": ret 8594 end
+        "uarr": ret 8593 end
+        "darr": ret 8595 end
+        else: ret -1 end
+    end
+    ret -1
+end
+
+func _decode_entities(s: str): str:
+    if not s.includes("&"):
+        ret str.Clone(s)
+    end
+    p := (s as void*) as u8*
+    n := s.len()
+    mut b := str.NewBuilder()
+    mut i := 0
+    until i < n:
+        c := _hb(p, i)
+        if c != 38:
+            str.BufAppendChar(b, c)
+            i++
+            continue
+        end
+        mut j := i + 1
+        until j < n and j - i < 34 and _hb(p, j) != 59 and _hb(p, j) != 38 and not _is_ws(_hb(p, j)):
+            j++
+        end
+        mut cp := -1
+        if j < n and _hb(p, j) == 59 and j > i + 1:
+            body := _slice(s, i + 1, j)
+            if _hb(p, i + 1) == 35:
+                mut v := 0
+                mut ok := true
+                if j > i + 2 and (_hb(p, i + 2) == 120 or _hb(p, i + 2) == 88):
+                    mut k := i + 3
+                    until k < j:
+                        d := _hb(p, k)
+                        if d >= 48 and d <= 57:
+                            v *= 16 + d - 48
+                        else d >= 97 and d <= 102:
+                            v *= 16 + d - 87
+                        else d >= 65 and d <= 70:
+                            v *= 16 + d - 55
+                        else:
+                            ok = false
+                        end
+                        if v > 0x10FFFF:
+                            ok = false
+                        end
+                        k++
+                    end
+                    ok = ok and j > i + 3
+                else:
+                    mut k := i + 2
+                    until k < j:
+                        d := _hb(p, k)
+                        if d >= 48 and d <= 57:
+                            v *= 10 + d - 48
+                        else:
+                            ok = false
+                        end
+                        if v > 0x10FFFF:
+                            ok = false
+                        end
+                        k++
+                    end
+                    ok = ok and j > i + 2
+                end
+                if ok:
+                    cp = v == 0 ? 0xFFFD : v
+                end
+            else:
+                cp = _named_entity(body)
+            end
+            _sfree(body)
+        end
+        if cp >= 0:
+            str.BufAppendCp(b, cp)
+            i = j + 1
+        else:
+            str.BufAppendChar(b, c)
+            i++
+        end
+    end
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
+
+func _new_node(d &: _Dom, tag: str, parent: int): int:
+    mut nd := _Node { tag = tag, parent = parent }
+    nd.names = Vector {} as Vector<str>
+    nd.values = Vector {} as Vector<str>
+    nd.kids = Vector {} as Vector<int>
+    d.nodes.push(nd)
+    id := d.nodes.len() - 1
+    if parent >= 0:
+        mut pn := d.nodes.ref(parent)
+        pn.kids.push(id)
+    end
+    ret id
+end
+
+func _add_text(d &: _Dom, parent: int, text: str):
+    if text.len() == 0:
+        ret
+    end
+    pn := d.nodes[parent]
+    if pn.kids.len() > 0:
+        last := pn.kids[pn.kids.len() - 1]
+        if d.nodes[last].tag == "#text":
+            mut ln := d.nodes.ref(last)
+            old := ln.text
+            ln.text = old + text
+            _sfree(old)
+            ret
+        end
+    end
+    id := _new_node(d, "#text", parent)
+    mut tn := d.nodes.ref(id)
+    tn.text = str.Clone(text)
+end
+
+func _attr(d: _Dom, node: int, name: str): str:
+    if node < 0 or node >= d.nodes.len():
+        ret ""
+    end
+    nd := d.nodes[node]
+    repeat nd.names.len() in i:
+        if nd.names[i] == name:
+            ret nd.values[i]
+        end
+    end
+    ret ""
+end
+
+func _has_attr(d: _Dom, node: int, name: str): bool:
+    if node < 0 or node >= d.nodes.len():
+        ret false
+    end
+    nd := d.nodes[node]
+    repeat nd.names.len() in i:
+        if nd.names[i] == name:
+            ret true
+        end
+    end
+    ret false
+end
+
+func _set_attr(d &: _Dom, node: int, name: str, value: str):
+    mut nd := d.nodes.ref(node)
+    repeat nd.names.len() in i:
+        if nd.names[i] == name:
+            old := nd.values[i]
+            nd.values[i] = str.Clone(value)
+            _sfree(old)
+            ret
+        end
+    end
+    nd.names.push(str.Clone(name))
+    nd.values.push(str.Clone(value))
+end
+
+func _remove_attr(d &: _Dom, node: int, name: str):
+    mut nd := d.nodes.ref(node)
+    repeat nd.names.len() in i:
+        if nd.names[i] == name:
+            _sfree(nd.names[i])
+            _sfree(nd.values[i])
+            nd.names.remove_at(i)
+            nd.values.remove_at(i)
+            ret
+        end
+    end
+end
+
+func _implied_end(open: str, next: str): bool:
+    switch open:
+        "p":
+            switch next:
+                "address", "article", "aside", "blockquote", "details", "dialog", "div", "dl", "fieldset", "figcaption", "figure", "footer", "form", "h1", "h2", "h3", "h4", "h5", "h6", "header", "hgroup", "hr", "main", "menu", "nav", "ol", "p", "pre", "section", "table", "ul":
+                    ret true
+                end
+                else: ret false end
+            end
+        end
+        "li": ret next == "li" end
+        "option": ret next == "option" or next == "optgroup" end
+        "dt", "dd": ret next == "dt" or next == "dd" end
+        "tr": ret next == "tr" end
+        "td", "th": ret next == "td" or next == "th" or next == "tr" end
+        else: ret false end
+    end
+    ret false
+end
+
+func _parse_attrs(d &: _Dom, node: int, s: str, p: u8*, n: int, start: int, self_close &: bool): int:
+    mut i := start
+    until i < n:
+        until i < n and _is_ws(_hb(p, i)):
+            i++
+        end
+        if i >= n:
+            ret n
+        end
+        c := _hb(p, i)
+        if c == 62:
+            ret i + 1
+        end
+        if c == 47:
+            if i + 1 < n and _hb(p, i + 1) == 62:
+                self_close = true
+                ret i + 2
+            end
+            i++
+            continue
+        end
+        ns := i
+        until i < n and not _is_ws(_hb(p, i)) and _hb(p, i) != 61 and _hb(p, i) != 62 and not (_hb(p, i) == 47 and i + 1 < n and _hb(p, i + 1) == 62):
+            i++
+        end
+        raw_name := _slice(s, ns, i)
+        name := _lower(raw_name)
+        _sfree(raw_name)
+        until i < n and _is_ws(_hb(p, i)):
+            i++
+        end
+        mut value := str.Clone("")
+        if i < n and _hb(p, i) == 61:
+            i++
+            until i < n and _is_ws(_hb(p, i)):
+                i++
+            end
+            if i < n and (_hb(p, i) == 34 or _hb(p, i) == 39):
+                q := _hb(p, i)
+                vs := i + 1
+                i++
+                until i < n and _hb(p, i) != q:
+                    i++
+                end
+                raw := _slice(s, vs, i)
+                _sfree(value)
+                value = _decode_entities(raw)
+                _sfree(raw)
+                if i < n:
+                    i++
+                end
+            else:
+                vs := i
+                until i < n and not _is_ws(_hb(p, i)) and _hb(p, i) != 62:
+                    i++
+                end
+                raw := _slice(s, vs, i)
+                _sfree(value)
+                value = _decode_entities(raw)
+                _sfree(raw)
+            end
+        end
+        if name.len() > 0 and not _has_attr(d, node, name):
+            mut nd := d.nodes.ref(node)
+            nd.names.push(name)
+            nd.values.push(value)
+        else:
+            _sfree(name)
+            _sfree(value)
+        end
+    end
+    ret n
+end
+
+func _find_ci(p: u8*, n: int, from: int, needle: str): int:
+    q := (needle as void*) as u8*
+    m := needle.len()
+    mut i := from
+    until i + m <= n:
+        mut ok := true
+        repeat m in k:
+            mut c := _hb(p, i + k)
+            if c >= 65 and c <= 90:
+                c += 32
+            end
+            if c != _hb(q, k):
+                ok = false
+                break
+            end
+        end
+        if ok:
+            ret i
+        end
+        i++
+    end
+    ret -1
+end
+
+func _close_to(d &: _Dom, stack &: Vector<int>, tag: str): bool:
+    mut k := stack.len() - 1
+    until k >= 1:
+        if d.nodes[stack[k]].tag == tag:
+            until stack.len() > k:
+                stack.pop()
+            end
+            ret true
+        end
+        k--
+    end
+    ret false
+end
+
+func _parse_html(src: str): _Dom:
+    mut d := _Dom {}
+    d.nodes = Vector {} as Vector<_Node>
+    root := _new_node(d, "#document", -1)
+    mut stack := Vector {} as Vector<int>
+    defer stack.free()
+    stack.push(root)
+    p := (src as void*) as u8*
+    n := src.len()
+    mut i := 0
+    mut text_start := 0
+    until i < n:
+        if _hb(p, i) != 60:
+            i++
+            continue
+        end
+        if i + 1 >= n:
+            break
+        end
+        c1 := _hb(p, i + 1)
+        is_tag := (c1 >= 97 and c1 <= 122) or (c1 >= 65 and c1 <= 90) or c1 == 47 or c1 == 33
+        if not is_tag:
+            i++
+            continue
+        end
+        if i > text_start:
+            raw := _slice(src, text_start, i)
+            dec := _decode_entities(raw)
+            _add_text(d, stack[stack.len() - 1], dec)
+            _sfree(dec)
+            _sfree(raw)
+        end
+        if c1 == 33:
+            if i + 3 < n and _hb(p, i + 2) == 45 and _hb(p, i + 3) == 45:
+                e := str.IndexFrom(src, "-->", i + 4)
+                i = e < 0 ? n : e + 3
+            else:
+                mut j := i + 2
+                until j < n and _hb(p, j) != 62:
+                    j++
+                end
+                i = j + 1
+            end
+            text_start = i
+            continue
+        end
+        if c1 == 47:
+            mut j := i + 2
+            until j < n and not _is_ws(_hb(p, j)) and _hb(p, j) != 62:
+                j++
+            end
+            raw := _slice(src, i + 2, j)
+            tag := _lower(raw)
+            _sfree(raw)
+            until j < n and _hb(p, j) != 62:
+                j++
+            end
+            i = j + 1
+            text_start = i
+            if tag == "br":
+                _new_node(d, "br", stack[stack.len() - 1])
+            else:
+                _close_to(d, stack, tag)
+            end
+            _sfree(tag)
+            continue
+        end
+        mut j := i + 1
+        until j < n and not _is_ws(_hb(p, j)) and _hb(p, j) != 62 and _hb(p, j) != 47:
+            j++
+        end
+        raw := _slice(src, i + 1, j)
+        tag := _lower(raw)
+        _sfree(raw)
+        mut top := stack[stack.len() - 1]
+        until stack.len() > 1 and _implied_end(d.nodes[top].tag, tag):
+            stack.pop()
+            top = stack[stack.len() - 1]
+        end
+        node := _new_node(d, tag, top)
+        mut self_close := false
+        i = _parse_attrs(d, node, src, p, n, j, self_close)
+        text_start = i
+        if _is_raw(tag):
+            close := "</" + tag
+            e := _find_ci(p, n, i, close)
+            _sfree(close)
+            end_at := e < 0 ? n : e
+            mut cs := i
+            if tag == "textarea" and cs < end_at and _hb(p, cs) == 10:
+                cs++
+            end
+            body := _slice(src, cs, end_at)
+            if tag == "style" or tag == "script":
+                _add_text(d, node, body)
+            else:
+                dec := _decode_entities(body)
+                _add_text(d, node, dec)
+                _sfree(dec)
+            end
+            _sfree(body)
+            if e < 0:
+                i = n
+            else:
+                mut k := e
+                until k < n and _hb(p, k) != 62:
+                    k++
+                end
+                i = k + 1
+            end
+            text_start = i
+            continue
+        end
+        if not _is_void(tag) and not self_close:
+            stack.push(node)
+            if tag == "pre" or tag == "listing":
+                if i < n and _hb(p, i) == 10:
+                    i++
+                    text_start = i
+                end
+            end
+        end
+    end
+    if n > text_start:
+        raw := _slice(src, text_start, n)
+        dec := _decode_entities(raw)
+        _add_text(d, stack[stack.len() - 1], dec)
+        _sfree(dec)
+        _sfree(raw)
+    end
+    _dom_finish(d)
+    ret d
+end
+
+func _find_tag(d: _Dom, from: int, tag: str): int:
+    if d.nodes[from].tag == tag:
+        ret from
+    end
+    each k in d.nodes[from].kids:
+        r := _find_tag(d, k, tag)
+        if r >= 0:
+            ret r
+        end
+    end
+    ret -1
+end
+
+func _text_of(d: _Dom, node: int): str:
+    mut b := str.NewBuilder()
+    _collect_text(d, node, b)
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
+
+func _collect_text(d: _Dom, node: int, b &: str.StringBuilder):
+    nd := d.nodes[node]
+    if nd.tag == "#text":
+        str.BufAppend(b, nd.text)
+        ret
+    end
+    each k in nd.kids:
+        _collect_text(d, k, b)
+    end
+end
+
+func _reparent(d &: _Dom, node: int, parent: int):
+    old := d.nodes[node].parent
+    if old >= 0:
+        mut onode := d.nodes.ref(old)
+        repeat onode.kids.len() in i:
+            if onode.kids[i] == node:
+                onode.kids.remove_at(i)
+                break
+            end
+        end
+    end
+    mut nd := d.nodes.ref(node)
+    nd.parent = parent
+    mut pn := d.nodes.ref(parent)
+    pn.kids.push(node)
+end
+
+func _dom_finish(d &: _Dom):
+    mut html := _find_tag(d, 0, "html")
+    if html < 0:
+        html = _new_node(d, "html", -1)
+        doc := d.nodes.ref(0)
+        mut moved := Vector {} as Vector<int>
+        each k in doc.kids:
+            moved.push(k)
+        end
+        each k in moved:
+            _reparent(d, k, html)
+        end
+        moved.free()
+        mut hn := d.nodes.ref(html)
+        hn.parent = 0
+        mut doc2 := d.nodes.ref(0)
+        doc2.kids.push(html)
+    end
+    d.html = html
+    mut body := _find_tag(d, html, "body")
+    head := _find_tag(d, html, "head")
+    if body < 0:
+        body = _new_node(d, "body", html)
+        mut moved := Vector {} as Vector<int>
+        each k in d.nodes[html].kids:
+            if k != body and k != head:
+                moved.push(k)
+            end
+        end
+        each k in moved:
+            _reparent(d, k, body)
+        end
+        moved.free()
+    end
+    d.body = body
+    d.head = head
+    d.lang = _attr(d, html, "lang")
+    d.dir = _attr(d, html, "dir")
+    t := _find_tag(d, html, "title")
+    if t >= 0:
+        d.title = _text_of(d, t)
+    end
+    mut css := str.NewBuilder()
+    _collect_styles(d, html, css)
+    d.css = str.BufStr(css)
+    str.BufFree(css)
+    _find_icon(d, html)
+end
+
+func _collect_styles(d &: _Dom, node: int, b &: str.StringBuilder):
+    nd := d.nodes[node]
+    if nd.tag == "style":
+        media := _attr(d, node, "media")
+        if media.len() > 0:
+            str.BufAppend(b, "@media " + media + " {\n")
+        end
+        each k in nd.kids:
+            str.BufAppend(b, d.nodes[k].text)
+        end
+        if media.len() > 0:
+            str.BufAppend(b, "\n}")
+        end
+        str.BufAppend(b, "\n")
+        ret
+    end
+    each k in nd.kids:
+        _collect_styles(d, k, b)
+    end
+end
+
+func _find_icon(d &: _Dom, node: int):
+    nd := d.nodes[node]
+    if nd.tag == "link":
+        rel := _lower(_attr(d, node, "rel"))
+        if rel.includes("icon") and d.icon.len() == 0:
+            d.icon = _attr(d, node, "href")
+        end
+        _sfree(rel)
+    end
+    each k in nd.kids:
+        _find_icon(d, k)
+    end
+end
+
+func _dom_free(d &: _Dom):
+    repeat d.nodes.len() in i:
+        mut nd := d.nodes.ref(i)
+        _sfree(nd.text)
+        each s in nd.names:
+            _sfree(s)
+        end
+        each s in nd.values:
+            _sfree(s)
+        end
+        nd.names.free()
+        nd.values.free()
+        nd.kids.free()
+    end
+    d.nodes.free()
+    _sfree(d.title)
+    _sfree(d.css)
+    d.title = ""
+    d.css = ""
+end

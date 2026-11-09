@@ -1,0 +1,963 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ui
+
+import str
+import math
+import gui.css
+import gui.cssbox
+import gui.paint
+import gui.typeset
+
+const _OUT_NONE := 0
+const _OUT_BLOCK := 1
+const _OUT_INLINE := 2
+const _OUT_ATOM := 3
+
+func _ensure_fonts():
+    if _fonts_ready:
+        ret
+    end
+    _fonts_ready = true
+    if _fonts_added == 0:
+        _n := typeset.AddSystemFonts(_fc)
+    end
+end
+
+func _ensure_gcache():
+    if not _gcache_ready:
+        _gcache = typeset.NewGlyphCache(4 * 1024 * 1024)
+        _gcache_ready = true
+    end
+end
+
+func _is_replaced(tag: str): bool:
+    switch tag:
+        "img", "input", "select", "textarea", "progress", "meter", "canvas", "video", "iframe", "embed", "object", "audio":
+            ret true
+        end
+        else:
+            ret false
+        end
+    end
+    ret false
+end
+
+func _input_type(node: int): str:
+    t := _attr(_e.dom, node, "type")
+    if t.len() == 0:
+        ret "text"
+    end
+    ret t
+end
+
+func _is_text_input(node: int): bool:
+    tag := _e.dom.nodes[node].tag
+    if tag == "textarea":
+        ret true
+    end
+    if tag != "input":
+        ret false
+    end
+    t := _input_type(node)
+    switch t:
+        "text", "password", "email", "search", "url", "tel", "number":
+            ret true
+        end
+        else:
+            ret false
+        end
+    end
+    ret false
+end
+
+func _is_button_input(node: int): bool:
+    if _e.dom.nodes[node].tag != "input":
+        ret false
+    end
+    t := _input_type(node)
+    ret t == "button" or t == "submit" or t == "reset"
+end
+
+func _has_block_desc(node: int): bool:
+    each k in _e.dom.nodes[node].kids:
+        i := _e.node_el[k]
+        if i >= 0:
+            cs := _e.st[i]
+            d := cs.display
+            if d != css.Display.None and d != css.Display.Inline and d != css.Display.InlineBlock and d != css.Display.InlineFlex and d != css.Display.InlineGrid and d != css.Display.InlineTable and d != css.Display.Contents:
+                if not _is_replaced(_e.dom.nodes[k].tag):
+                    ret true
+                end
+            end
+            if d == css.Display.Inline and _has_block_desc(k):
+                ret true
+            end
+        end
+    end
+    ret false
+end
+
+func _details_hidden(node: int): bool:
+    p := _e.dom.nodes[node].parent
+    if p < 0 or _e.dom.nodes[p].tag != "details":
+        ret false
+    end
+    if _details_open(p):
+        ret false
+    end
+    each k in _e.dom.nodes[p].kids:
+        if _e.dom.nodes[k].tag == "summary":
+            ret k != node
+        end
+    end
+    ret true
+end
+
+func _details_open(node: int): bool:
+    i := _e.node_el[node]
+    if i >= 0:
+        ret _e.els[i].HasAttr("open")
+    end
+    ret false
+end
+
+func _outer(node: int): int:
+    nd := _e.dom.nodes[node]
+    if _details_hidden(node):
+        ret _OUT_NONE
+    end
+    if nd.tag == "#text":
+        ret _OUT_INLINE
+    end
+    i := _e.node_el[node]
+    if i < 0:
+        ret _OUT_NONE
+    end
+    cs := _e.st[i]
+    switch cs.display:
+        css.Display.None:
+            ret _OUT_NONE
+        end
+        css.Display.Inline:
+            if nd.tag == "br":
+                ret _OUT_INLINE
+            end
+            if _is_replaced(nd.tag) or nd.tag == "button":
+                ret _OUT_ATOM
+            end
+            if cs.position == cssbox.Position.Absolute or cs.position == cssbox.Position.Fixed:
+                ret _OUT_BLOCK
+            end
+            if _has_block_desc(node):
+                ret _OUT_BLOCK
+            end
+            ret _OUT_INLINE
+        end
+        css.Display.InlineBlock, css.Display.InlineFlex, css.Display.InlineGrid, css.Display.InlineTable:
+            if cs.position == cssbox.Position.Absolute or cs.position == cssbox.Position.Fixed:
+                ret _OUT_BLOCK
+            end
+            ret _OUT_ATOM
+        end
+        else:
+            ret _OUT_BLOCK
+        end
+    end
+    ret _OUT_BLOCK
+end
+
+func _is_ws_text(s: str): bool:
+    p := (s as void*) as u8*
+    repeat s.len() in i:
+        if not _is_ws(_hb(p, i)):
+            ret false
+        end
+    end
+    ret true
+end
+
+func _box_style(node: int, cs: css.ComputedStyle, blockify: bool): cssbox.Style:
+    mut st := css.ToBox(cs)
+    if css.NeedsBasis(cs):
+        st = css.ToBoxIn(cs, _e.width, _e.height)
+    end
+    if blockify:
+        if st.display == cssbox.Display.InlineBlock:
+            st.display = cssbox.Display.Block
+        else st.display == cssbox.Display.InlineFlex:
+            st.display = cssbox.Display.Flex
+        end
+    end
+    switch cs.display:
+        css.Display.Table, css.Display.InlineTable:
+            if st.width.kind == cssbox.LengthKind.Auto:
+                st.width = cssbox.FitContent()
+            end
+            break
+        end
+        css.Display.TableRow:
+            st.display = cssbox.Display.Flex
+            break
+        end
+        css.Display.TableCell:
+            st.flex_grow = 1.0
+            st.flex_shrink = 1.0
+            break
+        end
+        else:
+            break
+        end
+    end
+    if node >= 0 and _e.dom.nodes[node].tag == "img":
+        iw := _e.rep_w[node]
+        ih := _e.rep_h[node]
+        if iw > 0.0 and ih > 0.0 and st.aspect_ratio == 0.0:
+            st.aspect_ratio = iw / ih
+        end
+    end
+    if st.overflow_x == cssbox.Overflow.Scroll or st.overflow_y == cssbox.Overflow.Scroll:
+        st.scrollbar_width = 0.0
+    end
+    ret st
+end
+
+func _new_cb(st: cssbox.Style, node: int): int:
+    cb := _e.tree.AddNode(st)
+    until _e.cb_node.len() <= cb:
+        _e.cb_node.push(-1)
+        _e.cb_ifc.push(-1)
+        _e.cb_rep.push(-1)
+    end
+    _e.cb_node[cb] = node
+    ret cb
+end
+
+func _measure_fn(mi: cssbox.MeasureInput): cssbox.MeasureOutput:
+    ret _measure(mi)
+end
+
+func _attach_measure(cb: int):
+    _e.tree.SetMeasure(cb, (mi: cssbox.MeasureInput): ret _measure_fn(mi) end)
+end
+
+func _new_ifc(owner: int, cb: int): int:
+    mut f := _Ifc { owner = owner, cb = cb }
+    f.spans = Vector {} as Vector<typeset.TextSpan>
+    f.span_el = Vector {} as Vector<int>
+    f.span_atom = Vector {} as Vector<int>
+    f.atoms = Vector {} as Vector<int>
+    cs := _style_of(owner)
+    f.pstyle = _pstyle(cs)
+    _e.ifcs.push(f)
+    idx := _e.ifcs.len() - 1
+    if owner >= 0 and owner < _e.node_ifc.len() and _e.node_ifc[owner] < 0:
+        _e.node_ifc[owner] = idx
+    else owner >= 0 and owner < _e.node_ifc.len():
+        mut j := _e.node_ifc[owner]
+        until _e.ifcs[j].next >= 0:
+            j = _e.ifcs[j].next
+        end
+        if j != idx:
+            mut pj := _e.ifcs.ref(j)
+            pj.next = idx
+        end
+    end
+    if cb >= 0:
+        _e.cb_ifc[cb] = idx
+        _attach_measure(cb)
+    end
+    ret idx
+end
+
+func _pstyle(cs: css.ComputedStyle): typeset.ParagraphStyle:
+    mut ps := typeset.ParagraphStyle {}
+    switch cs.text_align:
+        css.TextAlign.End: ps.align = typeset.TextAlign.End break end
+        css.TextAlign.Left: ps.align = typeset.TextAlign.Left break end
+        css.TextAlign.Right: ps.align = typeset.TextAlign.Right break end
+        css.TextAlign.Center: ps.align = typeset.TextAlign.Center break end
+        css.TextAlign.Justify: ps.align = typeset.TextAlign.Justify break end
+        else: ps.align = typeset.TextAlign.Start break end
+    end
+    ps.direction = cs.direction == cssbox.Direction.Rtl ? typeset.TextDirRTL : typeset.TextDirLTR
+    switch cs.white_space:
+        css.WhiteSpace.Pre: ps.white_space = typeset.WhiteSpace.Pre break end
+        css.WhiteSpace.NoWrap: ps.white_space = typeset.WhiteSpace.NoWrap break end
+        css.WhiteSpace.PreWrap, css.WhiteSpace.BreakSpaces: ps.white_space = typeset.WhiteSpace.PreWrap break end
+        else: ps.white_space = typeset.WhiteSpace.Normal break end
+    end
+    switch cs.overflow_wrap:
+        css.OverflowWrap.Anywhere: ps.overflow_wrap = typeset.OverflowWrap.Anywhere break end
+        css.OverflowWrap.BreakWord: ps.overflow_wrap = typeset.OverflowWrap.BreakWord break end
+        else: break end
+    end
+    ps.lang = _e.env.lang
+    ret ps
+end
+
+func _span_of(cs: css.ComputedStyle, text: str, el: int): typeset.TextSpan:
+    mut sp := typeset.TextSpan {}
+    sp.text = text
+    sp.families = cs.font_family
+    sp.size = cs.font_size
+    sp.weight = cs.font_weight
+    sp.italic = cs.font_style != css.FontStyle.Normal
+    sp.letter_spacing = cs.letter_spacing
+    sp.word_spacing = cs.word_spacing
+    if not cs.line_height_normal:
+        sp.line_height = cs.line_height
+    end
+    sp.lang = _e.env.lang
+    sp.tag = el
+    ret sp
+end
+
+func _transform(cs: css.ComputedStyle, s: str): str:
+    switch cs.text_transform:
+        css.TextTransform.Uppercase: ret str.Upper(s) end
+        css.TextTransform.Lowercase: ret str.Lower(s) end
+        css.TextTransform.Capitalize: ret str.Title(s) end
+        else: ret str.Clone(s) end
+    end
+    ret str.Clone(s)
+end
+
+func _push_span(f &: _Ifc, sp: typeset.TextSpan, el: int, atom: int):
+    f.spans.push(sp)
+    f.span_el.push(el)
+    f.span_atom.push(atom)
+end
+
+func _ifc_add(fi: int, node: int):
+    nd := _e.dom.nodes[node]
+    mut f := _e.ifcs.ref(fi)
+    if nd.tag == "#text":
+        el := _el_of(nd.parent)
+        cs := _style_of(el)
+        t := _transform(cs, nd.text)
+        _push_span(f, _span_of(cs, t, el), el, -1)
+        ret
+    end
+    o := _outer(node)
+    if o == _OUT_NONE:
+        ret
+    end
+    cs := _style_of(node)
+    if nd.tag == "br":
+        _push_span(f, _span_of(cs, " ", node), node, -1)
+        ret
+    end
+    if o == _OUT_ATOM:
+        ai := _build_atom(node, fi)
+        mut f2 := _e.ifcs.ref(fi)
+        _push_span(f2, _span_of(cs, "​", node), node, -1)
+        _push_span(f2, _span_of(cs, " ", node), node, ai)
+        f2.atoms.push(ai)
+        mut a := _e.atoms.ref(ai)
+        a.span = f2.spans.len() - 1
+        _push_span(f2, _span_of(cs, "​", node), node, -1)
+        ret
+    end
+    each k in nd.kids:
+        _ifc_add(fi, k)
+    end
+end
+
+func _build_atom(node: int, fi: int): int:
+    cb := _build_element(node, -1, false)
+    _e.atoms.push(_Atom { node = node, ifc = fi })
+    ai := _e.atoms.len() - 1
+    _e.node_atom[node] = ai
+    _e.node_cb[node] = cb
+    ret ai
+end
+
+func _marker_text(node: int, cs: css.ComputedStyle): str:
+    t := cs.list_style_type
+    switch t:
+        "none", "":
+            ret str.Clone("")
+        end
+        "disc": ret str.Clone("•\u00A0 ") end
+        "circle": ret str.Clone("◦\u00A0 ") end
+        "square": ret str.Clone("▪\u00A0 ") end
+        "disclosure-closed": ret str.Clone(cs.direction == cssbox.Direction.Rtl ? "◂ " : "▸ ") end
+        "disclosure-open": ret str.Clone("▾ ") end
+        else:
+            break
+        end
+    end
+    mut idx := 1
+    p := _e.dom.nodes[node].parent
+    if p >= 0:
+        mut start := 1
+        st := _attr(_e.dom, p, "start")
+        if st.len() > 0:
+            start = st.to_int()
+        end
+        idx = start
+        each k in _e.dom.nodes[p].kids:
+            if k == node:
+                break
+            end
+            if _e.dom.nodes[k].tag == "li":
+                idx++
+            end
+        end
+    end
+    v := _attr(_e.dom, node, "value")
+    if v.len() > 0:
+        idx = v.to_int()
+    end
+    mut num := str.FromInt(idx as i64)
+    if t == "persian" or t == "arabic-indic" or (t == "decimal" and _e.env.lang.starts_with("fa")):
+        old := num
+        num = t == "arabic-indic" ? str.ToArabicDigits(old) : str.ToPersianDigits(old)
+        _sfree(old)
+    end
+    if t == "lower-alpha" or t == "lower-latin":
+        _sfree(num)
+        num = str.Clone(" ")
+        p2 := (num as void*) as u8*
+        p2[0] = (96 + ((idx - 1) % 26 + 1)) as u8
+    else t == "upper-alpha" or t == "upper-latin":
+        _sfree(num)
+        num = str.Clone(" ")
+        p2 := (num as void*) as u8*
+        p2[0] = (64 + ((idx - 1) % 26 + 1)) as u8
+    end
+    sep := _e.env.lang.starts_with("fa") ? "٫ " : ". "
+    r := num + (t == "decimal" or t == "persian" or t == "arabic-indic" ? sep : ".\u00A0")
+    _sfree(num)
+    ret r
+end
+
+func _make_ifc(owner: int, cb: int, kids: Vector<int>): int:
+    fi := _new_ifc(owner, cb)
+    cs := _style_of(owner)
+    if cs.display == css.Display.ListItem and cs.list_style_position == css.ListPosition.Inside:
+        m := _marker_text(owner, cs)
+        if m.len() > 0:
+            mut f := _e.ifcs.ref(fi)
+            _push_span(f, _span_of(cs, m, owner), owner, -1)
+        end
+    end
+    each k in kids:
+        _ifc_add(fi, k)
+    end
+    ret fi
+end
+
+func _run_has_content(kids: Vector<int>, pre: bool): bool:
+    each k in kids:
+        nd := _e.dom.nodes[k]
+        if nd.tag == "#text":
+            if pre or not _is_ws_text(nd.text):
+                ret true
+            end
+        else:
+            ret true
+        end
+    end
+    ret false
+end
+
+func _flush_run(node: int, cbn: int, run &: Vector<int>):
+    if run.len() == 0:
+        ret
+    end
+    cs := _style_of(node)
+    pre := cs.white_space == css.WhiteSpace.Pre or cs.white_space == css.WhiteSpace.PreWrap
+    if _run_has_content(run, pre):
+        mut st := cssbox.Style {}
+        st.direction = cs.direction
+        anon := _new_cb(st, node)
+        _e.tree.AddChild(cbn, anon)
+        _make_ifc(node, anon, run)
+    end
+    run.clear()
+end
+
+func _build_children(node: int, cbn: int, flex: bool):
+    nd := _e.dom.nodes[node]
+    mut any_block := false
+    each k in nd.kids:
+        o := _outer(k)
+        if o == _OUT_BLOCK:
+            any_block = true
+        end
+    end
+    cs := _style_of(node)
+    if not any_block and not flex:
+        pre := cs.white_space == css.WhiteSpace.Pre or cs.white_space == css.WhiteSpace.PreWrap
+        list_marker := cs.display == css.Display.ListItem and cs.list_style_position == css.ListPosition.Inside
+        if _run_has_content(nd.kids, pre) or list_marker:
+            _make_ifc(node, cbn, nd.kids)
+        end
+        ret
+    end
+    mut run := Vector {} as Vector<int>
+    defer run.free()
+    each k in nd.kids:
+        o := _outer(k)
+        if o == _OUT_NONE:
+            continue
+        end
+        if o == _OUT_BLOCK or (flex and _e.dom.nodes[k].tag != "#text"):
+            _flush_run(node, cbn, run)
+            child := _build_element(k, cbn, flex)
+            if child >= 0:
+                _e.node_cb[k] = child
+            end
+        else:
+            run.push(k)
+        end
+    end
+    _flush_run(node, cbn, run)
+end
+
+func _intrinsic(node: int, cs: css.ComputedStyle): bool:
+    tag := _e.dom.nodes[node].tag
+    fs := cs.font_size
+    mut w := 0.0
+    mut h := 0.0
+    switch tag:
+        "img":
+            src := _attr(_e.dom, node, "src")
+            k := _image_index(src)
+            if k >= 0 and _img_ok[k]:
+                w = _img_canvas[k].width as f64
+                h = _img_canvas[k].height as f64
+            end
+            break
+        end
+        "progress":
+            w = fs * 10.0
+            h = fs
+            break
+        end
+        "meter":
+            w = fs * 5.0
+            h = fs
+            break
+        end
+        "canvas":
+            w = 300.0
+            h = 150.0
+            break
+        end
+        "video", "iframe", "embed", "object":
+            w = 300.0
+            h = 150.0
+            break
+        end
+        "input":
+            t := _input_type(node)
+            switch t:
+                "checkbox", "radio":
+                    w = 13.0
+                    h = 13.0
+                    break
+                end
+                "range":
+                    w = 129.0
+                    h = 16.0
+                    break
+                end
+                "color":
+                    w = 50.0
+                    h = 27.0
+                    break
+                end
+                else:
+                    ret false
+                end
+            end
+            break
+        end
+        else:
+            ret false
+        end
+    end
+    _e.rep_w[node] = w
+    _e.rep_h[node] = h
+    ret true
+end
+
+func _control_ifc(node: int, cb: int, cs: css.ComputedStyle):
+    tag := _e.dom.nodes[node].tag
+    fi := _new_ifc(node, cb)
+    mut f := _e.ifcs.ref(fi)
+    f.control = true
+    f.pstyle.white_space = tag == "textarea" ? typeset.WhiteSpace.PreWrap : typeset.WhiteSpace.Pre
+    fs := cs.font_size
+    if tag == "textarea":
+        cols := _attr(_e.dom, node, "cols")
+        nc := cols.len() > 0 ? cols.to_int() : 20
+        f.fixed_w = (nc as f64) * fs * 0.6 + 17.0
+    else tag == "select":
+        f.fixed_w = -1.0
+    else:
+        sz := _attr(_e.dom, node, "size")
+        nc := sz.len() > 0 ? sz.to_int() : 20
+        f.fixed_w = (nc as f64) * fs * 0.55
+        if _input_type(node) == "number":
+            f.fixed_w -= 13.0
+        end
+    end
+    mut text := _control_text(node)
+    if tag == "select":
+        mut longest := ""
+        _select_longest(node, longest)
+        text = longest
+    end
+    _push_span(f, _span_of(cs, text, node), node, -1)
+    if tag == "textarea":
+        rows := _attr(_e.dom, node, "rows")
+        nr := rows.len() > 0 ? rows.to_int() : 2
+        lh := cs.line_height_normal ? fs * 1.2 : cs.line_height
+        f.fixed_h = (nr as f64) * lh
+    end
+end
+
+func _select_longest(node: int, out &: str):
+    each k in _e.dom.nodes[node].kids:
+        nd := _e.dom.nodes[k]
+        if nd.tag == "option":
+            t := _text_of(_e.dom, k)
+            if t.len() > out.len():
+                out = t
+            end
+        else nd.tag == "optgroup":
+            _select_longest(k, out)
+        end
+    end
+end
+
+func _build_element(node: int, parent_cb: int, blockify: bool): int:
+    i := _e.node_el[node]
+    if i < 0:
+        ret -1
+    end
+    cs := _e.st[i]
+    if cs.display == css.Display.None:
+        ret -1
+    end
+    tag := _e.dom.nodes[node].tag
+    replaced := _is_replaced(tag)
+    if replaced:
+        _intrinsic(node, cs)
+    end
+    st := _box_style(node, cs, blockify)
+    cb := _new_cb(st, node)
+    _e.node_cb[node] = cb
+    if parent_cb >= 0:
+        _e.tree.AddChild(parent_cb, cb)
+    end
+    if replaced:
+        if _intrinsic(node, cs):
+            _e.cb_rep[cb] = node
+            _attach_measure(cb)
+        else tag == "input" or tag == "textarea" or tag == "select":
+            _control_ifc(node, cb, cs)
+        end
+        ret cb
+    end
+    if _is_button_input(node):
+        _control_ifc(node, cb, cs)
+        ret cb
+    end
+    flex := cs.display == css.Display.Flex or cs.display == css.Display.InlineFlex or cs.display == css.Display.TableRow
+    _build_children(node, cb, flex)
+    ret cb
+end
+
+func _image_index(src: str): int:
+    if src.len() == 0:
+        ret -1
+    end
+    repeat _img_keys.len() in k:
+        if _img_keys[k] == src:
+            ret k
+        end
+    end
+    mut ok := false
+    cv := _load_image(src, ok)
+    _img_keys.push(str.Clone(src))
+    _img_canvas.push(cv)
+    _img_ok.push(ok)
+    ret _img_keys.len() - 1
+end
+
+func _reset_layout():
+    if _e.has_tree:
+        _e.tree.Free()
+    end
+    _e.tree = cssbox.Tree {}
+    _e.has_tree = true
+    repeat _e.ifcs.len() in i:
+        mut f := _e.ifcs.ref(i)
+        _free_ifc(f)
+    end
+    _e.ifcs.free()
+    _e.ifcs = Vector {} as Vector<_Ifc>
+    _e.atoms.free()
+    _e.atoms = Vector {} as Vector<_Atom>
+    _e.cb_node.free()
+    _e.cb_ifc.free()
+    _e.cb_rep.free()
+    _e.cb_node = Vector {} as Vector<int>
+    _e.cb_ifc = Vector {} as Vector<int>
+    _e.cb_rep = Vector {} as Vector<int>
+    n := _e.dom.nodes.len()
+    _e.node_cb.free()
+    _e.node_atom.free()
+    _e.node_ifc.free()
+    _e.rep_w.free()
+    _e.rep_h.free()
+    _e.node_cb = Vector {} as Vector<int>
+    _e.node_atom = Vector {} as Vector<int>
+    _e.node_ifc = Vector {} as Vector<int>
+    _e.rep_w = Vector {} as Vector<f64>
+    _e.rep_h = Vector {} as Vector<f64>
+    repeat n:
+        _e.node_cb.push(-1)
+        _e.node_atom.push(-1)
+        _e.node_ifc.push(-1)
+        _e.rep_w.push(0.0)
+        _e.rep_h.push(0.0)
+    end
+end
+
+func _free_ifc(f &: _Ifc):
+    repeat f.spans.len() in k:
+        sp := f.spans[k]
+        if f.span_atom[k] < 0 and sp.text.len() > 0 and not (sp.text == "​" or sp.text == " " or sp.text == " "):
+            _sfree(sp.text)
+        end
+    end
+    f.spans.free()
+    f.span_el.free()
+    f.span_atom.free()
+    f.atoms.free()
+    if f.has_para:
+        typeset.FreeParagraph(f.para)
+        f.has_para = false
+    end
+    if f.has_lay:
+        typeset.FreeLayout(f.lay)
+        f.has_lay = false
+    end
+end
+
+func _layout():
+    _ensure_fonts()
+    _reset_layout()
+    mut rs := cssbox.Style {}
+    rs.width = cssbox.Px(_e.width)
+    rcs := _e.sheet.RootStyle()
+    rs.direction = rcs.direction
+    _e.root_cb = _new_cb(rs, -1)
+    if _e.dom.body >= 0:
+        _build_element(_e.dom.body, _e.root_cb, false)
+    end
+    mut k := _e.atoms.len() - 1
+    until k >= 0:
+        _compute_atom(k)
+        k--
+    end
+    _e.tree.Compute(_e.root_cb, cssbox.Definite(_e.width), cssbox.Definite(_e.height))
+    _place_all()
+end
+
+func _compute_atom(k: int):
+    a := _e.atoms[k]
+    cb := _e.node_cb[a.node]
+    if cb < 0:
+        ret
+    end
+    _e.tree.Compute(cb, cssbox.MaxContentSpace(), cssbox.MaxContentSpace())
+    mut l := _e.tree.Layout(cb)
+    if l.width + l.margin.left + l.margin.right > _e.width:
+        _e.tree.Compute(cb, cssbox.Definite(_e.width), cssbox.MaxContentSpace())
+        l = _e.tree.Layout(cb)
+    end
+    mut at := _e.atoms.ref(k)
+    at.mw = l.width + l.margin.left + l.margin.right
+    at.mh = l.height + l.margin.top + l.margin.bottom
+    tag := _e.dom.nodes[a.node].tag
+    mut base := at.mh
+    if l.has_baseline and not (tag == "img" or (tag == "input" and not _is_text_input(a.node) and not _is_button_input(a.node))):
+        base = l.margin.top + l.baseline
+    end
+    cs := _style_of(a.node)
+    if cs.vertical_align == css.VerticalAlign.Middle:
+        base = at.mh / 2.0 + cs.font_size * 0.25
+    end
+    at.baseline = base
+end
+
+func _face_for(sp: typeset.TextSpan, cp: int): int:
+    ret typeset.FaceForCodepoint(_fc, sp.families, sp.weight, sp.italic, cp)
+end
+
+func _patch_atoms(f &: _Ifc):
+    each ai in f.atoms:
+        a := _e.atoms[ai]
+        if a.span < 0:
+            continue
+        end
+        mut sp := f.spans[a.span]
+        face := _face_for(sp, 0xA0)
+        mut asc := 0.8
+        mut desc := 0.2
+        if face >= 0:
+            fnt := typeset.FaceFont(_fc, face)
+            m := typeset.Metrics(fnt)
+            if m.units_per_em > 0:
+                asc = (m.ascent as f64) / (m.units_per_em as f64)
+                desc = (math.Abs(m.descent as f64)) / (m.units_per_em as f64)
+            end
+        end
+        h := math.Max(a.mh, 0.01)
+        mut s := 0.0
+        k := asc - desc
+        if k > 0.01:
+            s = (2.0 * a.baseline - h) / k
+        end
+        if s < 0.5:
+            s = 0.5
+        end
+        sp.size = s
+        sp.line_height = h
+        sp.line_height_scale = 0.0
+        sp.word_spacing = 0.0
+        mut adv := 0.0
+        if face >= 0:
+            fnt := typeset.FaceFont(_fc, face)
+            g := typeset.GlyphIndex(fnt, 0xA0)
+            upm := typeset.UnitsPerEm(fnt)
+            if upm > 0:
+                adv = (typeset.GlyphAdvance(fnt, g) as f64) * s / (upm as f64)
+            end
+        end
+        sp.letter_spacing = a.mw - adv
+        f.spans[a.span] = sp
+    end
+end
+
+func _ifc_para(fi: int):
+    f0 := _e.ifcs[fi]
+    if f0.has_para:
+        ret
+    end
+    mut f := _e.ifcs.ref(fi)
+    _patch_atoms(f)
+    if f.control:
+        mut sp := f.spans[0]
+        if sp.text.len() == 0:
+            sp.text = str.Clone(" ")
+            f.spans[0] = sp
+        end
+    end
+    f.para = typeset.NewParagraph(_fc, f.spans, f.pstyle)
+    f.has_para = true
+end
+
+func _ifc_layout(fi: int, width: f64):
+    _ifc_para(fi)
+    f0 := _e.ifcs[fi]
+    if f0.has_lay and f0.lay_w == width:
+        ret
+    end
+    mut f := _e.ifcs.ref(fi)
+    if f.has_lay:
+        typeset.FreeLayout(f.lay)
+    end
+    f.lay = typeset.LayoutParagraph(f.para, _fc, width)
+    f.lay_w = width
+    f.has_lay = true
+end
+
+func _measure(mi: cssbox.MeasureInput): cssbox.MeasureOutput:
+    cb := mi.node
+    if cb < 0 or cb >= _e.cb_ifc.len():
+        ret cssbox.Measured(0.0, 0.0)
+    end
+    rep := _e.cb_rep[cb]
+    if rep >= 0:
+        ret cssbox.Measured(_e.rep_w[rep], _e.rep_h[rep])
+    end
+    fi := _e.cb_ifc[cb]
+    if fi < 0:
+        ret cssbox.Measured(0.0, 0.0)
+    end
+    _ifc_para(fi)
+    f := _e.ifcs[fi]
+    minc := typeset.MinContentWidth(f.para)
+    maxc := typeset.MaxContentWidth(f.para)
+    mut w := maxc
+    mut lw := maxc
+    if mi.has_known_width:
+        lw = math.Max(0.0, mi.known_width - _pbw(cb))
+        w = lw
+    else mi.available_width.kind == cssbox.SpaceKind.MinContent:
+        lw = minc
+        w = minc
+    else mi.available_width.kind == cssbox.SpaceKind.Definite:
+        av := mi.available_width.value
+        lw = av
+        w = math.Min(maxc, math.Max(minc, av))
+    end
+    if f.control:
+        _ifc_layout(fi, 0.0)
+        f2 := _e.ifcs[fi]
+        mut ch := f2.lay.height
+        if f2.fixed_h > 0.0:
+            ch = f2.fixed_h
+        end
+        mut cw := f2.fixed_w
+        if cw < 0.0:
+            cw = f2.lay.width + 24.0
+        else _is_button_input(f2.owner):
+            cw = f2.lay.width
+        end
+        mut base := ch
+        if f2.lay.lines.len() > 0:
+            base = f2.lay.lines[0].baseline
+        end
+        ret cssbox.MeasuredWithBaseline(cw, ch, base)
+    end
+    _ifc_layout(fi, lw)
+    f2 := _e.ifcs[fi]
+    mut base := 0.0
+    if f2.lay.lines.len() > 0:
+        base = f2.lay.lines[0].baseline
+    end
+    ret cssbox.MeasuredWithBaseline(w, f2.lay.height, base)
+end
+
+func _pbw(cb: int): f64:
+    st := _e.tree.GetStyle(cb)
+    ret _px(st.padding.left) + _px(st.padding.right) + _px(st.border.left) + _px(st.border.right)
+end
+
+func _px(l: cssbox.Length): f64:
+    if l.kind == cssbox.LengthKind.Px:
+        ret l.value
+    end
+    ret 0.0
+end

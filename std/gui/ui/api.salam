@@ -1,0 +1,1056 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ui
+
+import str
+import math
+import os
+import io
+import mem
+import gui.css
+import gui.paint
+import gui.reactive
+import gui.typeset
+import gui.window
+
+func _new_ctl(): _Ctl:
+    mut c := _Ctl { uid = _uid_next }
+    _uid_next++
+    c.undo = Vector {} as Vector<str>
+    ret c
+end
+
+func _same_text(a: str, b: str): bool:
+    ret a == b
+end
+
+func _match_kid(od: _Dom, okids: Vector<int>, used &: Vector<bool>, nd: _Dom, k: int, nth: int): int:
+    tag := nd.nodes[k].tag
+    id := _attr(nd, k, "id")
+    key := _attr(nd, k, "key")
+    if id.len() > 0 or key.len() > 0:
+        repeat okids.len() in j:
+            o := okids[j]
+            if not used[j] and od.nodes[o].tag == tag:
+                if (id.len() > 0 and _attr(od, o, "id") == id) or (key.len() > 0 and _attr(od, o, "key") == key):
+                    ret j
+                end
+            end
+        end
+        ret -1
+    end
+    mut seen := 0
+    repeat okids.len() in j:
+        o := okids[j]
+        if od.nodes[o].tag == tag and _attr(od, o, "id").len() == 0 and _attr(od, o, "key").len() == 0:
+            if seen == nth:
+                if used[j]:
+                    ret -1
+                end
+                ret j
+            end
+            seen++
+        end
+    end
+    ret -1
+end
+
+func _carry(od: _Dom, oc: Vector<_Ctl>, o: int, nd: _Dom, nc &: Vector<_Ctl>, n: int):
+    mut c := oc[o]
+    tag := nd.nodes[n].tag
+    if tag == "input" or tag == "textarea" or tag == "select":
+        ov := tag == "textarea" ? _text_of(od, o) : str.Clone(_attr(od, o, "value"))
+        nv := tag == "textarea" ? _text_of(nd, n) : str.Clone(_attr(nd, n, "value"))
+        if ov != nv:
+            c.has_value = false
+            c.caret = nv.len()
+            c.anchor = c.caret
+            c.text_scroll = 0.0
+        end
+        if _has_attr(od, o, "checked") != _has_attr(nd, n, "checked"):
+            c.has_checked = false
+        end
+        if tag == "select":
+            mut changed := false
+            ok := od.nodes[o].kids.len()
+            if ok != nd.nodes[n].kids.len():
+                changed = true
+            end
+            if changed:
+                c.selected = -1
+                c.has_value = false
+            end
+        end
+        _sfree(ov)
+        _sfree(nv)
+    end
+    if tag == "details" or tag == "dialog":
+        if _has_attr(od, o, "open") != _has_attr(nd, n, "open"):
+            c.open = _has_attr(nd, n, "open")
+        end
+    end
+    nc[n] = c
+end
+
+func _rec_match(od: _Dom, oc: Vector<_Ctl>, o: int, nd: _Dom, nc &: Vector<_Ctl>, n: int):
+    _carry(od, oc, o, nd, nc, n)
+    okids := od.nodes[o].kids
+    mut used := Vector {} as Vector<bool>
+    defer used.free()
+    repeat okids.len():
+        used.push(false)
+    end
+    mut tags := Vector {} as Vector<str>
+    defer tags.free()
+    mut counts := Vector {} as Vector<int>
+    defer counts.free()
+    each k in nd.nodes[n].kids:
+        t := nd.nodes[k].tag
+        if t == "#text":
+            continue
+        end
+        mut nth := 0
+        mut slot := -1
+        repeat tags.len() in q:
+            if tags[q] == t:
+                slot = q
+            end
+        end
+        if _attr(nd, k, "id").len() == 0 and _attr(nd, k, "key").len() == 0:
+            if slot < 0:
+                tags.push(t)
+                counts.push(1)
+            else:
+                nth = counts[slot]
+                counts[slot] = nth + 1
+            end
+        end
+        j := _match_kid(od, okids, used, nd, k, nth)
+        if j >= 0:
+            used[j] = true
+            _rec_match(od, oc, okids[j], nd, nc, k)
+        end
+    end
+end
+
+func _remap(old_node: int, oc: Vector<_Ctl>, nc: Vector<_Ctl>): int:
+    if old_node < 0 or old_node >= oc.len():
+        ret -1
+    end
+    uid := oc[old_node].uid
+    repeat nc.len() in i:
+        if nc[i].uid == uid:
+            ret i
+        end
+    end
+    ret -1
+end
+
+func _load(html: str):
+    mut nd := _parse_html(html)
+    mut nc := Vector {} as Vector<_Ctl>
+    repeat nd.nodes.len():
+        nc.push(_Ctl {})
+    end
+    if _e.ready:
+        _rec_match(_e.dom, _e.ctl, 0, nd, nc, 0)
+        if _e.dom.body >= 0 and nd.body >= 0 and nc[nd.body].uid == 0:
+            _rec_match(_e.dom, _e.ctl, _e.dom.body, nd, nc, nd.body)
+        end
+    end
+    repeat nc.len() in i:
+        if nc[i].uid == 0:
+            nc[i] = _new_ctl()
+        end
+    end
+    mut focus := -1
+    mut hover := -1
+    mut popup := -1
+    mut capture := -1
+    if _e.ready:
+        focus = _remap(_e.focus, _e.ctl, nc)
+        hover = _remap(_e.hover, _e.ctl, nc)
+        popup = _remap(_e.popup, _e.ctl, nc)
+        capture = _remap(_e.capture, _e.ctl, nc)
+        _free_elements()
+        _dom_free(_e.dom)
+        _e.ctl.free()
+        _reset_layout()
+    end
+    _e.dom = nd
+    _e.ctl = nc
+    _e.focus = focus
+    _e.hover = hover
+    _e.popup = popup
+    _e.capture = capture
+    if focus < 0:
+        repeat _e.ctl.len() in i:
+            mut c := _e.ctl.ref(i)
+            c.focused = false
+            c.focus_visible = false
+        end
+    end
+    if _e.dom.title.len() > 0 and _e.has_win:
+        _e.win.SetTitle(_e.dom.title)
+    end
+    _e.ready = true
+    _build_elements()
+    _style_all()
+    _relayout()
+end
+
+func _relayout():
+    _layout()
+    _assign_order()
+    if _e.focus >= 0:
+        _scroll_caret(_e.focus)
+    end
+end
+
+func _rerun_view():
+    if not _e.view_set:
+        ret
+    end
+    v := _e.view
+    html := v()
+    _load(html)
+end
+
+func _frame_update():
+    reactive.SetTime(window.Clock())
+    mut guard := 0
+    until (_e.dirty_view or _e.dirty_style or _e.dirty_layout or _e.dirty_dom) and guard < 4:
+        guard++
+        if _e.dirty_dom and not _e.dirty_view:
+            _e.dirty_dom = false
+            _e.dirty_style = false
+            _e.dirty_layout = false
+            _free_elements()
+            _build_elements()
+            _style_all()
+            _relayout()
+            continue
+        end
+        if _e.dirty_view:
+            _e.dirty_dom = false
+            _e.dirty_view = false
+            _e.dirty_style = false
+            _e.dirty_layout = false
+            _rerun_view()
+            continue
+        end
+        mut need := _e.dirty_layout
+        if _e.dirty_style:
+            _e.dirty_style = false
+            if _restyle(-1):
+                need = true
+            end
+        end
+        _e.dirty_layout = false
+        if need:
+            _relayout()
+        end
+    end
+    _anims_running()
+    _diff_records()
+end
+
+func _ensure_canvas(): bool:
+    pw := math.Ceil(_e.width * _e.scale) as int
+    ph := math.Ceil(_e.height * _e.scale) as int
+    if _e.has_canvas and _e.canvas.width == pw and _e.canvas.height == ph:
+        ret false
+    end
+    if _e.has_canvas:
+        _e.canvas.Free()
+    end
+    _e.canvas = paint.NewCanvas(pw, ph)
+    _e.has_canvas = true
+    ret true
+end
+
+func _paint_frame(): bool:
+    if _ensure_canvas():
+        _e.full = true
+    end
+    if not _e.full and _e.damage.IsEmpty():
+        ret false
+    end
+    _paint_all(_e.canvas)
+    if _e.has_win:
+        if _e.full:
+            _ok := _e.win.PresentAll(_e.canvas.pixels, _e.canvas.width, _e.canvas.height, _e.canvas.stride)
+        else:
+            mut dmg := Vector {} as Vector<window.Rect>
+            repeat _e.damage.Count() in i:
+                r := _e.damage.At(i)
+                dmg.push(window.Rect { x = r.x, y = r.y, width = r.width, height = r.height })
+            end
+            _ok := _e.win.Present(_e.canvas.pixels, _e.canvas.width, _e.canvas.height, _e.canvas.stride, dmg)
+            dmg.free()
+        end
+    end
+    _e.frames++
+    _e.full = false
+    _e.damage.Clear()
+    ret true
+end
+
+func _button_of(b: window.MouseButton): int:
+    switch b:
+        window.MouseButton.Middle: ret 1 end
+        window.MouseButton.Right: ret 2 end
+        window.MouseButton.Back: ret 3 end
+        window.MouseButton.Forward: ret 4 end
+        else: ret 0 end
+    end
+    ret 0
+end
+
+func _handle(ev: window.Event):
+    switch ev.kind:
+        window.EventKind.CloseRequested:
+            _e.quit = true
+            break
+        end
+        window.EventKind.Resized:
+            if ev.width > 0.0 and ev.height > 0.0:
+                _e.width = ev.width
+                _e.height = ev.height
+                _env()
+                _restyle_media()
+                _e.full = true
+            end
+            break
+        end
+        window.EventKind.ScaleChanged:
+            if ev.scale > 0.0:
+                _e.scale = ev.scale
+                _e.full = true
+            end
+            break
+        end
+        window.EventKind.RedrawRequested:
+            _e.full = true
+            break
+        end
+        window.EventKind.PointerMove, window.EventKind.PointerEnter:
+            _pointer_move(ev.x, ev.y)
+            break
+        end
+        window.EventKind.PointerLeave:
+            if _e.hover >= 0:
+                _fire(_e.hover, "mouseleave", false)
+                _e.hover = -1
+                _set_chain(0, -1)
+            end
+            break
+        end
+        window.EventKind.PointerDown:
+            _pointer_down(ev.x, ev.y, _button_of(ev.button), ev.clicks, ev.modifiers)
+            break
+        end
+        window.EventKind.PointerUp:
+            _pointer_up(ev.x, ev.y, _button_of(ev.button), ev.clicks, ev.modifiers)
+            break
+        end
+        window.EventKind.Wheel:
+            _wheel(ev.delta_x, ev.delta_y, ev.delta_mode == window.WheelMode.Line)
+            break
+        end
+        window.EventKind.KeyDown:
+            _key_down(ev.key, ev.modifiers, "")
+            break
+        end
+        window.EventKind.KeyUp:
+            _key_up(ev.key, ev.modifiers)
+            break
+        end
+        window.EventKind.TextInput:
+            _text_input(ev.text)
+            break
+        end
+        window.EventKind.ImePreedit:
+            _ime(ev.text, false)
+            break
+        end
+        window.EventKind.ImeCommit:
+            _ime(ev.text, true)
+            break
+        end
+        window.EventKind.ColorSchemeChanged:
+            _env()
+            _restyle_media()
+            _e.full = true
+            break
+        end
+        window.EventKind.FocusOut:
+            _e.dirty_style = true
+            break
+        end
+        window.EventKind.Timer:
+            if _e.view_set and _e.timer_id == ev.timer:
+                _e.dirty_view = true
+            end
+            break
+        end
+        else:
+            break
+        end
+    end
+end
+
+func _restyle_media():
+    _e.sheet.Free()
+    _e.has_sheet = false
+    _style_all()
+    _e.dirty_layout = true
+end
+
+func _open_window(o: Options): bool:
+    mut wo := window.Options {}
+    wo.title = o.title.len() > 0 ? o.title : (_e.dom.title.len() > 0 ? _e.dom.title : "Salam")
+    wo.width = o.width
+    wo.height = o.height
+    wo.resizable = o.resizable
+    wo.headless = o.headless
+    wo.scale = o.scale
+    _e.win = window.Open(wo)
+    if not _e.win.IsOpen():
+        ret false
+    end
+    _e.has_win = true
+    _e.scale = _e.win.ScaleFactor()
+    sz := _e.win.Size()
+    _e.width = sz.width
+    _e.height = sz.height
+    _set_icon()
+    ret true
+end
+
+func _set_icon():
+    icon := _e.dom.icon
+    if icon.len() == 0 or not (icon.ends_with(".png") or icon.ends_with(".PNG")):
+        ret
+    end
+    mut ok := false
+    mut cv := paint.LoadPNG(icon, ok)
+    if ok:
+        _ok := _e.win.SetIcon(cv.pixels, cv.width, cv.height, cv.stride)
+        cv.Free()
+    end
+end
+
+func _start(html: str, o: Options): bool:
+    _e.bg_override = o.background
+    _e.dom = _parse_html(html)
+    _e.ctl = Vector {} as Vector<_Ctl>
+    repeat _e.dom.nodes.len():
+        _e.ctl.push(_new_ctl())
+    end
+    if not _open_window(o):
+        ret false
+    end
+    if o.title.len() > 0:
+        _e.win.SetTitle(o.title)
+    end
+    _e.ready = true
+    _build_elements()
+    _style_all()
+    _relayout()
+    if _e.dom.title.len() > 0 and o.title.len() == 0:
+        _e.win.SetTitle(_e.dom.title)
+    end
+    _e.full = true
+    _frame_update()
+    _paint_frame()
+    ret true
+end
+
+func _step(timeout: int): bool:
+    if _e.quit or not _e.has_win or not _e.win.IsOpen():
+        ret false
+    end
+    mut first := true
+    mut ev := window.Poll()
+    if ev.kind == window.EventKind.None and timeout != 0:
+        ev = window.Wait(timeout)
+    end
+    until ev.kind != window.EventKind.None or first:
+        first = false
+        if ev.kind != window.EventKind.None:
+            _handle(ev)
+        end
+        ev = window.Poll()
+        if _e.quit:
+            break
+        end
+    end
+    if _e.quit:
+        ret false
+    end
+    _frame_update()
+    _paint_frame()
+    ret true
+end
+
+func _selector_node(sel: str): int:
+    repeat _e.els.len() in i:
+        if _e.sheet.Matches(sel, _e.els, i):
+            ret _e.el_node[i]
+        end
+    end
+    ret -1
+end
+
+func _inject(ev0: window.Event):
+    mut ev := ev0
+    ev.window = _e.win.id
+    window.Inject(ev)
+end
+
+func _key_of(name: str): window.Key:
+    switch name:
+        "Tab": ret window.Key.Tab end
+        "Enter", "Return": ret window.Key.Enter end
+        "Escape", "Esc": ret window.Key.Escape end
+        "Backspace": ret window.Key.Backspace end
+        "Delete": ret window.Key.Delete end
+        "Space", " ": ret window.Key.Space end
+        "Left", "ArrowLeft": ret window.Key.Left end
+        "Right", "ArrowRight": ret window.Key.Right end
+        "Up", "ArrowUp": ret window.Key.Up end
+        "Down", "ArrowDown": ret window.Key.Down end
+        "Home": ret window.Key.Home end
+        "End": ret window.Key.End end
+        "PageUp": ret window.Key.PageUp end
+        "PageDown": ret window.Key.PageDown end
+        else: break end
+    end
+    if name.len() == 1:
+        p := (name as void*) as u8*
+        mut c := _hb(p, 0)
+        if c >= 65 and c <= 90:
+            c += 32
+        end
+        if c >= 97 and c <= 122:
+            ret ((window.Key.A as int) + c - 97) as window.Key
+        end
+        if c >= 48 and c <= 57:
+            ret ((window.Key.Digit0 as int) + c - 48) as window.Key
+        end
+    end
+    ret window.Key.Unknown
+end
+
+func _script_line(line0: str):
+    line := str.Trim(line0)
+    if line.len() == 0 or line.starts_with("#") or line.starts_with("//"):
+        ret
+    end
+    sp := line.find(" ")
+    cmd := sp < 0 ? line : line.substr(0, sp)
+    arg := sp < 0 ? "" : str.Trim(line.substr(sp + 1, line.len() - sp - 1))
+    switch cmd:
+        "click", "dblclick", "hover", "press", "release":
+            n := _selector_node(arg)
+            if n < 0:
+                println "ui script: no element matches", arg
+                break
+            end
+            b := _e.boxes[n]
+            x := b.x + b.w / 2.0
+            y := b.y + b.h / 2.0
+            _inject(window.Event { kind = window.EventKind.PointerMove, x = x, y = y })
+            if cmd != "hover":
+                if cmd != "release":
+                    _inject(window.Event { kind = window.EventKind.PointerDown, x = x, y = y, button = window.MouseButton.Left })
+                end
+                if cmd != "press":
+                    _inject(window.Event { kind = window.EventKind.PointerUp, x = x, y = y, button = window.MouseButton.Left })
+                end
+                if cmd == "dblclick":
+                    _inject(window.Event { kind = window.EventKind.PointerDown, x = x, y = y, button = window.MouseButton.Left })
+                    _inject(window.Event { kind = window.EventKind.PointerUp, x = x, y = y, button = window.MouseButton.Left })
+                end
+            end
+            break
+        end
+        "move":
+            parts := str.Fields(arg)
+            if parts.len() >= 2:
+                _inject(window.Event { kind = window.EventKind.PointerMove, x = parts[0].to_float(), y = parts[1].to_float() })
+            end
+            break
+        end
+        "key":
+            mut mods := 0
+            mut name := arg
+            until name.find("+") > 0:
+                pre := name.substr(0, name.find("+"))
+                switch pre:
+                    "ctrl", "Ctrl", "control": mods |= window.mod_control break end
+                    "shift", "Shift": mods |= window.mod_shift break end
+                    "alt", "Alt": mods |= window.mod_alt break end
+                    else: mods |= window.mod_super break end
+                end
+                name = name.substr(name.find("+") + 1, name.len() - name.find("+") - 1)
+            end
+            k := _key_of(name)
+            _inject(window.Event { kind = window.EventKind.KeyDown, key = k, modifiers = mods })
+            if name.len() == 1 and (mods & window.mod_control) == 0:
+                _inject(window.Event { kind = window.EventKind.TextInput, text = name, modifiers = mods })
+            end
+            _inject(window.Event { kind = window.EventKind.KeyUp, key = k, modifiers = mods })
+            break
+        end
+        "type":
+            _inject(window.Event { kind = window.EventKind.TextInput, text = arg })
+            break
+        end
+        "scroll":
+            parts := str.Fields(arg)
+            if parts.len() >= 2:
+                n := _selector_node(parts[0])
+                if n >= 0:
+                    b := _e.boxes[n]
+                    _inject(window.Event { kind = window.EventKind.PointerMove, x = b.x + b.w / 2.0, y = b.y + b.h / 2.0 })
+                end
+                _inject(window.Event { kind = window.EventKind.Wheel, delta_y = parts[1].to_float(), delta_mode = window.WheelMode.Pixel })
+            end
+            break
+        end
+        "resize":
+            parts := str.Fields(arg)
+            if parts.len() >= 2:
+                _e.win.SetSize(parts[0].to_float(), parts[1].to_float())
+            end
+            break
+        end
+        "wait":
+            window.Advance(arg.to_int())
+            break
+        end
+        "dump":
+            d := Dump()
+            print d
+            break
+        end
+        "shot":
+            _step(0)
+            _ok := paint.SavePNG(_e.canvas, arg)
+            break
+        end
+        "hash":
+            _step(0)
+            println "hash", _e.canvas.Hash()
+            break
+        end
+        "focus":
+            println "focus", _e.focus >= 0 ? _e.dom.nodes[_e.focus].tag + "#" + _attr(_e.dom, _e.focus, "id") : "none"
+            break
+        end
+        "quit":
+            _e.quit = true
+            break
+        end
+        else:
+            println "ui script: unknown step", cmd
+            break
+        end
+    end
+    _step(0)
+end
+
+func _run_script(path: str): bool:
+    if not os.Exists(path):
+        println "ui script: cannot read", path
+        ret false
+    end
+    text := io.ReadFile(path)
+    mut lines := str.Split(text, "\n")
+    defer lines.free()
+    each l in lines:
+        if _e.quit:
+            break
+        end
+        _script_line(l)
+    end
+    ret true
+end
+
+func _run_loop():
+    mode := os.Env("SALAM_UI_SCRIPT")
+    script := str.Clone(mode)
+    mem.Free(mode as void*)
+    if script.len() > 0 and _e.win.IsHeadless():
+        window.SetManualClock(true)
+        _run_script(script)
+        _sfree(script)
+        _shutdown()
+        ret
+    end
+    _sfree(script)
+    mut alive := true
+    until alive:
+        alive = _step(_anims_running() ? 16 : 250)
+    end
+    _shutdown()
+end
+
+func _shutdown():
+    if _e.has_win and _e.win.IsOpen():
+        _e.win.Close()
+    end
+    _e.has_win = false
+end
+
+func _dump_node(b &: str.StringBuilder, node: int, depth: int):
+    nd := _e.dom.nodes[node]
+    if _e.node_el[node] < 0:
+        ret
+    end
+    cs := _style_of(node)
+    if cs.display == css.Display.None:
+        ret
+    end
+    bx := _e.boxes[node]
+    repeat depth:
+        str.BufAppend(b, "  ")
+    end
+    str.BufAppend(b, nd.tag)
+    id := _attr(_e.dom, node, "id")
+    if id.len() > 0:
+        str.BufAppend(b, "#" + id)
+    end
+    mut own := str.NewBuilder()
+    each k in nd.kids:
+        if _e.dom.nodes[k].tag == "#text":
+            str.BufAppend(own, _e.dom.nodes[k].text)
+        end
+    end
+    t := str.BufStr(own)
+    str.BufFree(own)
+    tt := _collapse_ws(t)
+    _sfree(t)
+    if tt.len() > 0:
+        str.BufAppend(b, " \"" + tt + "\"")
+    end
+    tag := nd.tag
+    if tag == "input" or tag == "textarea" or tag == "select":
+        str.BufAppend(b, " value=\"" + _control_value(node) + "\"")
+        if tag == "input" and (_input_type(node) == "checkbox" or _input_type(node) == "radio"):
+            str.BufAppend(b, _is_checked(node) ? " checked" : " unchecked")
+        end
+    end
+    c := _e.ctl[node]
+    if c.focused:
+        str.BufAppend(b, " focused")
+    end
+    if bx.shown:
+        str.BufAppend(b, " " + _num(bx.x) + " " + _num(bx.y) + " " + _num(bx.w) + " " + _num(bx.h))
+    end
+    str.BufAppend(b, "\n")
+    each k in nd.kids:
+        _dump_node(b, k, depth + 1)
+    end
+end
+
+func _num(v: f64): str:
+    r := math.Round(v * 100.0) / 100.0
+    if r == math.Round(r):
+        ret str.FromInt(r as i64)
+    end
+    ret str.FromFloat(r)
+end
+
+func _collapse_ws(s: str): str:
+    mut b := str.NewBuilder()
+    p := (s as void*) as u8*
+    mut sp := false
+    repeat s.len() in i:
+        c := _hb(p, i)
+        if _is_ws(c):
+            sp = true
+        else:
+            if sp and str.BufLen(b) > 0:
+                str.BufAppendChar(b, 32)
+            end
+            sp = false
+            str.BufAppendChar(b, c)
+        end
+    end
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
+
+func _render_into(html: str, width: int, height: int, scale: f64):
+    _e.dom = _parse_html(html)
+    _e.ctl = Vector {} as Vector<_Ctl>
+    repeat _e.dom.nodes.len():
+        _e.ctl.push(_new_ctl())
+    end
+    _e.width = width as f64
+    _e.height = height as f64
+    _e.scale = scale
+    _e.ready = true
+    _build_elements()
+    _style_all()
+    _relayout()
+    _e.full = true
+    _diff_records()
+    _ensure_canvas()
+    _paint_all(_e.canvas)
+end
+
+func _free_engine():
+    if not _e.ready:
+        ret
+    end
+    _free_elements()
+    _reset_layout()
+    _e.tree.Free()
+    _e.has_tree = false
+    if _e.has_sheet:
+        _e.sheet.Free()
+        _e.has_sheet = false
+    end
+    _dom_free(_e.dom)
+    _e.ctl.free()
+    _e.boxes.free()
+    _e.recs.free()
+    _e.order.free()
+    _e.st.free()
+    _e.sid.free()
+    _e.anims.free()
+    _e.ready = false
+end
+
+@en "Handle"
+@fa "ثبت رسیدگی"
+pub func Handle(name: str, fn: func ()):
+    repeat _handler_names.len() in i:
+        if _handler_names[i] == name:
+            _handler_fns[i] = fn
+            ret
+        end
+    end
+    _handler_names.push(str.Clone(name))
+    _handler_fns.push(fn)
+end
+
+@en "CurrentEvent"
+@fa "رخداد جاری"
+pub func CurrentEvent(): Event:
+    ret _event
+end
+
+@en "Start"
+@fa "آغاز"
+pub func Start(view: func () str, options: Options): bool:
+    _e.view = view
+    _e.view_set = true
+    html := view()
+    ret _start(html, options)
+end
+
+@en "StartHtml"
+@fa "آغاز سند"
+pub func StartHtml(doc: str, options: Options): bool:
+    _e.view_set = false
+    ret _start(doc, options)
+end
+
+@en "Step"
+@fa "گام"
+pub func Step(timeout_ms: int): bool:
+    ret _step(timeout_ms)
+end
+
+@en "Stop"
+@fa "توقف"
+pub func Stop():
+    _e.quit = true
+    _shutdown()
+end
+
+@en "RunWith"
+@fa "اجرا با"
+pub func RunWith(view: func () str, options: Options):
+    if not Start(view, options):
+        println "ui: cannot open a window:", window.LastError()
+        ret
+    end
+    _run_loop()
+end
+
+@en "Run"
+@fa "اجرا"
+pub func Run(view: func () str):
+    RunWith(view, Options {})
+end
+
+@en "RunHtmlWith"
+@fa "اجرای سند با"
+pub func RunHtmlWith(doc: str, options: Options):
+    if not StartHtml(doc, options):
+        println "ui: cannot open a window:", window.LastError()
+        ret
+    end
+    _run_loop()
+end
+
+@en "RunHtml"
+@fa "اجرای سند"
+pub func RunHtml(doc: str):
+    RunHtmlWith(doc, Options {})
+end
+
+@en "Refresh"
+@fa "تازه سازی"
+pub func Refresh():
+    _e.dirty_view = true
+end
+
+@en "Render"
+@fa "نگاره"
+pub func Render(doc: str, width: int, height: int): paint.Canvas:
+    saved := _e
+    _e = _Engine {}
+    _render_into(doc, width, height, 1.0)
+    out := _e.canvas
+    _e.has_canvas = false
+    _free_engine()
+    _e = saved
+    ret out
+end
+
+@en "RenderScaled"
+@fa "نگاره با مقیاس"
+pub func RenderScaled(doc: str, width: int, height: int, scale: f64): paint.Canvas:
+    saved := _e
+    _e = _Engine {}
+    _render_into(doc, width, height, scale)
+    out := _e.canvas
+    _e.has_canvas = false
+    _free_engine()
+    _e = saved
+    ret out
+end
+
+@en "RenderPNG"
+@fa "نگاره پی ان جی"
+pub func RenderPNG(doc: str, width: int, height: int, path: str): bool:
+    mut cv := Render(doc, width, height)
+    ok := paint.SavePNG(cv, path)
+    cv.Free()
+    ret ok
+end
+
+@en "Dump"
+@fa "گزارش درخت"
+pub func Dump(): str:
+    if not _e.ready or _e.dom.body < 0:
+        ret str.Clone("")
+    end
+    mut b := str.NewBuilder()
+    _dump_node(b, _e.dom.body, 0)
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
+
+@en "DumpHtml"
+@fa "گزارش سند"
+pub func DumpHtml(doc: str, width: int, height: int): str:
+    saved := _e
+    _e = _Engine {}
+    _render_into(doc, width, height, 1.0)
+    r := Dump()
+    _free_engine()
+    if _e.has_canvas:
+        _e.canvas.Free()
+    end
+    _e = saved
+    ret r
+end
+
+@en "Frame"
+@fa "قاب"
+pub func Frame(): paint.Canvas:
+    ret _e.canvas
+end
+
+@en "FrameCount"
+@fa "شمار قاب"
+pub func FrameCount(): int:
+    ret _e.frames
+end
+
+@en "CurrentWindow"
+@fa "پنجره جاری"
+pub func CurrentWindow(): window.Window:
+    ret _e.win
+end
+
+@en "Page"
+@fa "صفحه برنامه"
+pub func Page(path: str, view: func () str):
+    _page_paths.push(str.Clone(path))
+    _page_views.push(view)
+end
+
+@en "SetUrlOpener"
+@fa "تنظیم بازکننده نشانی"
+pub func SetUrlOpener(opener: func (str) bool):
+    _opener = opener
+    _opener_set = true
+end
+
+@en "SetNavigator"
+@fa "تنظیم ناوبر"
+pub func SetNavigator(navigator: func (str) bool):
+    _navigator = navigator
+    _navigator_set = true
+end
+
+@en "OpenedUrls"
+@fa "نشانی های باز شده"
+pub func OpenedUrls(): Vector<str>:
+    ret _opened_urls
+end
+
+@en "OpenUrl"
+@fa "باز کردن نشانی"
+pub func OpenUrl(url: str): bool:
+    ret _open_url_default(url)
+end
+
+@en "AddFontFile"
+@fa "افزودن پرونده قلم"
+pub func AddFontFile(path: str): int:
+    n := typeset.AddFontFile(_fc, path)
+    _fonts_added += n
+    ret n
+end
+
+@en "AddFontDir"
+@fa "افزودن پوشه قلم"
+pub func AddFontDir(dir: str): int:
+    n := typeset.AddFontDir(_fc, dir)
+    _fonts_added += n
+    ret n
+end

@@ -1,0 +1,159 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ui
+
+import math
+import gui.css
+import gui.reactive
+
+func _prop_name(prop: int): str:
+    switch prop:
+        0: ret "color" end
+        1: ret "background-color" end
+        else: ret "opacity" end
+    end
+    ret "opacity"
+end
+
+func _find_transition(cs: css.ComputedStyle, prop: int, out &: css.Transition): bool:
+    name := _prop_name(prop)
+    mut found := false
+    each t in cs.transitions:
+        if (t.property == "all" or t.property == name or (prop == 1 and t.property == "background")) and t.duration > 0.0:
+            out = t
+            found = true
+        end
+    end
+    ret found
+end
+
+func _now(): i64:
+    ret reactive.Now()
+end
+
+func _anim_index(node: int, prop: int): int:
+    repeat _e.anims.len() in i:
+        a := _e.anims[i]
+        if a.node == node and a.prop == prop and not a.done:
+            ret i
+        end
+    end
+    ret -1
+end
+
+func _same_color(a: css.Color, b: css.Color): bool:
+    ret a.r == b.r and a.g == b.g and a.b == b.b and a.a == b.a
+end
+
+func _start_transitions(i: int, old: css.ComputedStyle, now: css.ComputedStyle):
+    node := _e.el_node[i]
+    repeat 3 in prop:
+        mut t := css.Transition {}
+        if not _find_transition(now, prop, t):
+            continue
+        end
+        mut a := _Anim { node = node, uid = _e.ctl[node].uid, prop = prop, start = _now(), duration = t.duration, delay = t.delay, timing = t.timing }
+        if prop == 2:
+            if old.opacity == now.opacity:
+                continue
+            end
+            a.from_f = _anim_f(node, 2, old.opacity)
+            a.to_f = now.opacity
+        else:
+            oc := prop == 0 ? old.color : old.background_color
+            nc := prop == 0 ? now.color : now.background_color
+            if _same_color(oc, nc):
+                continue
+            end
+            a.from = _anim_color(node, prop, oc)
+            a.to = nc
+        end
+        k := _anim_index(node, prop)
+        if k >= 0:
+            mut prev := _e.anims[k]
+            prev.done = true
+            _e.anims[k] = prev
+        end
+        _e.anims.push(a)
+    end
+end
+
+func _anim_progress(a: _Anim): f64:
+    el := (_now() - a.start) as f64 - a.delay
+    if el <= 0.0:
+        ret 0.0
+    end
+    if a.duration <= 0.0 or el >= a.duration:
+        ret 1.0
+    end
+    ret css.EasingAt(a.timing, el / a.duration)
+end
+
+func _mix(a: int, b: int, t: f64): int:
+    ret math.Round((a as f64) + ((b - a) as f64) * t) as int
+end
+
+func _anim_color(node: int, prop: int, target: css.Color): css.Color:
+    if _e.anims.len() == 0:
+        ret target
+    end
+    k := _anim_index(node, prop)
+    if k < 0:
+        ret target
+    end
+    a := _e.anims[k]
+    t := _anim_progress(a)
+    if t >= 1.0:
+        ret target
+    end
+    ret css.Color { r = _mix(a.from.r, target.r, t), g = _mix(a.from.g, target.g, t), b = _mix(a.from.b, target.b, t), a = _mix(a.from.a, target.a, t) }
+end
+
+func _anim_f(node: int, prop: int, target: f64): f64:
+    if _e.anims.len() == 0:
+        ret target
+    end
+    k := _anim_index(node, prop)
+    if k < 0:
+        ret target
+    end
+    a := _e.anims[k]
+    t := _anim_progress(a)
+    if t >= 1.0:
+        ret target
+    end
+    ret a.from_f + (target - a.from_f) * t
+end
+
+func _anims_running(): bool:
+    mut any := false
+    repeat _e.anims.len() in i:
+        a := _e.anims[i]
+        if not a.done:
+            if (_now() - a.start) as f64 >= a.delay + a.duration:
+                mut ak := _e.anims.ref(i)
+                ak.done = true
+                _damage_node(a.node)
+            else:
+                any = true
+                _damage_node(a.node)
+            end
+        end
+    end
+    if not any and _e.anims.len() > 0:
+        _e.anims.clear()
+    end
+    ret any
+end

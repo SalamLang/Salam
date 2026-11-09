@@ -1,0 +1,179 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package tls
+
+import mem
+
+inline func _xc_qr(x: u32*, a: int, b: int, c: int, d: int):
+    x[a] = x[a] + x[b]
+    x[d] = _rotl32(x[d] ^ x[a], 16 as u32)
+    x[c] = x[c] + x[d]
+    x[b] = _rotl32(x[b] ^ x[c], 12 as u32)
+    x[a] = x[a] + x[b]
+    x[d] = _rotl32(x[d] ^ x[a], 8 as u32)
+    x[c] = x[c] + x[d]
+    x[b] = _rotl32(x[b] ^ x[c], 7 as u32)
+end
+
+func _hchacha20(key: void*, nonce16: void*, out: void*):
+    x := mem.AllocateZeroed(64 as u64) as u32*
+    x[0] = 0x61707865 as u32
+    x[1] = 0x3320646e as u32
+    x[2] = 0x79622d32 as u32
+    x[3] = 0x6b206574 as u32
+    repeat 8 in i:
+        x[4 + i] = _le32(key, i * 4)
+    end
+    repeat 4 in i:
+        x[12 + i] = _le32(nonce16, i * 4)
+    end
+    repeat 10:
+        _xc_qr(x, 0, 4, 8, 12)
+        _xc_qr(x, 1, 5, 9, 13)
+        _xc_qr(x, 2, 6, 10, 14)
+        _xc_qr(x, 3, 7, 11, 15)
+        _xc_qr(x, 0, 5, 10, 15)
+        _xc_qr(x, 1, 6, 11, 12)
+        _xc_qr(x, 2, 7, 8, 13)
+        _xc_qr(x, 3, 4, 9, 14)
+    end
+    repeat 4 in i:
+        _ple32(x[i], out, i * 4)
+        _ple32(x[12 + i], out, 16 + i * 4)
+    end
+    _wipe(x as void*, 64)
+    mem.Free(x as void*)
+end
+
+func _xc_subkey(key: void*, nonce24: void*, sub: void*, cn: void*):
+    _hchacha20(key, nonce24, sub)
+    mem.Set(cn, 0, 12 as u64)
+    mem.Copy(((cn as i64) + (4 as i64)) as void*, ((nonce24 as i64) + (16 as i64)) as void*, 8 as u64)
+end
+
+inline func _ecb_xt(a: int): int:
+    ret ((a << 1) ^ (((a >> 7) & 1) * 0x11b)) & 0xFF
+end
+
+func _ecb_mul(a0: int, b0: int): int:
+    mut a := a0
+    mut b := b0
+    mut r := 0
+    until b > 0:
+        if (b & 1) == 1:
+            r ^= a
+        end
+        a = _ecb_xt(a)
+        b = b >> 1
+    end
+    ret r
+end
+
+func _ecb_addkey(s: u8*, rk: u32*, r: int):
+    repeat 4 in c:
+        w := rk[r * 4 + c]
+        s[c * 4] = s[c * 4] ^ ((w >> (24 as u32)) as u8)
+        s[c * 4 + 1] = s[c * 4 + 1] ^ ((w >> (16 as u32)) as u8)
+        s[c * 4 + 2] = s[c * 4 + 2] ^ ((w >> (8 as u32)) as u8)
+        s[c * 4 + 3] = s[c * 4 + 3] ^ (w as u8)
+    end
+end
+
+@en "XChaCha20Poly1305SealRaw"
+@fa "مهر خام ایکس چاچا۲۰ پلی۱۳۰۵"
+pub func XChaCha20Poly1305SealRaw(
+    key: void*, nonce24: void*, aad: void*, aadlen: int, pt: void*, n: int, out: void*
+): bool:
+    sub := mem.AllocateZeroed(32 as u64)
+    cn := mem.AllocateZeroed(12 as u64)
+    _xc_subkey(key, nonce24, sub, cn)
+    _cha20poly_seal(sub, cn, aad, aadlen, pt, out, n, ((out as i64) + (n as i64)) as void*)
+    _wipe(sub, 32)
+    mem.Free(sub)
+    mem.Free(cn)
+    ret true
+end
+
+@en "XChaCha20Poly1305OpenRaw"
+@fa "گشودن خام ایکس چاچا۲۰ پلی۱۳۰۵"
+pub func XChaCha20Poly1305OpenRaw(
+    key: void*, nonce24: void*, aad: void*, aadlen: int, sealed: void*, sealed_len: int, out: void*
+): bool:
+    if sealed_len < 16:
+        ret false
+    end
+    sub := mem.AllocateZeroed(32 as u64)
+    cn := mem.AllocateZeroed(12 as u64)
+    _xc_subkey(key, nonce24, sub, cn)
+    n := sealed_len - 16
+    ok := _cha20poly_open(sub, cn, aad, aadlen, sealed, n, ((sealed as i64) + (n as i64)) as void*, out)
+    _wipe(sub, 32)
+    mem.Free(sub)
+    mem.Free(cn)
+    ret ok
+end
+
+@en "AesEcbBlock"
+@fa "بلوک ای ای اس ای سی بی"
+pub func AesEcbBlock(key: void*, keylen: int, inp: void*, out: void*, decrypt: bool): bool:
+    c := _fg_new(key, keylen)
+    if c == null:
+        ret false
+    end
+    if not decrypt:
+        _fg_block(c, _fg_be32(inp, 0), _fg_be32(inp, 4), _fg_be32(inp, 8), _fg_be32(inp, 12), out, 0)
+        _fg_free(c)
+        ret true
+    end
+    inv := mem.AllocateZeroed(256 as u64) as u8*
+    repeat 256 in i:
+        inv[FG_SBOX[i] as int] = i as u8
+    end
+    s := mem.AllocateZeroed(32 as u64) as u8*
+    t := ((s as i64) + (16 as i64)) as u8*
+    mem.Copy(s as void*, inp, 16 as u64)
+    rk := c.rk
+    _ecb_addkey(s, rk, c.nr)
+    mut r := c.nr - 1
+    until r >= 0:
+        repeat 4 in col:
+            repeat 4 in row:
+                t[((col + row) % 4) * 4 + row] = inv[s[col * 4 + row] as int]
+            end
+        end
+        mem.Copy(s as void*, t as void*, 16 as u64)
+        _ecb_addkey(s, rk, r)
+        if r > 0:
+            repeat 4 in col:
+                a0 := s[col * 4] as int
+                a1 := s[col * 4 + 1] as int
+                a2 := s[col * 4 + 2] as int
+                a3 := s[col * 4 + 3] as int
+                t[col * 4] = (_ecb_mul(a0, 14) ^ _ecb_mul(a1, 11) ^ _ecb_mul(a2, 13) ^ _ecb_mul(a3, 9)) as u8
+                t[col * 4 + 1] = (_ecb_mul(a0, 9) ^ _ecb_mul(a1, 14) ^ _ecb_mul(a2, 11) ^ _ecb_mul(a3, 13)) as u8
+                t[col * 4 + 2] = (_ecb_mul(a0, 13) ^ _ecb_mul(a1, 9) ^ _ecb_mul(a2, 14) ^ _ecb_mul(a3, 11)) as u8
+                t[col * 4 + 3] = (_ecb_mul(a0, 11) ^ _ecb_mul(a1, 13) ^ _ecb_mul(a2, 9) ^ _ecb_mul(a3, 14)) as u8
+            end
+            mem.Copy(s as void*, t as void*, 16 as u64)
+        end
+        r--
+    end
+    mem.Copy(out, s as void*, 16 as u64)
+    _wipe(s as void*, 32)
+    mem.Free(s as void*)
+    mem.Free(inv as void*)
+    _fg_free(c)
+    ret true
+end

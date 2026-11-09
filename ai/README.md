@@ -380,6 +380,20 @@ the service, encrypted with HMAC-based counter mode plus an HMAC tag keyed by
 - `figma_api` reads files, nodes, comments and images (GET, plus POST for comments);
   `figma_export` renders nodes and saves them into the sandbox. Figma OAuth tokens
   are refreshed on use.
+- `figma_mcp` talks to Figma's own MCP server (`https://mcp.figma.com/mcp`, streamable
+  HTTP) as the user: `action: "tools"` lists the Figma tools, `action: "call"` runs one
+  (`get_design_context`, `get_screenshot`, `get_metadata`, ...) and a returned screenshot
+  reaches the model as an image. It runs on the server for both cloud chats and Salam
+  Agent chats, so the desktop app needs no change. It is opt-in: the Connections page
+  has a separate Figma MCP card. Figma's MCP server does not accept REST tokens or the
+  Figma app above; it needs its own OAuth login with the `mcp:connect` scope. The server
+  registers itself once through Figma's dynamic client registration
+  (`/v1/oauth/mcp/register`, stored encrypted in `integration_clients`), then sends the
+  user to `https://www.figma.com/oauth/mcp` with PKCE (the verifier is an HMAC of the
+  state, so nothing extra is stored) and the redirect `AI_APP_URL/auth/callback/figma-mcp`.
+  Nothing has to be configured by the operator. `AI_FIGMA_MCP_URL` only moves the MCP
+  endpoint, for the test mock. Tokens are refreshed on use and, like the others, never
+  shown to the model.
 - The sandbox shell is signed in for the user: when GitHub is connected, `GH_TOKEN`,
   `GITHUB_TOKEN` and a Git credential helper for github.com are set, and for Figma
   `FIGMA_TOKEN` and `FIGMA_AUTH_HEADER`. Tokens are scrubbed from command output.

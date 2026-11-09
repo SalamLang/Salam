@@ -48,6 +48,9 @@ pub const SEVENZIP_UNSAFE_PATH := 7
 @en "SEVENZIP_BAD_PASSWORD"
 @fa "هفت زد گذرواژه اشتباه"
 pub const SEVENZIP_BAD_PASSWORD := 8
+@en "SEVENZIP_IO"
+@fa "هفت زد خطای پرونده"
+pub const SEVENZIP_IO := 10
 
 @en "SevenZipArchive"
 @fa "بایگانی هفت زد"
@@ -347,7 +350,7 @@ func _szin_free(inp: _SzIn):
     end
 end
 
-func _sz_input_of(s: _Sz, base: u8*, n: int, fi: int, in_idx: int, password: str, depth: int, status &: int, inp &: _SzIn): bool:
+func _sz_input_of(s: _Sz, base: u8*, n: i64, fi: int, in_idx: int, password: str, depth: int, status &: int, inp &: _SzIn): bool:
     f := s.folders.get(fi)
     repeat f.bin.len() in k:
         if f.bin.get(k) == in_idx:
@@ -371,7 +374,7 @@ func _sz_input_of(s: _Sz, base: u8*, n: int, fi: int, in_idx: int, password: str
             end
             off := _sz_pack_offset(s, pidx)
             sz := s.pack_sizes.get(pidx)
-            if off < (32 as i64) or sz < (0 as i64) or off + sz > (n as i64):
+            if off < (32 as i64) or sz < (0 as i64) or off + sz > n:
                 status = SEVENZIP_CORRUPT
                 ret false
             end
@@ -384,7 +387,7 @@ func _sz_input_of(s: _Sz, base: u8*, n: int, fi: int, in_idx: int, password: str
     ret false
 end
 
-func _sz_stream_out(s: _Sz, base: u8*, n: int, fi: int, out_idx: int, password: str, depth: int, status &: int): compress.ByteBuf:
+func _sz_stream_out(s: _Sz, base: u8*, n: i64, fi: int, out_idx: int, password: str, depth: int, status &: int): compress.ByteBuf:
     f := s.folders.get(fi)
     if depth > f.coders.len() or out_idx >= f.coders.len() or out_idx >= f.unpack.len():
         status = SEVENZIP_CORRUPT
@@ -449,7 +452,7 @@ func _sz_has_aes(f: _SzFolder): bool:
     ret false
 end
 
-func _sz_unpack_folder(s: _Sz, base: u8*, n: int, fi: int, password: str, status &: int): compress.ByteBuf:
+func _sz_unpack_folder(s: _Sz, base: u8*, n: i64, fi: int, password: str, status &: int): compress.ByteBuf:
     status = SEVENZIP_OK
     f := s.folders.get(fi)
     repeat f.coders.len() in i:
@@ -575,7 +578,7 @@ func _sz_load(p: void*, n: int, password: str, s &: _Sz): int:
             break
         end
         mut dst := SEVENZIP_OK
-        next := _sz_unpack_folder(tmp, b, n, 0, password, dst)
+        next := _sz_unpack_folder(tmp, b, n as i64, 0, password, dst)
         _sz_free(tmp)
         if dst != SEVENZIP_OK:
             status = dst
@@ -642,7 +645,22 @@ func _sz_unix_mode(f: _SzFile): int:
     ret -1
 end
 
-func _sz_entries_of(s: _Sz, base: u8*, n: int, password: str): Vector<Entry>:
+func _sz_make_entry(f: _SzFile, method: int, packed: i64, kind: int, mode: int, lnk: str): Entry:
+    ret Entry {
+        name = _rar_dup(f.name)
+        size = f.size
+        compressed_size = packed
+        is_dir = f.is_dir
+        method = method
+        crc32 = f.crc as u32
+        mtime = f.mtime
+        link = lnk
+        kind = kind
+        mode = mode
+    }
+end
+
+func _sz_entries_of(s: _Sz, base: u8*, n: i64, password: str): Vector<Entry>:
     mut out := Vector {} as Vector<Entry>
     mut cur := -1
     mut cur_ok := false
@@ -687,18 +705,7 @@ func _sz_entries_of(s: _Sz, base: u8*, n: int, password: str): Vector<Entry>:
                 end
             end
         end
-        out.push(Entry {
-            name = _rar_dup(f.name)
-            size = f.size
-            compressed_size = packed
-            is_dir = f.is_dir
-            method = method
-            crc32 = f.crc as u32
-            mtime = f.mtime
-            link = lnk
-            kind = kind
-            mode = mode
-        })
+        out.push(_sz_make_entry(f, method, packed, kind, mode, lnk))
     end
     compress.BufFree(fb)
     ret out
@@ -736,7 +743,7 @@ func _sz_file_data(s: _Sz, fi: int, folder_buf: compress.ByteBuf, status &: int)
     ret out
 end
 
-func _sz_read_from(s: _Sz, base: u8*, n: int, name: str, max: int, password: str, status &: int): compress.ByteBuf:
+func _sz_read_from(s: _Sz, base: u8*, n: i64, name: str, max: int, password: str, status &: int): compress.ByteBuf:
     status = SEVENZIP_OK
     fi := _sz_find(s, name)
     if fi < 0:
@@ -770,7 +777,7 @@ func _sz_apply_meta(f: _SzFile, path: str):
     end
 end
 
-func _sz_extract_all_of(s: _Sz, base: u8*, n: int, destdir: str, password: str, status &: int): int:
+func _sz_extract_all_of(s: _Sz, base: u8*, n: i64, destdir: str, password: str, status &: int): int:
     status = SEVENZIP_OK
     mut extracted := 0
     mut cur := -1
@@ -936,6 +943,7 @@ pub func SevenZipStatusText(status: int): str:
     if status == SEVENZIP_TOO_BIG: ret ArchiveStatusText(ARCHIVE_TOO_BIG) end
     if status == SEVENZIP_UNSAFE_PATH: ret ArchiveStatusText(ARCHIVE_UNSAFE_PATH) end
     if status == SEVENZIP_BAD_PASSWORD: ret ArchiveStatusText(ARCHIVE_BAD_PASSWORD) end
+    if status == SEVENZIP_IO: ret ArchiveStatusText(ARCHIVE_IO_ERROR) end
     ret ArchiveStatusText(-1)
 end
 
@@ -1025,7 +1033,7 @@ pub func SevenZipEntries(arc &: SevenZipArchive): Vector<Entry>:
     arc.status = _sz_load(arc.data, arc.len, arc.password, s)
     mut out := Vector {} as Vector<Entry>
     if arc.status == SEVENZIP_OK:
-        out = _sz_entries_of(s, arc.data as u8*, arc.len, arc.password)
+        out = _sz_entries_of(s, arc.data as u8*, arc.len as i64, arc.password)
     end
     _sz_free(s)
     ret out
@@ -1038,7 +1046,7 @@ pub func SevenZipRead(arc &: SevenZipArchive, name: str, max: int): compress.Byt
     mut st := _sz_load(arc.data, arc.len, arc.password, s)
     mut out := compress.NewByteBuf()
     if st == SEVENZIP_OK:
-        out = _sz_read_from(s, arc.data as u8*, arc.len, name, max, arc.password, st)
+        out = _sz_read_from(s, arc.data as u8*, arc.len as i64, name, max, arc.password, st)
     end
     arc.status = st
     _sz_free(s)
@@ -1052,7 +1060,7 @@ pub func SevenZipReadAll(arc &: SevenZipArchive, destdir: str): int:
     mut st := _sz_load(arc.data, arc.len, arc.password, s)
     mut extracted := 0
     if st == SEVENZIP_OK:
-        extracted = _sz_extract_all_of(s, arc.data as u8*, arc.len, destdir, arc.password, st)
+        extracted = _sz_extract_all_of(s, arc.data as u8*, arc.len as i64, destdir, arc.password, st)
     end
     arc.status = st
     _sz_free(s)

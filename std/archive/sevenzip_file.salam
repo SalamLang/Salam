@@ -1,0 +1,1040 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package archive
+
+import compress
+import filepath
+import mem
+import os
+import str
+
+struct _SzX:
+    pub fidx: Vector<int>
+    pub mode: Vector<int>
+    pub paths: Vector<str>
+    pub sizes: Vector<i64>
+    pub crcs: Vector<i64>
+    pub crc_def: Vector<bool>
+    pub res: Vector<int>
+    pub links: Vector<str>
+    pub names: Vector<str>
+    pub made: Vector<str>
+    pub cur: int
+    pub left: i64
+    pub began: bool
+    pub sink: compress.FileSink
+    pub capbuf: compress.ByteBuf
+    pub last: int
+    pub done: bool
+    pub err: int
+    pub fcrc: u32
+    pub fcrc_on: bool
+end
+
+struct _SzF:
+    pub kind: int
+    pub dist: int
+    pub hist: u8*
+    pub hp: int
+    pub carry: u8*
+    pub nc: int
+    pub tmp: u8*
+    pub tcap: int
+    pub next: compress.FileSink*
+end
+
+@en "SevenZipFile"
+@fa "پرونده هفت زد"
+pub struct SevenZipFile:
+    @en "path"
+    @fa "مسیر"
+    pub path: str = ""
+    @en "size"
+    @fa "اندازه"
+    pub size: i64 = 0 as i64
+    @en "start"
+    @fa "آغاز"
+    pub start: i64 = 0 as i64
+    @en "password"
+    @fa "گذرواژه"
+    pub password: str = ""
+    @en "status"
+    @fa "وضعیت"
+    pub status: int = 0
+    @en "header"
+    @fa "سرایند"
+    pub hdr: compress.ByteBuf = compress.ByteBuf { data = null, len = 0, cap = 0 }
+end
+
+func _szx_new(s: _Sz, fi: int, made: Vector<str>): _SzX:
+    mut x := _SzX {
+        fidx = Vector {} as Vector<int>, mode = Vector {} as Vector<int>, paths = Vector {} as Vector<str> sizes = Vector {} as Vector<i64>,
+        crcs = Vector {} as Vector<i64>, crc_def = Vector {} as Vector<bool> res = Vector {} as Vector<int>,
+        links = Vector {} as Vector<str>, names = Vector {} as Vector<str>, made = made
+        cur = 0, left = 0 as i64, began = false, sink = compress.FileSink {}, capbuf = compress.NewByteBuf()
+        last = -1, done = false, err = 0, fcrc = 0 as u32, fcrc_on = false
+    }
+    repeat s.files.len() in i:
+        f := s.files.get(i)
+        if f.anti or not f.has_stream or f.folder != fi or f.size <= (0 as i64):
+            continue
+        end
+        x.fidx.push(i)
+        x.mode.push(0)
+        x.paths.push("")
+        x.sizes.push(f.size)
+        x.crcs.push(f.crc)
+        x.crc_def.push(f.crc_def)
+        x.res.push(SEVENZIP_OK)
+        x.links.push("")
+        x.names.push(f.name)
+    end
+    ret x
+end
+
+func _szx_free(x &: _SzX):
+    x.fidx.free()
+    x.mode.free()
+    x.paths.free()
+    x.sizes.free()
+    x.crcs.free()
+    x.crc_def.free()
+    x.res.free()
+    x.links.free()
+    x.names.free()
+    compress.BufFree(x.capbuf)
+end
+
+func _szx_pos(x: _SzX, fileidx: int): int:
+    repeat x.fidx.len() in k:
+        if x.fidx.get(k) == fileidx:
+            ret k
+        end
+    end
+    ret -1
+end
+
+func _szx_begin(x: _SzX*):
+    i := x[0].cur
+    m := x[0].mode.get(i)
+    x[0].left = x[0].sizes.get(i)
+    x[0].began = true
+    compress.BufReset(x[0].capbuf)
+    if m == 1:
+        x[0].sink = compress.SinkOpen(x[0].paths.get(i), 0 as i64)
+        if x[0].sink.failed:
+            x[0].res.set(i, SEVENZIP_IO)
+            x[0].mode.set(i, 0)
+        end
+    else m >= 2:
+        x[0].sink = compress.FileSink {}
+    end
+end
+
+func _szx_end(x: _SzX*):
+    i := x[0].cur
+    m := x[0].mode.get(i)
+    if m != 0:
+        mut closed := true
+        if m == 1:
+            closed = compress.SinkClose(x[0].sink)
+        end
+        mut bad := not closed
+        if x[0].res.get(i) == SEVENZIP_OK and bad:
+            x[0].res.set(i, SEVENZIP_IO)
+        end
+        if x[0].crc_def.get(i) and (x[0].sink.crc as i64) != x[0].crcs.get(i):
+            bad = true
+            if x[0].res.get(i) == SEVENZIP_OK:
+                x[0].res.set(i, SEVENZIP_BAD_CRC)
+            end
+        end
+        if m == 1 and bad:
+            os.Remove(x[0].paths.get(i))
+        end
+        if not bad and m >= 2:
+            tgt := compress.BufToStrUnsafe(x[0].capbuf)
+            if m == 3:
+                x[0].links.set(i, tgt)
+            else:
+                nm := x[0].names.get(i)
+                if not _rar_link_target_ok(nm, tgt, x[0].made):
+                    x[0].res.set(i, SEVENZIP_UNSAFE_PATH)
+                else _rar_symlink(tgt, x[0].paths.get(i)):
+                    x[0].made.push(_rar_dup(nm))
+                else:
+                    x[0].res.set(i, SEVENZIP_UNSUPPORTED)
+                end
+                _rar_free_name(tgt)
+            end
+        end
+    end
+    x[0].cur = i + 1
+    x[0].left = 0 as i64
+    x[0].began = false
+    if x[0].cur > x[0].last:
+        x[0].done = true
+    end
+end
+
+func _szx_emit(x: _SzX*, p: void*, n: int): bool:
+    mut q := p as u8*
+    mut k := n
+    if x[0].fcrc_on:
+        x[0].fcrc = compress.CRC32Update(x[0].fcrc, p, n)
+    end
+    until k > 0:
+        if x[0].done:
+            ret false
+        end
+        if x[0].cur >= x[0].fidx.len():
+            ret true
+        end
+        if not x[0].began:
+            _szx_begin(x)
+        end
+        left := x[0].left
+        take := left < (k as i64) ? (left as int) : k
+        m := x[0].mode.get(x[0].cur)
+        if m != 0 and take > 0:
+            if not compress.SinkWrite(x[0].sink, q as void*, take):
+                x[0].res.set(x[0].cur, SEVENZIP_IO)
+                x[0].err = SEVENZIP_IO
+                ret false
+            end
+            if m >= 2:
+                compress.BufPushBytes(x[0].capbuf, q as void*, take)
+            end
+        end
+        x[0].left -= take as i64
+        q = ((q as i64) + (take as i64)) as u8*
+        k -= take
+        if x[0].left == (0 as i64):
+            _szx_end(x)
+        end
+    end
+    ret not x[0].done
+end
+
+func _szx_finish(x: _SzX*, st: int):
+    if x[0].began and x[0].cur < x[0].fidx.len():
+        i := x[0].cur
+        if x[0].mode.get(i) == 1:
+            compress.SinkClose(x[0].sink)
+            os.Remove(x[0].paths.get(i))
+        end
+    end
+    if st == SEVENZIP_OK:
+        ret
+    end
+    mut k := x[0].cur
+    until k < x[0].fidx.len():
+        if x[0].mode.get(k) != 0 and x[0].res.get(k) == SEVENZIP_OK:
+            x[0].res.set(k, st)
+        end
+        k++
+    end
+end
+
+func _szf_emit(f: _SzF*, p: void*, n: int): bool:
+    if n <= 0:
+        ret true
+    end
+    if f[0].kind == 1:
+        if f[0].tcap < n:
+            if f[0].tmp != null:
+                mem.Free(f[0].tmp as void*)
+            end
+            f[0].tmp = mem.Allocate(n as u64) as u8*
+            f[0].tcap = n
+        end
+        src := p as u8*
+        d := f[0].dist
+        mut hp := f[0].hp
+        repeat n in i:
+            v := (((src[i] as int) + (f[0].hist[(hp - d) & 255] as int)) & 255)
+            f[0].hist[hp & 255] = v as u8
+            f[0].tmp[i] = v as u8
+            hp++
+        end
+        f[0].hp = hp
+        ret compress.SinkWrite(f[0].next[0], f[0].tmp as void*, n)
+    end
+    w := f[0].dist
+    total := f[0].nc + n
+    if f[0].tcap < total:
+        if f[0].tmp != null:
+            mem.Free(f[0].tmp as void*)
+        end
+        f[0].tmp = mem.Allocate(total as u64) as u8*
+        f[0].tcap = total
+    end
+    repeat f[0].nc in i:
+        f[0].tmp[i] = f[0].carry[i]
+    end
+    mem.Copy(((f[0].tmp as i64) + (f[0].nc as i64)) as void*, p, n as u64)
+    full := total - (total % w)
+    if full > 0:
+        compress.SwapDecode(f[0].tmp as void*, full, w)
+    end
+    f[0].nc = total - full
+    repeat f[0].nc in i:
+        f[0].carry[i] = f[0].tmp[full + i]
+    end
+    if full > 0:
+        ret compress.SinkWrite(f[0].next[0], f[0].tmp as void*, full)
+    end
+    ret true
+end
+
+func _szf_finalize(f: _SzF*): bool:
+    if f[0].kind == 2 and f[0].nc > 0:
+        n := f[0].nc
+        f[0].nc = 0
+        ret compress.SinkWrite(f[0].next[0], f[0].carry as void*, n)
+    end
+    ret true
+end
+
+func _szf_filter_kind(id: i64): int:
+    if id == (3 as i64):
+        ret 1
+    end
+    if id == (0x020302 as i64) or id == (0x020304 as i64):
+        ret 2
+    end
+    ret 0
+end
+
+func _szf_source_ok(id: i64): bool:
+    ret id == (0 as i64) or id == (0x030101 as i64) or id == (0x21 as i64) or id == (0x040108 as i64) or id == (0x040109 as i64) or id == (0x040202 as i64)
+end
+
+func _szf_range(s: _Sz, f: _SzFolder, avail: i64, lo &: i64, hi &: i64): int:
+    lo = 0x7FFFFFFFFFFFFFF as i64
+    hi = 0 as i64
+    repeat f.packed.len() in j:
+        pidx := f.pack_first + j
+        if pidx >= s.pack_sizes.len():
+            ret SEVENZIP_CORRUPT
+        end
+        off := s.pack_off.get(pidx)
+        sz := s.pack_sizes.get(pidx)
+        if off < (32 as i64) or sz < (0 as i64) or off + sz > avail:
+            ret SEVENZIP_CORRUPT
+        end
+        if off < lo:
+            lo = off
+        end
+        if off + sz > hi:
+            hi = off + sz
+        end
+    end
+    if hi == (0 as i64):
+        lo = 32 as i64
+        hi = 32 as i64
+    end
+    ret SEVENZIP_OK
+end
+
+func _szf_region(fp: void*, start: i64, avail: i64, s: _Sz, f: _SzFolder, region &: compress.ByteBuf, vb &: i64, vn &: i64): int:
+    mut lo := 0 as i64
+    mut hi := 0 as i64
+    rs := _szf_range(s, f, avail, lo, hi)
+    if rs != SEVENZIP_OK:
+        ret rs
+    end
+    span := hi - lo
+    if span > (2000000000 as i64):
+        ret SEVENZIP_TOO_BIG
+    end
+    region = compress.NewByteBufCap(span as int)
+    if span > (0 as i64):
+        got := compress.FileReadAt(fp, start + lo, region.data, span as int)
+        if (got as i64) != span:
+            ret SEVENZIP_IO
+        end
+    end
+    region.len = span as int
+    vb = (region.data as i64) - lo
+    vn = hi
+    ret SEVENZIP_OK
+end
+
+func _szf_fallback(fp: void*, start: i64, avail: i64, s: _Sz, fi: int, password: str, memcap: i64, top: compress.FileSink*): int:
+    f := s.folders.get(fi)
+    if memcap > (0 as i64) and _sz_folder_packed(s, fi) > memcap:
+        ret SEVENZIP_TOO_BIG
+    end
+    mut region := compress.NewByteBuf()
+    mut vb := 0 as i64
+    mut vn := 0 as i64
+    mut st := _szf_region(fp, start, avail, s, f, region, vb, vn)
+    if st == SEVENZIP_OK:
+        mut out := _sz_unpack_folder(s, vb as u8*, vn, fi, password, st)
+        if st == SEVENZIP_OK:
+            if not compress.SinkWrite(top[0], out.data, out.len):
+                st = SEVENZIP_IO
+            end
+        end
+        compress.BufFree(out)
+    end
+    compress.BufFree(region)
+    ret st
+end
+
+func _szf_source(fp: void*, start: i64, avail: i64, s: _Sz, f: _SzFolder, c: _SzCoder, out_idx: int, pidx: int, memcap: i64, sink &: compress.FileSink): int:
+    out_size := f.unpack.get(out_idx)
+    off := start + s.pack_off.get(pidx)
+    sz := s.pack_sizes.get(pidx)
+    if s.pack_off.get(pidx) < (32 as i64) or sz < (0 as i64) or s.pack_off.get(pidx) + sz > avail or out_size < (0 as i64):
+        ret SEVENZIP_CORRUPT
+    end
+    id := c.id
+    pp := c.props.data as u8*
+    mut code := 0
+    if id == (0 as i64):
+        if sz != out_size:
+            ret SEVENZIP_CORRUPT
+        end
+        if not compress.SinkCopyFrom(sink, fp, off, sz):
+            code = 3
+        end
+    else id == (0x21 as i64):
+        if c.props.len < 1:
+            ret SEVENZIP_CORRUPT
+        end
+        code = compress.Lzma2FileToSink(pp[0] as int, fp, off, sz, out_size, sink, memcap)
+    else id == (0x030101 as i64):
+        if c.props.len < 5:
+            ret SEVENZIP_CORRUPT
+        end
+        code = compress.LzmaFileToSink(c.props.data, c.props.len, fp, off, sz, out_size, sink, memcap)
+    else id == (0x040108 as i64) or id == (0x040109 as i64):
+        mut br := compress.NewFileBitReader(fp, off, sz)
+        mut good := not br.bad
+        if good:
+            good = compress.RawInflateToSink(br, sink, id == (0x040109 as i64))
+        end
+        compress.FileBitReaderFree(br)
+        if not good:
+            code = sink.failed or sink.over ? 3 : 1
+        end
+    else:
+        if sz > (2000000000 as i64) or out_size > (2000000000 as i64) or (memcap > (0 as i64) and sz + out_size > memcap):
+            ret SEVENZIP_TOO_BIG
+        end
+        packed := mem.Allocate((sz + (1 as i64)) as u64)
+        mut ok := compress.FileReadAt(fp, off, packed, sz as int) == (sz as int)
+        mut res := compress.NewByteBuf()
+        if ok:
+            res = compress.Bzip2DecompressMax(packed, sz as int, out_size as int, ok)
+        end
+        mem.Free(packed)
+        if ok:
+            ok = res.len == (out_size as int) and compress.SinkWrite(sink, res.data, res.len)
+        end
+        compress.BufFree(res)
+        if not ok:
+            code = sink.failed or sink.over ? 3 : 1
+        end
+    end
+    if code == 0:
+        if sink.written != out_size:
+            ret SEVENZIP_CORRUPT
+        end
+        ret SEVENZIP_OK
+    end
+    if code == 2:
+        ret SEVENZIP_TOO_BIG
+    end
+    if code == 3:
+        ret SEVENZIP_IO
+    end
+    ret SEVENZIP_CORRUPT
+end
+
+func _szf_folder(fp: void*, start: i64, avail: i64, s: _Sz, fi: int, password: str, memcap: i64, x: _SzX*): int:
+    f := s.folders.get(fi)
+    xemit := (p: void*, n: int, c: void*): ret _szx_emit(c as _SzX*, p, n) end
+    femit := (p: void*, n: int, c: void*): ret _szf_emit(c as _SzF*, p, n) end
+    mut top := mem.AllocateZeroed(sizeof(compress.FileSink)) as compress.FileSink*
+    top[0] = compress.SinkCallback(0 as i64, xemit, x as void*)
+    x[0].fcrc_on = f.crc_def
+    x[0].fcrc = 0 as u32
+    mut chain := Vector {} as Vector<int>
+    mut pidx := -1
+    mut streamable := true
+    mut out_idx := _sz_folder_main_out(f)
+    mut guard := 0
+    until streamable and pidx < 0:
+        guard++
+        if guard > f.coders.len() + 1 or out_idx < 0 or out_idx >= f.coders.len() or out_idx >= f.unpack.len():
+            streamable = false
+            break
+        end
+        c := f.coders.get(out_idx)
+        if c.num_in != 1 or c.num_out != 1:
+            streamable = false
+            break
+        end
+        mut first_in := 0
+        repeat out_idx in q:
+            first_in += f.coders.get(q).num_in
+        end
+        chain.push(out_idx)
+        mut found := false
+        repeat f.bin.len() in k:
+            if not found and f.bin.get(k) == first_in:
+                out_idx = f.bout.get(k)
+                found = true
+            end
+        end
+        if not found:
+            repeat f.packed.len() in j:
+                if not found and f.packed.get(j) == first_in:
+                    pidx = f.pack_first + j
+                    found = true
+                end
+            end
+        end
+        if not found or (pidx >= 0 and pidx >= s.pack_sizes.len()):
+            streamable = false
+        end
+    end
+    if streamable:
+        repeat chain.len() in k:
+            id := f.coders.get(chain.get(k)).id
+            if k < chain.len() - 1:
+                if _szf_filter_kind(id) == 0:
+                    streamable = false
+                end
+            else:
+                if not _szf_source_ok(id):
+                    streamable = false
+                end
+            end
+        end
+    end
+    mut st := SEVENZIP_OK
+    if not streamable:
+        st = _szf_fallback(fp, start, avail, s, fi, password, memcap, top)
+    else:
+        mut stages := Vector {} as Vector<i64>
+        mut sinks := Vector {} as Vector<i64>
+        mut nextp := top
+        repeat chain.len() - 1 in k:
+            c := f.coders.get(chain.get(k))
+            fk := _szf_filter_kind(c.id)
+            mut dist := 1
+            if fk == 1:
+                dist = 1
+                if c.props.len >= 1:
+                    dist = ((c.props.data as u8*)[0] as int) + 1
+                end
+            else:
+                dist = c.id == (0x020302 as i64) ? 2 : 4
+            end
+            fs := mem.AllocateZeroed(sizeof(_SzF)) as _SzF*
+            fs[0].kind = fk
+            fs[0].dist = dist
+            fs[0].hist = mem.AllocateZeroed(256 as u64) as u8*
+            fs[0].carry = mem.AllocateZeroed(8 as u64) as u8*
+            fs[0].next = nextp
+            ns := mem.AllocateZeroed(sizeof(compress.FileSink)) as compress.FileSink*
+            ns[0] = compress.SinkCallback(0 as i64, femit, fs as void*)
+            stages.push(fs as i64)
+            sinks.push(ns as i64)
+            nextp = ns
+        end
+        last := chain.get(chain.len() - 1)
+        st = _szf_source(fp, start, avail, s, f, f.coders.get(last), last, pidx, memcap, nextp[0])
+        mut k := stages.len() - 1
+        until k >= 0:
+            fs := stages.get(k) as _SzF*
+            if st == SEVENZIP_OK and not _szf_finalize(fs):
+                st = SEVENZIP_IO
+            end
+            k--
+        end
+        repeat stages.len() in q:
+            fs := stages.get(q) as _SzF*
+            mem.Free(fs[0].hist as void*)
+            mem.Free(fs[0].carry as void*)
+            if fs[0].tmp != null:
+                mem.Free(fs[0].tmp as void*)
+            end
+            mem.Free(fs as void*)
+            mem.Free(sinks.get(q) as void*)
+        end
+        stages.free()
+        sinks.free()
+        if st == SEVENZIP_IO and x[0].done:
+            st = SEVENZIP_OK
+        end
+        if st == SEVENZIP_OK and f.crc_def and not x[0].done and (x[0].fcrc as i64) != f.crc:
+            st = SEVENZIP_BAD_CRC
+        end
+        if st == SEVENZIP_IO and x[0].err == 0 and not x[0].done:
+            st = SEVENZIP_CORRUPT
+        end
+    end
+    chain.free()
+    mem.Free(top as void*)
+    if not streamable and st == SEVENZIP_IO and x[0].done:
+        st = SEVENZIP_OK
+    end
+    ret st
+end
+
+func _szf_load(fp: void*, sf &: SevenZipFile): int:
+    sz := sf.size
+    if sz < (32 as i64):
+        ret SEVENZIP_UNSUPPORTED
+    end
+    sig := mem.Allocate(32 as u64)
+    got := compress.FileReadAt(fp, 0 as i64, sig, 32)
+    good := got == 32 and _sz_is(sig, 32)
+    mem.Free(sig)
+    mut start := 0 as i64
+    if not good:
+        n := sz > (8388640 as i64) ? 8388640 : (sz as int)
+        buf := mem.Allocate(n as u64)
+        g := compress.FileReadAt(fp, 0 as i64, buf, n)
+        off := _sz_start(buf, g)
+        mem.Free(buf)
+        if off == 0:
+            ret SEVENZIP_UNSUPPORTED
+        end
+        start = off as i64
+    end
+    sf.start = start
+    avail := sz - start
+    hd := mem.Allocate(32 as u64)
+    if compress.FileReadAt(fp, start, hd, 32) != 32:
+        mem.Free(hd)
+        ret SEVENZIP_CORRUPT
+    end
+    b := hd as u8*
+    if (b[6] as int) != 0:
+        mem.Free(hd)
+        ret SEVENZIP_UNSUPPORTED
+    end
+    if (compress.CRC32(((hd as i64) + 12) as void*, 20) as i64) != _sz_le32(b, 8):
+        mem.Free(hd)
+        ret SEVENZIP_BAD_CRC
+    end
+    noff := _sz_le64(b, 12)
+    nsize := _sz_le64(b, 20)
+    want_crc := _sz_le32(b, 28)
+    mem.Free(hd)
+    if nsize == (0 as i64):
+        ret SEVENZIP_OK
+    end
+    if noff < (0 as i64) or nsize < (0 as i64) or 32 + noff + nsize > avail:
+        ret SEVENZIP_CORRUPT
+    end
+    if nsize > (2000000000 as i64):
+        ret SEVENZIP_TOO_BIG
+    end
+    mut cur := compress.NewByteBufCap(nsize as int)
+    if compress.FileReadAt(fp, start + 32 + noff, cur.data, nsize as int) != (nsize as int):
+        compress.BufFree(cur)
+        ret SEVENZIP_IO
+    end
+    cur.len = nsize as int
+    if (compress.CRC32(cur.data, cur.len) as i64) != want_crc:
+        compress.BufFree(cur)
+        ret SEVENZIP_BAD_CRC
+    end
+    mut round := 0
+    mut status := SEVENZIP_OK
+    until true:
+        round++
+        if round > 4 or cur.len < 1:
+            status = SEVENZIP_CORRUPT
+            break
+        end
+        first := compress.BufGet(cur, 0)
+        if first == _SZ_HEADER:
+            sf.hdr = cur
+            ret SEVENZIP_OK
+        end
+        if first != _SZ_ENCODED_HEADER:
+            status = SEVENZIP_CORRUPT
+            break
+        end
+        mut r := _SzR { p = cur.data as u8*, pos = 1, end = cur.len, bad = false }
+        mut tmp := _sz_new()
+        st := _sz_read_streams(r, tmp)
+        if st != 0 or tmp.folders.len() < 1:
+            _sz_free(tmp)
+            status = st != 0 ? st : SEVENZIP_CORRUPT
+            break
+        end
+        mut region := compress.NewByteBuf()
+        mut vb := 0 as i64
+        mut vn := 0 as i64
+        mut dst := _szf_region(fp, start, avail, tmp, tmp.folders.get(0), region, vb, vn)
+        mut next := compress.NewByteBuf()
+        if dst == SEVENZIP_OK:
+            next = _sz_unpack_folder(tmp, vb as u8*, vn, 0, sf.password, dst)
+        end
+        compress.BufFree(region)
+        _sz_free(tmp)
+        if dst != SEVENZIP_OK:
+            status = dst
+            if dst == SEVENZIP_BAD_PASSWORD and sf.password.len() == 0:
+                status = SEVENZIP_ENCRYPTED
+            end
+            break
+        end
+        compress.BufFree(cur)
+        cur = next
+    end
+    compress.BufFree(cur)
+    ret status
+end
+
+func _szf_parse(sf: SevenZipFile, s &: _Sz): int:
+    if sf.status != SEVENZIP_OK:
+        ret sf.status
+    end
+    if sf.hdr.len < 1:
+        ret SEVENZIP_OK
+    end
+    mut r := _SzR { p = sf.hdr.data as u8*, pos = 1, end = sf.hdr.len, bad = false }
+    ret _sz_parse_header(r, s)
+end
+
+func _szf_links(fp: void*, sf: SevenZipFile, s: _Sz, memcap: i64, kinds: Vector<int>, texts: Vector<str>):
+    avail := sf.size - sf.start
+    repeat s.folders.len() in fi:
+        mut any := false
+        repeat s.files.len() in i:
+            f := s.files.get(i)
+            if kinds.get(i) == 2 and f.folder == fi:
+                any = true
+            end
+        end
+        if not any:
+            continue
+        end
+        mut made := Vector {} as Vector<str>
+        mut x := _szx_new(s, fi, made)
+        repeat s.files.len() in i:
+            f := s.files.get(i)
+            if kinds.get(i) == 2 and f.folder == fi:
+                pos := _szx_pos(x, i)
+                if pos >= 0:
+                    x.mode.set(pos, 3)
+                    if pos > x.last:
+                        x.last = pos
+                    end
+                end
+            end
+        end
+        if x.last >= 0:
+            xp := mem.AllocateZeroed(sizeof(_SzX)) as _SzX*
+            xp[0] = x
+            st := _szf_folder(fp, sf.start, avail, s, fi, sf.password, memcap, xp)
+            _szx_finish(xp, st)
+            x = xp[0]
+            repeat x.fidx.len() in k:
+                if x.mode.get(k) == 3 and x.res.get(k) == SEVENZIP_OK:
+                    texts.set(x.fidx.get(k), x.links.get(k))
+                end
+            end
+            mem.Free(xp as void*)
+        end
+        _szx_free(x)
+        made.free()
+    end
+end
+
+func _szf_extract(sf: SevenZipFile, s: _Sz, destdir: str, only: int, destpath: str, cap: i64, memcap: i64, made: Vector<str>, written &: int): int:
+    fp := compress.FileOpenRead(sf.path)
+    if fp == null:
+        ret SEVENZIP_IO
+    end
+    avail := sf.size - sf.start
+    mut first := SEVENZIP_OK
+    repeat s.folders.len() in fi:
+        mut x := _szx_new(s, fi, made)
+        mut want := 0
+        repeat x.fidx.len() in k:
+            i := x.fidx.get(k)
+            f := s.files.get(i)
+            if only >= 0 and i != only:
+                continue
+            end
+            if only < 0 and not _safe_entry_name(f.name) or only < 0 and _rar_under_link(f.name, made):
+                x.res.set(k, SEVENZIP_UNSAFE_PATH)
+                continue
+            end
+            if cap > (0 as i64) and f.size > cap:
+                x.res.set(k, SEVENZIP_TOO_BIG)
+                continue
+            end
+            is_link := only < 0 and _sz_is_link(f)
+            if is_link and f.size >= (4096 as i64):
+                x.res.set(k, SEVENZIP_UNSUPPORTED)
+                continue
+            end
+            mut outpath := destpath
+            if only < 0:
+                outpath = filepath.Join(destdir, f.name)
+                parent := filepath.Dir(outpath)
+                EnsureDir(parent)
+                mem.Free(parent as void*)
+            end
+            if is_link:
+                x.mode.set(k, 2)
+            else:
+                x.mode.set(k, 1)
+                if os.Exists(outpath):
+                    _rar_set_mode(outpath, 0x1a4)
+                end
+            end
+            x.paths.set(k, outpath)
+            x.last = k
+            want++
+        end
+        if want > 0:
+            xp := mem.AllocateZeroed(sizeof(_SzX)) as _SzX*
+            xp[0] = x
+            st := _szf_folder(fp, sf.start, avail, s, fi, sf.password, memcap, xp)
+            _szx_finish(xp, st)
+            x = xp[0]
+            mem.Free(xp as void*)
+            if st != SEVENZIP_OK and first == SEVENZIP_OK:
+                first = st
+            end
+        end
+        repeat x.fidx.len() in k:
+            r := x.res.get(k)
+            m := x.mode.get(k)
+            if r == SEVENZIP_OK and m != 0:
+                written++
+                if m == 1:
+                    _sz_apply_meta(s.files.get(x.fidx.get(k)), x.paths.get(k))
+                end
+            else r != SEVENZIP_OK and first == SEVENZIP_OK:
+                first = r
+            end
+            if x.paths.get(k).len() > 0 and only < 0:
+                mem.Free(x.paths.get(k) as void*)
+            end
+        end
+        _szx_free(x)
+    end
+    compress.FileClose(fp)
+    ret first
+end
+
+@en "SevenZipOpenFile"
+@fa "بازکردن پرونده هفت زد"
+pub func SevenZipOpenFile(path: str, password: str): SevenZipFile:
+    mut sf := SevenZipFile { path = str.Clone(path), password = str.Clone(password), status = SEVENZIP_CORRUPT }
+    fp := compress.FileOpenRead(path)
+    if fp == null:
+        sf.status = SEVENZIP_IO
+        ret sf
+    end
+    sf.size = compress.FileSize(fp)
+    sf.status = _szf_load(fp, sf)
+    compress.FileClose(fp)
+    ret sf
+end
+
+@en "SevenZipFileClose"
+@fa "بستن پرونده هفت زد"
+pub func SevenZipFileClose(sf &: SevenZipFile):
+    compress.BufFree(sf.hdr)
+    if sf.path.len() > 0:
+        mem.Free(sf.path as void*)
+    end
+    if sf.password.len() > 0:
+        mem.Free(sf.password as void*)
+    end
+    sf.path = ""
+    sf.password = ""
+    sf.size = 0 as i64
+end
+
+@en "SevenZipFileEntries"
+@fa "مدخل های پرونده هفت زد"
+pub func SevenZipFileEntries(sf &: SevenZipFile): Vector<Entry>:
+    mut out := Vector {} as Vector<Entry>
+    mut s := _sz_new()
+    st := _szf_parse(sf, s)
+    if st != SEVENZIP_OK:
+        sf.status = st
+        _sz_free(s)
+        ret out
+    end
+    mut kinds := Vector {} as Vector<int>
+    mut texts := Vector {} as Vector<str>
+    repeat s.files.len() in i:
+        f := s.files.get(i)
+        mut k := f.is_dir ? 1 : 0
+        if _sz_is_link(f) and not f.is_dir:
+            k = 2
+            if not f.has_stream or f.size <= (0 as i64) or f.size >= (4096 as i64):
+                k = 4
+            end
+        end
+        kinds.push(k)
+        texts.push("")
+    end
+    fp := compress.FileOpenRead(sf.path)
+    if fp != null:
+        _szf_links(fp, sf, s, 0 as i64, kinds, texts)
+        compress.FileClose(fp)
+    end
+    repeat s.files.len() in i:
+        f := s.files.get(i)
+        if f.anti:
+            continue
+        end
+        mut method := 0
+        mut packed := 0 as i64
+        if f.has_stream and f.folder >= 0:
+            method = _sz_method(s.folders.get(f.folder))
+            if f.offset == (0 as i64):
+                packed = _sz_folder_packed(s, f.folder)
+            end
+        end
+        mut mode := _sz_unix_mode(f)
+        if mode < 0:
+            mode = 0
+        end
+        mut kind := f.is_dir ? 1 : 0
+        if kinds.get(i) >= 2:
+            kind = 2
+        end
+        out.push(_sz_make_entry(f, method, packed, kind, mode, texts.get(i)))
+    end
+    kinds.free()
+    texts.free()
+    _sz_free(s)
+    ret out
+end
+
+@en "SevenZipFileExtractTo"
+@fa "استخراج از پرونده هفت زد به پرونده"
+pub func SevenZipFileExtractTo(sf &: SevenZipFile, name: str, destpath: str, cap: i64, memcap: i64): int:
+    mut s := _sz_new()
+    mut st := _szf_parse(sf, s)
+    if st != SEVENZIP_OK:
+        _sz_free(s)
+        ret st
+    end
+    fi := _sz_find(s, name)
+    if fi < 0:
+        _sz_free(s)
+        ret SEVENZIP_NOT_FOUND
+    end
+    f := s.files.get(fi)
+    if cap > (0 as i64) and f.size > cap:
+        _sz_free(s)
+        ret SEVENZIP_TOO_BIG
+    end
+    if f.is_dir:
+        _sz_free(s)
+        ret SEVENZIP_UNSUPPORTED
+    end
+    if not f.has_stream or f.size == (0 as i64):
+        mut empty := compress.SinkOpen(destpath, 0 as i64)
+        if empty.failed:
+            st = SEVENZIP_IO
+        else:
+            compress.SinkClose(empty)
+        end
+        _sz_free(s)
+        ret st
+    end
+    mut made := Vector {} as Vector<str>
+    mut written := 0
+    st = _szf_extract(sf, s, "", fi, destpath, cap, memcap, made, written)
+    made.free()
+    _sz_free(s)
+    ret st
+end
+
+@en "SevenZipFileExtractAll"
+@fa "استخراج همه از پرونده هفت زد"
+pub func SevenZipFileExtractAll(sf &: SevenZipFile, destdir: str, cap: i64, memcap: i64): int:
+    mut s := _sz_new()
+    mut first := _szf_parse(sf, s)
+    if first != SEVENZIP_OK:
+        _sz_free(s)
+        ret first
+    end
+    mut made := Vector {} as Vector<str>
+    repeat s.files.len() in i:
+        f := s.files.get(i)
+        if f.anti:
+            continue
+        end
+        if not _safe_entry_name(f.name) or _rar_under_link(f.name, made):
+            if first == SEVENZIP_OK:
+                first = SEVENZIP_UNSAFE_PATH
+            end
+            continue
+        end
+        outpath := filepath.Join(destdir, f.name)
+        if f.is_dir:
+            EnsureDir(outpath)
+        else not f.has_stream or f.size == (0 as i64):
+            parent := filepath.Dir(outpath)
+            EnsureDir(parent)
+            mem.Free(parent as void*)
+            mut empty := compress.SinkOpen(outpath, 0 as i64)
+            if empty.failed:
+                if first == SEVENZIP_OK:
+                    first = SEVENZIP_IO
+                end
+            else:
+                compress.SinkClose(empty)
+                _sz_apply_meta(f, outpath)
+            end
+        end
+        mem.Free(outpath as void*)
+    end
+    mut written := 0
+    st := _szf_extract(sf, s, destdir, -1, "", cap, memcap, made, written)
+    if first == SEVENZIP_OK:
+        first = st
+    end
+    mut j := s.files.len() - 1
+    until j >= 0:
+        f := s.files.get(j)
+        j--
+        if f.is_dir and not f.anti and _safe_entry_name(f.name) and not _rar_under_link(f.name, made):
+            dpath := filepath.Join(destdir, f.name)
+            if os.IsDir(dpath):
+                _sz_apply_meta(f, dpath)
+            end
+            mem.Free(dpath as void*)
+        end
+    end
+    repeat made.len() in k:
+        mem.Free(made.get(k) as void*)
+    end
+    made.free()
+    _sz_free(s)
+    ret first
+end

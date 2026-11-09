@@ -1,0 +1,281 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+
+package archive
+
+import compress
+import mem
+
+struct _SzSeq:
+    pub p: u8*
+    pub n: int
+    pub pos: int
+    pub fp: void*
+    pub off: i64
+    pub left: i64
+    pub buf: u8*
+    pub bad: bool
+    pub hold: compress.ByteBuf
+end
+
+struct _SzB2:
+    pub probs: i32*
+    pub code: i64
+    pub range: i64
+    pub o: i64
+    pub limit: i64
+    pub prev: int
+    pub ob: u8*
+    pub obn: int
+    pub call: _SzSeq*
+    pub jump: _SzSeq*
+    pub rc: _SzSeq*
+    pub bad: bool
+end
+
+func _szseq_mem(b: compress.ByteBuf): _SzSeq:
+    ret _SzSeq { p = b.data as u8*, n = b.len, pos = 0, fp = null, off = 0 as i64, left = 0 as i64, buf = null as u8*, bad = false, hold = b }
+end
+
+func _szseq_file(fp: void*, off: i64, len: i64): _SzSeq:
+    ret _SzSeq { p = null as u8*, n = 0, pos = 0, fp = fp, off = off, left = len, buf = mem.Allocate(65536 as u64) as u8*, bad = false, hold = compress.NewByteBuf() }
+end
+
+func _szseq_free(q: _SzSeq*):
+    compress.BufFree(q[0].hold)
+    if q[0].buf != null:
+        mem.Free(q[0].buf as void*)
+    end
+    mem.Free(q as void*)
+end
+
+func _szseq_byte(q: _SzSeq*): int:
+    if q[0].pos >= q[0].n:
+        if q[0].fp == null or q[0].left <= (0 as i64):
+            q[0].bad = true
+            ret 0
+        end
+        want := q[0].left > (65536 as i64) ? 65536 : (q[0].left as int)
+        got := compress.FileReadAt(q[0].fp, q[0].off, q[0].buf as void*, want)
+        if got <= 0:
+            q[0].bad = true
+            ret 0
+        end
+        q[0].off += got as i64
+        q[0].left -= got as i64
+        q[0].p = q[0].buf
+        q[0].n = got
+        q[0].pos = 0
+    end
+    v := q[0].p[q[0].pos] as int
+    q[0].pos++
+    ret v
+end
+
+func _szb2_new(limit: i64, call: _SzSeq*, jump: _SzSeq*, rc: _SzSeq*): _SzB2*:
+    d := mem.AllocateZeroed(sizeof(_SzB2)) as _SzB2*
+    d[0].probs = mem.AllocateZeroed(1032 as u64) as i32*
+    repeat 258 in i:
+        d[0].probs[i] = 1024 as i32
+    end
+    d[0].range = 0xFFFFFFFF as i64
+    d[0].limit = limit
+    d[0].ob = mem.Allocate(65536 as u64) as u8*
+    d[0].call = call
+    d[0].jump = jump
+    d[0].rc = rc
+    repeat 5:
+        d[0].code = ((d[0].code << 8) | (_szseq_byte(rc) as i64)) & 0xFFFFFFFF
+    end
+    d[0].bad = rc[0].bad
+    ret d
+end
+
+func _szb2_free(d: _SzB2*):
+    mem.Free(d[0].probs as void*)
+    mem.Free(d[0].ob as void*)
+    _szseq_free(d[0].call)
+    _szseq_free(d[0].jump)
+    _szseq_free(d[0].rc)
+    mem.Free(d as void*)
+end
+
+func _szb2_bit(d: _SzB2*, idx: int): int:
+    ttt := d[0].probs[idx] as i64
+    bound := (d[0].range >> 11) * ttt
+    mut bit := 0
+    if d[0].code < bound:
+        d[0].range = bound
+        d[0].probs[idx] = (ttt + ((2048 - ttt) >> 5)) as i32
+    else:
+        d[0].range -= bound
+        d[0].code -= bound
+        d[0].probs[idx] = (ttt - (ttt >> 5)) as i32
+        bit = 1
+    end
+    if d[0].range < 16777216:
+        d[0].range = (d[0].range << 8) & 0xFFFFFFFF
+        d[0].code = ((d[0].code << 8) | (_szseq_byte(d[0].rc) as i64)) & 0xFFFFFFFF
+        if d[0].rc[0].bad:
+            d[0].bad = true
+        end
+    end
+    ret bit
+end
+
+func _szb2_flush(d: _SzB2*, next: compress.FileSink*): bool:
+    if d[0].obn > 0:
+        n := d[0].obn
+        d[0].obn = 0
+        ret compress.SinkWrite(next[0], d[0].ob as void*, n)
+    end
+    ret true
+end
+
+func _szb2_feed(d: _SzB2*, p: u8*, n: int, next: compress.FileSink*): bool:
+    mut i := 0
+    until i < n and d[0].o < d[0].limit and not d[0].bad:
+        bb := p[i] as int
+        i++
+        d[0].ob[d[0].obn] = bb as u8
+        d[0].obn++
+        d[0].o++
+        prev := d[0].prev
+        hit := (bb & 0xFE) == 0xE8 or (prev == 0x0F and (bb & 0xF0) == 0x80)
+        if not hit:
+            d[0].prev = bb
+        else d[0].o < d[0].limit:
+            mut idx := 257
+            if bb == 0xE8:
+                idx = prev
+            else bb == 0xE9:
+                idx = 256
+            end
+            if _szb2_bit(d, idx) == 0:
+                d[0].prev = bb
+            else:
+                mut src := d[0].jump
+                if bb == 0xE8:
+                    src = d[0].call
+                end
+                b0 := _szseq_byte(src) as i64
+                b1 := _szseq_byte(src) as i64
+                b2 := _szseq_byte(src) as i64
+                b3 := _szseq_byte(src) as i64
+                if src[0].bad:
+                    d[0].bad = true
+                else:
+                    v := (b0 << 24) | (b1 << 16) | (b2 << 8) | b3
+                    dest := (v - (d[0].o + (4 as i64))) & 0xFFFFFFFF
+                    repeat 4 in q:
+                        if d[0].o < d[0].limit:
+                            d[0].ob[d[0].obn] = ((dest >> (8 * q)) & 255) as u8
+                            d[0].obn++
+                            d[0].o++
+                        end
+                    end
+                    d[0].prev = ((dest >> 24) & 255) as int
+                end
+            end
+        end
+        if d[0].obn >= 65000:
+            if not _szb2_flush(d, next):
+                ret false
+            end
+        end
+    end
+    if d[0].bad:
+        ret false
+    end
+    ret _szb2_flush(d, next)
+end
+
+func _szf_side(fp: void*, start: i64, avail: i64, s: _Sz, fi: int, in_idx: int, password: str, memcap: i64, depth: int, status &: int): _SzSeq*:
+    f := s.folders.get(fi)
+    mut nout := -1
+    mut pidx := -1
+    if not _szf_in_of(f, s, in_idx, nout, pidx):
+        status = SEVENZIP_CORRUPT
+        ret null as _SzSeq*
+    end
+    if nout < 0:
+        if not _szf_pack_ok(s, pidx, avail):
+            status = SEVENZIP_CORRUPT
+            ret null as _SzSeq*
+        end
+        q := mem.AllocateZeroed(sizeof(_SzSeq)) as _SzSeq*
+        q[0] = _szseq_file(fp, start + s.pack_off.get(pidx), s.pack_sizes.get(pidx))
+        ret q
+    end
+    if nout >= f.unpack.len():
+        status = SEVENZIP_CORRUPT
+        ret null as _SzSeq*
+    end
+    want := f.unpack.get(nout)
+    if want < (0 as i64):
+        status = SEVENZIP_CORRUPT
+        ret null as _SzSeq*
+    end
+    if want > (2147483000 as i64) or (memcap > (0 as i64) and want > memcap):
+        status = SEVENZIP_TOO_BIG
+        ret null as _SzSeq*
+    end
+    holder := mem.AllocateZeroed(sizeof(compress.ByteBuf)) as compress.ByteBuf*
+    holder[0] = compress.NewByteBufCap(want > (65536 as i64) ? 65536 : (want as int))
+    emit := (p: void*, n: int, c: void*): ret _szf_buf_emit(p, n, c) end
+    mut top := mem.AllocateZeroed(sizeof(compress.FileSink)) as compress.FileSink*
+    top[0] = compress.SinkCallback(0 as i64, emit, holder as void*)
+    st := _szf_stream(fp, start, avail, s, fi, nout, password, memcap, top, depth + 1)
+    mem.Free(top as void*)
+    if st != SEVENZIP_OK or holder[0].len != (want as int):
+        compress.BufFree(holder[0])
+        mem.Free(holder as void*)
+        status = st != SEVENZIP_OK ? st : SEVENZIP_CORRUPT
+        ret null as _SzSeq*
+    end
+    q := mem.AllocateZeroed(sizeof(_SzSeq)) as _SzSeq*
+    q[0] = _szseq_mem(holder[0])
+    mem.Free(holder as void*)
+    ret q
+end
+
+func _szf_b2_open(fp: void*, start: i64, avail: i64, s: _Sz, fi: int, ci: int, password: str, memcap: i64, depth: int, fs: _SzF*): int:
+    f := s.folders.get(fi)
+    first := _szf_first_in(f, ci)
+    mut st := SEVENZIP_OK
+    call := _szf_side(fp, start, avail, s, fi, first + 1, password, memcap, depth, st)
+    mut jump := null as _SzSeq*
+    mut rc := null as _SzSeq*
+    if st == SEVENZIP_OK:
+        jump = _szf_side(fp, start, avail, s, fi, first + 2, password, memcap, depth, st)
+    end
+    if st == SEVENZIP_OK:
+        rc = _szf_side(fp, start, avail, s, fi, first + 3, password, memcap, depth, st)
+    end
+    if st != SEVENZIP_OK:
+        if call != null:
+            _szseq_free(call)
+        end
+        if jump != null:
+            _szseq_free(jump)
+        end
+        if rc != null:
+            _szseq_free(rc)
+        end
+        ret st
+    end
+    fs[0].b2 = _szb2_new(f.unpack.get(ci), call, jump, rc) as void*
+    ret SEVENZIP_OK
+end

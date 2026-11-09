@@ -18,6 +18,8 @@ import mem
 import compress
 import net.dns
 import net.udp
+import net.tcp
+import net.internal.rawsock
 import sync
 
 struct StubState:
@@ -25,6 +27,14 @@ struct StubState:
     pub resolver: Resolver = Resolver {}
     pub stop: i64* = null
     pub served: i64* = null
+    pub inflight: i64* = null
+    pub tcp_srv: tcp.Server = tcp.Server {}
+    pub tcp_ok: bool = false
+end
+
+struct TcpJob:
+    pub st: StubState* = null
+    pub conn: tcp.Conn = tcp.Conn {}
 end
 
 struct Job:
@@ -43,14 +53,18 @@ pub struct Stub:
     @en "port"
     @fa "درگاه"
     pub port: int = 0
+    @en "host"
+    @fa "میزبان"
+    pub host: str = ""
+    @en "tcp_ok"
+    @fa "تی سی پی فعال"
+    pub tcp_ok: bool = false
     @en "st"
     @fa "وضعیت"
     pub st: StubState* = null
 end
 
-func _handle(j: Job*):
-    st := j[0].st
-    q := j[0].query
+func _answer(st: StubState*, q: compress.ByteBuf): compress.ByteBuf:
     msg := dns.Decode(q.data, q.len)
     id := msg.id
     mut out := compress.NewByteBuf()
@@ -73,12 +87,98 @@ func _handle(j: Job*):
     end
     if done:
         _n := atomic_add(st[0].served, 1 as i64)
+    else:
+        compress.BufFree(out)
+        out = compress.NewByteBuf()
+    end
+    ret out
+end
+
+func _handle(j: Job*):
+    st := j[0].st
+    mut out := _answer(st, j[0].query)
+    if out.len > 0:
         _sent := udp.SendBytes(st[0].sock, j[0].host, j[0].port, out.data, out.len)
     end
     compress.BufFree(out)
     mut qq := j[0].query
     compress.BufFree(qq)
     mem.Free(j as void*)
+    _d := atomic_add(st[0].inflight, 0 - 1 as i64)
+end
+
+func _read_full(c: tcp.Conn, buf: void*, n: int): bool:
+    mut got := 0
+    until got < n:
+        r := tcp.ReadBytes(c, ((buf as i64) + (got as i64)) as void*, n - got)
+        if r <= 0:
+            ret false
+        end
+        got += r
+    end
+    ret true
+end
+
+func _tcp_conn(j: TcpJob*):
+    st := j[0].st
+    c := j[0].conn
+    mem.Free(j as void*)
+    tcp.SetDeadline(c, 5000)
+    hdr := mem.Allocate(2 as u64)
+    buf := mem.Allocate(65536 as u64)
+    until atomic_load(st[0].stop) != 0:
+        if not _read_full(c, hdr, 2):
+            break
+        end
+        n := ((hdr as u8*)[0] as int) * 256 + ((hdr as u8*)[1] as int)
+        if n < 12 or not _read_full(c, buf, n):
+            break
+        end
+        mut qb := compress.NewByteBufCap(n)
+        compress.BufPushBytes(qb, buf, n)
+        mut out := _answer(st, qb)
+        compress.BufFree(qb)
+        if out.len == 0:
+            compress.BufFree(out)
+            break
+        end
+        mut framed := compress.NewByteBufCap(out.len + 2)
+        compress.BufPush(framed, (out.len >> 8) & 255)
+        compress.BufPush(framed, out.len & 255)
+        compress.BufPushBuf(framed, out)
+        w := tcp.WriteBytes(c, framed.data, framed.len)
+        compress.BufFree(framed)
+        compress.BufFree(out)
+        if w <= 0:
+            break
+        end
+    end
+    mem.Free(hdr)
+    mem.Free(buf)
+    tcp.Close(c)
+    _d := atomic_add(st[0].inflight, 0 - 1 as i64)
+end
+
+func _tcp_loop(st: StubState*):
+    until atomic_load(st[0].stop) != 0:
+        c := tcp.Accept(st[0].tcp_srv)
+        if atomic_load(st[0].stop) == 0:
+            if tcp.ConnOk(c):
+                tcp.Close(c)
+            end
+            break
+        end
+        if not tcp.ConnOk(c):
+            sync.SleepMs(5)
+        else atomic_load(st[0].inflight) >= 256:
+            tcp.Close(c)
+        else:
+            _a := atomic_add(st[0].inflight, 1 as i64)
+            j := mem.AllocateZeroed(sizeof(TcpJob) as u64) as TcpJob*
+            j[0] = TcpJob { st = st, conn = c }
+            _t := spawn(_tcp_conn, j)
+        end
+    end
 end
 
 func _stub_loop(st: StubState*):
@@ -88,7 +188,8 @@ func _stub_loop(st: StubState*):
     mut fp := 0
     until atomic_load(st[0].stop) != 0:
         n := udp.ReceiveBytes(st[0].sock, buf, cap, fh, fp)
-        if n >= 12 and atomic_load(st[0].stop) != 0:
+        if n >= 12 and atomic_load(st[0].stop) != 0 and atomic_load(st[0].inflight) < 256:
+            _a := atomic_add(st[0].inflight, 1 as i64)
             j := mem.AllocateZeroed(sizeof(Job) as u64) as Job*
             mut qb := compress.NewByteBufCap(n)
             compress.BufPushBytes(qb, buf, n)
@@ -103,7 +204,11 @@ end
 @fa "راه‌اندازی کارگزار محلی"
 pub func StartStub(r: Resolver, host: str, port: int): Stub:
     mut s := Stub {}
-    sock := udp.BindOn(host, port)
+    mut bind := host
+    if bind.len() == 0:
+        bind = "127.0.0.1"
+    end
+    sock := udp.BindOn(bind, port)
     if not udp.Ok(sock):
         ret s
     end
@@ -111,11 +216,19 @@ pub func StartStub(r: Resolver, host: str, port: int): Stub:
     st := mem.AllocateZeroed(sizeof(StubState) as u64) as StubState*
     stop := mem.AllocateZeroed(8 as u64) as i64*
     served := mem.AllocateZeroed(8 as u64) as i64*
+    inflight := mem.AllocateZeroed(8 as u64) as i64*
     atomic_store(stop, 1 as i64)
-    st[0] = StubState { sock = sock, resolver = r, stop = stop, served = served }
+    lport := udp.Port(sock)
+    ts := tcp.BindOn(bind, lport)
+    st[0] = StubState { sock = sock, resolver = r, stop = stop, served = served, inflight = inflight, tcp_srv = ts, tcp_ok = tcp.Ok(ts) }
     _t := spawn(_stub_loop, st)
+    if tcp.Ok(ts):
+        _t2 := spawn(_tcp_loop, st)
+    end
     s.ok = true
-    s.port = udp.Port(sock)
+    s.port = lport
+    s.host = bind
+    s.tcp_ok = tcp.Ok(ts)
     s.st = st
     ret s
 end
@@ -136,6 +249,20 @@ pub func StopStub(s: Stub):
         ret
     end
     atomic_store(s.st[0].stop, 0 as i64)
+    if s.tcp_ok:
+        rawsock.Shutdown(rawsock.FromFd(s.st[0].tcp_srv.fd))
+        mut wake := s.host
+        if wake == "0.0.0.0":
+            wake = "127.0.0.1"
+        end
+        w := tcp.DialTimeout(wake, s.port, 300)
+        if tcp.ConnOk(w):
+            tcp.Close(w)
+        end
+    end
     sync.SleepMs(300)
+    if s.tcp_ok:
+        tcp.CloseServer(s.st[0].tcp_srv)
+    end
     udp.Close(s.st[0].sock)
 end

@@ -129,6 +129,13 @@ func _codec_free(c &: Codec):
     end
 end
 
+func _raw(security: int, option: int): bool:
+    if security == SecZero:
+        ret true
+    end
+    ret security == SecNone and (option & OptChunkStream) == 0
+end
+
 func _overhead(c: Codec): int:
     if c.security == SecAES128GCM or c.security == SecChaCha20Poly1305:
         ret 16
@@ -302,7 +309,7 @@ func _read_response(c &: Conn): bool:
         ret false
     end
     c.resp_pending = false
-    if c.req.security != SecZero:
+    if not _raw(c.req.security, c.req.option):
         c.rc = _codec_new(c.req.security, c.req.option, c.resp_key, c.resp_iv)
     end
     ret true
@@ -379,7 +386,7 @@ pub func Client(t: transport.Conn, uuid: str, security: int, option: int, comman
         _fail(c, "could not send the request header")
         ret c
     end
-    if security != SecZero:
+    if not _raw(security, option):
         c.wc = _codec_new(security, option, r.key, r.iv)
     end
     _setup_resp_keys(c)
@@ -505,7 +512,7 @@ pub func Accept(t: transport.Conn, users: Vector<User>, rf &: ReplayFilter): Con
         ret c
     end
     _setup_resp_keys(c)
-    if sec != SecZero:
+    if not _raw(sec, req.option):
         c.rc = _codec_new(sec, req.option, req.key, req.iv)
         c.wc = _codec_new(sec, req.option, c.resp_key, c.resp_iv)
     end
@@ -536,7 +543,7 @@ pub func Read(c &: Conn, buf: void*, max: int): int:
             ret 0 - 1
         end
     end
-    if c.req.security == SecZero:
+    if _raw(c.req.security, c.req.option):
         ret transport.Read(c.t, buf, max)
     end
     until c.rbuf.len == 0:
@@ -584,7 +591,7 @@ pub func Write(c &: Conn, p: void*, n: int): bool:
     if not c.ok:
         ret false
     end
-    if c.req.security == SecZero:
+    if _raw(c.req.security, c.req.option):
         ret transport.Write(c.t, p, n)
     end
     mut out := transport.NewBytes(n + 64)
@@ -608,7 +615,7 @@ pub func Close(c &: Conn):
         ret
     end
     c.closed = true
-    if c.ok and c.req.security != SecZero:
+    if c.ok and not _raw(c.req.security, c.req.option):
         mut out := transport.NewBytes(64)
         _seal_chunk(c.wc, null, 0, out)
         transport.WriteBytes(c.t, out)

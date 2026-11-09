@@ -40,6 +40,8 @@ struct ElBlocks:
     pub active: int = -1
     pub media0: int = 0
     pub median: int = 0
+    pub dyn0: int = 0
+    pub dynn: int = 0
 end
 
 struct Engine:
@@ -54,6 +56,7 @@ struct Engine:
     pub el_style: Vector<int> = Vector {}
     pub el_blocks: Vector<ElBlocks> = Vector {}
     pub el_media_blocks: Vector<int> = Vector {}
+    pub el_dyn_blocks: Vector<int> = Vector {}
     pub media_ok: Vector<bool> = Vector {}
     pub cond_cache: HashMap<str, int> = HashMap {}
     pub win: Vector<int> = Vector {}
@@ -79,6 +82,7 @@ func engine_new(env: Env): Engine:
     e.el_style = Vector {} as Vector<int>
     e.el_blocks = Vector {} as Vector<ElBlocks>
     e.el_media_blocks = Vector {} as Vector<int>
+    e.el_dyn_blocks = Vector {} as Vector<int>
     e.media_ok = Vector {} as Vector<bool>
     e.cond_cache = HashMap {} as HashMap<str, int>
     e.win = Vector {} as Vector<int>
@@ -140,6 +144,7 @@ func engine_free(e &: Engine):
     e.el_style.free()
     e.el_blocks.free()
     e.el_media_blocks.free()
+    e.el_dyn_blocks.free()
     e.media_ok.free()
     free_keys(e.cond_cache)
     e.win.free()
@@ -257,7 +262,7 @@ func eval_medias(e &: Engine, sd: SheetData):
     e.media_ok = Vector {} as Vector<bool>
     repeat sd.media_list.len() in i:
         m := sd.media_list[i]
-        mut ok := cond_ok(e, m.text)
+        mut ok := media_toks_match(sd.toks, m.ts, m.te, e.env)
         if m.parent >= 0 and ok:
             ok = e.media_ok[m.parent]
         end
@@ -265,19 +270,38 @@ func eval_medias(e &: Engine, sd: SheetData):
     end
 end
 
+func prog_block(sd: SheetData, id: int): int:
+    if id < 0 or sd.main_map < 0:
+        ret -1
+    end
+    m := sd.maps[sd.main_map]
+    if id >= m.blocks.len():
+        ret -1
+    end
+    ret m.blocks[id]
+end
+
 func element_blocks(e &: Engine, sd &: SheetData, i: int):
     el := e.dom.els[i]
     mut b := ElBlocks {}
-    if el.base.len() > 0:
+    if el.decl_base >= 0:
+        b.base = prog_block(sd, el.decl_base)
+    else el.base.len() > 0:
         b.base = parse_block(sd, el.base)
     end
-    if el.hover.len() > 0:
+    if el.decl_hover >= 0:
+        b.hover = prog_block(sd, el.decl_hover)
+    else el.hover.len() > 0:
         b.hover = parse_block(sd, el.hover)
     end
-    if el.focus.len() > 0:
+    if el.decl_focus >= 0:
+        b.focus = prog_block(sd, el.decl_focus)
+    else el.focus.len() > 0:
         b.focus = parse_block(sd, el.focus)
     end
-    if el.active.len() > 0:
+    if el.decl_active >= 0:
+        b.active = prog_block(sd, el.decl_active)
+    else el.active.len() > 0:
         b.active = parse_block(sd, el.active)
     end
     b.media0 = e.el_media_blocks.len()
@@ -287,6 +311,14 @@ func element_blocks(e &: Engine, sd &: SheetData, i: int):
         end
     end
     b.median = e.el_media_blocks.len() - b.media0
+    b.dyn0 = e.el_dyn_blocks.len()
+    repeat el.decl_dyn.len() in k:
+        db := prog_block(sd, el.decl_dyn[k])
+        if db >= 0:
+            e.el_dyn_blocks.push(db)
+        end
+    end
+    b.dynn = e.el_dyn_blocks.len() - b.dyn0
     if i < e.el_blocks.len():
         e.el_blocks[i] = b
     else:
@@ -346,6 +378,9 @@ func collect(e &: Engine, sd: SheetData, i: int):
     is_body := d.tags[i] == "body"
     if b.base >= 0:
         push_entry(e, Entry { block = b.base, spec = is_body ? 1 : SPEC_CLASS, order = is_body ? -1 : ORDER_EL })
+    end
+    repeat b.dynn in k:
+        push_entry(e, Entry { block = e.el_dyn_blocks[b.dyn0 + k], spec = is_body ? 1 : SPEC_CLASS, order = is_body ? -1 : ORDER_EL })
     end
     repeat b.median in k:
         mb := e.el_media_blocks[b.media0 + k]

@@ -51,6 +51,7 @@ pub struct Obfs:
     @en "got_first"
     @fa "دریافت نخست انجام شد"
     pub got_first: bool = false
+    pub seen_hello: bool = false
     @en "rx"
     @fa "دریافتی"
     pub rx: Buf = Buf {}
@@ -196,10 +197,6 @@ func _tls_server_hello(out &: Buf):
     _put16(out, 0x0303)
     _put16(out, 1)
     BufAppendByte(out, 1)
-    BufAppendByte(out, 0x16)
-    _put16(out, 0x0303)
-    _put16(out, 32)
-    _put_random(out, 32)
 end
 
 func _tls_records(p: void*, n: int, out &: Buf):
@@ -330,14 +327,17 @@ func _tls_step(o &: Obfs, out &: Buf): int:
         end
         t := _getb(o.rx.p, 0)
         rl := _getb(o.rx.p, 3) * 256 + _getb(o.rx.p, 4)
-        if t == 0x14 or t == 0x16:
+        if t == 0x14 or (t == 0x16 and not o.seen_hello):
             if o.rx.len < 5 + rl:
                 ret 1
+            end
+            if t == 0x16:
+                o.seen_hello = true
             end
             BufConsume(o.rx, 5 + rl)
             ret 2
         end
-        if t == 0x17:
+        if (t == 0x17 or t == 0x16) and o.seen_hello:
             o.got_first = true
             ret 2
         end
@@ -346,7 +346,7 @@ func _tls_step(o &: Obfs, out &: Buf): int:
     if o.rx.len < 5:
         ret 1
     end
-    if _getb(o.rx.p, 0) != 0x17:
+    if _getb(o.rx.p, 0) != 0x17 and _getb(o.rx.p, 0) != 0x16:
         ret 0 - 1
     end
     o.frame_left = _getb(o.rx.p, 3) * 256 + _getb(o.rx.p, 4)
@@ -390,7 +390,17 @@ pub func ObfsWrap(o &: Obfs, p: void*, n: int, out &: Buf):
         o.sent_first = true
         if o.server:
             _tls_server_hello(out)
-            _tls_records(p, n, out)
+            mut first := n
+            if first > TLS_RECORD_MAX:
+                first = TLS_RECORD_MAX
+            end
+            BufAppendByte(out, 0x16)
+            _put16(out, 0x0303)
+            _put16(out, first)
+            BufAppend(out, p, first)
+            if n > first:
+                _tls_records(_at(p, first), n - first, out)
+            end
         else:
             if n > 8000:
                 _tls_ext_hello(o.host, p, 8000, out)

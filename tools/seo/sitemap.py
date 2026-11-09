@@ -6,6 +6,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 SITES = {
     "ai/frontend/public": ["https://ai.salamlang.ir/", "https://ai.salamlang.ir/plans"],
+    "tools/mcp/site": ["https://mcp.salamlang.ir/"],
     "editor": ["https://editor.salamlang.ir/"],
 }
 today = datetime.date.today().isoformat()

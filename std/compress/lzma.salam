@@ -42,6 +42,7 @@ struct _Lz:
     pub rng: i64
     pub code: i64
     pub bad: bool
+    pub over: bool
     pub probs: u16*
     pub nprobs: int
     pub lc: int
@@ -69,7 +70,7 @@ end
 
 func _lz_new(dsize: i64): _Lz:
     ret _Lz {
-        ip = null as u8*, ipos = 0, iend = 0, rng = 0xFFFFFFFF as i64, code = 0 as i64, bad = false
+        ip = null as u8*, ipos = 0, iend = 0, rng = 0xFFFFFFFF as i64, code = 0 as i64, bad = false, over = false
         probs = null as u16*, nprobs = 0, lc = 0, lp = 0, pb = 0, state = 0
         rep0 = 0, rep1 = 0, rep2 = 0, rep3 = 0, dsize = dsize, dstart = 0
         ffp = null, foff = 0 as i64, fleft = 0 as i64, refill = false, ibuf = null as u8*
@@ -447,7 +448,11 @@ func _lzma2_chunks(d &: _Lz, p: void*, n: int, out &: ByteBuf, maxout: int): int
             else c >= 160:
                 _lz_reset_state(d)
             end
-            if ip + csize > n or out.len + usize > maxout or out.len + usize < 0:
+            if out.len + usize > maxout or out.len + usize < 0:
+                d.over = true
+                ret -1
+            end
+            if ip + csize > n:
                 ret -1
             end
             if not _lz_rc_init(d, p, ip, ip + csize):
@@ -467,7 +472,11 @@ func _lzma2_chunks(d &: _Lz, p: void*, n: int, out &: ByteBuf, maxout: int): int
             end
             usize := (((bp[ip] as int) << 8) | (bp[ip + 1] as int)) + 1
             ip += 2
-            if ip + usize > n or out.len + usize > maxout:
+            if out.len + usize > maxout:
+                d.over = true
+                ret -1
+            end
+            if ip + usize > n:
                 ret -1
             end
             _buf_grow(out, usize)
@@ -862,7 +871,16 @@ end
 @en "LzmaDecompressMax"
 @fa "کدگشایی الزد ام ای با سقف"
 pub func LzmaDecompressMax(p: void*, n: int, max: int, ok &: bool): ByteBuf:
-    ok = false
+    mut why := 0
+    out := LzmaDecompressWhy(p, n, max, why)
+    ok = why == DecodeOk
+    ret out
+end
+
+@en "LzmaDecompressWhy"
+@fa "کدگشایی الزد ام ای با علت"
+pub func LzmaDecompressWhy(p: void*, n: int, max: int, why &: int): ByteBuf:
+    why = DecodeCorrupt
     mut out := NewByteBuf()
     if n < 13:
         ret out
@@ -888,6 +906,7 @@ pub func LzmaDecompressMax(p: void*, n: int, max: int, ok &: bool): ByteBuf:
         ret out
     end
     if known and max > 0 and usize > (max as i64):
+        why = DecodeTooBig
         ret out
     end
     mut d := _lz_new(dsize)
@@ -919,10 +938,13 @@ pub func LzmaDecompressMax(p: void*, n: int, max: int, ok &: bool): ByteBuf:
             ret NewByteBuf()
         end
     else st != 1 or (max > 0 and out.len > max):
+        if max > 0 and out.len > max:
+            why = DecodeTooBig
+        end
         BufFree(out)
         ret NewByteBuf()
     end
-    ok = true
+    why = DecodeOk
     ret out
 end
 

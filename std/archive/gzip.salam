@@ -59,6 +59,39 @@ func _gz_header_len(h: u8*, n: int): int:
     ret pos
 end
 
+func _gz_to_sink(fp: void*, size: i64, sink &: compress.FileSink): int:
+    if size < (18 as i64):
+        ret ARCHIVE_CORRUPT
+    end
+    mut hn := 70000
+    if (hn as i64) > size: hn = size as int end
+    head := mem.Allocate(hn as u64)
+    tail := mem.Allocate(8 as u64)
+    got := compress.FileReadAt(fp, 0 as i64, head, hn)
+    got2 := compress.FileReadAt(fp, size - (8 as i64), tail, 8)
+    hlen := got == hn ? _gz_header_len(head as u8*, hn) : -1
+    mut st := ARCHIVE_OK
+    if got2 != 8 or hlen < 0 or (hlen as i64) >= size - (8 as i64):
+        st = ARCHIVE_CORRUPT
+    else:
+        mut br := compress.NewFileBitReader(fp, hlen as i64, size - (8 as i64) - (hlen as i64))
+        good := not br.bad and compress.RawInflateToSink(br, sink, false)
+        compress.FileBitReaderFree(br)
+        want_crc := LEGet32(tail, 0) as u32
+        want_size := (LEGet32(tail, 4) as i64) & (0xFFFFFFFF as i64)
+        if sink.over:
+            st = ARCHIVE_TOO_BIG
+        else sink.failed:
+            st = ARCHIVE_IO_ERROR
+        else not good or sink.crc != want_crc or (sink.written & (0xFFFFFFFF as i64)) != want_size:
+            st = ARCHIVE_CORRUPT
+        end
+    end
+    mem.Free(head)
+    mem.Free(tail)
+    ret st
+end
+
 @en "GzipCompressFile"
 @fa "فشرده سازی پرونده جی زیپ"
 pub func GzipCompressFile(inpath: str, outpath: str): bool:
@@ -73,45 +106,20 @@ pub func GzipDecompressFileCap(inpath: str, outpath: str, cap: i64): int:
         ret ARCHIVE_IO_ERROR
     end
     size := compress.FileSize(fp)
-    if size < (18 as i64):
-        compress.FileClose(fp)
-        ret ARCHIVE_CORRUPT
-    end
-    mut hn := 70000
-    if (hn as i64) > size: hn = size as int end
-    head := mem.Allocate(hn as u64)
-    tail := mem.Allocate(8 as u64)
-    got := compress.FileReadAt(fp, 0 as i64, head, hn)
-    got2 := compress.FileReadAt(fp, size - (8 as i64), tail, 8)
-    hlen := got == hn ? _gz_header_len(head as u8*, hn) : -1
+    mut sink := compress.SinkOpen(outpath, cap)
     mut st := ARCHIVE_OK
-    if got2 != 8 or hlen < 0 or (hlen as i64) >= size - (8 as i64):
-        st = ARCHIVE_CORRUPT
+    if sink.failed:
+        st = ARCHIVE_IO_ERROR
     else:
-        mut sink := compress.SinkOpen(outpath, cap)
-        if sink.failed:
+        st = _gz_to_sink(fp, size, sink)
+        closed := compress.SinkClose(sink)
+        if st == ARCHIVE_OK and not closed:
             st = ARCHIVE_IO_ERROR
-        else:
-            mut br := compress.NewFileBitReader(fp, hlen as i64, size - (8 as i64) - (hlen as i64))
-            good := not br.bad and compress.RawInflateToSink(br, sink, false)
-            compress.FileBitReaderFree(br)
-            closed := compress.SinkClose(sink)
-            want_crc := LEGet32(tail, 0) as u32
-            want_size := (LEGet32(tail, 4) as i64) & (0xFFFFFFFF as i64)
-            if sink.over:
-                st = ARCHIVE_TOO_BIG
-            else sink.failed or not closed:
-                st = ARCHIVE_IO_ERROR
-            else not good or sink.crc != want_crc or (sink.written & (0xFFFFFFFF as i64)) != want_size:
-                st = ARCHIVE_CORRUPT
-            end
-            if st != ARCHIVE_OK:
-                os.Remove(outpath)
-            end
+        end
+        if st != ARCHIVE_OK:
+            os.Remove(outpath)
         end
     end
-    mem.Free(head)
-    mem.Free(tail)
     compress.FileClose(fp)
     ret st
 end

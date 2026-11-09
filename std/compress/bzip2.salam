@@ -58,6 +58,9 @@ struct _BzIn:
     pub acc: i64 = 0
     pub cnt: int = 0
     pub bad: bool = false
+    pub fp: void* = null
+    pub foff: i64 = 0 as i64
+    pub fleft: i64 = 0 as i64
 end
 
 struct _BzOut:
@@ -66,10 +69,29 @@ struct _BzOut:
     pub cnt: int = 0
 end
 
+func _bz_refill(s &: _BzIn): bool:
+    if s.fp == null or s.fleft <= (0 as i64):
+        ret false
+    end
+    mut want := 65536
+    if s.fleft < (want as i64):
+        want = s.fleft as int
+    end
+    got := FileReadAt(s.fp, s.foff, s.data, want)
+    if got <= 0:
+        ret false
+    end
+    s.len = got
+    s.pos = 0
+    s.foff += got as i64
+    s.fleft -= got as i64
+    ret true
+end
+
 inline func _bz_get(s &: _BzIn, k: int): int:
     until s.cnt < k:
         mut b := 0
-        if s.pos < s.len:
+        if s.pos < s.len or _bz_refill(s):
             b = _bget(s.data, s.pos)
             s.pos++
         else:
@@ -106,7 +128,7 @@ func _bz_rotl1(c: u32): u32:
     ret (c << 1) | (c >> 31)
 end
 
-func _bz_block(s &: _BzIn, out &: ByteBuf, max: int, lvl: int, tt: u32*, ll: u8*, crctab: u32*, crc_out &: u32): int:
+func _bz_block(s &: _BzIn, out &: ByteBuf, max: int, lvl: int, tt: u32*, ll: u8*, crctab: u32*, crc_out &: u32, sink &: FileSink, stream: bool): int:
     hi := _bz_get(s, 16)
     lo := _bz_get(s, 16)
     stored := ((hi as u32) << 16) | (lo as u32)
@@ -365,6 +387,18 @@ func _bz_block(s &: _BzIn, out &: ByteBuf, max: int, lvl: int, tt: u32*, ll: u8*
             BufPush(out, c)
             crc = (crc << 8) ^ crctab[((crc >> 24) as int) ^ c]
         end
+        if stream and out.len >= 1048576:
+            if not SinkWrite(sink, out.data, out.len):
+                ret sink.over ? 2 : 3
+            end
+            out.len = 0
+        end
+    end
+    if stream and out.len > 0:
+        if not SinkWrite(sink, out.data, out.len):
+            ret sink.over ? 2 : 3
+        end
+        out.len = 0
     end
     crc = _bz_crc_final(crc)
     if crc != stored: ret 1 end
@@ -372,7 +406,7 @@ func _bz_block(s &: _BzIn, out &: ByteBuf, max: int, lvl: int, tt: u32*, ll: u8*
     ret 0
 end
 
-func _bz_stream(s &: _BzIn, out &: ByteBuf, max: int, crctab: u32*): int:
+func _bz_stream(s &: _BzIn, out &: ByteBuf, max: int, crctab: u32*, sink &: FileSink, stream: bool): int:
     if _bz_get(s, 8) != 0x42 or _bz_get(s, 8) != 0x5a or _bz_get(s, 8) != 0x68: ret 1 end
     lv := _bz_get(s, 8) - 0x30
     if s.bad or lv < 1 or lv > 9: ret 1 end
@@ -389,7 +423,7 @@ func _bz_stream(s &: _BzIn, out &: ByteBuf, max: int, crctab: u32*): int:
         else:
             if m1 == 0x314159 and m2 == 0x265359:
                 mut bc := 0 as u32
-                r := _bz_block(s, out, max, lv, tt, ll, crctab, bc)
+                r := _bz_block(s, out, max, lv, tt, ll, crctab, bc, sink, stream)
                 if r != 0:
                     st = r
                     more = false
@@ -984,10 +1018,11 @@ pub func Bzip2DecompressWhy(p: void*, n: int, max: int, why &: int): ByteBuf:
     mut out := NewByteBuf()
     if n < 14 or p == null: ret out end
     mut s := _BzIn { data = p, len = n, pos = 0, acc = 0, cnt = 0, bad = false }
+    mut nosink := FileSink {}
     crctab := _bz_crc_table()
     mut good := true
     until good:
-        st := _bz_stream(s, out, max, crctab)
+        st := _bz_stream(s, out, max, crctab, nosink, false)
         if st != 0:
             BufFree(out)
             out = NewByteBuf()
@@ -1006,4 +1041,39 @@ end
 @fa "کدگشایی بی زیپ دو بافر"
 pub func Bzip2DecompressBuf(b: ByteBuf, ok &: bool): ByteBuf:
     ret Bzip2Decompress(b.data, b.len, ok)
+end
+
+@en "Bzip2FileToSink"
+@fa "کدگشایی بی زیپ دو از پرونده به مقصد"
+pub func Bzip2FileToSink(fp: void*, off: i64, len: i64, sink &: FileSink): int:
+    if fp == null or off < (0 as i64) or len < (14 as i64):
+        ret DecodeCorrupt
+    end
+    chunk := mem.Allocate(65536 as u64)
+    mut s := _BzIn { data = chunk, len = 0, pos = 0, acc = 0, cnt = 0, bad = false, fp = fp, foff = off, fleft = len }
+    crctab := _bz_crc_table()
+    mut out := NewByteBuf()
+    mut code := DecodeCorrupt
+    mut more := true
+    until more:
+        st := _bz_stream(s, out, 0, crctab, sink, true)
+        if st != 0:
+            if st == 2:
+                code = DecodeTooBig
+            else st == 3:
+                code = DecodeIo
+            end
+            more = false
+        else:
+            consumed := (s.foff - off) - ((s.len - s.pos) as i64) - ((s.cnt / 8) as i64)
+            if consumed >= len:
+                code = DecodeOk
+                more = false
+            end
+        end
+    end
+    BufFree(out)
+    mem.Free(crctab as void*)
+    mem.Free(chunk)
+    ret code
 end

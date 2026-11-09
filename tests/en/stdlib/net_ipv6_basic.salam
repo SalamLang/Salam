@@ -1,0 +1,151 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import mem
+import net.internal.rawsock
+import net.socks
+import net.tcp
+import net.udp
+
+mut last_peer := ""
+
+func acceptor(arg: i64):
+    srv := tcp.Server { fd = arg }
+    until true:
+        c := tcp.Accept(srv)
+        if not tcp.ConnOk(c): break end
+        last_peer = tcp.PeerAddr(c)
+        d := tcp.Read(c, 4096)
+        if d.len() > 0: tcp.Write(c, d) end
+        tcp.Close(c)
+    end
+end
+
+func udp_echo(arg: i64):
+    s := udp.Socket { fd = arg }
+    buf := mem.Allocate(2048 as u64)
+    until true:
+        mut h := ""
+        mut p := 0
+        n := udp.ReceiveBytes(s, buf, 2048, h, p)
+        if n < 0: break end
+        udp.SendBytes(s, h, p, buf, n)
+    end
+end
+
+func ping(host: str, port: int, msg: str): str:
+    c := tcp.Dial(host, port)
+    if not tcp.ConnOk(c): ret "refused" end
+    tcp.Write(c, msg)
+    got := tcp.Read(c, 100)
+    tcp.Close(c)
+    ret got
+end
+
+func shout(s: udp.Socket, host: str, port: int, msg: str): str:
+    udp.SetTimeout(s, 1500)
+    udp.SendTo(s, host, port, msg)
+    p := udp.Receive(s, 100)
+    if p.data.len() == 0: ret "timeout" end
+    ret p.data + " from " + p.from_host
+end
+
+func main:
+    probe := tcp.BindOn("::1", 0)
+    if not tcp.Ok(probe):
+        println "ipv6 unavailable"
+        ret
+    end
+    tcp.CloseServer(probe)
+
+    println rawsock.CanonIP("[2001:0DB8:0:0:0:0:0:1]")
+    println rawsock.CanonIP("::ffff:1.2.3.4")
+    println rawsock.CanonIP("0:0:0:0:0:0:0:0")
+    println rawsock.CanonIP("1:0:0:2:0:0:0:3")
+    println rawsock.CanonIP("fe80::1%2")
+    println rawsock.IsIPv6("2606:4700:4700::1111"), rawsock.IsIPv6("1:2:3"), rawsock.IsIPv6(":::"), rawsock.IsIPv6("1.2.3.4")
+    println rawsock.HostPort("::1", 80), rawsock.HostPort("1.2.3.4", 80), rawsock.HostPort("example.com", 80)
+    println rawsock.V6Prefix("2001:db8:1:2:3:4:5:6", 64), rawsock.V6Prefix("2001:db8:ffff::1", 36)
+    println rawsock.HexIPv6("::1")
+    println rawsock.ResolveAny("::1"), rawsock.ResolveAny("[2001:db8::7]"), rawsock.ResolveAny("127.0.0.1")
+
+    six := tcp.BindOn("::1", 0)
+    println "listen ::1", tcp.Ok(six), tcp.LocalAddr(six)
+    socks.Go(acceptor, six.fd as void*)
+    p6 := tcp.Port(six)
+    println ping("::1", p6, "hello six")
+    println last_peer
+    println ping("[::1]", p6, "bracketed")
+    println ping("127.0.0.1", p6, "v4 to v6 only")
+
+    dual := tcp.BindDual(0)
+    println "dual", tcp.Ok(dual), tcp.LocalAddr(dual)
+    socks.Go(acceptor, dual.fd as void*)
+    pd := tcp.Port(dual)
+    println ping("127.0.0.1", pd, "dual v4")
+    println last_peer
+    println ping("::1", pd, "dual v6")
+    println last_peer
+    println ping("localhost", pd, "dual name") != "refused"
+    println tcp.JoinHostPort("::1", 80), tcp.JoinHostPort("example.org", 80)
+    tcp.WakeServer("::", pd)
+    tcp.WakeServer("[::1]", p6)
+    println "woken"
+
+    only := tcp.BindV6("::", 0, true)
+    println "v6only", tcp.Ok(only), ping("127.0.0.1", tcp.Port(only), "x")
+    tcp.CloseServer(only)
+
+    mut fam := Vector {} as Vector<str>
+    fam.push("::1")
+    fam.push("127.0.0.1")
+    c := tcp.DialAnyTimeout(fam, p6, 2000)
+    println "race", tcp.ConnOk(c)
+    println tcp.PeerAddr(c), tcp.PeerPort(c) == p6, tcp.ConnLocalAddr(c)
+    tcp.Close(c)
+    four := tcp.BindOn("127.0.0.1", 0)
+    socks.Go(acceptor, four.fd as void*)
+    mut fb := Vector {} as Vector<str>
+    fb.push("::1")
+    fb.push("127.0.0.1")
+    cf := tcp.DialAnyTimeout(fb, tcp.Port(four), 2000)
+    println "fallback", tcp.ConnOk(cf), tcp.PeerAddr(cf)
+    tcp.Close(cf)
+    mut dead := Vector {} as Vector<str>
+    dead.push("::1")
+    dead.push("127.0.0.1")
+    dd := tcp.DialAnyTimeout(dead, tcp.Port(six) + 1, 500)
+    println "race refused", tcp.ConnOk(dd)
+
+    us := udp.BindOn("::1", 0)
+    println "udp bind", udp.Ok(us), udp.LocalAddr(us)
+    println "udp v6only", udp.SetV6Only(udp.OpenFor("::1"), true)
+    socks.Go(udp_echo, us.fd as void*)
+    uc := udp.OpenAny()
+    println "udp ::1", shout(uc, "::1", udp.Port(us), "ping6")
+    println "udp [::1]", shout(uc, "[::1]", udp.Port(us), "ping6b")
+    ud := udp.BindDual(0)
+    socks.Go(udp_echo, ud.fd as void*)
+    println "udp dual v4", shout(uc, "127.0.0.1", udp.Port(ud), "ping4")
+    println "udp dual v6", shout(uc, "::1", udp.Port(ud), "ping6c")
+    uf := udp.OpenFor("::1")
+    println "udp openfor", shout(uf, "::1", udp.Port(ud), "ping6d")
+    dl := udp.Dial("::1", udp.Port(us))
+    udp.SetTimeout(dl, 1500)
+    udp.Write(dl, "connected")
+    println "udp dial", udp.Read(dl, 100), udp.Ok(dl)
+    udp.Close(dl)
+    udp.Close(uf)
+    udp.Close(uc)
+end

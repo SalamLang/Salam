@@ -43,6 +43,148 @@ pub struct ZipFile:
     @en "cd"
     @fa "فهرست مرکزی"
     pub cd: compress.ByteBuf = compress.ByteBuf { data = null, len = 0, cap = 0 }
+    @en "volumes"
+    @fa "قطعه ها"
+    pub volumes: Vector<str> = Vector {} as Vector<str>
+    @en "starts"
+    @fa "آغازها"
+    pub starts: Vector<i64> = Vector {} as Vector<i64>
+    @en "by_disk"
+    @fa "شماره قرص"
+    pub by_disk: bool = false
+    @en "cd_start"
+    @fa "آغاز فهرست"
+    pub cd_start: i64 = 0 as i64
+end
+
+func _zipf_num2(i: int): str:
+    d := str.FromInt(i as i64)
+    if i < 10:
+        r := "0" + d
+        mem.Free(d as void*)
+        ret r
+    end
+    ret d
+end
+
+func _zipf_ci_ends(p: str, suffix: str): bool:
+    lo := str.Lower(p)
+    ok := str.EndsWith(lo, suffix)
+    mem.Free(lo as void*)
+    ret ok
+end
+
+func _zipf_is_digit(c: int): bool:
+    ret c >= 48 and c <= 57
+end
+
+func _zipf_split_vols(zf &: ZipFile):
+    p := zf.path
+    n := p.len()
+    pb := p as u8*
+    mut ds := n
+    until ds > 0 and _zipf_is_digit(pb[ds - 1] as int):
+        ds--
+    end
+    if ds < n and n - ds >= 3 and n - ds <= 9 and ds >= 5:
+        head := str.Substr(p, 0, ds)
+        ok := _zipf_ci_ends(head, ".zip.")
+        if ok:
+            width := n - ds
+            ns := str.Substr(p, ds, width)
+            first := str.ToInt(ns)
+            mem.Free(ns as void*)
+            mut idx := first
+            until idx < 100000:
+                mut digits := str.FromInt(idx as i64)
+                until digits.len() < width:
+                    grown := "0" + digits
+                    mem.Free(digits as void*)
+                    digits = grown
+                end
+                v := head + digits
+                mem.Free(digits as void*)
+                if not os.Exists(v):
+                    mem.Free(v as void*)
+                    break
+                end
+                zf.volumes.push(v)
+                idx++
+            end
+        end
+        mem.Free(head as void*)
+        if zf.volumes.len() > 0:
+            ret
+        end
+    end
+    mut main := str.Clone(p)
+    mut stem := ""
+    if n >= 4 and _zipf_ci_ends(p, ".zip"):
+        stem = str.Substr(p, 0, n - 4)
+    else n >= 4 and (pb[n - 3] == 122 or pb[n - 3] == 90) and pb[n - 4] == 46 and _zipf_is_digit(pb[n - 2] as int) and _zipf_is_digit(pb[n - 1] as int):
+        stem = str.Substr(p, 0, n - 4)
+        up := pb[n - 3] == 90
+        mem.Free(main as void*)
+        main = stem + (up ? ".ZIP" : ".zip")
+    end
+    if stem.len() == 0:
+        mem.Free(main as void*)
+        ret
+    end
+    mb := main as u8*
+    mn := main.len()
+    up := mb[mn - 1] == 80
+    zl := up ? ".Z" : ".z"
+    mut idx := 1
+    until idx < 100000:
+        d2 := _zipf_num2(idx)
+        v := stem + zl + d2
+        mem.Free(d2 as void*)
+        if not os.Exists(v):
+            mem.Free(v as void*)
+            break
+        end
+        zf.volumes.push(v)
+        idx++
+    end
+    if zf.volumes.len() > 0:
+        zf.volumes.push(main)
+        zf.by_disk = true
+        mem.Free(zf.path as void*)
+        zf.path = str.Clone(main)
+    else:
+        mem.Free(main as void*)
+    end
+    mem.Free(stem as void*)
+end
+
+func _zipf_open(zf: ZipFile): void*:
+    if zf.volumes.len() > 1:
+        ret compress.MultiOpenRead(zf.volumes)
+    end
+    ret compress.FileOpenRead(zf.path)
+end
+
+func _zipf_start(zf: ZipFile, disk: int): i64:
+    if not zf.by_disk:
+        ret 0
+    end
+    if disk < 0 or disk >= zf.starts.len():
+        ret -1
+    end
+    ret zf.starts.get(disk)
+end
+
+func _zipf_fix(zf: ZipFile, r &: _ZipRec): bool:
+    if not zf.by_disk:
+        ret true
+    end
+    s := _zipf_start(zf, r.disk)
+    if s < (0 as i64):
+        ret false
+    end
+    r.local += s
+    ret true
 end
 
 func _zipf_read_cd(fp: void*, zf &: ZipFile, cd_off: i64, csize: i64): bool:
@@ -68,6 +210,8 @@ func _zipf_decode(fp: void*, off: i64, comp: i64, method: int, uncomp: i64, sink
         mut br := compress.NewFileBitReader(fp, off, comp)
         ok = not br.bad and compress.RawInflateToSink(br, sink, method == ZipMethodDeflate64)
         compress.FileBitReaderFree(br)
+    else method == ZipMethodBzip2:
+        ok = compress.Bzip2FileToSink(fp, off, comp, sink) == compress.DecodeOk
     else method == ZipMethodLzma:
         if comp < (14 as i64):
             ret ZIP_CORRUPT
@@ -195,7 +339,15 @@ end
 @fa "بازکردن پرونده زیپ"
 pub func ZipOpenFile(path: str): ZipFile:
     mut zf := ZipFile { path = str.Clone(path), status = ZIP_CORRUPT }
-    fp := compress.FileOpenRead(path)
+    _zipf_split_vols(zf)
+    if zf.volumes.len() > 1:
+        mut total := 0 as i64
+        repeat zf.volumes.len() in vi:
+            zf.starts.push(total)
+            total += os.FileSize(zf.volumes.get(vi))
+        end
+    end
+    fp := _zipf_open(zf)
     if fp == null:
         zf.status = ZIP_IO
         ret zf
@@ -214,25 +366,40 @@ pub func ZipOpenFile(path: str): ZipFile:
     if found:
         mut count := LEGet16(tail, eocd + 10) as i64
         mut cd_off := _zip_u32(tail, eocd + 16)
+        mut cd_disk := LEGet16(tail, eocd + 6)
         mut csize := _zip_u32(tail, eocd + 12)
         ffff := 0xFFFF as i64
         ffffffff := 0xFFFFFFFF as i64
         if count == ffff or cd_off == ffffffff or csize == ffffffff:
             if eocd >= 20 and LEGet32(tail, eocd - 20) == 0x07064b50:
-                z := _zip_get64(tail, eocd - 12)
+                mut z := _zip_get64(tail, eocd - 12)
+                zs := _zipf_start(zf, LEGet32(tail, eocd - 16))
                 rec := mem.Allocate(56 as u64)
+                if zs < (0 as i64) or z < (0 as i64):
+                    z = -1
+                else:
+                    z += zs
+                end
                 if z >= (0 as i64) and compress.FileReadAt(fp, z, rec, 56) == 56 and LEGet32(rec, 0) == 0x06064b50:
                     count = _zip_get64(rec, 32)
                     csize = _zip_get64(rec, 40)
                     cd_off = _zip_get64(rec, 48)
+                    cd_disk = LEGet32(rec, 20)
                 else:
                     found = false
                 end
                 mem.Free(rec)
             end
         end
+        cds := _zipf_start(zf, cd_disk)
+        if cds < (0 as i64):
+            found = false
+        else:
+            cd_off += cds
+        end
         if found and count >= (0 as i64) and _zipf_read_cd(fp, zf, cd_off, csize):
             zf.count = count
+            zf.cd_start = cd_off
             zf.status = ZIP_OK
         end
     end
@@ -254,6 +421,11 @@ pub func ZipFileClose(zf &: ZipFile):
         mem.Free(zf.password as void*)
     end
     zf.password = ""
+    repeat zf.volumes.len() in vi:
+        mem.Free(zf.volumes.get(vi) as void*)
+    end
+    zf.volumes.free()
+    zf.starts.free()
 end
 
 @en "ZipFileSetPassword"
@@ -296,7 +468,7 @@ pub func ZipFileExtractTo(zf &: ZipFile, name: str, destpath: str, cap: i64): in
     if zf.status != ZIP_OK:
         ret zf.status
     end
-    fp := compress.FileOpenRead(zf.path)
+    fp := _zipf_open(zf)
     if fp == null:
         ret ZIP_IO
     end
@@ -310,7 +482,9 @@ pub func ZipFileExtractTo(zf &: ZipFile, name: str, destpath: str, cap: i64): in
             break
         end
         hit := r.name == name
-        if hit:
+        if hit and not _zipf_fix(zf, r):
+            st = ZIP_CORRUPT
+        else hit:
             st = _zipf_write_one(fp, zf.size, r, destpath, cap, zf.password)
         end
         _zip_free_name(r.name)
@@ -330,7 +504,7 @@ pub func ZipFileExtractAll(zf &: ZipFile, destdir: str, cap: i64): int:
     if zf.status != ZIP_OK:
         ret zf.status
     end
-    fp := compress.FileOpenRead(zf.path)
+    fp := _zipf_open(zf)
     if fp == null:
         ret ZIP_IO
     end
@@ -344,7 +518,9 @@ pub func ZipFileExtractAll(zf &: ZipFile, destdir: str, cap: i64): int:
             break
         end
         mut st := ZIP_OK
-        if not _safe_entry_name(r.name):
+        if not _zipf_fix(zf, r):
+            st = ZIP_CORRUPT
+        else not _safe_entry_name(r.name):
             st = ZIP_UNSAFE_PATH
         else:
             outpath := filepath.Join(destdir, r.name)

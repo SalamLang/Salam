@@ -1,0 +1,90 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+package main
+
+import mem
+import os
+import net.shadowsocks
+
+func udp_client(a: Vector<str>): int:
+    cfg := shadowsocks.Config { host = "127.0.0.1", port = a[2].to_int(), method = a[3], password = a[4] }
+    c := shadowsocks.UdpDial(cfg)
+    if not c.ok:
+        println "FAIL udp dial"
+        ret 1
+    end
+    shadowsocks.UdpSetTimeout(c, 5000)
+    buf := mem.Allocate(70000 as u64)
+    bp := buf as u8*
+    mut good := 0
+    repeat 5 in k:
+        n := 100 + k * 300
+        repeat n in i:
+            bp[i] = ((i * 5 + k) & 255) as u8
+        end
+        if shadowsocks.UdpSend(c, a[5], a[6].to_int(), buf, n):
+            back := mem.Allocate(70000 as u64)
+            mut from := shadowsocks.Target {}
+            got := shadowsocks.UdpRecv(c, back, 70000, from)
+            mut same := got == n
+            rp := back as u8*
+            repeat n in i:
+                if same and rp[i] != bp[i]: same = false end
+            end
+            if same: good++ end
+            mem.Free(back)
+        end
+    end
+    mem.Free(buf)
+    shadowsocks.UdpClose(c)
+    if good == 5:
+        println "OK 5"
+        ret 0
+    end
+    println "FAIL", good, "of 5"
+    ret 1
+end
+
+func main:
+    a := os.Args()
+    if a.len() < 5:
+        println "usage: ss_peer server-tcp|server-udp|client-udp PORT METHOD PASSWORD [OBFS | TARGET_HOST TARGET_PORT]"
+        ret 2
+    end
+    if a[1] == "server-tcp":
+        mut obfs := ""
+        if a.len() > 5: obfs = a[5] end
+        s := shadowsocks.ListenObfs(a[2].to_int(), a[3], a[4], obfs)
+        if not shadowsocks.ServerOk(s):
+            println "FAIL listen"
+            ret 1
+        end
+        shadowsocks.ServeRelay(s)
+        ret 0
+    end
+    if a[1] == "server-udp":
+        mut s := shadowsocks.UdpListen(a[2].to_int(), a[3], a[4])
+        if not s.ok:
+            println "FAIL listen"
+            ret 1
+        end
+        shadowsocks.UdpServe(s)
+        ret 0
+    end
+    if a.len() < 7:
+        println "usage: ss_peer client-udp PORT METHOD PASSWORD TARGET_HOST TARGET_PORT"
+        ret 2
+    end
+    ret udp_client(a)
+end

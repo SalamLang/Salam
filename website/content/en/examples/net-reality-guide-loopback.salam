@@ -1,0 +1,72 @@
+import net.reality
+import net.tcp
+import tls
+
+mut ss := reality.ServerSettings {}
+
+func decoy(arg: void*):
+    srv := tcp.Server { fd = arg as i64 }
+    c := tcp.Accept(srv)
+    if tcp.ConnOk(c):
+        tcp.Read(c, 4096)
+        tcp.Write(c, "decoy site says hello")
+        tcp.Close(c)
+    end
+end
+
+func serve(arg: void*):
+    srv := tcp.Server { fd = arg as i64 }
+    c := tcp.Accept(srv)
+    if not tcp.ConnOk(c):
+        ret
+    end
+    r := reality.Accept(c.fd, ss)
+    if r.ok:
+        mut t := r.conn
+        d := tls.Read(t, 4096)
+        tls.Write(t, "hello " + d + " from short id " + r.short_id)
+        tls.Close(t)
+    end
+end
+
+func main:
+    keys := reality.GenerateKey()
+    dest := tcp.Bind(0)
+    dth := spawn(decoy, dest.fd as void*)
+    ss.private_key = keys.private_key
+    ss.dest = "127.0.0.1:" + tcp.Port(dest)
+    ss.server_names = "www.example.com"
+    ss.short_ids = "abcd1234"
+
+    srv := tcp.Bind(0)
+    sth := spawn(serve, srv.fd as void*)
+    c := tcp.Dial("127.0.0.1", tcp.Port(srv))
+    mut s := reality.Settings {}
+    s.server_name = "www.example.com"
+    s.public_key = keys.public_key
+    s.short_id = "abcd1234"
+    mut t := reality.DialOver(c.fd, s)
+    println "client connected:", tls.ConnOk(t)
+    tls.Write(t, "reality")
+    println tls.Read(t, 4096)
+    tls.Close(t)
+    join(sth)
+    tcp.Close(tcp.Dial("127.0.0.1", tcp.Port(dest)))
+    join(dth)
+
+    dest2 := tcp.Bind(0)
+    dth2 := spawn(decoy, dest2.fd as void*)
+    ss.dest = "127.0.0.1:" + tcp.Port(dest2)
+    srv2 := tcp.Bind(0)
+    sth2 := spawn(serve, srv2.fd as void*)
+    p := tcp.Dial("127.0.0.1", tcp.Port(srv2))
+    tcp.Write(p, "GET / HTTP/1.1\r\nHost: www.example.com\r\n\r\n")
+    println "a probe gets:", tcp.Read(p, 4096)
+    tcp.Close(p)
+    join(sth2)
+    join(dth2)
+    tcp.CloseServer(srv)
+    tcp.CloseServer(srv2)
+    tcp.CloseServer(dest)
+    tcp.CloseServer(dest2)
+end

@@ -4,7 +4,9 @@ import type { Chat, Project, ProjectInput } from "./api";
 import { confirmDialog } from "./Confirm";
 import { fmtDate, fmtNum } from "./format";
 import { t } from "./i18n";
+import { agent, isDesktop } from "./desktop";
 import { autoDir } from "./dir";
+import { MasterField, PROJECT_MASTER_MAX } from "./MasterPrompt";
 import {
   IconChat,
   IconClose,
@@ -80,15 +82,19 @@ function stateText(c: Chat): string {
 type DialogProps = {
   project: Project | null;
   busy?: boolean;
+  running?: boolean;
   onSave: (input: ProjectInput) => void;
   onClose: () => void;
 };
 
-export function ProjectDialog({ project, busy, onSave, onClose }: DialogProps) {
+export function ProjectDialog({ project, busy, running, onSave, onClose }: DialogProps) {
   const [name, setName] = useState(project?.name ?? "");
   const [description, setDescription] = useState(project?.description ?? "");
+  const [master, setMaster] = useState(project?.master_prompt ?? "");
   const [color, setColor] = useState(project?.color || PROJECT_COLORS[0]);
   const [emoji, setEmoji] = useState(project?.emoji ?? "");
+  const [path, setPath] = useState(project?.path ?? "");
+  const [pathError, setPathError] = useState("");
   const nameRef = useRef<HTMLInputElement>(null);
   // Keep the latest onClose without re-running the mount effect below: the
   // parent re-renders on polling and passes a fresh inline callback, which
@@ -112,12 +118,27 @@ export function ProjectDialog({ project, busy, onSave, onClose }: DialogProps) {
       if (previous && document.contains(previous)) previous.focus();
     };
   }, []);
+  const needsPath = isDesktop && path === "";
   const submit = (e: FormEvent) => {
     e.preventDefault();
     const trimmed = name.trim();
-    if (!trimmed || busy) return;
-    onSave({ name: trimmed, description: description.trim(), color, emoji });
+    if (!trimmed || busy || needsPath) return;
+    const input: ProjectInput = { name: trimmed, description: description.trim(), master_prompt: master.trim(), color, emoji };
+    if (path !== (project?.path ?? "")) input.path = path;
+    onSave(input);
   };
+  const pickPath = async () => {
+    try {
+      const picked = await agent.pickFolder();
+      if (picked) {
+        setPath(picked);
+        setPathError("");
+      }
+    } catch {
+      setPathError(t("انتخاب پوشه ناموفق بود.", "Could not choose the folder."));
+    }
+  };
+  const pathLocked = project !== null && running === true && (project.path ?? "") !== "";
   return (
     <div className="project-dialog-scrim">
       <button
@@ -190,6 +211,61 @@ export function ProjectDialog({ project, busy, onSave, onClose }: DialogProps) {
             )}
           />
         </label>
+        <div className="field project-path-field">
+          <span>{t("پوشه‌ی پروژه", "Project folder")}</span>
+          <div className="project-path-row">
+            <span className={`project-path${path ? "" : " empty"}`} title={path}>
+              <IconFolder width={15} height={15} />
+              {path ? <bdi dir="ltr">{path}</bdi> : t("هنوز انتخاب نشده", "Not chosen yet")}
+            </span>
+            {isDesktop && (
+              <button type="button" className="button ghost" onClick={pickPath} disabled={busy || pathLocked}>
+                {path ? t("تغییر پوشه", "Change folder") : t("انتخاب پوشه", "Choose folder")}
+              </button>
+            )}
+          </div>
+          {pathLocked && (
+            <small className="muted">
+              {t(
+                "تا وقتی گفت‌وگویی در این پروژه در حال اجراست، پوشه را نمی‌شود عوض کرد.",
+                "The folder cannot be changed while a chat in this project is running.",
+              )}
+            </small>
+          )}
+          {!isDesktop && (
+            <small className="muted">
+              {t("پوشه‌ی پروژه را فقط از برنامه‌ی ایجنت سلام می‌شود تعیین کرد.", "The project folder can only be set from the Salam Agent app.")}
+            </small>
+          )}
+          {isDesktop && !pathLocked && (
+            <small className="muted">
+              {t(
+                "همه‌ی گفت‌وگوهای این پروژه در این پوشه کار می‌کنند. فقط از همین‌جا عوض می‌شود.",
+                "Every chat in this project works in this folder. It can only be changed here.",
+              )}
+            </small>
+          )}
+          {pathError && <small className="error">{pathError}</small>}
+        </div>
+        <label className="field">
+          <span>{t("پرامپت اصلی پروژه", "Project master prompt")}</span>
+          <MasterField
+            value={master}
+            max={PROJECT_MASTER_MAX}
+            onChange={setMaster}
+            rows={5}
+            placeholder={t(
+              "چگونه این پروژه را پیش ببرد؟ مثلاً: بعد از هر کار تست کن و مرحله به مرحله کامیت و پوش کن.",
+              "How should this project be run? For example: test after each task, commit and push step by step.",
+            )}
+          />
+          <small className="muted">
+            {t(
+              "برای همه‌ی گفت‌وگوهای این پروژه. از پرامپت اصلی حساب بالاتر و از قوانین سرویس پایین‌تر است.",
+              "Applies to every chat in this project. Ranks above your account master prompt and below the service rules.",
+            )}
+          </small>
+        </label>
         <fieldset className="project-color-row">
           <legend className="project-dialog-label">{t("رنگ", "Color")}</legend>
           {PROJECT_COLORS.map((c) => (
@@ -230,7 +306,7 @@ export function ProjectDialog({ project, busy, onSave, onClose }: DialogProps) {
           <button
             type="submit"
             className="button primary"
-            disabled={!name.trim() || busy}
+            disabled={!name.trim() || busy || needsPath}
           >
             {project
               ? t("ذخیره‌ی تغییرها", "Save changes")

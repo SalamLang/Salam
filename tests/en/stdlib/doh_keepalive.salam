@@ -1,0 +1,136 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import mem
+import str
+import compress
+import net.dns
+import net.doh
+import net.tcp
+import sync
+
+mut http_port := 0
+mut accepts := 0
+mut requests := 0
+mut ready := sync.NewWaitGroup()
+
+func rec(name: str, rtype: int, ttl: int, data: str): dns.Record:
+    ret dns.Record { name = name, rtype = rtype, rclass = 1, ttl = ttl, data = data }
+end
+
+func head_end(p: void*, n: int): int:
+    b := p as u8*
+    mut i := 0
+    until i + 4 <= n:
+        if b[i] == 13 and b[i + 1] == 10 and b[i + 2] == 13 and b[i + 3] == 10:
+            ret i
+        end
+        i++
+    end
+    ret 0 - 1
+end
+
+func serve_conn(c: tcp.Conn):
+    buf := mem.Allocate(4096 as u64)
+    until true:
+        n := tcp.ReadBytes(c, buf, 4096)
+        if n <= 0:
+            break
+        end
+        he := head_end(buf, n)
+        if he < 0:
+            break
+        end
+        requests++
+        wire := ((buf as i64) + (he as i64) + 4) as void*
+        q := dns.Decode(wire, n - he - 4)
+        qn := q.questions.items.get(0)
+        mut recs := Vector {} as Vector<dns.Record>
+        recs.push(rec(qn.name, dns.TypeA, 60, "10.0.0.7"))
+        mut out := doh.EncodeResponse(q.id, qn.name, qn.qtype, 0, recs)
+        recs.free()
+        head := "HTTP/1.1 200 OK\r\nContent-Type: application/dns-message\r\nContent-Length: " + str.FromInt(out.len as i64) + "\r\n\r\n"
+        _a := tcp.WriteBytes(c, head as void*, head.len())
+        _b := tcp.WriteBytes(c, out.data, out.len)
+        compress.BufFree(out)
+    end
+    mem.Free(buf)
+    tcp.Close(c)
+end
+
+func http_server():
+    srv := tcp.Bind(0)
+    http_port = tcp.Port(srv)
+    sync.Done(ready)
+    until true:
+        c := tcp.Accept(srv)
+        accepts++
+        serve_conn(c)
+    end
+end
+
+func main:
+    sync.Add(ready, 1 as i64)
+    _t := spawn(http_server)
+    sync.Wait(ready)
+
+    s := doh.NewServer("local", doh.KindDoH, "http://127.0.0.1:" + http_port + "/dns-query")
+    r1 := doh.Query(s, "one.test", dns.TypeA, 3000)
+    println r1.ok, r1.msg.answers.items.get(0).data
+    r2 := doh.Query(s, "two.test", dns.TypeA, 3000)
+    println r2.ok, r2.msg.answers.items.get(0).data
+    r3 := doh.Query(s, "three.test", dns.TypeA, 3000)
+    println r3.ok
+    println "accepts", accepts, "requests", requests, "reused", doh.ReusedConnections()
+    doh.CloseIdleConnections()
+    r4 := doh.Query(s, "four.test", dns.TypeA, 3000)
+    println r4.ok, "accepts", accepts, "reused", doh.ReusedConnections()
+    doh.CloseIdleConnections()
+
+    mut one := Vector {} as Vector<doh.Server>
+    one.push(s)
+    rs := doh.NewResolver(one)
+    stub := doh.StartStub(rs, "", 0)
+    println "stub", stub.ok, stub.host, stub.tcp_ok
+    c := tcp.Dial("127.0.0.1", stub.port)
+    println tcp.ConnOk(c)
+    mut i := 0
+    until i < 2:
+        qw := dns.EncodeQuery("tcp" + i + ".test", dns.TypeA, 100 + i)
+        hdr := mem.Allocate(2 as u64)
+        (hdr as u8*)[0] = ((qw.len >> 8) & 255) as u8
+        (hdr as u8*)[1] = (qw.len & 255) as u8
+        _w1 := tcp.WriteBytes(c, hdr, 2)
+        _w2 := tcp.WriteBytes(c, qw.data, qw.len)
+        rb := mem.Allocate(2048 as u64)
+        _r1 := tcp.ReadBytes(c, rb, 2)
+        want := ((rb as u8*)[0] as int) * 256 + ((rb as u8*)[1] as int)
+        mut got := 0
+        until got < want:
+            k := tcp.ReadBytes(c, ((rb as i64) + (got as i64)) as void*, want - got)
+            if k <= 0:
+                break
+            end
+            got += k
+        end
+        sm := dns.Decode(rb, got)
+        println "tcp answer", sm.id, sm.rcode, sm.answers.items.get(0).data
+        mem.Free(rb)
+        mem.Free(hdr)
+        i++
+    end
+    tcp.Close(c)
+    println doh.StubServed(stub)
+    doh.StopStub(stub)
+end

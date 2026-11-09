@@ -164,6 +164,18 @@ pub struct ConnState:
     @en "live"
     @fa "زنده"
     pub live: bool = false
+    @en "eih"
+    @fa "سرآیند هویت"
+    pub eih: Buf = Buf {}
+    @en "eih_n"
+    @fa "تعداد سرآیند هویت"
+    pub eih_n: int = 0
+    @en "eih_done"
+    @fa "سرآیند هویت خوانده شد"
+    pub eih_done: bool = false
+    @en "user"
+    @fa "کاربر"
+    pub user: str = ""
 end
 
 @en "Conn"
@@ -293,6 +305,8 @@ func _free_state(st: ConnState*):
     end
     BufWipe(st.key)
     BufFree(st.key)
+    BufWipe(st.eih)
+    BufFree(st.eih)
     BufFree(st.plain)
     BufFree(st.out)
     BufFree(st.pending)
@@ -367,6 +381,16 @@ func _first_write_2022(st: ConnState*, data: void*, n: int): bool:
     BufAppendByte(fixed, v.len >> 8)
     BufAppendByte(fixed, v.len)
     EmitSalt(st.enc, st.out)
+    repeat st.eih_n in i:
+        mut nxt := st.key.p
+        if i + 1 < st.eih_n:
+            nxt = _at(st.eih.p, (i + 1) * st.method.key_len)
+        end
+        blk := mem.AllocateZeroed(16 as u64)
+        EihSeal(_at(st.eih.p, i * st.method.key_len), st.method.key_len, st.enc.salt.p, st.method.salt_len, nxt, blk)
+        BufAppend(st.out, blk, 16)
+        mem.Free(blk)
+    end
     SealFrame(st.enc, fixed.p, fixed.len, st.out)
     SealFrame(st.enc, v.p, v.len, st.out)
     BufFree(v)
@@ -526,11 +550,26 @@ func _client_state(cfg: Config, target_host: str, target_port: int): ConnState*:
     if not m.ok:
         ret null
     end
-    key := MakeKey(m, cfg.password)
-    if key.bad:
+    mut chain := ChainOf(m, cfg.password)
+    mut key := MakeKey(m, cfg.password)
+    if m.v2022:
+        if not chain.ok:
+            ret null
+        end
+        key = NewBuf(m.key_len)
+        BufAppend(key, ChainKey(chain, chain.count - 1), m.key_len)
+    else key.bad:
         ret null
     end
     st := _new_state(m, key, ObfsMode(cfg.obfs), false, cfg.obfs_host)
+    if m.v2022 and chain.count > 1:
+        st.eih = NewBuf(chain.count * m.key_len)
+        BufAppend(st.eih, chain.keys.p, (chain.count - 1) * m.key_len)
+        st.eih_n = chain.count - 1
+    end
+    if m.v2022:
+        ChainFree(chain)
+    end
     mut hdr := NewBuf(300)
     if not EncodeTarget(target_host, target_port, hdr):
         BufFree(hdr)

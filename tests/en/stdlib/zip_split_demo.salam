@@ -1,0 +1,110 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import archive
+import compress
+import filepath
+import mem
+import os
+import str
+
+func cat(a: str, b: str): str:
+    ret filepath.Join(a, b)
+end
+
+func fill(n: int): compress.ByteBuf:
+    mut b := compress.NewByteBufCap(n)
+    mut x := 12345 as i64
+    repeat n in i:
+        x = (x * (1103515245 as i64) + (12345 as i64)) & (0x7fffffff as i64)
+        compress.BufPush(b, i % 5 == 0 ? ((x >> (16 as i64)) & (255 as i64)) as int : 65 + (i % 7))
+    end
+    ret b
+end
+
+func count_parts(dir: str, prefix: str): int:
+    names := os.ListDir(dir)
+    mut n := 0
+    each nm in names:
+        if str.StartsWith(nm, prefix):
+            n++
+        end
+        mem.Free(nm as void*)
+    end
+    names.free()
+    ret n
+end
+
+func check(first: str, dir: str, tag: str, data: compress.ByteBuf):
+    mut zf := archive.ZipOpenFile(first)
+    println tag, "open", zf.status, zf.count, zf.volumes.len()
+    out := cat(dir, "two.out")
+    println tag, "two", archive.ZipFileExtractTo(zf, "two.bin", out, 0 as i64), os.FileSize(out)
+    mut ok := false
+    mut back := archive.ReadBinaryFile(out, ok)
+    println tag, ok, back.len, compress.CRC32(back.data, back.len) == compress.CRC32(data.data, 300000)
+    compress.BufFree(back)
+    all := cat(dir, "all")
+    os.RemoveAll(all)
+    println tag, "all", archive.ZipFileExtractAll(zf, all, 0 as i64)
+    p := cat(all, "a/one.bin")
+    println tag, "one", os.FileSize(p)
+    mem.Free(p as void*)
+    mem.Free(all as void*)
+    mem.Free(out as void*)
+    archive.ZipFileClose(zf)
+end
+
+func main:
+    dir := cat(os.TempDir(), "salam_zip_split_demo")
+    os.RemoveAll(dir)
+    os.MkdirAll(dir)
+    mut data := fill(400000)
+    mut files := Vector {} as Vector<archive.ZipFileInput>
+    files.push(archive.MakeZipFileInput("a/one.bin", data.data, data.len, 8))
+    files.push(archive.MakeZipFileInput("two.bin", data.data, 300000, 0))
+    files.push(archive.MakeZipFileInput("three.bin", data.data, 200000, 8))
+    d1 := cat(dir, "disk")
+    d2 := cat(dir, "byte")
+    os.MkdirAll(d1)
+    os.MkdirAll(d2)
+    p1 := cat(d1, "s.zip")
+    p2 := cat(d2, "b.zip")
+    println "bad part size", archive.ZipCreateFileSplit(files, p1, 1000 as i64, archive.ZipSplitDisk)
+    println "disk", archive.ZipCreateFileSplit(files, p1, 100000 as i64, archive.ZipSplitDisk)
+    println "byte", archive.ZipCreateFileSplit(files, p2, 100000 as i64, archive.ZipSplitByte)
+    println "parts", count_parts(d1, "s."), count_parts(d2, "b.")
+    check(p1, dir, "disk", data)
+    p3 := cat(d1, "s.z02")
+    check(p3, dir, "disk2", data)
+    p4 := cat(d2, "b.zip.001")
+    check(p4, dir, "byte", data)
+    os.Remove(p3)
+    mut gone := archive.ZipOpenFile(p1)
+    println "missing part", gone.status
+    archive.ZipFileClose(gone)
+    os.RemoveAll(dir)
+    compress.BufFree(data)
+    files.free()
+    mem.Free(p1 as void*)
+    mem.Free(p2 as void*)
+    mem.Free(p3 as void*)
+    mem.Free(p4 as void*)
+    mem.Free(d1 as void*)
+    mem.Free(d2 as void*)
+    mem.Free(dir as void*)
+    ret 0
+end

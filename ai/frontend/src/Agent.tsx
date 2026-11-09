@@ -313,9 +313,13 @@ type BarProps = {
   onPick: () => void;
   onClear: () => void;
   onMode: (m: AgentMode) => void;
+  inProject?: boolean;
+  extra?: string;
+  onExtraPick?: () => void;
+  onExtraClear?: () => void;
 };
 
-export function AgentBar({ info, workspace, locked, elsewhere, mode, onPick, onClear, onMode }: BarProps) {
+export function AgentBar({ info, workspace, locked, elsewhere, mode, onPick, onClear, onMode, inProject, extra, onExtraPick, onExtraClear }: BarProps) {
   const online = info?.connected ?? false;
   const [help, setHelp] = useState(false);
   const wrapRef = useRef<HTMLSpanElement>(null);
@@ -337,7 +341,22 @@ export function AgentBar({ info, workspace, locked, elsewhere, mode, onPick, onC
   return (
     <div className="agent-bar">
       <span className={`agent-dot${online ? " on" : ""}`} title={online ? t(`وصل به ${info?.device?.name ?? "این رایانه"}`, `Connected to ${info?.device?.name ?? "this computer"}`) : t("در حال اتصال", "Connecting")} />
-      {workspace && locked ? (
+      {inProject ? (
+        extra ? (
+          <span className="agent-ws" title={extra}>
+            <IconFolder width={15} height={15} />
+            <bdi dir="ltr">{folderName(extra)}</bdi>
+            <button type="button" className="agent-ws-clear" onClick={onExtraClear} aria-label={t("برداشتن پوشه‌ی اضافه", "Remove extra folder")}>
+              <IconClose width={14} height={14} />
+            </button>
+          </span>
+        ) : (
+          <button type="button" className="agent-ws pick" onClick={onExtraPick} title={t("پوشه‌ی پروژه برای همه‌ی گفت‌وگوها یکی است. اینجا می‌توانید برای همین گفت‌وگو یک پوشه‌ی دیگر هم اضافه کنید.", "The project folder is shared by every chat. Here you can add one more folder for this chat only.")}>
+            <IconFolder width={15} height={15} />
+            {t("افزودن پوشه‌ی اضافه", "Add extra folder")}
+          </button>
+        )
+      ) : workspace && locked ? (
         <span className="agent-ws-wrap" ref={wrapRef}>
           <button type="button" className="agent-ws" title={workspace} aria-expanded={help} onClick={() => setHelp((v) => !v)}>
             <IconFolder width={15} height={15} />

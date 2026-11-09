@@ -14,6 +14,7 @@ export type Chat = {
   cloud?: boolean;
   device_id?: number;
   workspace?: string;
+  extra_path?: string;
   project_id?: string;
   shared?: ShareKind[];
   state?: "working" | "queued" | "waiting" | "idle" | "offline";
@@ -34,18 +35,23 @@ export type Project = {
   chats: number;
   live: number;
   last: number;
+  path?: string;
+  master_prompt?: string;
 };
 export type ProjectInput = {
   name: string;
   description?: string;
+  master_prompt?: string;
   color?: string;
   emoji?: string;
+  path?: string;
 };
 export type ChatStart = {
   device_id?: string;
   workspace?: string;
   cloud?: boolean;
   project_id?: string;
+  extra_path?: string;
 };
 export type ShareKind = "view" | "collab";
 export type ShareState =
@@ -223,11 +229,29 @@ export type UserProfile = {
   name: string;
   email: string;
   created: number;
-  plan: { id: string; name: string; source: string; started: number; expires: number };
+  plan: {
+    id: string;
+    name: string;
+    source: string;
+    started: number;
+    expires: number;
+  };
   counts: Record<string, number>;
-  identities: { provider: string; login: string; email: string; created: number }[];
+  identities: {
+    provider: string;
+    login: string;
+    email: string;
+    created: number;
+  }[];
   integrations: { provider: string; login: string }[];
-  telegram: { tg_id: string; name: string; username: string; lang: string; created: number; last_seen: number }[];
+  telegram: {
+    tg_id: string;
+    name: string;
+    username: string;
+    lang: string;
+    created: number;
+    last_seen: number;
+  }[];
 };
 export type AdminChatOwner = { id: number; name: string; email: string };
 export type Device = {
@@ -781,7 +805,11 @@ export async function awaitProviderLogin(
       return { token: r.token, next: r.next ?? "" };
     if (r.status === "failed") throw new ApiError(400, r.error || "failed", "");
     if (r.status !== "pending")
-      throw new ApiError(400, r.status === "expired" ? "expired" : "missing", "");
+      throw new ApiError(
+        400,
+        r.status === "expired" ? "expired" : "missing",
+        "",
+      );
   }
   throw new ApiError(400, "expired", "");
 }
@@ -1074,6 +1102,13 @@ export const api = {
   logout: () => call<{ ok: boolean }>("POST", "/auth/logout"),
   me: () => call<{ user: User }>("GET", "/me"),
   chats: () => call<{ chats: Chat[] }>("GET", "/chats"),
+  masterPrompt: () =>
+    call<{ master_prompt: string; max: number; project_max: number }>(
+      "GET",
+      "/me/master",
+    ),
+  setMasterPrompt: (master_prompt: string) =>
+    call<{ master_prompt: string }>("PUT", "/me/master", { master_prompt }),
   projects: () => call<{ projects: Project[] }>("GET", "/projects"),
   createProject: (body: ProjectInput) =>
     call<{ project: Project }>("POST", "/projects", body),
@@ -1181,6 +1216,10 @@ export const api = {
       { text, name },
       true,
     ),
+  setChatExtra: (id: string, extraPath: string) =>
+    call<{ ok: boolean; extra_path: string }>("PATCH", `/chats/${id}`, {
+      extra_path: extraPath,
+    }),
   renameChat: (id: string, title: string) =>
     call<{ title: string }>("PATCH", `/chats/${id}`, { title }),
   deleteChat: (id: string) => call<{ ok: boolean }>("DELETE", `/chats/${id}`),
@@ -1336,7 +1375,11 @@ export const api = {
     }>("GET", `/admin/users${query({ q, offset: offset || undefined })}`),
   adminTelegram: () => call<AdminTelegram>("GET", "/admin/telegram"),
   adminUserPolicy: (id: number, body: { policy_system?: string }) =>
-    call<{ user: { id: number; policy_system: string } }>("PATCH", `/admin/users/${id}/policy`, body),
+    call<{ user: { id: number; policy_system: string } }>(
+      "PATCH",
+      `/admin/users/${id}/policy`,
+      body,
+    ),
   adminEvents: (f: EventFilters) =>
     call<{ events: AppEvent[] }>(
       "GET",
@@ -1358,11 +1401,15 @@ export const api = {
     ),
   adminUpdateKey: (id: number, policy: KeyPolicy) =>
     call<{ key: AdminKey }>("PATCH", `/admin/keys/${id}`, policy),
-  adminUserProfile: (id: number) => call<UserProfile>("GET", `/admin/users/${id}/profile`),
+  adminUserProfile: (id: number) =>
+    call<UserProfile>("GET", `/admin/users/${id}/profile`),
   adminUserChats: (id: number) =>
     call<{ chats: Chat[] }>("GET", `/admin/users/${id}/chats`),
   adminLatestChats: (offset: number, q: string) =>
-    call<{ chats: AdminChatRow[]; more: boolean }>("GET", `/admin/chats?offset=${offset}${q ? `&q=${encodeURIComponent(q)}` : ""}`),
+    call<{ chats: AdminChatRow[]; more: boolean }>(
+      "GET",
+      `/admin/chats?offset=${offset}${q ? `&q=${encodeURIComponent(q)}` : ""}`,
+    ),
   adminChat: (id: string) =>
     call<{
       chat: Chat;

@@ -20,6 +20,8 @@ import mem
 import sync
 import atomic
 
+const _PUMP_BUF := 65536
+
 struct _Job:
     pub src: dyn Stream = ClosedStream {}
     pub dst: dyn Stream = ClosedStream {}
@@ -133,13 +135,19 @@ pub struct IdleTimer:
 end
 
 func _pump(j: _Job):
-    buf := mem.Allocate(16384 as u64)
+    buf := mem.Allocate(_PUMP_BUF as u64)
+    track := j.idle.limit > 0
+    mut clean := false
     until true:
-        n := j.src.ReadBytes(buf, 16384)
-        if n <= 0: break end
+        n := j.src.ReadBytes(buf, _PUMP_BUF)
+        if n == 0:
+            clean = true
+            break
+        end
+        if n < 0: break end
         w := j.dst.WriteBytes(buf, n)
         if w != n: break end
-        j.idle.Touch()
+        if track: j.idle.Touch() end
         atomic.Add(j.count, n as i64)
         if j.upward:
             atomic.Add(j.st.up, n as i64)
@@ -148,8 +156,12 @@ func _pump(j: _Job):
         end
     end
     mem.Free(buf)
-    j.src.Shutdown()
-    j.dst.Shutdown()
+    if clean:
+        j.dst.CloseWrite()
+    else:
+        j.src.Shutdown()
+        j.dst.Shutdown()
+    end
 end
 
 func _pump_thread(jp: _Job*):

@@ -1,0 +1,102 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import mem
+import sync
+import pool
+import net.tcp
+import net.tunnel
+
+const CHUNK := 65536
+const TOTAL := 268435456
+
+mut srv_a := tcp.Server {}
+mut srv_b := tcp.Server {}
+mut hop_ready := sync.NewWaitGroup()
+
+func writer(s: dyn tunnel.Stream):
+    buf := mem.AllocateZeroed(CHUNK as u64)
+    mut sent := 0
+    until sent < TOTAL:
+        if s.WriteBytes(buf, CHUNK) != CHUNK: break end
+        sent += CHUNK
+    end
+    s.CloseWrite()
+    mem.Free(buf)
+end
+
+func drain(s: dyn tunnel.Stream): int:
+    buf := mem.Allocate(CHUNK as u64)
+    mut got := 0
+    until true:
+        n := s.ReadBytes(buf, CHUNK)
+        if n <= 0: break end
+        got += n
+    end
+    mem.Free(buf)
+    ret got
+end
+
+func relay(a: dyn tunnel.Stream, b: dyn tunnel.Stream):
+    _r := tunnel.Relay(a, b)
+end
+
+func report(label: str, bytes: int, start: i64):
+    ms := sync.NowMs() - start
+    mbs := (bytes as f64) / 1048576.0 / ((ms as f64) / 1000.0)
+    println label, bytes / 1048576, "MiB in", ms, "ms =", mbs as int, "MiB/s"
+end
+
+func pipe_run(wp: pool.Pool):
+    p1 := tunnel.NewPipe()
+    p2 := tunnel.NewPipe()
+    start := sync.NowMs()
+    pool.Submit(wp, (): relay(tunnel.PipeB(p1), tunnel.PipeA(p2)) end)
+    pool.Submit(wp, (): writer(tunnel.PipeA(p1)) end)
+    got := drain(tunnel.PipeB(p2))
+    report("pipe relay", got, start)
+    tunnel.PipeB(p2).CloseWrite()
+    pool.Wait(wp)
+end
+
+func accept_a():
+    c := tcp.Accept(srv_a)
+    relay_conn := tunnel.WrapTcp(c)
+    out := tunnel.DialTcp("127.0.0.1", tcp.Port(srv_b), 3000)
+    relay(relay_conn, out)
+end
+
+func tcp_run(wp: pool.Pool):
+    pool.Submit(wp, (): accept_a() end)
+    cl := tunnel.DialTcp("127.0.0.1", tcp.Port(srv_a), 3000)
+    sink_c := tcp.Accept(srv_b)
+    sink := tunnel.WrapTcp(sink_c)
+    start := sync.NowMs()
+    pool.Submit(wp, (): writer(cl) end)
+    got := drain(sink)
+    report("tcp relay ", got, start)
+    sink.CloseWrite()
+    pool.Wait(wp)
+end
+
+func main:
+    wp := pool.NewElastic(2 as i64, 8 as i64, 8 as i64)
+    pipe_run(wp)
+    srv_a = tcp.Bind(0)
+    srv_b = tcp.Bind(0)
+    tcp_run(wp)
+    pool.Stop(wp)
+end

@@ -14,18 +14,21 @@
 
 package main
 
+import net.vpn
 import io
 import mem
 import os
 import pool
+import compress
+import str
+import net.dns
+import net.doh
 import net.socks
 import net.httpproxy
 import net.tcp
 import net.transport
 import net.tunnel
 
-include "registry.salam"
-include "core.salam"
 include "testcert.salam"
 
 const UUID := "b831381d-6324-4d53-ad4f-8cda48b30811"
@@ -35,6 +38,8 @@ mut failures := 0
 mut echo_srv := tcp.Server {}
 mut site_srv := tcp.Server {}
 mut workers := pool.Pool {}
+mut doh_srv := tcp.Server {}
+mut doh_queries := 0
 
 func echo_conn(c: tcp.Conn):
     buf := mem.Allocate(65536 as u64)
@@ -66,6 +71,66 @@ func site_loop():
         c := tcp.Accept(site_srv)
         if not tcp.ConnOk(c): break end
         pool.Submit(workers, (): site_conn(c) end)
+    end
+end
+
+func doh_head_end(b: u8*, n: int): int:
+    repeat n - 3 in i:
+        if b[i] == 13 and b[i + 1] == 10 and b[i + 2] == 13 and b[i + 3] == 10: ret i end
+    end
+    ret 0 - 1
+end
+
+func doh_content_length(b: u8*, hend: int): int:
+    raw := mem.AllocateZeroed((hend + 1) as u64)
+    mem.Copy(raw, b as void*, hend as u64)
+    head := str.Lower(raw as str)
+    at := head.find("content-length:")
+    if at < 0: ret 0 end
+    rest := head.substr(at + 15, head.len() - at - 15)
+    mut e := rest.find("\r\n")
+    if e < 0: e = rest.len() end
+    ret str.Trim(rest.substr(0, e)).to_int()
+end
+
+func doh_conn(c: tcp.Conn):
+    buf := mem.AllocateZeroed(8192 as u64) as u8*
+    mut got := 0
+    mut hend := 0 - 1
+    mut need := 0
+    until true:
+        n := tcp.ReadBytes(c, (buf as i64 + got) as void*, 8192 - got)
+        if n <= 0: break end
+        got += n
+        if hend < 0:
+            hend = doh_head_end(buf, got)
+            if hend >= 0: need = doh_content_length(buf, hend) end
+        end
+        if hend >= 0 and got >= hend + 4 + need: break end
+    end
+    if hend >= 0 and need > 0:
+        q := dns.Decode((buf as i64 + hend + 4) as void*, need)
+        qn := q.questions.items.get(0)
+        mut recs := Vector {} as Vector<dns.Record>
+        if qn.name == "doh.test" and qn.qtype == dns.TypeA:
+            recs.push(dns.Record { name = "doh.test", rtype = dns.TypeA, rclass = 1, ttl = 60, data = "127.0.0.1" })
+        end
+        doh_queries++
+        mut reply := doh.EncodeResponse(q.id, qn.name, qn.qtype, 0, recs)
+        head := "HTTP/1.1 200 OK\r\nContent-Type: application/dns-message\r\nConnection: close\r\nContent-Length: " + str.FromInt(reply.len as i64) + "\r\n\r\n"
+        tcp.Write(c, head)
+        tcp.WriteBytes(c, reply.data, reply.len)
+        compress.BufFree(reply)
+    end
+    mem.Free(buf as void*)
+    tcp.Close(c)
+end
+
+func doh_loop():
+    until true:
+        c := tcp.Accept(doh_srv)
+        if not tcp.ConnOk(c): break end
+        pool.Submit(workers, (): doh_conn(c) end)
     end
 end
 
@@ -122,10 +187,10 @@ func via_http(port: int): int:
     ret n
 end
 
-func local_proxy(node: tunnel.Node, stats: tunnel.Stats): core.Listener:
+func local_proxy(node: tunnel.Node, stats: tunnel.Stats): vpn.Listener:
     mut dialer := tunnel.NewRouterDialer(tunnel.NewRouter("proxy"))
-    tunnel.RouterDialerAdd(dialer, "proxy", registry.DialerFromNode(node))
-    ret core.Start(tunnel.InboundConfig { tag = "local", protocol = "mixed" }, dialer, stats)
+    tunnel.RouterDialerAdd(dialer, "proxy", vpn.DialerFromNode(node))
+    ret vpn.Start(tunnel.InboundConfig { tag = "local", protocol = "mixed" }, dialer, stats)
 end
 
 func link_node(n: tunnel.Node): tunnel.Node:
@@ -169,7 +234,14 @@ func main:
     io.WriteFile(key, testcert.KEY)
 
     workers = pool.NewElastic(2 as i64, 64 as i64, 64 as i64)
-    registry.Install(registry.Options { fragment = true })
+    doh_srv = tcp.Bind(0)
+    _doh_t := spawn(doh_loop)
+    mut doh_server := doh.NewServer("mock", doh.KindDoH, "http://127.0.0.1:" + tcp.Port(doh_srv) + "/dns-query")
+    doh_server.addrs.push("127.0.0.1")
+    mut doh_list := Vector {} as Vector<doh.Server>
+    doh_list.push(doh_server)
+    doh_resolver := doh.NewResolver(doh_list)
+    vpn.RegisterWith(vpn.Options { fragment = true, use_doh = true, resolver = doh_resolver })
     echo_srv = tcp.Bind(0)
     site_srv = tcp.Bind(0)
     _echo_t := spawn(echo_loop)
@@ -177,7 +249,7 @@ func main:
 
     server_stats := tunnel.NewStats()
     cfg := tunnel.ParseConfig(server_config(crt, key, tcp.Port(site_srv)))
-    servers := core.StartAll(cfg, server_stats)
+    servers := vpn.StartAll(cfg, server_stats)
     println "server inbounds:", servers.len()
 
     cases := [
@@ -196,13 +268,13 @@ func main:
         proxy := local_proxy(link_node(n), stats)
         report(names[i], via_socks(proxy.port))
         if i == 0: report("vless over tcp, http connect", via_http(proxy.port)) end
-        core.Stop(proxy)
+        vpn.Stop(proxy)
     end
 
     wrong := tunnel.Node { protocol = "vless", uuid = "00000000-0000-4000-8000-000000000001", network = "tcp", host = "127.0.0.1", port = servers[0].port, valid = true }
     bad := local_proxy(wrong, tunnel.NewStats())
     println "vless unknown user:", via_socks(bad.port) < 0 ? "rejected" : "ACCEPTED"
-    core.Stop(bad)
+    vpn.Stop(bad)
 
     probe := transport.Dial("127.0.0.1", servers[4].port, transport.Settings { tls = true, allow_insecure = true, sni = "localhost" })
     probe_s := transport.AsStream(probe)
@@ -211,11 +283,24 @@ func main:
     println "trojan probe without password:", reply.ends_with("hello, website") ? "served the website" : "FAILED"
     probe_s.Close()
 
+    named := tunnel.Node { protocol = "vless", uuid = UUID, network = "tcp", host = "doh.test", port = servers[0].port, valid = true }
+    viadoh := local_proxy(named, tunnel.NewStats())
+    report("vless to a name resolved over doh", via_socks(viadoh.port))
+    vpn.Stop(viadoh)
+    mut geo := tunnel.NewRouter("proxy")
+    mut loop_rule := tunnel.NewRule("direct")
+    tunnel.RuleCidr(loop_rule, "127.0.0.0/8")
+    tunnel.RouterAdd(geo, loop_rule)
+    tunnel.SetResolver(geo, vpn.DohResolver { resolver = doh_resolver, ipv6 = false }, 60000 as i64)
+    println "cidr rule on a domain:", geo.MatchHost("doh.test", 80), geo.MatchHost("missing.test", 80)
+    println "doh queries answered:", doh_queries > 0
+
     ir := tunnel.IranRouter("direct", "proxy")
     println "iran router:", ir.MatchHost("divar.ir", 443), ir.MatchHost("192.168.1.10", 80), ir.MatchHost("digikala.com", 443), ir.MatchHost("example.com", 443)
 
-    each l in servers: core.Stop(l) end
+    each l in servers: vpn.Stop(l) end
     tcp.CloseServer(echo_srv)
+    tcp.CloseServer(doh_srv)
     tcp.CloseServer(site_srv)
     os.RemoveAll(dir)
     println "failures:", failures

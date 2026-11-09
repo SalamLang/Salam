@@ -1,0 +1,96 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import archive
+import compress
+import filepath
+import fs
+import os
+
+func at(d: str, rel: str): str:
+    ret filepath.Join(d, rel)
+end
+
+func size_of(path: str): int:
+    mut ok := false
+    mut b := archive.ReadBinaryFile(path, ok)
+    if not ok:
+        ret -1
+    end
+    n := b.len
+    compress.BufFree(b)
+    ret n
+end
+
+func main:
+    note := "salam 7z writer\n"
+    mut blob := compress.NewByteBuf()
+    repeat 3000 in i:
+        compress.BufPush(blob, (i * 7 + i / 13) & 255)
+    end
+    mut files := Vector {} as Vector<archive.SevenZipFileInput>
+    files.push(archive.MakeSevenZipFileInput("docs/", null, 0, true))
+    mut f1 := archive.MakeSevenZipFileInput("docs/note.txt", note as void*, note.len(), false)
+    f1.mtime = 1600000000 as i64
+    f1.mode = 420
+    files.push(f1)
+    mut f2 := archive.MakeSevenZipFileInput("data.bin", blob.data, blob.len, false)
+    f2.mode = 493
+    files.push(f2)
+    files.push(archive.MakeSevenZipFileInput("empty.txt", null, 0, false))
+    files.push(archive.MakeSevenZipFileInput("docs/empty dir", null, 0, true))
+    mut f3 := archive.MakeSevenZipFileInput("docs/note.link", null, 0, false)
+    f3.link = "note.txt"
+    files.push(f3)
+    pers := "\u0633\u0644\u0627\u0645"
+    files.push(archive.MakeSevenZipFileInput(pers + ".txt", note as void*, note.len(), false))
+    files.push(archive.MakeSevenZipFileInput("emoji \U0001F600.txt", note as void*, 5, false))
+
+    packed := archive.SevenZipCreate(files)
+    println "archive bytes", packed.len, "crc", compress.CRC32(packed.data, packed.len), "is 7z", archive.IsSevenZip(packed.data, packed.len)
+
+    mut st := 0
+    es := archive.SevenZipListStatus(packed.data, packed.len, st)
+    println "status", st, "entries", es.len()
+    each e in es:
+        println e.name, e.size, e.is_dir, e.kind, e.mode, e.mtime, e.link
+    end
+
+    mut ok := false
+    got := archive.SevenZipExtractByName(packed.data, packed.len, "data.bin", ok)
+    println "data.bin", ok, compress.BufEquals(got, blob)
+    note2 := archive.SevenZipExtractByName(packed.data, packed.len, "docs/note.txt", ok)
+    println "note", ok, compress.BufToStrUnsafe(note2) == note
+
+    dir := filepath.Join(os.TempDir(), "salam_sz_create")
+    os.RemoveAll(dir)
+    os.MkdirAll(dir)
+    println "extract", archive.SevenZipExtractAll(packed.data, packed.len, dir)
+    println "sizes", size_of(at(dir, "data.bin")), size_of(at(dir, "docs/note.link")), size_of(at(dir, "empty.txt")), os.IsDir(at(dir, "docs/empty dir"))
+    println "mode", fs.Permissions(at(dir, "data.bin")), fs.Permissions(at(dir, "docs/note.txt")), "mtime", fs.ModTime(at(dir, "docs/note.txt"))
+    os.RemoveAll(dir)
+
+    path := filepath.Join(os.TempDir(), "salam_sz_made.7z")
+    println "file", archive.SevenZipCreateFile(files, path), size_of(path) == packed.len
+    os.Remove(path)
+
+    none := Vector {} as Vector<archive.SevenZipFileInput>
+    empty := archive.SevenZipCreate(none)
+    println "empty archive", empty.len, archive.SevenZipList(empty.data, empty.len).len()
+    mut bad := Vector {} as Vector<archive.SevenZipFileInput>
+    bad.push(archive.MakeSevenZipFileInput("", null, 0, false))
+    println "bad input", archive.SevenZipCreate(bad).len
+end

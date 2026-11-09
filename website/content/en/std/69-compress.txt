@@ -1,30 +1,36 @@
 pkg.en = compress
 pkg.name = compress
 pkg.group = Encoding and data
-pkg.summary = Byte buffers, compression methods from RLE through DEFLATE, gzip and checksums.
+pkg.summary = Byte buffers, compression methods from RLE through DEFLATE, gzip, bzip2 and checksums.
 pkg.title = The compress package in Salam | gzip and deflate
-pkg.description = The compress package in Salam: byte buffers, RLE, Huffman, LZ77, LZW, Burrows Wheeler and DEFLATE compression, gzip, CRC-32 and Adler-32, and reading and writing bits, with examples.
+pkg.description = The compress package in Salam: byte buffers, RLE, Huffman, LZ77, LZW, Burrows Wheeler and DEFLATE compression, gzip, bzip2, CRC-32 and Adler-32, and reading and writing bits, with examples.
 group.Method.title = Method numbers
 group.Method = The same <code>Method</code> enum cases as plain numbers, for <code>Compress</code> and <code>Decompress</code>.
 pkg.intro <<
-<p>This package is the base of all binary data work in Salam. <code>ByteBuf</code>, a growable byte buffer, and <code>ByteReader</code>, a cursor over bytes, are what packages such as <a href="/std/encoding/binary/">encoding.binary</a>, <a href="/std/archive/">archive</a> and <a href="/std/encoding/msgpack/">encoding.msgpack</a> pass around. On top of them it has gzip, raw DEFLATE, a few teaching compressors (RLE, LZ77, LZW, Huffman, BWT), bit-level reading and writing, and the CRC-32 and Adler-32 checksums.</p>
+<p>This package is the base of all binary data work in Salam. <code>ByteBuf</code>, a growable byte buffer, and <code>ByteReader</code>, a cursor over bytes, are what packages such as <a href="/std/encoding/binary/">encoding.binary</a>, <a href="/std/archive/">archive</a> and <a href="/std/encoding/msgpack/">encoding.msgpack</a> pass around. On top of them it has gzip, bzip2, raw DEFLATE, a few teaching compressors (RLE, LZ77, LZW, Huffman, BWT), bit-level reading and writing, and the CRC-32 and Adler-32 checksums.</p>
 <p>To pack several files into one <code>.zip</code> or <code>.tar</code>, use <a href="/std/archive/">archive</a>, which calls this package for the compression. To write numbers in a fixed byte order, use <a href="/std/encoding/binary/">encoding.binary</a> on the same buffers.</p>
-<p>For compression, reach for <strong>gzip</strong> when the data has to be read by other programs. The other methods are mostly there to learn from and experiment with, and their output format belongs to this package alone. The examples show that for small data the overhead of Huffman and DEFLATE comes to more than the data itself.</p>
+<p>For compression, reach for <strong>gzip</strong> when the data has to be read by other programs. Use <strong>bzip2</strong> when the result should be smaller than gzip and a slower pack is fine; it reads and writes standard <code>.bz2</code> data. The other methods are mostly there to learn from and experiment with, and their output format belongs to this package alone. The examples show that for small data the overhead of Huffman and DEFLATE comes to more than the data itself.</p>
 
 <h3 id="pitfalls">What trips people up</h3>
 <ul>
 <li><strong>Gzip verifies its checksum.</strong> <code>GzipDecompress</code> checks the header, inflates the data, then compares both the CRC-32 and the uncompressed length in the trailer; a mismatch sets <code>ok</code> false and returns an empty buffer.</li>
+<li><strong>Bzip2 checks every checksum and can be capped.</strong> <code>Bzip2Decompress</code> verifies each block CRC and the whole stream CRC and rejects broken tables and indexes, and it accepts several streams one after another and nothing else after them. A tiny file can expand to a huge one, so use <code>Bzip2DecompressMax</code> on data from outside.</li>
 <li><strong>The method is not stored.</strong> <code>Compress</code> output does not say which method made it; keep the method number next to the data.</li>
 <li><strong>A <code>str</code> stops at the first zero byte.</strong> Keep binary data in a <code>ByteBuf</code>; <code>BufToStrUnsafe</code> is for bytes that are really text.</li>
 <li><strong>Buffers are not freed for you.</strong> Call <code>BufFree</code> on buffers you are done with, especially in loops and servers.</li>
 </ul>
 
-<p>The guide below covers the jobs this package is used for day to day: gzipping text, laying out your own binary records in a <code>ByteBuf</code>, checking data with CRC-32, and choosing a compression method. Each section has a complete program with its output.</p>
+<p>The guide below covers the jobs this package is used for day to day: gzipping and bzip2-ing text, laying out your own binary records in a <code>ByteBuf</code>, checking data with CRC-32, and choosing a compression method. Each section has a complete program with its output.</p>
 
 <h2 id="guide-gzip">Gzip text for storage or transport</h2>
 <p><code>GzipCompressStr</code> turns a string into a gzip stream that <code>gzip -d</code>, browsers and every other gzip reader understand, and <code>GzipDecompressBuf</code> turns it back. Gzip output is binary, so when it has to travel inside JSON, a URL or an environment variable, wrap it in Base64 with <code>BufToBase64</code>. On the receiving side <code>encoding.Base64DecodeBytes</code> writes the bytes into a buffer you have made big enough; set the buffer's <code>len</code> to the count it returns. It throws when the text is not Base64 or does not fit, so call it inside <code>try:</code>.</p>
 {{example.compress-guide-gzip}}
 <p>A log with the same line twenty times shrinks to a tenth of its size. Base64 costs a third back (64 characters for 48 bytes), which is still far smaller than the original. <code>BufToStrUnsafe</code> copies the bytes into a string, so use it only for data that is really text: a <code>str</code> ends at the first zero byte.</p>
+
+<h2 id="guide-bzip2">Bzip2 for smaller files</h2>
+<p><code>Bzip2CompressStr</code>, <code>Bzip2Compress</code> and <code>Bzip2CompressBuf</code> write a standard bzip2 stream (what <code>bzip2</code> and Python's <code>bz2</code> read), and <code>Bzip2CompressLevel</code> takes a level from 1 to 9: the block size in units of 100000 bytes, 9 by default. <code>Bzip2DecompressBuf</code> reads one or more streams, including old ones with randomised blocks, and checks all CRCs. The program packs the same text both ways and then shows the two safety nets: a cap on the unpacked size, and a flipped bit.</p>
+{{example.compress-guide-bzip2}}
+<p>On text with many repeated words bzip2 beats gzip by a good margin, while on short or already compressed data the two are close. Bzip2 needs more time and memory per megabyte than gzip, so it suits files that are written once and read rarely. To work with <code>.bz2</code> files on disk, use <code>Bzip2CompressFile</code> and <code>Bzip2DecompressFile</code> from <a href="/std/archive/">archive</a>.</p>
 
 <h2 id="guide-record">Your own binary format with ByteBuf</h2>
 <p>A <code>ByteBuf</code> grows as you push into it, and a <code>ByteReader</code> walks over the bytes from the start. That is all you need for a small file format: a few magic bytes so that a wrong file is rejected, a count, and then each record as a length and its bytes. <code>BufPushU32</code> and <code>RdU32</code> write and read a 32 bit number in big-endian order; for little-endian or 64 bit numbers use <a href="/std/encoding/binary/">encoding.binary</a>, which works on the same buffers.</p>
@@ -46,6 +52,7 @@ pkg.intro <<
 <thead><tr><th>Job</th><th>Use</th></tr></thead>
 <tbody>
 <tr><td>Data that other programs will read</td><td><code>GzipCompressStr</code>, <code>GzipCompressBuf</code>, <code>GzipDecompressBuf</code></td></tr>
+<tr><td>Smaller data than gzip, or a <code>.bz2</code> stream</td><td><code>Bzip2CompressStr</code>, <code>Bzip2CompressLevel</code>, <code>Bzip2DecompressBuf</code>, and <code>Bzip2DecompressMax</code> for untrusted input</td></tr>
 <tr><td>Standard DEFLATE with no header, as zip entries and zlib streams hold it</td><td><code>RawDeflate</code>, and <code>RawInflate</code> with the original size</td></tr>
 <tr><td>Smallest result for data only you read</td><td><code>CompressBest</code>, then <code>Decompress</code> with the method it chose</td></tr>
 <tr><td>Build bytes, then read them back</td><td><code>NewByteBuf</code>, <code>BufPush...</code>, <code>ReaderFromBuf</code>, <code>Rd...</code></td></tr>
@@ -129,6 +136,13 @@ doc.GzipCompressBuf = Gzips a buffer.
 doc.GzipCompressStr = Gzips a string.
 doc.GzipDecompressMax = Like <code>GzipDecompress</code>, but stops with <code>ok</code> false when the unpacked data would pass <code>max</code> bytes (0 means no limit); use it on data from outside so a small file cannot fill memory.
 doc.GzipDecompressBuf = Decompresses a gzip buffer.
+doc.Bzip2Compress = Compresses the data into a standard bzip2 stream (<code>.bz2</code>) with the biggest block size, level 9.
+doc.Bzip2CompressLevel = Like <code>Bzip2Compress</code> with a level from 1 to 9, the block size in units of 100000 bytes; a number outside that range is moved to the nearest end. A lower level uses less memory.
+doc.Bzip2CompressBuf = Compresses a buffer with bzip2.
+doc.Bzip2CompressStr = Compresses a string with bzip2.
+doc.Bzip2Decompress = Decompresses bzip2 data made of one or more streams; <code>ok</code> becomes false when the data is not valid bzip2, when a block or stream CRC does not match or when anything follows the last stream. A failure returns an empty buffer.
+doc.Bzip2DecompressMax = Like <code>Bzip2Decompress</code>, but stops with <code>ok</code> false when the unpacked data would pass <code>max</code> bytes (0 means no limit); use it on data from outside so a small file cannot fill memory.
+doc.Bzip2DecompressBuf = Decompresses a bzip2 buffer.
 doc.CRC32 = The CRC-32 checksum, the one in ZIP and gzip, for checking that data is intact.
 doc.CRC32Str = The CRC-32 of a string.
 doc.CRC32Buf = The CRC-32 of a buffer.
@@ -215,6 +229,13 @@ ex.DeflateDecompress = compress-Gzip
 ex.RawDeflate = compress-Gzip
 ex.RawInflate = compress-Gzip
 ex.RawInflateMax = compress-Gzip
+ex.Bzip2Compress = compress-Bzip2
+ex.Bzip2CompressLevel = compress-Bzip2
+ex.Bzip2CompressBuf = compress-Bzip2
+ex.Bzip2CompressStr = compress-Bzip2
+ex.Bzip2Decompress = compress-Bzip2
+ex.Bzip2DecompressMax = compress-Bzip2
+ex.Bzip2DecompressBuf = compress-Bzip2
 ex.CRC32 = compress-Checksum
 ex.CRC32Str = compress-Checksum
 ex.CRC32Buf = compress-Checksum

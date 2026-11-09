@@ -1,0 +1,133 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import archive
+import compress
+import filepath
+import mem
+import os
+
+const FRAME := "28b52ffd640800ed0000b07a7374642073747265616d2074657374206c696e65200100de49cd265da8ba9c"
+
+func cat(a: str, b: str): str:
+    ret filepath.Join(a, b)
+end
+
+func hexval(c: int): int:
+    if c >= 97:
+        ret c - 87
+    end
+    ret c - 48
+end
+
+func from_hex(s: str): compress.ByteBuf:
+    mut b := compress.NewByteBufCap(s.len() / 2)
+    p := s as u8*
+    mut i := 0
+    until i + 1 < s.len():
+        compress.BufPush(b, hexval(p[i] as int) * 16 + hexval(p[i + 1] as int))
+        i += 2
+    end
+    ret b
+end
+
+func run_sink(path: str, cap: i64, label: str):
+    fp := compress.FileOpenRead(path)
+    mut sink := compress.SinkCallback(cap, (_p: void*, _n: int, _c: void*): ret true end, null)
+    st := compress.ZstdFileToSink(fp, 0 as i64, compress.FileSize(fp), sink, 0 as i64)
+    println label, st, sink.written
+    compress.FileClose(fp)
+end
+
+func crc_of(path: str): u32:
+    mut ok := false
+    mut b := archive.ReadBinaryFile(path, ok)
+    c := compress.CRC32(b.data, b.len)
+    compress.BufFree(b)
+    ret c
+end
+
+func free_all(a: str, b: str, c: str, d: str, e: str, f: str, g: str, h: str, i: str, j: str, k: str):
+    mem.Free(a as void*)
+    mem.Free(b as void*)
+    mem.Free(c as void*)
+    mem.Free(d as void*)
+    mem.Free(e as void*)
+    mem.Free(f as void*)
+    mem.Free(g as void*)
+    mem.Free(h as void*)
+    mem.Free(i as void*)
+    mem.Free(j as void*)
+    mem.Free(k as void*)
+end
+
+func main:
+    root := cat(os.TempDir(), "salam_zstd_stream_demo")
+    os.RemoveAll(root)
+    os.MkdirAll(root)
+    mut frame := from_hex(FRAME)
+    f1 := cat(root, "frame.zst")
+    println archive.WriteBinaryFileBuf(f1, frame)
+    run_sink(f1, 0 as i64, "frame")
+    run_sink(f1, 100 as i64, "cap")
+    (frame.data as u8*)[frame.len - 3] = 1 as u8
+    f2 := cat(root, "bad.zst")
+    println archive.WriteBinaryFileBuf(f2, frame)
+    run_sink(f2, 0 as i64, "damaged")
+
+    mut big := compress.NewByteBufCap(3000000)
+    repeat 3000000 in i:
+        compress.BufPush(big, 65 + ((i % 4001) * (i % 977)) % 29)
+    end
+    raw := cat(root, "raw.bin")
+    zst := cat(root, "raw.bin.zst")
+    back := cat(root, "back.bin")
+    println archive.WriteBinaryFileBuf(raw, big), archive.ZstdCompressFile(raw, zst)
+    println "file", archive.ZstdDecompressFileCap(zst, back, 0 as i64), os.FileSize(back), crc_of(back) == compress.CRC32(big.data, big.len)
+    println "file cap", archive.ZstdDecompressFileCap(zst, back, 1000 as i64), os.Exists(back)
+
+    note := "hello zstd tar"
+    mut files := Vector {} as Vector<archive.TarFileInput>
+    files.push(archive.MakeTarFileInput("a.txt", note as void*, note.len(), false))
+    files.push(archive.MakeTarFileInput("sub/big.bin", big.data, big.len, false))
+    tzs := cat(root, "t.tar.zst")
+    println archive.TarZstdCreateFile(files, tzs)
+    dir := cat(root, "x")
+    println "tar.zst", archive.TarZstdFileExtractAll(tzs, dir, 0 as i64)
+    p1 := cat(dir, "a.txt")
+    p2 := cat(dir, "sub/big.bin")
+    println os.FileSize(p1), os.FileSize(p2), crc_of(p2) == compress.CRC32(big.data, big.len)
+    mut lst := 0
+    mut es := archive.TarCompressedFileEntries(tzs, archive.FormatTarZstd, lst)
+    println "list", lst, es.len()
+    archive.FreeEntries(es)
+
+    mut zin := Vector {} as Vector<archive.ZipFileInput>
+    zin.push(archive.MakeZipFileInput("big.bin", big.data, big.len, 93))
+    zp := cat(root, "z.zip")
+    println "zip", archive.ZipCreateFile(zin, zp)
+    mut zf := archive.ZipOpenFile(zp)
+    println "zip zstd", zf.status, archive.ZipFileExtractTo(zf, "big.bin", back, 0 as i64), crc_of(back) == compress.CRC32(big.data, big.len)
+    println "zip cap", archive.ZipFileExtractTo(zf, "big.bin", back, 1000 as i64)
+    archive.ZipFileClose(zf)
+    zin.free()
+    files.free()
+    compress.BufFree(big)
+    compress.BufFree(frame)
+    os.RemoveAll(root)
+    free_all(root, f1, f2, raw, zst, back, tzs, dir, p1, p2, zp)
+    ret 0
+end

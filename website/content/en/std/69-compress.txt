@@ -1,9 +1,9 @@
 pkg.en = compress
 pkg.name = compress
 pkg.group = Encoding and data
-pkg.summary = Byte buffers, compression methods from RLE through DEFLATE, gzip, bzip2 and checksums.
+pkg.summary = Byte buffers, compression methods from RLE through DEFLATE, gzip, bzip2, zstd and checksums.
 pkg.title = The compress package in Salam | gzip and deflate
-pkg.description = The compress package in Salam: byte buffers, RLE, Huffman, LZ77, LZW, Burrows Wheeler and DEFLATE compression, gzip, bzip2, CRC-32 and Adler-32, and reading and writing bits, with examples.
+pkg.description = The compress package in Salam: byte buffers, RLE, Huffman, LZ77, LZW, Burrows Wheeler and DEFLATE compression, gzip, bzip2, zstd, XXH64, CRC-32 and Adler-32, and reading and writing bits, with examples.
 group.Method.title = Method numbers
 group.Method = The same <code>Method</code> enum cases as plain numbers, for <code>Compress</code> and <code>Decompress</code>.
 pkg.intro <<
@@ -15,6 +15,7 @@ pkg.intro <<
 <ul>
 <li><strong>Gzip verifies its checksum.</strong> <code>GzipDecompress</code> checks the header, inflates the data, then compares both the CRC-32 and the uncompressed length in the trailer; a mismatch sets <code>ok</code> false and returns an empty buffer.</li>
 <li><strong>Xz and LZMA are decode only.</strong> There are no compressors for them here. The result of a decoder is kept whole in memory, so use the <code>...Max</code> functions on data you did not make yourself.</li>
+<li><strong>Zstandard output is valid, not the smallest.</strong> The writer is simple, so <code>ZstdCompressLevel</code> makes frames usually a quarter to a half larger than the <code>zstd</code> tool at the same level; every reader still accepts them. Reading is complete, but only <code>ZstdDecompressDict</code> and <code>ZstdDecompressEx</code> take a dictionary, and the decoder holds the whole result in memory, so use <code>ZstdDecompressMax</code> on data from outside.</li>
 <li><strong>Bzip2 checks every checksum and can be capped.</strong> <code>Bzip2Decompress</code> verifies each block CRC and the whole stream CRC and rejects broken tables and indexes, and it accepts several streams one after another and nothing else after them. A tiny file can expand to a huge one, so use <code>Bzip2DecompressMax</code> on data from outside.</li>
 <li><strong>The method is not stored.</strong> <code>Compress</code> output does not say which method made it; keep the method number next to the data.</li>
 <li><strong>A <code>str</code> stops at the first zero byte.</strong> Keep binary data in a <code>ByteBuf</code>; <code>BufToStrUnsafe</code> is for bytes that are really text.</li>
@@ -53,12 +54,17 @@ pkg.intro <<
 {{example.compress-guide-xz}}
 <p>Inside 7z archives and xz blocks the compressed data comes without a container. <code>LzmaRawDecompress</code> and <code>Lzma2RawDecompress</code> read that form when you know the properties and the unpacked size, and <code>BcjDecode</code> and <code>DeltaDecode</code> undo the filters that sit in front of it. Dictionaries above 1 GiB (<code>LzmaMaxDictSize</code>) are refused.</p>
 
+<h2 id="guide-zstd">Read and write .zst files</h2>
+<p><code>ZstdDecompress</code> opens the <code>.zst</code> files that <code>zstd</code>, <code>tar --zstd</code> and <code>7z a -tzstd</code> write: one frame or several in a row, any compression level, with or without a checksum, and frames written with long-distance matching or many threads. The decoder checks as it reads. A bad table, an offset that points before the data, a size that does not add up or a wrong XXH64 checksum gives <code>ok</code> false and an empty result; <code>ZstdDecompressEx</code> also says which of these it was, through the <code>ZstdErr...</code> codes. The whole result is kept in memory, so on data you did not make yourself call <code>ZstdDecompressMax</code> with the biggest size you accept.</p>
+{{example.compress-guide-zstd}}
+<p><code>ZstdCompressLevel</code> writes a standard frame at a level from 1 to 22 (0 stores the data as it is), with the content size and a checksum in the header. The writer is deliberately simple: it finds repeats with a greedy or lazy search over a hash chain and codes them with the predefined tables, so the result is usually a quarter to a half larger than the <code>zstd</code> tool's at the same level. Every reader accepts it. Dictionaries are supported for reading only (<code>ZstdDecompressDict</code>); the writer does not use one.</p>
 <h2 id="guide-which">Which function for which job</h2>
 <div class="table-wrap"><table>
 <thead><tr><th>Job</th><th>Use</th></tr></thead>
 <tbody>
 <tr><td>Data that other programs will read</td><td><code>GzipCompressStr</code>, <code>GzipCompressBuf</code>, <code>GzipDecompressBuf</code></td></tr>
 <tr><td>Read a <code>.xz</code> or <code>.lzma</code> file (decode only)</td><td><code>XzDecompressBuf</code>, <code>LzmaDecompressBuf</code>; the <code>...Max</code> variants for data from outside</td></tr>
+<tr><td>Read or write a <code>.zst</code> file</td><td><code>ZstdCompressBuf</code>, <code>ZstdCompressLevel</code>, <code>ZstdDecompressBuf</code>, and <code>ZstdDecompressMax</code> for data from outside</td></tr>
 <tr><td>Smaller data than gzip, or a <code>.bz2</code> stream</td><td><code>Bzip2CompressStr</code>, <code>Bzip2CompressLevel</code>, <code>Bzip2DecompressBuf</code>, and <code>Bzip2DecompressMax</code> for untrusted input</td></tr>
 <tr><td>Standard DEFLATE with no header, as zip entries and zlib streams hold it</td><td><code>RawDeflate</code>, and <code>RawInflate</code> with the original size</td></tr>
 <tr><td>Smallest result for data only you read</td><td><code>CompressBest</code>, then <code>Decompress</code> with the method it chose</td></tr>
@@ -174,6 +180,30 @@ doc.CRC32Buf = The CRC-32 of a buffer.
 doc.Adler32 = The Adler-32 checksum, the one in zlib; faster than CRC-32 but a little weaker.
 doc.Adler32Str = The Adler-32 of a string.
 doc.Adler32Buf = The Adler-32 of a buffer.
+doc.ZstdOk = Status code 0: the data was decoded and every check passed.
+doc.ZstdErrFormat = Status code 1: the data does not start with a Zstandard frame, or a header sets something this reader does not accept (a reserved bit, or a window above 2 GiB).
+doc.ZstdErrTruncated = Status code 2: the data ends in the middle of a header, a block or a frame.
+doc.ZstdErrCorrupt = Status code 3: a block does not decode. The cause can be a bad table, an offset that reaches before the start of the data, a size that does not add up or a reserved block type.
+doc.ZstdErrChecksum = Status code 4: the frame decoded but its XXH64 content checksum does not match.
+doc.ZstdErrTooBig = Status code 5: the unpacked data would pass the limit you gave, or the default limit of just under 1 GiB.
+doc.ZstdErrDict = Status code 6: the frame names a dictionary that was not given, or the dictionary given is damaged or has another ID.
+doc.ZstdStatusText = A short English description of a status code, such as "checksum mismatch".
+doc.IsZstd = True when the data starts with the Zstandard magic number (<code>28 B5 2F FD</code>) or the magic number of a skippable frame. It reads four bytes and checks nothing else.
+doc.IsZstdBuf = <code>IsZstd</code> on a byte buffer.
+doc.ZstdContentSize = The unpacked size written in the header of the first frame, passing over skippable frames before it. It returns -1 when the frame does not record a size (as when it was written from a pipe) and -2 when the data is not a Zstandard frame or the header is cut short. It is only what the header claims, so do not use it alone to size a buffer for data from outside.
+doc.ZstdDecompressEx = The full decoder. It decodes every frame in the data one after the other, passes over skippable frames, and verifies the XXH64 checksum of each frame that has one. <code>max</code> is the largest output accepted (0 means just under 1 GiB). <code>dict</code> and <code>dn</code> give an optional dictionary (<code>null</code> and 0 for none), either a trained one or plain content. <code>status</code> receives one of the <code>ZstdOk</code> and <code>ZstdErr...</code> codes, and the result is an empty buffer on any failure.
+doc.ZstdDecompressMax = Like <code>ZstdDecompress</code>, but stops with <code>ok</code> false when the unpacked data would pass <code>max</code> bytes (0 means no limit). Use it on data from outside: a few bytes of Zstandard can describe gigabytes.
+doc.ZstdDecompress = Decompresses Zstandard data, the content of a <code>.zst</code> file: one frame or several in a row, with skippable frames passed over. It handles every block type, including Huffman and FSE compressed ones, repeated offsets and the XXH64 checksum when the frame carries one. <code>ok</code> is false for damaged, truncated or unsupported data, and the result is then empty. A frame that needs a dictionary fails here; use <code>ZstdDecompressDict</code>.
+doc.ZstdDecompressBuf = Decompresses a Zstandard buffer.
+doc.ZstdDecompressDict = Decompresses data that was made with a dictionary. The dictionary can be a trained one, the file <code>zstd --train</code> writes, or any bytes, which then serve as raw content. A frame that names a dictionary ID needs the dictionary with that ID.
+doc.ZstdCompressOpts = Compresses to one Zstandard frame at <code>level</code>, with or without the XXH64 content checksum. The frame records the unpacked size.
+doc.ZstdCompressLevel = Compresses at a level, with the checksum. Level 0 or less stores the data without compressing it; 1 to 22 search harder for repeats as the number grows, and from 10 up the window is larger. The result is a standard frame that the <code>zstd</code> tool and every other reader accepts. The writer is simple (a greedy or lazy search and the predefined entropy tables), so its output is larger than the reference tool's at the same level, but it is valid everywhere.
+doc.ZstdCompress = Compresses at level 3, with the checksum.
+doc.ZstdCompressBuf = Compresses a buffer at level 3.
+doc.ZstdCompressStr = Compresses a string at level 3.
+doc.XXH64 = The 64-bit xxHash of <code>n</code> bytes with a seed. A Zstandard frame uses the low 32 bits of the seed 0 value as its content checksum.
+doc.XXH64Str = The xxHash64 of a string, with seed 0.
+doc.XXH64Buf = The xxHash64 of a buffer, with seed 0.
 doc.BitWriter = A writer of bits; it fills each byte from the least significant bit.
 doc.BitWriter.buf = The bytes written.
 doc.BitWriter.acc = The bits waiting.
@@ -285,6 +315,30 @@ ex.CRC32Buf = compress-Checksum
 ex.Adler32 = compress-Checksum
 ex.Adler32Str = compress-Checksum
 ex.Adler32Buf = compress-Checksum
+ex.ZstdOk = compress-Zstd
+ex.ZstdErrFormat = compress-Zstd
+ex.ZstdErrTruncated = compress-Zstd
+ex.ZstdErrCorrupt = compress-Zstd
+ex.ZstdErrChecksum = compress-Zstd
+ex.ZstdErrTooBig = compress-Zstd
+ex.ZstdErrDict = compress-Zstd
+ex.ZstdStatusText = compress-Zstd
+ex.IsZstd = compress-Zstd
+ex.IsZstdBuf = compress-Zstd
+ex.ZstdContentSize = compress-Zstd
+ex.ZstdDecompressEx = compress-Zstd
+ex.ZstdDecompressMax = compress-Zstd
+ex.ZstdDecompress = compress-Zstd
+ex.ZstdDecompressBuf = compress-Zstd
+ex.ZstdDecompressDict = compress-ZstdDict
+ex.ZstdCompressOpts = compress-Zstd
+ex.ZstdCompressLevel = compress-Zstd
+ex.ZstdCompress = compress-Zstd
+ex.ZstdCompressBuf = compress-Zstd
+ex.ZstdCompressStr = compress-Zstd
+ex.XXH64 = compress-XXH64
+ex.XXH64Str = compress-XXH64
+ex.XXH64Buf = compress-XXH64
 ex.BitWriter = compress-Bits
 ex.BitReader = compress-Bits
 ex.NewBitWriter = compress-Bits

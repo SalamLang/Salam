@@ -8,7 +8,7 @@ import {
   useState,
 } from "react";
 import { createPortal } from "react-dom";
-import { IconCheck, IconChevronDown } from "./icons";
+import { IconCheck, IconChevronDown, IconSearch } from "./icons";
 
 export type SelectOption<T extends string> = {
   value: T;
@@ -27,6 +27,9 @@ type Props<T extends string> = {
   className?: string;
   disabled?: boolean;
   title?: string;
+  searchable?: boolean;
+  searchLabel?: string;
+  emptyLabel?: string;
 };
 
 type Place = {
@@ -49,6 +52,9 @@ export function Select<T extends string>({
   className,
   disabled,
   title,
+  searchable,
+  searchLabel,
+  emptyLabel,
 }: Props<T>) {
   const id = useId();
   const listId = `${id}-list`;
@@ -57,6 +63,13 @@ export function Select<T extends string>({
   const [open, setOpen] = useState(false);
   const [place, setPlace] = useState<Place | null>(null);
   const [active, setActive] = useState(0);
+  const [query, setQuery] = useState("");
+  const find = useRef<HTMLInputElement>(null);
+  const withSearch = searchable ?? options.length > 7;
+  const needle = query.trim().toLowerCase();
+  const shown = needle
+    ? options.filter((o) => `${o.label} ${o.hint ?? ""}`.toLowerCase().includes(needle))
+    : options;
   const selected = Math.max(
     0,
     options.findIndex((o) => o.value === value),
@@ -64,6 +77,7 @@ export function Select<T extends string>({
 
   const close = useCallback((focus = true) => {
     setOpen(false);
+    setQuery("");
     if (focus) trigger.current?.focus();
   }, []);
 
@@ -76,6 +90,7 @@ export function Select<T extends string>({
   );
 
   const show = useCallback(() => {
+    setQuery("");
     setActive(selected);
     setOpen(true);
   }, [selected]);
@@ -113,23 +128,23 @@ export function Select<T extends string>({
       const step = e.key === "ArrowDown" ? 1 : e.key === "ArrowUp" ? -1 : 0;
       if (step !== 0) {
         e.preventDefault();
-        setActive((i) => (i + step + options.length) % options.length);
+        setActive((i) => (i + step + Math.max(shown.length, 1)) % Math.max(shown.length, 1));
         return;
       }
-      if (e.key === "Home" || e.key === "End") {
+      if (!withSearch && (e.key === "Home" || e.key === "End")) {
         e.preventDefault();
-        setActive(e.key === "Home" ? 0 : options.length - 1);
+        setActive(e.key === "Home" ? 0 : shown.length - 1);
         return;
       }
-      if (e.key === "Enter" || e.key === " ") {
+      if (e.key === "Enter" || (e.key === " " && !withSearch)) {
         e.preventDefault();
-        const option = options[active];
+        const option = shown[active];
         if (option) pick(option);
       }
     };
     document.addEventListener("keydown", onKey, true);
     return () => document.removeEventListener("keydown", onKey, true);
-  }, [open, options, active, pick, close]);
+  }, [open, shown, active, pick, close, withSearch]);
 
   useLayoutEffect(() => {
     if (!open) {
@@ -180,6 +195,14 @@ export function Select<T extends string>({
     node?.scrollIntoView({ block: "nearest" });
   }, [open, active, listId]);
 
+  useEffect(() => {
+    if (open && withSearch && place) find.current?.focus({ preventScroll: true });
+  }, [open, withSearch, place]);
+
+  useEffect(() => {
+    setActive(0);
+  }, [needle]);
+
   const current = options[selected];
   const list = open
     ? createPortal(
@@ -201,7 +224,26 @@ export function Select<T extends string>({
               : { visibility: "hidden" }
           }
         >
-          {options.map((option, i) => (
+          {withSearch && (
+            <div className="pick-search">
+              <IconSearch width={14} height={14} />
+              <input
+                ref={find}
+                type="text"
+                dir="auto"
+                value={query}
+                placeholder={searchLabel ?? ""}
+                aria-label={searchLabel ?? ariaLabel}
+                autoComplete="off"
+                spellCheck={false}
+                onChange={(e) => setQuery(e.target.value)}
+              />
+            </div>
+          )}
+          {shown.length === 0 && (
+            <div className="pick-empty">{emptyLabel ?? ""}</div>
+          )}
+          {shown.map((option, i) => (
             <div
               key={option.value}
               className={option.dividerBefore ? "pick-sep" : undefined}

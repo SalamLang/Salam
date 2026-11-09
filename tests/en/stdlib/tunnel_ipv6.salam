@@ -1,0 +1,112 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import mem
+import net.socks
+import net.tcp
+import net.tunnel
+import sync
+
+func closed_by_peer(c: tcp.Conn, wait_ms: int): bool:
+    tcp.SetReadDeadline(c, wait_ms)
+    buf := mem.Allocate(8 as u64)
+    n := tcp.ReadBytes(c, buf, 8)
+    mem.Free(buf)
+    ret n == 0
+end
+
+func keys():
+    println tunnel.SourceKey("203.0.113.9")
+    println tunnel.SourceKey("::ffff:203.0.113.9")
+    println tunnel.SourceKey("[::ffff:203.0.113.9]")
+    println tunnel.SourceKey("2001:0db8:0001:0002:aaaa:bbbb:cccc:dddd")
+    println tunnel.SourceKey("2001:db8:1:2::1")
+    println tunnel.SourceKey("2001:db8:1:3::1")
+    println tunnel.SourceKey("fe80::1%2")
+    println tunnel.SourceKey("::1")
+end
+
+func limits():
+    t := tunnel.NewSourceTable()
+    println "v4 then mapped share one slot pool:", tunnel.SourceEnter(t, "198.51.100.4", 2), tunnel.SourceEnter(t, "::ffff:198.51.100.4", 2), tunnel.SourceEnter(t, "198.51.100.4", 2)
+    tunnel.SourceLeave(t, "::ffff:198.51.100.4")
+    println "mapped leave frees a v4 slot:", tunnel.SourceEnter(t, "198.51.100.4", 2)
+    println "one v6 prefix shares a limit:", tunnel.SourceEnter(t, "2001:db8:5:6::1", 1), tunnel.SourceEnter(t, "2001:db8:5:6:ffff::2", 1), tunnel.SourceEnter(t, "2001:db8:5:7::1", 1)
+    println "textual forms of one address are equal:", tunnel.SourceEnter(t, "2001:db8:9::1", 1), tunnel.SourceEnter(t, "2001:0db8:0009:0000:0000:0000:0000:0001", 1)
+end
+
+func ranges():
+    mut set := tunnel.NewIpSet()
+    println tunnel.IpSetAdd(set, "2606:4700::/32"), tunnel.IpSetAdd(set, "2001:4860::/32"), tunnel.IpSetAdd(set, "2620:fe::/48"), tunnel.IpSetAdd(set, "1.1.1.0/24")
+    println tunnel.IpSetContains(set, tunnel.ParseIP("2606:4700:4700::1111")), tunnel.IpSetContains(set, tunnel.ParseIP("2001:4860:4860::8888")), tunnel.IpSetContains(set, tunnel.ParseIP("2620:fe::9"))
+    println tunnel.IpSetContains(set, tunnel.ParseIP("2606:4701::1")), tunnel.IpSetContains(set, tunnel.ParseIP("2620:ff::1")), tunnel.IpSetContains(set, tunnel.ParseIP("1.1.1.1")), tunnel.IpSetContains(set, tunnel.ParseIP("1.1.2.1"))
+    mut rule := tunnel.NewRule("direct")
+    println tunnel.RuleCidr(rule, "2001:db8::/32"), tunnel.RuleCidr(rule, "fe80::/10")
+    println tunnel.RuleMatches(rule, tunnel.NewAddr("2001:db8:1::5", 443)), tunnel.RuleMatches(rule, tunnel.NewAddr("fe80::abcd", 443)), tunnel.RuleMatches(rule, tunnel.NewAddr("2001:db9::1", 443)), tunnel.RuleMatches(rule, tunnel.NewAddr("[2001:db8::1]", 443))
+end
+
+func main:
+    keys()
+    limits()
+    ranges()
+
+    probe := tcp.BindOn("::1", 0)
+    if not tcp.Ok(probe):
+        println "ipv6 unavailable"
+        ret
+    end
+    tcp.CloseServer(probe)
+
+    srv := tunnel.ListenTcpOn("::", 0)
+    srv.per_source = 1
+    srv.handshake_ms = 1500
+    fwd := tunnel.NewForwarder(tunnel.Direct(), socks.NewInbound(socks.NewServerConfig(0)))
+    println "dual acceptor up:", srv.Ok(), srv.host
+    tunnel.StartAccepting(srv, socks.NewInbound(socks.NewServerConfig(0)), fwd)
+    a := tcp.Dial("::1", srv.Port())
+    sync.SleepMs(200)
+    b := tcp.Dial("::1", srv.Port())
+    c := tcp.Dial("127.0.0.1", srv.Port())
+    sync.SleepMs(300)
+    println "second silent client from the same v6 source is refused:", closed_by_peer(b, 400)
+    println "first v6 client still waiting:", not closed_by_peer(a, 100)
+    println "a v4 client is another source and waits:", not closed_by_peer(c, 100)
+    println "the handshake deadline closes them:", closed_by_peer(a, 3000), closed_by_peer(c, 500)
+    srv.Stop()
+    println "stopped"
+
+    six := tunnel.ListenLocal6(0)
+    println "listen local6:", six.Ok(), six.host
+    tunnel.StartAccepting(six, socks.NewInbound(socks.NewServerConfig(0)), fwd)
+    refused := tcp.Dial("127.0.0.1", six.Port())
+    println "v4 cannot reach a ::1 listener:", not tcp.ConnOk(refused)
+    d := tcp.Dial("::1", six.Port())
+    println "v6 reaches it:", tcp.ConnOk(d), not closed_by_peer(d, 100)
+    tcp.Close(d)
+    six.Stop()
+    println "stopped local6"
+
+    mut inb := tunnel.ListenTcpAt("::1", 0)
+    println "tcp inbound at ::1:", inb.Ok(), inb.port > 0
+    inb.per_source = 1
+    inb.handshake_ms = 1500
+    tunnel.ServeBackground(inb, socks.NewInbound(socks.NewServerConfig(0)), fwd)
+    e := tcp.Dial("::1", inb.port)
+    f := tcp.Dial("::1", inb.port)
+    sync.SleepMs(300)
+    println "inbound refuses a second client from the same source:", closed_by_peer(f, 400), not closed_by_peer(e, 100)
+    tcp.Close(e)
+    inb.Stop()
+    println "stopped inbound"
+end

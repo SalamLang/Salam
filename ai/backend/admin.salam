@@ -919,6 +919,123 @@ func admin_update_key(ctx: i64):
     aiweb.Reply(ctx, 200, `{"key": ` + str.TrimSuffix(str.TrimPrefix(admin_keys_json("k.id = ?1", one(id)), "["), "]") + "}")
 end
 
+func stat(m &: Vector<str>, key: str, sql: str, args: Vector<str>):
+    m.push(json.MemberRaw(key, count(sql, args)))
+end
+
+func user_profile(ctx: i64):
+    if aiweb.NeedAdmin(ctx) == 0:
+        ret
+    end
+    id := str.Trim(http.Param(ctx, "id"))
+    now := n(aistore.Now())
+    both := two(id, now)
+    mut m := Vector {} as Vector<str>
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT id, name, email, created FROM users WHERE id = ?1", one(id))
+    if not aistore.Next(rows):
+        aistore.Finish(rows)
+        aistore.Unlock()
+        aiweb.Fail(ctx, 404, "user", "این کاربر پیدا نشد.")
+        ret
+    end
+    m.push(json.MemberRaw("id", aistore.Text(rows, 0)))
+    m.push(json.Member("name", aistore.Text(rows, 1)))
+    m.push(json.Member("email", aistore.Text(rows, 2)))
+    m.push(json.MemberRaw("created", aistore.Text(rows, 3)))
+    aistore.Finish(rows)
+    mut sub := aistore.Stmt("SELECT s.plan, COALESCE(p.name, s.plan), s.source, s.started, s.expires FROM subscriptions s LEFT JOIN plans p ON p.id = s.plan WHERE s.user_id = ?1 AND s.status = 'active' AND (s.expires = 0 OR s.expires > ?2) ORDER BY s.id DESC LIMIT 1", both)
+    mut plan := Vector {} as Vector<str>
+    if aistore.Next(sub):
+        plan.push(json.Member("id", aistore.Text(sub, 0)))
+        plan.push(json.Member("name", aistore.Text(sub, 1)))
+        plan.push(json.Member("source", aistore.Text(sub, 2)))
+        plan.push(json.MemberRaw("started", aistore.Text(sub, 3)))
+        plan.push(json.MemberRaw("expires", aistore.Text(sub, 4)))
+    else:
+        plan.push(json.Member("id", "free"))
+        plan.push(json.Member("name", ""))
+        plan.push(json.Member("source", "free"))
+        plan.push(json.MemberRaw("started", "0"))
+        plan.push(json.MemberRaw("expires", "0"))
+    end
+    aistore.Finish(sub)
+    m.push(json.MemberRaw("plan", json.Object(plan)))
+    mut c := Vector {} as Vector<str>
+    stat(c, "chats", "SELECT COUNT(*) FROM chats WHERE user_id = ?1", both)
+    stat(c, "messages", "SELECT COUNT(*) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = ?1 AND m.role = 'user'", both)
+    stat(c, "telegram_chats", "SELECT COUNT(*) FROM chats WHERE user_id = ?1 AND source = 'telegram'", both)
+    stat(c, "agent_chats", "SELECT COUNT(*) FROM chats WHERE user_id = ?1 AND device_id != 0", both)
+    stat(c, "last_chat", "SELECT COALESCE(MAX(updated), 0) FROM chats WHERE user_id = ?1", both)
+    stat(c, "sessions", "SELECT COUNT(*) FROM sessions WHERE user_id = ?1 AND expires > ?2", both)
+    stat(c, "logins", "SELECT COUNT(*) FROM sessions WHERE user_id = ?1", both)
+    stat(c, "last_login", "SELECT COALESCE(MAX(created), 0) FROM sessions WHERE user_id = ?1", both)
+    stat(c, "last_seen", "SELECT COALESCE(MAX(last_used), 0) FROM sessions WHERE user_id = ?1", both)
+    stat(c, "keys", "SELECT COUNT(*) FROM api_keys WHERE user_id = ?1 AND revoked = 0", both)
+    stat(c, "keys_revoked", "SELECT COUNT(*) FROM api_keys WHERE user_id = ?1 AND revoked <> 0", both)
+    stat(c, "api_requests", "SELECT COUNT(*) FROM api_requests WHERE user_id = ?1", both)
+    stat(c, "api_requests_24h", "SELECT COUNT(*) FROM api_requests WHERE user_id = ?1 AND created > ?2 - 86400", both)
+    stat(c, "api_tokens_in", "SELECT COALESCE(SUM(tokens_in), 0) FROM api_requests WHERE user_id = ?1", both)
+    stat(c, "api_tokens_out", "SELECT COALESCE(SUM(tokens_out), 0) FROM api_requests WHERE user_id = ?1", both)
+    stat(c, "chat_tokens_in", "SELECT COALESCE(SUM(m.tokens_in), 0) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = ?1", both)
+    stat(c, "chat_tokens_out", "SELECT COALESCE(SUM(m.tokens_out), 0) FROM messages m JOIN chats c ON c.id = m.chat_id WHERE c.user_id = ?1", both)
+    stat(c, "mcp_calls", "SELECT COUNT(*) FROM mcp_events WHERE user_id = ?1", both)
+    stat(c, "mcp_last", "SELECT COALESCE(MAX(created), 0) FROM mcp_events WHERE user_id = ?1", both)
+    stat(c, "apps", "SELECT COUNT(*) FROM oauth_grants WHERE user_id = ?1 AND revoked = 0", both)
+    stat(c, "telegram_links", "SELECT COUNT(*) FROM telegram_links WHERE user_id = ?1", both)
+    stat(c, "files", "SELECT COUNT(*) FROM message_files WHERE user_id = ?1", both)
+    stat(c, "memories", "SELECT COUNT(*) FROM memories WHERE user_id = ?1", both)
+    stat(c, "devices", "SELECT COUNT(*) FROM bridge_devices WHERE user_id = ?1 AND revoked = 0", both)
+    stat(c, "projects", "SELECT COUNT(*) FROM projects WHERE user_id = ?1", both)
+    stat(c, "shares", "SELECT COUNT(*) FROM shares WHERE user_id = ?1", both)
+    stat(c, "subscriptions", "SELECT COUNT(*) FROM subscriptions WHERE user_id = ?1", both)
+    stat(c, "payments_paid", "SELECT COUNT(*) FROM payments WHERE user_id = ?1 AND status = 'paid'", both)
+    stat(c, "payments_failed", "SELECT COUNT(*) FROM payments WHERE user_id = ?1 AND status <> 'paid' AND status <> 'pending'", both)
+    stat(c, "payments_pending", "SELECT COUNT(*) FROM payments WHERE user_id = ?1 AND status = 'pending'", both)
+    stat(c, "payments_attempts", "SELECT COUNT(*) FROM payments WHERE user_id = ?1", both)
+    stat(c, "paid_total", "SELECT COALESCE(SUM(amount), 0) FROM payments WHERE user_id = ?1 AND status = 'paid'", both)
+    stat(c, "last_payment", "SELECT COALESCE(MAX(created), 0) FROM payments WHERE user_id = ?1", both)
+    m.push(json.MemberRaw("counts", json.Object(c)))
+    mut ids := Vector {} as Vector<str>
+    mut irows := aistore.Stmt("SELECT provider, login, email, created FROM identities WHERE user_id = ?1 ORDER BY created", one(id))
+    until aistore.Next(irows):
+        mut x := Vector {} as Vector<str>
+        x.push(json.Member("provider", aistore.Text(irows, 0)))
+        x.push(json.Member("login", aistore.Text(irows, 1)))
+        x.push(json.Member("email", aistore.Text(irows, 2)))
+        x.push(json.MemberRaw("created", aistore.Text(irows, 3)))
+        ids.push(json.Object(x))
+    end
+    aistore.Finish(irows)
+    m.push(json.MemberRaw("identities", json.Array(ids)))
+    mut ints := Vector {} as Vector<str>
+    mut nrows := aistore.Stmt("SELECT provider, login FROM integrations WHERE user_id = ?1 ORDER BY provider", one(id))
+    until aistore.Next(nrows):
+        mut x := Vector {} as Vector<str>
+        x.push(json.Member("provider", aistore.Text(nrows, 0)))
+        x.push(json.Member("login", aistore.Text(nrows, 1)))
+        ints.push(json.Object(x))
+    end
+    aistore.Finish(nrows)
+    m.push(json.MemberRaw("integrations", json.Array(ints)))
+    mut tgs := Vector {} as Vector<str>
+    mut trows := aistore.Stmt("SELECT tg_id, name, username, lang, created, last_seen FROM telegram_links WHERE user_id = ?1 ORDER BY created", one(id))
+    until aistore.Next(trows):
+        mut x := Vector {} as Vector<str>
+        x.push(json.Member("tg_id", aistore.Text(trows, 0)))
+        x.push(json.Member("name", aistore.Text(trows, 1)))
+        x.push(json.Member("username", aistore.Text(trows, 2)))
+        x.push(json.Member("lang", aistore.Text(trows, 3)))
+        x.push(json.MemberRaw("created", aistore.Text(trows, 4)))
+        x.push(json.MemberRaw("last_seen", aistore.Text(trows, 5)))
+        tgs.push(json.Object(x))
+    end
+    aistore.Finish(trows)
+    m.push(json.MemberRaw("telegram", json.Array(tgs)))
+    aistore.Unlock()
+    aiweb.Reply(ctx, 200, json.Object(m))
+end
+
 func admin_user_policy(ctx: i64):
     admin := aiweb.NeedAdmin(ctx)
     if admin == 0:
@@ -1037,6 +1154,7 @@ pub func Routes(r &: router.Router):
     router.Get(r, "/admin/summary", summary)
     router.Get(r, "/admin/users", list_users)
     router.Get(r, "/admin/users/:id/chats", list_user_chats)
+    router.Get(r, "/admin/users/:id/profile", user_profile)
     router.Get(r, "/admin/chats", list_latest_chats)
     router.Get(r, "/admin/chats/:id", get_admin_chat)
     router.Get(r, "/admin/messages/:id/trace", get_trace)

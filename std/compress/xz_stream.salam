@@ -1,0 +1,403 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package compress
+
+import crypto
+import mem
+
+const _XZS_MAX_INDEX := 67108864
+const _XZS_MAX_BLOCKS := 1000000
+
+struct _XzsCtx:
+    pub outer: FileSink*
+    pub check: int
+    pub t64: u64*
+    pub crc64: u64
+    pub sha: crypto.Sha256
+end
+
+func _xzs_read(fp: void*, off: i64, n: int): u8*:
+    p := mem.Allocate((n + 1) as u64) as u8*
+    if FileReadAt(fp, off, p as void*, n) != n:
+        mem.Free(p as void*)
+        ret null as u8*
+    end
+    ret p
+end
+
+func _xzs_table64(): u64*:
+    t := mem.Allocate((256 * 8) as u64) as u64*
+    mut i := 0
+    until i < 256:
+        mut c := i as u64
+        mut k := 0
+        until k < 8:
+            if (c & (1 as u64)) != (0 as u64):
+                c = (c >> 1) ^ _XZ_CRC64_POLY
+            else:
+                c >>= 1
+            end
+            k++
+        end
+        t[i] = c
+        i++
+    end
+    ret t
+end
+
+func _xzs_emit(c: _XzsCtx*, p: void*, n: int): bool:
+    if c[0].check == 4:
+        bp := p as u8*
+        mut crc := c[0].crc64
+        mut i := 0
+        until i < n:
+            crc = c[0].t64[((crc ^ (bp[i] as u64)) & (255 as u64)) as int] ^ (crc >> 8)
+            i++
+        end
+        c[0].crc64 = crc
+    else c[0].check == 10:
+        crypto.Sha256Update(c[0].sha, p, n)
+    end
+    ret SinkWrite(c[0].outer[0], p, n)
+end
+
+func _xzs_footer(fp: void*, lo: i64, endpos: i64, start &: i64, check &: int, unpad &: Vector<i64>, unc &: Vector<i64>): bool:
+    if endpos - lo < (24 as i64):
+        ret false
+    end
+    ft := _xzs_read(fp, endpos - (12 as i64), 12)
+    if ft == null:
+        ret false
+    end
+    mut good := (ft[10] as int) == 89 and (ft[11] as int) == 90 and (ft[8] as int) == 0
+    good = good and (CRC32(((ft as i64) + (4 as i64)) as void*, 6) as i64) == _xz_le32(ft, 0)
+    check = (ft[9] as int) & 15
+    backward := (_xz_le32(ft, 4) + (1 as i64)) * (4 as i64)
+    mem.Free(ft as void*)
+    if not good or _xz_check_size(check) < 0 or backward > (_XZS_MAX_INDEX as i64) or endpos - (12 as i64) - backward < lo + (12 as i64):
+        ret false
+    end
+    ipos0 := endpos - (12 as i64) - backward
+    ix := _xzs_read(fp, ipos0, backward as int)
+    if ix == null:
+        ret false
+    end
+    bn := backward as int
+    mut ok := (ix[0] as int) == 0 and (CRC32(ix as void*, bn - 4) as i64) == _xz_le32(ix, bn - 4)
+    mut pos := 1
+    mut total := 0 as i64
+    if ok:
+        cnt := _xz_vli(ix, pos, bn - 4)
+        if cnt < (0 as i64) or cnt > (_XZS_MAX_BLOCKS as i64):
+            ok = false
+        else:
+            mut r := 0 as i64
+            until r < cnt and ok:
+                a := _xz_vli(ix, pos, bn - 4)
+                b := _xz_vli(ix, pos, bn - 4)
+                if a <= (0 as i64) or b < (0 as i64):
+                    ok = false
+                else:
+                    unpad.push(a)
+                    unc.push(b)
+                    total += ((a + (3 as i64)) / (4 as i64)) * (4 as i64)
+                end
+                r++
+            end
+        end
+    end
+    mem.Free(ix as void*)
+    if not ok:
+        ret false
+    end
+    st := ipos0 - total - (12 as i64)
+    if st < lo:
+        ret false
+    end
+    hd := _xzs_read(fp, st, 12)
+    if hd == null:
+        ret false
+    end
+    mut hok := true
+    magic := [253, 55, 122, 88, 90, 0]
+    mut m := 0
+    until m < 6:
+        if (hd[m] as int) != magic[m]:
+            hok = false
+        end
+        m++
+    end
+    hok = hok and (hd[6] as int) == 0 and ((hd[7] as int) & 15) == check and (CRC32(((hd as i64) + (6 as i64)) as void*, 2) as i64) == _xz_le32(hd, 8)
+    mem.Free(hd as void*)
+    start = st
+    ret hok
+end
+
+func _xzs_trim(fp: void*, lo: i64, endpos: i64): i64:
+    mut e := endpos
+    until e - lo >= (4 as i64):
+        t := _xzs_read(fp, e - (4 as i64), 4)
+        if t == null:
+            ret -1
+        end
+        z := (t[0] as int) == 0 and (t[1] as int) == 0 and (t[2] as int) == 0 and (t[3] as int) == 0
+        mem.Free(t as void*)
+        if not z:
+            break
+        end
+        e -= 4
+    end
+    ret e
+end
+
+func _xzs_block_hdr(fp: void*, off: i64, avail: i64, hsize &: int, dict &: int, simple &: bool): bool:
+    b0 := _xzs_read(fp, off, 1)
+    if b0 == null:
+        ret false
+    end
+    hs := ((b0[0] as int) + 1) * 4
+    mem.Free(b0 as void*)
+    if hs < 8 or (hs as i64) > avail:
+        ret false
+    end
+    h := _xzs_read(fp, off, hs)
+    if h == null:
+        ret false
+    end
+    mut ok := (CRC32(h as void*, hs - 4) as i64) == _xz_le32(h, hs - 4) and ((h[1] as int) & 60) == 0
+    hsize = hs
+    simple = false
+    if ok:
+        flags := h[1] as int
+        nf := (flags & 3) + 1
+        hend := hs - 4
+        mut hp := 2
+        if (flags & 64) != 0 and _xz_vli(h, hp, hend) <= (0 as i64):
+            ok = false
+        end
+        if ok and (flags & 128) != 0 and _xz_vli(h, hp, hend) < (0 as i64):
+            ok = false
+        end
+        if ok and nf == 1:
+            id := _xz_vli(h, hp, hend)
+            psz := _xz_vli(h, hp, hend)
+            if id == (33 as i64) and psz == (1 as i64) and hp + 1 <= hend:
+                dict = h[hp] as int
+                hp++
+                simple = true
+                mut z := hp
+                until z < hend:
+                    if (h[z] as int) != 0:
+                        ok = false
+                    end
+                    z++
+                end
+            end
+        end
+    end
+    mem.Free(h as void*)
+    ret ok
+end
+
+func _xzs_fallback(fp: void*, off: i64, len: i64, sink &: FileSink): int:
+    if len > (2000000000 as i64):
+        ret DecodeTooBig
+    end
+    p := _xzs_read(fp, off, len as int)
+    if p == null:
+        ret DecodeIo
+    end
+    mut why := 0
+    mut maxo := 0
+    if sink.cap > (0 as i64):
+        maxo = sink.cap > (2000000000 as i64) ? 2000000000 : (sink.cap as int)
+    end
+    mut out := XzDecompressWhy(p as void*, len as int, maxo, why)
+    mem.Free(p as void*)
+    mut code := why
+    if why == DecodeOk and not SinkWrite(sink, out.data, out.len):
+        code = sink.over ? DecodeTooBig : DecodeIo
+    end
+    BufFree(out)
+    ret code
+end
+
+@en "XzFileToSink"
+@fa "کدگشایی ایکس زد از پرونده به مقصد"
+pub func XzFileToSink(fp: void*, off: i64, len: i64, sink &: FileSink, memcap: i64): int:
+    if fp == null or off < (0 as i64) or len < (32 as i64):
+        ret DecodeCorrupt
+    end
+    lo := off
+    mut ends := Vector {} as Vector<i64>
+    mut cur := off + len
+    mut ok := true
+    mut starts := Vector {} as Vector<i64>
+    mut checks := Vector {} as Vector<int>
+    mut unpads := Vector {} as Vector<Vector<i64>>
+    mut uncs := Vector {} as Vector<Vector<i64>>
+    until cur > lo and ok:
+        e := _xzs_trim(fp, lo, cur)
+        if e < (0 as i64) or e - lo < (24 as i64):
+            ok = false
+        else:
+            mut up := Vector {} as Vector<i64>
+            mut un := Vector {} as Vector<i64>
+            mut st := 0 as i64
+            mut ck := 0
+            if _xzs_footer(fp, lo, e, st, ck, up, un):
+                starts.push(st)
+                ends.push(e)
+                checks.push(ck)
+                unpads.push(up)
+                uncs.push(un)
+                cur = st
+            else:
+                up.free()
+                un.free()
+                ok = false
+            end
+        end
+    end
+    mut simple := ok
+    mut total := 0 as i64
+    mut s := starts.len() - 1
+    until s >= 0 and ok:
+        un := uncs.get(s)
+        up := unpads.get(s)
+        mut pos := starts.get(s) + (12 as i64)
+        mut b := 0
+        until b < un.len() and ok:
+            mut hs := 0
+            mut dp := 0
+            mut sm := false
+            if not _xzs_block_hdr(fp, pos, ends.get(s) - pos, hs, dp, sm):
+                ok = false
+            else:
+                if not sm:
+                    simple = false
+                end
+                total += un.get(b)
+            end
+            pos += ((up.get(b) + (3 as i64)) / (4 as i64)) * (4 as i64)
+            b++
+        end
+        s--
+    end
+    mut code := DecodeCorrupt
+    if ok and sink.cap > (0 as i64) and total > sink.cap:
+        code = DecodeTooBig
+        ok = false
+    end
+    if ok and not simple:
+        code = _xzs_fallback(fp, off, len, sink)
+        ok = false
+    end
+    if ok:
+        code = DecodeOk
+        outer := mem.AllocateZeroed(sizeof(FileSink)) as FileSink*
+        outer[0] = sink
+        emit := (p: void*, n: int, c: void*): ret _xzs_emit(c as _XzsCtx*, p, n) end
+        ctx := mem.AllocateZeroed(sizeof(_XzsCtx)) as _XzsCtx*
+        ctx[0] = _XzsCtx { outer = outer, check = 0, t64 = _xzs_table64(), crc64 = 0 as u64, sha = crypto.Sha256New() }
+        mut s2 := starts.len() - 1
+        until s2 >= 0 and code == DecodeOk:
+            un := uncs.get(s2)
+            up := unpads.get(s2)
+            ck := checks.get(s2)
+            csz := _xz_check_size(ck)
+            mut pos := starts.get(s2) + (12 as i64)
+            mut b := 0
+            until b < un.len() and code == DecodeOk:
+                mut hs := 0
+                mut dp := 0
+                mut sm := false
+                _ := _xzs_block_hdr(fp, pos, ends.get(s2) - pos, hs, dp, sm)
+                comp := up.get(b) - (hs as i64) - (csz as i64)
+                if comp <= (0 as i64):
+                    code = DecodeCorrupt
+                else:
+                    ctx[0].check = ck
+                    ctx[0].crc64 = 0xFFFFFFFFFFFFFFFF as u64
+                    ctx[0].sha = crypto.Sha256New()
+                    mut ws := SinkCallback(0 as i64, emit, ctx as void*)
+                    r := Lzma2FileToSink(dp, fp, pos + (hs as i64), comp, un.get(b), ws, memcap)
+                    if r == 2:
+                        code = DecodeTooBig
+                    else r == 3:
+                        code = outer[0].over ? DecodeTooBig : DecodeIo
+                    else r != 0:
+                        code = DecodeCorrupt
+                    else:
+                        cpos := pos + (hs as i64) + comp
+                        pad := (4 - ((comp as int) & 3)) & 3
+                        cb := _xzs_read(fp, cpos, pad + csz)
+                        if cb == null:
+                            code = DecodeCorrupt
+                        else:
+                            mut good := true
+                            mut z := 0
+                            until z < pad:
+                                if (cb[z] as int) != 0:
+                                    good = false
+                                end
+                                z++
+                            end
+                            cp := (cb as i64) + (pad as i64)
+                            cbp := cp as u8*
+                            if ck == 1:
+                                good = good and (ws.crc as i64) == _xz_le32(cbp, 0)
+                            else ck == 4:
+                                good = good and (ctx[0].crc64 ^ (0xFFFFFFFFFFFFFFFF as u64)) == _xz_le64(cbp, 0)
+                            else ck == 10:
+                                dg := mem.Allocate(32 as u64) as u8*
+                                crypto.Sha256Final(ctx[0].sha, dg as void*)
+                                mut q := 0
+                                until q < 32:
+                                    if dg[q] != cbp[q]:
+                                        good = false
+                                    end
+                                    q++
+                                end
+                                mem.Free(dg as void*)
+                            end
+                            mem.Free(cb as void*)
+                            if not good:
+                                code = DecodeCorrupt
+                            end
+                        end
+                    end
+                end
+                pos += ((up.get(b) + (3 as i64)) / (4 as i64)) * (4 as i64)
+                b++
+            end
+            s2--
+        end
+        sink = outer[0]
+        mem.Free(ctx[0].t64 as void*)
+        mem.Free(ctx as void*)
+        mem.Free(outer as void*)
+    end
+    repeat unpads.len() in q:
+        unpads.get(q).free()
+        uncs.get(q).free()
+    end
+    unpads.free()
+    uncs.free()
+    starts.free()
+    ends.free()
+    checks.free()
+    ret code
+end

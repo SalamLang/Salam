@@ -9,6 +9,8 @@ This page records what the `std/net` proxy packages (`vless`, `vmess`, `trojan`,
 | Xray-core                    | 26.11.9        | XTLS/Xray-core release, SHA2-256 from the published `.dgst`                                        |
 | sing-box                     | 1.14.4         | SagerNet/sing-box release, SHA-256 from the GitHub release digest                                  |
 | shadowsocks-rust             | 1.25.0         | `ssserver` and `sslocal`, SHA-256 from the published `.sha256`                                     |
+| Xray-core (legacy)           | 26.7.28        | XTLS/Xray-core release, SHA2-256 from the published `.dgst`; the last release before REALITY dropped hellos without X25519MLKEM768 (only for `chrome_120`) |
+| simple-obfs                  | master 486bebd | built from source with libev 4.33 (SHA-256 507eb7b8d1015fbec5b935f34ebed15bf346bed04a11ab82b8eee848c4205aea); `obfs-server` and `obfs-local` |
 | mihomo                       | 1.19.33        | MetaCubeX/mihomo release, SHA-256 from the GitHub release digest (only for simple-obfs, see below) |
 | Loyalsoldier v2ray-rules-dat | 202611091318   | `geoip.dat`, `geosite.dat`, SHA-256 from the published `.sha256sum` (geo reader check)             |
 | Chocolate4U Iran-v2ray-rules | 202611091318   | `geoip.dat`, `geosite.dat` with the `ir` and `category-ir` lists (geo reader check)                |
@@ -85,7 +87,7 @@ Where the payload is HTTPS ("inner TLS" below) the echo server is a TLS 1.3 serv
 | VLESS vision over Reality, plain and inner TLS payload                                               | both ways pass                       | both ways pass                       |                                                                                                           |
 | VLESS over Reality, empty flow, plain and inner TLS payload                                          | both ways pass                       | both ways pass                       |                                                                                                           |
 | VLESS over Reality + gRPC                                                                            | both ways pass                       | both ways pass                       |                                                                                                           |
-| Reality client fingerprints against an Xray server: chrome, edge, firefox, safari, `ios`, randomized | authenticate, 1 MiB passes           | not run                              | after the fix below; `chrome_120` does not (see Reality notes)                                            |
+| Reality client fingerprints against an Xray server: chrome, edge, firefox, safari, `ios`, randomized | authenticate, 1 MiB passes           | see round three                      | after the fix below; `chrome_120` does not (see Reality notes)                                            |
 | Reality destination that picks X25519MLKEM768, and one that does not                                 | pass with both                       | pass with both                       | the first one failed before the fix                                                                       |
 | ClientHello fragmenting (tcp default, 1 byte pieces, TLS records, both + SNI cut)                    | our client to the real server passes | our client to the real server passes | checked on the wire that the hello really arrives in pieces                                               |
 | Mux.Cool, VLESS and VMess, 4 concurrent 1 MiB sessions per connection                                | both ways pass                       | not applicable                       | sing-box multiplexes with smux, which is a different protocol                                             |
@@ -118,6 +120,44 @@ DoH (`doh_probe.salam`, run from a normal network on 2026-11-09) against Cloudfl
 
 Also found, and left alone: an outbound `streamSettings.fragment` in a config file is ignored on the client-side; fragmenting is switched on with `vpn.Options` (the `client -f` flag, or `tools/interop/vpn_frag`).
 
+## Third round (UDP, Mux.Cool over TLS and Reality, fingerprints, simple-obfs, trojan transports)
+
+Same method again. New or extended scripts: `udp.py` with the program `udp_peer`, `mux.py` (now over five transports), `obfs.py`, `matrix2.py` (fingerprints in both directions against Xray and sing-box), `matrix.py` (Trojan over more transports) and `fuzz.py` (more listeners, 500 sessions).
+
+| Case | xray 26.11.9 | sing-box 1.14.4 | Notes |
+| ---- | ------------ | --------------- | ----- |
+| Mux.Cool, VLESS and VMess, 4 x 1 MiB, over tcp, TLS, ws+TLS, Reality, gRPC+TLS | both ways pass (20 cases) | not applicable | sing-box has no Mux.Cool |
+| VLESS UDP (command 2), plain, TLS, ws+TLS, Reality, gRPC+TLS | ours to xray passes up to 8000 bytes; xray client to ours up to 4000 | both ways pass up to 16000 bytes | Xray itself loses datagrams over 4000 (client) and 8000 (server) in this mode, a run of Xray against Xray shows the same limit |
+| VMess UDP (command 2), the same five transports | the same limits as VLESS | both ways pass up to 9000 bytes | sing-box VMess takes less than its VLESS |
+| UDP inside Mux.Cool (VLESS XUDP and VMess), the same five transports | ours to xray up to 8192, xray client (with `mux.enabled`) to ours up to 8000 | VLESS only: ours to sing-box and sing-box with `packet_encoding: xudp` to ours, up to 16000 | sing-box has the XUDP form of VLESS Mux only |
+| UDP to port 53 with DNS query packets and a redirect to the echo | both ways pass | both ways pass | Xray `freedom.redirect`, sing-box `route-options override_port`; our peer redirects itself |
+| VLESS Reality fingerprints chrome, firefox, safari, edge, ios, randomized | both ways pass | both ways pass |
+| `chrome_120` against Xray 26.7.28 | passes (needs the client version fix below) | not available (sing-box does not know the name) | against 26.11.9 it is refused, as expected; kept as a legacy profile, see below |
+| Trojan over ws, ws+TLS, httpupgrade+TLS, gRPC+TLS (and tcp+TLS) | both ways pass after the fixes below | both ways pass | plain `trojan-go` style websocket is the same wire format as Xray's |
+| Shadowsocks simple-obfs http and tls, real `obfs-server` with `ssserver` and `sslocal` with real `obfs-local` | our client to obfs-server + ssserver passes; sslocal + obfs-local to our server passes | | 1 MiB each, four cases |
+| Link import shapes | | | expected values in `tests/{en,fa}/stdlib/tunnel_link_shapes` |
+
+Datagram sizes tested: 1, 29, 512, 1200, 4000, 8000, 8192, 9000, 16000, 32000, 65000 bytes, two echoes per size on one session. A UDP session inside Mux.Cool carries at most 8192 bytes (`transport.MuxMaxPacket`): Xray closes the whole Mux connection on a larger packet, so a larger write is refused locally. The 65000 byte datagram did not pass anywhere.
+
+### chrome_120
+
+The profile has no hybrid X25519MLKEM768 key share. REALITY refuses such a hello since 2026-09-08 (REALITY commit 8cdf7bf9, in Xray-core 26.9.9 and later), and the Xray 26.7.28 test above shows that before that date it authenticates. Decision: it stays as an explicit legacy profile for older servers. `utls.ProfileNames()` and with it the documented default list no longer name it (`utls.LegacyProfileNames()` does), `randomized` is built on `chrome` and so has the share, and the profile table of the `net.utls` page says which servers refuse it.
+
+### Bugs found and fixed in round three
+
+1. **Reality client version** (`reality: send client version 26.3.27 ...`). The sealed proof carried the version 1.8.1. Xray 26.3.27 to 26.10 have a default `minClientVer` of 26.3.27 and refuse older clients ("authentication failed"), so every Salam Reality client (and sing-box, which sends the same) failed against those servers; 26.11.9 dropped the default, which hid it. We now send 26.3.27; the server side reports it (`Accepted.client_version`).
+2. **Trojan on ws+TLS, httpupgrade and gRPC** (`vpn: trojan over ws with TLS ...`). The `vpn` trojan server only knew tcp+TLS and plain ws; everything else fell back to plain tcp, so real clients got a reset. Those transports now use the generic transport listener (TCP only; UDP and the fallback site stay on the tcp+TLS and plain ws paths).
+3. **Trojan first payload with a NUL** (`trojan: the first payload after the request is kept as bytes ...`). The generic path carried the bytes after the request header in a string, which stops at the first NUL; a real client (Xray sends header and data together) lost the rest of the first packet and the session stalled at 1 MiB. `tunnel.Session` has `initial_data` and `initial_size` now.
+4. **Mux UDP oversize** (`transport: a Mux UDP session refuses a datagram over 8192 bytes ...`). Writes over 8192 bytes in a UDP session were split into 16384 byte frames; Xray treats that as a protocol error and drops the whole multiplexed connection, including its TCP sessions.
+5. **Shadowsocks plugin in `vpn`** (`vpn: shadowsocks plugin obfs-local/obfs-server ...`). The dialer ignored the `plugin` of an outbound and the shadowsocks inbound had no plugin setting, so simple-obfs worked in the library but not in the program.
+
+### Not changed, found
+
+- **File descriptors left in CLOSE-WAIT.** Opening 100 idle connections at once (half to a mixed listener, half to a VLESS one), then closing them, intermittently leaves between 1 and 36 accepted sockets open on the server (CLOSE-WAIT, no thread owns them; thread dumps show only idle workers). It does not reproduce under `strace`, with a single listener, or with 50 connections, and a second run may leave none. It is also present in the build from the start of this round. The descriptors are never reused. Reproduce: `fuzz.py` stall check, or 100 simultaneous idle connections to two listeners. Not fixed.
+- **Growth over 500 sessions.** 500 sessions through the mixed listener, 20 at a time, twice in a row (`fuzz.py`): all pass, descriptors stay at 14 (the baseline). First batch: threads 40 to 64, resident memory 8.0 to 10.7 MB, virtual size +0.9 GB (pool threads with 8 MB stacks). Second batch: threads 64 to 76, resident memory 10.7 to 12.7 MB, virtual size +0.1 GB. The thread growth is the elastic pool filling up (the number levels off), the resident growth of about 4 KB per session matches the known closure environment leak of the accept path (about 2 KB per connection under valgrind in round one); it was not chased further.
+- **Shadowsocks v2ray-plugin** is not implemented in our client or server (only simple-obfs), so no v2ray-plugin cases were run; use VLESS or VMess over ws for that transport.
+- **Datagram sources.** An incoming UDP session in Mux.Cool answers from the requested target only: per-packet source addresses (full cone) and XUDP global ids are not implemented.
+
 ## Pre-auth connections (second look)
 
 Measured with `stall.py` (silent connections to a `vpn run` server: plain tcp, ws, TLS for VLESS; TLS and ws for Trojan):
@@ -148,16 +188,16 @@ INTEROP_GEO_DIR=/path/to/geo tools/interop/run.sh ...
 
 ## Not covered or not possible here
 
-- simple-obfs: no `obfs-local` or `obfs-server` binary was available; only the mihomo client against our server was tested.
-- VLESS and VMess UDP (XUDP) and UDP sessions inside Mux.Cool were not run.
-- Mux.Cool was run over plain TCP only (not under TLS or Reality), and no UDP session went through it.
-- Reality: only the default `chrome` fingerprint was run against sing-box; the other profiles were run against Xray. `chrome_120` cannot authenticate against Xray 26.x (no hybrid key share). Our Reality server never offers a hybrid share of its own.
+- simple-obfs was run against the real `obfs-server` and `obfs-local` in round three (the mihomo run of round one stays).
+- The `vpn` program does not serve VLESS or VMess UDP or Mux.Cool itself: those were run through `udp_peer` and `mux_peer`, small programs on the library. `vpn` forwards TCP only on those protocols.
+- UDP: the 65000 byte datagram passed nowhere; the limits per peer are in the third round table.
+- Reality: our Reality server never offers a hybrid share of its own; `chrome_120` is a legacy profile.
 - Vision: our writer never sends the `direct` command, and a real Xray client does not send it on the uplink either, so the `direct` reader was exercised on the downlink of Xray and on both directions of sing-box.
 - A `fragment` object inside an outbound `streamSettings` is ignored; only `vpn.Options` switches fragmenting on.
 - The per source limit reads the peer address with `getpeername`, which is wired up for Linux and macOS (macOS was not run here) and not for Windows. The `vpn` program compiles to objects for `x86_64-windows`, `aarch64-macos` and `x86_64-macos`; nothing was run there.
 - Slow clients: the handshake deadlines are per read, so a client that sends one byte every few seconds keeps its handshake open for several reads.
-- The link import cases were compared by eye against the conventions; only the two mistakes found have tests with expected values.
-- mihomo and the simple-obfs cases were not rerun in round two (no mihomo binary was downloaded).
+- The link import shapes now have expected values (`tunnel_link_shapes`); they were compared by eye against the conventions once when frozen.
+- mihomo was not run in rounds two and three.
 - xray no longer accepts `allowInsecure`; its clients pin the test certificate by SHA-256 instead (`pinnedPeerCertSha256`).
 - xray 26.x `freedom` blocks loopback unless `finalRules` allows it; the harness sets that.
 
@@ -196,4 +236,4 @@ No wrong value was found. The Shecan, 403 and Radar addresses are confirmed only
 tools/interop/run.sh /path/to/salam /path/to/bins /path/to/scratch
 ```
 
-`bins` holds `xray`, `sing-box`, `ssserver`, `sslocal` and `mihomo`. The compiler must have a `std/` directory next to it that points at this tree. Individual scripts (`matrix.py`, `vmess_options.py`, `ss_extra.py`, `proxies.py`, `fallback.py`, `fuzz.py`) take their inputs from the `INTEROP_*` environment variables listed in `run.sh`; `matrix.py` accepts a substring to select cases, for example `matrix.py vmess/`.
+`bins` holds `xray`, `sing-box`, `ssserver`, `sslocal` and `mihomo`, and for `obfs.py` `obfs-server` and `obfs-local` (`INTEROP_OBFS_SERVER`, `INTEROP_OBFS_LOCAL`). `udp.py` needs `INTEROP_UDP_PEER` (the `udp_peer` build); `INTEROP_XRAY_LEGACY=1` with `INTEROP_XRAY` set to Xray 26.7.28 makes `matrix2.py` expect `chrome_120` to pass. The compiler must have a `std/` directory next to it that points at this tree. Individual scripts (`matrix.py`, `vmess_options.py`, `ss_extra.py`, `proxies.py`, `fallback.py`, `fuzz.py`) take their inputs from the `INTEROP_*` environment variables listed in `run.sh`; `matrix.py` accepts a substring to select cases, for example `matrix.py vmess/`.

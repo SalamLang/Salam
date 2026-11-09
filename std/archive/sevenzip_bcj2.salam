@@ -1,0 +1,138 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package archive
+
+import compress
+import mem
+
+func _bcj2_rc_byte(d: _SzIn, pos &: int, bad &: bool): i64:
+    if pos >= d.n:
+        bad = true
+        ret 0
+    end
+    v := d.p[pos] as i64
+    pos++
+    ret v
+end
+
+func _bcj2_bit(d: _SzIn, pos &: int, code &: i64, range &: i64, probs: i32*, idx: int, bad &: bool): int:
+    ttt := probs[idx] as i64
+    bound := (range >> 11) * ttt
+    mut bit := 0
+    if code < bound:
+        range = bound
+        probs[idx] = (ttt + ((2048 - ttt) >> 5)) as i32
+    else:
+        range -= bound
+        code -= bound
+        probs[idx] = (ttt - (ttt >> 5)) as i32
+        bit = 1
+    end
+    if range < 16777216:
+        range = (range << 8) & 0xFFFFFFFF
+        code = ((code << 8) | _bcj2_rc_byte(d, pos, bad)) & 0xFFFFFFFF
+    end
+    ret bit
+end
+
+func _sz_bcj2(a: _SzIn, b: _SzIn, c: _SzIn, d: _SzIn, out_size: int, status &: int): compress.ByteBuf:
+    mut out := compress.NewByteBufCap(out_size > 16777216 ? 16777216 : out_size)
+    if out_size == 0:
+        ret out
+    end
+    if d.n < 5:
+        status = SEVENZIP_CORRUPT
+        ret out
+    end
+    probs := mem.AllocateZeroed(1032 as u64) as i32*
+    repeat 258 in i:
+        probs[i] = 1024 as i32
+    end
+    mut code := 0 as i64
+    mut range := 0xFFFFFFFF as i64
+    mut rpos := 0
+    mut bad := false
+    repeat 5:
+        code = ((code << 8) | _bcj2_rc_byte(d, rpos, bad)) & 0xFFFFFFFF
+    end
+    mut ip := 0
+    mut bpos := 0
+    mut cpos := 0
+    mut o := 0
+    mut prev := 0
+    until o < out_size and not bad:
+        mut hit := false
+        until ip < a.n and o < out_size and not hit:
+            bb := a.p[ip] as int
+            compress.BufPush(out, bb)
+            o++
+            if (bb & 0xFE) == 0xE8 or (prev == 0x0F and (bb & 0xF0) == 0x80):
+                hit = true
+            else:
+                ip++
+                prev = bb
+            end
+        end
+        if not hit or o >= out_size:
+            break
+        end
+        bb := a.p[ip] as int
+        ip++
+        mut idx := 257
+        if bb == 0xE8:
+            idx = prev
+        else bb == 0xE9:
+            idx = 256
+        end
+        bit := _bcj2_bit(d, rpos, code, range, probs, idx, bad)
+        if bit == 0:
+            prev = bb
+        else:
+            mut src := b
+            mut sp := bpos
+            if bb != 0xE8:
+                src = c
+                sp = cpos
+            end
+            if sp + 4 > src.n:
+                status = SEVENZIP_CORRUPT
+                break
+            end
+            v := ((src.p[sp] as i64) << 24) | ((src.p[sp + 1] as i64) << 16) | ((src.p[sp + 2] as i64) << 8) | (src.p[sp + 3] as i64)
+            if bb == 0xE8:
+                bpos += 4
+            else:
+                cpos += 4
+            end
+            dest := (v - ((o as i64) + 4)) & 0xFFFFFFFF
+            repeat 4 in q:
+                if o < out_size:
+                    compress.BufPush(out, ((dest >> (8 * q)) & 255) as int)
+                    o++
+                end
+            end
+            prev = ((dest >> 24) & 255) as int
+        end
+    end
+    mem.Free(probs as void*)
+    if status == SEVENZIP_OK and (bad or o != out_size):
+        status = SEVENZIP_CORRUPT
+    end
+    if status != SEVENZIP_OK:
+        compress.BufFree(out)
+        ret compress.NewByteBuf()
+    end
+    ret out
+end

@@ -260,6 +260,18 @@ func _sz_coder_run(c: _SzCoder, inp: _SzIn, out_size: int, password: str, status
         if ok and out.len != out_size:
             ok = false
         end
+    else id == (0x040109 as i64):
+        out = compress.RawInflate64Max(inp.p as void*, inp.n, out_size, out_size, ok)
+        if ok and out.len != out_size:
+            ok = false
+        end
+    else id == (0x020302 as i64) or id == (0x020304 as i64):
+        if inp.n != out_size:
+            status = SEVENZIP_CORRUPT
+            ret out
+        end
+        compress.BufPushBytes(out, inp.p as void*, inp.n)
+        ok = compress.SwapDecode(out.data, out.len, id == (0x020302 as i64) ? 2 : 4)
     else id == (0x06F10701 as i64):
         out = _sz_decrypt(c, inp, out_size, password, status)
         ok = status == SEVENZIP_OK
@@ -297,6 +309,8 @@ func _sz_coder_run(c: _SzCoder, inp: _SzIn, out_size: int, password: str, status
             kind = compress.BcjSPARC
         else id == (10 as i64):
             kind = compress.BcjARM64
+        else id == (11 as i64):
+            kind = compress.BcjRISCV
         end
         if kind == 0:
             status = SEVENZIP_UNSUPPORTED
@@ -322,6 +336,49 @@ func _sz_coder_run(c: _SzCoder, inp: _SzIn, out_size: int, password: str, status
     ret out
 end
 
+func _szin_free(inp: _SzIn):
+    if inp.owned:
+        compress.BufFree(inp.buf)
+    end
+end
+
+func _sz_input_of(s: _Sz, base: u8*, n: int, fi: int, in_idx: int, password: str, depth: int, status &: int, inp &: _SzIn): bool:
+    f := s.folders.get(fi)
+    repeat f.bin.len() in k:
+        if f.bin.get(k) == in_idx:
+            inp.buf = _sz_stream_out(s, base, n, fi, f.bout.get(k), password, depth + 1, status)
+            if status != SEVENZIP_OK:
+                compress.BufFree(inp.buf)
+                ret false
+            end
+            inp.p = inp.buf.data as u8*
+            inp.n = inp.buf.len
+            inp.owned = true
+            ret true
+        end
+    end
+    repeat f.packed.len() in j:
+        if f.packed.get(j) == in_idx:
+            pidx := f.pack_first + j
+            if pidx >= s.pack_sizes.len():
+                status = SEVENZIP_CORRUPT
+                ret false
+            end
+            off := _sz_pack_offset(s, pidx)
+            sz := s.pack_sizes.get(pidx)
+            if off < (32 as i64) or sz < (0 as i64) or off + sz > (n as i64):
+                status = SEVENZIP_CORRUPT
+                ret false
+            end
+            inp.p = ((base as i64) + off) as u8*
+            inp.n = sz as int
+            ret true
+        end
+    end
+    status = SEVENZIP_CORRUPT
+    ret false
+end
+
 func _sz_stream_out(s: _Sz, base: u8*, n: int, fi: int, out_idx: int, password: str, depth: int, status &: int): compress.ByteBuf:
     f := s.folders.get(fi)
     if depth > f.coders.len() or out_idx >= f.coders.len() or out_idx >= f.unpack.len():
@@ -333,49 +390,48 @@ func _sz_stream_out(s: _Sz, base: u8*, n: int, fi: int, out_idx: int, password: 
         status = SEVENZIP_TOO_BIG
         ret compress.NewByteBuf()
     end
-    mut inp := _SzIn { p = null as u8*, n = 0, buf = compress.NewByteBuf(), owned = false }
-    mut found := false
-    repeat f.bin.len() in k:
-        if f.bin.get(k) == out_idx and not found:
-            found = true
-            inp.buf = _sz_stream_out(s, base, n, fi, f.bout.get(k), password, depth + 1, status)
-            if status != SEVENZIP_OK:
-                compress.BufFree(inp.buf)
-                ret compress.NewByteBuf()
-            end
-            inp.p = inp.buf.data as u8*
-            inp.n = inp.buf.len
-            inp.owned = true
-        end
+    c := f.coders.get(out_idx)
+    mut first_in := 0
+    repeat out_idx in q:
+        first_in += f.coders.get(q).num_in
     end
-    if not found:
-        repeat f.packed.len() in j:
-            if f.packed.get(j) == out_idx and not found:
-                found = true
-                pidx := f.pack_first + j
-                if pidx >= s.pack_sizes.len():
-                    status = SEVENZIP_CORRUPT
-                    ret compress.NewByteBuf()
+    if c.id == (0x0303011B as i64):
+        if c.num_in != 4:
+            status = SEVENZIP_CORRUPT
+            ret compress.NewByteBuf()
+        end
+        mut ins := Vector {} as Vector<_SzIn>
+        mut good := true
+        repeat 4 in q:
+            if good:
+                mut one := _SzIn { p = null as u8*, n = 0, buf = compress.NewByteBuf(), owned = false }
+                if _sz_input_of(s, base, n, fi, first_in + q, password, depth, status, one):
+                    ins.push(one)
+                else:
+                    good = false
                 end
-                off := _sz_pack_offset(s, pidx)
-                sz := s.pack_sizes.get(pidx)
-                if off < (32 as i64) or sz < (0 as i64) or off + sz > (n as i64):
-                    status = SEVENZIP_CORRUPT
-                    ret compress.NewByteBuf()
-                end
-                inp.p = ((base as i64) + off) as u8*
-                inp.n = sz as int
             end
         end
+        mut res := compress.NewByteBuf()
+        if good:
+            res = _sz_bcj2(ins.get(0), ins.get(1), ins.get(2), ins.get(3), out_size as int, status)
+        end
+        repeat ins.len() in q:
+            _szin_free(ins.get(q))
+        end
+        ins.free()
+        ret res
     end
-    if not found:
-        status = SEVENZIP_CORRUPT
+    if c.num_in != 1:
+        status = SEVENZIP_UNSUPPORTED
         ret compress.NewByteBuf()
     end
-    out := _sz_coder_run(f.coders.get(out_idx), inp, out_size as int, password, status)
-    if inp.owned:
-        compress.BufFree(inp.buf)
+    mut inp := _SzIn { p = null as u8*, n = 0, buf = compress.NewByteBuf(), owned = false }
+    if not _sz_input_of(s, base, n, fi, first_in, password, depth, status, inp):
+        ret compress.NewByteBuf()
     end
+    out := _sz_coder_run(c, inp, out_size as int, password, status)
+    _szin_free(inp)
     ret out
 end
 
@@ -393,7 +449,7 @@ func _sz_unpack_folder(s: _Sz, base: u8*, n: int, fi: int, password: str, status
     f := s.folders.get(fi)
     repeat f.coders.len() in i:
         c := f.coders.get(i)
-        if c.nin != 1 or c.nout != 1:
+        if c.num_out != 1 or (c.num_in != 1 and not (c.num_in == 4 and c.id == (0x0303011B as i64))):
             status = SEVENZIP_UNSUPPORTED
             ret compress.NewByteBuf()
         end

@@ -1,0 +1,419 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package tls
+
+import mem
+
+const MLKEM_Q := 3329
+const MLKEM_EK_LEN := 1184
+const MLKEM_CT_LEN := 1088
+
+func _mk_pow(base: int, e: int): int:
+    mut r := 1
+    mut b := base % MLKEM_Q
+    mut k := e
+    until k > 0:
+        if (k & 1) == 1:
+            r = (r * b) % MLKEM_Q
+        end
+        b = (b * b) % MLKEM_Q
+        k >>= 1
+    end
+    ret r
+end
+
+func _mk_brv7(x: int): int:
+    mut r := 0
+    repeat 7 in i:
+        if ((x >> i) & 1) == 1:
+            r |= 1 << (6 - i)
+        end
+    end
+    ret r
+end
+
+func _mk_zeta(i: int): int:
+    ret _mk_pow(17, _mk_brv7(i))
+end
+
+func _mk_poly(count: int): int*:
+    ret mem.AllocateZeroed((count * 1024) as u64) as int*
+end
+
+func _mk_ntt(f: int*):
+    mut k := 1
+    mut len := 128
+    until len >= 2:
+        mut start := 0
+        until start < 256:
+            zeta := _mk_zeta(k)
+            k++
+            repeat len in jj:
+                j := start + jj
+                t := (zeta * f[j + len]) % MLKEM_Q
+                f[j + len] = (f[j] - t + MLKEM_Q) % MLKEM_Q
+                f[j] = (f[j] + t) % MLKEM_Q
+            end
+            start += 2 * len
+        end
+        len >>= 1
+    end
+end
+
+func _mk_intt(f: int*):
+    mut k := 127
+    mut len := 2
+    until len <= 128:
+        mut start := 0
+        until start < 256:
+            zeta := _mk_zeta(k)
+            k--
+            repeat len in jj:
+                j := start + jj
+                t := f[j]
+                f[j] = (t + f[j + len]) % MLKEM_Q
+                f[j + len] = (zeta * ((f[j + len] - t + MLKEM_Q) % MLKEM_Q)) % MLKEM_Q
+            end
+            start += 2 * len
+        end
+        len <<= 1
+    end
+    repeat 256 in i:
+        f[i] = (f[i] * 3303) % MLKEM_Q
+    end
+end
+
+func _mk_mul_add(h: int*, f: int*, g: int*):
+    repeat 128 in i:
+        gamma := _mk_pow(17, 2 * _mk_brv7(i) + 1)
+        a0 := f[2 * i]
+        a1 := f[2 * i + 1]
+        b0 := g[2 * i]
+        b1 := g[2 * i + 1]
+        h[2 * i] = (h[2 * i] + a0 * b0 + (((a1 * b1) % MLKEM_Q) * gamma)) % MLKEM_Q
+        h[2 * i + 1] = (h[2 * i + 1] + a0 * b1 + a1 * b0) % MLKEM_Q
+    end
+end
+
+func _mk_add(a: int*, b: int*):
+    repeat 256 in i:
+        a[i] = (a[i] + b[i]) % MLKEM_Q
+    end
+end
+
+func _mk_sample_ntt(out: int*, rho: void*, i: int, j: int):
+    seed := mem.AllocateZeroed(34 as u64)
+    mem.Copy(seed, rho, 32 as u64)
+    (seed as u8*)[32] = j as u8
+    (seed as u8*)[33] = i as u8
+    mut s := _sp_new(168, 0x1F)
+    _sp_absorb(s, seed, 34)
+    _sp_finish(s)
+    c := mem.AllocateZeroed(3 as u64)
+    cp := c as u8*
+    mut n := 0
+    until n < 256:
+        _sp_squeeze(s, c, 3)
+        d1 := (cp[0] as int) + 256 * ((cp[1] as int) & 15)
+        d2 := ((cp[1] as int) >> 4) + 16 * (cp[2] as int)
+        if d1 < MLKEM_Q:
+            out[n] = d1
+            n++
+        end
+        if d2 < MLKEM_Q and n < 256:
+            out[n] = d2
+            n++
+        end
+    end
+    mem.Free(c)
+    _sp_free(s)
+    mem.Free(seed)
+end
+
+func _mk_cbd(out: int*, sigma: void*, nonce: int):
+    inp := mem.AllocateZeroed(33 as u64)
+    mem.Copy(inp, sigma, 32 as u64)
+    (inp as u8*)[32] = nonce as u8
+    buf := mem.AllocateZeroed(128 as u64)
+    _shake256(inp, 33, buf, 128)
+    bp := buf as u8*
+    repeat 256 in i:
+        byte := bp[(4 * i) >> 3] as int
+        nib := (byte >> ((4 * i) & 7)) & 15
+        x := (nib & 1) + ((nib >> 1) & 1)
+        y := ((nib >> 2) & 1) + ((nib >> 3) & 1)
+        out[i] = (x - y + MLKEM_Q) % MLKEM_Q
+    end
+    mem.Free(buf)
+    mem.Free(inp)
+end
+
+func _mk_encode(f: int*, d: int, out: void*):
+    op := out as u8*
+    mut acc := 0
+    mut bits := 0
+    mut pos := 0
+    repeat 256 in i:
+        acc |= f[i] << bits
+        bits += d
+        until bits >= 8:
+            op[pos] = (acc & 255) as u8
+            pos++
+            acc >>= 8
+            bits -= 8
+        end
+    end
+end
+
+func _mk_decode(inp: void*, d: int, f: int*):
+    ip := inp as u8*
+    mut acc := 0
+    mut bits := 0
+    mut pos := 0
+    mask := (1 << d) - 1
+    repeat 256 in i:
+        until bits < d:
+            acc |= (ip[pos] as int) << bits
+            pos++
+            bits += 8
+        end
+        f[i] = acc & mask
+        acc >>= d
+        bits -= d
+    end
+end
+
+func _mk_compress(x: int, d: int): int:
+    ret ((((x << d) * 2) + MLKEM_Q) / (2 * MLKEM_Q)) & ((1 << d) - 1)
+end
+
+func _mk_decompress(y: int, d: int): int:
+    ret (MLKEM_Q * y + (1 << (d - 1))) >> d
+end
+
+func _mk_matrix_row_dot(t: int*, rho: void*, s: int*, transposed: bool, row: int):
+    tmp := _mk_poly(1)
+    repeat 3 in j:
+        if transposed:
+            _mk_sample_ntt(tmp, rho, j, row)
+        else:
+            _mk_sample_ntt(tmp, rho, row, j)
+        end
+        _mk_mul_add(t, tmp, ((s as i64) + ((j * 1024) as i64)) as int*)
+    end
+    mem.Free(tmp as void*)
+end
+
+func _mk_kpke_keygen(d: void*, ek_out: void*, dk_out: void*):
+    inp := mem.AllocateZeroed(33 as u64)
+    mem.Copy(inp, d, 32 as u64)
+    (inp as u8*)[32] = 3 as u8
+    g := mem.AllocateZeroed(64 as u64)
+    _sha3_512(inp, 33, g)
+    rho := g
+    sigma := ((g as i64) + 32) as void*
+    s := _mk_poly(3)
+    e := _mk_poly(3)
+    t := _mk_poly(3)
+    repeat 3 in i:
+        _mk_cbd(((s as i64) + ((i * 1024) as i64)) as int*, sigma, i)
+        _mk_cbd(((e as i64) + ((i * 1024) as i64)) as int*, sigma, 3 + i)
+        _mk_ntt(((s as i64) + ((i * 1024) as i64)) as int*)
+        _mk_ntt(((e as i64) + ((i * 1024) as i64)) as int*)
+    end
+    repeat 3 in i:
+        ti := ((t as i64) + ((i * 1024) as i64)) as int*
+        _mk_matrix_row_dot(ti, rho, s, false, i)
+        _mk_add(ti, ((e as i64) + ((i * 1024) as i64)) as int*)
+        _mk_encode(ti, 12, ((ek_out as i64) + ((i * 384) as i64)) as void*)
+        _mk_encode(((s as i64) + ((i * 1024) as i64)) as int*, 12, ((dk_out as i64) + ((i * 384) as i64)) as void*)
+    end
+    mem.Copy(((ek_out as i64) + 1152) as void*, rho, 32 as u64)
+    mem.Free(t as void*)
+    mem.Free(e as void*)
+    mem.Free(s as void*)
+    mem.Free(g)
+    mem.Free(inp)
+end
+
+func _mk_kpke_encrypt(ek: void*, m: void*, r: void*, ct_out: void*):
+    that := _mk_poly(3)
+    repeat 3 in i:
+        ti := ((that as i64) + ((i * 1024) as i64)) as int*
+        _mk_decode(((ek as i64) + ((i * 384) as i64)) as void*, 12, ti)
+        repeat 256 in k:
+            ti[k] %= MLKEM_Q
+        end
+    end
+    rho := ((ek as i64) + 1152) as void*
+    y := _mk_poly(3)
+    e1 := _mk_poly(3)
+    e2 := _mk_poly(1)
+    repeat 3 in i:
+        _mk_cbd(((y as i64) + ((i * 1024) as i64)) as int*, r, i)
+        _mk_cbd(((e1 as i64) + ((i * 1024) as i64)) as int*, r, 3 + i)
+        _mk_ntt(((y as i64) + ((i * 1024) as i64)) as int*)
+    end
+    _mk_cbd(e2, r, 6)
+    u := _mk_poly(3)
+    repeat 3 in i:
+        ui := ((u as i64) + ((i * 1024) as i64)) as int*
+        _mk_matrix_row_dot(ui, rho, y, true, i)
+        _mk_intt(ui)
+        _mk_add(ui, ((e1 as i64) + ((i * 1024) as i64)) as int*)
+        repeat 256 in k:
+            ui[k] = _mk_compress(ui[k], 10)
+        end
+        _mk_encode(ui, 10, ((ct_out as i64) + ((i * 320) as i64)) as void*)
+    end
+    v := _mk_poly(1)
+    repeat 3 in i:
+        _mk_mul_add(v, ((that as i64) + ((i * 1024) as i64)) as int*, ((y as i64) + ((i * 1024) as i64)) as int*)
+    end
+    _mk_intt(v)
+    _mk_add(v, e2)
+    mp := m as u8*
+    repeat 256 in k:
+        bit := ((mp[k >> 3] as int) >> (k & 7)) & 1
+        v[k] = (v[k] + bit * 1665) % MLKEM_Q
+        v[k] = _mk_compress(v[k], 4)
+    end
+    _mk_encode(v, 4, ((ct_out as i64) + 960) as void*)
+    mem.Free(v as void*)
+    mem.Free(u as void*)
+    mem.Free(e2 as void*)
+    mem.Free(e1 as void*)
+    mem.Free(y as void*)
+    mem.Free(that as void*)
+end
+
+func _mk_kpke_decrypt(dk: void*, ct: void*, m_out: void*):
+    shat := _mk_poly(3)
+    repeat 3 in i:
+        _mk_decode(((dk as i64) + ((i * 384) as i64)) as void*, 12, ((shat as i64) + ((i * 1024) as i64)) as int*)
+    end
+    u := _mk_poly(1)
+    w := _mk_poly(1)
+    repeat 3 in i:
+        _mk_decode(((ct as i64) + ((i * 320) as i64)) as void*, 10, u)
+        repeat 256 in k:
+            u[k] = _mk_decompress(u[k], 10)
+        end
+        _mk_ntt(u)
+        _mk_mul_add(w, ((shat as i64) + ((i * 1024) as i64)) as int*, u)
+    end
+    _mk_intt(w)
+    v := _mk_poly(1)
+    _mk_decode(((ct as i64) + 960) as void*, 4, v)
+    mp := m_out as u8*
+    repeat 32 in k:
+        mp[k] = 0 as u8
+    end
+    repeat 256 in k:
+        x := (_mk_decompress(v[k], 4) - w[k] + MLKEM_Q) % MLKEM_Q
+        bit := _mk_compress(x, 1)
+        mp[k >> 3] = ((mp[k >> 3] as int) | (bit << (k & 7))) as u8
+    end
+    mem.Free(v as void*)
+    mem.Free(w as void*)
+    mem.Free(u as void*)
+    mem.Free(shat as void*)
+end
+
+@en "Mlkem768PublicKey"
+@fa "کلید عمومی ام ال کم۷۶۸"
+pub func Mlkem768PublicKey(seed: void*, ek_out: void*):
+    dk := mem.AllocateZeroed(1152 as u64)
+    _mk_kpke_keygen(seed, ek_out, dk)
+    mem.Free(dk)
+end
+
+@en "Mlkem768Encapsulate"
+@fa "کپسوله سازی ام ال کم۷۶۸"
+pub func Mlkem768Encapsulate(ek: void*, m: void*, ct_out: void*, ss_out: void*): bool:
+    f := _mk_poly(1)
+    mut ok := true
+    repeat 3 in i:
+        _mk_decode(((ek as i64) + ((i * 384) as i64)) as void*, 12, f)
+        repeat 256 in k:
+            if f[k] >= MLKEM_Q:
+                ok = false
+            end
+        end
+    end
+    mem.Free(f as void*)
+    if not ok:
+        ret false
+    end
+    hek := mem.AllocateZeroed(32 as u64)
+    _sha3_256(ek, MLKEM_EK_LEN, hek)
+    mh := mem.AllocateZeroed(64 as u64)
+    mem.Copy(mh, m, 32 as u64)
+    mem.Copy(((mh as i64) + 32) as void*, hek, 32 as u64)
+    g := mem.AllocateZeroed(64 as u64)
+    _sha3_512(mh, 64, g)
+    mem.Copy(ss_out, g, 32 as u64)
+    _mk_kpke_encrypt(ek, m, ((g as i64) + 32) as void*, ct_out)
+    mem.Free(g)
+    mem.Free(mh)
+    mem.Free(hek)
+    ret true
+end
+
+@en "Mlkem768Decapsulate"
+@fa "بازگشایی ام ال کم۷۶۸"
+pub func Mlkem768Decapsulate(seed: void*, ct: void*, ss_out: void*):
+    ek := mem.AllocateZeroed(MLKEM_EK_LEN as u64)
+    dk := mem.AllocateZeroed(1152 as u64)
+    _mk_kpke_keygen(seed, ek, dk)
+    hek := mem.AllocateZeroed(32 as u64)
+    _sha3_256(ek, MLKEM_EK_LEN, hek)
+    m := mem.AllocateZeroed(32 as u64)
+    _mk_kpke_decrypt(dk, ct, m)
+    mh := mem.AllocateZeroed(64 as u64)
+    mem.Copy(mh, m, 32 as u64)
+    mem.Copy(((mh as i64) + 32) as void*, hek, 32 as u64)
+    g := mem.AllocateZeroed(64 as u64)
+    _sha3_512(mh, 64, g)
+    ct2 := mem.AllocateZeroed(MLKEM_CT_LEN as u64)
+    _mk_kpke_encrypt(ek, m, ((g as i64) + 32) as void*, ct2)
+    zc := mem.AllocateZeroed((32 + MLKEM_CT_LEN) as u64)
+    mem.Copy(zc, ((seed as i64) + 32) as void*, 32 as u64)
+    mem.Copy(((zc as i64) + 32) as void*, ct, MLKEM_CT_LEN as u64)
+    kbar := mem.AllocateZeroed(32 as u64)
+    _shake256(zc, 32 + MLKEM_CT_LEN, kbar, 32)
+    mut same := 0
+    a := ct as u8*
+    b := ct2 as u8*
+    repeat MLKEM_CT_LEN in i:
+        same |= (a[i] as int) ^ (b[i] as int)
+    end
+    gp := g as u8*
+    kp := kbar as u8*
+    op := ss_out as u8*
+    sel := 0 - (((same | (0 - same)) >> 31) & 1)
+    repeat 32 in i:
+        op[i] = (((gp[i] as int) & (~sel)) | ((kp[i] as int) & sel)) as u8
+    end
+    mem.Free(kbar)
+    mem.Free(zc)
+    mem.Free(ct2)
+    mem.Free(g)
+    mem.Free(mh)
+    mem.Free(m)
+    mem.Free(hek)
+    mem.Free(dk)
+    mem.Free(ek)
+end

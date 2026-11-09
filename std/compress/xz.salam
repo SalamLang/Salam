@@ -1,0 +1,431 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package compress
+
+import mem
+import crypto
+
+const _XZ_CRC64_POLY := 0xC96C5795D7870F42 as u64
+const _XZ_MAX_FILTERS := 4
+
+struct _Xz:
+    pub t32: u32*
+    pub t64: u64*
+    pub d: _Lz
+    pub maxout: int
+end
+
+func _xz_new(maxout: int): _Xz:
+    mut t32 := mem.Allocate((256 * 4) as u64) as u32*
+    mut t64 := mem.Allocate((256 * 8) as u64) as u64*
+    mut i := 0
+    until i < 256:
+        mut c := i as u32
+        mut k := 0
+        until k < 8:
+            if (c & (1 as u32)) != (0 as u32):
+                c = (c >> 1) ^ (0xEDB88320 as u32)
+            else:
+                c >>= 1
+            end
+            k++
+        end
+        t32[i] = c
+        mut c64 := i as u64
+        k = 0
+        until k < 8:
+            if (c64 & (1 as u64)) != (0 as u64):
+                c64 = (c64 >> 1) ^ _XZ_CRC64_POLY
+            else:
+                c64 >>= 1
+            end
+            k++
+        end
+        t64[i] = c64
+        i++
+    end
+    mut d := _lz_new(0 as i64)
+    _lz_alloc(d, _LZ_MAXLCP)
+    ret _Xz { t32 = t32, t64 = t64, d = d, maxout = maxout }
+end
+
+func _xz_free(x &: _Xz):
+    mem.Free(x.t32 as void*)
+    mem.Free(x.t64 as void*)
+    _lz_free(x.d)
+end
+
+func _xz_crc32(x: _Xz, p: u8*, start: int, n: int): u32:
+    mut crc := 0xFFFFFFFF as u32
+    mut i := start
+    stop := start + n
+    until i < stop:
+        crc = x.t32[((crc ^ (p[i] as u32)) & (255 as u32)) as int] ^ (crc >> 8)
+        i++
+    end
+    ret crc ^ (0xFFFFFFFF as u32)
+end
+
+func _xz_crc64(x: _Xz, p: u8*, start: int, n: int): u64:
+    mut crc := 0xFFFFFFFFFFFFFFFF as u64
+    mut i := start
+    stop := start + n
+    until i < stop:
+        crc = x.t64[((crc ^ (p[i] as u64)) & (255 as u64)) as int] ^ (crc >> 8)
+        i++
+    end
+    ret crc ^ (0xFFFFFFFFFFFFFFFF as u64)
+end
+
+func _xz_le32(p: u8*, off: int): i64:
+    ret (p[off] as i64) | ((p[off + 1] as i64) << 8) | ((p[off + 2] as i64) << 16) | ((p[off + 3] as i64) << 24)
+end
+
+func _xz_le64(p: u8*, off: int): u64:
+    mut v := 0 as u64
+    mut i := 7
+    until i >= 0:
+        v = (v << 8) | (p[off + i] as u64)
+        i--
+    end
+    ret v
+end
+
+func _xz_vli(p: u8*, pos &: int, lim: int): i64:
+    mut v := 0 as i64
+    mut i := 0
+    until i < 9:
+        if pos >= lim:
+            ret -1
+        end
+        b := p[pos] as int
+        pos++
+        v |= (((b & 127) as i64) << (7 * i))
+        if (b & 128) == 0:
+            if b == 0 and i > 0:
+                ret -1
+            end
+            ret v
+        end
+        i++
+    end
+    ret -1
+end
+
+func _xz_check_size(id: int): int:
+    if id == 0:
+        ret 0
+    end
+    if id == 1:
+        ret 4
+    end
+    if id == 4:
+        ret 8
+    end
+    if id == 10:
+        ret 32
+    end
+    ret -1
+end
+
+func _xz_zeros(p: u8*, start: int, n: int): bool:
+    mut i := 0
+    until i < n:
+        if (p[start + i] as int) != 0:
+            ret false
+        end
+        i++
+    end
+    ret true
+end
+
+func _xz_verify(x: _Xz, check: int, p: u8*, cpos: int, data: u8*, dstart: int, dlen: int): bool:
+    if check == 1:
+        ret (_xz_crc32(x, data, dstart, dlen) as i64) == _xz_le32(p, cpos)
+    end
+    if check == 4:
+        ret _xz_crc64(x, data, dstart, dlen) == _xz_le64(p, cpos)
+    end
+    if check == 10:
+        dg := mem.Allocate(32 as u64) as u8*
+        hp := ((data as i64) + (dstart as i64)) as void*
+        crypto.Sha256Bytes(hp, dlen, dg as void*)
+        mut same := true
+        mut i := 0
+        until i < 32:
+            if dg[i] != p[cpos + i]:
+                same = false
+            end
+            i++
+        end
+        mem.Free(dg as void*)
+        ret same
+    end
+    ret true
+end
+
+func _xz_block(x &: _Xz, p: void*, n: int, pos &: int, out &: ByteBuf, check: int, unp &: i64, usz &: i64): bool:
+    bp := p as u8*
+    start := pos
+    hsize := ((bp[start] as int) + 1) * 4
+    if start + hsize > n or hsize < 8:
+        ret false
+    end
+    if (_xz_crc32(x, bp, start, hsize - 4) as i64) != _xz_le32(bp, start + hsize - 4):
+        ret false
+    end
+    hflags := bp[start + 1] as int
+    if (hflags & 60) != 0:
+        ret false
+    end
+    nf := (hflags & 3) + 1
+    hend := start + hsize - 4
+    mut hp := start + 2
+    mut want_c := -1 as i64
+    mut want_u := -1 as i64
+    if (hflags & 64) != 0:
+        want_c = _xz_vli(bp, hp, hend)
+        if want_c <= (0 as i64):
+            ret false
+        end
+    end
+    if (hflags & 128) != 0:
+        want_u = _xz_vli(bp, hp, hend)
+        if want_u < (0 as i64):
+            ret false
+        end
+    end
+    mut fid: int[4]
+    mut fprop: int[4]
+    mut dict_prop := 0
+    mut f := 0
+    until f < nf:
+        id := _xz_vli(bp, hp, hend)
+        psz := _xz_vli(bp, hp, hend)
+        if id < (0 as i64) or psz < (0 as i64) or hp + (psz as int) > hend:
+            ret false
+        end
+        fid[f] = id as int
+        fprop[f] = 0
+        last := f == nf - 1
+        if last:
+            if id != (33 as i64) or psz != (1 as i64):
+                ret false
+            end
+            dict_prop = bp[hp] as int
+        else id == (3 as i64):
+            if psz != (1 as i64):
+                ret false
+            end
+            fprop[f] = (bp[hp] as int) + 1
+        else id >= (4 as i64) and id <= (10 as i64):
+            if psz == (4 as i64):
+                fprop[f] = _xz_le32(bp, hp) as int
+            else psz != (0 as i64):
+                ret false
+            end
+        else:
+            ret false
+        end
+        hp += psz as int
+        f++
+    end
+    if not _xz_zeros(bp, hp, hend - hp):
+        ret false
+    end
+    dsize := _lzma2_dict_size(dict_prop)
+    if dsize < (0 as i64) or dsize > (LzmaMaxDictSize as i64):
+        ret false
+    end
+    x.d.dsize = dsize
+    dpos := start + hsize
+    out_start := out.len
+    dp := ((p as i64) + (dpos as i64)) as void*
+    used := _lzma2_chunks(x.d, dp, n - dpos, out, x.maxout)
+    if used < 0:
+        ret false
+    end
+    if want_c >= (0 as i64) and want_c != (used as i64):
+        ret false
+    end
+    ulen := out.len - out_start
+    if want_u >= (0 as i64) and want_u != (ulen as i64):
+        ret false
+    end
+    pad := (4 - (used & 3)) & 3
+    cpos := dpos + used + pad
+    csz := _xz_check_size(check)
+    if cpos + csz > n or not _xz_zeros(bp, dpos + used, pad):
+        ret false
+    end
+    obuf := out.data as u8*
+    mut g := nf - 2
+    until g >= 0:
+        base := ((out.data as i64) + (out_start as i64)) as void*
+        if fid[g] == 3:
+            DeltaDecode(base, ulen, fprop[g])
+        else:
+            BcjDecode(fid[g], base, ulen, fprop[g])
+        end
+        g--
+    end
+    if not _xz_verify(x, check, bp, cpos, obuf, out_start, ulen):
+        ret false
+    end
+    pos = cpos + csz
+    unp = (hsize + used + csz) as i64
+    usz = ulen as i64
+    ret true
+end
+
+func _xz_stream(x &: _Xz, p: void*, n: int, pos &: int, out &: ByteBuf): bool:
+    bp := p as u8*
+    s0 := pos
+    if n - s0 < 12:
+        ret false
+    end
+    magic := [253, 55, 122, 88, 90, 0]
+    mut m := 0
+    until m < 6:
+        if (bp[s0 + m] as int) != magic[m]:
+            ret false
+        end
+        m++
+    end
+    if (bp[s0 + 6] as int) != 0 or ((bp[s0 + 7] as int) & 240) != 0:
+        ret false
+    end
+    if (_xz_crc32(x, bp, s0 + 6, 2) as i64) != _xz_le32(bp, s0 + 8):
+        ret false
+    end
+    check := (bp[s0 + 7] as int) & 15
+    if _xz_check_size(check) < 0:
+        ret false
+    end
+    pos = s0 + 12
+    mut recs_u := Vector {} as Vector<i64>
+    mut recs_s := Vector {} as Vector<i64>
+    mut good := false
+    until true:
+        if pos >= n:
+            break
+        end
+        if (bp[pos] as int) == 0:
+            ipos := pos
+            pos++
+            cnt := _xz_vli(bp, pos, n)
+            if cnt != (recs_u.len() as i64):
+                break
+            end
+            mut r := 0
+            mut match_all := true
+            until r < recs_u.len():
+                a := _xz_vli(bp, pos, n)
+                b := _xz_vli(bp, pos, n)
+                if a != recs_u.get(r) or b != recs_s.get(r):
+                    match_all = false
+                    break
+                end
+                r++
+            end
+            if not match_all:
+                break
+            end
+            ipad := (4 - ((pos - ipos) & 3)) & 3
+            if pos + ipad + 4 + 12 > n or not _xz_zeros(bp, pos, ipad):
+                break
+            end
+            pos += ipad
+            if (_xz_crc32(x, bp, ipos, pos - ipos) as i64) != _xz_le32(bp, pos):
+                break
+            end
+            pos += 4
+            isize := pos - ipos
+            if (_xz_crc32(x, bp, pos + 4, 6) as i64) != _xz_le32(bp, pos):
+                break
+            end
+            if (_xz_le32(bp, pos + 4) + 1) * 4 != (isize as i64):
+                break
+            end
+            if (bp[pos + 8] as int) != 0 or (bp[pos + 9] as int) != (bp[s0 + 7] as int):
+                break
+            end
+            if (bp[pos + 10] as int) != 89 or (bp[pos + 11] as int) != 90:
+                break
+            end
+            pos += 12
+            good = true
+            break
+        end
+        mut unp := 0 as i64
+        mut usz := 0 as i64
+        if not _xz_block(x, p, n, pos, out, check, unp, usz):
+            break
+        end
+        recs_u.push(unp)
+        recs_s.push(usz)
+    end
+    recs_u.free()
+    recs_s.free()
+    ret good
+end
+
+@en "XzDecompress"
+@fa "کدگشایی ایکس زد"
+pub func XzDecompress(p: void*, n: int, ok &: bool): ByteBuf:
+    ret XzDecompressMax(p, n, 0, ok)
+end
+
+@en "XzDecompressMax"
+@fa "کدگشایی ایکس زد با سقف"
+pub func XzDecompressMax(p: void*, n: int, max: int, ok &: bool): ByteBuf:
+    ok = false
+    mut out := NewByteBuf()
+    if n < 12 or max < 0:
+        ret out
+    end
+    bp := p as u8*
+    mut x := _xz_new(_lz_cap(max, 0))
+    mut pos := 0
+    mut good := true
+    until pos < n:
+        if not _xz_stream(x, p, n, pos, out):
+            good = false
+            break
+        end
+        mut z := pos
+        until z + 4 <= n and _xz_zeros(bp, z, 4):
+            z += 4
+        end
+        if z < n and z + 4 > n:
+            good = false
+            break
+        end
+        pos = z
+    end
+    _xz_free(x)
+    if not good:
+        BufFree(out)
+        ret NewByteBuf()
+    end
+    ok = true
+    ret out
+end
+
+@en "XzDecompressBuf"
+@fa "کدگشایی ایکس زد بافر"
+pub func XzDecompressBuf(b: ByteBuf, ok &: bool): ByteBuf:
+    ret XzDecompress(b.data, b.len, ok)
+end

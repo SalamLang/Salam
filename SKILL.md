@@ -1567,7 +1567,8 @@ end
 - **`compress`**: `ByteBuf` (`NewByteBuf BufPush BufGet BufLen BufFree BufFromStr BufToBase64`), `Compress/Decompress(method)` over `Method*`,
   `DeflateCompress GzipCompress GzipDecompress Bzip2Compress Bzip2CompressLevel Bzip2Decompress Bzip2DecompressMax CRC32 Adler32`. Gzip decoding
   verifies the CRC-32 and length and bzip2 decoding every block and stream CRC (`ok` is false on mismatch; `*Max` caps the output size); the method is not stored in the output; free every buffer.
-- **`archive`**: `ZipCreate ZipCreateFile ZipList ZipExtractAll ZipExtractByName ZipExtractVerified ZipVerify ZipCreate64 TarCreate TarList TarExtractAll TarGzCreate TarGzList TarGzExtractAll MakeTarSymlink RarCreate RarCreateFile RarList RarExtract RarExtractByName RarExtractAll RarStatusText GzipCompressFile Bzip2CompressFile Bzip2DecompressFile ReadBinaryFile WriteBinaryFile`. Zip64 is read and
+  `XzDecompress(p, n, ok)` and `LzmaDecompress` read `.xz` (LZMA2, BCJ and delta filters, CRC-32/CRC-64/SHA-256 verified) and `.lzma`; decode only, `...Max` variants cap the output, dictionaries over 1 GiB are refused.
+- **`archive`**: `ZipCreate ZipCreateFile ZipList ZipExtractAll ZipExtractByName ZipExtractVerified ZipVerify ZipCreate64 TarCreate TarList TarExtractAll TarGzCreate TarGzList TarGzExtractAll MakeTarSymlink RarCreate RarCreateFile RarList RarExtract RarExtractByName RarExtractAll RarStatusText GzipCompressFile XzDecompressFile LzmaDecompressFile Bzip2CompressFile Bzip2DecompressFile ReadBinaryFile WriteBinaryFile`. Zip64 is read and
   written but sizes are `int` (under 2 GB; bigger entries report `ZIP_TOO_BIG`),
   ZIP methods 0 and 8 only, `ZipExtractByName` does not check the CRC while
   `ZipExtractVerified(p, n, name, max, status)`, `ZipVerify` and `ZipExtractAll` do,

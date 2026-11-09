@@ -185,6 +185,7 @@ pub fn run() {
             commands::agent_stop,
             commands::agent_pending,
             commands::agent_project_context,
+            commands::agent_path_status,
             commands::agent_alive,
             commands::agent_notify,
             commands::agent_notify_prefs,

@@ -1,0 +1,446 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import os
+import io
+import str
+import sort
+import filepath
+
+const BASELINE := "tools/salam/std-naming-baseline.txt"
+
+struct Item:
+    pub pkg: str = ""
+    pub key: str = ""
+    pub kind: str = ""
+    pub name: str = ""
+    pub style: str = ""
+end
+
+func lines_of(text: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    parts := str.Split(text, "\n")
+    defer parts.free()
+    each p in parts:
+        out.push(str.TrimSuffix(p, "\r"))
+    end
+    ret out
+end
+
+func protocol(name: str): bool:
+    each n in ["free", "next", "has_next", "iter", "key", "value", "copy", "deep_copy", "to_str", "to_json", "from_json", "hash", "main"]:
+        if name == n:
+            ret true
+        end
+    end
+    ret str.StartsWith(name, "operator_")
+end
+
+func is_upper(c: str): bool:
+    ret c >= "A" and c <= "Z"
+end
+
+func is_lower(c: str): bool:
+    ret c >= "a" and c <= "z"
+end
+
+func is_digit(c: str): bool:
+    ret c >= "0" and c <= "9"
+end
+
+func style_of(name: str): str:
+    if name.len() == 0:
+        ret "other"
+    end
+    mut upper := 0
+    mut lower := 0
+    mut under := 0
+    repeat name.len() in i:
+        c := name.substr(i, 1)
+        if is_upper(c):
+            upper++
+        else is_lower(c):
+            lower++
+        else c == "_":
+            under++
+        else not is_digit(c):
+            ret "other"
+        end
+    end
+    first := name.substr(0, 1)
+    if lower == 0 and upper > 0 and under > 0:
+        ret "upper"
+    end
+    if lower == 0 and upper > 1:
+        ret "acronym"
+    end
+    if upper == 0 and is_lower(first):
+        if under > 0:
+            ret "snake"
+        end
+        ret "word"
+    end
+    if is_upper(first) and under == 0:
+        ret "pascal"
+    end
+    ret "mixed"
+end
+
+func func_ok(name: str): bool:
+    if protocol(name):
+        ret true
+    end
+    s := style_of(name)
+    ret s == "pascal" or s == "acronym"
+end
+
+func value_ok(name: str): bool:
+    s := style_of(name)
+    ret s == "snake" or s == "word"
+end
+
+func ident_end(s: str, from: int): int:
+    mut i := from
+    until i < s.len():
+        c := s.substr(i, 1)
+        if c == "(" or c == "<" or c == ":" or c == "=" or c == " ":
+            break
+        end
+        i++
+    end
+    ret i
+end
+
+func strip_mods(s: str): str:
+    mut rest := s
+    mut again := true
+    until again:
+        again = false
+        each m in ["pub ", "inline ", "noinline ", "pure ", "noret ", "deprecated ", "mut ", "static "]:
+            if str.StartsWith(rest, m):
+                rest = rest.substr(m.len(), rest.len() - m.len())
+                again = true
+            end
+        end
+    end
+    ret rest
+end
+
+func word_after(rest: str, kw: str): str:
+    body := str.TrimLeft(rest.substr(kw.len(), rest.len() - kw.len()))
+    ret body.substr(0, ident_end(body, 0))
+end
+
+func add(items &: Vector<Item>, pkg: str, key: str, kind: str, name: str):
+    if name.len() == 0 or str.StartsWith(name, "_"):
+        ret
+    end
+    first := name.substr(0, 1)
+    if not is_upper(first) and not is_lower(first):
+        ret
+    end
+    items.push(Item { pkg = pkg, key = key, kind = kind, name = name, style = style_of(name) })
+end
+
+func parse_file(path: str, pkg: str, items &: Vector<Item>):
+    lines := lines_of(io.ReadFile(path))
+    defer lines.free()
+    mut owner := ""
+    mut owner_enum := false
+    mut owner_iface := false
+    mut in_extern := false
+    each line in lines:
+        t := str.Trim(line)
+        top := not (str.StartsWith(line, " ") or str.StartsWith(line, "\t"))
+        if top and (str.StartsWith(line, "extern:") or str.StartsWith(line, "extern ")):
+            in_extern = true
+            continue
+        end
+        if top and line == "end":
+            owner = ""
+            owner_enum = false
+            owner_iface = false
+            in_extern = false
+            continue
+        end
+        if in_extern or t == "" or str.StartsWith(t, "@") or str.StartsWith(t, "//"):
+            continue
+        end
+        ispub := str.StartsWith(t, "pub ")
+        rest := strip_mods(t)
+        if top and (str.StartsWith(rest, "struct ") or str.StartsWith(rest, "enum ") or str.StartsWith(rest, "interface ")):
+            mut kw := "struct "
+            if str.StartsWith(rest, "enum "):
+                kw = "enum "
+            else str.StartsWith(rest, "interface "):
+                kw = "interface "
+            end
+            n := word_after(rest, kw)
+            owner = ""
+            owner_enum = false
+            owner_iface = false
+            if ispub:
+                add(items, pkg, n, "type", n)
+                owner = n
+                owner_enum = kw == "enum "
+                owner_iface = kw == "interface "
+            end
+            continue
+        end
+        if owner != "" and not top and owner_enum and not str.StartsWith(t, "end"):
+            add(items, pkg, owner + "." + t.substr(0, ident_end(t, 0)), "member", t.substr(0, ident_end(t, 0)))
+            continue
+        end
+        if owner != "" and not top and owner_iface and str.StartsWith(rest, "func "):
+            n := word_after(rest, "func ")
+            add(items, pkg, owner + "." + n, "method", n)
+            continue
+        end
+        if not ispub or str.StartsWith(rest, "use "):
+            continue
+        end
+        if top:
+            if str.StartsWith(rest, "func "):
+                n := word_after(rest, "func ")
+                add(items, pkg, n, "func", n)
+            else str.StartsWith(rest, "type "):
+                n := word_after(rest, "type ")
+                add(items, pkg, n, "type", n)
+            else str.StartsWith(rest, "const "):
+                n := word_after(rest, "const ")
+                add(items, pkg, n, "const", n)
+            else:
+                n := rest.substr(0, ident_end(rest, 0))
+                add(items, pkg, n, "var", n)
+            end
+        else owner != "" and not owner_enum and not owner_iface:
+            if str.StartsWith(rest, "func "):
+                n := word_after(rest, "func ")
+                add(items, pkg, owner + "." + n, "method", n)
+            else str.StartsWith(rest, "const "):
+                n := word_after(rest, "const ")
+                add(items, pkg, owner + "." + n, "const", n)
+            else:
+                n := rest.substr(0, ident_end(rest, 0))
+                add(items, pkg, owner + "." + n, "field", n)
+            end
+        end
+    end
+end
+
+func violation(it: Item): str:
+    if it.kind == "func" or it.kind == "method":
+        if func_ok(it.name):
+            ret ""
+        end
+        ret it.kind + "-" + it.style
+    end
+    if it.kind == "const" or it.kind == "var" or it.kind == "field":
+        if value_ok(it.name):
+            ret ""
+        end
+        ret it.kind + "-" + it.style
+    end
+    ret ""
+end
+
+func collect(root: str, only: HashMap<str, bool>, items &: Vector<Item>): int:
+    base := root + "/std"
+    files := os.Walk(base)
+    defer files.free()
+    sort.Sort(files)
+    mut seen := HashMap {} as HashMap<str, bool>
+    defer seen.free()
+    each path in files:
+        if not str.EndsWith(path, ".salam"):
+            continue
+        end
+        folder := filepath.Dir(path)
+        if folder.len() <= base.len():
+            continue
+        end
+        rel := folder.substr(base.len() + 1, folder.len() - base.len() - 1)
+        if only.size() > 0 and not only.has(rel):
+            continue
+        end
+        seen.put(rel, true)
+        parse_file(path, rel, items)
+    end
+    ret seen.size()
+end
+
+func sorted_keys(m: HashMap<str, bool>): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    each k, _ in m:
+        out.push(k)
+    end
+    sort.Sort(out)
+    ret out
+end
+
+func read_baseline(root: str): HashMap<str, bool>:
+    mut out := HashMap {} as HashMap<str, bool>
+    path := root + "/" + BASELINE
+    if not os.Exists(path):
+        ret out
+    end
+    each line in lines_of(io.ReadFile(path)):
+        t := str.Trim(line)
+        if t != "":
+            out.put(t, true)
+        end
+    end
+    ret out
+end
+
+func bump(m &: HashMap<str, int>, k: str):
+    m.put(k, m.get(k) + 1)
+end
+
+func show_sorted(m: HashMap<str, int>):
+    mut names := Vector {} as Vector<str>
+    each k, _ in m:
+        names.push(k)
+    end
+    sort.Sort(names)
+    each n in names:
+        println str.FromInt(m.get(n) as i64) + "\t" + n
+    end
+end
+
+func show_counts(items: Vector<Item>):
+    mut styles := HashMap {} as HashMap<str, int>
+    mut bad := HashMap {} as HashMap<str, int>
+    mut perpkg := HashMap {} as HashMap<str, int>
+    each it in items:
+        bump(styles, it.kind + " " + it.style)
+        v := violation(it)
+        if v != "":
+            bump(bad, v)
+            bump(perpkg, it.pkg)
+        end
+    end
+    println "--- public declarations by kind and style"
+    show_sorted(styles)
+    println "--- violations by class"
+    show_sorted(bad)
+    println "--- violations by package"
+    show_sorted(perpkg)
+end
+
+func fold(name: str): str:
+    mut out := ""
+    repeat name.len() in i:
+        c := name.substr(i, 1)
+        if c != "_":
+            out += str.Lower(c)
+        end
+    end
+    ret out
+end
+
+func show_collisions(items: Vector<Item>):
+    mut seen := HashMap {} as HashMap<str, str>
+    mut hits := 0
+    each it in items:
+        if it.kind == "type" or it.kind == "member":
+            continue
+        end
+        dot := str.IndexOf(it.key, ".")
+        mut scope := it.pkg + "|"
+        if dot >= 0:
+            scope = scope + it.key.substr(0, dot) + "."
+        end
+        k := scope + fold(it.name)
+        if seen.has(k) and seen.get(k) != it.key:
+            println k + "  " + seen.get(k) + "  " + it.key
+            hits++
+        else:
+            seen.put(k, it.key)
+        end
+    end
+    println "folded-name collisions:", hits
+end
+
+func usage(): int:
+    printerrln "usage: check-naming.salam [check | counts | collisions | list [package...] | update]"
+    ret 2
+end
+
+func main:
+    mut root := os.Cwd()
+    if not os.IsDir(root + "/std") and os.IsDir(root + "/../std"):
+        root = filepath.Clean(root + "/..")
+    end
+    args := os.Args()
+    defer args.free()
+    mut mode := "check"
+    if args.len() > 1:
+        mode = args.get(1)
+    end
+    mut only := HashMap {} as HashMap<str, bool>
+    if mode == "list":
+        repeat args.len() - 2 in i:
+            only.put(args.get(i + 2), true)
+        end
+    else mode != "check" and mode != "counts" and mode != "collisions" and mode != "update":
+        ret usage()
+    end
+    mut items := Vector {} as Vector<Item>
+    pkgs := collect(root, only, items)
+    mut found := HashMap {} as HashMap<str, bool>
+    each it in items:
+        v := violation(it)
+        if v != "":
+            found.put(v + "|" + it.pkg + "|" + it.key, true)
+        end
+    end
+    if mode == "collisions":
+        show_collisions(items)
+        ret 0
+    end
+    if mode == "counts":
+        show_counts(items)
+        ret 0
+    end
+    if mode == "list":
+        each g in sorted_keys(found):
+            println g
+        end
+        ret 0
+    end
+    if mode == "update":
+        io.WriteFile(root + "/" + BASELINE, str.Join(sorted_keys(found), "\n") + "\n")
+        println "baseline now has", found.size(), "lines"
+        ret 0
+    end
+    known := read_baseline(root)
+    mut fresh := 0
+    mut stale := 0
+    each g in sorted_keys(found):
+        if not known.has(g):
+            fresh++
+            printerrln "naming: new violation " + g
+        end
+    end
+    each g in sorted_keys(known):
+        if not found.has(g):
+            stale++
+        end
+    end
+    println "naming: " + str.FromInt(pkgs as i64) + " packages, " + str.FromInt(items.len() as i64) + " public declarations, " + str.FromInt(found.size() as i64) + " violations, " + str.FromInt(fresh as i64) + " new, " + str.FromInt(stale as i64) + " fixed since the baseline"
+    if fresh > 0 and args.len() > 2 and args.get(2) == "--strict":
+        ret 1
+    end
+end

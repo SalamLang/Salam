@@ -7,7 +7,7 @@ root=$(cd "$(dirname "$0")/../.." && pwd)
 mkdir -p "$out"
 cd "$out"
 ulimit -v 4000000
-"$salam" build "$root/examples/vpn/vpn.salam" --output="$out/vpn" >/dev/null
+"$salam" build "$root/examples/vpn/vpn_cli.salam" --output="$out/vpn" >/dev/null
 for f in "$root"/tools/interop/*.salam; do
     [ -e "$f" ] || continue
     n=$(basename "$f" .salam)

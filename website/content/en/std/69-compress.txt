@@ -54,13 +54,17 @@ pkg.intro <<
 {{example.compress-guide-xz}}
 <h3 id="guide-xz-write">Write .xz and .lzma files</h3>
 <p><code>XzCompressStr</code>, <code>XzCompress</code> and <code>XzCompressBuf</code> write a standard <code>.xz</code> file that <code>xz</code>, <code>unxz</code>, <code>tar -J</code> and 7-Zip open: one LZMA2 block, a CRC-64 check, and an index. <code>XzCompressLevel</code> takes a level from 0 (fastest, 256 KiB window) to 9 (64 MiB window, longest search), and <code>XzCompressCheck</code> also picks the check: <code>XzCheckNone</code>, <code>XzCheckCrc32</code>, <code>XzCheckCrc64</code> or <code>XzCheckSha256</code>. Data that does not shrink is stored in uncompressed chunks, so the result is only the container overhead over the input. <code>LzmaCompressStr</code>, <code>LzmaCompress</code>, <code>LzmaCompressBuf</code> and <code>LzmaCompressLevel</code> write the older <code>.lzma</code> format, which has no check; <code>archive.XzCompressFile</code> and <code>archive.LzmaCompressFile</code> do it for a file.</p>
-{{example.compress-XzWrite}}
+{{example.compress-guide-xz-write}}
 <p>Inside 7z archives and xz blocks the compressed data comes without a container. <code>LzmaRawDecompress</code> and <code>Lzma2RawDecompress</code> read that form when you know the properties and the unpacked size, and <code>BcjDecode</code> and <code>DeltaDecode</code> undo the filters that sit in front of it. Dictionaries above 1 GiB (<code>LzmaMaxDictSize</code>) are refused.</p>
 
 <h2 id="guide-zstd">Read and write .zst files</h2>
 <p><code>ZstdDecompress</code> opens the <code>.zst</code> files that <code>zstd</code>, <code>tar --zstd</code> and <code>7z a -tzstd</code> write: one frame or several in a row, any compression level, with or without a checksum, and frames written with long-distance matching or many threads. The decoder checks as it reads. A bad table, an offset that points before the data, a size that does not add up or a wrong XXH64 checksum gives <code>ok</code> false and an empty result; <code>ZstdDecompressEx</code> also says which of these it was, through the <code>ZstdErr...</code> codes. The whole result is kept in memory, so on data you did not make yourself call <code>ZstdDecompressMax</code> with the biggest size you accept.</p>
 {{example.compress-guide-zstd}}
 <p><code>ZstdCompressLevel</code> writes a standard frame at a level from 1 to 22 (0 stores the data as it is), with the content size and a checksum in the header. The writer is deliberately simple: it finds repeats with a greedy or lazy search over a hash chain and codes them with the predefined tables, so the result is usually a quarter to a half larger than the <code>zstd</code> tool's at the same level. Every reader accepts it. Dictionaries are supported for reading only (<code>ZstdDecompressDict</code>); the writer does not use one.</p>
+<h2 id="guide-stream">Unpack a big file without holding it in memory</h2>
+<p>Everything above works on a whole buffer. For a file that may not fit in memory, <code>NewFileBitReader</code> reads a part of a file in pieces of 64 KiB and <code>RawInflateToSink</code> writes the unpacked data into a <code>FileSink</code>, which counts the bytes, keeps a CRC-32 and stops at a cap you choose. The archive package uses exactly these calls to unpack zip, gzip and RAR entries to disk. <code>FileSeek</code>, <code>FileSize</code> and <code>FileReadAt</code> use 64 bit offsets, and <code>CRC32Update</code> lets you checksum data that arrives in parts.</p>
+{{example.compress-guide-stream}}
+<p>A sink that reaches its cap sets <code>over</code> and refuses the rest, so a small hostile file cannot fill the disk. Check the result of <code>SinkClose</code> too: a full disk shows up there as a failed write.</p>
 <h2 id="guide-which">Which function for which job</h2>
 <div class="table-wrap"><table>
 <thead><tr><th>Job</th><th>Use</th></tr></thead>
@@ -384,7 +388,7 @@ ex.BitFlush = compress-Bits
 ex.BitWriterLen = compress-Bits
 ex.BitWriterFree = compress-Bits
 ex.NewBitReader = compress-Bits
-ex.BitReaderFromBuf = compress-Bits
+ex.BitReaderFromBuf = compress-Fields
 ex.BitReadBit = compress-Bits
 ex.BitReadBits = compress-Bits
 doc.RLEDecompressMax = Like <code>RLEDecompress</code> but with a cap on the output size (0 means 1 GiB) and an <code>ok</code> flag. Damaged, truncated or oversized input gives <code>ok</code> false and an empty buffer; it never reads or writes out of bounds.
@@ -394,6 +398,36 @@ doc.LZWDecompressMax = Like <code>LZWDecompress</code> but with a cap on the out
 doc.DeflateDecompressMax = Like <code>DeflateDecompress</code> but with a cap on the output size (0 means 1 GiB) and an <code>ok</code> flag. Damaged, truncated or oversized input gives <code>ok</code> false and an empty buffer; it never reads or writes out of bounds.
 doc.BWTDecompressMax = Like <code>BWTDecompress</code> but with a cap on the output size (0 means 1 GiB) and an <code>ok</code> flag. Damaged, truncated or oversized input gives <code>ok</code> false and an empty buffer; it never reads or writes out of bounds.
 doc.DecompressMax = Like <code>Decompress</code> with a cap on the output size (0 means 1 GiB) and an <code>ok</code> flag; bad input gives <code>ok</code> false and an empty buffer.
+doc.BitReader.fp = The file a bit reader made by <code>NewFileBitReader</code> reads from; null for a reader over memory.
+doc.BitReader.left = The number of bytes of the file that are not read yet.
+doc.CRC32Update = Continues a CRC-32 over more data. Pass the value returned for the earlier part (0 for the first part); the result equals <code>CRC32</code> of all the parts joined, so a big file can be checksummed piece by piece.
+doc.FileBitReaderFree = Frees the read buffer of a bit reader made by <code>NewFileBitReader</code>. It does not close the file.
+doc.FileClose = Closes a file opened with <code>FileOpenRead</code> or <code>FileOpenWrite</code>. A null file is ignored.
+doc.FileOpenRead = Opens a file for reading bytes. Returns null when the file cannot be opened.
+doc.FileOpenWrite = Creates a file, or empties an existing one, for writing bytes. Returns null when it cannot be opened.
+doc.FileReadAt = Reads up to <code>n</code> bytes starting at byte <code>off</code> of the file into <code>dst</code> and returns how many were read; 0 when the file cannot be positioned. The offset is 64 bit, so files over 2 GB work.
+doc.FileSeek = Moves to byte <code>off</code> of the file with a 64 bit offset. True when it worked.
+doc.FileSink = A destination for unpacked data that writes to a file piece by piece, counts the bytes, keeps a running CRC-32 and can refuse more than a set number of bytes. The decoders write into it, so a big result never has to sit in memory whole.
+doc.FileSink.cap = The most bytes the sink accepts; zero means no limit.
+doc.FileSink.crc = The CRC-32 of the bytes written so far.
+doc.FileSink.failed = The file could not be created or a write to it failed.
+doc.FileSink.fp = The open file; null after <code>SinkClose</code>.
+doc.FileSink.over = A write would have passed <code>cap</code> and was refused.
+doc.FileSink.written = The number of bytes written so far.
+doc.FileSize = The size of the file in bytes, or -1 when it cannot be found. The position goes back to the start.
+doc.MethodBWT = The number 6, the same as <code>Method.BWT</code>, for <code>Compress</code> and <code>Decompress</code>.
+doc.MethodDeflate = The number 5, the same as <code>Method.Deflate</code>, for <code>Compress</code> and <code>Decompress</code>.
+doc.MethodHuffman = The number 2, the same as <code>Method.Huffman</code>, for <code>Compress</code> and <code>Decompress</code>.
+doc.MethodLZ77 = The number 3, the same as <code>Method.LZ77</code>, for <code>Compress</code> and <code>Decompress</code>.
+doc.MethodLZW = The number 4, the same as <code>Method.LZW</code>, for <code>Compress</code> and <code>Decompress</code>.
+doc.MethodNone = The number 0, the same as <code>Method.None</code>, for <code>Compress</code> and <code>Decompress</code>.
+doc.MethodRLE = The number 1, the same as <code>Method.RLE</code>, for <code>Compress</code> and <code>Decompress</code>.
+doc.NewFileBitReader = A bit reader over <code>len</code> bytes of a file, starting at byte <code>off</code>, that reads the file in pieces of 64 KiB. <code>bad</code> is true when the file cannot be positioned. Free it with <code>FileBitReaderFree</code>.
+doc.RawInflateToSink = Decompresses raw DEFLATE from a bit reader straight into a sink (Deflate64 when <code>d64</code> is true). False when the data is broken or the sink refuses it because of its cap or a failed write.
+doc.SinkClose = Closes the file of a sink. True when no write failed.
+doc.SinkCopyFrom = Copies <code>len</code> bytes from byte <code>off</code> of an open file into the sink, in pieces. False when the file is too short or the sink refuses the data.
+doc.SinkOpen = Creates a file and returns a sink for it with a cap of <code>cap</code> bytes (0 for no limit). <code>failed</code> is true when the file cannot be created.
+doc.SinkWrite = Writes <code>n</code> bytes to the sink and adds them to the count and the CRC-32. False once the sink has failed or when the bytes would pass the cap.
 ex.RLEDecompressMax = compress-Methods
 ex.HuffmanDecompressMax = compress-Methods
 ex.LZ77DecompressMax = compress-Methods
@@ -401,3 +435,49 @@ ex.LZWDecompressMax = compress-Methods
 ex.DeflateDecompressMax = compress-Methods
 ex.BWTDecompressMax = compress-Methods
 ex.DecompressMax = compress-Methods
+ex.BitReader.acc = compress-Fields
+ex.BitReader.bad = compress-Fields
+ex.BitReader.data = compress-Fields
+ex.BitReader.fp = compress-Stream
+ex.BitReader.left = compress-Stream
+ex.BitReader.len = compress-Fields
+ex.BitReader.nbits = compress-Fields
+ex.BitReader.pos = compress-Fields
+ex.BitWriter.acc = compress-Fields
+ex.BitWriter.buf = compress-Fields
+ex.BitWriter.nbits = compress-Fields
+ex.ByteBuf.cap = compress-Fields
+ex.ByteBuf.data = compress-Fields
+ex.ByteBuf.len = compress-Fields
+ex.ByteReader.bad = compress-Fields
+ex.ByteReader.data = compress-Fields
+ex.ByteReader.len = compress-Fields
+ex.ByteReader.pos = compress-Fields
+ex.CRC32Update = compress-Stream
+ex.FileBitReaderFree = compress-Stream
+ex.FileClose = compress-Stream
+ex.FileOpenRead = compress-Stream
+ex.FileOpenWrite = compress-Stream
+ex.FileReadAt = compress-Stream
+ex.FileSeek = compress-Stream
+ex.FileSink = compress-Stream
+ex.FileSink.cap = compress-Stream
+ex.FileSink.crc = compress-Stream
+ex.FileSink.failed = compress-Stream
+ex.FileSink.fp = compress-Stream
+ex.FileSink.over = compress-Stream
+ex.FileSink.written = compress-Stream
+ex.FileSize = compress-Stream
+ex.MethodBWT = compress-Fields
+ex.MethodDeflate = compress-Fields
+ex.MethodHuffman = compress-Fields
+ex.MethodLZ77 = compress-Fields
+ex.MethodLZW = compress-Fields
+ex.MethodNone = compress-Fields
+ex.MethodRLE = compress-Fields
+ex.NewFileBitReader = compress-Stream
+ex.RawInflateToSink = compress-Stream
+ex.SinkClose = compress-Stream
+ex.SinkCopyFrom = compress-Stream
+ex.SinkOpen = compress-Stream
+ex.SinkWrite = compress-Stream

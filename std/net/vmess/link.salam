@@ -1,0 +1,244 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package vmess
+
+import str
+import encoding
+import encoding.json
+import net.transport
+import net.tunnel
+
+@en "Link"
+@fa "پیوند"
+pub struct Link:
+    @en "ok"
+    @fa "معتبر"
+    pub ok: bool = false
+    @en "err"
+    @fa "خطا"
+    pub err: str = ""
+    @en "remark"
+    @fa "برچسب"
+    pub remark: str = ""
+    @en "host"
+    @fa "میزبان"
+    pub host: str = ""
+    @en "port"
+    @fa "درگاه"
+    pub port: int = 443
+    @en "uuid"
+    @fa "شناسه"
+    pub uuid: str = ""
+    @en "alter_id"
+    @fa "شناسه جایگزین"
+    pub alter_id: int = 0
+    @en "security"
+    @fa "امنیت"
+    pub security: str = "auto"
+    @en "network"
+    @fa "شبکه"
+    pub network: str = "tcp"
+    @en "header_type"
+    @fa "نوع سرآیند"
+    pub header_type: str = "none"
+    @en "host_header"
+    @fa "سربرگ میزبان"
+    pub host_header: str = ""
+    @en "path"
+    @fa "مسیر"
+    pub path: str = ""
+    @en "tls"
+    @fa "تی ال اس"
+    pub tls: bool = false
+    @en "sni"
+    @fa "نام سرور"
+    pub sni: str = ""
+    @en "alpn"
+    @fa "الپن"
+    pub alpn: str = ""
+    @en "fingerprint"
+    @fa "اثر انگشت"
+    pub fingerprint: str = ""
+    @en "allow_insecure"
+    @fa "اجازه ناامن"
+    pub allow_insecure: bool = false
+end
+
+@en "SecurityByName"
+@fa "امنیت از نام"
+pub func SecurityByName(name: str): int:
+    n := str.Lower(name)
+    if n == "aes-128-gcm" or n == "auto" or n == "":
+        ret SecAES128GCM
+    end
+    if n == "chacha20-poly1305" or n == "chacha20-ietf-poly1305":
+        ret SecChaCha20Poly1305
+    end
+    if n == "none":
+        ret SecNone
+    end
+    if n == "zero":
+        ret SecZero
+    end
+    ret 0 - 1
+end
+
+@en "SecurityName"
+@fa "نام امنیت"
+pub func SecurityName(sec: int): str:
+    if sec == SecChaCha20Poly1305:
+        ret "chacha20-poly1305"
+    end
+    if sec == SecNone:
+        ret "none"
+    end
+    if sec == SecZero:
+        ret "zero"
+    end
+    ret "aes-128-gcm"
+end
+
+@en "ParseLink"
+@fa "تجزیه پیوند"
+pub func ParseLink(link: str): Link:
+    mut l := Link {}
+    if not str.StartsWith(link, "vmess://"):
+        l.err = "not a vmess link"
+        ret l
+    end
+    mut body := str.Trim(link.substr(8, link.len() - 8))
+    mut frag := ""
+    hash := str.Find(body, "#")
+    if hash >= 0:
+        frag = tunnel.PctDecode(body.substr(hash + 1, body.len() - hash - 1))
+        body = body.substr(0, hash)
+    end
+    js := tunnel.B64Decode(body)
+    if js.len() == 0 or not json.Valid(js):
+        l.err = "bad vmess payload"
+        ret l
+    end
+    l.host = json.Get(js, "add")
+    l.port = json.Get(js, "port").to_int()
+    l.uuid = json.Get(js, "id")
+    l.alter_id = json.Get(js, "aid").to_int()
+    sc := json.Get(js, "scy")
+    if sc.len() > 0:
+        l.security = sc
+    end
+    nt := json.Get(js, "net")
+    if nt.len() > 0:
+        l.network = nt
+    end
+    ty := json.Get(js, "type")
+    if ty.len() > 0:
+        l.header_type = ty
+    end
+    l.host_header = json.Get(js, "host")
+    l.path = json.Get(js, "path")
+    l.sni = json.Get(js, "sni")
+    l.alpn = json.Get(js, "alpn")
+    l.fingerprint = json.Get(js, "fp")
+    tv := json.Get(js, "tls")
+    l.tls = tv == "tls" or tv == "true" or tv == "1"
+    ai := json.Get(js, "allowInsecure")
+    l.allow_insecure = ai == "1" or ai == "true"
+    l.remark = json.Get(js, "ps")
+    if l.remark.len() == 0:
+        l.remark = frag
+    end
+    mut parsed := transport.ParseUUID(l.uuid)
+    bad_id := parsed.bad
+    transport.FreeBytes(parsed)
+    if l.host.len() == 0 or l.port <= 0 or l.port > 65535:
+        l.err = "bad host or port"
+        ret l
+    end
+    if bad_id:
+        l.err = "bad uuid"
+        ret l
+    end
+    if SecurityByName(l.security) < 0:
+        l.err = "unsupported security " + l.security
+        ret l
+    end
+    if l.network != "tcp" and l.network != "ws" and l.network != "httpupgrade" and l.network != "grpc":
+        l.err = "unsupported transport " + l.network
+        ret l
+    end
+    l.ok = true
+    ret l
+end
+
+@en "FormatLink"
+@fa "قالب پیوند"
+pub func FormatLink(l: Link): str:
+    mut m := Vector {} as Vector<str>
+    defer m.free()
+    m.push(json.Member("v", "2"))
+    m.push(json.Member("ps", l.remark))
+    m.push(json.Member("add", l.host))
+    m.push(json.Member("port", str.FromInt(l.port as i64)))
+    m.push(json.Member("id", l.uuid))
+    m.push(json.Member("aid", str.FromInt(l.alter_id as i64)))
+    m.push(json.Member("scy", l.security))
+    m.push(json.Member("net", l.network))
+    m.push(json.Member("type", l.header_type))
+    m.push(json.Member("host", l.host_header))
+    m.push(json.Member("path", l.path))
+    mut tv := ""
+    if l.tls:
+        tv = "tls"
+    end
+    m.push(json.Member("tls", tv))
+    m.push(json.Member("sni", l.sni))
+    m.push(json.Member("alpn", l.alpn))
+    m.push(json.Member("fp", l.fingerprint))
+    if l.allow_insecure:
+        m.push(json.Member("allowInsecure", "1"))
+    end
+    ret "vmess://" + encoding.Base64Encode(json.Object(m))
+end
+
+@en "LinkSettings"
+@fa "تنظیمات پیوند"
+pub func LinkSettings(l: Link): transport.Settings:
+    mut s := transport.Settings {}
+    s.network = l.network
+    s.tls = l.tls
+    s.sni = l.sni
+    s.alpn = l.alpn
+    s.fingerprint = l.fingerprint
+    s.allow_insecure = l.allow_insecure
+    s.host = l.host_header
+    if l.network == "grpc":
+        s.service_name = l.path
+    else l.path.len() > 0:
+        s.path = l.path
+        qi := str.Find(l.path, "?ed=")
+        if qi >= 0:
+            s.path = l.path.substr(0, qi)
+            s.early_data = l.path.substr(qi + 4, l.path.len() - qi - 4).to_int()
+        end
+    end
+    ret s
+end
+
+@en "DialLink"
+@fa "شماره گیری پیوند"
+pub func DialLink(l: Link, command: int, target: transport.Addr): Conn:
+    sec := SecurityByName(l.security)
+    ret Dial(l.host, l.port, LinkSettings(l), l.uuid, sec, command, target)
+end

@@ -19,6 +19,7 @@ package vless
 import mem
 import str
 import net.transport
+import net.reality
 
 @en "CmdTCP"
 @fa "فرمان تی سی پی"
@@ -114,6 +115,15 @@ pub struct Link:
     @en "allow_insecure"
     @fa "اجازه ناامن"
     pub allow_insecure: bool = false
+    @en "reality"
+    @fa "ریلیتی"
+    pub reality: reality.Settings = reality.Settings {}
+    @en "service_name"
+    @fa "نام سرویس"
+    pub service_name: str = ""
+    @en "grpc_mode"
+    @fa "حالت جی آر پی سی"
+    pub grpc_mode: str = "gun"
 end
 
 @en "Conn"
@@ -137,8 +147,18 @@ pub struct Conn:
     @en "user"
     @fa "کاربر"
     pub user: str = ""
+    @en "resp_pending"
+    @fa "پاسخ معلق"
     pub resp_pending: bool = false
+    @en "closed"
+    @fa "بسته شده"
     pub closed: bool = false
+    @en "vis_on"
+    @fa "ویژن روشن"
+    pub vis_on: bool = false
+    @en "vis"
+    @fa "ویژن"
+    pub vis: Vision = Vision {}
 end
 
 func _hexval(c: int): int:
@@ -396,6 +416,10 @@ pub func Client(t: transport.Conn, uuid: str, flow: str, command: int, addr: tra
     end
     transport.FreeBytes(hdr)
     c.resp_pending = true
+    if flow == FlowVision and command == CmdTCP:
+        c.vis = NewVision(r.uuid)
+        c.vis_on = true
+    end
     c.ok = true
     ret c
 end
@@ -443,6 +467,10 @@ pub func Accept(t: transport.Conn, users: Vector<User>): Conn:
     end
     c.req = r
     c.user = u.id
+    if r.flow == FlowVision and r.command == CmdTCP:
+        c.vis = NewVision(r.uuid)
+        c.vis_on = true
+    end
     mut resp := transport.NewBytes(2)
     transport.Put8(resp, 0)
     transport.Put8(resp, 0)
@@ -465,6 +493,9 @@ pub func Read(c &: Conn, buf: void*, max: int): int:
     if c.resp_pending and not _read_response(c):
         ret 0 - 1
     end
+    if c.vis_on:
+        ret VisionRead(c.t, c.vis, buf, max)
+    end
     ret transport.Read(c.t, buf, max)
 end
 
@@ -473,6 +504,9 @@ end
 pub func Write(c &: Conn, p: void*, n: int): bool:
     if not c.ok:
         ret false
+    end
+    if c.vis_on:
+        ret VisionWrite(c.t, c.vis, p, n)
     end
     ret transport.Write(c.t, p, n)
 end
@@ -525,6 +559,9 @@ pub func Close(c &: Conn):
     c.closed = true
     transport.Close(c.t)
     transport.FreeBytes(c.req.uuid)
+    if c.vis_on:
+        FreeVision(c.vis)
+    end
 end
 
 @en "ParseLink"
@@ -610,6 +647,11 @@ pub func ParseLink(link: str): Link:
     end
     l.host_header = _query_get(query, "host")
     l.path = _query_get(query, "path")
+    l.service_name = _query_get(query, "serviceName")
+    gm := _query_get(query, "mode")
+    if gm == "multi":
+        l.grpc_mode = "multi"
+    end
     mut ai := _query_get(query, "allowInsecure")
     if ai.len() == 0:
         ai = _query_get(query, "insecure")
@@ -619,11 +661,22 @@ pub func ParseLink(link: str): Link:
         l.err = "unsupported encryption " + l.encryption
         ret l
     end
-    if l.security != "none" and l.security != "tls":
+    if l.security == "reality":
+        l.reality = reality.ParseParams(query)
+        if not reality.ValidPublicKey(l.reality.public_key):
+            l.err = "bad reality public key"
+            ret l
+        end
+        if not reality.ValidShortId(l.reality.short_id):
+            l.err = "bad reality short id"
+            ret l
+        end
+    end
+    if l.security != "none" and l.security != "tls" and l.security != "reality":
         l.err = "unsupported security " + l.security
         ret l
     end
-    if l.network != "tcp" and l.network != "ws" and l.network != "httpupgrade":
+    if l.network != "tcp" and l.network != "ws" and l.network != "httpupgrade" and l.network != "grpc":
         l.err = "unsupported transport " + l.network
         ret l
     end
@@ -639,19 +692,26 @@ pub func FormatLink(l: Link): str:
         host = "[" + host + "]"
     end
     mut q := "encryption=" + _pct_encode(l.encryption)
-    if l.security != "none":
-        q += "&security=" + l.security
+    if l.security == "tls":
+        q += "&security=tls"
     end
-    if l.flow.len() > 0:
+    if l.flow.len() > 0 and l.security != "reality":
         q += "&flow=" + _pct_encode(l.flow)
     end
-    if l.sni.len() > 0:
+    if l.security == "reality":
+        mut rs := l.reality
+        if rs.server_name.len() == 0:
+            rs.server_name = l.sni
+        end
+        q += "&" + reality.FormatParams(rs)
+    end
+    if l.sni.len() > 0 and l.security != "reality":
         q += "&sni=" + _pct_encode(l.sni)
     end
     if l.alpn.len() > 0:
         q += "&alpn=" + _pct_encode(l.alpn)
     end
-    if l.fingerprint.len() > 0:
+    if l.fingerprint.len() > 0 and l.security != "reality":
         q += "&fp=" + _pct_encode(l.fingerprint)
     end
     if l.allow_insecure:
@@ -663,6 +723,12 @@ pub func FormatLink(l: Link): str:
     end
     if l.path.len() > 0:
         q += "&path=" + _pct_encode(l.path)
+    end
+    if l.service_name.len() > 0:
+        q += "&serviceName=" + _pct_encode(l.service_name)
+    end
+    if l.network == "grpc" and l.grpc_mode == "multi":
+        q += "&mode=multi"
     end
     mut out := "vless://" + l.uuid + "@" + host + ":" + str.FromInt(l.port as i64) + "?" + q
     if l.remark.len() > 0:
@@ -682,6 +748,14 @@ pub func LinkSettings(l: Link): transport.Settings:
     s.fingerprint = l.fingerprint
     s.allow_insecure = l.allow_insecure
     s.host = l.host_header
+    s.security = l.security
+    if l.security == "reality":
+        s.reality = l.reality
+        s.reality.server_name = l.sni
+        s.tls = false
+    end
+    s.service_name = l.service_name
+    s.grpc_mode = l.grpc_mode
     if l.path.len() > 0:
         s.path = l.path
         qi := str.Find(l.path, "?ed=")

@@ -235,7 +235,8 @@ $cerrs"
         produced=0
         if [ -x "$exe" ]; then
             produced=1
-            got=$(tmo "$exp_tmo" "$exe" </dev/null 2>&1 | tr -d '\r')
+            mkdir -p "$jobdir/tmp"
+            got=$(TMPDIR="$jobdir/tmp" tmo "$exp_tmo" "$exe" </dev/null 2>&1 | tr -d '\r')
         else
             html="$jobdir/a.html"
             wtry=1

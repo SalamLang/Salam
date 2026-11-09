@@ -72,7 +72,7 @@ func _shadow_bands(cv &: Canvas, o: int, sig: int): int:
     sh := cv.state.sh
     y0 := sh[o + 1]
     y1 := sh[o + 3]
-    bh := sig / 2 > 256 ? sig / 2 : 256
+    bh := sig > 256 ? sig : 256
     top_end := y0 + _maxi(sh[o + 5], sh[o + 7])
     bot_start := y1 - _maxi(sh[o + 9], sh[o + 11])
     mut slices := (y1 - y0) / bh + 4
@@ -93,55 +93,116 @@ func _shadow_bands(cv &: Canvas, o: int, sig: int): int:
     ret n
 end
 
-inline func _phi_d(d: i64, sig: int): int:
-    ret _phi((d << 16) / (sig as i64))
+inline func _phi_d(d: i64, inv: i64): int:
+    ret _phi((d * inv) >> 16)
 end
 
 func _shadow_profiles(cv &: Canvas, nb: int, sig: int, px0: int, pw: int):
     bd := cv.state.bands
-    prof := _cv_prof(cv, nb * pw + 4)
+    inv := ((1 as i64) << 32) / (sig as i64)
+    cv.state.s_inv = inv
+    prof := _cv_prof(cv, nb * (pw + 2) + 4)
+    fr := nb * pw
     repeat nb in b:
         xa := bd[b * 4 + 2] as i64
         xb := bd[b * 4 + 3] as i64
         base := b * pw
+        mut fa := px0 + pw
+        mut fb := px0
         repeat pw in i:
             xc := (((px0 + i) as i64) << 8) + (128 as i64)
-            prof[base + i] = _phi_d(xb - xc, sig) - _phi_d(xa - xc, sig)
+            v := _phi_d(xb - xc, inv) - _phi_d(xa - xc, inv)
+            prof[base + i] = v
+            if v >= 65536:
+                if px0 + i < fa:
+                    fa = px0 + i
+                end
+                fb = px0 + i + 1
+            end
         end
+        prof[fr + b * 2] = fa
+        prof[fr + b * 2 + 1] = fb
     end
 end
 
-func _shadow_shade(cv &: Canvas, y: int, a: int, b: int):
-    sig := cv.state.s_sig
+func _shadow_row(cv &: Canvas, y: int):
+    cv.state.s_lasty = y
+    bd := cv.state.bands
     tmp := cv.state.tmp
-    if cv.state.s_lasty != y:
-        cv.state.s_lasty = y
-        bd := cv.state.bands
-        yc := ((y as i64) << 8) + (128 as i64)
-        mut m := 0
-        repeat cv.state.s_n in k:
-            v := _phi_d((bd[k * 4 + 1] as i64) - yc, sig) - _phi_d((bd[k * 4] as i64) - yc, sig)
-            if v > 0:
-                tmp[m * 2] = k
-                tmp[m * 2 + 1] = v
-                m++
-            end
+    prof := cv.state.prof
+    fr := cv.state.s_n * cv.state.s_pw
+    inv := cv.state.s_inv
+    yc := ((y as i64) << 8) + (128 as i64)
+    mut m := 0
+    mut sum := 0
+    mut fa := -2147483647
+    mut fb := 2147483647
+    repeat cv.state.s_n in k:
+        v := _phi_d((bd[k * 4 + 1] as i64) - yc, inv) - _phi_d((bd[k * 4] as i64) - yc, inv)
+        if v > 0:
+            tmp[m * 2] = k
+            tmp[m * 2 + 1] = v
+            m++
+            sum += v
+            fa = _maxi(fa, prof[fr + k * 2])
+            fb = _mini(fb, prof[fr + k * 2 + 1])
         end
-        cv.state.s_act = m
     end
+    cv.state.s_act = m
+    cv.state.s_sum = sum
+    cv.state.s_fa = fa
+    cv.state.s_fb = fb
+end
+
+inline func _shadow_alpha(cv &: Canvas, acc: i64): u32:
+    mut al := (acc >> 16) as int
+    if al > 65536:
+        al = 65536
+    end
+    if al < 0:
+        al = 0
+    end
+    if cv.state.s_inset:
+        al = 65536 - al
+    end
+    f := (al * 255 + 32768) >> 16
+    c := cv.state.s_col
+    ret f >= 255 ? c : _mul8(c, f as u32)
+end
+
+func _shadow_shade(cv &: Canvas, y: int, a: int, b: int):
+    if cv.state.s_lasty != y:
+        _shadow_row(cv, y)
+    end
+    tmp := cv.state.tmp
     col := cv.state.col
     prof := cv.state.prof
     pw := cv.state.s_pw
     px0 := cv.state.s_px0
     m := cv.state.s_act
-    c := cv.state.s_col
+    fa := _maxi(cv.state.s_fa, a)
+    fb := _mini(cv.state.s_fb, b)
     inset := cv.state.s_inset
-    repeat b - a in i:
-        x := a + i
+    c := cv.state.s_col
+    mut x := a
+    until x < b:
+        if x == fa and fa < fb:
+            cc := _shadow_alpha(cv, (cv.state.s_sum as i64) << 16)
+            repeat fb - fa in i:
+                col[fa + i] = cc
+            end
+            x = fb
+            continue
+        end
         mut acc := 0 as i64
         if x >= px0 and x < px0 + pw:
-            repeat m in k:
-                acc += (tmp[k * 2 + 1] as i64) * (prof[tmp[k * 2] * pw + x - px0] as i64)
+            off := x - px0
+            if m == 1:
+                acc = (tmp[1] as i64) * (prof[tmp[0] * pw + off] as i64)
+            else:
+                repeat m in k:
+                    acc += (tmp[k * 2 + 1] as i64) * (prof[tmp[k * 2] * pw + off] as i64)
+                end
             end
         end
         mut al := (acc >> 16) as int
@@ -156,6 +217,7 @@ func _shadow_shade(cv &: Canvas, y: int, a: int, b: int):
         end
         f := (al * 255 + 32768) >> 16
         col[x] = f >= 255 ? c : _mul8(c, f as u32)
+        x++
     end
 end
 

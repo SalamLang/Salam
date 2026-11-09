@@ -18,6 +18,7 @@ import { Keys } from "./Keys";
 import { announce, announceGuest } from "./Notify";
 import { Plans } from "./Plans";
 import { Usage } from "./Usage";
+import { Select } from "./Select";
 import { IconArrowLeft, IconBook, IconBug, IconCode, IconFolder, IconGlobe, IconMenu, IconMoon, IconPlus, IconSearch, IconShare, IconSun, IconSwap, IconTerminal } from "./icons";
 import { MessageView } from "./Messages";
 import { Sidebar } from "./Sidebar";
@@ -991,15 +992,18 @@ export function App() {
           )}
           <h1 dir="auto">{uiText(title)}</h1>
           {route === "chat" && activeId && (
-            <label className="project-move" title={t("انتقال به پروژه", "Move to a project")}>
+            <div className="project-move" title={t("انتقال به پروژه", "Move to a project")}>
               <IconFolder width={15} height={15} />
-              <select value={activeChat?.project_id ?? ""} onChange={(e) => activeChat && moveChatTo(activeChat.id, e.target.value)} aria-label={t("انتقال گفت‌وگو به پروژه", "Move chat to a project")}>
-                <option value="">{t("سایر گفت‌وگوها", "Others")}</option>
-                {projects.map((p) => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
-                ))}
-              </select>
-            </label>
+              <Select
+                className="project-select"
+                value={activeChat?.project_id ?? ""}
+                options={[{ value: "", label: t("سایر گفت‌وگوها", "Others") }, ...projects.map((p) => ({ value: p.id, label: p.name }))]}
+                ariaLabel={t("انتقال گفت‌وگو به پروژه", "Move chat to a project")}
+                searchLabel={t("جست‌وجوی پروژه", "Search projects")}
+                emptyLabel={t("پروژه‌ای پیدا نشد", "No project found")}
+                onChange={(v) => activeChat && moveChatTo(activeChat.id, v)}
+              />
+            </div>
           )}
           {route === "chat" && activeId && (
             <button

@@ -19,6 +19,28 @@ import filepath
 import mem
 import str
 
+@en "ZIP_OK"
+@fa "زیپ موفق"
+pub const ZIP_OK := 0
+@en "ZIP_NOT_FOUND"
+@fa "زیپ یافت نشد"
+pub const ZIP_NOT_FOUND := 1
+@en "ZIP_UNSUPPORTED"
+@fa "زیپ پشتیبانی نمی شود"
+pub const ZIP_UNSUPPORTED := 2
+@en "ZIP_ENCRYPTED"
+@fa "زیپ رمزگذاری شده"
+pub const ZIP_ENCRYPTED := 3
+@en "ZIP_CORRUPT"
+@fa "زیپ خراب"
+pub const ZIP_CORRUPT := 4
+@en "ZIP_BAD_CRC"
+@fa "زیپ چک جمع ناهمخوان"
+pub const ZIP_BAD_CRC := 5
+@en "ZIP_TOO_BIG"
+@fa "زیپ بیش از حد بزرگ"
+pub const ZIP_TOO_BIG := 6
+
 @en "ZipFileInput"
 @fa "ورودی پرونده زیپ"
 pub struct ZipFileInput:
@@ -34,6 +56,22 @@ pub struct ZipFileInput:
     @en "method"
     @fa "روش"
     pub method: int = 8
+    @en "mtime"
+    @fa "زمان تغییر"
+    pub mtime: i64 = 0 as i64
+end
+
+struct _ZipRec:
+    pub name: str = ""
+    pub flags: int = 0
+    pub method: int = 0
+    pub crc: u32 = 0 as u32
+    pub comp: i64 = 0 as i64
+    pub uncomp: i64 = 0 as i64
+    pub local: i64 = 0 as i64
+    pub dos_time: int = 0
+    pub dos_date: int = 0
+    pub next: int = 0
 end
 
 func _zip_find_eocd(p: void*, n: int, eocd_pos_out &: int): bool:
@@ -57,6 +95,51 @@ func _zip_in(off: int, len: int, n: int): bool:
     ret off >= 0 and len >= 0 and (off as i64) + (len as i64) <= (n as i64)
 end
 
+func _zip_u32(p: void*, off: int): i64:
+    ret (LEGet32(p, off) as i64) & (0xFFFFFFFF as i64)
+end
+
+func _zip_get64(p: void*, off: int): i64:
+    lo := _zip_u32(p, off)
+    hi := _zip_u32(p, off + 4)
+    if hi >= (0x80000000 as i64):
+        ret -1
+    end
+    ret lo | (hi << 32)
+end
+
+func _zip_put64(b &: compress.ByteBuf, v: i64):
+    LEPut32(b, (v & (0xFFFFFFFF as i64)) as int)
+    LEPut32(b, ((v >> 32) & (0xFFFFFFFF as i64)) as int)
+end
+
+func _zip_locate(p: void*, n: int, cd_off &: i64, count &: i64): bool:
+    mut eocd := 0
+    if not _zip_find_eocd(p, n, eocd):
+        ret false
+    end
+    count = LEGet16(p, eocd + 10) as i64
+    cd_off = _zip_u32(p, eocd + 16)
+    csize := _zip_u32(p, eocd + 12)
+    ffff := 0xFFFF as i64
+    ffffffff := 0xFFFFFFFF as i64
+    if count == ffff or cd_off == ffffffff or csize == ffffffff:
+        if eocd >= 20 and LEGet32(p, eocd - 20) == 0x07064b50:
+            z := _zip_get64(p, eocd - 12)
+            if z < 0 or z + (56 as i64) > (n as i64):
+                ret false
+            end
+            zi := z as int
+            if LEGet32(p, zi) != 0x06064b50:
+                ret false
+            end
+            count = _zip_get64(p, zi + 32)
+            cd_off = _zip_get64(p, zi + 48)
+        end
+    end
+    ret count >= 0 and cd_off >= 0 and cd_off <= (n as i64)
+end
+
 func _zip_read_name(p: void*, off: int, name_len: int): str:
     mut nmbuf := compress.NewByteBuf()
     name_ptr := ((p as i64) + (off as i64)) as void*
@@ -76,85 +159,300 @@ func _zip_is_dir_name(name: str): bool:
     ret str.EndsWith(name, "/")
 end
 
-func _zip_extract_by_name(p: void*, n: int, name: str, max: int, ok &: bool): compress.ByteBuf:
-    ok = false
+func _zip_rec(p: void*, n: int, pos: int, r &: _ZipRec): bool:
+    if not _zip_in(pos, 46, n) or LEGet32(p, pos) != 0x02014b50:
+        ret false
+    end
+    name_len := LEGet16(p, pos + 28)
+    extra_len := LEGet16(p, pos + 30)
+    comment_len := LEGet16(p, pos + 32)
+    if not _zip_in(pos + 46, name_len + extra_len + comment_len, n):
+        ret false
+    end
+    r.flags = LEGet16(p, pos + 8)
+    r.method = LEGet16(p, pos + 10)
+    r.dos_time = LEGet16(p, pos + 12)
+    r.dos_date = LEGet16(p, pos + 14)
+    r.crc = LEGet32(p, pos + 16) as u32
+    r.comp = _zip_u32(p, pos + 20)
+    r.uncomp = _zip_u32(p, pos + 24)
+    r.local = _zip_u32(p, pos + 42)
+    ffffffff := 0xFFFFFFFF as i64
+    mut up_off := 0
+    mut up_len := 0
+    mut ep := pos + 46 + name_len
+    eend := ep + extra_len
+    until ep + 4 <= eend:
+        tag := LEGet16(p, ep)
+        sz := LEGet16(p, ep + 2)
+        body := ep + 4
+        if body + sz > eend:
+            break
+        end
+        if tag == 1:
+            mut q := body
+            qend := body + sz
+            if r.uncomp == ffffffff and q + 8 <= qend:
+                r.uncomp = _zip_get64(p, q)
+                q += 8
+            end
+            if r.comp == ffffffff and q + 8 <= qend:
+                r.comp = _zip_get64(p, q)
+                q += 8
+            end
+            if r.local == ffffffff and q + 8 <= qend:
+                r.local = _zip_get64(p, q)
+                q += 8
+            end
+        end
+        if tag == 0x7075 and sz >= 5 and LEGet16(p, body) % 256 == 1:
+            up_off = body + 5
+            up_len = sz - 5
+        end
+        ep = body + sz
+    end
+    mut use_up := false
+    if (r.flags & 0x800) == 0 and up_len > 0:
+        raw_ptr := ((p as i64) + (pos + 46) as i64) as void*
+        if compress.CRC32(raw_ptr, name_len) == (LEGet32(p, up_off - 4) as u32):
+            use_up = true
+        end
+    end
+    if use_up:
+        r.name = _zip_read_name(p, up_off, up_len)
+    else:
+        r.name = _zip_read_name(p, pos + 46, name_len)
+    end
+    r.next = pos + 46 + name_len + extra_len + comment_len
+    ret true
+end
+
+func _zip_dos_to_unix(dos_date: int, dos_time: int): i64:
+    if dos_date == 0:
+        ret 0
+    end
+    mut y := 1980 + ((dos_date >> 9) & 127)
+    mon := (dos_date >> 5) & 15
+    day := dos_date & 31
+    if mon < 1 or mon > 12 or day < 1:
+        ret 0
+    end
+    hh := (dos_time >> 11) & 31
+    mi := (dos_time >> 5) & 63
+    ss := (dos_time & 31) * 2
+    if mon <= 2: y-- end
+    era := y / 400
+    yoe := y - era * 400
+    mp := mon > 2 ? mon - 3 : mon + 9
+    doy := (153 * mp + 2) / 5 + day - 1
+    doe := yoe * 365 + yoe / 4 - yoe / 100 + doy
+    days := era * 146097 + doe - 719468
+    ret (days as i64) * (86400 as i64) + ((hh * 3600 + mi * 60 + ss) as i64)
+end
+
+func _zip_unix_to_dos(t: i64, dos_date &: int, dos_time &: int):
+    dos_date = 0x21
+    dos_time = 0
+    if t < (315532800 as i64):
+        ret
+    end
+    if t >= (4354819200 as i64):
+        dos_date = (127 << 9) | (12 << 5) | 31
+        dos_time = (23 << 11) | (59 << 5) | 29
+        ret
+    end
+    days := (t / (86400 as i64)) as int
+    secs := (t % (86400 as i64)) as int
+    z := days + 719468
+    era := z / 146097
+    doe := z - era * 146097
+    yoe := (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365
+    doy := doe - (365 * yoe + yoe / 4 - yoe / 100)
+    mp := (5 * doy + 2) / 153
+    d := doy - (153 * mp + 2) / 5 + 1
+    m := mp < 10 ? mp + 3 : mp - 9
+    mut y := yoe + era * 400
+    if m <= 2: y++ end
+    dos_date = ((y - 1980) << 9) | (m << 5) | d
+    dos_time = ((secs / 3600) << 11) | (((secs % 3600) / 60) << 5) | ((secs % 60) / 2)
+end
+
+func _zip_read_data(p: void*, n: int, r: _ZipRec, max: int, verify: bool, out &: compress.ByteBuf): int:
+    if (r.flags & 1) != 0:
+        ret ZIP_ENCRYPTED
+    end
+    if r.method != 0 and r.method != 8:
+        ret ZIP_UNSUPPORTED
+    end
+    lim := 2147483647 as i64
+    if r.uncomp < 0 or r.comp < 0 or r.local < 0 or r.uncomp > lim or r.comp > lim or r.local > lim:
+        ret ZIP_TOO_BIG
+    end
+    if max > 0 and r.uncomp > (max as i64):
+        ret ZIP_TOO_BIG
+    end
+    local := r.local as int
+    comp_size := r.comp as int
+    uncomp_size := r.uncomp as int
+    if not _zip_in(local, 30, n) or LEGet32(p, local) != 0x04034b50:
+        ret ZIP_CORRUPT
+    end
+    lname_len := LEGet16(p, local + 26)
+    lextra_len := LEGet16(p, local + 28)
+    data_start := local + 30 + lname_len + lextra_len
+    if not _zip_in(data_start, comp_size, n):
+        ret ZIP_CORRUPT
+    end
+    data_ptr := ((p as i64) + (data_start as i64)) as void*
+    if r.method == 0:
+        if max > 0 and comp_size > max:
+            ret ZIP_TOO_BIG
+        end
+        compress.BufPushBytes(out, data_ptr, comp_size)
+    else:
+        mut infl_ok := false
+        mut result := compress.RawInflateMax(data_ptr, comp_size, uncomp_size, max, infl_ok)
+        if not infl_ok:
+            too_big := max > 0 and result.len >= max
+            compress.BufFree(result)
+            if too_big:
+                ret ZIP_TOO_BIG
+            end
+            ret ZIP_CORRUPT
+        end
+        compress.BufFree(out)
+        out = result
+    end
+    if verify:
+        mut bad := 0
+        if out.len != uncomp_size:
+            bad = ZIP_CORRUPT
+        else:
+            if compress.CRC32(out.data, out.len) != r.crc:
+                bad = ZIP_BAD_CRC
+            end
+        end
+        if bad != 0:
+            compress.BufFree(out)
+            out = compress.NewByteBuf()
+            ret bad
+        end
+    end
+    ret ZIP_OK
+end
+
+func _zip_extract(p: void*, n: int, name: str, max: int, verify: bool, status &: int): compress.ByteBuf:
+    status = ZIP_CORRUPT
     mut out := compress.NewByteBuf()
-    mut eocd_pos := 0
-    if not _zip_find_eocd(p, n, eocd_pos):
+    mut cd := 0 as i64
+    mut count := 0 as i64
+    if not _zip_locate(p, n, cd, count):
         ret out
     end
-    count := LEGet16(p, eocd_pos + 10)
-    cd_offset := LEGet32(p, eocd_pos + 16)
-    mut pos := cd_offset
-    mut k := 0
+    mut pos := cd as int
+    mut k := 0 as i64
+    status = ZIP_NOT_FOUND
     until k < count:
-        if not _zip_in(pos, 46, n) or LEGet32(p, pos) != 0x02014b50:
+        mut r := _ZipRec {}
+        if not _zip_rec(p, n, pos, r):
+            status = ZIP_CORRUPT
             break
         end
-        if not _zip_in(pos + 46, LEGet16(p, pos + 28), n):
-            break
-        end
-        flags := LEGet16(p, pos + 8)
-        method := LEGet16(p, pos + 10)
-        comp_size := LEGet32(p, pos + 20)
-        uncomp_size := LEGet32(p, pos + 24)
-        name_len := LEGet16(p, pos + 28)
-        extra_len := LEGet16(p, pos + 30)
-        comment_len := LEGet16(p, pos + 32)
-        local_offset := LEGet32(p, pos + 42)
-        nm := _zip_read_name(p, pos + 46, name_len)
-        hit := nm == name
-        _zip_free_name(nm)
+        hit := r.name == name
+        _zip_free_name(r.name)
         if hit:
-            if (flags & 1) != 0 or not _zip_in(local_offset, 30, n):
-                ret out
-            end
-            lname_len := LEGet16(p, local_offset + 26)
-            lextra_len := LEGet16(p, local_offset + 28)
-            data_start := local_offset + 30 + lname_len + lextra_len
-            if not _zip_in(data_start, comp_size, n):
-                ret out
-            end
-            data_ptr := ((p as i64) + (data_start as i64)) as void*
-            if max > 0 and uncomp_size > max:
-                ret out
-            end
-            if method == 0:
-                if max > 0 and comp_size > max:
-                    ret out
-                end
-                compress.BufPushBytes(out, data_ptr, comp_size)
-                ok = true
-            else:
-                if method == 8:
-                    mut infl_ok := false
-                    mut result := compress.RawInflateMax(data_ptr, comp_size, uncomp_size < 0 ? 0 : uncomp_size, max, infl_ok)
-                    if infl_ok:
-                        compress.BufFree(out)
-                        out = result
-                        ok = true
-                    else:
-                        compress.BufFree(result)
-                    end
-                end
-            end
+            status = _zip_read_data(p, n, r, max, verify, out)
             ret out
         end
-        pos += 46 + name_len + extra_len + comment_len
+        pos = r.next
         k++
     end
     ret out
 end
 
-@en "MakeZipFileInput"
-@fa "ساخت ورودی پرونده زیپ"
-pub func MakeZipFileInput(name: str, data_ptr: void*, data_len: int, method: int): ZipFileInput:
-    ret ZipFileInput { name = name, data_ptr = data_ptr, data_len = data_len, method = method }
+func _zip_extract_by_name(p: void*, n: int, name: str, max: int, ok &: bool): compress.ByteBuf:
+    mut st := 0
+    out := _zip_extract(p, n, name, max, false, st)
+    ok = st == ZIP_OK
+    ret out
 end
 
-@en "ZipCreate"
-@fa "ساخت زیپ"
-pub func ZipCreate(files: Vector<ZipFileInput>): compress.ByteBuf:
+func _zip_entry_of(r: _ZipRec): Entry:
+    ret Entry {
+        name = r.name
+        size = r.uncomp
+        compressed_size = r.comp
+        is_dir = _zip_is_dir_name(r.name)
+        method = r.method
+        crc32 = r.crc
+        mtime = _zip_dos_to_unix(r.dos_date, r.dos_time)
+    }
+end
+
+func _zip_scan(p: void*, n: int, checked &: int, bad_list &: Vector<Entry>): int:
+    checked = 0
+    mut cd := 0 as i64
+    mut count := 0 as i64
+    if not _zip_locate(p, n, cd, count):
+        ret -1
+    end
+    mut pos := cd as int
+    mut k := 0 as i64
+    mut bad := 0
+    until k < count:
+        mut r := _ZipRec {}
+        if not _zip_rec(p, n, pos, r):
+            bad++
+            break
+        end
+        if _zip_is_dir_name(r.name):
+            _zip_free_name(r.name)
+        else:
+            checked++
+            mut data := compress.NewByteBuf()
+            st := _zip_read_data(p, n, r, 0, true, data)
+            compress.BufFree(data)
+            if st != ZIP_OK:
+                bad++
+                bad_list.push(_zip_entry_of(r))
+            else:
+                _zip_free_name(r.name)
+            end
+        end
+        pos = r.next
+        k++
+    end
+    ret bad
+end
+
+func _zip_has_high(s: str): bool:
+    bp := s as u8*
+    n := s.len()
+    mut i := 0
+    until i < n:
+        if (bp[i] as int) >= 128:
+            ret true
+        end
+        i++
+    end
+    ret false
+end
+
+func _zip_build(files: Vector<ZipFileInput>, force64: bool): compress.ByteBuf:
+    mut total := 0 as i64
+    mut v := 0
+    until v < files.len():
+        f := files.get(v)
+        if f.name.len() > 65535 or f.data_len < 0 or (f.data_ptr == null and f.data_len > 0):
+            ret compress.NewByteBuf()
+        end
+        total += (f.data_len as i64) + (f.name.len() as i64) * (2 as i64) + (200 as i64)
+        v++
+    end
+    if total > (1900000000 as i64):
+        ret compress.NewByteBuf()
+    end
+
     mut body := compress.NewByteBuf()
     mut central := compress.NewByteBuf()
     mut count := 0
@@ -166,7 +464,8 @@ pub func ZipCreate(files: Vector<ZipFileInput>): compress.ByteBuf:
         mut comp_len := f.data_len
         mut owned := compress.NewByteBuf()
         mut has_owned := false
-        if f.method == 8:
+        method := f.method == 8 ? 8 : 0
+        if method == 8:
             owned = compress.RawDeflate(f.data_ptr, f.data_len)
             comp_ptr = owned.data
             comp_len = owned.len
@@ -175,39 +474,71 @@ pub func ZipCreate(files: Vector<ZipFileInput>): compress.ByteBuf:
 
         offset := compress.BufLen(body)
         name_len := f.name.len()
+        flags := _zip_has_high(f.name) ? 0x800 : 0
+        mut dd := 0
+        mut dt := 0
+        _zip_unix_to_dos(f.mtime, dd, dt)
+        version := force64 ? 45 : 20
 
         LEPut32(body, 0x04034b50)
-        LEPut16(body, 20)
-        LEPut16(body, 0)
-        LEPut16(body, f.method)
-        LEPut16(body, 0)
-        LEPut16(body, 0x21)
+        LEPut16(body, version)
+        LEPut16(body, flags)
+        LEPut16(body, method)
+        LEPut16(body, dt)
+        LEPut16(body, dd)
         LEPut32(body, crc as int)
-        LEPut32(body, comp_len)
-        LEPut32(body, f.data_len)
+        if force64:
+            LEPut32(body, -1)
+            LEPut32(body, -1)
+        else:
+            LEPut32(body, comp_len)
+            LEPut32(body, f.data_len)
+        end
         LEPut16(body, name_len)
-        LEPut16(body, 0)
+        LEPut16(body, force64 ? 20 : 0)
         compress.BufPushBytes(body, f.name as void*, name_len)
+        if force64:
+            LEPut16(body, 1)
+            LEPut16(body, 16)
+            _zip_put64(body, f.data_len as i64)
+            _zip_put64(body, comp_len as i64)
+        end
         compress.BufPushBytes(body, comp_ptr, comp_len)
 
         LEPut32(central, 0x02014b50)
-        LEPut16(central, 20)
-        LEPut16(central, 20)
-        LEPut16(central, 0)
-        LEPut16(central, f.method)
-        LEPut16(central, 0)
-        LEPut16(central, 0x21)
+        LEPut16(central, version)
+        LEPut16(central, version)
+        LEPut16(central, flags)
+        LEPut16(central, method)
+        LEPut16(central, dt)
+        LEPut16(central, dd)
         LEPut32(central, crc as int)
-        LEPut32(central, comp_len)
-        LEPut32(central, f.data_len)
+        if force64:
+            LEPut32(central, -1)
+            LEPut32(central, -1)
+        else:
+            LEPut32(central, comp_len)
+            LEPut32(central, f.data_len)
+        end
         LEPut16(central, name_len)
-        LEPut16(central, 0)
+        LEPut16(central, force64 ? 28 : 0)
         LEPut16(central, 0)
         LEPut16(central, 0)
         LEPut16(central, 0)
         LEPut32(central, 0)
-        LEPut32(central, offset)
+        if force64:
+            LEPut32(central, -1)
+        else:
+            LEPut32(central, offset)
+        end
         compress.BufPushBytes(central, f.name as void*, name_len)
+        if force64:
+            LEPut16(central, 1)
+            LEPut16(central, 24)
+            _zip_put64(central, f.data_len as i64)
+            _zip_put64(central, comp_len as i64)
+            _zip_put64(central, offset as i64)
+        end
 
         if has_owned:
             compress.BufFree(owned)
@@ -224,21 +555,62 @@ pub func ZipCreate(files: Vector<ZipFileInput>): compress.ByteBuf:
     compress.BufFree(body)
     compress.BufFree(central)
 
+    wide := force64 or count >= 0xFFFF
+    if wide:
+        z_off := compress.BufLen(out)
+        LEPut32(out, 0x06064b50)
+        _zip_put64(out, 44 as i64)
+        LEPut16(out, 45)
+        LEPut16(out, 45)
+        LEPut32(out, 0)
+        LEPut32(out, 0)
+        _zip_put64(out, count as i64)
+        _zip_put64(out, count as i64)
+        _zip_put64(out, cd_size as i64)
+        _zip_put64(out, cd_offset as i64)
+        LEPut32(out, 0x07064b50)
+        LEPut32(out, 0)
+        _zip_put64(out, z_off as i64)
+        LEPut32(out, 1)
+    end
+
     LEPut32(out, 0x06054b50)
     LEPut16(out, 0)
     LEPut16(out, 0)
-    LEPut16(out, count)
-    LEPut16(out, count)
-    LEPut32(out, cd_size)
-    LEPut32(out, cd_offset)
+    LEPut16(out, wide ? 0xFFFF : count)
+    LEPut16(out, wide ? 0xFFFF : count)
+    LEPut32(out, wide ? -1 : cd_size)
+    LEPut32(out, wide ? -1 : cd_offset)
     LEPut16(out, 0)
     ret out
+end
+
+@en "MakeZipFileInput"
+@fa "ساخت ورودی پرونده زیپ"
+pub func MakeZipFileInput(name: str, data_ptr: void*, data_len: int, method: int): ZipFileInput:
+    ret ZipFileInput { name = name, data_ptr = data_ptr, data_len = data_len, method = method, mtime = 0 as i64 }
+end
+
+@en "ZipCreate"
+@fa "ساخت زیپ"
+pub func ZipCreate(files: Vector<ZipFileInput>): compress.ByteBuf:
+    ret _zip_build(files, false)
+end
+
+@en "ZipCreate64"
+@fa "ساخت زیپ بزرگ"
+pub func ZipCreate64(files: Vector<ZipFileInput>): compress.ByteBuf:
+    ret _zip_build(files, true)
 end
 
 @en "ZipCreateFile"
 @fa "ساخت پرونده زیپ"
 pub func ZipCreateFile(files: Vector<ZipFileInput>, outpath: str): bool:
     mut out := ZipCreate(files)
+    if out.len == 0:
+        compress.BufFree(out)
+        ret false
+    end
     ok := WriteBinaryFileBuf(outpath, out)
     compress.BufFree(out)
     ret ok
@@ -248,42 +620,20 @@ end
 @fa "فهرست زیپ"
 pub func ZipList(p: void*, n: int): Vector<Entry>:
     mut out := Vector {} as Vector<Entry>
-    mut eocd_pos := 0
-    if not _zip_find_eocd(p, n, eocd_pos):
+    mut cd := 0 as i64
+    mut count := 0 as i64
+    if not _zip_locate(p, n, cd, count):
         ret out
     end
-    count := LEGet16(p, eocd_pos + 10)
-    cd_offset := LEGet32(p, eocd_pos + 16)
-    mut pos := cd_offset
-    mut k := 0
+    mut pos := cd as int
+    mut k := 0 as i64
     until k < count:
-        if not _zip_in(pos, 46, n) or LEGet32(p, pos) != 0x02014b50:
+        mut r := _ZipRec {}
+        if not _zip_rec(p, n, pos, r):
             break
         end
-        if not _zip_in(pos + 46, LEGet16(p, pos + 28), n):
-            break
-        end
-        method := LEGet16(p, pos + 10)
-        crc := LEGet32(p, pos + 16)
-        comp_size := LEGet32(p, pos + 20)
-        uncomp_size := LEGet32(p, pos + 24)
-        name_len := LEGet16(p, pos + 28)
-        extra_len := LEGet16(p, pos + 30)
-        comment_len := LEGet16(p, pos + 32)
-        nm := _zip_read_name(p, pos + 46, name_len)
-
-        e := Entry {
-            name = nm
-            size = uncomp_size as i64
-            compressed_size = comp_size as i64
-            is_dir = _zip_is_dir_name(nm)
-            method = method
-            crc32 = crc as u32
-            mtime = 0 as i64
-        }
-        out.push(e)
-
-        pos += 46 + name_len + extra_len + comment_len
+        out.push(_zip_entry_of(r))
+        pos = r.next
         k++
     end
     ret out
@@ -301,40 +651,86 @@ pub func ZipExtractByNameMax(p: void*, n: int, name: str, max: int, ok &: bool):
     ret _zip_extract_by_name(p, n, name, max, ok)
 end
 
+@en "ZipExtractVerified"
+@fa "استخراج تایید شده از زیپ"
+pub func ZipExtractVerified(p: void*, n: int, name: str, max: int, status &: int): compress.ByteBuf:
+    ret _zip_extract(p, n, name, max, true, status)
+end
+
+@en "ZipVerify"
+@fa "بررسی زیپ"
+pub func ZipVerify(p: void*, n: int, checked &: int): int:
+    mut bad := Vector {} as Vector<Entry>
+    r := _zip_scan(p, n, checked, bad)
+    FreeEntries(bad)
+    ret r
+end
+
+@en "ZipBadEntries"
+@fa "مدخل های خراب زیپ"
+pub func ZipBadEntries(p: void*, n: int): Vector<Entry>:
+    mut bad := Vector {} as Vector<Entry>
+    mut checked := 0
+    _ := _zip_scan(p, n, checked, bad)
+    ret bad
+end
+
+@en "ZipStatusText"
+@fa "متن وضعیت زیپ"
+pub func ZipStatusText(status: int): str:
+    if status == ZIP_OK: ret "ok" end
+    if status == ZIP_NOT_FOUND: ret "entry not found" end
+    if status == ZIP_UNSUPPORTED: ret "unsupported compression method" end
+    if status == ZIP_ENCRYPTED: ret "encrypted entry" end
+    if status == ZIP_CORRUPT: ret "corrupt data" end
+    if status == ZIP_BAD_CRC: ret "checksum mismatch" end
+    if status == ZIP_TOO_BIG: ret "entry too large" end
+    ret "unknown error"
+end
+
 @en "ZipExtractAll"
 @fa "استخراج همه از زیپ"
 pub func ZipExtractAll(p: void*, n: int, destdir: str): bool:
-    mut entries := ZipList(p, n)
+    mut cd := 0 as i64
+    mut count := 0 as i64
+    if not _zip_locate(p, n, cd, count):
+        ret true
+    end
     mut all_ok := true
-    mut i := 0
-    until i < entries.len():
-        e := entries.get(i)
-        if not _safe_entry_name(e.name):
+    mut pos := cd as int
+    mut k := 0 as i64
+    until k < count:
+        mut r := _ZipRec {}
+        if not _zip_rec(p, n, pos, r):
             all_ok = false
-            i++
-            continue
+            break
         end
-        outpath := filepath.Join(destdir, e.name)
-        if e.is_dir:
-            EnsureDir(outpath)
+        if not _safe_entry_name(r.name):
+            all_ok = false
         else:
-            parent := filepath.Dir(outpath)
-            EnsureDir(parent)
-            mem.Free(parent as void*)
-            mut ok := false
-            mut data := ZipExtractByName(p, n, e.name, ok)
-            if ok:
-                if not WriteBinaryFileBuf(outpath, data):
+            outpath := filepath.Join(destdir, r.name)
+            if _zip_is_dir_name(r.name):
+                EnsureDir(outpath)
+            else:
+                parent := filepath.Dir(outpath)
+                EnsureDir(parent)
+                mem.Free(parent as void*)
+                mut data := compress.NewByteBuf()
+                st := _zip_read_data(p, n, r, 0, true, data)
+                if st == ZIP_OK:
+                    if not WriteBinaryFileBuf(outpath, data):
+                        all_ok = false
+                    end
+                else:
                     all_ok = false
                 end
-            else:
-                all_ok = false
+                compress.BufFree(data)
             end
-            compress.BufFree(data)
+            mem.Free(outpath as void*)
         end
-        mem.Free(outpath as void*)
-        i++
+        _zip_free_name(r.name)
+        pos = r.next
+        k++
     end
-    defer FreeEntries(entries)
     ret all_ok
 end

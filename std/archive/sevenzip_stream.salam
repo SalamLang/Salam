@@ -1,0 +1,118 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package archive
+
+import compress
+import mem
+
+struct _SzAesR:
+    pub inner: void*
+    pub ioff: i64
+    pub ileft: i64
+    pub oleft: i64
+    pub pos: i64
+    pub aes: _Aes
+    pub iv: u8*
+    pub cbuf: u8*
+    pub pbuf: u8*
+    pub pstart: int
+    pub pend: int
+end
+
+func _szaes_read(off: i64, dst: void*, n: int, ctx: void*): int:
+    r := ctx as _SzAesR*
+    if off != r[0].pos:
+        ret 0
+    end
+    mut done := 0
+    until done < n:
+        if r[0].pstart == r[0].pend:
+            if r[0].oleft <= (0 as i64) or r[0].ileft < (16 as i64):
+                break
+            end
+            mut want := 65536
+            if (want as i64) > r[0].ileft:
+                want = (r[0].ileft as int) & (-16)
+            end
+            got := compress.FileReadAt(r[0].inner, r[0].ioff, r[0].cbuf as void*, want)
+            g := got & (-16)
+            if g <= 0:
+                break
+            end
+            _aes_cbc_decrypt(r[0].aes, r[0].iv, r[0].cbuf, r[0].pbuf, g)
+            repeat 16 in q:
+                r[0].iv[q] = r[0].cbuf[g - 16 + q]
+            end
+            r[0].ioff += g as i64
+            r[0].ileft -= g as i64
+            r[0].pstart = 0
+            r[0].pend = g
+            if (g as i64) > r[0].oleft:
+                r[0].pend = r[0].oleft as int
+            end
+        end
+        mut take := n - done
+        if take > r[0].pend - r[0].pstart:
+            take = r[0].pend - r[0].pstart
+        end
+        mem.Copy(((dst as i64) + (done as i64)) as void*, ((r[0].pbuf as i64) + (r[0].pstart as i64)) as void*, take as u64)
+        r[0].pstart += take
+        done += take
+        r[0].pos += take as i64
+        r[0].oleft -= take as i64
+    end
+    ret done
+end
+
+func _szaes_open(inner: void*, ioff: i64, ilen: i64, c: _SzCoder, osz: i64, password: str, status &: int): void*:
+    key := mem.AllocateZeroed(32 as u64) as u8*
+    iv := mem.AllocateZeroed(16 as u64) as u8*
+    if not _sz_aes_setup(c, password, key, iv, status):
+        mem.Free(key as void*)
+        mem.Free(iv as void*)
+        ret null
+    end
+    if osz < (0 as i64) or (ilen & ((-16) as i64)) < osz:
+        status = SEVENZIP_CORRUPT
+        mem.Free(key as void*)
+        mem.Free(iv as void*)
+        ret null
+    end
+    r := mem.AllocateZeroed(sizeof(_SzAesR)) as _SzAesR*
+    r[0].inner = inner
+    r[0].ioff = ioff
+    r[0].ileft = ilen
+    r[0].oleft = osz
+    r[0].aes = _aes_new(key, 32)
+    r[0].iv = iv
+    r[0].cbuf = mem.Allocate(65536 as u64) as u8*
+    r[0].pbuf = mem.Allocate(65536 as u64) as u8*
+    mem.Free(key as void*)
+    rd := (o: i64, d: void*, n: int, c: void*): ret _szaes_read(o, d, n, c) end
+    ret compress.CallbackOpenRead(osz, rd, r as void*)
+end
+
+func _szaes_free(fp: void*):
+    if fp == null:
+        ret
+    end
+    r := compress.CallbackContext(fp) as _SzAesR*
+    _aes_free(r[0].aes)
+    mem.Free(r[0].iv as void*)
+    mem.Free(r[0].cbuf as void*)
+    mem.Free(r[0].pbuf as void*)
+    mem.Free(r as void*)
+    compress.FileClose(fp)
+end

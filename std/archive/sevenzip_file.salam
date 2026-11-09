@@ -20,6 +20,8 @@ import mem
 import os
 import str
 
+const _SZF_NOSTREAM := 99
+
 struct _SzX:
     pub fidx: Vector<int>
     pub mode: Vector<int>
@@ -342,6 +344,10 @@ func _szf_finalize(f: _SzF*): bool:
     ret true
 end
 
+func _szf_is_aes(id: i64): bool:
+    ret id == (0x06F10701 as i64)
+end
+
 func _szf_filter_kind(id: i64): int:
     if id == (3 as i64):
         ret 1
@@ -432,35 +438,67 @@ func _szf_fallback(fp: void*, start: i64, avail: i64, s: _Sz, fi: int, password:
     ret st
 end
 
-func _szf_source(fp: void*, start: i64, avail: i64, s: _Sz, f: _SzFolder, c: _SzCoder, out_idx: int, pidx: int, memcap: i64, sink &: compress.FileSink): int:
-    out_size := f.unpack.get(out_idx)
-    off := start + s.pack_off.get(pidx)
+func _szf_pack_ok(s: _Sz, pidx: int, avail: i64): bool:
+    if pidx < 0 or pidx >= s.pack_sizes.len():
+        ret false
+    end
+    off := s.pack_off.get(pidx)
     sz := s.pack_sizes.get(pidx)
-    if s.pack_off.get(pidx) < (32 as i64) or sz < (0 as i64) or s.pack_off.get(pidx) + sz > avail or out_size < (0 as i64):
+    ret off >= (32 as i64) and sz >= (0 as i64) and off + sz <= avail
+end
+
+func _szf_in_of(f: _SzFolder, s: _Sz, in_idx: int, nout &: int, pidx &: int): bool:
+    nout = -1
+    pidx = -1
+    repeat f.bin.len() in k:
+        if f.bin.get(k) == in_idx:
+            nout = f.bout.get(k)
+            ret true
+        end
+    end
+    repeat f.packed.len() in j:
+        if f.packed.get(j) == in_idx:
+            pidx = f.pack_first + j
+            ret pidx < s.pack_sizes.len()
+        end
+    end
+    ret false
+end
+
+func _szf_first_in(f: _SzFolder, ci: int): int:
+    mut n := 0
+    repeat ci in q:
+        n += f.coders.get(q).num_in
+    end
+    ret n
+end
+
+func _szf_source(rfp: void*, roff: i64, rsz: i64, c: _SzCoder, out_size: i64, memcap: i64, sink &: compress.FileSink): int:
+    if out_size < (0 as i64) or rsz < (0 as i64):
         ret SEVENZIP_CORRUPT
     end
     id := c.id
     pp := c.props.data as u8*
     mut code := 0
     if id == (0 as i64):
-        if sz != out_size:
+        if rsz != out_size:
             ret SEVENZIP_CORRUPT
         end
-        if not compress.SinkCopyFrom(sink, fp, off, sz):
+        if not compress.SinkCopyFrom(sink, rfp, roff, rsz):
             code = 3
         end
     else id == (0x21 as i64):
         if c.props.len < 1:
             ret SEVENZIP_CORRUPT
         end
-        code = compress.Lzma2FileToSink(pp[0] as int, fp, off, sz, out_size, sink, memcap)
+        code = compress.Lzma2FileToSink(pp[0] as int, rfp, roff, rsz, out_size, sink, memcap)
     else id == (0x030101 as i64):
         if c.props.len < 5:
             ret SEVENZIP_CORRUPT
         end
-        code = compress.LzmaFileToSink(c.props.data, c.props.len, fp, off, sz, out_size, sink, memcap)
+        code = compress.LzmaFileToSink(c.props.data, c.props.len, rfp, roff, rsz, out_size, sink, memcap)
     else id == (0x040108 as i64) or id == (0x040109 as i64):
-        mut br := compress.NewFileBitReader(fp, off, sz)
+        mut br := compress.NewFileBitReader(rfp, roff, rsz)
         mut good := not br.bad
         if good:
             good = compress.RawInflateToSink(br, sink, id == (0x040109 as i64))
@@ -470,14 +508,14 @@ func _szf_source(fp: void*, start: i64, avail: i64, s: _Sz, f: _SzFolder, c: _Sz
             code = sink.failed or sink.over ? 3 : 1
         end
     else:
-        if sz > (2000000000 as i64) or out_size > (2000000000 as i64) or (memcap > (0 as i64) and sz + out_size > memcap):
+        if rsz > (2000000000 as i64) or out_size > (2000000000 as i64) or (memcap > (0 as i64) and rsz + out_size > memcap):
             ret SEVENZIP_TOO_BIG
         end
-        packed := mem.Allocate((sz + (1 as i64)) as u64)
-        mut ok := compress.FileReadAt(fp, off, packed, sz as int) == (sz as int)
+        packed := mem.Allocate((rsz + (1 as i64)) as u64)
+        mut ok := compress.FileReadAt(rfp, roff, packed, rsz as int) == (rsz as int)
         mut res := compress.NewByteBuf()
         if ok:
-            res = compress.Bzip2DecompressMax(packed, sz as int, out_size as int, ok)
+            res = compress.Bzip2DecompressMax(packed, rsz as int, out_size as int, ok)
         end
         mem.Free(packed)
         if ok:
@@ -503,76 +541,79 @@ func _szf_source(fp: void*, start: i64, avail: i64, s: _Sz, f: _SzFolder, c: _Sz
     ret SEVENZIP_CORRUPT
 end
 
-func _szf_folder(fp: void*, start: i64, avail: i64, s: _Sz, fi: int, password: str, memcap: i64, x: _SzX*): int:
+func _szf_stream(fp: void*, start: i64, avail: i64, s: _Sz, fi: int, out_start: int, password: str, memcap: i64, top: compress.FileSink*): int:
     f := s.folders.get(fi)
-    xemit := (p: void*, n: int, c: void*): ret _szx_emit(c as _SzX*, p, n) end
     femit := (p: void*, n: int, c: void*): ret _szf_emit(c as _SzF*, p, n) end
-    mut top := mem.AllocateZeroed(sizeof(compress.FileSink)) as compress.FileSink*
-    top[0] = compress.SinkCallback(0 as i64, xemit, x as void*)
-    x[0].fcrc_on = f.crc_def
-    x[0].fcrc = 0 as u32
     mut chain := Vector {} as Vector<int>
     mut pidx := -1
-    mut streamable := true
-    mut out_idx := _sz_folder_main_out(f)
-    mut guard := 0
-    until streamable and pidx < 0:
-        guard++
-        if guard > f.coders.len() + 1 or out_idx < 0 or out_idx >= f.coders.len() or out_idx >= f.unpack.len():
-            streamable = false
+    mut out_idx := out_start
+    mut ok := true
+    until ok and pidx < 0:
+        if chain.len() > f.coders.len() or out_idx < 0 or out_idx >= f.coders.len() or out_idx >= f.unpack.len():
+            ok = false
             break
         end
         c := f.coders.get(out_idx)
         if c.num_in != 1 or c.num_out != 1:
-            streamable = false
+            ok = false
             break
         end
-        mut first_in := 0
-        repeat out_idx in q:
-            first_in += f.coders.get(q).num_in
-        end
         chain.push(out_idx)
-        mut found := false
-        repeat f.bin.len() in k:
-            if not found and f.bin.get(k) == first_in:
-                out_idx = f.bout.get(k)
-                found = true
-            end
+        mut nout := -1
+        if not _szf_in_of(f, s, _szf_first_in(f, out_idx), nout, pidx):
+            ok = false
         end
-        if not found:
-            repeat f.packed.len() in j:
-                if not found and f.packed.get(j) == first_in:
-                    pidx = f.pack_first + j
-                    found = true
-                end
-            end
-        end
-        if not found or (pidx >= 0 and pidx >= s.pack_sizes.len()):
-            streamable = false
+        if nout >= 0:
+            out_idx = nout
         end
     end
-    if streamable:
-        repeat chain.len() in k:
-            id := f.coders.get(chain.get(k)).id
-            if k < chain.len() - 1:
-                if _szf_filter_kind(id) == 0:
-                    streamable = false
-                end
-            else:
-                if not _szf_source_ok(id):
-                    streamable = false
-                end
+    mut sk := chain.len() - 1
+    if ok:
+        until sk > 0 and _szf_is_aes(f.coders.get(chain.get(sk)).id):
+            sk--
+        end
+        if not _szf_source_ok(f.coders.get(chain.get(sk)).id):
+            ok = false
+        end
+        repeat sk in k:
+            if _szf_filter_kind(f.coders.get(chain.get(k)).id) == 0:
+                ok = false
             end
         end
+    end
+    if not ok:
+        chain.free()
+        ret _SZF_NOSTREAM
     end
     mut st := SEVENZIP_OK
-    if not streamable:
-        st = _szf_fallback(fp, start, avail, s, fi, password, memcap, top)
-    else:
-        mut stages := Vector {} as Vector<i64>
-        mut sinks := Vector {} as Vector<i64>
-        mut nextp := top
-        repeat chain.len() - 1 in k:
+    mut readers := Vector {} as Vector<i64>
+    mut rfp := fp
+    mut roff := start + s.pack_off.get(pidx)
+    mut rsz := s.pack_sizes.get(pidx)
+    if not _szf_pack_ok(s, pidx, avail):
+        st = SEVENZIP_CORRUPT
+    end
+    mut ak := chain.len() - 1
+    until st == SEVENZIP_OK and ak > sk:
+        ci := chain.get(ak)
+        osz := f.unpack.get(ci)
+        mut ast := SEVENZIP_OK
+        r := _szaes_open(rfp, roff, rsz, f.coders.get(ci), osz, password, ast)
+        if r == null:
+            st = ast
+            break
+        end
+        readers.push(r as i64)
+        rfp = r
+        roff = 0 as i64
+        rsz = osz
+        ak--
+    end
+    mut stages := Vector {} as Vector<i64>
+    mut sinks := Vector {} as Vector<i64>
+    mut nextp := top
+    if st == SEVENZIP_OK:
+        repeat sk in k:
             c := f.coders.get(chain.get(k))
             fk := _szf_filter_kind(c.id)
             mut dist := 1
@@ -602,8 +643,7 @@ func _szf_folder(fp: void*, start: i64, avail: i64, s: _Sz, fi: int, password: s
             sinks.push(ns as i64)
             nextp = ns
         end
-        last := chain.get(chain.len() - 1)
-        st = _szf_source(fp, start, avail, s, f, f.coders.get(last), last, pidx, memcap, nextp[0])
+        st = _szf_source(rfp, roff, rsz, f.coders.get(chain.get(sk)), f.unpack.get(chain.get(sk)), memcap, nextp[0])
         mut k := stages.len() - 1
         until k >= 0:
             fs := stages.get(k) as _SzF*
@@ -612,18 +652,38 @@ func _szf_folder(fp: void*, start: i64, avail: i64, s: _Sz, fi: int, password: s
             end
             k--
         end
-        repeat stages.len() in q:
-            fs := stages.get(q) as _SzF*
-            mem.Free(fs[0].hist as void*)
-            mem.Free(fs[0].carry as void*)
-            if fs[0].tmp != null:
-                mem.Free(fs[0].tmp as void*)
-            end
-            mem.Free(fs as void*)
-            mem.Free(sinks.get(q) as void*)
+    end
+    repeat stages.len() in q:
+        fs := stages.get(q) as _SzF*
+        mem.Free(fs[0].hist as void*)
+        mem.Free(fs[0].carry as void*)
+        if fs[0].tmp != null:
+            mem.Free(fs[0].tmp as void*)
         end
-        stages.free()
-        sinks.free()
+        mem.Free(fs as void*)
+        mem.Free(sinks.get(q) as void*)
+    end
+    stages.free()
+    sinks.free()
+    repeat readers.len() in q:
+        _szaes_free(readers.get(q) as void*)
+    end
+    readers.free()
+    chain.free()
+    ret st
+end
+
+func _szf_run(fp: void*, start: i64, avail: i64, s: _Sz, fi: int, password: str, memcap: i64, top: compress.FileSink*, x: _SzX*): int:
+    f := s.folders.get(fi)
+    mut st := _szf_stream(fp, start, avail, s, fi, _sz_folder_main_out(f), password, memcap, top)
+    if st == _SZF_NOSTREAM:
+        st = _szf_fallback(fp, start, avail, s, fi, password, memcap, top)
+        if st == SEVENZIP_IO and x != null and x[0].done:
+            st = SEVENZIP_OK
+        end
+        ret st
+    end
+    if x != null:
         if st == SEVENZIP_IO and x[0].done:
             st = SEVENZIP_OK
         end
@@ -634,11 +694,55 @@ func _szf_folder(fp: void*, start: i64, avail: i64, s: _Sz, fi: int, password: s
             st = SEVENZIP_CORRUPT
         end
     end
-    chain.free()
-    mem.Free(top as void*)
-    if not streamable and st == SEVENZIP_IO and x[0].done:
-        st = SEVENZIP_OK
+    if _sz_has_aes(f) and (st == SEVENZIP_CORRUPT or st == SEVENZIP_BAD_CRC):
+        st = SEVENZIP_BAD_PASSWORD
     end
+    ret st
+end
+
+func _szf_folder(fp: void*, start: i64, avail: i64, s: _Sz, fi: int, password: str, memcap: i64, x: _SzX*): int:
+    f := s.folders.get(fi)
+    xemit := (p: void*, n: int, c: void*): ret _szx_emit(c as _SzX*, p, n) end
+    mut top := mem.AllocateZeroed(sizeof(compress.FileSink)) as compress.FileSink*
+    top[0] = compress.SinkCallback(0 as i64, xemit, x as void*)
+    x[0].fcrc_on = f.crc_def
+    x[0].fcrc = 0 as u32
+    st := _szf_run(fp, start, avail, s, fi, password, memcap, top, x)
+    mem.Free(top as void*)
+    ret st
+end
+
+func _szf_buf_emit(p: void*, n: int, c: void*): bool:
+    compress.BufPushBytes((c as compress.ByteBuf*)[0], p, n)
+    ret true
+end
+
+func _szf_folder_buf(fp: void*, start: i64, avail: i64, s: _Sz, fi: int, password: str, cap: i64, out &: compress.ByteBuf): int:
+    f := s.folders.get(fi)
+    main := _sz_folder_main_out(f)
+    if main < 0 or main >= f.unpack.len():
+        ret SEVENZIP_CORRUPT
+    end
+    want := f.unpack.get(main)
+    if want < (0 as i64) or want > cap:
+        ret SEVENZIP_TOO_BIG
+    end
+    holder := mem.AllocateZeroed(sizeof(compress.ByteBuf)) as compress.ByteBuf*
+    holder[0] = compress.NewByteBufCap(want > (65536 as i64) ? 65536 : (want as int))
+    emit := (p: void*, n: int, c: void*): ret _szf_buf_emit(p, n, c) end
+    mut top := mem.AllocateZeroed(sizeof(compress.FileSink)) as compress.FileSink*
+    top[0] = compress.SinkCallback(0 as i64, emit, holder as void*)
+    st := _szf_run(fp, start, avail, s, fi, password, 0 as i64, top, null as _SzX*)
+    mem.Free(top as void*)
+    if st == SEVENZIP_OK and f.crc_def and (compress.CRC32(holder[0].data, holder[0].len) as i64) != f.crc:
+        ret _sz_has_aes(f) ? SEVENZIP_BAD_PASSWORD : SEVENZIP_BAD_CRC
+    end
+    if st != SEVENZIP_OK:
+        compress.BufFree(holder[0])
+    else:
+        out = holder[0]
+    end
+    mem.Free(holder as void*)
     ret st
 end
 
@@ -764,15 +868,8 @@ func _szf_load(fp: void*, sf &: SevenZipFile): int:
             status = st != 0 ? st : SEVENZIP_CORRUPT
             break
         end
-        mut region := compress.NewByteBuf()
-        mut vb := 0 as i64
-        mut vn := 0 as i64
-        mut dst := _szf_region(fp, start, avail, tmp, tmp.folders.get(0), region, vb, vn)
         mut next := compress.NewByteBuf()
-        if dst == SEVENZIP_OK:
-            next = _sz_unpack_folder(tmp, vb as u8*, vn, 0, sf.password, dst)
-        end
-        compress.BufFree(region)
+        dst := _szf_folder_buf(fp, start, avail, tmp, 0, sf.password, 1073741824 as i64, next)
         _sz_free(tmp)
         if dst != SEVENZIP_OK:
             status = dst

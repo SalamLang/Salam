@@ -1,6 +1,45 @@
 # Native UI from the page language
 
-Status: phase 0 (target gating) implemented. Later phases are planned below.
+Status: a page runs in a native window with `salam run page.salam --ui=native`.
+The runtime is `std/gui/ui` on top of `gui.window`, `gui.paint`, `gui.typeset`,
+`gui.cssbox`, `gui.css` and `gui.reactive`. Later phases are planned below.
+
+## Using it
+
+```salam
+mut count := 0
+
+page:
+    title = "Counter"
+    box:
+        heading: content = "Count: " + count end
+        button: content = "+1" click = (): count++ end end
+    end
+end
+```
+
+```
+salam page build app.salam            web page, as before
+salam run app.salam --ui=native       the same page in a native window
+salam build app.salam --ui=native     a native executable
+```
+
+For a file with a page and no entry function, the compiler lowers the page
+into a view function returning the page's HTML document, the same output the
+web build produces, and adds an entry that registers each event handler with
+`gui.ui` and calls `ui.Run`. After every handler the runtime runs the view
+again and reconciles the new tree with the old one, so a handler only changes
+the program's state; hover, focus, scroll positions and typed text survive.
+The page view reads the program's mutable globals.
+
+A program that has its own entry function keeps it, and can call
+`ui.Run((): ret __salam_page() end)` or build documents itself with runtime
+`page Name(params):` views and `ui.Run`.
+
+Tests run headless: `SALAM_WINDOW_BACKEND=headless` with `SALAM_UI_SCRIPT`
+naming a file of steps (`click #id`, `type text`, `key Tab`, `dump`,
+`shot out.png`, `quit`). The `ui` section of `tools/bash/run-tests.sh` builds
+each `tests/<lang>/ui/X.salam` with `--ui=native` and runs it with `X.script`.
 
 ## The problem
 

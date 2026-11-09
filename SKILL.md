@@ -2393,10 +2393,12 @@ page:
 end
 ```
 
-**Web and native targets.** Pages are built for the web by default. Native
-windows drawn by Salam itself are being added (`docs/design/NATIVE_UI.md`);
-`salam check page.salam --ui=native` already reports what a native window
-cannot show: E165 for things that need a browser (`script`, `style`, `iframe`,
+**Web and native targets.** Pages are built for the web by default.
+`salam run page.salam --ui=native` (and `salam build ... --ui=native`) runs
+the same page in a native window drawn by Salam (`std/gui/ui`,
+`docs/design/NATIVE_UI.md`): handlers change program state (mutable globals)
+and the page re-renders after each one. `salam check page.salam --ui=native`
+reports what a native window cannot show: E165 for things that need a browser (`script`, `style`, `iframe`,
 `embed`, `object`, `template`, `slot`, `svg`, `math`, `inline style`,
 `contenteditable`, `popover`, ...) and W166 for web metadata it ignores
 (`meta`, `head link`, `base`, `noscript`, `srcset`, `loading`, `rel`,

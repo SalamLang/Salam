@@ -1,0 +1,195 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package layout
+
+import str
+
+include co "../sal_core.salam"
+include tok "../token.salam"
+include lg "../logger.salam"
+include at "../ast.salam"
+include lp "../langpack.salam"
+include src "../source.salam"
+include lx "../lexer/lexer.salam"
+include ps "../parser/parser.salam"
+
+pub const NATIVE_PAGE_VIEW := "__salam_page"
+
+func ln_find_page(a &: at.Ast, prog: int): int:
+    repeat at.ChildCount(a, prog) in i:
+        did := at.Child(a, prog, i)
+        d := at.Get(a, did)
+        if d.kind == at.AST_LAYOUT_BLOCK and str.Len(d.name) == 0 and not d.view_glue:
+            ret did
+        end
+    end
+    ret 0
+end
+
+func ln_has_main(a &: at.Ast, prog: int, pack: lp.Langpack): bool:
+    repeat at.ChildCount(a, prog) in i:
+        d := at.Get(a, at.Child(a, prog, i))
+        if d.kind == at.AST_FUNC_DEF and (str.Equals(d.name, "main") or lp.IdentEqual(d.name, lp.Entry(pack))):
+            ret true
+        end
+    end
+    ret false
+end
+
+func ln_handler_name(call: str): str:
+    p := str.IndexOf(call, "(")
+    if p <= 0:
+        ret ""
+    end
+    if str.Equals(str.Substr(call, p, str.Len(call) - p), "()"):
+        ret str.Substr(call, 0, p)
+    end
+    ret ""
+end
+
+func ln_quote(s: str): str:
+    mut out := "\""
+    repeat str.Len(s) in i:
+        b := byte_at(s, i)
+        if b == 34 or b == 92:
+            out += "\\"
+        end
+        out += str.Substr(s, i, 1)
+    end
+    ret out + "\""
+end
+
+func ln_parse(log: lg.Logger, a &: at.Ast, text: str, path: str, pack: lp.Langpack): int:
+    mut sf := src.New()
+    sf.path = path
+    sf.text = text
+    sf.len = text.len()
+    quiet := lg.New(lg.LOG_OFF, false)
+    mut toks := tok.StreamNew(path)
+    ok := lx.Run(quiet, pack, sf, toks)
+    mut prog := 0
+    if ok:
+        _ps := ps.Run(quiet, toks, a, prog)
+    end
+    tok.StreamFree(toks)
+    if prog == 0:
+        lg.Log(log, lg.PH_DRIVER, lg.LOG_ERROR, "internal: could not build the native page entry")
+    end
+    ret prog
+end
+
+func ln_main_source_fa(handlers: Vector<str>): str:
+    ui := "رابط کاربری"
+    mut body := ""
+    mut seen := Vector {} as Vector<str>
+    defer seen.free()
+    each call in handlers:
+        name := ln_handler_name(call)
+        if str.Len(name) == 0 or str.IndexOf(name, " ") >= 0:
+            continue
+        end
+        mut dup := false
+        each s in seen:
+            if str.Equals(s, name):
+                dup = true
+            end
+        end
+        if dup:
+            continue
+        end
+        seen.push(name)
+        body += "    " + ui + ".ثبت رسیدگی(" + ln_quote(name) + "، (): " + name + "() پایان)\n"
+    end
+    body += "    " + ui + ".اجرا((): برگشت " + NATIVE_PAGE_VIEW + "() پایان)\n"
+    ret "واردسازی رابط گرافیکی.رابط کاربری\n\nتابع ریشه:\n" + body + "پایان\n"
+end
+
+func ln_main_source(ui: str, handlers: Vector<str>): str:
+    mut body := ""
+    mut seen := Vector {} as Vector<str>
+    defer seen.free()
+    each call in handlers:
+        name := ln_handler_name(call)
+        if str.Len(name) == 0 or str.IndexOf(name, " ") >= 0:
+            continue
+        end
+        mut dup := false
+        each s in seen:
+            if str.Equals(s, name):
+                dup = true
+            end
+        end
+        if dup:
+            continue
+        end
+        seen.push(name)
+        body += "    " + ui + ".Handle(" + ln_quote(name) + ", (): " + name + "() end)\n"
+    end
+    body += "    " + ui + ".Run((): ret " + NATIVE_PAGE_VIEW + "() end)\n"
+    ret "import gui.ui\n\nfunc main:\n" + body + "end\n"
+end
+
+pub func PrepareNativePage(log: lg.Logger, pack: lp.Langpack, a &: at.Ast, prog: int, file: str, handlers: Vector<str>): bool:
+    if prog == 0:
+        ret false
+    end
+    lb := ln_find_page(a, prog)
+    if lb == 0:
+        ret false
+    end
+    mut ln := at.Get(a, lb)
+    ln.name = NATIVE_PAGE_VIEW
+    at.Put(a, lb, ln)
+    if ln_has_main(a, prog, pack):
+        ret true
+    end
+    base := at.Count(a)
+    mut sp := 0
+    if str.Equals(lp.Code(pack), "fa"):
+        sp = ln_parse(log, a, ln_main_source_fa(handlers), file, pack)
+    else:
+        sp = lo_parse_text(log, a, ln_main_source("ui", handlers), file)
+    end
+    if sp == 0:
+        ret false
+    end
+    mut pn := at.Get(a, prog)
+    mut list := Vector {} as Vector<int>
+    repeat at.ChildCount(a, sp) in ci:
+        cid := at.Child(a, sp, ci)
+        if at.KindOf(a, cid) == at.AST_IMPORT:
+            list.push(cid)
+        end
+    end
+    repeat pn.list.len() in k:
+        list.push(pn.list.get(k))
+    end
+    repeat at.ChildCount(a, sp) in cj:
+        cid2 := at.Child(a, sp, cj)
+        if at.KindOf(a, cid2) == at.AST_FUNC_DEF:
+            lo_span_tree(a, cid2, lb, base)
+            mut fnode := at.Get(a, cid2)
+            fnode.file_boundary = true
+            at.Put(a, cid2, fnode)
+            list.push(cid2)
+        end
+    end
+    mut old := pn.list
+    pn.list = list
+    at.Put(a, prog, pn)
+    old.free()
+    lg.Log(log, lg.PH_DRIVER, lg.LOG_INFO, "page " + file + " runs in a native window")
+    ret true
+end

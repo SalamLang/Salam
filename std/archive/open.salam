@@ -167,6 +167,9 @@ pub struct Archive:
     @en "tmp"
     @fa "پرونده موقت"
     pub tmp: str = ""
+    @en "gzpath"
+    @fa "مسیر جی زیپ"
+    pub gzpath: str = ""
     @en "zf"
     @fa "پرونده زیپ"
     pub zf: ZipFile = ZipFile {}
@@ -455,6 +458,9 @@ func _auto_disk_close(arc &: Archive):
         TarFileClose(arc.tf)
     else arc.disk == 4:
         RarFileClose(arc.rf)
+    else arc.disk == 5:
+        mem.Free(arc.gzpath as void*)
+        arc.gzpath = ""
     end
     if arc.tmp.len() > 0:
         os.Remove(arc.tmp)
@@ -476,6 +482,10 @@ func _auto_disk_list(arc &: Archive): Vector<Entry>:
     else arc.disk == 3:
         out = TarFileEntries(arc.tf)
         arc.status = _auto_map_disk(arc.tf.status)
+    else arc.disk == 5:
+        mut gst := 0
+        out = _tar_push_list(arc.gzpath, FormatTarGz, arc.limits.max_total, gst)
+        arc.status = _auto_map_disk(gst)
     else arc.disk == 4:
         out = RarFileEntries(arc.rf)
         arc.status = _auto_map_rar(arc.rf.status)
@@ -492,6 +502,9 @@ func _auto_disk_to(arc &: Archive, name: str, dest: str, cap: i64): int:
     end
     if arc.disk == 4:
         ret _auto_map_rar(RarFileExtractTo(arc.rf, name, dest, cap, 0 as i64))
+    end
+    if arc.disk == 5:
+        ret _auto_map_disk(TarCompressedFileExtractTo(arc.gzpath, FormatTarGz, name, dest, cap, arc.limits.max_total))
     end
     TarFileRewind(arc.tf)
     mut st := ARCHIVE_NOT_FOUND
@@ -519,7 +532,40 @@ func _auto_disk_all(arc &: Archive, destdir: str): int:
     if arc.disk == 4:
         ret _auto_map_rar(RarFileExtractAll(arc.rf, destdir, cap, 0 as i64))
     end
+    if arc.disk == 5:
+        ret _auto_map_disk(_tar_push_all_cap(arc.gzpath, FormatTarGz, destdir, cap, arc.limits.max_total))
+    end
     ret _auto_map_disk(TarFileExtractAll(arc.tf.path, destdir, cap))
+end
+
+func _auto_head_emit(p: void*, n: int, c: void*): bool:
+    b := c as compress.ByteBuf*
+    mut take := 1024 - b[0].len
+    if take > n:
+        take = n
+    end
+    if take > 0:
+        compress.BufPushBytes(b[0], p, take)
+    end
+    ret b[0].len < 1024
+end
+
+func _auto_gz_is_tar(path: str): bool:
+    fp := compress.FileOpenRead(path)
+    if fp == null:
+        ret false
+    end
+    size := compress.FileSize(fp)
+    holder := mem.AllocateZeroed(sizeof(compress.ByteBuf)) as compress.ByteBuf*
+    holder[0] = compress.NewByteBuf()
+    emit := (p: void*, n: int, c: void*): ret _auto_head_emit(p, n, c) end
+    mut sink := compress.SinkCallback(0 as i64, emit, holder as void*)
+    _ := _gz_to_sink(fp, size, sink)
+    tar := _auto_is_tar(holder[0].data, holder[0].len)
+    compress.BufFree(holder[0])
+    mem.Free(holder as void*)
+    compress.FileClose(fp)
+    ret tar
 end
 
 func _auto_open_disk(path: str, password: str, f: int, arc &: Archive): bool:
@@ -548,35 +594,11 @@ func _auto_open_disk(path: str, password: str, f: int, arc &: Archive): bool:
         arc.fail = _auto_map_disk(arc.tf.status)
         ret true
     end
-    if f == FormatGzip:
-        tmp := _auto_tmp_name()
-        gz := GzipDecompressFileCap(path, tmp, arc.limits.max_total)
-        mut tar := false
-        if gz == ARCHIVE_OK:
-            fp := compress.FileOpenRead(tmp)
-            if fp != null:
-                head := mem.AllocateZeroed(1024 as u64)
-                got := compress.FileReadAt(fp, 0 as i64, head, 1024)
-                tar = _auto_is_tar(head, got)
-                mem.Free(head)
-                compress.FileClose(fp)
-            end
-        end
-        if not tar:
-            os.Remove(tmp)
-            mem.Free(tmp as void*)
-            if gz == ARCHIVE_TOO_BIG or gz == ARCHIVE_IO_ERROR:
-                arc.fail = gz
-                arc.format = FormatGzip
-                ret true
-            end
-            ret false
-        end
-        arc.tmp = tmp
-        arc.tf = TarFileOpen(tmp)
-        arc.disk = 3
+    if f == FormatGzip and _auto_gz_is_tar(path):
+        arc.gzpath = str.Clone(path)
+        arc.disk = 5
         arc.format = FormatTarGz
-        arc.fail = _auto_map_disk(arc.tf.status)
+        arc.fail = ARCHIVE_OK
         ret true
     end
     ret false

@@ -94,6 +94,11 @@ fn open_main(app: &AppHandle) -> tauri::Result<()> {
         .on_page_load(move |window, payload| {
             let app = window.app_handle();
             match payload.event() {
+                PageLoadEvent::Started if config::same_origin(payload.url(), &loaded) => {
+                    watchdog::disarm(app);
+                    let token = watchdog::start_navigation(app);
+                    tauri::async_runtime::spawn(watchdog::await_navigation(app.clone(), token));
+                }
                 PageLoadEvent::Started => watchdog::disarm(app),
                 PageLoadEvent::Finished if config::same_origin(payload.url(), &loaded) => watchdog::arm(app),
                 PageLoadEvent::Finished => {}

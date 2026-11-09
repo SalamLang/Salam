@@ -1,0 +1,156 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import net.httpproxy
+import net.socks
+import net.tcp
+import net.tunnel
+
+func echo_conn(arg: i64):
+    c := tcp.ConnFromFd(arg)
+    until true:
+        d := tcp.Read(c, 4096)
+        if d.len() == 0: break end
+        tcp.Write(c, d)
+    end
+    tcp.Close(c)
+end
+
+func echo_accept(arg: i64):
+    srv := tcp.Server { fd = arg }
+    until true:
+        c := tcp.Accept(srv)
+        if not tcp.ConnOk(c): break end
+        socks.Go(echo_conn, c.fd as void*)
+    end
+end
+
+func origin_conn(arg: i64):
+    c := tcp.ConnFromFd(arg)
+    d := tcp.Read(c, 4096)
+    if d.len() > 0:
+        tcp.Write(c, "HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\norigin")
+    end
+    tcp.Close(c)
+end
+
+func origin_accept(arg: i64):
+    srv := tcp.Server { fd = arg }
+    until true:
+        c := tcp.Accept(srv)
+        if not tcp.ConnOk(c): break end
+        socks.Go(origin_conn, c.fd as void*)
+    end
+end
+
+func say(label: str, r: socks.ConnectResult):
+    println label + ": ok=" + r.ok + " code=" + r.code
+end
+
+func main:
+    es := tcp.Bind(0)
+    eport := tcp.Port(es)
+    socks.Go(echo_accept, es.fd as void*)
+    os := tcp.Bind(0)
+    oport := tcp.Port(os)
+    socks.Go(origin_accept, os.fd as void*)
+
+    mut pcfg := socks.NewServerConfig(0)
+    socks.AddUser(pcfg, "u", "p")
+    mut hcfg := httpproxy.NewServerConfig(0)
+    httpproxy.AddUser(hcfg, "u", "p")
+
+    mut mixed := tunnel.NewMixed()
+    tunnel.MixedSetSocks5(mixed, socks.NewInbound(pcfg))
+    tunnel.MixedSetSocks4(mixed, socks.NewInbound4(socks.NewServerConfig(0)))
+    tunnel.MixedSetHttp(mixed, httpproxy.NewInbound(hcfg))
+    fwd := tunnel.NewForwarder(tunnel.Direct(), mixed)
+    inb := tunnel.ListenTcp(0)
+    tunnel.ServeBackground(inb, mixed, fwd)
+    println "mixed inbound up: " + inb.Ok()
+
+    s5 := socks.NewClientAuth("127.0.0.1", inb.port, "u", "p")
+    r5 := socks.Connect(s5, "127.0.0.1", eport)
+    say("socks5 through mixed", r5)
+    r5.stream.Write("five")
+    println r5.stream.Read(100)
+    r5.stream.Close()
+    say("socks5 wrong password", socks.Connect(socks.NewClientAuth("127.0.0.1", inb.port, "u", "x"), "127.0.0.1", eport))
+    say("socks5 no credentials", socks.Connect(socks.NewClient("127.0.0.1", inb.port), "127.0.0.1", eport))
+    mut s4 := socks.NewClient("127.0.0.1", inb.port)
+    s4.version = socks.Socks4
+    r4 := socks.Connect(s4, "127.0.0.1", eport)
+    say("socks4 through mixed", r4)
+    r4.stream.Write("four")
+    println r4.stream.Read(100)
+    r4.stream.Close()
+    say("socks5 refused target", socks.Connect(s5, "127.0.0.1", tcp.FreePort()))
+
+    hc := httpproxy.NewClientAuth("127.0.0.1", inb.port, "u", "p")
+    rh := httpproxy.Connect(hc, "127.0.0.1", eport)
+    println "http connect through mixed: " + rh.ok + " " + rh.status
+    rh.stream.Write("http tunnel")
+    println rh.stream.Read(100)
+    rh.stream.Close()
+    g := httpproxy.Get(hc, "http://127.0.0.1:" + oport + "/")
+    println "http get through mixed: " + g.status + " " + g.body
+    println "http without credentials: " + httpproxy.Connect(httpproxy.NewClient("127.0.0.1", inb.port), "127.0.0.1", eport).status
+    println "http refused target: " + httpproxy.Connect(hc, "127.0.0.1", tcp.FreePort()).status
+    inb.Stop()
+
+    mut ds := socks.NewServerConfig(0)
+    socks.SetDialer(ds, tunnel.Direct())
+    dsv := socks.Start(ds)
+    say("socks server with tunnel dialer", socks.Connect(socks.NewClient("127.0.0.1", dsv.port), "127.0.0.1", eport))
+    socks.Stop(dsv)
+
+    mut bs := socks.NewServerConfig(0)
+    socks.SetDialer(bs, tunnel.Block())
+    bsv := socks.Start(bs)
+    say("socks server with block dialer", socks.Connect(socks.NewClient("127.0.0.1", bsv.port), "127.0.0.1", eport))
+    socks.Stop(bsv)
+
+    mut hs := httpproxy.NewServerConfig(0)
+    httpproxy.SetDialer(hs, tunnel.Block())
+    hsv := httpproxy.Start(hs)
+    println "http server with block dialer: " + httpproxy.Connect(httpproxy.NewClient("127.0.0.1", hsv.port), "127.0.0.1", eport).status
+    httpproxy.Stop(hsv)
+
+    sv1 := socks.Start(socks.NewServerConfig(0))
+    mut h2 := httpproxy.NewServerConfig(0)
+    httpproxy.SetDialer(h2, tunnel.Via(tunnel.Direct(), socks.NewConnector(socks.NewClient("127.0.0.1", sv1.port))))
+    hsv2 := httpproxy.Start(h2)
+    println "http proxy that dials through a socks proxy: " + httpproxy.Connect(httpproxy.NewClient("127.0.0.1", hsv2.port), "127.0.0.1", eport).status
+    cr := httpproxy.Connect(httpproxy.NewClient("127.0.0.1", hsv2.port), "127.0.0.1", eport)
+    cr.stream.Write("two hops")
+    println cr.stream.Read(100)
+    cr.stream.Close()
+    httpproxy.Stop(hsv2)
+    socks.Stop(sv1)
+
+    sv2 := socks.Start(socks.NewServerConfig(0))
+    h3 := httpproxy.NewServerConfig(0)
+    hsv3 := httpproxy.Start(h3)
+    mut chain := tunnel.NewChain(tunnel.Direct())
+    tunnel.ChainAdd(chain, httpproxy.NewConnector(httpproxy.NewClient("127.0.0.1", hsv3.port)))
+    tunnel.ChainAdd(chain, socks.NewConnector(socks.NewClient("127.0.0.1", sv2.port)))
+    println chain.Name()
+    cs := chain.Dial(tunnel.NewAddr("127.0.0.1", eport))
+    println "chain http then socks: " + cs.Ok()
+    cs.Write("chained")
+    println cs.Read(100)
+    cs.Close()
+    httpproxy.Stop(hsv3)
+    socks.Stop(sv2)
+end

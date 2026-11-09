@@ -1,0 +1,107 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import net.httpproxy
+import net.socks
+import net.tcp
+
+func echo_conn(arg: i64):
+    c := tcp.ConnFromFd(arg)
+    until true:
+        d := tcp.Read(c, 4096)
+        if d.len() == 0: break end
+        tcp.Write(c, d)
+    end
+    tcp.Close(c)
+end
+
+func echo_accept(arg: i64):
+    srv := tcp.Server { fd = arg }
+    until true:
+        c := tcp.Accept(srv)
+        if not tcp.ConnOk(c): break end
+        socks.Go(echo_conn, c.fd as void*)
+    end
+end
+
+func origin_conn(arg: i64):
+    c := tcp.ConnFromFd(arg)
+    d := tcp.Read(c, 4096)
+    if d.len() > 0:
+        tcp.Write(c, "HTTP/1.1 200 OK\r\nContent-Length: 11\r\nConnection: close\r\n\r\nhello https")
+    end
+    tcp.Close(c)
+end
+
+func origin_accept(arg: i64):
+    srv := tcp.Server { fd = arg }
+    until true:
+        c := tcp.Accept(srv)
+        if not tcp.ConnOk(c): break end
+        socks.Go(origin_conn, c.fd as void*)
+    end
+end
+
+func main:
+    es := tcp.Bind(0)
+    eport := tcp.Port(es)
+    socks.Go(echo_accept, es.fd as void*)
+    os := tcp.Bind(0)
+    oport := tcp.Port(os)
+    socks.Go(origin_accept, os.fd as void*)
+
+    mut missing := httpproxy.NewServerConfig(0)
+    println "bad cert path: " + httpproxy.SetTLS(missing, "tests/fixtures/ssl/none.crt", "tests/fixtures/ssl/none.key")
+    println "start refused without tls: " + httpproxy.Start(missing).ok
+
+    mut cfg := httpproxy.NewServerConfig(0)
+    println "tls configured: " + httpproxy.SetTLS(cfg, "tests/fixtures/ssl/server.crt", "tests/fixtures/ssl/server.key")
+    httpproxy.AddUser(cfg, "alice", "s3cret")
+    sv := httpproxy.Start(cfg)
+    println "https proxy up: " + sv.ok
+
+    mut cl := httpproxy.NewClientAuth("127.0.0.1", sv.port, "alice", "s3cret")
+    cl.tls = true
+    cl.insecure = true
+    cl.server_name = "localhost"
+    r := httpproxy.Connect(cl, "127.0.0.1", eport)
+    println "connect over tls: ok=" + r.ok + " status=" + r.status
+    r.stream.Write("secret tunnel")
+    println r.stream.Read(100)
+    r.stream.Write("second write")
+    println r.stream.Read(100)
+    r.stream.Close()
+
+    g := httpproxy.Get(cl, "http://127.0.0.1:" + oport + "/")
+    println "plain http via https proxy: ok=" + g.ok + " status=" + g.status + " body=" + g.body
+
+    mut bad := cl
+    bad.password = "wrong"
+    b := httpproxy.Connect(bad, "127.0.0.1", eport)
+    println "wrong password over tls: ok=" + b.ok + " status=" + b.status
+
+    mut strict := cl
+    strict.insecure = false
+    s := httpproxy.Connect(strict, "127.0.0.1", eport)
+    println "self signed rejected: ok=" + s.ok
+
+    plain := httpproxy.NewClientAuth("127.0.0.1", sv.port, "alice", "s3cret")
+    p := httpproxy.Connect(plain, "127.0.0.1", eport)
+    println "plain client against tls proxy: ok=" + p.ok
+
+    again := httpproxy.Connect(cl, "127.0.0.1", eport)
+    println "still serving: " + again.ok
+    again.stream.Close()
+    httpproxy.Stop(sv)
+end

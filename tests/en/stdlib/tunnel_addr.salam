@@ -1,0 +1,133 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import net.tunnel
+import mem
+import testing
+
+func hex(v: Vector<u8>): str:
+    digits := "0123456789abcdef"
+    mut out := ""
+    repeat v.len() in i:
+        b := v[i] as int
+        out += digits.substr(b / 16, 1) + digits.substr(b % 16, 1)
+    end
+    ret out
+end
+
+func send(s: dyn tunnel.Stream, v: Vector<u8>):
+    p := tunnel.VectorBytes(v)
+    tunnel.WriteAllBytes(s, p, v.len())
+    mem.Free(p)
+end
+
+func ip4(): int:
+    mut bad := 0
+    v := tunnel.ParseIPv4("192.168.1.20")
+    testing.AssertEqInt(v.len(), 4)
+    testing.AssertEqStr(tunnel.FormatIP(v), "192.168.1.20")
+    each s in ["1.2.3", "1.2.3.4.5", "256.1.1.1", "1..2.3", "a.b.c.d", "", "1.2.3.", "01234.1.1.1"]:
+        t := tunnel.ParseIPv4(s)
+        if t.len() != 0:
+            println "accepted bad ipv4", s
+            bad++
+        end
+    end
+    ret bad
+end
+
+func ip6(): int:
+    mut bad := 0
+    pairs := ["::1", "::1", "2001:db8::1", "2001:db8::1", "2001:0db8:0000:0000:0000:0000:0000:0001", "2001:db8::1", "::", "::", "fe80::1:2", "fe80::1:2", "::ffff:1.2.3.4", "::ffff:102:304", "1:2:3:4:5:6:7:8", "1:2:3:4:5:6:7:8", "1:0:0:2:0:0:0:3", "1:0:0:2::3"]
+    mut i := 0
+    until i < pairs.len():
+        v := tunnel.ParseIPv6(pairs[i])
+        got := tunnel.FormatIP(v)
+        if got != pairs[i + 1]:
+            println "ipv6 mismatch", pairs[i], got, pairs[i + 1]
+            bad++
+        end
+        i += 2
+    end
+    each s in ["1:2:3", ":::", "1::2::3", "12345::1", "g::1", "1:2:3:4:5:6:7:8:9", ":1:2:3:4:5:6:7"]:
+        if tunnel.ParseIPv6(s).len() != 0:
+            println "accepted bad ipv6", s
+            bad++
+        end
+    end
+    ret bad
+end
+
+func main:
+    println "bad ipv4:", ip4()
+    println "bad ipv6:", ip6()
+    each s in ["example.com:443", "10.0.0.1:80", "[2001:db8::5]:8080", "[::1]:22", "EXAMPLE.org:1"]:
+        a := tunnel.ParseAddr(s)
+        println a.valid, a.kind, a.host, a.port, a.String()
+    end
+    each s in ["example.com", "example.com:", "example.com:99999", ":80", "a:b:80", "[::1]", "[::1]x:80", "host:12x"]:
+        println s, tunnel.ParseAddr(s).valid
+    end
+    println tunnel.IsIP("10.1.1.1"), tunnel.IsIP("::1"), tunnel.IsIP("example.com")
+
+    d := tunnel.NewAddr("example.com", 443)
+    println hex(tunnel.EncodeSocks(d))
+    println hex(tunnel.EncodeSocks(tunnel.NewAddr("1.2.3.4", 80)))
+    println hex(tunnel.EncodeSocks(tunnel.NewAddr("::1", 8080)))
+    println hex(tunnel.EncodeVless(d))
+    println hex(tunnel.EncodeVless(tunnel.NewAddr("1.2.3.4", 80)))
+    println hex(tunnel.EncodeVless(tunnel.NewAddr("::1", 8080)))
+
+    mut all := Vector {} as Vector<tunnel.Addr>
+    all.push(d)
+    all.push(tunnel.NewAddr("1.2.3.4", 80))
+    all.push(tunnel.NewAddr("2001:db8::7", 65535))
+    all.push(tunnel.NewAddr("ایران.ir", 1))
+    repeat all.len() in i:
+        e := tunnel.EncodeSocks(all[i])
+        p := tunnel.VectorBytes(e)
+        r := tunnel.DecodeSocks(p, e.len())
+        println "socks", r.valid, r.host, r.port, r.size == e.len()
+        short := tunnel.DecodeSocks(p, e.len() - 1)
+        println "short", short.valid
+        mem.Free(p)
+        ev := tunnel.EncodeVless(all[i])
+        pv := tunnel.VectorBytes(ev)
+        rv := tunnel.DecodeVless(pv, ev.len())
+        println "vless", rv.valid, rv.host, rv.port, rv.size == ev.len()
+        mem.Free(pv)
+    end
+
+    pipe := tunnel.NewPipe()
+    a := tunnel.PipeA(pipe)
+    b := tunnel.PipeB(pipe)
+    send(a, tunnel.EncodeSocks(all[0]))
+    sa := tunnel.ReadSocksAddr(b)
+    println "stream socks", sa.valid, sa.host, sa.port
+    send(a, tunnel.EncodeSocks(all[2]))
+    sb := tunnel.ReadSocksAddr(b)
+    println "stream socks6", sb.valid, sb.host, sb.port
+    send(a, tunnel.EncodeVless(all[0]))
+    sc := tunnel.ReadVlessAddr(b)
+    println "stream vless", sc.valid, sc.host, sc.port
+    a.Write("\x09")
+    println tunnel.ReadSocksAddr(b).valid
+    a.Close()
+    scratch := mem.Allocate(4 as u64)
+    println b.Read(10) == "", b.ReadBytes(scratch, 4)
+    mem.Free(scratch)
+    println tunnel.ReadByte(b)
+end

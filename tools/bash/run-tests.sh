@@ -903,6 +903,12 @@ if want new; then
     done
 fi
 
+x11_available() {
+    [ "$HOST_OS" = linux ] || return 1
+    [ -n "${DISPLAY:-}" ] && return 0
+    command -v xvfb-run >/dev/null 2>&1
+}
+
 collect_example_dir() {
     dir="$1"
     for lang in $LANGS; do
@@ -920,6 +926,8 @@ collect_example_dir() {
                 skip="requires live network; set SALAM_TEST_NETWORK=1"
             elif [ -f "$base.interactive" ] && [ "${SALAM_TEST_INTERACTIVE:-0}" != "1" ]; then
                 skip="opens a modal window; set SALAM_TEST_INTERACTIVE=1 on a desktop session"
+            elif [ -f "$base.x11" ] && ! x11_available; then
+                skip="needs an X server: set DISPLAY or install xvfb-run"
             fi
             if [ -f "$exp" ]; then
                 if [ -n "$skip" ]; then

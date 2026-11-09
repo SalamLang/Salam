@@ -55,7 +55,11 @@ _try=1
 _runout="$jobdir/run.out"
 while [ "$_try" -le 4 ]; do
     exec 3>&2 2>/dev/null
-    (timeout "${SALAM_TEST_TIMEOUT:-30}" "$exe" 2>&1 3>&-) >"$_runout"
+    if [ -f "${f%.salam}.x11" ] && [ -z "${DISPLAY:-}" ]; then
+        (timeout "${SALAM_TEST_TIMEOUT:-30}" xvfb-run -a "$exe" 2>&1 3>&-) >"$_runout"
+    else
+        (timeout "${SALAM_TEST_TIMEOUT:-30}" "$exe" 2>&1 3>&-) >"$_runout"
+    fi
     _rc=$?
     exec 2>&3 3>&-
     got=$(tr -d '\r' <"$_runout" 2>/dev/null)

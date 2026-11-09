@@ -422,7 +422,6 @@ function TopList({ title, items, ltr }: { title: string; items: { name: string; 
 }
 
 function Users({ picked, onPick, notify }: { picked: Picked; onPick: (p: Picked) => void; notify: (msg: string, ok?: boolean) => void }) {
-  const [saving, setSaving] = useState<number | null>(null);
   const [q, setQ] = useState("");
   const [query, setQuery] = useState("");
   const [offset, setOffset] = useState(0);
@@ -457,30 +456,6 @@ function Users({ picked, onPick, notify }: { picked: Picked; onPick: (p: Picked)
     };
   }, [query, offset]);
 
-  const togglePolicy = async (u: AdminUser) => {
-    const lift = !u.policy_free;
-    const ok = await confirmDialog({
-      title: lift ? t("برداشتن محدودیت فقط-سلام", "Lift the Salam-only limit") : t("برگرداندن محدودیت فقط-سلام", "Restore the Salam-only limit"),
-      subject: u.name,
-      message: lift
-        ? t("دستیار برای این کاربر (سایت، تلگرام، ایجنت و کلیدهای API او) به زبان‌ها و فناوری‌های دیگر هم کد می‌نویسد و بررسی‌های سلام‌محور اعمال نمی‌شود. بقیه‌ی کاربران همچنان محدود می‌مانند.", "The assistant will write code in other languages and technologies for this user (site, Telegram, agent and their API keys) and the Salam-only checks are skipped. Everyone else stays limited.")
-        : t("محدودیت فقط-سلام دوباره برای این کاربر فعال می‌شود.", "The Salam-only limit applies to this user again."),
-      confirmLabel: lift ? t("برداشتن", "Lift") : t("فعال کردن", "Restore"),
-      icon: "alert",
-    });
-    if (!ok) return;
-    setSaving(u.id);
-    try {
-      const r = await api.adminUserPolicy(u.id, { policy_free: lift });
-      setData((cur) => (cur ? { ...cur, users: cur.users.map((x) => (x.id === u.id ? { ...x, policy_free: r.user.policy_free } : x)) } : cur));
-      notify(lift ? t("محدودیت برای این کاربر برداشته شد.", "The limit was lifted for this user.") : t("محدودیت دوباره فعال شد.", "The limit is on again."), true);
-    } catch (e) {
-      notify(errText(e, t("ذخیره ناموفق بود.", "Could not save.")));
-    } finally {
-      setSaving(null);
-    }
-  };
-
   const total = data?.total ?? 0;
   const from = total === 0 ? 0 : offset + 1;
   const to = Math.min(total, offset + (data?.users.length ?? 0));
@@ -497,12 +472,12 @@ function Users({ picked, onPick, notify }: { picked: Picked; onPick: (p: Picked)
       </div>
       {data && data.plain_ready === false && (
         <p className="policy-warn" role="status">
-          {t("موتور پروفایل ساده ندارد (AI_ENGINE_AGENT_RAW)، پس حساب‌هایی که محدودیت فقط-سلام‌شان برداشته شده هنوز با پروفایل سلام پاسخ می‌گیرند.", "The engine has no plain profile (AI_ENGINE_AGENT_RAW), so accounts whose Salam-only limit is lifted are still answered by the Salam profile.")}
+          {t("موتور پروفایل ساده ندارد (AI_ENGINE_AGENT_RAW)، پس حساب‌های اشتراک پولی هنوز با پروفایل سلام پاسخ می‌گیرند.", "The engine has no plain profile (AI_ENGINE_AGENT_RAW), so paid accounts are still answered by the Salam profile.")}
         </p>
       )}
       {data && data.desktop_plain_ready === false && (
         <p className="policy-warn" role="status">
-          {t("برای ایجنت، AI_ENGINE_AGENT_DESKTOP_RAW تنظیم نشده؛ حساب آزاد در ایجنت یا ابزارهای دسکتاپ را از دست می‌دهد یا همان سیاست سلام را می‌گیرد.", "AI_ENGINE_AGENT_DESKTOP_RAW is not configured; a lifted account in the desktop agent either loses its desktop tools or keeps the Salam policy.")}
+          {t("برای ایجنت، AI_ENGINE_AGENT_DESKTOP_RAW تنظیم نشده؛ حساب اشتراک پولی در ایجنت یا ابزارهای دسکتاپ را از دست می‌دهد یا همان سیاست سلام را می‌گیرد.", "AI_ENGINE_AGENT_DESKTOP_RAW is not configured; a lifted account in the desktop agent either loses its desktop tools or keeps the Salam policy.")}
         </p>
       )}
       {error && (
@@ -532,7 +507,6 @@ function Users({ picked, onPick, notify }: { picked: Picked; onPick: (p: Picked)
               <th scope="col">{t("هزینه‌ی خروجی ($)", "Output cost ($)")}</th>
               <th scope="col">{t("هزینه‌ی کل ($)", "Total cost ($)")}</th>
               <th scope="col">{t("تلگرام", "Telegram")}</th>
-              <th scope="col">{t("محدودیت فقط سلام", "Salam-only limit")}</th>
               <th scope="col">{t("آخرین ورود", "Last login")}</th>
               <th scope="col">{t("آخرین چت", "Last chat")}</th>
               <th scope="col">{t("آخرین ایجنت", "Last agent")}</th>
@@ -566,11 +540,6 @@ function Users({ picked, onPick, notify }: { picked: Picked; onPick: (p: Picked)
                 <td dir="ltr">{(u.cost_out ?? 0) > 0 ? fmtCost(u.cost_out ?? 0) : <span className="muted">-</span>}</td>
                 <td dir="ltr" className="strong">{(u.cost_in ?? 0) + (u.cost_out ?? 0) > 0 ? fmtCost((u.cost_in ?? 0) + (u.cost_out ?? 0)) : <span className="muted">-</span>}</td>
                 <td>{u.telegram ? fmtNum(u.telegram) : <span className="muted">-</span>}</td>
-                <td>
-                  <button type="button" className={`badge ${u.policy_free ? "danger" : "ok"}`} disabled={saving === u.id} onClick={() => togglePolicy(u)} title={t("با زدن، محدودیت فقط-سلام برای این کاربر برداشته یا برگردانده می‌شود", "Click to lift or restore the Salam-only limit for this user")}>
-                    {saving === u.id ? "…" : u.policy_free ? t("برداشته شده", "Lifted") : t("فعال", "On")}
-                  </button>
-                </td>
                 <td title={u.last_login ? t(`${fmtDateTime(u.last_login)}، روی هم ${fmtNum(u.logins || 0)} ورود`, `${fmtDateTime(u.last_login)}, ${fmtNum(u.logins || 0)} logins in total`) : undefined}>{fmtRelative(u.last_login || 0)}</td>
                 <td title={u.last_active_chat ? fmtDateTime(u.last_active_chat) : undefined}>{fmtRelative(u.last_active_chat)}</td>
                 <td title={u.last_active_agent ? fmtDateTime(u.last_active_agent) : undefined}>{fmtRelative(u.last_active_agent)}</td>
@@ -853,10 +822,10 @@ const PLAN_NUMBERS: { key: "price" | "usd" | "days" | "chat_5h" | "chat_daily" |
   { key: "sort", fa: "ترتیب نمایش", en: "Sort order" },
 ];
 
-type PlanDraft = { id: string; name: string; name_en: string; note: string; note_en: string; enabled: boolean } & Record<(typeof PLAN_NUMBERS)[number]["key"], string>;
+type PlanDraft = { id: string; name: string; name_en: string; note: string; note_en: string; enabled: boolean; salam_only: boolean } & Record<(typeof PLAN_NUMBERS)[number]["key"], string>;
 
 function draftOf(p: Partial<AdminPlan>): PlanDraft {
-  const d = { id: p.id ?? "", name: p.name ?? "", name_en: p.name_en ?? "", note: p.note ?? "", note_en: p.note_en ?? "", enabled: p.enabled ?? false } as PlanDraft;
+  const d = { id: p.id ?? "", name: p.name ?? "", name_en: p.name_en ?? "", note: p.note ?? "", note_en: p.note_en ?? "", enabled: p.enabled ?? false, salam_only: p.salam_only ?? false } as PlanDraft;
   for (const f of PLAN_NUMBERS) d[f.key] = String(p[f.key] ?? 0);
   return d;
 }
@@ -872,7 +841,7 @@ function PlanEditor({ plan, onSaved, notify }: { plan: AdminPlan | null; onSaved
     e.preventDefault();
     setSaving(true);
     try {
-      const body: Record<string, unknown> = { name: d.name, name_en: d.name_en, note: d.note, note_en: d.note_en, enabled: d.enabled };
+      const body: Record<string, unknown> = { name: d.name, name_en: d.name_en, note: d.note, note_en: d.note_en, enabled: d.enabled, salam_only: d.salam_only };
       for (const f of PLAN_NUMBERS) body[f.key] = Number(d[f.key]) || 0;
       if (fresh) {
         body.id = d.id;
@@ -928,6 +897,7 @@ function PlanEditor({ plan, onSaved, notify }: { plan: AdminPlan | null; onSaved
           </label>
         ))}
       </div>
+      <Checkbox checked={d.salam_only} onChange={(v) => set("salam_only", v)} label={t("فقط سلام", "Salam only")} hint={t("روشن: دستیار با این پلن فقط به زبان سلام کد می‌نویسد. خاموش: به هر زبان و فناوری هم کد می‌نویسد. پلن رایگان باید روشن بماند.", "On: the assistant writes code in Salam only on this plan. Off: it writes code in any language too. Keep it on for the free plan.")} />
       {!free && <Checkbox checked={d.enabled} onChange={(v) => set("enabled", v)} label={t("فعال و قابل خرید", "Active and on sale")} hint={t("پلن غیرفعال از صفحه‌ی اشتراک‌ها پنهان می‌شود، ولی مشترک‌های فعلی آن می‌مانند.", "A disabled plan is hidden from the plans page, but current subscribers keep it.")} />}
       <div className="grant-actions">
         <button type="submit" className="button primary" disabled={saving}>
@@ -2587,34 +2557,91 @@ export function NoAccess() {
 
 type Section = "overview" | "users" | "chats" | "billing" | "api" | "events";
 
-const SECTIONS: { id: Section; icon: typeof IconActivity; label: () => string; hint: () => string }[] = [
-  { id: "overview", icon: IconChart, label: () => t("نمای کلی", "Overview"), hint: () => t("آمار، مصرف و روند", "Stats, usage and trends") },
-  { id: "users", icon: IconUsers, label: () => t("کاربران", "Users"), hint: () => t("حساب‌ها، تلگرام و نشست‌ها", "Accounts, Telegram and sessions") },
-  { id: "chats", icon: IconChat, label: () => t("گفت‌وگوها", "Chats"), hint: () => t("گفت‌وگوها، مهمان‌ها و فایل‌ها", "Chats, guests and files") },
-  { id: "billing", icon: IconBadgeCheck, label: () => t("پلن‌ها و پرداخت", "Plans and billing"), hint: () => t("پلن‌ها، اشتراک‌ها و پرداخت‌ها", "Plans, subscriptions and payments") },
-  { id: "api", icon: IconKey, label: () => t("API و برنامه‌ها", "API and apps"), hint: () => t("درخواست‌ها، کلیدها و برنامه‌های متصل", "Requests, keys and connected apps") },
-  { id: "events", icon: IconActivity, label: () => t("رویدادها", "Events"), hint: () => t("گزارش رویدادهای سرویس", "Service event log") },
+type Sub = { id: string; label: () => string; hint: () => string };
+
+const SECTIONS: { id: Section; icon: typeof IconActivity; label: () => string; hint: () => string; subs: Sub[] }[] = [
+  { id: "overview", icon: IconChart, label: () => t("نمای کلی", "Overview"), hint: () => t("آمار، مصرف و روند", "Stats, usage and trends"), subs: [] },
+  {
+    id: "users",
+    icon: IconUsers,
+    label: () => t("کاربران", "People"),
+    hint: () => t("حساب‌ها، تلگرام و نشست‌ها", "Accounts, Telegram and sessions"),
+    subs: [
+      { id: "accounts", label: () => t("حساب‌ها", "Accounts"), hint: () => t("همه‌ی کاربران ثبت‌نام‌شده", "Every registered user") },
+      { id: "telegram", label: () => t("تلگرام", "Telegram"), hint: () => t("کاربران و مهمان‌های ربات تلگرام", "Telegram bot users and guests") },
+      { id: "sessions", label: () => t("نشست‌ها", "Sessions"), hint: () => t("نشست‌های ورود و سیستم‌عامل‌ها", "Sign-in sessions and platforms") },
+    ],
+  },
+  {
+    id: "chats",
+    icon: IconChat,
+    label: () => t("گفت‌وگوها", "Chats"),
+    hint: () => t("گفت‌وگوها، مهمان‌ها و فایل‌ها", "Chats, guests and files"),
+    subs: [
+      { id: "latest", label: () => t("گفت‌وگوها", "Chats"), hint: () => t("آخرین گفت‌وگوها", "Latest chats") },
+      { id: "guests", label: () => t("مهمان‌های سایت", "Website guests"), hint: () => t("گفت‌وگوهای مهمان‌ها روی سایت", "Guest chats on the website") },
+      { id: "files", label: () => t("فایل‌ها", "Files"), hint: () => t("فایل‌های بارگذاری‌شده", "Uploaded files") },
+    ],
+  },
+  {
+    id: "billing",
+    icon: IconBadgeCheck,
+    label: () => t("فروش", "Billing"),
+    hint: () => t("پلن‌ها، اشتراک‌ها و پرداخت‌ها", "Plans, subscriptions and payments"),
+    subs: [
+      { id: "plans", label: () => t("پلن‌ها", "Plans"), hint: () => t("ساخت و ویرایش پلن‌ها", "Create and edit plans") },
+      { id: "subscriptions", label: () => t("اشتراک‌ها", "Subscriptions"), hint: () => t("اشتراک‌های فعال و اعطای پلن", "Active subscriptions and grants") },
+      { id: "payments", label: () => t("پرداخت‌ها", "Payments"), hint: () => t("تراکنش‌های پرداخت", "Payment transactions") },
+    ],
+  },
+  {
+    id: "api",
+    icon: IconKey,
+    label: () => t("API", "API"),
+    hint: () => t("درخواست‌ها، کلیدها و برنامه‌های متصل", "Requests, keys and connected apps"),
+    subs: [
+      { id: "requests", label: () => t("درخواست‌ها", "Requests"), hint: () => t("درخواست‌های API", "API requests") },
+      { id: "keys", label: () => t("کلیدها", "Keys"), hint: () => t("سیاست و محدودیت کلیدها", "Key policies and limits") },
+      { id: "apps", label: () => t("برنامه‌های متصل", "Connected apps"), hint: () => t("برنامه‌های OAuth و MCP", "OAuth and MCP apps") },
+    ],
+  },
+  { id: "events", icon: IconActivity, label: () => t("رویدادها", "Events"), hint: () => t("گزارش رویدادهای سرویس", "Service event log"), subs: [] },
 ];
 
-function sectionFromPath(): Section {
-  const part = location.pathname.replace(/\/+$/, "").split("/")[2] ?? "";
-  return SECTIONS.find((x) => x.id === part)?.id ?? "overview";
+function placeFromPath(): { section: (typeof SECTIONS)[number]; sub: Sub | null } {
+  const parts = location.pathname.replace(/\/+$/, "").split("/");
+  const section = SECTIONS.find((x) => x.id === parts[2]) ?? SECTIONS[0];
+  const sub = section.subs.find((x) => x.id === parts[3]) ?? section.subs[0] ?? null;
+  return { section, sub };
 }
 
-function sectionPath(id: Section): string {
-  return id === "overview" ? "/admin" : `/admin/${id}`;
+function adminPath(section: Section, sub?: string): string {
+  if (section === "overview") return "/admin";
+  return sub ? `/admin/${section}/${sub}` : `/admin/${section}`;
+}
+
+function arrowMove(e: React.KeyboardEvent, i: number, count: number, go: (next: number) => void) {
+  const step = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+  if (step === 0) return;
+  const rtl = getComputedStyle(e.currentTarget).direction === "rtl";
+  e.preventDefault();
+  go((i + (rtl ? -step : step) + count) % count);
+}
+
+function openLink(e: React.MouseEvent, path: string, go: (path: string) => void) {
+  if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+  e.preventDefault();
+  go(path);
+}
+
+function useShowActive(key: string) {
+  useEffect(() => {
+    document.querySelector<HTMLElement>(".admin-tab.active, .admin-subtab.active")?.scrollIntoView({ block: "nearest", inline: "center" });
+  }, [key]);
 }
 
 function TabBar({ active, onNavigate }: { active: Section; onNavigate: (path: string) => void }) {
-  const move = (e: React.KeyboardEvent, i: number) => {
-    const step = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
-    if (step === 0) return;
-    const rtl = getComputedStyle(e.currentTarget).direction === "rtl";
-    const next = SECTIONS[(i + (rtl ? -step : step) + SECTIONS.length) % SECTIONS.length];
-    e.preventDefault();
-    onNavigate(sectionPath(next.id));
-    requestAnimationFrame(() => document.getElementById(`admin-tab-${next.id}`)?.focus());
-  };
+  useShowActive(active);
   return (
     <nav className="admin-tabs" role="tablist" aria-label={t("بخش‌های مدیریت", "Admin sections")}>
       {SECTIONS.map((x, i) => {
@@ -2628,18 +2655,52 @@ function TabBar({ active, onNavigate }: { active: Section; onNavigate: (path: st
             aria-selected={on}
             aria-controls="admin-panel"
             tabIndex={on ? 0 : -1}
-            href={sectionPath(x.id)}
+            href={adminPath(x.id)}
             className={`admin-tab${on ? " active" : ""}`}
             title={x.hint()}
-            onKeyDown={(e) => move(e, i)}
-            onClick={(e) => {
-              if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
-              e.preventDefault();
-              onNavigate(sectionPath(x.id));
-            }}
+            onKeyDown={(e) =>
+              arrowMove(e, i, SECTIONS.length, (n) => {
+                onNavigate(adminPath(SECTIONS[n].id));
+                requestAnimationFrame(() => document.getElementById(`admin-tab-${SECTIONS[n].id}`)?.focus());
+              })
+            }
+            onClick={(e) => openLink(e, adminPath(x.id), onNavigate)}
           >
             <Icon width={16} height={16} />
             <span>{x.label()}</span>
+          </a>
+        );
+      })}
+    </nav>
+  );
+}
+
+function SubBar({ section, active, onNavigate }: { section: Section; active: string; onNavigate: (path: string) => void }) {
+  const subs = SECTIONS.find((x) => x.id === section)?.subs ?? [];
+  if (subs.length === 0) return null;
+  return (
+    <nav className="admin-subtabs" role="tablist" aria-label={t("صفحه‌های این بخش", "Pages in this section")}>
+      {subs.map((x, i) => {
+        const on = x.id === active;
+        return (
+          <a
+            key={x.id}
+            id={`admin-sub-${x.id}`}
+            role="tab"
+            aria-selected={on}
+            tabIndex={on ? 0 : -1}
+            href={adminPath(section, x.id)}
+            className={`admin-subtab${on ? " active" : ""}`}
+            title={x.hint()}
+            onKeyDown={(e) =>
+              arrowMove(e, i, subs.length, (n) => {
+                onNavigate(adminPath(section, subs[n].id));
+                requestAnimationFrame(() => document.getElementById(`admin-sub-${subs[n].id}`)?.focus());
+              })
+            }
+            onClick={(e) => openLink(e, adminPath(section, x.id), onNavigate)}
+          >
+            {x.label()}
           </a>
         );
       })}
@@ -2654,7 +2715,7 @@ function Overview({ s }: { s: AdminSummary }) {
     <>
       <section className="admin-group" aria-label={t("کاربران و محتوا", "People and content")}>
         <h3 className="admin-group-title">{t("کاربران و محتوا", "People and content")}</h3>
-        <div className="tiles">
+        <div className="tiles tiles-4">
           <Tile label={t("کاربران", "Users")} value={s.users} sub={t(`${fmtNum(s.users_7d)} در ۷ روز اخیر`, `${fmtNum(s.users_7d)} in the last 7 days`)} />
           <Tile label={t("گفت‌وگوها", "Chats")} value={s.chats} sub={t(`${fmtNum(s.messages)} پیام`, `${fmtNum(s.messages)} messages`)} />
           <Tile label={t("مهمان‌های سایت", "Website guests")} value={s.guests ?? 0} sub={t(`${fmtNum(s.guest_messages ?? 0)} پیام، ${fmtNum(s.guests_at_limit ?? 0)} به سقف رسیدند`, `${fmtNum(s.guest_messages ?? 0)} messages, ${fmtNum(s.guests_at_limit ?? 0)} hit the limit`)} />
@@ -2663,7 +2724,7 @@ function Overview({ s }: { s: AdminSummary }) {
       </section>
       <section className="admin-group" aria-label={t("API و MCP", "API and MCP")}>
         <h3 className="admin-group-title">{t("API و MCP", "API and MCP")}</h3>
-        <div className="tiles">
+        <div className="tiles tiles-3">
           <Tile label={t("برنامه‌های متصل", "Connected apps")} value={s.apps} />
           <Tile label={t("فراخوانی‌های MCP", "MCP calls")} value={s.mcp_calls} sub={t(`${fmtNum(s.mcp_calls_24h)} در ۲۴ ساعت اخیر`, `${fmtNum(s.mcp_calls_24h)} in the last 24 hours`)} />
           <Tile label={t("خطاهای MCP در ۲۴ ساعت", "MCP errors in 24 hours")} value={s.mcp_errors_24h} sub={t(`${fmtNum(errRate)}٪ از فراخوانی‌ها`, `${fmtNum(errRate)}% of calls`)} tone={s.mcp_errors_24h > 0 ? "danger" : undefined} />
@@ -2697,7 +2758,8 @@ export function Admin({ notify, onNavigate }: { notify: (msg: string, ok?: boole
   const [error, setError] = useState("");
   const [forbidden, setForbidden] = useState(false);
   const [picked, setPicked] = useState<Picked>(null);
-  const section = sectionFromPath();
+  const { section: current, sub } = placeFromPath();
+  const section = current.id;
 
   const load = useCallback(() => {
     setError("");
@@ -2716,15 +2778,14 @@ export function Admin({ notify, onNavigate }: { notify: (msg: string, ok?: boole
 
   if (forbidden) return <NoAccess />;
 
-  const current = SECTIONS.find((x) => x.id === section) ?? SECTIONS[0];
-
   return (
     <div className="page admin-page">
       <header className="page-head">
         <h2>{t("مدیریت", "Admin")}</h2>
-        <p className="muted">{current.hint()}</p>
+        <p className="muted">{sub ? sub.hint() : current.hint()}</p>
       </header>
       <TabBar active={section} onNavigate={onNavigate} />
+      {sub && <SubBar section={section} active={sub.id} onNavigate={onNavigate} />}
       {picked && section !== "overview" && (
         <div className="picked-bar" role="status">
           {t("نمایش داده‌های", "Showing data for")} <bdi className="strong">{picked.name}</bdi>
@@ -2753,34 +2814,29 @@ export function Admin({ notify, onNavigate }: { notify: (msg: string, ok?: boole
             {summary && <Overview s={summary} />}
           </>
         )}
-        {section === "users" && (
-          <>
-            <Users picked={picked} onPick={setPicked} notify={notify} />
-            <TelegramSessions picked={picked} onPick={setPicked} />
-            <Sessions picked={picked} notify={notify} />
-          </>
+        {section === "users" && sub?.id === "accounts" && <Users picked={picked} onPick={setPicked} notify={notify} />}
+        {section === "users" && sub?.id === "telegram" && <TelegramSessions picked={picked} onPick={setPicked} />}
+        {section === "users" && sub?.id === "sessions" && <Sessions picked={picked} notify={notify} />}
+        {section === "chats" && sub?.id === "latest" && (picked ? <Conversations picked={picked} /> : <LatestChats />)}
+        {section === "chats" && sub?.id === "guests" && (
+          picked ? (
+            <section className="card panel">
+              <p className="muted">{t("گفت‌وگوهای مهمان به حساب کاربری وصل نیستند. برای دیدنشان فیلتر کاربر را بردارید.", "Guest chats are not tied to accounts. Clear the user filter to see them.")}</p>
+              <button type="button" className="button ghost" onClick={() => setPicked(null)}>
+                {t("نمایش همه", "Show all")}
+              </button>
+            </section>
+          ) : (
+            <Guests />
+          )
         )}
-        {section === "chats" && (
-          <>
-            {picked ? <Conversations picked={picked} /> : <LatestChats />}
-            {!picked && <Guests />}
-            <Uploads picked={picked} notify={notify} />
-          </>
-        )}
-        {section === "billing" && (
-          <>
-            <PlansAdmin notify={notify} />
-            <Subscriptions picked={picked} notify={notify} />
-            <Payments picked={picked} />
-          </>
-        )}
-        {section === "api" && (
-          <>
-            <RequestsFeed picked={picked} onPick={setPicked} />
-            <KeyPolicies picked={picked} notify={notify} />
-            <AppsTable picked={picked} notify={notify} />
-          </>
-        )}
+        {section === "chats" && sub?.id === "files" && <Uploads picked={picked} notify={notify} />}
+        {section === "billing" && sub?.id === "plans" && <PlansAdmin notify={notify} />}
+        {section === "billing" && sub?.id === "subscriptions" && <Subscriptions picked={picked} notify={notify} />}
+        {section === "billing" && sub?.id === "payments" && <Payments picked={picked} />}
+        {section === "api" && sub?.id === "requests" && <RequestsFeed picked={picked} onPick={setPicked} />}
+        {section === "api" && sub?.id === "keys" && <KeyPolicies picked={picked} notify={notify} />}
+        {section === "api" && sub?.id === "apps" && <AppsTable picked={picked} notify={notify} />}
         {section === "events" && <Events picked={picked} onPick={setPicked} />}
       </div>
     </div>

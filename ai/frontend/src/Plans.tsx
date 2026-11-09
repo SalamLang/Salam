@@ -79,7 +79,7 @@ function limit(n: number, unit: string): string {
 
 function features(p: Plan): string[] {
   return [
-    p.price === 0 ? t("فقط کد زبان سلام می‌نویسد", "Writes Salam code only") : t("هر زبان برنامه‌نویسی و هر کاری", "Any programming language and any task"),
+    p.salam_only ? t("فقط کد زبان سلام می‌نویسد", "Writes Salam code only") : t("هر زبان برنامه‌نویسی و هر کاری", "Any programming language and any task"),
     t(`گفت‌وگو: ${limit(p.chat_daily, "پیام در روز")}`, `Chat: ${limit(p.chat_daily, "messages per day")}`),
     ...(p.chat_weekly > 0 ? [t(`گفت‌وگو در هفته: ${fmtNum(p.chat_weekly)} پیام`, `Chat per week: ${fmtNum(p.chat_weekly)} messages`)] : []),
     ...(p.chat_5h > 0 ? [t(`گفت‌وگو در ۵ ساعت: ${fmtNum(p.chat_5h)} پیام`, `Chat per 5 hours: ${fmtNum(p.chat_5h)} messages`)] : []),

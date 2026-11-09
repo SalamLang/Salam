@@ -380,7 +380,7 @@ $msgs
 EOF_MSGS
         fi
         msg_present=""
-        nots=$(grep -oE '(EXPECT-NOT|انتظار-نه): .*' "$f" | sed -E 's/^(EXPECT-NOT|انتظار-نه): //' | tr -d '\r')
+        nots=$(grep -oE '(EXPECT-NOT|انتظار نه): .*' "$f" | sed -E 's/^(EXPECT-NOT|انتظار نه): //' | tr -d '\r')
         if [ -n "$nots" ]; then
             while IFS= read -r bad_msg; do
                 [ -n "$bad_msg" ] || continue
@@ -559,7 +559,7 @@ EOF_LAYOUT
                     [ -n "$bad_txt" ] || continue
                     grep -qF -- "$bad_txt" "$html" && lbad="$bad_txt"
                 done <<EOF_LAYOUT_NOT
-$(grep -oE '(EXPECT-NOT|انتظار-نه): .*' "$f" | sed -E 's/^(EXPECT-NOT|انتظار-نه): //' | tr -d '\r')
+$(grep -oE '(EXPECT-NOT|انتظار نه): .*' "$f" | sed -E 's/^(EXPECT-NOT|انتظار نه): //' | tr -d '\r')
 EOF_LAYOUT_NOT
             else
                 lmiss="(no html produced)"
@@ -755,6 +755,13 @@ note_result() {
     printf '%s\n' "$1" >"$WORK/results/s_$(printf '%s' "$2" | tr '/ .*' '____')"
     printf '%s\n' "$1"
 }
+
+legacy_markers=$(grep -rIlE '^[[:space:]]*// انتظار-(پیام|نه):' "$TOOLS_DIR/../../tests" 2>/dev/null)
+if [ -n "$legacy_markers" ]; then
+    echo "FAIL a Persian test marker still has a hyphen (write 'انتظار پیام' and 'انتظار نه' with a space):"
+    printf '  %s\n' $legacy_markers
+    exit 1
+fi
 
 SECTIONS="$*"
 

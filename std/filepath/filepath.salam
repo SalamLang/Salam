@@ -37,6 +37,19 @@ inline func _fp_sep(c: int): bool: ret c == 47 or c == 92 end
 
 inline func _fp_end(c: int): bool: ret c == 0 or c == 47 or c == 92 end
 
+inline func _fp_drive_len(src: u8*, n: int): int:
+    if n >= 2:
+        c := src[0] as int
+        if ((c >= 65 and c <= 90) or (c >= 97 and c <= 122)) and src[1] as int == 58:
+            if n >= 3 and _fp_sep(src[2] as int):
+                ret 3
+            end
+            ret 2
+        end
+    end
+    ret 0
+end
+
 func _fp_put(dst: u8*, at: int, src: u8*, from: int, n: int):
     repeat n in i:
         c := src[from + i]
@@ -84,13 +97,11 @@ end
 @en "IsAbs"
 @fa "مطلق است"
 pub func IsAbs(p: str): bool:
-    q := Normalize(p)
-    if str.StartsWith(q, "/"): ret true
-    else q.len() >= 2 and q.substr(1, 1) == ":":
-        c := char_code(q.substr(0, 1))
-        ret str.IsAsciiAlpha(c)
-    end
-    ret false
+    n := p.len()
+    if n == 0: ret false end
+    src := p as u8*
+    if _fp_sep(src[0] as int): ret true end
+    ret _fp_drive_len(src, n) == 3
 end
 
 @en "Join"
@@ -123,12 +134,20 @@ end
 @fa "نام پایه"
 pub func Base(p: str): str:
     mut q := Normalize(p)
+    dlen := _fp_drive_len(q as u8*, q.len())
+    if dlen == 3 and q.len() == 3:
+        mem.Free(q as void*)
+        ret str.Clone("/")
+    end
     until q.len() > 1 and str.EndsWith(q, "/"):
+        if dlen == 3 and q.len() <= 3:
+            break
+        end
         shorter := q.substr(0, q.len() - 1)
         mem.Free(q as void*)
         q = shorter
     end
-    if q == "/":
+    if q == "/" or (dlen == 3 and q.len() == 3):
         mem.Free(q as void*)
         ret str.Clone("/")
     else q.len() == 0:
@@ -146,17 +165,33 @@ end
 @fa "پوشه"
 pub func Dir(p: str): str:
     mut q := Normalize(p)
+    dlen := _fp_drive_len(q as u8*, q.len())
+    if dlen == 3 and q.len() == 3:
+        ret q
+    end
     until q.len() > 1 and str.EndsWith(q, "/"):
+        if dlen == 3 and q.len() <= 3:
+            break
+        end
         t := q.substr(0, q.len() - 1)
         mem.Free(q as void*)
         q = t
     end
+    if dlen == 3 and q.len() == 3:
+        ret q
+    end
     idx := str.LastIndex(q, "/")
     mut out := ""
     if idx < 0:
-        out = str.Clone(".")
+        if dlen == 2:
+            out = q.substr(0, 2)
+        else:
+            out = str.Clone(".")
+        end
     else idx == 0:
         out = str.Clone("/")
+    else dlen == 3 and idx == 2:
+        out = q.substr(0, 3)
     else:
         out = q.substr(0, idx)
     end
@@ -193,15 +228,31 @@ pub func Clean(p: str): str:
     n := p.len()
     if n == 0: ret str.Clone(".") end
     src := p as u8*
-    out := mem.Allocate((n + 2) as u64) as u8*
-    rooted := _fp_sep(src[0] as int)
+    out := mem.Allocate((n + 3) as u64) as u8*
+    dlen := _fp_drive_len(src, n)
+    mut rooted := false
     mut r := 0
     mut w := 0
     mut dotdot := 0
-    if rooted:
+    if dlen == 3:
+        out[0] = src[0]
+        out[1] = 58 as u8
+        out[2] = 47 as u8
+        w = 3
+        r = 3
+        rooted = true
+        dotdot = 3
+    else dlen == 2:
+        out[0] = src[0]
+        out[1] = 58 as u8
+        w = 2
+        r = 2
+        dotdot = 2
+    else _fp_sep(src[0] as int):
         out[0] = 47 as u8
         w = 1
         r = 1
+        rooted = true
         dotdot = 1
     end
     until r < n:
@@ -218,7 +269,7 @@ pub func Clean(p: str): str:
                     w--
                 end
             else not rooted:
-                if w > 0:
+                if (dlen == 2 and w > 2) or (dlen != 2 and w > 0):
                     out[w] = 47 as u8
                     w++
                 end
@@ -228,7 +279,7 @@ pub func Clean(p: str): str:
                 dotdot = w
             end
         else:
-            if (rooted and w != 1) or (not rooted and w != 0):
+            if (rooted and w != dotdot) or (not rooted and w != dlen):
                 out[w] = 47 as u8
                 w++
             end

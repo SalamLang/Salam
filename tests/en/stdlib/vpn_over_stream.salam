@@ -1,0 +1,106 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import mem
+import sync
+import net.transport
+import net.tunnel
+import net.vless
+import net.vmess
+
+const UUID := "b831381d-6324-4d53-ad4f-8cda48b30811"
+
+mut mode := 0
+mut pipe := tunnel.NewPipe()
+mut done := sync.NewWaitGroup()
+mut seen := ""
+
+func echo_loop(s: dyn tunnel.Stream):
+    buf := mem.Allocate(4096 as u64)
+    until true:
+        n := s.ReadBytes(buf, 4096)
+        if n <= 0:
+            break
+        end
+        s.WriteBytes(buf, n)
+    end
+    mem.Free(buf)
+    s.Close()
+end
+
+func server():
+    srv_end := tunnel.PipeB(pipe)
+    mut rf := vmess.NewReplayFilter()
+    mut vl := Vector {} as Vector<vless.User>
+    vl.push(vless.NewUser(UUID, ""))
+    mut vm := Vector {} as Vector<vmess.User>
+    vm.push(vmess.NewUser(UUID))
+    if mode == 0:
+        c := vless.AcceptOver(srv_end, vl)
+        seen = "vless " + c.req.addr.host
+        echo_loop(vless.AsStream(c))
+    else mode == 1:
+        c := vmess.AcceptOver(srv_end, vm, rf)
+        seen = "vmess " + c.req.addr.host
+        echo_loop(vmess.AsStream(c))
+    else:
+        outer := vless.AcceptOver(srv_end, vl)
+        inner := vmess.AcceptOver(vless.AsStream(outer), vm, rf)
+        seen = "vless then vmess " + outer.req.addr.host + " " + inner.req.addr.host
+        echo_loop(vmess.AsStream(inner))
+    end
+    sync.Done(done)
+end
+
+func talk(s: dyn tunnel.Stream, label: str):
+    ok := s.Write("ping through the " + label + " tunnel") > 0
+    buf := mem.AllocateZeroed(256 as u64)
+    n := s.ReadBytes(buf, 256)
+    mut got := ""
+    if n > 0:
+        bp := buf as u8*
+        bp[n] = 0 as u8
+        got = buf as str
+    end
+    println label, ok, got
+    mem.Free(buf)
+    s.Close()
+end
+
+func run(m: int):
+    mode = m
+    pipe = tunnel.NewPipe()
+    sync.Add(done, 1 as i64)
+    _t := spawn(server)
+    cli := tunnel.PipeA(pipe)
+    if m == 0:
+        c := vless.DialOver(cli, UUID, "", vless.CmdTCP, transport.NewAddr("one.example", 443))
+        talk(vless.AsStream(c), "vless")
+    else m == 1:
+        c := vmess.DialOver(cli, UUID, vmess.SecChaCha20Poly1305, vmess.CmdTCP, transport.NewAddr("two.example", 443))
+        talk(vmess.AsStream(c), "vmess")
+    else:
+        outer := vless.DialOver(cli, UUID, "", vless.CmdTCP, transport.NewAddr("hop.example", 443))
+        inner := vmess.DialOver(vless.AsStream(outer), UUID, vmess.SecAES128GCM, vmess.CmdTCP, transport.NewAddr("final.example", 443))
+        talk(vmess.AsStream(inner), "vless+vmess")
+    end
+    sync.Wait(done)
+    println "server saw", seen
+end
+
+func main:
+    run(0)
+    run(1)
+    run(2)
+end

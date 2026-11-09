@@ -24,6 +24,7 @@ import tls
 import net.tcp
 import net.internal.rawsock
 import net.websocket
+import net.tunnel
 
 @en "KindTCP"
 @fa "نوع تی سی پی"
@@ -32,6 +33,10 @@ pub const KindTCP := 0
 @en "KindTLS"
 @fa "نوع تی ال اس"
 pub const KindTLS := 1
+
+@en "KindStream"
+@fa "نوع جریان"
+pub const KindStream := 2
 
 @en "Settings"
 @fa "تنظیمات"
@@ -104,6 +109,9 @@ pub struct Conn:
     @en "tls"
     @fa "تی ال اس"
     pub tls: tls.Conn = tls.Conn {}
+    @en "up"
+    @fa "جریان زیرین"
+    pub up: dyn tunnel.Stream = tunnel.TcpStream {}
     @en "ws"
     @fa "وب سوکت"
     pub ws: bool = false
@@ -163,11 +171,69 @@ struct _Pump:
     pub alive: i64* = null
 end
 
+struct _StreamAdapter:
+    pub c: Conn = Conn {}
+
+    pub func Read(max: int): str:
+        buf := mem.Allocate((max + 1) as u64)
+        n := _stream_read(this.c, buf, max)
+        if n <= 0:
+            mem.Free(buf)
+            ret ""
+        end
+        bp := buf as u8*
+        bp[n] = 0 as u8
+        ret buf as str
+    end
+
+    pub func ReadBytes(buf: void*, max: int): int:
+        ret _stream_read(this.c, buf, max)
+    end
+
+    pub func Write(data: str): int:
+        if not _stream_write(this.c, data as void*, data.len()):
+            ret 0 - 1
+        end
+        ret data.len()
+    end
+
+    pub func WriteBytes(ptr: void*, n: int): int:
+        if not _stream_write(this.c, ptr, n):
+            ret 0 - 1
+        end
+        ret n
+    end
+
+    pub func SetDeadline(millis: int):
+        _stream_timeout(this.c, millis)
+    end
+
+    pub func Shutdown():
+        if this.c.kind == KindTLS:
+            rawsock.Shutdown(rawsock.FromFd(tls.Fd(this.c.tls)))
+        else this.c.kind == KindTCP:
+            rawsock.Shutdown(rawsock.FromFd(this.c.tcp.fd))
+        end
+    end
+
+    pub func Close():
+        _stream_close(this.c)
+    end
+
+    pub func Ok(): bool:
+        ret this.c.open
+    end
+end
+
+
 func _ub(p: u8*, i: int): int:
     ret p[i] as int
 end
 
 func _raw_read(c &: Conn, buf: void*, max: int): int:
+    if c.kind == KindStream:
+        ret c.up.ReadBytes(buf, max)
+    end
     if c.kind == KindTLS:
         ret tls.ReadBytes(c.tls, buf, max)
     end
@@ -175,6 +241,9 @@ func _raw_read(c &: Conn, buf: void*, max: int): int:
 end
 
 func _raw_write_once(c &: Conn, buf: void*, n: int): int:
+    if c.kind == KindStream:
+        ret c.up.WriteBytes(buf, n)
+    end
     if c.kind == KindTLS:
         ret tls.WriteBytes(c.tls, buf, n)
     end
@@ -553,6 +622,22 @@ func _server_reject(c &: Conn, status: str):
     _raw_write(c, resp as void*, resp.len())
 end
 
+func _stream_read(c &: Conn, buf: void*, max: int): int:
+    ret Read(c, buf, max)
+end
+
+func _stream_write(c &: Conn, p: void*, n: int): bool:
+    ret Write(c, p, n)
+end
+
+func _stream_timeout(c &: Conn, ms: int):
+    SetReadTimeout(c, ms)
+end
+
+func _stream_close(c &: Conn):
+    Close(c)
+end
+
 @en "FragmentSizes"
 @fa "اندازه تکه ها"
 pub func FragmentSizes(total: int, min: int, max: int): Vector<int>:
@@ -654,7 +739,9 @@ end
 @en "SetReadTimeout"
 @fa "مهلت خواندن"
 pub func SetReadTimeout(c &: Conn, ms: int):
-    if c.kind == KindTLS:
+    if c.kind == KindStream:
+        c.up.SetDeadline(ms)
+    else c.kind == KindTLS:
         tcp.SetReadDeadline(tcp.ConnFromFd(tls.Fd(c.tls)), ms)
     else:
         tcp.SetReadDeadline(c.tcp, ms)
@@ -668,7 +755,9 @@ pub func Close(c &: Conn):
         _ws_send(c, 8, null, 0)
     end
     c.open = false
-    if c.kind == KindTLS:
+    if c.kind == KindStream:
+        c.up.Close()
+    else c.kind == KindTLS:
         tls.Close(c.tls)
     else:
         tcp.Close(c.tcp)
@@ -880,5 +969,22 @@ pub func Accept(l: Listener): Conn:
     if not Upgrade(c, l.settings):
         c.open = false
     end
+    ret c
+end
+
+@en "AsStream"
+@fa "به عنوان جریان"
+pub func AsStream(c: Conn): dyn tunnel.Stream:
+    ret _StreamAdapter { c = c }
+end
+
+@en "FromStream"
+@fa "از جریان"
+pub func FromStream(s: dyn tunnel.Stream, client: bool): Conn:
+    mut c := Conn {}
+    c.kind = KindStream
+    c.up = s
+    c.client = client
+    c.open = s.Ok()
     ret c
 end

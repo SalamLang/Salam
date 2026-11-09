@@ -1,0 +1,140 @@
+package main
+
+import archive
+import compress
+import testing
+import os
+import filepath
+import mem
+import conv
+
+func make_data(n: int, seed: int): compress.ByteBuf:
+    mut b := compress.NewByteBuf()
+    mut x := seed
+    repeat n:
+        x = (x * 1103515245 + 12345) & 0x7fffffff
+        compress.BufPush(b, 32 + (x >> 16) % 90)
+    end
+    ret b
+end
+
+func same_file(path: str, want: compress.ByteBuf, len: int): bool:
+    mut ok := false
+    mut got := archive.ReadBinaryFile(path, ok)
+    r := ok and got.len == len and compress.CRC32(got.data, len) == compress.CRC32(want.data, len)
+    compress.BufFree(got)
+    ret r
+end
+
+func check(zf &: archive.ZipFile, name: str, password: str, want: compress.ByteBuf, len: int, dir: str):
+    archive.ZipFileSetPassword(zf, password)
+    dest := filepath.Join(dir, "got.bin")
+    testing.AssertEqInt(archive.ZipFileExtractTo(zf, name, dest, 0 as i64), archive.ZIP_OK)
+    testing.AssertTrue(same_file(dest, want, len))
+    os.Remove(dest)
+end
+
+func main(): int:
+    dir := filepath.Join(os.TempDir(), "salam_zip_write_test")
+    defer mem.Free(dir as void*)
+    os.RemoveAll(dir)
+    os.MkdirAll(dir)
+    archive.SetWriteChunk(4096)
+
+    mut a := make_data(30000, 1)
+    mut b := make_data(5000, 2)
+    src := filepath.Join(dir, "a.in")
+    testing.AssertTrue(archive.WriteBinaryFile(src, a.data, a.len))
+
+    mut files := Vector {} as Vector<archive.ZipFileInput>
+    files.push(archive.MakeZipFilePath("p_deflate.txt", src, archive.ZipMethodDeflate, 0))
+    files.push(archive.MakeZipFilePath("p_store.txt", src, archive.ZipMethodStore, 0))
+    files.push(archive.MakeZipFilePath("p_bzip2.txt", src, archive.ZipMethodBzip2, 3))
+    files.push(archive.MakeZipFileInput("m_deflate.txt", b.data, b.len, archive.ZipMethodDeflate))
+    files.push(archive.MakeZipFileInput("m_zstd.txt", b.data, b.len, archive.ZipMethodZstd))
+    files.push(archive.MakeZipFileInput("m_lzma.txt", b.data, b.len, archive.ZipMethodLzma))
+    files.push(archive.MakeZipFileInputEncrypted("e_classic.txt", b.data, b.len, archive.ZipMethodDeflate, 0, "one", archive.ZipEncZipCrypto))
+    files.push(archive.MakeZipFileInputEncrypted("e_aes256.txt", b.data, b.len, archive.ZipMethodDeflate, 0, "two", archive.ZipEncAuto))
+    files.push(archive.MakeZipFileInputEncrypted("e_aes128.txt", b.data, 1000, archive.ZipMethodStore, 0, "three", archive.ZipEncAes128))
+    mut pa := archive.MakeZipFilePath("e_path_aes192.txt", src, archive.ZipMethodDeflate, 0)
+    pa.password = "four"
+    pa.encryption = archive.ZipEncAes192
+    files.push(pa)
+    mut pc := archive.MakeZipFilePath("e_path_classic.txt", src, archive.ZipMethodStore, 0)
+    pc.password = "five"
+    pc.encryption = archive.ZipEncZipCrypto
+    files.push(pc)
+    files.push(archive.MakeZipFileInput("dir/", null, 0, archive.ZipMethodStore))
+    files.push(archive.MakeZipFileInput("empty.txt", null, 0, archive.ZipMethodDeflate))
+
+    zip_path := filepath.Join(dir, "w.zip")
+    zip64_path := filepath.Join(dir, "w64.zip")
+    mem_path := filepath.Join(dir, "wm.zip")
+    testing.AssertTrue(archive.ZipCreateFile(files, zip_path))
+    testing.AssertTrue(archive.ZipCreateFile64(files, zip64_path))
+    mut mem_zip := archive.ZipCreate(files)
+    testing.AssertTrue(mem_zip.len > 0)
+    testing.AssertTrue(archive.WriteBinaryFileBuf(mem_path, mem_zip))
+    compress.BufFree(mem_zip)
+
+    each zp in [zip_path, zip64_path, mem_path]:
+        mut zf := archive.ZipOpenFile(zp)
+        testing.AssertEqInt(zf.status, archive.ZIP_OK)
+        testing.AssertEqInt(zf.count as int, 13)
+        check(zf, "p_deflate.txt", "", a, a.len, dir)
+        check(zf, "p_store.txt", "", a, a.len, dir)
+        check(zf, "p_bzip2.txt", "", a, a.len, dir)
+        check(zf, "m_deflate.txt", "", b, b.len, dir)
+        check(zf, "m_zstd.txt", "", b, b.len, dir)
+        check(zf, "m_lzma.txt", "", b, b.len, dir)
+        check(zf, "e_classic.txt", "one", b, b.len, dir)
+        check(zf, "e_aes256.txt", "two", b, b.len, dir)
+        check(zf, "e_aes128.txt", "three", b, 1000, dir)
+        check(zf, "e_path_aes192.txt", "four", a, a.len, dir)
+        check(zf, "e_path_classic.txt", "five", a, a.len, dir)
+        check(zf, "empty.txt", "", b, 0, dir)
+        dest := filepath.Join(dir, "nope.bin")
+        archive.ZipFileSetPassword(zf, "")
+        testing.AssertEqInt(archive.ZipFileExtractTo(zf, "e_aes256.txt", dest, 0 as i64), archive.ZIP_ENCRYPTED)
+        archive.ZipFileSetPassword(zf, "wrong password")
+        testing.AssertEqInt(archive.ZipFileExtractTo(zf, "e_aes256.txt", dest, 0 as i64), archive.ZIP_BAD_PASSWORD)
+        archive.ZipFileClose(zf)
+    end
+
+    mut rok := false
+    mut whole := archive.ReadBinaryFile(zip_path, rok)
+    mut gok := false
+    mut one := archive.ZipExtractByName(whole.data, whole.len, "m_deflate.txt", gok)
+    testing.AssertTrue(gok and compress.CRC32(one.data, one.len) == compress.CRC32(b.data, b.len) and one.len == b.len)
+    compress.BufFree(one)
+    mut two := archive.ZipExtractByName(whole.data, whole.len, "p_deflate.txt", gok)
+    testing.AssertTrue(gok and two.len == a.len and compress.CRC32(two.data, two.len) == compress.CRC32(a.data, a.len))
+    compress.BufFree(two)
+    compress.BufFree(whole)
+
+    mut many := Vector {} as Vector<archive.ZipFileInput>
+    repeat 66000 in i:
+        many.push(archive.MakeZipFileInput("d/f" + conv.FormatInt(i as i64), null, 0, archive.ZipMethodStore))
+    end
+    many_path := filepath.Join(dir, "many.zip")
+    testing.AssertTrue(archive.ZipCreateFile(many, many_path))
+    mut mz := archive.ZipOpenFile(many_path)
+    testing.AssertEqInt(mz.status, archive.ZIP_OK)
+    testing.AssertEqInt(mz.count as int, 66000)
+    archive.ZipFileClose(mz)
+
+    mut bad := Vector {} as Vector<archive.ZipFileInput>
+    bad.push(archive.MakeZipFileInput("ok.txt", b.data, b.len, archive.ZipMethodDeflate))
+    bad.push(archive.MakeZipFilePath("gone.txt", filepath.Join(dir, "no_such_input"), archive.ZipMethodDeflate, 0))
+    never := filepath.Join(dir, "never.zip")
+    testing.AssertFalse(archive.ZipCreateFile(bad, never))
+    testing.AssertFalse(os.Exists(never))
+    mut none := archive.ZipCreate(bad)
+    testing.AssertEqInt(none.len, 0)
+    compress.BufFree(none)
+
+    compress.BufFree(a)
+    compress.BufFree(b)
+    os.RemoveAll(dir)
+    ret testing.Summary()
+end

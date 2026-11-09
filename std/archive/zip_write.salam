@@ -1,0 +1,449 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package archive
+
+import compress
+import mem
+import os
+import str
+import time
+
+struct _ZipW:
+    pub fp: void*
+    pub pos: i64
+    pub central: compress.ByteBuf
+    pub count: int
+    pub failed: bool
+end
+
+func _zw_raw(w &: _ZipW, p: void*, n: int):
+    if w.failed or n <= 0:
+        ret
+    end
+    if (fwrite(p, 1 as u64, n as u64, w.fp) as int) != n:
+        w.failed = true
+        ret
+    end
+    w.pos += n as i64
+end
+
+func _zw_enc_kind(f: ZipFileInput): int:
+    if f.password.len() == 0:
+        ret 0
+    end
+    if f.encryption == ZipEncZipCrypto:
+        ret 1
+    end
+    if f.encryption == ZipEncAes128 or f.encryption == ZipEncAes192:
+        ret f.encryption
+    end
+    ret ZipEncAes256
+end
+
+func _zw_overhead(enc: int): i64:
+    if enc == 0:
+        ret 0
+    end
+    if enc == 1:
+        ret 12
+    end
+    slen := enc == ZipEncAes128 ? 8 : (enc == ZipEncAes192 ? 12 : 16)
+    ret slen + 2 + 10
+end
+
+func _zw_crc_of_file(src: void*, size: i64, scratch: void*): i64:
+    mut crc := 0 as u32
+    mut at := 0 as i64
+    until at < size:
+        mut want := 262144
+        if size - at < (want as i64):
+            want = (size - at) as int
+        end
+        got := compress.FileReadAt(src, at, scratch, want)
+        if got != want:
+            ret -1
+        end
+        crc = compress.CRC32Update(crc, scratch, got)
+        at += got as i64
+    end
+    ret crc as i64
+end
+
+func _zw_feed(cw &: _ChunkWriter, src: void*, size: i64, scratch: void*): bool:
+    mut at := 0 as i64
+    mut ok := true
+    until at < size and ok:
+        mut want := 262144
+        if size - at < (want as i64):
+            want = (size - at) as int
+        end
+        got := compress.FileReadAt(src, at, scratch, want)
+        if got != want:
+            ok = false
+        else:
+            ok = _cw_write(cw, scratch, got)
+            at += got as i64
+        end
+    end
+    ret ok
+end
+
+func _zw_entry(w &: _ZipW, f: ZipFileInput, force64: bool, scratch: void*): bool:
+    name_len := f.name.len()
+    if name_len > 65535 or f.data_len < 0 or (f.path.len() == 0 and f.data_ptr == null and f.data_len > 0):
+        ret false
+    end
+    enc := _zw_enc_kind(f)
+    mut method := _zip_known_method(f.method) ? f.method : 0
+    mut ptr := f.data_ptr
+    mut size := f.data_len as i64
+    mut src := null as void*
+    mut loaded := compress.NewByteBuf()
+    if f.path.len() > 0:
+        if method != ZipMethodStore and method != ZipMethodDeflate:
+            mut rok := false
+            loaded = ReadBinaryFile(f.path, rok)
+            if not rok:
+                compress.BufFree(loaded)
+                ret false
+            end
+            ptr = loaded.data
+            size = loaded.len as i64
+        else:
+            src = compress.FileOpenRead(f.path)
+            if src == null:
+                ret false
+            end
+            size = compress.FileSize(src)
+            if size < (0 as i64):
+                compress.FileClose(src)
+                ret false
+            end
+        end
+    end
+    if method != ZipMethodDeflate and size == (0 as i64):
+        method = ZipMethodStore
+    end
+
+    mut owned := compress.NewByteBuf()
+    mut body_ptr := ptr
+    mut body_len := size
+    mut crc := 0 as u32
+    mut dd := false
+    mut ok := true
+    if method == ZipMethodDeflate:
+        dd = true
+    else:
+        if src != null:
+            c := _zw_crc_of_file(src, size, scratch)
+            if c < (0 as i64):
+                ok = false
+            else:
+                crc = c as u32
+            end
+        else:
+            crc = compress.CRC32(ptr, size as int)
+        end
+        if method == ZipMethodBzip2:
+            owned = compress.Bzip2CompressLevel(ptr, size as int, f.level >= 1 and f.level <= 9 ? f.level : 9)
+        else method == ZipMethodZstd:
+            owned = compress.ZstdCompressLevel(ptr, size as int, f.level >= 1 ? f.level : 3)
+        else method == ZipMethodLzma:
+            mut packed := compress.LzmaCompressLevel(ptr, size as int, f.level >= 1 and f.level <= 9 ? f.level : 6)
+            compress.BufPush(owned, 9)
+            compress.BufPush(owned, 4)
+            LEPut16(owned, 5)
+            compress.BufPushBytes(owned, packed.data, 5)
+            compress.BufPushBytes(owned, ((packed.data as i64) + (13 as i64)) as void*, packed.len - 13)
+            compress.BufFree(packed)
+        end
+        if method == ZipMethodBzip2 or method == ZipMethodZstd or method == ZipMethodLzma:
+            body_ptr = owned.data
+            body_len = owned.len as i64
+        end
+    end
+
+    mut dd_date := 0
+    mut dd_time := 0
+    _zip_unix_to_dos(f.mtime, dd_date, dd_time)
+    big := force64 or size >= (0xF0000000 as i64) or body_len >= (0xF0000000 as i64)
+    offset := w.pos
+    flags := (_zip_has_high(f.name) ? 0x800 : 0) | (dd ? 8 : 0) | (enc != 0 ? 1 : 0)
+    mut version := big ? 45 : 20
+    if method == ZipMethodBzip2 and version < 46:
+        version = 46
+    else method == ZipMethodLzma or method == ZipMethodZstd:
+        version = 63
+    end
+    if enc >= 2 and version < 51:
+        version = 51
+    end
+    method_field := enc >= 2 ? 99 : method
+    aes_strength := enc == ZipEncAes128 ? 1 : (enc == ZipEncAes192 ? 2 : 3)
+    store_crc := enc >= 2 ? (0 as u32) : crc
+    comp_known := body_len + _zw_overhead(enc)
+
+    mut lh := compress.NewByteBuf()
+    LEPut32(lh, 0x04034b50)
+    LEPut16(lh, version)
+    LEPut16(lh, flags)
+    LEPut16(lh, method_field)
+    LEPut16(lh, dd_time)
+    LEPut16(lh, dd_date)
+    LEPut32(lh, dd ? 0 : (store_crc as int))
+    mut extra := compress.NewByteBuf()
+    if big:
+        if dd:
+            LEPut32(lh, 0)
+            LEPut32(lh, 0)
+        else:
+            LEPut32(lh, -1)
+            LEPut32(lh, -1)
+        end
+        LEPut16(extra, 1)
+        LEPut16(extra, 16)
+        _zip_put64(extra, dd ? (0 as i64) : size)
+        _zip_put64(extra, dd ? (0 as i64) : comp_known)
+    else:
+        LEPut32(lh, dd ? 0 : (comp_known as int))
+        LEPut32(lh, dd ? 0 : (size as int))
+    end
+    mut aes_extra := compress.NewByteBuf()
+    if enc >= 2:
+        LEPut16(aes_extra, 0x9901)
+        LEPut16(aes_extra, 7)
+        LEPut16(aes_extra, 2)
+        compress.BufPush(aes_extra, 65)
+        compress.BufPush(aes_extra, 69)
+        compress.BufPush(aes_extra, aes_strength)
+        LEPut16(aes_extra, method)
+    end
+    LEPut16(lh, name_len)
+    LEPut16(lh, extra.len + aes_extra.len)
+    compress.BufPushBytes(lh, f.name as void*, name_len)
+    compress.BufPushBuf(lh, extra)
+    compress.BufPushBuf(lh, aes_extra)
+    _zw_raw(w, lh.data, lh.len)
+    compress.BufFree(lh)
+
+    mut cw := _cw_open(w.fp, method == ZipMethodDeflate ? _CW_DEFLATE : _CW_RAW, 0)
+    cw.failed = cw.failed or w.failed or not ok
+    if enc != 0 and not cw.failed:
+        check := dd ? ((dd_time >> 8) & 255) : (((crc as int) >> 24) & 255)
+        ok = _ze_begin(cw, enc, f.password, check)
+    end
+    if cw.failed:
+        ok = false
+    end
+    if ok:
+        if method == ZipMethodDeflate:
+            if src != null:
+                ok = _zw_feed(cw, src, size, scratch)
+            else:
+                ok = _cw_write(cw, ptr, size as int)
+            end
+            if ok:
+                crc = cw.in_crc
+            end
+        else:
+            if src != null:
+                ok = _zw_feed(cw, src, size, scratch)
+            else:
+                ok = _cw_write(cw, body_ptr, body_len as int)
+            end
+        end
+    end
+    if ok:
+        if method == ZipMethodDeflate:
+            _cw_flush(cw, true)
+        end
+        _ze_end(cw)
+        ok = not cw.failed
+    end
+    comp_total := cw.out_size
+    mut uncomp_total := cw.in_size
+    if method != ZipMethodDeflate:
+        uncomp_total = size
+    end
+    w.pos += comp_total
+    if not ok:
+        w.failed = true
+    end
+    if cw.buf != null:
+        mem.Free(cw.buf)
+        cw.buf = null
+    end
+    compress.BitWriterFree(cw.w)
+    if src != null:
+        compress.FileClose(src)
+    end
+    compress.BufFree(owned)
+    compress.BufFree(loaded)
+    if not ok:
+        compress.BufFree(extra)
+        compress.BufFree(aes_extra)
+        ret false
+    end
+
+    final_crc := enc >= 2 ? (0 as u32) : crc
+    if dd:
+        mut d := compress.NewByteBuf()
+        LEPut32(d, 0x08074b50)
+        LEPut32(d, final_crc as int)
+        if big:
+            _zip_put64(d, comp_total)
+            _zip_put64(d, uncomp_total)
+        else:
+            LEPut32(d, comp_total as int)
+            LEPut32(d, uncomp_total as int)
+        end
+        _zw_raw(w, d.data, d.len)
+        compress.BufFree(d)
+    end
+
+    mut cd := w.central
+    need_size := big or uncomp_total >= (0xFFFFFFFF as i64) or comp_total >= (0xFFFFFFFF as i64)
+    need_off := force64 or offset >= (0xFFFFFFFF as i64)
+    mut cx := compress.NewByteBuf()
+    if need_size or need_off:
+        mut inner := compress.NewByteBuf()
+        if need_size:
+            _zip_put64(inner, uncomp_total)
+            _zip_put64(inner, comp_total)
+        end
+        if need_off:
+            _zip_put64(inner, offset)
+        end
+        LEPut16(cx, 1)
+        LEPut16(cx, inner.len)
+        compress.BufPushBuf(cx, inner)
+        compress.BufFree(inner)
+        if version < 45:
+            version = 45
+        end
+    end
+    compress.BufPushBuf(cx, aes_extra)
+    LEPut32(cd, 0x02014b50)
+    LEPut16(cd, version)
+    LEPut16(cd, version)
+    LEPut16(cd, flags)
+    LEPut16(cd, method_field)
+    LEPut16(cd, dd_time)
+    LEPut16(cd, dd_date)
+    LEPut32(cd, final_crc as int)
+    LEPut32(cd, need_size ? -1 : (comp_total as int))
+    LEPut32(cd, need_size ? -1 : (uncomp_total as int))
+    LEPut16(cd, name_len)
+    LEPut16(cd, cx.len)
+    LEPut16(cd, 0)
+    LEPut16(cd, 0)
+    LEPut16(cd, 0)
+    LEPut32(cd, 0)
+    LEPut32(cd, need_off ? -1 : (offset as int))
+    compress.BufPushBytes(cd, f.name as void*, name_len)
+    compress.BufPushBuf(cd, cx)
+    w.central = cd
+    w.count++
+    compress.BufFree(cx)
+    compress.BufFree(extra)
+    compress.BufFree(aes_extra)
+    ret true
+end
+
+func _zip_stream(files: Vector<ZipFileInput>, outpath: str, force64: bool): bool:
+    fp := compress.FileOpenWrite(outpath)
+    if fp == null:
+        ret false
+    end
+    mut w := _ZipW { fp = fp, pos = 0 as i64, central = compress.NewByteBuf(), count = 0, failed = false }
+    scratch := mem.Allocate(262144 as u64)
+    mut ok := true
+    mut i := 0
+    until i < files.len() and ok:
+        ok = _zw_entry(w, files.get(i), force64, scratch)
+        i++
+    end
+    mem.Free(scratch)
+    if ok:
+        cd_offset := w.pos
+        cd_size := w.central.len as i64
+        _zw_raw(w, w.central.data, w.central.len)
+        wide := force64 or w.count >= 0xFFFF or cd_offset >= (0xFFFFFFFF as i64)
+        mut t := compress.NewByteBuf()
+        if wide:
+            LEPut32(t, 0x06064b50)
+            _zip_put64(t, 44 as i64)
+            LEPut16(t, 45)
+            LEPut16(t, 45)
+            LEPut32(t, 0)
+            LEPut32(t, 0)
+            _zip_put64(t, w.count as i64)
+            _zip_put64(t, w.count as i64)
+            _zip_put64(t, cd_size)
+            _zip_put64(t, cd_offset)
+            LEPut32(t, 0x07064b50)
+            LEPut32(t, 0)
+            _zip_put64(t, w.pos)
+            LEPut32(t, 1)
+        end
+        LEPut32(t, 0x06054b50)
+        LEPut16(t, 0)
+        LEPut16(t, 0)
+        LEPut16(t, wide ? 0xFFFF : w.count)
+        LEPut16(t, wide ? 0xFFFF : w.count)
+        LEPut32(t, wide ? -1 : (cd_size as int))
+        LEPut32(t, wide ? -1 : (cd_offset as int))
+        LEPut16(t, 0)
+        _zw_raw(w, t.data, t.len)
+        compress.BufFree(t)
+        ok = not w.failed
+    end
+    compress.BufFree(w.central)
+    if fclose(fp) != 0:
+        ok = false
+    end
+    if not ok:
+        os.Remove(outpath)
+    end
+    ret ok
+end
+
+func _zip_has_secret(files: Vector<ZipFileInput>): bool:
+    mut i := 0
+    until i < files.len():
+        if files.get(i).password.len() > 0:
+            ret true
+        end
+        i++
+    end
+    ret false
+end
+
+func _zip_stream_mem(files: Vector<ZipFileInput>, force64: bool): compress.ByteBuf:
+    pid := str.FromInt(os.Pid() as i64)
+    stamp := str.FromInt(time.NowNanos())
+    tmp := os.TempDir() + "/salam_zipenc_" + pid + "_" + stamp
+    mem.Free(pid as void*)
+    mem.Free(stamp as void*)
+    mut out := compress.NewByteBuf()
+    if _zip_stream(files, tmp, force64):
+        mut rok := false
+        compress.BufFree(out)
+        out = ReadBinaryFile(tmp, rok)
+        os.Remove(tmp)
+    end
+    mem.Free(tmp as void*)
+    ret out
+end

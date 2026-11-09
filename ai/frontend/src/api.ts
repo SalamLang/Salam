@@ -1217,7 +1217,9 @@ export const api = {
       true,
     ),
   setChatExtra: (id: string, extraPath: string) =>
-    call<{ ok: boolean; extra_path: string }>("PATCH", `/chats/${id}`, { extra_path: extraPath }),
+    call<{ ok: boolean; extra_path: string }>("PATCH", `/chats/${id}`, {
+      extra_path: extraPath,
+    }),
   renameChat: (id: string, title: string) =>
     call<{ title: string }>("PATCH", `/chats/${id}`, { title }),
   deleteChat: (id: string) => call<{ ok: boolean }>("DELETE", `/chats/${id}`),

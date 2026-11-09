@@ -1,0 +1,598 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package cssbox
+
+struct OAxis:
+    pub cb: f64 = 0.0
+    pub ins_s: f64 = NO
+    pub ins_e: f64 = NO
+    pub mar_s: f64 = NO
+    pub mar_e: f64 = NO
+    pub sp_s: f64 = 0.0
+    pub sp_e: f64 = 0.0
+    pub sp_a: int = 0
+    pub align: int = 0
+    pub inl: bool = false
+    pub reversed: bool = false
+end
+
+struct Span:
+    pub s: f64 = 0.0
+    pub e: f64 = 0.0
+end
+
+func _oa_imcb(a: OAxis): Span:
+    mut sp := Span {}
+    mut weaker_start := false
+    if _is(a.ins_s) and _is(a.ins_e):
+        sp = Span { s = a.ins_s, e = a.cb - a.ins_e }
+        weaker_start = a.reversed
+    else _is(a.ins_s):
+        sp = Span { s = a.ins_s, e = a.cb }
+        weaker_start = false
+    else _is(a.ins_e):
+        sp = Span { s = 0.0, e = a.cb - a.ins_e }
+        weaker_start = true
+    else:
+        switch a.sp_a:
+            0:
+                sp = Span { s = a.sp_s, e = a.cb }
+                break
+            end
+            1:
+                sp = Span { s = 0.0, e = a.sp_e }
+                break
+            end
+            else:
+                c := (a.sp_s + a.sp_e) / 2.0
+                sd := c
+                ed := a.cb - c
+                sda := sd < 0.0 ? 0.0 - sd : sd
+                eda := ed < 0.0 ? 0.0 - ed : ed
+                if sda <= eda:
+                    sp = Span { s = 0.0, e = 2.0 * sd }
+                else:
+                    sp = Span { s = a.cb - 2.0 * ed, e = a.cb }
+                end
+            end
+        end
+        weaker_start = a.reversed
+    end
+    if sp.e < sp.s:
+        if weaker_start:
+            sp.s = sp.e
+        else:
+            sp.e = sp.s
+        end
+    end
+    ret sp
+end
+
+func _oa_stretch_fit(a: OAxis): f64:
+    sp := _oa_imcb(a)
+    ret _fmax(sp.e - sp.s - _or(a.mar_s, 0.0) - _or(a.mar_e, 0.0), 0.0)
+end
+
+func _oa_is_stretch(a: OAxis): bool:
+    ret _is(a.ins_s) and _is(a.ins_e) and (a.align == 0 or a.align == 1)
+end
+
+func _oa_margins(a: OAxis, size: f64): Span:
+    both := _is(a.ins_s) and _is(a.ins_e)
+    sp := _oa_imcb(a)
+    free := sp.e - sp.s - size
+    if _is(a.mar_s) and _is(a.mar_e):
+        ret Span { s = a.mar_s, e = a.mar_e }
+    end
+    if not both:
+        ret Span { s = _or(a.mar_s, 0.0), e = _or(a.mar_e, 0.0) }
+    end
+    if _is(a.mar_s):
+        ret Span { s = a.mar_s, e = free - a.mar_s }
+    end
+    if _is(a.mar_e):
+        ret Span { s = free - a.mar_e, e = a.mar_e }
+    end
+    if free < 0.0 and a.inl:
+        if a.reversed:
+            ret Span { s = free, e = 0.0 }
+        end
+        ret Span { s = 0.0, e = free }
+    end
+    ret Span { s = free / 2.0, e = free / 2.0 }
+end
+
+func _align_in(s: f64, e: f64, size: f64, edge: int): f64:
+    switch edge:
+        0:
+            ret s
+        end
+        1:
+            ret e - size
+        end
+        else:
+            ret (s + e - size) / 2.0
+        end
+    end
+    ret s
+end
+
+func _oa_position(a: OAxis, size: f64, m: Span): f64:
+    sp := _oa_imcb(a)
+    hs := _is(a.ins_s)
+    he := _is(a.ins_e)
+    if not hs and not he:
+        mbs := size + m.s + m.e
+        ret _align_in(a.sp_s, a.sp_e, mbs, a.sp_a) + m.s
+    end
+    if hs and not he:
+        ret sp.s + m.s
+    end
+    if he and not hs:
+        ret sp.e - size - m.e
+    end
+    if not _is(a.mar_s) or not _is(a.mar_e):
+        ret sp.s + m.s
+    end
+    mbs := size + m.s + m.e
+    imcb_size := sp.e - sp.s
+    mut edge := 0
+    switch a.align:
+        3:
+            edge = 2
+            break
+        end
+        4:
+            edge = a.reversed ? 0 : 1
+            break
+        end
+        else:
+            edge = a.reversed ? 1 : 0
+        end
+    end
+    start_edge := a.reversed ? 1 : 0
+    mut mstart := 0.0
+    if mbs <= imcb_size or a.align == 0:
+        mstart = _align_in(sp.s, sp.e, mbs, edge)
+    else:
+        ls := _fmin(sp.s, 0.0)
+        le := _fmax(sp.e, a.cb)
+        if mbs <= le - ls:
+            st := _align_in(sp.s, sp.e, mbs, edge)
+            mstart = _fmax(_fmin(st, le - mbs), ls)
+        else:
+            mstart = _align_in(ls, le, mbs, start_edge)
+        end
+    end
+    ret mstart + m.s
+end
+
+func _align_code(a: Align): int:
+    switch a:
+        Align.Stretch:
+            ret 1
+        end
+        Align.Center:
+            ret 3
+        end
+        Align.End, Align.FlexEnd:
+            ret 4
+        end
+        Align.Start, Align.FlexStart, Align.Baseline:
+            ret 2
+        end
+        else:
+            ret 0
+        end
+    end
+    ret 0
+end
+
+func _oof_box(t &: Engine, id: int, aw: f64, ah: f64, ox: f64, oy: f64, cb_rtl: bool, spxs: f64, spxe: f64, spxa: int, spys: f64, spye: f64, spya: int):
+    n := t.nodes.ref(id)
+    st := n.style
+    ratio := st.aspect_ratio
+    pad := _r4(st.padding, aw)
+    bor := _r4(st.border, aw)
+    mar := _r4opt(st.margin, aw)
+    pbw := pad.l + pad.r + bor.l + bor.r
+    pbh := pad.t + pad.b + bor.t + bor.b
+    adjw := st.box_sizing == BoxSizing.ContentBox ? pbw : 0.0
+    adjh := st.box_sizing == BoxSizing.ContentBox ? pbh : 0.0
+    left := _res(st.inset.left, aw)
+    right := _res(st.inset.right, aw)
+    top := _res(st.inset.top, ah)
+    bottom := _res(st.inset.bottom, ah)
+    sw0 := _res(st.width, aw)
+    sh0 := _res(st.height, ah)
+    ssw := _add(_arw(sw0, sh0, ratio), adjw)
+    ssh := _add(_arh(sw0, sh0, ratio), adjh)
+    mnw0 := _res(st.min_width, aw)
+    mnh0 := _res(st.min_height, ah)
+    minw := _fmax(_or(_add(_arw(mnw0, mnh0, ratio), adjw), pbw), pbw)
+    minh := _fmax(_or(_add(_arh(mnw0, mnh0, ratio), adjh), pbh), pbh)
+    mxw0 := _res(st.max_width, aw)
+    mxh0 := _res(st.max_height, ah)
+    maxw := _add(_arw(mxw0, mxh0, ratio), adjw)
+    maxh := _add(_arh(mxw0, mxh0, ratio), adjh)
+    mut kw := _clamp(ssw, minw, maxw)
+    mut kh := _clamp(ssh, minh, maxh)
+    hx := OAxis { cb = aw, ins_s = left, ins_e = right, mar_s = mar.l, mar_e = mar.r, sp_s = spxs - ox, sp_e = spxe - ox, sp_a = spxa, align = 0, inl = true, reversed = cb_rtl }
+    vy := OAxis { cb = ah, ins_s = top, ins_e = bottom, mar_s = mar.t, mar_e = mar.b, sp_s = spys - oy, sp_e = spye - oy, sp_a = spya, align = _align_code(st.align_self), inl = false, reversed = false }
+    sfw := _oa_stretch_fit(hx)
+    sfh := _oa_stretch_fit(vy)
+    avw := _clampf(sfw, minw, maxw)
+    avh := _clampf(sfh, minh, maxh)
+    if _iskeyword(st.width) and not _is(kw):
+        mut ex := NO
+        sw := _fmax(aw - _or(left, 0.0) - _or(right, 0.0) - _or(mar.l, 0.0) - _or(mar.r, 0.0), 0.0)
+        kav := _keyword_avail(st.width, sw, ex)
+        if _is(ex):
+            kw = ex
+        else kav != NO:
+            sh := _fmax(ah - _or(top, 0.0) - _or(bottom, 0.0) - _or(mar.t, 0.0) - _or(mar.b, 0.0), 0.0)
+            kw = _measure(t, id, NO, kh, aw, ah, kav, sh, 0)
+        end
+        kh = _arh(kw, kh, ratio)
+        kw = _clamp(kw, minw, maxw)
+        kh = _clamp(kh, minh, maxh)
+    end
+    if _iskeyword(st.height) and not _is(kh):
+        mut ex := NO
+        sh := _fmax(ah - _or(top, 0.0) - _or(bottom, 0.0) - _or(mar.t, 0.0) - _or(mar.b, 0.0), 0.0)
+        kav := _keyword_avail(st.height, sh, ex)
+        if _is(ex):
+            kh = ex
+        else kav != NO:
+            sw := _fmax(aw - _or(left, 0.0) - _or(right, 0.0) - _or(mar.l, 0.0) - _or(mar.r, 0.0), 0.0)
+            kh = _measure(t, id, kw, NO, aw, ah, _or(kw, sw), kav, 1)
+        end
+        kw = _arw(kw, kh, ratio)
+        kw = _clamp(kw, minw, maxw)
+        kh = _clamp(kh, minh, maxh)
+    end
+    stw := not _is(kw) and _oa_is_stretch(hx)
+    sth := not _is(kh) and _oa_is_stretch(vy)
+    if stw:
+        kw = sfw
+        nkh := _arh(kw, kh, ratio)
+        kw = _clamp(kw, minw, maxw)
+        kh = _clamp(nkh, minh, maxh)
+    end
+    if not _is(kh) and sth:
+        kh = sfh
+        nkw := _arw(kw, kh, ratio)
+        kw = _clamp(nkw, minw, maxw)
+        kh = _clamp(kh, minh, maxh)
+    end
+    mut fw := kw
+    mut fh := kh
+    if not _is(fw) or not _is(fh):
+        o := _layout(t, id, Inp { kw = kw, kh = kh, pw = aw, ph = ah, aw = avw, ah = avh, axis = 2 })
+        fw = _or(kw, o.w)
+        fh = _or(kh, o.h)
+    end
+    fw = _clampf(fw, minw, maxw)
+    fh = _clampf(fh, minh, maxh)
+    _layout(t, id, Inp { kw = fw, kh = fh, pw = aw, ph = ah, aw = avw, ah = avh, axis = 2, perform = true })
+    hm := _oa_margins(hx, fw)
+    vm := _oa_margins(vy, fh)
+    x := _oa_position(hx, fw, hm) + ox
+    y := _oa_position(vy, fh, vm) + oy
+    _set_layout(t, id, x, y, fw, fh, pad, bor, R4 { l = hm.s, r = hm.e, t = vm.s, b = vm.e })
+end
+
+func _cb_area(t &: Engine, cb: int, ax &: f64, ay &: f64, aw &: f64, ah &: f64, rtl &: bool):
+    c := t.nodes.ref(cb)
+    crtl := c.style.direction == Direction.Rtl
+    ax = c.ax + c.bor.l + (crtl ? c.sbw : 0.0)
+    ay = c.ay + c.bor.t
+    aw = c.lw - c.bor.l - c.bor.r - c.sbw
+    ah = c.lh - c.bor.t - c.bor.b - c.sbh
+    rtl = crtl
+end
+
+func _post(t &: Engine, id: int, root: int):
+    n := t.nodes.ref(id)
+    pax := n.ax
+    pay := n.ay
+    nk := n.children.len()
+    repeat nk in i:
+        c := t.nodes.ref(id).children.get(i)
+        cn := t.nodes.ref(c)
+        d := cn.style.display
+        if d == Display.None:
+            _post_hidden(t, c, pax, pay)
+            continue
+        end
+        if d == Display.Contents:
+            _set_zero(t, c)
+            cz := t.nodes.ref(c)
+            cz.ax = pax
+            cz.ay = pay
+            _post(t, c, root)
+            continue
+        end
+        if _oof(cn.style.position):
+            mut cb := -1
+            if cn.style.position == Position.Absolute:
+                mut p := id
+                until p >= 0 and cb < 0:
+                    pn := t.nodes.ref(p)
+                    if pn.style.position != Position.Static or p == root:
+                        if pn.style.display != Display.Contents:
+                            cb = p
+                        end
+                    end
+                    if p == root:
+                        break
+                    end
+                    p = pn.parent
+                end
+            end
+            mut ax := 0.0
+            mut ay := 0.0
+            mut aw := 0.0
+            mut ah := 0.0
+            mut rtl := false
+            if cb >= 0 and not (cb == root and t.nodes.ref(root).style.position == Position.Static and _def(t.vw) and _def(t.vh)):
+                _cb_area(t, cb, ax, ay, aw, ah, rtl)
+            else _def(t.vw) and _def(t.vh):
+                rn := t.nodes.ref(root)
+                ax = 0.0
+                ay = 0.0
+                aw = _fmax(t.vw - rn.sbw, 0.0)
+                ah = _fmax(t.vh - rn.sbh, 0.0)
+                rtl = rn.style.direction == Direction.Rtl
+            else:
+                _cb_area(t, root, ax, ay, aw, ah, rtl)
+            end
+            cn2 := t.nodes.ref(c)
+            dx := pax - ax
+            dy := pay - ay
+            _oof_box(t, c, aw, ah, 0.0, 0.0, rtl, cn2.spx_s + dx, cn2.spx_e + dx, cn2.spx_a, cn2.spy_s + dy, cn2.spy_e + dy, cn2.spy_a)
+            cn3 := t.nodes.ref(c)
+            cn3.lx = cn3.lx + ax - pax
+            cn3.ly = cn3.ly + ay - pay
+        end
+        cn4 := t.nodes.ref(c)
+        cn4.ax = pax + cn4.lx
+        cn4.ay = pay + cn4.ly
+        _post(t, c, root)
+    end
+end
+
+func _post_hidden(t &: Engine, id: int, pax: f64, pay: f64):
+    _set_zero(t, id)
+    n := t.nodes.ref(id)
+    n.ax = pax
+    n.ay = pay
+    each c in n.children:
+        _post_hidden(t, c, pax, pay)
+    end
+end
+
+func _union_child(t &: Engine, pid: int, c: int, ox: f64, oy: f64, scroll: bool, r &: R4):
+    cn := t.nodes.ref(c)
+    d := cn.style.display
+    if d == Display.None:
+        ret
+    end
+    if d == Display.Contents:
+        each g in cn.children:
+            _union_child(t, pid, g, ox, oy, scroll, r)
+        end
+        ret
+    end
+    x0 := ox + cn.lx
+    y0 := oy + cn.ly
+    r.l = _fmin(r.l, x0)
+    r.t = _fmin(r.t, y0)
+    r.r = _fmax(r.r, x0 + cn.lw)
+    r.b = _fmax(r.b, y0 + cn.lh)
+    clips := cn.style.overflow_x != Overflow.Visible or cn.style.overflow_y != Overflow.Visible
+    if not clips:
+        r.l = _fmin(r.l, x0 + cn.ovl)
+        r.t = _fmin(r.t, y0 + cn.ovt)
+        r.r = _fmax(r.r, x0 + cn.ovr)
+        r.b = _fmax(r.b, y0 + cn.ovb)
+    end
+    if scroll and not _oof(cn.style.position):
+        p := t.nodes.ref(pid)
+        r.r = _fmax(r.r, x0 + cn.lw + cn.mar.r + p.pad.r)
+        r.b = _fmax(r.b, y0 + cn.lh + cn.mar.b + p.pad.b)
+    end
+end
+
+func _overflow(t &: Engine, id: int):
+    n := t.nodes.ref(id)
+    if n.style.display == Display.None:
+        ret
+    end
+    each c in n.children:
+        _overflow(t, c)
+    end
+    n2 := t.nodes.ref(id)
+    rtl := n2.style.direction == Direction.Rtl
+    pl := n2.bor.l + (rtl ? n2.sbw : 0.0)
+    pt := n2.bor.t
+    pr := n2.lw - n2.bor.r - (rtl ? 0.0 : n2.sbw)
+    pb := n2.lh - n2.bor.b - n2.sbh
+    mut r := R4 { l = pl, t = pt, r = _fmax(pr, pl), b = _fmax(pb, pt) }
+    scroll := _scroller(n2.style.overflow_x) or _scroller(n2.style.overflow_y)
+    if n2.children.len() == 0:
+        endp := scroll ? n2.pad.r : 0.0
+        endb := scroll ? n2.pad.b : 0.0
+        if rtl:
+            r.l = _fmin(r.l, pr - n2.pad.r - n2.cmw - (scroll ? n2.pad.l : 0.0))
+        else:
+            r.r = _fmax(r.r, pl + n2.pad.l + n2.cmw + endp)
+        end
+        r.b = _fmax(r.b, pt + n2.pad.t + n2.cmh + endb)
+    else:
+        each c in n2.children:
+            _union_child(t, id, c, 0.0, 0.0, scroll, r)
+        end
+    end
+    n3 := t.nodes.ref(id)
+    n3.ovl = r.l
+    n3.ovt = r.t
+    n3.ovr = r.r
+    n3.ovb = r.b
+end
+
+func _rnd(t &: Engine, v: f64): f64:
+    if t.rounding:
+        ret _round(v)
+    end
+    ret v
+end
+
+func _finalize(t &: Engine, id: int, cx0: f64, cy0: f64):
+    n := t.nodes.ref(id)
+    cx := cx0 + n.lx
+    cy := cy0 + n.ly
+    mut b := BoxLayout {}
+    b.x = _rnd(t, cx) - _rnd(t, cx0)
+    b.y = _rnd(t, cy) - _rnd(t, cy0)
+    b.abs_x = _rnd(t, cx)
+    b.abs_y = _rnd(t, cy)
+    b.width = _rnd(t, cx + n.lw) - _rnd(t, cx)
+    b.height = _rnd(t, cy + n.lh) - _rnd(t, cy)
+    b.border = Edges { left = _rnd(t, cx + n.bor.l) - _rnd(t, cx), right = _rnd(t, cx + n.lw) - _rnd(t, cx + n.lw - n.bor.r), top = _rnd(t, cy + n.bor.t) - _rnd(t, cy), bottom = _rnd(t, cy + n.lh) - _rnd(t, cy + n.lh - n.bor.b) }
+    b.padding = Edges { left = _rnd(t, cx + n.bor.l + n.pad.l) - _rnd(t, cx + n.bor.l), right = _rnd(t, cx + n.lw - n.bor.r) - _rnd(t, cx + n.lw - n.bor.r - n.pad.r), top = _rnd(t, cy + n.bor.t + n.pad.t) - _rnd(t, cy + n.bor.t), bottom = _rnd(t, cy + n.lh - n.bor.b) - _rnd(t, cy + n.lh - n.bor.b - n.pad.b) }
+    b.margin = Edges { left = _rnd(t, n.mar.l), right = _rnd(t, n.mar.r), top = _rnd(t, n.mar.t), bottom = _rnd(t, n.mar.b) }
+    b.scrollbar_width = _rnd(t, n.sbw)
+    b.scrollbar_height = _rnd(t, n.sbh)
+    rtl := n.style.direction == Direction.Rtl
+    cl := n.bor.l + n.pad.l + (rtl ? n.sbw : 0.0)
+    ct := n.bor.t + n.pad.t
+    cr := n.lw - n.bor.r - n.pad.r - (rtl ? 0.0 : n.sbw)
+    cbm := n.lh - n.bor.b - n.pad.b - n.sbh
+    b.content_x = _rnd(t, cx + cl) - _rnd(t, cx)
+    b.content_y = _rnd(t, cy + ct) - _rnd(t, cy)
+    b.content_width = _fmax(_rnd(t, cx + cr) - _rnd(t, cx + cl), 0.0)
+    b.content_height = _fmax(_rnd(t, cy + cbm) - _rnd(t, cy + ct), 0.0)
+    pl := n.bor.l + (rtl ? n.sbw : 0.0)
+    pr := n.lw - n.bor.r - (rtl ? 0.0 : n.sbw)
+    pt := n.bor.t
+    pb := n.lh - n.bor.b - n.sbh
+    mut sw := 0.0
+    if rtl:
+        sw = pr - _fmin(n.ovl, pl)
+    else:
+        sw = _fmax(n.ovr, pr) - pl
+    end
+    sh := _fmax(n.ovb, pb) - pt
+    b.scroll_width = _fmax(_rnd(t, sw), 0.0)
+    b.scroll_height = _fmax(_rnd(t, sh), 0.0)
+    if _is(n.base):
+        b.has_baseline = true
+        b.baseline = _rnd(t, cy + n.base) - _rnd(t, cy)
+    end
+    n.fin = b
+    nk := n.children.len()
+    repeat nk in i:
+        c := t.nodes.ref(id).children.get(i)
+        _finalize(t, c, cx, cy)
+    end
+end
+
+func _compute_root(t &: Engine, root: int, aw: f64, ah: f64):
+    t.vw = aw
+    t.vh = ah
+    n := t.nodes.ref(root)
+    st := n.style
+    if st.display == Display.None:
+        _hide(t, root)
+        n0 := t.nodes.ref(root)
+        n0.fin = BoxLayout {}
+        ret
+    end
+    rtl := st.direction == Direction.Rtl
+    if _oof(st.position) and _def(aw) and _def(ah):
+        n.ax = 0.0
+        n.ay = 0.0
+        _oof_box(t, root, aw, ah, 0.0, 0.0, rtl, rtl ? aw : 0.0, rtl ? aw : 0.0, rtl ? 1 : 0, 0.0, 0.0, 0)
+    else:
+        pw := _avopt(aw)
+        ph := _avopt(ah)
+        mar := _r4(st.margin, pw)
+        raw := _avmax(_avsub(aw, mar.l + mar.r), 0.0)
+        rah := _avmax(_avsub(ah, mar.t + mar.b), 0.0)
+        mut kw := NO
+        if st.display == Display.Block or st.display == Display.FlowRoot or st.display == Display.InlineBlock:
+            ratio := st.aspect_ratio
+            pad := _r4(st.padding, pw)
+            bor := _r4(st.border, pw)
+            pbw := pad.l + pad.r + bor.l + bor.r
+            pbh := pad.t + pad.b + bor.t + bor.b
+            adjw := st.box_sizing == BoxSizing.ContentBox ? pbw : 0.0
+            adjh := st.box_sizing == BoxSizing.ContentBox ? pbh : 0.0
+            mnw0 := _res(st.min_width, pw)
+            mnh0 := _res(st.min_height, ph)
+            mxw0 := _res(st.max_width, pw)
+            mxh0 := _res(st.max_height, ph)
+            minw := _add(_arw(mnw0, mnh0, ratio), adjw)
+            maxw := _add(_arw(mxw0, mxh0, ratio), adjw)
+            minh := _add(_arh(mnw0, mnh0, ratio), adjh)
+            maxh := _add(_arh(mxw0, mxh0, ratio), adjh)
+            sw0 := _res(st.width, pw)
+            sh0 := _res(st.height, ph)
+            csw := _clamp(_add(_arw(sw0, sh0, ratio), adjw), minw, maxw)
+            csh := _clamp(_add(_arh(sw0, sh0, ratio), adjh), minh, maxh)
+            mmw := (_is(minw) and _is(maxw) and maxw <= minw) ? minw : NO
+            kw = _mmax(_or(_or(mmw, csw), _avopt(raw)), pbw)
+            mmh := (_is(minh) and _is(maxh) and maxh <= minh) ? minh : NO
+            kh0 := _mmax(_or(mmh, csh), pbh)
+            o := _layout(t, root, Inp { kw = kw, kh = kh0, pw = pw, ph = ph, aw = raw, ah = rah, inherent = true, axis = 2, perform = true })
+            _root_place(t, root, o, aw, pw, ph, mar, rtl)
+        else:
+            o := _layout(t, root, Inp { kw = kw, pw = pw, ph = ph, aw = raw, ah = rah, inherent = true, axis = 2, perform = true })
+            _root_place(t, root, o, aw, pw, ph, mar, rtl)
+        end
+    end
+    n2 := t.nodes.ref(root)
+    n2.ax = n2.lx
+    n2.ay = n2.ly
+    _post(t, root, root)
+    _overflow(t, root)
+    _finalize(t, root, 0.0, 0.0)
+end
+
+func _root_place(t &: Engine, root: int, o: Out, aw: f64, pw: f64, ph: f64, mar: R4, rtl: bool):
+    n := t.nodes.ref(root)
+    st := n.style
+    pad := _r4(st.padding, pw)
+    bor := _r4(st.border, pw)
+    mut x := mar.l
+    if rtl and _def(aw):
+        x = aw - o.w - mar.r
+    end
+    mut y := mar.t
+    if _isrel(st.position):
+        l := _res(st.inset.left, pw)
+        r := _res(st.inset.right, pw)
+        tp := _res(st.inset.top, ph)
+        bt := _res(st.inset.bottom, ph)
+        if rtl:
+            x += _is(r) ? 0.0 - r : _or(l, 0.0)
+        else:
+            x += _is(l) ? l : (_is(r) ? 0.0 - r : 0.0)
+        end
+        y += _is(tp) ? tp : (_is(bt) ? 0.0 - bt : 0.0)
+    end
+    _set_layout(t, root, x, y, o.w, o.h, pad, bor, mar)
+end

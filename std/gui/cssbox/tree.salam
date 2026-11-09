@@ -1,0 +1,371 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package cssbox
+
+struct Engine:
+    pub nodes: Vector<Node> = Vector {}
+    pub rounding: bool = true
+    pub measure_calls: int = 0
+    pub layout_calls: int = 0
+    pub vw: f64 = MAXC
+    pub vh: f64 = MAXC
+end
+
+@en "Tree"
+@fa "درخت"
+pub struct Tree:
+    e: Engine = Engine {}
+
+    @en "AddNode"
+    @fa "افزودن گره"
+    pub func AddNode(style: Style): int:
+        this.e.nodes.push(Node { style = style })
+        ret this.e.nodes.len() - 1
+    end
+
+    @en "NodeCount"
+    @fa "شمار گره ها"
+    pub func NodeCount(): int:
+        ret this.e.nodes.len()
+    end
+
+    @en "SetChildren"
+    @fa "تنظیم فرزندان"
+    pub func SetChildren(node: int, children: Vector<int>):
+        if node < 0 or node >= this.e.nodes.len():
+            ret
+        end
+        n := this.e.nodes.ref(node)
+        each old in n.children:
+            if old >= 0 and old < this.e.nodes.len():
+                c := this.e.nodes.ref(old)
+                if c.parent == node:
+                    c.parent = -1
+                end
+            end
+        end
+        n.children.clear()
+        each c in children:
+            if c >= 0 and c < this.e.nodes.len() and c != node:
+                n.children.push(c)
+                cn := this.e.nodes.ref(c)
+                cn.parent = node
+            end
+        end
+        this.MarkDirty(node)
+    end
+
+    @en "AddChild"
+    @fa "افزودن فرزند"
+    pub func AddChild(node: int, child: int):
+        if node < 0 or node >= this.e.nodes.len() or child < 0 or child >= this.e.nodes.len() or child == node:
+            ret
+        end
+        n := this.e.nodes.ref(node)
+        n.children.push(child)
+        cn := this.e.nodes.ref(child)
+        cn.parent = node
+        this.MarkDirty(node)
+    end
+
+    @en "ChildCount"
+    @fa "شمار فرزندان"
+    pub func ChildCount(node: int): int:
+        if node < 0 or node >= this.e.nodes.len():
+            ret 0
+        end
+        ret this.e.nodes.ref(node).children.len()
+    end
+
+    @en "Child"
+    @fa "فرزند"
+    pub func Child(node: int, index: int): int:
+        if node < 0 or node >= this.e.nodes.len():
+            ret -1
+        end
+        n := this.e.nodes.ref(node)
+        if index < 0 or index >= n.children.len():
+            ret -1
+        end
+        ret n.children.get(index)
+    end
+
+    @en "Parent"
+    @fa "والد"
+    pub func Parent(node: int): int:
+        if node < 0 or node >= this.e.nodes.len():
+            ret -1
+        end
+        ret this.e.nodes.ref(node).parent
+    end
+
+    @en "GetStyle"
+    @fa "سبک گره"
+    pub func GetStyle(node: int): Style:
+        if node < 0 or node >= this.e.nodes.len():
+            ret Style {}
+        end
+        ret this.e.nodes.ref(node).style
+    end
+
+    @en "SetStyle"
+    @fa "تنظیم سبک"
+    pub func SetStyle(node: int, style: Style):
+        if node < 0 or node >= this.e.nodes.len():
+            ret
+        end
+        n := this.e.nodes.ref(node)
+        n.style = style
+        this.MarkDirty(node)
+    end
+
+    @en "SetMeasure"
+    @fa "تنظیم سنجش"
+    pub func SetMeasure(node: int, measure: func (MeasureInput) MeasureOutput):
+        if node < 0 or node >= this.e.nodes.len():
+            ret
+        end
+        n := this.e.nodes.ref(node)
+        n.measure = measure
+        n.has_measure = true
+        this.MarkDirty(node)
+    end
+
+    @en "ClearMeasure"
+    @fa "حذف سنجش"
+    pub func ClearMeasure(node: int):
+        if node < 0 or node >= this.e.nodes.len():
+            ret
+        end
+        n := this.e.nodes.ref(node)
+        n.has_measure = false
+        this.MarkDirty(node)
+    end
+
+    @en "MarkDirty"
+    @fa "علامت تغییر"
+    pub func MarkDirty(node: int):
+        mut cur := node
+        mut guard := 0
+        until cur >= 0 and cur < this.e.nodes.len() and guard <= this.e.nodes.len():
+            n := this.e.nodes.ref(cur)
+            n.fin_ok = false
+            n.ckeys.clear()
+            n.couts.clear()
+            n.cnext = 0
+            cur = n.parent
+            guard++
+        end
+    end
+
+    @en "IsDirty"
+    @fa "تغییر کرده است"
+    pub func IsDirty(node: int): bool:
+        if node < 0 or node >= this.e.nodes.len():
+            ret false
+        end
+        n := this.e.nodes.ref(node)
+        ret not n.fin_ok and n.ckeys.len() == 0
+    end
+
+    @en "SetRounding"
+    @fa "تنظیم گردکردن"
+    pub func SetRounding(enabled: bool):
+        this.e.rounding = enabled
+    end
+
+    @en "MeasureCalls"
+    @fa "شمار سنجش ها"
+    pub func MeasureCalls(): int:
+        ret this.e.measure_calls
+    end
+
+    @en "LayoutCalls"
+    @fa "شمار محاسبه ها"
+    pub func LayoutCalls(): int:
+        ret this.e.layout_calls
+    end
+
+    @en "ResetCounters"
+    @fa "صفر کردن شمارنده ها"
+    pub func ResetCounters():
+        this.e.measure_calls = 0
+        this.e.layout_calls = 0
+    end
+
+    @en "Compute"
+    @fa "محاسبه"
+    pub func Compute(root: int, width: Space, height: Space):
+        if root < 0 or root >= this.e.nodes.len():
+            ret
+        end
+        _compute_root(this.e, root, _space_out(width), _space_out(height))
+    end
+
+    @en "Layout"
+    @fa "جانمایی گره"
+    pub func Layout(node: int): BoxLayout:
+        if node < 0 or node >= this.e.nodes.len():
+            ret BoxLayout {}
+        end
+        ret this.e.nodes.ref(node).fin
+    end
+
+    @en "Free"
+    @fa "آزاد کردن"
+    pub func Free():
+        repeat this.e.nodes.len() in i:
+            n := this.e.nodes.ref(i)
+            n.children.free()
+            n.ckeys.free()
+            n.couts.free()
+        end
+        this.e.nodes.free()
+    end
+end
+
+func _kids(t &: Engine, id: int): Vector<int>:
+    mut out := Vector {} as Vector<int>
+    n := t.nodes.ref(id)
+    each c in n.children:
+        cn := t.nodes.ref(c)
+        if cn.style.display == Display.Contents:
+            _set_zero(t, c)
+            sub := _kids(t, c)
+            each s in sub:
+                out.push(s)
+            end
+            sub.free()
+        else:
+            out.push(c)
+        end
+    end
+    ret out
+end
+
+func _set_zero(t &: Engine, id: int):
+    n := t.nodes.ref(id)
+    n.lx = 0.0
+    n.ly = 0.0
+    n.lw = 0.0
+    n.lh = 0.0
+    n.pad = R4 {}
+    n.bor = R4 {}
+    n.mar = R4 {}
+    n.sbw = 0.0
+    n.sbh = 0.0
+    n.base = NO
+    n.cmw = 0.0
+    n.cmh = 0.0
+end
+
+func _set_layout(t &: Engine, id: int, x: f64, y: f64, w: f64, h: f64, pad: R4, bor: R4, mar: R4):
+    n := t.nodes.ref(id)
+    n.lx = x
+    n.ly = y
+    n.lw = w
+    n.lh = h
+    n.pad = pad
+    n.bor = bor
+    n.mar = mar
+    n.sbw = n.style.overflow_y == Overflow.Scroll ? n.style.scrollbar_width : 0.0
+    n.sbh = n.style.overflow_x == Overflow.Scroll ? n.style.scrollbar_width : 0.0
+end
+
+func _hide(t &: Engine, id: int):
+    n := t.nodes.ref(id)
+    n.fin_ok = false
+    n.ckeys.clear()
+    n.couts.clear()
+    n.cnext = 0
+    _set_zero(t, id)
+    n2 := t.nodes.ref(id)
+    each c in n2.children:
+        _hide(t, c)
+    end
+end
+
+func _hide_display_none(t &: Engine, kids: Vector<int>):
+    each c in kids:
+        if t.nodes.ref(c).style.display == Display.None:
+            _hide(t, c)
+        end
+    end
+end
+
+func _same_key(a: Inp, b: Inp): bool:
+    ret a.kw == b.kw and a.kh == b.kh and a.kw_def == b.kw_def and a.kh_def == b.kh_def and a.pw == b.pw and a.ph == b.ph and a.aw == b.aw and a.ah == b.ah and a.inherent == b.inherent and a.cstart == b.cstart and a.cend == b.cend
+end
+
+func _norm_key(inp: Inp): Inp:
+    mut k := inp
+    k.kw_def = inp.kw_def or not _is(inp.kw)
+    k.kh_def = inp.kh_def or not _is(inp.kh)
+    if _is(inp.kw):
+        k.aw = 0.0
+    end
+    if _is(inp.kh):
+        k.ah = 0.0
+    end
+    ret k
+end
+
+func _layout(t &: Engine, id: int, inp: Inp): Out:
+    key := _norm_key(inp)
+    n := t.nodes.ref(id)
+    if inp.perform:
+        if n.fin_ok and _same_key(n.fin_key, key):
+            ret n.fin_out
+        end
+    else:
+        repeat n.ckeys.len() in i:
+            ck := n.ckeys.get(i)
+            if _same_key(ck, key) and (ck.axis == 2 or ck.axis == key.axis):
+                ret n.couts.get(i)
+            end
+        end
+    end
+    t.layout_calls++
+    d := n.style.display
+    mut o := Out {}
+    if d == Display.None:
+        _hide(t, id)
+        ret o
+    end
+    if n.children.len() == 0:
+        o = _leaf(t, id, inp)
+    else d == Display.Flex or d == Display.InlineFlex:
+        o = _flex(t, id, inp)
+    else:
+        o = _block(t, id, inp)
+    end
+    n2 := t.nodes.ref(id)
+    if inp.perform:
+        n2.fin_ok = true
+        n2.fin_key = key
+        n2.fin_out = o
+        n2.base = o.baseline
+    else:
+        if n2.ckeys.len() < 9:
+            n2.ckeys.push(key)
+            n2.couts.push(o)
+        else:
+            n2.ckeys.set(n2.cnext, key)
+            n2.couts.set(n2.cnext, o)
+            n2.cnext = (n2.cnext + 1) % 9
+        end
+    end
+    ret o
+end

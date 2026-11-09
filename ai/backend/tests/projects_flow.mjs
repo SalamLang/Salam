@@ -218,11 +218,11 @@ check(
   bigMaster.json?.project?.master_prompt.length === 4000,
   bigMaster.json?.project?.master_prompt?.length,
 );
-const listed = await api("GET", "/projects", owner);
+const listedMaster = await api("GET", "/projects", owner);
 check(
   "the list carries the master prompt",
-  (listed.json?.projects ?? []).some((p) => p.id === project.id && p.master_prompt.length === 4000),
-  listed.json,
+  (listedMaster.json?.projects ?? []).some((p) => p.id === project.id && p.master_prompt.length === 4000),
+  listedMaster.json,
 );
 const strangerEdit = await api("PATCH", `/projects/${project.id}`, stranger, {
   name: "x",

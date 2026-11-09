@@ -1,0 +1,86 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import mem
+import net.dns
+import net.doh
+import net.tcp
+import sync
+
+mut http_port := 0
+mut served := 0
+mut ready := sync.NewWaitGroup()
+
+func reply(c: tcp.Conn, text: str):
+    _w := tcp.WriteBytes(c, text as void*, text.len())
+end
+
+func flood(c: tcp.Conn):
+    chunk := mem.AllocateZeroed(65536 as u64)
+    reply(c, "HTTP/1.1 200 OK\r\nContent-Length: 99999999\r\n\r\n")
+    mut sent := 0
+    until sent < 6000000:
+        w := tcp.WriteBytes(c, chunk, 65536)
+        if w <= 0:
+            break
+        end
+        sent += w
+    end
+    mem.Free(chunk)
+end
+
+func serve_conn(c: tcp.Conn):
+    buf := mem.Allocate(4096 as u64)
+    n := tcp.ReadBytes(c, buf, 4096)
+    mem.Free(buf)
+    if n > 0:
+        served++
+        if served == 1:
+            reply(c, "HTTP/1.1 200 OK\r\nContent-Length: -5\r\n\r\nabcdefghijkl")
+        else served == 2:
+            reply(c, "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nfffffffffffffff\r\nabc\r\n0\r\n\r\n")
+        else served == 3:
+            reply(c, "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n80000000\r\nabc\r\n0\r\n\r\n")
+        else:
+            flood(c)
+        end
+    end
+    tcp.Close(c)
+end
+
+func http_server():
+    srv := tcp.Bind(0)
+    http_port = tcp.Port(srv)
+    sync.Done(ready)
+    until true:
+        c := tcp.Accept(srv)
+        serve_conn(c)
+    end
+end
+
+func main:
+    sync.Add(ready, 1 as i64)
+    _t := spawn(http_server)
+    sync.Wait(ready)
+    s := doh.NewServer("hostile", doh.KindDoH, "http://127.0.0.1:" + http_port + "/dns-query")
+    r1 := doh.Query(s, "one.test", dns.TypeA, 3000)
+    println "negative content-length", r1.ok, r1.err
+    r2 := doh.Query(s, "two.test", dns.TypeA, 3000)
+    println "oversized chunk", r2.ok, r2.err
+    r3 := doh.Query(s, "three.test", dns.TypeA, 3000)
+    println "wrapping chunk size", r3.ok, r3.err
+    r4 := doh.Query(s, "four.test", dns.TypeA, 8000)
+    println "endless body", r4.ok, r4.err
+    doh.CloseIdleConnections()
+end

@@ -317,18 +317,47 @@ type BarProps = {
 
 export function AgentBar({ info, workspace, locked, elsewhere, mode, onPick, onClear, onMode }: BarProps) {
   const online = info?.connected ?? false;
+  const [help, setHelp] = useState(false);
+  const wrapRef = useRef<HTMLSpanElement>(null);
+  useEffect(() => {
+    if (!help) return;
+    const away = (e: MouseEvent) => {
+      if (!wrapRef.current?.contains(e.target as Node)) setHelp(false);
+    };
+    const esc = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setHelp(false);
+    };
+    document.addEventListener("mousedown", away);
+    document.addEventListener("keydown", esc);
+    return () => {
+      document.removeEventListener("mousedown", away);
+      document.removeEventListener("keydown", esc);
+    };
+  }, [help]);
   return (
     <div className="agent-bar">
       <span className={`agent-dot${online ? " on" : ""}`} title={online ? t(`وصل به ${info?.device?.name ?? "این رایانه"}`, `Connected to ${info?.device?.name ?? "this computer"}`) : t("در حال اتصال", "Connecting")} />
-      {workspace ? (
+      {workspace && locked ? (
+        <span className="agent-ws-wrap" ref={wrapRef}>
+          <button type="button" className="agent-ws" title={workspace} aria-expanded={help} onClick={() => setHelp((v) => !v)}>
+            <IconFolder width={15} height={15} />
+            <bdi dir="ltr">{folderName(workspace)}</bdi>
+          </button>
+          {help && (
+            <div className="agent-ws-help" role="dialog">
+              <p>{t("مسیر اصلی هر پروژه یک بار تعیین می‌شود و بعد از آن قابل تغییر نیست.", "The main folder is set once per project and cannot be changed afterwards.")}</p>
+              <p>{t("اگر موقتا می‌خواهید دستیار سلام فایل، پوشه یا پروژه‌ی دیگری را بخواند یا از آن الگو بگیرد، مسیر کامل آن را در رایانه‌ی خود برایش بنویسید.", "If you need Salam Assistant to read or take inspiration from another file, folder or project for a moment, just write its full path on your computer in the chat.")}</p>
+              <bdi dir="ltr" className="agent-ws-path">{workspace}</bdi>
+            </div>
+          )}
+        </span>
+      ) : workspace ? (
         <span className="agent-ws" title={workspace}>
           <IconFolder width={15} height={15} />
           <bdi dir="ltr">{folderName(workspace)}</bdi>
-          {!locked && (
-            <button type="button" className="agent-ws-clear" onClick={onClear} aria-label={t("برداشتن پوشه", "Remove folder")}>
-              <IconClose width={14} height={14} />
-            </button>
-          )}
+          <button type="button" className="agent-ws-clear" onClick={onClear} aria-label={t("برداشتن پوشه", "Remove folder")}>
+            <IconClose width={14} height={14} />
+          </button>
         </span>
       ) : (
         <button type="button" className="agent-ws pick" onClick={onPick}>

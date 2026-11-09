@@ -1,0 +1,132 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package shadowsocks
+
+import mem
+import str
+import tls
+
+@en "IDENTITY_CONTEXT"
+@fa "زمینه هویت"
+pub const IDENTITY_CONTEXT := "shadowsocks 2022 identity subkey"
+
+@en "EIH_LEN"
+@fa "طول سرآیند هویت"
+pub const EIH_LEN := 16
+
+@en "KeyChain"
+@fa "زنجیره کلید"
+pub struct KeyChain:
+    @en "keys"
+    @fa "کلیدها"
+    pub keys: Buf = Buf {}
+    @en "count"
+    @fa "تعداد"
+    pub count: int = 0
+    @en "key_len"
+    @fa "طول کلید"
+    pub key_len: int = 0
+    @en "ok"
+    @fa "معتبر"
+    pub ok: bool = false
+end
+
+@en "ChainOf"
+@fa "زنجیره از"
+pub func ChainOf(m: Method, password: str): KeyChain:
+    mut c := KeyChain { key_len = m.key_len }
+    if not m.v2022 or not m.ok:
+        ret c
+    end
+    parts := str.Split(password, ":")
+    n := parts.len()
+    if n < 1 or n > 8:
+        ret c
+    end
+    c.keys = NewBuf(n * m.key_len)
+    each part in parts:
+        mut k := _b64_key(part, m.key_len)
+        if k.bad:
+            BufWipe(k)
+            BufFree(k)
+            BufWipe(c.keys)
+            BufFree(c.keys)
+            ret KeyChain { key_len = m.key_len }
+        end
+        BufAppend(c.keys, k.p, m.key_len)
+        BufWipe(k)
+        BufFree(k)
+    end
+    c.count = n
+    c.ok = true
+    ret c
+end
+
+@en "ChainKey"
+@fa "کلید زنجیره"
+pub func ChainKey(c: KeyChain, i: int): void*:
+    ret _at(c.keys.p, i * c.key_len)
+end
+
+@en "ChainFree"
+@fa "آزادسازی زنجیره"
+pub func ChainFree(c &: KeyChain):
+    BufWipe(c.keys)
+    BufFree(c.keys)
+    c.count = 0
+    c.ok = false
+end
+
+@en "IdentityHash"
+@fa "هش هویت"
+pub func IdentityHash(psk: void*, klen: int, out16: void*):
+    Blake3Hash(psk, klen, out16, 16)
+end
+
+@en "IdentityKey"
+@fa "کلید هویت"
+pub func IdentityKey(ipsk: void*, klen: int, salt: void*, slen: int, out: void*):
+    mat := mem.AllocateZeroed((klen + slen) as u64)
+    mem.Copy(mat, ipsk, klen as u64)
+    mem.Copy(_at(mat, klen), salt, slen as u64)
+    Blake3DeriveKey(IDENTITY_CONTEXT, mat, klen + slen, out, klen)
+    _wipe(mat, klen + slen)
+    mem.Free(mat)
+end
+
+@en "EihSeal"
+@fa "مهر سرآیند هویت"
+pub func EihSeal(ipsk: void*, klen: int, salt: void*, slen: int, next_psk: void*, out16: void*): bool:
+    ik := mem.AllocateZeroed(32 as u64)
+    IdentityKey(ipsk, klen, salt, slen, ik)
+    h := mem.AllocateZeroed(16 as u64)
+    IdentityHash(next_psk, klen, h)
+    ok := tls.AesEcbBlock(ik, klen, h, out16, false)
+    _wipe(ik, 32)
+    mem.Free(ik)
+    mem.Free(h)
+    ret ok
+end
+
+@en "EihOpen"
+@fa "گشودن سرآیند هویت"
+pub func EihOpen(ipsk: void*, klen: int, salt: void*, slen: int, block16: void*, out_hash16: void*): bool:
+    ik := mem.AllocateZeroed(32 as u64)
+    IdentityKey(ipsk, klen, salt, slen, ik)
+    ok := tls.AesEcbBlock(ik, klen, block16, out_hash16, true)
+    _wipe(ik, 32)
+    mem.Free(ik)
+    ret ok
+end

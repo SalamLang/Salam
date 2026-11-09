@@ -92,6 +92,12 @@ pub struct PipeStream:
         _ring_end_read(this.rx)
     end
 
+    @en "CloseWrite"
+    @fa "بستن نوشتن"
+    pub func CloseWrite():
+        _ring_end_write(this.tx)
+    end
+
     @en "Close"
     @fa "بستن"
     pub func Close():
@@ -180,6 +186,12 @@ pub struct PrefixStream:
         this.inner.Shutdown()
     end
 
+    @en "CloseWrite"
+    @fa "بستن نوشتن"
+    pub func CloseWrite():
+        this.inner.CloseWrite()
+    end
+
     @en "Close"
     @fa "بستن"
     pub func Close():
@@ -223,11 +235,14 @@ func _ring_write(r: _Ring, ptr: void*, n: int, deadline: int): int:
         end
         mut chunk := n - done
         if chunk > space: chunk = space end
-        repeat chunk in i:
-            pos := ((c[1] as int) + (c[0] as int)) % _RING_CAP
-            r.buf[pos] = src[done + i]
-            c[0] = c[0] + 1
+        pos := ((c[1] as int) + (c[0] as int)) % _RING_CAP
+        mut first := chunk
+        if first > _RING_CAP - pos: first = _RING_CAP - pos end
+        mem.Copy((r.buf as i64 + pos) as void*, (src as i64 + done) as void*, first as u64)
+        if chunk > first:
+            mem.Copy(r.buf as void*, (src as i64 + done + first) as void*, (chunk - first) as u64)
         end
+        c[0] = c[0] + (chunk as i64)
         done += chunk
         sync.Broadcast(r.cv)
     end
@@ -236,7 +251,6 @@ func _ring_write(r: _Ring, ptr: void*, n: int, deadline: int): int:
 end
 
 func _ring_read(r: _Ring, ptr: void*, max: int, deadline: int): int:
-    dst := ptr as u8*
     c := r.cells
     sync.Lock(r.mu)
     until c[0] == 0:
@@ -257,11 +271,15 @@ func _ring_read(r: _Ring, ptr: void*, max: int, deadline: int): int:
     end
     mut n := c[0] as int
     if n > max: n = max end
-    repeat n in i:
-        dst[i] = r.buf[c[1] as int]
-        c[1] = (c[1] + 1) % (_RING_CAP as i64)
-        c[0] = c[0] - 1
+    head := c[1] as int
+    mut first := n
+    if first > _RING_CAP - head: first = _RING_CAP - head end
+    mem.Copy(ptr, (r.buf as i64 + head) as void*, first as u64)
+    if n > first:
+        mem.Copy((ptr as i64 + first) as void*, r.buf as void*, (n - first) as u64)
     end
+    c[1] = ((head + n) % _RING_CAP) as i64
+    c[0] = c[0] - (n as i64)
     sync.Broadcast(r.cv)
     sync.Unlock(r.mu)
     ret n

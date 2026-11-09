@@ -1,0 +1,137 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import net.tunnel
+import net.tcp
+import pool
+
+mut failures := 0
+mut req_srv := tcp.Server {}
+mut banner_srv := tcp.Server {}
+mut seen_request := ""
+mut seen_later := ""
+mut relay_up := 0 as i64
+mut relay_down := 0 as i64
+
+func expect(label: str, ok: bool):
+    if not ok:
+        println "FAIL", label
+        failures++
+    end
+end
+
+func read_all(s: dyn tunnel.Stream): str:
+    mut out := ""
+    until true:
+        piece := s.Read(4096)
+        if piece.len() == 0: break end
+        out += piece
+    end
+    ret out
+end
+
+func request_response_server():
+    c := tcp.Accept(req_srv)
+    s := tunnel.WrapTcp(c)
+    seen_request = read_all(s)
+    s.Write("response:" + seen_request)
+    s.Close()
+end
+
+func banner_server():
+    c := tcp.Accept(banner_srv)
+    s := tunnel.WrapTcp(c)
+    s.Write("banner")
+    s.CloseWrite()
+    seen_later = read_all(s)
+    s.Close()
+end
+
+func run_relay(a: dyn tunnel.Stream, b: dyn tunnel.Stream):
+    r := tunnel.Relay(a, b)
+    relay_up = r.up
+    relay_down = r.down
+end
+
+func request_then_shutdown():
+    p := tunnel.NewPipe()
+    out := tunnel.DialTcp("127.0.0.1", tcp.Port(req_srv), 3000)
+    wp := pool.NewElastic(2 as i64, 4 as i64, 4 as i64)
+    pool.Submit(wp, (): request_response_server() end)
+    pool.Submit(wp, (): run_relay(tunnel.PipeB(p), out) end)
+    client := tunnel.PipeA(p)
+    client.Write("hello over half close")
+    client.CloseWrite()
+    reply := read_all(client)
+    println "reply:", reply
+    expect("reply", reply == "response:hello over half close")
+    client.Close()
+    pool.Wait(wp)
+    pool.Stop(wp)
+    println "server saw:", seen_request
+    println "bytes:", relay_up, relay_down
+end
+
+func late_write_after_server_eof():
+    p := tunnel.NewPipe()
+    out := tunnel.DialTcp("127.0.0.1", tcp.Port(banner_srv), 3000)
+    wp := pool.NewElastic(2 as i64, 4 as i64, 4 as i64)
+    pool.Submit(wp, (): banner_server() end)
+    pool.Submit(wp, (): run_relay(tunnel.PipeB(p), out) end)
+    client := tunnel.PipeA(p)
+    banner := read_all(client)
+    println "banner:", banner
+    expect("banner", banner == "banner")
+    client.Write("sent after the server closed its write side")
+    client.CloseWrite()
+    pool.Wait(wp)
+    pool.Stop(wp)
+    println "server later:", seen_later
+    client.Close()
+end
+
+func pipe_to_pipe():
+    p1 := tunnel.NewPipe()
+    p2 := tunnel.NewPipe()
+    wp := pool.NewElastic(2 as i64, 4 as i64, 4 as i64)
+    pool.Submit(wp, (): run_relay(tunnel.PipeB(p1), tunnel.PipeA(p2)) end)
+    left := tunnel.PipeA(p1)
+    right := tunnel.PipeB(p2)
+    left.Write("ping")
+    left.CloseWrite()
+    got := read_all(right)
+    println "right got:", got
+    right.Write("pong")
+    right.CloseWrite()
+    back := read_all(left)
+    println "left got:", back
+    left.Close()
+    right.Close()
+    pool.Wait(wp)
+    pool.Stop(wp)
+    println "relayed:", relay_up, relay_down
+end
+
+func main:
+    req_srv = tcp.Bind(0)
+    banner_srv = tcp.Bind(0)
+    request_then_shutdown()
+    late_write_after_server_eof()
+    pipe_to_pipe()
+    tcp.CloseServer(req_srv)
+    tcp.CloseServer(banner_srv)
+    println "failures:", failures
+end

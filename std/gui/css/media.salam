@@ -1,0 +1,374 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package css
+
+import str
+
+func media_len(t: Vector<Tok>, i: int, e: int, out &: f64): bool:
+    cx := Cx {}
+    mut l := Len {}
+    if not p_len(t, i, e, cx, false, true, l) or l.calc.len() > 0:
+        ret false
+    end
+    out = l.px
+    ret true
+end
+
+func media_ratio(t: Vector<Tok>, i: int, e: int, out &: f64, next &: int): bool:
+    cx := Cx {}
+    mut a := 0.0
+    if not p_num(t, i, e, cx, a):
+        ret false
+    end
+    mut j := nxt(t, i)
+    mut b := 1.0
+    if is_delim(t, j, e, 47):
+        if not p_num(t, j + 1, e, cx, b) or b == 0.0:
+            ret false
+        end
+        j = nxt(t, j + 1)
+    end
+    out = a / b
+    next = j
+    ret true
+end
+
+func feature_value(name: str, env: Env, out &: f64, is_len &: bool): bool:
+    is_len = true
+    switch name:
+        "width", "device-width": out = env.width end
+        "height", "device-height": out = env.height end
+        "aspect-ratio", "device-aspect-ratio":
+            is_len = false
+            out = env.height > 0.0 ? env.width / env.height : 0.0
+        end
+        "resolution":
+            is_len = false
+            out = 1.0
+        end
+        "color":
+            is_len = false
+            out = 8.0
+        end
+        "monochrome", "color-index", "grid":
+            is_len = false
+            out = 0.0
+        end
+        else: ret false end
+    end
+    ret true
+end
+
+func compare(a: f64, op: str, b: f64): bool:
+    switch op:
+        "<": ret a < b end
+        "<=": ret a <= b end
+        ">": ret a > b end
+        ">=": ret a >= b end
+        else: ret a == b end
+    end
+    ret false
+end
+
+func read_op(t: Vector<Tok>, i: int, e: int, op &: str): int:
+    if i >= e or t[i].k != TK_DELIM:
+        ret -1
+    end
+    d := t[i].d
+    if d == 61:
+        op = "="
+        ret i + 1
+    end
+    if d == 60 or d == 62:
+        if i + 1 < e and t[i + 1].k == TK_DELIM and t[i + 1].d == 61 and not t[i + 1].ws:
+            op = d == 60 ? "<=" : ">="
+            ret i + 2
+        end
+        op = d == 60 ? "<" : ">"
+        ret i + 1
+    end
+    ret -1
+end
+
+func flip(op: str): str:
+    switch op:
+        "<": ret ">" end
+        "<=": ret ">=" end
+        ">": ret "<" end
+        ">=": ret "<=" end
+        else: ret "=" end
+    end
+    ret "="
+end
+
+func read_mvalue(t: Vector<Tok>, i: int, e: int, is_len: bool, out &: f64): int:
+    if is_len:
+        if not media_len(t, i, e, out):
+            ret -1
+        end
+        ret nxt(t, i)
+    end
+    mut j := 0
+    if t[i].k == TK_DIM and (t[i].s == "dppx" or t[i].s == "x" or t[i].s == "dpi" or t[i].s == "dpcm"):
+        switch t[i].s:
+            "dpi": out = t[i].n / 96.0 end
+            "dpcm": out = t[i].n * 2.54 / 96.0 end
+            else: out = t[i].n end
+        end
+        ret i + 1
+    end
+    if not media_ratio(t, i, e, out, j):
+        ret -1
+    end
+    ret j
+end
+
+func media_feature(t: Vector<Tok>, s: int, e: int, env: Env): bool:
+    if s >= e:
+        ret false
+    end
+    if t[s].k == TK_IDENT and s + 1 < e and t[s + 1].k == TK_DELIM and t[s + 1].d == 58:
+        name := t[s].s
+        vs := s + 2
+        mut prefix := 0
+        if str.StartsWith(name, "min-"):
+            prefix = 1
+        else str.StartsWith(name, "max-"):
+            prefix = 2
+        end
+        base := prefix != 0 ? name.substr(4, name.len() - 4) : str.Clone(name)
+        defer sfree(base)
+        k := kw_at(t, vs, e)
+        switch base:
+            "orientation":
+                portrait := env.height >= env.width
+                ret (k == "portrait" and portrait) or (k == "landscape" and not portrait)
+            end
+            "prefers-color-scheme":
+                ret (k == "dark" and env.dark) or (k == "light" and not env.dark)
+            end
+            "prefers-reduced-motion":
+                ret (k == "reduce" and env.reduced_motion) or (k == "no-preference" and not env.reduced_motion)
+            end
+            "hover", "any-hover":
+                ret (k == "hover" and env.hover) or (k == "none" and not env.hover)
+            end
+            "pointer", "any-pointer":
+                if k == "fine":
+                    ret env.fine_pointer
+                end
+                if k == "coarse":
+                    ret not env.fine_pointer
+                end
+                ret false
+            end
+            "prefers-contrast", "prefers-reduced-transparency", "prefers-reduced-data":
+                ret k == "no-preference"
+            end
+            "forced-colors", "inverted-colors":
+                ret k == "none"
+            end
+            "display-mode":
+                ret k == "browser" or k == "standalone"
+            end
+            "scripting":
+                ret k == "enabled"
+            end
+            "update":
+                ret k == "fast"
+            end
+            "color-gamut":
+                ret k == "srgb"
+            end
+            "dynamic-range", "video-dynamic-range":
+                ret k == "standard"
+            end
+            else:
+            end
+        end
+        mut v := 0.0
+        mut is_len := true
+        if not feature_value(base, env, v, is_len):
+            ret false
+        end
+        mut want := 0.0
+        if read_mvalue(t, vs, e, is_len, want) != e:
+            ret false
+        end
+        switch prefix:
+            1: ret v >= want end
+            2: ret v <= want end
+            else: ret v == want end
+        end
+        ret false
+    end
+    if single(t, s, e) and t[s].k == TK_IDENT:
+        name := t[s].s
+        switch name:
+            "hover", "any-hover": ret env.hover end
+            "pointer", "any-pointer": ret true end
+            "color": ret true end
+            "monochrome", "grid", "prefers-reduced-motion", "forced-colors", "inverted-colors", "prefers-contrast", "prefers-reduced-transparency":
+                ret name == "prefers-reduced-motion" and env.reduced_motion
+            end
+            "prefers-color-scheme": ret true end
+            else:
+                mut v := 0.0
+                mut il := true
+                ret feature_value(name, env, v, il) and v != 0.0
+            end
+        end
+    end
+    mut i := s
+    mut v1 := 0.0
+    mut op1 := ""
+    mut fname := ""
+    mut has_left := false
+    if t[i].k != TK_IDENT:
+        mut il := true
+        if t[i].k == TK_NUM:
+            il = false
+        end
+        j := read_mvalue(t, i, e, il, v1)
+        if j < 0:
+            ret false
+        end
+        k := read_op(t, j, e, op1)
+        if k < 0:
+            ret false
+        end
+        i = k
+        has_left = true
+    end
+    if i >= e or t[i].k != TK_IDENT:
+        ret false
+    end
+    fname = t[i].s
+    mut fv := 0.0
+    mut flen := true
+    if not feature_value(fname, env, fv, flen):
+        ret false
+    end
+    i++
+    if has_left and not compare(v1, op1, fv) and op1 != "=":
+        ret false
+    end
+    if has_left and op1 == "=" and v1 != fv:
+        ret false
+    end
+    if i >= e:
+        ret has_left
+    end
+    mut op2 := ""
+    k2 := read_op(t, i, e, op2)
+    if k2 < 0:
+        ret false
+    end
+    mut v2 := 0.0
+    if read_mvalue(t, k2, e, flen, v2) != e:
+        ret false
+    end
+    ret compare(fv, op2, v2)
+end
+
+func media_cond(t: Vector<Tok>, s: int, e: int, env: Env): bool:
+    if is_kw(t, s, e, "not"):
+        ret not media_in_parens(t, s + 1, e, env)
+    end
+    mut result := media_in_parens(t, s, e, env)
+    mut i := nxt(t, s)
+    until i < e:
+        if not (t[i].k == TK_IDENT and (t[i].s == "and" or t[i].s == "or")) or i + 1 >= e:
+            ret false
+        end
+        r := media_in_parens(t, i + 1, nxt(t, i + 1), env)
+        if t[i].s == "and":
+            result = result and r
+        else:
+            result = result or r
+        end
+        i = nxt(t, i + 1)
+    end
+    ret result
+end
+
+func media_in_parens(t: Vector<Tok>, s: int, e: int, env: Env): bool:
+    if s >= e or t[s].k != TK_FUNC or t[s].s.len() != 0:
+        ret false
+    end
+    is := s + 1
+    ie := t[s].close
+    if is < ie and (t[is].k == TK_FUNC and t[is].s.len() == 0 or is_kw(t, is, ie, "not")):
+        ret media_cond(t, is, ie, env)
+    end
+    ret media_feature(t, is, ie, env)
+end
+
+func media_query(t: Vector<Tok>, s: int, e: int, env: Env): bool:
+    if s >= e:
+        ret false
+    end
+    if t[s].k == TK_FUNC:
+        ret media_cond(t, s, e, env)
+    end
+    mut i := s
+    mut negate := false
+    if is_kw(t, i, e, "not"):
+        negate = true
+        i++
+    else is_kw(t, i, e, "only"):
+        i++
+    end
+    if i >= e or t[i].k != TK_IDENT:
+        ret false
+    end
+    typ := t[i].s
+    mut ok := typ == "all" or typ == "screen"
+    if not ok and typ != "print" and typ != "speech" and typ != "tty" and typ != "tv" and typ != "projection" and typ != "handheld" and typ != "braille" and typ != "embossed" and typ != "aural":
+        ret false
+    end
+    i++
+    if i < e:
+        if not is_kw(t, i, e, "and") or i + 1 >= e:
+            ret false
+        end
+        ok = ok and media_cond(t, i + 1, e, env)
+    end
+    ret negate ? not ok : ok
+end
+
+func media_matches(text: str, env: Env): bool:
+    mut t := Vector {} as Vector<Tok>
+    tokenize(text, t)
+    n := t.len()
+    mut result := false
+    if n == 0:
+        result = true
+    else:
+        mut parts := Vector {} as Vector<int>
+        split_commas(t, 0, n, parts)
+        mut k := 0
+        until k + 1 < parts.len():
+            if media_query(t, parts[k], parts[k + 1], env):
+                result = true
+            end
+            k += 2
+        end
+        parts.free()
+    end
+    free_toks(t, 0)
+    t.free()
+    ret result
+end

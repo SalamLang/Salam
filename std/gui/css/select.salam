@@ -1,0 +1,993 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package css
+
+import str
+
+const SK_TAG := 1
+const SK_ID := 2
+const SK_CLASS := 3
+const SK_ATTR := 4
+const SK_PSEUDO := 5
+const SK_NTH := 6
+const SK_LIST := 7
+
+const AT_HAS := 0
+const AT_EQ := 1
+const AT_INCL := 2
+const AT_DASH := 3
+const AT_PREFIX := 4
+const AT_SUFFIX := 5
+const AT_SUB := 6
+
+const PS_HOVER := 1
+const PS_FOCUS := 2
+const PS_FOCUS_VISIBLE := 3
+const PS_ACTIVE := 4
+const PS_FIRST_CHILD := 5
+const PS_LAST_CHILD := 6
+const PS_ONLY_CHILD := 7
+const PS_ROOT := 8
+const PS_EMPTY := 9
+const PS_FIRST_OF_TYPE := 10
+const PS_LAST_OF_TYPE := 11
+const PS_ONLY_OF_TYPE := 12
+const PS_CHECKED := 13
+const PS_DISABLED := 14
+const PS_ENABLED := 15
+const PS_REQUIRED := 16
+const PS_OPTIONAL := 17
+const PS_LINK := 18
+const PS_NEVER := 19
+const PS_FOCUS_WITHIN := 20
+const PS_DIR_RTL := 21
+const PS_DIR_LTR := 22
+const PS_LANG := 23
+const PS_PLACEHOLDER_SHOWN := 24
+const PS_READ_ONLY := 25
+const PS_READ_WRITE := 26
+const PS_OPEN := 27
+
+const NTH_CHILD := 0
+const NTH_LAST_CHILD := 1
+const NTH_OF_TYPE := 2
+const NTH_LAST_OF_TYPE := 3
+
+const LIST_NOT := 0
+const LIST_IS := 1
+const LIST_WHERE := 2
+
+const CB_NONE := 0
+const CB_DESC := 1
+const CB_CHILD := 2
+const CB_ADJ := 3
+const CB_SIB := 4
+
+const ST_HOVER := 1
+const ST_FOCUS := 2
+const ST_FOCUS_VISIBLE := 4
+const ST_ACTIVE := 8
+
+struct Simple:
+    pub k: int = 0
+    pub name: str = ""
+    pub value: str = ""
+    pub op: int = 0
+    pub a: int = 0
+    pub b: int = 0
+    pub icase: bool = false
+end
+
+struct Compound:
+    pub s0: int = 0
+    pub n: int = 0
+    pub comb: int = CB_NONE
+end
+
+struct Selector:
+    pub c0: int = 0
+    pub n: int = 0
+    pub spec: int = 0
+    pub state_left: bool = false
+    pub sibling: bool = false
+end
+
+struct SelParser:
+    pub src: str = ""
+    pub p: u8* = null
+    pub n: int = 0
+    pub i: int = 0
+end
+
+struct Dom:
+    pub count: int = 0
+    pub tags: Vector<str> = Vector {}
+    pub ids: Vector<str> = Vector {}
+    pub cls0: Vector<int> = Vector {}
+    pub clsn: Vector<int> = Vector {}
+    pub classes: Vector<str> = Vector {}
+    pub parent: Vector<int> = Vector {}
+    pub prev: Vector<int> = Vector {}
+    pub next: Vector<int> = Vector {}
+    pub first: Vector<int> = Vector {}
+    pub last: Vector<int> = Vector {}
+    pub state: Vector<int> = Vector {}
+    pub els: Vector<Element> = Vector {}
+    pub root_dir: str = "ltr"
+    pub root_lang: str = "en"
+end
+
+func sp_peek(sp: SelParser, off: int): int:
+    j := sp.i + off
+    if j < sp.n:
+        ret sp.p[j] as int
+    end
+    ret 0
+end
+
+func sp_ws(sp &: SelParser): bool:
+    mut any := false
+    until sp.i < sp.n and is_space(sp.p[sp.i] as int):
+        sp.i++
+        any = true
+    end
+    ret any
+end
+
+func sp_ident(sp &: SelParser): str:
+    st := sp.i
+    mut j := sp.i
+    if j < sp.n and (sp.p[j] as int) == 45:
+        j++
+    end
+    if j < sp.n and (sp.p[j] as int) == 45:
+        j++
+    end
+    if j >= sp.n or not (is_name_start(sp.p[j] as int) or (sp.p[j] as int) == 92):
+        ret ""
+    end
+    e := name_end(sp.p, sp.n, j)
+    sp.i = e
+    raw := sp.src.substr(st, e - st)
+    r := unescape(raw)
+    sfree(raw)
+    ret r
+end
+
+func parse_nth(text: str, a &: int, b &: int): bool:
+    t := lower_ascii(text)
+    defer sfree(t)
+    mut s := str.Trim(t)
+    defer sfree(s)
+    if s == "odd":
+        a = 2
+        b = 1
+        ret true
+    end
+    if s == "even":
+        a = 2
+        b = 0
+        ret true
+    end
+    p := (s as void*) as u8*
+    n := s.len()
+    mut i := 0
+    mut sign := 1
+    mut has_n := false
+    mut av := 0
+    mut bv := 0
+    if i < n and ((p[i] as int) == 43 or (p[i] as int) == 45):
+        sign = (p[i] as int) == 45 ? -1 : 1
+        i++
+    end
+    mut digits := 0
+    mut num := 0
+    until i < n and is_digit(p[i] as int):
+        num = num * 10 + (p[i] as int) - 48
+        digits++
+        i++
+    end
+    if i < n and (p[i] as int) == 110:
+        has_n = true
+        av = sign * (digits > 0 ? num : 1)
+        i++
+        until i < n and is_space(p[i] as int):
+            i++
+        end
+        if i < n:
+            mut bs := 1
+            if (p[i] as int) == 43:
+                bs = 1
+            else (p[i] as int) == 45:
+                bs = -1
+            else:
+                ret false
+            end
+            i++
+            until i < n and is_space(p[i] as int):
+                i++
+            end
+            mut bd := 0
+            mut bn := 0
+            until i < n and is_digit(p[i] as int):
+                bn = bn * 10 + (p[i] as int) - 48
+                bd++
+                i++
+            end
+            if bd == 0:
+                ret false
+            end
+            bv = bs * bn
+        end
+    else:
+        if digits == 0:
+            ret false
+        end
+        bv = sign * num
+    end
+    if i != n:
+        ret false
+    end
+    a = has_n ? av : 0
+    b = bv
+    ret true
+end
+
+func pseudo_code(name: str): int:
+    switch name:
+        "hover": ret PS_HOVER end
+        "focus": ret PS_FOCUS end
+        "focus-visible": ret PS_FOCUS_VISIBLE end
+        "focus-within": ret PS_FOCUS_WITHIN end
+        "active": ret PS_ACTIVE end
+        "first-child": ret PS_FIRST_CHILD end
+        "last-child": ret PS_LAST_CHILD end
+        "only-child": ret PS_ONLY_CHILD end
+        "root": ret PS_ROOT end
+        "empty": ret PS_EMPTY end
+        "first-of-type": ret PS_FIRST_OF_TYPE end
+        "last-of-type": ret PS_LAST_OF_TYPE end
+        "only-of-type": ret PS_ONLY_OF_TYPE end
+        "checked": ret PS_CHECKED end
+        "disabled": ret PS_DISABLED end
+        "enabled": ret PS_ENABLED end
+        "required": ret PS_REQUIRED end
+        "optional": ret PS_OPTIONAL end
+        "link", "any-link", "-webkit-any-link": ret PS_LINK end
+        "visited", "target", "indeterminate", "invalid", "user-invalid", "fullscreen", "modal", "autofill", "-webkit-autofill", "popover-open", "defined", "playing", "paused", "default", "in-range", "out-of-range", "valid", "user-valid", "scope", "target-within", "blank":
+            ret PS_NEVER
+        end
+        "placeholder-shown": ret PS_PLACEHOLDER_SHOWN end
+        "read-only": ret PS_READ_ONLY end
+        "read-write": ret PS_READ_WRITE end
+        "open": ret PS_OPEN end
+        else: ret 0 end
+    end
+    ret 0
+end
+
+func paren_body(sp &: SelParser, out &: str): bool:
+    if sp.i >= sp.n or (sp.p[sp.i] as int) != 40:
+        ret false
+    end
+    st := sp.i + 1
+    mut depth := 1
+    mut j := st
+    mut q := 0
+    until j < sp.n:
+        c := sp.p[j] as int
+        if q != 0:
+            if c == q:
+                q = 0
+            end
+        else c == 34 or c == 39:
+            q = c
+        else c == 40:
+            depth++
+        else c == 41:
+            depth--
+            if depth == 0:
+                break
+            end
+        end
+        j++
+    end
+    if depth != 0:
+        ret false
+    end
+    out = sp.src.substr(st, j - st)
+    sp.i = j + 1
+    ret true
+end
+
+func parse_attr_sel(sp &: SelParser, out &: Simple): bool:
+    sp.i++
+    _w := sp_ws(sp)
+    name := sp_ident(sp)
+    if name.len() == 0:
+        ret false
+    end
+    out.k = SK_ATTR
+    out.name = intern_own(lower_ascii(name))
+    sfree(name)
+    _w2 := sp_ws(sp)
+    c := sp_peek(sp, 0)
+    if c == 93:
+        sp.i++
+        out.op = AT_HAS
+        ret true
+    end
+    mut op := -1
+    if c == 61:
+        op = AT_EQ
+        sp.i++
+    else sp_peek(sp, 1) == 61:
+        switch c:
+            126: op = AT_INCL end
+            124: op = AT_DASH end
+            94: op = AT_PREFIX end
+            36: op = AT_SUFFIX end
+            42: op = AT_SUB end
+            else: ret false end
+        end
+        sp.i += 2
+    else:
+        ret false
+    end
+    out.op = op
+    _w3 := sp_ws(sp)
+    q := sp_peek(sp, 0)
+    if q == 34 or q == 39:
+        st := sp.i + 1
+        mut j := st
+        until j < sp.n and (sp.p[j] as int) != q:
+            if (sp.p[j] as int) == 92:
+                j++
+            end
+            j++
+        end
+        if j >= sp.n:
+            ret false
+        end
+        raw := sp.src.substr(st, j - st)
+        out.value = intern_own(unescape(raw))
+        sfree(raw)
+        sp.i = j + 1
+    else:
+        v := sp_ident(sp)
+        if v.len() == 0:
+            mut j := sp.i
+            until j < sp.n and is_digit(sp.p[j] as int):
+                j++
+            end
+            if j == sp.i:
+                ret false
+            end
+            out.value = intern_own(sp.src.substr(sp.i, j - sp.i))
+            sp.i = j
+        else:
+            out.value = intern_own(v)
+        end
+    end
+    _w4 := sp_ws(sp)
+    f := sp_peek(sp, 0)
+    if f == 105 or f == 73:
+        out.icase = true
+        sp.i++
+        _w5 := sp_ws(sp)
+    else f == 115 or f == 83:
+        sp.i++
+        _w6 := sp_ws(sp)
+    end
+    if sp_peek(sp, 0) != 93:
+        ret false
+    end
+    sp.i++
+    ret true
+end
+
+func parse_pseudo(sd &: SheetData, sp &: SelParser, out &: Simple, spec &: int): bool:
+    sp.i++
+    if sp_peek(sp, 0) == 58:
+        ret false
+    end
+    raw := sp_ident(sp)
+    if raw.len() == 0:
+        ret false
+    end
+    name := lower_ascii(raw)
+    sfree(raw)
+    defer sfree(name)
+    if name == "before" or name == "after" or name == "first-line" or name == "first-letter":
+        ret false
+    end
+    if sp_peek(sp, 0) == 40:
+        mut body := ""
+        if not paren_body(sp, body):
+            ret false
+        end
+        defer sfree(body)
+        switch name:
+            "nth-child", "nth-last-child", "nth-of-type", "nth-last-of-type":
+                mut a := 0
+                mut b := 0
+                if not parse_nth(body, a, b):
+                    ret false
+                end
+                out.k = SK_NTH
+                out.a = a
+                out.b = b
+                switch name:
+                    "nth-child": out.op = NTH_CHILD end
+                    "nth-last-child": out.op = NTH_LAST_CHILD end
+                    "nth-of-type": out.op = NTH_OF_TYPE end
+                    else: out.op = NTH_LAST_OF_TYPE end
+                end
+                spec += 1000
+                ret true
+            end
+            "not", "is", "where", "matches", "-webkit-any", "any":
+                mut sels := Vector {} as Vector<int>
+                defer sels.free()
+                if not parse_selector_list(sd, body, sels):
+                    ret false
+                end
+                out.k = SK_LIST
+                out.op = name == "not" ? LIST_NOT : (name == "where" ? LIST_WHERE : LIST_IS)
+                out.a = sels.len() > 0 ? sels[0] : 0
+                out.b = sels.len()
+                if out.op != LIST_WHERE:
+                    mut best := 0
+                    repeat sels.len() in k:
+                        sv := sd.selectors[sels[k]].spec
+                        if sv > best:
+                            best = sv
+                        end
+                    end
+                    spec += best
+                end
+                ret true
+            end
+            "dir":
+                out.k = SK_PSEUDO
+                tb := str.Trim(body)
+                out.a = tb == "rtl" ? PS_DIR_RTL : PS_DIR_LTR
+                sfree(tb)
+                spec += 1000
+                ret true
+            end
+            "lang":
+                out.k = SK_PSEUDO
+                out.a = PS_LANG
+                out.value = intern_own(str.Trim(body))
+                spec += 1000
+                ret true
+            end
+            else:
+                ret false
+            end
+        end
+    end
+    code := pseudo_code(name)
+    if code == 0:
+        ret false
+    end
+    out.k = SK_PSEUDO
+    out.a = code
+    spec += 1000
+    ret true
+end
+
+func parse_compound(sd &: SheetData, sp &: SelParser, spec &: int, state &: bool, c &: Compound): bool:
+    c.s0 = sd.simples.len()
+    mut count := 0
+    until sp.i < sp.n:
+        ch := sp.p[sp.i] as int
+        mut sm := Simple {}
+        if ch == 42:
+            sp.i++
+            count++
+            continue
+        else ch == 35:
+            sp.i++
+            id := sp_ident(sp)
+            if id.len() == 0:
+                ret false
+            end
+            sm.k = SK_ID
+            sm.name = intern_own(id)
+            spec += 1000000
+        else ch == 46:
+            sp.i++
+            cl := sp_ident(sp)
+            if cl.len() == 0:
+                ret false
+            end
+            sm.k = SK_CLASS
+            sm.name = intern_own(cl)
+            spec += 1000
+        else ch == 91:
+            if not parse_attr_sel(sp, sm):
+                ret false
+            end
+            spec += 1000
+        else ch == 58:
+            if not parse_pseudo(sd, sp, sm, spec):
+                ret false
+            end
+            if sm.k == SK_PSEUDO and (sm.a == PS_HOVER or sm.a == PS_FOCUS or sm.a == PS_FOCUS_VISIBLE or sm.a == PS_ACTIVE or sm.a == PS_FOCUS_WITHIN):
+                state = true
+            end
+            if sm.k == SK_LIST:
+                state = true
+            end
+        else is_name_start(ch) or ch == 45 or ch == 92:
+            if count > 0:
+                ret false
+            end
+            tg := sp_ident(sp)
+            if tg.len() == 0:
+                ret false
+            end
+            sm.k = SK_TAG
+            sm.name = intern_own(lower_ascii(tg))
+            sfree(tg)
+            spec++
+        else:
+            break
+        end
+        sd.simples.push(sm)
+        count++
+    end
+    c.n = sd.simples.len() - c.s0
+    ret count > 0
+end
+
+func parse_complex(sd &: SheetData, text: str, out &: int): bool:
+    mut sp := SelParser { src = text, p = (text as void*) as u8*, n = text.len() }
+    _w := sp_ws(sp)
+    mut comps := Vector {} as Vector<Compound>
+    defer comps.free()
+    mut spec := 0
+    mut comb := CB_NONE
+    mut state_left := false
+    mut last_state := false
+    mut sibling := false
+    mut need := false
+    until sp.i < sp.n:
+        mut st := false
+        mut c := Compound {}
+        if not parse_compound(sd, sp, spec, st, c):
+            ret false
+        end
+        need = false
+        c.comb = comb
+        comps.push(c)
+        if last_state:
+            state_left = true
+        end
+        last_state = st
+        ws := sp_ws(sp)
+        if sp.i >= sp.n:
+            break
+        end
+        ch := sp.p[sp.i] as int
+        if ch == 62 or ch == 43 or ch == 126:
+            need = true
+        end
+        if ch == 62:
+            comb = CB_CHILD
+            sp.i++
+            _w2 := sp_ws(sp)
+        else ch == 43:
+            comb = CB_ADJ
+            sibling = true
+            sp.i++
+            _w3 := sp_ws(sp)
+        else ch == 126:
+            comb = CB_SIB
+            sibling = true
+            sp.i++
+            _w4 := sp_ws(sp)
+        else ws:
+            comb = CB_DESC
+        else:
+            ret false
+        end
+    end
+    if need:
+        ret false
+    end
+    if comps.len() == 0:
+        ret false
+    end
+    c0 := sd.compounds.len()
+    repeat comps.len() in k:
+        sd.compounds.push(comps[k])
+    end
+    sd.selectors.push(Selector { c0 = c0, n = comps.len(), spec = spec, state_left = state_left, sibling = sibling })
+    out = sd.selectors.len() - 1
+    ret true
+end
+
+func split_top_commas(text: str, out &: Vector<str>):
+    n := text.len()
+    p := (text as void*) as u8*
+    mut depth := 0
+    mut q := 0
+    mut st := 0
+    repeat n in i:
+        c := p[i] as int
+        if q != 0:
+            if c == q:
+                q = 0
+            end
+        else c == 34 or c == 39:
+            q = c
+        else c == 40 or c == 91:
+            depth++
+        else (c == 41 or c == 93) and depth > 0:
+            depth--
+        else c == 44 and depth == 0:
+            out.push(text.substr(st, i - st))
+            st = i + 1
+        end
+    end
+    out.push(text.substr(st, n - st))
+end
+
+func parse_selector_list(sd &: SheetData, text: str, out &: Vector<int>): bool:
+    mut parts := Vector {} as Vector<str>
+    split_top_commas(text, parts)
+    mut ok := true
+    repeat parts.len() in i:
+        mut si := 0
+        if ok and not parse_complex(sd, parts[i], si):
+            ok = false
+        end
+        if ok:
+            out.push(si)
+        end
+        sfree(parts[i])
+    end
+    parts.free()
+    ret ok and out.len() > 0
+end
+
+func dom_parent(d: Dom, i: int): int:
+    ret d.parent[i]
+end
+
+func attr_of(d: Dom, i: int, name: str, out &: str): bool:
+    if i == d.count:
+        if name == "dir":
+            out = d.root_dir
+            ret true
+        end
+        if name == "lang":
+            out = d.root_lang
+            ret true
+        end
+        ret false
+    end
+    e := d.els[i]
+    repeat e.attr_names.len() in k:
+        if e.attr_names[k] == name:
+            out = e.attr_values[k]
+            ret true
+        end
+    end
+    if name == "id" and d.ids[i].len() > 0:
+        out = d.ids[i]
+        ret true
+    end
+    if name == "class" and e.classes.len() > 0:
+        out = e.classes
+        ret true
+    end
+    ret false
+end
+
+func eq_case(a: str, b: str, icase: bool): bool:
+    if not icase:
+        ret a == b
+    end
+    la := lower_ascii(a)
+    lb := lower_ascii(b)
+    r := la == lb
+    sfree(la)
+    sfree(lb)
+    ret r
+end
+
+func attr_match(d: Dom, i: int, sm: Simple): bool:
+    mut v := ""
+    if not attr_of(d, i, sm.name, v):
+        ret false
+    end
+    switch sm.op:
+        AT_HAS: ret true end
+        AT_EQ: ret eq_case(v, sm.value, sm.icase) end
+        AT_INCL:
+            mut parts := str.Fields(v)
+            mut found := false
+            repeat parts.len() in k:
+                if eq_case(parts[k], sm.value, sm.icase):
+                    found = true
+                end
+            end
+            parts.free()
+            ret found
+        end
+        AT_DASH:
+            ret eq_case(v, sm.value, sm.icase) or str.StartsWith(v, sm.value + "-")
+        end
+        AT_PREFIX: ret sm.value.len() > 0 and str.StartsWith(v, sm.value) end
+        AT_SUFFIX: ret sm.value.len() > 0 and str.EndsWith(v, sm.value) end
+        else: ret sm.value.len() > 0 and str.Contains(v, sm.value) end
+    end
+    ret false
+end
+
+func sib_index(d: Dom, i: int, from_end: bool, of_type: bool): int:
+    mut k := 1
+    mut j := from_end ? d.next[i] : d.prev[i]
+    until j >= 0:
+        if not of_type or d.tags[j] == d.tags[i]:
+            k++
+        end
+        j = from_end ? d.next[j] : d.prev[j]
+    end
+    ret k
+end
+
+func nth_ok(a: int, b: int, idx: int): bool:
+    if a == 0:
+        ret idx == b
+    end
+    diff := idx - b
+    if diff % a != 0:
+        ret false
+    end
+    ret diff / a >= 0
+end
+
+func has_state_desc(d: Dom, i: int, mask: int): bool:
+    mut c := d.first[i]
+    until c >= 0:
+        if (d.state[c] & mask) != 0 or has_state_desc(d, c, mask):
+            ret true
+        end
+        c = d.next[c]
+    end
+    ret false
+end
+
+func lang_of(d: Dom, i: int): str:
+    mut j := i
+    until j >= 0:
+        mut v := ""
+        if attr_of(d, j, "lang", v):
+            ret v
+        end
+        j = d.parent[j]
+    end
+    ret ""
+end
+
+func dir_of(d: Dom, i: int): str:
+    mut j := i
+    until j >= 0:
+        mut v := ""
+        if attr_of(d, j, "dir", v) and (v == "rtl" or v == "ltr"):
+            ret v
+        end
+        j = d.parent[j]
+    end
+    ret "ltr"
+end
+
+func is_form_control(tag: str): bool:
+    ret tag == "input" or tag == "button" or tag == "select" or tag == "textarea" or tag == "option" or tag == "optgroup" or tag == "fieldset"
+end
+
+func pseudo_match(d: Dom, i: int, code: int): bool:
+    st := d.state[i]
+    switch code:
+        PS_HOVER: ret (st & ST_HOVER) != 0 end
+        PS_FOCUS: ret (st & ST_FOCUS) != 0 end
+        PS_FOCUS_VISIBLE: ret (st & ST_FOCUS_VISIBLE) != 0 end
+        PS_ACTIVE: ret (st & ST_ACTIVE) != 0 end
+        PS_FOCUS_WITHIN: ret (st & ST_FOCUS) != 0 or has_state_desc(d, i, ST_FOCUS) end
+        PS_FIRST_CHILD: ret i != d.count and d.prev[i] < 0 end
+        PS_LAST_CHILD: ret i != d.count and d.next[i] < 0 end
+        PS_ONLY_CHILD: ret i != d.count and d.prev[i] < 0 and d.next[i] < 0 end
+        PS_ROOT: ret i == d.count end
+        PS_EMPTY: ret d.first[i] < 0 end
+        PS_FIRST_OF_TYPE: ret i != d.count and sib_index(d, i, false, true) == 1 end
+        PS_LAST_OF_TYPE: ret i != d.count and sib_index(d, i, true, true) == 1 end
+        PS_ONLY_OF_TYPE: ret i != d.count and sib_index(d, i, false, true) == 1 and sib_index(d, i, true, true) == 1 end
+        PS_CHECKED:
+            mut v := ""
+            ret attr_of(d, i, "checked", v) or attr_of(d, i, "selected", v)
+        end
+        PS_DISABLED:
+            mut v := ""
+            ret is_form_control(d.tags[i]) and attr_of(d, i, "disabled", v)
+        end
+        PS_ENABLED:
+            mut v := ""
+            ret is_form_control(d.tags[i]) and not attr_of(d, i, "disabled", v)
+        end
+        PS_REQUIRED:
+            mut v := ""
+            ret attr_of(d, i, "required", v)
+        end
+        PS_OPTIONAL:
+            mut v := ""
+            tg := d.tags[i]
+            ret (tg == "input" or tg == "select" or tg == "textarea") and not attr_of(d, i, "required", v)
+        end
+        PS_LINK:
+            mut v := ""
+            ret d.tags[i] == "a" and attr_of(d, i, "href", v)
+        end
+        PS_DIR_RTL: ret dir_of(d, i) == "rtl" end
+        PS_DIR_LTR: ret dir_of(d, i) == "ltr" end
+        PS_PLACEHOLDER_SHOWN:
+            mut v := ""
+            mut w := ""
+            ret attr_of(d, i, "placeholder", v) and not (attr_of(d, i, "value", w) and w.len() > 0)
+        end
+        PS_READ_ONLY, PS_READ_WRITE:
+            tg := d.tags[i]
+            mut v := ""
+            editable := (tg == "input" or tg == "textarea") and not attr_of(d, i, "readonly", v) and not attr_of(d, i, "disabled", v)
+            ret code == PS_READ_WRITE ? editable : not editable
+        end
+        PS_OPEN:
+            mut v := ""
+            ret attr_of(d, i, "open", v)
+        end
+        else: ret false end
+    end
+    ret false
+end
+
+func match_simple(sd: SheetData, d: Dom, i: int, sm: Simple): bool:
+    switch sm.k:
+        SK_TAG: ret d.tags[i] == sm.name end
+        SK_ID: ret d.ids[i] == sm.name end
+        SK_CLASS:
+            c0 := d.cls0[i]
+            repeat d.clsn[i] in k:
+                if d.classes[c0 + k] == sm.name:
+                    ret true
+                end
+            end
+            ret false
+        end
+        SK_ATTR: ret attr_match(d, i, sm) end
+        SK_PSEUDO:
+            if sm.a == PS_LANG:
+                l := lang_of(d, i)
+                ret eq_case(l, sm.value, true) or str.StartsWith(lower_ascii(l), lower_ascii(sm.value) + "-")
+            end
+            ret pseudo_match(d, i, sm.a)
+        end
+        SK_NTH:
+            if i == d.count:
+                ret false
+            end
+            idx := sib_index(d, i, sm.op == NTH_LAST_CHILD or sm.op == NTH_LAST_OF_TYPE, sm.op == NTH_OF_TYPE or sm.op == NTH_LAST_OF_TYPE)
+            ret nth_ok(sm.a, sm.b, idx)
+        end
+        SK_LIST:
+            mut any := false
+            repeat sm.b in k:
+                if match_selector(sd, d, sm.a + k, i):
+                    any = true
+                    break
+                end
+            end
+            ret sm.op == LIST_NOT ? not any : any
+        end
+        else: ret false end
+    end
+    ret false
+end
+
+func match_compound(sd: SheetData, d: Dom, ci: int, i: int): bool:
+    c := sd.compounds[ci]
+    repeat c.n in k:
+        if not match_simple(sd, d, i, sd.simples[c.s0 + k]):
+            ret false
+        end
+    end
+    ret true
+end
+
+func match_from(sd: SheetData, d: Dom, sel: Selector, k: int, i: int): bool:
+    ci := sel.c0 + k
+    if not match_compound(sd, d, ci, i):
+        ret false
+    end
+    if k == 0:
+        ret true
+    end
+    switch sd.compounds[ci].comb:
+        CB_CHILD:
+            p := d.parent[i]
+            ret p >= 0 and match_from(sd, d, sel, k - 1, p)
+        end
+        CB_DESC:
+            mut p := d.parent[i]
+            until p >= 0:
+                if match_from(sd, d, sel, k - 1, p):
+                    ret true
+                end
+                p = d.parent[p]
+            end
+            ret false
+        end
+        CB_ADJ:
+            s := d.prev[i]
+            ret s >= 0 and match_from(sd, d, sel, k - 1, s)
+        end
+        CB_SIB:
+            mut s := d.prev[i]
+            until s >= 0:
+                if match_from(sd, d, sel, k - 1, s):
+                    ret true
+                end
+                s = d.prev[s]
+            end
+            ret false
+        end
+        else: ret false end
+    end
+    ret false
+end
+
+func match_selector(sd: SheetData, d: Dom, si: int, i: int): bool:
+    sel := sd.selectors[si]
+    ret match_from(sd, d, sel, sel.n - 1, i)
+end
+
+func selector_key(sd: SheetData, si: int): str:
+    sel := sd.selectors[si]
+    c := sd.compounds[sel.c0 + sel.n - 1]
+    mut cls := ""
+    mut tag := ""
+    repeat c.n in k:
+        sm := sd.simples[c.s0 + k]
+        if sm.k == SK_ID:
+            ret "#" + sm.name
+        end
+        if sm.k == SK_CLASS and cls.len() == 0:
+            cls = sm.name
+        end
+        if sm.k == SK_TAG:
+            tag = sm.name
+        end
+    end
+    if cls.len() > 0:
+        ret "." + cls
+    end
+    if tag.len() > 0:
+        ret str.Clone(tag)
+    end
+    ret str.Clone("*")
+end

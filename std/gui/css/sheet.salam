@@ -1,0 +1,531 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package css
+
+import str
+
+const W_NONE := 0
+const W_INHERIT := 1
+const W_INITIAL := 2
+const W_UNSET := 3
+
+struct Decl:
+    pub prop: int = -1
+    pub name: str = ""
+    pub value: str = ""
+    pub important: bool = false
+    pub ts: int = 0
+    pub te: int = 0
+    pub has_var: bool = false
+    pub wide: int = W_NONE
+end
+
+struct Block:
+    pub d0: int = 0
+    pub n: int = 0
+end
+
+struct Rule:
+    pub sel: int = 0
+    pub block: int = 0
+    pub order: int = 0
+    pub ua: bool = false
+    pub media: int = -1
+    pub next: int = -1
+end
+
+struct MediaEntry:
+    pub text: str = ""
+    pub parent: int = -1
+end
+
+struct SheetData:
+    pub simples: Vector<Simple> = Vector {}
+    pub compounds: Vector<Compound> = Vector {}
+    pub selectors: Vector<Selector> = Vector {}
+    pub rules: Vector<Rule> = Vector {}
+    pub buckets: HashMap<str, int> = HashMap {}
+    pub tails: HashMap<str, int> = HashMap {}
+    pub medias: Vector<MediaEntry> = Vector {}
+    pub decls: Vector<Decl> = Vector {}
+    pub blocks: Vector<Block> = Vector {}
+    pub block_cache: HashMap<str, int> = HashMap {}
+    pub toks: Vector<Tok> = Vector {}
+    pub adding_ua: bool = false
+    pub state_left: bool = false
+    pub sibling: bool = false
+    pub version: int = 0
+end
+
+func sheet_new(): SheetData:
+    mut sd := SheetData {}
+    sd.simples = Vector {} as Vector<Simple>
+    sd.compounds = Vector {} as Vector<Compound>
+    sd.selectors = Vector {} as Vector<Selector>
+    sd.rules = Vector {} as Vector<Rule>
+    sd.buckets = HashMap {} as HashMap<str, int>
+    sd.tails = HashMap {} as HashMap<str, int>
+    sd.medias = Vector {} as Vector<MediaEntry>
+    sd.decls = Vector {} as Vector<Decl>
+    sd.blocks = Vector {} as Vector<Block>
+    sd.block_cache = HashMap {} as HashMap<str, int>
+    sd.toks = Vector {} as Vector<Tok>
+    ret sd
+end
+
+func sheet_free(sd &: SheetData):
+    sd.simples.free()
+    sd.compounds.free()
+    sd.selectors.free()
+    sd.rules.free()
+    sd.buckets.free()
+    sd.tails.free()
+    repeat sd.medias.len() in i:
+        sfree(sd.medias[i].text)
+    end
+    sd.medias.free()
+    repeat sd.decls.len() in i:
+        d := sd.decls[i]
+        sfree(d.name)
+        sfree(d.value)
+    end
+    sd.decls.free()
+    sd.blocks.free()
+    sd.block_cache.free()
+    free_toks(sd.toks, 0)
+    sd.toks.free()
+end
+
+func wide_kw(t: Vector<Tok>, s: int, e: int): int:
+    k := kw_at(t, s, e)
+    switch k:
+        "inherit": ret W_INHERIT end
+        "initial": ret W_INITIAL end
+        "unset", "revert", "revert-layer": ret W_UNSET end
+        else: ret W_NONE end
+    end
+    ret W_NONE
+end
+
+func has_var_fn(t: Vector<Tok>, s: int, e: int): bool:
+    mut i := s
+    until i < e:
+        if t[i].k == TK_FUNC and (t[i].s == "var" or t[i].s == "env"):
+            ret true
+        end
+        i++
+    end
+    ret false
+end
+
+func validate(sd &: SheetData, p: int, ts: int, te: int): bool:
+    mut q := p
+    if q >= L_FIRST and q <= L_LAST:
+        q = logical_to_physical(q, false)
+    end
+    mut cs := initial_style()
+    ok := apply_prop(cs, q, sd.toks, ts, te, Cx {})
+    free_style(cs)
+    ret ok
+end
+
+func push_decl(sd &: SheetData, prop: int, name: str, value: str, important: bool, out_n &: int): bool:
+    ts := sd.toks.len()
+    tokenize(value, sd.toks)
+    te := sd.toks.len()
+    mut d := Decl { prop = prop, name = str.Clone(name), value = str.Clone(value), important = important, ts = ts, te = te }
+    d.wide = wide_kw(sd.toks, ts, te)
+    d.has_var = d.wide == W_NONE and has_var_fn(sd.toks, ts, te)
+    if prop == P_CUSTOM:
+        sd.decls.push(d)
+        out_n++
+        ret true
+    end
+    if d.wide == W_NONE and not d.has_var and ts == te:
+        sfree(d.name)
+        sfree(d.value)
+        free_toks(sd.toks, ts)
+        ret false
+    end
+    if d.wide == W_NONE and not d.has_var and not validate(sd, prop, ts, te):
+        sfree(d.name)
+        sfree(d.value)
+        free_toks(sd.toks, ts)
+        ret false
+    end
+    sd.decls.push(d)
+    out_n++
+    ret true
+end
+
+func add_declaration(sd &: SheetData, name: str, value: str, important: bool, out_n &: int):
+    p := prop_id(name)
+    if p < 0:
+        ret
+    end
+    if p < S_FIRST or p > S_LAST or p == P_CUSTOM:
+        _ok := push_decl(sd, p, name, value, important, out_n)
+        ret
+    end
+    mut toks := Vector {} as Vector<Tok>
+    tokenize(value, toks)
+    n := toks.len()
+    w := wide_kw(toks, 0, n)
+    hv := has_var_fn(toks, 0, n)
+    if hv:
+        free_toks(toks, 0)
+        toks.free()
+        _ok := push_decl(sd, p, name, value, important, out_n)
+        ret
+    end
+    mut ids := Vector {} as Vector<int>
+    mut vals := Vector {} as Vector<str>
+    if w != W_NONE:
+        longhands_of(p, ids)
+        repeat ids.len():
+            vals.push(str.Clone(value))
+        end
+    else not expand(p, value, toks, 0, n, ids, vals):
+        repeat vals.len() in i:
+            sfree(vals[i])
+        end
+        ids.free()
+        vals.free()
+        free_toks(toks, 0)
+        toks.free()
+        ret
+    end
+    free_toks(toks, 0)
+    toks.free()
+    mark := sd.decls.len()
+    mark_t := sd.toks.len()
+    mut ok := true
+    mut cnt := 0
+    repeat ids.len() in i:
+        if ok and not push_decl(sd, ids[i], name, vals[i], important, cnt):
+            ok = false
+        end
+        sfree(vals[i])
+    end
+    ids.free()
+    vals.free()
+    if not ok:
+        until sd.decls.len() > mark:
+            d := sd.decls.pop()
+            sfree(d.name)
+            sfree(d.value)
+        end
+        free_toks(sd.toks, mark_t)
+        ret
+    end
+    out_n += cnt
+end
+
+func trim_range(p: u8*, s: int, e: int, os &: int, oe &: int):
+    mut a := s
+    mut b := e
+    until a < b and is_space(p[a] as int):
+        a++
+    end
+    until b > a and is_space(p[b - 1] as int):
+        b--
+    end
+    os = a
+    oe = b
+end
+
+func parse_block(sd &: SheetData, text: str): int:
+    if sd.block_cache.has(text):
+        ret sd.block_cache.get(text)
+    end
+    d0 := sd.decls.len()
+    mut n := 0
+    p := (text as void*) as u8*
+    len := text.len()
+    mut i := 0
+    until i < len:
+        mut j := i
+        mut depth := 0
+        mut q := 0
+        until j < len:
+            c := p[j] as int
+            if q != 0:
+                if c == 92:
+                    j++
+                else c == q:
+                    q = 0
+                end
+            else c == 34 or c == 39:
+                q = c
+            else c == 40 or c == 91 or c == 123:
+                depth++
+            else (c == 41 or c == 93 or c == 125) and depth > 0:
+                depth--
+            else c == 59 and depth == 0:
+                break
+            end
+            j++
+        end
+        mut a := 0
+        mut b := 0
+        trim_range(p, i, j, a, b)
+        mut colon := -1
+        mut k := a
+        until k < b:
+            if (p[k] as int) == 58:
+                colon = k
+                break
+            end
+            k++
+        end
+        if colon > a:
+            mut na := 0
+            mut nb := 0
+            trim_range(p, a, colon, na, nb)
+            mut va := 0
+            mut vb := 0
+            trim_range(p, colon + 1, b, va, vb)
+            mut important := false
+            mut bang := vb - 1
+            until bang >= va and (p[bang] as int) != 33:
+                bang--
+            end
+            if bang >= va:
+                tail := text.substr(bang + 1, vb - bang - 1)
+                tl := lower_ascii(tail)
+                tt := str.Trim(tl)
+                if tt == "important":
+                    important = true
+                    mut nvb := bang
+                    until nvb > va and is_space(p[nvb - 1] as int):
+                        nvb--
+                    end
+                    vb = nvb
+                end
+                sfree(tail)
+                sfree(tl)
+                sfree(tt)
+            end
+            rawname := text.substr(na, nb - na)
+            mut name := rawname
+            if not str.StartsWith(rawname, "--"):
+                name = lower_ascii(rawname)
+                sfree(rawname)
+            end
+            value := text.substr(va, vb - va)
+            add_declaration(sd, name, value, important, n)
+            sfree(name)
+            sfree(value)
+        end
+        i = j + 1
+    end
+    sd.blocks.push(Block { d0 = d0, n = n })
+    idx := sd.blocks.len() - 1
+    sd.block_cache.put(str.Clone(text), idx)
+    ret idx
+end
+
+func add_rule_to_bucket(sd &: SheetData, ri: int):
+    key := selector_key(sd, sd.rules[ri].sel)
+    if sd.tails.has(key):
+        t := sd.tails.get(key)
+        mut r := sd.rules.ref(t)
+        r.next = ri
+        sd.tails.put(key, ri)
+        sfree(key)
+    else:
+        sd.buckets.put(key, ri)
+        sd.tails.put(str.Clone(key), ri)
+    end
+end
+
+func add_rule_text(sd &: SheetData, selector: str, decls: str, media: int): bool:
+    mut sels := Vector {} as Vector<int>
+    defer sels.free()
+    if not parse_selector_list(sd, selector, sels):
+        ret false
+    end
+    blk := parse_block(sd, decls)
+    repeat sels.len() in i:
+        sel := sd.selectors[sels[i]]
+        if sel.state_left:
+            sd.state_left = true
+        end
+        if sel.sibling:
+            sd.sibling = true
+        end
+        sd.rules.push(Rule { sel = sels[i], block = blk, order = sd.rules.len(), ua = sd.adding_ua, media = media })
+        add_rule_to_bucket(sd, sd.rules.len() - 1)
+    end
+    sd.version++
+    ret true
+end
+
+func add_media(sd &: SheetData, cond: str, parent: int): int:
+    sd.medias.push(MediaEntry { text = str.Clone(cond), parent = parent })
+    ret sd.medias.len() - 1
+end
+
+func skip_ws_comments(p: u8*, n: int, i0: int): int:
+    mut i := i0
+    until i < n:
+        c := p[i] as int
+        if is_space(c):
+            i++
+        else c == 47 and i + 1 < n and (p[i + 1] as int) == 42:
+            mut j := i + 2
+            until j + 1 < n and not ((p[j] as int) == 42 and (p[j + 1] as int) == 47):
+                j++
+            end
+            i = j + 2
+        else c == 60 and i + 3 < n and (p[i + 1] as int) == 33:
+            i += 4
+        else c == 45 and i + 2 < n and (p[i + 1] as int) == 45 and (p[i + 2] as int) == 62:
+            i += 3
+        else:
+            break
+        end
+    end
+    ret i
+end
+
+func find_char(p: u8*, n: int, i0: int, want: int, stop: int): int:
+    mut i := i0
+    mut q := 0
+    mut depth := 0
+    until i < n:
+        c := p[i] as int
+        if q != 0:
+            if c == 92:
+                i++
+            else c == q:
+                q = 0
+            end
+        else c == 34 or c == 39:
+            q = c
+        else c == 47 and i + 1 < n and (p[i + 1] as int) == 42:
+            mut j := i + 2
+            until j + 1 < n and not ((p[j] as int) == 42 and (p[j + 1] as int) == 47):
+                j++
+            end
+            i = j + 1
+        else c == 40 or c == 91:
+            depth++
+        else (c == 41 or c == 93) and depth > 0:
+            depth--
+        else depth == 0 and (c == want or c == stop):
+            ret i
+        end
+        i++
+    end
+    ret n
+end
+
+func block_end(p: u8*, n: int, open: int): int:
+    mut i := open + 1
+    mut depth := 1
+    mut q := 0
+    until i < n:
+        c := p[i] as int
+        if q != 0:
+            if c == 92:
+                i++
+            else c == q:
+                q = 0
+            end
+        else c == 34 or c == 39:
+            q = c
+        else c == 47 and i + 1 < n and (p[i + 1] as int) == 42:
+            mut j := i + 2
+            until j + 1 < n and not ((p[j] as int) == 42 and (p[j + 1] as int) == 47):
+                j++
+            end
+            i = j + 1
+        else c == 123:
+            depth++
+        else c == 125:
+            depth--
+            if depth == 0:
+                ret i
+            end
+        end
+        i++
+    end
+    ret n
+end
+
+func parse_css(sd &: SheetData, text: str, s: int, e: int, media: int): int:
+    p := (text as void*) as u8*
+    mut count := 0
+    mut i := s
+    until i < e:
+        i = skip_ws_comments(p, e, i)
+        if i >= e:
+            break
+        end
+        c := p[i] as int
+        if c == 125 or c == 59:
+            i++
+            continue
+        end
+        if c == 64:
+            ne := name_end(p, e, i + 1)
+            at := text.substr(i + 1, ne - i - 1)
+            atl := lower_ascii(at)
+            sfree(at)
+            brace := find_char(p, e, ne, 123, 59)
+            if brace >= e or (p[brace] as int) == 59:
+                sfree(atl)
+                i = brace + 1
+                continue
+            end
+            close := block_end(p, e, brace)
+            mut ps := 0
+            mut pe := 0
+            trim_range(p, ne, brace, ps, pe)
+            if atl == "media":
+                prelude := text.substr(ps, pe - ps)
+                mi := add_media(sd, prelude, media)
+                sfree(prelude)
+                count += parse_css(sd, text, brace + 1, close, mi)
+            else atl == "supports" or atl == "layer" or atl == "document" or atl == "scope" or atl == "starting-style":
+                if atl != "starting-style":
+                    count += parse_css(sd, text, brace + 1, close, media)
+                end
+            end
+            sfree(atl)
+            i = close + 1
+            continue
+        end
+        brace := find_char(p, e, i, 123, 125)
+        if brace >= e or (p[brace] as int) == 125:
+            i = brace + 1
+            continue
+        end
+        close := block_end(p, e, brace)
+        mut ss := 0
+        mut se := 0
+        trim_range(p, i, brace, ss, se)
+        sel := text.substr(ss, se - ss)
+        body := text.substr(brace + 1, close - brace - 1)
+        if add_rule_text(sd, sel, body, media):
+            count++
+        end
+        sfree(sel)
+        sfree(body)
+        i = close + 1
+    end
+    ret count
+end

@@ -1,0 +1,134 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import mem
+import sync
+import net.transport
+import net.vless
+import net.vmess
+
+const UUID1 := "b831381d-6324-4d53-ad4f-8cda48b30811"
+const TOTAL := 128 * 1024 * 1024
+const CHUNK := 65536
+
+mut ready := sync.NewWaitGroup()
+mut port := 0
+mut proto := 0
+mut srv_settings := transport.Settings {}
+mut received := 0
+mut last_ms := 0 as i64
+
+func sink():
+    l := transport.Listen(0, srv_settings)
+    port = transport.ListenerPort(l)
+    sync.Done(ready)
+    t := transport.Accept(l)
+    buf := mem.Allocate(CHUNK as u64)
+    received = 0
+    if proto == 0:
+        mut c := t
+        until true:
+            n := transport.Read(c, buf, CHUNK)
+            if n <= 0:
+                break
+            end
+            received += n
+            last_ms = sync.NowMs()
+        end
+        transport.Close(c)
+    else proto == 1:
+        mut users := Vector {} as Vector<vless.User>
+        users.push(vless.NewUser(UUID1, ""))
+        mut c := vless.Accept(t, users)
+        until true:
+            n := vless.Read(c, buf, CHUNK)
+            if n <= 0:
+                break
+            end
+            received += n
+            last_ms = sync.NowMs()
+        end
+        vless.Close(c)
+    else:
+        mut users := Vector {} as Vector<vmess.User>
+        users.push(vmess.NewUser(UUID1))
+        mut rf := vmess.NewReplayFilter()
+        mut c := vmess.Accept(t, users, rf)
+        until true:
+            n := vmess.Read(c, buf, CHUNK)
+            if n <= 0:
+                break
+            end
+            received += n
+            last_ms = sync.NowMs()
+        end
+        vmess.Close(c)
+    end
+    mem.Free(buf)
+    transport.CloseListener(l)
+end
+
+func run(label: str, p: int, cs: transport.Settings, ss: transport.Settings):
+    proto = p
+    srv_settings = ss
+    sync.Add(ready, 1 as i64)
+    th := spawn(sink)
+    sync.Wait(ready)
+    tc := transport.Dial("127.0.0.1", port, cs)
+    buf := mem.AllocateZeroed(CHUNK as u64)
+    start := sync.NowMs()
+    mut sent := 0
+    if p == 0:
+        mut c := tc
+        until sent < TOTAL:
+            transport.Write(c, buf, CHUNK)
+            sent += CHUNK
+        end
+        sync.SleepMs(400)
+        transport.Close(c)
+    else p == 1:
+        mut c := vless.Client(tc, UUID1, "", vless.CmdTCP, transport.NewAddr("example.com", 443))
+        until sent < TOTAL:
+            vless.Write(c, buf, CHUNK)
+            sent += CHUNK
+        end
+        sync.SleepMs(400)
+        vless.Close(c)
+    else:
+        mut c := vmess.Client(tc, UUID1, vmess.SecAES128GCM, vmess.DefaultOption(vmess.SecAES128GCM), vmess.CmdTCP, transport.NewAddr("example.com", 443))
+        until sent < TOTAL:
+            vmess.Write(c, buf, CHUNK)
+            sent += CHUNK
+        end
+        sync.SleepMs(400)
+        vmess.Close(c)
+    end
+    join(th)
+    ms := last_ms - start
+    mem.Free(buf)
+    println label, "MB/s:", (received as i64) * (1000 as i64) / ms / (1048576 as i64), "received", received, "of", sent
+end
+
+func main:
+    plain := transport.Settings {}
+    mut ws := transport.Settings {}
+    ws.network = "ws"
+    ws.path = "/b"
+    run("tcp", 0, plain, plain)
+    run("websocket", 0, ws, ws)
+    run("vless over tcp", 1, plain, plain)
+    run("vless over websocket", 1, ws, ws)
+    run("vmess aes-128-gcm over tcp", 2, plain, plain)
+    run("vmess aes-128-gcm over websocket", 2, ws, ws)
+end

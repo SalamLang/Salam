@@ -43,6 +43,7 @@ struct _SzX:
     pub err: int
     pub fcrc: u32
     pub fcrc_on: bool
+    pub got: compress.ByteBuf
 end
 
 struct _SzF:
@@ -86,6 +87,13 @@ pub struct SevenZipFile:
     @en "volumes"
     @fa "بخش ها"
     pub volumes: Vector<str> = Vector {} as Vector<str>
+    pub memp: void* = null
+    pub memn: i64 = 0 as i64
+end
+
+struct _SzMem:
+    pub p: u8*
+    pub n: i64
 end
 
 func _szx_new(s: _Sz, fi: int, made: Vector<str>): _SzX:
@@ -94,7 +102,7 @@ func _szx_new(s: _Sz, fi: int, made: Vector<str>): _SzX:
         crcs = Vector {} as Vector<i64>, crc_def = Vector {} as Vector<bool> res = Vector {} as Vector<int>,
         links = Vector {} as Vector<str>, names = Vector {} as Vector<str>, made = made
         cur = 0, left = 0 as i64, began = false, sink = compress.FileSink {}, capbuf = compress.NewByteBuf()
-        last = -1, done = false, err = 0, fcrc = 0 as u32, fcrc_on = false
+        last = -1, done = false, err = 0, fcrc = 0 as u32, fcrc_on = false, got = compress.NewByteBuf()
     }
     repeat s.files.len() in i:
         f := s.files.get(i)
@@ -179,7 +187,11 @@ func _szx_end(x: _SzX*):
         if m == 1 and bad:
             os.Remove(x[0].paths.get(i))
         end
-        if not bad and m >= 2:
+        if not bad and m == 4:
+            x[0].got = x[0].capbuf
+            x[0].capbuf = compress.NewByteBuf()
+        end
+        if not bad and m >= 2 and m < 4:
             tgt := compress.BufToStrUnsafe(x[0].capbuf)
             if m == 3:
                 x[0].links.set(i, tgt)
@@ -790,7 +802,24 @@ func _szf_folder_buf(fp: void*, start: i64, avail: i64, s: _Sz, fi: int, passwor
     ret st
 end
 
+func _szm_read(o: i64, d: void*, n: int, c: void*): int:
+    m := c as _SzMem*
+    if o < (0 as i64) or o >= m[0].n:
+        ret 0
+    end
+    mut k := n
+    if (k as i64) > m[0].n - o:
+        k = (m[0].n - o) as int
+    end
+    mem.Copy(d, ((m[0].p as i64) + o) as void*, k as u64)
+    ret k
+end
+
 func _szf_open(sf: SevenZipFile): void*:
+    if sf.memp != null:
+        rd := (o: i64, d: void*, n: int, c: void*): ret _szm_read(o, d, n, c) end
+        ret compress.CallbackOpenRead(sf.memn, rd, sf.memp)
+    end
     if sf.volumes.len() > 1:
         ret compress.MultiOpenRead(sf.volumes)
     end
@@ -985,7 +1014,7 @@ func _szf_links(fp: void*, sf: SevenZipFile, s: _Sz, memcap: i64, kinds: Vector<
     end
 end
 
-func _szf_extract(sf: SevenZipFile, s: _Sz, destdir: str, only: int, destpath: str, cap: i64, memcap: i64, made &: Vector<str>, written &: int): int:
+func _szf_extract(sf: SevenZipFile, s: _Sz, destdir: str, only: int, destpath: str, cap: i64, memcap: i64, made &: Vector<str>, written &: int, got &: compress.ByteBuf): int:
     fp := _szf_open(sf)
     if fp == null:
         ret SEVENZIP_IO
@@ -1021,7 +1050,9 @@ func _szf_extract(sf: SevenZipFile, s: _Sz, destdir: str, only: int, destpath: s
                 EnsureDir(parent)
                 mem.Free(parent as void*)
             end
-            if is_link:
+            if only >= 0 and destpath.len() == 0:
+                x.mode.set(k, 4)
+            else is_link:
                 x.mode.set(k, 2)
             else:
                 x.mode.set(k, 1)
@@ -1046,8 +1077,18 @@ func _szf_extract(sf: SevenZipFile, s: _Sz, destdir: str, only: int, destpath: s
             end
         end
         repeat x.fidx.len() in k:
-            r := x.res.get(k)
+            mut r := x.res.get(k)
+            if r == SEVENZIP_BAD_CRC and _sz_has_aes(s.folders.get(fi)):
+                r = SEVENZIP_BAD_PASSWORD
+            end
             m := x.mode.get(k)
+            if m == 4:
+                if r == SEVENZIP_OK:
+                    got = x.got
+                else:
+                    compress.BufFree(x.got)
+                end
+            end
             if r == SEVENZIP_OK and m != 0:
                 written++
                 if m == 1:
@@ -1065,6 +1106,128 @@ func _szf_extract(sf: SevenZipFile, s: _Sz, destdir: str, only: int, destpath: s
     compress.FileClose(fp)
     ret first
 end
+
+func _szf_extract_all(sf: SevenZipFile, destdir: str, cap: i64, memcap: i64, count &: int): int:
+    count = 0
+    mut s := _sz_new()
+    mut first := _szf_parse(sf, s)
+    if first != SEVENZIP_OK:
+        _sz_free(s)
+        ret first
+    end
+    mut made := Vector {} as Vector<str>
+    repeat s.files.len() in i:
+        f := s.files.get(i)
+        if f.anti:
+            continue
+        end
+        if not _safe_entry_name(f.name) or _rar_under_link(f.name, made):
+            if first == SEVENZIP_OK:
+                first = SEVENZIP_UNSAFE_PATH
+            end
+            continue
+        end
+        outpath := filepath.Join(destdir, f.name)
+        if f.is_dir:
+            EnsureDir(outpath)
+            count++
+        else not f.has_stream or f.size == (0 as i64):
+            parent := filepath.Dir(outpath)
+            EnsureDir(parent)
+            mem.Free(parent as void*)
+            mut empty := compress.SinkOpen(outpath, 0 as i64)
+            if empty.failed:
+                if first == SEVENZIP_OK:
+                    first = SEVENZIP_IO
+                end
+            else:
+                compress.SinkClose(empty)
+                _sz_apply_meta(f, outpath)
+                count++
+            end
+        end
+        mem.Free(outpath as void*)
+    end
+    mut written := 0
+    mut unused := compress.NewByteBuf()
+    st := _szf_extract(sf, s, destdir, -1, "", cap, memcap, made, written, unused)
+    count += written
+    if first == SEVENZIP_OK:
+        first = st
+    end
+    mut j := s.files.len() - 1
+    until j >= 0:
+        f := s.files.get(j)
+        j--
+        if f.is_dir and not f.anti and _safe_entry_name(f.name) and not _rar_under_link(f.name, made):
+            dpath := filepath.Join(destdir, f.name)
+            if os.IsDir(dpath):
+                _sz_apply_meta(f, dpath)
+            end
+            mem.Free(dpath as void*)
+        end
+    end
+    repeat made.len() in k:
+        mem.Free(made.get(k) as void*)
+    end
+    made.free()
+    _sz_free(s)
+    ret first
+end
+
+func _szm_open(arc: SevenZipArchive): SevenZipFile:
+    m := mem.AllocateZeroed(sizeof(_SzMem)) as _SzMem*
+    m[0].p = arc.data as u8*
+    m[0].n = arc.len as i64
+    mut sf := SevenZipFile { password = arc.password, size = arc.len as i64, status = SEVENZIP_CORRUPT, memp = m as void*, memn = arc.len as i64 }
+    fp := _szf_open(sf)
+    sf.status = _szf_load(fp, sf)
+    compress.FileClose(fp)
+    ret sf
+end
+
+func _szm_close(sf &: SevenZipFile):
+    compress.BufFree(sf.hdr)
+    sf.volumes.free()
+    if sf.memp != null:
+        mem.Free(sf.memp)
+    end
+    sf.memp = null
+end
+
+func _szm_read_one(sf: SevenZipFile, name: str, cap: i64, out &: compress.ByteBuf): int:
+    mut s := _sz_new()
+    mut st := _szf_parse(sf, s)
+    if st != SEVENZIP_OK:
+        _sz_free(s)
+        ret st
+    end
+    fi := _sz_find(s, name)
+    if fi < 0:
+        _sz_free(s)
+        ret SEVENZIP_NOT_FOUND
+    end
+    f := s.files.get(fi)
+    if not f.has_stream or f.size == (0 as i64):
+        _sz_free(s)
+        ret SEVENZIP_OK
+    end
+    mut lim := 2147483000 as i64
+    if cap > (0 as i64) and cap < lim:
+        lim = cap
+    end
+    if f.size > lim:
+        _sz_free(s)
+        ret SEVENZIP_TOO_BIG
+    end
+    mut made := Vector {} as Vector<str>
+    mut written := 0
+    st = _szf_extract(sf, s, "", fi, "", 0 as i64, 0 as i64, made, written, out)
+    made.free()
+    _sz_free(s)
+    ret st
+end
+
 
 @en "SevenZipOpenFile"
 @fa "بازکردن پرونده هفت زد"
@@ -1194,7 +1357,8 @@ pub func SevenZipFileExtractTo(sf &: SevenZipFile, name: str, destpath: str, cap
     end
     mut made := Vector {} as Vector<str>
     mut written := 0
-    st = _szf_extract(sf, s, "", fi, destpath, cap, memcap, made, written)
+    mut unused := compress.NewByteBuf()
+    st = _szf_extract(sf, s, "", fi, destpath, cap, memcap, made, written, unused)
     made.free()
     _sz_free(s)
     ret st
@@ -1203,64 +1367,47 @@ end
 @en "SevenZipFileExtractAll"
 @fa "استخراج همه از پرونده هفت زد"
 pub func SevenZipFileExtractAll(sf &: SevenZipFile, destdir: str, cap: i64, memcap: i64): int:
-    mut s := _sz_new()
-    mut first := _szf_parse(sf, s)
-    if first != SEVENZIP_OK:
-        _sz_free(s)
-        ret first
+    mut count := 0
+    ret _szf_extract_all(sf, destdir, cap, memcap, count)
+end
+
+@en "SevenZipReadCap"
+@fa "خواندن از هفت زد با سقف"
+pub func SevenZipReadCap(arc &: SevenZipArchive, name: str, cap: i64): compress.ByteBuf:
+    mut sf := _szm_open(arc)
+    mut out := compress.NewByteBuf()
+    mut st := sf.status
+    if st == SEVENZIP_OK:
+        st = _szm_read_one(sf, name, cap, out)
     end
-    mut made := Vector {} as Vector<str>
-    repeat s.files.len() in i:
-        f := s.files.get(i)
-        if f.anti:
-            continue
-        end
-        if not _safe_entry_name(f.name) or _rar_under_link(f.name, made):
-            if first == SEVENZIP_OK:
-                first = SEVENZIP_UNSAFE_PATH
-            end
-            continue
-        end
-        outpath := filepath.Join(destdir, f.name)
-        if f.is_dir:
-            EnsureDir(outpath)
-        else not f.has_stream or f.size == (0 as i64):
-            parent := filepath.Dir(outpath)
-            EnsureDir(parent)
-            mem.Free(parent as void*)
-            mut empty := compress.SinkOpen(outpath, 0 as i64)
-            if empty.failed:
-                if first == SEVENZIP_OK:
-                    first = SEVENZIP_IO
-                end
-            else:
-                compress.SinkClose(empty)
-                _sz_apply_meta(f, outpath)
-            end
-        end
-        mem.Free(outpath as void*)
+    arc.status = st
+    _szm_close(sf)
+    ret out
+end
+
+@en "SevenZipReadAllCap"
+@fa "خواندن همه از هفت زد با سقف"
+pub func SevenZipReadAllCap(arc &: SevenZipArchive, destdir: str, cap: i64, memcap: i64): int:
+    mut sf := _szm_open(arc)
+    mut count := 0
+    mut st := sf.status
+    if st == SEVENZIP_OK:
+        st = _szf_extract_all(sf, destdir, cap, memcap, count)
     end
-    mut written := 0
-    st := _szf_extract(sf, s, destdir, -1, "", cap, memcap, made, written)
-    if first == SEVENZIP_OK:
-        first = st
+    arc.status = st
+    _szm_close(sf)
+    ret count
+end
+
+@en "SevenZipEntriesOf"
+@fa "مدخل‌های هفت زد در حافظه"
+pub func SevenZipEntriesOf(arc &: SevenZipArchive): Vector<Entry>:
+    mut sf := _szm_open(arc)
+    mut out := Vector {} as Vector<Entry>
+    if sf.status == SEVENZIP_OK:
+        out = SevenZipFileEntries(sf)
     end
-    mut j := s.files.len() - 1
-    until j >= 0:
-        f := s.files.get(j)
-        j--
-        if f.is_dir and not f.anti and _safe_entry_name(f.name) and not _rar_under_link(f.name, made):
-            dpath := filepath.Join(destdir, f.name)
-            if os.IsDir(dpath):
-                _sz_apply_meta(f, dpath)
-            end
-            mem.Free(dpath as void*)
-        end
-    end
-    repeat made.len() in k:
-        mem.Free(made.get(k) as void*)
-    end
-    made.free()
-    _sz_free(s)
-    ret first
+    arc.status = sf.status
+    _szm_close(sf)
+    ret out
 end

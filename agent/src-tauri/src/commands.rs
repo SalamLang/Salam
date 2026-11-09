@@ -121,6 +121,23 @@ pub fn agent_alive(app: AppHandle) {
 }
 
 #[tauri::command]
+pub async fn agent_path_status(path: String) -> Result<&'static str, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let p = std::path::Path::new(path.trim());
+        if path.trim().is_empty() || !p.is_absolute() {
+            return "invalid";
+        }
+        match std::fs::metadata(p) {
+            Ok(m) if m.is_dir() => "ok",
+            Ok(_) => "not_folder",
+            Err(_) => "missing",
+        }
+    })
+    .await
+    .map_err(|e| format!("Checking the folder failed: {e}"))
+}
+
+#[tauri::command]
 pub async fn agent_project_context(workspace: String) -> Result<memory::ProjectContext, String> {
     if workspace.trim().is_empty() {
         return Err("No workspace folder is selected.".to_string());

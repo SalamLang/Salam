@@ -460,11 +460,22 @@ end
 
 func session_device(session: str, chat &: str, dev &: str, workspace &: str):
     aistore.Lock()
-    mut rows := aistore.Stmt("SELECT c.id, c.device_id, c.workspace FROM chats c JOIN bridge_devices d ON d.id = c.device_id AND d.user_id = c.user_id AND d.revoked = 0 WHERE c.bridge_token = ?1", one(session))
+    mut rows := aistore.Stmt("SELECT c.id, c.device_id, IF(c.project_id <> '', COALESCE(p.path, ''), c.workspace) FROM chats c JOIN bridge_devices d ON d.id = c.device_id AND d.user_id = c.user_id AND d.revoked = 0 LEFT JOIN projects p ON p.id = c.project_id WHERE c.bridge_token = ?1", one(session))
     if aistore.Next(rows):
         chat = aistore.Text(rows, 0)
         dev = aistore.Text(rows, 1)
         workspace = aistore.Text(rows, 2)
+    end
+    aistore.Finish(rows)
+    aistore.Unlock()
+end
+
+func session_scope(session: str, extra &: str, project &: bool):
+    aistore.Lock()
+    mut rows := aistore.Stmt("SELECT c.extra_path, c.project_id <> '' FROM chats c WHERE c.bridge_token = ?1", one(session))
+    if aistore.Next(rows):
+        extra = aistore.Text(rows, 0)
+        project = aistore.Text(rows, 1) == "1"
     end
     aistore.Finish(rows)
     aistore.Unlock()
@@ -706,6 +717,15 @@ func call_tool(params: str): str:
     m.push(json.MemberRaw("args", args))
     m.push(json.Member("chat", chat))
     m.push(json.Member("workspace", workspace))
+    mut extra := ""
+    mut in_project := false
+    session_scope(session, extra, in_project)
+    if extra.len() > 0:
+        m.push(json.Member("extra", extra))
+    end
+    if in_project:
+        m.push(json.MemberBool("project", true))
+    end
     _l := sync.Lock(LOCK)
     CALLS.put(id, json.Object(m))
     OWNER.put(id, dev)

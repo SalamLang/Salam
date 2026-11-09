@@ -2,6 +2,7 @@ use std::path::{Component, Path, PathBuf};
 
 pub struct Workspace {
     root: PathBuf,
+    extra: Vec<PathBuf>,
 }
 
 pub struct Resolved {
@@ -52,7 +53,30 @@ impl Workspace {
         if !root.is_dir() {
             return Err(format!("The workspace {} is not a folder.", root.display()));
         }
-        Ok(Workspace { root })
+        Ok(Workspace { root, extra: Vec::new() })
+    }
+
+    /// Adds a second folder that counts as part of the workspace. It must be
+    /// an absolute path without `..`, and an existing folder.
+    pub fn with_extra(mut self, raw: &str) -> Result<Self, String> {
+        let raw = raw.trim();
+        if raw.is_empty() {
+            return Ok(self);
+        }
+        let given = Path::new(raw);
+        if !given.is_absolute() || given.components().any(|c| matches!(c, Component::ParentDir)) {
+            return Err(format!("The extra folder {raw} must be a full path without '..'."));
+        }
+        let dir = dunce::canonicalize(given).map_err(|_| format!("The extra folder {raw} of this chat does not exist on this computer. Change or remove the extra folder in the chat settings."))?;
+        if !dir.is_dir() {
+            return Err(format!("The extra folder {} is not a folder.", dir.display()));
+        }
+        self.extra.push(dir);
+        Ok(self)
+    }
+
+    fn contains(&self, path: &Path) -> bool {
+        path.starts_with(&self.root) || self.extra.iter().any(|e| path.starts_with(e))
     }
 
     pub fn root(&self) -> &Path {
@@ -68,7 +92,7 @@ impl Workspace {
             if p.is_absolute() { p.to_path_buf() } else { self.root.join(p) }
         };
         let path = canonical_prefix(&normalize(&joined));
-        let inside = path.starts_with(&self.root);
+        let inside = self.contains(&path);
         Resolved { path, inside }
     }
 
@@ -215,7 +239,7 @@ impl Workspace {
             let token = token.trim_matches(|c: char| c == '\'' || c == '"' || c == '`');
             match target(token, cwd) {
                 Some(Target::Unknown) => out.push(token.to_string()),
-                Some(Target::Path(p)) if !canonical_prefix(&normalize(&p)).starts_with(&self.root) => {
+                Some(Target::Path(p)) if !self.contains(&canonical_prefix(&normalize(&p))) => {
                     out.push(token.to_string());
                 }
                 _ => {}
@@ -275,6 +299,31 @@ mod tests {
         std::os::unix::fs::symlink(other.path(), d.path().join("link")).unwrap();
         assert!(!ws.resolve("link/x.txt").inside);
         assert!(!ws.resolve("link/new.txt").inside);
+    }
+
+    #[test]
+    fn an_extra_folder_counts_as_inside() {
+        let (_d, ws) = setup();
+        let other = tempfile::tempdir().unwrap();
+        let ws = ws.with_extra(other.path().to_str().unwrap()).unwrap();
+        let file = other.path().join("a.txt");
+        assert!(ws.resolve(file.to_str().unwrap()).inside);
+        assert!(ws.outside_paths(&format!("cat {}", file.display()), ws.root()).is_empty());
+        let third = tempfile::tempdir().unwrap();
+        assert!(!ws.resolve(third.path().to_str().unwrap()).inside);
+        assert_eq!(ws.outside_paths(&format!("cat {}", third.path().display()), ws.root()).len(), 1);
+    }
+
+    #[test]
+    fn a_bad_extra_folder_is_refused() {
+        let (_d, ws) = setup();
+        assert!(ws.with_extra("relative/dir").is_err());
+        let (_d2, ws) = setup();
+        assert!(ws.with_extra("/tmp/../etc").is_err());
+        let (_d3, ws) = setup();
+        assert!(ws.with_extra("/definitely/not/here/salam").is_err());
+        let (_d4, ws) = setup();
+        assert!(ws.with_extra("  ").is_ok());
     }
 
     #[test]

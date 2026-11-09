@@ -187,9 +187,55 @@ async fn report(
     }
 }
 
+static PINS: std::sync::Mutex<Vec<(String, std::path::PathBuf, usize)>> = std::sync::Mutex::new(Vec::new());
+
+struct Pin(String);
+
+impl Drop for Pin {
+    fn drop(&mut self) {
+        if let Ok(mut pins) = PINS.lock() {
+            if let Some(i) = pins.iter().position(|p| p.0 == self.0) {
+                pins[i].2 -= 1;
+                if pins[i].2 == 0 {
+                    pins.remove(i);
+                }
+            }
+        }
+    }
+}
+
+fn pin(chat: &str, root: &std::path::Path) -> Result<Pin, String> {
+    let mut pins = PINS.lock().map_err(|_| "Salam Agent is busy, try again.".to_string())?;
+    let pos = pins.iter().position(|p| p.0 == chat);
+    if let Some(i) = pos {
+        if pins[i].1 != root {
+            return Err("The project folder of this chat changed while it is running. Wait for the running steps to finish, then run it again.".to_string());
+        }
+        pins[i].2 += 1;
+    } else {
+        pins.push((chat.to_string(), root.to_path_buf(), 1));
+    }
+    Ok(Pin(chat.to_string()))
+}
+
 async fn handle(app: AppHandle, http: reqwest::Client, secret: String, call: Call) {
-    let ws = match Workspace::open(&call.workspace) {
+    let opened = if call.project && call.workspace.trim().is_empty() {
+        Err("This project has no folder yet. Open the project edit screen and choose an existing folder.".to_string())
+    } else {
+        Workspace::open(&call.workspace).map_err(|e| {
+            if call.project && e.contains("does not exist") {
+                format!("The project folder {} does not exist on this computer. Open the project edit screen and choose an existing folder, then run the chat again.", call.workspace)
+            } else {
+                e
+            }
+        })
+    };
+    let ws = match opened.and_then(|ws| ws.with_extra(&call.extra)) {
         Ok(ws) => ws,
+        Err(e) => return report(&http, &secret, &call.id, "error", &e, None, None).await,
+    };
+    let _pin = match pin(&call.chat, ws.root()) {
+        Ok(p) => p,
         Err(e) => return report(&http, &secret, &call.id, "error", &e, None, None).await,
     };
     let plan = match tools::plan(&call, &ws) {
@@ -251,6 +297,18 @@ mod tests {
             cwd: "/work".into(),
             memory: false,
         }
+    }
+
+    #[test]
+    fn a_chat_keeps_one_folder_while_calls_run() {
+        let root = std::path::Path::new("/work/a");
+        let first = pin("chat-pin", root).unwrap();
+        assert!(pin("chat-pin", std::path::Path::new("/work/b")).is_err());
+        let second = pin("chat-pin", root).unwrap();
+        drop(first);
+        assert!(pin("chat-pin", std::path::Path::new("/work/b")).is_err());
+        drop(second);
+        assert!(pin("chat-pin", std::path::Path::new("/work/b")).is_ok());
     }
 
     #[test]

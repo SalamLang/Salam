@@ -21,7 +21,22 @@ import net.websocket
 import compress
 import crypto
 import sync
+import atomic
 import tls
+import net.internal.rawsock
+import net.tunnel
+
+@en "ModeTLS"
+@fa "حالت تی ال اس"
+pub const ModeTLS := 0
+
+@en "ModePlain"
+@fa "حالت ساده"
+pub const ModePlain := 1
+
+@en "ModeWS"
+@fa "حالت وب‌سوکت"
+pub const ModeWS := 2
 
 struct ServerState:
     pub cfg: ServerConfig = ServerConfig {}
@@ -44,6 +59,76 @@ struct UdpState:
     pub link: Link* = null
     pub sock: udp.Socket = udp.Socket {}
     pub stop: i64* = null
+    pub stats: tunnel.Stats = tunnel.Stats {}
+end
+
+@en "LinkStream"
+@fa "جریان پیوند"
+pub struct LinkStream:
+    @en "link"
+    @fa "پیوند"
+    pub link: Link* = null
+
+    @en "Read"
+    @fa "خواندن"
+    pub func Read(max: int): str:
+        buf := mem.Allocate((max + 1) as u64)
+        n := LinkRead(this.link[0], buf, max)
+        if n <= 0:
+            mem.Free(buf)
+            ret ""
+        end
+        (buf as u8*)[n] = 0 as u8
+        ret buf as str
+    end
+
+    @en "ReadBytes"
+    @fa "خواندن بایت"
+    pub func ReadBytes(buf: void*, max: int): int:
+        ret LinkRead(this.link[0], buf, max)
+    end
+
+    @en "Write"
+    @fa "نوشتن"
+    pub func Write(data: str): int:
+        if LinkWrite(this.link[0], data as void*, data.len()):
+            ret data.len()
+        end
+        ret 0 - 1
+    end
+
+    @en "WriteBytes"
+    @fa "نوشتن بایت"
+    pub func WriteBytes(ptr: void*, n: int): int:
+        if LinkWrite(this.link[0], ptr, n):
+            ret n
+        end
+        ret 0 - 1
+    end
+
+    @en "SetDeadline"
+    @fa "تنظیم مهلت"
+    pub func SetDeadline(millis: int):
+        LinkSetTimeout(this.link[0], millis)
+    end
+
+    @en "Shutdown"
+    @fa "خاموش کردن"
+    pub func Shutdown():
+        LinkShutdown(this.link[0])
+    end
+
+    @en "Close"
+    @fa "بستن"
+    pub func Close():
+        LinkShutdown(this.link[0])
+    end
+
+    @en "Ok"
+    @fa "معتبر"
+    pub func Ok(): bool:
+        ret LinkOk(this.link[0])
+    end
 end
 
 @en "ServerConfig"
@@ -73,6 +158,27 @@ pub struct ServerConfig:
     @en "idle_timeout_ms"
     @fa "مهلت بیکاری"
     pub idle_timeout_ms: int = 0
+    @en "mode"
+    @fa "حالت"
+    pub mode: int = 0
+    @en "bind_host"
+    @fa "میزبان شنود"
+    pub bind_host: str = ""
+    @en "dialer"
+    @fa "شماره‌گیر"
+    pub dialer: dyn tunnel.Dialer = tunnel.DirectDialer {}
+    @en "has_dialer"
+    @fa "دارای شماره‌گیر"
+    pub has_dialer: bool = false
+    @en "stats"
+    @fa "آمار ترافیک"
+    pub stats: tunnel.Stats = tunnel.Stats {}
+    @en "has_stats"
+    @fa "دارای آمار ترافیک"
+    pub has_stats: bool = false
+    @en "allow_udp"
+    @fa "اجازه یو دی پی"
+    pub allow_udp: bool = true
 end
 
 @en "Session"
@@ -115,6 +221,9 @@ pub struct Server:
     @en "port"
     @fa "درگاه"
     pub port: int = 0
+    @en "host"
+    @fa "میزبان"
+    pub host: str = ""
     @en "st"
     @fa "وضعیت"
     pub st: ServerState* = null
@@ -145,12 +254,14 @@ func _udp_reply_pump(us: UdpState*):
             if not WriteUDPPacket(us[0].link[0], fh, fp, buf, n):
                 break
             end
+            atomic.Add(us[0].stats.down, n as i64)
         end
     end
     mem.Free(buf)
 end
 
-func _serve_udp(lp: Link*):
+func _serve_udp(lp: Link*, extra: compress.ByteBuf, stats: tunnel.Stats):
+    _seed_udp(lp[0], extra.data, extra.len)
     sock := udp.Open()
     if not udp.Ok(sock):
         ret
@@ -159,12 +270,15 @@ func _serve_udp(lp: Link*):
     us := mem.AllocateZeroed(sizeof(UdpState) as u64) as UdpState*
     stop := mem.AllocateZeroed(8 as u64) as i64*
     atomic_store(stop, 1 as i64)
-    us[0] = UdpState { link = lp, sock = sock, stop = stop }
+    us[0] = UdpState { link = lp, sock = sock, stop = stop, stats = stats }
     t := spawn(_udp_reply_pump, us)
     mut pkt := UDPPacket {}
     mut payload := compress.NewByteBuf()
     until ReadUDPPacket(lp[0], pkt, payload):
-        _sent := udp.SendBytes(sock, pkt.host, pkt.port, payload.data, payload.len)
+        sent := udp.SendBytes(sock, pkt.host, pkt.port, payload.data, payload.len)
+        if sent > 0:
+            atomic.Add(stats.up, sent as i64)
+        end
     end
     atomic_store(stop, 0 as i64)
     join(t)
@@ -172,6 +286,12 @@ func _serve_udp(lp: Link*):
     compress.BufFree(payload)
     mem.Free(stop as void*)
     mem.Free(us as void*)
+end
+
+func _free_stats(cfg: ServerConfig, st: tunnel.Stats):
+    if not cfg.has_stats:
+        tunnel.FreeStats(st)
+    end
 end
 
 func _count(st: ServerState*, idx: int):
@@ -239,7 +359,7 @@ func _accept_loop(st: ServerState*):
     end
 end
 
-func _start(cfg: ServerConfig, port: int, ws: bool, use_tls: bool): Server:
+func _start(cfg: ServerConfig, host: str, port: int, ws: bool, use_tls: bool): Server:
     mut srv := Server {}
     st := mem.AllocateZeroed(sizeof(ServerState) as u64) as ServerState*
     mut tcfg := tls.ServerConfig {}
@@ -253,7 +373,7 @@ func _start(cfg: ServerConfig, port: int, ws: bool, use_tls: bool): Server:
     mut lfd := 0 - 1 as i64
     mut lport := 0
     if ws:
-        ls := websocket.Listen(port)
+        ls := websocket.Server { fd = rawsock.ListenOn(host, port, rawsock.SOCK_STREAM).fd, port = port }
         if not websocket.Ok(ls):
             mem.Free(st as void*)
             ret srv
@@ -261,7 +381,7 @@ func _start(cfg: ServerConfig, port: int, ws: bool, use_tls: bool): Server:
         lfd = ls.fd
         lport = websocket.Port(ls)
     else:
-        ls := tcp.Bind(port)
+        ls := tcp.BindOn(host, port)
         if not tcp.Ok(ls):
             mem.Free(st as void*)
             ret srv
@@ -276,6 +396,7 @@ func _start(cfg: ServerConfig, port: int, ws: bool, use_tls: bool): Server:
     _t := spawn(_accept_loop, st)
     srv.ok = true
     srv.port = lport
+    srv.host = host
     srv.st = st
     ret srv
 end
@@ -394,46 +515,120 @@ pub func ServeLink(lp: Link*, cfg: ServerConfig): int:
         end
         ret 2
     end
+    mut stats := cfg.stats
+    if not cfg.has_stats:
+        stats = tunnel.NewStats()
+    end
+    defer _free_stats(cfg, stats)
+    atomic.Add(stats.total, 1 as i64)
     if s.req.cmd == CmdUDP:
-        _serve_udp(lp)
+        if not cfg.allow_udp:
+            atomic.Add(stats.failed, 1 as i64)
+            ret 3
+        end
+        atomic.Add(stats.active, 1 as i64)
+        _serve_udp(lp, s.extra, stats)
+        atomic.Add(stats.active, 0 - 1 as i64)
         ret 1
     end
-    tp := mem.AllocateZeroed(sizeof(Link) as u64) as Link*
-    tp[0] = _connect_target(cfg, s.req.host, s.req.port)
-    if not LinkOk(tp[0]):
-        LinkClose(tp[0])
-        mem.Free(tp as void*)
+    mut dialer := cfg.dialer
+    if not cfg.has_dialer:
+        dialer = tunnel.DirectDialer { timeout_ms = cfg.connect_timeout_ms }
+    end
+    out := dialer.Dial(tunnel.NewAddr(s.req.host, s.req.port))
+    if not out.Ok():
+        atomic.Add(stats.failed, 1 as i64)
         ret 3
     end
     if s.extra.len > 0:
-        if not LinkWrite(tp[0], s.extra.data, s.extra.len):
-            LinkClose(tp[0])
-            mem.Free(tp as void*)
+        if out.WriteBytes(s.extra.data, s.extra.len) != s.extra.len:
+            out.Close()
+            atomic.Add(stats.failed, 1 as i64)
             ret 3
         end
+        atomic.Add(stats.up, s.extra.len as i64)
     end
-    _n := Relay(lp, tp)
-    LinkClose(tp[0])
-    mem.Free(tp as void*)
+    atomic.Add(stats.active, 1 as i64)
+    _r := tunnel.RelayWith(AsStream(lp), out, stats, cfg.idle_timeout_ms)
+    atomic.Add(stats.active, 0 - 1 as i64)
     ret 1
+end
+
+@en "AsStream"
+@fa "به صورت جریان"
+pub func AsStream(lp: Link*): dyn tunnel.Stream:
+    ret LinkStream { link = lp }
+end
+
+@en "SetMode"
+@fa "تعیین حالت"
+pub func SetMode(cfg &: ServerConfig, mode: int):
+    cfg.mode = mode
+end
+
+@en "SetBind"
+@fa "تعیین میزبان شنود"
+pub func SetBind(cfg &: ServerConfig, host: str):
+    cfg.bind_host = host
+end
+
+@en "SetDialer"
+@fa "تعیین شماره‌گیر"
+pub func SetDialer(cfg &: ServerConfig, d: dyn tunnel.Dialer):
+    cfg.dialer = d
+    cfg.has_dialer = true
+end
+
+@en "SetRouter"
+@fa "تعیین مسیریاب"
+pub func SetRouter(cfg &: ServerConfig, rd: tunnel.RouterDialer):
+    cfg.dialer = rd
+    cfg.has_dialer = true
+end
+
+@en "SetStats"
+@fa "تعیین آمار ترافیک"
+pub func SetStats(cfg &: ServerConfig, st: tunnel.Stats):
+    cfg.stats = st
+    cfg.has_stats = true
+end
+
+@en "Listen"
+@fa "شنود"
+pub func Listen(cfg: ServerConfig, port: int): Server:
+    mut host := cfg.bind_host
+    if host.len() == 0:
+        if cfg.mode == ModeTLS:
+            host = "0.0.0.0"
+        else:
+            host = "127.0.0.1"
+        end
+    end
+    ret _start(cfg, host, port, cfg.mode == ModeWS, cfg.mode == ModeTLS)
 end
 
 @en "Serve"
 @fa "سرویس‌دهی"
 pub func Serve(cfg: ServerConfig, port: int): Server:
-    ret _start(cfg, port, false, true)
+    mut c := cfg
+    c.mode = ModeTLS
+    ret Listen(c, port)
 end
 
 @en "ServePlain"
 @fa "سرویس‌دهی بدون رمز"
 pub func ServePlain(cfg: ServerConfig, port: int): Server:
-    ret _start(cfg, port, false, false)
+    mut c := cfg
+    c.mode = ModePlain
+    ret Listen(c, port)
 end
 
 @en "ServeWS"
 @fa "سرویس‌دهی وب‌سوکت"
 pub func ServeWS(cfg: ServerConfig, port: int): Server:
-    ret _start(cfg, port, true, false)
+    mut c := cfg
+    c.mode = ModeWS
+    ret Listen(c, port)
 end
 
 @en "ServerPort"
@@ -459,7 +654,11 @@ pub func Stop(s: Server):
         ret
     end
     atomic_store(s.st[0].stop, 0 as i64)
-    w := tcp.Dial("127.0.0.1", s.port)
+    mut wake := s.host
+    if wake.len() == 0 or wake == "0.0.0.0":
+        wake = "127.0.0.1"
+    end
+    w := tcp.Dial(wake, s.port)
     tcp.Close(w)
     sync.SleepMs(50)
 end

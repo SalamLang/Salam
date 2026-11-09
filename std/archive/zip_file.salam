@@ -37,6 +37,9 @@ pub struct ZipFile:
     @en "status"
     @fa "وضعیت"
     pub status: int = 0
+    @en "password"
+    @fa "گذرواژه"
+    pub password: str = ""
     @en "cd"
     @fa "فهرست مرکزی"
     pub cd: compress.ByteBuf = compress.ByteBuf { data = null, len = 0, cap = 0 }
@@ -57,11 +60,71 @@ func _zipf_read_cd(fp: void*, zf &: ZipFile, cd_off: i64, csize: i64): bool:
     ret true
 end
 
-func _zipf_to_sink(fp: void*, size: i64, r: _ZipRec, sink &: compress.FileSink): int:
-    if (r.flags & 1) != 0:
+func _zipf_decode(fp: void*, off: i64, comp: i64, method: int, uncomp: i64, sink &: compress.FileSink): int:
+    mut ok := true
+    if method == ZipMethodStore:
+        ok = comp == uncomp and compress.SinkCopyFrom(sink, fp, off, comp)
+    else method == ZipMethodDeflate or method == ZipMethodDeflate64:
+        mut br := compress.NewFileBitReader(fp, off, comp)
+        ok = not br.bad and compress.RawInflateToSink(br, sink, method == ZipMethodDeflate64)
+        compress.FileBitReaderFree(br)
+    else method == ZipMethodLzma:
+        if comp < (14 as i64):
+            ret ZIP_CORRUPT
+        end
+        hd := mem.Allocate(9 as u64)
+        got := compress.FileReadAt(fp, off, hd, 9)
+        good := got == 9 and LEGet16(hd, 2) == 5
+        if not good:
+            mem.Free(hd)
+            ret ZIP_CORRUPT
+        end
+        props := ((hd as i64) + (4 as i64)) as void*
+        code := compress.LzmaFileToSink(props, 5, fp, off + (9 as i64), comp - (9 as i64), uncomp, sink, 0 as i64)
+        mem.Free(hd)
+        if code == 2:
+            ret ZIP_TOO_BIG
+        end
+        ok = code == 0
+    else:
+        lim := 2147483647 as i64
+        if comp > lim or uncomp > lim:
+            ret ZIP_TOO_BIG
+        end
+        packed := mem.Allocate((comp + (1 as i64)) as u64)
+        ok = compress.FileReadAt(fp, off, packed, comp as int) == (comp as int)
+        mut res := compress.NewByteBuf()
+        if ok:
+            ok = _zip_unpack_ext(method, packed, comp as int, uncomp as int, res) == ZIP_OK
+        end
+        mem.Free(packed)
+        if ok:
+            ok = compress.SinkWrite(sink, res.data, res.len)
+        end
+        compress.BufFree(res)
+    end
+    if sink.over:
+        ret ZIP_TOO_BIG
+    end
+    if sink.failed:
+        ret ZIP_IO
+    end
+    if not ok or sink.written != uncomp:
+        ret ZIP_CORRUPT
+    end
+    ret ZIP_OK
+end
+
+func _zipf_to_sink(fp: void*, size: i64, r: _ZipRec, password: str, sink &: compress.FileSink): int:
+    enc := (r.flags & 1) != 0
+    if enc and password.len() == 0:
         ret ZIP_ENCRYPTED
     end
-    if not _zip_readable_method(r.method):
+    mut method := r.method
+    if enc and r.method == 99:
+        method = r.aes_method
+    end
+    if not _zip_readable_method(method):
         ret ZIP_UNSUPPORTED
     end
     if r.uncomp < (0 as i64) or r.comp < (0 as i64) or r.local < (0 as i64) or r.local + (30 as i64) > size:
@@ -82,55 +145,41 @@ func _zipf_to_sink(fp: void*, size: i64, r: _ZipRec, sink &: compress.FileSink):
     if not good:
         ret ZIP_CORRUPT
     end
-    mut ok := true
-    if r.method == 0:
-        ok = r.comp == r.uncomp and compress.SinkCopyFrom(sink, fp, data_start, r.comp)
-    else r.method == ZipMethodDeflate64:
-        mut br := compress.NewFileBitReader(fp, data_start, r.comp)
-        ok = not br.bad and compress.RawInflateToSink(br, sink, true)
-        compress.FileBitReaderFree(br)
-    else r.method != ZipMethodDeflate:
-        lim := 2147483647 as i64
-        if r.comp > lim or r.uncomp > lim:
-            ret ZIP_TOO_BIG
-        end
-        packed := mem.Allocate((r.comp + (1 as i64)) as u64)
-        ok = compress.FileReadAt(fp, data_start, packed, r.comp as int) == (r.comp as int)
-        mut res := compress.NewByteBuf()
-        if ok:
-            ok = _zip_unpack_ext(r.method, packed, r.comp as int, r.uncomp as int, res) == ZIP_OK
-        end
-        mem.Free(packed)
-        if ok:
-            ok = compress.SinkWrite(sink, res.data, res.len)
-        end
-        compress.BufFree(res)
+    mut st := ZIP_OK
+    if not enc:
+        st = _zipf_decode(fp, data_start, r.comp, method, r.uncomp, sink)
     else:
-        mut br := compress.NewFileBitReader(fp, data_start, r.comp)
-        ok = not br.bad and compress.RawInflateToSink(br, sink, false)
-        compress.FileBitReaderFree(br)
+        tmp := _zc_open_tmp()
+        dlen := _zc_decrypt_file(fp, data_start, r.comp, r, password, tmp)
+        if dlen < (0 as i64):
+            st = (0 as i64 - dlen) as int
+        else:
+            fp2 := compress.FileOpenRead(tmp)
+            if fp2 == null:
+                st = ZIP_IO
+            else:
+                st = _zipf_decode(fp2, 0 as i64, dlen, method, r.uncomp, sink)
+                compress.FileClose(fp2)
+            end
+            os.Remove(tmp)
+        end
+        mem.Free(tmp as void*)
     end
-    if sink.over:
-        ret ZIP_TOO_BIG
+    if st != ZIP_OK:
+        ret st
     end
-    if sink.failed:
-        ret ZIP_IO
-    end
-    if not ok or sink.written != r.uncomp:
-        ret ZIP_CORRUPT
-    end
-    if sink.crc != r.crc:
+    if not (enc and r.method == 99 and r.aes_ver == 2) and sink.crc != r.crc:
         ret ZIP_BAD_CRC
     end
     ret ZIP_OK
 end
 
-func _zipf_write_one(fp: void*, size: i64, r: _ZipRec, outpath: str, cap: i64): int:
+func _zipf_write_one(fp: void*, size: i64, r: _ZipRec, outpath: str, cap: i64, password: str): int:
     mut sink := compress.SinkOpen(outpath, cap)
     if sink.failed:
         ret ZIP_IO
     end
-    st := _zipf_to_sink(fp, size, r, sink)
+    st := _zipf_to_sink(fp, size, r, password, sink)
     closed := compress.SinkClose(sink)
     if st == ZIP_OK and not closed:
         os.Remove(outpath)
@@ -201,6 +250,22 @@ pub func ZipFileClose(zf &: ZipFile):
     end
     zf.path = ""
     zf.count = 0 as i64
+    if zf.password.len() > 0:
+        mem.Free(zf.password as void*)
+    end
+    zf.password = ""
+end
+
+@en "ZipFileSetPassword"
+@fa "تنظیم گذرواژه پرونده زیپ"
+pub func ZipFileSetPassword(zf &: ZipFile, password: str):
+    if zf.password.len() > 0:
+        mem.Free(zf.password as void*)
+    end
+    zf.password = ""
+    if password.len() > 0:
+        zf.password = str.Clone(password)
+    end
 end
 
 @en "ZipFileEntries"
@@ -246,7 +311,7 @@ pub func ZipFileExtractTo(zf &: ZipFile, name: str, destpath: str, cap: i64): in
         end
         hit := r.name == name
         if hit:
-            st = _zipf_write_one(fp, zf.size, r, destpath, cap)
+            st = _zipf_write_one(fp, zf.size, r, destpath, cap, zf.password)
         end
         _zip_free_name(r.name)
         if hit:
@@ -289,7 +354,7 @@ pub func ZipFileExtractAll(zf &: ZipFile, destdir: str, cap: i64): int:
                 parent := filepath.Dir(outpath)
                 EnsureDir(parent)
                 mem.Free(parent as void*)
-                st = _zipf_write_one(fp, zf.size, r, outpath, cap)
+                st = _zipf_write_one(fp, zf.size, r, outpath, cap, zf.password)
                 if st == ZIP_OK:
                     when := _zip_dos_to_unix(r.dos_date, r.dos_time)
                     if when > (0 as i64): _tar_set_mtime(outpath, when) end

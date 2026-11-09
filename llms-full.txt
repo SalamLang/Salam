@@ -74371,7 +74371,7 @@ The example for this item is shown with the ones above: compress-Gzip.salam
 
 https://salamlang.github.io/Salam/std/archive/
 
-Making and opening zip and tar archives, reading RAR, and gzipping a file.
+Making and opening zip and tar archives, reading and writing RAR, and gzipping a file.
 
 An archive gathers several files into one. Zip compresses each file on its own; tar only puts the files one after another and is usually gzipped afterwards (`.tar.gz`).
 
@@ -74387,7 +74387,7 @@ The compression itself comes from compress; use that package directly to gzip a 
 
 - Tar: names longer than 100 bytes are cut, both when writing and reading, and the ustar prefix field and GNU or PAX long names are not used. Links and other special entries are listed as ordinary files of size 0. New entries get a time of 0, and the mode you set, or 644 for files and 755 for folders when you leave it at 0.
 
-- RAR: listing works for RAR 4 and 5, but only entries stored without compression can be extracted.
+- RAR: RAR 5 archives are read completely: every compression level, solid archives and the built-in filters, with each entry's CRC-32 checked. For RAR 3 and 4 archives (WinRAR before 5), listing works and entries stored without compression come out, but compressed entries fail with `RAR_UNSUPPORTED`. Encrypted entries (`RAR_ENCRYPTED`) and multi-volume archives (`RAR_MULTIVOLUME`) are refused. New archives are RAR 5 with the files stored, because only WinRAR itself can compress to RAR; any RAR tool opens them.
 
 The guide below shows the usual jobs: zipping a set of files, making and reading a `.tar.gz`, telling formats apart by their first bytes, and extracting without letting an archive write outside the target folder.
 
@@ -74615,6 +74615,81 @@ out2/safe.txt written: true
 
 A false result from an extract call is therefore not always a disk error: check the entry names with `ZipList` or `TarList` when you need to tell the two apart.
 
+## Read and write a RAR
+
+Reading goes through `RarList` and `RarExtract`, the same way as zip. The sample below is a small solid RAR 5 made by WinRAR: the second file is packed against the first, so `RarExtract` unpacks both to reach it. Every entry is checked against its CRC-32, and the `status` says what went wrong instead of returning silent garbage.
+
+archive-guide-rar.salam
+
+```salam
+import archive
+import compress
+
+const SAMPLE := """
+526172211a07010009efc86f0b0105070406010180808000f59006092302030bc300049c04a48302dcdfaa7280050105
+612e7478740a031341fff06a00f2f92ec4de405543522f75043ded152822995a044050507ca7cbf17ff3c348ad0d2727
+655f99a332a4c1ac1c51cad46312e761917434a437902ab22276d9e9f3b0b2cd03eb58c5ad77d22302030b9c0004b104
+a4830220abc84ec0050105622e7478740a031341fff06ae4e7fa2e440719f5c9e63f0caebd274804c54d756dc27b960e
+6971f66c94d170988ae3092702030b8000048000a4830200000000c0050109656d7074792e7478740a031341fff06ae4
+e7fa2e1d77565103050400
+"""
+
+func digit(c: int): int:
+    if c >= 48 and c <= 57:
+        ret c - 48
+    end
+    if c >= 97 and c <= 102:
+        ret c - 87
+    end
+    ret -1
+end
+
+func from_hex(text: str): compress.ByteBuf:
+    mut out := compress.NewByteBuf()
+    bytes := text as u8*
+    mut high := -1
+    repeat text.len() in i:
+        v := digit(bytes[i] as int)
+        if v < 0:
+            continue
+        end
+        if high < 0:
+            high = v
+        else:
+            compress.BufPush(out, high * 16 + v)
+            high = -1
+        end
+    end
+    ret out
+end
+
+func main:
+    rar := from_hex(SAMPLE)
+    println archive.IsRar(rar.data, rar.len)
+    mut entries := archive.RarList(rar.data, rar.len)
+    each e in entries:
+        println e.name, e.size, e.compressed_size
+    end
+    archive.FreeEntries(entries)
+
+    mut status := 0
+    b := archive.RarExtract(rar.data, rar.len, "b.txt", 0, status)
+    println archive.RarStatusText(status), b.len
+end
+```
+
+Output:
+
+```text
+true
+a.txt 540 67
+b.txt 561 28
+empty.txt 0 0
+ok 561
+```
+
+Making a RAR is simpler: build `RarFileInput` values and call `RarCreate` or `RarCreateFile`. The result is a valid RAR 5 archive with the files stored uncompressed. If you need real compression, use zip, or `.tar.gz` as shown above. Passwords and multi-volume sets are not supported for reading, and the status codes tell you when you hit one.
+
 ## Which function for which job
 
 | Job | Use |
@@ -74624,7 +74699,7 @@ A false result from an extract call is therefore not always a disk error: check 
 | See what is inside | `ZipList`, `TarList`, `RarList`, then `FreeEntries` |
 | One file out of an archive | `ZipExtractByName`, `TarExtractByName` |
 | Everything into a folder | `ZipExtractAll`, `TarExtractAll` |
-| A RAR file | `RarList`; `RarExtractByName` only for entries stored without compression |
+| A RAR file | `RarList`, `RarExtract` (or `RarExtractByName`), `RarExtractAll`; `RarCreate` to make one |
 | Bytes from and to disk | `ReadBinaryFile`, `WriteBinaryFileBuf` |
 
 ## Types
@@ -74698,6 +74773,83 @@ true true
 true true
 false 0
 false true
+```
+
+### `RarFileInput`
+
+```salam
+struct RarFileInput
+```
+
+One file to put in a RAR.
+
+| Name | Type | Description |
+| --- | --- | --- |
+| `name` | `str = ""` | The name inside the archive; a directory name ends with `/`. Use `/` between folders, never `\`. |
+| `data_ptr` | `void*` | The address of the contents. |
+| `data_len` | `int = 0` | The length of the contents. |
+| `is_dir` | `bool = false` | True for a directory entry; it has no contents. |
+| `mtime` | `i64 = 0` | The modification time in seconds since the Unix epoch, or 0 to leave it out. |
+
+archive-Rar.salam
+
+```salam
+import archive
+import compress
+
+func main:
+    a := compress.BufFromStr("first file\n")
+    b := compress.BufFromStr("second file, a little longer\n")
+    mut files := Vector {} as Vector<archive.RarFileInput>
+    files.push(archive.MakeRarFileInput("docs/", null, 0, true))
+    files.push(archive.MakeRarFileInput("docs/a.txt", a.data, a.len, false))
+    mut second := archive.MakeRarFileInput("docs/b.txt", b.data, b.len, false)
+    second.mtime = 1700000000 as i64
+    files.push(second)
+    r := archive.RarCreate(files)
+    println archive.IsRar(r.data, r.len), archive.RarCreateFile(files, "made.rar")
+
+    mut entries := archive.RarList(r.data, r.len)
+    each e in entries:
+        println e.name, e.size, e.is_dir, e.mtime
+    end
+    archive.FreeEntries(entries)
+
+    mut status := 0
+    got := archive.RarExtract(r.data, r.len, "docs/b.txt", 0, status)
+    println status == archive.RAR_OK, compress.BufToStrUnsafe(got) == "second file, a little longer\n"
+    _ := archive.RarExtract(r.data, r.len, "docs/none.txt", 0, status)
+    println status == archive.RAR_NOT_FOUND, archive.RarStatusText(status)
+
+    mut ok := false
+    small := archive.RarExtractByNameMax(r.data, r.len, "docs/b.txt", 5, ok)
+    println ok, small.len
+    println archive.RarStatusText(archive.RAR_TOO_BIG)
+
+    n := archive.RarExtractAllStatus(r.data, r.len, "rar-out", status)
+    println n, archive.RarStatusText(status)
+
+    bad := compress.BufClone(r)
+    p := bad.data as u8*
+    p[bad.len - 15] = ((p[bad.len - 15] as int) ^ 1) as u8
+    _ := archive.RarExtract(bad.data, bad.len, "docs/b.txt", 0, status)
+    println status == archive.RAR_BAD_CRC, archive.RarStatusText(status)
+end
+```
+
+Output:
+
+```text
+true true
+docs 0 true 0
+docs/a.txt 11 false 0
+docs/b.txt 29 false 1700000000
+true true
+true entry not found
+false 0
+entry too large
+3 ok
+true checksum mismatch
 ```
 
 ### `ZipFileInput`
@@ -74782,6 +74934,98 @@ true true
 true true
 513 70000
 ```
+
+## Constants and variables
+
+### `RAR_OK`
+
+```salam
+const RAR_OK: i32 = 0
+```
+
+Status: the entry was unpacked and its checksum matched.
+
+The example for this item is shown with the ones above: archive-Rar.salam
+
+### `RAR_NOT_FOUND`
+
+```salam
+const RAR_NOT_FOUND: i32 = 1
+```
+
+Status: no entry has that name.
+
+The example for this item is shown with the ones above: archive-Rar.salam
+
+### `RAR_UNSUPPORTED`
+
+```salam
+const RAR_UNSUPPORTED: i32 = 2
+```
+
+Status: a RAR version or method this package cannot unpack, such as a compressed entry in a RAR 3 or 4 archive.
+
+The example for this item is shown with the ones above: archive-Rar.salam
+
+### `RAR_ENCRYPTED`
+
+```salam
+const RAR_ENCRYPTED: i32 = 3
+```
+
+Status: the entry or the headers are encrypted; passwords are not supported.
+
+The example for this item is shown with the ones above: archive-Rar.salam
+
+### `RAR_CORRUPT`
+
+```salam
+const RAR_CORRUPT: i32 = 4
+```
+
+Status: the data is damaged or cut short.
+
+The example for this item is shown with the ones above: archive-Rar.salam
+
+### `RAR_BAD_CRC`
+
+```salam
+const RAR_BAD_CRC: i32 = 5
+```
+
+Status: the entry unpacked but its CRC-32 does not match the one in the archive.
+
+The example for this item is shown with the ones above: archive-Rar.salam
+
+### `RAR_MULTIVOLUME`
+
+```salam
+const RAR_MULTIVOLUME: i32 = 6
+```
+
+Status: the entry continues in another volume; multi-volume archives are not supported.
+
+The example for this item is shown with the ones above: archive-Rar.salam
+
+### `RAR_TOO_BIG`
+
+```salam
+const RAR_TOO_BIG: i32 = 7
+```
+
+Status: the entry is larger than the `max` given, or needs more memory than the package will allocate.
+
+The example for this item is shown with the ones above: archive-Rar.salam
+
+### `RAR_UNSAFE_PATH`
+
+```salam
+const RAR_UNSAFE_PATH: i32 = 8
+```
+
+Status: the entry name would write outside the target directory, so it was skipped.
+
+The example for this item is shown with the ones above: archive-Rar.salam
 
 ## Functions
 
@@ -74885,6 +75129,16 @@ True when the data starts with the RAR signature.
 
 The example for this item is shown with the ones above: archive-Zip.salam
 
+### `RarStatusText`
+
+```salam
+func RarStatusText(status: int): str
+```
+
+A short English description of a `RAR_` status code.
+
+The example for this item is shown with the ones above: archive-Rar.salam
+
 ### `RarList`
 
 ```salam
@@ -74895,15 +75149,45 @@ The entries of a RAR archive.
 
 The example for this item is shown with the ones above: archive-Zip.salam
 
+### `RarExtract`
+
+```salam
+func RarExtract(p: void*, n: int, name: str, max: int, status &: int): compress.ByteBuf
+```
+
+The contents of one RAR entry, found by its exact name. `status` is set to one of the `RAR_` codes: `RAR_OK` on success, otherwise the reason, and the buffer is empty. `max` caps the unpacked size, or 0 for no cap.
+
+The example for this item is shown with the ones above: archive-Rar.salam
+
+### `RarExtractByNameMax`
+
+```salam
+func RarExtractByNameMax(p: void*, n: int, name: str, max: int, ok &: bool): compress.ByteBuf
+```
+
+Same as `RarExtractByName`, but `ok` becomes false when the entry is larger than `max` bytes, which is checked before anything is unpacked.
+
+The example for this item is shown with the ones above: archive-Rar.salam
+
 ### `RarExtractByName`
 
 ```salam
 func RarExtractByName(p: void*, n: int, name: str, ok &: bool): compress.ByteBuf
 ```
 
-The contents of a RAR entry that was stored without compression.
+The contents of one RAR entry, found by its exact name. `ok` is false when it is missing, unsupported, encrypted or damaged; use `RarExtract` to learn which.
 
 The example for this item is shown with the ones above: archive-Zip.salam
+
+### `RarExtractAllStatus`
+
+```salam
+func RarExtractAllStatus(p: void*, n: int, destdir: str, status &: int): int
+```
+
+Same as `RarExtractAll`, but returns how many entries were written and sets `status` to the first problem it met. An entry whose name would leave the target directory is skipped and reported as `RAR_UNSAFE_PATH`.
+
+The example for this item is shown with the ones above: archive-Rar.salam
 
 ### `RarExtractAll`
 
@@ -74911,9 +75195,39 @@ The example for this item is shown with the ones above: archive-Zip.salam
 func RarExtractAll(p: void*, n: int, destdir: str): bool
 ```
 
-Pulls out every RAR entry.
+Pulls out every RAR entry, never writing outside the target directory.
 
 The example for this item is shown with the ones above: archive-Zip.salam
+
+### `MakeRarFileInput`
+
+```salam
+func MakeRarFileInput(name: str, data_ptr: void*, data_len: int, is_dir: bool): RarFileInput
+```
+
+Makes one RAR input.
+
+The example for this item is shown with the ones above: archive-Rar.salam
+
+### `RarCreate`
+
+```salam
+func RarCreate(files: Vector<RarFileInput>): compress.ByteBuf
+```
+
+Builds a RAR 5 archive in memory. The files are stored without compression, with a CRC-32 each, and any RAR tool can open the result.
+
+The example for this item is shown with the ones above: archive-Rar.salam
+
+### `RarCreateFile`
+
+```salam
+func RarCreateFile(files: Vector<RarFileInput>, outpath: str): bool
+```
+
+Writes the RAR 5 archive to disk and returns false when it cannot.
+
+The example for this item is shown with the ones above: archive-Rar.salam
 
 ### `MakeZipFileInput`
 

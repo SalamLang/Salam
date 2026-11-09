@@ -91,21 +91,11 @@ struct _StreamAdapter:
     end
 
     pub func Shutdown():
-        if this.c.kind == KindTLS:
-            rawsock.Shutdown(rawsock.FromFd(tls.Fd(this.c.tls)))
-        else this.c.kind == KindTCP:
-            rawsock.Shutdown(rawsock.FromFd(this.c.tcp.fd))
-        end
+        ShutdownConn(this.c)
     end
 
     pub func CloseWrite():
-        if this.c.kind == KindTLS:
-            tls.CloseWrite(this.c.tls)
-        else this.c.kind == KindTCP:
-            rawsock.ShutdownWrite(rawsock.FromFd(this.c.tcp.fd))
-        else this.c.kind == KindStream:
-            this.c.up.CloseWrite()
-        end
+        CloseWriteConn(this.c)
     end
 
     pub func Close():
@@ -373,6 +363,7 @@ end
 func _header(h: str, name: str): str:
     lower := str.Lower(h)
     idx := str.Find(lower, "\r\n" + name + ":")
+    mem.Free(lower as void*)
     if idx < 0:
         ret ""
     end
@@ -381,7 +372,10 @@ func _header(h: str, name: str): str:
     if e < 0:
         e = h.len()
     end
-    ret str.Trim(h.substr(start, e - start))
+    part := h.substr(start, e - start)
+    out := str.Trim(part)
+    mem.Free(part as void*)
+    ret out
 end
 
 func _request_path(h: str): str:
@@ -775,10 +769,10 @@ func _finish_accept(l: Listener, tc: tcp.Conn): Conn:
     ret c
 end
 
-func _hs_release(a: _Hs*):
+func _hs_release(a: _Hs*, shares: i64):
     me := a[0]
     sync.Lock(me.mu)
-    me.st[1]--
+    me.st[1] -= shares
     left := me.st[1]
     sync.Unlock(me.mu)
     if left <= (0 as i64):
@@ -828,7 +822,7 @@ func _hs_work(a: _Hs*):
         end
     end
     sync.Release(me.l.slots)
-    _hs_release(a)
+    _hs_release(a, 1 as i64)
 end
 
 func _hs_limit(s: Settings): int:
@@ -859,7 +853,23 @@ func _hs_watch(a: _Hs*):
     if late:
         rawsock.Shutdown(rawsock.FromFd(me.fd))
     end
-    _hs_release(a)
+    _hs_release(a, 1 as i64)
+end
+
+func _hs_abandon(a: _Hs*, watching: bool):
+    me := a[0]
+    mut shares := 2 as i64
+    if watching:
+        shares = 1 as i64
+        sync.Lock(me.mu)
+        me.st[0] = 1 as i64
+        sync.Signal(me.cv)
+        sync.Unlock(me.mu)
+    end
+    tcp.Close(tcp.ConnFromFd(me.fd))
+    tunnel.SourceLeave(me.l.sources, me.host)
+    sync.Release(me.l.slots)
+    _hs_release(a, shares)
 end
 
 func _acceptor(a: _Hs*):
@@ -891,8 +901,13 @@ func _acceptor(a: _Hs*):
         if SALAM_OS_WINDOWS:
             rawsock.SetTimeout(rawsock.FromFd(tc.fd), _hs_limit(l.settings) + 500)
         end
-        tunnel.Go(_hs_work, h as void*)
-        tunnel.Go(_hs_watch, h as void*)
+        if not tunnel.Go(_hs_watch, h as void*):
+            _hs_abandon(h, false)
+            continue
+        end
+        if not tunnel.Go(_hs_work, h as void*):
+            _hs_abandon(h, true)
+        end
     end
     chan.Close(l.ready)
     mem.Free(a as void*)
@@ -1293,6 +1308,28 @@ pub func Upgrade(c &: Conn, s: Settings): bool:
     ret true
 end
 
+@en "ShutdownConn"
+@fa "خاموش کردن اتصال"
+pub func ShutdownConn(c &: Conn):
+    if c.kind == KindTLS:
+        rawsock.Shutdown(rawsock.FromFd(tls.Fd(c.tls)))
+    else c.kind == KindTCP:
+        rawsock.Shutdown(rawsock.FromFd(c.tcp.fd))
+    end
+end
+
+@en "CloseWriteConn"
+@fa "بستن نوشتن اتصال"
+pub func CloseWriteConn(c &: Conn):
+    if c.kind == KindTLS:
+        tls.CloseWrite(c.tls)
+    else c.kind == KindTCP:
+        rawsock.ShutdownWrite(rawsock.FromFd(c.tcp.fd))
+    else c.kind == KindStream:
+        c.up.CloseWrite()
+    end
+end
+
 @en "Accept"
 @fa "پذیرش"
 pub func Accept(l: Listener): Conn:
@@ -1304,7 +1341,13 @@ pub func Accept(l: Listener): Conn:
     if atomic_cas(l.flags, 0 as i64, 1 as i64):
         h := mem.AllocateZeroed(sizeof(_Hs) as u64) as _Hs*
         h[0] = _Hs { l = l }
-        _a := spawn(_acceptor, h)
+        if spawn(_acceptor, h) == 0:
+            mem.Free(h as void*)
+            atomic_store(l.flags, 0 as i64)
+            mut e := Conn {}
+            e.err = "could not start the accept thread"
+            ret e
+        end
     end
     mut ok := false
     c := chan.Recv(l.ready, ok)

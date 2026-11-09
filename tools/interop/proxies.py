@@ -88,6 +88,30 @@ def main():
             print(("PASS " if ok else "FAIL ") + name + ("" if ok else "  " + d))
     finally:
         procs.stop_all()
+    xray = os.environ.get("INTEROP_XRAY")
+    if xray:
+        from harness import Echo, check_tcp_via_socks
+
+        echo = Echo()
+        for proto in ("socks", "http"):
+            procs = Procs(work)
+            try:
+                rp, lp = free_port(), free_port()
+                sc = os.path.join(work, "x_%s.json" % proto)
+                json.dump({"inbounds": [{"listen": "127.0.0.1", "port": rp, "protocol": proto, "settings": {"auth": "noauth", "udp": False}}], "outbounds": [{"protocol": "freedom", "settings": {"finalRules": [{"action": "allow"}]}}]}, open(sc, "w"))
+                cc = os.path.join(work, "o_%s.json" % proto)
+                json.dump({"inbounds": [{"tag": "m", "listen": "127.0.0.1", "port": lp, "protocol": "mixed"}], "outbounds": [{"tag": "proxy", "protocol": proto, "settings": {"servers": [{"address": "127.0.0.1", "port": rp}]}}], "routing": {"defaultOutbound": "proxy", "rules": []}}, open(cc, "w"))
+                procs.start("xs", [xray, "run", "-c", sc])
+                procs.wait_port(rp)
+                procs.start("oc", [vpn, "run", "-c", cc, "--stats", "0"])
+                procs.wait_port(lp)
+                ok, d = check_tcp_via_socks(lp, echo.port)
+                name = "ours %s outbound -> xray %s inbound (1 MB)" % (proto, proto)
+                res.append((name, ok, d))
+                print(("PASS " if ok else "FAIL ") + name + ("" if ok else "  " + d))
+            finally:
+                procs.stop_all()
+        echo.close()
     bad = [r for r in res if not r[1]]
     print("%d/%d passed" % (len(res) - len(bad), len(res)))
     sys.exit(1 if bad else 0)

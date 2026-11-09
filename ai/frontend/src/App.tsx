@@ -2,6 +2,7 @@ import { lazy, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRe
 import { api, ApiError, getToken, handleUnauthorized, setClientPlatform, setClientVersion, setToken, streamMessage, uiText, type Chat, type ChatStart, type FileMeta, type Message, type OutgoingFile, type Project, type ProjectInput, type QueueItem, type User } from "./api";
 import { Admin, NoAccess } from "./Admin";
 import { AdminChat } from "./AdminChat";
+import { AdminUser } from "./AdminUser";
 import { confirmDialog } from "./Confirm";
 import { AgentBar, useAgent } from "./Agent";
 import { Memory } from "./Memory";
@@ -49,9 +50,13 @@ function shareTokenFromPath(): string | null {
   return /^\/s\/([a-f0-9]{40})\/?$/.exec(location.pathname)?.[1] ?? null;
 }
 
-type Route = "share" | "chat" | "projects" | "project" | "others" | "connect" | "telegram" | "connections" | "keys" | "plans" | "usage" | "memory" | "admin" | "admin-chat";
+type Route = "share" | "chat" | "projects" | "project" | "others" | "connect" | "telegram" | "connections" | "keys" | "plans" | "usage" | "memory" | "admin" | "admin-user" | "admin-chat";
 
 type Place = { route: Route; chat: string | null; project: string | null };
+
+function adminUserIdFromPath(): number {
+  return Number(/^\/admin\/users\/(\d+)(\/[a-z]+)?\/?$/.exec(location.pathname)?.[1] ?? 0);
+}
 
 function adminChatIdFromPath(): string {
   return /^\/admin\/chats\/([a-f0-9]{24})\/?$/.exec(location.pathname)?.[1] ?? "";
@@ -60,6 +65,7 @@ function adminChatIdFromPath(): string {
 function placeFromPath(): Place {
   const p = location.pathname.replace(/\/+$/, "") || "/";
   if (shareTokenFromPath()) return { route: "share", chat: null, project: null };
+  if (adminUserIdFromPath()) return { route: "admin-user", chat: null, project: null };
   if (adminChatIdFromPath()) return { route: "admin-chat", chat: adminChatIdFromPath(), project: null };
   if (p === "/connect") return { route: "connect", chat: null, project: null };
   if (p === "/telegram") return { route: "telegram", chat: null, project: null };
@@ -106,6 +112,7 @@ const PAGE_TITLES: Record<Route, string> = {
   usage: t("مصرف و توکن‌ها", "Usage and tokens"),
   memory: t("حافظه", "Memory"),
   admin: t("مدیریت", "Admin"),
+  "admin-user": t("پروفایل کاربر", "User profile"),
   "admin-chat": t("گفت‌وگو در مدیریت", "Admin chat view"),
 };
 
@@ -969,7 +976,7 @@ export function App() {
         user={user}
         projects={projects}
         activeProject={projectScope}
-        page={route === "admin-chat" ? "admin" : route}
+        page={route === "admin-chat" || route === "admin-user" ? "admin" : route}
         onNavigate={navigate}
         open={sidebar}
         onClose={() => setSidebar(false)}
@@ -1071,6 +1078,8 @@ export function App() {
               onDeleteChat={remove}
             />
           </div>
+        ) : route === "admin-user" ? (
+          <div className="scroller page-scroller">{user.admin ? <AdminUser id={adminUserIdFromPath()} notify={notify} onNavigate={navigate} /> : <NoAccess />}</div>
         ) : route === "admin-chat" ? (
           <div className="scroller page-scroller">{user.admin ? <AdminChat id={adminChatIdFromPath()} /> : <NoAccess />}</div>
         ) : route === "connections" || route === "keys" || route === "plans" || route === "usage" || route === "memory" || route === "admin" ? (

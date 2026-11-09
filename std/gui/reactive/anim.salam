@@ -1,0 +1,635 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package reactive
+
+import math
+import mem
+import str
+
+mut _clock := -1
+mut _running := 0
+mut _anims := Vector {} as Vector<AnimState>
+mut _anim_free := Vector {} as Vector<int>
+
+@en "EasingKind"
+@fa "گونه‌نرمش"
+pub enum EasingKind:
+    @en "Linear"
+    @fa "خطی"
+    Linear,
+    @en "CubicBezier"
+    @fa "بزیه مکعبی"
+    CubicBezier,
+    @en "Steps"
+    @fa "پله ای"
+    Steps
+end
+
+@en "StepPosition"
+@fa "جای‌پله"
+pub enum StepPosition:
+    @en "JumpStart"
+    @fa "پرش آغاز"
+    JumpStart,
+    @en "JumpEnd"
+    @fa "پرش انتها"
+    JumpEnd,
+    @en "JumpNone"
+    @fa "بدون پرش"
+    JumpNone,
+    @en "JumpBoth"
+    @fa "پرش دو سو"
+    JumpBoth
+end
+
+@en "Easing"
+@fa "نرمش"
+pub struct Easing:
+    @en "kind"
+    @fa "گونه"
+    pub kind: EasingKind = EasingKind.Linear
+    @en "x1"
+    @fa "ایکس یک"
+    pub x1: f64 = 0.0
+    @en "y1"
+    @fa "ایگرگ یک"
+    pub y1: f64 = 0.0
+    @en "x2"
+    @fa "ایکس دو"
+    pub x2: f64 = 1.0
+    @en "y2"
+    @fa "ایگرگ دو"
+    pub y2: f64 = 1.0
+    @en "steps"
+    @fa "شمار پله"
+    pub steps: int = 1
+    @en "position"
+    @fa "جای پرش"
+    pub position: StepPosition = StepPosition.JumpEnd
+
+    @en "At"
+    @fa "مقدار لحظه"
+    pub func At(t: f64): f64:
+        ret _rx_ease(this[0], t)
+    end
+end
+
+@en "Animation"
+@fa "پویانمایی‌ویژگی"
+pub struct Animation:
+    @en "duration"
+    @fa "مدت"
+    pub duration: int = 0
+    @en "delay"
+    @fa "درنگ"
+    pub delay: int = 0
+    @en "easing"
+    @fa "نرمش"
+    pub easing: Easing = Easing {}
+    @en "color"
+    @fa "رنگی"
+    pub color: bool = false
+end
+
+struct AnimState:
+    pub node: int = -1
+    pub target: int = -1
+    pub kind: int = 0
+    pub from: f64 = 0.0
+    pub to: f64 = 0.0
+    pub from_raw: i64 = 0
+    pub to_raw: i64 = 0
+    pub start: i64 = 0
+    pub spec: Animation = Animation {}
+    pub running: bool = false
+    pub pending: bool = false
+    pub pending_at: i64 = 0
+    pub live: bool = false
+end
+
+func _rx_bez_x(e: Easing, t: f64): f64:
+    cx := 3.0 * e.x1
+    bx := 3.0 * (e.x2 - e.x1) - cx
+    ax := 1.0 - cx - bx
+    ret ((ax * t + bx) * t + cx) * t
+end
+
+func _rx_bez_y(e: Easing, t: f64): f64:
+    cy := 3.0 * e.y1
+    by_ := 3.0 * (e.y2 - e.y1) - cy
+    ay := 1.0 - cy - by_
+    ret ((ay * t + by_) * t + cy) * t
+end
+
+func _rx_bez_dx(e: Easing, t: f64): f64:
+    cx := 3.0 * e.x1
+    bx := 3.0 * (e.x2 - e.x1) - cx
+    ax := 1.0 - cx - bx
+    ret (3.0 * ax * t + 2.0 * bx) * t + cx
+end
+
+func _rx_bez_solve(e: Easing, x: f64): f64:
+    mut t := x
+    repeat 8:
+        d := _rx_bez_x(e, t) - x
+        if math.Abs(d) < 0.0000001:
+            ret t
+        end
+        dd := _rx_bez_dx(e, t)
+        if math.Abs(dd) < 0.000001:
+            break
+        end
+        t -= d / dd
+    end
+    mut lo := 0.0
+    mut hi := 1.0
+    t = x
+    repeat 64:
+        v := _rx_bez_x(e, t)
+        if math.Abs(v - x) < 0.0000001:
+            ret t
+        end
+        if x > v:
+            lo = t
+        else:
+            hi = t
+        end
+        t = lo + (hi - lo) / 2.0
+    end
+    ret t
+end
+
+func _rx_steps(e: Easing, x: f64): f64:
+    mut n := e.steps
+    if n < 1:
+        n = 1
+    end
+    if e.position == StepPosition.JumpNone and n < 2:
+        n = 2
+    end
+    mut step := math.Floor(x * (n as f64))
+    if e.position == StepPosition.JumpStart or e.position == StepPosition.JumpBoth:
+        step++
+    end
+    mut jumps := n
+    if e.position == StepPosition.JumpNone:
+        jumps = n - 1
+    else e.position == StepPosition.JumpBoth:
+        jumps = n + 1
+    end
+    if x >= 0.0 and step < 0.0:
+        step = 0.0
+    end
+    if x <= 1.0 and step > (jumps as f64):
+        step = jumps as f64
+    end
+    ret step / (jumps as f64)
+end
+
+func _rx_ease(e: Easing, t: f64): f64:
+    mut x := t
+    if x < 0.0:
+        x = 0.0
+    end
+    if x > 1.0:
+        x = 1.0
+    end
+    switch e.kind:
+        EasingKind.Linear:
+            ret x
+        end
+        EasingKind.CubicBezier:
+            if x <= 0.0 or x >= 1.0:
+                ret x
+            end
+            ret _rx_bez_y(e, _rx_bez_solve(e, x))
+        end
+        EasingKind.Steps:
+            ret _rx_steps(e, x)
+        end
+    end
+    ret x
+end
+
+func _rx_round(v: f64): i64:
+    ret math.Floor(v + 0.5) as i64
+end
+
+func _rx_clock_node(): int:
+    if _clock < 0 or not _rx_live(_clock):
+        _clock = _rx_node_new(_K_I64)
+        _rx_set_name(_clock, "animation clock")
+    end
+    ret _clock
+end
+
+func _rx_anim_touch(n: int, src: int):
+    b := _n_bind.get(n)
+    if b < 0 or _b_kind.get(b) != _B_ANIM:
+        ret
+    end
+    r := _b_aux.get(b)
+    mut st := _anims.get(r)
+    if src != st.target or st.pending:
+        ret
+    end
+    st.pending = true
+    st.pending_at = 0 as i64
+    if _clock >= 0 and _rx_live(_clock):
+        st.pending_at = _n_val.get(_clock)
+    end
+    _anims.set(r, st)
+end
+
+func _rx_anim_target(r: int): int:
+    ret _anims.get(r).target
+end
+
+func _rx_anim_release(r: int):
+    if r < 0 or r >= _anims.len():
+        ret
+    end
+    st := _anims.get(r)
+    if not st.live:
+        ret
+    end
+    if st.running:
+        _running--
+    end
+    _anims.set(r, AnimState {})
+    _anim_free.push(r)
+    _rx_node_free(st.target)
+end
+
+func _rx_anim_free_all():
+    _anims.free()
+    _anim_free.free()
+    _anims = Vector {} as Vector<AnimState>
+    _anim_free = Vector {} as Vector<int>
+    _clock = -1
+    _running = 0
+end
+
+func _rx_num(n: int): f64:
+    if _rx_kind(n) == _K_F64:
+        ret _f64s.get(_n_val.get(n) as int)
+    end
+    ret _n_val.get(n) as f64
+end
+
+func _rx_channel(c: i64, shift: int): f64:
+    ret ((c >> shift) & 255) as f64
+end
+
+func _rx_mix_color(a: i64, b: i64, p: f64): i64:
+    mut out := 0 as i64
+    each sh in [24, 16, 8, 0]:
+        ca := _rx_channel(a, sh)
+        cb := _rx_channel(b, sh)
+        mut v := _rx_round(ca + (cb - ca) * p)
+        if v < 0:
+            v = 0 as i64
+        end
+        if v > 255:
+            v = 255 as i64
+        end
+        out |= (v << sh)
+    end
+    ret out
+end
+
+func _rx_anim_progress(st: AnimState, now: i64): f64:
+    el := now - st.start - (st.spec.delay as i64)
+    if el <= 0:
+        ret 0.0
+    end
+    if st.spec.duration <= 0 or el >= (st.spec.duration as i64):
+        ret 1.0
+    end
+    ret _rx_ease(st.spec.easing, (el as f64) / (st.spec.duration as f64))
+end
+
+func _rx_anim_store(n: int, st: AnimState, p: f64, done: bool):
+    k := st.kind
+    if k == _K_F64:
+        mut v := st.from + (st.to - st.from) * p
+        if done:
+            v = st.to
+        end
+        _p := _rx_store_f64(n, v)
+        ret
+    end
+    if done:
+        _p2 := _rx_store_raw(n, st.to_raw)
+        ret
+    end
+    if st.spec.color:
+        _p3 := _rx_store_raw(n, _rx_mix_color(st.from_raw, st.to_raw, p))
+        ret
+    end
+    _p4 := _rx_store_raw(n, _rx_round(st.from + (st.to - st.from) * p))
+end
+
+func _rx_eval_anim(n: int, r: int):
+    mut st := _anims.get(r)
+    t := st.target
+    _rx_get_raw(t)
+    tv := _rx_num(t)
+    traw := _n_val.get(t)
+    c := _rx_clock_node()
+    now := _n_val.get(c)
+    mut changed := false
+    if st.kind == _K_F64:
+        changed = tv != st.to
+    else:
+        changed = traw != st.to_raw
+    end
+    mut begin := now
+    if st.pending:
+        begin = st.pending_at
+        st.pending = false
+    end
+    if changed:
+        mut cur := _rx_num(n)
+        mut cur_raw := _n_val.get(n)
+        if st.running:
+            p0 := _rx_anim_progress(st, now)
+            cur = st.from + (st.to - st.from) * p0
+            if st.spec.color:
+                cur_raw = _rx_mix_color(st.from_raw, st.to_raw, p0)
+            end
+        end
+        st.from = cur
+        st.from_raw = cur_raw
+        st.to = tv
+        st.to_raw = traw
+        st.start = begin
+        if not st.running:
+            st.running = true
+            _running++
+        end
+    end
+    if st.running:
+        el := now - st.start - (st.spec.delay as i64)
+        if el >= (st.spec.duration as i64):
+            st.running = false
+            _running--
+            _rx_anim_store(n, st, 1.0, true)
+        else:
+            _rx_anim_store(n, st, _rx_anim_progress(st, now), false)
+            _rx_register(c)
+        end
+    else:
+        _rx_anim_store(n, st, 1.0, true)
+    end
+    _anims.set(r, st)
+end
+
+func _rx_animate(n: int, spec: Animation):
+    if n < 0:
+        _rx_error("a constant property cannot be animated")
+        ret
+    end
+    if not _rx_live(n):
+        ret
+    end
+    b := _n_bind.get(n)
+    if b >= 0 and _b_kind.get(b) == _B_ANIM:
+        r0 := _b_aux.get(b)
+        mut st0 := _anims.get(r0)
+        st0.spec = spec
+        _anims.set(r0, st0)
+        ret
+    end
+    if b >= 0 and _b_kind.get(b) == _B_TWOWAY:
+        _rx_error("a linked property cannot be animated")
+        ret
+    end
+    _rx_update(n)
+    k := _rx_kind(n)
+    t := _rx_new_node_like(k)
+    _p := _rx_copy_value(t, n)
+    _rx_move_binding(n, t)
+    st := AnimState { node = n, target = t, kind = k, from = _rx_num(t), to = _rx_num(t), from_raw = _n_val.get(t), to_raw = _n_val.get(t), spec = spec, live = true }
+    mut r := -1
+    if _anim_free.len() > 0:
+        r = _anim_free.pop()
+        _anims.set(r, st)
+    else:
+        _anims.push(st)
+        r = _anims.len() - 1
+    end
+    _p2 := _rx_bind_new(n, _B_ANIM, -1, r)
+    _n_flags.set(n, _n_flags.get(n) | _F_ANIM)
+    _rx_mark_self(n)
+end
+
+func _rx_settle():
+    if _running <= 0:
+        ret
+    end
+    c := _rx_clock_node()
+    now := _n_val.get(c)
+    repeat _anims.len() in i:
+        st := _anims.get(i)
+        if st.live and st.running and now - st.start - (st.spec.delay as i64) >= (st.spec.duration as i64):
+            _rx_update(st.node)
+        end
+    end
+end
+
+func _rx_num_arg(s: str): f64:
+    t := str.Trim(s)
+    v := str.ToFloat(t)
+    mem.Free(t as void*)
+    ret v
+end
+
+func _rx_free_parts(parts: Vector<str>):
+    each p in parts:
+        mem.Free(p as void*)
+    end
+    parts.free()
+end
+
+func _rx_parse_fn(text: str, fallback: Easing): Easing:
+    open := str.IndexOf(text, "(")
+    close := str.LastIndex(text, ")")
+    if open < 0 or close != str.Len(text) - 1:
+        ret fallback
+    end
+    head := str.Substr(text, 0, open)
+    name := str.Trim(head)
+    mem.Free(head as void*)
+    defer mem.Free(name as void*)
+    inner := str.Substr(text, open + 1, close - open - 1)
+    parts := str.Split(inner, ",")
+    mem.Free(inner as void*)
+    defer _rx_free_parts(parts)
+    if name == "cubic-bezier":
+        if parts.len() != 4:
+            ret fallback
+        end
+        e := CubicBezier(_rx_num_arg(parts.get(0)), _rx_num_arg(parts.get(1)), _rx_num_arg(parts.get(2)), _rx_num_arg(parts.get(3)))
+        if e.x1 < 0.0 or e.x1 > 1.0 or e.x2 < 0.0 or e.x2 > 1.0:
+            ret fallback
+        end
+        ret e
+    end
+    if name == "steps":
+        if parts.len() < 1 or parts.len() > 2:
+            ret fallback
+        end
+        ns := str.Trim(parts.get(0))
+        n := str.ToInt(ns)
+        mem.Free(ns as void*)
+        if n < 1:
+            ret fallback
+        end
+        mut pos := StepPosition.JumpEnd
+        if parts.len() == 2:
+            p := str.Trim(parts.get(1))
+            defer mem.Free(p as void*)
+            if p == "jump-start" or p == "start":
+                pos = StepPosition.JumpStart
+            else p == "jump-end" or p == "end":
+                pos = StepPosition.JumpEnd
+            else p == "jump-none":
+                pos = StepPosition.JumpNone
+            else p == "jump-both":
+                pos = StepPosition.JumpBoth
+            else:
+                ret fallback
+            end
+        end
+        if pos == StepPosition.JumpNone and n < 2:
+            ret fallback
+        end
+        ret Steps(n, pos)
+    end
+    ret fallback
+end
+
+@en "Linear"
+@fa "نرمش خطی"
+pub func Linear(): Easing:
+    ret Easing {}
+end
+
+@en "CubicBezier"
+@fa "نرمش بزیه"
+pub func CubicBezier(x1: f64, y1: f64, x2: f64, y2: f64): Easing:
+    ret Easing { kind = EasingKind.CubicBezier, x1 = x1, y1 = y1, x2 = x2, y2 = y2 }
+end
+
+@en "Ease"
+@fa "نرمش عادی"
+pub func Ease(): Easing:
+    ret CubicBezier(0.25, 0.1, 0.25, 1.0)
+end
+
+@en "EaseIn"
+@fa "نرمش ورود"
+pub func EaseIn(): Easing:
+    ret CubicBezier(0.42, 0.0, 1.0, 1.0)
+end
+
+@en "EaseOut"
+@fa "نرمش خروج"
+pub func EaseOut(): Easing:
+    ret CubicBezier(0.0, 0.0, 0.58, 1.0)
+end
+
+@en "EaseInOut"
+@fa "نرمش ورود خروج"
+pub func EaseInOut(): Easing:
+    ret CubicBezier(0.42, 0.0, 0.58, 1.0)
+end
+
+@en "Steps"
+@fa "نرمش پله ای"
+pub func Steps(count: int, position: StepPosition): Easing:
+    ret Easing { kind = EasingKind.Steps, steps = count, position = position }
+end
+
+@en "ParseEasing"
+@fa "خواندن نرمش"
+pub func ParseEasing(text: str, fallback: Easing): Easing:
+    trimmed := str.Trim(text)
+    t := str.Lower(trimmed)
+    mem.Free(trimmed as void*)
+    defer mem.Free(t as void*)
+    switch t:
+        "linear":
+            ret Linear()
+        end
+        "ease":
+            ret Ease()
+        end
+        "ease-in":
+            ret EaseIn()
+        end
+        "ease-out":
+            ret EaseOut()
+        end
+        "ease-in-out":
+            ret EaseInOut()
+        end
+        "step-start":
+            ret Steps(1, StepPosition.JumpStart)
+        end
+        "step-end":
+            ret Steps(1, StepPosition.JumpEnd)
+        end
+    end
+    ret _rx_parse_fn(t, fallback)
+end
+
+@en "SetTime"
+@fa "تنظیم زمان"
+pub func SetTime(ms: i64):
+    c := _rx_clock_node()
+    if _rx_store_raw(c, ms):
+        _rx_notify(c)
+    end
+    _rx_settle()
+end
+
+@en "AdvanceTime"
+@fa "جلو بردن زمان"
+pub func AdvanceTime(ms: i64):
+    c := _rx_clock_node()
+    SetTime(_n_val.get(c) + ms)
+end
+
+@en "Now"
+@fa "اکنون"
+pub func Now(): i64:
+    c := _rx_clock_node()
+    _rx_get_raw(c)
+    ret _n_val.get(c)
+end
+
+@en "AnimationsRunning"
+@fa "پویانمایی جاری"
+pub func AnimationsRunning(): bool:
+    ret _running > 0
+end
+
+@en "RunningAnimations"
+@fa "شمار پویانمایی ها"
+pub func RunningAnimations(): int:
+    ret _running
+end

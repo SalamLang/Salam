@@ -1,0 +1,480 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package socks
+
+import mem
+import str
+import net.tcp
+import net.udp
+import net.internal.rawsock
+import net.tunnel
+import tls
+
+@en "Socks5"
+@fa "ساکس۵"
+pub const Socks5 := 5
+
+@en "Socks4"
+@fa "ساکس۴"
+pub const Socks4 := 4
+
+@en "Socks4a"
+@fa "ساکس۴ای"
+pub const Socks4a := 40
+
+@en "Client"
+@fa "کلاینت"
+pub struct Client:
+    @en "version"
+    @fa "نسخه"
+    pub version: int = 5
+    @en "host"
+    @fa "میزبان"
+    pub host: str = ""
+    @en "port"
+    @fa "درگاه"
+    pub port: int = 0
+    @en "username"
+    @fa "نام کاربری"
+    pub username: str = ""
+    @en "password"
+    @fa "گذرواژه"
+    pub password: str = ""
+    @en "timeout_ms"
+    @fa "مهلت میلی‌ثانیه"
+    pub timeout_ms: int = 10000
+    @en "tls"
+    @fa "امن"
+    pub tls: bool = false
+    @en "server_name"
+    @fa "نام سرور"
+    pub server_name: str = ""
+    @en "insecure"
+    @fa "بدون اعتبارسنجی"
+    pub insecure: bool = false
+end
+
+@en "HandshakeResult"
+@fa "نتیجه دست‌دهی"
+pub struct HandshakeResult:
+    @en "ok"
+    @fa "موفق"
+    pub ok: bool = false
+    @en "code"
+    @fa "کد"
+    pub code: int = 0
+    @en "err"
+    @fa "خطا"
+    pub err: str = ""
+    @en "bound"
+    @fa "نشانی محلی"
+    pub bound: Address = Address {}
+end
+
+@en "ConnectResult"
+@fa "نتیجه اتصال"
+pub struct ConnectResult:
+    @en "ok"
+    @fa "موفق"
+    pub ok: bool = false
+    @en "code"
+    @fa "کد"
+    pub code: int = 0
+    @en "err"
+    @fa "خطا"
+    pub err: str = ""
+    @en "stream"
+    @fa "جریان"
+    pub stream: dyn tunnel.Stream = tunnel.TcpStream {}
+    @en "bound"
+    @fa "نشانی محلی"
+    pub bound: Address = Address {}
+end
+
+@en "UDPSession"
+@fa "نشست یو دی پی"
+pub struct UDPSession:
+    @en "ok"
+    @fa "موفق"
+    pub ok: bool = false
+    @en "err"
+    @fa "خطا"
+    pub err: str = ""
+    @en "control"
+    @fa "کنترل"
+    pub control: dyn tunnel.Stream = tunnel.TcpStream {}
+    @en "sock"
+    @fa "سوکت"
+    pub sock: udp.Socket = udp.Socket {}
+    @en "relay_host"
+    @fa "میزبان رله"
+    pub relay_host: str = ""
+    @en "relay_port"
+    @fa "درگاه رله"
+    pub relay_port: int = 0
+end
+
+func _fail(code: int, err: str): HandshakeResult:
+    ret HandshakeResult { ok = false, code = code, err = err }
+end
+
+func _send(s: dyn tunnel.Stream, v: Vector<u8>): bool:
+    n := v.len()
+    if n == 0: ret false end
+    buf := mem.Allocate(n as u64)
+    defer mem.Free(buf)
+    p := buf as u8*
+    repeat n in i:
+        p[i] = v.get(i)
+    end
+    ret s.WriteBytes(buf, n) == n
+end
+
+func _recv(s: dyn tunnel.Stream, v &: Vector<u8>, n: int): bool:
+    buf := mem.Allocate(n as u64)
+    defer mem.Free(buf)
+    if not tunnel.ReadFull(s, buf, n): ret false end
+    p := buf as u8*
+    repeat n in i:
+        v.push(p[i])
+    end
+    ret true
+end
+
+func _recv_reply5(s: dyn tunnel.Stream, out &: Reply): int:
+    mut v := Vector {} as Vector<u8>
+    defer v.free()
+    if not _recv(s, v, 4): ret 0 - 1 end
+    t := _b(v, 3)
+    mut more := 0
+    if t == AtypIPv4:
+        more = 6
+    else t == AtypIPv6:
+        more = 18
+    else t == AtypDomain:
+        if not _recv(s, v, 1): ret 0 - 1 end
+        more = _b(v, 4) + 2
+    else:
+        ret 0 - 2
+    end
+    if not _recv(s, v, more): ret 0 - 1 end
+    if DecodeReply(v, out) <= 0: ret 0 - 2 end
+    ret 0
+end
+
+func _auth5(s: dyn tunnel.Stream, c: Client): HandshakeResult:
+    req := EncodeAuthRequest(c.username, c.password)
+    defer req.free()
+    if req.len() == 0: ret _fail(RepGeneralFailure, "bad username or password length") end
+    if not _send(s, req): ret _fail(RepGeneralFailure, "auth write failed") end
+    mut v := Vector {} as Vector<u8>
+    defer v.free()
+    if not _recv(s, v, 2): ret _fail(RepGeneralFailure, "auth reply truncated") end
+    if _b(v, 0) != 1: ret _fail(RepGeneralFailure, "bad auth reply version") end
+    if _b(v, 1) != 0: ret _fail(RepNotAllowed, "authentication failed") end
+    ret HandshakeResult { ok = true }
+end
+
+func _negotiate5(s: dyn tunnel.Stream, c: Client): HandshakeResult:
+    mut methods := Vector {} as Vector<u8>
+    defer methods.free()
+    methods.push(0 as u8)
+    if c.username.len() > 0: methods.push(2 as u8) end
+    g := EncodeGreeting(methods)
+    defer g.free()
+    if not _send(s, g): ret _fail(RepGeneralFailure, "greeting write failed") end
+    mut v := Vector {} as Vector<u8>
+    defer v.free()
+    if not _recv(s, v, 2): ret _fail(RepGeneralFailure, "greeting reply truncated") end
+    if _b(v, 0) != 5: ret _fail(RepGeneralFailure, "not a SOCKS5 server") end
+    m := _b(v, 1)
+    if m == AuthNoAcceptable: ret _fail(RepNotAllowed, "no acceptable auth method") end
+    if m == AuthUserPass:
+        if c.username.len() == 0: ret _fail(RepNotAllowed, "server requires credentials") end
+        ret _auth5(s, c)
+    end
+    if m != AuthNone: ret _fail(RepGeneralFailure, "server chose an unsupported method") end
+    ret HandshakeResult { ok = true }
+end
+
+func _command5(s: dyn tunnel.Stream, c: Client, cmd: int, host: str, port: int): HandshakeResult:
+    n := _negotiate5(s, c)
+    if not n.ok: ret n end
+    req := EncodeRequest(cmd, NewAddress(host, port))
+    defer req.free()
+    if req.len() == 0: ret _fail(RepAtypNotSupported, "bad target address") end
+    if not _send(s, req): ret _fail(RepGeneralFailure, "request write failed") end
+    ret _read_reply(s)
+end
+
+func _read_reply(s: dyn tunnel.Stream): HandshakeResult:
+    mut r := Reply {}
+    rc := _recv_reply5(s, r)
+    if rc == 0 - 1: ret _fail(RepGeneralFailure, "reply truncated") end
+    if rc == 0 - 2: ret _fail(RepGeneralFailure, "malformed reply") end
+    if r.code != RepSucceeded: ret HandshakeResult { ok = false, code = r.code, err = ReplyText(r.code), bound = r.addr } end
+    ret HandshakeResult { ok = true, code = 0, bound = r.addr }
+end
+
+func _command4(s: dyn tunnel.Stream, c: Client, cmd: int, host: str, port: int): HandshakeResult:
+    mut h := host
+    mut ip := Vector {} as Vector<u8>
+    defer ip.free()
+    if not ParseIPv4(h, ip):
+        if c.version == Socks4:
+            h = rawsock.Resolve(host)
+            if h.len() == 0 or not ParseIPv4(h, ip): ret _fail(Rep4Rejected, "socks4 needs an IPv4 target") end
+        end
+    end
+    req := Encode4Request(cmd, h, port, c.username)
+    defer req.free()
+    if req.len() == 0: ret _fail(Rep4Rejected, "bad target address") end
+    if not _send(s, req): ret _fail(Rep4Rejected, "request write failed") end
+    mut v := Vector {} as Vector<u8>
+    defer v.free()
+    if not _recv(s, v, 8): ret _fail(Rep4Rejected, "reply truncated") end
+    mut r := Reply {}
+    if not Decode4Reply(v, r): ret _fail(Rep4Rejected, "malformed reply") end
+    if r.code != Rep4Granted: ret HandshakeResult { ok = false, code = r.code, err = ReplyText(r.code), bound = r.addr } end
+    ret HandshakeResult { ok = true, code = r.code, bound = r.addr }
+end
+
+func _open(c: Client): ConnectResult:
+    mut r := ConnectResult {}
+    if c.tls:
+        mut cfg := tls.NewConfig(c.server_name)
+        if c.server_name.len() == 0: cfg = tls.NewConfig(c.host) end
+        cfg.insecure_skip_verify = c.insecure
+        t := tls.Dial(c.host, c.port, cfg)
+        if not tls.ConnOk(t):
+            r.err = "tls dial to proxy failed: " + tls.ConnError(t)
+            ret r
+        end
+        r.stream = tunnel.TlsStream { conn = t }
+        r.ok = true
+        ret r
+    end
+    conn := tcp.DialTimeout(c.host, c.port, c.timeout_ms)
+    if not tcp.ConnOk(conn):
+        r.err = "cannot reach proxy " + c.host + ":" + str.FromInt(c.port as i64)
+        ret r
+    end
+    r.stream = tunnel.TcpStream { conn = conn }
+    r.ok = true
+    ret r
+end
+
+@en "NewClient"
+@fa "کلاینت جدید"
+pub func NewClient(host: str, port: int): Client:
+    ret Client { host = host, port = port }
+end
+
+@en "NewClientAuth"
+@fa "کلاینت جدید با احراز هویت"
+pub func NewClientAuth(host: str, port: int, username: str, password: str): Client:
+    ret Client { host = host, port = port, username = username, password = password }
+end
+
+@en "Handshake"
+@fa "دست‌دهی"
+pub func Handshake(s: dyn tunnel.Stream, c: Client, cmd: int, host: str, port: int): HandshakeResult:
+    s.SetDeadline(c.timeout_ms)
+    mut r := HandshakeResult {}
+    if c.version == Socks5:
+        r = _command5(s, c, cmd, host, port)
+    else:
+        r = _command4(s, c, cmd, host, port)
+    end
+    s.SetDeadline(0)
+    ret r
+end
+
+@en "Connect"
+@fa "اتصال"
+pub func Connect(c: Client, host: str, port: int): ConnectResult:
+    mut r := _open(c)
+    if not r.ok: ret r end
+    h := Handshake(r.stream, c, CmdConnect, host, port)
+    if not h.ok:
+        r.stream.Close()
+        r.ok = false
+        r.code = h.code
+        r.err = h.err
+        ret r
+    end
+    r.code = h.code
+    r.bound = h.bound
+    ret r
+end
+
+@en "DialConn"
+@fa "شماره‌گیری اتصال"
+pub func DialConn(c: Client, host: str, port: int): tcp.Conn:
+    mut cc := c
+    cc.tls = false
+    conn := tcp.DialTimeout(cc.host, cc.port, cc.timeout_ms)
+    if not tcp.ConnOk(conn): ret conn end
+    st := tunnel.TcpStream { conn = conn }
+    h := Handshake(st, cc, CmdConnect, host, port)
+    if not h.ok:
+        tcp.Close(conn)
+        ret tcp.Conn {}
+    end
+    ret conn
+end
+
+@en "Bind"
+@fa "پیوند درخواست"
+pub func Bind(c: Client, host: str, port: int): ConnectResult:
+    mut r := _open(c)
+    if not r.ok: ret r end
+    h := Handshake(r.stream, c, CmdBind, host, port)
+    if not h.ok:
+        r.stream.Close()
+        r.ok = false
+        r.code = h.code
+        r.err = h.err
+        ret r
+    end
+    r.code = h.code
+    r.bound = h.bound
+    ret r
+end
+
+@en "BindAccept"
+@fa "پذیرش پیوند"
+pub func BindAccept(s: dyn tunnel.Stream, c: Client): HandshakeResult:
+    s.SetDeadline(c.timeout_ms)
+    r := HandshakeResult {}
+    mut out := r
+    if c.version == Socks5:
+        out = _read_reply(s)
+    else:
+        mut v := Vector {} as Vector<u8>
+        defer v.free()
+        if not _recv(s, v, 8):
+            out = _fail(Rep4Rejected, "reply truncated")
+        else:
+            mut rep := Reply {}
+            if not Decode4Reply(v, rep) or rep.code != Rep4Granted:
+                out = _fail(rep.code, ReplyText(rep.code))
+            else:
+                out = HandshakeResult { ok = true, code = rep.code, bound = rep.addr }
+            end
+        end
+    end
+    s.SetDeadline(0)
+    ret out
+end
+
+@en "Associate"
+@fa "ایجاد نشست یو دی پی"
+pub func Associate(c: Client): UDPSession:
+    mut u := UDPSession {}
+    if c.version != Socks5:
+        u.err = "UDP associate needs SOCKS5"
+        ret u
+    end
+    mut r := _open(c)
+    if not r.ok:
+        u.err = r.err
+        ret u
+    end
+    h := Handshake(r.stream, c, CmdUDPAssociate, "0.0.0.0", 0)
+    if not h.ok:
+        r.stream.Close()
+        u.err = h.err
+        ret u
+    end
+    sock := udp.Bind(0)
+    if not udp.Ok(sock):
+        r.stream.Close()
+        u.err = "cannot open UDP socket"
+        ret u
+    end
+    u.control = r.stream
+    u.sock = sock
+    u.relay_host = h.bound.host
+    if u.relay_host == "0.0.0.0" or u.relay_host.len() == 0: u.relay_host = c.host end
+    u.relay_port = h.bound.port
+    u.ok = true
+    ret u
+end
+
+@en "UDPSendBytes"
+@fa "ارسال بایت یو دی پی"
+pub func UDPSendBytes(u: UDPSession, host: str, port: int, ptr: void*, n: int): int:
+    hdr := EncodeUDPHeader(NewAddress(host, port), 0)
+    defer hdr.free()
+    hl := hdr.len()
+    if hl == 0: ret 0 - 1 end
+    buf := mem.Allocate((hl + n) as u64)
+    defer mem.Free(buf)
+    p := buf as u8*
+    repeat hl in i:
+        p[i] = hdr.get(i)
+    end
+    if n > 0: mem.Copy(((buf as i64) + (hl as i64)) as void*, ptr, n as u64) end
+    sent := udp.SendBytes(u.sock, u.relay_host, u.relay_port, buf, hl + n)
+    if sent < hl: ret 0 - 1 end
+    ret n
+end
+
+@en "UDPSend"
+@fa "ارسال یو دی پی"
+pub func UDPSend(u: UDPSession, host: str, port: int, data: str): int:
+    ret UDPSendBytes(u, host, port, data as void*, data.len())
+end
+
+@en "UDPReceiveBytes"
+@fa "دریافت بایت یو دی پی"
+pub func UDPReceiveBytes(u: UDPSession, buf: void*, max: int, from &: Address): int:
+    cap := max + 300
+    raw := mem.Allocate(cap as u64)
+    defer mem.Free(raw)
+    mut fh := ""
+    mut fp := 0
+    n := udp.ReceiveBytes(u.sock, raw, cap, fh, fp)
+    if n < 4: ret 0 - 1 end
+    mut v := Vector {} as Vector<u8>
+    defer v.free()
+    rp := raw as u8*
+    m := n
+    repeat m in i:
+        v.push(rp[i])
+    end
+    mut hd := UDPHeader {}
+    if not DecodeUDPHeader(v, hd): ret 0 - 1 end
+    if hd.frag != 0: ret 0 - 1 end
+    mut plen := n - hd.length
+    if plen > max: plen = max end
+    if plen > 0: mem.Copy(buf, ((raw as i64) + (hd.length as i64)) as void*, plen as u64) end
+    from = hd.addr
+    ret plen
+end
+
+@en "UDPSetTimeout"
+@fa "تنظیم مهلت یو دی پی"
+pub func UDPSetTimeout(u: UDPSession, millis: int):
+    udp.SetTimeout(u.sock, millis)
+end
+
+@en "CloseUDP"
+@fa "بستن نشست یو دی پی"
+pub func CloseUDP(u: UDPSession):
+    udp.Close(u.sock)
+    u.control.Close()
+end

@@ -1,0 +1,599 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package socks
+
+import mem
+import sync
+import net.tcp
+import net.udp
+import net.internal.rawsock
+import net.tunnel
+
+struct _AcceptJob:
+    pub cfg: ServerConfig = ServerConfig {}
+    pub listener: tcp.Server = tcp.Server {}
+    pub stop: i64* = null
+end
+
+struct _ConnJob:
+    pub cfg: ServerConfig = ServerConfig {}
+    pub st: dyn tunnel.Stream = tunnel.TcpStream {}
+end
+
+struct _UDPJob:
+    pub cfg: ServerConfig = ServerConfig {}
+    pub sock: udp.Socket = udp.Socket {}
+    pub chost: str = ""
+    pub cport: int = 0
+    pub stop: i64* = null
+end
+
+@en "ServerConfig"
+@fa "پیکربندی سرور"
+pub struct ServerConfig:
+    @en "port"
+    @fa "درگاه"
+    pub port: int = 0
+    @en "require_auth"
+    @fa "نیاز به احراز هویت"
+    pub require_auth: bool = false
+    @en "users"
+    @fa "کاربران"
+    pub users: HashMap<str, str> = HashMap {}
+    @en "auth"
+    @fa "احراز هویت"
+    pub auth: func (str, str) bool = (_u: str, _p: str): ret false end
+    @en "has_auth"
+    @fa "دارای احراز هویت سفارشی"
+    pub has_auth: bool = false
+    @en "allow_v4"
+    @fa "اجازه ساکس۴"
+    pub allow_v4: bool = true
+    @en "allow_bind"
+    @fa "اجازه پیوند"
+    pub allow_bind: bool = false
+    @en "allow_udp"
+    @fa "اجازه یو دی پی"
+    pub allow_udp: bool = true
+    @en "bind_host"
+    @fa "میزبان پیوند"
+    pub bind_host: str = "127.0.0.1"
+    @en "handshake_timeout_ms"
+    @fa "مهلت دست‌دهی میلی‌ثانیه"
+    pub handshake_timeout_ms: int = 10000
+    @en "idle_timeout_ms"
+    @fa "مهلت بی‌کاری میلی‌ثانیه"
+    pub idle_timeout_ms: int = 0
+    @en "connect"
+    @fa "اتصال به مقصد"
+    pub connect: func (str, int) Outbound = (h: str, p: int): ret DirectConnect(h, p, 10000) end
+    @en "allow"
+    @fa "اجازه"
+    pub allow: func (int, str, int) bool = (_c: int, _h: str, _p: int): ret true end
+end
+
+@en "Server"
+@fa "سرور"
+pub struct Server:
+    @en "ok"
+    @fa "موفق"
+    pub ok: bool = false
+    @en "port"
+    @fa "درگاه"
+    pub port: int = 0
+    @en "listener"
+    @fa "شنونده"
+    pub listener: tcp.Server = tcp.Server {}
+    @en "stop_cell"
+    @fa "پرچم توقف"
+    pub stop_cell: i64* = null
+end
+
+func _ct_eq(a: str, b: str): bool:
+    n := a.len()
+    m := b.len()
+    mut diff := n ^ m
+    pa := a as u8*
+    pb := b as u8*
+    mut i := 0
+    until i < n:
+        mut y := 0
+        if i < m: y = pb[i] as int end
+        diff |= (pa[i] as int) ^ y
+        i++
+    end
+    ret diff == 0
+end
+
+func _authorized(cfg: ServerConfig, user: str, pass: str): bool:
+    if cfg.users.has(user):
+        if _ct_eq(cfg.users.get(user), pass): ret true end
+    end
+    if cfg.has_auth: ret cfg.auth(user, pass) end
+    ret false
+end
+
+func _reply(s: dyn tunnel.Stream, ver: int, code: int, a: Address): bool:
+    if ver == 5:
+        v := EncodeReply(code, a)
+        defer v.free()
+        ret _send(s, v)
+    end
+    mut c := Rep4Rejected
+    if code == RepSucceeded: c = Rep4Granted end
+    mut host := "0.0.0.0"
+    if a.kind == AtypIPv4: host = a.host end
+    v := Encode4Reply(c, host, a.port)
+    defer v.free()
+    ret _send(s, v)
+end
+
+func _wild(): Address:
+    ret Address { kind = AtypIPv4, host = "0.0.0.0", port = 0 }
+end
+
+func _read_cstr(s: dyn tunnel.Stream, v &: Vector<u8>, max: int): bool:
+    mut n := 0
+    until n <= max:
+        b := tunnel.ReadByte(s)
+        if b < 0: ret false end
+        v.push(b as u8)
+        if b == 0: ret true end
+        n++
+    end
+    ret false
+end
+
+func _do_connect(cfg: ServerConfig, s: dyn tunnel.Stream, ver: int, a: Address):
+    if not cfg.allow(CmdConnect, a.host, a.port):
+        _reply(s, ver, RepNotAllowed, _wild())
+        s.Close()
+        ret
+    end
+    out := cfg.connect(a.host, a.port)
+    if not out.ok:
+        mut code := out.code
+        if code == RepSucceeded: code = RepGeneralFailure end
+        _reply(s, ver, code, _wild())
+        s.Close()
+        ret
+    end
+    mut bound := out.bound
+    if bound.kind == 0: bound = _wild() end
+    if not _reply(s, ver, RepSucceeded, bound):
+        out.stream.Close()
+        s.Close()
+        ret
+    end
+    Relay(s, out.stream, cfg.idle_timeout_ms)
+end
+
+func _do_bind(cfg: ServerConfig, s: dyn tunnel.Stream, ver: int, a: Address):
+    if not cfg.allow_bind or not cfg.allow(CmdBind, a.host, a.port):
+        _reply(s, ver, RepCmdNotSupported, _wild())
+        s.Close()
+        ret
+    end
+    ls := tcp.Bind(0)
+    if not tcp.Ok(ls):
+        _reply(s, ver, RepGeneralFailure, _wild())
+        s.Close()
+        ret
+    end
+    port := tcp.Port(ls)
+    if not _reply(s, ver, RepSucceeded, NewAddress(cfg.bind_host, port)):
+        tcp.CloseServer(ls)
+        s.Close()
+        ret
+    end
+    waited := rawsock.WaitReadable(rawsock.FromFd(ls.fd), 60000)
+    if not waited:
+        tcp.CloseServer(ls)
+        _reply(s, ver, RepGeneralFailure, _wild())
+        s.Close()
+        ret
+    end
+    conn := tcp.Accept(ls)
+    tcp.CloseServer(ls)
+    if not tcp.ConnOk(conn):
+        _reply(s, ver, RepGeneralFailure, _wild())
+        s.Close()
+        ret
+    end
+    peer := tunnel.TcpStream { conn = conn }
+    if not _reply(s, ver, RepSucceeded, _wild()):
+        peer.Close()
+        s.Close()
+        ret
+    end
+    Relay(s, peer, cfg.idle_timeout_ms)
+end
+
+func _udp_thread(arg: i64):
+    jp := (arg as void*) as _UDPJob*
+    cfg := jp[0].cfg
+    sock := jp[0].sock
+    chost := jp[0].chost
+    cport := jp[0].cport
+    stop := jp[0].stop
+    mem.Free(jp as void*)
+    cap := 65535 + 300
+    ibuf := mem.Allocate(cap as u64)
+    obuf := mem.Allocate(cap as u64)
+    udp.SetTimeout(sock, 400)
+    mut learned := false
+    mut ch := ""
+    mut cp := 0
+    mut expect := chost
+    if expect == "0.0.0.0": expect = "" end
+    if cport != 0 and expect.len() > 0:
+        learned = true
+        ch = expect
+        cp = cport
+    end
+    until atomic_load(stop) == 0:
+        mut fh := ""
+        mut fp := 0
+        n := udp.ReceiveBytes(sock, ibuf, cap, fh, fp)
+        if n <= 0: continue end
+        mut from_client := learned and fh == ch and fp == cp
+        mut hd := UDPHeader {}
+        mut parsed := false
+        if not learned and (expect.len() == 0 or fh == expect):
+            mut hv := Vector {} as Vector<u8>
+            ip := ibuf as u8*
+            mut lim := n
+            if lim > 300: lim = 300 end
+            repeat lim in i:
+                hv.push(ip[i])
+            end
+            parsed = DecodeUDPHeader(hv, hd)
+            hv.free()
+            if parsed:
+                learned = true
+                ch = fh
+                cp = fp
+                from_client = true
+            end
+        else from_client:
+            mut hv := Vector {} as Vector<u8>
+            ip := ibuf as u8*
+            mut lim := n
+            if lim > 300: lim = 300 end
+            repeat lim in i:
+                hv.push(ip[i])
+            end
+            parsed = DecodeUDPHeader(hv, hd)
+            hv.free()
+        end
+        if from_client:
+            if parsed and hd.frag == 0 and cfg.allow(CmdUDPAssociate, hd.addr.host, hd.addr.port):
+                plen := n - hd.length
+                udp.SendBytes(sock, hd.addr.host, hd.addr.port, ((ibuf as i64) + (hd.length as i64)) as void*, plen)
+            end
+        else learned:
+            hdr := EncodeUDPHeader(NewAddress(fh, fp), 0)
+            hl := hdr.len()
+            if hl > 0:
+                op := obuf as u8*
+                repeat hl in i:
+                    op[i] = hdr.get(i)
+                end
+                mem.Copy(((obuf as i64) + (hl as i64)) as void*, ibuf, n as u64)
+                udp.SendBytes(sock, ch, cp, obuf, hl + n)
+            end
+            hdr.free()
+        end
+    end
+    udp.Close(sock)
+    mem.Free(stop as void*)
+    mem.Free(ibuf)
+    mem.Free(obuf)
+end
+
+func _do_udp(cfg: ServerConfig, s: dyn tunnel.Stream, a: Address):
+    if not cfg.allow_udp:
+        _reply(s, 5, RepCmdNotSupported, _wild())
+        s.Close()
+        ret
+    end
+    us := udp.Bind(0)
+    if not udp.Ok(us):
+        _reply(s, 5, RepGeneralFailure, _wild())
+        s.Close()
+        ret
+    end
+    stop := mem.AllocateZeroed(8 as u64) as i64*
+    atomic_store(stop, 1 as i64)
+    jb := mem.AllocateZeroed(sizeof(_UDPJob) as u64) as _UDPJob*
+    jb[0] = _UDPJob { cfg = cfg, sock = us, chost = a.host, cport = a.port, stop = stop }
+    if not _reply(s, 5, RepSucceeded, NewAddress(cfg.bind_host, udp.Port(us))):
+        udp.Close(us)
+        mem.Free(stop as void*)
+        mem.Free(jb as void*)
+        s.Close()
+        ret
+    end
+    Go(_udp_thread, jb as void*)
+    s.SetDeadline(0)
+    buf := mem.Allocate(64 as u64)
+    until s.ReadBytes(buf, 64) > 0:
+        continue
+    end
+    mem.Free(buf)
+    atomic_store(stop, 0 as i64)
+    s.Close()
+end
+
+func _serve5(cfg: ServerConfig, s: dyn tunnel.Stream):
+    nm := tunnel.ReadByte(s)
+    if nm <= 0:
+        s.Close()
+        ret
+    end
+    mut mv := Vector {} as Vector<u8>
+    defer mv.free()
+    if not _recv(s, mv, nm):
+        s.Close()
+        ret
+    end
+    mut has0 := false
+    mut has2 := false
+    repeat nm in i:
+        if _b(mv, i) == AuthNone: has0 = true end
+        if _b(mv, i) == AuthUserPass: has2 = true end
+    end
+    mut choice := AuthNoAcceptable
+    if cfg.require_auth:
+        if has2: choice = AuthUserPass end
+    else has0:
+        choice = AuthNone
+    end
+    cv := EncodeMethodChoice(choice)
+    _send(s, cv)
+    cv.free()
+    if choice == AuthNoAcceptable:
+        s.Close()
+        ret
+    end
+    if choice == AuthUserPass:
+        if tunnel.ReadByte(s) != 1:
+            s.Close()
+            ret
+        end
+        ul := tunnel.ReadByte(s)
+        mut uv := Vector {} as Vector<u8>
+        defer uv.free()
+        if ul < 1 or not _recv(s, uv, ul):
+            s.Close()
+            ret
+        end
+        pl := tunnel.ReadByte(s)
+        mut pv := Vector {} as Vector<u8>
+        defer pv.free()
+        if pl < 0 or (pl > 0 and not _recv(s, pv, pl)):
+            s.Close()
+            ret
+        end
+        okp := _authorized(cfg, _bytes_str(uv, 0, ul), _bytes_str(pv, 0, pl))
+        ar := EncodeAuthReply(okp)
+        _send(s, ar)
+        ar.free()
+        if not okp:
+            s.Close()
+            ret
+        end
+    end
+    mut rq := Vector {} as Vector<u8>
+    defer rq.free()
+    if not _recv(s, rq, 4):
+        s.Close()
+        ret
+    end
+    t := _b(rq, 3)
+    mut more := 0
+    if t == AtypIPv4:
+        more = 6
+    else t == AtypIPv6:
+        more = 18
+    else t == AtypDomain:
+        if not _recv(s, rq, 1):
+            s.Close()
+            ret
+        end
+        more = _b(rq, 4) + 2
+    else:
+        _reply(s, 5, RepAtypNotSupported, _wild())
+        s.Close()
+        ret
+    end
+    if not _recv(s, rq, more):
+        s.Close()
+        ret
+    end
+    mut req := Request {}
+    if DecodeRequest(rq, req) <= 0:
+        _reply(s, 5, RepGeneralFailure, _wild())
+        s.Close()
+        ret
+    end
+    switch req.cmd:
+        1:
+            _do_connect(cfg, s, 5, req.addr)
+        end
+        2:
+            _do_bind(cfg, s, 5, req.addr)
+        end
+        3:
+            _do_udp(cfg, s, req.addr)
+        end
+        else:
+            _reply(s, 5, RepCmdNotSupported, _wild())
+            s.Close()
+        end
+    end
+end
+
+func _serve4(cfg: ServerConfig, s: dyn tunnel.Stream):
+    mut v := Vector {} as Vector<u8>
+    defer v.free()
+    v.push(4 as u8)
+    if not _recv(s, v, 7):
+        s.Close()
+        ret
+    end
+    if not _read_cstr(s, v, 255):
+        s.Close()
+        ret
+    end
+    if _b(v, 4) == 0 and _b(v, 5) == 0 and _b(v, 6) == 0 and _b(v, 7) != 0:
+        if not _read_cstr(s, v, 255):
+            s.Close()
+            ret
+        end
+    end
+    mut req := Request {}
+    if Decode4Request(v, req) <= 0:
+        _reply(s, 4, RepGeneralFailure, _wild())
+        s.Close()
+        ret
+    end
+    if cfg.require_auth:
+        bad := Encode4Reply(Rep4BadUser, "0.0.0.0", 0)
+        _send(s, bad)
+        bad.free()
+        s.Close()
+        ret
+    end
+    switch req.cmd:
+        1:
+            _do_connect(cfg, s, 4, req.addr)
+        end
+        2:
+            _do_bind(cfg, s, 4, req.addr)
+        end
+        else:
+            _reply(s, 4, RepCmdNotSupported, _wild())
+            s.Close()
+        end
+    end
+end
+
+func _conn_thread(arg: i64):
+    jp := (arg as void*) as _ConnJob*
+    cfg := jp[0].cfg
+    st := jp[0].st
+    mem.Free(jp as void*)
+    Handle(cfg, st)
+end
+
+func _accept_thread(arg: i64):
+    jp := (arg as void*) as _AcceptJob*
+    cfg := jp[0].cfg
+    lst := jp[0].listener
+    stop := jp[0].stop
+    mem.Free(jp as void*)
+    until atomic_load(stop) != 0:
+        c := tcp.Accept(lst)
+        if not tcp.ConnOk(c):
+            if atomic_load(stop) != 0: continue end
+            sync.SleepMs(5)
+        else:
+            cj := mem.AllocateZeroed(sizeof(_ConnJob) as u64) as _ConnJob*
+            cj[0] = _ConnJob { cfg = cfg, st = tunnel.TcpStream { conn = c } }
+            Go(_conn_thread, cj as void*)
+        end
+    end
+    mem.Free(stop as void*)
+end
+
+@en "NewServerConfig"
+@fa "پیکربندی سرور جدید"
+pub func NewServerConfig(port: int): ServerConfig:
+    ret ServerConfig { port = port }
+end
+
+@en "AddUser"
+@fa "افزودن کاربر"
+pub func AddUser(cfg &: ServerConfig, user: str, pass: str):
+    cfg.users.put(user, pass)
+    cfg.require_auth = true
+end
+
+@en "SetAuth"
+@fa "تعیین احراز هویت"
+pub func SetAuth(cfg &: ServerConfig, check: func (str, str) bool):
+    cfg.auth = check
+    cfg.has_auth = true
+    cfg.require_auth = true
+end
+
+@en "SetConnector"
+@fa "تعیین اتصال به مقصد"
+pub func SetConnector(cfg &: ServerConfig, connect: func (str, int) Outbound):
+    cfg.connect = connect
+end
+
+@en "Handle"
+@fa "رسیدگی"
+pub func Handle(cfg: ServerConfig, s: dyn tunnel.Stream):
+    s.SetDeadline(cfg.handshake_timeout_ms)
+    v := tunnel.ReadByte(s)
+    if v == 5:
+        _serve5(cfg, s)
+    else v == 4 and cfg.allow_v4:
+        _serve4(cfg, s)
+    else:
+        s.Close()
+    end
+end
+
+@en "Start"
+@fa "شروع"
+pub func Start(cfg: ServerConfig): Server:
+    mut sv := Server {}
+    ls := tcp.Bind(cfg.port)
+    if not tcp.Ok(ls): ret sv end
+    stop := mem.AllocateZeroed(8 as u64) as i64*
+    atomic_store(stop, 1 as i64)
+    jb := mem.AllocateZeroed(sizeof(_AcceptJob) as u64) as _AcceptJob*
+    jb[0] = _AcceptJob { cfg = cfg, listener = ls, stop = stop }
+    sv.ok = true
+    sv.port = tcp.Port(ls)
+    sv.listener = ls
+    sv.stop_cell = stop
+    Go(_accept_thread, jb as void*)
+    ret sv
+end
+
+@en "Stop"
+@fa "توقف"
+pub func Stop(sv: Server):
+    if not sv.ok: ret end
+    atomic_store(sv.stop_cell, 0 as i64)
+    rawsock.Shutdown(rawsock.FromFd(sv.listener.fd))
+    tcp.CloseServer(sv.listener)
+end
+
+@en "Serve"
+@fa "خدمت‌رسانی"
+pub func Serve(cfg: ServerConfig): bool:
+    sv := Start(cfg)
+    if not sv.ok: ret false end
+    until sv.ok:
+        sync.SleepMs(1000)
+    end
+    ret true
+end

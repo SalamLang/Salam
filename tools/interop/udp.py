@@ -151,6 +151,9 @@ def verdict(res, must_upto=MUST):
 
 def main():
     only = sys.argv[1] if len(sys.argv) > 1 else ""
+    dns53 = only == "dns53"
+    if dns53:
+        only = "/tcp/"
     work0 = os.environ.get("INTEROP_WORK") or tempfile.mkdtemp(prefix="interop-")
     cert, key = matrix.prepare(work0)
     matrix.reality_keys()
@@ -176,14 +179,16 @@ def main():
             work = os.path.join(work0, "udp", (case["name"] + "_" + real + "_" + direction).replace("/", "_").replace(">", ""))
             os.makedirs(work, exist_ok=True)
             if direction == "ours->real":
-                res, d = ours_client(case, real, kind, work, cert, key, echo, echo.port, False)
+                res, d = ours_client(case, real, kind, work, cert, key, echo, 53 if dns53 else echo.port, dns53)
             else:
-                res, d = ours_server(case, real, kind, work, cert, key, echo, echo.port, False)
+                res, d = ours_server(case, real, kind, work, cert, key, echo, 53 if dns53 else echo.port, dns53, dns53)
             upto = MUST
+            if dns53:
+                upto = 1200
             if real == "xray" and direction == "real->ours" and kind == "direct":
                 upto = 4000
             ok, summary = verdict(res, upto)
-            name = "%s %s %s" % (case["name"], real, direction)
+            name = "%s %s %s%s" % (case["name"], real, direction, " port 53 with DNS packets" if dns53 else "")
             results.append((name, ok, summary))
             print(("PASS " if ok else "FAIL ") + name + "  " + summary + ("" if ok else " | " + d[:300]), flush=True)
     echo.close()

@@ -1,0 +1,244 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import net.shadowsocks
+import net.udp
+import tls
+import mem
+import str
+
+const IP16 := "AQQHCg0QExYZHB8iJSgrLg=="
+const UP16 := "MjU4Oz5BREdKTVBTVllcXw=="
+const K16 := "AAECAwQFBgcICQoLDA0ODw=="
+const K32 := "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
+const U32 := "MjM0NTY3ODk6Ozw9Pj9AQUJDREVGR0hJSktMTU4="
+const CAP_UDP := "665f3cda97d39bdf53960eed002d1194fdd126cee8285bf4831cae22f3600300ab5d05e2be76afd1eca62764399a59289b98114ba3c2db794a4f0492e10c43a1e1e7c480dc9880"
+const CAP_SALT := "3d99fecd443635d8c8409f16b74fa034"
+
+mut failures := 0
+mut echo_sock := udp.Socket {}
+mut echo_stop := false
+mut relay := shadowsocks.UdpServer {}
+
+func check(name: str, ok: bool):
+    if ok:
+        println "PASS", name
+    else:
+        println "FAIL", name
+        failures += 1
+    end
+end
+
+func echo_main():
+    buf := mem.Allocate(4000 as u64)
+    until not echo_stop:
+        mut h := ""
+        mut p := 0
+        n := udp.ReceiveBytes(echo_sock, buf, 4000, h, p)
+        if n > 0:
+            _w := udp.SendBytes(echo_sock, h, p, buf, n)
+        end
+    end
+    mem.Free(buf)
+end
+
+func relay_main():
+    shadowsocks.UdpServe(relay)
+end
+
+func exchange(c: shadowsocks.UdpClient, text: str): str:
+    n := text.len()
+    if not shadowsocks.UdpSend(c, "127.0.0.1", udp.Port(echo_sock), text as void*, n):
+        ret "send failed"
+    end
+    buf := mem.AllocateZeroed(2000 as u64)
+    mut from := shadowsocks.Target {}
+    got := shadowsocks.UdpRecv(c, buf, 1999, from)
+    mut res := ""
+    if got > 0 and from.host == "127.0.0.1" and from.port == udp.Port(echo_sock):
+        res = str.Substr(buf as str, 0, got)
+    end
+    mem.Free(buf)
+    ret res
+end
+
+func raw_twice(pkt: shadowsocks.Buf, port: int): int:
+    raw := udp.Open()
+    udp.SetTimeout(raw, 700)
+    mut answers := 0
+    repeat 2:
+        udp.SendBytes(raw, "127.0.0.1", port, pkt.p, pkt.len)
+        buf := mem.Allocate(2000 as u64)
+        mut h := ""
+        mut p := 0
+        n := udp.ReceiveBytes(raw, buf, 2000, h, p)
+        if n > 0:
+            answers += 1
+        end
+        mem.Free(buf)
+    end
+    udp.Close(raw)
+    ret answers
+end
+
+func replay_probe(m: shadowsocks.Method, password: str): int:
+    if not m.v2022:
+        key := shadowsocks.PasswordKey(m, password)
+        mut lp := shadowsocks.NewBuf(128)
+        shadowsocks.PackUdp(m, key.p, "127.0.0.1", udp.Port(echo_sock), "replayed" as void*, 8, lp)
+        ret raw_twice(lp, shadowsocks.UdpServerPort(relay))
+    end
+    mut chain := shadowsocks.ChainOf(m, password)
+    last := shadowsocks.ChainKey(chain, chain.count - 1)
+    mut eih := shadowsocks.NewBuf(64)
+    shadowsocks.BufAppend(eih, chain.keys.p, (chain.count - 1) * m.key_len)
+    mut hk := last
+    if chain.count > 1:
+        hk = eih.p
+    end
+    mut s := shadowsocks.NewUdpSession()
+    mut pkt := shadowsocks.NewBuf(128)
+    ok := shadowsocks.PackUdp2022(m, last, hk, eih, chain.count - 1, s, true, "127.0.0.1", udp.Port(echo_sock), "replayed" as void*, 8, pkt)
+    mut answers := 0
+    if ok:
+        answers = raw_twice(pkt, shadowsocks.UdpServerPort(relay))
+    end
+    shadowsocks.ChainFree(chain)
+    ret answers
+end
+
+func e2e(label: str, method: str, server_pw: str, user_pw: str, client_pw: str):
+    m := shadowsocks.LookupMethod(method)
+    echo_stop = false
+    relay = shadowsocks.UdpListenOn("127.0.0.1", 0, method, server_pw)
+    check(label + " server up", relay.ok and shadowsocks.UdpServerPort(relay) > 0)
+    if user_pw != "":
+        check(label + " add user", shadowsocks.UdpAddUser(relay, user_pw))
+    end
+    th := spawn(relay_main)
+    te := spawn(echo_main)
+    c := shadowsocks.UdpDial(shadowsocks.Config { host = "127.0.0.1", port = shadowsocks.UdpServerPort(relay), method = method, password = client_pw })
+    shadowsocks.UdpSetTimeout(c, 3000)
+    check(label + " echo", exchange(c, "ping-one") == "ping-one")
+    check(label + " echo again", exchange(c, "ping-two-longer") == "ping-two-longer")
+    check(label + " big datagram", exchange(c, str.Repeat("0123456789", 100)) == str.Repeat("0123456789", 100))
+    c2 := shadowsocks.UdpDial(shadowsocks.Config { host = "127.0.0.1", port = shadowsocks.UdpServerPort(relay), method = method, password = client_pw })
+    shadowsocks.UdpSetTimeout(c2, 3000)
+    check(label + " second client", exchange(c2, "from-second") == "from-second")
+    check(label + " replayed datagram answered once", replay_probe(m, client_pw) == 1)
+    shadowsocks.UdpStop(relay)
+    join(th)
+    echo_stop = true
+    join(te)
+    shadowsocks.UdpClose(c)
+    shadowsocks.UdpClose(c2)
+    shadowsocks.UdpDestroy(relay)
+end
+
+func chain_and_identity():
+    m := shadowsocks.LookupMethod("2022-blake3-aes-128-gcm")
+    mut ch := shadowsocks.ChainOf(m, IP16 + ":" + UP16)
+    check("chain two keys", ch.ok and ch.count == 2 and ch.key_len == 16)
+    check("chain key bytes", shadowsocks.HexOf(shadowsocks.ChainKey(ch, 0), 16) == "0104070a0d101316191c1f2225282b2e")
+    check("chain rejects bad key", not shadowsocks.ChainOf(m, IP16 + ":AAAA").ok)
+    check("chain needs 2022 method", not shadowsocks.ChainOf(shadowsocks.LookupMethod("aes-128-gcm"), IP16).ok)
+    check("eih length", shadowsocks.EIH_LEN == 16)
+    check("identity context", shadowsocks.IDENTITY_CONTEXT == "shadowsocks 2022 identity subkey")
+    h := mem.AllocateZeroed(16 as u64)
+    shadowsocks.IdentityHash(shadowsocks.ChainKey(ch, 1), 16, h)
+    check("identity hash is blake3 prefix", shadowsocks.HexOf(h, 16) == "dea34a240a441fa8f7f6a2739353728e")
+    salt := shadowsocks.BufFromHex(CAP_SALT)
+    blk := mem.AllocateZeroed(16 as u64)
+    check("eih seal", shadowsocks.EihSeal(shadowsocks.ChainKey(ch, 0), 16, salt.p, 16, shadowsocks.ChainKey(ch, 1), blk))
+    check("eih matches a reference server capture", shadowsocks.HexOf(blk, 16) == "591b7073746e4cec45794be2cda49c13")
+    out := mem.AllocateZeroed(16 as u64)
+    check("eih open", shadowsocks.EihOpen(shadowsocks.ChainKey(ch, 0), 16, salt.p, 16, blk, out))
+    check("eih open recovers the hash", shadowsocks.HexOf(out, 16) == shadowsocks.HexOf(h, 16))
+    ik := mem.AllocateZeroed(32 as u64)
+    shadowsocks.IdentityKey(shadowsocks.ChainKey(ch, 0), 16, salt.p, 16, ik)
+    check("identity key is 16 bytes of derived material", shadowsocks.HexOf(ik, 16) != shadowsocks.HexOf(shadowsocks.ChainKey(ch, 0), 16))
+    shadowsocks.ChainFree(ch)
+    check("chain freed", not ch.ok and ch.count == 0)
+end
+
+func window_and_capture():
+    mut w := shadowsocks.UdpSession {}
+    check("window first", shadowsocks.SessionAccept(w, 5 as i64))
+    check("window duplicate", not shadowsocks.SessionAccept(w, 5 as i64))
+    check("window older once", shadowsocks.SessionAccept(w, 3 as i64))
+    check("window older twice", not shadowsocks.SessionAccept(w, 3 as i64))
+    check("window jump", shadowsocks.SessionAccept(w, 100 as i64))
+    check("window too old", not shadowsocks.SessionAccept(w, 30 as i64))
+    check("window next", shadowsocks.SessionAccept(w, 101 as i64))
+    s1 := shadowsocks.NewUdpSession()
+    s2 := shadowsocks.NewUdpSession()
+    check("sessions differ", s1.sid != s2.sid and s1.pid == 0)
+    m := shadowsocks.LookupMethod("2022-blake3-aes-128-gcm")
+    mut ch := shadowsocks.ChainOf(m, IP16 + ":" + UP16)
+    cap := shadowsocks.BufFromHex(CAP_UDP)
+    mut sid := 0 as i64
+    check("peek", shadowsocks.Udp2022Peek(m, shadowsocks.ChainKey(ch, 0), cap.p, cap.len, sid))
+    want := (0xea33ae80 as i64) << (32 as i64) | (0x25a6743e as i64)
+    check("peek reads the session id", sid == want)
+    h := mem.AllocateZeroed(16 as u64)
+    check("identity from a reference client capture", shadowsocks.Udp2022Identity(m, shadowsocks.ChainKey(ch, 0), cap.p, cap.len, h) and shadowsocks.HexOf(h, 16) == "dea34a240a441fa8f7f6a2739353728e")
+    mut sess := shadowsocks.UdpSession {}
+    mut t := shadowsocks.Target {}
+    mut body := shadowsocks.NewBuf(64)
+    check("old capture is refused for its timestamp", not shadowsocks.UnpackUdp2022(m, shadowsocks.ChainKey(ch, 1), shadowsocks.ChainKey(ch, 0), 16, false, cap.p, cap.len, sess, t, body))
+    shadowsocks.ChainFree(ch)
+end
+
+func block_ciphers():
+    key := shadowsocks.BufFromHex("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f")
+    pt := shadowsocks.BufFromHex("00112233445566778899aabbccddeeff")
+    o := mem.AllocateZeroed(16 as u64)
+    o2 := mem.AllocateZeroed(16 as u64)
+    check("aes-128 ecb fips-197", tls.AesEcbBlock(key.p, 16, pt.p, o, false) and shadowsocks.HexOf(o, 16) == "69c4e0d86a7b0430d8cdb78070b4c55a")
+    check("aes-128 ecb decrypt", tls.AesEcbBlock(key.p, 16, o, o2, true) and shadowsocks.HexOf(o2, 16) == "00112233445566778899aabbccddeeff")
+    check("aes-256 ecb fips-197", tls.AesEcbBlock(key.p, 32, pt.p, o, false) and shadowsocks.HexOf(o, 16) == "8ea2b7ca516745bfeafc49904b496089")
+    check("aes-256 ecb decrypt", tls.AesEcbBlock(key.p, 32, o, o2, true) and shadowsocks.HexOf(o2, 16) == "00112233445566778899aabbccddeeff")
+    check("ecb refuses odd key length", not tls.AesEcbBlock(key.p, 24, pt.p, o, false))
+    xk := shadowsocks.BufFromHex("808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9f")
+    xn := shadowsocks.BufFromHex("404142434445464748494a4b4c4d4e4f5051525354555657")
+    msg := shadowsocks.BufFromHex("0102030405060708090a0b0c0d0e0f1011121314")
+    aad := shadowsocks.BufFromHex("0001020304")
+    out := mem.AllocateZeroed(40 as u64)
+    check("xchacha20-poly1305 seal", tls.XChaCha20Poly1305SealRaw(xk.p, xn.p, aad.p, 5, msg.p, 20, out))
+    check("xchacha20-poly1305 bytes", shadowsocks.HexOf(out, 36) == "f00e70f05ef6f352f2187cdffba092452355617a340b75ecc59c00f027078d3044de2531")
+    back := mem.AllocateZeroed(40 as u64)
+    check("xchacha20-poly1305 open", tls.XChaCha20Poly1305OpenRaw(xk.p, xn.p, aad.p, 5, out, 36, back) and shadowsocks.HexOf(back, 20) == "0102030405060708090a0b0c0d0e0f1011121314")
+    bp := out as u8*
+    bp[2] = bp[2] ^ (1 as u8)
+    check("xchacha20-poly1305 tamper", not tls.XChaCha20Poly1305OpenRaw(xk.p, xn.p, aad.p, 5, out, 36, back))
+    check("xchacha20-poly1305 short", not tls.XChaCha20Poly1305OpenRaw(xk.p, xn.p, aad.p, 5, out, 8, back))
+end
+
+func main:
+    block_ciphers()
+    chain_and_identity()
+    window_and_capture()
+    echo_sock = udp.Bind(0)
+    udp.SetTimeout(echo_sock, 100)
+    e2e("2022 aes-128", "2022-blake3-aes-128-gcm", K16, "", K16)
+    e2e("2022 aes-256", "2022-blake3-aes-256-gcm", K32, "", K32)
+    e2e("2022 chacha20", "2022-blake3-chacha20-poly1305", K32, "", K32)
+    e2e("2022 aes-128 multi user", "2022-blake3-aes-128-gcm", IP16, UP16, IP16 + ":" + UP16)
+    e2e("legacy aes-256", "aes-256-gcm", "legacy-pw", "", "legacy-pw")
+    udp.Close(echo_sock)
+    println "failures", failures
+    ret failures
+end

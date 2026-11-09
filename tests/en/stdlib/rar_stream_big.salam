@@ -1,0 +1,209 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+
+package main
+
+import archive
+import compress
+import filepath
+import mem
+import os
+
+struct Bits:
+    pub acc: int
+    pub n: int
+end
+
+func put(out &: compress.ByteBuf, b &: Bits, value: int, count: int):
+    mut i := count - 1
+    until i >= 0:
+        b.acc = (b.acc << 1) | ((value >> i) & 1)
+        b.n++
+        if b.n == 8:
+            compress.BufPush(out, b.acc)
+            b.acc = 0
+            b.n = 0
+        end
+        i--
+    end
+end
+
+func flush(out &: compress.ByteBuf, b &: Bits):
+    if b.n > 0:
+        compress.BufPush(out, b.acc << (8 - b.n))
+        b.acc = 0
+        b.n = 0
+    end
+end
+
+func next(s: i64): i64:
+    ret (s * 1103515245 + 12345) & 0x7fffffff
+end
+
+func data_bytes(count: int): compress.ByteBuf:
+    mut out := compress.NewByteBufCap(count + 16)
+    mut s := 99 as i64
+    repeat count:
+        s = next(s)
+        compress.BufPush(out, ((s >> 16) & 255) as int)
+    end
+    ret out
+end
+
+func lz29_head(out &: compress.ByteBuf, b &: Bits):
+    put(out, b, 0, 2)
+    repeat 20 in i:
+        put(out, b, (i == 8 or i == 17 or i == 18 or i == 19) ? 2 : 0, 4)
+    end
+    put(out, b, 0, 2)
+    put(out, b, 1, 2)
+    put(out, b, 127, 7)
+    put(out, b, 1, 2)
+    put(out, b, 106, 7)
+    put(out, b, 3, 2)
+    put(out, b, 58, 7)
+    put(out, b, 3, 2)
+    put(out, b, 68, 7)
+end
+
+func lz20_head(out &: compress.ByteBuf, b &: Bits):
+    put(out, b, 0, 2)
+    repeat 19 in i:
+        put(out, b, (i == 8 or i >= 16) ? 2 : 0, 4)
+    end
+    put(out, b, 0, 2)
+    repeat 42:
+        put(out, b, 1, 2)
+        put(out, b, 3, 2)
+    end
+    put(out, b, 1, 2)
+    put(out, b, 0, 2)
+    put(out, b, 3, 2)
+    put(out, b, 107, 7)
+end
+
+func u16(b &: compress.ByteBuf, v: int):
+    compress.BufPush(b, v & 255)
+    compress.BufPush(b, (v >> 8) & 255)
+end
+
+func u32(b &: compress.ByteBuf, v: i64):
+    compress.BufPush(b, (v & 255) as int)
+    compress.BufPush(b, ((v >> 8) & 255) as int)
+    compress.BufPush(b, ((v >> 16) & 255) as int)
+    compress.BufPush(b, ((v >> 24) & 255) as int)
+end
+
+func with_crc16(body: compress.ByteBuf): compress.ByteBuf:
+    mut out := compress.NewByteBufCap(body.len + 4)
+    u16(out, (compress.CRC32Buf(body) as int) & 0xffff)
+    compress.BufPushBuf(out, body)
+    ret out
+end
+
+func build(ver: int, high: bool, packed: compress.ByteBuf, unp: int, crc: u32): compress.ByteBuf:
+    mut out := compress.NewByteBufCap(packed.len + 128)
+    each c in [0x52, 0x61, 0x72, 0x21, 0x1a, 0x07, 0x00]:
+        compress.BufPush(out, c)
+    end
+    mut mh := compress.NewByteBuf()
+    compress.BufPush(mh, 0x73)
+    u16(mh, 0)
+    u16(mh, 13)
+    repeat 6:
+        compress.BufPush(mh, 0)
+    end
+    mut mc := with_crc16(mh)
+    compress.BufPushBuf(out, mc)
+    compress.BufFree(mh)
+    compress.BufFree(mc)
+    name := "big.bin"
+    mut fh := compress.NewByteBuf()
+    compress.BufPush(fh, 0x74)
+    u16(fh, high ? 0x8100 : 0x8000)
+    u16(fh, 32 + name.len() + (high ? 8 : 0))
+    u32(fh, packed.len as i64)
+    u32(fh, unp as i64)
+    compress.BufPush(fh, 2)
+    u32(fh, crc as i64)
+    u32(fh, 0x5a000000 as i64)
+    compress.BufPush(fh, ver)
+    compress.BufPush(fh, 0x33)
+    u16(fh, name.len())
+    u32(fh, 0x20 as i64)
+    if high:
+        u32(fh, 0 as i64)
+        u32(fh, 0 as i64)
+    end
+    compress.BufPushBytes(fh, name as void*, name.len())
+    mut fc := with_crc16(fh)
+    compress.BufPushBuf(out, fc)
+    compress.BufFree(fh)
+    compress.BufFree(fc)
+    compress.BufPushBuf(out, packed)
+    mut eh := compress.NewByteBuf()
+    compress.BufPush(eh, 0x7b)
+    u16(eh, 0x4000)
+    u16(eh, 7)
+    mut ec := with_crc16(eh)
+    compress.BufPushBuf(out, ec)
+    compress.BufFree(eh)
+    compress.BufFree(ec)
+    ret out
+end
+
+func check(label: str, ver: int, high: bool, count: int):
+    mut raw := data_bytes(count)
+    want := compress.CRC32Buf(raw)
+    mut packed := compress.NewByteBufCap(count + 64)
+    mut bits := Bits { acc = 0, n = 0 }
+    if ver == 29:
+        lz29_head(packed, bits)
+        flush(packed, bits)
+        compress.BufPushBuf(packed, raw)
+    else:
+        lz20_head(packed, bits)
+        repeat raw.len in i:
+            put(packed, bits, compress.BufGet(raw, i), 8)
+        end
+        flush(packed, bits)
+    end
+    mut arc := build(ver, high, packed, count, want)
+    path := filepath.Join(os.TempDir(), "salam_rar_stream_big.rar")
+    dest := filepath.Join(os.TempDir(), "salam_rar_stream_big.out")
+    _ := archive.WriteBinaryFileBuf(path, arc)
+    mut rf := archive.RarFileOpen(path)
+    mut es := archive.RarFileEntries(rf)
+    st := archive.RarFileExtractTo(rf, "big.bin", dest, 0 as i64, 0 as i64)
+    mut ok := false
+    mut got := archive.ReadBinaryFile(dest, ok)
+    println label, es.len(), es.get(0).size, rf.streaming, archive.RarStatusText(st), got.len == count, compress.CRC32Buf(got) == want
+    compress.BufFree(got)
+    archive.FreeEntries(es)
+    archive.RarFileClose(rf)
+    os.Remove(path)
+    os.Remove(dest)
+    mem.Free(path as void*)
+    mem.Free(dest as void*)
+    compress.BufFree(raw)
+    compress.BufFree(packed)
+    compress.BufFree(arc)
+end
+
+func main:
+    check("rar 2.9 literals", 29, false, 6291456 + 777)
+    check("rar 2.9 literals, 64 bit fields", 29, true, 100000)
+    check("rar 2.0 literals", 20, false, 6291456 + 333)
+end

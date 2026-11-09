@@ -47,6 +47,15 @@ pub struct UdpClient:
     @en "ok"
     @fa "معتبر"
     pub ok: bool = false
+    @en "sess"
+    @fa "نشست"
+    pub sess: UdpSession* = null
+    @en "eih"
+    @fa "سرآیند هویت"
+    pub eih: Buf = Buf {}
+    @en "eih_n"
+    @fa "تعداد سرآیند هویت"
+    pub eih_n: int = 0
 end
 
 @en "UdpServer"
@@ -79,6 +88,21 @@ pub struct UdpServer:
     @en "ok"
     @fa "معتبر"
     pub ok: bool = false
+    @en "sess"
+    @fa "نشست ها"
+    pub sess: HashMap<str, UdpSession> = HashMap {} as HashMap<str, UdpSession>
+    @en "skeys"
+    @fa "کلید نشست ها"
+    pub skeys: HashMap<str, Buf> = HashMap {} as HashMap<str, Buf>
+    @en "users"
+    @fa "کاربران"
+    pub users: HashMap<str, Buf> = HashMap {} as HashMap<str, Buf>
+    @en "user_n"
+    @fa "تعداد کاربران"
+    pub user_n: int = 0
+    @en "filter"
+    @fa "فیلتر"
+    pub filter: SaltFilter = SaltFilter {}
 end
 
 func _udp_ctx(m: Method, key: void*, salt: void*): void*:
@@ -90,12 +114,72 @@ func _udp_ctx(m: Method, key: void*, salt: void*): void*:
     ret c
 end
 
-func _udp_forward(s &: UdpServer, ck: str, from_host: str, from_port: int, n: int):
+func _u22_resolve(s &: UdpServer, n: int, ukey &: void*, skip &: int): bool:
+    ukey = s.key.p
+    skip = 0
+    if s.method.kind == tls.AEAD_CHACHA20_POLY1305 or s.user_n == 0:
+        ret true
+    end
+    if n < 32:
+        ret false
+    end
+    id16 := mem.AllocateZeroed(16 as u64)
+    mut ok := Udp2022Identity(s.method, s.key.p, s.rbuf, n, id16)
+    if ok:
+        id := HexOf(id16, 16)
+        if s.users.has(id):
+            uk := s.users.get(id)
+            ukey = uk.p
+            skip = 16
+        else:
+            ok = false
+        end
+    end
+    mem.Free(id16)
+    ret ok
+end
+
+func _udp_forward(s &: UdpServer, ck0: str, from_host: str, from_port: int, n: int):
+    mut ck := ck0
     mut t := Target {}
     mut pl := NewBuf(n)
-    if not UnpackUdp(s.method, s.key.p, s.rbuf, n, t, pl):
-        BufFree(pl)
-        ret
+    if s.method.v2022:
+        mut ukey := s.key.p
+        mut skip := 0
+        if not _u22_resolve(s, n, ukey, skip):
+            BufFree(pl)
+            ret
+        end
+        mut probe := UdpSession {}
+        if not UnpackUdp2022(s.method, ukey, s.key.p, skip, false, s.rbuf, n, probe, t, pl):
+            BufFree(pl)
+            ret
+        end
+        ck = "u" + str.FromInt(probe.peer)
+        mut sess := UdpSession {}
+        if s.sess.has(ck):
+            sess = s.sess.get(ck)
+        else:
+            sess = NewUdpSession()
+            sess.peer = probe.peer
+            mut kc := NewBuf(s.method.key_len)
+            BufAppend(kc, ukey, s.method.key_len)
+            s.skeys.put(ck, kc)
+        end
+        if not SessionAccept(sess, probe.last):
+            BufFree(pl)
+            ret
+        end
+        s.sess.put(ck, sess)
+    else:
+        if not FilterCheck(s.filter, s.rbuf, s.method.salt_len):
+            BufFree(pl)
+            ret
+        end
+        if not UnpackUdp(s.method, s.key.p, s.rbuf, n, t, pl):
+            BufFree(pl)
+            ret
+        end
     end
     mut out := udp.Socket {}
     if s.assoc.has(ck):
@@ -111,14 +195,23 @@ func _udp_forward(s &: UdpServer, ck: str, from_host: str, from_port: int, n: in
     BufFree(pl)
 end
 
-func _udp_drain(s &: UdpServer, out: udp.Socket, cli: Target):
+func _udp_drain(s &: UdpServer, ck: str, out: udp.Socket, cli: Target):
     mut fh := ""
     mut fp := 0
     buf := mem.Allocate(UDP_MAX as u64)
     n := udp.ReceiveBytes(out, buf, UDP_MAX, fh, fp)
     if n > 0:
-        mut pkt := NewBuf(n + 400)
-        if PackUdp(s.method, s.key.p, fh, fp, buf, n, pkt):
+        mut pkt := NewBuf(n + 1400)
+        mut packed := false
+        if s.method.v2022:
+            mut sess := s.sess.get(ck)
+            uk := s.skeys.get(ck)
+            packed = PackUdp2022(s.method, uk.p, uk.p, Buf {}, 0, sess, false, fh, fp, buf, n, pkt)
+            s.sess.put(ck, sess)
+        else:
+            packed = PackUdp(s.method, s.key.p, fh, fp, buf, n, pkt)
+        end
+        if packed:
             udp.SendBytes(s.sock, cli.host, cli.port, pkt.p, pkt.len)
         end
         BufFree(pkt)
@@ -131,7 +224,7 @@ func _udp_sweep(s &: UdpServer):
     mut dead := Vector {} as Vector<str>
     defer dead.free()
     each ck, out in s.assoc:
-        _udp_drain(s, out, s.clients.get(ck))
+        _udp_drain(s, ck, out, s.clients.get(ck))
         if now - s.seen.get(ck) > (UDP_IDLE_MS as i64):
             dead.push(ck)
         end
@@ -141,8 +234,41 @@ func _udp_sweep(s &: UdpServer):
         s.assoc.remove(ck)
         s.clients.remove(ck)
         s.seen.remove(ck)
+        if s.sess.has(ck):
+            s.sess.remove(ck)
+            mut kb := s.skeys.get(ck)
+            BufWipe(kb)
+            BufFree(kb)
+            s.skeys.remove(ck)
+        end
     end
 end
+
+func _udp_listen(host: str, port: int, method: str, password: str): UdpServer:
+    m := LookupMethod(method)
+    mut s := UdpServer { method = m }
+    if not m.ok:
+        ret s
+    end
+    s.key = MakeKey(m, password)
+    if s.key.bad:
+        ret s
+    end
+    s.sock = udp.BindOn(host, port)
+    if not udp.Ok(s.sock):
+        ret s
+    end
+    udp.SetTimeout(s.sock, 20)
+    s.rbuf = mem.Allocate(UDP_MAX as u64)
+    s.filter = NewSaltFilter(100000)
+    s.sess = HashMap {} as HashMap<str, UdpSession>
+    s.skeys = HashMap {} as HashMap<str, Buf>
+    s.users = HashMap {} as HashMap<str, Buf>
+    s.stopc = mem.AllocateZeroed(8 as u64) as i64*
+    s.ok = true
+    ret s
+end
+
 
 @en "PackUdp"
 @fa "بسته بندی یو دی پی"
@@ -203,12 +329,29 @@ end
 pub func UdpDial(cfg: Config): UdpClient:
     m := LookupMethod(cfg.method)
     mut c := UdpClient { host = cfg.host, port = cfg.port, method = m }
-    if not m.ok or m.v2022:
+    if not m.ok:
         ret c
     end
-    c.key = MakeKey(m, cfg.password)
-    if c.key.bad:
-        ret c
+    if m.v2022:
+        mut chain := ChainOf(m, cfg.password)
+        if not chain.ok:
+            ret c
+        end
+        c.key = NewBuf(m.key_len)
+        BufAppend(c.key, ChainKey(chain, chain.count - 1), m.key_len)
+        if chain.count > 1:
+            c.eih = NewBuf(chain.count * m.key_len)
+            BufAppend(c.eih, chain.keys.p, (chain.count - 1) * m.key_len)
+            c.eih_n = chain.count - 1
+        end
+        ChainFree(chain)
+        c.sess = mem.AllocateZeroed(sizeof(UdpSession) as u64) as UdpSession*
+        c.sess.sid = NewUdpSession().sid
+    else:
+        c.key = MakeKey(m, cfg.password)
+        if c.key.bad:
+            ret c
+        end
     end
     c.sock = udp.Open()
     c.rbuf = mem.Allocate(UDP_MAX as u64)
@@ -219,10 +362,21 @@ end
 @en "UdpSend"
 @fa "ارسال یو دی پی"
 pub func UdpSend(c: UdpClient, host: str, port: int, data: void*, n: int): bool:
-    mut out := NewBuf(n + 400)
-    if not PackUdp(c.method, c.key.p, host, port, data, n, out):
-        BufFree(out)
-        ret false
+    mut out := NewBuf(n + 1400)
+    if c.method.v2022:
+        mut hk := c.key.p
+        if c.eih_n > 0:
+            hk = c.eih.p
+        end
+        if not PackUdp2022(c.method, c.key.p, hk, c.eih, c.eih_n, c.sess, true, host, port, data, n, out):
+            BufFree(out)
+            ret false
+        end
+    else:
+        if not PackUdp(c.method, c.key.p, host, port, data, n, out):
+            BufFree(out)
+            ret false
+        end
     end
     w := udp.SendBytes(c.sock, c.host, c.port, out.p, out.len)
     BufFree(out)
@@ -239,9 +393,16 @@ pub func UdpRecv(c: UdpClient, buf: void*, max: int, from &: Target): int:
         ret 0 - 1
     end
     mut out := NewBuf(n)
-    if not UnpackUdp(c.method, c.key.p, c.rbuf, n, from, out):
-        BufFree(out)
-        ret 0 - 1
+    if c.method.v2022:
+        if not UnpackUdp2022(c.method, c.key.p, c.key.p, 0, true, c.rbuf, n, c.sess, from, out):
+            BufFree(out)
+            ret 0 - 1
+        end
+    else:
+        if not UnpackUdp(c.method, c.key.p, c.rbuf, n, from, out):
+            BufFree(out)
+            ret 0 - 1
+        end
     end
     mut take := out.len
     if take > max:
@@ -268,29 +429,42 @@ pub func UdpClose(c: UdpClient):
     mut k := c.key
     BufWipe(k)
     BufFree(k)
+    mut e := c.eih
+    BufWipe(e)
+    BufFree(e)
+    if c.sess != null:
+        mem.Free(c.sess as void*)
+    end
 end
 
 @en "UdpListen"
 @fa "گوش دادن یو دی پی"
 pub func UdpListen(port: int, method: str, password: str): UdpServer:
-    m := LookupMethod(method)
-    mut s := UdpServer { method = m }
-    if not m.ok or m.v2022:
-        ret s
+    ret _udp_listen("", port, method, password)
+end
+
+@en "UdpListenOn"
+@fa "گوش دادن یو دی پی روی نشانی"
+pub func UdpListenOn(host: str, port: int, method: str, password: str): UdpServer:
+    ret _udp_listen(host, port, method, password)
+end
+
+@en "UdpAddUser"
+@fa "افزودن کاربر یو دی پی"
+pub func UdpAddUser(s &: UdpServer, password: str): bool:
+    if not s.method.v2022 or s.method.kind == tls.AEAD_CHACHA20_POLY1305:
+        ret false
     end
-    s.key = MakeKey(m, password)
-    if s.key.bad:
-        ret s
+    k := MakeKey(s.method, password)
+    if k.bad:
+        ret false
     end
-    s.sock = udp.Bind(port)
-    if not udp.Ok(s.sock):
-        ret s
-    end
-    udp.SetTimeout(s.sock, 20)
-    s.rbuf = mem.Allocate(UDP_MAX as u64)
-    s.stopc = mem.AllocateZeroed(8 as u64) as i64*
-    s.ok = true
-    ret s
+    h := mem.AllocateZeroed(16 as u64)
+    IdentityHash(k.p, s.method.key_len, h)
+    s.users.put(HexOf(h, 16), k)
+    s.user_n = s.users.size()
+    mem.Free(h)
+    ret true
 end
 
 @en "UdpServerPort"
@@ -335,6 +509,21 @@ pub func UdpDestroy(s &: UdpServer):
         udp.Close(out)
     end
     s.assoc.free()
+    s.sess.free()
+    each _, kb in s.skeys:
+        mut kk := kb
+        BufWipe(kk)
+        BufFree(kk)
+    end
+    s.skeys.free()
+    each uid, ub in s.users:
+        mut uk := ub
+        BufWipe(uk)
+        BufFree(uk)
+        mem.Free(uid as void*)
+    end
+    s.users.free()
+    FilterFree(s.filter)
     s.clients.free()
     s.seen.free()
     udp.Close(s.sock)

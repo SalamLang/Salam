@@ -1,0 +1,323 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package shadowsocks
+
+import mem
+import time
+import crypto
+import tls
+
+const UDP22_SKEW := 30
+const UDP22_WINDOW := 64
+
+@en "UdpSession"
+@fa "نشست یو دی پی"
+pub struct UdpSession:
+    @en "sid"
+    @fa "شناسه نشست"
+    pub sid: i64 = 0
+    @en "pid"
+    @fa "شناسه بسته"
+    pub pid: i64 = 0
+    @en "peer"
+    @fa "شناسه نشست همتا"
+    pub peer: i64 = 0
+    @en "top"
+    @fa "بالاترین شناسه"
+    pub top: i64 = 0
+    @en "bits"
+    @fa "بیت های پنجره"
+    pub bits: u64 = 0 as u64
+    @en "any"
+    @fa "بسته دریافت شد"
+    pub any: bool = false
+    @en "last"
+    @fa "آخرین شناسه دریافتی"
+    pub last: i64 = 0
+end
+
+func _u22_put64(p: void*, off: int, v: i64):
+    repeat 8 in i:
+        _setb(p, off + i, ((v >> (((7 - i) * 8) as i64)) & (255 as i64)) as int)
+    end
+end
+
+func _u22_skew_ok(ts: i64): bool:
+    d := time.Now() - ts
+    ret d <= (UDP22_SKEW as i64) and d >= (0 - UDP22_SKEW) as i64
+end
+
+func _u22_pt_parse(client: bool, pt: void*, n: int, own_sid: i64, t &: Target, out &: Buf): bool:
+    mut off := 9
+    if n < 11:
+        ret false
+    end
+    want := client ? 1 : 0
+    if _getb(pt, 0) != want:
+        ret false
+    end
+    if not _u22_skew_ok(_get64be(_at(pt, 1))):
+        ret false
+    end
+    if client:
+        if n < off + 8 + 2:
+            ret false
+        end
+        if _get64be(_at(pt, off)) != own_sid:
+            ret false
+        end
+        off += 8
+    end
+    padlen := _getb(pt, off) * 256 + _getb(pt, off + 1)
+    off += 2 + padlen
+    if off >= n:
+        ret false
+    end
+    hl := ParseTarget(_at(pt, off), n - off, t)
+    if hl <= 0:
+        ret false
+    end
+    off += hl
+    BufAppend(out, _at(pt, off), n - off)
+    ret true
+end
+
+func _u22_xor16(a: void*, b: void*, out: void*):
+    repeat 16 in i:
+        _setb(out, i, _getb(a, i) ^ _getb(b, i))
+    end
+end
+
+func _u22_eih_seal(ipsk: void*, klen: int, hdr: void*, next_psk: void*, out16: void*): bool:
+    h := mem.AllocateZeroed(16 as u64)
+    IdentityHash(next_psk, klen, h)
+    _u22_xor16(h, hdr, h)
+    ok := tls.AesEcbBlock(ipsk, klen, h, out16, false)
+    mem.Free(h)
+    ret ok
+end
+
+func _u22_eih_open(ipsk: void*, klen: int, hdr: void*, block16: void*, out_hash16: void*): bool:
+    ok := tls.AesEcbBlock(ipsk, klen, block16, out_hash16, true)
+    _u22_xor16(out_hash16, hdr, out_hash16)
+    ret ok
+end
+
+func _u22_ctx(m: Method, ukey: void*, hdr: void*): void*:
+    sub := mem.AllocateZeroed(32 as u64)
+    Blake3SessionKey(ukey, m.key_len, hdr, 8, sub)
+    c := tls.AeadNew(m.kind, sub)
+    _wipe(sub, 32)
+    mem.Free(sub)
+    ret c
+end
+
+@en "NewUdpSession"
+@fa "نشست یو دی پی جدید"
+pub func NewUdpSession(): UdpSession:
+    r := mem.AllocateZeroed(8 as u64)
+    crypto.RandomBytes(r, 8)
+    sid := _get64be(r)
+    mem.Free(r)
+    ret UdpSession { sid = sid }
+end
+
+@en "SessionAccept"
+@fa "پذیرش شناسه بسته"
+pub func SessionAccept(s &: UdpSession, pid: i64): bool:
+    if not s.any:
+        s.any = true
+        s.top = pid
+        s.bits = 1 as u64
+        ret true
+    end
+    if pid > s.top:
+        shift := pid - s.top
+        if shift >= (UDP22_WINDOW as i64):
+            s.bits = 1 as u64
+        else:
+            s.bits = (s.bits << (shift as u64)) | (1 as u64)
+        end
+        s.top = pid
+        ret true
+    end
+    d := s.top - pid
+    if d >= (UDP22_WINDOW as i64):
+        ret false
+    end
+    mask := (1 as u64) << (d as u64)
+    if (s.bits & mask) != (0 as u64):
+        ret false
+    end
+    s.bits |= mask
+    ret true
+end
+
+@en "PackUdp2022"
+@fa "بسته بندی یو دی پی نسخه جدید"
+pub func PackUdp2022(
+    m: Method, ukey: void*, hdr_key: void*, eih: Buf, eih_n: int, s &: UdpSession, client: bool, host: str, port: int, data: void*, n: int, out &: Buf
+): bool:
+    if not m.v2022:
+        ret false
+    end
+    klen := m.key_len
+    mut pt := NewBuf(n + 1300)
+    BufAppendByte(pt, client ? 0 : 1)
+    _put64be(pt, time.Now())
+    if not client:
+        _put64be(pt, s.peer)
+    end
+    mut padlen := 0
+    if client and port == 53:
+        padlen = _rand_int(901)
+    end
+    BufAppendByte(pt, padlen >> 8)
+    BufAppendByte(pt, padlen)
+    _put_random(pt, padlen)
+    if not EncodeTarget(host, port, pt):
+        BufFree(pt)
+        ret false
+    end
+    BufAppend(pt, data, n)
+    hdr := mem.AllocateZeroed(16 as u64)
+    _u22_put64(hdr, 0, s.sid)
+    _u22_put64(hdr, 8, s.pid)
+    s.pid += 1
+    if m.kind == tls.AEAD_CHACHA20_POLY1305:
+        nonce := mem.AllocateZeroed(24 as u64)
+        crypto.RandomBytes(nonce, 24)
+        BufAppend(out, nonce, 24)
+        mut full := NewBuf(pt.len + 16)
+        BufAppend(full, hdr, 16)
+        BufAppend(full, pt.p, pt.len)
+        BufReserve(out, full.len + TAG_LEN)
+        tls.XChaCha20Poly1305SealRaw(ukey, nonce, null, 0, full.p, full.len, _at(out.p, out.len))
+        out.len += full.len + TAG_LEN
+        BufWipe(full)
+        BufFree(full)
+        mem.Free(nonce)
+    else:
+        enc := mem.AllocateZeroed(16 as u64)
+        tls.AesEcbBlock(hdr_key, klen, hdr, enc, false)
+        BufAppend(out, enc, 16)
+        mem.Free(enc)
+        repeat eih_n in i:
+            mut nxt := ukey
+            if i + 1 < eih_n:
+                nxt = _at(eih.p, (i + 1) * klen)
+            end
+            blk := mem.AllocateZeroed(16 as u64)
+            _u22_eih_seal(_at(eih.p, i * klen), klen, hdr, nxt, blk)
+            BufAppend(out, blk, 16)
+            mem.Free(blk)
+        end
+        ctx := _u22_ctx(m, ukey, hdr)
+        BufReserve(out, pt.len + TAG_LEN)
+        tls.AeadSeal(ctx, _at(hdr, 4), null, 0, pt.p, pt.len, _at(out.p, out.len))
+        out.len += pt.len + TAG_LEN
+        tls.AeadFree(ctx)
+    end
+    mem.Free(hdr)
+    BufWipe(pt)
+    BufFree(pt)
+    ret not out.bad
+end
+
+@en "Udp2022Peek"
+@fa "نگاه به یو دی پی نسخه جدید"
+pub func Udp2022Peek(m: Method, hdr_key: void*, p: void*, n: int, sid &: i64): bool:
+    if not m.v2022 or m.kind == tls.AEAD_CHACHA20_POLY1305 or n < 16:
+        ret false
+    end
+    hdr := mem.AllocateZeroed(16 as u64)
+    ok := tls.AesEcbBlock(hdr_key, m.key_len, p, hdr, true)
+    sid = _get64be(hdr)
+    mem.Free(hdr)
+    ret ok
+end
+
+@en "UnpackUdp2022"
+@fa "بازکردن یو دی پی نسخه جدید"
+pub func UnpackUdp2022(
+    m: Method, ukey: void*, hdr_key: void*, skip: int, client: bool, p: void*, n: int, s &: UdpSession, t &: Target, out &: Buf
+): bool:
+    if not m.v2022:
+        ret false
+    end
+    hdr := mem.AllocateZeroed(16 as u64)
+    pt := mem.Allocate((n + 1) as u64)
+    mut ptn := 0
+    mut ok := false
+    if m.kind == tls.AEAD_CHACHA20_POLY1305:
+        if n >= 24 + 16 + 16 + 11:
+            ok = tls.XChaCha20Poly1305OpenRaw(ukey, p, null, 0, _at(p, 24), n - 24, pt)
+            if ok:
+                ptn = n - 24 - TAG_LEN - 16
+                mem.Copy(hdr, pt, 16 as u64)
+                mem.MemMove(pt, _at(pt, 16), ptn as u64)
+            end
+        end
+    else:
+        if n >= 16 + skip + TAG_LEN + 11:
+            if tls.AesEcbBlock(hdr_key, m.key_len, p, hdr, true):
+                ctx := _u22_ctx(m, ukey, hdr)
+                ptn = n - 16 - skip - TAG_LEN
+                ok = tls.AeadOpen(ctx, _at(hdr, 4), null, 0, _at(p, 16 + skip), ptn, pt)
+                tls.AeadFree(ctx)
+            end
+        end
+    end
+    mut good := false
+    if ok:
+        sid := _get64be(hdr)
+        pid := _get64be(_at(hdr, 8))
+        if _u22_pt_parse(client, pt, ptn, s.sid, t, out):
+            s.last = pid
+            if client:
+                if s.peer != 0 and sid != s.peer:
+                    good = false
+                else:
+                    if s.peer == 0:
+                        s.peer = sid
+                    end
+                    good = SessionAccept(s, pid)
+                end
+            else:
+                s.peer = sid
+                good = true
+            end
+        end
+    end
+    _wipe(pt, n)
+    mem.Free(pt)
+    mem.Free(hdr)
+    ret good
+end
+
+@en "Udp2022Identity"
+@fa "هویت یو دی پی نسخه جدید"
+pub func Udp2022Identity(m: Method, ipsk: void*, p: void*, n: int, out_hash16: void*): bool:
+    if not m.v2022 or m.kind == tls.AEAD_CHACHA20_POLY1305 or n < 32:
+        ret false
+    end
+    hd := mem.AllocateZeroed(16 as u64)
+    mut ok := tls.AesEcbBlock(ipsk, m.key_len, p, hd, true)
+    if ok:
+        ok = _u22_eih_open(ipsk, m.key_len, hd, _at(p, 16), out_hash16)
+    end
+    mem.Free(hd)
+    ret ok
+end

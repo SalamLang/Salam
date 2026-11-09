@@ -1,0 +1,480 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package tls
+
+import mem
+
+const ED_L := [
+    237 as i64, 211 as i64, 245 as i64, 92 as i64, 26 as i64, 99 as i64, 18 as i64, 88 as i64
+    214 as i64, 156 as i64, 247 as i64, 162 as i64, 222 as i64, 249 as i64, 222 as i64, 20 as i64
+]
+
+const ED_SQRTM1 := "b0a00e4a271beec478e42fad0618432fa7d7fb3d99004d2b0bdfc14f8024832b"
+const ED_BASE := "5866666666666666666666666666666666666666666666666666666666666666"
+
+const ED_CX_SLOTS := 16
+const ED_PT := 320
+
+func _bptr_off(p: void*, off: int): void*:
+    ret ((p as i64) + (off as i64)) as void*
+end
+
+func _ed_l(j: int): i64:
+    if j < 16:
+        ret ED_L[j]
+    end
+    if j == 31:
+        ret 16
+    end
+    ret 0
+end
+
+func _ed_modl(r: void*, x: i64*):
+    mut i := 63
+    until i >= 32:
+        mut carry := 0 as i64
+        mut j := i - 32
+        until j < i - 12:
+            x[j] += carry - (16 as i64) * x[i] * _ed_l(j - (i - 32))
+            carry = (x[j] + (128 as i64)) >> (8 as i64)
+            x[j] -= carry << (8 as i64)
+            j++
+        end
+        x[j] += carry
+        x[i] = 0 as i64
+        i--
+    end
+    mut carry := 0 as i64
+    repeat 32 in j:
+        x[j] += carry - (x[31] >> (4 as i64)) * _ed_l(j)
+        carry = x[j] >> (8 as i64)
+        x[j] &= (255 as i64)
+    end
+    repeat 32 in j:
+        x[j] -= carry * _ed_l(j)
+    end
+    repeat 32 in k:
+        x[k + 1] += x[k] >> (8 as i64)
+        _bput(r, k, (x[k] & (255 as i64)) as int)
+    end
+end
+
+func _ed_reduce64(r: void*, h: void*):
+    x := mem.AllocateZeroed(512 as u64) as i64*
+    repeat 64 in i:
+        x[i] = _bget(h, i) as i64
+    end
+    _ed_modl(r, x)
+    mem.Free(x as void*)
+end
+
+func _ed_less_l(s: void*): bool:
+    mut i := 31
+    until i >= 0:
+        l := _ed_l(i)
+        b := _bget(s, i) as i64
+        if b < l:
+            ret true
+        end
+        if b > l:
+            ret false
+        end
+        i--
+    end
+    ret false
+end
+
+func _ed_fe_zero(f: i64*):
+    repeat X_LIMBS in i:
+        f[i] = 0 as i64
+    end
+end
+
+func _ed_fe_one(f: i64*):
+    _ed_fe_zero(f)
+    f[0] = 1 as i64
+end
+
+func _ed_fe_iszero(f: i64*): bool:
+    mut b_b := _newbuf(32)
+    defer _buf_wipe(b_b)
+    _putzeros(b_b, 32)
+    _fe25519_tobytes(b_b.p, f)
+    mut acc := 0
+    repeat 32 in i:
+        acc |= _bget(b_b.p, i)
+    end
+    ret acc == 0
+end
+
+func _ed_fe_neg(h: i64*, f: i64*):
+    repeat X_LIMBS in i:
+        h[i] = (0 as i64) - f[i]
+    end
+end
+
+func _ed_fe_parity(f: i64*): int:
+    mut b_b := _newbuf(32)
+    defer _buf_wipe(b_b)
+    _putzeros(b_b, 32)
+    _fe25519_tobytes(b_b.p, f)
+    ret _bget(b_b.p, 0) & 1
+end
+
+func _ed_pow22523(out: i64*, z: i64*, t0: i64*, t1: i64*, t2: i64*, t3: i64*):
+    _fe25519_sq(t0, z)
+    _fe25519_sqn(t1, t0, 2)
+    _fe25519_mul(t1, z, t1)
+    _fe25519_mul(t0, t0, t1)
+    _fe25519_sq(t2, t0)
+    _fe25519_mul(t1, t1, t2)
+    _fe25519_sqn(t2, t1, 5)
+    _fe25519_mul(t1, t2, t1)
+    _fe25519_sqn(t2, t1, 10)
+    _fe25519_mul(t2, t2, t1)
+    _fe25519_sqn(t3, t2, 20)
+    _fe25519_mul(t2, t3, t2)
+    _fe25519_sqn(t2, t2, 10)
+    _fe25519_mul(t1, t2, t1)
+    _fe25519_sqn(t2, t1, 50)
+    _fe25519_mul(t2, t2, t1)
+    _fe25519_sqn(t3, t2, 100)
+    _fe25519_mul(t2, t3, t2)
+    _fe25519_sqn(t2, t2, 50)
+    _fe25519_mul(t1, t2, t1)
+    _fe25519_sqn(t1, t1, 2)
+    _fe25519_mul(out, t1, z)
+end
+
+func _ed_cx_new(): i64*:
+    cx := mem.AllocateZeroed((X_SLOT * ED_CX_SLOTS) as u64) as i64*
+    d := _x_slot(cx, 0)
+    d2 := _x_slot(cx, 1)
+    sq := _x_slot(cx, 2)
+    t0 := _x_slot(cx, 3)
+    t1 := _x_slot(cx, 4)
+    t2 := _x_slot(cx, 5)
+    t3 := _x_slot(cx, 6)
+    num := _x_slot(cx, 7)
+    _ed_fe_zero(num)
+    num[0] = 121665 as i64
+    _ed_fe_zero(t0)
+    t0[0] = 121666 as i64
+    _fe25519_invert(t1, t0, d, t2, t3, sq)
+    _fe25519_mul(d, num, t1)
+    _ed_fe_neg(d, d)
+    _fe25519_add(d2, d, d)
+    mut sb := _hexbuf(ED_SQRTM1)
+    _fe25519_frombytes(sq, sb.p)
+    _buf_free(sb)
+    ret cx
+end
+
+func _ed_cx_free(cx: i64*):
+    mem.Free(cx as void*)
+end
+
+func _ed_pt_zero(p: i64*):
+    _ed_fe_zero(_x_slot(p, 0))
+    _ed_fe_one(_x_slot(p, 1))
+    _ed_fe_one(_x_slot(p, 2))
+    _ed_fe_zero(_x_slot(p, 3))
+end
+
+func _ed_pt_copy(r: i64*, p: i64*):
+    repeat 4 in i:
+        _fe25519_copy(_x_slot(r, i), _x_slot(p, i))
+    end
+end
+
+func _ed_pt_cswap(p: i64*, q: i64*, b: i64):
+    repeat 4 in i:
+        _fe25519_cswap(_x_slot(p, i), _x_slot(q, i), b)
+    end
+end
+
+func _ed_pt_add(r: i64*, p: i64*, q: i64*, cx: i64*):
+    d2 := _x_slot(cx, 1)
+    a := _x_slot(cx, 8)
+    b := _x_slot(cx, 9)
+    c := _x_slot(cx, 10)
+    dd := _x_slot(cx, 11)
+    e := _x_slot(cx, 12)
+    f := _x_slot(cx, 13)
+    t := _x_slot(cx, 14)
+    u := _x_slot(cx, 15)
+    x1 := _x_slot(p, 0)
+    y1 := _x_slot(p, 1)
+    z1 := _x_slot(p, 2)
+    t1 := _x_slot(p, 3)
+    x2 := _x_slot(q, 0)
+    y2 := _x_slot(q, 1)
+    z2 := _x_slot(q, 2)
+    t2 := _x_slot(q, 3)
+    _fe25519_sub(t, y1, x1)
+    _fe25519_sub(u, y2, x2)
+    _fe25519_mul(a, t, u)
+    _fe25519_add(t, y1, x1)
+    _fe25519_add(u, y2, x2)
+    _fe25519_mul(b, t, u)
+    _fe25519_mul(c, t1, t2)
+    _fe25519_mul(c, c, d2)
+    _fe25519_mul(dd, z1, z2)
+    _fe25519_add(dd, dd, dd)
+    _fe25519_sub(e, b, a)
+    _fe25519_sub(f, dd, c)
+    _fe25519_add(dd, dd, c)
+    _fe25519_add(a, b, a)
+    _fe25519_mul(_x_slot(r, 0), e, f)
+    _fe25519_mul(_x_slot(r, 1), dd, a)
+    _fe25519_mul(_x_slot(r, 3), e, a)
+    _fe25519_mul(_x_slot(r, 2), f, dd)
+end
+
+func _ed_scalarmult(r: i64*, p: i64*, s: void*, cx: i64*):
+    acc := mem.AllocateZeroed(ED_PT as u64) as i64*
+    tmp := mem.AllocateZeroed(ED_PT as u64) as i64*
+    base := mem.AllocateZeroed(ED_PT as u64) as i64*
+    _ed_pt_zero(acc)
+    _ed_pt_copy(base, p)
+    mut i := 255
+    until i >= 0:
+        bit := ((_bget(s, i >> 3) >> (i & 7)) & 1) as i64
+        _ed_pt_add(tmp, acc, acc, cx)
+        _ed_pt_copy(acc, tmp)
+        _ed_pt_add(tmp, acc, base, cx)
+        _ed_pt_cswap(acc, tmp, bit)
+        i--
+    end
+    _ed_pt_copy(r, acc)
+    _wipe(acc as void*, ED_PT)
+    mem.Free(acc as void*)
+    mem.Free(tmp as void*)
+    mem.Free(base as void*)
+end
+
+func _ed_pt_encode(out: void*, p: i64*, cx: i64*):
+    zi := _x_slot(cx, 8)
+    x := _x_slot(cx, 9)
+    y := _x_slot(cx, 10)
+    t0 := _x_slot(cx, 11)
+    t1 := _x_slot(cx, 12)
+    t2 := _x_slot(cx, 13)
+    t3 := _x_slot(cx, 14)
+    _fe25519_invert(zi, _x_slot(p, 2), t0, t1, t2, t3)
+    _fe25519_mul(x, _x_slot(p, 0), zi)
+    _fe25519_mul(y, _x_slot(p, 1), zi)
+    _fe25519_tobytes(out, y)
+    _bput(out, 31, _bget(out, 31) ^ (_ed_fe_parity(x) << 7))
+end
+
+func _ed_pt_decode(r: i64*, s: void*, cx: i64*): bool:
+    d := _x_slot(cx, 0)
+    sq := _x_slot(cx, 2)
+    y := _x_slot(cx, 8)
+    u := _x_slot(cx, 9)
+    v := _x_slot(cx, 10)
+    v3 := _x_slot(cx, 11)
+    t := _x_slot(cx, 12)
+    x := _x_slot(cx, 13)
+    c := _x_slot(cx, 14)
+    w := _x_slot(cx, 15)
+    sign := (_bget(s, 31) >> 7) & 1
+    _fe25519_frombytes(y, s)
+    one := _x_slot(r, 2)
+    _ed_fe_one(one)
+    _fe25519_sq(u, y)
+    _fe25519_mul(v, u, d)
+    _fe25519_sub(u, u, one)
+    _fe25519_add(v, v, one)
+    _fe25519_sq(v3, v)
+    _fe25519_mul(v3, v3, v)
+    _fe25519_sq(x, v3)
+    _fe25519_mul(x, x, v)
+    _fe25519_mul(x, x, u)
+    p0 := _x_slot(r, 0)
+    p1 := _x_slot(r, 1)
+    p3 := _x_slot(r, 3)
+    _ed_pow22523(p0, x, p1, p3, t, c)
+    _fe25519_mul(p0, p0, v3)
+    _fe25519_mul(p0, p0, u)
+    _fe25519_sq(c, p0)
+    _fe25519_mul(c, c, v)
+    _fe25519_sub(w, c, u)
+    if not _ed_fe_iszero(w):
+        _fe25519_add(w, c, u)
+        if not _ed_fe_iszero(w):
+            ret false
+        end
+        _fe25519_mul(p0, p0, sq)
+    end
+    if _ed_fe_iszero(p0) and sign == 1:
+        ret false
+    end
+    if _ed_fe_parity(p0) != sign:
+        _ed_fe_neg(p0, p0)
+    end
+    _fe25519_copy(p1, y)
+    _fe25519_mul(p3, p0, p1)
+    ret true
+end
+
+func _ed_base(cx: i64*, b: i64*): bool:
+    mut bb := _hexbuf(ED_BASE)
+    ok := _ed_pt_decode(b, bb.p, cx)
+    _buf_free(bb)
+    ret ok
+end
+
+@en "Ed25519PublicKey"
+@fa "کلید عمومی ایدی۲۵۵۱۹"
+pub func Ed25519PublicKey(seed: void*, out: void*):
+    mut h_b := _newbuf(64)
+    defer _buf_wipe(h_b)
+    _putzeros(h_b, 64)
+    _sha512(seed, 32, h_b.p)
+    _bput(h_b.p, 0, _bget(h_b.p, 0) & 248)
+    _bput(h_b.p, 31, (_bget(h_b.p, 31) & 127) | 64)
+    cx := _ed_cx_new()
+    b := mem.AllocateZeroed(ED_PT as u64) as i64*
+    p := mem.AllocateZeroed(ED_PT as u64) as i64*
+    _ed_base(cx, b)
+    _ed_scalarmult(p, b, h_b.p, cx)
+    _ed_pt_encode(out, p, cx)
+    _wipe(h_b.p, 64)
+    mem.Free(b as void*)
+    mem.Free(p as void*)
+    _ed_cx_free(cx)
+end
+
+@en "Ed25519Sign"
+@fa "امضای ایدی۲۵۵۱۹"
+pub func Ed25519Sign(seed: void*, msg: void*, n: int, out: void*):
+    mut h_b := _newbuf(64)
+    defer _buf_wipe(h_b)
+    _putzeros(h_b, 64)
+    hp := h_b.p
+    _sha512(seed, 32, hp)
+    _bput(hp, 0, _bget(hp, 0) & 248)
+    _bput(hp, 31, (_bget(hp, 31) & 127) | 64)
+    cx := _ed_cx_new()
+    b := mem.AllocateZeroed(ED_PT as u64) as i64*
+    p := mem.AllocateZeroed(ED_PT as u64) as i64*
+    _ed_base(cx, b)
+    mut pubk_b := _newbuf(32)
+    defer _buf_wipe(pubk_b)
+    _putzeros(pubk_b, 32)
+    pk := pubk_b.p
+    _ed_scalarmult(p, b, hp, cx)
+    _ed_pt_encode(pk, p, cx)
+
+    mut buf := _newbuf(32 + n + 64)
+    _putraw(buf, _bptr_off(hp, 32), 32)
+    _putraw(buf, msg, n)
+    mut rh_b := _newbuf(64)
+    defer _buf_wipe(rh_b)
+    _putzeros(rh_b, 64)
+    _sha512(buf.p, buf.len, rh_b.p)
+    mut r_b := _newbuf(32)
+    defer _buf_wipe(r_b)
+    _putzeros(r_b, 32)
+    _ed_reduce64(r_b.p, rh_b.p)
+    _ed_scalarmult(p, b, r_b.p, cx)
+    _ed_pt_encode(out, p, cx)
+
+    _bufreset(buf)
+    _putraw(buf, out, 32)
+    _putraw(buf, pk, 32)
+    _putraw(buf, msg, n)
+    _sha512(buf.p, buf.len, rh_b.p)
+    mut k_b := _newbuf(32)
+    defer _buf_wipe(k_b)
+    _putzeros(k_b, 32)
+    _ed_reduce64(k_b.p, rh_b.p)
+
+    x := mem.AllocateZeroed(512 as u64) as i64*
+    repeat 32 in i:
+        x[i] = _bget(r_b.p, i) as i64
+    end
+    repeat 32 in i:
+        repeat 32 in j:
+            x[i + j] += (_bget(k_b.p, i) as i64) * (_bget(hp, j) as i64)
+        end
+    end
+    _ed_modl(_bptr_off(out, 32), x)
+    mem.Free(x as void*)
+    _wipe(hp, 64)
+    _wipe(r_b.p, 32)
+    _buf_free(buf)
+    mem.Free(b as void*)
+    mem.Free(p as void*)
+    _ed_cx_free(cx)
+end
+
+@en "Ed25519Verify"
+@fa "بررسی امضای ایدی۲۵۵۱۹"
+pub func Ed25519Verify(pubk: void*, msg: void*, n: int, sig: void*): bool:
+    if not _ed_less_l(_bptr_off(sig, 32)):
+        ret false
+    end
+    cx := _ed_cx_new()
+    b := mem.AllocateZeroed(ED_PT as u64) as i64*
+    a := mem.AllocateZeroed(ED_PT as u64) as i64*
+    rp := mem.AllocateZeroed(ED_PT as u64) as i64*
+    sb := mem.AllocateZeroed(ED_PT as u64) as i64*
+    ha := mem.AllocateZeroed(ED_PT as u64) as i64*
+    mut ok := _ed_base(cx, b)
+    if ok and not _ed_pt_decode(a, pubk, cx):
+        ok = false
+    end
+    if ok and not _ed_pt_decode(rp, sig, cx):
+        ok = false
+    end
+    mut good := false
+    if ok:
+        mut buf := _newbuf(64 + n + 64)
+        _putraw(buf, sig, 32)
+        _putraw(buf, pubk, 32)
+        _putraw(buf, msg, n)
+        mut rh_b := _newbuf(64)
+        defer _buf_wipe(rh_b)
+        _putzeros(rh_b, 64)
+        _sha512(buf.p, buf.len, rh_b.p)
+        _buf_free(buf)
+        mut k_b := _newbuf(32)
+        defer _buf_wipe(k_b)
+        _putzeros(k_b, 32)
+        _ed_reduce64(k_b.p, rh_b.p)
+        _ed_scalarmult(sb, b, _bptr_off(sig, 32), cx)
+        _ed_scalarmult(ha, a, k_b.p, cx)
+        _ed_pt_add(ha, rp, ha, cx)
+        mut e1_b := _newbuf(32)
+        defer _buf_wipe(e1_b)
+        _putzeros(e1_b, 32)
+        mut e2_b := _newbuf(32)
+        defer _buf_wipe(e2_b)
+        _putzeros(e2_b, 32)
+        _ed_pt_encode(e1_b.p, sb, cx)
+        _ed_pt_encode(e2_b.p, ha, cx)
+        good = _cteq(e1_b.p, e2_b.p, 32)
+    end
+    mem.Free(b as void*)
+    mem.Free(a as void*)
+    mem.Free(rp as void*)
+    mem.Free(sb as void*)
+    mem.Free(ha as void*)
+    _ed_cx_free(cx)
+    ret good
+end

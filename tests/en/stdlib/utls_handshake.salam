@@ -1,0 +1,88 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import net.utls
+import net.censor
+import net.tcp
+import tls
+
+mut g_cfg := tls.ServerConfig {}
+
+func serve_one(arg: void*):
+    srv := tcp.Server { fd = arg as i64 }
+    c := tcp.Accept(srv)
+    if not tcp.ConnOk(c):
+        ret
+    end
+    mut t := tls.WrapServer(c.fd, g_cfg)
+    if tls.ConnOk(t):
+        d := tls.Read(t, 4096)
+        if d.len() > 0:
+            tls.Write(t, "echo:" + d)
+        end
+        tls.Close(t)
+    else:
+        println "server failed:", tls.ConnError(t)
+        tcp.Close(c)
+    end
+end
+
+func try_profile(name: str, shuffle: bool): bool:
+    srv := tcp.Bind(0)
+    port := tcp.Port(srv)
+    th := spawn(serve_one, srv.fd as void*)
+    sp := utls.Profile(name)
+    mut o := utls.Options {}
+    o.server_name = "localhost"
+    o.alpn = "http/1.1"
+    o.shuffle = shuffle
+    c := tcp.Dial("127.0.0.1", port)
+    mut cfg := tls.NewConfig("localhost")
+    cfg.insecure_skip_verify = true
+    mut t := utls.WrapClient(c.fd, sp, o, cfg)
+    mut ok := tls.ConnOk(t)
+    if ok:
+        tls.Write(t, "hi " + name)
+        ok = tls.Read(t, 4096) == "echo:hi " + name
+        tls.Close(t)
+    else:
+        println "client failed:", tls.ConnError(t)
+    end
+    join(th)
+    tcp.CloseServer(srv)
+    ret ok
+end
+
+func main:
+    g_cfg = tls.NewServerConfig("tests/fixtures/ssl/server.crt", "tests/fixtures/ssl/server.key")
+    println "server config", g_cfg.ok
+    names := ["chrome", "chrome_120", "edge", "firefox", "safari", "ios", "randomized"]
+    each n in names:
+        println n, try_profile(n, false)
+    end
+    println "chrome shuffled", try_profile("chrome", true)
+    println "unknown profile", utls.Profile("nope").ok
+
+    mut o := utls.Options {}
+    o.server_name = "example.com"
+    each n in ["chrome", "firefox", "safari", "chrome_120"]:
+        mut h := utls.Build(utls.Profile(n), o)
+        mut rec := utls.Record(h)
+        ch := censor.ParseClientHello(rec.p, rec.len)
+        println n, "parse", ch.ok, ch.sni, ch.has_tls13, ch.has_ech, ch.session_id_len
+        println n, "ja3", utls.JA3(h.raw)
+        utls.FreeBytes(rec)
+        utls.FreeHello(h)
+    end
+end

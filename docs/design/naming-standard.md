@@ -109,7 +109,7 @@ Methods that ARE lower case and must be looked at one by one: `collections`
 
 ### Built-in method names
 
-The compiler knows 38 built-in method names, each with a Persian spelling, in
+The compiler knows 42 built-in method names, each with a Persian spelling, in
 one table (`k_sm_intr_methods` in `compiler/semantic/semantic.salam`, resolved
 by `intrinsic_method_canon` in `compiler/semantic/sema_util.salam`):
 
@@ -134,7 +134,7 @@ methods (`std/collections/vector.salam` has `reserve`, `push`, `pop`, `get`,
 
 ### Call sites (all `.salam` files, 12164 files)
 
-Counts of `.name(` for the 38 names, an upper bound because user and std
+Counts of `.name(` for the 42 names, an upper bound because user and std
 methods with the same name are included:
 
 | Group                | Call sites |
@@ -249,7 +249,8 @@ the history of the
 | Phase | Release | What ships | Estimated cost |
 | ----- | ------- | ---------- | -------------- |
 | 0 | now | this document, `check-naming.salam`, baseline, informational CI step | done |
-| 1 | 0.6.4 | compiler accepts Pascal names via the two fallbacks above; tests in `tests/en` and `tests/fa` on C, LLVM, interp and js; no deprecation message yet | 1 PR, 2 to 3 days (table in `sema_util`, member lookup retry, tests for 38 built-ins, Vector, HashMap, user struct, interface, generic) |
+| 1a | 0.6.4 | built-in front door, implemented: the 42 built-in method names also accept PascalCase on Vector, HashMap, str and File receivers (rewritten to the canonical name, backends untouched); tests on four backends | done |
+| 1 | 0.6.4 | second fallback for ordinary std and user methods (snake and Pascal retry on a miss); tests in `tests/en` and `tests/fa` on C, LLVM, interp and js; no deprecation message yet | 1 PR, 2 to 3 days (member lookup retry, tests for user struct, interface, generic) |
 | 1b | 0.6.4 | W164 behind `--naming-lint=warn`, off by default; `fix` mode | 1 PR, 3 to 4 days (the rewrite is the hard part: edits on declarations, `@en`, imports of renamed functions) |
 | 2 | one release after 1 (the 1 release is the seed) | std migrated with the fixer: 10 functions, 572 methods, then constants and fields outside mirror packages; `@en`, docs keys, tests, coverage baselines moved in the same PR per package | about 25 PRs (one per big package, a few batches for the small ones), 8 to 10 days; the 1817 constants are the bulk and are mostly mechanical |
 | 3 | 0.7.0 | W164 on by default for user code; compiler, tests, site, books, `ai/`, `tools/` migrated with the fixer (62148 call sites, 6668 test files, 344 site content files, the books); Dockerfile pins (`ai/backend`, `tools/mcp`, `sandbox`) moved first because they compile repository std with an older compiler | 6 to 8 days, mostly review and the Docker pins; the AI prompt (`docs/ai/AGENTS.md`, `SKILL.md` files, `Practice` check) rewritten the same day or the assistant keeps writing the old names |
@@ -296,7 +297,7 @@ is not the compiler, it is phase 2 and 3 volume and the order against the seed.
    renamed.
 3. Built-in methods and protocol hooks. Rename (`v.Push`, `s.Len()`,
    `x.Free()`) with the old spelling kept as a deprecated alias for two
-   releases, or treat the 38 built-ins plus the protocol hooks as language
+   releases, or treat the 42 built-ins plus the protocol hooks as language
    keywords that stay lower case, like `len` and `append` in Go, and apply the
    rule only to std and user code. The first is the stated rule and costs 62148
    call sites; the second leaves `.len()` and `.free()` untouched and costs
@@ -319,10 +320,12 @@ is not the compiler, it is phase 2 and 3 volume and the order against the seed.
    for users. Confirm, and whether `pub mut` globals should be discouraged
    instead.
 
-## What this change does and does not do
+## Status
 
-It adds the measurement tool, the baseline and this document. It renames
-nothing and changes no public behavior. Adding PascalCase twins to std
+Implemented: the measurement tool and baseline, and the built-in front door
+(phase 1a: `v.Push(x)`, `s.StartsWith(p)`, `x.ToInt()` and the rest of the 42
+names compile, the lower case spelling still works and is not reported). No
+name in std was renamed and no existing behavior changed. Adding PascalCase twins to std
 structs now (without touching the compiler) works technically, a struct may
 hold `push` and `Push` and both resolve, but every new public symbol needs an
 `@fa` name, tests in both languages and `doc.`/`ex.` keys in both site

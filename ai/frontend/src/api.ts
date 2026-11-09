@@ -237,6 +237,7 @@ export type UserProfile = {
     expires: number;
   };
   counts: Record<string, number>;
+  agent_version?: string;
   identities: {
     provider: string;
     login: string;

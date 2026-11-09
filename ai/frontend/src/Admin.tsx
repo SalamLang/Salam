@@ -421,6 +421,10 @@ function TopList({ title, items, ltr }: { title: string; items: { name: string; 
   );
 }
 
+function lastActive(u: AdminUser): number {
+  return Math.max(u.last_login || 0, u.last_active_chat || 0, u.last_active_agent || 0, u.last_active_api || 0);
+}
+
 function Users({ picked, onNavigate }: { picked: Picked; onNavigate: (path: string) => void }) {
   const [q, setQ] = useState("");
   const [query, setQuery] = useState("");
@@ -486,7 +490,7 @@ function Users({ picked, onNavigate }: { picked: Picked; onNavigate: (path: stri
         </div>
       )}
       <div className={`table-wrap ${loading ? "busy" : ""}`}>
-        <table className="data-table">
+        <table className="data-table compact">
           <thead>
             <tr>
               <th scope="col">{t("نام", "Name")}</th>
@@ -494,23 +498,9 @@ function Users({ picked, onNavigate }: { picked: Picked; onNavigate: (path: stri
               <th scope="col">{t("عضویت", "Joined")}</th>
               <th scope="col">{t("گفت‌وگو", "Chats")}</th>
               <th scope="col">{t("پیام", "Messages")}</th>
-              <th scope="col">{t("تصویر", "Images")}</th>
-              <th scope="col">{t("نشست", "Sessions")}</th>
-              <th scope="col">{t("نسخه‌ی ایجنت", "Agent version")}</th>
-              <th scope="col">{t("برنامه", "Apps")}</th>
-              <th scope="col">{t("فراخوانی MCP", "MCP calls")}</th>
-              <th scope="col">API</th>
-              <th scope="col">{t("توکن ورودی", "Input tokens")}</th>
-              <th scope="col">{t("توکن خروجی", "Output tokens")}</th>
-              <th scope="col">{t("از ورودی: کش", "Of input: cache")}</th>
-              <th scope="col">{t("هزینه‌ی ورودی ($)", "Input cost ($)")}</th>
-              <th scope="col">{t("هزینه‌ی خروجی ($)", "Output cost ($)")}</th>
-              <th scope="col">{t("هزینه‌ی کل ($)", "Total cost ($)")}</th>
-              <th scope="col">{t("تلگرام", "Telegram")}</th>
-              <th scope="col">{t("آخرین ورود", "Last login")}</th>
-              <th scope="col">{t("آخرین چت", "Last chat")}</th>
-              <th scope="col">{t("آخرین ایجنت", "Last agent")}</th>
-              <th scope="col">{t("آخرین API", "Last API")}</th>
+              <th scope="col">{t("توکن", "Tokens")}</th>
+              <th scope="col">{t("هزینه ($)", "Cost ($)")}</th>
+              <th scope="col">{t("آخرین استفاده", "Last active")}</th>
             </tr>
           </thead>
           <tbody>
@@ -521,34 +511,20 @@ function Users({ picked, onNavigate }: { picked: Picked; onNavigate: (path: stri
                     <bdi>{u.name}</bdi>
                   </a>
                 </td>
-                <td dir="ltr" className="cell-ltr">
+                <td dir="ltr" className="cell-ltr cell-clip" title={u.email}>
                   {u.email}
                 </td>
                 <td title={fmtDateTime(u.created)}>{fmtDate(u.created)}</td>
                 <td>{fmtNum(u.chats)}</td>
                 <td>{fmtNum(u.messages)}</td>
-                <td title={u.files ? t(`${fmtNum(u.files)} فایل روی هم`, `${fmtNum(u.files)} files in total`) : undefined}>{fmtNum(u.images ?? 0)}</td>
-                <td>{fmtNum(u.sessions ?? 0)}</td>
-                <td dir="ltr" className="cell-ltr">{u.agent_version || "-"}</td>
-                <td>{fmtNum(u.apps)}</td>
-                <td>{fmtNum(u.mcp_calls)}</td>
-                <td>{fmtNum(u.api_requests)}</td>
-                <td title={exactTitle(u.tokens_in || 0)}>{fmtCompact(u.tokens_in || 0)}</td>
-                <td title={exactTitle(u.tokens_out || 0)}>{fmtCompact(u.tokens_out || 0)}</td>
-                <td title={exactTitle(u.tokens_cache || 0)}>{fmtCompact(u.tokens_cache || 0)}</td>
-                <td dir="ltr">{(u.cost_in ?? 0) > 0 ? fmtCost(u.cost_in ?? 0) : <span className="muted">-</span>}</td>
-                <td dir="ltr">{(u.cost_out ?? 0) > 0 ? fmtCost(u.cost_out ?? 0) : <span className="muted">-</span>}</td>
-                <td dir="ltr" className="strong">{(u.cost_in ?? 0) + (u.cost_out ?? 0) > 0 ? fmtCost((u.cost_in ?? 0) + (u.cost_out ?? 0)) : <span className="muted">-</span>}</td>
-                <td>{u.telegram ? fmtNum(u.telegram) : <span className="muted">-</span>}</td>
-                <td title={u.last_login ? t(`${fmtDateTime(u.last_login)}، روی هم ${fmtNum(u.logins || 0)} ورود`, `${fmtDateTime(u.last_login)}, ${fmtNum(u.logins || 0)} logins in total`) : undefined}>{fmtRelative(u.last_login || 0)}</td>
-                <td title={u.last_active_chat ? fmtDateTime(u.last_active_chat) : undefined}>{fmtRelative(u.last_active_chat)}</td>
-                <td title={u.last_active_agent ? fmtDateTime(u.last_active_agent) : undefined}>{fmtRelative(u.last_active_agent)}</td>
-                <td title={u.last_active_api ? fmtDateTime(u.last_active_api) : undefined}>{fmtRelative(u.last_active_api)}</td>
+                <td title={exactTitle((u.tokens_in || 0) + (u.tokens_out || 0))}>{fmtCompact((u.tokens_in || 0) + (u.tokens_out || 0))}</td>
+                <td dir="ltr">{(u.cost_in ?? 0) + (u.cost_out ?? 0) > 0 ? fmtCost((u.cost_in ?? 0) + (u.cost_out ?? 0)) : <span className="muted">-</span>}</td>
+                <td title={lastActive(u) ? fmtDateTime(lastActive(u)) : undefined}>{fmtRelative(lastActive(u))}</td>
               </tr>
             ))}
             {!data && !error && (
               <tr>
-                <td colSpan={23} className="empty-cell">
+                <td colSpan={8} className="empty-cell">
                   <span className="list-loading inline" role="status">
                     <span className="spinner" />
                     <span>{t("در حال بارگذاری کاربران…", "Loading users…")}</span>
@@ -558,7 +534,7 @@ function Users({ picked, onNavigate }: { picked: Picked; onNavigate: (path: stri
             )}
             {data && data.users.length === 0 && !loading && (
               <tr>
-                <td colSpan={23} className="empty-cell">
+                <td colSpan={8} className="empty-cell">
                   {t("کاربری پیدا نشد.", "No users found.")}
                 </td>
               </tr>

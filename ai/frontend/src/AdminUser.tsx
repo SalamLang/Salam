@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { api, ApiError, type UserProfile } from "./api";
 import { AppsTable, Conversations, Events, KeyPolicies, NoAccess, Payments, RequestsFeed, Sessions, Subscriptions, TelegramSessions, Tile, Uploads, openLink, type Picked } from "./Admin";
-import { fmtCompact, fmtDate, fmtDateTime, fmtNum, fmtRelative } from "./format";
+import { fmtCompact, fmtCost, fmtDate, fmtDateTime, fmtNum, fmtRelative } from "./format";
 import { t } from "./i18n";
 
 type Tab = "summary" | "account" | "chats" | "purchases" | "api" | "telegram" | "mcp" | "files";
@@ -48,6 +48,9 @@ function Summary({ p, go }: { p: UserProfile; go: (tab: Tab) => void }) {
   const free = p.plan.id === "free";
   const tokensIn = (c.api_tokens_in ?? 0) + (c.chat_tokens_in ?? 0);
   const tokensOut = (c.api_tokens_out ?? 0) + (c.chat_tokens_out ?? 0);
+  const costIn = (c.api_cost_in ?? 0) + (c.chat_cost_in ?? 0);
+  const costOut = (c.api_cost_out ?? 0) + (c.chat_cost_out ?? 0);
+  const cache = (c.api_cache ?? 0) + (c.chat_cache ?? 0);
   const left = p.plan.expires > 0 ? p.plan.expires - Math.floor(Date.now() / 1000) : 0;
   return (
     <>
@@ -71,6 +74,13 @@ function Summary({ p, go }: { p: UserProfile; go: (tab: Tab) => void }) {
           </Row>
           <Row label={t("آخرین ورود", "Last sign-in")}>{c.last_login > 0 ? <span title={when(c.last_login)}>{ago(c.last_login)}</span> : "-"}</Row>
           <Row label={t("آخرین فعالیت", "Last seen")}>{c.last_seen > 0 ? <span title={when(c.last_seen)}>{ago(c.last_seen)}</span> : "-"}</Row>
+          <Row label={t("آخرین ایجنت", "Last agent")}>{c.last_agent > 0 ? <span title={when(c.last_agent)}>{ago(c.last_agent)}</span> : "-"}</Row>
+          <Row label={t("آخرین API", "Last API")}>{c.last_api > 0 ? <span title={when(c.last_api)}>{ago(c.last_api)}</span> : "-"}</Row>
+          {p.agent_version && (
+            <Row label={t("نسخه‌ی ایجنت", "Agent version")}>
+              <span dir="ltr">{p.agent_version}</span>
+            </Row>
+          )}
           <Row label={t("پلن فعلی", "Current plan")}>
             {free
               ? t("رایگان", "Free")
@@ -105,7 +115,11 @@ function Summary({ p, go }: { p: UserProfile; go: (tab: Tab) => void }) {
           <Tile label={t("نشست‌های فعال", "Active sessions")} value={c.sessions} sub={t(`${fmtNum(c.logins)} ورود روی هم`, `${fmtNum(c.logins)} sign-ins in total`)} />
           <Tile label={t("کلیدهای API", "API keys")} value={c.keys} sub={c.keys_revoked ? t(`${fmtNum(c.keys_revoked)} باطل‌شده`, `${fmtNum(c.keys_revoked)} revoked`) : undefined} />
           <Tile label={t("برنامه‌های متصل", "Connected apps")} value={c.apps} />
-          <Tile label={t("فایل‌ها", "Files")} value={c.files} />
+          <Tile label={t("فایل‌ها", "Files")} value={c.files} sub={c.images > 0 ? t(`${fmtNum(c.images)} تصویر`, `${fmtNum(c.images)} images`) : undefined} />
+        </div>
+        <div className="tiles tiles-4">
+          <Tile label={t("هزینه‌ی کل", "Total cost")} value={costIn + costOut} display={costIn + costOut > 0 ? fmtCost(costIn + costOut) : "-"} sub={costIn + costOut > 0 ? t(`${fmtCost(costIn)} ورودی، ${fmtCost(costOut)} خروجی`, `${fmtCost(costIn)} in, ${fmtCost(costOut)} out`) : undefined} />
+          <Tile label={t("توکن کش", "Cache tokens")} value={cache} compact />
         </div>
       </section>
 

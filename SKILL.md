@@ -1568,13 +1568,17 @@ end
   `DeflateCompress GzipCompress GzipDecompress Bzip2Compress Bzip2CompressLevel Bzip2Decompress Bzip2DecompressMax CRC32 Adler32`. Gzip decoding
   verifies the CRC-32 and length and bzip2 decoding every block and stream CRC (`ok` is false on mismatch; `*Max` caps the output size); the method is not stored in the output; free every buffer.
   `XzDecompress(p, n, ok)` and `LzmaDecompress` read `.xz` (LZMA2, BCJ and delta filters, CRC-32/CRC-64/SHA-256 verified) and `.lzma`; decode only, `...Max` variants cap the output, dictionaries over 1 GiB are refused.
-- **`archive`**: `ZipCreate ZipCreateFile ZipList ZipExtractAll ZipExtractByName TarCreate TarList TarExtractAll TarGzCreate TarGzList TarGzExtractAll MakeTarSymlink RarCreate RarCreateFile RarList RarExtract RarExtractByName RarExtractAll RarStatusText GzipCompressFile XzDecompressFile LzmaDecompressFile Bzip2CompressFile Bzip2DecompressFile ReadBinaryFile WriteBinaryFile`. No zip64 (under 2 GB),
-  ZIP methods 0 and 8 only, CRC not checked, tar reads ustar, PAX and GNU
+- **`archive`**: `ZipCreate ZipCreateFile ZipList ZipExtractAll ZipExtractByName ZipExtractVerified ZipVerify ZipCreate64 TarCreate TarList TarExtractAll TarGzCreate TarGzList TarGzExtractAll MakeTarSymlink RarCreate RarCreateFile RarList RarExtract RarExtractByName RarExtractAll RarStatusText GzipCompressFile XzDecompressFile LzmaDecompressFile Bzip2CompressFile Bzip2DecompressFile ReadBinaryFile WriteBinaryFile`. Zip64 is read and
+  written but sizes are `int` (under 2 GB; bigger entries report `ZIP_TOO_BIG`),
+  ZIP methods 0 and 8 only, `ZipExtractByName` does not check the CRC while
+  `ZipExtractVerified(p, n, name, max, status)`, `ZipVerify` and `ZipExtractAll` do,
+  non-ASCII names get the UTF-8 flag, `ZipFileInput.mtime` sets the date, tar reads ustar, PAX and GNU
   long names and links (`Entry.kind`, `Entry.link`), `TarGz*Max` cap the inflated size. RAR 1.5 to 5 are read fully (CRC checked, `RarExtract` reports a
   `RAR_*` status); passwords through `RarOpen(p, n, password)` with
-  `RarEntries`/`RarRead`/`RarReadAll` (RAR 3 to 5, encrypted names too); multi-volume
-  sets through `RarReadVolumes`/`RarOpenVolumes`; `RarCreate`
-  writes stored RAR 5.
+  `RarEntries`/`RarRead`/`RarReadAll` (RAR 1.5 to 5, encrypted names too); multi-volume
+  sets through `RarReadVolumes`/`RarOpenVolumes`, encrypted and split too;
+  `RarReadAll` restores modes and times and makes safe symlinks; entries must be
+  under 2 GB (`RAR_TOO_BIG`); `RarCreate` writes stored RAR 5.
 - **`excel`**: xlsx, ods and csv workbooks: `Open Save New NewWorkbook NewSheet` with sheet methods `set_string set_number get_cell get_string row_count ...`, `CellRef ParseCellRef SheetToJSON SheetToCSV`. No `.xls`
   (`IsXLS` detects it); the format comes from the file extension; formulas
   are not evaluated; rows and columns count from 0.

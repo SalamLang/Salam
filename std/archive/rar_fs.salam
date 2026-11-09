@@ -1,0 +1,183 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package archive
+
+import compress
+import fs
+import mem
+import os
+
+if SALAM_OS_WINDOWS:
+    func _rar_symlink(target: str, path: str): bool:
+        ret false
+    end
+
+    func _rar_set_mtime(path: str, t: i64): bool:
+        ret false
+    end
+
+    func _rar_set_mode(path: str, mode: int): bool:
+        ret false
+    end
+else:
+    func _rar_symlink(target: str, path: str): bool:
+        if os.IsDir(path):
+            ret false
+        end
+        if os.Exists(path):
+            os.Remove(path)
+        end
+        ret symlink(target, path) == 0
+    end
+
+    func _rar_set_mtime(path: str, t: i64): bool:
+        if SALAM_ARCH_X86 or SALAM_ARCH_ARM or SALAM_ARCH_WASM:
+            ret false
+        end
+        if t <= 0:
+            ret false
+        end
+        tv := mem.AllocateZeroed(32 as u64) as i64*
+        tv[0] = t
+        tv[2] = t
+        r := utimes(path, tv as void*)
+        mem.Free(tv as void*)
+        ret r == 0
+    end
+
+    func _rar_set_mode(path: str, mode: int): bool:
+        ret fs.Chmod(path, mode & 0x1ff) == 0
+    end
+end
+
+func _rar_is_sep(c: int): bool:
+    ret c == 47 or c == 92
+end
+
+func _rar_under_link(name: str, made: Vector<str>): bool:
+    nb := name as u8*
+    nl := name.len()
+    repeat made.len() in k:
+        m := made.get(k)
+        ml := m.len()
+        if ml == 0 or ml > nl:
+            continue
+        end
+        mb := m as u8*
+        mut same := true
+        mut i := 0
+        until i < ml:
+            if nb[i] != mb[i]:
+                same = false
+                break
+            end
+            i++
+        end
+        if same and (nl == ml or _rar_is_sep(nb[ml] as int)):
+            ret true
+        end
+    end
+    ret false
+end
+
+func _rar_cur_is_link(cur: compress.ByteBuf, made: Vector<str>): bool:
+    repeat made.len() in k:
+        m := made.get(k)
+        if m.len() != cur.len:
+            continue
+        end
+        mb := m as u8*
+        cb := cur.data as u8*
+        mut same := true
+        mut i := 0
+        until i < cur.len:
+            if cb[i] != mb[i]:
+                same = false
+                break
+            end
+            i++
+        end
+        if same:
+            ret true
+        end
+    end
+    ret false
+end
+
+func _rar_link_target_ok(name: str, target: str, made: Vector<str>): bool:
+    tl := target.len()
+    if tl == 0 or tl > 4096:
+        ret false
+    end
+    tb := target as u8*
+    if _rar_is_sep(tb[0] as int) or (tl >= 2 and (tb[1] as int) == 58):
+        ret false
+    end
+    nb := name as u8*
+    mut last := -1
+    repeat name.len() in i:
+        if _rar_is_sep(nb[i] as int):
+            last = i
+        end
+    end
+    mut cur := compress.NewByteBuf()
+    mut ok := true
+    mut pass := 0
+    until pass < 2:
+        mut src := tb
+        mut n := tl
+        if pass == 0:
+            src = nb
+            n = last + 1
+        end
+        mut start := 0
+        mut i := 0
+        until i <= n:
+            c := i < n ? src[i] as int : 47
+            if _rar_is_sep(c):
+                cl := i - start
+                if cl == 0 or (cl == 1 and (src[start] as int) == 46):
+                    start = i + 1
+                    i++
+                    continue
+                end
+                if cl == 2 and (src[start] as int) == 46 and (src[start + 1] as int) == 46:
+                    if cur.len == 0 or _rar_cur_is_link(cur, made):
+                        ok = false
+                        break
+                    end
+                    mut cut := cur.len - 1
+                    until cut >= 0 and not _rar_is_sep(((cur.data as u8*)[cut]) as int):
+                        cut--
+                    end
+                    cur.len = cut < 0 ? 0 : cut
+                else:
+                    if cur.len > 0:
+                        compress.BufPush(cur, 47)
+                    end
+                    compress.BufPushBytes(cur, ((src as i64) + (start as i64)) as void*, cl)
+                end
+                start = i + 1
+            end
+            i++
+        end
+        if not ok:
+            break
+        end
+        pass++
+    end
+    compress.BufFree(cur)
+    ret ok
+end

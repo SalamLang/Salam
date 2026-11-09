@@ -1,0 +1,167 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package compress
+
+import mem
+
+@en "ZstdStatusText"
+@fa "متن وضعیت زستد"
+pub func ZstdStatusText(code: int): str:
+    if code == ZstdOk: ret "ok" end
+    if code == ZstdErrFormat: ret "not a zstd stream" end
+    if code == ZstdErrTruncated: ret "truncated input" end
+    if code == ZstdErrCorrupt: ret "corrupt data" end
+    if code == ZstdErrChecksum: ret "checksum mismatch" end
+    if code == ZstdErrTooBig: ret "output exceeds the limit" end
+    if code == ZstdErrDict: ret "wrong or invalid dictionary" end
+    ret "unknown error"
+end
+
+@en "IsZstd"
+@fa "زستد است"
+pub func IsZstd(p: void*, n: int): bool:
+    if n < 4:
+        ret false
+    end
+    m := _zs_le32(p as u8*, 0)
+    ret m == _ZS_MAGIC or (m & 0xFFFFFFF0) == _ZS_SKIP
+end
+
+@en "IsZstdBuf"
+@fa "زستد است بافر"
+pub func IsZstdBuf(b: ByteBuf): bool:
+    ret IsZstd(b.data, b.len)
+end
+
+@en "ZstdDecompressEx"
+@fa "کدگشایی زستد با جزئیات"
+pub func ZstdDecompressEx(p: void*, n: int, max: int, dict: void*, dn: int, status &: int): ByteBuf:
+    mut out := NewByteBuf()
+    status = _zs_decode(p, n, max, dict, dn, out)
+    if status != ZstdOk:
+        BufFree(out)
+        ret NewByteBuf()
+    end
+    ret out
+end
+
+@en "ZstdDecompressMax"
+@fa "کدگشایی زستد با سقف"
+pub func ZstdDecompressMax(p: void*, n: int, max: int, ok &: bool): ByteBuf:
+    mut st := 0
+    out := ZstdDecompressEx(p, n, max, null, 0, st)
+    ok = st == ZstdOk
+    ret out
+end
+
+@en "ZstdDecompress"
+@fa "کدگشایی زستد"
+pub func ZstdDecompress(p: void*, n: int, ok &: bool): ByteBuf:
+    ret ZstdDecompressMax(p, n, 0, ok)
+end
+
+@en "ZstdDecompressBuf"
+@fa "کدگشایی زستد بافر"
+pub func ZstdDecompressBuf(b: ByteBuf, ok &: bool): ByteBuf:
+    ret ZstdDecompressMax(b.data, b.len, 0, ok)
+end
+
+@en "ZstdDecompressDict"
+@fa "کدگشایی زستد با واژه نامه"
+pub func ZstdDecompressDict(p: void*, n: int, dict: void*, dn: int, ok &: bool): ByteBuf:
+    mut st := 0
+    out := ZstdDecompressEx(p, n, 0, dict, dn, st)
+    ok = st == ZstdOk
+    ret out
+end
+
+@en "ZstdCompressOpts"
+@fa "فشرده سازی زستد با گزینه"
+pub func ZstdCompressOpts(p: void*, n: int, level: int, checksum: bool): ByteBuf:
+    ret _zs_encode(p, n, level, checksum)
+end
+
+@en "ZstdCompressLevel"
+@fa "فشرده سازی زستد با سطح"
+pub func ZstdCompressLevel(p: void*, n: int, level: int): ByteBuf:
+    ret _zs_encode(p, n, level, true)
+end
+
+@en "ZstdCompress"
+@fa "فشرده سازی زستد"
+pub func ZstdCompress(p: void*, n: int): ByteBuf:
+    ret _zs_encode(p, n, 3, true)
+end
+
+@en "ZstdCompressBuf"
+@fa "فشرده سازی زستد بافر"
+pub func ZstdCompressBuf(b: ByteBuf): ByteBuf:
+    ret _zs_encode(b.data, b.len, 3, true)
+end
+
+@en "ZstdCompressStr"
+@fa "فشرده سازی زستد رشته"
+pub func ZstdCompressStr(s: str): ByteBuf:
+    ret _zs_encode(s as void*, s.len(), 3, true)
+end
+
+@en "ZstdContentSize"
+@fa "اندازه محتوای زستد"
+pub func ZstdContentSize(p: void*, n: int): i64:
+    bp := p as u8*
+    mut pos := 0
+    until pos + 8 <= n and (_zs_le32(bp, pos) & 0xFFFFFFF0) == _ZS_SKIP:
+        pos += 8 + (_zs_le32(bp, pos + 4) as int)
+    end
+    if pos + 5 > n or _zs_le32(bp, pos) != _ZS_MAGIC:
+        ret -2
+    end
+    fhd := bp[pos + 4] as int
+    fcsf := fhd >> 6
+    single := (fhd >> 5) & 1
+    mut at := pos + 5
+    if single == 0:
+        at++
+    end
+    mut dsz := fhd & 3
+    if dsz == 3:
+        dsz = 4
+    end
+    at += dsz
+    mut fsz := 0
+    if fcsf == 0:
+        fsz = single
+    else fcsf == 1:
+        fsz = 2
+    else fcsf == 2:
+        fsz = 4
+    else:
+        fsz = 8
+    end
+    if fsz == 0:
+        ret -1
+    end
+    if at + fsz > n:
+        ret -2
+    end
+    mut v := 0 as i64
+    repeat fsz in i:
+        v |= (bp[at + i] as i64) << (8 * i)
+    end
+    if fcsf == 1:
+        v += 256
+    end
+    ret v
+end

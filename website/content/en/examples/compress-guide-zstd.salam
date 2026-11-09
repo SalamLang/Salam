@@ -1,0 +1,57 @@
+import compress
+
+const PACKED := """
+28b52ffd6459008502009285111290cf0184e3820d4c2042136477707af2ed3a409c9edcb0e3e7730fed14fb943c8038
+53dea7a9ea4f2fc3f0527dda9e972a958b464c916376e4546b1cd18bf07ca9de9831090100407fa04214ee20b3a1
+"""
+
+func nib(c: int): int:
+    if c >= 48 and c <= 57:
+        ret c - 48
+    end
+    if c >= 97 and c <= 102:
+        ret c - 87
+    end
+    ret -1
+end
+
+func unhex(s: str): compress.ByteBuf:
+    mut b := compress.NewByteBuf()
+    bp := s as u8*
+    mut hi := -1
+    repeat s.len() in i:
+        v := nib(bp[i] as int)
+        if v < 0:
+            continue
+        end
+        if hi < 0:
+            hi = v
+        else:
+            compress.BufPush(b, hi * 16 + v)
+            hi = -1
+        end
+    end
+    ret b
+end
+
+func main:
+    packed := unhex(PACKED)
+    mut ok := false
+    text := compress.ZstdDecompressBuf(packed, ok)
+    println "decoded:", ok, text.len, "bytes from", packed.len
+    println compress.BufToStrUnsafe(text)
+
+    mut damaged := compress.BufClone(packed)
+    compress.BufSet(damaged, damaged.len - 20, compress.BufGet(damaged, damaged.len - 20) ^ 1)
+    mut status := 0
+    broken := compress.ZstdDecompressEx(damaged.data, damaged.len, 0, null, 0, status)
+    println "damaged file:", status, compress.ZstdStatusText(status), broken.len
+
+    small := compress.ZstdDecompressMax(packed.data, packed.len, 100, ok)
+    println "capped at 100 bytes:", ok, small.len
+
+    mine := compress.ZstdCompressLevel(text.data, text.len, 19)
+    again := compress.ZstdDecompressBuf(mine, ok)
+    println "our own frame:", mine.len, "bytes,", compress.BufEquals(again, text)
+    println "size recorded in the header:", compress.ZstdContentSize(mine.data, mine.len)
+end

@@ -305,7 +305,7 @@ func _resolve(c: _Ctx, t: int): int:
     ret t
 end
 
-func _put_list16(out &: Bytes, c: _Ctx, s: str, grease_on: bool):
+func _put_list16(out &: Bytes, c: _Ctx, s: str, grease_on: bool, pq: bool):
     mut v := _tokens(s)
     defer v.free()
     mark := out.len
@@ -313,6 +313,9 @@ func _put_list16(out &: Bytes, c: _Ctx, s: str, grease_on: bool):
     repeat v.len() in i:
         t := v.get(i)
         if t >= _GREASE_BASE and not grease_on:
+            continue
+        end
+        if not pq and (t == 0x11EC or t == 0x6399):
             continue
         end
         _p16(out, _resolve(c, t))
@@ -350,6 +353,25 @@ func _put_alpn(out &: Bytes, list: str):
     _patch16(out, mark, out.len - mark - 2)
 end
 
+func _pq_ek(out &: Bytes):
+    mut n := 0
+    until n < 768:
+        mut a := 4095
+        until a >= 3329:
+            a = ((_randbyte() << 8) | _randbyte()) & 0xFFF
+        end
+        mut b := 4095
+        until b >= 3329:
+            b = ((_randbyte() << 8) | _randbyte()) & 0xFFF
+        end
+        _p8(out, a & 0xFF)
+        _p8(out, (a >> 8) | ((b & 0xF) << 4))
+        _p8(out, b >> 4)
+        n += 2
+    end
+    _prand(out, 32)
+end
+
 func _put_ext(out &: Bytes, id: int, c: _Ctx, sp: Spec, o: Options, pub_key: Bytes, grease_on: bool): bool:
     if id == 0:
         if o.server_name.len() == 0:
@@ -373,7 +395,7 @@ func _put_ext(out &: Bytes, id: int, c: _Ctx, sp: Spec, o: Options, pub_key: Byt
     end
     if id == 10:
         m := _ext_head(out, 10)
-        _put_list16(out, c, sp.groups, grease_on)
+        _put_list16(out, c, sp.groups, grease_on, o.pq)
         _ext_done(out, m)
         ret true
     end
@@ -386,7 +408,7 @@ func _put_ext(out &: Bytes, id: int, c: _Ctx, sp: Spec, o: Options, pub_key: Byt
     end
     if id == 13:
         m := _ext_head(out, 13)
-        _put_list16(out, c, sp.sigalgs, grease_on)
+        _put_list16(out, c, sp.sigalgs, grease_on, true)
         _ext_done(out, m)
         ret true
     end
@@ -427,7 +449,7 @@ func _put_ext(out &: Bytes, id: int, c: _Ctx, sp: Spec, o: Options, pub_key: Byt
     end
     if id == 34:
         m := _ext_head(out, 34)
-        _put_list16(out, c, sp.delegated, false)
+        _put_list16(out, c, sp.delegated, false, true)
         _ext_done(out, m)
         ret true
     end
@@ -478,7 +500,7 @@ func _put_ext(out &: Bytes, id: int, c: _Ctx, sp: Spec, o: Options, pub_key: Byt
                 if o.pq:
                     _p16(out, 0x11EC)
                     _p16(out, 1184 + 32)
-                    _prand(out, 1184)
+                    _pq_ek(out)
                     _praw(out, pub_key.p, 32)
                 end
             else if t == 0x6399:
@@ -486,7 +508,7 @@ func _put_ext(out &: Bytes, id: int, c: _Ctx, sp: Spec, o: Options, pub_key: Byt
                     _p16(out, 0x6399)
                     _p16(out, 32 + 1184)
                     _praw(out, pub_key.p, 32)
-                    _prand(out, 1184)
+                    _pq_ek(out)
                 end
             else if t == 0x0017:
                 _p16(out, 0x0017)

@@ -1,0 +1,75 @@
+import tls
+import mem
+
+const DIGITS := "0123456789abcdef"
+
+func hex_of(p: void*, n: int): str:
+    mut out := ""
+    repeat n in i:
+        b := (p as u8*)[i] as int
+        out += DIGITS.substr(b / 16, 1) + DIGITS.substr(b % 16, 1)
+    end
+    ret out
+end
+
+func filled(n: int, start: int): void*:
+    p := mem.AllocateZeroed(n as u64)
+    repeat n in i:
+        (p as u8*)[i] = ((start + i) % 256) as u8
+    end
+    ret p
+end
+
+func main:
+    println tls.AEAD_AES_128_GCM, tls.AEAD_AES_256_GCM, tls.AEAD_CHACHA20_POLY1305
+    println tls.AEAD_TAG_LEN, tls.AEAD_NONCE_LEN
+    println tls.AeadKeyLen(tls.AEAD_AES_128_GCM), tls.AeadKeyLen(tls.AEAD_AES_256_GCM), tls.AeadKeyLen(tls.AEAD_CHACHA20_POLY1305)
+
+    key := filled(32, 0)
+    nonce := filled(12, 100)
+    message := "attack at dawn"
+    n := message.len()
+    out := mem.AllocateZeroed((n + tls.AEAD_TAG_LEN) as u64)
+    back := mem.AllocateZeroed((n + 1) as u64)
+
+    each kind in [tls.AEAD_AES_128_GCM, tls.AEAD_AES_256_GCM, tls.AEAD_CHACHA20_POLY1305]:
+        ctx := tls.AeadNew(kind, key)
+        tls.AeadSeal(ctx, nonce, null, 0, message as void*, n, out)
+        println kind, hex_of(out, n + tls.AEAD_TAG_LEN)
+        println tls.AeadOpen(ctx, nonce, null, 0, out, n, back), (back as str).substr(0, n)
+        (out as u8*)[0] = ((out as u8*)[0] as int ^ 1) as u8
+        println tls.AeadOpen(ctx, nonce, null, 0, out, n, back)
+        tls.AeadFree(ctx)
+    end
+
+    println tls.AesGcmSealRaw(key, 16, nonce, null, 0, message as void*, n, out)
+    println hex_of(out, n + tls.AEAD_TAG_LEN)
+    println tls.AesGcmOpenRaw(key, 16, nonce, null, 0, out, n + tls.AEAD_TAG_LEN, back), (back as str).substr(0, n)
+
+    println tls.ChaCha20Poly1305SealRaw(key, nonce, null, 0, message as void*, n, out)
+    println hex_of(out, n + tls.AEAD_TAG_LEN)
+    println tls.ChaCha20Poly1305OpenRaw(key, nonce, null, 0, out, n + tls.AEAD_TAG_LEN, back), (back as str).substr(0, n)
+
+    nonce24 := filled(24, 100)
+    println tls.XChaCha20Poly1305SealRaw(key, nonce24, null, 0, message as void*, n, out)
+    println hex_of(out, n + tls.AEAD_TAG_LEN)
+    println tls.XChaCha20Poly1305OpenRaw(key, nonce24, null, 0, out, n + tls.AEAD_TAG_LEN, back), (back as str).substr(0, n)
+
+    plain := mem.AllocateZeroed(16 as u64)
+    repeat 16 in i:
+        (plain as u8*)[i] = (i * 17) as u8
+    end
+    cipher := mem.AllocateZeroed(16 as u64)
+    key16 := filled(16, 0)
+    println tls.AesEcbBlock(key16, 16, plain, cipher, false), hex_of(cipher, 16)
+    println tls.AesEcbBlock(key16, 16, cipher, back, true), hex_of(back, 16) == hex_of(plain, 16)
+
+    mem.Free(key)
+    mem.Free(nonce)
+    mem.Free(nonce24)
+    mem.Free(out)
+    mem.Free(back)
+    mem.Free(plain)
+    mem.Free(cipher)
+    mem.Free(key16)
+end

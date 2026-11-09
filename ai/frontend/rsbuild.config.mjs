@@ -27,5 +27,9 @@ export default defineConfig({
   },
   server: {
     port: 3000,
+    headers: {
+      "Accept-CH": "Sec-CH-UA-Platform-Version, Sec-CH-UA-Model, Sec-CH-UA-Full-Version-List, Sec-CH-UA-Arch, Sec-CH-UA-Bitness",
+      "Permissions-Policy": "ch-ua-platform-version=(self), ch-ua-model=(self), ch-ua-full-version-list=(self), ch-ua-arch=(self), ch-ua-bitness=(self)",
+    },
   },
 });

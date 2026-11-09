@@ -1,0 +1,108 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import mem
+import compress
+import net.dns
+import net.doh
+import net.http2
+import net.tcp
+import sync
+import tls
+
+mut port := 0
+mut plain_conns := 0
+mut h2_conns := 0
+mut ready := sync.NewWaitGroup()
+
+func rec(name: str, rtype: int, ttl: int, data: str): dns.Record:
+    ret dns.Record { name = name, rtype = rtype, rclass = 1, ttl = ttl, data = data }
+end
+
+func refuse_http1(sec &: tls.Conn):
+    buf := mem.Allocate(4096 as u64)
+    _n := tls.ReadBytes(sec, buf, 4096)
+    reply := "HTTP/1.1 505 HTTP Version Not Supported\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+    _w := tls.WriteBytes(sec, reply as void*, reply.len())
+    mem.Free(buf)
+    tls.Close(sec)
+end
+
+func answer_h2(sec &: tls.Conn):
+    mut c := http2.NewConn(http2.TLSTransport(sec), true)
+    if not http2.ServerHandshake(c):
+        ret
+    end
+    mut n := 0
+    until n < 40:
+        s := http2.StreamAt(c, 1)
+        if s.live and s.end_stream:
+            break
+        end
+        if http2.Poll(c) == http2.H2_POLL_ERROR:
+            ret
+        end
+        n++
+    end
+    s := http2.StreamAt(c, 1)
+    q := dns.Decode(s.data.data, s.data.len)
+    qn := q.questions.items.get(0)
+    mut recs := Vector {} as Vector<dns.Record>
+    recs.push(rec(qn.name, dns.TypeA, 60, "10.9.8.7"))
+    mut out := doh.EncodeResponse(q.id, qn.name, qn.qtype, 0, recs)
+    recs.free()
+    mut hl := http2.HeaderList {}
+    http2.HeadersAdd(hl, ":status", "200")
+    http2.HeadersAdd(hl, "content-type", "application/dns-message")
+    _a := http2.SendHeaders(c, 1, hl, false)
+    _b := http2.SendData(c, 1, out, true)
+    compress.BufFree(out)
+    http2.AwaitStreamEnd(c, 1, 4)
+    http2.CloseConn(c)
+end
+
+func server():
+    cfg := tls.NewServerConfig("tests/fixtures/ssl/server.crt", "tests/fixtures/ssl/server.key")
+    l := tcp.Bind(0)
+    port = tcp.Port(l)
+    sync.Done(ready)
+    until true:
+        c := tcp.Accept(l)
+        mut sec := tls.WrapServer(c.fd, cfg)
+        if not tls.ConnOk(sec):
+            continue
+        end
+        if plain_conns == 0:
+            plain_conns++
+            refuse_http1(sec)
+        else:
+            h2_conns++
+            answer_h2(sec)
+        end
+    end
+end
+
+func main:
+    sync.Add(ready, 1 as i64)
+    _t := spawn(server)
+    sync.Wait(ready)
+    mut s := doh.NewServer("local", doh.KindDoH, "https://localhost:" + port + "/dns-query")
+    s.insecure = true
+    s.addrs.push("127.0.0.1")
+    r1 := doh.Query(s, "one.test", dns.TypeA, 5000)
+    println "first query after a 505:", r1.ok, r1.msg.answers.items.get(0).data
+    r2 := doh.Query(s, "two.test", dns.TypeA, 5000)
+    println "next query goes straight to h2:", r2.ok, r2.msg.answers.items.get(0).data
+    println "http/1.1 attempts", plain_conns, "h2 connections", h2_conns
+end

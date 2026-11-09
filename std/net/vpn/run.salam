@@ -31,6 +31,10 @@ extern:
     func signal(sig: int, handler: void*): void*
 end
 
+@en "PENDING_PER_SOURCE"
+@fa "سقف دست دادن مبدا"
+pub const PENDING_PER_SOURCE := 32
+
 mut _stop := atomic.NewFlag(false)
 
 @en "TransportPending"
@@ -69,6 +73,12 @@ pub struct TransportPending:
         mut c := this.raw
         transport.Close(c)
     end
+
+    @en "Remote"
+    @fa "مبدا"
+    pub func Remote(): str:
+        ret this.raw.remote
+    end
 end
 
 @en "TransportAcceptor"
@@ -84,12 +94,8 @@ pub struct TransportAcceptor:
     @en "Accept"
     @fa "پذیرش"
     pub func Accept(): dyn tunnel.Pending:
-        if this.settings.network == "grpc" or this.settings.security == "reality":
-            c := transport.Accept(this.listener)
-            ret TransportPending { raw = c, settings = this.settings, upgraded = true }
-        end
-        raw := transport.AcceptRaw(this.listener)
-        ret TransportPending { raw = raw, settings = this.settings }
+        c := transport.Accept(this.listener)
+        ret TransportPending { raw = c, settings = this.settings, upgraded = true }
     end
 
     @en "Port"
@@ -145,6 +151,7 @@ end
 
 func _trojan_server(ib: tunnel.InboundConfig, s: transport.Settings): Listener:
     mut cfg := trojan.NewServerConfig(s.cert_file, s.key_file)
+    cfg.max_per_source = PENDING_PER_SOURCE
     clients := json.Items(json.Get(ib.settings, "clients"))
     defer clients.free()
     repeat clients.len() in i:
@@ -163,7 +170,8 @@ end
 @en "Start"
 @fa "شروع"
 pub func Start(ib: tunnel.InboundConfig, dialer: dyn tunnel.Dialer, stats: tunnel.Stats): Listener:
-    s := StreamSettings(ib.stream_settings)
+    mut s := StreamSettings(ib.stream_settings)
+    s.max_per_source = PENDING_PER_SOURCE
     if ib.protocol == "trojan": ret _trojan_server(ib, s) end
     proto := tunnel.CreateInbound(ib)
     mut h := tunnel.NewForwarder(dialer, proto)
@@ -175,7 +183,8 @@ pub func Start(ib: tunnel.InboundConfig, dialer: dyn tunnel.Dialer, stats: tunne
     if sock.fd >= 0: bound.port = rawsock.LocalPort(sock) end
     tl := transport.ListenerFrom(bound, s)
     acc := TransportAcceptor { listener = tl, settings = s }
-    srv := tunnel.NewAcceptServer(acc, host)
+    mut srv := tunnel.NewAcceptServer(acc, host)
+    srv.per_source = PENDING_PER_SOURCE
     l := Listener { server = srv, has_server = true, port = acc.Port(), tag = ib.tag }
     if acc.Ok(): tunnel.StartAccepting(srv, proto, h) end
     ret l

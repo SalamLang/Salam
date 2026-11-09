@@ -1,0 +1,143 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ailangfuse
+
+import net.tcp
+import encoding
+import encoding.json
+import str
+import time
+import conv
+
+include aiengine "engine.salam"
+
+const SEND_MS := 4000
+
+mut HOST := ""
+mut PORT := 80
+mut BASE := ""
+mut AUTH := ""
+
+func post(path: str, body: str):
+    c := tcp.Dial(HOST, PORT)
+    if not tcp.ConnOk(c):
+        tcp.Close(c)
+        ret
+    end
+    tcp.SetReadDeadline(c, SEND_MS)
+    tcp.SetWriteDeadline(c, SEND_MS)
+    req := "POST " + BASE + path + " HTTP/1.1\r\nHost: " + HOST + "\r\nUser-Agent: salam-ai\r\nAuthorization: " + AUTH + "\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: " + body.len() + "\r\n\r\n" + body
+    _w := tcp.Write(c, req)
+    tcp.Close(c)
+end
+
+func usage_obj(u: aiengine.Usage): str:
+    mut m := Vector {} as Vector<str>
+    m.push(json.MemberInt("input", u.input))
+    m.push(json.MemberInt("output", u.output + u.reasoning))
+    m.push(json.MemberInt("total", u.input + u.output + u.reasoning))
+    m.push(json.Member("unit", "TOKENS"))
+    ret json.Object(m)
+end
+
+func usage_details(u: aiengine.Usage): str:
+    mut m := Vector {} as Vector<str>
+    m.push(json.MemberInt("input", u.input))
+    m.push(json.MemberInt("output", u.output))
+    m.push(json.MemberInt("reasoning", u.reasoning))
+    m.push(json.MemberInt("cache_read", u.cache_read))
+    m.push(json.MemberInt("cache_write", u.cache_write))
+    ret json.Object(m)
+end
+
+func cost_details(u: aiengine.Usage): str:
+    mut m := Vector {} as Vector<str>
+    m.push(json.MemberRaw("input", conv.FormatFloatPrec(u.cost_in, 8)))
+    m.push(json.MemberRaw("output", conv.FormatFloatPrec(u.cost_out, 8)))
+    m.push(json.MemberRaw("total", conv.FormatFloatPrec(u.cost, 8)))
+    ret json.Object(m)
+end
+
+pub func Configure(url: str, public_key: str, secret_key: str):
+    if url.len() == 0 or public_key.len() == 0 or secret_key.len() == 0:
+        ret
+    end
+    mut rest := str.TrimPrefix(str.TrimPrefix(url, "https://"), "http://")
+    slash := rest.find("/")
+    if slash >= 0:
+        BASE = str.TrimSuffix(rest.substr(slash, rest.len() - slash), "/")
+        rest = rest.substr(0, slash)
+    end
+    colon := rest.find(":")
+    if colon > 0:
+        PORT = rest.substr(colon + 1, rest.len() - colon - 1).to_int()
+        HOST = rest.substr(0, colon)
+    else:
+        PORT = 80
+        HOST = rest
+    end
+    AUTH = "Basic " + encoding.Base64Encode(public_key + ":" + secret_key)
+end
+
+pub func Enabled(): bool:
+    ret HOST.len() > 0
+end
+
+pub func Send(sid: str, mid: str, model: str, u: aiengine.Usage, reply: str, failed: bool):
+    if not Enabled() or sid.len() == 0:
+        ret
+    end
+    now_sec := time.NowMillis() / 1000
+    start_sec := u.ms > 0 ? now_sec - u.ms / 1000 : now_sec
+    now_iso := time.FormatISO(now_sec)
+    start_iso := time.FormatISO(start_sec)
+    gen_id := sid + "-gen-" + mid
+    mut trace := Vector {} as Vector<str>
+    trace.push(json.Member("id", sid))
+    trace.push(json.Member("name", "salam-chat-turn"))
+    trace.push(json.Member("timestamp", now_iso))
+    trace.push(json.Member("output", reply))
+    mut tmeta := Vector {} as Vector<str>
+    tmeta.push(json.MemberBool("failed", failed))
+    trace.push(json.MemberRaw("metadata", json.Object(tmeta)))
+    mut gen := Vector {} as Vector<str>
+    gen.push(json.Member("id", gen_id))
+    gen.push(json.Member("traceId", sid))
+    gen.push(json.Member("name", "assistant-reply"))
+    gen.push(json.Member("model", model))
+    gen.push(json.Member("startTime", start_iso))
+    gen.push(json.Member("endTime", now_iso))
+    gen.push(json.MemberRaw("usage", usage_obj(u)))
+    gen.push(json.MemberRaw("usageDetails", usage_details(u)))
+    gen.push(json.MemberRaw("costDetails", cost_details(u)))
+    gen.push(json.Member("output", reply))
+    gen.push(json.Member("level", failed ? "ERROR" : "DEFAULT"))
+    mut trace_evt := Vector {} as Vector<str>
+    trace_evt.push(json.Member("id", sid + "-trace-evt"))
+    trace_evt.push(json.Member("type", "trace-create"))
+    trace_evt.push(json.Member("timestamp", now_iso))
+    trace_evt.push(json.MemberRaw("body", json.Object(trace)))
+    mut gen_evt := Vector {} as Vector<str>
+    gen_evt.push(json.Member("id", gen_id + "-evt"))
+    gen_evt.push(json.Member("type", "generation-create"))
+    gen_evt.push(json.Member("timestamp", now_iso))
+    gen_evt.push(json.MemberRaw("body", json.Object(gen)))
+    mut batch := Vector {} as Vector<str>
+    batch.push(json.Object(trace_evt))
+    batch.push(json.Object(gen_evt))
+    mut root := Vector {} as Vector<str>
+    root.push(json.MemberRaw("batch", json.Array(batch)))
+    post("/api/public/ingestion", json.Object(root))
+end

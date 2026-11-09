@@ -8,7 +8,14 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import matrix
 from harness import Echo, Procs, check_tcp_via_socks, free_port, socks5_udp_associate
 
+import base64
+
 METHODS = ("aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305")
+M2022 = (("2022-blake3-aes-128-gcm", 16), ("2022-blake3-aes-256-gcm", 32), ("2022-blake3-chacha20-poly1305", 32))
+
+
+def key2022(n, salt):
+    return base64.b64encode(bytes((i * 7 + salt) & 255 for i in range(n))).decode()
 PW = matrix.PASS
 
 

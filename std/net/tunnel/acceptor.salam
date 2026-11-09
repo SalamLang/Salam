@@ -19,6 +19,7 @@ package tunnel
 import mem
 import atomic
 import pool
+import sync
 import net.tcp
 import net.internal.rawsock
 
@@ -40,6 +41,22 @@ pub interface Pending:
     @en "Abort"
     @fa "رها کردن"
     func Abort()
+    @en "Remote"
+    @fa "مبدا"
+    func Remote(): str
+end
+
+struct _SourceCore:
+    pub mu: sync.Mutex = sync.Mutex {}
+    pub counts: HashMap<str, int> = HashMap {}
+end
+
+@en "SourceTable"
+@fa "جدول مبداها"
+pub struct SourceTable:
+    @en "core"
+    @fa "هسته"
+    pub core: void* = null
 end
 
 @en "Acceptor"
@@ -68,6 +85,9 @@ pub struct ReadyConn:
     @en "ok"
     @fa "موفق"
     pub ok: bool = false
+    @en "remote"
+    @fa "مبدا"
+    pub remote: str = ""
 
     @en "Valid"
     @fa "معتبر"
@@ -86,6 +106,12 @@ pub struct ReadyConn:
     pub func Abort():
         this.stream.Close()
     end
+
+    @en "Remote"
+    @fa "مبدا"
+    pub func Remote(): str:
+        ret this.remote
+    end
 end
 
 @en "TcpAcceptor"
@@ -101,7 +127,7 @@ pub struct TcpAcceptor:
         c := tcp.Accept(this.server)
         if not tcp.ConnOk(c): ret ReadyConn {} end
         tcp.SetNoDelay(c, true)
-        ret ReadyConn { stream = TcpStream { conn = c }, ok = true }
+        ret ReadyConn { stream = TcpStream { conn = c }, ok = true, remote = rawsock.PeerHost(rawsock.FromFd(c.fd)) }
     end
 
     @en "Port"
@@ -140,7 +166,13 @@ pub struct AcceptServer:
     pub workers: pool.Pool = pool.Pool {}
     @en "handshake_ms"
     @fa "مهلت دست‌دهی"
-    pub handshake_ms: int = 15000
+    pub handshake_ms: int = 8000
+    @en "per_source"
+    @fa "سقف مبدا"
+    pub per_source: int = 0
+    @en "sources"
+    @fa "مبداها"
+    pub sources: SourceTable = SourceTable {}
 
     @en "Ok"
     @fa "معتبر"
@@ -166,14 +198,16 @@ pub struct AcceptServer:
     end
 end
 
-func _accept_conn(p: dyn Pending, proto: dyn InboundProtocol, h: dyn Handler, handshake_ms: int):
+func _accept_conn(p: dyn Pending, proto: dyn InboundProtocol, h: dyn Handler, handshake_ms: int, sources: SourceTable, host: str):
     up := p.Open()
     if not up.Ok():
         up.Close()
+        SourceLeave(sources, host)
         ret
     end
     up.SetDeadline(handshake_ms)
     sess := proto.Handshake(up)
+    SourceLeave(sources, host)
     if not sess.ok:
         up.Close()
         ret
@@ -185,6 +219,8 @@ end
 func _accept_loop(srv: AcceptServer, proto: dyn InboundProtocol, h: dyn Handler):
     a := srv.acceptor
     hs := srv.handshake_ms
+    limit := srv.per_source
+    sources := srv.sources
     until atomic.Get(srv.running):
         p := a.Accept()
         if not p.Valid(): continue end
@@ -192,7 +228,12 @@ func _accept_loop(srv: AcceptServer, proto: dyn InboundProtocol, h: dyn Handler)
             p.Abort()
             break
         end
-        pool.Submit(srv.workers, (): _accept_conn(p, proto, h, hs) end)
+        host := p.Remote()
+        if not SourceEnter(sources, host, limit):
+            p.Abort()
+            continue
+        end
+        pool.Submit(srv.workers, (): _accept_conn(p, proto, h, hs, sources, host) end)
     end
 end
 
@@ -202,10 +243,52 @@ func _accept_thread(jp: _AcceptJob*):
     _accept_loop(j.server, j.proto, j.handler)
 end
 
+@en "NewSourceTable"
+@fa "جدول مبداها جدید"
+pub func NewSourceTable(): SourceTable:
+    p := mem.AllocateZeroed(sizeof(_SourceCore) as u64) as _SourceCore*
+    p[0] = _SourceCore { mu = sync.NewMutex() }
+    ret SourceTable { core = p as void* }
+end
+
+@en "SourceEnter"
+@fa "ورود مبدا"
+pub func SourceEnter(t: SourceTable, host: str, limit: int): bool:
+    if limit <= 0 or host.len() == 0 or t.core == null:
+        ret true
+    end
+    c := t.core as _SourceCore*
+    sync.Lock(c[0].mu)
+    n := c[0].counts.get_or(host, 0)
+    ok := n < limit
+    if ok:
+        c[0].counts.put(host, n + 1)
+    end
+    sync.Unlock(c[0].mu)
+    ret ok
+end
+
+@en "SourceLeave"
+@fa "خروج مبدا"
+pub func SourceLeave(t: SourceTable, host: str):
+    if host.len() == 0 or t.core == null:
+        ret
+    end
+    c := t.core as _SourceCore*
+    sync.Lock(c[0].mu)
+    n := c[0].counts.get_or(host, 0)
+    if n <= 1:
+        c[0].counts.remove(host)
+    else:
+        c[0].counts.put(host, n - 1)
+    end
+    sync.Unlock(c[0].mu)
+end
+
 @en "NewAcceptServer"
 @fa "کارساز پذیرش جدید"
 pub func NewAcceptServer(a: dyn Acceptor, host: str): AcceptServer:
-    ret AcceptServer { acceptor = a, host = host, running = atomic.NewFlag(false), workers = pool.NewElastic(2 as i64, 512 as i64, 1024 as i64) }
+    ret AcceptServer { acceptor = a, host = host, running = atomic.NewFlag(false), workers = pool.NewElastic(2 as i64, 512 as i64, 1024 as i64), sources = NewSourceTable() }
 end
 
 @en "ListenTcpOn"

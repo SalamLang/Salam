@@ -1,0 +1,170 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import mem
+import sync
+import net.transport
+import net.tunnel
+import net.vless
+import net.vmess
+
+const UUID1 := "b831381d-6324-4d53-ad4f-8cda48b30811"
+
+mut ready := sync.NewWaitGroup()
+mut port := 0
+mut kind := 0
+mut seen := Vector {} as Vector<str>
+mut seen_lock := sync.NewMutex()
+
+func echo_session(p: transport.MuxIncoming*):
+    inc := p[0]
+    sync.Lock(seen_lock)
+    mut tag := "tcp"
+    if inc.udp:
+        tag = "udp"
+    end
+    seen.push(tag + " " + inc.addr.host + ":" + str_of(inc.addr.port))
+    sync.Unlock(seen_lock)
+    buf := mem.Allocate(65536 as u64)
+    until true:
+        n := inc.stream.ReadBytes(buf, 65536)
+        if n <= 0:
+            break
+        end
+        if inc.stream.WriteBytes(buf, n) != n:
+            break
+        end
+    end
+    mem.Free(buf)
+    inc.stream.Close()
+    mem.Free(p as void*)
+end
+
+func str_of(n: int): str:
+    ret "" + n
+end
+
+func serve():
+    l := transport.Listen(0, transport.Settings {})
+    port = transport.ListenerPort(l)
+    sync.Done(ready)
+    t := transport.Accept(l)
+    mut m := transport.Mux {}
+    mut users := Vector {} as Vector<vless.User>
+    users.push(vless.NewUser(UUID1, ""))
+    mut vusers := Vector {} as Vector<vmess.User>
+    vusers.push(vmess.NewUser(UUID1))
+    mut rf := vmess.NewReplayFilter()
+    if kind == 0:
+        c := vless.Accept(t, users)
+        m = vless.MuxServer(c)
+    else:
+        c := vmess.Accept(t, vusers, rf)
+        m = vmess.MuxServer(c)
+    end
+    mut inc := transport.MuxIncoming {}
+    until transport.MuxAccept(m, inc):
+        p := mem.AllocateZeroed(sizeof(transport.MuxIncoming) as u64) as transport.MuxIncoming*
+        p[0] = inc
+        _h := spawn(echo_session, p)
+    end
+    transport.CloseListener(l)
+end
+
+func exchange(s: dyn tunnel.Stream, seed: int, n: int): bool:
+    mut out := transport.NewBytes(n + 1)
+    repeat n in i:
+        transport.Put8(out, (i * 3 + seed) & 255)
+    end
+    if s.WriteBytes(out.p, n) != n:
+        ret false
+    end
+    back := mem.AllocateZeroed((n + 1) as u64)
+    mut got := 0
+    until got < n:
+        r := s.ReadBytes(((back as i64) + (got as i64)) as void*, n - got)
+        if r <= 0:
+            break
+        end
+        got += r
+    end
+    bp := back as u8*
+    mut good := got == n
+    repeat got in i:
+        if (bp[i] as int) != ((i * 3 + seed) & 255):
+            good = false
+            break
+        end
+    end
+    mem.Free(back)
+    transport.FreeBytes(out)
+    ret good
+end
+
+func run(label: str, k: int):
+    kind = k
+    seen = Vector {} as Vector<str>
+    sync.Add(ready, 1 as i64)
+    t := spawn(serve)
+    sync.Wait(ready)
+    plain := transport.Settings {}
+    tc := transport.Dial("127.0.0.1", port, plain)
+    mut m := transport.Mux {}
+    if k == 0:
+        c := vless.Client(tc, UUID1, "", vless.CmdMux, transport.Addr {})
+        m = vless.MuxClient(c)
+    else:
+        c := vmess.Client(tc, UUID1, vmess.SecAES128GCM, vmess.DefaultOption(vmess.SecAES128GCM), vmess.CmdMux, transport.Addr {})
+        m = vmess.MuxClient(c)
+    end
+    a := transport.MuxOpen(m, transport.NewAddr("one.example.com", 443), false)
+    b := transport.MuxOpen(m, transport.NewAddr("10.0.0.2", 80), false)
+    d := transport.MuxOpen(m, transport.NewAddr("8.8.8.8", 53), true)
+    r1 := exchange(a, 1, 40000)
+    r2 := exchange(b, 2, 100)
+    r3 := exchange(d, 3, 700)
+    r4 := exchange(a, 4, 3000)
+    println label, "three sessions over one connection:", r1, r2, r3, r4
+    a.Close()
+    r5 := exchange(b, 5, 20000)
+    println label, "other session survives a close:", r5, "closed one is not ok:", not a.Ok()
+    b.Close()
+    d.Close()
+    sync.SleepMs(100)
+    sync.Lock(seen_lock)
+    mut tcp_one := false
+    mut tcp_two := false
+    mut udp_one := false
+    repeat seen.len() in i:
+        v := seen.get(i)
+        if v == "tcp one.example.com:443":
+            tcp_one = true
+        end
+        if v == "tcp 10.0.0.2:80":
+            tcp_two = true
+        end
+        if v == "udp 8.8.8.8:53":
+            udp_one = true
+        end
+    end
+    sync.Unlock(seen_lock)
+    println label, "server saw targets:", tcp_one, tcp_two, udp_one
+    transport.MuxClose(m)
+    join(t)
+end
+
+func main:
+    run("vless", 0)
+    run("vmess", 1)
+end

@@ -362,7 +362,7 @@ func _szf_filter_kind(id: i64): int:
 end
 
 func _szf_source_ok(id: i64): bool:
-    ret id == (0 as i64) or id == (0x030101 as i64) or id == (0x21 as i64) or id == (0x040108 as i64) or id == (0x040109 as i64) or id == (0x040202 as i64)
+    ret id == (0 as i64) or id == (0x030101 as i64) or id == (0x21 as i64) or id == (0x040108 as i64) or id == (0x040109 as i64) or id == (0x040202 as i64) or id == (0x030401 as i64)
 end
 
 func _szf_range(s: _Sz, f: _SzFolder, avail: i64, lo &: i64, hi &: i64): int:
@@ -507,24 +507,27 @@ func _szf_source(rfp: void*, roff: i64, rsz: i64, c: _SzCoder, out_size: i64, me
         if not good:
             code = sink.failed or sink.over ? 3 : 1
         end
+    else id == (0x040202 as i64):
+        if memcap > (0 as i64):
+            hb := mem.AllocateZeroed(8 as u64) as u8*
+            hn := compress.FileReadAt(rfp, roff, hb as void*, 4)
+            level := hn == 4 ? (hb[3] as int) - 48 : 0
+            mem.Free(hb as void*)
+            if level >= 1 and level <= 9 and (level as i64) * (500000 as i64) > memcap:
+                ret SEVENZIP_TOO_BIG
+            end
+        end
+        if sink.cap == (0 as i64) and out_size > (0 as i64):
+            sink.cap = out_size
+        end
+        code = compress.Bzip2FileToSink(rfp, roff, rsz, sink)
+    else id == (0x030401 as i64):
+        pst := _szf_ppmd(rfp, roff, rsz, c, out_size, memcap, sink)
+        if pst != SEVENZIP_OK:
+            ret pst
+        end
     else:
-        if rsz > (2000000000 as i64) or out_size > (2000000000 as i64) or (memcap > (0 as i64) and rsz + out_size > memcap):
-            ret SEVENZIP_TOO_BIG
-        end
-        packed := mem.Allocate((rsz + (1 as i64)) as u64)
-        mut ok := compress.FileReadAt(rfp, roff, packed, rsz as int) == (rsz as int)
-        mut res := compress.NewByteBuf()
-        if ok:
-            res = compress.Bzip2DecompressMax(packed, rsz as int, out_size as int, ok)
-        end
-        mem.Free(packed)
-        if ok:
-            ok = res.len == (out_size as int) and compress.SinkWrite(sink, res.data, res.len)
-        end
-        compress.BufFree(res)
-        if not ok:
-            code = sink.failed or sink.over ? 3 : 1
-        end
+        ret SEVENZIP_UNSUPPORTED
     end
     if code == 0:
         if sink.written != out_size:

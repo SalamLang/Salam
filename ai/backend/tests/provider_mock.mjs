@@ -4,6 +4,7 @@ const PORT = Number(process.env.PORT ?? 18095);
 const GH_TOKEN = "ghp_validtoken0123456789abcdef";
 const FG_TOKEN = "figd_validtoken0123456789abcdef";
 const seen = [];
+const mcpSeen = [];
 const exp = { access: new Set(), refresh: new Set(), seq: 0, refreshes: 0 };
 const issue = (secs) => {
   exp.seq += 1;
@@ -23,9 +24,44 @@ http
         res.end(JSON.stringify(obj));
       };
       if (url.pathname === "/_seen") return send(200, seen);
+      if (url.pathname === "/mcp/" || url.pathname === "/mcp") {
+        const auth = req.headers.authorization ?? "";
+        mcpSeen.push({ method: req.method, auth, body });
+        if (auth !== `Bearer ${GH_TOKEN}`) return send(auth.startsWith("Bearer ghu_") ? 403 : 401, { message: "bad token" });
+        let rpc = {};
+        try {
+          rpc = JSON.parse(body || "{}");
+        } catch {}
+        if (rpc.method === "initialize") {
+          res.writeHead(200, { "Content-Type": "application/json", "Mcp-Session-Id": "sess-1" });
+          return res.end(JSON.stringify({ jsonrpc: "2.0", id: rpc.id, result: { protocolVersion: "2025-06-18", capabilities: {}, serverInfo: { name: "mock" } } }));
+        }
+        if (rpc.method === "notifications/initialized") {
+          res.writeHead(202);
+          return res.end();
+        }
+        if (req.headers["mcp-session-id"] !== "sess-1") return send(400, { error: "no session" });
+        const reply = (result) => {
+          res.writeHead(200, { "Content-Type": "text/event-stream" });
+          res.end(`event: message\ndata: ${JSON.stringify({ jsonrpc: "2.0", id: rpc.id, result })}\n\n`);
+        };
+        if (rpc.method === "tools/list") {
+          const names = ["search_code", "get_file_contents", "issue_write", "merge_pull_request", "delete_file", "create_repository"];
+          return reply({ tools: names.map((name) => ({ name, description: `mock ${name}`, inputSchema: { type: "object" } })) });
+        }
+        if (rpc.method === "tools/call") {
+          const name = rpc.params.name;
+          if (name === "get_file_contents") return reply({ content: [{ type: "text", text: "x".repeat(60000) }] });
+          if (name === "search_code") return reply({ content: [{ type: "text", text: `found in octo-dev/secret-app; leaked ${GH_TOKEN} and gho_abcdefghijklmnopqrstuvwxyz0123` }] });
+          if (name === "issue_write") return reply({ content: [{ type: "text", text: `issue created: ${rpc.params.arguments.title}` }] });
+          return reply({ content: [{ type: "text", text: `ran ${name}` }], isError: true });
+        }
+        return send(404, { error: "unknown method" });
+      }
       seen.push({ method: req.method, path: url.pathname + url.search, auth: req.headers.authorization ?? req.headers["x-figma-token"] ?? "", body });
       const bearer = (req.headers.authorization ?? "").replace("Bearer ", "");
       const fields = (token, prefix) => (token.startsWith(prefix) ? decodeURIComponent(token.slice(prefix.length)).split("|") : null);
+      if (url.pathname === "/_mcp_seen") return send(200, mcpSeen);
       if (url.pathname === "/_state") return send(200, { refreshes: exp.refreshes, access: exp.access.size, refresh: exp.refresh.size });
       if (url.pathname === "/_expire") {
         exp.access.clear();

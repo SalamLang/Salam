@@ -1,12 +1,25 @@
 pkg.en = archive
 pkg.name = archive
 pkg.group = Encoding and data
-pkg.summary = Making and opening zip and tar archives, reading and writing RAR, and gzipping a file.
-pkg.title = The archive package in Salam | zip and tar
-pkg.description = The archive package in Salam: making, listing and extracting zip and tar, reading and writing RAR and gzipping a file, with examples.
+pkg.summary = Making, listing, checking and extracting zip, tar, tar.gz, gzip and RAR files, with passwords and multi-volume RAR.
+pkg.title = The archive package in Salam | zip, tar, gzip and RAR
+pkg.description = The archive package in Salam: making, listing, checking and extracting zip, tar, tar.gz, gzip and RAR (passwords and multi-volume too), with examples.
 pkg.intro <<
 <p>An archive gathers several files into one. <strong>Zip</strong> compresses each file on its own; <strong>tar</strong> only puts the files one after another and is usually gzipped afterwards (<code>.tar.gz</code>).</p>
 <p>The functions work both in memory and on files. They take the archive data as an address and a length, such as <code>b.data</code> and <code>b.len</code> of a byte buffer.</p>
+
+<h3 id="formats">Every format at a glance</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Format</th><th>Make</th><th>List</th><th>Read one file</th><th>Extract all</th><th>Is the data checked?</th></tr></thead>
+<tbody>
+<tr><td><code>.zip</code></td><td><code>ZipCreate</code>, <code>ZipCreateFile</code></td><td><code>ZipList</code></td><td><code>ZipExtractByName</code>, <code>ZipExtractByNameMax</code></td><td><code>ZipExtractAll</code></td><td>Not while extracting. Compare <code>Entry.crc32</code> with <code>compress.CRC32Buf</code> (see "Check an archive").</td></tr>
+<tr><td><code>.tar</code></td><td><code>TarCreate</code>, <code>TarCreateFile</code></td><td><code>TarList</code></td><td><code>TarExtractByName</code></td><td><code>TarExtractAll</code></td><td>No. Tar keeps no checksum of the contents.</td></tr>
+<tr><td><code>.tar.gz</code></td><td><code>TarCreate</code>, then <code>compress.GzipCompressBuf</code></td><td>gunzip, then <code>TarList</code></td><td>gunzip, then <code>TarExtractByName</code></td><td>gunzip, then <code>TarExtractAll</code></td><td>Yes, by the gzip step: its CRC-32 and length are verified.</td></tr>
+<tr><td><code>.gz</code> (one file)</td><td><code>GzipCompressFile</code>, <code>compress.GzipCompressBuf</code></td><td>not applicable</td><td><code>GzipDecompressFile</code>, <code>compress.GzipDecompressBuf</code></td><td>the same</td><td>Yes: CRC-32 and length are verified, <code>ok</code> is false on a mismatch.</td></tr>
+<tr><td><code>.rar</code></td><td><code>RarCreate</code>, <code>RarCreateFile</code> (stored, RAR 5)</td><td><code>RarList</code>, <code>RarEntries</code></td><td><code>RarExtract</code>, <code>RarRead</code></td><td><code>RarExtractAll</code>, <code>RarReadAll</code></td><td>Yes, every entry; the result is a status code.</td></tr>
+</tbody>
+</table></div>
+<p>Passwords and multi-volume sets work for RAR only, through <code>RarOpen</code> and <code>RarOpenVolumes</code>. Zip passwords are not supported.</p>
 
 <p>The compression itself comes from <a href="/std/compress/">compress</a>; use that package directly to gzip a single file or stream. For reading and writing the files on disk around an archive, see <a href="/std/fs/file/">fs.file</a>.</p>
 <h3 id="limits">Limits to know about</h3>
@@ -48,6 +61,21 @@ pkg.intro <<
 {{example.archive-guide-extract}}
 <p>A false result from an extract call is therefore not always a disk error: check the entry names with <code>ZipList</code> or <code>TarList</code> when you need to tell the two apart.</p>
 
+<h2 id="guide-gzip">Gzip a single file (.gz)</h2>
+<p>A <code>.gz</code> holds one file, not a folder. <code>GzipCompressFile</code> and <code>GzipDecompressFile</code> go from a path to a path and return false when they cannot read, write or decode; in memory, <code>compress.GzipCompressBuf</code> and <code>compress.GzipDecompressBuf</code> do the same on a buffer. Decompressing checks the trailer, so a damaged or cut file is refused instead of giving back wrong bytes. For data from someone else use <code>compress.GzipDecompressMax</code>, which stops at a size you choose, so a tiny file cannot expand into gigabytes.</p>
+{{example.archive-guide-gzip}}
+<p>To compress several files, put them in a tar first (the <code>.tar.gz</code> section above). To open a <code>.tar.gz</code> you do the same two steps backwards.</p>
+
+<h2 id="guide-check">Check an archive</h2>
+<p>"Check" means two different things. To see what is inside without unpacking, list it: <code>ZipList</code>, <code>TarList</code> and <code>RarList</code> (or <code>RarEntries</code>) give every name, size, folder flag and, for zip and RAR, the stored CRC-32; free the list with <code>FreeEntries</code>. To know the data is intact, you need a checksum, and formats differ:</p>
+<ul>
+<li><strong>gzip and RAR</strong> verify themselves. A gzip call returns <code>ok = false</code>; a RAR call sets the status to <code>RAR_BAD_CRC</code>, or <code>RAR_BAD_PASSWORD</code> when a password was wrong.</li>
+<li><strong>zip</strong> stores a CRC-32 for each entry but does not compare it while extracting. Extract the entry and compare <code>compress.CRC32Buf(data)</code> with <code>Entry.crc32</code>, as the example does.</li>
+<li><strong>tar</strong> has no checksum for the contents. All you can check is that the listing is sane (names, sizes); for integrity gzip the tar and rely on the gzip trailer, or keep a hash next to the file.</li>
+</ul>
+{{example.archive-guide-check}}
+<p>In the example one byte of the first zip entry was changed. Extraction still reports success for it, but its checksum no longer matches, while the second entry is fine. The RAR entry with the same damage is refused by the extractor itself.</p>
+
 <h2 id="guide-rar">Read and write a RAR</h2>
 <p>Reading goes through <code>RarList</code> and <code>RarExtract</code>, the same way as zip. The sample below is a small solid RAR 5 made by WinRAR: the second file is packed against the first, so <code>RarExtract</code> unpacks both to reach it. Every entry is checked against its CRC-32, and the <code>status</code> says what went wrong instead of returning silent garbage.</p>
 {{example.archive-guide-rar}}
@@ -70,6 +98,9 @@ pkg.intro <<
 <tr><td>One file out of an archive</td><td><code>ZipExtractByName</code>, <code>TarExtractByName</code></td></tr>
 <tr><td>Everything into a folder</td><td><code>ZipExtractAll</code>, <code>TarExtractAll</code></td></tr>
 <tr><td>A RAR file</td><td><code>RarList</code>, <code>RarExtract</code> (or <code>RarExtractByName</code>), <code>RarExtractAll</code>; <code>RarCreate</code> to make one</td></tr>
+<tr><td>A single compressed file (<code>.gz</code>)</td><td><code>GzipCompressFile</code>, <code>GzipDecompressFile</code></td></tr>
+<tr><td>Check that an archive is intact</td><td>zip: compare <code>CRC32Buf</code> with <code>Entry.crc32</code>; gzip and RAR check themselves; see "Check an archive"</td></tr>
+<tr><td>A password-protected or multi-volume RAR</td><td><code>RarOpen</code>, <code>RarOpenVolumes</code>, then <code>RarEntries</code>, <code>RarRead</code>, <code>RarReadAll</code></td></tr>
 <tr><td>Bytes from and to disk</td><td><code>ReadBinaryFile</code>, <code>WriteBinaryFileBuf</code></td></tr>
 </tbody>
 </table></div>

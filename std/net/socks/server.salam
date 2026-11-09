@@ -243,7 +243,7 @@ func _udp_thread(arg: i64):
         ch = expect
         cp = cport
     end
-    until atomic_load(stop) == 0:
+    until atomic_load(stop) != 0:
         mut fh := ""
         mut fp := 0
         n := udp.ReceiveBytes(sock, ibuf, cap, fh, fp)
@@ -431,12 +431,15 @@ func _serve5(cfg: ServerConfig, s: dyn tunnel.Stream):
     switch req.cmd:
         1:
             _do_connect(cfg, s, 5, req.addr)
+            break
         end
         2:
             _do_bind(cfg, s, 5, req.addr)
+            break
         end
         3:
             _do_udp(cfg, s, req.addr)
+            break
         end
         else:
             _reply(s, 5, RepCmdNotSupported, _wild())
@@ -482,9 +485,11 @@ func _serve4(cfg: ServerConfig, s: dyn tunnel.Stream):
     switch req.cmd:
         1:
             _do_connect(cfg, s, 4, req.addr)
+            break
         end
         2:
             _do_bind(cfg, s, 4, req.addr)
+            break
         end
         else:
             _reply(s, 4, RepCmdNotSupported, _wild())
@@ -509,8 +514,9 @@ func _accept_thread(arg: i64):
     mem.Free(jp as void*)
     until atomic_load(stop) != 0:
         c := tcp.Accept(lst)
-        if not tcp.ConnOk(c):
-            if atomic_load(stop) != 0: continue end
+        if atomic_load(stop) == 0:
+            if tcp.ConnOk(c): tcp.Close(c) end
+        else not tcp.ConnOk(c):
             sync.SleepMs(5)
         else:
             cj := mem.AllocateZeroed(sizeof(_ConnJob) as u64) as _ConnJob*
@@ -518,6 +524,7 @@ func _accept_thread(arg: i64):
             Go(_conn_thread, cj as void*)
         end
     end
+    tcp.CloseServer(lst)
     mem.Free(stop as void*)
 end
 
@@ -586,7 +593,8 @@ pub func Stop(sv: Server):
     if not sv.ok: ret end
     atomic_store(sv.stop_cell, 0 as i64)
     rawsock.Shutdown(rawsock.FromFd(sv.listener.fd))
-    tcp.CloseServer(sv.listener)
+    wake := tcp.DialTimeout("127.0.0.1", sv.port, 500)
+    if tcp.ConnOk(wake): tcp.Close(wake) end
 end
 
 @en "Serve"

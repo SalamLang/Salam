@@ -89,6 +89,9 @@ pub struct Session:
     @en "stream"
     @fa "جریان"
     pub stream: dyn Stream = ClosedStream {}
+    @en "refused"
+    @fa "ممنوع"
+    pub refused: bool = false
 end
 
 @en "InboundProtocol"
@@ -218,15 +221,29 @@ pub struct ForwardHandler:
     @en "idle_ms"
     @fa "مهلت بیکاری"
     pub idle_ms: int = 300000
+    @en "guard"
+    @fa "نگهبان"
+    pub guard: GuardDialer = GuardDialer {}
+    @en "has_guard"
+    @fa "نگهبان دارد"
+    pub has_guard: bool = false
 
     @en "Handle"
     @fa "رسیدگی"
     pub func Handle(s: dyn Stream, sess: Session):
         atomic.Add(this.stats.total, 1 as i64)
-        out := this.dialer.Dial(sess.target)
+        mut gr := GuardResult {}
+        if this.has_guard:
+            gr = this.guard.DialChecked(sess.target)
+        else:
+            gr.stream = this.dialer.Dial(sess.target)
+        end
+        out := gr.stream
         if not out.Ok():
             atomic.Add(this.stats.failed, 1 as i64)
-            this.proto.Reply(s, sess, false)
+            mut failed := sess
+            failed.refused = gr.denied
+            this.proto.Reply(s, failed, false)
             s.Close()
             ret
         end
@@ -417,4 +434,10 @@ end
 @fa "انتقال‌دهنده جدید"
 pub func NewForwarder(dialer: dyn Dialer, proto: dyn InboundProtocol): ForwardHandler:
     ret ForwardHandler { dialer = dialer, proto = proto, stats = NewStats() }
+end
+
+@en "NewGuardedForwarder"
+@fa "انتقال‌دهنده نگهبان‌دار جدید"
+pub func NewGuardedForwarder(guard: GuardDialer, proto: dyn InboundProtocol): ForwardHandler:
+    ret ForwardHandler { dialer = guard, proto = proto, stats = NewStats(), guard = guard, has_guard = true }
 end

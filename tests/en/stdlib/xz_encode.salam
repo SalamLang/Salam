@@ -1,0 +1,170 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import archive
+import compress
+import filepath
+import os
+
+const WORDS := ["salam", "compress", "xz", "lzma", "archive", "the", "quick", "brown", "fox", "jumps", "over", "lazy", "dog", "stream", "block", "index"]
+
+func lcg(x: i64): i64:
+    ret (x * 1103515245 + 12345) & 0x7fffffff
+end
+
+func gen_text(n: int, seed: i64): compress.ByteBuf:
+    mut out := compress.NewByteBuf()
+    mut x := seed
+    repeat n:
+        x = lcg(x)
+        w := WORDS[((x >> 8) % 16) as int]
+        compress.BufPushBytes(out, w as void*, w.len())
+        if ((x >> 4) & 7) == 0:
+            compress.BufPush(out, 10)
+        else:
+            compress.BufPush(out, 32)
+        end
+    end
+    ret out
+end
+
+func gen_noise(n: int, seed: i64): compress.ByteBuf:
+    mut out := compress.NewByteBuf()
+    mut x := seed
+    repeat n:
+        x = lcg(x)
+        compress.BufPush(out, ((x >> 10) & 255) as int)
+    end
+    ret out
+end
+
+func gen_mixed(): compress.ByteBuf:
+    mut out := gen_text(6000, 5 as i64)
+    compress.BufPushBuf(out, gen_noise(70000, 9 as i64))
+    compress.BufPushBuf(out, gen_text(6000, 5 as i64))
+    repeat 40000:
+        compress.BufPush(out, 0)
+    end
+    compress.BufPushBuf(out, gen_noise(300, 3 as i64))
+    ret out
+end
+
+func hex(b: compress.ByteBuf): str:
+    digits := "0123456789abcdef"
+    mut s := ""
+    repeat b.len in i:
+        v := compress.BufGet(b, i)
+        s = s + digits.substr(v >> 4, 1) + digits.substr(v & 15, 1)
+    end
+    ret s
+end
+
+func xz_case(label: str, src: compress.ByteBuf, level: int, check: int):
+    packed := compress.XzCompressCheck(src.data, src.len, level, check)
+    mut ok := false
+    back := compress.XzDecompressBuf(packed, ok)
+    println label, ok, compress.BufEquals(back, src), packed.len < src.len + 80
+end
+
+func lzma_case(label: str, src: compress.ByteBuf, level: int):
+    packed := compress.LzmaCompressLevel(src.data, src.len, level)
+    mut ok := false
+    back := compress.LzmaDecompressBuf(packed, ok)
+    println label, ok, compress.BufEquals(back, src), packed.len < src.len + src.len / 20 + 40
+end
+
+func main:
+    text := gen_text(4000, 1 as i64)
+    noise := gen_noise(20000, 2 as i64)
+    mixed := gen_mixed()
+    one := compress.BufFromStr("a")
+    empty := compress.NewByteBuf()
+    println "== xz =="
+    xz_case("empty", empty, 6, 4)
+    xz_case("one byte", one, 6, 4)
+    xz_case("text", text, 6, 4)
+    xz_case("noise", noise, 6, 4)
+    xz_case("mixed", mixed, 6, 4)
+    println "== checks =="
+    xz_case("none", text, 6, compress.XzCheckNone)
+    xz_case("crc32", text, 6, compress.XzCheckCrc32)
+    xz_case("crc64", text, 6, compress.XzCheckCrc64)
+    xz_case("sha256", text, 6, compress.XzCheckSha256)
+    xz_case("unknown check becomes crc64", text, 6, 3)
+    println "== levels =="
+    for_each_level(text, mixed)
+    println "== lzma =="
+    lzma_case("empty", empty, 6)
+    lzma_case("one byte", one, 6)
+    lzma_case("text", text, 6)
+    lzma_case("noise", noise, 6)
+    lzma_case("mixed", mixed, 9)
+
+    println "== sizes =="
+    px := compress.XzCompress(text.data, text.len)
+    pl := compress.LzmaCompress(text.data, text.len)
+    println "text", text.len, px.len < text.len / 3, pl.len < text.len / 3
+    pn := compress.XzCompress(noise.data, noise.len)
+    println "noise stays stored", pn.len < noise.len + 80
+    pe := compress.XzCompressBuf(empty)
+    println "empty stream", pe.len
+    ps := compress.XzCompressStr("salam salam salam salam")
+    println "str", compress.BufGet(ps, 0), compress.BufGet(ps, 1), compress.BufGet(ps, 5)
+    pb := compress.XzCompressBuf(text)
+    println "buf equals", compress.BufEquals(pb, px)
+    lb := compress.LzmaCompressBuf(text)
+    println "lzma buf equals", compress.BufEquals(lb, pl)
+    ls := compress.LzmaCompressStr("salam")
+    println "lzma header", compress.BufGet(ls, 0), compress.BufGet(ls, 5), ls.len
+
+    println "== bytes =="
+    println "xz", hex(compress.XzCompressCheck("salam salam salam salam" as void*, 23, 6, 1))
+    println "lzma", hex(compress.LzmaCompressLevel("salam salam salam salam" as void*, 23, 6))
+
+    println "== files =="
+    src_path := filepath.Join(os.TempDir(), "salam_xz_encode.src")
+    xz_path := filepath.Join(os.TempDir(), "salam_xz_encode.xz")
+    lzma_path := filepath.Join(os.TempDir(), "salam_xz_encode.lzma")
+    back_path := filepath.Join(os.TempDir(), "salam_xz_encode.back")
+    archive.WriteBinaryFileBuf(src_path, mixed)
+    println "xz file", archive.XzCompressFile(src_path, xz_path), archive.XzDecompressFile(xz_path, back_path), read_same(back_path, mixed)
+    println "lzma file", archive.LzmaCompressFile(src_path, lzma_path), archive.LzmaDecompressFile(lzma_path, back_path), read_same(back_path, mixed)
+    println "missing file", archive.XzCompressFile(src_path + ".missing", xz_path)
+    os.Remove(src_path)
+    os.Remove(xz_path)
+    os.Remove(lzma_path)
+    os.Remove(back_path)
+end
+
+func read_same(path: str, want: compress.ByteBuf): bool:
+    mut ok := false
+    got := archive.ReadBinaryFile(path, ok)
+    ret ok and compress.BufEquals(got, want)
+end
+
+func for_each_level(a: compress.ByteBuf, b: compress.ByteBuf):
+    mut lv := 0
+    until lv <= 9:
+        mut ok := false
+        pa := compress.XzCompressLevel(a.data, a.len, lv)
+        ba := compress.XzDecompressBuf(pa, ok)
+        oka := ok and compress.BufEquals(ba, a)
+        pb := compress.XzCompressLevel(b.data, b.len, lv)
+        bb := compress.XzDecompressBuf(pb, ok)
+        println "level", lv, oka, ok and compress.BufEquals(bb, b)
+        lv++
+    end
+end

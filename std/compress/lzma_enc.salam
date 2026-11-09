@@ -1,0 +1,763 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package compress
+
+import mem
+import crypto
+
+const _LZE_MAXLEN := 273
+const _LZE_CHUNK_USIZE := 2097152
+const _LZE_CHUNK_CSIZE := 65400
+
+@en "XzCheckNone"
+@fa "بررسی ایکس زد هیچ"
+pub const XzCheckNone := 0
+
+@en "XzCheckCrc32"
+@fa "بررسی ایکس زد سی آر سی۳۲"
+pub const XzCheckCrc32 := 1
+
+@en "XzCheckCrc64"
+@fa "بررسی ایکس زد سی آر سی۶۴"
+pub const XzCheckCrc64 := 4
+
+@en "XzCheckSha256"
+@fa "بررسی ایکس زد شا۲۵۶"
+pub const XzCheckSha256 := 10
+
+struct _Lze:
+    pub probs: u16*
+    pub low: i64
+    pub range: i64
+    pub cache: int
+    pub csize: int
+    pub rc: ByteBuf
+    pub state: int
+    pub rep0: int
+    pub rep1: int
+    pub rep2: int
+    pub rep3: int
+    pub src: u8*
+    pub n: int
+    pub head: u32*
+    pub prev: u32*
+    pub hbits: int
+    pub wmask: int
+    pub ins: int
+    pub depth: int
+    pub nice: int
+    pub lazy: bool
+    pub dsize: int
+end
+
+func _lze_dict_for(level: int, n: int): int:
+    mut want := 262144
+    if level == 1:
+        want = 1048576
+    else level == 2:
+        want = 2097152
+    else level == 3 or level == 4:
+        want = 4194304
+    else level == 5 or level == 6:
+        want = 8388608
+    else level == 7:
+        want = 16777216
+    else level == 8:
+        want = 33554432
+    else level == 9:
+        want = 67108864
+    end
+    mut need := n
+    if need < 4096:
+        need = 4096
+    end
+    if want > need:
+        want = need
+    end
+    ret want
+end
+
+func _lze_dict_prop(size: int): int:
+    mut b := 0
+    until b < 40 and (_lzma2_dict_size(b) < (size as i64)):
+        b++
+    end
+    ret b
+end
+
+func _lze_new(p: void*, n: int, level: int, dsize: int): _Lze:
+    mut lv := level
+    if lv < 0:
+        lv = 0
+    end
+    if lv > 9:
+        lv = 9
+    end
+    depths := [2, 4, 8, 16, 24, 48, 64, 128, 256, 512]
+    nices := [16, 24, 32, 48, 64, 64, 64, 96, 128, 273]
+    mut wsize := 4096
+    until wsize < dsize and wsize < n + 1:
+        wsize <<= 1
+    end
+    mut hb := 16
+    if lv >= 5:
+        hb = 18
+    end
+    nprobs := 1860 + (768 << 3)
+    pr := mem.Allocate((nprobs * 2) as u64) as u16*
+    ret _Lze {
+        probs = pr, low = 0 as i64, range = 0xFFFFFFFF as i64, cache = 0, csize = 1
+        rc = NewByteBuf(), state = 0, rep0 = 0, rep1 = 0, rep2 = 0, rep3 = 0
+        src = p as u8*, n = n
+        head = mem.AllocateZeroed(((1 << hb) * 4) as u64) as u32*
+        prev = mem.AllocateZeroed((wsize * 4) as u64) as u32*
+        hbits = hb, wmask = wsize - 1, ins = 0
+        depth = depths[lv], nice = nices[lv], lazy = lv >= 4, dsize = dsize
+    }
+end
+
+func _lze_free(e &: _Lze):
+    mem.Free(e.probs as void*)
+    mem.Free(e.head as void*)
+    mem.Free(e.prev as void*)
+    BufFree(e.rc)
+end
+
+func _lze_reset_state(e &: _Lze):
+    total := 1860 + (768 << 3)
+    mut i := 0
+    until i < total:
+        e.probs[i] = 1024 as u16
+        i++
+    end
+    e.state = 0
+    e.rep0 = 0
+    e.rep1 = 0
+    e.rep2 = 0
+    e.rep3 = 0
+end
+
+func _lze_rc_reset(e &: _Lze):
+    e.low = 0 as i64
+    e.range = 0xFFFFFFFF as i64
+    e.cache = 0
+    e.csize = 1
+    BufReset(e.rc)
+end
+
+func _lze_shift(e &: _Lze):
+    if e.low < (0xFF000000 as i64) or e.low >= (0x100000000 as i64):
+        carry := (e.low >> 32) as int
+        mut temp := e.cache
+        until e.csize > 0:
+            BufPush(e.rc, (temp + carry) & 255)
+            temp = 255
+            e.csize--
+        end
+        e.cache = ((e.low >> 24) & (255 as i64)) as int
+    end
+    e.csize++
+    e.low = (e.low & (0xFFFFFF as i64)) << 8
+end
+
+func _lze_flush(e &: _Lze):
+    mut i := 0
+    until i < 5:
+        _lze_shift(e)
+        i++
+    end
+end
+
+inline func _lze_bit(e &: _Lze, idx: int, bit: int):
+    prob := e.probs[idx] as i64
+    bound := (e.range >> 11) * prob
+    if bit == 0:
+        e.range = bound
+        e.probs[idx] = (prob + ((2048 - prob) >> 5)) as u16
+    else:
+        e.low += bound
+        e.range -= bound
+        e.probs[idx] = (prob - (prob >> 5)) as u16
+    end
+    if e.range < (16777216 as i64):
+        e.range <<= 8
+        _lze_shift(e)
+    end
+end
+
+func _lze_direct(e &: _Lze, v: int, nbits: int):
+    mut i := nbits - 1
+    until i >= 0:
+        e.range >>= 1
+        if ((v >> i) & 1) != 0:
+            e.low += e.range
+        end
+        if e.range < (16777216 as i64):
+            e.range <<= 8
+            _lze_shift(e)
+        end
+        i--
+    end
+end
+
+func _lze_tree(e &: _Lze, base: int, nbits: int, v: int):
+    mut m := 1
+    mut i := nbits - 1
+    until i >= 0:
+        bit := (v >> i) & 1
+        _lze_bit(e, base + m, bit)
+        m = (m << 1) + bit
+        i--
+    end
+end
+
+func _lze_rtree(e &: _Lze, base: int, nbits: int, v: int):
+    mut m := 1
+    mut i := 0
+    until i < nbits:
+        bit := (v >> i) & 1
+        _lze_bit(e, base + m, bit)
+        m = (m << 1) + bit
+        i++
+    end
+end
+
+func _lze_len(e &: _Lze, base: int, pos_state: int, len: int):
+    l := len - 2
+    if l < 8:
+        _lze_bit(e, base, 0)
+        _lze_tree(e, base + 2 + pos_state * 8, 3, l)
+    else l < 16:
+        _lze_bit(e, base, 1)
+        _lze_bit(e, base + 1, 0)
+        _lze_tree(e, base + 130 + pos_state * 8, 3, l - 8)
+    else:
+        _lze_bit(e, base, 1)
+        _lze_bit(e, base + 1, 1)
+        _lze_tree(e, base + 258, 8, l - 16)
+    end
+end
+
+func _lze_dist(e &: _Lze, dist: int, len: int):
+    mut ls := len - 2
+    if ls > 3:
+        ls = 3
+    end
+    mut slot := dist
+    if dist >= 4:
+        mut nb := 31
+        until (dist >> nb) == 0:
+            nb--
+        end
+        slot = nb * 2 + ((dist >> (nb - 1)) & 1)
+    end
+    _lze_tree(e, 432 + ls * 64, 6, slot)
+    if slot < 4:
+        ret
+    end
+    nbits := (slot >> 1) - 1
+    base := (2 | (slot & 1)) << nbits
+    rem := dist - base
+    if slot < 14:
+        _lze_rtree(e, 688 + base - slot - 1, nbits, rem)
+    else:
+        _lze_direct(e, rem >> 4, nbits - 4)
+        _lze_rtree(e, 816, 4, rem & 15)
+    end
+end
+
+func _lze_hash(e &: _Lze, p: int): int:
+    v := (e.src[p] as i64) | ((e.src[p + 1] as i64) << 8) | ((e.src[p + 2] as i64) << 16)
+    h := ((v * (506832829 as i64)) & (0xFFFFFFFF as i64)) >> (32 - e.hbits)
+    ret h as int
+end
+
+func _lze_ins_to(e &: _Lze, upto: int):
+    until e.ins < upto:
+        if e.ins + 3 <= e.n:
+            h := _lze_hash(e, e.ins)
+            e.prev[e.ins & e.wmask] = e.head[h]
+            e.head[h] = (e.ins + 1) as u32
+        end
+        e.ins++
+    end
+end
+
+func _lze_mlen(e &: _Lze, a: int, b: int, maxlen: int): int:
+    mut l := 0
+    until l < maxlen and e.src[a + l] == e.src[b + l]:
+        l++
+    end
+    ret l
+end
+
+func _lze_find(e &: _Lze, pos: int, maxlen: int, dist &: int): int:
+    _lze_ins_to(e, pos)
+    dist = 0
+    if maxlen < 3:
+        ret 0
+    end
+    h := _lze_hash(e, pos)
+    mut cand := (e.head[h] as int) - 1
+    mut best := 2
+    mut left := e.depth
+    until best < maxlen and cand >= 0 and left > 0:
+        offs := pos - cand
+        if offs > e.dsize:
+            break
+        end
+        if e.src[cand + best] == e.src[pos + best] and e.src[cand] == e.src[pos]:
+            l := _lze_mlen(e, pos, cand, maxlen)
+            if l > best:
+                best = l
+                dist = offs - 1
+                if l >= e.nice:
+                    break
+                end
+            end
+        end
+        nxt := (e.prev[cand & e.wmask] as int) - 1
+        if nxt >= cand:
+            break
+        end
+        cand = nxt
+        left--
+    end
+    if best < 3:
+        ret 0
+    end
+    if best == 3 and dist >= 16384:
+        ret 0
+    end
+    ret best
+end
+
+func _lze_literal(e &: _Lze, pos: int, pos_state: int):
+    st := e.state
+    _lze_bit(e, st * 16 + pos_state, 0)
+    mut prev := 0
+    if pos > 0:
+        prev = e.src[pos - 1] as int
+    end
+    base := 1860 + 768 * (prev >> 5)
+    byte := e.src[pos] as int
+    mut sym := 1
+    if st >= 7:
+        mut mb := e.src[pos - e.rep0 - 1] as int
+        mut offs := 256
+        mut i := 7
+        until i >= 0:
+            mb <<= 1
+            mbit := mb & offs
+            bit := (byte >> i) & 1
+            _lze_bit(e, base + offs + mbit + sym, bit)
+            sym = (sym << 1) | bit
+            if bit == 0:
+                offs &= (mbit ^ 0xFFFF)
+            else:
+                offs &= mbit
+            end
+            i--
+        end
+    else:
+        mut i := 7
+        until i >= 0:
+            bit := (byte >> i) & 1
+            _lze_bit(e, base + sym, bit)
+            sym = (sym << 1) | bit
+            i--
+        end
+    end
+    if st < 4:
+        e.state = 0
+    else st < 10:
+        e.state = st - 3
+    else:
+        e.state = st - 6
+    end
+end
+
+func _lze_match(e &: _Lze, pos_state: int, len: int, dist: int):
+    st := e.state
+    _lze_bit(e, st * 16 + pos_state, 1)
+    _lze_bit(e, 192 + st, 0)
+    _lze_len(e, 832, pos_state, len)
+    _lze_dist(e, dist, len)
+    e.rep3 = e.rep2
+    e.rep2 = e.rep1
+    e.rep1 = e.rep0
+    e.rep0 = dist
+    if st < 7:
+        e.state = 7
+    else:
+        e.state = 10
+    end
+end
+
+func _lze_rep(e &: _Lze, pos_state: int, idx: int, len: int):
+    st := e.state
+    _lze_bit(e, st * 16 + pos_state, 1)
+    _lze_bit(e, 192 + st, 1)
+    if idx == 0:
+        _lze_bit(e, 204 + st, 0)
+        _lze_bit(e, 240 + st * 16 + pos_state, 1)
+    else:
+        _lze_bit(e, 204 + st, 1)
+        mut dd := e.rep1
+        if idx == 1:
+            _lze_bit(e, 216 + st, 0)
+        else:
+            _lze_bit(e, 216 + st, 1)
+            if idx == 2:
+                _lze_bit(e, 228 + st, 0)
+                dd = e.rep2
+            else:
+                _lze_bit(e, 228 + st, 1)
+                dd = e.rep3
+                e.rep3 = e.rep2
+            end
+            e.rep2 = e.rep1
+        end
+        e.rep1 = e.rep0
+        e.rep0 = dd
+    end
+    _lze_len(e, 1346, pos_state, len)
+    if st < 7:
+        e.state = 8
+    else:
+        e.state = 11
+    end
+end
+
+func _lze_shortrep(e &: _Lze, pos_state: int):
+    st := e.state
+    _lze_bit(e, st * 16 + pos_state, 1)
+    _lze_bit(e, 192 + st, 1)
+    _lze_bit(e, 204 + st, 0)
+    _lze_bit(e, 240 + st * 16 + pos_state, 0)
+    if st < 7:
+        e.state = 9
+    else:
+        e.state = 11
+    end
+end
+
+func _lze_rep_len(e &: _Lze, pos: int, idx: int, maxlen: int): int:
+    mut r := e.rep0
+    if idx == 1:
+        r = e.rep1
+    else idx == 2:
+        r = e.rep2
+    else idx == 3:
+        r = e.rep3
+    end
+    if r + 1 > pos or r >= e.dsize:
+        ret 0
+    end
+    ret _lze_mlen(e, pos, pos - r - 1, maxlen)
+end
+
+func _lze_run(e &: _Lze, start: int, endp: int, csz_lim: int): int:
+    mut pos := start
+    until pos < endp:
+        if e.rc.len + e.csize >= csz_lim:
+            break
+        end
+        pos_state := pos & 3
+        mut maxlen := endp - pos
+        if maxlen > _LZE_MAXLEN:
+            maxlen = _LZE_MAXLEN
+        end
+        mut rl := 0
+        mut ri := 0
+        mut i := 0
+        until i < 4:
+            l := _lze_rep_len(e, pos, i, maxlen)
+            if l > rl:
+                rl = l
+                ri = i
+            end
+            i++
+        end
+        mut md := 0
+        ml := _lze_find(e, pos, maxlen, md)
+        mut adv := 1
+        if rl >= 2 and (rl + 1 >= ml or (rl + 2 >= ml and md >= 512) or (rl + 3 >= ml and md >= 32768)):
+            _lze_rep(e, pos_state, ri, rl)
+            adv = rl
+        else ml >= 3:
+            mut skip := false
+            if e.lazy and ml < e.nice and pos + 1 < endp:
+                mut md2 := 0
+                max2 := maxlen - 1
+                ml2 := _lze_find(e, pos + 1, max2, md2)
+                if ml2 > ml + 1:
+                    skip = true
+                else ml2 == ml + 1 and (md2 >> 7) <= md:
+                    skip = true
+                else ml2 == ml and md2 < md:
+                    skip = true
+                end
+            end
+            if skip:
+                _lze_literal(e, pos, pos_state)
+            else:
+                _lze_match(e, pos_state, ml, md)
+                adv = ml
+            end
+        else rl >= 2:
+            _lze_rep(e, pos_state, ri, rl)
+            adv = rl
+        else pos > e.rep0 and e.rep0 < e.dsize and e.src[pos] == e.src[pos - e.rep0 - 1]:
+            _lze_shortrep(e, pos_state)
+        else:
+            _lze_literal(e, pos, pos_state)
+        end
+        pos += adv
+        _lze_ins_to(e, pos)
+    end
+    ret pos
+end
+
+func _lze_le32(b &: ByteBuf, v: i64):
+    BufPush(b, (v & (255 as i64)) as int)
+    BufPush(b, ((v >> 8) & (255 as i64)) as int)
+    BufPush(b, ((v >> 16) & (255 as i64)) as int)
+    BufPush(b, ((v >> 24) & (255 as i64)) as int)
+end
+
+func _lze_vli(b &: ByteBuf, v: i64):
+    mut x := v
+    until x >= (128 as i64):
+        BufPush(b, ((x & (127 as i64)) | (128 as i64)) as int)
+        x >>= 7
+    end
+    BufPush(b, x as int)
+end
+
+func _lze_lzma2(e &: _Lze, out &: ByteBuf):
+    mut pos := 0
+    mut dict_reset := true
+    mut props_sent := false
+    mut need_state := true
+    until pos < e.n:
+        start := pos
+        if need_state:
+            _lze_reset_state(e)
+        end
+        _lze_rc_reset(e)
+        mut endp := start + _LZE_CHUNK_USIZE
+        if endp > e.n:
+            endp = e.n
+        end
+        pos = _lze_run(e, start, endp, _LZE_CHUNK_CSIZE)
+        _lze_flush(e)
+        usize := pos - start
+        csize := e.rc.len
+        if csize < usize and csize <= 65536:
+            mut ctrl := 128
+            if dict_reset:
+                ctrl = 224
+            else not props_sent:
+                ctrl = 192
+            else need_state:
+                ctrl = 160
+            end
+            u := usize - 1
+            c := csize - 1
+            BufPush(out, ctrl | (u >> 16))
+            BufPush(out, (u >> 8) & 255)
+            BufPush(out, u & 255)
+            BufPush(out, (c >> 8) & 255)
+            BufPush(out, c & 255)
+            if ctrl >= 192:
+                BufPush(out, 93)
+            end
+            BufPushBytes(out, e.rc.data, csize)
+            dict_reset = false
+            props_sent = true
+            need_state = false
+        else:
+            mut off := start
+            until off < pos:
+                mut m := pos - off
+                if m > 65536:
+                    m = 65536
+                end
+                if dict_reset:
+                    BufPush(out, 1)
+                else:
+                    BufPush(out, 2)
+                end
+                BufPush(out, ((m - 1) >> 8) & 255)
+                BufPush(out, (m - 1) & 255)
+                BufPushBytes(out, ((e.src as i64) + (off as i64)) as void*, m)
+                dict_reset = false
+                off += m
+            end
+            need_state = true
+        end
+    end
+    BufPush(out, 0)
+end
+
+func _lze_pad4(b &: ByteBuf, from: int):
+    until ((b.len - from) & 3) != 0:
+        BufPush(b, 0)
+    end
+end
+
+@en "LzmaCompressLevel"
+@fa "فشرده سازی الزد ام ای با سطح"
+pub func LzmaCompressLevel(p: void*, n: int, level: int): ByteBuf:
+    mut out := NewByteBuf()
+    dsz := _lzma2_dict_size(_lze_dict_prop(_lze_dict_for(level, n)))
+    mut e := _lze_new(p, n, level, dsz as int)
+    BufPush(out, 93)
+    _lze_le32(out, dsz)
+    _lze_le32(out, n as i64)
+    _lze_le32(out, 0 as i64)
+    _lze_reset_state(e)
+    _lze_rc_reset(e)
+    _lze_run(e, 0, n, 0x7FFFFFF0)
+    _lze_flush(e)
+    BufPushBytes(out, e.rc.data, e.rc.len)
+    _lze_free(e)
+    ret out
+end
+
+@en "LzmaCompress"
+@fa "فشرده سازی الزد ام ای"
+pub func LzmaCompress(p: void*, n: int): ByteBuf:
+    ret LzmaCompressLevel(p, n, 6)
+end
+
+@en "LzmaCompressBuf"
+@fa "فشرده سازی الزد ام ای بافر"
+pub func LzmaCompressBuf(b: ByteBuf): ByteBuf:
+    ret LzmaCompress(b.data, b.len)
+end
+
+@en "LzmaCompressStr"
+@fa "فشرده سازی الزد ام ای رشته"
+pub func LzmaCompressStr(s: str): ByteBuf:
+    ret LzmaCompress(s as void*, s.len())
+end
+
+@en "XzCompressCheck"
+@fa "فشرده سازی ایکس زد با بررسی"
+pub func XzCompressCheck(p: void*, n: int, level: int, check: int): ByteBuf:
+    mut out := NewByteBuf()
+    mut ck := check
+    if ck != 0 and ck != 1 and ck != 4 and ck != 10:
+        ck = 4
+    end
+    mut x := _xz_new(0)
+    magic := [253, 55, 122, 88, 90, 0]
+    mut i := 0
+    until i < 6:
+        BufPush(out, magic[i])
+        i++
+    end
+    BufPush(out, 0)
+    BufPush(out, ck)
+    _lze_le32(out, _xz_crc32(x, out.data as u8*, 6, 2) as i64)
+    mut unpadded := 0 as i64
+    mut have_block := false
+    if n > 0:
+        have_block = true
+        dprop := _lze_dict_prop(_lze_dict_for(level, n))
+        dsz := _lzma2_dict_size(dprop)
+        mut e := _lze_new(p, n, level, dsz as int)
+        mut hdr := NewByteBuf()
+        BufPush(hdr, 2)
+        BufPush(hdr, 0)
+        BufPush(hdr, 33)
+        BufPush(hdr, 1)
+        BufPush(hdr, dprop)
+        BufPush(hdr, 0)
+        BufPush(hdr, 0)
+        BufPush(hdr, 0)
+        _lze_le32(hdr, _xz_crc32(x, hdr.data as u8*, 0, 8) as i64)
+        BufPushBuf(out, hdr)
+        BufFree(hdr)
+        dstart := out.len
+        _lze_lzma2(e, out)
+        _lze_free(e)
+        packed_len := out.len - dstart
+        _lze_pad4(out, dstart)
+        if ck == 1:
+            _lze_le32(out, _xz_crc32(x, p as u8*, 0, n) as i64)
+        else ck == 4:
+            c64 := _xz_crc64(x, p as u8*, 0, n)
+            _lze_le32(out, (c64 & (0xFFFFFFFF as u64)) as i64)
+            _lze_le32(out, (c64 >> 32) as i64)
+        else ck == 10:
+            dg := mem.Allocate(32 as u64) as void*
+            crypto.Sha256Bytes(p, n, dg)
+            BufPushBytes(out, dg, 32)
+            mem.Free(dg)
+        end
+        csz := _xz_check_size(ck)
+        unpadded = (12 + packed_len + csz) as i64
+    end
+    istart := out.len
+    BufPush(out, 0)
+    if have_block:
+        _lze_vli(out, 1 as i64)
+        _lze_vli(out, unpadded)
+        _lze_vli(out, n as i64)
+    else:
+        _lze_vli(out, 0 as i64)
+    end
+    _lze_pad4(out, istart)
+    _lze_le32(out, _xz_crc32(x, out.data as u8*, istart, out.len - istart) as i64)
+    isize := out.len - istart
+    mut ft := NewByteBuf()
+    _lze_le32(ft, ((isize / 4) - 1) as i64)
+    BufPush(ft, 0)
+    BufPush(ft, ck)
+    _lze_le32(out, _xz_crc32(x, ft.data as u8*, 0, 6) as i64)
+    BufPushBuf(out, ft)
+    BufFree(ft)
+    BufPush(out, 89)
+    BufPush(out, 90)
+    _xz_free(x)
+    ret out
+end
+
+@en "XzCompressLevel"
+@fa "فشرده سازی ایکس زد با سطح"
+pub func XzCompressLevel(p: void*, n: int, level: int): ByteBuf:
+    ret XzCompressCheck(p, n, level, 4)
+end
+
+@en "XzCompress"
+@fa "فشرده سازی ایکس زد"
+pub func XzCompress(p: void*, n: int): ByteBuf:
+    ret XzCompressCheck(p, n, 6, 4)
+end
+
+@en "XzCompressBuf"
+@fa "فشرده سازی ایکس زد بافر"
+pub func XzCompressBuf(b: ByteBuf): ByteBuf:
+    ret XzCompress(b.data, b.len)
+end
+
+@en "XzCompressStr"
+@fa "فشرده سازی ایکس زد رشته"
+pub func XzCompressStr(s: str): ByteBuf:
+    ret XzCompress(s as void*, s.len())
+end

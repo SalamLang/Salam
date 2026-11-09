@@ -11,3 +11,685 @@
  * Repository: https://github.com/SalamLang/Salam
  *
  */
+
+@en "net/vless"
+@fa "وی لس"
+package vless
+
+import mem
+import str
+import net.transport
+
+@en "CmdTCP"
+@fa "فرمان تی سی پی"
+pub const CmdTCP := 1
+
+@en "CmdUDP"
+@fa "فرمان یو دی پی"
+pub const CmdUDP := 2
+
+@en "CmdMux"
+@fa "فرمان مالتی پلکس"
+pub const CmdMux := 3
+
+@en "Request"
+@fa "درخواست"
+pub struct Request:
+    @en "uuid"
+    @fa "شناسه"
+    pub uuid: transport.Bytes = transport.Bytes {}
+    @en "flow"
+    @fa "جریان"
+    pub flow: str = ""
+    @en "command"
+    @fa "فرمان"
+    pub command: int = 1
+    @en "addr"
+    @fa "نشانی"
+    pub addr: transport.Addr = transport.Addr {}
+end
+
+@en "User"
+@fa "کاربر"
+pub struct User:
+    @en "id"
+    @fa "شناسه"
+    pub id: str = ""
+    @en "uuid"
+    @fa "بایت های شناسه"
+    pub uuid: transport.Bytes = transport.Bytes {}
+    @en "flow"
+    @fa "جریان"
+    pub flow: str = ""
+end
+
+@en "Link"
+@fa "پیوند"
+pub struct Link:
+    @en "ok"
+    @fa "معتبر"
+    pub ok: bool = false
+    @en "err"
+    @fa "خطا"
+    pub err: str = ""
+    @en "uuid"
+    @fa "شناسه"
+    pub uuid: str = ""
+    @en "host"
+    @fa "میزبان"
+    pub host: str = ""
+    @en "port"
+    @fa "درگاه"
+    pub port: int = 443
+    @en "remark"
+    @fa "برچسب"
+    pub remark: str = ""
+    @en "encryption"
+    @fa "رمزگذاری"
+    pub encryption: str = "none"
+    @en "flow"
+    @fa "جریان"
+    pub flow: str = ""
+    @en "security"
+    @fa "امنیت"
+    pub security: str = "none"
+    @en "sni"
+    @fa "نام سرور"
+    pub sni: str = ""
+    @en "alpn"
+    @fa "الپن"
+    pub alpn: str = ""
+    @en "fingerprint"
+    @fa "اثر انگشت"
+    pub fingerprint: str = ""
+    @en "network"
+    @fa "شبکه"
+    pub network: str = "tcp"
+    @en "host_header"
+    @fa "سربرگ میزبان"
+    pub host_header: str = ""
+    @en "path"
+    @fa "مسیر"
+    pub path: str = ""
+    @en "allow_insecure"
+    @fa "اجازه ناامن"
+    pub allow_insecure: bool = false
+end
+
+@en "Conn"
+@fa "اتصال"
+pub struct Conn:
+    @en "t"
+    @fa "انتقال"
+    pub t: transport.Conn = transport.Conn {}
+    @en "client"
+    @fa "کارخواه"
+    pub client: bool = false
+    @en "ok"
+    @fa "معتبر"
+    pub ok: bool = false
+    @en "err"
+    @fa "خطا"
+    pub err: str = ""
+    @en "req"
+    @fa "درخواست"
+    pub req: Request = Request {}
+    @en "user"
+    @fa "کاربر"
+    pub user: str = ""
+    pub resp_pending: bool = false
+    pub closed: bool = false
+end
+
+func _hexval(c: int): int:
+    if c >= 48 and c <= 57: ret c - 48 end
+    if c >= 97 and c <= 102: ret c - 87 end
+    if c >= 65 and c <= 70: ret c - 55 end
+    ret 0 - 1
+end
+
+func _unreserved(c: int): bool:
+    if c >= 48 and c <= 57: ret true end
+    if c >= 65 and c <= 90: ret true end
+    if c >= 97 and c <= 122: ret true end
+    ret c == 45 or c == 46 or c == 95 or c == 126
+end
+
+func _pct_decode(s: str): str:
+    mut b := transport.NewBytes(s.len() + 1)
+    defer transport.FreeBytes(b)
+    sp := s as u8*
+    mut i := 0
+    until i < s.len():
+        ch := sp[i] as int
+        if ch == 37 and i + 2 < s.len():
+            hv := _hexval(sp[i + 1] as int)
+            lv := _hexval(sp[i + 2] as int)
+            if hv >= 0 and lv >= 0:
+                transport.Put8(b, hv * 16 + lv)
+                i += 3
+                continue
+            end
+        end
+        transport.Put8(b, ch)
+        i++
+    end
+    transport.Put8(b, 0)
+    ret str.Clone(b.p as str)
+end
+
+func _pct_encode(s: str): str:
+    mut b := transport.NewBytes(s.len() * 3 + 1)
+    defer transport.FreeBytes(b)
+    dg := "0123456789ABCDEF" as u8*
+    sp := s as u8*
+    repeat s.len() in i:
+        ch := sp[i] as int
+        if _unreserved(ch):
+            transport.Put8(b, ch)
+        else:
+            transport.Put8(b, 37)
+            transport.Put8(b, dg[ch >> 4] as int)
+            transport.Put8(b, dg[ch & 15] as int)
+        end
+    end
+    transport.Put8(b, 0)
+    ret str.Clone(b.p as str)
+end
+
+func _query_get(q: str, key: str): str:
+    mut start := 0
+    until start < q.len():
+        mut e := str.IndexFrom(q, "&", start)
+        if e < 0:
+            e = q.len()
+        end
+        part := q.substr(start, e - start)
+        eqi := str.Find(part, "=")
+        if eqi >= 0 and part.substr(0, eqi) == key:
+            ret _pct_decode(part.substr(eqi + 1, part.len() - eqi - 1))
+        end
+        start = e + 1
+    end
+    ret ""
+end
+
+func _fail(c &: Conn, msg: str):
+    c.ok = false
+    c.err = msg
+    transport.Close(c.t)
+end
+
+func _put_packet_len(b &: transport.Bytes, n: int):
+    transport.Put16(b, n)
+end
+
+func _read_response(c &: Conn): bool:
+    hdr := mem.Allocate(2 as u64) as u8*
+    defer mem.Free(hdr as void*)
+    if not transport.ReadFull(c.t, hdr as void*, 2):
+        _fail(c, "no response header")
+        ret false
+    end
+    if (hdr[0] as int) != 0:
+        _fail(c, "bad response version")
+        ret false
+    end
+    n := hdr[1] as int
+    if n > 0:
+        skip := mem.Allocate(n as u64)
+        ok := transport.ReadFull(c.t, skip, n)
+        mem.Free(skip)
+        if not ok:
+            _fail(c, "short response header")
+            ret false
+        end
+    end
+    c.resp_pending = false
+    ret true
+end
+
+@en "EncodeRequest"
+@fa "کدگذاری درخواست"
+pub func EncodeRequest(r: Request): transport.Bytes:
+    mut b := transport.NewBytes(64)
+    transport.Put8(b, 0)
+    transport.PutBytes(b, r.uuid)
+    if r.flow.len() > 0:
+        transport.Put8(b, r.flow.len() + 2)
+        transport.Put8(b, 0x0a)
+        transport.Put8(b, r.flow.len())
+        transport.PutStr(b, r.flow)
+    else:
+        transport.Put8(b, 0)
+    end
+    transport.Put8(b, r.command)
+    if r.command != CmdMux:
+        if not transport.PutAddr(b, r.addr):
+            b.bad = true
+        end
+    end
+    ret b
+end
+
+@en "DecodeRequest"
+@fa "کدگشایی درخواست"
+pub func DecodeRequest(b: transport.Bytes, r &: Request): int:
+    if b.len < 19 or transport.At(b, 0) != 0:
+        ret 0 - 1
+    end
+    r.uuid = transport.NewBytes(16)
+    transport.PutRaw(r.uuid, transport.BytesPtr(b, 1), 16)
+    n := transport.At(b, 17)
+    mut off := 18
+    if off + n + 1 > b.len:
+        ret 0 - 1
+    end
+    r.flow = ""
+    if n > 0:
+        if n < 2 or transport.At(b, off) != 0x0a:
+            ret 0 - 1
+        end
+        fl := transport.At(b, off + 1)
+        if fl + 2 != n:
+            ret 0 - 1
+        end
+        raw := mem.Allocate((fl + 1) as u64)
+        mem.Copy(raw, transport.BytesPtr(b, off + 2), fl as u64)
+        rp := raw as u8*
+        rp[fl] = 0 as u8
+        r.flow = raw as str
+    end
+    off += n
+    r.command = transport.At(b, off)
+    off++
+    if r.command == CmdTCP or r.command == CmdUDP:
+        mut a := transport.Addr {}
+        off = transport.ReadAddr(b, off, a)
+        if off < 0:
+            ret 0 - 1
+        end
+        r.addr = a
+    else r.command != CmdMux:
+        ret 0 - 1
+    end
+    ret off
+end
+
+@en "ReadRequest"
+@fa "خواندن درخواست"
+pub func ReadRequest(t &: transport.Conn, r &: Request): bool:
+    mut b := transport.NewBytes(64)
+    defer transport.FreeBytes(b)
+    transport.Reserve(b, 300)
+    if not transport.ReadFull(t, b.p, 18):
+        ret false
+    end
+    b.len = 18
+    n := transport.At(b, 17)
+    if not transport.ReadFull(t, transport.BytesPtr(b, 18), n + 1):
+        ret false
+    end
+    b.len = 18 + n + 1
+    cmd := transport.At(b, 18 + n)
+    if cmd == CmdTCP or cmd == CmdUDP:
+        if not transport.ReadFull(t, transport.BytesPtr(b, b.len), 3):
+            ret false
+        end
+        b.len += 3
+        k := transport.At(b, b.len - 1)
+        mut more := 0
+        if k == 1:
+            more = 4
+        else k == 3:
+            more = 16
+        else k == 2:
+            if not transport.ReadFull(t, transport.BytesPtr(b, b.len), 1):
+                ret false
+            end
+            b.len += 1
+            more = transport.At(b, b.len - 1)
+        else:
+            ret false
+        end
+        if more > 0 and not transport.ReadFull(t, transport.BytesPtr(b, b.len), more):
+            ret false
+        end
+        b.len += more
+    else cmd != CmdMux:
+        ret false
+    end
+    ret DecodeRequest(b, r) == b.len
+end
+
+@en "NewUser"
+@fa "کاربر جدید"
+pub func NewUser(uuid: str, flow: str): User:
+    mut u := User {}
+    u.id = uuid
+    u.flow = flow
+    u.uuid = transport.ParseUUID(uuid)
+    ret u
+end
+
+@en "Client"
+@fa "کارخواه"
+pub func Client(t: transport.Conn, uuid: str, flow: str, command: int, addr: transport.Addr): Conn:
+    mut c := Conn {}
+    c.t = t
+    c.client = true
+    mut r := Request {}
+    r.uuid = transport.ParseUUID(uuid)
+    if r.uuid.bad:
+        _fail(c, "bad uuid")
+        ret c
+    end
+    r.flow = flow
+    r.command = command
+    r.addr = addr
+    c.req = r
+    mut hdr := EncodeRequest(r)
+    if hdr.bad or not transport.WriteBytes(c.t, hdr):
+        transport.FreeBytes(hdr)
+        _fail(c, "could not send the request header")
+        ret c
+    end
+    transport.FreeBytes(hdr)
+    c.resp_pending = true
+    c.ok = true
+    ret c
+end
+
+@en "Dial"
+@fa "شماره گیری"
+pub func Dial(
+    host: str, port: int, s: transport.Settings, uuid: str, flow: str, command: int, target: transport.Addr
+): Conn:
+    t := transport.Dial(host, port, s)
+    if not transport.Ok(t):
+        mut c := Conn {}
+        c.t = t
+        c.err = t.err
+        ret c
+    end
+    ret Client(t, uuid, flow, command, target)
+end
+
+@en "Accept"
+@fa "پذیرش"
+pub func Accept(t: transport.Conn, users: Vector<User>): Conn:
+    mut c := Conn {}
+    c.t = t
+    mut r := Request {}
+    if not ReadRequest(c.t, r):
+        _fail(c, "bad request header")
+        ret c
+    end
+    mut found := 0 - 1
+    repeat users.len() in i:
+        u := users.get(i)
+        if transport.Equal(u.uuid, r.uuid):
+            found = i
+        end
+    end
+    if found < 0:
+        _fail(c, "unknown user")
+        ret c
+    end
+    u := users.get(found)
+    if r.flow != u.flow and r.flow.len() > 0:
+        _fail(c, "unsupported flow " + r.flow)
+        ret c
+    end
+    c.req = r
+    c.user = u.id
+    mut resp := transport.NewBytes(2)
+    transport.Put8(resp, 0)
+    transport.Put8(resp, 0)
+    ok := transport.WriteBytes(c.t, resp)
+    transport.FreeBytes(resp)
+    if not ok:
+        _fail(c, "could not send the response header")
+        ret c
+    end
+    c.ok = true
+    ret c
+end
+
+@en "Read"
+@fa "خواندن"
+pub func Read(c &: Conn, buf: void*, max: int): int:
+    if not c.ok:
+        ret 0
+    end
+    if c.resp_pending and not _read_response(c):
+        ret 0 - 1
+    end
+    ret transport.Read(c.t, buf, max)
+end
+
+@en "Write"
+@fa "نوشتن"
+pub func Write(c &: Conn, p: void*, n: int): bool:
+    if not c.ok:
+        ret false
+    end
+    ret transport.Write(c.t, p, n)
+end
+
+@en "ReadPacket"
+@fa "خواندن بسته"
+pub func ReadPacket(c &: Conn, out &: transport.Bytes): bool:
+    if not c.ok:
+        ret false
+    end
+    if c.resp_pending and not _read_response(c):
+        ret false
+    end
+    lb := mem.Allocate(2 as u64) as u8*
+    defer mem.Free(lb as void*)
+    if not transport.ReadFull(c.t, lb as void*, 2):
+        ret false
+    end
+    n := (lb[0] as int) * 256 + (lb[1] as int)
+    if n == 0:
+        ret true
+    end
+    transport.Reserve(out, n)
+    if not transport.ReadFull(c.t, transport.BytesPtr(out, out.len), n):
+        ret false
+    end
+    out.len += n
+    ret true
+end
+
+@en "WritePacket"
+@fa "نوشتن بسته"
+pub func WritePacket(c &: Conn, p: void*, n: int): bool:
+    if not c.ok or n > 65535:
+        ret false
+    end
+    mut b := transport.NewBytes(n + 2)
+    defer transport.FreeBytes(b)
+    _put_packet_len(b, n)
+    transport.PutRaw(b, p, n)
+    ret transport.WriteBytes(c.t, b)
+end
+
+@en "Close"
+@fa "بستن"
+pub func Close(c &: Conn):
+    if c.closed:
+        ret
+    end
+    c.closed = true
+    transport.Close(c.t)
+    transport.FreeBytes(c.req.uuid)
+end
+
+@en "ParseLink"
+@fa "تجزیه پیوند"
+pub func ParseLink(link: str): Link:
+    mut l := Link {}
+    if not str.StartsWith(link, "vless://"):
+        l.err = "not a vless link"
+        ret l
+    end
+    mut rest := link.substr(8, link.len() - 8)
+    hash := str.Find(rest, "#")
+    if hash >= 0:
+        l.remark = _pct_decode(rest.substr(hash + 1, rest.len() - hash - 1))
+        rest = rest.substr(0, hash)
+    end
+    mut query := ""
+    qm := str.Find(rest, "?")
+    if qm >= 0:
+        query = rest.substr(qm + 1, rest.len() - qm - 1)
+        rest = rest.substr(0, qm)
+    end
+    at := str.Find(rest, "@")
+    if at < 0:
+        l.err = "missing user id"
+        ret l
+    end
+    l.uuid = _pct_decode(rest.substr(0, at))
+    mut b := transport.ParseUUID(l.uuid)
+    defer transport.FreeBytes(b)
+    if b.bad:
+        l.err = "bad uuid"
+        ret l
+    end
+    mut hostport := rest.substr(at + 1, rest.len() - at - 1)
+    if str.EndsWith(hostport, "/"):
+        hostport = hostport.substr(0, hostport.len() - 1)
+    end
+    mut colon := 0 - 1
+    if hostport.substr(0, 1) == "[":
+        close := str.Find(hostport, "]")
+        if close < 0:
+            l.err = "bad host"
+            ret l
+        end
+        l.host = hostport.substr(1, close - 1)
+        if close + 1 < hostport.len() and hostport.substr(close + 1, 1) == ":":
+            colon = close + 1
+        end
+    else:
+        colon = str.LastIndex(hostport, ":")
+        if colon >= 0:
+            l.host = hostport.substr(0, colon)
+        else:
+            l.host = hostport
+        end
+    end
+    if colon >= 0:
+        l.port = hostport.substr(colon + 1, hostport.len() - colon - 1).to_int()
+    end
+    if l.host.len() == 0 or l.port <= 0 or l.port > 65535:
+        l.err = "bad host or port"
+        ret l
+    end
+    enc := _query_get(query, "encryption")
+    if enc.len() > 0:
+        l.encryption = enc
+    end
+    l.flow = _query_get(query, "flow")
+    sec := _query_get(query, "security")
+    if sec.len() > 0:
+        l.security = sec
+    end
+    l.sni = _query_get(query, "sni")
+    if l.sni.len() == 0:
+        l.sni = _query_get(query, "peer")
+    end
+    l.alpn = _query_get(query, "alpn")
+    l.fingerprint = _query_get(query, "fp")
+    nt := _query_get(query, "type")
+    if nt.len() > 0:
+        l.network = nt
+    end
+    l.host_header = _query_get(query, "host")
+    l.path = _query_get(query, "path")
+    mut ai := _query_get(query, "allowInsecure")
+    if ai.len() == 0:
+        ai = _query_get(query, "insecure")
+    end
+    l.allow_insecure = ai == "1" or ai == "true"
+    if l.encryption != "none":
+        l.err = "unsupported encryption " + l.encryption
+        ret l
+    end
+    if l.security != "none" and l.security != "tls":
+        l.err = "unsupported security " + l.security
+        ret l
+    end
+    if l.network != "tcp" and l.network != "ws" and l.network != "httpupgrade":
+        l.err = "unsupported transport " + l.network
+        ret l
+    end
+    l.ok = true
+    ret l
+end
+
+@en "FormatLink"
+@fa "قالب پیوند"
+pub func FormatLink(l: Link): str:
+    mut host := l.host
+    if str.Find(host, ":") >= 0:
+        host = "[" + host + "]"
+    end
+    mut q := "encryption=" + _pct_encode(l.encryption)
+    if l.security != "none":
+        q += "&security=" + l.security
+    end
+    if l.flow.len() > 0:
+        q += "&flow=" + _pct_encode(l.flow)
+    end
+    if l.sni.len() > 0:
+        q += "&sni=" + _pct_encode(l.sni)
+    end
+    if l.alpn.len() > 0:
+        q += "&alpn=" + _pct_encode(l.alpn)
+    end
+    if l.fingerprint.len() > 0:
+        q += "&fp=" + _pct_encode(l.fingerprint)
+    end
+    if l.allow_insecure:
+        q += "&allowInsecure=1"
+    end
+    q += "&type=" + l.network
+    if l.host_header.len() > 0:
+        q += "&host=" + _pct_encode(l.host_header)
+    end
+    if l.path.len() > 0:
+        q += "&path=" + _pct_encode(l.path)
+    end
+    mut out := "vless://" + l.uuid + "@" + host + ":" + str.FromInt(l.port as i64) + "?" + q
+    if l.remark.len() > 0:
+        out += "#" + _pct_encode(l.remark)
+    end
+    ret out
+end
+
+@en "LinkSettings"
+@fa "تنظیمات پیوند"
+pub func LinkSettings(l: Link): transport.Settings:
+    mut s := transport.Settings {}
+    s.network = l.network
+    s.tls = l.security == "tls"
+    s.sni = l.sni
+    s.alpn = l.alpn
+    s.fingerprint = l.fingerprint
+    s.allow_insecure = l.allow_insecure
+    s.host = l.host_header
+    if l.path.len() > 0:
+        s.path = l.path
+    end
+    ret s
+end
+
+@en "DialLink"
+@fa "شماره گیری پیوند"
+pub func DialLink(l: Link, command: int, target: transport.Addr): Conn:
+    ret Dial(l.host, l.port, LinkSettings(l), l.uuid, l.flow, command, target)
+end

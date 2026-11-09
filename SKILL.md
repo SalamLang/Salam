@@ -2309,6 +2309,7 @@ way multi-word names already are elsewhere:
 | `SALAM_ARCH_X64` / `_ARM64`                             | `سلام معماری ایکس۶۴` / `آرم۶۴`                   |
 | `SALAM_OS` / `SALAM_ARCH`                               | `سلام سیستم` / `سلام معماری`                     |
 | `SALAM_VERSION` / `SALAM_GIT_COMMIT`                    | `سلام نگارش` / `سلام کامیت گیت`                  |
+| `SALAM_UI_WEB` / `SALAM_UI_NATIVE`                      | `سلام رابط وب` / `سلام رابط بومی`                |
 | `defined(X)`                                            | `تعریف‌شده(X)`                                   |
 
 These names are matched the way Persian keywords are, so a ZWNJ, a space, an
@@ -2391,6 +2392,18 @@ page:
     end
 end
 ```
+
+**Web and native targets.** Pages are built for the web by default. Native
+windows drawn by Salam itself are being added (`docs/design/NATIVE_UI.md`);
+`salam check page.salam --ui=native` already reports what a native window
+cannot show: E165 for things that need a browser (`script`, `style`, `iframe`,
+`embed`, `object`, `template`, `slot`, `svg`, `math`, `inline style`,
+`contenteditable`, `popover`, ...) and W166 for web metadata it ignores
+(`meta`, `head link`, `base`, `noscript`, `srcset`, `loading`, `rel`,
+`target`, `data *`, microdata, form `action`/`method`). Keep one page for
+both by wrapping those parts in `if SALAM_UI_WEB:` (`اگر سلام رابط وب:`);
+`SALAM_UI_NATIVE` (`سلام رابط بومی`) is its opposite. Both fold at compile time
+like `SALAM_OS_LINUX`.
 
 **Elements** (`std/layout/elements/`, one `LayoutElement` const per element or
 context variant): every current HTML element, with the full list, Persian

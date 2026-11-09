@@ -1,0 +1,278 @@
+# Native UI from the page language
+
+Status: phase 0 (target gating) implemented. Later phases are planned below.
+
+## The problem
+
+A `page:` block (`صفحه:` in Persian) compiles to HTML, CSS and JavaScript.
+A desktop app can show that page today, but only inside a web view
+(`std/gui/webview`), which means shipping or depending on a browser engine
+and accepting its look, start time and memory use. There is no way to write
+a page once and get a real native window that Salam draws itself.
+
+Most of what a page says is not specific to the web. A box with a border, a
+heading, a paragraph of Persian text, a button with a hover colour, a flex
+row, a list built with `each`, a form: all of these describe a user
+interface, not a document format. The parts that only make sense in a
+browser are few: search engine metadata, `<head>` links, scripts, frames,
+and raw markup islands such as inline SVG.
+
+## The goal
+
+One page source, two targets:
+
+```
+salam page build app.salam              -> app.html (web, unchanged)
+salam page run app.salam --ui=native    -> a native window, drawn by Salam
+```
+
+- The same syntax, elements, attributes and CSS properties on both targets.
+- The same look on both targets and on every OS: the native target draws
+  everything itself, like Slint, instead of mapping to OS widgets.
+- No browser, no external UI library. Rendering and layout are written in
+  Salam; only the window and the pixel blit use the OS.
+- Persian and right to left text work from the start (shaping, bidi,
+  line breaking).
+- Web-only features stay available for web. A native build reports them
+  clearly instead of silently dropping them, and `if SALAM_UI_WEB:` lets a
+  page keep web-only parts next to portable ones.
+
+## Targets and the portable core
+
+The compiler knows which UI target it is building for:
+
+| target   | how it is chosen                                          | `SALAM_UI_WEB` | `SALAM_UI_NATIVE` |
+| -------- | --------------------------------------------------------- | -------------- | ----------------- |
+| `web`    | default for every command                                 | true           | false             |
+| `native` | `--ui=native` (`salam check`, later `page run`, `bundle`) | false          | true              |
+
+Both names are compile-time constants, folded like `SALAM_OS_LINUX`. In
+Persian they are `سلام رابط وب` and `سلام رابط بومی`. Inside a page:
+
+```salam
+page:
+    title = "Notes"
+    if SALAM_UI_WEB:
+        meta: name = "description" content = "A small notes app" end
+    end
+    box:
+        heading: content = "Notes" end
+    end
+end
+```
+
+A native build drops the `if SALAM_UI_WEB:` branch before checking, so the
+`meta` inside it is never seen.
+
+### What the schema says about each target
+
+Every `LayoutElement` and `LayoutAttribute` in `std/layout` has an optional
+`native` field:
+
+| `native` | meaning on the native target                                     | diagnostic |
+| -------- | ---------------------------------------------------------------- | ---------- |
+| `""`     | portable: works the same way on both targets (the default)       |            |
+| `"skip"` | web metadata with no native meaning; the native build ignores it | W166       |
+| `"no"`   | needs a browser; the native build refuses it                     | E165       |
+
+Nothing changes for the web target. Both diagnostics appear only with
+`--ui=native`.
+
+**Ignored on native (W166)**, because they only tell a browser or a search
+engine something:
+
+- elements `meta`, `head link`, `base`, `noscript`, `track`
+- attributes for loading and fetching (`srcset`, `sizes`, `loading`,
+  `decoding`, `fetch priority`, `crossorigin`, `integrity`, `referrer policy`,
+  `ping`, `preload`, `imagesrcset`, `imagesizes`, `blocking`, `nonce`,
+  `hreflang`, `download`, `target` and `rel` on links)
+- microdata (`itemscope`, `itemtype`, `itemprop`, `itemid`, `itemref`),
+  `data *` attributes, `translatable`
+- form submission to a server (`action`, `method`, `enctype`, `novalidate`,
+  `accept charset`, `form action`, `form method`, `form enctype`,
+  `form novalidate`, `form target`); a native form still fires `submit`
+- browser text-entry hints (`autocomplete`, `autocapitalize`, `autocorrect`,
+  `spellcheck`, `writingsuggestions`, `dirname`)
+
+**Refused on native (E165)**, because they embed another document or a
+script, or rely on browser-only machinery:
+
+- elements `script`, `style` (raw CSS), `iframe`, `embed`, `object`,
+  `template`, `slot`, `svg` and `math` (raw markup), `image map`, `area`
+- attributes `inline style` (raw CSS), `contenteditable`, `popover`,
+  `popover target`, `popover target action`, `command`, `commandfor`,
+  `shadowrootmode` and the other shadow root attributes, `slot`, `part`,
+  `exportparts`, `is`, `srcdoc`, `xmlns`, `use map`, `ismap`
+- events that only a browser fires: `before match`, `context lost`,
+  `context restored`, `cue change`, `form data`,
+  `security policy violation`, `slot change`
+
+**Everything else is portable**, including the semantic elements (`article`,
+`section`, `nav`, `header`, `footer`, ...), which render as boxes with the
+same default styles a browser gives them. `class` and `global` stay
+portable: the native cascade supports element, class and id selectors.
+
+### Native meaning of page settings
+
+| page setting / element  | native target                                                                                 |
+| ----------------------- | --------------------------------------------------------------------------------------------- |
+| `title`                 | window title                                                                                  |
+| `favicon`               | window and taskbar icon                                                                       |
+| `lang`, `dir`           | text direction and the default font fallback order                                            |
+| `link url = ...`        | another page of the app opens in the window; an `http(s)` address opens in the user's browser |
+| `font`                  | font loaded from the app's bundled assets                                                     |
+| `media condition = ...` | window size, orientation and OS dark mode                                                     |
+| `image url = ...`       | file decoded with the codecs in `std/ai/image`                                                |
+
+## Architecture
+
+```
+page source -> parse -> condcomp (SALAM_UI_*) -> expand -> check (target aware)
+                                                             |
+                               +-----------------------------+------------------------------+
+                               |                                                            |
+                    web generator (today)                                   native generator (phase 4)
+                    HTML + CSS + JS                                Salam code that builds a gui.ui tree
+                                                                                            |
+                                         gui.ui:     style cascade, layout (block, inline, flex), paint, events, state
+                                         gui.text:   fonts, fallback, shaping, bidi, line breaking, caret
+                                         gui.paint:  RGBA canvas, anti-aliased paths, borders, gradients, shadows, clip
+                                         gui.window: OS window, event loop, blit (X11, Win32, Cocoa, headless PNG)
+```
+
+Everything before code generation is shared: the parser, components,
+`include`, `if`/`each`, constant folding, schema checks and the runtime
+lowering of `page Name(params):` into functions. The native generator
+reuses the runtime lowering pattern in `compiler/sal_layout/layout_lower.salam`:
+it writes Salam source that builds a node tree and splices it into the
+program.
+
+### Why draw instead of using OS widgets
+
+OS widgets (Win32 controls, Cocoa views, GTK widgets) each support a
+different, small subset of styling. A design with rounded corners,
+gradients, custom fonts and Persian text would look different on every OS
+or not work at all. Drawing every pixel, as Slint and Flutter do, gives the
+same result everywhere and lets the CSS properties a page already uses keep
+their meaning.
+
+### Default look
+
+Pages rely on browser defaults: heading sizes, paragraph margins, list
+indent, link colour, the look of buttons and inputs. The native default
+theme reproduces those defaults, so a page that looks right in a browser
+looks the same natively without changing any web output.
+
+## Lessons taken from Slint
+
+Slint (`slint-ui/slint`) solves the same problem for its own language, so its
+source was read before designing the runtime. What we adopt and what we do
+differently:
+
+- **Properties and trackers.** Every value that can change is a property
+  cell with a lazy binding and a list of dependents. `set` only marks
+  dependents dirty; `get` recomputes. A tracker is a binding without a value,
+  used for the window redraw, one paint tracker per element and text shaping
+  caches. Literal attributes never allocate a binding, which matters because
+  most attributes in a page are literals. Binding loops are reported by the
+  compiler and again at runtime with the property name.
+- **Layout wiring.** Each container's child geometry is one lazily computed
+  property (a flat array of x, y, width, height). Resizing invalidates only
+  what depends on the size, with no separate layout pass. Width flows down
+  and height is computed from it. Unlike Slint's own layouts, the algorithm
+  is CSS: block flow, inline formatting for text, and the flexbox spec (Slint
+  itself added a CSS flexbox layout because users asked for it).
+- **Software painter.** Premultiplied colour and integer blending. Rounded
+  rectangles and borders are drawn line by line with analytic coverage in
+  fixed point, one square root per line and corner. Box shadows use an
+  analytic separable Gaussian, and gradients use precomputed per-pixel steps.
+  Pixels are stored as 32-bit BGRA so X11, Win32, Cocoa and Wayland can take
+  the buffer without a copy. We go further than Slint where a CSS page needs
+  it: per-side border widths, bilinear and area image scaling with a cache of
+  scaled images, real group opacity, and transforms.
+- **Partial rendering.** Each element keeps its last screen rectangle and
+  paint tracker. A frame repaints a dirty region of at most three
+  rectangles, using the buffer age the OS reports. Slint's changelog shows
+  many partial-render bugs, so a test that a partial render equals a full
+  render runs from the first day.
+- **Text.** Shaped paragraphs are cached apart from line breaking, so a
+  resize re-breaks lines without shaping again. Glyphs are alpha maps in a
+  size-bounded cache keyed by font, size, glyph and a quarter-pixel x
+  position. Persian needs real OpenType shaping (GSUB for joining forms and
+  ligatures, GPOS for kerning and marks); the presentation forms used by
+  `std/ai/image` today stay only as a fallback.
+- **Styles.** Slint ships widget libraries per style. A page already styles
+  itself with CSS properties, so we ship one default style sheet and expose
+  theme tokens as reactive state that follows the OS colour scheme.
+- **Platform layer.** One small interface per OS: create a window, report
+  size and scale, request a redraw, present a buffer with damage rectangles,
+  cursor, IME position, clipboard, colour scheme, timers. The event loop
+  waits until the next timer or animation frame, runs deferred change
+  handlers, advances the animation clock and paints once if the redraw
+  tracker is dirty.
+
+## Interactivity: reactive state
+
+Today a handler changes the page through `std/dom`
+(`dom.SetText(dom.ById("count"), ...)`), which exists only in a browser.
+Phase 5 adds state that both targets understand:
+
+```salam
+component Counter(start: int):
+    state count := start
+    box:
+        heading: content = "Count: " + count end
+        button: content = "+1" click = (): count++ end end
+    end
+end
+
+page:
+    title = "Counter"
+    Counter: start = 5 end
+end
+```
+
+A handler only changes state, and every attribute that reads that state
+updates. Natively the component's subtree is rebuilt and reconciled (focus,
+scroll position and caret are kept). On the web the generated JavaScript
+re-runs the component's view and patches the DOM. `std/dom` stays as a
+web-only escape hatch.
+
+## Phases
+
+Each phase is one pull request.
+
+0. **Target gating.** `native` schema field, E165 and W166, `--ui=native`
+   for `salam check`, `SALAM_UI_WEB` and `SALAM_UI_NATIVE`, this document.
+1. **Paint and text.** `std/gui/paint` (canvas, paths, anti-aliased fill and
+   stroke, rounded rects, borders, gradients, shadows, clipping, images) and
+   `std/gui/text` (the TrueType, shaping and bidi code moved out of
+   `std/ai/image`, plus font fallback, line breaking and caret hit testing).
+   Tests compare PNG output against checked-in images.
+2. **Windows.** `std/gui/window`: X11, Win32 and Cocoa windows that show a
+   pixel buffer, an event loop with pointer, keyboard, text input, resize,
+   DPI, clipboard and timers, and a headless backend for tests.
+3. **UI runtime.** `std/gui/ui`: node tree, computed styles, the cascade
+   (default theme, element styles, `hover`/`focus`/`active`, `media`),
+   block, inline and flex layout, absolute positioning, scrolling, painting,
+   hit testing, event dispatch, focus order.
+4. **Native generator.** `compiler/sal_layout/layout_native.salam`,
+   `salam page run --ui=native`, `salam page shot` (render to PNG),
+   `ui.Run` for programs, `engine = "native"` in `salam bundle`.
+5. **Reactive state** on both targets, with two-way binding for inputs.
+6. **Widgets and input.** Every input type, text area, select with a popup,
+   forms, details, dialog, progress, meter, tables, lists, text editing with
+   selection, IME and clipboard.
+7. **Responsive design, motion and themes.** `media` on native, CSS custom
+   properties, transitions and animations, HiDPI, custom fonts.
+8. **Tooling.** Live preview with reload, LSP target diagnostics, site
+   learn pages in English and Persian, CI on Linux, Windows and macOS.
+9. **Later.** Accessibility from `aria` and roles, a GPU renderer, Wayland,
+   CSS grid, an SVG subset, Android and iOS.
+
+## Diagnostics
+
+| code | kind    | message                                                                                            |
+| ---- | ------- | -------------------------------------------------------------------------------------------------- |
+| E165 | error   | `'script' works only on the web; wrap it in 'if SALAM_UI_WEB:' or remove it for the native target` |
+| W166 | warning | `'meta' is web page metadata and is ignored by the native target`                                  |

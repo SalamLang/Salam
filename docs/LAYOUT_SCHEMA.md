@@ -60,6 +60,7 @@ pub const link := LayoutElement {
 | `placement`             | `"head"` sends the tag to `<head>`                                                                                                              |
 | `position`              | `"first"`: must be the first element inside its parent (E125)                                                                                   |
 | `styled`                | `false` rejects CSS attributes on this element                                                                                                  |
+| `native`                | `""` (portable), `"skip"` (web metadata, W166 and ignored with `--ui=native`) or `"no"` (needs a browser, E165 with `--ui=native`)              |
 
 ### Context variants
 
@@ -102,6 +103,12 @@ pub const url := LayoutAttribute {
 | `elements`       | scope; empty means every element                                                                                                                                                                                        |
 | `multiple`       | the value is a space-separated list, each item validated                                                                                                                                                                |
 | `default`        | emitted when the attribute is absent (scoped attributes only)                                                                                                                                                           |
+| `native`         | `""` (portable), `"skip"` (only matters on the web; W166 with `--ui=native`) or `"no"` (needs a browser; E165 with `--ui=native`)                                                                                       |
+
+`native` only matters when a page is checked for the native target
+(`salam check --ui=native`); the web output never changes. An attribute that
+is scoped only to `"no"` or `"skip"` elements needs no `native` of its own.
+See `docs/design/NATIVE_UI.md`.
 
 The same name may be declared once per scope. Lookup tries the element-scoped
 entry first, then the global one. Unknown attributes are errors, and so are

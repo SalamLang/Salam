@@ -366,7 +366,9 @@ $cerrs"
     }
     wk_errors() {
         code=$(grep -oE '(EXPECT|انتظار|توقع): [^ ]*' "$f" | head -1 | sed -E 's/^(EXPECT|انتظار|توقع): //' | tr -d '\r')
-        out=$("$SALAM_ABS" inspect "$f" --emit-symbol --no-color --log-level=error --lang="$lang" 2>&1 >/dev/null)
+        tflags=$(grep -oE '(FLAGS|پرچم): .*' "$f" | head -1 | sed -E 's/^(FLAGS|پرچم): //' | tr -d '\r')
+        # shellcheck disable=SC2086
+        out=$("$SALAM_ABS" inspect "$f" --emit-symbol --no-color --log-level=error --lang="$lang" $tflags 2>&1 >/dev/null)
         [ -z "${extra_out:-}" ] || out="$out
 $extra_out"
         msg_missing=""

@@ -1,0 +1,799 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package archive
+
+import compress
+import mem
+
+const _SZ_END := 0
+const _SZ_HEADER := 1
+const _SZ_ARCHIVE_PROPS := 2
+const _SZ_ADD_STREAMS := 3
+const _SZ_MAIN_STREAMS := 4
+const _SZ_FILES := 5
+const _SZ_PACK_INFO := 6
+const _SZ_UNPACK_INFO := 7
+const _SZ_SUB_STREAMS := 8
+const _SZ_SIZE := 9
+const _SZ_CRC := 10
+const _SZ_FOLDER := 11
+const _SZ_CODERS_SIZE := 12
+const _SZ_NUM_UNPACK := 13
+const _SZ_EMPTY_STREAM := 14
+const _SZ_EMPTY_FILE := 15
+const _SZ_ANTI := 16
+const _SZ_NAMES := 17
+const _SZ_MTIME := 20
+const _SZ_ATTR := 21
+const _SZ_ENCODED_HEADER := 23
+const _SZ_MAX_CODERS := 32
+const _SZ_MAX_SIZE := 0x3FFFF000
+
+struct _SzR:
+    pub p: u8*
+    pub pos: int
+    pub end: int
+    pub bad: bool
+end
+
+struct _SzCoder:
+    pub id: i64
+    pub nin: int
+    pub nout: int
+    pub props: compress.ByteBuf
+end
+
+struct _SzFolder:
+    pub coders: Vector<_SzCoder>
+    pub bin: Vector<int>
+    pub bout: Vector<int>
+    pub packed: Vector<int>
+    pub unpack: Vector<i64>
+    pub crc_def: bool
+    pub crc: i64
+    pub pack_first: int
+    pub nsub: int
+    pub sub_first: int
+end
+
+struct _SzFile:
+    pub name: str
+    pub has_stream: bool
+    pub is_dir: bool
+    pub anti: bool
+    pub has_attr: bool
+    pub attr: int
+    pub mtime: i64
+    pub size: i64
+    pub crc_def: bool
+    pub crc: i64
+    pub folder: int
+    pub offset: i64
+end
+
+struct _Sz:
+    pub pack_pos: i64
+    pub pack_sizes: Vector<i64>
+    pub pack_off: Vector<i64>
+    pub folders: Vector<_SzFolder>
+    pub sub_sizes: Vector<i64>
+    pub sub_crc_def: Vector<bool>
+    pub sub_crc: Vector<i64>
+    pub files: Vector<_SzFile>
+end
+
+func _sz_new(): _Sz:
+    ret _Sz {
+        pack_pos = 0 as i64, pack_sizes = Vector {} as Vector<i64>, pack_off = Vector {} as Vector<i64>, folders = Vector {} as Vector<_SzFolder>
+        sub_sizes = Vector {} as Vector<i64>, sub_crc_def = Vector {} as Vector<bool>, sub_crc = Vector {} as Vector<i64>
+        files = Vector {} as Vector<_SzFile>
+    }
+end
+
+func _sz_free_folders(s &: _Sz):
+    repeat s.folders.len() in i:
+        f := s.folders.get(i)
+        repeat f.coders.len() in j:
+            c := f.coders.get(j)
+            mut pb := c.props
+            compress.BufFree(pb)
+        end
+        f.coders.free()
+        f.bin.free()
+        f.bout.free()
+        f.packed.free()
+        f.unpack.free()
+    end
+    s.folders.free()
+    s.pack_sizes.free()
+    s.pack_off.free()
+    s.sub_sizes.free()
+    s.sub_crc_def.free()
+    s.sub_crc.free()
+end
+
+func _sz_free(s &: _Sz):
+    repeat s.files.len() in i:
+        nm := s.files.get(i).name
+        if nm.len() > 0:
+            mem.Free(nm as void*)
+        end
+    end
+    s.files.free()
+    _sz_free_folders(s)
+end
+
+func _szr_byte(r &: _SzR): int:
+    if r.pos >= r.end:
+        r.bad = true
+        ret 0
+    end
+    v := r.p[r.pos] as int
+    r.pos++
+    ret v
+end
+
+func _szr_u32(r &: _SzR): i64:
+    if r.pos + 4 > r.end:
+        r.bad = true
+        r.pos = r.end
+        ret 0
+    end
+    v := (r.p[r.pos] as i64) | ((r.p[r.pos + 1] as i64) << 8) | ((r.p[r.pos + 2] as i64) << 16) | ((r.p[r.pos + 3] as i64) << 24)
+    r.pos += 4
+    ret v
+end
+
+func _szr_u64(r &: _SzR): i64:
+    lo := _szr_u32(r)
+    hi := _szr_u32(r)
+    ret lo | (hi << 32)
+end
+
+func _szr_num(r &: _SzR): i64:
+    first := _szr_byte(r)
+    mut mask := 128
+    mut v := 0 as i64
+    mut i := 0
+    until i < 8:
+        if (first & mask) == 0:
+            hi := (first & (mask - 1)) as i64
+            ret v | (hi << (8 * i))
+        end
+        v |= ((_szr_byte(r) as i64) << (8 * i))
+        mask >>= 1
+        i++
+    end
+    ret v
+end
+
+func _szr_count(r &: _SzR, limit: int): int:
+    v := _szr_num(r)
+    if v < (0 as i64) or v > (limit as i64):
+        r.bad = true
+        ret 0
+    end
+    ret v as int
+end
+
+func _szr_size(r &: _SzR): i64:
+    v := _szr_num(r)
+    if v < (0 as i64) or v > (0x7fffffffffff as i64):
+        r.bad = true
+        ret 0
+    end
+    ret v
+end
+
+func _szr_left(r: _SzR): int:
+    ret r.end - r.pos
+end
+
+func _szr_bits(r &: _SzR, n: int): Vector<bool>:
+    mut out := Vector {} as Vector<bool>
+    mut cur := 0
+    mut mask := 0
+    mut i := 0
+    until i < n:
+        if mask == 0:
+            cur = _szr_byte(r)
+            mask = 128
+        end
+        out.push((cur & mask) != 0)
+        mask >>= 1
+        i++
+    end
+    ret out
+end
+
+func _szr_defined(r &: _SzR, n: int): Vector<bool>:
+    all := _szr_byte(r)
+    if all != 0:
+        mut out := Vector {} as Vector<bool>
+        repeat n:
+            out.push(true)
+        end
+        ret out
+    end
+    ret _szr_bits(r, n)
+end
+
+func _szr_digests(r &: _SzR, n: int, defs &: Vector<bool>, crcs &: Vector<i64>):
+    d := _szr_defined(r, n)
+    repeat n in i:
+        if d.get(i):
+            crcs.push(_szr_u32(r))
+        else:
+            crcs.push(0 as i64)
+        end
+        defs.push(d.get(i))
+    end
+    d.free()
+end
+
+func _sz_read_folder(r &: _SzR, s &: _Sz): int:
+    mut f := _SzFolder {
+        coders = Vector {} as Vector<_SzCoder>, bin = Vector {} as Vector<int>, bout = Vector {} as Vector<int>
+        packed = Vector {} as Vector<int>, unpack = Vector {} as Vector<i64>
+        crc_def = false, crc = 0 as i64, pack_first = 0, nsub = 1, sub_first = 0
+    }
+    ncoders := _szr_count(r, _SZ_MAX_CODERS)
+    if r.bad or ncoders == 0:
+        s.folders.push(f)
+        ret 4
+    end
+    mut tin := 0
+    mut tout := 0
+    mut k := 0
+    until k < ncoders:
+        flags := _szr_byte(r)
+        idsize := flags & 15
+        if idsize > 8 or (flags & 128) != 0:
+            s.folders.push(f)
+            ret 2
+        end
+        mut id := 0 as i64
+        mut j := 0
+        until j < idsize:
+            id = (id << 8) | (_szr_byte(r) as i64)
+            j++
+        end
+        mut nin := 1
+        mut nout := 1
+        if (flags & 16) != 0:
+            nin = _szr_count(r, 64)
+            nout = _szr_count(r, 64)
+        end
+        mut props := compress.NewByteBuf()
+        if (flags & 32) != 0:
+            psz := _szr_count(r, _szr_left(r))
+            if r.bad:
+                s.folders.push(f)
+                ret 4
+            end
+            compress.BufPushBytes(props, ((r.p as i64) + (r.pos as i64)) as void*, psz)
+            r.pos += psz
+        end
+        f.coders.push(_SzCoder { id = id, nin = nin, nout = nout, props = props })
+        tin += nin
+        tout += nout
+        k++
+    end
+    if r.bad or tout == 0 or tin < tout - 1:
+        s.folders.push(f)
+        ret 4
+    end
+    nbind := tout - 1
+    k = 0
+    until k < nbind:
+        a := _szr_count(r, tin)
+        b := _szr_count(r, tout)
+        f.bin.push(a)
+        f.bout.push(b)
+        k++
+    end
+    npacked := tin - nbind
+    if npacked == 1:
+        mut idx := 0
+        until idx < tin:
+            mut bound := false
+            repeat nbind in q:
+                if f.bin.get(q) == idx:
+                    bound = true
+                end
+            end
+            if not bound:
+                f.packed.push(idx)
+                break
+            end
+            idx++
+        end
+    else:
+        k = 0
+        until k < npacked:
+            f.packed.push(_szr_count(r, tin))
+            k++
+        end
+    end
+    if r.bad or f.packed.len() != npacked:
+        s.folders.push(f)
+        ret 4
+    end
+    s.folders.push(f)
+    ret 0
+end
+
+func _sz_folder_total_out(f: _SzFolder): int:
+    mut t := 0
+    repeat f.coders.len() in i:
+        t += f.coders.get(i).nout
+    end
+    ret t
+end
+
+func _sz_folder_main_out(f: _SzFolder): int:
+    total := _sz_folder_total_out(f)
+    mut o := 0
+    until o < total:
+        mut used := false
+        repeat f.bout.len() in q:
+            if f.bout.get(q) == o:
+                used = true
+            end
+        end
+        if not used:
+            ret o
+        end
+        o++
+    end
+    ret 0
+end
+
+func _sz_folder_size(f: _SzFolder): i64:
+    m := _sz_folder_main_out(f)
+    if m >= f.unpack.len():
+        ret 0
+    end
+    ret f.unpack.get(m)
+end
+
+func _sz_read_pack_info(r &: _SzR, s &: _Sz): int:
+    s.pack_pos = _szr_size(r)
+    n := _szr_count(r, _szr_left(r))
+    until true:
+        id := _szr_byte(r)
+        if r.bad:
+            ret 4
+        end
+        if id == _SZ_END:
+            break
+        end
+        if id == _SZ_SIZE:
+            repeat n:
+                s.pack_sizes.push(_szr_size(r))
+            end
+        else id == _SZ_CRC:
+            mut dd := Vector {} as Vector<bool>
+            mut cc := Vector {} as Vector<i64>
+            _szr_digests(r, n, dd, cc)
+            dd.free()
+            cc.free()
+        else:
+            ret 4
+        end
+    end
+    if s.pack_sizes.len() != n or r.bad:
+        ret 4
+    end
+    mut off := 32 as i64 + s.pack_pos
+    repeat n in i:
+        s.pack_off.push(off)
+        off += s.pack_sizes.get(i)
+    end
+    ret 0
+end
+
+func _sz_read_unpack_info(r &: _SzR, s &: _Sz): int:
+    if _szr_byte(r) != _SZ_FOLDER:
+        ret 4
+    end
+    nf := _szr_count(r, _szr_left(r))
+    if _szr_byte(r) != 0:
+        ret 2
+    end
+    mut pack_idx := 0
+    repeat nf:
+        st := _sz_read_folder(r, s)
+        if st != 0 or r.bad:
+            if st != 0:
+                ret st
+            end
+            ret 4
+        end
+        mut fl := s.folders.get(s.folders.len() - 1)
+        fl.pack_first = pack_idx
+        pack_idx += fl.packed.len()
+        s.folders.set(s.folders.len() - 1, fl)
+    end
+    if _szr_byte(r) != _SZ_CODERS_SIZE:
+        ret 4
+    end
+    repeat nf in i:
+        mut fl := s.folders.get(i)
+        total := _sz_folder_total_out(fl)
+        repeat total:
+            fl.unpack.push(_szr_size(r))
+        end
+        s.folders.set(i, fl)
+    end
+    until true:
+        id := _szr_byte(r)
+        if r.bad:
+            ret 4
+        end
+        if id == _SZ_END:
+            break
+        end
+        if id == _SZ_CRC:
+            mut dd := Vector {} as Vector<bool>
+            mut cc := Vector {} as Vector<i64>
+            _szr_digests(r, nf, dd, cc)
+            repeat nf in i:
+                mut fl := s.folders.get(i)
+                fl.crc_def = dd.get(i)
+                fl.crc = cc.get(i)
+                s.folders.set(i, fl)
+            end
+            dd.free()
+            cc.free()
+        else:
+            ret 4
+        end
+    end
+    ret 0
+end
+
+func _sz_default_subs(s &: _Sz):
+    s.sub_sizes.free()
+    s.sub_crc_def.free()
+    s.sub_crc.free()
+    s.sub_sizes = Vector {} as Vector<i64>
+    s.sub_crc_def = Vector {} as Vector<bool>
+    s.sub_crc = Vector {} as Vector<i64>
+    mut first := 0
+    repeat s.folders.len() in i:
+        mut fl := s.folders.get(i)
+        fl.nsub = 1
+        fl.sub_first = first
+        first++
+        s.sub_sizes.push(_sz_folder_size(fl))
+        s.sub_crc_def.push(fl.crc_def)
+        s.sub_crc.push(fl.crc)
+        s.folders.set(i, fl)
+    end
+end
+
+func _sz_read_substreams(r &: _SzR, s &: _Sz): int:
+    nf := s.folders.len()
+    mut id := _szr_byte(r)
+    if id == _SZ_NUM_UNPACK:
+        repeat nf in i:
+            mut fl := s.folders.get(i)
+            fl.nsub = _szr_count(r, _szr_left(r) + 1)
+            s.folders.set(i, fl)
+        end
+        id = _szr_byte(r)
+    end
+    s.sub_sizes.free()
+    s.sub_crc_def.free()
+    s.sub_crc.free()
+    s.sub_sizes = Vector {} as Vector<i64>
+    s.sub_crc_def = Vector {} as Vector<bool>
+    s.sub_crc = Vector {} as Vector<i64>
+    mut first := 0
+    repeat nf in i:
+        mut fl := s.folders.get(i)
+        fl.sub_first = first
+        first += fl.nsub
+        s.folders.set(i, fl)
+    end
+    if r.bad or first > r.end:
+        ret 4
+    end
+    repeat nf in i:
+        fl := s.folders.get(i)
+        if fl.nsub == 0:
+            continue
+        end
+        mut sum := 0 as i64
+        mut j := 0
+        until j < fl.nsub - 1:
+            mut sz := 0 as i64
+            if id == _SZ_SIZE:
+                sz = _szr_size(r)
+            end
+            s.sub_sizes.push(sz)
+            sum += sz
+            j++
+        end
+        last := _sz_folder_size(fl) - sum
+        if last < (0 as i64) or (fl.nsub > 1 and id != _SZ_SIZE):
+            ret 4
+        end
+        s.sub_sizes.push(last)
+    end
+    if id == _SZ_SIZE:
+        id = _szr_byte(r)
+    end
+    repeat s.sub_sizes.len():
+        s.sub_crc_def.push(false)
+        s.sub_crc.push(0 as i64)
+    end
+    mut unknown := 0
+    repeat nf in i:
+        fl := s.folders.get(i)
+        if fl.nsub == 1 and fl.crc_def:
+            s.sub_crc_def.set(fl.sub_first, true)
+            s.sub_crc.set(fl.sub_first, fl.crc)
+        else:
+            unknown += fl.nsub
+        end
+    end
+    until true:
+        if r.bad:
+            ret 4
+        end
+        if id == _SZ_END:
+            break
+        end
+        if id == _SZ_CRC:
+            mut dd := Vector {} as Vector<bool>
+            mut cc := Vector {} as Vector<i64>
+            _szr_digests(r, unknown, dd, cc)
+            mut u := 0
+            repeat nf in i:
+                fl := s.folders.get(i)
+                if fl.nsub == 1 and fl.crc_def:
+                    continue
+                end
+                repeat fl.nsub in j:
+                    s.sub_crc_def.set(fl.sub_first + j, dd.get(u))
+                    s.sub_crc.set(fl.sub_first + j, cc.get(u))
+                    u++
+                end
+            end
+            dd.free()
+            cc.free()
+        else:
+            ret 4
+        end
+        id = _szr_byte(r)
+    end
+    ret 0
+end
+
+func _sz_read_streams(r &: _SzR, s &: _Sz): int:
+    mut have_subs := false
+    until true:
+        id := _szr_byte(r)
+        if r.bad:
+            ret 4
+        end
+        if id == _SZ_END:
+            break
+        end
+        mut st := 0
+        if id == _SZ_PACK_INFO:
+            st = _sz_read_pack_info(r, s)
+        else id == _SZ_UNPACK_INFO:
+            st = _sz_read_unpack_info(r, s)
+        else id == _SZ_SUB_STREAMS:
+            st = _sz_read_substreams(r, s)
+            have_subs = true
+        else:
+            ret 4
+        end
+        if st != 0:
+            ret st
+        end
+    end
+    if not have_subs:
+        _sz_default_subs(s)
+    end
+    ret 0
+end
+
+func _szr_name(r &: _SzR, endp: int): str:
+    mut b := compress.NewByteBuf()
+    until r.pos + 2 <= endp:
+        u := (r.p[r.pos] as int) | ((r.p[r.pos + 1] as int) << 8)
+        r.pos += 2
+        if u == 0:
+            break
+        end
+        mut cp := u
+        if u >= 55296 and u <= 56319 and r.pos + 2 <= endp:
+            u2 := (r.p[r.pos] as int) | ((r.p[r.pos + 1] as int) << 8)
+            if u2 >= 56320 and u2 <= 57343:
+                r.pos += 2
+                cp = 65536 + ((u - 55296) << 10) + (u2 - 56320)
+            end
+        end
+        if cp < 128:
+            compress.BufPush(b, cp)
+        else cp < 2048:
+            compress.BufPush(b, 192 | (cp >> 6))
+            compress.BufPush(b, 128 | (cp & 63))
+        else cp < 65536:
+            compress.BufPush(b, 224 | (cp >> 12))
+            compress.BufPush(b, 128 | ((cp >> 6) & 63))
+            compress.BufPush(b, 128 | (cp & 63))
+        else:
+            compress.BufPush(b, 240 | (cp >> 18))
+            compress.BufPush(b, 128 | ((cp >> 12) & 63))
+            compress.BufPush(b, 128 | ((cp >> 6) & 63))
+            compress.BufPush(b, 128 | (cp & 63))
+        end
+    end
+    out := compress.BufToStrUnsafe(b)
+    compress.BufFree(b)
+    ret out
+end
+
+func _sz_read_files(r &: _SzR, s &: _Sz): int:
+    n := _szr_count(r, _szr_left(r))
+    if r.bad:
+        ret 4
+    end
+    repeat n:
+        s.files.push(_SzFile {
+            name = "", has_stream = true, is_dir = false, anti = false, has_attr = false, attr = 0
+            mtime = 0 as i64, size = 0 as i64, crc_def = false, crc = 0 as i64, folder = -1, offset = 0 as i64
+        })
+    end
+    mut empty := Vector {} as Vector<bool>
+    mut empty_file := Vector {} as Vector<bool>
+    mut anti := Vector {} as Vector<bool>
+    mut nempty := 0
+    mut st := 0
+    until true:
+        ty := _szr_num(r)
+        if r.bad:
+            st = 4
+            break
+        end
+        if ty == (_SZ_END as i64):
+            break
+        end
+        size := _szr_count(r, _szr_left(r))
+        if r.bad:
+            st = 4
+            break
+        end
+        endp := r.pos + size
+        if ty == (_SZ_EMPTY_STREAM as i64):
+            empty.free()
+            empty = _szr_bits(r, n)
+            nempty = 0
+            repeat n in i:
+                if empty.get(i):
+                    nempty++
+                end
+            end
+        else ty == (_SZ_EMPTY_FILE as i64):
+            empty_file.free()
+            empty_file = _szr_bits(r, nempty)
+        else ty == (_SZ_ANTI as i64):
+            anti.free()
+            anti = _szr_bits(r, nempty)
+        else ty == (_SZ_NAMES as i64):
+            if _szr_byte(r) != 0:
+                st = 2
+                break
+            end
+            repeat n in i:
+                mut f := s.files.get(i)
+                f.name = _szr_name(r, endp)
+                s.files.set(i, f)
+            end
+        else ty == (_SZ_MTIME as i64):
+            defs := _szr_defined(r, n)
+            if _szr_byte(r) != 0:
+                st = 2
+                defs.free()
+                break
+            end
+            repeat n in i:
+                if defs.get(i):
+                    ft := _szr_u64(r)
+                    mut f := s.files.get(i)
+                    f.mtime = ft / (10000000 as i64) - (11644473600 as i64)
+                    s.files.set(i, f)
+                end
+            end
+            defs.free()
+        else ty == (_SZ_ATTR as i64):
+            defs := _szr_defined(r, n)
+            if _szr_byte(r) != 0:
+                st = 2
+                defs.free()
+                break
+            end
+            repeat n in i:
+                if defs.get(i):
+                    a := _szr_u32(r)
+                    mut f := s.files.get(i)
+                    f.has_attr = true
+                    f.attr = a as int
+                    s.files.set(i, f)
+                end
+            end
+            defs.free()
+        end
+        if r.bad or endp > r.end:
+            st = 4
+            break
+        end
+        r.pos = endp
+    end
+    if st == 0:
+        mut k := 0
+        mut next_sub := 0
+        mut cur_folder := 0
+        mut in_folder := 0
+        mut off := 0 as i64
+        repeat n in i:
+            mut f := s.files.get(i)
+            is_empty := empty.len() > i and empty.get(i)
+            if is_empty:
+                f.has_stream = false
+                f.is_dir = true
+                if empty_file.len() > k and empty_file.get(k):
+                    f.is_dir = false
+                end
+                if anti.len() > k and anti.get(k):
+                    f.anti = true
+                end
+                k++
+            else:
+                until cur_folder < s.folders.len() and in_folder >= s.folders.get(cur_folder).nsub:
+                    cur_folder++
+                    in_folder = 0
+                    off = 0 as i64
+                end
+                if cur_folder >= s.folders.len() or next_sub >= s.sub_sizes.len():
+                    st = 4
+                    break
+                end
+                f.folder = cur_folder
+                f.offset = off
+                f.size = s.sub_sizes.get(next_sub)
+                f.crc_def = s.sub_crc_def.get(next_sub)
+                f.crc = s.sub_crc.get(next_sub)
+                off += f.size
+                in_folder++
+                next_sub++
+            end
+            if f.has_attr and (f.attr & 16) != 0:
+                f.is_dir = true
+            end
+            s.files.set(i, f)
+        end
+    end
+    empty.free()
+    empty_file.free()
+    anti.free()
+    ret st
+end

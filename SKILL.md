@@ -1131,7 +1131,7 @@ not the libraries.
 
 ### Text & formatting
 
-- **`str`**: `Upper Lower Title Trim TrimLeft TrimRight TrimPrefix TrimSuffix Reverse Repeat Concat Substr Split Join Fields Chars CharAt Contains Find IndexOf IndexFrom LastIndex Count StartsWith EndsWith Equals EqualFold CompareFold Compare Replace Len CharCount CharSubstr CharFind CodePoints FromCodePoints Graphemes GraphemeCount ReverseGraphemes NFC NFD NFKC NFKD Clone FromInt(i64) FromFloat(f64) ToInt ToFloat IsEmpty IsDigit IsAlpha IsAlnum IsSpace IsPunct ToEnglishDigits ToPersianDigits ToArabicDigits DigitValue IsAnyDigit IsPersianDigit IsArabicDigit HasEnglishDigits HasPersianDigits HasArabicDigits`; plus a `StringBuilder` (`NewBuilder`,
+- **`str`**: `Upper Lower Title Trim TrimLeft TrimRight TrimPrefix TrimSuffix Reverse Repeat Concat Substr Split Join Fields Chars CharAt Contains Find IndexOf IndexFrom LastIndex Count StartsWith EndsWith StartsWithFold EndsWithFold StartsWithAny EndsWithAny CutPrefix(s, p, ok) CutSuffix(s, p, ok) StartsWithBytes EndsWithBytes Equals EqualFold CompareFold Compare Replace Len CharCount CharSubstr CharFind CodePoints FromCodePoints Graphemes GraphemeCount ReverseGraphemes NFC NFD NFKC NFKD Clone FromInt(i64) FromFloat(f64) ToInt ToFloat IsEmpty IsDigit IsAlpha IsAlnum IsSpace IsPunct ToEnglishDigits ToPersianDigits ToArabicDigits DigitValue IsAnyDigit IsPersianDigit IsArabicDigit HasEnglishDigits HasPersianDigits HasArabicDigits`; plus a `StringBuilder` (`NewBuilder`,
   `BufAppend`, `BufAppendChar`, `BufAppendCp`, `BufAppendInt`, `BufStr`,
   `BufReset`, `BufFree`). `Len`, `Substr`, `IndexOf` count **bytes**;
   `CharCount`, `CharSubstr`, `CharFind` count code points; use those for
@@ -1139,6 +1139,11 @@ not the libraries.
   `CAFé`; use `unicode.ToUpper` per code point, or `EqualFold` to compare),
   and `Trim` strips only ASCII space, tab, CR and LF (a no-break space
   stays). `ToInt` returns a 32-bit `int` and clamps.
+  For prefix, suffix and substring tests write `s.starts_with(p)`, `s.ends_with(p)`
+  and `s.includes(sub)` (no import, same on every backend), not
+  `s.substr(0, n) == p`, `s.find(p) == 0` or a byte loop; an empty affix
+  always matches. `CutPrefix`/`CutSuffix` return the rest and set an `ok`
+  flag, the `*Fold` forms ignore case, `*Any` take a `Vector<str>`.
 - **`fmt`**: `Sprintf(tmpl, Vector<str>)` (`{}` placeholders), `Fprintf`,
   `PadLeft PadRight Center` (count characters), and `Int Float FloatPrec Bool Hex Uint` to build the string args you pass to `Sprintf`. There are no
   verbs (`%d`, `{:.2}`): format the value first with `FloatPrec`/`PadLeft`.

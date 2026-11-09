@@ -1,0 +1,685 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package css
+
+import str
+import math
+
+const K_NUM := 0
+const K_LEN := 1
+const K_ANG := 2
+const K_TIME := 3
+
+mut g_intern := HashMap {} as HashMap<str, int>
+mut g_intern_list := Vector {} as Vector<str>
+
+struct Cx:
+    pub fs: f64 = 16.0
+    pub pfs: f64 = 16.0
+    pub rfs: f64 = 16.0
+    pub vw: f64 = 1024.0
+    pub vh: f64 = 768.0
+    pub dark: bool = false
+    pub color: Color = Color {}
+    pub pcolor: Color = Color {}
+    pub rtl: bool = false
+    pub basis: f64 = -1.0
+end
+
+struct Lin:
+    pub kind: int = K_NUM
+    pub v: f64 = 0.0
+    pub pct: f64 = 0.0
+    pub has_pct: bool = false
+    pub nl: str = ""
+    pub ok: bool = true
+end
+
+func unit_value(n: f64, unit: str, cx: Cx, out &: f64, kind &: int): bool:
+    kind = K_LEN
+    switch unit:
+        "px": out = n end
+        "em": out = n * cx.fs end
+        "rem": out = n * cx.rfs end
+        "ex", "ch": out = n * cx.fs * 0.5 end
+        "cap": out = n * cx.fs * 0.7 end
+        "ic": out = n * cx.fs end
+        "lh": out = n * cx.fs * 1.2 end
+        "rlh": out = n * cx.rfs * 1.2 end
+        "vw", "svw", "lvw", "dvw", "vi", "svi", "lvi", "dvi", "cqw", "cqi": out = n * cx.vw / 100.0 end
+        "vh", "svh", "lvh", "dvh", "vb", "svb", "lvb", "dvb", "cqh", "cqb": out = n * cx.vh / 100.0 end
+        "vmin", "svmin", "lvmin", "dvmin", "cqmin": out = n * math.Min(cx.vw, cx.vh) / 100.0 end
+        "vmax", "svmax", "lvmax", "dvmax", "cqmax": out = n * math.Max(cx.vw, cx.vh) / 100.0 end
+        "pt": out = n * 4.0 / 3.0 end
+        "pc": out = n * 16.0 end
+        "in": out = n * 96.0 end
+        "cm": out = n * 96.0 / 2.54 end
+        "mm": out = n * 96.0 / 25.4 end
+        "q": out = n * 96.0 / 101.6 end
+        "deg":
+            kind = K_ANG
+            out = n
+        end
+        "rad":
+            kind = K_ANG
+            out = n * 180.0 / math.PI
+        end
+        "grad":
+            kind = K_ANG
+            out = n * 0.9
+        end
+        "turn":
+            kind = K_ANG
+            out = n * 360.0
+        end
+        "s":
+            kind = K_TIME
+            out = n * 1000.0
+        end
+        "ms":
+            kind = K_TIME
+            out = n
+        end
+        else:
+            ret false
+        end
+    end
+    ret true
+end
+
+func lin_bad(): Lin:
+    ret Lin { ok = false }
+end
+
+func lin_css(a: Lin): str:
+    if a.nl.len() > 0:
+        ret str.Clone(a.nl)
+    end
+    vs := fmt_num(a.v)
+    defer sfree(vs)
+    if a.kind != K_LEN or not a.has_pct:
+        if a.kind == K_LEN:
+            ret vs + "px"
+        end
+        if a.kind == K_ANG:
+            ret vs + "deg"
+        end
+        if a.kind == K_TIME:
+            ret vs + "ms"
+        end
+        ret str.Clone(vs)
+    end
+    ps := fmt_num(a.pct)
+    defer sfree(ps)
+    if a.v == 0.0:
+        ret ps + "%"
+    end
+    if a.v < 0.0:
+        nv := fmt_num(0.0 - a.v)
+        out := "calc(" + ps + "% - " + nv + "px)"
+        sfree(nv)
+        ret out
+    end
+    ret "calc(" + ps + "% + " + vs + "px)"
+end
+
+func lin_add(a: Lin, b: Lin, sub: bool): Lin:
+    if not a.ok or not b.ok:
+        ret lin_bad()
+    end
+    ka := a.kind
+    kb := b.kind
+    if ka != kb:
+        ret lin_bad()
+    end
+    if a.nl.len() > 0 or b.nl.len() > 0:
+        sa := lin_css(a)
+        sb := lin_css(b)
+        r := Lin { kind = ka, has_pct = true, nl = "calc(" + sa + (sub ? " - " : " + ") + sb + ")" }
+        sfree(sa)
+        sfree(sb)
+        ret r
+    end
+    sg := sub ? -1.0 : 1.0
+    ret Lin { kind = ka, v = a.v + sg * b.v, pct = a.pct + sg * b.pct, has_pct = a.has_pct or b.has_pct }
+end
+
+func lin_scale(a: Lin, k: f64): Lin:
+    if not a.ok:
+        ret a
+    end
+    if a.nl.len() > 0:
+        sa := lin_css(a)
+        ks := fmt_num(k)
+        r := Lin { kind = a.kind, has_pct = true, nl = "calc(" + sa + " * " + ks + ")" }
+        sfree(sa)
+        sfree(ks)
+        ret r
+    end
+    ret Lin { kind = a.kind, v = a.v * k, pct = a.pct * k, has_pct = a.has_pct }
+end
+
+func lin_minmax(args: Vector<Lin>, is_max: bool, fname: str): Lin:
+    if args.len() == 0:
+        ret lin_bad()
+    end
+    k := args[0].kind
+    mut linear := true
+    repeat args.len() in i:
+        a := args[i]
+        if not a.ok or a.kind != k:
+            ret lin_bad()
+        end
+        if a.has_pct or a.nl.len() > 0:
+            linear = false
+        end
+    end
+    if linear:
+        mut best := args[0].v
+        repeat args.len() in i:
+            v := args[i].v
+            if is_max and v > best:
+                best = v
+            end
+            if not is_max and v < best:
+                best = v
+            end
+        end
+        ret Lin { kind = k, v = best }
+    end
+    mut b := str.NewBuilder()
+    str.BufAppend(b, fname)
+    str.BufAppend(b, "(")
+    repeat args.len() in i:
+        if i > 0:
+            str.BufAppend(b, ", ")
+        end
+        sa := lin_css(args[i])
+        str.BufAppend(b, sa)
+        sfree(sa)
+    end
+    str.BufAppend(b, ")")
+    out := str.BufStr(b)
+    str.BufFree(b)
+    ret Lin { kind = k, has_pct = true, nl = out }
+end
+
+func lin_free(a: Lin):
+    if a.nl.len() > 0:
+        sfree(a.nl)
+    end
+end
+
+func calc_term(t: Vector<Tok>, i: int, e: int, cx: Cx): Lin:
+    if i >= e:
+        ret lin_bad()
+    end
+    tk := t[i]
+    if tk.k == TK_NUM:
+        ret Lin { kind = K_NUM, v = tk.n }
+    end
+    if tk.k == TK_PCT:
+        if cx.basis >= 0.0:
+            ret Lin { kind = K_LEN, v = tk.n * cx.basis / 100.0 }
+        end
+        ret Lin { kind = K_LEN, pct = tk.n, has_pct = true }
+    end
+    if tk.k == TK_DIM:
+        mut v := 0.0
+        mut k := K_LEN
+        if not unit_value(tk.n, tk.s, cx, v, k):
+            ret lin_bad()
+        end
+        ret Lin { kind = k, v = v }
+    end
+    if tk.k == TK_IDENT:
+        switch tk.s:
+            "pi": ret Lin { kind = K_NUM, v = math.PI } end
+            "e": ret Lin { kind = K_NUM, v = math.E } end
+            "infinity": ret Lin { kind = K_NUM, v = 1.0e300 } end
+            "-infinity": ret Lin { kind = K_NUM, v = -1.0e300 } end
+            else: ret lin_bad() end
+        end
+    end
+    if tk.k == TK_FUNC:
+        ret calc_fn(t, i, cx)
+    end
+    ret lin_bad()
+end
+
+func calc_product(t: Vector<Tok>, s: int, e: int, cx: Cx): Lin:
+    mut acc := calc_term(t, s, e, cx)
+    mut i := nxt(t, s)
+    until i < e and acc.ok:
+        if t[i].k != TK_DELIM or (t[i].d != 42 and t[i].d != 47):
+            lin_free(acc)
+            ret lin_bad()
+        end
+        op := t[i].d
+        if i + 1 >= e:
+            lin_free(acc)
+            ret lin_bad()
+        end
+        rhs := calc_term(t, i + 1, e, cx)
+        if not rhs.ok:
+            lin_free(acc)
+            ret lin_bad()
+        end
+        if op == 42:
+            if rhs.kind == K_NUM and rhs.nl.len() == 0:
+                old := acc
+                acc = lin_scale(acc, rhs.v)
+                lin_free(old)
+            else acc.kind == K_NUM and acc.nl.len() == 0:
+                k := acc.v
+                acc = lin_scale(rhs, k)
+                lin_free(rhs)
+            else:
+                lin_free(acc)
+                lin_free(rhs)
+                ret lin_bad()
+            end
+        else:
+            if rhs.kind != K_NUM or rhs.nl.len() > 0 or rhs.v == 0.0:
+                lin_free(acc)
+                lin_free(rhs)
+                ret lin_bad()
+            end
+            old := acc
+            acc = lin_scale(acc, 1.0 / rhs.v)
+            lin_free(old)
+        end
+        i = nxt(t, i + 1)
+    end
+    ret acc
+end
+
+func is_addop(t: Vector<Tok>, j: int): bool:
+    ret t[j].k == TK_DELIM and (t[j].d == 43 or t[j].d == 45)
+end
+
+func calc_sum(t: Vector<Tok>, s: int, e: int, cx: Cx): Lin:
+    if s >= e:
+        ret lin_bad()
+    end
+    mut j := s
+    until j < e and not is_addop(t, j):
+        j = nxt(t, j)
+    end
+    mut acc := calc_product(t, s, j, cx)
+    until j < e and acc.ok:
+        sub := t[j].d == 45
+        start := j + 1
+        mut k := start
+        until k < e and not is_addop(t, k):
+            k = nxt(t, k)
+        end
+        rhs := calc_product(t, start, k, cx)
+        old := acc
+        acc = lin_add(acc, rhs, sub)
+        lin_free(old)
+        lin_free(rhs)
+        j = k
+    end
+    ret acc
+end
+
+func calc_fn(t: Vector<Tok>, i: int, cx: Cx): Lin:
+    f := t[i]
+    s := i + 1
+    e := f.close
+    if e < 0:
+        ret lin_bad()
+    end
+    switch f.s:
+        "calc", "", "-webkit-calc":
+            ret calc_sum(t, s, e, cx)
+        end
+        "min", "max", "clamp":
+            mut parts := Vector {} as Vector<int>
+            defer parts.free()
+            split_commas(t, s, e, parts)
+            mut args := Vector {} as Vector<Lin>
+            defer args.free()
+            mut k := 0
+            until k + 1 < parts.len():
+                args.push(calc_sum(t, parts[k], parts[k + 1], cx))
+                k += 2
+            end
+            mut r := lin_bad()
+            if f.s == "clamp":
+                if args.len() == 3:
+                    mut inner := Vector {} as Vector<Lin>
+                    inner.push(args[1])
+                    inner.push(args[2])
+                    mn := lin_minmax(inner, false, "min")
+                    inner.free()
+                    mut outer := Vector {} as Vector<Lin>
+                    outer.push(args[0])
+                    outer.push(mn)
+                    r = lin_minmax(outer, true, "max")
+                    outer.free()
+                    lin_free(mn)
+                end
+            else:
+                r = lin_minmax(args, f.s == "max", f.s)
+            end
+            repeat args.len() in a:
+                lin_free(args[a])
+            end
+            ret r
+        end
+        "abs", "sign":
+            a := calc_sum(t, s, e, cx)
+            if not a.ok or a.has_pct or a.nl.len() > 0:
+                lin_free(a)
+                ret lin_bad()
+            end
+            if f.s == "abs":
+                ret Lin { kind = a.kind, v = math.Abs(a.v) }
+            end
+            ret Lin { kind = K_NUM, v = a.v > 0.0 ? 1.0 : (a.v < 0.0 ? -1.0 : 0.0) }
+        end
+        "round", "mod", "rem":
+            mut parts := Vector {} as Vector<int>
+            defer parts.free()
+            split_commas(t, s, e, parts)
+            mut ps := 0
+            mut strategy := "nearest"
+            if parts.len() >= 2 and t[parts[0]].k == TK_IDENT and nxt(t, parts[0]) == parts[1] and f.s == "round":
+                strategy = t[parts[0]].s
+                ps = 2
+            end
+            if parts.len() - ps != 4:
+                ret lin_bad()
+            end
+            a := calc_sum(t, parts[ps], parts[ps + 1], cx)
+            b := calc_sum(t, parts[ps + 2], parts[ps + 3], cx)
+            if not a.ok or not b.ok or a.has_pct or b.has_pct or a.nl.len() > 0 or b.nl.len() > 0 or a.kind != b.kind or b.v == 0.0:
+                lin_free(a)
+                lin_free(b)
+                ret lin_bad()
+            end
+            q := a.v / b.v
+            mut r := 0.0
+            if f.s == "round":
+                switch strategy:
+                    "up": r = math.Ceil(q) * b.v end
+                    "down": r = math.Floor(q) * b.v end
+                    "to-zero": r = (q < 0.0 ? math.Ceil(q) : math.Floor(q)) * b.v end
+                    else: r = math.Floor(q + 0.5) * b.v end
+                end
+            else f.s == "mod":
+                r = a.v - math.Floor(q) * b.v
+            else:
+                r = a.v - (q < 0.0 ? math.Ceil(q) : math.Floor(q)) * b.v
+            end
+            ret Lin { kind = a.kind, v = r }
+        end
+        else:
+            ret lin_bad()
+        end
+    end
+    ret lin_bad()
+end
+
+func is_math_fn(name: str): bool:
+    switch name:
+        "calc", "min", "max", "clamp", "abs", "sign", "round", "mod", "rem", "-webkit-calc":
+            ret true
+        end
+        else:
+            ret false
+        end
+    end
+    ret false
+end
+
+func lin_to_len(a: Lin, out &: Len):
+    if a.nl.len() > 0:
+        out = Len { kind = LenKind.Length, has_pct = true, calc = intern_own(a.nl) }
+        ret
+    end
+    out = Len { kind = LenKind.Length, px = a.v, pct = a.pct, has_pct = a.has_pct }
+end
+
+func p_len(t: Vector<Tok>, i: int, e: int, cx: Cx, allow_pct: bool, allow_neg: bool, out &: Len): bool:
+    if i >= e:
+        ret false
+    end
+    tk := t[i]
+    if tk.k == TK_NUM:
+        if tk.n == 0.0:
+            out = Len {}
+            ret true
+        end
+        ret false
+    end
+    if tk.k == TK_DIM:
+        mut v := 0.0
+        mut k := K_LEN
+        if not unit_value(tk.n, tk.s, cx, v, k) or k != K_LEN:
+            ret false
+        end
+        if v < 0.0 and not allow_neg:
+            ret false
+        end
+        out = Len { px = v }
+        ret true
+    end
+    if tk.k == TK_PCT:
+        if not allow_pct or (tk.n < 0.0 and not allow_neg):
+            ret false
+        end
+        if cx.basis >= 0.0:
+            out = Len { px = tk.n * cx.basis / 100.0 }
+        else:
+            out = Len { pct = tk.n, has_pct = true }
+        end
+        ret true
+    end
+    if tk.k == TK_FUNC and is_math_fn(tk.s):
+        a := calc_fn(t, i, cx)
+        if not a.ok or (a.kind != K_LEN and not (a.kind == K_NUM and a.v == 0.0 and a.nl.len() == 0)):
+            lin_free(a)
+            ret false
+        end
+        if a.has_pct and not allow_pct:
+            lin_free(a)
+            ret false
+        end
+        if a.nl.len() == 0 and not allow_neg and not a.has_pct and a.v < 0.0:
+            out = Len {}
+            ret true
+        end
+        lin_to_len(a, out)
+        ret true
+    end
+    ret false
+end
+
+func p_num(t: Vector<Tok>, i: int, e: int, cx: Cx, out &: f64): bool:
+    if i >= e:
+        ret false
+    end
+    tk := t[i]
+    if tk.k == TK_NUM:
+        out = tk.n
+        ret true
+    end
+    if tk.k == TK_FUNC and is_math_fn(tk.s):
+        a := calc_fn(t, i, cx)
+        if not a.ok or a.kind != K_NUM or a.nl.len() > 0:
+            lin_free(a)
+            ret false
+        end
+        out = a.v
+        ret true
+    end
+    ret false
+end
+
+func p_num_or_pct(t: Vector<Tok>, i: int, e: int, cx: Cx, out &: f64): bool:
+    if i < e and t[i].k == TK_PCT:
+        out = t[i].n / 100.0
+        ret true
+    end
+    ret p_num(t, i, e, cx, out)
+end
+
+func p_angle(t: Vector<Tok>, i: int, e: int, cx: Cx, allow_zero: bool, out &: f64): bool:
+    if i >= e:
+        ret false
+    end
+    tk := t[i]
+    if tk.k == TK_NUM:
+        if allow_zero and tk.n == 0.0:
+            out = 0.0
+            ret true
+        end
+        ret false
+    end
+    if tk.k == TK_DIM:
+        mut v := 0.0
+        mut k := K_LEN
+        if unit_value(tk.n, tk.s, cx, v, k) and k == K_ANG:
+            out = v
+            ret true
+        end
+        ret false
+    end
+    if tk.k == TK_FUNC and is_math_fn(tk.s):
+        a := calc_fn(t, i, cx)
+        if a.ok and a.kind == K_ANG and a.nl.len() == 0:
+            out = a.v
+            ret true
+        end
+        lin_free(a)
+    end
+    ret false
+end
+
+func p_time(t: Vector<Tok>, i: int, e: int, cx: Cx, out &: f64): bool:
+    if i >= e:
+        ret false
+    end
+    tk := t[i]
+    if tk.k == TK_DIM:
+        mut v := 0.0
+        mut k := K_LEN
+        if unit_value(tk.n, tk.s, cx, v, k) and k == K_TIME:
+            out = v
+            ret true
+        end
+        ret false
+    end
+    if tk.k == TK_FUNC and is_math_fn(tk.s):
+        a := calc_fn(t, i, cx)
+        if a.ok and a.kind == K_TIME and a.nl.len() == 0:
+            out = a.v
+            ret true
+        end
+        lin_free(a)
+    end
+    ret false
+end
+
+func p_int(t: Vector<Tok>, i: int, e: int, cx: Cx, out &: int): bool:
+    mut v := 0.0
+    if not p_num(t, i, e, cx, v):
+        ret false
+    end
+    if t[i].k == TK_NUM and not t[i].int_like:
+        ret false
+    end
+    out = math.Floor(v + 0.5) as int
+    ret true
+end
+
+func single(t: Vector<Tok>, s: int, e: int): bool:
+    ret s < e and nxt(t, s) == e
+end
+
+func kw_at(t: Vector<Tok>, s: int, e: int): str:
+    if single(t, s, e) and t[s].k == TK_IDENT:
+        ret t[s].s
+    end
+    ret ""
+end
+
+func resolve_len(l: Len, basis: f64, cx: Cx): f64:
+    if l.kind != LenKind.Length:
+        ret 0.0
+    end
+    if l.calc.len() > 0:
+        mut toks := Vector {} as Vector<Tok>
+        tokenize(l.calc, toks)
+        mut c2 := cx
+        c2.basis = basis
+        mut r := 0.0
+        if toks.len() > 0:
+            a := calc_term(toks, 0, toks.len(), c2)
+            if a.ok:
+                r = a.v
+            end
+            lin_free(a)
+        end
+        free_toks(toks, 0)
+        toks.free()
+        ret r
+    end
+    if l.has_pct:
+        ret l.px + l.pct * basis / 100.0
+    end
+    ret l.px
+end
+
+func len_text(l: Len): str:
+    switch l.kind:
+        LenKind.Auto: ret str.Clone("auto") end
+        LenKind.None: ret str.Clone("none") end
+        LenKind.Normal: ret str.Clone("normal") end
+        LenKind.MinContent: ret str.Clone("min-content") end
+        LenKind.MaxContent: ret str.Clone("max-content") end
+        LenKind.FitContent: ret str.Clone("fit-content") end
+        LenKind.Content: ret str.Clone("content") end
+        else:
+            if l.calc.len() > 0:
+                ret str.Clone(l.calc)
+            end
+            ret lin_css(Lin { kind = K_LEN, v = l.px, pct = l.pct, has_pct = l.has_pct })
+        end
+    end
+    ret str.Clone("")
+end
+
+func intern(s: str): str:
+    if s.len() == 0:
+        ret ""
+    end
+    if g_intern.has(s):
+        ret g_intern_list[g_intern.get(s)]
+    end
+    c := str.Clone(s)
+    g_intern_list.push(c)
+    g_intern.put(c, g_intern_list.len() - 1)
+    ret c
+end
+
+func intern_own(s: str): str:
+    r := intern(s)
+    sfree(s)
+    ret r
+end

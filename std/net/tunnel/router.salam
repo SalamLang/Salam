@@ -1,0 +1,455 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "net/tunnel"
+@fa "تونل"
+package tunnel
+
+import str
+import io
+import regex
+
+@en "M_DOMAIN"
+@fa "تطبیق دامنه"
+pub const M_DOMAIN := 1
+
+@en "M_SUFFIX"
+@fa "تطبیق پسوند"
+pub const M_SUFFIX := 2
+
+@en "M_KEYWORD"
+@fa "تطبیق کلیدواژه"
+pub const M_KEYWORD := 3
+
+@en "M_REGEX"
+@fa "تطبیق عبارت باقاعده"
+pub const M_REGEX := 4
+
+@en "M_CIDR"
+@fa "تطبیق سی‌آی‌دی‌آر"
+pub const M_CIDR := 5
+
+@en "M_PORT"
+@fa "تطبیق درگاه"
+pub const M_PORT := 6
+
+@en "Matcher"
+@fa "تطبیق‌دهنده"
+pub struct Matcher:
+    @en "kind"
+    @fa "نوع"
+    pub kind: int = 0
+    @en "value"
+    @fa "مقدار"
+    pub value: str = ""
+    @en "net"
+    @fa "شبکه"
+    pub net: Vector<int> = Vector {}
+    @en "prefix"
+    @fa "پیشوند"
+    pub prefix: int = 0
+    @en "lo"
+    @fa "کمینه"
+    pub lo: int = 0
+    @en "hi"
+    @fa "بیشینه"
+    pub hi: int = 0
+end
+
+@en "Rule"
+@fa "قاعده"
+pub struct Rule:
+    @en "tag"
+    @fa "برچسب"
+    pub tag: str = ""
+    @en "dest"
+    @fa "مقصدها"
+    pub dest: Vector<Matcher> = Vector {}
+    @en "ports"
+    @fa "درگاه‌ها"
+    pub ports: Vector<Matcher> = Vector {}
+end
+
+@en "Router"
+@fa "مسیریاب"
+pub struct Router:
+    @en "rules"
+    @fa "قاعده‌ها"
+    pub rules: Vector<Rule> = Vector {}
+    @en "default_tag"
+    @fa "برچسب پیش‌فرض"
+    pub default_tag: str = "direct"
+
+    @en "Match"
+    @fa "تطبیق"
+    pub func Match(target: Addr): str:
+        n := this.rules.len()
+        repeat n in i:
+            if RuleMatches(this.rules[i], target):
+                ret this.rules[i].tag
+            end
+        end
+        ret this.default_tag
+    end
+
+    @en "MatchHost"
+    @fa "تطبیق میزبان"
+    pub func MatchHost(host: str, port: int): str:
+        ret this.Match(NewAddr(host, port))
+    end
+end
+
+@en "RuleSet"
+@fa "مجموعه قاعده"
+pub struct RuleSet:
+    @en "router"
+    @fa "مسیریاب"
+    pub router: Router = Router {}
+    @en "errors"
+    @fa "خطاها"
+    pub errors: Vector<str> = Vector {}
+end
+
+func _ip_in(net: Vector<int>, prefix: int, ip: Vector<int>): bool:
+    if net.len() != ip.len(): ret false end
+    full := prefix / 8
+    rem := prefix % 8
+    repeat full in i:
+        if net[i] != ip[i]: ret false end
+    end
+    if rem > 0:
+        mask := (255 << (8 - rem)) & 255
+        if (net[full] & mask) != (ip[full] & mask): ret false end
+    end
+    ret true
+end
+
+func _strip_dot(s: str): str:
+    mut h := s
+    if h.len() > 0 and h.ends_with("."): h = h.substr(0, h.len() - 1) end
+    ret str.Lower(h)
+end
+
+func _domain_match(m: Matcher, host: str): bool:
+    if m.kind == M_DOMAIN:
+        ret host == m.value
+    else m.kind == M_SUFFIX:
+        if host == m.value: ret true end
+        dotted := "." + m.value
+        ret host.len() > dotted.len() and host.ends_with(dotted)
+    else m.kind == M_KEYWORD:
+        ret host.includes(m.value)
+    else m.kind == M_REGEX:
+        ret regex.Match(regex.Regex { pattern = m.value }, host)
+    end
+    ret false
+end
+
+func _trim(s: str): str:
+    ret str.Trim(s)
+end
+
+func _line_rule(line: str, set &: RuleSet, num: int):
+    first := line.find(",")
+    if first < 0:
+        set.errors.push("line " + num + ": expected KIND,VALUE,TAG")
+        ret
+    end
+    kind := str.Upper(_trim(line.substr(0, first)))
+    if kind == "FINAL" or kind == "MATCH":
+        set.router.default_tag = _trim(line.substr(first + 1, line.len() - first - 1))
+        ret
+    end
+    last := str.LastIndex(line, ",")
+    if last <= first:
+        set.errors.push("line " + num + ": expected KIND,VALUE,TAG")
+        ret
+    end
+    value := _trim(line.substr(first + 1, last - first - 1))
+    tag := _trim(line.substr(last + 1, line.len() - last - 1))
+    if value.len() == 0 or tag.len() == 0:
+        set.errors.push("line " + num + ": empty value or tag")
+        ret
+    end
+    mut r := NewRule(tag)
+    mut ok := true
+    if kind == "DOMAIN":
+        RuleDomain(r, value)
+    else kind == "DOMAIN-SUFFIX":
+        RuleSuffix(r, value)
+    else kind == "DOMAIN-KEYWORD":
+        RuleKeyword(r, value)
+    else kind == "DOMAIN-REGEX":
+        ok = RuleRegex(r, value)
+    else kind == "IP-CIDR" or kind == "IP-CIDR6":
+        ok = RuleCidr(r, value)
+    else kind == "GEOIP":
+        ok = str.Upper(value) == "PRIVATE"
+        if ok: RulePrivate(r) end
+    else kind == "DST-PORT" or kind == "PORT":
+        ok = RulePort(r, value)
+    else:
+        ok = false
+    end
+    if not ok:
+        set.errors.push("line " + num + ": bad rule " + kind + "," + value)
+        ret
+    end
+    set.router.rules.push(r)
+end
+
+@en "NewRule"
+@fa "قاعده جدید"
+pub func NewRule(tag: str): Rule:
+    ret Rule { tag = tag }
+end
+
+@en "RuleDomain"
+@fa "قاعده دامنه"
+pub func RuleDomain(r &: Rule, host: str):
+    r.dest.push(Matcher { kind = M_DOMAIN, value = _strip_dot(host) })
+end
+
+@en "RuleSuffix"
+@fa "قاعده پسوند"
+pub func RuleSuffix(r &: Rule, suffix: str):
+    mut s := _strip_dot(suffix)
+    if s.starts_with("*."): s = s.substr(2, s.len() - 2) end
+    if s.starts_with("."): s = s.substr(1, s.len() - 1) end
+    r.dest.push(Matcher { kind = M_SUFFIX, value = s })
+end
+
+@en "RuleKeyword"
+@fa "قاعده کلیدواژه"
+pub func RuleKeyword(r &: Rule, word: str):
+    r.dest.push(Matcher { kind = M_KEYWORD, value = str.Lower(word) })
+end
+
+@en "RuleRegex"
+@fa "قاعده عبارت باقاعده"
+pub func RuleRegex(r &: Rule, pattern: str): bool:
+    if not regex.IsValid(pattern): ret false end
+    r.dest.push(Matcher { kind = M_REGEX, value = pattern })
+    ret true
+end
+
+@en "ParseCidr"
+@fa "تجزیه سی‌آی‌دی‌آر"
+pub func ParseCidr(text: str): Matcher:
+    mut m := Matcher { kind = 0 }
+    slash := text.find("/")
+    mut ip := text
+    mut prefix := 0 - 1
+    if slash >= 0:
+        ip = text.substr(0, slash)
+        ps := text.substr(slash + 1, text.len() - slash - 1)
+        if ps.len() == 0 or ps.len() > 3: ret m end
+        repeat ps.len() in i:
+            c := (ps as u8*)[i] as int
+            if c < 48 or c > 57: ret m end
+        end
+        prefix = ps.to_int()
+    end
+    bytes := ParseIP(ip)
+    if bytes.len() == 0: ret m end
+    if prefix < 0: prefix = bytes.len() * 8 end
+    if prefix > bytes.len() * 8: ret m end
+    m.kind = M_CIDR
+    m.value = text
+    m.net = bytes
+    m.prefix = prefix
+    ret m
+end
+
+@en "RuleCidr"
+@fa "قاعده سی‌آی‌دی‌آر"
+pub func RuleCidr(r &: Rule, text: str): bool:
+    m := ParseCidr(text)
+    if m.kind == 0: ret false end
+    r.dest.push(m)
+    ret true
+end
+
+@en "RulePrivate"
+@fa "قاعده آدرس‌های خصوصی"
+pub func RulePrivate(r &: Rule):
+    list := ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "169.254.0.0/16", "100.64.0.0/10", "0.0.0.0/8", "::1/128", "fc00::/7", "fe80::/10"]
+    each c in list:
+        RuleCidr(r, c)
+    end
+    RuleDomain(r, "localhost")
+end
+
+@en "RulePort"
+@fa "قاعده درگاه"
+pub func RulePort(r &: Rule, spec: str): bool:
+    mut ok := true
+    parts := spec.split(",")
+    defer parts.free()
+    repeat parts.len() in i:
+        p := _trim(parts[i])
+        if p.len() == 0:
+            ok = false
+            continue
+        end
+        dash := p.find("-")
+        mut lo := 0
+        mut hi := 0
+        if dash > 0:
+            a := p.substr(0, dash)
+            b := p.substr(dash + 1, p.len() - dash - 1)
+            if not _all_digits(a) or not _all_digits(b):
+                ok = false
+                continue
+            end
+            lo = a.to_int()
+            hi = b.to_int()
+        else:
+            if not _all_digits(p):
+                ok = false
+                continue
+            end
+            lo = p.to_int()
+            hi = lo
+        end
+        if lo > hi or hi > 65535:
+            ok = false
+            continue
+        end
+        r.ports.push(Matcher { kind = M_PORT, value = p, lo = lo, hi = hi })
+    end
+    ret ok
+end
+
+@en "RuleDomainSpec"
+@fa "قاعده دامنه با پیشوند"
+pub func RuleDomainSpec(r &: Rule, spec: str): bool:
+    if spec.starts_with("domain:"): RuleSuffix(r, spec.substr(7, spec.len() - 7))
+    else spec.starts_with("full:"): RuleDomain(r, spec.substr(5, spec.len() - 5))
+    else spec.starts_with("suffix:"): RuleSuffix(r, spec.substr(7, spec.len() - 7))
+    else spec.starts_with("keyword:"): RuleKeyword(r, spec.substr(8, spec.len() - 8))
+    else spec.starts_with("regexp:"): ret RuleRegex(r, spec.substr(7, spec.len() - 7))
+    else spec.starts_with("regex:"): ret RuleRegex(r, spec.substr(6, spec.len() - 6))
+    else: RuleKeyword(r, spec)
+end
+ret true
+end
+
+@en "RuleIpSpec"
+@fa "قاعده آی‌پی با پیشوند"
+pub func RuleIpSpec(r &: Rule, spec: str): bool:
+    if spec == "geoip:private" or spec == "private":
+        RulePrivate(r)
+        ret true
+    end
+    ret RuleCidr(r, spec)
+end
+
+@en "RuleMatches"
+@fa "قاعده مطابقت دارد"
+pub func RuleMatches(r: Rule, target: Addr): bool:
+    if r.dest.len() == 0 and r.ports.len() == 0: ret false end
+    if r.dest.len() > 0:
+        mut hit := false
+        if target.kind == ADDR_DOMAIN:
+            host := _strip_dot(target.host)
+            repeat r.dest.len() in i:
+                if _domain_match(r.dest[i], host):
+                    hit = true
+                    break
+                end
+            end
+        else:
+            ip := ParseIP(target.host)
+            defer ip.free()
+            repeat r.dest.len() in i:
+                m := r.dest[i]
+                if m.kind == M_CIDR and _ip_in(m.net, m.prefix, ip):
+                    hit = true
+                    break
+                end
+            end
+        end
+        if not hit: ret false end
+    end
+    if r.ports.len() > 0:
+        mut hit := false
+        repeat r.ports.len() in i:
+            if target.port >= r.ports[i].lo and target.port <= r.ports[i].hi:
+                hit = true
+                break
+            end
+        end
+        if not hit: ret false end
+    end
+    ret true
+end
+
+@en "NewRouter"
+@fa "مسیریاب جدید"
+pub func NewRouter(default_tag: str): Router:
+    ret Router { default_tag = default_tag }
+end
+
+@en "RouterAdd"
+@fa "افزودن قاعده"
+pub func RouterAdd(rt &: Router, r: Rule):
+    rt.rules.push(r)
+end
+
+@en "ParseRules"
+@fa "تجزیه قاعده‌ها"
+pub func ParseRules(text: str, default_tag: str): RuleSet:
+    mut set := RuleSet { router = NewRouter(default_tag) }
+    lines := text.split("\n")
+    defer lines.free()
+    repeat lines.len() in i:
+        line := _trim(lines[i])
+        if line.len() == 0 or line.starts_with("#") or line.starts_with("//"): continue end
+        _line_rule(line, set, i + 1)
+    end
+    ret set
+end
+
+@en "LoadRules"
+@fa "بارگذاری قاعده‌ها"
+pub func LoadRules(path: str, default_tag: str): RuleSet:
+    text := io.ReadFile(path)
+    if text.len() == 0:
+        mut set := RuleSet { router = NewRouter(default_tag) }
+        set.errors.push("cannot read " + path)
+        ret set
+    end
+    ret ParseRules(text, default_tag)
+end
+
+@en "IranRouter"
+@fa "مسیریاب ایران"
+pub func IranRouter(direct_tag: str, proxy_tag: str): Router:
+    mut rt := NewRouter(proxy_tag)
+    mut ir := NewRule(direct_tag)
+    RuleSuffix(ir, "ir")
+    RuleSuffix(ir, "xn--mgba3a4f16a")
+    RuleSuffix(ir, "xn--mgba3a4fra1a")
+    RouterAdd(rt, ir)
+    mut local := NewRule(direct_tag)
+    RulePrivate(local)
+    RouterAdd(rt, local)
+    mut known := NewRule(direct_tag)
+    each d in ["digikala.com", "aparat.com", "snapp.taxi", "tapsi.cab", "bale.ai", "eitaa.com", "telewebion.com", "namava.ir"]:
+        RuleSuffix(known, d)
+    end
+    RouterAdd(rt, known)
+    ret rt
+end

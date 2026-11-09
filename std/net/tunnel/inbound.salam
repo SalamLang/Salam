@@ -1,0 +1,372 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "net/tunnel"
+@fa "تونل"
+package tunnel
+
+import mem
+import sync
+import atomic
+import pool
+import net.tcp
+
+@en "CMD_CONNECT"
+@fa "فرمان اتصال"
+pub const CMD_CONNECT := 1
+
+@en "CMD_UDP"
+@fa "فرمان یو دی پی"
+pub const CMD_UDP := 3
+
+@en "MIXED_UNKNOWN"
+@fa "ناشناخته"
+pub const MIXED_UNKNOWN := 0
+
+@en "MIXED_HTTP"
+@fa "اچ تی تی پی"
+pub const MIXED_HTTP := 1
+
+@en "MIXED_SOCKS4"
+@fa "ساکس۴"
+pub const MIXED_SOCKS4 := 4
+
+@en "MIXED_SOCKS5"
+@fa "ساکس۵"
+pub const MIXED_SOCKS5 := 5
+
+@en "Session"
+@fa "نشست"
+pub struct Session:
+    @en "ok"
+    @fa "موفق"
+    pub ok: bool = false
+    @en "target"
+    @fa "مقصد"
+    pub target: Addr = Addr {}
+    @en "protocol"
+    @fa "پروتکل"
+    pub protocol: str = ""
+    @en "user"
+    @fa "کاربر"
+    pub user: str = ""
+    @en "command"
+    @fa "فرمان"
+    pub command: int = 1
+    @en "initial"
+    @fa "داده آغازین"
+    pub initial: str = ""
+    @en "error"
+    @fa "خطا"
+    pub error: str = ""
+end
+
+@en "InboundProtocol"
+@fa "پروتکل ورودی"
+pub interface InboundProtocol:
+    @en "Name"
+    @fa "نام"
+    func Name(): str
+    @en "Handshake"
+    @fa "دست‌دهی"
+    func Handshake(s: dyn Stream): Session
+    @en "Reply"
+    @fa "پاسخ"
+    func Reply(s: dyn Stream, sess: Session, ok: bool)
+end
+
+@en "Handler"
+@fa "دستگیره"
+pub interface Handler:
+    @en "Handle"
+    @fa "رسیدگی"
+    func Handle(s: dyn Stream, sess: Session)
+end
+
+@en "NullProtocol"
+@fa "پروتکل تهی"
+pub struct NullProtocol:
+    @en "unused"
+    @fa "بی‌کاربرد"
+    pub unused: int = 0
+
+    @en "Name"
+    @fa "نام"
+    pub func Name(): str:
+        ret "null"
+    end
+
+    @en "Handshake"
+    @fa "دست‌دهی"
+    pub func Handshake(_s: dyn Stream): Session:
+        ret Session { error = "no protocol" }
+    end
+
+    @en "Reply"
+    @fa "پاسخ"
+    pub func Reply(_s: dyn Stream, _sess: Session, _ok: bool):
+        this.unused += 1
+    end
+end
+
+@en "MixedProtocol"
+@fa "پروتکل ترکیبی"
+pub struct MixedProtocol:
+    @en "socks4"
+    @fa "ساکس۴"
+    pub socks4: dyn InboundProtocol = NullProtocol {}
+    @en "socks5"
+    @fa "ساکس۵"
+    pub socks5: dyn InboundProtocol = NullProtocol {}
+    @en "http"
+    @fa "اچ تی تی پی"
+    pub http: dyn InboundProtocol = NullProtocol {}
+    @en "has_socks4"
+    @fa "ساکس۴ دارد"
+    pub has_socks4: bool = false
+    @en "has_socks5"
+    @fa "ساکس۵ دارد"
+    pub has_socks5: bool = false
+    @en "has_http"
+    @fa "اچ تی تی پی دارد"
+    pub has_http: bool = false
+
+    @en "Name"
+    @fa "نام"
+    pub func Name(): str:
+        ret "mixed"
+    end
+
+    @en "Handshake"
+    @fa "دست‌دهی"
+    pub func Handshake(s: dyn Stream): Session:
+        first := ReadByte(s)
+        if first < 0: ret Session { error = "closed before first byte" } end
+        kind := DetectMixed(first)
+        w := WithPrefix(s, ByteString(first))
+        if kind == MIXED_SOCKS5 and this.has_socks5:
+            mut r := this.socks5.Handshake(w)
+            r.protocol = "socks5"
+            ret r
+        else kind == MIXED_SOCKS4 and this.has_socks4:
+            mut r := this.socks4.Handshake(w)
+            r.protocol = "socks4"
+            ret r
+        else kind == MIXED_HTTP and this.has_http:
+            mut r := this.http.Handshake(w)
+            r.protocol = "http"
+            ret r
+        end
+        ret Session { error = "unrecognised protocol" }
+    end
+
+    @en "Reply"
+    @fa "پاسخ"
+    pub func Reply(s: dyn Stream, sess: Session, ok: bool):
+        if sess.protocol == "socks5":
+            this.socks5.Reply(s, sess, ok)
+        else sess.protocol == "socks4":
+            this.socks4.Reply(s, sess, ok)
+        else sess.protocol == "http":
+            this.http.Reply(s, sess, ok)
+        end
+    end
+end
+
+@en "ForwardHandler"
+@fa "دستگیره انتقال"
+pub struct ForwardHandler:
+    @en "dialer"
+    @fa "شماره‌گیر"
+    pub dialer: dyn Dialer = DirectDialer {}
+    @en "proto"
+    @fa "پروتکل"
+    pub proto: dyn InboundProtocol = NullProtocol {}
+    @en "stats"
+    @fa "آمار"
+    pub stats: Stats = Stats {}
+    @en "idle_ms"
+    @fa "مهلت بیکاری"
+    pub idle_ms: int = 300000
+
+    @en "Handle"
+    @fa "رسیدگی"
+    pub func Handle(s: dyn Stream, sess: Session):
+        atomic.Add(this.stats.total, 1 as i64)
+        out := this.dialer.Dial(sess.target)
+        if not out.Ok():
+            atomic.Add(this.stats.failed, 1 as i64)
+            this.proto.Reply(s, sess, false)
+            s.Close()
+            ret
+        end
+        this.proto.Reply(s, sess, true)
+        if sess.initial.len() > 0:
+            out.Write(sess.initial)
+        end
+        atomic.Add(this.stats.active, 1 as i64)
+        RelayWith(s, out, this.stats, this.idle_ms)
+        atomic.Add(this.stats.active, 0 - 1 as i64)
+    end
+end
+
+@en "TcpInbound"
+@fa "ورودی تی سی پی"
+pub struct TcpInbound:
+    @en "port"
+    @fa "درگاه"
+    pub port: int = 0
+    @en "listener"
+    @fa "شنونده"
+    pub listener: tcp.Server = tcp.Server {}
+    @en "running"
+    @fa "در حال اجرا"
+    pub running: atomic.Flag = atomic.Flag {}
+    @en "workers"
+    @fa "کارگرها"
+    pub workers: pool.Pool = pool.Pool {}
+    @en "handshake_ms"
+    @fa "مهلت دست‌دهی"
+    pub handshake_ms: int = 15000
+
+    @en "Ok"
+    @fa "معتبر"
+    pub func Ok(): bool:
+        ret tcp.Ok(this.listener)
+    end
+
+    @en "Serve"
+    @fa "سرویس‌دهی"
+    pub func Serve(proto: dyn InboundProtocol, h: dyn Handler):
+        until atomic.Get(this.running):
+            c := tcp.Accept(this.listener)
+            if not tcp.ConnOk(c): continue end
+            if not atomic.Get(this.running):
+                tcp.Close(c)
+                break
+            end
+            hs := this.handshake_ms
+            pool.Submit(this.workers, (): _serve_conn(c, proto, h, hs) end)
+        end
+    end
+
+    @en "Stop"
+    @fa "توقف"
+    pub func Stop():
+        atomic.Set(this.running, false)
+        wake := tcp.Dial("127.0.0.1", this.port)
+        if tcp.ConnOk(wake): tcp.Close(wake) end
+        tcp.CloseServer(this.listener)
+    end
+end
+
+struct _ServeJob:
+    pub inbound: TcpInbound = TcpInbound {}
+    pub proto: dyn InboundProtocol = NullProtocol {}
+    pub handler: dyn Handler = ForwardHandler {}
+end
+
+func _serve_conn(c: tcp.Conn, proto: dyn InboundProtocol, h: dyn Handler, handshake_ms: int):
+    s := WrapTcp(c)
+    tcp.SetNoDelay(c, true)
+    s.SetDeadline(handshake_ms)
+    sess := proto.Handshake(s)
+    if not sess.ok:
+        s.Close()
+        ret
+    end
+    s.SetDeadline(0)
+    h.Handle(s, sess)
+end
+
+func _serve_thread(jp: _ServeJob*):
+    j := jp[0]
+    mem.Free(jp as void*)
+    j.inbound.Serve(j.proto, j.handler)
+end
+
+@en "DetectMixed"
+@fa "تشخیص ترکیبی"
+pub func DetectMixed(first: int): int:
+    if first == 5: ret MIXED_SOCKS5 end
+    if first == 4: ret MIXED_SOCKS4 end
+    if (first >= 65 and first <= 90) or (first >= 97 and first <= 122): ret MIXED_HTTP end
+    ret MIXED_UNKNOWN
+end
+
+@en "ByteString"
+@fa "رشته بایت"
+pub func ByteString(b: int): str:
+    p := mem.AllocateZeroed(2 as u64)
+    (p as u8*)[0] = b as u8
+    ret p as str
+end
+
+@en "NewMixed"
+@fa "ترکیبی جدید"
+pub func NewMixed(): MixedProtocol:
+    ret MixedProtocol {}
+end
+
+@en "MixedSetSocks5"
+@fa "تنظیم ساکس۵ ترکیبی"
+pub func MixedSetSocks5(m &: MixedProtocol, p: dyn InboundProtocol):
+    m.socks5 = p
+    m.has_socks5 = true
+end
+
+@en "MixedSetSocks4"
+@fa "تنظیم ساکس۴ ترکیبی"
+pub func MixedSetSocks4(m &: MixedProtocol, p: dyn InboundProtocol):
+    m.socks4 = p
+    m.has_socks4 = true
+end
+
+@en "MixedSetHttp"
+@fa "تنظیم اچ تی تی پی ترکیبی"
+pub func MixedSetHttp(m &: MixedProtocol, p: dyn InboundProtocol):
+    m.http = p
+    m.has_http = true
+end
+
+@en "ListenTcp"
+@fa "شنود تی سی پی"
+pub func ListenTcp(port: int): TcpInbound:
+    srv := tcp.Bind(port)
+    mut p := 0
+    if tcp.Ok(srv): p = tcp.Port(srv) end
+    ret TcpInbound { port = p, listener = srv, running = atomic.NewFlag(false), workers = pool.NewElastic(2 as i64, 512 as i64, 1024 as i64) }
+end
+
+@en "ServeBackground"
+@fa "سرویس‌دهی پس‌زمینه"
+pub func ServeBackground(inb: TcpInbound, proto: dyn InboundProtocol, h: dyn Handler):
+    atomic.Set(inb.running, true)
+    jp := mem.AllocateZeroed(sizeof(_ServeJob) as u64) as _ServeJob*
+    jp[0] = _ServeJob { inbound = inb, proto = proto, handler = h }
+    _t := spawn(_serve_thread, jp)
+end
+
+@en "ServeForever"
+@fa "سرویس‌دهی پیوسته"
+pub func ServeForever(inb: TcpInbound, proto: dyn InboundProtocol, h: dyn Handler):
+    atomic.Set(inb.running, true)
+    inb.Serve(proto, h)
+end
+
+@en "NewForwarder"
+@fa "انتقال‌دهنده جدید"
+pub func NewForwarder(dialer: dyn Dialer, proto: dyn InboundProtocol): ForwardHandler:
+    ret ForwardHandler { dialer = dialer, proto = proto, stats = NewStats() }
+end

@@ -1,0 +1,249 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "net/tunnel"
+@fa "تونل"
+package tunnel
+
+import net.tcp
+
+@en "Dialer"
+@fa "شماره‌گیر"
+pub interface Dialer:
+    @en "Dial"
+    @fa "اتصال"
+    func Dial(target: Addr): dyn Stream
+    @en "Name"
+    @fa "نام"
+    func Name(): str
+end
+
+@en "Connector"
+@fa "رابط پراکسی"
+pub interface Connector:
+    @en "Server"
+    @fa "کارساز"
+    func Server(): Addr
+    @en "Handshake"
+    @fa "دست‌دهی"
+    func Handshake(s: dyn Stream, target: Addr): bool
+    @en "Name"
+    @fa "نام"
+    func Name(): str
+end
+
+@en "DirectDialer"
+@fa "شماره‌گیر مستقیم"
+pub struct DirectDialer:
+    @en "timeout_ms"
+    @fa "مهلت اتصال"
+    pub timeout_ms: int = 10000
+
+    @en "Dial"
+    @fa "اتصال"
+    pub func Dial(target: Addr): dyn Stream:
+        if not target.valid: ret ClosedStream {} end
+        c := tcp.DialTimeout(target.host, target.port, this.timeout_ms)
+        if not tcp.ConnOk(c): ret ClosedStream {} end
+        tcp.SetNoDelay(c, true)
+        ret TcpStream { conn = c }
+    end
+
+    @en "Name"
+    @fa "نام"
+    pub func Name(): str:
+        ret "direct"
+    end
+end
+
+@en "BlockDialer"
+@fa "شماره‌گیر مسدودکننده"
+pub struct BlockDialer:
+    @en "refused"
+    @fa "ردشده"
+    pub refused: int = 0
+
+    @en "Dial"
+    @fa "اتصال"
+    pub func Dial(_target: Addr): dyn Stream:
+        this.refused += 1
+        ret ClosedStream {}
+    end
+
+    @en "Name"
+    @fa "نام"
+    pub func Name(): str:
+        ret "block"
+    end
+end
+
+@en "ProxyDialer"
+@fa "شماره‌گیر پراکسی"
+pub struct ProxyDialer:
+    @en "upstream"
+    @fa "بالادست"
+    pub upstream: dyn Dialer = DirectDialer {}
+    @en "hop"
+    @fa "گام"
+    pub hop: dyn Connector = NullConnector {}
+
+    @en "Dial"
+    @fa "اتصال"
+    pub func Dial(target: Addr): dyn Stream:
+        s := this.upstream.Dial(this.hop.Server())
+        if not s.Ok(): ret ClosedStream {} end
+        if not this.hop.Handshake(s, target):
+            s.Close()
+            ret ClosedStream {}
+        end
+        ret s
+    end
+
+    @en "Name"
+    @fa "نام"
+    pub func Name(): str:
+        ret this.hop.Name()
+    end
+end
+
+@en "NullConnector"
+@fa "رابط تهی"
+pub struct NullConnector:
+    @en "unused"
+    @fa "بی‌کاربرد"
+    pub unused: int = 0
+
+    @en "Server"
+    @fa "کارساز"
+    pub func Server(): Addr:
+        ret Addr {}
+    end
+
+    @en "Handshake"
+    @fa "دست‌دهی"
+    pub func Handshake(_s: dyn Stream, _target: Addr): bool:
+        ret false
+    end
+
+    @en "Name"
+    @fa "نام"
+    pub func Name(): str:
+        ret "null"
+    end
+end
+
+@en "Chain"
+@fa "زنجیره"
+pub struct Chain:
+    @en "base"
+    @fa "پایه"
+    pub base: dyn Dialer = DirectDialer {}
+    @en "hops"
+    @fa "گام‌ها"
+    pub hops: Vector<dyn Connector> = Vector {}
+
+    @en "Dial"
+    @fa "اتصال"
+    pub func Dial(target: Addr): dyn Stream:
+        n := this.hops.len()
+        if n == 0: ret this.base.Dial(target) end
+        s := this.base.Dial(this.hops[0].Server())
+        if not s.Ok(): ret ClosedStream {} end
+        repeat n in i:
+            mut next := target
+            if i + 1 < n: next = this.hops[i + 1].Server() end
+            if not this.hops[i].Handshake(s, next):
+                s.Close()
+                ret ClosedStream {}
+            end
+        end
+        ret s
+    end
+
+    @en "Name"
+    @fa "نام"
+    pub func Name(): str:
+        mut out := "chain"
+        repeat this.hops.len() in i:
+            out += ">" + this.hops[i].Name()
+        end
+        ret out
+    end
+end
+
+@en "Fallback"
+@fa "جایگزین"
+pub struct Fallback:
+    @en "items"
+    @fa "موارد"
+    pub items: Vector<dyn Dialer> = Vector {}
+
+    @en "Dial"
+    @fa "اتصال"
+    pub func Dial(target: Addr): dyn Stream:
+        repeat this.items.len() in i:
+            s := this.items[i].Dial(target)
+            if s.Ok(): ret s end
+        end
+        ret ClosedStream {}
+    end
+
+    @en "Name"
+    @fa "نام"
+    pub func Name(): str:
+        ret "fallback"
+    end
+end
+
+@en "NewChain"
+@fa "زنجیره جدید"
+pub func NewChain(base: dyn Dialer): Chain:
+    ret Chain { base = base }
+end
+
+@en "ChainAdd"
+@fa "افزودن گام"
+pub func ChainAdd(c &: Chain, hop: dyn Connector):
+    c.hops.push(hop)
+end
+
+@en "NewFallback"
+@fa "جایگزین جدید"
+pub func NewFallback(): Fallback:
+    ret Fallback {}
+end
+
+@en "FallbackAdd"
+@fa "افزودن جایگزین"
+pub func FallbackAdd(f &: Fallback, d: dyn Dialer):
+    f.items.push(d)
+end
+
+@en "Direct"
+@fa "مستقیم"
+pub func Direct(): dyn Dialer:
+    ret DirectDialer {}
+end
+
+@en "Block"
+@fa "مسدود"
+pub func Block(): dyn Dialer:
+    ret BlockDialer {}
+end
+
+@en "Via"
+@fa "از طریق"
+pub func Via(upstream: dyn Dialer, hop: dyn Connector): dyn Dialer:
+    ret ProxyDialer { upstream = upstream, hop = hop }
+end

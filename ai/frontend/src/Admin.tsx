@@ -830,7 +830,7 @@ function draftOf(p: Partial<AdminPlan>): PlanDraft {
   return d;
 }
 
-function PlanEditor({ plan, onSaved, notify }: { plan: AdminPlan | null; onSaved: () => void; notify: (msg: string, ok?: boolean) => void }) {
+function PlanEditor({ plan, onSaved, notify, move }: { plan: AdminPlan | null; onSaved: () => void; notify: (msg: string, ok?: boolean) => void; move?: { up: (() => void) | null; down: (() => void) | null; busy: boolean } }) {
   const [d, setD] = useState<PlanDraft>(() => draftOf(plan ?? {}));
   const [saving, setSaving] = useState(false);
   const fresh = plan === null;
@@ -866,6 +866,16 @@ function PlanEditor({ plan, onSaved, notify }: { plan: AdminPlan | null; onSaved
           {fresh ? t("پلن تازه", "New plan") : <bdi>{plan.name}</bdi>}
           {!fresh && <span className="muted small"> {plan.id} · {fmtNum(plan.subscribers)} {t("مشترک فعال", "active subscribers")}</span>}
         </h4>
+        {move && (
+          <div className="plan-move">
+            <button type="button" className="button small" disabled={!move.up || move.busy} onClick={move.up ?? undefined} aria-label={t("بردن به بالا", "Move up")} title={t("بردن به بالا", "Move up")}>
+              ↑
+            </button>
+            <button type="button" className="button small" disabled={!move.down || move.busy} onClick={move.down ?? undefined} aria-label={t("آوردن به پایین", "Move down")} title={t("آوردن به پایین", "Move down")}>
+              ↓
+            </button>
+          </div>
+        )}
       </div>
       <div className="grant-grid plan-editor-grid">
         {fresh && (
@@ -913,6 +923,7 @@ function PlansAdmin({ notify }: { notify: (msg: string, ok?: boolean) => void })
   const [plans, setPlans] = useState<AdminPlan[] | null>(null);
   const [error, setError] = useState("");
   const [adding, setAdding] = useState(false);
+  const [moving, setMoving] = useState(false);
 
   const load = useCallback(() => {
     setError("");
@@ -928,6 +939,23 @@ function PlansAdmin({ notify }: { notify: (msg: string, ok?: boolean) => void })
   useEffect(() => {
     load();
   }, [load]);
+
+  const shift = async (from: number, to: number) => {
+    if (!plans || moving) return;
+    const order = plans.slice();
+    const [item] = order.splice(from, 1);
+    order.splice(to, 0, item);
+    setMoving(true);
+    try {
+      await Promise.all(order.map((p, i) => (p.sort === i + 1 ? null : api.adminPlanSave(p.id, { sort: i + 1 }))));
+      notify(t("ترتیب پلن‌ها ذخیره شد.", "Plan order saved."));
+    } catch (err) {
+      notify(errText(err, t("ذخیره‌ی ترتیب ناموفق بود.", "Could not save the order.")), false);
+    } finally {
+      setMoving(false);
+      load();
+    }
+  };
 
   return (
     <section className="card panel">
@@ -949,7 +977,15 @@ function PlansAdmin({ notify }: { notify: (msg: string, ok?: boolean) => void })
           <span className="spinner" />
         </div>
       ) : (
-        plans?.map((p) => <PlanEditor key={p.id + JSON.stringify(p)} plan={p} notify={notify} onSaved={load} />)
+        plans?.map((p, i) => (
+          <PlanEditor
+            key={p.id + JSON.stringify(p)}
+            plan={p}
+            notify={notify}
+            onSaved={load}
+            move={{ up: i > 0 ? () => void shift(i, i - 1) : null, down: i < plans.length - 1 ? () => void shift(i, i + 1) : null, busy: moving }}
+          />
+        ))
       )}
     </section>
   );

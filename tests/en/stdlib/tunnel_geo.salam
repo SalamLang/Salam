@@ -1,0 +1,194 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import net.tunnel
+import net.tcp
+import mem
+import pool
+
+mut failures := 0
+mut v6_srv := tcp.Server {}
+
+struct MockResolver:
+    pub calls: int = 0
+    pub answer: str = ""
+
+    pub func Lookup(host: str): tunnel.LookupResult:
+        this.calls += 1
+        mut out := tunnel.LookupResult {}
+        if host == "bank.test": out.ips.push("5.22.7.7") end
+        if host == "dual.test":
+            out.ips.push("::1")
+            out.ips.push(this.answer)
+        end
+        ret out
+    end
+end
+
+func expect(label: str, ok: bool):
+    if not ok:
+        println "FAIL", label
+        failures++
+    end
+end
+
+func accept_once():
+    c := tcp.Accept(v6_srv)
+    s := tunnel.WrapTcp(c)
+    s.Write("hi from v4")
+    s.Close()
+end
+
+func put_varint(p: u8*, pos &: int, v: int):
+    mut x := v
+    until x >= 128:
+        p[pos] = ((x & 127) | 128) as u8
+        pos += 1
+        x = x >> 7
+    end
+    p[pos] = x as u8
+    pos += 1
+end
+
+func put_bytes(p: u8*, pos &: int, field: int, data: str, n: int):
+    put_varint(p, pos, field * 8 + 2)
+    put_varint(p, pos, n)
+    mem.Copy((p as i64 + pos) as void*, data as void*, n as u64)
+    pos += n
+end
+
+func lists():
+    set := tunnel.LookupGeoSite("ir")
+    println "bundled:", set.count > 0, tunnel.DomainSetContains(set, "shop.digikala.com"), tunnel.DomainSetContains(set, "x.ir"), tunnel.DomainSetContains(set, "google.com")
+    d := tunnel.ParseDomainList("domain:a.test\nfull:b.test\nkeyword:zzz\nregexp:^r[0-9]\\.test$\nplain.test @cn\n", "")
+    println "domain set:", tunnel.DomainSetContains(d, "a.test"), tunnel.DomainSetContains(d, "x.a.test"), tunnel.DomainSetContains(d, "xa.test")
+    println "full:", tunnel.DomainSetContains(d, "b.test"), tunnel.DomainSetContains(d, "x.b.test")
+    println "keyword:", tunnel.DomainSetContains(d, "my-zzz-site.org"), "regex:", tunnel.DomainSetContains(d, "r7.test"), tunnel.DomainSetContains(d, "rr.test")
+    cn := tunnel.ParseDomainList("plain.test @cn\nother.test @us\n", "cn")
+    println "attr:", tunnel.DomainSetContains(cn, "plain.test"), tunnel.DomainSetContains(cn, "other.test")
+    ips := tunnel.ParseIpList("5.22.0.0/16\n185.55.224.0/22\n2a01:5ec0::/32\n91.99.1.2\n")
+    println "ip count:", ips.count
+    println "v4:", tunnel.IpSetContains(ips, tunnel.ParseIP("5.22.9.9")), tunnel.IpSetContains(ips, tunnel.ParseIP("5.23.0.1")), tunnel.IpSetContains(ips, tunnel.ParseIP("185.55.227.255")), tunnel.IpSetContains(ips, tunnel.ParseIP("185.55.228.0"))
+    println "v6:", tunnel.IpSetContains(ips, tunnel.ParseIP("2a01:5ec0:1::1")), tunnel.IpSetContains(ips, tunnel.ParseIP("2a01:5ec1::1"))
+    println "single:", tunnel.IpSetContains(ips, tunnel.ParseIP("91.99.1.2")), tunnel.IpSetContains(ips, tunnel.ParseIP("91.99.1.3"))
+end
+
+func directory():
+    tunnel.ClearGeo()
+    tunnel.SetGeoDir("tests/fixtures/geo")
+    println "has site:", tunnel.HasGeoSite("test-ir"), tunnel.HasGeoSite("nothing-here")
+    s := tunnel.LookupGeoSite("test-ir")
+    println "dir list:", tunnel.DomainSetContains(s, "shop.example.ir"), tunnel.DomainSetContains(s, "example.ir"), tunnel.DomainSetContains(s, "www.exact.test"), tunnel.DomainSetContains(s, "extra.test"), tunnel.DomainSetContains(s, "img3.cdn.test")
+    ads := tunnel.LookupGeoSite("test-ir@ads")
+    println "ads only:", tunnel.DomainSetContains(ads, "shop.test"), tunnel.DomainSetContains(ads, "news.test"), tunnel.DomainSetContains(ads, "ads.extra.test"), tunnel.DomainSetContains(ads, "extra.test")
+    println "has ip:", tunnel.HasGeoIp("test-ir")
+    mut rt := tunnel.NewRouter("proxy")
+    mut r := tunnel.NewRule("direct")
+    expect("geosite spec", tunnel.RuleDomainSpec(r, "geosite:test-ir"))
+    expect("geoip spec", tunnel.RuleIpSpec(r, "geoip:test-ir"))
+    expect("unknown spec", not tunnel.RuleDomainSpec(r, "geosite:no-such-list"))
+    tunnel.RouterAdd(rt, r)
+    println "route:", rt.MatchHost("x.example.ir", 443), rt.MatchHost("185.55.225.1", 443), rt.MatchHost("8.8.8.8", 443), rt.MatchHost("google.com", 443)
+end
+
+func resolved():
+    mut rt := tunnel.NewRouter("proxy")
+    mut r := tunnel.NewRule("direct")
+    tunnel.RuleCidr(r, "5.22.0.0/16")
+    tunnel.RouterAdd(rt, r)
+    println "no resolver:", rt.MatchHost("bank.test", 443)
+    m := MockResolver {}
+    tunnel.SetResolver(rt, m, 60000 as i64)
+    println "with resolver:", rt.MatchHost("bank.test", 443), rt.MatchHost("bank.test", 80), rt.MatchHost("other.test", 80)
+    println "lookups cached:", rt.cache.lookups
+end
+
+func dat_files():
+    tunnel.ClearGeo()
+    dom := mem.AllocateZeroed(64 as u64) as u8*
+    mut dp := 0
+    put_varint(dom, dp, 8)
+    put_varint(dom, dp, 2)
+    put_bytes(dom, dp, 2, "dat.test", 8)
+    site := mem.AllocateZeroed(128 as u64) as u8*
+    mut sp := 0
+    put_bytes(site, sp, 1, "IR", 2)
+    put_bytes(site, sp, 2, dom as str, dp)
+    buf := mem.AllocateZeroed(256 as u64) as u8*
+    mut pos := 0
+    put_bytes(buf, pos, 1, site as str, sp)
+    n := tunnel.LoadGeoSiteDat(buf as void*, pos, Vector {} as Vector<str>)
+    println "site entries:", n, tunnel.DomainSetContains(tunnel.LookupGeoSite("ir"), "www.dat.test")
+    cidr := mem.AllocateZeroed(16 as u64) as u8*
+    mut cp := 0
+    put_varint(cidr, cp, 10)
+    put_varint(cidr, cp, 4)
+    cidr[cp] = 10 as u8
+    cidr[cp + 1] = 4 as u8
+    cidr[cp + 2] = 0 as u8
+    cidr[cp + 3] = 0 as u8
+    cp += 4
+    put_varint(cidr, cp, 16)
+    put_varint(cidr, cp, 16)
+    ipe := mem.AllocateZeroed(64 as u64) as u8*
+    mut ip := 0
+    put_bytes(ipe, ip, 1, "IR", 2)
+    put_bytes(ipe, ip, 2, cidr as str, cp)
+    ibuf := mem.AllocateZeroed(128 as u64) as u8*
+    mut ipos := 0
+    put_bytes(ibuf, ipos, 1, ipe as str, ip)
+    println "ip entries:", tunnel.LoadGeoIpDat(ibuf as void*, ipos, Vector {} as Vector<str>)
+    gi := tunnel.LookupGeoIp("ir")
+    println "dat ip:", tunnel.IpSetContains(gi, tunnel.ParseIP("10.4.77.1")), tunnel.IpSetContains(gi, tunnel.ParseIP("10.5.0.1"))
+    println "truncated:", tunnel.LoadGeoSiteDat(buf as void*, pos - 3, Vector {} as Vector<str>)
+    mem.Free(dom as void*)
+    mem.Free(site as void*)
+    mem.Free(buf as void*)
+    mem.Free(cidr as void*)
+    mem.Free(ipe as void*)
+    mem.Free(ibuf as void*)
+end
+
+func dialer():
+    v6_srv = tcp.Bind(0)
+    wp := pool.NewElastic(1 as i64, 2 as i64, 2 as i64)
+    pool.Submit(wp, (): accept_once() end)
+    mut m := MockResolver {}
+    m.answer = "127.0.0.1"
+    mut d := tunnel.DirectDialer {}
+    d.timeout_ms = 3000
+    d.resolver = m
+    d.has_resolver = true
+    d.prefer_v6 = true
+    s := d.Dial(tunnel.NewAddr("dual.test", tcp.Port(v6_srv)))
+    println "dialed:", s.Ok()
+    println s.Read(100)
+    s.Close()
+    pool.Wait(wp)
+    pool.Stop(wp)
+    ipv6 := tunnel.NewAddr("[::1]", 5)
+    println "v6 literal:", ipv6.kind, ipv6.valid, tunnel.NewAddr("::1", 80).String()
+    tcp.CloseServer(v6_srv)
+end
+
+func main:
+    lists()
+    directory()
+    resolved()
+    dat_files()
+    dialer()
+    println "failures:", failures
+end

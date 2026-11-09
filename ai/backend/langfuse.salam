@@ -14,7 +14,7 @@
 
 package ailangfuse
 
-import net.tcp
+import net.http
 import encoding
 import encoding.json
 import str
@@ -26,22 +26,15 @@ include aiengine "engine.salam"
 
 const SEND_MS := 4000
 
-mut HOST := ""
-mut PORT := 80
-mut BASE := ""
+mut BASE_URL := ""
 mut AUTH := ""
 
-func post(path: str, extra_header: str, body: str):
-    c := tcp.Dial(HOST, PORT)
-    if not tcp.ConnOk(c):
-        tcp.Close(c)
-        ret
-    end
-    tcp.SetReadDeadline(c, SEND_MS)
-    tcp.SetWriteDeadline(c, SEND_MS)
-    req := "POST " + BASE + path + " HTTP/1.1\r\nHost: " + HOST + "\r\nUser-Agent: salam-ai\r\nAuthorization: " + AUTH + "\r\n" + extra_header + "Content-Type: application/json\r\nConnection: close\r\nContent-Length: " + body.len() + "\r\n\r\n" + body
-    _w := tcp.Write(c, req)
-    tcp.Close(c)
+func post(path: str, body: str):
+    mut headers := HashMap {} as HashMap<str, str>
+    headers.put("Authorization", AUTH)
+    headers.put("Content-Type", "application/json")
+    headers.put("x-langfuse-ingestion-version", "4")
+    _r := http.Do("POST", BASE_URL + path, headers, body, http.RequestOptions { timeout_ms = SEND_MS })
 end
 
 func str_value(v: str): str:
@@ -118,25 +111,12 @@ pub func Configure(url: str, public_key: str, secret_key: str):
     if url.len() == 0 or public_key.len() == 0 or secret_key.len() == 0:
         ret
     end
-    mut rest := str.TrimPrefix(str.TrimPrefix(url, "https://"), "http://")
-    slash := rest.find("/")
-    if slash >= 0:
-        BASE = str.TrimSuffix(rest.substr(slash, rest.len() - slash), "/")
-        rest = rest.substr(0, slash)
-    end
-    colon := rest.find(":")
-    if colon > 0:
-        PORT = rest.substr(colon + 1, rest.len() - colon - 1).to_int()
-        HOST = rest.substr(0, colon)
-    else:
-        PORT = 80
-        HOST = rest
-    end
+    BASE_URL = str.TrimSuffix(url, "/")
     AUTH = "Basic " + encoding.Base64Encode(public_key + ":" + secret_key)
 end
 
 pub func Enabled(): bool:
-    ret HOST.len() > 0
+    ret BASE_URL.len() > 0
 end
 
 pub func Send(sid: str, mid: str, model: str, u: aiengine.Usage, reply: str, failed: bool, session: str = "", source: str = "web"):
@@ -176,5 +156,5 @@ pub func Send(sid: str, mid: str, model: str, u: aiengine.Usage, reply: str, fai
     res_span.push(json.MemberRaw("scopeSpans", json.Array(one_raw(json.Object(scope_span)))))
     mut root := Vector {} as Vector<str>
     root.push(json.MemberRaw("resourceSpans", json.Array(one_raw(json.Object(res_span)))))
-    post("/api/public/otel/v1/traces", "x-langfuse-ingestion-version: 4\r\n", json.Object(root))
+    post("/api/public/otel/v1/traces", json.Object(root))
 end

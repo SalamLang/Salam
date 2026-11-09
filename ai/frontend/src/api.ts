@@ -34,10 +34,12 @@ export type Project = {
   chats: number;
   live: number;
   last: number;
+  master_prompt?: string;
 };
 export type ProjectInput = {
   name: string;
   description?: string;
+  master_prompt?: string;
   color?: string;
   emoji?: string;
 };
@@ -1074,6 +1076,10 @@ export const api = {
   logout: () => call<{ ok: boolean }>("POST", "/auth/logout"),
   me: () => call<{ user: User }>("GET", "/me"),
   chats: () => call<{ chats: Chat[] }>("GET", "/chats"),
+  masterPrompt: () =>
+    call<{ master_prompt: string; max: number; project_max: number }>("GET", "/me/master"),
+  setMasterPrompt: (master_prompt: string) =>
+    call<{ master_prompt: string }>("PUT", "/me/master", { master_prompt }),
   projects: () => call<{ projects: Project[] }>("GET", "/projects"),
   createProject: (body: ProjectInput) =>
     call<{ project: Project }>("POST", "/projects", body),

@@ -190,6 +190,29 @@ check(
   back,
 );
 
+const rel = await api("POST", "/projects", owner, { name: "Relative", path: "src/app" });
+check("a relative project path is refused", rel.res.status === 400 && rel.json?.error === "path", rel);
+const climb = await api("POST", "/projects", owner, { name: "Climb", path: "/home/a/../root" });
+check("a path that climbs out is refused", climb.res.status === 400, climb);
+const rooted = await api("POST", "/projects", owner, { name: "Rooted", path: "/home/ali/app/" });
+check("an absolute path is stored clean", rooted.res.status === 201 && rooted.json?.project?.path === "/home/ali/app", rooted.json);
+const rid = rooted.json?.project?.id;
+const same = await api("PATCH", `/projects/${rid}`, owner, { name: "Rooted 2" });
+const afterSame = await api("GET", "/projects", owner);
+check(
+  "an edit without a path keeps the path",
+  same.res.status === 200 && (afterSame.json?.projects ?? []).find((p) => p.id === rid)?.path === "/home/ali/app",
+  afterSame.json,
+);
+const blank = await api("PATCH", `/projects/${rid}`, owner, { name: "Rooted 2", path: "" });
+check("a set path cannot be cleared", blank.res.status === 400, blank);
+const moved = await api("PATCH", `/projects/${rid}`, owner, { name: "Rooted 2", path: "/home/ali/other" });
+check("an idle project can change its path", moved.res.status === 200 && moved.json?.project?.path === "/home/ali/other", moved);
+const theirsPath = await api("PATCH", `/projects/${rid}`, stranger, { name: "x", path: "/tmp" });
+check("another user cannot change the path", theirsPath.res.status === 404, theirsPath);
+const extraChat = await api("PATCH", `/chats/${chatId}`, owner, { extra_path: "/tmp/more" });
+check("a plain chat has no extra path", extraChat.res.status === 400, extraChat);
+
 const removed = await api("DELETE", `/projects/${project.id}`, owner);
 check("a project can be deleted", removed.res.status === 200, removed);
 const kept = await api("GET", `/chats/${chatId}`, owner);

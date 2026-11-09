@@ -576,6 +576,7 @@ mut d := i
 until d < j:
 _rar_free_name(a.files.get(d).name)
 _rar_free_name(a.files.get(d).rtarget)
+_rar_free_part(a.files.get(d))
 d++
 end
 i = j
@@ -586,6 +587,7 @@ mut d2 := i
 until d2 < j:
 _rar_free_name(a.files.get(d2).name)
 _rar_free_name(a.files.get(d2).rtarget)
+_rar_free_part(a.files.get(d2))
 d2++
 end
 i = j
@@ -3696,9 +3698,7 @@ if s.len() > 0:
 mem.Free(s as void*)
 end
 end
-func _rar_free_blobs(files &: Vector<_RarFile>):
-repeat files.len() in i:
-fl := files.get(i)
+func _rar_free_part(fl: _RarFile):
 if fl.salt != null:
 mem.Free(fl.salt as void*)
 end
@@ -3711,6 +3711,10 @@ end
 if fl.owned:
 mem.Free(fl.base as void*)
 end
+end
+func _rar_free_blobs(files &: Vector<_RarFile>):
+repeat files.len() in i:
+_rar_free_part(files.get(i))
 end
 end
 func _rar_free_files(files &: Vector<_RarFile>):
@@ -6495,6 +6499,8 @@ import compress
 import crypto
 import filepath
 import mem
+import os
+import str
 @en "SEVENZIP_OK"
 @fa "هفت زد موفق"
 pub const SEVENZIP_OK := 0
@@ -6543,6 +6549,9 @@ pub password: str = ""
 @en "status"
 @fa "وضعیت"
 pub status: int = 0
+@en "own"
+@fa "حافظه خودی"
+pub own: void* = null
 end
 func _sz_is(p: void*, n: int): bool:
 if n < 6:
@@ -6726,6 +6735,18 @@ out = compress.RawInflateMax(inp.p as void*, inp.n, out_size, out_size, ok)
 if ok and out.len != out_size:
 ok = false
 end
+else id == (0x040109 as i64):
+out = compress.RawInflate64Max(inp.p as void*, inp.n, out_size, out_size, ok)
+if ok and out.len != out_size:
+ok = false
+end
+else id == (0x020302 as i64) or id == (0x020304 as i64):
+if inp.n != out_size:
+status = SEVENZIP_CORRUPT
+ret out
+end
+compress.BufPushBytes(out, inp.p as void*, inp.n)
+ok = compress.SwapDecode(out.data, out.len, id == (0x020302 as i64) ? 2 : 4)
 else id == (0x06F10701 as i64):
 out = _sz_decrypt(c, inp, out_size, password, status)
 ok = status == SEVENZIP_OK
@@ -6763,6 +6784,8 @@ else id == (9 as i64) or id == (0x03030805 as i64):
 kind = compress.BcjSPARC
 else id == (10 as i64):
 kind = compress.BcjARM64
+else id == (11 as i64):
+kind = compress.BcjRISCV
 end
 if kind == 0:
 status = SEVENZIP_UNSUPPORTED
@@ -6787,6 +6810,47 @@ status = SEVENZIP_CORRUPT
 end
 ret out
 end
+func _szin_free(inp: _SzIn):
+if inp.owned:
+compress.BufFree(inp.buf)
+end
+end
+func _sz_input_of(s: _Sz, base: u8*, n: int, fi: int, in_idx: int, password: str, depth: int, status &: int, inp &: _SzIn): bool:
+f := s.folders.get(fi)
+repeat f.bin.len() in k:
+if f.bin.get(k) == in_idx:
+inp.buf = _sz_stream_out(s, base, n, fi, f.bout.get(k), password, depth + 1, status)
+if status != SEVENZIP_OK:
+compress.BufFree(inp.buf)
+ret false
+end
+inp.p = inp.buf.data as u8*
+inp.n = inp.buf.len
+inp.owned = true
+ret true
+end
+end
+repeat f.packed.len() in j:
+if f.packed.get(j) == in_idx:
+pidx := f.pack_first + j
+if pidx >= s.pack_sizes.len():
+status = SEVENZIP_CORRUPT
+ret false
+end
+off := _sz_pack_offset(s, pidx)
+sz := s.pack_sizes.get(pidx)
+if off < (32 as i64) or sz < (0 as i64) or off + sz > (n as i64):
+status = SEVENZIP_CORRUPT
+ret false
+end
+inp.p = ((base as i64) + off) as u8*
+inp.n = sz as int
+ret true
+end
+end
+status = SEVENZIP_CORRUPT
+ret false
+end
 func _sz_stream_out(s: _Sz, base: u8*, n: int, fi: int, out_idx: int, password: str, depth: int, status &: int): compress.ByteBuf:
 f := s.folders.get(fi)
 if depth > f.coders.len() or out_idx >= f.coders.len() or out_idx >= f.unpack.len():
@@ -6798,49 +6862,48 @@ if out_size < (0 as i64) or out_size > (_SZ_MAX_SIZE as i64):
 status = SEVENZIP_TOO_BIG
 ret compress.NewByteBuf()
 end
+c := f.coders.get(out_idx)
+mut first_in := 0
+repeat out_idx in q:
+first_in += f.coders.get(q).num_in
+end
+if c.id == (0x0303011B as i64):
+if c.num_in != 4:
+status = SEVENZIP_CORRUPT
+ret compress.NewByteBuf()
+end
+mut ins := Vector {} as Vector<_SzIn>
+mut good := true
+repeat 4 in q:
+if good:
+mut one := _SzIn { p = null as u8*, n = 0, buf = compress.NewByteBuf(), owned = false }
+if _sz_input_of(s, base, n, fi, first_in + q, password, depth, status, one):
+ins.push(one)
+else:
+good = false
+end
+end
+end
+mut res := compress.NewByteBuf()
+if good:
+res = _sz_bcj2(ins.get(0), ins.get(1), ins.get(2), ins.get(3), out_size as int, status)
+end
+repeat ins.len() in q:
+_szin_free(ins.get(q))
+end
+ins.free()
+ret res
+end
+if c.num_in != 1:
+status = SEVENZIP_UNSUPPORTED
+ret compress.NewByteBuf()
+end
 mut inp := _SzIn { p = null as u8*, n = 0, buf = compress.NewByteBuf(), owned = false }
-mut found := false
-repeat f.bin.len() in k:
-if f.bin.get(k) == out_idx and not found:
-found = true
-inp.buf = _sz_stream_out(s, base, n, fi, f.bout.get(k), password, depth + 1, status)
-if status != SEVENZIP_OK:
-compress.BufFree(inp.buf)
+if not _sz_input_of(s, base, n, fi, first_in, password, depth, status, inp):
 ret compress.NewByteBuf()
 end
-inp.p = inp.buf.data as u8*
-inp.n = inp.buf.len
-inp.owned = true
-end
-end
-if not found:
-repeat f.packed.len() in j:
-if f.packed.get(j) == out_idx and not found:
-found = true
-pidx := f.pack_first + j
-if pidx >= s.pack_sizes.len():
-status = SEVENZIP_CORRUPT
-ret compress.NewByteBuf()
-end
-off := _sz_pack_offset(s, pidx)
-sz := s.pack_sizes.get(pidx)
-if off < (32 as i64) or sz < (0 as i64) or off + sz > (n as i64):
-status = SEVENZIP_CORRUPT
-ret compress.NewByteBuf()
-end
-inp.p = ((base as i64) + off) as u8*
-inp.n = sz as int
-end
-end
-end
-if not found:
-status = SEVENZIP_CORRUPT
-ret compress.NewByteBuf()
-end
-out := _sz_coder_run(f.coders.get(out_idx), inp, out_size as int, password, status)
-if inp.owned:
-compress.BufFree(inp.buf)
-end
+out := _sz_coder_run(c, inp, out_size as int, password, status)
+_szin_free(inp)
 ret out
 end
 func _sz_has_aes(f: _SzFolder): bool:
@@ -6856,7 +6919,7 @@ status = SEVENZIP_OK
 f := s.folders.get(fi)
 repeat f.coders.len() in i:
 c := f.coders.get(i)
-if c.nin != 1 or c.nout != 1:
+if c.num_out != 1 or (c.num_in != 1 and not (c.num_in == 4 and c.id == (0x0303011B as i64))):
 status = SEVENZIP_UNSUPPORTED
 ret compress.NewByteBuf()
 end
@@ -7028,8 +7091,20 @@ end
 end
 ret t
 end
-func _sz_entries_of(s: _Sz): Vector<Entry>:
+func _sz_is_link(f: _SzFile): bool:
+ret f.has_attr and (f.attr & 32768) != 0 and ((f.attr >> 16) & 0xF000) == 0xA000
+end
+func _sz_unix_mode(f: _SzFile): int:
+if f.has_attr and (f.attr & 32768) != 0:
+ret (f.attr >> 16) & 4095
+end
+ret -1
+end
+func _sz_entries_of(s: _Sz, base: u8*, n: int, password: str): Vector<Entry>:
 mut out := Vector {} as Vector<Entry>
+mut cur := -1
+mut cur_ok := false
+mut fb := compress.NewByteBuf()
 repeat s.files.len() in i:
 f := s.files.get(i)
 if f.anti:
@@ -7044,9 +7119,31 @@ if f.offset == (0 as i64):
 packed = _sz_folder_packed(s, f.folder)
 end
 end
-mut mode := 0
-if f.has_attr and (f.attr & 32768) != 0:
-mode = (f.attr >> 16) & 4095
+mut mode := _sz_unix_mode(f)
+if mode < 0:
+mode = 0
+end
+mut kind := f.is_dir ? 1 : 0
+mut lnk := ""
+if _sz_is_link(f) and not f.is_dir:
+kind = 2
+if f.has_stream and f.size > (0 as i64) and f.size < (4096 as i64):
+if f.folder != cur:
+compress.BufFree(fb)
+cur = f.folder
+mut fst := SEVENZIP_OK
+fb = _sz_unpack_folder(s, base, n, cur, password, fst)
+cur_ok = fst == SEVENZIP_OK
+end
+if cur_ok:
+mut dst := SEVENZIP_OK
+mut d := _sz_file_data(s, i, fb, dst)
+if dst == SEVENZIP_OK:
+lnk = compress.BufToStrUnsafe(d)
+end
+compress.BufFree(d)
+end
+end
 end
 out.push(
 Entry {
@@ -7057,12 +7154,13 @@ is_dir = f.is_dir
 method = method
 crc32 = f.crc as u32
 mtime = f.mtime
-link = ""
-kind = f.is_dir ? 1 : 0
+link = lnk
+kind = kind
 mode = mode
 }
 )
 end
+compress.BufFree(fb)
 ret out
 end
 func _sz_find(s: _Sz, name: str): int:
@@ -7087,6 +7185,9 @@ end
 src := ((folder_buf.data as i64) + f.offset) as void*
 if f.crc_def and (compress.CRC32(src, f.size as int) as i64) != f.crc:
 status = SEVENZIP_BAD_CRC
+if f.folder >= 0 and _sz_has_aes(s.folders.get(f.folder)):
+status = SEVENZIP_BAD_PASSWORD
+end
 ret out
 end
 compress.BufPushBytes(out, src, f.size as int)
@@ -7115,18 +7216,28 @@ out := _sz_file_data(s, fi, fb, status)
 compress.BufFree(fb)
 ret out
 end
+func _sz_apply_meta(f: _SzFile, path: str):
+m := _sz_unix_mode(f)
+if m >= 0:
+_rar_set_mode(path, f.is_dir ? (m | 0x1c0) : m)
+end
+if f.mtime > (0 as i64):
+_rar_set_mtime(path, f.mtime)
+end
+end
 func _sz_extract_all_of(s: _Sz, base: u8*, n: int, destdir: str, password: str, status &: int): int:
 status = SEVENZIP_OK
 mut extracted := 0
 mut cur := -1
 mut cur_ok := false
 mut fb := compress.NewByteBuf()
+mut made := Vector {} as Vector<str>
 repeat s.files.len() in i:
 f := s.files.get(i)
 if f.anti:
 continue
 end
-if not _safe_entry_name(f.name):
+if not _safe_entry_name(f.name) or _rar_under_link(f.name, made):
 status = SEVENZIP_UNSAFE_PATH
 continue
 end
@@ -7160,10 +7271,31 @@ st = status
 end
 end
 if st == SEVENZIP_OK:
+if _sz_is_link(f) and data.len > 0:
+tgt := compress.BufToStrUnsafe(data)
+if not _rar_link_target_ok(f.name, tgt, made):
+status = SEVENZIP_UNSAFE_PATH
+else:
+if _rar_symlink(tgt, outpath):
+made.push(_rar_dup(f.name))
+extracted++
+else:
+if status == SEVENZIP_OK:
+status = SEVENZIP_UNSUPPORTED
+end
+end
+end
+_rar_free_name(tgt)
+else:
+if os.Exists(outpath):
+_rar_set_mode(outpath, 0x1a4)
+end
 if WriteBinaryFileBuf(outpath, data):
+_sz_apply_meta(f, outpath)
 extracted++
 else:
 status = SEVENZIP_CORRUPT
+end
 end
 else:
 if status == SEVENZIP_OK:
@@ -7175,7 +7307,68 @@ end
 mem.Free(outpath as void*)
 end
 compress.BufFree(fb)
+mut j := s.files.len() - 1
+until j >= 0:
+f := s.files.get(j)
+j--
+if f.is_dir and not f.anti and _safe_entry_name(f.name) and not _rar_under_link(f.name, made):
+dpath := filepath.Join(destdir, f.name)
+if os.IsDir(dpath):
+_sz_apply_meta(f, dpath)
+end
+mem.Free(dpath as void*)
+end
+end
+repeat made.len() in k:
+mem.Free(made.get(k) as void*)
+end
+made.free()
 ret extracted
+end
+func _sz_start(p: void*, n: int): int:
+if n < 32:
+ret 0
+end
+b := p as u8*
+if _sz_is(p, n):
+ret 0
+end
+mut lim := n - 32
+if lim > 8388608:
+lim = 8388608
+end
+mut i := 1
+until i <= lim:
+if (b[i] as int) == 55 and (b[i + 1] as int) == 122 and (b[i + 2] as int) == 188 and (b[i + 3] as int) == 175 and (b[i + 4] as int) == 39 and (b[i + 5] as int) == 28 and (b[i + 6] as int) == 0:
+if (compress.CRC32(((p as i64) + (i as i64) + 12) as void*, 20) as i64) == _sz_le32(b, i + 8):
+ret i
+end
+end
+i++
+end
+ret 0
+end
+func _sz_volume_path(first: str, idx: int): str:
+n := first.len()
+ds := _rar_digits_end(first, n)
+if ds == n or n - ds > 9:
+ret ""
+end
+width := n - ds
+ns := str.Substr(first, ds, width)
+num := str.ToInt(ns) + idx
+_rar_free_name(ns)
+mut digits := str.FromInt(num as i64)
+until digits.len() < width:
+grown := "0" + digits
+_rar_free_name(digits)
+digits = grown
+end
+head := str.Substr(first, 0, ds)
+res := head + digits
+_rar_free_name(head)
+_rar_free_name(digits)
+ret res
 end
 @en "IsSevenZip"
 @fa "هفت زد است"
@@ -7199,7 +7392,76 @@ end
 @en "SevenZipOpen"
 @fa "بازکردن هفت زد"
 pub func SevenZipOpen(p: void*, n: int, password: str): SevenZipArchive:
-ret SevenZipArchive { data = p, len = n, password = password, status = SEVENZIP_OK }
+off := _sz_start(p, n)
+ret SevenZipArchive { data = ((p as i64) + (off as i64)) as void*, len = n - off, password = password, status = SEVENZIP_OK }
+end
+@en "SevenZipReadVolumes"
+@fa "خواندن بخش‌های هفت زد"
+pub func SevenZipReadVolumes(first: str, ok &: bool): Vector<compress.ByteBuf>:
+mut vols := Vector {} as Vector<compress.ByteBuf>
+head := ReadBinaryFile(first, ok)
+if not ok:
+ret vols
+end
+vols.push(head)
+mut idx := 1
+until idx < 10000:
+path := _sz_volume_path(first, idx)
+if path.len() == 0:
+break
+end
+if not os.Exists(path):
+mem.Free(path as void*)
+break
+end
+mut more_ok := false
+part := ReadBinaryFile(path, more_ok)
+mem.Free(path as void*)
+if not more_ok:
+break
+end
+vols.push(part)
+idx++
+end
+ret vols
+end
+@en "SevenZipFreeVolumes"
+@fa "آزادسازی بخش‌های هفت زد"
+pub func SevenZipFreeVolumes(vols &: Vector<compress.ByteBuf>):
+repeat vols.len() in i:
+mut b := vols.get(i)
+compress.BufFree(b)
+end
+vols.free()
+end
+@en "SevenZipOpenVolumes"
+@fa "بازکردن بخش‌های هفت زد"
+pub func SevenZipOpenVolumes(vols: Vector<compress.ByteBuf>, password: str): SevenZipArchive:
+mut total := 0 as i64
+repeat vols.len() in i:
+total += vols.get(i).len as i64
+end
+if total > (1900000000 as i64):
+ret SevenZipArchive { password = password, status = SEVENZIP_TOO_BIG }
+end
+mut joined := compress.NewByteBufCap(total as int)
+repeat vols.len() in i:
+v := vols.get(i)
+compress.BufPushBytes(joined, v.data, v.len)
+end
+mut arc := SevenZipOpen(joined.data, joined.len, password)
+arc.own = joined.data
+ret arc
+end
+@en "SevenZipClose"
+@fa "بستن هفت زد"
+pub func SevenZipClose(arc &: SevenZipArchive):
+if arc.own != null:
+mem.Free(arc.own)
+end
+arc.own = null
+arc.data = null
+arc.len = 0
 end
 @en "SevenZipEntries"
 @fa "مدخل‌های هفت زد"
@@ -7208,7 +7470,7 @@ mut s := _sz_new()
 arc.status = _sz_load(arc.data, arc.len, arc.password, s)
 mut out := Vector {} as Vector<Entry>
 if arc.status == SEVENZIP_OK:
-out = _sz_entries_of(s)
+out = _sz_entries_of(s, arc.data as u8*, arc.len, arc.password)
 end
 _sz_free(s)
 ret out
@@ -7292,6 +7554,126 @@ end
 package archive
 import compress
 import mem
+func _bcj2_rc_byte(d: _SzIn, pos &: int, bad &: bool): i64:
+if pos >= d.n:
+bad = true
+ret 0
+end
+v := d.p[pos] as i64
+pos++
+ret v
+end
+func _bcj2_bit(d: _SzIn, pos &: int, code &: i64, range &: i64, probs: i32*, idx: int, bad &: bool): int:
+ttt := probs[idx] as i64
+bound := (range >> 11) * ttt
+mut bit := 0
+if code < bound:
+range = bound
+probs[idx] = (ttt + ((2048 - ttt) >> 5)) as i32
+else:
+range -= bound
+code -= bound
+probs[idx] = (ttt - (ttt >> 5)) as i32
+bit = 1
+end
+if range < 16777216:
+range = (range << 8) & 0xFFFFFFFF
+code = ((code << 8) | _bcj2_rc_byte(d, pos, bad)) & 0xFFFFFFFF
+end
+ret bit
+end
+func _sz_bcj2(a: _SzIn, b: _SzIn, c: _SzIn, d: _SzIn, out_size: int, status &: int): compress.ByteBuf:
+mut out := compress.NewByteBufCap(out_size > 16777216 ? 16777216 : out_size)
+if out_size == 0:
+ret out
+end
+if d.n < 5:
+status = SEVENZIP_CORRUPT
+ret out
+end
+probs := mem.AllocateZeroed(1032 as u64) as i32*
+repeat 258 in i:
+probs[i] = 1024 as i32
+end
+mut code := 0 as i64
+mut range := 0xFFFFFFFF as i64
+mut rpos := 0
+mut bad := false
+repeat 5:
+code = ((code << 8) | _bcj2_rc_byte(d, rpos, bad)) & 0xFFFFFFFF
+end
+mut ip := 0
+mut bpos := 0
+mut cpos := 0
+mut o := 0
+mut prev := 0
+until o < out_size and not bad:
+mut hit := false
+until ip < a.n and o < out_size and not hit:
+bb := a.p[ip] as int
+compress.BufPush(out, bb)
+o++
+if (bb & 0xFE) == 0xE8 or (prev == 0x0F and (bb & 0xF0) == 0x80):
+hit = true
+else:
+ip++
+prev = bb
+end
+end
+if not hit or o >= out_size:
+break
+end
+bb := a.p[ip] as int
+ip++
+mut idx := 257
+if bb == 0xE8:
+idx = prev
+else bb == 0xE9:
+idx = 256
+end
+bit := _bcj2_bit(d, rpos, code, range, probs, idx, bad)
+if bit == 0:
+prev = bb
+else:
+mut src := b
+mut sp := bpos
+if bb != 0xE8:
+src = c
+sp = cpos
+end
+if sp + 4 > src.n:
+status = SEVENZIP_CORRUPT
+break
+end
+v := ((src.p[sp] as i64) << 24) | ((src.p[sp + 1] as i64) << 16) | ((src.p[sp + 2] as i64) << 8) | (src.p[sp + 3] as i64)
+if bb == 0xE8:
+bpos += 4
+else:
+cpos += 4
+end
+dest := (v - ((o as i64) + 4)) & 0xFFFFFFFF
+repeat 4 in q:
+if o < out_size:
+compress.BufPush(out, ((dest >> (8 * q)) & 255) as int)
+o++
+end
+end
+prev = ((dest >> 24) & 255) as int
+end
+end
+mem.Free(probs as void*)
+if status == SEVENZIP_OK and (bad or o != out_size):
+status = SEVENZIP_CORRUPT
+end
+if status != SEVENZIP_OK:
+compress.BufFree(out)
+ret compress.NewByteBuf()
+end
+ret out
+end
+package archive
+import compress
+import mem
 const _SZ_END := 0
 const _SZ_HEADER := 1
 const _SZ_ARCHIVE_PROPS := 2
@@ -7324,8 +7706,8 @@ pub bad: bool
 end
 struct _SzCoder:
 pub id: i64
-pub nin: int
-pub nout: int
+pub num_in: int
+pub num_out: int
 pub props: compress.ByteBuf
 end
 struct _SzFolder:
@@ -7527,11 +7909,11 @@ until j < idsize:
 id = (id << 8) | (_szr_byte(r) as i64)
 j++
 end
-mut nin := 1
-mut nout := 1
+mut num_in := 1
+mut num_out := 1
 if (flags & 16) != 0:
-nin = _szr_count(r, 64)
-nout = _szr_count(r, 64)
+num_in = _szr_count(r, 64)
+num_out = _szr_count(r, 64)
 end
 mut props := compress.NewByteBuf()
 if (flags & 32) != 0:
@@ -7543,9 +7925,9 @@ end
 compress.BufPushBytes(props, ((r.p as i64) + (r.pos as i64)) as void*, psz)
 r.pos += psz
 end
-f.coders.push(_SzCoder { id = id, nin = nin, nout = nout, props = props })
-tin += nin
-tout += nout
+f.coders.push(_SzCoder { id = id, num_in = num_in, num_out = num_out, props = props })
+tin += num_in
+tout += num_out
 k++
 end
 if r.bad or tout == 0 or tin < tout - 1:
@@ -7594,7 +7976,7 @@ end
 func _sz_folder_total_out(f: _SzFolder): int:
 mut t := 0
 repeat f.coders.len() in i:
-t += f.coders.get(i).nout
+t += f.coders.get(i).num_out
 end
 ret t
 end
@@ -7915,7 +8297,7 @@ end
 mut empty := Vector {} as Vector<bool>
 mut empty_file := Vector {} as Vector<bool>
 mut anti := Vector {} as Vector<bool>
-mut nempty := 0
+mut empty_count := 0
 mut st := 0
 until true:
 ty := _szr_num(r)
@@ -7935,18 +8317,18 @@ endp := r.pos + size
 if ty == (_SZ_EMPTY_STREAM as i64):
 empty.free()
 empty = _szr_bits(r, n)
-nempty = 0
+empty_count = 0
 repeat n in i:
 if empty.get(i):
-nempty++
+empty_count++
 end
 end
 else ty == (_SZ_EMPTY_FILE as i64):
 empty_file.free()
-empty_file = _szr_bits(r, nempty)
+empty_file = _szr_bits(r, empty_count)
 else ty == (_SZ_ANTI as i64):
 anti.free()
-anti = _szr_bits(r, nempty)
+anti = _szr_bits(r, empty_count)
 else ty == (_SZ_NAMES as i64):
 if _szr_byte(r) != 0:
 st = 2
@@ -8045,6 +8427,359 @@ empty.free()
 empty_file.free()
 anti.free()
 ret st
+end
+package archive
+import compress
+@en "SevenZipFileInput"
+@fa "ورودی پرونده هفت زد"
+pub struct SevenZipFileInput:
+@en "name"
+@fa "نام"
+pub name: str = ""
+@en "data_ptr"
+@fa "نشانی داده"
+pub data_ptr: void* = null
+@en "data_len"
+@fa "طول داده"
+pub data_len: int = 0
+@en "is_dir"
+@fa "پوشه"
+pub is_dir: bool = false
+@en "mtime"
+@fa "زمان تغییر"
+pub mtime: i64 = 0 as i64
+@en "mode"
+@fa "دسترسی"
+pub mode: int = 0
+@en "link"
+@fa "پیوند"
+pub link: str = ""
+end
+func _szw_num(b &: compress.ByteBuf, v: i64):
+if v >= (0 as i64) and v < (128 as i64):
+compress.BufPush(b, v as int)
+ret
+end
+compress.BufPush(b, 255)
+repeat 8 in i:
+compress.BufPush(b, ((v >> (8 * i)) & 255) as int)
+end
+end
+func _szw_u32(b &: compress.ByteBuf, v: i64):
+repeat 4 in i:
+compress.BufPush(b, ((v >> (8 * i)) & 255) as int)
+end
+end
+func _szw_bits(b &: compress.ByteBuf, bits: Vector<bool>):
+mut cur := 0
+mut n := 0
+repeat bits.len() in i:
+cur <<= 1
+if bits.get(i):
+cur |= 1
+end
+n++
+if n == 8:
+compress.BufPush(b, cur)
+cur = 0
+n = 0
+end
+end
+if n > 0:
+compress.BufPush(b, cur << (8 - n))
+end
+end
+func _szw_name(b &: compress.ByteBuf, name: str):
+p := name as u8*
+mut n := name.len()
+until n > 1 and ((p[n - 1] as int) == 47 or (p[n - 1] as int) == 92):
+n--
+end
+mut i := 0
+until i < n:
+c := p[i] as int
+mut cp := c
+mut extra := 0
+if c >= 240:
+cp = c & 7
+extra = 3
+else c >= 224:
+cp = c & 15
+extra = 2
+else c >= 192:
+cp = c & 31
+extra = 1
+end
+i++
+repeat extra:
+if i < n:
+cp = (cp << 6) | ((p[i] as int) & 63)
+i++
+end
+end
+if cp == 92:
+cp = 47
+end
+if cp >= 65536:
+v := cp - 65536
+u1 := 55296 + (v >> 10)
+u2 := 56320 + (v & 1023)
+compress.BufPush(b, u1 & 255)
+compress.BufPush(b, u1 >> 8)
+compress.BufPush(b, u2 & 255)
+compress.BufPush(b, u2 >> 8)
+else:
+compress.BufPush(b, cp & 255)
+compress.BufPush(b, cp >> 8)
+end
+end
+compress.BufPush(b, 0)
+compress.BufPush(b, 0)
+end
+func _szw_wrap(h: compress.ByteBuf, id: int): compress.ByteBuf:
+mut out := compress.NewByteBuf()
+compress.BufPush(out, id)
+_szw_num(out, h.len as i64)
+compress.BufPushBuf(out, h)
+ret out
+end
+@en "MakeSevenZipFileInput"
+@fa "ساخت ورودی پرونده هفت زد"
+pub func MakeSevenZipFileInput(name: str, data_ptr: void*, data_len: int, is_dir: bool): SevenZipFileInput:
+ret SevenZipFileInput { name = name, data_ptr = data_ptr, data_len = data_len, is_dir = is_dir }
+end
+@en "SevenZipCreate"
+@fa "ساخت هفت زد"
+pub func SevenZipCreate(files: Vector<SevenZipFileInput>): compress.ByteBuf:
+mut out := compress.NewByteBuf()
+n := files.len()
+mut total := 0 as i64
+mut nstream := 0
+mut empty := Vector {} as Vector<bool>
+mut empty_file := Vector {} as Vector<bool>
+mut any_mtime := false
+mut any_attr := false
+repeat n in i:
+f := files.get(i)
+if f.data_len < 0 or f.name.len() == 0 or f.name.len() > 65535 or (f.data_len > 0 and f.data_ptr == null):
+empty.free()
+empty_file.free()
+ret out
+end
+mut size := f.data_len
+if f.link.len() > 0:
+size = f.link.len()
+end
+is_empty := f.is_dir or size == 0
+empty.push(is_empty)
+if is_empty:
+empty_file.push(not f.is_dir)
+else:
+nstream++
+total += size as i64
+end
+if f.mtime > (0 as i64):
+any_mtime = true
+end
+if f.mode > 0:
+any_attr = true
+end
+end
+if total > (1900000000 as i64):
+empty.free()
+empty_file.free()
+ret out
+end
+repeat 32:
+compress.BufPush(out, 0)
+end
+mut h := compress.NewByteBuf()
+compress.BufPush(h, 1)
+if nstream > 0:
+mut crcs := Vector {} as Vector<i64>
+mut sizes := Vector {} as Vector<i64>
+repeat n in i:
+f := files.get(i)
+if empty.get(i):
+continue
+end
+if f.link.len() > 0:
+compress.BufPushBytes(out, f.link as void*, f.link.len())
+sizes.push(f.link.len() as i64)
+crcs.push(compress.CRC32(f.link as void*, f.link.len()) as i64)
+else:
+compress.BufPushBytes(out, f.data_ptr, f.data_len)
+sizes.push(f.data_len as i64)
+crcs.push(compress.CRC32(f.data_ptr, f.data_len) as i64)
+end
+end
+compress.BufPush(h, 4)
+compress.BufPush(h, 6)
+_szw_num(h, 0 as i64)
+_szw_num(h, 1 as i64)
+compress.BufPush(h, 9)
+_szw_num(h, total)
+compress.BufPush(h, 0)
+compress.BufPush(h, 7)
+compress.BufPush(h, 11)
+_szw_num(h, 1 as i64)
+compress.BufPush(h, 0)
+_szw_num(h, 1 as i64)
+compress.BufPush(h, 1)
+compress.BufPush(h, 0)
+compress.BufPush(h, 12)
+_szw_num(h, total)
+compress.BufPush(h, 0)
+compress.BufPush(h, 8)
+compress.BufPush(h, 13)
+_szw_num(h, nstream as i64)
+if nstream > 1:
+compress.BufPush(h, 9)
+repeat nstream - 1 in i:
+_szw_num(h, sizes.get(i))
+end
+end
+compress.BufPush(h, 10)
+compress.BufPush(h, 1)
+repeat nstream in i:
+_szw_u32(h, crcs.get(i))
+end
+compress.BufPush(h, 0)
+compress.BufPush(h, 0)
+crcs.free()
+sizes.free()
+end
+if n > 0:
+compress.BufPush(h, 5)
+_szw_num(h, n as i64)
+if n > nstream:
+mut t := compress.NewByteBuf()
+_szw_bits(t, empty)
+mut w := _szw_wrap(t, 14)
+compress.BufPushBuf(h, w)
+compress.BufFree(w)
+compress.BufFree(t)
+mut any_ef := false
+repeat empty_file.len() in i:
+if empty_file.get(i):
+any_ef = true
+end
+end
+if any_ef:
+mut t2 := compress.NewByteBuf()
+_szw_bits(t2, empty_file)
+mut w2 := _szw_wrap(t2, 15)
+compress.BufPushBuf(h, w2)
+compress.BufFree(w2)
+compress.BufFree(t2)
+end
+end
+mut nm := compress.NewByteBuf()
+compress.BufPush(nm, 0)
+repeat n in i:
+_szw_name(nm, files.get(i).name)
+end
+mut wn := _szw_wrap(nm, 17)
+compress.BufPushBuf(h, wn)
+compress.BufFree(wn)
+compress.BufFree(nm)
+if any_mtime:
+mut mt := compress.NewByteBuf()
+mut defined := Vector {} as Vector<bool>
+mut all_def := true
+repeat n in i:
+has := files.get(i).mtime > (0 as i64)
+defined.push(has)
+if not has:
+all_def = false
+end
+end
+if all_def:
+compress.BufPush(mt, 1)
+else:
+compress.BufPush(mt, 0)
+_szw_bits(mt, defined)
+end
+compress.BufPush(mt, 0)
+repeat n in i:
+if defined.get(i):
+ft := (files.get(i).mtime + (11644473600 as i64)) * (10000000 as i64)
+repeat 8 in q:
+compress.BufPush(mt, ((ft >> (8 * q)) & 255) as int)
+end
+end
+end
+defined.free()
+mut wm := _szw_wrap(mt, 20)
+compress.BufPushBuf(h, wm)
+compress.BufFree(wm)
+compress.BufFree(mt)
+end
+mut at := compress.NewByteBuf()
+compress.BufPush(at, 1)
+compress.BufPush(at, 0)
+repeat n in i:
+f := files.get(i)
+mut attr := f.is_dir ? (16 as i64) : (32 as i64)
+if f.mode > 0 or f.link.len() > 0:
+mut m := f.mode & 4095
+if f.link.len() > 0:
+m = 0xA000 | (f.mode > 0 ? (f.mode & 4095) : 511)
+else:
+m |= f.is_dir ? 0x4000 : 0x8000
+end
+attr |= (32768 as i64) | ((m as i64) << 16)
+end
+_szw_u32(at, attr)
+end
+mut wa := _szw_wrap(at, 21)
+compress.BufPushBuf(h, wa)
+compress.BufFree(wa)
+compress.BufFree(at)
+compress.BufPush(h, 0)
+end
+compress.BufPush(h, 0)
+hdr_off := (out.len - 32) as i64
+hlen := h.len as i64
+compress.BufPushBuf(out, h)
+hcrc := compress.CRC32(h.data, h.len)
+compress.BufFree(h)
+mut sh := compress.NewByteBuf()
+repeat 8 in i:
+compress.BufPush(sh, ((hdr_off >> (8 * i)) & 255) as int)
+end
+repeat 8 in i:
+compress.BufPush(sh, ((hlen >> (8 * i)) & 255) as int)
+end
+_szw_u32(sh, hcrc as i64)
+scrc := compress.CRC32(sh.data, sh.len) as i64
+b := out.data as u8*
+sp := sh.data as u8*
+sig := [55, 122, 188, 175, 39, 28, 0, 4]
+repeat 8 in i:
+b[i] = sig[i] as u8
+end
+repeat 4 in i:
+b[8 + i] = ((scrc >> (8 * i)) & 255) as u8
+end
+repeat 20 in i:
+b[12 + i] = sp[i]
+end
+compress.BufFree(sh)
+empty.free()
+empty_file.free()
+ret out
+end
+@en "SevenZipCreateFile"
+@fa "ساخت پرونده هفت زد"
+pub func SevenZipCreateFile(files: Vector<SevenZipFileInput>, path: str): bool:
+mut packed := SevenZipCreate(files)
+if packed.len == 0:
+ret false
+end
+ok := WriteBinaryFileBuf(path, packed)
+compress.BufFree(packed)
+ret ok
 end
 package archive
 import compress
@@ -8919,6 +9654,34 @@ ret TarGzExtractAllMax(p, n, destdir, _TAR_GZ_DEFAULT_MAX)
 end
 package archive
 import compress
+@en "XzCompressFile"
+@fa "فشرده سازی پرونده ایکس زد"
+pub func XzCompressFile(inpath: str, outpath: str): bool:
+mut rok := false
+mut inbuf := ReadBinaryFile(inpath, rok)
+if not rok:
+ret false
+end
+mut out := compress.XzCompress(inbuf.data, inbuf.len)
+wok := WriteBinaryFileBuf(outpath, out)
+compress.BufFree(inbuf)
+compress.BufFree(out)
+ret wok
+end
+@en "LzmaCompressFile"
+@fa "فشرده سازی پرونده الزد ام ای"
+pub func LzmaCompressFile(inpath: str, outpath: str): bool:
+mut rok := false
+mut inbuf := ReadBinaryFile(inpath, rok)
+if not rok:
+ret false
+end
+mut out := compress.LzmaCompress(inbuf.data, inbuf.len)
+wok := WriteBinaryFileBuf(outpath, out)
+compress.BufFree(inbuf)
+compress.BufFree(out)
+ret wok
+end
 @en "XzDecompressFile"
 @fa "کدگشایی پرونده ایکس زد"
 pub func XzDecompressFile(inpath: str, outpath: str): bool:
@@ -32857,6 +33620,9 @@ pub const BcjSPARC := 9
 @en "BcjARM64"
 @fa "فیلتر آرم۶۴"
 pub const BcjARM64 := 10
+@en "BcjRISCV"
+@fa "فیلتر ریسک۵"
+pub const BcjRISCV := 11
 const _BCJ_ALLOWED := [1, 1, 1, 0, 1, 0, 0, 0]
 const _BCJ_BITNUM := [0, 1, 2, 2, 3, 3, 3, 3]
 const _BCJ_IA64 := [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 4, 6, 6, 0, 0, 7, 7, 4, 4, 0, 0, 4, 4, 0, 0]
@@ -33066,6 +33832,69 @@ end
 i += 4
 end
 end
+func _bcj_riscv(b: u8*, size: int, start: i64):
+if size < 8:
+ret
+end
+lim := size - 8
+mut i := 0
+until i <= lim:
+mut inst := b[i] as i64
+if inst == 0xEF:
+b1 := b[i + 1] as i64
+if (b1 & 0x0D) != 0:
+i += 2
+continue
+end
+b2 := b[i + 2] as i64
+b3 := b[i + 3] as i64
+pc := (start + (i as i64)) & 0xFFFFFFFF
+mut addr := ((b1 & 0xF0) << 13) | (b2 << 9) | (b3 << 1)
+addr = (addr - pc) & 0xFFFFFFFF
+b[i + 1] = ((b1 & 0x0F) | ((addr >> 8) & 0xF0)) as u8
+b[i + 2] = (((addr >> 16) & 0x0F) | ((addr >> 7) & 0x10) | ((addr << 4) & 0xE0)) as u8
+b[i + 3] = (((addr >> 4) & 0x7F) | ((addr >> 13) & 0x80)) as u8
+i += 4
+else (inst & 0x7F) == 0x17:
+inst |= (b[i + 1] as i64) << 8
+inst |= (b[i + 2] as i64) << 16
+inst |= (b[i + 3] as i64) << 24
+mut inst2 := 0 as i64
+if (inst & 0xE80) != 0:
+inst2 = (b[i + 4] as i64) | ((b[i + 5] as i64) << 8) | ((b[i + 6] as i64) << 16) | ((b[i + 7] as i64) << 24)
+if ((((inst << 8) ^ (inst2 - 3)) & 0xF8003) != 0):
+i += 6
+continue
+end
+addr := ((inst & 0xFFFFF000) + (inst2 >> 20)) & 0xFFFFFFFF
+inst = (0x17 | (2 << 7) | (inst2 << 12)) & 0xFFFFFFFF
+inst2 = addr
+else:
+rs1 := inst >> 27
+t := ((inst - 0x3117) << 18) & 0xFFFFFFFF
+if t >= (rs1 & 0x1D):
+i += 4
+continue
+end
+mut addr := ((b[i + 4] as i64) << 24) | ((b[i + 5] as i64) << 16) | ((b[i + 6] as i64) << 8) | (b[i + 7] as i64)
+addr = (addr - ((start + (i as i64)) & 0xFFFFFFFF)) & 0xFFFFFFFF
+inst2 = ((inst >> 12) | (addr << 20)) & 0xFFFFFFFF
+inst = (0x17 | (rs1 << 7) | ((addr + 0x800) & 0xFFFFF000)) & 0xFFFFFFFF
+end
+b[i] = (inst & 255) as u8
+b[i + 1] = ((inst >> 8) & 255) as u8
+b[i + 2] = ((inst >> 16) & 255) as u8
+b[i + 3] = ((inst >> 24) & 255) as u8
+b[i + 4] = (inst2 & 255) as u8
+b[i + 5] = ((inst2 >> 8) & 255) as u8
+b[i + 6] = ((inst2 >> 16) & 255) as u8
+b[i + 7] = ((inst2 >> 24) & 255) as u8
+i += 8
+else:
+i += 2
+end
+end
+end
 @en "BcjDecode"
 @fa "کدگشایی فیلتر شاخه"
 pub func BcjDecode(kind: int, p: void*, n: int, start: int): bool:
@@ -33085,6 +33914,8 @@ else kind == BcjSPARC:
 _bcj_sparc(b, n, s)
 else kind == BcjARM64:
 _bcj_arm64(b, n, s)
+else kind == BcjRISCV:
+_bcj_riscv(b, n, s)
 else:
 ret false
 end
@@ -33101,6 +33932,31 @@ mut i := dist
 until i < n:
 b[i] = (((b[i] as int) + (b[i - dist] as int)) & 255) as u8
 i++
+end
+ret true
+end
+@en "SwapDecode"
+@fa "کدگشایی فیلتر جابجایی بایت"
+pub func SwapDecode(p: void*, n: int, width: int): bool:
+if width != 2 and width != 4:
+ret false
+end
+b := p as u8*
+mut i := 0
+until i + width <= n:
+if width == 2:
+t := b[i]
+b[i] = b[i + 1]
+b[i + 1] = t
+else:
+t0 := b[i]
+t1 := b[i + 1]
+b[i] = b[i + 3]
+b[i + 1] = b[i + 2]
+b[i + 2] = t1
+b[i + 3] = t0
+end
+i += width
 end
 ret true
 end
@@ -34134,6 +34990,711 @@ pub func LzmaDecompressBuf(b: ByteBuf, ok &: bool): ByteBuf:
 ret LzmaDecompress(b.data, b.len, ok)
 end
 package compress
+import mem
+import crypto
+const _LZE_MAXLEN := 273
+const _LZE_CHUNK_USIZE := 2097152
+const _LZE_CHUNK_CSIZE := 65400
+@en "XzCheckNone"
+@fa "بررسی ایکس زد هیچ"
+pub const XzCheckNone := 0
+@en "XzCheckCrc32"
+@fa "بررسی ایکس زد سی آر سی۳۲"
+pub const XzCheckCrc32 := 1
+@en "XzCheckCrc64"
+@fa "بررسی ایکس زد سی آر سی۶۴"
+pub const XzCheckCrc64 := 4
+@en "XzCheckSha256"
+@fa "بررسی ایکس زد شا۲۵۶"
+pub const XzCheckSha256 := 10
+struct _Lze:
+pub probs: u16*
+pub low: i64
+pub range: i64
+pub cache: int
+pub csize: int
+pub rc: ByteBuf
+pub state: int
+pub rep0: int
+pub rep1: int
+pub rep2: int
+pub rep3: int
+pub src: u8*
+pub n: int
+pub head: u32*
+pub prev: u32*
+pub hbits: int
+pub wmask: int
+pub ins: int
+pub depth: int
+pub nice: int
+pub lazy: bool
+pub dsize: int
+end
+func _lze_dict_for(level: int, n: int): int:
+mut want := 262144
+if level == 1:
+want = 1048576
+else level == 2:
+want = 2097152
+else level == 3 or level == 4:
+want = 4194304
+else level == 5 or level == 6:
+want = 8388608
+else level == 7:
+want = 16777216
+else level == 8:
+want = 33554432
+else level == 9:
+want = 67108864
+end
+mut need := n
+if need < 4096:
+need = 4096
+end
+if want > need:
+want = need
+end
+ret want
+end
+func _lze_dict_prop(size: int): int:
+mut b := 0
+until b < 40 and (_lzma2_dict_size(b) < (size as i64)):
+b++
+end
+ret b
+end
+func _lze_new(p: void*, n: int, level: int, dsize: int): _Lze:
+mut lv := level
+if lv < 0:
+lv = 0
+end
+if lv > 9:
+lv = 9
+end
+depths := [2, 4, 8, 16, 24, 48, 64, 128, 256, 512]
+nices := [16, 24, 32, 48, 64, 64, 64, 96, 128, 273]
+mut wsize := 4096
+until wsize < dsize and wsize < n + 1:
+wsize <<= 1
+end
+mut hb := 16
+if lv >= 5:
+hb = 18
+end
+nprobs := 1860 + (768 << 3)
+pr := mem.Allocate((nprobs * 2) as u64) as u16*
+ret _Lze {
+probs = pr, low = 0 as i64, range = 0xFFFFFFFF as i64, cache = 0, csize = 1
+rc = NewByteBuf(), state = 0, rep0 = 0, rep1 = 0, rep2 = 0, rep3 = 0
+src = p as u8*, n = n
+head = mem.AllocateZeroed(((1 << hb) * 4) as u64) as u32*
+prev = mem.AllocateZeroed((wsize * 4) as u64) as u32*
+hbits = hb, wmask = wsize - 1, ins = 0
+depth = depths[lv], nice = nices[lv], lazy = lv >= 4, dsize = dsize
+}
+end
+func _lze_free(e &: _Lze):
+mem.Free(e.probs as void*)
+mem.Free(e.head as void*)
+mem.Free(e.prev as void*)
+BufFree(e.rc)
+end
+func _lze_reset_state(e &: _Lze):
+total := 1860 + (768 << 3)
+mut i := 0
+until i < total:
+e.probs[i] = 1024 as u16
+i++
+end
+e.state = 0
+e.rep0 = 0
+e.rep1 = 0
+e.rep2 = 0
+e.rep3 = 0
+end
+func _lze_rc_reset(e &: _Lze):
+e.low = 0 as i64
+e.range = 0xFFFFFFFF as i64
+e.cache = 0
+e.csize = 1
+BufReset(e.rc)
+end
+func _lze_shift(e &: _Lze):
+if e.low < (0xFF000000 as i64) or e.low >= (0x100000000 as i64):
+carry := (e.low >> 32) as int
+mut temp := e.cache
+until e.csize > 0:
+BufPush(e.rc, (temp + carry) & 255)
+temp = 255
+e.csize--
+end
+e.cache = ((e.low >> 24) & (255 as i64)) as int
+end
+e.csize++
+e.low = (e.low & (0xFFFFFF as i64)) << 8
+end
+func _lze_flush(e &: _Lze):
+mut i := 0
+until i < 5:
+_lze_shift(e)
+i++
+end
+end
+inline func _lze_bit(e &: _Lze, idx: int, bit: int):
+prob := e.probs[idx] as i64
+bound := (e.range >> 11) * prob
+if bit == 0:
+e.range = bound
+e.probs[idx] = (prob + ((2048 - prob) >> 5)) as u16
+else:
+e.low += bound
+e.range -= bound
+e.probs[idx] = (prob - (prob >> 5)) as u16
+end
+if e.range < (16777216 as i64):
+e.range <<= 8
+_lze_shift(e)
+end
+end
+func _lze_direct(e &: _Lze, v: int, nbits: int):
+mut i := nbits - 1
+until i >= 0:
+e.range >>= 1
+if ((v >> i) & 1) != 0:
+e.low += e.range
+end
+if e.range < (16777216 as i64):
+e.range <<= 8
+_lze_shift(e)
+end
+i--
+end
+end
+func _lze_tree(e &: _Lze, base: int, nbits: int, v: int):
+mut m := 1
+mut i := nbits - 1
+until i >= 0:
+bit := (v >> i) & 1
+_lze_bit(e, base + m, bit)
+m = (m << 1) + bit
+i--
+end
+end
+func _lze_rtree(e &: _Lze, base: int, nbits: int, v: int):
+mut m := 1
+mut i := 0
+until i < nbits:
+bit := (v >> i) & 1
+_lze_bit(e, base + m, bit)
+m = (m << 1) + bit
+i++
+end
+end
+func _lze_len(e &: _Lze, base: int, pos_state: int, len: int):
+l := len - 2
+if l < 8:
+_lze_bit(e, base, 0)
+_lze_tree(e, base + 2 + pos_state * 8, 3, l)
+else l < 16:
+_lze_bit(e, base, 1)
+_lze_bit(e, base + 1, 0)
+_lze_tree(e, base + 130 + pos_state * 8, 3, l - 8)
+else:
+_lze_bit(e, base, 1)
+_lze_bit(e, base + 1, 1)
+_lze_tree(e, base + 258, 8, l - 16)
+end
+end
+func _lze_dist(e &: _Lze, dist: int, len: int):
+mut ls := len - 2
+if ls > 3:
+ls = 3
+end
+mut slot := dist
+if dist >= 4:
+mut nb := 31
+until (dist >> nb) == 0:
+nb--
+end
+slot = nb * 2 + ((dist >> (nb - 1)) & 1)
+end
+_lze_tree(e, 432 + ls * 64, 6, slot)
+if slot < 4:
+ret
+end
+nbits := (slot >> 1) - 1
+base := (2 | (slot & 1)) << nbits
+rem := dist - base
+if slot < 14:
+_lze_rtree(e, 688 + base - slot - 1, nbits, rem)
+else:
+_lze_direct(e, rem >> 4, nbits - 4)
+_lze_rtree(e, 816, 4, rem & 15)
+end
+end
+func _lze_hash(e &: _Lze, p: int): int:
+v := (e.src[p] as i64) | ((e.src[p + 1] as i64) << 8) | ((e.src[p + 2] as i64) << 16)
+h := ((v * (506832829 as i64)) & (0xFFFFFFFF as i64)) >> (32 - e.hbits)
+ret h as int
+end
+func _lze_ins_to(e &: _Lze, upto: int):
+until e.ins < upto:
+if e.ins + 3 <= e.n:
+h := _lze_hash(e, e.ins)
+e.prev[e.ins & e.wmask] = e.head[h]
+e.head[h] = (e.ins + 1) as u32
+end
+e.ins++
+end
+end
+func _lze_mlen(e &: _Lze, a: int, b: int, maxlen: int): int:
+mut l := 0
+until l < maxlen and e.src[a + l] == e.src[b + l]:
+l++
+end
+ret l
+end
+func _lze_find(e &: _Lze, pos: int, maxlen: int, dist &: int): int:
+_lze_ins_to(e, pos)
+dist = 0
+if maxlen < 3:
+ret 0
+end
+h := _lze_hash(e, pos)
+mut cand := (e.head[h] as int) - 1
+mut best := 2
+mut left := e.depth
+until best < maxlen and cand >= 0 and left > 0:
+offs := pos - cand
+if offs > e.dsize:
+break
+end
+if e.src[cand + best] == e.src[pos + best] and e.src[cand] == e.src[pos]:
+l := _lze_mlen(e, pos, cand, maxlen)
+if l > best:
+best = l
+dist = offs - 1
+if l >= e.nice:
+break
+end
+end
+end
+nxt := (e.prev[cand & e.wmask] as int) - 1
+if nxt >= cand:
+break
+end
+cand = nxt
+left--
+end
+if best < 3:
+ret 0
+end
+if best == 3 and dist >= 16384:
+ret 0
+end
+ret best
+end
+func _lze_literal(e &: _Lze, pos: int, pos_state: int):
+st := e.state
+_lze_bit(e, st * 16 + pos_state, 0)
+mut prev := 0
+if pos > 0:
+prev = e.src[pos - 1] as int
+end
+base := 1860 + 768 * (prev >> 5)
+byte := e.src[pos] as int
+mut sym := 1
+if st >= 7:
+mut mb := e.src[pos - e.rep0 - 1] as int
+mut offs := 256
+mut i := 7
+until i >= 0:
+mb <<= 1
+mbit := mb & offs
+bit := (byte >> i) & 1
+_lze_bit(e, base + offs + mbit + sym, bit)
+sym = (sym << 1) | bit
+if bit == 0:
+offs &= (mbit ^ 0xFFFF)
+else:
+offs &= mbit
+end
+i--
+end
+else:
+mut i := 7
+until i >= 0:
+bit := (byte >> i) & 1
+_lze_bit(e, base + sym, bit)
+sym = (sym << 1) | bit
+i--
+end
+end
+if st < 4:
+e.state = 0
+else st < 10:
+e.state = st - 3
+else:
+e.state = st - 6
+end
+end
+func _lze_match(e &: _Lze, pos_state: int, len: int, dist: int):
+st := e.state
+_lze_bit(e, st * 16 + pos_state, 1)
+_lze_bit(e, 192 + st, 0)
+_lze_len(e, 832, pos_state, len)
+_lze_dist(e, dist, len)
+e.rep3 = e.rep2
+e.rep2 = e.rep1
+e.rep1 = e.rep0
+e.rep0 = dist
+if st < 7:
+e.state = 7
+else:
+e.state = 10
+end
+end
+func _lze_rep(e &: _Lze, pos_state: int, idx: int, len: int):
+st := e.state
+_lze_bit(e, st * 16 + pos_state, 1)
+_lze_bit(e, 192 + st, 1)
+if idx == 0:
+_lze_bit(e, 204 + st, 0)
+_lze_bit(e, 240 + st * 16 + pos_state, 1)
+else:
+_lze_bit(e, 204 + st, 1)
+mut dd := e.rep1
+if idx == 1:
+_lze_bit(e, 216 + st, 0)
+else:
+_lze_bit(e, 216 + st, 1)
+if idx == 2:
+_lze_bit(e, 228 + st, 0)
+dd = e.rep2
+else:
+_lze_bit(e, 228 + st, 1)
+dd = e.rep3
+e.rep3 = e.rep2
+end
+e.rep2 = e.rep1
+end
+e.rep1 = e.rep0
+e.rep0 = dd
+end
+_lze_len(e, 1346, pos_state, len)
+if st < 7:
+e.state = 8
+else:
+e.state = 11
+end
+end
+func _lze_shortrep(e &: _Lze, pos_state: int):
+st := e.state
+_lze_bit(e, st * 16 + pos_state, 1)
+_lze_bit(e, 192 + st, 1)
+_lze_bit(e, 204 + st, 0)
+_lze_bit(e, 240 + st * 16 + pos_state, 0)
+if st < 7:
+e.state = 9
+else:
+e.state = 11
+end
+end
+func _lze_rep_len(e &: _Lze, pos: int, idx: int, maxlen: int): int:
+mut r := e.rep0
+if idx == 1:
+r = e.rep1
+else idx == 2:
+r = e.rep2
+else idx == 3:
+r = e.rep3
+end
+if r + 1 > pos or r >= e.dsize:
+ret 0
+end
+ret _lze_mlen(e, pos, pos - r - 1, maxlen)
+end
+func _lze_run(e &: _Lze, start: int, endp: int, csz_lim: int): int:
+mut pos := start
+until pos < endp:
+if e.rc.len + e.csize >= csz_lim:
+break
+end
+pos_state := pos & 3
+mut maxlen := endp - pos
+if maxlen > _LZE_MAXLEN:
+maxlen = _LZE_MAXLEN
+end
+mut rl := 0
+mut ri := 0
+mut i := 0
+until i < 4:
+l := _lze_rep_len(e, pos, i, maxlen)
+if l > rl:
+rl = l
+ri = i
+end
+i++
+end
+mut md := 0
+ml := _lze_find(e, pos, maxlen, md)
+mut adv := 1
+if rl >= 2 and (rl + 1 >= ml or (rl + 2 >= ml and md >= 512) or (rl + 3 >= ml and md >= 32768)):
+_lze_rep(e, pos_state, ri, rl)
+adv = rl
+else ml >= 3:
+mut skip := false
+if e.lazy and ml < e.nice and pos + 1 < endp:
+mut md2 := 0
+max2 := maxlen - 1
+ml2 := _lze_find(e, pos + 1, max2, md2)
+if ml2 > ml + 1:
+skip = true
+else ml2 == ml + 1 and (md2 >> 7) <= md:
+skip = true
+else ml2 == ml and md2 < md:
+skip = true
+end
+end
+if skip:
+_lze_literal(e, pos, pos_state)
+else:
+_lze_match(e, pos_state, ml, md)
+adv = ml
+end
+else rl >= 2:
+_lze_rep(e, pos_state, ri, rl)
+adv = rl
+else pos > e.rep0 and e.rep0 < e.dsize and e.src[pos] == e.src[pos - e.rep0 - 1]:
+_lze_shortrep(e, pos_state)
+else:
+_lze_literal(e, pos, pos_state)
+end
+pos += adv
+_lze_ins_to(e, pos)
+end
+ret pos
+end
+func _lze_le32(b &: ByteBuf, v: i64):
+BufPush(b, (v & (255 as i64)) as int)
+BufPush(b, ((v >> 8) & (255 as i64)) as int)
+BufPush(b, ((v >> 16) & (255 as i64)) as int)
+BufPush(b, ((v >> 24) & (255 as i64)) as int)
+end
+func _lze_vli(b &: ByteBuf, v: i64):
+mut x := v
+until x >= (128 as i64):
+BufPush(b, ((x & (127 as i64)) | (128 as i64)) as int)
+x >>= 7
+end
+BufPush(b, x as int)
+end
+func _lze_lzma2(e &: _Lze, out &: ByteBuf):
+mut pos := 0
+mut dict_reset := true
+mut props_sent := false
+mut need_state := true
+until pos < e.n:
+start := pos
+if need_state:
+_lze_reset_state(e)
+end
+_lze_rc_reset(e)
+mut endp := start + _LZE_CHUNK_USIZE
+if endp > e.n:
+endp = e.n
+end
+pos = _lze_run(e, start, endp, _LZE_CHUNK_CSIZE)
+_lze_flush(e)
+usize := pos - start
+csize := e.rc.len
+if csize < usize and csize <= 65536:
+mut ctrl := 128
+if dict_reset:
+ctrl = 224
+else not props_sent:
+ctrl = 192
+else need_state:
+ctrl = 160
+end
+u := usize - 1
+c := csize - 1
+BufPush(out, ctrl | (u >> 16))
+BufPush(out, (u >> 8) & 255)
+BufPush(out, u & 255)
+BufPush(out, (c >> 8) & 255)
+BufPush(out, c & 255)
+if ctrl >= 192:
+BufPush(out, 93)
+end
+BufPushBytes(out, e.rc.data, csize)
+dict_reset = false
+props_sent = true
+need_state = false
+else:
+mut off := start
+until off < pos:
+mut m := pos - off
+if m > 65536:
+m = 65536
+end
+if dict_reset:
+BufPush(out, 1)
+else:
+BufPush(out, 2)
+end
+BufPush(out, ((m - 1) >> 8) & 255)
+BufPush(out, (m - 1) & 255)
+BufPushBytes(out, ((e.src as i64) + (off as i64)) as void*, m)
+dict_reset = false
+off += m
+end
+need_state = true
+end
+end
+BufPush(out, 0)
+end
+func _lze_pad4(b &: ByteBuf, from: int):
+until ((b.len - from) & 3) != 0:
+BufPush(b, 0)
+end
+end
+@en "LzmaCompressLevel"
+@fa "فشرده سازی الزد ام ای با سطح"
+pub func LzmaCompressLevel(p: void*, n: int, level: int): ByteBuf:
+mut out := NewByteBuf()
+dsz := _lzma2_dict_size(_lze_dict_prop(_lze_dict_for(level, n)))
+mut e := _lze_new(p, n, level, dsz as int)
+BufPush(out, 93)
+_lze_le32(out, dsz)
+_lze_le32(out, n as i64)
+_lze_le32(out, 0 as i64)
+_lze_reset_state(e)
+_lze_rc_reset(e)
+_lze_run(e, 0, n, 0x7FFFFFF0)
+_lze_flush(e)
+BufPushBytes(out, e.rc.data, e.rc.len)
+_lze_free(e)
+ret out
+end
+@en "LzmaCompress"
+@fa "فشرده سازی الزد ام ای"
+pub func LzmaCompress(p: void*, n: int): ByteBuf:
+ret LzmaCompressLevel(p, n, 6)
+end
+@en "LzmaCompressBuf"
+@fa "فشرده سازی الزد ام ای بافر"
+pub func LzmaCompressBuf(b: ByteBuf): ByteBuf:
+ret LzmaCompress(b.data, b.len)
+end
+@en "LzmaCompressStr"
+@fa "فشرده سازی الزد ام ای رشته"
+pub func LzmaCompressStr(s: str): ByteBuf:
+ret LzmaCompress(s as void*, s.len())
+end
+@en "XzCompressCheck"
+@fa "فشرده سازی ایکس زد با بررسی"
+pub func XzCompressCheck(p: void*, n: int, level: int, check: int): ByteBuf:
+mut out := NewByteBuf()
+mut ck := check
+if ck != 0 and ck != 1 and ck != 4 and ck != 10:
+ck = 4
+end
+mut x := _xz_new(0)
+magic := [253, 55, 122, 88, 90, 0]
+mut i := 0
+until i < 6:
+BufPush(out, magic[i])
+i++
+end
+BufPush(out, 0)
+BufPush(out, ck)
+_lze_le32(out, _xz_crc32(x, out.data as u8*, 6, 2) as i64)
+mut unpadded := 0 as i64
+mut have_block := false
+if n > 0:
+have_block = true
+dprop := _lze_dict_prop(_lze_dict_for(level, n))
+dsz := _lzma2_dict_size(dprop)
+mut e := _lze_new(p, n, level, dsz as int)
+mut hdr := NewByteBuf()
+BufPush(hdr, 2)
+BufPush(hdr, 0)
+BufPush(hdr, 33)
+BufPush(hdr, 1)
+BufPush(hdr, dprop)
+BufPush(hdr, 0)
+BufPush(hdr, 0)
+BufPush(hdr, 0)
+_lze_le32(hdr, _xz_crc32(x, hdr.data as u8*, 0, 8) as i64)
+BufPushBuf(out, hdr)
+BufFree(hdr)
+dstart := out.len
+_lze_lzma2(e, out)
+_lze_free(e)
+packed_len := out.len - dstart
+_lze_pad4(out, dstart)
+if ck == 1:
+_lze_le32(out, _xz_crc32(x, p as u8*, 0, n) as i64)
+else ck == 4:
+c64 := _xz_crc64(x, p as u8*, 0, n)
+_lze_le32(out, (c64 & (0xFFFFFFFF as u64)) as i64)
+_lze_le32(out, (c64 >> 32) as i64)
+else ck == 10:
+dg := mem.Allocate(32 as u64) as void*
+crypto.Sha256Bytes(p, n, dg)
+BufPushBytes(out, dg, 32)
+mem.Free(dg)
+end
+csz := _xz_check_size(ck)
+unpadded = (12 + packed_len + csz) as i64
+end
+istart := out.len
+BufPush(out, 0)
+if have_block:
+_lze_vli(out, 1 as i64)
+_lze_vli(out, unpadded)
+_lze_vli(out, n as i64)
+else:
+_lze_vli(out, 0 as i64)
+end
+_lze_pad4(out, istart)
+_lze_le32(out, _xz_crc32(x, out.data as u8*, istart, out.len - istart) as i64)
+isize := out.len - istart
+mut ft := NewByteBuf()
+_lze_le32(ft, ((isize / 4) - 1) as i64)
+BufPush(ft, 0)
+BufPush(ft, ck)
+_lze_le32(out, _xz_crc32(x, ft.data as u8*, 0, 6) as i64)
+BufPushBuf(out, ft)
+BufFree(ft)
+BufPush(out, 89)
+BufPush(out, 90)
+_xz_free(x)
+ret out
+end
+@en "XzCompressLevel"
+@fa "فشرده سازی ایکس زد با سطح"
+pub func XzCompressLevel(p: void*, n: int, level: int): ByteBuf:
+ret XzCompressCheck(p, n, level, 4)
+end
+@en "XzCompress"
+@fa "فشرده سازی ایکس زد"
+pub func XzCompress(p: void*, n: int): ByteBuf:
+ret XzCompressCheck(p, n, 6, 4)
+end
+@en "XzCompressBuf"
+@fa "فشرده سازی ایکس زد بافر"
+pub func XzCompressBuf(b: ByteBuf): ByteBuf:
+ret XzCompress(b.data, b.len)
+end
+@en "XzCompressStr"
+@fa "فشرده سازی ایکس زد رشته"
+pub func XzCompressStr(s: str): ByteBuf:
+ret XzCompress(s as void*, s.len())
+end
+package compress
 const _LZW_MAX_CODE := 4096
 @en "LZWCompress"
 @fa "فشرده سازی ال زد دبلیو"
@@ -34907,7 +36468,7 @@ mut v := Vector {} as Vector<int>
 repeat 32: v.push(5) end
 ret v
 end
-func _raw_inflate_block(r &: BitReader, out &: ByteBuf, littable: _RawHuffTable, disttable: _RawHuffTable, max: int): bool:
+func _raw_inflate_block(r &: BitReader, out &: ByteBuf, littable: _RawHuffTable, disttable: _RawHuffTable, max: int, d64: bool): bool:
 until true:
 sym := _decode_raw_symbol(r, littable)
 if sym < 0 or r.bad:
@@ -34926,12 +36487,20 @@ idx := sym - 257
 if idx < 0 or idx >= 29:
 ret false
 end
-length := _LENGTH_BASE[idx] + BitReadBits(r, _LENGTH_EXTRA[idx])
+mut length := _LENGTH_BASE[idx] + BitReadBits(r, _LENGTH_EXTRA[idx])
+if d64 and idx == 28:
+length = 3 + BitReadBits(r, 16)
+end
 dsym := _decode_raw_symbol(r, disttable)
-if dsym < 0 or dsym >= 30:
+if dsym < 0 or dsym >= (d64 ? 32 : 30):
 ret false
 end
-dist := _DIST_BASE[dsym] + BitReadBits(r, _DIST_EXTRA[dsym])
+mut dist := 0
+if dsym >= 30:
+dist = 32769 + (dsym - 30) * 16384 + BitReadBits(r, 14)
+else:
+dist = _DIST_BASE[dsym] + BitReadBits(r, _DIST_EXTRA[dsym])
+end
 start := BufLen(out) - dist
 if start < 0:
 ret false
@@ -34944,11 +36513,11 @@ end
 end
 end
 end
-func _raw_inflate_dynamic_block(r &: BitReader, out &: ByteBuf, max: int): bool:
+func _raw_inflate_dynamic_block(r &: BitReader, out &: ByteBuf, max: int, d64: bool): bool:
 hlit := BitReadBits(r, 5) + 257
 hdist := BitReadBits(r, 5) + 1
 hclen := BitReadBits(r, 4) + 4
-if hlit > 286 or hdist > 30:
+if hlit > 286 or hdist > (d64 ? 32 : 30):
 ret false
 end
 mut cl: int[19]
@@ -35024,12 +36593,12 @@ mut littable := _build_raw_huff_table(litlengths)
 mut disttable := _build_raw_huff_table(distlengths)
 defer litlengths.free()
 defer distlengths.free()
-ok := _raw_inflate_block(r, out, littable, disttable, max)
+ok := _raw_inflate_block(r, out, littable, disttable, max, d64)
 _raw_huff_table_free(littable)
 _raw_huff_table_free(disttable)
 ret ok
 end
-func _raw_inflate(p: void*, n: int, expected_size: int, max: int, ok &: bool): ByteBuf:
+func _raw_inflate(p: void*, n: int, expected_size: int, max: int, d64: bool, ok &: bool): ByteBuf:
 ok = true
 mut r := NewBitReader(p, n)
 mut cap := 0
@@ -35066,7 +36635,7 @@ mut littable := _build_raw_huff_table(litlengths)
 mut disttable := _build_raw_huff_table(distlengths)
 litlengths.free()
 distlengths.free()
-good := _raw_inflate_block(r, out, littable, disttable, max)
+good := _raw_inflate_block(r, out, littable, disttable, max, d64)
 _raw_huff_table_free(littable)
 _raw_huff_table_free(disttable)
 if not good:
@@ -35075,7 +36644,7 @@ ret out
 end
 else:
 if btype == 2:
-if not _raw_inflate_dynamic_block(r, out, max):
+if not _raw_inflate_dynamic_block(r, out, max, d64):
 ok = false
 ret out
 end
@@ -35095,12 +36664,17 @@ end
 @en "RawInflate"
 @fa "کدگشایی دیفلیت خام"
 pub func RawInflate(p: void*, n: int, expected_size: int, ok &: bool): ByteBuf:
-ret _raw_inflate(p, n, expected_size, 0, ok)
+ret _raw_inflate(p, n, expected_size, 0, false, ok)
 end
 @en "RawInflateMax"
 @fa "کدگشایی دیفلیت خام با سقف"
 pub func RawInflateMax(p: void*, n: int, expected_size: int, max: int, ok &: bool): ByteBuf:
-ret _raw_inflate(p, n, expected_size, max, ok)
+ret _raw_inflate(p, n, expected_size, max, false, ok)
+end
+@en "RawInflate64Max"
+@fa "کدگشایی دیفلیت۶۴ خام با سقف"
+pub func RawInflate64Max(p: void*, n: int, expected_size: int, max: int, ok &: bool): ByteBuf:
+ret _raw_inflate(p, n, expected_size, max, true, ok)
 end
 package compress
 const _RLE_MAX_RUN := 128
@@ -90504,27 +92078,33 @@ str.BufFree(sb)
 ret out
 end
 func _fs_stat_field(path: str, fmt: str): i64:
-mut cmd := ""
 quoted := _fs_shell_quote(path)
+defer mem.Free(quoted as void*)
+mut cb := str.NewBuilder()
 if SALAM_OS_MAC or SALAM_OS_BSD:
-cmd = "stat -f ".concat(fmt).concat(" ").concat(quoted).concat(" 2>/dev/null")
+str.BufAppend(cb, "stat -f ")
 else:
-cmd = "stat -c ".concat(fmt).concat(" ").concat(quoted).concat(" 2>/dev/null")
+str.BufAppend(cb, "stat -c ")
 end
-mem.Free(quoted as void*)
+str.BufAppend(cb, fmt)
+str.BufAppend(cb, " ")
+str.BufAppend(cb, quoted)
+str.BufAppend(cb, " 2>/dev/null")
+cmd := str.BufStr(cb)
+str.BufFree(cb)
 fp := popen(cmd, "r")
+mem.Free(cmd as void*)
 if fp == null: ret 0 - 1 end
-buf := mem.MustAllocate(256 as u64)
 mut sb := str.NewBuilder()
 mut c := fgetc(fp)
 until c != -1 and c != 10:
 str.BufAppendChar(sb, c)
 c = fgetc(fp)
 end
-mem.Free(buf)
 line := str.BufStr(sb)
 str.BufFree(sb)
 pclose(fp)
+defer mem.Free(line as void*)
 if line.len() == 0: ret 0 - 1 end
 lp := line as void*
 mut k := 0
@@ -90533,9 +92113,9 @@ if neg: k = 1 end
 if k >= line.len() or line.len() - k > 18: ret 0 - 1 end
 mut v := 0 as i64
 until k < line.len():
-c := _byte_at(lp, k as i64)
-if c < 48 or c > 57: ret 0 - 1 end
-v = v * 10 + ((c - 48) as i64)
+c2 := _byte_at(lp, k as i64)
+if c2 < 48 or c2 > 57: ret 0 - 1 end
+v = v * 10 + ((c2 - 48) as i64)
 k++
 end
 if neg: ret 0 - v end

@@ -33,9 +33,16 @@ struct _ConnJob:
     pub peer: str = ""
 end
 
+struct _UState:
+    pub learned: bool = false
+    pub ch: str = ""
+    pub cp: int = 0
+end
+
 struct _UDPJob:
     pub cfg: ServerConfig = ServerConfig {}
     pub sock: udp.Socket = udp.Socket {}
+    pub osock: udp.Socket = udp.Socket {}
     pub chost: str = ""
     pub cport: int = 0
     pub stop: i64* = null
@@ -148,14 +155,7 @@ func _bind_host(cfg: ServerConfig): str:
     if cfg.bind_host.len() == 0:
         ret "127.0.0.1"
     end
-    ret cfg.bind_host
-end
-
-func _wake_host(host: str): str:
-    if host.len() == 0 or host == "0.0.0.0":
-        ret "127.0.0.1"
-    end
-    ret host
+    ret rawsock.CanonIP(cfg.bind_host)
 end
 
 func _wild(): Address:
@@ -204,14 +204,22 @@ func _do_bind(cfg: ServerConfig, s: dyn tunnel.Stream, ver: int, a: Address):
         s.Close()
         ret
     end
-    ls := tcp.BindOn(_bind_host(cfg), 0)
+    mut bh := _bind_host(cfg)
+    if a.kind == AtypIPv6 and rawsock.IsIPv4(bh):
+        if bh == "0.0.0.0":
+            bh = "::"
+        else:
+            bh = "::1"
+        end
+    end
+    ls := tcp.BindOn(bh, 0)
     if not tcp.Ok(ls):
         _reply(s, ver, RepGeneralFailure, _wild())
         s.Close()
         ret
     end
     port := tcp.Port(ls)
-    if not _reply(s, ver, RepSucceeded, NewAddress(_bind_host(cfg), port)):
+    if not _reply(s, ver, RepSucceeded, NewAddress(bh, port)):
         tcp.CloseServer(ls)
         s.Close()
         ret
@@ -231,7 +239,11 @@ func _do_bind(cfg: ServerConfig, s: dyn tunnel.Stream, ver: int, a: Address):
         ret
     end
     peer := tunnel.TcpStream { conn = conn }
-    if not _reply(s, ver, RepSucceeded, _wild()):
+    mut pport := 0
+    phost := rawsock.PeerAddr(rawsock.FromFd(conn.fd), pport)
+    mut paddr := _wild()
+    if phost.len() > 0: paddr = NewAddress(phost, pport) end
+    if not _reply(s, ver, RepSucceeded, paddr):
         peer.Close()
         s.Close()
         ret
@@ -239,83 +251,103 @@ func _do_bind(cfg: ServerConfig, s: dyn tunnel.Stream, ver: int, a: Address):
     Relay(s, peer, cfg.idle_timeout_ms)
 end
 
+func _decode_head(ibuf: void*, n: int, hd &: UDPHeader): bool:
+    mut hv := Vector {} as Vector<u8>
+    ip := ibuf as u8*
+    mut lim := n
+    if lim > 300: lim = 300 end
+    repeat lim in i:
+        hv.push(ip[i])
+    end
+    ok := DecodeUDPHeader(hv, hd)
+    hv.free()
+    ret ok
+end
+
+func _udp_forward(cfg: ServerConfig, osock: udp.Socket, ibuf: void*, n: int, hd: UDPHeader):
+    if hd.frag == 0 and cfg.allow(CmdUDPAssociate, hd.addr.host, hd.addr.port):
+        plen := n - hd.length
+        udp.SendBytes(osock, hd.addr.host, hd.addr.port, ((ibuf as i64) + (hd.length as i64)) as void*, plen)
+    end
+end
+
+func _udp_wrap(sock: udp.Socket, st: _UState, obuf: void*, ibuf: void*, n: int, fh: str, fp: int):
+    hdr := EncodeUDPHeader(NewAddress(fh, fp), 0)
+    hl := hdr.len()
+    if hl > 0:
+        op := obuf as u8*
+        repeat hl in i:
+            op[i] = hdr.get(i)
+        end
+        mem.Copy(((obuf as i64) + (hl as i64)) as void*, ibuf, n as u64)
+        udp.SendBytes(sock, st.ch, st.cp, obuf, hl + n)
+    end
+    hdr.free()
+end
+
 func _udp_thread(arg: i64):
     jp := (arg as void*) as _UDPJob*
     cfg := jp[0].cfg
     sock := jp[0].sock
+    osock := jp[0].osock
     chost := jp[0].chost
     cport := jp[0].cport
     stop := jp[0].stop
     mem.Free(jp as void*)
+    split := osock.fd != sock.fd
     cap := 65535 + 300
     ibuf := mem.Allocate(cap as u64)
     obuf := mem.Allocate(cap as u64)
-    udp.SetTimeout(sock, 400)
-    mut learned := false
-    mut ch := ""
-    mut cp := 0
-    mut expect := chost
-    if expect == "0.0.0.0": expect = "" end
+    mut st := _UState {}
+    mut expect := rawsock.CanonIP(chost)
+    if expect == "0.0.0.0" or expect == "::": expect = "" end
     if cport != 0 and expect.len() > 0:
-        learned = true
-        ch = expect
-        cp = cport
+        st.learned = true
+        st.ch = expect
+        st.cp = cport
     end
+    rs := rawsock.FromFd(sock.fd)
+    ro := rawsock.FromFd(osock.fd)
     until atomic_load(stop) != 0:
-        mut fh := ""
-        mut fp := 0
-        n := udp.ReceiveBytes(sock, ibuf, cap, fh, fp)
-        if n <= 0: continue end
-        mut from_client := learned and fh == ch and fp == cp
-        mut hd := UDPHeader {}
-        mut parsed := false
-        if not learned and (expect.len() == 0 or fh == expect):
-            mut hv := Vector {} as Vector<u8>
-            ip := ibuf as u8*
-            mut lim := n
-            if lim > 300: lim = 300 end
-            repeat lim in i:
-                hv.push(ip[i])
-            end
-            parsed = DecodeUDPHeader(hv, hd)
-            hv.free()
-            if parsed:
-                learned = true
-                ch = fh
-                cp = fp
-                from_client = true
-            end
-        else from_client:
-            mut hv := Vector {} as Vector<u8>
-            ip := ibuf as u8*
-            mut lim := n
-            if lim > 300: lim = 300 end
-            repeat lim in i:
-                hv.push(ip[i])
-            end
-            parsed = DecodeUDPHeader(hv, hd)
-            hv.free()
+        mut ready := 1
+        if split:
+            ready = rawsock.WaitReadable2(rs, ro, 400)
+        else:
+            if not rawsock.WaitReadable(rs, 400): ready = 0 end
         end
-        if from_client:
-            if parsed and hd.frag == 0 and cfg.allow(CmdUDPAssociate, hd.addr.host, hd.addr.port):
-                plen := n - hd.length
-                udp.SendBytes(sock, hd.addr.host, hd.addr.port, ((ibuf as i64) + (hd.length as i64)) as void*, plen)
-            end
-        else learned:
-            hdr := EncodeUDPHeader(NewAddress(fh, fp), 0)
-            hl := hdr.len()
-            if hl > 0:
-                op := obuf as u8*
-                repeat hl in i:
-                    op[i] = hdr.get(i)
+        if (ready & 1) != 0:
+            mut fh := ""
+            mut fp := 0
+            n := udp.ReceiveBytes(sock, ibuf, cap, fh, fp)
+            if n > 0:
+                mut hd := UDPHeader {}
+                if st.learned and fh == st.ch and fp == st.cp:
+                    if _decode_head(ibuf, n, hd): _udp_forward(cfg, osock, ibuf, n, hd) end
+                else not st.learned and (expect.len() == 0 or fh == expect):
+                    if _decode_head(ibuf, n, hd):
+                        st.learned = true
+                        st.ch = fh
+                        st.cp = fp
+                        _udp_forward(cfg, osock, ibuf, n, hd)
+                    end
+                else st.learned and not split:
+                    _udp_wrap(sock, st, obuf, ibuf, n, fh, fp)
                 end
-                mem.Copy(((obuf as i64) + (hl as i64)) as void*, ibuf, n as u64)
-                udp.SendBytes(sock, ch, cp, obuf, hl + n)
             end
-            hdr.free()
+        end
+        if split and (ready & 2) != 0:
+            mut fh := ""
+            mut fp := 0
+            n := udp.ReceiveBytes(osock, ibuf, cap, fh, fp)
+            if n > 0 and st.learned:
+                _udp_wrap(sock, st, obuf, ibuf, n, fh, fp)
+            end
         end
     end
     udp.Close(sock)
+    if split:
+        udp.Close(osock)
+    end
     mem.Free(stop as void*)
     mem.Free(ibuf)
     mem.Free(obuf)
@@ -327,11 +359,17 @@ func _do_udp(cfg: ServerConfig, s: dyn tunnel.Stream, a: Address, peer: str):
         s.Close()
         ret
     end
-    us := udp.BindOn(_bind_host(cfg), 0)
+    bh := _bind_host(cfg)
+    us := udp.BindOn(bh, 0)
     if not udp.Ok(us):
         _reply(s, 5, RepGeneralFailure, _wild())
         s.Close()
         ret
+    end
+    mut os := us
+    if bh != "::":
+        wide := udp.OpenAny()
+        if udp.Ok(wide): os = wide end
     end
     stop := mem.AllocateZeroed(8 as u64) as i64*
     atomic_store(stop, 1 as i64)
@@ -340,9 +378,10 @@ func _do_udp(cfg: ServerConfig, s: dyn tunnel.Stream, a: Address, peer: str):
     if (chost == "0.0.0.0" or chost == "::" or chost.len() == 0) and peer.len() > 0:
         chost = peer
     end
-    jb[0] = _UDPJob { cfg = cfg, sock = us, chost = chost, cport = a.port, stop = stop }
-    if not _reply(s, 5, RepSucceeded, NewAddress(_bind_host(cfg), udp.Port(us))):
+    jb[0] = _UDPJob { cfg = cfg, sock = us, osock = os, chost = chost, cport = a.port, stop = stop }
+    if not _reply(s, 5, RepSucceeded, NewAddress(bh, udp.Port(us))):
         udp.Close(us)
+        if os.fd != us.fd: udp.Close(os) end
         mem.Free(stop as void*)
         mem.Free(jb as void*)
         s.Close()
@@ -622,8 +661,7 @@ pub func Stop(sv: Server):
     if not sv.ok: ret end
     atomic_store(sv.stop_cell, 0 as i64)
     rawsock.Shutdown(rawsock.FromFd(sv.listener.fd))
-    wake := tcp.DialTimeout(_wake_host(sv.host), sv.port, 500)
-    if tcp.ConnOk(wake): tcp.Close(wake) end
+    tcp.WakeServer(sv.host, sv.port)
 end
 
 @en "Serve"

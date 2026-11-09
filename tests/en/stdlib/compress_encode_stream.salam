@@ -1,0 +1,123 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import archive
+import compress
+import filepath
+import mem
+import os
+
+func emit(p: void*, n: int, c: void*): bool:
+    compress.BufPushBytes((c as compress.ByteBuf*)[0], p, n)
+    ret true
+end
+
+func make(n: int): compress.ByteBuf:
+    mut out := compress.NewByteBufCap(n + 16)
+    mut s := 12345 as i64
+    mut i := 0
+    until i < n:
+        s = (s * 1103515245 + 12345) & 0x7fffffff
+        v := ((s >> 16) & 255) as int
+        if (i / 4096) % 3 == 0:
+            compress.BufPush(out, v)
+            i++
+        else:
+            run := 1 + (v & 15)
+            repeat run:
+                if i < n:
+                    compress.BufPush(out, 97 + (v & 7))
+                    i++
+                end
+            end
+        end
+    end
+    ret out
+end
+
+func stream(kind: int, path: str, total: int, level: int): compress.ByteBuf:
+    fp := compress.FileOpenRead(path)
+    holder := mem.AllocateZeroed(sizeof(compress.ByteBuf)) as compress.ByteBuf*
+    holder[0] = compress.NewByteBuf()
+    cb := (p: void*, n: int, c: void*): ret emit(p, n, c) end
+    mut sink := compress.SinkCallback(0 as i64, cb, holder as void*)
+    mut ok := false
+    if kind == 0:
+        ok = compress.Bzip2CompressFileToSink(fp, 0 as i64, total as i64, level, sink)
+    else kind == 1:
+        ok = compress.ZstdCompressFileToSink(fp, 0 as i64, total as i64, level, sink)
+    else:
+        ok = compress.LzmaCompressFileToSink(fp, 0 as i64, total as i64, level, true, sink)
+    end
+    compress.FileClose(fp)
+    mut out := holder[0]
+    mem.Free(holder as void*)
+    if not ok:
+        compress.BufFree(out)
+        ret compress.NewByteBuf()
+    end
+    ret out
+end
+
+func check(name: str, kind: int, total: int, level: int):
+    mut data := make(total)
+    path := filepath.Join(os.TempDir(), "salam_enc_stream_" + name)
+    archive.WriteBinaryFileBuf(path, data)
+    mut packed := stream(kind, path, total, level)
+    mut ok := false
+    mut back := compress.NewByteBuf()
+    mut shot := compress.NewByteBuf()
+    if kind == 0:
+        back = compress.Bzip2Decompress(packed.data, packed.len, ok)
+        shot = compress.Bzip2CompressLevel(data.data, data.len, level)
+    else kind == 1:
+        back = compress.ZstdDecompress(packed.data, packed.len, ok)
+        shot = compress.ZstdCompressLevel(data.data, data.len, level)
+    else:
+        raw := ((packed.data as i64) + (5 as i64)) as void*
+        back = compress.LzmaRawDecompress(packed.data, 5, raw, packed.len - 5, total, 0, ok)
+        shot = compress.LzmaCompressLevel(data.data, data.len, level)
+    end
+    same := compress.BufEquals(back, data)
+    mut like := packed.len > 0
+    if kind == 2:
+        diff := packed.len - 5 - (shot.len - 13)
+        like = diff * 100 <= shot.len and 0 - diff * 100 <= shot.len
+    else:
+        like = compress.BufEquals(packed, shot)
+    end
+    println name, total, "roundtrip", ok and same, "like one-shot", like, "smaller", packed.len < total
+    os.Remove(path)
+    mem.Free(path as void*)
+    compress.BufFree(data)
+    compress.BufFree(packed)
+    compress.BufFree(back)
+    compress.BufFree(shot)
+end
+
+func main:
+    check("bz_empty", 0, 0, 9)
+    check("bz_small", 0, 1000, 9)
+    check("bz_blocks", 0, 2500000, 1)
+    check("zs_empty", 1, 0, 3)
+    check("zs_small", 1, 70000, 3)
+    check("zs_window", 1, 9000000, 3)
+    check("zs_raw", 1, 300000, 0)
+    check("lz_empty", 2, 0, 6)
+    check("lz_small", 2, 5000, 6)
+    check("lz_window", 2, 9000000, 1)
+    check("lz_big_dict", 2, 3000000, 6)
+end

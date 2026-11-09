@@ -1,0 +1,106 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import archive
+import compress
+import filepath
+import mem
+import os
+
+func make(n: int): compress.ByteBuf:
+    mut out := compress.NewByteBufCap(n + 16)
+    mut s := 777 as i64
+    mut i := 0
+    until i < n:
+        s = (s * 1103515245 + 12345) & 0x7fffffff
+        v := ((s >> 16) & 255) as int
+        if (i / 4096) % 3 == 0:
+            compress.BufPush(out, v)
+            i++
+        else:
+            run := 1 + (v & 15)
+            repeat run:
+                if i < n:
+                    compress.BufPush(out, 97 + (v & 7))
+                    i++
+                end
+            end
+        end
+    end
+    ret out
+end
+
+func same_file(a: str, b: str): bool:
+    mut ok1 := false
+    mut ok2 := false
+    mut x := archive.ReadBinaryFile(a, ok1)
+    mut y := archive.ReadBinaryFile(b, ok2)
+    r := ok1 and ok2 and compress.BufEquals(x, y)
+    compress.BufFree(x)
+    compress.BufFree(y)
+    ret r
+end
+
+func main:
+    dir := filepath.Join(os.TempDir(), "salam_zip_stream_methods")
+    os.RemoveAll(dir)
+    os.MkdirAll(dir)
+    mut a := make(6000000)
+    mut b := make(300000)
+    apath := filepath.Join(dir, "a.bin")
+    bpath := filepath.Join(dir, "b.bin")
+    archive.WriteBinaryFileBuf(apath, a)
+    archive.WriteBinaryFileBuf(bpath, b)
+
+    mut files := Vector {} as Vector<archive.ZipFileInput>
+    files.push(archive.MakeZipFilePath("bz_disk.bin", apath, archive.ZipMethodBzip2, 1))
+    files.push(archive.MakeZipFilePath("zs_disk.bin", apath, archive.ZipMethodZstd, 3))
+    files.push(archive.MakeZipFilePath("lz_disk.bin", apath, archive.ZipMethodLzma, 1))
+    files.push(archive.MakeZipFileInputLevel("bz_mem.bin", b.data, b.len, archive.ZipMethodBzip2, 9))
+    files.push(archive.MakeZipFileInputLevel("zs_mem.bin", b.data, b.len, archive.ZipMethodZstd, 5))
+    files.push(archive.MakeZipFileInputLevel("lz_mem.bin", b.data, b.len, archive.ZipMethodLzma, 6))
+    files.push(archive.MakeZipFileInputLevel("empty.bin", null, 0, archive.ZipMethodZstd, 3))
+    files.push(archive.MakeZipFileInputEncrypted("bz_aes.bin", b.data, b.len, archive.ZipMethodBzip2, 9, "secret", archive.ZipEncAes256))
+    files.push(archive.MakeZipFileInputEncrypted("zs_crypto.bin", b.data, b.len, archive.ZipMethodZstd, 3, "secret", archive.ZipEncZipCrypto))
+    zpath := filepath.Join(dir, "out.zip")
+    println "create", archive.ZipCreateFile(files, zpath)
+    println "create64", archive.ZipCreateFile64(files, filepath.Join(dir, "out64.zip"))
+    files.free()
+
+    each variant in ["out.zip", "out64.zip"]:
+        mut zf := archive.ZipOpenFile(filepath.Join(dir, variant))
+        archive.ZipFileSetPassword(zf, "secret")
+        println variant, "open", zf.status
+        mut es := archive.ZipFileEntries(zf)
+        each e in es:
+            dest := filepath.Join(dir, "x_" + e.name)
+            st := archive.ZipFileExtractTo(zf, e.name, dest, 0 as i64)
+            mut want := bpath
+            if e.name.substr(3, 4) == "disk":
+                want = apath
+            end
+            ok := e.name == "empty.bin" ? os.FileSize(dest) == (0 as i64) : same_file(dest, want)
+            println e.name, e.method, e.size, st, ok
+            os.Remove(dest)
+            mem.Free(dest as void*)
+        end
+        archive.FreeEntries(es)
+        archive.ZipFileClose(zf)
+    end
+    os.RemoveAll(dir)
+    compress.BufFree(a)
+    compress.BufFree(b)
+end

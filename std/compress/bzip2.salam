@@ -1077,3 +1077,128 @@ pub func Bzip2FileToSink(fp: void*, off: i64, len: i64, sink &: FileSink): int:
     mem.Free(chunk)
     ret code
 end
+
+@en "Bzip2CompressFileToSink"
+@fa "فشرده سازی بی زیپ دو پرونده به مقصد"
+pub func Bzip2CompressFileToSink(fp: void*, off: i64, len: i64, level: int, sink &: FileSink): bool:
+    mut lv := level
+    if lv < 1: lv = 1 end
+    if lv > 9: lv = 9 end
+    if fp == null or len < (0 as i64):
+        ret false
+    end
+    maxblk := lv * 100000 - 19
+    mut acap := maxblk + 8
+    need := len + len / (3 as i64) + (16 as i64)
+    if need < (acap as i64): acap = need as int end
+    mut w := _BzOut { buf = NewByteBuf(), acc = 0, cnt = 0 }
+    _bz_put(w, 8, 0x42)
+    _bz_put(w, 8, 0x5a)
+    _bz_put(w, 8, 0x68)
+    _bz_put(w, 8, 0x30 + lv)
+
+    crctab := _bz_crc_table()
+    blk := mem.Allocate(acap as u64) as u8*
+    last := mem.Allocate(acap as u64) as u8*
+    wp := mem.Allocate((acap * 4) as u64) as int*
+    wc := mem.Allocate((acap * 4) as u64) as int*
+    wq := mem.Allocate((acap * 4) as u64) as int*
+    wd := mem.Allocate((acap * 4) as u64) as int*
+    mut cs := acap
+    if cs < 256: cs = 256 end
+    wcnt := mem.Allocate((cs * 4) as u64) as int*
+    mtfv := mem.Allocate(((acap + 2) * 2) as u64) as u16*
+    ib := mem.Allocate(262144 as u64) as u8*
+
+    mut ok := SinkWrite(sink, w.buf.data, w.buf.len)
+    BufReset(w.buf)
+    mut comb := 0 as u32
+    mut bcrc := 0xFFFFFFFF as u32
+    mut nblock := 0
+    mut ipos := 0
+    mut ifill := 0
+    mut at := off
+    mut left := len
+    until ok and (ipos < ifill or left > (0 as i64)):
+        if ifill - ipos < 512 and left > (0 as i64):
+            keep := ifill - ipos
+            if keep > 0 and ipos > 0:
+                _ := mem.MemMove(ib as void*, ((ib as i64) + (ipos as i64)) as void*, keep as u64)
+            end
+            mut want := 262144 - keep
+            if (want as i64) > left:
+                want = left as int
+            end
+            got := FileReadAt(fp, at, ((ib as i64) + (keep as i64)) as void*, want)
+            if got != want:
+                ok = false
+                break
+            end
+            at += got as i64
+            left -= got as i64
+            ipos = 0
+            ifill = keep + got
+        end
+        if ipos >= ifill:
+            break
+        end
+        if nblock >= maxblk:
+            bc := _bz_crc_final(bcrc)
+            _ := _bz_emit_block(w, blk, nblock, bc, wp, wc, wq, wd, wcnt, mtfv, last)
+            comb = _bz_rotl1(comb) ^ bc
+            bcrc = 0xFFFFFFFF as u32
+            nblock = 0
+            ok = SinkWrite(sink, w.buf.data, w.buf.len)
+            BufReset(w.buf)
+        end
+        ch := ib[ipos] as int
+        mut run := 1
+        until ipos + run < ifill and (ib[ipos + run] as int) == ch and run < 255:
+            run++
+        end
+        repeat run:
+            bcrc = (bcrc << 8) ^ crctab[((bcrc >> 24) as int) ^ ch]
+        end
+        if run < 4:
+            repeat run:
+                blk[nblock] = ch as u8
+                nblock++
+            end
+        else:
+            repeat 4:
+                blk[nblock] = ch as u8
+                nblock++
+            end
+            blk[nblock] = (run - 4) as u8
+            nblock++
+        end
+        ipos += run
+    end
+    if ok:
+        if nblock > 0:
+            bc := _bz_crc_final(bcrc)
+            _ := _bz_emit_block(w, blk, nblock, bc, wp, wc, wq, wd, wcnt, mtfv, last)
+            comb = _bz_rotl1(comb) ^ bc
+        end
+        _bz_put(w, 24, 0x177245)
+        _bz_put(w, 24, 0x385090)
+        _bz_put(w, 16, ((comb >> 16) & (65535 as u32)) as int)
+        _bz_put(w, 16, (comb & (65535 as u32)) as int)
+        if w.cnt > 0:
+            _bz_put(w, 8 - w.cnt, 0)
+        end
+        ok = SinkWrite(sink, w.buf.data, w.buf.len)
+    end
+    BufFree(w.buf)
+    mem.Free(crctab as void*)
+    mem.Free(blk as void*)
+    mem.Free(last as void*)
+    mem.Free(wp as void*)
+    mem.Free(wc as void*)
+    mem.Free(wq as void*)
+    mem.Free(wd as void*)
+    mem.Free(wcnt as void*)
+    mem.Free(mtfv as void*)
+    mem.Free(ib as void*)
+    ret ok
+end

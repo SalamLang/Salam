@@ -27,6 +27,8 @@ import time
 import tls
 import net.http2
 
+const MAX_HTTP_REPLY := 1048576
+
 mut _pool_mu := sync.NewMutex()
 mut _h2_only := HashMap {} as HashMap<str, bool>
 mut _pool_items := Vector {} as Vector<PoolItem>
@@ -224,8 +226,24 @@ func _hex_num(s: str): int:
             break
         end
         v = v * 16 + h
+        if v > 16777216:
+            ret 0 - 1
+        end
     end
     ret v
+end
+
+func _all_digits(s: str): bool:
+    if s.len() == 0 or s.len() > 8:
+        ret false
+    end
+    repeat s.len() in i:
+        c := (s as u8*)[i] as int
+        if c < 48 or c > 57:
+            ret false
+        end
+    end
+    ret true
 end
 
 func _dechunk(raw: compress.ByteBuf, start: int, out &: compress.ByteBuf): bool:
@@ -237,10 +255,13 @@ func _dechunk(raw: compress.ByteBuf, start: int, out &: compress.ByteBuf): bool:
         end
         size := _hex_num(_slice_str(raw, pos, eol - pos))
         pos = eol + 2
+        if size < 0:
+            ret false
+        end
         if size == 0:
             ret true
         end
-        if pos + size > raw.len:
+        if size > raw.len - pos:
             ret false
         end
         compress.BufPushBytes(out, ((raw.data as i64) + (pos as i64)) as void*, size)
@@ -256,6 +277,9 @@ func _http_done(raw: compress.ByteBuf): bool:
     head := _slice_str(raw, 0, hend)
     cl := _header_value(head, "content-length")
     if cl.len() > 0:
+        if not _all_digits(cl):
+            ret true
+        end
         ret raw.len >= hend + 4 + cl.to_int()
     end
     te := _header_value(head, "transfer-encoding").lower()
@@ -278,6 +302,9 @@ func _read_http_body(io &: Io, body &: compress.ByteBuf, keep &: bool): str:
             break
         end
         compress.BufPushBytes(raw, buf, n)
+        if raw.len > MAX_HTTP_REPLY:
+            ret "response too large"
+        end
         if _http_done(raw):
             break
         end
@@ -306,6 +333,9 @@ func _read_http_body(io &: Io, body &: compress.ByteBuf, keep &: bool): str:
         ret ""
     end
     cl := _header_value(head, "content-length")
+    if cl.len() > 0 and not _all_digits(cl):
+        ret "bad content-length"
+    end
     mut take := raw.len - start
     if cl.len() > 0 and cl.to_int() < take:
         take = cl.to_int()
@@ -519,7 +549,7 @@ func _query_dot(srv: Server, addr: str, wire: compress.ByteBuf, timeout_ms: int,
 end
 
 func _query_udp(srv: Server, addr: str, wire: compress.ByteBuf, timeout_ms: int, out &: compress.ByteBuf): str:
-    sock := udp.Open()
+    sock := udp.OpenAny()
     if not udp.Ok(sock):
         ret "socket failed"
     end
@@ -541,7 +571,7 @@ func _query_udp(srv: Server, addr: str, wire: compress.ByteBuf, timeout_ms: int,
     if n <= 0:
         ret "timeout"
     end
-    if fh != addr or fp != port:
+    if fh != rawsock.CanonIP(addr) or fp != port:
         ret "unexpected sender"
     end
     compress.BufPushBytes(out, buf, n)
@@ -598,10 +628,18 @@ pub func Query(srv: Server, name: str, qtype: int, timeout_ms: int): Response:
     if srv.addrs.len() == 0 and srv.host.len() > 0:
         mut ip := srv.host
         if not IsIP(ip):
-            ip = rawsock.Resolve(srv.host)
+            ip = rawsock.ResolveAny(srv.host)
         end
         if ip.len() > 0:
-            ret QueryAddr(srv, ip, name, qtype, timeout_ms)
+            r := QueryAddr(srv, ip, name, qtype, timeout_ms)
+            if r.ok or IsIP(srv.host) or rawsock.IsIPv6(ip):
+                ret r
+            end
+            ip6 := rawsock.Resolve6(srv.host)
+            if ip6.len() > 0:
+                ret QueryAddr(srv, ip6, name, qtype, timeout_ms)
+            end
+            ret r
         end
     end
     ret last

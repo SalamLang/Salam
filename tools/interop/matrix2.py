@@ -7,6 +7,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import matrix
 from harness import Echo
 
+LEGACY_XRAY = os.environ.get("INTEROP_XRAY_LEGACY") == "1"
 FINGERPRINTS = ("chrome", "firefox", "safari", "edge", "ios", "randomized", "chrome_120")
 
 
@@ -33,9 +34,11 @@ def case_list():
     ):
         cs.append({"name": "vless/tls fragment %s" % name, "proto": "vless", "tls": True, "frag_args": args, "only_ours_client": True})
     for fp in FINGERPRINTS:
-        c = {"name": "vless/reality fp=%s" % fp, "proto": "vless", "reality": True, "fp": fp, "reals": ("xray",), "no_ours_server": True}
+        c = {"name": "vless/reality fp=%s" % fp, "proto": "vless", "reality": True, "fp": fp}
         if fp == "chrome_120":
-            c["expect_fail"] = "no hybrid key share, Xray drops the hello"
+            c["reals"] = ("xray",)
+            if not LEGACY_XRAY:
+                c["expect_fail"] = "legacy profile, no hybrid key share, Xray 26.9 and later drop the hello"
         cs.append(c)
     return cs
 

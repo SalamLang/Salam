@@ -1,0 +1,157 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import mem
+import net.tcp
+import net.transport
+import net.vless
+import net.vmess
+import str
+import sync
+
+const UUID1 := "b831381d-6324-4d53-ad4f-8cda48b30811"
+
+mut port := 0
+mut ready := sync.NewWaitGroup()
+mut finished := sync.NewWaitGroup()
+mut srv_settings := transport.Settings {}
+mut srv_log := ""
+mut use_vmess := false
+
+func server():
+    l := transport.Listen(0, srv_settings)
+    port = transport.ListenerPort(l)
+    sync.Done(ready)
+    mut users := Vector {} as Vector<vless.User>
+    users.push(vless.NewUser(UUID1, ""))
+    mut mu := Vector {} as Vector<vmess.User>
+    mu.push(vmess.NewUser(UUID1))
+    mut rf := vmess.NewReplayFilter()
+    buf := mem.Allocate(65536 as u64)
+    t := transport.Accept(l)
+    if not transport.Ok(t):
+        srv_log += "transport(" + t.err + ");"
+    else use_vmess:
+        mut c := vmess.Accept(t, mu, rf)
+        if c.ok:
+            srv_log += "ok(" + c.req.addr.host + ":" + str.FromInt(c.req.addr.port as i64) + ");"
+            until true:
+                n := vmess.Read(c, buf, 65536)
+                if n <= 0: break end
+                vmess.Write(c, buf, n)
+            end
+            vmess.Close(c)
+        else:
+            srv_log += "fail(" + c.err + ");"
+        end
+    else:
+        mut c := vless.Accept(t, users)
+        if c.ok:
+            srv_log += "ok(" + str.FromInt(c.req.command as i64) + " " + c.req.addr.host + ":" + str.FromInt(c.req.addr.port as i64) + ");"
+            if c.req.command == vless.CmdUDP:
+                until true:
+                    mut p := transport.NewBytes(64)
+                    if not vless.ReadPacket(c, p):
+                        transport.FreeBytes(p)
+                        break
+                    end
+                    vless.WritePacket(c, p.p, p.len)
+                    transport.FreeBytes(p)
+                end
+            else:
+                until true:
+                    n := vless.Read(c, buf, 65536)
+                    if n <= 0: break end
+                    vless.Write(c, buf, n)
+                end
+            end
+            vless.Close(c)
+        else:
+            srv_log += "fail(" + c.err + ");"
+        end
+    end
+    mem.Free(buf)
+    transport.CloseListener(l)
+    sync.Done(finished)
+end
+
+func start(ss: transport.Settings):
+    srv_settings = ss
+    srv_log = ""
+    sync.Add(ready, 1 as i64)
+    sync.Add(finished, 1 as i64)
+    _t := spawn(server)
+    sync.Wait(ready)
+end
+
+func headers():
+    mut r := vless.Request {}
+    r.uuid = transport.ParseUUID(UUID1)
+    r.command = vless.CmdUDP
+    r.addr = transport.NewAddr("2606:4700:4700::1111", 53)
+    mut back := vless.Request {}
+    mut consumed := vless.DecodeRequest(vless.EncodeRequest(r), back)
+    println "vless udp v6 header", consumed, back.command == vless.CmdUDP, back.addr.host, back.addr.port, back.addr.kind == transport.AddrIPv6
+    r.addr = transport.NewAddr("[2001:4860:4860::8888]", 443)
+    consumed = vless.DecodeRequest(vless.EncodeRequest(r), back)
+    println "vless bracketed host", consumed, back.addr.host, back.addr.kind == transport.AddrIPv6
+end
+
+func main:
+    headers()
+    probe := tcp.BindOn("::1", 0)
+    if not tcp.Ok(probe):
+        println "ipv6 unavailable"
+        ret
+    end
+    tcp.CloseServer(probe)
+
+    mut ss := transport.Settings {}
+    ss.bind = "::1"
+    cs := transport.Settings {}
+
+    use_vmess = false
+    start(ss)
+    mut c := vless.Dial("::1", port, cs, UUID1, "", vless.CmdTCP, transport.NewAddr("2001:db8::7", 443))
+    println "vless tcp over ::1", c.ok
+    vless.Write(c, "hello vless six" as void*, 15)
+    b := mem.AllocateZeroed(64 as u64)
+    n := vless.Read(c, b, 64)
+    println n, str.Substr(b as str, 0, n)
+    vless.Close(c)
+    sync.Wait(finished)
+    println srv_log
+
+    start(ss)
+    mut u := vless.Dial("[::1]", port, cs, UUID1, "", vless.CmdUDP, transport.NewAddr("2001:4860:4860::8844", 53))
+    println "vless udp over ::1", u.ok
+    mut out := transport.NewBytes(16)
+    transport.PutStr(out, "datagram six")
+    mut back := transport.NewBytes(16)
+    println vless.WritePacket(u, out.p, out.len), vless.ReadPacket(u, back), back.len
+    vless.Close(u)
+    sync.Wait(finished)
+    println srv_log
+
+    use_vmess = true
+    start(ss)
+    mut vc := vmess.Dial("::1", port, cs, UUID1, vmess.SecAES128GCM, vmess.CmdTCP, transport.NewAddr("2001:db8::9", 8443))
+    println "vmess tcp over ::1", vc.ok
+    vmess.Write(vc, "hello vmess six" as void*, 15)
+    m := vmess.Read(vc, b, 64)
+    println m, str.Substr(b as str, 0, m)
+    vmess.Close(vc)
+    sync.Wait(finished)
+    println srv_log
+end

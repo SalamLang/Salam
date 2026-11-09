@@ -422,7 +422,6 @@ function TopList({ title, items, ltr }: { title: string; items: { name: string; 
 }
 
 function Users({ picked, onPick, notify }: { picked: Picked; onPick: (p: Picked) => void; notify: (msg: string, ok?: boolean) => void }) {
-  const [saving, setSaving] = useState<number | null>(null);
   const [q, setQ] = useState("");
   const [query, setQuery] = useState("");
   const [offset, setOffset] = useState(0);
@@ -457,30 +456,6 @@ function Users({ picked, onPick, notify }: { picked: Picked; onPick: (p: Picked)
     };
   }, [query, offset]);
 
-  const togglePolicy = async (u: AdminUser) => {
-    const lift = !u.policy_free;
-    const ok = await confirmDialog({
-      title: lift ? t("برداشتن محدودیت فقط-سلام", "Lift the Salam-only limit") : t("برگرداندن محدودیت فقط-سلام", "Restore the Salam-only limit"),
-      subject: u.name,
-      message: lift
-        ? t("دستیار برای این کاربر (سایت، تلگرام، ایجنت و کلیدهای API او) به زبان‌ها و فناوری‌های دیگر هم کد می‌نویسد و بررسی‌های سلام‌محور اعمال نمی‌شود. بقیه‌ی کاربران همچنان محدود می‌مانند.", "The assistant will write code in other languages and technologies for this user (site, Telegram, agent and their API keys) and the Salam-only checks are skipped. Everyone else stays limited.")
-        : t("محدودیت فقط-سلام دوباره برای این کاربر فعال می‌شود.", "The Salam-only limit applies to this user again."),
-      confirmLabel: lift ? t("برداشتن", "Lift") : t("فعال کردن", "Restore"),
-      icon: "alert",
-    });
-    if (!ok) return;
-    setSaving(u.id);
-    try {
-      const r = await api.adminUserPolicy(u.id, { policy_free: lift });
-      setData((cur) => (cur ? { ...cur, users: cur.users.map((x) => (x.id === u.id ? { ...x, policy_free: r.user.policy_free } : x)) } : cur));
-      notify(lift ? t("محدودیت برای این کاربر برداشته شد.", "The limit was lifted for this user.") : t("محدودیت دوباره فعال شد.", "The limit is on again."), true);
-    } catch (e) {
-      notify(errText(e, t("ذخیره ناموفق بود.", "Could not save.")));
-    } finally {
-      setSaving(null);
-    }
-  };
-
   const total = data?.total ?? 0;
   const from = total === 0 ? 0 : offset + 1;
   const to = Math.min(total, offset + (data?.users.length ?? 0));
@@ -497,12 +472,12 @@ function Users({ picked, onPick, notify }: { picked: Picked; onPick: (p: Picked)
       </div>
       {data && data.plain_ready === false && (
         <p className="policy-warn" role="status">
-          {t("موتور پروفایل ساده ندارد (AI_ENGINE_AGENT_RAW)، پس حساب‌هایی که محدودیت فقط-سلام‌شان برداشته شده هنوز با پروفایل سلام پاسخ می‌گیرند.", "The engine has no plain profile (AI_ENGINE_AGENT_RAW), so accounts whose Salam-only limit is lifted are still answered by the Salam profile.")}
+          {t("موتور پروفایل ساده ندارد (AI_ENGINE_AGENT_RAW)، پس حساب‌های اشتراک پولی هنوز با پروفایل سلام پاسخ می‌گیرند.", "The engine has no plain profile (AI_ENGINE_AGENT_RAW), so paid accounts are still answered by the Salam profile.")}
         </p>
       )}
       {data && data.desktop_plain_ready === false && (
         <p className="policy-warn" role="status">
-          {t("برای ایجنت، AI_ENGINE_AGENT_DESKTOP_RAW تنظیم نشده؛ حساب آزاد در ایجنت یا ابزارهای دسکتاپ را از دست می‌دهد یا همان سیاست سلام را می‌گیرد.", "AI_ENGINE_AGENT_DESKTOP_RAW is not configured; a lifted account in the desktop agent either loses its desktop tools or keeps the Salam policy.")}
+          {t("برای ایجنت، AI_ENGINE_AGENT_DESKTOP_RAW تنظیم نشده؛ حساب اشتراک پولی در ایجنت یا ابزارهای دسکتاپ را از دست می‌دهد یا همان سیاست سلام را می‌گیرد.", "AI_ENGINE_AGENT_DESKTOP_RAW is not configured; a lifted account in the desktop agent either loses its desktop tools or keeps the Salam policy.")}
         </p>
       )}
       {error && (
@@ -532,7 +507,6 @@ function Users({ picked, onPick, notify }: { picked: Picked; onPick: (p: Picked)
               <th scope="col">{t("هزینه‌ی خروجی ($)", "Output cost ($)")}</th>
               <th scope="col">{t("هزینه‌ی کل ($)", "Total cost ($)")}</th>
               <th scope="col">{t("تلگرام", "Telegram")}</th>
-              <th scope="col">{t("محدودیت فقط سلام", "Salam-only limit")}</th>
               <th scope="col">{t("آخرین ورود", "Last login")}</th>
               <th scope="col">{t("آخرین چت", "Last chat")}</th>
               <th scope="col">{t("آخرین ایجنت", "Last agent")}</th>
@@ -566,11 +540,6 @@ function Users({ picked, onPick, notify }: { picked: Picked; onPick: (p: Picked)
                 <td dir="ltr">{(u.cost_out ?? 0) > 0 ? fmtCost(u.cost_out ?? 0) : <span className="muted">-</span>}</td>
                 <td dir="ltr" className="strong">{(u.cost_in ?? 0) + (u.cost_out ?? 0) > 0 ? fmtCost((u.cost_in ?? 0) + (u.cost_out ?? 0)) : <span className="muted">-</span>}</td>
                 <td>{u.telegram ? fmtNum(u.telegram) : <span className="muted">-</span>}</td>
-                <td>
-                  <button type="button" className={`badge ${u.policy_free ? "danger" : "ok"}`} disabled={saving === u.id} onClick={() => togglePolicy(u)} title={t("با زدن، محدودیت فقط-سلام برای این کاربر برداشته یا برگردانده می‌شود", "Click to lift or restore the Salam-only limit for this user")}>
-                    {saving === u.id ? "…" : u.policy_free ? t("برداشته شده", "Lifted") : t("فعال", "On")}
-                  </button>
-                </td>
                 <td title={u.last_login ? t(`${fmtDateTime(u.last_login)}، روی هم ${fmtNum(u.logins || 0)} ورود`, `${fmtDateTime(u.last_login)}, ${fmtNum(u.logins || 0)} logins in total`) : undefined}>{fmtRelative(u.last_login || 0)}</td>
                 <td title={u.last_active_chat ? fmtDateTime(u.last_active_chat) : undefined}>{fmtRelative(u.last_active_chat)}</td>
                 <td title={u.last_active_agent ? fmtDateTime(u.last_active_agent) : undefined}>{fmtRelative(u.last_active_agent)}</td>
@@ -853,10 +822,10 @@ const PLAN_NUMBERS: { key: "price" | "usd" | "days" | "chat_5h" | "chat_daily" |
   { key: "sort", fa: "ترتیب نمایش", en: "Sort order" },
 ];
 
-type PlanDraft = { id: string; name: string; name_en: string; note: string; note_en: string; enabled: boolean } & Record<(typeof PLAN_NUMBERS)[number]["key"], string>;
+type PlanDraft = { id: string; name: string; name_en: string; note: string; note_en: string; enabled: boolean; salam_only: boolean } & Record<(typeof PLAN_NUMBERS)[number]["key"], string>;
 
 function draftOf(p: Partial<AdminPlan>): PlanDraft {
-  const d = { id: p.id ?? "", name: p.name ?? "", name_en: p.name_en ?? "", note: p.note ?? "", note_en: p.note_en ?? "", enabled: p.enabled ?? false } as PlanDraft;
+  const d = { id: p.id ?? "", name: p.name ?? "", name_en: p.name_en ?? "", note: p.note ?? "", note_en: p.note_en ?? "", enabled: p.enabled ?? false, salam_only: p.salam_only ?? false } as PlanDraft;
   for (const f of PLAN_NUMBERS) d[f.key] = String(p[f.key] ?? 0);
   return d;
 }
@@ -872,7 +841,7 @@ function PlanEditor({ plan, onSaved, notify }: { plan: AdminPlan | null; onSaved
     e.preventDefault();
     setSaving(true);
     try {
-      const body: Record<string, unknown> = { name: d.name, name_en: d.name_en, note: d.note, note_en: d.note_en, enabled: d.enabled };
+      const body: Record<string, unknown> = { name: d.name, name_en: d.name_en, note: d.note, note_en: d.note_en, enabled: d.enabled, salam_only: d.salam_only };
       for (const f of PLAN_NUMBERS) body[f.key] = Number(d[f.key]) || 0;
       if (fresh) {
         body.id = d.id;
@@ -928,6 +897,7 @@ function PlanEditor({ plan, onSaved, notify }: { plan: AdminPlan | null; onSaved
           </label>
         ))}
       </div>
+      <Checkbox checked={d.salam_only} onChange={(v) => set("salam_only", v)} label={t("فقط سلام", "Salam only")} hint={t("روشن: دستیار با این پلن فقط به زبان سلام کد می‌نویسد. خاموش: به هر زبان و فناوری هم کد می‌نویسد. پلن رایگان باید روشن بماند.", "On: the assistant writes code in Salam only on this plan. Off: it writes code in any language too. Keep it on for the free plan.")} />
       {!free && <Checkbox checked={d.enabled} onChange={(v) => set("enabled", v)} label={t("فعال و قابل خرید", "Active and on sale")} hint={t("پلن غیرفعال از صفحه‌ی اشتراک‌ها پنهان می‌شود، ولی مشترک‌های فعلی آن می‌مانند.", "A disabled plan is hidden from the plans page, but current subscribers keep it.")} />}
       <div className="grant-actions">
         <button type="submit" className="button primary" disabled={saving}>

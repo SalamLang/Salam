@@ -55,12 +55,12 @@ const me = (await api("GET", "/me", user)).json.user;
 
 check("a user starts under the Salam-only policy", /agent=salam system=salam .*reminder=false/.test(await ask(user, "show policy")));
 
-const denied = await api("PATCH", `/admin/users/${me.id}/policy`, user, { policy_free: true });
-check("a normal user cannot lift the limit", denied.res.status === 403);
-const bad = await api("PATCH", `/admin/users/${me.id}/policy`, admin, { policy_free: "maybe" });
-check("a bad value is refused", bad.res.status === 400);
-const lifted = await api("PATCH", `/admin/users/${me.id}/policy`, admin, { policy_free: true, policy_system: "Answer plainly." });
-check("an admin lifts the limit for one user", lifted.res.status === 200 && lifted.json.user.policy_free === true && lifted.json.user.policy_system === "Answer plainly.", lifted.json);
+const denied = await api("PATCH", `/admin/users/${me.id}/policy`, user, { policy_system: "Answer plainly." });
+check("a normal user cannot set operator text", denied.res.status === 403);
+const text = await api("PATCH", `/admin/users/${me.id}/policy`, admin, { policy_system: "Answer plainly." });
+check("an admin sets operator text for one user", text.res.status === 200 && text.json.user.policy_system === "Answer plainly.", text.json);
+const gift = await api("POST", "/admin/subscriptions", admin, { email, plan: "plus", note: "policy test" });
+check("a paid plan is given", gift.res.status === 201, gift.json);
 
 const free = await ask(user, "show policy");
 check("the user is answered by the plain profile", /agent=raw/.test(free), free);
@@ -81,16 +81,20 @@ check("other users keep the limit in the desktop agent too", /agent=salam-agent 
 
 const listed = await api("GET", `/admin/users?q=${encodeURIComponent(email)}`, admin);
 const row = listed.json?.users?.[0];
-check("the admin list shows the lifted limit", row?.policy_free === true, row);
 check("the admin list splits the dollar cost", row?.cost_in > 0 && row?.cost_out > 0 && Math.abs(row.cost_in + row.cost_out - 0.0036) < 0.0001, row);
 
 const summary = await api("GET", "/admin/summary", admin);
 const all = summary.json?.usage?.find((p) => p.key === "all");
 check("the usage table splits cost into input and output", all?.chat?.cost > 0 && all.chat.cost_in > 0 && all.chat.cost_out > 0 && Math.abs(all.chat.cost_in + all.chat.cost_out - all.chat.cost) < 0.0001, all?.chat);
 
-const restored = await api("PATCH", `/admin/users/${me.id}/policy`, admin, { policy_free: false });
-check("the limit can be restored", restored.res.status === 200 && restored.json.user.policy_free === false);
-check("and applies again", /agent=salam system=salam .*reminder=false/.test(await ask(user, "show policy")));
+const specOff = await api("PUT", "/admin/plans/plus", admin, { salam_only: true });
+check("the admin makes the paid plan Salam-only", specOff.res.status === 200, specOff.json);
+check("and the plan spec applies at once", /agent=salam system=salam .*reminder=false/.test(await ask(user, "show policy")));
+const specOn = await api("PUT", "/admin/plans/plus", admin, { salam_only: false });
+check("the admin opens the plan again", specOn.res.status === 200, specOn.json);
+const cancel = await api("DELETE", `/admin/subscriptions/${gift.json.subscription_id}`, admin);
+check("the plan is canceled", cancel.res.status === 200 || cancel.res.status === 204, cancel.res.status);
+check("a free account is under the Salam-only policy again", /agent=salam system=salam .*reminder=false/.test(await ask(user, "show policy")));
 
 check("python in an unlabeled fence is sent back to be written in Salam", (await ask(user, "review then fix please")).startsWith("Rewritten in Salam"));
 const spread = (await api("POST", "/chats", user, {})).json.chat.id;

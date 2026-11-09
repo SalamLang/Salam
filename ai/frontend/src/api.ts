@@ -346,6 +346,7 @@ export type Plan = {
   parallel: number;
   enabled: boolean;
   sort: number;
+  salam_only: boolean;
 };
 export type AdminPlan = Plan & { subscribers: number };
 export type Gateway = "zarinpal" | "zibal";
@@ -564,7 +565,6 @@ export type AdminUser = {
   last_active_api: number;
   cost_in?: number;
   cost_out?: number;
-  policy_free?: boolean;
   policy_system?: string;
   telegram?: number;
 };
@@ -1319,15 +1319,8 @@ export const api = {
       desktop_plain_ready?: boolean;
     }>("GET", `/admin/users${query({ q, offset: offset || undefined })}`),
   adminTelegram: () => call<AdminTelegram>("GET", "/admin/telegram"),
-  adminUserPolicy: (
-    id: number,
-    body: { policy_free?: boolean; policy_system?: string },
-  ) =>
-    call<{ user: { id: number; policy_free: boolean; policy_system: string } }>(
-      "PATCH",
-      `/admin/users/${id}/policy`,
-      body,
-    ),
+  adminUserPolicy: (id: number, body: { policy_system?: string }) =>
+    call<{ user: { id: number; policy_system: string } }>("PATCH", `/admin/users/${id}/policy`, body),
   adminEvents: (f: EventFilters) =>
     call<{ events: AppEvent[] }>(
       "GET",

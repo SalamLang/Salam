@@ -402,13 +402,15 @@ of it with `sandbox_mock.mjs` and `provider_mock.mjs`; set `REAL_SANDBOX=1` and 
 
 ### Admin: policy per account, cost split, Telegram sessions
 
-- `PATCH /admin/users/:id/policy` with `{policy_free, policy_system?}` lifts the
-  Salam-only rule for one account (and puts it back). A lifted account is answered by
-  the plain engine profile with only the operator text, on the site, in Telegram, in
-  the desktop agent and cloud chats, and through its API keys; the foreign-language
-  checks and the agent's foreign-code limits are skipped. Everyone else, including
-  other keys, keeps the policy. Per API key switches already existed (`/admin/keys`).
-  The Users table in the admin page has a toggle for it.
+- The Salam-only rule is part of the plan spec (`salam_only` on `/admin/plans`, a
+  checkbox in the plan editor). The free plan has it on; paid plans have it off, so an
+  account with an active paid plan gets the general prompt (`aipolicy.GeneralSystem`,
+  no Salam-only text and no "forget the policy" note), answered by the plain engine
+  profile on the site, in Telegram, in the desktop agent and cloud chats, and through
+  its API keys; the foreign-language checks and the agent's foreign-code limits are
+  skipped. Everyone else, including other keys, keeps the policy. Per API key switches
+  already existed (`/admin/keys`). `PATCH /admin/users/:id/policy` with
+  `{policy_system}` still sets operator text for one account.
 
   Site, Telegram and API turns use the plain `AI_ENGINE_AGENT_RAW` profile. A
   desktop or cloud agent turn needs a profile that keeps the bridge MCP tools and

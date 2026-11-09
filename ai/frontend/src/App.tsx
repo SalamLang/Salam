@@ -68,7 +68,7 @@ function placeFromPath(): Place {
   if (p === "/plans") return { route: "plans", chat: null, project: null };
   if (p === "/usage") return { route: "usage", chat: null, project: null };
   if (p === "/memory") return { route: "memory", chat: null, project: null };
-  if (p === "/admin" || /^\/admin\/(overview|users|chats|billing|api|events)$/.test(p)) return { route: "admin", chat: null, project: null };
+  if (p === "/admin" || /^\/admin\/(overview|users|chats|billing|api|events)(\/[a-z]+)?$/.test(p)) return { route: "admin", chat: null, project: null };
   const inside = /^\/p\/([a-f0-9]{24})\/c\/([a-f0-9]{24})$/.exec(p);
   if (inside) return { route: "chat", chat: inside[2], project: inside[1] };
   const fresh = /^\/p\/([a-f0-9]{24})\/new$/.exec(p);

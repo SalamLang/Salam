@@ -1,0 +1,350 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package shadowsocks
+
+import mem
+import time
+import str
+import net.udp
+import tls
+
+const UDP_MAX := 65536
+const UDP_IDLE_MS := 60000
+
+@en "UdpClient"
+@fa "کلاینت یو دی پی"
+pub struct UdpClient:
+    @en "sock"
+    @fa "سوکت"
+    pub sock: udp.Socket = udp.Socket {}
+    @en "host"
+    @fa "میزبان"
+    pub host: str = ""
+    @en "port"
+    @fa "درگاه"
+    pub port: int = 0
+    @en "method"
+    @fa "روش"
+    pub method: Method = Method {}
+    @en "key"
+    @fa "کلید"
+    pub key: Buf = Buf {}
+    @en "rbuf"
+    @fa "بافر دریافت"
+    pub rbuf: void* = null
+    @en "ok"
+    @fa "معتبر"
+    pub ok: bool = false
+end
+
+@en "UdpServer"
+@fa "سرور یو دی پی"
+pub struct UdpServer:
+    @en "sock"
+    @fa "سوکت"
+    pub sock: udp.Socket = udp.Socket {}
+    @en "method"
+    @fa "روش"
+    pub method: Method = Method {}
+    @en "key"
+    @fa "کلید"
+    pub key: Buf = Buf {}
+    @en "rbuf"
+    @fa "بافر دریافت"
+    pub rbuf: void* = null
+    @en "assoc"
+    @fa "ارتباط ها"
+    pub assoc: HashMap<str, udp.Socket> = HashMap {} as HashMap<str, udp.Socket>
+    @en "seen"
+    @fa "آخرین فعالیت"
+    pub seen: HashMap<str, i64> = HashMap {} as HashMap<str, i64>
+    @en "clients"
+    @fa "کلاینت ها"
+    pub clients: HashMap<str, Target> = HashMap {} as HashMap<str, Target>
+    @en "stopc"
+    @fa "پرچم توقف"
+    pub stopc: i64* = null
+    @en "ok"
+    @fa "معتبر"
+    pub ok: bool = false
+end
+
+func _udp_ctx(m: Method, key: void*, salt: void*): void*:
+    sub := mem.AllocateZeroed(32 as u64)
+    SessionSubkey(m, key, salt, sub)
+    c := tls.AeadNew(m.kind, sub)
+    _wipe(sub, 32)
+    mem.Free(sub)
+    ret c
+end
+
+func _udp_forward(s &: UdpServer, ck: str, from_host: str, from_port: int, n: int):
+    mut t := Target {}
+    mut pl := NewBuf(n)
+    if not UnpackUdp(s.method, s.key.p, s.rbuf, n, t, pl):
+        BufFree(pl)
+        ret
+    end
+    mut out := udp.Socket {}
+    if s.assoc.has(ck):
+        out = s.assoc.get(ck)
+    else:
+        out = udp.Open()
+        udp.SetTimeout(out, 1)
+        s.assoc.put(ck, out)
+    end
+    s.clients.put(ck, Target { host = from_host, port = from_port })
+    s.seen.put(ck, time.NowMillis())
+    udp.SendBytes(out, t.host, t.port, pl.p, pl.len)
+    BufFree(pl)
+end
+
+func _udp_drain(s &: UdpServer, out: udp.Socket, cli: Target):
+    mut fh := ""
+    mut fp := 0
+    buf := mem.Allocate(UDP_MAX as u64)
+    n := udp.ReceiveBytes(out, buf, UDP_MAX, fh, fp)
+    if n > 0:
+        mut pkt := NewBuf(n + 400)
+        if PackUdp(s.method, s.key.p, fh, fp, buf, n, pkt):
+            udp.SendBytes(s.sock, cli.host, cli.port, pkt.p, pkt.len)
+        end
+        BufFree(pkt)
+    end
+    mem.Free(buf)
+end
+
+func _udp_sweep(s &: UdpServer):
+    now := time.NowMillis()
+    mut dead := Vector {} as Vector<str>
+    defer dead.free()
+    each ck, out in s.assoc:
+        _udp_drain(s, out, s.clients.get(ck))
+        if now - s.seen.get(ck) > (UDP_IDLE_MS as i64):
+            dead.push(ck)
+        end
+    end
+    each ck in dead:
+        udp.Close(s.assoc.get(ck))
+        s.assoc.remove(ck)
+        s.clients.remove(ck)
+        s.seen.remove(ck)
+    end
+end
+
+@en "PackUdp"
+@fa "بسته بندی یو دی پی"
+pub func PackUdp(m: Method, key: void*, host: str, port: int, data: void*, n: int, out &: Buf): bool:
+    if m.v2022:
+        ret false
+    end
+    mut pt := NewBuf(n + 300)
+    if not EncodeTarget(host, port, pt):
+        BufFree(pt)
+        ret false
+    end
+    BufAppend(pt, data, n)
+    salt := mem.AllocateZeroed(m.salt_len as u64)
+    RandomSalt(m, salt)
+    BufAppend(out, salt, m.salt_len)
+    ctx := _udp_ctx(m, key, salt)
+    nonce := mem.AllocateZeroed(12 as u64)
+    BufReserve(out, pt.len + TAG_LEN)
+    tls.AeadSeal(ctx, nonce, null, 0, pt.p, pt.len, _at(out.p, out.len))
+    out.len += pt.len + TAG_LEN
+    tls.AeadFree(ctx)
+    mem.Free(nonce)
+    mem.Free(salt)
+    BufWipe(pt)
+    BufFree(pt)
+    ret not out.bad
+end
+
+@en "UnpackUdp"
+@fa "بازکردن یو دی پی"
+pub func UnpackUdp(m: Method, key: void*, p: void*, n: int, t &: Target, out &: Buf): bool:
+    if m.v2022 or n < m.salt_len + TAG_LEN + 7:
+        ret false
+    end
+    ctx := _udp_ctx(m, key, p)
+    nonce := mem.AllocateZeroed(12 as u64)
+    cl := n - m.salt_len - TAG_LEN
+    pt := mem.Allocate((cl + 1) as u64)
+    ok := tls.AeadOpen(ctx, nonce, null, 0, _at(p, m.salt_len), cl, pt)
+    tls.AeadFree(ctx)
+    mem.Free(nonce)
+    mut good := false
+    if ok:
+        hl := ParseTarget(pt, cl, t)
+        if hl > 0:
+            BufAppend(out, _at(pt, hl), cl - hl)
+            good = true
+        end
+    end
+    _wipe(pt, cl)
+    mem.Free(pt)
+    ret good
+end
+
+@en "UdpDial"
+@fa "اتصال یو دی پی"
+pub func UdpDial(cfg: Config): UdpClient:
+    m := LookupMethod(cfg.method)
+    mut c := UdpClient { host = cfg.host, port = cfg.port, method = m }
+    if not m.ok or m.v2022:
+        ret c
+    end
+    c.key = MakeKey(m, cfg.password)
+    if c.key.bad:
+        ret c
+    end
+    c.sock = udp.Open()
+    c.rbuf = mem.Allocate(UDP_MAX as u64)
+    c.ok = udp.Ok(c.sock)
+    ret c
+end
+
+@en "UdpSend"
+@fa "ارسال یو دی پی"
+pub func UdpSend(c: UdpClient, host: str, port: int, data: void*, n: int): bool:
+    mut out := NewBuf(n + 400)
+    if not PackUdp(c.method, c.key.p, host, port, data, n, out):
+        BufFree(out)
+        ret false
+    end
+    w := udp.SendBytes(c.sock, c.host, c.port, out.p, out.len)
+    BufFree(out)
+    ret w > 0
+end
+
+@en "UdpRecv"
+@fa "دریافت یو دی پی"
+pub func UdpRecv(c: UdpClient, buf: void*, max: int, from &: Target): int:
+    mut fh := ""
+    mut fp := 0
+    n := udp.ReceiveBytes(c.sock, c.rbuf, UDP_MAX, fh, fp)
+    if n <= 0:
+        ret 0 - 1
+    end
+    mut out := NewBuf(n)
+    if not UnpackUdp(c.method, c.key.p, c.rbuf, n, from, out):
+        BufFree(out)
+        ret 0 - 1
+    end
+    mut take := out.len
+    if take > max:
+        take = max
+    end
+    mem.Copy(buf, out.p, take as u64)
+    BufFree(out)
+    ret take
+end
+
+@en "UdpSetTimeout"
+@fa "مهلت یو دی پی"
+pub func UdpSetTimeout(c: UdpClient, millis: int):
+    udp.SetTimeout(c.sock, millis)
+end
+
+@en "UdpClose"
+@fa "بستن یو دی پی"
+pub func UdpClose(c: UdpClient):
+    udp.Close(c.sock)
+    if c.rbuf != null:
+        mem.Free(c.rbuf)
+    end
+    mut k := c.key
+    BufWipe(k)
+    BufFree(k)
+end
+
+@en "UdpListen"
+@fa "گوش دادن یو دی پی"
+pub func UdpListen(port: int, method: str, password: str): UdpServer:
+    m := LookupMethod(method)
+    mut s := UdpServer { method = m }
+    if not m.ok or m.v2022:
+        ret s
+    end
+    s.key = MakeKey(m, password)
+    if s.key.bad:
+        ret s
+    end
+    s.sock = udp.Bind(port)
+    if not udp.Ok(s.sock):
+        ret s
+    end
+    udp.SetTimeout(s.sock, 20)
+    s.rbuf = mem.Allocate(UDP_MAX as u64)
+    s.stopc = mem.AllocateZeroed(8 as u64) as i64*
+    s.ok = true
+    ret s
+end
+
+@en "UdpServerPort"
+@fa "درگاه سرور یو دی پی"
+pub func UdpServerPort(s: UdpServer): int:
+    ret udp.Port(s.sock)
+end
+
+@en "UdpStep"
+@fa "گام یو دی پی"
+pub func UdpStep(s &: UdpServer): int:
+    mut fh := ""
+    mut fp := 0
+    mut worked := 0
+    n := udp.ReceiveBytes(s.sock, s.rbuf, UDP_MAX, fh, fp)
+    if n > 0:
+        _udp_forward(s, fh + ":" + str.FromInt(fp as i64), fh, fp, n)
+        worked = 1
+    end
+    _udp_sweep(s)
+    ret worked
+end
+
+@en "UdpServe"
+@fa "خدمت یو دی پی"
+pub func UdpServe(s &: UdpServer):
+    until atomic_load(s.stopc) == 0 as i64:
+        _step := UdpStep(s)
+    end
+end
+
+@en "UdpStop"
+@fa "توقف یو دی پی"
+pub func UdpStop(s: UdpServer):
+    atomic_store(s.stopc, 1 as i64)
+end
+
+@en "UdpDestroy"
+@fa "نابودی یو دی پی"
+pub func UdpDestroy(s &: UdpServer):
+    each _, out in s.assoc:
+        udp.Close(out)
+    end
+    s.assoc.free()
+    s.clients.free()
+    s.seen.free()
+    udp.Close(s.sock)
+    if s.rbuf != null:
+        mem.Free(s.rbuf)
+    end
+    if s.stopc != null:
+        mem.Free(s.stopc as void*)
+    end
+    mut k := s.key
+    BufWipe(k)
+    BufFree(k)
+end

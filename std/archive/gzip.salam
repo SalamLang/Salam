@@ -15,6 +15,49 @@
 package archive
 
 import compress
+import mem
+import os
+
+func _gz_cstr_end(h: u8*, start: int, n: int): int:
+    mut i := start
+    until i < n and (h[i] as int) != 0:
+        i++
+    end
+    if i >= n:
+        ret -1
+    end
+    ret i + 1
+end
+
+func _gz_header_len(h: u8*, n: int): int:
+    if n < 18 or (h[0] as int) != 0x1f or (h[1] as int) != 0x8b or (h[2] as int) != 8:
+        ret -1
+    end
+    flg := h[3] as int
+    if (flg & 0xe0) != 0:
+        ret -1
+    end
+    mut pos := 10
+    if (flg & 4) != 0:
+        if pos + 2 > n:
+            ret -1
+        end
+        pos += 2 + ((h[pos] as int) | ((h[pos + 1] as int) << 8))
+    end
+    if (flg & 8) != 0:
+        pos = _gz_cstr_end(h, pos, n)
+    end
+    if pos >= 0 and (flg & 16) != 0:
+        pos = _gz_cstr_end(h, pos, n)
+    end
+    if pos >= 0 and (flg & 2) != 0:
+        pos += 2
+    end
+    if pos < 0 or pos > n:
+        ret -1
+    end
+    ret pos
+end
 
 @en "GzipCompressFile"
 @fa "فشرده سازی پرونده جی زیپ"
@@ -31,22 +74,59 @@ pub func GzipCompressFile(inpath: str, outpath: str): bool:
     ret wok
 end
 
+@en "GzipDecompressFileCap"
+@fa "کدگشایی پرونده جی زیپ با سقف"
+pub func GzipDecompressFileCap(inpath: str, outpath: str, cap: i64): int:
+    fp := compress.FileOpenRead(inpath)
+    if fp == null:
+        ret ARCHIVE_IO_ERROR
+    end
+    size := compress.FileSize(fp)
+    if size < (18 as i64):
+        compress.FileClose(fp)
+        ret ARCHIVE_CORRUPT
+    end
+    mut hn := 70000
+    if (hn as i64) > size: hn = size as int end
+    head := mem.Allocate(hn as u64)
+    tail := mem.Allocate(8 as u64)
+    got := compress.FileReadAt(fp, 0 as i64, head, hn)
+    got2 := compress.FileReadAt(fp, size - (8 as i64), tail, 8)
+    hlen := got == hn ? _gz_header_len(head as u8*, hn) : -1
+    mut st := ARCHIVE_OK
+    if got2 != 8 or hlen < 0 or (hlen as i64) >= size - (8 as i64):
+        st = ARCHIVE_CORRUPT
+    else:
+        mut sink := compress.SinkOpen(outpath, cap)
+        if sink.failed:
+            st = ARCHIVE_IO_ERROR
+        else:
+            mut br := compress.NewFileBitReader(fp, hlen as i64, size - (8 as i64) - (hlen as i64))
+            good := not br.bad and compress.RawInflateToSink(br, sink, false)
+            compress.FileBitReaderFree(br)
+            closed := compress.SinkClose(sink)
+            want_crc := LEGet32(tail, 0) as u32
+            want_size := (LEGet32(tail, 4) as i64) & (0xFFFFFFFF as i64)
+            if sink.over:
+                st = ARCHIVE_TOO_BIG
+            else sink.failed or not closed:
+                st = ARCHIVE_IO_ERROR
+            else not good or sink.crc != want_crc or (sink.written & (0xFFFFFFFF as i64)) != want_size:
+                st = ARCHIVE_CORRUPT
+            end
+            if st != ARCHIVE_OK:
+                os.Remove(outpath)
+            end
+        end
+    end
+    mem.Free(head)
+    mem.Free(tail)
+    compress.FileClose(fp)
+    ret st
+end
+
 @en "GzipDecompressFile"
 @fa "کدگشایی پرونده جی زیپ"
 pub func GzipDecompressFile(inpath: str, outpath: str): bool:
-    mut rok := false
-    mut inbuf := ReadBinaryFile(inpath, rok)
-    if not rok:
-        ret false
-    end
-    mut gok := false
-    mut out := compress.GzipDecompress(inbuf.data, inbuf.len, gok)
-    compress.BufFree(inbuf)
-    if not gok:
-        compress.BufFree(out)
-        ret false
-    end
-    wok := WriteBinaryFileBuf(outpath, out)
-    compress.BufFree(out)
-    ret wok
+    ret GzipDecompressFileCap(inpath, outpath, 0 as i64) == ARCHIVE_OK
 end

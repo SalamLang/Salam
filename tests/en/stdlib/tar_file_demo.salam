@@ -1,0 +1,138 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+package main
+
+import archive
+import compress
+import filepath
+import mem
+import os
+
+func cat(a: str, b: str): str:
+    ret filepath.Join(a, b)
+end
+
+func fill(n: int): compress.ByteBuf:
+    mut b := compress.NewByteBufCap(n)
+    repeat n in i:
+        compress.BufPush(b, (i * 11 + i / 7) & 255)
+    end
+    ret b
+end
+
+func size_of(dir: str, name: str): i64:
+    path := cat(dir, name)
+    n := os.FileSize(path)
+    mem.Free(path as void*)
+    ret n
+end
+
+func exists_in(dir: str, name: str): bool:
+    path := cat(dir, name)
+    found := os.Exists(path)
+    mem.Free(path as void*)
+    ret found
+end
+
+func main:
+    dir := cat(os.TempDir(), "salam_tar_file_demo")
+    os.RemoveAll(dir)
+    os.MkdirAll(dir)
+    mut data := fill(70000)
+    mut files := Vector {} as Vector<archive.TarFileInput>
+    files.push(archive.MakeTarFileInput("docs", null, 0, true))
+    files.push(archive.MakeTarFileInput("docs/a.bin", data.data, data.len, false))
+    files.push(archive.MakeTarFileInput("docs/b.txt", data.data, 1000, false))
+    files.push(archive.MakeTarSymlink("docs/link", "b.txt"))
+    files.push(archive.MakeTarHardlink("docs/hard", "docs/b.txt"))
+    files.push(archive.MakeTarFileInput("../escape.txt", data.data, 10, false))
+    mut long_name := compress.NewByteBuf()
+    repeat 130:
+        compress.BufPush(long_name, 108)
+    end
+    compress.BufPush(long_name, 0)
+    files.push(archive.MakeTarFileInput(long_name.data as str, data.data, 5, false))
+    mut tar := archive.TarCreate(files)
+    path1 := cat(dir, "a.tar")
+    path2 := cat(dir, "a.tar.gz")
+    path3 := cat(dir, "a.gz")
+    println archive.WriteBinaryFileBuf(path1, tar), archive.TarGzCreateFile(files, path2)
+
+    mut tf := archive.TarFileOpen(path1)
+    println "open", tf.status, tf.size == tar.len as i64
+    mut e := archive.Entry {}
+    until archive.TarFileNext(tf, e):
+        println e.kind, e.name.len(), e.size, e.link.len(), tf.data_off
+        archive.FreeEntry(e)
+    end
+    archive.TarFileRewind(tf)
+    mut es := archive.TarFileEntries(tf)
+    println "entries", es.len()
+    mut bin := archive.Entry {}
+    println archive.TarFileNext(tf, bin)
+    archive.FreeEntry(bin)
+    println archive.TarFileNext(tf, bin), bin.name
+    out1 := cat(dir, "a.out")
+    println "extract", archive.TarFileExtractTo(tf, bin, out1, 0 as i64), os.FileSize(out1)
+    println "cap", archive.TarFileExtractTo(tf, bin, out1, 100 as i64), os.Exists(out1)
+    println "dir entry", archive.TarFileExtractTo(tf, es.get(0), out1, 0 as i64)
+    archive.FreeEntry(bin)
+    archive.FreeEntries(es)
+    archive.TarFileClose(tf)
+
+    out2 := cat(dir, "all")
+    println "all", archive.TarFileExtractAll(path1, out2, 0 as i64), archive.TarStatusText(archive.TAR_UNSAFE_PATH)
+    println size_of(out2, "docs/a.bin"), size_of(out2, "docs/b.txt"), size_of(out2, "docs/link"), size_of(out2, "docs/hard"), exists_in(dir, "escape.txt")
+    out3 := cat(dir, "capped")
+    println "capped", archive.TarFileExtractAll(path1, out3, 5000 as i64) == archive.TAR_TOO_BIG, size_of(out3, "docs/b.txt"), exists_in(out3, "docs/a.bin")
+    out4 := cat(dir, "viagz")
+    println "tar.gz", archive.TarGzFileExtractAll(path2, out4, 0 as i64), size_of(out4, "docs/a.bin")
+
+    mut gz := compress.GzipCompress(data.data, data.len)
+    println "gz", archive.WriteBinaryFileBuf(path3, gz)
+    compress.BufFree(gz)
+    out5 := cat(dir, "a.raw")
+    println archive.GzipDecompressFileCap(path3, out5, 0 as i64) == archive.ARCHIVE_OK, os.FileSize(out5)
+    println archive.GzipDecompressFileCap(path3, out5, 100 as i64) == archive.ARCHIVE_TOO_BIG, os.Exists(out5)
+    println archive.GzipDecompressFile(path3, out5), archive.GzipDecompressFile(path1, out5)
+
+    mut cut := compress.BufClone(tar)
+    cut.len = 4000
+    path4 := cat(dir, "cut.tar")
+    println archive.WriteBinaryFileBuf(path4, cut)
+    out6 := cat(dir, "cutout")
+    println "cut", archive.TarFileExtractAll(path4, out6, 0 as i64) != archive.TAR_OK
+    path5 := cat(dir, "none.tar")
+    println "missing", archive.TarFileExtractAll(path5, out6, 0 as i64)
+
+    os.RemoveAll(dir)
+    files.free()
+    compress.BufFree(data)
+    compress.BufFree(long_name)
+    compress.BufFree(tar)
+    compress.BufFree(cut)
+    mem.Free(dir as void*)
+    mem.Free(path1 as void*)
+    mem.Free(path2 as void*)
+    mem.Free(path3 as void*)
+    mem.Free(path4 as void*)
+    mem.Free(path5 as void*)
+    mem.Free(out1 as void*)
+    mem.Free(out2 as void*)
+    mem.Free(out3 as void*)
+    mem.Free(out4 as void*)
+    mem.Free(out5 as void*)
+    mem.Free(out6 as void*)
+    ret 0
+end

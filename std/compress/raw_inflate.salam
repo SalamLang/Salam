@@ -14,6 +14,8 @@
 
 package compress
 
+import mem
+
 const _LENGTH_BASE := [
     3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31
     35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258
@@ -35,6 +37,9 @@ const _DIST_EXTRA := [
 ]
 
 const _CLC_ORDER := [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15]
+
+const _STREAM_KEEP := 131072
+const _STREAM_FLUSH := 4194304
 
 struct _RawHuffTable:
     pub tleft: Vector<int>
@@ -167,13 +172,30 @@ func _fixed_raw_dist_lengths(): Vector<int>:
     ret v
 end
 
-func _raw_inflate_block(r &: BitReader, out &: ByteBuf, littable: _RawHuffTable, disttable: _RawHuffTable, max: int, d64: bool): bool:
+func _stream_drain(out &: ByteBuf, sink &: FileSink): bool:
+    if out.len <= _STREAM_KEEP:
+        ret true
+    end
+    n := out.len - _STREAM_KEEP
+    if not SinkWrite(sink, out.data, n):
+        ret false
+    end
+    tail := ((out.data as i64) + (n as i64)) as void*
+    mem.MemMove(out.data, tail, _STREAM_KEEP as u64)
+    out.len = _STREAM_KEEP
+    ret true
+end
+
+func _raw_inflate_block(r &: BitReader, out &: ByteBuf, littable: _RawHuffTable, disttable: _RawHuffTable, max: int, d64: bool, sink &: FileSink, stream: bool): bool:
     until true:
         sym := _decode_raw_symbol(r, littable)
         if sym < 0 or r.bad:
             ret false
         end
         if max > 0 and BufLen(out) > max:
+            ret false
+        end
+        if stream and out.len >= _STREAM_FLUSH and not _stream_drain(out, sink):
             ret false
         end
         if sym < 256:
@@ -213,7 +235,7 @@ func _raw_inflate_block(r &: BitReader, out &: ByteBuf, littable: _RawHuffTable,
     end
 end
 
-func _raw_inflate_dynamic_block(r &: BitReader, out &: ByteBuf, max: int, d64: bool): bool:
+func _raw_inflate_dynamic_block(r &: BitReader, out &: ByteBuf, max: int, d64: bool, sink &: FileSink, stream: bool): bool:
     hlit := BitReadBits(r, 5) + 257
     hdist := BitReadBits(r, 5) + 1
     hclen := BitReadBits(r, 4) + 4
@@ -298,24 +320,14 @@ func _raw_inflate_dynamic_block(r &: BitReader, out &: ByteBuf, max: int, d64: b
     defer litlengths.free()
     defer distlengths.free()
 
-    ok := _raw_inflate_block(r, out, littable, disttable, max, d64)
+    ok := _raw_inflate_block(r, out, littable, disttable, max, d64, sink, stream)
     _raw_huff_table_free(littable)
     _raw_huff_table_free(disttable)
     ret ok
 end
 
-func _raw_inflate(p: void*, n: int, expected_size: int, max: int, d64: bool, ok &: bool): ByteBuf:
-    ok = true
-    mut r := NewBitReader(p, n)
-    mut cap := 0
-    if expected_size > 0: cap = expected_size end
-    if (cap as i64) > (n as i64) * (1032 as i64) + (1024 as i64):
-        cap = n * 1032 + 1024
-    end
-    if max > 0 and cap > max:
-        cap = max
-    end
-    mut out := NewByteBufCap(cap)
+func _inflate_core(r &: BitReader, out &: ByteBuf, max: int, d64: bool, sink &: FileSink, stream: bool): bool:
+    mut ok := true
 
     mut bfinal := 0
     until bfinal != 1:
@@ -342,31 +354,60 @@ func _raw_inflate(p: void*, n: int, expected_size: int, max: int, d64: bool, ok 
                 mut disttable := _build_raw_huff_table(distlengths)
                 litlengths.free()
                 distlengths.free()
-                good := _raw_inflate_block(r, out, littable, disttable, max, d64)
+                good := _raw_inflate_block(r, out, littable, disttable, max, d64, sink, stream)
                 _raw_huff_table_free(littable)
                 _raw_huff_table_free(disttable)
                 if not good:
                     ok = false
-                    ret out
+                    ret false
                 end
             else:
                 if btype == 2:
-                    if not _raw_inflate_dynamic_block(r, out, max, d64):
+                    if not _raw_inflate_dynamic_block(r, out, max, d64, sink, stream):
                         ok = false
-                        ret out
+                        ret ok
                     end
                 else:
                     ok = false
-                    ret out
+                    ret false
                 end
             end
         end
         if r.bad:
             ok = false
-            ret out
+            ret ok
         end
     end
+    ret ok
+end
+
+func _raw_inflate(p: void*, n: int, expected_size: int, max: int, d64: bool, ok &: bool): ByteBuf:
+    mut r := NewBitReader(p, n)
+    mut cap := 0
+    if expected_size > 0: cap = expected_size end
+    if (cap as i64) > (n as i64) * (1032 as i64) + (1024 as i64):
+        cap = n * 1032 + 1024
+    end
+    if max > 0 and cap > max:
+        cap = max
+    end
+    mut out := NewByteBufCap(cap)
+    mut none := FileSink {}
+    ok = _inflate_core(r, out, max, d64, none, false)
     ret out
+end
+
+@en "RawInflateToSink"
+@fa "کدگشایی دیفلیت خام به مقصد"
+pub func RawInflateToSink(r &: BitReader, sink &: FileSink, d64: bool): bool:
+    mut out := NewByteBufCap(_STREAM_FLUSH + _STREAM_KEEP + 1024)
+    good := _inflate_core(r, out, 0, d64, sink, true)
+    mut flushed := good
+    if good and out.len > 0:
+        flushed = SinkWrite(sink, out.data, out.len)
+    end
+    BufFree(out)
+    ret good and flushed
 end
 
 @en "RawInflate"

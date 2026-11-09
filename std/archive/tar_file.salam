@@ -1,0 +1,263 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package archive
+
+import compress
+import filepath
+import mem
+import os
+import str
+
+const _TARF_META_MAX := 1048576
+
+@en "TarFile"
+@fa "پرونده تار"
+pub struct TarFile:
+    @en "path"
+    @fa "مسیر"
+    pub path: str = ""
+    @en "size"
+    @fa "اندازه"
+    pub size: i64 = 0 as i64
+    @en "status"
+    @fa "وضعیت"
+    pub status: int = 0
+    @en "pos"
+    @fa "جایگاه"
+    pub pos: i64 = 0 as i64
+    @en "data_off"
+    @fa "جایگاه داده"
+    pub data_off: i64 = 0 as i64
+    @en "fp"
+    @fa "پرونده"
+    pub fp: void* = null
+    @en "g"
+    @fa "رکورد سراسری"
+    pub g: _TarPax = _TarPax {}
+end
+
+@en "TarFileOpen"
+@fa "بازکردن پرونده تار"
+pub func TarFileOpen(path: str): TarFile:
+    mut tf := TarFile { path = str.Clone(path) }
+    tf.fp = compress.FileOpenRead(path)
+    if tf.fp == null:
+        tf.status = TAR_IO
+        ret tf
+    end
+    tf.size = compress.FileSize(tf.fp)
+    ret tf
+end
+
+@en "TarFileClose"
+@fa "بستن پرونده تار"
+pub func TarFileClose(tf &: TarFile):
+    compress.FileClose(tf.fp)
+    tf.fp = null
+    if tf.path.len() > 0:
+        mem.Free(tf.path as void*)
+    end
+    tf.path = ""
+end
+
+@en "TarFileRewind"
+@fa "بازگشت به آغاز پرونده تار"
+pub func TarFileRewind(tf &: TarFile):
+    tf.pos = 0 as i64
+    tf.data_off = 0 as i64
+    tf.g = _TarPax {}
+end
+
+@en "FreeEntry"
+@fa "آزادسازی مدخل"
+pub func FreeEntry(e &: Entry):
+    if e.name.len() > 0: mem.Free(e.name as void*) end
+    if e.link.len() > 0: mem.Free(e.link as void*) end
+    e.name = ""
+    e.link = ""
+end
+
+@en "TarFileNext"
+@fa "مدخل بعدی پرونده تار"
+pub func TarFileNext(tf &: TarFile, e &: Entry): bool:
+    if tf.status != TAR_OK or tf.fp == null:
+        ret false
+    end
+    mut mini := compress.NewByteBufCap(1536)
+    defer compress.BufFree(mini)
+    mut at := tf.pos
+    mut found := false
+    mut real_off := 0 as i64
+    until not found:
+        if at + (512 as i64) > tf.size:
+            ret false
+        end
+        hdr := mem.Allocate(512 as u64)
+        got := compress.FileReadAt(tf.fp, at, hdr, 512)
+        if got != 512:
+            mem.Free(hdr)
+            tf.status = TAR_IO
+            ret false
+        end
+        hbp := hdr as u8*
+        typeflag := hbp[156] as int
+        compress.BufPushBytes(mini, hdr, 512)
+        if _tar_is_zero_block(hdr, 0):
+            mem.Free(hdr)
+            ret false
+        end
+        size := _tar_get_num(hdr, 124, 12)
+        mem.Free(hdr)
+        if typeflag == 103 or typeflag == 120 or typeflag == 76 or typeflag == 75:
+            if size < (0 as i64) or size > (_TARF_META_MAX as i64) or at + (512 as i64) + size > tf.size:
+                tf.status = TAR_CORRUPT
+                ret false
+            end
+            span := (((size as int) + 511) / 512) * 512
+            body := mem.AllocateZeroed(span as u64)
+            if compress.FileReadAt(tf.fp, at + (512 as i64), body, size as int) != (size as int):
+                mem.Free(body)
+                tf.status = TAR_IO
+                ret false
+            end
+            compress.BufPushBytes(mini, body, span)
+            mem.Free(body)
+            at += (512 as i64) + (span as i64)
+        else:
+            real_off = at
+            found = true
+        end
+    end
+    mut mpos := 0
+    mut mdata := 0
+    if not _tar_next(mini.data, mini.len, mpos, e, mdata, tf.g, 9223372036854775807 as i64):
+        ret false
+    end
+    tf.data_off = real_off + (512 as i64)
+    if e.kind == 0:
+        tf.pos = tf.data_off + (((e.size + (511 as i64)) / (512 as i64)) * (512 as i64))
+    else:
+        tf.pos = tf.data_off
+    end
+    ret true
+end
+
+@en "TarFileEntries"
+@fa "مدخل های پرونده تار"
+pub func TarFileEntries(tf &: TarFile): Vector<Entry>:
+    TarFileRewind(tf)
+    mut out := Vector {} as Vector<Entry>
+    mut e := Entry {}
+    until TarFileNext(tf, e):
+        out.push(e)
+    end
+    TarFileRewind(tf)
+    ret out
+end
+
+@en "TarFileExtractTo"
+@fa "استخراج از پرونده تار به پرونده"
+pub func TarFileExtractTo(tf &: TarFile, e: Entry, destpath: str, cap: i64): int:
+    if e.kind != 0:
+        ret TAR_NOT_FOUND
+    end
+    if cap > (0 as i64) and e.size > cap:
+        ret TAR_TOO_BIG
+    end
+    if tf.data_off + e.size > tf.size:
+        ret TAR_CORRUPT
+    end
+    mut sink := compress.SinkOpen(destpath, cap)
+    if sink.failed:
+        ret TAR_IO
+    end
+    good := compress.SinkCopyFrom(sink, tf.fp, tf.data_off, e.size)
+    closed := compress.SinkClose(sink)
+    if not good or not closed:
+        os.Remove(destpath)
+        ret sink.over ? TAR_TOO_BIG : TAR_IO
+    end
+    ret TAR_OK
+end
+
+@en "TarFileExtractAll"
+@fa "استخراج همه از پرونده تار"
+pub func TarFileExtractAll(path: str, destdir: str, cap: i64): int:
+    mut tf := TarFileOpen(path)
+    if tf.status != TAR_OK:
+        st0 := tf.status
+        TarFileClose(tf)
+        ret st0
+    end
+    mut first := TAR_OK
+    mut dirs := Vector {} as Vector<str>
+    mut dir_times := Vector {} as Vector<i64>
+    mut e := Entry {}
+    until TarFileNext(tf, e):
+        mut st := TAR_OK
+        size_ok := e.kind != 0 or tf.data_off + e.size <= tf.size
+        if not size_ok:
+            st = TAR_CORRUPT
+            FreeEntry(e)
+        else:
+            if not _tar_place(e, destdir, dirs, dir_times, null, 0, tf.fp, tf.data_off, cap, st):
+                if st == TAR_OK: st = TAR_CORRUPT end
+            end
+        end
+        if st != TAR_OK and first == TAR_OK:
+            first = st
+        end
+    end
+    if first == TAR_OK and tf.status != TAR_OK:
+        first = tf.status
+    end
+    _tar_finish_dirs(dirs, dir_times)
+    TarFileClose(tf)
+    ret first
+end
+
+@en "TarStatusText"
+@fa "متن وضعیت تار"
+pub func TarStatusText(status: int): str:
+    if status == TAR_OK: ret "ok" end
+    if status == TAR_NOT_FOUND: ret "not a regular file entry" end
+    if status == TAR_CORRUPT: ret "corrupt or cut short" end
+    if status == TAR_TOO_BIG: ret "entry larger than the size cap" end
+    if status == TAR_IO: ret "cannot read or write a file" end
+    if status == TAR_UNSAFE_PATH: ret "entry path or link leaves the target folder" end
+    ret "unknown error"
+end
+
+@en "TarGzFileExtractAll"
+@fa "استخراج همه از پرونده تار جی زیپ"
+pub func TarGzFileExtractAll(path: str, destdir: str, cap: i64): int:
+    pid := str.FromInt(os.Pid() as i64)
+    name := str.Concat("salam_targz_", pid)
+    tmp := filepath.Join(os.TempDir(), name)
+    mem.Free(pid as void*)
+    mem.Free(name as void*)
+    gz := GzipDecompressFileCap(path, tmp, 0 as i64)
+    mut st := TAR_OK
+    if gz == ARCHIVE_IO_ERROR:
+        st = TAR_IO
+    else gz != ARCHIVE_OK:
+        st = TAR_CORRUPT
+    else:
+        st = TarFileExtractAll(tmp, destdir, cap)
+    end
+    os.Remove(tmp)
+    mem.Free(tmp as void*)
+    ret st
+end

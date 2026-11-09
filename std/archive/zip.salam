@@ -40,6 +40,28 @@ pub const ZIP_BAD_CRC := 5
 @en "ZIP_TOO_BIG"
 @fa "زیپ بیش از حد بزرگ"
 pub const ZIP_TOO_BIG := 6
+@en "ZIP_IO"
+@fa "زیپ خطای ورودی خروجی"
+pub const ZIP_IO := 7
+@en "ZIP_UNSAFE_PATH"
+@fa "زیپ مسیر ناامن"
+pub const ZIP_UNSAFE_PATH := 8
+
+@en "ZipMethodStore"
+@fa "روش زیپ ذخیره"
+pub const ZipMethodStore := 0
+@en "ZipMethodDeflate"
+@fa "روش زیپ دیفلیت"
+pub const ZipMethodDeflate := 8
+@en "ZipMethodBzip2"
+@fa "روش زیپ بی زیپ دو"
+pub const ZipMethodBzip2 := 12
+@en "ZipMethodLzma"
+@fa "روش زیپ الزد ام ای"
+pub const ZipMethodLzma := 14
+@en "ZipMethodZstd"
+@fa "روش زیپ زد استاندارد"
+pub const ZipMethodZstd := 93
 
 @en "ZipFileInput"
 @fa "ورودی پرونده زیپ"
@@ -59,6 +81,9 @@ pub struct ZipFileInput:
     @en "mtime"
     @fa "زمان تغییر"
     pub mtime: i64 = 0 as i64
+    @en "level"
+    @fa "سطح"
+    pub level: int = 0
 end
 
 struct _ZipRec:
@@ -277,11 +302,46 @@ func _zip_unix_to_dos(t: i64, dos_date &: int, dos_time &: int):
     dos_time = ((secs / 3600) << 11) | (((secs % 3600) / 60) << 5) | ((secs % 60) / 2)
 end
 
+func _zip_unpack_ext(method: int, dptr: void*, comp_size: int, uncomp_size: int, out &: compress.ByteBuf): int:
+    mut ok := false
+    mut res := compress.NewByteBuf()
+    mut cap := uncomp_size
+    if cap < 1:
+        cap = 1
+    end
+    if method == ZipMethodBzip2:
+        compress.BufFree(res)
+        res = compress.Bzip2DecompressMax(dptr, comp_size, cap, ok)
+    else method == ZipMethodZstd:
+        compress.BufFree(res)
+        res = compress.ZstdDecompressMax(dptr, comp_size, cap, ok)
+    else:
+        if comp_size < 9 or LEGet16(dptr, 2) != 5 or comp_size - 9 < 5:
+            ret ZIP_CORRUPT
+        end
+        props := ((dptr as i64) + (4 as i64)) as void*
+        stream := ((dptr as i64) + (9 as i64)) as void*
+        compress.BufFree(res)
+        res = compress.LzmaRawDecompress(props, 5, stream, comp_size - 9, uncomp_size, 0, ok)
+    end
+    if not ok or res.len != uncomp_size:
+        compress.BufFree(res)
+        ret ZIP_CORRUPT
+    end
+    compress.BufFree(out)
+    out = res
+    ret ZIP_OK
+end
+
+func _zip_known_method(m: int): bool:
+    ret m == ZipMethodStore or m == ZipMethodDeflate or m == ZipMethodBzip2 or m == ZipMethodLzma or m == ZipMethodZstd
+end
+
 func _zip_read_data(p: void*, n: int, r: _ZipRec, max: int, verify: bool, out &: compress.ByteBuf): int:
     if (r.flags & 1) != 0:
         ret ZIP_ENCRYPTED
     end
-    if r.method != 0 and r.method != 8:
+    if not _zip_known_method(r.method):
         ret ZIP_UNSUPPORTED
     end
     lim := 2147483647 as i64
@@ -309,6 +369,11 @@ func _zip_read_data(p: void*, n: int, r: _ZipRec, max: int, verify: bool, out &:
             ret ZIP_TOO_BIG
         end
         compress.BufPushBytes(out, data_ptr, comp_size)
+    else r.method != ZipMethodDeflate:
+        st := _zip_unpack_ext(r.method, data_ptr, comp_size, uncomp_size, out)
+        if st != ZIP_OK:
+            ret st
+        end
     else:
         mut infl_ok := false
         mut result := compress.RawInflateMax(data_ptr, comp_size, uncomp_size, max, infl_ok)
@@ -464,9 +529,26 @@ func _zip_build(files: Vector<ZipFileInput>, force64: bool): compress.ByteBuf:
         mut comp_len := f.data_len
         mut owned := compress.NewByteBuf()
         mut has_owned := false
-        method := f.method == 8 ? 8 : 0
-        if method == 8:
+        mut method := _zip_known_method(f.method) ? f.method : 0
+        if method != ZipMethodDeflate and f.data_len == 0:
+            method = 0
+        end
+        if method == ZipMethodDeflate:
             owned = compress.RawDeflate(f.data_ptr, f.data_len)
+        else method == ZipMethodBzip2:
+            owned = compress.Bzip2CompressLevel(f.data_ptr, f.data_len, f.level >= 1 and f.level <= 9 ? f.level : 9)
+        else method == ZipMethodZstd:
+            owned = compress.ZstdCompressLevel(f.data_ptr, f.data_len, f.level >= 1 ? f.level : 3)
+        else method == ZipMethodLzma:
+            mut packed := compress.LzmaCompressLevel(f.data_ptr, f.data_len, f.level >= 1 and f.level <= 9 ? f.level : 6)
+            compress.BufPush(owned, 9)
+            compress.BufPush(owned, 4)
+            LEPut16(owned, 5)
+            compress.BufPushBytes(owned, packed.data, 5)
+            compress.BufPushBytes(owned, ((packed.data as i64) + (13 as i64)) as void*, packed.len - 13)
+            compress.BufFree(packed)
+        end
+        if method != 0:
             comp_ptr = owned.data
             comp_len = owned.len
             has_owned = true
@@ -478,7 +560,12 @@ func _zip_build(files: Vector<ZipFileInput>, force64: bool): compress.ByteBuf:
         mut dd := 0
         mut dt := 0
         _zip_unix_to_dos(f.mtime, dd, dt)
-        version := force64 ? 45 : 20
+        mut version := force64 ? 45 : 20
+        if method == ZipMethodBzip2 and version < 46:
+            version = 46
+        else method == ZipMethodLzma or method == ZipMethodZstd:
+            version = 63
+        end
 
         LEPut32(body, 0x04034b50)
         LEPut16(body, version)
@@ -591,6 +678,12 @@ pub func MakeZipFileInput(name: str, data_ptr: void*, data_len: int, method: int
     ret ZipFileInput { name = name, data_ptr = data_ptr, data_len = data_len, method = method, mtime = 0 as i64 }
 end
 
+@en "MakeZipFileInputLevel"
+@fa "ساخت ورودی پرونده زیپ با سطح"
+pub func MakeZipFileInputLevel(name: str, data_ptr: void*, data_len: int, method: int, level: int): ZipFileInput:
+    ret ZipFileInput { name = name, data_ptr = data_ptr, data_len = data_len, method = method, mtime = 0 as i64, level = level }
+end
+
 @en "ZipCreate"
 @fa "ساخت زیپ"
 pub func ZipCreate(files: Vector<ZipFileInput>): compress.ByteBuf:
@@ -684,7 +777,9 @@ pub func ZipStatusText(status: int): str:
     if status == ZIP_ENCRYPTED: ret "encrypted entry" end
     if status == ZIP_CORRUPT: ret "corrupt data" end
     if status == ZIP_BAD_CRC: ret "checksum mismatch" end
-    if status == ZIP_TOO_BIG: ret "entry too large" end
+    if status == ZIP_TOO_BIG: ret "entry larger than the size cap" end
+    if status == ZIP_IO: ret "cannot read or write a file" end
+    if status == ZIP_UNSAFE_PATH: ret "entry path leaves the target folder" end
     ret "unknown error"
 end
 

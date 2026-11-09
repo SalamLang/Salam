@@ -44,7 +44,7 @@ pub const ARCHIVE_TOO_BIG := 6
 @fa "بایگانی مسیر ناامن"
 pub const ARCHIVE_UNSAFE_PATH := 7
 @en "ARCHIVE_BAD_PASSWORD"
-@fa "بایگانی گذرواژه نادرست"
+@fa "بایگانی گذرواژه اشتباه"
 pub const ARCHIVE_BAD_PASSWORD := 8
 @en "ARCHIVE_MULTIVOLUME"
 @fa "بایگانی چند بخشی"
@@ -98,6 +98,9 @@ pub const FormatSevenZip := 10
 @en "FormatZstd"
 @fa "قالب زد استاندارد"
 pub const FormatZstd := 11
+@en "FormatTarZstd"
+@fa "قالب تار زد استاندارد"
+pub const FormatTarZstd := 12
 
 const _AUTO_INT_MAX := 2147483647
 const _AUTO_RATIO_SLACK := 1048576
@@ -228,6 +231,8 @@ func _auto_unwrap(arc &: Archive, kind: int):
         out = compress.GzipDecompressMax(arc.data, arc.len, cap, ok)
     else kind == FormatBzip2:
         out = compress.Bzip2DecompressMax(arc.data, arc.len, cap, ok)
+    else kind == FormatZstd:
+        out = compress.ZstdDecompressMax(arc.data, arc.len, cap, ok)
     else:
         out = compress.XzDecompressMax(arc.data, arc.len, cap, ok)
     end
@@ -238,7 +243,15 @@ func _auto_unwrap(arc &: Archive, kind: int):
     end
     arc.inner = out
     if _auto_is_tar(arc.inner.data, arc.inner.len):
-        arc.format = kind == FormatGzip ? FormatTarGz : (kind == FormatBzip2 ? FormatTarBz2 : FormatTarXz)
+        if kind == FormatGzip:
+            arc.format = FormatTarGz
+        else kind == FormatBzip2:
+            arc.format = FormatTarBz2
+        else kind == FormatZstd:
+            arc.format = FormatTarZstd
+        else:
+            arc.format = FormatTarXz
+        end
     end
 end
 
@@ -253,11 +266,11 @@ func _auto_tar_len(arc: Archive): int:
 end
 
 func _auto_is_tarish(f: int): bool:
-    ret f == FormatTar or f == FormatTarGz or f == FormatTarBz2 or f == FormatTarXz
+    ret f == FormatTar or f == FormatTarGz or f == FormatTarBz2 or f == FormatTarXz or f == FormatTarZstd
 end
 
 func _auto_is_stream(f: int): bool:
-    ret f == FormatGzip or f == FormatBzip2 or f == FormatXz
+    ret f == FormatGzip or f == FormatBzip2 or f == FormatXz or f == FormatZstd
 end
 
 func _auto_map_rar(st: int): int:
@@ -276,7 +289,7 @@ func _auto_tar_read(arc: Archive, name: str, max: int, status &: int): compress.
     mut e := Entry {}
     mut data := 0
     mut g := _TarPax {}
-    until _tar_next(p, _auto_tar_len(arc), pos, e, data, g):
+    until _tar_next(p, _auto_tar_len(arc), pos, e, data, g, _auto_tar_len(arc) as i64):
         hit := e.kind == 0 and e.name == name
         size := e.size
         _tar_free_str(e.name)
@@ -414,6 +427,7 @@ pub func FormatName(format: int): str:
     if format == FormatRar: ret "rar" end
     if format == FormatSevenZip: ret "7z" end
     if format == FormatZstd: ret "zstd" end
+    if format == FormatTarZstd: ret "tar.zst" end
     ret "unknown"
 end
 
@@ -454,6 +468,7 @@ pub func DetectName(path: str): int:
     if _auto_ends(path, ".tar.gz") or _auto_ends(path, ".tgz"): ret FormatTarGz end
     if _auto_ends(path, ".tar.bz2") or _auto_ends(path, ".tbz2") or _auto_ends(path, ".tbz"): ret FormatTarBz2 end
     if _auto_ends(path, ".tar.xz") or _auto_ends(path, ".txz"): ret FormatTarXz end
+    if _auto_ends(path, ".tar.zst") or _auto_ends(path, ".tzst"): ret FormatTarZstd end
     if _auto_ends(path, ".gz"): ret FormatGzip end
     if _auto_ends(path, ".bz2"): ret FormatBzip2 end
     if _auto_ends(path, ".xz"): ret FormatXz end
@@ -471,9 +486,7 @@ pub func OpenWith(p: void*, n: int, password: str, limits: Limits): Archive:
     arc.format = f
     if f == FormatUnknown:
         arc.fail = ARCHIVE_UNKNOWN_FORMAT
-    else f == FormatZstd:
-        arc.fail = ARCHIVE_UNSUPPORTED
-    else f == FormatGzip or f == FormatBzip2 or f == FormatXz:
+    else f == FormatGzip or f == FormatBzip2 or f == FormatXz or f == FormatZstd:
         _auto_unwrap(arc, f)
     end
     arc.status = arc.fail
@@ -504,6 +517,7 @@ pub func OpenFile(path: str, password: str): Archive:
     if arc.format == FormatGzip and _auto_ends(base, ".gz"): arc.name = base.substr(0, base.len() - 3)
     else arc.format == FormatBzip2 and _auto_ends(base, ".bz2"): arc.name = base.substr(0, base.len() - 4)
     else arc.format == FormatXz and _auto_ends(base, ".xz"): arc.name = base.substr(0, base.len() - 3)
+    else arc.format == FormatZstd and _auto_ends(base, ".zst"): arc.name = base.substr(0, base.len() - 4)
     end
     mem.Free(base as void*)
     ret arc
@@ -760,7 +774,7 @@ pub func CreateBuf(format: int, files: Vector<FileInput>, status &: int): compre
         end
         owned.free()
         zs.free()
-    else format == FormatTar or format == FormatTarGz or format == FormatTarBz2:
+    else format == FormatTar or format == FormatTarGz or format == FormatTarBz2 or format == FormatTarZstd:
         mut ts := Vector {} as Vector<TarFileInput>
         i = 0
         until i < files.len():
@@ -775,6 +789,9 @@ pub func CreateBuf(format: int, files: Vector<FileInput>, status &: int): compre
             out = tar
         else format == FormatTarGz:
             out = compress.GzipCompressBuf(tar)
+            compress.BufFree(tar)
+        else format == FormatTarZstd:
+            out = compress.ZstdCompressBuf(tar)
             compress.BufFree(tar)
         else:
             out = compress.Bzip2CompressBuf(tar)
@@ -802,7 +819,7 @@ pub func CreateBuf(format: int, files: Vector<FileInput>, status &: int): compre
         compress.BufFree(out)
         out = SevenZipCreate(ss)
         ss.free()
-    else format == FormatGzip or format == FormatBzip2:
+    else format == FormatGzip or format == FormatBzip2 or format == FormatZstd:
         if files.len() != 1 or files.get(0).is_dir:
             status = ARCHIVE_UNSUPPORTED
         else:
@@ -810,6 +827,8 @@ pub func CreateBuf(format: int, files: Vector<FileInput>, status &: int): compre
             compress.BufFree(out)
             if format == FormatGzip:
                 out = compress.GzipCompress(f.data_ptr, f.data_len)
+            else format == FormatZstd:
+                out = compress.ZstdCompress(f.data_ptr, f.data_len)
             else:
                 out = compress.Bzip2Compress(f.data_ptr, f.data_len)
             end

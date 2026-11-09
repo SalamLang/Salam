@@ -122,6 +122,8 @@ export type Integration = {
   scope: string;
   created: number;
   oauth: boolean;
+  mcp_available?: boolean;
+  mcp?: "" | "read" | "write";
 };
 export type Integrations = {
   sandbox: boolean;
@@ -1135,6 +1137,8 @@ export const api = {
   integrations: () => call<Integrations>("GET", "/integrations"),
   saveIntegration: (provider: string, token: string) =>
     call<Integration>("POST", `/integrations/${provider}/token`, { token }),
+  setMcp: (provider: string, level: "off" | "read" | "write") =>
+    call<Integration>("POST", `/integrations/${provider}/mcp`, { level }),
   removeIntegration: (provider: string) =>
     call<{ ok: boolean }>("DELETE", `/integrations/${provider}`),
   integrationOauth: (provider: string) =>

@@ -79,6 +79,8 @@ or `docker build ai/backend`. It is configured through environment variables:
 | `AI_GITHUB_CLIENT_ID`, `AI_GITHUB_CLIENT_SECRET`                  | a GitHub OAuth app (callback `AI_OAUTH_ISSUER/integrations/github/callback`) for "Sign in with GitHub"; tokens can be pasted without it                                                                                                                                                                                                                                                                                                    | empty                                                                 |
 | `AI_FIGMA_CLIENT_ID`, `AI_FIGMA_CLIENT_SECRET`, `AI_FIGMA_SCOPES` | the same for Figma (callback `.../integrations/figma/callback`)                                                                                                                                                                                                                                                                                                                                                                            | empty                                                                 |
 | `AI_GITHUB_SCOPES`                                                | the classic OAuth scopes the "Connect with GitHub" flow asks for (space separated); the default is everything except `delete_repo` and `delete:packages`                                                                                                                                                                                                                                                                                   | see `cloud.salam`                                                     |
+| `AI_GITHUB_MCP_URL`                                               | the remote GitHub MCP endpoint used by `github_mcp`                                                                                                                                                                                                                                                                                                                                                                                        | `https://api.githubcopilot.com/mcp/`                                  |
+| `AI_GITHUB_MCP`                                                   | `0` turns `github_mcp` off for every account                                                                                                                                                                                                                                                                                                                                                                                               | on                                                                    |
 | `AI_GITHUB_APP_CLIENT_ID`, `AI_GITHUB_APP_CLIENT_SECRET`          | a GitHub App (not an OAuth App) used side by side with the OAuth App; both callbacks are `AI_APP_URL/auth/callback/github`                                                                                                                                                                                                                                                                                                                 | empty                                                                 |
 | `AI_GITHUB_APP_FOR`                                               | which flows use the GitHub App: `signin`, `connect` or `signin,connect`; a flow not listed keeps the OAuth App; ignored until the App id and secret are set                                                                                                                                                                                                                                                                                | empty                                                                 |
 | `AI_GITHUB_WEBHOOK_SECRET`                                        | secret of the GitHub App webhook (`/auth/webhook/github`); every delivery is checked against `X-Hub-Signature-256`; unset means the route answers 503                                                                                                                                                                                                                                                                                      | empty                                                                 |
@@ -374,7 +376,7 @@ App configured.
 A chat can be a cloud chat (`chats.cloud = 1`): it has a private Linux container
 (see `sandbox/`) and, through the same bridge MCP server the desktop agent uses, the
 tools `shell`, `read_file`, `write_file`, `edit_file`, `list_dir`, `glob`, `grep`,
-`run_tests` and `browser`, plus `github_api`, `github_git`, `figma_api` and `figma_export`. The
+`run_tests` and `browser`, plus `github_api`, `github_mcp`, `github_git`, `figma_api` and `figma_export`. The
 chat's random `bridge_token` is the session id the engine passes in every call, as
 for a desktop chat, so the engine needs no new configuration. Calls run on worker
 threads, are recorded in `bridge_calls` (the site shows them as command boxes) and,
@@ -382,7 +384,7 @@ when they take longer than `AI_BRIDGE_HOLD_SECONDS`, are picked up with `wait`.
 Telegram chats are cloud chats whenever the sandbox is on; on the site a cloud chat
 is made from the toggle on the welcome screen (`POST /chats {"cloud": true}`).
 The desktop-only tools (`docker`, `wsl`, the memory tools) answer that they need
-Salam Agent, and the cloud-only tools answer the same way in a desktop chat.
+Salam Agent, and the cloud-only tools answer the same way in a desktop chat (`github_mcp` is the exception: it runs on the server for both).
 
 GitHub and Figma are connected per account, with a personal access token or with
 OAuth where the operator set the client id and secret. Tokens are verified against
@@ -392,6 +394,24 @@ the service, encrypted with HMAC-based counter mode plus an HMAC tag keyed by
 - `github_api` calls the GitHub REST API as the user, private repositories included.
   Deleting or transferring a repository, deleting an organization, and the endpoints that manage keys, email addresses and
   authorizations are refused.
+- `github_mcp` talks to the remote GitHub MCP server (streamable HTTP,
+  `https://api.githubcopilot.com/mcp/`) with the user's saved token as a bearer token. It is
+  off for everyone until the user opts in under GitHub on the Connections page, or with
+  `/github mcp read|write|off` in Telegram (`POST /integrations/github/mcp {level}`; the
+  choice is kept in `integration_mcp` and dropped when GitHub is disconnected). It works
+  in cloud chats, Telegram and Salam Agent chats alike: the call always runs on the
+  server, so the token never reaches the user's computer. Only an allowlist of tools is
+  offered (repositories, file contents, issues, pull requests, commits, branches, tags,
+  releases, workflows, notifications, discussions, gists and code, issue and user
+  search). Level `write` adds `issue_write`, `add_issue_comment`, `create_pull_request`
+  and `create_branch` (`issue_write` can also edit or close an issue), and each of those needs `confirmed: true` after the model has
+  shown the user the change and got a yes in the chat. Merging, deleting and every tool
+  not on the list are refused. Every write call is recorded in `bridge_calls` with its arguments, so the user can review it; the flag is a model-side confirmation, so a prompt injected through issue text could still set it, which is why writes are a separate opt-in. Results are cut to 24000 characters and tokens
+  (`ghp_`, `gho_`, `github_pat_` and the saved one) are redacted. Personal access tokens
+  and OAuth App tokens (`ghp_`, `github_pat_`, `gho_`) are accepted by the MCP server;
+  GitHub App user tokens (`ghu_`) may be refused, in which case the tool says to
+  reconnect with a personal access token and the model falls back to `github_api`.
+  `AI_GITHUB_MCP_URL` overrides the endpoint and `AI_GITHUB_MCP=0` turns the feature off.
 - `github_git` runs `clone`, `fetch`, `pull`, `push` and `ls-remote` in the sandbox
   against `https://github.com/` only; the token reaches Git for that one command
   through an environment variable and a credential helper, never the remote URL.

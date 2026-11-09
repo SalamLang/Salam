@@ -322,6 +322,18 @@ function IntegrationCard({ item, storage, highlight, notify, onChange }: { item:
     }
   };
 
+  const setMcp = async (level: "off" | "read" | "write") => {
+    setBusy("mcp");
+    try {
+      await api.setMcp(item.provider, level);
+      onChange();
+    } catch (err) {
+      notify(err instanceof ApiError ? err.message : t("ذخیره‌ی تنظیم ناموفق بود.", "Could not save the setting."));
+    } finally {
+      setBusy("");
+    }
+  };
+
   const remove = async () => {
     const ok = await confirmDialog({
       title: t(`جدا کردن ${info.name}`, `Disconnect ${info.name}`),
@@ -379,6 +391,17 @@ function IntegrationCard({ item, storage, highlight, notify, onChange }: { item:
         <ul className="conn-accounts">
           <Account name={item.login} note={item.scope && item.scope !== "token" ? item.scope : undefined} since={item.created} busy={busy === "remove"} onRemove={remove} />
         </ul>
+      )}
+      {item.connected && !item.expired && item.mcp_available && (
+        <label className="field conn-mcp">
+          <span>{t("استفاده از سرور MCP گیت‌هاب", "Let the assistant use the GitHub MCP server")}</span>
+          <select value={item.mcp || "off"} disabled={busy !== ""} onChange={(e) => setMcp(e.target.value as "off" | "read" | "write")}>
+            <option value="off">{t("خاموش", "Off")}</option>
+            <option value="read">{t("فقط خواندن (مخزن‌ها، ایشوها، پول‌ریکوئست‌ها، جست‌وجوی کد)", "Read only (repositories, issues, pull requests, code search)")}</option>
+            <option value="write">{t("خواندن و نوشتن با تأیید شما (ایشو، نظر، پول‌ریکوئست، شاخه)", "Read and write with your yes (issues, comments, pull requests, branches)")}</option>
+          </select>
+          <small className="muted">{t("ادغام و حذف هرگز به دستیار داده نمی‌شود. با توکن شخصی (ghp_ یا github_pat_) بهتر کار می‌کند.", "Merging and deleting are never offered. Works best with a personal access token (ghp_ or github_pat_).")}</small>
+        </label>
       )}
       {item.connected && !replacing && storage && (
         <button type="button" className="link small-link conn-link" onClick={() => setReplacing(true)}>

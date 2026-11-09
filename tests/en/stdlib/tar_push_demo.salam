@@ -1,0 +1,148 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import archive
+import compress
+import filepath
+import mem
+import os
+
+func cat(a: str, b: str): str:
+    ret filepath.Join(a, b)
+end
+
+func fill(n: int, seed: int): compress.ByteBuf:
+    mut b := compress.NewByteBufCap(n)
+    mut x := seed as i64
+    repeat n in i:
+        x = (x * (1103515245 as i64) + (12345 as i64)) & (0x7fffffff as i64)
+        compress.BufPush(b, i % 3 == 0 ? ((x >> (16 as i64)) & (255 as i64)) as int : 65 + (i % 5))
+    end
+    ret b
+end
+
+func crc_of(path: str): u32:
+    mut ok := false
+    mut b := archive.ReadBinaryFile(path, ok)
+    c := compress.CRC32(b.data, b.len)
+    compress.BufFree(b)
+    ret c
+end
+
+func report(tag: str, st: int, dir: str, want_big: u32):
+    p1 := cat(dir, "a.txt")
+    p2 := cat(dir, "d/e/big.bin")
+    p3 := cat(dir, "link")
+    println tag, st, os.FileSize(p1), os.FileSize(p2), crc_of(p2) == want_big, os.Exists(p3)
+    mem.Free(p1 as void*)
+    mem.Free(p2 as void*)
+    mem.Free(p3 as void*)
+end
+
+func size_in(dir: str, name: str): i64:
+    p := cat(dir, name)
+    n := os.FileSize(p)
+    mem.Free(p as void*)
+    ret n
+end
+
+func exists_in(dir: str, name: str): bool:
+    p := cat(dir, name)
+    ok := os.Exists(p)
+    mem.Free(p as void*)
+    ret ok
+end
+
+func main:
+    root := cat(os.TempDir(), "salam_tar_push_demo")
+    os.RemoveAll(root)
+    os.MkdirAll(root)
+    mut big := fill(1500000, 7)
+    want := compress.CRC32(big.data, big.len)
+    note := "hello tar"
+    mut files := Vector {} as Vector<archive.TarFileInput>
+    files.push(archive.MakeTarFileInput("a.txt", note as void*, note.len(), false))
+    files.push(archive.MakeTarFileInput("d/", null, 0, true))
+    files.push(archive.MakeTarFileInput("d/e/big.bin", big.data, big.len, false))
+    files.push(archive.MakeTarSymlink("link", "a.txt"))
+    tar := cat(root, "t.tar")
+    tgz := cat(root, "t.tar.gz")
+    tbz := cat(root, "t.tar.bz2")
+    println archive.TarCreateFile(files, tar), archive.TarGzCreateFile(files, tgz), archive.Bzip2CompressFile(tar, tbz)
+
+    gzdir := cat(root, "gz")
+    bzdir := cat(root, "bz")
+    capdir := cat(root, "cap")
+    cutdir := cat(root, "cut")
+    st1 := archive.TarGzFileExtractAll(tgz, gzdir, 0 as i64)
+    report("gz", st1, gzdir, want)
+    st2 := archive.TarBz2FileExtractAll(tbz, bzdir, 0 as i64)
+    report("bz2", st2, bzdir, want)
+
+    mut lst := 0
+    mut es := archive.TarCompressedFileEntries(tgz, archive.FormatTarGz, lst)
+    println "list gz", lst, es.len()
+    archive.FreeEntries(es)
+    mut lst2 := 0
+    mut fb := archive.TarCompressedFileEntries(tbz, archive.FormatTarBz2, lst2)
+    println "list bz2", lst2, fb.len()
+    archive.FreeEntries(fb)
+
+    println "cap", archive.TarCompressedFileExtractAll(tgz, archive.FormatTarGz, capdir, 1000 as i64), size_in(capdir, "a.txt"), exists_in(capdir, "d/e/big.bin")
+
+    mut rok := false
+    mut raw := archive.ReadBinaryFile(tgz, rok)
+    cut := cat(root, "cut.tar.gz")
+    println archive.WriteBinaryFile(cut, raw.data, raw.len / 2)
+    println "truncated gz", archive.TarGzFileExtractAll(cut, cutdir, 0 as i64)
+    none := cat(root, "none.gz")
+    println "missing", archive.TarGzFileExtractAll(none, cutdir, 0 as i64)
+    compress.BufFree(raw)
+
+    mut zin := Vector {} as Vector<archive.ZipFileInput>
+    zin.push(archive.MakeZipFileInput("big.bin", big.data, big.len, 12))
+    zip := cat(root, "bz.zip")
+    println "zip", archive.ZipCreateFile(zin, zip)
+    mut zf := archive.ZipOpenFile(zip)
+    out := cat(root, "bz.out")
+    println "zip bzip2", zf.status, archive.ZipFileExtractTo(zf, "big.bin", out, 0 as i64), crc_of(out) == want
+    println "zip cap", archive.ZipFileExtractTo(zf, "big.bin", out, 1000 as i64), os.Exists(out)
+    archive.ZipFileClose(zf)
+    fpb := compress.FileOpenRead(tbz)
+    plain := cat(root, "plain.tar")
+    mut sk := compress.SinkOpen(plain, 0 as i64)
+    println "bzip2 sink", compress.Bzip2FileToSink(fpb, 0 as i64, compress.FileSize(fpb), sk) == compress.DecodeOk, sk.written == os.FileSize(tar), compress.DecodeIo
+    _ := compress.SinkClose(sk)
+    compress.FileClose(fpb)
+    zin.free()
+    files.free()
+    compress.BufFree(big)
+    os.RemoveAll(root)
+    mem.Free(root as void*)
+    mem.Free(tar as void*)
+    mem.Free(tgz as void*)
+    mem.Free(tbz as void*)
+    mem.Free(gzdir as void*)
+    mem.Free(bzdir as void*)
+    mem.Free(capdir as void*)
+    mem.Free(cutdir as void*)
+    mem.Free(cut as void*)
+    mem.Free(none as void*)
+    mem.Free(zip as void*)
+    mem.Free(out as void*)
+    mem.Free(plain as void*)
+    ret 0
+end

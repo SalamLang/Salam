@@ -1,0 +1,145 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import mem
+import net.tcp
+import net.udp
+import net.trojan
+import net.tunnel
+import compress
+import sync
+
+mut echo_port := 0
+mut udp_port := 0
+mut ready := sync.NewWaitGroup()
+
+func text_of(p: void*, n: int): str:
+    buf := mem.Allocate((n + 1) as u64)
+    mem.Copy(buf, p, n as u64)
+    (buf as u8*)[n] = 0 as u8
+    ret buf as str
+end
+
+func echo_server():
+    srv := tcp.Bind(0)
+    echo_port = tcp.Port(srv)
+    sync.Done(ready)
+    until true:
+        c := tcp.Accept(srv)
+        until true:
+            s := tcp.Read(c, 4096)
+            if s.len() == 0:
+                break
+            end
+            _n := tcp.Write(c, s)
+        end
+        tcp.Close(c)
+    end
+end
+
+func udp_server():
+    s := udp.Bind(0)
+    udp_port = udp.Port(s)
+    sync.Done(ready)
+    until true:
+        p := udp.Receive(s, 2048)
+        if p.data.len() > 0:
+            _n := udp.Send(s, p.from_host, p.from_port, "echo:" + p.data)
+        end
+    end
+end
+
+func read_all_text(l &: trojan.Link, want: int): str:
+    buf := mem.Allocate(8192 as u64)
+    defer mem.Free(buf)
+    mut out := ""
+    until out.len() < want:
+        n := trojan.LinkRead(l, buf, 8192)
+        if n <= 0:
+            break
+        end
+        out = out + text_of(buf, n)
+    end
+    ret out
+end
+
+func main:
+    sync.Add(ready, 2 as i64)
+    _t1 := spawn(echo_server)
+    _t2 := spawn(udp_server)
+    sync.Wait(ready)
+
+    mut cfg := trojan.NewServerConfig("", "")
+    trojan.AddPassword(cfg, "secret")
+    trojan.SetMode(cfg, trojan.ModePlain)
+    stats := tunnel.NewStats()
+    trojan.SetStats(cfg, stats)
+    srv := trojan.Listen(cfg, 0)
+    println "listen ok", srv.ok, srv.host
+
+    mut ccfg := trojan.NewClientConfig("127.0.0.1", srv.port, "secret")
+    ccfg.use_tls = false
+
+    mut ulink := trojan.DialUDP(ccfg)
+    println trojan.SendUDP(ulink, "127.0.0.1", udp_port, "one" as void*, 3)
+    println trojan.SendUDP(ulink, "127.0.0.1", udp_port, "two" as void*, 3)
+    mut pkt := trojan.NewUDPPacket()
+    mut payload := compress.NewByteBuf()
+    println trojan.ReadUDPPacket(ulink, pkt, payload), text_of(payload.data, payload.len)
+    println trojan.ReadUDPPacket(ulink, pkt, payload), text_of(payload.data, payload.len)
+    trojan.LinkClose(ulink)
+
+    mut link := trojan.Dial(ccfg, "127.0.0.1", echo_port)
+    println trojan.LinkWriteStr(link, "hello stats")
+    println read_all_text(link, 11)
+    trojan.LinkClose(link)
+    sync.SleepMs(300)
+    println "up", stats.Up() >= 17, "down", stats.Down() >= 17, "total", stats.Total()
+    trojan.Stop(srv)
+
+    mut rt := tunnel.NewRouter("direct")
+    mut rule := tunnel.NewRule("block")
+    println tunnel.RulePort(rule, "" + echo_port)
+    tunnel.RouterAdd(rt, rule)
+    mut rd := tunnel.NewRouterDialer(rt)
+    tunnel.RouterDialerAdd(rd, "block", tunnel.Block())
+    mut cfg2 := trojan.NewServerConfig("", "")
+    trojan.AddPassword(cfg2, "secret")
+    trojan.SetRouter(cfg2, rd)
+    trojan.SetBind(cfg2, "127.0.0.1")
+    trojan.SetMode(cfg2, trojan.ModePlain)
+    srv2 := trojan.Listen(cfg2, 0)
+    mut c2 := trojan.NewClientConfig("127.0.0.1", srv2.port, "secret")
+    c2.use_tls = false
+    mut blocked := trojan.Dial(c2, "127.0.0.1", echo_port)
+    println trojan.LinkWriteStr(blocked, "x")
+    println "blocked read", read_all_text(blocked, 1).len()
+    trojan.LinkClose(blocked)
+
+    mut v6 := trojan.Dial(c2, "::1", echo_port)
+    println trojan.LinkWriteStr(v6, "x")
+    println "v6 read", read_all_text(v6, 1).len()
+    trojan.LinkClose(v6)
+    trojan.Stop(srv2)
+
+    mut tls_cfg := trojan.NewServerConfig("tests/fixtures/ssl/server.crt", "tests/fixtures/ssl/server.key")
+    trojan.AddPassword(tls_cfg, "secret")
+    srv3 := trojan.Listen(tls_cfg, 0)
+    println "tls mode host", srv3.ok, srv3.host
+    trojan.Stop(srv3)
+
+    ls := tcp.BindOn("127.0.0.1", 0)
+    println "bindon", tcp.Ok(ls), tcp.Port(ls) > 0
+    tcp.CloseServer(ls)
+end

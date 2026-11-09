@@ -1,0 +1,335 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package archive
+
+import compress
+import filepath
+import mem
+import os
+import str
+
+const _TP_HDR := 0
+const _TP_DATA := 1
+const _TP_SKIP := 2
+const _TP_PAD := 3
+const _TP_DONE := 4
+const _TP_META := 5
+
+struct _TarPush:
+    pub destdir: str
+    pub cap: i64
+    pub list_only: bool
+    pub state: int
+    pub have: int
+    pub meta_left: int
+    pub left: i64
+    pub pad: int
+    pub mini: compress.ByteBuf
+    pub g: _TarPax
+    pub dirs: Vector<str>
+    pub dir_times: Vector<i64>
+    pub entries: Vector<Entry>
+    pub status: int
+    pub sink: compress.FileSink
+    pub open: bool
+    pub outpath: str
+    pub mode: int
+    pub mtime: i64
+end
+
+func _tp_new(destdir: str, cap: i64, list_only: bool): _TarPush:
+    ret _TarPush {
+        destdir = destdir, cap = cap, list_only = list_only, state = _TP_HDR, have = 0, meta_left = 0, left = 0 as i64, pad = 0
+        mini = compress.NewByteBufCap(2048), g = _TarPax {}, dirs = Vector {} as Vector<str>, dir_times = Vector {} as Vector<i64>
+        entries = Vector {} as Vector<Entry>, status = TAR_OK, sink = compress.FileSink {}, open = false, outpath = "", mode = 0, mtime = 0 as i64
+    }
+end
+
+func _tp_note(tp: _TarPush*, st: int):
+    if st != TAR_OK and tp[0].status == TAR_OK:
+        tp[0].status = st
+    end
+end
+
+func _tp_close_file(tp: _TarPush*, good: bool):
+    if not tp[0].open:
+        ret
+    end
+    bad := tp[0].sink.over or tp[0].sink.failed
+    over := tp[0].sink.over
+    closed := compress.SinkClose(tp[0].sink)
+    if bad or not closed or not good:
+        os.Remove(tp[0].outpath)
+        if over:
+            _tp_note(tp, TAR_TOO_BIG)
+        else bad or not closed:
+            _tp_note(tp, TAR_IO)
+        else:
+            _tp_note(tp, TAR_CORRUPT)
+        end
+    else:
+        _tar_set_mode(tp[0].outpath, tp[0].mode, false)
+        if tp[0].mtime > (0 as i64):
+            _tar_set_mtime(tp[0].outpath, tp[0].mtime)
+        end
+    end
+    mem.Free(tp[0].outpath as void*)
+    tp[0].outpath = ""
+    tp[0].open = false
+end
+
+func _tp_after_data(tp: _TarPush*):
+    _tp_close_file(tp, true)
+    if tp[0].pad > 0:
+        tp[0].state = _TP_PAD
+    else:
+        tp[0].state = _TP_HDR
+    end
+end
+
+func _tp_begin(tp: _TarPush*, e: Entry):
+    if tp[0].list_only:
+        tp[0].entries.push(e)
+        if e.kind == 0 and e.size > (0 as i64):
+            tp[0].left = e.size
+            tp[0].pad = ((((e.size + (511 as i64)) / (512 as i64)) * (512 as i64)) - e.size) as int
+            tp[0].state = _TP_SKIP
+        end
+        ret
+    end
+    if e.kind != 0:
+        mut st := TAR_OK
+        if not _tar_place(e, tp[0].destdir, tp[0].dirs, tp[0].dir_times, null, 0, null, 0 as i64, tp[0].cap, st):
+            if st == TAR_OK:
+                st = TAR_CORRUPT
+            end
+        end
+        _tp_note(tp, st)
+        ret
+    end
+    tp[0].left = e.size
+    tp[0].pad = ((((e.size + (511 as i64)) / (512 as i64)) * (512 as i64)) - e.size) as int
+    tp[0].state = _TP_SKIP
+    if not _safe_entry_name(e.name) or _tar_through_link(tp[0].destdir, e.name):
+        _tp_note(tp, TAR_UNSAFE_PATH)
+    else tp[0].cap > (0 as i64) and e.size > tp[0].cap:
+        _tp_note(tp, TAR_TOO_BIG)
+    else:
+        outpath := filepath.Join(tp[0].destdir, e.name)
+        parent := filepath.Dir(outpath)
+        EnsureDir(parent)
+        mem.Free(parent as void*)
+        os.Remove(outpath)
+        tp[0].sink = compress.SinkOpen(outpath, tp[0].cap)
+        if tp[0].sink.failed:
+            _tp_note(tp, TAR_IO)
+            mem.Free(outpath as void*)
+        else:
+            tp[0].open = true
+            tp[0].outpath = outpath
+            tp[0].mode = e.mode
+            tp[0].mtime = e.mtime
+            tp[0].state = _TP_DATA
+        end
+    end
+    _tar_free_str(e.name)
+    _tar_free_str(e.link)
+    if e.size == (0 as i64):
+        _tp_after_data(tp)
+    end
+end
+
+func _tp_block(tp: _TarPush*):
+    blk := ((tp[0].mini.data as i64) + ((tp[0].mini.len - 512) as i64)) as void*
+    if _tar_is_zero_block(blk, 0):
+        tp[0].state = _TP_DONE
+        ret
+    end
+    bp := blk as u8*
+    typeflag := bp[156] as int
+    size := _tar_get_num(blk, 124, 12)
+    if typeflag == 103 or typeflag == 120 or typeflag == 76 or typeflag == 75:
+        if size < (0 as i64) or size > (_TARF_META_MAX as i64):
+            _tp_note(tp, TAR_CORRUPT)
+            tp[0].state = _TP_DONE
+            ret
+        end
+        span := (((size as int) + 511) / 512) * 512
+        if span > 0:
+            tp[0].meta_left = span
+            tp[0].state = _TP_META
+        end
+        ret
+    end
+    mut e := Entry {}
+    mut mpos := 0
+    mut mdata := 0
+    ok := _tar_next(tp[0].mini.data, tp[0].mini.len, mpos, e, mdata, tp[0].g, 9223372036854775807 as i64)
+    tp[0].mini.len = 0
+    if not ok:
+        _tp_note(tp, TAR_CORRUPT)
+        tp[0].state = _TP_DONE
+        ret
+    end
+    _tp_begin(tp, e)
+end
+
+func _tp_feed(tp: _TarPush*, p: void*, n: int):
+    mut at := 0
+    until at < n:
+        src := ((p as i64) + (at as i64)) as void*
+        room := n - at
+        st := tp[0].state
+        if st == _TP_HDR:
+            mut take := 512 - tp[0].have
+            if take > room:
+                take = room
+            end
+            compress.BufPushBytes(tp[0].mini, src, take)
+            tp[0].have += take
+            at += take
+            if tp[0].have == 512:
+                tp[0].have = 0
+                _tp_block(tp)
+            end
+        else st == _TP_META:
+            mut take := tp[0].meta_left
+            if take > room:
+                take = room
+            end
+            compress.BufPushBytes(tp[0].mini, src, take)
+            tp[0].meta_left -= take
+            at += take
+            if tp[0].meta_left == 0:
+                tp[0].state = _TP_HDR
+            end
+        else st == _TP_DATA or st == _TP_SKIP:
+            mut take := room
+            if (take as i64) > tp[0].left:
+                take = tp[0].left as int
+            end
+            if st == _TP_DATA and not tp[0].sink.over and not tp[0].sink.failed:
+                _ := compress.SinkWrite(tp[0].sink, src, take)
+            end
+            tp[0].left -= take as i64
+            at += take
+            if tp[0].left == (0 as i64):
+                if st == _TP_DATA:
+                    _tp_after_data(tp)
+                else tp[0].pad > 0:
+                    tp[0].state = _TP_PAD
+                else:
+                    tp[0].state = _TP_HDR
+                end
+            end
+        else st == _TP_PAD:
+            mut take := tp[0].pad
+            if take > room:
+                take = room
+            end
+            tp[0].pad -= take
+            at += take
+            if tp[0].pad == 0:
+                tp[0].state = _TP_HDR
+            end
+        else:
+            at = n
+        end
+    end
+end
+
+func _tp_end(tp: _TarPush*): int:
+    st := tp[0].state
+    if st == _TP_DATA or st == _TP_SKIP or st == _TP_PAD or st == _TP_META or tp[0].have > 0:
+        _tp_note(tp, TAR_CORRUPT)
+        _tp_close_file(tp, false)
+    end
+    _tar_finish_dirs(tp[0].dirs, tp[0].dir_times)
+    compress.BufFree(tp[0].mini)
+    _tar_px_free(tp[0].g)
+    ret tp[0].status
+end
+
+func _tar_push_run(path: str, format: int, tp: _TarPush*): int:
+    emit := (p: void*, n: int, c: void*): ret _tp_emit(c as _TarPush*, p, n) end
+    fp := compress.FileOpenRead(path)
+    if fp == null:
+        ret TAR_IO
+    end
+    size := compress.FileSize(fp)
+    mut sink := compress.SinkCallback(0 as i64, emit, tp as void*)
+    mut code := ARCHIVE_CORRUPT
+    if format == FormatTarGz:
+        code = _gz_to_sink(fp, size, sink)
+    else format == FormatTarBz2:
+        d := compress.Bzip2FileToSink(fp, 0 as i64, size, sink)
+        code = d == compress.DecodeOk ? ARCHIVE_OK : (d == compress.DecodeTooBig ? ARCHIVE_TOO_BIG : (d == compress.DecodeIo ? ARCHIVE_IO_ERROR : ARCHIVE_CORRUPT))
+    else:
+        code = ARCHIVE_UNSUPPORTED
+    end
+    compress.FileClose(fp)
+    if code == ARCHIVE_OK:
+        ret TAR_OK
+    end
+    if code == ARCHIVE_IO_ERROR:
+        ret TAR_IO
+    end
+    if code == ARCHIVE_TOO_BIG:
+        ret TAR_TOO_BIG
+    end
+    ret TAR_CORRUPT
+end
+
+func _tp_emit(tp: _TarPush*, p: void*, n: int): bool:
+    _tp_feed(tp, p, n)
+    ret true
+end
+
+func _tar_push_all(path: str, format: int, destdir: str, cap: i64): int:
+    tp := mem.AllocateZeroed(sizeof(_TarPush)) as _TarPush*
+    tp[0] = _tp_new(destdir, cap, false)
+    dec := _tar_push_run(path, format, tp)
+    end_st := _tp_end(tp)
+    mem.Free(tp as void*)
+    if end_st != TAR_OK:
+        ret end_st
+    end
+    ret dec
+end
+
+@en "TarCompressedFileExtractAll"
+@fa "استخراج همه از پرونده تار فشرده"
+pub func TarCompressedFileExtractAll(path: str, format: int, destdir: str, cap: i64): int:
+    ret _tar_push_all(path, format, destdir, cap)
+end
+
+@en "TarCompressedFileEntries"
+@fa "مدخل های پرونده تار فشرده"
+pub func TarCompressedFileEntries(path: str, format: int, status &: int): Vector<Entry>:
+    tp := mem.AllocateZeroed(sizeof(_TarPush)) as _TarPush*
+    tp[0] = _tp_new("", 0 as i64, true)
+    dec := _tar_push_run(path, format, tp)
+    end_st := _tp_end(tp)
+    out := tp[0].entries
+    mem.Free(tp as void*)
+    status = end_st != TAR_OK ? end_st : dec
+    ret out
+end
+
+@en "TarBz2FileExtractAll"
+@fa "استخراج همه از پرونده تار بی زیپ دو"
+pub func TarBz2FileExtractAll(path: str, destdir: str, cap: i64): int:
+    ret _tar_push_all(path, FormatTarBz2, destdir, cap)
+end

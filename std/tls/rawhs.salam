@@ -1,0 +1,576 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package tls
+
+const ED_SPKI_LEN := 32
+
+func _raw_new(fd: i64): Conn:
+    mut c := Conn {}
+    c.h = Handshake {}
+    c.h.rec = _rec_new(fd)
+    c.h.priv = _newbuf(32)
+    c.h.pub_key = _newbuf(32)
+    c.h.shared = _newbuf(32)
+    c.h.hs_secret = _newbuf(48)
+    c.h.master = _newbuf(48)
+    c.h.c_hs_secret = _newbuf(48)
+    c.h.s_hs_secret = _newbuf(48)
+    c.h.c_ap_secret = _newbuf(48)
+    c.h.s_ap_secret = _newbuf(48)
+    c.h.certs = _newbuf(8192)
+    c.h.cert_off = _newbuf(128)
+    c.h.crand = _newbuf(32)
+    c.h.srand = _newbuf(32)
+    c.h.ecpriv = _newbuf(32)
+    c.h.ecpub = _newbuf(65)
+    ret c
+end
+
+func _der_read(p: void*, n: int, off: int, tag &: int, dlen &: int, cstart &: int): bool:
+    if off + 2 > n:
+        ret false
+    end
+    tag = _bget(p, off)
+    l := _bget(p, off + 1)
+    mut start := off + 2
+    mut len := l
+    if l >= 0x80:
+        nb := l & 0x7F
+        if nb == 0 or nb > 3 or off + 2 + nb > n:
+            ret false
+        end
+        len = 0
+        repeat nb in i:
+            len = (len << 8) | _bget(p, off + 2 + i)
+        end
+        start = off + 2 + nb
+    end
+    if start + len > n:
+        ret false
+    end
+    dlen = len
+    cstart = start
+    ret true
+end
+
+func _der_ed25519(p: void*, n: int, pubout: void*, sigout: void*): bool:
+    mut tag := 0
+    mut cl := 0
+    mut cs := 0
+    if not _der_read(p, n, 0, tag, cl, cs) or tag != 0x30:
+        ret false
+    end
+    mut ts := 0
+    mut tl := 0
+    if not _der_read(p, n, cs, tag, tl, ts) or tag != 0x30:
+        ret false
+    end
+    mut o := ts + tl
+    mut al := 0
+    mut asx := 0
+    if not _der_read(p, n, o, tag, al, asx) or tag != 0x30:
+        ret false
+    end
+    o = asx + al
+    mut sl := 0
+    mut ss := 0
+    if not _der_read(p, n, o, tag, sl, ss) or tag != 0x03 or sl != 65 or _bget(p, ss) != 0:
+        ret false
+    end
+    repeat 64 in i:
+        _bput(sigout, i, _bget(p, ss + 1 + i))
+    end
+    mut e := ts
+    mut el := 0
+    mut es := 0
+    if not _der_read(p, n, e, tag, el, es):
+        ret false
+    end
+    if tag == 0xA0:
+        e = es + el
+    end
+    mut skip := 0
+    until skip < 5:
+        if not _der_read(p, n, e, tag, el, es):
+            ret false
+        end
+        e = es + el
+        skip++
+    end
+    mut kl := 0
+    mut ks := 0
+    if not _der_read(p, n, e, tag, kl, ks) or tag != 0x30:
+        ret false
+    end
+    mut gl := 0
+    mut gs := 0
+    if not _der_read(p, n, ks, tag, gl, gs) or tag != 0x30 or gl != 5:
+        ret false
+    end
+    if _bget(p, gs) != 0x06 or _bget(p, gs + 1) != 3 or _bget(p, gs + 2) != 0x2b or _bget(p, gs + 3) != 0x65 or _bget(p, gs + 4) != 0x70:
+        ret false
+    end
+    mut bl := 0
+    mut bs := 0
+    if not _der_read(p, n, gs + gl, tag, bl, bs) or tag != 0x03 or bl != 33 or _bget(p, bs) != 0:
+        ret false
+    end
+    repeat 32 in i:
+        _bput(pubout, i, _bget(p, bs + 1 + i))
+    end
+    ret true
+end
+
+func _raw_cv_verify_reality(h &: Handshake, msg: Reader, th: Buf, auth: void*, authlen: int): bool:
+    mut r := msg
+    scheme := _rd16(r)
+    sigr := _rdvec16(r)
+    if r.bad or _rdleft(r) != 0:
+        ret _hs_fail(h, "malformed CertificateVerify")
+    end
+    if scheme != 0x0807 or sigr.len != 64:
+        ret _hs_fail(h, "reality: server did not sign with ed25519")
+    end
+    mut pubk := _newbuf(32)
+    defer _buf_free(pubk)
+    _putzeros(pubk, 32)
+    mut cs := _newbuf(64)
+    defer _buf_free(cs)
+    _putzeros(cs, 64)
+    if not _der_ed25519(_bufptr(h.certs, _cert_start(h, 0)), _cert_len(h, 0), pubk.p, cs.p):
+        ret _hs_fail(h, "reality: certificate is not an ed25519 certificate")
+    end
+    mut mac := _newbuf(64)
+    defer _buf_free(mac)
+    _putzeros(mac, 64)
+    _hmac(HASH_SHA512, auth, authlen, pubk.p, 32, mac.p)
+    if not _cteq(mac.p, cs.p, 64):
+        ret _hs_fail(h, "reality: server certificate failed authentication")
+    end
+    mut sig := _newbuf(64)
+    defer _buf_free(sig)
+    repeat 64 in i:
+        _put8(sig, _rdat(sigr, i))
+    end
+    mut content := _newbuf(128)
+    defer _buf_free(content)
+    _hs_cv_content(h, th, content)
+    if not Ed25519Verify(pubk.p, content.p, content.len, sig.p):
+        ret _hs_fail(h, "reality: CertificateVerify signature invalid")
+    end
+    ret true
+end
+
+func _raw_client13(c &: Conn, h &: Handshake, cfg: Config, buf &: Buf, auth: void*, authlen: int): bool:
+    mut typ := 0
+    mut body := _newbuf(REC_MAX_PLAINTEXT)
+    defer _buf_free(body)
+
+    if not _hs_key_schedule(h):
+        ret _conn_fail(c, "key schedule failed")
+    end
+    _install_keys(h, h.s_hs_secret, h.c_hs_secret)
+
+    if not _hs_next_msg(h, buf, typ, body):
+        ret _conn_fail(c, h.err)
+    end
+    if typ != HS_ENCRYPTED_EXTENSIONS:
+        ret _conn_fail(c, "expected EncryptedExtensions")
+    end
+
+    if not _hs_next_msg(h, buf, typ, body):
+        ret _conn_fail(c, h.err)
+    end
+    mut cert_ctx := _newbuf(256)
+    defer _buf_free(cert_ctx)
+    mut cert_requested := false
+    if typ == HS_CERTIFICATE_REQUEST:
+        if body.len < 1 or _bufat(body, 0) + 1 > body.len:
+            ret _conn_fail(c, "malformed CertificateRequest")
+        end
+        repeat _bufat(body, 0) in i:
+            _put8(cert_ctx, _bufat(body, 1 + i))
+        end
+        cert_requested = true
+        if not _hs_next_msg(h, buf, typ, body):
+            ret _conn_fail(c, h.err)
+        end
+    end
+    if typ != HS_CERTIFICATE:
+        ret _conn_fail(c, "expected Certificate")
+    end
+    if not _hs_parse_certificate(h, _readerof(body)):
+        ret _conn_fail(c, h.err)
+    end
+
+    mut th_cv := _newbuf(64)
+    defer _buf_free(th_cv)
+    _hs_transcript(h, th_cv)
+
+    if not _hs_next_msg(h, buf, typ, body):
+        ret _conn_fail(c, h.err)
+    end
+    if typ != HS_CERTIFICATE_VERIFY:
+        ret _conn_fail(c, "expected CertificateVerify")
+    end
+    if authlen > 0:
+        if not _raw_cv_verify_reality(h, _readerof(body), th_cv, auth, authlen):
+            ret _conn_fail(c, h.err)
+        end
+    else:
+        if not _hs_verify_cert_verify(h, _readerof(body), th_cv):
+            ret _conn_fail(c, h.err)
+        end
+        if not _verify_peer_chain(c, h, cfg):
+            ret false
+        end
+    end
+
+    mut th_fin := _newbuf(64)
+    defer _buf_free(th_fin)
+    _hs_transcript(h, th_fin)
+    if not _hs_next_msg(h, buf, typ, body):
+        ret _conn_fail(c, h.err)
+    end
+    if typ != HS_FINISHED:
+        ret _conn_fail(c, "expected Finished")
+    end
+    mut expect := _newbuf(64)
+    defer _buf_free(expect)
+    if not _hs_finished_mac(h, h.s_hs_secret, th_fin, expect):
+        ret _conn_fail(c, "could not compute Finished MAC")
+    end
+    if body.len != expect.len or not _cteq(body.p, expect.p, expect.len):
+        _rec_send_alert(h.rec, 2, ALERT_DECRYPT_ERROR)
+        ret _conn_fail(c, "server Finished did not verify")
+    end
+
+    mut th_app := _newbuf(64)
+    defer _buf_free(th_app)
+    _hs_transcript(h, th_app)
+    if not _hs_derive(h, h.master, "c ap traffic", th_app, h.c_ap_secret):
+        ret _conn_fail(c, "could not derive client application secret")
+    end
+    if not _hs_derive(h, h.master, "s ap traffic", th_app, h.s_ap_secret):
+        ret _conn_fail(c, "could not derive server application secret")
+    end
+
+    mut ccs := _newbuf(1)
+    defer _buf_free(ccs)
+    _put8(ccs, 1)
+    _rec_write_plain(h.rec, REC_CHANGE_CIPHER_SPEC, ccs.p, 1)
+
+    if cert_requested:
+        mut ccert := _newbuf(16 + cert_ctx.len)
+        defer _buf_free(ccert)
+        _put8(ccert, HS_CERTIFICATE)
+        _put24(ccert, 1 + cert_ctx.len + 3)
+        _put8(ccert, cert_ctx.len)
+        _putbuf(ccert, cert_ctx)
+        _put24(ccert, 0)
+        _hash_update(h.tr, ccert.p, ccert.len)
+        if not _rec_write(h.rec, REC_HANDSHAKE, ccert.p, ccert.len):
+            ret _conn_fail(c, "could not send client Certificate")
+        end
+    end
+    mut th_cfin := _newbuf(64)
+    defer _buf_free(th_cfin)
+    _hs_transcript(h, th_cfin)
+    mut cfin := _newbuf(64)
+    defer _buf_free(cfin)
+    if not _hs_finished_mac(h, h.c_hs_secret, th_cfin, cfin):
+        ret _conn_fail(c, "could not compute client Finished")
+    end
+    mut fmsg := _newbuf(64)
+    defer _buf_free(fmsg)
+    _put8(fmsg, HS_FINISHED)
+    _put24(fmsg, cfin.len)
+    _putbuf(fmsg, cfin)
+    if not _rec_write(h.rec, REC_HANDSHAKE, fmsg.p, fmsg.len):
+        ret _conn_fail(c, "could not send Finished")
+    end
+    _install_keys(h, h.s_ap_secret, h.c_ap_secret)
+    h.ok = true
+    c.open = true
+    ret true
+end
+
+func _raw_client(c &: Conn, hello: void*, hlen: int, xpriv: void*, auth: void*, authlen: int, cfg: Config): bool:
+    mut h := c.h
+    _bufreset(h.priv)
+    _putraw(h.priv, xpriv, 32)
+    h.share_group = GROUP_X25519
+    _bufreset(h.pub_key)
+    _putzeros(h.pub_key, 32)
+    _x25519_base(h.priv.p, h.pub_key.p)
+
+    mut rec := _newbuf(hlen + 5)
+    defer _buf_free(rec)
+    _put8(rec, REC_HANDSHAKE)
+    _put16(rec, TLS10)
+    _put16(rec, hlen)
+    _putraw(rec, hello, hlen)
+    _putraw(h.rec.tx, rec.p, rec.len)
+    if not _rec_flush(h.rec):
+        c.h = h
+        ret _conn_fail(c, "could not send ClientHello: " + h.rec.err)
+    end
+
+    mut frag := _newbuf(REC_MAX_PLAINTEXT)
+    defer _buf_free(frag)
+    mut shlen := 0
+    mut sherr := ""
+    if not _read_server_hello(h, frag, shlen, sherr):
+        c.h = h
+        ret _conn_fail(c, sherr)
+    end
+    if not _hs_parse_server_hello(h, _newreader(_bufptr(frag, 4), shlen)):
+        c.h = h
+        ret _conn_fail(c, h.err)
+    end
+    if h.hrr:
+        c.h = h
+        ret _conn_fail(c, "server sent a HelloRetryRequest, which a custom ClientHello cannot answer")
+    end
+    if h.ver != TLS13:
+        c.h = h
+        ret _conn_fail(c, "server did not select TLS 1.3")
+    end
+    h.tr = _hash_init(h.hash)
+    _hash_update(h.tr, hello, hlen)
+    _hash_update(h.tr, frag.p, 4 + shlen)
+
+    mut buf := _newbuf(REC_MAX_PLAINTEXT)
+    defer _buf_free(buf)
+    if frag.len > 4 + shlen:
+        _putraw(buf, _bufptr(frag, 4 + shlen), frag.len - (4 + shlen))
+    end
+    ok := _raw_client13(c, h, cfg, buf, auth, authlen)
+    c.h = h
+    ret ok
+end
+
+func _raw_server13(c &: Conn, h &: Handshake, chi: ClientHelloInfo, suite: int, cert: void*, certlen: int, seed: void*): bool:
+    mut buf := _newbuf(REC_MAX_PLAINTEXT)
+    defer _buf_free(buf)
+    if not _hs_server_kx(h, chi.kx_group, chi.kx_pub):
+        ret _conn_fail(c, "key exchange failed")
+    end
+    mut sh := _newbuf(256)
+    defer _buf_free(sh)
+    if not _hs_build_server_hello(h, chi, suite, true, sh):
+        ret _conn_fail(c, "could not build ServerHello")
+    end
+    _hash_update(h.tr, sh.p, sh.len)
+    if not _rec_write(h.rec, REC_HANDSHAKE, sh.p, sh.len):
+        ret _conn_fail(c, "could not send ServerHello")
+    end
+    mut ccs := _newbuf(1)
+    defer _buf_free(ccs)
+    _put8(ccs, 1)
+    _rec_write_plain(h.rec, REC_CHANGE_CIPHER_SPEC, ccs.p, 1)
+
+    if not _hs_key_schedule(h):
+        ret _conn_fail(c, "key schedule failed")
+    end
+    _install_keys(h, h.c_hs_secret, h.s_hs_secret)
+
+    mut ee := _newbuf(64)
+    defer _buf_free(ee)
+    _hs_build_encrypted_extensions(ee)
+    _hash_update(h.tr, ee.p, ee.len)
+    if not _rec_write(h.rec, REC_HANDSHAKE, ee.p, ee.len):
+        ret _conn_fail(c, "could not send EncryptedExtensions")
+    end
+
+    mut certmsg := _newbuf(certlen + 16)
+    defer _buf_free(certmsg)
+    _put8(certmsg, HS_CERTIFICATE)
+    _put24(certmsg, certlen + 9)
+    _put8(certmsg, 0)
+    _put24(certmsg, certlen + 5)
+    _put24(certmsg, certlen)
+    _putraw(certmsg, cert, certlen)
+    _put16(certmsg, 0)
+    _hash_update(h.tr, certmsg.p, certmsg.len)
+    if not _rec_write(h.rec, REC_HANDSHAKE, certmsg.p, certmsg.len):
+        ret _conn_fail(c, "could not send Certificate")
+    end
+
+    mut th_cv := _newbuf(64)
+    defer _buf_free(th_cv)
+    _hs_transcript(h, th_cv)
+    mut content := _newbuf(128)
+    defer _buf_free(content)
+    _hs_cv_content(h, th_cv, content)
+    mut sig := _newbuf(64)
+    defer _buf_free(sig)
+    _putzeros(sig, 64)
+    Ed25519Sign(seed, content.p, content.len, sig.p)
+    mut cv := _newbuf(96)
+    defer _buf_free(cv)
+    _put8(cv, HS_CERTIFICATE_VERIFY)
+    _put24(cv, 68)
+    _put16(cv, 0x0807)
+    _put16(cv, 64)
+    _putbuf(cv, sig)
+    _hash_update(h.tr, cv.p, cv.len)
+    if not _rec_write(h.rec, REC_HANDSHAKE, cv.p, cv.len):
+        ret _conn_fail(c, "could not send CertificateVerify")
+    end
+
+    mut th_fin := _newbuf(64)
+    defer _buf_free(th_fin)
+    _hs_transcript(h, th_fin)
+    mut sfin := _newbuf(64)
+    defer _buf_free(sfin)
+    if not _hs_finished_mac(h, h.s_hs_secret, th_fin, sfin):
+        ret _conn_fail(c, "could not compute server Finished")
+    end
+    mut sfmsg := _newbuf(64)
+    defer _buf_free(sfmsg)
+    _put8(sfmsg, HS_FINISHED)
+    _put24(sfmsg, sfin.len)
+    _putbuf(sfmsg, sfin)
+    _hash_update(h.tr, sfmsg.p, sfmsg.len)
+    if not _rec_write(h.rec, REC_HANDSHAKE, sfmsg.p, sfmsg.len):
+        ret _conn_fail(c, "could not send server Finished")
+    end
+
+    mut th_app := _newbuf(64)
+    defer _buf_free(th_app)
+    _hs_transcript(h, th_app)
+    if not _hs_derive(h, h.master, "c ap traffic", th_app, h.c_ap_secret):
+        ret _conn_fail(c, "could not derive client application secret")
+    end
+    if not _hs_derive(h, h.master, "s ap traffic", th_app, h.s_ap_secret):
+        ret _conn_fail(c, "could not derive server application secret")
+    end
+
+    mut typ := 0
+    mut cfinbody := _newbuf(64)
+    defer _buf_free(cfinbody)
+    if not _hs_next_msg(h, buf, typ, cfinbody):
+        ret _conn_fail(c, h.err)
+    end
+    if typ != HS_FINISHED:
+        ret _conn_fail(c, "expected client Finished")
+    end
+    mut want := _newbuf(64)
+    defer _buf_free(want)
+    if not _hs_finished_mac(h, h.c_hs_secret, th_app, want):
+        ret _conn_fail(c, "could not compute expected client Finished")
+    end
+    if cfinbody.len != want.len or not _cteq(cfinbody.p, want.p, want.len):
+        _rec_send_alert(h.rec, 2, ALERT_DECRYPT_ERROR)
+        ret _conn_fail(c, "client Finished did not verify")
+    end
+    _install_keys(h, h.c_ap_secret, h.s_ap_secret)
+    h.ok = true
+    c.open = true
+    ret true
+end
+
+func _raw_server(c &: Conn, ch: void*, chlen: int, cert: void*, certlen: int, seed: void*): bool:
+    mut h := c.h
+    if chlen < 4 or _bget(ch, 0) != HS_CLIENT_HELLO:
+        c.h = h
+        ret _conn_fail(c, "expected ClientHello")
+    end
+    mut chi := _hs_parse_client_hello(_newreader(((ch as i64) + 4) as void*, chlen - 4))
+    defer _chi_free(chi)
+    if not chi.ok or not chi.want_tls13 or chi.kx_group != GROUP_X25519:
+        c.h = h
+        ret _conn_fail(c, "ClientHello is not usable for TLS 1.3 with x25519")
+    end
+    _bufreset(h.crand)
+    _putbuf(h.crand, chi.crand)
+    suite := _pick_suite13(chi)
+    if suite == 0:
+        c.h = h
+        ret _conn_fail(c, "no common TLS 1.3 cipher suite")
+    end
+    h.ver = TLS13
+    h.suite = suite
+    h.cipher = _cipher_from_wire(suite)
+    h.hash = _cipher_hash(h.cipher)
+    h.hlen = _hash_size(h.hash)
+    h.tr = _hash_init(h.hash)
+    _hash_update(h.tr, ch, chlen)
+    ok := _raw_server13(c, h, chi, suite, cert, certlen, seed)
+    c.h = h
+    ret ok
+end
+
+@en "WrapClientRaw"
+@fa "پوشش کارخواه با سلام خام"
+pub func WrapClientRaw(fd: i64, hello: void*, hlen: int, xpriv: void*, auth: void*, authlen: int, cfg: Config): Conn:
+    mut c := _raw_new(fd)
+    c.insecure = cfg.insecure_skip_verify
+    c.host = cfg.server_name
+    if fd < 0:
+        c.err = "invalid fd"
+        ret c
+    end
+    c.h.rec.read_deadline_ms = HANDSHAKE_READ_TIMEOUT_MS
+    _raw_client(c, hello, hlen, xpriv, auth, authlen, cfg)
+    c.h.rec.read_deadline_ms = 0
+    _rec_uncork(c.h.rec)
+    ret c
+end
+
+@en "X25519Public"
+@fa "کلید عمومی ایکس۲۵۵۱۹"
+pub func X25519Public(priv: void*, out: void*):
+    _x25519_base(priv, out)
+end
+
+@en "X25519Shared"
+@fa "راز مشترک ایکس۲۵۵۱۹"
+pub func X25519Shared(priv: void*, peer: void*, out: void*): bool:
+    ret _x25519_shared(priv, peer, out)
+end
+
+@en "HkdfSha256Derive"
+@fa "اشتقاق اچ کی دی اف"
+pub func HkdfSha256Derive(ikm: void*, ikmlen: int, salt: void*, saltlen: int, info: str, out: void*, outlen: int): bool:
+    mut prk := _newbuf(32)
+    defer _buf_wipe(prk)
+    _putzeros(prk, 32)
+    _hkdf_extract(HASH_SHA256, salt, saltlen, ikm, ikmlen, prk.p)
+    ret _hkdf_expand(HASH_SHA256, prk.p, 32, info as void*, info.len(), out, outlen)
+end
+
+@en "HmacSha512Raw"
+@fa "اچ مک شا۵۱۲ خام"
+pub func HmacSha512Raw(key: void*, klen: int, msg: void*, mlen: int, out: void*):
+    _hmac(HASH_SHA512, key, klen, msg, mlen, out)
+end
+
+@en "WrapServerRaw"
+@fa "پوشش کارساز با سلام خام"
+pub func WrapServerRaw(fd: i64, ch: void*, chlen: int, cert: void*, certlen: int, seed: void*): Conn:
+    mut c := _raw_new(fd)
+    c.h.rec.read_deadline_ms = HANDSHAKE_READ_TIMEOUT_MS
+    _raw_server(c, ch, chlen, cert, certlen, seed)
+    c.h.rec.read_deadline_ms = 0
+    _rec_uncork(c.h.rec)
+    if SALAM_OS_LINUX:
+        if c.open:
+            _rec_ack_now(c.h.rec)
+        end
+    end
+    ret c
+end

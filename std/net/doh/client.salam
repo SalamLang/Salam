@@ -22,8 +22,19 @@ import net.dns
 import net.tcp
 import net.udp
 import net.internal.rawsock
+import sync
 import time
 import tls
+
+mut _pool_mu := sync.NewMutex()
+mut _pool_items := Vector {} as Vector<PoolItem>
+mut _pool_reused := 0 as i64
+
+struct PoolItem:
+    pub key: str = ""
+    pub io: Io = Io {}
+    pub at_ms: i64 = 0
+end
 
 struct Io:
     pub use_tls: bool = false
@@ -98,6 +109,58 @@ func _io_read(io &: Io, buf: void*, max: int): int:
         ret tls.ReadBytes(io.sc, buf, max)
     end
     ret tcp.ReadBytes(io.tc, buf, max)
+end
+
+func _io_timeout(io &: Io, ms: int):
+    if io.use_tls:
+        rawsock.SetTimeout(rawsock.FromFd(tls.Fd(io.sc)), ms)
+    else:
+        tcp.SetReadDeadline(io.tc, ms)
+    end
+end
+
+func _pool_key(srv: Server, addr: str): str:
+    mut k := addr + ":" + str.FromInt(srv.port as i64) + ":" + srv.host
+    if srv.use_tls:
+        k += ":t"
+    end
+    if srv.insecure:
+        k += ":i"
+    end
+    ret k
+end
+
+func _pool_take(key: str): Io:
+    mut got := Io {}
+    _l := sync.Lock(_pool_mu)
+    now := sync.NowMs()
+    total := _pool_items.len()
+    repeat total in k:
+        i := total - 1 - k
+        it := _pool_items.get(i)
+        if now - it.at_ms > 30000:
+            mut dead := it.io
+            _io_close(dead)
+            _gone := _pool_items.remove_at(i)
+        else it.key == key and not got.ok:
+            got = it.io
+            _gone := _pool_items.remove_at(i)
+            _pool_reused += 1 as i64
+        end
+    end
+    _u := sync.Unlock(_pool_mu)
+    ret got
+end
+
+func _pool_put(key: str, io: Io):
+    _l := sync.Lock(_pool_mu)
+    if _pool_items.len() >= 8:
+        mut old := _pool_items.get(0).io
+        _io_close(old)
+        _gone2 := _pool_items.remove_at(0)
+    end
+    _pool_items.push(PoolItem { key = key, io = io, at_ms = sync.NowMs() })
+    _u := sync.Unlock(_pool_mu)
 end
 
 func _io_close(io &: Io):
@@ -200,7 +263,8 @@ func _http_done(raw: compress.ByteBuf): bool:
     ret false
 end
 
-func _read_http_body(io &: Io, body &: compress.ByteBuf): str:
+func _read_http_body(io &: Io, body &: compress.ByteBuf, keep &: bool): str:
+    keep = false
     mut raw := compress.NewByteBuf()
     defer compress.BufFree(raw)
     cap := 8192
@@ -230,11 +294,13 @@ func _read_http_body(io &: Io, body &: compress.ByteBuf): str:
         ret "http " + status
     end
     te := _header_value(head, "transfer-encoding").lower()
+    conn := _header_value(head, "connection").lower()
     start := hend + 4
     if te.find("chunked") >= 0:
         if not _dechunk(raw, start, body):
             ret "bad chunked body"
         end
+        keep = conn.find("close") < 0 and head.starts_with("HTTP/1.1")
         ret ""
     end
     cl := _header_value(head, "content-length")
@@ -243,6 +309,7 @@ func _read_http_body(io &: Io, body &: compress.ByteBuf): str:
         take = cl.to_int()
     end
     compress.BufPushBytes(body, ((raw.data as i64) + (start as i64)) as void*, take)
+    keep = cl.len() > 0 and raw.len == start + take and conn.find("close") < 0 and head.starts_with("HTTP/1.1")
     ret ""
 end
 
@@ -274,38 +341,66 @@ func _check_response(raw: compress.ByteBuf, want_id: int, check_id: bool): str:
     ret ""
 end
 
-func _query_doh(srv: Server, addr: str, wire: compress.ByteBuf, timeout_ms: int, out &: compress.ByteBuf): str:
-    mut io := _dial(addr, srv.port, srv.use_tls, srv.host, srv.insecure, timeout_ms)
-    if not io.ok:
-        ret "connect failed"
-    end
-    defer _io_close(io)
-    mut req := ""
+func _doh_request(srv: Server, wire: compress.ByteBuf): compress.ByteBuf:
     mut host_header := srv.host
     if srv.port != 443 and srv.port != 80:
         host_header = srv.host + ":" + str.FromInt(srv.port as i64)
     end
+    mut req := ""
+    mut full := compress.NewByteBuf()
     if srv.kind == KindDoHGet:
         mut sep := "?"
         if srv.path.find("?") >= 0:
             sep = "&"
         end
-        req = "GET " + srv.path + sep + "dns=" + _b64url(wire) + " HTTP/1.1\r\nHost: " + host_header + "\r\nAccept: application/dns-message\r\nUser-Agent: salam-doh\r\nConnection: close\r\n\r\n"
-        if not _io_write(io, req as void*, req.len()):
-            ret "write failed"
-        end
+        req = "GET " + srv.path + sep + "dns=" + _b64url(wire) + " HTTP/1.1\r\nHost: " + host_header + "\r\nAccept: application/dns-message\r\nUser-Agent: salam-doh\r\nConnection: keep-alive\r\n\r\n"
+        compress.BufPushBytes(full, req as void*, req.len())
     else:
-        req = "POST " + srv.path + " HTTP/1.1\r\nHost: " + host_header + "\r\nAccept: application/dns-message\r\nContent-Type: application/dns-message\r\nUser-Agent: salam-doh\r\nConnection: close\r\nContent-Length: " + str.FromInt(wire.len as i64) + "\r\n\r\n"
-        mut full := compress.NewByteBufCap(req.len() + wire.len)
+        req = "POST " + srv.path + " HTTP/1.1\r\nHost: " + host_header + "\r\nAccept: application/dns-message\r\nContent-Type: application/dns-message\r\nUser-Agent: salam-doh\r\nConnection: keep-alive\r\nContent-Length: " + str.FromInt(wire.len as i64) + "\r\n\r\n"
         compress.BufPushBytes(full, req as void*, req.len())
         compress.BufPushBuf(full, wire)
-        ok := _io_write(io, full.data, full.len)
-        compress.BufFree(full)
-        if not ok:
-            ret "write failed"
+    end
+    ret full
+end
+
+func _doh_exchange(io &: Io, full: compress.ByteBuf, out &: compress.ByteBuf, keep &: bool): str:
+    if not _io_write(io, full.data, full.len):
+        ret "write failed"
+    end
+    ret _read_http_body(io, out, keep)
+end
+
+func _query_doh(srv: Server, addr: str, wire: compress.ByteBuf, timeout_ms: int, out &: compress.ByteBuf): str:
+    key := _pool_key(srv, addr)
+    mut full := _doh_request(srv, wire)
+    defer compress.BufFree(full)
+    mut io := _pool_take(key)
+    reused := io.ok
+    if reused:
+        _io_timeout(io, timeout_ms)
+    else:
+        io = _dial(addr, srv.port, srv.use_tls, srv.host, srv.insecure, timeout_ms)
+        if not io.ok:
+            ret "connect failed"
         end
     end
-    ret _read_http_body(io, out)
+    mut keep := false
+    mut err := _doh_exchange(io, full, out, keep)
+    if err.len() > 0 and reused:
+        _io_close(io)
+        compress.BufReset(out)
+        io = _dial(addr, srv.port, srv.use_tls, srv.host, srv.insecure, timeout_ms)
+        if not io.ok:
+            ret "connect failed"
+        end
+        err = _doh_exchange(io, full, out, keep)
+    end
+    if err.len() == 0 and keep:
+        _pool_put(key, io)
+    else:
+        _io_close(io)
+    end
+    ret err
 end
 
 func _query_dot(srv: Server, addr: str, wire: compress.ByteBuf, timeout_ms: int, out &: compress.ByteBuf): str:
@@ -366,6 +461,9 @@ func _query_udp(srv: Server, addr: str, wire: compress.ByteBuf, timeout_ms: int,
     n := udp.ReceiveBytes(sock, buf, cap, fh, fp)
     if n <= 0:
         ret "timeout"
+    end
+    if fh != addr or fp != port:
+        ret "unexpected sender"
     end
     compress.BufPushBytes(out, buf, n)
     ret ""
@@ -434,4 +532,25 @@ end
 @fa "آزاد کردن پاسخ"
 pub func FreeResponse(r &: Response):
     compress.BufFree(r.raw)
+end
+
+@en "ReusedConnections"
+@fa "اتصال‌های بازاستفاده‌شده"
+pub func ReusedConnections(): i64:
+    _l := sync.Lock(_pool_mu)
+    n := _pool_reused
+    _u := sync.Unlock(_pool_mu)
+    ret n
+end
+
+@en "CloseIdleConnections"
+@fa "بستن اتصال‌های بی‌کار"
+pub func CloseIdleConnections():
+    _l := sync.Lock(_pool_mu)
+    until _pool_items.len() > 0:
+        mut io := _pool_items.get(0).io
+        _io_close(io)
+        _gone := _pool_items.remove_at(0)
+    end
+    _u := sync.Unlock(_pool_mu)
 end

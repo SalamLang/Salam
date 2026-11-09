@@ -639,7 +639,7 @@ func scrub_tech(text: str, done: bool): str:
             sentence := text.substr(at, stop - at)
             if not tool_line(text, at + (sentence.len() - str.TrimLeft(sentence).len())) and tech_self(sentence):
                 lead := sentence.substr(0, sentence.len() - str.TrimLeft(sentence).len())
-                str.BufAppend(b, said ? lead : lead + str.Trim(canned(sentence)))
+                str.BufAppend(b, said ? "" : lead + str.Trim(canned(sentence)))
                 said = true
                 changed = true
             else:
@@ -653,6 +653,34 @@ func scrub_tech(text: str, done: bool): str:
     end
     str.BufAppend(b, text.substr(at, text.len() - at))
     ret str.BufStr(b)
+end
+
+func squash_one(text: str, line: str): str:
+    first := text.find(line)
+    if first < 0:
+        ret text
+    end
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    keep := first + line.len()
+    str.BufAppend(b, text.substr(0, keep))
+    mut rest := text.substr(keep, text.len() - keep)
+    mut at := rest.find(line)
+    until at >= 0:
+        mut piece := rest.substr(0, at)
+        if piece.len() > 0 and (piece[piece.len() - 1] as int) == 32:
+            piece = piece.substr(0, piece.len() - 1)
+        end
+        str.BufAppend(b, piece)
+        rest = rest.substr(at + line.len(), rest.len() - at - line.len())
+        at = rest.find(line)
+    end
+    str.BufAppend(b, rest)
+    ret str.BufStr(b)
+end
+
+func squash_canned(text: str): str:
+    ret squash_one(squash_one(text, canned("a")), canned("ب"))
 end
 
 func settled_len(text: str): int:
@@ -729,6 +757,47 @@ func names_strict(sentence: str): bool:
     ret false
 end
 
+func guard_once(raw: str, done: bool): str:
+    text := scrub_tech(raw, done)
+    if REDACT.len() == 0 or text.len() == 0:
+        ret text
+    end
+    mut probe := 0
+    seen := word_hit(text, 0, probe) >= 0
+    cut := done ? text.len() : text.len() - partial_tail(text)
+    if not seen:
+        ret cut == text.len() ? text : text.substr(0, cut)
+    end
+    mut b := str.NewBuilder()
+    defer str.BufFree(b)
+    mut at := 0
+    mut size := 0
+    mut held := false
+    mut going := true
+    until going:
+        hit := word_hit(text, at, size)
+        if hit < 0 or hit >= cut:
+            going = false
+        else:
+            start := sentence_start(text, hit, at)
+            stop := sentence_end(text, hit + size, done)
+            str.BufAppend(b, text.substr(at, start - at))
+            if stop < 0 or stop > cut:
+                held = true
+                going = false
+            else:
+                sentence := text.substr(start, stop - start)
+                str.BufAppend(b, not tool_line(text, hit) and (names_strict(sentence) or self_ref(sentence) or yes_no(sentence)) ? canned(sentence) : sentence)
+                at = stop
+            end
+        end
+    end
+    if not held and at < cut:
+        str.BufAppend(b, text.substr(at, cut - at))
+    end
+    ret str.BufStr(b)
+end
+
 pub func Configure(words: str, strict: str):
     REDACT = Vector {} as Vector<str>
     STRICT = Vector {} as Vector<str>
@@ -772,44 +841,7 @@ pub func Settled(text: str): str:
 end
 
 pub func Guard(raw: str, done: bool): str:
-    text := scrub_tech(raw, done)
-    if REDACT.len() == 0 or text.len() == 0:
-        ret text
-    end
-    mut probe := 0
-    seen := word_hit(text, 0, probe) >= 0
-    cut := done ? text.len() : text.len() - partial_tail(text)
-    if not seen:
-        ret cut == text.len() ? text : text.substr(0, cut)
-    end
-    mut b := str.NewBuilder()
-    defer str.BufFree(b)
-    mut at := 0
-    mut size := 0
-    mut held := false
-    mut going := true
-    until going:
-        hit := word_hit(text, at, size)
-        if hit < 0 or hit >= cut:
-            going = false
-        else:
-            start := sentence_start(text, hit, at)
-            stop := sentence_end(text, hit + size, done)
-            str.BufAppend(b, text.substr(at, start - at))
-            if stop < 0 or stop > cut:
-                held = true
-                going = false
-            else:
-                sentence := text.substr(start, stop - start)
-                str.BufAppend(b, not tool_line(text, hit) and (names_strict(sentence) or self_ref(sentence) or yes_no(sentence)) ? canned(sentence) : sentence)
-                at = stop
-            end
-        end
-    end
-    if not held and at < cut:
-        str.BufAppend(b, text.substr(at, cut - at))
-    end
-    ret str.BufStr(b)
+    ret squash_canned(guard_once(raw, done))
 end
 
 pub func ThoughtStep(text: str, growing: bool): str:

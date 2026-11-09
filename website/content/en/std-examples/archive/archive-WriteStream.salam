@@ -1,0 +1,54 @@
+import archive
+import compress
+import filepath
+import os
+
+func same(path: str, want: compress.ByteBuf): bool:
+    mut ok := false
+    got := archive.ReadBinaryFile(path, ok)
+    ret ok and compress.BufEquals(got, want)
+end
+
+func main:
+    dir := filepath.Join(os.TempDir(), "salam_write_example")
+    os.RemoveAll(dir)
+    os.MkdirAll(dir)
+    plain := filepath.Join(dir, "notes.txt")
+    back := filepath.Join(dir, "back.bin")
+    text := compress.BufFromStr("Salam keeps notes in plain files. ".repeat(2000))
+    archive.WriteBinaryFileBuf(plain, text)
+    archive.SetWriteChunk(16384)
+
+    println "gz:", archive.GzipCompressFile(plain, filepath.Join(dir, "n.gz")), archive.GzipDecompressFile(filepath.Join(dir, "n.gz"), back), same(back, text)
+    println "bz2 level 1:", archive.Bzip2CompressFileLevel(plain, filepath.Join(dir, "n.bz2"), 1), archive.Bzip2DecompressFile(filepath.Join(dir, "n.bz2"), back), same(back, text)
+    println "xz level 9:", archive.XzCompressFileLevel(plain, filepath.Join(dir, "n.xz"), 9), archive.XzDecompressFile(filepath.Join(dir, "n.xz"), back), same(back, text)
+    println "lzma level 3:", archive.LzmaCompressFileLevel(plain, filepath.Join(dir, "n.lzma"), 3), archive.LzmaDecompressFile(filepath.Join(dir, "n.lzma"), back), same(back, text)
+
+    mut tar_files := Vector {} as Vector<archive.TarFileInput>
+    tar_files.push(archive.MakeTarFilePath("docs/notes.txt", plain))
+    tar_files.push(archive.MakeTarFileInput("docs/hello.txt", "hello" as void*, 5, false))
+    tgz := filepath.Join(dir, "n.tar.zst")
+    println "tar.zst:", archive.TarZstdCreateFileLevel(tar_files, tgz, 5)
+
+    mut zip_files := Vector {} as Vector<archive.ZipFileInput>
+    zip_files.push(archive.MakeZipFilePath("notes.txt", plain, archive.ZipMethodDeflate, 0))
+    secret := "top secret"
+    zip_files.push(archive.MakeZipFileInputEncrypted("secret.txt", secret as void*, secret.len(), archive.ZipMethodDeflate, 0, "pass", archive.ZipEncAuto))
+    zpath := filepath.Join(dir, "n.zip")
+    println "zip:", archive.ZipCreateFile(zip_files, zpath), archive.ZipCreateFile64(zip_files, filepath.Join(dir, "n64.zip"))
+    mut zf := archive.ZipOpenFile(zpath)
+    println "entries:", zf.count, "status:", zf.status
+    println "no password:", archive.ZipFileExtractTo(zf, "secret.txt", back, 0 as i64) == archive.ZIP_ENCRYPTED
+    archive.ZipFileSetPassword(zf, "pass")
+    println "password:", archive.ZipFileExtractTo(zf, "secret.txt", back, 0 as i64) == archive.ZIP_OK, same(back, compress.BufFromStr(secret))
+    archive.ZipFileClose(zf)
+
+    mut sz_files := Vector {} as Vector<archive.SevenZipFileInput>
+    sz_files.push(archive.MakeSevenZipFilePath("notes.txt", plain))
+    szpath := filepath.Join(dir, "n.7z")
+    println "7z level 5:", archive.SevenZipCreateFileLevel(sz_files, szpath, 5)
+    mut sf := archive.SevenZipOpenFile(szpath, "")
+    println "7z extract:", archive.SevenZipFileExtractTo(sf, "notes.txt", back, 0 as i64, 0 as i64), same(back, text)
+    archive.SevenZipFileClose(sf)
+    os.RemoveAll(dir)
+end

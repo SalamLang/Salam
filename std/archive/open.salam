@@ -1,0 +1,822 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package archive
+
+import compress
+import filepath
+import mem
+import str
+
+@en "ARCHIVE_OK"
+@fa "بایگانی موفق"
+pub const ARCHIVE_OK := 0
+@en "ARCHIVE_NOT_FOUND"
+@fa "بایگانی یافت نشد"
+pub const ARCHIVE_NOT_FOUND := 1
+@en "ARCHIVE_UNSUPPORTED"
+@fa "بایگانی پشتیبانی نمی شود"
+pub const ARCHIVE_UNSUPPORTED := 2
+@en "ARCHIVE_ENCRYPTED"
+@fa "بایگانی رمزگذاری شده"
+pub const ARCHIVE_ENCRYPTED := 3
+@en "ARCHIVE_CORRUPT"
+@fa "بایگانی خراب"
+pub const ARCHIVE_CORRUPT := 4
+@en "ARCHIVE_BAD_CRC"
+@fa "بایگانی چک جمع ناهمخوان"
+pub const ARCHIVE_BAD_CRC := 5
+@en "ARCHIVE_TOO_BIG"
+@fa "بایگانی بیش از حد بزرگ"
+pub const ARCHIVE_TOO_BIG := 6
+@en "ARCHIVE_UNSAFE_PATH"
+@fa "بایگانی مسیر ناامن"
+pub const ARCHIVE_UNSAFE_PATH := 7
+@en "ARCHIVE_BAD_PASSWORD"
+@fa "بایگانی گذرواژه نادرست"
+pub const ARCHIVE_BAD_PASSWORD := 8
+@en "ARCHIVE_MULTIVOLUME"
+@fa "بایگانی چند بخشی"
+pub const ARCHIVE_MULTIVOLUME := 9
+@en "ARCHIVE_IO_ERROR"
+@fa "بایگانی خطای ورودی خروجی"
+pub const ARCHIVE_IO_ERROR := 10
+@en "ARCHIVE_UNKNOWN_FORMAT"
+@fa "بایگانی قالب ناشناخته"
+pub const ARCHIVE_UNKNOWN_FORMAT := 11
+@en "ARCHIVE_TOO_MANY_ENTRIES"
+@fa "بایگانی مدخل های بسیار"
+pub const ARCHIVE_TOO_MANY_ENTRIES := 12
+@en "ARCHIVE_BOMB"
+@fa "بایگانی بمب فشرده"
+pub const ARCHIVE_BOMB := 13
+
+@en "FormatUnknown"
+@fa "قالب ناشناخته"
+pub const FormatUnknown := 0
+@en "FormatZip"
+@fa "قالب زیپ"
+pub const FormatZip := 1
+@en "FormatTar"
+@fa "قالب تار"
+pub const FormatTar := 2
+@en "FormatTarGz"
+@fa "قالب تار جی زیپ"
+pub const FormatTarGz := 3
+@en "FormatTarBz2"
+@fa "قالب تار بی زیپ دو"
+pub const FormatTarBz2 := 4
+@en "FormatTarXz"
+@fa "قالب تار ایکس زد"
+pub const FormatTarXz := 5
+@en "FormatGzip"
+@fa "قالب جی زیپ"
+pub const FormatGzip := 6
+@en "FormatBzip2"
+@fa "قالب بی زیپ دو"
+pub const FormatBzip2 := 7
+@en "FormatXz"
+@fa "قالب ایکس زد"
+pub const FormatXz := 8
+@en "FormatRar"
+@fa "قالب آر ای آر"
+pub const FormatRar := 9
+@en "FormatSevenZip"
+@fa "قالب هفت زد"
+pub const FormatSevenZip := 10
+@en "FormatZstd"
+@fa "قالب زد استاندارد"
+pub const FormatZstd := 11
+
+const _AUTO_INT_MAX := 2147483647
+const _AUTO_RATIO_SLACK := 1048576
+
+@en "Limits"
+@fa "سقف ها"
+pub struct Limits:
+    @en "max_entries"
+    @fa "بیشینه مدخل"
+    pub max_entries: int = 100000
+    @en "max_entry"
+    @fa "بیشینه اندازه مدخل"
+    pub max_entry: i64 = 1073741824 as i64
+    @en "max_total"
+    @fa "بیشینه اندازه کل"
+    pub max_total: i64 = 4294967296 as i64
+    @en "max_ratio"
+    @fa "بیشینه نسبت فشرده سازی"
+    pub max_ratio: int = 5000
+end
+
+@en "Archive"
+@fa "بایگانی"
+pub struct Archive:
+    @en "data"
+    @fa "داده"
+    pub data: void* = null
+    @en "len"
+    @fa "طول"
+    pub len: int = 0
+    @en "password"
+    @fa "گذرواژه"
+    pub password: str = ""
+    @en "format"
+    @fa "قالب"
+    pub format: int = 0
+    @en "status"
+    @fa "وضعیت"
+    pub status: int = 0
+    @en "limits"
+    @fa "سقف ها"
+    pub limits: Limits = Limits {}
+    @en "name"
+    @fa "نام"
+    pub name: str = "data"
+    @en "fail"
+    @fa "شکست"
+    pub fail: int = 0
+    @en "inner"
+    @fa "درون"
+    pub inner: compress.ByteBuf = compress.NewByteBuf()
+    @en "file"
+    @fa "پرونده"
+    pub file: compress.ByteBuf = compress.NewByteBuf()
+end
+
+@en "FileInput"
+@fa "ورودی پرونده"
+pub struct FileInput:
+    @en "name"
+    @fa "نام"
+    pub name: str = ""
+    @en "data_ptr"
+    @fa "نشانی داده"
+    pub data_ptr: void* = null
+    @en "data_len"
+    @fa "طول داده"
+    pub data_len: int = 0
+    @en "is_dir"
+    @fa "پوشه"
+    pub is_dir: bool = false
+end
+
+func _auto_byte(p: void*, n: int, i: int): int:
+    if i < 0 or i >= n: ret -1 end
+    bp := p as u8*
+    ret bp[i] as int
+end
+
+func _auto_is_tar(p: void*, n: int): bool:
+    if n < 512: ret false end
+    bp := p as u8*
+    if (bp[257] as int) == 117 and (bp[258] as int) == 115 and (bp[259] as int) == 116 and (bp[260] as int) == 97 and (bp[261] as int) == 114:
+        ret true
+    end
+    mut stored := 0
+    mut digits := 0
+    mut i := 148
+    until i < 156:
+        c := bp[i] as int
+        if c >= 48 and c <= 55:
+            stored = stored * 8 + (c - 48)
+            digits++
+        end
+        i++
+    end
+    if digits == 0: ret false end
+    ret stored == _tar_checksum(p) and (bp[0] as int) != 0
+end
+
+func _auto_ends(path: str, suffix: str): bool:
+    n := path.len()
+    m := suffix.len()
+    if m > n: ret false end
+    pb := path as u8*
+    sb := suffix as u8*
+    mut i := 0
+    until i < m:
+        mut c := pb[n - m + i] as int
+        if c >= 65 and c <= 90: c += 32 end
+        if c != (sb[i] as int): ret false end
+        i++
+    end
+    ret true
+end
+
+func _auto_clamp(v: i64): int:
+    if v < (0 as i64): ret 0 end
+    if v > (_AUTO_INT_MAX as i64): ret _AUTO_INT_MAX end
+    ret v as int
+end
+
+func _auto_unwrap(arc &: Archive, kind: int):
+    mut ok := false
+    cap := _auto_clamp(arc.limits.max_total)
+    mut out := compress.NewByteBuf()
+    if kind == FormatGzip:
+        out = compress.GzipDecompressMax(arc.data, arc.len, cap, ok)
+    else kind == FormatBzip2:
+        out = compress.Bzip2DecompressMax(arc.data, arc.len, cap, ok)
+    else:
+        out = compress.XzDecompressMax(arc.data, arc.len, cap, ok)
+    end
+    if not ok:
+        compress.BufFree(out)
+        arc.fail = ARCHIVE_CORRUPT
+        ret
+    end
+    arc.inner = out
+    if _auto_is_tar(arc.inner.data, arc.inner.len):
+        arc.format = kind == FormatGzip ? FormatTarGz : (kind == FormatBzip2 ? FormatTarBz2 : FormatTarXz)
+    end
+end
+
+func _auto_tar_ptr(arc: Archive): void*:
+    if arc.format == FormatTar: ret arc.data end
+    ret arc.inner.data
+end
+
+func _auto_tar_len(arc: Archive): int:
+    if arc.format == FormatTar: ret arc.len end
+    ret arc.inner.len
+end
+
+func _auto_is_tarish(f: int): bool:
+    ret f == FormatTar or f == FormatTarGz or f == FormatTarBz2 or f == FormatTarXz
+end
+
+func _auto_is_stream(f: int): bool:
+    ret f == FormatGzip or f == FormatBzip2 or f == FormatXz
+end
+
+func _auto_map_rar(st: int): int:
+    if st == RAR_MULTIVOLUME: ret ARCHIVE_MULTIVOLUME end
+    if st == RAR_TOO_BIG: ret ARCHIVE_TOO_BIG end
+    if st == RAR_UNSAFE_PATH: ret ARCHIVE_UNSAFE_PATH end
+    if st == RAR_BAD_PASSWORD: ret ARCHIVE_BAD_PASSWORD end
+    ret st
+end
+
+func _auto_tar_read(arc: Archive, name: str, max: int, status &: int): compress.ByteBuf:
+    status = ARCHIVE_NOT_FOUND
+    mut out := compress.NewByteBuf()
+    p := _auto_tar_ptr(arc)
+    mut pos := 0
+    mut e := Entry {}
+    mut data := 0
+    mut g := _TarPax {}
+    until _tar_next(p, _auto_tar_len(arc), pos, e, data, g):
+        hit := e.kind == 0 and e.name == name
+        size := e.size
+        _tar_free_str(e.name)
+        _tar_free_str(e.link)
+        if hit:
+            if max > 0 and size > (max as i64):
+                status = ARCHIVE_TOO_BIG
+            else:
+                compress.BufPushBytes(out, ((p as i64) + (data as i64)) as void*, size as int)
+                status = ARCHIVE_OK
+            end
+            ret out
+        end
+    end
+    ret out
+end
+
+func _auto_is_dir(e: Entry): bool:
+    ret e.is_dir or e.kind == 1
+end
+
+func _auto_check(arc: Archive, entries: Vector<Entry>): int:
+    lim := arc.limits
+    if lim.max_entries > 0 and entries.len() > lim.max_entries:
+        ret ARCHIVE_TOO_MANY_ENTRIES
+    end
+    mut total := 0 as i64
+    mut links := Vector {} as Vector<str>
+    mut verdict := ARCHIVE_OK
+    mut i := 0
+    until i < entries.len() and verdict == ARCHIVE_OK:
+        e := entries.get(i)
+        if not _safe_entry_name(e.name):
+            verdict = ARCHIVE_UNSAFE_PATH
+        else e.kind == 4:
+            verdict = ARCHIVE_UNSAFE_PATH
+        else e.kind == 2:
+            if not _tar_link_ok(e.name, e.link): verdict = ARCHIVE_UNSAFE_PATH end
+        else e.kind == 3:
+            if not _safe_entry_name(e.link): verdict = ARCHIVE_UNSAFE_PATH end
+        end
+        if verdict == ARCHIVE_OK:
+            mut k := 0
+            until k < links.len():
+                prefix := links.get(k)
+                if e.name.len() > prefix.len() and str.StartsWith(e.name, prefix) and _auto_byte(e.name as void*, e.name.len(), prefix.len()) == 47:
+                    verdict = ARCHIVE_UNSAFE_PATH
+                end
+                k++
+            end
+        end
+        if verdict == ARCHIVE_OK and (e.kind == 2 or e.kind == 3):
+            links.push(e.name)
+        end
+        if verdict == ARCHIVE_OK and not _auto_is_dir(e):
+            if e.size < (0 as i64):
+                verdict = ARCHIVE_CORRUPT
+            else lim.max_entry > (0 as i64) and e.size > lim.max_entry:
+                verdict = ARCHIVE_TOO_BIG
+            else:
+                total += e.size
+                if lim.max_total > (0 as i64) and total > lim.max_total:
+                    verdict = ARCHIVE_TOO_BIG
+                end
+            end
+        end
+        i++
+    end
+    links.free()
+    if verdict == ARCHIVE_OK and lim.max_ratio > 0:
+        allowed := (lim.max_ratio as i64) * (arc.len as i64) + (_AUTO_RATIO_SLACK as i64)
+        if total > allowed: verdict = ARCHIVE_BOMB end
+    end
+    ret verdict
+end
+
+func _auto_count_files(entries: Vector<Entry>): int:
+    mut c := 0
+    mut i := 0
+    until i < entries.len():
+        if not _auto_is_dir(entries.get(i)): c++ end
+        i++
+    end
+    ret c
+end
+
+func _auto_dir_name(name: str): str:
+    if str.EndsWith(name, "/"): ret str.Clone(name) end
+    ret name + "/"
+end
+
+@en "MakeFileInput"
+@fa "ساخت ورودی پرونده"
+pub func MakeFileInput(name: str, data_ptr: void*, data_len: int, is_dir: bool): FileInput:
+    ret FileInput { name = name, data_ptr = data_ptr, data_len = data_len, is_dir = is_dir }
+end
+
+@en "DefaultLimits"
+@fa "سقف های پیش فرض"
+pub func DefaultLimits(): Limits:
+    ret Limits {}
+end
+
+@en "ArchiveStatusText"
+@fa "متن وضعیت بایگانی"
+pub func ArchiveStatusText(status: int): str:
+    if status == ARCHIVE_OK: ret "ok" end
+    if status == ARCHIVE_NOT_FOUND: ret "entry not found" end
+    if status == ARCHIVE_UNSUPPORTED: ret "unsupported format, method or feature" end
+    if status == ARCHIVE_ENCRYPTED: ret "encrypted data and no password" end
+    if status == ARCHIVE_CORRUPT: ret "corrupt data" end
+    if status == ARCHIVE_BAD_CRC: ret "checksum mismatch" end
+    if status == ARCHIVE_TOO_BIG: ret "entry too large" end
+    if status == ARCHIVE_UNSAFE_PATH: ret "entry path or link leaves the target folder" end
+    if status == ARCHIVE_BAD_PASSWORD: ret "wrong password" end
+    if status == ARCHIVE_MULTIVOLUME: ret "a volume of the multi-volume archive is missing" end
+    if status == ARCHIVE_IO_ERROR: ret "file could not be read or written" end
+    if status == ARCHIVE_UNKNOWN_FORMAT: ret "unknown archive format" end
+    if status == ARCHIVE_TOO_MANY_ENTRIES: ret "too many entries" end
+    if status == ARCHIVE_BOMB: ret "compression ratio too high" end
+    ret "unknown error"
+end
+
+@en "FormatName"
+@fa "نام قالب"
+pub func FormatName(format: int): str:
+    if format == FormatZip: ret "zip" end
+    if format == FormatTar: ret "tar" end
+    if format == FormatTarGz: ret "tar.gz" end
+    if format == FormatTarBz2: ret "tar.bz2" end
+    if format == FormatTarXz: ret "tar.xz" end
+    if format == FormatGzip: ret "gzip" end
+    if format == FormatBzip2: ret "bzip2" end
+    if format == FormatXz: ret "xz" end
+    if format == FormatRar: ret "rar" end
+    if format == FormatSevenZip: ret "7z" end
+    if format == FormatZstd: ret "zstd" end
+    ret "unknown"
+end
+
+@en "Detect"
+@fa "تشخیص قالب"
+pub func Detect(p: void*, n: int): int:
+    if n >= 4 and _auto_byte(p, n, 0) == 80 and _auto_byte(p, n, 1) == 75:
+        b2 := _auto_byte(p, n, 2)
+        b3 := _auto_byte(p, n, 3)
+        if (b2 == 3 and b3 == 4) or (b2 == 5 and b3 == 6) or (b2 == 7 and b3 == 8):
+            ret FormatZip
+        end
+    end
+    if IsSevenZip(p, n): ret FormatSevenZip end
+    if IsRar(p, n): ret FormatRar end
+    if n >= 3 and _auto_byte(p, n, 0) == 31 and _auto_byte(p, n, 1) == 139 and _auto_byte(p, n, 2) == 8:
+        ret FormatGzip
+    end
+    if n >= 4 and _auto_byte(p, n, 0) == 66 and _auto_byte(p, n, 1) == 90 and _auto_byte(p, n, 2) == 104:
+        b3 := _auto_byte(p, n, 3)
+        if b3 >= 49 and b3 <= 57: ret FormatBzip2 end
+    end
+    if n >= 6 and _auto_byte(p, n, 0) == 253 and _auto_byte(p, n, 1) == 55 and _auto_byte(p, n, 2) == 122 and _auto_byte(p, n, 3) == 88 and _auto_byte(p, n, 4) == 90 and _auto_byte(p, n, 5) == 0:
+        ret FormatXz
+    end
+    if n >= 4 and _auto_byte(p, n, 0) == 40 and _auto_byte(p, n, 1) == 181 and _auto_byte(p, n, 2) == 47 and _auto_byte(p, n, 3) == 253:
+        ret FormatZstd
+    end
+    if _auto_is_tar(p, n): ret FormatTar end
+    ret FormatUnknown
+end
+
+@en "DetectName"
+@fa "تشخیص قالب از نام"
+pub func DetectName(path: str): int:
+    if _auto_ends(path, ".zip") or _auto_ends(path, ".jar") or _auto_ends(path, ".apk"): ret FormatZip end
+    if _auto_ends(path, ".tar"): ret FormatTar end
+    if _auto_ends(path, ".tar.gz") or _auto_ends(path, ".tgz"): ret FormatTarGz end
+    if _auto_ends(path, ".tar.bz2") or _auto_ends(path, ".tbz2") or _auto_ends(path, ".tbz"): ret FormatTarBz2 end
+    if _auto_ends(path, ".tar.xz") or _auto_ends(path, ".txz"): ret FormatTarXz end
+    if _auto_ends(path, ".gz"): ret FormatGzip end
+    if _auto_ends(path, ".bz2"): ret FormatBzip2 end
+    if _auto_ends(path, ".xz"): ret FormatXz end
+    if _auto_ends(path, ".rar"): ret FormatRar end
+    if _auto_ends(path, ".7z"): ret FormatSevenZip end
+    if _auto_ends(path, ".zst"): ret FormatZstd end
+    ret FormatUnknown
+end
+
+@en "OpenWith"
+@fa "بازکردن با سقف"
+pub func OpenWith(p: void*, n: int, password: str, limits: Limits): Archive:
+    mut arc := Archive { data = p, len = n, password = password, limits = limits }
+    f := Detect(p, n)
+    arc.format = f
+    if f == FormatUnknown:
+        arc.fail = ARCHIVE_UNKNOWN_FORMAT
+    else f == FormatZstd:
+        arc.fail = ARCHIVE_UNSUPPORTED
+    else f == FormatGzip or f == FormatBzip2 or f == FormatXz:
+        _auto_unwrap(arc, f)
+    end
+    arc.status = arc.fail
+    ret arc
+end
+
+@en "Open"
+@fa "بازکردن بایگانی"
+pub func Open(p: void*, n: int, password: str): Archive:
+    ret OpenWith(p, n, password, Limits {})
+end
+
+@en "OpenFile"
+@fa "بازکردن پرونده بایگانی"
+pub func OpenFile(path: str, password: str): Archive:
+    mut ok := false
+    mut file := ReadBinaryFile(path, ok)
+    if not ok:
+        compress.BufFree(file)
+        mut bad := Archive {}
+        bad.fail = ARCHIVE_IO_ERROR
+        bad.status = ARCHIVE_IO_ERROR
+        ret bad
+    end
+    mut arc := Open(file.data, file.len, password)
+    arc.file = file
+    base := filepath.Base(path)
+    if arc.format == FormatGzip and _auto_ends(base, ".gz"): arc.name = base.substr(0, base.len() - 3)
+    else arc.format == FormatBzip2 and _auto_ends(base, ".bz2"): arc.name = base.substr(0, base.len() - 4)
+    else arc.format == FormatXz and _auto_ends(base, ".xz"): arc.name = base.substr(0, base.len() - 3)
+    end
+    mem.Free(base as void*)
+    ret arc
+end
+
+@en "SetLimits"
+@fa "تنظیم سقف ها"
+pub func SetLimits(arc &: Archive, limits: Limits):
+    arc.limits = limits
+end
+
+@en "Close"
+@fa "بستن بایگانی"
+pub func Close(arc &: Archive):
+    compress.BufFree(arc.inner)
+    compress.BufFree(arc.file)
+    arc.data = null
+    arc.len = 0
+end
+
+@en "List"
+@fa "فهرست بایگانی"
+pub func List(arc &: Archive): Vector<Entry>:
+    mut out := Vector {} as Vector<Entry>
+    if arc.fail != 0:
+        arc.status = arc.fail
+        ret out
+    end
+    arc.status = ARCHIVE_OK
+    f := arc.format
+    if f == FormatZip:
+        out = ZipList(arc.data, arc.len)
+        if out.len() == 0:
+            mut checked := 0
+            if ZipVerify(arc.data, arc.len, checked) < 0: arc.status = ARCHIVE_CORRUPT end
+        end
+    else _auto_is_tarish(f):
+        out = TarList(_auto_tar_ptr(arc), _auto_tar_len(arc))
+    else f == FormatSevenZip:
+        mut z := SevenZipOpen(arc.data, arc.len, arc.password)
+        out = SevenZipEntries(z)
+        arc.status = z.status
+    else f == FormatRar:
+        mut r := RarOpen(arc.data, arc.len, arc.password)
+        out = RarEntries(r)
+        arc.status = _auto_map_rar(r.status)
+    else _auto_is_stream(f):
+        out.push(Entry { name = str.Clone(arc.name), size = arc.inner.len as i64, compressed_size = arc.len as i64, crc32 = compress.CRC32(arc.inner.data, arc.inner.len) })
+    end
+    ret out
+end
+
+@en "Read"
+@fa "خواندن از بایگانی"
+pub func Read(arc &: Archive, name: str): compress.ByteBuf:
+    mut out := compress.NewByteBuf()
+    if arc.fail != 0:
+        arc.status = arc.fail
+        ret out
+    end
+    max := _auto_clamp(arc.limits.max_entry)
+    mut st := ARCHIVE_OK
+    f := arc.format
+    if f == FormatZip:
+        compress.BufFree(out)
+        out = ZipExtractVerified(arc.data, arc.len, name, max, st)
+    else _auto_is_tarish(f):
+        compress.BufFree(out)
+        out = _auto_tar_read(arc, name, max, st)
+    else f == FormatSevenZip:
+        compress.BufFree(out)
+        mut z := SevenZipOpen(arc.data, arc.len, arc.password)
+        out = SevenZipRead(z, name, max)
+        st = z.status
+    else f == FormatRar:
+        compress.BufFree(out)
+        mut r := RarOpen(arc.data, arc.len, arc.password)
+        out = RarRead(r, name, max)
+        st = _auto_map_rar(r.status)
+    else _auto_is_stream(f):
+        if name == arc.name or name.len() == 0:
+            if max > 0 and arc.inner.len > max:
+                st = ARCHIVE_TOO_BIG
+            else:
+                compress.BufFree(out)
+                out = compress.BufClone(arc.inner)
+            end
+        else:
+            st = ARCHIVE_NOT_FOUND
+        end
+    end
+    if st != ARCHIVE_OK and out.len > 0:
+        compress.BufFree(out)
+        out = compress.NewByteBuf()
+    end
+    arc.status = st
+    ret out
+end
+
+@en "ExtractAll"
+@fa "استخراج همه از بایگانی"
+pub func ExtractAll(arc &: Archive, destdir: str): int:
+    mut entries := List(arc)
+    if arc.status != ARCHIVE_OK:
+        FreeEntries(entries)
+        ret 0
+    end
+    v := _auto_check(arc, entries)
+    if v != ARCHIVE_OK:
+        arc.status = v
+        FreeEntries(entries)
+        ret 0
+    end
+    count := _auto_count_files(entries)
+    FreeEntries(entries)
+    EnsureDir(destdir)
+    f := arc.format
+    mut st := ARCHIVE_OK
+    mut done := count
+    if f == FormatZip:
+        if not ZipExtractAll(arc.data, arc.len, destdir):
+            mut checked := 0
+            vr := ZipVerify(arc.data, arc.len, checked)
+            st = vr > 0 ? vr : ARCHIVE_IO_ERROR
+        end
+    else _auto_is_tarish(f):
+        if not TarExtractAll(_auto_tar_ptr(arc), _auto_tar_len(arc), destdir): st = ARCHIVE_IO_ERROR end
+    else f == FormatSevenZip:
+        mut z := SevenZipOpen(arc.data, arc.len, arc.password)
+        done = SevenZipReadAll(z, destdir)
+        st = z.status
+    else f == FormatRar:
+        mut r := RarOpen(arc.data, arc.len, arc.password)
+        done = RarReadAll(r, destdir)
+        st = _auto_map_rar(r.status)
+    else _auto_is_stream(f):
+        out := filepath.Join(destdir, arc.name)
+        if not WriteBinaryFileBuf(out, arc.inner): st = ARCHIVE_IO_ERROR end
+        mem.Free(out as void*)
+    end
+    arc.status = st
+    if st == ARCHIVE_OK: ret count end
+    ret done
+end
+
+@en "Extract"
+@fa "استخراج یک مدخل"
+pub func Extract(arc &: Archive, name: str, destdir: str): bool:
+    mut entries := List(arc)
+    if arc.status != ARCHIVE_OK:
+        FreeEntries(entries)
+        ret false
+    end
+    mut found := false
+    mut isdir := false
+    mut kind := 0
+    mut i := 0
+    until i < entries.len() and not found:
+        e := entries.get(i)
+        if e.name == name:
+            found = true
+            isdir = _auto_is_dir(e)
+            kind = e.kind
+        end
+        i++
+    end
+    FreeEntries(entries)
+    if not found:
+        arc.status = ARCHIVE_NOT_FOUND
+        ret false
+    end
+    if not _safe_entry_name(name) or _tar_through_link(destdir, name) or (kind != 0 and kind != 1):
+        arc.status = ARCHIVE_UNSAFE_PATH
+        ret false
+    end
+    EnsureDir(destdir)
+    outpath := filepath.Join(destdir, name)
+    mut ok := true
+    if isdir:
+        EnsureDir(outpath)
+    else:
+        mut data := Read(arc, name)
+        if arc.status == ARCHIVE_OK:
+            parent := filepath.Dir(outpath)
+            EnsureDir(parent)
+            mem.Free(parent as void*)
+            if not WriteBinaryFileBuf(outpath, data):
+                arc.status = ARCHIVE_IO_ERROR
+                ok = false
+            end
+        else:
+            ok = false
+        end
+        compress.BufFree(data)
+    end
+    mem.Free(outpath as void*)
+    ret ok
+end
+
+@en "ListFile"
+@fa "فهرست پرونده بایگانی"
+pub func ListFile(path: str, password: str, status &: int): Vector<Entry>:
+    mut arc := OpenFile(path, password)
+    out := List(arc)
+    status = arc.status
+    Close(arc)
+    ret out
+end
+
+@en "ExtractFile"
+@fa "استخراج پرونده بایگانی"
+pub func ExtractFile(path: str, destdir: str, password: str, status &: int): int:
+    mut arc := OpenFile(path, password)
+    n := ExtractAll(arc, destdir)
+    status = arc.status
+    Close(arc)
+    ret n
+end
+
+@en "CreateBuf"
+@fa "ساخت بایگانی در بافر"
+pub func CreateBuf(format: int, files: Vector<FileInput>, status &: int): compress.ByteBuf:
+    status = ARCHIVE_OK
+    mut out := compress.NewByteBuf()
+    mut i := 0
+    until i < files.len():
+        if not _safe_entry_name(files.get(i).name):
+            status = ARCHIVE_UNSAFE_PATH
+            ret out
+        end
+        i++
+    end
+    if format == FormatZip:
+        mut zs := Vector {} as Vector<ZipFileInput>
+        mut owned := Vector {} as Vector<str>
+        i = 0
+        until i < files.len():
+            f := files.get(i)
+            if f.is_dir:
+                nm := _auto_dir_name(f.name)
+                owned.push(nm)
+                zs.push(MakeZipFileInput(nm, null, 0, 0))
+            else:
+                zs.push(MakeZipFileInput(f.name, f.data_ptr, f.data_len, f.data_len > 0 ? 8 : 0))
+            end
+            i++
+        end
+        compress.BufFree(out)
+        out = ZipCreate(zs)
+        i = 0
+        until i < owned.len():
+            mem.Free(owned.get(i) as void*)
+            i++
+        end
+        owned.free()
+        zs.free()
+    else format == FormatTar or format == FormatTarGz or format == FormatTarBz2:
+        mut ts := Vector {} as Vector<TarFileInput>
+        i = 0
+        until i < files.len():
+            f := files.get(i)
+            ts.push(MakeTarFileInput(f.name, f.data_ptr, f.data_len, f.is_dir))
+            i++
+        end
+        compress.BufFree(out)
+        mut tar := TarCreate(ts)
+        ts.free()
+        if format == FormatTar:
+            out = tar
+        else format == FormatTarGz:
+            out = compress.GzipCompressBuf(tar)
+            compress.BufFree(tar)
+        else:
+            out = compress.Bzip2CompressBuf(tar)
+            compress.BufFree(tar)
+        end
+    else format == FormatRar:
+        mut rs := Vector {} as Vector<RarFileInput>
+        i = 0
+        until i < files.len():
+            f := files.get(i)
+            rs.push(MakeRarFileInput(f.name, f.data_ptr, f.data_len, f.is_dir))
+            i++
+        end
+        compress.BufFree(out)
+        out = RarCreate(rs)
+        rs.free()
+    else format == FormatGzip or format == FormatBzip2:
+        if files.len() != 1 or files.get(0).is_dir:
+            status = ARCHIVE_UNSUPPORTED
+        else:
+            f := files.get(0)
+            compress.BufFree(out)
+            if format == FormatGzip:
+                out = compress.GzipCompress(f.data_ptr, f.data_len)
+            else:
+                out = compress.Bzip2Compress(f.data_ptr, f.data_len)
+            end
+        end
+    else:
+        status = ARCHIVE_UNSUPPORTED
+    end
+    if status == ARCHIVE_OK and out.len == 0: status = ARCHIVE_IO_ERROR end
+    ret out
+end
+
+@en "Create"
+@fa "ساخت بایگانی"
+pub func Create(path: str, files: Vector<FileInput>): int:
+    format := DetectName(path)
+    mut st := ARCHIVE_OK
+    mut out := CreateBuf(format, files, st)
+    if st == ARCHIVE_OK and not WriteBinaryFileBuf(path, out): st = ARCHIVE_IO_ERROR end
+    compress.BufFree(out)
+    ret st
+end

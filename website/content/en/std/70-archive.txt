@@ -109,6 +109,22 @@ pkg.intro <<
 <p>7z cuts a big archive into plain pieces named <code>name.7z.001</code>, <code>name.7z.002</code> and so on. <code>SevenZipReadVolumes</code> takes the first file name and loads the rest by counting up; <code>SevenZipOpenVolumes</code> joins the pieces and opens them as one archive. A self-extracting 7z (an executable with the archive appended) opens with <code>SevenZipOpen</code> directly: the signature is searched for in the first 8 MiB.</p>
 {{example.archive-guide-sevenzip-volumes}}
 
+<h2 id="guide-open">One door for every format</h2>
+<p><code>Open</code> reads the first bytes, finds the format and returns an <code>Archive</code>; <code>List</code>, <code>Read</code>, <code>Extract</code> and <code>ExtractAll</code> then work the same for every format and report one set of <code>ARCHIVE_</code> codes. <code>OpenFile</code>, <code>ListFile</code> and <code>ExtractFile</code> do the same from a path. Gzip, bzip2 and xz files are unpacked on opening, and a tar inside is recognized, so a <code>.tar.gz</code>, <code>.tar.bz2</code> and <code>.tar.xz</code> open like any other archive. The per-format functions below keep working unchanged.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Format</th><th>Open, list, read, extract</th><th>Make</th></tr></thead>
+<tbody>
+<tr><td>zip</td><td>yes</td><td><code>Create</code> (<code>.zip</code>)</td></tr>
+<tr><td>tar, tar.gz, tar.bz2</td><td>yes</td><td><code>Create</code> (<code>.tar</code>, <code>.tar.gz</code>, <code>.tgz</code>, <code>.tar.bz2</code>)</td></tr>
+<tr><td>tar.xz</td><td>yes</td><td>no encoder</td></tr>
+<tr><td>gzip, bzip2, xz (one file)</td><td>yes, as an archive of one entry</td><td><code>Create</code> for <code>.gz</code> and <code>.bz2</code> with exactly one file</td></tr>
+<tr><td>RAR</td><td>yes, with a password</td><td><code>Create</code> (<code>.rar</code>, stored)</td></tr>
+<tr><td>7z</td><td>yes, with a password</td><td>no</td></tr>
+<tr><td>zstd</td><td>recognized; opening gives <code>ARCHIVE_UNSUPPORTED</code></td><td>no</td></tr>
+</tbody>
+</table></div>
+<p><code>ExtractAll</code> is the safe way to unpack data you do not trust. Before it writes anything it checks every entry against <code>Limits</code> (entry count, size of one entry, size of all, and the ratio of unpacked size to archive size, which catches compression bombs) and refuses names that are absolute or climb out with <code>..</code>, links that leave the folder, files written through a link, and device entries. If a check fails nothing is written and <code>status</code> says why. The limits use the sizes the archive declares; each format still verifies the real sizes while unpacking. Multi-volume RAR and 7z sets, and large-file streaming, stay with the per-format functions.</p>
+
 <h2 id="guide-which">Which function for which job</h2>
 <div class="table-wrap"><table>
 <thead><tr><th>Job</th><th>Use</th></tr></thead>
@@ -414,3 +430,135 @@ ex.LEGet16 = archive-Tar
 ex.LEGet32 = archive-Tar
 ex.LEPut16 = archive-Tar
 ex.LEPut32 = archive-Tar
+doc.ARCHIVE_OK = Status code: Success.
+doc.ARCHIVE_NOT_FOUND = Status code: The entry is not in the archive.
+doc.ARCHIVE_UNSUPPORTED = Status code: The format, method or feature is not supported.
+doc.ARCHIVE_ENCRYPTED = Status code: The data is encrypted and no password was given.
+doc.ARCHIVE_CORRUPT = Status code: The data is damaged. For a gzip, bzip2 or xz file it also means the data is larger than the <code>max_total</code> limit.
+doc.ARCHIVE_BAD_CRC = Status code: A checksum does not match.
+doc.ARCHIVE_TOO_BIG = Status code: An entry or the total is over the limit.
+doc.ARCHIVE_UNSAFE_PATH = Status code: A name, link or device entry could leave the target folder; nothing is written.
+doc.ARCHIVE_BAD_PASSWORD = Status code: The password is wrong.
+doc.ARCHIVE_MULTIVOLUME = Status code: A volume of a multi-volume archive is missing.
+doc.ARCHIVE_IO_ERROR = Status code: The file could not be read or written.
+doc.ARCHIVE_UNKNOWN_FORMAT = Status code: The first bytes match no known format.
+doc.ARCHIVE_TOO_MANY_ENTRIES = Status code: The archive has more entries than <code>max_entries</code>.
+doc.ARCHIVE_BOMB = Status code: The listed sizes are far larger than the archive itself (over <code>max_ratio</code>).
+doc.FormatUnknown = Format code: unknown.
+doc.FormatZip = Format code: zip.
+doc.FormatTar = Format code: plain tar.
+doc.FormatTarGz = Format code: tar compressed with gzip (<code>.tar.gz</code>, <code>.tgz</code>).
+doc.FormatTarBz2 = Format code: tar compressed with bzip2.
+doc.FormatTarXz = Format code: tar compressed with xz.
+doc.FormatGzip = Format code: a single gzip file.
+doc.FormatBzip2 = Format code: a single bzip2 file.
+doc.FormatXz = Format code: a single xz file.
+doc.FormatRar = Format code: RAR 1.5 to 5.
+doc.FormatSevenZip = Format code: 7z.
+doc.FormatZstd = Format code: zstd (recognized, not yet readable).
+doc.Limits = The caps that <code>ExtractAll</code> and <code>Open</code> enforce.
+doc.Limits.max_entries = The most entries an archive may have; 0 means no cap. Default 100000.
+doc.Limits.max_entry = The most bytes one entry may unpack to; 0 means no cap. Default 1 GiB.
+doc.Limits.max_total = The most bytes all entries together may unpack to, also the cap for unwrapping gzip, bzip2 and xz. Default 4 GiB.
+doc.Limits.max_ratio = The most the unpacked total may exceed the archive size, as a multiple (plus 1 MiB of slack); 0 turns the check off. Default 5000.
+doc.DefaultLimits = Returns the default <code>Limits</code>.
+doc.Archive = An opened archive of any format, made by <code>Open</code>, <code>OpenWith</code> or <code>OpenFile</code>. Free it with <code>Close</code>.
+doc.Archive.data = The address of the archive bytes (not owned, unless opened with <code>OpenFile</code>).
+doc.Archive.len = The length of the archive bytes.
+doc.Archive.password = The password given to <code>Open</code>.
+doc.Archive.format = The detected format, one of the <code>Format</code> codes.
+doc.Archive.status = The <code>ARCHIVE_</code> code of the last call.
+doc.Archive.limits = The caps in force.
+doc.Archive.name = The name of the one entry in a single-stream file (<code>.gz</code>, <code>.bz2</code>, <code>.xz</code>), taken from the file name by <code>OpenFile</code>; otherwise <code>data</code>.
+doc.Archive.fail = Why the archive could not be opened, or 0.
+doc.Archive.inner = The unpacked bytes of a gzip, bzip2 or xz file, owned by the archive.
+doc.Archive.file = The file contents, when opened by <code>OpenFile</code>.
+doc.FileInput = One file to put in an archive with <code>Create</code> or <code>CreateBuf</code>.
+doc.FileInput.name = The name inside the archive. It must be a safe relative path.
+doc.FileInput.data_ptr = The address of the contents.
+doc.FileInput.data_len = The length of the contents.
+doc.FileInput.is_dir = The entry is a folder.
+doc.MakeFileInput = Makes one <code>FileInput</code>.
+doc.ArchiveStatusText = A short English description of an <code>ARCHIVE_</code> code.
+doc.FormatName = The short name of a <code>Format</code> code, such as <code>tar.gz</code>.
+doc.Detect = Finds the format from the first bytes (and the header checksum for tar). A gzip, bzip2 or xz file is reported as itself even when a tar is inside; <code>Open</code> looks inside.
+doc.DetectName = Guesses the format from a file name ending such as <code>.zip</code>, <code>.tar.gz</code>, <code>.tgz</code>, <code>.rar</code> or <code>.7z</code>; <code>FormatUnknown</code> when nothing matches.
+doc.Open = Opens archive bytes of any format, found by its first bytes, with the default limits. A gzip, bzip2 or xz file is unpacked at once and a tar inside is recognized. Check <code>status</code> afterwards.
+doc.OpenWith = Like <code>Open</code> with your own <code>Limits</code>.
+doc.OpenFile = Reads a file and opens it like <code>Open</code>. The whole file is held in memory until <code>Close</code>.
+doc.SetLimits = Replaces the limits of an opened archive.
+doc.Close = Frees what the archive holds.
+doc.List = Lists the entries of any format, in one <code>Entry</code> model. Free with <code>FreeEntries</code>.
+doc.Read = Reads one entry by name, up to <code>max_entry</code> bytes. <code>status</code> says what happened; the buffer is empty unless it is <code>ARCHIVE_OK</code>.
+doc.ExtractAll = Extracts everything into a folder. First every entry is checked against the limits and for unsafe names, absolute paths, <code>..</code>, links that leave the folder, writes through links and device entries; if any check fails nothing is written and <code>status</code> says why. Returns the number of files, or 0 on failure.
+doc.Extract = Extracts one file or folder by name, with the same name checks. Returns false and sets <code>status</code> on failure.
+doc.ListFile = Opens a file, lists it and closes it. <code>status</code> gets the result.
+doc.ExtractFile = Opens a file, extracts it into a folder and closes it. Returns the number of files.
+doc.CreateBuf = Builds an archive of the given <code>Format</code> in memory: zip, tar, tar.gz, tar.bz2, rar (stored), or gzip and bzip2 with exactly one file. Other formats give <code>ARCHIVE_UNSUPPORTED</code>; an unsafe name gives <code>ARCHIVE_UNSAFE_PATH</code>.
+doc.Create = Builds an archive and writes it to a path; the format comes from the ending of the name (<code>DetectName</code>). Returns an <code>ARCHIVE_</code> code.
+ex.ARCHIVE_OK = archive-Open
+ex.ARCHIVE_NOT_FOUND = archive-Open
+ex.ARCHIVE_UNSUPPORTED = archive-Open
+ex.ARCHIVE_ENCRYPTED = archive-Open
+ex.ARCHIVE_CORRUPT = archive-Open
+ex.ARCHIVE_BAD_CRC = archive-Open
+ex.ARCHIVE_TOO_BIG = archive-Open
+ex.ARCHIVE_UNSAFE_PATH = archive-Open
+ex.ARCHIVE_BAD_PASSWORD = archive-Open
+ex.ARCHIVE_MULTIVOLUME = archive-Open
+ex.ARCHIVE_IO_ERROR = archive-Open
+ex.ARCHIVE_UNKNOWN_FORMAT = archive-Open
+ex.ARCHIVE_TOO_MANY_ENTRIES = archive-Open
+ex.ARCHIVE_BOMB = archive-Open
+ex.FormatUnknown = archive-Open
+ex.FormatZip = archive-Open
+ex.FormatTar = archive-Open
+ex.FormatTarGz = archive-Open
+ex.FormatTarBz2 = archive-Open
+ex.FormatTarXz = archive-Open
+ex.FormatGzip = archive-Open
+ex.FormatBzip2 = archive-Open
+ex.FormatXz = archive-Open
+ex.FormatRar = archive-Open
+ex.FormatSevenZip = archive-Open
+ex.FormatZstd = archive-Open
+ex.Limits = archive-Open
+ex.Limits.max_entries = archive-Open
+ex.Limits.max_entry = archive-Open
+ex.Limits.max_total = archive-Open
+ex.Limits.max_ratio = archive-Open
+ex.DefaultLimits = archive-Open
+ex.Archive = archive-Open
+ex.Archive.data = archive-Open
+ex.Archive.len = archive-Open
+ex.Archive.password = archive-Open
+ex.Archive.format = archive-Open
+ex.Archive.status = archive-Open
+ex.Archive.limits = archive-Open
+ex.Archive.name = archive-Open
+ex.Archive.fail = archive-Open
+ex.Archive.inner = archive-Open
+ex.Archive.file = archive-Open
+ex.FileInput = archive-Open
+ex.FileInput.name = archive-Open
+ex.FileInput.data_ptr = archive-Open
+ex.FileInput.data_len = archive-Open
+ex.FileInput.is_dir = archive-Open
+ex.MakeFileInput = archive-Open
+ex.ArchiveStatusText = archive-Open
+ex.FormatName = archive-Open
+ex.Detect = archive-Open
+ex.DetectName = archive-Open
+ex.Open = archive-Open
+ex.OpenWith = archive-Open
+ex.OpenFile = archive-Open
+ex.SetLimits = archive-Open
+ex.Close = archive-Open
+ex.List = archive-Open
+ex.Read = archive-Open
+ex.ExtractAll = archive-Open
+ex.Extract = archive-Open
+ex.ListFile = archive-Open
+ex.ExtractFile = archive-Open
+ex.CreateBuf = archive-Open
+ex.Create = archive-Open

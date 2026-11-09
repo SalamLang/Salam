@@ -1,0 +1,928 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "reactive"
+@fa "واکنشی"
+package reactive
+
+import mem
+import str
+
+const _K_MASK := 15
+const _K_INT := 1
+const _K_I64 := 2
+const _K_F64 := 3
+const _K_BOOL := 4
+const _K_STR := 5
+const _K_EXT := 6
+const _K_TRACKER := 7
+const _K_HANDLER := 8
+const _K_SOURCE := 9
+
+const _F_DIRTY := 16
+const _F_BUSY := 32
+const _F_LIVE := 64
+const _F_ANIM := 128
+
+const _B_INT := 1
+const _B_I64 := 2
+const _B_F64 := 3
+const _B_BOOL := 4
+const _B_STR_OWN := 5
+const _B_STR_COPY := 6
+const _B_CTX := 7
+const _B_TWOWAY := 8
+const _B_ANIM := 9
+const _B_TRACK := 10
+const _B_HANDLER := 11
+
+const _HANDLER_ROUNDS := 100
+
+mut _n_flags := Vector {} as Vector<int>
+mut _n_val := Vector {} as Vector<i64>
+mut _n_deps := Vector {} as Vector<int>
+mut _n_bind := Vector {} as Vector<int>
+mut _n_ver := Vector {} as Vector<int>
+mut _n_free := Vector {} as Vector<int>
+mut _n_live := 0
+
+mut _b_kind := Vector {} as Vector<int>
+mut _b_node := Vector {} as Vector<int>
+mut _b_fn := Vector {} as Vector<int>
+mut _b_reads := Vector {} as Vector<int>
+mut _b_aux := Vector {} as Vector<int>
+mut _b_free := Vector {} as Vector<int>
+
+mut _e_dep := Vector {} as Vector<int>
+mut _e_src := Vector {} as Vector<int>
+mut _e_next := Vector {} as Vector<int>
+mut _e_prev := Vector {} as Vector<int>
+mut _e_bnext := Vector {} as Vector<int>
+mut _e_free := Vector {} as Vector<int>
+mut _e_live := 0
+
+mut _f_int := Vector {} as Vector<func () int>
+mut _f_i64 := Vector {} as Vector<func () i64>
+mut _f_f64 := Vector {} as Vector<func () f64>
+mut _f_bool := Vector {} as Vector<func () bool>
+mut _f_str := Vector {} as Vector<func () str>
+mut _f_void := Vector {} as Vector<func ()>
+mut _f_ctx := Vector {} as Vector<func (void*)>
+mut _f_ctxp := Vector {} as Vector<void*>
+mut _f_int_free := Vector {} as Vector<int>
+mut _f_i64_free := Vector {} as Vector<int>
+mut _f_f64_free := Vector {} as Vector<int>
+mut _f_bool_free := Vector {} as Vector<int>
+mut _f_str_free := Vector {} as Vector<int>
+mut _f_void_free := Vector {} as Vector<int>
+mut _f_ctx_free := Vector {} as Vector<int>
+
+mut _f64s := Vector {} as Vector<f64>
+mut _f64s_free := Vector {} as Vector<int>
+mut _strs := Vector {} as Vector<str>
+mut _strs_free := Vector {} as Vector<int>
+
+mut _names := HashMap {} as HashMap<int, str>
+mut _shared_refs := HashMap {} as HashMap<int, int>
+
+mut _cur := -1
+mut _stack := Vector {} as Vector<int>
+mut _mstack := Vector {} as Vector<int>
+mut _hold := 0
+mut _flushing := false
+mut _notify := Vector {} as Vector<int>
+mut _hq := Vector {} as Vector<int>
+
+mut _evals := 0
+mut _marks := 0
+mut _errs := 0
+mut _err := Vector {} as Vector<str>
+
+func _rx_kind(n: int): int:
+    ret _n_flags.get(n) & _K_MASK
+end
+
+func _rx_live(n: int): bool:
+    ret n >= 0 and n < _n_flags.len() and (_n_flags.get(n) & _F_LIVE) != 0
+end
+
+func _rx_node_new(kind: int): int:
+    if _n_free.len() > 0:
+        n := _n_free.pop()
+        _n_flags.set(n, kind | _F_LIVE)
+        _n_val.set(n, 0 as i64)
+        _n_deps.set(n, -1)
+        _n_bind.set(n, -1)
+        _n_ver.set(n, 0)
+        _n_live++
+        ret n
+    end
+    _n_flags.push(kind | _F_LIVE)
+    _n_val.push(0 as i64)
+    _n_deps.push(-1)
+    _n_bind.push(-1)
+    _n_ver.push(0)
+    _n_live++
+    ret _n_flags.len() - 1
+end
+
+func _rx_f64_slot(v: f64): int:
+    if _f64s_free.len() > 0:
+        i := _f64s_free.pop()
+        _f64s.set(i, v)
+        ret i
+    end
+    _f64s.push(v)
+    ret _f64s.len() - 1
+end
+
+func _rx_str_slot(s: str): int:
+    if _strs_free.len() > 0:
+        i := _strs_free.pop()
+        _strs.set(i, s)
+        ret i
+    end
+    _strs.push(s)
+    ret _strs.len() - 1
+end
+
+func _rx_str_release(i: int):
+    old := _strs.get(i)
+    mem.Free(old as void*)
+    _strs_free.push(i)
+end
+
+func _rx_slot_int(f: func () int): int:
+    if _f_int_free.len() > 0:
+        i := _f_int_free.pop()
+        _f_int.set(i, f)
+        ret i
+    end
+    _f_int.push(f)
+    ret _f_int.len() - 1
+end
+
+func _rx_slot_i64(f: func () i64): int:
+    if _f_i64_free.len() > 0:
+        i := _f_i64_free.pop()
+        _f_i64.set(i, f)
+        ret i
+    end
+    _f_i64.push(f)
+    ret _f_i64.len() - 1
+end
+
+func _rx_slot_f64(f: func () f64): int:
+    if _f_f64_free.len() > 0:
+        i := _f_f64_free.pop()
+        _f_f64.set(i, f)
+        ret i
+    end
+    _f_f64.push(f)
+    ret _f_f64.len() - 1
+end
+
+func _rx_slot_bool(f: func () bool): int:
+    if _f_bool_free.len() > 0:
+        i := _f_bool_free.pop()
+        _f_bool.set(i, f)
+        ret i
+    end
+    _f_bool.push(f)
+    ret _f_bool.len() - 1
+end
+
+func _rx_slot_str(f: func () str): int:
+    if _f_str_free.len() > 0:
+        i := _f_str_free.pop()
+        _f_str.set(i, f)
+        ret i
+    end
+    _f_str.push(f)
+    ret _f_str.len() - 1
+end
+
+func _rx_slot_void(f: func ()): int:
+    if _f_void_free.len() > 0:
+        i := _f_void_free.pop()
+        _f_void.set(i, f)
+        ret i
+    end
+    _f_void.push(f)
+    ret _f_void.len() - 1
+end
+
+func _rx_slot_ctx(f: func (void*), ctx: void*): int:
+    if _f_ctx_free.len() > 0:
+        i := _f_ctx_free.pop()
+        _f_ctx.set(i, f)
+        _f_ctxp.set(i, ctx)
+        ret i
+    end
+    _f_ctx.push(f)
+    _f_ctxp.push(ctx)
+    ret _f_ctx.len() - 1
+end
+
+func _rx_release_fn(kind: int, i: int):
+    if i < 0:
+        ret
+    end
+    switch kind:
+        _B_INT:
+            _f_int_free.push(i)
+            break
+        end
+        _B_I64:
+            _f_i64_free.push(i)
+            break
+        end
+        _B_F64:
+            _f_f64_free.push(i)
+            break
+        end
+        _B_BOOL:
+            _f_bool_free.push(i)
+            break
+        end
+        _B_STR_OWN, _B_STR_COPY:
+            _f_str_free.push(i)
+            break
+        end
+        _B_CTX:
+            _f_ctxp.set(i, null)
+            _f_ctx_free.push(i)
+            break
+        end
+        _B_TRACK, _B_HANDLER:
+            _f_void_free.push(i)
+            break
+        end
+        else:
+            break
+        end
+    end
+end
+
+func _rx_edge_new(d: int, s: int, bnext: int): int:
+    mut e := -1
+    if _e_free.len() > 0:
+        e = _e_free.pop()
+        _e_dep.set(e, d)
+        _e_src.set(e, s)
+        _e_next.set(e, -1)
+        _e_prev.set(e, -1)
+        _e_bnext.set(e, bnext)
+    else:
+        _e_dep.push(d)
+        _e_src.push(s)
+        _e_next.push(-1)
+        _e_prev.push(-1)
+        _e_bnext.push(bnext)
+        e = _e_dep.len() - 1
+    end
+    _e_live++
+    ret e
+end
+
+func _rx_edge_unlink(e: int):
+    s := _e_src.get(e)
+    if s < 0:
+        ret
+    end
+    p := _e_prev.get(e)
+    nx := _e_next.get(e)
+    if p >= 0:
+        _e_next.set(p, nx)
+    else:
+        _n_deps.set(s, nx)
+    end
+    if nx >= 0:
+        _e_prev.set(nx, p)
+    end
+    _e_src.set(e, -1)
+end
+
+func _rx_clear_reads(b: int):
+    mut e := _b_reads.get(b)
+    until e >= 0:
+        nx := _e_bnext.get(e)
+        _rx_edge_unlink(e)
+        _e_free.push(e)
+        _e_live--
+        e = nx
+    end
+    _b_reads.set(b, -1)
+end
+
+func _rx_register(n: int):
+    d := _cur
+    if d < 0 or d == n:
+        ret
+    end
+    b := _n_bind.get(d)
+    if b < 0:
+        ret
+    end
+    head := _b_reads.get(b)
+    if head >= 0 and _e_src.get(head) == n:
+        ret
+    end
+    e := _rx_edge_new(d, n, head)
+    old := _n_deps.get(n)
+    _e_next.set(e, old)
+    if old >= 0:
+        _e_prev.set(old, e)
+    end
+    _n_deps.set(n, e)
+    _b_reads.set(b, e)
+end
+
+func _rx_bind_new(n: int, kind: int, f: int, aux: int): int:
+    mut b := -1
+    if _b_free.len() > 0:
+        b = _b_free.pop()
+        _b_kind.set(b, kind)
+        _b_node.set(b, n)
+        _b_fn.set(b, f)
+        _b_reads.set(b, -1)
+        _b_aux.set(b, aux)
+    else:
+        _b_kind.push(kind)
+        _b_node.push(n)
+        _b_fn.push(f)
+        _b_reads.push(-1)
+        _b_aux.push(aux)
+        b = _b_kind.len() - 1
+    end
+    _n_bind.set(n, b)
+    ret b
+end
+
+func _rx_name_of(n: int): str:
+    if _names.has(n):
+        ret str.Clone(_names.get(n))
+    end
+    ret "#" + n
+end
+
+func _rx_error(msg: str):
+    _errs++
+    if _err.len() > 0:
+        old := _err.pop()
+        mem.Free(old as void*)
+    end
+    _err.push(str.Clone(msg))
+    printerrln "gui.reactive: " + msg
+end
+
+func _rx_loop(n: int):
+    mut sb := str.NewBuilder()
+    str.BufAppend(sb, "binding loop: ")
+    mut start := -1
+    repeat _stack.len() in i:
+        if _stack.get(i) == n and start < 0:
+            start = i
+        end
+    end
+    if start < 0:
+        start = 0
+    end
+    mut i2 := start
+    until i2 < _stack.len():
+        nm := _rx_name_of(_stack.get(i2))
+        str.BufAppend(sb, "'" + nm + "' -> ")
+        mem.Free(nm as void*)
+        i2++
+    end
+    last := _rx_name_of(n)
+    str.BufAppend(sb, "'" + last + "'")
+    mem.Free(last as void*)
+    msg := str.BufStr(sb)
+    str.BufFree(sb)
+    _rx_error(msg)
+    mem.Free(msg as void*)
+end
+
+func _rx_push_hold():
+    _hold++
+end
+
+func _rx_flush():
+    if _flushing:
+        ret
+    end
+    _flushing = true
+    mut i := 0
+    until i < _notify.len():
+        t := _notify.get(i)
+        i++
+        if _rx_live(t) and _rx_kind(t) == _K_TRACKER:
+            b := _n_bind.get(t)
+            if b >= 0:
+                cb := _b_aux.get(b)
+                if cb >= 0:
+                    f := _f_void.get(cb)
+                    f()
+                end
+            end
+        end
+    end
+    _notify.clear()
+    _flushing = false
+end
+
+func _rx_pop_hold():
+    _hold--
+    if _hold <= 0:
+        _hold = 0
+        if _notify.len() > 0:
+            _rx_flush()
+        end
+    end
+end
+
+func _rx_on_dirty(d: int, fl: int):
+    k := fl & _K_MASK
+    if k == _K_TRACKER:
+        b := _n_bind.get(d)
+        if b >= 0 and _b_aux.get(b) >= 0:
+            _notify.push(d)
+        end
+    else k == _K_HANDLER:
+        _hq.push(d)
+    else _n_deps.get(d) >= 0:
+        _mstack.push(d)
+    end
+end
+
+func _rx_mark(n: int):
+    if _n_deps.get(n) < 0:
+        ret
+    end
+    base := _mstack.len()
+    _mstack.push(n)
+    until _mstack.len() > base:
+        s := _mstack.pop()
+        mut e := _n_deps.get(s)
+        until e >= 0:
+            d := _e_dep.get(e)
+            fl := _n_flags.get(d)
+            if (fl & _F_ANIM) != 0:
+                _rx_anim_touch(d, s)
+            end
+            if (fl & _F_DIRTY) == 0:
+                _n_flags.set(d, fl | _F_DIRTY)
+                _marks++
+                _rx_on_dirty(d, fl)
+            end
+            e = _e_next.get(e)
+        end
+    end
+end
+
+func _rx_changed(n: int):
+    _n_ver.set(n, _n_ver.get(n) + 1)
+    if _n_deps.get(n) >= 0:
+        _rx_push_hold()
+        _rx_mark(n)
+        _rx_pop_hold()
+    end
+end
+
+func _rx_mark_self(n: int):
+    fl := _n_flags.get(n)
+    if (fl & _F_DIRTY) == 0:
+        _n_flags.set(n, fl | _F_DIRTY)
+    end
+    _rx_push_hold()
+    _rx_mark(n)
+    _rx_pop_hold()
+end
+
+func _rx_store_raw(n: int, v: i64): bool:
+    if _n_val.get(n) == v:
+        ret false
+    end
+    _n_val.set(n, v)
+    _n_ver.set(n, _n_ver.get(n) + 1)
+    ret true
+end
+
+func _rx_store_f64(n: int, v: f64): bool:
+    i := _n_val.get(n) as int
+    if _f64s.get(i) == v:
+        ret false
+    end
+    _f64s.set(i, v)
+    _n_ver.set(n, _n_ver.get(n) + 1)
+    ret true
+end
+
+func _rx_store_str(n: int, s: str, owned: bool): bool:
+    i := _n_val.get(n) as int
+    old := _strs.get(i)
+    if str.Equals(old, s):
+        if owned:
+            mem.Free(s as void*)
+        end
+        ret false
+    end
+    mem.Free(old as void*)
+    if owned:
+        _strs.set(i, s)
+    else:
+        _strs.set(i, str.Clone(s))
+    end
+    _n_ver.set(n, _n_ver.get(n) + 1)
+    ret true
+end
+
+func _rx_eval_kind(n: int, b: int):
+    bk := _b_kind.get(b)
+    fi := _b_fn.get(b)
+    switch bk:
+        _B_INT:
+            f := _f_int.get(fi)
+            v := f()
+            _p := _rx_store_raw(n, v as i64)
+            break
+        end
+        _B_I64:
+            f2 := _f_i64.get(fi)
+            v2 := f2()
+            _p2 := _rx_store_raw(n, v2)
+            break
+        end
+        _B_F64:
+            f3 := _f_f64.get(fi)
+            v3 := f3()
+            _p3 := _rx_store_f64(n, v3)
+            break
+        end
+        _B_BOOL:
+            f4 := _f_bool.get(fi)
+            mut v4 := 0 as i64
+            if f4():
+                v4 = 1 as i64
+            end
+            _p4 := _rx_store_raw(n, v4)
+            break
+        end
+        _B_STR_OWN:
+            f5 := _f_str.get(fi)
+            v5 := f5()
+            _p5 := _rx_store_str(n, v5, true)
+            break
+        end
+        _B_STR_COPY:
+            f6 := _f_str.get(fi)
+            v6 := f6()
+            _p6 := _rx_store_str(n, v6, false)
+            break
+        end
+        _B_CTX:
+            f7 := _f_ctx.get(fi)
+            f7(_f_ctxp.get(fi))
+            _n_ver.set(n, _n_ver.get(n) + 1)
+            break
+        end
+        _B_TWOWAY:
+            _rx_eval_twoway(n, _b_aux.get(b))
+            break
+        end
+        _B_ANIM:
+            _rx_eval_anim(n, _b_aux.get(b))
+            break
+        end
+        _B_TRACK:
+            f8 := _f_void.get(fi)
+            f8()
+            break
+        end
+        _B_HANDLER:
+            _rx_get_raw(_b_aux.get(b))
+            break
+        end
+        else:
+            break
+        end
+    end
+end
+
+func _rx_eval(n: int):
+    fl := _n_flags.get(n)
+    if (fl & _F_BUSY) != 0:
+        _rx_loop(n)
+        ret
+    end
+    b := _n_bind.get(n)
+    if b < 0:
+        _n_flags.set(n, fl & ~_F_DIRTY)
+        ret
+    end
+    _rx_clear_reads(b)
+    _n_flags.set(n, (fl | _F_BUSY) & ~_F_DIRTY)
+    saved := _cur
+    _cur = n
+    _stack.push(n)
+    _evals++
+    _rx_eval_kind(n, b)
+    _p := _stack.pop()
+    _cur = saved
+    if _rx_live(n):
+        _n_flags.set(n, _n_flags.get(n) & ~_F_BUSY)
+    end
+end
+
+func _rx_update(n: int):
+    if (_n_flags.get(n) & _F_DIRTY) != 0:
+        _rx_eval(n)
+    else (_n_flags.get(n) & _F_BUSY) != 0:
+        _rx_loop(n)
+    end
+end
+
+func _rx_get_raw(n: int):
+    _rx_update(n)
+    if _cur >= 0:
+        _rx_register(n)
+    end
+end
+
+func _rx_drop_binding(n: int):
+    b := _n_bind.get(n)
+    if b < 0:
+        ret
+    end
+    _rx_clear_reads(b)
+    bk := _b_kind.get(b)
+    if bk == _B_TWOWAY:
+        _rx_shared_release(_b_aux.get(b))
+    else bk == _B_ANIM:
+        _rx_anim_release(_b_aux.get(b))
+    else bk == _B_TRACK:
+        _rx_release_fn(_B_TRACK, _b_aux.get(b))
+    end
+    _rx_release_fn(bk, _b_fn.get(b))
+    _b_kind.set(b, 0)
+    _b_free.push(b)
+    _n_bind.set(n, -1)
+    _n_flags.set(n, _n_flags.get(n) & ~(_F_DIRTY | _F_ANIM))
+end
+
+func _rx_node_free(n: int):
+    if not _rx_live(n):
+        ret
+    end
+    _rx_drop_binding(n)
+    mut e := _n_deps.get(n)
+    until e >= 0:
+        nx := _e_next.get(e)
+        _e_src.set(e, -1)
+        e = nx
+    end
+    _n_deps.set(n, -1)
+    k := _rx_kind(n)
+    if k == _K_F64:
+        _f64s_free.push(_n_val.get(n) as int)
+    else k == _K_STR:
+        _rx_str_release(_n_val.get(n) as int)
+    end
+    if _names.has(n):
+        nm := _names.get(n)
+        mem.Free(nm as void*)
+        _names.remove(n)
+    end
+    _n_flags.set(n, 0)
+    _n_free.push(n)
+    _n_live--
+end
+
+func _rx_check_set(n: int): bool:
+    if (_n_flags.get(n) & _F_BUSY) != 0:
+        nm := _rx_name_of(n)
+        _rx_error("property '" + nm + "' was set while its own binding runs")
+        mem.Free(nm as void*)
+        ret false
+    end
+    ret true
+end
+
+func _rx_set_name(n: int, name: str):
+    if n < 0:
+        ret
+    end
+    if _names.has(n):
+        old := _names.get(n)
+        mem.Free(old as void*)
+    end
+    _names.put(n, str.Clone(name))
+end
+
+func _rx_bind_fn(n: int, kind: int, f: int):
+    _rx_drop_binding(n)
+    _p := _rx_bind_new(n, kind, f, -1)
+    _rx_mark_self(n)
+end
+
+func _rx_free_all():
+    _n_flags.free()
+    _n_val.free()
+    _n_deps.free()
+    _n_bind.free()
+    _n_ver.free()
+    _n_free.free()
+    _b_kind.free()
+    _b_node.free()
+    _b_fn.free()
+    _b_reads.free()
+    _b_aux.free()
+    _b_free.free()
+    _e_dep.free()
+    _e_src.free()
+    _e_next.free()
+    _e_prev.free()
+    _e_bnext.free()
+    _e_free.free()
+    _f_int.free()
+    _f_i64.free()
+    _f_f64.free()
+    _f_bool.free()
+    _f_str.free()
+    _f_void.free()
+    _f_ctx.free()
+    _f_ctxp.free()
+    _f_int_free.free()
+    _f_i64_free.free()
+    _f_f64_free.free()
+    _f_bool_free.free()
+    _f_str_free.free()
+    _f_void_free.free()
+    _f_ctx_free.free()
+    _f64s.free()
+    _f64s_free.free()
+    mut hole := Vector {} as Vector<bool>
+    hole.zeros(_strs.len())
+    each fi in _strs_free:
+        hole.set(fi, true)
+    end
+    repeat _strs.len() in si:
+        if not hole.get(si):
+            mem.Free(_strs.get(si) as void*)
+        end
+    end
+    hole.free()
+    _strs.free()
+    _strs_free.free()
+    each _, v in _names:
+        mem.Free(v as void*)
+    end
+    _names.free()
+    _shared_refs.free()
+    _stack.free()
+    _mstack.free()
+    _notify.free()
+    _hq.free()
+    each m in _err:
+        mem.Free(m as void*)
+    end
+    _err.free()
+    _rx_anim_free_all()
+    _n_flags = Vector {} as Vector<int>
+    _n_val = Vector {} as Vector<i64>
+    _n_deps = Vector {} as Vector<int>
+    _n_bind = Vector {} as Vector<int>
+    _n_ver = Vector {} as Vector<int>
+    _n_free = Vector {} as Vector<int>
+    _b_kind = Vector {} as Vector<int>
+    _b_node = Vector {} as Vector<int>
+    _b_fn = Vector {} as Vector<int>
+    _b_reads = Vector {} as Vector<int>
+    _b_aux = Vector {} as Vector<int>
+    _b_free = Vector {} as Vector<int>
+    _e_dep = Vector {} as Vector<int>
+    _e_src = Vector {} as Vector<int>
+    _e_next = Vector {} as Vector<int>
+    _e_prev = Vector {} as Vector<int>
+    _e_bnext = Vector {} as Vector<int>
+    _e_free = Vector {} as Vector<int>
+    _f_int = Vector {} as Vector<func () int>
+    _f_i64 = Vector {} as Vector<func () i64>
+    _f_f64 = Vector {} as Vector<func () f64>
+    _f_bool = Vector {} as Vector<func () bool>
+    _f_str = Vector {} as Vector<func () str>
+    _f_void = Vector {} as Vector<func ()>
+    _f_ctx = Vector {} as Vector<func (void*)>
+    _f_ctxp = Vector {} as Vector<void*>
+    _f_int_free = Vector {} as Vector<int>
+    _f_i64_free = Vector {} as Vector<int>
+    _f_f64_free = Vector {} as Vector<int>
+    _f_bool_free = Vector {} as Vector<int>
+    _f_str_free = Vector {} as Vector<int>
+    _f_void_free = Vector {} as Vector<int>
+    _f_ctx_free = Vector {} as Vector<int>
+    _f64s = Vector {} as Vector<f64>
+    _f64s_free = Vector {} as Vector<int>
+    _strs = Vector {} as Vector<str>
+    _strs_free = Vector {} as Vector<int>
+    _names = HashMap {} as HashMap<int, str>
+    _shared_refs = HashMap {} as HashMap<int, int>
+    _stack = Vector {} as Vector<int>
+    _mstack = Vector {} as Vector<int>
+    _notify = Vector {} as Vector<int>
+    _hq = Vector {} as Vector<int>
+    _err = Vector {} as Vector<str>
+    _n_live = 0
+    _e_live = 0
+    _cur = -1
+    _hold = 0
+    _flushing = false
+    _evals = 0
+    _marks = 0
+    _errs = 0
+end
+
+@en "LastError"
+@fa "آخرین خطا"
+pub func LastError(): str:
+    if _err.len() == 0:
+        ret str.Clone("")
+    end
+    ret str.Clone(_err.get(0))
+end
+
+@en "ErrorCount"
+@fa "شمار خطاها"
+pub func ErrorCount(): int:
+    ret _errs
+end
+
+@en "Evaluations"
+@fa "شمار ارزیابی"
+pub func Evaluations(): int:
+    ret _evals
+end
+
+@en "DirtyMarks"
+@fa "شمار نشانه گذاری"
+pub func DirtyMarks(): int:
+    ret _marks
+end
+
+@en "LiveNodes"
+@fa "گره های زنده"
+pub func LiveNodes(): int:
+    ret _n_live
+end
+
+@en "LiveEdges"
+@fa "یال های زنده"
+pub func LiveEdges(): int:
+    ret _e_live
+end
+
+@en "BeginBatch"
+@fa "آغاز دسته"
+pub func BeginBatch():
+    _rx_push_hold()
+end
+
+@en "EndBatch"
+@fa "اتمام دسته"
+pub func EndBatch():
+    if _hold > 0:
+        _rx_pop_hold()
+    end
+end
+
+@en "Batch"
+@fa "دسته"
+pub func Batch(body: func ()):
+    _rx_push_hold()
+    body()
+    _rx_pop_hold()
+end
+
+@en "InBatch"
+@fa "داخل دسته"
+pub func InBatch(): bool:
+    ret _hold > 0
+end
+
+@en "Reset"
+@fa "بازنشانی"
+pub func Reset():
+    _rx_free_all()
+end

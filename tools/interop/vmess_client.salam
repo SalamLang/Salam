@@ -1,0 +1,89 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+package main
+
+import mem
+import os
+import pool
+import net.transport
+import net.vmess
+
+func writer(c &: vmess.Conn, n_total: int):
+    chunk := 16384
+    buf := mem.Allocate(chunk as u64)
+    bp := buf as u8*
+    mut sent := 0
+    until sent < n_total:
+        mut take := n_total - sent
+        if take > chunk: take = chunk end
+        repeat take in i:
+            bp[i] = (((sent + i) * 7 + 3) & 255) as u8
+        end
+        if not vmess.Write(c, buf, take): break end
+        sent += take
+    end
+    mem.Free(buf)
+end
+
+func security(name: str): int:
+    if name == "chacha20-poly1305": ret vmess.SecChaCha20Poly1305 end
+    if name == "none": ret vmess.SecNone end
+    if name == "zero": ret vmess.SecZero end
+    ret vmess.SecAES128GCM
+end
+
+func main:
+    a := os.Args()
+    if a.len() < 8:
+        println "usage: vmess_client SERVER_PORT UUID SECURITY OPTION TARGET_HOST TARGET_PORT BYTES"
+        ret 2
+    end
+    sec := security(a[3])
+    t := transport.Dial("127.0.0.1", a[1].to_int(), transport.Settings {})
+    if not transport.Ok(t):
+        println "FAIL dial", t.err
+        ret 1
+    end
+    size := a[7].to_int()
+    mut conn := vmess.Client(t, a[2], sec, a[4].to_int(), vmess.CmdTCP, transport.NewAddr(a[5], a[6].to_int()))
+    if not conn.ok:
+        println "FAIL client", conn.err
+        ret 1
+    end
+    go writer(conn, size)
+    buf := mem.Allocate(65536 as u64)
+    bp := buf as u8*
+    mut got := 0
+    mut bad := false
+    until got < size:
+        n := vmess.Read(conn, buf, 65536)
+        if n <= 0: break end
+        repeat n in i:
+            if (bp[i] as int) != (((got + i) * 7 + 3) & 255):
+                bad = true
+                break
+            end
+        end
+        got += n
+        if bad: break end
+    end
+    mem.Free(buf)
+    vmess.Close(conn)
+    if got == size and not bad:
+        println "OK", got
+        ret 0
+    end
+    println "FAIL got", got, "of", size, "mismatch", bad
+    ret 1
+end

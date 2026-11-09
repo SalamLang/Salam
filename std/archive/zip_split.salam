@@ -1,0 +1,450 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package archive
+
+import compress
+import mem
+import os
+import str
+
+@en "ZipSplitDisk"
+@fa "زیپ قطعه دیسکی"
+pub const ZipSplitDisk := 0
+
+@en "ZipSplitByte"
+@fa "زیپ قطعه بایتی"
+pub const ZipSplitByte := 1
+
+const _ZSP_MIN_PART := 65536
+
+struct _ZspOut:
+    pub outpath: str
+    pub stem: str
+    pub style: int
+    pub fp: void*
+    pub disk: int
+    pub names: Vector<str>
+    pub failed: bool
+    pub total: int
+end
+
+func _zsp_set(p: void*, off: int, v: i64, n: int):
+    b := p as u8*
+    repeat n in i:
+        b[off + i] = ((v >> (i * 8)) & (255 as i64)) as u8
+    end
+end
+
+func _zsp_patch_offset(p: void*, pos: int, off: i64): bool:
+    ffffffff := 0xFFFFFFFF as i64
+    if _zip_u32(p, pos + 42) != ffffffff:
+        _zsp_set(p, pos + 42, off, 4)
+        ret true
+    end
+    name_len := LEGet16(p, pos + 28)
+    extra_len := LEGet16(p, pos + 30)
+    mut ep := pos + 46 + name_len
+    eend := ep + extra_len
+    until ep + 4 <= eend:
+        tag := LEGet16(p, ep)
+        sz := LEGet16(p, ep + 2)
+        body := ep + 4
+        if body + sz > eend:
+            break
+        end
+        if tag == 1:
+            mut q := body
+            if _zip_u32(p, pos + 24) == ffffffff:
+                q += 8
+            end
+            if _zip_u32(p, pos + 20) == ffffffff:
+                q += 8
+            end
+            if q + 8 <= body + sz:
+                _zsp_set(p, q, off, 8)
+                ret true
+            end
+            ret false
+        end
+        ep = body + sz
+    end
+    ret false
+end
+
+func _zsp_stem(outpath: str): str:
+    n := outpath.len()
+    if n >= 4 and _zipf_ci_ends(outpath, ".zip"):
+        ret str.Substr(outpath, 0, n - 4)
+    end
+    ret str.Clone(outpath)
+end
+
+func _zsp_name(outpath: str, stem: str, i: int, last: bool, style: int): str:
+    if style == ZipSplitByte:
+        mut d := str.FromInt((i + 1) as i64)
+        until d.len() < 3:
+            g := "0" + d
+            mem.Free(d as void*)
+            d = g
+        end
+        r := outpath + "." + d
+        mem.Free(d as void*)
+        ret r
+    end
+    if last:
+        if outpath.len() >= 4 and _zipf_ci_ends(outpath, ".zip"):
+            ret str.Clone(outpath)
+        end
+        ret outpath + ".zip"
+    end
+    d2 := _zipf_num2(i + 1)
+    r2 := stem + ".z" + d2
+    mem.Free(d2 as void*)
+    ret r2
+end
+
+func _zsp_open_disk(o &: _ZspOut): bool:
+    nm := _zsp_name(o.outpath, o.stem, o.disk, o.disk == o.total - 1, o.style)
+    o.names.push(nm)
+    o.fp = compress.FileOpenWrite(nm)
+    if o.fp == null:
+        o.failed = true
+        ret false
+    end
+    ret true
+end
+
+func _zsp_write(o &: _ZspOut, p: void*, n: int):
+    if o.failed or n <= 0:
+        ret
+    end
+    if (fwrite(p, 1 as u64, n as u64, o.fp) as int) != n:
+        o.failed = true
+    end
+end
+
+func _zsp_next(o &: _ZspOut):
+    if o.fp != null:
+        if fclose(o.fp) != 0:
+            o.failed = true
+        end
+        o.fp = null
+    end
+    o.disk++
+    _ := _zsp_open_disk(o)
+end
+
+func _zsp_copy(o &: _ZspOut, src: void*, begin: i64, stop: i64, scratch: void*): bool:
+    mut at := begin
+    until at < stop and not o.failed:
+        mut want := 262144
+        if stop - at < (want as i64):
+            want = (stop - at) as int
+        end
+        got := compress.FileReadAt(src, at, scratch, want)
+        if got != want:
+            ret false
+        end
+        _zsp_write(o, scratch, got)
+        at += got as i64
+    end
+    ret not o.failed
+end
+
+func _zsp_byte_split(src: void*, total: i64, o &: _ZspOut, part: i64, scratch: void*): bool:
+    mut at := 0 as i64
+    mut ok := true
+    mut first := true
+    until (at < total or first) and ok:
+        mut end_at := at + part
+        if end_at > total:
+            end_at = total
+        end
+        if not _zsp_open_disk(o):
+            ok = false
+        else:
+            ok = _zsp_copy(o, src, at, end_at, scratch)
+            if fclose(o.fp) != 0:
+                ok = false
+            end
+            o.fp = null
+            o.disk++
+        end
+        at = end_at
+        first = false
+    end
+    ret ok
+end
+
+func _zsp_disk_split(src: void*, zf: ZipFile, o &: _ZspOut, part: i64, scratch: void*): bool:
+    n := zf.count as int
+    mut recpos := Vector {} as Vector<int>
+    mut recnext := Vector {} as Vector<int>
+    mut locals := Vector {} as Vector<i64>
+    mut pos := 0
+    mut k := 0
+    mut ok := true
+    until k < n and ok:
+        mut r := _ZipRec {}
+        if not _zip_rec(zf.cd.data, zf.cd.len, pos, r):
+            ok = false
+        else:
+            if locals.len() > 0 and r.local <= locals.get(locals.len() - 1):
+                ok = false
+            end
+            recpos.push(pos)
+            recnext.push(r.next)
+            locals.push(r.local)
+            _zip_free_name(r.name)
+            pos = r.next
+        end
+        k++
+    end
+    mut bnd := Vector {} as Vector<i64>
+    mut ent_disk := Vector {} as Vector<int>
+    mut ent_off := Vector {} as Vector<i64>
+    bnd.push(0 as i64)
+    mut room := part - (4 as i64)
+    mut used := 4 as i64
+    mut disk := 0
+    mut i := 0
+    until i < n and ok:
+        h := locals.get(i)
+        hdr := mem.Allocate(30 as u64)
+        got := compress.FileReadAt(src, h, hdr, 30)
+        mut hl := 0 as i64
+        if got == 30 and LEGet32(hdr, 0) == 0x04034b50:
+            hl = (30 + LEGet16(hdr, 26) + LEGet16(hdr, 28)) as i64
+        else:
+            ok = false
+        end
+        mem.Free(hdr)
+        if ok:
+            e := i + 1 < n ? locals.get(i + 1) : zf.cd_start
+            if hl > part or e < h + hl:
+                ok = false
+            else:
+                if hl > room:
+                    disk++
+                    bnd.push(h)
+                    room = part
+                    used = 0 as i64
+                end
+                ent_disk.push(disk)
+                ent_off.push(used)
+                room -= hl
+                used += hl
+                mut at := h + hl
+                mut b := e - at
+                until b > (0 as i64):
+                    if room == (0 as i64):
+                        disk++
+                        bnd.push(at)
+                        room = part
+                        used = 0 as i64
+                    end
+                    mut t := b
+                    if t > room:
+                        t = room
+                    end
+                    room -= t
+                    used += t
+                    at += t
+                    b -= t
+                end
+            end
+        end
+        i++
+    end
+    mut cd_brk := Vector {} as Vector<bool>
+    mut cd_disk_of := Vector {} as Vector<int>
+    mut cd_disk := disk
+    mut cd_off := used
+    mut cd_size := 0 as i64
+    mut cnt_last := 0
+    if ok:
+        mut j := 0
+        until j < n:
+            rl := (recnext.get(j) - recpos.get(j)) as i64
+            mut brk := false
+            if rl > room:
+                if rl > part:
+                    ok = false
+                end
+                disk++
+                room = part
+                used = 0 as i64
+                brk = true
+                cnt_last = 0
+            end
+            if j == 0:
+                cd_disk = disk
+                cd_off = used
+            end
+            cd_brk.push(brk)
+            cd_disk_of.push(disk)
+            room -= rl
+            used += rl
+            cd_size += rl
+            cnt_last++
+            j++
+        end
+    end
+    wide := n >= 0xFFFF
+    fb := wide ? (98 as i64) : (22 as i64)
+    mut fin_brk := false
+    if ok and fb > room:
+        disk++
+        room = part
+        used = 0 as i64
+        fin_brk = true
+        cnt_last = 0
+    end
+    fin_off := used
+    fin_disk := disk
+    if disk >= 65534 or cd_size >= (0xFFFFFFFF as i64):
+        ok = false
+    end
+    if ok:
+        o.total = disk + 1
+        ok = _zsp_open_disk(o)
+    end
+    if ok:
+        mark := mem.Allocate(4 as u64)
+        _zsp_set(mark, 0, 0x08074b50 as i64, 4)
+        _zsp_write(o, mark, 4)
+        mem.Free(mark)
+        mut b2 := 0
+        until b2 < bnd.len() and ok:
+            begin := bnd.get(b2)
+            stop := b2 + 1 < bnd.len() ? bnd.get(b2 + 1) : zf.cd_start
+            if b2 > 0:
+                _zsp_next(o)
+            end
+            ok = _zsp_copy(o, src, begin, stop, scratch) and not o.failed
+            b2++
+        end
+    end
+    if ok:
+        cdp := zf.cd.data
+        mut m := 0
+        until m < n and ok:
+            if cd_brk.get(m):
+                _zsp_next(o)
+            end
+            p0 := recpos.get(m)
+            _zsp_set(cdp, p0 + 34, ent_disk.get(m) as i64, 2)
+            ok = _zsp_patch_offset(cdp, p0, ent_off.get(m))
+            if ok:
+                _zsp_write(o, ((cdp as i64) + (p0 as i64)) as void*, recnext.get(m) - p0)
+            end
+            m++
+        end
+    end
+    if ok:
+        if fin_brk:
+            _zsp_next(o)
+        end
+        mut t := compress.NewByteBuf()
+        if wide:
+            LEPut32(t, 0x06064b50)
+            _zip_put64(t, 44 as i64)
+            LEPut16(t, 45)
+            LEPut16(t, 45)
+            LEPut32(t, fin_disk)
+            LEPut32(t, cd_disk)
+            _zip_put64(t, cnt_last as i64)
+            _zip_put64(t, n as i64)
+            _zip_put64(t, cd_size)
+            _zip_put64(t, cd_off)
+            LEPut32(t, 0x07064b50)
+            LEPut32(t, fin_disk)
+            _zip_put64(t, fin_off)
+            LEPut32(t, fin_disk + 1)
+        end
+        LEPut32(t, 0x06054b50)
+        LEPut16(t, fin_disk)
+        LEPut16(t, cd_disk)
+        LEPut16(t, wide ? 0xFFFF : cnt_last)
+        LEPut16(t, wide ? 0xFFFF : n)
+        LEPut32(t, wide ? -1 : (cd_size as int))
+        LEPut32(t, wide ? -1 : (cd_off as int))
+        LEPut16(t, 0)
+        _zsp_write(o, t.data, t.len)
+        compress.BufFree(t)
+        ok = not o.failed
+    end
+    bnd.free()
+    ent_disk.free()
+    ent_off.free()
+    cd_brk.free()
+    cd_disk_of.free()
+    recpos.free()
+    recnext.free()
+    locals.free()
+    ret ok
+end
+
+@en "ZipCreateFileSplit"
+@fa "ساخت پرونده زیپ چندقطعه ای"
+pub func ZipCreateFileSplit(files: Vector<ZipFileInput>, outpath: str, part_size: i64, style: int): bool:
+    if part_size < (_ZSP_MIN_PART as i64) or part_size >= (0xFFFFFFFF as i64) or (style != ZipSplitDisk and style != ZipSplitByte):
+        ret false
+    end
+    tmp := outpath + ".salamsplit.tmp"
+    if not _zip_stream(files, tmp, false):
+        mem.Free(tmp as void*)
+        ret false
+    end
+    mut zf := ZipOpenFile(tmp)
+    mut ok := zf.status == ZIP_OK
+    src := compress.FileOpenRead(tmp)
+    if src == null:
+        ok = false
+    end
+    mut o := _ZspOut { outpath = outpath, stem = _zsp_stem(outpath), style = style, fp = null, disk = 0, names = Vector {} as Vector<str>, failed = false, total = 0 }
+    scratch := mem.Allocate(262144 as u64)
+    if ok:
+        if style == ZipSplitByte:
+            ok = _zsp_byte_split(src, zf.size, o, part_size, scratch)
+        else:
+            ok = _zsp_disk_split(src, zf, o, part_size, scratch)
+        end
+    end
+    mem.Free(scratch)
+    if o.fp != null:
+        if fclose(o.fp) != 0:
+            ok = false
+        end
+        o.fp = null
+    end
+    if not ok:
+        repeat o.names.len() in q:
+            os.Remove(o.names.get(q))
+        end
+    end
+    repeat o.names.len() in q2:
+        mem.Free(o.names.get(q2) as void*)
+    end
+    o.names.free()
+    mem.Free(o.stem as void*)
+    if src != null:
+        compress.FileClose(src)
+    end
+    ZipFileClose(zf)
+    os.Remove(tmp)
+    mem.Free(tmp as void*)
+    ret ok
+end

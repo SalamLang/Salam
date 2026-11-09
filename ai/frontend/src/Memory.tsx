@@ -6,6 +6,7 @@ import { Markdown } from "./Markdown";
 import { confirmDialog, Subject } from "./Confirm";
 import { t } from "./i18n";
 import { Checkbox } from "./Checkbox";
+import { AccountMaster } from "./MasterPrompt";
 
 function errText(e: unknown, fallback: string): string {
   return e instanceof ApiError ? e.message : fallback;
@@ -194,6 +195,7 @@ export function Memory({ notify }: { notify: (msg: string, ok?: boolean) => void
         <h2>{t("حافظه", "Memory")}</h2>
         <p className="muted">{t("دستیار پس از هر گفت‌وگو خلاصه‌ای از آن و نکته‌های ماندنی‌اش را نگه می‌دارد و در گفت‌وگوهای تازه از آن‌ها کمک می‌گیرد. هر خاطره را می‌توانید ببینید، دریافت کنید یا پاک کنید.", "After each chat the assistant keeps a summary of it and the things worth remembering, and uses them in new chats. You can read, download or delete each memory.")}</p>
       </header>
+      <AccountMaster notify={notify} />
       {error && (
         <div className="form-error" role="alert">
           {error}{" "}

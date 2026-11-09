@@ -115,7 +115,7 @@ export type FileMeta = {
   url?: string;
 };
 export type Integration = {
-  provider: "github" | "figma";
+  provider: "github" | "figma" | "figma-mcp";
   connected: boolean;
   expired?: boolean;
   login: string;

@@ -1,0 +1,232 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "net/shadowsocks"
+@fa "شدوساکس"
+package shadowsocks
+
+import mem
+
+@en "Buf"
+@fa "بافر"
+pub struct Buf:
+    @en "p"
+    @fa "اشاره گر"
+    pub p: void* = null
+    @en "len"
+    @fa "طول"
+    pub len: int = 0
+    @en "cap"
+    @fa "ظرفیت"
+    pub cap: int = 0
+    @en "bad"
+    @fa "خراب"
+    pub bad: bool = false
+end
+
+inline func _at(p: void*, off: int): void*:
+    ret ((p as i64) + (off as i64)) as void*
+end
+
+inline func _getb(p: void*, i: int): int:
+    bp := p as u8*
+    ret bp[i] as int
+end
+
+inline func _setb(p: void*, i: int, v: int):
+    bp := p as u8*
+    bp[i] = (v & 0xFF) as u8
+end
+
+func _wipe(p: void*, n: int):
+    if p != null and n > 0:
+        mem.Set(p, 0, n as u64)
+    end
+end
+
+func _hexval(c: int): int:
+    if c >= 48 and c <= 57:
+        ret c - 48
+    end
+    if c >= 97 and c <= 102:
+        ret c - 87
+    end
+    if c >= 65 and c <= 70:
+        ret c - 55
+    end
+    ret 0 - 1
+end
+
+@en "NewBuf"
+@fa "بافر جدید"
+pub func NewBuf(cap0: int): Buf:
+    mut c := cap0
+    if c < 64:
+        c = 64
+    end
+    p := mem.Allocate(c as u64)
+    if p == null:
+        ret Buf { bad = true }
+    end
+    ret Buf { p = p, len = 0, cap = c, bad = false }
+end
+
+@en "BufFree"
+@fa "آزادسازی بافر"
+pub func BufFree(b &: Buf):
+    if b.p != null:
+        mem.Free(b.p)
+    end
+    b.p = null
+    b.len = 0
+    b.cap = 0
+end
+
+@en "BufWipe"
+@fa "پاکسازی بافر"
+pub func BufWipe(b &: Buf):
+    _wipe(b.p, b.cap)
+    b.len = 0
+end
+
+@en "BufReserve"
+@fa "رزرو بافر"
+pub func BufReserve(b &: Buf, extra: int):
+    if b.bad:
+        ret
+    end
+    if b.p == null:
+        nb := NewBuf(extra)
+        b.p = nb.p
+        b.cap = nb.cap
+        b.bad = nb.bad
+        b.len = 0
+        ret
+    end
+    need := b.len + extra
+    if need <= b.cap:
+        ret
+    end
+    mut nc := b.cap * 2
+    if nc < need:
+        nc = need
+    end
+    np := mem.Reallocate(b.p, nc as u64)
+    if np == null:
+        b.bad = true
+        ret
+    end
+    b.p = np
+    b.cap = nc
+end
+
+@en "BufAppend"
+@fa "افزودن به بافر"
+pub func BufAppend(b &: Buf, src: void*, n: int):
+    if n <= 0:
+        ret
+    end
+    BufReserve(b, n)
+    if b.bad:
+        ret
+    end
+    mem.Copy(_at(b.p, b.len), src, n as u64)
+    b.len += n
+end
+
+@en "BufAppendByte"
+@fa "افزودن بایت به بافر"
+pub func BufAppendByte(b &: Buf, v: int):
+    BufReserve(b, 1)
+    if b.bad:
+        ret
+    end
+    _setb(b.p, b.len, v)
+    b.len += 1
+end
+
+@en "BufAppendStr"
+@fa "افزودن رشته به بافر"
+pub func BufAppendStr(b &: Buf, s: str):
+    BufAppend(b, s as void*, s.len())
+end
+
+@en "BufConsume"
+@fa "مصرف بافر"
+pub func BufConsume(b &: Buf, n: int):
+    if n <= 0:
+        ret
+    end
+    if n >= b.len:
+        b.len = 0
+        ret
+    end
+    mem.MemMove(b.p, _at(b.p, n), (b.len - n) as u64)
+    b.len -= n
+end
+
+@en "BufToStr"
+@fa "بافر به رشته"
+pub func BufToStr(b: Buf): str:
+    if b.len <= 0:
+        ret ""
+    end
+    d := mem.Allocate((b.len + 1) as u64)
+    mem.Copy(d, b.p, b.len as u64)
+    _setb(d, b.len, 0)
+    ret d as str
+end
+
+@en "BufToHex"
+@fa "بافر به هگز"
+pub func BufToHex(b: Buf): str:
+    ret HexOf(b.p, b.len)
+end
+
+@en "HexOf"
+@fa "هگز از"
+pub func HexOf(p: void*, n: int): str:
+    digits := "0123456789abcdef"
+    d := mem.Allocate((n * 2 + 1) as u64)
+    repeat n in i:
+        v := _getb(p, i)
+        _setb(d, i * 2, _getb(digits as void*, (v >> 4) & 15))
+        _setb(d, i * 2 + 1, _getb(digits as void*, v & 15))
+    end
+    _setb(d, n * 2, 0)
+    ret d as str
+end
+
+@en "BufFromHex"
+@fa "بافر از هگز"
+pub func BufFromHex(hex: str): Buf:
+    n := hex.len()
+    mut b := NewBuf(n / 2 + 1)
+    if n % 2 != 0:
+        b.bad = true
+        ret b
+    end
+    mut i := 0
+    until i < n:
+        hi := _hexval(_getb(hex as void*, i))
+        lo := _hexval(_getb(hex as void*, i + 1))
+        if hi < 0 or lo < 0:
+            b.bad = true
+            ret b
+        end
+        BufAppendByte(b, hi * 16 + lo)
+        i += 2
+    end
+    ret b
+end

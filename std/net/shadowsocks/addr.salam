@@ -1,0 +1,281 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package shadowsocks
+
+import mem
+import str
+
+@en "ATYP_IPV4"
+@fa "نوع آدرس آی پی ۴"
+pub const ATYP_IPV4 := 1
+
+@en "ATYP_DOMAIN"
+@fa "نوع آدرس دامنه"
+pub const ATYP_DOMAIN := 3
+
+@en "ATYP_IPV6"
+@fa "نوع آدرس آی پی ۶"
+pub const ATYP_IPV6 := 4
+
+@en "Target"
+@fa "مقصد"
+pub struct Target:
+    @en "host"
+    @fa "میزبان"
+    pub host: str = ""
+    @en "port"
+    @fa "درگاه"
+    pub port: int = 0
+end
+
+func _parse_v4(s: str, out: void*): bool:
+    n := s.len()
+    mut part := 0
+    mut digits := 0
+    mut idx := 0
+    repeat n + 1 in i:
+        mut c := 46
+        if i < n:
+            c = _getb(s as void*, i)
+        end
+        if c == 46:
+            if digits == 0 or idx > 3:
+                ret false
+            end
+            _setb(out, idx, part)
+            idx += 1
+            part = 0
+            digits = 0
+        else c >= 48 and c <= 57:
+            part = part * 10 + (c - 48)
+            digits += 1
+            if part > 255 or digits > 3:
+                ret false
+            end
+        else:
+            ret false
+        end
+    end
+    ret idx == 4
+end
+
+func _hexdigit(c: int): int:
+    if c >= 48 and c <= 57:
+        ret c - 48
+    end
+    if c >= 97 and c <= 102:
+        ret c - 87
+    end
+    if c >= 65 and c <= 70:
+        ret c - 55
+    end
+    ret 0 - 1
+end
+
+func _parse_v6(s0: str, out: void*): bool:
+    mut s := s0
+    n0 := s.len()
+    if n0 >= 2 and _getb(s as void*, 0) == 91 and _getb(s as void*, n0 - 1) == 93:
+        s = str.Substr(s, 1, n0 - 2)
+    end
+    n := s.len()
+    groups := mem.AllocateZeroed(16 as u64)
+    defer mem.Free(groups)
+    mut gi := 0
+    mut gap := 0 - 1
+    mut i := 0
+    until i < n:
+        c := _getb(s as void*, i)
+        if c == 58:
+            if i + 1 < n and _getb(s as void*, i + 1) == 58:
+                if gap >= 0:
+                    ret false
+                end
+                gap = gi
+                i += 2
+                if i >= n:
+                    break
+                end
+            else:
+                if i == 0 or i + 1 >= n:
+                    ret false
+                end
+                i += 1
+            end
+        end
+        mut v := 0
+        mut nd := 0
+        until i < n and _hexdigit(_getb(s as void*, i)) >= 0:
+            v = v * 16 + _hexdigit(_getb(s as void*, i))
+            nd += 1
+            i += 1
+            if nd > 4:
+                ret false
+            end
+        end
+        if nd == 0:
+            ret false
+        end
+        if gi >= 8:
+            ret false
+        end
+        _setb(groups, gi * 2, v >> 8)
+        _setb(groups, gi * 2 + 1, v)
+        gi += 1
+    end
+    _wipe(out, 16)
+    if gap < 0:
+        if gi != 8:
+            ret false
+        end
+        mem.Copy(out, groups, 16 as u64)
+        ret true
+    end
+    if gi > 7:
+        ret false
+    end
+    mem.Copy(out, groups, (gap * 2) as u64)
+    tail := gi - gap
+    mem.Copy(_at(out, 16 - tail * 2), _at(groups, gap * 2), (tail * 2) as u64)
+    ret true
+end
+
+func _cstr(p: void*, n: int): str:
+    d := mem.Allocate((n + 1) as u64)
+    mem.Copy(d, p, n as u64)
+    _setb(d, n, 0)
+    ret d as str
+end
+
+func _hex4(v: int): str:
+    digits := "0123456789abcdef"
+    mut r := ""
+    mut x := v
+    if x == 0:
+        ret "0"
+    end
+    until x > 0:
+        r = str.Substr(digits, x % 16, 1) + r
+        x = x / 16
+    end
+    ret r
+end
+
+func _fmt_v6(p: void*): str:
+    mut best := 0 - 1
+    mut blen := 0
+    mut i := 0
+    until i < 8:
+        if _getb(p, i * 2) == 0 and _getb(p, i * 2 + 1) == 0:
+            mut j := i
+            until j < 8 and _getb(p, j * 2) == 0 and _getb(p, j * 2 + 1) == 0:
+                j += 1
+            end
+            if j - i > blen and j - i >= 2:
+                best = i
+                blen = j - i
+            end
+            i = j
+        else:
+            i += 1
+        end
+    end
+    mut r := ""
+    mut k := 0
+    until k < 8:
+        if k == best:
+            r = r + "::"
+            k += blen
+        else:
+            if k > 0 and k != best + blen:
+                r = r + ":"
+            end
+            v := _getb(p, k * 2) * 256 + _getb(p, k * 2 + 1)
+            r = r + _hex4(v)
+            k += 1
+        end
+    end
+    ret r
+end
+
+@en "EncodeTarget"
+@fa "رمزگذاری مقصد"
+pub func EncodeTarget(host: str, port: int, out &: Buf): bool:
+    if port < 0 or port > 65535:
+        ret false
+    end
+    tmp := mem.AllocateZeroed(16 as u64)
+    defer mem.Free(tmp)
+    if _parse_v4(host, tmp):
+        BufAppendByte(out, ATYP_IPV4)
+        BufAppend(out, tmp, 4)
+    else _parse_v6(host, tmp):
+        BufAppendByte(out, ATYP_IPV6)
+        BufAppend(out, tmp, 16)
+    else:
+        hl := host.len()
+        if hl < 1 or hl > 255:
+            ret false
+        end
+        BufAppendByte(out, ATYP_DOMAIN)
+        BufAppendByte(out, hl)
+        BufAppend(out, host as void*, hl)
+    end
+    BufAppendByte(out, port >> 8)
+    BufAppendByte(out, port)
+    ret true
+end
+
+@en "ParseTarget"
+@fa "تجزیه مقصد"
+pub func ParseTarget(p: void*, n: int, t &: Target): int:
+    if n < 1:
+        ret 0
+    end
+    atyp := _getb(p, 0)
+    mut hlen := 0
+    mut hoff := 1
+    if atyp == ATYP_IPV4:
+        hlen = 4
+    else atyp == ATYP_IPV6:
+        hlen = 16
+    else atyp == ATYP_DOMAIN:
+        if n < 2:
+            ret 0
+        end
+        hlen = _getb(p, 1)
+        hoff = 2
+        if hlen == 0:
+            ret 0 - 1
+        end
+    else:
+        ret 0 - 1
+    end
+    total := hoff + hlen + 2
+    if n < total:
+        ret 0
+    end
+    mut host := ""
+    if atyp == ATYP_IPV4:
+        host = str.FromInt(_getb(p, 1) as i64) + "." + str.FromInt(_getb(p, 2) as i64) + "." + str.FromInt(_getb(p, 3) as i64) + "." + str.FromInt(_getb(p, 4) as i64)
+    else atyp == ATYP_IPV6:
+        host = _fmt_v6(_at(p, 1))
+    else:
+        host = _cstr(_at(p, hoff), hlen)
+    end
+    t.host = host
+    t.port = _getb(p, hoff + hlen) * 256 + _getb(p, hoff + hlen + 1)
+    ret total
+end

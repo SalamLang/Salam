@@ -1,0 +1,159 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package shadowsocks
+
+import mem
+import crypto
+import tls
+
+@en "MAX_CHUNK"
+@fa "بیشینه تکه"
+pub const MAX_CHUNK := 0x3fff
+
+@en "TAG_LEN"
+@fa "طول برچسب"
+pub const TAG_LEN := 16
+
+@en "Method"
+@fa "روش"
+pub struct Method:
+    @en "name"
+    @fa "نام"
+    pub name: str = ""
+    @en "kind"
+    @fa "نوع"
+    pub kind: int = 0
+    @en "key_len"
+    @fa "طول کلید"
+    pub key_len: int = 0
+    @en "salt_len"
+    @fa "طول نمک"
+    pub salt_len: int = 0
+    @en "v2022"
+    @fa "نسخه ۲۰۲۲"
+    pub v2022: bool = false
+    @en "ok"
+    @fa "معتبر"
+    pub ok: bool = false
+end
+
+@en "LookupMethod"
+@fa "یافتن روش"
+pub func LookupMethod(name: str): Method:
+    if name == "aes-128-gcm":
+        ret Method { name = name, kind = tls.AEAD_AES_128_GCM, key_len = 16, salt_len = 16, ok = true }
+    end
+    if name == "aes-256-gcm":
+        ret Method { name = name, kind = tls.AEAD_AES_256_GCM, key_len = 32, salt_len = 32, ok = true }
+    end
+    if name == "chacha20-ietf-poly1305" or name == "chacha20-poly1305":
+        ret Method { name = "chacha20-ietf-poly1305", kind = tls.AEAD_CHACHA20_POLY1305, key_len = 32, salt_len = 32, ok = true }
+    end
+    if name == "2022-blake3-aes-128-gcm":
+        ret Method { name = name, kind = tls.AEAD_AES_128_GCM, key_len = 16, salt_len = 16, v2022 = true, ok = true }
+    end
+    if name == "2022-blake3-aes-256-gcm":
+        ret Method { name = name, kind = tls.AEAD_AES_256_GCM, key_len = 32, salt_len = 32, v2022 = true, ok = true }
+    end
+    if name == "2022-blake3-chacha20-poly1305":
+        ret Method { name = name, kind = tls.AEAD_CHACHA20_POLY1305, key_len = 32, salt_len = 32, v2022 = true, ok = true }
+    end
+    ret Method {}
+end
+
+@en "BytesToKey"
+@fa "بایت به کلید"
+pub func BytesToKey(password: str, klen: int, out: void*):
+    plen := password.len()
+    msg := mem.Allocate((16 + plen + 1) as u64)
+    d := mem.AllocateZeroed(16 as u64)
+    mut have := 0
+    mut first := true
+    until have < klen:
+        mut mlen := plen
+        if first:
+            mem.Copy(msg, password as void*, plen as u64)
+        else:
+            mem.Copy(msg, d, 16 as u64)
+            mem.Copy(_at(msg, 16), password as void*, plen as u64)
+            mlen = 16 + plen
+        end
+        first = false
+        crypto.Md5Bytes(msg, mlen, d)
+        mut take := 16
+        if take > klen - have:
+            take = klen - have
+        end
+        mem.Copy(_at(out, have), d, take as u64)
+        have += take
+    end
+    _wipe(msg, 16 + plen)
+    mem.Free(msg)
+    mem.Free(d)
+end
+
+@en "HkdfSha1"
+@fa "اچ کی دی اف شا۱"
+pub func HkdfSha1(key: void*, klen: int, salt: void*, slen: int, info: str, out: void*, olen: int):
+    prk := mem.AllocateZeroed(20 as u64)
+    crypto.HmacSha1Raw(salt, slen, key, klen, prk)
+    ilen := info.len()
+    blk := mem.AllocateZeroed((20 + ilen + 1) as u64)
+    t := mem.AllocateZeroed(20 as u64)
+    mut have := 0
+    mut counter := 1
+    mut tlen := 0
+    until have < olen:
+        mem.Copy(blk, t, tlen as u64)
+        mem.Copy(_at(blk, tlen), info as void*, ilen as u64)
+        _setb(blk, tlen + ilen, counter)
+        crypto.HmacSha1Raw(prk, 20, blk, tlen + ilen + 1, t)
+        tlen = 20
+        mut take := 20
+        if take > olen - have:
+            take = olen - have
+        end
+        mem.Copy(_at(out, have), t, take as u64)
+        have += take
+        counter += 1
+    end
+    _wipe(prk, 20)
+    _wipe(t, 20)
+    mem.Free(prk)
+    mem.Free(blk)
+    mem.Free(t)
+end
+
+@en "SessionSubkey"
+@fa "زیرکلید نشست"
+pub func SessionSubkey(m: Method, master: void*, salt: void*, out: void*):
+    HkdfSha1(master, m.key_len, salt, m.salt_len, "ss-subkey", out, m.key_len)
+end
+
+@en "RandomSalt"
+@fa "نمک تصادفی"
+pub func RandomSalt(m: Method, out: void*):
+    crypto.RandomBytes(out, m.salt_len)
+end
+
+@en "PasswordKey"
+@fa "کلید گذرواژه"
+pub func PasswordKey(m: Method, password: str): Buf:
+    mut b := NewBuf(m.key_len)
+    BufReserve(b, m.key_len)
+    BytesToKey(password, m.key_len, b.p)
+    b.len = m.key_len
+    ret b
+end

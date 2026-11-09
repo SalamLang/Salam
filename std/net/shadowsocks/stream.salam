@@ -1,0 +1,333 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package shadowsocks
+
+import mem
+import time
+import net.tcp
+import net.internal.rawsock
+import sync
+import pool
+
+const RD_SIZE := 32768
+const WR_SLICE := 65536
+
+@en "Config"
+@fa "پیکربندی"
+pub struct Config:
+    @en "host"
+    @fa "میزبان"
+    pub host: str = ""
+    @en "port"
+    @fa "درگاه"
+    pub port: int = 0
+    @en "method"
+    @fa "روش"
+    pub method: str = "aes-256-gcm"
+    @en "password"
+    @fa "گذرواژه"
+    pub password: str = ""
+    @en "obfs"
+    @fa "پوشش"
+    pub obfs: str = ""
+    @en "obfs_host"
+    @fa "میزبان پوشش"
+    pub obfs_host: str = "www.bing.com"
+end
+
+@en "ConnState"
+@fa "وضعیت اتصال"
+pub struct ConnState:
+    @en "sock"
+    @fa "سوکت"
+    pub sock: tcp.Conn = tcp.Conn {}
+    @en "method"
+    @fa "روش"
+    pub method: Method = Method {}
+    @en "key"
+    @fa "کلید"
+    pub key: Buf = Buf {}
+    @en "enc"
+    @fa "رمزگذار"
+    pub enc: Encoder = Encoder {}
+    @en "dec"
+    @fa "رمزگشا"
+    pub dec: Decoder = Decoder {}
+    @en "plain"
+    @fa "متن ساده"
+    pub plain: Buf = Buf {}
+    @en "plain_pos"
+    @fa "موقعیت متن ساده"
+    pub plain_pos: int = 0
+    @en "out"
+    @fa "خروجی"
+    pub out: Buf = Buf {}
+    @en "rd"
+    @fa "خواندن"
+    pub rd: void* = null
+    @en "pending"
+    @fa "سرآیند معلق"
+    pub pending: Buf = Buf {}
+    @en "target"
+    @fa "مقصد"
+    pub target: Target = Target {}
+    @en "obfs"
+    @fa "پوشش"
+    pub obfs: Obfs = Obfs {}
+    @en "live"
+    @fa "زنده"
+    pub live: bool = false
+end
+
+@en "Conn"
+@fa "اتصال"
+pub struct Conn:
+    @en "st"
+    @fa "وضعیت"
+    pub st: ConnState* = null
+end
+
+func _tx(st: ConnState*, p: void*, n: int): bool:
+    mut off := 0
+    until off < n:
+        w := tcp.WriteBytes(st.sock, _at(p, off), n - off)
+        if w <= 0:
+            ret false
+        end
+        off += w
+    end
+    ret true
+end
+
+func _rx(st: ConnState*, buf: void*, max: int): int:
+    ret tcp.ReadBytes(st.sock, buf, max)
+end
+
+func _new_state(sock: tcp.Conn, m: Method, key: Buf): ConnState*:
+    st := mem.AllocateZeroed(sizeof(ConnState) as u64) as ConnState*
+    st.sock = sock
+    st.method = m
+    st.key = key
+    st.plain = NewBuf(RD_SIZE)
+    st.out = NewBuf(4096)
+    st.pending = NewBuf(300)
+    st.rd = mem.Allocate(RD_SIZE as u64)
+    st.live = true
+    ret st
+end
+
+func _free_state(st: ConnState*):
+    if st == null:
+        ret
+    end
+    EncoderFree(st.enc)
+    DecoderFree(st.dec)
+    BufWipe(st.key)
+    BufFree(st.key)
+    BufFree(st.plain)
+    BufFree(st.out)
+    BufFree(st.pending)
+    if st.rd != null:
+        mem.Free(st.rd)
+    end
+    mem.Free(st as void*)
+end
+
+func _send_plain(st: ConnState*, data: void*, n: int): bool:
+    st.out.len = 0
+    if st.pending.len > 0:
+        mut pt := NewBuf(st.pending.len + n)
+        BufAppend(pt, st.pending.p, st.pending.len)
+        BufAppend(pt, data, n)
+        EncodeStream(st.enc, pt.p, pt.len, st.out)
+        BufFree(pt)
+        st.pending.len = 0
+    else:
+        if n <= 0:
+            ret true
+        end
+        EncodeStream(st.enc, data, n, st.out)
+    end
+    if st.out.bad:
+        ret false
+    end
+    ret _tx(st, st.out.p, st.out.len)
+end
+
+func _fill(st: ConnState*): int:
+    mut res := 2
+    until res == 2:
+        if st.plain_pos < st.plain.len:
+            res = 1
+        else:
+            st.plain.len = 0
+            st.plain_pos = 0
+            r := NextChunk(st.dec, st.plain)
+            if r < 0:
+                res = 0 - 1
+            else r == 0:
+                n := _rx(st, st.rd, RD_SIZE)
+                if n == 0:
+                    res = 0
+                else n < 0:
+                    res = 0 - 1
+                else:
+                    Feed(st.dec, st.rd, n)
+                end
+            end
+        end
+    end
+    ret res
+end
+
+@en "Ok"
+@fa "معتبر"
+pub func Ok(c: Conn): bool:
+    ret c.st != null
+end
+
+@en "TargetOf"
+@fa "مقصد اتصال"
+pub func TargetOf(c: Conn): Target:
+    if c.st == null:
+        ret Target {}
+    end
+    ret c.st.target
+end
+
+@en "Write"
+@fa "نوشتن"
+pub func Write(c: Conn, data: void*, n: int): int:
+    st := c.st
+    if st == null:
+        ret 0 - 1
+    end
+    mut off := 0
+    mut first := true
+    until first or off < n:
+        first = false
+        mut take := n - off
+        if take > WR_SLICE:
+            take = WR_SLICE
+        end
+        if not _send_plain(st, _at(data, off), take):
+            ret 0 - 1
+        end
+        off += take
+    end
+    ret n
+end
+
+@en "WriteStr"
+@fa "نوشتن رشته"
+pub func WriteStr(c: Conn, s: str): int:
+    ret Write(c, s as void*, s.len())
+end
+
+@en "Read"
+@fa "خواندن"
+pub func Read(c: Conn, buf: void*, max: int): int:
+    st := c.st
+    if st == null:
+        ret 0 - 1
+    end
+    if st.pending.len > 0:
+        if not _send_plain(st, null, 0):
+            ret 0 - 1
+        end
+    end
+    r := _fill(st)
+    if r <= 0:
+        ret r
+    end
+    mut take := st.plain.len - st.plain_pos
+    if take > max:
+        take = max
+    end
+    mem.Copy(buf, _at(st.plain.p, st.plain_pos), take as u64)
+    st.plain_pos += take
+    ret take
+end
+
+@en "ReadStr"
+@fa "خواندن رشته"
+pub func ReadStr(c: Conn, max: int): str:
+    b := mem.Allocate((max + 1) as u64)
+    n := Read(c, b, max)
+    if n <= 0:
+        mem.Free(b)
+        ret ""
+    end
+    _setb(b, n, 0)
+    ret b as str
+end
+
+@en "Close"
+@fa "بستن"
+pub func Close(c: Conn):
+    st := c.st
+    if st == null:
+        ret
+    end
+    rawsock.Shutdown(rawsock.Socket { fd = st.sock.fd })
+    tcp.Close(st.sock)
+    _free_state(st)
+end
+
+@en "Shutdown"
+@fa "قطع"
+pub func Shutdown(c: Conn):
+    if c.st == null:
+        ret
+    end
+    rawsock.Shutdown(rawsock.Socket { fd = c.st.sock.fd })
+end
+
+@en "Wrap"
+@fa "پوشاندن"
+pub func Wrap(sock: tcp.Conn, m: Method, key: Buf, target_host: str, target_port: int): Conn:
+    st := _new_state(sock, m, key)
+    mut hdr := NewBuf(300)
+    if not EncodeTarget(target_host, target_port, hdr):
+        BufFree(hdr)
+        _free_state(st)
+        ret Conn {}
+    end
+    BufAppend(st.pending, hdr.p, hdr.len)
+    BufFree(hdr)
+    st.enc = NewEncoderRandom(m, key.p)
+    st.dec = NewDecoder(m, key.p)
+    ret Conn { st = st }
+end
+
+@en "Dial"
+@fa "اتصال"
+pub func Dial(cfg: Config, target_host: str, target_port: int): Conn:
+    m := LookupMethod(cfg.method)
+    if not m.ok or m.v2022:
+        ret Conn {}
+    end
+    key := MakeKey(m, cfg.password)
+    if key.bad:
+        ret Conn {}
+    end
+    sock := tcp.Dial(cfg.host, cfg.port)
+    if not tcp.ConnOk(sock):
+        mut k := key
+        BufFree(k)
+        ret Conn {}
+    end
+    ret Wrap(sock, m, key, target_host, target_port)
+end

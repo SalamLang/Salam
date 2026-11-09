@@ -47,13 +47,13 @@ func _bcj_msb(b: int): bool:
     ret b == 0 or b == 255
 end
 
-func _bcj_x86(b: u8*, size: int, start: i64):
+func _bcj_x86(b: u8*, size: int, start: i64, state &: int): int:
     if size <= 4:
-        ret
+        ret 0
     end
     last := size - 4
     mut prev_pos := -1
-    mut prev_mask := 0
+    mut prev_mask := state
     mut i := 0
     until i < last:
         if ((b[i] as int) & 254) != 232:
@@ -105,9 +105,16 @@ func _bcj_x86(b: u8*, size: int, start: i64):
             i++
         end
     end
+    d := i - prev_pos
+    if d > 3:
+        state = 0
+    else:
+        state = (prev_mask << (d - 1)) & 7
+    end
+    ret i
 end
 
-func _bcj_ppc(b: u8*, size: int, start: i64):
+func _bcj_ppc(b: u8*, size: int, start: i64): int:
     mut i := 0
     until i + 4 <= size:
         if ((b[i] as int) >> 2) == 18 and ((b[i + 3] as int) & 3) == 1:
@@ -120,9 +127,10 @@ func _bcj_ppc(b: u8*, size: int, start: i64):
         end
         i += 4
     end
+    ret i
 end
 
-func _bcj_ia64(b: u8*, size: int, start: i64):
+func _bcj_ia64(b: u8*, size: int, start: i64): int:
     mut i := 0
     until i + 16 <= size:
         mask := _BCJ_IA64[(b[i] as int) & 31]
@@ -163,9 +171,10 @@ func _bcj_ia64(b: u8*, size: int, start: i64):
         end
         i += 16
     end
+    ret i
 end
 
-func _bcj_arm(b: u8*, size: int, start: i64):
+func _bcj_arm(b: u8*, size: int, start: i64): int:
     mut i := 0
     until i + 4 <= size:
         if (b[i + 3] as int) == 235:
@@ -179,9 +188,10 @@ func _bcj_arm(b: u8*, size: int, start: i64):
         end
         i += 4
     end
+    ret i
 end
 
-func _bcj_armt(b: u8*, size: int, start: i64):
+func _bcj_armt(b: u8*, size: int, start: i64): int:
     mut i := 0
     until i + 4 <= size:
         if (((b[i + 1] as int) & 248) == 240) and (((b[i + 3] as int) & 248) == 248):
@@ -197,9 +207,10 @@ func _bcj_armt(b: u8*, size: int, start: i64):
         end
         i += 2
     end
+    ret i
 end
 
-func _bcj_sparc(b: u8*, size: int, start: i64):
+func _bcj_sparc(b: u8*, size: int, start: i64): int:
     mut i := 0
     until i + 4 <= size:
         b0 := b[i] as int
@@ -221,9 +232,10 @@ func _bcj_sparc(b: u8*, size: int, start: i64):
         end
         i += 4
     end
+    ret i
 end
 
-func _bcj_arm64(b: u8*, size: int, start: i64):
+func _bcj_arm64(b: u8*, size: int, start: i64): int:
     mut i := 0
     until i + 4 <= size:
         pc := (start + (i as i64)) & 0xFFFFFFFF
@@ -255,11 +267,12 @@ func _bcj_arm64(b: u8*, size: int, start: i64):
         end
         i += 4
     end
+    ret i
 end
 
-func _bcj_riscv(b: u8*, size: int, start: i64):
+func _bcj_riscv(b: u8*, size: int, start: i64): int:
     if size < 8:
-        ret
+        ret 0
     end
     lim := size - 8
     mut i := 0
@@ -319,33 +332,38 @@ func _bcj_riscv(b: u8*, size: int, start: i64):
             i += 2
         end
     end
+    ret i
+end
+
+@en "BcjStep"
+@fa "گام فیلتر شاخه"
+pub func BcjStep(kind: int, p: void*, n: int, pos: i64, state &: int): int:
+    b := p as u8*
+    if kind == BcjX86:
+        ret _bcj_x86(b, n, pos, state)
+    else kind == BcjPowerPC:
+        ret _bcj_ppc(b, n, pos)
+    else kind == BcjIA64:
+        ret _bcj_ia64(b, n, pos)
+    else kind == BcjARM:
+        ret _bcj_arm(b, n, pos)
+    else kind == BcjARMThumb:
+        ret _bcj_armt(b, n, pos)
+    else kind == BcjSPARC:
+        ret _bcj_sparc(b, n, pos)
+    else kind == BcjARM64:
+        ret _bcj_arm64(b, n, pos)
+    else kind == BcjRISCV:
+        ret _bcj_riscv(b, n, pos)
+    end
+    ret -1
 end
 
 @en "BcjDecode"
 @fa "کدگشایی فیلتر شاخه"
 pub func BcjDecode(kind: int, p: void*, n: int, start: int): bool:
-    b := p as u8*
-    s := (start as i64) & 0xFFFFFFFF
-    if kind == BcjX86:
-        _bcj_x86(b, n, s)
-    else kind == BcjPowerPC:
-        _bcj_ppc(b, n, s)
-    else kind == BcjIA64:
-        _bcj_ia64(b, n, s)
-    else kind == BcjARM:
-        _bcj_arm(b, n, s)
-    else kind == BcjARMThumb:
-        _bcj_armt(b, n, s)
-    else kind == BcjSPARC:
-        _bcj_sparc(b, n, s)
-    else kind == BcjARM64:
-        _bcj_arm64(b, n, s)
-    else kind == BcjRISCV:
-        _bcj_riscv(b, n, s)
-    else:
-        ret false
-    end
-    ret true
+    mut state := 0
+    ret BcjStep(kind, p, n, (start as i64) & 0xFFFFFFFF, state) >= 0
 end
 
 @en "DeltaDecode"

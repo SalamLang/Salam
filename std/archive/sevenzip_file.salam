@@ -52,6 +52,9 @@ struct _SzF:
     pub nc: int
     pub tmp: u8*
     pub tcap: int
+    pub bkind: int
+    pub bstate: int
+    pub bpos: i64
     pub next: compress.FileSink*
 end
 
@@ -280,6 +283,29 @@ func _szf_emit(f: _SzF*, p: void*, n: int): bool:
         f[0].hp = hp
         ret compress.SinkWrite(f[0].next[0], f[0].tmp as void*, n)
     end
+    if f[0].kind == 3:
+        total := f[0].nc + n
+        if f[0].tcap < total:
+            if f[0].tmp != null:
+                mem.Free(f[0].tmp as void*)
+            end
+            f[0].tmp = mem.Allocate(total as u64) as u8*
+            f[0].tcap = total
+        end
+        mem.Copy(f[0].tmp as void*, f[0].carry as void*, f[0].nc as u64)
+        mem.Copy(((f[0].tmp as i64) + (f[0].nc as i64)) as void*, p, n as u64)
+        done := compress.BcjStep(f[0].bkind, f[0].tmp as void*, total, f[0].bpos, f[0].bstate)
+        if done < 0 or total - done > 64:
+            ret false
+        end
+        f[0].bpos += done as i64
+        f[0].nc = total - done
+        mem.Copy(f[0].carry as void*, ((f[0].tmp as i64) + (done as i64)) as void*, f[0].nc as u64)
+        if done > 0:
+            ret compress.SinkWrite(f[0].next[0], f[0].tmp as void*, done)
+        end
+        ret true
+    end
     w := f[0].dist
     total := f[0].nc + n
     if f[0].tcap < total:
@@ -308,7 +334,7 @@ func _szf_emit(f: _SzF*, p: void*, n: int): bool:
 end
 
 func _szf_finalize(f: _SzF*): bool:
-    if f[0].kind == 2 and f[0].nc > 0:
+    if (f[0].kind == 2 or f[0].kind == 3) and f[0].nc > 0:
         n := f[0].nc
         f[0].nc = 0
         ret compress.SinkWrite(f[0].next[0], f[0].carry as void*, n)
@@ -322,6 +348,9 @@ func _szf_filter_kind(id: i64): int:
     end
     if id == (0x020302 as i64) or id == (0x020304 as i64):
         ret 2
+    end
+    if _sz_bcj_kind(id) != 0:
+        ret 3
     end
     ret 0
 end
@@ -552,14 +581,20 @@ func _szf_folder(fp: void*, start: i64, avail: i64, s: _Sz, fi: int, password: s
                 if c.props.len >= 1:
                     dist = ((c.props.data as u8*)[0] as int) + 1
                 end
-            else:
+            else fk == 2:
                 dist = c.id == (0x020302 as i64) ? 2 : 4
             end
             fs := mem.AllocateZeroed(sizeof(_SzF)) as _SzF*
             fs[0].kind = fk
+            if fk == 3:
+                fs[0].bkind = _sz_bcj_kind(c.id)
+                if c.props.len == 4:
+                    fs[0].bpos = _sz_le32(c.props.data as u8*, 0)
+                end
+            end
             fs[0].dist = dist
             fs[0].hist = mem.AllocateZeroed(256 as u64) as u8*
-            fs[0].carry = mem.AllocateZeroed(8 as u64) as u8*
+            fs[0].carry = mem.AllocateZeroed(64 as u64) as u8*
             fs[0].next = nextp
             ns := mem.AllocateZeroed(sizeof(compress.FileSink)) as compress.FileSink*
             ns[0] = compress.SinkCallback(0 as i64, femit, fs as void*)

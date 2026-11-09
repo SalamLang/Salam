@@ -808,10 +808,11 @@ function toman(n: number): string {
   return t(`${fmtNum(n)} تومان`, `${fmtNum(n)} toman`);
 }
 
-const PLAN_NUMBERS: { key: "price" | "usd" | "days" | "chat_5h" | "chat_daily" | "chat_weekly" | "api_5h" | "api_daily" | "api_weekly" | "parallel" | "sort"; fa: string; en: string }[] = [
+const PLAN_NUMBERS: { key: "price" | "usd" | "days" | "hours" | "chat_5h" | "chat_daily" | "chat_weekly" | "api_5h" | "api_daily" | "api_weekly" | "parallel" | "sort"; fa: string; en: string }[] = [
   { key: "price", fa: "قیمت (تومان)", en: "Price (toman)" },
   { key: "usd", fa: "قیمت (دلار)", en: "Price (USD)" },
   { key: "days", fa: "مدت (روز، ۰ بدون انقضا)", en: "Days (0 never expires)" },
+  { key: "hours", fa: "مدت (ساعت، جایگزین روز)", en: "Hours (replaces days)" },
   { key: "chat_5h", fa: "پیام در ۵ ساعت (۰ نامحدود)", en: "Messages per 5 hours (0 unlimited)" },
   { key: "chat_daily", fa: "پیام در روز (۰ نامحدود)", en: "Messages per day (0 unlimited)" },
   { key: "chat_weekly", fa: "پیام در هفته (۰ نامحدود)", en: "Messages per week (0 unlimited)" },
@@ -900,7 +901,7 @@ function PlanEditor({ plan, onSaved, notify, move }: { plan: AdminPlan | null; o
           <span>{t("توضیح انگلیسی", "English note")}</span>
           <input dir="auto" value={d.note_en} onChange={(e) => set("note_en", e.target.value)} />
         </label>
-        {PLAN_NUMBERS.filter((f) => !(free && (f.key === "price" || f.key === "usd" || f.key === "days"))).map((f) => (
+        {PLAN_NUMBERS.filter((f) => !(free && (f.key === "price" || f.key === "usd" || f.key === "days" || f.key === "hours"))).map((f) => (
           <label key={f.key} className="grant-field">
             <span>{t(f.fa, f.en)}</span>
             <input type="number" min={0} inputMode="numeric" dir="ltr" value={d[f.key]} onChange={(e) => set(f.key, e.target.value)} />

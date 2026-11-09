@@ -1,0 +1,77 @@
+import archive
+import compress
+import filepath
+import os
+
+const PACKED := """
+377abcaf271c0004285eeffde1000000000000002200000000000000b6539000e0009a00455d00271bca866798db2a9932
+ecb108f48e70217d76d380887c03113d3cbf05381d9da1ba6b83a1a220c4656aeac3932a993abd9ea11cf8b4a761ae3af5
+25cd41b942bff3ee0000000000813307ae0fd29aba3d40c090d2ff7d694d8f17af096379cb439267a35290e659701f3be3
+6ecf209c510fa5d7b46a9c1bc2ee771f3e97490b78775d756e5d08a454586e1ec479608d69d1666dfa5b88efa423415340
+9765eb30ad5f38ecae89e94cbd79558938ae1d384c90fe7db292aab05a6ec1eb816b7fbbeaf3ea941a1f4ff09d06216330
+82fa2e2e1849c8fb9600000017064d0109809400070b01000123030101055d001000000c80ce0a01885a3c9d0000
+"""
+
+func nib(c: int): int:
+    if c >= 48 and c <= 57:
+        ret c - 48
+    end
+    if c >= 97 and c <= 102:
+        ret c - 87
+    end
+    ret -1
+end
+
+func unhex(s: str): compress.ByteBuf:
+    mut b := compress.NewByteBuf()
+    bp := s as u8*
+    mut hi := -1
+    repeat s.len() in i:
+        v := nib(bp[i] as int)
+        if v < 0:
+            continue
+        end
+        if hi < 0:
+            hi = v
+        else:
+            compress.BufPush(b, hi * 16 + v)
+            hi = -1
+        end
+    end
+    ret b
+end
+
+func main:
+    packed := unhex(PACKED)
+    println "7z archive:", archive.IsSevenZip(packed.data, packed.len)
+
+    mut status := 0
+    mut list := archive.SevenZipListStatus(packed.data, packed.len, status)
+    println "entries:", list.len(), archive.SevenZipStatusText(status)
+    repeat list.len() in i:
+        e := list.get(i)
+        mut kind := "file"
+        if e.is_dir:
+            kind = "folder"
+        end
+        println " ", e.name, kind, e.size
+    end
+    archive.FreeEntries(list)
+
+    mut ok := false
+    readme := archive.SevenZipExtractByName(packed.data, packed.len, "readme.txt", ok)
+    println "readme.txt:", ok, readme.len, "bytes"
+    capped := archive.SevenZipExtractByNameMax(packed.data, packed.len, "readme.txt", 50, ok)
+    println "capped at 50:", ok, capped.len
+
+    dir := filepath.Join(os.TempDir(), "salam_sevenzip_guide")
+    os.RemoveAll(dir)
+    println "extracted:", archive.SevenZipExtractAll(packed.data, packed.len, dir)
+    println os.Exists(filepath.Join(dir, "src/main.salam")), os.Exists(filepath.Join(dir, "empty.log"))
+    os.RemoveAll(dir)
+
+    mut damaged := compress.BufClone(packed)
+    compress.BufSet(damaged, damaged.len - 3, compress.BufGet(damaged, damaged.len - 3) ^ 1)
+    broken := archive.SevenZipExtract(damaged.data, damaged.len, "readme.txt", 0, status)
+    println "damaged:", archive.SevenZipStatusText(status), broken.len
+end

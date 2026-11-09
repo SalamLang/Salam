@@ -1,0 +1,247 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import compress
+import testing
+
+func hex_val(c: int): int:
+    if c >= 48 and c <= 57: ret c - 48 end
+    if c >= 97 and c <= 102: ret c - 87 end
+    ret c - 55
+end
+
+func hex_buf(s: str): compress.ByteBuf:
+    n := s.len() / 2
+    p := s as u8*
+    mut b := compress.NewByteBufCap(n)
+    repeat n in i:
+        compress.BufPush(b, hex_val(p[i * 2] as int) * 16 + hex_val(p[i * 2 + 1] as int))
+    end
+    ret b
+end
+
+func lcg_buf(n: int, mask: int): compress.ByteBuf:
+    mut b := compress.NewByteBufCap(n)
+    mut x := 12345 as u32
+    repeat n:
+        x = x * (1103515245 as u32) + (12345 as u32)
+        compress.BufPush(b, ((x >> 16) as int) & mask)
+    end
+    ret b
+end
+
+func check_fixture(hex: str, want: str, label: str):
+    mut src := hex_buf(hex)
+    mut ok := false
+    mut out := compress.Bzip2DecompressBuf(src, ok)
+    testing.AssertMsg(ok, label)
+    testing.AssertEqStr(compress.BufToStrUnsafe(out), want)
+    compress.BufFree(out)
+    compress.BufFree(src)
+end
+
+func round_trip(b: compress.ByteBuf, level: int, label: str):
+    mut packed := compress.Bzip2CompressLevel(b.data, b.len, level)
+    mut ok := false
+    mut out := compress.Bzip2DecompressBuf(packed, ok)
+    testing.AssertMsg(ok, label)
+    testing.AssertEqInt(out.len, b.len)
+    testing.AssertTrue(compress.BufEquals(out, b))
+    compress.BufFree(out)
+    compress.BufFree(packed)
+end
+
+func main(): int:
+    text := "Salam, world! Bzip2 sorts blocks with the Burrows-Wheeler transform.\n"
+    check_fixture("425a6831314159265359f5dc17c70000085f80001060071000100008803f6fde902000488a69fa9a8c351a68699a468449e9326d01184613d0f76aba6a1f3f0315093695606a10a59c6e5d6316aa3ec0321a2c4eee48872629fc8e65c030c4183b177245385090f5dc17c7", text, "bzip2 -1")
+    check_fixture("425a68393141592653597c4073c70000195f80001060071000100008803f6fde902000705000000002bfd551a23c8d4c9a06691ea62d182a9365514db3e22b95520a3b356ec98aa8a906abd9b983cacb386ea26e114573274559b172928d20c165e8bf26b3c26ba092cbe092f7f1772453850907c4073c70", text + text + text, "python level 9")
+    check_fixture("425a683917724538509000000000", "", "empty stream")
+    check_fixture("425a683931415926535981b02d8b00000004002000200021184682ee48a70a12103605b160", "A", "one byte")
+    check_fixture("425a68393141592653592a045d3800000251800010400023221c002000310030201a62730b4908271e2ee48a70a1205408ba70425a683931415926535984529094000005d180001040002e039c0020002200d0d040d0340504bd384f1e1e2ee48a70a12108a52128", "first stream\nsecond stream\n", "two streams")
+
+    mut rsrc := hex_buf("425a68393141592653597c6b61df8000007ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff03000f02400000000000000000000000000000001a68000000000000000000000000000001a06aa84c13002604d32601309a64c2604c984c01323008c984c0008d323004d34c4c9801323046989a1a6981018864c00010d1a304c4c98614400000000000000000000000000000001a68000000000000000000000000000001a26b746f6f9022489978e0981899199a1a83606e7073c23a3b0780f4f8ff8681c408210b8a86888a8c11c2424a57192d31342771d3f90a0a3c90a414d515794acae1602cad2df2d71747302f2fb030f35883186465666768696a1ce6b6ce7f41b5b83787071727374e88e907576e9bbbc3c87a1d47b7c7d7e7f1002060a0e12161a1c44757ad13d78a8b1d81d98c8d8e8f9012224a4e53b52bdb12c3b92f3133dd9a9b2929ef4e4ecf4fd05050d151d252f7e9853f83c3515355562b3c5e3adf257578b0f2d8f9bcfe8b21e9b3f55a5adb5bdc5cfafd9edf77bfe02eaeef3e3f2f9de8befa5fe060e1618c4c5c6c7c8c9ca197999b9d9ff5fb7df43f1f9d1fd7ef4869ea6aeb7f35f606cff76b6ffdb9ba37b7c811244ffc5dc914e14241f1ad877c0")
+    mut rok := false
+    mut rout := compress.Bzip2DecompressBuf(rsrc, rok)
+    testing.AssertTrue(rok)
+    testing.AssertEqInt(rout.len, 300)
+    mut rgood := true
+    repeat 300 in i:
+        if compress.BufGet(rout, i) != (i * 7 + i / 5) % 251: rgood = false end
+    end
+    testing.AssertTrue(rgood)
+    compress.BufFree(rout)
+    compress.BufFree(rsrc)
+
+    mut runs := compress.NewByteBuf()
+    repeat 300: compress.BufPush(runs, 97) end
+    repeat 5: compress.BufPush(runs, 98) end
+    repeat 255: compress.BufPush(runs, 99) end
+    repeat 256: compress.BufPush(runs, 100) end
+    compress.BufPush(runs, 120)
+    compress.BufPush(runs, 121)
+    compress.BufPush(runs, 122)
+    mut rsrc2 := hex_buf("425a68393141592653590d1a6d660000035180a00000203c000070000820002191a9e86a1003048092ca2de1cd1543a73f7c5dc914e142403469b598")
+    mut rok2 := false
+    mut rout2 := compress.Bzip2DecompressBuf(rsrc2, rok2)
+    testing.AssertTrue(rok2)
+    testing.AssertTrue(compress.BufEquals(rout2, runs))
+    compress.BufFree(rout2)
+    compress.BufFree(rsrc2)
+    round_trip(runs, 9, "runs")
+    compress.BufFree(runs)
+
+    empty := compress.NewByteBuf()
+    mut ep := compress.Bzip2Compress(empty.data, 0)
+    testing.AssertEqInt(ep.len, 14)
+    testing.AssertEqInt(compress.BufGet(ep, 0), 66)
+    testing.AssertEqInt(compress.BufGet(ep, 1), 90)
+    testing.AssertEqInt(compress.BufGet(ep, 2), 104)
+    testing.AssertEqInt(compress.BufGet(ep, 3), 57)
+    compress.BufFree(ep)
+    round_trip(empty, 9, "empty")
+
+    mut one := lcg_buf(1, 255)
+    round_trip(one, 1, "one byte")
+    compress.BufFree(one)
+
+    mut noise := lcg_buf(300000, 255)
+    round_trip(noise, 9, "noise level 9")
+    round_trip(noise, 1, "noise level 1")
+    compress.BufFree(noise)
+
+    mut few := lcg_buf(450000, 3)
+    round_trip(few, 4, "four symbols level 4")
+    round_trip(few, 9, "four symbols level 9")
+    compress.BufFree(few)
+
+    mut edge := lcg_buf(900000, 7)
+    round_trip(edge, 9, "900000 bytes")
+    compress.BufFree(edge)
+    mut edge2 := lcg_buf(899981, 7)
+    round_trip(edge2, 9, "block limit")
+    compress.BufFree(edge2)
+
+    mut zeros := compress.NewByteBufCap(2000000)
+    repeat 2000000: compress.BufPush(zeros, 0) end
+    mut zp := compress.Bzip2Compress(zeros.data, zeros.len)
+    testing.AssertTrue(zp.len < 100)
+    mut zok := false
+    mut zout := compress.Bzip2DecompressBuf(zp, zok)
+    testing.AssertTrue(zok)
+    testing.AssertTrue(compress.BufEquals(zout, zeros))
+    compress.BufFree(zout)
+
+    zok = true
+    zout = compress.Bzip2DecompressMax(zp.data, zp.len, 1000, zok)
+    testing.AssertFalse(zok)
+    testing.AssertEqInt(zout.len, 0)
+    compress.BufFree(zout)
+    zout = compress.Bzip2DecompressMax(zp.data, zp.len, 1999999, zok)
+    testing.AssertFalse(zok)
+    compress.BufFree(zout)
+    zout = compress.Bzip2DecompressMax(zp.data, zp.len, 2000000, zok)
+    testing.AssertTrue(zok)
+    testing.AssertEqInt(zout.len, 2000000)
+    compress.BufFree(zout)
+    compress.BufFree(zp)
+    compress.BufFree(zeros)
+
+    mut multi := lcg_buf(450000, 15)
+    mut mp := compress.Bzip2CompressLevel(multi.data, multi.len, 1)
+    testing.AssertEqInt(compress.BufGet(mp, 3), 49)
+    mut mok := false
+    mut mout := compress.Bzip2DecompressBuf(mp, mok)
+    testing.AssertTrue(mok)
+    testing.AssertTrue(compress.BufEquals(mout, multi))
+    compress.BufFree(mout)
+
+    mut two := compress.BufClone(mp)
+    compress.BufPushBuf(two, mp)
+    mout = compress.Bzip2DecompressBuf(two, mok)
+    testing.AssertTrue(mok)
+    testing.AssertEqInt(mout.len, multi.len * 2)
+    compress.BufFree(mout)
+    compress.BufFree(two)
+
+    mut flipped := compress.BufClone(mp)
+    compress.BufSet(flipped, flipped.len / 2, compress.BufGet(flipped, flipped.len / 2) ^ 16)
+    mok = true
+    mout = compress.Bzip2DecompressBuf(flipped, mok)
+    testing.AssertFalse(mok)
+    testing.AssertEqInt(mout.len, 0)
+    compress.BufFree(mout)
+    compress.BufFree(flipped)
+
+    mut cut := compress.BufClone(mp)
+    cut.len -= 5
+    mok = true
+    mout = compress.Bzip2DecompressBuf(cut, mok)
+    testing.AssertFalse(mok)
+    compress.BufFree(mout)
+    cut.len = 3
+    mok = true
+    mout = compress.Bzip2DecompressBuf(cut, mok)
+    testing.AssertFalse(mok)
+    compress.BufFree(mout)
+    cut.len = 0
+    compress.BufFree(cut)
+
+    mut badcrc := compress.BufClone(mp)
+    compress.BufSet(badcrc, badcrc.len - 2, compress.BufGet(badcrc, badcrc.len - 2) ^ 1)
+    mok = true
+    mout = compress.Bzip2DecompressBuf(badcrc, mok)
+    testing.AssertFalse(mok)
+    compress.BufFree(mout)
+    compress.BufFree(badcrc)
+
+    mut badmagic := compress.BufClone(mp)
+    compress.BufSet(badmagic, 0, 67)
+    mok = true
+    mout = compress.Bzip2DecompressBuf(badmagic, mok)
+    testing.AssertFalse(mok)
+    compress.BufFree(mout)
+    compress.BufFree(badmagic)
+
+    mut junk := compress.BufClone(mp)
+    compress.BufPush(junk, 0)
+    mok = true
+    mout = compress.Bzip2DecompressBuf(junk, mok)
+    testing.AssertFalse(mok)
+    compress.BufFree(mout)
+    compress.BufFree(junk)
+
+    mut lvl0 := compress.Bzip2CompressLevel(multi.data, 10, 0)
+    testing.AssertEqInt(compress.BufGet(lvl0, 3), 49)
+    compress.BufFree(lvl0)
+    mut lvl99 := compress.Bzip2CompressLevel(multi.data, 10, 99)
+    testing.AssertEqInt(compress.BufGet(lvl99, 3), 57)
+    compress.BufFree(lvl99)
+
+    mut sb := compress.Bzip2CompressStr(text)
+    mut sok := false
+    mut sd := compress.Bzip2Decompress(sb.data, sb.len, sok)
+    testing.AssertTrue(sok)
+    testing.AssertEqStr(compress.BufToStrUnsafe(sd), text)
+    compress.BufFree(sd)
+    compress.BufFree(sb)
+    mut bb := compress.Bzip2CompressBuf(multi)
+    testing.AssertEqInt(compress.BufGet(bb, 3), 57)
+    compress.BufFree(bb)
+
+    compress.BufFree(mp)
+    compress.BufFree(multi)
+    ret testing.Summary()
+end

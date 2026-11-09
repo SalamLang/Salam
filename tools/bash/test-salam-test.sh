@@ -58,6 +58,11 @@ step test
 mkdir -p exp
 printf '// انتظار: سلام\nfunc main:\n    println "سلام"\nend\n' >exp/fa_expect.test.salam
 step test exp
+mkdir -p expnot
+printf '// انتظار نه: بدرود\nfunc main:\n    println "سلام"\nend\n' >expnot/ok.test.salam
+step test expnot/ok.test.salam
+printf '// انتظار نه: سلام\nfunc main:\n    println "سلام"\nend\n' >expnot/bad.test.salam
+step test expnot/bad.test.salam
 cd "$work" || exit 1
 mkdir empty
 step test empty

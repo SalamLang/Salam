@@ -17,6 +17,20 @@ package archive
 import compress
 import mem
 import filepath
+import os
+import fs
+
+if not SALAM_OS_WINDOWS:
+    extern:
+        func symlink(target: str, path: str): int
+        func link(existing: str, path: str): int
+        func utimes(path: str, tv: void*): int
+        func readlink(path: str, buf: void*, sz: u64): int
+    end
+end
+
+const _TAR_GZ_DEFAULT_MAX := 1073741824
+const _TAR_OCTAL_LIMIT := 8589934592
 
 @en "TarFileInput"
 @fa "ورودی پرونده تار"
@@ -36,6 +50,23 @@ pub struct TarFileInput:
     @en "mode"
     @fa "دسترسی"
     pub mode: int = 0
+    @en "mtime"
+    @fa "زمان تغییر"
+    pub mtime: i64 = 0 as i64
+    @en "link"
+    @fa "پیوند"
+    pub link: str = ""
+    @en "kind"
+    @fa "نوع"
+    pub kind: int = 0
+end
+
+struct _TarPax:
+    pub path: str = ""
+    pub linkpath: str = ""
+    pub size: i64 = -1 as i64
+    pub mtime: i64 = 0 as i64
+    pub has_mtime: bool = false
 end
 
 func _tar_put_octal(b &: compress.ByteBuf, value: i64, width: int):
@@ -56,10 +87,19 @@ func _tar_put_octal(b &: compress.ByteBuf, value: i64, width: int):
     compress.BufPush(b, 0)
 end
 
-func _tar_get_octal(p: void*, off: int, width: int): i64:
+func _tar_get_num(p: void*, off: int, width: int): i64:
     bp := p as u8*
     mut v := 0 as i64
     mut i := 0
+    if ((bp[off] as int) & 128) != 0:
+        v = ((bp[off] as int) & 127) as i64
+        i = 1
+        until i < width:
+            v = v * (256 as i64) + ((bp[off + i] as int) as i64)
+            i++
+        end
+        ret v
+    end
     until i < width:
         c := bp[off + i] as int
         if c >= 48 and c <= 55:
@@ -67,6 +107,24 @@ func _tar_get_octal(p: void*, off: int, width: int): i64:
         end
         i++
     end
+    ret v
+end
+
+func _tar_dec(s: str): i64:
+    bp := s as u8*
+    n := s.len()
+    mut i := 0
+    mut neg := false
+    if n > 0 and (bp[0] as int) == 45:
+        neg = true
+        i = 1
+    end
+    mut v := 0 as i64
+    until i < n and (bp[i] as int) >= 48 and (bp[i] as int) <= 57 and v < (100000000000000000 as i64):
+        v = v * (10 as i64) + (((bp[i] as int) - 48) as i64)
+        i++
+    end
+    if neg: ret (0 as i64) - v end
     ret v
 end
 
@@ -99,6 +157,22 @@ func _tar_free_str(name: str):
     if name.len() > 0: mem.Free(name as void*) end
 end
 
+func _tar_drop(s &: str):
+    if s.len() > 0: mem.Free(s as void*) end
+    s = ""
+end
+
+func _tar_take(s &: str): str:
+    v := s
+    s = ""
+    ret v
+end
+
+func _tar_px_free(px &: _TarPax):
+    _tar_drop(px.path)
+    _tar_drop(px.linkpath)
+end
+
 func _tar_checksum(header: void*): int:
     bp := header as u8*
     mut sum := 0
@@ -126,25 +200,67 @@ func _tar_is_zero_block(p: void*, pos: int): bool:
     ret true
 end
 
-func _tar_write_header(out &: compress.ByteBuf, f: TarFileInput):
-    mut h := compress.NewByteBuf()
-    _tar_put_str(h, f.name, 100)
-    mut file_mode := f.mode as i64
-    if file_mode == 0:
-        file_mode = f.is_dir ? 0o755 as i64 : 0o644 as i64
+func _tar_digits(v: int): int:
+    mut d := 1
+    mut x := v
+    until x >= 10:
+        x /= 10
+        d++
     end
-    _tar_put_octal(h, file_mode, 8)
+    ret d
+end
+
+func _tar_push_dec(b &: compress.ByteBuf, v: int):
+    mut digits: int[12]
+    mut x := v
+    mut n := 0
+    until true:
+        digits[n] = x % 10
+        x /= 10
+        n++
+        if x == 0: break end
+    end
+    mut i := n - 1
+    until i >= 0:
+        compress.BufPush(b, 48 + digits[i])
+        i--
+    end
+end
+
+func _tar_pax_rec(b &: compress.ByteBuf, key: str, val: str):
+    l := key.len() + val.len() + 3
+    mut tot := l + _tar_digits(l)
+    tot = l + _tar_digits(tot)
+    _tar_push_dec(b, tot)
+    compress.BufPush(b, 32)
+    compress.BufPushBytes(b, key as void*, key.len())
+    compress.BufPush(b, 61)
+    compress.BufPushBytes(b, val as void*, val.len())
+    compress.BufPush(b, 10)
+end
+
+func _tar_pad(out &: compress.ByteBuf, n: int):
+    pad := n % 512
+    if pad > 0:
+        mut k := 0
+        until k < 512 - pad:
+            compress.BufPush(out, 0)
+            k++
+        end
+    end
+end
+
+func _tar_raw_header(out &: compress.ByteBuf, name: str, prefix: str, mode: i64, size: i64, mtime: i64, typeflag: int, target: str):
+    mut h := compress.NewByteBuf()
+    _tar_put_str(h, name, 100)
+    _tar_put_octal(h, mode, 8)
     _tar_put_octal(h, 0 as i64, 8)
     _tar_put_octal(h, 0 as i64, 8)
-    mut sz := f.data_len
-    if f.is_dir: sz = 0 end
-    _tar_put_octal(h, sz as i64, 12)
-    _tar_put_octal(h, 0 as i64, 12)
+    _tar_put_octal(h, size, 12)
+    _tar_put_octal(h, mtime, 12)
     repeat 8: compress.BufPush(h, 32) end
-    mut typeflag := 48
-    if f.is_dir: typeflag = 53 end
     compress.BufPush(h, typeflag)
-    _tar_put_str(h, "", 100)
+    _tar_put_str(h, target, 100)
     _tar_put_str(h, "ustar", 6)
     compress.BufPush(h, 48)
     compress.BufPush(h, 48)
@@ -152,7 +268,7 @@ func _tar_write_header(out &: compress.ByteBuf, f: TarFileInput):
     _tar_put_str(h, "", 32)
     _tar_put_octal(h, 0 as i64, 8)
     _tar_put_octal(h, 0 as i64, 8)
-    _tar_put_str(h, "", 155)
+    _tar_put_str(h, prefix, 155)
     repeat 12: compress.BufPush(h, 0) end
 
     sum := _tar_checksum(h.data)
@@ -171,7 +287,107 @@ func _tar_write_header(out &: compress.ByteBuf, f: TarFileInput):
     compress.BufFree(h)
 end
 
-func _tar_pax_path(p: void*, off: int, size: int): str:
+func _tar_prefix_cut(name: str): int:
+    n := name.len()
+    if n <= 100: ret 0 - 1 end
+    bp := name as u8*
+    mut i := 1
+    until i < n - 1 and i <= 155:
+        if (bp[i] as int) == 47 and n - i - 1 <= 100:
+            ret i
+        end
+        i++
+    end
+    ret 0 - 2
+end
+
+func _tar_input_kind(f: TarFileInput): int:
+    if f.is_dir: ret 1 end
+    ret f.kind
+end
+
+func _tar_write_header(out &: compress.ByteBuf, f: TarFileInput):
+    kind := _tar_input_kind(f)
+    mut pax := compress.NewByteBuf()
+    mut name_part := f.name
+    mut prefix := ""
+    mut split := false
+    cut := _tar_prefix_cut(f.name)
+    if cut == 0 - 2:
+        _tar_pax_rec(pax, "path", f.name)
+    else cut > 0:
+        prefix = f.name.substr(0, cut)
+        name_part = f.name.substr(cut + 1, f.name.len() - cut - 1)
+        split = true
+    end
+    mut target := f.link
+    if kind != 2 and kind != 3: target = "" end
+    if target.len() > 100:
+        _tar_pax_rec(pax, "linkpath", target)
+    end
+    mut mtime := f.mtime
+    if mtime < (0 as i64) or mtime >= _TAR_OCTAL_LIMIT:
+        mut digits := compress.NewByteBuf()
+        mut mv := mtime
+        if mv < (0 as i64):
+            compress.BufPush(digits, 45)
+            mv = (0 as i64) - mv
+        end
+        mut tmp: int[24]
+        mut tn := 0
+        until true:
+            tmp[tn] = (mv % (10 as i64)) as int
+            mv /= (10 as i64)
+            tn++
+            if mv == (0 as i64): break end
+        end
+        mut ti := tn - 1
+        until ti >= 0:
+            compress.BufPush(digits, 48 + tmp[ti])
+            ti--
+        end
+        ms := compress.BufToStrUnsafe(digits)
+        compress.BufFree(digits)
+        _tar_pax_rec(pax, "mtime", ms)
+        _tar_free_str(ms)
+        mtime = 0 as i64
+    end
+    if pax.len > 0:
+        _tar_raw_header(out, "PaxHeaders/entry", "", 0o644 as i64, pax.len as i64, 0 as i64, 120, "")
+        compress.BufPushBuf(out, pax)
+        _tar_pad(out, pax.len)
+    end
+    compress.BufFree(pax)
+
+    mut file_mode := f.mode as i64
+    if file_mode == 0:
+        if kind == 1:
+            file_mode = 0o755 as i64
+        else kind == 2:
+            file_mode = 0o777 as i64
+        else:
+            file_mode = 0o644 as i64
+        end
+    end
+    mut sz := 0
+    mut typeflag := 48
+    if kind == 0:
+        sz = f.data_len
+    else kind == 1:
+        typeflag = 53
+    else kind == 2:
+        typeflag = 50
+    else kind == 3:
+        typeflag = 49
+    end
+    _tar_raw_header(out, name_part, prefix, file_mode, sz as i64, mtime, typeflag, target)
+    if split:
+        _tar_free_str(prefix)
+        _tar_free_str(name_part)
+    end
+end
+
+func _tar_pax_read(p: void*, off: int, size: int, px &: _TarPax):
     bp := p as u8*
     mut pos := 0
     until pos < size:
@@ -179,105 +395,330 @@ func _tar_pax_path(p: void*, off: int, size: int): str:
         until sp < size and (bp[off + sp] as int) != 32:
             sp++
         end
-        lenstr := _tar_get_str(p, off + pos, sp - pos)
-        rec_len := lenstr.to_int()
-        _tar_free_str(lenstr)
-        if rec_len <= 0 or pos + rec_len > size:
-            ret ""
-        end
-        body_len := rec_len - (sp - pos) - 2
-        if body_len > 5:
-            rec := _tar_get_str(p, off + sp + 1, body_len)
-            head := rec.substr(0, 5)
-            is_path := head == "path="
-            _tar_free_str(head)
-            if is_path:
-                path := rec.substr(5, rec.len() - 5)
-                _tar_free_str(rec)
-                ret path
+        mut rec_len := 0
+        mut d := pos
+        until d < sp and rec_len < size:
+            c := bp[off + d] as int
+            if c < 48 or c > 57:
+                ret
             end
-            _tar_free_str(rec)
+            rec_len = rec_len * 10 + (c - 48)
+            d++
+        end
+        if rec_len <= sp - pos + 2 or pos + rec_len > size:
+            ret
+        end
+        bstart := off + sp + 1
+        blen := rec_len - (sp - pos) - 2
+        mut kq := 0
+        until kq < blen and (bp[bstart + kq] as int) != 61:
+            kq++
+        end
+        if kq < blen:
+            key := _tar_get_str(p, bstart, kq)
+            val := _tar_get_str(p, bstart + kq + 1, blen - kq - 1)
+            if key == "path" and val.len() > 0:
+                _tar_drop(px.path)
+                px.path = val
+            else key == "linkpath" and val.len() > 0:
+                _tar_drop(px.linkpath)
+                px.linkpath = val
+            else:
+                if key == "size":
+                    px.size = _tar_dec(val)
+                else key == "mtime":
+                    px.mtime = _tar_dec(val)
+                    px.has_mtime = true
+                end
+                _tar_free_str(val)
+            end
+            _tar_free_str(key)
         end
         pos += rec_len
     end
-    ret ""
 end
 
-func _tar_next(p: void*, n: int, pos &: int, e &: Entry, data &: int): bool:
-    mut long_name := ""
+func _tar_next(p: void*, n: int, pos &: int, e &: Entry, data &: int, g &: _TarPax): bool:
+    mut px := _TarPax {}
+    mut lname := ""
+    mut llink := ""
+    bp := p as u8*
     until pos + 512 <= n:
         if _tar_is_zero_block(p, pos):
-            ret false
+            break
         end
-        nm := _tar_get_str(p, pos, 100)
-        if nm.len() == 0:
-            ret false
-        end
-        size := _tar_get_octal(p, pos + 124, 12)
-        if size < (0 as i64) or (pos as i64) + (512 as i64) + size > (n as i64):
-            _tar_free_str(nm)
-            ret false
-        end
-        bp := p as u8*
         typeflag := bp[pos + 156] as int
+        mut size := _tar_get_num(p, pos + 124, 12)
         dstart := pos + 512
-        span := (((size as int) + 511) / 512) * 512
         if typeflag == 103 or typeflag == 120 or typeflag == 76 or typeflag == 75:
-            if typeflag == 120:
-                v := _tar_pax_path(p, dstart, size as int)
-                if v.len() > 0:
-                    _tar_free_str(long_name)
-                    long_name = v
-                end
-            else typeflag == 76:
-                _tar_free_str(long_name)
-                long_name = _tar_get_str(p, dstart, size as int)
+            if size < (0 as i64) or (dstart as i64) + size > (n as i64):
+                break
             end
-            _tar_free_str(nm)
+            span := (((size as int) + 511) / 512) * 512
+            if typeflag == 120:
+                _tar_pax_read(p, dstart, size as int, px)
+            else typeflag == 103:
+                _tar_pax_read(p, dstart, size as int, g)
+                _tar_px_free(g)
+            else typeflag == 76:
+                _tar_drop(lname)
+                lname = _tar_get_str(p, dstart, size as int)
+            else:
+                _tar_drop(llink)
+                llink = _tar_get_str(p, dstart, size as int)
+            end
             pos = dstart + span
             continue
         end
-        mut full := nm
-        if long_name.len() > 0:
-            full = long_name
+        mut nm := _tar_get_str(p, pos, 100)
+        if px.path.len() > 0:
             _tar_free_str(nm)
+            _tar_drop(lname)
+            nm = _tar_take(px.path)
+        else lname.len() > 0:
+            _tar_free_str(nm)
+            nm = _tar_take(lname)
         else:
-            magic := _tar_get_str(p, pos + 257, 5)
+            magic := _tar_get_str(p, pos + 257, 6)
             is_ustar := magic == "ustar"
             _tar_free_str(magic)
             if is_ustar:
                 prefix := _tar_get_str(p, pos + 345, 155)
                 if prefix.len() > 0:
-                    full = prefix + "/" + nm
+                    full := prefix + "/" + nm
                     _tar_free_str(nm)
+                    nm = full
                 end
                 _tar_free_str(prefix)
             end
         end
-        is_dir := typeflag == 53
+        if nm.len() == 0:
+            break
+        end
+        if px.size >= (0 as i64): size = px.size end
+        mut kind := 0
+        if typeflag == 53:
+            kind = 1
+        else typeflag == 50:
+            kind = 2
+        else typeflag == 49:
+            kind = 3
+        else typeflag == 51 or typeflag == 52 or typeflag == 54:
+            kind = 4
+        else:
+            nb := nm as u8*
+            last := nb[nm.len() - 1] as int
+            if last == 47 and (typeflag == 48 or typeflag == 0):
+                kind = 1
+            end
+        end
+        mut target := ""
+        if kind == 2 or kind == 3:
+            if px.linkpath.len() > 0:
+                target = _tar_take(px.linkpath)
+                _tar_drop(llink)
+            else llink.len() > 0:
+                target = _tar_take(llink)
+            else:
+                target = _tar_get_str(p, pos + 157, 100)
+            end
+            size = 0 as i64
+        else kind == 4:
+            size = 0 as i64
+        end
+        span := (((size as int) + 511) / 512) * 512
+        if kind == 0 and (size < (0 as i64) or (dstart as i64) + size > (n as i64)):
+            _tar_free_str(nm)
+            _tar_free_str(target)
+            break
+        end
+        mut mt := _tar_get_num(p, pos + 136, 12)
+        if px.has_mtime:
+            mt = px.mtime
+        else g.has_mtime:
+            mt = g.mtime
+        end
         e = Entry {
-            name = full
+            name = nm
             size = size
             compressed_size = size
-            is_dir = is_dir
+            is_dir = kind == 1
             method = 0
             crc32 = 0 as u32
-            mtime = _tar_get_octal(p, pos + 136, 12)
+            mtime = mt
+            link = target
+            kind = kind
+            mode = _tar_get_num(p, pos + 100, 8) as int
         }
         data = dstart
         pos = dstart
-        if not is_dir:
+        if kind == 0:
             pos = dstart + span
         end
+        _tar_px_free(px)
+        _tar_drop(lname)
+        _tar_drop(llink)
         ret true
     end
+    _tar_px_free(px)
+    _tar_drop(lname)
+    _tar_drop(llink)
     ret false
+end
+
+func _tar_link_ok(name: str, target: str): bool:
+    n := target.len()
+    if n == 0: ret false end
+    bp := target as u8*
+    first := bp[0] as int
+    if first == 47 or first == 92 or (n >= 2 and (bp[1] as int) == 58):
+        ret false
+    end
+    nb := name as u8*
+    mut depth := 0
+    mut start := 0
+    mut i := 0
+    until i <= name.len():
+        c := i < name.len() ? nb[i] as int : 47
+        if c == 47 or c == 92:
+            seg := i - start
+            if seg > 0 and not (seg == 1 and (nb[start] as int) == 46):
+                depth++
+            end
+            start = i + 1
+        end
+        i++
+    end
+    depth--
+    mut ups := 0
+    mut seen := false
+    start = 0
+    i = 0
+    until i <= n:
+        c := i < n ? bp[i] as int : 47
+        if c == 47 or c == 92:
+            seg := i - start
+            if seg == 2 and (bp[start] as int) == 46 and (bp[start + 1] as int) == 46:
+                if seen: ret false end
+                ups++
+                if ups > depth: ret false end
+            else seg > 0 and not (seg == 1 and (bp[start] as int) == 46):
+                seen = true
+            end
+            start = i + 1
+        end
+        i++
+    end
+    ret true
+end
+
+func _tar_is_link(path: str): bool:
+    if SALAM_OS_WINDOWS:
+        ret false
+    else:
+        buf := mem.Allocate(8 as u64)
+        r := readlink(path, buf, 8 as u64)
+        mem.Free(buf)
+        ret r >= 0
+    end
+end
+
+func _tar_through_link(destdir: str, name: str): bool:
+    n := name.len()
+    bp := name as u8*
+    mut i := 1
+    until i < n:
+        if (bp[i] as int) == 47:
+            part := name.substr(0, i)
+            full := filepath.Join(destdir, part)
+            hit := _tar_is_link(full)
+            mem.Free(full as void*)
+            _tar_free_str(part)
+            if hit: ret true end
+        end
+        i++
+    end
+    ret false
+end
+
+func _tar_symlink(target: str, path: str): bool:
+    if SALAM_OS_WINDOWS:
+        ret false
+    else:
+        ret symlink(target, path) == 0
+    end
+end
+
+func _tar_hardlink(src: str, path: str): bool:
+    if SALAM_OS_WINDOWS:
+        ret false
+    else:
+        ret link(src, path) == 0
+    end
+end
+
+func _tar_set_mtime(path: str, t: i64):
+    if SALAM_OS_WINDOWS:
+        ret
+    else:
+        if sizeof(void*) != 8: ret end
+        tv := mem.AllocateZeroed(32 as u64) as i64*
+        tv[0] = t
+        tv[2] = t
+        utimes(path, tv as void*)
+        mem.Free(tv as void*)
+    end
+end
+
+func _tar_set_mode(path: str, mode: int, is_dir: bool):
+    if mode == 0: ret end
+    mut m := mode & 0o777
+    if is_dir: m |= 0o700 end
+    fs.Chmod(path, m)
+end
+
+func _tar_write_entry_file(p: void*, data: int, e: Entry, outpath: str): bool:
+    parent := filepath.Dir(outpath)
+    EnsureDir(parent)
+    mem.Free(parent as void*)
+    os.Remove(outpath)
+    data_ptr := ((p as i64) + (data as i64)) as void*
+    ok := WriteBinaryFile(outpath, data_ptr, e.size as int)
+    if ok:
+        _tar_set_mode(outpath, e.mode, false)
+        if e.mtime > (0 as i64): _tar_set_mtime(outpath, e.mtime) end
+    end
+    ret ok
+end
+
+func _tar_copy_file(src: str, dst: str): bool:
+    mut ok := false
+    mut b := ReadBinaryFile(src, ok)
+    if not ok:
+        compress.BufFree(b)
+        ret false
+    end
+    r := WriteBinaryFileBuf(dst, b)
+    compress.BufFree(b)
+    ret r
 end
 
 @en "MakeTarFileInput"
 @fa "ساخت ورودی پرونده تار"
 pub func MakeTarFileInput(name: str, data_ptr: void*, data_len: int, is_dir: bool): TarFileInput:
-    ret TarFileInput { name = name, data_ptr = data_ptr, data_len = data_len, is_dir = is_dir }
+    ret TarFileInput { name = name, data_ptr = data_ptr, data_len = data_len, is_dir = is_dir, mode = 0, mtime = 0 as i64, link = "", kind = 0 }
+end
+
+@en "MakeTarSymlink"
+@fa "ساخت ورودی پیوند نمادین تار"
+pub func MakeTarSymlink(name: str, target: str): TarFileInput:
+    ret TarFileInput { name = name, data_ptr = null, data_len = 0, is_dir = false, mode = 0, mtime = 0 as i64, link = target, kind = 2 }
+end
+
+@en "MakeTarHardlink"
+@fa "ساخت ورودی پیوند سخت تار"
+pub func MakeTarHardlink(name: str, target: str): TarFileInput:
+    ret TarFileInput { name = name, data_ptr = null, data_len = 0, is_dir = false, mode = 0, mtime = 0 as i64, link = target, kind = 3 }
 end
 
 @en "TarCreate"
@@ -288,16 +729,9 @@ pub func TarCreate(files: Vector<TarFileInput>): compress.ByteBuf:
     until i < files.len():
         f := files.get(i)
         _tar_write_header(out, f)
-        if not f.is_dir:
+        if _tar_input_kind(f) == 0:
             compress.BufPushBytes(out, f.data_ptr, f.data_len)
-            pad := f.data_len % 512
-            if pad > 0:
-                mut k := 0
-                until k < 512 - pad:
-                    compress.BufPush(out, 0)
-                    k++
-                end
-            end
+            _tar_pad(out, f.data_len)
         end
         i++
     end
@@ -321,7 +755,8 @@ pub func TarList(p: void*, n: int): Vector<Entry>:
     mut pos := 0
     mut e := Entry {}
     mut data := 0
-    until _tar_next(p, n, pos, e, data):
+    mut g := _TarPax {}
+    until _tar_next(p, n, pos, e, data, g):
         out.push(e)
     end
     ret out
@@ -335,9 +770,11 @@ pub func TarExtractByName(p: void*, n: int, name: str, ok &: bool): compress.Byt
     mut pos := 0
     mut e := Entry {}
     mut data := 0
-    until _tar_next(p, n, pos, e, data):
-        hit := not e.is_dir and e.name == name
+    mut g := _TarPax {}
+    until _tar_next(p, n, pos, e, data, g):
+        hit := e.kind == 0 and e.name == name
         _tar_free_str(e.name)
+        _tar_free_str(e.link)
         if hit:
             data_ptr := ((p as i64) + (data as i64)) as void*
             compress.BufPushBytes(out, data_ptr, e.size as int)
@@ -355,26 +792,148 @@ pub func TarExtractAll(p: void*, n: int, destdir: str): bool:
     mut pos := 0
     mut e := Entry {}
     mut data := 0
-    until _tar_next(p, n, pos, e, data):
-        if not _safe_entry_name(e.name):
+    mut g := _TarPax {}
+    mut dirs := Vector {} as Vector<str>
+    mut dir_times := Vector {} as Vector<i64>
+    until _tar_next(p, n, pos, e, data, g):
+        if not _safe_entry_name(e.name) or _tar_through_link(destdir, e.name):
             all_ok = false
             _tar_free_str(e.name)
+            _tar_free_str(e.link)
             continue
         end
         outpath := filepath.Join(destdir, e.name)
-        if e.is_dir:
+        if e.kind == 1:
             EnsureDir(outpath)
+            _tar_set_mode(outpath, e.mode, true)
+            if e.mtime > (0 as i64):
+                dirs.push(outpath)
+                dir_times.push(e.mtime)
+                _tar_free_str(e.name)
+                _tar_free_str(e.link)
+                continue
+            end
+        else e.kind == 2:
+            if _tar_link_ok(e.name, e.link):
+                parent := filepath.Dir(outpath)
+                EnsureDir(parent)
+                mem.Free(parent as void*)
+                os.Remove(outpath)
+                if not _tar_symlink(e.link, outpath): all_ok = false end
+            else:
+                all_ok = false
+            end
+        else e.kind == 3:
+            if _safe_entry_name(e.link) and not _tar_through_link(destdir, e.link):
+                src := filepath.Join(destdir, e.link)
+                parent := filepath.Dir(outpath)
+                EnsureDir(parent)
+                mem.Free(parent as void*)
+                os.Remove(outpath)
+                if not _tar_hardlink(src, outpath):
+                    if not _tar_copy_file(src, outpath): all_ok = false end
+                end
+                mem.Free(src as void*)
+            else:
+                all_ok = false
+            end
+        else e.kind == 4:
+            all_ok = false
         else:
-            parent := filepath.Dir(outpath)
-            EnsureDir(parent)
-            mem.Free(parent as void*)
-            data_ptr := ((p as i64) + (data as i64)) as void*
-            if not WriteBinaryFile(outpath, data_ptr, e.size as int):
+            if not _tar_write_entry_file(p, data, e, outpath):
                 all_ok = false
             end
         end
         mem.Free(outpath as void*)
         _tar_free_str(e.name)
+        _tar_free_str(e.link)
     end
+    mut k := dirs.len() - 1
+    until k >= 0:
+        dp := dirs.get(k)
+        _tar_set_mtime(dp, dir_times.get(k))
+        mem.Free(dp as void*)
+        k--
+    end
+    dirs.free()
+    dir_times.free()
     ret all_ok
+end
+
+@en "TarGzCreate"
+@fa "ساخت تار جی زیپ"
+pub func TarGzCreate(files: Vector<TarFileInput>): compress.ByteBuf:
+    mut t := TarCreate(files)
+    out := compress.GzipCompressBuf(t)
+    compress.BufFree(t)
+    ret out
+end
+
+@en "TarGzCreateFile"
+@fa "ساخت پرونده تار جی زیپ"
+pub func TarGzCreateFile(files: Vector<TarFileInput>, outpath: str): bool:
+    mut out := TarGzCreate(files)
+    ok := WriteBinaryFileBuf(outpath, out)
+    compress.BufFree(out)
+    ret ok
+end
+
+@en "TarGzListMax"
+@fa "فهرست تار جی زیپ با سقف"
+pub func TarGzListMax(p: void*, n: int, max: int, ok &: bool): Vector<Entry>:
+    mut t := compress.GzipDecompressMax(p, n, max, ok)
+    if not ok:
+        compress.BufFree(t)
+        ret Vector {}
+    end
+    out := TarList(t.data, t.len)
+    compress.BufFree(t)
+    ret out
+end
+
+@en "TarGzList"
+@fa "فهرست تار جی زیپ"
+pub func TarGzList(p: void*, n: int, ok &: bool): Vector<Entry>:
+    ret TarGzListMax(p, n, _TAR_GZ_DEFAULT_MAX, ok)
+end
+
+@en "TarGzExtractByNameMax"
+@fa "استخراج با نام از تار جی زیپ با سقف"
+pub func TarGzExtractByNameMax(p: void*, n: int, name: str, max: int, ok &: bool): compress.ByteBuf:
+    mut gok := false
+    mut t := compress.GzipDecompressMax(p, n, max, gok)
+    if not gok:
+        compress.BufFree(t)
+        ok = false
+        ret compress.NewByteBuf()
+    end
+    out := TarExtractByName(t.data, t.len, name, ok)
+    compress.BufFree(t)
+    ret out
+end
+
+@en "TarGzExtractByName"
+@fa "استخراج با نام از تار جی زیپ"
+pub func TarGzExtractByName(p: void*, n: int, name: str, ok &: bool): compress.ByteBuf:
+    ret TarGzExtractByNameMax(p, n, name, _TAR_GZ_DEFAULT_MAX, ok)
+end
+
+@en "TarGzExtractAllMax"
+@fa "استخراج همه از تار جی زیپ با سقف"
+pub func TarGzExtractAllMax(p: void*, n: int, destdir: str, max: int): bool:
+    mut gok := false
+    mut t := compress.GzipDecompressMax(p, n, max, gok)
+    if not gok:
+        compress.BufFree(t)
+        ret false
+    end
+    ok := TarExtractAll(t.data, t.len, destdir)
+    compress.BufFree(t)
+    ret ok
+end
+
+@en "TarGzExtractAll"
+@fa "استخراج همه از تار جی زیپ"
+pub func TarGzExtractAll(p: void*, n: int, destdir: str): bool:
+    ret TarGzExtractAllMax(p, n, destdir, _TAR_GZ_DEFAULT_MAX)
 end

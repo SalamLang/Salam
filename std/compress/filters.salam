@@ -1,0 +1,295 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package compress
+
+@en "BcjX86"
+@fa "فیلتر ایکس۸۶"
+pub const BcjX86 := 4
+@en "BcjPowerPC"
+@fa "فیلتر پاورپی سی"
+pub const BcjPowerPC := 5
+@en "BcjIA64"
+@fa "فیلتر ای آی۶۴"
+pub const BcjIA64 := 6
+@en "BcjARM"
+@fa "فیلتر آرم"
+pub const BcjARM := 7
+@en "BcjARMThumb"
+@fa "فیلتر آرم تامب"
+pub const BcjARMThumb := 8
+@en "BcjSPARC"
+@fa "فیلتر اسپارک"
+pub const BcjSPARC := 9
+@en "BcjARM64"
+@fa "فیلتر آرم۶۴"
+pub const BcjARM64 := 10
+
+const _BCJ_ALLOWED := [1, 1, 1, 0, 1, 0, 0, 0]
+const _BCJ_BITNUM := [0, 1, 2, 2, 3, 3, 3, 3]
+const _BCJ_IA64 := [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 4, 4, 6, 6, 0, 0, 7, 7, 4, 4, 0, 0, 4, 4, 0, 0]
+
+func _bcj_msb(b: int): bool:
+    ret b == 0 or b == 255
+end
+
+func _bcj_x86(b: u8*, size: int, start: i64):
+    if size <= 4:
+        ret
+    end
+    last := size - 4
+    mut prev_pos := -1
+    mut prev_mask := 0
+    mut i := 0
+    until i < last:
+        if ((b[i] as int) & 254) != 232:
+            i++
+            continue
+        end
+        gap := i - prev_pos
+        if gap > 3:
+            prev_mask = 0
+        else:
+            prev_mask = (prev_mask << (gap - 1)) & 7
+            if prev_mask != 0:
+                bb := b[i + 4 - _BCJ_BITNUM[prev_mask]] as int
+                if _BCJ_ALLOWED[prev_mask] == 0 or _bcj_msb(bb):
+                    prev_pos = i
+                    prev_mask = (prev_mask << 1) | 1
+                    i++
+                    continue
+                end
+            end
+        end
+        prev_pos = i
+        if _bcj_msb(b[i + 4] as int):
+            mut src := (b[i + 1] as i64) | ((b[i + 2] as i64) << 8) | ((b[i + 3] as i64) << 16) | ((b[i + 4] as i64) << 24)
+            mut dest := 0 as i64
+            until true:
+                dest = (src - (start + (i as i64) + 5)) & 0xFFFFFFFF
+                if prev_mask == 0:
+                    break
+                end
+                j := _BCJ_BITNUM[prev_mask] * 8
+                bb2 := ((dest >> (24 - j)) & 255) as int
+                if not _bcj_msb(bb2):
+                    break
+                end
+                src = dest ^ (((1 as i64) << (32 - j)) - 1)
+            end
+            dest &= 0x01FFFFFF
+            if (dest & 0x01000000) != 0:
+                dest |= 0xFE000000
+            end
+            b[i + 1] = (dest & 255) as u8
+            b[i + 2] = ((dest >> 8) & 255) as u8
+            b[i + 3] = ((dest >> 16) & 255) as u8
+            b[i + 4] = ((dest >> 24) & 255) as u8
+            i += 5
+        else:
+            prev_mask = (prev_mask << 1) | 1
+            i++
+        end
+    end
+end
+
+func _bcj_ppc(b: u8*, size: int, start: i64):
+    mut i := 0
+    until i + 4 <= size:
+        if ((b[i] as int) >> 2) == 18 and ((b[i + 3] as int) & 3) == 1:
+            src := (((b[i] as i64) & 3) << 24) | ((b[i + 1] as i64) << 16) | ((b[i + 2] as i64) << 8) | ((b[i + 3] as i64) & 252)
+            dest := (src - (start + (i as i64))) & 0xFFFFFFFF
+            b[i] = (72 | ((dest >> 24) & 3)) as u8
+            b[i + 1] = ((dest >> 16) & 255) as u8
+            b[i + 2] = ((dest >> 8) & 255) as u8
+            b[i + 3] = (((b[i + 3] as i64) & 3) | (dest & 252)) as u8
+        end
+        i += 4
+    end
+end
+
+func _bcj_ia64(b: u8*, size: int, start: i64):
+    mut i := 0
+    until i + 16 <= size:
+        mask := _BCJ_IA64[(b[i] as int) & 31]
+        mut bit_pos := 5
+        mut slot := 0
+        until slot < 3:
+            if ((mask >> slot) & 1) != 0:
+                byte_pos := bit_pos >> 3
+                bit_res := bit_pos & 7
+                mut instr := 0 as i64
+                mut j := 0
+                until j < 6:
+                    instr += ((b[i + j + byte_pos] as i64) << (8 * j))
+                    j++
+                end
+                mut norm := instr >> bit_res
+                if ((norm >> 37) & 15) == 5 and ((norm >> 9) & 7) == 0:
+                    mut addr := (norm >> 13) & 0xFFFFF
+                    addr |= (((norm >> 36) & 1) << 20)
+                    addr <<= 4
+                    addr = (addr - (start + (i as i64))) & 0xFFFFFFFF
+                    addr >>= 4
+                    mk := (0x8FFFFF as i64) << 13
+                    norm &= (mk ^ (-1 as i64))
+                    norm |= ((addr & 0xFFFFF) << 13)
+                    norm |= ((addr & 0x100000) << 16)
+                    instr &= (((1 as i64) << bit_res) - 1)
+                    instr |= (norm << bit_res)
+                    j = 0
+                    until j < 6:
+                        b[i + j + byte_pos] = ((instr >> (8 * j)) & 255) as u8
+                        j++
+                    end
+                end
+            end
+            slot++
+            bit_pos += 41
+        end
+        i += 16
+    end
+end
+
+func _bcj_arm(b: u8*, size: int, start: i64):
+    mut i := 0
+    until i + 4 <= size:
+        if (b[i + 3] as int) == 235:
+            mut addr := (b[i] as i64) | ((b[i + 1] as i64) << 8) | ((b[i + 2] as i64) << 16)
+            addr <<= 2
+            addr = (addr - (start + (i as i64) + 8)) & 0xFFFFFFFF
+            addr >>= 2
+            b[i] = (addr & 255) as u8
+            b[i + 1] = ((addr >> 8) & 255) as u8
+            b[i + 2] = ((addr >> 16) & 255) as u8
+        end
+        i += 4
+    end
+end
+
+func _bcj_armt(b: u8*, size: int, start: i64):
+    mut i := 0
+    until i + 4 <= size:
+        if (((b[i + 1] as int) & 248) == 240) and (((b[i + 3] as int) & 248) == 248):
+            mut addr := ((((b[i + 1] as i64) & 7) << 19) | ((b[i] as i64) << 11) | (((b[i + 3] as i64) & 7) << 8) | (b[i + 2] as i64))
+            addr <<= 1
+            addr = (addr - (start + (i as i64) + 4)) & 0xFFFFFFFF
+            addr >>= 1
+            b[i + 1] = (240 | ((addr >> 19) & 7)) as u8
+            b[i] = ((addr >> 11) & 255) as u8
+            b[i + 3] = (248 | ((addr >> 8) & 7)) as u8
+            b[i + 2] = (addr & 255) as u8
+            i += 2
+        end
+        i += 2
+    end
+end
+
+func _bcj_sparc(b: u8*, size: int, start: i64):
+    mut i := 0
+    until i + 4 <= size:
+        b0 := b[i] as int
+        b1 := b[i + 1] as int
+        if (b0 == 64 and (b1 & 192) == 0) or (b0 == 127 and (b1 & 192) == 192):
+            mut src := ((b[i] as i64) << 24) | ((b[i + 1] as i64) << 16) | ((b[i + 2] as i64) << 8) | (b[i + 3] as i64)
+            src = (src << 2) & 0xFFFFFFFF
+            mut dest := (src - (start + (i as i64))) & 0xFFFFFFFF
+            dest >>= 2
+            mut sign := 0 as i64
+            if ((dest >> 22) & 1) != 0:
+                sign = 0x3FC00000 as i64
+            end
+            dest = sign | (dest & 0x3FFFFF) | 0x40000000
+            b[i] = ((dest >> 24) & 255) as u8
+            b[i + 1] = ((dest >> 16) & 255) as u8
+            b[i + 2] = ((dest >> 8) & 255) as u8
+            b[i + 3] = (dest & 255) as u8
+        end
+        i += 4
+    end
+end
+
+func _bcj_arm64(b: u8*, size: int, start: i64):
+    mut i := 0
+    until i + 4 <= size:
+        pc := (start + (i as i64)) & 0xFFFFFFFF
+        mut instr := (b[i] as i64) | ((b[i + 1] as i64) << 8) | ((b[i + 2] as i64) << 16) | ((b[i + 3] as i64) << 24)
+        mut write := false
+        if (instr >> 26) == 37:
+            src := instr
+            instr = 0x94000000 as i64
+            instr |= ((src - (pc >> 2)) & 0x03FFFFFF)
+            write = true
+        else (instr & 0x9F000000) == 0x90000000:
+            mut src := ((instr >> 29) & 3) | ((instr >> 3) & 0x001FFFFC)
+            if ((src + 0x00020000) & 0x001C0000) == 0:
+                src = (src - (pc >> 12)) & 0xFFFFFFFF
+                instr &= 0x9000001F
+                instr |= ((src & 3) << 29)
+                instr |= ((src & 0x0003FFFC) << 3)
+                if (src & 0x00020000) != 0:
+                    instr |= 0x00E00000
+                end
+                write = true
+            end
+        end
+        if write:
+            b[i] = (instr & 255) as u8
+            b[i + 1] = ((instr >> 8) & 255) as u8
+            b[i + 2] = ((instr >> 16) & 255) as u8
+            b[i + 3] = ((instr >> 24) & 255) as u8
+        end
+        i += 4
+    end
+end
+
+@en "BcjDecode"
+@fa "کدگشایی فیلتر شاخه"
+pub func BcjDecode(kind: int, p: void*, n: int, start: int): bool:
+    b := p as u8*
+    s := (start as i64) & 0xFFFFFFFF
+    if kind == BcjX86:
+        _bcj_x86(b, n, s)
+    else kind == BcjPowerPC:
+        _bcj_ppc(b, n, s)
+    else kind == BcjIA64:
+        _bcj_ia64(b, n, s)
+    else kind == BcjARM:
+        _bcj_arm(b, n, s)
+    else kind == BcjARMThumb:
+        _bcj_armt(b, n, s)
+    else kind == BcjSPARC:
+        _bcj_sparc(b, n, s)
+    else kind == BcjARM64:
+        _bcj_arm64(b, n, s)
+    else:
+        ret false
+    end
+    ret true
+end
+
+@en "DeltaDecode"
+@fa "کدگشایی فیلتر دلتا"
+pub func DeltaDecode(p: void*, n: int, dist: int): bool:
+    if dist < 1 or dist > 256:
+        ret false
+    end
+    b := p as u8*
+    mut i := dist
+    until i < n:
+        b[i] = (((b[i] as int) + (b[i - dist] as int)) & 255) as u8
+        i++
+    end
+    ret true
+end

@@ -59,6 +59,7 @@ struct _Ppmd:
     pub mask: u8*
     pub ps: int*
     pub ready: bool
+    pub rc7z: bool
 end
 
 func _pp_g16(p: _Ppmd, o: int): int:
@@ -164,6 +165,7 @@ func _pp_new(): _Ppmd:
         mask = mem.AllocateZeroed(256 as u64) as u8*
         ps = mem.AllocateZeroed((256 * 4) as u64) as int*
         ready = false
+        rc7z = false
     }
     mut k := 0
     repeat _PP_NUM_INDEXES in i:
@@ -618,7 +620,7 @@ func _pp_update_model(p &: _Ppmd):
             _pp_s32(p, c + 4, s)
             mut fr := _pp_freq(p, s)
             if fr < _PP_MAX_FREQ / 4 - 1:
-                fr = fr << 1
+                fr <<= 1
             else:
                 fr = _PP_MAX_FREQ - 4
             end
@@ -724,8 +726,8 @@ func _pp_rescale(p &: _Ppmd):
             t_s4 := p.base[stats + 4]
             t_s5 := p.base[stats + 5]
             until true:
-                tf2 = tf2 - (tf2 >> 1)
-                esc_freq = esc_freq >> 1
+                tf2 -= (tf2 >> 1)
+                esc_freq >>= 1
                 if esc_freq <= 1:
                     break
                 end
@@ -843,6 +845,15 @@ func _pp_rc_init(p &: _Ppmd, b &: _RarBits):
 end
 
 func _pp_rc_norm(p &: _Ppmd, b &: _RarBits):
+    if p.rc7z:
+        repeat 2:
+            if p.rc_range < 0x1000000:
+                p.rc_code = ((p.rc_code << 8) | _pp_byte(b)) & 0xffffffff
+                p.rc_range = (p.rc_range << 8) & 0xffffffff
+            end
+        end
+        ret
+    end
     until true:
         if ((p.rc_low ^ ((p.rc_low + p.rc_range) & 0xffffffff)) & 0xffffffff) >= 0x1000000:
             if p.rc_range >= 0x8000:
@@ -857,7 +868,7 @@ func _pp_rc_norm(p &: _Ppmd, b &: _RarBits):
 end
 
 func _pp_rc_threshold(p &: _Ppmd, total: int): int:
-    p.rc_range = p.rc_range / (total as i64)
+    p.rc_range /= (total as i64)
     if p.rc_range == 0:
         ret 0x7fffffff
     end
@@ -865,6 +876,12 @@ func _pp_rc_threshold(p &: _Ppmd, total: int): int:
 end
 
 func _pp_rc_decode(p &: _Ppmd, b &: _RarBits, start: int, size: int):
+    if p.rc7z:
+        p.rc_code = (p.rc_code - (start as i64) * p.rc_range) & 0xffffffff
+        p.rc_range = (p.rc_range * (size as i64)) & 0xffffffff
+        _pp_rc_norm(p, b)
+        ret
+    end
     p.rc_low = (p.rc_low + (start as i64) * p.rc_range) & 0xffffffff
     p.rc_range = (p.rc_range * (size as i64)) & 0xffffffff
     _pp_rc_norm(p, b)
@@ -938,7 +955,11 @@ func _pp_decode(p &: _Ppmd, b &: _RarBits): int:
         prob := p.bin_summ[idx] as int
         r := p.rc_range >> 14
         nb := r * (prob as i64)
-        if ((p.rc_code - p.rc_low) & 0xffffffff) < nb:
+        mut zero := ((p.rc_code - p.rc_low) & 0xffffffff) < nb
+        if p.rc7z:
+            zero = p.rc_code < nb
+        end
+        if zero:
             p.rc_range = nb
             _pp_rc_norm(p, b)
             p.bin_summ[idx] = (prob + 128 - ((prob + 32) >> 7)) as u16
@@ -947,8 +968,13 @@ func _pp_decode(p &: _Ppmd, b &: _RarBits): int:
             _pp_update_bin(p)
             ret sym
         end
-        p.rc_low = (p.rc_low + nb) & 0xffffffff
-        p.rc_range = (r * ((16384 - prob) as i64)) & 0xffffffff
+        if p.rc7z:
+            p.rc_code -= nb
+            p.rc_range -= nb
+        else:
+            p.rc_low = (p.rc_low + nb) & 0xffffffff
+            p.rc_range = (r * ((16384 - prob) as i64)) & 0xffffffff
+        end
         _pp_rc_norm(p, b)
         np := prob - ((prob + 32) >> 7)
         p.bin_summ[idx] = np as u16

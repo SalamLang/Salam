@@ -1331,14 +1331,14 @@ process.Child` runs a program on a pseudo terminal (POSIX only; type
   on failure; `File` always returns a path), **`os.user`** `Username HomeDir ConfigDir CacheDir` (env based; never for permissions), **`os.platform`**
   `IsLinux IsWindows IsMac IsWasm OS Arch IsX64 IsArm64`, **`os.error`**
   `Last LastCode LastMessage HasError Clear` (the last file/process error).
-- **`fs.file`**: `Open Close ReadText ReadAll ReadBytes ReadLines WriteText WriteBytes Append AtomicWrite Size ModTime Stat Copy Move Rename Delete Exists Extension MimeType Md5Hex Sha256Hex`. **Not binary-safe**: every
+- **`fs`** (one `import fs` is enough for files): `Open Close ReadText ReadAll ReadBytes ReadLines WriteText WriteBytes Append AtomicWrite Size ModTime AccessedTime CreatedTime Chmod Permissions Stat Copy Move Rename Delete Exists Extension MimeType Md5Hex Sha1Hex Sha256Hex Sha512Hex` (`CreatedTime` is 0 on most Linux file systems). `import fs.file` still works but is deprecated: it forwards every function to `fs`. **Not binary-safe**: every
   read, write and digest goes through `str` and stops at the first NUL
   (`ReadBytes` too); use `archive.ReadBinaryFile`/`WriteBinaryFile` and
   `crypto.Sha256Bytes`. `Exists` is true for directories too; `AtomicWrite`
   resets permissions to the default.
 - **`fs.dir`**: `Mkdir MkdirAll Remove RemoveAll List ListDirs ListFiles Walk Copy Move Exists IsDir Size`. `Exists` is true only for a directory;
   `Copy`/`Move` merge into an existing target; `RemoveAll Walk Size Copy`
-  follow symlinks. **`fs`** itself: `ModTime AccessedTime CreatedTime Chmod Permissions` (`CreatedTime` is 0 on most Linux file systems).
+  follow symlinks.
 - **`fs.path`** (`Join Split Clean Normalize IsAbs Abs Rel Parent Dirname Filename Basename Ext Stem IsSafe Validate`) and **`filepath`** (the same
   work, never touching the disk: `Join Dir Base Ext Stem Clean Normalize IsAbs Abs Rel IsSafe Validate Separator`). `Join` does not clean
   (`Join("a/b", "../c")` is `a/b/../c`) and an absolute second part is
@@ -1565,15 +1565,21 @@ end
   the first zero byte (use `Base64DecodeBytes`). `http.UrlDecode` stays
   lenient.
 - **`compress`**: `ByteBuf` (`NewByteBuf BufPush BufGet BufLen BufFree BufFromStr BufToBase64`), `Compress/Decompress(method)` over `Method*`,
-  `DeflateCompress GzipCompress GzipDecompress CRC32 Adler32`. Gzip decoding
-  verifies the CRC-32 and length (`ok` is false on mismatch); the method is not stored in the output; free every buffer.
-- **`archive`**: `ZipCreate ZipCreateFile ZipList ZipExtractAll ZipExtractByName TarCreate TarList TarExtractAll RarCreate RarCreateFile RarList RarExtract RarExtractByName RarExtractAll RarStatusText GzipCompressFile ReadBinaryFile WriteBinaryFile`. No zip64 (under 2 GB),
-  ZIP methods 0 and 8 only, CRC not checked, tar names over 100 bytes are
-  cut. RAR 1.5 to 5 are read fully (CRC checked, `RarExtract` reports a
+  `DeflateCompress GzipCompress GzipDecompress Bzip2Compress Bzip2CompressLevel Bzip2Decompress Bzip2DecompressMax CRC32 Adler32`. Gzip decoding
+  verifies the CRC-32 and length and bzip2 decoding every block and stream CRC (`ok` is false on mismatch; `*Max` caps the output size); the method is not stored in the output; free every buffer.
+  `XzDecompress(p, n, ok)` and `LzmaDecompress` read `.xz` (LZMA2, BCJ and delta filters, CRC-32/CRC-64/SHA-256 verified) and `.lzma`; decode only, `...Max` variants cap the output, dictionaries over 1 GiB are refused.
+- **`archive`**: `ZipCreate ZipCreateFile ZipList ZipExtractAll ZipExtractByName ZipExtractVerified ZipVerify ZipCreate64 TarCreate TarList TarExtractAll TarGzCreate TarGzList TarGzExtractAll MakeTarSymlink RarCreate RarCreateFile RarList RarExtract RarExtractByName RarExtractAll RarStatusText GzipCompressFile XzDecompressFile LzmaDecompressFile Bzip2CompressFile Bzip2DecompressFile ReadBinaryFile WriteBinaryFile`. Zip64 is read and
+  written but sizes are `int` (under 2 GB; bigger entries report `ZIP_TOO_BIG`),
+  ZIP methods 0 and 8 only, `ZipExtractByName` does not check the CRC while
+  `ZipExtractVerified(p, n, name, max, status)`, `ZipVerify` and `ZipExtractAll` do,
+  non-ASCII names get the UTF-8 flag, `ZipFileInput.mtime` sets the date, tar reads ustar, PAX and GNU
+  long names and links (`Entry.kind`, `Entry.link`), `TarGz*Max` cap the inflated size. RAR 1.5 to 5 are read fully (CRC checked, `RarExtract` reports a
   `RAR_*` status); passwords through `RarOpen(p, n, password)` with
-  `RarEntries`/`RarRead`/`RarReadAll` (RAR 3 to 5, encrypted names too); multi-volume
-  sets through `RarReadVolumes`/`RarOpenVolumes`; `RarCreate`
-  writes stored RAR 5.
+  `RarEntries`/`RarRead`/`RarReadAll` (RAR 1.5 to 5, encrypted names too); multi-volume
+  sets through `RarReadVolumes`/`RarOpenVolumes`, encrypted and split too;
+  `RarReadAll` restores modes and times and makes safe symlinks; entries must be
+  under 2 GB (`RAR_TOO_BIG`); `RarCreate` writes stored RAR 5.
+  7z is read only: `IsSevenZip`, `SevenZipList`, `SevenZipExtractByName`, `SevenZipExtractAll`, and `SevenZipOpen(p, n, password)` with `SevenZipEntries`/`SevenZipRead`/`SevenZipReadAll` (LZMA, LZMA2, PPMd, BZip2, Deflate, filters, AES; `SEVENZIP_*` status, CRC checked, BCJ2 unsupported).
 - **`excel`**: xlsx, ods and csv workbooks: `Open Save New NewWorkbook NewSheet` with sheet methods `set_string set_number get_cell get_string row_count ...`, `CellRef ParseCellRef SheetToJSON SheetToCSV`. No `.xls`
   (`IsXLS` detects it); the format comes from the file extension; formulas
   are not evaluated; rows and columns count from 0.
@@ -3019,8 +3025,8 @@ them** - the English spelling is an error (`E001`):
 
 The free functions `listdir` and `strcmp` were removed from the language:
 use `os.ListDir` (or `fs.dir.List`) and `str.Equals` / the string comparison
-operators instead. `open` is gone as well: file IO is `import fs.file`, then
-`file.Open`. `env` and `args` stay built-ins because the JavaScript target and
+operators instead. `open` is gone as well: file IO is `import fs`, then
+`fs.Open`. `env` and `args` stay built-ins because the JavaScript target and
 the interpreter implement them in their own runtimes; prefer `os.Env` and
 `os.Args` in new code.
 
@@ -3111,7 +3117,7 @@ Common packages: `str` `رشته`, `math` `ریاضی`, `os` `سیستم عام�
 `io` `ورودی خروجی`, `fmt` `قالب بندی`, `conv` `تبدیل`, `time` `زمان`,
 `rand` `تصادفی`, `sort` `مرتب سازی`, `json` `جیسون`, `regex`
 `عبارت باقاعده`, `collections` `مجموعه ها`, `mem` `حافظه`, `path` `مسیر`,
-`fs` `سیستم پرونده`, `file` `پرونده`, `dir` `پوشه`, `sync` `همگام سازی`,
+`fs` `سیستم پرونده`, `dir` `پوشه`, `sync` `همگام سازی`,
 `thread` `نخ`, `chan` `کانال`, `testing` `آزمایش`, `template` `قالب`,
 `log` `گزارش`, `result` `نتیجه`, `option` `اختیاری`, `crypto` `رمزنگاری`,
 `bigint` `عدد بزرگ`, `net` `شبکه`, `net/http` `اچ تی تی پی`

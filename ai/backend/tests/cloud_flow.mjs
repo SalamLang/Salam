@@ -228,6 +228,59 @@ async function main() {
   await say(tgid, "/sandbox");
   check("/sandbox explains itself", !!(await until(async () => textsTo(await tglog(), tgid).find((t) => /private Linux sandbox/.test(t)))));
 
+  const mcpItem = async () => (await api("GET", "/integrations", token)).json.integrations.find((i) => i.provider === "figma-mcp");
+  check("Figma MCP is listed and off by default", (await mcpItem())?.connected === false && (await mcpItem())?.oauth === true, await mcpItem());
+  const pasted = await api("POST", "/integrations/figma-mcp/token", token, { token: "figd_validtoken0123456789abcdef" });
+  check("a pasted token cannot stand in for Figma MCP", pasted.res.status === 400, pasted.json);
+  r = await ask(token, chat, 'tool: figma_mcp {"action": "tools"}');
+  check("figma_mcp says when it is not connected", /has not connected Figma MCP/.test(r.body ?? ""), r);
+  const mcpStart = async () => {
+    const o = await api("POST", "/integrations/figma-mcp/oauth", token);
+    const link = new URL(o.json.url);
+    await fetch(`${PROVIDERS}/_mcp_expect?challenge=${encodeURIComponent(link.searchParams.get("code_challenge") ?? "")}`);
+    return { o, link };
+  };
+  const mcpConnect = async (code) => {
+    const { o } = await mcpStart();
+    return api("POST", "/auth/provider/figma-mcp/complete", undefined, { code, state: o.json.state });
+  };
+  const reg0 = (await mock("/_mcp")).registered;
+  const refresh0 = (await mock("/_mcp")).refreshes;
+  const first = await mcpStart();
+  check("the Figma MCP link asks for the mcp scope with PKCE", first.link.pathname === "/oauth/mcp" && first.link.searchParams.get("client_id") === "mcp-client-1" && first.link.searchParams.get("scope") === "mcp:connect" && first.link.searchParams.get("code_challenge_method") === "S256" && /\/auth\/callback\/figma-mcp$/.test(first.link.searchParams.get("redirect_uri") ?? "") && !!first.link.searchParams.get("resource"), first.link.href);
+  const joined = await api("POST", "/auth/provider/figma-mcp/complete", undefined, { code: "mcp", state: first.o.json.state });
+  check("the app completes the Figma MCP connection", joined.res.status === 200 && joined.json.purpose === "connect" && joined.json.ok === true, joined.json);
+  check("Figma MCP shows as connected without leaking a token", (await mcpItem())?.connected === true && (await mcpItem())?.scope === "mcp:connect" && !/fmcp_/.test(JSON.stringify((await api("GET", "/integrations", token)).json)));
+  r = await ask(token, chat, 'tool: figma_mcp {"action": "tools"}');
+  check("figma_mcp lists the Figma tools", /get_design_context: Design context/.test(r.body ?? "") && /get_screenshot/.test(r.body ?? ""), r);
+  r = await ask(token, chat, 'tool: figma_mcp {"tool": "get_design_context", "arguments": {"fileKey": "abc123", "nodeId": "1:2"}}');
+  check("figma_mcp calls a Figma tool", /design abc123\/1:2: Hero button/.test(r.body ?? ""), r);
+  r = await ask(token, chat, 'tool: figma_mcp {"tool": "get_screenshot", "arguments": {"nodeId": "1:2"}}');
+  check("a Figma screenshot reaches the model as an image", /images=1/.test(r.body ?? ""), r);
+  r = await ask(token, chat, 'tool: figma_mcp {"tool": "nope", "arguments": {}}');
+  check("a Figma tool error is reported", /unknown tool nope/.test(r.body ?? ""), r);
+  r = await ask(token, chat, 'tool: figma_mcp {"tool": "get_design_context", "arguments": "not json"}');
+  check("figma_mcp refuses arguments that are not an object", /arguments a JSON object/.test(r.body ?? ""), r);
+  await api("DELETE", "/integrations/figma-mcp", token);
+  const second = await mcpConnect("denied");
+  check("a failed Figma MCP exchange says why", second.json.ok === false && /incorrect or expired/.test(second.json.reason ?? ""), second.json);
+  const wrong = await api("POST", "/integrations/figma-mcp/oauth", token);
+  const badChallenge = await api("POST", "/auth/provider/figma-mcp/complete", undefined, { code: "mcp", state: wrong.json.state });
+  check("the code is useless without the matching PKCE verifier", badChallenge.json.ok === false && /PKCE/.test(badChallenge.json.reason ?? ""), badChallenge.json);
+  check("the Figma MCP app is registered at most once", (await mock("/_mcp")).registered - reg0 <= 1, await mock("/_mcp"));
+  await mcpConnect("mcpsoon");
+  await sleep(1200);
+  r = await ask(token, chat, 'tool: figma_mcp {"tool": "get_design_context", "arguments": {"fileKey": "k", "nodeId": "3:4"}}');
+  check("an expired Figma MCP token is refreshed before use", /design k\/3:4/.test(r.body ?? "") && (await mock("/_mcp")).refreshes - refresh0 === 1, r);
+  await mock("/_mcp_revoke");
+  r = await ask(token, chat, 'tool: figma_mcp {"action": "tools"}');
+  check("a revoked Figma MCP login is reported", /rejected the saved login/.test(r.body ?? ""), r);
+  check("a revoked Figma MCP login is marked expired", (await mcpItem())?.expired === true, await mcpItem());
+  await api("DELETE", "/integrations/figma-mcp", token);
+  check("disconnecting Figma MCP turns it off", (await mcpItem())?.connected === false);
+  const login = await api("POST", "/auth/provider/figma-mcp/start", undefined, {});
+  check("Figma MCP cannot be used to sign in", login.res.status >= 400, login.json);
+
   const deleted = await api("DELETE", `/chats/${chat}`, token);
   check("deleting a chat works", deleted.res.status === 200);
 

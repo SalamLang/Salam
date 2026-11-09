@@ -141,6 +141,11 @@ await answer(secret, { call_id: call2.id, status: "denied", output: "" });
 const done2 = await settle(session, chat.json.chat.id, sent2.json.assistant.id);
 check("a refused call reaches the model as an error", done2.body.includes("error The user refused this call."), done2.body);
 
+console.log("figma mcp");
+const sentMcp = await api("POST", `/chats/${chat.json.chat.id}/messages`, session, { text: 'tool: figma_mcp {"action": "tools"}' });
+const doneMcp = await settle(session, chat.json.chat.id, sentMcp.json.assistant.id);
+check("figma_mcp runs on the server for a desktop chat and asks for opt-in", doneMcp.body.includes("has not connected Figma MCP"), doneMcp.body);
+
 console.log("long call");
 const third = poll(secret);
 await new Promise((r) => setTimeout(r, 300));

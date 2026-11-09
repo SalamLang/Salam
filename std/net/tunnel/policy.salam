@@ -1,0 +1,399 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+@en "net/tunnel"
+@fa "تونل"
+package tunnel
+
+import str
+import net.internal.rawsock
+
+@en "DestPolicy"
+@fa "سیاست مقصد"
+pub struct DestPolicy:
+    @en "allow_private"
+    @fa "اجازه خصوصی"
+    pub allow_private: bool = false
+    @en "loopback_only"
+    @fa "فقط حلقه محلی"
+    pub loopback_only: bool = false
+    @en "allow_cidrs"
+    @fa "بازه‌های مجاز"
+    pub allow_cidrs: Vector<Matcher> = Vector {}
+    @en "deny_cidrs"
+    @fa "بازه‌های ممنوع"
+    pub deny_cidrs: Vector<Matcher> = Vector {}
+    @en "allow_suffixes"
+    @fa "پسوندهای مجاز"
+    pub allow_suffixes: Vector<str> = Vector {}
+    @en "deny_suffixes"
+    @fa "پسوندهای ممنوع"
+    pub deny_suffixes: Vector<str> = Vector {}
+    @en "resolver"
+    @fa "حل‌کننده"
+    pub resolver: dyn HostResolver = NullResolver {}
+    @en "has_resolver"
+    @fa "حل‌کننده دارد"
+    pub has_resolver: bool = false
+end
+
+@en "Plan"
+@fa "طرح اتصال"
+pub struct Plan:
+    @en "allowed"
+    @fa "مجاز"
+    pub allowed: bool = false
+    @en "reason"
+    @fa "دلیل"
+    pub reason: str = ""
+    @en "ips"
+    @fa "آی‌پی‌ها"
+    pub ips: Vector<str> = Vector {}
+    @en "resolved"
+    @fa "تفکیک‌شده"
+    pub resolved: bool = false
+end
+
+@en "GuardResult"
+@fa "نتیجه نگهبان"
+pub struct GuardResult:
+    @en "stream"
+    @fa "جریان"
+    pub stream: dyn Stream = ClosedStream {}
+    @en "denied"
+    @fa "ردشده"
+    pub denied: bool = false
+    @en "reason"
+    @fa "دلیل"
+    pub reason: str = ""
+end
+
+@en "GuardDialer"
+@fa "شماره‌گیر نگهبان"
+pub struct GuardDialer:
+    @en "inner"
+    @fa "درونی"
+    pub inner: dyn Dialer = DirectDialer {}
+    @en "policy"
+    @fa "سیاست"
+    pub policy: DestPolicy = DestPolicy {}
+    @en "router"
+    @fa "مسیریاب"
+    pub router: RouterDialer = RouterDialer {}
+    @en "has_router"
+    @fa "مسیریاب دارد"
+    pub has_router: bool = false
+
+    @en "DialChecked"
+    @fa "اتصال بررسی‌شده"
+    pub func DialChecked(target: Addr): GuardResult:
+        mut r := GuardResult {}
+        mut d := this.inner
+        if this.has_router:
+            d = this.router.Pick(this.router.router.Match(target))
+        end
+        direct := d.Name() == "direct"
+        pl := PolicyPlan(this.policy, target, direct)
+        if not pl.allowed:
+            r.denied = true
+            r.reason = pl.reason
+            ret r
+        end
+        if not direct:
+            r.stream = d.Dial(target)
+            ret r
+        end
+        mut tries := 0
+        repeat pl.ips.len() in i:
+            if tries < 4 and not r.stream.Ok():
+                tries++
+                r.stream = d.Dial(NewAddr(pl.ips[i], target.port))
+            end
+        end
+        ret r
+    end
+
+    @en "Dial"
+    @fa "اتصال"
+    pub func Dial(target: Addr): dyn Stream:
+        r := this.DialChecked(target)
+        ret r.stream
+    end
+
+    @en "Name"
+    @fa "نام"
+    pub func Name(): str:
+        ret "guard"
+    end
+end
+
+func _suffix_norm(s: str): str:
+    mut h := str.Lower(str.Trim(s))
+    if h.starts_with("*."): h = h.substr(2, h.len() - 2) end
+    if h.starts_with("."): h = h.substr(1, h.len() - 1) end
+    if h.ends_with("."): h = h.substr(0, h.len() - 1) end
+    ret h
+end
+
+func _special4(a: int, b: int, c: int): bool:
+    if a == 0 or a == 10 or a == 127 or a >= 224: ret true end
+    if a == 100 and (b & 192) == 64: ret true end
+    if a == 169 and b == 254: ret true end
+    if a == 172 and (b & 240) == 16: ret true end
+    if a == 192 and b == 168: ret true end
+    if a == 192 and b == 0 and (c == 0 or c == 2): ret true end
+    if a == 198 and (b & 254) == 18: ret true end
+    if a == 198 and b == 51 and c == 100: ret true end
+    if a == 203 and b == 0 and c == 113: ret true end
+    ret false
+end
+
+func _in_list(list: Vector<Matcher>, ip: Vector<int>): bool:
+    repeat list.len() in i:
+        if _ip_in(list[i].net, list[i].prefix, ip): ret true end
+        if ip.len() == 16 and list[i].net.len() == 4:
+            mut mapped := true
+            repeat 10 in k:
+                if ip[k] != 0: mapped = false end
+            end
+            if mapped and ip[10] == 255 and ip[11] == 255:
+                v4 := Vector {} as Vector<int>
+                v4.push(ip[12])
+                v4.push(ip[13])
+                v4.push(ip[14])
+                v4.push(ip[15])
+                hit := _ip_in(list[i].net, list[i].prefix, v4)
+                v4.free()
+                if hit: ret true end
+            end
+        end
+    end
+    ret false
+end
+
+func _suffix_hit(list: Vector<str>, host: str): bool:
+    repeat list.len() in i:
+        s := list[i]
+        if host == s: ret true end
+        if host.len() > s.len() + 1 and host.ends_with("." + s): ret true end
+    end
+    ret false
+end
+
+func _effective_private(p: DestPolicy): bool:
+    ret p.allow_private and p.loopback_only
+end
+
+@en "NewDestPolicy"
+@fa "سیاست مقصد جدید"
+pub func NewDestPolicy(): DestPolicy:
+    ret DestPolicy {}
+end
+
+@en "PolicyAllowPrivate"
+@fa "اجازه آدرس‌های خصوصی در سیاست"
+pub func PolicyAllowPrivate(p &: DestPolicy, enabled: bool):
+    p.allow_private = enabled
+end
+
+@en "PolicyAllowCidr"
+@fa "افزودن بازه مجاز"
+pub func PolicyAllowCidr(p &: DestPolicy, text: str): bool:
+    m := ParseCidr(text)
+    if m.kind == 0: ret false end
+    p.allow_cidrs.push(m)
+    ret true
+end
+
+@en "PolicyDenyCidr"
+@fa "افزودن بازه ممنوع"
+pub func PolicyDenyCidr(p &: DestPolicy, text: str): bool:
+    m := ParseCidr(text)
+    if m.kind == 0: ret false end
+    p.deny_cidrs.push(m)
+    ret true
+end
+
+@en "PolicyAllowSuffix"
+@fa "افزودن پسوند مجاز"
+pub func PolicyAllowSuffix(p &: DestPolicy, suffix: str):
+    h := _suffix_norm(suffix)
+    if h.len() > 0: p.allow_suffixes.push(h) end
+end
+
+@en "PolicyDenySuffix"
+@fa "افزودن پسوند ممنوع"
+pub func PolicyDenySuffix(p &: DestPolicy, suffix: str):
+    h := _suffix_norm(suffix)
+    if h.len() > 0: p.deny_suffixes.push(h) end
+end
+
+@en "PolicySetResolver"
+@fa "تعیین حل‌کننده سیاست"
+pub func PolicySetResolver(p &: DestPolicy, r: dyn HostResolver):
+    p.resolver = r
+    p.has_resolver = true
+end
+
+@en "IsLoopbackHost"
+@fa "میزبان حلقه محلی است"
+pub func IsLoopbackHost(host: str): bool:
+    h := str.Lower(host)
+    if h == "localhost": ret true end
+    b := ParseIP(rawsock.CanonIP(host))
+    defer b.free()
+    if b.len() == 4: ret b[0] == 127 end
+    if b.len() == 16:
+        mut z := true
+        repeat 15 in i:
+            if b[i] != 0: z = false end
+        end
+        ret z and b[15] == 1
+    end
+    ret false
+end
+
+@en "PolicyForBind"
+@fa "سیاست برای نشانی شنود"
+pub func PolicyForBind(p: DestPolicy, bind_host: str): DestPolicy:
+    mut q := p
+    q.loopback_only = IsLoopbackHost(bind_host)
+    ret q
+end
+
+@en "IsSpecialIP"
+@fa "آی‌پی ویژه است"
+pub func IsSpecialIP(b: Vector<int>): bool:
+    if b.len() == 4: ret _special4(b[0], b[1], b[2]) end
+    if b.len() != 16: ret false end
+    mut head := true
+    repeat 10 in i:
+        if b[i] != 0: head = false end
+    end
+    if head and b[10] == 255 and b[11] == 255: ret _special4(b[12], b[13], b[14]) end
+    if head and b[10] == 0 and b[11] == 0: ret true end
+    if b[0] == 0 and b[1] == 100 and b[2] == 255 and b[3] == 155:
+        mut z := true
+        repeat 8 in i:
+            if b[4 + i] != 0: z = false end
+        end
+        if z: ret _special4(b[12], b[13], b[14]) end
+        ret true
+    end
+    if b[0] == 32 and b[1] == 2: ret _special4(b[2], b[3], b[4]) end
+    if b[0] == 32 and b[1] == 1 and (b[2] == 0 and b[3] == 0): ret true end
+    if b[0] == 32 and b[1] == 1 and b[2] == 13 and b[3] == 184: ret true end
+    if (b[0] & 254) == 252: ret true end
+    if b[0] == 254 and (b[1] & 192) >= 128: ret true end
+    if b[0] == 255: ret true end
+    if b[0] == 1 and b[1] == 0 and b[2] == 0 and b[3] == 0 and b[4] == 0 and b[5] == 0 and b[6] == 0 and b[7] == 0: ret true end
+    ret false
+end
+
+@en "IsPrivateAddress"
+@fa "نشانی خصوصی است"
+pub func IsPrivateAddress(ip: str): bool:
+    b := ParseIP(rawsock.CanonIP(ip))
+    defer b.free()
+    ret IsSpecialIP(b)
+end
+
+@en "PolicyCheckBytes"
+@fa "بررسی بایت‌های آی‌پی"
+pub func PolicyCheckBytes(p: DestPolicy, ip: Vector<int>): bool:
+    if ip.len() != 4 and ip.len() != 16: ret false end
+    if _in_list(p.deny_cidrs, ip): ret false end
+    if _in_list(p.allow_cidrs, ip): ret true end
+    if IsSpecialIP(ip) and not _effective_private(p): ret false end
+    ret true
+end
+
+@en "PolicyCheckIP"
+@fa "بررسی آی‌پی در سیاست"
+pub func PolicyCheckIP(p: DestPolicy, ip: str): bool:
+    b := ParseIP(rawsock.CanonIP(ip))
+    defer b.free()
+    ret PolicyCheckBytes(p, b)
+end
+
+@en "PolicyCheckName"
+@fa "بررسی نام در سیاست"
+pub func PolicyCheckName(p: DestPolicy, host: str): bool:
+    mut h := str.Lower(host)
+    if h.ends_with("."): h = h.substr(0, h.len() - 1) end
+    if _suffix_hit(p.deny_suffixes, h): ret false end
+    if _suffix_hit(p.allow_suffixes, h): ret true end
+    if (h == "localhost" or h.ends_with(".localhost")) and not _effective_private(p): ret false end
+    ret true
+end
+
+@en "PolicyPlan"
+@fa "طرح سیاست"
+pub func PolicyPlan(p: DestPolicy, a: Addr, resolve: bool): Plan:
+    mut pl := Plan {}
+    if not a.valid:
+        pl.reason = "bad address"
+        ret pl
+    end
+    if a.kind != ADDR_DOMAIN:
+        b := ParseIP(a.host)
+        defer b.free()
+        if not PolicyCheckBytes(p, b):
+            pl.reason = "destination " + a.host + " is not allowed"
+            ret pl
+        end
+        pl.allowed = true
+        pl.resolved = true
+        pl.ips.push(FormatIP(b))
+        ret pl
+    end
+    if not PolicyCheckName(p, a.host):
+        pl.reason = "destination " + a.host + " is not allowed"
+        ret pl
+    end
+    pl.allowed = true
+    if not resolve: ret pl end
+    mut names := Vector {} as Vector<str>
+    if p.has_resolver:
+        names = p.resolver.Lookup(a.host).ips
+    else:
+        names = rawsock.ResolveAll(a.host)
+    end
+    if names.len() == 0: ret pl end
+    pl.resolved = true
+    repeat names.len() in i:
+        b := ParseIP(rawsock.CanonIP(names[i]))
+        ok := PolicyCheckBytes(p, b)
+        if ok: pl.ips.push(FormatIP(b)) end
+        b.free()
+        if not ok:
+            pl.allowed = false
+            pl.reason = a.host + " resolves to a forbidden address"
+            pl.ips.clear()
+            ret pl
+        end
+    end
+    ret pl
+end
+
+@en "Guard"
+@fa "نگهبان"
+pub func Guard(inner: dyn Dialer, p: DestPolicy): GuardDialer:
+    ret GuardDialer { inner = inner, policy = p }
+end
+
+@en "GuardRouter"
+@fa "نگهبان مسیریاب"
+pub func GuardRouter(rd: RouterDialer, p: DestPolicy): GuardDialer:
+    ret GuardDialer { router = rd, has_router = true, policy = p }
+end

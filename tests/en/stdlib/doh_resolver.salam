@@ -1,0 +1,460 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import mem
+import str
+import compress
+import net.dns
+import net.doh
+import net.tcp
+import net.udp
+import sync
+import tls
+
+mut http_port := 0
+mut tls_port := 0
+mut dot_port := 0
+mut udp_port := 0
+mut queries := 0
+mut last_method := ""
+mut chunked := false
+mut ready := sync.NewWaitGroup()
+
+struct MIo:
+    pub use_tls: bool = false
+    pub tc: tcp.Conn = tcp.Conn {}
+    pub sc: tls.Conn = tls.Conn {}
+end
+
+func io_read(io &: MIo, buf: void*, max: int): int:
+    if io.use_tls:
+        ret tls.ReadBytes(io.sc, buf, max)
+    end
+    ret tcp.ReadBytes(io.tc, buf, max)
+end
+
+func io_write(io &: MIo, p: void*, n: int): bool:
+    if io.use_tls:
+        ret tls.WriteBytes(io.sc, p, n) == n
+    end
+    ret tcp.WriteBytes(io.tc, p, n) == n
+end
+
+func io_close(io &: MIo):
+    if io.use_tls:
+        tls.Close(io.sc)
+    else:
+        tcp.Close(io.tc)
+    end
+end
+
+func rec(name: str, rtype: int, ttl: int, data: str): dns.Record:
+    ret dns.Record { name = name, rtype = rtype, rclass = 1, ttl = ttl, data = data }
+end
+
+func answer_for(p: void*, n: int): compress.ByteBuf:
+    queries++
+    q := dns.Decode(p, n)
+    qn := q.questions.items.get(0)
+    mut recs := Vector {} as Vector<dns.Record>
+    mut rcode := 0
+    if qn.name == "a.test" and qn.qtype == dns.TypeA:
+        recs.push(rec("a.test", dns.TypeA, 120, "10.0.0.1"))
+        recs.push(rec("a.test", dns.TypeA, 300, "10.0.0.2"))
+    else qn.name == "v6.test" and qn.qtype == dns.TypeAAAA:
+        recs.push(rec("v6.test", dns.TypeAAAA, 300, "2001:db8::5"))
+    else qn.name == "txt.test" and qn.qtype == dns.TypeTXT:
+        recs.push(rec("txt.test", dns.TypeTXT, 60, "hello world"))
+    else qn.name == "alias.test":
+        recs.push(rec("alias.test", dns.TypeCNAME, 60, "target.test"))
+        if qn.qtype == dns.TypeA:
+            recs.push(rec("target.test", dns.TypeA, 60, "10.9.9.9"))
+        end
+    else qn.name == "empty.test":
+        rcode = 0
+    else:
+        rcode = 3
+    end
+    out := doh.EncodeResponse(q.id, qn.name, qn.qtype, rcode, recs)
+    recs.free()
+    ret out
+end
+
+func b64url_decode(s: str): compress.ByteBuf:
+    alphabet := "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+    mut out := compress.NewByteBuf()
+    mut acc := 0
+    mut bits := 0
+    repeat s.len() in i:
+        v := alphabet.find(s.substr(i, 1))
+        if v < 0:
+            break
+        end
+        acc = (acc << 6) | v
+        bits += 6
+        if bits >= 8:
+            bits -= 8
+            compress.BufPush(out, (acc >> bits) & 255)
+            acc = acc & ((1 << bits) - 1)
+        end
+    end
+    ret out
+end
+
+func find_text(b: compress.ByteBuf, pat: str): int:
+    pl := pat.len()
+    mut i := 0
+    until i + pl <= b.len:
+        mut m := true
+        repeat pl in j:
+            if compress.BufGet(b, i + j) != (pat as u8*)[j] as int:
+                m = false
+                break
+            end
+        end
+        if m:
+            ret i
+        end
+        i++
+    end
+    ret 0 - 1
+end
+
+func text_at(b: compress.ByteBuf, off: int, n: int): str:
+    buf := mem.Allocate((n + 1) as u64)
+    mem.Copy(buf, ((b.data as i64) + (off as i64)) as void*, n as u64)
+    (buf as u8*)[n] = 0 as u8
+    ret buf as str
+end
+
+func serve_http(io &: MIo):
+    mut raw := compress.NewByteBuf()
+    buf := mem.Allocate(4096 as u64)
+    mut hend := 0 - 1
+    mut need := 0
+    until true:
+        n := io_read(io, buf, 4096)
+        if n <= 0:
+            break
+        end
+        compress.BufPushBytes(raw, buf, n)
+        hend = find_text(raw, "\r\n\r\n")
+        if hend >= 0:
+            head := str.Lower(text_at(raw, 0, hend))
+            cl := head.find("content-length:")
+            if cl >= 0:
+                rest := head.substr(cl + 15, head.len() - cl - 15)
+                mut e := rest.find("\r\n")
+                if e < 0:
+                    e = rest.len()
+                end
+                need = str.Trim(rest.substr(0, e)).to_int()
+            end
+            if raw.len >= hend + 4 + need:
+                break
+            end
+        end
+    end
+    mem.Free(buf)
+    if hend < 0:
+        compress.BufFree(raw)
+        ret
+    end
+    mut wire := compress.NewByteBuf()
+    sp := text_at(raw, 0, 4)
+    if sp == "POST":
+        last_method = "POST"
+        compress.BufPushBytes(wire, ((raw.data as i64) + (hend as i64) + 4) as void*, need)
+    else:
+        last_method = "GET"
+        line := text_at(raw, 0, find_text(raw, "\r\n"))
+        di := line.find("dns=")
+        rest := line.substr(di + 4, line.len() - di - 4)
+        sp2 := rest.find(" ")
+        wire = b64url_decode(rest.substr(0, sp2))
+    end
+    mut ans := answer_for(wire.data, wire.len)
+    mut resp := compress.NewByteBuf()
+    mut head := "HTTP/1.1 200 OK\r\nContent-Type: application/dns-message\r\nConnection: close\r\n"
+    if chunked:
+        head = head + "Transfer-Encoding: chunked\r\n\r\n"
+        compress.BufPushBytes(resp, head as void*, head.len())
+        half := ans.len / 2
+        hexd := "0123456789abcdef"
+        mut h1 := ""
+        mut v1 := half
+        until v1 > 0:
+            h1 = hexd.substr(v1 % 16, 1) + h1
+            v1 = v1 / 16
+        end
+        mut h2 := ""
+        mut v2 := ans.len - half
+        until v2 > 0:
+            h2 = hexd.substr(v2 % 16, 1) + h2
+            v2 = v2 / 16
+        end
+        c1 := h1 + "\r\n"
+        compress.BufPushBytes(resp, c1 as void*, c1.len())
+        compress.BufPushBytes(resp, ans.data, half)
+        c2 := "\r\n" + h2 + "\r\n"
+        compress.BufPushBytes(resp, c2 as void*, c2.len())
+        compress.BufPushBytes(resp, ((ans.data as i64) + (half as i64)) as void*, ans.len - half)
+        c3 := "\r\n0\r\n\r\n"
+        compress.BufPushBytes(resp, c3 as void*, c3.len())
+    else:
+        head = head + "Content-Length: " + str.FromInt(ans.len as i64) + "\r\n\r\n"
+        compress.BufPushBytes(resp, head as void*, head.len())
+        compress.BufPushBuf(resp, ans)
+    end
+    _ok := io_write(io, resp.data, resp.len)
+    compress.BufFree(resp)
+    compress.BufFree(ans)
+    compress.BufFree(wire)
+    compress.BufFree(raw)
+end
+
+func http_server():
+    srv := tcp.Bind(0)
+    http_port = tcp.Port(srv)
+    sync.Done(ready)
+    until true:
+        c := tcp.Accept(srv)
+        mut io := MIo { tc = c }
+        serve_http(io)
+        io_close(io)
+    end
+end
+
+func tls_server():
+    srv := tcp.Bind(0)
+    tls_port = tcp.Port(srv)
+    sync.Done(ready)
+    cfg := tls.NewServerConfig("tests/fixtures/ssl/server.crt", "tests/fixtures/ssl/server.key")
+    until true:
+        c := tcp.Accept(srv)
+        sc := tls.WrapServer(c.fd, cfg)
+        if tls.ConnOk(sc):
+            mut io := MIo { use_tls = true, sc = sc }
+            serve_http(io)
+            io_close(io)
+        end
+    end
+end
+
+func dot_server():
+    srv := tcp.Bind(0)
+    dot_port = tcp.Port(srv)
+    sync.Done(ready)
+    cfg := tls.NewServerConfig("tests/fixtures/ssl/server.crt", "tests/fixtures/ssl/server.key")
+    until true:
+        c := tcp.Accept(srv)
+        sc := tls.WrapServer(c.fd, cfg)
+        if tls.ConnOk(sc):
+            mut io := MIo { use_tls = true, sc = sc }
+            buf := mem.Allocate(4096 as u64)
+            mut raw := compress.NewByteBuf()
+            until true:
+                n := io_read(io, buf, 4096)
+                if n <= 0:
+                    break
+                end
+                compress.BufPushBytes(raw, buf, n)
+                if raw.len >= 2 and raw.len >= 2 + compress.BufGet(raw, 0) * 256 + compress.BufGet(raw, 1):
+                    break
+                end
+            end
+            if raw.len > 2:
+                mut ans := answer_for(((raw.data as i64) + 2) as void*, raw.len - 2)
+                mut out := compress.NewByteBuf()
+                compress.BufPush(out, (ans.len >> 8) & 255)
+                compress.BufPush(out, ans.len & 255)
+                compress.BufPushBuf(out, ans)
+                _ok := io_write(io, out.data, out.len)
+                compress.BufFree(out)
+                compress.BufFree(ans)
+            end
+            compress.BufFree(raw)
+            mem.Free(buf)
+            io_close(io)
+        end
+    end
+end
+
+func udp_server():
+    s := udp.Bind(0)
+    udp_port = udp.Port(s)
+    sync.Done(ready)
+    buf := mem.Allocate(2048 as u64)
+    mut fh := ""
+    mut fp := 0
+    until true:
+        n := udp.ReceiveBytes(s, buf, 2048, fh, fp)
+        if n > 0:
+            ans := answer_for(buf, n)
+            _sent := udp.SendBytes(s, fh, fp, ans.data, ans.len)
+        end
+    end
+end
+
+func first_ip(v: Vector<str>): str:
+    if v.len() == 0:
+        ret "none"
+    end
+    ret v.get(0)
+end
+
+func main:
+    println doh.IsIP("1.2.3.4"), doh.IsIP("2001:db8::1"), doh.IsIP("dns.google"), doh.IsIP("1.2.3")
+    u := doh.ParseURL("https://dns.example.net/dns-query")
+    println u.ok, u.use_tls, u.host, u.port, u.path
+    u2 := doh.ParseURL("http://127.0.0.1:8053/q?x=1")
+    println u2.ok, u2.use_tls, u2.host, u2.port, u2.path
+    println doh.ParseURL("ftp://x").ok
+    cf := doh.Cloudflare()
+    println cf.url, cf.host, cf.path, cf.addrs.get(0), cf.addrs.get(1)
+    println doh.Google().host, doh.Quad9().addrs.get(0), doh.CloudflareDoT().port, doh.CloudflareDoT().host
+    iran := doh.IranPlainServers()
+    println iran.len(), iran.get(0).name, iran.get(0).addrs.get(0), iran.get(2).addrs.get(0), iran.get(0).port, iran.get(0).kind
+    println doh.DefaultServers().len()
+
+    mut recs := Vector {} as Vector<dns.Record>
+    recs.push(rec("example.com", dns.TypeA, 60, "93.184.216.34"))
+    recs.push(rec("example.com", dns.TypeAAAA, 60, "2001:db8::1"))
+    recs.push(rec("example.com", dns.TypeTXT, 60, "v=spf1 -all"))
+    recs.push(rec("example.com", dns.TypeCNAME, 60, "www.example.com"))
+    enc := doh.EncodeResponse(4660, "example.com", dns.TypeA, 0, recs)
+    println enc.len
+    dec := dns.Decode(enc.data, enc.len)
+    println dec.id, dec.qr, dec.rcode, dec.questions.items.len(), dec.answers.items.len()
+    repeat dec.answers.items.len() in i:
+        r := dec.answers.items.get(i)
+        println r.name, r.rtype, r.ttl, r.data
+    end
+    nx := doh.EncodeResponse(7, "nope.test", dns.TypeA, 3, Vector {} as Vector<dns.Record>)
+    println dns.Decode(nx.data, nx.len).rcode
+
+    sync.Add(ready, 4 as i64)
+    _t1 := spawn(http_server)
+    _t2 := spawn(tls_server)
+    _t3 := spawn(dot_server)
+    _t4 := spawn(udp_server)
+    sync.Wait(ready)
+
+    mut post := doh.NewServer("mock-post", doh.KindDoH, "http://127.0.0.1:" + str.FromInt(http_port as i64) + "/dns-query")
+    post.addrs.push("127.0.0.1")
+    q := doh.Query(post, "a.test", dns.TypeA, 3000)
+    println q.ok, q.msg.rcode, q.msg.answers.items.len(), q.msg.answers.items.get(0).data, last_method
+
+    mut get := doh.NewServer("mock-get", doh.KindDoHGet, "http://127.0.0.1:" + str.FromInt(http_port as i64) + "/dns-query")
+    get.addrs.push("127.0.0.1")
+    qg := doh.Query(get, "v6.test", dns.TypeAAAA, 3000)
+    println qg.ok, qg.msg.answers.items.get(0).data, last_method
+
+    chunked = true
+    qc := doh.Query(post, "txt.test", dns.TypeTXT, 3000)
+    println qc.ok, qc.msg.answers.items.get(0).data
+    chunked = false
+
+    mut secure := doh.NewServer("mock-tls", doh.KindDoH, "https://localhost:" + str.FromInt(tls_port as i64) + "/dns-query")
+    secure.addrs.push("127.0.0.1")
+    secure.insecure = true
+    qs := doh.Query(secure, "a.test", dns.TypeA, 5000)
+    println "https", qs.ok, qs.msg.answers.items.len()
+
+    mut dot := doh.NewDoT("mock-dot", "localhost", "127.0.0.1")
+    dot.port = dot_port
+    dot.insecure = true
+    qd := doh.Query(dot, "alias.test", dns.TypeA, 5000)
+    println "dot", qd.ok, qd.msg.answers.items.len(), qd.msg.answers.items.get(0).rtype, qd.msg.answers.items.get(0).data
+
+    mut plain := doh.NewPlain("mock-udp", "127.0.0.1")
+    plain.port = udp_port
+    qu := doh.Query(plain, "nx.test", dns.TypeA, 3000)
+    println "udp", qu.ok, qu.msg.rcode, qu.msg.answers.items.len()
+
+    mut dead := doh.NewServer("dead", doh.KindDoH, "http://127.0.0.1:1/dns-query")
+    dead.addrs.push("127.0.0.1")
+    qx := doh.Query(dead, "a.test", dns.TypeA, 500)
+    println "dead", qx.ok, qx.err
+
+    mut servers := Vector {} as Vector<doh.Server>
+    servers.push(dead)
+    servers.push(post)
+    r := doh.NewResolver(servers)
+    doh.SetTimeout(r, 1000)
+    queries = 0
+    a1 := doh.ResolveAt(r, "a.test", dns.TypeA, 1000 as i64)
+    println a1.ok, a1.cached, a1.ttl, a1.negative, a1.msg.answers.items.len(), queries
+    a2 := doh.ResolveAt(r, "A.TEST.", dns.TypeA, 60000 as i64)
+    println a2.ok, a2.cached, a2.ttl, queries
+    a3 := doh.ResolveAt(r, "a.test", dns.TypeA, 121000 as i64)
+    println a3.ok, a3.cached, queries
+    a4 := doh.ResolveAt(r, "a.test", dns.TypeA, 121500 as i64)
+    println a4.ok, a4.cached, a4.ttl, queries
+    n1 := doh.ResolveAt(r, "nx.test", dns.TypeA, 5000 as i64)
+    println n1.ok, n1.cached, n1.negative, n1.rcode, n1.ttl, queries
+    n2 := doh.ResolveAt(r, "nx.test", dns.TypeA, 20000 as i64)
+    println n2.cached, n2.negative, n2.rcode, queries
+    n3 := doh.ResolveAt(r, "nx.test", dns.TypeA, 36000 as i64)
+    println n3.cached, queries
+    e1 := doh.ResolveAt(r, "empty.test", dns.TypeA, 5000 as i64)
+    println e1.ok, e1.negative, e1.rcode, e1.msg.answers.items.len()
+    mut bypass := Vector {} as Vector<doh.Server>
+    bypass.push(dead)
+    rd := doh.NewResolver(bypass)
+    doh.SetTimeout(rd, 500)
+    f1 := doh.ResolveAt(rd, "a.test", dns.TypeA, 0 as i64)
+    println f1.ok, f1.err.len() > 0
+
+    println first_ip(doh.LookupA(r, "a.test")), doh.LookupA(r, "a.test").len()
+    println first_ip(doh.LookupAAAA(r, "v6.test"))
+    println first_ip(doh.LookupTXT(r, "txt.test"))
+    println doh.LookupCNAME(r, "alias.test")
+    println first_ip(doh.LookupHost(r, "alias.test")), first_ip(doh.LookupHost(r, "5.6.7.8"))
+    st := doh.Stats(r)
+    println st.hits > 0, st.misses > 0, st.failures
+    println doh.CacheSize(r) > 0
+    doh.ClearCache(r)
+    println doh.CacheSize(r)
+
+    mut one := Vector {} as Vector<doh.Server>
+    one.push(post)
+    rs := doh.NewResolver(one)
+    stub := doh.StartStub(rs, "127.0.0.1", 0)
+    println "stub", stub.ok
+    sock := udp.Open()
+    udp.SetTimeout(sock, 3000)
+    qw := dns.EncodeQuery("a.test", dns.TypeA, 2222)
+    _s := udp.SendBytes(sock, "127.0.0.1", stub.port, qw.data, qw.len)
+    rbuf := mem.Allocate(2048 as u64)
+    mut fh := ""
+    mut fp := 0
+    n := udp.ReceiveBytes(sock, rbuf, 2048, fh, fp)
+    sm := dns.Decode(rbuf, n)
+    println "stub answer", sm.id, sm.qr, sm.rcode, sm.answers.items.len(), sm.answers.items.get(0).data
+    before := queries
+    qw2 := dns.EncodeQuery("a.test", dns.TypeA, 3333)
+    _s2 := udp.SendBytes(sock, "127.0.0.1", stub.port, qw2.data, qw2.len)
+    rn2 := udp.ReceiveBytes(sock, rbuf, 2048, fh, fp)
+    sm2 := dns.Decode(rbuf, rn2)
+    println "stub cached", sm2.id, sm2.answers.items.len(), queries == before
+    qw3 := dns.EncodeQuery("nx.test", dns.TypeA, 4444)
+    _s3 := udp.SendBytes(sock, "127.0.0.1", stub.port, qw3.data, qw3.len)
+    rn3 := udp.ReceiveBytes(sock, rbuf, 2048, fh, fp)
+    sm3 := dns.Decode(rbuf, rn3)
+    println "stub nx", sm3.id, sm3.rcode
+    println doh.StubServed(stub)
+    doh.StopStub(stub)
+    udp.Close(sock)
+end

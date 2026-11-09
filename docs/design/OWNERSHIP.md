@@ -110,6 +110,7 @@ positive count at zero on `std/` and `compiler/`:
 | W142 | used after free on some paths                                                         | on, warn       |
 | W143 | freed twice on some paths                                                             | on, warn       |
 | W144 | a copy, `.ref()` pointer or iterator used after a call that may have moved the buffer | warn (default) |
+| W163 | an owned `Vector`/`HashMap` used after `b := a`, `x.f = a` or handing it to a keeper  | warn (default) |
 
 `--ownership=off|on|warn|error` picks the mode; `warn` is the default.
 `on` reports the errors plus W142 and W143; `warn` adds W144, which needs a

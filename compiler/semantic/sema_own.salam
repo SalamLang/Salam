@@ -38,6 +38,8 @@ pub struct OwSt:
     pub sl: Vector<int> = Vector {}
     pub sn: Vector<int> = Vector {}
     pub sq: Vector<int> = Vector {}
+    pub mv: Vector<int> = Vector {}
+    pub mvs: Vector<int> = Vector {}
 end
 
 pub struct OwBlk:
@@ -70,6 +72,9 @@ pub struct Ow:
     pub locals: Vector<str> = Vector {}
     pub krel: Vector<int> = Vector {}
     pub rel: Vector<str> = Vector {}
+    pub owned: Vector<int> = Vector {}
+    pub mvrep: Vector<int> = Vector {}
+    pub in_defer: bool = false
     pub report: bool = false
     pub mode: int = 1
 end
@@ -120,6 +125,8 @@ func ow_st_free(st &: OwSt):
     st.sl.free()
     st.sn.free()
     st.sq.free()
+    st.mv.free()
+    st.mvs.free()
     st.live = false
 end
 
@@ -135,6 +142,8 @@ func ow_st_clone(st: OwSt): OwSt:
     out.sl = ow_vclone(st.sl)
     out.sn = ow_vclone(st.sn)
     out.sq = ow_vclone(st.sq)
+    out.mv = ow_vclone(st.mv)
+    out.mvs = ow_vclone(st.mvs)
     ret out
 end
 
@@ -591,6 +600,8 @@ func ow_st_join(o &: Ow, dst &: OwSt, src &: OwSt): bool:
         dst.sl = ow_vclone(src.sl)
         dst.sn = ow_vclone(src.sn)
         dst.sq = ow_vclone(src.sq)
+        dst.mv = ow_vclone(src.mv)
+        dst.mvs = ow_vclone(src.mvs)
         ret true
     end
     if ow_same(dst.pk, src.pk) and ow_same(dst.pt, src.pt) and ow_same(dst.pf, src.pf) and ow_same(dst.fr, src.fr) and ow_same(dst.fm, src.fm) and ow_same(dst.rt, src.rt):
@@ -649,6 +660,13 @@ func ow_st_join(o &: Ow, dst &: OwSt, src &: OwSt): bool:
             changed = true
         end
     end
+    repeat src.mv.len() in mq:
+        if not ow_has(dst.mv, src.mv.get(mq)):
+            dst.mv.push(src.mv.get(mq))
+            dst.mvs.push(src.mvs.get(mq))
+            changed = true
+        end
+    end
     repeat src.sl.len() in q2:
         if not ow_has(dst.sl, src.sl.get(q2)):
             dst.sl.push(src.sl.get(q2))
@@ -660,6 +678,7 @@ func ow_st_join(o &: Ow, dst &: OwSt, src &: OwSt): bool:
 end
 
 func ow_write(o &: Ow, st &: OwSt, key: int, toks: Vector<int>):
+    ow_mv_del(st, key)
     if not ow_rel(o, key):
         ret
     end
@@ -680,6 +699,7 @@ func ow_write(o &: Ow, st &: OwSt, key: int, toks: Vector<int>):
 end
 
 func ow_write_from(o &: Ow, st &: OwSt, key: int, src: int):
+    ow_mv_del(st, key)
     if not ow_rel(o, key):
         ret
     end
@@ -933,7 +953,74 @@ func ow_check_key(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, nid: int, key: in
     end
 end
 
+func ow_mv_del(st &: OwSt, key: int):
+    mut i := 0
+    until i < st.mv.len():
+        if st.mv.get(i) == key:
+            _a := st.mv.remove_at(i)
+            _b := st.mvs.remove_at(i)
+        else:
+            i++
+        end
+    end
+end
+
+func ow_mv_add(o &: Ow, st &: OwSt, key: int, site: int):
+    if o.mode < 2 or not ow_has(o.owned, key) or ow_has(st.mv, key):
+        ret
+    end
+    st.mv.push(key)
+    st.mvs.push(site)
+end
+
+func ow_mv_check(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, nid: int, key: int):
+    if o.mode < 2 or not o.report or o.in_defer or st.mv.len() == 0:
+        ret
+    end
+    mut r := key
+    until o.kpar.get(r) >= 0:
+        r = o.kpar.get(r)
+    end
+    repeat st.mv.len() in i:
+        if st.mv.get(i) == r and not ow_has(o.mvrep, r):
+            o.mvrep.push(r)
+            nm := o.kname.get(r)
+            ow_diag(
+                s, o, false, 163, nid, a, co.Format3(
+                    i18.Tr("'%s' is used after its buffer was moved on line %u; both names now share one buffer, so take '%s.copy()' where both are needed"), co.ArgStr(nm), co.ArgUint(ow_line(a, st.mvs.get(i))), co.ArgStr(nm)
+                ), i18.Tr("use the new name from here on, or copy the Vector or HashMap before handing it over")
+            )
+            ret
+        end
+    end
+end
+
+func ow_mv_src(o &: Ow, a &: at.Ast, e: int): int:
+    x := ow_strip_cast(a, e)
+    if x == 0 or at.KindOf(a, x) != at.AST_IDENTIFIER:
+        ret 0 - 1
+    end
+    k := ow_key(o, 0 - 1, at.At(a, x).name)
+    ret ow_has(o.owned, k) ? k : 0 - 1
+end
+
+func ow_mv_lit(o &: Ow, a &: at.Ast, st &: OwSt, e: int):
+    if e == 0 or at.KindOf(a, e) != at.AST_STRUCT_LIT:
+        ret
+    end
+    repeat at.ChildCount(a, e) in i:
+        fi := at.Child(a, e, i)
+        if fi != 0 and at.KindOf(a, fi) == at.AST_FIELD_INIT:
+            mk := ow_mv_src(o, a, at.At(a, fi).a)
+            if mk >= 0:
+                ow_mv_add(o, st, mk, fi)
+            end
+        end
+    end
+end
+
 func ow_use(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, nid: int, key: int):
+    ow_mv_check(s, o, a, st, nid, key)
     if not ow_rel(o, key):
         ret
     end
@@ -1375,7 +1462,7 @@ func ow_args(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, nid: int):
         end
         if at.At(a, arg2).ref_arg and key2 >= 0:
             ow_apply(s, o, a, st, nid, key2, eff, false, j + 1)
-            freed := eff == SU_FREE or eff == SU_FREE + 100
+            freed := (eff == SU_FREE or eff == SU_FREE + 100) and not ow_is_container(at.At(a, arg2).type_str)
             if not freed or ow_arg_kept(s, nid, j + 1):
                 ow_write_fresh(o, st, key2, arg2)
             end
@@ -1383,6 +1470,10 @@ func ow_args(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, nid: int):
         end
         if eff != SU_READ:
             ow_apply(s, o, a, st, nid, key2, eff, ow_is_container(at.At(a, arg2).type_str), j + 1)
+        end
+        gmk := ow_mv_src(o, a, arg2)
+        if gmk >= 0 and su_arg_effect(s, a, nid, j + 1) == SU_KEEP:
+            ow_mv_add(o, st, gmk, nid)
         end
         if str.EndsWith(at.At(a, arg2).type_str, "*") and key2 >= 0:
             ow_unfree_under(o, st, key2)
@@ -1433,6 +1524,7 @@ func ow_call(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, nid: int): Vector<int>
     end
     cont := ow_is_container(rts)
     if str.Equals(mname, "free") and argc == 0 and (cont or str.StartsWith(rts, "dyn ")):
+        ow_mv_check(s, o, a, st, nid, rkey)
         ow_use_prefix(s, o, a, st, nid, eff)
         ow_free(s, o, a, st, nid, eff, cont, false)
         ret out
@@ -1617,6 +1709,14 @@ func ow_decl(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, nid: int):
     o.locals.push(name)
     key := ow_key(o, 0 - 1, name)
     mut ts := ow_expr(s, o, a, st, init)
+    mvk := ow_mv_src(o, a, init)
+    if mvk >= 0 and mvk != key:
+        ow_mv_add(o, st, mvk, nid)
+    end
+    ow_mv_lit(o, a, st, init)
+    if init != 0 and ow_is_container(at.At(a, init).type_str) and (sf_empty_lit(a, init) or (at.KindOf(a, init) == at.AST_CALL and su_call_fresh(s, a, init))):
+        _ow := ow_add(o.owned, key)
+    end
     src := ow_path(o, a, init)
     if init != 0 and ow_scalar_ts(at.At(a, init).type_str):
         ts.clear()
@@ -1649,6 +1749,13 @@ func ow_assign(s &: Sema, o &: Ow, a &: at.Ast, st &: OwSt, nid: int):
     if op != tok.TK_ASSIGN:
         ow_check_key(s, o, a, st, lhs, key)
         ts.clear()
+    end
+    if op == tok.TK_ASSIGN:
+        amk := ow_mv_src(o, a, rhs)
+        if amk >= 0 and amk != key:
+            ow_mv_add(o, st, amk, nid)
+        end
+        ow_mv_lit(o, a, st, rhs)
     end
     src := ow_path(o, a, rhs)
     if rhs != 0 and ow_scalar_ts(at.At(a, rhs).type_str):
@@ -1952,7 +2059,9 @@ func ow_run_block(s &: Sema, o &: Ow, g &: OwCfg, a &: at.Ast, bi: int, st &: Ow
             mut te := ow_expr(s, o, a, st, nid)
             te.free()
         else kind == OW_IT_DEFER:
+            o.in_defer = true
             ow_stmt(s, o, a, st, at.At(a, nid).a)
+            o.in_defer = false
         else kind == OW_IT_RET:
             ow_ret(s, o, a, st, nid)
         end
@@ -2347,6 +2456,8 @@ func ow_free_ctx(o &: Ow):
     o.locals.free()
     o.krel.free()
     o.rel.free()
+    o.owned.free()
+    o.mvrep.free()
 end
 
 pub func SemaCheckOwnership(s &: Sema, a &: at.Ast, fnid: int):

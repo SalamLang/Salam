@@ -48,6 +48,7 @@ if SALAM_OS_WINDOWS:
         func shutdown(s: usize, how: int): int
         func setsockopt(s: usize, level: int, optname: int, optval: void*, optlen: int): int
         func getsockname(s: usize, addr: void*, addrlen: void*): int
+        func getpeername(s: usize, addr: void*, addrlen: void*): int
         func ioctlsocket(s: usize, cmd: int, argp: void*): int
         func getaddrinfo(node: str, service: str, hints: void*, res: void*): int
         func freeaddrinfo(res: void*)
@@ -134,6 +135,14 @@ pub const ShutRdWr := 2
 
 const _SHUT_BOTH := 2
 
+const _IPPROTO_IPV6 := 41
+
+if SALAM_OS_LINUX:
+    const _IPV6_V6ONLY := 26
+else:
+    const _IPV6_V6ONLY := 27
+end
+
 if SALAM_OS_WINDOWS:
     mut _rawsock_wsa_init := 0
 end
@@ -187,17 +196,6 @@ func _resolve_addr4(host: str): int:
     ret _hostent_addr4(he)
 end
 
-func _make_sa4(h_addr: int, port: int): void*:
-    sa := mem.Allocate(16 as u64)
-    memset(sa, 0, 16 as u64)
-    sa32 := sa as int*
-    port_n := htons(port)
-    packed := (port_n as i64) * 65536 + AF_INET
-    sa32[0] = packed as int
-    sa32[1] = h_addr
-    ret sa
-end
-
 func _ai_family(ai: void*): int: ret ((ai as i64 + 4) as int*)[0] end
 func _ai_addrlen(ai: void*): i64:
     if SALAM_OS_WINDOWS and sizeof(void*) == 8:
@@ -244,63 +242,20 @@ func _try_connect(sa: void*, alen: int, fam: int, socktype: int): Socket:
     end
 end
 
-func _try_connect_timeout(sa: void*, alen: int, fam: int, socktype: int, millis: int): Socket:
-    if SALAM_OS_LINUX:
-        s := socket(fam, socktype, 0)
-        if s == 0 - 1:
-            ret Socket { fd = 0 - 1, family = fam }
-        end
-        sock := Socket { fd = s as i64, family = fam }
-        SetNonBlocking(sock, true)
-        if connect(s, sa, alen) != 0:
-            if not _wait_writable(s, millis):
-                close(s)
-                ret Socket { fd = 0 - 1, family = fam }
-            end
-            slot := mem.AllocateZeroed(136 as u64)
-            lenp := mem.AllocateZeroed(8 as u64)
-            (lenp as int*)[0] = 128
-            peer := getpeername(s, slot, lenp)
-            mem.Free(slot)
-            mem.Free(lenp)
-            if peer != 0:
-                close(s)
-                ret Socket { fd = 0 - 1, family = fam }
-            end
-        end
-        SetNonBlocking(sock, false)
-        _no_sigpipe(s as i64)
-        ret sock
-    else:
-        ret _try_connect(sa, alen, fam, socktype)
-    end
-end
-
-if SALAM_OS_LINUX:
-    func _wait_writable(fd: int, millis: int): bool:
-        p := mem.AllocateZeroed(8 as u64)
-        defer mem.Free(p)
-        fdp := p as i32*
-        fdp[0] = fd
-        evp := ((p as i64) + 4) as i16*
-        evp[0] = 4 as i16
-        ret poll(p, 1 as usize, millis) > 0
-    end
-end
-
-func _resolve_all(host: str, port: int, addrs &: Vector<i64>, lens &: Vector<int>, fams &: Vector<int>):
+func _resolve_all(host: str, port: int, family: int, socktype: int, addrs &: Vector<i64>, lens &: Vector<int>, fams &: Vector<int>):
     hints := mem.Allocate(48 as u64)
     defer mem.Free(hints)
     memset(hints, 0, 48 as u64)
     hp := hints as int*
-    hp[2] = SOCK_STREAM
+    hp[1] = family
+    hp[2] = socktype
     res_slot := mem.Allocate(8 as u64)
     defer mem.Free(res_slot)
     rp := res_slot as i64*
     rp[0] = 0
     port_str := str.FromInt(port as i64)
     defer mem.Free(port_str as void*)
-    if getaddrinfo(host, port_str, hints, res_slot) != 0:
+    if getaddrinfo(_strip_brackets(host), port_str, hints, res_slot) != 0:
         ret
     end
     res := rp[0] as void*
@@ -341,6 +296,678 @@ func _no_sigpipe(fd: i64):
     end
 end
 
+func _sa_family(sa: void*): int:
+    b := sa as u8*
+    if SALAM_OS_MAC or SALAM_OS_BSD:
+        ret b[1] as int
+    end
+    ret b[0] as int
+end
+
+func _is_v6_text(h: str): bool:
+    p := h as u8*
+    n := h.len()
+    repeat n in i:
+        if p[i] == 58:
+            ret true
+        end
+    end
+    ret false
+end
+
+func _has_char(h: str, c: int): bool:
+    p := h as u8*
+    n := h.len()
+    repeat n in i:
+        if (p[i] as int) == c:
+            ret true
+        end
+    end
+    ret false
+end
+
+func _strip_brackets(h: str): str:
+    n := h.len()
+    if n >= 2:
+        p := h as u8*
+        if p[0] == 91 and p[n - 1] == 93:
+            ret h.substr(1, n - 2)
+        end
+    end
+    ret h
+end
+
+func _hexval(c: int): int:
+    if c >= 48 and c <= 57:
+        ret c - 48
+    end
+    if c >= 97 and c <= 102:
+        ret c - 87
+    end
+    if c >= 65 and c <= 70:
+        ret c - 55
+    end
+    ret 0 - 1
+end
+
+func _parse_ip4(h: str, out: u8*): bool:
+    p := h as u8*
+    n := h.len()
+    if n < 7 or n > 15:
+        ret false
+    end
+    mut part := 0
+    mut digits := 0
+    mut idx := 0
+    mut i := 0
+    until i < n:
+        c := p[i] as int
+        if c >= 48 and c <= 57:
+            part = part * 10 + (c - 48)
+            digits++
+            if part > 255 or digits > 3:
+                ret false
+            end
+        else c == 46:
+            if digits == 0 or idx >= 3:
+                ret false
+            end
+            out[idx] = part as u8
+            idx++
+            part = 0
+            digits = 0
+        else:
+            ret false
+        end
+        i++
+    end
+    if digits == 0 or idx != 3:
+        ret false
+    end
+    out[3] = part as u8
+    ret true
+end
+
+func _parse_ip6(h: str, out: u8*): bool:
+    p := h as u8*
+    n := h.len()
+    if n < 2 or n > 45:
+        ret false
+    end
+    mut g := Vector {} as Vector<int>
+    defer g.free()
+    mut gap := 0 - 1
+    mut i := 0
+    if p[0] == 58:
+        if p[1] != 58:
+            ret false
+        end
+        gap = 0
+        i = 2
+    end
+    until i < n:
+        start := i
+        mut v := 0
+        mut nd := 0
+        mut scanning := true
+        until scanning:
+            if i < n:
+                hv := _hexval(p[i] as int)
+                if hv >= 0:
+                    v = v * 16 + hv
+                    nd++
+                    i++
+                    if nd > 4:
+                        ret false
+                    end
+                else:
+                    scanning = false
+                end
+            else:
+                scanning = false
+            end
+        end
+        if nd == 0:
+            ret false
+        end
+        if i < n and p[i] == 46:
+            tail := h.substr(start, n - start)
+            b4 := mem.AllocateZeroed(4 as u64)
+            defer mem.Free(b4)
+            if not _parse_ip4(tail, b4 as u8*):
+                ret false
+            end
+            q := b4 as u8*
+            g.push((q[0] as int) * 256 + (q[1] as int))
+            g.push((q[2] as int) * 256 + (q[3] as int))
+            i = n
+        else:
+            g.push(v)
+            if i < n:
+                if p[i] != 58:
+                    ret false
+                end
+                i++
+                if i >= n:
+                    ret false
+                end
+                if p[i] == 58:
+                    if gap >= 0:
+                        ret false
+                    end
+                    gap = g.len()
+                    i++
+                end
+            end
+        end
+    end
+    total := g.len()
+    if gap < 0:
+        if total != 8:
+            ret false
+        end
+    else:
+        if total > 7:
+            ret false
+        end
+    end
+    repeat 16 in z:
+        out[z] = 0 as u8
+    end
+    repeat total in k:
+        mut pos := k
+        if gap >= 0 and k >= gap:
+            pos = k + (8 - total)
+        end
+        w := g.get(k)
+        out[pos * 2] = (w / 256) as u8
+        out[pos * 2 + 1] = (w % 256) as u8
+    end
+    ret true
+end
+
+func _hex16(v: int): str:
+    d := "0123456789abcdef"
+    mut s := ""
+    mut started := false
+    repeat 4 in j:
+        sh := 12 - 4 * j
+        nib := (v >> sh) & 15
+        if nib != 0 or started or sh == 0:
+            s += d.substr(nib, 1)
+            started = true
+        end
+    end
+    ret s
+end
+
+func _fmt_ip4(b: u8*): str:
+    ret "" + (b[0] as int) + "." + (b[1] as int) + "." + (b[2] as int) + "." + (b[3] as int)
+end
+
+func _fmt_ip6(b: u8*, scope: int): str:
+    mut mapped := true
+    repeat 10 in z:
+        if b[z] != 0:
+            mapped = false
+        end
+    end
+    if mapped and b[10] == 255 and b[11] == 255:
+        ret "" + (b[12] as int) + "." + (b[13] as int) + "." + (b[14] as int) + "." + (b[15] as int)
+    end
+    mut best_s := 0 - 1
+    mut best_l := 0
+    mut cur_s := 0 - 1
+    mut cur_l := 0
+    repeat 8 in k:
+        w := (b[k * 2] as int) * 256 + (b[k * 2 + 1] as int)
+        if w == 0:
+            if cur_s < 0:
+                cur_s = k
+                cur_l = 0
+            end
+            cur_l++
+            if cur_l > best_l:
+                best_l = cur_l
+                best_s = cur_s
+            end
+        else:
+            cur_s = 0 - 1
+        end
+    end
+    if best_l < 2:
+        best_s = 0 - 1
+    end
+    mut out := ""
+    mut k := 0
+    mut after_gap := false
+    until k < 8:
+        if k == best_s:
+            out += "::"
+            k += best_l
+            after_gap = true
+        else:
+            if k > 0 and not after_gap:
+                out += ":"
+            end
+            out += _hex16((b[k * 2] as int) * 256 + (b[k * 2 + 1] as int))
+            after_gap = false
+            k++
+        end
+    end
+    if scope != 0 and b[0] == 254 and ((b[1] as int) & 192) == 128:
+        out += "%" + scope
+    end
+    ret out
+end
+
+func _make_sa4(h_addr: int, port: int): void*:
+    sa := mem.AllocateZeroed(16 as u64)
+    b := sa as u8*
+    if SALAM_OS_MAC or SALAM_OS_BSD:
+        b[0] = 16 as u8
+        b[1] = AF_INET as u8
+    else:
+        b[0] = AF_INET as u8
+    end
+    b[2] = (port / 256) as u8
+    b[3] = (port % 256) as u8
+    ((sa as i64 + 4) as int*)[0] = h_addr
+    ret sa
+end
+
+func _make_sa6(addr: u8*, scope: int, port: int): void*:
+    sa := mem.AllocateZeroed(28 as u64)
+    b := sa as u8*
+    if SALAM_OS_MAC or SALAM_OS_BSD:
+        b[0] = 28 as u8
+        b[1] = AF_INET6 as u8
+    else:
+        b[0] = AF_INET6 as u8
+    end
+    b[2] = (port / 256) as u8
+    b[3] = (port % 256) as u8
+    repeat 16 in i:
+        b[8 + i] = addr[i]
+    end
+    ((sa as i64 + 24) as int*)[0] = scope
+    ret sa
+end
+
+func _map4(sa4: void*, port: int): void*:
+    addr := mem.AllocateZeroed(16 as u64)
+    defer mem.Free(addr)
+    a := addr as u8*
+    a[10] = 255 as u8
+    a[11] = 255 as u8
+    src := (sa4 as i64 + 4) as u8*
+    repeat 4 in i:
+        a[12 + i] = src[i]
+    end
+    ret _make_sa6(a, 0, port)
+end
+
+func _sa_text(sa: void*, out_port &: int): str:
+    b := sa as u8*
+    fam := _sa_family(sa)
+    out_port = (b[2] as int) * 256 + (b[3] as int)
+    if fam == AF_INET:
+        ret _fmt_ip4((sa as i64 + 4) as u8*)
+    end
+    if fam == AF_INET6:
+        scope := ((sa as i64 + 24) as int*)[0]
+        ret _fmt_ip6((sa as i64 + 8) as u8*, scope)
+    end
+    out_port = 0
+    ret ""
+end
+
+func _first_sockaddr(host: str, port: int, family: int, out_len &: int): void*:
+    mut addrs := Vector {} as Vector<i64>
+    mut lens := Vector {} as Vector<int>
+    mut fams := Vector {} as Vector<int>
+    _resolve_all(host, port, family, SOCK_STREAM, addrs, lens, fams)
+    mut found := null as void*
+    out_len = 0
+    repeat addrs.len() in i:
+        a := addrs.get(i) as void*
+        if found == null and (family == 0 or fams.get(i) == family):
+            found = a
+            out_len = lens.get(i)
+        else:
+            mem.Free(a)
+        end
+    end
+    addrs.free()
+    lens.free()
+    fams.free()
+    ret found
+end
+
+func _sockaddr_for(host: str, port: int, out_len &: int): void*:
+    h := _strip_brackets(host)
+    out_len = 0
+    if h.len() == 0:
+        ret null
+    end
+    if _is_v6_text(h):
+        if _has_char(h, 37):
+            ret _first_sockaddr(h, port, AF_INET6, out_len)
+        end
+        raw := mem.AllocateZeroed(16 as u64)
+        defer mem.Free(raw)
+        if not _parse_ip6(h, raw as u8*):
+            ret null
+        end
+        out_len = 28
+        ret _make_sa6(raw as u8*, 0, port)
+    end
+    q := mem.AllocateZeroed(4 as u64)
+    defer mem.Free(q)
+    if _parse_ip4(h, q as u8*):
+        out_len = 16
+        ret _make_sa4(((q as int*)[0]), port)
+    end
+    a4 := _resolve_addr4(h)
+    if a4 != 0:
+        out_len = 16
+        ret _make_sa4(a4, port)
+    end
+    ret _first_sockaddr(h, port, AF_INET6, out_len)
+end
+
+func _sendto_raw(fd: i64, ptr: void*, n: int, sa: void*, alen: int): int:
+    if SALAM_OS_WINDOWS:
+        ret sendto(_sk(fd), ptr, n, 0, sa, alen)
+    else:
+        ret sendto(fd as int, ptr, n, 0, sa, alen)
+    end
+end
+
+func _s_open(fam: int, socktype: int): i64:
+    if SALAM_OS_WINDOWS:
+        ret _fd_of(socket(fam, socktype, 0))
+    else:
+        ret socket(fam, socktype, 0)
+    end
+end
+
+func _s_close(fd: i64):
+    if fd < 0:
+        ret
+    end
+    if SALAM_OS_WINDOWS:
+        closesocket(_sk(fd))
+    else:
+        close(fd as int)
+    end
+end
+
+func _s_bind(fd: i64, sa: void*, alen: int): int:
+    if SALAM_OS_WINDOWS:
+        ret bind(_sk(fd), sa, alen)
+    else:
+        ret bind(fd as int, sa, alen)
+    end
+end
+
+func _s_listen(fd: i64): int:
+    if SALAM_OS_WINDOWS:
+        ret listen(_sk(fd), 128)
+    else:
+        ret listen(fd as int, 128)
+    end
+end
+
+func _set_int_opt(fd: i64, level: int, name: int, val: int): int:
+    opt := mem.Allocate(4 as u64)
+    defer mem.Free(opt)
+    (opt as int*)[0] = val
+    if SALAM_OS_WINDOWS:
+        ret setsockopt(_sk(fd), level, name, opt, 4)
+    else:
+        ret setsockopt(fd as int, level, name, opt, 4)
+    end
+end
+
+func _set_v6only(fd: i64, flag: bool): int:
+    mut v := 0
+    if flag:
+        v = 1
+    end
+    ret _set_int_opt(fd, _IPPROTO_IPV6, _IPV6_V6ONLY, v)
+end
+
+func _all_zero16(addr: u8*): bool:
+    repeat 16 in i:
+        if addr[i] != 0:
+            ret false
+        end
+    end
+    ret true
+end
+
+func _listen_sa(sa: void*, alen: int, fam: int, socktype: int, v6mode: int): Socket:
+    s := _s_open(fam, socktype)
+    if s < 0:
+        ret Socket { fd = 0 - 1, family = fam }
+    end
+    if fam == AF_INET6 and v6mode >= 0:
+        _set_v6only(s, v6mode == 1)
+    end
+    if not SALAM_OS_WINDOWS:
+        if SALAM_OS_MAC or SALAM_OS_BSD:
+            _set_int_opt(s, 65535, 4, 1)
+        else:
+            _set_int_opt(s, 1, 2, 1)
+        end
+    end
+    if _s_bind(s, sa, alen) != 0:
+        _s_close(s)
+        ret Socket { fd = 0 - 1, family = fam }
+    end
+    if socktype == SOCK_STREAM:
+        if _s_listen(s) != 0:
+            _s_close(s)
+            ret Socket { fd = 0 - 1, family = fam }
+        end
+    end
+    ret Socket { fd = s, family = fam }
+end
+
+func _listen_v4(h_addr: int, port: int, socktype: int): Socket:
+    sa := _make_sa4(h_addr, port)
+    defer mem.Free(sa)
+    ret _listen_sa(sa, 16, AF_INET, socktype, 0 - 1)
+end
+
+func _listen_host(host: str, port: int, socktype: int, v6mode: int): Socket:
+    if SALAM_OS_WINDOWS:
+        _net_init()
+    end
+    h := _strip_brackets(host)
+    if h.len() == 0 or h == "0.0.0.0":
+        ret _listen_v4(0, port, socktype)
+    end
+    mut alen := 0
+    sa := _sockaddr_for(h, port, alen)
+    if sa == null:
+        ret Socket { fd = 0 - 1, family = AF_INET }
+    end
+    defer mem.Free(sa)
+    if _sa_family(sa) == AF_INET:
+        ret _listen_sa(sa, alen, AF_INET, socktype, 0 - 1)
+    end
+    wild := _all_zero16((sa as i64 + 8) as u8*)
+    mut mode := v6mode
+    if mode < 0:
+        mode = 1
+        if wild:
+            mode = 0
+        end
+    end
+    r := _listen_sa(sa, alen, AF_INET6, socktype, mode)
+    if r.fd < 0 and wild and mode == 0:
+        ret _listen_v4(0, port, socktype)
+    end
+    ret r
+end
+
+func _name_of(fd: i64, peer: bool, out_port &: int): str:
+    out_port = 0
+    if fd < 0:
+        ret ""
+    end
+    slot := mem.AllocateZeroed(136 as u64)
+    defer mem.Free(slot)
+    lenp := mem.AllocateZeroed(8 as u64)
+    defer mem.Free(lenp)
+    (lenp as int*)[0] = 128
+    mut rc := 0 - 1
+    if SALAM_OS_WINDOWS:
+        if peer:
+            rc = getpeername(_sk(fd), slot, lenp)
+        else:
+            rc = getsockname(_sk(fd), slot, lenp)
+        end
+    else:
+        if peer:
+            rc = getpeername(fd as int, slot, lenp)
+        else:
+            rc = getsockname(fd as int, slot, lenp)
+        end
+    end
+    if rc != 0:
+        ret ""
+    end
+    ret _sa_text(slot, out_port)
+end
+
+func _connected(fd: int): bool:
+    slot := mem.AllocateZeroed(136 as u64)
+    defer mem.Free(slot)
+    lenp := mem.AllocateZeroed(8 as u64)
+    defer mem.Free(lenp)
+    (lenp as int*)[0] = 128
+    ret getpeername(fd, slot, lenp) == 0
+end
+
+func _interleave(fams &: Vector<int>): Vector<int>:
+    n := fams.len()
+    mut first := Vector {} as Vector<int>
+    mut second := Vector {} as Vector<int>
+    mut out := Vector {} as Vector<int>
+    if n == 0:
+        first.free()
+        second.free()
+        ret out
+    end
+    f0 := fams.get(0)
+    repeat n in i:
+        if fams.get(i) == f0:
+            first.push(i)
+        else:
+            second.push(i)
+        end
+    end
+    mut ia := 0
+    mut ib := 0
+    until ia < first.len() or ib < second.len():
+        if ia < first.len():
+            out.push(first.get(ia))
+            ia++
+        end
+        if ib < second.len():
+            out.push(second.get(ib))
+            ib++
+        end
+    end
+    first.free()
+    second.free()
+    ret out
+end
+
+if SALAM_OS_LINUX:
+    func _race_connect(addrs &: Vector<i64>, lens &: Vector<int>, fams &: Vector<int>, order &: Vector<int>, millis: int): Socket:
+        n := order.len()
+        deadline := sync.NowMs() + (millis as i64)
+        mut pend := Vector {} as Vector<int>
+        mut win := 0 - 1
+        mut next := 0
+        mut next_at := sync.NowMs()
+        mut active := true
+        until active:
+            now := sync.NowMs()
+            if now >= deadline:
+                active = false
+            else next < n and (pend.len() == 0 or now >= next_at):
+                k := order.get(next)
+                next++
+                next_at = now + 250
+                fd := socket(fams.get(k), SOCK_STREAM, 0)
+                if fd >= 0:
+                    SetNonBlocking(Socket { fd = fd as i64, family = fams.get(k) }, true)
+                    if connect(fd, addrs.get(k) as void*, lens.get(k)) == 0:
+                        win = fd
+                        active = false
+                    else:
+                        pend.push(fd)
+                    end
+                end
+            else pend.len() == 0:
+                active = false
+            else:
+                m := pend.len()
+                pfds := mem.AllocateZeroed((m * 8) as u64)
+                repeat m in j:
+                    ((pfds as i64 + (j * 8) as i64) as i32*)[0] = pend.get(j)
+                    ((pfds as i64 + (j * 8 + 4) as i64) as i16*)[0] = 4 as i16
+                end
+                mut wait := (deadline - now) as int
+                if next < n:
+                    gap := (next_at - now) as int
+                    if gap < wait:
+                        wait = gap
+                    end
+                end
+                if wait < 1:
+                    wait = 1
+                end
+                poll(pfds, m as usize, wait)
+                mut j := m - 1
+                until j >= 0:
+                    rev := ((pfds as i64 + (j * 8 + 6) as i64) as i16*)[0] as int
+                    if rev != 0:
+                        fd := pend.get(j)
+                        if win < 0 and _connected(fd):
+                            win = fd
+                        else:
+                            close(fd)
+                        end
+                        pend.remove_at(j)
+                    end
+                    j--
+                end
+                mem.Free(pfds)
+                if win >= 0:
+                    active = false
+                end
+            end
+        end
+        repeat pend.len() in q:
+            close(pend.get(q))
+        end
+        pend.free()
+        if win < 0:
+            ret Socket { fd = 0 - 1, family = AF_INET }
+        end
+        sock := Socket { fd = win as i64, family = AF_INET }
+        SetNonBlocking(sock, false)
+        _no_sigpipe(win as i64)
+        ret sock
+    end
+end
+
 @en "FromFd"
 @fa "سوکت از توصیف‌گر"
 pub func FromFd(fd: i64): Socket:
@@ -378,18 +1005,16 @@ pub func ConnectTimeout(host: str, port: int, millis: int): Socket:
     mut addrs := Vector {} as Vector<i64>
     mut lens := Vector {} as Vector<int>
     mut fams := Vector {} as Vector<int>
-    _resolve_all(host, port, addrs, lens, fams)
-    deadline := sync.NowMs() + (millis as i64)
+    _resolve_all(host, port, 0, SOCK_STREAM, addrs, lens, fams)
+    mut order := _interleave(fams)
     mut out := Socket { fd = 0 - 1, family = AF_INET }
+    if SALAM_OS_LINUX:
+        out = _race_connect(addrs, lens, fams, order, millis)
+    end
     repeat addrs.len() in i:
-        if out.fd < 0:
-            left := deadline - sync.NowMs()
-            if left > 0:
-                out = _try_connect_timeout(addrs.get(i) as void*, lens.get(i), fams.get(i), SOCK_STREAM, left as int)
-            end
-        end
         mem.Free(addrs.get(i) as void*)
     end
+    order.free()
     addrs.free()
     lens.free()
     fams.free()
@@ -405,7 +1030,7 @@ pub func ConnectProto(host: str, port: int, socktype: int): Socket:
     mut addrs := Vector {} as Vector<i64>
     mut lens := Vector {} as Vector<int>
     mut fams := Vector {} as Vector<int>
-    _resolve_all(host, port, addrs, lens, fams)
+    _resolve_all(host, port, 0, socktype, addrs, lens, fams)
     mut out := Socket { fd = 0 - 1, family = AF_INET }
     repeat addrs.len() in i:
         if out.fd < 0:
@@ -422,58 +1047,23 @@ end
 @en "ListenOn"
 @fa "شنود روی"
 pub func ListenOn(host: str, port: int, socktype: int): Socket:
-    if SALAM_OS_WINDOWS:
-        _net_init()
+    ret _listen_host(host, port, socktype, 0 - 1)
+end
+
+@en "ListenV6"
+@fa "شنود آی‌پی۶"
+pub func ListenV6(host: str, port: int, socktype: int, v6only: bool): Socket:
+    mut mode := 0
+    if v6only:
+        mode = 1
     end
-    mut h_addr := 0
-    if host.len() > 0 and host != "0.0.0.0" and host != "::":
-        h_addr = _resolve_addr4(host)
-        if h_addr == 0:
-            ret Socket { fd = 0 - 1, family = AF_INET }
-        end
-    end
-    if SALAM_OS_WINDOWS:
-        s := _fd_of(socket(AF_INET, socktype, 0))
-        if s == (0 - 1 as i64): ret Socket { fd = 0 - 1, family = AF_INET } end
-        sa := _make_sa4(h_addr, port)
-        defer mem.Free(sa)
-        if bind(_sk(s), sa, 16) != 0:
-            closesocket(_sk(s))
-            ret Socket { fd = 0 - 1, family = AF_INET }
-        end
-        if socktype == SOCK_STREAM:
-            if listen(_sk(s), 128) != 0:
-                closesocket(_sk(s))
-                ret Socket { fd = 0 - 1, family = AF_INET }
-            end
-        end
-        ret Socket { fd = s, family = AF_INET }
-    else:
-        s := socket(AF_INET, socktype, 0)
-        if s == 0 - 1: ret Socket { fd = 0 - 1, family = AF_INET } end
-        opt := mem.Allocate(4 as u64)
-        defer mem.Free(opt)
-        opt32 := opt as int*
-        opt32[0] = 1
-        if SALAM_OS_BSD:
-            setsockopt(s, 65535, 4, opt, 4)
-        else:
-            setsockopt(s, 1, 2, opt, 4)
-        end
-        sa := _make_sa4(h_addr, port)
-        defer mem.Free(sa)
-        if bind(s, sa, 16) != 0:
-            close(s)
-            ret Socket { fd = 0 - 1, family = AF_INET }
-        end
-        if socktype == SOCK_STREAM:
-            if listen(s, 128) != 0:
-                close(s)
-                ret Socket { fd = 0 - 1, family = AF_INET }
-            end
-        end
-        ret Socket { fd = s as i64, family = AF_INET }
-    end
+    ret _listen_host(host, port, socktype, mode)
+end
+
+@en "ListenDual"
+@fa "شنود دوگانه"
+pub func ListenDual(port: int, socktype: int): Socket:
+    ret _listen_host("::", port, socktype, 0)
 end
 
 @en "Listen"
@@ -521,37 +1111,143 @@ pub func Accept(server: Socket): Socket:
     end
 end
 
+@en "PeerAddr"
+@fa "نشانی همتا"
+pub func PeerAddr(s: Socket, out_port &: int): str:
+    ret _name_of(s.fd, true, out_port)
+end
+
 @en "PeerHost"
 @fa "میزبان همتا"
 pub func PeerHost(s: Socket): str:
-    if SALAM_OS_WINDOWS:
-        ret ""
-    else:
-        if s.fd < 0:
-            ret ""
+    mut port := 0
+    ret _name_of(s.fd, true, port)
+end
+
+@en "LocalAddr"
+@fa "نشانی محلی"
+pub func LocalAddr(s: Socket, out_port &: int): str:
+    ret _name_of(s.fd, false, out_port)
+end
+
+@en "SetV6Only"
+@fa "تنظیم فقط آی‌پی۶"
+pub func SetV6Only(sock: Socket, enable: bool): bool:
+    ret _set_v6only(sock.fd, enable) == 0
+end
+
+@en "OpenDual"
+@fa "باز کردن دوگانه"
+pub func OpenDual(socktype: int): Socket:
+    s := Open(AF_INET6, socktype)
+    if s.fd >= 0:
+        if _set_v6only(s.fd, false) == 0:
+            ret s
         end
-        slot := mem.AllocateZeroed(136 as u64)
-        defer mem.Free(slot)
-        lenp := mem.AllocateZeroed(8 as u64)
-        defer mem.Free(lenp)
-        (lenp as int*)[0] = 128
-        if getpeername(s.fd as int, slot, lenp) != 0:
-            ret ""
-        end
-        n := (lenp as int*)[0]
-        b := slot as u8*
-        digits := "0123456789abcdef"
-        mut out := ""
-        if n <= 16:
-            out = "" + (b[4] as int) + "." + (b[5] as int) + "." + (b[6] as int) + "." + (b[7] as int)
-            ret out
-        end
-        repeat 16 in i:
-            v := b[8 + i] as int
-            out += digits.substr(v >> 4, 1) + digits.substr(v & 15, 1)
-        end
-        ret out
+        Close(s)
     end
+    ret Open(AF_INET, socktype)
+end
+
+@en "OpenFor"
+@fa "باز کردن برای"
+pub func OpenFor(host: str, socktype: int): Socket:
+    h := _strip_brackets(host)
+    if _is_v6_text(h):
+        s := Open(AF_INET6, socktype)
+        if s.fd >= 0:
+            ret s
+        end
+    end
+    ret Open(AF_INET, socktype)
+end
+
+@en "IsIPv6"
+@fa "آی‌پی۶ است"
+pub func IsIPv6(host: str): bool:
+    h := _strip_brackets(host)
+    if not _is_v6_text(h):
+        ret false
+    end
+    if _has_char(h, 37):
+        ret true
+    end
+    raw := mem.AllocateZeroed(16 as u64)
+    defer mem.Free(raw)
+    ret _parse_ip6(h, raw as u8*)
+end
+
+@en "IsIPv4"
+@fa "آی‌پی۴ است"
+pub func IsIPv4(host: str): bool:
+    raw := mem.AllocateZeroed(4 as u64)
+    defer mem.Free(raw)
+    ret _parse_ip4(host, raw as u8*)
+end
+
+@en "CanonIP"
+@fa "نشانی استاندارد"
+pub func CanonIP(host: str): str:
+    h := _strip_brackets(host)
+    if _is_v6_text(h) and not _has_char(h, 37):
+        raw := mem.AllocateZeroed(16 as u64)
+        defer mem.Free(raw)
+        if _parse_ip6(h, raw as u8*):
+            ret _fmt_ip6(raw as u8*, 0)
+        end
+    end
+    ret str.Clone(h)
+end
+
+@en "HostPort"
+@fa "میزبان و درگاه"
+pub func HostPort(host: str, port: int): str:
+    h := CanonIP(host)
+    if _is_v6_text(h):
+        ret "[" + h + "]:" + port
+    end
+    ret h + ":" + port
+end
+
+@en "ResolveAny"
+@fa "تفکیک نشانی هر خانواده"
+pub func ResolveAny(host: str): str:
+    if SALAM_OS_WINDOWS:
+        _net_init()
+    end
+    mut alen := 0
+    sa := _sockaddr_for(host, 0, alen)
+    if sa == null:
+        ret ""
+    end
+    mut pp := 0
+    t := _sa_text(sa, pp)
+    mem.Free(sa)
+    ret t
+end
+
+@en "Resolve6"
+@fa "تفکیک نشانی آی‌پی۶"
+pub func Resolve6(host: str): str:
+    if SALAM_OS_WINDOWS:
+        _net_init()
+    end
+    mut alen := 0
+    h := _strip_brackets(host)
+    if h.len() == 0:
+        ret ""
+    end
+    if IsIPv4(h):
+        ret ""
+    end
+    sa := _first_sockaddr(h, 0, AF_INET6, alen)
+    if sa == null:
+        ret ""
+    end
+    mut pp := 0
+    t := _sa_text(sa, pp)
+    mem.Free(sa)
+    ret t
 end
 
 @en "Send"
@@ -836,15 +1532,19 @@ end
 @en "SendToBytes"
 @fa "ارسال بایت به"
 pub func SendToBytes(sock: Socket, host: str, port: int, ptr: void*, n: int): int:
-    h_addr := _resolve_addr4(host)
-    if h_addr == 0: ret 0 - 1 end
-    sa := _make_sa4(h_addr, port)
-    defer mem.Free(sa)
-    if SALAM_OS_WINDOWS:
-        ret sendto(_sk(sock.fd), ptr, n, 0, sa, 16)
-    else:
-        ret sendto(sock.fd as int, ptr, n, 0, sa, 16)
+    mut alen := 0
+    sa := _sockaddr_for(host, port, alen)
+    if sa == null:
+        ret 0 - 1
     end
+    defer mem.Free(sa)
+    mut r := _sendto_raw(sock.fd, ptr, n, sa, alen)
+    if r < 0 and _sa_family(sa) == AF_INET:
+        m := _map4(sa, port)
+        r = _sendto_raw(sock.fd, ptr, n, m, 28)
+        mem.Free(m)
+    end
+    ret r
 end
 
 @en "SendTo"
@@ -856,13 +1556,11 @@ end
 @en "RecvFromBytes"
 @fa "دریافت بایت از"
 pub func RecvFromBytes(sock: Socket, buf: void*, max: int, out_host &: str, out_port &: int): int:
-    sa := mem.Allocate(16 as u64)
+    sa := mem.AllocateZeroed(136 as u64)
     defer mem.Free(sa)
-    memset(sa, 0, 16 as u64)
     salen := mem.Allocate(4 as u64)
     defer mem.Free(salen)
-    salen32 := salen as int*
-    salen32[0] = 16
+    (salen as int*)[0] = 128
     mut n := 0
     if SALAM_OS_WINDOWS:
         n = recvfrom(_sk(sock.fd), buf, max, 0, sa, salen)
@@ -874,14 +1572,7 @@ pub func RecvFromBytes(sock: Socket, buf: void*, max: int, out_host &: str, out_
         out_port = 0
         ret n
     end
-    sap := sa as i8*
-    sa32 := sa as int*
-    mut hi := sap[2] as int
-    mut lo := sap[3] as int
-    if hi < 0: hi += 256 end
-    if lo < 0: lo += 256 end
-    out_port = hi * 256 + lo
-    out_host = str.Clone(inet_ntoa(sa32[1]))
+    out_host = _sa_text(sa, out_port)
     ret n
 end
 

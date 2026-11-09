@@ -404,9 +404,9 @@ the service, encrypted with HMAC-based counter mode plus an HMAC tag keyed by
   offered (repositories, file contents, issues, pull requests, commits, branches, tags,
   releases, workflows, notifications, discussions, gists and code, issue and user
   search). Level `write` adds `issue_write`, `add_issue_comment`, `create_pull_request`
-  and `create_branch`, and each of those needs `confirmed: true` after the model has
+  and `create_branch` (`issue_write` can also edit or close an issue), and each of those needs `confirmed: true` after the model has
   shown the user the change and got a yes in the chat. Merging, deleting and every tool
-  not on the list are refused. Results are cut to 24000 characters and tokens
+  not on the list are refused. Every write call is recorded in `bridge_calls` with its arguments, so the user can review it; the flag is a model-side confirmation, so a prompt injected through issue text could still set it, which is why writes are a separate opt-in. Results are cut to 24000 characters and tokens
   (`ghp_`, `gho_`, `github_pat_` and the saved one) are redacted. Personal access tokens
   and OAuth App tokens (`ghp_`, `github_pat_`, `gho_`) are accepted by the MCP server;
   GitHub App user tokens (`ghu_`) may be refused, in which case the tool says to

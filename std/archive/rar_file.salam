@@ -106,6 +106,7 @@ func _rarf_blank(): _RarArc:
         h4 = false
         bad_password = false
         kcache = null
+        big = 0 as i64
     }
 end
 
@@ -235,42 +236,117 @@ func _rarf_scan_vol(rf &: RarFile, vi: int, fp: void*, size: i64):
     end
 end
 
-func _rarf_scan_vol4(rf &: RarFile, vi: int, fp: void*, size: i64):
-    if size > (2147483000 as i64):
-        rf.status = RAR_TOO_BIG
-        ret
-    end
-    rf.arc.n = size as int
-    mut pos := 7
-    mut stop := false
-    until not stop and (pos as i64) + (7 as i64) <= size:
-        head := mem.AllocateZeroed(16 as u64) as u8*
-        if compress.FileReadAt(fp, pos as i64, head as void*, 7) != 7:
+func _rarf_hdr4(rf &: RarFile, fp: void*, pos: i64, size: i64, lastsalt: u8*, havekey &: bool, key: u8*, iv: u8*, hs &: int, disk &: int): u8*:
+    hs = 0
+    disk = 0
+    if rf.arc.h4:
+        if pos + (24 as i64) > size:
+            ret null
+        end
+        head := mem.AllocateZeroed(48 as u64) as u8*
+        if compress.FileReadAt(fp, pos, head as void*, 24) != 24:
             mem.Free(head as void*)
-            rf.status = RAR_CORRUPT
-            break
+            ret null
         end
-        hs := (head[5] as int) | ((head[6] as int) << 8)
+        mut same := havekey
+        if same:
+            repeat 8 in i:
+                if lastsalt[i] != head[i]:
+                    same = false
+                end
+            end
+        end
+        if not same:
+            _rar3_kdf(rf.password, head, key, iv)
+            repeat 8 in i:
+                lastsalt[i] = head[i]
+            end
+            havekey = true
+        end
+        mut ka := _aes_new(key, 16)
+        first := mem.AllocateZeroed(48 as u64) as u8*
+        _aes_cbc_decrypt(ka, iv, _poff(head, 8), first, 16)
+        n := (first[5] as int) | ((first[6] as int) << 8)
+        mem.Free(first as void*)
         mem.Free(head as void*)
-        if hs < 7 or (pos as i64) + (hs as i64) > size:
-            rf.status = RAR_CORRUPT
-            break
+        if n < 7 or n > 65535:
+            rf.arc.bad_password = true
+            _aes_free(ka)
+            ret null
         end
-        buf := mem.AllocateZeroed((hs + 16) as u64) as u8*
-        if compress.FileReadAt(fp, pos as i64, buf as void*, hs) != hs:
-            mem.Free(buf as void*)
-            rf.status = RAR_CORRUPT
+        total := _rar_align16(n)
+        if pos + (8 as i64) + (total as i64) > size:
+            rf.arc.bad_password = true
+            _aes_free(ka)
+            ret null
+        end
+        cipher := mem.AllocateZeroed((total + 16) as u64) as u8*
+        if compress.FileReadAt(fp, pos + (8 as i64), cipher as void*, total) != total:
+            mem.Free(cipher as void*)
+            _aes_free(ka)
+            ret null
+        end
+        tmp := mem.AllocateZeroed((total + 16) as u64) as u8*
+        _aes_cbc_decrypt(ka, iv, cipher, tmp, total)
+        _aes_free(ka)
+        mem.Free(cipher as void*)
+        if (_rar_crc(_poff(tmp, 2) as void*, n - 2) & (0xffff as u32)) != ((_rar_u32(tmp, 0) & 0xffff) as u32):
+            rf.arc.bad_password = true
+            mem.Free(tmp as void*)
+            ret null
+        end
+        hs = total
+        disk = 8 + total
+        ret tmp
+    end
+    head := mem.AllocateZeroed(16 as u64) as u8*
+    if compress.FileReadAt(fp, pos, head as void*, 7) != 7:
+        mem.Free(head as void*)
+        ret null
+    end
+    n := (head[5] as int) | ((head[6] as int) << 8)
+    mem.Free(head as void*)
+    if n < 7 or pos + (n as i64) > size:
+        ret null
+    end
+    buf := mem.AllocateZeroed((n + 16) as u64) as u8*
+    if compress.FileReadAt(fp, pos, buf as void*, n) != n:
+        mem.Free(buf as void*)
+        ret null
+    end
+    hs = n
+    disk = n
+    ret buf
+end
+
+func _rarf_scan_vol4(rf &: RarFile, vi: int, fp: void*, size: i64):
+    rf.arc.big = size
+    rf.arc.h4 = false
+    lastsalt := mem.AllocateZeroed(16 as u64) as u8*
+    key := mem.AllocateZeroed(32 as u64) as u8*
+    iv := mem.AllocateZeroed(32 as u64) as u8*
+    mut havekey := false
+    mut pos := 7 as i64
+    mut stop := false
+    until not stop and pos + (7 as i64) <= size:
+        mut hs := 0
+        mut disk := 0
+        buf := _rarf_hdr4(rf, fp, pos, size, lastsalt, havekey, key, iv, hs, disk)
+        if buf == null:
+            if not rf.arc.bad_password and not rf.arc.h4:
+                rf.status = RAR_CORRUPT
+            end
             break
         end
         htype := buf[2] as int
         before := rf.arc.files.len()
-        mut next := 0
-        ok := _rar4_one(rf.arc, buf, hs, 0, pos, hs, next)
+        mut next := 0 as i64
+        ok := _rar4_one(rf.arc, buf, hs, 0, pos, disk, next)
         mem.Free(buf as void*)
         if htype == 0x74 and rf.arc.files.len() > before:
             f := rf.arc.files.get(before)
             rf.vols.pvol.push(vi)
-            rf.vols.poff.push((pos as i64) + (hs as i64))
+            rf.vols.poff.push(pos + (disk as i64))
             rf.vols.plen.push(f.pack_size)
             if next <= pos:
                 stop = true
@@ -282,6 +358,9 @@ func _rarf_scan_vol4(rf &: RarFile, vi: int, fp: void*, size: i64):
             stop = true
         end
     end
+    mem.Free(lastsalt as void*)
+    mem.Free(key as void*)
+    mem.Free(iv as void*)
 end
 
 func _rarf_merge(rf &: RarFile):
@@ -463,6 +542,21 @@ func _rarf_entry(rf: RarFile, dc &: _RarDecs, nx &: int, rd &: int, idx: int, si
             mem.Free(key as void*)
         end
     end
+    mut iv4 := null as u8*
+    if f.encrypted and not rf.arc.v5 and f.crypt == 3 and st == RAR_OK:
+        if rf.password.len() == 0:
+            st = RAR_ENCRYPTED
+        else f.salt == null:
+            st = RAR_UNSUPPORTED
+        else:
+            key := mem.AllocateZeroed(64 as u64) as u8*
+            iv4 = mem.AllocateZeroed(64 as u64) as u8*
+            _rar_derive3(rf.arc.kcache, rf.password, f, key, iv4)
+            _rsrc_encrypt(src, key, 16, iv4)
+            src.total &= (~(15 as i64))
+            mem.Free(key as void*)
+        end
+    end
     if st == RAR_OK and not rf.arc.v5:
         st = _rarf_entry4(rf, src, dc, nx, rd, idx, sink, pcap, memcap)
     else st == RAR_OK:
@@ -479,10 +573,112 @@ func _rarf_entry(rf: RarFile, dc &: _RarDecs, nx &: int, rd &: int, idx: int, si
     end
     mem.Free(hk as void*)
     _rsrc_free(src)
+    mem.Free(iv4 as void*)
     ret st
 end
 
 func _rarf_entry4(rf: RarFile, src &: _RarSrc, dc &: _RarDecs, nx &: int, rd &: int, idx: int, sink &: compress.FileSink, pcap: i64, memcap: i64): int:
+    f := rf.arc.files.get(idx)
+    if f.encrypted and f.crypt != 3:
+        ret _rarf_entry4m(rf, src, dc, nx, rd, idx, sink, pcap, memcap)
+    end
+    if f.unp_size == 0 and f.pack_size == 0:
+        if nx == idx: nx = idx + 1 end
+        ret RAR_OK
+    end
+    if f.method != 0:
+        if f.ver != 29 and f.ver != 36 and f.ver != 20 and f.ver != 26 and f.ver != 15:
+            ret RAR_UNSUPPORTED
+        end
+        if f.method > 5:
+            ret RAR_UNSUPPORTED
+        end
+    end
+    if f.method == 0:
+        mut want := f.pack_size
+        if f.encrypted:
+            want = f.unp_size
+            if want < (0 as i64) or want > src.total:
+                ret RAR_CORRUPT
+            end
+        else f.unp_size >= (0 as i64) and f.unp_size != f.pack_size:
+            ret RAR_CORRUPT
+        end
+        mut at := 0 as i64
+        until at < want:
+            mut n := 65536
+            if want - at < (n as i64): n = (want - at) as int end
+            p := _rsrc_get(src, at, n)
+            if p == null:
+                ret RAR_CORRUPT
+            end
+            if not compress.SinkWrite(sink, p as void*, n):
+                ret sink.over ? RAR_TOO_BIG : RAR_CORRUPT
+            end
+            at += n as i64
+        end
+        if nx == idx: nx = idx + 1 end
+        ret RAR_OK
+    end
+    if f.solid and nx != idx:
+        s0 := _rar_chain_start(rf.arc, idx)
+        nx = s0
+        rd = 0
+        mut k := s0
+        until k < idx:
+            mut scratch := compress.FileSink {}
+            cst := _rarf_entry(rf, dc, nx, rd, k, scratch, memcap)
+            if cst != RAR_OK:
+                nx = -1
+                rd = 0
+                ret cst
+            end
+            k++
+        end
+        nx = idx
+    end
+    mut st := RAR_OK
+    mut out := compress.NewByteBufCap(4194304)
+    lim := sink.cap > (0 as i64) ? sink.cap : (4611686018427387904 as i64)
+    if f.ver == 29 or f.ver == 36:
+        if not f.solid or rd == 0:
+            w := _rar_win_size(rf.arc, idx)
+            if not _r3_setwin(dc.r3, w as int):
+                st = RAR_WINDOW_TOO_BIG
+            else:
+                _r3_reset(dc.r3)
+            end
+        end
+        if st == RAR_OK:
+            st = _r3_decode_src(dc.r3, src, f.unp_size, lim, out, sink, true)
+        end
+    else:
+        if not f.solid or rd == 0:
+            w := _rar_win_size(rf.arc, idx)
+            if not _ro_setwin(dc.ro, w as int):
+                st = RAR_WINDOW_TOO_BIG
+            else:
+                _ro_reset(dc.ro)
+            end
+        end
+        if st == RAR_OK and f.ver == 15:
+            st = _ro15_decode_src(dc.ro, src, f.unp_size, lim, f.solid, out, sink, true)
+        else st == RAR_OK:
+            st = _ro20_decode_src(dc.ro, src, f.unp_size, lim, f.solid, out, sink, true)
+        end
+    end
+    compress.BufFree(out)
+    if st != RAR_OK:
+        nx = -1
+        rd = 0
+        ret sink.over ? RAR_TOO_BIG : st
+    end
+    rd = 1
+    nx = idx + 1
+    ret RAR_OK
+end
+
+func _rarf_entry4m(rf: RarFile, src &: _RarSrc, dc &: _RarDecs, nx &: int, rd &: int, idx: int, sink &: compress.FileSink, pcap: i64, memcap: i64): int:
     f := rf.arc.files.get(idx)
     if f.unp_size == 0 and f.pack_size == 0:
         if nx == idx: nx = idx + 1 end
@@ -780,9 +976,6 @@ func _rarf_open_with(path: str, password: str, volumes: bool): RarFile:
             end
         end
         _rarf_finish(rf)
-        if not rf.arc.v5 and rf.arc.h4:
-            _rarf_reload_whole(rf, path)
-        end
     else:
         if rf.size > (2000000000 as i64) or volumes:
             rf.status = volumes ? RAR_UNSUPPORTED : RAR_TOO_BIG

@@ -1,0 +1,111 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import mem
+import net.socks
+import net.tunnel
+import net.tcp
+import net.udp
+
+mut qport := 0
+
+func send(s: dyn tunnel.Stream, vals: int[]):
+    buf := mem.Allocate(vals.len() as u64)
+    repeat vals.len() in i:
+        (buf as u8*)[i] = vals[i] as u8
+    end
+    _n := s.WriteBytes(buf, vals.len())
+    mem.Free(buf)
+end
+
+func take(s: dyn tunnel.Stream, n: int): str:
+    buf := mem.Allocate(n as u64)
+    got := s.ReadBytes(buf, n)
+    hexd := "0123456789abcdef"
+    mut out := ""
+    repeat got in i:
+        b := (buf as u8*)[i] as int
+        out = out + hexd.substr(b / 16, 1) + hexd.substr(b % 16, 1)
+    end
+    mem.Free(buf)
+    ret out
+end
+
+func main:
+    p1 := tunnel.NewPipe()
+    a1 := tunnel.PipeA(p1)
+    b1 := tunnel.PipeB(p1)
+    send(a1, [5, 1, 0, 5, 1, 0, 1, 127, 0, 0, 1, 0, 80])
+    mut in5 := socks.Socks5Inbound {}
+    s5 := in5.Handshake(b1)
+    println "socks5", s5.ok, s5.target.host, s5.target.port
+    in5.Reply(b1, s5, true)
+    println take(a1, 2), take(a1, 10)
+
+    p2 := tunnel.NewPipe()
+    a2 := tunnel.PipeA(p2)
+    b2 := tunnel.PipeB(p2)
+    send(a2, [4, 1, 0, 80, 10, 1, 2, 3, 0])
+    mut in4 := socks.Socks4Inbound {}
+    s4 := in4.Handshake(b2)
+    println "socks4", s4.ok
+    in4.Reply(b2, s4, false)
+    println take(a2, 8)
+
+    p3 := tunnel.NewPipe()
+    a3 := tunnel.PipeA(p3)
+    b3 := tunnel.PipeB(p3)
+    send(b3, [5, 0, 5, 0, 0, 1, 0, 0, 0, 0, 0, 0])
+    conn := socks.SocksConnector { client = socks.NewClient("10.0.0.1", 1080) }
+    println conn.Server().host, conn.Server().port
+    println conn.Handshake(a3, tunnel.NewAddr("example.com", 443))
+
+    p4 := tunnel.NewPipe()
+    a4 := tunnel.PipeA(p4)
+    b4 := tunnel.PipeB(p4)
+    send(a4, [9, 9, 9])
+    socks.Handle(socks.NewServerConfig(0), b4)
+    println "handled", b4.Ok()
+
+    p5 := tunnel.NewPipe()
+    a5 := tunnel.PipeA(p5)
+    b5 := tunnel.PipeB(p5)
+    p6 := tunnel.NewPipe()
+    a6 := tunnel.PipeA(p6)
+    b6 := tunnel.PipeB(p6)
+    a5.Write("relayed bytes")
+    b6.SetDeadline(200)
+    rs := socks.Relay(b5, a6, 300)
+    println "relay", rs.a_to_b, rs.b_to_a
+
+    mut bad := socks.NewServerConfig(0)
+    bad.bind_host = "203.0.113.1"
+    println "serve unbindable", socks.Serve(bad)
+
+    mut hv := Vector {} as Vector<u8>
+    hv.push(192 as u8)
+    hv.push(168 as u8)
+    hv.push(1 as u8)
+    hv.push(9 as u8)
+    println socks.FormatIPv4(hv, 0)
+
+    srv := tcp.Bind(0)
+    println tcp.Ok(srv)
+    tcp.CloseServer(srv)
+    cl := socks.NewClient("127.0.0.1", 1)
+    u := socks.UDPSession { relay_host = "127.0.0.1", relay_port = 9, sock = udp.Open() }
+    println socks.UDPSendBytes(u, "127.0.0.1", 9, "x" as void*, 1) > 0
+    udp.Close(u.sock)
+    println cl.port
+end

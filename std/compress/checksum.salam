@@ -16,6 +16,31 @@ package compress
 
 const _CRC32_POLY := 0xEDB88320 as u32
 const _ADLER_MOD := 65521 as u32
+const _XX_P1 := 0x9E3779B185EBCA87 as u64
+const _XX_P2 := 0xC2B2AE3D27D4EB4F as u64
+const _XX_P3 := 0x165667B19E3779F9 as u64
+const _XX_P4 := 0x85EBCA77C2B2AE63 as u64
+const _XX_P5 := 0x27D4EB2F165667C5 as u64
+
+inline func _xx_rotl(x: u64, r: int): u64:
+    ret (x << r) | (x >> (64 - r))
+end
+
+inline func _xx_rd32(bp: u8*, i: int): u64:
+    ret (bp[i] as u64) | ((bp[i + 1] as u64) << 8) | ((bp[i + 2] as u64) << 16) | ((bp[i + 3] as u64) << 24)
+end
+
+inline func _xx_rd64(bp: u8*, i: int): u64:
+    ret _xx_rd32(bp, i) | (_xx_rd32(bp, i + 4) << 32)
+end
+
+inline func _xx_round(acc: u64, inp: u64): u64:
+    ret _xx_rotl(acc + inp * _XX_P2, 31) * _XX_P1
+end
+
+inline func _xx_merge(acc: u64, val: u64): u64:
+    ret (acc ^ _xx_round(0 as u64, val)) * _XX_P1 + _XX_P4
+end
 
 @en "CRC32"
 @fa "چک جمع سی آر سی"
@@ -77,3 +102,60 @@ pub func Adler32Str(s: str): u32: ret Adler32(s as void*, s.len()) end
 @en "Adler32Buf"
 @fa "چک جمع ادلر بافر"
 pub func Adler32Buf(b: ByteBuf): u32: ret Adler32(b.data, b.len) end
+
+
+@en "XXH64"
+@fa "ایکس ایکس اچ۶۴"
+pub func XXH64(p: void*, n: int, seed: u64): u64:
+    bp := p as u8*
+    mut i := 0
+    mut h := seed + _XX_P5
+    if n >= 32:
+        mut v1 := seed + _XX_P1 + _XX_P2
+        mut v2 := seed + _XX_P2
+        mut v3 := seed
+        mut v4 := seed - _XX_P1
+        until i + 32 <= n:
+            v1 = _xx_round(v1, _xx_rd64(bp, i))
+            v2 = _xx_round(v2, _xx_rd64(bp, i + 8))
+            v3 = _xx_round(v3, _xx_rd64(bp, i + 16))
+            v4 = _xx_round(v4, _xx_rd64(bp, i + 24))
+            i += 32
+        end
+        h = _xx_rotl(v1, 1) + _xx_rotl(v2, 7) + _xx_rotl(v3, 12) + _xx_rotl(v4, 18)
+        h = _xx_merge(h, v1)
+        h = _xx_merge(h, v2)
+        h = _xx_merge(h, v3)
+        h = _xx_merge(h, v4)
+    end
+    h += n as u64
+    until i + 8 <= n:
+        h ^= _xx_round(0 as u64, _xx_rd64(bp, i))
+        h = _xx_rotl(h, 27) * _XX_P1 + _XX_P4
+        i += 8
+    end
+    if i + 4 <= n:
+        h ^= _xx_rd32(bp, i) * _XX_P1
+        h = _xx_rotl(h, 23) * _XX_P2 + _XX_P3
+        i += 4
+    end
+    until i < n:
+        h ^= (bp[i] as u64) * _XX_P5
+        h = _xx_rotl(h, 11) * _XX_P1
+        i++
+    end
+    h ^= h >> 33
+    h *= _XX_P2
+    h ^= h >> 29
+    h *= _XX_P3
+    h ^= h >> 32
+    ret h
+end
+
+@en "XXH64Str"
+@fa "ایکس ایکس اچ۶۴ رشته"
+pub func XXH64Str(s: str): u64: ret XXH64(s as void*, s.len(), 0 as u64) end
+
+@en "XXH64Buf"
+@fa "ایکس ایکس اچ۶۴ بافر"
+pub func XXH64Buf(b: ByteBuf): u64: ret XXH64(b.data, b.len, 0 as u64) end

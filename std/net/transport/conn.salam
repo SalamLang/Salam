@@ -775,10 +775,10 @@ func _finish_accept(l: Listener, tc: tcp.Conn): Conn:
     ret c
 end
 
-func _hs_release(a: _Hs*):
+func _hs_release(a: _Hs*, shares: i64):
     me := a[0]
     sync.Lock(me.mu)
-    me.st[1]--
+    me.st[1] -= shares
     left := me.st[1]
     sync.Unlock(me.mu)
     if left <= (0 as i64):
@@ -828,7 +828,7 @@ func _hs_work(a: _Hs*):
         end
     end
     sync.Release(me.l.slots)
-    _hs_release(a)
+    _hs_release(a, 1 as i64)
 end
 
 func _hs_limit(s: Settings): int:
@@ -859,7 +859,23 @@ func _hs_watch(a: _Hs*):
     if late:
         rawsock.Shutdown(rawsock.FromFd(me.fd))
     end
-    _hs_release(a)
+    _hs_release(a, 1 as i64)
+end
+
+func _hs_abandon(a: _Hs*, watching: bool):
+    me := a[0]
+    mut shares := 2 as i64
+    if watching:
+        shares = 1 as i64
+        sync.Lock(me.mu)
+        me.st[0] = 1 as i64
+        sync.Signal(me.cv)
+        sync.Unlock(me.mu)
+    end
+    tcp.Close(tcp.ConnFromFd(me.fd))
+    tunnel.SourceLeave(me.l.sources, me.host)
+    sync.Release(me.l.slots)
+    _hs_release(a, shares)
 end
 
 func _acceptor(a: _Hs*):
@@ -891,8 +907,13 @@ func _acceptor(a: _Hs*):
         if SALAM_OS_WINDOWS:
             rawsock.SetTimeout(rawsock.FromFd(tc.fd), _hs_limit(l.settings) + 500)
         end
-        tunnel.Go(_hs_work, h as void*)
-        tunnel.Go(_hs_watch, h as void*)
+        if not tunnel.Go(_hs_watch, h as void*):
+            _hs_abandon(h, false)
+            continue
+        end
+        if not tunnel.Go(_hs_work, h as void*):
+            _hs_abandon(h, true)
+        end
     end
     chan.Close(l.ready)
     mem.Free(a as void*)

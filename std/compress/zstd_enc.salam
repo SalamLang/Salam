@@ -47,7 +47,7 @@ struct _Ze:
     pub sm: int*
     pub so: int*
     pub nseq: int
-    pub lits: u8*
+    pub litbuf: u8*
     pub nlit: int
     pub ctl: _ZCt
     pub cto: _ZCt
@@ -190,7 +190,7 @@ func _ze_new(p: void*, n: int, level: int): _Ze:
         sm = mem.Allocate(262144 as u64) as int*
         so = mem.Allocate(262144 as u64) as int*
         nseq = 0
-        lits = mem.Allocate((_ZS_MAXBLOCK + 64) as u64) as u8*
+        litbuf = mem.Allocate((_ZS_MAXBLOCK + 64) as u64) as u8*
         nlit = 0
         ctl = _ZCt { st = null as int*, dnb = null as int*, dfs = null as int*, log = 0 }
         cto = _ZCt { st = null as int*, dnb = null as int*, dfs = null as int*, log = 0 }
@@ -226,7 +226,7 @@ func _ze_free(e &: _Ze):
     mem.Free(e.sl as void*)
     mem.Free(e.sm as void*)
     mem.Free(e.so as void*)
-    mem.Free(e.lits as void*)
+    mem.Free(e.litbuf as void*)
     mem.Free(e.tsym as void*)
     mem.Free(e.cum as void*)
     _zct_free(e.ctl)
@@ -351,7 +351,7 @@ end
 
 func _ze_emit(e &: _Ze, anchor: int, i: int, mlen: int, moff: int):
     ll := i - anchor
-    mem.Copy(_zs_at(e.lits, e.nlit) as void*, _zs_at(e.src, anchor) as void*, ll as u64)
+    mem.Copy(_zs_at(e.litbuf, e.nlit) as void*, _zs_at(e.src, anchor) as void*, ll as u64)
     e.nlit += ll
     e.sl[e.nseq] = ll
     e.sm[e.nseq] = mlen
@@ -404,7 +404,7 @@ func _ze_parse(e &: _Ze, bs: int, be: int):
         anchor = i
     end
     ll := be - anchor
-    mem.Copy(_zs_at(e.lits, e.nlit) as void*, _zs_at(e.src, anchor) as void*, ll as u64)
+    mem.Copy(_zs_at(e.litbuf, e.nlit) as void*, _zs_at(e.src, anchor) as void*, ll as u64)
     e.nlit += ll
 end
 
@@ -479,10 +479,10 @@ func _ze_seqs(e &: _Ze, out &: ByteBuf):
     BufFree(w.buf)
 end
 
-func _ze_hufstream(w &: _Zw, lits: u8*, a: int, b: int, code: int*, nbs: int*):
+func _ze_hufstream(w &: _Zw, litbuf: u8*, a: int, b: int, code: int*, nbs: int*):
     mut k := b - 1
     until k >= a:
-        s := lits[k] as int
+        s := litbuf[k] as int
         _zw_add(w, code[s], nbs[s])
         k--
     end
@@ -526,11 +526,11 @@ end
 
 func _ze_lits(e &: _Ze, out &: ByteBuf):
     nl := e.nlit
-    lits := e.lits
+    litbuf := e.litbuf
     mut freq := Vector {} as Vector<int>
     freq.zeros(256)
     repeat nl in i:
-        freq.set(lits[i] as int, freq.get(lits[i] as int) + 1)
+        freq.set(litbuf[i] as int, freq.get(litbuf[i] as int) + 1)
     end
     mut distinct := 0
     mut lastsym := 0
@@ -543,7 +543,7 @@ func _ze_lits(e &: _Ze, out &: ByteBuf):
     mut done := false
     if nl >= 2 and distinct == 1:
         _ze_lit_header(out, 1, nl, 0, false)
-        BufPush(out, lits[0] as int)
+        BufPush(out, litbuf[0] as int)
         done = true
     end
     if not done and nl >= 64 and distinct >= 2 and lastsym <= 128:
@@ -590,7 +590,7 @@ func _ze_lits(e &: _Ze, out &: ByteBuf):
         mut four := nl > 1023
         if not four:
             mut w1 := _Zw {}
-            _ze_hufstream(w1, lits, 0, nl, code, nbs)
+            _ze_hufstream(w1, litbuf, 0, nl, code, nbs)
             BufPushBuf(body, w1.buf)
             BufFree(w1.buf)
             if tree.len + body.len > 1023:
@@ -609,7 +609,7 @@ func _ze_lits(e &: _Ze, out &: ByteBuf):
                     b = nl
                 end
                 mut wq := _Zw {}
-                _ze_hufstream(wq, lits, a, b, code, nbs)
+                _ze_hufstream(wq, litbuf, a, b, code, nbs)
                 sizes.push(wq.buf.len)
                 BufPushBuf(streams, wq.buf)
                 BufFree(wq.buf)
@@ -637,7 +637,7 @@ func _ze_lits(e &: _Ze, out &: ByteBuf):
     end
     if not done:
         _ze_lit_header(out, 0, nl, 0, false)
-        BufPushBytes(out, lits as void*, nl)
+        BufPushBytes(out, litbuf as void*, nl)
     end
     freq.free()
 end

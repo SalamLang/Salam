@@ -1,0 +1,120 @@
+package main
+
+import archive
+import compress
+import testing
+import os
+import filepath
+import mem
+
+func make_data(n: int, seed: int): compress.ByteBuf:
+    mut b := compress.NewByteBuf()
+    mut x := seed
+    repeat n:
+        x = (x * 1103515245 + 12345) & 0x7fffffff
+        compress.BufPush(b, 32 + (x >> 16) % 90)
+    end
+    ret b
+end
+
+func put(dir: str, name: str, data: compress.ByteBuf): str:
+    path := filepath.Join(dir, name)
+    testing.AssertTrue(archive.WriteBinaryFile(path, data.data, data.len))
+    ret path
+end
+
+func same_file(path: str, want: compress.ByteBuf): bool:
+    mut ok := false
+    mut got := archive.ReadBinaryFile(path, ok)
+    r := ok and compress.BufEquals(got, want)
+    compress.BufFree(got)
+    ret r
+end
+
+func check_tree(root: str, a: compress.ByteBuf, b: compress.ByteBuf, c: compress.ByteBuf, m: compress.ByteBuf):
+    testing.AssertTrue(same_file(filepath.Join(root, "big.bin"), a))
+    testing.AssertTrue(same_file(filepath.Join(root, "sub/exact.bin"), b))
+    testing.AssertTrue(same_file(filepath.Join(root, "sub/empty.bin"), c))
+    testing.AssertTrue(same_file(filepath.Join(root, "mem.txt"), m))
+end
+
+func main(): int:
+    dir := filepath.Join(os.TempDir(), "salam_tar_stream_test")
+    defer mem.Free(dir as void*)
+    os.RemoveAll(dir)
+    os.MkdirAll(dir)
+    archive.SetWriteChunk(4096)
+
+    mut a := make_data(70001, 1)
+    mut b := make_data(4096, 2)
+    mut c := compress.NewByteBuf()
+    mut m := make_data(777, 3)
+    pa := put(dir, "a.in", a)
+    pb := put(dir, "b.in", b)
+    pc := put(dir, "c.in", c)
+
+    mut files := Vector {} as Vector<archive.TarFileInput>
+    files.push(archive.MakeTarFilePath("big.bin", pa))
+    files.push(archive.MakeTarFileInput("sub/", null, 0, true))
+    files.push(archive.MakeTarFilePath("sub/exact.bin", pb))
+    files.push(archive.MakeTarFilePath("sub/empty.bin", pc))
+    files.push(archive.MakeTarFileInput("mem.txt", m.data, m.len, false))
+    files.push(archive.MakeTarSymlink("link", "big.bin"))
+
+    plain := filepath.Join(dir, "out.tar")
+    gz := filepath.Join(dir, "out.tar.gz")
+    zs := filepath.Join(dir, "out.tar.zst")
+    testing.AssertTrue(archive.TarCreateFile(files, plain))
+    testing.AssertTrue(archive.TarGzCreateFile(files, gz))
+    testing.AssertTrue(archive.TarZstdCreateFile(files, zs))
+
+    mut mem_tar := archive.TarCreate(files)
+    testing.AssertTrue(mem_tar.len > 0)
+    testing.AssertTrue(same_file(plain, mem_tar))
+    testing.AssertEqInt(mem_tar.len % 512, 0)
+    compress.BufFree(mem_tar)
+
+    r1 := filepath.Join(dir, "x1")
+    testing.AssertEqInt(archive.TarFileExtractAll(plain, r1, 0 as i64), 0)
+    check_tree(r1, a, b, c, m)
+
+    r2 := filepath.Join(dir, "x2")
+    testing.AssertEqInt(archive.TarGzFileExtractAll(gz, r2, 0 as i64), 0)
+    check_tree(r2, a, b, c, m)
+
+    r3 := filepath.Join(dir, "x3")
+    mut rok := false
+    mut zpacked := archive.ReadBinaryFile(zs, rok)
+    testing.AssertTrue(rok)
+    testing.AssertTrue(archive.TarZstdExtractAll(zpacked.data, zpacked.len, r3))
+    compress.BufFree(zpacked)
+    check_tree(r3, a, b, c, m)
+
+    testing.AssertTrue(archive.TarZstdCreateFileLevel(files, zs, 1))
+    testing.AssertTrue(archive.TarZstdCreateFileLevel(files, zs, 9))
+    zpacked = archive.ReadBinaryFile(zs, rok)
+    r4 := filepath.Join(dir, "x4")
+    testing.AssertTrue(archive.TarZstdExtractAll(zpacked.data, zpacked.len, r4))
+    compress.BufFree(zpacked)
+    check_tree(r4, a, b, c, m)
+
+    mut bad := Vector {} as Vector<archive.TarFileInput>
+    bad.push(archive.MakeTarFileInput("ok.txt", m.data, m.len, false))
+    bad.push(archive.MakeTarFilePath("gone.bin", filepath.Join(dir, "no_such_input")))
+    never := filepath.Join(dir, "never.tar")
+    testing.AssertFalse(archive.TarCreateFile(bad, never))
+    testing.AssertFalse(os.Exists(never))
+    testing.AssertFalse(archive.TarGzCreateFile(bad, never))
+    testing.AssertFalse(archive.TarZstdCreateFile(bad, never))
+    testing.AssertFalse(os.Exists(never))
+    mut none := archive.TarCreate(bad)
+    testing.AssertEqInt(none.len, 0)
+    compress.BufFree(none)
+
+    compress.BufFree(a)
+    compress.BufFree(b)
+    compress.BufFree(c)
+    compress.BufFree(m)
+    os.RemoveAll(dir)
+    ret testing.Summary()
+end

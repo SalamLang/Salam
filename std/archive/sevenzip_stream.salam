@@ -116,3 +116,97 @@ func _szaes_free(fp: void*):
     mem.Free(r as void*)
     compress.FileClose(fp)
 end
+
+func _szf_ppmd(rfp: void*, roff: i64, rsz: i64, c: _SzCoder, out_size: i64, memcap: i64, sink &: compress.FileSink): int:
+    pr := c.props
+    if pr.len < 5 or rsz < (5 as i64) or out_size < (0 as i64):
+        ret SEVENZIP_CORRUPT
+    end
+    pp := pr.data as u8*
+    order := pp[0] as int
+    msize := _sz_le32(pp, 1)
+    if order < 2 or order > 64 or msize < (2048 as i64):
+        ret SEVENZIP_UNSUPPORTED
+    end
+    if msize > (2147483000 as i64) or (memcap > (0 as i64) and msize > memcap):
+        ret SEVENZIP_TOO_BIG
+    end
+    mut m := _pp_new()
+    m.rc7z = true
+    if not _pp_alloc(m, msize as int):
+        _pp_free(m)
+        ret SEVENZIP_TOO_BIG
+    end
+    _pp_init(m, order)
+    ib := mem.Allocate(65536 as u64) as u8*
+    ob := mem.Allocate(65536 as u64) as u8*
+    mut left := rsz
+    mut at := roff
+    mut want := 65536
+    if (want as i64) > left:
+        want = left as int
+    end
+    got := compress.FileReadAt(rfp, at, ib as void*, want)
+    mut st := SEVENZIP_OK
+    if got != want:
+        st = SEVENZIP_IO
+    end
+    left -= got as i64
+    at += got as i64
+    mut b := _RarBits { p = ib, n = got, pos = 0 }
+    if st == SEVENZIP_OK:
+        if _pp_byte(b) != (0 as i64):
+            st = SEVENZIP_CORRUPT
+        else:
+            _pp_rc_init(m, b)
+        end
+    end
+    mut produced := 0 as i64
+    mut fill := 0
+    until st == SEVENZIP_OK and produced < out_size:
+        byte := b.pos >> 3
+        if b.n - byte < 32 and left > (0 as i64):
+            keep := b.n - byte
+            if keep > 0:
+                mem.MemMove(ib as void*, ((ib as i64) + (byte as i64)) as void*, keep as u64)
+            end
+            mut room := 65536 - keep
+            if (room as i64) > left:
+                room = left as int
+            end
+            more := compress.FileReadAt(rfp, at, ((ib as i64) + (keep as i64)) as void*, room)
+            if more != room:
+                st = SEVENZIP_IO
+                break
+            end
+            left -= more as i64
+            at += more as i64
+            b.n = keep + more
+            b.pos = 0
+        end
+        sym := _pp_decode(m, b)
+        if sym < 0:
+            st = SEVENZIP_CORRUPT
+            break
+        end
+        ob[fill] = sym as u8
+        fill++
+        produced++
+        if fill == 65536:
+            if not compress.SinkWrite(sink, ob as void*, fill):
+                st = SEVENZIP_IO
+                break
+            end
+            fill = 0
+        end
+    end
+    if st == SEVENZIP_OK and fill > 0:
+        if not compress.SinkWrite(sink, ob as void*, fill):
+            st = SEVENZIP_IO
+        end
+    end
+    mem.Free(ib as void*)
+    mem.Free(ob as void*)
+    _pp_free(m)
+    ret st
+end

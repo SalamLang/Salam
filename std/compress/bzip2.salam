@@ -58,6 +58,10 @@ struct _BzIn:
     pub acc: i64 = 0
     pub cnt: int = 0
     pub bad: bool = false
+    pub ffp: void* = null
+    pub foff: i64 = 0 as i64
+    pub fleft: i64 = 0 as i64
+    pub ibuf: u8* = null
 end
 
 struct _BzOut:
@@ -66,12 +70,32 @@ struct _BzOut:
     pub cnt: int = 0
 end
 
+func _bz_refill(s &: _BzIn): bool:
+    if s.ffp == null or s.fleft <= (0 as i64):
+        ret false
+    end
+    want := s.fleft > (65536 as i64) ? 65536 : (s.fleft as int)
+    got := FileReadAt(s.ffp, s.foff, s.ibuf as void*, want)
+    if got <= 0:
+        ret false
+    end
+    s.foff += got as i64
+    s.fleft -= got as i64
+    s.data = s.ibuf as void*
+    s.len = got
+    s.pos = 0
+    ret true
+end
+
 inline func _bz_get(s &: _BzIn, k: int): int:
     until s.cnt < k:
         mut b := 0
         if s.pos < s.len:
             b = _bget(s.data, s.pos)
             s.pos++
+        else _bz_refill(s):
+            b = _bget(s.data, 0)
+            s.pos = 1
         else:
             s.bad = true
         end
@@ -395,6 +419,60 @@ func _bz_stream(s &: _BzIn, out &: ByteBuf, max: int, crctab: u32*): int:
                     more = false
                 else:
                     comb = _bz_rotl1(comb) ^ bc
+                end
+            else:
+                more = false
+                if m1 == 0x177245 and m2 == 0x385090:
+                    hi := _bz_get(s, 16)
+                    lo := _bz_get(s, 16)
+                    stored := ((hi as u32) << 16) | (lo as u32)
+                    if not s.bad and stored == comb:
+                        st = 0
+                        s.cnt -= s.cnt % 8
+                    end
+                end
+            end
+        end
+    end
+    mem.Free(tt as void*)
+    mem.Free(ll as void*)
+    ret st
+end
+
+func _bz_stream_file(s &: _BzIn, out &: ByteBuf, sink &: FileSink, limit: i64, crctab: u32*, memcap: i64): int:
+    if _bz_get(s, 8) != 0x42 or _bz_get(s, 8) != 0x5a or _bz_get(s, 8) != 0x68: ret 1 end
+    lv := _bz_get(s, 8) - 0x30
+    if s.bad or lv < 1 or lv > 9: ret 1 end
+    if memcap > (0 as i64) and (lv as i64) * (500000 as i64) > memcap: ret 2 end
+    tt := mem.Allocate((lv * 100000 * 4) as u64) as u32*
+    ll := mem.Allocate((lv * 100000) as u64) as u8*
+    mut comb := 0 as u32
+    mut st := 1
+    mut more := true
+    until more:
+        m1 := _bz_get(s, 24)
+        m2 := _bz_get(s, 24)
+        if s.bad:
+            more = false
+        else:
+            if m1 == 0x314159 and m2 == 0x265359:
+                mut bc := 0 as u32
+                BufReset(out)
+                r := _bz_block(s, out, 0, lv, tt, ll, crctab, bc)
+                if r != 0:
+                    st = r
+                    more = false
+                else:
+                    comb = _bz_rotl1(comb) ^ bc
+                    if limit >= (0 as i64) and sink.written + (out.len as i64) > limit:
+                        st = 1
+                        more = false
+                    else:
+                        if not SinkWrite(sink, out.data, out.len):
+                            st = 3
+                            more = false
+                        end
+                    end
                 end
             else:
                 more = false
@@ -1000,6 +1078,36 @@ pub func Bzip2DecompressWhy(p: void*, n: int, max: int, why &: int): ByteBuf:
     mem.Free(crctab as void*)
     why = DecodeOk
     ret out
+end
+
+@en "Bzip2FileToSink"
+@fa "کدگشایی بی زیپ دو از پرونده به مقصد"
+pub func Bzip2FileToSink(fp: void*, off: i64, len: i64, out_size: i64, sink &: FileSink, memcap: i64): int:
+    if len < (14 as i64) or fp == null:
+        ret 1
+    end
+    mut s := _BzIn { data = null, len = 0, pos = 0, acc = 0, cnt = 0, bad = false }
+    s.ffp = fp
+    s.foff = off
+    s.fleft = len
+    s.ibuf = mem.Allocate(65536 as u64) as u8*
+    crctab := _bz_crc_table()
+    mut out := NewByteBuf()
+    mut res := 0
+    mut more := true
+    until more:
+        st := _bz_stream_file(s, out, sink, out_size, crctab, memcap)
+        if st != 0:
+            res = st
+            more = false
+        else:
+            if s.fleft <= (0 as i64) and s.pos - s.cnt / 8 >= s.len: more = false end
+        end
+    end
+    BufFree(out)
+    mem.Free(crctab as void*)
+    mem.Free(s.ibuf as void*)
+    ret res
 end
 
 @en "Bzip2DecompressBuf"

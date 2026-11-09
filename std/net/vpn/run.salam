@@ -173,14 +173,13 @@ func _trojan_server(ib: tunnel.InboundConfig, s: transport.Settings): Listener:
     ret Listener { trojan = srv, port = trojan.ServerPort(srv), tag = ib.tag }
 end
 
-@en "Start"
-@fa "شروع"
-pub func Start(ib: tunnel.InboundConfig, dialer: dyn tunnel.Dialer, stats: tunnel.Stats): Listener:
+func _start_with(ib: tunnel.InboundConfig, h0: tunnel.ForwardHandler, stats: tunnel.Stats): Listener:
     mut s := StreamSettings(ib.stream_settings)
     s.max_per_source = PENDING_PER_SOURCE
     if ib.protocol == "trojan" and _trojan_native(s): ret _trojan_server(ib, s) end
     proto := tunnel.CreateInbound(ib)
-    mut h := tunnel.NewForwarder(dialer, proto)
+    mut h := h0
+    h.proto = proto
     h.stats = stats
     mut host := ib.listen
     if host.len() == 0: host = "127.0.0.1" end
@@ -196,13 +195,57 @@ pub func Start(ib: tunnel.InboundConfig, dialer: dyn tunnel.Dialer, stats: tunne
     ret l
 end
 
+@en "InboundPolicy"
+@fa "سیاست درون‌سو"
+pub func InboundPolicy(ib: tunnel.InboundConfig): tunnel.DestPolicy:
+    mut p := tunnel.NewDestPolicy()
+    host := ib.listen
+    if json.Get(ib.settings, "allowPrivate") == "true": tunnel.PolicyAllowPrivate(p, true) end
+    allow := json.Items(json.Get(ib.settings, "allowCidr"))
+    deny := json.Items(json.Get(ib.settings, "denyCidr"))
+    dallow := json.Items(json.Get(ib.settings, "allowDomain"))
+    ddeny := json.Items(json.Get(ib.settings, "denyDomain"))
+    repeat allow.len() in i:
+        tunnel.PolicyAllowCidr(p, json.Unquote(allow[i]))
+    end
+    repeat deny.len() in i:
+        tunnel.PolicyDenyCidr(p, json.Unquote(deny[i]))
+    end
+    repeat dallow.len() in i:
+        tunnel.PolicyAllowSuffix(p, json.Unquote(dallow[i]))
+    end
+    repeat ddeny.len() in i:
+        tunnel.PolicyDenySuffix(p, json.Unquote(ddeny[i]))
+    end
+    allow.free()
+    deny.free()
+    dallow.free()
+    ddeny.free()
+    if _opts.use_doh: tunnel.PolicySetResolver(p, DohResolver { resolver = _opts.resolver }) end
+    ret tunnel.PolicyForBind(p, host)
+end
+
+@en "Start"
+@fa "شروع"
+pub func Start(ib: tunnel.InboundConfig, dialer: dyn tunnel.Dialer, stats: tunnel.Stats): Listener:
+    g := tunnel.Guard(dialer, InboundPolicy(ib))
+    ret _start_with(ib, tunnel.NewGuardedForwarder(g, tunnel.NullProtocol {}), stats)
+end
+
+@en "StartRouted"
+@fa "شروع با مسیریاب"
+pub func StartRouted(ib: tunnel.InboundConfig, rd: tunnel.RouterDialer, stats: tunnel.Stats): Listener:
+    g := tunnel.GuardRouter(rd, InboundPolicy(ib))
+    ret _start_with(ib, tunnel.NewGuardedForwarder(g, tunnel.NullProtocol {}), stats)
+end
+
 @en "StartAll"
 @fa "شروع همه"
 pub func StartAll(c: tunnel.Config, stats: tunnel.Stats): Vector<Listener>:
     dialer := BuildDialer(c)
     mut out := Vector {} as Vector<Listener>
     repeat c.inbounds.len() in i:
-        out.push(Start(c.inbounds[i], dialer, stats))
+        out.push(StartRouted(c.inbounds[i], dialer, stats))
     end
     ret out
 end

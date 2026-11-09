@@ -1,0 +1,151 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import mem
+import sync
+import net.httpproxy
+import net.socks
+import net.tcp
+import net.trojan
+
+func closed_by_peer(c: tcp.Conn, wait_ms: int): bool:
+    tcp.SetReadDeadline(c, wait_ms)
+    buf := mem.Allocate(64 as u64)
+    n := tcp.ReadBytes(c, buf, 64)
+    mem.Free(buf)
+    ret n <= 0
+end
+
+func first_line(c: tcp.Conn, wait_ms: int): str:
+    tcp.SetReadDeadline(c, wait_ms)
+    text := tcp.Read(c, 200)
+    nl := text.find("\r\n")
+    if nl < 0: ret "(" + text.len() + " bytes)" end
+    ret text.substr(0, nl)
+end
+
+func drip_until_cut(port: int, payload: str): bool:
+    c := tcp.Dial("127.0.0.1", port)
+    started := sync.NowMs()
+    mut i := 0
+    mut alive := true
+    until i < payload.len() and alive:
+        if tcp.Write(c, payload.substr(i, 1)) <= 0: alive = false end
+        i++
+        sync.SleepMs(250)
+        if sync.NowMs() - started > 4000: alive = false end
+    end
+    waited := sync.NowMs() - started
+    tcp.Close(c)
+    ret waited < 3500
+end
+
+func echo_conn(arg: i64):
+    c := tcp.ConnFromFd(arg)
+    until true:
+        d := tcp.Read(c, 4096)
+        if d.len() == 0: break end
+        tcp.Write(c, d)
+    end
+    tcp.Close(c)
+end
+
+func echo_accept(arg: i64):
+    srv := tcp.Server { fd = arg }
+    until true:
+        c := tcp.Accept(srv)
+        if not tcp.ConnOk(c): break end
+        socks.Go(echo_conn, c.fd as void*)
+    end
+end
+
+func main:
+    es := tcp.Bind(0)
+    socks.Go(echo_accept, es.fd as void*)
+    eport := tcp.Port(es)
+
+    mut scfg := socks.NewServerConfig(0)
+    socks.AllowPrivate(scfg, true)
+    scfg.max_connections = 2
+    scfg.max_per_source = 0
+    scfg.handshake_deadline_ms = 900
+    scfg.handshake_timeout_ms = 6000
+    ssv := socks.Start(scfg)
+    a1 := tcp.Dial("127.0.0.1", ssv.port)
+    a2 := tcp.Dial("127.0.0.1", ssv.port)
+    sync.SleepMs(150)
+    a3 := tcp.Dial("127.0.0.1", ssv.port)
+    println "socks: third connection over the cap is closed at once:", closed_by_peer(a3, 400)
+    println "socks: the two silent ones are cut at the total deadline:", closed_by_peer(a1, 2500), closed_by_peer(a2, 500)
+    tcp.Close(a1)
+    tcp.Close(a2)
+    tcp.Close(a3)
+    println "socks: a one byte every 250 ms sender is cut:", drip_until_cut(ssv.port, "\x05\x01\x00\x05\x01\x00\x01\x7f\x00\x00\x01\x00\x50")
+    r := socks.Connect(socks.NewClient("127.0.0.1", ssv.port), "127.0.0.1", eport)
+    println "socks: the slot is free again and a normal client works:", r.ok
+    if r.ok: r.stream.Close() end
+    socks.Stop(ssv)
+
+    mut hcfg := httpproxy.NewServerConfig(0)
+    httpproxy.AllowPrivate(hcfg, true)
+    hcfg.max_connections = 2
+    hcfg.max_per_source = 0
+    hcfg.handshake_deadline_ms = 900
+    hcfg.handshake_timeout_ms = 6000
+    hsv := httpproxy.Start(hcfg)
+    b1 := tcp.Dial("127.0.0.1", hsv.port)
+    b2 := tcp.Dial("127.0.0.1", hsv.port)
+    sync.SleepMs(150)
+    b3 := tcp.Dial("127.0.0.1", hsv.port)
+    println "http: third connection over the cap gets:", first_line(b3, 1000)
+    println "http: the two silent ones are cut at the total deadline:", closed_by_peer(b1, 2500), closed_by_peer(b2, 500)
+    tcp.Close(b1)
+    tcp.Close(b2)
+    tcp.Close(b3)
+    println "http: a slow sender is cut:", drip_until_cut(hsv.port, "GET http://127.0.0.1/ HTTP/1.1\r\nHost: x\r\n\r\n")
+    httpproxy.Stop(hsv)
+
+    mut pcfg := httpproxy.NewServerConfig(0)
+    pcfg.max_per_source = 2
+    pcfg.handshake_deadline_ms = 5000
+    psv := httpproxy.Start(pcfg)
+    p1 := tcp.Dial("127.0.0.1", psv.port)
+    p2 := tcp.Dial("127.0.0.1", psv.port)
+    sync.SleepMs(150)
+    p3 := tcp.Dial("127.0.0.1", psv.port)
+    println "http: a third pending handshake from one source gets:", first_line(p3, 1000)
+    tcp.Close(p1)
+    tcp.Close(p2)
+    tcp.Close(p3)
+    httpproxy.Stop(psv)
+
+    mut tcfg := trojan.NewServerConfig("", "")
+    trojan.AddPassword(tcfg, "secret")
+    tcfg.max_connections = 2
+    tcfg.max_per_source = 0
+    tcfg.handshake_deadline_ms = 900
+    tcfg.handshake_timeout_ms = 6000
+    tsv := trojan.ServePlain(tcfg, 0)
+    t1 := tcp.Dial("127.0.0.1", tsv.port)
+    t2 := tcp.Dial("127.0.0.1", tsv.port)
+    sync.SleepMs(150)
+    t3 := tcp.Dial("127.0.0.1", tsv.port)
+    println "trojan: third connection over the cap is closed at once:", closed_by_peer(t3, 400)
+    println "trojan: the two silent ones are cut at the total deadline:", closed_by_peer(t1, 2500), closed_by_peer(t2, 500)
+    tcp.Close(t1)
+    tcp.Close(t2)
+    tcp.Close(t3)
+    println "trojan: a slow sender is cut:", drip_until_cut(tsv.port, "0123456789012345678901234567890123456789012345678901234567890123456789")
+    trojan.Stop(tsv)
+end

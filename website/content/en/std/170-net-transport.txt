@@ -1,0 +1,247 @@
+pkg.en = net/transport
+pkg.name = net.transport
+pkg.group = Network
+pkg.summary = The byte stream under the VPN protocols: TCP, TLS, WebSocket and HTTP upgrade connections with SNI, ALPN and ClientHello fragmentation, plus byte buffers and addresses.
+pkg.title = The net.transport package in Salam | TCP, TLS and WebSocket streams for VPN protocols
+pkg.description = The net.transport package in Salam: dial and listen over plain TCP, TLS, WebSocket or HTTP upgrade with SNI, ALPN, a Host header, a secret path and TLS ClientHello fragmentation, use a net.tunnel stream as the carrier, and the byte buffers and addresses the VLESS and VMess packages share, with examples.
+pkg.import = net.transport
+pkg.intro <<
+<p>A proxy protocol such as <a href="/std/net/vless/">VLESS</a> or <a href="/std/net/vmess/">VMess</a> says what the first bytes of a connection mean. It does not say how the connection itself is made, and that is the part a censor looks at: is it plain TCP, TLS to which name, a WebSocket on which path, under which Host header. <code>net.transport</code> is that layer. It turns "connect to this host and port with these settings" into a <code>Conn</code> that is read and written the same way whatever is underneath.</p>
+<p>The package has four jobs:</p>
+<ul>
+<li><strong>Carriers.</strong> <code>Dial</code> and <code>Listen</code> work over plain TCP, TLS, WebSocket (alone or inside TLS) and a bare HTTP upgrade. <code>FromStream</code> and <code>AsStream</code> let any <a href="/std/net/tunnel/">net.tunnel</a> stream carry a protocol too, so a protocol can run inside another one.</li>
+<li><strong>Looking like something else.</strong> The TLS server name (<code>sni</code>) and the HTTP <code>Host</code> header are separate settings, so a client can connect to a CDN front name while asking for another site. The WebSocket path works as a shared secret: a request for any other path gets a fake nginx 404 page.</li>
+<li><strong>ClientHello fragmentation.</strong> <code>fragment</code> sends the first bytes of the TLS handshake in small pieces with a pause between them, which defeats some filters that read the server name from the first packet.</li>
+<li><strong>Shared plumbing.</strong> <code>Bytes</code> is the growable buffer the protocol packages build headers in, and <code>Addr</code> is a target address that knows its wire form.</li>
+</ul>
+
+<h3 id="settings">Which carrier a Settings value selects</h3>
+<p>Every dial and listen call takes a <code>Settings</code> value. Its zero value is plain TCP.</p>
+<div class="table-wrap"><table>
+<thead><tr><th>Settings</th><th>Carrier</th></tr></thead>
+<tbody>
+<tr><td><code>network = "tcp"</code> (default)</td><td>The raw stream, with TLS on top when <code>tls = true</code>.</td></tr>
+<tr><td><code>network = "ws"</code></td><td>An HTTP/1.1 request that upgrades to a WebSocket, then binary frames. Client frames are masked, as the standard requires. With <code>tls = true</code> this is <code>wss</code>.</td></tr>
+<tr><td><code>network = "httpupgrade"</code></td><td>The same upgrade request without WebSocket framing: after the <code>101</code> answer the bytes flow raw. It is cheaper than <code>ws</code> and looks the same to a proxy that only reads the first request.</td></tr>
+<tr><td><code>tls = true</code></td><td>The client checks the server certificate against the system roots or <code>ca_file</code>, using <code>sni</code> (or the dialed host when it is empty) as the name. The server needs <code>cert_file</code> and <code>key_file</code>.</td></tr>
+</tbody></table></div>
+<p>Any other <code>network</code> text is not rejected here: the connection is simply plain. The link parsers of the protocol packages refuse unsupported types before they get this far.</p>
+
+<h3 id="pitfalls">What trips people up</h3>
+<ul>
+<li><strong><code>Accept</code> does the WebSocket upgrade inline.</strong> A client that connects and says nothing blocks the accept loop. For a server on the open internet call <code>AcceptRaw</code> in the loop and run <code>Upgrade</code> in a worker thread, as the WebSocket guide shows.</li>
+<li><strong><code>sni</code> is not <code>host</code>.</strong> <code>sni</code> is the name in the TLS handshake and the name the certificate is checked against; <code>host</code> is the <code>Host</code> header inside the upgrade request. Behind a CDN they usually differ.</li>
+<li><strong>The ALPN setting is one string.</strong> Offer <code>"h2"</code> or <code>"http/1.1"</code>, not a list. Over WebSocket use <code>"http/1.1"</code>, because the upgrade is an HTTP/1.1 feature.</li>
+<li><strong><code>fingerprint</code> changes nothing.</strong> The field is kept so links that carry <code>fp=chrome</code> round-trip, but the TLS handshake is this library's own, not a copy of a browser's. A filter that recognizes the handshake shape is not fooled.</li>
+<li><strong><code>timeout_ms</code> covers the connect only.</strong> Reads wait forever unless you call <code>SetReadTimeout</code>.</li>
+<li><strong>Buffers are manual.</strong> <code>NewBytes</code> allocates and <code>FreeBytes</code> frees; nothing collects them.</li>
+<li><strong>No HTTP/2, gRPC, XHTTP, Reality or multiplexing.</strong> There is one stream per connection.</li>
+</ul>
+
+<h2 id="guide-bytes">Buffers and addresses</h2>
+<p>A <code>Bytes</code> value is a pointer, a length and a capacity. The <code>Put</code> functions append (and grow it), <code>At</code> and <code>Peek16</code> read back, and <code>ToHex</code> shows the content. A target address is a <code>Addr</code>: <code>NewAddr</code> looks at the text and decides between an IPv4 address, an IPv6 address and a domain name, and <code>PutAddr</code> writes it in the order the VLESS and VMess headers use (port, type, address). <code>ParseUUID</code> turns the usual 36 character text into the 16 bytes a user id is on the wire and sets <code>bad</code> when the text is not a UUID.</p>
+{{example.net-transport-guide-bytes}}
+
+<h2 id="guide-quickstart">Quick start: a client and a server</h2>
+<p><code>Listen</code> binds a port (0 picks a free one, and <code>ListenerPort</code> says which), <code>Accept</code> waits for a client, and <code>Read</code> and <code>Write</code> move bytes. <code>Read</code> returns 0 or less when the other side has closed. Check <code>Ok</code> after a dial, and read <code>err</code> when it is false. This program runs the server in a thread and talks to it over the loopback address.</p>
+{{example.net-transport-guide-echo}}
+
+<h2 id="guide-ws">WebSocket, and why Accept is not enough</h2>
+<p>Set <code>network = "ws"</code>, a <code>path</code> and optionally a <code>host</code> on both sides. The client sends a normal-looking <code>GET</code> with a browser <code>User-Agent</code>. The server checks the path and, when <code>host</code> is set, the <code>Host</code> header; a mismatch is answered with an nginx style <code>404 Not Found</code> page and the connection is closed, so a probe for a different path sees an ordinary web server.</p>
+<p>The program below does the server side the careful way: <code>AcceptRaw</code> only takes the TCP connection (and the TLS handshake when <code>tls</code> is on), and <code>Upgrade</code> then reads the request. In a real server the <code>Upgrade</code> call and everything after it go into a worker thread per connection, so a client that stalls cannot hold up the others. The second half shows a wrong path being refused.</p>
+{{example.net-transport-guide-ws}}
+<p><code>early_data</code> is the Xray style "0-RTT" trick: the first payload bytes ride in the <code>Sec-WebSocket-Protocol</code> header of the upgrade request. Pass them to <code>DialEarly</code>, and set <code>early_data</code> to the largest size you allow on both sides. The server hands those bytes back through the first <code>Read</code>.</p>
+
+<h2 id="guide-cdn">VLESS or VMess over WebSocket and TLS behind a CDN</h2>
+<p>This is the usual way to run a proxy that has to survive: the real server hides behind a CDN, the connection to the CDN is ordinary HTTPS, and the CDN forwards WebSocket requests for one secret path to the server.</p>
+<ol>
+<li>Put a domain on the CDN and point it at the server. Turn the proxy (orange cloud) on and turn WebSockets on. Use a port the CDN accepts for HTTPS, such as 443, 2053, 2083, 2087 or 2096.</li>
+<li>Let the CDN terminate TLS. Choose its "Full" mode with an origin certificate, or run the server with <code>tls = true</code> and a certificate and key through <code>cert_file</code> and <code>key_file</code>. If you do not want the origin to speak TLS at all, listen with plain <code>ws</code> on a local port behind your own reverse proxy.</li>
+<li>On the server, <code>Listen</code> with <code>network = "ws"</code>, a long random <code>path</code> and <code>host</code> set to your domain. Anything that asks for another path gets the nginx 404.</li>
+<li>On the client, dial the front name (any name that resolves to the CDN) with <code>tls = true</code>, <code>sni</code> set to the front name, <code>host</code> set to your own domain and the same <code>path</code>. The network between you and the CDN sees TLS to the front name only.</li>
+<li>Use <code>alpn = "http/1.1"</code>. Set <code>early_data</code> only when the CDN passes the <code>Sec-WebSocket-Protocol</code> header through.</li>
+</ol>
+{{example.net-transport-guide-cdn}}
+<p>The program is checked but not run by the site, because it needs your server. See the <a href="/std/net/vless/#guide-cdn">VLESS</a> and <a href="/std/net/vmess/#guide-cdn">VMess</a> pages for the same setup on top of a protocol, and the <a href="/std/net/tunnel/">tunnel</a> page to wire it into a local proxy. A CDN sees all your traffic in clear text between its two TLS legs: it terminates TLS for you, and the protocol inside (VMess) or the lack of one (VLESS with <code>encryption=none</code>) is all that is left. Prefer VMess with <code>SecAES128GCM</code> or <code>SecChaCha20Poly1305</code> when you do not trust the CDN with your payload.</p>
+
+<h2 id="guide-fragment">Fragmenting the TLS ClientHello</h2>
+<p>Some national filters, Iran's among them, read the server name out of the first packet of a TLS connection and cut the connection when the name is on a list. They often do this without reassembling TCP, so a ClientHello that arrives in several small segments, with a short pause between them, is not matched. <code>fragment = true</code> does this on the client:</p>
+<ol>
+<li>the dial opens a loopback socket pair and two small threads, and the TLS layer talks to the loopback side;</li>
+<li>the first chunk the TLS layer writes, which is the ClientHello, is written to the real connection in pieces of <code>fragment_min</code> to <code>fragment_max</code> bytes, with <code>fragment_delay_ms</code> milliseconds between them;</li>
+<li>everything after that is copied through unchanged.</li>
+</ol>
+<p><code>FragmentSizes</code> is the function that picks the sizes. It is public so you can see what a setting produces: every piece but the last is within the range, and they add up to the total.</p>
+{{example.net-transport-guide-fragment}}
+<p>To turn it on for a TLS dial:</p>
+{{example.net-transport-guide-fragment-tls}}
+<p>Start with pieces of 3 to 30 bytes and 5 to 10 milliseconds. Smaller pieces and longer pauses fool more filters and make the handshake slower; if the connection starts failing or timing out, grow the pieces or shorten the pause. Fragmentation applies to the client only, and only when <code>tls = true</code>. It has to be tried where you are: a filter that reassembles the stream, or one that blocks on the IP address or on something other than the server name, is not affected, and what works changes over time. Fragmentation hides the name from the filter; it does not hide that you are using a proxy, and it does not change the shape of the handshake itself (see <code>fingerprint</code> above).</p>
+
+<h2 id="guide-limits">Limits and security</h2>
+<ul>
+<li><strong>Certificates are checked by default.</strong> <code>allow_insecure = true</code> turns the check off, which lets anyone on the path read and change the connection. Use it for a test against a self-signed certificate, or give the CA to <code>ca_file</code> instead.</li>
+<li><strong>The fragmenting pump costs a socket pair and two threads per connection.</strong> It splits only the first chunk of the handshake; it does not re-fragment later TLS records.</li>
+<li><strong>The fake 404 is the whole disguise.</strong> A visitor with the right path and no WebSocket handshake gets <code>400 Bad Request</code> in the same nginx style. Nothing else about the server is made to look like a website; if you need that, put a real reverse proxy in front.</li>
+<li><strong>Handling a stalled client is up to you.</strong> Use <code>AcceptRaw</code> with <code>Upgrade</code> in workers, and call <code>SetReadTimeout</code> on connections that must not hang.</li>
+<li><strong>No live comparison with Xray or V2Ray was run.</strong> The package is tested against itself and against byte vectors; whether a given CDN or a given Xray build accepts its requests has to be tried on your side.</li>
+</ul>
+>>
+
+doc.Bytes = A growable byte buffer. It owns memory: free it with <code>FreeBytes</code> when you are done.
+doc.Bytes.p = The start of the memory.
+doc.Bytes.len = How many bytes are in use.
+doc.Bytes.cap = How many bytes fit before the buffer grows.
+doc.Bytes.bad = True when the buffer is the result of a failed parse or conversion, such as an invalid hex text or UUID.
+doc.NewBytes = Allocates an empty buffer with room for at least <code>cap0</code> bytes.
+doc.FreeBytes = Releases the memory and resets the buffer.
+doc.ResetBytes = Empties the buffer and keeps its memory.
+doc.BytesPtr = A pointer to the byte at offset <code>off</code>, for passing to a function that fills or reads memory.
+doc.Reserve = Makes sure <code>need</code> more bytes fit without growing again.
+doc.Put8 = Appends one byte.
+doc.Put16 = Appends a 16 bit number, high byte first.
+doc.Put32 = Appends a 32 bit number, high byte first.
+doc.Put64 = Appends a 64 bit number, high byte first.
+doc.PutRaw = Appends <code>n</code> bytes from a pointer.
+doc.PutBytes = Appends another buffer.
+doc.PutStr = Appends the bytes of a text.
+doc.PutZeros = Appends <code>n</code> zero bytes.
+doc.At = The byte at index <code>i</code> as a number from 0 to 255.
+doc.Set8 = Overwrites the byte at index <code>i</code>.
+doc.Peek16 = Reads a 16 bit number at an offset, high byte first.
+doc.Peek32 = Reads a 32 bit number at an offset, high byte first.
+doc.Consume = Drops the first <code>n</code> bytes.
+doc.Equal = True when two buffers hold the same bytes. The comparison does not stop at the first difference.
+doc.ToHex = The buffer as lower case hex text.
+doc.FromHex = Reads hex text into a new buffer; <code>bad</code> is set when the text is not valid hex.
+doc.FromStr = Copies a text into a new buffer.
+doc.AddrIPv4 = The address kind number of an IPv4 address.
+doc.AddrDomain = The address kind number of a domain name.
+doc.AddrIPv6 = The address kind number of an IPv6 address.
+doc.Addr = A target address: kind, host text and port.
+doc.Addr.kind = <code>AddrIPv4</code>, <code>AddrDomain</code> or <code>AddrIPv6</code>.
+doc.Addr.host = The address or name as text.
+doc.Addr.port = The port.
+doc.DetectKind = Decides whether a host text is an IPv4 address, an IPv6 address or a domain name.
+doc.NewAddr = Builds an address and sets its kind from the text.
+doc.PutAddr = Appends the wire form: port, kind byte and address. A domain is prefixed by its length. False when the address cannot be written, for example an empty name, a name longer than 255 bytes or an IP address that does not parse.
+doc.FormatIPv6 = Formats 16 bytes as IPv6 text.
+doc.ReadAddr = Reads an address from a buffer at an offset and returns the offset just after the address, or -1 when the bytes are not a valid address.
+doc.ParseUUID = Turns the 36 character UUID text into 16 bytes; <code>bad</code> is set on any other text.
+doc.FormatUUID = Turns 16 bytes into the 36 character UUID text.
+doc.Settings = Everything that decides how a connection is made. The zero value is plain TCP.
+doc.Settings.network = <code>"tcp"</code>, <code>"ws"</code> or <code>"httpupgrade"</code>.
+doc.Settings.tls = Wrap the connection in TLS. A listener needs <code>cert_file</code> and <code>key_file</code> as well.
+doc.Settings.sni = The server name sent in the TLS handshake and checked against the certificate. Empty means the dialed host.
+doc.Settings.alpn = The one ALPN protocol to offer, such as <code>"http/1.1"</code>. It is a single string, not a list.
+doc.Settings.fingerprint = A browser name such as <code>"chrome"</code>. Kept for links that carry it; it does not change the handshake.
+doc.Settings.allow_insecure = Skip certificate verification. Unsafe on a real network.
+doc.Settings.ca_file = A PEM file with the certificate authorities to trust instead of the system ones.
+doc.Settings.path = The request path of the WebSocket or upgrade request. The server refuses any other path.
+doc.Settings.host = The <code>Host</code> header of the upgrade request. A server with this set refuses other host names.
+doc.Settings.headers = Extra request headers for the client, written as <code>Name: value</code> lines separated by <code>\r\n</code>.
+doc.Settings.early_data = The largest number of payload bytes sent in the <code>Sec-WebSocket-Protocol</code> header. 0 turns early data off.
+doc.Settings.fragment = Split the first bytes of the TLS handshake into small pieces. Client side, with <code>tls</code> only.
+doc.Settings.fragment_min = The smallest piece in bytes.
+doc.Settings.fragment_max = The largest piece in bytes.
+doc.Settings.fragment_delay_ms = The pause between two pieces, in milliseconds.
+doc.Settings.cert_file = The server certificate chain, as a PEM file.
+doc.Settings.key_file = The server private key, as a PEM file.
+doc.Settings.timeout_ms = How long the TCP connect may take. 0 means the system default. It does not limit reads.
+doc.Conn = One connection, whatever carries it. Read and write it with the functions of this package, not through its fields.
+doc.Conn.kind = <code>KindTCP</code>, <code>KindTLS</code> or <code>KindStream</code>.
+doc.Conn.tcp = The TCP socket, when there is one.
+doc.Conn.tls = The TLS session, when there is one.
+doc.Conn.up = The stream under the connection when its kind is <code>KindStream</code>.
+doc.Conn.ws = True after a WebSocket upgrade: reads and writes then use frames.
+doc.Conn.client = True on the side that dialed.
+doc.Conn.open = True while the connection is usable. <code>Ok</code> returns this.
+doc.Conn.err = The reason the dial, accept or upgrade failed, empty otherwise.
+doc.Conn.fr_left = Bytes of the current WebSocket frame not yet read.
+doc.Conn.fr_masked = The current frame is masked.
+doc.Conn.fr_mask = The mask of the current frame.
+doc.Conn.fr_pos = The position inside the current frame, for unmasking.
+doc.Conn.pre = Early data that arrived with the upgrade request. The first reads return it.
+doc.Conn.request_path = On a server after the upgrade: the path the client asked for.
+doc.Conn.request_host = On a server after the upgrade: the <code>Host</code> header the client sent.
+doc.Listener = A listening socket with the settings it was made with.
+doc.Listener.server = The TCP server socket.
+doc.Listener.settings = The settings given to <code>Listen</code>.
+doc.Listener.tls_cfg = The server TLS configuration loaded from the certificate and key.
+doc.FragmentSizes = The piece sizes a fragmented write of <code>total</code> bytes would use: each piece is between <code>min</code> and <code>max</code> bytes, except possibly the last one, and they add up to <code>total</code>. The sizes are random.
+doc.Ok = True when the connection is open.
+doc.Read = Reads up to <code>max</code> bytes and returns how many arrived. A WebSocket connection returns the payload of binary frames and answers pings by itself. 0 or less means the connection ended.
+doc.ReadFull = Reads exactly <code>n</code> bytes. False when the connection ended first.
+doc.Write = Writes <code>n</code> bytes from a pointer, as one WebSocket frame on a WebSocket connection. False when it fails.
+doc.WriteBytes = Writes a whole buffer.
+doc.SetReadTimeout = Makes a read give up after this many milliseconds. 0 waits forever.
+doc.Close = Closes the connection; a WebSocket connection sends a close frame first.
+doc.DialEarly = Dials like <code>Dial</code> and sends <code>early</code> in the upgrade request when the settings allow early data.
+doc.Dial = Connects to a host and port: TCP, then ClientHello fragmentation, TLS and the upgrade request, as the settings ask. Check <code>Ok</code> and read <code>err</code> when it is false.
+doc.Listen = Starts listening on a port; 0 picks a free one.
+doc.ListenerOk = True when the socket is bound and, with TLS, the certificate and key loaded.
+doc.ListenerPort = The port the listener is bound to.
+doc.CloseListener = Stops listening.
+doc.AcceptRaw = Waits for a client and finishes the TCP connection and the TLS handshake, but not the upgrade request.
+doc.Upgrade = Reads the upgrade request on a connection from <code>AcceptRaw</code>, checks the path and host, answers it and switches the connection to WebSocket or raw mode. Does nothing for plain <code>tcp</code>. A refused request is answered and the connection is closed.
+doc.Accept = <code>AcceptRaw</code> followed by <code>Upgrade</code>, in the calling thread. A client that stalls holds up the caller.
+doc.AsStream = Wraps a connection as a <code>tunnel.Stream</code>, so tunnel code can use it.
+doc.FromStream = Uses a <code>tunnel.Stream</code> as the carrier of a connection. Set <code>client</code> to say which side it is.
+group.Kind.title = Connection kinds
+group.Kind = The value of the <code>kind</code> field of a connection: <code>KindTCP</code> (0) plain TCP, <code>KindTLS</code> (1) TLS, <code>KindStream</code> (2) a <code>net.tunnel</code> stream.
+ex.Bytes = -
+ex.NewBytes = -
+ex.FreeBytes = -
+ex.ResetBytes = -
+ex.BytesPtr = -
+ex.Reserve = -
+ex.Put8 = -
+ex.Put16 = -
+ex.Put32 = -
+ex.Put64 = -
+ex.PutRaw = -
+ex.PutBytes = -
+ex.PutStr = -
+ex.PutZeros = -
+ex.At = -
+ex.Set8 = -
+ex.Peek16 = -
+ex.Peek32 = -
+ex.Consume = -
+ex.Equal = -
+ex.ToHex = -
+ex.FromHex = -
+ex.FromStr = -
+ex.AddrIPv4 = -
+ex.AddrDomain = -
+ex.AddrIPv6 = -
+ex.Addr = -
+ex.DetectKind = -
+ex.NewAddr = -
+ex.PutAddr = -
+ex.FormatIPv6 = -
+ex.ReadAddr = -
+ex.ParseUUID = -
+ex.FormatUUID = -
+ex.Settings = -
+ex.Conn = -
+ex.Listener = -
+ex.FragmentSizes = -
+ex.Ok = -
+ex.Read = -
+ex.ReadFull = -
+ex.Write = -
+ex.WriteBytes = -
+ex.SetReadTimeout = -
+ex.Close = -
+ex.DialEarly = -
+ex.Dial = -
+ex.Listen = -
+ex.ListenerOk = -
+ex.ListenerPort = -
+ex.CloseListener = -
+ex.AcceptRaw = -
+ex.Upgrade = -
+ex.Accept = -
+ex.AsStream = -
+ex.FromStream = -
+ex.group.Kind = -

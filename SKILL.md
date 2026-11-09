@@ -1567,8 +1567,11 @@ end
 - **`compress`**: `ByteBuf` (`NewByteBuf BufPush BufGet BufLen BufFree BufFromStr BufToBase64`), `Compress/Decompress(method)` over `Method*`,
   `DeflateCompress GzipCompress GzipDecompress Bzip2Compress Bzip2CompressLevel Bzip2Decompress Bzip2DecompressMax CRC32 Adler32`. Gzip decoding
   verifies the CRC-32 and length and bzip2 decoding every block and stream CRC (`ok` is false on mismatch; `*Max` caps the output size); the method is not stored in the output; free every buffer.
-- **`archive`**: `ZipCreate ZipCreateFile ZipList ZipExtractAll ZipExtractByName TarCreate TarList TarExtractAll TarGzCreate TarGzList TarGzExtractAll MakeTarSymlink RarCreate RarCreateFile RarList RarExtract RarExtractByName RarExtractAll RarStatusText GzipCompressFile Bzip2CompressFile Bzip2DecompressFile ReadBinaryFile WriteBinaryFile`. No zip64 (under 2 GB),
-  ZIP methods 0 and 8 only, CRC not checked, tar reads ustar, PAX and GNU
+- **`archive`**: `ZipCreate ZipCreateFile ZipList ZipExtractAll ZipExtractByName ZipExtractVerified ZipVerify ZipCreate64 TarCreate TarList TarExtractAll TarGzCreate TarGzList TarGzExtractAll MakeTarSymlink RarCreate RarCreateFile RarList RarExtract RarExtractByName RarExtractAll RarStatusText GzipCompressFile Bzip2CompressFile Bzip2DecompressFile ReadBinaryFile WriteBinaryFile`. Zip64 is read and
+  written but sizes are `int` (under 2 GB; bigger entries report `ZIP_TOO_BIG`),
+  ZIP methods 0 and 8 only, `ZipExtractByName` does not check the CRC while
+  `ZipExtractVerified(p, n, name, max, status)`, `ZipVerify` and `ZipExtractAll` do,
+  non-ASCII names get the UTF-8 flag, `ZipFileInput.mtime` sets the date, tar reads ustar, PAX and GNU
   long names and links (`Entry.kind`, `Entry.link`), `TarGz*Max` cap the inflated size. RAR 1.5 to 5 are read fully (CRC checked, `RarExtract` reports a
   `RAR_*` status); passwords through `RarOpen(p, n, password)` with
   `RarEntries`/`RarRead`/`RarReadAll` (RAR 3 to 5, encrypted names too); multi-volume

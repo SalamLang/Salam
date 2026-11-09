@@ -1,0 +1,493 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package css
+
+import str
+import mem
+
+const TK_IDENT := 1
+const TK_NUM := 2
+const TK_DIM := 3
+const TK_PCT := 4
+const TK_HASH := 5
+const TK_STR := 6
+const TK_FUNC := 7
+const TK_CLOSE := 8
+const TK_COMMA := 9
+const TK_DELIM := 10
+const TK_URL := 11
+const TK_BAD := 12
+
+struct Tok:
+    pub k: int = 0
+    pub s: str = ""
+    pub raw: str = ""
+    pub n: f64 = 0.0
+    pub d: int = 0
+    pub close: int = -1
+    pub p0: int = 0
+    pub p1: int = 0
+    pub ws: bool = false
+    pub int_like: bool = false
+end
+
+inline func _ub(p: u8*, i: int): int:
+    ret p[i] as int
+end
+
+func sfree(s: str):
+    if s.len() > 0:
+        mem.Free(s as void*)
+    end
+end
+
+func is_name_start(c: int): bool:
+    ret (c >= 97 and c <= 122) or (c >= 65 and c <= 90) or c == 95 or c >= 128
+end
+
+func is_name_char(c: int): bool:
+    ret is_name_start(c) or (c >= 48 and c <= 57) or c == 45
+end
+
+func is_digit(c: int): bool:
+    ret c >= 48 and c <= 57
+end
+
+func is_space(c: int): bool:
+    ret c == 32 or c == 9 or c == 10 or c == 13 or c == 12
+end
+
+func lower_ascii(s: str): str:
+    n := s.len()
+    p := (s as void*) as u8*
+    mut need := false
+    repeat n in i:
+        c := _ub(p, i)
+        if c >= 65 and c <= 90:
+            need = true
+            break
+        end
+    end
+    if not need:
+        ret str.Clone(s)
+    end
+    mut b := str.NewBuilder()
+    repeat n in i:
+        c := _ub(p, i)
+        if c >= 65 and c <= 90:
+            str.BufAppendChar(b, c + 32)
+        else:
+            str.BufAppendChar(b, c)
+        end
+    end
+    out := str.BufStr(b)
+    str.BufFree(b)
+    ret out
+end
+
+func pow10(k: int): f64:
+    mut r := 1.0
+    repeat k:
+        r *= 10.0
+    end
+    ret r
+end
+
+func number_at(p: u8*, n: int, start: int, out &: f64, intl &: bool): int:
+    mut i := start
+    mut neg := false
+    if i < n and (_ub(p, i) == 43 or _ub(p, i) == 45):
+        neg = _ub(p, i) == 45
+        i++
+    end
+    mut mant := 0 as i64
+    mut scale := 0
+    mut digits := 0
+    mut extra := 0
+    until i < n and is_digit(_ub(p, i)):
+        if digits < 17:
+            mant = mant * 10 + (_ub(p, i) - 48) as i64
+            digits++
+        else:
+            extra++
+        end
+        i++
+    end
+    mut is_int := true
+    if i + 1 < n and _ub(p, i) == 46 and is_digit(_ub(p, i + 1)):
+        is_int = false
+        i++
+        until i < n and is_digit(_ub(p, i)):
+            if digits < 17:
+                mant = mant * 10 + (_ub(p, i) - 48) as i64
+                digits++
+                scale++
+            end
+            i++
+        end
+    end
+    mut ex := 0
+    if i + 1 < n and (_ub(p, i) == 101 or _ub(p, i) == 69):
+        mut j := i + 1
+        mut eneg := false
+        if j < n and (_ub(p, j) == 43 or _ub(p, j) == 45):
+            eneg = _ub(p, j) == 45
+            j++
+        end
+        if j < n and is_digit(_ub(p, j)):
+            is_int = false
+            until j < n and is_digit(_ub(p, j)):
+                if ex < 400:
+                    ex = ex * 10 + _ub(p, j) - 48
+                end
+                j++
+            end
+            if eneg:
+                ex = 0 - ex
+            end
+            i = j
+        end
+    end
+    mut v := mant as f64
+    e10 := ex + extra - scale
+    if e10 > 0:
+        v *= pow10(e10)
+    else e10 < 0:
+        v /= pow10(0 - e10)
+    end
+    out = neg ? 0.0 - v : v
+    intl = is_int
+    ret i
+end
+
+func starts_number(p: u8*, n: int, i: int): bool:
+    c := _ub(p, i)
+    if is_digit(c):
+        ret true
+    end
+    if c == 46:
+        ret i + 1 < n and is_digit(_ub(p, i + 1))
+    end
+    if c == 43 or c == 45:
+        if i + 1 < n and is_digit(_ub(p, i + 1)):
+            ret true
+        end
+        ret i + 2 < n and _ub(p, i + 1) == 46 and is_digit(_ub(p, i + 2))
+    end
+    ret false
+end
+
+func name_end(p: u8*, n: int, i: int): int:
+    mut j := i
+    until j < n:
+        c := _ub(p, j)
+        if is_name_char(c):
+            j++
+        else c == 92 and j + 1 < n:
+            j += 2
+        else:
+            break
+        end
+    end
+    ret j
+end
+
+func unescape(s: str): str:
+    if str.IndexOf(s, "\\") < 0:
+        ret str.Clone(s)
+    end
+    n := s.len()
+    p := (s as void*) as u8*
+    mut b := str.NewBuilder()
+    mut i := 0
+    until i < n:
+        c := _ub(p, i)
+        if c == 92 and i + 1 < n:
+            mut j := i + 1
+            mut cp := 0
+            mut hex := 0
+            until j < n and hex < 6:
+                h := _ub(p, j)
+                mut hv := -1
+                if h >= 48 and h <= 57:
+                    hv = h - 48
+                else h >= 97 and h <= 102:
+                    hv = h - 87
+                else h >= 65 and h <= 70:
+                    hv = h - 55
+                end
+                if hv < 0:
+                    break
+                end
+                cp = cp * 16 + hv
+                hex++
+                j++
+            end
+            if hex > 0:
+                str.BufAppendCp(b, cp)
+                if j < n and is_space(_ub(p, j)):
+                    j++
+                end
+                i = j
+            else:
+                str.BufAppendChar(b, _ub(p, i + 1))
+                i += 2
+            end
+        else:
+            str.BufAppendChar(b, c)
+            i++
+        end
+    end
+    out := str.BufStr(b)
+    str.BufFree(b)
+    ret out
+end
+
+func tokenize(src: str, out &: Vector<Tok>):
+    n := src.len()
+    p := (src as void*) as u8*
+    mut stack := Vector {} as Vector<int>
+    defer stack.free()
+    mut i := 0
+    mut ws := false
+    until i < n:
+        c := _ub(p, i)
+        if is_space(c):
+            ws = true
+            i++
+            continue
+        end
+        if c == 47 and i + 1 < n and _ub(p, i + 1) == 42:
+            mut j := i + 2
+            until j + 1 < n and not (_ub(p, j) == 42 and _ub(p, j + 1) == 47):
+                j++
+            end
+            i = j + 2
+            ws = true
+            continue
+        end
+        mut t := Tok { p0 = i, ws = ws }
+        ws = false
+        if starts_number(p, n, i):
+            mut v := 0.0
+            mut il := false
+            j := number_at(p, n, i, v, il)
+            t.n = v
+            t.int_like = il
+            if j < n and _ub(p, j) == 37:
+                t.k = TK_PCT
+                t.p1 = j + 1
+            else j < n and (is_name_start(_ub(p, j)) or (_ub(p, j) == 45 and j + 1 < n and is_name_start(_ub(p, j + 1)))):
+                e := name_end(p, n, j)
+                t.k = TK_DIM
+                u := src.substr(j, e - j)
+                t.s = lower_ascii(u)
+                sfree(u)
+                t.p1 = e
+            else:
+                t.k = TK_NUM
+                t.p1 = j
+            end
+            t.raw = src.substr(i, t.p1 - i)
+            i = t.p1
+            out.push(t)
+            continue
+        end
+        if is_name_start(c) or c == 92 or (c == 45 and i + 1 < n and (is_name_start(_ub(p, i + 1)) or _ub(p, i + 1) == 45 or _ub(p, i + 1) == 92)):
+            e := name_end(p, n, i)
+            rawname := src.substr(i, e - i)
+            name := unescape(rawname)
+            sfree(rawname)
+            if e < n and _ub(p, e) == 40:
+                lname := lower_ascii(name)
+                if lname == "url":
+                    mut j := e + 1
+                    until j < n and is_space(_ub(p, j)):
+                        j++
+                    end
+                    if j < n and (_ub(p, j) == 34 or _ub(p, j) == 39):
+                        t.k = TK_FUNC
+                        t.s = lname
+                        t.raw = name
+                        t.p1 = e + 1
+                        out.push(t)
+                        stack.push(out.len() - 1)
+                        i = e + 1
+                        continue
+                    end
+                    mut k := j
+                    until k < n and _ub(p, k) != 41:
+                        k++
+                    end
+                    mut ke := k
+                    until ke > j and is_space(_ub(p, ke - 1)):
+                        ke--
+                    end
+                    t.k = TK_URL
+                    t.s = src.substr(j, ke - j)
+                    t.raw = src.substr(i, k + 1 - i)
+                    t.p1 = k < n ? k + 1 : n
+                    i = t.p1
+                    sfree(lname)
+                    sfree(name)
+                    out.push(t)
+                    continue
+                end
+                t.k = TK_FUNC
+                t.s = lname
+                t.raw = name
+                t.p1 = e + 1
+                out.push(t)
+                stack.push(out.len() - 1)
+                i = e + 1
+                continue
+            end
+            t.k = TK_IDENT
+            t.s = lower_ascii(name)
+            t.raw = name
+            t.p1 = e
+            i = e
+            out.push(t)
+            continue
+        end
+        if c == 34 or c == 39:
+            mut j := i + 1
+            until j < n and _ub(p, j) != c:
+                if _ub(p, j) == 92:
+                    j++
+                end
+                j++
+            end
+            if j > n:
+                j = n
+            end
+            body := src.substr(i + 1, j - i - 1)
+            t.k = TK_STR
+            t.s = unescape(body)
+            sfree(body)
+            t.p1 = j < n ? j + 1 : n
+            t.raw = src.substr(i, t.p1 - i)
+            i = t.p1
+            out.push(t)
+            continue
+        end
+        if c == 35 and i + 1 < n and is_name_char(_ub(p, i + 1)):
+            e := name_end(p, n, i + 1)
+            t.k = TK_HASH
+            t.raw = src.substr(i + 1, e - i - 1)
+            t.s = lower_ascii(t.raw)
+            t.p1 = e
+            i = e
+            out.push(t)
+            continue
+        end
+        if c == 40:
+            t.k = TK_FUNC
+            t.s = ""
+            t.raw = ""
+            t.p1 = i + 1
+            out.push(t)
+            stack.push(out.len() - 1)
+            i++
+            continue
+        end
+        if c == 41:
+            if stack.len() > 0:
+                o := stack.pop()
+                t.k = TK_CLOSE
+                t.p1 = i + 1
+                out.push(t)
+                mut open_tok := out.ref(o)
+                open_tok.close = out.len() - 1
+                open_tok.p1 = i + 1
+            end
+            i++
+            continue
+        end
+        if c == 44:
+            t.k = TK_COMMA
+            t.p1 = i + 1
+            out.push(t)
+            i++
+            continue
+        end
+        t.k = TK_DELIM
+        t.d = c
+        t.p1 = i + 1
+        out.push(t)
+        i++
+    end
+    until stack.len() > 0:
+        o := stack.pop()
+        t := Tok { k = TK_CLOSE, p0 = n, p1 = n }
+        out.push(t)
+        mut open_tok := out.ref(o)
+        open_tok.close = out.len() - 1
+        open_tok.p1 = n
+    end
+end
+
+func free_toks(v &: Vector<Tok>, from: int):
+    mut i := v.len() - 1
+    until i >= from:
+        t := v[i]
+        if t.s.len() > 0:
+            sfree(t.s)
+        end
+        if t.raw.len() > 0:
+            sfree(t.raw)
+        end
+        _x := v.pop()
+        i--
+    end
+end
+
+func nxt(t: Vector<Tok>, i: int): int:
+    if t[i].k == TK_FUNC and t[i].close > i:
+        ret t[i].close + 1
+    end
+    ret i + 1
+end
+
+func is_kw(t: Vector<Tok>, i: int, e: int, kw: str): bool:
+    ret i < e and t[i].k == TK_IDENT and t[i].s == kw
+end
+
+func is_delim(t: Vector<Tok>, i: int, e: int, d: int): bool:
+    ret i < e and t[i].k == TK_DELIM and t[i].d == d
+end
+
+func count_items(t: Vector<Tok>, s: int, e: int): int:
+    mut c := 0
+    mut i := s
+    until i < e:
+        c++
+        i = nxt(t, i)
+    end
+    ret c
+end
+
+func split_commas(t: Vector<Tok>, s: int, e: int, out &: Vector<int>):
+    out.push(s)
+    mut i := s
+    until i < e:
+        if t[i].k == TK_COMMA:
+            out.push(i)
+            out.push(i + 1)
+        end
+        i = nxt(t, i)
+    end
+    out.push(e)
+end

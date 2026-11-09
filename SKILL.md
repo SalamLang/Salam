@@ -1232,21 +1232,21 @@ not the libraries.
 
 One family of packages, all pure Salam, seeded and deterministic (a fixed
 seed gives the same result on every machine at any thread count). The deep
-learning half is `f32` on `std/tensor`; the classical half is `f64` on
+learning half is `f32` on `std/ai/tensor`; the classical half is `f64` on
 `std/matrix`. Shape errors return the empty tensor / `0x0` matrix.
 
-- **`tensor`**: n-d `f32` arrays, contiguous row-major, no views. `Tensor {data: Vector<f32>, shape: Vector<int>}` with `rank numel dim at set_at at2 set_at2 reshape_ free`; build `Zeros(shape) Zeros1..4 Ones Full Scalar FromArray Arange Clone CopyInto Shape1..4`. `Add Sub Mul Div` broadcast
+- **`ai.tensor`**: n-d `f32` arrays, contiguous row-major, no views. `Tensor {data: Vector<f32>, shape: Vector<int>}` with `rank numel dim at set_at at2 set_at2 reshape_ free`; build `Zeros(shape) Zeros1..4 Ones Full Scalar FromArray Arange Clone CopyInto Shape1..4`. `Add Sub Mul Div` broadcast
   (equal, scalar, trailing `[N,D]+[D]`, `[N,1]`; `BroadcastShape Expand` for
   the general case), plus `AddScalar Scale Neg Exp Log Tanh Sigmoid Relu Gelu Sqrt Square PowScalar Clip` and `*InPlace`/`*Into` forms; shape `Reshape Permute SliceAxis0 Narrow Concat2 Stack2 Pad2D`; reduce `SumAll MeanAll MaxAll ArgMaxAll SumAxis MeanAxis ArgMaxAxis Softmax LogSoftmax`; products
   `MatMul MatMulInto BatchMatMul MatVec Dot Transpose2D`; conv
   `Conv2DForward MaxPool2DForward Im2Col`; random `NewRng FillUniform FillNormal RandNormal`; masks and gathers `Greater EqualMask Where MaskedFill IndexSelect Gather OneHot TopK Tril Cumsum`; `SetThreads`,
   `ToMatrix FromMatrix WriteTensor ReadTensor AllClose ShapeString`.
-- **`autograd`**: tape-based reverse mode. `NewTape(seed)`, leaves `Input`
+- **`ai.autograd`**: tape-based reverse mode. `NewTape(seed)`, leaves `Input`
   (constant) `Watch` (tape-owned grad) `Param(val, grad)` (accumulates into the
   caller's buffer), recorded ops `Add Sub Mul Div Neg Scale AddScalar Exp Log Tanh Sigmoid Relu Gelu Sqrt Square PowScalar MatMul BatchMatMul Sum Mean SumAxis MeanAxis Softmax LogSoftmax Reshape Transpose2D Permute Embedding Dropout LayerNorm RMSNorm BatchNorm GroupNorm Narrow SliceAxis0 Concat2 RoPE Silu Conv2D MaxPool2D AvgPool2D`, `Constant` (an untracked tensor on the tape),
   losses `MSELoss CrossEntropyLogits BCEWithLogits`, then `Backward(tp, loss)`, `Value Grad`,
   `tp.reset()` per step, `tp.free()`. `GradCheck` does central differences.
-- **`nn`**: `ParamStore` (owns values and grads; layers hold int handles)
+- **`ai.nn`**: `ParamStore` (owns values and grads; layers hold int handles)
   with `add at zero_grad free`, `Bind`; layers `Linear Conv2D MaxPool2D AvgPool2D LayerNorm BatchNorm GroupNorm RMSNorm Embedding Dropout LSTM GRU MultiHeadAttention TransformerEncoderLayer` (`New*` constructors,
   `forward(tp, ps, x)`; `NewTransformerDecoderLayer` sets `attn.causal`, and
   `CausalMask(seq)` is the additive mask it adds), recurrent helper
@@ -1255,9 +1255,9 @@ learning half is `f32` on `std/tensor`; the classical half is `f64` on
   init `XavierUniform XavierNormal KaimingUniform KaimingNormal`, checkpoints `SaveCheckpoint LoadCheckpoint`
   (SLMT, `.gz` aware) and the `*Buf` forms; the loaders `throws` (`nn.crc`,
   `nn.param_count`, `nn.shape`, ...) and write nothing unless the whole file matches.
-- **`optim`**: `SGD` (momentum, nesterov, weight decay) `Adam` `NewAdamW`
+- **`ai.optim`**: `SGD` (momentum, nesterov, weight decay) `Adam` `NewAdamW`
   `RMSProp` with `step(ps)`, `ClipGradNorm ClipGradValue`, schedules `StepLR CosineLR WarmupCosine`.
-- **`ml`**: struct-per-estimator over `matrix`; `fit(x, y): bool`, `predict`,
+- **`ai.ml`**: struct-per-estimator over `matrix`; `fit(x, y): bool`, `predict`,
   `predict_proba`, `transform`, `score`, `free`, hyperparameters as fields
   (`ml.KMeans { k = 3, seed = 7 }`). Preprocessing `StandardScaler MinMaxScaler LabelEncoder OneHotEncoder SimpleImputer PolynomialFeatures`;
   models `LinearReg Ridge Lasso NewElasticNet LogisticRegression KNNClassifier KNNRegressor GaussianNB MultinomialNB DecisionTree RandomForest AdaBoost GradientBoosting HistGradientBoosting LinearSVM SVC LDA QDA KMeans MiniBatchKMeans DBSCAN Agglomerative GaussianMixture PCA TruncatedSVD TSNE` (+ `KDTree`, `workers` on KNN/KMeans); metrics
@@ -1269,14 +1269,14 @@ learning half is `f32` on `std/tensor`; the classical half is `f64` on
   `XTensor YLabels`. `LoadCsv LoadCsvFile LoadIdx LoadMnist ParseIdx` are `throws`.
 - **`npy`**: `ReadNpy ReadNpyFile WriteNpy WriteNpyFile ToMatrix FromMatrix NpzList NpzRead NpzWrite`;
   every reader and `ToMatrix` `throws` (`npy.bad_magic`, `npy.dtype`, `npy.truncated`, `npy.missing_key`).
-- **`onnx`**: `LoadOnnx ParseOnnx Run` for MLP, CNN and transformer-style
+- **`ai.onnx`**: `LoadOnnx ParseOnnx Run` for MLP, CNN and transformer-style
   graphs (`Conv Gemm MatMul` activations, pooling, the norms, shape ops,
   reductions, `Gather Slice Where Cast` and more, about 65 ops); anything
   else fails with the op named in `model.error`.
-- **`gguf`**: `LoadGguf ParseGguf` (metadata, tensor directory),
+- **`ai.gguf`**: `LoadGguf ParseGguf` (metadata, tensor directory),
   `LoadTensorF32` dequantizing `F32 F16 Q8_0 Q4_0 Q4_1`; all three `throws`
   (`ParseGguf` owns the buffer only on success). `tensor.ReadTensor` throws too.
-- **`llm`**: decoder-only models (Llama layout: RMSNorm, RoPE, GQA,
+- **`ai.llm`**: decoder-only models (Llama layout: RMSNorm, RoPE, GQA,
   SwiGLU). `Config Model RandomModel NewKVCache(cfg) Forward(m, cache, tokens)` (positions continue from `cache.len`), `LogitsRow Greedy`,
   `Sampler` (`temperature top_k top_p repeat_penalty`) with `GenerateIds Generate`, `NewTokenizer` (`TOK_SPM`, `TOK_BPE`; `encode decode`), and
   `LoadGgufModel ModelFromGguf TokenizerFromGguf`.
@@ -1920,7 +1920,7 @@ Each driver keeps its own full surface, and `Conn(d)` boxes one as a
   from each thread before its first query - `tests/en/apps/*api/_store.salam`
   is the worked example.
 - **`db.sql`** (read and check SQL without a database, the sqlc idea with your own DDL as the schema): `DialectOf DialectNamed` give a `Dialect` for `SQLITE MYSQL MARIADB POSTGRES`; `Lint(sql, d)` parses one statement or a whole `;` separated script and returns a `Report` of `Diag` values (`code message help line col offset length`, rendered by `ReportText`/`DiagText`); `ParamCount`/`Placeholders` count and list the placeholders. With a schema: `NewCatalog(d)` then `Apply(cat, ddl)` reads `CREATE TABLE`, `ALTER TABLE`, `DROP` and `CREATE VIEW` into a `Catalog` (so the migrations are the schema), `TableCount TableName HasTable ColumnCount ColumnAt HasColumn` look around it, and `Check(sql, cat)` resolves names: unknown table or column with the nearest real name offered, ambiguous column, INSERT arity, a NOT NULL column with no default left out, a write with no WHERE. `Analyze(sql, cat)` adds what the query takes and returns - `Param { marker ordinal table column kind not_null }` and `ResultCol { name table kind nullable }`, with outer joins making a whole side nullable - and `SalamType(kind, not_null)` names the Salam type to read it into (`option.Option<T>` when it can be null). Codes: `SQL0xx` lexical, `SQL1xx` syntax, `SQL2xx` a dialect rule (`?` in postgres, `AUTO_INCREMENT` in sqlite, `ILIKE` outside postgres, `::` outside postgres, `LIMIT a, b` in postgres, `ON DUPLICATE KEY` outside mysql, `TRUNCATE`/`PRAGMA` in the wrong engine), `SQL3xx` the schema. Messages are English in both language modes; match on `code`. Free with `FreeReport`, `FreeCatalog`, `FreeAnalysis`. Putting values in: the three drivers do not all prepare and bind (only `db.sqlite` has `Prepare`/`Bind*`), so `NewArgs` + `AddInt AddFloat AddText AddBool AddNull` + `Fill(query, args, d, err)` writes the values into the SQL properly - the query is lexed first, so a `?` inside a string literal is left alone, the count has to match (`SQL400`), quotes are doubled, backslashes are doubled on MySQL, and a boolean is `TRUE`/`FALSE` on postgres and `1`/`0` elsewhere. It is substitution, not a prepared statement; `ArgCount` and `FreeArgs` round it out. Code generation, the sqlc half: annotate a `.sql` file with `-- name: GetUser :one` (`:one :many :exec :execrows`), then `ParseQueries(src, err)` and `Generate(pkg, queries, cat, err)` write a row struct and a typed function per query - parameters named and typed from the column each placeholder binds against, nullable columns as `option.Option<T>` read through `IsNull`, every query analysed against the catalog first so a typo stops generation with the query's name. One `dyn db.Connection` signature serves all three engines. The command is `salam sql generate queries --schema=db --output=gen/store.salam --package=store`. The `salam sql check` command runs the same checks over `.sql` files and over every SQL string literal in `.salam` files (`--schema=` a file or a directory; without `--dialect=` each file is read with the engine it imports); a literal assembled from pieces (glued with `+` or `.concat`, or one that simply stops mid-statement) is a fragment, so it is counted in the summary and skipped instead of reported.
-- **The whole library is in `std/`** and ships with Salam, so no `salam add` is needed for any of it: `db.sqlite db.postgres db.mysql db.redis db.meilisearch db.elasticsearch db.typesense db.opensearch`, `audio` and every `audio.*`, `tensor autograd nn optim ml data gguf llm onnx npy`, `net.http.swagger net.http.middleware net.http.session net.http.validate net.http2 net.websocket net.socketio net.email net.proxy`, `grpc rpc graphql ftp ssh aws google webpush telegram.bot`, `gui.webview opencv excel`. `salam add` is only for packages from GitHub and other hosts. Their API notes below still apply.
+- **The whole library is in `std/`** and ships with Salam, so no `salam add` is needed for any of it: `db.sqlite db.postgres db.mysql db.redis db.meilisearch db.elasticsearch db.typesense db.opensearch`, `audio` and every `audio.*`, `ai.tensor ai.autograd ai.nn ai.optim ai.ml ai.gguf ai.llm ai.onnx ai.image data npy`, `net.http.swagger net.http.middleware net.http.session net.http.validate net.http2 net.websocket net.socketio net.email net.proxy`, `grpc rpc graphql ftp ssh aws google webpush telegram.bot`, `gui.webview ai.opencv excel`. `salam add` is only for packages from GitHub and other hosts. Their API notes below still apply.
 - **`db.redis`** (RESP over TCP): `Connect Ok Error Close Ping Auth Select Set SetEx Get Exists Del Expire TTL Incr IncrBy Decr Append Keys HSet HGet HDel HExists HGetAll LPush RPush LPop RPop LLen LRange SAdd SRem SIsMember SMembers Publish`, anything else via `Command` and `Reply*`. Failures come
   back as empty values (`""`, 0, false); `Command` shows the server's
   `REPLY_ERROR` text. A plain `Set` removes a key's TTL; `Auth` sends only

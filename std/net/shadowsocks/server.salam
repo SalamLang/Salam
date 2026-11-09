@@ -1,0 +1,344 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package shadowsocks
+
+import mem
+import net.tcp
+import net.internal.rawsock
+import pool
+import chan
+import net.tunnel
+
+const RELAY_BUF := 16384
+
+struct _PipeJob:
+    pub st: ConnState* = null
+    pub tgt: tcp.Conn = tcp.Conn {}
+end
+
+@en "ServerState"
+@fa "وضعیت سرور"
+pub struct ServerState:
+    @en "ls"
+    @fa "شنونده"
+    pub ls: tcp.Server = tcp.Server {}
+    @en "method"
+    @fa "روش"
+    pub method: Method = Method {}
+    @en "key"
+    @fa "کلید"
+    pub key: Buf = Buf {}
+    @en "filter"
+    @fa "فیلتر"
+    pub filter: SaltFilter = SaltFilter {}
+    @en "workers"
+    @fa "کارگرها"
+    pub workers: pool.Pool = pool.Pool {}
+    @en "stop"
+    @fa "توقف"
+    pub stop: i64* = null
+    @en "jobs"
+    @fa "صف اتصال ها"
+    pub jobs: chan.Chan<i64> = chan.Chan {} as chan.Chan<i64>
+    @en "obfs_mode"
+    @fa "حالت پوشش"
+    pub obfs_mode: str = ""
+end
+
+@en "Server"
+@fa "سرور"
+pub struct Server:
+    @en "st"
+    @fa "وضعیت"
+    pub st: ServerState* = null
+end
+
+func _handshake(ss: ServerState*, st: ConnState*): bool:
+    mut checked := false
+    mut res := 2
+    until res == 2:
+        n := _rx(st, st.rd, RD_SIZE)
+        if n <= 0:
+            res = 0
+        else:
+            Feed(st.dec, st.rd, n)
+            if not checked and TakeSalt(st.dec):
+                checked = true
+                if not FilterCheck(ss.filter, st.dec.salt.p, st.method.salt_len):
+                    res = 0
+                end
+            end
+            if res == 2:
+                mut more := true
+                until more:
+                    r := _next(st)
+                    if r < 0:
+                        res = 0
+                    end
+                    if r <= 0:
+                        more = false
+                    end
+                end
+                if res == 2 and st.v2022:
+                    if st.target_ok:
+                        res = 1
+                    end
+                else res == 2:
+                    pn := ParseTarget(st.plain.p, st.plain.len, st.target)
+                    if pn > 0:
+                        st.plain_pos = pn
+                        res = 1
+                    else pn < 0:
+                        res = 0
+                    end
+                end
+            end
+        end
+    end
+    ret res == 1
+end
+
+func _server_state(ss: ServerState*): ConnState*:
+    mut k := NewBuf(ss.key.len)
+    BufAppend(k, ss.key.p, ss.key.len)
+    st := _new_state(ss.method, k, ObfsMode(ss.obfs_mode), true, "")
+    st.dec = NewDecoder(ss.method, k.p)
+    st.enc = NewEncoderRandom(ss.method, k.p)
+    ret st
+end
+
+func _server_conn(ss: ServerState*, raw: tcp.Conn): Conn:
+    st := _server_state(ss)
+    st.sock = raw
+    if not _handshake(ss, st):
+        _raw_shutdown(st)
+        tcp.Close(raw)
+        _free_state(st)
+        ret Conn {}
+    end
+    ret Conn { st = st }
+end
+
+func _pipe_down(job: _PipeJob*):
+    st := job.st
+    buf := mem.Allocate(RELAY_BUF as u64)
+    cc := Conn { st = st }
+    mut go := true
+    until go:
+        n := tcp.ReadBytes(job.tgt, buf, RELAY_BUF)
+        if n <= 0:
+            go = false
+        else:
+            if Write(cc, buf, n) < 0:
+                go = false
+            end
+        end
+    end
+    mem.Free(buf)
+    _raw_shutdown(st)
+    rawsock.Shutdown(rawsock.Socket { fd = job.tgt.fd })
+end
+
+func _serve_one(ss: ServerState*, raw: tcp.Conn, handler: func (Conn)):
+    c := _server_conn(ss, raw)
+    if c.st != null:
+        handler(c)
+    end
+end
+
+func _serve_next(ss: ServerState*, handler: func (Conn), jobs: chan.Chan<i64>):
+    mut ok := true
+    fd := jobs.recv(ok)
+    if ok:
+        _serve_one(ss, tcp.Conn { fd = fd }, handler)
+    end
+end
+
+@en "Listen"
+@fa "گوش دادن"
+pub func Listen(port: int, method: str, password: str): Server:
+    ret ListenObfs(port, method, password, "")
+end
+
+@en "ListenObfs"
+@fa "گوش دادن با پوشش"
+pub func ListenObfs(port: int, method: str, password: str, obfs: str): Server:
+    m := LookupMethod(method)
+    if not m.ok:
+        ret Server {}
+    end
+    key := MakeKey(m, password)
+    if key.bad:
+        ret Server {}
+    end
+    ls := tcp.Bind(port)
+    if not tcp.Ok(ls):
+        mut k := key
+        BufFree(k)
+        ret Server {}
+    end
+    ss := mem.AllocateZeroed(sizeof(ServerState) as u64) as ServerState*
+    ss.ls = ls
+    ss.method = m
+    ss.key = key
+    ss.filter = NewSaltFilter(100000)
+    ss.workers = pool.NewElastic(2 as i64, 512 as i64, 64 as i64)
+    ss.jobs = chan.Chan {} as chan.Chan<i64>
+    ss.jobs.init(1024 as i64)
+    ss.stop = mem.AllocateZeroed(8 as u64) as i64*
+    ss.obfs_mode = obfs
+    ret Server { st = ss }
+end
+
+@en "ServerOk"
+@fa "سرور معتبر"
+pub func ServerOk(s: Server): bool:
+    ret s.st != null
+end
+
+@en "ServerPort"
+@fa "درگاه سرور"
+pub func ServerPort(s: Server): int:
+    ret tcp.Port(s.st.ls)
+end
+
+@en "Accept"
+@fa "پذیرش"
+pub func Accept(s: Server): Conn:
+    ss := s.st
+    mut res := Conn {}
+    mut done := false
+    until not done:
+        raw := tcp.Accept(ss.ls)
+        if not tcp.ConnOk(raw):
+            done = true
+        else:
+            res = _server_conn(ss, raw)
+            if res.st != null:
+                done = true
+            end
+        end
+    end
+    ret res
+end
+
+@en "AcceptOver"
+@fa "پذیرش روی جریان"
+pub func AcceptOver(s: Server, io: dyn tunnel.Stream): Conn:
+    ss := s.st
+    st := _server_state(ss)
+    st.up = io
+    st.use_up = true
+    if not _handshake(ss, st):
+        _raw_shutdown(st)
+        _free_state(st)
+        ret Conn {}
+    end
+    ret Conn { st = st }
+end
+
+@en "Relay"
+@fa "رله"
+pub func Relay(c: Conn):
+    st := c.st
+    if st == null:
+        ret
+    end
+    tgt := tcp.Dial(st.target.host, st.target.port)
+    if not tcp.ConnOk(tgt):
+        Close(c)
+        ret
+    end
+    job := mem.AllocateZeroed(sizeof(_PipeJob) as u64) as _PipeJob*
+    job.st = st
+    job.tgt = tgt
+    th := spawn(_pipe_down, job)
+    buf := mem.Allocate(RELAY_BUF as u64)
+    mut go := true
+    until go:
+        n := Read(c, buf, RELAY_BUF)
+        if n <= 0:
+            go = false
+        else:
+            w := tcp.WriteBytes(tgt, buf, n)
+            if w < n:
+                go = false
+            end
+        end
+    end
+    mem.Free(buf)
+    _raw_shutdown(st)
+    rawsock.Shutdown(rawsock.Socket { fd = tgt.fd })
+    join(th)
+    mem.Free(job as void*)
+    tcp.Close(tgt)
+    Close(c)
+end
+
+@en "Serve"
+@fa "خدمت"
+pub func Serve(s: Server, handler: func (Conn)):
+    ss := s.st
+    jobs := ss.jobs
+    task := (): _serve_next(ss, handler, jobs) end
+    until atomic_load(ss.stop) == 0 as i64:
+        raw := tcp.Accept(ss.ls)
+        if tcp.ConnOk(raw) and atomic_load(ss.stop) == 0 as i64:
+            jobs.send(raw.fd)
+            pool.Submit(ss.workers, task)
+        else tcp.ConnOk(raw):
+            tcp.Close(raw)
+        end
+    end
+end
+
+@en "ServeRelay"
+@fa "خدمت رله"
+pub func ServeRelay(s: Server):
+    Serve(s, (c: Conn): Relay(c) end)
+end
+
+@en "Stop"
+@fa "توقف سرور"
+pub func Stop(s: Server):
+    ss := s.st
+    if ss == null:
+        ret
+    end
+    atomic_store(ss.stop, 1 as i64)
+    rawsock.Shutdown(rawsock.Socket { fd = ss.ls.fd })
+    wake := tcp.Dial("127.0.0.1", tcp.Port(ss.ls))
+    if tcp.ConnOk(wake):
+        tcp.Close(wake)
+    end
+end
+
+@en "Destroy"
+@fa "نابودی سرور"
+pub func Destroy(s: Server):
+    ss := s.st
+    if ss == null:
+        ret
+    end
+    tcp.CloseServer(ss.ls)
+    pool.Stop(ss.workers)
+    ss.jobs.close()
+    ss.jobs.free()
+    FilterFree(ss.filter)
+    BufWipe(ss.key)
+    BufFree(ss.key)
+    mem.Free(ss.stop as void*)
+    mem.Free(ss as void*)
+end

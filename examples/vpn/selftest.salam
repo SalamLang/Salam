@@ -1,0 +1,223 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import io
+import mem
+import os
+import pool
+import net.socks
+import net.httpproxy
+import net.tcp
+import net.transport
+import net.tunnel
+
+include "registry.salam"
+include "core.salam"
+include "testcert.salam"
+
+const UUID := "b831381d-6324-4d53-ad4f-8cda48b30811"
+const SIZES := [1, 1000, 16384, 65536]
+
+mut failures := 0
+mut echo_srv := tcp.Server {}
+mut site_srv := tcp.Server {}
+mut workers := pool.Pool {}
+
+func echo_conn(c: tcp.Conn):
+    buf := mem.Allocate(65536 as u64)
+    until true:
+        n := tcp.ReadBytes(c, buf, 65536)
+        if n <= 0: break end
+        if tcp.WriteBytes(c, buf, n) < n: break end
+    end
+    mem.Free(buf)
+    tcp.Close(c)
+end
+
+func echo_loop():
+    until true:
+        c := tcp.Accept(echo_srv)
+        if not tcp.ConnOk(c): break end
+        pool.Submit(workers, (): echo_conn(c) end)
+    end
+end
+
+func site_conn(c: tcp.Conn):
+    _head := tcp.Read(c, 1024)
+    tcp.Write(c, "HTTP/1.1 200 OK\r\nContent-Length: 14\r\nConnection: close\r\n\r\nhello, website")
+    tcp.Close(c)
+end
+
+func site_loop():
+    until true:
+        c := tcp.Accept(site_srv)
+        if not tcp.ConnOk(c): break end
+        pool.Submit(workers, (): site_conn(c) end)
+    end
+end
+
+func pattern(n: int, seed: int): str:
+    mut b := mem.AllocateZeroed((n + 1) as u64) as u8*
+    repeat n in i:
+        b[i] = (65 + (i * 7 + seed) % 26) as u8
+    end
+    ret b as str
+end
+
+func echo_check(s: dyn tunnel.Stream): int:
+    mut total := 0
+    each k, n in SIZES:
+        want := pattern(n, k)
+        if not tunnel.WriteAll(s, want): ret 0 - 1 end
+        got := mem.AllocateZeroed((n + 1) as u64)
+        defer mem.Free(got)
+        if not tunnel.ReadFull(s, got, n): ret 0 - 1 end
+        if (got as str) != want: ret 0 - 1 end
+        total += n
+    end
+    ret total
+end
+
+func report(label: str, bytes: int):
+    if bytes < 0:
+        println label, "FAILED"
+        failures++
+    else:
+        println label, "echo ok,", bytes, "bytes"
+    end
+end
+
+func via_socks(port: int): int:
+    s := tunnel.DialTcp("127.0.0.1", port, 5000)
+    if not s.Ok(): ret 0 - 1 end
+    r := socks.ClientHandshake(s, socks.Client { version = 5 }, socks.CmdConnect, "127.0.0.1", tcp.Port(echo_srv))
+    if not r.ok: ret 0 - 1 end
+    s.SetDeadline(10000)
+    n := echo_check(s)
+    s.Close()
+    ret n
+end
+
+func via_http(port: int): int:
+    s := tunnel.DialTcp("127.0.0.1", port, 5000)
+    if not s.Ok(): ret 0 - 1 end
+    r := httpproxy.ClientHandshake(s, httpproxy.Client {}, "127.0.0.1", tcp.Port(echo_srv))
+    if not r.ok: ret 0 - 1 end
+    s.SetDeadline(10000)
+    n := echo_check(s)
+    s.Close()
+    ret n
+end
+
+func local_proxy(node: tunnel.Node, stats: tunnel.Stats): core.Listener:
+    mut dialer := tunnel.NewRouterDialer(tunnel.NewRouter("proxy"))
+    tunnel.RouterDialerAdd(dialer, "proxy", registry.DialerFromNode(node))
+    ret core.Start(tunnel.InboundConfig { tag = "local", protocol = "mixed" }, dialer, stats)
+end
+
+func link_node(n: tunnel.Node): tunnel.Node:
+    ret tunnel.ParseLink(tunnel.NodeToLink(n))
+end
+
+func tls_stream(network: str, path: str, crt: str, key: str): str:
+    mut ws := ""
+    if network == "ws": ws = `,"wsSettings":{"path":"` + path + `"}` end
+    ret `{"network":"` + network + `","security":"tls","tlsSettings":{"certificates":[{"certificateFile":"` + crt + `","keyFile":"` + key + `"}]}` + ws + `}`
+end
+
+func server_config(crt: str, key: str, site: int): str:
+    users := `{"clients":[{"id":"` + UUID + `"}]}`
+    ib := (tag: str, proto: str, settings: str, stream: str):
+        mut m := `{"tag":"` + tag + `","port":0,"protocol":"` + proto + `","settings":` + settings
+        if stream.len() > 0: m += `,"streamSettings":` + stream end
+        ret m + "}"
+    end
+    mut all := Vector {} as Vector<str>
+    all.push(ib("vless-tcp", "vless", users, ""))
+    all.push(ib("vless-wss", "vless", users, tls_stream("ws", "/v", crt, key)))
+    all.push(ib("vmess-tcp", "vmess", users, ""))
+    all.push(ib("vmess-ws", "vmess", users, `{"network":"ws","wsSettings":{"path":"/m"}}`))
+    all.push(ib("trojan-tls", "trojan", `{"clients":[{"password":"hunter2"}],"fallbacks":[{"dest":"127.0.0.1:` + site + `"}]}`, tls_stream("tcp", "", crt, key)))
+    all.push(ib("ss-tcp", "shadowsocks", `{"method":"aes-256-gcm","password":"s3cret"}`, ""))
+    mut text := `{"inbounds":[`
+    each i, m in all:
+        if i > 0: text += "," end
+        text += m
+    end
+    ret text + `],"outbounds":[{"tag":"direct","protocol":"freedom"}]}`
+end
+
+func main:
+    dir := os.TempDir() + "/vpn-selftest-" + os.Pid()
+    os.MkdirAll(dir)
+    crt := dir + "/server.crt"
+    key := dir + "/server.key"
+    io.WriteFile(crt, testcert.CRT)
+    io.WriteFile(key, testcert.KEY)
+
+    workers = pool.NewElastic(2 as i64, 64 as i64, 64 as i64)
+    registry.Install(registry.Options { fragment = true })
+    echo_srv = tcp.Bind(0)
+    site_srv = tcp.Bind(0)
+    _echo_t := spawn(echo_loop)
+    _site_t := spawn(site_loop)
+
+    server_stats := tunnel.NewStats()
+    cfg := tunnel.ParseConfig(server_config(crt, key, tcp.Port(site_srv)))
+    servers := core.StartAll(cfg, server_stats)
+    println "server inbounds:", servers.len()
+
+    cases := [
+        tunnel.Node { protocol = "vless", uuid = UUID, network = "tcp" }, tunnel.Node { protocol = "vless", uuid = UUID, network = "ws", path = "/v", tls = true, security = "tls", sni = "localhost", allow_insecure = true },
+        tunnel.Node { protocol = "vmess", uuid = UUID, method = "auto", network = "tcp" }, tunnel.Node { protocol = "vmess", uuid = UUID, method = "chacha20-poly1305", network = "ws", path = "/m" },
+        tunnel.Node { protocol = "trojan", password = "hunter2", network = "tcp", tls = true, security = "tls", sni = "localhost", allow_insecure = true },
+        tunnel.Node { protocol = "ss", method = "aes-256-gcm", password = "s3cret", network = "tcp" }
+    ]
+    names := ["vless over tcp", "vless over ws+tls", "vmess over tcp", "vmess over ws", "trojan over tls", "shadowsocks over tcp"]
+    each i, c in cases:
+        mut n := c
+        n.host = "127.0.0.1"
+        n.port = servers[i].port
+        n.valid = true
+        stats := tunnel.NewStats()
+        proxy := local_proxy(link_node(n), stats)
+        report(names[i], via_socks(proxy.port))
+        if i == 0: report("vless over tcp, http connect", via_http(proxy.port)) end
+        core.Stop(proxy)
+    end
+
+    wrong := tunnel.Node { protocol = "vless", uuid = "00000000-0000-4000-8000-000000000001", network = "tcp", host = "127.0.0.1", port = servers[0].port, valid = true }
+    bad := local_proxy(wrong, tunnel.NewStats())
+    println "vless unknown user:", via_socks(bad.port) < 0 ? "rejected" : "ACCEPTED"
+    core.Stop(bad)
+
+    probe := transport.Dial("127.0.0.1", servers[4].port, transport.Settings { tls = true, allow_insecure = true, sni = "localhost" })
+    probe_s := transport.AsStream(probe)
+    tunnel.WriteAll(probe_s, "GET / HTTP/1.1\r\nHost: example.org\r\n\r\n")
+    reply := tunnel.ReadUntil(probe_s, "website", 4096)
+    println "trojan probe without password:", reply.ends_with("hello, website") ? "served the website" : "FAILED"
+    probe_s.Close()
+
+    ir := tunnel.IranRouter("direct", "proxy")
+    println "iran router:", ir.MatchHost("divar.ir", 443), ir.MatchHost("192.168.1.10", 80), ir.MatchHost("digikala.com", 443), ir.MatchHost("example.com", 443)
+
+    each l in servers: core.Stop(l) end
+    tcp.CloseServer(echo_srv)
+    tcp.CloseServer(site_srv)
+    os.RemoveAll(dir)
+    println "failures:", failures
+    ret failures
+end

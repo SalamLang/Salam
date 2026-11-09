@@ -1,0 +1,178 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import net.socks
+
+func hex(label: str, v: Vector<u8>):
+    println label + ": " + socks.ToHex(v)
+    v.free()
+end
+
+func dom(h: str, p: int): socks.Address:
+    ret socks.Address { kind = socks.AtypDomain, host = h, port = p }
+end
+
+func main:
+    mut methods := Vector {} as Vector<u8>
+    methods.push(0 as u8)
+    hex("greeting none", socks.EncodeGreeting(methods))
+    methods.push(2 as u8)
+    hex("greeting pass", socks.EncodeGreeting(methods))
+    methods.free()
+    hex("choice", socks.EncodeMethodChoice(2))
+    hex("auth req", socks.EncodeAuthRequest("user", "pass"))
+    hex("auth ok", socks.EncodeAuthReply(true))
+    hex("auth bad", socks.EncodeAuthReply(false))
+    println "auth empty user: " + socks.ToHex(socks.EncodeAuthRequest("", "x"))
+
+    hex("connect domain", socks.EncodeRequest(socks.CmdConnect, socks.NewAddress("example.com", 443)))
+    hex("connect v4", socks.EncodeRequest(socks.CmdConnect, socks.NewAddress("1.2.3.4", 80)))
+    hex("connect v6", socks.EncodeRequest(socks.CmdConnect, socks.NewAddress("::1", 8080)))
+    hex("bind", socks.EncodeRequest(socks.CmdBind, socks.NewAddress("10.0.0.1", 0)))
+    hex("udp", socks.EncodeRequest(socks.CmdUDPAssociate, socks.NewAddress("0.0.0.0", 0)))
+    hex("reply ok", socks.EncodeReply(socks.RepSucceeded, socks.NewAddress("127.0.0.1", 1080)))
+    hex("reply refused", socks.EncodeReply(socks.RepConnRefused, socks.Address {}))
+    hex("udp header", socks.EncodeUDPHeader(socks.NewAddress("8.8.8.8", 53), 0))
+
+    hex("socks4 ip", socks.Encode4Request(1, "93.184.216.34", 80, "bob"))
+    hex("socks4a", socks.Encode4Request(1, "example.com", 80, ""))
+    hex("socks4 reply", socks.Encode4Reply(socks.Rep4Granted, "1.2.3.4", 8080))
+
+    println "dotted non-ip: " + socks.ToHex(socks.EncodeAddress(socks.NewAddress("1.2.3", 80)))
+    println "long domain: " + socks.EncodeAddress(dom("a".repeat(256), 80)).len()
+    println "empty domain: " + socks.EncodeAddress(dom("", 80)).len()
+    println "max domain: " + socks.EncodeAddress(dom("a".repeat(255), 80)).len()
+    println "bad port: " + socks.EncodeAddress(socks.NewAddress("1.2.3.4", 70000)).len()
+
+    println "classify: " + socks.ClassifyHost("1.2.3.4") + " " + socks.ClassifyHost("example.com") + " " + socks.ClassifyHost("::1") + " " + socks.ClassifyHost("999.1.1.1") + " " + socks.ClassifyHost("fe80::1")
+
+    mut b := Vector {} as Vector<u8>
+    v6 := ["::", "::1", "2001:db8::1", "fe80::1:2:3:4", "1:2:3:4:5:6:7:8", "::ffff:1.2.3.4", "1::", "0:0:1:0:0:0:0:1"]
+    each t in v6:
+        ok := socks.ParseIPv6(t, b)
+        if ok:
+            println "v6 " + t + " -> " + socks.FormatIPv6(b, 0)
+        else:
+            println "v6 " + t + " rejected"
+        end
+    end
+    bad6 := ["", ":", ":::", "1::2::3", "12345::1", "1:2:3:4:5:6:7:8:9", "g::1", "1:2:3:4:5:6:7", "::1.2.3"]
+    each t in bad6:
+        if socks.ParseIPv6(t, b):
+            println "v6 " + t + " wrongly accepted"
+        else:
+            println "v6 reject " + t
+        end
+    end
+    bad4 := ["", "1.2.3", "1.2.3.4.5", "256.1.1.1", "1..2.3", "a.b.c.d", "01.2.3.4x"]
+    each t in bad4:
+        if socks.ParseIPv4(t, b):
+            println "v4 " + t + " wrongly accepted"
+        else:
+            println "v4 reject " + t
+        end
+    end
+    b.free()
+
+    mut raw := Vector {} as Vector<u8>
+    rq := socks.EncodeRequest(socks.CmdConnect, socks.NewAddress("example.com", 443))
+    mut req := socks.Request {}
+    println "decode full: " + socks.DecodeRequest(rq, req) + " " + req.cmd + " " + req.addr.host + ":" + req.addr.port + " kind " + req.addr.kind
+    repeat rq.len() in cut:
+        raw.clear()
+        repeat cut in i:
+            raw.push(rq.get(i))
+        end
+        r := socks.DecodeRequest(raw, req)
+        if r != 0: println "truncated at " + cut + " gave " + r end
+    end
+    println "truncated all return 0"
+    rq.set(3, 9 as u8)
+    println "bad atyp: " + socks.DecodeRequest(rq, req)
+    rq.set(3, 3 as u8)
+    rq.set(4, 0 as u8)
+    println "zero domain: " + socks.DecodeRequest(rq, req)
+    rq.set(4, 11 as u8)
+    rq.set(0, 4 as u8)
+    println "bad version: " + socks.DecodeRequest(rq, req)
+    rq.set(0, 5 as u8)
+    rq.set(2, 1 as u8)
+    println "bad rsv: " + socks.DecodeRequest(rq, req)
+    rq.free()
+
+    rp := socks.EncodeReply(socks.RepSucceeded, socks.NewAddress("2001:db8::5", 9999))
+    mut rep := socks.Reply {}
+    println "decode reply: " + socks.DecodeReply(rp, rep) + " " + rep.code + " " + rep.addr.host + ":" + rep.addr.port
+    rp.free()
+
+    uh := socks.EncodeUDPHeader(socks.NewAddress("example.org", 5353), 0)
+    mut hd := socks.UDPHeader {}
+    println "udp header: " + socks.DecodeUDPHeader(uh, hd) + " " + hd.addr.host + ":" + hd.addr.port + " len " + hd.length + " frag " + hd.frag
+    uh.set(2, 3 as u8)
+    println "udp frag: " + socks.DecodeUDPHeader(uh, hd) + " " + hd.frag
+    uh.free()
+
+    r4 := socks.Encode4Request(1, "93.184.216.34", 80, "bob")
+    mut q4 := socks.Request {}
+    println "decode4: " + socks.Decode4Request(r4, q4) + " " + q4.addr.host + ":" + q4.addr.port + " user " + q4.user
+    r4.free()
+    r4a := socks.Encode4Request(1, "example.com", 80, "al")
+    println "decode4a: " + socks.Decode4Request(r4a, q4) + " " + q4.addr.host + ":" + q4.addr.port + " user " + q4.user + " kind " + q4.addr.kind
+    mut cutv := Vector {} as Vector<u8>
+    mut partial := 0
+    repeat r4a.len() in cut:
+        cutv.clear()
+        repeat cut in i:
+            cutv.push(r4a.get(i))
+        end
+        if socks.Decode4Request(cutv, q4) != 0: partial++ end
+    end
+    println "decode4a truncated nonzero: " + partial
+    cutv.free()
+    r4a.free()
+    mut rep4 := socks.Reply {}
+    e4 := socks.Encode4Reply(socks.Rep4Rejected, "9.8.7.6", 22)
+    println "decode4 reply: " + socks.Decode4Reply(e4, rep4) + " " + rep4.code + " " + rep4.addr.host + ":" + rep4.addr.port
+    e4.free()
+
+    println socks.ReplyText(socks.RepConnRefused) + " | " + socks.ReplyText(socks.Rep4Granted) + " | " + socks.ReplyText(200)
+
+    mut seed := 12345 as i64
+    mut fuzz := Vector {} as Vector<u8>
+    mut crashes := 0
+    repeat 3000 in round:
+        fuzz.clear()
+        seed = (seed * 1103515245 + 12345) & 2147483647
+        n := ((seed >> 8) % 40) as int
+        repeat n:
+            seed = (seed * 1103515245 + 12345) & 2147483647
+            fuzz.push(((seed >> 16) & 255) as u8)
+        end
+        if round % 3 == 0 and n > 0: fuzz.set(0, 5 as u8) end
+        if round % 3 == 1 and n > 3: fuzz.set(3, (1 + (round % 4)) as u8) end
+        mut qa := socks.Request {}
+        mut ra := socks.Reply {}
+        mut ua := socks.UDPHeader {}
+        mut aa := socks.Address {}
+        x1 := socks.DecodeRequest(fuzz, qa)
+        x2 := socks.DecodeReply(fuzz, ra)
+        ok := socks.DecodeUDPHeader(fuzz, ua)
+        x3 := socks.Decode4Request(fuzz, qa)
+        x4 := socks.DecodeAddress(fuzz, 0, aa)
+        if x1 > fuzz.len() or x2 > fuzz.len() or x3 > fuzz.len() or x4 > fuzz.len(): crashes++ end
+        if ok and ua.length > fuzz.len(): crashes++ end
+    end
+    fuzz.free()
+    println "fuzz overruns: " + crashes
+end

@@ -1,0 +1,319 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package shadowsocks
+
+import mem
+
+const B3_CHUNK_START := 1 as u32
+const B3_CHUNK_END := 2 as u32
+const B3_PARENT := 4 as u32
+const B3_ROOT := 8 as u32
+const B3_KEYED_HASH := 16 as u32
+const B3_DERIVE_CONTEXT := 32 as u32
+const B3_DERIVE_MATERIAL := 64 as u32
+const B3_STACK_WORDS := 8 * 64
+
+func _b3_iv(i: int): u32:
+    if i == 0:
+        ret 0x6A09E667
+    end
+    if i == 1:
+        ret 0xBB67AE85
+    end
+    if i == 2:
+        ret 0x3C6EF372
+    end
+    if i == 3:
+        ret 0xA54FF53A
+    end
+    if i == 4:
+        ret 0x510E527F
+    end
+    if i == 5:
+        ret 0x9B05688C
+    end
+    if i == 6:
+        ret 0x1F83D9AB
+    end
+    ret 0x5BE0CD19
+end
+
+inline func _b3_rotr(x: u32, n: int): u32:
+    ret (x >> (n as u32)) | (x << ((32 - n) as u32))
+end
+
+inline func _b3_g(v: u32*, a: int, b: int, c: int, d: int, mx: u32, my: u32):
+    v[a] = v[a] + v[b] + mx
+    v[d] = _b3_rotr(v[d] ^ v[a], 16)
+    v[c] = v[c] + v[d]
+    v[b] = _b3_rotr(v[b] ^ v[c], 12)
+    v[a] = v[a] + v[b] + my
+    v[d] = _b3_rotr(v[d] ^ v[a], 8)
+    v[c] = v[c] + v[d]
+    v[b] = _b3_rotr(v[b] ^ v[c], 7)
+end
+
+func _b3_round(v: u32*, m: u32*):
+    _b3_g(v, 0, 4, 8, 12, m[0], m[1])
+    _b3_g(v, 1, 5, 9, 13, m[2], m[3])
+    _b3_g(v, 2, 6, 10, 14, m[4], m[5])
+    _b3_g(v, 3, 7, 11, 15, m[6], m[7])
+    _b3_g(v, 0, 5, 10, 15, m[8], m[9])
+    _b3_g(v, 1, 6, 11, 12, m[10], m[11])
+    _b3_g(v, 2, 7, 8, 13, m[12], m[13])
+    _b3_g(v, 3, 4, 9, 14, m[14], m[15])
+end
+
+func _b3_permute(m: u32*, t: u32*):
+    perm := [2, 6, 3, 10, 7, 0, 4, 13, 1, 11, 12, 5, 9, 14, 15, 8]
+    repeat 16 in i:
+        t[i] = m[perm[i]]
+    end
+    repeat 16 in j:
+        m[j] = t[j]
+    end
+end
+
+func _b3_compress(cv: u32*, block: u32*, counter: u64, blen: u32, flags: u32, out: u32*):
+    v := mem.Allocate(64 as u64) as u32*
+    m := mem.Allocate(64 as u64) as u32*
+    t := mem.Allocate(64 as u64) as u32*
+    repeat 8 in i:
+        v[i] = cv[i]
+    end
+    repeat 4 in j:
+        v[8 + j] = _b3_iv(j)
+    end
+    v[12] = (counter & (0xFFFFFFFF as u64)) as u32
+    v[13] = (counter >> (32 as u64)) as u32
+    v[14] = blen
+    v[15] = flags
+    repeat 16 in k:
+        m[k] = block[k]
+    end
+    repeat 7 in r:
+        _b3_round(v, m)
+        if r < 6:
+            _b3_permute(m, t)
+        end
+    end
+    repeat 8 in x:
+        out[x] = v[x] ^ v[x + 8]
+        out[x + 8] = v[x + 8] ^ cv[x]
+    end
+    mem.Free(v as void*)
+    mem.Free(m as void*)
+    mem.Free(t as void*)
+end
+
+func _b3_load(data: void*, n: int, block: u32*):
+    bp := data as u8*
+    repeat 16 in w:
+        mut x := 0 as u32
+        repeat 4 in b:
+            idx := w * 4 + b
+            if idx < n:
+                x |= (bp[idx] as u32) << ((b * 8) as u32)
+            end
+        end
+        block[w] = x
+    end
+end
+
+func _b3_chunk_out(key: u32*, data: void*, n: int, counter: u64, base: u32, o: u32*):
+    mut nblocks := (n + 63) / 64
+    if nblocks == 0:
+        nblocks = 1
+    end
+    tmp := mem.Allocate(64 as u64) as u32*
+    repeat 8 in i:
+        o[i] = key[i]
+    end
+    repeat nblocks in b:
+        mut blen := n - b * 64
+        if blen > 64:
+            blen = 64
+        end
+        _b3_load(_at(data, b * 64), blen, _b3_at(o, 8))
+        mut fl := base
+        if b == 0:
+            fl |= B3_CHUNK_START
+        end
+        if b == nblocks - 1:
+            fl |= B3_CHUNK_END
+        end
+        o[24] = (counter & (0xFFFFFFFF as u64)) as u32
+        o[25] = (counter >> (32 as u64)) as u32
+        o[26] = blen as u32
+        o[27] = fl
+        if b < nblocks - 1:
+            _b3_compress(o, _b3_at(o, 8), counter, blen as u32, fl, tmp)
+            repeat 8 in j:
+                o[j] = tmp[j]
+            end
+        end
+    end
+    mem.Free(tmp as void*)
+end
+
+inline func _b3_at(p: u32*, off: int): u32*:
+    ret (((p as i64) + ((off * 4) as i64)) as void*) as u32*
+end
+
+func _b3_out_cv(o: u32*, cv: u32*):
+    tmp := mem.Allocate(64 as u64) as u32*
+    counter := (o[24] as u64) | ((o[25] as u64) << (32 as u64))
+    _b3_compress(o, _b3_at(o, 8), counter, o[26], o[27], tmp)
+    repeat 8 in i:
+        cv[i] = tmp[i]
+    end
+    mem.Free(tmp as void*)
+end
+
+func _b3_parent_out(key: u32*, left: u32*, right: u32*, base: u32, o: u32*):
+    repeat 8 in i:
+        o[i] = key[i]
+        o[8 + i] = left[i]
+        o[16 + i] = right[i]
+    end
+    o[24] = 0 as u32
+    o[25] = 0 as u32
+    o[26] = 64 as u32
+    o[27] = B3_PARENT | base
+end
+
+func _b3_root(o: u32*, out: void*, outlen: int):
+    tmp := mem.Allocate(64 as u64) as u32*
+    mut done := 0
+    mut t := 0 as u64
+    until done < outlen:
+        _b3_compress(o, _b3_at(o, 8), t, o[26], o[27] | B3_ROOT, tmp)
+        mut take := outlen - done
+        if take > 64:
+            take = 64
+        end
+        repeat take in i:
+            w := tmp[i / 4]
+            _setb(out, done + i, ((w >> (((i % 4) * 8) as u32)) & (0xFF as u32)) as int)
+        end
+        done += take
+        t += 1 as u64
+    end
+    mem.Free(tmp as void*)
+end
+
+func _b3_hash_with(key: u32*, base: u32, p: void*, n: int, out: void*, outlen: int):
+    mut nchunks := (n + 1023) / 1024
+    if nchunks == 0:
+        nchunks = 1
+    end
+    stack := mem.Allocate((B3_STACK_WORDS * 4) as u64) as u32*
+    o := mem.Allocate(112 as u64) as u32*
+    o2 := mem.Allocate(112 as u64) as u32*
+    cv := mem.Allocate(32 as u64) as u32*
+    mut sp := 0
+    repeat nchunks - 1 in ci:
+        _b3_chunk_out(key, _at(p, ci * 1024), 1024, ci as u64, base, o)
+        _b3_out_cv(o, cv)
+        mut tt := ci + 1
+        until tt % 2 == 0:
+            sp -= 1
+            _b3_parent_out(key, _b3_at(stack, sp * 8), cv, base, o2)
+            _b3_out_cv(o2, cv)
+            tt = tt / 2
+        end
+        repeat 8 in w:
+            stack[sp * 8 + w] = cv[w]
+        end
+        sp += 1
+    end
+    last := nchunks - 1
+    mut lastlen := n - last * 1024
+    if lastlen < 0:
+        lastlen = 0
+    end
+    _b3_chunk_out(key, _at(p, last * 1024), lastlen, last as u64, base, o)
+    until sp > 0:
+        sp -= 1
+        _b3_out_cv(o, cv)
+        _b3_parent_out(key, _b3_at(stack, sp * 8), cv, base, o2)
+        repeat 28 in w:
+            o[w] = o2[w]
+        end
+    end
+    _b3_root(o, out, outlen)
+    mem.Free(stack as void*)
+    mem.Free(o as void*)
+    mem.Free(o2 as void*)
+    mem.Free(cv as void*)
+end
+
+func _b3_key_words(key: void*, out: u32*):
+    repeat 8 in i:
+        mut x := 0 as u32
+        repeat 4 in b:
+            x |= (_getb(key, i * 4 + b) as u32) << ((b * 8) as u32)
+        end
+        out[i] = x
+    end
+end
+
+func _b3_iv_key(out: u32*):
+    repeat 8 in i:
+        out[i] = _b3_iv(i)
+    end
+end
+
+@en "Blake3Hash"
+@fa "هش بلیک۳"
+pub func Blake3Hash(p: void*, n: int, out: void*, outlen: int):
+    key := mem.Allocate(32 as u64) as u32*
+    _b3_iv_key(key)
+    _b3_hash_with(key, 0 as u32, p, n, out, outlen)
+    mem.Free(key as void*)
+end
+
+@en "Blake3KeyedHash"
+@fa "هش کلیددار بلیک۳"
+pub func Blake3KeyedHash(key32: void*, p: void*, n: int, out: void*, outlen: int):
+    key := mem.Allocate(32 as u64) as u32*
+    _b3_key_words(key32, key)
+    _b3_hash_with(key, B3_KEYED_HASH, p, n, out, outlen)
+    mem.Free(key as void*)
+end
+
+@en "Blake3DeriveKey"
+@fa "اشتقاق کلید بلیک۳"
+pub func Blake3DeriveKey(context: str, p: void*, n: int, out: void*, outlen: int):
+    key := mem.Allocate(32 as u64) as u32*
+    _b3_iv_key(key)
+    cbytes := mem.AllocateZeroed(32 as u64)
+    _b3_hash_with(key, B3_DERIVE_CONTEXT, context as void*, context.len(), cbytes, 32)
+    _b3_key_words(cbytes, key)
+    _b3_hash_with(key, B3_DERIVE_MATERIAL, p, n, out, outlen)
+    mem.Free(cbytes)
+    mem.Free(key as void*)
+end
+
+@en "Blake3SessionKey"
+@fa "کلید نشست بلیک۳"
+pub func Blake3SessionKey(psk: void*, klen: int, salt: void*, slen: int, out: void*):
+    mat := mem.AllocateZeroed((klen + slen) as u64)
+    mem.Copy(mat, psk, klen as u64)
+    mem.Copy(_at(mat, klen), salt, slen as u64)
+    Blake3DeriveKey("shadowsocks 2022 session subkey", mat, klen + slen, out, klen)
+    _wipe(mat, klen + slen)
+    mem.Free(mat)
+end

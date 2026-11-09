@@ -1,0 +1,414 @@
+pkg.en = net/shadowsocks
+pkg.name = net.shadowsocks
+pkg.group = Network
+pkg.summary = A Shadowsocks client and server: AEAD and Shadowsocks 2022 ciphers, ss:// links, simple-obfs, a UDP relay, and a stream that runs over any tunnel.Stream.
+pkg.title = The net.shadowsocks package in Salam | Shadowsocks client and server
+pkg.description = The net.shadowsocks package in Salam: dial and serve Shadowsocks over TCP and UDP with AES-GCM, ChaCha20-Poly1305 and the 2022 BLAKE3 ciphers, parse ss:// links, hide the traffic with simple-obfs, and run it over a tunnel stream, with runnable examples.
+pkg.import = net.shadowsocks
+pkg.intro <<
+<p>Shadowsocks is a small encrypted proxy protocol. A client connects to a Shadowsocks server and says which host and port it wants to reach; the server connects there and carries bytes both ways. Everything after the first byte looks like random data, so there is no handshake to recognise. <code>net.shadowsocks</code> is a client and a server for it written in Salam, with no native library. It is one of the proxy packages built on <a href="/std/net/tunnel/">net.tunnel</a> and can be plugged into the same routers and chains as the others.</p>
+<p>The main calls are few. <code>Dial</code> opens a <code>Conn</code> through a server to a target such as <code>example.com:443</code>; <code>Read</code>, <code>Write</code> and <code>Close</code> then work like on any socket. <code>Listen</code> starts a server and <code>Serve</code> or <code>ServeRelay</code> answers clients. <code>Config</code> holds the server address, the cipher <code>method</code>, the <code>password</code> and the optional <code>obfs</code> disguise. Everything else (<code>Buf</code>, <code>Encoder</code>, <code>Decoder</code>, the BLAKE3 and key functions) is the lower level the protocol is built from, public so you can test it or build your own framing.</p>
+
+<h2 id="guide-quickstart">Quick start</h2>
+<p>This program starts a server on a free port, connects a client through it to <code>example.com:443</code> and sends one message. The handler never connects to <code>example.com</code>; it only reads the target the client asked for with <code>TargetOf</code> and echoes the bytes back, so the whole run stays on the loopback interface. <code>Stop</code> wakes the accept loop so that <code>Serve</code> returns, and <code>Destroy</code> frees the server.</p>
+{{example.net-shadowsocks-guide-loopback}}
+<p>A real server uses <code>ServeRelay</code>, which does the forwarding for you: for each client it connects to the requested target and copies bytes in both directions until either side closes. The next example runs a relay in front of a small TCP echo server and sends a message through it.</p>
+{{example.net-shadowsocks-guide-relay}}
+<p>The client side is just <code>Dial</code> with a <code>Config</code>. <code>Dial</code> returns at once without waiting for the server: the target address travels in the first encrypted packet together with your first <code>Write</code>. So a wrong password is not reported by <code>Dial</code>; the server drops the connection and your first <code>Read</code> returns 0 or a negative number. Check <code>Ok</code> for a connection that could not even start (an unknown method, or the server not reachable).</p>
+
+<h2 id="guide-methods">Ciphers</h2>
+<p>The <code>method</code> is a name from this table. <code>LookupMethod</code> turns a name into a <code>Method</code> and returns one with <code>ok</code> false for a name it does not know. The name <code>chacha20-poly1305</code> is accepted too, as an alias of <code>chacha20-ietf-poly1305</code>. Old stream ciphers such as <code>rc4-md5</code> and <code>aes-256-cfb</code> are not supported and never will be: they are broken.</p>
+<div class="table-wrap"><table class="api-members">
+<thead><tr><th>Method</th><th>Key</th><th>Salt</th><th>Password form</th><th>Notes</th></tr></thead>
+<tbody>
+<tr><td><code dir="ltr">aes-128-gcm</code></td><td>16 bytes</td><td>16 bytes</td><td>any text</td><td>Classic AEAD. Slow here, see below.</td></tr>
+<tr><td><code dir="ltr">aes-256-gcm</code></td><td>32 bytes</td><td>32 bytes</td><td>any text</td><td>Classic AEAD. The default of <code>Config</code>. Slow here, see below.</td></tr>
+<tr><td><code dir="ltr">chacha20-ietf-poly1305</code></td><td>32 bytes</td><td>32 bytes</td><td>any text</td><td>Classic AEAD. The one to prefer.</td></tr>
+<tr><td><code dir="ltr">2022-blake3-aes-128-gcm</code></td><td>16 bytes</td><td>16 bytes</td><td>base64 of exactly 16 bytes</td><td>Shadowsocks 2022, TCP only.</td></tr>
+<tr><td><code dir="ltr">2022-blake3-aes-256-gcm</code></td><td>32 bytes</td><td>32 bytes</td><td>base64 of exactly 32 bytes</td><td>Shadowsocks 2022, TCP only.</td></tr>
+<tr><td><code dir="ltr">2022-blake3-chacha20-poly1305</code></td><td>32 bytes</td><td>32 bytes</td><td>base64 of exactly 32 bytes</td><td>Shadowsocks 2022, TCP only.</td></tr>
+</tbody></table></div>
+{{example.net-shadowsocks-guide-methods}}
+<p>For the first three, the password is any text and the key is derived from it the classic way (<code>BytesToKey</code>, MD5 based), so use a long random password. For the 2022 ciphers the password <em>is</em> the key: it must be the base64 of exactly the key length, for example the output of <code>openssl rand -base64 32</code>. A password of the wrong length makes <code>MakeKey</code> return a <code>Buf</code> with <code>bad</code> set, and <code>Listen</code> or <code>Dial</code> then fail. The 2022 ciphers add replay protection with a timestamp (a request more than 30 seconds off is refused) and a salt cache, and the connection header is authenticated.</p>
+
+<h3 id="limits">What is not there</h3>
+<ul>
+<li>Shadowsocks 2022 is implemented for TCP only. <code>UdpListen</code>, <code>UdpDial</code>, <code>PackUdp</code> and <code>UnpackUdp</code> refuse the three 2022 methods.</li>
+<li>No multi user support: the 2022 extensible identity headers (EIH, a key per user behind one port) are not implemented. A server has one password.</li>
+<li>No real server was used to test the interoperability of <code>simple-obfs</code> and of the 2022 TCP stream. They are tested against this package itself and against separate Python reimplementations written from the specifications, not against <code>ssserver</code>, <code>shadowsocks-rust</code> or the real <code>obfs-server</code>. The classic AEAD ciphers are checked against published test vectors. Treat the 2022 methods and the obfuscation as young and test against your own server before relying on them.</li>
+<li>AES is done in software (bitsliced, to avoid timing leaks) and is slow: in the tests here about four to five times slower than ChaCha20. Prefer <code>chacha20-ietf-poly1305</code>.</li>
+<li>The relay has no half close: when one side closes, the whole connection is shut down. A protocol that depends on a client finishing its request with a close and still reading the answer will break.</li>
+<li>No anti probing behaviour: a server that receives a bad first packet closes the connection at once instead of draining it as a real web server would, so a prober can tell it is not one.</li>
+<li>UDP is IPv4 only, and the UDP relay has no replay filter (TCP has one, a salt cache of 100000 entries).</li>
+<li>Only the HTTP and TLS shapes of <code>simple-obfs</code> exist, not the plugin <code>v2ray-plugin</code> or other plugins.</li>
+</ul>
+
+<h2 id="guide-uri">ss:// links and plugin options</h2>
+<p>Shadowsocks servers are shared as <code>ss://</code> links. <code>ParseUri</code> reads the SIP002 form <code>ss://base64(method:password)@host:port/?plugin=...#tag</code>, the form with the user info in plain percent encoded text (used by the 2022 ciphers), and the old form where the whole <code>method:password@host:port</code> is base64. It returns a <code>Uri</code> whose <code>ok</code> is true only when the link is well formed and the method is known. <code>FormatUri</code> writes the link back (a 2022 link is written with the method and password in text, the others as base64). <code>ToConfig</code> turns a <code>Uri</code> into a <code>Config</code> that <code>Dial</code> accepts, including the obfuscation options of the plugin.</p>
+<p>The <code>plugin</code> text is a plugin name followed by <code>key=value</code> options separated by semicolons, with a backslash to escape a semicolon or equals sign. <code>ParsePlugin</code> splits it into a <code>Plugin</code> and <code>PluginGet</code> and <code>PluginHas</code> read the options. Free it with <code>PluginFree</code>. <code>ToConfig</code> understands the plugin names <code>obfs-local</code> and <code>simple-obfs</code> with the options <code>obfs</code> (<code>http</code> or <code>tls</code>) and <code>obfs-host</code>; any other plugin is ignored, so check <code>u.plugin</code> yourself if you need to refuse it.</p>
+{{example.net-shadowsocks-guide-uri}}
+
+<h2 id="guide-obfs">simple-obfs</h2>
+<p><code>simple-obfs</code> hides the first bytes of a Shadowsocks connection inside something that looks like ordinary web traffic, which helps against filters that classify connections by their first packet. Set <code>obfs</code> in the client <code>Config</code> to <code>"http"</code> or <code>"tls"</code>, set <code>obfs_host</code> to the host name to show (the <code>Host</code> header or the TLS server name, default <code>www.bing.com</code>), and start the server with <code>ListenObfs</code> and the same mode. Both sides must agree: a server without obfs does not understand an obfs client and the other way round.</p>
+<ul>
+<li><code>http</code>: the first client packet is sent as an HTTP request with a WebSocket upgrade header, the server answers with a <code>101 Switching Protocols</code>, and after that the data flows as is.</li>
+<li><code>tls</code>: the first client packet is a fake TLS ClientHello carrying the data in a session ticket extension and the server name you chose, the server answers with a fake ServerHello, and the rest is wrapped in TLS application data records.</li>
+</ul>
+<p>This is camouflage, not encryption: the Shadowsocks cipher underneath still protects the data. The fake handshake is simple and a determined censor can fingerprint it; it also does not make the connection look like a real site to an active prober. <code>ObfsMode</code> turns the names into the constants <code>OBFS_NONE</code>, <code>OBFS_HTTP</code> and <code>OBFS_TLS</code>, and <code>ObfsInit</code>, <code>ObfsWrap</code>, <code>ObfsUnwrap</code> and <code>ObfsFree</code> expose the framing for your own use.</p>
+{{example.net-shadowsocks-guide-obfs}}
+
+<h2 id="guide-udp">The UDP relay</h2>
+<p>Shadowsocks carries UDP too, for DNS and for games, one encrypted datagram at a time: the packet holds a random salt, the target address and the payload, sealed as a whole. <code>UdpListen</code> starts a relay on a UDP port; <code>UdpServe</code> loops until <code>UdpStop</code> is called, and <code>UdpStep</code> handles one packet and returns 1 when it did, so you can drive it yourself. The relay keeps one outgoing socket per client and forgets a client after 60 seconds of silence. On the client, <code>UdpDial</code> makes a <code>UdpClient</code>, <code>UdpSend</code> sends a payload to a target through the relay and <code>UdpRecv</code> returns the next reply and who it came from; <code>UdpSetTimeout</code> bounds the wait. UDP works only with the three classic methods and only for IPv4 targets.</p>
+{{example.net-shadowsocks-guide-udp}}
+
+<h2 id="guide-over-stream">Running over a tunnel.Stream</h2>
+<p>The client normally dials its server with TCP, but <code>DialOver</code> takes any <code>tunnel.Stream</code> instead: a WebSocket, a TLS connection, the output of another proxy hop, or a stream you made. The server side has <code>AcceptOver</code>. In both cases the Shadowsocks layer treats the stream as the wire, so you can put Shadowsocks inside a transport from <a href="/std/net/transport/">net.transport</a>, or behind a proxy chain from <a href="/std/net/tunnel/">net.tunnel</a>. <code>AsStream</code> does the opposite: it wraps a <code>Conn</code> as a <code>tunnel.Stream</code>, so a Shadowsocks connection can be handed to anything that takes a stream, such as a router outbound or another protocol layer.</p>
+{{example.net-shadowsocks-guide-over-stream}}
+
+<h2 id="guide-codec">The framing layer</h2>
+<p>The bottom of the package is public. An <code>Encoder</code> seals a byte stream into length prefixed AEAD chunks (<code>EmitSalt</code> first, then <code>EncodeStream</code>); a <code>Decoder</code> takes in the bytes as they arrive with <code>Feed</code> and returns the plaintext with <code>NextChunk</code>, or all at once with <code>DecodeAll</code>. <code>EncodeTarget</code> and <code>ParseTarget</code> write and read the address header (<code>ATYP_IPV4</code>, <code>ATYP_DOMAIN</code>, <code>ATYP_IPV6</code>), and <code>PackUdp</code> and <code>UnpackUdp</code> do the same for one datagram. <code>Buf</code> is the growable byte buffer all of them use: you own it, free it with <code>BufFree</code> and wipe key material with <code>BufWipe</code> first. This is how the protocol is tested against known vectors, and how you can write a custom front end.</p>
+<p>The example under <a href="#Buf">Buf</a> below runs a whole round trip: it seals a stream and opens it again, writes and reads an address header, and packs and unpacks one UDP datagram.</p>
+
+<h2 id="guide-iran">Practical notes for Iran</h2>
+<p>These are tips for people building tools for networks with heavy filtering. They come from how the protocol works, not from tests against any particular ISP, and what works changes from month to month.</p>
+<ul>
+<li><strong>Pick ChaCha20.</strong> Use <code>chacha20-ietf-poly1305</code> unless the other end only offers something else. It is the fastest cipher here by a wide margin, and the security is the same as AES-GCM. Choose a 2022 method only when your server also speaks it and you can test it end to end; it has the best design (replay protection, authenticated header) but the least interoperability testing.</li>
+<li><strong>Use a long random password</strong> for the classic methods, at least 20 characters from a password generator. Short passwords can be guessed offline from a captured connection.</li>
+<li><strong>Do not rely on plain Shadowsocks alone.</strong> Pure random looking traffic on an unusual port is itself a signal, and the lack of an anti probing reply makes it easier to confirm. Put it on port 443, behind a transport that looks like a web site (a WebSocket over TLS, with <code>DialOver</code> and <code>AcceptOver</code>), or use <code>simple-obfs</code> with <code>tls</code> and a host name that is allowed and common on that network.</li>
+<li><strong>Use the tunnel router.</strong> <a href="/std/net/tunnel/">net.tunnel</a> has routing rules with an Iran preset: domestic sites go direct and the rest goes through the proxy, so the local network is not slowed down and domestic sites do not see a foreign address. Make a Shadowsocks outbound from a <code>Config</code>, wrap it as a stream with <code>AsStream</code> where a dialer wants a stream, and let the router choose. For a local SOCKS or HTTP entry point see <a href="/std/net/socks/">net.socks</a> and <a href="/std/net/httpproxy/">net.httpproxy</a>.</li>
+<li><strong>Resolve names remotely.</strong> Pass the host name to <code>Dial</code> and let the server resolve it; do not resolve it locally first, or the lookup leaks. When a local lookup is unavoidable, <a href="/std/net/doh/">net.doh</a> sends it over HTTPS.</li>
+<li><strong>Keep sharing safe.</strong> A link carries the password in clear text apart from base64: send it over a private channel, and do not publish servers you want to keep alive.</li>
+</ul>
+>>
+
+doc.ServerState = The state of a running server: the listening socket, the cipher and key, the replay filter and the worker pool. You get one inside a <code>Server</code> and only pass it around.
+doc.ServerState.ls = The listening TCP socket.
+doc.ServerState.method = The cipher the server uses.
+doc.ServerState.key = The master key, from the password.
+doc.ServerState.filter = The salt cache that rejects a replayed connection.
+doc.ServerState.workers = The pool of threads that run client handlers.
+doc.ServerState.stop = A flag that tells <code>Serve</code> to stop; <code>Stop</code> sets it.
+doc.ServerState.jobs = The queue of accepted connections waiting for a worker.
+doc.ServerState.obfs_mode = The obfuscation mode, <code>http</code>, <code>tls</code> or empty for none.
+doc.Server = A Shadowsocks server. It holds a pointer to its <code>ServerState</code>; the zero value (<code>st</code> null) means the server could not be started.
+doc.Server.st = The state of the server, or null when <code>Listen</code> failed.
+doc.Listen = Starts a server on a TCP port (0 picks a free one) with a method and a password. For a 2022 method the password is base64 of the key. Returns a <code>Server</code> that is not <code>ServerOk</code> when the method, the password or the port is bad.
+doc.ListenObfs = Like <code>Listen</code> but also expects clients to use the <code>simple-obfs</code> mode <code>http</code> or <code>tls</code>; an empty string means none.
+doc.ServerOk = Tells whether the server started.
+doc.ServerPort = The port the server listens on; useful after <code>Listen(0, ...)</code>.
+doc.Accept = Waits for the next client whose handshake succeeds and returns its <code>Conn</code>. A connection that fails the handshake (a wrong password, a replay, a bad timestamp) is closed without a reply and the wait continues. <code>TargetOf</code> tells where the client wants to go.
+doc.AcceptOver = Like <code>Accept</code> but for one client that arrives over a stream you already have, such as a WebSocket. Returns a <code>Conn</code> that is not <code>Ok</code> when the handshake fails.
+doc.Relay = Serves one accepted connection as a proxy: connects to the target the client asked for and copies bytes in both directions until one side ends, then closes everything. There is no half close.
+doc.Serve = Accepts clients until <code>Stop</code> is called and runs the handler for each on a worker thread. The handler owns the <code>Conn</code> and must close it.
+doc.ServeRelay = Serves every client with <code>Relay</code>. This is the whole server of a plain Shadowsocks proxy.
+doc.Stop = Asks <code>Serve</code> to return. Call it from another thread, then wait for the serving thread and call <code>Destroy</code>.
+doc.Destroy = Frees a server and wipes its key. Call it once, after <code>Serve</code> has returned.
+doc.SaltFilter = A replay filter: it remembers the salts of recent connections in two generations so memory stays bounded. It is thread safe.
+doc.SaltFilter.cur = The current generation of seen salts.
+doc.SaltFilter.old = The previous generation, dropped when the current one fills.
+doc.SaltFilter.cap = How many salts one generation holds.
+doc.SaltFilter.lock = The mutex that guards both generations.
+doc.NewSaltFilter = Makes a filter whose generations hold up to <code>cap</code> salts each (at least 16).
+doc.FilterCheck = Records a salt and returns true when it is new, false when it was seen before and the connection should be refused.
+doc.FilterFree = Frees a filter.
+doc.MakeKey = Turns a password into the master key for a method: for a classic method the derived key, for a 2022 method the base64 decoded password. The returned <code>Buf</code> has <code>bad</code> set when a 2022 password has the wrong length.
+doc.Buf = A growable byte buffer with its own memory. You must free it with <code>BufFree</code>.
+doc.Buf.p = The start of the memory.
+doc.Buf.len = How many bytes are in use.
+doc.Buf.cap = How many bytes were allocated.
+doc.Buf.bad = True after an allocation failed or a parse error; the buffer must not be trusted then.
+doc.BufAt = A pointer to the byte at an offset in the buffer.
+doc.PtrAt = A pointer a number of bytes after another pointer.
+doc.NewBuf = Allocates an empty buffer with room for at least that many bytes (never less than 64).
+doc.BufFree = Releases the memory of a buffer.
+doc.BufWipe = Overwrites the whole allocation with zeros and sets the length to 0. Use it before freeing keys.
+doc.BufReserve = Makes room for that many more bytes, growing the buffer if needed.
+doc.BufAppend = Appends bytes from memory.
+doc.BufAppendByte = Appends one byte (the low 8 bits of the number).
+doc.BufAppendStr = Appends the bytes of a string.
+doc.BufConsume = Removes bytes from the front of the buffer and moves the rest down.
+doc.BufToStr = Copies the buffer into a new string. The result stops at a zero byte, so use it for text only.
+doc.BufToHex = The buffer as lowercase hexadecimal text.
+doc.HexOf = Lowercase hexadecimal text of bytes in memory.
+doc.BufFromHex = Reads hexadecimal text into a new buffer; <code>bad</code> is set when the text is not valid hex.
+doc.Plugin = A parsed plugin string: its name and its options in order.
+doc.Plugin.name = The plugin name, such as <code>obfs-local</code>.
+doc.Plugin.keys = The option names.
+doc.Plugin.values = The option values, in the same order as <code>keys</code>; empty for an option without a value.
+doc.Uri = A parsed <code>ss://</code> link.
+doc.Uri.method = The cipher method name.
+doc.Uri.password = The password, or the base64 key for a 2022 method.
+doc.Uri.host = The server host name or address (IPv6 without brackets).
+doc.Uri.port = The server port.
+doc.Uri.plugin = The raw plugin text, empty when the link has none.
+doc.Uri.tag = The name after the <code>#</code>, decoded.
+doc.Uri.ok = True when the link parsed and the method is one this package supports.
+doc.ParseUri = Parses an <code>ss://</code> link in the SIP002 form, the plain text user info form or the old whole base64 form. On bad input <code>ok</code> of the result is false.
+doc.FormatUri = Writes a <code>Uri</code> as an <code>ss://</code> link, including the plugin and the tag when they are set.
+doc.ParsePlugin = Splits a plugin string such as <code>obfs-local;obfs=tls;obfs-host=a.com</code> into a name and options. Free the result with <code>PluginFree</code>.
+doc.PluginGet = The value of an option, or the fallback when the option is missing.
+doc.PluginHas = Tells whether an option is present.
+doc.PluginFree = Frees the vectors of a <code>Plugin</code>.
+doc.ToConfig = Builds a <code>Config</code> from a <code>Uri</code>, applying the <code>simple-obfs</code> options of its plugin.
+doc.Encoder = Seals a byte stream into Shadowsocks AEAD chunks. It keeps the session key, the nonce counter and whether the salt has gone out.
+doc.Encoder.method = The cipher method.
+doc.Encoder.ctx = The AEAD context holding the session key.
+doc.Encoder.nonce = The 12 byte counter used as the nonce, increased for every sealed piece.
+doc.Encoder.salt = The random salt of this direction.
+doc.Encoder.salt_sent = True once the salt was emitted.
+doc.Encoder.max_chunk = The largest payload of one chunk: 16383 bytes, or 65535 for the 2022 methods.
+doc.Decoder = Reads a Shadowsocks AEAD stream, in pieces of any size, and returns the plaintext. It buffers incomplete chunks.
+doc.Decoder.method = The cipher method.
+doc.Decoder.master = The master key the session key is derived from.
+doc.Decoder.ctx = The AEAD context, made when the salt has arrived.
+doc.Decoder.nonce = The 12 byte counter used as the nonce.
+doc.Decoder.salt = The salt that was read from the start of the stream.
+doc.Decoder.have_salt = True once the salt was read.
+doc.Decoder.inb = The bytes received and not yet used.
+doc.Decoder.off = The read offset in <code>inb</code>.
+doc.Decoder.need = How many bytes the next piece needs, or -1 when it is not known yet.
+doc.Decoder.tmp = A scratch buffer for the length field.
+doc.Decoder.bad = True after an authentication failure; the stream cannot be used any more.
+doc.Decoder.max_chunk = The largest accepted chunk size.
+doc.NewEncoder = Makes an encoder with a given salt.
+doc.NewEncoderRandom = Makes an encoder with a fresh random salt.
+doc.EncoderFree = Frees an encoder and its key material.
+doc.SealFrame = Seals one piece of data with the AEAD and appends the ciphertext and the tag to the buffer.
+doc.EmitSalt = Appends the salt to the buffer, once, at the start of a connection.
+doc.EncodeStream = Appends data as length prefixed encrypted chunks, split at <code>max_chunk</code>. Emit the salt first.
+doc.NewDecoder = Makes a decoder for a method and a master key.
+doc.DecoderFree = Frees a decoder.
+doc.Feed = Gives the decoder bytes that arrived from the network.
+doc.TakeSalt = Reads the salt from the bytes fed so far and sets up the key. Returns true when it is ready.
+doc.TakeFrame = Reads and opens one piece of a given size. Returns its length, or a negative number when more bytes are needed or authentication failed.
+doc.NextChunk = Appends the next complete decrypted chunk to the buffer and returns its length, 0 when more bytes are needed, or a negative number on error.
+doc.DecodeAll = Decodes everything in a block of bytes that holds a whole stream, appending the plaintext. Returns false on error.
+doc.Target = A destination: a host (a name or an address) and a port.
+doc.Target.host = The host name or the IP address in text.
+doc.Target.port = The port.
+doc.EncodeTarget = Appends the address header for a host and port to the buffer. A host that looks like an IPv4 or IPv6 address is sent as such, anything else as a name of at most 255 bytes. Returns false for a bad port or name.
+doc.ParseTarget = Reads an address header from bytes into a <code>Target</code>. Returns how many bytes the header took, or 0 when the bytes are short or invalid.
+doc.Obfs = The state of the <code>simple-obfs</code> layer of one connection.
+doc.Obfs.mode = One of the <code>OBFS_</code> constants.
+doc.Obfs.server = True on the server side.
+doc.Obfs.host = The host name shown in the fake request or hello.
+doc.Obfs.sent_first = True once the first packet was sent.
+doc.Obfs.got_first = True once the first packet was received and checked.
+doc.Obfs.rx = Bytes received that do not form a whole record yet.
+doc.Obfs.frame_left = How many bytes of the current TLS record remain.
+doc.Obfs.ws_key = The WebSocket key of the fake HTTP upgrade.
+doc.ObfsWrap = Wraps outgoing bytes in the disguise (the fake request or hello for the first packet, TLS records after that) and appends the result to the buffer.
+doc.ObfsUnwrap = Removes the disguise from incoming bytes and appends the payload to the buffer. Returns the number of bytes consumed, 0 when more bytes are needed, or a negative number when the data is not a valid disguise.
+doc.ObfsInit = Makes the state for a mode, for the client or the server side, with the host name to show.
+doc.ObfsFree = Frees an <code>Obfs</code>.
+doc.ObfsMode = Turns <code>http</code> or <code>tls</code> into the <code>OBFS_</code> constant; anything else gives <code>OBFS_NONE</code>.
+doc.UdpClient = A UDP client that talks to a Shadowsocks UDP relay.
+doc.UdpClient.sock = The local UDP socket.
+doc.UdpClient.host = The relay host.
+doc.UdpClient.port = The relay port.
+doc.UdpClient.method = The cipher method.
+doc.UdpClient.key = The master key.
+doc.UdpClient.rbuf = The receive buffer.
+doc.UdpClient.ok = True when the client could be set up.
+doc.UdpServer = A Shadowsocks UDP relay with one outgoing socket per client.
+doc.UdpServer.sock = The UDP socket clients send to.
+doc.UdpServer.method = The cipher method.
+doc.UdpServer.key = The master key.
+doc.UdpServer.rbuf = The receive buffer.
+doc.UdpServer.assoc = The outgoing socket of each client, keyed by the client address.
+doc.UdpServer.seen = When each client was last heard from, in milliseconds.
+doc.UdpServer.clients = The address each client sends from, for the replies.
+doc.UdpServer.stopc = The flag that stops <code>UdpServe</code>.
+doc.UdpServer.ok = True when the relay started.
+doc.PackUdp = Builds one UDP datagram: a random salt, then the target and the payload sealed together. Appends it to the buffer. Returns false for a 2022 method or a bad target.
+doc.UnpackUdp = Opens a datagram, fills the target and appends the payload to the buffer. Returns false when authentication fails, the packet is short or the method is a 2022 method.
+doc.UdpDial = Makes a UDP client for the server and the method in the <code>Config</code>. <code>ok</code> is false for a 2022 method or a bad password.
+doc.UdpSend = Sends a payload to a target through the relay. Returns true when the datagram was sent.
+doc.UdpRecv = Waits for one reply, opens it and copies the payload to the buffer (up to <code>max</code> bytes), filling <code>from</code> with the sender. Returns the length, or a negative number on timeout or on a packet that does not authenticate.
+doc.UdpSetTimeout = How many milliseconds <code>UdpRecv</code> waits at most.
+doc.UdpClose = Closes the client and frees its buffers.
+doc.UdpListen = Starts a UDP relay on a port with a classic method and a password. <code>ok</code> is false for a 2022 method, a bad password or a port that is taken.
+doc.UdpServerPort = The port the relay listens on.
+doc.UdpStep = Handles at most one waiting datagram, forwards it, hands pending replies back to their clients and drops idle clients. Returns 1 when a datagram was handled, else 0. It waits about 20 ms for a packet.
+doc.UdpServe = Calls <code>UdpStep</code> in a loop until <code>UdpStop</code>. Run it on its own thread.
+doc.UdpStop = Asks <code>UdpServe</code> to return.
+doc.UdpDestroy = Closes the relay, its sockets and its key.
+doc.Config = How to reach a Shadowsocks server: its address, the cipher, the password and the optional disguise. Pass it to <code>Dial</code>, <code>DialOver</code> or <code>UdpDial</code>.
+doc.Config.host = The server host name or address. Not used by <code>DialOver</code>.
+doc.Config.port = The server port. Not used by <code>DialOver</code>.
+doc.Config.method = The cipher method name. The default is <code>aes-256-gcm</code>; prefer <code>chacha20-ietf-poly1305</code>.
+doc.Config.password = The password; for a 2022 method the base64 of the key.
+doc.Config.obfs = <code>http</code>, <code>tls</code> or empty for no <code>simple-obfs</code>.
+doc.Config.obfs_host = The host name the disguise shows. The default is <code>www.bing.com</code>.
+doc.ConnState = Everything one connection needs: the socket or underlying stream, both ciphers, the buffers and the handshake progress. You only hold a pointer to it inside a <code>Conn</code>.
+doc.ConnState.sock = The TCP socket, when the connection does not run over a stream.
+doc.ConnState.method = The cipher method.
+doc.ConnState.key = The master key.
+doc.ConnState.enc = The encoder for the data that is sent.
+doc.ConnState.dec = The decoder for the data that is received.
+doc.ConnState.plain = Decrypted bytes that were not read yet.
+doc.ConnState.plain_pos = How much of <code>plain</code> was read.
+doc.ConnState.out = A scratch buffer for the bytes about to be sent.
+doc.ConnState.rd = The receive buffer.
+doc.ConnState.pending = The address header held back until the first write.
+doc.ConnState.target = The destination of the connection: asked for by the client, or read by the server.
+doc.ConnState.obfs = The disguise layer.
+doc.ConnState.up = The underlying stream, when <code>use_up</code> is true.
+doc.ConnState.use_up = True when the connection runs over a stream and not a socket.
+doc.ConnState.obuf = A scratch buffer for disguised output.
+doc.ConnState.oin = Raw bytes received before the disguise was removed.
+doc.ConnState.rd2 = The raw receive buffer.
+doc.ConnState.v2022 = True for a 2022 method.
+doc.ConnState.is_server = True on the server side.
+doc.ConnState.wphase = The write side handshake step.
+doc.ConnState.rphase = The read side handshake step.
+doc.ConnState.first_len = The length announced by the first 2022 header.
+doc.ConnState.target_ok = True once the target was received.
+doc.ConnState.vtmp = A scratch buffer for the 2022 header.
+doc.ConnState.live = True while the connection is open.
+doc.Conn = One Shadowsocks connection, as a client or on a server. It holds a pointer to its <code>ConnState</code>; with a null pointer the connection is not usable.
+doc.Conn.st = The state of the connection, or null when it could not be made.
+doc.Ok = Tells whether a connection was made. After <code>Dial</code> it only means the setup and the TCP connect worked, not that the server accepted the password.
+doc.TargetOf = The destination of a connection: on a server, the host and port the client asked for.
+doc.Write = Encrypts and sends bytes. Returns the number sent, or -1 on failure. On a new client connection the first write carries the target address too.
+doc.WriteStr = Sends a string. Same as <code>Write</code> with its length.
+doc.Read = Waits for data and copies up to <code>max</code> bytes to the buffer. Returns the length, 0 when the other side closed, or a negative number on error or a failed authentication.
+doc.ReadStr = Reads up to <code>max</code> bytes as a string, empty at the end or on error. Binary data can contain zero bytes that cut a string short, so use <code>Read</code> for that.
+doc.Close = Closes the connection and frees its state. Using the <code>Conn</code> afterwards is an error.
+doc.Shutdown = Shuts the connection down without freeing it, which wakes a thread that is blocked reading.
+doc.Dial = Connects to a Shadowsocks server and asks it to reach a target host and port. The host may be a name; the server resolves it. Returns at once, with the target sent along with the first write.
+doc.DialOver = Like <code>Dial</code> but runs over a stream you give it instead of opening a TCP connection. <code>host</code> and <code>port</code> of the config are ignored.
+doc.AsStream = Wraps a connection as a <code>tunnel.Stream</code>, so any code that takes a stream can use it.
+doc.Blake3Hash = The BLAKE3 hash of bytes, written as <code>outlen</code> bytes to <code>out</code> (32 is the usual length).
+doc.Blake3KeyedHash = The keyed BLAKE3 hash, for a 32 byte key.
+doc.Blake3DeriveKey = BLAKE3 key derivation with a context string.
+doc.Blake3SessionKey = The Shadowsocks 2022 session key: derived from the pre shared key and the salt.
+doc.MAX_CHUNK = The largest payload of one chunk in a classic stream, 16383 bytes.
+doc.TAG_LEN = The length of the AEAD authentication tag, 16 bytes.
+doc.Method = A cipher method: its name, key and salt sizes, and whether it is a 2022 method.
+doc.Method.name = The method name, with aliases resolved.
+doc.Method.kind = The AEAD kind, as <code>net.tls</code> names it.
+doc.Method.key_len = The key length in bytes, 16 or 32.
+doc.Method.salt_len = The salt length in bytes, 16 or 32.
+doc.Method.v2022 = True for the 2022 methods.
+doc.Method.ok = True when the name was a known method.
+doc.LookupMethod = Finds a method by name. The result has <code>ok</code> false for an unknown name.
+doc.BytesToKey = The classic password to key function (repeated MD5), writing <code>klen</code> bytes to <code>out</code>.
+doc.HkdfSha1 = HKDF with SHA-1: derives <code>olen</code> bytes from a key, a salt and an info string. The classic session key uses it.
+doc.SessionSubkey = The classic session key for a master key and a salt (HKDF with the info <code>ss-subkey</code>).
+doc.RandomSalt = Fills <code>out</code> with a random salt of the length of the method.
+doc.PasswordKey = The master key of a classic method from a password, as a new <code>Buf</code>.
+group.ATYP_.title = Address types
+group.ATYP_ = The first byte of the address header: what kind of address follows.
+group.OBFS_.title = Obfuscation modes
+group.OBFS_ = Which disguise <code>simple-obfs</code> uses.
+ex.ServerState = -
+ex.Server = -
+ex.Listen = -
+ex.ListenObfs = -
+ex.ServerOk = -
+ex.ServerPort = -
+ex.Accept = -
+ex.AcceptOver = -
+ex.Relay = -
+ex.Serve = -
+ex.ServeRelay = -
+ex.Stop = -
+ex.Destroy = -
+ex.SaltFilter = -
+ex.NewSaltFilter = -
+ex.FilterCheck = -
+ex.FilterFree = -
+ex.MakeKey = net-shadowsocks-Codec
+ex.Buf = net-shadowsocks-Codec
+ex.BufAt = -
+ex.PtrAt = -
+ex.NewBuf = net-shadowsocks-Codec
+ex.BufFree = net-shadowsocks-Codec
+ex.BufWipe = net-shadowsocks-Codec
+ex.BufReserve = -
+ex.BufAppend = -
+ex.BufAppendByte = -
+ex.BufAppendStr = -
+ex.BufConsume = -
+ex.BufToStr = net-shadowsocks-Codec
+ex.BufToHex = net-shadowsocks-Codec
+ex.HexOf = -
+ex.BufFromHex = -
+ex.Plugin = -
+ex.Uri = -
+ex.ParseUri = -
+ex.FormatUri = -
+ex.ParsePlugin = -
+ex.PluginGet = -
+ex.PluginHas = -
+ex.PluginFree = -
+ex.ToConfig = -
+ex.Encoder = net-shadowsocks-Codec
+ex.Decoder = net-shadowsocks-Codec
+ex.NewEncoder = -
+ex.NewEncoderRandom = net-shadowsocks-Codec
+ex.EncoderFree = net-shadowsocks-Codec
+ex.SealFrame = -
+ex.EmitSalt = net-shadowsocks-Codec
+ex.EncodeStream = net-shadowsocks-Codec
+ex.NewDecoder = net-shadowsocks-Codec
+ex.DecoderFree = net-shadowsocks-Codec
+ex.Feed = -
+ex.TakeSalt = -
+ex.TakeFrame = -
+ex.NextChunk = -
+ex.DecodeAll = net-shadowsocks-Codec
+ex.Target = net-shadowsocks-Codec
+ex.EncodeTarget = net-shadowsocks-Codec
+ex.ParseTarget = net-shadowsocks-Codec
+ex.Obfs = -
+ex.ObfsWrap = -
+ex.ObfsUnwrap = -
+ex.ObfsInit = -
+ex.ObfsFree = -
+ex.ObfsMode = -
+ex.UdpClient = -
+ex.UdpServer = -
+ex.PackUdp = net-shadowsocks-Codec
+ex.UnpackUdp = net-shadowsocks-Codec
+ex.UdpDial = -
+ex.UdpSend = -
+ex.UdpRecv = -
+ex.UdpSetTimeout = -
+ex.UdpClose = -
+ex.UdpListen = -
+ex.UdpServerPort = -
+ex.UdpStep = -
+ex.UdpServe = -
+ex.UdpStop = -
+ex.UdpDestroy = -
+ex.Config = -
+ex.ConnState = -
+ex.Conn = -
+ex.Ok = -
+ex.TargetOf = -
+ex.Write = -
+ex.WriteStr = -
+ex.Read = -
+ex.ReadStr = -
+ex.Close = -
+ex.Shutdown = -
+ex.Dial = -
+ex.DialOver = -
+ex.AsStream = -
+ex.Blake3Hash = -
+ex.Blake3KeyedHash = -
+ex.Blake3DeriveKey = -
+ex.Blake3SessionKey = -
+ex.MAX_CHUNK = -
+ex.TAG_LEN = -
+ex.Method = -
+ex.LookupMethod = -
+ex.BytesToKey = -
+ex.HkdfSha1 = -
+ex.SessionSubkey = -
+ex.RandomSalt = -
+ex.PasswordKey = -
+ex.group.ATYP_ = net-shadowsocks-Codec
+ex.group.OBFS_ = -

@@ -1,0 +1,46 @@
+import mem
+import net.socks
+import net.udp
+import str
+
+func udp_echo(arg: i64):
+    s := udp.Socket { fd = arg }
+    buf := mem.Allocate(2048 as u64)
+    until true:
+        mut host := ""
+        mut port := 0
+        n := udp.ReceiveBytes(s, buf, 2048, host, port)
+        if n < 0:
+            break
+        end
+        udp.SendBytes(s, host, port, buf, n)
+    end
+end
+
+func main:
+    echo := udp.Bind(0)
+    echo_port := udp.Port(echo)
+    socks.Go(udp_echo, echo.fd as void*)
+
+    server := socks.Start(socks.NewServerConfig(0))
+    client := socks.NewClient("127.0.0.1", server.port)
+    session := socks.Associate(client)
+    println "associated:", session.ok, session.relay_host
+    socks.UDPSetTimeout(session, 2000)
+    println "sent:", socks.UDPSend(session, "127.0.0.1", echo_port, "datagram one")
+
+    buf := mem.Allocate(1024 as u64)
+    mut from := socks.Address {}
+    n := socks.UDPReceiveBytes(session, buf, 1024, from)
+    println "received:", n, "from", from.host, from.port == echo_port
+    (buf as u8*)[n] = 0 as u8
+    println str.Clone(buf as str)
+    println "bytes sent:", socks.UDPSendBytes(session, "127.0.0.1", echo_port, "raw" as void*, 3)
+    mem.Free(buf)
+    socks.CloseUDP(session)
+
+    mut four := socks.NewClient("127.0.0.1", server.port)
+    four.version = socks.Socks4
+    println "socks4 has no udp:", socks.Associate(four).ok
+    socks.Stop(server)
+end

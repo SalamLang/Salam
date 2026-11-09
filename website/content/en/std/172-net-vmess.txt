@@ -1,0 +1,180 @@
+pkg.en = net/vmess
+pkg.name = net.vmess
+pkg.group = Network
+pkg.summary = The VMess proxy protocol, AEAD form only: encrypted client and server, TCP and UDP, over TCP, TLS, WebSocket or any tunnel stream, with the cryptographic building blocks exposed.
+pkg.title = The net.vmess package in Salam | VMess AEAD client and server
+pkg.description = The net.vmess package in Salam: the AEAD form of the VMess proxy protocol with a client and a server, AES-128-GCM and ChaCha20-Poly1305 bodies, replay protection, use over TLS, WebSocket and HTTP upgrade through net.transport, and the limits of this implementation, with examples.
+pkg.import = net.vmess
+pkg.intro <<
+<p>VMess is the older protocol of the V2Ray family, and unlike <a href="/std/net/vless/">VLESS</a> it encrypts for itself. The client proves it holds a user's UUID with an authentication id that contains the current time, sends the request (the target address and the session keys) encrypted under keys derived from the UUID, and then sends the payload in encrypted chunks. The server answers with its own encrypted header and its own chunks. Anyone watching sees random bytes, whatever carries them.</p>
+<p>This package implements <strong>only the AEAD form</strong>, the one used since V2Ray 4.28 and the only one current clients still produce: the user is identified by the encrypted authentication id and the header is sealed with AES-128-GCM. The older MD5 based form, the one that needs <code>alterId</code> to be above 0, is not implemented. Set <code>alterId</code> to 0 on both sides (it is the default in current clients).</p>
+<p>The package is both halves. <code>Dial</code> connects a client through <a href="/std/net/transport/">net.transport</a> and sends the header, <code>Accept</code> reads it on a server, <code>Read</code> and <code>Write</code> move the payload and <code>ReadPacket</code> reads one chunk as a UDP datagram. <code>AsStream</code>, <code>DialOver</code> and <code>AcceptOver</code> connect it to <a href="/std/net/tunnel/">net.tunnel</a> streams. The lower level functions (key derivation, the sealed header, the chunk encoder) are public, because the protocol is easiest to understand, and to test, one piece at a time.</p>
+
+<h3 id="security">The body encryptions</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Constant</th><th>What it does</th></tr></thead>
+<tbody>
+<tr><td><code>SecAES128GCM</code></td><td>Each chunk is sealed with AES-128-GCM. The default choice.</td></tr>
+<tr><td><code>SecChaCha20Poly1305</code></td><td>Each chunk is sealed with ChaCha20-Poly1305. A good choice on a processor without AES instructions.</td></tr>
+<tr><td><code>SecNone</code></td><td>The chunks are framed but not encrypted. The header is still sealed.</td></tr>
+<tr><td><code>SecZero</code></td><td>No chunks and no encryption: the payload follows the header as it is. Only for use inside TLS.</td></tr>
+</tbody></table></div>
+<p>The header is always sealed with AES-128-GCM under keys derived from the UUID, whichever body type is chosen. The options in <code>Request.option</code> are bits: <code>OptChunkStream</code> frames the body in chunks, <code>OptChunkMask</code> hides the chunk lengths with a SHAKE-128 stream, <code>OptPadding</code> adds random padding to each chunk, <code>OptAuthLength</code> authenticates the lengths with the body cipher. <code>Dial</code> uses <code>DefaultOption</code> for the security type; to choose the bits yourself, call <code>Client</code> on a connection you opened.</p>
+
+<h3 id="pitfalls">What trips people up</h3>
+<ul>
+<li><strong>The two clocks must agree.</strong> The authentication id contains the time and a server accepts only ids within <code>TimeWindow</code> seconds, 120, of its own clock. A phone or a server with a wrong clock gets <code>unknown user or stale timestamp</code> and nothing else. This is the first thing to check when a correct UUID is refused.</li>
+<li><strong>Share one replay filter.</strong> <code>Accept</code> remembers the authentication ids it has seen and refuses a repeat. Make one with <code>NewReplayFilter</code> and pass the same one to every <code>Accept</code> call of a server; it is safe to use from several threads. Once it holds more than 4096 ids it drops the ones older than four minutes.</li>
+<li><strong>A refused client is not told.</strong> <code>Dial</code> only sends the header. A wrong UUID, a stale clock or a replayed id makes the server close the connection, and the client sees that as a failed read.</li>
+<li><strong>The server must support the security type.</strong> An <code>Accept</code> that reads a type other than the four above fails with <code>unsupported security type</code>.</li>
+<li><strong>There are no vmess:// links.</strong> The base64 JSON share format of V2RayN and others is not parsed here. Take the fields from it yourself.</li>
+<li><strong>Close frees the keys.</strong> Call <code>Close</code> once on each side when you are done.</li>
+</ul>
+
+<h2 id="guide-primitives">The building blocks</h2>
+<p>This program derives a user's command key from a UUID, makes an authentication id for a given time, opens it again (which also gives back the time), shows that another user's key cannot open it, and seals a small header. The numbers that come out are fixed, so they can be compared with another implementation.</p>
+{{example.net-vmess-guide-primitives}}
+
+<h2 id="guide-quickstart">Quick start: a client and a server over TCP</h2>
+<p>The server listens with <code>transport.Listen</code>, accepts with <code>transport.Accept</code> and hands each connection to <code>vmess.Accept</code> with its list of users and the shared replay filter. The client dials with <code>vmess.Dial</code> and picks the body encryption. The target in the header is what a real server would connect onward to; this echo server just reports it.</p>
+{{example.net-vmess-guide-loopback}}
+
+<h2 id="guide-wrong-user">A user the server does not know</h2>
+<p>The client cannot tell by itself. The server finds no matching key, says <code>unknown user or stale timestamp</code>, and closes the connection. A real server should do nothing else: sending an error would tell a scanner that it found a proxy.</p>
+{{example.net-vmess-guide-wrong-user}}
+
+<h2 id="guide-over-stream">VLESS carrying VMess</h2>
+<p>A stream wrapper turns any protocol into the carrier of another. Here an outer VLESS connection runs over an in-memory pipe and an inner VMess connection runs inside it, with different users and different targets. On a real network the outer one would be VLESS over WebSocket and TLS and the inner one VMess, which encrypts the payload end to end even when a CDN terminates the outer TLS.</p>
+{{example.net-vmess-guide-over-stream}}
+
+<h2 id="guide-cdn">VMess over WebSocket and TLS behind a CDN</h2>
+<p>Do the CDN steps from the <a href="/std/net/transport/#guide-cdn">net.transport</a> page: a proxied domain, a secret WebSocket path, TLS to the CDN with the front name as <code>sni</code>, your domain as <code>host</code>. VMess does the encryption, so it also protects the payload from the CDN.</p>
+{{example.net-vmess-guide-cdn}}
+<p>On the server, listen with <code>network = "ws"</code>, the same <code>path</code> and <code>host</code> and with <code>tls</code> off when the CDN or your reverse proxy terminates TLS. For each connection, in a worker thread, call <code>transport.AcceptRaw</code>, <code>transport.Upgrade</code> and then <code>vmess.Accept</code>. Keep the server's clock right (the time window is 120 seconds), and tell your users to do the same.</p>
+
+<h2 id="guide-limits">Limits</h2>
+<ul>
+<li><strong>AEAD only.</strong> There is no legacy (<code>alterId</code> above 0) mode, and no compatibility with servers or clients that need it.</li>
+<li><strong>The authenticated length option is unverified.</strong> <code>OptAuthLength</code> is implemented from the protocol description and round-trips with this package, but it has not been checked against a real V2Ray or Xray peer. <code>Dial</code> never sets it.</li>
+<li><strong>No live interoperability test was run.</strong> The header, the authentication id, the key derivation and the chunk formats are checked against fixed byte vectors and the two halves of this package against each other (over TCP, TLS, WebSocket and a pipe), not against a real V2Ray or Xray build.</li>
+<li><strong>No multiplexing.</strong> <code>CmdMux</code> can be written into a header, but no multiplexing is implemented.</li>
+<li><strong>Weak primitives by design.</strong> VMess uses MD5 for the command key and AES in ECB mode for one block of the authentication id; these are the protocol's, not choices of this package. The payload ciphers are authenticated (AES-GCM, ChaCha20-Poly1305).</li>
+<li><strong><code>SecNone</code> and <code>SecZero</code> do not encrypt the payload.</strong> Use them only inside TLS you trust.</li>
+<li><strong>Replay protection is per process.</strong> The filter lives in memory, so a restart forgets it, but the time window still limits what can be replayed.</li>
+</ul>
+>>
+
+doc.TimeWindow = How many seconds the time in an authentication id may differ from the server's clock. 120.
+doc.Request = The request header sealed inside the first bytes of a connection: session keys, options, command and target.
+doc.Request.version = The header version. Always 1.
+doc.Request.iv = The 16 byte initialization vector of the request body. The response keys are derived from it.
+doc.Request.key = The 16 byte key of the request body.
+doc.Request.resp_v = One byte the server must echo back in its response header. It tells the client the answer belongs to this request.
+doc.Request.option = The option bits: <code>OptChunkStream</code>, <code>OptChunkMask</code>, <code>OptPadding</code>, <code>OptAuthLength</code>.
+doc.Request.security = The body encryption: <code>SecAES128GCM</code>, <code>SecChaCha20Poly1305</code>, <code>SecNone</code> or <code>SecZero</code>.
+doc.Request.command = <code>CmdTCP</code>, <code>CmdUDP</code> or <code>CmdMux</code>.
+doc.Request.addr = The target address. Unused by <code>CmdMux</code>.
+doc.Request.padding = How many random bytes of padding the header carries, 0 to 15.
+doc.User = A user a server accepts.
+doc.User.id = The user id as text.
+doc.User.cmd_key = The command key derived from the user id. <code>NewUser</code> computes it.
+doc.ReplayFilter = The memory of authentication ids a server has seen. Share one between all <code>Accept</code> calls; it has a lock.
+doc.ReplayFilter.seen = The ids already seen and the time each was seen.
+doc.ReplayFilter.lock = The lock that guards <code>seen</code>.
+doc.Conn = A VMess connection, client or server side.
+doc.Conn.t = The transport connection underneath.
+doc.Conn.client = True on the client side.
+doc.Conn.ok = True when the header exchange succeeded and the connection is usable.
+doc.Conn.err = The reason it failed, empty otherwise.
+doc.Conn.req = The request header: on a server what the client sent, on a client what it sent.
+doc.Conn.user = On a server: the id of the user that matched.
+doc.Conn.wc = Internal: the encoder of the chunks this side writes.
+doc.Conn.rc = Internal: the decoder of the chunks this side reads.
+doc.Conn.resp_pending = Internal: the server's response header has not been read yet.
+doc.Conn.resp_key = Internal: the key of the response header.
+doc.Conn.resp_iv = Internal: the initialization vector of the response.
+doc.Conn.rbuf = Internal: decrypted bytes that have not been read yet.
+doc.Conn.eof = Internal: the peer ended the stream.
+doc.Conn.closed = Internal: <code>Close</code> has been called.
+doc.NewUser = Makes a user from a UUID text and computes its command key. A bad UUID leaves the key empty.
+doc.NewReplayFilter = Makes an empty replay filter.
+doc.DefaultOption = The option bits to use with a security type: none for <code>SecZero</code>, chunks for <code>SecNone</code>, chunks and masked lengths otherwise.
+doc.Client = Sends the sealed request on a transport connection that is already open, with the option bits you give, and returns the VMess connection. <code>ok</code> is false when the UUID is bad or the write fails.
+doc.Dial = Connects with <code>transport.Dial</code> and the given settings, then sends the request with <code>DefaultOption</code> and a random session key. The reply is not read yet: a refused user shows up on the first read.
+doc.Accept = Reads and opens the header on a transport connection, finds the user whose key matches within the time window, refuses a replayed id, and sends the response header. On failure <code>ok</code> is false, <code>err</code> says why and the transport is closed.
+doc.Read = Reads decrypted payload. On a client the first call reads and checks the server's response header. Returns 0 or less when the connection ended.
+doc.ReadPacket = Reads one chunk into the buffer, appending to it, which is one datagram for <code>CmdUDP</code>. False when the connection ended.
+doc.Write = Writes payload from a pointer as one or more encrypted chunks. False when it fails.
+doc.Close = Sends the end chunk if the body is chunked and closes the connection and the transport under it.
+doc.EncodeChunks = Encodes the parts as the chunks a sender with these keys would produce, with an end chunk when <code>with_end</code> is true. For tests and for implementing a variant.
+doc.KDF = The VMess key derivation: nested HMAC-SHA-256 over a label and up to two more inputs, giving 32 bytes.
+doc.KDF16 = <code>KDF</code> cut to the first 16 bytes.
+doc.KDF12 = <code>KDF</code> cut to the first 12 bytes.
+doc.CmdKey = The 16 byte command key of a user: the MD5 of the UUID bytes and a fixed text.
+doc.Sha256 = The SHA-256 hash of the bytes.
+doc.AES128Block = Encrypts or, with <code>decrypt</code>, decrypts one 16 byte block with AES-128.
+doc.Shake128 = The SHAKE-128 output of a message, <code>outlen</code> bytes long.
+doc.CRC32 = The CRC-32 checksum of the bytes.
+doc.FNV1a = The 32 bit FNV-1a hash of the bytes, which the request header ends with.
+doc.CreateAuthID = Makes the 16 byte authentication id: the time, four random bytes and a checksum, encrypted with a key derived from the command key.
+doc.OpenAuthID = Decrypts an authentication id with a command key, checks its checksum and gives back the time it holds. False when the key is not the right one.
+doc.SealHeader = Seals a request header: the authentication id, the encrypted length, the nonce and the encrypted header.
+doc.SealHeaderNow = <code>SealHeader</code> with the current time and fresh random bytes.
+doc.OpenHeaderLength = Opens the encrypted header length. Returns -1 when it fails to authenticate.
+doc.OpenHeader = Opens the encrypted header. The result has <code>bad</code> set when it fails to authenticate.
+doc.SealResponseHeader = Seals the server's response header.
+doc.OpenResponseLength = Opens the encrypted length of a response header. Returns -1 when it fails to authenticate.
+doc.OpenResponseHeader = Opens a response header. The result has <code>bad</code> set when it fails to authenticate.
+doc.EncodeRequest = The request header as plain bytes, with its FNV-1a checksum at the end. Free the result with <code>transport.FreeBytes</code>.
+doc.DecodeRequest = Reads a request header from bytes. False when the checksum or the version is wrong, the command is unknown or the bytes do not fit.
+doc.AsStream = Wraps a connection as a <code>tunnel.Stream</code> so it can carry another protocol or be handed to tunnel code.
+doc.DialOver = Runs the client half over an existing stream instead of a new network connection.
+doc.AcceptOver = Runs the server half over an existing stream, with the users and the replay filter.
+group.Cmd.title = Commands
+group.Cmd = The command byte of a request: <code>CmdTCP</code> opens a TCP connection to the target, <code>CmdUDP</code> carries UDP datagrams, <code>CmdMux</code> is the multiplexing command, which the header can carry but nothing implements.
+group.Sec.title = Body encryptions
+group.Sec = Which cipher seals the body, for the <code>security</code> of a request and for <code>Dial</code>: <code>SecAES128GCM</code> (AES-128-GCM), <code>SecChaCha20Poly1305</code> (ChaCha20-Poly1305), <code>SecNone</code> (framed, not encrypted), <code>SecZero</code> (no framing, no encryption).
+group.Opt.title = Option bits
+group.Opt = Bits for the <code>option</code> of a request, combined with <code>|</code>: <code>OptChunkStream</code> frames the body, <code>OptChunkMask</code> masks the chunk lengths, <code>OptPadding</code> pads each chunk, <code>OptAuthLength</code> authenticates the lengths (not verified against a real peer).
+ex.User = -
+ex.ReplayFilter = -
+ex.Conn = -
+ex.NewUser = -
+ex.NewReplayFilter = -
+ex.DefaultOption = -
+ex.Client = -
+ex.Dial = -
+ex.Accept = -
+ex.Read = -
+ex.ReadPacket = -
+ex.Write = -
+ex.Close = -
+ex.EncodeChunks = -
+ex.TimeWindow = -
+ex.Request = -
+ex.KDF = -
+ex.KDF16 = -
+ex.KDF12 = -
+ex.CmdKey = -
+ex.Sha256 = -
+ex.AES128Block = -
+ex.Shake128 = -
+ex.CRC32 = -
+ex.FNV1a = -
+ex.CreateAuthID = -
+ex.OpenAuthID = -
+ex.SealHeader = -
+ex.SealHeaderNow = -
+ex.OpenHeaderLength = -
+ex.OpenHeader = -
+ex.SealResponseHeader = -
+ex.OpenResponseLength = -
+ex.OpenResponseHeader = -
+ex.EncodeRequest = -
+ex.DecodeRequest = -
+ex.AsStream = -
+ex.DialOver = -
+ex.AcceptOver = -
+ex.group.Cmd = -
+ex.group.Sec = -
+ex.group.Opt = -

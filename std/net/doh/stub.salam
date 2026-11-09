@@ -1,0 +1,141 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package doh
+
+import mem
+import compress
+import net.dns
+import net.udp
+import sync
+
+struct StubState:
+    pub sock: udp.Socket = udp.Socket {}
+    pub resolver: Resolver = Resolver {}
+    pub stop: i64* = null
+    pub served: i64* = null
+end
+
+struct Job:
+    pub st: StubState* = null
+    pub query: compress.ByteBuf = compress.ByteBuf {}
+    pub host: str = ""
+    pub port: int = 0
+end
+
+@en "Stub"
+@fa "کارگزار محلی"
+pub struct Stub:
+    @en "ok"
+    @fa "معتبر"
+    pub ok: bool = false
+    @en "port"
+    @fa "درگاه"
+    pub port: int = 0
+    @en "st"
+    @fa "وضعیت"
+    pub st: StubState* = null
+end
+
+func _handle(j: Job*):
+    st := j[0].st
+    q := j[0].query
+    msg := dns.Decode(q.data, q.len)
+    id := msg.id
+    mut out := compress.NewByteBuf()
+    mut done := false
+    if msg.questions.items.len() > 0:
+        qn := msg.questions.items.get(0)
+        mut a := Resolve(st[0].resolver, qn.name, qn.qtype)
+        if a.ok:
+            out = compress.BufClone(a.raw)
+            compress.BufSet(out, 0, (id >> 8) & 255)
+            compress.BufSet(out, 1, id & 255)
+            done = true
+        else:
+            empty := Vector {} as Vector<dns.Record>
+            out = EncodeResponse(id, qn.name, qn.qtype, 2, empty)
+            empty.free()
+            done = true
+        end
+        FreeAnswer(a)
+    end
+    if done:
+        _n := atomic_add(st[0].served, 1 as i64)
+        _sent := udp.SendBytes(st[0].sock, j[0].host, j[0].port, out.data, out.len)
+    end
+    compress.BufFree(out)
+    mut qq := j[0].query
+    compress.BufFree(qq)
+    mem.Free(j as void*)
+end
+
+func _stub_loop(st: StubState*):
+    cap := 4096
+    buf := mem.Allocate(cap as u64)
+    mut fh := ""
+    mut fp := 0
+    until atomic_load(st[0].stop) != 0:
+        n := udp.ReceiveBytes(st[0].sock, buf, cap, fh, fp)
+        if n >= 12 and atomic_load(st[0].stop) != 0:
+            j := mem.AllocateZeroed(sizeof(Job) as u64) as Job*
+            mut qb := compress.NewByteBufCap(n)
+            compress.BufPushBytes(qb, buf, n)
+            j[0] = Job { st = st, query = qb, host = fh, port = fp }
+            _t := spawn(_handle, j)
+        end
+    end
+    mem.Free(buf)
+end
+
+@en "StartStub"
+@fa "راه‌اندازی کارگزار محلی"
+pub func StartStub(r: Resolver, host: str, port: int): Stub:
+    mut s := Stub {}
+    sock := udp.BindOn(host, port)
+    if not udp.Ok(sock):
+        ret s
+    end
+    udp.SetTimeout(sock, 200)
+    st := mem.AllocateZeroed(sizeof(StubState) as u64) as StubState*
+    stop := mem.AllocateZeroed(8 as u64) as i64*
+    served := mem.AllocateZeroed(8 as u64) as i64*
+    atomic_store(stop, 1 as i64)
+    st[0] = StubState { sock = sock, resolver = r, stop = stop, served = served }
+    _t := spawn(_stub_loop, st)
+    s.ok = true
+    s.port = udp.Port(sock)
+    s.st = st
+    ret s
+end
+
+@en "StubServed"
+@fa "شمار پاسخ‌های کارگزار محلی"
+pub func StubServed(s: Stub): i64:
+    if not s.ok:
+        ret 0
+    end
+    ret atomic_load(s.st[0].served)
+end
+
+@en "StopStub"
+@fa "توقف کارگزار محلی"
+pub func StopStub(s: Stub):
+    if not s.ok:
+        ret
+    end
+    atomic_store(s.st[0].stop, 0 as i64)
+    sync.SleepMs(300)
+    udp.Close(s.st[0].sock)
+end

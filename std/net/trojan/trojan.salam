@@ -1,0 +1,516 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "net/trojan"
+@fa "تروجان"
+package trojan
+
+import mem
+import str
+import compress
+
+@en "CmdConnect"
+@fa "فرمان اتصال"
+pub const CmdConnect := 1
+
+@en "CmdUDP"
+@fa "فرمان یو دی پی"
+pub const CmdUDP := 3
+
+@en "AtypIPv4"
+@fa "نوع نشانی آی‌پی۴"
+pub const AtypIPv4 := 1
+
+@en "AtypDomain"
+@fa "نوع نشانی دامنه"
+pub const AtypDomain := 3
+
+@en "AtypIPv6"
+@fa "نوع نشانی آی‌پی۶"
+pub const AtypIPv6 := 4
+
+@en "ParseOK"
+@fa "تجزیه موفق"
+pub const ParseOK := 0
+
+@en "ParseNeedMore"
+@fa "تجزیه نیازمند داده بیشتر"
+pub const ParseNeedMore := 1
+
+@en "ParseInvalid"
+@fa "تجزیه نامعتبر"
+pub const ParseInvalid := 2
+
+@en "Request"
+@fa "درخواست"
+pub struct Request:
+    @en "status"
+    @fa "وضعیت"
+    pub status: int = 1
+    @en "hash"
+    @fa "درهم"
+    pub hash: str = ""
+    @en "cmd"
+    @fa "فرمان"
+    pub cmd: int = 0
+    @en "atyp"
+    @fa "نوع نشانی"
+    pub atyp: int = 0
+    @en "host"
+    @fa "میزبان"
+    pub host: str = ""
+    @en "port"
+    @fa "درگاه"
+    pub port: int = 0
+    @en "consumed"
+    @fa "بایت‌های مصرف‌شده"
+    pub consumed: int = 0
+end
+
+@en "UDPPacket"
+@fa "بسته یو دی پی"
+pub struct UDPPacket:
+    @en "status"
+    @fa "وضعیت"
+    pub status: int = 1
+    @en "atyp"
+    @fa "نوع نشانی"
+    pub atyp: int = 0
+    @en "host"
+    @fa "میزبان"
+    pub host: str = ""
+    @en "port"
+    @fa "درگاه"
+    pub port: int = 0
+    @en "payload_off"
+    @fa "آغاز داده"
+    pub payload_off: int = 0
+    @en "payload_len"
+    @fa "طول داده"
+    pub payload_len: int = 0
+    @en "consumed"
+    @fa "بایت‌های مصرف‌شده"
+    pub consumed: int = 0
+end
+
+inline func _ub(p: void*, i: int): int:
+    ret ((p as u8*)[i]) as int
+end
+
+func _mkstr(p: void*, off: int, n: int): str:
+    buf := mem.Allocate((n + 1) as u64)
+    if n > 0:
+        mem.Copy(buf, ((p as i64) + (off as i64)) as void*, n as u64)
+    end
+    (buf as u8*)[n] = 0 as u8
+    ret buf as str
+end
+
+func _is_hex(c: int): bool:
+    ret (c >= 48 and c <= 57) or (c >= 97 and c <= 102) or (c >= 65 and c <= 70)
+end
+
+func _hexval(c: int): int:
+    if c >= 48 and c <= 57:
+        ret c - 48
+    end
+    if c >= 97 and c <= 102:
+        ret c - 87
+    end
+    if c >= 65 and c <= 70:
+        ret c - 55
+    end
+    ret 0 - 1
+end
+
+func _all_digits(s: str): bool:
+    if s.len() == 0 or s.len() > 3:
+        ret false
+    end
+    repeat s.len() in i:
+        c := (s as u8*)[i] as int
+        if c < 48 or c > 57:
+            ret false
+        end
+    end
+    ret true
+end
+
+func _hex_group(s: str): int:
+    n := s.len()
+    if n == 0 or n > 4:
+        ret 0 - 1
+    end
+    mut v := 0
+    repeat n in i:
+        h := _hexval((s as u8*)[i] as int)
+        if h < 0:
+            ret 0 - 1
+        end
+        v = v * 16 + h
+    end
+    ret v
+end
+
+func _groups(part: str, out &: Vector<int>): bool:
+    if part.len() == 0:
+        ret true
+    end
+    items := str.Split(part, ":")
+    defer items.free()
+    repeat items.len() in i:
+        g := _hex_group(items.get(i))
+        if g < 0:
+            ret false
+        end
+        out.push(g)
+    end
+    ret true
+end
+
+func _hex16(v: int): str:
+    digits := "0123456789abcdef"
+    mut s := ""
+    mut started := false
+    mut sh := 12
+    until sh >= 0:
+        d := (v >> sh) & 15
+        if d != 0 or started or sh == 0:
+            s = s + digits.substr(d, 1)
+            started = true
+        end
+        sh -= 4
+    end
+    ret s
+end
+
+@en "ParseIPv4"
+@fa "تجزیه آی‌پی۴"
+pub func ParseIPv4(text: str, out &: compress.ByteBuf): bool:
+    parts := str.Split(text, ".")
+    defer parts.free()
+    if parts.len() != 4:
+        ret false
+    end
+    mut vals: int[4]
+    repeat 4 in i:
+        s := parts.get(i)
+        if not _all_digits(s):
+            ret false
+        end
+        v := s.to_int()
+        if v > 255:
+            ret false
+        end
+        vals[i] = v
+    end
+    repeat 4 in i:
+        compress.BufPush(out, vals[i])
+    end
+    ret true
+end
+
+@en "ParseIPv6"
+@fa "تجزیه آی‌پی۶"
+pub func ParseIPv6(text: str, out &: compress.ByteBuf): bool:
+    mut left := Vector {} as Vector<int>
+    mut right := Vector {} as Vector<int>
+    defer left.free()
+    defer right.free()
+    dc := text.find("::")
+    mut has_gap := false
+    if dc >= 0:
+        has_gap = true
+        rest := text.substr(dc + 2, text.len() - dc - 2)
+        if rest.find("::") >= 0:
+            ret false
+        end
+        if not _groups(text.substr(0, dc), left):
+            ret false
+        end
+        if not _groups(rest, right):
+            ret false
+        end
+    else:
+        if not _groups(text, left):
+            ret false
+        end
+    end
+    total := left.len() + right.len()
+    if has_gap and total > 7:
+        ret false
+    end
+    if not has_gap and total != 8:
+        ret false
+    end
+    repeat left.len() in i:
+        g := left.get(i)
+        compress.BufPush(out, g >> 8)
+        compress.BufPush(out, g & 255)
+    end
+    repeat 8 - total:
+        compress.BufPush(out, 0)
+        compress.BufPush(out, 0)
+    end
+    repeat right.len() in i:
+        g := right.get(i)
+        compress.BufPush(out, g >> 8)
+        compress.BufPush(out, g & 255)
+    end
+    ret true
+end
+
+@en "FormatIPv4"
+@fa "قالب‌دهی آی‌پی۴"
+pub func FormatIPv4(p: void*, off: int): str:
+    ret str.FromInt(_ub(p, off) as i64) + "." + str.FromInt(_ub(p, off + 1) as i64) + "." + str.FromInt(_ub(p, off + 2) as i64) + "." + str.FromInt(_ub(p, off + 3) as i64)
+end
+
+@en "FormatIPv6"
+@fa "قالب‌دهی آی‌پی۶"
+pub func FormatIPv6(p: void*, off: int): str:
+    mut g: int[8]
+    repeat 8 in i:
+        g[i] = _ub(p, off + i * 2) * 256 + _ub(p, off + i * 2 + 1)
+    end
+    mut best := 0 - 1
+    mut best_len := 0
+    mut i := 0
+    until i < 8:
+        if g[i] == 0:
+            mut j := i
+            until j < 8 and g[j] == 0:
+                j++
+            end
+            if j - i > best_len and j - i >= 2:
+                best = i
+                best_len = j - i
+            end
+            i = j
+        else:
+            i++
+        end
+    end
+    mut s := ""
+    mut k := 0
+    until k < 8:
+        if k == best:
+            s = s + "::"
+            k += best_len
+            continue
+        end
+        if s.len() > 0 and s.substr(s.len() - 1, 1) != ":":
+            s = s + ":"
+        end
+        s = s + _hex16(g[k])
+        k++
+    end
+    ret s
+end
+
+@en "EncodeAddr"
+@fa "کدگذاری نشانی"
+pub func EncodeAddr(host: str, port: int): compress.ByteBuf:
+    mut b := compress.NewByteBufCap(32)
+    mut raw := compress.NewByteBuf()
+    defer compress.BufFree(raw)
+    if ParseIPv4(host, raw):
+        compress.BufPush(b, AtypIPv4)
+        compress.BufPushBuf(b, raw)
+    else host.find(":") >= 0 and ParseIPv6(host, raw):
+        compress.BufPush(b, AtypIPv6)
+        compress.BufPushBuf(b, raw)
+    else:
+        mut hl := host.len()
+        if hl > 255:
+            hl = 255
+        end
+        compress.BufPush(b, AtypDomain)
+        compress.BufPush(b, hl)
+        compress.BufPushBytes(b, host as void*, hl)
+    end
+    compress.BufPush(b, (port >> 8) & 255)
+    compress.BufPush(b, port & 255)
+    ret b
+end
+
+@en "ParseAddr"
+@fa "تجزیه نشانی"
+pub func ParseAddr(p: void*, n: int, off: int, atyp &: int, host &: str, port &: int): int:
+    if off >= n:
+        ret 0
+    end
+    t := _ub(p, off)
+    mut need := 0
+    if t == AtypIPv4:
+        need = 1 + 4 + 2
+    else t == AtypIPv6:
+        need = 1 + 16 + 2
+    else t == AtypDomain:
+        if off + 1 >= n:
+            ret 0
+        end
+        dl := _ub(p, off + 1)
+        if dl == 0:
+            ret 0 - 1
+        end
+        need = 2 + dl + 2
+    else:
+        ret 0 - 1
+    end
+    if off + need > n:
+        ret 0
+    end
+    atyp = t
+    after := off + need - 2
+    if t == AtypIPv4:
+        host = FormatIPv4(p, off + 1)
+    else t == AtypIPv6:
+        host = FormatIPv6(p, off + 1)
+    else:
+        host = _mkstr(p, off + 2, _ub(p, off + 1))
+    end
+    port = _ub(p, after) * 256 + _ub(p, after + 1)
+    ret need
+end
+
+@en "EncodeRequestHash"
+@fa "کدگذاری درخواست با درهم"
+pub func EncodeRequestHash(hash: str, cmd: int, host: str, port: int): compress.ByteBuf:
+    mut b := compress.NewByteBufCap(96)
+    compress.BufPushBytes(b, hash as void*, hash.len())
+    compress.BufPush(b, 13)
+    compress.BufPush(b, 10)
+    compress.BufPush(b, cmd)
+    mut a := EncodeAddr(host, port)
+    compress.BufPushBuf(b, a)
+    compress.BufFree(a)
+    compress.BufPush(b, 13)
+    compress.BufPush(b, 10)
+    ret b
+end
+
+@en "EncodeRequest"
+@fa "کدگذاری درخواست"
+pub func EncodeRequest(password: str, cmd: int, host: str, port: int): compress.ByteBuf:
+    h := PasswordHash(password)
+    defer mem.Free(h as void*)
+    ret EncodeRequestHash(h, cmd, host, port)
+end
+
+@en "ParseRequest"
+@fa "تجزیه درخواست"
+pub func ParseRequest(p: void*, n: int): Request:
+    mut r := Request {}
+    lim := n
+    mut i := 0
+    until i < 56 and i < lim:
+        if not _is_hex(_ub(p, i)):
+            r.status = ParseInvalid
+            ret r
+        end
+        i++
+    end
+    if n > 56 and _ub(p, 56) != 13:
+        r.status = ParseInvalid
+        ret r
+    end
+    if n > 57 and _ub(p, 57) != 10:
+        r.status = ParseInvalid
+        ret r
+    end
+    if n < 59:
+        ret r
+    end
+    cmd := _ub(p, 58)
+    if cmd != CmdConnect and cmd != CmdUDP:
+        r.status = ParseInvalid
+        ret r
+    end
+    mut atyp := 0
+    mut host := ""
+    mut port := 0
+    used := ParseAddr(p, n, 59, atyp, host, port)
+    if used < 0:
+        r.status = ParseInvalid
+        ret r
+    end
+    if used == 0:
+        ret r
+    end
+    end_at := 59 + used
+    if n < end_at + 2:
+        ret r
+    end
+    if _ub(p, end_at) != 13 or _ub(p, end_at + 1) != 10:
+        r.status = ParseInvalid
+        ret r
+    end
+    r.status = ParseOK
+    r.hash = _mkstr(p, 0, 56)
+    r.cmd = cmd
+    r.atyp = atyp
+    r.host = host
+    r.port = port
+    r.consumed = end_at + 2
+    ret r
+end
+
+@en "EncodeUDPPacket"
+@fa "کدگذاری بسته یو دی پی"
+pub func EncodeUDPPacket(host: str, port: int, payload: void*, n: int): compress.ByteBuf:
+    mut b := compress.NewByteBufCap(n + 32)
+    mut a := EncodeAddr(host, port)
+    compress.BufPushBuf(b, a)
+    compress.BufFree(a)
+    compress.BufPush(b, (n >> 8) & 255)
+    compress.BufPush(b, n & 255)
+    compress.BufPush(b, 13)
+    compress.BufPush(b, 10)
+    compress.BufPushBytes(b, payload, n)
+    ret b
+end
+
+@en "ParseUDPPacket"
+@fa "تجزیه بسته یو دی پی"
+pub func ParseUDPPacket(p: void*, n: int): UDPPacket:
+    mut r := UDPPacket {}
+    mut atyp := 0
+    mut host := ""
+    mut port := 0
+    used := ParseAddr(p, n, 0, atyp, host, port)
+    if used < 0:
+        r.status = ParseInvalid
+        ret r
+    end
+    if used == 0 or n < used + 4:
+        ret r
+    end
+    plen := _ub(p, used) * 256 + _ub(p, used + 1)
+    if _ub(p, used + 2) != 13 or _ub(p, used + 3) != 10:
+        r.status = ParseInvalid
+        ret r
+    end
+    if n < used + 4 + plen:
+        ret r
+    end
+    r.status = ParseOK
+    r.atyp = atyp
+    r.host = host
+    r.port = port
+    r.payload_off = used + 4
+    r.payload_len = plen
+    r.consumed = used + 4 + plen
+    ret r
+end

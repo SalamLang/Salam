@@ -1,0 +1,47 @@
+import net.socks
+import net.tcp
+
+func echo_conn(arg: i64):
+    c := tcp.ConnFromFd(arg)
+    until true:
+        data := tcp.Read(c, 4096)
+        if data.len() == 0:
+            break
+        end
+        tcp.Write(c, data)
+    end
+    tcp.Close(c)
+end
+
+func echo_accept(arg: i64):
+    srv := tcp.Server { fd = arg }
+    until true:
+        c := tcp.Accept(srv)
+        if not tcp.ConnOk(c):
+            break
+        end
+        socks.Go(echo_conn, c.fd as void*)
+    end
+end
+
+func start_echo(): int:
+    listener := tcp.Bind(0)
+    socks.Go(echo_accept, listener.fd as void*)
+    ret tcp.Port(listener)
+end
+
+func main:
+    target := start_echo()
+    proxy := socks.Start(socks.NewServerConfig(0))
+
+    client := socks.NewClient("127.0.0.1", proxy.port)
+    result := socks.Connect(client, "127.0.0.1", target)
+    if not result.ok:
+        println "the proxy said no:", result.code, result.err
+        ret
+    end
+    result.stream.Write("hello from behind the proxy")
+    println result.stream.Read(100)
+    result.stream.Close()
+    socks.Stop(proxy)
+end

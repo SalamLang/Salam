@@ -1,0 +1,48 @@
+import mem
+import net.trojan
+import net.udp
+import sync
+import compress
+
+mut udp_port := 0
+mut ready := sync.NewWaitGroup()
+
+func udp_server():
+    s := udp.Bind(0)
+    udp_port = udp.Port(s)
+    sync.Done(ready)
+    until true:
+        p := udp.Receive(s, 2048)
+        if p.data.len() > 0:
+            udp.Send(s, p.from_host, p.from_port, "echo:" + p.data)
+        end
+    end
+end
+
+func main:
+    sync.Add(ready, 1 as i64)
+    _t := spawn(udp_server)
+    sync.Wait(ready)
+
+    mut config := trojan.NewServerConfig("", "")
+    trojan.AddPassword(config, "secret")
+    server := trojan.ServePlain(config, 0)
+
+    mut client := trojan.NewClientConfig("127.0.0.1", server.port, "secret")
+    client.use_tls = false
+    mut link := trojan.DialUDP(client)
+    println "udp session:", trojan.LinkOk(link)
+    sync.SleepMs(200)
+    println trojan.WriteUDPPacket(link, "127.0.0.1", udp_port, "ping" as void*, 4)
+
+    mut packet := trojan.NewUDPPacket()
+    mut payload := compress.NewByteBuf()
+    println trojan.ReadUDPPacket(link, packet, payload)
+    println packet.host, packet.port == udp_port, packet.status
+    buf := mem.Allocate((payload.len + 1) as u64)
+    mem.Copy(buf, payload.data, payload.len as u64)
+    (buf as u8*)[payload.len] = 0 as u8
+    println buf as str
+    trojan.LinkClose(link)
+    trojan.Stop(server)
+end

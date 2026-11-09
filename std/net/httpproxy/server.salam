@@ -1,0 +1,588 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package httpproxy
+
+import mem
+import str
+import sync
+import net.tcp
+import net.internal.rawsock
+import net.tunnel
+import net.socks
+import tls
+
+struct _AcceptJob:
+    pub cfg: ServerConfig = ServerConfig {}
+    pub listener: tcp.Server = tcp.Server {}
+    pub stop: i64* = null
+end
+
+struct _ConnJob:
+    pub cfg: ServerConfig = ServerConfig {}
+    pub conn: tcp.Conn = tcp.Conn {}
+end
+
+struct _Up:
+    pub ok: bool = false
+    pub host: str = ""
+    pub port: int = 0
+    pub stream: dyn tunnel.Stream = tunnel.TcpStream {}
+    pub rd: _Rd = _Rd {}
+end
+
+@en "ServerConfig"
+@fa "پیکربندی سرور"
+pub struct ServerConfig:
+    @en "port"
+    @fa "درگاه"
+    pub port: int = 0
+    @en "require_auth"
+    @fa "نیاز به احراز هویت"
+    pub require_auth: bool = false
+    @en "realm"
+    @fa "قلمرو"
+    pub realm: str = "Salam proxy"
+    @en "users"
+    @fa "کاربران"
+    pub users: HashMap<str, str> = HashMap {}
+    @en "auth"
+    @fa "احراز هویت"
+    pub auth: func (str, str) bool = (_u: str, _p: str): ret false end
+    @en "has_auth"
+    @fa "دارای احراز هویت سفارشی"
+    pub has_auth: bool = false
+    @en "allow_connect"
+    @fa "اجازه کانکت"
+    pub allow_connect: bool = true
+    @en "allow_plain"
+    @fa "اجازه درخواست ساده"
+    pub allow_plain: bool = true
+    @en "handshake_timeout_ms"
+    @fa "مهلت دست‌دهی میلی‌ثانیه"
+    pub handshake_timeout_ms: int = 15000
+    @en "idle_timeout_ms"
+    @fa "مهلت بی‌کاری میلی‌ثانیه"
+    pub idle_timeout_ms: int = 60000
+    @en "relay_idle_ms"
+    @fa "مهلت بی‌کاری رله"
+    pub relay_idle_ms: int = 0
+    @en "use_tls"
+    @fa "استفاده از تی ال اس"
+    pub use_tls: bool = false
+    @en "tls_config"
+    @fa "پیکربندی تی ال اس"
+    pub tls_config: tls.ServerConfig = tls.ServerConfig {}
+    @en "connect"
+    @fa "اتصال به مقصد"
+    pub connect: func (str, int) socks.Outbound = (h: str, p: int): ret socks.DirectConnect(h, p, 10000) end
+    @en "allow"
+    @fa "اجازه"
+    pub allow: func (str, str, int) bool = (_m: str, _h: str, _p: int): ret true end
+end
+
+@en "Server"
+@fa "سرور"
+pub struct Server:
+    @en "ok"
+    @fa "موفق"
+    pub ok: bool = false
+    @en "port"
+    @fa "درگاه"
+    pub port: int = 0
+    @en "listener"
+    @fa "شنونده"
+    pub listener: tcp.Server = tcp.Server {}
+    @en "stop_cell"
+    @fa "پرچم توقف"
+    pub stop_cell: i64* = null
+end
+
+func _ct_eq(a: str, b: str): bool:
+    n := a.len()
+    m := b.len()
+    mut diff := n ^ m
+    pa := a as u8*
+    pb := b as u8*
+    mut i := 0
+    until i < n:
+        mut y := 0
+        if i < m: y = pb[i] as int end
+        diff |= (pa[i] as int) ^ y
+        i++
+    end
+    ret diff == 0
+end
+
+func _authorized(cfg: ServerConfig, user: str, pass: str): bool:
+    if cfg.users.has(user):
+        if _ct_eq(cfg.users.get(user), pass): ret true end
+    end
+    if cfg.has_auth: ret cfg.auth(user, pass) end
+    ret false
+end
+
+func _auth_ok(cfg: ServerConfig, h: Head): bool:
+    if not cfg.require_auth: ret true end
+    v := HeaderGet(h, "proxy-authorization")
+    if v.len() == 0: ret false end
+    mut user := ""
+    mut pass := ""
+    if not BasicCredentials(v, user, pass): ret false end
+    ret _authorized(cfg, user, pass)
+end
+
+func _send(s: dyn tunnel.Stream, text: str): bool:
+    ret tunnel.WriteAll(s, text)
+end
+
+func _respond(s: dyn tunnel.Stream, code: int, extra: str, body: str, close: bool): bool:
+    ret _send(s, ResponseText(code, extra, body, close))
+end
+
+func _body_kind(h: Head, n &: i64): int:
+    n = 0 as i64
+    te := HeaderGet(h, "transfer-encoding")
+    cls := HeaderCount(h, "content-length")
+    if te.len() > 0:
+        if cls > 0: ret 0 - 1 end
+        if HeaderCount(h, "transfer-encoding") > 1: ret 0 - 1 end
+        if not str.EqualFold(te.trim(), "chunked"): ret 0 - 2 end
+        ret 2
+    end
+    if cls == 0: ret 0 end
+    mut seen := ""
+    mut first := true
+    repeat h.names.len() in i:
+        if str.EqualFold(h.names.get(i), "content-length"):
+            v := h.values.get(i).trim()
+            if first:
+                seen = v
+                first = false
+            else v != seen:
+                ret 0 - 1
+            end
+        end
+    end
+    if seen.len() == 0 or seen.len() > 18: ret 0 - 1 end
+    mut total := 0 as i64
+    repeat seen.len() in i:
+        c := _ch(seen, i)
+        if c < 48 or c > 57: ret 0 - 1 end
+        total = total * 10 + ((c - 48) as i64)
+    end
+    n = total
+    if total == 0 as i64: ret 0 end
+    ret 1
+end
+
+func _keepalive(h: Head): bool:
+    if HeaderHasToken(h, "connection", "close") or HeaderHasToken(h, "proxy-connection", "close"): ret false end
+    if h.version == "HTTP/1.1": ret true end
+    ret HeaderHasToken(h, "connection", "keep-alive") or HeaderHasToken(h, "proxy-connection", "keep-alive")
+end
+
+func _fwd_headers(h: Head, keep_upgrade: bool): str:
+    mut out := ""
+    mut listed := Vector {} as Vector<str>
+    defer listed.free()
+    repeat h.names.len() in i:
+        if str.EqualFold(h.names.get(i), "connection"):
+            parts := h.values.get(i).split(",")
+            repeat parts.len() in k:
+                listed.push(parts.get(k).trim().lower())
+            end
+            parts.free()
+        end
+    end
+    repeat h.names.len() in i:
+        name := h.names.get(i)
+        low := name.lower()
+        mut skip := IsHopByHop(name)
+        if keep_upgrade and low == "upgrade": skip = false end
+        if low == "host" or low == "expect": skip = true end
+        repeat listed.len() in k:
+            if listed.get(k) == low and not (keep_upgrade and low == "upgrade"): skip = true end
+        end
+        if not skip: out += name + ": " + h.values.get(i) + "\r\n" end
+    end
+    ret out
+end
+
+func _host_header(u: URL): str:
+    mut hs := u.host
+    if hs.find(":") >= 0: hs = "[" + hs + "]" end
+    mut dp := 80
+    if u.scheme == "https": dp = 443 end
+    if u.port != dp: hs += ":" + str.FromInt(u.port as i64) end
+    ret hs
+end
+
+func _up_close(up &: _Up):
+    if up.ok:
+        up.stream.Close()
+        _rd_free(up.rd)
+    end
+    up.ok = false
+end
+
+func _up_open(cfg: ServerConfig, up &: _Up, host: str, port: int): int:
+    _up_close(up)
+    out := cfg.connect(host, port)
+    if not out.ok: ret out.code end
+    up.ok = true
+    up.host = host
+    up.port = port
+    up.stream = out.stream
+    up.rd = _rd_new(out.stream, MaxHeadBytes)
+    ret 0
+end
+
+func _resp_framing(rh: Head, method: str): int:
+    st := rh.status
+    if method == "HEAD" or st == 204 or st == 304 or (st >= 100 and st < 200): ret 0 end
+    if HeaderHasToken(rh, "transfer-encoding", "chunked"): ret 2 end
+    mut n := 0 as i64
+    k := _body_kind(rh, n)
+    if k == 1: ret 1 end
+    if k == 0 and HeaderHas(rh, "content-length"): ret 0 end
+    ret 3
+end
+
+func _forward(cfg: ServerConfig, s: dyn tunnel.Stream, rd &: _Rd, h: Head, up &: _Up): bool:
+    u := ParseURL(h.target)
+    if not u.ok or u.scheme != "http":
+        _respond(s, 400, "", "absolute http URI required\n", true)
+        ret false
+    end
+    if not cfg.allow_plain or not cfg.allow(h.method, u.host, u.port):
+        _respond(s, 403, "", "forbidden\n", true)
+        ret false
+    end
+    mut blen := 0 as i64
+    kind := _body_kind(h, blen)
+    if kind == 0 - 1:
+        _respond(s, 400, "", "bad message framing\n", true)
+        ret false
+    else kind == 0 - 2:
+        _respond(s, 501, "", "unsupported transfer encoding\n", true)
+        ret false
+    end
+    upgrade := HeaderHasToken(h, "connection", "upgrade") and HeaderHas(h, "upgrade")
+    mut ka := _keepalive(h)
+    if upgrade: ka = false end
+    if str.EqualFold(HeaderGet(h, "expect").trim(), "100-continue") and kind != 0:
+        _send(s, "HTTP/1.1 100 Continue\r\n\r\n")
+    end
+    mut head := h.method + " " + u.path + " HTTP/1.1\r\nHost: " + _host_header(u) + "\r\n" + _fwd_headers(h, upgrade)
+    if kind == 2: head += "Transfer-Encoding: chunked\r\n" end
+    if upgrade: head += "Connection: Upgrade\r\n" else not ka: head += "Connection: close\r\n" end
+    head += "\r\n"
+
+    mut reused := up.ok and up.host == u.host and up.port == u.port
+    mut attempt := 0
+    mut rh := Head {}
+    until true:
+        if not reused:
+            code := _up_open(cfg, up, u.host, u.port)
+            if code != 0:
+                _respond(s, 502, "", "cannot reach " + u.host + "\n", true)
+                ret false
+            end
+        end
+        sent := _send(up.stream, head)
+        mut got := false
+        if sent:
+            if kind == 1:
+                if not _rd_copy(rd, up.stream, blen):
+                    _up_close(up)
+                    ret false
+                end
+            else kind == 2:
+                if not _rd_copy_chunked(rd, up.stream):
+                    _up_close(up)
+                    ret false
+                end
+            end
+            until true:
+                mut st := 0
+                text := _rd_head(up.rd, MaxHeadBytes, st)
+                if st != 0:
+                    if reused and kind == 0 and st == 1 and attempt == 0: break end
+                    _up_close(up)
+                    _respond(s, 502, "", "upstream closed or sent a bad response\n", true)
+                    ret false
+                end
+                rh = ParseResponseHead(text)
+                if not rh.ok:
+                    _up_close(up)
+                    _respond(s, 502, "", "bad response from upstream\n", true)
+                    ret false
+                end
+                if rh.status >= 100 and rh.status < 200 and rh.status != 101:
+                    _send(s, "HTTP/1.1 " + str.FromInt(rh.status as i64) + " " + rh.reason + "\r\n\r\n")
+                    continue
+                end
+                got = true
+                break
+            end
+        else reused and attempt == 0:
+            got = false
+        else:
+            _up_close(up)
+            _respond(s, 502, "", "cannot send to upstream\n", true)
+            ret false
+        end
+        if got: break end
+        if reused and attempt == 0 and (kind == 0 or not sent):
+            attempt = 1
+            reused = false
+            _up_close(up)
+        else:
+            _up_close(up)
+            _respond(s, 502, "", "upstream failed\n", true)
+            ret false
+        end
+    end
+
+    framing := _resp_framing(rh, h.method)
+    mut rhead := "HTTP/1.1 " + str.FromInt(rh.status as i64) + " " + rh.reason + "\r\n" + _fwd_headers(rh, rh.status == 101)
+    if rh.status == 101:
+        rhead += "Connection: Upgrade\r\n\r\n"
+        if not _send(s, rhead) or not _rd_flush_to(up.rd, s):
+            _up_close(up)
+            ret false
+        end
+        _rd_flush_to(rd, up.stream)
+        s.SetDeadline(0)
+        socks.Relay(s, up.stream, cfg.relay_idle_ms)
+        up.ok = false
+        _rd_free(up.rd)
+        ret false
+    end
+    if framing == 2: rhead += "Transfer-Encoding: chunked\r\n" end
+    ck := ka and framing != 3
+    if not ck: rhead += "Connection: close\r\n" end
+    rhead += "\r\n"
+    if not _send(s, rhead):
+        _up_close(up)
+        ret false
+    end
+    mut ok := true
+    if framing == 1:
+        mut rl := 0 as i64
+        _body_kind(rh, rl)
+        ok = _rd_copy(up.rd, s, rl)
+    else framing == 2:
+        ok = _rd_copy_chunked(up.rd, s)
+    else framing == 3:
+        ok = _rd_copy_close(up.rd, s)
+    end
+    if not ok:
+        _up_close(up)
+        ret false
+    end
+    mut keep_up := framing != 3 and not HeaderHasToken(rh, "connection", "close")
+    if rh.version == "HTTP/1.0" and not HeaderHasToken(rh, "connection", "keep-alive"): keep_up = false end
+    if not keep_up: _up_close(up) end
+    ret ck
+end
+
+func _do_connect(cfg: ServerConfig, s: dyn tunnel.Stream, rd &: _Rd, h: Head): bool:
+    hp := SplitHostPort(h.target, 0)
+    if not hp.ok or not hp.has_port:
+        _respond(s, 400, "", "CONNECT needs host:port\n", true)
+        ret false
+    end
+    if not cfg.allow_connect or not cfg.allow("CONNECT", hp.host, hp.port):
+        _respond(s, 403, "", "forbidden\n", true)
+        ret false
+    end
+    out := cfg.connect(hp.host, hp.port)
+    if not out.ok:
+        _respond(s, 502, "", "cannot reach " + hp.host + ":" + str.FromInt(hp.port as i64) + "\n", true)
+        ret false
+    end
+    if not _send(s, "HTTP/1.1 200 Connection established\r\n\r\n"):
+        out.stream.Close()
+        ret false
+    end
+    _rd_flush_to(rd, out.stream)
+    socks.Relay(s, out.stream, cfg.relay_idle_ms)
+    ret true
+end
+
+func _conn_thread(arg: i64):
+    jp := (arg as void*) as _ConnJob*
+    cfg := jp[0].cfg
+    c := jp[0].conn
+    mem.Free(jp as void*)
+    if cfg.use_tls:
+        t := tls.WrapServer(c.fd, cfg.tls_config)
+        if not tls.ConnOk(t):
+            tcp.Close(c)
+            ret
+        end
+        Handle(cfg, tunnel.TlsStream { conn = t })
+    else:
+        tcp.SetNoDelay(c, true)
+        Handle(cfg, tunnel.TcpStream { conn = c })
+    end
+end
+
+func _accept_thread(arg: i64):
+    jp := (arg as void*) as _AcceptJob*
+    cfg := jp[0].cfg
+    lst := jp[0].listener
+    stop := jp[0].stop
+    mem.Free(jp as void*)
+    until atomic_load(stop) != 0:
+        c := tcp.Accept(lst)
+        if atomic_load(stop) == 0:
+            if tcp.ConnOk(c): tcp.Close(c) end
+        else not tcp.ConnOk(c):
+            sync.SleepMs(5)
+        else:
+            cj := mem.AllocateZeroed(sizeof(_ConnJob) as u64) as _ConnJob*
+            cj[0] = _ConnJob { cfg = cfg, conn = c }
+            socks.Go(_conn_thread, cj as void*)
+        end
+    end
+    tcp.CloseServer(lst)
+    mem.Free(stop as void*)
+end
+
+@en "NewServerConfig"
+@fa "پیکربندی سرور جدید"
+pub func NewServerConfig(port: int): ServerConfig:
+    ret ServerConfig { port = port }
+end
+
+@en "AddUser"
+@fa "افزودن کاربر"
+pub func AddUser(cfg &: ServerConfig, user: str, pass: str):
+    cfg.users.put(user, pass)
+    cfg.require_auth = true
+end
+
+@en "SetAuth"
+@fa "تعیین احراز هویت"
+pub func SetAuth(cfg &: ServerConfig, check: func (str, str) bool):
+    cfg.auth = check
+    cfg.has_auth = true
+    cfg.require_auth = true
+end
+
+@en "SetConnector"
+@fa "تعیین اتصال به مقصد"
+pub func SetConnector(cfg &: ServerConfig, connect: func (str, int) socks.Outbound):
+    cfg.connect = connect
+end
+
+@en "SetTLS"
+@fa "تعیین تی ال اس"
+pub func SetTLS(cfg &: ServerConfig, cert_file: str, key_file: str): bool:
+    cfg.tls_config = tls.NewServerConfig(cert_file, key_file)
+    cfg.use_tls = true
+    ret cfg.tls_config.ok
+end
+
+@en "Handle"
+@fa "رسیدگی"
+pub func Handle(cfg: ServerConfig, s: dyn tunnel.Stream):
+    mut rd := _rd_new(s, MaxHeadBytes)
+    mut up := _Up {}
+    mut first := true
+    mut closed := false
+    until true:
+        if first:
+            s.SetDeadline(cfg.handshake_timeout_ms)
+        else:
+            s.SetDeadline(cfg.idle_timeout_ms)
+        end
+        first = false
+        mut st := 0
+        text := _rd_head(rd, MaxHeadBytes, st)
+        if st != 0:
+            if st == 2:
+                _respond(s, 431, "", "request head too large\n", true)
+            else st == 3:
+                _respond(s, 400, "", "bad request\n", true)
+            end
+            break
+        end
+        h := ParseRequestHead(text)
+        if not h.ok:
+            _respond(s, 400, "", "bad request: " + h.err + "\n", true)
+            break
+        end
+        s.SetDeadline(cfg.idle_timeout_ms)
+        if not _auth_ok(cfg, h):
+            mut n := 0 as i64
+            kind := _body_kind(h, n)
+            ka := _keepalive(h) and kind == 0
+            _respond(s, 407, "Proxy-Authenticate: Basic realm=\"" + cfg.realm + "\"\r\n", "", not ka)
+            if not ka: break end
+            continue
+        end
+        if h.method == "CONNECT":
+            closed = _do_connect(cfg, s, rd, h)
+            break
+        end
+        if not _forward(cfg, s, rd, h, up): break end
+    end
+    _up_close(up)
+    _rd_free(rd)
+    if not closed: s.Close() end
+end
+
+@en "Start"
+@fa "شروع"
+pub func Start(cfg: ServerConfig): Server:
+    mut sv := Server {}
+    if cfg.use_tls and not cfg.tls_config.ok: ret sv end
+    ls := tcp.Bind(cfg.port)
+    if not tcp.Ok(ls): ret sv end
+    stop := mem.AllocateZeroed(8 as u64) as i64*
+    atomic_store(stop, 1 as i64)
+    jb := mem.AllocateZeroed(sizeof(_AcceptJob) as u64) as _AcceptJob*
+    jb[0] = _AcceptJob { cfg = cfg, listener = ls, stop = stop }
+    sv.ok = true
+    sv.port = tcp.Port(ls)
+    sv.listener = ls
+    sv.stop_cell = stop
+    socks.Go(_accept_thread, jb as void*)
+    ret sv
+end
+
+@en "Stop"
+@fa "توقف"
+pub func Stop(sv: Server):
+    if not sv.ok: ret end
+    atomic_store(sv.stop_cell, 0 as i64)
+    rawsock.Shutdown(rawsock.FromFd(sv.listener.fd))
+    wake := tcp.DialTimeout("127.0.0.1", sv.port, 500)
+    if tcp.ConnOk(wake): tcp.Close(wake) end
+end
+
+@en "Serve"
+@fa "خدمت‌رسانی"
+pub func Serve(cfg: ServerConfig): bool:
+    sv := Start(cfg)
+    if not sv.ok: ret false end
+    until sv.ok:
+        sync.SleepMs(1000)
+    end
+    ret true
+end

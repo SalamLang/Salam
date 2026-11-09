@@ -1,0 +1,73 @@
+import net.socks
+import net.tcp
+import net.tunnel
+
+func echo_conn(arg: i64):
+    c := tcp.ConnFromFd(arg)
+    until true:
+        data := tcp.Read(c, 4096)
+        if data.len() == 0:
+            break
+        end
+        tcp.Write(c, data)
+    end
+    tcp.Close(c)
+end
+
+func echo_accept(arg: i64):
+    srv := tcp.Server { fd = arg }
+    until true:
+        c := tcp.Accept(srv)
+        if not tcp.ConnOk(c):
+            break
+        end
+        socks.Go(echo_conn, c.fd as void*)
+    end
+end
+
+func start_echo(): int:
+    listener := tcp.Bind(0)
+    socks.Go(echo_accept, listener.fd as void*)
+    ret tcp.Port(listener)
+end
+
+func main:
+    echo := start_echo()
+    mut config := socks.NewServerConfig(0)
+    socks.AddUser(config, "u", "p")
+    mixed_config := socks.NewServerConfig(0)
+
+    mut mixed := tunnel.NewMixed()
+    tunnel.MixedSetSocks5(mixed, socks.NewInbound(config))
+    tunnel.MixedSetSocks4(mixed, socks.NewInbound4(mixed_config))
+    println socks.NewInbound(config).Name(), socks.NewInbound4(mixed_config).Name()
+
+    forward := tunnel.NewForwarder(tunnel.Direct(), mixed)
+    inbound := tunnel.ListenTcp(0)
+    tunnel.ServeBackground(inbound, mixed, forward)
+
+    five := socks.Connect(socks.NewClientAuth("127.0.0.1", inbound.port, "u", "p"), "127.0.0.1", echo)
+    five.stream.Write("five")
+    println five.ok, five.stream.Read(100)
+    five.stream.Close()
+    println "wrong password:", socks.Connect(socks.NewClientAuth("127.0.0.1", inbound.port, "u", "x"), "127.0.0.1", echo).ok
+
+    mut four := socks.NewClient("127.0.0.1", inbound.port)
+    four.version = socks.Socks4
+    println "socks4 with auth required:", socks.Connect(four, "127.0.0.1", echo).code
+    inbound.Stop()
+
+    listener := tcp.Bind(0)
+    port := tcp.Port(listener)
+    socks.Go(serve_once, listener.fd as void*)
+    direct := socks.Connect(socks.NewClient("127.0.0.1", port), "127.0.0.1", echo)
+    direct.stream.Write("handled by hand")
+    println direct.stream.Read(100)
+    direct.stream.Close()
+end
+
+func serve_once(arg: i64):
+    listener := tcp.Server { fd = arg }
+    c := tcp.Accept(listener)
+    socks.Handle(socks.NewServerConfig(0), tunnel.WrapTcp(c))
+end

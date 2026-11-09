@@ -1,0 +1,437 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package doh
+
+import mem
+import str
+import crypto
+import compress
+import net.dns
+import net.tcp
+import net.udp
+import net.internal.rawsock
+import time
+import tls
+
+struct Io:
+    pub use_tls: bool = false
+    pub tc: tcp.Conn = tcp.Conn {}
+    pub sc: tls.Conn = tls.Conn {}
+    pub ok: bool = false
+end
+
+@en "Response"
+@fa "پاسخ"
+pub struct Response:
+    @en "ok"
+    @fa "معتبر"
+    pub ok: bool = false
+    @en "raw"
+    @fa "پاسخ خام"
+    pub raw: compress.ByteBuf = compress.ByteBuf {}
+    @en "msg"
+    @fa "پیام"
+    pub msg: dns.Message = dns.Message {}
+    @en "rtt_ms"
+    @fa "زمان رفت‌وبرگشت"
+    pub rtt_ms: i64 = 0
+    @en "server"
+    @fa "کارگزار"
+    pub server: str = ""
+    @en "err"
+    @fa "خطا"
+    pub err: str = ""
+end
+
+func _dial(addr: str, port: int, use_tls: bool, sni: str, insecure: bool, timeout_ms: int): Io:
+    mut io := Io { use_tls = use_tls }
+    if use_tls:
+        mut cfg := tls.NewConfig(sni)
+        cfg.insecure_skip_verify = insecure
+        io.sc = tls.Dial(addr, port, cfg)
+        io.ok = tls.ConnOk(io.sc)
+        if io.ok:
+            rawsock.SetTimeout(rawsock.FromFd(tls.Fd(io.sc)), timeout_ms)
+        end
+    else:
+        io.tc = tcp.DialTimeout(addr, port, timeout_ms)
+        io.ok = tcp.ConnOk(io.tc)
+        if io.ok:
+            tcp.SetReadDeadline(io.tc, timeout_ms)
+        end
+    end
+    ret io
+end
+
+func _io_write(io &: Io, p: void*, n: int): bool:
+    mut off := 0
+    until off < n:
+        src := ((p as i64) + (off as i64)) as void*
+        mut w := 0
+        if io.use_tls:
+            w = tls.WriteBytes(io.sc, src, n - off)
+        else:
+            w = tcp.WriteBytes(io.tc, src, n - off)
+        end
+        if w <= 0:
+            ret false
+        end
+        off += w
+    end
+    ret true
+end
+
+func _io_read(io &: Io, buf: void*, max: int): int:
+    if io.use_tls:
+        ret tls.ReadBytes(io.sc, buf, max)
+    end
+    ret tcp.ReadBytes(io.tc, buf, max)
+end
+
+func _io_close(io &: Io):
+    if io.use_tls:
+        tls.Close(io.sc)
+    else:
+        tcp.Close(io.tc)
+    end
+end
+
+func _find_bytes(b: compress.ByteBuf, pat: str, from: int): int:
+    pl := pat.len()
+    mut i := from
+    until i + pl <= b.len:
+        mut m := true
+        repeat pl in j:
+            if compress.BufGet(b, i + j) != (pat as u8*)[j] as int:
+                m = false
+                break
+            end
+        end
+        if m:
+            ret i
+        end
+        i++
+    end
+    ret 0 - 1
+end
+
+func _slice_str(b: compress.ByteBuf, off: int, n: int): str:
+    buf := mem.Allocate((n + 1) as u64)
+    if n > 0:
+        mem.Copy(buf, ((b.data as i64) + (off as i64)) as void*, n as u64)
+    end
+    (buf as u8*)[n] = 0 as u8
+    ret buf as str
+end
+
+func _header_value(head: str, name: str): str:
+    lower := head.lower()
+    idx := lower.find("\r\n" + name + ":")
+    if idx < 0:
+        ret ""
+    end
+    start := idx + 2 + name.len() + 1
+    rest := head.substr(start, head.len() - start)
+    mut e := rest.find("\r\n")
+    if e < 0:
+        e = rest.len()
+    end
+    ret str.Trim(rest.substr(0, e))
+end
+
+func _hex_num(s: str): int:
+    mut v := 0
+    repeat s.len() in i:
+        h := _hexval((s as u8*)[i] as int)
+        if h < 0:
+            break
+        end
+        v = v * 16 + h
+    end
+    ret v
+end
+
+func _dechunk(raw: compress.ByteBuf, start: int, out &: compress.ByteBuf): bool:
+    mut pos := start
+    until true:
+        eol := _find_bytes(raw, "\r\n", pos)
+        if eol < 0:
+            ret false
+        end
+        size := _hex_num(_slice_str(raw, pos, eol - pos))
+        pos = eol + 2
+        if size == 0:
+            ret true
+        end
+        if pos + size > raw.len:
+            ret false
+        end
+        compress.BufPushBytes(out, ((raw.data as i64) + (pos as i64)) as void*, size)
+        pos += size + 2
+    end
+end
+
+func _http_done(raw: compress.ByteBuf): bool:
+    hend := _find_bytes(raw, "\r\n\r\n", 0)
+    if hend < 0:
+        ret false
+    end
+    head := _slice_str(raw, 0, hend)
+    cl := _header_value(head, "content-length")
+    if cl.len() > 0:
+        ret raw.len >= hend + 4 + cl.to_int()
+    end
+    te := _header_value(head, "transfer-encoding").lower()
+    if te.find("chunked") >= 0:
+        ret raw.len >= hend + 9 and _find_bytes(raw, "0\r\n\r\n", raw.len - 5) >= 0
+    end
+    ret false
+end
+
+func _read_http_body(io &: Io, body &: compress.ByteBuf): str:
+    mut raw := compress.NewByteBuf()
+    defer compress.BufFree(raw)
+    cap := 8192
+    buf := mem.Allocate(cap as u64)
+    defer mem.Free(buf)
+    until true:
+        n := _io_read(io, buf, cap)
+        if n <= 0:
+            break
+        end
+        compress.BufPushBytes(raw, buf, n)
+        if _http_done(raw):
+            break
+        end
+    end
+    hend := _find_bytes(raw, "\r\n\r\n", 0)
+    if hend < 0:
+        ret "no http response"
+    end
+    head := _slice_str(raw, 0, hend)
+    sp := head.find(" ")
+    if sp < 0:
+        ret "bad status line"
+    end
+    status := head.substr(sp + 1, 3)
+    if status != "200":
+        ret "http " + status
+    end
+    te := _header_value(head, "transfer-encoding").lower()
+    start := hend + 4
+    if te.find("chunked") >= 0:
+        if not _dechunk(raw, start, body):
+            ret "bad chunked body"
+        end
+        ret ""
+    end
+    cl := _header_value(head, "content-length")
+    mut take := raw.len - start
+    if cl.len() > 0 and cl.to_int() < take:
+        take = cl.to_int()
+    end
+    compress.BufPushBytes(body, ((raw.data as i64) + (start as i64)) as void*, take)
+    ret ""
+end
+
+func _b64url(b: compress.ByteBuf): str:
+    mut s := compress.BufToBase64(b)
+    s = str.Replace(s, "+", "-")
+    s = str.Replace(s, "/", "_")
+    s = str.Replace(s, "=", "")
+    ret s
+end
+
+func _random_id(): int:
+    buf := mem.Allocate(2 as u64)
+    defer mem.Free(buf)
+    crypto.RandomBytes(buf, 2)
+    ret ((buf as u8*)[0] as int) * 256 + ((buf as u8*)[1] as int)
+end
+
+func _check_response(raw: compress.ByteBuf, want_id: int, check_id: bool): str:
+    if raw.len < 12:
+        ret "short dns message"
+    end
+    if (compress.BufGet(raw, 2) & 128) == 0:
+        ret "not a response"
+    end
+    if check_id and compress.BufGet(raw, 0) * 256 + compress.BufGet(raw, 1) != want_id:
+        ret "id mismatch"
+    end
+    ret ""
+end
+
+func _query_doh(srv: Server, addr: str, wire: compress.ByteBuf, timeout_ms: int, out &: compress.ByteBuf): str:
+    mut io := _dial(addr, srv.port, srv.use_tls, srv.host, srv.insecure, timeout_ms)
+    if not io.ok:
+        ret "connect failed"
+    end
+    defer _io_close(io)
+    mut req := ""
+    mut host_header := srv.host
+    if srv.port != 443 and srv.port != 80:
+        host_header = srv.host + ":" + str.FromInt(srv.port as i64)
+    end
+    if srv.kind == KindDoHGet:
+        mut sep := "?"
+        if srv.path.find("?") >= 0:
+            sep = "&"
+        end
+        req = "GET " + srv.path + sep + "dns=" + _b64url(wire) + " HTTP/1.1\r\nHost: " + host_header + "\r\nAccept: application/dns-message\r\nUser-Agent: salam-doh\r\nConnection: close\r\n\r\n"
+        if not _io_write(io, req as void*, req.len()):
+            ret "write failed"
+        end
+    else:
+        req = "POST " + srv.path + " HTTP/1.1\r\nHost: " + host_header + "\r\nAccept: application/dns-message\r\nContent-Type: application/dns-message\r\nUser-Agent: salam-doh\r\nConnection: close\r\nContent-Length: " + str.FromInt(wire.len as i64) + "\r\n\r\n"
+        mut full := compress.NewByteBufCap(req.len() + wire.len)
+        compress.BufPushBytes(full, req as void*, req.len())
+        compress.BufPushBuf(full, wire)
+        ok := _io_write(io, full.data, full.len)
+        compress.BufFree(full)
+        if not ok:
+            ret "write failed"
+        end
+    end
+    ret _read_http_body(io, out)
+end
+
+func _query_dot(srv: Server, addr: str, wire: compress.ByteBuf, timeout_ms: int, out &: compress.ByteBuf): str:
+    mut io := _dial(addr, srv.port, true, srv.host, srv.insecure, timeout_ms)
+    if not io.ok:
+        ret "connect failed"
+    end
+    defer _io_close(io)
+    mut full := compress.NewByteBufCap(wire.len + 2)
+    compress.BufPush(full, (wire.len >> 8) & 255)
+    compress.BufPush(full, wire.len & 255)
+    compress.BufPushBuf(full, wire)
+    ok := _io_write(io, full.data, full.len)
+    compress.BufFree(full)
+    if not ok:
+        ret "write failed"
+    end
+    mut raw := compress.NewByteBuf()
+    defer compress.BufFree(raw)
+    buf := mem.Allocate(4096 as u64)
+    defer mem.Free(buf)
+    until true:
+        if raw.len >= 2:
+            want := compress.BufGet(raw, 0) * 256 + compress.BufGet(raw, 1)
+            if raw.len >= 2 + want:
+                compress.BufPushBytes(out, ((raw.data as i64) + 2) as void*, want)
+                ret ""
+            end
+        end
+        n := _io_read(io, buf, 4096)
+        if n <= 0:
+            break
+        end
+        compress.BufPushBytes(raw, buf, n)
+    end
+    ret "dot read failed"
+end
+
+func _query_udp(srv: Server, addr: str, wire: compress.ByteBuf, timeout_ms: int, out &: compress.ByteBuf): str:
+    sock := udp.Open()
+    if not udp.Ok(sock):
+        ret "socket failed"
+    end
+    defer udp.Close(sock)
+    udp.SetTimeout(sock, timeout_ms)
+    mut port := srv.port
+    if port <= 0:
+        port = 53
+    end
+    if udp.SendBytes(sock, addr, port, wire.data, wire.len) < 0:
+        ret "send failed"
+    end
+    cap := 4096
+    buf := mem.Allocate(cap as u64)
+    defer mem.Free(buf)
+    mut fh := ""
+    mut fp := 0
+    n := udp.ReceiveBytes(sock, buf, cap, fh, fp)
+    if n <= 0:
+        ret "timeout"
+    end
+    compress.BufPushBytes(out, buf, n)
+    ret ""
+end
+
+@en "QueryAddr"
+@fa "پرسش از نشانی"
+pub func QueryAddr(srv: Server, addr: str, name: str, qtype: int, timeout_ms: int): Response:
+    mut r := Response { server = srv.name }
+    id := _random_id()
+    mut wire_id := id
+    if srv.kind == KindDoH or srv.kind == KindDoHGet:
+        wire_id = 0
+    end
+    mut wire := dns.EncodeQuery(name, qtype, wire_id)
+    defer compress.BufFree(wire)
+    start := time.MonoMillis()
+    mut raw := compress.NewByteBuf()
+    mut err := ""
+    if srv.kind == KindDoT:
+        err = _query_dot(srv, addr, wire, timeout_ms, raw)
+    else srv.kind == KindUDP:
+        err = _query_udp(srv, addr, wire, timeout_ms, raw)
+    else:
+        err = _query_doh(srv, addr, wire, timeout_ms, raw)
+    end
+    if err.len() == 0:
+        err = _check_response(raw, wire_id, srv.kind != KindDoH and srv.kind != KindDoHGet)
+    end
+    r.rtt_ms = time.MonoMillis() - start
+    if err.len() > 0:
+        compress.BufFree(raw)
+        r.err = err
+        ret r
+    end
+    r.raw = raw
+    r.msg = dns.Decode(raw.data, raw.len)
+    r.ok = true
+    ret r
+end
+
+@en "Query"
+@fa "پرسش"
+pub func Query(srv: Server, name: str, qtype: int, timeout_ms: int): Response:
+    mut last := Response { server = srv.name, err = "no address" }
+    repeat srv.addrs.len() in i:
+        r := QueryAddr(srv, srv.addrs.get(i), name, qtype, timeout_ms)
+        if r.ok:
+            ret r
+        end
+        last = r
+    end
+    if srv.addrs.len() == 0 and srv.host.len() > 0:
+        mut ip := srv.host
+        if not IsIP(ip):
+            ip = rawsock.Resolve(srv.host)
+        end
+        if ip.len() > 0:
+            ret QueryAddr(srv, ip, name, qtype, timeout_ms)
+        end
+    end
+    ret last
+end
+
+@en "FreeResponse"
+@fa "آزاد کردن پاسخ"
+pub func FreeResponse(r &: Response):
+    compress.BufFree(r.raw)
+end

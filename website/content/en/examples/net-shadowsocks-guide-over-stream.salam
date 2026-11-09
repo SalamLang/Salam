@@ -1,0 +1,43 @@
+import mem
+import sync
+import net.tcp
+import net.tunnel
+import net.shadowsocks
+
+mut port := 0
+mut ready := sync.NewWaitGroup()
+
+func server():
+    carrier := tcp.Bind(0)
+    port = tcp.Port(carrier)
+    srv := shadowsocks.Listen(0, "aes-128-gcm", "inner")
+    sync.Done(ready)
+    raw := tcp.Accept(carrier)
+    c := shadowsocks.AcceptOver(srv, tunnel.TcpStream { conn = raw })
+    if shadowsocks.Ok(c):
+        buf := mem.Allocate(4096 as u64)
+        n := shadowsocks.Read(c, buf, 4096)
+        shadowsocks.Write(c, buf, n)
+        mem.Free(buf)
+        shadowsocks.Close(c)
+    end
+    shadowsocks.Destroy(srv)
+    tcp.CloseServer(carrier)
+end
+
+func main:
+    sync.Add(ready, 1 as i64)
+    t := spawn(server)
+    sync.Wait(ready)
+
+    link := tunnel.TcpStream { conn = tcp.Dial("127.0.0.1", port) }
+    cfg := shadowsocks.Config { method = "aes-128-gcm", password = "inner" }
+    c := shadowsocks.DialOver(link, cfg, "example.com", 443)
+    shadowsocks.WriteStr(c, "any stream will do")
+    println shadowsocks.ReadStr(c, 4096)
+
+    s := shadowsocks.AsStream(c)
+    println s.Ok()
+    shadowsocks.Close(c)
+    join(t)
+end

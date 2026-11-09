@@ -1,0 +1,189 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package httpproxy
+
+import str
+import net.tunnel
+import net.socks
+
+@en "HttpInbound"
+@fa "ورودی اچ‌تی‌تی‌پی"
+pub struct HttpInbound:
+    @en "config"
+    @fa "پیکربندی"
+    pub config: ServerConfig = ServerConfig {}
+
+    @en "Name"
+    @fa "نام"
+    pub func Name(): str:
+        ret "http"
+    end
+
+    @en "Handshake"
+    @fa "دست‌دهی"
+    pub func Handshake(s: dyn tunnel.Stream): tunnel.Session:
+        ret _inbound_handshake(this.config, s)
+    end
+
+    @en "Reply"
+    @fa "پاسخ"
+    pub func Reply(s: dyn tunnel.Stream, sess: tunnel.Session, ok: bool):
+        if sess.initial.len() > 0:
+            if not ok: _respond(s, 502, "", "cannot reach " + sess.target.String() + "\n", true) end
+            ret
+        end
+        if ok:
+            _send(s, "HTTP/1.1 200 Connection established\r\n\r\n")
+        else:
+            _respond(s, 502, "", "cannot reach " + sess.target.String() + "\n", true)
+        end
+    end
+end
+
+@en "HttpConnector"
+@fa "رابط اچ‌تی‌تی‌پی"
+pub struct HttpConnector:
+    @en "client"
+    @fa "کلاینت"
+    pub client: Client = Client {}
+
+    @en "Server"
+    @fa "کارساز"
+    pub func Server(): tunnel.Addr:
+        ret tunnel.NewAddr(this.client.host, this.client.port)
+    end
+
+    @en "Handshake"
+    @fa "دست‌دهی"
+    pub func Handshake(s: dyn tunnel.Stream, target: tunnel.Addr): bool:
+        ret ClientHandshake(s, this.client, target.host, target.port).ok
+    end
+
+    @en "Name"
+    @fa "نام"
+    pub func Name(): str:
+        ret "http"
+    end
+end
+
+func _fail(msg: str): tunnel.Session:
+    ret tunnel.Session { error = msg }
+end
+
+func _inbound_handshake(cfg: ServerConfig, s: dyn tunnel.Stream): tunnel.Session:
+    mut rd := _rd_new(s, MaxHeadBytes)
+    defer _rd_free(rd)
+    mut tries := 0
+    until tries < 4:
+        tries++
+        mut st := 0
+        text := _rd_head(rd, MaxHeadBytes, st)
+        if st != 0:
+            if st == 2: _respond(s, 431, "", "request head too large\n", true) end
+            ret _fail("no request head")
+        end
+        h := ParseRequestHead(text)
+        if not h.ok:
+            _respond(s, 400, "", "bad request\n", true)
+            ret _fail("bad request")
+        end
+        mut blen := 0 as i64
+        kind := _body_kind(h, blen)
+        if not _auth_ok(cfg, h):
+            if kind != 0 or not _keepalive(h):
+                _respond(s, 407, "Proxy-Authenticate: Basic realm=\"" + cfg.realm + "\"\r\n", "", true)
+                ret _fail("proxy authentication required")
+            end
+            _respond(s, 407, "Proxy-Authenticate: Basic realm=\"" + cfg.realm + "\"\r\n", "", false)
+            continue
+        end
+        mut user := ""
+        if cfg.require_auth:
+            mut pass := ""
+            BasicCredentials(HeaderGet(h, "proxy-authorization"), user, pass)
+        end
+        if h.method == "CONNECT":
+            hp := SplitHostPort(h.target, 0)
+            if not hp.ok or not hp.has_port:
+                _respond(s, 400, "", "CONNECT needs host:port\n", true)
+                ret _fail("bad CONNECT target")
+            end
+            if not cfg.allow_connect or not cfg.allow("CONNECT", hp.host, hp.port):
+                _respond(s, 403, "", "forbidden\n", true)
+                ret _fail("target not allowed")
+            end
+            if rd.len > rd.pos:
+                ret _fail("data sent before the tunnel was open")
+            end
+            ret tunnel.Session { ok = true, target = tunnel.NewAddr(hp.host, hp.port), protocol = "http", user = user, command = 1 }
+        end
+        u := ParseURL(h.target)
+        if not u.ok or u.scheme != "http":
+            _respond(s, 400, "", "absolute http URI required\n", true)
+            ret _fail("not a proxy request")
+        end
+        if not cfg.allow_plain or not cfg.allow(h.method, u.host, u.port):
+            _respond(s, 403, "", "forbidden\n", true)
+            ret _fail("target not allowed")
+        end
+        if kind < 0 or kind == 2 or blen > 1048576 as i64:
+            _respond(s, 501, "", "this proxy entry cannot forward that body\n", true)
+            ret _fail("unsupported body framing")
+        end
+        mut head := h.method + " " + u.path + " HTTP/1.1\r\nHost: " + _host_header(u) + "\r\n" + _fwd_headers(h, false)
+        if kind == 1: head += "Content-Length: " + str.FromInt(blen) + "\r\n" end
+        head += "Connection: close\r\n\r\n"
+        mut payload := head
+        if kind == 1:
+            n := blen as int
+            sink_st := _sink_new(n + 16)
+            sink := _Sink { st = sink_st }
+            ok := _rd_copy(rd, sink, blen)
+            mut clean := ok
+            if ok:
+                repeat sink_st[0].len in i:
+                    if sink_st[0].buf[i] == 0: clean = false end
+                end
+            end
+            if clean: payload += _range_str(sink_st[0].buf, 0, sink_st[0].len) end
+            _sink_free(sink_st)
+            if not clean: ret _fail("body truncated or binary") end
+        end
+        ret tunnel.Session { ok = true, target = tunnel.NewAddr(u.host, u.port), protocol = "http", user = user, command = 1, initial = payload }
+    end
+    ret _fail("too many authentication attempts")
+end
+
+@en "NewInbound"
+@fa "ورودی جدید"
+pub func NewInbound(cfg: ServerConfig): HttpInbound:
+    ret HttpInbound { config = cfg }
+end
+
+@en "NewConnector"
+@fa "رابط جدید"
+pub func NewConnector(c: Client): HttpConnector:
+    ret HttpConnector { client = c }
+end
+
+@en "SetDialer"
+@fa "تعیین شماره‌گیر"
+pub func SetDialer(cfg &: ServerConfig, d: dyn tunnel.Dialer):
+    cfg.connect = (h: str, p: int):
+        s := d.Dial(tunnel.NewAddr(h, p))
+        if not s.Ok(): ret socks.Outbound { ok = false, code = socks.RepHostUnreachable, err = "dial failed via " + d.Name() } end
+        ret socks.Outbound { ok = true, code = socks.RepSucceeded, stream = s }
+    end
+end

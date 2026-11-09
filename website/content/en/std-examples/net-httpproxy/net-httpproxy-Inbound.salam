@@ -1,0 +1,66 @@
+import net.httpproxy
+import net.tcp
+import net.tunnel
+import sync
+
+mut origin_port := 0
+mut echo_port := 0
+mut ready := sync.NewWaitGroup()
+
+func origin():
+    srv := tcp.Bind(0)
+    origin_port = tcp.Port(srv)
+    sync.Done(ready)
+    until true:
+        c := tcp.Accept(srv)
+        request := tcp.Read(c, 4096)
+        first := request.substr(0, request.find("\r\n"))
+        body := "origin saw: " + first
+        tcp.Write(c, "HTTP/1.1 200 OK\r\nContent-Length: " + body.len() + "\r\nConnection: close\r\n\r\n" + body)
+        tcp.Close(c)
+    end
+end
+
+func echo():
+    srv := tcp.Bind(0)
+    echo_port = tcp.Port(srv)
+    sync.Done(ready)
+    until true:
+        c := tcp.Accept(srv)
+        tcp.Write(c, "echo:" + tcp.Read(c, 100))
+        tcp.Close(c)
+    end
+end
+
+func start_backends():
+    sync.Add(ready, 2 as i64)
+    _a := spawn(origin)
+    _b := spawn(echo)
+    sync.Wait(ready)
+end
+
+func main:
+    start_backends()
+    mut config := httpproxy.NewServerConfig(0)
+    httpproxy.AddUser(config, "u", "p")
+    inbound_protocol := httpproxy.NewInbound(config)
+    println inbound_protocol.Name()
+
+    forward := tunnel.NewForwarder(tunnel.Direct(), inbound_protocol)
+    listener := tunnel.ListenTcp(0)
+    tunnel.ServeBackground(listener, inbound_protocol, forward)
+
+    client := httpproxy.NewClientAuth("127.0.0.1", listener.port, "u", "p")
+    println httpproxy.Get(client, "http://127.0.0.1:" + origin_port + "/page").body
+    tunnel_result := httpproxy.Connect(client, "127.0.0.1", echo_port)
+    tunnel_result.stream.Write("connect through the inbound")
+    println tunnel_result.status, tunnel_result.stream.Read(100)
+    tunnel_result.stream.Close()
+    println "without login:", httpproxy.Get(httpproxy.NewClient("127.0.0.1", listener.port), "http://127.0.0.1:" + origin_port + "/").status
+    listener.Stop()
+
+    hop := httpproxy.NewConnector(httpproxy.NewClient("127.0.0.1", 3128))
+    println hop.Name(), hop.Server().String()
+    via := tunnel.Via(tunnel.Direct(), hop)
+    println via.Name()
+end

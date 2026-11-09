@@ -1,0 +1,49 @@
+import net.censor
+import net.tcp
+import sync
+
+const HELLO := "160301008c010000880303000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f206465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80818283000613011302c02b0100003900000014001200000f7777772e6578616d706c652e636f6d000a00040002001d0010000e000c02683208687474702f312e31002b0003020304"
+
+mut port := 0
+mut seen := ""
+mut ready := sync.NewWaitGroup()
+
+func server():
+    srv := tcp.Bind(0)
+    port = tcp.Port(srv)
+    sync.Done(ready)
+    c := tcp.Accept(srv)
+    tcp.SetReadDeadline(c, 1500)
+    until true:
+        data := tcp.Read(c, 4096)
+        if data.len() == 0:
+            break
+        end
+        seen += data.len() + " "
+    end
+    tcp.Close(c)
+end
+
+func main:
+    sync.Add(ready, 1 as i64)
+    t := spawn(server)
+    sync.Wait(ready)
+
+    hello := censor.FromHex(HELLO)
+    sizes := censor.SNISplitSizes(hello.data, hello.len, false)
+    mut pieces := censor.Slice(hello.data, hello.len, sizes)
+    println "server name starts at byte", censor.ParseClientHello(hello.data, hello.len).sni_offset, "and is cut after", sizes.get(0), "bytes"
+
+    conn := tcp.Dial("127.0.0.1", port)
+    tcp.SetNoDelay(conn, true)
+    repeat pieces.len() in i:
+        piece := pieces.get(i)
+        tcp.WriteBytes(conn, piece.data, piece.len)
+        sync.SleepMs(60)
+    end
+    tcp.Close(conn)
+    join(t)
+    println "the server read:", seen
+    println "pieces sent:", pieces.len()
+    censor.FreePieces(pieces)
+end

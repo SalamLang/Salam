@@ -1,0 +1,258 @@
+pkg.en = net/censor
+pkg.name = net.censor
+pkg.group = Network
+pkg.summary = Helpers for networks that interfere with traffic: protocol sniffing and TLS server name reading, ClientHello fragmentation, padding, domain rule sets with Iran lists, a probe guard and a replay cache.
+pkg.title = The net.censor package in Salam | Anti-censorship helpers
+pkg.description = The net.censor package in Salam: sniff the protocol and the TLS server name of a connection, fragment a TLS ClientHello, pad records, match domain rule sets with Iran lists, and guard a server against probes and replays, with examples.
+pkg.import = net.censor
+pkg.intro <<
+<p>Some networks do not just carry traffic. They look at it: the first bytes of a connection tell a filter which protocol it is, and the server name in the first TLS message tells it which site you are going to. This package is a set of small helpers, each independent of the others, for working with that. <code>Sniff</code> and <code>ParseClientHello</code> read what a filter would read. <code>FragmentClientHello</code> and <code>SNISplitSizes</code> cut that first message into pieces, so that a filter that only looks at one packet never sees the whole name. <code>DomainSet</code> and <code>Classifier</code> decide, from rules, which hosts go direct, through a proxy or nowhere. <code>ProbeGuard</code>, <code>ReplayCache</code> and <code>DecoyResponse</code> are the pieces of a server that does not give itself away to someone who is trying it. To see how the pieces fit together in an app, read <a href="/std/net/tunnel/#guide-vpn-app">Building a v2ray style or VPN app</a>.</p>
+<p>It does not open any connection and has no state of its own. It works on bytes and text you give it, so it fits in front of any of the proxy packages: <a href="/std/net/tunnel/">net.tunnel</a>, <a href="/std/net/socks/">net.socks</a>, <a href="/std/net/httpproxy/">net.httpproxy</a>, <a href="/std/net/trojan/">net.trojan</a>. None of them calls it for you; you wire it in where you need it.</p>
+<p>Core ideas:</p>
+<ul>
+<li><code>Sniff</code> needs only the first few bytes and says <code>KindTLS</code>, <code>KindHTTP</code>, <code>KindSSH</code>, <code>KindSOCKS5</code> or <code>KindSOCKS4</code>, or <code>KindTooShort</code> when it cannot tell yet.</li>
+<li><code>ParseClientHello</code> reads a TLS ClientHello without a TLS library: server name, offered protocols, whether Encrypted Client Hello is present.</li>
+<li>Fragmenting is a plan plus a cut. <code>SplitSizes</code> or <code>SNISplitSizes</code> make the plan (sizes that add up to the total), <code>Slice</code> cuts bytes into plain pieces and <code>FragmentRecords</code> cuts one TLS record into several records. <code>FragmentClientHello</code> does the whole job for a ClientHello.</li>
+<li>Padding hides sizes: <code>WrapRecord</code> and <code>WrapStream</code> add random padding inside records that look like TLS application data, and <code>UnwrapRecord</code> takes it off.</li>
+<li>A <code>DomainSet</code> holds domain rules (<code>example.com</code>, <code>full:name</code>, <code>keyword:word</code>); a <code>Classifier</code> has three of them and a default and answers <code>DecisionProxy</code>, <code>DecisionDirect</code> or <code>DecisionBlock</code>.</li>
+</ul>
+<p>Things that catch people out:</p>
+<ul>
+<li><strong>Fragmentation is not encryption and not magic.</strong> It helps against filters that look at the first packet or the first record only. Filters change, and many networks reassemble. Test it on the network you actually use, and do not rely on it alone.</li>
+<li><strong>Padding is not encryption either.</strong> <code>WrapStream</code> hides how large the pieces are, not what is in them. Use it inside TLS or another encrypted channel, never in place of one. The padded records use TLS looking headers of this package's own making: they will not pass for real TLS to a careful observer.</li>
+<li><strong>Fragment before TLS goes out, at the start only.</strong> The cut goes on the first record of a handshake. A connection already running is not affected.</li>
+<li><strong>The Iran lists are starting points.</strong> <code>IranDirectList</code> and <code>FilteredList</code> are short, human edited lists that age. Treat them as examples to edit, and keep your own list in a file for <code>AddRules</code>.</li>
+<li><strong><code>ProbeGuard</code> and <code>ReplayCache</code> have no lock.</strong> They are plain data. When several threads use one, wrap the calls in your own lock. They do not stop a probe by themselves: you call them from your server's accept path.</li>
+<li><strong><code>ShouldFallback</code> is a single comparison.</strong> A server that has a real website to show is what does the hiding; see the Trojan package.</li>
+<li><strong>Randomness is secure.</strong> <code>RandomInt</code> and <code>RandomBytes</code> draw from the system's secure source. <code>SplitRandom</code> is the one exception: with a seed it is repeatable on purpose, which makes it fine for tests and a poor choice for hiding a pattern.</li>
+</ul>
+
+<h2 id="guide-fragment">Fragmenting a TLS hello</h2>
+<p>A client sends its first TLS message as one record. <code>SNISplitSizes</code> finds the server name in it and plans a cut in the middle of the name; <code>Slice</code> cuts the bytes, and the pieces are sent one after another, each in its own packet. A server reads them as one stream and sees the same message. The example sends a ClientHello in two pieces over loopback and shows what the receiving side reads.</p>
+{{example.net-censor-guide-fragment}}
+<p>That cuts the bytes of the stream, which any TCP server reassembles. <code>FragmentClientHello</code> does something different: it cuts the <em>record</em> into several TLS records, so even a filter that reassembles packets sees the server name split between records. A server that follows TLS accepts both. Send the pieces with a short pause or with the TCP no-delay option on, so that each leaves in its own packet.</p>
+
+<h2 id="guide-rules">Domain rules and the Iran lists</h2>
+<p>A <code>DomainSet</code> reads rules from text, one per line: <code>example.com</code> matches that domain and everything under it, <code>full:name</code> only that name, <code>keyword:word</code> any host containing the word. A <code>Classifier</code> holds a block set, a proxy set and a direct set and answers in a fixed order: block, then proxy, then direct (the direct set or any private address), then its default. So a rule in the proxy set wins over the direct set, and a private address is direct unless you say otherwise.</p>
+<pre class="code"><code>mut classifier := censor.NewClassifier(censor.DecisionProxy)
+classifier.direct = censor.IranDirectSet()
+println censor.Classify(classifier, "www.digikala.com")   // direct
+println censor.Classify(classifier, "mail.sharif.ir")     // direct
+println censor.Classify(classifier, "youtube.com")        // proxy (the default)</code></pre>
+<p><code>IranDirectList</code> holds <code>.ir</code> and a few large domestic sites; <code>FilteredList</code> holds sites commonly filtered. Both are short and will age: copy them into a file, edit them, and load your own with <code>AddRules</code>. For a router that works on tags, <a href="/std/net/tunnel/">net.tunnel</a> has <code>tunnel.IranRouter</code> and <code>tunnel.ParseRules</code>.</p>
+
+<h2 id="guide-probe">Hiding a server from probes</h2>
+<p>A server that is being probed sees connections that do not authenticate. The safe answer is to look like an ordinary web server: hand the connection to a real site (<code>ShouldFallback</code> says yes for anything not authenticated), or at least send a plain 404 (<code>DecoyResponse</code>). A <code>ProbeGuard</code> adds a memory: after <code>max_fails</code> failures from one address within <code>window_ms</code>, <code>GuardAllowed</code> says no for <code>ban_ms</code>. A <code>ReplayCache</code> remembers the first bytes of authentications, so that a recorded handshake sent again is noticed (<code>ReplaySeen</code>). A small random wait (<code>DelayMs</code>) before answering a failed client keeps the timing of the failure path from standing out.</p>
+<pre class="code"><code>if not censor.GuardAllowed(guard, client_ip, now):
+    close(connection)
+else if not authenticated:
+    censor.GuardRecordFail(guard, client_ip, now)
+    hand_to_real_website(connection)
+end</code></pre>
+<p>The <a href="/std/net/trojan/">net.trojan</a> server already hands failed clients to a real website. These helpers are the extra layer for servers you build yourself.</p>
+
+<h2 id="guide-limits">What to know</h2>
+<ul>
+<li>Every function works on bytes and text you pass in. Nothing here opens a socket or keeps global state.</li>
+<li>Fragmenting and padding are partial measures, not encryption; use them inside an encrypted channel and test them on your own network.</li>
+<li>The Iran lists are short and out of date quickly. Keep your own.</li>
+<li><code>ProbeGuard</code> and <code>ReplayCache</code> are plain data without a lock and must be freed (<code>FreeProbeGuard</code>, <code>FreeReplayCache</code>); so must the sets, pieces and buffers you create (<code>FreeDomainSet</code>, <code>FreePieces</code>).</li>
+<li>Addresses are IPv4 text or IPv6 text; the helpers do not resolve names.</li>
+<li>No logging happens by itself.</li>
+</ul>
+>>
+
+group.Kind.title = Protocol kinds
+group.Kind = What <code>Sniff</code> returns.
+group.Decision.title = Decisions
+group.Decision = What <code>Classify</code> returns.
+group.Split.title = Split policies
+group.Split = The policies of <code>SplitSizes</code>.
+doc.KindUnknown = <code>Sniff</code> result: the bytes look like no known protocol.
+doc.KindTLS = <code>Sniff</code> result: a TLS record (a handshake record, content type 22).
+doc.KindHTTP = <code>Sniff</code> result: the start of an HTTP request, a method name such as <code>GET </code> or <code>POST </code>.
+doc.KindSSH = <code>Sniff</code> result: the <code>SSH-</code> banner.
+doc.KindSOCKS5 = <code>Sniff</code> result: a SOCKS5 greeting.
+doc.KindSOCKS4 = <code>Sniff</code> result: a SOCKS4 request.
+doc.KindTooShort = <code>Sniff</code> result: too few bytes to decide yet. Read more and ask again.
+doc.ClientHello = What <code>ParseClientHello</code> reads from the first TLS message a client sends: the server name, the offered protocols and a few facts about it.
+doc.ClientHello.ok = True when the bytes are a valid ClientHello (possibly cut short, see <code>truncated</code>).
+doc.ClientHello.truncated = True when the bytes ended before the whole message did. The fields read so far are still filled in.
+doc.ClientHello.record_version = The version number in the TLS record header.
+doc.ClientHello.hello_version = The version number in the ClientHello itself.
+doc.ClientHello.record_len = The length the record header announces.
+doc.ClientHello.sni = The server name from the Server Name Indication extension, lower case, or empty when there is none.
+doc.ClientHello.sni_offset = Where in the bytes the server name starts, or -1. This is where a filter looks, and where <code>SNISplitSizes</code> cuts.
+doc.ClientHello.sni_len = The length of the server name.
+doc.ClientHello.alpn = The application protocols the client offers, such as <code>h2</code> and <code>http/1.1</code>.
+doc.ClientHello.cipher_count = How many cipher suites are offered.
+doc.ClientHello.ext_count = How many extensions the message has.
+doc.ClientHello.has_tls13 = True when TLS 1.3 is offered in the supported versions extension.
+doc.ClientHello.has_ech = True when the message carries an Encrypted Client Hello extension, which hides the real server name.
+doc.ClientHello.session_id_len = The length of the session id the client sent. TLS 1.3 clients send 32 bytes of it.
+doc.Sniff = Looks at the first bytes of a connection and says which protocol they start: one of the <code>Kind</code> values. It needs only a few bytes, and says <code>KindTooShort</code> when they are not enough.
+doc.KindName = Returns a short name for a <code>Kind</code> value: <code>tls</code>, <code>http</code>, <code>ssh</code>, <code>socks5</code>, <code>socks4</code>, <code>short</code> or <code>unknown</code>.
+doc.ParseClientHello = Parses a TLS ClientHello from memory without any TLS library. Bytes that are cut short give a partial result with <code>truncated</code> set; anything that is not a ClientHello gives <code>ok</code> false.
+doc.ExtractSNI = Returns just the server name of a ClientHello, or an empty text.
+doc.FromHex = Turns hex text into a byte buffer. Spaces and line breaks are ignored.
+doc.ToHex = Returns the bytes of a buffer as lowercase hex.
+doc.DecisionProxy = <code>Classify</code> result: send the host through the proxy.
+doc.DecisionDirect = <code>Classify</code> result: connect to the host directly.
+doc.DecisionBlock = <code>Classify</code> result: refuse the connection.
+doc.DomainSet = A set of domain rules: whole domains (with all their subdomains), exact names and keywords. Make it with <code>NewDomainSet</code> and fill it with <code>AddRule</code> or <code>AddRules</code>.
+doc.DomainSet.suffixes = Domains that match themselves and everything under them.
+doc.DomainSet.fulls = Names that must match exactly.
+doc.DomainSet.keywords = Words that match any host containing them.
+doc.DomainSet.count = How many rules were added.
+doc.Classifier = Three domain sets and a default: <code>Classify</code> asks them in order and returns a decision. Make it with <code>NewClassifier</code> and fill the sets.
+doc.Classifier.block = Hosts to refuse. Checked first.
+doc.Classifier.direct = Hosts to reach directly.
+doc.Classifier.proxy = Hosts that must use the proxy. Checked second, so it wins over direct and over private addresses.
+doc.Classifier.default_decision = What to do with a host that nothing matched.
+doc.NewDomainSet = Returns an empty set.
+doc.AddRule = Adds one rule: <code>example.com</code> or <code>domain:example.com</code> (that domain and all below it), <code>full:name</code> (exactly that name) or <code>keyword:word</code>. A leading <code>*.</code> is allowed. False for an empty line or a kind it does not support, such as <code>regexp:</code>.
+doc.AddRules = Adds many rules from text, one per line. Blank lines and <code>#</code> comments, also after a rule, are skipped. Returns how many were added.
+doc.MatchDomain = True when a host matches the set. Case and a trailing dot are ignored, and <code>badexample.com</code> does not match the rule <code>example.com</code>.
+doc.FreeDomainSet = Frees a set.
+doc.IsPrivateHost = True for <code>localhost</code> and for private, loopback and link local addresses: 127/8, 10/8, 172.16/12, 192.168/16, 169.254/16, <code>::1</code> and the IPv6 private and link local ranges.
+doc.NewClassifier = Returns a classifier with empty sets and the given default decision.
+doc.Classify = Decides for a host: block first, then proxy, then direct (the direct set or any private address), then the default.
+doc.IranDirectList = A short list, as rule text, of domestic sites that work best without a proxy: <code>.ir</code> and a handful of well known services. A starting point, to be edited.
+doc.FilteredList = A short list, as rule text, of sites commonly filtered in Iran. A starting point only: it ages and is not complete, so check it before you rely on it.
+doc.IranDirectSet = <code>IranDirectList</code> loaded into a <code>DomainSet</code>.
+doc.FilteredSet = <code>FilteredList</code> loaded into a <code>DomainSet</code>.
+doc.SplitEven = <code>SplitSizes</code> policy: pieces of nearly equal size.
+doc.SplitRandom = <code>SplitSizes</code> policy: random cut points, the same for the same seed.
+doc.SplitFirst = <code>SplitSizes</code> policy: a first piece of a chosen size and everything else in the second.
+doc.MaxRecordPayload = The most data <code>WrapStream</code> puts in one record: 16000 bytes.
+doc.SplitSizes = Plans how to cut a total length into pieces: returns the sizes. The policy is <code>SplitEven</code>, <code>SplitRandom</code> or <code>SplitFirst</code>; pieces is how many, param the size of the first piece for <code>SplitFirst</code>, seed makes the random policy repeatable. The sizes always add up to the total.
+doc.SNISplitSizes = Plans a cut in the middle of the server name of a ClientHello, so that no piece holds the whole name. With head_first the first byte goes alone. Without a readable server name it falls back to two even pieces.
+doc.Slice = Cuts memory into pieces of the given sizes (the last piece takes the rest) and returns them as buffers.
+doc.FragmentRecords = Cuts one TLS record into several records of the given payload sizes, each with its own header, so the receiver sees the same message in several records. Its type and version are kept.
+doc.FragmentClientHello = Splits the first TLS message of a connection into the given number of records, by a policy and a seed. The result, sent in order, is still one valid ClientHello for the server, with 5 bytes of extra header per extra record. Empty when the bytes are not a handshake record.
+doc.Concat = Joins buffers into one, in order.
+doc.FreePieces = Frees a vector of buffers and the buffers in it.
+doc.RandomInt = Returns a random number from lo to hi, both included, from the system's secure random source.
+doc.RandomBytes = Returns a buffer of random bytes from the secure random source.
+doc.PadLength = Chooses a random padding length between a minimum and a maximum and, when a block size above 1 is given, rounds the total up to a multiple of it.
+doc.WrapRecord = Wraps some bytes in a record that looks like TLS application data (type 23, version 3.3) and adds random padding after them. The record has a 4 byte inner header with the real and padding lengths. Empty when it would be over 16384 bytes.
+doc.UnwrapRecord = Reads one record made by <code>WrapRecord</code>: puts its real bytes in a buffer and returns how many bytes the record took, 0 when more bytes are needed and -1 when it is not a valid record.
+doc.WrapStream = Wraps a whole stream of bytes in <code>WrapRecord</code> records of up to <code>MaxRecordPayload</code> bytes, each with random padding between the two limits. It hides sizes, not content: it is not encryption.
+doc.ProbeGuard = Counts failed authentications per IP address and bans an address that fails too often. Make it with <code>NewProbeGuard</code>. It is plain data with no lock, so share it between threads only under your own lock.
+doc.ProbeGuard.max_fails = How many failures within the window cause a ban.
+doc.ProbeGuard.window_ms = The length of the counting window, in milliseconds.
+doc.ProbeGuard.ban_ms = How long a ban lasts, in milliseconds.
+doc.ProbeGuard.fails = The failure count of each address.
+doc.ProbeGuard.first_ms = When each address's current window started.
+doc.ProbeGuard.banned_until = Until when each banned address is banned.
+doc.ReplayCache = Remembers recent keys (for example the first bytes of authentication) to tell when one comes a second time. Make it with <code>NewReplayCache</code>. It is plain data with no lock.
+doc.ReplayCache.ttl_ms = How long a key is remembered, in milliseconds. The default is 120000.
+doc.ReplayCache.max_entries = The size at which expired keys are cleared out. The default is 4096.
+doc.ReplayCache.seen = The keys and the time each was last seen.
+doc.NewProbeGuard = Makes a guard: how many failures, in how long, give how long a ban.
+doc.GuardAllowed = True when an address is not banned at the given time, in milliseconds.
+doc.GuardRecordFail = Records a failed attempt from an address at a time. Returns true when this one caused a ban. Failures older than the window do not count.
+doc.GuardRecordOK = Records a success from an address and clears its failure count.
+doc.FreeProbeGuard = Frees a guard.
+doc.NewReplayCache = Makes a cache with a lifetime for keys and a size at which it cleans up.
+doc.ReplaySeen = Returns true when the key was seen within the lifetime. Otherwise it remembers the key now and returns false, so asking twice tells you about the repeat.
+doc.FreeReplayCache = Frees a cache.
+doc.ShouldFallback = True for a connection that did not authenticate: it should be handed to the decoy site instead of being dropped. It is the one decision a probe resistant server makes.
+doc.DelayMs = Returns a random delay between two limits, in milliseconds. Waiting a little before answering a failed client hides how fast the check was.
+doc.DecoyResponse = Returns a ready HTTP response that looks like a stock <code>404 Not Found</code> page of a common web server, for a server that has no real site to show.
+
+ex.KindUnknown = net-censor-Sniff
+ex.KindTLS = net-censor-Sniff
+ex.KindHTTP = net-censor-Sniff
+ex.KindSSH = net-censor-Sniff
+ex.KindSOCKS5 = net-censor-Sniff
+ex.KindSOCKS4 = net-censor-Sniff
+ex.KindTooShort = net-censor-Sniff
+ex.ClientHello = net-censor-Sniff
+ex.ClientHello.ok = -
+ex.ClientHello.truncated = -
+ex.ClientHello.record_version = -
+ex.ClientHello.hello_version = -
+ex.ClientHello.record_len = -
+ex.ClientHello.sni = -
+ex.ClientHello.sni_offset = -
+ex.ClientHello.sni_len = -
+ex.ClientHello.alpn = -
+ex.ClientHello.cipher_count = -
+ex.ClientHello.ext_count = -
+ex.ClientHello.has_tls13 = -
+ex.ClientHello.has_ech = -
+ex.ClientHello.session_id_len = -
+ex.Sniff = net-censor-Sniff
+ex.KindName = net-censor-Sniff
+ex.ParseClientHello = net-censor-Sniff
+ex.ExtractSNI = net-censor-Sniff
+ex.FromHex = net-censor-Sniff
+ex.ToHex = net-censor-Sniff
+ex.DecisionProxy = net-censor-Domains
+ex.DecisionDirect = net-censor-Domains
+ex.DecisionBlock = net-censor-Domains
+ex.DomainSet = net-censor-Domains
+ex.DomainSet.suffixes = -
+ex.DomainSet.fulls = -
+ex.DomainSet.keywords = -
+ex.DomainSet.count = -
+ex.Classifier = net-censor-Domains
+ex.Classifier.block = -
+ex.Classifier.direct = -
+ex.Classifier.proxy = -
+ex.Classifier.default_decision = -
+ex.NewDomainSet = net-censor-Domains
+ex.AddRule = net-censor-Domains
+ex.AddRules = net-censor-Domains
+ex.MatchDomain = net-censor-Domains
+ex.FreeDomainSet = net-censor-Domains
+ex.IsPrivateHost = net-censor-Domains
+ex.NewClassifier = net-censor-Domains
+ex.Classify = net-censor-Domains
+ex.IranDirectList = net-censor-Domains
+ex.FilteredList = net-censor-Domains
+ex.IranDirectSet = net-censor-Domains
+ex.FilteredSet = net-censor-Domains
+ex.SplitEven = net-censor-Fragment
+ex.SplitRandom = net-censor-Fragment
+ex.SplitFirst = net-censor-Fragment
+ex.MaxRecordPayload = net-censor-Fragment
+ex.SplitSizes = net-censor-Fragment
+ex.SNISplitSizes = net-censor-Fragment
+ex.Slice = net-censor-Fragment
+ex.FragmentRecords = net-censor-Fragment
+ex.FragmentClientHello = net-censor-Fragment
+ex.Concat = net-censor-Fragment
+ex.FreePieces = net-censor-Fragment
+ex.RandomInt = net-censor-Padding
+ex.RandomBytes = net-censor-Padding
+ex.PadLength = net-censor-Padding
+ex.WrapRecord = net-censor-Padding
+ex.UnwrapRecord = net-censor-Padding
+ex.WrapStream = net-censor-Padding
+ex.ProbeGuard = net-censor-Probe
+ex.ProbeGuard.max_fails = -
+ex.ProbeGuard.window_ms = -
+ex.ProbeGuard.ban_ms = -
+ex.ProbeGuard.fails = -
+ex.ProbeGuard.first_ms = -
+ex.ProbeGuard.banned_until = -
+ex.ReplayCache = net-censor-Probe
+ex.ReplayCache.ttl_ms = -
+ex.ReplayCache.max_entries = -
+ex.ReplayCache.seen = -
+ex.NewProbeGuard = net-censor-Probe
+ex.GuardAllowed = net-censor-Probe
+ex.GuardRecordFail = net-censor-Probe
+ex.GuardRecordOK = net-censor-Probe
+ex.FreeProbeGuard = net-censor-Probe
+ex.NewReplayCache = net-censor-Probe
+ex.ReplaySeen = net-censor-Probe
+ex.FreeReplayCache = net-censor-Probe
+ex.ShouldFallback = net-censor-Probe
+ex.DelayMs = net-censor-Probe
+ex.DecoyResponse = net-censor-Probe
+ex.group.Kind = -
+ex.group.Decision = -
+ex.group.Split = -

@@ -1,0 +1,396 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "net/tunnel"
+@fa "تونل"
+package tunnel
+
+import mem
+import str
+import sync
+import net.tcp
+import net.websocket
+import tls
+
+const _RING_CAP := 65536
+
+struct _Ring:
+    pub mu: sync.Mutex = sync.Mutex {}
+    pub cv: sync.CondVar = sync.CondVar {}
+    pub buf: u8* = null
+    pub cells: i64* = null
+end
+
+@en "PipeStream"
+@fa "جریان لوله"
+pub struct PipeStream:
+    @en "rx"
+    @fa "دریافت"
+    pub rx: _Ring = _Ring {}
+    @en "tx"
+    @fa "ارسال"
+    pub tx: _Ring = _Ring {}
+    @en "deadline"
+    @fa "مهلت"
+    pub deadline: int = 0
+    @en "live"
+    @fa "زنده"
+    pub live: bool = false
+
+    @en "Read"
+    @fa "خواندن"
+    pub func Read(max: int): str:
+        if max <= 0: ret "" end
+        buf := mem.AllocateZeroed((max + 1) as u64)
+        n := _ring_read(this.rx, buf, max, this.deadline)
+        if n <= 0:
+            mem.Free(buf)
+            ret ""
+        end
+        ret buf as str
+    end
+
+    @en "ReadBytes"
+    @fa "خواندن بایت"
+    pub func ReadBytes(buf: void*, max: int): int:
+        ret _ring_read(this.rx, buf, max, this.deadline)
+    end
+
+    @en "Write"
+    @fa "نوشتن"
+    pub func Write(data: str): int:
+        ret _ring_write(this.tx, data as void*, data.len(), this.deadline)
+    end
+
+    @en "WriteBytes"
+    @fa "نوشتن بایت"
+    pub func WriteBytes(ptr: void*, n: int): int:
+        ret _ring_write(this.tx, ptr, n, this.deadline)
+    end
+
+    @en "SetDeadline"
+    @fa "تنظیم مهلت"
+    pub func SetDeadline(millis: int):
+        this.deadline = millis
+    end
+
+    @en "Shutdown"
+    @fa "خاموش کردن"
+    pub func Shutdown():
+        _ring_end_write(this.tx)
+        _ring_end_read(this.rx)
+    end
+
+    @en "Close"
+    @fa "بستن"
+    pub func Close():
+        _ring_end_write(this.tx)
+        _ring_end_read(this.rx)
+    end
+
+    @en "Ok"
+    @fa "معتبر"
+    pub func Ok(): bool:
+        ret this.live
+    end
+end
+
+@en "PipePair"
+@fa "جفت لوله"
+pub struct PipePair:
+    @en "a"
+    @fa "سر اول"
+    pub a: PipeStream = PipeStream {}
+    @en "b"
+    @fa "سر دوم"
+    pub b: PipeStream = PipeStream {}
+end
+
+@en "PrefixStream"
+@fa "جریان پیشوندی"
+pub struct PrefixStream:
+    @en "inner"
+    @fa "درونی"
+    pub inner: dyn Stream = TcpStream {}
+    @en "prefix"
+    @fa "پیشوند"
+    pub prefix: str = ""
+    @en "off"
+    @fa "آغاز"
+    pub off: int = 0
+
+    @en "Read"
+    @fa "خواندن"
+    pub func Read(max: int): str:
+        if this.off < this.prefix.len():
+            mut n := this.prefix.len() - this.off
+            if n > max: n = max end
+            out := this.prefix.substr(this.off, n)
+            this.off += n
+            ret out
+        end
+        ret this.inner.Read(max)
+    end
+
+    @en "ReadBytes"
+    @fa "خواندن بایت"
+    pub func ReadBytes(buf: void*, max: int): int:
+        if this.off < this.prefix.len():
+            mut n := this.prefix.len() - this.off
+            if n > max: n = max end
+            mem.Copy(buf, ((this.prefix as void*) as i64 + this.off) as void*, n as u64)
+            this.off += n
+            ret n
+        end
+        ret this.inner.ReadBytes(buf, max)
+    end
+
+    @en "Write"
+    @fa "نوشتن"
+    pub func Write(data: str): int:
+        ret this.inner.Write(data)
+    end
+
+    @en "WriteBytes"
+    @fa "نوشتن بایت"
+    pub func WriteBytes(ptr: void*, n: int): int:
+        ret this.inner.WriteBytes(ptr, n)
+    end
+
+    @en "SetDeadline"
+    @fa "تنظیم مهلت"
+    pub func SetDeadline(millis: int):
+        this.inner.SetDeadline(millis)
+    end
+
+    @en "Shutdown"
+    @fa "خاموش کردن"
+    pub func Shutdown():
+        this.inner.Shutdown()
+    end
+
+    @en "Close"
+    @fa "بستن"
+    pub func Close():
+        this.inner.Close()
+    end
+
+    @en "Ok"
+    @fa "معتبر"
+    pub func Ok(): bool:
+        ret this.inner.Ok()
+    end
+end
+
+func _ring_new(): _Ring:
+    cells := mem.AllocateZeroed(32 as u64) as i64*
+    ret _Ring { mu = sync.NewMutex(), cv = sync.NewCondVar(), buf = mem.Allocate(_RING_CAP as u64) as u8*, cells = cells }
+end
+
+func _ring_write(r: _Ring, ptr: void*, n: int, deadline: int): int:
+    src := ptr as u8*
+    c := r.cells
+    mut done := 0
+    sync.Lock(r.mu)
+    until done < n:
+        if c[3] != 0 or c[2] != 0:
+            sync.Unlock(r.mu)
+            if done > 0: ret done end
+            ret 0 - 1
+        end
+        space := _RING_CAP - (c[0] as int)
+        if space == 0:
+            if deadline > 0:
+                if not sync.WaitCondTimeout(r.cv, r.mu, deadline as i64):
+                    sync.Unlock(r.mu)
+                    ret done
+                end
+            else:
+                sync.WaitCond(r.cv, r.mu)
+            end
+            continue
+        end
+        mut chunk := n - done
+        if chunk > space: chunk = space end
+        repeat chunk in i:
+            pos := ((c[1] as int) + (c[0] as int)) % _RING_CAP
+            r.buf[pos] = src[done + i]
+            c[0] = c[0] + 1
+        end
+        done += chunk
+        sync.Broadcast(r.cv)
+    end
+    sync.Unlock(r.mu)
+    ret done
+end
+
+func _ring_read(r: _Ring, ptr: void*, max: int, deadline: int): int:
+    dst := ptr as u8*
+    c := r.cells
+    sync.Lock(r.mu)
+    until c[0] == 0:
+        if c[2] != 0 or c[3] != 0:
+            sync.Unlock(r.mu)
+            ret 0
+        end
+        if deadline > 0:
+            if not sync.WaitCondTimeout(r.cv, r.mu, deadline as i64):
+                if c[0] == 0:
+                    sync.Unlock(r.mu)
+                    ret 0 - 1
+                end
+            end
+        else:
+            sync.WaitCond(r.cv, r.mu)
+        end
+    end
+    mut n := c[0] as int
+    if n > max: n = max end
+    repeat n in i:
+        dst[i] = r.buf[c[1] as int]
+        c[1] = (c[1] + 1) % (_RING_CAP as i64)
+        c[0] = c[0] - 1
+    end
+    sync.Broadcast(r.cv)
+    sync.Unlock(r.mu)
+    ret n
+end
+
+func _ring_end_write(r: _Ring):
+    sync.Lock(r.mu)
+    r.cells[2] = 1 as i64
+    sync.Broadcast(r.cv)
+    sync.Unlock(r.mu)
+end
+
+func _ring_end_read(r: _Ring):
+    sync.Lock(r.mu)
+    r.cells[3] = 1 as i64
+    sync.Broadcast(r.cv)
+    sync.Unlock(r.mu)
+end
+
+@en "NewPipe"
+@fa "لوله جدید"
+pub func NewPipe(): PipePair:
+    ab := _ring_new()
+    ba := _ring_new()
+    ret PipePair { a = PipeStream { rx = ba, tx = ab, live = true }, b = PipeStream { rx = ab, tx = ba, live = true } }
+end
+
+@en "PipeA"
+@fa "سر اول لوله"
+pub func PipeA(p: PipePair): dyn Stream:
+    ret p.a
+end
+
+@en "PipeB"
+@fa "سر دوم لوله"
+pub func PipeB(p: PipePair): dyn Stream:
+    ret p.b
+end
+
+@en "WrapTcp"
+@fa "پوشاندن تی سی پی"
+pub func WrapTcp(c: tcp.Conn): dyn Stream:
+    ret TcpStream { conn = c }
+end
+
+@en "WrapTls"
+@fa "پوشاندن تی ال اس"
+pub func WrapTls(c: tls.Conn): dyn Stream:
+    ret TlsStream { conn = c }
+end
+
+@en "WrapWebSocket"
+@fa "پوشاندن وب‌سوکت"
+pub func WrapWebSocket(c: websocket.Conn): dyn Stream:
+    ret WsStream { conn = c }
+end
+
+@en "DialTcp"
+@fa "اتصال تی سی پی"
+pub func DialTcp(host: str, port: int, timeout_ms: int): dyn Stream:
+    ret TcpStream { conn = tcp.DialTimeout(host, port, timeout_ms) }
+end
+
+@en "WithPrefix"
+@fa "با پیشوند"
+pub func WithPrefix(s: dyn Stream, prefix: str): dyn Stream:
+    ret PrefixStream { inner = s, prefix = prefix }
+end
+
+@en "ReadFull"
+@fa "خواندن کامل"
+pub func ReadFull(s: dyn Stream, buf: void*, n: int): bool:
+    mut got := 0
+    until got < n:
+        r := s.ReadBytes((buf as i64 + got) as void*, n - got)
+        if r <= 0: ret false end
+        got += r
+    end
+    ret true
+end
+
+@en "WriteAll"
+@fa "نوشتن همه"
+pub func WriteAll(s: dyn Stream, data: str): bool:
+    n := data.len()
+    ret s.WriteBytes(data as void*, n) == n
+end
+
+@en "WriteAllBytes"
+@fa "نوشتن همه بایت‌ها"
+pub func WriteAllBytes(s: dyn Stream, ptr: void*, n: int): bool:
+    ret s.WriteBytes(ptr, n) == n
+end
+
+@en "ReadByte"
+@fa "خواندن یک بایت"
+pub func ReadByte(s: dyn Stream): int:
+    b := mem.Allocate(1 as u64)
+    defer mem.Free(b)
+    if not ReadFull(s, b, 1): ret 0 - 1 end
+    ret (b as u8*)[0] as int
+end
+
+@en "ReadUntil"
+@fa "خواندن با جداکننده"
+pub func ReadUntil(s: dyn Stream, delim: str, max: int): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    mut got := 0
+    mut hit := false
+    dl := delim.len()
+    dp := delim as u8*
+    mut m := 0
+    until not hit:
+        c := ReadByte(s)
+        if c < 0 or got >= max:
+            hit = true
+        else:
+            str.BufAppendChar(sb, c)
+            got++
+            if c == (dp[m] as int):
+                m++
+            else c == (dp[0] as int):
+                m = 1
+            else:
+                m = 0
+            end
+            if m == dl: hit = true end
+        end
+    end
+    ret str.BufStr(sb)
+end

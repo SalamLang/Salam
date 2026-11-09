@@ -1,0 +1,120 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import net.shadowsocks
+import net.udp
+import mem
+import str
+
+mut failures := 0
+mut echo_sock := udp.Socket {}
+mut relay := shadowsocks.UdpServer {}
+
+func check(name: str, ok: bool):
+    if ok:
+        println "PASS", name
+    else:
+        println "FAIL", name
+        failures += 1
+    end
+end
+
+func echo_main():
+    buf := mem.Allocate(4000 as u64)
+    mut served := 0
+    until served < 4:
+        mut h := ""
+        mut p := 0
+        n := udp.ReceiveBytes(echo_sock, buf, 4000, h, p)
+        if n > 0:
+            _w := udp.SendBytes(echo_sock, h, p, buf, n)
+            served += 1
+        end
+    end
+    mem.Free(buf)
+end
+
+func relay_main():
+    shadowsocks.UdpServe(relay)
+end
+
+func vector_case(method: str, pw: str, hex: str):
+    m := shadowsocks.LookupMethod(method)
+    key := shadowsocks.PasswordKey(m, pw)
+    pkt := shadowsocks.BufFromHex(hex)
+    mut t := shadowsocks.Target {}
+    mut out := shadowsocks.NewBuf(64)
+    ok := shadowsocks.UnpackUdp(m, key.p, pkt.p, pkt.len, t, out)
+    check(method + " udp vector", ok and t.host == "10.0.0.7" and t.port == 5353 and shadowsocks.BufToStr(out) == "dns-query-bytes")
+    tp := pkt.p as u8*
+    tp[pkt.len - 1] = tp[pkt.len - 1] ^ (1 as u8)
+    mut t2 := shadowsocks.Target {}
+    mut out2 := shadowsocks.NewBuf(64)
+    check(method + " udp tamper", not shadowsocks.UnpackUdp(m, key.p, pkt.p, pkt.len, t2, out2))
+    mut packed := shadowsocks.NewBuf(64)
+    check(method + " udp pack", shadowsocks.PackUdp(m, key.p, "example.org", 53, "abc" as void*, 3, packed) and packed.len == m.salt_len + 1 + 1 + 11 + 2 + 3 + 16)
+    mut t3 := shadowsocks.Target {}
+    mut out3 := shadowsocks.NewBuf(64)
+    check(method + " udp pack round trip", shadowsocks.UnpackUdp(m, key.p, packed.p, packed.len, t3, out3) and t3.host == "example.org" and t3.port == 53 and shadowsocks.BufToStr(out3) == "abc")
+end
+
+func exchange(c: shadowsocks.UdpClient, text: str): str:
+    n := text.len()
+    if not shadowsocks.UdpSend(c, "127.0.0.1", udp.Port(echo_sock), text as void*, n):
+        ret "send failed"
+    end
+    buf := mem.AllocateZeroed(2000 as u64)
+    mut from := shadowsocks.Target {}
+    got := shadowsocks.UdpRecv(c, buf, 1999, from)
+    mut res := ""
+    if got > 0 and from.host == "127.0.0.1" and from.port == udp.Port(echo_sock):
+        res = str.Substr(buf as str, 0, got)
+    end
+    mem.Free(buf)
+    ret res
+end
+
+func main:
+    vector_case("aes-128-gcm", "udp-pw", "6465666768696a6b6c6d6e6f70717273987eaa8ddd99009cd4f1bd92c1e20894a4c0ac7c2b3cf835f1815f5339c735ca909536138f6f")
+    vector_case("aes-256-gcm", "udp-pw", "6465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f80818283c00c4075774e0388b4265fc06d6d7066874f8d5ce128ef2dd95e4927412577138639fbd90e4f")
+    vector_case("chacha20-ietf-poly1305", "udp-pw", "6465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838e333524ce186c650e6efda2e934806e65a69fc765eecf48250478e36d68d6bfed42a0a46e3a")
+    echo_sock = udp.Bind(0)
+    relay = shadowsocks.UdpListen(0, "aes-256-gcm", "relay-pw")
+    check("udp server up", relay.ok and shadowsocks.UdpServerPort(relay) > 0)
+    th := spawn(relay_main)
+    te := spawn(echo_main)
+    c := shadowsocks.UdpDial(shadowsocks.Config { host = "127.0.0.1", port = shadowsocks.UdpServerPort(relay), method = "aes-256-gcm", password = "relay-pw" })
+    shadowsocks.UdpSetTimeout(c, 3000)
+    check("udp echo", exchange(c, "ping-one") == "ping-one")
+    check("udp echo again", exchange(c, "ping-two-longer") == "ping-two-longer")
+    c2 := shadowsocks.UdpDial(shadowsocks.Config { host = "127.0.0.1", port = shadowsocks.UdpServerPort(relay), method = "aes-256-gcm", password = "relay-pw" })
+    shadowsocks.UdpSetTimeout(c2, 3000)
+    check("udp second client", exchange(c2, "from-second") == "from-second")
+    bad := shadowsocks.UdpDial(shadowsocks.Config { host = "127.0.0.1", port = shadowsocks.UdpServerPort(relay), method = "aes-256-gcm", password = "wrong" })
+    shadowsocks.UdpSetTimeout(bad, 400)
+    check("udp wrong password is ignored", exchange(bad, "nope") == "")
+    check("udp server survives bad packet", exchange(c, "still-alive") == "still-alive")
+    shadowsocks.UdpStop(relay)
+    join(th)
+    join(te)
+    shadowsocks.UdpClose(c)
+    shadowsocks.UdpClose(c2)
+    shadowsocks.UdpClose(bad)
+    shadowsocks.UdpDestroy(relay)
+    udp.Close(echo_sock)
+    println "failures", failures
+    ret failures
+end

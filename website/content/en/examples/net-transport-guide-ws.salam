@@ -1,0 +1,62 @@
+import mem
+import sync
+import net.transport
+
+mut port := 0
+mut ready := sync.NewWaitGroup()
+mut seen_path := ""
+mut seen_host := ""
+
+func settings(): transport.Settings:
+    mut s := transport.Settings {}
+    s.network = "ws"
+    s.path = "/tunnel"
+    s.host = "cdn.example.com"
+    ret s
+end
+
+func worker():
+    s := settings()
+    l := transport.Listen(0, s)
+    port = transport.ListenerPort(l)
+    sync.Done(ready)
+    mut c := transport.AcceptRaw(l)
+    if transport.Upgrade(c, s):
+        seen_path = c.request_path
+        seen_host = c.request_host
+        buf := mem.Allocate(4096 as u64)
+        n := transport.Read(c, buf, 4096)
+        transport.Write(c, buf, n)
+        mem.Free(buf)
+    end
+    transport.Close(c)
+    transport.CloseListener(l)
+end
+
+func main:
+    sync.Add(ready, 1 as i64)
+    t := spawn(worker)
+    sync.Wait(ready)
+
+    mut c := transport.Dial("127.0.0.1", port, settings())
+    mut msg := transport.FromStr("inside a websocket")
+    transport.WriteBytes(c, msg)
+    buf := mem.Allocate(4096 as u64)
+    n := transport.Read(c, buf, 4096)
+    println (buf as str).substr(0, n)
+    mem.Free(buf)
+    transport.FreeBytes(msg)
+    transport.Close(c)
+    join(t)
+    println "server saw path", seen_path, "and host", seen_host
+
+    mut wrong := settings()
+    wrong.path = "/other"
+    sync.Add(ready, 1 as i64)
+    t2 := spawn(worker)
+    sync.Wait(ready)
+    bad := transport.Dial("127.0.0.1", port, wrong)
+    println "wrong path accepted:", transport.Ok(bad)
+    println bad.err
+    join(t2)
+end

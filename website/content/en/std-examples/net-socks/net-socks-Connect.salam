@@ -1,0 +1,63 @@
+import net.socks
+import net.tcp
+
+func echo_conn(arg: i64):
+    c := tcp.ConnFromFd(arg)
+    until true:
+        data := tcp.Read(c, 4096)
+        if data.len() == 0:
+            break
+        end
+        tcp.Write(c, data)
+    end
+    tcp.Close(c)
+end
+
+func echo_accept(arg: i64):
+    srv := tcp.Server { fd = arg }
+    until true:
+        c := tcp.Accept(srv)
+        if not tcp.ConnOk(c):
+            break
+        end
+        socks.Go(echo_conn, c.fd as void*)
+    end
+end
+
+func start_echo(): int:
+    listener := tcp.Bind(0)
+    socks.Go(echo_accept, listener.fd as void*)
+    ret tcp.Port(listener)
+end
+
+func say(label: str, r: socks.ConnectResult):
+    println label + ": ok=" + r.ok + " code=" + r.code + " " + r.err
+end
+
+func main:
+    echo := start_echo()
+    server := socks.Start(socks.NewServerConfig(0))
+    println "server up:", server.ok
+
+    client := socks.NewClient("127.0.0.1", server.port)
+    println client.version == socks.Socks5, client.timeout_ms, client.tls
+    r := socks.Connect(client, "127.0.0.1", echo)
+    say("connect", r)
+    r.stream.Write("hello through socks5")
+    println r.stream.Read(100)
+    r.stream.Close()
+
+    by_name := socks.Connect(client, "localhost", echo)
+    by_name.stream.Write("by name")
+    println by_name.stream.Read(100)
+    by_name.stream.Close()
+
+    conn := socks.DialConn(client, "127.0.0.1", echo)
+    tcp.Write(conn, "plain tcp conn")
+    println tcp.Read(conn, 100)
+    tcp.Close(conn)
+
+    say("refused", socks.Connect(client, "127.0.0.1", tcp.FreePort()))
+    say("no such host", socks.Connect(client, "no-such-host.invalid", 80))
+    socks.Stop(server)
+end

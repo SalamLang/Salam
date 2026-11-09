@@ -1,0 +1,410 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package doh
+
+import mem
+import str
+import compress
+import net.dns
+import sync
+import time
+
+struct State:
+    pub servers: Vector<Server> = Vector {}
+    pub bootstrap: Vector<Server> = Vector {}
+    pub cache: HashMap<str, CacheEntry> = HashMap {}
+    pub lock: sync.Mutex = sync.Mutex {}
+    pub stats: i64* = null
+    pub min_ttl: int = 10
+    pub max_ttl: int = 86400
+    pub neg_ttl: int = 30
+    pub timeout_ms: int = 4000
+    pub max_entries: int = 2048
+end
+
+@en "CacheEntry"
+@fa "ورودی حافظه"
+pub struct CacheEntry:
+    @en "raw"
+    @fa "پاسخ خام"
+    pub raw: compress.ByteBuf = compress.ByteBuf {}
+    @en "expires_ms"
+    @fa "زمان انقضا"
+    pub expires_ms: i64 = 0
+    @en "negative"
+    @fa "منفی"
+    pub negative: bool = false
+end
+
+@en "Answer"
+@fa "پاسخ نهایی"
+pub struct Answer:
+    @en "ok"
+    @fa "معتبر"
+    pub ok: bool = false
+    @en "cached"
+    @fa "از حافظه"
+    pub cached: bool = false
+    @en "negative"
+    @fa "منفی"
+    pub negative: bool = false
+    @en "rcode"
+    @fa "کد نتیجه"
+    pub rcode: int = 0
+    @en "ttl"
+    @fa "زمان ماندگاری"
+    pub ttl: int = 0
+    @en "raw"
+    @fa "پاسخ خام"
+    pub raw: compress.ByteBuf = compress.ByteBuf {}
+    @en "msg"
+    @fa "پیام"
+    pub msg: dns.Message = dns.Message {}
+    @en "server"
+    @fa "کارگزار"
+    pub server: str = ""
+    @en "err"
+    @fa "خطا"
+    pub err: str = ""
+end
+
+@en "ResolverStats"
+@fa "آمار حل‌کننده"
+pub struct ResolverStats:
+    @en "hits"
+    @fa "برخورد حافظه"
+    pub hits: i64 = 0
+    @en "misses"
+    @fa "ناکامی حافظه"
+    pub misses: i64 = 0
+    @en "upstream"
+    @fa "پرسش بالادست"
+    pub upstream: i64 = 0
+    @en "failures"
+    @fa "شکست‌ها"
+    pub failures: i64 = 0
+end
+
+@en "Resolver"
+@fa "حل‌کننده"
+pub struct Resolver:
+    @en "st"
+    @fa "وضعیت"
+    pub st: State* = null
+end
+
+func _key(name: str, qtype: int): str:
+    mut n := name.lower()
+    if n.len() > 0 and n.substr(n.len() - 1, 1) == ".":
+        n = n.substr(0, n.len() - 1)
+    end
+    ret n + "/" + str.FromInt(qtype as i64)
+end
+
+func _bump(r: Resolver, idx: int):
+    cell := ((r.st[0].stats as i64) + (idx * 8) as i64) as i64*
+    _v := atomic_add(cell, 1 as i64)
+end
+
+func _answer_ttl(msg: dns.Message): int:
+    mut best := 0 - 1
+    repeat msg.answers.items.len() in i:
+        t := msg.answers.items.get(i).ttl
+        if best < 0 or t < best:
+            best = t
+        end
+    end
+    ret best
+end
+
+func _purge(st: State*, now_ms: i64):
+    mut dead := Vector {} as Vector<str>
+    defer dead.free()
+    each k, v in st[0].cache:
+        if now_ms >= v.expires_ms:
+            dead.push(k)
+        end
+    end
+    repeat dead.len() in i:
+        mut e := st[0].cache.get(dead.get(i))
+        compress.BufFree(e.raw)
+        st[0].cache.remove(dead.get(i))
+    end
+    if st[0].cache.size() >= st[0].max_entries:
+        mut all := Vector {} as Vector<str>
+        defer all.free()
+        each k, _ in st[0].cache:
+            all.push(k)
+        end
+        repeat all.len() in i:
+            mut e := st[0].cache.get(all.get(i))
+            compress.BufFree(e.raw)
+            st[0].cache.remove(all.get(i))
+        end
+    end
+end
+
+func _server_ips(r: Resolver, srv: Server): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    repeat srv.addrs.len() in i:
+        out.push(srv.addrs.get(i))
+    end
+    if out.len() > 0:
+        ret out
+    end
+    if IsIP(srv.host):
+        out.push(srv.host)
+        ret out
+    end
+    repeat r.st[0].bootstrap.len() in i:
+        q := Query(r.st[0].bootstrap.get(i), srv.host, dns.TypeA, r.st[0].timeout_ms)
+        if q.ok:
+            repeat q.msg.answers.items.len() in j:
+                rec := q.msg.answers.items.get(j)
+                if rec.rtype == dns.TypeA:
+                    out.push(rec.data)
+                end
+            end
+        end
+        if out.len() > 0:
+            ret out
+        end
+    end
+    ret out
+end
+
+func _purge_all(st: State*):
+    _purge(st, 9223372036854775807 as i64)
+end
+
+func _collect(r: Resolver, name: str, qtype: int): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    mut a := Resolve(r, name, qtype)
+    if a.ok:
+        repeat a.msg.answers.items.len() in i:
+            rec := a.msg.answers.items.get(i)
+            if rec.rtype == qtype:
+                out.push(rec.data)
+            end
+        end
+    end
+    FreeAnswer(a)
+    ret out
+end
+
+@en "NewResolver"
+@fa "حل‌کننده جدید"
+pub func NewResolver(servers: Vector<Server>): Resolver:
+    st := mem.AllocateZeroed(sizeof(State) as u64) as State*
+    mut s := State {}
+    s.servers = servers
+    s.lock = sync.NewMutex()
+    s.stats = mem.AllocateZeroed(32 as u64) as i64*
+    st[0] = s
+    ret Resolver { st = st }
+end
+
+@en "SetBootstrap"
+@fa "تعیین کارگزارهای راه‌انداز"
+pub func SetBootstrap(r: Resolver, servers: Vector<Server>):
+    r.st[0].bootstrap = servers
+end
+
+@en "SetTTLLimits"
+@fa "تعیین حدود ماندگاری"
+pub func SetTTLLimits(r: Resolver, min_ttl: int, max_ttl: int, neg_ttl: int):
+    r.st[0].min_ttl = min_ttl
+    r.st[0].max_ttl = max_ttl
+    r.st[0].neg_ttl = neg_ttl
+end
+
+@en "SetTimeout"
+@fa "تعیین مهلت"
+pub func SetTimeout(r: Resolver, timeout_ms: int):
+    r.st[0].timeout_ms = timeout_ms
+end
+
+@en "Stats"
+@fa "آمار"
+pub func Stats(r: Resolver): ResolverStats:
+    c := r.st[0].stats
+    ret ResolverStats { hits = atomic_load(c), misses = atomic_load(((c as i64) + 8) as i64*), upstream = atomic_load(((c as i64) + 16) as i64*), failures = atomic_load(((c as i64) + 24) as i64*) }
+end
+
+@en "CacheSize"
+@fa "اندازه حافظه"
+pub func CacheSize(r: Resolver): int:
+    _l := sync.Lock(r.st[0].lock)
+    n := r.st[0].cache.size()
+    _u := sync.Unlock(r.st[0].lock)
+    ret n
+end
+
+@en "ClearCache"
+@fa "پاک کردن حافظه"
+pub func ClearCache(r: Resolver):
+    _l := sync.Lock(r.st[0].lock)
+    _purge_all(r.st)
+    _u := sync.Unlock(r.st[0].lock)
+end
+
+@en "ResolveAt"
+@fa "حل در زمان"
+pub func ResolveAt(r: Resolver, name: str, qtype: int, now_ms: i64): Answer:
+    mut a := Answer {}
+    key := _key(name, qtype)
+    st := r.st
+    _l := sync.Lock(st[0].lock)
+    if st[0].cache.has(key):
+        e := st[0].cache.get(key)
+        if now_ms < e.expires_ms:
+            a.raw = compress.BufClone(e.raw)
+            a.cached = true
+            a.negative = e.negative
+            a.ttl = ((e.expires_ms - now_ms) / 1000) as int
+            _u := sync.Unlock(st[0].lock)
+            a.msg = dns.Decode(a.raw.data, a.raw.len)
+            a.rcode = a.msg.rcode
+            a.ok = true
+            _bump(r, 0)
+            ret a
+        end
+        mut old := e
+        compress.BufFree(old.raw)
+        st[0].cache.remove(key)
+    end
+    _u2 := sync.Unlock(st[0].lock)
+    _bump(r, 1)
+    mut err := "no servers"
+    mut got := Response {}
+    mut found := false
+    repeat st[0].servers.len() in i:
+        srv := st[0].servers.get(i)
+        ips := _server_ips(r, srv)
+        _bump(r, 2)
+        mut j := 0
+        until j < ips.len() and not found:
+            q := QueryAddr(srv, ips.get(j), name, qtype, st[0].timeout_ms)
+            if q.ok and q.msg.rcode != 2 and q.msg.rcode != 5:
+                got = q
+                found = true
+            else q.ok:
+                err = srv.name + " rcode " + str.FromInt(q.msg.rcode as i64)
+                mut qq := q
+                FreeResponse(qq)
+            else:
+                err = srv.name + ": " + q.err
+            end
+            j++
+        end
+        ips.free()
+        if found:
+            break
+        end
+    end
+    if not found:
+        _bump(r, 3)
+        a.err = err
+        ret a
+    end
+    mut ttl := _answer_ttl(got.msg)
+    mut neg := false
+    if ttl < 0 or got.msg.rcode != 0:
+        neg = true
+        ttl = st[0].neg_ttl
+    end
+    if ttl < st[0].min_ttl and not neg:
+        ttl = st[0].min_ttl
+    end
+    if ttl > st[0].max_ttl:
+        ttl = st[0].max_ttl
+    end
+    a.ok = true
+    a.negative = neg
+    a.rcode = got.msg.rcode
+    a.ttl = ttl
+    a.msg = got.msg
+    a.server = got.server
+    a.raw = compress.BufClone(got.raw)
+    entry := CacheEntry { raw = got.raw, expires_ms = now_ms + (ttl as i64) * 1000, negative = neg }
+    _l2 := sync.Lock(st[0].lock)
+    if st[0].cache.size() >= st[0].max_entries:
+        _purge(st, now_ms)
+    end
+    if st[0].cache.has(key):
+        mut prev := st[0].cache.get(key)
+        compress.BufFree(prev.raw)
+    end
+    st[0].cache.put(key, entry)
+    _u3 := sync.Unlock(st[0].lock)
+    ret a
+end
+
+@en "Resolve"
+@fa "حل"
+pub func Resolve(r: Resolver, name: str, qtype: int): Answer:
+    ret ResolveAt(r, name, qtype, time.NowMillis())
+end
+
+@en "FreeAnswer"
+@fa "آزاد کردن پاسخ نهایی"
+pub func FreeAnswer(a &: Answer):
+    compress.BufFree(a.raw)
+end
+
+@en "LookupA"
+@fa "جستجوی آ"
+pub func LookupA(r: Resolver, name: str): Vector<str>:
+    ret _collect(r, name, dns.TypeA)
+end
+
+@en "LookupAAAA"
+@fa "جستجوی کواداِی"
+pub func LookupAAAA(r: Resolver, name: str): Vector<str>:
+    ret _collect(r, name, dns.TypeAAAA)
+end
+
+@en "LookupTXT"
+@fa "جستجوی تی‌ایکس‌تی"
+pub func LookupTXT(r: Resolver, name: str): Vector<str>:
+    ret _collect(r, name, dns.TypeTXT)
+end
+
+@en "LookupCNAME"
+@fa "جستجوی سی‌نیم"
+pub func LookupCNAME(r: Resolver, name: str): str:
+    v := _collect(r, name, dns.TypeCNAME)
+    defer v.free()
+    if v.len() > 0:
+        ret v.get(0)
+    end
+    ret ""
+end
+
+@en "LookupHost"
+@fa "جستجوی میزبان"
+pub func LookupHost(r: Resolver, name: str): Vector<str>:
+    if IsIP(name):
+        mut one := Vector {} as Vector<str>
+        one.push(name)
+        ret one
+    end
+    v := LookupA(r, name)
+    if v.len() > 0:
+        ret v
+    end
+    v.free()
+    ret LookupAAAA(r, name)
+end

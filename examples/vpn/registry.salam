@@ -1,0 +1,294 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package registry
+
+import str
+import encoding.json
+import net.doh
+import net.socks
+import net.httpproxy
+import net.trojan
+import net.vless
+import net.vmess
+import net.shadowsocks
+import net.transport
+import net.tunnel
+
+mut _opts := Options {}
+
+pub struct Options:
+    pub fragment: bool = false
+    pub fragment_min: int = 4
+    pub fragment_max: int = 12
+    pub fragment_delay_ms: int = 5
+    pub use_doh: bool = false
+    pub resolver: doh.Resolver = doh.Resolver {}
+end
+
+pub struct TransportDialer:
+    pub settings: transport.Settings = transport.Settings {}
+
+    pub func Dial(target: tunnel.Addr): dyn tunnel.Stream:
+        c := _connect(target.host, target.port, this.settings)
+        if not transport.Ok(c): ret tunnel.ClosedStream {} end
+        ret transport.AsStream(c)
+    end
+
+    pub func Name(): str:
+        ret "transport"
+    end
+end
+
+pub struct VlessDialer:
+    pub node: tunnel.Node = tunnel.Node {}
+
+    pub func Dial(target: tunnel.Addr): dyn tunnel.Stream:
+        t := _connect(this.node.host, this.node.port, NodeSettings(this.node))
+        if not transport.Ok(t): ret tunnel.ClosedStream {} end
+        c := vless.Client(t, this.node.uuid, this.node.flow, vless.CmdTCP, transport.NewAddr(target.host, target.port))
+        if not c.ok: ret tunnel.ClosedStream {} end
+        ret vless.AsStream(c)
+    end
+
+    pub func Name(): str:
+        ret "vless"
+    end
+end
+
+pub struct VmessDialer:
+    pub node: tunnel.Node = tunnel.Node {}
+
+    pub func Dial(target: tunnel.Addr): dyn tunnel.Stream:
+        t := _connect(this.node.host, this.node.port, NodeSettings(this.node))
+        if not transport.Ok(t): ret tunnel.ClosedStream {} end
+        sec := _vmess_security(this.node.method)
+        c := vmess.Client(t, this.node.uuid, sec, vmess.DefaultOption(sec), vmess.CmdTCP, transport.NewAddr(target.host, target.port))
+        if not c.ok: ret tunnel.ClosedStream {} end
+        ret vmess.AsStream(c)
+    end
+
+    pub func Name(): str:
+        ret "vmess"
+    end
+end
+
+pub struct SsDialer:
+    pub node: tunnel.Node = tunnel.Node {}
+
+    pub func Dial(target: tunnel.Addr): dyn tunnel.Stream:
+        cfg := shadowsocks.Config { host = _resolve(this.node.host), port = this.node.port, method = this.node.method, password = this.node.password }
+        c := shadowsocks.Dial(cfg, target.host, target.port)
+        if not shadowsocks.Ok(c): ret tunnel.ClosedStream {} end
+        ret shadowsocks.AsStream(c)
+    end
+
+    pub func Name(): str:
+        ret "shadowsocks"
+    end
+end
+
+pub struct OutMaker:
+    pub proto: str = ""
+
+    pub func Protocol(): str:
+        ret this.proto
+    end
+
+    pub func Make(cfg: tunnel.OutboundConfig): dyn tunnel.Dialer:
+        ret DialerFromNode(tunnel.NodeFromOutbound(cfg))
+    end
+end
+
+pub struct VlessInbound:
+    pub users: Vector<vless.User> = Vector {}
+
+    pub func Name(): str:
+        ret "vless"
+    end
+
+    pub func Handshake(s: dyn tunnel.Stream): tunnel.Session:
+        c := vless.AcceptOver(s, this.users)
+        if not c.ok: ret tunnel.Session { error = c.err } end
+        ret tunnel.Session { ok = true, target = tunnel.NewAddr(c.req.addr.host, c.req.addr.port), protocol = "vless", user = c.user, wrapped = true, stream = vless.AsStream(c) }
+    end
+
+    pub func Reply(_s: dyn tunnel.Stream, sess: tunnel.Session, ok: bool):
+        if not ok: sess.stream.Close() end
+    end
+end
+
+pub struct VmessInbound:
+    pub users: Vector<vmess.User> = Vector {}
+    pub replay: vmess.ReplayFilter = vmess.NewReplayFilter()
+
+    pub func Name(): str:
+        ret "vmess"
+    end
+
+    pub func Handshake(s: dyn tunnel.Stream): tunnel.Session:
+        c := vmess.AcceptOver(s, this.users, this.replay)
+        if not c.ok: ret tunnel.Session { error = c.err } end
+        ret tunnel.Session { ok = true, target = tunnel.NewAddr(c.req.addr.host, c.req.addr.port), protocol = "vmess", wrapped = true, stream = vmess.AsStream(c) }
+    end
+
+    pub func Reply(_s: dyn tunnel.Stream, sess: tunnel.Session, ok: bool):
+        if not ok: sess.stream.Close() end
+    end
+end
+
+pub struct SsInbound:
+    pub server: shadowsocks.Server = shadowsocks.Server {}
+
+    pub func Name(): str:
+        ret "shadowsocks"
+    end
+
+    pub func Handshake(s: dyn tunnel.Stream): tunnel.Session:
+        c := shadowsocks.AcceptOver(this.server, s)
+        if not shadowsocks.Ok(c): ret tunnel.Session { error = "shadowsocks handshake failed" } end
+        t := shadowsocks.TargetOf(c)
+        ret tunnel.Session { ok = true, target = tunnel.NewAddr(t.host, t.port), protocol = "shadowsocks", wrapped = true, stream = shadowsocks.AsStream(c) }
+    end
+
+    pub func Reply(_s: dyn tunnel.Stream, sess: tunnel.Session, ok: bool):
+        if not ok: sess.stream.Close() end
+    end
+end
+
+pub struct InMaker:
+    pub proto: str = ""
+
+    pub func Protocol(): str:
+        ret this.proto
+    end
+
+    pub func Make(cfg: tunnel.InboundConfig): dyn tunnel.InboundProtocol:
+        clients := json.Items(json.Get(cfg.settings, "clients"))
+        defer clients.free()
+        if this.proto == "vless":
+            mut p := VlessInbound {}
+            repeat clients.len() in i:
+                p.users.push(vless.NewUser(json.Get(clients[i], "id"), json.Get(clients[i], "flow")))
+            end
+            ret p
+        end
+        if this.proto == "vmess":
+            mut p := VmessInbound {}
+            repeat clients.len() in i:
+                p.users.push(vmess.NewUser(json.Get(clients[i], "id")))
+            end
+            ret p
+        end
+        if this.proto == "trojan":
+            mut p := trojan.NewInbound()
+            repeat clients.len() in i:
+                trojan.InboundAddPassword(p, json.Get(clients[i], "password"))
+            end
+            ret p
+        end
+        if this.proto == "shadowsocks":
+            ret SsInbound { server = shadowsocks.Listen(0, json.Get(cfg.settings, "method"), json.Get(cfg.settings, "password")) }
+        end
+        if this.proto == "socks": ret socks.NewInbound(socks.ServerConfig {}) end
+        if this.proto == "http": ret httpproxy.NewInbound(httpproxy.ServerConfig {}) end
+        mut m := tunnel.NewMixed()
+        tunnel.MixedSetSocks5(m, socks.NewInbound(socks.ServerConfig {}))
+        tunnel.MixedSetSocks4(m, socks.NewInbound4(socks.ServerConfig {}))
+        tunnel.MixedSetHttp(m, httpproxy.NewInbound(httpproxy.ServerConfig {}))
+        ret m
+    end
+end
+
+func _resolve(host: str): str:
+    if not _opts.use_doh or tunnel.IsIP(host): ret host end
+    ips := doh.LookupHost(_opts.resolver, host)
+    defer ips.free()
+    if ips.len() == 0: ret host end
+    ret ips[0]
+end
+
+func _connect(host: str, port: int, s: transport.Settings): transport.Conn:
+    mut st := s
+    if st.tls and st.sni.len() == 0: st.sni = host end
+    ret transport.Dial(_resolve(host), port, st)
+end
+
+func _vmess_security(method: str): int:
+    if method == "chacha20-poly1305": ret vmess.SecChaCha20Poly1305 end
+    if method == "none": ret vmess.SecNone end
+    if method == "zero": ret vmess.SecZero end
+    ret vmess.SecAES128GCM
+end
+
+pub func StreamSettings(raw: str): transport.Settings:
+    mut s := transport.Settings {}
+    n := json.Get(raw, "network")
+    if n.len() > 0: s.network = n end
+    s.tls = json.Get(raw, "security") == "tls"
+    t := json.Get(raw, "tlsSettings")
+    s.sni = json.Get(t, "serverName")
+    s.allow_insecure = json.Get(t, "allowInsecure") == "true"
+    certs := json.Items(json.Get(t, "certificates"))
+    defer certs.free()
+    if certs.len() > 0:
+        s.cert_file = json.Get(certs[0], "certificateFile")
+        s.key_file = json.Get(certs[0], "keyFile")
+    end
+    mut w := json.Get(raw, "wsSettings")
+    if s.network == "httpupgrade": w = json.Get(raw, "httpupgradeSettings") end
+    p := json.Get(w, "path")
+    if p.len() > 0: s.path = p end
+    s.host = json.Get(json.Get(w, "headers"), "Host")
+    ret s
+end
+
+pub func NodeSettings(n: tunnel.Node): transport.Settings:
+    mut s := transport.Settings { network = n.network, tls = n.tls, sni = n.sni, alpn = n.alpn, fingerprint = n.fingerprint, allow_insecure = n.allow_insecure, host = n.host_header }
+    if n.path.len() > 0: s.path = n.path end
+    if s.tls and _opts.fragment:
+        s.fragment = true
+        s.fragment_min = _opts.fragment_min
+        s.fragment_max = _opts.fragment_max
+        s.fragment_delay_ms = _opts.fragment_delay_ms
+    end
+    ret s
+end
+
+pub func DialerFromNode(n: tunnel.Node): dyn tunnel.Dialer:
+    plain := TransportDialer { settings = NodeSettings(n) }
+    if n.protocol == "vless": ret VlessDialer { node = n } end
+    if n.protocol == "vmess": ret VmessDialer { node = n } end
+    if n.protocol == "ss" or n.protocol == "shadowsocks": ret SsDialer { node = n } end
+    if n.protocol == "trojan":
+        ret tunnel.Via(plain, trojan.NewConnector(n.host, n.port, n.password))
+    end
+    if n.protocol == "socks":
+        ret tunnel.Via(plain, socks.NewConnector(socks.Client { host = n.host, port = n.port }))
+    end
+    if n.protocol == "http":
+        ret tunnel.Via(plain, httpproxy.NewConnector(httpproxy.Client { host = n.host, port = n.port }))
+    end
+    ret tunnel.Block()
+end
+
+pub func Install(o: Options):
+    _opts = o
+    each p in ["vless", "vmess", "trojan", "shadowsocks", "ss", "socks", "http"]:
+        tunnel.RegisterOutbound(OutMaker { proto = p })
+    end
+    each p in ["mixed", "socks", "http", "trojan", "vless", "vmess", "shadowsocks"]:
+        tunnel.RegisterInbound(InMaker { proto = p })
+    end
+end

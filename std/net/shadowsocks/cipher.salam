@@ -1,0 +1,320 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package shadowsocks
+
+import mem
+import tls
+
+@en "Encoder"
+@fa "رمزگذار"
+pub struct Encoder:
+    @en "method"
+    @fa "روش"
+    pub method: Method = Method {}
+    @en "ctx"
+    @fa "زمینه"
+    pub ctx: void* = null
+    @en "nonce"
+    @fa "نانس"
+    pub nonce: void* = null
+    @en "salt"
+    @fa "نمک"
+    pub salt: Buf = Buf {}
+    @en "salt_sent"
+    @fa "نمک فرستاده شد"
+    pub salt_sent: bool = false
+    @en "max_chunk"
+    @fa "بیشینه تکه"
+    pub max_chunk: int = 0x3fff
+end
+
+@en "Decoder"
+@fa "رمزگشا"
+pub struct Decoder:
+    @en "method"
+    @fa "روش"
+    pub method: Method = Method {}
+    @en "master"
+    @fa "کلید اصلی"
+    pub master: void* = null
+    @en "ctx"
+    @fa "زمینه"
+    pub ctx: void* = null
+    @en "nonce"
+    @fa "نانس"
+    pub nonce: void* = null
+    @en "salt"
+    @fa "نمک"
+    pub salt: Buf = Buf {}
+    @en "have_salt"
+    @fa "نمک دریافت شد"
+    pub have_salt: bool = false
+    @en "inb"
+    @fa "ورودی"
+    pub inb: Buf = Buf {}
+    @en "off"
+    @fa "جابجایی"
+    pub off: int = 0
+    @en "need"
+    @fa "نیاز"
+    pub need: int = 0 - 1
+    @en "tmp"
+    @fa "موقت"
+    pub tmp: Buf = Buf {}
+    @en "bad"
+    @fa "خراب"
+    pub bad: bool = false
+    @en "max_chunk"
+    @fa "بیشینه تکه"
+    pub max_chunk: int = 0x3fff
+end
+
+func _nonce_inc(n: void*):
+    mut i := 0
+    until i < 12:
+        v := _getb(n, i) + 1
+        _setb(n, i, v)
+        if v < 256:
+            break
+        end
+        i += 1
+    end
+end
+
+func _derive_key(m: Method, master: void*, salt: void*, out: void*):
+    if m.v2022:
+        Blake3SessionKey(master, m.key_len, salt, m.salt_len, out)
+    else:
+        SessionSubkey(m, master, salt, out)
+    end
+end
+
+func _open_ctx(m: Method, master: void*, salt: void*): void*:
+    sub := mem.AllocateZeroed(32 as u64)
+    _derive_key(m, master, salt, sub)
+    c := tls.AeadNew(m.kind, sub)
+    _wipe(sub, 32)
+    mem.Free(sub)
+    ret c
+end
+
+@en "NewEncoder"
+@fa "رمزگذار جدید"
+pub func NewEncoder(m: Method, master: void*, salt: void*): Encoder:
+    mut e := Encoder { method = m }
+    if m.v2022:
+        e.max_chunk = 0xffff
+    end
+    e.salt = NewBuf(m.salt_len)
+    BufAppend(e.salt, salt, m.salt_len)
+    e.ctx = _open_ctx(m, master, salt)
+    e.nonce = mem.AllocateZeroed(12 as u64)
+    ret e
+end
+
+@en "NewEncoderRandom"
+@fa "رمزگذار جدید تصادفی"
+pub func NewEncoderRandom(m: Method, master: void*): Encoder:
+    s := mem.AllocateZeroed(m.salt_len as u64)
+    RandomSalt(m, s)
+    e := NewEncoder(m, master, s)
+    mem.Free(s)
+    ret e
+end
+
+@en "EncoderFree"
+@fa "آزادسازی رمزگذار"
+pub func EncoderFree(e &: Encoder):
+    tls.AeadFree(e.ctx)
+    e.ctx = null
+    if e.nonce != null:
+        mem.Free(e.nonce)
+    end
+    e.nonce = null
+    BufFree(e.salt)
+end
+
+@en "SealFrame"
+@fa "مهر قاب"
+pub func SealFrame(e &: Encoder, pt: void*, n: int, out &: Buf):
+    BufReserve(out, n + TAG_LEN)
+    if out.bad:
+        ret
+    end
+    tls.AeadSeal(e.ctx, e.nonce, null, 0, pt, n, _at(out.p, out.len))
+    out.len += n + TAG_LEN
+    _nonce_inc(e.nonce)
+end
+
+@en "EmitSalt"
+@fa "ارسال نمک"
+pub func EmitSalt(e &: Encoder, out &: Buf):
+    if e.salt_sent:
+        ret
+    end
+    BufAppend(out, e.salt.p, e.salt.len)
+    e.salt_sent = true
+end
+
+@en "EncodeStream"
+@fa "رمزگذاری جریان"
+pub func EncodeStream(e &: Encoder, data: void*, n: int, out &: Buf):
+    EmitSalt(e, out)
+    hdr := mem.AllocateZeroed(2 as u64)
+    mut off := 0
+    until off < n:
+        mut take := n - off
+        if take > e.max_chunk:
+            take = e.max_chunk
+        end
+        _setb(hdr, 0, take >> 8)
+        _setb(hdr, 1, take)
+        SealFrame(e, hdr, 2, out)
+        SealFrame(e, _at(data, off), take, out)
+        off += take
+    end
+    mem.Free(hdr)
+end
+
+@en "NewDecoder"
+@fa "رمزگشا جدید"
+pub func NewDecoder(m: Method, master: void*): Decoder:
+    mut d := Decoder { method = m }
+    if m.v2022:
+        d.max_chunk = 0xffff
+    end
+    d.master = mem.AllocateZeroed(32 as u64)
+    mem.Copy(d.master, master, m.key_len as u64)
+    d.salt = NewBuf(m.salt_len)
+    d.inb = NewBuf(4096)
+    d.tmp = NewBuf(64)
+    d.nonce = mem.AllocateZeroed(12 as u64)
+    ret d
+end
+
+@en "DecoderFree"
+@fa "آزادسازی رمزگشا"
+pub func DecoderFree(d &: Decoder):
+    tls.AeadFree(d.ctx)
+    d.ctx = null
+    if d.master != null:
+        _wipe(d.master, 32)
+        mem.Free(d.master)
+    end
+    d.master = null
+    if d.nonce != null:
+        mem.Free(d.nonce)
+    end
+    d.nonce = null
+    BufFree(d.salt)
+    BufWipe(d.inb)
+    BufFree(d.inb)
+    BufFree(d.tmp)
+end
+
+@en "Feed"
+@fa "خوراندن"
+pub func Feed(d &: Decoder, data: void*, n: int):
+    if d.off > 0 and d.off == d.inb.len:
+        d.off = 0
+        d.inb.len = 0
+    else d.off > 32768:
+        BufConsume(d.inb, d.off)
+        d.off = 0
+    end
+    BufAppend(d.inb, data, n)
+end
+
+@en "TakeSalt"
+@fa "گرفتن نمک"
+pub func TakeSalt(d &: Decoder): bool:
+    if d.have_salt:
+        ret true
+    end
+    sl := d.method.salt_len
+    if d.inb.len - d.off < sl:
+        ret false
+    end
+    BufAppend(d.salt, _at(d.inb.p, d.off), sl)
+    d.off += sl
+    d.ctx = _open_ctx(d.method, d.master, d.salt.p)
+    d.have_salt = true
+    ret true
+end
+
+@en "TakeFrame"
+@fa "گرفتن قاب"
+pub func TakeFrame(d &: Decoder, n: int, out &: Buf): int:
+    if d.bad:
+        ret 0 - 1
+    end
+    if not TakeSalt(d):
+        ret 0
+    end
+    if d.inb.len - d.off < n + TAG_LEN:
+        ret 0
+    end
+    BufReserve(out, n + 1)
+    if out.bad:
+        ret 0 - 1
+    end
+    if not tls.AeadOpen(d.ctx, d.nonce, null, 0, _at(d.inb.p, d.off), n, _at(out.p, out.len)):
+        d.bad = true
+        ret 0 - 1
+    end
+    _nonce_inc(d.nonce)
+    d.off += n + TAG_LEN
+    out.len += n
+    ret 1
+end
+
+@en "NextChunk"
+@fa "تکه بعدی"
+pub func NextChunk(d &: Decoder, out &: Buf): int:
+    if d.need < 0:
+        d.tmp.len = 0
+        r := TakeFrame(d, 2, d.tmp)
+        if r <= 0:
+            ret r
+        end
+        ln := (_getb(d.tmp.p, 0) << 8) | _getb(d.tmp.p, 1)
+        if ln > d.max_chunk:
+            d.bad = true
+            ret 0 - 1
+        end
+        d.need = ln
+    end
+    r2 := TakeFrame(d, d.need, out)
+    if r2 == 1:
+        d.need = 0 - 1
+    end
+    ret r2
+end
+
+@en "DecodeAll"
+@fa "رمزگشایی همه"
+pub func DecodeAll(d &: Decoder, data: void*, n: int, out &: Buf): bool:
+    Feed(d, data, n)
+    until true:
+        r := NextChunk(d, out)
+        if r < 0:
+            ret false
+        end
+        if r == 0:
+            break
+        end
+    end
+    ret true
+end

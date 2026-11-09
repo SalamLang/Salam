@@ -1,0 +1,110 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package shadowsocks
+
+import mem
+import encoding
+import sync
+
+@en "SaltFilter"
+@fa "فیلتر نمک"
+pub struct SaltFilter:
+    @en "cur"
+    @fa "نسل جاری"
+    pub cur: HashMap<str, bool> = HashMap {} as HashMap<str, bool>
+    @en "old"
+    @fa "نسل پیشین"
+    pub old: HashMap<str, bool> = HashMap {} as HashMap<str, bool>
+    @en "cap"
+    @fa "ظرفیت"
+    pub cap: int = 0
+    @en "lock"
+    @fa "قفل"
+    pub lock: sync.Mutex = sync.Mutex {}
+end
+
+func _b64_key(text: str, klen: int): Buf:
+    mut b := NewBuf(klen + 64)
+    b.len = 0
+    mut got := 0
+    try:
+        got = encoding.Base64DecodeBytes(text, b.p, b.cap)
+    catch:
+        got = 0 - 1
+    end
+    if got != klen:
+        b.bad = true
+        b.len = 0
+        ret b
+    end
+    b.len = got
+    ret b
+end
+
+@en "NewSaltFilter"
+@fa "فیلتر نمک جدید"
+pub func NewSaltFilter(cap: int): SaltFilter:
+    mut c := cap
+    if c < 16:
+        c = 16
+    end
+    ret SaltFilter { cap = c, lock = sync.NewMutex() }
+end
+
+@en "FilterCheck"
+@fa "بررسی فیلتر"
+pub func FilterCheck(f &: SaltFilter, salt: void*, n: int): bool:
+    key := HexOf(salt, n)
+    sync.Lock(f.lock)
+    if f.cur.has(key) or f.old.has(key):
+        sync.Unlock(f.lock)
+        mem.Free(key as void*)
+        ret false
+    end
+    if f.cur.size() >= f.cap:
+        each k, _ in f.old:
+            mem.Free(k as void*)
+        end
+        f.old.free()
+        f.old = f.cur
+        f.cur = HashMap {} as HashMap<str, bool>
+    end
+    f.cur.put(key, true)
+    sync.Unlock(f.lock)
+    ret true
+end
+
+@en "FilterFree"
+@fa "آزادسازی فیلتر"
+pub func FilterFree(f &: SaltFilter):
+    each k, _ in f.cur:
+        mem.Free(k as void*)
+    end
+    each k2, _ in f.old:
+        mem.Free(k2 as void*)
+    end
+    f.cur.free()
+    f.old.free()
+    sync.Destroy(f.lock)
+end
+
+@en "MakeKey"
+@fa "ساخت کلید"
+pub func MakeKey(m: Method, password: str): Buf:
+    if m.v2022:
+        ret _b64_key(password, m.key_len)
+    end
+    ret PasswordKey(m, password)
+end

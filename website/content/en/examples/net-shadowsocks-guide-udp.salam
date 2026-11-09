@@ -1,0 +1,45 @@
+import mem
+import str
+import net.udp
+import net.shadowsocks
+
+mut echo_sock := udp.Socket {}
+mut relay := shadowsocks.UdpServer {}
+
+func echo():
+    buf := mem.Allocate(2000 as u64)
+    mut host := ""
+    mut port := 0
+    n := udp.ReceiveBytes(echo_sock, buf, 2000, host, port)
+    udp.SendBytes(echo_sock, host, port, buf, n)
+    mem.Free(buf)
+end
+
+func serve():
+    shadowsocks.UdpServe(relay)
+end
+
+func main:
+    echo_sock = udp.Bind(0)
+    relay = shadowsocks.UdpListen(0, "chacha20-ietf-poly1305", "udp password")
+    te := spawn(echo)
+    ts := spawn(serve)
+
+    cfg := shadowsocks.Config { host = "127.0.0.1", port = shadowsocks.UdpServerPort(relay), method = "chacha20-ietf-poly1305", password = "udp password" }
+    c := shadowsocks.UdpDial(cfg)
+    shadowsocks.UdpSetTimeout(c, 3000)
+    shadowsocks.UdpSend(c, "127.0.0.1", udp.Port(echo_sock), "ping" as void*, 4)
+
+    buf := mem.AllocateZeroed(2000 as u64)
+    mut from := shadowsocks.Target {}
+    n := shadowsocks.UdpRecv(c, buf, 1999, from)
+    println str.Substr(buf as str, 0, n), from.host, from.port == udp.Port(echo_sock)
+
+    mem.Free(buf)
+    join(te)
+    shadowsocks.UdpStop(relay)
+    join(ts)
+    shadowsocks.UdpClose(c)
+    shadowsocks.UdpDestroy(relay)
+    udp.Close(echo_sock)
+end

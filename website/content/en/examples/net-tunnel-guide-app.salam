@@ -1,0 +1,82 @@
+import net.tcp
+import net.socks
+import net.httpproxy
+import net.trojan
+import net.tunnel
+import sync
+
+mut local_port := 0
+mut abroad_port := 0
+mut ready := sync.NewWaitGroup()
+
+func serve_echo(name: str, port: int):
+    srv := tcp.Bind(port)
+    if name == "local":
+        local_port = tcp.Port(srv)
+    else:
+        abroad_port = tcp.Port(srv)
+    end
+    sync.Done(ready)
+    until true:
+        c := tcp.Accept(srv)
+        data := tcp.Read(c, 100)
+        tcp.Write(c, name + " saw " + data)
+        tcp.Close(c)
+    end
+end
+
+func local_echo():
+    serve_echo("local", 0)
+end
+
+func abroad_echo():
+    serve_echo("abroad", 0)
+end
+
+func ask(proxy_port: int, port: int, text: str): str:
+    r := socks.Connect(socks.NewClient("127.0.0.1", proxy_port), "127.0.0.1", port)
+    r.stream.Write(text)
+    answer := r.stream.Read(100)
+    r.stream.Close()
+    ret answer
+end
+
+func main:
+    sync.Add(ready, 2 as i64)
+    _a := spawn(local_echo)
+    _b := spawn(abroad_echo)
+    sync.Wait(ready)
+
+    mut remote_cfg := trojan.NewServerConfig("", "")
+    trojan.AddPassword(remote_cfg, "secret")
+    remote := trojan.ServePlain(remote_cfg, 0)
+
+    rules := tunnel.ParseRules("DST-PORT," + abroad_port + ",proxy\nDOMAIN-SUFFIX,ir,direct\nFINAL,direct\n", "direct")
+    println "rule errors:", rules.errors.len()
+
+    mut dialer := tunnel.NewRouterDialer(rules.router)
+    tunnel.RouterDialerAdd(dialer, "direct", tunnel.Direct())
+    hop := trojan.NewConnector("127.0.0.1", remote.port, "secret")
+    tunnel.RouterDialerAdd(dialer, "proxy", tunnel.Via(tunnel.Direct(), hop))
+
+    mut mixed := tunnel.NewMixed()
+    tunnel.MixedSetSocks5(mixed, socks.NewInbound(socks.NewServerConfig(0)))
+    tunnel.MixedSetHttp(mixed, httpproxy.NewInbound(httpproxy.NewServerConfig(0)))
+    forward := tunnel.NewForwarder(dialer, mixed)
+    inbound := tunnel.ListenTcp(0)
+    tunnel.ServeBackground(inbound, mixed, forward)
+
+    println ask(inbound.port, local_port, "hello")
+    println ask(inbound.port, abroad_port, "hello")
+
+    web := httpproxy.Connect(httpproxy.NewClient("127.0.0.1", inbound.port), "127.0.0.1", abroad_port)
+    println "http connect:", web.status
+    web.stream.Write("via http")
+    println web.stream.Read(100)
+    web.stream.Close()
+
+    sync.SleepMs(100)
+    println "connections:", forward.stats.Total()
+    inbound.Stop()
+    trojan.Stop(remote)
+end

@@ -1,0 +1,157 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package censor
+
+import str
+
+@en "ProbeGuard"
+@fa "نگهبان کاوش"
+pub struct ProbeGuard:
+    @en "max_fails"
+    @fa "بیشینه شکست"
+    pub max_fails: int = 5
+    @en "window_ms"
+    @fa "بازه شمارش"
+    pub window_ms: i64 = 60000
+    @en "ban_ms"
+    @fa "مدت مسدودی"
+    pub ban_ms: i64 = 600000
+    @en "fails"
+    @fa "شکست‌ها"
+    pub fails: HashMap<str, int> = HashMap {}
+    @en "first_ms"
+    @fa "آغاز بازه"
+    pub first_ms: HashMap<str, i64> = HashMap {}
+    @en "banned_until"
+    @fa "زمان رفع مسدودی"
+    pub banned_until: HashMap<str, i64> = HashMap {}
+end
+
+@en "ReplayCache"
+@fa "حافظه تکرار"
+pub struct ReplayCache:
+    @en "ttl_ms"
+    @fa "ماندگاری"
+    pub ttl_ms: i64 = 120000
+    @en "max_entries"
+    @fa "بیشینه ورودی"
+    pub max_entries: int = 4096
+    @en "seen"
+    @fa "دیده‌شده"
+    pub seen: HashMap<str, i64> = HashMap {}
+end
+
+@en "NewProbeGuard"
+@fa "نگهبان کاوش جدید"
+pub func NewProbeGuard(max_fails: int, window_ms: i64, ban_ms: i64): ProbeGuard:
+    ret ProbeGuard { max_fails = max_fails, window_ms = window_ms, ban_ms = ban_ms }
+end
+
+@en "GuardAllowed"
+@fa "اجازه نگهبان"
+pub func GuardAllowed(g: ProbeGuard, ip: str, now_ms: i64): bool:
+    if not g.banned_until.has(ip):
+        ret true
+    end
+    ret now_ms >= g.banned_until.get(ip)
+end
+
+@en "GuardRecordFail"
+@fa "ثبت شکست"
+pub func GuardRecordFail(g &: ProbeGuard, ip: str, now_ms: i64): bool:
+    mut n := 0
+    if g.fails.has(ip) and now_ms - g.first_ms.get(ip) <= g.window_ms:
+        n = g.fails.get(ip)
+    else:
+        g.first_ms.put(ip, now_ms)
+    end
+    n++
+    g.fails.put(ip, n)
+    if n >= g.max_fails:
+        g.banned_until.put(ip, now_ms + g.ban_ms)
+        g.fails.put(ip, 0)
+        ret true
+    end
+    ret false
+end
+
+@en "GuardRecordOK"
+@fa "ثبت موفقیت"
+pub func GuardRecordOK(g &: ProbeGuard, ip: str):
+    g.fails.put(ip, 0)
+end
+
+@en "FreeProbeGuard"
+@fa "آزاد کردن نگهبان"
+pub func FreeProbeGuard(g &: ProbeGuard):
+    g.fails.free()
+    g.first_ms.free()
+    g.banned_until.free()
+end
+
+@en "NewReplayCache"
+@fa "حافظه تکرار جدید"
+pub func NewReplayCache(ttl_ms: i64, max_entries: int): ReplayCache:
+    ret ReplayCache { ttl_ms = ttl_ms, max_entries = max_entries }
+end
+
+@en "ReplaySeen"
+@fa "تکراری است"
+pub func ReplaySeen(c &: ReplayCache, key: str, now_ms: i64): bool:
+    if c.seen.has(key):
+        if now_ms - c.seen.get(key) <= c.ttl_ms:
+            ret true
+        end
+    end
+    if c.seen.size() >= c.max_entries:
+        mut old := Vector {} as Vector<str>
+        defer old.free()
+        each k, v in c.seen:
+            if now_ms - v > c.ttl_ms:
+                old.push(k)
+            end
+        end
+        repeat old.len() in i:
+            c.seen.remove(old.get(i))
+        end
+    end
+    c.seen.put(key, now_ms)
+    ret false
+end
+
+@en "FreeReplayCache"
+@fa "آزاد کردن حافظه تکرار"
+pub func FreeReplayCache(c &: ReplayCache):
+    c.seen.free()
+end
+
+@en "ShouldFallback"
+@fa "باید جایگزین شود"
+pub func ShouldFallback(authenticated: bool): bool:
+    ret not authenticated
+end
+
+@en "DelayMs"
+@fa "تاخیر تصادفی"
+pub func DelayMs(min_ms: int, max_ms: int): int:
+    ret RandomInt(min_ms, max_ms)
+end
+
+@en "DecoyResponse"
+@fa "پاسخ طعمه"
+pub func DecoyResponse(): str:
+    body := "<html>\r\n<head><title>404 Not Found</title></head>\r\n<body>\r\n<center><h1>404 Not Found</h1></center>\r\n<hr><center>nginx</center>\r\n</body>\r\n</html>\r\n"
+    ret "HTTP/1.1 404 Not Found\r\nServer: nginx\r\nContent-Type: text/html\r\nContent-Length: " + str.FromInt(body.len() as i64) + "\r\nConnection: close\r\n\r\n" + body
+end

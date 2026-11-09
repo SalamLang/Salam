@@ -1,0 +1,465 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package trojan
+
+import mem
+import net.tcp
+import net.udp
+import net.websocket
+import compress
+import crypto
+import sync
+import tls
+
+struct ServerState:
+    pub cfg: ServerConfig = ServerConfig {}
+    pub tlscfg: tls.ServerConfig = tls.ServerConfig {}
+    pub use_tls: bool = true
+    pub ws: bool = false
+    pub listen_fd: i64 = 0 - 1
+    pub port: int = 0
+    pub stop: i64* = null
+    pub counters: i64* = null
+end
+
+struct ConnArg:
+    pub st: ServerState* = null
+    pub fd: i64 = 0 - 1
+    pub wsc: websocket.Conn = websocket.Conn {}
+end
+
+struct UdpState:
+    pub link: Link* = null
+    pub sock: udp.Socket = udp.Socket {}
+    pub stop: i64* = null
+end
+
+@en "ServerConfig"
+@fa "پیکربندی کارساز"
+pub struct ServerConfig:
+    @en "cert_file"
+    @fa "پرونده گواهی"
+    pub cert_file: str = ""
+    @en "key_file"
+    @fa "پرونده کلید"
+    pub key_file: str = ""
+    @en "hashes"
+    @fa "درهم گذرواژه‌ها"
+    pub hashes: Vector<str> = Vector {}
+    @en "fallback_host"
+    @fa "میزبان جایگزین"
+    pub fallback_host: str = ""
+    @en "fallback_port"
+    @fa "درگاه جایگزین"
+    pub fallback_port: int = 0
+    @en "handshake_timeout_ms"
+    @fa "مهلت دست‌دهی"
+    pub handshake_timeout_ms: int = 5000
+    @en "connect_timeout_ms"
+    @fa "مهلت اتصال مقصد"
+    pub connect_timeout_ms: int = 10000
+    @en "idle_timeout_ms"
+    @fa "مهلت بیکاری"
+    pub idle_timeout_ms: int = 0
+end
+
+@en "Session"
+@fa "نشست"
+pub struct Session:
+    @en "ok"
+    @fa "معتبر"
+    pub ok: bool = false
+    @en "req"
+    @fa "درخواست"
+    pub req: Request = Request {}
+    @en "seen"
+    @fa "بایت‌های خوانده‌شده"
+    pub seen: compress.ByteBuf = compress.ByteBuf {}
+    @en "extra"
+    @fa "داده همراه"
+    pub extra: compress.ByteBuf = compress.ByteBuf {}
+end
+
+@en "ServerStats"
+@fa "آمار کارساز"
+pub struct ServerStats:
+    @en "accepted"
+    @fa "پذیرفته‌شده"
+    pub accepted: i64 = 0
+    @en "authed"
+    @fa "احراز‌شده"
+    pub authed: i64 = 0
+    @en "fallbacks"
+    @fa "جایگزین‌شده"
+    pub fallbacks: i64 = 0
+end
+
+@en "Server"
+@fa "کارساز"
+pub struct Server:
+    @en "ok"
+    @fa "معتبر"
+    pub ok: bool = false
+    @en "port"
+    @fa "درگاه"
+    pub port: int = 0
+    @en "st"
+    @fa "وضعیت"
+    pub st: ServerState* = null
+end
+
+func _hash_known(cfg: ServerConfig, h: str): bool:
+    mut found := false
+    repeat cfg.hashes.len() in i:
+        if crypto.SecretEquals(cfg.hashes.get(i), h):
+            found = true
+        end
+    end
+    ret found
+end
+
+func _connect_target(cfg: ServerConfig, host: str, port: int): Link:
+    ret NewTCPLink(tcp.DialTimeout(host, port, cfg.connect_timeout_ms))
+end
+
+func _udp_reply_pump(us: UdpState*):
+    cap := 65536
+    buf := mem.Allocate(cap as u64)
+    mut fh := ""
+    mut fp := 0
+    until atomic_load(us[0].stop) != 0:
+        n := udp.ReceiveBytes(us[0].sock, buf, cap, fh, fp)
+        if n > 0:
+            if not WriteUDPPacket(us[0].link[0], fh, fp, buf, n):
+                break
+            end
+        end
+    end
+    mem.Free(buf)
+end
+
+func _serve_udp(lp: Link*):
+    sock := udp.Open()
+    if not udp.Ok(sock):
+        ret
+    end
+    udp.SetTimeout(sock, 300)
+    us := mem.AllocateZeroed(sizeof(UdpState) as u64) as UdpState*
+    stop := mem.AllocateZeroed(8 as u64) as i64*
+    atomic_store(stop, 1 as i64)
+    us[0] = UdpState { link = lp, sock = sock, stop = stop }
+    t := spawn(_udp_reply_pump, us)
+    mut pkt := UDPPacket {}
+    mut payload := compress.NewByteBuf()
+    until ReadUDPPacket(lp[0], pkt, payload):
+        _sent := udp.SendBytes(sock, pkt.host, pkt.port, payload.data, payload.len)
+    end
+    atomic_store(stop, 0 as i64)
+    join(t)
+    udp.Close(sock)
+    compress.BufFree(payload)
+    mem.Free(stop as void*)
+    mem.Free(us as void*)
+end
+
+func _count(st: ServerState*, idx: int):
+    _added := atomic_add(((st[0].counters as i64) + (idx * 8) as i64) as i64*, 1 as i64)
+end
+
+func _conn_main(a: ConnArg*):
+    st := a[0].st
+    fd := a[0].fd
+    mut link := Link {}
+    if st[0].ws:
+        link = NewWSLink(a[0].wsc)
+    else st[0].use_tls:
+        c := tls.WrapServer(fd, st[0].tlscfg)
+        link = NewTLSLink(c)
+    else:
+        link = NewTCPLink(tcp.ConnFromFd(fd))
+    end
+    mem.Free(a as void*)
+    if not LinkOk(link):
+        LinkClose(link)
+        ret
+    end
+    lp := mem.AllocateZeroed(sizeof(Link) as u64) as Link*
+    lp[0] = link
+    _count(st, 0)
+    r := ServeLink(lp, st[0].cfg)
+    if r == 1:
+        _count(st, 1)
+    else r == 2:
+        _count(st, 2)
+    end
+    LinkClose(lp[0])
+    mem.Free(lp as void*)
+end
+
+func _accept_loop(st: ServerState*):
+    until atomic_load(st[0].stop) != 0:
+        mut a := mem.AllocateZeroed(sizeof(ConnArg) as u64) as ConnArg*
+        if st[0].ws:
+            wc := websocket.Accept(websocket.Server { fd = st[0].listen_fd, port = st[0].port })
+            if atomic_load(st[0].stop) == 0:
+                mem.Free(a as void*)
+                break
+            end
+            if not wc.open:
+                mem.Free(a as void*)
+                continue
+            end
+            a[0] = ConnArg { st = st, fd = wc.fd, wsc = wc }
+        else:
+            c := tcp.Accept(tcp.Server { fd = st[0].listen_fd, port = st[0].port })
+            if atomic_load(st[0].stop) == 0:
+                tcp.Close(c)
+                mem.Free(a as void*)
+                break
+            end
+            if not tcp.ConnOk(c):
+                mem.Free(a as void*)
+                continue
+            end
+            a[0] = ConnArg { st = st, fd = c.fd }
+        end
+        _t := spawn(_conn_main, a)
+    end
+end
+
+func _start(cfg: ServerConfig, port: int, ws: bool, use_tls: bool): Server:
+    mut srv := Server {}
+    st := mem.AllocateZeroed(sizeof(ServerState) as u64) as ServerState*
+    mut tcfg := tls.ServerConfig {}
+    if use_tls and not ws:
+        tcfg = tls.NewServerConfig(cfg.cert_file, cfg.key_file)
+        if not tcfg.ok:
+            mem.Free(st as void*)
+            ret srv
+        end
+    end
+    mut lfd := 0 - 1 as i64
+    mut lport := 0
+    if ws:
+        ls := websocket.Listen(port)
+        if not websocket.Ok(ls):
+            mem.Free(st as void*)
+            ret srv
+        end
+        lfd = ls.fd
+        lport = websocket.Port(ls)
+    else:
+        ls := tcp.Bind(port)
+        if not tcp.Ok(ls):
+            mem.Free(st as void*)
+            ret srv
+        end
+        lfd = ls.fd
+        lport = tcp.Port(ls)
+    end
+    stop := mem.AllocateZeroed(8 as u64) as i64*
+    atomic_store(stop, 1 as i64)
+    counters := mem.AllocateZeroed(24 as u64) as i64*
+    st[0] = ServerState { cfg = cfg, tlscfg = tcfg, use_tls = use_tls, ws = ws, listen_fd = lfd, port = lport, stop = stop, counters = counters }
+    _t := spawn(_accept_loop, st)
+    srv.ok = true
+    srv.port = lport
+    srv.st = st
+    ret srv
+end
+
+@en "NewServerConfig"
+@fa "پیکربندی کارساز جدید"
+pub func NewServerConfig(cert_file: str, key_file: str): ServerConfig:
+    ret ServerConfig { cert_file = cert_file, key_file = key_file }
+end
+
+@en "SetFallback"
+@fa "تعیین جایگزین"
+pub func SetFallback(cfg &: ServerConfig, host: str, port: int):
+    cfg.fallback_host = host
+    cfg.fallback_port = port
+end
+
+@en "AddPassword"
+@fa "افزودن گذرواژه"
+pub func AddPassword(cfg &: ServerConfig, password: str):
+    h := PasswordHash(password)
+    cfg.hashes.push(h)
+end
+
+@en "AddPasswordHash"
+@fa "افزودن درهم گذرواژه"
+pub func AddPasswordHash(cfg &: ServerConfig, hash: str):
+    cfg.hashes.push(hash)
+end
+
+@en "Handshake"
+@fa "دست‌دهی"
+pub func Handshake(l &: Link, cfg: ServerConfig): Session:
+    mut s := Session {}
+    s.seen = compress.NewByteBuf()
+    s.extra = compress.NewByteBuf()
+    cap := 2048
+    tmp := mem.Allocate(cap as u64)
+    defer mem.Free(tmp)
+    if cfg.handshake_timeout_ms > 0:
+        LinkSetTimeout(l, cfg.handshake_timeout_ms)
+    end
+    until true:
+        n := LinkRead(l, tmp, cap)
+        if n <= 0:
+            break
+        end
+        compress.BufPushBytes(s.seen, tmp, n)
+        r := ParseRequest(s.seen.data, s.seen.len)
+        if r.status == ParseInvalid:
+            break
+        end
+        if r.status == ParseOK:
+            if _hash_known(cfg, r.hash):
+                s.ok = true
+                s.req = r
+                rest := s.seen.len - r.consumed
+                if rest > 0:
+                    compress.BufPushBytes(s.extra, ((s.seen.data as i64) + (r.consumed as i64)) as void*, rest)
+                end
+            end
+            break
+        end
+    end
+    if cfg.handshake_timeout_ms > 0:
+        LinkSetTimeout(l, cfg.idle_timeout_ms)
+    end
+    ret s
+end
+
+@en "FreeSession"
+@fa "آزاد کردن نشست"
+pub func FreeSession(s &: Session):
+    compress.BufFree(s.seen)
+    compress.BufFree(s.extra)
+end
+
+@en "Fallback"
+@fa "جایگزین"
+pub func Fallback(lp: Link*, cfg: ServerConfig, seen: compress.ByteBuf): bool:
+    if cfg.fallback_port <= 0:
+        ret false
+    end
+    mut host := cfg.fallback_host
+    if host.len() == 0:
+        host = "127.0.0.1"
+    end
+    tp := mem.AllocateZeroed(sizeof(Link) as u64) as Link*
+    tp[0] = _connect_target(cfg, host, cfg.fallback_port)
+    if not LinkOk(tp[0]):
+        LinkClose(tp[0])
+        mem.Free(tp as void*)
+        ret false
+    end
+    if seen.len > 0:
+        if not LinkWrite(tp[0], seen.data, seen.len):
+            LinkClose(tp[0])
+            mem.Free(tp as void*)
+            ret false
+        end
+    end
+    _n := Relay(lp, tp)
+    LinkClose(tp[0])
+    mem.Free(tp as void*)
+    ret true
+end
+
+@en "ServeLink"
+@fa "پاسخ به پیوند"
+pub func ServeLink(lp: Link*, cfg: ServerConfig): int:
+    mut s := Handshake(lp[0], cfg)
+    defer FreeSession(s)
+    if not s.ok:
+        if lp[0].kind != LinkWS:
+            _fb := Fallback(lp, cfg, s.seen)
+        end
+        ret 2
+    end
+    if s.req.cmd == CmdUDP:
+        _serve_udp(lp)
+        ret 1
+    end
+    tp := mem.AllocateZeroed(sizeof(Link) as u64) as Link*
+    tp[0] = _connect_target(cfg, s.req.host, s.req.port)
+    if not LinkOk(tp[0]):
+        LinkClose(tp[0])
+        mem.Free(tp as void*)
+        ret 3
+    end
+    if s.extra.len > 0:
+        if not LinkWrite(tp[0], s.extra.data, s.extra.len):
+            LinkClose(tp[0])
+            mem.Free(tp as void*)
+            ret 3
+        end
+    end
+    _n := Relay(lp, tp)
+    LinkClose(tp[0])
+    mem.Free(tp as void*)
+    ret 1
+end
+
+@en "Serve"
+@fa "سرویس‌دهی"
+pub func Serve(cfg: ServerConfig, port: int): Server:
+    ret _start(cfg, port, false, true)
+end
+
+@en "ServePlain"
+@fa "سرویس‌دهی بدون رمز"
+pub func ServePlain(cfg: ServerConfig, port: int): Server:
+    ret _start(cfg, port, false, false)
+end
+
+@en "ServeWS"
+@fa "سرویس‌دهی وب‌سوکت"
+pub func ServeWS(cfg: ServerConfig, port: int): Server:
+    ret _start(cfg, port, true, false)
+end
+
+@en "ServerPort"
+@fa "درگاه کارساز"
+pub func ServerPort(s: Server): int:
+    ret s.port
+end
+
+@en "Stats"
+@fa "آمار"
+pub func Stats(s: Server): ServerStats:
+    if not s.ok:
+        ret ServerStats {}
+    end
+    c := s.st[0].counters
+    ret ServerStats { accepted = atomic_load(c), authed = atomic_load(((c as i64) + 8) as i64*), fallbacks = atomic_load(((c as i64) + 16) as i64*) }
+end
+
+@en "Stop"
+@fa "توقف"
+pub func Stop(s: Server):
+    if not s.ok:
+        ret
+    end
+    atomic_store(s.st[0].stop, 0 as i64)
+    w := tcp.Dial("127.0.0.1", s.port)
+    tcp.Close(w)
+    sync.SleepMs(50)
+end

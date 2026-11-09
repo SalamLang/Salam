@@ -1,0 +1,990 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package transport
+
+import mem
+import sync
+import str
+import crypto
+import rand
+import encoding
+import tls
+import net.tcp
+import net.internal.rawsock
+import net.websocket
+import net.tunnel
+
+@en "KindTCP"
+@fa "نوع تی سی پی"
+pub const KindTCP := 0
+
+@en "KindTLS"
+@fa "نوع تی ال اس"
+pub const KindTLS := 1
+
+@en "KindStream"
+@fa "نوع جریان"
+pub const KindStream := 2
+
+@en "Settings"
+@fa "تنظیمات"
+pub struct Settings:
+    @en "network"
+    @fa "شبکه"
+    pub network: str = "tcp"
+    @en "tls"
+    @fa "تی ال اس"
+    pub tls: bool = false
+    @en "sni"
+    @fa "نام سرور"
+    pub sni: str = ""
+    @en "alpn"
+    @fa "الپن"
+    pub alpn: str = ""
+    @en "fingerprint"
+    @fa "اثر انگشت"
+    pub fingerprint: str = ""
+    @en "allow_insecure"
+    @fa "اجازه ناامن"
+    pub allow_insecure: bool = false
+    @en "ca_file"
+    @fa "پرونده گواهی ریشه"
+    pub ca_file: str = ""
+    @en "path"
+    @fa "مسیر"
+    pub path: str = "/"
+    @en "host"
+    @fa "سربرگ میزبان"
+    pub host: str = ""
+    @en "headers"
+    @fa "سربرگ ها"
+    pub headers: str = ""
+    @en "early_data"
+    @fa "داده زودهنگام"
+    pub early_data: int = 0
+    @en "fragment"
+    @fa "تکه تکه کردن"
+    pub fragment: bool = false
+    @en "fragment_min"
+    @fa "کمینه تکه"
+    pub fragment_min: int = 5
+    @en "fragment_max"
+    @fa "بیشینه تکه"
+    pub fragment_max: int = 20
+    @en "fragment_delay_ms"
+    @fa "تاخیر تکه میلی ثانیه"
+    pub fragment_delay_ms: int = 10
+    @en "cert_file"
+    @fa "پرونده گواهی"
+    pub cert_file: str = ""
+    @en "key_file"
+    @fa "پرونده کلید"
+    pub key_file: str = ""
+    @en "timeout_ms"
+    @fa "مهلت میلی ثانیه"
+    pub timeout_ms: int = 0
+end
+
+@en "Conn"
+@fa "اتصال"
+pub struct Conn:
+    @en "kind"
+    @fa "نوع"
+    pub kind: int = 0
+    @en "tcp"
+    @fa "تی سی پی"
+    pub tcp: tcp.Conn = tcp.Conn {}
+    @en "tls"
+    @fa "تی ال اس"
+    pub tls: tls.Conn = tls.Conn {}
+    @en "up"
+    @fa "جریان زیرین"
+    pub up: dyn tunnel.Stream = tunnel.TcpStream {}
+    @en "ws"
+    @fa "وب سوکت"
+    pub ws: bool = false
+    @en "client"
+    @fa "کارخواه"
+    pub client: bool = false
+    @en "open"
+    @fa "باز"
+    pub open: bool = false
+    @en "err"
+    @fa "خطا"
+    pub err: str = ""
+    @en "fr_left"
+    @fa "باقی چارچوب"
+    pub fr_left: int = 0
+    @en "fr_masked"
+    @fa "نقابدار"
+    pub fr_masked: bool = false
+    @en "fr_mask"
+    @fa "نقاب"
+    pub fr_mask: i64 = 0
+    @en "fr_pos"
+    @fa "جایگاه چارچوب"
+    pub fr_pos: int = 0
+    @en "pre"
+    @fa "پیش خوانده"
+    pub pre: Bytes = Bytes {}
+    @en "request_path"
+    @fa "مسیر درخواست"
+    pub request_path: str = ""
+    @en "request_host"
+    @fa "میزبان درخواست"
+    pub request_host: str = ""
+end
+
+@en "Listener"
+@fa "شنونده"
+pub struct Listener:
+    @en "server"
+    @fa "سرور"
+    pub server: tcp.Server = tcp.Server {}
+    @en "settings"
+    @fa "تنظیمات"
+    pub settings: Settings = Settings {}
+    @en "tls_cfg"
+    @fa "پیکربندی تی ال اس"
+    pub tls_cfg: tls.ServerConfig = tls.ServerConfig {}
+end
+
+struct _Pump:
+    pub src: i64 = 0 - 1
+    pub dst: i64 = 0 - 1
+    pub fragment: bool = false
+    pub fmin: int = 0
+    pub fmax: int = 0
+    pub delay: int = 0
+    pub alive: i64* = null
+end
+
+struct _StreamAdapter:
+    pub c: Conn = Conn {}
+
+    pub func Read(max: int): str:
+        buf := mem.Allocate((max + 1) as u64)
+        n := _stream_read(this.c, buf, max)
+        if n <= 0:
+            mem.Free(buf)
+            ret ""
+        end
+        bp := buf as u8*
+        bp[n] = 0 as u8
+        ret buf as str
+    end
+
+    pub func ReadBytes(buf: void*, max: int): int:
+        ret _stream_read(this.c, buf, max)
+    end
+
+    pub func Write(data: str): int:
+        if not _stream_write(this.c, data as void*, data.len()):
+            ret 0 - 1
+        end
+        ret data.len()
+    end
+
+    pub func WriteBytes(ptr: void*, n: int): int:
+        if not _stream_write(this.c, ptr, n):
+            ret 0 - 1
+        end
+        ret n
+    end
+
+    pub func SetDeadline(millis: int):
+        _stream_timeout(this.c, millis)
+    end
+
+    pub func Shutdown():
+        if this.c.kind == KindTLS:
+            rawsock.Shutdown(rawsock.FromFd(tls.Fd(this.c.tls)))
+        else this.c.kind == KindTCP:
+            rawsock.Shutdown(rawsock.FromFd(this.c.tcp.fd))
+        end
+    end
+
+    pub func Close():
+        _stream_close(this.c)
+    end
+
+    pub func Ok(): bool:
+        ret this.c.open
+    end
+end
+
+
+func _ub(p: u8*, i: int): int:
+    ret p[i] as int
+end
+
+func _raw_read(c &: Conn, buf: void*, max: int): int:
+    if c.kind == KindStream:
+        ret c.up.ReadBytes(buf, max)
+    end
+    if c.kind == KindTLS:
+        ret tls.ReadBytes(c.tls, buf, max)
+    end
+    ret tcp.ReadBytes(c.tcp, buf, max)
+end
+
+func _raw_write_once(c &: Conn, buf: void*, n: int): int:
+    if c.kind == KindStream:
+        ret c.up.WriteBytes(buf, n)
+    end
+    if c.kind == KindTLS:
+        ret tls.WriteBytes(c.tls, buf, n)
+    end
+    ret tcp.WriteBytes(c.tcp, buf, n)
+end
+
+func _raw_write(c &: Conn, buf: void*, n: int): bool:
+    mut done := 0
+    until done < n:
+        sent := _raw_write_once(c, ((buf as i64) + (done as i64)) as void*, n - done)
+        if sent <= 0:
+            ret false
+        end
+        done += sent
+    end
+    ret true
+end
+
+func _raw_read_full(c &: Conn, buf: void*, n: int): bool:
+    mut got := 0
+    until got < n:
+        r := _raw_read(c, ((buf as i64) + (got as i64)) as void*, n - got)
+        if r <= 0:
+            ret false
+        end
+        got += r
+    end
+    ret true
+end
+
+func _read_headers(c &: Conn): str:
+    mut b := NewBytes(512)
+    defer FreeBytes(b)
+    one := mem.Allocate(1 as u64) as u8*
+    defer mem.Free(one as void*)
+    until b.len < 16384:
+        r := _raw_read(c, one as void*, 1)
+        if r <= 0:
+            ret ""
+        end
+        Put8(b, one[0] as int)
+        if b.len >= 4 and At(b, b.len - 1) == 10 and At(b, b.len - 2) == 13 and At(b, b.len - 3) == 10 and At(b, b.len - 4) == 13:
+            Put8(b, 0)
+            ret str.Clone(b.p as str)
+        end
+    end
+    ret ""
+end
+
+func _header(h: str, name: str): str:
+    lower := str.Lower(h)
+    idx := str.Find(lower, "\r\n" + name + ":")
+    if idx < 0:
+        ret ""
+    end
+    start := idx + 2 + name.len() + 1
+    mut e := str.IndexFrom(h, "\r", start)
+    if e < 0:
+        e = h.len()
+    end
+    ret str.Trim(h.substr(start, e - start))
+end
+
+func _request_path(h: str): str:
+    sp := str.Find(h, " ")
+    if sp < 0:
+        ret ""
+    end
+    e := str.IndexFrom(h, " ", sp + 1)
+    if e < 0:
+        ret ""
+    end
+    mut p := h.substr(sp + 1, e - sp - 1)
+    q := str.Find(p, "?")
+    if q >= 0:
+        p = p.substr(0, q)
+    end
+    ret p
+end
+
+func _b64url_encode(p: void*, n: int): str:
+    s := encoding.Base64EncodeBytes(p, n)
+    mut out := ""
+    sp := s as u8*
+    repeat s.len() in i:
+        ch := sp[i] as int
+        if ch == 43:
+            out += "-"
+        else ch == 47:
+            out += "_"
+        else ch != 61:
+            out += s.substr(i, 1)
+        end
+    end
+    ret out
+end
+
+func _b64val(ch: int): int:
+    if ch >= 65 and ch <= 90: ret ch - 65 end
+    if ch >= 97 and ch <= 122: ret ch - 71 end
+    if ch >= 48 and ch <= 57: ret ch + 4 end
+    if ch == 45 or ch == 43: ret 62 end
+    if ch == 95 or ch == 47: ret 63 end
+    ret 0 - 1
+end
+
+func _b64url_decode(s: str): Bytes:
+    mut out := NewBytes(s.len())
+    sp := s as u8*
+    mut acc := 0
+    mut bits := 0
+    repeat s.len() in i:
+        v := _b64val(sp[i] as int)
+        if v < 0:
+            continue
+        end
+        acc = (acc << 6) | v
+        bits += 6
+        if bits >= 8:
+            bits -= 8
+            Put8(out, (acc >> bits) & 255)
+            acc = acc & ((1 << bits) - 1)
+        end
+    end
+    ret out
+end
+
+func _tls_config(host: str, s: Settings): tls.Config:
+    mut cfg := tls.NewConfig(host)
+    if s.sni.len() > 0:
+        cfg.server_name = s.sni
+    end
+    cfg.insecure_skip_verify = s.allow_insecure
+    cfg.alpn = s.alpn
+    cfg.ca_file = s.ca_file
+    ret cfg
+end
+
+func _ws_frame(c: Conn, op: int, p: void*, n: int): Bytes:
+    mut f := NewBytes(n + 16)
+    Put8(f, 0x80 | op)
+    mut mb := 0
+    if c.client:
+        mb = 0x80
+    end
+    if n < 126:
+        Put8(f, mb | n)
+    else n < 65536:
+        Put8(f, mb | 126)
+        Put16(f, n)
+    else:
+        Put8(f, mb | 127)
+        Put64(f, n as u64)
+    end
+    if c.client:
+        mut key := NewBytes(4)
+        defer FreeBytes(key)
+        crypto.RandomBytes(key.p, 4)
+        key.len = 4
+        PutBytes(f, key)
+        Reserve(f, n)
+        dst := ((f.p as i64) + (f.len as i64)) as u8*
+        src := p as u8*
+        repeat n in i:
+            dst[i] = (src[i] as int ^ At(key, i & 3)) as u8
+        end
+        f.len += n
+    else:
+        PutRaw(f, p, n)
+    end
+    ret f
+end
+
+func _ws_send(c &: Conn, op: int, p: void*, n: int): bool:
+    mut f := _ws_frame(c, op, p, n)
+    defer FreeBytes(f)
+    ret _raw_write(c, f.p, f.len)
+end
+
+func _ws_next_frame(c &: Conn): int:
+    hdr := mem.Allocate(8 as u64) as u8*
+    defer mem.Free(hdr as void*)
+    until true:
+        if not _raw_read_full(c, hdr as void*, 2):
+            ret 0
+        end
+        op := _ub(hdr, 0) & 15
+        masked := (_ub(hdr, 1) & 0x80) != 0
+        mut ln := _ub(hdr, 1) & 0x7F
+        if ln == 126:
+            if not _raw_read_full(c, hdr as void*, 2):
+                ret 0
+            end
+            ln = _ub(hdr, 0) * 256 + _ub(hdr, 1)
+        else ln == 127:
+            if not _raw_read_full(c, hdr as void*, 8):
+                ret 0
+            end
+            mut v := 0 as i64
+            repeat 8 in i:
+                v = (v << (8 as i64)) | (_ub(hdr, i) as i64)
+            end
+            if v > (1073741824 as i64):
+                ret 0
+            end
+            ln = v as int
+        end
+        c.fr_masked = masked
+        c.fr_pos = 0
+        if masked:
+            mk := mem.Allocate(4 as u64) as u8*
+            if not _raw_read_full(c, mk as void*, 4):
+                mem.Free(mk as void*)
+                ret 0
+            end
+            c.fr_mask = ((_ub(mk, 0) as i64) << (24 as i64)) | ((_ub(mk, 1) as i64) << (16 as i64)) | ((_ub(mk, 2) as i64) << (8 as i64)) | (_ub(mk, 3) as i64)
+            mem.Free(mk as void*)
+        end
+        if op == 8:
+            ret 0
+        end
+        if op == 9 or op == 10:
+            mut pl := NewBytes(ln + 1)
+            pl.len = ln
+            if ln > 0 and not _raw_read_full(c, pl.p, ln):
+                FreeBytes(pl)
+                ret 0
+            end
+            if op == 9:
+                _ws_send(c, 10, pl.p, pl.len)
+            end
+            FreeBytes(pl)
+            continue
+        end
+        if ln == 0:
+            continue
+        end
+        c.fr_left = ln
+        ret ln
+    end
+end
+
+func _ws_unmask(c &: Conn, p: u8*, n: int):
+    if not c.fr_masked:
+        ret
+    end
+    repeat n in i:
+        sh := ((3 - ((c.fr_pos + i) & 3)) * 8) as i64
+        p[i] = (p[i] as int ^ ((c.fr_mask >> sh) & (255 as i64)) as int) as u8
+    end
+    c.fr_pos += n
+end
+
+func _pump(a: _Pump*):
+    me := a[0]
+    src := tcp.ConnFromFd(me.src)
+    dst := tcp.ConnFromFd(me.dst)
+    buf := mem.Allocate(16384 as u64)
+    mut first := me.fragment
+    until true:
+        n := tcp.ReadBytes(src, buf, 16384)
+        if n <= 0:
+            break
+        end
+        if first:
+            first = false
+            if not _write_fragmented_tcp(dst, buf, n, me.fmin, me.fmax, me.delay):
+                break
+            end
+        else:
+            mut done := 0
+            mut bad := false
+            until done < n:
+                w := tcp.WriteBytes(dst, ((buf as i64) + (done as i64)) as void*, n - done)
+                if w <= 0:
+                    bad = true
+                    break
+                end
+                done += w
+            end
+            if bad:
+                break
+            end
+        end
+    end
+    mem.Free(buf)
+    rawsock.Shutdown(rawsock.FromFd(me.src))
+    rawsock.Shutdown(rawsock.FromFd(me.dst))
+    if atomic_add(me.alive, (0 - 1) as i64) == 0 as i64:
+        rawsock.Close(rawsock.FromFd(me.src))
+        rawsock.Close(rawsock.FromFd(me.dst))
+    end
+    mem.Free(a as void*)
+end
+
+func _write_fragmented_tcp(c: tcp.Conn, p: void*, n: int, fmin: int, fmax: int, delay: int): bool:
+    sizes := FragmentSizes(n, fmin, fmax)
+    defer sizes.free()
+    mut off := 0
+    mut idx := 0
+    until idx < sizes.len():
+        part := sizes.get(idx)
+        if tcp.WriteBytes(c, ((p as i64) + (off as i64)) as void*, part) != part:
+            ret false
+        end
+        off += part
+        idx++
+        if idx < sizes.len() and delay > 0:
+            sync.SleepMs(delay)
+        end
+    end
+    ret true
+end
+
+func _norm_headers(h: str): str:
+    if h.len() == 0:
+        ret ""
+    end
+    if str.EndsWith(h, "\r\n"):
+        ret h
+    end
+    ret h + "\r\n"
+end
+
+func _client_upgrade(c &: Conn, host: str, s: Settings, early: Bytes): bool:
+    mut hostname := host
+    if s.host.len() > 0:
+        hostname = s.host
+    end
+    mut path := s.path
+    if path.len() == 0:
+        path = "/"
+    end
+    mut req := "GET " + path + " HTTP/1.1\r\nHost: " + hostname + "\r\nUser-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36\r\n"
+    mut key := ""
+    if s.network == "ws":
+        mut kb := NewBytes(16)
+        defer FreeBytes(kb)
+        crypto.RandomBytes(kb.p, 16)
+        kb.len = 16
+        key = encoding.Base64EncodeBytes(kb.p, 16)
+        req += "Upgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: " + key + "\r\nSec-WebSocket-Version: 13\r\n"
+        if early.len > 0 and s.early_data > 0:
+            req += "Sec-WebSocket-Protocol: " + _b64url_encode(early.p, early.len) + "\r\n"
+        end
+    else:
+        req += "Connection: Upgrade\r\nUpgrade: websocket\r\n"
+    end
+    req += _norm_headers(s.headers) + "\r\n"
+    if not _raw_write(c, req as void*, req.len()):
+        c.err = "could not send the upgrade request"
+        ret false
+    end
+    h := _read_headers(c)
+    if h.len() == 0:
+        c.err = "no upgrade response"
+        ret false
+    end
+    if not str.Contains(h, " 101 "):
+        c.err = "upgrade refused: " + h.substr(0, 20)
+        ret false
+    end
+    if s.network == "ws":
+        if not str.Contains(h, websocket.AcceptKey(key)):
+            c.err = "bad Sec-WebSocket-Accept"
+            ret false
+        end
+        c.ws = true
+    end
+    ret true
+end
+
+func _server_reject(c &: Conn, status: str):
+    body := "<html><head><title>" + status + "</title></head><body><center><h1>" + status + "</h1></center><hr><center>nginx</center></body></html>"
+    resp := "HTTP/1.1 " + status + "\r\nServer: nginx\r\nContent-Type: text/html\r\nConnection: close\r\nContent-Length: " + str.FromInt(body.len() as i64) + "\r\n\r\n" + body
+    _raw_write(c, resp as void*, resp.len())
+end
+
+func _stream_read(c &: Conn, buf: void*, max: int): int:
+    ret Read(c, buf, max)
+end
+
+func _stream_write(c &: Conn, p: void*, n: int): bool:
+    ret Write(c, p, n)
+end
+
+func _stream_timeout(c &: Conn, ms: int):
+    SetReadTimeout(c, ms)
+end
+
+func _stream_close(c &: Conn):
+    Close(c)
+end
+
+@en "FragmentSizes"
+@fa "اندازه تکه ها"
+pub func FragmentSizes(total: int, min: int, max: int): Vector<int>:
+    mut out := Vector {} as Vector<int>
+    mut lo := min
+    if lo < 1:
+        lo = 1
+    end
+    mut hi := max
+    if hi < lo:
+        hi = lo
+    end
+    mut remaining := total
+    until remaining > 0:
+        mut n := rand.IntRange(lo as i64, hi as i64) as int
+        if n < lo:
+            n = lo
+        end
+        if n > remaining:
+            n = remaining
+        end
+        out.push(n)
+        remaining -= n
+    end
+    ret out
+end
+
+@en "Ok"
+@fa "معتبر"
+pub func Ok(c: Conn): bool:
+    ret c.open
+end
+
+@en "Read"
+@fa "خواندن"
+pub func Read(c &: Conn, buf: void*, max: int): int:
+    if c.pre.len > 0:
+        mut n := max
+        if n > c.pre.len:
+            n = c.pre.len
+        end
+        mem.Copy(buf, c.pre.p, n as u64)
+        Consume(c.pre, n)
+        ret n
+    end
+    if not c.ws:
+        ret _raw_read(c, buf, max)
+    end
+    if c.fr_left == 0:
+        if _ws_next_frame(c) <= 0:
+            ret 0
+        end
+    end
+    mut take := max
+    if take > c.fr_left:
+        take = c.fr_left
+    end
+    r := _raw_read(c, buf, take)
+    if r <= 0:
+        ret r
+    end
+    _ws_unmask(c, buf as u8*, r)
+    c.fr_left -= r
+    ret r
+end
+
+@en "ReadFull"
+@fa "خواندن کامل"
+pub func ReadFull(c &: Conn, buf: void*, n: int): bool:
+    mut got := 0
+    until got < n:
+        r := Read(c, ((buf as i64) + (got as i64)) as void*, n - got)
+        if r <= 0:
+            ret false
+        end
+        got += r
+    end
+    ret true
+end
+
+@en "Write"
+@fa "نوشتن"
+pub func Write(c &: Conn, p: void*, n: int): bool:
+    if n <= 0:
+        ret true
+    end
+    if c.ws:
+        ret _ws_send(c, 2, p, n)
+    end
+    ret _raw_write(c, p, n)
+end
+
+@en "WriteBytes"
+@fa "ارسال بایت ها"
+pub func WriteBytes(c &: Conn, b: Bytes): bool:
+    ret Write(c, b.p, b.len)
+end
+
+@en "SetReadTimeout"
+@fa "مهلت خواندن"
+pub func SetReadTimeout(c &: Conn, ms: int):
+    if c.kind == KindStream:
+        c.up.SetDeadline(ms)
+    else c.kind == KindTLS:
+        tcp.SetReadDeadline(tcp.ConnFromFd(tls.Fd(c.tls)), ms)
+    else:
+        tcp.SetReadDeadline(c.tcp, ms)
+    end
+end
+
+@en "Close"
+@fa "بستن"
+pub func Close(c &: Conn):
+    if c.ws and c.open:
+        _ws_send(c, 8, null, 0)
+    end
+    c.open = false
+    if c.kind == KindStream:
+        c.up.Close()
+    else c.kind == KindTLS:
+        tls.Close(c.tls)
+    else:
+        tcp.Close(c.tcp)
+    end
+    FreeBytes(c.pre)
+end
+
+@en "DialEarly"
+@fa "شماره گیری با داده زودهنگام"
+pub func DialEarly(host: str, port: int, s: Settings, early: Bytes): Conn:
+    mut c := Conn {}
+    c.client = true
+    mut tc := tcp.Dial(host, port)
+    if s.timeout_ms > 0:
+        tc = tcp.DialTimeout(host, port, s.timeout_ms)
+    end
+    if not tcp.ConnOk(tc):
+        c.err = "could not connect to " + host
+        ret c
+    end
+    tcp.SetNoDelay(tc, true)
+    c.tcp = tc
+    if s.tls:
+        mut fd := tc.fd
+        if s.fragment:
+            lsrv := tcp.Bind(0)
+            lport := tcp.Port(lsrv)
+            lc := tcp.Dial("127.0.0.1", lport)
+            ls := tcp.Accept(lsrv)
+            tcp.CloseServer(lsrv)
+            if not tcp.ConnOk(lc) or not tcp.ConnOk(ls):
+                c.err = "fragment relay failed"
+                tcp.Close(tc)
+                ret c
+            end
+            alive := mem.AllocateZeroed(8 as u64) as i64*
+            alive[0] = 1 as i64
+            up := mem.AllocateZeroed(sizeof(_Pump) as u64) as _Pump*
+            up[0] = _Pump { src = ls.fd, dst = tc.fd, fragment = true, fmin = s.fragment_min, fmax = s.fragment_max, delay = s.fragment_delay_ms, alive = alive }
+            down := mem.AllocateZeroed(sizeof(_Pump) as u64) as _Pump*
+            down[0] = _Pump { src = tc.fd, dst = ls.fd, fragment = false, alive = alive }
+            _t1 := spawn(_pump, up)
+            _t2 := spawn(_pump, down)
+            fd = lc.fd
+            c.tcp = lc
+        end
+        c.kind = KindTLS
+        c.tls = tls.WrapClient(fd, _tls_config(host, s))
+        if not tls.ConnOk(c.tls):
+            c.err = "tls: " + tls.ConnError(c.tls)
+            ret c
+        end
+    end
+    if s.network == "ws" or s.network == "httpupgrade":
+        if not _client_upgrade(c, host, s, early):
+            Close(c)
+            ret c
+        end
+    end
+    c.open = true
+    ret c
+end
+
+@en "Dial"
+@fa "شماره گیری"
+pub func Dial(host: str, port: int, s: Settings): Conn:
+    ret DialEarly(host, port, s, Bytes {})
+end
+
+@en "Listen"
+@fa "شنود"
+pub func Listen(port: int, s: Settings): Listener:
+    mut l := Listener {}
+    l.settings = s
+    l.server = tcp.Bind(port)
+    if s.tls:
+        l.tls_cfg = tls.NewServerConfig(s.cert_file, s.key_file)
+    end
+    ret l
+end
+
+@en "ListenerOk"
+@fa "شنونده معتبر"
+pub func ListenerOk(l: Listener): bool:
+    if not tcp.Ok(l.server):
+        ret false
+    end
+    if l.settings.tls:
+        ret l.tls_cfg.ok
+    end
+    ret true
+end
+
+@en "ListenerPort"
+@fa "درگاه شنونده"
+pub func ListenerPort(l: Listener): int:
+    ret tcp.Port(l.server)
+end
+
+@en "CloseListener"
+@fa "بستن شنونده"
+pub func CloseListener(l: Listener):
+    tcp.CloseServer(l.server)
+end
+
+@en "AcceptRaw"
+@fa "پذیرش خام"
+pub func AcceptRaw(l: Listener): Conn:
+    mut c := Conn {}
+    tc := tcp.Accept(l.server)
+    if not tcp.ConnOk(tc):
+        c.err = "accept failed"
+        ret c
+    end
+    tcp.SetNoDelay(tc, true)
+    c.tcp = tc
+    if l.settings.tls:
+        c.kind = KindTLS
+        c.tls = tls.WrapServer(tc.fd, l.tls_cfg)
+        if not tls.ConnOk(c.tls):
+            c.err = "tls: " + tls.ConnError(c.tls)
+            tcp.Close(tc)
+            ret c
+        end
+    end
+    c.open = true
+    ret c
+end
+
+@en "Upgrade"
+@fa "ارتقا"
+pub func Upgrade(c &: Conn, s: Settings): bool:
+    if not c.open:
+        ret false
+    end
+    if s.network != "ws" and s.network != "httpupgrade":
+        ret true
+    end
+    h := _read_headers(c)
+    if h.len() == 0:
+        c.err = "no request"
+        Close(c)
+        ret false
+    end
+    c.request_path = _request_path(h)
+    c.request_host = _header(h, "host")
+    mut want := s.path
+    if want.len() == 0:
+        want = "/"
+    end
+    if c.request_path != want:
+        _server_reject(c, "404 Not Found")
+        c.err = "path mismatch"
+        Close(c)
+        ret false
+    end
+    if s.host.len() > 0:
+        mut rh := c.request_host
+        colon := str.Find(rh, ":")
+        if colon >= 0:
+            rh = rh.substr(0, colon)
+        end
+        if str.Lower(rh) != str.Lower(s.host):
+            _server_reject(c, "404 Not Found")
+            c.err = "host mismatch"
+            Close(c)
+            ret false
+        end
+    end
+    mut resp := "HTTP/1.1 101 Switching Protocols\r\nConnection: upgrade\r\nUpgrade: websocket\r\n"
+    if s.network == "ws":
+        key := _header(h, "sec-websocket-key")
+        if key.len() == 0:
+            _server_reject(c, "400 Bad Request")
+            c.err = "not a websocket request"
+            Close(c)
+            ret false
+        end
+        resp += "Sec-WebSocket-Accept: " + websocket.AcceptKey(key) + "\r\n"
+        proto := _header(h, "sec-websocket-protocol")
+        if proto.len() > 0 and s.early_data > 0:
+            c.pre = _b64url_decode(proto)
+            resp += "Sec-WebSocket-Protocol: " + proto + "\r\n"
+        end
+        c.ws = true
+    else:
+        if str.Lower(_header(h, "upgrade")) != "websocket":
+            _server_reject(c, "400 Bad Request")
+            c.err = "not an upgrade request"
+            Close(c)
+            ret false
+        end
+    end
+    resp += "\r\n"
+    if not _raw_write(c, resp as void*, resp.len()):
+        Close(c)
+        ret false
+    end
+    ret true
+end
+
+@en "Accept"
+@fa "پذیرش"
+pub func Accept(l: Listener): Conn:
+    mut c := AcceptRaw(l)
+    if not c.open:
+        ret c
+    end
+    if not Upgrade(c, l.settings):
+        c.open = false
+    end
+    ret c
+end
+
+@en "AsStream"
+@fa "به عنوان جریان"
+pub func AsStream(c: Conn): dyn tunnel.Stream:
+    ret _StreamAdapter { c = c }
+end
+
+@en "FromStream"
+@fa "از جریان"
+pub func FromStream(s: dyn tunnel.Stream, client: bool): Conn:
+    mut c := Conn {}
+    c.kind = KindStream
+    c.up = s
+    c.client = client
+    c.open = s.Ok()
+    ret c
+end

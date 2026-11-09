@@ -1,0 +1,61 @@
+import net.httpproxy
+import net.tcp
+import sync
+
+mut origin_port := 0
+mut echo_port := 0
+mut ready := sync.NewWaitGroup()
+
+func origin():
+    srv := tcp.Bind(0)
+    origin_port = tcp.Port(srv)
+    sync.Done(ready)
+    until true:
+        c := tcp.Accept(srv)
+        request := tcp.Read(c, 4096)
+        first := request.substr(0, request.find("\r\n"))
+        body := "origin saw: " + first
+        tcp.Write(c, "HTTP/1.1 200 OK\r\nContent-Length: " + body.len() + "\r\nConnection: close\r\n\r\n" + body)
+        tcp.Close(c)
+    end
+end
+
+func echo():
+    srv := tcp.Bind(0)
+    echo_port = tcp.Port(srv)
+    sync.Done(ready)
+    until true:
+        c := tcp.Accept(srv)
+        tcp.Write(c, "echo:" + tcp.Read(c, 100))
+        tcp.Close(c)
+    end
+end
+
+func start_backends():
+    sync.Add(ready, 2 as i64)
+    _a := spawn(origin)
+    _b := spawn(echo)
+    sync.Wait(ready)
+end
+
+func main:
+    start_backends()
+    server := httpproxy.Start(httpproxy.NewServerConfig(0))
+    println "proxy up:", server.ok
+    client := httpproxy.NewClient("127.0.0.1", server.port)
+    println client.timeout_ms, client.max_body, client.tls
+
+    url := "http://127.0.0.1:" + origin_port
+    r := httpproxy.Get(client, url + "/hello?x=1")
+    println r.ok, r.status, r.length, r.body
+    println httpproxy.HeaderGet(r.head, "content-length"), r.head.reason
+
+    p := httpproxy.Post(client, url + "/submit", "text/plain", "payload")
+    println p.ok, p.status, p.body
+    custom := httpproxy.Request(client, "PUT", url + "/thing", "X-Trace: 1\r\n", "data")
+    println custom.status, custom.body
+
+    https := httpproxy.Get(client, "https://127.0.0.1/")
+    println https.ok, https.err
+    httpproxy.Stop(server)
+end

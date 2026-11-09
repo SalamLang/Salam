@@ -1,0 +1,135 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import net.tunnel
+
+mut failures := 0
+
+func check(rt: tunnel.Router, host: str, port: int, want: str):
+    got := rt.MatchHost(host, port)
+    if got != want:
+        println "MISMATCH", host, port, "got", got, "want", want
+        failures++
+    end
+end
+
+func iran():
+    rt := tunnel.IranRouter("direct", "proxy")
+    check(rt, "divar.ir", 443, "direct")
+    check(rt, "www.digikala.ir", 443, "direct")
+    check(rt, "WWW.SNAPP.IR", 443, "direct")
+    check(rt, "ایران.ir", 80, "direct")
+    check(rt, "aparat.com", 443, "direct")
+    check(rt, "cdn.aparat.com", 443, "direct")
+    check(rt, "notaparat.com", 443, "proxy")
+    check(rt, "evilir", 443, "proxy")
+    check(rt, "ir.example.com", 443, "proxy")
+    check(rt, "google.com", 443, "proxy")
+    check(rt, "10.1.2.3", 80, "direct")
+    check(rt, "172.16.0.1", 80, "direct")
+    check(rt, "172.32.0.1", 80, "proxy")
+    check(rt, "192.168.100.100", 80, "direct")
+    check(rt, "192.169.0.1", 80, "proxy")
+    check(rt, "127.0.0.1", 1080, "direct")
+    check(rt, "169.254.1.1", 80, "direct")
+    check(rt, "100.64.0.1", 80, "direct")
+    check(rt, "100.128.0.1", 80, "proxy")
+    check(rt, "8.8.8.8", 53, "proxy")
+    check(rt, "::1", 80, "direct")
+    check(rt, "[fe80::abcd]", 80, "direct")
+    check(rt, "fd12:3456::1", 80, "direct")
+    check(rt, "2001:4860:4860::8888", 53, "proxy")
+    check(rt, "localhost", 3000, "direct")
+    println "iran ok"
+end
+
+func rules():
+    text := "# comment line\n\nDOMAIN,Exact.Example.com,exact\nDOMAIN-SUFFIX,.example.org,suffix\nDOMAIN-KEYWORD,tracker,block\nDOMAIN-REGEX,^img[0-9]{2}\\.cdn\\.net$,cdn\nIP-CIDR,203.0.113.0/24,doc4\nIP-CIDR6,2001:db8::/32,doc6\nGEOIP,PRIVATE,lan\nDST-PORT,22,ssh\nDST-PORT,8000-8100,dev\nPORT,25;1,x\nbroken line\nFINAL,fallback\n"
+    set := tunnel.ParseRules(text, "none")
+    println "errors", set.errors.len(), "rules", set.router.rules.len(), "default", set.router.default_tag
+    each e in set.errors:
+        println e
+    end
+    rt := set.router
+    check(rt, "exact.example.com", 443, "exact")
+    check(rt, "EXACT.example.com.", 443, "exact")
+    check(rt, "sub.exact.example.com", 443, "fallback")
+    check(rt, "example.org", 443, "suffix")
+    check(rt, "a.b.example.org", 443, "suffix")
+    check(rt, "myexample.org", 443, "fallback")
+    check(rt, "ad-tracker.net", 443, "block")
+    check(rt, "img12.cdn.net", 443, "cdn")
+    check(rt, "img1.cdn.net", 443, "fallback")
+    check(rt, "img123.cdn.net", 443, "fallback")
+    check(rt, "203.0.113.77", 443, "doc4")
+    check(rt, "203.0.114.1", 443, "fallback")
+    check(rt, "2001:db8:abcd::1", 443, "doc6")
+    check(rt, "2001:db9::1", 443, "fallback")
+    check(rt, "10.9.9.9", 443, "lan")
+    check(rt, "unknown.test", 22, "ssh")
+    check(rt, "unknown.test", 8050, "dev")
+    check(rt, "unknown.test", 8101, "fallback")
+    check(rt, "10.9.9.9", 22, "lan")
+    println "rules ok"
+end
+
+func combined():
+    mut rt := tunnel.NewRouter("proxy")
+    mut r := tunnel.NewRule("direct")
+    tunnel.RuleSuffix(r, "*.corp.test")
+    tunnel.RulePort(r, "443,8443")
+    tunnel.RouterAdd(rt, r)
+    mut p := tunnel.NewRule("block")
+    tunnel.RulePort(p, "25")
+    tunnel.RouterAdd(rt, p)
+    mut k := tunnel.NewRule("direct")
+    println tunnel.RuleCidr(k, "10.0.0.0/33"), tunnel.RuleCidr(k, "nonsense"), tunnel.RuleCidr(k, "10.0.0.0/8"), tunnel.RuleCidr(k, "10.1.2.3"), tunnel.RuleCidr(k, "::/0")
+    println tunnel.RuleRegex(k, "(unclosed"), tunnel.RulePort(k, "70000"), tunnel.RulePort(k, "9-3"), tunnel.RulePort(k, "x")
+    check(rt, "git.corp.test", 443, "direct")
+    check(rt, "git.corp.test", 8443, "direct")
+    check(rt, "git.corp.test", 80, "proxy")
+    check(rt, "other.test", 443, "proxy")
+    check(rt, "other.test", 25, "block")
+    empty := tunnel.NewRule("x")
+    println tunnel.RuleMatches(empty, tunnel.NewAddr("a.com", 80))
+    println tunnel.IranRouter("d", "p").rules.len()
+    println "combined ok"
+end
+
+func v2ray():
+    mut r := tunnel.NewRule("direct")
+    println tunnel.RuleDomainSpec(r, "domain:example.net"), tunnel.RuleDomainSpec(r, "full:www.a.test"), tunnel.RuleDomainSpec(r, "keyword:cdn"), tunnel.RuleDomainSpec(r, "regexp:^x[0-9]+\\.t$"), tunnel.RuleDomainSpec(r, "plainword"), tunnel.RuleDomainSpec(r, "regexp:(")
+    println tunnel.RuleIpSpec(r, "geoip:private"), tunnel.RuleIpSpec(r, "198.51.100.0/24"), tunnel.RuleIpSpec(r, "bad")
+    mut rt := tunnel.NewRouter("proxy")
+    tunnel.RouterAdd(rt, r)
+    check(rt, "a.example.net", 80, "direct")
+    check(rt, "www.a.test", 80, "direct")
+    check(rt, "sub.www.a.test", 80, "proxy")
+    check(rt, "mycdn.org", 80, "direct")
+    check(rt, "x77.t", 80, "direct")
+    check(rt, "198.51.100.9", 80, "direct")
+    check(rt, "198.51.101.9", 80, "proxy")
+    println "v2ray ok"
+end
+
+func main:
+    iran()
+    rules()
+    combined()
+    v2ray()
+    println "failures", failures
+    ret failures
+end

@@ -1,0 +1,185 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import net.shadowsocks
+import crypto
+import mem
+
+mut failures := 0
+
+func check(name: str, ok: bool):
+    if ok:
+        println "PASS", name
+    else:
+        println "FAIL", name
+        failures += 1
+    end
+end
+
+func pattern(n: int): void*:
+    d := mem.AllocateZeroed((n + 1) as u64)
+    bp := d as u8*
+    repeat n in i:
+        bp[i] = ((i * 7 + 3) % 251) as u8
+    end
+    ret d
+end
+
+func sha_hex(p: void*, n: int): str:
+    out := mem.AllocateZeroed(32 as u64)
+    crypto.Sha256Bytes(p, n, out)
+    r := shadowsocks.HexOf(out, 32)
+    mem.Free(out)
+    ret r
+end
+
+func fixed_salt(n: int): void*:
+    s := mem.AllocateZeroed(n as u64)
+    repeat n in i:
+        bp := s as u8*
+        bp[i] = i as u8
+    end
+    ret s
+end
+
+func key_vectors():
+    m128 := shadowsocks.LookupMethod("aes-128-gcm")
+    m256 := shadowsocks.LookupMethod("aes-256-gcm")
+    k128 := shadowsocks.PasswordKey(m128, "barfoo!")
+    k256 := shadowsocks.PasswordKey(m256, "barfoo!")
+    check("evp key 16", shadowsocks.BufToHex(k128) == "b3adc47839e047eb228870526dc8fc30")
+    check("evp key 32", shadowsocks.BufToHex(k256) == "b3adc47839e047eb228870526dc8fc30b347287ffca3045dcea06b3fdf090acb")
+    salt := fixed_salt(32)
+    sub := mem.AllocateZeroed(32 as u64)
+    shadowsocks.SessionSubkey(m256, k256.p, salt, sub)
+    check("hkdf sha1 subkey 32", shadowsocks.HexOf(sub, 32) == "6e62f41174d7879ffea269ebf7805b730f62002e2b461f4dcb2a21dfb6f6423e")
+    shadowsocks.SessionSubkey(m128, k128.p, salt, sub)
+    check("hkdf sha1 subkey 16", shadowsocks.HexOf(sub, 16) == "9cd21fb890a57fbe98653cbadd4d047c")
+    mem.Free(sub)
+    mem.Free(salt)
+    check("method chacha", shadowsocks.LookupMethod("chacha20-ietf-poly1305").key_len == 32)
+    check("method alias", shadowsocks.LookupMethod("chacha20-poly1305").name == "chacha20-ietf-poly1305")
+    check("method unknown", not shadowsocks.LookupMethod("rc4-md5").ok)
+    check("method 2022", shadowsocks.LookupMethod("2022-blake3-aes-256-gcm").v2022)
+end
+
+func frame_vectors(name: str, klen: int, w1: str, w2: str):
+    m := shadowsocks.LookupMethod(name)
+    key := shadowsocks.PasswordKey(m, "barfoo!")
+    salt := fixed_salt(klen)
+    mut e := shadowsocks.NewEncoder(m, key.p, salt)
+    mut wire := shadowsocks.NewBuf(100)
+    shadowsocks.EncodeStream(e, "hello world" as void*, 11, wire)
+    check(name + " chunk vector", shadowsocks.BufToHex(wire) == w1)
+    mut d := shadowsocks.NewDecoder(m, key.p)
+    mut pt := shadowsocks.NewBuf(100)
+    check(name + " decode", shadowsocks.DecodeAll(d, wire.p, wire.len, pt) and shadowsocks.BufToStr(pt) == "hello world")
+    check(name + " salt seen", d.have_salt and shadowsocks.HexOf(d.salt.p, klen) == shadowsocks.HexOf(salt, klen))
+    mut e2 := shadowsocks.NewEncoder(m, key.p, salt)
+    mut wire2 := shadowsocks.NewBuf(100)
+    big := pattern(20000)
+    shadowsocks.EncodeStream(e2, big, 20000, wire2)
+    check(name + " big vector", sha_hex(wire2.p, wire2.len) == w2)
+    mut d2 := shadowsocks.NewDecoder(m, key.p)
+    mut out2 := shadowsocks.NewBuf(100)
+    mut bytewise := true
+    mut i := 0
+    until i < wire2.len:
+        if not shadowsocks.DecodeAll(d2, shadowsocks.BufAt(wire2, i), 1, out2):
+            bytewise = false
+        end
+        i += 1
+    end
+    mut same := out2.len == 20000
+    if same:
+        same = sha_hex(out2.p, 20000) == sha_hex(big, 20000)
+    end
+    check(name + " bytewise decode", bytewise and same)
+    mut d3 := shadowsocks.NewDecoder(m, key.p)
+    mut out3 := shadowsocks.NewBuf(100)
+    half := wire.len - 5
+    check(name + " truncated needs more", shadowsocks.DecodeAll(d3, wire.p, half, out3) and out3.len == 0)
+    mut tampered := shadowsocks.NewBuf(100)
+    shadowsocks.BufAppend(tampered, wire.p, wire.len)
+    last := tampered.len - 3
+    bp := tampered.p as u8*
+    bp[last] = bp[last] ^ (1 as u8)
+    mut d4 := shadowsocks.NewDecoder(m, key.p)
+    mut out4 := shadowsocks.NewBuf(100)
+    check(name + " tamper payload", not shadowsocks.DecodeAll(d4, tampered.p, tampered.len, out4))
+    mut t2 := shadowsocks.NewBuf(100)
+    shadowsocks.BufAppend(t2, wire.p, wire.len)
+    tp := t2.p as u8*
+    tp[klen + 1] = tp[klen + 1] ^ (128 as u8)
+    mut d5 := shadowsocks.NewDecoder(m, key.p)
+    mut out5 := shadowsocks.NewBuf(100)
+    check(name + " tamper length", not shadowsocks.DecodeAll(d5, t2.p, t2.len, out5))
+    wrong := shadowsocks.PasswordKey(m, "other")
+    mut d6 := shadowsocks.NewDecoder(m, wrong.p)
+    mut out6 := shadowsocks.NewBuf(100)
+    check(name + " wrong key", not shadowsocks.DecodeAll(d6, wire.p, wire.len, out6))
+    mut e3 := shadowsocks.NewEncoder(m, key.p, salt)
+    mut wire3 := shadowsocks.NewBuf(100)
+    shadowsocks.EmitSalt(e3, wire3)
+    hdr := mem.AllocateZeroed(2 as u64)
+    hdr_b := hdr as u8*
+    hdr_b[0] = 0x40 as u8
+    shadowsocks.SealFrame(e3, hdr, 2, wire3)
+    mut d7 := shadowsocks.NewDecoder(m, key.p)
+    mut out7 := shadowsocks.NewBuf(100)
+    check(name + " oversize length", not shadowsocks.DecodeAll(d7, wire3.p, wire3.len, out7))
+    mem.Free(hdr)
+    mem.Free(big)
+    mem.Free(salt)
+end
+
+func filter_tests():
+    mut f := shadowsocks.NewSaltFilter(16)
+    a := fixed_salt(16)
+    b := fixed_salt(32)
+    check("filter fresh", shadowsocks.FilterCheck(f, a, 16))
+    check("filter replay", not shadowsocks.FilterCheck(f, a, 16))
+    check("filter other salt", shadowsocks.FilterCheck(f, b, 32))
+    mut all := true
+    repeat 20 in i:
+        s := fixed_salt(16)
+        bp := s as u8*
+        bp[0] = (100 + i) as u8
+        if not shadowsocks.FilterCheck(f, s, 16):
+            all = false
+        end
+        mem.Free(s)
+    end
+    check("filter many fresh", all)
+    last := fixed_salt(16)
+    lp := last as u8*
+    lp[0] = 119 as u8
+    check("filter rejects recent after rotation", not shadowsocks.FilterCheck(f, last, 16))
+    mem.Free(last)
+    shadowsocks.FilterFree(f)
+    mem.Free(a)
+    mem.Free(b)
+end
+
+func main:
+    key_vectors()
+    frame_vectors("aes-128-gcm", 16, "000102030405060708090a0b0c0d0e0f6f5f882a74d5fab07da555f2c0f6825fadffe8a53f65d1433236ed8e6726f1e88216543573cb06960b526b1be1", "0e4657146aecf803e655669bc66517d02814fe9a9969e93eef7412ebd3f26623")
+    frame_vectors("aes-256-gcm", 32, "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1ffe3c9ab4e40590a09e40d3c5f32b6a366172b6f5cc0f03c784b126233a90eb3b7921cf5c112b80a9fc0078ba04", "3fbfd47b577199b9aa0ff0bd877e8afd25fc926450aac52fd2b8e47f44bd3988")
+    frame_vectors("chacha20-ietf-poly1305", 32, "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1fa024c071c593ddcea95345ad949e51ef08fa26d76ee13abf1c55ed31a27a0033053b6cf1398be6148ef5c2ff5d", "74f5aae0c62be5711dd727d8fd6c41413ad06dcd1171374285228d132b4e22e4")
+    filter_tests()
+    println "failures", failures
+    ret failures
+end

@@ -1,0 +1,513 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "net/tunnel"
+@fa "تونل"
+package tunnel
+
+import mem
+import str
+
+@en "ADDR_IPV4"
+@fa "نشانی آی‌پی۴"
+pub const ADDR_IPV4 := 1
+
+@en "ADDR_DOMAIN"
+@fa "نشانی دامنه"
+pub const ADDR_DOMAIN := 3
+
+@en "ADDR_IPV6"
+@fa "نشانی آی‌پی۶"
+pub const ADDR_IPV6 := 4
+
+@en "Addr"
+@fa "نشانی"
+pub struct Addr:
+    @en "host"
+    @fa "میزبان"
+    pub host: str = ""
+    @en "port"
+    @fa "درگاه"
+    pub port: int = 0
+    @en "kind"
+    @fa "نوع"
+    pub kind: int = 3
+    @en "valid"
+    @fa "معتبر"
+    pub valid: bool = false
+    @en "size"
+    @fa "حجم"
+    pub size: int = 0
+
+    @en "String"
+    @fa "متن"
+    pub func String(): str:
+        if this.kind == 4:
+            ret "[" + this.host + "]:" + this.port
+        end
+        ret this.host + ":" + this.port
+    end
+end
+
+func _hexdigit(c: int): int:
+    if c >= 48 and c <= 57: ret c - 48 end
+    if c >= 97 and c <= 102: ret c - 87 end
+    if c >= 65 and c <= 70: ret c - 55 end
+    ret 0 - 1
+end
+
+func _hex4(v: int): str:
+    digits := "0123456789abcdef"
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    mut started := false
+    mut shift := 12
+    until shift >= 0:
+        d := (v >> shift) & 15
+        if d != 0 or started or shift == 0:
+            str.BufAppendChar(sb, (digits as u8*)[d] as int)
+            started = true
+        end
+        shift -= 4
+    end
+    ret str.BufStr(sb)
+end
+
+func _all_digits(s: str): bool:
+    n := s.len()
+    if n == 0 or n > 5: ret false end
+    p := s as u8*
+    repeat n in i:
+        c := p[i] as int
+        if c < 48 or c > 57: ret false end
+    end
+    ret true
+end
+
+func _put_addr_body(out &: Vector<u8>, a: Addr, atyp_v4: int, atyp_dom: int, atyp_v6: int): bool:
+    if a.kind == ADDR_IPV4:
+        v := ParseIPv4(a.host)
+        defer v.free()
+        out.push(atyp_v4 as u8)
+        repeat 4 in i:
+            out.push(v[i] as u8)
+        end
+        ret true
+    end
+    if a.kind == ADDR_IPV6:
+        v := ParseIPv6(a.host)
+        defer v.free()
+        out.push(atyp_v6 as u8)
+        repeat 16 in i:
+            out.push(v[i] as u8)
+        end
+        ret true
+    end
+    n := a.host.len()
+    if n == 0 or n > 255: ret false end
+    out.push(atyp_dom as u8)
+    out.push(n as u8)
+    hp := a.host as u8*
+    repeat n in i:
+        out.push(hp[i])
+    end
+    ret true
+end
+
+func _decode_body(p: u8*, n: int, off: int, atyp: int, v4: int, dom: int, v6: int): Addr:
+    mut a := Addr {}
+    mut o := off
+    if atyp == v4:
+        if o + 4 > n: ret a end
+        mut v := Vector {} as Vector<int>
+        defer v.free()
+        repeat 4 in i:
+            v.push(p[o + i] as int)
+        end
+        a.host = FormatIP(v)
+        a.kind = ADDR_IPV4
+        o += 4
+    else atyp == v6:
+        if o + 16 > n: ret a end
+        mut v := Vector {} as Vector<int>
+        defer v.free()
+        repeat 16 in i:
+            v.push(p[o + i] as int)
+        end
+        a.host = FormatIP(v)
+        a.kind = ADDR_IPV6
+        o += 16
+    else atyp == dom:
+        if o + 1 > n: ret a end
+        l := p[o] as int
+        if l == 0 or o + 1 + l > n: ret a end
+        o++
+        mut sb := str.NewBuilder()
+        defer str.BufFree(sb)
+        repeat l in i:
+            str.BufAppendChar(sb, p[o + i] as int)
+        end
+        a.host = str.BufStr(sb)
+        a.kind = ADDR_DOMAIN
+        o += l
+    else:
+        ret a
+    end
+    a.size = o
+    a.valid = true
+    ret a
+end
+
+@en "ParseIPv4"
+@fa "تجزیه آی‌پی۴"
+pub func ParseIPv4(s: str): Vector<int>:
+    mut out := Vector {} as Vector<int>
+    n := s.len()
+    p := s as u8*
+    mut cur := 0
+    mut digits := 0
+    repeat n in i:
+        c := p[i] as int
+        if c >= 48 and c <= 57:
+            cur = cur * 10 + (c - 48)
+            digits++
+            if digits > 3 or cur > 255:
+                out.clear()
+                ret out
+            end
+        else c == 46 and digits > 0 and out.len() < 3:
+            out.push(cur)
+            cur = 0
+            digits = 0
+        else:
+            out.clear()
+            ret out
+        end
+    end
+    if digits == 0 or out.len() != 3:
+        out.clear()
+        ret out
+    end
+    out.push(cur)
+    ret out
+end
+
+@en "ParseIPv6"
+@fa "تجزیه آی‌پی۶"
+pub func ParseIPv6(text: str): Vector<int>:
+    mut out := Vector {} as Vector<int>
+    mut s := text
+    if s.includes("."):
+        cut := str.LastIndex(s, ":")
+        if cut < 0: ret out end
+        v4 := ParseIPv4(s.substr(cut + 1, s.len() - cut - 1))
+        defer v4.free()
+        if v4.len() != 4: ret out end
+        s = s.substr(0, cut + 1) + _hex4(v4[0] * 256 + v4[1]) + ":" + _hex4(v4[2] * 256 + v4[3])
+    end
+    n := s.len()
+    p := s as u8*
+    mut head := Vector {} as Vector<int>
+    mut tail := Vector {} as Vector<int>
+    defer head.free()
+    defer tail.free()
+    mut dc := false
+    mut cur := 0
+    mut digits := 0
+    mut i := 0
+    until i < n:
+        c := p[i] as int
+        d := _hexdigit(c)
+        if d >= 0:
+            cur = cur * 16 + d
+            digits++
+            if digits > 4: ret out end
+        else c == 58:
+            mut nextc := 0 - 1
+            if i + 1 < n: nextc = p[i + 1] as int end
+            if nextc == 58:
+                if dc: ret out end
+                if digits > 0:
+                    head.push(cur)
+                end
+                dc = true
+                cur = 0
+                digits = 0
+                i++
+            else:
+                if digits == 0: ret out end
+                if dc: tail.push(cur) else:
+                    head.push(cur)
+                end
+                cur = 0
+                digits = 0
+            end
+        else:
+            ret out
+        end
+        i++
+    end
+    if digits > 0:
+        if dc: tail.push(cur) else:
+            head.push(cur)
+        end
+    end
+    total := head.len() + tail.len()
+    if dc:
+        if total > 7: ret out end
+    else:
+        if total != 8: ret out end
+    end
+    repeat head.len() in k:
+        out.push(head[k] / 256)
+        out.push(head[k] % 256)
+    end
+    if dc:
+        repeat 16 - total * 2:
+            out.push(0)
+        end
+        repeat tail.len() in k:
+            out.push(tail[k] / 256)
+            out.push(tail[k] % 256)
+        end
+    end
+    ret out
+end
+
+@en "ParseIP"
+@fa "تجزیه آی‌پی"
+pub func ParseIP(s: str): Vector<int>:
+    if s.includes(":"): ret ParseIPv6(s) end
+    ret ParseIPv4(s)
+end
+
+@en "FormatIP"
+@fa "قالب‌بندی آی‌پی"
+pub func FormatIP(b: Vector<int>): str:
+    if b.len() == 4:
+        ret b[0] + "." + b[1] + "." + b[2] + "." + b[3]
+    end
+    if b.len() != 16: ret "" end
+    mut groups := Vector {} as Vector<int>
+    defer groups.free()
+    repeat 8 in g:
+        groups.push(b[g * 2] * 256 + b[g * 2 + 1])
+    end
+    mut best := 0 - 1
+    mut best_len := 0
+    mut run := 0 - 1
+    mut run_len := 0
+    repeat 8 in g:
+        if groups[g] == 0:
+            if run < 0:
+                run = g
+                run_len = 0
+            end
+            run_len++
+            if run_len > best_len:
+                best = run
+                best_len = run_len
+            end
+        else:
+            run = 0 - 1
+            run_len = 0
+        end
+    end
+    if best_len < 2: best = 0 - 1 end
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    mut g := 0
+    until g < 8:
+        if g == best:
+            str.BufAppend(sb, "::")
+            g += best_len
+        else:
+            if g > 0 and g != best + best_len:
+                str.BufAppend(sb, ":")
+            end
+            str.BufAppend(sb, _hex4(groups[g]))
+            g++
+        end
+    end
+    ret str.BufStr(sb)
+end
+
+@en "IsIP"
+@fa "آی‌پی است"
+pub func IsIP(s: str): bool:
+    v := ParseIP(s)
+    defer v.free()
+    ret v.len() > 0
+end
+
+@en "NewAddr"
+@fa "نشانی جدید"
+pub func NewAddr(host: str, port: int): Addr:
+    mut h := host
+    if h.len() > 1 and h.char_at(0) == "[" and h.char_at(h.len() - 1) == "]":
+        h = h.substr(1, h.len() - 2)
+    end
+    mut kind := ADDR_DOMAIN
+    if h.includes(":"):
+        v6 := ParseIPv6(h)
+        defer v6.free()
+        if v6.len() == 16:
+            kind = ADDR_IPV6
+            h = FormatIP(v6)
+        end
+    else:
+        v4 := ParseIPv4(h)
+        defer v4.free()
+        if v4.len() == 4: kind = ADDR_IPV4 end
+    end
+    ok := port >= 0 and port <= 65535 and h.len() > 0 and h.len() <= 255
+    if kind == ADDR_DOMAIN and h.includes(":"): ret Addr { host = h, port = port, kind = kind, valid = false } end
+    ret Addr { host = h, port = port, kind = kind, valid = ok }
+end
+
+@en "ParseAddr"
+@fa "تجزیه نشانی"
+pub func ParseAddr(s: str): Addr:
+    n := s.len()
+    if n == 0: ret Addr {} end
+    if s.char_at(0) == "[":
+        close := s.find("]")
+        if close < 0 or close + 2 >= n or s.char_at(close + 1) != ":":
+            ret Addr {}
+        end
+        pt := s.substr(close + 2, n - close - 2)
+        if not _all_digits(pt): ret Addr {} end
+        ret NewAddr(s.substr(1, close - 1), pt.to_int())
+    end
+    cut := str.LastIndex(s, ":")
+    if cut < 0 or cut == n - 1: ret Addr {} end
+    if s.find(":") != cut: ret Addr {} end
+    pt := s.substr(cut + 1, n - cut - 1)
+    if not _all_digits(pt): ret Addr {} end
+    ret NewAddr(s.substr(0, cut), pt.to_int())
+end
+
+@en "EncodeSocks"
+@fa "کدگذاری ساکس"
+pub func EncodeSocks(a: Addr): Vector<u8>:
+    mut out := Vector {} as Vector<u8>
+    if not _put_addr_body(out, a, 1, 3, 4):
+        out.clear()
+        ret out
+    end
+    out.push((a.port / 256) as u8)
+    out.push((a.port % 256) as u8)
+    ret out
+end
+
+@en "EncodeVless"
+@fa "کدگذاری ویلس"
+pub func EncodeVless(a: Addr): Vector<u8>:
+    mut out := Vector {} as Vector<u8>
+    out.push((a.port / 256) as u8)
+    out.push((a.port % 256) as u8)
+    if not _put_addr_body(out, a, 1, 2, 3):
+        out.clear()
+    end
+    ret out
+end
+
+@en "DecodeSocks"
+@fa "کدگشایی ساکس"
+pub func DecodeSocks(ptr: void*, n: int): Addr:
+    p := ptr as u8*
+    if n < 1: ret Addr {} end
+    mut a := _decode_body(p, n, 1, p[0] as int, 1, 3, 4)
+    if not a.valid: ret a end
+    if a.size + 2 > n:
+        a.valid = false
+        a.size = 0
+        ret a
+    end
+    a.port = (p[a.size] as int) * 256 + (p[a.size + 1] as int)
+    a.size += 2
+    ret a
+end
+
+@en "DecodeVless"
+@fa "کدگشایی ویلس"
+pub func DecodeVless(ptr: void*, n: int): Addr:
+    p := ptr as u8*
+    if n < 3: ret Addr {} end
+    mut a := _decode_body(p, n, 3, p[2] as int, 1, 2, 3)
+    if not a.valid: ret a end
+    a.port = (p[0] as int) * 256 + (p[1] as int)
+    ret a
+end
+
+@en "VectorBytes"
+@fa "بایت‌های بردار"
+pub func VectorBytes(v: Vector<u8>): void*:
+    n := v.len()
+    p := mem.Allocate((n + 1) as u64)
+    repeat n in i:
+        (p as u8*)[i] = v[i]
+    end
+    ret p
+end
+
+@en "ReadSocksAddr"
+@fa "خواندن نشانی ساکس"
+pub func ReadSocksAddr(s: dyn Stream): Addr:
+    buf := mem.AllocateZeroed(300 as u64)
+    defer mem.Free(buf)
+    p := buf as u8*
+    if not ReadFull(s, buf, 1): ret Addr {} end
+    atyp := p[0] as int
+    mut need := 0
+    if atyp == 1:
+        need = 4
+    else atyp == 4:
+        need = 16
+    else atyp == 3:
+        if not ReadFull(s, (buf as i64 + 1) as void*, 1): ret Addr {} end
+        l := p[1] as int
+        if l == 0: ret Addr {} end
+        if not ReadFull(s, (buf as i64 + 2) as void*, l + 2): ret Addr {} end
+        ret DecodeSocks(buf, 2 + l + 2)
+    else:
+        ret Addr {}
+    end
+    if not ReadFull(s, (buf as i64 + 1) as void*, need + 2): ret Addr {} end
+    ret DecodeSocks(buf, 1 + need + 2)
+end
+
+@en "ReadVlessAddr"
+@fa "خواندن نشانی ویلس"
+pub func ReadVlessAddr(s: dyn Stream): Addr:
+    buf := mem.AllocateZeroed(300 as u64)
+    defer mem.Free(buf)
+    p := buf as u8*
+    if not ReadFull(s, buf, 3): ret Addr {} end
+    atyp := p[2] as int
+    if atyp == 1:
+        if not ReadFull(s, (buf as i64 + 3) as void*, 4): ret Addr {} end
+        ret DecodeVless(buf, 7)
+    else atyp == 3:
+        if not ReadFull(s, (buf as i64 + 3) as void*, 16): ret Addr {} end
+        ret DecodeVless(buf, 19)
+    else atyp == 2:
+        if not ReadFull(s, (buf as i64 + 3) as void*, 1): ret Addr {} end
+        l := p[3] as int
+        if l == 0: ret Addr {} end
+        if not ReadFull(s, (buf as i64 + 4) as void*, l): ret Addr {} end
+        ret DecodeVless(buf, 4 + l)
+    end
+    ret Addr {}
+end

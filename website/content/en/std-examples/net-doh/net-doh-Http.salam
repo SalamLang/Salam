@@ -1,0 +1,133 @@
+import compress
+import mem
+import net.dns
+import net.doh
+import net.tcp
+import str
+import sync
+
+mut http_port := 0
+mut methods := ""
+mut ready := sync.NewWaitGroup()
+
+func find_text(b: compress.ByteBuf, pattern: str): int:
+    n := pattern.len()
+    mut i := 0
+    until i + n <= b.len:
+        mut same := true
+        repeat n in j:
+            if compress.BufGet(b, i + j) != (pattern as u8*)[j] as int:
+                same = false
+                break
+            end
+        end
+        if same:
+            ret i
+        end
+        i++
+    end
+    ret 0 - 1
+end
+
+func text_at(b: compress.ByteBuf, off: int, n: int): str:
+    buf := mem.Allocate((n + 1) as u64)
+    mem.Copy(buf, ((b.data as i64) + (off as i64)) as void*, n as u64)
+    (buf as u8*)[n] = 0 as u8
+    ret buf as str
+end
+
+func from_base64url(s: str): compress.ByteBuf:
+    alphabet := "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_"
+    mut out := compress.NewByteBuf()
+    mut acc := 0
+    mut bits := 0
+    repeat s.len() in i:
+        v := alphabet.find(s.substr(i, 1))
+        if v < 0:
+            break
+        end
+        acc = (acc << 6) | v
+        bits += 6
+        if bits >= 8:
+            bits -= 8
+            compress.BufPush(out, (acc >> bits) & 255)
+            acc = acc & ((1 << bits) - 1)
+        end
+    end
+    ret out
+end
+
+func serve_one(c: tcp.Conn):
+    mut raw := compress.NewByteBuf()
+    buf := mem.Allocate(4096 as u64)
+    mut head_end := 0 - 1
+    mut need := 0
+    until true:
+        n := tcp.ReadBytes(c, buf, 4096)
+        if n <= 0:
+            break
+        end
+        compress.BufPushBytes(raw, buf, n)
+        head_end = find_text(raw, "\r\n\r\n")
+        if head_end >= 0:
+            head := str.Lower(text_at(raw, 0, head_end))
+            at := head.find("content-length:")
+            if at >= 0:
+                rest := head.substr(at + 15, head.len() - at - 15)
+                mut line_end := rest.find("\r\n")
+                if line_end < 0:
+                    line_end = rest.len()
+                end
+                need = str.Trim(rest.substr(0, line_end)).to_int()
+            end
+            if raw.len >= head_end + 4 + need:
+                break
+            end
+        end
+    end
+    mut wire := compress.NewByteBuf()
+    if text_at(raw, 0, 4) == "POST":
+        methods += "POST "
+        compress.BufPushBytes(wire, ((raw.data as i64) + (head_end as i64) + 4) as void*, need)
+    else:
+        methods += "GET "
+        line := text_at(raw, 0, find_text(raw, "\r\n"))
+        rest := line.substr(line.find("dns=") + 4, line.len())
+        wire = from_base64url(rest.substr(0, rest.find(" ")))
+    end
+    question := dns.Decode(wire.data, wire.len)
+    asked := question.questions.items.get(0)
+    mut records := Vector {} as Vector<dns.Record>
+    records.push(dns.Record { name = asked.name, rtype = dns.TypeA, rclass = 1, ttl = 300, data = "192.0.2.80" })
+    answer := doh.EncodeResponse(question.id, asked.name, asked.qtype, 0, records)
+    head := "HTTP/1.1 200 OK\r\nContent-Type: application/dns-message\r\nConnection: close\r\nContent-Length: " + answer.len + "\r\n\r\n"
+    tcp.Write(c, head)
+    tcp.WriteBytes(c, answer.data, answer.len)
+    tcp.Close(c)
+end
+
+func http_server():
+    srv := tcp.Bind(0)
+    http_port = tcp.Port(srv)
+    sync.Done(ready)
+    until true:
+        serve_one(tcp.Accept(srv))
+    end
+end
+
+func main:
+    sync.Add(ready, 1 as i64)
+    _t := spawn(http_server)
+    sync.Wait(ready)
+    base := "http://127.0.0.1:" + http_port + "/dns-query"
+
+    post := doh.NewServer("post", doh.KindDoH, base)
+    println post.use_tls, post.port == http_port, post.path
+    r := doh.Query(post, "web.test", dns.TypeA, 2000)
+    println r.ok, r.msg.answers.items.get(0).data
+
+    get := doh.NewServer("get", doh.KindDoHGet, base)
+    g := doh.Query(get, "web.test", dns.TypeA, 2000)
+    println g.ok, g.msg.answers.items.get(0).data
+    println methods
+end

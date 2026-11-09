@@ -1,0 +1,37 @@
+import net.tcp
+import net.trojan
+import sync
+
+mut port := 0
+mut ready := sync.NewWaitGroup()
+
+mut config := trojan.NewServerConfig("", "")
+
+func serve_one():
+    listener := tcp.Bind(0)
+    port = tcp.Port(listener)
+    sync.Done(ready)
+    c := tcp.Accept(listener)
+    mut link := trojan.NewTCPLink(c)
+    mut session := trojan.Handshake(link, config)
+    println "server saw a valid client:", session.ok
+    println session.req.host, session.req.port, session.req.cmd == trojan.CmdConnect
+    println "bytes read:", session.seen.len, "payload after the request:", session.extra.len
+    trojan.FreeSession(session)
+    trojan.LinkClose(link)
+end
+
+func main:
+    trojan.AddPassword(config, "secret")
+    sync.Add(ready, 1 as i64)
+    t := spawn(serve_one)
+    sync.Wait(ready)
+
+    conn := tcp.Dial("127.0.0.1", port)
+    request := trojan.EncodeRequest("secret", trojan.CmdConnect, "example.com", 443)
+    mut link := trojan.NewTCPLink(conn)
+    trojan.LinkWriteBuf(link, request)
+    println trojan.LinkOk(link), trojan.LinkFd(link) > 0
+    join(t)
+    trojan.LinkClose(link)
+end

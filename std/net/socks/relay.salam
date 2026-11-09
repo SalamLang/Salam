@@ -1,0 +1,170 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package socks
+
+import mem
+import str
+import net.tcp
+import net.internal.rawsock
+import net.tunnel
+
+if SALAM_OS_WINDOWS:
+    extern:
+        func _beginthread(start: void *, stack: u32, arg: void *): usize
+    end
+else:
+    extern:
+        func pthread_create(thread: void *, attr: void *, start: void *, arg: void *): int
+        func pthread_detach(thread: u64): int
+    end
+end
+
+struct _Pump:
+    pub src: dyn tunnel.Stream = tunnel.TcpStream {}
+    pub dst: dyn tunnel.Stream = tunnel.TcpStream {}
+    pub total: i64 = 0
+end
+
+@en "Outbound"
+@fa "خروجی"
+pub struct Outbound:
+    @en "ok"
+    @fa "موفق"
+    pub ok: bool = false
+    @en "code"
+    @fa "کد"
+    pub code: int = 1
+    @en "err"
+    @fa "خطا"
+    pub err: str = ""
+    @en "stream"
+    @fa "جریان"
+    pub stream: dyn tunnel.Stream = tunnel.TcpStream {}
+    @en "bound"
+    @fa "نشانی محلی"
+    pub bound: Address = Address {}
+end
+
+@en "RelayStats"
+@fa "آمار رله"
+pub struct RelayStats:
+    @en "a_to_b"
+    @fa "از اول به دوم"
+    pub a_to_b: i64 = 0
+    @en "b_to_a"
+    @fa "از دوم به اول"
+    pub b_to_a: i64 = 0
+end
+
+if SALAM_OS_WINDOWS:
+    export:
+        func salam_vpn_go(fn: i64, arg: i64):
+            _h := _beginthread(fn as void *, 0 as u32, arg as void *)
+        end
+    end
+else:
+    export:
+        func salam_vpn_go(fn: i64, arg: i64):
+            t := mem.Allocate(8 as u64)
+            if pthread_create(t, null, fn as void *, arg as void *) == 0:
+                tp := t as i64 *
+                pthread_detach(tp[0] as u64)
+            end
+            mem.Free(t)
+        end
+    end
+end
+
+func _pump_run(p: _Pump*, cell: i64*):
+    buf := mem.Allocate(16384 as u64)
+    defer mem.Free(buf)
+    mut total := 0 as i64
+    mut live := true
+    until live:
+        n := p[0].src.ReadBytes(buf, 16384)
+        if n <= 0:
+            live = false
+        else p[0].dst.WriteBytes(buf, n) != n:
+            live = false
+        else:
+            total += n as i64
+        end
+    end
+    p[0].dst.Shutdown()
+    p[0].src.Shutdown()
+    cell[0] = total
+end
+
+func _pump_thread(arg: void*):
+    p := arg as _Pump*
+    _pump_run(p, ((arg as i64) + (sizeof(_Pump) as i64)) as i64*)
+end
+
+@en "Go"
+@fa "برو"
+pub func Go(fn: i64, arg: void*):
+    salam_vpn_go(fn, arg as i64)
+end
+
+@en "Relay"
+@fa "رله"
+pub func Relay(a: dyn tunnel.Stream, b: dyn tunnel.Stream, idle_ms: int): RelayStats:
+    if idle_ms > 0:
+        a.SetDeadline(idle_ms)
+        b.SetDeadline(idle_ms)
+    else:
+        a.SetDeadline(0)
+        b.SetDeadline(0)
+    end
+    sz := sizeof(_Pump) as i64
+    block := mem.AllocateZeroed((sz + 8 as i64) as u64)
+    pa := block as _Pump*
+    pa[0] = _Pump { src = a, dst = b }
+    cell_a := ((block as i64) + sz) as i64*
+    t := spawn(_pump_thread, block)
+    block2 := mem.AllocateZeroed((sz + 8 as i64) as u64)
+    pb := block2 as _Pump*
+    pb[0] = _Pump { src = b, dst = a }
+    cell_b := ((block2 as i64) + sz) as i64*
+    _pump_run(pb, cell_b)
+    join(t)
+    st := RelayStats { a_to_b = cell_a[0], b_to_a = cell_b[0] }
+    mem.Free(block)
+    mem.Free(block2)
+    a.Close()
+    b.Close()
+    ret st
+end
+
+@en "DirectConnect"
+@fa "اتصال مستقیم"
+pub func DirectConnect(host: str, port: int, timeout_ms: int): Outbound:
+    mut o := Outbound {}
+    c := tcp.DialTimeout(host, port, timeout_ms)
+    if not tcp.ConnOk(c):
+        o.ok = false
+        o.err = "cannot connect to " + host + ":" + str.FromInt(port as i64)
+        if rawsock.Resolve(host).len() == 0:
+            o.code = RepHostUnreachable
+        else:
+            o.code = RepConnRefused
+        end
+        ret o
+    end
+    o.ok = true
+    o.code = RepSucceeded
+    o.stream = tunnel.TcpStream { conn = c }
+    ret o
+end

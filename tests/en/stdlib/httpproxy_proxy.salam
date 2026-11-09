@@ -1,0 +1,385 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import net.httpproxy
+import net.socks
+import net.tcp
+import str
+import sync
+
+mut origin_conns := 0
+
+func send_text(c: tcp.Conn, text: str):
+    tcp.Write(c, text)
+end
+
+func fill(c: tcp.Conn, buf &: str, marker: str): bool:
+    until buf.find(marker) < 0:
+        d := tcp.Read(c, 4096)
+        if d.len() == 0: ret false end
+        buf += d
+    end
+    ret true
+end
+
+func need(c: tcp.Conn, buf &: str, n: int): bool:
+    until buf.len() < n:
+        d := tcp.Read(c, 4096)
+        if d.len() == 0: ret false end
+        buf += d
+    end
+    ret true
+end
+
+func respond(c: tcp.Conn, status: str, extra: str, body: str):
+    send_text(c, "HTTP/1.1 " + status + "\r\n" + extra + "Content-Length: " + body.len() + "\r\n\r\n" + body)
+end
+
+func origin_conn(arg: i64):
+    c := tcp.ConnFromFd(arg)
+    mut buf := ""
+    until true:
+        if not fill(c, buf, "\r\n\r\n"): break end
+        idx := buf.find("\r\n\r\n")
+        head := buf.substr(0, idx + 4)
+        buf = buf.substr(idx + 4, buf.len() - idx - 4)
+        h := httpproxy.ParseRequestHead(head)
+        mut body := ""
+        cl := httpproxy.HeaderGet(h, "content-length")
+        if cl.len() > 0:
+            n := cl.to_int()
+            if not need(c, buf, n): break end
+            body = buf.substr(0, n)
+            buf = buf.substr(n, buf.len() - n)
+        else httpproxy.HeaderHasToken(h, "transfer-encoding", "chunked"):
+            until true:
+                if not fill(c, buf, "\r\n"): break end
+                nl := buf.find("\r\n")
+                size := buf.substr(0, nl).to_int()
+                buf = buf.substr(nl + 2, buf.len() - nl - 2)
+                if size == 0:
+                    if not need(c, buf, 2): break end
+                    buf = buf.substr(2, buf.len() - 2)
+                    break
+                end
+                if not need(c, buf, size + 2): break end
+                body += buf.substr(0, size)
+                buf = buf.substr(size + 2, buf.len() - size - 2)
+            end
+        end
+        path := h.target
+        if path == "/hello":
+            respond(c, "200 OK", "Content-Type: text/plain\r\n", "hello")
+        else path == "/echo":
+            respond(c, "200 OK", "", "echo:" + body + " via " + h.method)
+        else path == "/chunked":
+            send_text(c, "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nwiki\r\n5\r\npedia\r\n0\r\n\r\n")
+        else path == "/close":
+            send_text(c, "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nuntil close body")
+            break
+        else path == "/headers":
+            mut seen := ""
+            repeat h.names.len() in i:
+                seen += h.names.get(i).lower() + ","
+            end
+            respond(c, "200 OK", "Connection: keep-alive\r\nKeep-Alive: timeout=5\r\nX-Origin: yes\r\n", "host=" + httpproxy.HeaderGet(h, "host") + " names=" + seen)
+        else path == "/head":
+            send_text(c, "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\n")
+        else path == "/missing":
+            respond(c, "404 Not Found", "", "nope")
+        else path == "/nocontent":
+            send_text(c, "HTTP/1.1 204 No Content\r\n\r\n")
+        else path == "/continue":
+            respond(c, "200 OK", "", "got " + body)
+        else path == "/upgrade":
+            send_text(c, "HTTP/1.1 101 Switching Protocols\r\nUpgrade: test\r\nConnection: Upgrade\r\n\r\n")
+            until true:
+                d := tcp.Read(c, 1024)
+                if d.len() == 0: break end
+                tcp.Write(c, "up:" + d)
+            end
+            break
+        else path == "/garbage":
+            send_text(c, "this is not http\r\n\r\n")
+            break
+        else path == "/truncate":
+            send_text(c, "HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nshort")
+            break
+        else:
+            respond(c, "200 OK", "", "path " + path)
+        end
+        if httpproxy.HeaderHasToken(h, "connection", "close"): break end
+    end
+    tcp.Close(c)
+end
+
+func origin_accept(arg: i64):
+    srv := tcp.Server { fd = arg }
+    until true:
+        c := tcp.Accept(srv)
+        if not tcp.ConnOk(c): break end
+        origin_conns++
+        socks.Go(origin_conn, c.fd as void*)
+    end
+end
+
+func echo_conn(arg: i64):
+    c := tcp.ConnFromFd(arg)
+    until true:
+        d := tcp.Read(c, 4096)
+        if d.len() == 0: break end
+        tcp.Write(c, d)
+    end
+    tcp.Close(c)
+end
+
+func echo_accept(arg: i64):
+    srv := tcp.Server { fd = arg }
+    until true:
+        c := tcp.Accept(srv)
+        if not tcp.ConnOk(c): break end
+        socks.Go(echo_conn, c.fd as void*)
+    end
+end
+
+func raw(port: int, request: str, wait_ms: int): str:
+    c := tcp.Dial("127.0.0.1", port)
+    tcp.SetReadDeadline(c, wait_ms)
+    tcp.Write(c, request)
+    mut out := ""
+    until true:
+        d := tcp.Read(c, 4096)
+        if d.len() == 0: break end
+        out += d
+    end
+    tcp.Close(c)
+    ret out
+end
+
+func status_of(text: str): str:
+    nl := text.find("\r\n")
+    if nl < 0: ret "(none)" end
+    ret text.substr(0, nl)
+end
+
+func show(label: str, r: httpproxy.Response):
+    println label + ": ok=" + r.ok + " status=" + r.status + " len=" + r.length + " body=[" + r.body + "] " + r.err
+end
+
+func main:
+    os := tcp.Bind(0)
+    oport := tcp.Port(os)
+    socks.Go(origin_accept, os.fd as void*)
+    es := tcp.Bind(0)
+    eport := tcp.Port(es)
+    socks.Go(echo_accept, es.fd as void*)
+    ob := "http://127.0.0.1:" + oport
+
+    mut cfg := httpproxy.NewServerConfig(0)
+    cfg.handshake_timeout_ms = 800
+    cfg.idle_timeout_ms = 3000
+    sv := httpproxy.Start(cfg)
+    println "proxy up: " + sv.ok
+    cl := httpproxy.NewClient("127.0.0.1", sv.port)
+
+    show("get hello", httpproxy.Get(cl, ob + "/hello"))
+    show("get chunked", httpproxy.Get(cl, ob + "/chunked"))
+    show("get until close", httpproxy.Get(cl, ob + "/close"))
+    show("get 404", httpproxy.Get(cl, ob + "/missing"))
+    show("get 204", httpproxy.Get(cl, ob + "/nocontent"))
+    show("get other path", httpproxy.Get(cl, ob + "/a/b?c=d"))
+    show("post echo", httpproxy.Post(cl, ob + "/echo", "text/plain", "payload"))
+    show("head", httpproxy.Request(cl, "HEAD", ob + "/head", "", ""))
+    show("garbage upstream", httpproxy.Get(cl, ob + "/garbage"))
+    show("truncated upstream", httpproxy.Get(cl, ob + "/truncate"))
+    show("localhost name", httpproxy.Get(cl, "http://localhost:" + oport + "/hello"))
+    show("https url refused", httpproxy.Get(cl, "https://localhost/"))
+    free := tcp.FreePort()
+    show("upstream refused", httpproxy.Get(cl, "http://127.0.0.1:" + free + "/"))
+
+    hr := httpproxy.Get(cl, ob + "/headers")
+    println "x-origin kept: " + httpproxy.HeaderGet(hr.head, "x-origin") + " keep-alive stripped: [" + httpproxy.HeaderGet(hr.head, "keep-alive") + "]"
+    hr2 := httpproxy.Request(cl, "GET", ob + "/headers", "Connection: keep-alive, X-Drop\r\nX-Drop: 1\r\nKeep-Alive: 5\r\nTE: trailers\r\nProxy-Connection: keep-alive\r\nX-Keep: 1\r\nAccept: */*\r\n", "")
+    println str.Replace(hr2.body, ":" + oport, ":PORT")
+
+    f1 := raw(sv.port, "GET " + ob + "/hello HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n", 1500)
+    println status_of(f1) + " | closes=" + f1.includes("Connection: close") + " | body=" + f1.substr(f1.find("\r\n\r\n") + 4, 5)
+
+    before := origin_conns
+    ka := tcp.Dial("127.0.0.1", sv.port)
+    tcp.SetReadDeadline(ka, 1500)
+    mut got := ""
+    repeat 3:
+        tcp.Write(ka, "GET " + ob + "/hello HTTP/1.1\r\nHost: x\r\n\r\n")
+        mut one := ""
+        until not (one.includes("\r\n\r\n") and one.ends_with("hello")):
+            d := tcp.Read(ka, 4096)
+            if d.len() == 0: break end
+            one += d
+        end
+        got += status_of(one) + ";"
+    end
+    tcp.Close(ka)
+    println "keep-alive: " + got + " new origin connections: " + (origin_conns - before)
+
+    pipe := raw(sv.port, "GET " + ob + "/hello HTTP/1.1\r\nHost: x\r\n\r\nGET " + ob + "/missing HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n", 1500)
+    println "pipelined: " + pipe.find("200 OK") + " " + (pipe.find("404 Not Found") > pipe.find("200 OK")) + " hello=" + pipe.includes("hello") + " nope=" + pipe.includes("nope")
+
+    ch := raw(sv.port, "POST " + ob + "/echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n", 1500)
+    println "chunked request: " + status_of(ch) + " " + ch.includes("echo:hello world via POST")
+
+    ex := tcp.Dial("127.0.0.1", sv.port)
+    tcp.SetReadDeadline(ex, 1500)
+    tcp.Write(ex, "POST " + ob + "/continue HTTP/1.1\r\nHost: x\r\nExpect: 100-continue\r\nContent-Length: 4\r\nConnection: close\r\n\r\n")
+    println "expect: " + str.Replace(tcp.Read(ex, 100), "\r\n", "|")
+    tcp.Write(ex, "data")
+    mut exr := ""
+    until true:
+        d := tcp.Read(ex, 4096)
+        if d.len() == 0: break end
+        exr += d
+    end
+    println status_of(exr) + " " + exr.includes("got data")
+    tcp.Close(ex)
+
+    up := tcp.Dial("127.0.0.1", sv.port)
+    tcp.SetReadDeadline(up, 1500)
+    tcp.Write(up, "GET " + ob + "/upgrade HTTP/1.1\r\nHost: x\r\nConnection: Upgrade\r\nUpgrade: test\r\n\r\n")
+    uh := tcp.Read(up, 4096)
+    println "upgrade: " + status_of(uh) + " " + uh.includes("Upgrade: test")
+    tcp.Write(up, "ping")
+    println tcp.Read(up, 100)
+    tcp.Close(up)
+
+    cr := httpproxy.Connect(cl, "127.0.0.1", eport)
+    println "connect echo: ok=" + cr.ok + " status=" + cr.status
+    cr.stream.Write("tunnelled bytes")
+    println cr.stream.Read(100)
+    cr.stream.Close()
+    cr2 := httpproxy.Connect(cl, "localhost", eport)
+    cr2.stream.Write("by name")
+    println cr2.ok, cr2.stream.Read(100)
+    cr2.stream.Close()
+    dc := httpproxy.DialConn(cl, "127.0.0.1", eport)
+    tcp.Write(dc, "dialconn")
+    println tcp.Read(dc, 100)
+    tcp.Close(dc)
+    bad := httpproxy.Connect(cl, "127.0.0.1", free)
+    println "connect refused: ok=" + bad.ok + " status=" + bad.status + " " + bad.err
+
+    cx := tcp.Dial("127.0.0.1", sv.port)
+    tcp.SetReadDeadline(cx, 1500)
+    tcp.Write(cx, "CONNECT 127.0.0.1:" + eport + " HTTP/1.1\r\nHost: x\r\n\r\nearly bytes")
+    mut cxr := ""
+    until not cxr.includes("early bytes"):
+        d := tcp.Read(cx, 4096)
+        if d.len() == 0: break end
+        cxr += d
+    end
+    println "connect with early data: " + status_of(cxr) + " " + cxr.includes("early bytes")
+    tcp.Close(cx)
+
+    println "garbage: " + status_of(raw(sv.port, "GARBAGE\r\n\r\n", 1500))
+    println "bad version: " + status_of(raw(sv.port, "GET http://x/ HTTP/3.0\r\n\r\n", 1500))
+    println "relative uri: " + status_of(raw(sv.port, "GET /hello HTTP/1.1\r\nHost: x\r\n\r\n", 1500))
+    println "ftp uri: " + status_of(raw(sv.port, "GET ftp://x/ HTTP/1.1\r\nHost: x\r\n\r\n", 1500))
+    println "connect no port: " + status_of(raw(sv.port, "CONNECT example.com HTTP/1.1\r\n\r\n", 1500))
+    println "connect bad port: " + status_of(raw(sv.port, "CONNECT example.com:99999 HTTP/1.1\r\n\r\n", 1500))
+    println "cl and te: " + status_of(raw(sv.port, "POST " + ob + "/echo HTTP/1.1\r\nHost: x\r\nContent-Length: 4\r\nTransfer-Encoding: chunked\r\n\r\n", 1500))
+    println "two different cl: " + status_of(raw(sv.port, "POST " + ob + "/echo HTTP/1.1\r\nHost: x\r\nContent-Length: 4\r\nContent-Length: 5\r\n\r\n", 1500))
+    println "bad cl: " + status_of(raw(sv.port, "POST " + ob + "/echo HTTP/1.1\r\nHost: x\r\nContent-Length: -1\r\n\r\n", 1500))
+    println "gzip te: " + status_of(raw(sv.port, "POST " + ob + "/echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: gzip\r\n\r\n", 1500))
+    println "huge head: " + status_of(raw(sv.port, "GET " + ob + "/ HTTP/1.1\r\nX-Big: " + "a".repeat(70000) + "\r\n\r\n", 1500))
+    println "head without end then close: " + raw(sv.port, "GET " + ob + "/ HTTP/1.1\r\nHost", 300).len()
+    println "idle client closed: " + raw(sv.port, "", 2500).len()
+    println "chunk garbage: " + status_of(raw(sv.port, "POST " + ob + "/echo HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\nZZ\r\n", 1500))
+
+    show("still serving", httpproxy.Get(cl, ob + "/hello"))
+    httpproxy.Stop(sv)
+
+    mut acfg := httpproxy.NewServerConfig(0)
+    httpproxy.AddUser(acfg, "alice", "s3cret")
+    asv := httpproxy.Start(acfg)
+    na := raw(asv.port, "GET " + ob + "/hello HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n", 1500)
+    println "no auth: " + status_of(na) + " challenge=" + na.includes("Proxy-Authenticate: Basic realm=\"Salam proxy\"")
+    wa := raw(asv.port, "GET " + ob + "/hello HTTP/1.1\r\nHost: x\r\nProxy-Authorization: " + httpproxy.BasicHeader("alice", "wrong") + "\r\nConnection: close\r\n\r\n", 1500)
+    println "wrong password: " + status_of(wa)
+    ua := raw(asv.port, "GET " + ob + "/hello HTTP/1.1\r\nHost: x\r\nProxy-Authorization: " + httpproxy.BasicHeader("eve", "s3cret") + "\r\nConnection: close\r\n\r\n", 1500)
+    println "wrong user: " + status_of(ua)
+    ba := raw(asv.port, "GET " + ob + "/hello HTTP/1.1\r\nHost: x\r\nProxy-Authorization: Basic !!!\r\nConnection: close\r\n\r\n", 1500)
+    println "bad credentials syntax: " + status_of(ba)
+    show("auth good get", httpproxy.Get(httpproxy.NewClientAuth("127.0.0.1", asv.port, "alice", "s3cret"), ob + "/hello"))
+    show("auth missing get", httpproxy.Get(httpproxy.NewClient("127.0.0.1", asv.port), ob + "/hello"))
+    gc := httpproxy.Connect(httpproxy.NewClientAuth("127.0.0.1", asv.port, "alice", "s3cret"), "127.0.0.1", eport)
+    println "auth good connect: " + gc.ok + " " + gc.status
+    gc.stream.Close()
+    mc := httpproxy.Connect(httpproxy.NewClient("127.0.0.1", asv.port), "127.0.0.1", eport)
+    println "auth missing connect: " + mc.ok + " " + mc.status + " " + mc.err
+    retry := tcp.Dial("127.0.0.1", asv.port)
+    tcp.SetReadDeadline(retry, 1500)
+    tcp.Write(retry, "GET " + ob + "/hello HTTP/1.1\r\nHost: x\r\n\r\n")
+    r1 := tcp.Read(retry, 4096)
+    tcp.Write(retry, "GET " + ob + "/hello HTTP/1.1\r\nHost: x\r\nProxy-Authorization: " + httpproxy.BasicHeader("alice", "s3cret") + "\r\n\r\n")
+    r2 := tcp.Read(retry, 4096)
+    println "challenge then retry on one connection: " + status_of(r1) + " / " + status_of(r2)
+    tcp.Close(retry)
+    httpproxy.Stop(asv)
+
+    mut ccfg := httpproxy.NewServerConfig(0)
+    httpproxy.SetAuth(ccfg, (u: str, p: str): ret u == "bob" and p == "pw" end)
+    csv := httpproxy.Start(ccfg)
+    show("callback auth", httpproxy.Get(httpproxy.NewClientAuth("127.0.0.1", csv.port, "bob", "pw"), ob + "/hello"))
+    show("callback auth bad", httpproxy.Get(httpproxy.NewClientAuth("127.0.0.1", csv.port, "bob", "no"), ob + "/hello"))
+    httpproxy.Stop(csv)
+
+    mut pcfg := httpproxy.NewServerConfig(0)
+    pcfg.allow = (m: str, h: str, p: int): ret not (h == "blocked.example" or p == 25 or (m == "DELETE")) end
+    psv := httpproxy.Start(pcfg)
+    pc := httpproxy.NewClient("127.0.0.1", psv.port)
+    show("acl allows", httpproxy.Get(pc, ob + "/hello"))
+    show("acl blocks host", httpproxy.Get(pc, "http://blocked.example/x"))
+    show("acl blocks port", httpproxy.Get(pc, "http://127.0.0.1:25/"))
+    show("acl blocks method", httpproxy.Request(pc, "DELETE", ob + "/hello", "", ""))
+    println "acl blocks connect: " + httpproxy.Connect(pc, "blocked.example", 443).status
+    println "acl allows connect: " + httpproxy.Connect(pc, "127.0.0.1", eport).status
+    httpproxy.Stop(psv)
+
+    mut ocfg := httpproxy.NewServerConfig(0)
+    ocfg.allow_connect = false
+    osv := httpproxy.Start(ocfg)
+    println "connect disabled: " + httpproxy.Connect(httpproxy.NewClient("127.0.0.1", osv.port), "127.0.0.1", eport).status
+    show("plain still on", httpproxy.Get(httpproxy.NewClient("127.0.0.1", osv.port), ob + "/hello"))
+    httpproxy.Stop(osv)
+
+    mut dcfg := httpproxy.NewServerConfig(0)
+    dcfg.allow_plain = false
+    dsv := httpproxy.Start(dcfg)
+    show("plain disabled", httpproxy.Get(httpproxy.NewClient("127.0.0.1", dsv.port), ob + "/hello"))
+    println "connect still on: " + httpproxy.Connect(httpproxy.NewClient("127.0.0.1", dsv.port), "127.0.0.1", eport).status
+    httpproxy.Stop(dsv)
+
+    mut rcfg := httpproxy.NewServerConfig(0)
+    httpproxy.SetConnector(
+        rcfg, (h: str, _p: int): if h == "origin.internal": ret socks.DirectConnect("127.0.0.1", oport, 2000) end ret socks.Outbound { ok = false, code = socks.RepNetUnreachable, err = "no route" } end
+    )
+    rsv := httpproxy.Start(rcfg)
+    rc := httpproxy.NewClient("127.0.0.1", rsv.port)
+    show("routed by callback", httpproxy.Get(rc, "http://origin.internal/hello"))
+    show("callback refuses", httpproxy.Get(rc, "http://elsewhere.internal/hello"))
+    println "callback refuses connect: " + httpproxy.Connect(rc, "elsewhere.internal", 443).status
+    httpproxy.Stop(rsv)
+
+    println "stopped: " + tcp.ConnOk(tcp.Dial("127.0.0.1", sv.port))
+    sync.SleepMs(10)
+end

@@ -1,0 +1,317 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package httpproxy
+
+import str
+import net.tcp
+import net.tunnel
+import tls
+
+@en "Client"
+@fa "کلاینت"
+pub struct Client:
+    @en "host"
+    @fa "میزبان"
+    pub host: str = ""
+    @en "port"
+    @fa "درگاه"
+    pub port: int = 0
+    @en "username"
+    @fa "نام کاربری"
+    pub username: str = ""
+    @en "password"
+    @fa "گذرواژه"
+    pub password: str = ""
+    @en "tls"
+    @fa "امن"
+    pub tls: bool = false
+    @en "server_name"
+    @fa "نام سرور"
+    pub server_name: str = ""
+    @en "insecure"
+    @fa "بدون اعتبارسنجی"
+    pub insecure: bool = false
+    @en "timeout_ms"
+    @fa "مهلت میلی‌ثانیه"
+    pub timeout_ms: int = 15000
+    @en "max_body"
+    @fa "بیشترین اندازه بدنه"
+    pub max_body: int = 16777216
+end
+
+@en "HandshakeResult"
+@fa "نتیجه دست‌دهی"
+pub struct HandshakeResult:
+    @en "ok"
+    @fa "موفق"
+    pub ok: bool = false
+    @en "status"
+    @fa "وضعیت"
+    pub status: int = 0
+    @en "err"
+    @fa "خطا"
+    pub err: str = ""
+end
+
+@en "ConnectResult"
+@fa "نتیجه اتصال"
+pub struct ConnectResult:
+    @en "ok"
+    @fa "موفق"
+    pub ok: bool = false
+    @en "status"
+    @fa "وضعیت"
+    pub status: int = 0
+    @en "err"
+    @fa "خطا"
+    pub err: str = ""
+    @en "stream"
+    @fa "جریان"
+    pub stream: dyn tunnel.Stream = tunnel.TcpStream {}
+end
+
+@en "Response"
+@fa "پاسخ"
+pub struct Response:
+    @en "ok"
+    @fa "موفق"
+    pub ok: bool = false
+    @en "err"
+    @fa "خطا"
+    pub err: str = ""
+    @en "status"
+    @fa "وضعیت"
+    pub status: int = 0
+    @en "head"
+    @fa "سرآیند"
+    pub head: Head = Head {}
+    @en "body"
+    @fa "بدنه"
+    pub body: str = ""
+    @en "length"
+    @fa "طول بدنه"
+    pub length: int = 0
+end
+
+func _open(c: Client): ConnectResult:
+    mut r := ConnectResult {}
+    if c.tls:
+        mut cfg := tls.NewConfig(c.server_name)
+        if c.server_name.len() == 0: cfg = tls.NewConfig(c.host) end
+        cfg.insecure_skip_verify = c.insecure
+        t := tls.Dial(c.host, c.port, cfg)
+        if not tls.ConnOk(t):
+            r.err = "tls dial to proxy failed: " + tls.ConnError(t)
+            ret r
+        end
+        r.stream = tunnel.TlsStream { conn = t }
+        r.ok = true
+        ret r
+    end
+    conn := tcp.DialTimeout(c.host, c.port, c.timeout_ms)
+    if not tcp.ConnOk(conn):
+        r.err = "cannot reach proxy " + c.host + ":" + str.FromInt(c.port as i64)
+        ret r
+    end
+    tcp.SetNoDelay(conn, true)
+    r.stream = tunnel.TcpStream { conn = conn }
+    r.ok = true
+    ret r
+end
+
+func _auth_line(c: Client): str:
+    if c.username.len() == 0: ret "" end
+    ret "Proxy-Authorization: " + BasicHeader(c.username, c.password) + "\r\n"
+end
+
+func _authority(host: str, port: int): str:
+    mut h := host
+    if h.find(":") >= 0: h = "[" + h + "]" end
+    ret h + ":" + str.FromInt(port as i64)
+end
+
+func _rd_unchunk(r &: _Rd, dst: dyn tunnel.Stream): bool:
+    until true:
+        mut line := ""
+        if not _rd_line(r, 1024, line): ret false end
+        size := _chunk_size(line)
+        if size < 0: ret false end
+        if size == 0:
+            until true:
+                mut tl := ""
+                if not _rd_line(r, 8192, tl): ret false end
+                if tl.len() == 0: ret true end
+            end
+        end
+        if not _rd_copy(r, dst, size): ret false end
+        mut crlf := ""
+        if not _rd_line(r, 8, crlf): ret false end
+        if crlf.len() != 0: ret false end
+    end
+end
+
+@en "NewClient"
+@fa "کلاینت جدید"
+pub func NewClient(host: str, port: int): Client:
+    ret Client { host = host, port = port }
+end
+
+@en "NewClientAuth"
+@fa "کلاینت جدید با احراز هویت"
+pub func NewClientAuth(host: str, port: int, username: str, password: str): Client:
+    ret Client { host = host, port = port, username = username, password = password }
+end
+
+@en "ClientHandshake"
+@fa "دست‌دهی کلاینت"
+pub func ClientHandshake(s: dyn tunnel.Stream, c: Client, host: str, port: int): HandshakeResult:
+    mut r := HandshakeResult {}
+    auth := _authority(host, port)
+    req := "CONNECT " + auth + " HTTP/1.1\r\nHost: " + auth + "\r\n" + _auth_line(c) + "\r\n"
+    s.SetDeadline(c.timeout_ms)
+    if not tunnel.WriteAll(s, req):
+        r.err = "request write failed"
+        ret r
+    end
+    text := tunnel.ReadUntil(s, "\r\n\r\n", 16384)
+    s.SetDeadline(0)
+    if not text.ends_with("\r\n\r\n"):
+        r.err = "response head truncated"
+        ret r
+    end
+    rh := ParseResponseHead(text)
+    if not rh.ok:
+        r.err = "bad response: " + rh.err
+        ret r
+    end
+    r.status = rh.status
+    if rh.status < 200 or rh.status > 299:
+        r.err = "proxy answered " + str.FromInt(rh.status as i64) + " " + rh.reason
+        ret r
+    end
+    r.ok = true
+    ret r
+end
+
+@en "Connect"
+@fa "اتصال"
+pub func Connect(c: Client, host: str, port: int): ConnectResult:
+    mut r := _open(c)
+    if not r.ok: ret r end
+    h := ClientHandshake(r.stream, c, host, port)
+    if not h.ok:
+        r.stream.Close()
+        r.ok = false
+        r.status = h.status
+        r.err = h.err
+        ret r
+    end
+    r.status = h.status
+    ret r
+end
+
+@en "DialConn"
+@fa "شماره‌گیری اتصال"
+pub func DialConn(c: Client, host: str, port: int): tcp.Conn:
+    conn := tcp.DialTimeout(c.host, c.port, c.timeout_ms)
+    if not tcp.ConnOk(conn): ret conn end
+    st := tunnel.TcpStream { conn = conn }
+    h := ClientHandshake(st, c, host, port)
+    if not h.ok:
+        tcp.Close(conn)
+        ret tcp.Conn {}
+    end
+    ret conn
+end
+
+@en "Request"
+@fa "درخواست"
+pub func Request(c: Client, method: str, url: str, headers: str, body: str): Response:
+    mut resp := Response {}
+    u := ParseURL(url)
+    if not u.ok or u.scheme != "http":
+        resp.err = "only absolute http URLs can go through the proxy this way"
+        ret resp
+    end
+    mut o := _open(c)
+    if not o.ok:
+        resp.err = o.err
+        ret resp
+    end
+    mut req := method + " " + url + " HTTP/1.1\r\nHost: " + _host_header(u) + "\r\n" + _auth_line(c) + headers + "Connection: close\r\n"
+    if body.len() > 0 or method == "POST" or method == "PUT":
+        req += "Content-Length: " + str.FromInt(body.len() as i64) + "\r\n"
+    end
+    req += "\r\n" + body
+    o.stream.SetDeadline(c.timeout_ms)
+    if not tunnel.WriteAll(o.stream, req):
+        o.stream.Close()
+        resp.err = "request write failed"
+        ret resp
+    end
+    mut rd := _rd_new(o.stream, MaxHeadBytes)
+    sk := _sink_new(c.max_body)
+    sink := _Sink { st = sk }
+    mut ok := false
+    until true:
+        mut st := 0
+        text := _rd_head(rd, MaxHeadBytes, st)
+        if st != 0:
+            resp.err = "no response head"
+            break
+        end
+        rh := ParseResponseHead(text)
+        if not rh.ok:
+            resp.err = "bad response: " + rh.err
+            break
+        end
+        if rh.status >= 100 and rh.status < 200 and rh.status != 101: continue end
+        resp.head = rh
+        resp.status = rh.status
+        framing := _resp_framing(rh, method)
+        if framing == 1:
+            mut rl := 0 as i64
+            _body_kind(rh, rl)
+            ok = _rd_copy(rd, sink, rl)
+        else framing == 2:
+            ok = _rd_unchunk(rd, sink)
+        else framing == 3:
+            ok = _rd_copy_close(rd, sink)
+        else:
+            ok = true
+        end
+        if not ok: resp.err = "body truncated or too large" end
+        break
+    end
+    resp.length = sk[0].len
+    resp.body = _range_str(sk[0].buf, 0, sk[0].len)
+    resp.ok = ok
+    _sink_free(sk)
+    _rd_free(rd)
+    o.stream.Close()
+    ret resp
+end
+
+@en "Get"
+@fa "دریافت"
+pub func Get(c: Client, url: str): Response:
+    ret Request(c, "GET", url, "", "")
+end
+
+@en "Post"
+@fa "ارسال"
+pub func Post(c: Client, url: str, content_type: str, body: str): Response:
+    ret Request(c, "POST", url, "Content-Type: " + content_type + "\r\n", body)
+end

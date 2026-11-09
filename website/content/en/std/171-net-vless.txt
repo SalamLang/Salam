@@ -1,0 +1,153 @@
+pkg.en = net/vless
+pkg.name = net.vless
+pkg.group = Network
+pkg.summary = The VLESS proxy protocol: client and server, TCP and UDP, vless:// share links, over TCP, TLS, WebSocket or any tunnel stream.
+pkg.title = The net.vless package in Salam | VLESS client and server
+pkg.description = The net.vless package in Salam: the VLESS proxy protocol with a client and a server, TCP and UDP commands, vless:// share links, use over TLS, WebSocket and HTTP upgrade through net.transport, and the limits of this implementation, with examples.
+pkg.import = net.vless
+pkg.intro <<
+<p>VLESS is a very small proxy protocol from the Xray and V2Ray family. A client opens a connection to the server and sends one header that says who it is (a UUID), what it wants (a TCP connection, or UDP datagrams) and where to (a host and a port). The server checks the UUID, answers with two bytes and from then on the connection carries the payload unchanged. That is all: <strong>VLESS does no encryption of its own.</strong> The protection has to come from what carries it, which is why it is used over TLS (<code>transport.Settings.tls</code>), usually inside a WebSocket behind a CDN.</p>
+<p>This package is both halves. <code>Dial</code> connects a client through <a href="/std/net/transport/">net.transport</a> and sends the header; <code>Accept</code> reads the header on a server and checks it against a list of users. <code>Read</code> and <code>Write</code> then move the payload, <code>ReadPacket</code> and <code>WritePacket</code> move UDP datagrams, and <code>ParseLink</code> reads the <code>vless://</code> share links that apps exchange. <code>AsStream</code>, <code>DialOver</code> and <code>AcceptOver</code> connect it to the <a href="/std/net/tunnel/">net.tunnel</a> streams, so it can be one hop of a chain or run inside another protocol. Importing this package pulls in <code>net.transport</code>, and you need that import yourself to build a <code>Settings</code> value and a target <code>Addr</code>.</p>
+
+<h3 id="wire">What goes on the wire</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Direction</th><th>Bytes</th></tr></thead>
+<tbody>
+<tr><td>Client to server, once</td><td>version <code>0</code>, the 16 byte user id, the length of the addon block (0, or the flow name wrapped in a small protobuf message), the command (<code>1</code> TCP, <code>2</code> UDP, <code>3</code> mux), the port, the address kind, the address. The mux command has no address.</td></tr>
+<tr><td>Server to client, once</td><td>version <code>0</code> and the addon length (this package skips any addon).</td></tr>
+<tr><td>Afterwards, TCP</td><td>the payload in both directions.</td></tr>
+<tr><td>Afterwards, UDP</td><td>each datagram prefixed by its length in two bytes.</td></tr>
+</tbody></table></div>
+<p>The client does not wait for the server's reply before it sends data. The two byte reply is read by the first <code>Read</code>, and a server that refuses the user simply closes the connection, so the client learns about it there and not from <code>Dial</code>.</p>
+
+<h3 id="pitfalls">What trips people up</h3>
+<ul>
+<li><strong>Without TLS the user id is visible and nothing is encrypted.</strong> A plain TCP VLESS connection is a plain text tunnel with a password in front. Use TLS, or put VLESS inside something that encrypts.</li>
+<li><strong>A rejected client sees success.</strong> <code>Dial</code> only sends the header. A wrong UUID shows up as the first <code>Read</code> failing, on the server as <code>unknown user</code>.</li>
+<li><strong>The flow must match.</strong> A server user created with <code>NewUser(id, "")</code> accepts requests without a flow. A request that names a flow different from the user's is refused.</li>
+<li><strong>UDP is length prefixed datagrams on the one connection.</strong> It is the simple form; Xray's XUDP packet format is not implemented.</li>
+<li><strong>Close frees the request.</strong> Call <code>Close</code> once when you are done, on both sides; it also closes the transport underneath.</li>
+</ul>
+
+<h2 id="guide-header">The request header</h2>
+<p><code>EncodeRequest</code> and <code>DecodeRequest</code> are the header on its own, with no connection. They are what the tests compare with known bytes, and they are handy to see exactly what a server will receive. <code>DecodeRequest</code> returns how many bytes it consumed, or -1 when the bytes are cut short, have a wrong version or carry an unknown command.</p>
+{{example.net-vless-guide-header}}
+
+<h2 id="guide-link">Share links</h2>
+<p>Apps share a server as one <code>vless://uuid@host:port?query#name</code> text. <code>ParseLink</code> reads it into a <code>Link</code>: check <code>ok</code> first, and read <code>err</code> when it is false. <code>LinkSettings</code> turns the link into the <code>Settings</code> for <code>net.transport</code> (the path's <code>?ed=2048</code> suffix becomes <code>early_data</code>), <code>FormatLink</code> goes back to text and <code>DialLink</code> does the whole connect. The parser refuses what the package cannot do, with a message that says why: <code>security=reality</code>, <code>type=grpc</code>, <code>type=h2</code>, <code>type=xhttp</code>, an <code>encryption</code> other than <code>none</code>, and a bad UUID.</p>
+{{example.net-vless-guide-link}}
+
+<h2 id="guide-quickstart">Quick start: a client and a server over TCP</h2>
+<p>The server listens with <code>transport.Listen</code>, accepts with <code>transport.Accept</code> and hands the connection to <code>vless.Accept</code> with its list of users. The client dials with <code>vless.Dial</code>. The target address in the header is what the server would connect onward to; this echo server just prints it. In a real server you would dial that target (with <a href="/std/net/tcp/">net.tcp</a> or a <a href="/std/net/tunnel/">tunnel</a> dialer) and copy bytes both ways.</p>
+{{example.net-vless-guide-loopback}}
+
+<h2 id="guide-wrong-user">A user the server does not know</h2>
+<p>The client cannot tell by itself. The server sees <code>unknown user</code>, closes the connection and the client's first read fails.</p>
+{{example.net-vless-guide-wrong-user}}
+
+<h2 id="guide-udp">UDP datagrams</h2>
+<p>Dial with <code>CmdUDP</code> and the datagram target (a DNS server here). Each <code>WritePacket</code> sends one datagram and each <code>ReadPacket</code> returns one, whole, in the buffer; a datagram can be at most 65535 bytes. A zero length datagram reads as an empty one.</p>
+{{example.net-vless-guide-udp}}
+
+<h2 id="guide-over-stream">Inside another stream</h2>
+<p><code>DialOver</code> and <code>AcceptOver</code> run the protocol on any <code>tunnel.Stream</code> instead of a network connection, and <code>AsStream</code> turns the result back into a stream. This is how a chain is built: the output of one protocol is the carrier of the next. The example runs both ends over an in-memory pipe.</p>
+{{example.net-vless-guide-over-stream}}
+
+<h2 id="guide-cdn">VLESS over WebSocket and TLS behind a CDN</h2>
+<p>The most common deployment. Do the CDN steps from the <a href="/std/net/transport/#guide-cdn">net.transport</a> page: a proxied domain, a secret WebSocket path, TLS to the CDN with the front name as <code>sni</code> and your own domain as <code>host</code>. Then the share link carries all of it, and one call connects:</p>
+{{example.net-vless-guide-cdn}}
+<p>On the server, listen with <code>network = "ws"</code>, the same <code>path</code> and <code>host</code>, with <code>tls</code> off when the CDN or your reverse proxy terminates TLS (and on, with a certificate and key, when it does not). Accept connections with <code>transport.AcceptRaw</code>, run <code>transport.Upgrade</code> and then <code>vless.Accept</code> in a worker thread for each of them.</p>
+<p>Two things to know. First, VLESS has no encryption (<code>encryption=none</code>), so the CDN can read the traffic between its two TLS legs. For hostile CDNs use <a href="/std/net/vmess/">VMess</a> with <code>SecAES128GCM</code>, which encrypts the payload itself. Second, set the <code>fragment</code> options of <code>net.transport</code> if the first hop is blocked by its TLS server name; they apply to this dial like any other.</p>
+
+<h2 id="guide-limits">Limits</h2>
+<ul>
+<li><strong>The flow <code>xtls-rprx-vision</code> is accepted but not implemented.</strong> The name is carried in the header and a server user can be created with it, but no Vision padding or direct copy is done. A real Xray server that expects Vision will not interoperate; leave the flow empty.</li>
+<li><strong>Reality, gRPC, HTTP/2 and XHTTP are not supported,</strong> and <code>ParseLink</code> refuses their links. Only <code>tcp</code>, <code>ws</code> and <code>httpupgrade</code> exist.</li>
+<li><strong>No multiplexing.</strong> <code>CmdMux</code> can be written into a header, but nothing multiplexes; an <code>Accept</code> for such a request hands you the connection and the rest is up to you.</li>
+<li><strong>The <code>fingerprint</code> of a link is informational.</strong> It is stored and written back, but the TLS handshake is not changed by it.</li>
+<li><strong>No live interoperability test against Xray or V2Ray was run.</strong> The header is checked against fixed byte vectors, and client and server are tested against each other over TCP, TLS, WebSocket and HTTP upgrade, but not against a real Xray build.</li>
+<li><strong>There are no server fallbacks.</strong> A connection that is not VLESS, or has an unknown user, is closed; it is not handed to a web server as Xray's fallbacks do.</li>
+<li><strong>Early data needs <code>DialEarly</code>.</strong> <code>LinkSettings</code> sets <code>early_data</code> from <code>?ed=</code>, but <code>Dial</code> and <code>DialLink</code> do not send any early payload.</li>
+</ul>
+>>
+
+doc.Request = The request header of a connection: user, flow, command and target.
+doc.Request.uuid = The 16 byte user id.
+doc.Request.flow = The flow name, empty for none.
+doc.Request.command = <code>CmdTCP</code>, <code>CmdUDP</code> or <code>CmdMux</code>.
+doc.Request.addr = The target address. Unused by <code>CmdMux</code>.
+doc.User = A user a server accepts.
+doc.User.id = The user id as text.
+doc.User.uuid = The user id as 16 bytes.
+doc.User.flow = The flow the user may name. Empty accepts only requests without one, and requests with an empty flow are always accepted.
+doc.Link = A parsed <code>vless://</code> link.
+doc.Link.ok = The link was understood and uses only what this package supports.
+doc.Link.err = Why the link was refused, empty when <code>ok</code> is true.
+doc.Link.uuid = The user id text.
+doc.Link.host = The server host or IP address. IPv6 is written in brackets in the link.
+doc.Link.port = The server port. The default is 443.
+doc.Link.remark = The name after the <code>#</code>, percent decoded.
+doc.Link.encryption = The <code>encryption</code> value. Only <code>none</code> is accepted.
+doc.Link.flow = The <code>flow</code> value, empty when absent.
+doc.Link.security = <code>none</code> or <code>tls</code>. Other values, such as <code>reality</code>, are refused.
+doc.Link.sni = The TLS server name. The <code>peer</code> key is read when <code>sni</code> is absent.
+doc.Link.alpn = The ALPN value, percent decoded.
+doc.Link.fingerprint = The <code>fp</code> value. It is stored and written back, and does not change the handshake.
+doc.Link.network = <code>tcp</code>, <code>ws</code> or <code>httpupgrade</code>. Other values, such as <code>grpc</code> and <code>h2</code>, are refused.
+doc.Link.host_header = The <code>host</code> value, the <code>Host</code> header of the WebSocket request.
+doc.Link.path = The <code>path</code> value, percent decoded, with any <code>?ed=</code> suffix still in it.
+doc.Link.allow_insecure = True when the link says <code>allowInsecure=1</code>, <code>insecure=1</code> or the word <code>true</code>.
+doc.Conn = A VLESS connection, client or server side.
+doc.Conn.t = The transport connection underneath.
+doc.Conn.client = True on the client side.
+doc.Conn.ok = True when the handshake step succeeded and the connection is usable.
+doc.Conn.err = The reason it failed, empty otherwise.
+doc.Conn.req = The request header: on a server what the client sent, on a client what it sent.
+doc.Conn.user = On a server: the id of the user that matched.
+doc.Conn.resp_pending = Internal: the two byte server reply has not been read yet.
+doc.Conn.closed = Internal: <code>Close</code> has been called.
+doc.EncodeRequest = The request header as bytes. Free the result with <code>transport.FreeBytes</code>.
+doc.DecodeRequest = Reads a request header from bytes and returns how many it used, or -1 when it is cut short, has a wrong version or an unknown command.
+doc.ReadRequest = Reads one request header from a transport connection. False when it does not parse.
+doc.NewUser = Makes a user from a UUID text and the flow it may use.
+doc.Client = Sends the request header on a transport connection that is already open and returns the VLESS connection. <code>ok</code> is false when the UUID is bad or the write fails.
+doc.Dial = Connects with <code>transport.Dial</code> and the given settings, then sends the header. The reply is not read yet: a refused user shows up on the first read.
+doc.Accept = Reads the header on a transport connection, finds the user in the list and sends the reply. On failure <code>ok</code> is false, <code>err</code> says why (<code>unknown user</code>, <code>bad request header</code>, <code>unsupported flow</code>) and the transport is closed.
+doc.Read = Reads payload. On a client the first call reads the two byte server reply. Returns 0 or less when the connection ended.
+doc.Write = Writes payload from a pointer. False when it fails.
+doc.ReadPacket = Reads one UDP datagram into the buffer, appending to it. False when the connection ended.
+doc.WritePacket = Writes one UDP datagram of at most 65535 bytes.
+doc.Close = Closes the connection and the transport under it. Safe to call twice.
+doc.ParseLink = Parses a <code>vless://</code> link. Check <code>ok</code>; <code>err</code> says what was wrong or unsupported.
+doc.FormatLink = Writes a link back as text, percent encoding the values that need it.
+doc.LinkSettings = The <code>transport.Settings</code> that match a link: network, TLS, names, path and the early data size from <code>?ed=</code>.
+doc.DialLink = Dials the server of a link with its settings, user and flow and the command and target you give.
+doc.AsStream = Wraps a connection as a <code>tunnel.Stream</code> so it can carry another protocol or be handed to tunnel code.
+doc.DialOver = Runs the client half over an existing stream instead of a new network connection.
+doc.AcceptOver = Runs the server half over an existing stream.
+group.Cmd.title = Commands
+group.Cmd = The command byte of a request: <code>CmdTCP</code> opens a TCP connection to the target, <code>CmdUDP</code> carries UDP datagrams, <code>CmdMux</code> is the multiplexing command, which the header can carry but nothing implements.
+ex.Request = -
+ex.User = -
+ex.Link = -
+ex.Conn = -
+ex.EncodeRequest = -
+ex.DecodeRequest = -
+ex.ReadRequest = -
+ex.NewUser = -
+ex.Client = -
+ex.Dial = -
+ex.Accept = -
+ex.Read = -
+ex.Write = -
+ex.ReadPacket = -
+ex.WritePacket = -
+ex.Close = -
+ex.ParseLink = -
+ex.FormatLink = -
+ex.LinkSettings = -
+ex.DialLink = -
+ex.AsStream = -
+ex.DialOver = -
+ex.AcceptOver = -
+ex.group.Cmd = -

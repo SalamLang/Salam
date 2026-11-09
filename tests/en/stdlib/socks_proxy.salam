@@ -1,0 +1,319 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import mem
+import net.socks
+import net.tcp
+import net.udp
+import str
+import sync
+
+func echo_conn(arg: i64):
+    c := tcp.ConnFromFd(arg)
+    until true:
+        d := tcp.Read(c, 4096)
+        if d.len() == 0: break end
+        tcp.Write(c, d)
+    end
+    tcp.Close(c)
+end
+
+func echo_accept(arg: i64):
+    srv := tcp.Server { fd = arg }
+    until true:
+        c := tcp.Accept(srv)
+        if not tcp.ConnOk(c): break end
+        socks.Go(echo_conn, c.fd as void*)
+    end
+end
+
+func udp_echo(arg: i64):
+    s := udp.Socket { fd = arg }
+    buf := mem.Allocate(2048 as u64)
+    until true:
+        mut h := ""
+        mut p := 0
+        n := udp.ReceiveBytes(s, buf, 2048, h, p)
+        if n < 0: break end
+        udp.SendBytes(s, h, p, buf, n)
+    end
+end
+
+func start_echo(): int:
+    es := tcp.Bind(0)
+    socks.Go(echo_accept, es.fd as void*)
+    ret tcp.Port(es)
+end
+
+func raw_send(c: tcp.Conn, bytes: Vector<u8>):
+    n := bytes.len()
+    buf := mem.Allocate(n as u64)
+    p := buf as u8*
+    repeat n in i:
+        p[i] = bytes.get(i)
+    end
+    tcp.WriteBytes(c, buf, n)
+    mem.Free(buf)
+end
+
+func raw_read(c: tcp.Conn, max: int): str:
+    buf := mem.Allocate(max as u64)
+    n := tcp.ReadBytes(c, buf, max)
+    mut v := Vector {} as Vector<u8>
+    p := buf as u8*
+    if n > 0:
+        repeat n in i:
+            v.push(p[i])
+        end
+    end
+    out := socks.ToHex(v)
+    v.free()
+    mem.Free(buf)
+    ret out
+end
+
+func vec(items: int[]): Vector<u8>:
+    mut v := Vector {} as Vector<u8>
+    each x in items:
+        v.push(x as u8)
+    end
+    ret v
+end
+
+func say(label: str, r: socks.ConnectResult):
+    println label + ": ok=" + r.ok + " code=" + r.code + " " + r.err
+end
+
+func roundtrip(r: socks.ConnectResult, msg: str): str:
+    if not r.ok: ret "no stream" end
+    r.stream.Write(msg)
+    got := r.stream.Read(4096)
+    r.stream.Close()
+    ret got
+end
+
+func main:
+    eport := start_echo()
+    udps := udp.Bind(0)
+    uport := udp.Port(udps)
+    socks.Go(udp_echo, udps.fd as void*)
+
+    mut cfg := socks.NewServerConfig(0)
+    cfg.handshake_timeout_ms = 600
+    sv := socks.Start(cfg)
+    println "server up: " + sv.ok
+    cl := socks.NewClient("127.0.0.1", sv.port)
+
+    r1 := socks.Connect(cl, "127.0.0.1", eport)
+    say("v5 ipv4", r1)
+    println roundtrip(r1, "hello ipv4")
+    r2 := socks.Connect(cl, "localhost", eport)
+    say("v5 domain", r2)
+    println roundtrip(r2, "hello domain")
+    conn := socks.DialConn(cl, "127.0.0.1", eport)
+    tcp.Write(conn, "plain conn")
+    println "DialConn: " + tcp.Read(conn, 100)
+    tcp.Close(conn)
+
+    mut big := 0
+    mut bad := 0
+    rb := socks.Connect(cl, "127.0.0.1", eport)
+    chunk := "abcdefghijklmnopqrstuvwxyz0123456789".repeat(400)
+    repeat 24:
+        rb.stream.Write(chunk)
+        mut got := 0
+        until got < chunk.len():
+            d := rb.stream.Read(chunk.len() - got)
+            if d.len() == 0: break end
+            got += d.len()
+        end
+        big += got
+        if got != chunk.len(): bad++ end
+    end
+    rb.stream.Close()
+    println "bulk bytes echoed: " + big + " short reads: " + bad
+
+    free := tcp.FreePort()
+    rr := socks.Connect(cl, "127.0.0.1", free)
+    say("refused", rr)
+    ru := socks.Connect(cl, "no-such-host.invalid", 80)
+    say("unresolvable", ru)
+    println "empty target: " + socks.Connect(cl, "", 80).ok
+
+    mut acfg := socks.NewServerConfig(0)
+    socks.AddUser(acfg, "alice", "s3cret")
+    asv := socks.Start(acfg)
+    good := socks.NewClientAuth("127.0.0.1", asv.port, "alice", "s3cret")
+    say("auth good", socks.Connect(good, "127.0.0.1", eport))
+    println roundtrip(socks.Connect(good, "127.0.0.1", eport), "authed")
+    say("auth wrong password", socks.Connect(socks.NewClientAuth("127.0.0.1", asv.port, "alice", "nope"), "127.0.0.1", eport))
+    say("auth unknown user", socks.Connect(socks.NewClientAuth("127.0.0.1", asv.port, "mallory", "s3cret"), "127.0.0.1", eport))
+    say("auth missing", socks.Connect(socks.NewClient("127.0.0.1", asv.port), "127.0.0.1", eport))
+    say("auth offered to open server", socks.Connect(socks.NewClientAuth("127.0.0.1", sv.port, "x", "y"), "127.0.0.1", eport))
+    socks.Stop(asv)
+
+    mut ccfg := socks.NewServerConfig(0)
+    socks.SetAuth(ccfg, (u: str, p: str): ret u == "bob" and p == "pw" end)
+    csv := socks.Start(ccfg)
+    say("callback auth good", socks.Connect(socks.NewClientAuth("127.0.0.1", csv.port, "bob", "pw"), "127.0.0.1", eport))
+    say("callback auth bad", socks.Connect(socks.NewClientAuth("127.0.0.1", csv.port, "bob", "xx"), "127.0.0.1", eport))
+    socks.Stop(csv)
+
+    mut rcfg := socks.NewServerConfig(0)
+    socks.SetConnector(
+        rcfg, (h: str, _p: int): if h == "echo.internal": ret socks.DirectConnect("127.0.0.1", eport, 2000) end ret socks.Outbound { ok = false, code = socks.RepNetUnreachable, err = "no route" } end
+    )
+    rsv := socks.Start(rcfg)
+    rc := socks.NewClient("127.0.0.1", rsv.port)
+    println roundtrip(socks.Connect(rc, "echo.internal", 1), "routed by callback")
+    say("callback refuses", socks.Connect(rc, "other.internal", 1))
+    socks.Stop(rsv)
+
+    mut pcfg := socks.NewServerConfig(0)
+    pcfg.allow = (cmd: int, _h: str, p: int): ret not (cmd == socks.CmdConnect and p == 25) end
+    psv := socks.Start(pcfg)
+    pc := socks.NewClient("127.0.0.1", psv.port)
+    say("acl allows", socks.Connect(pc, "127.0.0.1", eport))
+    say("acl denies port 25", socks.Connect(pc, "127.0.0.1", 25))
+    socks.Stop(psv)
+
+    mut c4 := socks.NewClient("127.0.0.1", sv.port)
+    c4.version = socks.Socks4
+    say("socks4 ip", socks.Connect(c4, "127.0.0.1", eport))
+    println roundtrip(socks.Connect(c4, "127.0.0.1", eport), "four")
+    println roundtrip(socks.Connect(c4, "localhost", eport), "four resolved by client")
+    c4.version = socks.Socks4a
+    c4.username = "tester"
+    println roundtrip(socks.Connect(c4, "localhost", eport), "four a")
+    say("socks4 refused", socks.Connect(c4, "127.0.0.1", free))
+
+    mut a4cfg := socks.NewServerConfig(0)
+    socks.AddUser(a4cfg, "u", "p")
+    a4sv := socks.Start(a4cfg)
+    c4b := socks.NewClient("127.0.0.1", a4sv.port)
+    c4b.version = socks.Socks4
+    say("socks4 vs auth server", socks.Connect(c4b, "127.0.0.1", eport))
+    socks.Stop(a4sv)
+
+    mut ncfg := socks.NewServerConfig(0)
+    ncfg.allow_v4 = false
+    nsv := socks.Start(ncfg)
+    c4c := socks.NewClient("127.0.0.1", nsv.port)
+    c4c.version = socks.Socks4
+    say("socks4 disabled", socks.Connect(c4c, "127.0.0.1", eport))
+    socks.Stop(nsv)
+
+    u := socks.Associate(cl)
+    println "udp associate: " + u.ok
+    socks.UDPSetTimeout(u, 2000)
+    println "udp send: " + socks.UDPSend(u, "127.0.0.1", uport, "datagram one")
+    ubuf := mem.Allocate(1024 as u64)
+    mut from := socks.Address {}
+    n := socks.UDPReceiveBytes(u, ubuf, 1024, from)
+    println "udp recv: " + n + " from " + from.host + " same port: " + (from.port == uport)
+    ubuf2 := ubuf as u8*
+    ubuf2[n] = 0 as u8
+    println str.Clone(ubuf as str)
+    mem.Free(ubuf)
+    socks.CloseUDP(u)
+    println "udp over socks4 client: " + socks.Associate(c4).ok
+
+    mut bcfg := socks.NewServerConfig(0)
+    bcfg.allow_bind = true
+    bsv := socks.Start(bcfg)
+    bc := socks.NewClient("127.0.0.1", bsv.port)
+    br := socks.Bind(bc, "127.0.0.1", 0)
+    say("bind first reply", br)
+    println "bind port known: " + (br.bound.port > 0)
+    peer := tcp.Dial("127.0.0.1", br.bound.port)
+    acc := socks.BindAccept(br.stream, bc)
+    println "bind accepted: " + acc.ok
+    tcp.Write(peer, "from the inbound peer")
+    println br.stream.Read(100)
+    br.stream.Write("reply to peer")
+    println tcp.Read(peer, 100)
+    tcp.Close(peer)
+    br.stream.Close()
+    say("bind not enabled", socks.Bind(socks.NewClient("127.0.0.1", sv.port), "127.0.0.1", 0))
+    socks.Stop(bsv)
+
+    sv2 := socks.Start(socks.NewServerConfig(0))
+    hop := socks.Connect(socks.NewClient("127.0.0.1", sv.port), "127.0.0.1", sv2.port)
+    say("chain hop one", hop)
+    h2 := socks.ClientHandshake(hop.stream, socks.NewClient("", 0), socks.CmdConnect, "127.0.0.1", eport)
+    println "chain hop two: " + h2.ok
+    hop.stream.Write("through two proxies")
+    println hop.stream.Read(100)
+    hop.stream.Close()
+    socks.Stop(sv2)
+
+    mut raw := tcp.Dial("127.0.0.1", sv.port)
+    raw_send(raw, vec([71, 69, 84, 32]))
+    println "junk version: " + raw_read(raw, 16)
+    tcp.Close(raw)
+
+    raw = tcp.Dial("127.0.0.1", sv.port)
+    raw_send(raw, vec([5, 0]))
+    println "zero methods: " + raw_read(raw, 16)
+    tcp.Close(raw)
+
+    raw = tcp.Dial("127.0.0.1", sv.port)
+    raw_send(raw, vec([5, 1, 1]))
+    println "only gssapi: " + raw_read(raw, 16)
+    tcp.Close(raw)
+
+    raw = tcp.Dial("127.0.0.1", sv.port)
+    raw_send(raw, vec([5, 1, 0]))
+    println "greeting: " + raw_read(raw, 2)
+    raw_send(raw, vec([5, 1, 0, 9, 1, 2, 3, 4, 0, 80]))
+    println "bad atyp: " + raw_read(raw, 16)
+    tcp.Close(raw)
+
+    raw = tcp.Dial("127.0.0.1", sv.port)
+    raw_send(raw, vec([5, 1, 0]))
+    println "greeting: " + raw_read(raw, 2)
+    raw_send(raw, vec([5, 9, 0, 1, 127, 0, 0, 1, 0, 80]))
+    println "bad command: " + raw_read(raw, 16)
+    tcp.Close(raw)
+
+    raw = tcp.Dial("127.0.0.1", sv.port)
+    raw_send(raw, vec([5, 1, 0]))
+    println "greeting: " + raw_read(raw, 2)
+    raw_send(raw, vec([5, 1, 0, 3, 0, 0, 80]))
+    println "empty domain: " + raw_read(raw, 16)
+    tcp.Close(raw)
+
+    raw = tcp.Dial("127.0.0.1", sv.port)
+    raw_send(raw, vec([5, 1, 0]))
+    println "greeting: " + raw_read(raw, 2)
+    raw_send(raw, vec([5, 1, 0, 1, 127]))
+    tcp.Close(raw)
+    println "truncated request closed"
+
+    raw = tcp.Dial("127.0.0.1", sv.port)
+    println "idle client sees close: " + raw_read(raw, 16).len()
+    tcp.Close(raw)
+
+    raw = tcp.Dial("127.0.0.1", sv.port)
+    raw_send(raw, vec([4, 1, 0, 80, 0, 0, 0, 1]))
+    raw_send(raw, vec([97, 98, 99]))
+    tcp.Close(raw)
+    println "socks4a with no terminator closed"
+
+    say("still serving", socks.Connect(cl, "127.0.0.1", eport))
+
+    socks.Stop(sv)
+    sync.SleepMs(50)
+    println "stopped: " + tcp.ConnOk(tcp.Dial("127.0.0.1", sv.port))
+end

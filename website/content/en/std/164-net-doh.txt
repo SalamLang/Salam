@@ -1,0 +1,247 @@
+pkg.en = net/doh
+pkg.name = net.doh
+pkg.group = Network
+pkg.summary = Encrypted DNS: a resolver over DNS over HTTPS and DNS over TLS with server failover and a TTL cache, plain UDP DNS as a fallback, presets, and a local stub server for other programs.
+pkg.title = The net.doh package in Salam | DNS over HTTPS and TLS
+pkg.description = The net.doh package in Salam: DNS over HTTPS and DNS over TLS queries, a caching resolver with failover, plain DNS servers used in Iran, lookups for A, AAAA, TXT and CNAME, and a local stub DNS server, with examples.
+pkg.import = net.doh
+pkg.intro <<
+<p>Ordinary DNS asks "what is the address of this name?" in plain text over UDP, so the network between you and the resolver can read every name you look up, and can change or block the answer. DNS over HTTPS (DoH) and DNS over TLS (DoT) send the same question inside an encrypted connection. This package speaks both, and plain UDP DNS too, and adds what a program needs on top: a <code>Resolver</code> that tries a list of servers in order, remembers answers for their TTL and answers <code>LookupHost</code> with a list of addresses. A <code>Stub</code> turns the resolver into a small local DNS server, so other programs can use it by pointing their DNS at it. To see how the pieces fit together in an app, read <a href="/std/net/tunnel/#guide-vpn-app">Building a v2ray style or VPN app</a>.</p>
+<p>Core ideas:</p>
+<ul>
+<li>A <code>Server</code> says how to reach one DNS server: <code>KindDoH</code> (HTTPS POST), <code>KindDoHGet</code> (HTTPS GET), <code>KindDoT</code> (TLS on port 853) or <code>KindUDP</code> (plain). <code>Cloudflare</code>, <code>Google</code>, <code>Quad9</code> and their DoT forms are ready made, and <code>NewServer</code>, <code>NewDoT</code> and <code>NewPlain</code> make your own.</li>
+<li>Give a server its IP addresses in <code>addrs</code>. Then the program does not need to resolve the server's own name first, which matters when DNS is exactly what is blocked.</li>
+<li><code>Query</code> asks one server once. <code>NewResolver</code> and <code>Resolve</code> ask a list: a server that fails, times out or answers SERVFAIL or REFUSED is skipped for the next, and answers are cached (an answer for its TTL, kept between the limits of <code>SetTTLLimits</code>; a "no such name" answer for a short fixed time).</li>
+<li>Certificates are checked. <code>insecure</code> turns that off for tests only.</li>
+</ul>
+<p>Things that catch people out:</p>
+<ul>
+<li><strong>Encrypted DNS hides the question from the network, not from the resolver.</strong> The resolver you pick sees every name you look up. Choose one you trust, and remember that connecting to a well known resolver address is itself visible.</li>
+<li><strong>Blocked resolvers.</strong> A network can block the addresses of public DoH servers. Use several servers, keep a plain or private one as the last in the list, and see <code>IranPlainServers</code> for the plain servers used in Iran. Plain DNS is readable and can be changed on the way.</li>
+<li><strong>No DNSSEC.</strong> Answers are trusted as the server gave them; nothing here checks DNSSEC signatures.</li>
+<li><strong>The stub is UDP only</strong> and answers one datagram at a time. Bind it to <code>127.0.0.1</code> unless other machines must use it; an open DNS server on a public address is abused.</li>
+<li><strong>Free what you hold.</strong> <code>FreeResponse</code>, <code>FreeAnswer</code> and <code>FreeServers</code> release memory; a <code>Resolver</code> and a <code>Stub</code> live until the program ends.</li>
+<li><strong>The cache and counters are shared across threads</strong> and the resolver takes its own lock, so one resolver can serve many threads.</li>
+<li><strong>IPv4 first.</strong> Queries go to IPv4 server addresses.</li>
+</ul>
+
+<h2 id="guide-resolver">Using a resolver</h2>
+<p>Make a <code>Resolver</code> from a list of servers and ask it. The second lookup of the same name comes from the cache and does not touch the network. The example uses a tiny DNS server on loopback so that it runs anywhere; with real servers use <code>DefaultServers</code> or your own list.</p>
+{{example.net-doh-guide-resolver}}
+<p>For real use, put your servers in the order you trust them and give each one its addresses:</p>
+<pre class="code"><code>mut servers := Vector {} as Vector&lt;doh.Server&gt;
+servers.push(doh.Cloudflare())
+servers.push(doh.GoogleDoT())
+servers.push(doh.NewPlain("home", "192.168.1.1"))
+resolver := doh.NewResolver(servers)
+println doh.LookupHost(resolver, "example.com")</code></pre>
+
+<h2 id="guide-iran">DNS when networks interfere</h2>
+<p>Three kinds of trouble are common. The network can <em>read</em> your lookups: use DoH or DoT. It can <em>change</em> answers for some names, or return nothing: encrypted DNS stops changes on the path, but not a block of the resolver's address. It can <em>block the resolvers themselves</em>: list several, keep <code>addrs</code> filled so that no lookup is needed to reach them, and keep a plain server that works in your network as the last choice. <code>IranPlainServers</code> lists plain servers used in Iran; their traffic is not encrypted.</p>
+<p>Run a <code>Stub</code> on <code>127.0.0.1</code> and point the operating system or a program at it, and every lookup it makes goes through your resolver and its cache. When a program does name lookups itself through a proxy, as SOCKS5 and Trojan do, let the proxy resolve the name, so that the lookup is not made locally at all.</p>
+
+<h2 id="guide-limits">What to know</h2>
+<ul>
+<li>Encrypted DNS hides the question from the network, not from the resolver you choose.</li>
+<li>Fill <code>addrs</code>, or set a bootstrap with <code>SetBootstrap</code>, so that the resolver does not need DNS to find its DNS.</li>
+<li>Failed servers are skipped; a "no such name" answer is final and cached for the short failure time.</li>
+<li>No DNSSEC validation. The stub is UDP only and has no access control; bind it to loopback.</li>
+<li><code>Query</code> has a timeout in milliseconds, and a <code>Resolver</code> has <code>SetTimeout</code>; keep it short enough that a blocked server does not stall your program.</li>
+<li>No logging happens by itself.</li>
+</ul>
+>>
+
+group.Kind.title = Server kinds
+group.Kind = The values of <code>kind</code>.
+doc.Response = The answer of one <code>Query</code>: the raw DNS message, the decoded message, how long it took and which server gave it.
+doc.Response.ok = True when a valid DNS message with the same id came back. A name that does not exist is still ok: look at the message's rcode.
+doc.Response.raw = The answer as DNS wire bytes. Free it with <code>FreeResponse</code>.
+doc.Response.msg = The decoded <code>dns.Message</code>: its questions, answers and rcode.
+doc.Response.rtt_ms = The round trip time in milliseconds.
+doc.Response.server = The name of the server that answered.
+doc.Response.err = A readable reason when <code>ok</code> is false, such as <code>id mismatch</code> or a connection error.
+doc.QueryAddr = Sends one query to one address of a server and waits up to the timeout. Use it when you already know which IP to ask.
+doc.Query = Sends one query to a server, trying each of its <code>addrs</code> in turn, or resolving its host name when it has none. <code>QueryAddr</code> does one address.
+doc.FreeResponse = Frees the raw bytes of a response.
+doc.KindDoH = <code>kind</code>: DNS over HTTPS with a POST request. The default.
+doc.KindDoHGet = <code>kind</code>: DNS over HTTPS with a GET request, the query in the URL.
+doc.KindDoT = <code>kind</code>: DNS over TLS on port 853.
+doc.KindUDP = <code>kind</code>: ordinary DNS over UDP on port 53. Not encrypted.
+doc.Server = One DNS server and how to talk to it: the protocol, where it is and which addresses to try first. The preset functions and <code>NewServer</code>, <code>NewDoT</code> and <code>NewPlain</code> make them.
+doc.Server.name = A short name for logs and for <code>server</code>.
+doc.Server.kind = <code>KindDoH</code>, <code>KindDoHGet</code>, <code>KindDoT</code> or <code>KindUDP</code>.
+doc.Server.url = The URL of a DoH endpoint, such as <code>https://dns.google/dns-query</code>.
+doc.Server.host = The host name (for the TLS name and the <code>Host</code> header) or the IP.
+doc.Server.port = The port: 443 for DoH, 853 for DoT, 53 for plain DNS.
+doc.Server.path = The request path of a DoH endpoint.
+doc.Server.use_tls = True when the server uses TLS. It is true for DoH over <code>https</code> and for DoT.
+doc.Server.addrs = IP addresses to connect to, so that the server's own name does not have to be looked up first. This is what makes an encrypted resolver work when DNS is the thing that is blocked.
+doc.Server.insecure = True to skip the certificate check. For tests only.
+doc.Url = A parsed DoH URL: scheme (as <code>use_tls</code>), host, port and path.
+doc.Url.ok = True when the URL was valid.
+doc.Url.use_tls = True for <code>https</code>, false for <code>http</code>.
+doc.Url.host = The host.
+doc.Url.port = The port, or 443 or 80 when the URL has none.
+doc.Url.path = The path with the query, at least <code>/</code>.
+doc.ParseIPv4 = Parses IPv4 text into four bytes appended to a buffer. False when it is not an address.
+doc.ParseIPv6 = Parses IPv6 text into sixteen bytes appended to a buffer. False when it is not an address.
+doc.IsIP = True when the text is an IPv4 or IPv6 address and not a name.
+doc.ParseURL = Parses an <code>http://</code> or <code>https://</code> URL.
+doc.NewServer = Makes a server from a name, a kind and a URL. For the two DoH kinds the host, port, path and TLS flag come from the URL. Add <code>addrs</code> or use <code>WithBootstrap</code> so that its name need not be resolved.
+doc.NewDoT = Makes a DNS over TLS server from a name, the TLS host name and an IP address, on port 853.
+doc.NewPlain = Makes a plain UDP DNS server on port 53 from a name and an IP address. Change <code>port</code> for another port.
+doc.WithBootstrap = Returns a copy of a server with one more IP address to try.
+doc.Cloudflare = The Cloudflare resolver over DoH (<code>cloudflare-dns.com</code>), with its addresses 1.1.1.1 and 1.0.0.1.
+doc.Google = The Google resolver over DoH (<code>dns.google</code>), with 8.8.8.8 and 8.8.4.4.
+doc.Quad9 = The Quad9 resolver over DoH (<code>dns.quad9.net</code>), with 9.9.9.9 and 149.112.112.112.
+doc.CloudflareDoT = The Cloudflare resolver over DNS over TLS, at 1.1.1.1.
+doc.GoogleDoT = The Google resolver over DNS over TLS, at 8.8.8.8.
+doc.Quad9DoT = The Quad9 resolver over DNS over TLS, at 9.9.9.9.
+doc.DefaultServers = Cloudflare, Google and Quad9 over DoH, in that order: a reasonable list for a <code>Resolver</code>.
+doc.Shecan = The two plain UDP servers of the Shecan DNS service, used in Iran. They are not encrypted.
+doc.Server403 = The two plain UDP servers of the 403 DNS service. Their addresses are private ones, reachable only from inside some Iranian networks.
+doc.Electro = The two plain UDP servers of the Electro DNS service. They are not encrypted.
+doc.Radar = The two plain UDP servers of the Radar DNS service. Their addresses are private ones, reachable only from inside some Iranian networks.
+doc.IranPlainServers = Six plain UDP servers: Shecan, 403 and Electro, for use inside Iran. Plain DNS can be read and changed by the network, so prefer <code>DefaultServers</code> where they are reachable.
+doc.EncodeResponse = Builds a DNS response message for a question and a list of records. It exists for tests and for the local stub, so you can make a fake DNS server in a few lines.
+doc.FreeServers = Frees a vector of servers and their address lists.
+doc.CacheEntry = One cached answer: the bytes, when it expires and whether it is a cached failure.
+doc.CacheEntry.raw = The cached answer as DNS wire bytes.
+doc.CacheEntry.expires_ms = When the entry expires, as a time in milliseconds.
+doc.CacheEntry.negative = True for a cached 'no such name' or 'no data' answer.
+doc.Answer = What <code>Resolve</code> returns: the answer, and whether it came from the cache.
+doc.Answer.ok = True when some server gave a usable answer, or the cache did.
+doc.Answer.cached = True when the answer came from the cache without asking a server.
+doc.Answer.negative = True when the answer says the name does not exist or has no data of that type.
+doc.Answer.rcode = The DNS response code: 0 is success, 3 is a name that does not exist.
+doc.Answer.ttl = How many seconds the answer may still be used, after the limits of <code>SetTTLLimits</code>.
+doc.Answer.raw = The answer as DNS wire bytes. Free it with <code>FreeAnswer</code>.
+doc.Answer.msg = The decoded <code>dns.Message</code>.
+doc.Answer.server = The name of the server that answered, empty for a cached answer.
+doc.Answer.err = Why no server could answer, when <code>ok</code> is false.
+doc.ResolverStats = Counters of a resolver. <code>Stats</code> returns them.
+doc.ResolverStats.hits = Questions answered from the cache.
+doc.ResolverStats.misses = Questions that were not in the cache.
+doc.ResolverStats.upstream = Servers asked in total (a failed server and its successor count twice).
+doc.ResolverStats.failures = Questions that no server could answer.
+doc.Resolver = A caching resolver over a list of servers: it asks them in order, falls over to the next on failure and remembers answers for their TTL. Make it with <code>NewResolver</code>; it is safe to use from several threads.
+doc.Resolver.st = The internal state: servers, cache, limits and counters.
+doc.NewResolver = Makes a resolver that asks these servers in order. The defaults are a minimum TTL of 10 seconds, a maximum of 86400, 30 seconds for failures, a 4000 millisecond timeout and 2048 cache entries.
+doc.SetBootstrap = Sets the servers used to find the address of a DoH or DoT server that has a host name but no <code>addrs</code>. They must be reachable by IP, for example plain ones.
+doc.SetTTLLimits = Sets the smallest and largest time an answer is kept, and how long a failure ('no such name') is kept, in seconds.
+doc.SetTimeout = Sets how long each query to one server may take, in milliseconds.
+doc.Stats = Returns the counters of a resolver.
+doc.CacheSize = The number of entries in the cache.
+doc.ClearCache = Throws away every cached answer.
+doc.ResolveAt = Like <code>Resolve</code> but with the clock given in milliseconds, so the cache can be tested without waiting.
+doc.Resolve = Answers a question from the cache, or asks the servers in order and caches the result. A server that fails, times out or answers SERVFAIL or REFUSED is skipped for the next one; a 'no such name' answer is final and cached for a short time.
+doc.FreeAnswer = Frees the raw bytes of an answer.
+doc.LookupA = Returns the IPv4 addresses of a name as text. Empty when there are none.
+doc.LookupAAAA = Returns the IPv6 addresses of a name as text.
+doc.LookupTXT = Returns the TXT records of a name.
+doc.LookupCNAME = Returns the canonical name a name points to, or an empty text.
+doc.LookupHost = Returns the addresses of a name, IPv4 then IPv6. A name that is already an IP comes back as itself without asking anyone.
+doc.Stub = A small DNS server on a local UDP port that answers other programs from a <code>Resolver</code>. Point a program's DNS at it and its lookups go through your encrypted resolver and cache. Start it with <code>StartStub</code>.
+doc.Stub.ok = True when the port was bound.
+doc.Stub.port = The UDP port it listens on, useful when you asked for 0.
+doc.Stub.st = The internal state.
+doc.StartStub = Starts the local DNS server on a host and port (0 picks a free port) on a background thread. Check <code>ok</code>. Listen on <code>127.0.0.1</code> unless other machines should use it.
+doc.StubServed = How many queries the stub has answered.
+doc.StopStub = Stops the local DNS server.
+
+ex.Response = net-doh-Query
+ex.Response.ok = -
+ex.Response.raw = -
+ex.Response.msg = -
+ex.Response.rtt_ms = -
+ex.Response.server = -
+ex.Response.err = -
+ex.QueryAddr = net-doh-Query
+ex.Query = net-doh-Query
+ex.FreeResponse = net-doh-Query
+ex.KindDoH = net-doh-Http
+ex.KindDoHGet = net-doh-Http
+ex.KindDoT = net-doh-Encrypted
+ex.KindUDP = net-doh-Servers
+ex.Server = net-doh-Servers
+ex.Server.name = -
+ex.Server.kind = -
+ex.Server.url = -
+ex.Server.host = -
+ex.Server.port = -
+ex.Server.path = -
+ex.Server.use_tls = -
+ex.Server.addrs = -
+ex.Server.insecure = -
+ex.Url = net-doh-Parse
+ex.Url.ok = -
+ex.Url.use_tls = -
+ex.Url.host = -
+ex.Url.port = -
+ex.Url.path = -
+ex.ParseIPv4 = net-doh-Parse
+ex.ParseIPv6 = net-doh-Parse
+ex.IsIP = net-doh-Parse
+ex.ParseURL = net-doh-Parse
+ex.NewServer = net-doh-Servers
+ex.NewDoT = net-doh-Servers
+ex.NewPlain = net-doh-Servers
+ex.WithBootstrap = net-doh-Servers
+ex.Cloudflare = net-doh-Servers
+ex.Google = net-doh-Servers
+ex.Quad9 = net-doh-Servers
+ex.CloudflareDoT = net-doh-Servers
+ex.GoogleDoT = net-doh-Encrypted
+ex.Quad9DoT = net-doh-Servers
+ex.DefaultServers = net-doh-Servers
+ex.Shecan = net-doh-Servers
+ex.Server403 = -
+ex.Electro = net-doh-Servers
+ex.Radar = net-doh-Servers
+ex.IranPlainServers = net-doh-Servers
+ex.EncodeResponse = net-doh-Parse
+ex.FreeServers = net-doh-Servers
+ex.CacheEntry = -
+ex.CacheEntry.raw = -
+ex.CacheEntry.expires_ms = -
+ex.CacheEntry.negative = -
+ex.Answer = net-doh-Resolver
+ex.Answer.ok = -
+ex.Answer.cached = -
+ex.Answer.negative = -
+ex.Answer.rcode = -
+ex.Answer.ttl = -
+ex.Answer.raw = -
+ex.Answer.msg = -
+ex.Answer.server = -
+ex.Answer.err = -
+ex.ResolverStats = net-doh-Resolver
+ex.ResolverStats.hits = -
+ex.ResolverStats.misses = -
+ex.ResolverStats.upstream = -
+ex.ResolverStats.failures = -
+ex.Resolver = net-doh-Resolver
+ex.Resolver.st = -
+ex.NewResolver = net-doh-Resolver
+ex.SetBootstrap = net-doh-Resolver
+ex.SetTTLLimits = net-doh-Resolver
+ex.SetTimeout = net-doh-Resolver
+ex.Stats = net-doh-Resolver
+ex.CacheSize = net-doh-Resolver
+ex.ClearCache = net-doh-Resolver
+ex.ResolveAt = net-doh-Resolver
+ex.Resolve = net-doh-Resolver
+ex.FreeAnswer = net-doh-Resolver
+ex.LookupA = net-doh-Resolver
+ex.LookupAAAA = net-doh-Resolver
+ex.LookupTXT = net-doh-Resolver
+ex.LookupCNAME = net-doh-Resolver
+ex.LookupHost = net-doh-Resolver
+ex.Stub = net-doh-Stub
+ex.Stub.ok = -
+ex.Stub.port = -
+ex.Stub.st = -
+ex.StartStub = net-doh-Stub
+ex.StubServed = net-doh-Stub
+ex.StopStub = net-doh-Stub
+ex.group.Kind = net-doh-Http

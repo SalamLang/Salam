@@ -32,6 +32,8 @@ def jdump(path, obj):
 
 
 PIN = [""]
+REALITY = {"priv": "", "pub": "", "sid": "0123abcd", "dest": 0}
+GRPC_SERVICE = "gunsvc"
 
 
 def stream_xray(c, cert, key, server, server_is_xray_client=False):
@@ -40,7 +42,15 @@ def stream_xray(c, cert, key, server, server_is_xray_client=False):
         s["wsSettings"] = {"path": PATH}
     if c.get("net") == "httpupgrade":
         s["httpupgradeSettings"] = {"path": PATH}
-    if c.get("tls"):
+    if c.get("net") == "grpc":
+        s["grpcSettings"] = {"serviceName": GRPC_SERVICE, "multiMode": bool(c.get("multi"))}
+    if c.get("reality"):
+        s["security"] = "reality"
+        if server:
+            s["realitySettings"] = {"dest": "127.0.0.1:%d" % REALITY["dest"], "serverNames": ["localhost"], "privateKey": REALITY["priv"], "shortIds": [REALITY["sid"]]}
+        else:
+            s["realitySettings"] = {"serverName": "localhost", "fingerprint": c.get("fp", "chrome"), "publicKey": REALITY["pub"], "shortId": REALITY["sid"]}
+    elif c.get("tls"):
         s["security"] = "tls"
         if server:
             s["tlsSettings"] = {"certificates": [{"certificateFile": cert, "keyFile": key}]}
@@ -63,7 +73,14 @@ def stream_sb(c, cert, key, server):
         out["transport"] = {"type": "ws", "path": PATH}
     if n == "httpupgrade":
         out["transport"] = {"type": "httpupgrade", "path": PATH}
-    if c.get("tls"):
+    if n == "grpc":
+        out["transport"] = {"type": "grpc", "service_name": GRPC_SERVICE}
+    if c.get("reality"):
+        if server:
+            out["tls"] = {"enabled": True, "server_name": "localhost", "reality": {"enabled": True, "handshake": {"server": "127.0.0.1", "server_port": REALITY["dest"]}, "private_key": REALITY["priv"], "short_id": [REALITY["sid"]]}}
+        else:
+            out["tls"] = {"enabled": True, "server_name": "localhost", "utls": {"enabled": True, "fingerprint": c.get("fp", "chrome")}, "reality": {"enabled": True, "public_key": REALITY["pub"], "short_id": REALITY["sid"]}}
+    elif c.get("tls"):
         if server:
             out["tls"] = {"enabled": True, "certificate_path": cert, "key_path": key}
         else:
@@ -74,13 +91,25 @@ def stream_sb(c, cert, key, server):
 def inbound_settings(c):
     p = c["proto"]
     if p == "vless":
-        return {"clients": [{"id": UUID}], "decryption": "none"}
+        u = {"id": UUID}
+        if c.get("flow"):
+            u["flow"] = c["flow"]
+        return {"clients": [u], "decryption": "none"}
     if p == "vmess":
         return {"clients": [{"id": UUID}]}
     if p == "trojan":
         return {"clients": [{"password": PASS}]}
     if p == "ss":
-        return {"method": c["method"], "password": c["password"], "network": "tcp,udp"}
+        st = {"method": c["method"], "password": c["password"], "network": "tcp,udp"}
+        if c.get("user_psk"):
+            st["clients"] = [{"password": c["user_psk"], "email": "u1@example.com"}]
+        return st
+
+
+def _client_pw(c):
+    if c.get("user_psk"):
+        return c["password"] + ":" + c["user_psk"]
+    return c["password"]
 
 
 def outbound_xray(c, port, stream):
@@ -89,16 +118,20 @@ def outbound_xray(c, port, stream):
         u = {"id": UUID}
         if p == "vless":
             u["encryption"] = "none"
+            if c.get("flow"):
+                u["flow"] = c["flow"]
         else:
             u["security"] = c.get("sec", "aes-128-gcm")
         st = {"vnext": [{"address": "127.0.0.1", "port": port, "users": [u]}]}
     elif p == "trojan":
         st = {"servers": [{"address": "127.0.0.1", "port": port, "password": PASS}]}
     else:
-        st = {"servers": [{"address": "127.0.0.1", "port": port, "method": c["method"], "password": c["password"]}]}
+        st = {"servers": [{"address": "127.0.0.1", "port": port, "method": c["method"], "password": _client_pw(c)}]}
     o = {"tag": "proxy", "protocol": "shadowsocks" if p == "ss" else p, "settings": st}
     if p != "ss":
         o["streamSettings"] = stream
+    if c.get("mux"):
+        o["mux"] = {"enabled": True, "concurrency": 8}
     return o
 
 
@@ -148,6 +181,8 @@ def gen_sb_server(c, port, cert, key, path):
     ib = {"type": "shadowsocks" if p == "ss" else p, "tag": "in", "listen": "127.0.0.1", "listen_port": port}
     if p == "vless":
         ib["users"] = [{"uuid": UUID}]
+        if c.get("flow"):
+            ib["users"][0]["flow"] = c["flow"]
     elif p == "vmess":
         ib["users"] = [{"uuid": UUID, "alterId": 0}]
     elif p == "trojan":
@@ -155,6 +190,8 @@ def gen_sb_server(c, port, cert, key, path):
     else:
         ib["method"] = c["method"]
         ib["password"] = c["password"]
+        if c.get("user_psk"):
+            ib["users"] = [{"name": "u1", "password": c["user_psk"]}]
     if p != "ss":
         ib.update(stream_sb(c, cert, key, True))
     jdump(path, {"log": {"level": "info"}, "inbounds": [ib], "outbounds": [{"type": "direct", "tag": "direct"}]})
@@ -165,6 +202,8 @@ def gen_sb_client(c, port, local, cert, key, path):
     ob = {"type": "shadowsocks" if p == "ss" else p, "tag": "proxy", "server": "127.0.0.1", "server_port": port}
     if p == "vless":
         ob["uuid"] = UUID
+        if c.get("flow"):
+            ob["flow"] = c["flow"]
     elif p == "vmess":
         ob["uuid"] = UUID
         ob["security"] = c.get("sec", "aes-128-gcm")
@@ -173,7 +212,7 @@ def gen_sb_client(c, port, local, cert, key, path):
         ob["password"] = PASS
     else:
         ob["method"] = c["method"]
-        ob["password"] = c["password"]
+        ob["password"] = _client_pw(c)
     if p != "ss":
         ob.update(stream_sb(c, cert, key, False))
     jdump(
@@ -188,15 +227,19 @@ def gen_sb_client(c, port, local, cert, key, path):
 
 
 def gen_ssr_server(c, port, cert, key, path):
-    jdump(path, {"port": port, "method": c["method"], "password": c["password"]})
+    jdump(path, {"port": port, "method": c["method"], "password": c["password"], "user": c.get("user_psk", "")})
 
 
 def gen_ssr_client(c, port, local, cert, key, path):
-    jdump(path, {"port": port, "local": local, "method": c["method"], "password": c["password"]})
+    jdump(path, {"port": port, "local": local, "method": c["method"], "password": _client_pw(c)})
 
 
 def argv_ssr_server(path):
     j = json.load(open(path))
+    if j.get("user"):
+        cfg = path + ".full.json"
+        jdump(cfg, {"servers": [{"server": "127.0.0.1", "server_port": j["port"], "method": j["method"], "password": j["password"], "users": [{"name": "u1", "password": j["user"]}], "mode": "tcp_and_udp"}]})
+        return [BIN["ssserver"], "-c", cfg]
     return [BIN["ssserver"], "-s", "127.0.0.1:%d" % j["port"], "-k", j["password"], "-m", j["method"], "-U"]
 
 
@@ -267,11 +310,14 @@ def run_pair(case, server_impl, client_impl, cert, key, work, echo, results, udp
         if not procs.wait_port(sp):
             results.append((name, False, "server did not listen: " + procs.log("server")[-300:].replace("\n", " | ")))
             return
-        procs.start("client", IMPLS[client_impl][3](cpath))
+        cargv = IMPLS[client_impl][3](cpath)
+        if client_impl == "ours" and case.get("frag_args"):
+            cargv = [os.environ.get("INTEROP_VPN_FRAG", "vpn_frag"), "--config", cpath] + case["frag_args"]
+        procs.start("client", cargv)
         if not procs.wait_port(lp):
             results.append((name, False, "client did not listen: " + procs.log("client")[-300:].replace("\n", " | ")))
             return
-        ok, detail = check_tcp_via_socks(lp, echo.port)
+        ok, detail = check_tcp_via_socks(lp, echo.tls_port if case.get("inner_tls") else echo.port, inner_tls=bool(case.get("inner_tls")))
         if not ok:
             detail += " | srv: " + procs.log("server")[-200:].replace("\n", " ") + " | cli: " + procs.log("client")[-200:].replace("\n", " ")
         results.append((name + " tcp", ok, detail))
@@ -285,9 +331,7 @@ def run_pair(case, server_impl, client_impl, cert, key, work, echo, results, udp
         procs.stop_all()
 
 
-def main():
-    only = sys.argv[1] if len(sys.argv) > 1 else ""
-    work0 = os.environ.get("INTEROP_WORK") or tempfile.mkdtemp(prefix="interop-")
+def prepare(work0):
     os.makedirs(work0, exist_ok=True)
     cert = os.path.join(work0, "cert.pem")
     key = os.path.join(work0, "key.pem")
@@ -300,19 +344,48 @@ def main():
     import hashlib
 
     PIN[0] = hashlib.sha256(der).hexdigest()
+    return cert, key
+
+
+def reality_keys():
+    out = subprocess.check_output([BIN["xray"], "x25519"]).decode()
+    vals = [l.split(":", 1)[1].strip() for l in out.splitlines() if ":" in l]
+    REALITY["priv"] = vals[0]
+    REALITY["pub"] = vals[1]
+
+
+def run_cases(cases, work0, cert, key, echo, reals=("xray", "sing-box"), only=""):
+    results = []
+    for case in cases:
+        if only and only not in case["name"]:
+            continue
+        for real in case.get("reals", reals):
+            for (srv, cli) in (("ours", real), (real, "ours")):
+                if case.get("only_ours_client") and cli != "ours":
+                    continue
+                if srv == "ours" and case.get("no_ours_server") or cli == "ours" and case.get("no_ours_client"):
+                    continue
+                work = os.path.join(work0, case["name"].replace("/", "_").replace(" ", "_") + "_" + cli + "_" + srv)
+                os.makedirs(work, exist_ok=True)
+                run_pair(case, srv, cli, cert, key, work, echo, results)
+                if case.get("expect_fail"):
+                    results[-1] = (results[-1][0] + " (expected to fail: " + case["expect_fail"] + ")", not results[-1][1], results[-1][2])
+                last = results[-1]
+                print(("PASS " if last[1] else "FAIL ") + last[0] + "  " + last[2][:300], flush=True)
+    return results
+
+
+def main():
+    only = sys.argv[1] if len(sys.argv) > 1 else ""
+    work0 = os.environ.get("INTEROP_WORK") or tempfile.mkdtemp(prefix="interop-")
+    cert, key = prepare(work0)
     echo = Echo()
     results = []
     for case in case_list():
         if only and only not in case["name"]:
             continue
         reals = ("xray", "sing-box", "ssrust") if case["proto"] == "ss" else ("xray", "sing-box")
-        for real in reals:
-            for (srv, cli) in (("ours", real), (real, "ours")):
-                work = os.path.join(work0, case["name"].replace("/", "_") + "_" + cli + "_" + srv)
-                os.makedirs(work, exist_ok=True)
-                run_pair(case, srv, cli, cert, key, work, echo, results)
-                last = results[-1]
-                print(("PASS " if last[1] else "FAIL ") + last[0] + "  " + last[2][:300], flush=True)
+        results += run_cases([case], work0, cert, key, echo, reals)
     echo.close()
     bad = [r for r in results if not r[1]]
     print("\n%d/%d passed" % (len(results) - len(bad), len(results)))

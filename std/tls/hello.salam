@@ -11,6 +11,7 @@ const EXT_COOKIE := 44
 const GROUP_X25519 := 0x001D
 const GROUP_SECP256R1 := 0x0017
 const GROUP_SECP384R1 := 0x0018
+const GROUP_X25519MLKEM768 := 0x11EC
 
 const SA_RSA_PKCS1_SHA256 := 0x0401
 const SA_RSA_PKCS1_SHA384 := 0x0501
@@ -243,6 +244,9 @@ func _hs_parse_server_hello(h &: Handshake, msg: Reader): bool:
             end
         else if id == EXT_KEY_SHARE:
             g := _rd16(body)
+            if g == GROUP_X25519MLKEM768 and h.pq_seed.len == 64 and h.share_group == GROUP_X25519:
+                h.share_group = g
+            end
             if g != h.share_group:
                 ret _hs_fail(h, "server selected a group we did not offer a share for")
             end
@@ -290,6 +294,18 @@ func _hs_parse_server_hello(h &: Handshake, msg: Reader): bool:
     end
     h.group = h.share_group
     _bufreset(h.shared)
+    if h.share_group == GROUP_X25519MLKEM768:
+        if peer.len != 1088 + 32:
+            ret _hs_fail(h, "malformed key share")
+        end
+        _putzeros(h.shared, 64)
+        mlkem_ss := h.shared.p
+        Mlkem768Decapsulate(h.pq_seed.p, peer.p, mlkem_ss)
+        if not _x25519_shared(h.priv.p, ((peer.p as i64) + 1088) as void*, _bufptr(h.shared, 32)):
+            ret _hs_fail(h, "peer key share produced a degenerate shared secret")
+        end
+        ret true
+    end
     if h.share_group == GROUP_X25519:
         if peer.len != 32:
             ret _hs_fail(h, "malformed key share")

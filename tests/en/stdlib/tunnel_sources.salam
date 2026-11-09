@@ -1,0 +1,73 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import mem
+import sync
+import net.socks
+import net.tcp
+import net.tunnel
+
+mut table := tunnel.NewSourceTable()
+mut done := sync.NewWaitGroup()
+
+func churn(p: int*):
+    repeat p[0]:
+        if tunnel.SourceEnter(table, "198.51.100.7", 1000):
+            tunnel.SourceLeave(table, "198.51.100.7")
+        end
+    end
+    sync.Done(done)
+end
+
+func closed_by_peer(c: tcp.Conn, wait_ms: int): bool:
+    tcp.SetReadDeadline(c, wait_ms)
+    buf := mem.Allocate(8 as u64)
+    n := tcp.ReadBytes(c, buf, 8)
+    mem.Free(buf)
+    ret n == 0
+end
+
+func main:
+    println "first two in:", tunnel.SourceEnter(table, "203.0.113.1", 2), tunnel.SourceEnter(table, "203.0.113.1", 2)
+    println "third refused:", tunnel.SourceEnter(table, "203.0.113.1", 2)
+    println "another source is separate:", tunnel.SourceEnter(table, "203.0.113.2", 2)
+    tunnel.SourceLeave(table, "203.0.113.1")
+    println "a slot freed by Leave:", tunnel.SourceEnter(table, "203.0.113.1", 2)
+    println "no limit:", tunnel.SourceEnter(table, "203.0.113.3", 0), tunnel.SourceEnter(table, "203.0.113.3", 0), tunnel.SourceEnter(table, "", 1), tunnel.SourceEnter(table, "", 1)
+    sync.Add(done, 4 as i64)
+    n := mem.AllocateZeroed(8 as u64) as int*
+    n[0] = 500
+    repeat 4:
+        _h := spawn(churn, n)
+    end
+    sync.Wait(done)
+    println "threads leave no count behind:", tunnel.SourceEnter(table, "198.51.100.7", 1), tunnel.SourceEnter(table, "198.51.100.7", 1)
+
+    mut inb := tunnel.ListenTcp(0)
+    inb.per_source = 2
+    inb.handshake_ms = 1500
+    fwd := tunnel.NewForwarder(tunnel.Direct(), socks.NewInbound(socks.NewServerConfig(0)))
+    tunnel.ServeBackground(inb, socks.NewInbound(socks.NewServerConfig(0)), fwd)
+    a := tcp.Dial("127.0.0.1", inb.port)
+    b := tcp.Dial("127.0.0.1", inb.port)
+    c := tcp.Dial("127.0.0.1", inb.port)
+    sync.SleepMs(300)
+    println "the third silent connection is refused at once:", closed_by_peer(c, 400)
+    println "the first two are still waiting:", not closed_by_peer(a, 100), not closed_by_peer(b, 100)
+    println "the handshake deadline closes them:", closed_by_peer(a, 3000), closed_by_peer(b, 500)
+    d := tcp.Dial("127.0.0.1", inb.port)
+    println "a new connection is accepted again:", not closed_by_peer(d, 300)
+    tcp.Close(d)
+    inb.Stop()
+end

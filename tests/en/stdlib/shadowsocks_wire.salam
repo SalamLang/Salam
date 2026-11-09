@@ -1,0 +1,201 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import net.shadowsocks
+import mem
+
+mut failures := 0
+
+func check(name: str, ok: bool):
+    if ok:
+        println "PASS", name
+    else:
+        println "FAIL", name
+        failures += 1
+    end
+end
+
+func addr_case(host: str, port: int, want_hex: str, want_host: str):
+    mut b := shadowsocks.NewBuf(64)
+    ok := shadowsocks.EncodeTarget(host, port, b)
+    mut t := shadowsocks.Target {}
+    n := shadowsocks.ParseTarget(b.p, b.len, t)
+    check("addr " + host, ok and shadowsocks.BufToHex(b) == want_hex and n == b.len and t.host == want_host and t.port == port)
+    mut short := shadowsocks.Target {}
+    check("addr partial " + host, shadowsocks.ParseTarget(b.p, b.len - 1, short) == 0)
+    shadowsocks.BufFree(b)
+end
+
+func addr_tests():
+    addr_case("example.com", 443, "030b6578616d706c652e636f6d01bb", "example.com")
+    addr_case("1.2.3.4", 80, "01010203040050", "1.2.3.4")
+    addr_case("::1", 8080, "04" + "00000000000000000000000000000001" + "1f90", "::1")
+    addr_case("2001:db8::ff00:42:8329", 1, "0420010db8000000000000ff00004283290001", "2001:db8::ff00:42:8329")
+    addr_case("[fe80::1]", 2, "04fe8000000000000000000000000000010002", "fe80::1")
+    addr_case("1:2:3:4:5:6:7:8", 3, "04000100020003000400050006000700080003", "1:2:3:4:5:6:7:8")
+    addr_case("256.1.1.1", 5, "03093235362e312e312e310005", "256.1.1.1")
+    mut b := shadowsocks.NewBuf(8)
+    check("addr bad port", not shadowsocks.EncodeTarget("a.b", 70000, b))
+    bad := shadowsocks.BufFromHex("0900")
+    mut t := shadowsocks.Target {}
+    check("addr bad type", shadowsocks.ParseTarget(bad.p, bad.len, t) < 0)
+end
+
+func feed_slow(src: shadowsocks.Buf, o &: shadowsocks.Obfs, out &: shadowsocks.Buf, step: int): bool:
+    mut i := 0
+    until i < src.len:
+        mut take := step
+        if take > src.len - i:
+            take = src.len - i
+        end
+        if shadowsocks.ObfsUnwrap(o, shadowsocks.BufAt(src, i), take, out) < 0:
+            ret false
+        end
+        i += take
+    end
+    ret true
+end
+
+func obfs_case(name: str, mode: int, size: int):
+    mut client := shadowsocks.ObfsInit(mode, false, "cdn.example.com")
+    mut server := shadowsocks.ObfsInit(mode, true, "")
+    payload := mem.AllocateZeroed((size + 1) as u64)
+    pp := payload as u8*
+    repeat size in i:
+        pp[i] = ((i * 13 + 5) % 251) as u8
+    end
+    mut wire := shadowsocks.NewBuf(256)
+    shadowsocks.ObfsWrap(client, payload, size, wire)
+    mut got := shadowsocks.NewBuf(256)
+    ok1 := feed_slow(wire, server, got, 7)
+    mut same := got.len == size
+    if same:
+        gp := got.p as u8*
+        repeat size in j:
+            if gp[j] != pp[j]:
+                same = false
+            end
+        end
+    end
+    check(name + " client to server", ok1 and same)
+    mut wire2 := shadowsocks.NewBuf(256)
+    shadowsocks.ObfsWrap(client, payload, size, wire2)
+    mut got2 := shadowsocks.NewBuf(256)
+    ok2 := feed_slow(wire2, server, got2, 1000)
+    check(name + " second write", ok2 and got2.len == size)
+    mut wire3 := shadowsocks.NewBuf(256)
+    shadowsocks.ObfsWrap(server, payload, size, wire3)
+    mut got3 := shadowsocks.NewBuf(256)
+    ok3 := feed_slow(wire3, client, got3, 5)
+    check(name + " server to client", ok3 and got3.len == size)
+    mut wire4 := shadowsocks.NewBuf(256)
+    shadowsocks.ObfsWrap(server, payload, size, wire4)
+    mut got4 := shadowsocks.NewBuf(256)
+    ok4 := feed_slow(wire4, client, got4, 4096)
+    check(name + " server second write", ok4 and got4.len == size)
+    mem.Free(payload)
+end
+
+func obfs_shape():
+    mut client := shadowsocks.ObfsInit(shadowsocks.OBFS_HTTP, false, "cdn.example.com")
+    mut w := shadowsocks.NewBuf(256)
+    shadowsocks.ObfsWrap(client, "abc" as void*, 3, w)
+    text := shadowsocks.BufToStr(w)
+    check("http starts with GET", text.starts_with("GET / HTTP/1.1\r\nHost: cdn.example.com\r\n"))
+    check("http has upgrade", text.includes("Upgrade: websocket\r\n") and text.includes("Content-Length: 3\r\n\r\nabc"))
+    mut c2 := shadowsocks.ObfsInit(shadowsocks.OBFS_TLS, false, "cdn.example.com")
+    mut w2 := shadowsocks.NewBuf(256)
+    shadowsocks.ObfsWrap(c2, "abc" as void*, 3, w2)
+    p := w2.p as u8*
+    check("tls hello record", p[0] == (22 as u8) and p[1] == (3 as u8) and p[2] == (1 as u8) and p[5] == (1 as u8))
+    check("tls hello length", ((p[3] as int) * 256 + (p[4] as int)) == w2.len - 5)
+    check("tls hello carries sni", shadowsocks.BufToHex(w2).includes("63646e2e6578616d706c652e636f6d"))
+    mut w3 := shadowsocks.NewBuf(256)
+    shadowsocks.ObfsWrap(c2, "abc" as void*, 3, w3)
+    q := w3.p as u8*
+    check("tls application record", w3.len == 8 and q[0] == (23 as u8) and q[1] == (3 as u8) and q[2] == (3 as u8) and q[4] == (3 as u8))
+    mut s2 := shadowsocks.ObfsInit(shadowsocks.OBFS_TLS, true, "")
+    mut w4 := shadowsocks.NewBuf(256)
+    shadowsocks.ObfsWrap(s2, "abc" as void*, 3, w4)
+    r := w4.p as u8*
+    check("tls server hello", r[0] == (22 as u8) and r[5] == (2 as u8) and w4.len == 5 + 91 + 6 + 37 + 8)
+end
+
+func obfs_garbage():
+    mut server := shadowsocks.ObfsInit(shadowsocks.OBFS_TLS, true, "")
+    mut out := shadowsocks.NewBuf(64)
+    junk := "GET / HTTP/1.1\r\n\r\n"
+    check("tls rejects non tls", shadowsocks.ObfsUnwrap(server, junk as void*, junk.len(), out) < 0)
+    mut hs := shadowsocks.ObfsInit(shadowsocks.OBFS_HTTP, true, "")
+    mut out2 := shadowsocks.NewBuf(64)
+    partial := "GET / HTTP/1.1\r\nHost: x"
+    check("http waits for end of header", shadowsocks.ObfsUnwrap(hs, partial as void*, partial.len(), out2) == 1 and out2.len == 0)
+    check("obfs mode names", shadowsocks.ObfsMode("http") == shadowsocks.OBFS_HTTP and shadowsocks.ObfsMode("tls") == shadowsocks.OBFS_TLS and shadowsocks.ObfsMode("x") == shadowsocks.OBFS_NONE)
+end
+
+func show_uri(name: str, u: shadowsocks.Uri, method: str, password: str, host: str, port: int, plugin: str, tag: str):
+    check(name, u.ok and u.method == method and u.password == password and u.host == host and u.port == port and u.plugin == plugin and u.tag == tag)
+end
+
+func uri_tests():
+    show_uri("uri sip002", shadowsocks.ParseUri("ss://YWVzLTI1Ni1nY206cGFzc3dvcmQ@example.com:8388#My%20Node"), "aes-256-gcm", "password", "example.com", 8388, "", "My Node")
+    show_uri("uri ipv6 plugin", shadowsocks.ParseUri("ss://Y2hhY2hhMjAtaWV0Zi1wb2x5MTMwNTpwYXNz@[2001:db8::1]:443/?plugin=obfs-local%3Bobfs%3Dhttp%3Bobfs-host%3Dexample.com#tag"), "chacha20-ietf-poly1305", "pass", "2001:db8::1", 443, "obfs-local;obfs=http;obfs-host=example.com", "tag")
+    show_uri("uri legacy", shadowsocks.ParseUri("ss://YWVzLTEyOC1nY206dGVzdEAxOTIuMTY4LjEuMTo4ODg4"), "aes-128-gcm", "test", "192.168.1.1", 8888, "", "")
+    show_uri("uri 2022 plain", shadowsocks.ParseUri("ss://2022-blake3-aes-128-gcm:AAECAwQFBgcICQoLDA0ODw%3D%3D@1.2.3.4:5000"), "2022-blake3-aes-128-gcm", "AAECAwQFBgcICQoLDA0ODw==", "1.2.3.4", 5000, "", "")
+    check("uri wrong scheme", not shadowsocks.ParseUri("http://x").ok)
+    check("uri unknown method", not shadowsocks.ParseUri("ss://cmM0LW1kNTpwdw@h.example:1").ok)
+    check("uri no port", not shadowsocks.ParseUri("ss://YWVzLTI1Ni1nY206cGFzc3dvcmQ@example.com").ok)
+    u := shadowsocks.ParseUri("ss://YWVzLTI1Ni1nY206cGFzc3dvcmQ@example.com:8388/?plugin=v2ray-plugin%3Bserver%3Btls%3Bhost%3Dcdn.example.com#My%20Node")
+    f := shadowsocks.FormatUri(u)
+    check("uri format", f == "ss://YWVzLTI1Ni1nY206cGFzc3dvcmQ@example.com:8388/?plugin=v2ray-plugin%3Bserver%3Btls%3Bhost%3Dcdn.example.com#My%20Node")
+    again := shadowsocks.ParseUri(f)
+    check("uri round trip", again.ok and again.password == u.password and again.plugin == u.plugin and again.tag == u.tag)
+    mut v6 := shadowsocks.Uri { method = "aes-128-gcm", password = "p:w", host = "::1", port = 9 }
+    v6.ok = true
+    v6r := shadowsocks.ParseUri(shadowsocks.FormatUri(v6))
+    check("uri ipv6 round trip", v6r.ok and v6r.host == "::1" and v6r.password == "p:w" and v6r.port == 9)
+    mut s22 := shadowsocks.Uri { method = "2022-blake3-aes-256-gcm", password = "a+b/c=", host = "h.example", port = 1 }
+    s22.ok = true
+    s22f := shadowsocks.FormatUri(s22)
+    check("uri 2022 format plain", s22f.starts_with("ss://2022-blake3-aes-256-gcm:a%2Bb%2Fc%3D@h.example:1"))
+    s22r := shadowsocks.ParseUri(s22f)
+    check("uri 2022 round trip", s22r.ok and s22r.password == "a+b/c=")
+    p := shadowsocks.ParsePlugin(u.plugin)
+    check("plugin name", p.name == "v2ray-plugin")
+    check("plugin opts", shadowsocks.PluginGet(p, "host", "-") == "cdn.example.com" and shadowsocks.PluginHas(p, "tls") and shadowsocks.PluginHas(p, "server") and not shadowsocks.PluginHas(p, "mux"))
+    check("plugin default", shadowsocks.PluginGet(p, "path", "/") == "/")
+    shadowsocks.PluginFree(p)
+    esc := shadowsocks.ParsePlugin(`obfs-local;obfs-host=a\;b;obfs=tls`)
+    check("plugin escapes", shadowsocks.PluginGet(esc, "obfs-host", "") == "a;b" and shadowsocks.PluginGet(esc, "obfs", "") == "tls")
+    shadowsocks.PluginFree(esc)
+    cfg := shadowsocks.ToConfig(shadowsocks.ParseUri("ss://YWVzLTI1Ni1nY206cGFzc3dvcmQ@example.com:8388/?plugin=obfs-local%3Bobfs%3Dtls%3Bobfs-host%3Dwww.example.org"))
+    check("config from uri", cfg.obfs == "tls" and cfg.obfs_host == "www.example.org" and cfg.host == "example.com" and cfg.port == 8388 and cfg.method == "aes-256-gcm")
+    cfg2 := shadowsocks.ToConfig(u)
+    check("config ignores v2ray plugin", cfg2.obfs == "")
+end
+
+func main:
+    addr_tests()
+    obfs_case("obfs http small", shadowsocks.OBFS_HTTP, 40)
+    obfs_case("obfs http large", shadowsocks.OBFS_HTTP, 50000)
+    obfs_case("obfs tls small", shadowsocks.OBFS_TLS, 40)
+    obfs_case("obfs tls large", shadowsocks.OBFS_TLS, 50000)
+    obfs_shape()
+    obfs_garbage()
+    uri_tests()
+    println "failures", failures
+    ret failures
+end

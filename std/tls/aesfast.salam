@@ -264,6 +264,7 @@ struct FastGcm:
     pub rk: u32* = null
     pub ht: u64* = null
     pub nr: int = 0
+    pub hw: HwGcm* = null
 end
 
 struct FgY:
@@ -365,18 +366,10 @@ inline func _fg_sub4(a: u32, b: u32, c: u32, d: u32): u32:
     ret ((FG_SBOX[(a >> (24 as u32)) as int] as u32) << (24 as u32)) | ((FG_SBOX[((b >> (16 as u32)) & (255 as u32)) as int] as u32) << (16 as u32)) | ((FG_SBOX[((c >> (8 as u32)) & (255 as u32)) as int] as u32) << (8 as u32)) | (FG_SBOX[(d & (255 as u32)) as int] as u32)
 end
 
-func _fg_new(key: void*, keylen: int): FastGcm*:
-    if keylen != 16 and keylen != 32:
-        ret null
-    end
-    c := mem.AllocateZeroed(sizeof(FastGcm) as u64) as FastGcm*
-    c.nr = keylen == 16 ? 10 : 14
+func _fg_expand(key: void*, keylen: int, rk: u32*): int:
     nk := keylen / 4
-    total := (c.nr + 1) * 4
-    mem_ := mem.AllocateZeroed(4352 as u64)
-    c.rk = mem_ as u32*
-    c.ht = ((mem_ as i64) + (256 as i64)) as u64*
-    rk := c.rk
+    nr := nk + 6
+    total := (nr + 1) * 4
     repeat nk in i:
         rk[i] = _fg_be32(key, i * 4)
     end
@@ -391,6 +384,32 @@ func _fg_new(key: void*, keylen: int): FastGcm*:
         rk[i] = rk[i - nk] ^ t
         i++
     end
+    ret nr
+end
+
+func _fg_new_gcm(key: void*, keylen: int): FastGcm*:
+    if keylen != 16 and keylen != 32:
+        ret null
+    end
+    hw := _hg_try(key, keylen)
+    if hw != null:
+        c := mem.AllocateZeroed(sizeof(FastGcm) as u64) as FastGcm*
+        c.nr = hw.nr
+        c.hw = hw
+        ret c
+    end
+    ret _fg_new(key, keylen)
+end
+
+func _fg_new(key: void*, keylen: int): FastGcm*:
+    if keylen != 16 and keylen != 32:
+        ret null
+    end
+    c := mem.AllocateZeroed(sizeof(FastGcm) as u64) as FastGcm*
+    mem_ := mem.AllocateZeroed(4352 as u64)
+    c.rk = mem_ as u32*
+    c.ht = ((mem_ as i64) + (256 as i64)) as u64*
+    c.nr = _fg_expand(key, keylen, c.rk)
     hb := mem.AllocateZeroed(16 as u64)
     _fg_block(c, 0 as u32, 0 as u32, 0 as u32, 0 as u32, hb, 0)
     mut vh := _be64(hb, 0)
@@ -424,8 +443,11 @@ func _fg_free(c: FastGcm*):
     if c == null:
         ret
     end
-    _wipe(c.rk as void*, 4352)
-    mem.Free(c.rk as void*)
+    _hg_free(c.hw)
+    if c.rk != null:
+        _wipe(c.rk as void*, 4352)
+        mem.Free(c.rk as void*)
+    end
     _wipe(c as void*, sizeof(FastGcm) as int)
     mem.Free(c as void*)
 end
@@ -478,6 +500,10 @@ func _fg_tag(c: FastGcm*, nonce: void*, aad: void*, aadlen: int, ct: void*, n: i
 end
 
 func _fg_seal(c: FastGcm*, nonce: void*, aad: void*, aadlen: int, pt: void*, ct: void*, n: int, tag: void*):
+    if c.hw != null:
+        _hg_seal(c.hw, nonce, aad, aadlen, pt, ct, n, tag)
+        ret
+    end
     _fg_ctr(c, nonce, 2, pt, ct, n)
     mut t := FgY {}
     _fg_tag(c, nonce, aad, aadlen, ct, n, t)
@@ -486,6 +512,9 @@ func _fg_seal(c: FastGcm*, nonce: void*, aad: void*, aadlen: int, pt: void*, ct:
 end
 
 func _fg_open(c: FastGcm*, nonce: void*, aad: void*, aadlen: int, ct: void*, n: int, tag: void*, pt: void*): bool:
+    if c.hw != null:
+        ret _hg_open(c.hw, nonce, aad, aadlen, ct, n, tag, pt)
+    end
     mut t := FgY {}
     _fg_tag(c, nonce, aad, aadlen, ct, n, t)
     d1 := t.hi ^ _be64(tag, 0)

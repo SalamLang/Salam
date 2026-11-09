@@ -554,6 +554,13 @@ func review_pull_request(gh: GitHub, repo: str, number: str) throws:
     end
 end
 
+func is_model_auth_error(message: str): bool:
+    if message.includes("/chat/completions") == false:
+        ret false
+    end
+    ret message.starts_with("HTTP 401 ") or message.starts_with("HTTP 403 ")
+end
+
 func main(): int:
     token := env.GetOr("GITHUB_TOKEN", "")
     repo := env.GetOr("GITHUB_REPOSITORY", "")
@@ -562,16 +569,29 @@ func main(): int:
         println "GITHUB_TOKEN, GITHUB_REPOSITORY and PR_NUMBER are required"
         ret 2
     end
+    is_fork := env.GetOr("PR_IS_FORK", "") == "true"
     if env.GetOr("SALAM_AI_API_KEY", "") == "":
-        println "SALAM_AI_API_KEY is not set; skipping the review"
-        ret 0
+        if is_fork:
+            println "SALAM_AI_API_KEY is not available to this fork pull request; skipping the review"
+            ret 0
+        end
+        println "::error::The repository secret SALAM_AI_API_KEY is missing or empty. Create it under Settings, Secrets and variables, Actions with the github-review key for ai-api.salamlang.ir."
+        ret 1
     end
     api := env.GetOr("GITHUB_API_URL", "https://api.github.com")
     gh := GitHub { token = token, base = api + "/repos/" + repo }
     try:
         review_pull_request(gh, repo, number)
     catch e:
-        println "::error::Salam AI review failed: " + e.to_str()
+        message := e.to_str()
+        if is_model_auth_error(message):
+            println "::error::The Salam AI API rejected SALAM_AI_API_KEY (" + message + "). Create a new key for ai-api.salamlang.ir and update the SALAM_AI_API_KEY repository secret."
+            if is_fork:
+                ret 0
+            end
+            ret 1
+        end
+        println "::error::Salam AI review failed: " + message
         ret 1
     end
     ret 0

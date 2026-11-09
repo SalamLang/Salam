@@ -35,6 +35,9 @@ pub const BcjSPARC := 9
 @en "BcjARM64"
 @fa "فیلتر آرم۶۴"
 pub const BcjARM64 := 10
+@en "BcjRISCV"
+@fa "فیلتر ریسک۵"
+pub const BcjRISCV := 11
 
 const _BCJ_ALLOWED := [1, 1, 1, 0, 1, 0, 0, 0]
 const _BCJ_BITNUM := [0, 1, 2, 2, 3, 3, 3, 3]
@@ -254,6 +257,70 @@ func _bcj_arm64(b: u8*, size: int, start: i64):
     end
 end
 
+func _bcj_riscv(b: u8*, size: int, start: i64):
+    if size < 8:
+        ret
+    end
+    lim := size - 8
+    mut i := 0
+    until i <= lim:
+        mut inst := b[i] as i64
+        if inst == 0xEF:
+            b1 := b[i + 1] as i64
+            if (b1 & 0x0D) != 0:
+                i += 2
+                continue
+            end
+            b2 := b[i + 2] as i64
+            b3 := b[i + 3] as i64
+            pc := (start + (i as i64)) & 0xFFFFFFFF
+            mut addr := ((b1 & 0xF0) << 13) | (b2 << 9) | (b3 << 1)
+            addr = (addr - pc) & 0xFFFFFFFF
+            b[i + 1] = ((b1 & 0x0F) | ((addr >> 8) & 0xF0)) as u8
+            b[i + 2] = (((addr >> 16) & 0x0F) | ((addr >> 7) & 0x10) | ((addr << 4) & 0xE0)) as u8
+            b[i + 3] = (((addr >> 4) & 0x7F) | ((addr >> 13) & 0x80)) as u8
+            i += 4
+        else (inst & 0x7F) == 0x17:
+            inst |= (b[i + 1] as i64) << 8
+            inst |= (b[i + 2] as i64) << 16
+            inst |= (b[i + 3] as i64) << 24
+            mut inst2 := 0 as i64
+            if (inst & 0xE80) != 0:
+                inst2 = (b[i + 4] as i64) | ((b[i + 5] as i64) << 8) | ((b[i + 6] as i64) << 16) | ((b[i + 7] as i64) << 24)
+                if ((((inst << 8) ^ (inst2 - 3)) & 0xF8003) != 0):
+                    i += 6
+                    continue
+                end
+                addr := ((inst & 0xFFFFF000) + (inst2 >> 20)) & 0xFFFFFFFF
+                inst = (0x17 | (2 << 7) | (inst2 << 12)) & 0xFFFFFFFF
+                inst2 = addr
+            else:
+                rs1 := inst >> 27
+                t := ((inst - 0x3117) << 18) & 0xFFFFFFFF
+                if t >= (rs1 & 0x1D):
+                    i += 4
+                    continue
+                end
+                mut addr := ((b[i + 4] as i64) << 24) | ((b[i + 5] as i64) << 16) | ((b[i + 6] as i64) << 8) | (b[i + 7] as i64)
+                addr = (addr - ((start + (i as i64)) & 0xFFFFFFFF)) & 0xFFFFFFFF
+                inst2 = ((inst >> 12) | (addr << 20)) & 0xFFFFFFFF
+                inst = (0x17 | (rs1 << 7) | ((addr + 0x800) & 0xFFFFF000)) & 0xFFFFFFFF
+            end
+            b[i] = (inst & 255) as u8
+            b[i + 1] = ((inst >> 8) & 255) as u8
+            b[i + 2] = ((inst >> 16) & 255) as u8
+            b[i + 3] = ((inst >> 24) & 255) as u8
+            b[i + 4] = (inst2 & 255) as u8
+            b[i + 5] = ((inst2 >> 8) & 255) as u8
+            b[i + 6] = ((inst2 >> 16) & 255) as u8
+            b[i + 7] = ((inst2 >> 24) & 255) as u8
+            i += 8
+        else:
+            i += 2
+        end
+    end
+end
+
 @en "BcjDecode"
 @fa "کدگشایی فیلتر شاخه"
 pub func BcjDecode(kind: int, p: void*, n: int, start: int): bool:
@@ -273,6 +340,8 @@ pub func BcjDecode(kind: int, p: void*, n: int, start: int): bool:
         _bcj_sparc(b, n, s)
     else kind == BcjARM64:
         _bcj_arm64(b, n, s)
+    else kind == BcjRISCV:
+        _bcj_riscv(b, n, s)
     else:
         ret false
     end
@@ -290,6 +359,32 @@ pub func DeltaDecode(p: void*, n: int, dist: int): bool:
     until i < n:
         b[i] = (((b[i] as int) + (b[i - dist] as int)) & 255) as u8
         i++
+    end
+    ret true
+end
+
+@en "SwapDecode"
+@fa "کدگشایی فیلتر جابجایی بایت"
+pub func SwapDecode(p: void*, n: int, width: int): bool:
+    if width != 2 and width != 4:
+        ret false
+    end
+    b := p as u8*
+    mut i := 0
+    until i + width <= n:
+        if width == 2:
+            t := b[i]
+            b[i] = b[i + 1]
+            b[i + 1] = t
+        else:
+            t0 := b[i]
+            t1 := b[i + 1]
+            b[i] = b[i + 3]
+            b[i + 1] = b[i + 2]
+            b[i + 2] = t1
+            b[i + 3] = t0
+        end
+        i += width
     end
     ret true
 end

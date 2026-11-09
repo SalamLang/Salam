@@ -101,9 +101,12 @@ def main():
     vpn = os.environ.get("INTEROP_OURS", "vpn")
     work = os.environ.get("INTEROP_WORK") or tempfile.mkdtemp(prefix="interop-")
     cert, key = os.path.join(work, "cert.pem"), os.path.join(work, "key.pem")
-    names = ["vless", "vmess", "trojan", "ss", "mixed", "socks", "http"]
+    names = ["vless", "vmess", "trojan", "ss", "mixed", "socks", "http", "grpc", "reality"]
     ports = {n: free_port() for n in names}
     tlsport = free_port()
+    if not os.path.exists(cert):
+        subprocess.check_call(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-keyout", key, "-out", cert, "-days", "30", "-subj", "/CN=localhost", "-addext", "subjectAltName=DNS:localhost,IP:127.0.0.1"], stderr=subprocess.DEVNULL)
+    echo = Echo(cert, key, "X25519")
     cfg = {
         "inbounds": [
             {"tag": "vless", "port": ports["vless"], "protocol": "vless", "settings": {"clients": [{"id": UUID}]}},
@@ -120,6 +123,20 @@ def main():
             {"tag": "socks", "listen": "127.0.0.1", "port": ports["socks"], "protocol": "socks"},
             {"tag": "http", "listen": "127.0.0.1", "port": ports["http"], "protocol": "http"},
             {
+                "tag": "grpc",
+                "port": ports["grpc"],
+                "protocol": "vless",
+                "settings": {"clients": [{"id": UUID}]},
+                "streamSettings": {"network": "grpc", "security": "tls", "grpcSettings": {"serviceName": "gsvc"}, "tlsSettings": {"certificates": [{"certificateFile": cert, "keyFile": key}]}},
+            },
+            {
+                "tag": "reality",
+                "port": ports["reality"],
+                "protocol": "vless",
+                "settings": {"clients": [{"id": UUID}]},
+                "streamSettings": {"security": "reality", "realitySettings": {"dest": "127.0.0.1:%d" % echo.tls_port, "serverNames": ["localhost"], "privateKey": "QI3DpbA326sqI7QAAz13iSj6Jk9Q8UUvgkjlKZu2u2I", "shortIds": ["0123abcd"]}},
+            },
+            {
                 "tag": "vlesstls",
                 "port": tlsport,
                 "protocol": "vless",
@@ -132,7 +149,6 @@ def main():
     }
     cp = os.path.join(work, "fuzz.json")
     json.dump(cfg, open(cp, "w"))
-    echo = Echo()
     procs = Procs(work)
     problems = []
     try:
@@ -146,7 +162,7 @@ def main():
         print("baseline fds=%d rss=%dkB threads=%d" % (base_fd, base_rss, base_threads))
         for name, data in garbage_cases():
             for n in names:
-                hit(ports[n], data, tls=(n == "trojan"), linger=0.3)
+                hit(ports[n], data, tls=(n in ("trojan", "grpc")), linger=0.3)
             hit(tlsport, data, tls=True, linger=0.3)
             if p.poll() is not None:
                 problems.append("server died after case: " + name)
@@ -168,6 +184,22 @@ def main():
             if not ok:
                 problems.append("service broken")
             print("rss now %dkB (baseline %dkB), threads %d (baseline %d)" % (rss(p.pid), base_rss, threads(p.pid), base_threads))
+            vm0 = vmsize(p.pid)
+            import concurrent.futures
+
+            def one(_i):
+                ok_, _d = check_tcp_via_socks(ports["mixed"], echo.port, 2000)
+                return ok_
+
+            for rnd in (1, 2):
+                vm1 = vmsize(p.pid)
+                f0, t0_, r0 = fds(p.pid), threads(p.pid), rss(p.pid)
+                with concurrent.futures.ThreadPoolExecutor(20) as ex:
+                    good = sum(1 for x in ex.map(one, range(500)) if x)
+                time.sleep(2)
+                print("500 valid sessions, round %d: %d ok; fds %d -> %d, threads %d -> %d, rss %d -> %d kB, vmsize %d -> %d kB" % (rnd, good, f0, fds(p.pid), t0_, threads(p.pid), r0, rss(p.pid), vm1, vmsize(p.pid)))
+            if good < 495 or fds(p.pid) > f0 + 3 or vmsize(p.pid) - vm1 > 200000:
+                problems.append("500 valid sessions leave growth")
             vm0 = vmsize(p.pid)
             for _ in range(300):
                 try:

@@ -47,13 +47,21 @@ struct _TarPush:
     pub outpath: str
     pub mode: int
     pub mtime: i64
+    pub only: str
+    pub dest: str
+    pub found: bool
+    pub stop: bool
+    pub tcap: i64
 end
 
 func _tp_new(destdir: str, cap: i64, list_only: bool): _TarPush:
     ret _TarPush {
-        destdir = destdir, cap = cap, list_only = list_only, state = _TP_HDR, have = 0, meta_left = 0, left = 0 as i64, pad = 0
-        mini = compress.NewByteBufCap(2048), g = _TarPax {}, dirs = Vector {} as Vector<str>, dir_times = Vector {} as Vector<i64>
-        entries = Vector {} as Vector<Entry>, status = TAR_OK, sink = compress.FileSink {}, open = false, outpath = "", mode = 0, mtime = 0 as i64
+        destdir = destdir, cap = cap, list_only = list_only, state = _TP_HDR, have = 0, meta_left = 0,
+        left = 0 as i64, pad = 0
+        mini = compress.NewByteBufCap(2048), g = _TarPax {}, dirs = Vector {} as Vector<str>,
+        dir_times = Vector {} as Vector<i64> entries = Vector {} as Vector<Entry>, status = TAR_OK,
+        sink = compress.FileSink {}, open = false, outpath = "", mode = 0, mtime = 0 as i64
+        only = "", dest = "", found = false, stop = false, tcap = 0 as i64
     }
 end
 
@@ -92,6 +100,9 @@ end
 
 func _tp_after_data(tp: _TarPush*):
     _tp_close_file(tp, true)
+    if tp[0].only.len() > 0 and tp[0].found:
+        tp[0].stop = true
+    end
     if tp[0].pad > 0:
         tp[0].state = _TP_PAD
     else:
@@ -109,6 +120,21 @@ func _tp_begin(tp: _TarPush*, e: Entry):
         end
         ret
     end
+    if tp[0].only.len() > 0:
+        if tp[0].stop or e.kind != 0 or e.name != tp[0].only:
+            if e.kind == 0:
+                tp[0].left = e.size
+                tp[0].pad = ((((e.size + (511 as i64)) / (512 as i64)) * (512 as i64)) - e.size) as int
+                if e.size > (0 as i64):
+                    tp[0].state = _TP_SKIP
+                end
+            end
+            _tar_free_str(e.name)
+            _tar_free_str(e.link)
+            ret
+        end
+        tp[0].found = true
+    end
     if e.kind != 0:
         mut st := TAR_OK
         if not _tar_place(e, tp[0].destdir, tp[0].dirs, tp[0].dir_times, null, 0, null, 0 as i64, tp[0].cap, st):
@@ -122,15 +148,17 @@ func _tp_begin(tp: _TarPush*, e: Entry):
     tp[0].left = e.size
     tp[0].pad = ((((e.size + (511 as i64)) / (512 as i64)) * (512 as i64)) - e.size) as int
     tp[0].state = _TP_SKIP
-    if not _safe_entry_name(e.name) or _tar_through_link(tp[0].destdir, e.name):
+    if tp[0].only.len() == 0 and (not _safe_entry_name(e.name) or _tar_through_link(tp[0].destdir, e.name)):
         _tp_note(tp, TAR_UNSAFE_PATH)
     else tp[0].cap > (0 as i64) and e.size > tp[0].cap:
         _tp_note(tp, TAR_TOO_BIG)
     else:
-        outpath := filepath.Join(tp[0].destdir, e.name)
-        parent := filepath.Dir(outpath)
-        EnsureDir(parent)
-        mem.Free(parent as void*)
+        outpath := tp[0].only.len() > 0 ? str.Clone(tp[0].dest) : filepath.Join(tp[0].destdir, e.name)
+        if tp[0].only.len() == 0:
+            parent := filepath.Dir(outpath)
+            EnsureDir(parent)
+            mem.Free(parent as void*)
+        end
         os.Remove(outpath)
         tp[0].sink = compress.SinkOpen(outpath, tp[0].cap)
         if tp[0].sink.failed:
@@ -252,7 +280,7 @@ end
 
 func _tp_end(tp: _TarPush*): int:
     st := tp[0].state
-    if st == _TP_DATA or st == _TP_SKIP or st == _TP_PAD or st == _TP_META or tp[0].have > 0:
+    if not tp[0].stop and (st == _TP_DATA or st == _TP_SKIP or st == _TP_PAD or st == _TP_META or tp[0].have > 0):
         _tp_note(tp, TAR_CORRUPT)
         _tp_close_file(tp, false)
     end
@@ -269,7 +297,7 @@ func _tar_push_run(path: str, format: int, tp: _TarPush*): int:
         ret TAR_IO
     end
     size := compress.FileSize(fp)
-    mut sink := compress.SinkCallback(0 as i64, emit, tp as void*)
+    mut sink := compress.SinkCallback(tp[0].tcap, emit, tp as void*)
     mut code := ARCHIVE_CORRUPT
     if format == FormatTarGz:
         code = _gz_to_sink(fp, size, sink)
@@ -293,6 +321,9 @@ func _tar_push_run(path: str, format: int, tp: _TarPush*): int:
         code = ARCHIVE_UNSUPPORTED
     end
     compress.FileClose(fp)
+    if tp[0].stop:
+        code = ARCHIVE_OK
+    end
     if code == ARCHIVE_OK:
         ret TAR_OK
     end
@@ -307,12 +338,13 @@ end
 
 func _tp_emit(tp: _TarPush*, p: void*, n: int): bool:
     _tp_feed(tp, p, n)
-    ret true
+    ret not tp[0].stop
 end
 
-func _tar_push_all(path: str, format: int, destdir: str, cap: i64): int:
+func _tar_push_all_cap(path: str, format: int, destdir: str, cap: i64, total: i64): int:
     tp := mem.AllocateZeroed(sizeof(_TarPush)) as _TarPush*
     tp[0] = _tp_new(destdir, cap, false)
+    tp[0].tcap = total
     dec := _tar_push_run(path, format, tp)
     end_st := _tp_end(tp)
     mem.Free(tp as void*)
@@ -320,6 +352,22 @@ func _tar_push_all(path: str, format: int, destdir: str, cap: i64): int:
         ret end_st
     end
     ret dec
+end
+
+func _tar_push_all(path: str, format: int, destdir: str, cap: i64): int:
+    ret _tar_push_all_cap(path, format, destdir, cap, 0 as i64)
+end
+
+func _tar_push_list(path: str, format: int, total: i64, status &: int): Vector<Entry>:
+    tp := mem.AllocateZeroed(sizeof(_TarPush)) as _TarPush*
+    tp[0] = _tp_new("", 0 as i64, true)
+    tp[0].tcap = total
+    dec := _tar_push_run(path, format, tp)
+    end_st := _tp_end(tp)
+    out := tp[0].entries
+    mem.Free(tp as void*)
+    status = end_st != TAR_OK ? end_st : dec
+    ret out
 end
 
 @en "TarCompressedFileExtractAll"
@@ -331,14 +379,7 @@ end
 @en "TarCompressedFileEntries"
 @fa "مدخل های پرونده تار فشرده"
 pub func TarCompressedFileEntries(path: str, format: int, status &: int): Vector<Entry>:
-    tp := mem.AllocateZeroed(sizeof(_TarPush)) as _TarPush*
-    tp[0] = _tp_new("", 0 as i64, true)
-    dec := _tar_push_run(path, format, tp)
-    end_st := _tp_end(tp)
-    out := tp[0].entries
-    mem.Free(tp as void*)
-    status = end_st != TAR_OK ? end_st : dec
-    ret out
+    ret _tar_push_list(path, format, 0 as i64, status)
 end
 
 @en "TarBz2FileExtractAll"
@@ -357,4 +398,25 @@ end
 @fa "استخراج همه از پرونده تار زستد"
 pub func TarZstdFileExtractAll(path: str, destdir: str, cap: i64): int:
     ret _tar_push_all(path, FormatTarZstd, destdir, cap)
+end
+
+@en "TarCompressedFileExtractTo"
+@fa "استخراج یک مدخل از پرونده تار فشرده"
+pub func TarCompressedFileExtractTo(path: str, format: int, name: str, destpath: str, cap: i64, total: i64): int:
+    tp := mem.AllocateZeroed(sizeof(_TarPush)) as _TarPush*
+    tp[0] = _tp_new("", cap, false)
+    tp[0].only = name
+    tp[0].dest = destpath
+    tp[0].tcap = total
+    dec := _tar_push_run(path, format, tp)
+    found := tp[0].found
+    end_st := _tp_end(tp)
+    mem.Free(tp as void*)
+    if end_st != TAR_OK:
+        ret end_st
+    end
+    if dec != TAR_OK:
+        ret dec
+    end
+    ret found ? TAR_OK : TAR_NOT_FOUND
 end

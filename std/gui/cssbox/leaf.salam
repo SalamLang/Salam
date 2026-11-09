@@ -1,0 +1,108 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package cssbox
+
+func _call_measure(t &: Engine, id: int, kw: f64, kh: f64, aw: f64, ah: f64): MeasureOutput:
+    n := t.nodes.ref(id)
+    if _is(kw) and _is(kh):
+        ret MeasureOutput { width = kw, height = kh }
+    end
+    if not n.has_measure:
+        ret MeasureOutput { width = _or(kw, 0.0), height = _or(kh, 0.0) }
+    end
+    t.measure_calls++
+    mi := MeasureInput { node = id, known_width = _or(kw, 0.0), has_known_width = _is(kw), known_height = _or(kh, 0.0), has_known_height = _is(kh), available_width = _space_in(aw), available_height = _space_in(ah) }
+    mut m := n.measure(mi)
+    if _is(kw):
+        m.width = kw
+    end
+    if _is(kh):
+        m.height = kh
+    end
+    ret m
+end
+
+func _leaf(t &: Engine, id: int, inp: Inp): Out:
+    n := t.nodes.ref(id)
+    pad := _r4(n.style.padding, inp.pw)
+    bor := _r4(n.style.border, inp.pw)
+    pbw := pad.l + pad.r + bor.l + bor.r
+    pbh := pad.t + pad.b + bor.t + bor.b
+    adjw := n.style.box_sizing == BoxSizing.ContentBox ? pbw : 0.0
+    adjh := n.style.box_sizing == BoxSizing.ContentBox ? pbh : 0.0
+    mut nw := inp.kw
+    mut nh := inp.kh
+    mut minw := NO
+    mut minh := NO
+    mut maxw := NO
+    mut maxh := NO
+    mut ratio := 0.0
+    if inp.inherent:
+        ratio = n.style.aspect_ratio
+        sw0 := _res(n.style.width, inp.pw)
+        sh0 := _res(n.style.height, inp.ph)
+        sw := _add(_arw(sw0, sh0, ratio), adjw)
+        sh := _add(_arh(sw0, sh0, ratio), adjh)
+        mnw0 := _res(n.style.min_width, inp.pw)
+        mnh0 := _res(n.style.min_height, inp.ph)
+        minw = _add(_arw(mnw0, mnh0, ratio), adjw)
+        minh = _add(_arh(mnw0, mnh0, ratio), adjh)
+        maxw = _add(_res(n.style.max_width, inp.pw), adjw)
+        maxh = _add(_res(n.style.max_height, inp.ph), adjh)
+        nw = _or(inp.kw, sw)
+        nh = _or(inp.kh, sh)
+    end
+    sgx := n.style.overflow_y == Overflow.Scroll ? n.style.scrollbar_width : 0.0
+    sgy := n.style.overflow_x == Overflow.Scroll ? n.style.scrollbar_width : 0.0
+    insw := pbw + sgx
+    insh := pbh + sgy
+    is_scroll := _scroller(n.style.overflow_x) or _scroller(n.style.overflow_y)
+    d := n.style.display
+    prevent := d != Display.Block or is_scroll or _oof(n.style.position) or pad.t > 0.0 or pad.b > 0.0 or bor.t > 0.0 or bor.b > 0.0 or (_is(nh) and nh > 0.0) or (_is(minh) and minh > 0.0)
+    if not inp.perform and prevent and _is(nw) and _is(nh):
+        ret Out { w = _fmax(_clampf(nw, minw, maxw), pbw), h = _fmax(_clampf(nh, minh, maxh), pbh) }
+    end
+    mut aw := _avset(_avset(_is(inp.kw) ? inp.kw : inp.aw, inp.kw), nw)
+    if _def(aw):
+        aw = _clampf(aw, minw, maxw) - insw
+    end
+    mut ah := _avset(_avset(_is(inp.kh) ? inp.kh : inp.ah, inp.kh), nh)
+    if _def(ah):
+        ah = _clampf(ah, minh, maxh) - insh
+    end
+    mkw := inp.perform ? NO : inp.kw
+    mkh := inp.perform ? NO : inp.kh
+    m := _call_measure(t, id, mkw, mkh, aw, ah)
+    mut cw := _is(inp.kw) ? inp.kw : (_is(nw) ? nw : m.width + insw)
+    mut ch := _is(inp.kh) ? inp.kh : (_is(nh) ? nh : m.height + insh)
+    cw = _clampf(cw, minw, maxw)
+    ch = _clampf(ch, minh, maxh)
+    if ratio > 0.0:
+        ch = _fmax(ch, cw / ratio)
+    end
+    cw = _fmax(cw, pbw)
+    ch = _fmax(ch, pbh)
+    if inp.perform:
+        n2 := t.nodes.ref(id)
+        n2.cmw = m.width
+        n2.cmh = m.height
+    end
+    mut o := Out { w = cw, h = ch }
+    if m.has_baseline:
+        o.baseline = pad.t + bor.t + m.baseline
+    end
+    o.collapse = not prevent and ch == 0.0 and m.height == 0.0
+    ret o
+end

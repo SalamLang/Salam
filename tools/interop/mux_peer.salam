@@ -13,6 +13,7 @@
  */
 package main
 
+import fs
 import mem
 import os
 import sync
@@ -20,11 +21,13 @@ import net.transport
 import net.tunnel
 import net.vless
 import net.vmess
+import net.vpn
 
 mut lock := sync.NewMutex()
 mut passed := 0
 mut done := sync.NewWaitGroup()
 mut replay := vmess.NewReplayFilter()
+mut stream_file := ""
 
 struct Job:
     pub s: dyn tunnel.Stream = tunnel.TcpStream {}
@@ -88,8 +91,13 @@ func session(jp: Job*):
     sync.Done(done)
 end
 
+func settings(): transport.Settings:
+    if stream_file.len() == 0: ret transport.Settings {} end
+    ret vpn.StreamSettings(fs.ReadText(stream_file))
+end
+
 func open_mux(proto: str, port: int, uuid: str): transport.Mux:
-    t := transport.Dial("127.0.0.1", port, transport.Settings {})
+    t := transport.Dial("127.0.0.1", port, settings())
     if not transport.Ok(t): ret transport.Mux {} end
     if proto == "vless":
         c := vless.Client(t, uuid, "", vless.CmdMux, transport.Addr {})
@@ -165,7 +173,7 @@ func serve_conn(cp: Conn*):
 end
 
 func run_server(a: Vector<str>): int:
-    l := transport.Listen(a[3].to_int(), transport.Settings {})
+    l := transport.Listen(a[3].to_int(), settings())
     if not transport.ListenerOk(l):
         println "FAIL listen"
         ret 1
@@ -182,10 +190,14 @@ end
 func main:
     a := os.Args()
     if a.len() < 5:
-        println "usage: mux_peer server|client vless|vmess PORT UUID [TARGET_HOST TARGET_PORT STREAMS BYTES]"
+        println "usage: mux_peer server|client vless|vmess PORT UUID [TARGET_HOST TARGET_PORT STREAMS BYTES] [STREAM_JSON]"
         ret 2
     end
-    if a[1] == "server": ret run_server(a) end
+    if a[1] == "server":
+        if a.len() > 5: stream_file = a[5] end
+        ret run_server(a)
+    end
+    if a.len() > 9: stream_file = a[9] end
     if a.len() < 9:
         println "usage: mux_peer client vless|vmess PORT UUID TARGET_HOST TARGET_PORT STREAMS BYTES"
         ret 2

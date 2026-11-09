@@ -1,0 +1,226 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package reactive
+
+import mem
+
+@en "ModelChange"
+@fa "تغییر‌مدل"
+pub enum ModelChange:
+    @en "RowChanged"
+    @fa "سطر تغییر کرد"
+    RowChanged,
+    @en "RowsInserted"
+    @fa "سطرها افزوده شد"
+    RowsInserted,
+    @en "RowsRemoved"
+    @fa "سطرها حذف شد"
+    RowsRemoved,
+    @en "Reset"
+    @fa "بازسازی کامل"
+    Reset
+end
+
+@en "ModelEvent"
+@fa "رویداد‌مدل"
+pub struct ModelEvent:
+    @en "kind"
+    @fa "گونه"
+    pub kind: ModelChange = ModelChange.Reset
+    @en "index"
+    @fa "شماره"
+    pub index: int = 0
+    @en "count"
+    @fa "شمار"
+    pub count: int = 0
+end
+
+struct ModelState<T>:
+    pub rows: Vector<T>
+    pub count_node: int = -1
+    pub data_node: int = -1
+    pub ls: Vector<func (ModelEvent)>
+    pub ls_on: Vector<bool>
+end
+
+@en "ListModel"
+@fa "مدل‌فهرست"
+pub struct ListModel<T>:
+    @en "state"
+    @fa "وضعیت"
+    pub state: void* = null
+
+    @en "Len"
+    @fa "طول"
+    pub func Len(): int:
+        st := this.state as ModelState<T>*
+        if _cur >= 0:
+            _rx_get_raw(st[0].count_node)
+        end
+        ret st[0].rows.len()
+    end
+
+    @en "Get"
+    @fa "بخوان"
+    pub func Get(i: int): T:
+        st := this.state as ModelState<T>*
+        if _cur >= 0:
+            _rx_get_raw(st[0].data_node)
+        end
+        ret st[0].rows.get(i)
+    end
+
+    @en "Set"
+    @fa "بنشان"
+    pub func Set(i: int, v: T):
+        st := this.state as ModelState<T>*
+        st[0].rows.set(i, v)
+        _rx_changed(st[0].data_node)
+        this._emit(ModelEvent { kind = ModelChange.RowChanged, index = i, count = 1 })
+    end
+
+    @en "Push"
+    @fa "بیفزا"
+    pub func Push(v: T):
+        st := this.state as ModelState<T>*
+        st[0].rows.push(v)
+        this._grew(st[0].rows.len() - 1, 1)
+    end
+
+    @en "Insert"
+    @fa "درج کن"
+    pub func Insert(i: int, v: T):
+        st := this.state as ModelState<T>*
+        st[0].rows.insert(i, v)
+        this._grew(i, 1)
+    end
+
+    @en "Remove"
+    @fa "حذف کن"
+    pub func Remove(i: int, count: int):
+        st := this.state as ModelState<T>*
+        mut n := count
+        if i + n > st[0].rows.len():
+            n = st[0].rows.len() - i
+        end
+        if i < 0 or n <= 0:
+            ret
+        end
+        repeat n:
+            _r := st[0].rows.remove_at(i)
+        end
+        _rx_push_hold()
+        _rx_changed(st[0].count_node)
+        _rx_changed(st[0].data_node)
+        _rx_pop_hold()
+        this._emit(ModelEvent { kind = ModelChange.RowsRemoved, index = i, count = n })
+    end
+
+    @en "Clear"
+    @fa "پاک کن"
+    pub func Clear():
+        st := this.state as ModelState<T>*
+        st[0].rows.clear()
+        this._reset()
+    end
+
+    @en "Replace"
+    @fa "جایگزین کن"
+    pub func Replace(rows: Vector<T>):
+        st := this.state as ModelState<T>*
+        st[0].rows.clear()
+        each r in rows:
+            st[0].rows.push(r)
+        end
+        this._reset()
+    end
+
+    @en "Listen"
+    @fa "گوش بده"
+    pub func Listen(cb: func (ModelEvent)): int:
+        st := this.state as ModelState<T>*
+        st[0].ls.push(cb)
+        st[0].ls_on.push(true)
+        ret st[0].ls.len() - 1
+    end
+
+    @en "Unlisten"
+    @fa "گوش نده"
+    pub func Unlisten(id: int):
+        st := this.state as ModelState<T>*
+        if id >= 0 and id < st[0].ls_on.len():
+            st[0].ls_on.set(id, false)
+        end
+    end
+
+    @en "OnChange"
+    @fa "هنگام تغییر"
+    pub func OnChange(body: func ()): Handler:
+        st := this.state as ModelState<T>*
+        ret _rx_on_change(st[0].data_node, body)
+    end
+
+    @en "Free"
+    @fa "آزاد کن"
+    pub func Free():
+        if this.state == null:
+            ret
+        end
+        st := this.state as ModelState<T>*
+        _rx_node_free(st[0].count_node)
+        _rx_node_free(st[0].data_node)
+        st[0].rows.free()
+        st[0].ls.free()
+        st[0].ls_on.free()
+        mem.Free(this.state)
+    end
+
+    func _emit(ev: ModelEvent):
+        st := this.state as ModelState<T>*
+        repeat st[0].ls.len() in i:
+            if st[0].ls_on.get(i):
+                f := st[0].ls.get(i)
+                f(ev)
+            end
+        end
+    end
+
+    func _grew(i: int, n: int):
+        st := this.state as ModelState<T>*
+        _rx_push_hold()
+        _rx_changed(st[0].count_node)
+        _rx_changed(st[0].data_node)
+        _rx_pop_hold()
+        this._emit(ModelEvent { kind = ModelChange.RowsInserted, index = i, count = n })
+    end
+
+    func _reset():
+        st := this.state as ModelState<T>*
+        _rx_push_hold()
+        _rx_changed(st[0].count_node)
+        _rx_changed(st[0].data_node)
+        _rx_pop_hold()
+        this._emit(ModelEvent { kind = ModelChange.Reset, index = 0, count = st[0].rows.len() })
+    end
+end
+
+@en "NewListModel"
+@fa "مدل فهرست تازه"
+pub func NewListModel<T>(): ListModel<T>:
+    st := mem.AllocateZeroed(sizeof(ModelState<T>)) as ModelState<T>*
+    st[0].count_node = _rx_node_new(_K_SOURCE)
+    st[0].data_node = _rx_node_new(_K_SOURCE)
+    ret ListModel { state = st as void* }
+end

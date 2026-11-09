@@ -26,7 +26,7 @@ pkg.intro <<
 <li><strong>Failure is a closed stream, not an exception.</strong> A dial that fails returns a stream whose <code>Ok</code> is false. Check it before you write.</li>
 <li><strong>A config does not build protocols by itself.</strong> <code>BuildDialer</code> knows <code>freedom</code> (direct) and <code>blackhole</code> (block). Any other outbound protocol needs a maker registered with <code>RegisterOutbound</code>; until one is, that outbound refuses traffic instead of leaking it. The packages in this family give you dialers and connectors you can build in code, as the guide below does.</li>
 <li><strong>It is TCP.</strong> Streams carry TCP. UDP relays are the business of the individual protocol packages.</li>
-<li><strong>The examples and tests use IPv4 loopback.</strong> IPv6 literals are parsed, encoded and matched by rules, but dialing IPv6 targets is not covered by tests.</li>
+<li><strong>Examples use IPv4 loopback; tests cover IPv6 too.</strong> Listeners accept <code>::1</code> and <code>::</code> (both families), <code>DirectDialer</code> reaches IPv6 targets and races IPv6 and IPv4 addresses of a name, and the per-source limit treats IPv4-mapped clients as IPv4 and groups IPv6 clients by their /64 prefix.</li>
 <li><strong>Share links are untrusted input.</strong> <code>ParseLink</code> rejects what it cannot read, but a subscription comes from someone else's server. Look at <code>allow_insecure</code> before you trust a node.</li>
 <li><strong>A <code>Stats</code> value and a <code>IdleTimer</code> own native counters.</strong> Free them with <code>FreeStats</code> and <code>Free</code> when you are done.</li>
 </ul>
@@ -57,6 +57,27 @@ application   |  inbound          router              outbound                  
 <h3 id="guide-config">From a config or a share link</h3>
 <p>If your app takes a subscription, <code>ParseSubscription</code> gives a list of <code>Node</code> values and <code>ConfigFromNodes</code> turns them into a ready <code>Config</code> (a mixed inbound, one outbound per node, direct and block, and the <code>.ir</code> rule). <code>BuildDialer</code> then builds the dialer, but only for outbound protocols that have a registered maker. Writing a maker is a few lines, see <code>OutboundMaker</code>.</p>
 
+<h3 id="guide-quickstart">Quick start: building a proxy or VPN app with Salam</h3>
+<p>This is the short path from a share link to a local proxy that a browser or any other program can connect to. Each step is one call, and the program below puts them together.</p>
+<ol>
+<li><strong>Read the link or the subscription.</strong> <code>ParseLink</code> reads one <code>vless://</code>, <code>vmess://</code>, <code>trojan://</code> or <code>ss://</code> link and <code>ParseSubscription</code> reads a text with many links (Base64 or one link per line). A bad line is dropped and counted in <code>skipped</code>; the program does not stop. A link that comes from someone else is untrusted input: look at <code>allow_insecure</code> before you trust a node.</li>
+<li><strong>Build a config.</strong> <code>ConfigFromNodes</code> makes a mixed inbound (SOCKS4, SOCKS5 and HTTP on one local port), one outbound per node, the <code>direct</code> and <code>block</code> outbounds and the <code>.ir</code> rule. With no extra work, <code>.ir</code> domains and private addresses go direct and everything else goes through your node.</li>
+<li><strong>Turn on DoH and fragmenting.</strong> With <code>RegisterWith</code>, the <code>fragment</code> option sends the ClientHello in several packets and <code>use_doh</code> resolves names with DNS over HTTPS. Both are only options: they help on some networks and not on others.</li>
+<li><strong>Start.</strong> <code>StartAll</code> brings the inbounds up and <code>Stop</code> closes each one. If the config is a V2Ray style JSON file, <code>RunConfig</code> loads it, checks it and runs it until Ctrl-C.</li>
+<li><strong>Connect your programs.</strong> The inbound listens on <code>127.0.0.1</code> only. In a browser or an app, set the SOCKS5 or HTTP proxy to that port. To test from a command line, <code>curl --socks5-hostname 127.0.0.1:1080 https://example.com</code> resolves the name through the proxy too.</li>
+</ol>
+{{example.net-tunnel-guide-quickstart}}
+<p>The example has made up servers (<code>example.org</code>) and only shows building and listening; put your own link in, save it to a file and run it:</p>
+<pre class="code" dir="ltr"><code>salam run proxy.salam</code></pre>
+<p>A few honest points before you use it:</p>
+<ul>
+<li>This is a tool for privacy and for reaching information. It does not make you anonymous and it does not promise that you will not be seen: a network that can recognize a proxy from its TLS fingerprint, its traffic pattern or active probing can block it.</li>
+<li>Fragmenting and DoH are small measures. Test both on the network you are really on, and do not rely on one trick alone.</li>
+<li>Only work with servers and links you know. The operator of any proxy can see where you connect, and a share link is itself a password or key; do not publish it.</li>
+<li>Before you run a service for other people, or use one, learn the laws and rules of the country and the network you are in. The responsibility for how you use it is yours.</li>
+<li>The limits of each protocol (not tested against a real server, no ML-KEM, the server clock for VMess and so on) are on the page of that package.</li>
+</ul>
+
 <h2 id="guide-streams">Streams and relays</h2>
 <p>Everything above sits on <code>Stream</code>. Wrap a TCP, TLS or WebSocket connection with <code>WrapTcp</code>, <code>WrapTls</code> or <code>WrapWebSocket</code>, or make two in memory ends with <code>NewPipe</code>, and the rest of the code is the same. <code>Relay</code> copies both ways until one side ends; <code>RelayWith</code> adds counters and an idle limit and is what <code>ForwardHandler</code> uses. Helpers such as <code>ReadFull</code>, <code>ReadUntil</code> and <code>WriteAll</code> deal with short reads and writes.</p>
 <p>In memory pipes make protocol code easy to test without a socket: write the client's bytes to one end, run the handshake on the other, and compare the reply.</p>
@@ -76,7 +97,7 @@ FINAL,proxy</code></pre>
 <h2 id="guide-limits">What to know</h2>
 <ul>
 <li>This is a proxy toolkit, not a VPN with a virtual interface.</li>
-<li>Streams are TCP. IPv6 is parsed and routed, but only IPv4 loopback is tested.</li>
+<li>Streams are TCP. IPv6 is parsed, routed, dialed and accepted.</li>
 <li>A failed dial returns a closed stream. Check <code>Ok</code>.</li>
 <li>Outbound protocols in a config need a registered maker, otherwise the outbound refuses traffic.</li>
 <li>A <code>Stats</code> and an <code>IdleTimer</code> must be freed. A <code>TcpInbound</code> stops with <code>Stop</code>; connections already relayed carry on to their end.</li>
@@ -215,6 +236,8 @@ doc.Session.target = The address the client wants to reach.
 doc.Session.protocol = Which protocol the client spoke, such as <code>socks5</code> or <code>http</code>.
 doc.Session.user = The authenticated user name, empty when there was none.
 doc.Session.command = <code>CMD_CONNECT</code> or <code>CMD_UDP</code>.
+doc.Session.initial_data = The same as <code>initial</code> for bytes that may contain zeros, such as the first payload after a Trojan request: a block of <code>initial_size</code> bytes that the forwarder writes to the target first and frees.
+doc.Session.initial_size = The number of bytes in <code>initial_data</code>; zero when the session uses <code>initial</code> or has none.
 doc.Session.initial = Bytes the client sent after the request that must be forwarded to the target first, such as the body of a plain HTTP request.
 doc.Session.error = Why the handshake failed, for logs.
 doc.Session.wrapped = True when the protocol replaced the client stream with its own (for example an encrypted one). The handler must then use <code>stream</code> instead of the stream it was given.
@@ -596,8 +619,14 @@ doc.AcceptServer.Ok = False when listening failed.
 doc.AcceptServer.Port = The port in use.
 doc.AcceptServer.Stop = Stops accepting and closes the listener.
 doc.NewAcceptServer = Makes an accept server around an acceptor. The host is only used to wake the loop on Stop.
-doc.ListenTcpOn = Listens on one address. Use 127.0.0.1 for a local proxy. 0.0.0.0 listens on every interface and has to be asked for.
+doc.ListenTcpOn = Listens on one address. Use 127.0.0.1 for a local proxy, <code>::1</code> for IPv6 loopback, 0.0.0.0 for every IPv4 interface and <code>::</code> for IPv4 and IPv6 together.
 doc.ListenLocal = Listens on 127.0.0.1 only. Port 0 picks a free port.
+doc.ListenLocal6 = Listens on <code>::1</code> only. Port 0 picks a free port.
+doc.ListenTcpDual = Listens on <code>::</code>, so IPv4 and IPv6 clients are both accepted.
+doc.ListenTcpAt = Like <code>ListenTcp</code>, for a given address such as <code>::1</code> or <code>::</code>.
+doc.ListenTcpDualInbound = A <code>TcpInbound</code> listening on <code>::</code> for both families.
+doc.TcpInbound.host = The address it listens on; used to wake the accept loop when stopping.
+doc.SourceKey = The key a client address is counted under: IPv4 as is, an IPv4-mapped IPv6 address as its IPv4 form, any other IPv6 address as its /64 prefix.
 doc.StartAccepting = Starts the accept loop on its own thread.
 doc.Go = Runs a function on a new thread that cleans up after itself. The function takes one pointer and returns nothing. Handshake and connection threads should use this and not <code>spawn</code>, because a thread that is never joined keeps its stack (8 MB of address space) for good.
 
@@ -723,6 +752,8 @@ ex.Session.target = -
 ex.Session.protocol = -
 ex.Session.user = -
 ex.Session.command = -
+ex.Session.initial_data = -
+ex.Session.initial_size = -
 ex.Session.initial = -
 ex.Session.error = -
 ex.Session.wrapped = -
@@ -1112,3 +1143,9 @@ ex.ListenTcpOn = net-tunnel-Inbound
 ex.ListenLocal = net-tunnel-Inbound
 ex.StartAccepting = net-tunnel-Inbound
 ex.Go = -
+ex.ListenLocal6 = net-tunnel-IPv6
+ex.ListenTcpAt = net-tunnel-IPv6
+ex.ListenTcpDual = net-tunnel-IPv6
+ex.ListenTcpDualInbound = net-tunnel-IPv6
+ex.SourceKey = net-tunnel-IPv6
+ex.TcpInbound.host = net-tunnel-IPv6

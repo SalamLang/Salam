@@ -1,0 +1,189 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import net.shadowsocks
+import net.tcp
+import net.udp
+import mem
+import str
+
+const K16 := "AAECAwQFBgcICQoLDA0ODw=="
+
+mut failures := 0
+mut echo_srv := tcp.Server {}
+mut echo_sock := udp.Socket {}
+mut echo_stop := false
+mut relay := shadowsocks.UdpServer {}
+
+func check(name: str, ok: bool):
+    if ok:
+        println "PASS", name
+    else:
+        println "FAIL", name
+        failures++
+    end
+end
+
+func echo_conn(c: tcp.Conn):
+    buf := mem.Allocate(8192 as u64)
+    mut go := true
+    until go:
+        n := tcp.ReadBytes(c, buf, 8192)
+        if n <= 0:
+            go = false
+        else:
+            _w := tcp.WriteBytes(c, buf, n)
+        end
+    end
+    mem.Free(buf)
+    tcp.Close(c)
+end
+
+func echo_main():
+    mut go := true
+    until go:
+        c := tcp.Accept(echo_srv)
+        if not tcp.ConnOk(c):
+            go = false
+        else:
+            echo_conn(c)
+        end
+    end
+end
+
+func udp_echo_main():
+    buf := mem.Allocate(4000 as u64)
+    until not echo_stop:
+        mut h := ""
+        mut p := 0
+        n := udp.ReceiveBytes(echo_sock, buf, 4000, h, p)
+        if n > 0:
+            _w := udp.SendBytes(echo_sock, h, p, buf, n)
+        end
+    end
+    mem.Free(buf)
+end
+
+func serve_thread(ss: shadowsocks.ServerState*):
+    shadowsocks.ServeRelay(shadowsocks.Server { st = ss })
+end
+
+func relay_main():
+    shadowsocks.UdpServe(relay)
+end
+
+func tcp_through(host: str, port: int, method: str, password: str, text: str): str:
+    c := shadowsocks.Dial(shadowsocks.Config { host = host, port = port, method = method, password = password }, "::1", tcp.Port(echo_srv))
+    if not shadowsocks.Ok(c):
+        ret "dial failed"
+    end
+    tcp.SetDeadline(c.st.sock, 5000)
+    _w := shadowsocks.Write(c, text as void*, text.len())
+    got := mem.AllocateZeroed(256 as u64)
+    mut have := 0
+    until have < text.len():
+        n := shadowsocks.Read(c, shadowsocks.PtrAt(got, have), text.len() - have)
+        if n <= 0:
+            break
+        end
+        have += n
+    end
+    res := str.Substr(got as str, 0, have)
+    mem.Free(got)
+    shadowsocks.Close(c)
+    ret res
+end
+
+func exchange(c: shadowsocks.UdpClient, text: str): str:
+    if not shadowsocks.UdpSend(c, "::1", udp.Port(echo_sock), text as void*, text.len()):
+        ret "send failed"
+    end
+    buf := mem.AllocateZeroed(2000 as u64)
+    mut from := shadowsocks.Target {}
+    got := shadowsocks.UdpRecv(c, buf, 1999, from)
+    mut res := ""
+    if got > 0 and from.host == "::1" and from.port == udp.Port(echo_sock):
+        res = str.Substr(buf as str, 0, got)
+    end
+    mem.Free(buf)
+    ret res
+end
+
+func tcp_case(label: str, listen_host: str, method: str, password: str):
+    srv := shadowsocks.ListenOn(listen_host, 0, method, password, "")
+    check(label + " listen", shadowsocks.ServerOk(srv))
+    th := spawn(serve_thread, srv.st)
+    port := shadowsocks.ServerPort(srv)
+    check(label + " via v6", tcp_through("::1", port, method, password, "hello over six") == "hello over six")
+    if listen_host == "::":
+        check(label + " via v4", tcp_through("127.0.0.1", port, method, password, "hello over four") == "hello over four")
+    end
+    shadowsocks.Stop(srv)
+    join(th)
+    shadowsocks.Destroy(srv)
+end
+
+func udp_case(label: str, listen_host: str, client_host: str, method: str, server_pw: str):
+    echo_stop = false
+    relay = shadowsocks.UdpListenOn(listen_host, 0, method, server_pw)
+    check(label + " server up", relay.ok and shadowsocks.UdpServerPort(relay) > 0)
+    th := spawn(relay_main)
+    te := spawn(udp_echo_main)
+    c := shadowsocks.UdpDial(shadowsocks.Config { host = client_host, port = shadowsocks.UdpServerPort(relay), method = method, password = server_pw })
+    shadowsocks.UdpSetTimeout(c, 3000)
+    check(label + " echo", exchange(c, "ping-one") == "ping-one")
+    check(label + " echo again", exchange(c, "ping-two-longer") == "ping-two-longer")
+    check(label + " big datagram", exchange(c, str.Repeat("0123456789", 100)) == str.Repeat("0123456789", 100))
+    shadowsocks.UdpStop(relay)
+    join(th)
+    echo_stop = true
+    shadowsocks.UdpClose(c)
+    udp.SendTo(udp.OpenAny(), "::1", udp.Port(echo_sock), "x")
+    join(te)
+    shadowsocks.UdpDestroy(relay)
+end
+
+func main:
+    m := shadowsocks.LookupMethod("aes-256-gcm")
+    key := shadowsocks.PasswordKey(m, "wire-pw")
+    mut packed := shadowsocks.NewBuf(128)
+    check("pack v6 target", shadowsocks.PackUdp(m, key.p, "2001:db8::53", 53, "abc" as void*, 3, packed) and packed.len == m.salt_len + 1 + 16 + 2 + 3 + 16)
+    mut t := shadowsocks.Target {}
+    mut out := shadowsocks.NewBuf(64)
+    check("unpack v6 target", shadowsocks.UnpackUdp(m, key.p, packed.p, packed.len, t, out) and t.host == "2001:db8::53" and t.port == 53 and shadowsocks.BufToStr(out) == "abc")
+
+    probe := tcp.BindOn("::1", 0)
+    if not tcp.Ok(probe):
+        println "ipv6 unavailable"
+        ret 0
+    end
+    tcp.CloseServer(probe)
+
+    echo_srv = tcp.BindOn("::1", 0)
+    echo_sock = udp.BindOn("::1", 0)
+    _te := spawn(echo_main)
+
+    tcp_case("tcp aes-256-gcm on ::1", "::1", "aes-256-gcm", "tcp-pw")
+    tcp_case("tcp chacha20 dual", "::", "chacha20-ietf-poly1305", "tcp-pw")
+    tcp_case("tcp 2022 on ::1", "::1", "2022-blake3-aes-128-gcm", K16)
+
+    udp_case("udp aes-256-gcm on ::1", "::1", "::1", "aes-256-gcm", "relay-pw")
+    udp_case("udp dual relay, v4 client", "::", "127.0.0.1", "aes-256-gcm", "relay-pw")
+    udp_case("udp dual relay, v6 client", "::", "::1", "chacha20-ietf-poly1305", "relay-pw")
+    udp_case("udp 2022 on ::1", "::1", "::1", "2022-blake3-aes-128-gcm", K16)
+
+    udp.Close(echo_sock)
+    println "failures", failures
+    ret failures
+end

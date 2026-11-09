@@ -1,0 +1,309 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+package main
+
+import fs
+import mem
+import os
+import str
+import net.transport
+import net.tunnel
+import net.udp
+import net.vless
+import net.vmess
+import net.vpn
+
+mut replay := vmess.NewReplayFilter()
+mut redirect_port := 0
+
+struct Conn:
+    pub t: transport.Conn = transport.Conn {}
+    pub proto: str = ""
+    pub uuid: str = ""
+end
+
+struct Sess:
+    pub s: dyn tunnel.Stream = tunnel.TcpStream {}
+    pub host: str = ""
+    pub port: int = 0
+end
+
+func fill(buf: void*, n: int, seed: int):
+    bp := buf as u8*
+    repeat n in i:
+        bp[i] = ((i * 31 + seed) & 255) as u8
+    end
+end
+
+func same(buf: void*, n: int, seed: int): bool:
+    bp := buf as u8*
+    repeat n in i:
+        if (bp[i] as int) != ((i * 31 + seed) & 255):
+            ret false
+        end
+    end
+    ret true
+end
+
+func target_port(p: int): int:
+    if redirect_port > 0: ret redirect_port end
+    ret p
+end
+
+func ask(sock: udp.Socket, host: str, port: int, buf: void*, n: int): int:
+    if udp.SendBytes(sock, host, target_port(port), buf, n) != n: ret 0 - 1 end
+    mut fh := ""
+    mut fp := 0
+    ret udp.ReceiveBytes(sock, buf, 70000, fh, fp)
+end
+
+func serve_vless_udp(c &: vless.Conn):
+    sock := udp.Open()
+    udp.SetTimeout(sock, 3000)
+    mut pk := transport.NewBytes(70000)
+    buf := mem.Allocate(70000 as u64)
+    until true:
+        transport.ResetBytes(pk)
+        if not vless.ReadPacket(c, pk): break end
+        mem.Copy(buf, pk.p, pk.len as u64)
+        r := ask(sock, c.req.addr.host, c.req.addr.port, buf, pk.len)
+        if r > 0 and not vless.WritePacket(c, buf, r): break end
+    end
+    mem.Free(buf)
+    transport.FreeBytes(pk)
+    udp.Close(sock)
+end
+
+func serve_vmess_udp(c &: vmess.Conn):
+    sock := udp.Open()
+    udp.SetTimeout(sock, 3000)
+    mut pk := transport.NewBytes(70000)
+    buf := mem.Allocate(70000 as u64)
+    until true:
+        transport.ResetBytes(pk)
+        if not vmess.ReadPacket(c, pk): break end
+        mem.Copy(buf, pk.p, pk.len as u64)
+        r := ask(sock, c.req.addr.host, c.req.addr.port, buf, pk.len)
+        if r > 0 and not vmess.Write(c, buf, r): break end
+    end
+    mem.Free(buf)
+    transport.FreeBytes(pk)
+    udp.Close(sock)
+end
+
+func mux_udp(sp: Sess*):
+    j := sp[0]
+    mem.Free(sp as void*)
+    sock := udp.Open()
+    udp.SetTimeout(sock, 3000)
+    buf := mem.Allocate(70000 as u64)
+    until true:
+        n := j.s.ReadBytes(buf, 70000)
+        if n <= 0: break end
+        r := ask(sock, j.host, j.port, buf, n)
+        if r > 0 and j.s.WriteBytes(buf, r) != r: break end
+    end
+    mem.Free(buf)
+    udp.Close(sock)
+    j.s.Close()
+end
+
+func mux_tcp(p: transport.MuxIncoming*):
+    inc := p[0]
+    mem.Free(p as void*)
+    t := transport.Dial(inc.addr.host, target_port(inc.addr.port), transport.Settings {})
+    if not transport.Ok(t):
+        inc.stream.Close()
+        ret
+    end
+    tunnel.Relay(inc.stream, transport.AsStream(t))
+end
+
+func serve_conn(cp: Conn*):
+    cc := cp[0]
+    mem.Free(cp as void*)
+    if cc.proto == "vless":
+        mut users := Vector {} as Vector<vless.User>
+        users.push(vless.NewUser(cc.uuid, ""))
+        mut c := vless.Accept(cc.t, users)
+        if not c.ok: ret end
+        if c.req.command == vless.CmdUDP:
+            serve_vless_udp(c)
+            vless.Close(c)
+            ret
+        end
+        if c.req.command != vless.CmdMux: ret end
+        serve_mux(vless.MuxServer(c))
+        ret
+    end
+    mut users := Vector {} as Vector<vmess.User>
+    users.push(vmess.NewUser(cc.uuid))
+    mut c := vmess.Accept(cc.t, users, replay)
+    if not c.ok: ret end
+    if c.req.command == vmess.CmdUDP:
+        serve_vmess_udp(c)
+        vmess.Close(c)
+        ret
+    end
+    if c.req.command != vmess.CmdMux: ret end
+    serve_mux(vmess.MuxServer(c))
+end
+
+func serve_mux(m: transport.Mux):
+    mut inc := transport.MuxIncoming {}
+    until transport.MuxAccept(m, inc):
+        if inc.udp:
+            sp := mem.AllocateZeroed(sizeof(Sess) as u64) as Sess*
+            sp[0] = Sess { s = inc.stream, host = inc.addr.host, port = inc.addr.port }
+            _h := spawn(mux_udp, sp)
+        else:
+            p := mem.AllocateZeroed(sizeof(transport.MuxIncoming) as u64) as transport.MuxIncoming*
+            p[0] = inc
+            _h := spawn(mux_tcp, p)
+        end
+    end
+end
+
+func settings_of(path: str): transport.Settings:
+    ret vpn.StreamSettings(fs.ReadText(path))
+end
+
+func run_server(a: Vector<str>): int:
+    l := transport.Listen(a[3].to_int(), settings_of(a[5]))
+    if not transport.ListenerOk(l):
+        println "FAIL listen"
+        ret 1
+    end
+    if a.len() > 6: redirect_port = a[6].to_int() end
+    until true:
+        t := transport.Accept(l)
+        if not transport.Ok(t): continue end
+        cp := mem.AllocateZeroed(sizeof(Conn) as u64) as Conn*
+        cp[0] = Conn { t = t, proto = a[2], uuid = a[4] }
+        _s := spawn(serve_conn, cp)
+    end
+end
+
+func exchange_direct(a: Vector<str>, size: int, seed: int): bool:
+    host := a[7]
+    port := a[8].to_int()
+    mut t := transport.Dial("127.0.0.1", a[3].to_int(), settings_of(a[5]))
+    if not transport.Ok(t): ret false end
+    transport.SetReadTimeout(t, 3000)
+    buf := mem.Allocate(70000 as u64)
+    defer mem.Free(buf)
+    mut pk := transport.NewBytes(70000)
+    defer transport.FreeBytes(pk)
+    mut good := 0
+    if a[2] == "vless":
+        mut c := vless.Client(t, a[4], "", vless.CmdUDP, transport.NewAddr(host, port))
+        if not c.ok: ret false end
+        repeat 2 in k:
+            fill(buf, size, seed + k)
+            if not vless.WritePacket(c, buf, size): break end
+            transport.ResetBytes(pk)
+            if not vless.ReadPacket(c, pk): break end
+            if pk.len == size and same(pk.p, size, seed + k): good++ end
+        end
+        vless.Close(c)
+        ret good == 2
+    end
+    sec := vmess.SecAES128GCM
+    mut c := vmess.Client(t, a[4], sec, vmess.DefaultOption(sec), vmess.CmdUDP, transport.NewAddr(host, port))
+    if not c.ok: ret false end
+    repeat 2 in k:
+        fill(buf, size, seed + k)
+        if not vmess.Write(c, buf, size): break end
+        transport.ResetBytes(pk)
+        if not vmess.ReadPacket(c, pk): break end
+        if pk.len == size and same(pk.p, size, seed + k): good++ end
+    end
+    vmess.Close(c)
+    ret good == 2
+end
+
+func open_mux(a: Vector<str>): transport.Mux:
+    t := transport.Dial("127.0.0.1", a[3].to_int(), settings_of(a[5]))
+    if not transport.Ok(t): ret transport.Mux {} end
+    if a[2] == "vless":
+        c := vless.Client(t, a[4], "", vless.CmdMux, transport.Addr {})
+        if not c.ok: ret transport.Mux {} end
+        ret vless.MuxClient(c)
+    end
+    sec := vmess.SecAES128GCM
+    c := vmess.Client(t, a[4], sec, vmess.DefaultOption(sec), vmess.CmdMux, transport.Addr {})
+    if not c.ok: ret transport.Mux {} end
+    ret vmess.MuxClient(c)
+end
+
+func exchange_mux(m: transport.Mux, a: Vector<str>, size: int, seed: int): bool:
+    s := transport.MuxOpen(m, transport.NewAddr(a[7], a[8].to_int()), true)
+    s.SetDeadline(3000)
+    buf := mem.Allocate(70000 as u64)
+    defer mem.Free(buf)
+    mut good := 0
+    repeat 2 in k:
+        fill(buf, size, seed + k)
+        if s.WriteBytes(buf, size) != size: break end
+        n := s.ReadBytes(buf, 70000)
+        if n == size and same(buf, size, seed + k): good++ end
+    end
+    s.Close()
+    ret good == 2
+end
+
+func run_client(a: Vector<str>): int:
+    sizes := str.Split(a[9], ",")
+    mut line := ""
+    mut ok := 0
+    mut m := transport.Mux {}
+    if a[6] == "mux":
+        m = open_mux(a)
+        if not transport.MuxOk(m):
+            println "FAIL mux open"
+            ret 1
+        end
+    end
+    repeat sizes.len() in i:
+        sz := sizes[i].to_int()
+        mut good := false
+        if a[6] == "mux":
+            good = exchange_mux(m, a, sz, i + 1)
+        else:
+            good = exchange_direct(a, sz, i + 1)
+        end
+        if good:
+            ok++
+            line += " " + sizes[i] + ":ok"
+        else:
+            line += " " + sizes[i] + ":lost"
+        end
+    end
+    if a[6] == "mux": transport.MuxClose(m) end
+    println "RESULT", ok, "of", sizes.len(), line
+    if ok == sizes.len(): ret 0 end
+    ret 1
+end
+
+func main:
+    a := os.Args()
+    if a.len() < 6:
+        println "usage: udp_peer server PROTO PORT UUID STREAM_JSON [REDIRECT_PORT]"
+        println "       udp_peer client PROTO PORT UUID STREAM_JSON direct|mux TARGET_HOST TARGET_PORT SIZES"
+        ret 2
+    end
+    if a[1] == "server": ret run_server(a) end
+    if a.len() < 10: ret 2 end
+    ret run_client(a)
+end

@@ -131,7 +131,7 @@ def outbound_xray(c, port, stream):
     if p != "ss":
         o["streamSettings"] = stream
     if c.get("mux"):
-        o["mux"] = {"enabled": True, "concurrency": 8}
+        o["mux"] = {"enabled": True, "concurrency": 8, "xudpConcurrency": 8}
     return o
 
 
@@ -204,6 +204,8 @@ def gen_sb_client(c, port, local, cert, key, path):
         ob["uuid"] = UUID
         if c.get("flow"):
             ob["flow"] = c["flow"]
+        if c.get("packet_encoding"):
+            ob["packet_encoding"] = c["packet_encoding"]
     elif p == "vmess":
         ob["uuid"] = UUID
         ob["security"] = c.get("sec", "aes-128-gcm")
@@ -277,7 +279,7 @@ def case_list():
     for proto in ("vless", "trojan", "vmess"):
         nets = [("tcp", False), ("tcp", True), ("ws", False), ("ws", True), ("httpupgrade", False)]
         if proto == "trojan":
-            nets = [("tcp", True)]
+            nets = [("tcp", True), ("ws", False), ("ws", True), ("httpupgrade", True), ("grpc", True)]
         for net, tls in nets:
             if proto == "vmess":
                 for sec in ("aes-128-gcm", "chacha20-poly1305", "none"):

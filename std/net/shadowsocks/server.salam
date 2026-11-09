@@ -20,6 +20,7 @@ import net.internal.rawsock
 import pool
 import chan
 import net.tunnel
+import tls
 
 const RELAY_BUF := 16384
 
@@ -55,6 +56,15 @@ pub struct ServerState:
     @en "obfs_mode"
     @fa "حالت پوشش"
     pub obfs_mode: str = ""
+    @en "users"
+    @fa "کاربران"
+    pub users: HashMap<str, Buf> = HashMap {} as HashMap<str, Buf>
+    @en "user_names"
+    @fa "نام کاربران"
+    pub user_names: HashMap<str, str> = HashMap {} as HashMap<str, str>
+    @en "user_n"
+    @fa "تعداد کاربران"
+    pub user_n: int = 0
 end
 
 @en "Server"
@@ -63,6 +73,31 @@ pub struct Server:
     @en "st"
     @fa "وضعیت"
     pub st: ServerState* = null
+end
+
+func _take_eih(ss: ServerState*, st: ConnState*): int:
+    if st.dec.inb.len - st.dec.off < 16:
+        ret 0
+    end
+    kl := st.method.key_len
+    h := mem.AllocateZeroed(16 as u64)
+    defer mem.Free(h)
+    if not EihOpen(ss.key.p, kl, st.dec.salt.p, st.method.salt_len, _at(st.dec.inb.p, st.dec.off), h):
+        ret 0 - 1
+    end
+    id := HexOf(h, 16)
+    if not ss.users.has(id):
+        ret 0 - 1
+    end
+    uk := ss.users.get(id)
+    st.user = ss.user_names.get(id)
+    st.dec.off += 16
+    tls.AeadFree(st.dec.ctx)
+    st.dec.ctx = _open_ctx(st.method, uk.p, st.dec.salt.p)
+    EncoderFree(st.enc)
+    st.enc = NewEncoderRandom(st.method, uk.p)
+    st.eih_done = true
+    ret 1
 end
 
 func _handshake(ss: ServerState*, st: ConnState*): bool:
@@ -80,7 +115,16 @@ func _handshake(ss: ServerState*, st: ConnState*): bool:
                     res = 0
                 end
             end
-            if res == 2:
+            mut ready := true
+            if res == 2 and ss.user_n > 0 and st.dec.have_salt and not st.eih_done:
+                er := _take_eih(ss, st)
+                if er < 0:
+                    res = 0
+                else er == 0:
+                    ready = false
+                end
+            end
+            if res == 2 and ready:
                 mut more := true
                 until more:
                     r := _next(st)
@@ -196,10 +240,33 @@ pub func ListenObfs(port: int, method: str, password: str, obfs: str): Server:
     ss.filter = NewSaltFilter(100000)
     ss.workers = pool.NewElastic(2 as i64, 512 as i64, 64 as i64)
     ss.jobs = chan.Chan {} as chan.Chan<i64>
+    ss.users = HashMap {} as HashMap<str, Buf>
+    ss.user_names = HashMap {} as HashMap<str, str>
     ss.jobs.init(1024 as i64)
     ss.stop = mem.AllocateZeroed(8 as u64) as i64*
     ss.obfs_mode = obfs
     ret Server { st = ss }
+end
+
+@en "AddUser"
+@fa "افزودن کاربر"
+pub func AddUser(s: Server, name: str, password: str): bool:
+    ss := s.st
+    if ss == null or not ss.method.v2022 or ss.method.kind == tls.AEAD_CHACHA20_POLY1305:
+        ret false
+    end
+    k := MakeKey(ss.method, password)
+    if k.bad:
+        ret false
+    end
+    h := mem.AllocateZeroed(16 as u64)
+    IdentityHash(k.p, ss.method.key_len, h)
+    id := HexOf(h, 16)
+    mem.Free(h)
+    ss.users.put(id, k)
+    ss.user_names.put(id, name)
+    ss.user_n = ss.users.size()
+    ret true
 end
 
 @en "ServerOk"
@@ -337,6 +404,14 @@ pub func Destroy(s: Server):
     ss.jobs.close()
     ss.jobs.free()
     FilterFree(ss.filter)
+    each uid, uk in ss.users:
+        mut kk := uk
+        BufWipe(kk)
+        BufFree(kk)
+        mem.Free(uid as void*)
+    end
+    ss.users.free()
+    ss.user_names.free()
     BufWipe(ss.key)
     BufFree(ss.key)
     mem.Free(ss.stop as void*)

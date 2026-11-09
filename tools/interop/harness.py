@@ -169,7 +169,7 @@ class Procs:
         self.items = []
         self.logdir = logdir
 
-    def start(self, name, argv, mem_kb=4000000, env=None):
+    def start(self, name, argv, mem_kb=int(os.environ.get("INTEROP_ULIMIT_KB", "4000000")), env=None):
         log = open(os.path.join(self.logdir, name + ".log"), "wb")
         e = dict(os.environ)
         if env:

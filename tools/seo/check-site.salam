@@ -1,0 +1,252 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import os
+import io
+import str
+
+const REQUIRED := [
+    "<title>",
+    "<meta name=\"description\" content=\"",
+    "<meta name=\"robots\" content=\"",
+    "<meta name=\"theme-color\" content=\"",
+    "<link rel=\"manifest\" href=\"",
+    "<link rel=\"apple-touch-icon\" href=\"",
+    "<link rel=\"icon\" href=\"",
+    "<meta property=\"og:type\" content=\"",
+    "<meta property=\"og:site_name\" content=\"",
+    "<meta property=\"og:locale\" content=\"",
+    "<meta property=\"og:title\" content=\"",
+    "<meta property=\"og:description\" content=\"",
+    "<meta property=\"og:url\" content=\"",
+    "<meta property=\"og:image\" content=\"",
+    "<meta property=\"og:image:type\" content=\"image/png\"",
+    "<meta property=\"og:image:width\" content=\"1200\"",
+    "<meta property=\"og:image:height\" content=\"630\"",
+    "<meta property=\"og:image:alt\" content=\"",
+    "<meta name=\"twitter:card\" content=\"summary_large_image\"",
+    "<meta name=\"twitter:title\" content=\"",
+    "<meta name=\"twitter:description\" content=\"",
+    "<meta name=\"twitter:image\" content=\"",
+    "<meta name=\"twitter:image:alt\" content=\""
+]
+
+func between(s: str, start: str, stop: str): str:
+    i := s.find(start)
+    if i < 0:
+        ret ""
+    end
+    rest := s.substr(i + start.len(), s.len() - i - start.len())
+    j := rest.find(stop)
+    if j < 0:
+        ret ""
+    end
+    ret rest.substr(0, j)
+end
+
+func has(s: str, sub: str): bool:
+    ret s.find(sub) >= 0
+end
+
+func json_balanced(s: str): bool:
+    mut depth := 0
+    mut in_str := false
+    mut esc := false
+    mut stack := ""
+    repeat s.len() in i:
+        c := s.substr(i, 1)
+        if in_str:
+            if esc:
+                esc = false
+            else c == "\\":
+                esc = true
+            else c == "\"":
+                in_str = false
+            end
+        else c == "\"":
+            in_str = true
+        else c == "{" or c == "[":
+            stack += c
+            depth++
+        else c == "}" or c == "]":
+            if depth == 0:
+                ret false
+            end
+            open := stack.substr(depth - 1, 1)
+            if (c == "}" and open != "{") or (c == "]" and open != "["):
+                ret false
+            end
+            stack = stack.substr(0, depth - 1)
+            depth--
+        end
+    end
+    ret depth == 0 and not in_str
+end
+
+func page_url_of(html: str): str:
+    ret between(html, "<link rel=\"canonical\" href=\"", "\"")
+end
+
+func check_page(root: str, path: str, errs &: Vector<str>, titles &: HashMap<str, str>, descs &: HashMap<str, str>, canon &: HashMap<str, bool>):
+    html := io.ReadFile(path)
+    is404 := path == root + "/404.html"
+    if has(html, "http-equiv=\"refresh\""):
+        if not has(html, "<meta name=\"robots\" content=\"noindex\">"):
+            errs.push(path + ": redirect stub must be noindex")
+        end
+        ret
+    end
+    rel := str.TrimPrefix(path, root)
+    each marker in REQUIRED:
+        if not has(html, marker):
+            errs.push(path + ": missing " + marker)
+        end
+    end
+    title := between(html, "<title>", "</title>")
+    desc := between(html, "<meta name=\"description\" content=\"", "\"")
+    if title.len() == 0 or desc.len() == 0:
+        errs.push(path + ": empty title or description")
+    end
+    if titles.has(title):
+        errs.push(path + ": same title as " + titles.get(title))
+    end
+    titles.put(title, path)
+    if descs.has(desc):
+        errs.push(path + ": same description as " + descs.get(desc))
+    end
+    descs.put(desc, path)
+    if has(title, "—") or has(title, "–") or has(desc, "—") or has(desc, "–"):
+        errs.push(path + ": long dash in title or description")
+    end
+    if is404:
+        if not has(html, "content=\"noindex"):
+            errs.push(path + ": 404 must be noindex")
+        end
+        ret
+    end
+    url := page_url_of(html)
+    if not str.StartsWith(url, "https://"):
+        errs.push(path + ": canonical is missing or not absolute: " + url)
+    end
+    canon.put(url, true)
+    each key in ["og:url\" content=\"", "og:image\" content=\"", "twitter:image\" content=\""]:
+        v := between(html, key, "\"")
+        if not str.StartsWith(v, "https://"):
+            errs.push(path + ": " + key + " is not absolute")
+        end
+    end
+    if between(html, "<meta property=\"og:url\" content=\"", "\"") != url:
+        errs.push(path + ": og:url differs from canonical")
+    end
+    img := between(html, "<meta property=\"og:image\" content=\"", "\"")
+    k := img.find("/assets/")
+    if k < 0 or not os.Exists(root + img.substr(k, img.len() - k)):
+        errs.push(path + ": cover image file missing for " + img)
+    end
+    if between(html, "<meta property=\"og:image:alt\" content=\"", "\"").len() == 0:
+        errs.push(path + ": empty og:image:alt")
+    end
+    if has(html, "hreflang=\"en\"") or has(html, "hreflang=\"fa-IR\""):
+        if not has(html, "hreflang=\"x-default\""):
+            errs.push(path + ": hreflang without x-default")
+        end
+    end
+    mut blocks := 0
+    each part in html.split("<script type=\"application/ld+json\">"):
+        blocks++
+        if blocks == 1:
+            continue
+        end
+        ld := part.substr(0, part.find("</script>"))
+        if not json_balanced(ld) or not has(ld, "\"@context\":\"https://schema.org\"") or not has(ld, "\"@graph\""):
+            errs.push(path + ": JSON-LD does not parse")
+        end
+        if not has(ld, "\"Organization\"") or not has(ld, "\"WebSite\"") or not has(ld, "\"SoftwareSourceCode\""):
+            errs.push(path + ": JSON-LD lacks Organization, WebSite or SoftwareSourceCode")
+        end
+        depth := str.TrimSuffix(rel, "index.html").split("/").len()
+        if depth > 3 and not has(ld, "\"BreadcrumbList\""):
+            errs.push(path + ": nested page without BreadcrumbList")
+        end
+        if has(rel, "/learn/") and rel != "/learn/index.html":
+            if not has(ld, "\"LearningResource\"") or not has(html, "og:type\" content=\"article\""):
+                errs.push(path + ": lesson without LearningResource or article type")
+            end
+        end
+    end
+    if blocks < 2:
+        errs.push(path + ": no JSON-LD")
+    end
+end
+
+func check_site(root: str, errs &: Vector<str>): int:
+    if not os.Exists(root + "/index.html"):
+        errs.push(root + ": not built")
+        ret 0
+    end
+    mut titles := HashMap {} as HashMap<str, str>
+    mut descs := HashMap {} as HashMap<str, str>
+    mut canon := HashMap {} as HashMap<str, bool>
+    mut count := 0
+    each path in os.Walk(root):
+        if str.EndsWith(path, ".html") and not str.StartsWith(path, root + "/assets/") and not has(path, "/slides/"):
+            check_page(root, path, errs, titles, descs, canon)
+            count++
+        end
+    end
+    sitemap := io.ReadFile(root + "/sitemap.xml")
+    each url, _ in canon:
+        if not has(sitemap, "<loc>" + url + "</loc>"):
+            errs.push(root + ": " + url + " is not in sitemap.xml")
+        end
+    end
+    each part in sitemap.split("<loc>"):
+        loc := part.substr(0, part.find("</loc>"))
+        if loc.len() > 0 and str.StartsWith(loc, "https://") and not canon.has(loc):
+            errs.push(root + ": sitemap lists " + loc + " but no page has that canonical")
+        end
+    end
+    if not has(io.ReadFile(root + "/robots.txt"), "Sitemap: https://"):
+        errs.push(root + ": robots.txt has no Sitemap line")
+    end
+    each f in ["site.webmanifest", "favicon.ico"]:
+        if not os.Exists(root + "/" + f):
+            errs.push(root + ": missing " + f)
+        end
+    end
+    ret count
+end
+
+func main: int:
+    args := os.Args()
+    mut roots := Vector {} as Vector<str>
+    mut i := 1
+    until i < args.len():
+        roots.push(args.get(i))
+        i++
+    end
+    if roots.len() == 0:
+        roots.push("website/dist/fa")
+        roots.push("website/dist/en")
+    end
+    mut errs := Vector {} as Vector<str>
+    each root in roots:
+        n := check_site(root, errs)
+        println "seo: checked", n, "pages in", root
+    end
+    each e in errs:
+        printerrln "seo: " + e
+    end
+    ret errs.len() > 0 ? 1 : 0
+end

@@ -160,3 +160,5 @@ for want in \
         exit 1
     fi
 done
+
+"$SALAM" run tools/seo/check-site.salam website/dist/fa website/dist/en --no-color --log-level=error

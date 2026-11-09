@@ -1,0 +1,999 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package compress
+
+import mem
+
+const _BZ_RNUMS := [
+    619, 720, 127, 481, 931, 816, 813, 233, 566, 247, 985, 724, 205, 454, 863, 491
+    741, 242, 949, 214, 733, 859, 335, 708, 621, 574, 73, 654, 730, 472, 419, 436
+    278, 496, 867, 210, 399, 680, 480, 51, 878, 465, 811, 169, 869, 675, 611, 697
+    867, 561, 862, 687, 507, 283, 482, 129, 807, 591, 733, 623, 150, 238, 59, 379
+    684, 877, 625, 169, 643, 105, 170, 607, 520, 932, 727, 476, 693, 425, 174, 647
+    73, 122, 335, 530, 442, 853, 695, 249, 445, 515, 909, 545, 703, 919, 874, 474
+    882, 500, 594, 612, 641, 801, 220, 162, 819, 984, 589, 513, 495, 799, 161, 604
+    958, 533, 221, 400, 386, 867, 600, 782, 382, 596, 414, 171, 516, 375, 682, 485
+    911, 276, 98, 553, 163, 354, 666, 933, 424, 341, 533, 870, 227, 730, 475, 186
+    263, 647, 537, 686, 600, 224, 469, 68, 770, 919, 190, 373, 294, 822, 808, 206
+    184, 943, 795, 384, 383, 461, 404, 758, 839, 887, 715, 67, 618, 276, 204, 918
+    873, 777, 604, 560, 951, 160, 578, 722, 79, 804, 96, 409, 713, 940, 652, 934
+    970, 447, 318, 353, 859, 672, 112, 785, 645, 863, 803, 350, 139, 93, 354, 99
+    820, 908, 609, 772, 154, 274, 580, 184, 79, 626, 630, 742, 653, 282, 762, 623
+    680, 81, 927, 626, 789, 125, 411, 521, 938, 300, 821, 78, 343, 175, 128, 250
+    170, 774, 972, 275, 999, 639, 495, 78, 352, 126, 857, 956, 358, 619, 580, 124
+    737, 594, 701, 612, 669, 112, 134, 694, 363, 992, 809, 743, 168, 974, 944, 375
+    748, 52, 600, 747, 642, 182, 862, 81, 344, 805, 988, 739, 511, 655, 814, 334
+    249, 515, 897, 955, 664, 981, 649, 113, 974, 459, 893, 228, 433, 837, 553, 268
+    926, 240, 102, 654, 459, 51, 686, 754, 806, 760, 493, 403, 415, 394, 687, 700
+    946, 670, 656, 610, 738, 392, 760, 799, 887, 653, 978, 321, 576, 617, 626, 502
+    894, 679, 243, 440, 680, 879, 194, 572, 640, 724, 926, 56, 204, 700, 707, 151
+    457, 449, 797, 195, 791, 558, 945, 679, 297, 59, 87, 824, 713, 663, 412, 693
+    342, 606, 134, 108, 571, 364, 631, 212, 174, 643, 304, 329, 343, 97, 430, 751
+    497, 314, 983, 374, 822, 928, 140, 206, 73, 263, 980, 736, 876, 478, 430, 305
+    170, 514, 364, 692, 829, 82, 855, 953, 676, 246, 369, 970, 294, 750, 807, 827
+    150, 790, 288, 923, 804, 378, 215, 828, 592, 281, 565, 555, 710, 82, 896, 831
+    547, 261, 524, 462, 293, 465, 502, 56, 661, 821, 976, 991, 658, 869, 905, 758
+    745, 193, 768, 550, 608, 933, 378, 286, 215, 979, 792, 961, 61, 688, 793, 644
+    986, 403, 106, 366, 905, 644, 372, 567, 466, 434, 645, 210, 389, 550, 919, 135
+    780, 773, 635, 389, 707, 100, 626, 958, 165, 504, 920, 176, 193, 713, 857, 265
+    203, 50, 668, 108, 645, 990, 626, 197, 510, 357, 358, 850, 858, 364, 936, 638
+]
+
+struct _BzIn:
+    pub data: void* = null
+    pub len: int = 0
+    pub pos: int = 0
+    pub acc: i64 = 0
+    pub cnt: int = 0
+    pub bad: bool = false
+end
+
+struct _BzOut:
+    pub buf: ByteBuf = ByteBuf { data = null, len = 0, cap = 0 }
+    pub acc: i64 = 0
+    pub cnt: int = 0
+end
+
+inline func _bz_get(s &: _BzIn, k: int): int:
+    until s.cnt < k:
+        mut b := 0
+        if s.pos < s.len:
+            b = _bget(s.data, s.pos)
+            s.pos++
+        else:
+            s.bad = true
+        end
+        s.acc = ((s.acc << 8) | (b as i64)) & 0xffffffffff
+        s.cnt += 8
+    end
+    s.cnt -= k
+    ret ((s.acc >> s.cnt) & (((1 as i64) << k) - (1 as i64))) as int
+end
+
+func _bz_crc_table(): u32*:
+    t := mem.Allocate((256 * 4) as u64) as u32*
+    repeat 256 in i:
+        mut c := (i as u32) << 24
+        repeat 8:
+            if (c & (0x80000000 as u32)) != (0 as u32):
+                c = (c << 1) ^ (0x04c11db7 as u32)
+            else:
+                c = c << 1
+            end
+        end
+        t[i] = c
+    end
+    ret t
+end
+
+func _bz_crc_final(c: u32): u32:
+    ret c ^ (0xFFFFFFFF as u32)
+end
+
+func _bz_rotl1(c: u32): u32:
+    ret (c << 1) | (c >> 31)
+end
+
+func _bz_block(s &: _BzIn, out &: ByteBuf, max: int, lvl: int, tt: u32*, ll: u8*, crctab: u32*, crc_out &: u32): int:
+    hi := _bz_get(s, 16)
+    lo := _bz_get(s, 16)
+    stored := ((hi as u32) << 16) | (lo as u32)
+    randomised := _bz_get(s, 1)
+    orig := _bz_get(s, 24)
+    if s.bad: ret 1 end
+    nmax := lvl * 100000
+
+    mut seq: int[256]
+    mut nin := 0
+    used16 := _bz_get(s, 16)
+    repeat 16 in i:
+        if (used16 & (0x8000 >> i)) != 0:
+            bits16 := _bz_get(s, 16)
+            repeat 16 in j:
+                if (bits16 & (0x8000 >> j)) != 0:
+                    seq[nin] = i * 16 + j
+                    nin++
+                end
+            end
+        end
+        if s.bad: ret 1 end
+    end
+    if nin == 0: ret 1 end
+    alpha := nin + 2
+    eob := nin + 1
+
+    ngroups := _bz_get(s, 3)
+    if ngroups < 2 or ngroups > 6: ret 1 end
+    nsel := _bz_get(s, 15)
+    if nsel < 1: ret 1 end
+    mut sel: u8[32768]
+    mut pos6: int[6]
+    repeat 6 in i: pos6[i] = i end
+    mut si := 0
+    until si < nsel:
+        mut j := 0
+        mut more := true
+        until more:
+            if _bz_get(s, 1) == 0:
+                more = false
+            else:
+                j++
+                if j >= ngroups: ret 1 end
+            end
+            if s.bad: ret 1 end
+        end
+        tmp := pos6[j]
+        until j > 0:
+            pos6[j] = pos6[j - 1]
+            j--
+        end
+        pos6[0] = tmp
+        sel[si] = tmp as u8
+        si++
+    end
+
+    mut limit: int[144]
+    mut base: int[144]
+    mut perm: int[1548]
+    mut minlen: int[6]
+    mut tl: int[258]
+    repeat ngroups in t:
+        mut curr := _bz_get(s, 5)
+        repeat alpha in i:
+            mut more := true
+            until more:
+                if curr < 1 or curr > 20: ret 1 end
+                if _bz_get(s, 1) == 0:
+                    more = false
+                else:
+                    if _bz_get(s, 1) == 0:
+                        curr++
+                    else:
+                        curr--
+                    end
+                end
+                if s.bad: ret 1 end
+            end
+            tl[i] = curr
+        end
+        mut mn := 32
+        mut mx := 0
+        repeat alpha in i:
+            if tl[i] > mx: mx = tl[i] end
+            if tl[i] < mn: mn = tl[i] end
+        end
+        minlen[t] = mn
+        mut pp := 0
+        mut l := mn
+        until l <= mx:
+            repeat alpha in i:
+                if tl[i] == l:
+                    perm[t * 258 + pp] = i
+                    pp++
+                end
+            end
+            l++
+        end
+        repeat 24 in i:
+            base[t * 24 + i] = 0
+            limit[t * 24 + i] = -1
+        end
+        repeat alpha in i:
+            base[t * 24 + tl[i] + 1]++
+        end
+        l = 1
+        until l < 23:
+            base[t * 24 + l] += base[t * 24 + l - 1]
+            l++
+        end
+        mut vec := 0
+        l = mn
+        until l <= mx:
+            vec += base[t * 24 + l + 1] - base[t * 24 + l]
+            limit[t * 24 + l] = vec - 1
+            vec = vec << 1
+            l++
+        end
+        l = mn + 1
+        until l <= mx:
+            base[t * 24 + l] = ((limit[t * 24 + l - 1] + 1) << 1) - base[t * 24 + l]
+            l++
+        end
+    end
+
+    mut mtf: int[256]
+    repeat 256 in i: mtf[i] = i end
+    mut unz: int[256]
+    repeat 256 in i: unz[i] = 0 end
+    mut nblock := 0
+    mut es := 0
+    mut rn := 1
+    mut inrun := false
+    mut gno := -1
+    mut gpos := 0
+    mut gbase := 0
+    mut fin := false
+    until not fin:
+        if gpos == 0:
+            gno++
+            if gno >= nsel: ret 1 end
+            gpos = 50
+            gbase = (sel[gno] as int)
+        end
+        gpos--
+        mut zn := minlen[gbase]
+        mut zv := _bz_get(s, zn)
+        until true:
+            if zn > 20: ret 1 end
+            if zv <= limit[gbase * 24 + zn]: break end
+            zn++
+            zv = (zv << 1) | _bz_get(s, 1)
+        end
+        if s.bad: ret 1 end
+        idx := zv - base[gbase * 24 + zn]
+        if idx < 0 or idx >= 258: ret 1 end
+        sym := perm[gbase * 258 + idx]
+        if sym <= 1:
+            if not inrun:
+                es = 0
+                rn = 1
+                inrun = true
+            end
+            if rn >= 2097152: ret 1 end
+            es += (sym + 1) * rn
+            rn = rn << 1
+        else:
+            if inrun:
+                uc := seq[mtf[0]]
+                if nblock + es > nmax: ret 1 end
+                unz[uc] += es
+                repeat es:
+                    tt[nblock] = uc as u32
+                    nblock++
+                end
+                inrun = false
+            end
+            if sym == eob:
+                fin = true
+            else:
+                if nblock >= nmax: ret 1 end
+                nn := sym - 1
+                if nn >= nin: ret 1 end
+                mtfv := mtf[nn]
+                mut k := nn
+                until k > 0:
+                    mtf[k] = mtf[k - 1]
+                    k--
+                end
+                mtf[0] = mtfv
+                uc := seq[mtfv]
+                unz[uc]++
+                tt[nblock] = uc as u32
+                nblock++
+            end
+        end
+    end
+    if orig >= nblock: ret 1 end
+
+    mut cf: int[257]
+    cf[0] = 0
+    repeat 256 in i: cf[i + 1] = cf[i] + unz[i] end
+    mut q := 0
+    until q < nblock:
+        uc := (tt[q] & (255 as u32)) as int
+        tt[cf[uc]] = tt[cf[uc]] | ((q as u32) << 8)
+        cf[uc]++
+        q++
+    end
+
+    mut tpos := (tt[orig] >> 8) as int
+    mut rtogo := 0
+    mut rtpos := 0
+    q = 0
+    until q < nblock:
+        w := tt[tpos]
+        mut ch := (w & (255 as u32)) as int
+        tpos = (w >> 8) as int
+        if randomised != 0:
+            if rtogo == 0:
+                rtogo = _BZ_RNUMS[rtpos]
+                rtpos++
+                if rtpos == 512: rtpos = 0 end
+            end
+            rtogo--
+            if rtogo == 1: ch = ch ^ 1 end
+        end
+        ll[q] = ch as u8
+        q++
+    end
+
+    mut crc := 0xFFFFFFFF as u32
+    mut prev := -1
+    mut run := 0
+    q = 0
+    until q < nblock:
+        c := (ll[q] as int)
+        q++
+        if run == 4:
+            if max > 0 and out.len + c > max: ret 2 end
+            repeat c:
+                BufPush(out, prev)
+                crc = (crc << 8) ^ crctab[((crc >> 24) as int) ^ prev]
+            end
+            run = 0
+            prev = -1
+        else:
+            if c == prev:
+                run++
+            else:
+                run = 1
+                prev = c
+            end
+            if max > 0 and out.len + 1 > max: ret 2 end
+            BufPush(out, c)
+            crc = (crc << 8) ^ crctab[((crc >> 24) as int) ^ c]
+        end
+    end
+    crc = _bz_crc_final(crc)
+    if crc != stored: ret 1 end
+    crc_out = crc
+    ret 0
+end
+
+func _bz_stream(s &: _BzIn, out &: ByteBuf, max: int, crctab: u32*): int:
+    if _bz_get(s, 8) != 0x42 or _bz_get(s, 8) != 0x5a or _bz_get(s, 8) != 0x68: ret 1 end
+    lv := _bz_get(s, 8) - 0x30
+    if s.bad or lv < 1 or lv > 9: ret 1 end
+    tt := mem.Allocate((lv * 100000 * 4) as u64) as u32*
+    ll := mem.Allocate((lv * 100000) as u64) as u8*
+    mut comb := 0 as u32
+    mut st := 1
+    mut more := true
+    until more:
+        m1 := _bz_get(s, 24)
+        m2 := _bz_get(s, 24)
+        if s.bad:
+            more = false
+        else:
+            if m1 == 0x314159 and m2 == 0x265359:
+                mut bc := 0 as u32
+                r := _bz_block(s, out, max, lv, tt, ll, crctab, bc)
+                if r != 0:
+                    st = r
+                    more = false
+                else:
+                    comb = _bz_rotl1(comb) ^ bc
+                end
+            else:
+                more = false
+                if m1 == 0x177245 and m2 == 0x385090:
+                    hi := _bz_get(s, 16)
+                    lo := _bz_get(s, 16)
+                    stored := ((hi as u32) << 16) | (lo as u32)
+                    if not s.bad and stored == comb:
+                        st = 0
+                        s.cnt -= s.cnt % 8
+                    end
+                end
+            end
+        end
+    end
+    mem.Free(tt as void*)
+    mem.Free(ll as void*)
+    ret st
+end
+
+inline func _bz_put(w &: _BzOut, k: int, v: int):
+    w.acc = (w.acc << k) | (v as i64)
+    w.cnt += k
+    until w.cnt >= 8:
+        w.cnt -= 8
+        BufPush(w.buf, ((w.acc >> w.cnt) & (255 as i64)) as int)
+    end
+    w.acc = w.acc & (((1 as i64) << w.cnt) - (1 as i64))
+end
+
+func _bz_bwt(blk: u8*, n: int, last: u8*, p0: int*, c0: int*, pn: int*, cn0: int*, cnt: int*, orig &: int):
+    mut p := p0
+    mut c := c0
+    mut cn := cn0
+    repeat 256 in i: cnt[i] = 0 end
+    repeat n in i: cnt[blk[i] as int]++ end
+    mut sum := 0
+    repeat 256 in i:
+        t := cnt[i]
+        cnt[i] = sum
+        sum += t
+    end
+    repeat n in i:
+        ch := blk[i] as int
+        p[cnt[ch]] = i
+        cnt[ch]++
+    end
+    c[p[0]] = 0
+    mut classes := 1
+    mut i := 1
+    until i < n:
+        if blk[p[i]] != blk[p[i - 1]]: classes++ end
+        c[p[i]] = classes - 1
+        i++
+    end
+    mut len := 1
+    until len < n and classes < n:
+        i = 0
+        until i < n:
+            mut v := p[i] - len
+            if v < 0: v += n end
+            pn[i] = v
+            i++
+        end
+        i = 0
+        until i < classes:
+            cnt[i] = 0
+            i++
+        end
+        i = 0
+        until i < n:
+            cnt[c[pn[i]]]++
+            i++
+        end
+        sum = 0
+        i = 0
+        until i < classes:
+            t := cnt[i]
+            cnt[i] = sum
+            sum += t
+            i++
+        end
+        i = 0
+        until i < n:
+            x := pn[i]
+            k := c[x]
+            p[cnt[k]] = x
+            cnt[k]++
+            i++
+        end
+        cn[p[0]] = 0
+        classes = 1
+        i = 1
+        until i < n:
+            a := p[i]
+            b := p[i - 1]
+            mut a2 := a + len
+            if a2 >= n: a2 -= n end
+            mut b2 := b + len
+            if b2 >= n: b2 -= n end
+            if c[a] != c[b] or c[a2] != c[b2]: classes++ end
+            cn[a] = classes - 1
+            i++
+        end
+        tmp := c
+        c = cn
+        cn = tmp
+        len = len << 1
+    end
+    i = 0
+    until i < n:
+        mut r := p[i]
+        if r == 0:
+            orig = i
+            r = n
+        end
+        last[i] = blk[r - 1]
+        i++
+    end
+end
+
+func _bz_lengths(lens: int*, lo: int, freq: int*, fo: int, alpha: int, maxlen: int):
+    mut wt: int[516]
+    mut par: int[516]
+    mut dep: int[516]
+    mut act: int[258]
+    mut f: int[258]
+    repeat alpha in i:
+        f[i] = freq[fo + i]
+        if f[i] == 0: f[i] = 1 end
+    end
+    mut more := true
+    until more:
+        repeat alpha in i:
+            wt[i] = f[i] << 8
+            dep[i] = 0
+            par[i] = -1
+            act[i] = i
+        end
+        mut na := alpha
+        mut nn := alpha
+        until na > 1:
+            mut a := 0
+            repeat na in k:
+                x := act[k]
+                y := act[a]
+                if wt[x] < wt[y] or (wt[x] == wt[y] and dep[x] < dep[y]): a = k end
+            end
+            n1 := act[a]
+            act[a] = act[na - 1]
+            na--
+            mut b := 0
+            repeat na in k:
+                x := act[k]
+                y := act[b]
+                if wt[x] < wt[y] or (wt[x] == wt[y] and dep[x] < dep[y]): b = k end
+            end
+            n2 := act[b]
+            wt[nn] = wt[n1] + wt[n2]
+            mut dd := dep[n1]
+            if dep[n2] > dd: dd = dep[n2] end
+            dep[nn] = dd + 1
+            par[n1] = nn
+            par[n2] = nn
+            par[nn] = -1
+            act[b] = nn
+            nn++
+        end
+        mut tooLong := false
+        repeat alpha in i:
+            mut d := 0
+            mut j := i
+            until par[j] >= 0:
+                j = par[j]
+                d++
+            end
+            lens[lo + i] = d
+            if d > maxlen: tooLong = true end
+        end
+        if tooLong:
+            repeat alpha in i:
+                f[i] = 1 + f[i] / 2
+            end
+        else:
+            more = false
+        end
+    end
+end
+
+func _bz_emit_block(w &: _BzOut, blk: u8*, n: int, crc: u32, wp: int*, wc: int*, wq: int*, wd: int*, wcnt: int*, mtfv: u16*, last: u8*): int:
+    mut orig := 0
+    _bz_bwt(blk, n, last, wp, wc, wq, wd, wcnt, orig)
+
+    mut inuse: bool[256]
+    mut u2s: int[256]
+    repeat 256 in i:
+        inuse[i] = false
+        u2s[i] = 0
+    end
+    repeat n in i: inuse[blk[i] as int] = true end
+    mut nin := 0
+    repeat 256 in i:
+        if inuse[i]:
+            u2s[i] = nin
+            nin++
+        end
+    end
+    eob := nin + 1
+    alpha := nin + 2
+
+    mut yy: int[256]
+    repeat 256 in i: yy[i] = i end
+    mut gf: int[258]
+    repeat 258 in i: gf[i] = 0 end
+    mut wr := 0
+    mut zp := 0
+    mut i := 0
+    until i < n:
+        li := u2s[last[i] as int]
+        if yy[0] == li:
+            zp++
+        else:
+            if zp > 0:
+                zp--
+                mut more := true
+                until more:
+                    if (zp & 1) != 0:
+                        mtfv[wr] = 1 as u16
+                        gf[1]++
+                    else:
+                        mtfv[wr] = 0 as u16
+                        gf[0]++
+                    end
+                    wr++
+                    if zp < 2:
+                        more = false
+                    else:
+                        zp = (zp - 2) / 2
+                    end
+                end
+                zp = 0
+            end
+            mut j := 0
+            until yy[j] != li: j++ end
+            mut k := j
+            until k > 0:
+                yy[k] = yy[k - 1]
+                k--
+            end
+            yy[0] = li
+            mtfv[wr] = (j + 1) as u16
+            gf[j + 1]++
+            wr++
+        end
+        i++
+    end
+    if zp > 0:
+        zp--
+        mut more := true
+        until more:
+            if (zp & 1) != 0:
+                mtfv[wr] = 1 as u16
+                gf[1]++
+            else:
+                mtfv[wr] = 0 as u16
+                gf[0]++
+            end
+            wr++
+            if zp < 2:
+                more = false
+            else:
+                zp = (zp - 2) / 2
+            end
+        end
+    end
+    mtfv[wr] = eob as u16
+    gf[eob]++
+    wr++
+    nmtf := wr
+
+    mut ng := 6
+    if nmtf < 2400: ng = 5 end
+    if nmtf < 1200: ng = 4 end
+    if nmtf < 600: ng = 3 end
+    if nmtf < 200: ng = 2 end
+
+    lens := mem.Allocate((1548 * 4) as u64) as int*
+    freq := mem.Allocate((1548 * 4) as u64) as int*
+    codes := mem.Allocate((1548 * 4) as u64) as int*
+    mut npart := ng
+    mut remf := nmtf
+    mut gs := 0
+    until npart > 0:
+        tf := remf / npart
+        mut ge := gs - 1
+        mut af := 0
+        until af < tf and ge < alpha - 1:
+            ge++
+            af += gf[ge]
+        end
+        if ge > gs and npart != ng and npart != 1 and ((ng - npart) % 2) == 1:
+            af -= gf[ge]
+            ge--
+        end
+        repeat alpha in v:
+            if v >= gs and v <= ge:
+                lens[(npart - 1) * 258 + v] = 0
+            else:
+                lens[(npart - 1) * 258 + v] = 15
+            end
+        end
+        npart--
+        gs = ge + 1
+        remf -= af
+    end
+
+    mut sels: u8[18100]
+    mut nsel := 0
+    repeat 4:
+        repeat 1548 in v: freq[v] = 0 end
+        nsel = 0
+        gs = 0
+        until gs < nmtf:
+            mut ge := gs + 49
+            if ge >= nmtf: ge = nmtf - 1 end
+            mut best := 0
+            mut bestc := 1000000000
+            repeat ng in t:
+                mut cost := 0
+                mut x := gs
+                until x <= ge:
+                    cost += lens[t * 258 + (mtfv[x] as int)]
+                    x++
+                end
+                if cost < bestc:
+                    bestc = cost
+                    best = t
+                end
+            end
+            sels[nsel] = best as u8
+            nsel++
+            mut x := gs
+            until x <= ge:
+                freq[best * 258 + (mtfv[x] as int)]++
+                x++
+            end
+            gs = ge + 1
+        end
+        repeat ng in t:
+            _bz_lengths(lens, t * 258, freq, t * 258, alpha, 17)
+        end
+    end
+
+    repeat ng in t:
+        mut mn := 32
+        mut mx := 0
+        repeat alpha in v:
+            if lens[t * 258 + v] > mx: mx = lens[t * 258 + v] end
+            if lens[t * 258 + v] < mn: mn = lens[t * 258 + v] end
+        end
+        mut vec := 0
+        mut l := mn
+        until l <= mx:
+            repeat alpha in v:
+                if lens[t * 258 + v] == l:
+                    codes[t * 258 + v] = vec
+                    vec++
+                end
+            end
+            vec = vec << 1
+            l++
+        end
+    end
+
+    _bz_put(w, 24, 0x314159)
+    _bz_put(w, 24, 0x265359)
+    _bz_put(w, 16, ((crc >> 16) & (65535 as u32)) as int)
+    _bz_put(w, 16, (crc & (65535 as u32)) as int)
+    _bz_put(w, 1, 0)
+    _bz_put(w, 24, orig)
+
+    repeat 16 in a:
+        mut any := 0
+        repeat 16 in b:
+            if inuse[a * 16 + b]: any = 1 end
+        end
+        _bz_put(w, 1, any)
+    end
+    repeat 16 in a:
+        mut any := false
+        repeat 16 in b:
+            if inuse[a * 16 + b]: any = true end
+        end
+        if any:
+            repeat 16 in b:
+                if inuse[a * 16 + b]:
+                    _bz_put(w, 1, 1)
+                else:
+                    _bz_put(w, 1, 0)
+                end
+            end
+        end
+    end
+
+    _bz_put(w, 3, ng)
+    _bz_put(w, 15, nsel)
+    mut pos6: int[6]
+    repeat 6 in t: pos6[t] = t end
+    repeat nsel in g:
+        sv := sels[g] as int
+        mut j := 0
+        until pos6[j] != sv: j++ end
+        repeat j:
+            _bz_put(w, 1, 1)
+        end
+        _bz_put(w, 1, 0)
+        mut k := j
+        until k > 0:
+            pos6[k] = pos6[k - 1]
+            k--
+        end
+        pos6[0] = sv
+    end
+
+    repeat ng in t:
+        mut curr := lens[t * 258]
+        _bz_put(w, 5, curr)
+        repeat alpha in v:
+            tgt := lens[t * 258 + v]
+            until curr < tgt:
+                _bz_put(w, 2, 2)
+                curr++
+            end
+            until curr > tgt:
+                _bz_put(w, 2, 3)
+                curr--
+            end
+            _bz_put(w, 1, 0)
+        end
+    end
+
+    mut g := 0
+    gs = 0
+    until gs < nmtf:
+        mut ge := gs + 49
+        if ge >= nmtf: ge = nmtf - 1 end
+        t := sels[g] as int
+        mut x := gs
+        until x <= ge:
+            sym := mtfv[x] as int
+            _bz_put(w, lens[t * 258 + sym], codes[t * 258 + sym])
+            x++
+        end
+        g++
+        gs = ge + 1
+    end
+    mem.Free(lens as void*)
+    mem.Free(freq as void*)
+    mem.Free(codes as void*)
+    ret 0
+end
+
+@en "Bzip2CompressLevel"
+@fa "فشرده سازی بی زیپ دو با سطح"
+pub func Bzip2CompressLevel(p: void*, n: int, level: int): ByteBuf:
+    mut lv := level
+    if lv < 1: lv = 1 end
+    if lv > 9: lv = 9 end
+    maxblk := lv * 100000 - 19
+    mut acap := n + n / 3 + 16
+    if acap > maxblk + 8: acap = maxblk + 8 end
+    mut w := _BzOut { buf = NewByteBuf(), acc = 0, cnt = 0 }
+    _bz_put(w, 8, 0x42)
+    _bz_put(w, 8, 0x5a)
+    _bz_put(w, 8, 0x68)
+    _bz_put(w, 8, 0x30 + lv)
+
+    crctab := _bz_crc_table()
+    blk := mem.Allocate(acap as u64) as u8*
+    last := mem.Allocate(acap as u64) as u8*
+    wp := mem.Allocate((acap * 4) as u64) as int*
+    wc := mem.Allocate((acap * 4) as u64) as int*
+    wq := mem.Allocate((acap * 4) as u64) as int*
+    wd := mem.Allocate((acap * 4) as u64) as int*
+    mut cs := acap
+    if cs < 256: cs = 256 end
+    wcnt := mem.Allocate((cs * 4) as u64) as int*
+    mtfv := mem.Allocate(((acap + 2) * 2) as u64) as u16*
+
+    bp := p as u8*
+    mut comb := 0 as u32
+    mut bcrc := 0xFFFFFFFF as u32
+    mut nblock := 0
+    mut pos := 0
+    until pos < n:
+        if nblock >= maxblk:
+            bc := _bz_crc_final(bcrc)
+            _ := _bz_emit_block(w, blk, nblock, bc, wp, wc, wq, wd, wcnt, mtfv, last)
+            comb = _bz_rotl1(comb) ^ bc
+            bcrc = 0xFFFFFFFF as u32
+            nblock = 0
+        end
+        ch := bp[pos] as int
+        mut run := 1
+        until pos + run < n and (bp[pos + run] as int) == ch and run < 255:
+            run++
+        end
+        repeat run:
+            bcrc = (bcrc << 8) ^ crctab[((bcrc >> 24) as int) ^ ch]
+        end
+        if run < 4:
+            repeat run:
+                blk[nblock] = ch as u8
+                nblock++
+            end
+        else:
+            repeat 4:
+                blk[nblock] = ch as u8
+                nblock++
+            end
+            blk[nblock] = (run - 4) as u8
+            nblock++
+        end
+        pos += run
+    end
+    if nblock > 0:
+        bc := _bz_crc_final(bcrc)
+        _ := _bz_emit_block(w, blk, nblock, bc, wp, wc, wq, wd, wcnt, mtfv, last)
+        comb = _bz_rotl1(comb) ^ bc
+    end
+    _bz_put(w, 24, 0x177245)
+    _bz_put(w, 24, 0x385090)
+    _bz_put(w, 16, ((comb >> 16) & (65535 as u32)) as int)
+    _bz_put(w, 16, (comb & (65535 as u32)) as int)
+    if w.cnt > 0:
+        _bz_put(w, 8 - w.cnt, 0)
+    end
+    mem.Free(crctab as void*)
+    mem.Free(blk as void*)
+    mem.Free(last as void*)
+    mem.Free(wp as void*)
+    mem.Free(wc as void*)
+    mem.Free(wq as void*)
+    mem.Free(wd as void*)
+    mem.Free(wcnt as void*)
+    mem.Free(mtfv as void*)
+    ret w.buf
+end
+
+@en "Bzip2Compress"
+@fa "فشرده سازی بی زیپ دو"
+pub func Bzip2Compress(p: void*, n: int): ByteBuf:
+    ret Bzip2CompressLevel(p, n, 9)
+end
+
+@en "Bzip2CompressBuf"
+@fa "فشرده سازی بی زیپ دو بافر"
+pub func Bzip2CompressBuf(b: ByteBuf): ByteBuf:
+    ret Bzip2Compress(b.data, b.len)
+end
+
+@en "Bzip2CompressStr"
+@fa "فشرده سازی بی زیپ دو رشته"
+pub func Bzip2CompressStr(s: str): ByteBuf:
+    ret Bzip2Compress(s as void*, s.len())
+end
+
+@en "Bzip2Decompress"
+@fa "کدگشایی بی زیپ دو"
+pub func Bzip2Decompress(p: void*, n: int, ok &: bool): ByteBuf:
+    ret Bzip2DecompressMax(p, n, 0, ok)
+end
+
+@en "Bzip2DecompressMax"
+@fa "کدگشایی بی زیپ دو با سقف"
+pub func Bzip2DecompressMax(p: void*, n: int, max: int, ok &: bool): ByteBuf:
+    ok = false
+    mut out := NewByteBuf()
+    if n < 14 or p == null: ret out end
+    mut s := _BzIn { data = p, len = n, pos = 0, acc = 0, cnt = 0, bad = false }
+    crctab := _bz_crc_table()
+    mut good := true
+    until good:
+        st := _bz_stream(s, out, max, crctab)
+        if st != 0:
+            BufFree(out)
+            out = NewByteBuf()
+            mem.Free(crctab as void*)
+            ret out
+        end
+        if s.pos - s.cnt / 8 >= n: good = false end
+    end
+    mem.Free(crctab as void*)
+    ok = true
+    ret out
+end
+
+@en "Bzip2DecompressBuf"
+@fa "کدگشایی بی زیپ دو بافر"
+pub func Bzip2DecompressBuf(b: ByteBuf, ok &: bool): ByteBuf:
+    ret Bzip2Decompress(b.data, b.len, ok)
+end

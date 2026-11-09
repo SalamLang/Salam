@@ -4,15 +4,15 @@ This page records what the `std/net` proxy packages (`vless`, `vmess`, `trojan`,
 
 ## Software used
 
-| Program | Version | Source and check |
-| --- | --- | --- |
-| Xray-core | 26.11.9 | XTLS/Xray-core release, SHA2-256 from the published `.dgst` |
-| sing-box | 1.14.4 | SagerNet/sing-box release, SHA-256 from the GitHub release digest |
-| shadowsocks-rust | 1.25.0 | `ssserver` and `sslocal`, SHA-256 from the published `.sha256` |
-| mihomo | 1.19.33 | MetaCubeX/mihomo release, SHA-256 from the GitHub release digest (only for simple-obfs, see below) |
-| curl | 8.18.0 | system |
-| openssl | 3.5.5 | system |
-| Python | 3.14.4 | harness, echo servers, garbage senders |
+| Program          | Version | Source and check                                                                                   |
+| ---------------- | ------- | -------------------------------------------------------------------------------------------------- |
+| Xray-core        | 26.11.9 | XTLS/Xray-core release, SHA2-256 from the published `.dgst`                                        |
+| sing-box         | 1.14.4  | SagerNet/sing-box release, SHA-256 from the GitHub release digest                                  |
+| shadowsocks-rust | 1.25.0  | `ssserver` and `sslocal`, SHA-256 from the published `.sha256`                                     |
+| mihomo           | 1.19.33 | MetaCubeX/mihomo release, SHA-256 from the GitHub release digest (only for simple-obfs, see below) |
+| cURL             | 8.18.0  | system                                                                                             |
+| OpenSSL          | 3.5.5   | system                                                                                             |
+| Python           | 3.14.4  | harness, echo servers, garbage senders                                                             |
 
 All third party programs run only against 127.0.0.1 with generated configs and a virtual memory cap (`ulimit -v`). Our side is `examples/vpn` (`vpn run -c config.json`) plus two small programs in `tools/interop` (`vmess_client`, `ss_peer`) for options the example does not expose.
 
@@ -22,39 +22,39 @@ Each case sends 1 MiB of random data through the proxy to an echo server and com
 
 "ours" is the Salam implementation. Each row was run in both directions: our client against the real server, and the real client against our server.
 
-| Protocol and transport | xray | sing-box | shadowsocks-rust | Notes |
-| --- | --- | --- | --- | --- |
-| VLESS tcp | both ways pass | both ways pass | | |
-| VLESS tcp + TLS | both ways pass | both ways pass | | |
-| VLESS ws | both ways pass | both ways pass | | |
-| VLESS ws + TLS | both ways pass | both ways pass | | |
-| VLESS httpupgrade | both ways pass | both ways pass | | gRPC not implemented |
-| VMess AEAD aes-128-gcm: tcp, tcp+TLS, ws, ws+TLS, httpupgrade | both ways pass | both ways pass | | after the fixes below |
-| VMess AEAD chacha20-poly1305 (tcp) | both ways pass | both ways pass | | |
-| VMess security none (tcp) | our client rejected by xray, xray client to ours passes | both ways pass | | Xray 26.x removed `none` and `zero` from its server |
-| VMess zero | not supported by xray 26.x | sing-box server does not support it | | ours to ours passes |
-| Trojan tcp + TLS | both ways pass | both ways pass | | |
-| Trojan fallback | | | | curl, openssl and raw TLS probes all get the fallback site |
-| Shadowsocks TCP aes-128-gcm, aes-256-gcm, chacha20-ietf-poly1305 | both ways pass | both ways pass | both ways pass | |
-| Shadowsocks 2022 TCP (aes-128-gcm, aes-256-gcm, chacha20-poly1305) | both ways pass | both ways pass | both ways pass | UDP for 2022 is not implemented |
-| Shadowsocks UDP, the 3 legacy methods | both ways pass | both ways pass | both ways pass | our client to real server, and real client (through its SOCKS5 UDP ASSOCIATE) to our UDP server |
-| Shadowsocks simple-obfs http | | | | mihomo client to our server passes |
-| Shadowsocks simple-obfs tls | | | | mihomo client to our server passes after the fix below |
-| SOCKS5 inbound | | | | curl `--socks5`, `--socks5-hostname`, user/pass offer pass |
-| SOCKS4 and SOCKS4a inbound | | | | curl `--socks4`, `--socks4a` pass on the mixed port; the dedicated socks inbound is SOCKS5 only by design |
-| HTTP proxy inbound | | | | curl `-x` plain GET, CONNECT, keep-alive pass |
-| HTTPS proxy inbound | | | | curl `--proxy https://` plain and CONNECT pass |
-| SOCKS5 and HTTP outbound | pass | | | our outbound to xray socks and http inbounds |
+| Protocol and transport                                             | xray                                                    | sing-box                            | shadowsocks-rust | Notes                                                                                                     |
+| ------------------------------------------------------------------ | ------------------------------------------------------- | ----------------------------------- | ---------------- | --------------------------------------------------------------------------------------------------------- |
+| VLESS tcp                                                          | both ways pass                                          | both ways pass                      |                  |                                                                                                           |
+| VLESS tcp + TLS                                                    | both ways pass                                          | both ways pass                      |                  |                                                                                                           |
+| VLESS ws                                                           | both ways pass                                          | both ways pass                      |                  |                                                                                                           |
+| VLESS ws + TLS                                                     | both ways pass                                          | both ways pass                      |                  |                                                                                                           |
+| VLESS httpupgrade                                                  | both ways pass                                          | both ways pass                      |                  | gRPC not implemented                                                                                      |
+| VMess AEAD aes-128-gcm: tcp, tcp+TLS, ws, ws+TLS, httpupgrade      | both ways pass                                          | both ways pass                      |                  | after the fixes below                                                                                     |
+| VMess AEAD chacha20-poly1305 (tcp)                                 | both ways pass                                          | both ways pass                      |                  |                                                                                                           |
+| VMess security none (tcp)                                          | our client rejected by xray, xray client to ours passes | both ways pass                      |                  | Xray 26.x removed `none` and `zero` from its server                                                       |
+| VMess zero                                                         | not supported by xray 26.x                              | sing-box server does not support it |                  | ours to ours passes                                                                                       |
+| Trojan tcp + TLS                                                   | both ways pass                                          | both ways pass                      |                  |                                                                                                           |
+| Trojan fallback                                                    |                                                         |                                     |                  | cURL, OpenSSL and raw TLS probes all get the fallback site                                                |
+| Shadowsocks TCP aes-128-gcm, aes-256-gcm, chacha20-ietf-poly1305   | both ways pass                                          | both ways pass                      | both ways pass   |                                                                                                           |
+| Shadowsocks 2022 TCP (aes-128-gcm, aes-256-gcm, chacha20-poly1305) | both ways pass                                          | both ways pass                      | both ways pass   | UDP for 2022 is not implemented                                                                           |
+| Shadowsocks UDP, the 3 legacy methods                              | both ways pass                                          | both ways pass                      | both ways pass   | our client to real server, and real client (through its SOCKS5 UDP ASSOCIATE) to our UDP server           |
+| Shadowsocks simple-obfs http                                       |                                                         |                                     |                  | mihomo client to our server passes                                                                        |
+| Shadowsocks simple-obfs tls                                        |                                                         |                                     |                  | mihomo client to our server passes after the fix below                                                    |
+| SOCKS5 inbound                                                     |                                                         |                                     |                  | cURL `--socks5`, `--socks5-hostname`, user/pass offer pass                                                |
+| SOCKS4 and SOCKS4a inbound                                         |                                                         |                                     |                  | cURL `--socks4`, `--socks4a` pass on the mixed port; the dedicated socks inbound is SOCKS5 only by design |
+| HTTP proxy inbound                                                 |                                                         |                                     |                  | cURL `-x` plain GET, CONNECT, keep-alive pass                                                             |
+| HTTPS proxy inbound                                                |                                                         |                                     |                  | cURL `--proxy https://` plain and CONNECT pass                                                            |
+| SOCKS5 and HTTP outbound                                           | pass                                                    |                                     |                  | our outbound to xray socks and http inbounds                                                              |
 
 VMess option matrix (our client with a chosen option byte, `vmess_options.py`), against our server, xray and sing-box:
 
-| Options | aes-128-gcm | chacha20-poly1305 |
-| --- | --- | --- |
-| chunk stream | pass (all three servers) | pass |
-| + chunk mask | pass | pass |
-| + global padding | pass | pass |
-| + authenticated length | pass | pass |
-| + mask + padding + authenticated length | pass | pass |
+| Options                                 | aes-128-gcm              | chacha20-poly1305 |
+| --------------------------------------- | ------------------------ | ----------------- |
+| chunk stream                            | pass (all three servers) | pass              |
+| + chunk mask                            | pass                     | pass              |
+| + global padding                        | pass                     | pass              |
+| + authenticated length                  | pass                     | pass              |
+| + mask + padding + authenticated length | pass                     | pass              |
 
 Real clients: Xray sends chunk stream, mask and padding by default and authenticated length when the user has `"experiments": "AuthenticatedLength"`; both were accepted by our server.
 
@@ -88,16 +88,16 @@ The stalled connection check is not fully explained: in the plain `fuzz.py` run,
 
 Checked on 2026-11-09 from a normal (non Iranian) network.
 
-| Preset | Result |
-| --- | --- |
-| Cloudflare 1.1.1.1, 1.0.0.1, `cloudflare-dns.com/dns-query` | alive, valid certificate, HTTP 200 |
-| Google 8.8.8.8, 8.8.4.4, `dns.google/dns-query` | alive, valid certificate |
-| Quad9 9.9.9.9, 149.112.112.112, `dns.quad9.net/dns-query` | alive, valid certificate |
-| Shecan 178.22.122.100 | answers; matches the community lists |
-| Shecan 185.51.200.2 | listed by community sources, no answer from outside Iran |
-| Electro 78.157.42.100, 78.157.42.101 | both answer |
-| 403.online 10.202.10.202, 10.202.10.102 | private range, unreachable here; match the Persian lists |
-| Radar 10.202.10.10, 10.202.10.11 | private range, unreachable here; match the Persian lists |
+| Preset                                                      | Result                                                   |
+| ----------------------------------------------------------- | -------------------------------------------------------- |
+| Cloudflare 1.1.1.1, 1.0.0.1, `cloudflare-dns.com/dns-query` | alive, valid certificate, HTTP 200                       |
+| Google 8.8.8.8, 8.8.4.4, `dns.google/dns-query`             | alive, valid certificate                                 |
+| Quad9 9.9.9.9, 149.112.112.112, `dns.quad9.net/dns-query`   | alive, valid certificate                                 |
+| Shecan 178.22.122.100                                       | answers; matches the community lists                     |
+| Shecan 185.51.200.2                                         | listed by community sources, no answer from outside Iran |
+| Electro 78.157.42.100, 78.157.42.101                        | both answer                                              |
+| 403.online 10.202.10.202, 10.202.10.102                     | private range, unreachable here; match the Persian lists |
+| Radar 10.202.10.10, 10.202.10.11                            | private range, unreachable here; match the Persian lists |
 
 No wrong value was found. The Shecan, 403 and Radar addresses are confirmed only by third party lists (no official page could be fetched), and the 10.202.x.x addresses can only be tested from inside Iran.
 

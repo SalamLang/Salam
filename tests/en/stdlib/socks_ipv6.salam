@@ -1,0 +1,188 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import mem
+import net.socks
+import net.tcp
+import net.tunnel
+import net.udp
+import str
+
+struct FakeResolver:
+    pub unused: int = 0
+
+    pub func Lookup(host: str): tunnel.LookupResult:
+        mut r := tunnel.LookupResult {}
+        if host == "six.internal":
+            r.ips.push("::1")
+        else host == "mixed.internal":
+            r.ips.push("2001:db8::dead")
+            r.ips.push("::1")
+        end
+        ret r
+    end
+end
+
+func echo_conn(arg: i64):
+    c := tcp.ConnFromFd(arg)
+    until true:
+        d := tcp.Read(c, 4096)
+        if d.len() == 0: break end
+        tcp.Write(c, d)
+    end
+    tcp.Close(c)
+end
+
+func echo_accept(arg: i64):
+    srv := tcp.Server { fd = arg }
+    until true:
+        c := tcp.Accept(srv)
+        if not tcp.ConnOk(c): break end
+        socks.Go(echo_conn, c.fd as void*)
+    end
+end
+
+func udp_echo(arg: i64):
+    s := udp.Socket { fd = arg }
+    buf := mem.Allocate(2048 as u64)
+    until true:
+        mut h := ""
+        mut p := 0
+        n := udp.ReceiveBytes(s, buf, 2048, h, p)
+        if n < 0: break end
+        udp.SendBytes(s, h, p, buf, n)
+    end
+end
+
+func connect_via_resolver(h: str, p: int): socks.Outbound:
+    d := tunnel.DirectDialer { resolver = FakeResolver {}, has_resolver = true, timeout_ms = 3000 }
+    s := d.Dial(tunnel.NewAddr(h, p))
+    if not s.Ok(): ret socks.Outbound { ok = false, code = socks.RepHostUnreachable, err = "no route" } end
+    ret socks.Outbound { ok = true, code = socks.RepSucceeded, stream = s }
+end
+
+func say(label: str, r: socks.ConnectResult):
+    println label + ": ok=" + r.ok + " code=" + r.code
+end
+
+func roundtrip(r: socks.ConnectResult, msg: str): str:
+    if not r.ok: ret "no stream" end
+    r.stream.Write(msg)
+    got := r.stream.Read(4096)
+    r.stream.Close()
+    ret got
+end
+
+func udp_probe(u: socks.UDPSession, host: str, port: int, msg: str): str:
+    socks.UDPSetTimeout(u, 2000)
+    socks.UDPSend(u, host, port, msg)
+    buf := mem.Allocate(1024 as u64)
+    mut from := socks.Address {}
+    n := socks.UDPReceiveBytes(u, buf, 1024, from)
+    if n < 0:
+        mem.Free(buf)
+        ret "timeout"
+    end
+    (buf as u8*)[n] = 0 as u8
+    out := str.Clone(buf as str) + " from " + from.host + " kind " + from.kind
+    mem.Free(buf)
+    ret out
+end
+
+func main:
+    probe := tcp.BindOn("::1", 0)
+    if not tcp.Ok(probe):
+        println "ipv6 unavailable"
+        ret
+    end
+    tcp.CloseServer(probe)
+
+    es := tcp.BindOn("::1", 0)
+    socks.Go(echo_accept, es.fd as void*)
+    eport := tcp.Port(es)
+    us := udp.BindOn("::1", 0)
+    socks.Go(udp_echo, us.fd as void*)
+    uport := udp.Port(us)
+
+    cfg4 := socks.NewServerConfig(0)
+    sv4 := socks.Start(cfg4)
+    println "v4 server up", sv4.ok, sv4.host
+    cl4 := socks.NewClient("127.0.0.1", sv4.port)
+    say("v4 control, v6 literal target", socks.Connect(cl4, "::1", eport))
+    println roundtrip(socks.Connect(cl4, "::1", eport), "hello six")
+    println roundtrip(socks.Connect(cl4, "[::1]", eport), "hello bracketed")
+    say("v4 control, refused v6 target", socks.Connect(cl4, "::1", tcp.FreePort()))
+
+    u4 := socks.Associate(cl4)
+    println "v4 control udp associate", u4.ok, u4.relay_host
+    println udp_probe(u4, "::1", uport, "udp to v6 target")
+    socks.CloseUDP(u4)
+
+    mut cfg6 := socks.NewServerConfig(0)
+    cfg6.bind_host = "::1"
+    cfg6.allow_bind = true
+    sv6 := socks.Start(cfg6)
+    println "v6 server up", sv6.ok, sv6.host
+    cl6 := socks.NewClient("::1", sv6.port)
+    println roundtrip(socks.Connect(cl6, "::1", eport), "via v6 proxy")
+    println roundtrip(socks.Connect(cl6, "[::1]", eport), "via v6 proxy bracketed")
+    c6 := socks.DialConn(cl6, "::1", eport)
+    tcp.Write(c6, "plain conn")
+    println tcp.Read(c6, 100)
+    tcp.Close(c6)
+
+    u6 := socks.Associate(cl6)
+    println "v6 control udp associate", u6.ok, u6.relay_host
+    println udp_probe(u6, "::1", uport, "udp over v6 relay")
+    socks.CloseUDP(u6)
+
+    br := socks.Bind(cl6, "::1", 0)
+    println "bind first reply", br.ok, br.bound.host, br.bound.kind == socks.AtypIPv6
+    peer := tcp.Dial(br.bound.host, br.bound.port)
+    acc := socks.BindAccept(br.stream, cl6)
+    println "bind accepted", acc.ok, acc.bound.host, acc.bound.kind == socks.AtypIPv6
+    tcp.Write(peer, "from the inbound v6 peer")
+    println br.stream.Read(100)
+    br.stream.Write("reply to v6 peer")
+    println tcp.Read(peer, 100)
+    tcp.Close(peer)
+    br.stream.Close()
+
+    mut cfgd := socks.NewServerConfig(0)
+    cfgd.bind_host = "::"
+    cfgd.allow_bind = true
+    svd := socks.Start(cfgd)
+    println "dual server up", svd.ok, svd.host
+    cld4 := socks.NewClient("127.0.0.1", svd.port)
+    cld6 := socks.NewClient("::1", svd.port)
+    println roundtrip(socks.Connect(cld4, "::1", eport), "dual via v4")
+    println roundtrip(socks.Connect(cld6, "::1", eport), "dual via v6")
+    ud := socks.Associate(cld6)
+    println "dual udp associate", ud.ok
+    println udp_probe(ud, "::1", uport, "udp over dual relay")
+    socks.CloseUDP(ud)
+    socks.Stop(svd)
+
+    mut cfgr := socks.NewServerConfig(0)
+    socks.SetConnector(cfgr, (h: str, p: int): ret connect_via_resolver(h, p) end)
+    svr := socks.Start(cfgr)
+    clr := socks.NewClient("127.0.0.1", svr.port)
+    println roundtrip(socks.Connect(clr, "six.internal", eport), "AAAA only name")
+    println roundtrip(socks.Connect(clr, "mixed.internal", eport), "dead first address, live second")
+    say("unknown name", socks.Connect(clr, "none.internal", eport))
+    socks.Stop(svr)
+
+    socks.Stop(sv4)
+    socks.Stop(sv6)
+end

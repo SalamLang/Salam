@@ -1,0 +1,650 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+
+package typeset
+
+import mem
+import math
+
+const _RQ := 256
+const _RSUB := 16
+const _RMAX_EDGES := 65536
+
+@en "GlyphMask"
+@fa "ماسک گلیف"
+pub struct GlyphMask:
+    @en "data"
+    @fa "داده"
+    pub data: void* = null
+    @en "width"
+    @fa "پهنا"
+    pub width: int = 0
+    @en "height"
+    @fa "بلندی"
+    pub height: int = 0
+    @en "stride"
+    @fa "گام سطر"
+    pub stride: int = 0
+    @en "left"
+    @fa "چپ"
+    pub left: int = 0
+    @en "top"
+    @fa "بالا"
+    pub top: int = 0
+end
+
+@en "CacheSlot"
+@fa "خانه نهانگاه"
+pub struct CacheSlot:
+    @en "key"
+    @fa "کلید"
+    pub key: i64 = 0 as i64
+    @en "mask"
+    @fa "ماسک"
+    pub mask: GlyphMask = GlyphMask {}
+    @en "stamp"
+    @fa "مهر زمان"
+    pub stamp: i64 = 0 as i64
+    @en "used"
+    @fa "اشغال"
+    pub used: bool = false
+end
+
+@en "GlyphCache"
+@fa "نهانگاه گلیف"
+pub struct GlyphCache:
+    @en "capacity"
+    @fa "گنجایش"
+    pub capacity: int = 1048576
+    @en "bytes"
+    @fa "بایت‌ها"
+    pub bytes: int = 0
+    @en "hits"
+    @fa "برخوردها"
+    pub hits: int = 0
+    @en "misses"
+    @fa "نیافته‌ها"
+    pub misses: int = 0
+    @en "clock"
+    @fa "ساعت"
+    pub clock: i64 = 0 as i64
+    @en "slots"
+    @fa "خانه‌ها"
+    pub slots: Vector<CacheSlot> = Vector {}
+    @en "index"
+    @fa "فهرست"
+    pub index: HashMap<i64, int> = HashMap {}
+end
+
+struct _IOut:
+    pub x: Vector<int> = Vector {}
+    pub y: Vector<int> = Vector {}
+    pub on: Vector<bool> = Vector {}
+    pub ends: Vector<int> = Vector {}
+end
+
+struct _IEdges:
+    pub x0: Vector<int> = Vector {}
+    pub y0: Vector<int> = Vector {}
+    pub x1: Vector<int> = Vector {}
+    pub y1: Vector<int> = Vector {}
+    pub dir: Vector<int> = Vector {}
+end
+
+func _floordiv(a: i64, b: i64): i64:
+    q := a / b
+    if (a % b != (0 as i64)) and ((a < (0 as i64)) != (b < (0 as i64))):
+        ret q - (1 as i64)
+    end
+    ret q
+end
+
+func _f2_mul(a: int, v: int): int:
+    ret _div_round((a as i64) * (v as i64), 16384 as i64)
+end
+
+func _i_simple(f: Font, goff: int, ncont: int, xx: int, xy: int, yx: int, yy: int, dx: int, dy: int, o &: _IOut):
+    base := o.x.len()
+    npoints := _ttf_u16(f.data, f.size, goff + 10 + (ncont - 1) * 2) + 1
+    if npoints <= 0 or npoints > _TTF_MAX_POINTS or base + npoints > _TTF_MAX_POINTS:
+        ret
+    end
+    mut i := 0
+    until i < ncont:
+        e := _ttf_u16(f.data, f.size, goff + 10 + i * 2)
+        if e < npoints:
+            o.ends.push(base + e + 1)
+        end
+        i++
+    end
+    ins_at := goff + 10 + ncont * 2
+    mut flags := Vector {} as Vector<int>
+    mut xs := Vector {} as Vector<int>
+    mut ys := Vector {} as Vector<int>
+    after_flags := _ttf_read_flags(f, ins_at + 2 + _ttf_u16(f.data, f.size, ins_at), npoints, flags)
+    after_x := _ttf_read_coords(f, after_flags, npoints, _TTF_X_SHORT, _TTF_X_SAME, flags, xs)
+    _ttf_read_coords(f, after_x, npoints, _TTF_Y_SHORT, _TTF_Y_SAME, flags, ys)
+    mut k := 0
+    until k < npoints:
+        gx := xs.get(k)
+        gy := ys.get(k)
+        o.x.push(_f2_mul(xx, gx) + _f2_mul(yx, gy) + dx)
+        o.y.push(_f2_mul(xy, gx) + _f2_mul(yy, gy) + dy)
+        o.on.push((flags.get(k) & _TTF_ON_CURVE) != 0)
+        k++
+    end
+    flags.free()
+    xs.free()
+    ys.free()
+end
+
+func _i_glyph(f: Font, gid: int, xx: int, xy: int, yx: int, yy: int, dx: int, dy: int, o &: _IOut, depth: int, work &: int):
+    work++
+    if depth >= _TTF_MAX_DEPTH or o.x.len() > _TTF_MAX_POINTS or work > _TTF_MAX_WORK:
+        ret
+    end
+    mut goff := 0
+    mut glen := 0
+    if not _ttf_glyph_range(f, gid, goff, glen):
+        ret
+    end
+    ncont := _ttf_i16(f.data, f.size, goff)
+    if ncont > 0:
+        _i_simple(f, goff, ncont, xx, xy, yx, yy, dx, dy, o)
+        ret
+    end
+    if ncont == 0:
+        ret
+    end
+    mut cur := goff + 10
+    mut more := true
+    until more and o.x.len() <= _TTF_MAX_POINTS and work <= _TTF_MAX_WORK:
+        flags := _ttf_u16(f.data, f.size, cur)
+        sub := _ttf_u16(f.data, f.size, cur + 2)
+        cur += 4
+        mut a1 := 0
+        mut a2 := 0
+        if (flags & _TTF_ARG_WORDS) != 0:
+            a1 = _ttf_i16(f.data, f.size, cur)
+            a2 = _ttf_i16(f.data, f.size, cur + 2)
+            cur += 4
+        else:
+            a1 = _ttf_i8(f, cur)
+            a2 = _ttf_i8(f, cur + 1)
+            cur += 2
+        end
+        mut sa := 16384
+        mut sb := 0
+        mut sc := 0
+        mut sd := 16384
+        if (flags & _TTF_HAVE_SCALE) != 0:
+            sa = _ttf_i16(f.data, f.size, cur)
+            sd = sa
+            cur += 2
+        else (flags & _TTF_XY_SCALE) != 0:
+            sa = _ttf_i16(f.data, f.size, cur)
+            sd = _ttf_i16(f.data, f.size, cur + 2)
+            cur += 4
+        else (flags & _TTF_TWO_BY_TWO) != 0:
+            sa = _ttf_i16(f.data, f.size, cur)
+            sb = _ttf_i16(f.data, f.size, cur + 2)
+            sc = _ttf_i16(f.data, f.size, cur + 4)
+            sd = _ttf_i16(f.data, f.size, cur + 6)
+            cur += 8
+        end
+        mut ox := 0
+        mut oy := 0
+        if (flags & _TTF_ARGS_XY) != 0:
+            ox = a1
+            oy = a2
+        end
+        nxx := _f2_mul(xx, sa) + _f2_mul(yx, sb)
+        nxy := _f2_mul(xy, sa) + _f2_mul(yy, sb)
+        nyx := _f2_mul(xx, sc) + _f2_mul(yx, sd)
+        nyy := _f2_mul(xy, sc) + _f2_mul(yy, sd)
+        ndx := _f2_mul(xx, ox) + _f2_mul(yx, oy) + dx
+        ndy := _f2_mul(xy, ox) + _f2_mul(yy, oy) + dy
+        _i_glyph(f, sub, nxx, nxy, nyx, nyy, ndx, ndy, o, depth + 1, work)
+        more = (flags & _TTF_MORE_COMP) != 0
+    end
+end
+
+func _e_push(e &: _IEdges, x0: int, y0: int, x1: int, y1: int):
+    if y0 == y1:
+        ret
+    end
+    if y0 < y1:
+        e.x0.push(x0)
+        e.y0.push(y0)
+        e.x1.push(x1)
+        e.y1.push(y1)
+        e.dir.push(1)
+    else:
+        e.x0.push(x1)
+        e.y0.push(y1)
+        e.x1.push(x0)
+        e.y1.push(y0)
+        e.dir.push(-1)
+    end
+end
+
+func _iabs(v: int): int:
+    ret v < 0 ? 0 - v : v
+end
+
+func _e_quad(e &: _IEdges, x0: int, y0: int, cx: int, cy: int, x1: int, y1: int):
+    d := _iabs(cx - x0) + _iabs(cy - y0) + _iabs(x1 - cx) + _iabs(y1 - cy)
+    mut n := 1 + d / _RQ
+    if n > 32:
+        n = 32
+    end
+    nn := (n * n) as i64
+    mut px := x0
+    mut py := y0
+    mut k := 1
+    until k <= n:
+        a := ((n - k) * (n - k)) as i64
+        b := (2 * k * (n - k)) as i64
+        c := (k * k) as i64
+        qx := _div_round_s(a * (x0 as i64) + b * (cx as i64) + c * (x1 as i64), nn)
+        qy := _div_round_s(a * (y0 as i64) + b * (cy as i64) + c * (y1 as i64), nn)
+        _e_push(e, px, py, qx, qy)
+        px = qx
+        py = qy
+        k++
+    end
+end
+
+func _div_round_s(a: i64, b: i64): int:
+    ret _floordiv(a * (2 as i64) + b, b * (2 as i64)) as int
+end
+
+func _contour_iedges(xs &: Vector<int>, ys &: Vector<int>, oncurve &: Vector<bool>, s: int, e: int, out &: _IEdges):
+    if e - s < 2:
+        ret
+    end
+    mut sx := 0
+    mut sy := 0
+    mut lo := s
+    mut hi := e - 1
+    if oncurve.get(s):
+        sx = xs.get(s)
+        sy = ys.get(s)
+        lo = s + 1
+    else oncurve.get(e - 1):
+        sx = xs.get(e - 1)
+        sy = ys.get(e - 1)
+        hi = e - 2
+    else:
+        sx = _div_round_s((xs.get(s) + xs.get(e - 1)) as i64, 2 as i64)
+        sy = _div_round_s((ys.get(s) + ys.get(e - 1)) as i64, 2 as i64)
+    end
+    mut cx := sx
+    mut cy := sy
+    mut kx := 0
+    mut ky := 0
+    mut have := false
+    mut i := lo
+    until i <= hi:
+        px := xs.get(i)
+        py := ys.get(i)
+        if oncurve.get(i):
+            if have:
+                _e_quad(out, cx, cy, kx, ky, px, py)
+                have = false
+            else:
+                _e_push(out, cx, cy, px, py)
+            end
+            cx = px
+            cy = py
+        else:
+            if have:
+                mx := _div_round_s((kx + px) as i64, 2 as i64)
+                my := _div_round_s((ky + py) as i64, 2 as i64)
+                _e_quad(out, cx, cy, kx, ky, mx, my)
+                cx = mx
+                cy = my
+            end
+            kx = px
+            ky = py
+            have = true
+        end
+        i++
+    end
+    if have:
+        _e_quad(out, cx, cy, kx, ky, sx, sy)
+    else:
+        _e_push(out, cx, cy, sx, sy)
+    end
+end
+
+func _add_cov(acc &: Vector<int>, w: int, a0: int, b0: int):
+    lim := w * _RQ
+    mut a := a0
+    mut b := b0
+    if a < 0: a = 0 end
+    if b > lim: b = lim end
+    if b <= a:
+        ret
+    end
+    ia := a / _RQ
+    ib := b / _RQ
+    if ia == ib:
+        acc.set(ia, acc.get(ia) + b - a)
+        ret
+    end
+    acc.set(ia, acc.get(ia) + (ia + 1) * _RQ - a)
+    mut i := ia + 1
+    until i < ib:
+        acc.set(i, acc.get(i) + _RQ)
+        i++
+    end
+    if ib < w:
+        acc.set(ib, acc.get(ib) + b - ib * _RQ)
+    end
+end
+
+func _sort_cross(xs &: Vector<int>, ds &: Vector<int>):
+    mut i := 1
+    until i < xs.len():
+        x := xs.get(i)
+        d := ds.get(i)
+        mut j := i
+        until j > 0 and xs.get(j - 1) > x:
+            xs.set(j, xs.get(j - 1))
+            ds.set(j, ds.get(j - 1))
+            j--
+        end
+        xs.set(j, x)
+        ds.set(j, d)
+        i++
+    end
+end
+
+func _free_iedges(e &: _IEdges):
+    e.x0.free()
+    e.y0.free()
+    e.x1.free()
+    e.y1.free()
+    e.dir.free()
+end
+
+@en "RasterizeGlyph"
+@fa "شطرنجی کردن گلیف"
+pub func RasterizeGlyph(f: Font, glyph: int, size: f64, subpixel: int): GlyphMask:
+    mut m := GlyphMask {}
+    if not FontValid(f) or size <= 0.0:
+        ret m
+    end
+    size64 := _to26(size)
+    mut o := _IOut {}
+    mut work := 0
+    _i_glyph(f, glyph, 16384, 0, 0, 16384, 0, 0, o, 0, work)
+    np := o.x.len()
+    mut sx := Vector {} as Vector<int>
+    mut sy := Vector {} as Vector<int>
+    shift := (subpixel & 3) * (_RQ / 4)
+    mut minx := 0
+    mut maxx := 0
+    mut miny := 0
+    mut maxy := 0
+    mut i := 0
+    until i < np:
+        sx.push(_div_round((o.x.get(i) as i64) * (size64 as i64) * (4 as i64), f.units_per_em as i64) + shift)
+        sy.push(0 - _div_round((o.y.get(i) as i64) * (size64 as i64) * (4 as i64), f.units_per_em as i64))
+        vx := sx.get(i)
+        vy := sy.get(i)
+        if i == 0 or vx < minx: minx = vx end
+        if i == 0 or vx > maxx: maxx = vx end
+        if i == 0 or vy < miny: miny = vy end
+        if i == 0 or vy > maxy: maxy = vy end
+        i++
+    end
+    mut edges := _IEdges {}
+    mut s := 0
+    each e in o.ends:
+        if e > s and e <= np:
+            _contour_iedges(sx, sy, o.on, s, e, edges)
+        end
+        s = e
+    end
+    ne := edges.dir.len()
+    if ne > 0 and ne <= _RMAX_EDGES:
+        px0 := _floordiv(minx as i64, _RQ as i64) as int
+        px1 := (_floordiv((maxx - 1) as i64, _RQ as i64) as int) + 1
+        py0 := _floordiv(miny as i64, _RQ as i64) as int
+        py1 := (_floordiv((maxy - 1) as i64, _RQ as i64) as int) + 1
+        w := px1 - px0
+        h := py1 - py0
+        if w > 0 and h > 0 and w <= 4096 and h <= 4096:
+            m.data = mem.AllocateZeroed((w * h) as u64)
+            m.width = w
+            m.height = h
+            m.stride = w
+            m.left = px0
+            m.top = 0 - py0
+            bp := m.data as u8*
+            mut acc := Vector {} as Vector<int>
+            acc.zeros(w)
+            mut cx := Vector {} as Vector<int>
+            mut cd := Vector {} as Vector<int>
+            ox := px0 * _RQ
+            mut row := 0
+            until row < h:
+                mut k := 0
+                until k < w:
+                    acc.set(k, 0)
+                    k++
+                end
+                mut sub := 0
+                until sub < _RSUB:
+                    yy := (py0 + row) * _RQ + sub * (_RQ / _RSUB) + (_RQ / _RSUB) / 2
+                    cx.clear()
+                    cd.clear()
+                    mut q := 0
+                    until q < ne:
+                        ey0 := edges.y0.get(q)
+                        ey1 := edges.y1.get(q)
+                        if yy >= ey0 and yy < ey1:
+                            ex0 := edges.x0.get(q)
+                            ex1 := edges.x1.get(q)
+                            xc := ex0 + (_floordiv(((yy - ey0) as i64) * ((ex1 - ex0) as i64), (ey1 - ey0) as i64) as int)
+                            cx.push(xc - ox)
+                            cd.push(edges.dir.get(q))
+                        end
+                        q++
+                    end
+                    _sort_cross(cx, cd)
+                    mut wind := 0
+                    mut start := 0
+                    mut c := 0
+                    until c < cx.len():
+                        prev := wind
+                        wind += cd.get(c)
+                        if prev == 0 and wind != 0:
+                            start = cx.get(c)
+                        else prev != 0 and wind == 0:
+                            _add_cov(acc, w, start, cx.get(c))
+                        end
+                        c++
+                    end
+                    sub++
+                end
+                k = 0
+                until k < w:
+                    mut v := (acc.get(k) * 255 + (_RQ * _RSUB) / 2) / (_RQ * _RSUB)
+                    if v > 255:
+                        v = 255
+                    end
+                    bp[row * w + k] = v as u8
+                    k++
+                end
+                row++
+            end
+            acc.free()
+            cx.free()
+            cd.free()
+        end
+    end
+    _free_iedges(edges)
+    sx.free()
+    sy.free()
+    o.x.free()
+    o.y.free()
+    o.on.free()
+    o.ends.free()
+    ret m
+end
+
+@en "FreeGlyphMask"
+@fa "آزادسازی ماسک گلیف"
+pub func FreeGlyphMask(m &: GlyphMask):
+    if m.data != null:
+        mem.Free(m.data)
+    end
+    m.data = null
+    m.width = 0
+    m.height = 0
+    m.stride = 0
+end
+
+@en "GlyphMaskHash"
+@fa "درهم ماسک گلیف"
+pub func GlyphMaskHash(m: GlyphMask): i64:
+    mut h := 1469598103934665603 as i64
+    if m.data == null:
+        ret h
+    end
+    bp := m.data as u8*
+    mut y := 0
+    until y < m.height:
+        mut x := 0
+        until x < m.width:
+            h = (h ^ (bp[y * m.stride + x] as i64)) * (1099511628211 as i64)
+            x++
+        end
+        y++
+    end
+    ret h
+end
+
+@en "SubpixelOf"
+@fa "زیرپیکسل"
+pub func SubpixelOf(x: f64): int:
+    q := math.Round(x * 4.0) as int
+    ret q - (_floordiv(q as i64, 4 as i64) as int) * 4
+end
+
+@en "GlyphOriginX"
+@fa "مبدا افقی گلیف"
+pub func GlyphOriginX(x: f64, m: GlyphMask): int:
+    q := math.Round(x * 4.0) as int
+    ret (_floordiv(q as i64, 4 as i64) as int) + m.left
+end
+
+@en "GlyphOriginY"
+@fa "مبدا عمودی گلیف"
+pub func GlyphOriginY(y: f64, m: GlyphMask): int:
+    ret (math.Round(y) as int) - m.top
+end
+
+@en "NewGlyphCache"
+@fa "نهانگاه گلیف تازه"
+pub func NewGlyphCache(capacity_bytes: int): GlyphCache:
+    mut c := GlyphCache {}
+    c.capacity = capacity_bytes
+    ret c
+end
+
+@en "CachedGlyph"
+@fa "گلیف نهان"
+pub func CachedGlyph(c &: GlyphCache, f: Font, glyph: int, size: f64, x: f64): GlyphMask:
+    sub := SubpixelOf(x)
+    key := ((((f.id as i64) * (1048576 as i64) + ((_to26(size) & 0xFFFFF) as i64)) * (65536 as i64) + ((glyph & 0xFFFF) as i64)) * (4 as i64)) + (sub as i64)
+    c.clock++
+    if c.index.has(key):
+        si := c.index.get(key)
+        mut slot := c.slots.get(si)
+        slot.stamp = c.clock
+        c.slots.set(si, slot)
+        c.hits++
+        ret slot.mask
+    end
+    c.misses++
+    m := RasterizeGlyph(f, glyph, size, sub)
+    cost := m.stride * m.height + 64
+    until c.bytes + cost > c.capacity and c.index.size() > 0:
+        mut oldest := -1
+        mut old_stamp := c.clock
+        mut i := 0
+        until i < c.slots.len():
+            sl := c.slots.get(i)
+            if sl.used and sl.stamp <= old_stamp:
+                oldest = i
+                old_stamp = sl.stamp
+            end
+            i++
+        end
+        if oldest < 0:
+            break
+        end
+        mut victim := c.slots.get(oldest)
+        c.bytes -= victim.mask.stride * victim.mask.height + 64
+        c.index.remove(victim.key)
+        FreeGlyphMask(victim.mask)
+        victim.used = false
+        c.slots.set(oldest, victim)
+    end
+    mut slot := CacheSlot {}
+    slot.key = key
+    slot.mask = m
+    slot.stamp = c.clock
+    slot.used = true
+    mut at := -1
+    mut i := 0
+    until i < c.slots.len() and at < 0:
+        if not c.slots.get(i).used:
+            at = i
+        end
+        i++
+    end
+    if at < 0:
+        at = c.slots.len()
+        c.slots.push(slot)
+    else:
+        c.slots.set(at, slot)
+    end
+    c.index.put(key, at)
+    c.bytes += cost
+    ret m
+end
+
+@en "FreeGlyphCache"
+@fa "آزادسازی نهانگاه گلیف"
+pub func FreeGlyphCache(c &: GlyphCache):
+    mut i := 0
+    until i < c.slots.len():
+        mut sl := c.slots.get(i)
+        if sl.used:
+            FreeGlyphMask(sl.mask)
+        end
+        i++
+    end
+    c.slots.free()
+    c.index.free()
+    c.slots = Vector {} as Vector<CacheSlot>
+    c.index = HashMap {} as HashMap<i64, int>
+    c.bytes = 0
+end

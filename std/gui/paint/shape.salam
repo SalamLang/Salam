@@ -1,0 +1,187 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package paint
+
+func _edge(sh: int*, o: int, ys: int, vh: int, right: bool, e: int[]):
+    x0 := sh[o]
+    y0 := sh[o + 1]
+    x1 := sh[o + 2]
+    y1 := sh[o + 3]
+    mut rx := 0
+    mut ry := 0
+    mut dy := 0
+    if right:
+        if sh[o + 6] > 0 and ys < y0 + sh[o + 7]:
+            rx = sh[o + 6]
+            ry = sh[o + 7]
+            dy = y0 + ry - ys
+        else sh[o + 8] > 0 and ys > y1 - sh[o + 9]:
+            rx = sh[o + 8]
+            ry = sh[o + 9]
+            dy = ys - (y1 - ry)
+        end
+    else:
+        if sh[o + 4] > 0 and ys < y0 + sh[o + 5]:
+            rx = sh[o + 4]
+            ry = sh[o + 5]
+            dy = y0 + ry - ys
+        else sh[o + 10] > 0 and ys > y1 - sh[o + 11]:
+            rx = sh[o + 10]
+            ry = sh[o + 11]
+            dy = ys - (y1 - ry)
+        end
+    end
+    k := right ? 2 : 0
+    if rx <= 0:
+        e[k] = right ? x1 : x0
+        e[k + 1] = 256
+        ret
+    end
+    r64 := ry as i64
+    d64 := dy as i64
+    s := _isqrt(r64 * r64 - d64 * d64)
+    xo := (((rx as i64) * s) / r64) as int
+    mut w := 0
+    if s <= (0 as i64):
+        w = 2 * xo
+    else:
+        ratio := ((rx as i64) * d64) / r64
+        mut slope := ((vh as i64) * ratio) / s
+        if slope > (16777216 as i64):
+            slope = 16777216 as i64
+        end
+        w = _isqrt((65536 as i64) + slope * slope) as int
+        if w > 2 * xo:
+            w = 2 * xo
+        end
+    end
+    if w < 256:
+        w = 256
+    end
+    e[k] = right ? x1 - rx + xo : x0 + rx - xo
+    e[k + 1] = w
+end
+
+inline func _cov_lr(x: int, pl: int, wl: int, pr: int, wr: int): int:
+    px := ((x as i64) << 8) + (128 as i64)
+    mut cl := (128 as i64) + ((px - (pl as i64)) << 8) / (wl as i64)
+    if cl < (0 as i64):
+        ret 0
+    end
+    if cl > (256 as i64):
+        cl = 256 as i64
+    end
+    mut cr := (128 as i64) + (((pr as i64) - px) << 8) / (wr as i64)
+    if cr < (0 as i64):
+        ret 0
+    end
+    if cr > (256 as i64):
+        cr = 256 as i64
+    end
+    v := (cl + cr - (256 as i64)) as int
+    ret v > 0 ? v : 0
+end
+
+func _ramp(out: int*, n0: int, a: int, b: int, e: int[4], vh: int, lim0: int, lim1: int): int:
+    mut n := n0
+    s := a > lim0 ? a : lim0
+    t := b < lim1 ? b : lim1
+    if s >= t:
+        ret n
+    end
+    repeat t - s in i:
+        x := s + i
+        c := (_cov_lr(x, e[0], e[1], e[2], e[3]) * vh) >> 8
+        n = _rpush(out, n, x, x + 1, c)
+    end
+    ret n
+end
+
+func _edges_row(e: int[4], vh: int, lim0: int, lim1: int, out: int*, n0: int): int:
+    lo := (e[0] - e[1] / 2) >> 8
+    l1 := (e[0] + e[1] / 2 + 255) >> 8
+    r0 := (e[2] - e[3] / 2) >> 8
+    hi := (e[2] + e[3] / 2 + 255) >> 8
+    mut n := n0
+    if l1 <= r0:
+        n = _ramp(out, n, lo, l1, e, vh, lim0, lim1)
+        a := l1 > lim0 ? l1 : lim0
+        b := r0 < lim1 ? r0 : lim1
+        if a < b:
+            n = _rpush(out, n, a, b, vh)
+        end
+        n = _ramp(out, n, r0, hi, e, vh, lim0, lim1)
+    else:
+        n = _ramp(out, n, lo < r0 ? lo : r0, l1 > hi ? l1 : hi, e, vh, lim0, lim1)
+    end
+    ret n
+end
+
+func _row_edges(sh: int*, o: int, y: int, e: int[]): int:
+    y0 := sh[o + 1]
+    y1 := sh[o + 3]
+    Y0 := y << 8
+    Y1 := Y0 + 256
+    if Y1 <= y0 or Y0 >= y1 or sh[o + 2] <= sh[o]:
+        ret 0
+    end
+    ya := Y0 > y0 ? Y0 : y0
+    yb := Y1 < y1 ? Y1 : y1
+    vh := yb - ya
+    ys := (ya + yb) >> 1
+    _edge(sh, o, ys, vh, false, e)
+    _edge(sh, o, ys, vh, true, e)
+    ret vh
+end
+
+func _shape_row(sh: int*, o: int, y: int, lim0: int, lim1: int, out: int*): int:
+    mut e := [0, 0, 0, 0]
+    vh := _row_edges(sh, o, y, e)
+    if vh <= 0:
+        ret 0
+    end
+    ret _edges_row(e, vh, lim0, lim1, out, 0)
+end
+
+func _cv_fill_rounded(cv &: Canvas, r: Rect, radii: Radii, c: Color):
+    _cv_ready(cv)
+    if cv.pixels == null:
+        ret
+    end
+    col := _premul(c)
+    if col == (0 as u32):
+        ret
+    end
+    if not _xf_axis(cv):
+        mut p := Path {}
+        p.AddRoundedRect(r, radii)
+        _cv_fill_path(cv, p, FillRule.NonZero, c)
+        p.Free()
+        ret
+    end
+    sh := cv.state.sh
+    if not _shape_from(cv, r, radii, sh, 0):
+        ret
+    end
+    mut rows := [0, 0]
+    if not _clip_rows(cv, sh[1], sh[3], rows):
+        ret
+    end
+    repeat rows[1] - rows[0] in k:
+        y := rows[0] + k
+        n := _shape_row(sh, 0, y, cv.state.cx0, cv.state.cx1, cv.state.ra)
+        _emit(cv, y, n, _K_SOLID, col)
+    end
+end

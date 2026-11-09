@@ -41,7 +41,7 @@ pkg.intro <<
 <p>The guide below shows the usual jobs: zipping a set of files, making and reading a <code>.tar.gz</code>, telling formats apart by their first bytes, and extracting without letting an archive write outside the target folder.</p>
 
 <h2 id="guide-zip">Zip a set of files</h2>
-<p>Each file you put into a zip is a <code>ZipFileInput</code>: its path inside the archive, the address and length of its bytes, and the method: 8 for DEFLATE, 0 to store it as it is, or 12, 14 and 93 for bzip2, LZMA and zstd (the <code>ZipMethod...</code> constants). <code>MakeZipFileInputLevel</code> also sets a level for those compressors. Every unzip reads bzip2 entries; LZMA and zstd entries are read by 7-Zip and by Python's <code>zipfile</code> (zstd from Python 3.14), but not by older tools such as Info-ZIP <code>unzip</code>, so use them only when you know the reader. A name that ends with <code>/</code> is a folder. <code>ZipCreateFile</code> writes the archive to disk and returns false when it cannot; <code>ZipCreate</code> keeps it in memory, for example to send it as an HTTP response.</p>
+<p>Each file you put into a zip is a <code>ZipFileInput</code>: its path inside the archive, the address and length of its bytes, and the method: 8 for DEFLATE, 0 to store it as it is, or 12, 14 and 93 for bzip2, LZMA and zstd (the <code>ZipMethod...</code> constants). <code>MakeZipFileInputLevel</code> also sets a level for those compressors. Every unzip reads bzip2 entries; LZMA and zstd entries are read by 7-Zip and by Python's <code>zipfile</code> (zstd from Python 3.14), but not by older tools such as Info-ZIP <code>unzip</code>, so use them only when you know the reader. A name that ends with <code>/</code> is a folder. <code>ZipCreateFile</code> writes the archive to disk and returns false when it cannot; bzip2, LZMA and zstd entries are streamed through the encoders in std/compress, so an entry of any size needs only the encoder window in memory (about 1 MiB for zstd at the default level, a few MiB for LZMA, one block for bzip2); <code>ZipCreate</code> keeps it in memory, for example to send it as an HTTP response.</p>
 {{example.archive-guide-bundle}}
 <p>Text shrinks well. The logo is already compressed, so it uses method 0: running DEFLATE on it again would only cost time and could even make it bigger. The same rule holds for JPEG, PNG, MP4 and other zips.</p>
 
@@ -209,12 +209,12 @@ doc.ZipFileInput.data_ptr = The address of the contents.
 doc.ZipFileInput.data_len = The length of the contents.
 doc.ZipFileInput.method = Zero for plain storage, 8 for DEFLATE, 12 for bzip2, 14 for LZMA or 93 for zstd. Any other number stores the data, and so does an empty entry.
 doc.ZipFileInput.level = The compression level for bzip2 (1 to 9, default 9), LZMA (1 to 9, default 6) or zstd (1 to 22, default 3). Zero picks the default; DEFLATE and plain storage ignore it.
-doc.ZipFileInput.path = A file to read the contents from when the archive is written; used instead of <code>data_ptr</code>. With <code>ZipCreateFile</code> a DEFLATE entry is compressed in chunks with a data descriptor, so it is never held whole in memory.
+doc.ZipFileInput.path = A file to read the contents from when the archive is written; used instead of <code>data_ptr</code>. With <code>ZipCreateFile</code> the entry is read and compressed in pieces, so it is never held whole in memory: DEFLATE uses a data descriptor, and bzip2, LZMA and zstd entries are written with a placeholder size that is patched in the local header once the entry is done.
 doc.ZipFileInput.password = The password for this entry; empty means no encryption.
 doc.ZipFileInput.encryption = <code>ZipEncAuto</code> (0, AES-256 when there is a password), <code>ZipEncZipCrypto</code> (1, the old weak zip encryption), <code>ZipEncAes128</code>, <code>ZipEncAes192</code> or <code>ZipEncAes256</code> (WinZip AES, version AE-2). <code>unzip</code> reads only ZipCrypto; 7-Zip and WinZip read both.
 doc.MakeZipFileInput = Makes one zip input.
 doc.MakeZipFileInputLevel = Makes one zip input with a compression level.
-doc.MakeZipFilePath = Makes a zip input that is read from a file on disk when the archive is written. DEFLATE and stored entries are streamed in chunks; for bzip2, LZMA and zstd that one file is read into memory while it is compressed.
+doc.MakeZipFilePath = Makes a zip input that is read from a file on disk when the archive is written. Stored, DEFLATE, bzip2, LZMA and zstd entries are all read and compressed in pieces.
 doc.MakeZipFileInputEncrypted = Makes a zip input with a password and an encryption (<code>ZipEncAuto</code> and the others below).
 doc.ZipMethodStore = Zip method 0: the data is stored as it is.
 doc.ZipEncAuto = Encryption 0: AES-256 when the entry has a password.
@@ -228,7 +228,7 @@ doc.ZipMethodBzip2 = Zip method 12: bzip2. Every zip reader that knows more than
 doc.ZipMethodLzma = Zip method 14: LZMA. Read by 7-Zip and Python, not by Info-ZIP <code>unzip</code>.
 doc.ZipMethodZstd = Zip method 93: Zstandard. Read by recent 7-Zip builds and Python 3.14, not by Info-ZIP <code>unzip</code>.
 doc.ZipFileInput.mtime = The modification time in seconds since the Unix epoch. Zero, or a time before 1980, writes 1 January 1980; the DOS format cannot go past 2107 and keeps two second steps.
-doc.ZipCreate = Builds a zip archive in memory. Names with non-ASCII bytes get the UTF-8 flag. Any method other than 8 stores the file. The result is empty when an input is invalid (negative length, null address with a length, name over 65535 bytes) or the total is over about 1.9 GB.
+doc.ZipCreate = Builds a zip archive in memory. Names with non-ASCII bytes get the UTF-8 flag. Any method other than 8 stores the file. The result is empty when an input is invalid (negative length, null address with a length, name over 65535 bytes) or the total is over about 1.9 GB. The archive is written by the same entry writer as <code>ZipCreateFile</code>, into a growing buffer, so every entry is compressed in pieces by the encoders and no second copy of the archive body is built; what stays in memory is the returned archive and your input buffers. Encrypted entries take the same path.
 doc.ZipCreate64 = Like <code>ZipCreate</code>, but always writes the zip64 form: 64-bit sizes and offsets in extra fields, the zip64 end record and its locator. <code>unzip</code> and 7-Zip read it; use it to test zip64 readers. Empty on invalid input.
 doc.ZipCreateFile = Writes a zip archive to a file.
 doc.ZipCreateFile64 = Like <code>ZipCreateFile</code>, but always writes the zip64 form. Without it <code>ZipCreateFile</code> still switches to zip64 for entries of 4 GB or more, for offsets past 4 GB and for 65535 entries or more.
@@ -457,7 +457,9 @@ doc.Bzip2CompressFileLevel = Like <code>Bzip2CompressFile</code>, at the level y
 doc.Bzip2DecompressFile = Decompresses a bzip2 file; false when it cannot read or write or the data is not valid bzip2.
 doc.TarZstdCreate = Builds a tar in memory and compresses it to Zstandard.
 doc.TarZstdCreateFile = Writes a <code>.tar.zst</code> file.
-doc.TarZstdCreateFileLevel = Like <code>TarZstdCreateFile</code>, at the zstd level you give (1 to 22; the default is 3). The archive is compressed in chunks as it is written.
+doc.TarZstdCreateFileLevel = Like <code>TarZstdCreateFile</code>, at the zstd level you give (1 to 22; the default is 3). The whole tar stream is compressed as one zstd frame while it is written, so memory stays at the encoder window and the size is that of <code>ZstdCompressLevel</code> on the whole tar. Older files made in 4 MB pieces are still read.
+doc.TarBz2CreateFile = Writes a <code>.tar.bz2</code> file at bzip2 level 9. The tar stream is compressed as one bzip2 stream while it is written, one block at a time, so memory stays at a block whatever the size of the inputs; the result is what <code>Bzip2CompressLevel</code> gives on the whole tar. Returns false, and leaves no file, when an input cannot be read.
+doc.TarBz2CreateFileLevel = Like <code>TarBz2CreateFile</code>, at the bzip2 level you give (1 to 9; other values are clamped).
 doc.TarZstdList = The entries of a <code>.tar.zst</code> in memory; <code>ok</code> is false when the Zstandard data is invalid or unpacks past 1 GiB.
 doc.TarZstdListMax = Same as <code>TarZstdList</code>, with your own limit <code>max</code> on the unpacked size in bytes.
 doc.TarZstdExtractByName = The contents of one file of a <code>.tar.zst</code>.
@@ -468,7 +470,7 @@ doc.ZstdCompressFile = Compresses a file into a Zstandard (<code>.zst</code>) fi
 doc.ZstdCompressFileLevel = Like <code>ZstdCompressFile</code>, at the level you give (0 or less stores, 1 to 22 compress).
 doc.ZstdDecompressFile = Decompresses a Zstandard file; false when it cannot read or write or the data is not valid Zstandard. The checksum is verified and the whole result is held in memory first.
 doc.GzipCompressFile = Gzips a file, reading and compressing it in chunks (one gzip member; the compression has a single setting, no levels).
-doc.SetWriteChunk = Sets how many bytes the gz, bz2, xz, zstd, tar.gz, tar.zst and zip file writers hold and compress at a time (default 4 MiB, anything under 4096 restores the default). Smaller chunks use less memory and compress a little worse.
+doc.SetWriteChunk = Sets how many bytes the gz, bz2, xz, zstd, tar.gz and zip file writers hold and compress at a time (default 4 MiB, anything under 4096 restores the default). The tar.zst and tar.bz2 writers ignore it: they compress the whole tar as one stream. Smaller chunks use less memory and compress a little worse.
 doc.GzipDecompressFile = Decompresses a gzip file.
 doc.XzCompressFile = Compresses a file into an <code>.xz</code> file (level 6, CRC-64 check); false when it cannot read or write. The file is read and compressed in chunks of <code>SetWriteChunk</code> bytes, written as one <code>.xz</code> stream per chunk.
 doc.XzCompressFileLevel = Like <code>XzCompressFile</code>, at the level you give (0 to 9; 0 stores in LZMA2 chunks).
@@ -738,6 +740,8 @@ ex.SetWriteChunk = archive-WriteStream
 ex.MakeTarFilePath = archive-WriteStream
 ex.TarFileInput.path = archive-WriteStream
 ex.TarZstdCreateFileLevel = archive-WriteStream
+ex.TarBz2CreateFile = archive-TarBz2
+ex.TarBz2CreateFileLevel = archive-TarBz2
 ex.MakeZipFilePath = archive-WriteStream
 ex.MakeZipFileInputEncrypted = archive-WriteStream
 ex.ZipCreateFile64 = archive-WriteStream

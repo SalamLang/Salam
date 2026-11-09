@@ -1,0 +1,432 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+
+package typeset
+
+import str
+
+@en "TextPosition"
+@fa "جای متن"
+pub struct TextPosition:
+    @en "offset"
+    @fa "جابجایی"
+    pub offset: int = 0
+    @en "upstream"
+    @fa "وابسته به پیش"
+    pub upstream: bool = false
+    @en "line"
+    @fa "خط"
+    pub line: int = 0
+end
+
+@en "TextRect"
+@fa "مستطیل متن"
+pub struct TextRect:
+    @en "x"
+    @fa "ایکس"
+    pub x: f64 = 0.0
+    @en "y"
+    @fa "ایگرگ"
+    pub y: f64 = 0.0
+    @en "width"
+    @fa "پهنا"
+    pub width: f64 = 0.0
+    @en "height"
+    @fa "بلندی"
+    pub height: f64 = 0.0
+end
+
+struct _Unit:
+    pub s: int = 0
+    pub e: int = 0
+    pub left: int = 0
+    pub right: int = 0
+    pub rtl: bool = false
+end
+
+func _cp_offset(p: Paragraph, k: int): int:
+    if k >= p.chars.len():
+        ret str.Len(p.text)
+    end
+    ret p.chars.get(k).offset
+end
+
+func _cp_at_offset(p: Paragraph, off: int): int:
+    mut lo := 0
+    mut hi := p.chars.len()
+    until lo < hi:
+        mid := (lo + hi) / 2
+        if p.chars.get(mid).offset < off:
+            lo = mid + 1
+        else:
+            hi = mid
+        end
+    end
+    ret lo
+end
+
+func _line_units(p: Paragraph, l: TextLayout, li: int, out &: Vector<_Unit>):
+    out.clear()
+    if li < 0 or li >= l.lines.len():
+        ret
+    end
+    lb := l.lines.get(li)
+    collapse := not _ws_mode_pre(p.style.white_space)
+    mut tmp := Vector {} as Vector<_Unit>
+    defer tmp.free()
+    mut k := lb.run_start
+    until k < lb.run_start + lb.run_count:
+        gr := l.runs.get(k)
+        k++
+        if gr.ellipsis:
+            continue
+        end
+        trailing := gr.cp_start >= lb.trailing_cp
+        tmp.clear()
+        x0 := _to26(gr.x)
+        x1 := _to26(gr.x + gr.width)
+        mut acc := 0
+        mut a := gr.cp_start
+        until a < gr.cp_end:
+            b := _next_gstart(p, a, gr.cp_end)
+            mut w := 0
+            if not (trailing and collapse):
+                mut q := a
+                until q < b:
+                    w += p.chars.get(q).advance
+                    if lb.space_extra != 0 and _cf(p, q, _CF_SPACE) and not _cf(p, q, _CF_HIDDEN):
+                        w += lb.space_extra
+                    end
+                    q++
+                end
+            end
+            mut u := _Unit {}
+            u.s = _cp_offset(p, a)
+            u.e = _cp_offset(p, b)
+            u.rtl = gr.rtl
+            if gr.rtl:
+                u.right = x1 - acc
+                u.left = x1 - acc - w
+            else:
+                u.left = x0 + acc
+                u.right = x0 + acc + w
+            end
+            acc += w
+            tmp.push(u)
+            a = b
+        end
+        if gr.rtl:
+            mut q := tmp.len() - 1
+            until q >= 0:
+                out.push(tmp.get(q))
+                q--
+            end
+        else:
+            each u in tmp:
+                out.push(u)
+            end
+        end
+    end
+end
+
+func _left_edge(u: _Unit): int:
+    ret u.rtl ? u.e : u.s
+end
+
+func _right_edge(u: _Unit): int:
+    ret u.rtl ? u.s : u.e
+end
+
+func _line_for(l: TextLayout, off: int, upstream: bool): int:
+    n := l.lines.len()
+    mut li := 0
+    until li < n:
+        lb := l.lines.get(li)
+        if off >= lb.start and off < lb.end:
+            if off == lb.start and upstream and li > 0 and not l.lines.get(li - 1).hard_break and l.lines.get(li - 1).end == off:
+                ret li - 1
+            end
+            ret li
+        end
+        if off == lb.end and (li == n - 1 or (upstream and not lb.hard_break)):
+            ret li
+        end
+        li++
+    end
+    ret n - 1
+end
+
+func _caret_x(p: Paragraph, l: TextLayout, li: int, off: int, upstream: bool): int:
+    mut units := Vector {} as Vector<_Unit>
+    defer units.free()
+    _line_units(p, l, li, units)
+    lb := l.lines.get(li)
+    if upstream:
+        each u in units:
+            if u.e == off:
+                ret u.rtl ? u.left : u.right
+            end
+        end
+    end
+    each u in units:
+        if u.s == off:
+            ret u.rtl ? u.right : u.left
+        end
+    end
+    each u in units:
+        if u.e == off:
+            ret u.rtl ? u.left : u.right
+        end
+    end
+    if lb.rtl:
+        ret _to26(lb.x + lb.width)
+    end
+    ret _to26(lb.x)
+end
+
+@en "HitTest"
+@fa "آزمون برخورد"
+pub func HitTest(p: Paragraph, l: TextLayout, x: f64, y: f64): TextPosition:
+    mut pos := TextPosition {}
+    n := l.lines.len()
+    if n == 0:
+        ret pos
+    end
+    mut li := 0
+    until li < n - 1 and y >= l.lines.get(li).top + l.lines.get(li).height:
+        li++
+    end
+    pos.line = li
+    lb := l.lines.get(li)
+    mut units := Vector {} as Vector<_Unit>
+    defer units.free()
+    _line_units(p, l, li, units)
+    if units.len() == 0:
+        pos.offset = lb.start
+        ret pos
+    end
+    x26 := _to26(x)
+    mut chosen := 0
+    first := units.get(0)
+    last := units.get(units.len() - 1)
+    if x26 < first.left:
+        chosen = _left_edge(first)
+    else x26 >= last.right:
+        chosen = _right_edge(last)
+    else:
+        mut i := 0
+        until i < units.len():
+            u := units.get(i)
+            if x26 >= u.left and x26 < u.right:
+                if (x26 - u.left) * 2 < (u.right - u.left):
+                    chosen = _left_edge(u)
+                else:
+                    chosen = _right_edge(u)
+                end
+                break
+            end
+            i++
+        end
+    end
+    if lb.hard_break and chosen == lb.end:
+        chosen = _cp_offset(p, lb.cp_end - 1)
+    end
+    pos.offset = chosen
+    pos.upstream = chosen == lb.end and li < n - 1
+    ret pos
+end
+
+@en "CaretRect"
+@fa "مستطیل نشانگر"
+pub func CaretRect(p: Paragraph, l: TextLayout, pos: TextPosition): TextRect:
+    mut r := TextRect {}
+    if l.lines.len() == 0:
+        ret r
+    end
+    li := _line_for(l, pos.offset, pos.upstream)
+    lb := l.lines.get(li)
+    r.x = _from26(_caret_x(p, l, li, pos.offset, pos.upstream))
+    r.y = lb.top
+    r.height = lb.height
+    ret r
+end
+
+@en "SelectionRects"
+@fa "مستطیل‌های گزینش"
+pub func SelectionRects(p: Paragraph, l: TextLayout, from: int, to_offset: int): Vector<TextRect>:
+    mut out := Vector {} as Vector<TextRect>
+    mut a := from
+    mut b := to_offset
+    if b < a:
+        a = to_offset
+        b = from
+    end
+    if a == b:
+        ret out
+    end
+    mut units := Vector {} as Vector<_Unit>
+    defer units.free()
+    mut li := 0
+    until li < l.lines.len():
+        lb := l.lines.get(li)
+        if lb.end > a and lb.start < b:
+            _line_units(p, l, li, units)
+            mut have := false
+            mut x0 := 0
+            mut x1 := 0
+            each u in units:
+                inside := u.s >= a and u.e <= b and u.e > u.s
+                if inside and have and u.left == x1:
+                    x1 = u.right
+                else inside:
+                    if have:
+                        mut rr := TextRect {}
+                        rr.x = _from26(x0)
+                        rr.y = lb.top
+                        rr.width = _from26(x1 - x0)
+                        rr.height = lb.height
+                        out.push(rr)
+                    end
+                    x0 = u.left
+                    x1 = u.right
+                    have = true
+                end
+            end
+            if have:
+                mut rr := TextRect {}
+                rr.x = _from26(x0)
+                rr.y = lb.top
+                rr.width = _from26(x1 - x0)
+                rr.height = lb.height
+                out.push(rr)
+            end
+        end
+        li++
+    end
+    ret out
+end
+
+@en "NextGrapheme"
+@fa "خوشه بعدی"
+pub func NextGrapheme(p: Paragraph, offset: int): int:
+    n := p.chars.len()
+    mut k := _cp_at_offset(p, offset)
+    if k < n and p.chars.get(k).offset == offset:
+        k++
+    end
+    until k < n and not _cf(p, k, _CF_GSTART):
+        k++
+    end
+    ret _cp_offset(p, k)
+end
+
+@en "PrevGrapheme"
+@fa "خوشه پیشین"
+pub func PrevGrapheme(p: Paragraph, offset: int): int:
+    mut k := _cp_at_offset(p, offset) - 1
+    until k > 0 and not _cf(p, k, _CF_GSTART):
+        k--
+    end
+    if k < 0:
+        ret 0
+    end
+    ret _cp_offset(p, k)
+end
+
+@en "NextWordEnd"
+@fa "انتهای واژه بعدی"
+pub func NextWordEnd(p: Paragraph, offset: int): int:
+    n := p.chars.len()
+    mut k := _cp_at_offset(p, offset)
+    until k < n and not _cf(p, k, _CF_WORD):
+        k++
+    end
+    until k < n and _cf(p, k, _CF_WORD):
+        k++
+    end
+    ret _cp_offset(p, k)
+end
+
+@en "PrevWordStart"
+@fa "آغاز واژه پیشین"
+pub func PrevWordStart(p: Paragraph, offset: int): int:
+    mut k := _cp_at_offset(p, offset)
+    until k > 0 and not _cf(p, k - 1, _CF_WORD):
+        k--
+    end
+    until k > 0 and _cf(p, k - 1, _CF_WORD):
+        k--
+    end
+    ret _cp_offset(p, k)
+end
+
+@en "MoveVisual"
+@fa "جابجایی دیداری"
+pub func MoveVisual(p: Paragraph, l: TextLayout, pos: TextPosition, right: bool): TextPosition:
+    mut out := pos
+    n := l.lines.len()
+    if n == 0:
+        ret out
+    end
+    li := _line_for(l, pos.offset, pos.upstream)
+    lb := l.lines.get(li)
+    x := _caret_x(p, l, li, pos.offset, pos.upstream)
+    mut units := Vector {} as Vector<_Unit>
+    defer units.free()
+    _line_units(p, l, li, units)
+    out.line = li
+    if right:
+        each u in units:
+            if u.left >= x and u.right > u.left:
+                if u.rtl:
+                    out.offset = u.s
+                    out.upstream = false
+                else:
+                    out.offset = u.e
+                    out.upstream = true
+                end
+                ret out
+            end
+        end
+    else:
+        mut i := units.len() - 1
+        until i >= 0:
+            u := units.get(i)
+            if u.right <= x and u.right > u.left:
+                if u.rtl:
+                    out.offset = u.e
+                    out.upstream = true
+                else:
+                    out.offset = u.s
+                    out.upstream = false
+                end
+                ret out
+            end
+            i--
+        end
+    end
+    forward := right != lb.rtl
+    if forward and li + 1 < n:
+        out.offset = l.lines.get(li + 1).start
+        out.upstream = false
+        out.line = li + 1
+    else not forward and li > 0:
+        prev := l.lines.get(li - 1)
+        out.offset = prev.hard_break ? _cp_offset(p, prev.cp_end - 1) : prev.end
+        out.upstream = not prev.hard_break
+        out.line = li - 1
+    end
+    ret out
+end

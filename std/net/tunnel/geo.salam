@@ -1,0 +1,692 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "net/tunnel"
+@fa "تونل"
+package tunnel
+
+import mem
+import str
+import io
+import sync
+import regex
+
+extern:
+    func fopen(path: str, mode: str): void*
+    func fclose(fp: void*): int
+    func fread(ptr: void*, size: u64, nmemb: u64, stream: void*): u64
+    func fseek(fp: void*, off: int, whence: int): int
+    func ftell(fp: void*): int
+end
+
+const _GEO_DEPTH := 8
+
+@en "IRAN_DOMAINS"
+@fa "دامنه‌های ایران"
+pub const IRAN_DOMAINS := "# bundled Iran direct list\ndomain:ir\ndomain:xn--mgba3a4f16a\ndomain:xn--mgba3a4fra1a\ndigikala.com\naparat.com\nsnapp.taxi\ntapsi.cab\nbale.ai\neitaa.com\ntelewebion.com\nfilimo.com\nnamava.ir\nrubika.ir\nsoroush-app.ir\n"
+
+mut _geosites := HashMap {} as HashMap<str, DomainSet>
+mut _geoips := HashMap {} as HashMap<str, IpSet>
+mut _geo_dir := ""
+
+struct _Pb:
+    pub p: u8* = null
+    pub stop: int = 0
+    pub pos: int = 0
+    pub field: int = 0
+    pub wt: int = 0
+    pub val: i64 = 0
+    pub off: int = 0
+    pub size: int = 0
+    pub bad: bool = false
+end
+
+@en "DomainSet"
+@fa "مجموعه دامنه"
+pub struct DomainSet:
+    @en "full"
+    @fa "کامل"
+    pub full: HashMap<str, bool> = HashMap {}
+    @en "suffix"
+    @fa "پسوندها"
+    pub suffix: HashMap<str, bool> = HashMap {}
+    @en "keywords"
+    @fa "کلیدواژه‌ها"
+    pub keywords: Vector<str> = Vector {}
+    @en "regexes"
+    @fa "عبارت‌های باقاعده"
+    pub regexes: Vector<str> = Vector {}
+    @en "count"
+    @fa "شمار"
+    pub count: int = 0
+end
+
+@en "IpSet"
+@fa "مجموعه آی‌پی"
+pub struct IpSet:
+    @en "v4"
+    @fa "نسخه چهار"
+    pub v4: HashMap<i64, bool> = HashMap {}
+    @en "v4_lens"
+    @fa "طول‌های نسخه چهار"
+    pub v4_lens: i64 = 0
+    @en "v6"
+    @fa "نسخه شش"
+    pub v6: HashMap<str, bool> = HashMap {}
+    @en "v6_lens"
+    @fa "طول‌های نسخه شش"
+    pub v6_lens: Vector<int> = Vector {}
+    @en "count"
+    @fa "شمار"
+    pub count: int = 0
+end
+
+func _hx(v: int): str:
+    d := "0123456789abcdef"
+    ret d.substr(v, 1)
+end
+
+func _v6_key(net: Vector<int>, prefix: int): str:
+    mut out := "" + prefix + ":"
+    nb := (prefix + 7) / 8
+    repeat nb in i:
+        mut b := net[i]
+        if i == nb - 1 and prefix % 8 != 0:
+            b = b & ((255 << (8 - prefix % 8)) & 255)
+        end
+        out += _hx(b / 16) + _hx(b % 16)
+    end
+    ret out
+end
+
+func _v4_value(b: Vector<int>): i64:
+    ret ((b[0] as i64) << 24) | ((b[1] as i64) << 16) | ((b[2] as i64) << 8) | (b[3] as i64)
+end
+
+func _v4_mask(prefix: int): i64:
+    if prefix <= 0: ret 0 end
+    ret ((4294967295 as i64) << (32 - prefix)) & (4294967295 as i64)
+end
+
+func _attr_ok(attrs: Vector<str>, want: str): bool:
+    if want.len() == 0: ret true end
+    mut negate := false
+    mut name := want
+    if want.starts_with("!"):
+        negate = true
+        name = want.substr(1, want.len() - 1)
+    end
+    mut has := false
+    repeat attrs.len() in i:
+        if attrs[i] == name: has = true end
+    end
+    if negate: ret not has end
+    ret has
+end
+
+func _geo_path(name: str): str:
+    if _geo_dir.len() == 0: ret name end
+    if _geo_dir.ends_with("/"): ret _geo_dir + name end
+    ret _geo_dir + "/" + name
+end
+
+func _read_first(paths: Vector<str>): str:
+    repeat paths.len() in i:
+        text := io.ReadFile(_geo_path(paths[i]))
+        if text.len() > 0: ret text end
+    end
+    ret ""
+end
+
+func _site_text(name: str): str:
+    if _geo_dir.len() == 0: ret "" end
+    mut p := Vector {} as Vector<str>
+    defer p.free()
+    p.push("geosite/" + name + ".txt")
+    p.push("geosite_" + name + ".txt")
+    p.push(name + ".txt")
+    p.push("geosite/" + name)
+    p.push(name)
+    ret _read_first(p)
+end
+
+func _ip_text(name: str): str:
+    if _geo_dir.len() == 0: ret "" end
+    mut p := Vector {} as Vector<str>
+    defer p.free()
+    p.push("geoip/" + name + ".txt")
+    p.push("geoip_" + name + ".txt")
+    p.push("geoip/" + name)
+    p.push(name + ".txt")
+    ret _read_first(p)
+end
+
+func _dl_include(set &: DomainSet, name: str, attr: str, depth: int):
+    if depth >= _GEO_DEPTH: ret end
+    text := _site_text(name)
+    if text.len() == 0:
+        sub := LookupGeoSite(name)
+        _dl_merge(set, sub, attr)
+        ret
+    end
+    _dl_text(set, text, attr, depth + 1)
+end
+
+func _dl_merge(set &: DomainSet, sub: DomainSet, attr: str):
+    if attr.len() > 0: ret end
+    mut fi := sub.full.iter()
+    until fi.has_next():
+        set.full.put(fi.key(), true)
+        fi.next()
+    end
+    mut si := sub.suffix.iter()
+    until si.has_next():
+        set.suffix.put(si.key(), true)
+        si.next()
+    end
+    repeat sub.keywords.len() in i:
+        set.keywords.push(sub.keywords[i])
+    end
+    repeat sub.regexes.len() in i:
+        set.regexes.push(sub.regexes[i])
+    end
+    set.count += sub.count
+end
+
+func _dl_line(set &: DomainSet, raw: str, attr: str, depth: int):
+    mut line := raw
+    h := line.find("#")
+    if h >= 0: line = line.substr(0, h) end
+    line = str.Trim(line)
+    if line.len() == 0: ret end
+    parts := str.Fields(line)
+    defer parts.free()
+    entry := str.Lower(parts[0])
+    mut attrs := Vector {} as Vector<str>
+    defer attrs.free()
+    repeat parts.len() in i:
+        if i > 0 and parts[i].starts_with("@"):
+            attrs.push(str.Lower(parts[i].substr(1, parts[i].len() - 1)))
+        end
+    end
+    if entry.starts_with("include:"):
+        mut inc_attr := attr
+        if attrs.len() > 0: inc_attr = attrs[0] end
+        _dl_include(set, entry.substr(8, entry.len() - 8), inc_attr, depth)
+        ret
+    end
+    if not _attr_ok(attrs, attr): ret end
+    if entry.starts_with("full:"): DomainSetFull(set, entry.substr(5, entry.len() - 5))
+    else entry.starts_with("domain:"): DomainSetSuffix(set, entry.substr(7, entry.len() - 7))
+    else entry.starts_with("keyword:"): DomainSetKeyword(set, entry.substr(8, entry.len() - 8))
+    else entry.starts_with("regexp:"): DomainSetRegex(set, parts[0].substr(7, parts[0].len() - 7))
+    else entry.starts_with("regex:"): DomainSetRegex(set, parts[0].substr(6, parts[0].len() - 6))
+    else: DomainSetSuffix(set, entry)
+end
+end
+
+func _dl_text(set &: DomainSet, text: str, attr: str, depth: int):
+    lines := text.split("\n")
+    defer lines.free()
+    repeat lines.len() in i:
+        _dl_line(set, lines[i], attr, depth)
+    end
+end
+
+func _split_attr(name: str, attr &: str): str:
+    at := name.find("@")
+    if at < 0:
+        attr = ""
+        ret name
+    end
+    attr = name.substr(at + 1, name.len() - at - 1)
+    ret name.substr(0, at)
+end
+
+func _pb_varint(r &: _Pb): i64:
+    mut out := 0 as i64
+    mut shift := 0
+    until true:
+        if r.pos >= r.stop or shift > 63:
+            r.bad = true
+            ret 0
+        end
+        b := r.p[r.pos] as int
+        r.pos += 1
+        out = out | (((b & 127) as i64) << shift)
+        if (b & 128) == 0: break end
+        shift += 7
+    end
+    ret out
+end
+
+func _pb_next(r &: _Pb): bool:
+    if r.bad or r.pos >= r.stop: ret false end
+    tag := _pb_varint(r)
+    if r.bad: ret false end
+    r.field = (tag >> 3) as int
+    r.wt = (tag & 7) as int
+    if r.wt == 0:
+        r.val = _pb_varint(r)
+        ret not r.bad
+    else r.wt == 2:
+        l := _pb_varint(r)
+        if r.bad or l < 0 or (r.pos as i64) + l > (r.stop as i64):
+            r.bad = true
+            ret false
+        end
+        r.off = r.pos
+        r.size = l as int
+        r.pos += r.size
+        ret true
+    else r.wt == 1:
+        r.pos += 8
+    else r.wt == 5:
+        r.pos += 4
+    else:
+        r.bad = true
+        ret false
+    end
+    if r.pos > r.stop:
+        r.bad = true
+        ret false
+    end
+    ret true
+end
+
+func _pb_sub(r: _Pb): _Pb:
+    ret _Pb { p = r.p, stop = r.off + r.size, pos = r.off }
+end
+
+func _pb_str(r: _Pb): str:
+    out := mem.AllocateZeroed((r.size + 1) as u64)
+    mem.Copy(out, (r.p as i64 + r.off) as void*, r.size as u64)
+    ret out as str
+end
+
+func _wanted(names: Vector<str>, code: str): bool:
+    if names.len() == 0: ret true end
+    lc := str.Lower(code)
+    repeat names.len() in i:
+        if str.Lower(names[i]) == lc: ret true end
+    end
+    ret false
+end
+
+func _site_entry_code(e: _Pb): str:
+    mut s := _pb_sub(e)
+    until true:
+        if not _pb_next(s): break end
+        if s.field == 1 and s.wt == 2: ret _pb_str(s) end
+    end
+    ret ""
+end
+
+func _site_add(set &: DomainSet, kind: int, value: str):
+    if kind == 0: DomainSetKeyword(set, value)
+else kind == 1: DomainSetRegex(set, value)
+else kind == 3: DomainSetFull(set, value)
+else: DomainSetSuffix(set, value)
+end
+end
+
+func _read_bin(path: str, size &: int): void*:
+    size = 0
+    fp := fopen(path, "rb")
+    if fp == null: ret null end
+    fseek(fp, 0, 2)
+    total := ftell(fp)
+    fseek(fp, 0, 0)
+    if total <= 0:
+        fclose(fp)
+        ret null
+    end
+    buf := mem.Allocate(total as u64)
+    got := fread(buf, 1 as u64, total as u64, fp)
+    fclose(fp)
+    size = got as int
+    ret buf
+end
+
+func _bundled_site(name: str): str:
+    if name == "ir" or name == "category-ir" or name == "iran":
+        ret IRAN_DOMAINS
+    end
+    ret ""
+end
+
+@en "NewDomainSet"
+@fa "مجموعه دامنه جدید"
+pub func NewDomainSet(): DomainSet:
+    ret DomainSet {}
+end
+
+@en "NewIpSet"
+@fa "مجموعه آی‌پی جدید"
+pub func NewIpSet(): IpSet:
+    ret IpSet {}
+end
+
+@en "DomainSetFull"
+@fa "افزودن دامنه کامل"
+pub func DomainSetFull(s &: DomainSet, host: str):
+    s.full.put(_strip_dot(host), true)
+    s.count += 1
+end
+
+@en "DomainSetSuffix"
+@fa "افزودن پسوند دامنه"
+pub func DomainSetSuffix(s &: DomainSet, host: str):
+    s.suffix.put(_strip_dot(host), true)
+    s.count += 1
+end
+
+@en "DomainSetKeyword"
+@fa "افزودن کلیدواژه دامنه"
+pub func DomainSetKeyword(s &: DomainSet, word: str):
+    s.keywords.push(str.Lower(word))
+    s.count += 1
+end
+
+@en "DomainSetRegex"
+@fa "افزودن عبارت باقاعده دامنه"
+pub func DomainSetRegex(s &: DomainSet, pattern: str): bool:
+    if not regex.IsValid(pattern): ret false end
+    s.regexes.push(pattern)
+    s.count += 1
+    ret true
+end
+
+@en "DomainSetContains"
+@fa "مجموعه دامنه شامل"
+pub func DomainSetContains(s: DomainSet, host: str): bool:
+    if s.full.has(host): ret true end
+    if s.suffix.has(host): ret true end
+    n := host.len()
+    bytes := host as u8*
+    repeat n in i:
+        if bytes[i] == 46:
+            if s.suffix.has(host.substr(i + 1, n - i - 1)): ret true end
+        end
+    end
+    repeat s.keywords.len() in i:
+        if host.includes(s.keywords[i]): ret true end
+    end
+    repeat s.regexes.len() in i:
+        re := regex.Regex { pattern = s.regexes[i] }
+        if regex.Match(re, host): ret true end
+    end
+    ret false
+end
+
+@en "IpSetAddNet"
+@fa "افزودن شبکه به مجموعه آی‌پی"
+pub func IpSetAddNet(s &: IpSet, net: Vector<int>, prefix: int):
+    if net.len() == 4 and prefix >= 0 and prefix <= 32:
+        key := ((prefix as i64) << 32) | (_v4_value(net) & _v4_mask(prefix))
+        s.v4.put(key, true)
+        s.v4_lens = s.v4_lens | ((1 as i64) << prefix)
+        s.count += 1
+    else net.len() == 16 and prefix >= 0 and prefix <= 128:
+        s.v6.put(_v6_key(net, prefix), true)
+        mut seen := false
+        repeat s.v6_lens.len() in i:
+            if s.v6_lens[i] == prefix: seen = true end
+        end
+        if not seen: s.v6_lens.push(prefix) end
+        s.count += 1
+    end
+end
+
+@en "IpSetAdd"
+@fa "افزودن به مجموعه آی‌پی"
+pub func IpSetAdd(s &: IpSet, cidr: str): bool:
+    m := ParseCidr(cidr)
+    if m.kind == 0: ret false end
+    IpSetAddNet(s, m.net, m.prefix)
+    ret true
+end
+
+@en "IpSetContains"
+@fa "مجموعه آی‌پی شامل"
+pub func IpSetContains(s: IpSet, ip: Vector<int>): bool:
+    if ip.len() == 4:
+        if s.v4_lens == 0: ret false end
+        v := _v4_value(ip)
+        repeat 33 in p:
+            if ((s.v4_lens >> p) & 1) != 0:
+                if s.v4.has(((p as i64) << 32) | (v & _v4_mask(p))): ret true end
+            end
+        end
+    else ip.len() == 16:
+        repeat s.v6_lens.len() in i:
+            if s.v6.has(_v6_key(ip, s.v6_lens[i])): ret true end
+        end
+    end
+    ret false
+end
+
+@en "ParseDomainList"
+@fa "تجزیه فهرست دامنه"
+pub func ParseDomainList(text: str, attr: str): DomainSet:
+    mut set := NewDomainSet()
+    _dl_text(set, text, attr, 0)
+    ret set
+end
+
+@en "ParseIpList"
+@fa "تجزیه فهرست آی‌پی"
+pub func ParseIpList(text: str): IpSet:
+    mut set := NewIpSet()
+    lines := text.split("\n")
+    defer lines.free()
+    repeat lines.len() in i:
+        mut line := lines[i]
+        h := line.find("#")
+        if h >= 0: line = line.substr(0, h) end
+        line = str.Trim(line)
+        if line.len() > 0: IpSetAdd(set, line) end
+    end
+    ret set
+end
+
+@en "SetGeoDir"
+@fa "تنظیم پوشه داده جغرافیایی"
+pub func SetGeoDir(dir: str):
+    _geo_dir = dir
+end
+
+@en "RegisterGeoSite"
+@fa "ثبت جی‌او‌سایت"
+pub func RegisterGeoSite(name: str, set: DomainSet):
+    _geosites.put(str.Lower(name), set)
+end
+
+@en "RegisterGeoIp"
+@fa "ثبت جی‌او‌آی‌پی"
+pub func RegisterGeoIp(name: str, set: IpSet):
+    _geoips.put(str.Lower(name), set)
+end
+
+@en "ClearGeo"
+@fa "پاک کردن داده جغرافیایی"
+pub func ClearGeo():
+    _geosites = HashMap {} as HashMap<str, DomainSet>
+    _geoips = HashMap {} as HashMap<str, IpSet>
+    _geo_dir = ""
+end
+
+@en "LookupGeoSite"
+@fa "جستجوی جی‌او‌سایت"
+pub func LookupGeoSite(spec: str): DomainSet:
+    mut attr := ""
+    key := str.Lower(_split_attr(str.Trim(spec), attr))
+    full := attr.len() > 0 ? key + "@" + attr : key
+    if _geosites.has(full): ret _geosites.get(full) end
+    text := _site_text(key)
+    if text.len() > 0:
+        s := ParseDomainList(text, attr)
+        _geosites.put(full, s)
+        ret s
+    end
+    if attr.len() == 0:
+        bundled := _bundled_site(key)
+        if bundled.len() > 0:
+            s := ParseDomainList(bundled, "")
+            _geosites.put(key, s)
+            ret s
+        end
+    end
+    ret NewDomainSet()
+end
+
+@en "HasGeoSite"
+@fa "جی‌او‌سایت وجود دارد"
+pub func HasGeoSite(spec: str): bool:
+    ret LookupGeoSite(spec).count > 0
+end
+
+@en "LookupGeoIp"
+@fa "جستجوی جی‌او‌آی‌پی"
+pub func LookupGeoIp(name: str): IpSet:
+    key := str.Lower(str.Trim(name))
+    if _geoips.has(key): ret _geoips.get(key) end
+    text := _ip_text(key)
+    if text.len() > 0:
+        s := ParseIpList(text)
+        if s.count > 0:
+            _geoips.put(key, s)
+            ret s
+        end
+    end
+    ret NewIpSet()
+end
+
+@en "HasGeoIp"
+@fa "جی‌او‌آی‌پی وجود دارد"
+pub func HasGeoIp(name: str): bool:
+    ret LookupGeoIp(name).count > 0
+end
+
+@en "LoadGeoSiteDat"
+@fa "بارگذاری جی‌او‌سایت دی‌ای‌تی"
+pub func LoadGeoSiteDat(ptr: void*, n: int, names: Vector<str>): int:
+    mut top := _Pb { p = ptr as u8*, stop = n }
+    mut loaded := 0
+    until true:
+        if not _pb_next(top): break end
+        if top.field != 1 or top.wt != 2: continue end
+        code := _site_entry_code(top)
+        if code.len() == 0 or not _wanted(names, code): continue end
+        mut set := NewDomainSet()
+        mut by_attr := HashMap {} as HashMap<str, DomainSet>
+        mut e := _pb_sub(top)
+        until true:
+            if not _pb_next(e): break end
+            if e.field != 2 or e.wt != 2: continue end
+            mut d := _pb_sub(e)
+            mut kind := 2
+            mut value := ""
+            mut attrs := Vector {} as Vector<str>
+            until true:
+                if not _pb_next(d): break end
+                if d.field == 1 and d.wt == 0: kind = d.val as int end
+                if d.field == 2 and d.wt == 2: value = _pb_str(d) end
+                if d.field == 3 and d.wt == 2:
+                    mut a := _pb_sub(d)
+                    until true:
+                        if not _pb_next(a): break end
+                        if a.field == 1 and a.wt == 2: attrs.push(str.Lower(_pb_str(a))) end
+                    end
+                end
+            end
+            if value.len() > 0:
+                _site_add(set, kind, value)
+                repeat attrs.len() in i:
+                    if not by_attr.has(attrs[i]): by_attr.put(attrs[i], NewDomainSet()) end
+                    mut sub := by_attr.get(attrs[i])
+                    _site_add(sub, kind, value)
+                end
+            end
+            attrs.free()
+        end
+        key := str.Lower(code)
+        _geosites.put(key, set)
+        mut ai := by_attr.iter()
+        until ai.has_next():
+            _geosites.put(key + "@" + ai.key(), ai.value())
+            ai.next()
+        end
+        loaded += 1
+    end
+    ret loaded
+end
+
+@en "LoadGeoIpDat"
+@fa "بارگذاری جی‌او‌آی‌پی دی‌ای‌تی"
+pub func LoadGeoIpDat(ptr: void*, n: int, names: Vector<str>): int:
+    mut top := _Pb { p = ptr as u8*, stop = n }
+    mut loaded := 0
+    until true:
+        if not _pb_next(top): break end
+        if top.field != 1 or top.wt != 2: continue end
+        code := _site_entry_code(top)
+        if code.len() == 0 or not _wanted(names, code): continue end
+        mut set := NewIpSet()
+        mut e := _pb_sub(top)
+        until true:
+            if not _pb_next(e): break end
+            if e.field != 2 or e.wt != 2: continue end
+            mut c := _pb_sub(e)
+            mut ip := Vector {} as Vector<int>
+            mut prefix := 0 - 1
+            until true:
+                if not _pb_next(c): break end
+                if c.field == 1 and c.wt == 2:
+                    repeat c.size in i:
+                        ip.push(c.p[c.off + i] as int)
+                    end
+                end
+                if c.field == 2 and c.wt == 0: prefix = c.val as int end
+            end
+            if prefix >= 0: IpSetAddNet(set, ip, prefix) end
+            ip.free()
+        end
+        _geoips.put(str.Lower(code), set)
+        loaded += 1
+    end
+    ret loaded
+end
+
+@en "LoadGeoSiteFile"
+@fa "بارگذاری پرونده جی‌او‌سایت"
+pub func LoadGeoSiteFile(path: str, names: Vector<str>): int:
+    mut size := 0
+    buf := _read_bin(path, size)
+    if buf == null: ret 0 - 1 end
+    r := LoadGeoSiteDat(buf, size, names)
+    mem.Free(buf)
+    ret r
+end
+
+@en "LoadGeoIpFile"
+@fa "بارگذاری پرونده جی‌او‌آی‌پی"
+pub func LoadGeoIpFile(path: str, names: Vector<str>): int:
+    mut size := 0
+    buf := _read_bin(path, size)
+    if buf == null: ret 0 - 1 end
+    r := LoadGeoIpDat(buf, size, names)
+    mem.Free(buf)
+    ret r
+end

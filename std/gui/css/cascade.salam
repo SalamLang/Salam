@@ -1,0 +1,888 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package css
+
+import str
+import gui.cssbox
+
+const ORDER_EL := 1000000000
+const SPEC_CLASS := 1000
+const SPEC_STATE := 2000
+
+struct Entry:
+    pub block: int = 0
+    pub spec: int = 0
+    pub order: int = 0
+    pub ua: bool = false
+end
+
+struct VarSet:
+    pub start: int = 0
+    pub count: int = 0
+end
+
+struct ElBlocks:
+    pub base: int = -1
+    pub hover: int = -1
+    pub focus: int = -1
+    pub active: int = -1
+    pub media0: int = 0
+    pub median: int = 0
+end
+
+struct Engine:
+    pub env: Env = Env {}
+    pub dom: Dom = Dom {}
+    pub styles: Vector<ComputedStyle> = Vector {}
+    pub style_vars: Vector<int> = Vector {}
+    pub vsets: Vector<VarSet> = Vector {}
+    pub vn: Vector<str> = Vector {}
+    pub vv: Vector<str> = Vector {}
+    pub cache: HashMap<str, int> = HashMap {}
+    pub el_style: Vector<int> = Vector {}
+    pub el_blocks: Vector<ElBlocks> = Vector {}
+    pub el_media_blocks: Vector<int> = Vector {}
+    pub media_ok: Vector<bool> = Vector {}
+    pub cond_cache: HashMap<str, int> = HashMap {}
+    pub win: Vector<int> = Vector {}
+    pub entries: Vector<Entry> = Vector {}
+    pub cnames: Vector<str> = Vector {}
+    pub cdecls: Vector<int> = Vector {}
+    pub stoks: Vector<Tok> = Vector {}
+    pub initial: ComputedStyle = ComputedStyle {}
+    pub root_fs: f64 = 16.0
+    pub cascades: int = 0
+    pub visits: int = 0
+end
+
+func engine_new(env: Env): Engine:
+    mut e := Engine { env = env }
+    e.styles = Vector {} as Vector<ComputedStyle>
+    e.style_vars = Vector {} as Vector<int>
+    e.vsets = Vector {} as Vector<VarSet>
+    e.vsets.push(VarSet {})
+    e.vn = Vector {} as Vector<str>
+    e.vv = Vector {} as Vector<str>
+    e.cache = HashMap {} as HashMap<str, int>
+    e.el_style = Vector {} as Vector<int>
+    e.el_blocks = Vector {} as Vector<ElBlocks>
+    e.el_media_blocks = Vector {} as Vector<int>
+    e.media_ok = Vector {} as Vector<bool>
+    e.cond_cache = HashMap {} as HashMap<str, int>
+    e.win = Vector {} as Vector<int>
+    repeat NPROP:
+        e.win.push(-1)
+    end
+    e.entries = Vector {} as Vector<Entry>
+    e.cnames = Vector {} as Vector<str>
+    e.cdecls = Vector {} as Vector<int>
+    e.stoks = Vector {} as Vector<Tok>
+    e.initial = initial_style()
+    ret e
+end
+
+func dom_free(d &: Dom):
+    d.tags.free()
+    d.ids.free()
+    d.cls0.free()
+    d.clsn.free()
+    repeat d.classes.len() in i:
+        sfree(d.classes[i])
+    end
+    d.classes.free()
+    d.parent.free()
+    d.prev.free()
+    d.next.free()
+    d.first.free()
+    d.last.free()
+    d.state.free()
+end
+
+func free_keys(m &: HashMap<str, int>):
+    mut keys := Vector {} as Vector<str>
+    each k, _ in m:
+        keys.push(k)
+    end
+    m.free()
+    repeat keys.len() in i:
+        sfree(keys[i])
+    end
+    keys.free()
+end
+
+func engine_free(e &: Engine):
+    repeat e.styles.len() in i:
+        mut cs := e.styles.ref(i)
+        free_style(cs)
+    end
+    e.styles.free()
+    e.style_vars.free()
+    e.vsets.free()
+    repeat e.vn.len() in i:
+        sfree(e.vn[i])
+        sfree(e.vv[i])
+    end
+    e.vn.free()
+    e.vv.free()
+    free_keys(e.cache)
+    e.el_style.free()
+    e.el_blocks.free()
+    e.el_media_blocks.free()
+    e.media_ok.free()
+    free_keys(e.cond_cache)
+    e.win.free()
+    e.entries.free()
+    e.cnames.free()
+    e.cdecls.free()
+    free_toks(e.stoks, 0)
+    e.stoks.free()
+    free_style(e.initial)
+    dom_free(e.dom)
+end
+
+func state_bits(el: Element): int:
+    mut s := 0
+    if el.hovered:
+        s |= ST_HOVER
+    end
+    if el.focused:
+        s |= ST_FOCUS
+    end
+    if el.focus_visible:
+        s |= ST_FOCUS_VISIBLE | ST_FOCUS
+    end
+    if el.pressed:
+        s |= ST_ACTIVE
+    end
+    ret s
+end
+
+func build_dom(elements: Vector<Element>, env: Env): Dom:
+    n := elements.len()
+    mut d := Dom { count = n, els = elements, root_dir = env.dir, root_lang = env.lang }
+    d.tags = Vector {} as Vector<str>
+    d.ids = Vector {} as Vector<str>
+    d.cls0 = Vector {} as Vector<int>
+    d.clsn = Vector {} as Vector<int>
+    d.classes = Vector {} as Vector<str>
+    d.parent = Vector {} as Vector<int>
+    d.prev = Vector {} as Vector<int>
+    d.next = Vector {} as Vector<int>
+    d.first = Vector {} as Vector<int>
+    d.last = Vector {} as Vector<int>
+    d.state = Vector {} as Vector<int>
+    repeat n + 1:
+        d.prev.push(-1)
+        d.next.push(-1)
+        d.first.push(-1)
+        d.last.push(-1)
+    end
+    repeat n in i:
+        el := elements[i]
+        mut tg := el.tag
+        if tg.len() == 0:
+            tg = tag_of(el.kind)
+        end
+        d.tags.push(intern_own(lower_ascii(tg)))
+        d.ids.push(intern(el.id))
+        d.cls0.push(d.classes.len())
+        mut parts := str.Fields(el.classes)
+        mut cnt := 0
+        repeat parts.len() in k:
+            mut dup := false
+            repeat cnt in m:
+                if d.classes[d.classes.len() - cnt + m] == parts[k]:
+                    dup = true
+                end
+            end
+            if dup:
+                sfree(parts[k])
+            else:
+                d.classes.push(parts[k])
+                cnt++
+            end
+        end
+        parts.free()
+        d.clsn.push(cnt)
+        mut p := el.parent
+        if p < 0 or p >= i:
+            p = n
+        end
+        d.parent.push(p)
+        d.state.push(state_bits(el))
+    end
+    d.tags.push("html")
+    d.ids.push("")
+    d.cls0.push(d.classes.len())
+    d.clsn.push(0)
+    d.parent.push(-1)
+    d.state.push(0)
+    repeat n in i:
+        p := d.parent[i]
+        l := d.last[p]
+        if l >= 0:
+            d.next[l] = i
+            d.prev[i] = l
+        else:
+            d.first[p] = i
+        end
+        d.last[p] = i
+    end
+    ret d
+end
+
+func cond_ok(e &: Engine, cond: str): bool:
+    if e.cond_cache.has(cond):
+        ret e.cond_cache.get(cond) != 0
+    end
+    r := media_matches(cond, e.env)
+    e.cond_cache.put(str.Clone(cond), r ? 1 : 0)
+    ret r
+end
+
+func eval_medias(e &: Engine, sd: SheetData):
+    e.media_ok.free()
+    e.media_ok = Vector {} as Vector<bool>
+    repeat sd.medias.len() in i:
+        m := sd.medias[i]
+        mut ok := cond_ok(e, m.text)
+        if m.parent >= 0 and ok:
+            ok = e.media_ok[m.parent]
+        end
+        e.media_ok.push(ok)
+    end
+end
+
+func element_blocks(e &: Engine, sd &: SheetData, i: int):
+    el := e.dom.els[i]
+    mut b := ElBlocks {}
+    if el.base.len() > 0:
+        b.base = parse_block(sd, el.base)
+    end
+    if el.hover.len() > 0:
+        b.hover = parse_block(sd, el.hover)
+    end
+    if el.focus.len() > 0:
+        b.focus = parse_block(sd, el.focus)
+    end
+    if el.active.len() > 0:
+        b.active = parse_block(sd, el.active)
+    end
+    b.media0 = e.el_media_blocks.len()
+    repeat el.media_conditions.len() in k:
+        if k < el.media_declarations.len():
+            e.el_media_blocks.push(cond_ok(e, el.media_conditions[k]) ? parse_block(sd, el.media_declarations[k]) : -1)
+        end
+    end
+    b.median = e.el_media_blocks.len() - b.media0
+    if i < e.el_blocks.len():
+        e.el_blocks[i] = b
+    else:
+        e.el_blocks.push(b)
+    end
+end
+
+func push_entry(e &: Engine, en: Entry):
+    e.entries.push(en)
+    mut k := e.entries.len() - 1
+    until k > 0:
+        a := e.entries[k - 1]
+        if a.spec < en.spec or (a.spec == en.spec and a.order <= en.order):
+            break
+        end
+        e.entries[k] = a
+        k--
+    end
+    e.entries[k] = en
+end
+
+func collect_bucket(e &: Engine, sd: SheetData, key: str, i: int):
+    if not sd.buckets.has(key):
+        ret
+    end
+    mut r := sd.bheads[sd.buckets.get(key)]
+    until r >= 0:
+        rule := sd.rules[r]
+        e.visits++
+        if (rule.media < 0 or e.media_ok[rule.media]) and match_selector(sd, e.dom, rule.sel, i):
+            push_entry(e, Entry { block = rule.block, spec = sd.selectors[rule.sel].spec, order = rule.order, ua = rule.ua })
+        end
+        r = rule.next
+    end
+end
+
+func collect(e &: Engine, sd: SheetData, i: int):
+    e.entries.clear()
+    d := e.dom
+    if d.ids[i].len() > 0:
+        idk := "#" + d.ids[i]
+        collect_bucket(e, sd, idk, i)
+        sfree(idk)
+    end
+    c0 := d.cls0[i]
+    repeat d.clsn[i] in m:
+        clk := "." + d.classes[c0 + m]
+        collect_bucket(e, sd, clk, i)
+        sfree(clk)
+    end
+    collect_bucket(e, sd, d.tags[i], i)
+    collect_bucket(e, sd, "*", i)
+    if i == d.count:
+        ret
+    end
+    b := e.el_blocks[i]
+    is_body := d.tags[i] == "body"
+    if b.base >= 0:
+        push_entry(e, Entry { block = b.base, spec = is_body ? 1 : SPEC_CLASS, order = is_body ? -1 : ORDER_EL })
+    end
+    repeat b.median in k:
+        mb := e.el_media_blocks[b.media0 + k]
+        if mb >= 0:
+            push_entry(e, Entry { block = mb, spec = is_body ? 1 : SPEC_CLASS, order = ORDER_EL + 1 + k })
+        end
+    end
+    st := d.state[i]
+    if b.hover >= 0 and (st & ST_HOVER) != 0:
+        push_entry(e, Entry { block = b.hover, spec = is_body ? 1001 : SPEC_STATE, order = ORDER_EL + 100000 })
+    end
+    if b.focus >= 0 and (st & ST_FOCUS) != 0:
+        push_entry(e, Entry { block = b.focus, spec = is_body ? 1001 : SPEC_STATE, order = ORDER_EL + 100001 })
+    end
+    if b.active >= 0 and (st & ST_ACTIVE) != 0:
+        push_entry(e, Entry { block = b.active, spec = is_body ? 1001 : SPEC_STATE, order = ORDER_EL + 100002 })
+    end
+end
+
+func entries_key(e: Engine, pstyle: int): str:
+    mut b := str.NewBuilder()
+    str.BufAppendInt(b, pstyle as i64)
+    repeat e.entries.len() in k:
+        en := e.entries[k]
+        str.BufAppend(b, en.ua ? "u" : ",")
+        str.BufAppendInt(b, en.block as i64)
+        str.BufAppend(b, ":")
+        str.BufAppendInt(b, en.spec as i64)
+    end
+    out := str.BufStr(b)
+    str.BufFree(b)
+    ret out
+end
+
+func var_lookup(e: Engine, vset: int, name: str, out &: str): bool:
+    vs := e.vsets[vset]
+    mut k := vs.count - 1
+    until k >= 0:
+        if e.vn[vs.start + k] == name:
+            out = e.vv[vs.start + k]
+            ret true
+        end
+        k--
+    end
+    ret false
+end
+
+func subst(e: Engine, text: str, vset: int, depth: int, ok &: bool): str:
+    if depth > 16:
+        ok = false
+        ret str.Clone("")
+    end
+    mut t := Vector {} as Vector<Tok>
+    tokenize(text, t)
+    mut b := str.NewBuilder()
+    mut pos := 0
+    mut i := 0
+    until i < t.len() and ok:
+        tk := t[i]
+        if tk.k == TK_FUNC and (tk.s == "var" or tk.s == "env"):
+            piece := text.substr(pos, tk.p0 - pos)
+            str.BufAppend(b, piece)
+            sfree(piece)
+            close := tk.close
+            mut name := ""
+            j := i + 1
+            if j < close and t[j].k == TK_IDENT:
+                name = t[j].raw
+            end
+            mut comma := -1
+            mut k := j
+            until k < close:
+                if t[k].k == TK_COMMA:
+                    comma = k
+                    break
+                end
+                k = nxt(t, k)
+            end
+            mut fb := ""
+            mut has_fb := false
+            if comma >= 0:
+                fb = text.substr(t[comma].p1, t[close].p0 - t[comma].p1)
+                has_fb = true
+            end
+            mut val := ""
+            if tk.s == "var" and var_lookup(e, vset, name, val):
+                r := subst(e, val, vset, depth + 1, ok)
+                str.BufAppend(b, r)
+                sfree(r)
+            else has_fb:
+                r := subst(e, fb, vset, depth + 1, ok)
+                str.BufAppend(b, r)
+                sfree(r)
+            else tk.s == "env":
+                str.BufAppend(b, "0px")
+            else:
+                ok = false
+            end
+            if has_fb:
+                sfree(fb)
+            end
+            pos = close >= 0 and close < t.len() ? t[close].p1 : text.len()
+            i = close + 1
+            continue
+        end
+        i++
+    end
+    if ok and pos < text.len():
+        piece := text.substr(pos, text.len() - pos)
+        str.BufAppend(b, piece)
+        sfree(piece)
+    end
+    out := str.BufStr(b)
+    str.BufFree(b)
+    free_toks(t, 0)
+    t.free()
+    ret out
+end
+
+func assign(e &: Engine, sd: SheetData, di: int, rtl: bool):
+    d := sd.decls[di]
+    p := d.prop
+    if p == P_CUSTOM:
+        repeat e.cnames.len() in k:
+            if e.cnames[k] == d.name:
+                e.cdecls[k] = di
+                ret
+            end
+        end
+        e.cnames.push(d.name)
+        e.cdecls.push(di)
+        ret
+    end
+    if p >= S_FIRST and p <= S_LAST:
+        mut lh := Vector {} as Vector<int>
+        longhands_of(p, lh)
+        repeat lh.len() in k:
+            q := logical_to_physical(lh[k], rtl)
+            if q >= 0 and q < NPROP:
+                e.win[q] = di
+            end
+        end
+        lh.free()
+        ret
+    end
+    q := logical_to_physical(p, rtl)
+    if q >= 0 and q < NPROP:
+        e.win[q] = di
+    end
+end
+
+func run_passes(e &: Engine, sd: SheetData, rtl: bool, only: int):
+    repeat 4 in pass:
+        want_ua := pass == 0 or pass == 3
+        want_imp := pass >= 2
+        repeat e.entries.len() in k:
+            en := e.entries[k]
+            if en.ua != want_ua:
+                continue
+            end
+            blk := sd.blocks[en.block]
+            repeat blk.n in m:
+                di := blk.d0 + m
+                d := sd.decls[di]
+                if d.important != want_imp:
+                    continue
+                end
+                if only >= 0:
+                    if d.prop == only:
+                        e.win[only] = di
+                    end
+                    continue
+                end
+                assign(e, sd, di, rtl)
+            end
+        end
+    end
+end
+
+func longhand_text(e: Engine, d: Decl, p: int, rtl: bool, vset: int, out &: str): bool:
+    mut ok := true
+    resolved := subst(e, d.value, vset, 0, ok)
+    if not ok:
+        sfree(resolved)
+        ret false
+    end
+    if d.prop < S_FIRST or d.prop > S_LAST:
+        out = resolved
+        ret true
+    end
+    mut toks := Vector {} as Vector<Tok>
+    tokenize(resolved, toks)
+    mut ids := Vector {} as Vector<int>
+    mut vals := Vector {} as Vector<str>
+    mut found := false
+    w := wide_kw(toks, 0, toks.len())
+    if w != W_NONE:
+        out = str.Clone(resolved)
+        found = true
+    else expand(d.prop, resolved, toks, 0, toks.len(), ids, vals):
+        repeat ids.len() in k:
+            if not found and logical_to_physical(ids[k], rtl) == p:
+                out = str.Clone(vals[k])
+                found = true
+            end
+        end
+    end
+    repeat vals.len() in k:
+        sfree(vals[k])
+    end
+    ids.free()
+    vals.free()
+    free_toks(toks, 0)
+    toks.free()
+    sfree(resolved)
+    ret found
+end
+
+func apply_decl(e &: Engine, sd: SheetData, cs &: ComputedStyle, p: int, di: int, parent: ComputedStyle, has_parent: bool, cx: Cx, vset: int):
+    d := sd.decls[di]
+    mut wide := d.wide
+    if wide == W_NONE and (d.has_var or d.prop != p and d.prop >= S_FIRST and d.prop <= S_LAST):
+        mut text := ""
+        if not longhand_text(e, d, p, cx.rtl, vset, text):
+            wide = W_UNSET
+        else:
+            mark := e.stoks.len()
+            tokenize(text, e.stoks)
+            te := e.stoks.len()
+            w2 := wide_kw(e.stoks, mark, te)
+            if w2 != W_NONE:
+                wide = w2
+            else not apply_prop(cs, p, e.stoks, mark, te, cx):
+                wide = W_UNSET
+            end
+            free_toks(e.stoks, mark)
+            sfree(text)
+            if wide == W_NONE:
+                ret
+            end
+        end
+    end
+    switch wide:
+        W_NONE:
+            _ok := apply_prop(cs, p, sd.toks, d.ts, d.te, cx)
+            break
+        end
+        W_INHERIT:
+            copy_prop(cs, has_parent ? parent : e.initial, p)
+            break
+        end
+        W_INITIAL:
+            copy_prop(cs, e.initial, p)
+            break
+        end
+        else:
+            if is_inherited(p) and has_parent:
+                copy_prop(cs, parent, p)
+            else:
+                copy_prop(cs, e.initial, p)
+            end
+        end
+    end
+end
+
+func make_vset(e &: Engine, parent_set: int): int:
+    if e.cnames.len() == 0:
+        ret parent_set
+    end
+    ps := e.vsets[parent_set]
+    start := e.vn.len()
+    repeat ps.count in k:
+        e.vn.push(str.Clone(e.vn[ps.start + k]))
+        e.vv.push(str.Clone(e.vv[ps.start + k]))
+    end
+    repeat e.cnames.len() in k:
+        e.vn.push(str.Clone(e.cnames[k]))
+        e.vv.push(str.Clone(e.cnames[k]))
+    end
+    e.vsets.push(VarSet { start = start, count = e.vn.len() - start })
+    ret e.vsets.len() - 1
+end
+
+func blockify(d: Display): Display:
+    switch d:
+        Display.Inline, Display.InlineBlock, Display.TableRowGroup, Display.TableHeaderGroup, Display.TableFooterGroup, Display.TableRow, Display.TableCell, Display.TableColumn, Display.TableColumnGroup, Display.TableCaption:
+            ret Display.Block
+        end
+        Display.InlineFlex: ret Display.Flex end
+        Display.InlineGrid: ret Display.Grid end
+        Display.InlineTable: ret Display.Table end
+        else: ret d end
+    end
+    ret d
+end
+
+func compute_style(e &: Engine, sd: SheetData, pstyle: int): int:
+    e.cascades++
+    has_parent := pstyle >= 0
+    parent := has_parent ? e.styles[pstyle] : e.initial
+    pvars := has_parent ? e.style_vars[pstyle] : 0
+    repeat NPROP in k:
+        e.win[k] = -1
+    end
+    e.cnames.clear()
+    e.cdecls.clear()
+    mut rtl := parent.direction == cssbox.Direction.Rtl
+    run_passes(e, sd, false, P_DIRECTION)
+    dwin := e.win[P_DIRECTION]
+    e.win[P_DIRECTION] = -1
+    run_passes(e, sd, rtl, -1)
+    vset := make_vset(e, pvars)
+    if e.cnames.len() > 0:
+        vs := e.vsets[vset]
+        repeat e.cnames.len() in k:
+            dd := sd.decls[e.cdecls[k]]
+            mut slot := vs.start
+            repeat vs.count in m:
+                if e.vn[vs.start + m] == e.cnames[k]:
+                    slot = vs.start + m
+                end
+            end
+            sfree(e.vv[slot])
+            e.vv[slot] = str.Clone(dd.value)
+        end
+    end
+    mut cs := initial_style()
+    if has_parent:
+        inherit_into(cs, parent)
+    end
+    mut cx := Cx { fs = parent.font_size, pfs = parent.font_size, rfs = has_parent ? e.root_fs : 16.0, vw = e.env.width, vh = e.env.height, dark = parent.used_dark, color = parent.color, pcolor = parent.color, rtl = rtl, pkw = has_parent ? parent.font_size_keyword : 1.0 }
+    if dwin >= 0:
+        apply_decl(e, sd, cs, P_DIRECTION, dwin, parent, has_parent, cx, vset)
+        nrtl := cs.direction == cssbox.Direction.Rtl
+        if nrtl != rtl:
+            rtl = nrtl
+            cx.rtl = rtl
+            repeat NPROP in k:
+                e.win[k] = -1
+            end
+            e.cnames.clear()
+            e.cdecls.clear()
+            run_passes(e, sd, rtl, -1)
+        end
+        e.win[P_DIRECTION] = -1
+    end
+    first := [P_FONT_FAMILY, P_FONT_SIZE, P_COLOR_SCHEME, P_COLOR, P_LINE_HEIGHT]
+    repeat 5 in k:
+        p := first[k]
+        if e.win[p] >= 0:
+            apply_decl(e, sd, cs, p, e.win[p], parent, has_parent, cx, vset)
+        end
+        switch p:
+            P_FONT_SIZE:
+                if cs.font_size_keyword > 0.0:
+                    cs.font_size = cs.font_size_keyword * (cs.font_family == "monospace" ? 13.0 : 16.0)
+                end
+                cx.fs = cs.font_size
+                if cs.line_height_normal:
+                    cs.line_height = cs.font_size * 1.2
+                else cs.line_height_factor > 0.0:
+                    cs.line_height = cs.line_height_factor * cs.font_size
+                end
+                break
+            end
+            P_FONT_FAMILY:
+                cx.mono = cs.font_family == "monospace"
+                break
+            end
+            P_COLOR_SCHEME:
+                sch := cs.color_scheme
+                cs.used_dark = e.env.dark ? (sch == ColorScheme.Dark or sch == ColorScheme.LightDark) : sch == ColorScheme.Dark
+                cx.dark = cs.used_dark
+                break
+            end
+            P_COLOR:
+                cx.color = cs.color
+                break
+            end
+            else:
+            end
+        end
+    end
+    repeat NPROP in p:
+        if p == P_FONT_FAMILY or p == P_FONT_SIZE or p == P_COLOR_SCHEME or p == P_COLOR or p == P_LINE_HEIGHT or p == P_DIRECTION:
+            continue
+        end
+        di := e.win[p]
+        if di < 0:
+            continue
+        end
+        apply_decl(e, sd, cs, p, di, parent, has_parent, cx, vset)
+    end
+    repeat 4 in k:
+        if e.win[P_BORDER_TOP_COLOR + k] < 0:
+            mut sdd := side_of(cs, k)
+            sdd.color = cs.color
+            set_side(cs, k, sdd)
+        end
+        sdd2 := side_of(cs, k)
+        if sdd2.style == BorderStyle.None or sdd2.style == BorderStyle.Hidden:
+            mut z := sdd2
+            z.width = 0.0
+            set_side(cs, k, z)
+        end
+    end
+    if e.win[P_OUTLINE_COLOR] < 0:
+        cs.outline.color = cs.color
+    end
+    if cs.text_align == TextAlign.MatchParent:
+        cs.text_align = has_parent ? parent.text_align : TextAlign.Start
+    end
+    if e.win[P_TD_COLOR] < 0:
+        cs.decoration_color = cs.color
+    end
+    if e.win[P_CARET_COLOR] < 0:
+        cs.caret_color = cs.color
+    end
+    if cs.accent_auto:
+        mut ac := Color {}
+        _ok := system_color("accentcolor", cs.used_dark, ac)
+        cs.accent_color = ac
+    end
+    if cs.position == cssbox.Position.Absolute or cs.position == cssbox.Position.Fixed:
+        cs.float_mode = Float.None
+    end
+    pd := parent.display
+    if not has_parent or cs.float_mode != Float.None or cs.position == cssbox.Position.Absolute or cs.position == cssbox.Position.Fixed or pd == Display.Flex or pd == Display.InlineFlex or pd == Display.Grid or pd == Display.InlineGrid:
+        cs.display = blockify(cs.display)
+    end
+    ox := cs.overflow_x
+    oy := cs.overflow_y
+    xv := ox == cssbox.Overflow.Visible or ox == cssbox.Overflow.Clip
+    yv := oy == cssbox.Overflow.Visible or oy == cssbox.Overflow.Clip
+    if xv != yv:
+        if ox == cssbox.Overflow.Visible:
+            cs.overflow_x = cssbox.Overflow.Auto
+        else ox == cssbox.Overflow.Clip:
+            cs.overflow_x = cssbox.Overflow.Hidden
+        end
+        if oy == cssbox.Overflow.Visible:
+            cs.overflow_y = cssbox.Overflow.Auto
+        else oy == cssbox.Overflow.Clip:
+            cs.overflow_y = cssbox.Overflow.Hidden
+        end
+    end
+    e.styles.push(cs)
+    e.style_vars.push(vset)
+    ret e.styles.len() - 1
+end
+
+func compute_one(e &: Engine, sd: SheetData, i: int):
+    p := e.dom.parent[i]
+    pstyle := p >= 0 ? e.el_style[p] : -1
+    collect(e, sd, i)
+    key := entries_key(e, pstyle)
+    if e.cache.has(key):
+        e.el_style[i] = e.cache.get(key)
+        sfree(key)
+        ret
+    end
+    idx := compute_style(e, sd, pstyle)
+    e.cache.put(key, idx)
+    e.el_style[i] = idx
+end
+
+func compute_all(e &: Engine, sd &: SheetData, elements: Vector<Element>):
+    e.dom = build_dom(elements, e.env)
+    eval_medias(e, sd)
+    n := elements.len()
+    repeat n in i:
+        element_blocks(e, sd, i)
+    end
+    e.el_style.clear()
+    repeat n + 1:
+        e.el_style.push(-1)
+    end
+    compute_one(e, sd, n)
+    e.root_fs = e.styles[e.el_style[n]].font_size
+    repeat n in i:
+        compute_one(e, sd, i)
+    end
+end
+
+func in_subtree(d: Dom, j: int, i: int): bool:
+    mut p := d.parent[j]
+    until p >= 0 and p != d.count:
+        if p == i:
+            ret true
+        end
+        if p < i:
+            ret false
+        end
+        p = d.parent[p]
+    end
+    ret false
+end
+
+func restyle(e &: Engine, sd &: SheetData, elements: Vector<Element>, i: int): int:
+    n := e.dom.count
+    if i >= n or elements.len() != n:
+        ret 0
+    end
+    e.dom.els = elements
+    mut stc := Vector {} as Vector<bool>
+    defer stc.free()
+    mut anc := Vector {} as Vector<bool>
+    defer anc.free()
+    mut sty := Vector {} as Vector<bool>
+    defer sty.free()
+    repeat n in k:
+        nb := state_bits(elements[k])
+        stc.push(nb != e.dom.state[k])
+        e.dom.state[k] = nb
+        anc.push(false)
+        sty.push(false)
+    end
+    if i >= 0:
+        element_blocks(e, sd, i)
+    end
+    mut count := 0
+    repeat n in j:
+        p := e.dom.parent[j]
+        inner := p >= 0 and p != n
+        a := stc[j] or (inner and anc[p])
+        anc[j] = a
+        mut need := j == i or stc[j] or (inner and sty[p]) or (sd.state_left and a)
+        if not need and sd.sibling:
+            pv := e.dom.prev[j]
+            need = pv >= 0 and (stc[pv] or sty[pv])
+        end
+        if need:
+            old := e.el_style[j]
+            compute_one(e, sd, j)
+            count++
+            sty[j] = e.el_style[j] != old
+        end
+    end
+    ret count
+end

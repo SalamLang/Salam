@@ -1,0 +1,688 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package css
+
+import str
+import math
+import gui.cssbox
+
+@en "Sheet"
+@fa "برگه‌سبک"
+pub struct Sheet:
+    d: SheetData = SheetData {}
+    e: Engine = Engine {}
+    ready: bool = false
+    computed: bool = false
+
+    func init():
+        if not this.ready:
+            this.d = sheet_new()
+            this.ready = true
+        end
+    end
+
+    @en "AddRule"
+    @fa "افزودن قاعده"
+    pub func AddRule(selector: str, declarations: str): bool:
+        this.init()
+        ret add_rule_text(this.d, selector, declarations, -1)
+    end
+
+    @en "AddMediaRule"
+    @fa "افزودن قاعده رسانه"
+    pub func AddMediaRule(condition: str, selector: str, declarations: str): bool:
+        this.init()
+        m := add_media(this.d, condition, -1)
+        ret add_rule_text(this.d, selector, declarations, m)
+    end
+
+    @en "AddCss"
+    @fa "افزودن سی اس اس"
+    pub func AddCss(text: str): int:
+        this.init()
+        ret parse_css(this.d, text, 0, text.len(), -1)
+    end
+
+    @en "RuleCount"
+    @fa "شمار قاعده ها"
+    pub func RuleCount(): int:
+        this.init()
+        ret this.d.rules.len()
+    end
+
+    @en "Compute"
+    @fa "محاسبه سبک ها"
+    pub func Compute(elements &: Vector<Element>, env: Env): int:
+        this.init()
+        if this.computed:
+            engine_free(this.e)
+        end
+        this.e = engine_new(env)
+        this.computed = true
+        compute_all(this.e, this.d, elements)
+        ret this.e.styles.len()
+    end
+
+    @en "Restyle"
+    @fa "سبک دهی دوباره"
+    pub func Restyle(elements &: Vector<Element>, index: int): int:
+        if not this.computed:
+            ret 0
+        end
+        ret restyle(this.e, this.d, elements, index)
+    end
+
+    @en "Count"
+    @fa "شمار عنصرها"
+    pub func Count(): int:
+        if not this.computed:
+            ret 0
+        end
+        ret this.e.dom.count
+    end
+
+    @en "Style"
+    @fa "سبک عنصر"
+    pub func Style(index: int): ComputedStyle:
+        if not this.computed or index < 0 or index >= this.e.el_style.len():
+            ret initial_style()
+        end
+        ret this.e.styles[this.e.el_style[index]]
+    end
+
+    @en "RootStyle"
+    @fa "سبک ریشه"
+    pub func RootStyle(): ComputedStyle:
+        if not this.computed:
+            ret initial_style()
+        end
+        ret this.e.styles[this.e.el_style[this.e.dom.count]]
+    end
+
+    @en "StyleId"
+    @fa "شناسه سبک"
+    pub func StyleId(index: int): int:
+        if not this.computed or index < 0 or index >= this.e.el_style.len():
+            ret -1
+        end
+        ret this.e.el_style[index]
+    end
+
+    @en "DistinctStyles"
+    @fa "شمار سبک های یکتا"
+    pub func DistinctStyles(): int:
+        if not this.computed:
+            ret 0
+        end
+        ret this.e.styles.len()
+    end
+
+    @en "CascadeCount"
+    @fa "شمار آبشارها"
+    pub func CascadeCount(): int:
+        if not this.computed:
+            ret 0
+        end
+        ret this.e.cascades
+    end
+
+    @en "Var"
+    @fa "متغیر سفارشی"
+    pub func Var(index: int, name: str): str:
+        if not this.computed or index < 0 or index >= this.e.el_style.len():
+            ret str.Clone("")
+        end
+        mut v := ""
+        if var_lookup(this.e, this.e.style_vars[this.e.el_style[index]], name, v):
+            mut ok := true
+            r := subst(this.e, v, this.e.style_vars[this.e.el_style[index]], 0, ok)
+            if ok:
+                t := str.Trim(r)
+                sfree(r)
+                ret t
+            end
+            sfree(r)
+        end
+        ret str.Clone("")
+    end
+
+    @en "Matches"
+    @fa "تطبیق گزینشگر"
+    pub func Matches(selector: str, elements &: Vector<Element>, index: int): bool:
+        this.init()
+        mut sels := Vector {} as Vector<int>
+        defer sels.free()
+        if not parse_selector_list(this.d, selector, sels):
+            ret false
+        end
+        mut d := build_dom(elements, this.computed ? this.e.env : Env {})
+        defer dom_free(d)
+        if index < 0 or index >= elements.len():
+            ret false
+        end
+        repeat sels.len() in k:
+            if match_selector(this.d, d, sels[k], index):
+                ret true
+            end
+        end
+        ret false
+    end
+
+    @en "Free"
+    @fa "آزادسازی برگه"
+    pub func Free():
+        if this.computed:
+            engine_free(this.e)
+            this.computed = false
+        end
+        if this.ready:
+            sheet_free(this.d)
+            this.ready = false
+        end
+    end
+
+    @en "AddDefaults"
+    @fa "افزودن پیش فرض ها"
+    pub func AddDefaults(): int:
+        this.init()
+        this.d.adding_ua = true
+        n := parse_css(this.d, UA_CSS, 0, UA_CSS.len(), -1)
+        this.d.adding_ua = false
+        ret n
+    end
+end
+
+func to_length(l: Len): cssbox.Length:
+    switch l.kind:
+        LenKind.Auto, LenKind.None, LenKind.Normal, LenKind.Content:
+            ret cssbox.Auto()
+        end
+        LenKind.MinContent: ret cssbox.MinContent() end
+        LenKind.MaxContent: ret cssbox.MaxContent() end
+        LenKind.FitContent: ret cssbox.FitContent() end
+        else:
+            if l.calc.len() > 0:
+                ret cssbox.Px(0.0)
+            end
+            if l.has_pct and l.px == 0.0:
+                ret cssbox.Percent(l.pct)
+            end
+            ret cssbox.Px(l.px)
+        end
+    end
+    ret cssbox.Auto()
+end
+
+func to_length_in(l: Len, basis: f64, cx: Cx): cssbox.Length:
+    if l.kind == LenKind.Length and (l.calc.len() > 0 or (l.has_pct and l.px != 0.0)):
+        ret cssbox.Px(resolve_len(l, basis, cx))
+    end
+    if l.kind == LenKind.Normal:
+        ret cssbox.Px(0.0)
+    end
+    ret to_length(l)
+end
+
+func box_display(d: Display): cssbox.Display:
+    switch d:
+        Display.None: ret cssbox.Display.None end
+        Display.Contents: ret cssbox.Display.Contents end
+        Display.Inline, Display.InlineBlock, Display.InlineGrid, Display.InlineTable: ret cssbox.Display.InlineBlock end
+        Display.FlowRoot: ret cssbox.Display.FlowRoot end
+        Display.Flex: ret cssbox.Display.Flex end
+        Display.InlineFlex: ret cssbox.Display.InlineFlex end
+        else: ret cssbox.Display.Block end
+    end
+    ret cssbox.Display.Block
+end
+
+func box_style(cs: ComputedStyle, cbw: f64, cbh: f64, exact: bool): cssbox.Style:
+    cx := Cx { fs = cs.font_size }
+    mut st := cssbox.Style {}
+    st.display = box_display(cs.display)
+    st.position = cs.position
+    st.box_sizing = cs.box_sizing
+    st.aspect_ratio = cs.aspect_ratio
+    st.overflow_x = cs.overflow_x
+    st.overflow_y = cs.overflow_y
+    st.direction = cs.direction
+    st.flex_direction = cs.flex_direction
+    st.flex_wrap = cs.flex_wrap
+    st.flex_grow = cs.flex_grow
+    st.flex_shrink = cs.flex_shrink
+    st.justify_content = cs.justify_content
+    st.align_items = cs.align_items
+    st.align_self = cs.align_self
+    st.align_content = cs.align_content
+    st.order = cs.order
+    if exact:
+        st.inset = cssbox.SidesOf(to_length_in(cs.top, cbh, cx), to_length_in(cs.right, cbw, cx), to_length_in(cs.bottom, cbh, cx), to_length_in(cs.left, cbw, cx))
+        st.width = to_length_in(cs.width, cbw, cx)
+        st.height = to_length_in(cs.height, cbh, cx)
+        st.min_width = to_length_in(cs.min_width, cbw, cx)
+        st.min_height = to_length_in(cs.min_height, cbh, cx)
+        st.max_width = to_length_in(cs.max_width, cbw, cx)
+        st.max_height = to_length_in(cs.max_height, cbh, cx)
+        st.margin = cssbox.SidesOf(to_length_in(cs.margin_top, cbw, cx), to_length_in(cs.margin_right, cbw, cx), to_length_in(cs.margin_bottom, cbw, cx), to_length_in(cs.margin_left, cbw, cx))
+        st.padding = cssbox.SidesOf(to_length_in(cs.padding_top, cbw, cx), to_length_in(cs.padding_right, cbw, cx), to_length_in(cs.padding_bottom, cbw, cx), to_length_in(cs.padding_left, cbw, cx))
+        st.flex_basis = to_length_in(cs.flex_basis, cbw, cx)
+        st.row_gap = to_length_in(cs.row_gap, cbh, cx)
+        st.column_gap = to_length_in(cs.column_gap, cbw, cx)
+    else:
+        st.inset = cssbox.SidesOf(to_length(cs.top), to_length(cs.right), to_length(cs.bottom), to_length(cs.left))
+        st.width = to_length(cs.width)
+        st.height = to_length(cs.height)
+        st.min_width = to_length(cs.min_width)
+        st.min_height = to_length(cs.min_height)
+        st.max_width = to_length(cs.max_width)
+        st.max_height = to_length(cs.max_height)
+        st.margin = cssbox.SidesOf(to_length(cs.margin_top), to_length(cs.margin_right), to_length(cs.margin_bottom), to_length(cs.margin_left))
+        st.padding = cssbox.SidesOf(to_length(cs.padding_top), to_length(cs.padding_right), to_length(cs.padding_bottom), to_length(cs.padding_left))
+        st.flex_basis = to_length(cs.flex_basis)
+        st.row_gap = cs.row_gap.kind == LenKind.Normal ? cssbox.Px(0.0) : to_length(cs.row_gap)
+        st.column_gap = cs.column_gap.kind == LenKind.Normal ? cssbox.Px(0.0) : to_length(cs.column_gap)
+    end
+    if cs.min_width.kind == LenKind.Auto:
+        st.min_width = cssbox.Auto()
+    end
+    st.border = cssbox.SidesOf(cssbox.Px(cs.border_top.width), cssbox.Px(cs.border_right.width), cssbox.Px(cs.border_bottom.width), cssbox.Px(cs.border_left.width))
+    ret st
+end
+
+func bezier_at(a: f64, b: f64, t: f64): f64:
+    u := 1.0 - t
+    ret 3.0 * u * u * t * a + 3.0 * u * t * t * b + t * t * t
+end
+
+func bezier_slope(a: f64, b: f64, t: f64): f64:
+    u := 1.0 - t
+    ret 3.0 * u * u * a + 6.0 * u * t * (b - a) + 3.0 * t * t * (1.0 - b)
+end
+
+func mat_mul(m: Matrix, n: Matrix): Matrix:
+    ret Matrix { a = m.a * n.a + m.c * n.b, b = m.b * n.a + m.d * n.b, c = m.a * n.c + m.c * n.d, d = m.b * n.c + m.d * n.d, e = m.a * n.e + m.c * n.f + m.e, f = m.b * n.e + m.d * n.f + m.f }
+end
+
+func mat_translate(x: f64, y: f64): Matrix:
+    ret Matrix { e = x, f = y }
+end
+
+func mat_rotate(deg: f64): Matrix:
+    r := deg * math.PI / 180.0
+    c := math.Cos(r)
+    s := math.Sin(r)
+    ret Matrix { a = c, b = s, c = 0.0 - s, d = c }
+end
+
+func round_tiny(v: f64): f64:
+    if math.Abs(v) < 1.0e-12:
+        ret 0.0
+    end
+    ret v
+end
+
+func matrix_of(cs: ComputedStyle, width: f64, height: f64): Matrix:
+    cx := Cx { fs = cs.font_size }
+    ox := resolve_len(cs.transform_origin_x, width, cx)
+    oy := resolve_len(cs.transform_origin_y, height, cx)
+    mut m := mat_translate(ox, oy)
+    tx := resolve_len(cs.translate_x, width, cx)
+    ty := resolve_len(cs.translate_y, height, cx)
+    if tx != 0.0 or ty != 0.0:
+        m = mat_mul(m, mat_translate(tx, ty))
+    end
+    if cs.rotate != 0.0:
+        m = mat_mul(m, mat_rotate(cs.rotate))
+    end
+    if cs.scale_x != 1.0 or cs.scale_y != 1.0:
+        m = mat_mul(m, Matrix { a = cs.scale_x, d = cs.scale_y })
+    end
+    repeat cs.transforms.len() in i:
+        f := cs.transforms[i]
+        switch f.kind:
+            TransformKind.Translate:
+                m = mat_mul(m, mat_translate(resolve_len(f.x, width, cx), resolve_len(f.y, height, cx)))
+                break
+            end
+            TransformKind.Scale:
+                m = mat_mul(m, Matrix { a = f.a, d = f.d })
+                break
+            end
+            TransformKind.Rotate:
+                m = mat_mul(m, mat_rotate(f.a))
+                break
+            end
+            TransformKind.Skew:
+                m = mat_mul(m, Matrix { c = math.Tan(f.a * math.PI / 180.0), b = math.Tan(f.b * math.PI / 180.0) })
+                break
+            end
+            else:
+                m = mat_mul(m, Matrix { a = f.a, b = f.b, c = f.c, d = f.d, e = f.e, f = f.f })
+            end
+        end
+    end
+    m = mat_mul(m, mat_translate(0.0 - ox, 0.0 - oy))
+    ret Matrix { a = round_tiny(m.a), b = round_tiny(m.b), c = round_tiny(m.c), d = round_tiny(m.d), e = round_tiny(m.e), f = round_tiny(m.f) }
+end
+
+@en "NewSheet"
+@fa "برگه تازه"
+pub func NewSheet(): Sheet:
+    mut s := Sheet {}
+    _n := s.AddDefaults()
+    ret s
+end
+
+@en "EmptySheet"
+@fa "برگه خالی"
+pub func EmptySheet(): Sheet:
+    mut s := Sheet {}
+    _n := s.RuleCount()
+    ret s
+end
+
+@en "DefaultCss"
+@fa "سی اس اس پیش فرض"
+pub func DefaultCss(): str:
+    ret str.Clone(UA_CSS)
+end
+
+@en "TagOf"
+@fa "برچسب نوع"
+pub func TagOf(kind: str): str:
+    ret str.Clone(tag_of(kind))
+end
+
+@en "NewElement"
+@fa "عنصر تازه"
+pub func NewElement(kind: str, parent: int): Element:
+    mut e := Element { kind = kind, tag = tag_of(kind), parent = parent }
+    e.attr_names = Vector {} as Vector<str>
+    e.attr_values = Vector {} as Vector<str>
+    e.media_conditions = Vector {} as Vector<str>
+    e.media_declarations = Vector {} as Vector<str>
+    ret e
+end
+
+@en "HoverChain"
+@fa "زنجیره اشاره"
+pub func HoverChain(elements &: Vector<Element>, target: int): int:
+    n := elements.len()
+    mut want := Vector {} as Vector<bool>
+    defer want.free()
+    repeat n:
+        want.push(false)
+    end
+    mut j := target
+    until j >= 0 and j < n:
+        want[j] = true
+        p := elements[j].parent
+        j = p < j ? p : -1
+    end
+    mut top := -1
+    repeat n in i:
+        if elements[i].hovered != want[i]:
+            mut el := elements.ref(i)
+            el.hovered = want[i]
+            if top < 0:
+                top = i
+            end
+        end
+    end
+    ret top
+end
+
+@en "ToBox"
+@fa "به جعبه"
+pub func ToBox(cs: ComputedStyle): cssbox.Style:
+    ret box_style(cs, 0.0, 0.0, false)
+end
+
+@en "NeedsBasis"
+@fa "نیاز به پایه"
+pub func NeedsBasis(cs: ComputedStyle): bool:
+    ls := [cs.top, cs.right, cs.bottom, cs.left, cs.width, cs.height, cs.min_width, cs.min_height, cs.max_width, cs.max_height, cs.margin_top, cs.margin_right, cs.margin_bottom, cs.margin_left, cs.padding_top, cs.padding_right, cs.padding_bottom, cs.padding_left, cs.flex_basis, cs.row_gap, cs.column_gap]
+    repeat len(ls) in i:
+        l := ls[i]
+        if l.kind == LenKind.Length and (l.calc.len() > 0 or (l.has_pct and l.px != 0.0)):
+            ret true
+        end
+    end
+    ret false
+end
+
+@en "ToBoxIn"
+@fa "به جعبه در"
+pub func ToBoxIn(cs: ComputedStyle, cb_width: f64, cb_height: f64): cssbox.Style:
+    ret box_style(cs, cb_width, cb_height, true)
+end
+
+@en "Resolve"
+@fa "حل طول"
+pub func Resolve(l: Len, basis: f64): f64:
+    ret resolve_len(l, basis, Cx {})
+end
+
+@en "ParseColor"
+@fa "تجزیه رنگ"
+pub func ParseColor(text: str, out &: Color): bool:
+    mut t := Vector {} as Vector<Tok>
+    tokenize(text, t)
+    ok := parse_color_at(t, 0, t.len(), false, Color {}, out)
+    free_toks(t, 0)
+    t.free()
+    ret ok
+end
+
+@en "ColorText"
+@fa "متن رنگ"
+pub func ColorText(c: Color): str:
+    ret color_text(c)
+end
+
+@en "LenText"
+@fa "متن طول"
+pub func LenText(l: Len): str:
+    ret len_text(l)
+end
+
+@en "ParseDeclarations"
+@fa "تجزیه اعلان ها"
+pub func ParseDeclarations(text: str): Vector<Declaration>:
+    mut sd := sheet_new()
+    b := parse_block(sd, text)
+    blk := sd.blocks[b]
+    mut out := Vector {} as Vector<Declaration>
+    repeat blk.n in k:
+        d := sd.decls[blk.d0 + k]
+        mut name := prop_name(d.prop)
+        if d.prop == P_CUSTOM or name.len() == 0:
+            name = d.name
+        end
+        out.push(Declaration { name = str.Clone(name), value = str.Clone(d.value), important = d.important })
+    end
+    sheet_free(sd)
+    ret out
+end
+
+@en "FreeDeclarations"
+@fa "آزادسازی اعلان ها"
+pub func FreeDeclarations(list &: Vector<Declaration>):
+    repeat list.len() in i:
+        d := list[i]
+        sfree(d.name)
+        sfree(d.value)
+    end
+    list.free()
+end
+
+@en "SelectorSpecificity"
+@fa "ویژگی مندی گزینشگر"
+pub func SelectorSpecificity(selector: str): Specificity:
+    mut sd := sheet_new()
+    mut sels := Vector {} as Vector<int>
+    mut sp := Specificity {}
+    if parse_selector_list(sd, selector, sels):
+        mut best := 0
+        repeat sels.len() in k:
+            v := sd.selectors[sels[k]].spec
+            if v > best:
+                best = v
+            end
+        end
+        sp = Specificity { ids = best / 1000000, classes = (best / 1000) % 1000, types = best % 1000 }
+    else:
+        sp = Specificity { ids = -1, classes = -1, types = -1 }
+    end
+    sels.free()
+    sheet_free(sd)
+    ret sp
+end
+
+@en "MediaMatches"
+@fa "تطبیق رسانه"
+pub func MediaMatches(condition: str, env: Env): bool:
+    ret media_matches(condition, env)
+end
+
+@en "EasingAt"
+@fa "مقدار تسهیل"
+pub func EasingAt(t: Timing, x: f64): f64:
+    if x <= 0.0 and t.kind != TimingKind.Steps:
+        ret 0.0
+    end
+    if x >= 1.0 and t.kind != TimingKind.Steps:
+        ret 1.0
+    end
+    switch t.kind:
+        TimingKind.Linear:
+            ret x
+        end
+        TimingKind.Steps:
+            n := t.steps
+            mut jumps := n
+            if t.step_position == StepPosition.JumpNone:
+                jumps = n - 1
+            else t.step_position == StepPosition.JumpBoth:
+                jumps = n + 1
+            end
+            mut cur := math.Floor(x * n as f64)
+            if t.step_position == StepPosition.JumpStart or t.step_position == StepPosition.JumpBoth:
+                cur++
+            end
+            if x >= 0.0 and cur < 0.0:
+                cur = 0.0
+            end
+            if x <= 1.0 and cur > jumps as f64:
+                cur = jumps as f64
+            end
+            ret cur / jumps as f64
+        end
+        else:
+            mut lo := 0.0
+            mut hi := 1.0
+            mut tt := x
+            repeat 8:
+                xv := bezier_at(t.x1, t.x2, tt) - x
+                sl := bezier_slope(t.x1, t.x2, tt)
+                if math.Abs(sl) < 1.0e-6:
+                    break
+                end
+                tt -= xv / sl
+            end
+            if tt < 0.0 or tt > 1.0 or math.Abs(bezier_at(t.x1, t.x2, tt) - x) > 1.0e-7:
+                tt = x
+                repeat 40:
+                    xv := bezier_at(t.x1, t.x2, tt)
+                    if xv < x:
+                        lo = tt
+                    else:
+                        hi = tt
+                    end
+                    tt = (lo + hi) / 2.0
+                end
+            end
+            ret bezier_at(t.y1, t.y2, tt)
+        end
+    end
+    ret x
+end
+
+@en "TransformMatrix"
+@fa "ماتریس تبدیل"
+pub func TransformMatrix(cs: ComputedStyle, width: f64, height: f64): Matrix:
+    ret matrix_of(cs, width, height)
+end
+
+@en "ValueText"
+@fa "متن مقدار"
+pub func ValueText(cs: ComputedStyle, property: str): str:
+    ret value_text(cs, property)
+end
+
+@en "UsedRadii"
+@fa "شعاع های به کار رفته"
+pub func UsedRadii(cs: ComputedStyle, width: f64, height: f64): Radii:
+    cx := Cx { fs = cs.font_size }
+    mut r := Radii {}
+    r.top_left_x = math.Max(0.0, resolve_len(cs.radius_top_left.h, width, cx))
+    r.top_left_y = math.Max(0.0, resolve_len(cs.radius_top_left.v, height, cx))
+    r.top_right_x = math.Max(0.0, resolve_len(cs.radius_top_right.h, width, cx))
+    r.top_right_y = math.Max(0.0, resolve_len(cs.radius_top_right.v, height, cx))
+    r.bottom_right_x = math.Max(0.0, resolve_len(cs.radius_bottom_right.h, width, cx))
+    r.bottom_right_y = math.Max(0.0, resolve_len(cs.radius_bottom_right.v, height, cx))
+    r.bottom_left_x = math.Max(0.0, resolve_len(cs.radius_bottom_left.h, width, cx))
+    r.bottom_left_y = math.Max(0.0, resolve_len(cs.radius_bottom_left.v, height, cx))
+    mut f := 1.0
+    top := r.top_left_x + r.top_right_x
+    bottom := r.bottom_left_x + r.bottom_right_x
+    left := r.top_left_y + r.bottom_left_y
+    right := r.top_right_y + r.bottom_right_y
+    if top > width and top > 0.0:
+        f = math.Min(f, width / top)
+    end
+    if bottom > width and bottom > 0.0:
+        f = math.Min(f, width / bottom)
+    end
+    if left > height and left > 0.0:
+        f = math.Min(f, height / left)
+    end
+    if right > height and right > 0.0:
+        f = math.Min(f, height / right)
+    end
+    if f < 1.0:
+        r.top_left_x *= f
+        r.top_left_y *= f
+        r.top_right_x *= f
+        r.top_right_y *= f
+        r.bottom_right_x *= f
+        r.bottom_right_y *= f
+        r.bottom_left_x *= f
+        r.bottom_left_y *= f
+    end
+    ret r
+end
+
+@en "FontFamilies"
+@fa "خانواده های قلم"
+pub func FontFamilies(cs: ComputedStyle): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    mut parts := str.Split(cs.font_family, ", ")
+    repeat parts.len() in i:
+        out.push(parts[i])
+    end
+    parts.free()
+    ret out
+end

@@ -703,6 +703,44 @@ func _r3_filter_upcase(out &: compress.ByteBuf, at: int, n: int): int:
     ret n - w
 end
 
+func _r3_apply_one(f: _R3Filter, out &: compress.ByteBuf, at: int, shrink &: i64): int:
+    p := ((out.data as i64) + (at as i64)) as u8*
+    n := f.len as int
+    if n > 0x40000:
+        ret 0
+    end
+    if f.kind == 7:
+        shrink += _r3_filter_upcase(out, at, n) as i64
+    else f.kind == 1:
+        _r5_filter_e8(p, n, f.start, false)
+    else f.kind == 2:
+        _r5_filter_e8(p, n, f.start, true)
+    else f.kind == 3:
+        if n >= 21:
+            _r3_filter_itanium(p, n, f.start)
+        end
+    else f.kind == 4:
+        if f.r0 > 0 and f.r0 <= 1024 and n <= 0x20000:
+            if not _r5_filter_delta(p, n, f.r0):
+                ret 4
+            end
+        end
+    else f.kind == 5:
+        if f.r0 > 3 and f.r0 - 3 <= n and f.r1 <= 2 and n >= 3 and n <= 0x20000:
+            if not _r3_filter_rgb(p, n, f.r0 - 3, f.r1):
+                ret 4
+            end
+        end
+    else f.kind == 6:
+        if f.r0 > 0 and f.r0 <= 128 and n <= 0x20000:
+            if not _r3_filter_audio(p, n, f.r0):
+                ret 4
+            end
+        end
+    end
+    ret 0
+end
+
 func _r3_apply_filters(d &: _R3, out &: compress.ByteBuf, base: int, produced: i64, shrink &: i64): int:
     mut i := 0
     shrink = 0 as i64
@@ -712,40 +750,48 @@ func _r3_apply_filters(d &: _R3, out &: compress.ByteBuf, base: int, produced: i
         if f.start < 0 or f.len <= 0 or f.start + f.len > produced:
             continue
         end
-        p := ((out.data as i64) + (base as i64) + (f.start - shrink)) as u8*
-        n := f.len as int
-        if n > 0x40000:
+        st := _r3_apply_one(f, out, base + ((f.start - shrink) as int), shrink)
+        if st != 0:
+            ret st
+        end
+    end
+    ret 0
+end
+
+func _r3_drain(d &: _R3, out &: compress.ByteBuf, sink &: compress.FileSink, drained &: i64, shrink &: i64, final: bool): int:
+    produced := drained + (out.len as i64) + shrink
+    until d.filters.len() > 0:
+        f := d.filters.get(0)
+        if f.len <= 0 or f.len > 0x40000 or f.start - shrink < drained:
+            d.filters.remove_at(0)
             continue
         end
-        if f.kind == 7:
-            shrink += _r3_filter_upcase(out, base + ((f.start - shrink) as int), n) as i64
-        else f.kind == 1:
-            _r5_filter_e8(p, n, f.start, false)
-        else f.kind == 2:
-            _r5_filter_e8(p, n, f.start, true)
-        else f.kind == 3:
-            if n >= 21:
-                _r3_filter_itanium(p, n, f.start)
-            end
-        else f.kind == 4:
-            if f.r0 > 0 and f.r0 <= 1024 and n <= 0x20000:
-                if not _r5_filter_delta(p, n, f.r0):
-                    ret 4
-                end
-            end
-        else f.kind == 5:
-            if f.r0 > 3 and f.r0 - 3 <= n and f.r1 <= 2 and n >= 3 and n <= 0x20000:
-                if not _r3_filter_rgb(p, n, f.r0 - 3, f.r1):
-                    ret 4
-                end
-            end
-        else f.kind == 6:
-            if f.r0 > 0 and f.r0 <= 128 and n <= 0x20000:
-                if not _r3_filter_audio(p, n, f.r0):
-                    ret 4
-                end
-            end
+        if f.start + f.len > produced:
+            break
         end
+        st := _r3_apply_one(f, out, (f.start - shrink - drained) as int, shrink)
+        if st != 0:
+            ret st
+        end
+        d.filters.remove_at(0)
+    end
+    mut safe := drained + (out.len as i64)
+    if not final and d.filters.len() > 0:
+        fs := d.filters.get(0).start - shrink
+        if fs < safe:
+            safe = fs
+        end
+    end
+    n := safe - drained
+    if n > (0 as i64):
+        if not compress.SinkWrite(sink, out.data, n as int):
+            ret 7
+        end
+        rest := out.len - (n as int)
+        tail := ((out.data as i64) + n) as void*
+        mem.MemMove(out.data, tail, rest as u64)
+        out.len = rest
+        drained += n
     end
     ret 0
 end
@@ -807,8 +853,10 @@ func _r3_vm_ppm(d &: _R3, b &: _RarBits, produced: i64): bool:
     ret ok
 end
 
-func _r3_decode(d &: _R3, p: u8*, n: int, unp: i64, limit: i64, out &: compress.ByteBuf): int:
+func _r3_decode(d &: _R3, p: u8*, n: int, unp: i64, limit: i64, out &: compress.ByteBuf, sink &: compress.FileSink, stream: bool): int:
     mut b := _RarBits { p = p, n = n, pos = 0 }
+    mut drained := 0 as i64
+    mut shrink := 0 as i64
     base := out.len
     start_total := d.total
     d.filters.clear()
@@ -846,6 +894,12 @@ func _r3_decode(d &: _R3, p: u8*, n: int, unp: i64, limit: i64, out &: compress.
         end
         if ((d.wp - d.fl) & d.wmask) >= (d.wsize >> 1):
             _r3_flush(d, out)
+            if stream:
+                dst := _r3_drain(d, out, sink, drained, shrink, false)
+                if dst != 0:
+                    ret dst
+                end
+            end
         end
         if d.block_ppm:
             ch := _pp_decode(d.ppm, b)
@@ -1035,7 +1089,16 @@ func _r3_decode(d &: _R3, p: u8*, n: int, unp: i64, limit: i64, out &: compress.
     if d.unsup:
         ret 2
     end
-    mut shrink := 0 as i64
+    if stream:
+        dst := _r3_drain(d, out, sink, drained, shrink, true)
+        if dst != 0:
+            ret dst
+        end
+        if unp >= 0 and produced - shrink != unp:
+            ret 4
+        end
+        ret 0
+    end
     st := _r3_apply_filters(d, out, base, produced, shrink)
     if st == 0 and unp >= 0 and produced - shrink != unp:
         ret 4

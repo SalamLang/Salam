@@ -69,6 +69,38 @@ pub const ZipMethodLzma := 14
 @fa "روش زیپ زد استاندارد"
 pub const ZipMethodZstd := 93
 
+@en "ZipEncAuto"
+@fa "رمزگذاری زیپ خودکار"
+pub const ZipEncAuto := 0
+@en "ZipEncZipCrypto"
+@fa "رمزگذاری زیپ کریپتو"
+pub const ZipEncZipCrypto := 1
+@en "ZipEncAes128"
+@fa "رمزگذاری زیپ ای ای اس۱۲۸"
+pub const ZipEncAes128 := 2
+@en "ZipEncAes192"
+@fa "رمزگذاری زیپ ای ای اس۱۹۲"
+pub const ZipEncAes192 := 3
+@en "ZipEncAes256"
+@fa "رمزگذاری زیپ ای ای اس۲۵۶"
+pub const ZipEncAes256 := 4
+
+struct _ZipRec:
+    pub name: str = ""
+    pub flags: int = 0
+    pub method: int = 0
+    pub crc: u32 = 0 as u32
+    pub comp: i64 = 0 as i64
+    pub uncomp: i64 = 0 as i64
+    pub local: i64 = 0 as i64
+    pub dos_time: int = 0
+    pub dos_date: int = 0
+    pub next: int = 0
+    pub aes: int = 0
+    pub aes_ver: int = 0
+    pub aes_method: int = 0
+end
+
 @en "ZipFileInput"
 @fa "ورودی پرونده زیپ"
 pub struct ZipFileInput:
@@ -90,22 +122,15 @@ pub struct ZipFileInput:
     @en "level"
     @fa "سطح"
     pub level: int = 0
-end
-
-struct _ZipRec:
-    pub name: str = ""
-    pub flags: int = 0
-    pub method: int = 0
-    pub crc: u32 = 0 as u32
-    pub comp: i64 = 0 as i64
-    pub uncomp: i64 = 0 as i64
-    pub local: i64 = 0 as i64
-    pub dos_time: int = 0
-    pub dos_date: int = 0
-    pub next: int = 0
-    pub aes: int = 0
-    pub aes_ver: int = 0
-    pub aes_method: int = 0
+    @en "path"
+    @fa "مسیر منبع"
+    pub path: str = ""
+    @en "password"
+    @fa "گذرواژه"
+    pub password: str = ""
+    @en "encryption"
+    @fa "رمزگذاری"
+    pub encryption: int = 0
 end
 
 func _zip_find_eocd(p: void*, n: int, eocd_pos_out &: int): bool:
@@ -529,6 +554,10 @@ func _zip_build(files: Vector<ZipFileInput>, force64: bool): compress.ByteBuf:
     mut v := 0
     until v < files.len():
         f := files.get(v)
+        if f.path.len() > 0:
+            v++
+            continue
+        end
         if f.name.len() > 65535 or f.data_len < 0 or (f.data_ptr == null and f.data_len > 0):
             ret compress.NewByteBuf()
         end
@@ -544,7 +573,20 @@ func _zip_build(files: Vector<ZipFileInput>, force64: bool): compress.ByteBuf:
     mut count := 0
     mut i := 0
     until i < files.len():
-        f := files.get(i)
+        mut f := files.get(i)
+        mut loaded := compress.NewByteBuf()
+        if f.path.len() > 0:
+            mut rok := false
+            loaded = ReadBinaryFile(f.path, rok)
+            if not rok or f.name.len() > 65535:
+                compress.BufFree(loaded)
+                compress.BufFree(body)
+                compress.BufFree(central)
+                ret compress.NewByteBuf()
+            end
+            f.data_ptr = loaded.data
+            f.data_len = loaded.len
+        end
         crc := compress.CRC32(f.data_ptr, f.data_len)
         mut comp_ptr := f.data_ptr
         mut comp_len := f.data_len
@@ -651,6 +693,7 @@ func _zip_build(files: Vector<ZipFileInput>, force64: bool): compress.ByteBuf:
         if has_owned:
             compress.BufFree(owned)
         end
+        compress.BufFree(loaded)
         count++
         i++
     end
@@ -708,26 +751,43 @@ end
 @en "ZipCreate"
 @fa "ساخت زیپ"
 pub func ZipCreate(files: Vector<ZipFileInput>): compress.ByteBuf:
+    if _zip_has_secret(files):
+        ret _zip_stream_mem(files, false)
+    end
     ret _zip_build(files, false)
 end
 
 @en "ZipCreate64"
 @fa "ساخت زیپ بزرگ"
 pub func ZipCreate64(files: Vector<ZipFileInput>): compress.ByteBuf:
+    if _zip_has_secret(files):
+        ret _zip_stream_mem(files, true)
+    end
     ret _zip_build(files, true)
 end
 
 @en "ZipCreateFile"
 @fa "ساخت پرونده زیپ"
 pub func ZipCreateFile(files: Vector<ZipFileInput>, outpath: str): bool:
-    mut out := ZipCreate(files)
-    if out.len == 0:
-        compress.BufFree(out)
-        ret false
-    end
-    ok := WriteBinaryFileBuf(outpath, out)
-    compress.BufFree(out)
-    ret ok
+    ret _zip_stream(files, outpath, false)
+end
+
+@en "ZipCreateFile64"
+@fa "ساخت پرونده زیپ بزرگ"
+pub func ZipCreateFile64(files: Vector<ZipFileInput>, outpath: str): bool:
+    ret _zip_stream(files, outpath, true)
+end
+
+@en "MakeZipFilePath"
+@fa "ساخت ورودی پرونده زیپ از مسیر"
+pub func MakeZipFilePath(name: str, path: str, method: int, level: int): ZipFileInput:
+    ret ZipFileInput { name = name, path = path, method = method, mtime = 0 as i64, level = level }
+end
+
+@en "MakeZipFileInputEncrypted"
+@fa "ساخت ورودی پرونده زیپ رمزدار"
+pub func MakeZipFileInputEncrypted(name: str, data_ptr: void*, data_len: int, method: int, level: int, password: str, encryption: int): ZipFileInput:
+    ret ZipFileInput { name = name, data_ptr = data_ptr, data_len = data_len, method = method, mtime = 0 as i64, level = level, password = password, encryption = encryption }
 end
 
 @en "ZipList"

@@ -6,7 +6,7 @@ import type { Theme } from "./theme";
 import { t } from "./i18n";
 
 export function providerFromPath(): string {
-  return /^\/auth\/callback\/(github|figma)\/?$/.exec(location.pathname)?.[1] ?? "";
+  return /^\/auth\/callback\/(github|figma-mcp|figma)\/?$/.exec(location.pathname)?.[1] ?? "";
 }
 
 function safe(next: string | undefined): string {

@@ -17,6 +17,7 @@ package main
 import archive
 import compress
 import filepath
+import mem
 import os
 import str
 
@@ -194,15 +195,24 @@ func noise(n: int): compress.ByteBuf:
     ret b
 end
 
-func same(path: str, want: compress.ByteBuf): bool:
+func same(dir: str, name: str, want: compress.ByteBuf): bool:
+    mut want2 := want
+    path := filepath.Join(dir, name)
     mut ok := false
-    got := archive.ReadBinaryFile(path, ok)
-    ret ok and compress.BufEquals(got, want)
+    mut got := archive.ReadBinaryFile(path, ok)
+    r := ok and compress.BufEquals(got, want2)
+    compress.BufFree(got)
+    compress.BufFree(want2)
+    mem.Free(path as void*)
+    ret r
 end
 
 func check(label: str, hex: str, password: str, dir: str):
-    path := filepath.Join(dir, label + ".zip")
-    archive.WriteBinaryFileBuf(path, unhex(hex))
+    zname := label + ".zip"
+    path := filepath.Join(dir, zname)
+    mut data := unhex(hex)
+    archive.WriteBinaryFileBuf(path, data)
+    compress.BufFree(data)
     mut zf := archive.ZipOpenFile(path)
     println label, "open", zf.status
     mut es := archive.ZipFileEntries(zf)
@@ -211,14 +221,21 @@ func check(label: str, hex: str, password: str, dir: str):
     end
     archive.FreeEntries(es)
     out := filepath.Join(dir, label)
+    wpath := filepath.Join(dir, "w.bin")
+    cpath := filepath.Join(dir, "c.bin")
     println "  no password", archive.ZipFileExtractAll(zf, out, 0 as i64)
     archive.ZipFileSetPassword(zf, "wrong")
-    println "  wrong password", archive.ZipFileExtractTo(zf, "t.txt", filepath.Join(dir, "w.bin"), 0 as i64)
+    println "  wrong password", archive.ZipFileExtractTo(zf, "t.txt", wpath, 0 as i64)
     archive.ZipFileSetPassword(zf, password)
     println "  all", archive.ZipFileExtractAll(zf, out, 0 as i64)
-    println "  text", same(filepath.Join(out, "t.txt"), text(120)), "noise", same(filepath.Join(out, "n.bin"), noise(300))
-    println "  cap", archive.ZipFileExtractTo(zf, "t.txt", filepath.Join(dir, "c.bin"), 100 as i64)
+    println "  text", same(out, "t.txt", text(120)), "noise", same(out, "n.bin", noise(300))
+    println "  cap", archive.ZipFileExtractTo(zf, "t.txt", cpath, 100 as i64)
     archive.ZipFileClose(zf)
+    mem.Free(zname as void*)
+    mem.Free(path as void*)
+    mem.Free(out as void*)
+    mem.Free(wpath as void*)
+    mem.Free(cpath as void*)
 end
 
 func main:
@@ -233,4 +250,5 @@ func main:
     check("bzip2", Z_BZ2, "", dir)
     println archive.ZipStatusText(archive.ZIP_BAD_PASSWORD)
     os.RemoveAll(dir)
+    mem.Free(dir as void*)
 end

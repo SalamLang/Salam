@@ -13,7 +13,7 @@ import { autoDir } from "./dir";
 import { planName, registerPlans } from "./Plans";
 import { Checkbox } from "./Checkbox";
 
-type Picked = { id: number; name: string } | null;
+export type Picked = { id: number; name: string } | null;
 type UsageMode = "all" | "chat" | "api";
 type ChartMode = "calls" | "tokens";
 
@@ -44,7 +44,7 @@ function exactTitle(n: number): string | undefined {
   return Math.abs(n) >= 10000 ? fmtNum(n) : undefined;
 }
 
-function Tile({ label, value, sub, tone, compact, display }: { label: string; value: number; sub?: string; tone?: "danger"; compact?: boolean; display?: string }) {
+export function Tile({ label, value, sub, tone, compact, display }: { label: string; value: number; sub?: string; tone?: "danger"; compact?: boolean; display?: string }) {
   return (
     <div className={`card tile ${tone || ""}`}>
       <span className="tile-label">{label}</span>
@@ -421,7 +421,7 @@ function TopList({ title, items, ltr }: { title: string; items: { name: string; 
   );
 }
 
-function Users({ picked, onPick, notify }: { picked: Picked; onPick: (p: Picked) => void; notify: (msg: string, ok?: boolean) => void }) {
+function Users({ picked, onNavigate }: { picked: Picked; onNavigate: (path: string) => void }) {
   const [q, setQ] = useState("");
   const [query, setQuery] = useState("");
   const [offset, setOffset] = useState(0);
@@ -485,7 +485,7 @@ function Users({ picked, onPick, notify }: { picked: Picked; onPick: (p: Picked)
           {error}
         </div>
       )}
-      <div className={`table-wrap scroll-y ${loading ? "busy" : ""}`}>
+      <div className={`table-wrap ${loading ? "busy" : ""}`}>
         <table className="data-table">
           <thead>
             <tr>
@@ -517,9 +517,9 @@ function Users({ picked, onPick, notify }: { picked: Picked; onPick: (p: Picked)
             {data?.users.map((u) => (
               <tr key={u.id} className={picked?.id === u.id ? "selected" : ""}>
                 <td>
-                  <button type="button" className="link" onClick={() => onPick(picked?.id === u.id ? null : { id: u.id, name: u.name })} aria-pressed={picked?.id === u.id} title={t("نمایش فعالیت، درخواست‌ها و برنامه‌های این کاربر", "Show this user's activity, requests and apps")}>
+                  <a className="link" href={`/admin/users/${u.id}`} onClick={(e) => openLink(e, `/admin/users/${u.id}`, onNavigate)} title={t("پروفایل کامل این کاربر", "Open the full profile of this user")}>
                     <bdi>{u.name}</bdi>
-                  </button>
+                  </a>
                 </td>
                 <td dir="ltr" className="cell-ltr">
                   {u.email}
@@ -583,7 +583,7 @@ function Users({ picked, onPick, notify }: { picked: Picked; onPick: (p: Picked)
   );
 }
 
-function Events({ picked, onPick }: { picked: Picked; onPick: (p: Picked) => void }) {
+export function Events({ picked, onPick }: { picked: Picked; onPick: (p: Picked) => void }) {
   const [tool, setTool] = useState("");
   const [client, setClient] = useState("");
   const [applied, setApplied] = useState({ tool: "", client: "" });
@@ -679,7 +679,7 @@ function Events({ picked, onPick }: { picked: Picked; onPick: (p: Picked) => voi
   );
 }
 
-function RequestsFeed({ picked, onPick }: { picked: Picked; onPick: (p: Picked) => void }) {
+export function RequestsFeed({ picked, onPick }: { picked: Picked; onPick: (p: Picked) => void }) {
   const [project, setProject] = useState("");
   const [keyId, setKeyId] = useState("");
   const [applied, setApplied] = useState<{ project: string; key?: number }>({ project: "" });
@@ -808,10 +808,11 @@ function toman(n: number): string {
   return t(`${fmtNum(n)} تومان`, `${fmtNum(n)} toman`);
 }
 
-const PLAN_NUMBERS: { key: "price" | "usd" | "days" | "chat_5h" | "chat_daily" | "chat_weekly" | "api_5h" | "api_daily" | "api_weekly" | "parallel" | "sort"; fa: string; en: string }[] = [
+const PLAN_NUMBERS: { key: "price" | "usd" | "days" | "hours" | "chat_5h" | "chat_daily" | "chat_weekly" | "api_5h" | "api_daily" | "api_weekly" | "parallel" | "sort"; fa: string; en: string }[] = [
   { key: "price", fa: "قیمت (تومان)", en: "Price (toman)" },
   { key: "usd", fa: "قیمت (دلار)", en: "Price (USD)" },
   { key: "days", fa: "مدت (روز، ۰ بدون انقضا)", en: "Days (0 never expires)" },
+  { key: "hours", fa: "مدت (ساعت، جایگزین روز)", en: "Hours (replaces days)" },
   { key: "chat_5h", fa: "پیام در ۵ ساعت (۰ نامحدود)", en: "Messages per 5 hours (0 unlimited)" },
   { key: "chat_daily", fa: "پیام در روز (۰ نامحدود)", en: "Messages per day (0 unlimited)" },
   { key: "chat_weekly", fa: "پیام در هفته (۰ نامحدود)", en: "Messages per week (0 unlimited)" },
@@ -830,7 +831,7 @@ function draftOf(p: Partial<AdminPlan>): PlanDraft {
   return d;
 }
 
-function PlanEditor({ plan, onSaved, notify }: { plan: AdminPlan | null; onSaved: () => void; notify: (msg: string, ok?: boolean) => void }) {
+function PlanEditor({ plan, onSaved, notify, move }: { plan: AdminPlan | null; onSaved: () => void; notify: (msg: string, ok?: boolean) => void; move?: { up: (() => void) | null; down: (() => void) | null; busy: boolean } }) {
   const [d, setD] = useState<PlanDraft>(() => draftOf(plan ?? {}));
   const [saving, setSaving] = useState(false);
   const fresh = plan === null;
@@ -866,6 +867,16 @@ function PlanEditor({ plan, onSaved, notify }: { plan: AdminPlan | null; onSaved
           {fresh ? t("پلن تازه", "New plan") : <bdi>{plan.name}</bdi>}
           {!fresh && <span className="muted small"> {plan.id} · {fmtNum(plan.subscribers)} {t("مشترک فعال", "active subscribers")}</span>}
         </h4>
+        {move && (
+          <div className="plan-move">
+            <button type="button" className="button small" disabled={!move.up || move.busy} onClick={move.up ?? undefined} aria-label={t("بردن به بالا", "Move up")} title={t("بردن به بالا", "Move up")}>
+              ↑
+            </button>
+            <button type="button" className="button small" disabled={!move.down || move.busy} onClick={move.down ?? undefined} aria-label={t("آوردن به پایین", "Move down")} title={t("آوردن به پایین", "Move down")}>
+              ↓
+            </button>
+          </div>
+        )}
       </div>
       <div className="grant-grid plan-editor-grid">
         {fresh && (
@@ -890,7 +901,7 @@ function PlanEditor({ plan, onSaved, notify }: { plan: AdminPlan | null; onSaved
           <span>{t("توضیح انگلیسی", "English note")}</span>
           <input dir="auto" value={d.note_en} onChange={(e) => set("note_en", e.target.value)} />
         </label>
-        {PLAN_NUMBERS.filter((f) => !(free && (f.key === "price" || f.key === "usd" || f.key === "days"))).map((f) => (
+        {PLAN_NUMBERS.filter((f) => !(free && (f.key === "price" || f.key === "usd" || f.key === "days" || f.key === "hours"))).map((f) => (
           <label key={f.key} className="grant-field">
             <span>{t(f.fa, f.en)}</span>
             <input type="number" min={0} inputMode="numeric" dir="ltr" value={d[f.key]} onChange={(e) => set(f.key, e.target.value)} />
@@ -913,6 +924,7 @@ function PlansAdmin({ notify }: { notify: (msg: string, ok?: boolean) => void })
   const [plans, setPlans] = useState<AdminPlan[] | null>(null);
   const [error, setError] = useState("");
   const [adding, setAdding] = useState(false);
+  const [moving, setMoving] = useState(false);
 
   const load = useCallback(() => {
     setError("");
@@ -928,6 +940,23 @@ function PlansAdmin({ notify }: { notify: (msg: string, ok?: boolean) => void })
   useEffect(() => {
     load();
   }, [load]);
+
+  const shift = async (from: number, to: number) => {
+    if (!plans || moving) return;
+    const order = plans.slice();
+    const [item] = order.splice(from, 1);
+    order.splice(to, 0, item);
+    setMoving(true);
+    try {
+      await Promise.all(order.map((p, i) => (p.sort === i + 1 ? null : api.adminPlanSave(p.id, { sort: i + 1 }))));
+      notify(t("ترتیب پلن‌ها ذخیره شد.", "Plan order saved."));
+    } catch (err) {
+      notify(errText(err, t("ذخیره‌ی ترتیب ناموفق بود.", "Could not save the order.")), false);
+    } finally {
+      setMoving(false);
+      load();
+    }
+  };
 
   return (
     <section className="card panel">
@@ -949,20 +978,28 @@ function PlansAdmin({ notify }: { notify: (msg: string, ok?: boolean) => void })
           <span className="spinner" />
         </div>
       ) : (
-        plans?.map((p) => <PlanEditor key={p.id + JSON.stringify(p)} plan={p} notify={notify} onSaved={load} />)
+        plans?.map((p, i) => (
+          <PlanEditor
+            key={p.id + JSON.stringify(p)}
+            plan={p}
+            notify={notify}
+            onSaved={load}
+            move={{ up: i > 0 ? () => void shift(i, i - 1) : null, down: i < plans.length - 1 ? () => void shift(i, i + 1) : null, busy: moving }}
+          />
+        ))
       )}
     </section>
   );
 }
 
-function Subscriptions({ picked, notify }: { picked: Picked; notify: (msg: string, ok?: boolean) => void }) {
+export function Subscriptions({ picked, notify, history, userEmail }: { picked: Picked; notify: (msg: string, ok?: boolean) => void; history?: boolean; userEmail?: string }) {
   const [rows, setRows] = useState<AdminSubscription[] | null>(null);
   const [active, setActive] = useState(0);
   const [income, setIncome] = useState(0);
   const [latest, setLatest] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState<number | null>(null);
-  const [email, setEmail] = useState("");
+  const [email, setEmail] = useState(userEmail ?? "");
   const [plan, setPlan] = useState<PlanId>("pro");
   const [days, setDays] = useState("");
   const [note, setNote] = useState("");
@@ -972,14 +1009,14 @@ function Subscriptions({ picked, notify }: { picked: Picked; notify: (msg: strin
     setError("");
     setRows(null);
     try {
-      const r = await api.adminSubscriptions(latest, picked?.id);
+      const r = await api.adminSubscriptions(latest, picked?.id, history);
       setRows(r.subscriptions);
       setActive(r.active);
       setIncome(r.income);
     } catch (e) {
       setError(errText(e, t("بارگذاری اشتراک‌ها ناموفق بود.", "Could not load subscriptions.")));
     }
-  }, [latest, picked]);
+  }, [latest, picked, history]);
 
   useEffect(() => {
     void load();
@@ -1036,15 +1073,17 @@ function Subscriptions({ picked, notify }: { picked: Picked; notify: (msg: strin
           <h3>{t("اشتراک‌ها", "Subscriptions")}{picked ? t(" این کاربر", " for this user") : ""}</h3>
           {!picked && active > 0 && <span className="badge ok">{fmtNum(active)} {t("اشتراک فعال", "active")}</span>}
         </div>
-        <Segmented
-          label={t("نما", "View")}
-          options={[
-            { id: "active", label: t("فعال", "Active") },
-            { id: "latest", label: t("آخرین اشتراک هر کاربر", "Latest per user") },
-          ]}
-          value={latest ? "latest" : "active"}
-          onChange={(v) => setLatest(v === "latest")}
-        />
+        {!history && (
+          <Segmented
+            label={t("نما", "View")}
+            options={[
+              { id: "active", label: t("فعال", "Active") },
+              { id: "latest", label: t("آخرین اشتراک هر کاربر", "Latest per user") },
+            ]}
+            value={latest ? "latest" : "active"}
+            onChange={(v) => setLatest(v === "latest")}
+          />
+        )}
       </div>
       <form className="grant" onSubmit={grant}>
         <div className="grant-head">
@@ -1096,7 +1135,7 @@ function Subscriptions({ picked, notify }: { picked: Picked; notify: (msg: strin
           <span className="sr-only">{t("در حال بارگذاری", "Loading")}</span>
         </div>
       ) : (
-        <div className="table-wrap scroll-y">
+        <div className="table-wrap">
           <table className="data-table">
             <thead>
               <tr>
@@ -1158,7 +1197,7 @@ function Subscriptions({ picked, notify }: { picked: Picked; notify: (msg: strin
   );
 }
 
-function Payments({ picked }: { picked: Picked }) {
+export function Payments({ picked }: { picked: Picked }) {
   const [rows, setRows] = useState<Payment[] | null>(null);
   const [income, setIncome] = useState(0);
   const [status, setStatus] = useState("");
@@ -1209,7 +1248,7 @@ function Payments({ picked }: { picked: Picked }) {
           <span className="sr-only">{t("در حال بارگذاری", "Loading")}</span>
         </div>
       ) : (
-        <div className="table-wrap scroll-y">
+        <div className="table-wrap">
           <table className="data-table">
             <thead>
               <tr>
@@ -1352,7 +1391,7 @@ function LatestChats() {
   );
 }
 
-function Conversations({ picked }: { picked: Picked }) {
+export function Conversations({ picked }: { picked: Picked }) {
   const [chats, setChats] = useState<Chat[] | null>(null);
   const [error, setError] = useState("");
 
@@ -1387,7 +1426,7 @@ function Conversations({ picked }: { picked: Picked }) {
           <span className="sr-only">{t("در حال بارگذاری", "Loading")}</span>
         </div>
       ) : (
-        <div className="table-wrap scroll-y">
+        <div className="table-wrap">
           <table className="data-table">
             <thead>
               <tr>
@@ -1492,7 +1531,7 @@ function KeyPolicyEditor({ k, onSaved, onClose, notify }: { k: AdminKey; onSaved
   );
 }
 
-function KeyPolicies({ picked, notify }: { picked: Picked; notify: (msg: string, ok?: boolean) => void }) {
+export function KeyPolicies({ picked, notify }: { picked: Picked; notify: (msg: string, ok?: boolean) => void }) {
   const [keys, setKeys] = useState<AdminKey[] | null>(null);
   const [ready, setReady] = useState(true);
   const [error, setError] = useState("");
@@ -1564,7 +1603,7 @@ function KeyPolicies({ picked, notify }: { picked: Picked; notify: (msg: string,
           <span className="sr-only">{t("در حال بارگذاری", "Loading")}</span>
         </div>
       ) : (
-        <div className="table-wrap scroll-y">
+        <div className="table-wrap">
           <table className="data-table">
             <thead>
               <tr>
@@ -1643,7 +1682,7 @@ function KeyPolicies({ picked, notify }: { picked: Picked; notify: (msg: string,
   );
 }
 
-function AppsTable({ picked, notify }: { picked: Picked; notify: (msg: string, ok?: boolean) => void }) {
+export function AppsTable({ picked, notify }: { picked: Picked; notify: (msg: string, ok?: boolean) => void }) {
   const [apps, setApps] = useState<AdminApp[] | null>(null);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState<number | null>(null);
@@ -1723,7 +1762,7 @@ function AppsTable({ picked, notify }: { picked: Picked; notify: (msg: string, o
           <span className="sr-only">{t("در حال بارگذاری", "Loading")}</span>
         </div>
       ) : (
-        <div className="table-wrap scroll-y">
+        <div className="table-wrap">
           <table className="data-table">
             <thead>
               <tr>
@@ -1798,7 +1837,7 @@ function AppsTable({ picked, notify }: { picked: Picked; notify: (msg: string, o
   );
 }
 
-function TelegramSessions({ picked, onPick }: { picked: Picked; onPick: (p: Picked) => void }) {
+export function TelegramSessions({ picked, onPick }: { picked: Picked; onPick: (p: Picked) => void }) {
   const [data, setData] = useState<AdminTelegram | null>(null);
   const [error, setError] = useState("");
 
@@ -1847,7 +1886,7 @@ function TelegramSessions({ picked, onPick }: { picked: Picked; onPick: (p: Pick
           {error}
         </div>
       )}
-      <div className="table-wrap scroll-y">
+      <div className="table-wrap">
         <table className="data-table">
           <thead>
             <tr>
@@ -1995,7 +2034,7 @@ function Guests() {
         </div>
       ) : (
         <>
-          <div className="table-wrap scroll-y">
+          <div className="table-wrap">
             <table className="data-table">
               <thead>
                 <tr>
@@ -2170,7 +2209,7 @@ function PlatformsPanel() {
   );
 }
 
-function Sessions({ picked, notify }: { picked: Picked; notify: (msg: string, ok?: boolean) => void }) {
+export function Sessions({ picked, notify }: { picked: Picked; notify: (msg: string, ok?: boolean) => void }) {
   const [rows, setRows] = useState<AdminSession[] | null>(null);
   const [total, setTotal] = useState(0);
   const [client, setClient] = useState("");
@@ -2278,7 +2317,7 @@ function Sessions({ picked, notify }: { picked: Picked; notify: (msg: string, ok
         </div>
       ) : (
         <>
-          <div className="table-wrap scroll-y">
+          <div className="table-wrap">
             <table className="data-table">
               <thead>
                 <tr>
@@ -2389,7 +2428,7 @@ function UploadPreview({ f }: { f: AdminUpload }) {
   return src ? <img src={src} alt={f.name} className="upload-preview" /> : <span className="spinner tiny" />;
 }
 
-function Uploads({ picked, notify }: { picked: Picked; notify?: (msg: string, ok?: boolean) => void }) {
+export function Uploads({ picked, notify }: { picked: Picked; notify?: (msg: string, ok?: boolean) => void }) {
   const [rows, setRows] = useState<AdminUpload[] | null>(null);
   const [total, setTotal] = useState(0);
   const [kind, setKind] = useState("");
@@ -2446,7 +2485,7 @@ function Uploads({ picked, notify }: { picked: Picked; notify?: (msg: string, ok
         </div>
       ) : (
         <>
-          <div className="table-wrap scroll-y">
+          <div className="table-wrap">
             <table className="data-table">
               <thead>
                 <tr>
@@ -2628,7 +2667,7 @@ function arrowMove(e: React.KeyboardEvent, i: number, count: number, go: (next: 
   go((i + (rtl ? -step : step) + count) % count);
 }
 
-function openLink(e: React.MouseEvent, path: string, go: (path: string) => void) {
+export function openLink(e: React.MouseEvent, path: string, go: (path: string) => void) {
   if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
   e.preventDefault();
   go(path);
@@ -2814,7 +2853,7 @@ export function Admin({ notify, onNavigate }: { notify: (msg: string, ok?: boole
             {summary && <Overview s={summary} />}
           </>
         )}
-        {section === "users" && sub?.id === "accounts" && <Users picked={picked} onPick={setPicked} notify={notify} />}
+        {section === "users" && sub?.id === "accounts" && <Users picked={picked} onNavigate={onNavigate} />}
         {section === "users" && sub?.id === "telegram" && <TelegramSessions picked={picked} onPick={setPicked} />}
         {section === "users" && sub?.id === "sessions" && <Sessions picked={picked} notify={notify} />}
         {section === "chats" && sub?.id === "latest" && (picked ? <Conversations picked={picked} /> : <LatestChats />)}

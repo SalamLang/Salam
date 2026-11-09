@@ -17,6 +17,7 @@ package main
 import archive
 import compress
 import filepath
+import mem
 import os
 import str
 
@@ -609,12 +610,26 @@ func expected(name: str): compress.ByteBuf:
     ret compress.BufFromStr("hello\n")
 end
 
+func same(dir: str, name: str, want: compress.ByteBuf): bool:
+    mut want2 := want
+    path := filepath.Join(dir, name)
+    mut ok := false
+    mut got := archive.ReadBinaryFile(path, ok)
+    r := ok and compress.BufEquals(got, want2)
+    compress.BufFree(got)
+    compress.BufFree(want2)
+    mem.Free(path as void*)
+    ret r
+end
+
 func check(label: str, hex: str, dir: str):
-    packed := unhex(hex)
-    path := filepath.Join(dir, label + ".7z")
+    mut packed := unhex(hex)
+    zname := label + ".7z"
+    path := filepath.Join(dir, zname)
     archive.WriteBinaryFileBuf(path, packed)
+    compress.BufFree(packed)
     mut sf := archive.SevenZipOpenFile(path, "")
-    entries := archive.SevenZipFileEntries(sf)
+    mut entries := archive.SevenZipFileEntries(sf)
     println label, "open", sf.status, "entries", entries.len()
     repeat entries.len() in i:
         e := entries.get(i)
@@ -628,26 +643,29 @@ func check(label: str, hex: str, dir: str):
         e := entries.get(i)
         if e.kind == 0 and not e.is_dir:
             files++
-            mut ok := false
-            got := archive.ReadBinaryFile(filepath.Join(out, e.name), ok)
-            if ok and compress.BufEquals(got, expected(e.name)):
+            if same(out, e.name, expected(e.name)):
                 good++
             end
         end
     end
     println "  extract", st, "match", good, "of", files
     if label != "copy":
-        one := filepath.Join(dir, label + "_one.bin")
+        oname := label + "_one.bin"
+        one := filepath.Join(dir, oname)
         s1 := archive.SevenZipFileExtractTo(sf, "sub/b.txt", one, 0 as i64, 0 as i64)
-        mut ok := false
-        got := archive.ReadBinaryFile(one, ok)
-        println "  one", s1, ok and compress.BufEquals(got, text(700))
+        println "  one", s1, same(dir, oname, text(700))
         s2 := archive.SevenZipFileExtractTo(sf, "sub/b.txt", one, 100 as i64, 0 as i64)
         s3 := archive.SevenZipFileExtractTo(sf, "sub/b.txt", one, 0 as i64, 1000 as i64)
         s4 := archive.SevenZipFileExtractTo(sf, "nope.txt", one, 0 as i64, 0 as i64)
         println "  cap", s2, "memcap", s3, "missing", s4
+        mem.Free(oname as void*)
+        mem.Free(one as void*)
     end
     archive.SevenZipFileClose(sf)
+    archive.FreeEntries(entries)
+    mem.Free(zname as void*)
+    mem.Free(path as void*)
+    mem.Free(out as void*)
 end
 
 func main:
@@ -663,12 +681,18 @@ func main:
     check("swp", F_SWP, dir)
     check("lnk", F_LNK, dir)
     bad := filepath.Join(dir, "bad.7z")
-    archive.WriteBinaryFileBuf(bad, compress.BufFromStr("not a seven zip archive at all, just text"))
+    mut junk := compress.BufFromStr("not a seven zip archive at all, just text")
+    archive.WriteBinaryFileBuf(bad, junk)
+    compress.BufFree(junk)
     mut sf := archive.SevenZipOpenFile(bad, "")
     println "bad", sf.status, archive.SevenZipStatusText(sf.status)
     archive.SevenZipFileClose(sf)
-    mut gone := archive.SevenZipOpenFile(filepath.Join(dir, "gone.7z"), "")
+    gpath := filepath.Join(dir, "gone.7z")
+    mut gone := archive.SevenZipOpenFile(gpath, "")
     println "gone", gone.status
     archive.SevenZipFileClose(gone)
     os.RemoveAll(dir)
+    mem.Free(bad as void*)
+    mem.Free(gpath as void*)
+    mem.Free(dir as void*)
 end

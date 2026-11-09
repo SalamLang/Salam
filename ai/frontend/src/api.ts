@@ -115,13 +115,15 @@ export type FileMeta = {
   url?: string;
 };
 export type Integration = {
-  provider: "github" | "figma";
+  provider: "github" | "figma" | "figma-mcp";
   connected: boolean;
   expired?: boolean;
   login: string;
   scope: string;
   created: number;
   oauth: boolean;
+  mcp_available?: boolean;
+  mcp?: "" | "read" | "write";
 };
 export type Integrations = {
   sandbox: boolean;
@@ -215,6 +217,17 @@ export type AdminPlatforms = {
   total: number;
   platforms: { id: PlatformId; count: number }[];
   systems: { os: string; version: string; arch: string; count: number }[];
+};
+export type UserProfile = {
+  id: number;
+  name: string;
+  email: string;
+  created: number;
+  plan: { id: string; name: string; source: string; started: number; expires: number };
+  counts: Record<string, number>;
+  identities: { provider: string; login: string; email: string; created: number }[];
+  integrations: { provider: string; login: string }[];
+  telegram: { tg_id: string; name: string; username: string; lang: string; created: number; last_seen: number }[];
 };
 export type AdminChatOwner = { id: number; name: string; email: string };
 export type Device = {
@@ -347,6 +360,7 @@ export type Plan = {
   enabled: boolean;
   sort: number;
   salam_only: boolean;
+  hours: number;
 };
 export type AdminPlan = Plan & { subscribers: number };
 export type Gateway = "zarinpal" | "zibal";
@@ -1123,6 +1137,8 @@ export const api = {
   integrations: () => call<Integrations>("GET", "/integrations"),
   saveIntegration: (provider: string, token: string) =>
     call<Integration>("POST", `/integrations/${provider}/token`, { token }),
+  setMcp: (provider: string, level: "off" | "read" | "write") =>
+    call<Integration>("POST", `/integrations/${provider}/mcp`, { level }),
   removeIntegration: (provider: string) =>
     call<{ ok: boolean }>("DELETE", `/integrations/${provider}`),
   integrationOauth: (provider: string) =>
@@ -1342,6 +1358,7 @@ export const api = {
     ),
   adminUpdateKey: (id: number, policy: KeyPolicy) =>
     call<{ key: AdminKey }>("PATCH", `/admin/keys/${id}`, policy),
+  adminUserProfile: (id: number) => call<UserProfile>("GET", `/admin/users/${id}/profile`),
   adminUserChats: (id: number) =>
     call<{ chats: Chat[] }>("GET", `/admin/users/${id}/chats`),
   adminLatestChats: (offset: number, q: string) =>
@@ -1369,14 +1386,14 @@ export const api = {
     ),
   payments: () => call<{ payments: Payment[] }>("GET", "/billing/payments"),
   usage: () => call<UsageReport>("GET", "/usage"),
-  adminSubscriptions: (latest?: boolean, user?: number) =>
+  adminSubscriptions: (latest?: boolean, user?: number, all?: boolean) =>
     call<{
       subscriptions: AdminSubscription[];
       active: number;
       income: number;
     }>(
       "GET",
-      `/admin/subscriptions${query({ latest: latest ? 1 : undefined, user })}`,
+      `/admin/subscriptions${query({ latest: latest ? 1 : undefined, user, all: all ? 1 : undefined })}`,
     ),
   adminPlans: () => call<{ plans: AdminPlan[] }>("GET", "/admin/plans"),
   adminPlanSave: (id: string, body: Partial<Plan>) =>

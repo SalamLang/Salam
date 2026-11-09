@@ -115,6 +115,11 @@ func _szx_free(x &: _SzX):
     x.crcs.free()
     x.crc_def.free()
     x.res.free()
+    repeat x.links.len() in k:
+        if x.links.get(k).len() > 0:
+            mem.Free(x.links.get(k) as void*)
+        end
+    end
     x.links.free()
     x.names.free()
     compress.BufFree(x.capbuf)
@@ -614,7 +619,13 @@ func _szf_find_volumes(first: str): Vector<str>:
     vols.push(str.Clone(first))
     n := first.len()
     ds := _rar_digits_end(first, n)
-    if ds == n or n - ds > 9 or ds < 4 or not str.EndsWith(str.Substr(first, 0, ds), ".7z."):
+    if ds == n or n - ds > 9 or ds < 4:
+        ret vols
+    end
+    stem := str.Substr(first, 0, ds)
+    stem_ok := str.EndsWith(stem, ".7z.")
+    mem.Free(stem as void*)
+    if not stem_ok:
         ret vols
     end
     mut idx := 1
@@ -766,8 +777,7 @@ func _szf_links(fp: void*, sf: SevenZipFile, s: _Sz, memcap: i64, kinds: Vector<
         if not any:
             continue
         end
-        mut made := Vector {} as Vector<str>
-        mut x := _szx_new(s, fi, made)
+        mut x := _szx_new(s, fi, Vector {} as Vector<str>)
         repeat s.files.len() in i:
             f := s.files.get(i)
             if kinds.get(i) == 2 and f.folder == fi:
@@ -789,16 +799,17 @@ func _szf_links(fp: void*, sf: SevenZipFile, s: _Sz, memcap: i64, kinds: Vector<
             repeat x.fidx.len() in k:
                 if x.mode.get(k) == 3 and x.res.get(k) == SEVENZIP_OK:
                     texts.set(x.fidx.get(k), x.links.get(k))
+                    x.links.set(k, "")
                 end
             end
             mem.Free(xp as void*)
         end
+        x.made.free()
         _szx_free(x)
-        made.free()
     end
 end
 
-func _szf_extract(sf: SevenZipFile, s: _Sz, destdir: str, only: int, destpath: str, cap: i64, memcap: i64, made: Vector<str>, written &: int): int:
+func _szf_extract(sf: SevenZipFile, s: _Sz, destdir: str, only: int, destpath: str, cap: i64, memcap: i64, made &: Vector<str>, written &: int): int:
     fp := _szf_open(sf)
     if fp == null:
         ret SEVENZIP_IO
@@ -806,7 +817,7 @@ func _szf_extract(sf: SevenZipFile, s: _Sz, destdir: str, only: int, destpath: s
     avail := sf.size - sf.start
     mut first := SEVENZIP_OK
     repeat s.folders.len() in fi:
-        mut x := _szx_new(s, fi, made)
+        mut x := _szx_new(s, fi, made.copy())
         mut want := 0
         repeat x.fidx.len() in k:
             i := x.fidx.get(k)
@@ -852,6 +863,7 @@ func _szf_extract(sf: SevenZipFile, s: _Sz, destdir: str, only: int, destpath: s
             st := _szf_folder(fp, sf.start, avail, s, fi, sf.password, memcap, xp)
             _szx_finish(xp, st)
             x = xp[0]
+            made = x.made
             mem.Free(xp as void*)
             if st != SEVENZIP_OK and first == SEVENZIP_OK:
                 first = st
@@ -881,7 +893,7 @@ end
 @en "SevenZipOpenFile"
 @fa "بازکردن پرونده هفت زد"
 pub func SevenZipOpenFile(path: str, password: str): SevenZipFile:
-    mut sf := SevenZipFile { path = str.Clone(path), password = str.Clone(password), status = SEVENZIP_CORRUPT }
+    mut sf := SevenZipFile { path = str.Clone(path), password = password.len() > 0 ? str.Clone(password) : "", status = SEVENZIP_CORRUPT }
     sf.volumes = _szf_find_volumes(path)
     fp := _szf_open(sf)
     if fp == null:

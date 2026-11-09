@@ -53,9 +53,11 @@ const TOOLS := `[
 {"name": "wait", "description": "Wait for a call that is still running on the user's computer and return its result. Use the call_id from the earlier result that said the call is still running. Do not repeat the original call.", "inputSchema": {"type": "object", "properties": {"session": {"type": "string"}, "call_id": {"type": "string"}}, "required": ["session", "call_id"]}}
 ,
 {"name": "github_api", "description": "Cloud sessions only: call the GitHub REST API as the user (private repositories included). path starts with /, for example /user/repos?per_page=100, /repos/OWNER/REPO/contents/PATH, /repos/OWNER/REPO/issues, /repos/OWNER/REPO/pulls. body is a JSON string for POST, PUT and PATCH.", "inputSchema": {"type": "object", "properties": {"session": {"type": "string"}, "method": {"type": "string", "enum": ["GET", "POST", "PUT", "PATCH", "DELETE"]}, "path": {"type": "string"}, "body": {"type": "string"}}, "required": ["session", "path"]}},
+{"name": "github_mcp", "description": "Use the remote GitHub MCP server as the user, only when they turned it on under Connections. action tools lists the allowed GitHub tools with their input schemas; action call runs one: tool is the GitHub tool name (for example search_code, get_file_contents, list_issues, pull_request_read, list_commits) and arguments is a JSON object. Read tools always work once enabled. Tools that change GitHub (issue_write, add_issue_comment, create_pull_request, create_branch) need the user's write setting, a plain description of the change to the user, their yes in the chat, and confirmed true. Merging and deleting are never offered. Results are cut to fit; ask for narrower queries instead of whole files.", "inputSchema": {"type": "object", "properties": {"session": {"type": "string"}, "action": {"type": "string", "enum": ["tools", "call"]}, "tool": {"type": "string"}, "arguments": {"type": "object"}, "confirmed": {"type": "boolean"}}, "required": ["session"]}},
 {"name": "github_git", "description": "Cloud sessions only: run clone, fetch, pull, push or ls-remote in the sandbox with the user's GitHub login. args is the git argument list, for example [\"clone\", \"https://github.com/OWNER/REPO.git\"]. Use shell for every other git command.", "inputSchema": {"type": "object", "properties": {"session": {"type": "string"}, "args": {"type": "array", "items": {"type": "string"}}, "cwd": {"type": "string"}}, "required": ["session", "args"]}},
 {"name": "figma_api", "description": "Cloud sessions only: read Figma as the user. path starts with /v1/, for example /v1/files/FILE_KEY?depth=2, /v1/files/FILE_KEY/nodes?ids=1:2, /v1/files/FILE_KEY/comments, /v1/me. POST is allowed only for comments.", "inputSchema": {"type": "object", "properties": {"session": {"type": "string"}, "method": {"type": "string", "enum": ["GET", "POST"]}, "path": {"type": "string"}, "body": {"type": "string"}}, "required": ["session", "path"]}},
-{"name": "figma_export", "description": "Cloud sessions only: render Figma nodes as png, jpg, svg or pdf and save them into the sandbox folder dir (default assets).", "inputSchema": {"type": "object", "properties": {"session": {"type": "string"}, "file_key": {"type": "string"}, "ids": {"type": "string", "description": "Comma separated node ids such as 1:2,3:4."}, "format": {"type": "string", "enum": ["png", "jpg", "svg", "pdf"]}, "scale": {"type": "integer"}, "dir": {"type": "string"}}, "required": ["session", "file_key", "ids"]}}
+{"name": "figma_export", "description": "Cloud sessions only: render Figma nodes as png, jpg, svg or pdf and save them into the sandbox folder dir (default assets).", "inputSchema": {"type": "object", "properties": {"session": {"type": "string"}, "file_key": {"type": "string"}, "ids": {"type": "string", "description": "Comma separated node ids such as 1:2,3:4."}, "format": {"type": "string", "enum": ["png", "jpg", "svg", "pdf"]}, "scale": {"type": "integer"}, "dir": {"type": "string"}}, "required": ["session", "file_key", "ids"]}},
+{"name": "figma_mcp", "description": "Use Figma's own MCP server as the user (works in Salam Agent and in cloud sessions, and only after the user connects Figma MCP under Connections on the Salam AI site). action tools lists the Figma tools with their inputs; action call runs one: tool is its name, for example get_design_context, get_screenshot or get_metadata, and arguments is a JSON object, for example {\"fileKey\": \"KEY\", \"nodeId\": \"1:2\"}. Screenshots come back as an image.", "inputSchema": {"type": "object", "properties": {"session": {"type": "string"}, "action": {"type": "string", "enum": ["tools", "call"]}, "tool": {"type": "string"}, "arguments": {"type": "object"}}, "required": ["session"]}}
 ]`
 const INSTRUCTIONS := "These tools act either on the user's own computer through Salam Agent, the desktop app on the user's computer, or, in a cloud session, inside a private sandbox container on the Salam servers. Every call needs the session id given at the top of the user's message. The user may refuse a call; respect the refusal and do not retry the same call. A call that takes long, or waits for the user's approval, returns a call_id; then call wait with it until the result arrives instead of repeating the call."
 
@@ -356,7 +358,7 @@ end
 
 func known_tool(name: str): bool:
     switch name:
-        "shell", "read_file", "write_file", "edit_file", "list_dir", "glob", "grep", "docker", "wsl", "run_tests", "save_memory", "forget_memory", "browser", "github_api", "github_git", "figma_api", "figma_export":
+        "shell", "read_file", "write_file", "edit_file", "list_dir", "glob", "grep", "docker", "wsl", "run_tests", "save_memory", "forget_memory", "browser", "github_api", "github_mcp", "github_git", "figma_api", "figma_export", "figma_mcp":
             ret true
         end
     end
@@ -568,6 +570,9 @@ func wait_call(args: str): str:
             ret await_cloud(id, cchat)
         end
     end
+    if chat.len() > 0 and aicloud.Known(id) and not (dev.len() > 0 and OWNER.has(id)):
+        ret await_cloud(id, chat)
+    end
     _l := sync.Lock(LOCK)
     mine := dev.len() > 0 and OWNER.has(id) and OWNER.get(id) == dev and CALLS.has(id) and json.Get(CALLS.get(id), "chat") == chat
     _u := sync.Unlock(LOCK)
@@ -678,6 +683,9 @@ func call_tool(params: str): str:
             ret cloud_call(name, args, session, cchat, cuid)
         end
         ret tool_text("This session is not linked to Salam Agent. Tell the user to open the conversation in Salam Agent.", true)
+    end
+    if name == "github_mcp" or name == "figma_mcp":
+        ret cloud_call(name, args, session, chat, aiweb.ChatOwner(chat))
     end
     if name == "github_api" or name == "github_git" or name == "figma_api" or name == "figma_export":
         ret tool_text("This tool only works in cloud sessions, not in Salam Agent on the user's computer.", true)

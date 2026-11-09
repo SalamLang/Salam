@@ -1,0 +1,250 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "cpu"
+@fa "پردازنده"
+package cpu
+
+import mem
+import os
+import str
+
+@en "FEATURE_HW_CRYPTO"
+@fa "ویژگی رمز سخت افزاری"
+pub const FEATURE_HW_CRYPTO := 1
+
+@en "FEATURE_X86"
+@fa "ویژگی ایکس۸۶"
+pub const FEATURE_X86 := 2
+
+@en "FEATURE_ARM64"
+@fa "ویژگی آرم۶۴"
+pub const FEATURE_ARM64 := 4
+
+mut g_state := 0
+
+func _gmul(a0: int, b0: int): int:
+    mut a := a0
+    mut b := b0
+    mut r := 0
+    repeat 8:
+        if (b & 1) != 0:
+            r ^= a
+        end
+        hi := a & 128
+        a = (a << 1) & 255
+        if hi != 0:
+            a ^= 27
+        end
+        b >>= 1
+    end
+    ret r
+end
+
+func _sub(x: int): int:
+    mut inv := 1
+    mut sq := x
+    mut e := 254
+    until e > 0:
+        if (e & 1) != 0:
+            inv = _gmul(inv, sq)
+        end
+        sq = _gmul(sq, sq)
+        e >>= 1
+    end
+    if x == 0:
+        inv = 0
+    end
+    mut r := inv
+    repeat 4 in i:
+        k := i + 1
+        r ^= ((inv << k) | (inv >> (8 - k))) & 255
+    end
+    ret r ^ 99
+end
+
+func _split(x: u128, lo &: u64, hi &: u64):
+    lo = x as u64
+    hi = (x >> (64 as u128)) as u64
+end
+
+func _join(lo: u64, hi: u64): u128:
+    ret ((hi as u128) << (64 as u128)) | (lo as u128)
+end
+
+func _get(x: u128, i: int): int:
+    mut lo := 0 as u64
+    mut hi := 0 as u64
+    _split(x, lo, hi)
+    if i < 8:
+        ret ((lo >> ((i * 8) as u64)) & (255 as u64)) as int
+    end
+    ret ((hi >> (((i - 8) * 8) as u64)) & (255 as u64)) as int
+end
+
+func _soft_round(x: u128, key: u128, last: bool): u128:
+    b := mem.AllocateZeroed(32 as u64) as u8*
+    repeat 16 in i:
+        b[i] = _sub(_get(x, i)) as u8
+    end
+    repeat 16 in i:
+        r := i % 4
+        c := i / 4
+        b[16 + r + 4 * c] = b[r + 4 * ((c + r) % 4)]
+    end
+    mut lo := 0 as u64
+    mut hi := 0 as u64
+    repeat 16 in i:
+        mut v := b[16 + i] as int
+        if not last:
+            col := (i / 4) * 4
+            r := i % 4
+            v = _gmul(b[16 + col + r] as int, 2) ^ _gmul(b[16 + col + (r + 1) % 4] as int, 3) ^ (b[16 + col + (r + 2) % 4] as int) ^ (b[16 + col + (r + 3) % 4] as int)
+        end
+        if i < 8:
+            lo |= (v as u64) << ((i * 8) as u64)
+        else:
+            hi |= (v as u64) << (((i - 8) * 8) as u64)
+        end
+    end
+    mem.Free(b as void*)
+    ret _join(lo, hi) ^ key
+end
+
+func _soft_clmul(a: u64, b: u64): u128:
+    mut r := 0 as u128
+    repeat 64 in i:
+        if ((b >> (i as u64)) & (1 as u64)) != (0 as u64):
+            r ^= (a as u128) << (i as u128)
+        end
+    end
+    ret r
+end
+
+@en "Features"
+@fa "ویژگی های پردازنده"
+pub func Features(): int:
+    ret 0
+end
+
+@en "HwAesEnc"
+@fa "دور رمز"
+pub func HwAesEnc(state: u128, key: u128): u128:
+    ret _soft_round(state, key, false)
+end
+
+@en "HwAesEncLast"
+@fa "دور آخر رمز"
+pub func HwAesEncLast(state: u128, key: u128): u128:
+    ret _soft_round(state, key, true)
+end
+
+@en "HwClmul"
+@fa "ضرب بدون نقلی"
+pub func HwClmul(a: u128, b: u128, imm: int): u128:
+    mut a_low := 0 as u64
+    mut a_high := 0 as u64
+    mut b_low := 0 as u64
+    mut b_high := 0 as u64
+    _split(a, a_low, a_high)
+    _split(b, b_low, b_high)
+    x := (imm & 1) != 0 ? a_high : a_low
+    y := (imm & 16) != 0 ? b_high : b_low
+    ret _soft_clmul(x, y)
+end
+
+@en "HwSwap64"
+@fa "جابجایی نیمه ها"
+pub func HwSwap64(x: u128): u128:
+    mut lo := 0 as u64
+    mut hi := 0 as u64
+    _split(x, lo, hi)
+    ret _join(hi, lo)
+end
+
+@en "HwBswap"
+@fa "وارونه سازی بایت ها"
+pub func HwBswap(x: u128): u128:
+    mut lo := 0 as u64
+    mut hi := 0 as u64
+    _split(x, lo, hi)
+    mut rlo := 0 as u64
+    mut rhi := 0 as u64
+    repeat 8 in i:
+        rhi = (rhi << (8 as u64)) | ((lo >> ((i * 8) as u64)) & (255 as u64))
+        rlo = (rlo << (8 as u64)) | ((hi >> ((i * 8) as u64)) & (255 as u64))
+    end
+    ret _join(rlo, rhi)
+end
+
+@en "HwLoad"
+@fa "بارگیری شانزده بایت"
+pub func HwLoad(p: void*): u128:
+    b := p as u8*
+    mut lo := 0 as u64
+    mut hi := 0 as u64
+    repeat 8 in i:
+        lo |= (b[i] as u64) << ((i * 8) as u64)
+        hi |= (b[8 + i] as u64) << ((i * 8) as u64)
+    end
+    ret _join(lo, hi)
+end
+
+@en "HwStore"
+@fa "ذخیره شانزده بایت"
+pub func HwStore(p: void*, x: u128):
+    b := p as u8*
+    repeat 16 in i:
+        b[i] = _get(x, i) as u8
+    end
+end
+
+@en "SetHardware"
+@fa "تنظیم سخت افزار"
+pub func SetHardware(enable: bool):
+    g_state = enable ? 1 : 2
+end
+
+@en "HasHardwareCrypto"
+@fa "دارای رمز سخت افزاری"
+pub func HasHardwareCrypto(): bool:
+    if g_state == 0:
+        mut st := 2
+        if (Features() & FEATURE_HW_CRYPTO) != 0 and str.Len(os.Env("SALAM_NO_HWCRYPTO")) == 0:
+            st = 1
+        end
+        g_state = st
+    end
+    ret g_state == 1 and (Features() & FEATURE_HW_CRYPTO) != 0
+end
+
+@en "HasAesNi"
+@fa "دارای ای ای اس ان آی"
+pub func HasAesNi(): bool:
+    f := Features()
+    ret (f & FEATURE_HW_CRYPTO) != 0 and (f & FEATURE_X86) != 0
+end
+
+@en "HasPclmul"
+@fa "دارای ضرب بدون نقلی"
+pub func HasPclmul(): bool:
+    ret HasAesNi()
+end
+
+@en "HasArmCrypto"
+@fa "دارای رمز آرم"
+pub func HasArmCrypto(): bool:
+    f := Features()
+    ret (f & FEATURE_HW_CRYPTO) != 0 and (f & FEATURE_ARM64) != 0
+end

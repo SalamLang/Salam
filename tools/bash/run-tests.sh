@@ -822,6 +822,23 @@ if redis_listening; then
     REDIS_OK=1
 fi
 export REDIS_OK
+
+ipv6_loopback() {
+    if [ -r /proc/net/if_inet6 ]; then
+        grep -q '^00000000000000000000000000000001 ' /proc/net/if_inet6
+        return $?
+    fi
+    if command -v ifconfig >/dev/null 2>&1; then
+        ifconfig lo0 2>/dev/null | grep -q 'inet6 ::1'
+        return $?
+    fi
+    return 0
+}
+IPV6_OK=0
+if ipv6_loopback; then
+    IPV6_OK=1
+fi
+export IPV6_OK
 REDIS_SKIP_MSG="requires a Redis server on 127.0.0.1:6379"
 
 if want fmt; then
@@ -922,6 +939,8 @@ collect_example_dir() {
             skip=""
             if [ -f "$base.redis" ] && [ "${REDIS_OK:-0}" != "1" ]; then
                 skip="requires a Redis server on 127.0.0.1:6379"
+            elif [ -f "$base.ipv6" ] && [ "${IPV6_OK:-0}" != "1" ]; then
+                skip="requires IPv6 loopback (::1) on this host"
             elif [ -f "$base.network" ] && [ "${SALAM_TEST_NETWORK:-0}" != "1" ]; then
                 skip="requires live network; set SALAM_TEST_NETWORK=1"
             elif [ -f "$base.interactive" ] && [ "${SALAM_TEST_INTERACTIVE:-0}" != "1" ]; then

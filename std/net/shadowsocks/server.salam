@@ -18,6 +18,7 @@ import mem
 import net.tcp
 import net.internal.rawsock
 import pool
+import chan
 import net.tunnel
 
 const RELAY_BUF := 16384
@@ -154,6 +155,14 @@ func _serve_one(ss: ServerState*, raw: tcp.Conn, handler: func (Conn)):
     end
 end
 
+func _serve_next(ss: ServerState*, handler: func (Conn), jobs: chan.Chan<i64>):
+    mut ok := true
+    fd := jobs.recv(ok)
+    if ok:
+        _serve_one(ss, tcp.Conn { fd = fd }, handler)
+    end
+end
+
 @en "Listen"
 @fa "گوش دادن"
 pub func Listen(port: int, method: str, password: str): Server:
@@ -277,14 +286,20 @@ end
 @fa "خدمت"
 pub func Serve(s: Server, handler: func (Conn)):
     ss := s.st
-    until atomic_load(ss.stop) == 0:
+    mut jobs := chan.Chan {} as chan.Chan<i64>
+    jobs.init(1024 as i64)
+    task := (): _serve_next(ss, handler, jobs) end
+    until atomic_load(ss.stop) == 0 as i64:
         raw := tcp.Accept(ss.ls)
-        if tcp.ConnOk(raw) and atomic_load(ss.stop) == 0:
-            pool.Submit(ss.workers, (): _serve_one(ss, raw, handler) end)
+        if tcp.ConnOk(raw) and atomic_load(ss.stop) == 0 as i64:
+            jobs.send(raw.fd)
+            pool.Submit(ss.workers, task)
         else tcp.ConnOk(raw):
             tcp.Close(raw)
         end
     end
+    jobs.close()
+    jobs.free()
 end
 
 @en "ServeRelay"

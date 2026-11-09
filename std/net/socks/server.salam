@@ -30,6 +30,7 @@ end
 struct _ConnJob:
     pub cfg: ServerConfig = ServerConfig {}
     pub st: dyn tunnel.Stream = tunnel.TcpStream {}
+    pub peer: str = ""
 end
 
 struct _UDPJob:
@@ -320,7 +321,7 @@ func _udp_thread(arg: i64):
     mem.Free(obuf)
 end
 
-func _do_udp(cfg: ServerConfig, s: dyn tunnel.Stream, a: Address):
+func _do_udp(cfg: ServerConfig, s: dyn tunnel.Stream, a: Address, peer: str):
     if not cfg.allow_udp:
         _reply(s, 5, RepCmdNotSupported, _wild())
         s.Close()
@@ -335,7 +336,11 @@ func _do_udp(cfg: ServerConfig, s: dyn tunnel.Stream, a: Address):
     stop := mem.AllocateZeroed(8 as u64) as i64*
     atomic_store(stop, 1 as i64)
     jb := mem.AllocateZeroed(sizeof(_UDPJob) as u64) as _UDPJob*
-    jb[0] = _UDPJob { cfg = cfg, sock = us, chost = a.host, cport = a.port, stop = stop }
+    mut chost := a.host
+    if (chost == "0.0.0.0" or chost == "::" or chost.len() == 0) and peer.len() > 0:
+        chost = peer
+    end
+    jb[0] = _UDPJob { cfg = cfg, sock = us, chost = chost, cport = a.port, stop = stop }
     if not _reply(s, 5, RepSucceeded, NewAddress(_bind_host(cfg), udp.Port(us))):
         udp.Close(us)
         mem.Free(stop as void*)
@@ -438,7 +443,7 @@ func _hs5(cfg: ServerConfig, s: dyn tunnel.Stream, req &: Request, user &: str):
     ret true
 end
 
-func _serve5(cfg: ServerConfig, s: dyn tunnel.Stream):
+func _serve5(cfg: ServerConfig, s: dyn tunnel.Stream, peer: str):
     mut req := Request {}
     mut user := ""
     if not _hs5(cfg, s, req, user):
@@ -455,7 +460,7 @@ func _serve5(cfg: ServerConfig, s: dyn tunnel.Stream):
             break
         end
         3:
-            _do_udp(cfg, s, req.addr)
+            _do_udp(cfg, s, req.addr, peer)
             break
         end
         else:
@@ -515,12 +520,25 @@ func _serve4(cfg: ServerConfig, s: dyn tunnel.Stream):
     end
 end
 
+func _handle(cfg: ServerConfig, s: dyn tunnel.Stream, peer: str):
+    s.SetDeadline(cfg.handshake_timeout_ms)
+    v := tunnel.ReadByte(s)
+    if v == 5:
+        _serve5(cfg, s, peer)
+    else v == 4 and cfg.allow_v4:
+        _serve4(cfg, s)
+    else:
+        s.Close()
+    end
+end
+
 func _conn_thread(arg: i64):
     jp := (arg as void*) as _ConnJob*
     cfg := jp[0].cfg
     st := jp[0].st
+    peer := jp[0].peer
     mem.Free(jp as void*)
-    Handle(cfg, st)
+    _handle(cfg, st, peer)
 end
 
 func _accept_thread(arg: i64):
@@ -537,7 +555,7 @@ func _accept_thread(arg: i64):
             sync.SleepMs(5)
         else:
             cj := mem.AllocateZeroed(sizeof(_ConnJob) as u64) as _ConnJob*
-            cj[0] = _ConnJob { cfg = cfg, st = tunnel.TcpStream { conn = c } }
+            cj[0] = _ConnJob { cfg = cfg, st = tunnel.TcpStream { conn = c }, peer = rawsock.PeerHost(rawsock.FromFd(c.fd)) }
             Go(_conn_thread, cj as void*)
         end
     end
@@ -575,16 +593,9 @@ end
 @en "Handle"
 @fa "رسیدگی"
 pub func Handle(cfg: ServerConfig, s: dyn tunnel.Stream):
-    s.SetDeadline(cfg.handshake_timeout_ms)
-    v := tunnel.ReadByte(s)
-    if v == 5:
-        _serve5(cfg, s)
-    else v == 4 and cfg.allow_v4:
-        _serve4(cfg, s)
-    else:
-        s.Close()
-    end
+    _handle(cfg, s, "")
 end
+
 
 @en "Start"
 @fa "شروع"

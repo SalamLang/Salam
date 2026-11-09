@@ -20,6 +20,7 @@ import encoding.json
 import str
 import time
 import conv
+import crypto
 
 include aiengine "engine.salam"
 
@@ -30,7 +31,7 @@ mut PORT := 80
 mut BASE := ""
 mut AUTH := ""
 
-func post(path: str, body: str):
+func post(path: str, extra_header: str, body: str):
     c := tcp.Dial(HOST, PORT)
     if not tcp.ConnOk(c):
         tcp.Close(c)
@@ -38,27 +39,48 @@ func post(path: str, body: str):
     end
     tcp.SetReadDeadline(c, SEND_MS)
     tcp.SetWriteDeadline(c, SEND_MS)
-    req := "POST " + BASE + path + " HTTP/1.1\r\nHost: " + HOST + "\r\nUser-Agent: salam-ai\r\nAuthorization: " + AUTH + "\r\nContent-Type: application/json\r\nConnection: close\r\nContent-Length: " + body.len() + "\r\n\r\n" + body
+    req := "POST " + BASE + path + " HTTP/1.1\r\nHost: " + HOST + "\r\nUser-Agent: salam-ai\r\nAuthorization: " + AUTH + "\r\n" + extra_header + "Content-Type: application/json\r\nConnection: close\r\nContent-Length: " + body.len() + "\r\n\r\n" + body
     _w := tcp.Write(c, req)
     tcp.Close(c)
 end
 
-func usage_obj(u: aiengine.Usage): str:
+func str_value(v: str): str:
     mut m := Vector {} as Vector<str>
-    m.push(json.MemberInt("input", u.input))
-    m.push(json.MemberInt("output", u.output + u.reasoning))
-    m.push(json.MemberInt("total", u.input + u.output + u.reasoning))
-    m.push(json.Member("unit", "TOKENS"))
+    m.push(json.Member("stringValue", v))
     ret json.Object(m)
+end
+
+func attr(key: str, value: str): str:
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("key", key))
+    m.push(json.MemberRaw("value", str_value(value)))
+    ret json.Object(m)
+end
+
+func tags_attr(key: str, values: Vector<str>): str:
+    mut items := Vector {} as Vector<str>
+    each v in values:
+        items.push(str_value(v))
+    end
+    mut arr := Vector {} as Vector<str>
+    arr.push(json.MemberRaw("arrayValue", json.Object(one("values", json.Array(items)))))
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("key", key))
+    m.push(json.MemberRaw("value", json.Object(arr)))
+    ret json.Object(m)
+end
+
+func one(key: str, raw: str): Vector<str>:
+    mut v := Vector {} as Vector<str>
+    v.push(json.MemberRaw(key, raw))
+    ret v
 end
 
 func usage_details(u: aiengine.Usage): str:
     mut m := Vector {} as Vector<str>
     m.push(json.MemberInt("input", u.input))
-    m.push(json.MemberInt("output", u.output))
-    m.push(json.MemberInt("reasoning", u.reasoning))
-    m.push(json.MemberInt("cache_read", u.cache_read))
-    m.push(json.MemberInt("cache_write", u.cache_write))
+    m.push(json.MemberInt("output", u.output + u.reasoning))
+    m.push(json.MemberInt("total", u.input + u.output + u.reasoning))
     ret json.Object(m)
 end
 
@@ -70,9 +92,25 @@ func cost_details(u: aiengine.Usage): str:
     ret json.Object(m)
 end
 
+func hex_id(key: str, chars: int): str:
+    ret crypto.Sha256Hex(key).substr(0, chars)
+end
+
+func one_raw(raw: str): Vector<str>:
+    mut v := Vector {} as Vector<str>
+    v.push(raw)
+    ret v
+end
+
 func one_str(s: str): Vector<str>:
     mut v := Vector {} as Vector<str>
-    v.push(json.Str(s))
+    v.push(s)
+    ret v
+end
+
+func one_int(key: str, val: int): Vector<str>:
+    mut v := Vector {} as Vector<str>
+    v.push(json.MemberInt(key, val as i64))
     ret v
 end
 
@@ -106,49 +144,37 @@ pub func Send(sid: str, mid: str, model: str, u: aiengine.Usage, reply: str, fai
         ret
     end
     session_id := session.len() > 0 ? session : sid
-    trace_id := sid + ":" + mid
-    gen_id := trace_id + ":gen"
-    now_sec := time.NowMillis() / 1000
-    start_sec := u.ms > 0 ? now_sec - u.ms / 1000 : now_sec
-    now_iso := time.FormatISO(now_sec)
-    start_iso := time.FormatISO(start_sec)
-    mut trace := Vector {} as Vector<str>
-    trace.push(json.Member("id", trace_id))
-    trace.push(json.Member("sessionId", session_id))
-    trace.push(json.Member("name", "salam-chat-turn"))
-    trace.push(json.Member("timestamp", now_iso))
-    trace.push(json.Member("output", reply))
-    trace.push(json.MemberRaw("tags", json.Array(one_str(source))))
-    mut tmeta := Vector {} as Vector<str>
-    tmeta.push(json.MemberBool("failed", failed))
-    tmeta.push(json.Member("source", source))
-    trace.push(json.MemberRaw("metadata", json.Object(tmeta)))
-    mut gen := Vector {} as Vector<str>
-    gen.push(json.Member("id", gen_id))
-    gen.push(json.Member("traceId", trace_id))
-    gen.push(json.Member("name", "assistant-reply"))
-    gen.push(json.Member("model", model))
-    gen.push(json.Member("startTime", start_iso))
-    gen.push(json.Member("endTime", now_iso))
-    gen.push(json.MemberRaw("usage", usage_obj(u)))
-    gen.push(json.MemberRaw("usageDetails", usage_details(u)))
-    gen.push(json.MemberRaw("costDetails", cost_details(u)))
-    gen.push(json.Member("output", reply))
-    gen.push(json.Member("level", failed ? "ERROR" : "DEFAULT"))
-    mut trace_evt := Vector {} as Vector<str>
-    trace_evt.push(json.Member("id", trace_id + ":evt"))
-    trace_evt.push(json.Member("type", "trace-create"))
-    trace_evt.push(json.Member("timestamp", now_iso))
-    trace_evt.push(json.MemberRaw("body", json.Object(trace)))
-    mut gen_evt := Vector {} as Vector<str>
-    gen_evt.push(json.Member("id", gen_id + ":evt"))
-    gen_evt.push(json.Member("type", "generation-create"))
-    gen_evt.push(json.Member("timestamp", now_iso))
-    gen_evt.push(json.MemberRaw("body", json.Object(gen)))
-    mut batch := Vector {} as Vector<str>
-    batch.push(json.Object(trace_evt))
-    batch.push(json.Object(gen_evt))
+    key := sid + ":" + mid
+    trace_id := hex_id(key, 32)
+    span_id := hex_id(key + ":span", 16)
+    now_ns := time.NowMillis() * 1000000
+    start_ns := u.ms > 0 ? now_ns - u.ms * 1000000 : now_ns
+    mut attrs := Vector {} as Vector<str>
+    attrs.push(attr("langfuse.trace.name", "salam-chat-turn"))
+    attrs.push(attr("langfuse.session.id", session_id))
+    attrs.push(attr("langfuse.observation.type", "generation"))
+    attrs.push(attr("langfuse.observation.model.name", model))
+    attrs.push(attr("langfuse.observation.output", reply))
+    attrs.push(attr("langfuse.observation.usage_details", usage_details(u)))
+    attrs.push(attr("langfuse.observation.cost_details", cost_details(u)))
+    attrs.push(attr("langfuse.observation.level", failed ? "ERROR" : "DEFAULT"))
+    attrs.push(attr("langfuse.trace.metadata.source", source))
+    attrs.push(tags_attr("langfuse.trace.tags", one_str(source)))
+    mut span := Vector {} as Vector<str>
+    span.push(json.Member("traceId", trace_id))
+    span.push(json.Member("spanId", span_id))
+    span.push(json.Member("name", "salam-chat-turn"))
+    span.push(json.MemberInt("kind", 1))
+    span.push(json.Member("startTimeUnixNano", conv.FormatInt(start_ns)))
+    span.push(json.Member("endTimeUnixNano", conv.FormatInt(now_ns)))
+    span.push(json.MemberRaw("attributes", json.Array(attrs)))
+    span.push(json.MemberRaw("status", json.Object(one_int("code", failed ? 2 : 1))))
+    mut scope_span := Vector {} as Vector<str>
+    scope_span.push(json.MemberRaw("spans", json.Array(one_raw(json.Object(span)))))
+    mut res_span := Vector {} as Vector<str>
+    res_span.push(json.MemberRaw("resource", json.Object(one("attributes", json.Array(one_raw(attr("service.name", "salam-ai")))))))
+    res_span.push(json.MemberRaw("scopeSpans", json.Array(one_raw(json.Object(scope_span)))))
     mut root := Vector {} as Vector<str>
-    root.push(json.MemberRaw("batch", json.Array(batch)))
-    post("/api/public/ingestion", json.Object(root))
+    root.push(json.MemberRaw("resourceSpans", json.Array(one_raw(json.Object(res_span)))))
+    post("/api/public/otel/v1/traces", "x-langfuse-ingestion-version: 4\r\n", json.Object(root))
 end

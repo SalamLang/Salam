@@ -132,8 +132,8 @@ end
 @en "BWTInverse"
 @fa "معکوس باروز ویلر"
 pub func BWTInverse(p: void*, n: int, primary: int): ByteBuf:
+    if n <= 0 or primary < 0 or primary >= n: ret NewByteBuf() end
     mut out := NewByteBufCap(n)
-    if n == 0: ret out end
     bp := p as u8*
 
     mut count: int[256]
@@ -198,25 +198,43 @@ pub func BWTCompress(p: void*, n: int): ByteBuf:
     ret out
 end
 
-@en "BWTDecompress"
-@fa "کدگشایی باروز ویلر"
-pub func BWTDecompress(p: void*, n: int): ByteBuf:
+@en "BWTDecompressMax"
+@fa "کدگشایی باروز ویلر با سقف"
+pub func BWTDecompressMax(p: void*, n: int, max: int, ok &: bool): ByteBuf:
+    ok = false
     mut r := NewByteReader(p, n)
     origLen := RdU32(r)
-    if origLen == 0: ret NewByteBuf() end
     primary := RdU32(r)
+    if r.bad or not _dec_size_ok(origLen, n, max): ret NewByteBuf() end
+    if origLen == 0:
+        ok = true
+        ret NewByteBuf()
+    end
 
     remaining := RdLeft(r)
     huffSrc := ((r.data as i64) + (r.pos as i64)) as void*
-    mut rlebuf := HuffmanDecompress(huffSrc, remaining)
-
-    mut mtfbuf := RLEDecompress(rlebuf.data, rlebuf.len)
+    mut hok := false
+    mut rlebuf := HuffmanDecompressMax(huffSrc, remaining, max, hok)
+    mut rok := false
+    mut mtfbuf := RLEDecompressMax(rlebuf.data, rlebuf.len, max, rok)
     BufFree(rlebuf)
 
     mut bwtbuf := MTFDecode(mtfbuf)
     BufFree(mtfbuf)
 
+    if not hok or not rok or bwtbuf.len != origLen or primary < 0 or primary >= origLen:
+        BufFree(bwtbuf)
+        ret NewByteBuf()
+    end
     out := BWTInverse(bwtbuf.data, bwtbuf.len, primary)
     BufFree(bwtbuf)
+    ok = true
     ret out
+end
+
+@en "BWTDecompress"
+@fa "کدگشایی باروز ویلر"
+pub func BWTDecompress(p: void*, n: int): ByteBuf:
+    mut ok := false
+    ret BWTDecompressMax(p, n, 0, ok)
 end

@@ -17,6 +17,7 @@ package main
 import archive
 import compress
 import filepath
+import mem
 import os
 
 const SEVENZ := """
@@ -46,6 +47,24 @@ func unhex(h: str): compress.ByteBuf:
     ret b
 end
 
+func tmp(name: str): str:
+    t := os.TempDir()
+    r := filepath.Join(t, name)
+    mem.Free(t as void*)
+    ret r
+end
+
+func has(dir: str, rel: str): bool:
+    p := filepath.Join(dir, rel)
+    r := os.Exists(p)
+    mem.Free(p as void*)
+    ret r
+end
+
+func sub(dir: str, rel: str): str:
+    ret filepath.Join(dir, rel)
+end
+
 func make_files(): Vector<archive.FileInput>:
     mut v := Vector {} as Vector<archive.FileInput>
     v.push(archive.MakeFileInput("docs/", null, 0, true))
@@ -69,11 +88,12 @@ func roundtrip(label: str, format: int):
     println arc.status, archive.ArchiveStatusText(arc.status)
     compress.BufFree(miss)
     archive.FreeEntries(es)
-    dest := filepath.Join(os.TempDir(), "salam_open_demo")
+    dest := tmp("salam_open_demo")
     os.RemoveAll(dest)
     n := archive.ExtractAll(arc, dest)
-    println n, arc.status, os.Exists(filepath.Join(dest, "docs/a.txt")), os.Exists(filepath.Join(dest, "b.txt"))
+    println n, arc.status, has(dest, "docs/a.txt"), has(dest, "b.txt")
     os.RemoveAll(dest)
+    mem.Free(dest as void*)
     archive.Close(arc)
     compress.BufFree(buf)
     files.free()
@@ -97,14 +117,14 @@ end
 
 
 func unsafe_cases():
-    dest := filepath.Join(os.TempDir(), "salam_open_unsafe")
+    dest := tmp("salam_open_unsafe")
     os.RemoveAll(dest)
     mut zs := Vector {} as Vector<archive.ZipFileInput>
     zs.push(archive.MakeZipFileInput("ok.txt", "fine" as void*, 4, 0))
     zs.push(archive.MakeZipFileInput("../evil.txt", "bad" as void*, 3, 0))
     mut zb := archive.ZipCreate(zs)
     mut za := archive.Open(zb.data, zb.len, "")
-    println archive.ExtractAll(za, dest), za.status, os.Exists(filepath.Join(dest, "ok.txt"))
+    println archive.ExtractAll(za, dest), za.status, has(dest, "ok.txt")
     archive.Close(za)
     compress.BufFree(zb)
     mut ts := Vector {} as Vector<archive.TarFileInput>
@@ -161,19 +181,22 @@ func unsafe_cases():
     mut a4 := archive.OpenWith(gz.data, gz.len, "", lim)
     println a4.status, archive.ArchiveStatusText(a4.status)
     archive.Close(a4)
-    made := filepath.Join(os.TempDir(), "salam_open_made.zip")
+    made := tmp("salam_open_made.zip")
     println archive.Create(made, files), os.Exists(made)
     os.Remove(made)
+    mem.Free(made as void*)
     compress.BufFree(buf)
     compress.BufFree(big)
     compress.BufFree(zbuf)
     compress.BufFree(gz)
     bf.free()
     os.RemoveAll(dest)
+    mem.Free(dest as void*)
+    files.free()
 end
 
 func file_cases():
-    dir := filepath.Join(os.TempDir(), "salam_open_files")
+    dir := tmp("salam_open_files")
     os.RemoveAll(dir)
     os.MkdirAll(dir)
     mut files := make_files()
@@ -183,18 +206,25 @@ func file_cases():
     mut es := archive.ListFile(path, "", st)
     println es.len(), st
     archive.FreeEntries(es)
-    out := filepath.Join(dir, "out")
-    println archive.ExtractFile(path, out, "", st), st, os.Exists(filepath.Join(out, "b.txt"))
+    out := sub(dir, "out")
+    one := sub(dir, "one")
+    two := sub(dir, "two")
+    println archive.ExtractFile(path, out, "", st), st, has(out, "b.txt")
     mut arc := archive.OpenFile(path, "")
     println archive.Detect(arc.data, arc.len) == archive.FormatGzip, archive.FormatName(arc.format)
-    println archive.Extract(arc, "docs/a.txt", filepath.Join(dir, "one")), os.Exists(filepath.Join(dir, "one/docs/a.txt"))
-    println archive.Extract(arc, "missing", filepath.Join(dir, "one")), arc.status
+    println archive.Extract(arc, "docs/a.txt", one), has(dir, "one/docs/a.txt")
+    println archive.Extract(arc, "missing", one), arc.status
     mut lim := archive.DefaultLimits()
     lim.max_entry = 5 as i64
     archive.SetLimits(arc, lim)
-    println archive.Extract(arc, "docs/a.txt", filepath.Join(dir, "two")), arc.status
+    println archive.Extract(arc, "docs/a.txt", two), arc.status
     archive.Close(arc)
     os.RemoveAll(dir)
+    mem.Free(dir as void*)
+    mem.Free(path as void*)
+    mem.Free(out as void*)
+    mem.Free(one as void*)
+    mem.Free(two as void*)
     files.free()
 end
 

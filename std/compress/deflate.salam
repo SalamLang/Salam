@@ -87,12 +87,14 @@ pub func DeflateCompress(p: void*, n: int): ByteBuf:
     ret out
 end
 
-@en "DeflateDecompress"
-@fa "کدگشایی دیفلیت"
-pub func DeflateDecompress(p: void*, n: int): ByteBuf:
+@en "DeflateDecompressMax"
+@fa "کدگشایی دیفلیت با سقف"
+pub func DeflateDecompressMax(p: void*, n: int, max: int, ok &: bool): ByteBuf:
+    ok = false
     mut r := NewByteReader(p, n)
     origLen := RdU32(r)
-    mut out := NewByteBufCap(origLen)
+    if r.bad or not _dec_size_ok(origLen, n, max): ret NewByteBuf() end
+    mut out := NewByteBufCap(_dec_cap(origLen))
 
     tagLen := RdU32(r)
     mut tagBytes := RdBytes(r, tagLen)
@@ -100,35 +102,52 @@ pub func DeflateDecompress(p: void*, n: int): ByteBuf:
 
     huffLitLen := RdU32(r)
     mut huffLitBytes := RdBytes(r, huffLitLen)
-    mut litlen := HuffmanDecompress(huffLitBytes.data, huffLitBytes.len)
+    mut litok := false
+    mut litlen := HuffmanDecompressMax(huffLitBytes.data, huffLitBytes.len, max, litok)
     BufFree(huffLitBytes)
 
     huffDistLen := RdU32(r)
     mut huffDistBytes := RdBytes(r, huffDistLen)
-    mut dist := HuffmanDecompress(huffDistBytes.data, huffDistBytes.len)
+    mut distok := false
+    mut dist := HuffmanDecompressMax(huffDistBytes.data, huffDistBytes.len, max, distok)
     BufFree(huffDistBytes)
+
+    mut good := not r.bad and litok and distok
 
     mut litpos := 0
     mut distpos := 0
-    until BufLen(out) < origLen:
+    until BufLen(out) < origLen and good:
         bit := BitReadBit(tagr)
-        if bit == 0:
-            b := BufGet(litlen, litpos)
-            litpos++
-            BufPush(out, b)
+        if tagr.bad:
+            good = false
+        else bit == 0:
+            if litpos >= litlen.len:
+                good = false
+            else:
+                BufPush(out, BufGet(litlen, litpos))
+                litpos++
+            end
         else:
-            lb := BufGet(litlen, litpos)
-            litpos++
-            length := lb + _DEFLATE_MIN_MATCH
-            hi := BufGet(dist, distpos)
-            lo := BufGet(dist, distpos + 1)
-            distpos += 2
-            d := ((hi << 8) | lo) + 1
-            start := BufLen(out) - d
-            mut k := 0
-            until k < length:
-                BufPush(out, BufGet(out, start + k))
-                k++
+            if litpos >= litlen.len or distpos + 1 >= dist.len:
+                good = false
+            else:
+                lb := BufGet(litlen, litpos)
+                litpos++
+                length := lb + _DEFLATE_MIN_MATCH
+                hi := BufGet(dist, distpos)
+                lo := BufGet(dist, distpos + 1)
+                distpos += 2
+                d := ((hi << 8) | lo) + 1
+                start := BufLen(out) - d
+                if start < 0:
+                    good = false
+                else:
+                    mut k := 0
+                    until k < length:
+                        BufPush(out, BufGet(out, start + k))
+                        k++
+                    end
+                end
             end
         end
     end
@@ -136,5 +155,17 @@ pub func DeflateDecompress(p: void*, n: int): ByteBuf:
     BufFree(tagBytes)
     BufFree(litlen)
     BufFree(dist)
+    if not good or BufLen(out) != origLen:
+        BufFree(out)
+        ret NewByteBuf()
+    end
+    ok = true
     ret out
+end
+
+@en "DeflateDecompress"
+@fa "کدگشایی دیفلیت"
+pub func DeflateDecompress(p: void*, n: int): ByteBuf:
+    mut ok := false
+    ret DeflateDecompressMax(p, n, 0, ok)
 end

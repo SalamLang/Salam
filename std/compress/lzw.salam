@@ -57,13 +57,18 @@ pub func LZWCompress(p: void*, n: int): ByteBuf:
     ret out
 end
 
-@en "LZWDecompress"
-@fa "کدگشایی ال زد دبلیو"
-pub func LZWDecompress(p: void*, n: int): ByteBuf:
+@en "LZWDecompressMax"
+@fa "کدگشایی ال زد دبلیو با سقف"
+pub func LZWDecompressMax(p: void*, n: int, max: int, ok &: bool): ByteBuf:
+    ok = false
     mut r := NewByteReader(p, n)
     origLen := RdU32(r)
-    mut out := NewByteBufCap(origLen)
-    if origLen == 0: ret out end
+    if r.bad or not _dec_size_ok(origLen, n, max): ret NewByteBuf() end
+    mut out := NewByteBufCap(_dec_cap(origLen))
+    if origLen == 0:
+        ok = true
+        ret out
+    end
 
     remaining := RdLeft(r)
     mut br := NewBitReader(((r.data as i64) + (r.pos as i64)) as void*, remaining)
@@ -80,43 +85,65 @@ pub func LZWDecompress(p: void*, n: int): ByteBuf:
 
     mut next_code := 256
     mut code_width := 9
+    mut good := true
 
     mut prev := BitReadBits(br, code_width)
-    BufPush(out, byte_of[prev])
+    if prev >= 256 or br.bad: good = false end
+    if good: BufPush(out, byte_of[prev]) end
 
-    until BufLen(out) < origLen:
+    until BufLen(out) < origLen and good:
         code := BitReadBits(br, code_width)
-        mut resolved := code
-        if code >= next_code:
-            resolved = prev
-        end
+        if br.bad or code > next_code:
+            good = false
+        else:
+            mut resolved := code
+            if code >= next_code:
+                resolved = prev
+            end
 
-        mut stack: int[4096]
-        mut top := 0
-        mut cur := resolved
-        until cur >= 0:
-            stack[top] = byte_of[cur]
-            top++
-            cur = prefix_of[cur]
-        end
-        firstbyte := stack[top - 1]
-        until top > 0:
-            top--
-            BufPush(out, stack[top])
-        end
-        if code >= next_code:
-            BufPush(out, firstbyte)
-        end
+            mut stack: int[4096]
+            mut top := 0
+            mut cur := resolved
+            until cur >= 0 and top < 4096:
+                stack[top] = byte_of[cur]
+                top++
+                cur = prefix_of[cur]
+            end
+            if top == 0 or cur >= 0:
+                good = false
+            else:
+                firstbyte := stack[top - 1]
+                until top > 0:
+                    top--
+                    BufPush(out, stack[top])
+                end
+                if code >= next_code:
+                    BufPush(out, firstbyte)
+                end
 
-        if next_code < 4096:
-            prefix_of[next_code] = prev
-            byte_of[next_code] = firstbyte
-            next_code++
-            if next_code >= (1 << code_width) - 1 and code_width < 12:
-                code_width++
+                if next_code < 4096:
+                    prefix_of[next_code] = prev
+                    byte_of[next_code] = firstbyte
+                    next_code++
+                    if next_code >= (1 << code_width) - 1 and code_width < 12:
+                        code_width++
+                    end
+                end
+                prev = code
             end
         end
-        prev = code
     end
+    if not good or BufLen(out) != origLen:
+        BufFree(out)
+        ret NewByteBuf()
+    end
+    ok = true
     ret out
+end
+
+@en "LZWDecompress"
+@fa "کدگشایی ال زد دبلیو"
+pub func LZWDecompress(p: void*, n: int): ByteBuf:
+    mut ok := false
+    ret LZWDecompressMax(p, n, 0, ok)
 end

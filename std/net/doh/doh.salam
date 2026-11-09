@@ -1,0 +1,506 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "net/doh"
+@fa "دی‌اوه‌اچ"
+package doh
+
+import str
+import compress
+import net.dns
+
+@en "KindDoH"
+@fa "نوع دی‌اوه‌اچ پست"
+pub const KindDoH := 0
+
+@en "KindDoHGet"
+@fa "نوع دی‌اوه‌اچ گت"
+pub const KindDoHGet := 1
+
+@en "KindDoT"
+@fa "نوع دی‌اوه‌تی"
+pub const KindDoT := 2
+
+@en "KindUDP"
+@fa "نوع یو دی پی ساده"
+pub const KindUDP := 3
+
+@en "Server"
+@fa "کارگزار"
+pub struct Server:
+    @en "name"
+    @fa "نام"
+    pub name: str = ""
+    @en "kind"
+    @fa "نوع"
+    pub kind: int = 0
+    @en "url"
+    @fa "نشانی"
+    pub url: str = ""
+    @en "host"
+    @fa "میزبان"
+    pub host: str = ""
+    @en "port"
+    @fa "درگاه"
+    pub port: int = 0
+    @en "path"
+    @fa "مسیر"
+    pub path: str = ""
+    @en "use_tls"
+    @fa "با تی ال اس"
+    pub use_tls: bool = true
+    @en "addrs"
+    @fa "نشانی‌های راه‌انداز"
+    pub addrs: Vector<str> = Vector {}
+    @en "insecure"
+    @fa "ناامن"
+    pub insecure: bool = false
+end
+
+@en "Url"
+@fa "نشانی وب"
+pub struct Url:
+    @en "ok"
+    @fa "معتبر"
+    pub ok: bool = false
+    @en "use_tls"
+    @fa "با تی ال اس"
+    pub use_tls: bool = true
+    @en "host"
+    @fa "میزبان"
+    pub host: str = ""
+    @en "port"
+    @fa "درگاه"
+    pub port: int = 0
+    @en "path"
+    @fa "مسیر"
+    pub path: str = ""
+end
+
+func _ip_digits(s: str): bool:
+    if s.len() == 0 or s.len() > 3:
+        ret false
+    end
+    repeat s.len() in i:
+        c := (s as u8*)[i] as int
+        if c < 48 or c > 57:
+            ret false
+        end
+    end
+    ret true
+end
+
+func _hexval(c: int): int:
+    if c >= 48 and c <= 57:
+        ret c - 48
+    end
+    if c >= 97 and c <= 102:
+        ret c - 87
+    end
+    if c >= 65 and c <= 70:
+        ret c - 55
+    end
+    ret 0 - 1
+end
+
+func _hex_group(s: str): int:
+    n := s.len()
+    if n == 0 or n > 4:
+        ret 0 - 1
+    end
+    mut v := 0
+    repeat n in i:
+        h := _hexval((s as u8*)[i] as int)
+        if h < 0:
+            ret 0 - 1
+        end
+        v = v * 16 + h
+    end
+    ret v
+end
+
+func _groups(part: str, out &: Vector<int>): bool:
+    if part.len() == 0:
+        ret true
+    end
+    items := str.Split(part, ":")
+    defer items.free()
+    repeat items.len() in i:
+        g := _hex_group(items.get(i))
+        if g < 0:
+            ret false
+        end
+        out.push(g)
+    end
+    ret true
+end
+
+func _put_u16(b &: compress.ByteBuf, v: int):
+    compress.BufPush(b, (v >> 8) & 255)
+    compress.BufPush(b, v & 255)
+end
+
+func _put_name(b &: compress.ByteBuf, name: str):
+    mut n := name
+    if n.len() > 0 and n.substr(n.len() - 1, 1) == ".":
+        n = n.substr(0, n.len() - 1)
+    end
+    if n.len() > 0:
+        labels := str.Split(n, ".")
+        defer labels.free()
+        repeat labels.len() in i:
+            l := labels.get(i)
+            compress.BufPush(b, l.len())
+            compress.BufPushBytes(b, l as void*, l.len())
+        end
+    end
+    compress.BufPush(b, 0)
+end
+
+func _put_rdata(b &: compress.ByteBuf, rec: dns.Record):
+    mut rd := compress.NewByteBuf()
+    defer compress.BufFree(rd)
+    if rec.rtype == dns.TypeA:
+        _a := ParseIPv4(rec.data, rd)
+    else rec.rtype == dns.TypeAAAA:
+        _b := ParseIPv6(rec.data, rd)
+    else rec.rtype == dns.TypeCNAME or rec.rtype == dns.TypeNS or rec.rtype == dns.TypePTR:
+        _put_name(rd, rec.data)
+    else rec.rtype == dns.TypeMX:
+        _put_u16(rd, rec.priority)
+        _put_name(rd, rec.data)
+    else rec.rtype == dns.TypeTXT:
+        mut off := 0
+        total := rec.data.len()
+        if total == 0:
+            compress.BufPush(rd, 0)
+        end
+        until off < total:
+            mut take := total - off
+            if take > 255:
+                take = 255
+            end
+            compress.BufPush(rd, take)
+            compress.BufPushBytes(rd, (((rec.data as void*) as i64) + (off as i64)) as void*, take)
+            off += take
+        end
+    end
+    _put_u16(b, rd.len)
+    compress.BufPushBuf(b, rd)
+end
+
+@en "ParseIPv4"
+@fa "تجزیه آی‌پی۴"
+pub func ParseIPv4(text: str, out &: compress.ByteBuf): bool:
+    parts := str.Split(text, ".")
+    defer parts.free()
+    if parts.len() != 4:
+        ret false
+    end
+    mut vals: int[4]
+    repeat 4 in i:
+        s := parts.get(i)
+        if not _ip_digits(s):
+            ret false
+        end
+        v := s.to_int()
+        if v > 255:
+            ret false
+        end
+        vals[i] = v
+    end
+    repeat 4 in i:
+        compress.BufPush(out, vals[i])
+    end
+    ret true
+end
+
+@en "ParseIPv6"
+@fa "تجزیه آی‌پی۶"
+pub func ParseIPv6(text: str, out &: compress.ByteBuf): bool:
+    mut left := Vector {} as Vector<int>
+    mut right := Vector {} as Vector<int>
+    defer left.free()
+    defer right.free()
+    dc := text.find("::")
+    mut has_gap := false
+    if dc >= 0:
+        has_gap = true
+        rest := text.substr(dc + 2, text.len() - dc - 2)
+        if rest.find("::") >= 0:
+            ret false
+        end
+        if not _groups(text.substr(0, dc), left):
+            ret false
+        end
+        if not _groups(rest, right):
+            ret false
+        end
+    else:
+        if not _groups(text, left):
+            ret false
+        end
+    end
+    total := left.len() + right.len()
+    if has_gap and total > 7:
+        ret false
+    end
+    if not has_gap and total != 8:
+        ret false
+    end
+    repeat left.len() in i:
+        _put_u16(out, left.get(i))
+    end
+    repeat 8 - total:
+        _put_u16(out, 0)
+    end
+    repeat right.len() in i:
+        _put_u16(out, right.get(i))
+    end
+    ret true
+end
+
+@en "IsIP"
+@fa "نشانی آی‌پی است"
+pub func IsIP(host: str): bool:
+    mut b := compress.NewByteBuf()
+    defer compress.BufFree(b)
+    if ParseIPv4(host, b):
+        ret true
+    end
+    compress.BufReset(b)
+    ret host.find(":") >= 0 and ParseIPv6(host, b)
+end
+
+@en "ParseURL"
+@fa "تجزیه نشانی وب"
+pub func ParseURL(raw: str): Url:
+    mut u := Url {}
+    mut rest := raw
+    if raw.len() > 8 and raw.substr(0, 8) == "https://":
+        rest = raw.substr(8, raw.len() - 8)
+        u.use_tls = true
+        u.port = 443
+    else raw.len() > 7 and raw.substr(0, 7) == "http://":
+        rest = raw.substr(7, raw.len() - 7)
+        u.use_tls = false
+        u.port = 80
+    else:
+        ret u
+    end
+    slash := rest.find("/")
+    mut authority := rest
+    u.path = "/"
+    if slash >= 0:
+        authority = rest.substr(0, slash)
+        u.path = rest.substr(slash, rest.len() - slash)
+    end
+    if authority.len() == 0:
+        ret u
+    end
+    colon := authority.find(":")
+    if colon > 0 and authority.find("[") < 0:
+        pv := authority.substr(colon + 1, authority.len() - colon - 1)
+        if not _ip_digits(pv) and pv.len() > 5:
+            ret u
+        end
+        u.port = pv.to_int()
+        authority = authority.substr(0, colon)
+    end
+    u.host = authority
+    u.ok = true
+    ret u
+end
+
+@en "NewServer"
+@fa "کارگزار جدید"
+pub func NewServer(name: str, kind: int, url: str): Server:
+    mut s := Server { name = name, kind = kind, url = url }
+    if kind == KindDoH or kind == KindDoHGet:
+        u := ParseURL(url)
+        s.host = u.host
+        s.port = u.port
+        s.path = u.path
+        s.use_tls = u.use_tls
+    end
+    ret s
+end
+
+@en "NewDoT"
+@fa "کارگزار دی‌اوه‌تی جدید"
+pub func NewDoT(name: str, host: str, addr: str): Server:
+    mut s := Server { name = name, kind = KindDoT, host = host, port = 853, use_tls = true }
+    if addr.len() > 0:
+        s.addrs.push(addr)
+    end
+    ret s
+end
+
+@en "NewPlain"
+@fa "کارگزار ساده جدید"
+pub func NewPlain(name: str, addr: str): Server:
+    mut s := Server { name = name, kind = KindUDP, host = addr, port = 53, use_tls = false }
+    s.addrs.push(addr)
+    ret s
+end
+
+@en "WithBootstrap"
+@fa "با نشانی راه‌انداز"
+pub func WithBootstrap(s: Server, addr: str): Server:
+    mut c := s
+    c.addrs = Vector {} as Vector<str>
+    repeat s.addrs.len() in i:
+        c.addrs.push(s.addrs.get(i))
+    end
+    c.addrs.push(addr)
+    ret c
+end
+
+@en "Cloudflare"
+@fa "کلودفلر"
+pub func Cloudflare(): Server:
+    mut s := NewServer("cloudflare", KindDoH, "https://cloudflare-dns.com/dns-query")
+    s.addrs.push("1.1.1.1")
+    s.addrs.push("1.0.0.1")
+    ret s
+end
+
+@en "Google"
+@fa "گوگل"
+pub func Google(): Server:
+    mut s := NewServer("google", KindDoH, "https://dns.google/dns-query")
+    s.addrs.push("8.8.8.8")
+    s.addrs.push("8.8.4.4")
+    ret s
+end
+
+@en "Quad9"
+@fa "کواد نه"
+pub func Quad9(): Server:
+    mut s := NewServer("quad9", KindDoH, "https://dns.quad9.net/dns-query")
+    s.addrs.push("9.9.9.9")
+    s.addrs.push("149.112.112.112")
+    ret s
+end
+
+@en "CloudflareDoT"
+@fa "کلودفلر دی‌اوه‌تی"
+pub func CloudflareDoT(): Server:
+    ret NewDoT("cloudflare-dot", "one.one.one.one", "1.1.1.1")
+end
+
+@en "GoogleDoT"
+@fa "گوگل دی‌اوه‌تی"
+pub func GoogleDoT(): Server:
+    ret NewDoT("google-dot", "dns.google", "8.8.8.8")
+end
+
+@en "Quad9DoT"
+@fa "کواد نه دی‌اوه‌تی"
+pub func Quad9DoT(): Server:
+    ret NewDoT("quad9-dot", "dns.quad9.net", "9.9.9.9")
+end
+
+@en "DefaultServers"
+@fa "کارگزارهای پیش‌فرض"
+pub func DefaultServers(): Vector<Server>:
+    mut v := Vector {} as Vector<Server>
+    v.push(Cloudflare())
+    v.push(Google())
+    v.push(Quad9())
+    ret v
+end
+
+@en "Shecan"
+@fa "شکن"
+pub func Shecan(): Vector<Server>:
+    mut v := Vector {} as Vector<Server>
+    v.push(NewPlain("shecan", "178.22.122.100"))
+    v.push(NewPlain("shecan2", "185.51.200.2"))
+    ret v
+end
+
+@en "Server403"
+@fa "چهارصد و سه"
+pub func Server403(): Vector<Server>:
+    mut v := Vector {} as Vector<Server>
+    v.push(NewPlain("403", "10.202.10.202"))
+    v.push(NewPlain("403b", "10.202.10.102"))
+    ret v
+end
+
+@en "Electro"
+@fa "الکترو"
+pub func Electro(): Vector<Server>:
+    mut v := Vector {} as Vector<Server>
+    v.push(NewPlain("electro", "78.157.42.100"))
+    v.push(NewPlain("electro2", "78.157.42.101"))
+    ret v
+end
+
+@en "Radar"
+@fa "رادار"
+pub func Radar(): Vector<Server>:
+    mut v := Vector {} as Vector<Server>
+    v.push(NewPlain("radar", "10.202.10.10"))
+    v.push(NewPlain("radar2", "10.202.10.11"))
+    ret v
+end
+
+@en "IranPlainServers"
+@fa "کارگزارهای ساده ایران"
+pub func IranPlainServers(): Vector<Server>:
+    mut v := Shecan()
+    a := Server403()
+    b := Electro()
+    v.push(a.get(0))
+    v.push(a.get(1))
+    v.push(b.get(0))
+    v.push(b.get(1))
+    ret v
+end
+
+@en "EncodeResponse"
+@fa "کدگذاری پاسخ"
+pub func EncodeResponse(id: int, name: str, qtype: int, rcode: int, records: Vector<dns.Record>): compress.ByteBuf:
+    mut b := compress.NewByteBufCap(128)
+    _put_u16(b, id)
+    _put_u16(b, 33152 + (rcode & 15))
+    _put_u16(b, 1)
+    _put_u16(b, records.len())
+    _put_u16(b, 0)
+    _put_u16(b, 0)
+    _put_name(b, name)
+    _put_u16(b, qtype)
+    _put_u16(b, dns.ClassIN)
+    repeat records.len() in i:
+        r := records.get(i)
+        _put_name(b, r.name)
+        _put_u16(b, r.rtype)
+        _put_u16(b, dns.ClassIN)
+        compress.BufPushU32(b, r.ttl)
+        _put_rdata(b, r)
+    end
+    ret b
+end
+
+@en "FreeServers"
+@fa "آزاد کردن کارگزارها"
+pub func FreeServers(v &: Vector<Server>):
+    repeat v.len() in i:
+        s := v.get(i)
+        s.addrs.free()
+    end
+    v.free()
+end

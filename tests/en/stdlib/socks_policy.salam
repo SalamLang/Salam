@@ -1,0 +1,141 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import mem
+import net.socks
+import net.tcp
+import net.udp
+import net.tunnel
+
+func echo_conn(arg: i64):
+    c := tcp.ConnFromFd(arg)
+    until true:
+        d := tcp.Read(c, 4096)
+        if d.len() == 0: break end
+        tcp.Write(c, d)
+    end
+    tcp.Close(c)
+end
+
+func echo_accept(arg: i64):
+    srv := tcp.Server { fd = arg }
+    until true:
+        c := tcp.Accept(srv)
+        if not tcp.ConnOk(c): break end
+        socks.Go(echo_conn, c.fd as void*)
+    end
+end
+
+func udp_echo(arg: i64):
+    s := udp.Socket { fd = arg }
+    buf := mem.Allocate(2048 as u64)
+    until true:
+        mut h := ""
+        mut p := 0
+        n := udp.ReceiveBytes(s, buf, 2048, h, p)
+        if n < 0: break end
+        udp.SendBytes(s, h, p, buf, n)
+    end
+end
+
+func attempt(label: str, cl: socks.Client, host: str, port: int):
+    r := socks.Connect(cl, host, port)
+    println label + ": ok=" + r.ok + " code=" + r.code
+    if r.ok:
+        r.stream.Write("ping")
+        println "  reply: " + r.stream.Read(100)
+        r.stream.Close()
+    end
+end
+
+func udp_try(label: str, cl: socks.Client, port: int):
+    u := socks.Associate(cl)
+    if not u.ok:
+        println label + ": associate failed"
+        ret
+    end
+    socks.UDPSetTimeout(u, 700)
+    socks.UDPSend(u, "127.0.0.1", port, "dgram")
+    buf := mem.Allocate(1024 as u64)
+    mut from := socks.Address {}
+    n := socks.UDPReceiveBytes(u, buf, 1024, from)
+    mem.Free(buf)
+    println label + ": reply bytes=" + n
+    socks.CloseUDP(u)
+end
+
+func main:
+    esock := tcp.Bind(0)
+    socks.Go(echo_accept, esock.fd as void*)
+    eport := tcp.Port(esock)
+    usock := udp.Bind(0)
+    uport := udp.Port(usock)
+    socks.Go(udp_echo, usock.fd as void*)
+
+    dsv := socks.Start(socks.NewServerConfig(0))
+    dcl := socks.NewClient("127.0.0.1", dsv.port)
+    attempt("default, loopback address", dcl, "127.0.0.1", eport)
+    attempt("default, loopback name", dcl, "localhost", eport)
+    attempt("default, loopback ipv6", dcl, "::1", eport)
+    attempt("default, mapped loopback", dcl, "::ffff:127.0.0.1", eport)
+    attempt("default, private address", dcl, "10.20.30.40", 80)
+    attempt("default, link local metadata address", dcl, "169.254.169.254", 80)
+    attempt("default, carrier grade nat", dcl, "100.64.1.1", 80)
+    attempt("default, unique local ipv6", dcl, "fd00::1", 80)
+    attempt("default, any address", dcl, "0.0.0.0", 80)
+    attempt("default, broadcast", dcl, "255.255.255.255", 80)
+    udp_try("default, udp to loopback", dcl, uport)
+    socks.Stop(dsv)
+
+    mut apcfg := socks.NewServerConfig(0)
+    socks.AllowPrivate(apcfg, true)
+    asv := socks.Start(apcfg)
+    acl_c := socks.NewClient("127.0.0.1", asv.port)
+    attempt("allow_private on loopback, address", acl_c, "127.0.0.1", eport)
+    attempt("allow_private on loopback, name", acl_c, "localhost", eport)
+    udp_try("allow_private on loopback, udp", acl_c, uport)
+    socks.Stop(asv)
+
+    mut widecfg := socks.NewServerConfig(0)
+    widecfg.bind_host = "0.0.0.0"
+    socks.AllowPrivate(widecfg, true)
+    wsv := socks.Start(widecfg)
+    wcl := socks.NewClient("127.0.0.1", wsv.port)
+    attempt("allow_private on a public bind is ignored", wcl, "127.0.0.1", eport)
+    socks.Stop(wsv)
+
+    mut aclcfg := socks.NewServerConfig(0)
+    socks.AllowPrivate(aclcfg, true)
+    tunnel.PolicyDenyCidr(aclcfg.policy, "127.0.0.1/32")
+    tunnel.PolicyDenySuffix(aclcfg.policy, "blocked.example")
+    ssv := socks.Start(aclcfg)
+    scl := socks.NewClient("127.0.0.1", ssv.port)
+    attempt("deny cidr beats allow_private", scl, "127.0.0.1", eport)
+    attempt("deny domain suffix", scl, "www.blocked.example", 80)
+    socks.Stop(ssv)
+
+    mut onlycfg := socks.NewServerConfig(0)
+    tunnel.PolicyAllowCidr(onlycfg.policy, "127.0.0.0/8")
+    osv := socks.Start(onlycfg)
+    ocl := socks.NewClient("127.0.0.1", osv.port)
+    attempt("allow cidr without allow_private", ocl, "127.0.0.1", eport)
+    attempt("allow cidr leaves other private ranges closed", ocl, "10.1.1.1", 80)
+    socks.Stop(osv)
+
+    vsv := socks.Start(socks.NewServerConfig(0))
+    mut cl4 := socks.NewClient("127.0.0.1", vsv.port)
+    cl4.version = socks.Socks4
+    println "socks4 default: " + socks.Connect(cl4, "127.0.0.1", eport).ok
+    socks.Stop(vsv)
+end

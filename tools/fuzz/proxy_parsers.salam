@@ -28,8 +28,77 @@ import net.doh
 import net.reality
 import net.transport
 import net.tunnel
+import net.http2
+
+const FUZZ_UUID := "b831381d-6324-4d53-ad4f-8cda48b30811"
 
 mut state := 88172645463325252 as i64
+
+struct MemStream:
+    pub cell: i64* = null
+
+    pub func Read(max: int): str:
+        buf := mem.AllocateZeroed((max + 1) as u64)
+        n := this.ReadBytes(buf, max)
+        if n <= 0:
+            mem.Free(buf)
+            ret ""
+        end
+        ret buf as str
+    end
+
+    pub func ReadBytes(buf: void*, max: int): int:
+        c := this.cell
+        left := (c[1] - c[2]) as int
+        mut n := max
+        if n > left: n = left end
+        if n <= 0: ret 0 end
+        mem.Copy(buf, (c[0] + c[2]) as void*, n as u64)
+        c[2] += n as i64
+        ret n
+    end
+
+    pub func Write(data: str): int:
+        ret this.WriteBytes(data as void*, data.len())
+    end
+
+    pub func WriteBytes(ptr: void*, n: int): int:
+        c := this.cell
+        if c[4] + (n as i64) > c[5]:
+            cap := (c[4] + (n as i64)) * (2 as i64) + (64 as i64)
+            nb := mem.AllocateZeroed(cap as u64)
+            if c[3] != 0:
+                mem.Copy(nb, c[3] as void*, c[4] as u64)
+                mem.Free(c[3] as void*)
+            end
+            c[3] = nb as i64
+            c[5] = cap
+        end
+        mem.Copy((c[3] + c[4]) as void*, ptr, n as u64)
+        c[4] += n as i64
+        ret n
+    end
+
+    pub func SetDeadline(_millis: int):
+        this.cell[6] = 1
+    end
+
+    pub func Shutdown():
+        this.cell[6] = 1
+    end
+
+    pub func CloseWrite():
+        this.cell[6] = 1
+    end
+
+    pub func Close():
+        this.cell[6] = 1
+    end
+
+    pub func Ok(): bool:
+        ret true
+    end
+end
 
 func next(): int:
     state ^= state << 13
@@ -295,6 +364,101 @@ func run_text(which: int, v: Vector<int>):
     end
 end
 
+func mem_stream(bytes: Vector<int>): MemStream:
+    c := mem.AllocateZeroed(64 as u64) as i64*
+    c[0] = load(bytes) as i64
+    c[1] = bytes.len() as i64
+    ret MemStream { cell = c }
+end
+
+func mem_free(m: MemStream):
+    c := m.cell
+    if c[0] != 0: mem.Free(c[0] as void*) end
+    if c[3] != 0: mem.Free(c[3] as void*) end
+    mem.Free(c as void*)
+end
+
+func captured(m: MemStream): Vector<int>:
+    c := m.cell
+    mut v := Vector {} as Vector<int>
+    p := c[3] as u8*
+    repeat c[4] as int in i:
+        v.push(p[i] as int)
+    end
+    ret v
+end
+
+func stream_seeds(): Vector<Vector<int>>:
+    mut seeds := Vector {} as Vector<Vector<int>>
+    payload := "hello stateful fuzzing"
+    sink1 := mem_stream(Vector {} as Vector<int>)
+    cfg := shadowsocks.ToConfig(shadowsocks.Uri { host = "127.0.0.1", port = 1, method = "aes-256-gcm", password = "pw" })
+    c1 := shadowsocks.DialOver(sink1, cfg, "example.com", 80)
+    shadowsocks.WriteStr(c1, payload)
+    shadowsocks.WriteStr(c1, payload)
+    seeds.push(captured(sink1))
+    sink2 := mem_stream(Vector {} as Vector<int>)
+    mut c2 := vmess.Client(transport.FromStream(sink2, true), FUZZ_UUID, vmess.SecAES128GCM, vmess.DefaultOption(vmess.SecAES128GCM), vmess.CmdTCP, transport.NewAddr("example.com", 80))
+    vmess.Write(c2, payload as void*, payload.len())
+    vmess.Write(c2, payload as void*, payload.len())
+    seeds.push(captured(sink2))
+    sink3 := mem_stream(Vector {} as Vector<int>)
+    mux := transport.NewMuxClient(sink3)
+    ms := transport.MuxOpen(mux, transport.NewAddr("example.com", 80), false)
+    ms.Write(payload)
+    ms.Write(payload)
+    seeds.push(captured(sink3))
+    seeds.push(hexbytes("828684410f7777772e6578616d706c652e636f6d"))
+    seeds.push(hexbytes("c1d3e7f5400a637573746f6d2d6b65790d637573746f6d2d76616c7565"))
+    ret seeds
+end
+
+func run_stream(which: int, v: Vector<int>):
+    if which == 0:
+        srv := shadowsocks.Listen(0, "aes-256-gcm", "pw")
+        m := mem_stream(v)
+        c := shadowsocks.AcceptOver(srv, m)
+        if shadowsocks.Ok(c):
+            buf := mem.Allocate(4096 as u64)
+            repeat 8:
+                if shadowsocks.Read(c, buf, 4096) <= 0: break end
+            end
+            mem.Free(buf)
+        end
+        shadowsocks.Close(c)
+        mem_free(m)
+    else which == 1:
+        m := mem_stream(v)
+        mut users := Vector {} as Vector<vmess.User>
+        users.push(vmess.NewUser(FUZZ_UUID))
+        mut rf := vmess.NewReplayFilter()
+        mut c := vmess.Accept(transport.FromStream(m, false), users, rf)
+        if c.ok:
+            buf := mem.Allocate(4096 as u64)
+            repeat 8:
+                if vmess.Read(c, buf, 4096) <= 0: break end
+            end
+            mem.Free(buf)
+        end
+        mem_free(m)
+    else which == 2:
+        m := mem_stream(v)
+        mux := transport.NewMuxServer(m)
+        mut inc := transport.MuxIncoming {}
+        if transport.MuxAccept(mux, inc):
+            inc.stream.SetDeadline(50)
+            _t := inc.stream.Read(256)
+        end
+        transport.MuxClose(mux)
+    else:
+        mut table := http2.NewDynTable(4096)
+        mut block := compress.NewByteBuf()
+        compress.BufPushBytes(block, load(v), v.len())
+        mut ok := false
+        _hl := http2.DecodeHeaderList(table, block, ok)
+    end
+end
+
 func main():
     args := os.Args()
     mut rounds := 3000
@@ -328,4 +492,15 @@ func main():
         end
     end
     println "text parsers", done
+    seeds := stream_seeds()
+    done = 0
+    repeat 4 in which:
+        repeat rounds / 20:
+            m := mutate(seeds.get(which), false)
+            run_stream(which, m)
+            m.free()
+            done++
+        end
+    end
+    println "stream parsers", done
 end

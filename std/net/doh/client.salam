@@ -360,7 +360,7 @@ func _random_id(): int:
     ret ((buf as u8*)[0] as int) * 256 + ((buf as u8*)[1] as int)
 end
 
-func _check_response(raw: compress.ByteBuf, want_id: int, check_id: bool): str:
+func _check_response(raw: compress.ByteBuf, wire: compress.ByteBuf, want_id: int, check_id: bool): str:
     if raw.len < 12:
         ret "short dns message"
     end
@@ -369,6 +369,9 @@ func _check_response(raw: compress.ByteBuf, want_id: int, check_id: bool): str:
     end
     if check_id and compress.BufGet(raw, 0) * 256 + compress.BufGet(raw, 1) != want_id:
         ret "id mismatch"
+    end
+    if not _same_question(wire.data, wire.len, raw.data, raw.len):
+        ret "question mismatch"
     end
     ret ""
 end
@@ -548,13 +551,81 @@ func _query_dot(srv: Server, addr: str, wire: compress.ByteBuf, timeout_ms: int,
     ret "dot read failed"
 end
 
+func _question_end(b: void*, n: int): int:
+    p := b as u8*
+    mut i := 12
+    until i < n:
+        l := p[i] as int
+        if l == 0:
+            if i + 5 > n: ret 0 - 1 end
+            ret i + 5
+        end
+        if l >= 64: ret 0 - 1 end
+        i += l + 1
+    end
+    ret 0 - 1
+end
+
+func _lower_byte(c: int): int:
+    if c >= 65 and c <= 90: ret c + 32 end
+    ret c
+end
+
+func _same_question(q: void*, qn: int, r: void*, rn: int): bool:
+    qe := _question_end(q, qn)
+    if qe < 0: ret false end
+    if rn < 12: ret false end
+    rp := r as u8*
+    if ((rp[4] as int) * 256 + (rp[5] as int)) != 1: ret false end
+    if _question_end(r, rn) != qe: ret false end
+    qp := q as u8*
+    mut i := 12
+    until i < qe - 4:
+        l := qp[i] as int
+        if (rp[i] as int) != l: ret false end
+        mut k := 1
+        until k <= l:
+            if _lower_byte(qp[i + k] as int) != _lower_byte(rp[i + k] as int): ret false end
+            k++
+        end
+        i += l + 1
+    end
+    if i < 0: ret false end
+    repeat 4 in j:
+        if qp[i + j] != rp[i + j]: ret false end
+    end
+    ret true
+end
+
+func _udp_reply_ok(wire: compress.ByteBuf, buf: void*, n: int): bool:
+    if n < 12: ret false end
+    rp := buf as u8*
+    if ((rp[2] as int) & 128) == 0: ret false end
+    if (rp[0] as int) != compress.BufGet(wire, 0) or (rp[1] as int) != compress.BufGet(wire, 1): ret false end
+    ret _same_question(wire.data, wire.len, buf, n)
+end
+
+func _open_random_port(addr: str): udp.Socket:
+    v6 := rawsock.IsIPv6(addr)
+    mut host := "0.0.0.0"
+    if v6: host = "::" end
+    rnd := mem.Allocate(2 as u64)
+    defer mem.Free(rnd)
+    repeat 8:
+        crypto.RandomBytes(rnd, 2)
+        port := 20000 + (((rnd as u8*)[0] as int) * 256 + ((rnd as u8*)[1] as int)) % 40000
+        sock := udp.BindOn(host, port)
+        if udp.Ok(sock): ret sock end
+    end
+    ret udp.OpenFor(addr)
+end
+
 func _query_udp(srv: Server, addr: str, wire: compress.ByteBuf, timeout_ms: int, out &: compress.ByteBuf): str:
-    sock := udp.OpenAny()
+    sock := _open_random_port(addr)
     if not udp.Ok(sock):
         ret "socket failed"
     end
     defer udp.Close(sock)
-    udp.SetTimeout(sock, timeout_ms)
     mut port := srv.port
     if port <= 0:
         port = 53
@@ -565,17 +636,21 @@ func _query_udp(srv: Server, addr: str, wire: compress.ByteBuf, timeout_ms: int,
     cap := 4096
     buf := mem.Allocate(cap as u64)
     defer mem.Free(buf)
-    mut fh := ""
-    mut fp := 0
-    n := udp.ReceiveBytes(sock, buf, cap, fh, fp)
-    if n <= 0:
-        ret "timeout"
+    want := rawsock.CanonIP(addr)
+    deadline := time.MonoMillis() + (timeout_ms as i64)
+    until true:
+        left := deadline - time.MonoMillis()
+        if left <= (0 as i64): ret "timeout" end
+        udp.SetTimeout(sock, left as int)
+        mut fh := ""
+        mut fp := 0
+        n := udp.ReceiveBytes(sock, buf, cap, fh, fp)
+        if n <= 0: ret "timeout" end
+        if fh == want and fp == port and _udp_reply_ok(wire, buf, n):
+            compress.BufPushBytes(out, buf, n)
+            ret ""
+        end
     end
-    if fh != rawsock.CanonIP(addr) or fp != port:
-        ret "unexpected sender"
-    end
-    compress.BufPushBytes(out, buf, n)
-    ret ""
 end
 
 @en "QueryAddr"
@@ -600,7 +675,7 @@ pub func QueryAddr(srv: Server, addr: str, name: str, qtype: int, timeout_ms: in
         err = _query_doh(srv, addr, wire, timeout_ms, raw)
     end
     if err.len() == 0:
-        err = _check_response(raw, wire_id, srv.kind != KindDoH and srv.kind != KindDoHGet)
+        err = _check_response(raw, wire, wire_id, srv.kind != KindDoH and srv.kind != KindDoHGet)
     end
     r.rtt_ms = time.MonoMillis() - start
     if err.len() > 0:

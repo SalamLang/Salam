@@ -6,6 +6,7 @@ import { fmtDate, fmtNum } from "./format";
 import { t } from "./i18n";
 import { agent, isDesktop } from "./desktop";
 import { autoDir } from "./dir";
+import { MasterField, PROJECT_MASTER_MAX } from "./MasterPrompt";
 import {
   IconChat,
   IconClose,
@@ -89,6 +90,7 @@ type DialogProps = {
 export function ProjectDialog({ project, busy, running, onSave, onClose }: DialogProps) {
   const [name, setName] = useState(project?.name ?? "");
   const [description, setDescription] = useState(project?.description ?? "");
+  const [master, setMaster] = useState(project?.master_prompt ?? "");
   const [color, setColor] = useState(project?.color || PROJECT_COLORS[0]);
   const [emoji, setEmoji] = useState(project?.emoji ?? "");
   const [path, setPath] = useState(project?.path ?? "");
@@ -121,7 +123,7 @@ export function ProjectDialog({ project, busy, running, onSave, onClose }: Dialo
     e.preventDefault();
     const trimmed = name.trim();
     if (!trimmed || busy || needsPath) return;
-    const input: ProjectInput = { name: trimmed, description: description.trim(), color, emoji };
+    const input: ProjectInput = { name: trimmed, description: description.trim(), master_prompt: master.trim(), color, emoji };
     if (path !== (project?.path ?? "")) input.path = path;
     onSave(input);
   };
@@ -245,6 +247,25 @@ export function ProjectDialog({ project, busy, running, onSave, onClose }: Dialo
           )}
           {pathError && <small className="error">{pathError}</small>}
         </div>
+        <label className="field">
+          <span>{t("پرامپت اصلی پروژه", "Project master prompt")}</span>
+          <MasterField
+            value={master}
+            max={PROJECT_MASTER_MAX}
+            onChange={setMaster}
+            rows={5}
+            placeholder={t(
+              "چگونه این پروژه را پیش ببرد؟ مثلاً: بعد از هر کار تست کن و مرحله به مرحله کامیت و پوش کن.",
+              "How should this project be run? For example: test after each task, commit and push step by step.",
+            )}
+          />
+          <small className="muted">
+            {t(
+              "برای همه‌ی گفت‌وگوهای این پروژه. از پرامپت اصلی حساب بالاتر و از قوانین سرویس پایین‌تر است.",
+              "Applies to every chat in this project. Ranks above your account master prompt and below the service rules.",
+            )}
+          </small>
+        </label>
         <fieldset className="project-color-row">
           <legend className="project-dialog-label">{t("رنگ", "Color")}</legend>
           {PROJECT_COLORS.map((c) => (

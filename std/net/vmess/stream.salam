@@ -52,6 +52,7 @@ struct Codec:
     pub key: transport.Bytes = transport.Bytes {}
     pub iv: transport.Bytes = transport.Bytes {}
     pub lkey: transport.Bytes = transport.Bytes {}
+    pub liv: transport.Bytes = transport.Bytes {}
     pub counter: int = 0
     pub lcounter: int = 0
     pub shake: Shake = Shake {}
@@ -97,7 +98,9 @@ func _chacha_key(k: transport.Bytes): transport.Bytes:
     ret out
 end
 
-func _codec_new(security: int, option: int, key: transport.Bytes, iv: transport.Bytes): Codec:
+func _codec_new(
+    security: int, option: int, key: transport.Bytes, iv: transport.Bytes, lsrc_key: transport.Bytes, lsrc_iv: transport.Bytes
+): Codec:
     mut c := Codec {}
     c.security = security
     c.option = option
@@ -109,8 +112,15 @@ func _codec_new(security: int, option: int, key: transport.Bytes, iv: transport.
     end
     c.iv = transport.NewBytes(16)
     transport.PutBytes(c.iv, iv)
+    c.liv = transport.NewBytes(16)
+    transport.PutBytes(c.liv, lsrc_iv)
     if (option & OptAuthLength) != 0:
-        c.lkey = KDF16(key, "auth_len", _empty(), _empty())
+        c.lkey = KDF16(lsrc_key, "auth_len", _empty(), _empty())
+        if security == SecChaCha20Poly1305:
+            mut k16 := c.lkey
+            c.lkey = _chacha_key(k16)
+            transport.FreeBytes(k16)
+        end
     end
     if (option & (OptChunkMask | OptPadding)) != 0:
         c.shake = _shake128_new(iv.p, iv.len)
@@ -122,11 +132,42 @@ end
 func _codec_free(c &: Codec):
     transport.FreeBytes(c.key)
     transport.FreeBytes(c.iv)
+    transport.FreeBytes(c.liv)
     transport.FreeBytes(c.lkey)
     if c.has_shake:
         _shake_free(c.shake)
         c.has_shake = false
     end
+end
+
+func _len_seal(c: Codec, nonce: transport.Bytes, plain: transport.Bytes): transport.Bytes:
+    if c.security != SecChaCha20Poly1305:
+        ret _gcm_seal(c.lkey, nonce, _empty(), plain)
+    end
+    mut out := transport.NewBytes(plain.len + 16)
+    tls.ChaCha20Poly1305SealRaw(c.lkey.p, nonce.p, null, 0, plain.p, plain.len, out.p)
+    out.len = plain.len + 16
+    ret out
+end
+
+func _len_open(c: Codec, nonce: transport.Bytes, sealed: transport.Bytes): transport.Bytes:
+    if c.security != SecChaCha20Poly1305:
+        ret _gcm_open(c.lkey, nonce, _empty(), sealed)
+    end
+    mut out := transport.NewBytes(sealed.len + 1)
+    if sealed.len < 16 or not tls.ChaCha20Poly1305OpenRaw(c.lkey.p, nonce.p, null, 0, sealed.p, sealed.len, out.p):
+        out.bad = true
+        ret out
+    end
+    out.len = sealed.len - 16
+    ret out
+end
+
+func _raw(security: int, option: int): bool:
+    if security == SecZero:
+        ret true
+    end
+    ret security == SecNone and (option & OptChunkStream) == 0
 end
 
 func _overhead(c: Codec): int:
@@ -157,9 +198,9 @@ func _seal_chunk(c &: Codec, p: void*, n: int, out &: transport.Bytes):
     if (c.option & OptAuthLength) != 0:
         mut lb := transport.NewBytes(2)
         transport.Put16(lb, total - 16)
-        mut ln := _nonce(c.iv, c.lcounter)
+        mut ln := _nonce(c.liv, c.lcounter)
         c.lcounter++
-        mut le := _gcm_seal(c.lkey, ln, _empty(), lb)
+        mut le := _len_seal(c, ln, lb)
         transport.PutBytes(out, le)
         transport.FreeBytes(lb)
         transport.FreeBytes(ln)
@@ -207,9 +248,9 @@ func _read_chunk(t &: transport.Conn, c &: Codec, out &: transport.Bytes): int:
     pad := _padding_len(c)
     mut total := 0
     if (c.option & OptAuthLength) != 0:
-        mut ln := _nonce(c.iv, c.lcounter)
+        mut ln := _nonce(c.liv, c.lcounter)
         c.lcounter++
-        mut pl := _gcm_open(c.lkey, ln, _empty(), sb)
+        mut pl := _len_open(c, ln, sb)
         transport.FreeBytes(ln)
         if pl.bad:
             transport.FreeBytes(pl)
@@ -283,7 +324,7 @@ func _read_response(c &: Conn): bool:
         ret false
     end
     el.len = 18
-    n := OpenResponseLength(c.resp_key, el)
+    n := OpenResponseLength(c.resp_key, c.resp_iv, el)
     if n < 4 or n > 4096:
         _fail(c, "bad response header length")
         ret false
@@ -295,15 +336,15 @@ func _read_response(c &: Conn): bool:
         ret false
     end
     eh.len = n + 16
-    mut h := OpenResponseHeader(c.resp_key, eh)
+    mut h := OpenResponseHeader(c.resp_key, c.resp_iv, eh)
     defer transport.FreeBytes(h)
     if h.bad or h.len < 4 or transport.At(h, 0) != c.req.resp_v:
         _fail(c, "response header rejected")
         ret false
     end
     c.resp_pending = false
-    if c.req.security != SecZero:
-        c.rc = _codec_new(c.req.security, c.req.option, c.resp_key, c.resp_iv)
+    if not _raw(c.req.security, c.req.option):
+        c.rc = _codec_new(c.req.security, c.req.option, c.resp_key, c.resp_iv, c.req.key, c.req.iv)
     end
     ret true
 end
@@ -379,8 +420,8 @@ pub func Client(t: transport.Conn, uuid: str, security: int, option: int, comman
         _fail(c, "could not send the request header")
         ret c
     end
-    if security != SecZero:
-        c.wc = _codec_new(security, option, r.key, r.iv)
+    if not _raw(security, option):
+        c.wc = _codec_new(security, option, r.key, r.iv, r.key, r.iv)
     end
     _setup_resp_keys(c)
     c.resp_pending = true
@@ -505,9 +546,9 @@ pub func Accept(t: transport.Conn, users: Vector<User>, rf &: ReplayFilter): Con
         ret c
     end
     _setup_resp_keys(c)
-    if sec != SecZero:
-        c.rc = _codec_new(sec, req.option, req.key, req.iv)
-        c.wc = _codec_new(sec, req.option, c.resp_key, c.resp_iv)
+    if not _raw(sec, req.option):
+        c.rc = _codec_new(sec, req.option, req.key, req.iv, req.key, req.iv)
+        c.wc = _codec_new(sec, req.option, c.resp_key, c.resp_iv, req.key, req.iv)
     end
     mut rh := transport.NewBytes(4)
     defer transport.FreeBytes(rh)
@@ -515,7 +556,7 @@ pub func Accept(t: transport.Conn, users: Vector<User>, rf &: ReplayFilter): Con
     transport.Put8(rh, 0)
     transport.Put8(rh, 0)
     transport.Put8(rh, 0)
-    mut sealed := SealResponseHeader(c.resp_key, rh)
+    mut sealed := SealResponseHeader(c.resp_key, c.resp_iv, rh)
     defer transport.FreeBytes(sealed)
     if not transport.WriteBytes(c.t, sealed):
         _fail(c, "could not send the response header")
@@ -536,7 +577,7 @@ pub func Read(c &: Conn, buf: void*, max: int): int:
             ret 0 - 1
         end
     end
-    if c.req.security == SecZero:
+    if _raw(c.req.security, c.req.option):
         ret transport.Read(c.t, buf, max)
     end
     until c.rbuf.len == 0:
@@ -584,7 +625,7 @@ pub func Write(c &: Conn, p: void*, n: int): bool:
     if not c.ok:
         ret false
     end
-    if c.req.security == SecZero:
+    if _raw(c.req.security, c.req.option):
         ret transport.Write(c.t, p, n)
     end
     mut out := transport.NewBytes(n + 64)
@@ -608,7 +649,7 @@ pub func Close(c &: Conn):
         ret
     end
     c.closed = true
-    if c.ok and c.req.security != SecZero:
+    if c.ok and not _raw(c.req.security, c.req.option):
         mut out := transport.NewBytes(64)
         _seal_chunk(c.wc, null, 0, out)
         transport.WriteBytes(c.t, out)
@@ -627,7 +668,7 @@ end
 pub func EncodeChunks(
     security: int, option: int, key: transport.Bytes, iv: transport.Bytes, parts: Vector<transport.Bytes>, with_end: bool
 ): transport.Bytes:
-    mut c := _codec_new(security, option, key, iv)
+    mut c := _codec_new(security, option, key, iv, key, iv)
     mut out := transport.NewBytes(256)
     repeat parts.len() in i:
         p := parts.get(i)

@@ -17,6 +17,7 @@ package main
 import net.shadowsocks
 import net.tcp
 import mem
+import time
 
 mut failures := 0
 mut echo_srv := tcp.Server {}
@@ -184,6 +185,58 @@ func replay_case():
     shadowsocks.Destroy(srv)
 end
 
+func put_be64(b &: shadowsocks.Buf, v: i64):
+    repeat 8 in i:
+        shadowsocks.BufAppendByte(b, ((v >> (((7 - i) * 8) as i64)) & (255 as i64)) as int)
+    end
+end
+
+func flight_2022(m: shadowsocks.Method, key: shadowsocks.Buf, ts_offset: i64): shadowsocks.Buf:
+    mut e := shadowsocks.NewEncoderRandom(m, key.p)
+    mut v := shadowsocks.NewBuf(64)
+    shadowsocks.EncodeTarget("127.0.0.1", tcp.Port(echo_srv), v)
+    shadowsocks.BufAppendByte(v, 0)
+    shadowsocks.BufAppendByte(v, 0)
+    shadowsocks.BufAppendStr(v, "stale?")
+    mut fixed := shadowsocks.NewBuf(16)
+    shadowsocks.BufAppendByte(fixed, 0)
+    put_be64(fixed, time.Now() + ts_offset)
+    shadowsocks.BufAppendByte(fixed, v.len >> 8)
+    shadowsocks.BufAppendByte(fixed, v.len)
+    mut wire := shadowsocks.NewBuf(128)
+    shadowsocks.EmitSalt(e, wire)
+    shadowsocks.SealFrame(e, fixed.p, fixed.len, wire)
+    shadowsocks.SealFrame(e, v.p, v.len, wire)
+    ret wire
+end
+
+func answered(port: int, wire: shadowsocks.Buf, m: shadowsocks.Method): bool:
+    raw := tcp.Dial("127.0.0.1", port)
+    tcp.SetDeadline(raw, 1500)
+    _w := tcp.WriteBytes(raw, wire.p, wire.len)
+    buf := mem.Allocate(4096 as u64)
+    n := tcp.ReadBytes(raw, buf, 4096)
+    mem.Free(buf)
+    tcp.Close(raw)
+    ret n > m.salt_len
+end
+
+func timestamp_case():
+    m := shadowsocks.LookupMethod("2022-blake3-aes-128-gcm")
+    psk := "AAECAwQFBgcICQoLDA0ODw=="
+    srv := shadowsocks.Listen(tcp.FreePort(), "2022-blake3-aes-128-gcm", psk)
+    th := spawn(serve_thread, srv.st)
+    key := shadowsocks.MakeKey(m, psk)
+    port := shadowsocks.ServerPort(srv)
+    check("2022 fresh timestamp answered", answered(port, flight_2022(m, key, 0 as i64), m))
+    check("2022 old timestamp rejected", not answered(port, flight_2022(m, key, (0 - 120) as i64), m))
+    check("2022 future timestamp rejected", not answered(port, flight_2022(m, key, 120 as i64), m))
+    check("2022 edge timestamp accepted", answered(port, flight_2022(m, key, (0 - 20) as i64), m))
+    shadowsocks.Stop(srv)
+    join(th)
+    shadowsocks.Destroy(srv)
+end
+
 func relay_through_stream_interface():
     srv := shadowsocks.Listen(tcp.FreePort(), "chacha20-ietf-poly1305", "iface")
     th := spawn(serve_thread, srv.st)
@@ -222,6 +275,7 @@ func main:
     bad_password_case("legacy", "aes-256-gcm", "good-pw", "bad-pw")
     bad_password_case("2022", "2022-blake3-aes-128-gcm", "AAECAwQFBgcICQoLDA0ODw==", "AAECAwQFBgcICQoLDA0ODg==")
     replay_case()
+    timestamp_case()
     relay_through_stream_interface()
     tcp.CloseServer(echo_srv)
     println "failures", failures

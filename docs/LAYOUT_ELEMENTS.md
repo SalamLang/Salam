@@ -2,6 +2,8 @@
 
 Every element the layout DSL knows, generated from `std/layout/elements/`. The HTML tag name is accepted as an English name too, except for the table parts that come from context: inside `table`, write `header`/`main`/`footer` and `column`, never `thead`/`tbody`/`tfoot`/`th`/`td`. Elements that share a name are context variants: the compiler picks one by where it sits (see `docs/LAYOUT_SCHEMA.md`). The ruby elements were `روبی`, `متن روبی` and `پرانتز روبی` in Persian, and those names still work.
 
+Every element works on the web. For the native target (`salam check --ui=native`, see `docs/design/NATIVE_UI.md`), `meta`, `head link`, `base`, `noscript` and `track` are web metadata that a native window ignores (W166), and `script`, `style`, `iframe`, `embed`, `object`, `template`, `slot`, `svg`, `math`, `image map` and `area` need a browser (E165). Put them inside `if SALAM_UI_WEB:` to keep one page for both targets.
+
 | element              | English names                         | Persian          | HTML           | kind    | must be inside                                        | required      |
 | -------------------- | ------------------------------------- | ---------------- | -------------- | ------- | ----------------------------------------------------- | ------------- |
 | `abbreviation`       | `abbreviation`, `abbr`                | کوته‌نوشت        | `<abbr>`       | normal  |                                                       |               |

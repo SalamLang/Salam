@@ -63,6 +63,11 @@ mut FG_ID := ""
 mut FG_SECRET := ""
 mut FG_SCOPES := DEFAULT_FIGMA_SCOPES
 mut GH_SCOPES := DEFAULT_GITHUB_SCOPES
+mut GHA_ID := ""
+mut GHA_SECRET := ""
+mut GHA_SIGNIN := false
+mut GHA_CONNECT := false
+mut GH_HOOK := ""
 mut LOCK := sync.Mutex {}
 mut REFRESH_LOCK := sync.Mutex {}
 mut JOBS := chan.Chan {} as chan.Chan<str>
@@ -587,15 +592,15 @@ func github_refresh_locked(uid: str, stale: str): str:
         ret current
     end
     refresh := refresh_blob.len() > 0 ? unseal(refresh_blob) : ""
-    if refresh.len() == 0 or GH_ID.len() == 0:
+    if refresh.len() == 0 or not gh_ready(false):
         ret ""
     end
     mut h := Vector {} as Vector<str>
     h.push("Accept: application/json")
     h.push("Content-Type: application/json")
     mut m := Vector {} as Vector<str>
-    m.push(json.Member("client_id", GH_ID))
-    m.push(json.Member("client_secret", GH_SECRET))
+    m.push(json.Member("client_id", gh_client(false)))
+    m.push(json.Member("client_secret", gh_client_secret(false)))
     m.push(json.Member("grant_type", "refresh_token"))
     m.push(json.Member("refresh_token", refresh))
     r := fetch("POST", GITHUB_WEB + "/login/oauth/access_token", h, json.Object(m), CALL_MS)
@@ -725,9 +730,25 @@ end
 
 func oauth_ready(provider: str): bool:
     if provider == "github":
-        ret GH_ID.len() > 0 and GH_SECRET.len() > 0
+        ret gh_ready(false)
     end
     ret FG_ID.len() > 0 and FG_SECRET.len() > 0
+end
+
+func gh_app(sign_in: bool): bool:
+    ret GHA_ID.len() > 0 and GHA_SECRET.len() > 0 and (sign_in ? GHA_SIGNIN : GHA_CONNECT)
+end
+
+func gh_client(sign_in: bool): str:
+    ret gh_app(sign_in) ? GHA_ID : GH_ID
+end
+
+func gh_client_secret(sign_in: bool): str:
+    ret gh_app(sign_in) ? GHA_SECRET : GH_SECRET
+end
+
+func gh_ready(sign_in: bool): bool:
+    ret gh_client(sign_in).len() > 0 and gh_client_secret(sign_in).len() > 0
 end
 
 func redirect_uri(provider: str): str:
@@ -1819,11 +1840,13 @@ func authorize_url(provider: str, state: str, sign_in: bool): str:
     mut q := Vector {} as Vector<str>
     if provider == "github":
         q.push("client_id")
-        q.push(GH_ID)
+        q.push(gh_client(sign_in))
         q.push("redirect_uri")
         q.push(redirect_uri(provider))
-        q.push("scope")
-        q.push(sign_in ? "read:user user:email" : GH_SCOPES)
+        if not gh_app(sign_in):
+            q.push("scope")
+            q.push(sign_in ? "read:user user:email" : GH_SCOPES)
+        end
         q.push("state")
         q.push(state)
         if sign_in:
@@ -1859,14 +1882,14 @@ func exchange_failure(r: Reply): str:
     ret clip(why, 200)
 end
 
-func exchange_code(provider: str, code: str, token &: str, refresh &: str, expires &: i64, why &: str):
+func exchange_code(provider: str, code: str, sign_in: bool, token &: str, refresh &: str, expires &: i64, why &: str):
     if provider == "github":
         mut h := Vector {} as Vector<str>
         h.push("Accept: application/json")
         h.push("Content-Type: application/json")
         mut m := Vector {} as Vector<str>
-        m.push(json.Member("client_id", GH_ID))
-        m.push(json.Member("client_secret", GH_SECRET))
+        m.push(json.Member("client_id", gh_client(sign_in)))
+        m.push(json.Member("client_secret", gh_client_secret(sign_in)))
         m.push(json.Member("code", code))
         m.push(json.Member("redirect_uri", redirect_uri(provider)))
         r := fetch("POST", GITHUB_WEB + "/login/oauth/access_token", h, json.Object(m), CALL_MS)
@@ -1897,6 +1920,21 @@ func exchange_code(provider: str, code: str, token &: str, refresh &: str, expir
     if token.len() == 0:
         why = exchange_failure(r)
     end
+end
+
+func github_webhook(ctx: i64):
+    if GH_HOOK.len() == 0:
+        aiweb.Fail(ctx, 503, "webhook", "webhook is not configured")
+        ret
+    end
+    given := http.Header(ctx, "X-Hub-Signature-256")
+    want := "sha256=" + crypto.HmacSha256Hex(GH_HOOK, http.Body(ctx))
+    if given.len() != want.len() or not crypto.SecretEquals(want, given):
+        aiweb.Fail(ctx, 401, "signature", "bad signature")
+        ret
+    end
+    http.SetStatus(ctx, 204)
+    http.Text(ctx, "")
 end
 
 func oauth_start(ctx: i64):
@@ -2073,6 +2111,20 @@ pub func SetGithubScopes(scopes: str):
     end
 end
 
+pub func SetGithubApp(id: str, secret: str, uses: str, hook_secret: str):
+    GHA_ID = str.Trim(id)
+    GHA_SECRET = str.Trim(secret)
+    each use in str.Lower(uses).split(","):
+        t := str.Trim(use)
+        if t == "signin":
+            GHA_SIGNIN = true
+        else if t == "connect":
+            GHA_CONNECT = true
+        end
+    end
+    GH_HOOK = hook_secret
+end
+
 pub func SetApis(github_api: str, github_web: str, figma_api: str, figma_web: str):
     if github_api.len() > 0:
         GITHUB_API = str.TrimSuffix(github_api, "/")
@@ -2180,6 +2232,9 @@ pub func Forget(uid: str, provider: str):
 end
 
 pub func OauthReady(provider: str): bool:
+    if provider == "github":
+        ret gh_ready(true)
+    end
     ret oauth_ready(provider)
 end
 
@@ -2213,7 +2268,7 @@ pub func FinishConnect(uid: str, provider: str, code: str, why &: str): bool:
     mut token := ""
     mut refresh := ""
     mut expires := 0 as i64
-    exchange_code(provider, code, token, refresh, expires, why)
+    exchange_code(provider, code, false, token, refresh, expires, why)
     if token.len() == 0:
         ret false
     end
@@ -2249,7 +2304,7 @@ pub func Identity(provider: str, code: str, subject &: str, login &: str, name &
     mut refresh := ""
     mut expires := 0 as i64
     mut why := ""
-    exchange_code(provider, code, token, refresh, expires, why)
+    exchange_code(provider, code, true, token, refresh, expires, why)
     if token.len() == 0:
         ret false
     end
@@ -2290,6 +2345,7 @@ pub func Routes(r &: router.Router):
     router.Delete(r, "/integrations/:provider", remove_integration)
     router.Post(r, "/integrations/:provider/mcp", set_mcp)
     router.Post(r, "/integrations/:provider/oauth", oauth_start)
+    router.Post(r, "/auth/webhook/github", github_webhook)
     each path in ["/integrations", "/integrations/:provider", "/integrations/:provider/token", "/integrations/:provider/oauth", "/integrations/:provider/mcp"]:
         router.Options(r, path, aiweb.Preflight)
     end

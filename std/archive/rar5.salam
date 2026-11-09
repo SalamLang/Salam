@@ -21,6 +21,7 @@ const _R5_NC := 306
 const _R5_LDC := 16
 const _R5_RC := 44
 const _R5_BC := 20
+const _R5_MAXBLOCK := 268435455
 
 struct _R5Filter:
     pub start: i64
@@ -46,6 +47,7 @@ struct _R5:
     pub lens: u8*
     pub dcsize: int
     pub have_tables: bool
+    pub far: bool
     pub filters: Vector<_R5Filter>
 end
 
@@ -71,6 +73,7 @@ func _r5_new(ws: int, dcs: int): _R5:
         lens = mem.AllocateZeroed(512 as u64) as u8*
         dcsize = dcs
         have_tables = false
+        far = false
         filters = Vector {} as Vector<_R5Filter>
     }
 end
@@ -93,6 +96,7 @@ func _r5_reset(d &: _R5):
     d.total = 0 as i64
     d.last_len = 0
     d.have_tables = false
+    d.far = false
     repeat 4 in i:
         d.od[i] = 0 as i64
     end
@@ -216,6 +220,9 @@ func _r5_copy(d &: _R5, len: int, dist: i64): bool:
     mut lim := d.total
     if lim > (d.wsize as i64):
         lim = d.wsize as i64
+    end
+    if dist > (d.wsize as i64) and dist <= d.total:
+        d.far = true
     end
     if dist <= 0 or dist > lim:
         ret false
@@ -381,30 +388,44 @@ func _r5_drain(d &: _R5, out &: compress.ByteBuf, sink &: compress.FileSink, dra
 end
 
 func _r5_decode(d &: _R5, p: u8*, n: int, unp: i64, limit: i64, out &: compress.ByteBuf, sink &: compress.FileSink, stream: bool): int:
-    mut b := _RarBits { p = p, n = n, pos = 0 }
+    mut s := _rsrc_mem(p, n)
+    st := _r5_decode_src(d, s, unp, limit, out, sink, stream)
+    _rsrc_free(s)
+    ret st
+end
+
+func _r5_decode_src(d &: _R5, s &: _RarSrc, unp: i64, limit: i64, out &: compress.ByteBuf, sink &: compress.FileSink, stream: bool): int:
     mut drained := 0 as i64
     base := out.len
     start_total := d.total
     d.filters.clear()
     d.fl = d.wp
+    mut pos := 0 as i64
     mut last := false
     until not last:
-        b.pos = (b.pos + 7) & (~7)
-        bp := b.pos >> 3
-        if bp + 3 > n:
+        rem := s.total - pos
+        if rem < (3 as i64):
             ret 4
         end
-        bf := p[bp] as int
-        ck := p[bp + 1] as int
+        mut want := 10
+        if (want as i64) > rem:
+            want = rem as int
+        end
+        p := _rsrc_get(s, pos, want)
+        if p == null:
+            ret 4
+        end
+        bf := p[0] as int
+        ck := p[1] as int
         cnt := ((bf >> 3) & 7) + 1
-        if bp + 2 + cnt > n:
+        if 2 + cnt > want:
             ret 4
         end
-        mut bsize := 0
+        mut bsize64 := 0 as i64
         mut chk := 0x5a ^ bf
         repeat cnt in i:
-            sb := p[bp + 2 + i] as int
-            bsize |= sb << (i * 8)
+            sb := p[2 + i] as int
+            bsize64 |= (sb as i64) << (i * 8)
             chk ^= sb
         end
         if (chk & 255) != ck:
@@ -413,12 +434,21 @@ func _r5_decode(d &: _R5, p: u8*, n: int, unp: i64, limit: i64, out &: compress.
         bits := (bf & 7) + 1
         last = (bf & 0x40) != 0
         table := (bf & 0x80) != 0
-        start := bp + 2 + cnt
-        if bsize < 1 or start + bsize > n:
+        hlen := 2 + cnt
+        if bsize64 < (1 as i64) or pos + (hlen as i64) + bsize64 > s.total:
             ret 4
         end
-        bend := (start + bsize - 1) * 8 + bits
-        b.pos = start * 8
+        if bsize64 > (_R5_MAXBLOCK as i64):
+            ret 7
+        end
+        bsize := bsize64 as int
+        bp := _rsrc_get(s, pos + (hlen as i64), bsize)
+        if bp == null:
+            ret 4
+        end
+        pos += (hlen as i64) + bsize64
+        mut b := _RarBits { p = bp, n = bsize, pos = 0 }
+        bend := (bsize - 1) * 8 + bits
         if table:
             if not _r5_read_tables(d, b):
                 ret 4
@@ -531,6 +561,9 @@ func _r5_decode(d &: _R5, p: u8*, n: int, unp: i64, limit: i64, out &: compress.
                     ret 7
                 end
             end
+        end
+        if b.pos > bend:
+            ret 4
         end
     end
     _r5_flush(d, out)

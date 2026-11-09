@@ -1,0 +1,210 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package archive
+
+import compress
+import mem
+
+struct _RarSrc:
+    pub mem: u8*
+    pub total: i64
+    pub paths: Vector<str>
+    pub fps: Vector<i64>
+    pub pvol: Vector<int>
+    pub poff: Vector<i64>
+    pub plen: Vector<i64>
+    pub aes_on: bool
+    pub aes: _Aes
+    pub iv: u8*
+    pub raw: u8*
+    pub rawcap: int
+    pub out: u8*
+    pub outcap: int
+end
+
+func _rsrc_blank_aes(): _Aes:
+    ret _Aes { rk = null, rounds = 0, m9 = null, m11 = null, m13 = null, m14 = null }
+end
+
+func _rsrc_mem(p: u8*, n: int): _RarSrc:
+    ret _RarSrc {
+        mem = p
+        total = n as i64
+        paths = Vector {} as Vector<str>
+        fps = Vector {} as Vector<i64>
+        pvol = Vector {} as Vector<int>
+        poff = Vector {} as Vector<i64>
+        plen = Vector {} as Vector<i64>
+        aes_on = false
+        aes = _rsrc_blank_aes()
+        iv = null
+        raw = null
+        rawcap = 0
+        out = null
+        outcap = 0
+    }
+end
+
+func _rsrc_files(paths: Vector<str>): _RarSrc:
+    mut s := _rsrc_mem(null, 0)
+    repeat paths.len() in i:
+        s.paths.push(paths.get(i))
+        s.fps.push(0 as i64)
+    end
+    ret s
+end
+
+func _rsrc_add(s &: _RarSrc, vol: int, off: i64, len: i64):
+    s.pvol.push(vol)
+    s.poff.push(off)
+    s.plen.push(len)
+    s.total += len
+end
+
+func _rsrc_encrypt(s &: _RarSrc, key: u8*, klen: int, iv: u8*):
+    if s.aes_on:
+        _aes_free(s.aes)
+    end
+    s.aes = _aes_new(key, klen)
+    s.aes_on = true
+    s.iv = iv
+end
+
+func _rsrc_free(s &: _RarSrc):
+    repeat s.fps.len() in i:
+        fp := s.fps.get(i)
+        if fp != (0 as i64):
+            compress.FileClose(fp as void*)
+        end
+    end
+    s.fps.free()
+    s.paths.free()
+    s.pvol.free()
+    s.poff.free()
+    s.plen.free()
+    if s.aes_on:
+        _aes_free(s.aes)
+        s.aes_on = false
+    end
+    mem.Free(s.raw as void*)
+    mem.Free(s.out as void*)
+    s.raw = null
+    s.out = null
+end
+
+func _rsrc_fp(s &: _RarSrc, vi: int): void*:
+    if vi < 0 or vi >= s.fps.len():
+        ret null
+    end
+    cur := s.fps.get(vi)
+    if cur != (0 as i64):
+        ret cur as void*
+    end
+    fp := compress.FileOpenRead(s.paths.get(vi))
+    s.fps.set(vi, fp as i64)
+    ret fp
+end
+
+func _rsrc_raw(s &: _RarSrc, pos: i64, dst: u8*, n: int): bool:
+    if n <= 0:
+        ret true
+    end
+    if pos < (0 as i64) or pos + (n as i64) > s.total:
+        ret false
+    end
+    if s.mem != null:
+        mem.Copy(dst as void*, ((s.mem as i64) + pos) as void*, n as u64)
+        ret true
+    end
+    mut at := pos
+    mut done := 0
+    mut cum := 0 as i64
+    mut k := 0
+    until k < s.plen.len() and done < n:
+        pl := s.plen.get(k)
+        if at < cum + pl:
+            inside := at - cum
+            mut take := pl - inside
+            if take > ((n - done) as i64):
+                take = (n - done) as i64
+            end
+            fp := _rsrc_fp(s, s.pvol.get(k))
+            if fp == null:
+                ret false
+            end
+            got := compress.FileReadAt(fp, s.poff.get(k) + inside, ((dst as i64) + (done as i64)) as void*, take as int)
+            if (got as i64) != take:
+                ret false
+            end
+            done += take as int
+            at += take
+        end
+        cum += pl
+        k++
+    end
+    ret done == n
+end
+
+func _rsrc_get(s &: _RarSrc, pos: i64, n: int): u8*:
+    if n <= 0:
+        ret s.mem != null ? ((s.mem as i64) + pos) as u8* : s.out
+    end
+    if not s.aes_on and s.mem != null:
+        if pos < (0 as i64) or pos + (n as i64) > s.total:
+            ret null
+        end
+        ret ((s.mem as i64) + pos) as u8*
+    end
+    if not s.aes_on:
+        if s.outcap < n + 16:
+            mem.Free(s.out as void*)
+            s.out = mem.AllocateZeroed((n + 16) as u64) as u8*
+            s.outcap = n + 16
+        end
+        if s.out == null or not _rsrc_raw(s, pos, s.out, n):
+            ret null
+        end
+        ret s.out
+    end
+    a0 := pos & (~(15 as i64))
+    e0 := (pos + (n as i64) + (15 as i64)) & (~(15 as i64))
+    if e0 > (s.total & (~(15 as i64))):
+        ret null
+    end
+    lead := a0 > (0 as i64) ? 16 : 0
+    rn := (e0 - a0) as int + lead
+    if s.rawcap < rn + 16:
+        mem.Free(s.raw as void*)
+        s.raw = mem.AllocateZeroed((rn + 16) as u64) as u8*
+        s.rawcap = rn + 16
+    end
+    if s.outcap < rn + 16:
+        mem.Free(s.out as void*)
+        s.out = mem.AllocateZeroed((rn + 16) as u64) as u8*
+        s.outcap = rn + 16
+    end
+    if s.raw == null or s.out == null:
+        ret null
+    end
+    if not _rsrc_raw(s, a0 - (lead as i64), s.raw, rn):
+        ret null
+    end
+    if lead == 0:
+        _aes_cbc_decrypt(s.aes, s.iv, s.raw, s.out, rn)
+    else:
+        _aes_cbc_decrypt(s.aes, s.raw, _poff(s.raw, 16), s.out, rn - 16)
+    end
+    ret _poff(s.out, (pos - a0) as int)
+end

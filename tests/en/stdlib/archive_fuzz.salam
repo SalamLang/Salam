@@ -160,6 +160,231 @@ func mutate(r &: Rng, src: compress.ByteBuf): compress.ByteBuf:
     ret out
 end
 
+
+func getb(b: compress.ByteBuf, i: int): int:
+    if i < 0 or i >= b.len: ret 0 end
+    ret (b.data as u8*)[i] as int
+end
+
+func setb(b &: compress.ByteBuf, i: int, v: int):
+    if i >= 0 and i < b.len: (b.data as u8*)[i] = (v & 255) as u8 end
+end
+
+func get32(b: compress.ByteBuf, i: int): int:
+    ret getb(b, i) | (getb(b, i + 1) << 8) | (getb(b, i + 2) << 16) | (getb(b, i + 3) << 24)
+end
+
+func put32(b &: compress.ByteBuf, i: int, v: int):
+    setb(b, i, v)
+    setb(b, i + 1, v >> 8)
+    setb(b, i + 2, v >> 16)
+    setb(b, i + 3, v >> 24)
+end
+
+func crc_range(b: compress.ByteBuf, from: int, n: int): int:
+    if from < 0 or n < 0 or from + n > b.len: ret 0 end
+    ret compress.CRC32(((b.data as i64) + (from as i64)) as void*, n) as int
+end
+
+func nasty(r &: Rng): int:
+    k := below(r, 8)
+    if k == 0: ret 0 end
+    if k == 1: ret 255 end
+    if k == 2: ret 127 end
+    if k == 3: ret 128 end
+    if k == 4: ret 1 end
+    if k == 5: ret 254 end
+    ret below(r, 256)
+end
+
+func scramble(r &: Rng, b &: compress.ByteBuf, from: int, n: int):
+    if n <= 0: ret end
+    repeat 1 + below(r, 3):
+        at := from + below(r, n)
+        if below(r, 3) == 0:
+            setb(b, at, getb(b, at) ^ (1 << below(r, 8)))
+        else:
+            setb(b, at, nasty(r))
+        end
+    end
+end
+
+func rar5_fix(r &: Rng, b &: compress.ByteBuf): bool:
+    mut hits := Vector {} as Vector<int>
+    mut pos := 8
+    until pos + 8 < b.len and pos < 70000:
+        mut l := 0
+        mut sz := 0
+        mut sh := 0
+        mut i := pos + 4
+        until i < pos + 14 and l < 4:
+            v := getb(b, i)
+            sz |= (v & 127) << sh
+            sh += 7
+            l++
+            i++
+            if (v & 128) == 0: break end
+        end
+        if l > 0 and sz > 1 and sz < 60000 and pos + 4 + l + sz <= b.len:
+            if crc_range(b, pos + 4, l + sz) == get32(b, pos): hits.push(pos) end
+        end
+        pos++
+    end
+    if hits.len() == 0: ret false end
+    h := hits.get(below(r, hits.len()))
+    mut l := 1
+    mut sz := getb(b, h + 4)
+    if (sz & 128) != 0:
+        sz = (sz & 127) | (getb(b, h + 5) << 7)
+        l = 2
+    end
+    scramble(r, b, h + 4 + l, sz)
+    put32(b, h, crc_range(b, h + 4, l + sz))
+    hits.free()
+    ret true
+end
+
+func rar4_fix(r &: Rng, b &: compress.ByteBuf): bool:
+    mut hits := Vector {} as Vector<int>
+    mut pos := 7
+    until pos + 7 < b.len and pos < 70000:
+        t := getb(b, pos + 2)
+        sz := getb(b, pos + 5) | (getb(b, pos + 6) << 8)
+        if t >= 0x72 and t <= 0x7b and sz >= 7 and pos + sz <= b.len:
+            if (crc_range(b, pos + 2, sz - 2) & 65535) == (getb(b, pos) | (getb(b, pos + 1) << 8)): hits.push(pos) end
+        end
+        pos++
+    end
+    if hits.len() == 0: ret false end
+    h := hits.get(below(r, hits.len()))
+    sz := getb(b, h + 5) | (getb(b, h + 6) << 8)
+    scramble(r, b, h + 3, sz - 3)
+    c := crc_range(b, h + 2, sz - 2)
+    setb(b, h, c)
+    setb(b, h + 1, c >> 8)
+    hits.free()
+    ret true
+end
+
+func xz_fix(r &: Rng, b &: compress.ByteBuf): bool:
+    if b.len < 36: ret false end
+    k := below(r, 4)
+    if k == 0:
+        scramble(r, b, 6, 2)
+        put32(b, 8, crc_range(b, 6, 2))
+        ret true
+    end
+    if k == 1:
+        hs := (getb(b, 12) + 1) * 4
+        if hs < 8 or 12 + hs > b.len: ret false end
+        scramble(r, b, 13, hs - 5)
+        put32(b, 12 + hs - 4, crc_range(b, 12, hs - 4))
+        ret true
+    end
+    if k == 2:
+        bs := (get32(b, b.len - 8) + 1) * 4
+        ipos := b.len - 12 - bs
+        if bs < 8 or ipos < 12: ret false end
+        scramble(r, b, ipos, bs - 4)
+        put32(b, ipos + bs - 4, crc_range(b, ipos, bs - 4))
+        ret true
+    end
+    scramble(r, b, b.len - 8, 6)
+    put32(b, b.len - 12, crc_range(b, b.len - 8, 6))
+    ret true
+end
+
+func zip_fix(r &: Rng, b &: compress.ByteBuf): bool:
+    mut hits := Vector {} as Vector<int>
+    mut pos := 0
+    until pos + 4 < b.len and pos < 70000:
+        if getb(b, pos) == 0x50 and getb(b, pos + 1) == 0x4b:
+            t := getb(b, pos + 2)
+            if (t == 3 and getb(b, pos + 3) == 4) or (t == 1 and getb(b, pos + 3) == 2) or (t == 5 and getb(b, pos + 3) == 6): hits.push(pos) end
+        end
+        pos++
+    end
+    if hits.len() == 0: ret false end
+    h := hits.get(below(r, hits.len()))
+    at := h + 4 + below(r, 40)
+    if below(r, 2) == 0:
+        put32(b, at, nasty(r) * 16777216 + nasty(r))
+    else:
+        setb(b, at, nasty(r))
+    end
+    hits.free()
+    ret true
+end
+
+func gz_fix(r &: Rng, b &: compress.ByteBuf): bool:
+    if b.len < 30: ret false end
+    mut ok := false
+    mut full := compress.GzipDecompressMax(b.data, b.len, 1048576, ok)
+    if not ok: compress.BufFree(full) ret false end
+    pos := 10 + below(r, b.len - 18)
+    scramble(r, b, pos, 3)
+    mut ok2 := false
+    mut out := compress.RawInflateMax(((b.data as i64) + (10 as i64)) as void*, b.len - 18, 0, 1048576, ok2)
+    put32(b, b.len - 8, compress.CRC32(out.data, out.len) as int)
+    put32(b, b.len - 4, out.len)
+    compress.BufFree(out)
+    compress.BufFree(full)
+    ret true
+end
+
+func mutate2(r &: Rng, src: compress.ByteBuf): compress.ByteBuf:
+    mut out := compress.BufClone(src)
+    mut done := false
+    if out.len > 16:
+        if getb(out, 0) == 0x52 and getb(out, 1) == 0x61 and getb(out, 6) == 1:
+            done = rar5_fix(r, out)
+        else getb(out, 0) == 0x52 and getb(out, 1) == 0x61:
+            done = rar4_fix(r, out)
+        else getb(out, 0) == 0xfd and getb(out, 1) == 0x37:
+            done = xz_fix(r, out)
+        else getb(out, 0) == 0x50 and getb(out, 1) == 0x4b:
+            done = zip_fix(r, out)
+        else getb(out, 0) == 0x1f and getb(out, 1) == 0x8b:
+            done = gz_fix(r, out)
+        end
+    end
+    if not done:
+        compress.BufFree(out)
+        ret mutate(r, src)
+    end
+    ret out
+end
+
+func file_paths(b: compress.ByteBuf, dest: str):
+    p := os.TempDir() + "/salam_fz_in.bin"
+    out := os.TempDir() + "/salam_fz_out.bin"
+    _ := archive.WriteBinaryFileBuf(p, b)
+    mut rf := archive.RarFileOpen(p)
+    if rf.status == archive.RAR_OK:
+        mut es := archive.RarFileEntries(rf)
+        mut k := 0
+        until k < es.len() and k < 4:
+            _ := archive.RarFileExtractTo(rf, es.get(k).name, out, 4194304 as i64, 33554432 as i64)
+            k++
+        end
+        archive.FreeEntries(es)
+        _ := archive.RarFileExtractAll(rf, dest, 4194304 as i64, 33554432 as i64)
+    end
+    archive.RarFileClose(rf)
+    mut zf := archive.ZipOpenFile(p)
+    if zf.status == archive.ZIP_OK:
+        _ := archive.ZipFileExtractAll(zf, dest, 4194304 as i64)
+    end
+    archive.ZipFileClose(zf)
+    _ := archive.TarFileExtractAll(p, dest, 4194304 as i64)
+    _ := archive.GzipDecompressFileCap(p, out, 4194304 as i64)
+    _ := archive.XzDecompressFileCap(p, out, 4194304 as i64)
+    _ := archive.Bzip2DecompressFileCap(p, out, 4194304 as i64)
+    _ := archive.LzmaDecompressFileCap(p, out, 4194304 as i64)
+    os.Remove(p)
+    os.Remove(out)
+end
+
 func exercise(b: compress.ByteBuf, extract: bool, dest: str):
     mut lim := archive.DefaultLimits()
     lim.max_total = 4194304 as i64
@@ -179,6 +404,7 @@ func exercise(b: compress.ByteBuf, extract: bool, dest: str):
         _ := archive.ExtractAll(arc, dest)
     end
     archive.Close(arc)
+    file_paths(b, dest)
     mut ok := false
     mut g := compress.GzipDecompressMax(b.data, b.len, 1048576, ok)
     compress.BufFree(g)
@@ -236,7 +462,7 @@ func main:
         mut j := 0
         until j < rounds:
             if verbose: printerrln "seed", i, j end
-            mut m := mutate(r, corpus.get(i))
+            mut m := mutate2(r, corpus.get(i))
             if verbose: _ := archive.WriteBinaryFileBuf(os.TempDir() + "/salam_fuzz_last.bin", m) end
             exercise(m, j % 4 == 0, dest)
             compress.BufFree(m)

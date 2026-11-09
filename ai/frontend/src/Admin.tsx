@@ -3,7 +3,7 @@ import { api, ApiError, PAGE_SIZE, type AdminApp, type AdminChatRow, type AdminP
 import { EventList } from "./Events";
 import { fmtCompact, fmtCost, fmtDate, fmtDateTime, fmtDay, fmtMonth, fmtNum, fmtRelative, tokenSplit } from "./format";
 import { Select } from "./Select";
-import { IconBadgeCheck, IconClose, IconSearch, IconShield } from "./icons";
+import { IconActivity, IconBadgeCheck, IconChart, IconChat, IconClose, IconKey, IconSearch, IconShield, IconUsers } from "./icons";
 import { fmtSize } from "./Attach";
 import { Markdown } from "./Markdown";
 import { RequestList } from "./Requests";
@@ -2555,11 +2555,211 @@ export function NoAccess() {
   );
 }
 
-export function Admin({ notify }: { notify: (msg: string, ok?: boolean) => void }) {
+type Section = "overview" | "users" | "chats" | "billing" | "api" | "events";
+
+type Sub = { id: string; label: () => string; hint: () => string };
+
+const SECTIONS: { id: Section; icon: typeof IconActivity; label: () => string; hint: () => string; subs: Sub[] }[] = [
+  { id: "overview", icon: IconChart, label: () => t("نمای کلی", "Overview"), hint: () => t("آمار، مصرف و روند", "Stats, usage and trends"), subs: [] },
+  {
+    id: "users",
+    icon: IconUsers,
+    label: () => t("کاربران", "People"),
+    hint: () => t("حساب‌ها، تلگرام و نشست‌ها", "Accounts, Telegram and sessions"),
+    subs: [
+      { id: "accounts", label: () => t("حساب‌ها", "Accounts"), hint: () => t("همه‌ی کاربران ثبت‌نام‌شده", "Every registered user") },
+      { id: "telegram", label: () => t("تلگرام", "Telegram"), hint: () => t("کاربران و مهمان‌های ربات تلگرام", "Telegram bot users and guests") },
+      { id: "sessions", label: () => t("نشست‌ها", "Sessions"), hint: () => t("نشست‌های ورود و سیستم‌عامل‌ها", "Sign-in sessions and platforms") },
+    ],
+  },
+  {
+    id: "chats",
+    icon: IconChat,
+    label: () => t("گفت‌وگوها", "Chats"),
+    hint: () => t("گفت‌وگوها، مهمان‌ها و فایل‌ها", "Chats, guests and files"),
+    subs: [
+      { id: "latest", label: () => t("گفت‌وگوها", "Chats"), hint: () => t("آخرین گفت‌وگوها", "Latest chats") },
+      { id: "guests", label: () => t("مهمان‌های سایت", "Website guests"), hint: () => t("گفت‌وگوهای مهمان‌ها روی سایت", "Guest chats on the website") },
+      { id: "files", label: () => t("فایل‌ها", "Files"), hint: () => t("فایل‌های بارگذاری‌شده", "Uploaded files") },
+    ],
+  },
+  {
+    id: "billing",
+    icon: IconBadgeCheck,
+    label: () => t("فروش", "Billing"),
+    hint: () => t("پلن‌ها، اشتراک‌ها و پرداخت‌ها", "Plans, subscriptions and payments"),
+    subs: [
+      { id: "plans", label: () => t("پلن‌ها", "Plans"), hint: () => t("ساخت و ویرایش پلن‌ها", "Create and edit plans") },
+      { id: "subscriptions", label: () => t("اشتراک‌ها", "Subscriptions"), hint: () => t("اشتراک‌های فعال و اعطای پلن", "Active subscriptions and grants") },
+      { id: "payments", label: () => t("پرداخت‌ها", "Payments"), hint: () => t("تراکنش‌های پرداخت", "Payment transactions") },
+    ],
+  },
+  {
+    id: "api",
+    icon: IconKey,
+    label: () => t("API", "API"),
+    hint: () => t("درخواست‌ها، کلیدها و برنامه‌های متصل", "Requests, keys and connected apps"),
+    subs: [
+      { id: "requests", label: () => t("درخواست‌ها", "Requests"), hint: () => t("درخواست‌های API", "API requests") },
+      { id: "keys", label: () => t("کلیدها", "Keys"), hint: () => t("سیاست و محدودیت کلیدها", "Key policies and limits") },
+      { id: "apps", label: () => t("برنامه‌های متصل", "Connected apps"), hint: () => t("برنامه‌های OAuth و MCP", "OAuth and MCP apps") },
+    ],
+  },
+  { id: "events", icon: IconActivity, label: () => t("رویدادها", "Events"), hint: () => t("گزارش رویدادهای سرویس", "Service event log"), subs: [] },
+];
+
+function placeFromPath(): { section: (typeof SECTIONS)[number]; sub: Sub | null } {
+  const parts = location.pathname.replace(/\/+$/, "").split("/");
+  const section = SECTIONS.find((x) => x.id === parts[2]) ?? SECTIONS[0];
+  const sub = section.subs.find((x) => x.id === parts[3]) ?? section.subs[0] ?? null;
+  return { section, sub };
+}
+
+function adminPath(section: Section, sub?: string): string {
+  if (section === "overview") return "/admin";
+  return sub ? `/admin/${section}/${sub}` : `/admin/${section}`;
+}
+
+function arrowMove(e: React.KeyboardEvent, i: number, count: number, go: (next: number) => void) {
+  const step = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+  if (step === 0) return;
+  const rtl = getComputedStyle(e.currentTarget).direction === "rtl";
+  e.preventDefault();
+  go((i + (rtl ? -step : step) + count) % count);
+}
+
+function openLink(e: React.MouseEvent, path: string, go: (path: string) => void) {
+  if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+  e.preventDefault();
+  go(path);
+}
+
+function useShowActive(key: string) {
+  useEffect(() => {
+    document.querySelector<HTMLElement>(".admin-tab.active, .admin-subtab.active")?.scrollIntoView({ block: "nearest", inline: "center" });
+  }, [key]);
+}
+
+function TabBar({ active, onNavigate }: { active: Section; onNavigate: (path: string) => void }) {
+  useShowActive(active);
+  return (
+    <nav className="admin-tabs" role="tablist" aria-label={t("بخش‌های مدیریت", "Admin sections")}>
+      {SECTIONS.map((x, i) => {
+        const Icon = x.icon;
+        const on = x.id === active;
+        return (
+          <a
+            key={x.id}
+            id={`admin-tab-${x.id}`}
+            role="tab"
+            aria-selected={on}
+            aria-controls="admin-panel"
+            tabIndex={on ? 0 : -1}
+            href={adminPath(x.id)}
+            className={`admin-tab${on ? " active" : ""}`}
+            title={x.hint()}
+            onKeyDown={(e) =>
+              arrowMove(e, i, SECTIONS.length, (n) => {
+                onNavigate(adminPath(SECTIONS[n].id));
+                requestAnimationFrame(() => document.getElementById(`admin-tab-${SECTIONS[n].id}`)?.focus());
+              })
+            }
+            onClick={(e) => openLink(e, adminPath(x.id), onNavigate)}
+          >
+            <Icon width={16} height={16} />
+            <span>{x.label()}</span>
+          </a>
+        );
+      })}
+    </nav>
+  );
+}
+
+function SubBar({ section, active, onNavigate }: { section: Section; active: string; onNavigate: (path: string) => void }) {
+  const subs = SECTIONS.find((x) => x.id === section)?.subs ?? [];
+  if (subs.length === 0) return null;
+  return (
+    <nav className="admin-subtabs" role="tablist" aria-label={t("صفحه‌های این بخش", "Pages in this section")}>
+      {subs.map((x, i) => {
+        const on = x.id === active;
+        return (
+          <a
+            key={x.id}
+            id={`admin-sub-${x.id}`}
+            role="tab"
+            aria-selected={on}
+            tabIndex={on ? 0 : -1}
+            href={adminPath(section, x.id)}
+            className={`admin-subtab${on ? " active" : ""}`}
+            title={x.hint()}
+            onKeyDown={(e) =>
+              arrowMove(e, i, subs.length, (n) => {
+                onNavigate(adminPath(section, subs[n].id));
+                requestAnimationFrame(() => document.getElementById(`admin-sub-${subs[n].id}`)?.focus());
+              })
+            }
+            onClick={(e) => openLink(e, adminPath(section, x.id), onNavigate)}
+          >
+            {x.label()}
+          </a>
+        );
+      })}
+    </nav>
+  );
+}
+
+function Overview({ s }: { s: AdminSummary }) {
+  const errRate = s.mcp_calls_24h > 0 ? Math.round((s.mcp_errors_24h / s.mcp_calls_24h) * 1000) / 10 : 0;
+  const apiErrRate = s.api_requests_24h > 0 ? Math.round((s.api_errors_24h / s.api_requests_24h) * 1000) / 10 : 0;
+  return (
+    <>
+      <section className="admin-group" aria-label={t("کاربران و محتوا", "People and content")}>
+        <h3 className="admin-group-title">{t("کاربران و محتوا", "People and content")}</h3>
+        <div className="tiles tiles-4">
+          <Tile label={t("کاربران", "Users")} value={s.users} sub={t(`${fmtNum(s.users_7d)} در ۷ روز اخیر`, `${fmtNum(s.users_7d)} in the last 7 days`)} />
+          <Tile label={t("گفت‌وگوها", "Chats")} value={s.chats} sub={t(`${fmtNum(s.messages)} پیام`, `${fmtNum(s.messages)} messages`)} />
+          <Tile label={t("مهمان‌های سایت", "Website guests")} value={s.guests ?? 0} sub={t(`${fmtNum(s.guest_messages ?? 0)} پیام، ${fmtNum(s.guests_at_limit ?? 0)} به سقف رسیدند`, `${fmtNum(s.guest_messages ?? 0)} messages, ${fmtNum(s.guests_at_limit ?? 0)} hit the limit`)} />
+          <Tile label={t("فایل‌های بارگذاری‌شده", "Uploaded files")} value={s.uploads ?? 0} sub={t(`${fmtNum(s.uploads_images ?? 0)} تصویر، ${fmtSize(s.uploads_bytes ?? 0)}`, `${fmtNum(s.uploads_images ?? 0)} images, ${fmtSize(s.uploads_bytes ?? 0)}`)} />
+        </div>
+      </section>
+      <section className="admin-group" aria-label={t("API و MCP", "API and MCP")}>
+        <h3 className="admin-group-title">{t("API و MCP", "API and MCP")}</h3>
+        <div className="tiles tiles-3">
+          <Tile label={t("برنامه‌های متصل", "Connected apps")} value={s.apps} />
+          <Tile label={t("فراخوانی‌های MCP", "MCP calls")} value={s.mcp_calls} sub={t(`${fmtNum(s.mcp_calls_24h)} در ۲۴ ساعت اخیر`, `${fmtNum(s.mcp_calls_24h)} in the last 24 hours`)} />
+          <Tile label={t("خطاهای MCP در ۲۴ ساعت", "MCP errors in 24 hours")} value={s.mcp_errors_24h} sub={t(`${fmtNum(errRate)}٪ از فراخوانی‌ها`, `${fmtNum(errRate)}% of calls`)} tone={s.mcp_errors_24h > 0 ? "danger" : undefined} />
+          <Tile label={t("درخواست‌های API", "API requests")} value={s.api_requests} />
+          <Tile label={t("درخواست‌های API در ۲۴ ساعت", "API requests in 24 hours")} value={s.api_requests_24h} />
+          <Tile label={t("خطاهای API در ۲۴ ساعت", "API errors in 24 hours")} value={s.api_errors_24h} sub={t(`${fmtNum(apiErrRate)}٪ از درخواست‌ها`, `${fmtNum(apiErrRate)}% of requests`)} tone={s.api_errors_24h > 0 ? "danger" : undefined} />
+        </div>
+      </section>
+      {s.usage && s.usage.length > 0 && (
+        <section className="admin-group" aria-label={t("مصرف", "Usage")}>
+          <h3 className="admin-group-title">{t("مصرف", "Usage")}</h3>
+          <UsageTiles usage={s.usage} />
+          <UsagePanel usage={s.usage} />
+        </section>
+      )}
+      <section className="admin-group" aria-label={t("روند و پرکاربردها", "Trends and top lists")}>
+        <h3 className="admin-group-title">{t("روند و پرکاربردها", "Trends and top lists")}</h3>
+        <DailyPanel daily={s.daily} />
+        <div className="split three">
+          <TopList title={t("ابزارهای پرکاربرد", "Top tools")} items={s.top_tools.map((x) => ({ name: x.tool, count: x.count }))} ltr />
+          <TopList title={t("برنامه‌های پرکاربرد", "Top apps")} items={s.top_clients} />
+          <TopList title={t("پروژه‌های پرکاربرد API", "Top API projects")} items={s.top_projects} />
+        </div>
+      </section>
+    </>
+  );
+}
+
+export function Admin({ notify, onNavigate }: { notify: (msg: string, ok?: boolean) => void; onNavigate: (path: string) => void }) {
   const [summary, setSummary] = useState<AdminSummary | null>(null);
   const [error, setError] = useState("");
   const [forbidden, setForbidden] = useState(false);
   const [picked, setPicked] = useState<Picked>(null);
+  const { section: current, sub } = placeFromPath();
+  const section = current.id;
 
   const load = useCallback(() => {
     setError("");
@@ -2578,83 +2778,67 @@ export function Admin({ notify }: { notify: (msg: string, ok?: boolean) => void 
 
   if (forbidden) return <NoAccess />;
 
-  const s = summary;
-  const errRate = s && s.mcp_calls_24h > 0 ? Math.round((s.mcp_errors_24h / s.mcp_calls_24h) * 1000) / 10 : 0;
-  const apiErrRate = s && s.api_requests_24h > 0 ? Math.round((s.api_errors_24h / s.api_requests_24h) * 1000) / 10 : 0;
-
   return (
-    <div className="page">
+    <div className="page admin-page">
       <header className="page-head">
         <h2>{t("مدیریت", "Admin")}</h2>
-        <p className="muted">{t("نمای کلی استفاده از دستیار و سرور MCP سلام.", "An overview of how Salam AI Assistant and the MCP server are used.")}</p>
+        <p className="muted">{sub ? sub.hint() : current.hint()}</p>
       </header>
-      {error && (
-        <div className="form-error" role="alert">
-          {error}{" "}
-          <button type="button" className="link" onClick={load}>
-            {t("تلاش دوباره", "Try again")}
+      <TabBar active={section} onNavigate={onNavigate} />
+      {sub && <SubBar section={section} active={sub.id} onNavigate={onNavigate} />}
+      {picked && section !== "overview" && (
+        <div className="picked-bar" role="status">
+          {t("نمایش داده‌های", "Showing data for")} <bdi className="strong">{picked.name}</bdi>
+          <button type="button" className="link" onClick={() => setPicked(null)}>
+            {t("نمایش همه", "Show all")}
           </button>
         </div>
       )}
-      {!s && !error && (
-        <div className="loading-chat" role="status">
-          <span className="spinner" />
-          <span className="sr-only">{t("در حال بارگذاری", "Loading")}</span>
-        </div>
-      )}
-      {s && (
-        <>
-          <div className="tiles">
-            <Tile label={t("کاربران", "Users")} value={s.users} sub={t(`${fmtNum(s.users_7d)} در ۷ روز اخیر`, `${fmtNum(s.users_7d)} in the last 7 days`)} />
-            <Tile label={t("گفت‌وگوها", "Chats")} value={s.chats} sub={t(`${fmtNum(s.messages)} پیام`, `${fmtNum(s.messages)} messages`)} />
-            <Tile label={t("مهمان‌های سایت", "Website guests")} value={s.guests ?? 0} sub={t(`${fmtNum(s.guest_messages ?? 0)} پیام، ${fmtNum(s.guests_at_limit ?? 0)} به سقف رسیدند`, `${fmtNum(s.guest_messages ?? 0)} messages, ${fmtNum(s.guests_at_limit ?? 0)} hit the limit`)} />
-            <Tile label={t("فایل‌های بارگذاری‌شده", "Uploaded files")} value={s.uploads ?? 0} sub={t(`${fmtNum(s.uploads_images ?? 0)} تصویر، ${fmtSize(s.uploads_bytes ?? 0)}`, `${fmtNum(s.uploads_images ?? 0)} images, ${fmtSize(s.uploads_bytes ?? 0)}`)} />
-            <Tile label={t("برنامه‌های متصل", "Connected apps")} value={s.apps} />
-            <Tile label={t("فراخوانی‌های MCP", "MCP calls")} value={s.mcp_calls} sub={t(`${fmtNum(s.mcp_calls_24h)} در ۲۴ ساعت اخیر`, `${fmtNum(s.mcp_calls_24h)} in the last 24 hours`)} />
-            <Tile label={t("خطاهای MCP در ۲۴ ساعت", "MCP errors in 24 hours")} value={s.mcp_errors_24h} sub={t(`${fmtNum(errRate)}٪ از فراخوانی‌ها`, `${fmtNum(errRate)}% of calls`)} tone={s.mcp_errors_24h > 0 ? "danger" : undefined} />
-            <Tile label={t("درخواست‌های API", "API requests")} value={s.api_requests} />
-            <Tile label={t("درخواست‌های API در ۲۴ ساعت", "API requests in 24 hours")} value={s.api_requests_24h} />
-            <Tile label={t("خطاهای API در ۲۴ ساعت", "API errors in 24 hours")} value={s.api_errors_24h} sub={t(`${fmtNum(apiErrRate)}٪ از درخواست‌ها`, `${fmtNum(apiErrRate)}% of requests`)} tone={s.api_errors_24h > 0 ? "danger" : undefined} />
-          </div>
-          {s.usage && s.usage.length > 0 && (
-            <>
-              <UsageTiles usage={s.usage} />
-              <UsagePanel usage={s.usage} />
-            </>
-          )}
-          <DailyPanel daily={s.daily} />
-          <div className="split three">
-            <TopList title={t("ابزارهای پرکاربرد", "Top tools")} items={s.top_tools.map((t) => ({ name: t.tool, count: t.count }))} ltr />
-            <TopList title={t("برنامه‌های پرکاربرد", "Top apps")} items={s.top_clients} />
-            <TopList title={t("پروژه‌های پرکاربرد API", "Top API projects")} items={s.top_projects} />
-          </div>
-        </>
-      )}
-      {!forbidden && (
-        <>
-          <Users picked={picked} onPick={setPicked} notify={notify} />
-          <TelegramSessions picked={picked} onPick={setPicked} />
-          {picked && (
-            <div className="picked-bar" role="status">
-              {t("نمایش رویدادها، درخواست‌های API و برنامه‌های", "Showing events, API requests and apps for")} <bdi className="strong">{picked.name}</bdi>
-              <button type="button" className="link" onClick={() => setPicked(null)}>
+      <div id="admin-panel" className="admin-panel" role="tabpanel" aria-labelledby={`admin-tab-${section}`}>
+        {section === "overview" && (
+          <>
+            {error && (
+              <div className="form-error" role="alert">
+                {error}{" "}
+                <button type="button" className="link" onClick={load}>
+                  {t("تلاش دوباره", "Try again")}
+                </button>
+              </div>
+            )}
+            {!summary && !error && (
+              <div className="loading-chat" role="status">
+                <span className="spinner" />
+                <span className="sr-only">{t("در حال بارگذاری", "Loading")}</span>
+              </div>
+            )}
+            {summary && <Overview s={summary} />}
+          </>
+        )}
+        {section === "users" && sub?.id === "accounts" && <Users picked={picked} onPick={setPicked} notify={notify} />}
+        {section === "users" && sub?.id === "telegram" && <TelegramSessions picked={picked} onPick={setPicked} />}
+        {section === "users" && sub?.id === "sessions" && <Sessions picked={picked} notify={notify} />}
+        {section === "chats" && sub?.id === "latest" && (picked ? <Conversations picked={picked} /> : <LatestChats />)}
+        {section === "chats" && sub?.id === "guests" && (
+          picked ? (
+            <section className="card panel">
+              <p className="muted">{t("گفت‌وگوهای مهمان به حساب کاربری وصل نیستند. برای دیدنشان فیلتر کاربر را بردارید.", "Guest chats are not tied to accounts. Clear the user filter to see them.")}</p>
+              <button type="button" className="button ghost" onClick={() => setPicked(null)}>
                 {t("نمایش همه", "Show all")}
               </button>
-            </div>
-          )}
-          <Sessions picked={picked} notify={notify} />
-          {!picked && <Guests />}
-          {picked ? <Conversations picked={picked} /> : <LatestChats />}
-          <PlansAdmin notify={notify} />
-          <Subscriptions picked={picked} notify={notify} />
-          <Payments picked={picked} />
-          <Uploads picked={picked} notify={notify} />
-          <Events picked={picked} onPick={setPicked} />
-          <RequestsFeed picked={picked} onPick={setPicked} />
-          <KeyPolicies picked={picked} notify={notify} />
-          <AppsTable picked={picked} notify={notify} />
-        </>
-      )}
+            </section>
+          ) : (
+            <Guests />
+          )
+        )}
+        {section === "chats" && sub?.id === "files" && <Uploads picked={picked} notify={notify} />}
+        {section === "billing" && sub?.id === "plans" && <PlansAdmin notify={notify} />}
+        {section === "billing" && sub?.id === "subscriptions" && <Subscriptions picked={picked} notify={notify} />}
+        {section === "billing" && sub?.id === "payments" && <Payments picked={picked} />}
+        {section === "api" && sub?.id === "requests" && <RequestsFeed picked={picked} onPick={setPicked} />}
+        {section === "api" && sub?.id === "keys" && <KeyPolicies picked={picked} notify={notify} />}
+        {section === "api" && sub?.id === "apps" && <AppsTable picked={picked} notify={notify} />}
+        {section === "events" && <Events picked={picked} onPick={setPicked} />}
+      </div>
     </div>
   );
 }

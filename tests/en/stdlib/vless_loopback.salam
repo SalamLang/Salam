@@ -1,0 +1,304 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import mem
+import str
+import sync
+import net.transport
+import net.vless
+
+const UUID1 := "b831381d-6324-4d53-ad4f-8cda48b30811"
+const UUID2 := "5783a3e7-e373-51cd-8642-c83782b807c5"
+const CERT := "tests/fixtures/ssl/server.crt"
+const KEY := "tests/fixtures/ssl/server.key"
+
+mut port := 0
+mut ready := sync.NewWaitGroup()
+mut finished := sync.NewWaitGroup()
+mut srv_settings := transport.Settings {}
+mut srv_count := 1
+mut srv_log := ""
+
+func hex_of(r: vless.Request): str:
+    ret transport.ToHex(vless.EncodeRequest(r))
+end
+
+func headers():
+    mut r := vless.Request {}
+    r.uuid = transport.ParseUUID(UUID1)
+    r.command = vless.CmdTCP
+    r.addr = transport.NewAddr("example.com", 443)
+    println "tcp domain", hex_of(r) == "00b831381d63244d53ad4f8cda48b3081100" + "0101bb020b6578616d706c652e636f6d"
+    r.addr = transport.NewAddr("1.2.3.4", 80)
+    println "tcp ipv4", hex_of(r) == "00b831381d63244d53ad4f8cda48b3081100" + "01" + "0050" + "01" + "01020304"
+    r.addr = transport.NewAddr("2001:db8::1", 8080)
+    println "udp ipv6", hex_of(r) == "00b831381d63244d53ad4f8cda48b3081100" + "01" + "1f90" + "03" + "20010db8000000000000000000000001"
+    r.command = vless.CmdUDP
+    r.addr = transport.NewAddr("8.8.8.8", 53)
+    println "udp ipv4", hex_of(r) == "00b831381d63244d53ad4f8cda48b3081100" + "02" + "0035" + "01" + "08080808"
+    r.command = vless.CmdMux
+    println "mux has no address", hex_of(r) == "00b831381d63244d53ad4f8cda48b3081100" + "03"
+    r.command = vless.CmdTCP
+    r.flow = "xtls-rprx-vision"
+    r.addr = transport.NewAddr("example.com", 443)
+    println "flow addon", hex_of(r) == "00b831381d63244d53ad4f8cda48b30811" + "12" + "0a10" + "78746c732d727072782d766973696f6e" + "0101bb020b6578616d706c652e636f6d"
+    mut back := vless.Request {}
+    consumed := vless.DecodeRequest(vless.EncodeRequest(r), back)
+    println "flow roundtrip", consumed, back.flow, back.addr.host, back.addr.port, transport.FormatUUID(back.uuid) == UUID1
+    mut bad := vless.Request {}
+    plain := transport.FromHex("01b831381d63244d53ad4f8cda48b3081100" + "0101bb020b6578616d706c652e636f6d")
+    println "wrong version rejected", vless.DecodeRequest(plain, bad)
+    cut := transport.FromHex("00b831381d63244d53ad4f8cda48b3081100" + "0101bb020b6578616d")
+    println "truncated rejected", vless.DecodeRequest(cut, bad)
+    odd := transport.FromHex("00b831381d63244d53ad4f8cda48b3081100" + "09")
+    println "unknown command rejected", vless.DecodeRequest(odd, bad)
+end
+
+func links():
+    l := vless.ParseLink("vless://b831381d-6324-4d53-ad4f-8cda48b30811@cdn.example.com:443?encryption=none&security=tls&sni=front.example.net&alpn=h2%2Chttp%2F1.1&fp=chrome&type=ws&host=real.example.org&path=%2Fvless%3Fed%3D2048&allowInsecure=1#My%20Server")
+    println "link ok", l.ok, l.host, l.port, l.security, l.network
+    println "link fields", l.sni, l.alpn, l.fingerprint, l.host_header, l.path, l.allow_insecure, l.remark
+    s := vless.LinkSettings(l)
+    println "link to transport", s.network, s.tls, s.sni, s.host, s.path, s.early_data, s.allow_insecure
+    again := vless.ParseLink(vless.FormatLink(l))
+    println "format roundtrip", again.ok, again.path == l.path, again.alpn == l.alpn, again.remark == l.remark
+    v6 := vless.ParseLink("vless://b831381d-6324-4d53-ad4f-8cda48b30811@[2001:db8::5]:8443?type=tcp&flow=xtls-rprx-vision")
+    println "ipv6 link", v6.ok, v6.host, v6.port, v6.flow
+    println "reality refused", vless.ParseLink("vless://b831381d-6324-4d53-ad4f-8cda48b30811@h:443?security=reality").err
+    println "grpc refused", vless.ParseLink("vless://b831381d-6324-4d53-ad4f-8cda48b30811@h:443?type=grpc").err
+    println "bad uuid refused", vless.ParseLink("vless://nope@h:443").err
+    println "other scheme refused", vless.ParseLink("vmess://abc").err
+end
+
+func server():
+    l := transport.Listen(0, srv_settings)
+    port = transport.ListenerPort(l)
+    sync.Done(ready)
+    mut users := Vector {} as Vector<vless.User>
+    users.push(vless.NewUser(UUID1, ""))
+    users.push(vless.NewUser(UUID2, ""))
+    buf := mem.Allocate(65536 as u64)
+    repeat srv_count:
+        t := transport.Accept(l)
+        if not transport.Ok(t):
+            srv_log += "transport(" + t.err + ");"
+            continue
+        end
+        mut c := vless.Accept(t, users)
+        if not c.ok:
+            srv_log += "fail(" + c.err + ");"
+            continue
+        end
+        srv_log += "ok(" + c.user.substr(0, 8) + " " + str.FromInt(c.req.command as i64) + " " + c.req.addr.host + ");"
+        if c.req.command == vless.CmdUDP:
+            until true:
+                mut p := transport.NewBytes(64)
+                if not vless.ReadPacket(c, p):
+                    transport.FreeBytes(p)
+                    break
+                end
+                vless.WritePacket(c, p.p, p.len)
+                transport.FreeBytes(p)
+            end
+        else:
+            until true:
+                n := vless.Read(c, buf, 65536)
+                if n <= 0:
+                    break
+                end
+                vless.Write(c, buf, n)
+            end
+        end
+        vless.Close(c)
+    end
+    mem.Free(buf)
+    transport.CloseListener(l)
+    sync.Done(finished)
+end
+
+func start(ss: transport.Settings, count: int):
+    srv_settings = ss
+    srv_count = count
+    srv_log = ""
+    sync.Add(ready, 1 as i64)
+    sync.Add(finished, 1 as i64)
+    _t := spawn(server)
+    sync.Wait(ready)
+end
+
+func pattern(n: int, seed: int): transport.Bytes:
+    mut b := transport.NewBytes(n + 1)
+    repeat n in i:
+        transport.Put8(b, (i * 13 + seed) & 255)
+    end
+    ret b
+end
+
+func stream_echo(label: str, c &: vless.Conn):
+    mut good := c.ok
+    mut sent := 0
+    mut sizes := Vector {} as Vector<int>
+    sizes.push(9)
+    sizes.push(2000)
+    sizes.push(50000)
+    repeat sizes.len() in i:
+        n := sizes.get(i)
+        mut out := pattern(n, i)
+        back := mem.AllocateZeroed((n + 1) as u64)
+        mut got := 0
+        if not vless.Write(c, out.p, n):
+            good = false
+        end
+        until got < n:
+            r := vless.Read(c, ((back as i64) + (got as i64)) as void*, n - got)
+            if r <= 0:
+                good = false
+                break
+            end
+            got += r
+        end
+        if got == n:
+            bp := back as u8*
+            repeat n in k:
+                if (bp[k] as int) != ((k * 13 + i) & 255):
+                    good = false
+                    break
+                end
+            end
+        end
+        sent += n
+        mem.Free(back)
+        transport.FreeBytes(out)
+    end
+    sizes.free()
+    vless.Close(c)
+    println label, "echo ok:", good, "bytes:", sent
+end
+
+func over(label: str, cs: transport.Settings, ss: transport.Settings):
+    start(ss, 1)
+    mut c := vless.Dial("127.0.0.1", port, cs, UUID1, "", vless.CmdTCP, transport.NewAddr("target.example.com", 443))
+    if not c.ok:
+        println label, "dial failed", c.err
+    else:
+        stream_echo(label, c)
+    end
+    sync.Wait(finished)
+end
+
+func udp_echo(label: str, cs: transport.Settings, ss: transport.Settings):
+    start(ss, 1)
+    mut c := vless.Dial("127.0.0.1", port, cs, UUID2, "", vless.CmdUDP, transport.NewAddr("8.8.4.4", 53))
+    mut good := c.ok
+    mut sizes := Vector {} as Vector<int>
+    sizes.push(1)
+    sizes.push(512)
+    sizes.push(1400)
+    repeat sizes.len() in i:
+        n := sizes.get(i)
+        mut out := pattern(n, 40 + i)
+        mut back := transport.NewBytes(64)
+        if not vless.WritePacket(c, out.p, n) or not vless.ReadPacket(c, back):
+            good = false
+        else:
+            good = good and back.len == n and transport.ToHex(back) == transport.ToHex(out)
+        end
+        transport.FreeBytes(out)
+        transport.FreeBytes(back)
+    end
+    sizes.free()
+    vless.Close(c)
+    sync.Wait(finished)
+    println label, "datagrams echoed:", good, srv_log
+end
+
+func rejects():
+    plain := transport.Settings {}
+    start(plain, 2)
+    c1 := vless.Dial("127.0.0.1", port, plain, "00000000-0000-4000-8000-000000000001", "", vless.CmdTCP, transport.NewAddr("a.example", 1))
+    b := mem.AllocateZeroed(8 as u64)
+    mut c1m := c1
+    r1 := vless.Read(c1m, b, 8)
+    c2 := vless.Dial("127.0.0.1", port, plain, UUID1, "xtls-rprx-vision", vless.CmdTCP, transport.NewAddr("a.example", 1))
+    mut c2m := c2
+    r2 := vless.Read(c2m, b, 8)
+    sync.Wait(finished)
+    mem.Free(b)
+    println "unknown user gets nothing", r1 <= 0
+    println "unsupported flow gets nothing", r2 <= 0
+    println "server saw", srv_log
+end
+
+func main:
+    headers()
+    links()
+
+    plain := transport.Settings {}
+    over("tcp", plain, plain)
+
+    mut tls_srv := transport.Settings {}
+    tls_srv.tls = true
+    tls_srv.cert_file = CERT
+    tls_srv.key_file = KEY
+    mut tls_cli := transport.Settings {}
+    tls_cli.tls = true
+    tls_cli.allow_insecure = true
+    tls_cli.sni = "front.example.net"
+    tls_cli.alpn = "http/1.1"
+    tls_cli.fingerprint = "chrome"
+    over("tls", tls_cli, tls_srv)
+
+    mut ws := transport.Settings {}
+    ws.network = "ws"
+    ws.path = "/vless"
+    ws.host = "cdn.example.com"
+    over("ws", ws, ws)
+
+    mut hu := transport.Settings {}
+    hu.network = "httpupgrade"
+    hu.path = "/hu"
+    over("httpupgrade", hu, hu)
+
+    mut wss_srv := ws
+    wss_srv.tls = true
+    wss_srv.cert_file = CERT
+    wss_srv.key_file = KEY
+    mut wss_cli := ws
+    wss_cli.tls = true
+    wss_cli.allow_insecure = true
+    wss_cli.sni = "www.example.org"
+    over("ws+tls", wss_cli, wss_srv)
+
+    mut frag := wss_cli
+    frag.fragment = true
+    frag.fragment_min = 4
+    frag.fragment_max = 12
+    frag.fragment_delay_ms = 1
+    over("ws+tls, fragmented hello", frag, wss_srv)
+
+    start(wss_srv, 1)
+    link := "vless://" + UUID1 + "@127.0.0.1:" + str.FromInt(port as i64) + "?encryption=none&security=tls&sni=www.example.org&type=ws&host=cdn.example.com&path=%2Fvless&allowInsecure=1#iran"
+    parsed := vless.ParseLink(link)
+    mut lc := vless.DialLink(parsed, vless.CmdTCP, transport.NewAddr("target.example.com", 443))
+    if lc.ok:
+        stream_echo("dial from link", lc)
+    else:
+        println "dial from link failed", lc.err
+    end
+    sync.Wait(finished)
+
+    udp_echo("udp over tcp", plain, plain)
+    udp_echo("udp over ws", ws, ws)
+    rejects()
+end

@@ -1,0 +1,285 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "net/tunnel"
+@fa "تونل"
+package tunnel
+
+import mem
+import str
+import sync
+import net.tcp
+import net.internal.rawsock
+import net.websocket
+import tls
+
+@en "Stream"
+@fa "جریان"
+pub interface Stream:
+    @en "Read"
+    @fa "خواندن"
+    func Read(max: int): str
+    @en "ReadBytes"
+    @fa "خواندن بایت"
+    func ReadBytes(buf: void*, max: int): int
+    @en "Write"
+    @fa "نوشتن"
+    func Write(data: str): int
+    @en "WriteBytes"
+    @fa "نوشتن بایت"
+    func WriteBytes(ptr: void*, n: int): int
+    @en "SetDeadline"
+    @fa "تنظیم مهلت"
+    func SetDeadline(millis: int)
+    @en "Shutdown"
+    @fa "خاموش کردن"
+    func Shutdown()
+    @en "Close"
+    @fa "بستن"
+    func Close()
+    @en "Ok"
+    @fa "معتبر"
+    func Ok(): bool
+end
+
+@en "TcpStream"
+@fa "جریان تی سی پی"
+pub struct TcpStream:
+    @en "conn"
+    @fa "اتصال"
+    pub conn: tcp.Conn = tcp.Conn {}
+
+    @en "Read"
+    @fa "خواندن"
+    pub func Read(max: int): str:
+        ret tcp.Read(this.conn, max)
+    end
+
+    @en "ReadBytes"
+    @fa "خواندن بایت"
+    pub func ReadBytes(buf: void*, max: int): int:
+        ret tcp.ReadBytes(this.conn, buf, max)
+    end
+
+    @en "Write"
+    @fa "نوشتن"
+    pub func Write(data: str): int:
+        ret tcp.Write(this.conn, data)
+    end
+
+    @en "WriteBytes"
+    @fa "نوشتن بایت"
+    pub func WriteBytes(ptr: void*, n: int): int:
+        ret tcp.WriteBytes(this.conn, ptr, n)
+    end
+
+    @en "SetDeadline"
+    @fa "تنظیم مهلت"
+    pub func SetDeadline(millis: int):
+        tcp.SetDeadline(this.conn, millis)
+    end
+
+    @en "Shutdown"
+    @fa "خاموش کردن"
+    pub func Shutdown():
+        rawsock.Shutdown(rawsock.FromFd(this.conn.fd))
+    end
+
+    @en "Close"
+    @fa "بستن"
+    pub func Close():
+        tcp.Close(this.conn)
+    end
+
+    @en "Ok"
+    @fa "معتبر"
+    pub func Ok(): bool:
+        ret tcp.ConnOk(this.conn)
+    end
+end
+
+@en "TlsStream"
+@fa "جریان تی ال اس"
+pub struct TlsStream:
+    @en "conn"
+    @fa "اتصال"
+    pub conn: tls.Conn = tls.Conn {}
+
+    @en "Read"
+    @fa "خواندن"
+    pub func Read(max: int): str:
+        ret tls.Read(this.conn, max)
+    end
+
+    @en "ReadBytes"
+    @fa "خواندن بایت"
+    pub func ReadBytes(buf: void*, max: int): int:
+        ret tls.ReadBytes(this.conn, buf, max)
+    end
+
+    @en "Write"
+    @fa "نوشتن"
+    pub func Write(data: str): int:
+        ret tls.Write(this.conn, data)
+    end
+
+    @en "WriteBytes"
+    @fa "نوشتن بایت"
+    pub func WriteBytes(ptr: void*, n: int): int:
+        ret tls.WriteBytes(this.conn, ptr, n)
+    end
+
+    @en "SetDeadline"
+    @fa "تنظیم مهلت"
+    pub func SetDeadline(millis: int):
+        rawsock.SetTimeout(rawsock.FromFd(tls.Fd(this.conn)), millis)
+    end
+
+    @en "Shutdown"
+    @fa "خاموش کردن"
+    pub func Shutdown():
+        rawsock.Shutdown(rawsock.FromFd(tls.Fd(this.conn)))
+    end
+
+    @en "Close"
+    @fa "بستن"
+    pub func Close():
+        tls.Close(this.conn)
+    end
+
+    @en "Ok"
+    @fa "معتبر"
+    pub func Ok(): bool:
+        ret tls.ConnOk(this.conn)
+    end
+end
+
+@en "WsStream"
+@fa "جریان وب‌سوکت"
+pub struct WsStream:
+    @en "conn"
+    @fa "اتصال"
+    pub conn: websocket.Conn = websocket.Conn {}
+    @en "pending"
+    @fa "داده معلق"
+    pub pending: void* = null
+    @en "pending_len"
+    @fa "طول داده معلق"
+    pub pending_len: int = 0
+    @en "pending_off"
+    @fa "آغاز داده معلق"
+    pub pending_off: int = 0
+    @en "timeout"
+    @fa "مهلت"
+    pub timeout: int = 0 - 1
+
+    func _fill(): bool:
+        if this.pending_off < this.pending_len: ret true end
+        if this.pending != null:
+            mem.Free(this.pending)
+            this.pending = null
+        end
+        this.pending_len = 0
+        this.pending_off = 0
+        until websocket.IsOpen(this.conn):
+            m := websocket.Poll(this.conn, this.timeout)
+            if m.kind == 2 and m.len > 0:
+                p := mem.Allocate(m.len as u64)
+                mem.Copy(p, m.data, m.len as u64)
+                this.pending = p
+                this.pending_len = m.len
+                ret true
+            else m.kind == 1 and m.text.len() > 0:
+                n := m.text.len()
+                p := mem.Allocate(n as u64)
+                mem.Copy(p, m.text as void*, n as u64)
+                this.pending = p
+                this.pending_len = n
+                ret true
+            else m.kind == 8 or m.kind == 0 or m.kind == 100:
+                ret false
+            end
+        end
+        ret false
+    end
+
+    @en "Read"
+    @fa "خواندن"
+    pub func Read(max: int): str:
+        if not this._fill(): ret "" end
+        mut n := this.pending_len - this.pending_off
+        if n > max: n = max end
+        out := mem.Allocate((n + 1) as u64)
+        mem.Copy(out, (this.pending as i64 + this.pending_off) as void*, n as u64)
+        (out as u8*)[n] = 0 as u8
+        this.pending_off += n
+        ret out as str
+    end
+
+    @en "ReadBytes"
+    @fa "خواندن بایت"
+    pub func ReadBytes(buf: void*, max: int): int:
+        if not this._fill(): ret 0 end
+        mut n := this.pending_len - this.pending_off
+        if n > max: n = max end
+        mem.Copy(buf, (this.pending as i64 + this.pending_off) as void*, n as u64)
+        this.pending_off += n
+        ret n
+    end
+
+    @en "Write"
+    @fa "نوشتن"
+    pub func Write(data: str): int:
+        n := data.len()
+        r := websocket.SendBinaryBytes(this.conn, data as void*, n)
+        if r < 0: ret r end
+        ret n
+    end
+
+    @en "WriteBytes"
+    @fa "نوشتن بایت"
+    pub func WriteBytes(ptr: void*, n: int): int:
+        r := websocket.SendBinaryBytes(this.conn, ptr, n)
+        if r < 0: ret r end
+        ret n
+    end
+
+    @en "SetDeadline"
+    @fa "تنظیم مهلت"
+    pub func SetDeadline(millis: int):
+        if millis <= 0:
+            this.timeout = 0 - 1
+        else:
+            this.timeout = millis
+        end
+    end
+
+    @en "Shutdown"
+    @fa "خاموش کردن"
+    pub func Shutdown():
+        rawsock.Shutdown(rawsock.FromFd(this.conn.fd))
+    end
+
+    @en "Close"
+    @fa "بستن"
+    pub func Close():
+        websocket.Close(this.conn)
+    end
+
+    @en "Ok"
+    @fa "معتبر"
+    pub func Ok(): bool:
+        ret this.conn.open
+    end
+end

@@ -1567,7 +1567,8 @@ end
 - **`compress`**: `ByteBuf` (`NewByteBuf BufPush BufGet BufLen BufFree BufFromStr BufToBase64`), `Compress/Decompress(method)` over `Method*`,
   `DeflateCompress GzipCompress GzipDecompress CRC32 Adler32`. Gzip decoding
   verifies the CRC-32 and length (`ok` is false on mismatch); the method is not stored in the output; free every buffer.
-- **`archive`**: `ZipCreate ZipCreateFile ZipList ZipExtractAll ZipExtractByName TarCreate TarList TarExtractAll RarCreate RarCreateFile RarList RarExtract RarExtractByName RarExtractAll RarStatusText GzipCompressFile ReadBinaryFile WriteBinaryFile`. No zip64 (under 2 GB),
+  `XzDecompress(p, n, ok)` and `LzmaDecompress` read `.xz` (LZMA2, BCJ and delta filters, CRC-32/CRC-64/SHA-256 verified) and `.lzma`; decode only, `...Max` variants cap the output, dictionaries over 1 GiB are refused.
+- **`archive`**: `ZipCreate ZipCreateFile ZipList ZipExtractAll ZipExtractByName TarCreate TarList TarExtractAll RarCreate RarCreateFile RarList RarExtract RarExtractByName RarExtractAll RarStatusText GzipCompressFile XzDecompressFile LzmaDecompressFile ReadBinaryFile WriteBinaryFile`. No zip64 (under 2 GB),
   ZIP methods 0 and 8 only, CRC not checked, tar names over 100 bytes are
   cut. RAR 1.5 to 5 are read fully (CRC checked, `RarExtract` reports a
   `RAR_*` status); passwords through `RarOpen(p, n, password)` with

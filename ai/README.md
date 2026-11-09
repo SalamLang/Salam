@@ -409,8 +409,10 @@ the service, encrypted with HMAC-based counter mode plus an HMAC tag keyed by
   (`/v1/oauth/mcp/register`, stored encrypted in `integration_clients`), then sends the
   user to `https://www.figma.com/oauth/mcp` with PKCE (the verifier is an HMAC of the
   state, so nothing extra is stored) and the redirect `AI_APP_URL/auth/callback/figma-mcp`.
-  Nothing has to be configured by the operator. `AI_FIGMA_MCP_URL` only moves the MCP
-  endpoint, for the test mock. Tokens are refreshed on use and, like the others, never
+  Figma only lets approved clients register for its MCP server, so the card stays hidden
+  until the operator sets `AI_FIGMA_MCP_ENABLED=1` after Salam AI is approved by Figma. A
+  failed registration answers 503 with Figma's HTTP status. `AI_FIGMA_MCP_URL` moves the
+  MCP endpoint (for the test mock) and also turns the card on. Tokens are refreshed on use and, like the others, never
   shown to the model.
 - The sandbox shell is signed in for the user: when GitHub is connected, `GH_TOKEN`,
   `GITHUB_TOKEN` and a Git credential helper for github.com are set, and for Figma

@@ -1,0 +1,1318 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ui
+
+import str
+import math
+import gui.css
+import gui.cssbox
+import gui.window
+
+func _handler_name(v0: str): str:
+    mut v := str.Trim(v0)
+    semi := v.find(";")
+    if semi >= 0:
+        v = str.Trim(v.substr(0, semi))
+    end
+    if v.starts_with("window[") and v.len() > 9:
+        q := v.substr(7, 1)
+        rest := v.substr(8, v.len() - 8)
+        e := rest.find(q + "]")
+        if e >= 0:
+            ret rest.substr(0, e)
+        end
+        ret ""
+    end
+    if v.starts_with("window."):
+        v = v.substr(7, v.len() - 7)
+    end
+    p := v.find("(")
+    if p > 0:
+        ret str.Trim(v.substr(0, p))
+    end
+    ret v
+end
+
+func _call_handler(name: str): bool:
+    repeat _handler_names.len() in i:
+        if _handler_names[i] == name:
+            f := _handler_fns[i]
+            f()
+            _e.handlers_run++
+            ret true
+        end
+    end
+    ret false
+end
+
+func _make_event(kind: str, node: int): Event:
+    mut ev := Event { kind = kind }
+    if node >= 0 and node < _e.dom.nodes.len():
+        ev.target = _attr(_e.dom, node, "id")
+        t := _e.dom.nodes[node].tag
+        if t == "input" or t == "textarea" or t == "select":
+            ev.value = _control_value(node)
+            ev.checked = _is_checked(node)
+        end
+    end
+    ev.x = _e.mx
+    ev.y = _e.my
+    ret ev
+end
+
+func _fire_ev(node: int, ev: Event, bubbles: bool): bool:
+    mut n := node
+    mut any := false
+    attr := "on" + ev.kind
+    until n >= 0:
+        if n < _e.dom.nodes.len() and _e.dom.nodes[n].tag != "#text":
+            v := _attr(_e.dom, n, attr)
+            if v.len() > 0:
+                name := _handler_name(v)
+                _event = ev
+                if _call_handler(name):
+                    any = true
+                    _e.dirty_view = true
+                end
+            end
+        end
+        if not bubbles:
+            break
+        end
+        if n == _e.dom.html:
+            break
+        end
+        n = _e.dom.nodes[n].parent
+    end
+    _sfree(attr)
+    ret any
+end
+
+func _fire(node: int, kind: str, bubbles: bool): bool:
+    ret _fire_ev(node, _make_event(kind, node), bubbles)
+end
+
+func _assign_order():
+    _e.order.free()
+    _e.order = Vector {} as Vector<int>
+    repeat _e.dom.nodes.len():
+        _e.order.push(-1)
+    end
+    _e.order_next = 0
+    if _e.dom.body >= 0:
+        _order_ctx(_e.dom.body)
+    end
+end
+
+func _order_ctx(node: int):
+    _e.order[node] = _e.order_next
+    _e.order_next++
+    mut pos := Vector {} as Vector<int>
+    defer pos.free()
+    _collect_positioned(node, pos)
+    _zsort(pos)
+    each p in pos:
+        if _style_of(p).z_index < 0:
+            _order_ctx(p)
+        end
+    end
+    _order_flow(node)
+    each p in pos:
+        if _style_of(p).z_index >= 0:
+            _order_ctx(p)
+        end
+    end
+end
+
+func _order_flow(node: int):
+    each k in _e.dom.nodes[node].kids:
+        if _e.node_el[k] < 0:
+            continue
+        end
+        kcs := _style_of(k)
+        if kcs.display == css.Display.None:
+            continue
+        end
+        if _positioned(kcs) and _e.node_cb[k] >= 0:
+            continue
+        end
+        _e.order[k] = _e.order_next
+        _e.order_next++
+        _order_flow(k)
+    end
+end
+
+func _inside(b: _Box, x: f64, y: f64): bool:
+    ret b.shown and x >= b.x and x < b.x + b.w and y >= b.y and y < b.y + b.h and x >= b.clip_x0 and x < b.clip_x1 and y >= b.clip_y0 and y < b.clip_y1
+end
+
+func _hit(x: f64, y: f64): int:
+    mut best := -1
+    mut best_order := -1
+    repeat _e.dom.nodes.len() in n:
+        if _e.node_cb[n] < 0 or _e.node_el[n] < 0 or n >= _e.order.len():
+            continue
+        end
+        if _e.order[n] < best_order:
+            continue
+        end
+        if not _inside(_e.boxes[n], x, y):
+            continue
+        end
+        cs := _style_of(n)
+        if not cs.pointer_events or cs.visibility != css.Visibility.Visible:
+            continue
+        end
+        best = n
+        best_order = _e.order[n]
+    end
+    if best < 0:
+        ret _e.dom.body
+    end
+    mut fi := _e.node_ifc[best]
+    until fi >= 0:
+        f := _e.ifcs[fi]
+        if f.has_lay and not f.control:
+            repeat f.lay.lines.len() in li:
+                line := f.lay.lines[li]
+                if y >= f.y + line.top and y < f.y + line.top + line.height:
+                    mut k := line.run_start
+                    until k < line.run_start + line.run_count:
+                        r := f.lay.runs[k]
+                        if x >= f.x + r.x and x < f.x + r.x + r.width and r.span >= 0 and r.span < f.span_el.len() and f.span_atom[r.span] < 0:
+                            el := f.span_el[r.span]
+                            if el >= 0:
+                                ret el
+                            end
+                        end
+                        k++
+                    end
+                end
+            end
+        end
+        fi = f.next
+    end
+    ret best
+end
+
+func _is_disabled(node: int): bool:
+    t := _e.dom.nodes[node].tag
+    if t == "button" or t == "input" or t == "select" or t == "textarea":
+        ret _has_attr(_e.dom, node, "disabled")
+    end
+    ret false
+end
+
+func _focusable(node: int): bool:
+    if node < 0 or node >= _e.dom.nodes.len() or _e.node_el[node] < 0:
+        ret false
+    end
+    if not _e.boxes[node].shown:
+        ret false
+    end
+    if _is_disabled(node):
+        ret false
+    end
+    t := _e.dom.nodes[node].tag
+    if _has_attr(_e.dom, node, "tabindex"):
+        ret true
+    end
+    switch t:
+        "button", "select", "textarea":
+            ret true
+        end
+        "input":
+            ret _input_type(node) != "hidden"
+        end
+        "a":
+            ret _has_attr(_e.dom, node, "href")
+        end
+        "summary":
+            ret true
+        end
+        else:
+            ret false
+        end
+    end
+    ret false
+end
+
+func _focus_target(node: int): int:
+    mut n := node
+    until n >= 0 and n != _e.dom.html:
+        if _focusable(n):
+            ret n
+        end
+        n = _e.dom.nodes[n].parent
+    end
+    ret -1
+end
+
+func _set_chain(which: int, target: int):
+    repeat _e.ctl.len() in i:
+        mut c := _e.ctl.ref(i)
+        if which == 0:
+            c.hovered = false
+        else:
+            c.pressed = false
+        end
+    end
+    mut n := target
+    until n >= 0:
+        mut c := _e.ctl.ref(n)
+        if which == 0:
+            c.hovered = true
+        else:
+            c.pressed = true
+        end
+        n = _e.dom.nodes[n].parent
+    end
+    _e.dirty_style = true
+end
+
+func _set_focus(node: int, visible: bool):
+    old := _e.focus
+    if old == node:
+        if node >= 0:
+            mut c := _e.ctl.ref(node)
+            if c.focus_visible != visible:
+                c.focus_visible = visible
+                _e.dirty_style = true
+            end
+        end
+        ret
+    end
+    if old >= 0 and old < _e.ctl.len():
+        mut c := _e.ctl.ref(old)
+        c.focused = false
+        c.focus_visible = false
+        c.anchor = c.caret
+        _fire(old, "blur", false)
+        _fire(old, "focusout", true)
+        if _e.dom.nodes[old].tag != "select" or _e.popup != old:
+            _close_popup()
+        end
+        _maybe_change(old)
+    end
+    _e.focus = node
+    if node >= 0:
+        mut c := _e.ctl.ref(node)
+        c.focused = true
+        c.focus_visible = visible or _is_text_input(node)
+        if _is_text_input(node):
+            v := _control_value(node)
+            mut c2 := _e.ctl.ref(node)
+            if visible:
+                c2.anchor = 0
+                c2.caret = v.len()
+            end
+            _remember_committed(node)
+        end
+        _fire(node, "focus", false)
+        _fire(node, "focusin", true)
+    end
+    _e.dirty_style = true
+end
+
+func _remember_committed(node: int):
+    v := _control_value(node)
+    mut c := _e.ctl.ref(node)
+    c.preedit = ""
+    c.value_attr = str.Clone(v)
+end
+
+func _maybe_change(node: int):
+    if not _is_text_input(node):
+        ret
+    end
+    v := _control_value(node)
+    if v != _e.ctl[node].value_attr:
+        _fire(node, "change", true)
+    end
+end
+
+func _tab_order(): Vector<int>:
+    mut pos := Vector {} as Vector<int>
+    mut zero := Vector {} as Vector<int>
+    repeat _e.dom.nodes.len() in n:
+        if _focusable(n):
+            ti := _attr(_e.dom, n, "tabindex")
+            v := ti.len() > 0 ? ti.to_int() : 0
+            if v > 0:
+                pos.push(n)
+            else v == 0:
+                zero.push(n)
+            end
+        end
+    end
+    repeat pos.len() in i:
+        mut j := i
+        until j > 0 and _attr(_e.dom, pos[j - 1], "tabindex").to_int() > _attr(_e.dom, pos[j], "tabindex").to_int():
+            t := pos[j - 1]
+            pos[j - 1] = pos[j]
+            pos[j] = t
+            j--
+        end
+    end
+    each z in zero:
+        pos.push(z)
+    end
+    zero.free()
+    ret pos
+end
+
+func _tab(back: bool):
+    mut order := _tab_order()
+    defer order.free()
+    if order.len() == 0:
+        ret
+    end
+    mut idx := -1
+    repeat order.len() in i:
+        if order[i] == _e.focus:
+            idx = i
+        end
+    end
+    mut next := 0
+    if back:
+        next = idx <= 0 ? order.len() - 1 : idx - 1
+    else:
+        next = idx < 0 or idx >= order.len() - 1 ? 0 : idx + 1
+    end
+    _set_focus(order[next], true)
+    _scroll_into_view(order[next])
+end
+
+func _scroll_into_view(node: int):
+    b := _e.boxes[node]
+    if b.y < 0.0:
+        _e.vscroll = math.Max(0.0, _e.vscroll + b.y - 8.0)
+        _e.dirty_layout = true
+    else b.y + b.h > _e.height:
+        _e.vscroll += (b.y + b.h - _e.height) + 8.0
+        _e.dirty_layout = true
+    end
+end
+
+func _ancestor_tag(node: int, tag: str): int:
+    mut n := node
+    until n >= 0:
+        if _e.dom.nodes[n].tag == tag:
+            ret n
+        end
+        n = _e.dom.nodes[n].parent
+    end
+    ret -1
+end
+
+func _find_id(id: str): int:
+    if id.len() == 0:
+        ret -1
+    end
+    repeat _e.dom.nodes.len() in n:
+        if _e.node_el[n] >= 0 and _attr(_e.dom, n, "id") == id:
+            ret n
+        end
+    end
+    ret -1
+end
+
+func _first_control(node: int): int:
+    each k in _e.dom.nodes[node].kids:
+        t := _e.dom.nodes[k].tag
+        if t == "input" or t == "select" or t == "textarea" or t == "button":
+            ret k
+        end
+        r := _first_control(k)
+        if r >= 0:
+            ret r
+        end
+    end
+    ret -1
+end
+
+func _toggle_check(node: int):
+    t := _input_type(node)
+    is_on := _is_checked(node)
+    if t == "radio":
+        if is_on:
+            ret
+        end
+        name := _attr(_e.dom, node, "name")
+        if name.len() > 0:
+            form := _ancestor_tag(node, "form")
+            repeat _e.dom.nodes.len() in n:
+                if n != node and _e.dom.nodes[n].tag == "input" and _input_type(n) == "radio" and _attr(_e.dom, n, "name") == name and _ancestor_tag(n, "form") == form:
+                    mut c := _e.ctl.ref(n)
+                    c.has_checked = true
+                    c.checked = false
+                    c.checked_attr = _has_attr(_e.dom, n, "checked")
+                end
+            end
+        end
+    end
+    mut c := _e.ctl.ref(node)
+    c.has_checked = true
+    c.checked = t == "radio" ? true : not is_on
+    c.checked_attr = _has_attr(_e.dom, node, "checked")
+    _restyle_attr(node)
+    _fire(node, "input", true)
+    _fire(node, "change", true)
+end
+
+func _restyle_attr(node: int):
+    i := _e.node_el[node]
+    if i < 0:
+        ret
+    end
+    mut el := _e.els.ref(i)
+    _set_el_flag(el, "checked", _is_checked(node))
+    c := _e.ctl[node]
+    if _e.dom.nodes[node].tag == "details" or _e.dom.nodes[node].tag == "dialog":
+        _set_el_flag(el, "open", c.open)
+    end
+    if _e.sheet.Restyle(_e.els, i) > 0:
+        _e.dirty_style = true
+    end
+    _restyle_all_radios()
+end
+
+func _restyle_all_radios():
+    repeat _e.dom.nodes.len() in n:
+        if _e.dom.nodes[n].tag == "input" and _input_type(n) == "radio" and _e.node_el[n] >= 0:
+            i := _e.node_el[n]
+            mut el := _e.els.ref(i)
+            if _set_el_flag(el, "checked", _is_checked(n)):
+                _cnt := _e.sheet.Restyle(_e.els, i)
+            end
+        end
+    end
+    _e.dirty_style = true
+end
+
+func _set_el_flag(el &: css.Element, name: str, is_on: bool): bool:
+    has := el.HasAttr(name)
+    if has == is_on:
+        ret false
+    end
+    if is_on:
+        el.AddAttr(name, "")
+    else:
+        repeat el.attr_names.len() in k:
+            if el.attr_names[k] == name:
+                el.attr_names.remove_at(k)
+                el.attr_values.remove_at(k)
+                break
+            end
+        end
+    end
+    ret true
+end
+
+func _submit(form: int):
+    if form < 0:
+        ret
+    end
+    _fire(form, "submit", true)
+end
+
+func _reset_form(form: int):
+    repeat _e.dom.nodes.len() in n:
+        if _ancestor_tag(n, "form") == form and n != form:
+            mut c := _e.ctl.ref(n)
+            c.has_value = false
+            c.has_checked = false
+            c.selected = -1
+            c.caret = 0
+            c.anchor = 0
+        end
+    end
+    _e.dirty_layout = true
+    _e.dirty_style = true
+    _fire(form, "reset", true)
+end
+
+func _navigate(url: str):
+    _opened_urls.push(str.Clone(url))
+    if url.starts_with("http://") or url.starts_with("https://") or url.starts_with("mailto:"):
+        if _opener_set:
+            _opener(url)
+        else:
+            _open_url_default(url)
+        end
+        ret
+    end
+    if url.starts_with("#"):
+        target := _find_id(url.substr(1, url.len() - 1))
+        if target >= 0:
+            _e.vscroll = math.Max(0.0, _e.vscroll + _e.boxes[target].y)
+            _e.dirty_layout = true
+        end
+        ret
+    end
+    if _navigator_set and _navigator(url):
+        ret
+    end
+    mut path := url
+    if path.starts_with("./"):
+        path = path.substr(2, path.len() - 2)
+    end
+    repeat _page_paths.len() in i:
+        pp := _page_paths[i]
+        if pp == url or pp == path or ("/" + path) == pp or pp == ("/" + path):
+            _e.view = _page_views[i]
+            _e.view_set = true
+            _e.vscroll = 0.0
+            _e.dirty_view = true
+            ret
+        end
+    end
+end
+
+func _activate(node: int):
+    t := _e.dom.nodes[node].tag
+    a := _ancestor_tag(node, "a")
+    if a >= 0 and _has_attr(_e.dom, a, "href"):
+        _navigate(_attr(_e.dom, a, "href"))
+        ret
+    end
+    lab := _ancestor_tag(node, "label")
+    if lab >= 0 and t != "input" and t != "select" and t != "textarea" and t != "button":
+        mut target := _find_id(_attr(_e.dom, lab, "for"))
+        if target < 0:
+            target = _first_control(lab)
+        end
+        if target >= 0 and not _is_disabled(target):
+            tt := _e.dom.nodes[target].tag
+            if tt == "input" and (_input_type(target) == "checkbox" or _input_type(target) == "radio"):
+                _toggle_check(target)
+                _fire(target, "click", true)
+            else:
+                _set_focus(target, false)
+            end
+        end
+        ret
+    end
+    if _is_disabled(node):
+        ret
+    end
+    if t == "input":
+        it := _input_type(node)
+        if it == "checkbox" or it == "radio":
+            ret
+        end
+        if it == "submit":
+            _submit(_ancestor_tag(node, "form"))
+        else it == "reset":
+            _reset_form(_ancestor_tag(node, "form"))
+        end
+        ret
+    end
+    btn := _ancestor_tag(node, "button")
+    if btn >= 0 and not _is_disabled(btn):
+        bt := _attr(_e.dom, btn, "type")
+        form := _ancestor_tag(btn, "form")
+        if form >= 0 and (bt.len() == 0 or bt == "submit"):
+            _submit(form)
+        else form >= 0 and bt == "reset":
+            _reset_form(form)
+        end
+        ret
+    end
+    sum := _ancestor_tag(node, "summary")
+    if sum >= 0:
+        det := _e.dom.nodes[sum].parent
+        if det >= 0 and _e.dom.nodes[det].tag == "details":
+            mut c := _e.ctl.ref(det)
+            c.open = not c.open
+            _restyle_attr(det)
+            _e.dirty_layout = true
+            _fire(det, "toggle", false)
+        end
+        ret
+    end
+    if t == "select":
+        if _e.popup == node:
+            _close_popup()
+        else:
+            _open_popup(node)
+        end
+    end
+end
+
+func _open_popup(node: int):
+    _close_popup()
+    _e.popup = node
+    mut c := _e.ctl.ref(node)
+    c.anchor = _select_index(node)
+    _damage_popup()
+end
+
+func _close_popup():
+    if _e.popup >= 0:
+        _damage_popup()
+        _e.full = true
+    end
+    _e.popup = -1
+end
+
+func _popup_hit(x: f64, y: f64): int:
+    if _e.popup < 0:
+        ret -2
+    end
+    mut px := 0.0
+    mut py := 0.0
+    mut w := 0.0
+    mut ih := 0.0
+    mut n := 0
+    _popup_geometry(px, py, w, ih, n)
+    if x >= px and x < px + w and y >= py and y < py + ih * (n as f64):
+        ret ((y - py) / ih) as int
+    end
+    ret -1
+end
+
+func _choose_option(node: int, i: int):
+    old := _select_index(node)
+    mut c := _e.ctl.ref(node)
+    c.selected = i
+    mut opts := Vector {} as Vector<int>
+    _option_nodes(node, opts)
+    if i >= 0 and i < opts.len():
+        _set_value(node, _option_value(opts[i]))
+    end
+    opts.free()
+    _refresh_control(node)
+    if old != i:
+        _fire(node, "input", true)
+        _fire(node, "change", true)
+    end
+end
+
+func _cursor_for(node: int): window.Cursor:
+    mut n := node
+    until n >= 0 and n != _e.dom.html:
+        if _e.node_el[n] >= 0:
+            cs := _style_of(n)
+            switch cs.cursor:
+                "pointer": ret window.Cursor.Pointer end
+                "text": ret window.Cursor.Text end
+                "wait", "progress": ret window.Cursor.Wait end
+                "crosshair": ret window.Cursor.Crosshair end
+                "move", "grab", "grabbing": ret window.Cursor.Move end
+                "not-allowed": ret window.Cursor.NotAllowed end
+                "default": ret window.Cursor.Default end
+                "none": ret window.Cursor.Hidden end
+                else: break end
+            end
+        end
+        n = _e.dom.nodes[n].parent
+    end
+    ret window.Cursor.Default
+end
+
+func _pointer_move(x: f64, y: f64):
+    _e.mx = x
+    _e.my = y
+    if _e.capture >= 0 and _e.drag_sel and _is_text_input(_e.capture):
+        mut c := _e.ctl.ref(_e.capture)
+        c.caret = _caret_from_point(_e.capture, x, y)
+        _scroll_caret(_e.capture)
+        ret
+    end
+    if _e.capture >= 0 and _e.dom.nodes[_e.capture].tag == "input" and _input_type(_e.capture) == "range":
+        _range_set(_e.capture, x)
+        ret
+    end
+    if _e.popup >= 0:
+        i := _popup_hit(x, y)
+        if i >= 0 and _e.ctl[_e.popup].anchor != i:
+            mut c := _e.ctl.ref(_e.popup)
+            c.anchor = i
+            _damage_popup()
+        end
+    end
+    t := _hit(x, y)
+    if t != _e.hover:
+        old := _e.hover
+        if old >= 0:
+            _fire(old, "mouseout", true)
+            _fire(old, "pointerout", true)
+            _fire(old, "mouseleave", false)
+            _fire(old, "pointerleave", false)
+        end
+        _e.hover = t
+        _set_chain(0, t)
+        _fire(t, "mouseover", true)
+        _fire(t, "pointerover", true)
+        _fire(t, "mouseenter", false)
+        _fire(t, "pointerenter", false)
+    end
+    _fire(t, "mousemove", true)
+    _fire(t, "pointermove", true)
+    if _e.has_win:
+        mut cur := _cursor_for(t)
+        if cur == window.Cursor.Default and _is_text_input(t):
+            cur = window.Cursor.Text
+        end
+        _e.win.SetCursor(cur)
+    end
+end
+
+func _range_set(node: int, x: f64):
+    c := _content_rect(node, _e.boxes[node])
+    mut frac := (x - c.x - 8.0) / math.Max(1.0, c.w - 16.0)
+    frac = math.Max(0.0, math.Min(1.0, frac))
+    mut mn := 0.0
+    mut mx := 100.0
+    if _has_attr(_e.dom, node, "min"):
+        mn = _attr(_e.dom, node, "min").to_float()
+    end
+    if _has_attr(_e.dom, node, "max"):
+        mx = _attr(_e.dom, node, "max").to_float()
+    end
+    mut step := 1.0
+    if _has_attr(_e.dom, node, "step"):
+        step = _attr(_e.dom, node, "step").to_float()
+    end
+    mut v := mn + (mx - mn) * frac
+    if step > 0.0:
+        v = mn + math.Round((v - mn) / step) * step
+    end
+    nv := str.FromFloat(v)
+    if nv != _control_value(node):
+        _set_value(node, nv)
+        _damage_node(node)
+        _fire(node, "input", true)
+        _fire(node, "change", true)
+    end
+    _sfree(nv)
+end
+
+func _pointer_down(x: f64, y: f64, button: int, clicks: int, mods: int):
+    _e.mx = x
+    _e.my = y
+    if _e.popup >= 0:
+        pi := _popup_hit(x, y)
+        if pi >= 0:
+            sel := _e.popup
+            _close_popup()
+            _choose_option(sel, pi)
+            _e.capture = -2
+            ret
+        end
+        b := _e.boxes[_e.popup]
+        if not _inside(b, x, y):
+            _close_popup()
+        end
+    end
+    t := _hit(x, y)
+    _e.capture = t
+    _e.last_click = t
+    _set_chain(1, t)
+    mut ev := _make_event("mousedown", t)
+    ev.button = button
+    ev.modifiers = mods
+    _fire_ev(t, ev, true)
+    ev.kind = "pointerdown"
+    _fire_ev(t, ev, true)
+    if button != 0:
+        ret
+    end
+    ft := _focus_target(t)
+    _set_focus(ft, false)
+    if ft >= 0 and _is_text_input(ft):
+        off := _caret_from_point(ft, x, y)
+        mut c := _e.ctl.ref(ft)
+        c.caret = off
+        if (mods & window.mod_shift) == 0:
+            c.anchor = off
+        end
+        if clicks == 2:
+            c.anchor = _grapheme_step(ft, off, false, true)
+            c.caret = _grapheme_step(ft, off, true, true)
+        else clicks >= 3:
+            c.anchor = 0
+            c.caret = _control_value(ft).len()
+        end
+        _e.capture = ft
+        _e.drag_sel = true
+        _scroll_caret(ft)
+        _damage_node(ft)
+    end
+    if ft >= 0 and _e.dom.nodes[ft].tag == "input" and _input_type(ft) == "range":
+        _e.capture = ft
+        _range_set(ft, x)
+    end
+end
+
+func _pointer_up(x: f64, y: f64, button: int, clicks: int, mods: int):
+    _e.mx = x
+    _e.my = y
+    down := _e.capture
+    _e.capture = -1
+    _e.drag_sel = false
+    _set_chain(1, -1)
+    if down == -2:
+        ret
+    end
+    t := _hit(x, y)
+    mut ev := _make_event("mouseup", t)
+    ev.button = button
+    ev.modifiers = mods
+    _fire_ev(t, ev, true)
+    ev.kind = "pointerup"
+    _fire_ev(t, ev, true)
+    mut same := down == t
+    if not same and down >= 0:
+        mut n := t
+        until n >= 0:
+            if n == down:
+                same = true
+                break
+            end
+            n = _e.dom.nodes[n].parent
+        end
+    end
+    if not same or button != 0:
+        if button == 2:
+            ev.kind = "contextmenu"
+            _fire_ev(t, ev, true)
+        else button == 1:
+            ev.kind = "auxclick"
+            _fire_ev(t, ev, true)
+        end
+        ret
+    end
+    _click(t, mods, clicks)
+end
+
+func _click(t: int, mods: int, clicks: int):
+    tt := _e.dom.nodes[t].tag
+    if tt == "input" and (_input_type(t) == "checkbox" or _input_type(t) == "radio") and not _is_disabled(t):
+        _toggle_check(t)
+    end
+    mut ev := _make_event("click", t)
+    ev.modifiers = mods
+    _fire_ev(t, ev, true)
+    if clicks == 2:
+        ev.kind = "dblclick"
+        _fire_ev(t, ev, true)
+    end
+    _activate(t)
+end
+
+func _wheel(dx0: f64, dy0: f64, line: bool):
+    mut dx := dx0
+    mut dy := dy0
+    if line:
+        dx *= 40.0
+        dy *= 40.0
+    end
+    t := _hit(_e.mx, _e.my)
+    _fire_ev(t, _make_event("wheel", t), true)
+    mut n := t
+    until n >= 0 and n != _e.dom.html:
+        if _e.node_cb[n] >= 0 and _e.node_el[n] >= 0 and _is_scroller(_style_of(n)) and n != _e.dom.body:
+            l := _e.tree.Layout(_e.node_cb[n])
+            vw := l.width - l.border.left - l.border.right
+            vh := l.height - l.border.top - l.border.bottom
+            maxx := math.Max(0.0, l.scroll_width - vw)
+            maxy := math.Max(0.0, l.scroll_height - vh)
+            c := _e.ctl[n]
+            nx := math.Max(0.0, math.Min(maxx, c.scroll_x + dx))
+            ny := math.Max(0.0, math.Min(maxy, c.scroll_y + dy))
+            if nx != c.scroll_x or ny != c.scroll_y:
+                mut cc := _e.ctl.ref(n)
+                cc.scroll_x = nx
+                cc.scroll_y = ny
+                _e.dirty_layout = true
+                _fire(n, "scroll", false)
+                ret
+            end
+        end
+        n = _e.dom.nodes[n].parent
+    end
+    maxs := math.Max(0.0, _e.doc_h - _e.height)
+    ns := math.Max(0.0, math.Min(maxs, _e.vscroll + dy))
+    if ns != _e.vscroll:
+        _e.vscroll = ns
+        _e.dirty_layout = true
+        _fire(_e.dom.body, "scroll", false)
+    end
+end
+
+func _key_name(k: window.Key, text: str): str:
+    switch k:
+        window.Key.Enter, window.Key.NumpadEnter: ret "Enter" end
+        window.Key.Tab: ret "Tab" end
+        window.Key.Escape: ret "Escape" end
+        window.Key.Backspace: ret "Backspace" end
+        window.Key.Delete: ret "Delete" end
+        window.Key.Space: ret " " end
+        window.Key.Left: ret "ArrowLeft" end
+        window.Key.Right: ret "ArrowRight" end
+        window.Key.Up: ret "ArrowUp" end
+        window.Key.Down: ret "ArrowDown" end
+        window.Key.Home: ret "Home" end
+        window.Key.End: ret "End" end
+        window.Key.PageUp: ret "PageUp" end
+        window.Key.PageDown: ret "PageDown" end
+        window.Key.Insert: ret "Insert" end
+        window.Key.ShiftLeft, window.Key.ShiftRight: ret "Shift" end
+        window.Key.ControlLeft, window.Key.ControlRight: ret "Control" end
+        window.Key.AltLeft, window.Key.AltRight: ret "Alt" end
+        window.Key.SuperLeft, window.Key.SuperRight: ret "Meta" end
+        window.Key.F1: ret "F1" end
+        window.Key.F2: ret "F2" end
+        window.Key.F5: ret "F5" end
+        window.Key.F12: ret "F12" end
+        else: break end
+    end
+    if text.len() > 0:
+        ret text
+    end
+    v := k as int
+    a := window.Key.A as int
+    z := window.Key.Z as int
+    if v >= a and v <= z:
+        s := str.Clone("a")
+        p := (s as void*) as u8*
+        p[0] = (97 + v - a) as u8
+        ret s
+    end
+    d0 := window.Key.Digit0 as int
+    d9 := window.Key.Digit9 as int
+    if v >= d0 and v <= d9:
+        ret str.FromInt((v - d0) as i64)
+    end
+    ret "Unidentified"
+end
+
+func _key_down(k: window.Key, mods: int, text: str):
+    target := _e.focus >= 0 ? _e.focus : _e.dom.body
+    name := _key_name(k, text)
+    mut ev := _make_event("keydown", target)
+    ev.key = name
+    ev.modifiers = mods
+    _fire_ev(target, ev, true)
+    ctrl := (mods & window.mod_control) != 0 or (mods & window.mod_super) != 0
+    shift := (mods & window.mod_shift) != 0
+    if _e.popup >= 0:
+        p := _e.popup
+        mut opts := Vector {} as Vector<int>
+        _option_nodes(p, opts)
+        n := opts.len()
+        opts.free()
+        c := _e.ctl[p]
+        if k == window.Key.Down:
+            mut cc := _e.ctl.ref(p)
+            cc.anchor = math.MinI(n - 1, c.anchor + 1)
+            _damage_popup()
+            ret
+        else k == window.Key.Up:
+            mut cc := _e.ctl.ref(p)
+            cc.anchor = math.MaxI(0, c.anchor - 1)
+            _damage_popup()
+            ret
+        else k == window.Key.Enter or k == window.Key.Space:
+            _close_popup()
+            _choose_option(p, c.anchor)
+            ret
+        else k == window.Key.Escape:
+            _close_popup()
+            ret
+        end
+    end
+    if k == window.Key.Tab:
+        _tab(shift)
+        ret
+    end
+    if _e.focus < 0:
+        if k == window.Key.Down or k == window.Key.PageDown or k == window.Key.Space:
+            _wheel(0.0, k == window.Key.Down ? 40.0 : _e.height * 0.9, false)
+        else k == window.Key.Up or k == window.Key.PageUp:
+            _wheel(0.0, k == window.Key.Up ? -40.0 : 0.0 - _e.height * 0.9, false)
+        else k == window.Key.Home:
+            _wheel(0.0, 0.0 - _e.doc_h, false)
+        else k == window.Key.End:
+            _wheel(0.0, _e.doc_h, false)
+        end
+        ret
+    end
+    f := _e.focus
+    tag := _e.dom.nodes[f].tag
+    if _is_text_input(f):
+        _edit_key(f, k, ctrl, shift)
+        ret
+    end
+    if tag == "select":
+        if k == window.Key.Space or k == window.Key.Enter or (k == window.Key.Down and (mods & window.mod_alt) != 0):
+            _open_popup(f)
+        else k == window.Key.Down or k == window.Key.Up:
+            mut opts := Vector {} as Vector<int>
+            _option_nodes(f, opts)
+            n := opts.len()
+            opts.free()
+            cur := _select_index(f)
+            ni := k == window.Key.Down ? math.MinI(n - 1, cur + 1) : math.MaxI(0, cur - 1)
+            _choose_option(f, ni)
+        end
+        ret
+    end
+    if tag == "input" and _input_type(f) == "range":
+        if k == window.Key.Left or k == window.Key.Right or k == window.Key.Up or k == window.Key.Down:
+            c := _content_rect(f, _e.boxes[f])
+            mut step := 1.0
+            if _has_attr(_e.dom, f, "step"):
+                step = _attr(_e.dom, f, "step").to_float()
+            end
+            mut mn := 0.0
+            mut mx := 100.0
+            if _has_attr(_e.dom, f, "min"):
+                mn = _attr(_e.dom, f, "min").to_float()
+            end
+            if _has_attr(_e.dom, f, "max"):
+                mx = _attr(_e.dom, f, "max").to_float()
+            end
+            up := k == window.Key.Right or k == window.Key.Up
+            v := mn + _range_frac(f) * (mx - mn) + (up ? step : 0.0 - step)
+            frac := (math.Max(mn, math.Min(mx, v)) - mn) / math.Max(0.000001, mx - mn)
+            _range_set(f, c.x + 8.0 + frac * (c.w - 16.0))
+        end
+        ret
+    end
+    if k == window.Key.Enter:
+        if tag == "button" or tag == "a" or tag == "summary" or _is_button_input(f):
+            _click(f, mods, 1)
+        end
+        ret
+    end
+    if k == window.Key.Space:
+        if tag == "button" or tag == "summary" or (tag == "input" and _input_type(f) != "hidden"):
+            _click(f, mods, 1)
+        end
+    end
+end
+
+func _key_up(k: window.Key, mods: int):
+    target := _e.focus >= 0 ? _e.focus : _e.dom.body
+    mut ev := _make_event("keyup", target)
+    ev.key = _key_name(k, "")
+    ev.modifiers = mods
+    _fire_ev(target, ev, true)
+end
+
+func _text_input(text: str):
+    f := _e.focus
+    if f < 0 or not _is_text_input(f) or _has_attr(_e.dom, f, "readonly") or _is_disabled(f):
+        ret
+    end
+    mut clean := text
+    if clean.len() == 0:
+        ret
+    end
+    p := (clean as void*) as u8*
+    if clean.len() == 1 and (_hb(p, 0) < 32 or _hb(p, 0) == 127):
+        ret
+    end
+    if _e.dom.nodes[f].tag == "input" and _input_type(f) == "number":
+        mut nb := str.NewBuilder()
+        repeat clean.len() in i:
+            c := _hb(p, i)
+            if (c >= 48 and c <= 57) or c == 45 or c == 46 or c == 43 or c == 101 or c == 69:
+                str.BufAppendChar(nb, c)
+            end
+        end
+        clean = str.BufStr(nb)
+        str.BufFree(nb)
+        if clean.len() == 0:
+            ret
+        end
+    end
+    _push_undo(f)
+    _replace_selection(f, clean)
+    mut c := _e.ctl.ref(f)
+    c.preedit = ""
+    _refresh_control(f)
+    mut ev := _make_event("input", f)
+    ev.text = clean
+    _fire_ev(f, ev, true)
+end
+
+func _edit_key(f: int, k: window.Key, ctrl: bool, shift: bool):
+    v := _control_value(f)
+    c := _e.ctl[f]
+    readonly := _has_attr(_e.dom, f, "readonly") or _is_disabled(f)
+    mut caret := c.caret
+    mut anchor := c.anchor
+    mut changed := false
+    mut moved := false
+    switch k:
+        window.Key.Left, window.Key.Right:
+            fwd := k == window.Key.Right
+            rtl := _style_of(f).direction == cssbox.Direction.Rtl
+            logical := rtl ? not fwd : fwd
+            if not shift and caret != anchor:
+                caret = logical ? math.MaxI(caret, anchor) : math.MinI(caret, anchor)
+            else:
+                caret = _grapheme_step(f, caret, logical, ctrl)
+            end
+            moved = true
+            break
+        end
+        window.Key.Home, window.Key.Up:
+            caret = 0
+            moved = true
+            break
+        end
+        window.Key.End, window.Key.Down:
+            caret = v.len()
+            moved = true
+            break
+        end
+        window.Key.Backspace, window.Key.Delete:
+            if readonly:
+                break
+            end
+            _push_undo(f)
+            if caret == anchor:
+                if k == window.Key.Backspace:
+                    anchor = _grapheme_step(f, caret, false, ctrl)
+                else:
+                    anchor = _grapheme_step(f, caret, true, ctrl)
+                end
+                mut cc := _e.ctl.ref(f)
+                cc.caret = caret
+                cc.anchor = anchor
+            end
+            _replace_selection(f, "")
+            changed = true
+            break
+        end
+        window.Key.A:
+            if ctrl:
+                anchor = 0
+                caret = v.len()
+                moved = true
+                shift_keep := true
+                if shift_keep:
+                    mut cc := _e.ctl.ref(f)
+                    cc.anchor = anchor
+                    cc.caret = caret
+                end
+                _damage_node(f)
+                ret
+            end
+            break
+        end
+        window.Key.C, window.Key.X:
+            if ctrl:
+                sel := _selected_text(f)
+                if sel.len() > 0:
+                    _set_clipboard(sel)
+                    if k == window.Key.X and not readonly:
+                        _push_undo(f)
+                        _replace_selection(f, "")
+                        changed = true
+                    end
+                end
+            end
+            break
+        end
+        window.Key.V:
+            if ctrl and not readonly:
+                t := _get_clipboard()
+                if t.len() > 0:
+                    _push_undo(f)
+                    _replace_selection(f, t)
+                    changed = true
+                end
+            end
+            break
+        end
+        window.Key.Z:
+            if ctrl and not readonly and c.undo.len() > 0:
+                mut cc := _e.ctl.ref(f)
+                last := cc.undo.pop()
+                _set_value(f, last)
+                mut c2 := _e.ctl.ref(f)
+                c2.caret = last.len()
+                c2.anchor = c2.caret
+                changed = true
+            end
+            break
+        end
+        window.Key.Enter:
+            if _e.dom.nodes[f].tag == "textarea":
+                if not readonly:
+                    _push_undo(f)
+                    _replace_selection(f, "\n")
+                    changed = true
+                end
+            else:
+                _maybe_change(f)
+                _remember_committed(f)
+                _submit(_ancestor_tag(f, "form"))
+            end
+            break
+        end
+        else:
+            break
+        end
+    end
+    if moved:
+        mut cc := _e.ctl.ref(f)
+        cc.caret = caret
+        if not shift:
+            cc.anchor = caret
+        end
+        _scroll_caret(f)
+        _damage_node(f)
+    end
+    if changed:
+        _refresh_control(f)
+        ev := _make_event("input", f)
+        _fire_ev(f, ev, true)
+    end
+end
+
+func _set_clipboard(t: str):
+    _clip_text = str.Clone(t)
+    _clip_owned = true
+    _ok := window.SetClipboardText(t)
+end
+
+func _get_clipboard(): str:
+    t := window.ClipboardText()
+    if t.len() > 0:
+        ret t
+    end
+    ret _clip_text
+end
+
+func _ime(text: str, commit: bool):
+    f := _e.focus
+    if f < 0 or not _is_text_input(f):
+        ret
+    end
+    if commit:
+        _text_input(text)
+        ret
+    end
+    mut c := _e.ctl.ref(f)
+    c.preedit = str.Clone(text)
+    _damage_node(f)
+end

@@ -1,0 +1,272 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package ui
+
+import str
+import gui.css
+import gui.window
+
+func _is_num_text(s: str): bool:
+    if s.len() == 0:
+        ret false
+    end
+    p := (s as void*) as u8*
+    repeat s.len() in i:
+        c := _hb(p, i)
+        if not ((c >= 48 and c <= 57) or c == 46):
+            ret false
+        end
+    end
+    ret true
+end
+
+func _hints(node: int, tag: str): str:
+    mut out := ""
+    if tag == "img" or tag == "canvas" or tag == "video" or tag == "iframe" or tag == "progress" or tag == "meter":
+        w := _attr(_e.dom, node, "width")
+        h := _attr(_e.dom, node, "height")
+        if _is_num_text(w):
+            out += "width:" + w + "px;"
+        end
+        if _is_num_text(h):
+            out += "height:" + h + "px;"
+        end
+    end
+    if tag == "table" or tag == "td" or tag == "th":
+        w := _attr(_e.dom, node, "width")
+        if _is_num_text(w):
+            out += "width:" + w + "px;"
+        end
+    end
+    ret out
+end
+
+func _ctl_of(node: int): _Ctl:
+    ret _e.ctl[node]
+end
+
+func _sync_el(i: int):
+    node := _e.el_node[i]
+    c := _e.ctl[node]
+    mut el := _e.els.ref(i)
+    el.hovered = c.hovered
+    el.focused = c.focused
+    el.focus_visible = c.focus_visible
+    el.pressed = c.pressed
+end
+
+func _build_elements():
+    n := _e.dom.nodes.len()
+    _e.els = Vector {} as Vector<css.Element>
+    _e.el_node = Vector {} as Vector<int>
+    _e.node_el = Vector {} as Vector<int>
+    repeat n:
+        _e.node_el.push(-1)
+    end
+    _add_element(_e.dom.body, -1)
+end
+
+func _add_element(node: int, parent: int):
+    nd := _e.dom.nodes[node]
+    if nd.tag.len() == 0 or nd.tag.starts_with("#"):
+        ret
+    end
+    mut el := css.NewElement(nd.tag, parent)
+    el.tag = nd.tag
+    el.id = _attr(_e.dom, node, "id")
+    el.classes = _attr(_e.dom, node, "class")
+    hint := _hints(node, nd.tag)
+    inline_style := _attr(_e.dom, node, "style")
+    el.base = hint.len() == 0 ? str.Clone(inline_style) : str.Clone(hint + inline_style)
+    if (nd.tag == "details" or nd.tag == "dialog") and not _e.ctl[node].open_init:
+        mut ci := _e.ctl.ref(node)
+        ci.open = _has_attr(_e.dom, node, "open")
+        ci.open_init = true
+    end
+    c := _e.ctl[node]
+    repeat nd.names.len() in k:
+        name := nd.names[k]
+        if name != "style" and name != "checked" and name != "open":
+            el.AddAttr(name, nd.values[k])
+        end
+    end
+    if c.has_checked:
+        if c.checked:
+            el.AddAttr("checked", "")
+        end
+    else _has_attr(_e.dom, node, "checked"):
+        el.AddAttr("checked", "")
+    end
+    if nd.tag == "details" or nd.tag == "dialog":
+        if c.open:
+            el.AddAttr("open", "")
+        end
+    else _has_attr(_e.dom, node, "open"):
+        el.AddAttr("open", "")
+    end
+    el.hovered = c.hovered
+    el.focused = c.focused
+    el.focus_visible = c.focus_visible
+    el.pressed = c.pressed
+    _e.els.push(el)
+    idx := _e.els.len() - 1
+    _e.el_node.push(node)
+    _e.node_el[node] = idx
+    each k in nd.kids:
+        _add_element(k, idx)
+    end
+end
+
+func _free_elements():
+    repeat _e.els.len() in i:
+        mut el := _e.els.ref(i)
+        if el.base.len() > 0:
+            _sfree(el.base)
+        end
+        el.Free()
+    end
+    _e.els.free()
+    _e.el_node.free()
+    _e.node_el.free()
+end
+
+func _env():
+    mut env := css.Env {}
+    env.width = _e.width
+    env.height = _e.height
+    env.dark = window.CurrentColorScheme() == window.ColorScheme.Dark
+    env.dir = _e.dom.dir.len() > 0 ? _e.dom.dir : "ltr"
+    env.lang = _e.dom.lang.len() > 0 ? _e.dom.lang : "en"
+    _e.env = env
+end
+
+func _style_all():
+    if _e.has_sheet:
+        _e.sheet.Free()
+    end
+    _e.sheet = css.NewSheet()
+    _e.has_sheet = true
+    if _e.dom.css.len() > 0:
+        _n := _e.sheet.AddCss(_e.dom.css)
+    end
+    _env()
+    _cnt := _e.sheet.Compute(_e.els, _e.env)
+    _read_styles()
+end
+
+func _read_styles():
+    _e.st.free()
+    _e.sid.free()
+    _e.st = Vector {} as Vector<css.ComputedStyle>
+    _e.sid = Vector {} as Vector<int>
+    repeat _e.els.len() in i:
+        _e.st.push(_e.sheet.Style(i))
+        _e.sid.push(_e.sheet.StyleId(i))
+    end
+end
+
+func _same_len(a: css.Len, b: css.Len): bool:
+    ret a.kind == b.kind and a.px == b.px and a.pct == b.pct and a.has_pct == b.has_pct and a.calc == b.calc
+end
+
+func _same_layout(a: css.ComputedStyle, b: css.ComputedStyle): bool:
+    if a.display != b.display or a.position != b.position or a.box_sizing != b.box_sizing:
+        ret false
+    end
+    if not (_same_len(a.width, b.width) and _same_len(a.height, b.height) and _same_len(a.min_width, b.min_width) and _same_len(a.min_height, b.min_height) and _same_len(a.max_width, b.max_width) and _same_len(a.max_height, b.max_height)):
+        ret false
+    end
+    if not (_same_len(a.margin_top, b.margin_top) and _same_len(a.margin_right, b.margin_right) and _same_len(a.margin_bottom, b.margin_bottom) and _same_len(a.margin_left, b.margin_left)):
+        ret false
+    end
+    if not (_same_len(a.padding_top, b.padding_top) and _same_len(a.padding_right, b.padding_right) and _same_len(a.padding_bottom, b.padding_bottom) and _same_len(a.padding_left, b.padding_left)):
+        ret false
+    end
+    if a.border_top.width != b.border_top.width or a.border_right.width != b.border_right.width or a.border_bottom.width != b.border_bottom.width or a.border_left.width != b.border_left.width:
+        ret false
+    end
+    if not (_same_len(a.top, b.top) and _same_len(a.right, b.right) and _same_len(a.bottom, b.bottom) and _same_len(a.left, b.left)):
+        ret false
+    end
+    if a.flex_direction != b.flex_direction or a.flex_wrap != b.flex_wrap or a.flex_grow != b.flex_grow or a.flex_shrink != b.flex_shrink or not _same_len(a.flex_basis, b.flex_basis):
+        ret false
+    end
+    if a.justify_content != b.justify_content or a.align_items != b.align_items or a.align_self != b.align_self or a.align_content != b.align_content or a.order != b.order:
+        ret false
+    end
+    if not (_same_len(a.row_gap, b.row_gap) and _same_len(a.column_gap, b.column_gap)):
+        ret false
+    end
+    if a.font_size != b.font_size or a.font_weight != b.font_weight or a.font_family != b.font_family or a.font_style != b.font_style:
+        ret false
+    end
+    if a.line_height != b.line_height or a.line_height_normal != b.line_height_normal or a.letter_spacing != b.letter_spacing or a.word_spacing != b.word_spacing:
+        ret false
+    end
+    if a.white_space != b.white_space or a.text_align != b.text_align or a.direction != b.direction or a.text_transform != b.text_transform:
+        ret false
+    end
+    if a.list_style_type != b.list_style_type or a.overflow_x != b.overflow_x or a.overflow_y != b.overflow_y or a.aspect_ratio != b.aspect_ratio:
+        ret false
+    end
+    ret a.z_index == b.z_index and a.z_auto == b.z_auto and a.vertical_align == b.vertical_align
+end
+
+func _restyle(node: int): bool:
+    mut idx := -1
+    if node >= 0 and node < _e.node_el.len():
+        idx = _e.node_el[node]
+    end
+    repeat _e.els.len() in i:
+        _sync_el(i)
+    end
+    _cnt := _e.sheet.Restyle(_e.els, idx)
+    mut relayout := false
+    repeat _e.els.len() in i:
+        nid := _e.sheet.StyleId(i)
+        if nid != _e.sid[i]:
+            ns := _e.sheet.Style(i)
+            if not _same_layout(_e.st[i], ns):
+                relayout = true
+            end
+            _start_transitions(i, _e.st[i], ns)
+            _e.st[i] = ns
+            _e.sid[i] = nid
+        end
+    end
+    ret relayout
+end
+
+func _style_of(node: int): css.ComputedStyle:
+    if node < 0 or node >= _e.node_el.len():
+        ret _e.sheet.RootStyle()
+    end
+    i := _e.node_el[node]
+    if i < 0:
+        ret _e.sheet.RootStyle()
+    end
+    ret _e.st[i]
+end
+
+func _el_of(node: int): int:
+    mut n := node
+    until n >= 0:
+        if n < _e.node_el.len() and _e.node_el[n] >= 0:
+            ret n
+        end
+        n = _e.dom.nodes[n].parent
+    end
+    ret -1
+end

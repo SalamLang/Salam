@@ -1,0 +1,346 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import net.tunnel
+import net.tcp
+import net.websocket
+import tls
+import sync
+import mem
+import pool
+import str
+
+mut failures := 0
+mut echo_server := tcp.Server {}
+mut hop_server := tcp.Server {}
+mut hop_log := ""
+mut ws_server := websocket.Server {}
+mut ws_seen := ""
+
+struct LineProtocol:
+    pub unused: int = 0
+
+    pub func Name(): str:
+        ret "line"
+    end
+
+    pub func Handshake(s: dyn tunnel.Stream): tunnel.Session:
+        line := tunnel.ReadUntil(s, "\n", 200)
+        if not line.starts_with("CONNECT "):
+            ret tunnel.Session { error = "bad request" }
+        end
+        a := tunnel.ParseAddr(line.substr(8, line.len() - 9))
+        if not a.valid:
+            ret tunnel.Session { error = "bad address" }
+        end
+        ret tunnel.Session { ok = true, target = a, protocol = "line" }
+    end
+
+    pub func Reply(s: dyn tunnel.Stream, _sess: tunnel.Session, ok: bool):
+        if ok:
+            s.Write("OK\n")
+        else:
+            s.Write("ERR\n")
+        end
+    end
+end
+
+struct Tagger:
+    pub nick: str = ""
+
+    pub func Name(): str:
+        ret this.nick
+    end
+
+    pub func Handshake(s: dyn tunnel.Stream): tunnel.Session:
+        c := tunnel.ReadByte(s)
+        ret tunnel.Session { ok = true, target = tunnel.NewAddr("x.test", c), protocol = this.nick }
+    end
+
+    pub func Reply(s: dyn tunnel.Stream, sess: tunnel.Session, ok: bool):
+        if ok:
+            s.Write("reply:" + sess.protocol)
+        end
+    end
+end
+
+struct HopConnector:
+    pub hname: str = ""
+    pub hport: int = 0
+    pub hlabel: str = ""
+
+    pub func Server(): tunnel.Addr:
+        ret tunnel.NewAddr(this.hname, this.hport)
+    end
+
+    pub func Handshake(s: dyn tunnel.Stream, target: tunnel.Addr): bool:
+        s.Write("HOP " + this.hlabel + " " + target.String() + "\n")
+        reply := tunnel.ReadUntil(s, "\n", 50)
+        ret reply == "OK\n"
+    end
+
+    pub func Name(): str:
+        ret this.hlabel
+    end
+end
+
+func expect(label: str, ok: bool):
+    if not ok:
+        println "FAIL", label
+        failures++
+    end
+end
+
+func echo_once():
+    c := tcp.Accept(echo_server)
+    s := tunnel.WrapTcp(c)
+    buf := mem.Allocate(4096 as u64)
+    until true:
+        n := s.ReadBytes(buf, 4096)
+        if n <= 0: break end
+        s.WriteBytes(buf, n)
+    end
+    mem.Free(buf)
+    s.Close()
+end
+
+func hop_once():
+    c := tcp.Accept(hop_server)
+    s := tunnel.WrapTcp(c)
+    repeat 2:
+        line := tunnel.ReadUntil(s, "\n", 200)
+        hop_log += line
+        s.Write("OK\n")
+    end
+    data := s.Read(100)
+    s.Write("end:" + data)
+    s.Close()
+end
+
+func ws_once():
+    c := websocket.Accept(ws_server)
+    s := tunnel.WrapWebSocket(c)
+    first := s.Read(5)
+    rest := s.Read(100)
+    ws_seen = first + "|" + rest
+    s.Write("pong:" + first + rest)
+    s.Close()
+end
+
+func run_relay(a: dyn tunnel.Stream, b: dyn tunnel.Stream, st: tunnel.Stats, idle: int):
+    r := tunnel.RelayWith(a, b, st, idle)
+    println "relay", r.up, r.down
+end
+
+func pipe_relay():
+    p1 := tunnel.NewPipe()
+    p2 := tunnel.NewPipe()
+    client := tunnel.PipeA(p1)
+    left := tunnel.PipeB(p1)
+    right := tunnel.PipeA(p2)
+    server := tunnel.PipeB(p2)
+    st := tunnel.NewStats()
+    wp := pool.NewElastic(2 as i64, 8 as i64, 8 as i64)
+    total := 200000
+    data := mem.Allocate(total as u64)
+    repeat total in i:
+        (data as u8*)[i] = ((i * 7 + 3) % 251) as u8
+    end
+    pool.Submit(wp, (): run_relay(left, right, st, 5000) end)
+    pool.Submit(wp, (): push(client, data, total) end)
+    got := mem.Allocate(total as u64)
+    ok := tunnel.ReadFull(server, got, total)
+    mut same := ok
+    repeat total in i:
+        if (got as u8*)[i] != (data as u8*)[i]: same = false end
+    end
+    println "forward", ok, same
+    expect("forward data", same)
+    server.Write("reply-from-server")
+    println client.Read(100)
+    client.Close()
+    pool.Wait(wp)
+    pool.Stop(wp)
+    println st.Summary()
+    mem.Free(got)
+    mem.Free(data)
+end
+
+func push(s: dyn tunnel.Stream, data: void*, n: int):
+    tunnel.WriteAllBytes(s, data, n)
+end
+
+func idle_relay():
+    p1 := tunnel.NewPipe()
+    p2 := tunnel.NewPipe()
+    st := tunnel.NewStats()
+    start := sync.NowMs()
+    r := tunnel.RelayWith(tunnel.PipeB(p1), tunnel.PipeA(p2), st, 300)
+    took := sync.NowMs() - start
+    println "idle", r.up, r.down, took >= 250, took < 3000
+    tm := tunnel.NewIdleTimer(100 as i64)
+    println tm.Expired()
+    sync.SleepMs(160)
+    println tm.Expired(), tm.IdleMs() >= 150
+    tm.Touch()
+    println tm.Expired()
+    tm.Free()
+    println tunnel.NewIdleTimer(0 as i64).Expired()
+    expect("pipe deadline", deadline_ok())
+end
+
+func deadline_ok(): bool:
+    p := tunnel.NewPipe()
+    a := tunnel.PipeA(p)
+    a.SetDeadline(100)
+    start := sync.NowMs()
+    buf := mem.Allocate(8 as u64)
+    n := a.ReadBytes(buf, 8)
+    mem.Free(buf)
+    ret n < 0 and sync.NowMs() - start >= 80
+end
+
+func tcp_inbound():
+    echo_server = tcp.Bind(0)
+    echo_port := tcp.Port(echo_server)
+    et := spawn(echo_once)
+    inb := tunnel.ListenTcp(0)
+    println "listening", inb.Ok(), inb.port > 0
+    fwd := tunnel.NewForwarder(tunnel.Direct(), LineProtocol {})
+    tunnel.ServeBackground(inb, LineProtocol {}, fwd)
+
+    bad := tunnel.DialTcp("127.0.0.1", inb.port, 2000)
+    bad.Write("CONNECT 127.0.0.1:1\n")
+    println "refused:", tunnel.ReadUntil(bad, "\n", 10) == "ERR\n"
+    bad.Close()
+    junk := tunnel.DialTcp("127.0.0.1", inb.port, 2000)
+    junk.Write("HELLO\n")
+    println "junk closed:", junk.Read(10) == ""
+    junk.Close()
+
+    c := tunnel.DialTcp("127.0.0.1", inb.port, 2000)
+    c.Write("CONNECT 127.0.0.1:" + echo_port + "\n")
+    println "reply:", tunnel.ReadUntil(c, "\n", 10) == "OK\n"
+    c.Write("through the tunnel")
+    println c.Read(100)
+    c.Close()
+    join(et)
+    mut waited := 0
+    until waited < 3000 and (fwd.stats.Active() > 0 or fwd.stats.Down() < 18 as i64):
+        sync.SleepMs(10)
+        waited += 10
+    end
+    println "stats", fwd.stats.Total(), fwd.stats.Failed(), fwd.stats.Active(), fwd.stats.Up(), fwd.stats.Down()
+    inb.Stop()
+    tcp.CloseServer(echo_server)
+end
+
+func mixed():
+    println tunnel.DetectMixed(5), tunnel.DetectMixed(4), tunnel.DetectMixed(71), tunnel.DetectMixed(67), tunnel.DetectMixed(112), tunnel.DetectMixed(0), tunnel.DetectMixed(22), tunnel.DetectMixed(255)
+    mut m := tunnel.NewMixed()
+    tunnel.MixedSetSocks5(m, Tagger { nick = "s5" })
+    tunnel.MixedSetSocks4(m, Tagger { nick = "s4" })
+    tunnel.MixedSetHttp(m, Tagger { nick = "http" })
+    each first in [5, 4, 71, 67, 80, 22]:
+        p := tunnel.NewPipe()
+        a := tunnel.PipeA(p)
+        b := tunnel.PipeB(p)
+        a.Write(tunnel.ByteString(first) + "\x37")
+        sess := m.Handshake(b)
+        println first, sess.ok, sess.protocol, sess.target.port
+        if sess.ok:
+            m.Reply(b, sess, true)
+            println a.Read(20)
+        end
+    end
+    mut only5 := tunnel.NewMixed()
+    tunnel.MixedSetSocks5(only5, Tagger { nick = "s5" })
+    p := tunnel.NewPipe()
+    tunnel.PipeA(p).Write("GET / HTTP/1.1\r\n")
+    println only5.Handshake(tunnel.PipeB(p)).ok
+    q := tunnel.NewPipe()
+    tunnel.PipeA(q).Close()
+    println only5.Handshake(tunnel.PipeB(q)).error
+    println m.Name()
+end
+
+func chain():
+    hop_server = tcp.Bind(0)
+    port := tcp.Port(hop_server)
+    ht := spawn(hop_once)
+    mut ch := tunnel.NewChain(tunnel.Direct())
+    tunnel.ChainAdd(ch, HopConnector { hname = "127.0.0.1", hport = port, hlabel = "h1" })
+    tunnel.ChainAdd(ch, HopConnector { hname = "next-hop.test", hport = 8443, hlabel = "h2" })
+    println ch.Name()
+    s := ch.Dial(tunnel.NewAddr("final.test", 443))
+    println "chain ok", s.Ok()
+    s.Write("payload")
+    println s.Read(100)
+    s.Close()
+    join(ht)
+    tcp.CloseServer(hop_server)
+    println str.Replace(hop_log, "\n", "|")
+    println tunnel.NewChain(tunnel.Block()).Dial(tunnel.NewAddr("a.test", 1)).Ok()
+    dead := tunnel.NewChain(tunnel.Direct())
+    println dead.Name(), tunnel.Via(tunnel.Direct(), HopConnector { hname = "127.0.0.1", hport = 1, hlabel = "x" }).Dial(tunnel.NewAddr("a.test", 1)).Ok()
+end
+
+func dialers():
+    blk := tunnel.BlockDialer {}
+    println blk.Dial(tunnel.NewAddr("a.test", 1)).Ok(), blk.Dial(tunnel.NewAddr("a.test", 1)).Ok(), blk.refused, blk.Name()
+    d := tunnel.DirectDialer { timeout_ms = 500 }
+    println d.Dial(tunnel.Addr {}).Ok(), d.Name()
+    srv := tcp.Bind(0)
+    port := tcp.Port(srv)
+    mut fb := tunnel.NewFallback()
+    tunnel.FallbackAdd(fb, tunnel.Block())
+    tunnel.FallbackAdd(fb, tunnel.Direct())
+    s := fb.Dial(tunnel.NewAddr("127.0.0.1", port))
+    println "fallback", s.Ok(), fb.Name()
+    s.Close()
+    tcp.CloseServer(srv)
+    c := tunnel.ClosedStream {}
+    println c.Ok(), c.Read(5) == "", c.Write("x")
+end
+
+func websocket_stream():
+    ws_server = websocket.Listen(0)
+    port := websocket.Port(ws_server)
+    wt := spawn(ws_once)
+    c := websocket.Dial("127.0.0.1", port, "/t")
+    s := tunnel.WrapWebSocket(c)
+    println s.Ok()
+    s.Write("hello world, this is long")
+    println s.Read(4), s.Read(4), s.Read(100)
+    join(wt)
+    println ws_seen
+    s.Close()
+    websocket.CloseServer(ws_server)
+    t := tunnel.WrapTls(tls.Conn {})
+    println t.Ok()
+end
+
+func main:
+    pipe_relay()
+    idle_relay()
+    tcp_inbound()
+    mixed()
+    chain()
+    dialers()
+    websocket_stream()
+    println "failures", failures
+    ret failures
+end

@@ -1,0 +1,94 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import net.httpproxy
+
+func show(label: str, h: httpproxy.Head):
+    println label + ": ok=" + h.ok + " " + h.err
+end
+
+func main:
+    r := httpproxy.ParseRequestHead("GET http://example.com:8080/a/b?x=1 HTTP/1.1\r\nHost: example.com:8080\r\nProxy-Authorization: Basic dXNlcjpwYXNz\r\nConnection: keep-alive, X-Drop\r\nX-Drop: 1\r\n\r\n")
+    println r.ok, r.method, r.target, r.version, r.names.len()
+    println httpproxy.HeaderGet(r, "HOST") + "|" + httpproxy.HeaderGet(r, "x-drop") + "|" + httpproxy.HeaderGet(r, "missing") + "|"
+    println httpproxy.HeaderHas(r, "proxy-authorization"), httpproxy.HeaderHasToken(r, "connection", "KEEP-ALIVE"), httpproxy.HeaderHasToken(r, "connection", "close"), httpproxy.HeaderCount(r, "host")
+
+    show("lowercase method ok", httpproxy.ParseRequestHead("get / HTTP/1.1\r\n\r\n"))
+    show("bad method", httpproxy.ParseRequestHead("G@T / HTTP/1.1\r\n\r\n"))
+    show("missing version", httpproxy.ParseRequestHead("GET /\r\n\r\n"))
+    show("http 2", httpproxy.ParseRequestHead("GET / HTTP/2.0\r\n\r\n"))
+    show("http 0.9", httpproxy.ParseRequestHead("GET / HTTP/0.9\r\n\r\n"))
+    show("extra spaces", httpproxy.ParseRequestHead("GET  / HTTP/1.1\r\n\r\n"))
+    show("no colon", httpproxy.ParseRequestHead("GET / HTTP/1.1\r\nBroken header\r\n\r\n"))
+    show("space before colon", httpproxy.ParseRequestHead("GET / HTTP/1.1\r\nHost : a\r\n\r\n"))
+    show("folded", httpproxy.ParseRequestHead("GET / HTTP/1.1\r\nA: b\r\n c\r\n\r\n"))
+    show("empty name", httpproxy.ParseRequestHead("GET / HTTP/1.1\r\n: v\r\n\r\n"))
+    show("empty", httpproxy.ParseRequestHead(""))
+    mut many := "GET / HTTP/1.1\r\n"
+    repeat 201 in i:
+        many += "X" + i + ": 1\r\n"
+    end
+    show("too many headers", httpproxy.ParseRequestHead(many + "\r\n"))
+    mut ok200 := "GET / HTTP/1.1\r\n"
+    repeat 200 in i:
+        ok200 += "X" + i + ": 1\r\n"
+    end
+    show("exactly 200 headers", httpproxy.ParseRequestHead(ok200 + "\r\n"))
+    show("head too big", httpproxy.ParseRequestHead("GET / HTTP/1.1\r\nX: " + "a".repeat(70000) + "\r\n\r\n"))
+
+    p := httpproxy.ParseResponseHead("HTTP/1.1 407 Proxy Authentication Required\r\nProxy-Authenticate: Basic realm=\"x\"\r\nContent-Length: 0\r\n\r\n")
+    println p.ok, p.status, p.reason, httpproxy.HeaderGet(p, "proxy-authenticate")
+    p2 := httpproxy.ParseResponseHead("HTTP/1.0 204\r\n\r\n")
+    println p2.ok, p2.status, "[" + p2.reason + "]"
+    show("short status line", httpproxy.ParseResponseHead("HTTP/1.1 20\r\n\r\n"))
+    show("non numeric status", httpproxy.ParseResponseHead("HTTP/1.1 2x0 OK\r\n\r\n"))
+    show("bad response version", httpproxy.ParseResponseHead("ICY 200 OK\r\n\r\n"))
+
+    urls := ["http://example.com", "http://example.com/", "HTTP://Example.COM:81/p?q=1#frag", "http://u:p@host:8080/x", "http://[::1]:8080/x", "http://[2001:db8::1]/", "https://secure.example/a", "http://example.com?x=1", "ftp://example.com/", "example.com/path", "http://", "http://host:0/", "http://host:99999/", "http://host:abc/", "http://a b/", "/relative"]
+    each u in urls:
+        x := httpproxy.ParseURL(u)
+        if x.ok:
+            println u + " -> " + x.scheme + " " + x.host + " " + x.port + " " + x.path
+        else:
+            println u + " -> invalid"
+        end
+    end
+
+    hosts := ["example.com:443", "example.com", "[::1]:8443", "[::1]", "::1", "a:b:c", ":80", "host:", "host:0", "host:65536", "host:65535", "ho st:1", "host/x:1", "user@host:1", ""]
+    each t in hosts:
+        x := httpproxy.SplitHostPort(t, 80)
+        if x.ok:
+            println "[" + t + "] -> " + x.host + " " + x.port + " explicit=" + x.has_port
+        else:
+            println "[" + t + "] -> invalid"
+        end
+    end
+
+    println httpproxy.BasicHeader("user", "pass")
+    mut u := ""
+    mut pw := ""
+    println httpproxy.BasicCredentials("Basic dXNlcjpwYXNz", u, pw), u, pw
+    println httpproxy.BasicCredentials("basic dXNlcjo=", u, pw), u + "|" + pw + "|"
+    println httpproxy.BasicCredentials("Basic dTpwOndpdGg6Y29sb24=", u, pw), u, pw
+    println httpproxy.BasicCredentials("Bearer abc", u, pw), httpproxy.BasicCredentials("Basic", u, pw), httpproxy.BasicCredentials("Basic !!!", u, pw), httpproxy.BasicCredentials("Basic bm9jb2xvbg==", u, pw)
+
+    hop := ["Connection", "keep-alive", "Proxy-Authenticate", "PROXY-AUTHORIZATION", "TE", "Trailer", "Transfer-Encoding", "Upgrade", "Proxy-Connection", "Host", "Content-Length", "Accept", "Cookie"]
+    each n in hop:
+        println n + " hop=" + httpproxy.IsHopByHop(n)
+    end
+
+    println httpproxy.ResponseText(407, "Proxy-Authenticate: Basic realm=\"r\"\r\n", "", false)
+    println httpproxy.ResponseText(502, "", "bad\n", true)
+    println httpproxy.StatusReason(403) + "|" + httpproxy.StatusReason(502) + "|" + httpproxy.StatusReason(999)
+end

@@ -1,6 +1,6 @@
 import { ApiError } from "./api";
-import { t } from "./i18n";
 import type { PathStatus } from "./desktop";
+import { t } from "./i18n";
 
 export function projectPathProblem(status: PathStatus): string {
   if (status === "missing") {
@@ -40,9 +40,15 @@ export function pathErrorText(e: unknown): string | null {
         "The project folder cannot be changed while a chat in this project is running. Wait for it to finish or stop it.",
       );
     case "path":
-      return t("پوشه‌ی پروژه باید یک مسیر کامل و معتبر باشد.", "The project folder must be a full, valid path.");
+      return t(
+        "پوشه‌ی پروژه باید یک مسیر کامل و معتبر باشد.",
+        "The project folder must be a full, valid path.",
+      );
     case "extra_path":
-      return t("پوشه‌ی اضافه باید یک مسیر کامل و معتبر باشد.", "The extra folder must be a full, valid path.");
+      return t(
+        "پوشه‌ی اضافه باید یک مسیر کامل و معتبر باشد.",
+        "The extra folder must be a full, valid path.",
+      );
     default:
       return null;
   }

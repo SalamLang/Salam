@@ -1,0 +1,630 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package compress
+
+import mem
+
+const _LZ_ISMATCH := 0
+const _LZ_ISREP := 192
+const _LZ_ISREPG0 := 204
+const _LZ_ISREPG1 := 216
+const _LZ_ISREPG2 := 228
+const _LZ_ISREP0LONG := 240
+const _LZ_POSSLOT := 432
+const _LZ_SPECPOS := 688
+const _LZ_ALIGN := 816
+const _LZ_LENMATCH := 832
+const _LZ_LENREP := 1346
+const _LZ_LITERAL := 1860
+const _LZ_MAXLCP := 4
+const _LZ_NOLIMIT := 0x3FFFF000
+
+@en "LzmaMaxDictSize"
+@fa "بیشینه اندازه واژه نامه الزد ام ای"
+pub const LzmaMaxDictSize := 1073741824
+
+struct _Lz:
+    pub ip: u8*
+    pub ipos: int
+    pub iend: int
+    pub rng: i64
+    pub code: i64
+    pub bad: bool
+    pub probs: u16*
+    pub nprobs: int
+    pub lc: int
+    pub lp: int
+    pub pb: int
+    pub state: int
+    pub rep0: int
+    pub rep1: int
+    pub rep2: int
+    pub rep3: int
+    pub dsize: i64
+    pub dstart: int
+end
+
+func _lz_new(dsize: i64): _Lz:
+    ret _Lz {
+        ip = null as u8*, ipos = 0, iend = 0, rng = 0xFFFFFFFF as i64, code = 0 as i64, bad = false
+        probs = null as u16*, nprobs = 0, lc = 0, lp = 0, pb = 0, state = 0
+        rep0 = 0, rep1 = 0, rep2 = 0, rep3 = 0, dsize = dsize, dstart = 0
+    }
+end
+
+func _lz_free(d &: _Lz):
+    if d.probs != null:
+        mem.Free(d.probs as void*)
+    end
+    d.probs = null as u16*
+    d.nprobs = 0
+end
+
+func _lz_alloc(d &: _Lz, lcp: int):
+    need := _LZ_LITERAL + (768 << lcp)
+    if d.probs != null and d.nprobs >= need:
+        ret
+    end
+    if d.probs != null:
+        mem.Free(d.probs as void*)
+    end
+    d.probs = mem.Allocate((need * 2) as u64) as u16*
+    d.nprobs = need
+end
+
+func _lz_reset_state(d &: _Lz):
+    total := _LZ_LITERAL + (768 << (d.lc + d.lp))
+    mut i := 0
+    until i < total:
+        d.probs[i] = 1024 as u16
+        i++
+    end
+    d.state = 0
+    d.rep0 = 0
+    d.rep1 = 0
+    d.rep2 = 0
+    d.rep3 = 0
+end
+
+func _lz_set_props(d &: _Lz, pbyte: int, maxlcp: int): bool:
+    if pbyte >= 225:
+        ret false
+    end
+    lc := pbyte % 9
+    rest := pbyte / 9
+    lp := rest % 5
+    pb := rest / 5
+    if lc + lp > maxlcp:
+        ret false
+    end
+    d.lc = lc
+    d.lp = lp
+    d.pb = pb
+    ret true
+end
+
+func _lz_rc_init(d &: _Lz, p: void*, start: int, endp: int): bool:
+    if endp - start < 5:
+        ret false
+    end
+    d.ip = p as u8*
+    d.ipos = start
+    d.iend = endp
+    d.bad = false
+    if (d.ip[start] as int) != 0:
+        ret false
+    end
+    d.code = ((d.ip[start + 1] as i64) << 24) | ((d.ip[start + 2] as i64) << 16) | ((d.ip[start + 3] as i64) << 8) | (d.ip[start + 4] as i64)
+    d.rng = 0xFFFFFFFF as i64
+    d.ipos = start + 5
+    ret true
+end
+
+inline func _lz_norm(d &: _Lz):
+    if d.rng < 16777216:
+        d.rng = (d.rng << 8) & 0xFFFFFFFF
+        mut b := 0 as i64
+        if d.ipos < d.iend:
+            b = d.ip[d.ipos] as i64
+            d.ipos++
+        else:
+            d.bad = true
+        end
+        d.code = ((d.code << 8) | b) & 0xFFFFFFFF
+    end
+end
+
+inline func _lz_bit(d &: _Lz, idx: int): int:
+    _lz_norm(d)
+    prob := d.probs[idx] as i64
+    bound := (d.rng >> 11) * prob
+    if d.code < bound:
+        d.rng = bound
+        d.probs[idx] = (prob + ((2048 - prob) >> 5)) as u16
+        ret 0
+    end
+    d.rng = d.rng - bound
+    d.code = d.code - bound
+    d.probs[idx] = (prob - (prob >> 5)) as u16
+    ret 1
+end
+
+func _lz_tree(d &: _Lz, base: int, nbits: int): int:
+    mut m := 1
+    mut i := 0
+    until i < nbits:
+        m = (m << 1) + _lz_bit(d, base + m)
+        i++
+    end
+    ret m - (1 << nbits)
+end
+
+func _lz_rtree(d &: _Lz, base: int, nbits: int): int:
+    mut m := 1
+    mut sym := 0
+    mut i := 0
+    until i < nbits:
+        bit := _lz_bit(d, base + m)
+        m = (m << 1) + bit
+        sym = sym | (bit << i)
+        i++
+    end
+    ret sym
+end
+
+func _lz_len(d &: _Lz, base: int, pos_state: int): int:
+    if _lz_bit(d, base) == 0:
+        ret _lz_tree(d, base + 2 + pos_state * 8, 3)
+    end
+    if _lz_bit(d, base + 1) == 0:
+        ret 8 + _lz_tree(d, base + 130 + pos_state * 8, 3)
+    end
+    ret 16 + _lz_tree(d, base + 258, 8)
+end
+
+func _lz_dist(d &: _Lz, len: int): i64:
+    mut ls := len
+    if ls > 3:
+        ls = 3
+    end
+    slot := _lz_tree(d, _LZ_POSSLOT + ls * 64, 6)
+    if slot < 4:
+        ret slot
+    end
+    nb := (slot >> 1) - 1
+    mut dist := ((2 | (slot & 1)) as i64) << nb
+    if slot < 14:
+        dist = dist + (_lz_rtree(d, _LZ_SPECPOS + (dist as int) - slot - 1, nb) as i64)
+        ret dist
+    end
+    mut r := 0 as i64
+    mut i := 0
+    until i < nb - 4:
+        _lz_norm(d)
+        d.rng = d.rng >> 1
+        if d.code >= d.rng:
+            d.code = d.code - d.rng
+            r = (r << 1) | (1 as i64)
+        else:
+            r = r << 1
+        end
+        i++
+    end
+    dist = dist + (r << 4)
+    dist = dist + (_lz_rtree(d, _LZ_ALIGN, 4) as i64)
+    ret dist
+end
+
+func _lz_run(d &: _Lz, out &: ByteBuf, limit: int, allow_end: bool): int:
+    mut pos := out.len
+    pb_mask := (1 << d.pb) - 1
+    lp_mask := (1 << d.lp) - 1
+    lc := d.lc
+    until pos < limit:
+        if d.bad:
+            out.len = pos
+            ret -1
+        end
+        if pos + 280 > out.cap:
+            out.len = pos
+            _buf_grow(out, 280)
+        end
+        buf := out.data as u8*
+        rel := pos - d.dstart
+        pos_state := rel & pb_mask
+        st := d.state
+        if _lz_bit(d, _LZ_ISMATCH + st * 16 + pos_state) == 0:
+            mut prev := 0
+            if rel > 0:
+                prev = buf[pos - 1] as int
+            end
+            lit_state := ((rel & lp_mask) << lc) + (prev >> (8 - lc))
+            base := _LZ_LITERAL + 768 * lit_state
+            mut sym := 1
+            if st >= 7:
+                mut mb := buf[pos - d.rep0 - 1] as int
+                mut offs := 256
+                until sym < 256:
+                    mb = mb << 1
+                    mbit := mb & offs
+                    bit := _lz_bit(d, base + offs + mbit + sym)
+                    sym = (sym << 1) | bit
+                    if bit == 0:
+                        offs = offs & (mbit ^ 0xFFFF)
+                    else:
+                        offs = offs & mbit
+                    end
+                end
+            else:
+                until sym < 256:
+                    sym = (sym << 1) | _lz_bit(d, base + sym)
+                end
+            end
+            buf[pos] = (sym & 255) as u8
+            pos++
+            if st < 4:
+                d.state = 0
+            else st < 10:
+                d.state = st - 3
+            else:
+                d.state = st - 6
+            end
+        else:
+            mut mlen := 0
+            if _lz_bit(d, _LZ_ISREP + st) == 0:
+                d.rep3 = d.rep2
+                d.rep2 = d.rep1
+                d.rep1 = d.rep0
+                mlen = _lz_len(d, _LZ_LENMATCH, pos_state)
+                if st < 7:
+                    d.state = 7
+                else:
+                    d.state = 10
+                end
+                dist := _lz_dist(d, mlen)
+                if dist == (0xFFFFFFFF as i64):
+                    out.len = pos
+                    if allow_end and not d.bad:
+                        ret 1
+                    end
+                    ret -1
+                end
+                if dist >= (0x7fffffff as i64):
+                    out.len = pos
+                    ret -1
+                end
+                d.rep0 = dist as int
+            else:
+                if rel == 0:
+                    out.len = pos
+                    ret -1
+                end
+                if _lz_bit(d, _LZ_ISREPG0 + st) == 0:
+                    if _lz_bit(d, _LZ_ISREP0LONG + st * 16 + pos_state) == 0:
+                        if d.rep0 >= rel or (d.rep0 as i64) >= d.dsize:
+                            out.len = pos
+                            ret -1
+                        end
+                        if st < 7:
+                            d.state = 9
+                        else:
+                            d.state = 11
+                        end
+                        buf[pos] = buf[pos - d.rep0 - 1]
+                        pos++
+                        continue
+                    end
+                else:
+                    mut dd := 0
+                    if _lz_bit(d, _LZ_ISREPG1 + st) == 0:
+                        dd = d.rep1
+                    else:
+                        if _lz_bit(d, _LZ_ISREPG2 + st) == 0:
+                            dd = d.rep2
+                        else:
+                            dd = d.rep3
+                            d.rep3 = d.rep2
+                        end
+                        d.rep2 = d.rep1
+                    end
+                    d.rep1 = d.rep0
+                    d.rep0 = dd
+                end
+                mlen = _lz_len(d, _LZ_LENREP, pos_state)
+                if st < 7:
+                    d.state = 8
+                else:
+                    d.state = 11
+                end
+            end
+            mlen += 2
+            if d.rep0 >= rel or (d.rep0 as i64) >= d.dsize or mlen > limit - pos:
+                out.len = pos
+                ret -1
+            end
+            src := pos - d.rep0 - 1
+            mut k := 0
+            until k < mlen:
+                buf[pos + k] = buf[src + k]
+                k++
+            end
+            pos += mlen
+        end
+    end
+    out.len = pos
+    if d.bad:
+        ret -1
+    end
+    ret 0
+end
+
+func _lzma2_chunks(d &: _Lz, p: void*, n: int, out &: ByteBuf, maxout: int): int:
+    bp := p as u8*
+    mut ip := 0
+    mut need_dict := true
+    mut need_props := true
+    d.dstart = out.len
+    until true:
+        if ip >= n:
+            ret -1
+        end
+        c := bp[ip] as int
+        ip++
+        if c == 0:
+            ret ip
+        end
+        if c == 1 or c >= 224:
+            d.dstart = out.len
+            need_dict = false
+            need_props = true
+        else need_dict:
+            ret -1
+        end
+        if c >= 128:
+            if ip + 4 > n:
+                ret -1
+            end
+            usize := (((c & 31) << 16) | ((bp[ip] as int) << 8) | (bp[ip + 1] as int)) + 1
+            csize := (((bp[ip + 2] as int) << 8) | (bp[ip + 3] as int)) + 1
+            ip += 4
+            if c >= 192:
+                if ip >= n:
+                    ret -1
+                end
+                if not _lz_set_props(d, bp[ip] as int, _LZ_MAXLCP):
+                    ret -1
+                end
+                ip++
+                need_props = false
+                _lz_reset_state(d)
+            else need_props:
+                ret -1
+            else c >= 160:
+                _lz_reset_state(d)
+            end
+            if ip + csize > n or out.len + usize > maxout or out.len + usize < 0:
+                ret -1
+            end
+            if not _lz_rc_init(d, p, ip, ip + csize):
+                ret -1
+            end
+            if _lz_run(d, out, out.len + usize, false) != 0:
+                ret -1
+            end
+            _lz_norm(d)
+            if d.bad or d.ipos != ip + csize or d.code != (0 as i64):
+                ret -1
+            end
+            ip += csize
+        else c <= 2:
+            if ip + 2 > n:
+                ret -1
+            end
+            usize := (((bp[ip] as int) << 8) | (bp[ip + 1] as int)) + 1
+            ip += 2
+            if ip + usize > n or out.len + usize > maxout:
+                ret -1
+            end
+            _buf_grow(out, usize)
+            BufPushBytes(out, ((p as i64) + (ip as i64)) as void*, usize)
+            ip += usize
+        else:
+            ret -1
+        end
+    end
+end
+
+func _lzma2_dict_size(b: int): i64:
+    if b > 40:
+        ret -1
+    end
+    if b == 40:
+        ret 0xFFFFFFFF
+    end
+    ret ((2 | (b & 1)) as i64) << ((b / 2) + 11)
+end
+
+func _lz_cap(a: int, b: int): int:
+    mut r := _LZ_NOLIMIT
+    if a > 0 and a < r:
+        r = a
+    end
+    if b > 0 and b < r:
+        r = b
+    end
+    ret r
+end
+
+func _lz_prealloc(out &: ByteBuf, size: int):
+    if size > 0:
+        mut want := size
+        if want > 16777216:
+            want = 16777216
+        end
+        _buf_grow(out, want)
+    end
+end
+
+func _lzma2_decode(dict_prop: int, p: void*, n: int, out_size: int, max: int, consumed &: int, ok &: bool): ByteBuf:
+    ok = false
+    consumed = 0
+    mut out := NewByteBuf()
+    dsize := _lzma2_dict_size(dict_prop)
+    if dsize < (0 as i64) or dsize > (LzmaMaxDictSize as i64) or n <= 0:
+        ret out
+    end
+    if out_size > 0 and max > 0 and out_size > max:
+        ret out
+    end
+    _lz_prealloc(out, out_size)
+    mut d := _lz_new(dsize)
+    _lz_alloc(d, _LZ_MAXLCP)
+    cap := _lz_cap(out_size, max)
+    used := _lzma2_chunks(d, p, n, out, cap)
+    _lz_free(d)
+    if used < 0 or (out_size >= 0 and out.len != out_size):
+        BufFree(out)
+        ret NewByteBuf()
+    end
+    consumed = used
+    ok = true
+    ret out
+end
+
+@en "Lzma2RawDecompress"
+@fa "کدگشایی الزد ام ای۲ خام"
+pub func Lzma2RawDecompress(dict_prop: int, p: void*, n: int, out_size: int, max: int, ok &: bool): ByteBuf:
+    mut used := 0
+    ret _lzma2_decode(dict_prop, p, n, out_size, max, used, ok)
+end
+
+@en "LzmaRawDecompress"
+@fa "کدگشایی الزد ام ای خام"
+pub func LzmaRawDecompress(props: void*, plen: int, p: void*, n: int, out_size: int, max: int, ok &: bool): ByteBuf:
+    ok = false
+    mut out := NewByteBuf()
+    if plen < 5 or out_size < 0 or out_size > _LZ_NOLIMIT or n < 5:
+        ret out
+    end
+    pp := props as u8*
+    dsize := (pp[1] as i64) | ((pp[2] as i64) << 8) | ((pp[3] as i64) << 16) | ((pp[4] as i64) << 24)
+    if dsize > (LzmaMaxDictSize as i64):
+        ret out
+    end
+    if max > 0 and out_size > max:
+        ret out
+    end
+    mut d := _lz_new(dsize)
+    if dsize < (4096 as i64):
+        d.dsize = 4096 as i64
+    end
+    if not _lz_set_props(d, pp[0] as int, 12):
+        ret out
+    end
+    _lz_alloc(d, d.lc + d.lp)
+    _lz_reset_state(d)
+    if not _lz_rc_init(d, p, 0, n):
+        _lz_free(d)
+        ret out
+    end
+    _lz_prealloc(out, out_size)
+    st := _lz_run(d, out, out_size, false)
+    _lz_free(d)
+    if st != 0 or out.len != out_size:
+        BufFree(out)
+        ret NewByteBuf()
+    end
+    ok = true
+    ret out
+end
+
+@en "LzmaDecompress"
+@fa "کدگشایی الزد ام ای"
+pub func LzmaDecompress(p: void*, n: int, ok &: bool): ByteBuf:
+    ret LzmaDecompressMax(p, n, 0, ok)
+end
+
+@en "LzmaDecompressMax"
+@fa "کدگشایی الزد ام ای با سقف"
+pub func LzmaDecompressMax(p: void*, n: int, max: int, ok &: bool): ByteBuf:
+    ok = false
+    mut out := NewByteBuf()
+    if n < 13:
+        ret out
+    end
+    bp := p as u8*
+    dsize := (bp[1] as i64) | ((bp[2] as i64) << 8) | ((bp[3] as i64) << 16) | ((bp[4] as i64) << 24)
+    if dsize > (LzmaMaxDictSize as i64):
+        ret out
+    end
+    mut usize := 0 as i64
+    mut allff := true
+    mut i := 0
+    until i < 8:
+        b := bp[5 + i] as i64
+        usize = usize | (b << (8 * i))
+        if b != (255 as i64):
+            allff = false
+        end
+        i++
+    end
+    known := not allff
+    if known and (usize < (0 as i64) or usize > (_LZ_NOLIMIT as i64)):
+        ret out
+    end
+    if known and max > 0 and usize > (max as i64):
+        ret out
+    end
+    mut d := _lz_new(dsize)
+    if dsize < (4096 as i64):
+        d.dsize = 4096 as i64
+    end
+    if not _lz_set_props(d, bp[0] as int, 12):
+        ret out
+    end
+    _lz_alloc(d, d.lc + d.lp)
+    _lz_reset_state(d)
+    if not _lz_rc_init(d, p, 13, n):
+        _lz_free(d)
+        ret out
+    end
+    mut limit := _lz_cap(0, max)
+    if not known and max > 0 and max < _LZ_NOLIMIT:
+        limit = max + 1
+    end
+    if known:
+        limit = usize as int
+        _lz_prealloc(out, limit)
+    end
+    st := _lz_run(d, out, limit, not known)
+    _lz_free(d)
+    if known:
+        if st != 0 or out.len != (usize as int):
+            BufFree(out)
+            ret NewByteBuf()
+        end
+    else st != 1 or (max > 0 and out.len > max):
+        BufFree(out)
+        ret NewByteBuf()
+    end
+    ok = true
+    ret out
+end
+
+@en "LzmaDecompressBuf"
+@fa "کدگشایی الزد ام ای بافر"
+pub func LzmaDecompressBuf(b: ByteBuf, ok &: bool): ByteBuf:
+    ret LzmaDecompress(b.data, b.len, ok)
+end

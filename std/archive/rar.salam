@@ -17,6 +17,8 @@ package archive
 import compress
 import filepath
 import mem
+import os
+import str
 
 @en "RAR_OK"
 @fa "آر ای آر موفق"
@@ -72,6 +74,11 @@ struct _RarFile:
     pub salt: u8*
     pub iv: u8*
     pub chk: u8*
+    pub base: u8*
+    pub vlen: int
+    pub split_before: bool
+    pub split_after: bool
+    pub owned: bool
 end
 
 struct _RarArc:
@@ -124,6 +131,9 @@ pub struct RarArchive:
     @en "status"
     @fa "وضعیت"
     pub status: int = 0
+    @en "more"
+    @fa "بخش‌های دیگر"
+    pub more: Vector<compress.ByteBuf> = Vector {}
 end
 
 func _rar_crc_table(): u32*:
@@ -178,6 +188,112 @@ func _rar_open(p: void*, n: int, pw: str): _RarArc:
         a.valid = true
         _rar4_scan(a)
     end
+    ret a
+end
+
+func _rar_merge_volumes(a &: _RarArc):
+    mut any := false
+    repeat a.files.len() in k:
+        g0 := a.files.get(k)
+        if g0.split_before or g0.split_after:
+            any = true
+        end
+    end
+    if not any:
+        ret
+    end
+    n := a.files.len()
+    mut out := Vector {} as Vector<_RarFile>
+    mut i := 0
+    until i < n:
+        f := a.files.get(i)
+        i++
+        if f.split_after and not f.split_before and not f.encrypted:
+            mut j := i
+            mut total := f.pack_size
+            mut complete := false
+            until j < n:
+                g := a.files.get(j)
+                if g.name != f.name or not g.split_before or g.encrypted:
+                    break
+                end
+                total += g.pack_size
+                j++
+                if not g.split_after:
+                    complete = true
+                    break
+                end
+            end
+            if complete and total <= 2000000000:
+                buf := mem.AllocateZeroed((total + 16) as u64) as u8*
+                mut at := 0
+                mut k := i - 1
+                until k < j:
+                    part := a.files.get(k)
+                    mem.Copy(((buf as i64) + (at as i64)) as void*, ((part.base as i64) + (part.data_off as i64)) as void*, part.pack_size as u64)
+                    at += part.pack_size as int
+                    k++
+                end
+                last := a.files.get(j - 1)
+                mut merged := f
+                merged.pack_size = total
+                merged.data_off = 0
+                merged.base = buf
+                merged.vlen = total as int
+                merged.owned = true
+                merged.split = false
+                merged.split_before = false
+                merged.split_after = false
+                merged.crc = last.crc
+                merged.has_crc = last.has_crc
+                out.push(merged)
+                mut d := i
+                until d < j:
+                    _rar_free_name(a.files.get(d).name)
+                    d++
+                end
+                i = j
+                continue
+            end
+            out.push(f)
+            mut d2 := i
+            until d2 < j:
+                _rar_free_name(a.files.get(d2).name)
+                d2++
+            end
+            i = j
+            continue
+        end
+        out.push(f)
+    end
+    a.files.free()
+    a.files = out
+end
+
+func _rar_open_vols(p: void*, n: int, more: Vector<compress.ByteBuf>, pw: str): _RarArc:
+    mut a := _rar_open(p, n, pw)
+    if more.len() == 0 or not a.valid:
+        ret a
+    end
+    repeat more.len() in i:
+        v := more.get(i)
+        if not IsRar(v.data, v.len):
+            continue
+        end
+        a.p = v.data as u8*
+        a.n = v.len
+        a.h4 = false
+        mem.Free(a.hkey as void*)
+        a.hkey = null
+        if a.v5:
+            _rar5_scan(a)
+        else:
+            _rar4_scan(a)
+        end
+    end
+    a.p = p as u8*
+    a.n = n
+    _rar_merge_volumes(a)
     ret a
 end
 
@@ -249,7 +365,7 @@ func _rar_core(a: _RarArc, r5 &: _R5, r3 &: _R3, ro &: _ROld, nx &: int, rd &: i
     if limit > 0 and f.unp_size > limit:
         ret RAR_TOO_BIG
     end
-    if f.pack_size < 0 or (f.data_off as i64) + f.pack_size > (a.n as i64):
+    if f.pack_size < 0 or (f.data_off as i64) + f.pack_size > (f.vlen as i64):
         ret RAR_CORRUPT
     end
     base := out.len
@@ -366,8 +482,8 @@ end
 func _rar_run(a: _RarArc, r5 &: _R5, r3 &: _R3, ro &: _ROld, nx &: int, rd &: int, idx: int, limit: i64, out &: compress.ByteBuf): int:
     f := a.files.get(idx)
     if f.is_dir or f.redirect or f.split or not f.encrypted:
-        src := ((a.p as i64) + (f.data_off as i64)) as u8*
-        if f.pack_size < 0 or (f.data_off as i64) + f.pack_size > (a.n as i64):
+        src := ((f.base as i64) + (f.data_off as i64)) as u8*
+        if f.pack_size < 0 or (f.data_off as i64) + f.pack_size > (f.vlen as i64):
             ret RAR_CORRUPT
         end
         ret _rar_core(a, r5, r3, ro, nx, rd, idx, limit, out, src, f.pack_size as int, null)
@@ -375,13 +491,13 @@ func _rar_run(a: _RarArc, r5 &: _R5, r3 &: _R3, ro &: _ROld, nx &: int, rd &: in
     if a.password.len() == 0:
         ret RAR_ENCRYPTED
     end
-    if f.pack_size < 0 or (f.data_off as i64) + f.pack_size > (a.n as i64):
+    if f.pack_size < 0 or (f.data_off as i64) + f.pack_size > (f.vlen as i64):
         ret RAR_CORRUPT
     end
     n16 := (f.pack_size as int) & (~15)
     mut st := 0
     hk := mem.AllocateZeroed(64 as u64) as u8*
-    src := ((a.p as i64) + (f.data_off as i64)) as u8*
+    src := ((f.base as i64) + (f.data_off as i64)) as u8*
     dec := _rar_decrypt_file(a.kcache, a.password, f, src, n16, hk, st)
     if dec == null:
         mem.Free(hk as void*)
@@ -549,6 +665,47 @@ func _rar_extract_all_of(a: _RarArc, destdir: str, status &: int): int:
     ret extracted
 end
 
+func _rar_digits_end(path: str, upto: int): int:
+    bp := path as u8*
+    mut k := upto
+    until k > 0 and (bp[k - 1] as int) >= 48 and (bp[k - 1] as int) <= 57:
+        k--
+    end
+    ret k
+end
+
+func _rar_volume_path(first: str, idx: int): str:
+    n := first.len()
+    if n < 5:
+        ret ""
+    end
+    lower := str.Lower(first)
+    if not str.EndsWith(lower, ".rar"):
+        ret ""
+    end
+    stem := n - 4
+    ds := _rar_digits_end(lower, stem)
+    if ds < stem and ds >= 5 and str.EndsWith(str.Substr(lower, 0, ds), ".part"):
+        width := stem - ds
+        num := str.ToInt(str.Substr(first, ds, width)) + idx
+        mut digits := str.FromInt(num as i64)
+        until digits.len() < width:
+            digits = "0" + digits
+        end
+        ret str.Substr(first, 0, ds) + digits + str.Substr(first, stem, 4)
+    end
+    k := idx - 1
+    if k / 100 >= 9:
+        ret ""
+    end
+    letter := str.Substr("rstuvwxyz", k / 100, 1)
+    mut two := str.FromInt((k % 100) as i64)
+    if two.len() < 2:
+        two = "0" + two
+    end
+    ret str.Substr(first, 0, stem) + "." + letter + two
+end
+
 @en "IsRar"
 @fa "آر ای آر است"
 pub func IsRar(p: void*, n: int): bool:
@@ -564,7 +721,7 @@ pub func RarStatusText(status: int): str:
     if status == RAR_ENCRYPTED: ret "encrypted entry" end
     if status == RAR_CORRUPT: ret "corrupt data" end
     if status == RAR_BAD_CRC: ret "checksum mismatch" end
-    if status == RAR_MULTIVOLUME: ret "multi-volume archives are not supported" end
+    if status == RAR_MULTIVOLUME: ret "a volume of the multi-volume archive is missing" end
     if status == RAR_TOO_BIG: ret "entry too large" end
     if status == RAR_UNSAFE_PATH: ret "entry path leaves the target folder" end
     if status == RAR_BAD_PASSWORD: ret "wrong password" end
@@ -633,7 +790,7 @@ end
 @en "RarEntries"
 @fa "مدخل‌های آر ای آر"
 pub func RarEntries(arc &: RarArchive): Vector<Entry>:
-    mut a := _rar_open(arc.data, arc.len, arc.password)
+    mut a := _rar_open_vols(arc.data, arc.len, arc.more, arc.password)
     arc.status = _rar_arc_status(a)
     out := _rar_entries_of(a)
     _rar_free_files(a.files)
@@ -644,7 +801,7 @@ end
 @en "RarRead"
 @fa "خواندن از آر ای آر"
 pub func RarRead(arc &: RarArchive, name: str, max: int): compress.ByteBuf:
-    mut a := _rar_open(arc.data, arc.len, arc.password)
+    mut a := _rar_open_vols(arc.data, arc.len, arc.more, arc.password)
     mut st := 0
     out := _rar_read_from(a, name, max, st)
     arc.status = st
@@ -656,13 +813,76 @@ end
 @en "RarReadAll"
 @fa "خواندن همه از آر ای آر"
 pub func RarReadAll(arc &: RarArchive, destdir: str): int:
-    mut a := _rar_open(arc.data, arc.len, arc.password)
+    mut a := _rar_open_vols(arc.data, arc.len, arc.more, arc.password)
     mut st := 0
     extracted := _rar_extract_all_of(a, destdir, st)
     arc.status = st
     _rar_free_files(a.files)
     _rar_close_arc(a)
     ret extracted
+end
+
+@en "RarReadVolumes"
+@fa "خواندن بخش‌های آر ای آر"
+pub func RarReadVolumes(first: str, ok &: bool): Vector<compress.ByteBuf>:
+    mut vols := Vector {} as Vector<compress.ByteBuf>
+    head := ReadBinaryFile(first, ok)
+    if not ok:
+        ret vols
+    end
+    vols.push(head)
+    mut idx := 1
+    until true:
+        path := _rar_volume_path(first, idx)
+        if path.len() == 0:
+            break
+        end
+        if not os.Exists(path):
+            mem.Free(path as void*)
+            break
+        end
+        mut more_ok := false
+        part := ReadBinaryFile(path, more_ok)
+        mem.Free(path as void*)
+        if not more_ok:
+            break
+        end
+        vols.push(part)
+        idx++
+    end
+    ret vols
+end
+
+@en "RarFreeVolumes"
+@fa "آزادسازی بخش‌های آر ای آر"
+pub func RarFreeVolumes(vols &: Vector<compress.ByteBuf>):
+    repeat vols.len() in i:
+        mut b := vols.get(i)
+        compress.BufFree(b)
+    end
+    vols.free()
+end
+
+@en "RarOpenVolumes"
+@fa "بازکردن بخش‌های آر ای آر"
+pub func RarOpenVolumes(vols: Vector<compress.ByteBuf>, password: str): RarArchive:
+    mut arc := RarArchive { password = password, status = RAR_OK }
+    if vols.len() == 0:
+        ret arc
+    end
+    first := vols.get(0)
+    arc.data = first.data
+    arc.len = first.len
+    repeat vols.len() - 1 in i:
+        arc.more.push(vols.get(i + 1))
+    end
+    ret arc
+end
+
+@en "RarClose"
+@fa "بستن آر ای آر"
+pub func RarClose(arc &: RarArchive):
+    arc.more.free()
 end
 
 @en "MakeRarFileInput"

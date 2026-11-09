@@ -224,21 +224,27 @@ func _auto_clamp(v: i64): int:
 end
 
 func _auto_unwrap(arc &: Archive, kind: int):
-    mut ok := false
+    mut why := compress.DecodeOk
     cap := _auto_clamp(arc.limits.max_total)
     mut out := compress.NewByteBuf()
     if kind == FormatGzip:
-        out = compress.GzipDecompressMax(arc.data, arc.len, cap, ok)
+        out = compress.GzipDecompressWhy(arc.data, arc.len, cap, why)
     else kind == FormatBzip2:
-        out = compress.Bzip2DecompressMax(arc.data, arc.len, cap, ok)
+        out = compress.Bzip2DecompressWhy(arc.data, arc.len, cap, why)
     else kind == FormatZstd:
-        out = compress.ZstdDecompressMax(arc.data, arc.len, cap, ok)
+        mut zst := 0
+        out = compress.ZstdDecompressEx(arc.data, arc.len, cap, null, 0, zst)
+        if zst == compress.ZstdErrTooBig:
+            why = compress.DecodeTooBig
+        else zst != compress.ZstdOk:
+            why = compress.DecodeCorrupt
+        end
     else:
-        out = compress.XzDecompressMax(arc.data, arc.len, cap, ok)
+        out = compress.XzDecompressWhy(arc.data, arc.len, cap, why)
     end
-    if not ok:
+    if why != compress.DecodeOk:
         compress.BufFree(out)
-        arc.fail = ARCHIVE_CORRUPT
+        arc.fail = why == compress.DecodeTooBig ? ARCHIVE_TOO_BIG : ARCHIVE_CORRUPT
         ret
     end
     arc.inner = out

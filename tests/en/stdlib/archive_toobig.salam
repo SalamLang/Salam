@@ -1,0 +1,109 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+package main
+
+import archive
+import compress
+import filepath
+import mem
+import os
+
+func code(why: int): str:
+    if why == compress.DecodeOk: ret "ok" end
+    if why == compress.DecodeTooBig: ret "too big" end
+    ret "corrupt"
+end
+
+func check(label: str, packed &: compress.ByteBuf, kind: int):
+    mut why := -1
+    mut out := compress.NewByteBuf()
+    if kind == 0:
+        out = compress.GzipDecompressWhy(packed.data, packed.len, 1000, why)
+    else kind == 1:
+        out = compress.Bzip2DecompressWhy(packed.data, packed.len, 1000, why)
+    else kind == 2:
+        out = compress.XzDecompressWhy(packed.data, packed.len, 1000, why)
+    else:
+        out = compress.LzmaDecompressWhy(packed.data, packed.len, 1000, why)
+    end
+    compress.BufFree(out)
+    capped := code(why)
+    mut free := compress.NewByteBuf()
+    if kind == 0:
+        free = compress.GzipDecompressWhy(packed.data, packed.len, 0, why)
+    else kind == 1:
+        free = compress.Bzip2DecompressWhy(packed.data, packed.len, 0, why)
+    else kind == 2:
+        free = compress.XzDecompressWhy(packed.data, packed.len, 0, why)
+    else:
+        free = compress.LzmaDecompressWhy(packed.data, packed.len, 0, why)
+    end
+    println label, capped, code(why), free.len
+    compress.BufFree(free)
+    cut := packed.len - 5
+    mut bad := compress.NewByteBuf()
+    if kind == 0:
+        bad = compress.GzipDecompressWhy(packed.data, cut, 0, why)
+    else kind == 1:
+        bad = compress.Bzip2DecompressWhy(packed.data, cut, 0, why)
+    else kind == 2:
+        bad = compress.XzDecompressWhy(packed.data, cut, 0, why)
+    else:
+        bad = compress.LzmaDecompressWhy(packed.data, cut, 0, why)
+    end
+    println " cut", code(why)
+    compress.BufFree(bad)
+    compress.BufFree(packed)
+end
+
+func tmp(name: str): str:
+    t := os.TempDir()
+    r := filepath.Join(t, name)
+    mem.Free(t as void*)
+    ret r
+end
+
+func main():
+    mut raw := compress.NewByteBuf()
+    mut i := 0
+    until i < 50000:
+        compress.BufPush(raw, 97 + (i % 7))
+        i++
+    end
+    mut p0 := compress.GzipCompress(raw.data, raw.len)
+    check("gzip", p0, 0)
+    mut p1 := compress.Bzip2Compress(raw.data, raw.len)
+    check("bzip2", p1, 1)
+    mut p2 := compress.XzCompress(raw.data, raw.len)
+    check("xz", p2, 2)
+    mut p3 := compress.LzmaCompress(raw.data, raw.len)
+    check("lzma", p3, 3)
+
+    src := tmp("salam_toobig_src.bin")
+    mut ok := archive.WriteBinaryFileBuf(src, raw)
+    packed := tmp("salam_toobig.xz")
+    back := tmp("salam_toobig_back.bin")
+    ok = archive.XzCompressFile(src, packed)
+    println "xz cap", archive.ArchiveStatusText(archive.XzDecompressFileCap(packed, back, 1000 as i64)), os.Exists(back)
+    println "xz free", archive.ArchiveStatusText(archive.XzDecompressFileCap(packed, back, 0 as i64))
+    ok = archive.Bzip2CompressFile(src, packed)
+    println "bz2 cap", archive.ArchiveStatusText(archive.Bzip2DecompressFileCap(packed, back, 1000 as i64))
+    println "bz2 free", archive.ArchiveStatusText(archive.Bzip2DecompressFileCap(packed, back, 0 as i64))
+    println "lzma missing", archive.ArchiveStatusText(archive.LzmaDecompressFileCap(src, back, 0 as i64))
+    println "texts", archive.ZipStatusText(archive.ZIP_IO), "|", archive.RarStatusText(archive.RAR_ENCRYPTED), "|", archive.SevenZipStatusText(archive.SEVENZIP_UNSAFE_PATH), "|", archive.TarStatusText(archive.TAR_TOO_BIG)
+    os.Remove(src)
+    os.Remove(packed)
+    os.Remove(back)
+    compress.BufFree(raw)
+end

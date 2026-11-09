@@ -1,0 +1,499 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "net/vmess"
+@fa "وی مس"
+package vmess
+
+import mem
+import crypto
+import tls
+import time
+import net.transport
+
+@en "CmdTCP"
+@fa "فرمان تی سی پی"
+pub const CmdTCP := 1
+
+@en "CmdUDP"
+@fa "فرمان یو دی پی"
+pub const CmdUDP := 2
+
+@en "CmdMux"
+@fa "فرمان مالتی پلکس"
+pub const CmdMux := 3
+
+@en "SecAES128GCM"
+@fa "امنیت ای ای اس ۱۲۸ جی سی ام"
+pub const SecAES128GCM := 3
+
+@en "SecChaCha20Poly1305"
+@fa "امنیت چاچا۲۰ پلی۱۳۰۵"
+pub const SecChaCha20Poly1305 := 4
+
+@en "SecNone"
+@fa "امنیت هیچ"
+pub const SecNone := 5
+
+@en "SecZero"
+@fa "امنیت صفر"
+pub const SecZero := 6
+
+@en "OptChunkStream"
+@fa "گزینه جریان قطعه ای"
+pub const OptChunkStream := 1
+
+@en "OptChunkMask"
+@fa "گزینه نقاب طول"
+pub const OptChunkMask := 4
+
+@en "OptPadding"
+@fa "گزینه لایه گذاری"
+pub const OptPadding := 8
+
+@en "OptAuthLength"
+@fa "گزینه طول احراز شده"
+pub const OptAuthLength := 16
+
+@en "TimeWindow"
+@fa "پنجره زمانی"
+pub const TimeWindow := 120
+
+const KDF_SALT := "VMess AEAD KDF"
+const CMD_KEY_SALT := "c48619fe-8f02-49e0-b9e9-edf763e17e21"
+
+@en "Request"
+@fa "درخواست"
+pub struct Request:
+    @en "version"
+    @fa "نگارش"
+    pub version: int = 1
+    @en "iv"
+    @fa "بردار آغازین"
+    pub iv: transport.Bytes = transport.Bytes {}
+    @en "key"
+    @fa "کلید"
+    pub key: transport.Bytes = transport.Bytes {}
+    @en "resp_v"
+    @fa "بایت پاسخ"
+    pub resp_v: int = 0
+    @en "option"
+    @fa "گزینه ها"
+    pub option: int = 0
+    @en "security"
+    @fa "امنیت"
+    pub security: int = 3
+    @en "command"
+    @fa "فرمان"
+    pub command: int = 1
+    @en "addr"
+    @fa "نشانی"
+    pub addr: transport.Addr = transport.Addr {}
+    @en "padding"
+    @fa "طول لایه گذاری"
+    pub padding: int = 0
+end
+
+func _hash_level(path: Vector<transport.Bytes>, depth: int, msg: void*, n: int, out: void*):
+    if depth == 0:
+        crypto.HmacSha256Raw(KDF_SALT as void*, KDF_SALT.len(), msg, n, out)
+        ret
+    end
+    key := path.get(depth - 1)
+    kp := mem.AllocateZeroed(64 as u64) as u8*
+    if key.len > 64:
+        _hash_level(path, depth - 1, key.p, key.len, kp as void*)
+    else:
+        mem.Copy(kp as void*, key.p, key.len as u64)
+    end
+    inner := mem.Allocate((64 + n) as u64) as u8*
+    repeat 64 in i:
+        inner[i] = (kp[i] as int ^ 0x36) as u8
+    end
+    if n > 0:
+        mem.Copy(((inner as i64) + 64) as void*, msg, n as u64)
+    end
+    mid := mem.AllocateZeroed(32 as u64) as u8*
+    _hash_level(path, depth - 1, inner as void*, 64 + n, mid as void*)
+    outer := mem.Allocate(96 as u64) as u8*
+    repeat 64 in i:
+        outer[i] = (kp[i] as int ^ 0x5c) as u8
+    end
+    mem.Copy(((outer as i64) + 64) as void*, mid as void*, 32 as u64)
+    _hash_level(path, depth - 1, outer as void*, 96, out)
+    mem.Set(kp as void*, 0, 64 as u64)
+    mem.Free(kp as void*)
+    mem.Free(inner as void*)
+    mem.Free(mid as void*)
+    mem.Free(outer as void*)
+end
+
+func _kdf(key: transport.Bytes, label: str, a: transport.Bytes, b: transport.Bytes): transport.Bytes:
+    mut path := Vector {} as Vector<transport.Bytes>
+    defer path.free()
+    mut lb := transport.FromStr(label)
+    defer transport.FreeBytes(lb)
+    path.push(lb)
+    if a.len > 0:
+        path.push(a)
+    end
+    if b.len > 0:
+        path.push(b)
+    end
+    mut out := transport.NewBytes(32)
+    _hash_level(path, path.len(), key.p, key.len, out.p)
+    out.len = 32
+    ret out
+end
+
+func _empty(): transport.Bytes:
+    ret transport.Bytes {}
+end
+
+func _gcm_seal(key: transport.Bytes, nonce: transport.Bytes, aad: transport.Bytes, pt: transport.Bytes): transport.Bytes:
+    mut out := transport.NewBytes(pt.len + 16)
+    ok := tls.AesGcmSealRaw(key.p, 16, nonce.p, aad.p, aad.len, pt.p, pt.len, out.p)
+    if not ok:
+        out.bad = true
+        ret out
+    end
+    out.len = pt.len + 16
+    ret out
+end
+
+func _gcm_open(key: transport.Bytes, nonce: transport.Bytes, aad: transport.Bytes, ct: transport.Bytes): transport.Bytes:
+    mut out := transport.NewBytes(ct.len + 1)
+    if ct.len < 16:
+        out.bad = true
+        ret out
+    end
+    ok := tls.AesGcmOpenRaw(key.p, 16, nonce.p, aad.p, aad.len, ct.p, ct.len, out.p)
+    if not ok:
+        out.bad = true
+        ret out
+    end
+    out.len = ct.len - 16
+    ret out
+end
+
+func _truncate(b: transport.Bytes, n: int): transport.Bytes:
+    mut r := b
+    if r.len > n:
+        r.len = n
+    end
+    ret r
+end
+
+@en "KDF"
+@fa "تابع اشتقاق کلید"
+pub func KDF(key: transport.Bytes, label: str, a: transport.Bytes, b: transport.Bytes): transport.Bytes:
+    ret _kdf(key, label, a, b)
+end
+
+@en "KDF16"
+@fa "تابع اشتقاق کلید ۱۶"
+pub func KDF16(key: transport.Bytes, label: str, a: transport.Bytes, b: transport.Bytes): transport.Bytes:
+    k := _kdf(key, label, a, b)
+    ret _truncate(k, 16)
+end
+
+@en "KDF12"
+@fa "تابع اشتقاق کلید ۱۲"
+pub func KDF12(key: transport.Bytes, label: str, a: transport.Bytes, b: transport.Bytes): transport.Bytes:
+    k := _kdf(key, label, a, b)
+    ret _truncate(k, 12)
+end
+
+@en "CmdKey"
+@fa "کلید فرمان"
+pub func CmdKey(uuid: transport.Bytes): transport.Bytes:
+    mut buf := transport.NewBytes(64)
+    defer transport.FreeBytes(buf)
+    transport.PutBytes(buf, uuid)
+    transport.PutStr(buf, CMD_KEY_SALT)
+    mut out := transport.NewBytes(16)
+    crypto.Md5Bytes(buf.p, buf.len, out.p)
+    out.len = 16
+    ret out
+end
+
+@en "Sha256"
+@fa "شا۲۵۶"
+pub func Sha256(data: transport.Bytes): transport.Bytes:
+    mut out := transport.NewBytes(32)
+    crypto.Sha256Bytes(data.p, data.len, out.p)
+    out.len = 32
+    ret out
+end
+
+@en "AES128Block"
+@fa "بلوک ای ای اس ۱۲۸"
+pub func AES128Block(key: transport.Bytes, block: transport.Bytes, decrypt: bool): transport.Bytes:
+    mut out := transport.NewBytes(16)
+    if key.len != 16 or block.len != 16:
+        out.bad = true
+        ret out
+    end
+    _aes128_block(key.p, block.p, out.p, decrypt)
+    out.len = 16
+    ret out
+end
+
+@en "Shake128"
+@fa "شیک ۱۲۸"
+pub func Shake128(msg: transport.Bytes, outlen: int): transport.Bytes:
+    mut s := _shake128_new(msg.p, msg.len)
+    mut out := transport.NewBytes(outlen + 1)
+    _shake_read(s, out.p as u8*, outlen)
+    out.len = outlen
+    _shake_free(s)
+    ret out
+end
+
+@en "CRC32"
+@fa "سی آر سی ۳۲"
+pub func CRC32(data: transport.Bytes): i64:
+    ret _crc32_ieee(data.p as u8*, data.len)
+end
+
+@en "FNV1a"
+@fa "اف ان وی ۱ آ"
+pub func FNV1a(data: transport.Bytes): i64:
+    ret _fnv1a32(data.p as u8*, data.len)
+end
+
+@en "CreateAuthID"
+@fa "ساخت شناسه احراز"
+pub func CreateAuthID(cmd_key: transport.Bytes, ts: i64, rand4: transport.Bytes): transport.Bytes:
+    mut plain := transport.NewBytes(16)
+    defer transport.FreeBytes(plain)
+    transport.Put64(plain, ts as u64)
+    transport.PutBytes(plain, rand4)
+    transport.Put32(plain, _crc32_ieee(plain.p as u8*, 12))
+    mut ek := KDF16(cmd_key, "AES Auth ID Encryption", _empty(), _empty())
+    defer transport.FreeBytes(ek)
+    ret AES128Block(ek, plain, false)
+end
+
+@en "OpenAuthID"
+@fa "گشودن شناسه احراز"
+pub func OpenAuthID(cmd_key: transport.Bytes, authid: transport.Bytes, ts &: i64): bool:
+    if authid.len != 16:
+        ret false
+    end
+    mut ek := KDF16(cmd_key, "AES Auth ID Encryption", _empty(), _empty())
+    defer transport.FreeBytes(ek)
+    mut plain := AES128Block(ek, authid, true)
+    defer transport.FreeBytes(plain)
+    want := _crc32_ieee(plain.p as u8*, 12)
+    got := transport.Peek32(plain, 12)
+    if want != got:
+        ret false
+    end
+    mut t := 0 as i64
+    repeat 8 in i:
+        t = (t << (8 as i64)) | (transport.At(plain, i) as i64)
+    end
+    ts = t
+    ret true
+end
+
+@en "SealHeader"
+@fa "مهر سرآیند"
+pub func SealHeader(
+    cmd_key: transport.Bytes, data: transport.Bytes, ts: i64, rand4: transport.Bytes, nonce: transport.Bytes
+): transport.Bytes:
+    mut out := transport.NewBytes(data.len + 64)
+    mut authid := CreateAuthID(cmd_key, ts, rand4)
+    defer transport.FreeBytes(authid)
+    mut lenb := transport.NewBytes(2)
+    defer transport.FreeBytes(lenb)
+    transport.Put16(lenb, data.len)
+    mut lk := KDF16(cmd_key, "VMess Header AEAD Key_Length", authid, nonce)
+    defer transport.FreeBytes(lk)
+    mut ln := KDF12(cmd_key, "VMess Header AEAD Nonce_Length", authid, nonce)
+    defer transport.FreeBytes(ln)
+    mut lenc := _gcm_seal(lk, ln, authid, lenb)
+    defer transport.FreeBytes(lenc)
+    mut hk := KDF16(cmd_key, "VMess Header AEAD Key", authid, nonce)
+    defer transport.FreeBytes(hk)
+    mut hn := KDF12(cmd_key, "VMess Header AEAD Nonce", authid, nonce)
+    defer transport.FreeBytes(hn)
+    mut henc := _gcm_seal(hk, hn, authid, data)
+    defer transport.FreeBytes(henc)
+    transport.PutBytes(out, authid)
+    transport.PutBytes(out, lenc)
+    transport.PutBytes(out, nonce)
+    transport.PutBytes(out, henc)
+    ret out
+end
+
+@en "SealHeaderNow"
+@fa "مهر سرآیند اکنون"
+pub func SealHeaderNow(cmd_key: transport.Bytes, data: transport.Bytes): transport.Bytes:
+    mut r4 := transport.NewBytes(4)
+    defer transport.FreeBytes(r4)
+    mut n8 := transport.NewBytes(8)
+    defer transport.FreeBytes(n8)
+    crypto.RandomBytes(r4.p, 4)
+    r4.len = 4
+    crypto.RandomBytes(n8.p, 8)
+    n8.len = 8
+    ret SealHeader(cmd_key, data, time.Now(), r4, n8)
+end
+
+@en "OpenHeaderLength"
+@fa "گشودن طول سرآیند"
+pub func OpenHeaderLength(
+    cmd_key: transport.Bytes, authid: transport.Bytes, enc_len: transport.Bytes, nonce: transport.Bytes
+): int:
+    mut lk := KDF16(cmd_key, "VMess Header AEAD Key_Length", authid, nonce)
+    defer transport.FreeBytes(lk)
+    mut ln := KDF12(cmd_key, "VMess Header AEAD Nonce_Length", authid, nonce)
+    defer transport.FreeBytes(ln)
+    mut plain := _gcm_open(lk, ln, authid, enc_len)
+    defer transport.FreeBytes(plain)
+    if plain.bad or plain.len != 2:
+        ret 0 - 1
+    end
+    ret transport.Peek16(plain, 0)
+end
+
+@en "OpenHeader"
+@fa "گشودن سرآیند"
+pub func OpenHeader(
+    cmd_key: transport.Bytes, authid: transport.Bytes, enc: transport.Bytes, nonce: transport.Bytes
+): transport.Bytes:
+    mut hk := KDF16(cmd_key, "VMess Header AEAD Key", authid, nonce)
+    defer transport.FreeBytes(hk)
+    mut hn := KDF12(cmd_key, "VMess Header AEAD Nonce", authid, nonce)
+    defer transport.FreeBytes(hn)
+    ret _gcm_open(hk, hn, authid, enc)
+end
+
+@en "SealResponseHeader"
+@fa "مهر سرآیند پاسخ"
+pub func SealResponseHeader(resp_key: transport.Bytes, header: transport.Bytes): transport.Bytes:
+    mut out := transport.NewBytes(header.len + 40)
+    mut lb := transport.NewBytes(2)
+    defer transport.FreeBytes(lb)
+    transport.Put16(lb, header.len)
+    mut lk := KDF16(resp_key, "AEAD Resp Header Len Key", _empty(), _empty())
+    defer transport.FreeBytes(lk)
+    mut ln := KDF12(resp_key, "AEAD Resp Header Len IV", _empty(), _empty())
+    defer transport.FreeBytes(ln)
+    mut hk := KDF16(resp_key, "AEAD Resp Header Key", _empty(), _empty())
+    defer transport.FreeBytes(hk)
+    mut hn := KDF12(resp_key, "AEAD Resp Header IV", _empty(), _empty())
+    defer transport.FreeBytes(hn)
+    mut le := _gcm_seal(lk, ln, _empty(), lb)
+    defer transport.FreeBytes(le)
+    mut he := _gcm_seal(hk, hn, _empty(), header)
+    defer transport.FreeBytes(he)
+    transport.PutBytes(out, le)
+    transport.PutBytes(out, he)
+    ret out
+end
+
+@en "OpenResponseLength"
+@fa "گشودن طول پاسخ"
+pub func OpenResponseLength(resp_key: transport.Bytes, enc_len: transport.Bytes): int:
+    mut lk := KDF16(resp_key, "AEAD Resp Header Len Key", _empty(), _empty())
+    defer transport.FreeBytes(lk)
+    mut ln := KDF12(resp_key, "AEAD Resp Header Len IV", _empty(), _empty())
+    defer transport.FreeBytes(ln)
+    mut plain := _gcm_open(lk, ln, _empty(), enc_len)
+    defer transport.FreeBytes(plain)
+    if plain.bad or plain.len != 2:
+        ret 0 - 1
+    end
+    ret transport.Peek16(plain, 0)
+end
+
+@en "OpenResponseHeader"
+@fa "گشودن سرآیند پاسخ"
+pub func OpenResponseHeader(resp_key: transport.Bytes, enc: transport.Bytes): transport.Bytes:
+    mut hk := KDF16(resp_key, "AEAD Resp Header Key", _empty(), _empty())
+    defer transport.FreeBytes(hk)
+    mut hn := KDF12(resp_key, "AEAD Resp Header IV", _empty(), _empty())
+    defer transport.FreeBytes(hn)
+    ret _gcm_open(hk, hn, _empty(), enc)
+end
+
+@en "EncodeRequest"
+@fa "کدگذاری درخواست"
+pub func EncodeRequest(r: Request): transport.Bytes:
+    mut b := transport.NewBytes(64 + r.padding)
+    transport.Put8(b, r.version)
+    transport.PutBytes(b, r.iv)
+    transport.PutBytes(b, r.key)
+    transport.Put8(b, r.resp_v)
+    transport.Put8(b, r.option)
+    transport.Put8(b, ((r.padding & 15) << 4) | (r.security & 15))
+    transport.Put8(b, 0)
+    transport.Put8(b, r.command)
+    if r.command != CmdMux:
+        if not transport.PutAddr(b, r.addr):
+            b.bad = true
+            ret b
+        end
+    end
+    if r.padding > 0:
+        mut pad := transport.NewBytes(r.padding)
+        crypto.RandomBytes(pad.p, r.padding)
+        pad.len = r.padding
+        transport.PutBytes(b, pad)
+        transport.FreeBytes(pad)
+    end
+    transport.Put32(b, _fnv1a32(b.p as u8*, b.len))
+    ret b
+end
+
+@en "DecodeRequest"
+@fa "کدگشایی درخواست"
+pub func DecodeRequest(b: transport.Bytes, r &: Request): bool:
+    if b.len < 4 + 38:
+        ret false
+    end
+    if transport.At(b, 0) != 1:
+        ret false
+    end
+    want := _fnv1a32(b.p as u8*, b.len - 4)
+    if want != transport.Peek32(b, b.len - 4):
+        ret false
+    end
+    r.version = 1
+    r.iv = transport.NewBytes(16)
+    transport.PutRaw(r.iv, transport.BytesPtr(b, 1), 16)
+    r.key = transport.NewBytes(16)
+    transport.PutRaw(r.key, transport.BytesPtr(b, 17), 16)
+    r.resp_v = transport.At(b, 33)
+    r.option = transport.At(b, 34)
+    pv := transport.At(b, 35)
+    r.padding = pv >> 4
+    r.security = pv & 15
+    r.command = transport.At(b, 37)
+    mut off := 38
+    if r.command == CmdTCP or r.command == CmdUDP:
+        mut a := transport.Addr {}
+        off = transport.ReadAddr(b, off, a)
+        if off < 0:
+            ret false
+        end
+        r.addr = a
+    else r.command != CmdMux:
+        ret false
+    end
+    ret off + r.padding + 4 == b.len
+end

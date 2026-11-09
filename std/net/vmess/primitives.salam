@@ -1,0 +1,344 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package vmess
+
+import mem
+
+const SHAKE_RATE := 168
+
+struct Shake:
+    pub st: u64* = null
+    pub buf: u8* = null
+    pub pos: int = 0
+end
+
+inline func _rotl64(x: u64, n: int): u64:
+    ret (x << (n as u64)) | (x >> ((64 - n) as u64))
+end
+
+inline func _rotl8(x: int, n: int): int:
+    ret ((x << n) | (x >> (8 - n))) & 0xFF
+end
+
+func _xtime(a: int): int:
+    mut r := (a << 1) & 0xFF
+    if (a & 0x80) != 0:
+        r ^= 0x1b
+    end
+    ret r
+end
+
+func _gmul(a0: int, b0: int): int:
+    mut a := a0
+    mut b := b0
+    mut p := 0
+    repeat 8:
+        if (b & 1) != 0:
+            p ^= a
+        end
+        a = _xtime(a)
+        b = b >> 1
+    end
+    ret p
+end
+
+func _ginv(x: int): int:
+    if x == 0:
+        ret 0
+    end
+    mut r := 1
+    mut base := x
+    mut e := 254
+    until e > 0:
+        if (e & 1) != 0:
+            r = _gmul(r, base)
+        end
+        base = _gmul(base, base)
+        e = e >> 1
+    end
+    ret r
+end
+
+func _sbox(x: int): int:
+    i := _ginv(x)
+    ret (i ^ _rotl8(i, 1) ^ _rotl8(i, 2) ^ _rotl8(i, 3) ^ _rotl8(i, 4) ^ 0x63) & 0xFF
+end
+
+func _inv_sbox(y: int): int:
+    ret _ginv((_rotl8(y, 1) ^ _rotl8(y, 3) ^ _rotl8(y, 6) ^ 0x05) & 0xFF)
+end
+
+func _aes128_expand(key: u8*, rk: u8*):
+    repeat 16 in i:
+        rk[i] = key[i]
+    end
+    mut rcon := 1
+    repeat 10 in r:
+        base := 16 * r
+        rk[base + 16] = (rk[base] as int ^ _sbox(rk[base + 13] as int) ^ rcon) as u8
+        rk[base + 17] = (rk[base + 1] as int ^ _sbox(rk[base + 14] as int)) as u8
+        rk[base + 18] = (rk[base + 2] as int ^ _sbox(rk[base + 15] as int)) as u8
+        rk[base + 19] = (rk[base + 3] as int ^ _sbox(rk[base + 12] as int)) as u8
+        repeat 12 in j:
+            rk[base + 20 + j] = (rk[base + 4 + j] as int ^ rk[base + 16 + j] as int) as u8
+        end
+        rcon = _xtime(rcon)
+    end
+end
+
+func _add_round_key(s: u8*, rk: u8*, round: int):
+    repeat 16 in i:
+        s[i] = (s[i] as int ^ rk[16 * round + i] as int) as u8
+    end
+end
+
+func _shift_rows(s: u8*, inverse: bool):
+    t := mem.Allocate(16 as u64) as u8*
+    repeat 4 in c:
+        repeat 4 in r:
+            mut src := (c + r) % 4
+            if inverse:
+                src = (c - r + 4) % 4
+            end
+            t[4 * c + r] = s[4 * src + r]
+        end
+    end
+    repeat 16 in i:
+        s[i] = t[i]
+    end
+    mem.Free(t as void*)
+end
+
+func _mix_columns(s: u8*, inverse: bool):
+    repeat 4 in c:
+        a0 := s[4 * c] as int
+        a1 := s[4 * c + 1] as int
+        a2 := s[4 * c + 2] as int
+        a3 := s[4 * c + 3] as int
+        if inverse:
+            s[4 * c] = (_gmul(a0, 14) ^ _gmul(a1, 11) ^ _gmul(a2, 13) ^ _gmul(a3, 9)) as u8
+            s[4 * c + 1] = (_gmul(a0, 9) ^ _gmul(a1, 14) ^ _gmul(a2, 11) ^ _gmul(a3, 13)) as u8
+            s[4 * c + 2] = (_gmul(a0, 13) ^ _gmul(a1, 9) ^ _gmul(a2, 14) ^ _gmul(a3, 11)) as u8
+            s[4 * c + 3] = (_gmul(a0, 11) ^ _gmul(a1, 13) ^ _gmul(a2, 9) ^ _gmul(a3, 14)) as u8
+        else:
+            s[4 * c] = (_gmul(a0, 2) ^ _gmul(a1, 3) ^ a2 ^ a3) as u8
+            s[4 * c + 1] = (a0 ^ _gmul(a1, 2) ^ _gmul(a2, 3) ^ a3) as u8
+            s[4 * c + 2] = (a0 ^ a1 ^ _gmul(a2, 2) ^ _gmul(a3, 3)) as u8
+            s[4 * c + 3] = (_gmul(a0, 3) ^ a1 ^ a2 ^ _gmul(a3, 2)) as u8
+        end
+    end
+end
+
+func _sub_bytes(s: u8*, inverse: bool):
+    repeat 16 in i:
+        if inverse:
+            s[i] = _inv_sbox(s[i] as int) as u8
+        else:
+            s[i] = _sbox(s[i] as int) as u8
+        end
+    end
+end
+
+func _aes128_block(key: void*, inp: void*, out: void*, decrypt: bool):
+    rk := mem.AllocateZeroed(176 as u64) as u8*
+    s := mem.AllocateZeroed(16 as u64) as u8*
+    ip := inp as u8*
+    _aes128_expand(key as u8*, rk)
+    repeat 16 in i:
+        s[i] = ip[i]
+    end
+    if not decrypt:
+        _add_round_key(s, rk, 0)
+        repeat 9 in r:
+            _sub_bytes(s, false)
+            _shift_rows(s, false)
+            _mix_columns(s, false)
+            _add_round_key(s, rk, r + 1)
+        end
+        _sub_bytes(s, false)
+        _shift_rows(s, false)
+        _add_round_key(s, rk, 10)
+    else:
+        _add_round_key(s, rk, 10)
+        repeat 9 in r:
+            _shift_rows(s, true)
+            _sub_bytes(s, true)
+            _add_round_key(s, rk, 9 - r)
+            _mix_columns(s, true)
+        end
+        _shift_rows(s, true)
+        _sub_bytes(s, true)
+        _add_round_key(s, rk, 0)
+    end
+    op := out as u8*
+    repeat 16 in i:
+        op[i] = s[i]
+    end
+    mem.Set(rk as void*, 0, 176 as u64)
+    mem.Free(rk as void*)
+    mem.Free(s as void*)
+end
+
+func _keccak_round_constant(r: int): u64:
+    rc := mem.Allocate(192 as u64) as u64*
+    defer mem.Free(rc as void*)
+    rc[0] = 0x0000000000000001 as u64
+    rc[1] = 0x0000000000008082 as u64
+    rc[2] = 0x800000000000808a as u64
+    rc[3] = 0x8000000080008000 as u64
+    rc[4] = 0x000000000000808b as u64
+    rc[5] = 0x0000000080000001 as u64
+    rc[6] = 0x8000000080008081 as u64
+    rc[7] = 0x8000000000008009 as u64
+    rc[8] = 0x000000000000008a as u64
+    rc[9] = 0x0000000000000088 as u64
+    rc[10] = 0x0000000080008009 as u64
+    rc[11] = 0x000000008000000a as u64
+    rc[12] = 0x000000008000808b as u64
+    rc[13] = 0x800000000000008b as u64
+    rc[14] = 0x8000000000008089 as u64
+    rc[15] = 0x8000000000008003 as u64
+    rc[16] = 0x8000000000008002 as u64
+    rc[17] = 0x8000000000000080 as u64
+    rc[18] = 0x000000000000800a as u64
+    rc[19] = 0x800000008000000a as u64
+    rc[20] = 0x8000000080008081 as u64
+    rc[21] = 0x8000000000008080 as u64
+    rc[22] = 0x0000000080000001 as u64
+    rc[23] = 0x8000000080008008 as u64
+    ret rc[r]
+end
+
+func _keccakf(st: u64*):
+    rotc := [1, 3, 6, 10, 15, 21, 28, 36, 45, 55, 2, 14, 27, 41, 56, 8, 25, 43, 62, 18, 39, 61, 20, 44]
+    piln := [10, 7, 11, 17, 18, 3, 5, 16, 8, 21, 24, 4, 15, 23, 19, 13, 12, 2, 20, 14, 22, 9, 6, 1]
+    bc := mem.AllocateZeroed(40 as u64) as u64*
+    repeat 24 in r:
+        repeat 5 in i:
+            bc[i] = st[i] ^ st[i + 5] ^ st[i + 10] ^ st[i + 15] ^ st[i + 20]
+        end
+        repeat 5 in i:
+            t := bc[(i + 4) % 5] ^ _rotl64(bc[(i + 1) % 5], 1)
+            repeat 5 in k:
+                st[5 * k + i] = st[5 * k + i] ^ t
+            end
+        end
+        mut t := st[1]
+        repeat 24 in i:
+            j := piln[i]
+            b0 := st[j]
+            st[j] = _rotl64(t, rotc[i])
+            t = b0
+        end
+        repeat 5 in k:
+            repeat 5 in i:
+                bc[i] = st[5 * k + i]
+            end
+            repeat 5 in i:
+                st[5 * k + i] = st[5 * k + i] ^ ((~bc[(i + 1) % 5]) & bc[(i + 2) % 5])
+            end
+        end
+        st[0] = st[0] ^ _keccak_round_constant(r)
+    end
+    mem.Free(bc as void*)
+end
+
+func _shake_refill(s &: Shake):
+    _keccakf(s.st)
+    sp := s.st as u8*
+    repeat SHAKE_RATE in i:
+        s.buf[i] = sp[i]
+    end
+    s.pos = 0
+end
+
+func _shake128_new(data: void*, n: int): Shake:
+    mut s := Shake {}
+    s.st = mem.AllocateZeroed(200 as u64) as u64*
+    s.buf = mem.AllocateZeroed(SHAKE_RATE as u64) as u8*
+    sp := s.st as u8*
+    dp := data as u8*
+    mut off := 0
+    until n - off >= SHAKE_RATE:
+        repeat SHAKE_RATE in i:
+            sp[i] = (sp[i] as int ^ dp[off + i] as int) as u8
+        end
+        _keccakf(s.st)
+        off += SHAKE_RATE
+    end
+    rem := n - off
+    repeat rem in i:
+        sp[i] = (sp[i] as int ^ dp[off + i] as int) as u8
+    end
+    sp[rem] = (sp[rem] as int ^ 0x1F) as u8
+    sp[SHAKE_RATE - 1] = (sp[SHAKE_RATE - 1] as int ^ 0x80) as u8
+    _shake_refill(s)
+    ret s
+end
+
+func _shake_next16(s &: Shake): int:
+    if s.pos + 2 > SHAKE_RATE:
+        _shake_refill(s)
+    end
+    v := (s.buf[s.pos] as int) * 256 + (s.buf[s.pos + 1] as int)
+    s.pos += 2
+    ret v
+end
+
+func _shake_read(s &: Shake, out: u8*, n: int):
+    repeat n in i:
+        if s.pos >= SHAKE_RATE:
+            _shake_refill(s)
+        end
+        out[i] = s.buf[s.pos]
+        s.pos++
+    end
+end
+
+func _shake_free(s &: Shake):
+    if s.st != null:
+        mem.Set(s.st as void*, 0, 200 as u64)
+        mem.Free(s.st as void*)
+    end
+    if s.buf != null:
+        mem.Free(s.buf as void*)
+    end
+    s.st = null
+    s.buf = null
+end
+
+func _crc32_ieee(p: u8*, n: int): i64:
+    mut crc := 0xFFFFFFFF as i64
+    repeat n in i:
+        crc = crc ^ (p[i] as i64)
+        repeat 8:
+            if (crc & 1) != 0:
+                crc = (crc >> 1) ^ (0xEDB88320 as i64)
+            else:
+                crc = crc >> 1
+            end
+        end
+    end
+    ret crc ^ (0xFFFFFFFF as i64)
+end
+
+func _fnv1a32(p: u8*, n: int): i64:
+    mut h := 0x811c9dc5 as i64
+    repeat n in i:
+        h = h ^ (p[i] as i64)
+        h = (h * (16777619 as i64)) & (0xFFFFFFFF as i64)
+    end
+    ret h
+end

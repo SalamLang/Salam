@@ -55,6 +55,8 @@ struct _SzF:
     pub tmp: u8*
     pub tcap: int
     pub bkind: int
+    pub b2: void*
+    pub err: int
     pub bstate: int
     pub bpos: i64
     pub next: compress.FileSink*
@@ -308,6 +310,16 @@ func _szf_emit(f: _SzF*, p: void*, n: int): bool:
         end
         ret true
     end
+    if f[0].kind == 4:
+        d := f[0].b2 as _SzB2*
+        if not _szb2_feed(d, p as u8*, n, f[0].next):
+            if d[0].bad:
+                f[0].err = SEVENZIP_CORRUPT
+            end
+            ret false
+        end
+        ret true
+    end
     w := f[0].dist
     total := f[0].nc + n
     if f[0].tcap < total:
@@ -336,6 +348,14 @@ func _szf_emit(f: _SzF*, p: void*, n: int): bool:
 end
 
 func _szf_finalize(f: _SzF*): bool:
+    if f[0].kind == 4:
+        d := f[0].b2 as _SzB2*
+        if d != null and (d[0].bad or d[0].o != d[0].limit):
+            f[0].err = SEVENZIP_CORRUPT
+            ret false
+        end
+        ret true
+    end
     if (f[0].kind == 2 or f[0].kind == 3) and f[0].nc > 0:
         n := f[0].nc
         f[0].nc = 0
@@ -357,6 +377,9 @@ func _szf_filter_kind(id: i64): int:
     end
     if _sz_bcj_kind(id) != 0:
         ret 3
+    end
+    if id == (0x0303011B as i64):
+        ret 4
     end
     ret 0
 end
@@ -544,8 +567,11 @@ func _szf_source(rfp: void*, roff: i64, rsz: i64, c: _SzCoder, out_size: i64, me
     ret SEVENZIP_CORRUPT
 end
 
-func _szf_stream(fp: void*, start: i64, avail: i64, s: _Sz, fi: int, out_start: int, password: str, memcap: i64, top: compress.FileSink*): int:
+func _szf_stream(fp: void*, start: i64, avail: i64, s: _Sz, fi: int, out_start: int, password: str, memcap: i64, top: compress.FileSink*, depth: int): int:
     f := s.folders.get(fi)
+    if depth > 8:
+        ret _SZF_NOSTREAM
+    end
     femit := (p: void*, n: int, c: void*): ret _szf_emit(c as _SzF*, p, n) end
     mut chain := Vector {} as Vector<int>
     mut pidx := -1
@@ -557,7 +583,8 @@ func _szf_stream(fp: void*, start: i64, avail: i64, s: _Sz, fi: int, out_start: 
             break
         end
         c := f.coders.get(out_idx)
-        if c.num_in != 1 or c.num_out != 1:
+        isb2 := c.id == (0x0303011B as i64) and c.num_in == 4
+        if (c.num_in != 1 and not isb2) or c.num_out != 1:
             ok = false
             break
         end
@@ -645,8 +672,13 @@ func _szf_stream(fp: void*, start: i64, avail: i64, s: _Sz, fi: int, out_start: 
             stages.push(fs as i64)
             sinks.push(ns as i64)
             nextp = ns
+            if fk == 4 and st == SEVENZIP_OK:
+                st = _szf_b2_open(fp, start, avail, s, fi, chain.get(k), password, memcap, depth, fs)
+            end
         end
-        st = _szf_source(rfp, roff, rsz, f.coders.get(chain.get(sk)), f.unpack.get(chain.get(sk)), memcap, nextp[0])
+        if st == SEVENZIP_OK:
+            st = _szf_source(rfp, roff, rsz, f.coders.get(chain.get(sk)), f.unpack.get(chain.get(sk)), memcap, nextp[0])
+        end
         mut k := stages.len() - 1
         until k >= 0:
             fs := stages.get(k) as _SzF*
@@ -655,11 +687,20 @@ func _szf_stream(fp: void*, start: i64, avail: i64, s: _Sz, fi: int, out_start: 
             end
             k--
         end
+        repeat stages.len() in q:
+            fs := stages.get(q) as _SzF*
+            if fs[0].err != 0 and (st == SEVENZIP_OK or st == SEVENZIP_IO):
+                st = fs[0].err
+            end
+        end
     end
     repeat stages.len() in q:
         fs := stages.get(q) as _SzF*
         mem.Free(fs[0].hist as void*)
         mem.Free(fs[0].carry as void*)
+        if fs[0].b2 != null:
+            _szb2_free(fs[0].b2 as _SzB2*)
+        end
         if fs[0].tmp != null:
             mem.Free(fs[0].tmp as void*)
         end
@@ -678,7 +719,7 @@ end
 
 func _szf_run(fp: void*, start: i64, avail: i64, s: _Sz, fi: int, password: str, memcap: i64, top: compress.FileSink*, x: _SzX*): int:
     f := s.folders.get(fi)
-    mut st := _szf_stream(fp, start, avail, s, fi, _sz_folder_main_out(f), password, memcap, top)
+    mut st := _szf_stream(fp, start, avail, s, fi, _sz_folder_main_out(f), password, memcap, top, 0)
     if st == _SZF_NOSTREAM:
         st = _szf_fallback(fp, start, avail, s, fi, password, memcap, top)
         if st == SEVENZIP_IO and x != null and x[0].done:

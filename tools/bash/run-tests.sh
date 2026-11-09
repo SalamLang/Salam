@@ -380,7 +380,7 @@ $msgs
 EOF_MSGS
         fi
         msg_present=""
-        nots=$(grep -oE '(EXPECT-NOT|انتظار-نه): .*' "$f" | sed -E 's/^(EXPECT-NOT|انتظار-نه): //' | tr -d '\r')
+        nots=$(grep -oE '(EXPECT-NOT|انتظار نه): .*' "$f" | sed -E 's/^(EXPECT-NOT|انتظار نه): //' | tr -d '\r')
         if [ -n "$nots" ]; then
             while IFS= read -r bad_msg; do
                 [ -n "$bad_msg" ] || continue
@@ -559,7 +559,7 @@ EOF_LAYOUT
                     [ -n "$bad_txt" ] || continue
                     grep -qF -- "$bad_txt" "$html" && lbad="$bad_txt"
                 done <<EOF_LAYOUT_NOT
-$(grep -oE '(EXPECT-NOT|انتظار-نه): .*' "$f" | sed -E 's/^(EXPECT-NOT|انتظار-نه): //' | tr -d '\r')
+$(grep -oE '(EXPECT-NOT|انتظار نه): .*' "$f" | sed -E 's/^(EXPECT-NOT|انتظار نه): //' | tr -d '\r')
 EOF_LAYOUT_NOT
             else
                 lmiss="(no html produced)"

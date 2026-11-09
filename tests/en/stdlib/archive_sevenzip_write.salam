@@ -1,0 +1,125 @@
+package main
+
+import archive
+import compress
+import testing
+import os
+import filepath
+import mem
+
+func make_data(n: int, seed: int): compress.ByteBuf:
+    mut b := compress.NewByteBuf()
+    mut x := seed
+    repeat n:
+        x = (x * 1103515245 + 12345) & 0x7fffffff
+        if (n / 300) % 2 == 0:
+            compress.BufPush(b, 97 + (x >> 16) % 5)
+        else:
+            compress.BufPush(b, 32 + (x >> 16) % 90)
+        end
+    end
+    ret b
+end
+
+func same_file(path: str, want: compress.ByteBuf, len: int): bool:
+    mut ok := false
+    mut got := archive.ReadBinaryFile(path, ok)
+    r := ok and got.len == len and compress.CRC32(got.data, len) == compress.CRC32(want.data, len)
+    compress.BufFree(got)
+    ret r
+end
+
+func check_file(arc: str, dir: str, a: compress.ByteBuf, b: compress.ByteBuf):
+    mut sf := archive.SevenZipOpenFile(arc, "")
+    testing.AssertEqInt(sf.status, 0)
+    dest := filepath.Join(dir, "got.bin")
+    testing.AssertEqInt(archive.SevenZipFileExtractTo(sf, "dir/path.txt", dest, 0 as i64, 0 as i64), 0)
+    testing.AssertTrue(same_file(dest, a, a.len))
+    testing.AssertEqInt(archive.SevenZipFileExtractTo(sf, "mem.txt", dest, 0 as i64, 0 as i64), 0)
+    testing.AssertTrue(same_file(dest, b, b.len))
+    testing.AssertEqInt(archive.SevenZipFileExtractTo(sf, "tiny.txt", dest, 0 as i64, 0 as i64), 0)
+    mut rok := false
+    mut tiny := archive.ReadBinaryFile(dest, rok)
+    testing.AssertTrue(rok and compress.BufToStrUnsafe(tiny) == "hi")
+    compress.BufFree(tiny)
+    archive.SevenZipFileClose(sf)
+    os.Remove(dest)
+end
+
+func check_mem(arc: str, a: compress.ByteBuf, b: compress.ByteBuf):
+    mut rok := false
+    mut whole := archive.ReadBinaryFile(arc, rok)
+    testing.AssertTrue(rok)
+    mut ok := false
+    mut one := archive.SevenZipExtractByName(whole.data, whole.len, "dir/path.txt", ok)
+    testing.AssertTrue(ok and one.len == a.len and compress.CRC32(one.data, one.len) == compress.CRC32(a.data, a.len))
+    compress.BufFree(one)
+    mut two := archive.SevenZipExtractByName(whole.data, whole.len, "mem.txt", ok)
+    testing.AssertTrue(ok and two.len == b.len and compress.CRC32(two.data, two.len) == compress.CRC32(b.data, b.len))
+    compress.BufFree(two)
+    mut three := archive.SevenZipExtractByName(whole.data, whole.len, "tiny.txt", ok)
+    testing.AssertTrue(ok and compress.BufToStrUnsafe(three) == "hi")
+    compress.BufFree(three)
+    ents := archive.SevenZipList(whole.data, whole.len)
+    testing.AssertEqInt(ents.len(), 5)
+    compress.BufFree(whole)
+end
+
+func main(): int:
+    dir := filepath.Join(os.TempDir(), "salam_sevenzip_write_test")
+    defer mem.Free(dir as void*)
+    os.RemoveAll(dir)
+    os.MkdirAll(dir)
+
+    mut a := make_data(60000, 1)
+    mut b := make_data(9000, 2)
+    src := filepath.Join(dir, "a.in")
+    testing.AssertTrue(archive.WriteBinaryFile(src, a.data, a.len))
+
+    mut files := Vector {} as Vector<archive.SevenZipFileInput>
+    files.push(archive.MakeSevenZipFileInput("dir/", null, 0, true))
+    files.push(archive.MakeSevenZipFilePath("dir/path.txt", src))
+    files.push(archive.MakeSevenZipFileInput("mem.txt", b.data, b.len, false))
+    files.push(archive.MakeSevenZipFileInput("empty.txt", null, 0, false))
+    files.push(archive.MakeSevenZipFileInput("tiny.txt", "hi" as void*, 2, false))
+
+    each lv in [0, 1, 5, 9, 40]:
+        arc := filepath.Join(dir, "level.7z")
+        testing.AssertTrue(archive.SevenZipCreateFileLevel(files, arc, lv))
+        check_file(arc, dir, a, b)
+        check_mem(arc, a, b)
+        mut packed := archive.SevenZipCreateLevel(files, lv)
+        testing.AssertTrue(packed.len > 32)
+        mut ok := false
+        mut one := archive.SevenZipExtractByName(packed.data, packed.len, "dir/path.txt", ok)
+        testing.AssertTrue(ok and one.len == a.len)
+        compress.BufFree(one)
+        if lv > 0:
+            testing.AssertTrue(packed.len < a.len)
+        end
+        compress.BufFree(packed)
+    end
+
+    plain := filepath.Join(dir, "plain.7z")
+    testing.AssertTrue(archive.SevenZipCreateFile(files, plain))
+    mut stored := archive.SevenZipCreate(files)
+    testing.AssertTrue(stored.len > a.len + b.len)
+    compress.BufFree(stored)
+
+    mut bad := Vector {} as Vector<archive.SevenZipFileInput>
+    bad.push(archive.MakeSevenZipFileInput("ok.txt", b.data, b.len, false))
+    bad.push(archive.MakeSevenZipFilePath("gone.txt", filepath.Join(dir, "no_such_input")))
+    never := filepath.Join(dir, "never.7z")
+    testing.AssertFalse(archive.SevenZipCreateFile(bad, never))
+    testing.AssertFalse(os.Exists(never))
+    testing.AssertFalse(archive.SevenZipCreateFileLevel(bad, never, 5))
+    testing.AssertFalse(os.Exists(never))
+    mut none := archive.SevenZipCreateLevel(bad, 3)
+    testing.AssertEqInt(none.len, 0)
+    compress.BufFree(none)
+
+    compress.BufFree(a)
+    compress.BufFree(b)
+    os.RemoveAll(dir)
+    ret testing.Summary()
+end

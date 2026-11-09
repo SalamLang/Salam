@@ -14,6 +14,8 @@
 
 package compress
 
+import mem
+
 @en "BitWriter"
 @fa "نویسنده بیت"
 pub struct BitWriter:
@@ -49,6 +51,27 @@ pub struct BitReader:
     @en "bad"
     @fa "خراب"
     pub bad: bool = false
+    @en "fp"
+    @fa "پرونده"
+    pub fp: void* = null
+    @en "left"
+    @fa "باقی مانده"
+    pub left: i64 = 0 as i64
+end
+
+func _br_refill(r &: BitReader): bool:
+    if r.fp == null or r.left <= (0 as i64):
+        ret false
+    end
+    want := r.left > (65536 as i64) ? 65536 : (r.left as int)
+    got := fread(r.data, 1 as u64, want as u64, r.fp) as int
+    if got <= 0:
+        ret false
+    end
+    r.len = got
+    r.pos = 0
+    r.left -= got as i64
+    ret true
 end
 
 @en "NewBitWriter"
@@ -114,6 +137,27 @@ pub func NewBitReader(p: void*, n: int): BitReader:
     ret BitReader { data = p, len = n, pos = 0, acc = 0, nbits = 0, bad = false }
 end
 
+@en "NewFileBitReader"
+@fa "خواننده بیت از پرونده"
+pub func NewFileBitReader(fp: void*, off: i64, len: i64): BitReader:
+    mut r := BitReader { data = null, len = 0, pos = 0, acc = 0, nbits = 0, bad = false, fp = fp, left = len }
+    if not FileSeek(fp, off):
+        r.bad = true
+        ret r
+    end
+    r.data = mem.Allocate(65536 as u64)
+    ret r
+end
+
+@en "FileBitReaderFree"
+@fa "آزادسازی خواننده بیت پرونده"
+pub func FileBitReaderFree(r &: BitReader):
+    if r.fp != null and r.data != null:
+        mem.Free(r.data)
+        r.data = null
+    end
+end
+
 @en "BitReaderFromBuf"
 @fa "خواننده بیت از بافر"
 pub func BitReaderFromBuf(b: ByteBuf): BitReader:
@@ -124,7 +168,10 @@ end
 @fa "خواندن بیت"
 pub func BitReadBit(r &: BitReader): int:
     if r.nbits == 0:
-        if r.bad or r.pos >= r.len:
+        if r.bad:
+            ret 0
+        end
+        if r.pos >= r.len and not _br_refill(r):
             r.bad = true
             ret 0
         end

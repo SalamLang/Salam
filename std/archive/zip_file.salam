@@ -1,0 +1,289 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package archive
+
+import compress
+import filepath
+import mem
+import os
+import str
+
+const _ZIPF_TAIL := 131072
+
+@en "ZipFile"
+@fa "پرونده زیپ"
+pub struct ZipFile:
+    @en "path"
+    @fa "مسیر"
+    pub path: str = ""
+    @en "count"
+    @fa "شمار"
+    pub count: i64 = 0 as i64
+    @en "size"
+    @fa "اندازه"
+    pub size: i64 = 0 as i64
+    @en "status"
+    @fa "وضعیت"
+    pub status: int = 0
+    @en "cd"
+    @fa "فهرست مرکزی"
+    pub cd: compress.ByteBuf = compress.ByteBuf { data = null, len = 0, cap = 0 }
+end
+
+func _zipf_read_cd(fp: void*, zf &: ZipFile, cd_off: i64, csize: i64): bool:
+    if cd_off < (0 as i64) or csize < (0 as i64) or cd_off + csize > zf.size or csize > (2000000000 as i64):
+        ret false
+    end
+    zf.cd = compress.NewByteBufCap(csize as int)
+    if csize > (0 as i64):
+        got := compress.FileReadAt(fp, cd_off, zf.cd.data, csize as int)
+        if (got as i64) != csize:
+            ret false
+        end
+    end
+    zf.cd.len = csize as int
+    ret true
+end
+
+func _zipf_to_sink(fp: void*, size: i64, r: _ZipRec, sink &: compress.FileSink): int:
+    if (r.flags & 1) != 0:
+        ret ZIP_ENCRYPTED
+    end
+    if r.method != 0 and r.method != 8:
+        ret ZIP_UNSUPPORTED
+    end
+    if r.uncomp < (0 as i64) or r.comp < (0 as i64) or r.local < (0 as i64) or r.local + (30 as i64) > size:
+        ret ZIP_CORRUPT
+    end
+    if sink.cap > (0 as i64) and r.uncomp > sink.cap:
+        ret ZIP_TOO_BIG
+    end
+    hdr := mem.Allocate(30 as u64)
+    got := compress.FileReadAt(fp, r.local, hdr, 30)
+    mut data_start := 0 as i64
+    mut good := got == 30 and LEGet32(hdr, 0) == 0x04034b50
+    if good:
+        data_start = r.local + (30 as i64) + (LEGet16(hdr, 26) as i64) + (LEGet16(hdr, 28) as i64)
+        good = data_start + r.comp <= size
+    end
+    mem.Free(hdr)
+    if not good:
+        ret ZIP_CORRUPT
+    end
+    mut ok := true
+    if r.method == 0:
+        ok = r.comp == r.uncomp and compress.SinkCopyFrom(sink, fp, data_start, r.comp)
+    else:
+        mut br := compress.NewFileBitReader(fp, data_start, r.comp)
+        ok = not br.bad and compress.RawInflateToSink(br, sink, false)
+        compress.FileBitReaderFree(br)
+    end
+    if sink.over:
+        ret ZIP_TOO_BIG
+    end
+    if sink.failed:
+        ret ZIP_IO
+    end
+    if not ok or sink.written != r.uncomp:
+        ret ZIP_CORRUPT
+    end
+    if sink.crc != r.crc:
+        ret ZIP_BAD_CRC
+    end
+    ret ZIP_OK
+end
+
+func _zipf_write_one(fp: void*, size: i64, r: _ZipRec, outpath: str, cap: i64): int:
+    mut sink := compress.SinkOpen(outpath, cap)
+    if sink.failed:
+        ret ZIP_IO
+    end
+    st := _zipf_to_sink(fp, size, r, sink)
+    closed := compress.SinkClose(sink)
+    if st == ZIP_OK and not closed:
+        os.Remove(outpath)
+        ret ZIP_IO
+    end
+    if st != ZIP_OK:
+        os.Remove(outpath)
+    end
+    ret st
+end
+
+@en "ZipOpenFile"
+@fa "بازکردن پرونده زیپ"
+pub func ZipOpenFile(path: str): ZipFile:
+    mut zf := ZipFile { path = str.Clone(path), status = ZIP_CORRUPT }
+    fp := compress.FileOpenRead(path)
+    if fp == null:
+        zf.status = ZIP_IO
+        ret zf
+    end
+    zf.size = compress.FileSize(fp)
+    mut tn := _ZIPF_TAIL
+    if (tn as i64) > zf.size: tn = zf.size as int end
+    if tn < 22:
+        compress.FileClose(fp)
+        ret zf
+    end
+    tail := mem.Allocate(tn as u64)
+    got := compress.FileReadAt(fp, zf.size - (tn as i64), tail, tn)
+    mut eocd := 0
+    mut found := got == tn and _zip_find_eocd(tail, tn, eocd)
+    if found:
+        mut count := LEGet16(tail, eocd + 10) as i64
+        mut cd_off := _zip_u32(tail, eocd + 16)
+        mut csize := _zip_u32(tail, eocd + 12)
+        ffff := 0xFFFF as i64
+        ffffffff := 0xFFFFFFFF as i64
+        if count == ffff or cd_off == ffffffff or csize == ffffffff:
+            if eocd >= 20 and LEGet32(tail, eocd - 20) == 0x07064b50:
+                z := _zip_get64(tail, eocd - 12)
+                rec := mem.Allocate(56 as u64)
+                if z >= (0 as i64) and compress.FileReadAt(fp, z, rec, 56) == 56 and LEGet32(rec, 0) == 0x06064b50:
+                    count = _zip_get64(rec, 32)
+                    csize = _zip_get64(rec, 40)
+                    cd_off = _zip_get64(rec, 48)
+                else:
+                    found = false
+                end
+                mem.Free(rec)
+            end
+        end
+        if found and count >= (0 as i64) and _zipf_read_cd(fp, zf, cd_off, csize):
+            zf.count = count
+            zf.status = ZIP_OK
+        end
+    end
+    mem.Free(tail)
+    compress.FileClose(fp)
+    ret zf
+end
+
+@en "ZipFileClose"
+@fa "بستن پرونده زیپ"
+pub func ZipFileClose(zf &: ZipFile):
+    compress.BufFree(zf.cd)
+    if zf.path.len() > 0:
+        mem.Free(zf.path as void*)
+    end
+    zf.path = ""
+    zf.count = 0 as i64
+end
+
+@en "ZipFileEntries"
+@fa "مدخل های پرونده زیپ"
+pub func ZipFileEntries(zf &: ZipFile): Vector<Entry>:
+    mut out := Vector {} as Vector<Entry>
+    if zf.status != ZIP_OK:
+        ret out
+    end
+    mut pos := 0
+    mut k := 0 as i64
+    until k < zf.count:
+        mut r := _ZipRec {}
+        if not _zip_rec(zf.cd.data, zf.cd.len, pos, r):
+            zf.status = ZIP_CORRUPT
+            break
+        end
+        out.push(_zip_entry_of(r))
+        pos = r.next
+        k++
+    end
+    ret out
+end
+
+@en "ZipFileExtractTo"
+@fa "استخراج از پرونده زیپ به پرونده"
+pub func ZipFileExtractTo(zf &: ZipFile, name: str, destpath: str, cap: i64): int:
+    if zf.status != ZIP_OK:
+        ret zf.status
+    end
+    fp := compress.FileOpenRead(zf.path)
+    if fp == null:
+        ret ZIP_IO
+    end
+    mut pos := 0
+    mut k := 0 as i64
+    mut st := ZIP_NOT_FOUND
+    until k < zf.count:
+        mut r := _ZipRec {}
+        if not _zip_rec(zf.cd.data, zf.cd.len, pos, r):
+            st = ZIP_CORRUPT
+            break
+        end
+        hit := r.name == name
+        if hit:
+            st = _zipf_write_one(fp, zf.size, r, destpath, cap)
+        end
+        _zip_free_name(r.name)
+        if hit:
+            break
+        end
+        pos = r.next
+        k++
+    end
+    compress.FileClose(fp)
+    ret st
+end
+
+@en "ZipFileExtractAll"
+@fa "استخراج همه از پرونده زیپ"
+pub func ZipFileExtractAll(zf &: ZipFile, destdir: str, cap: i64): int:
+    if zf.status != ZIP_OK:
+        ret zf.status
+    end
+    fp := compress.FileOpenRead(zf.path)
+    if fp == null:
+        ret ZIP_IO
+    end
+    mut first := ZIP_OK
+    mut pos := 0
+    mut k := 0 as i64
+    until k < zf.count:
+        mut r := _ZipRec {}
+        if not _zip_rec(zf.cd.data, zf.cd.len, pos, r):
+            if first == ZIP_OK: first = ZIP_CORRUPT end
+            break
+        end
+        mut st := ZIP_OK
+        if not _safe_entry_name(r.name):
+            st = ZIP_UNSAFE_PATH
+        else:
+            outpath := filepath.Join(destdir, r.name)
+            if _zip_is_dir_name(r.name):
+                EnsureDir(outpath)
+            else:
+                parent := filepath.Dir(outpath)
+                EnsureDir(parent)
+                mem.Free(parent as void*)
+                st = _zipf_write_one(fp, zf.size, r, outpath, cap)
+                if st == ZIP_OK:
+                    when := _zip_dos_to_unix(r.dos_date, r.dos_time)
+                    if when > (0 as i64): _tar_set_mtime(outpath, when) end
+                end
+            end
+            mem.Free(outpath as void*)
+        end
+        if st != ZIP_OK and first == ZIP_OK:
+            first = st
+        end
+        _zip_free_name(r.name)
+        pos = r.next
+        k++
+    end
+    compress.FileClose(fp)
+    ret first
+end

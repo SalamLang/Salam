@@ -1,0 +1,122 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import archive
+import compress
+import filepath
+import mem
+import os
+
+func cat(a: str, b: str): str:
+    ret filepath.Join(a, b)
+end
+
+func fill(n: int): compress.ByteBuf:
+    mut b := compress.NewByteBufCap(n)
+    repeat n in i:
+        compress.BufPush(b, (i * 7 + i / 13) & 255)
+    end
+    ret b
+end
+
+func main:
+    dir := cat(os.TempDir(), "salam_zip_file_demo")
+    os.RemoveAll(dir)
+    os.MkdirAll(dir)
+    mut data := fill(300000)
+    mut flat := compress.NewByteBuf()
+    repeat 200000:
+        compress.BufPush(flat, 65)
+    end
+    mut files := Vector {} as Vector<archive.ZipFileInput>
+    files.push(archive.MakeZipFileInput("docs/", null, 0, 0))
+    files.push(archive.MakeZipFileInput("docs/mixed.bin", data.data, data.len, 8))
+    files.push(archive.MakeZipFileInput("docs/flat.txt", flat.data, flat.len, 8))
+    files.push(archive.MakeZipFileInput("stored.bin", data.data, 1000, 0))
+    files.push(archive.MakeZipFileInput("../escape.txt", flat.data, 10, 0))
+    mut small := archive.ZipCreate(files)
+    mut wide := archive.ZipCreate64(files)
+    path1 := cat(dir, "small.zip")
+    path2 := cat(dir, "wide.zip")
+    println archive.WriteBinaryFileBuf(path1, small), archive.WriteBinaryFileBuf(path2, wide)
+
+    mut names := Vector {} as Vector<str>
+    names.push(path1)
+    names.push(path2)
+    repeat names.len() in n:
+        mut zf := archive.ZipOpenFile(names.get(n))
+        println "open", zf.status, zf.count, zf.size == (names.get(n) == path1 ? small.len : wide.len) as i64
+        mut es := archive.ZipFileEntries(zf)
+        each e in es:
+            println " ", e.name, e.size, e.compressed_size, e.method, e.is_dir
+        end
+        archive.FreeEntries(es)
+        out1 := cat(dir, "mixed.out")
+        println "mixed", archive.ZipFileExtractTo(zf, "docs/mixed.bin", out1, 0 as i64)
+        mut ok := false
+        mut back := archive.ReadBinaryFile(out1, ok)
+        println ok, back.len, compress.CRC32Buf(back) == compress.CRC32Buf(data)
+        compress.BufFree(back)
+        println "flat", archive.ZipFileExtractTo(zf, "docs/flat.txt", out1, 0 as i64), os.FileSize(out1)
+        println "stored", archive.ZipFileExtractTo(zf, "stored.bin", out1, 0 as i64), os.FileSize(out1)
+        println "cap too small", archive.ZipFileExtractTo(zf, "docs/mixed.bin", out1, 1000 as i64), os.Exists(out1)
+        println "cap exact", archive.ZipFileExtractTo(zf, "docs/flat.txt", out1, 200000 as i64), os.FileSize(out1)
+        println "missing", archive.ZipFileExtractTo(zf, "nothing", out1, 0 as i64)
+        out2 := cat(dir, "all")
+        os.RemoveAll(out2)
+        println "all", archive.ZipFileExtractAll(zf, out2, 0 as i64), archive.ZipStatusText(archive.ZIP_UNSAFE_PATH)
+        p3 := cat(out2, "docs/flat.txt")
+        p4 := cat(out2, "stored.bin")
+        p5 := cat(dir, "escape.txt")
+        println os.FileSize(p3), os.FileSize(p4), os.Exists(p5)
+        archive.ZipFileClose(zf)
+        mem.Free(out1 as void*)
+        mem.Free(out2 as void*)
+        mem.Free(p3 as void*)
+        mem.Free(p4 as void*)
+        mem.Free(p5 as void*)
+    end
+
+    mut bad := compress.BufClone(small)
+    bp := bad.data as u8*
+    bp[200] = ((bp[200] as int) ^ 0x55) as u8
+    path3 := cat(dir, "bad.zip")
+    println archive.WriteBinaryFileBuf(path3, bad)
+    mut zb := archive.ZipOpenFile(path3)
+    out3 := cat(dir, "bad.out")
+    println "damaged", archive.ZipFileExtractTo(zb, "docs/mixed.bin", out3, 0 as i64) != archive.ZIP_OK, os.Exists(out3)
+    archive.ZipFileClose(zb)
+    path4 := cat(dir, "none.zip")
+    mut zn := archive.ZipOpenFile(path4)
+    println "no file", zn.status, archive.ZipStatusText(zn.status)
+    archive.ZipFileClose(zn)
+
+    os.RemoveAll(dir)
+    names.free()
+    files.free()
+    compress.BufFree(data)
+    compress.BufFree(flat)
+    compress.BufFree(small)
+    compress.BufFree(wide)
+    compress.BufFree(bad)
+    mem.Free(dir as void*)
+    mem.Free(path1 as void*)
+    mem.Free(path2 as void*)
+    mem.Free(path3 as void*)
+    mem.Free(path4 as void*)
+    mem.Free(out3 as void*)
+    ret 0
+end

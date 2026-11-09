@@ -1579,6 +1579,7 @@ end
   sets through `RarReadVolumes`/`RarOpenVolumes`, encrypted and split too;
   `RarReadAll` restores modes and times and makes safe symlinks; entries must be
   under 2 GB (`RAR_TOO_BIG`); `RarCreate` writes stored RAR 5.
+  Big zips: `ZipOpenFile(path)` reads only the central directory; `ZipFileEntries`, `ZipFileExtractTo(zf, name, dest, cap)` and `ZipFileExtractAll(zf, dir, cap)` stream to disk in 64 KiB pieces with 64 bit offsets (zip64), memory stays small; `cap` is a byte limit (0 none), `ZIP_TOO_BIG` only past it; `ZipFileClose`.
   7z: `SevenZipCreate(files)`/`SevenZipCreateFile` write stored archives from `SevenZipFileInput` (`MakeSevenZipFileInput`; modes, mtimes, symlinks). Reading: `IsSevenZip`, `SevenZipList`, `SevenZipExtractByName`, `SevenZipExtractAll`, and `SevenZipOpen(p, n, password)` (also finds a self-extracting prefix) or `SevenZipOpenVolumes(vols, password)` for `.7z.001` sets (`SevenZipReadVolumes`, `SevenZipClose`) with `SevenZipEntries`/`SevenZipRead`/`SevenZipReadAll` (restores modes, mtimes, symlinks) (LZMA, LZMA2, PPMd, BZip2, Deflate, Deflate64, BCJ2, branch/swap/delta filters, AES; `SEVENZIP_*` status, CRC checked).
 - **`excel`**: xlsx, ods and csv workbooks: `Open Save New NewWorkbook NewSheet` with sheet methods `set_string set_number get_cell get_string row_count ...`, `CellRef ParseCellRef SheetToJSON SheetToCSV`. No `.xls`
   (`IsXLS` detects it); the format comes from the file extension; formulas

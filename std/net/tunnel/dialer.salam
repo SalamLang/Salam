@@ -16,6 +16,7 @@
 @fa "تونل"
 package tunnel
 
+import sync
 import net.tcp
 
 @en "Dialer"
@@ -50,14 +51,45 @@ pub struct DirectDialer:
     @fa "مهلت اتصال"
     pub timeout_ms: int = 10000
 
+    @en "resolver"
+    @fa "حل‌کننده"
+    pub resolver: dyn HostResolver = NullResolver {}
+    @en "has_resolver"
+    @fa "حل‌کننده دارد"
+    pub has_resolver: bool = false
+    @en "prefer_v6"
+    @fa "ترجیح نسخه شش"
+    pub prefer_v6: bool = false
+
     @en "Dial"
     @fa "اتصال"
     pub func Dial(target: Addr): dyn Stream:
         if not target.valid: ret ClosedStream {} end
-        c := tcp.DialTimeout(target.host, target.port, this.timeout_ms)
-        if not tcp.ConnOk(c): ret ClosedStream {} end
-        tcp.SetNoDelay(c, true)
-        ret TcpStream { conn = c }
+        if target.kind == ADDR_DOMAIN and this.has_resolver:
+            s := this._dial_resolved(target)
+            if s.Ok(): ret s end
+        end
+        ret _wrap_dialed(tcp.DialTimeout(target.host, target.port, this.timeout_ms))
+    end
+
+    func _dial_resolved(target: Addr): dyn Stream:
+        names := this.resolver.Lookup(target.host).ips
+        mut ordered := Vector {} as Vector<str>
+        defer ordered.free()
+        repeat 2 in pass:
+            repeat names.len() in i:
+                is6 := names[i].includes(":")
+                if (pass == 0) == (is6 == this.prefer_v6): ordered.push(names[i]) end
+            end
+        end
+        deadline := sync.NowMs() + (this.timeout_ms as i64)
+        repeat ordered.len() in i:
+            left := deadline - sync.NowMs()
+            if left <= 0: break end
+            c := tcp.DialTimeout(ordered[i], target.port, left as int)
+            if tcp.ConnOk(c): ret _wrap_dialed(c) end
+        end
+        ret ClosedStream {}
     end
 
     @en "Name"
@@ -77,7 +109,7 @@ pub struct BlockDialer:
     @en "Dial"
     @fa "اتصال"
     pub func Dial(_target: Addr): dyn Stream:
-        this.refused += 1
+        this.refused++
         ret ClosedStream {}
     end
 
@@ -204,6 +236,12 @@ pub struct Fallback:
     pub func Name(): str:
         ret "fallback"
     end
+end
+
+func _wrap_dialed(c: tcp.Conn): dyn Stream:
+    if not tcp.ConnOk(c): ret ClosedStream {} end
+    tcp.SetNoDelay(c, true)
+    ret TcpStream { conn = c }
 end
 
 @en "NewChain"

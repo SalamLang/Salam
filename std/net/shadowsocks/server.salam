@@ -23,6 +23,9 @@ import net.tunnel
 import tls
 
 const RELAY_BUF := 16384
+const RELAY_HALF_MS := 120000
+const PROBE_MIN_MS := 1500
+const PROBE_SPAN_MS := 3000
 
 struct _PipeJob:
     pub st: ConnState* = null
@@ -163,10 +166,26 @@ func _server_state(ss: ServerState*): ConnState*:
     ret st
 end
 
-func _server_conn(ss: ServerState*, raw: tcp.Conn): Conn:
+func _probe_drain(st: ConnState*):
+    tcp.SetReadDeadline(st.sock, PROBE_MIN_MS + _rand_int(PROBE_SPAN_MS))
+    limit := 4096 + _rand_int(60000)
+    mut total := 0
+    until total < limit:
+        n := tcp.ReadBytes(st.sock, st.rd, RD_SIZE)
+        if n <= 0:
+            break
+        end
+        total += n
+    end
+end
+
+func _server_conn(ss: ServerState*, raw: tcp.Conn, drain: bool): Conn:
     st := _server_state(ss)
     st.sock = raw
     if not _handshake(ss, st):
+        if drain:
+            _probe_drain(st)
+        end
         _raw_shutdown(st)
         tcp.Close(raw)
         _free_state(st)
@@ -191,12 +210,16 @@ func _pipe_down(job: _PipeJob*):
         end
     end
     mem.Free(buf)
-    _raw_shutdown(st)
-    rawsock.Shutdown(rawsock.Socket { fd = job.tgt.fd })
+    if st.use_up:
+        _raw_shutdown(st)
+    else:
+        _shut_wr(st.sock.fd)
+        tcp.SetReadDeadline(st.sock, RELAY_HALF_MS)
+    end
 end
 
 func _serve_one(ss: ServerState*, raw: tcp.Conn, handler: func (Conn)):
-    c := _server_conn(ss, raw)
+    c := _server_conn(ss, raw, true)
     if c.st != null:
         handler(c)
     end
@@ -210,15 +233,7 @@ func _serve_next(ss: ServerState*, handler: func (Conn), jobs: chan.Chan<i64>):
     end
 end
 
-@en "Listen"
-@fa "گوش دادن"
-pub func Listen(port: int, method: str, password: str): Server:
-    ret ListenObfs(port, method, password, "")
-end
-
-@en "ListenObfs"
-@fa "گوش دادن با پوشش"
-pub func ListenObfs(port: int, method: str, password: str, obfs: str): Server:
+func _listen(host: str, port: int, method: str, password: str, obfs: str): Server:
     m := LookupMethod(method)
     if not m.ok:
         ret Server {}
@@ -227,7 +242,12 @@ pub func ListenObfs(port: int, method: str, password: str, obfs: str): Server:
     if key.bad:
         ret Server {}
     end
-    ls := tcp.Bind(port)
+    mut ls := tcp.Server {}
+    if host == "":
+        ls = tcp.Bind(port)
+    else:
+        ls = tcp.Server { fd = rawsock.ListenOn(host, port, rawsock.SOCK_STREAM).fd, port = port }
+    end
     if not tcp.Ok(ls):
         mut k := key
         BufFree(k)
@@ -246,6 +266,24 @@ pub func ListenObfs(port: int, method: str, password: str, obfs: str): Server:
     ss.stop = mem.AllocateZeroed(8 as u64) as i64*
     ss.obfs_mode = obfs
     ret Server { st = ss }
+end
+
+@en "Listen"
+@fa "گوش دادن"
+pub func Listen(port: int, method: str, password: str): Server:
+    ret ListenObfs(port, method, password, "")
+end
+
+@en "ListenOn"
+@fa "گوش دادن روی نشانی"
+pub func ListenOn(host: str, port: int, method: str, password: str, obfs: str): Server:
+    ret _listen(host, port, method, password, obfs)
+end
+
+@en "ListenObfs"
+@fa "گوش دادن با پوشش"
+pub func ListenObfs(port: int, method: str, password: str, obfs: str): Server:
+    ret _listen("", port, method, password, obfs)
 end
 
 @en "AddUser"
@@ -292,7 +330,7 @@ pub func Accept(s: Server): Conn:
         if not tcp.ConnOk(raw):
             done = true
         else:
-            res = _server_conn(ss, raw)
+            res = _server_conn(ss, raw, false)
             if res.st != null:
                 done = true
             end
@@ -334,6 +372,7 @@ pub func Relay(c: Conn):
     th := spawn(_pipe_down, job)
     buf := mem.Allocate(RELAY_BUF as u64)
     mut go := true
+    mut hard := false
     until go:
         n := Read(c, buf, RELAY_BUF)
         if n <= 0:
@@ -342,12 +381,18 @@ pub func Relay(c: Conn):
             w := tcp.WriteBytes(tgt, buf, n)
             if w < n:
                 go = false
+                hard = true
             end
         end
     end
     mem.Free(buf)
-    _raw_shutdown(st)
-    rawsock.Shutdown(rawsock.Socket { fd = tgt.fd })
+    if hard:
+        _raw_shutdown(st)
+        rawsock.Shutdown(rawsock.Socket { fd = tgt.fd })
+    else:
+        _shut_wr(tgt.fd)
+        tcp.SetReadDeadline(tgt, RELAY_HALF_MS)
+    end
     join(th)
     mem.Free(job as void*)
     tcp.Close(tgt)

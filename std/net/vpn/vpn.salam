@@ -45,6 +45,21 @@ pub struct Options:
     @en "fragment_delay_ms"
     @fa "تاخیر تکه"
     pub fragment_delay_ms: int = 5
+    @en "fragment_mode"
+    @fa "حالت تکه تکه کردن"
+    pub fragment_mode: str = "tcp"
+    @en "fragment_sni"
+    @fa "برش نام سرور"
+    pub fragment_sni: bool = false
+    @en "fragment_writes"
+    @fa "شمار نوشتن های تکه شده"
+    pub fragment_writes: int = 1
+    @en "read_timeout_ms"
+    @fa "مهلت بی کاری خواندن"
+    pub read_timeout_ms: int = 0
+    @en "write_timeout_ms"
+    @fa "مهلت بی کاری نوشتن"
+    pub write_timeout_ms: int = 0
     @en "use_doh"
     @fa "استفاده از دی او اچ"
     pub use_doh: bool = false
@@ -356,6 +371,16 @@ func _vmess_security(method: str): int:
     ret vmess.SecAES128GCM
 end
 
+func _fragment_into(s &: transport.Settings):
+    s.fragment = true
+    s.fragment_min = _opts.fragment_min
+    s.fragment_max = _opts.fragment_max
+    s.fragment_delay_ms = _opts.fragment_delay_ms
+    s.fragment_mode = _opts.fragment_mode
+    s.fragment_sni = _opts.fragment_sni
+    s.fragment_writes = _opts.fragment_writes
+end
+
 @en "StreamSettings"
 @fa "تنظیمات جریان"
 pub func StreamSettings(raw: str): transport.Settings:
@@ -377,12 +402,62 @@ pub func StreamSettings(raw: str): transport.Settings:
     p := json.Get(w, "path")
     if p.len() > 0: s.path = p end
     s.host = json.Get(json.Get(w, "headers"), "Host")
+    if json.Get(raw, "security") == "reality":
+        s.security = "reality"
+        s.tls = false
+        r := json.Get(raw, "realitySettings")
+        s.reality.server_name = json.Get(r, "serverName")
+        s.reality.public_key = json.Get(r, "publicKey")
+        s.reality.short_id = json.Get(r, "shortId")
+        s.reality.spider_x = json.Get(r, "spiderX")
+        fp := json.Get(r, "fingerprint")
+        if fp.len() > 0: s.reality.fingerprint = fp end
+        s.sni = s.reality.server_name
+        s.reality_server.private_key = json.Get(r, "privateKey")
+        s.reality_server.dest = json.Get(r, "dest")
+        names := json.Items(json.Get(r, "serverNames"))
+        defer names.free()
+        mut nl := ""
+        repeat names.len() in i:
+            if i > 0: nl += "," end
+            nl += json.Unquote(names[i])
+        end
+        s.reality_server.server_names = nl
+        ids := json.Items(json.Get(r, "shortIds"))
+        defer ids.free()
+        mut il := ""
+        repeat ids.len() in i:
+            if i > 0: il += "," end
+            il += json.Unquote(ids[i])
+        end
+        s.reality_server.short_ids = il
+    end
+    if s.network == "grpc":
+        g := json.Get(raw, "grpcSettings")
+        s.service_name = json.Get(g, "serviceName")
+        if json.Get(g, "multiMode") == "true": s.grpc_mode = "multi" end
+    end
+    tmo := json.Get(raw, "timeouts")
+    if tmo.len() > 0:
+        s.read_timeout_ms = json.Get(tmo, "read").to_int()
+        s.write_timeout_ms = json.Get(tmo, "write").to_int()
+    end
     frag := json.Get(raw, "fragment")
-    if frag.len() > 0 and s.tls:
-        s.fragment = true
-        s.fragment_min = _opts.fragment_min
-        s.fragment_max = _opts.fragment_max
-        s.fragment_delay_ms = _opts.fragment_delay_ms
+    if frag.len() > 0 and (s.tls or s.security == "reality"):
+        _fragment_into(s)
+        mode := json.Get(frag, "mode")
+        if mode.len() > 0: s.fragment_mode = mode end
+        if json.Get(frag, "sni") == "true": s.fragment_sni = true end
+        w := json.Get(frag, "writes").to_int()
+        if w > 0: s.fragment_writes = w end
+        lo := json.Get(frag, "min").to_int()
+        hi := json.Get(frag, "max").to_int()
+        if lo > 0 or hi > 0:
+            s.fragment_min = lo
+            s.fragment_max = hi
+        end
+        dl := json.Get(frag, "delay").to_int()
+        if dl > 0: s.fragment_delay_ms = dl end
     end
     ret s
 end
@@ -392,11 +467,24 @@ end
 pub func NodeSettings(n: tunnel.Node): transport.Settings:
     mut s := transport.Settings { network = n.network, tls = n.tls, sni = n.sni, alpn = n.alpn, fingerprint = n.fingerprint, allow_insecure = n.allow_insecure, host = n.host_header }
     if n.path.len() > 0: s.path = n.path end
-    if s.tls and _opts.fragment:
-        s.fragment = true
-        s.fragment_min = _opts.fragment_min
-        s.fragment_max = _opts.fragment_max
-        s.fragment_delay_ms = _opts.fragment_delay_ms
+    if n.network == "grpc":
+        s.service_name = n.service_name
+        if s.service_name.len() == 0: s.service_name = n.path end
+    end
+    if n.security == "reality":
+        s.security = "reality"
+        s.tls = false
+        s.reality.server_name = n.sni
+        s.reality.public_key = n.public_key
+        s.reality.short_id = n.short_id
+        s.reality.spider_x = n.spider_x
+        if n.fingerprint.len() > 0: s.reality.fingerprint = n.fingerprint end
+        s.reality.alpn = n.alpn
+    end
+    s.read_timeout_ms = _opts.read_timeout_ms
+    s.write_timeout_ms = _opts.write_timeout_ms
+    if (s.tls or s.security == "reality") and _opts.fragment:
+        _fragment_into(s)
     end
     ret s
 end

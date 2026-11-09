@@ -1,0 +1,102 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import mem
+import sync
+import net.tcp
+import net.internal.rawsock
+import net.transport
+import net.tunnel
+import net.vpn
+
+const PUB := "IH8tyHx_SyHSCyaQgNTOvHYefAehmhpbMgkwFeAPnXY"
+const PRIV := "QI3DpbA326sqI7QAAz13iSj6Jk9Q8UUvgkjlKZu2u2I"
+
+mut ready := sync.NewWaitGroup()
+mut port := 0
+mut srv_settings := transport.Settings {}
+
+func settings_checks():
+    g := vpn.StreamSettings(`{"network":"grpc","security":"tls","tlsSettings":{"serverName":"g.test"},"grpcSettings":{"serviceName":"svc/x","multiMode":true}}`)
+    println "grpc:", g.network, g.service_name, g.grpc_mode, g.tls, g.sni
+    r := vpn.StreamSettings(`{"network":"tcp","security":"reality","realitySettings":{"serverName":"front.test","publicKey":"pk","shortId":"ab12","spiderX":"/","fingerprint":"firefox","privateKey":"priv","dest":"dest.test:443","serverNames":["front.test","b.test"],"shortIds":["ab12","cd"]}}`)
+    println "reality client:", r.security, r.tls, r.reality.server_name, r.reality.public_key, r.reality.short_id, r.reality.spider_x, r.reality.fingerprint
+    println "reality server:", r.reality_server.private_key, r.reality_server.dest, r.reality_server.server_names, r.reality_server.short_ids
+    f := vpn.StreamSettings(`{"security":"tls","fragment":{"mode":"tls","sni":"true","writes":2,"min":3,"max":9,"delay":7},"timeouts":{"read":1500,"write":2500}}`)
+    println "fragment:", f.fragment, f.fragment_mode, f.fragment_sni, f.fragment_writes, f.fragment_min, f.fragment_max, f.fragment_delay_ms, f.read_timeout_ms, f.write_timeout_ms
+    vpn.RegisterWith(vpn.Options { fragment = true, fragment_mode = "both", fragment_sni = true, fragment_writes = 3, read_timeout_ms = 900, write_timeout_ms = 800 })
+    n := vpn.NodeSettings(tunnel.Node { network = "tcp", security = "reality", tls = true, sni = "n.test", public_key = PUB, short_id = "abcd", spider_x = "/s", fingerprint = "chrome" })
+    println "node reality:", n.security, n.tls, n.reality.server_name, n.reality.short_id, n.reality.spider_x, n.fragment, n.fragment_mode, n.fragment_sni, n.fragment_writes, n.read_timeout_ms, n.write_timeout_ms
+    ng := vpn.NodeSettings(tunnel.Node { network = "grpc", service_name = "gs", tls = true, sni = "g.test" })
+    println "node grpc:", ng.network, ng.service_name, ng.fragment_mode
+    vpn.Register()
+end
+
+func serve_one():
+    sock := rawsock.ListenOn("127.0.0.1", 0, rawsock.SOCK_STREAM)
+    mut bound := tcp.Server { fd = sock.fd }
+    bound.port = rawsock.LocalPort(sock)
+    l := transport.ListenerFrom(bound, srv_settings)
+    port = transport.ListenerPort(l)
+    acc := vpn.TransportAcceptor { listener = l, settings = srv_settings }
+    sync.Done(ready)
+    p := acc.Accept()
+    if p.Valid():
+        s := p.Open()
+        buf := mem.Allocate(64 as u64)
+        n := s.ReadBytes(buf, 64)
+        s.WriteBytes(buf, n)
+        mem.Free(buf)
+        s.Close()
+    end
+    acc.Close()
+end
+
+func through_acceptor(label: str, cs: transport.Settings, ss: transport.Settings):
+    srv_settings = ss
+    sync.Add(ready, 1 as i64)
+    t := spawn(serve_one)
+    sync.Wait(ready)
+    mut c := transport.Dial("127.0.0.1", port, cs)
+    mut good := transport.Ok(c)
+    if good:
+        transport.Write(c, "via acceptor" as void*, 12)
+        back := mem.AllocateZeroed(32 as u64)
+        good = transport.ReadFull(c, back, 12)
+        mem.Free(back)
+        transport.Close(c)
+    end
+    join(t)
+    println label, "through the vpn acceptor:", good
+end
+
+func main:
+    settings_checks()
+    mut gs := transport.Settings {}
+    gs.network = "grpc"
+    gs.service_name = "acc"
+    through_acceptor("grpc", gs, gs)
+    mut rs := transport.Settings {}
+    rs.security = "reality"
+    rs.reality_server.private_key = PRIV
+    rs.reality_server.server_names = "front.example.com"
+    rs.reality_server.short_ids = "abcd1234"
+    rs.reality_server.dest = "127.0.0.1:1"
+    mut rc := transport.Settings {}
+    rc.security = "reality"
+    rc.sni = "front.example.com"
+    rc.reality.public_key = PUB
+    rc.reality.short_id = "abcd1234"
+    through_acceptor("reality", rc, rs)
+end

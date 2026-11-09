@@ -42,6 +42,9 @@ pub struct TransportPending:
     @en "settings"
     @fa "تنظیمات"
     pub settings: transport.Settings = transport.Settings {}
+    @en "upgraded"
+    @fa "ارتقا یافته"
+    pub upgraded: bool = false
 
     @en "Valid"
     @fa "معتبر"
@@ -53,7 +56,7 @@ pub struct TransportPending:
     @fa "گشودن"
     pub func Open(): dyn tunnel.Stream:
         mut c := this.raw
-        if not transport.Upgrade(c, this.settings):
+        if not this.upgraded and not transport.Upgrade(c, this.settings):
             transport.Close(c)
             ret tunnel.ClosedStream {}
         end
@@ -81,6 +84,10 @@ pub struct TransportAcceptor:
     @en "Accept"
     @fa "پذیرش"
     pub func Accept(): dyn tunnel.Pending:
+        if this.settings.network == "grpc" or this.settings.security == "reality":
+            c := transport.Accept(this.listener)
+            ret TransportPending { raw = c, settings = this.settings, upgraded = true }
+        end
         raw := transport.AcceptRaw(this.listener)
         ret TransportPending { raw = raw, settings = this.settings }
     end
@@ -166,8 +173,7 @@ pub func Start(ib: tunnel.InboundConfig, dialer: dyn tunnel.Dialer, stats: tunne
     sock := rawsock.ListenOn(host, ib.port, rawsock.SOCK_STREAM)
     mut bound := tcp.Server { fd = sock.fd }
     if sock.fd >= 0: bound.port = rawsock.LocalPort(sock) end
-    mut tl := transport.Listener { server = bound, settings = s }
-    if s.tls: tl.tls_cfg = tls.NewServerConfig(s.cert_file, s.key_file) end
+    tl := transport.ListenerFrom(bound, s)
     acc := TransportAcceptor { listener = tl, settings = s }
     srv := tunnel.NewAcceptServer(acc, host)
     l := Listener { server = srv, has_server = true, port = acc.Port(), tag = ib.tag }

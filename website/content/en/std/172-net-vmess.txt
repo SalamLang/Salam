@@ -52,12 +52,15 @@ pkg.intro <<
 {{example.net-vmess-guide-cdn}}
 <p>On the server, listen with <code>network = "ws"</code>, the same <code>path</code> and <code>host</code> and with <code>tls</code> off when the CDN or your reverse proxy terminates TLS. For each connection, in a worker thread, call <code>transport.AcceptRaw</code>, <code>transport.Upgrade</code> and then <code>vmess.Accept</code>. Keep the server's clock right (the time window is 120 seconds), and tell your users to do the same.</p>
 
+<h2 id="guide-link">Share links</h2>
+<p>Apps share a VMess server as <code>vmess://</code> followed by base64 of a JSON object (the v2rayN form, the same one <code>tunnel.ParseLink</code> reads). <code>ParseLink</code> reads it into a <code>Link</code>: check <code>ok</code> and read <code>err</code> when it is false. <code>FormatLink</code> writes one back, <code>LinkSettings</code> turns it into the <code>net.transport</code> settings (WebSocket path and <code>?ed=</code> early data, gRPC service name, TLS name) and <code>DialLink</code> dials it. <code>SecurityByName</code> and <code>SecurityName</code> convert between names such as <code>chacha20-poly1305</code> and the security numbers; <code>auto</code> means AES-128-GCM. The legacy <code>aid</code> is parsed and kept but only 0 is meaningful.</p>
+
 <h2 id="guide-limits">Limits</h2>
 <ul>
 <li><strong>AEAD only.</strong> There is no legacy (<code>alterId</code> above 0) mode, and no compatibility with servers or clients that need it.</li>
-<li><strong>The authenticated length option is unverified.</strong> <code>OptAuthLength</code> is implemented from the protocol description and round-trips with this package, but it has not been checked against a real V2Ray or Xray peer. <code>Dial</code> never sets it.</li>
-<li><strong>No live interoperability test was run.</strong> The header, the authentication id, the key derivation and the chunk formats are checked against fixed byte vectors and the two halves of this package against each other (over TCP, TLS, WebSocket and a pipe), not against a real V2Ray or Xray build.</li>
-<li><strong>No multiplexing.</strong> <code>CmdMux</code> can be written into a header, but no multiplexing is implemented.</li>
+<li><strong>The authenticated length option follows Xray.</strong> <code>OptAuthLength</code> derives its length key and nonce from the request key and IV in both directions, seals the length with AES-128-GCM (also for ChaCha20-Poly1305 bodies) and was checked against Xray and sing-box in the interop run (see <code>docs/VPN_INTEROP.md</code> for the matrix). <code>Dial</code> never sets it; choose the bits with <code>Client</code>.</li>
+<li><strong>Interoperability was tested separately.</strong> The header, the authentication id, the key derivation and the chunk formats are checked in this repository against fixed byte vectors and the two halves of this package against each other (over TCP, TLS, WebSocket and a pipe). The interop harness runs the package against real Xray and sing-box builds; its results are in <code>docs/VPN_INTEROP.md</code>.</li>
+<li><strong>Multiplexing is Mux.Cool.</strong> Dial with <code>CmdMux</code> and call <code>MuxClient</code>; on the server, when the accepted request has <code>CmdMux</code>, call <code>MuxServer</code>. Sessions come from <code>net.transport</code> (<code>MuxOpen</code>, <code>MuxAccept</code>).</li>
 <li><strong>Weak primitives by design.</strong> VMess uses MD5 for the command key and AES in ECB mode for one block of the authentication id; these are the protocol's, not choices of this package. The payload ciphers are authenticated (AES-GCM, ChaCha20-Poly1305).</li>
 <li><strong><code>SecNone</code> and <code>SecZero</code> do not encrypt the payload.</strong> Use them only inside TLS you trust.</li>
 <li><strong>Replay protection is per process.</strong> The filter lives in memory, so a restart forgets it, but the time window still limits what can be replayed.</li>
@@ -130,6 +133,43 @@ doc.DecodeRequest = Reads a request header from bytes. False when the checksum o
 doc.AsStream = Wraps a connection as a <code>tunnel.Stream</code> so it can carry another protocol or be handed to tunnel code.
 doc.DialOver = Runs the client half over an existing stream instead of a new network connection.
 doc.AcceptOver = Runs the server half over an existing stream, with the users and the replay filter.
+doc.CmdMux = The command byte of a multiplexed connection.
+doc.CmdTCP = The command byte of a TCP request.
+doc.CmdUDP = The command byte of a UDP request.
+doc.DialLink = Dials the server a link names and starts a VMess session to a target.
+doc.FormatLink = Writes a <code>Link</code> as a <code>vmess://</code> text (base64 of the v2rayN JSON).
+doc.Link = A parsed <code>vmess://</code> link, the form v2rayN and most apps share.
+doc.Link.allow_insecure = Skip certificate verification.
+doc.Link.alpn = The ALPN text.
+doc.Link.alter_id = The legacy <code>aid</code> number, kept for round trips. Only 0 is meaningful here.
+doc.Link.err = Why parsing failed.
+doc.Link.fingerprint = The <code>fp</code> browser name.
+doc.Link.header_type = The <code>type</code> field, usually <code>none</code>.
+doc.Link.host = The server address.
+doc.Link.host_header = The <code>host</code> field: the Host header of WebSocket and HTTP upgrade.
+doc.Link.network = <code>tcp</code>, <code>ws</code>, <code>httpupgrade</code> or <code>grpc</code>.
+doc.Link.ok = True when the link is complete and supported.
+doc.Link.path = The WebSocket path, or the gRPC service name.
+doc.Link.port = The server port.
+doc.Link.remark = The <code>ps</code> label.
+doc.Link.security = The body cipher name: <code>auto</code>, <code>aes-128-gcm</code>, <code>chacha20-poly1305</code>, <code>none</code> or <code>zero</code>.
+doc.Link.sni = The TLS server name.
+doc.Link.tls = True when the link says <code>tls</code>.
+doc.Link.uuid = The user id.
+doc.LinkSettings = The <code>transport.Settings</code> a link asks for.
+doc.MuxClient = Starts a Mux.Cool client multiplexer on a connection made with <code>CmdMux</code>.
+doc.MuxServer = Starts a Mux.Cool server demultiplexer on an accepted connection whose command is <code>CmdMux</code>.
+doc.OptAuthLength = Option bit: chunk lengths are sealed with AES-128-GCM under a key from the request key.
+doc.OptChunkMask = Option bit: chunk lengths are masked with a SHAKE-128 stream.
+doc.OptChunkStream = Option bit: the body is framed in chunks.
+doc.OptPadding = Option bit: every chunk gets random padding.
+doc.ParseLink = Reads a <code>vmess://</code> link. Check <code>ok</code> and <code>err</code>.
+doc.SecAES128GCM = Security type 3: AES-128-GCM.
+doc.SecChaCha20Poly1305 = Security type 4: ChaCha20-Poly1305.
+doc.SecNone = Security type 5: chunk framing without encryption.
+doc.SecZero = Security type 6: no framing and no encryption.
+doc.SecurityByName = The security type number for a link name such as <code>aes-128-gcm</code>; <code>auto</code> means AES-128-GCM. -1 for an unknown name.
+doc.SecurityName = The link name of a security type number.
 group.Cmd.title = Commands
 group.Cmd = The command byte of a request: <code>CmdTCP</code> opens a TCP connection to the target, <code>CmdUDP</code> carries UDP datagrams, <code>CmdMux</code> is the multiplexing command, which the header can carry but nothing implements.
 group.Sec.title = Body encryptions
@@ -178,3 +218,67 @@ ex.AcceptOver = -
 ex.group.Cmd = -
 ex.group.Sec = -
 ex.group.Opt = -
+ex.CmdMux = -
+ex.CmdTCP = -
+ex.CmdUDP = -
+ex.Conn.client = -
+ex.Conn.closed = -
+ex.Conn.eof = -
+ex.Conn.err = -
+ex.Conn.ok = -
+ex.Conn.rbuf = -
+ex.Conn.rc = -
+ex.Conn.req = -
+ex.Conn.resp_iv = -
+ex.Conn.resp_key = -
+ex.Conn.resp_pending = -
+ex.Conn.t = -
+ex.Conn.user = -
+ex.Conn.wc = -
+ex.DialLink = -
+ex.FormatLink = -
+ex.Link = -
+ex.Link.allow_insecure = -
+ex.Link.alpn = -
+ex.Link.alter_id = -
+ex.Link.err = -
+ex.Link.fingerprint = -
+ex.Link.header_type = -
+ex.Link.host = -
+ex.Link.host_header = -
+ex.Link.network = -
+ex.Link.ok = -
+ex.Link.path = -
+ex.Link.port = -
+ex.Link.remark = -
+ex.Link.security = -
+ex.Link.sni = -
+ex.Link.tls = -
+ex.Link.uuid = -
+ex.LinkSettings = -
+ex.MuxClient = -
+ex.MuxServer = -
+ex.OptAuthLength = -
+ex.OptChunkMask = -
+ex.OptChunkStream = -
+ex.OptPadding = -
+ex.ParseLink = -
+ex.ReplayFilter.lock = -
+ex.ReplayFilter.seen = -
+ex.Request.addr = -
+ex.Request.command = -
+ex.Request.iv = -
+ex.Request.key = -
+ex.Request.option = -
+ex.Request.padding = -
+ex.Request.resp_v = -
+ex.Request.security = -
+ex.Request.version = -
+ex.SecAES128GCM = -
+ex.SecChaCha20Poly1305 = -
+ex.SecNone = -
+ex.SecZero = -
+ex.SecurityByName = -
+ex.SecurityName = -
+ex.User.cmd_key = -
+ex.User.id = -

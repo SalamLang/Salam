@@ -1,0 +1,177 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import mem
+import sync
+import net.transport
+
+mut ready := sync.NewWaitGroup()
+mut port := 0
+mut srv_settings := transport.Settings {}
+mut srv_conns := 2
+mut srv_path := ""
+
+func echo_conn():
+    l := transport.Listen(0, srv_settings)
+    port = transport.ListenerPort(l)
+    sync.Done(ready)
+    mut handled := 0
+    until handled < srv_conns:
+        mut c := transport.Accept(l)
+        if transport.Ok(c):
+            srv_path = c.request_path
+            buf := mem.Allocate(65536 as u64)
+            until true:
+                n := transport.Read(c, buf, 65536)
+                if n <= 0:
+                    break
+                end
+                if not transport.Write(c, buf, n):
+                    break
+                end
+            end
+            mem.Free(buf)
+            transport.Close(c)
+        end
+        handled++
+    end
+    transport.CloseListener(l)
+end
+
+func pattern(n: int, seed: int): transport.Bytes:
+    mut b := transport.NewBytes(n + 1)
+    repeat n in i:
+        transport.Put8(b, (i * 7 + seed) & 255)
+    end
+    ret b
+end
+
+func scenario(label: str, cs: transport.Settings, ss: transport.Settings, conns: int):
+    srv_settings = ss
+    srv_conns = conns
+    srv_path = ""
+    sync.Add(ready, 1 as i64)
+    t := spawn(echo_conn)
+    sync.Wait(ready)
+    mut total := 0
+    mut good := true
+    repeat conns:
+        mut c := transport.Dial("127.0.0.1", port, cs)
+        if not transport.Ok(c):
+            println label, "dial failed:", c.err
+            good = false
+            break
+        end
+        mut sizes := Vector {} as Vector<int>
+        sizes.push(11)
+        sizes.push(300)
+        sizes.push(70000)
+        sizes.push(200000)
+        repeat sizes.len() in i:
+            n := sizes.get(i)
+            mut out := pattern(n, i + 5)
+            back := mem.AllocateZeroed((n + 1) as u64)
+            if not transport.Write(c, out.p, n):
+                good = false
+            end
+            if not transport.ReadFull(c, back, n):
+                good = false
+            else:
+                bp := back as u8*
+                repeat n in k:
+                    if (bp[k] as int) != ((k * 7 + i + 5) & 255):
+                        good = false
+                        break
+                    end
+                end
+            end
+            total += n
+            mem.Free(back)
+            transport.FreeBytes(out)
+        end
+        sizes.free()
+        transport.Close(c)
+    end
+    join(t)
+    println label, "echo ok:", good, "bytes:", total, "path:", srv_path
+end
+
+func refused():
+    mut ss := transport.Settings {}
+    ss.network = "grpc"
+    ss.service_name = "RealService"
+    ss.tls = true
+    ss.cert_file = "tests/fixtures/ssl/server.crt"
+    ss.key_file = "tests/fixtures/ssl/server.key"
+    srv_settings = ss
+    srv_conns = 1
+    sync.Add(ready, 1 as i64)
+    t := spawn(echo_conn)
+    sync.Wait(ready)
+    mut cs := ss
+    cs.allow_insecure = true
+    cs.sni = "www.example.org"
+    cs.service_name = "OtherService"
+    mut c := transport.Dial("127.0.0.1", port, cs)
+    mut n := 0 - 1
+    if transport.Ok(c):
+        buf := mem.AllocateZeroed(16 as u64)
+        n = transport.Read(c, buf, 16)
+        mem.Free(buf)
+        transport.Close(c)
+    end
+    println "wrong service name is refused:", n <= 0
+    mut good := cs
+    good.service_name = "RealService"
+    mut g := transport.Dial("127.0.0.1", port, good)
+    mut ok := transport.Ok(g)
+    if ok:
+        transport.Write(g, "ping" as void*, 4)
+        back := mem.AllocateZeroed(8 as u64)
+        ok = transport.ReadFull(g, back, 4)
+        mem.Free(back)
+        transport.Close(g)
+    end
+    println "right service name still works after a refusal:", ok
+    join(t)
+end
+
+func main:
+    mut gun := transport.Settings {}
+    gun.network = "grpc"
+    gun.service_name = "GunService"
+    gun.tls = true
+    gun.allow_insecure = true
+    gun.sni = "www.example.org"
+    mut gun_srv := gun
+    gun_srv.allow_insecure = false
+    gun_srv.cert_file = "tests/fixtures/ssl/server.crt"
+    gun_srv.key_file = "tests/fixtures/ssl/server.key"
+    scenario("gun", gun, gun_srv, 2)
+
+    mut multi := gun
+    multi.grpc_mode = "multi"
+    multi.service_name = "my/svc"
+    mut multi_srv := gun_srv
+    multi_srv.service_name = "my/svc"
+    scenario("multi", multi, multi_srv, 1)
+
+    mut plain := gun
+    plain.tls = false
+    mut plain_srv := gun_srv
+    plain_srv.tls = false
+    scenario("h2c gun", plain, plain_srv, 1)
+
+    refused()
+end

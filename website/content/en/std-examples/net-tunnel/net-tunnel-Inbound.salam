@@ -1,0 +1,77 @@
+import net.tcp
+import net.tunnel
+import sync
+
+mut echo_port := 0
+mut ready := sync.NewWaitGroup()
+
+struct LineProtocol:
+    pub unused: int = 0
+
+    pub func Name(): str:
+        ret "line"
+    end
+
+    pub func Handshake(s: dyn tunnel.Stream): tunnel.Session:
+        line := tunnel.ReadUntil(s, "\n", 200)
+        if not line.starts_with("CONNECT "):
+            ret tunnel.Session { error = "bad request" }
+        end
+        target := tunnel.ParseAddr(line.substr(8, line.len() - 9))
+        if not target.valid:
+            ret tunnel.Session { error = "bad address" }
+        end
+        ret tunnel.Session { ok = true, target = target, protocol = "line" }
+    end
+
+    pub func Reply(s: dyn tunnel.Stream, _sess: tunnel.Session, ok: bool):
+        if ok:
+            s.Write("OK\n")
+        else:
+            s.Write("ERR\n")
+        end
+    end
+end
+
+func echo_server():
+    srv := tcp.Bind(0)
+    echo_port = tcp.Port(srv)
+    sync.Done(ready)
+    until true:
+        c := tcp.Accept(srv)
+        tcp.Write(c, "echo:" + tcp.Read(c, 100))
+        tcp.Close(c)
+    end
+end
+
+func ask(port: int, request: str): str:
+    c := tcp.Dial("127.0.0.1", port)
+    tcp.Write(c, request)
+    answer := tcp.Read(c, 100)
+    rest := tcp.Read(c, 100)
+    tcp.Close(c)
+    ret answer + rest
+end
+
+func main:
+    sync.Add(ready, 1 as i64)
+    _t := spawn(echo_server)
+    sync.Wait(ready)
+    proto := LineProtocol {}
+    forward := tunnel.NewForwarder(tunnel.Direct(), proto)
+    inbound := tunnel.ListenTcp(0)
+    println inbound.Ok()
+    tunnel.ServeBackground(inbound, proto, forward)
+
+    c := tcp.Dial("127.0.0.1", inbound.port)
+    tcp.Write(c, "CONNECT 127.0.0.1:" + echo_port + "\n")
+    println tcp.Read(c, 100)
+    tcp.Write(c, "hello")
+    println tcp.Read(c, 100)
+    tcp.Close(c)
+
+    println ask(inbound.port, "CONNECT 127.0.0.1:" + tcp.FreePort() + "\n")
+    println ask(inbound.port, "GET / HTTP/1.1\r\n\r\n").len()
+    inbound.Stop()
+    println forward.stats.Total(), forward.stats.Failed()
+end

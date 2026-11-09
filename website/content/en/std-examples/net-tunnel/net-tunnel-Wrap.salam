@@ -1,0 +1,51 @@
+import net.tcp
+import net.tunnel
+import net.websocket
+import sync
+
+mut tcp_port := 0
+mut ws_port := 0
+mut ready := sync.NewWaitGroup()
+
+func tcp_server():
+    srv := tcp.Bind(0)
+    tcp_port = tcp.Port(srv)
+    sync.Done(ready)
+    c := tcp.Accept(srv)
+    s := tunnel.WrapTcp(c)
+    s.Write("tcp:" + s.Read(100))
+    s.Close()
+end
+
+func ws_server():
+    srv := websocket.Listen(0)
+    ws_port = websocket.Port(srv)
+    sync.Done(ready)
+    c := websocket.Accept(srv)
+    s := tunnel.WrapWebSocket(c)
+    first := s.Read(5)
+    rest := s.Read(100)
+    s.Write("ws:" + first + rest)
+    s.Close()
+end
+
+func main:
+    sync.Add(ready, 2 as i64)
+    t1 := spawn(tcp_server)
+    t2 := spawn(ws_server)
+    sync.Wait(ready)
+
+    plain := tunnel.DialTcp("127.0.0.1", tcp_port, 2000)
+    plain.Write("hello")
+    println plain.Read(100)
+    plain.Close()
+
+    conn := websocket.Dial("127.0.0.1", ws_port, "/")
+    stream := tunnel.WrapWebSocket(conn)
+    tunnel.WriteAll(stream, "hello world")
+    println tunnel.ReadByte(stream)
+    println stream.Read(100)
+    stream.Close()
+    join(t1)
+    join(t2)
+end

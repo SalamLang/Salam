@@ -1,0 +1,58 @@
+import net.tcp
+import net.tunnel
+import sync
+
+mut hop_port := 0
+mut hop_log := ""
+mut ready := sync.NewWaitGroup()
+
+struct LineHop:
+    pub host: str = ""
+    pub port: int = 0
+
+    pub func Server(): tunnel.Addr:
+        ret tunnel.NewAddr(this.host, this.port)
+    end
+
+    pub func Handshake(s: dyn tunnel.Stream, target: tunnel.Addr): bool:
+        s.Write("HOP " + target.String() + "\n")
+        ret tunnel.ReadUntil(s, "\n", 50) == "OK\n"
+    end
+
+    pub func Name(): str:
+        ret "linehop"
+    end
+end
+
+func hop_server():
+    srv := tcp.Bind(0)
+    hop_port = tcp.Port(srv)
+    sync.Done(ready)
+    c := tcp.Accept(srv)
+    s := tunnel.WrapTcp(c)
+    hop_log = tunnel.ReadUntil(s, "\n", 200)
+    s.Write("OK\n")
+    s.Write("end:" + s.Read(100))
+    s.Close()
+end
+
+func main:
+    sync.Add(ready, 1 as i64)
+    t := spawn(hop_server)
+    sync.Wait(ready)
+    hop := LineHop { host = "127.0.0.1", port = hop_port }
+
+    mut chain := tunnel.NewChain(tunnel.Direct())
+    tunnel.ChainAdd(chain, hop)
+    println chain.Name()
+    s := chain.Dial(tunnel.NewAddr("service.internal", 8080))
+    println s.Ok()
+    s.Write("payload")
+    println s.Read(100)
+    s.Close()
+    join(t)
+    print hop_log
+
+    via := tunnel.Via(tunnel.Direct(), hop)
+    println via.Name()
+end

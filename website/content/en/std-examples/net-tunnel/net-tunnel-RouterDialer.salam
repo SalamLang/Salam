@@ -1,0 +1,39 @@
+import net.tcp
+import net.tunnel
+import sync
+
+mut port := 0
+mut ready := sync.NewWaitGroup()
+
+func echo_once():
+    srv := tcp.Bind(0)
+    port = tcp.Port(srv)
+    sync.Done(ready)
+    c := tcp.Accept(srv)
+    tcp.Write(c, "echo:" + tcp.Read(c, 64))
+    tcp.Close(c)
+end
+
+func main:
+    sync.Add(ready, 1 as i64)
+    t := spawn(echo_once)
+    sync.Wait(ready)
+    mut router := tunnel.NewRouter("direct")
+    mut blocked := tunnel.NewRule("block")
+    tunnel.RuleSuffix(blocked, "blocked.test")
+    tunnel.RouterAdd(router, blocked)
+
+    mut rd := tunnel.NewRouterDialer(router)
+    tunnel.RouterDialerAdd(rd, "direct", tunnel.Direct())
+    tunnel.RouterDialerAdd(rd, "block", tunnel.Block())
+    println rd.Name(), rd.tags.len(), rd.dialers.len()
+
+    s := rd.Dial(tunnel.NewAddr("127.0.0.1", port))
+    println rd.last_tag, s.Ok()
+    s.Write("hi")
+    println s.Read(100)
+    s.Close()
+    join(t)
+    println rd.Dial(tunnel.NewAddr("ads.blocked.test", 80)).Ok(), rd.last_tag
+    println rd.Pick("direct").Name(), rd.Pick("nothing").Name()
+end

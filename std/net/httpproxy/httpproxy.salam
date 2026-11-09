@@ -1,0 +1,403 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "net/httpproxy"
+@fa "پراکسی اچ‌تی‌تی‌پی"
+package httpproxy
+
+import mem
+import str
+import encoding
+
+@en "MaxHeadBytes"
+@fa "بیشترین اندازه سرآیند"
+pub const MaxHeadBytes := 65536
+
+@en "MaxHeaders"
+@fa "بیشترین تعداد سرآیند"
+pub const MaxHeaders := 200
+
+@en "Head"
+@fa "سرآیند"
+pub struct Head:
+    @en "ok"
+    @fa "معتبر"
+    pub ok: bool = false
+    @en "err"
+    @fa "خطا"
+    pub err: str = ""
+    @en "method"
+    @fa "روش"
+    pub method: str = ""
+    @en "target"
+    @fa "هدف"
+    pub target: str = ""
+    @en "version"
+    @fa "نسخه"
+    pub version: str = ""
+    @en "status"
+    @fa "وضعیت"
+    pub status: int = 0
+    @en "reason"
+    @fa "دلیل"
+    pub reason: str = ""
+    @en "names"
+    @fa "نام‌ها"
+    pub names: Vector<str> = Vector {}
+    @en "values"
+    @fa "مقدارها"
+    pub values: Vector<str> = Vector {}
+end
+
+@en "HostPort"
+@fa "میزبان و درگاه"
+pub struct HostPort:
+    @en "ok"
+    @fa "معتبر"
+    pub ok: bool = false
+    @en "host"
+    @fa "میزبان"
+    pub host: str = ""
+    @en "port"
+    @fa "درگاه"
+    pub port: int = 0
+    @en "has_port"
+    @fa "درگاه دارد"
+    pub has_port: bool = false
+end
+
+@en "URL"
+@fa "نشانی وب"
+pub struct URL:
+    @en "ok"
+    @fa "معتبر"
+    pub ok: bool = false
+    @en "scheme"
+    @fa "طرح"
+    pub scheme: str = ""
+    @en "host"
+    @fa "میزبان"
+    pub host: str = ""
+    @en "port"
+    @fa "درگاه"
+    pub port: int = 0
+    @en "path"
+    @fa "مسیر"
+    pub path: str = ""
+end
+
+func _ch(s: str, i: int): int:
+    p := s as u8*
+    ret p[i] as int
+end
+
+func _is_tchar(c: int): bool:
+    if c >= 48 and c <= 57: ret true end
+    if c >= 65 and c <= 90: ret true end
+    if c >= 97 and c <= 122: ret true end
+    if c == 33 or c == 35 or c == 36 or c == 37 or c == 38 or c == 39 or c == 42 or c == 43: ret true end
+    if c == 45 or c == 46 or c == 94 or c == 95 or c == 96 or c == 124 or c == 126: ret true end
+    ret false
+end
+
+func _is_token(s: str): bool:
+    n := s.len()
+    if n == 0: ret false end
+    repeat n in i:
+        if not _is_tchar(_ch(s, i)): ret false end
+    end
+    ret true
+end
+
+func _digits(s: str): bool:
+    n := s.len()
+    if n == 0 or n > 9: ret false end
+    repeat n in i:
+        c := _ch(s, i)
+        if c < 48 or c > 57: ret false end
+    end
+    ret true
+end
+
+func _parse_headers(lines: Vector<str>, from: int, h &: Head): bool:
+    mut i := from
+    mut count := 0
+    until i < lines.len():
+        line := lines.get(i)
+        if line.len() == 0: ret true end
+        c0 := _ch(line, 0)
+        if c0 == 32 or c0 == 9:
+            h.err = "folded header lines are not allowed"
+            ret false
+        end
+        colon := line.find(":")
+        if colon <= 0:
+            h.err = "malformed header line"
+            ret false
+        end
+        name := line.substr(0, colon)
+        if not _is_token(name):
+            h.err = "invalid header name"
+            ret false
+        end
+        value := line.substr(colon + 1, line.len() - colon - 1).trim()
+        h.names.push(name)
+        h.values.push(value)
+        count++
+        if count > MaxHeaders:
+            h.err = "too many headers"
+            ret false
+        end
+        i++
+    end
+    ret true
+end
+
+func _fail_head(msg: str): Head:
+    ret Head { ok = false, err = msg }
+end
+
+func _lower_eq(a: str, b: str): bool:
+    ret str.EqualFold(a, b)
+end
+
+func _tokens_has(value: str, token: str): bool:
+    parts := value.split(",")
+    defer parts.free()
+    repeat parts.len() in i:
+        if _lower_eq(parts.get(i).trim(), token): ret true end
+    end
+    ret false
+end
+
+@en "ParseRequestHead"
+@fa "تجزیه سرآیند درخواست"
+pub func ParseRequestHead(text: str): Head:
+    if text.len() == 0 or text.len() > MaxHeadBytes: ret _fail_head("bad head size") end
+    lines := text.split("\r\n")
+    defer lines.free()
+    if lines.len() < 1: ret _fail_head("empty head") end
+    first := lines.get(0)
+    parts := first.split(" ")
+    defer parts.free()
+    if parts.len() != 3: ret _fail_head("malformed request line") end
+    mut h := Head {}
+    h.method = parts.get(0)
+    h.target = parts.get(1)
+    h.version = parts.get(2)
+    if not _is_token(h.method): ret _fail_head("invalid method") end
+    if h.target.len() == 0: ret _fail_head("empty request target") end
+    if h.version != "HTTP/1.1" and h.version != "HTTP/1.0": ret _fail_head("unsupported HTTP version") end
+    if not _parse_headers(lines, 1, h): ret h end
+    h.ok = true
+    ret h
+end
+
+@en "ParseResponseHead"
+@fa "تجزیه سرآیند پاسخ"
+pub func ParseResponseHead(text: str): Head:
+    if text.len() == 0 or text.len() > MaxHeadBytes: ret _fail_head("bad head size") end
+    lines := text.split("\r\n")
+    defer lines.free()
+    if lines.len() < 1: ret _fail_head("empty head") end
+    first := lines.get(0)
+    if first.len() < 12: ret _fail_head("malformed status line") end
+    mut h := Head {}
+    h.version = first.substr(0, 8)
+    if h.version != "HTTP/1.1" and h.version != "HTTP/1.0": ret _fail_head("unsupported HTTP version") end
+    if _ch(first, 8) != 32: ret _fail_head("malformed status line") end
+    code := first.substr(9, 3)
+    if not _digits(code): ret _fail_head("malformed status code") end
+    h.status = code.to_int()
+    if first.len() > 12:
+        if _ch(first, 12) != 32: ret _fail_head("malformed status line") end
+        h.reason = first.substr(13, first.len() - 13)
+    end
+    if not _parse_headers(lines, 1, h): ret h end
+    h.ok = true
+    ret h
+end
+
+@en "HeaderGet"
+@fa "گرفتن سرآیند"
+pub func HeaderGet(h: Head, name: str): str:
+    repeat h.names.len() in i:
+        if _lower_eq(h.names.get(i), name): ret h.values.get(i) end
+    end
+    ret ""
+end
+
+@en "HeaderHas"
+@fa "سرآیند دارد"
+pub func HeaderHas(h: Head, name: str): bool:
+    repeat h.names.len() in i:
+        if _lower_eq(h.names.get(i), name): ret true end
+    end
+    ret false
+end
+
+@en "HeaderCount"
+@fa "تعداد سرآیند"
+pub func HeaderCount(h: Head, name: str): int:
+    mut n := 0
+    repeat h.names.len() in i:
+        if _lower_eq(h.names.get(i), name): n++ end
+    end
+    ret n
+end
+
+@en "HeaderHasToken"
+@fa "سرآیند توکن دارد"
+pub func HeaderHasToken(h: Head, name: str, token: str): bool:
+    repeat h.names.len() in i:
+        if _lower_eq(h.names.get(i), name):
+            if _tokens_has(h.values.get(i), token): ret true end
+        end
+    end
+    ret false
+end
+
+@en "IsHopByHop"
+@fa "از نوع گام‌به‌گام"
+pub func IsHopByHop(name: str): bool:
+    n := name.lower()
+    if n == "connection" or n == "keep-alive" or n == "proxy-authenticate" or n == "proxy-authorization": ret true end
+    if n == "proxy-connection" or n == "te" or n == "trailer" or n == "transfer-encoding" or n == "upgrade": ret true end
+    ret false
+end
+
+@en "SplitHostPort"
+@fa "جداسازی میزبان و درگاه"
+pub func SplitHostPort(s: str, default_port: int): HostPort:
+    n := s.len()
+    if n == 0 or n > 300: ret HostPort {} end
+    mut host := ""
+    mut rest := ""
+    if _ch(s, 0) == 91:
+        close := s.find("]")
+        if close < 2: ret HostPort {} end
+        host = s.substr(1, close - 1)
+        rest = s.substr(close + 1, n - close - 1)
+        if rest.len() > 0 and _ch(rest, 0) != 58: ret HostPort {} end
+    else:
+        colon := s.find(":")
+        if colon < 0:
+            host = s
+        else:
+            if s.substr(colon + 1, n - colon - 1).find(":") >= 0: ret HostPort {} end
+            host = s.substr(0, colon)
+            rest = s.substr(colon, n - colon)
+        end
+    end
+    if host.len() == 0 or host.len() > 255: ret HostPort {} end
+    repeat host.len() in i:
+        c := _ch(host, i)
+        if c <= 32 or c == 47 or c == 63 or c == 35 or c == 64 or c == 127: ret HostPort {} end
+    end
+    if rest.len() > 0:
+        ps := rest.substr(1, rest.len() - 1)
+        if not _digits(ps): ret HostPort {} end
+        p := ps.to_int()
+        if p < 1 or p > 65535: ret HostPort {} end
+        ret HostPort { ok = true, host = host, port = p, has_port = true }
+    end
+    ret HostPort { ok = true, host = host, port = default_port, has_port = false }
+end
+
+@en "ParseURL"
+@fa "تجزیه نشانی وب"
+pub func ParseURL(s: str): URL:
+    sep := s.find("://")
+    if sep < 1: ret URL {} end
+    scheme := s.substr(0, sep).lower()
+    if scheme != "http" and scheme != "https": ret URL {} end
+    mut rest := s.substr(sep + 3, s.len() - sep - 3)
+    hash := rest.find("#")
+    if hash >= 0: rest = rest.substr(0, hash) end
+    mut cut := rest.len()
+    slash := rest.find("/")
+    ques := rest.find("?")
+    if slash >= 0 and slash < cut: cut = slash end
+    if ques >= 0 and ques < cut: cut = ques end
+    mut auth := rest.substr(0, cut)
+    mut path := rest.substr(cut, rest.len() - cut)
+    at := auth.find("@")
+    if at >= 0: auth = auth.substr(at + 1, auth.len() - at - 1) end
+    if path.len() == 0: path = "/" end
+    if _ch(path, 0) == 63: path = "/" + path end
+    mut dp := 80
+    if scheme == "https": dp = 443 end
+    hp := SplitHostPort(auth, dp)
+    if not hp.ok: ret URL {} end
+    ret URL { ok = true, scheme = scheme, host = hp.host, port = hp.port, path = path }
+end
+
+@en "BasicHeader"
+@fa "سرآیند بیسیک"
+pub func BasicHeader(user: str, pass: str): str:
+    ret "Basic " + encoding.Base64Encode(user + ":" + pass)
+end
+
+@en "BasicCredentials"
+@fa "اعتبارنامه بیسیک"
+pub func BasicCredentials(value: str, user &: str, pass &: str): bool:
+    v := value.trim()
+    if v.len() < 7: ret false end
+    if not _lower_eq(v.substr(0, 5), "basic") or _ch(v, 5) != 32: ret false end
+    token := v.substr(6, v.len() - 6).trim()
+    mut plain := ""
+    try:
+        plain = encoding.Base64Decode(token)
+    catch:
+        ret false
+    end
+    colon := plain.find(":")
+    if colon < 0: ret false end
+    user = plain.substr(0, colon)
+    pass = plain.substr(colon + 1, plain.len() - colon - 1)
+    ret true
+end
+
+@en "StatusReason"
+@fa "دلیل وضعیت"
+pub func StatusReason(code: int): str:
+    switch code:
+        100: ret "Continue" end
+        200: ret "OK" end
+        400: ret "Bad Request" end
+        403: ret "Forbidden" end
+        404: ret "Not Found" end
+        405: ret "Method Not Allowed" end
+        407: ret "Proxy Authentication Required" end
+        408: ret "Request Timeout" end
+        411: ret "Length Required" end
+        431: ret "Request Header Fields Too Large" end
+        501: ret "Not Implemented" end
+        502: ret "Bad Gateway" end
+        504: ret "Gateway Timeout" end
+        505: ret "HTTP Version Not Supported" end
+    end
+    ret "Status"
+end
+
+@en "ResponseText"
+@fa "متن پاسخ"
+pub func ResponseText(code: int, extra_headers: str, body: str, close: bool): str:
+    mut out := "HTTP/1.1 " + str.FromInt(code as i64) + " " + StatusReason(code) + "\r\n"
+    out += extra_headers
+    out += "Content-Length: " + str.FromInt(body.len() as i64) + "\r\n"
+    if close: out += "Connection: close\r\n" end
+    out += "\r\n" + body
+    ret out
+end

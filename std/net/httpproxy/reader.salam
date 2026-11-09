@@ -1,0 +1,286 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package httpproxy
+
+import mem
+import str
+import net.tunnel
+
+struct _Rd:
+    pub s: dyn tunnel.Stream = tunnel.TcpStream {}
+    pub buf: u8* = null
+    pub cap: int = 0
+    pub pos: int = 0
+    pub len: int = 0
+end
+
+struct _SinkState:
+    pub buf: u8* = null
+    pub len: int = 0
+    pub cap: int = 0
+    pub limit: int = 0
+    pub overflow: bool = false
+end
+
+struct _Sink:
+    pub st: _SinkState* = null
+    pub deadline: int = 0
+    pub closed: bool = false
+
+    pub func Read(_max: int): str:
+        ret ""
+    end
+
+    pub func ReadBytes(_buf: void*, _max: int): int:
+        ret 0
+    end
+
+    pub func Write(data: str): int:
+        ret this.WriteBytes(data as void*, data.len())
+    end
+
+    pub func WriteBytes(ptr: void*, n: int): int:
+        s := this.st
+        if s[0].len + n > s[0].limit:
+            s[0].overflow = true
+            ret 0 - 1
+        end
+        if s[0].len + n > s[0].cap:
+            mut nc := s[0].cap * 2
+            if nc < s[0].len + n: nc = s[0].len + n end
+            s[0].buf = mem.Reallocate(s[0].buf as void*, nc as u64) as u8*
+            s[0].cap = nc
+        end
+        mem.Copy(((s[0].buf as i64) + (s[0].len as i64)) as void*, ptr, n as u64)
+        s[0].len += n
+        ret n
+    end
+
+    pub func SetDeadline(millis: int):
+        this.deadline = millis
+    end
+
+    pub func Shutdown():
+        this.closed = true
+    end
+
+    pub func Close():
+        this.closed = true
+    end
+
+    pub func Ok(): bool:
+        ret not this.closed
+    end
+end
+
+func _range_str(p: u8*, off: int, n: int): str:
+    b := mem.AllocateZeroed((n + 1) as u64)
+    if n > 0: mem.Copy(b, ((p as i64) + (off as i64)) as void*, n as u64) end
+    out := str.Clone(b as str)
+    mem.Free(b)
+    ret out
+end
+
+func _rd_new(s: dyn tunnel.Stream, cap: int): _Rd:
+    ret _Rd { s = s, buf = mem.Allocate(cap as u64) as u8*, cap = cap, pos = 0, len = 0 }
+end
+
+func _rd_free(r: _Rd):
+    mem.Free(r.buf as void*)
+end
+
+func _rd_fill(r &: _Rd): bool:
+    if r.pos == r.len:
+        r.pos = 0
+        r.len = 0
+    end
+    if r.len == r.cap:
+        if r.pos == 0: ret false end
+        mem.MemMove(r.buf as void*, ((r.buf as i64) + (r.pos as i64)) as void*, (r.len - r.pos) as u64)
+        r.len -= r.pos
+        r.pos = 0
+    end
+    n := r.s.ReadBytes(((r.buf as i64) + (r.len as i64)) as void*, r.cap - r.len)
+    if n <= 0: ret false end
+    r.len += n
+    ret true
+end
+
+func _rd_find(r: _Rd, pat: str, from: int): int:
+    pl := pat.len()
+    pp := pat as u8*
+    mut i := r.pos + from
+    until i + pl <= r.len:
+        mut m := 0
+        until m < pl and r.buf[i + m] == pp[m]:
+            m++
+        end
+        if m == pl: ret i - r.pos end
+        i++
+    end
+    ret 0 - 1
+end
+
+func _rd_head(r &: _Rd, max: int, status &: int): str:
+    status = 0
+    until r.pos < r.len and (r.buf[r.pos] == 13 or r.buf[r.pos] == 10):
+        r.pos++
+    end
+    mut scan := 0
+    until true:
+        idx := _rd_find(r, "\r\n\r\n", scan)
+        if idx >= 0:
+            take := idx + 4
+            if take > max:
+                status = 2
+                ret ""
+            end
+            repeat take in i:
+                if r.buf[r.pos + i] == 0:
+                    status = 3
+                    ret ""
+                end
+            end
+            text := _range_str(r.buf, r.pos, take)
+            r.pos += take
+            ret text
+        end
+        avail := r.len - r.pos
+        if avail >= max:
+            status = 2
+            ret ""
+        end
+        scan = avail - 3
+        if scan < 0: scan = 0 end
+        had := avail
+        if not _rd_fill(r):
+            status = 1
+            if had > 0: status = 4 end
+            ret ""
+        end
+    end
+end
+
+func _rd_copy(r &: _Rd, dst: dyn tunnel.Stream, n: i64): bool:
+    mut left := n
+    until left > 0:
+        if r.pos == r.len:
+            if not _rd_fill(r): ret false end
+        end
+        mut take := r.len - r.pos
+        if (take as i64) > left: take = left as int end
+        if dst.WriteBytes(((r.buf as i64) + (r.pos as i64)) as void*, take) != take: ret false end
+        r.pos += take
+        left -= take as i64
+    end
+    ret true
+end
+
+func _rd_copy_close(r &: _Rd, dst: dyn tunnel.Stream): bool:
+    until true:
+        if r.pos < r.len:
+            take := r.len - r.pos
+            if dst.WriteBytes(((r.buf as i64) + (r.pos as i64)) as void*, take) != take: ret false end
+            r.pos += take
+        end
+        if not _rd_fill(r): ret true end
+    end
+end
+
+func _rd_line(r &: _Rd, max: int, out &: str): bool:
+    until true:
+        nl := _rd_find(r, "\n", 0)
+        if nl >= 0:
+            mut n := nl
+            if n > 0 and r.buf[r.pos + n - 1] == 13: n-- end
+            if n > max: ret false end
+            out = _range_str(r.buf, r.pos, n)
+            r.pos += nl + 1
+            ret true
+        end
+        if r.len - r.pos >= max: ret false end
+        if not _rd_fill(r): ret false end
+    end
+end
+
+func _hex_val(c: int): int:
+    if c >= 48 and c <= 57: ret c - 48 end
+    if c >= 97 and c <= 102: ret c - 87 end
+    if c >= 65 and c <= 70: ret c - 55 end
+    ret 0 - 1
+end
+
+func _chunk_size(line: str): i64:
+    n := line.len()
+    mut size := 0 as i64
+    mut digits := 0
+    mut i := 0
+    until i < n:
+        c := _ch(line, i)
+        if c == 59 or c == 32 or c == 9: break end
+        d := _hex_val(c)
+        if d < 0: ret 0 - 1 end
+        size = size * 16 + (d as i64)
+        digits++
+        if digits > 15: ret 0 - 1 end
+        i++
+    end
+    if digits == 0: ret 0 - 1 end
+    ret size
+end
+
+func _rd_copy_chunked(r &: _Rd, dst: dyn tunnel.Stream): bool:
+    until true:
+        mut line := ""
+        if not _rd_line(r, 1024, line): ret false end
+        size := _chunk_size(line)
+        if size < 0: ret false end
+        if not tunnel.WriteAll(dst, line + "\r\n"): ret false end
+        if size == 0:
+            until true:
+                mut tl := ""
+                if not _rd_line(r, 8192, tl): ret false end
+                if not tunnel.WriteAll(dst, tl + "\r\n"): ret false end
+                if tl.len() == 0: ret true end
+            end
+        end
+        if not _rd_copy(r, dst, size): ret false end
+        mut crlf := ""
+        if not _rd_line(r, 8, crlf): ret false end
+        if crlf.len() != 0: ret false end
+        if not tunnel.WriteAll(dst, "\r\n"): ret false end
+    end
+end
+
+func _rd_flush_to(r &: _Rd, dst: dyn tunnel.Stream): bool:
+    take := r.len - r.pos
+    if take <= 0: ret true end
+    ok := dst.WriteBytes(((r.buf as i64) + (r.pos as i64)) as void*, take) == take
+    r.pos = r.len
+    ret ok
+end
+
+func _sink_new(limit: int): _SinkState*:
+    p := mem.AllocateZeroed(sizeof(_SinkState) as u64) as _SinkState*
+    p[0].buf = mem.Allocate(1024 as u64) as u8*
+    p[0].cap = 1024
+    p[0].limit = limit
+    ret p
+end
+
+func _sink_free(p: _SinkState*):
+    mem.Free(p[0].buf as void*)
+    mem.Free(p as void*)
+end

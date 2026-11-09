@@ -1,0 +1,641 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package vmess
+
+import mem
+import crypto
+import tls
+import sync
+import time
+import rand
+import net.transport
+
+const MAX_PLAIN := 16384
+
+@en "User"
+@fa "کاربر"
+pub struct User:
+    @en "id"
+    @fa "شناسه"
+    pub id: str = ""
+    @en "cmd_key"
+    @fa "کلید فرمان"
+    pub cmd_key: transport.Bytes = transport.Bytes {}
+end
+
+@en "ReplayFilter"
+@fa "فیلتر بازپخش"
+pub struct ReplayFilter:
+    @en "seen"
+    @fa "دیده شده"
+    pub seen: HashMap<str, i64> = HashMap {} as HashMap<str, i64>
+    @en "lock"
+    @fa "قفل"
+    pub lock: sync.Mutex = sync.NewMutex()
+end
+
+struct Codec:
+    pub security: int = 3
+    pub option: int = 0
+    pub key: transport.Bytes = transport.Bytes {}
+    pub iv: transport.Bytes = transport.Bytes {}
+    pub lkey: transport.Bytes = transport.Bytes {}
+    pub counter: int = 0
+    pub lcounter: int = 0
+    pub shake: Shake = Shake {}
+    pub has_shake: bool = false
+end
+
+@en "Conn"
+@fa "اتصال"
+pub struct Conn:
+    @en "t"
+    @fa "انتقال"
+    pub t: transport.Conn = transport.Conn {}
+    @en "client"
+    @fa "کارخواه"
+    pub client: bool = false
+    @en "ok"
+    @fa "معتبر"
+    pub ok: bool = false
+    @en "err"
+    @fa "خطا"
+    pub err: str = ""
+    @en "req"
+    @fa "درخواست"
+    pub req: Request = Request {}
+    @en "user"
+    @fa "کاربر"
+    pub user: str = ""
+    pub wc: Codec = Codec {}
+    pub rc: Codec = Codec {}
+    pub resp_pending: bool = false
+    pub resp_key: transport.Bytes = transport.Bytes {}
+    pub resp_iv: transport.Bytes = transport.Bytes {}
+    pub rbuf: transport.Bytes = transport.Bytes {}
+    pub eof: bool = false
+    pub closed: bool = false
+end
+
+func _chacha_key(k: transport.Bytes): transport.Bytes:
+    mut out := transport.NewBytes(32)
+    crypto.Md5Bytes(k.p, 16, out.p)
+    crypto.Md5Bytes(out.p, 16, transport.BytesPtr(out, 16))
+    out.len = 32
+    ret out
+end
+
+func _codec_new(security: int, option: int, key: transport.Bytes, iv: transport.Bytes): Codec:
+    mut c := Codec {}
+    c.security = security
+    c.option = option
+    if security == SecChaCha20Poly1305:
+        c.key = _chacha_key(key)
+    else:
+        c.key = transport.NewBytes(16)
+        transport.PutBytes(c.key, key)
+    end
+    c.iv = transport.NewBytes(16)
+    transport.PutBytes(c.iv, iv)
+    if (option & OptAuthLength) != 0:
+        c.lkey = KDF16(key, "auth_len", _empty(), _empty())
+    end
+    if (option & (OptChunkMask | OptPadding)) != 0:
+        c.shake = _shake128_new(iv.p, iv.len)
+        c.has_shake = true
+    end
+    ret c
+end
+
+func _codec_free(c &: Codec):
+    transport.FreeBytes(c.key)
+    transport.FreeBytes(c.iv)
+    transport.FreeBytes(c.lkey)
+    if c.has_shake:
+        _shake_free(c.shake)
+        c.has_shake = false
+    end
+end
+
+func _overhead(c: Codec): int:
+    if c.security == SecAES128GCM or c.security == SecChaCha20Poly1305:
+        ret 16
+    end
+    ret 0
+end
+
+func _nonce(iv: transport.Bytes, counter: int): transport.Bytes:
+    mut n := transport.NewBytes(12)
+    transport.Put16(n, counter & 0xFFFF)
+    transport.PutRaw(n, transport.BytesPtr(iv, 2), 10)
+    ret n
+end
+
+func _padding_len(c &: Codec): int:
+    if (c.option & OptPadding) != 0 and c.has_shake:
+        ret _shake_next16(c.shake) % 64
+    end
+    ret 0
+end
+
+func _seal_chunk(c &: Codec, p: void*, n: int, out &: transport.Bytes):
+    ov := _overhead(c)
+    pad := _padding_len(c)
+    total := n + ov + pad
+    if (c.option & OptAuthLength) != 0:
+        mut lb := transport.NewBytes(2)
+        transport.Put16(lb, total - 16)
+        mut ln := _nonce(c.iv, c.lcounter)
+        c.lcounter++
+        mut le := _gcm_seal(c.lkey, ln, _empty(), lb)
+        transport.PutBytes(out, le)
+        transport.FreeBytes(lb)
+        transport.FreeBytes(ln)
+        transport.FreeBytes(le)
+    else (c.option & OptChunkMask) != 0 and c.has_shake:
+        transport.Put16(out, total ^ _shake_next16(c.shake))
+    else:
+        transport.Put16(out, total)
+    end
+    if ov == 0:
+        transport.PutRaw(out, p, n)
+    else:
+        mut nn := _nonce(c.iv, c.counter)
+        c.counter++
+        transport.Reserve(out, n + 16)
+        dst := transport.BytesPtr(out, out.len)
+        if c.security == SecAES128GCM:
+            tls.AesGcmSealRaw(c.key.p, 16, nn.p, null, 0, p, n, dst)
+        else:
+            tls.ChaCha20Poly1305SealRaw(c.key.p, nn.p, null, 0, p, n, dst)
+        end
+        out.len += n + 16
+        transport.FreeBytes(nn)
+    end
+    if pad > 0:
+        mut pb := transport.NewBytes(pad)
+        crypto.RandomBytes(pb.p, pad)
+        pb.len = pad
+        transport.PutBytes(out, pb)
+        transport.FreeBytes(pb)
+    end
+end
+
+func _read_chunk(t &: transport.Conn, c &: Codec, out &: transport.Bytes): int:
+    mut slen := 2
+    if (c.option & OptAuthLength) != 0:
+        slen = 18
+    end
+    mut sb := transport.NewBytes(slen)
+    defer transport.FreeBytes(sb)
+    if not transport.ReadFull(t, sb.p, slen):
+        ret 0 - 1
+    end
+    sb.len = slen
+    pad := _padding_len(c)
+    mut total := 0
+    if (c.option & OptAuthLength) != 0:
+        mut ln := _nonce(c.iv, c.lcounter)
+        c.lcounter++
+        mut pl := _gcm_open(c.lkey, ln, _empty(), sb)
+        transport.FreeBytes(ln)
+        if pl.bad:
+            transport.FreeBytes(pl)
+            ret 0 - 1
+        end
+        total = transport.Peek16(pl, 0) + 16
+        transport.FreeBytes(pl)
+    else (c.option & OptChunkMask) != 0 and c.has_shake:
+        total = transport.Peek16(sb, 0) ^ _shake_next16(c.shake)
+    else:
+        total = transport.Peek16(sb, 0)
+    end
+    ov := _overhead(c)
+    enc := total - pad
+    if enc < ov or total > 65535:
+        ret 0 - 1
+    end
+    mut body := transport.NewBytes(total + 1)
+    defer transport.FreeBytes(body)
+    if total > 0 and not transport.ReadFull(t, body.p, total):
+        ret 0 - 1
+    end
+    body.len = total
+    pn := enc - ov
+    if ov == 0:
+        if pn > 0:
+            transport.PutRaw(out, body.p, pn)
+        end
+        ret pn
+    end
+    mut nn := _nonce(c.iv, c.counter)
+    c.counter++
+    transport.Reserve(out, pn + 1)
+    dst := transport.BytesPtr(out, out.len)
+    mut good := false
+    if c.security == SecAES128GCM:
+        good = tls.AesGcmOpenRaw(c.key.p, 16, nn.p, null, 0, body.p, enc, dst)
+    else:
+        good = tls.ChaCha20Poly1305OpenRaw(c.key.p, nn.p, null, 0, body.p, enc, dst)
+    end
+    transport.FreeBytes(nn)
+    if not good:
+        ret 0 - 1
+    end
+    out.len += pn
+    ret pn
+end
+
+func _fail(c &: Conn, msg: str):
+    c.ok = false
+    c.err = msg
+    transport.Close(c.t)
+end
+
+func _setup_resp_keys(c &: Conn):
+    mut kh := Sha256(c.req.key)
+    mut ih := Sha256(c.req.iv)
+    c.resp_key = transport.NewBytes(16)
+    transport.PutRaw(c.resp_key, kh.p, 16)
+    c.resp_iv = transport.NewBytes(16)
+    transport.PutRaw(c.resp_iv, ih.p, 16)
+    transport.FreeBytes(kh)
+    transport.FreeBytes(ih)
+end
+
+func _read_response(c &: Conn): bool:
+    mut el := transport.NewBytes(18)
+    defer transport.FreeBytes(el)
+    if not transport.ReadFull(c.t, el.p, 18):
+        _fail(c, "no response header")
+        ret false
+    end
+    el.len = 18
+    n := OpenResponseLength(c.resp_key, el)
+    if n < 4 or n > 4096:
+        _fail(c, "bad response header length")
+        ret false
+    end
+    mut eh := transport.NewBytes(n + 16)
+    defer transport.FreeBytes(eh)
+    if not transport.ReadFull(c.t, eh.p, n + 16):
+        _fail(c, "short response header")
+        ret false
+    end
+    eh.len = n + 16
+    mut h := OpenResponseHeader(c.resp_key, eh)
+    defer transport.FreeBytes(h)
+    if h.bad or h.len < 4 or transport.At(h, 0) != c.req.resp_v:
+        _fail(c, "response header rejected")
+        ret false
+    end
+    c.resp_pending = false
+    if c.req.security != SecZero:
+        c.rc = _codec_new(c.req.security, c.req.option, c.resp_key, c.resp_iv)
+    end
+    ret true
+end
+
+@en "NewUser"
+@fa "کاربر جدید"
+pub func NewUser(uuid: str): User:
+    mut u := User {}
+    u.id = uuid
+    mut b := transport.ParseUUID(uuid)
+    if b.bad:
+        transport.FreeBytes(b)
+        ret u
+    end
+    u.cmd_key = CmdKey(b)
+    transport.FreeBytes(b)
+    ret u
+end
+
+@en "NewReplayFilter"
+@fa "فیلتر بازپخش جدید"
+pub func NewReplayFilter(): ReplayFilter:
+    ret ReplayFilter {}
+end
+
+@en "DefaultOption"
+@fa "گزینه پیش فرض"
+pub func DefaultOption(security: int): int:
+    if security == SecZero:
+        ret 0
+    end
+    if security == SecNone:
+        ret OptChunkStream
+    end
+    ret OptChunkStream | OptChunkMask
+end
+
+@en "Client"
+@fa "کارخواه"
+pub func Client(t: transport.Conn, uuid: str, security: int, option: int, command: int, addr: transport.Addr): Conn:
+    mut c := Conn {}
+    c.t = t
+    c.client = true
+    mut idb := transport.ParseUUID(uuid)
+    if idb.bad:
+        transport.FreeBytes(idb)
+        _fail(c, "bad uuid")
+        ret c
+    end
+    mut ck := CmdKey(idb)
+    transport.FreeBytes(idb)
+    mut r := Request {}
+    r.iv = transport.NewBytes(16)
+    crypto.RandomBytes(r.iv.p, 16)
+    r.iv.len = 16
+    r.key = transport.NewBytes(16)
+    crypto.RandomBytes(r.key.p, 16)
+    r.key.len = 16
+    r.resp_v = rand.IntRange(0 as i64, 255 as i64) as int
+    r.option = option
+    r.security = security
+    r.command = command
+    r.addr = addr
+    r.padding = rand.IntRange(0 as i64, 15 as i64) as int
+    c.req = r
+    mut plain := EncodeRequest(r)
+    mut sealed := SealHeaderNow(ck, plain)
+    ok := transport.WriteBytes(c.t, sealed)
+    transport.FreeBytes(plain)
+    transport.FreeBytes(sealed)
+    transport.FreeBytes(ck)
+    if not ok:
+        _fail(c, "could not send the request header")
+        ret c
+    end
+    if security != SecZero:
+        c.wc = _codec_new(security, option, r.key, r.iv)
+    end
+    _setup_resp_keys(c)
+    c.resp_pending = true
+    c.ok = true
+    ret c
+end
+
+@en "Dial"
+@fa "شماره گیری"
+pub func Dial(
+    host: str, port: int, s: transport.Settings, uuid: str, security: int, command: int, target: transport.Addr
+): Conn:
+    t := transport.Dial(host, port, s)
+    if not transport.Ok(t):
+        mut c := Conn {}
+        c.t = t
+        c.err = t.err
+        ret c
+    end
+    ret Client(t, uuid, security, DefaultOption(security), command, target)
+end
+
+@en "Accept"
+@fa "پذیرش"
+pub func Accept(t: transport.Conn, users: Vector<User>, rf &: ReplayFilter): Conn:
+    mut c := Conn {}
+    c.t = t
+    mut authid := transport.NewBytes(16)
+    defer transport.FreeBytes(authid)
+    if not transport.ReadFull(c.t, authid.p, 16):
+        _fail(c, "no auth id")
+        ret c
+    end
+    authid.len = 16
+    now := time.Now()
+    mut found := 0 - 1
+    repeat users.len() in i:
+        u := users.get(i)
+        mut ts := 0 as i64
+        if OpenAuthID(u.cmd_key, authid, ts):
+            mut d := now - ts
+            if d < 0 as i64:
+                d = 0 as i64 - d
+            end
+            if d <= (TimeWindow as i64):
+                found = i
+                break
+            end
+        end
+    end
+    if found < 0:
+        _fail(c, "unknown user or stale timestamp")
+        ret c
+    end
+    u := users.get(found)
+    key := transport.ToHex(authid)
+    sync.Lock(rf.lock)
+    mut replay := false
+    if rf.seen.has(key):
+        replay = true
+    else:
+        rf.seen.put(key, now)
+        if rf.seen.size() > 4096:
+            mut stale := Vector {} as Vector<str>
+            each k, v in rf.seen:
+                if now - v > ((2 * TimeWindow) as i64):
+                    stale.push(k)
+                end
+            end
+            repeat stale.len() in i:
+                rf.seen.remove(stale.get(i))
+            end
+            stale.free()
+        end
+    end
+    sync.Unlock(rf.lock)
+    if replay:
+        _fail(c, "replayed auth id")
+        ret c
+    end
+    mut el := transport.NewBytes(18 + 8)
+    defer transport.FreeBytes(el)
+    if not transport.ReadFull(c.t, el.p, 26):
+        _fail(c, "short header")
+        ret c
+    end
+    el.len = 26
+    mut enc_len := transport.NewBytes(18)
+    defer transport.FreeBytes(enc_len)
+    transport.PutRaw(enc_len, el.p, 18)
+    mut nonce := transport.NewBytes(8)
+    defer transport.FreeBytes(nonce)
+    transport.PutRaw(nonce, transport.BytesPtr(el, 18), 8)
+    n := OpenHeaderLength(u.cmd_key, authid, enc_len, nonce)
+    if n < 38 or n > 2048:
+        _fail(c, "bad header length")
+        ret c
+    end
+    mut eh := transport.NewBytes(n + 16)
+    defer transport.FreeBytes(eh)
+    if not transport.ReadFull(c.t, eh.p, n + 16):
+        _fail(c, "short header body")
+        ret c
+    end
+    eh.len = n + 16
+    mut hd := OpenHeader(u.cmd_key, authid, eh, nonce)
+    defer transport.FreeBytes(hd)
+    if hd.bad:
+        _fail(c, "header authentication failed")
+        ret c
+    end
+    mut req := Request {}
+    if not DecodeRequest(hd, req):
+        _fail(c, "bad request header")
+        ret c
+    end
+    c.req = req
+    c.user = u.id
+    sec := req.security
+    if sec != SecAES128GCM and sec != SecChaCha20Poly1305 and sec != SecNone and sec != SecZero:
+        _fail(c, "unsupported security type")
+        ret c
+    end
+    _setup_resp_keys(c)
+    if sec != SecZero:
+        c.rc = _codec_new(sec, req.option, req.key, req.iv)
+        c.wc = _codec_new(sec, req.option, c.resp_key, c.resp_iv)
+    end
+    mut rh := transport.NewBytes(4)
+    defer transport.FreeBytes(rh)
+    transport.Put8(rh, req.resp_v)
+    transport.Put8(rh, 0)
+    transport.Put8(rh, 0)
+    transport.Put8(rh, 0)
+    mut sealed := SealResponseHeader(c.resp_key, rh)
+    defer transport.FreeBytes(sealed)
+    if not transport.WriteBytes(c.t, sealed):
+        _fail(c, "could not send the response header")
+        ret c
+    end
+    c.ok = true
+    ret c
+end
+
+@en "Read"
+@fa "خواندن"
+pub func Read(c &: Conn, buf: void*, max: int): int:
+    if not c.ok or c.eof:
+        ret 0
+    end
+    if c.resp_pending:
+        if not _read_response(c):
+            ret 0 - 1
+        end
+    end
+    if c.req.security == SecZero:
+        ret transport.Read(c.t, buf, max)
+    end
+    until c.rbuf.len == 0:
+        n := _read_chunk(c.t, c.rc, c.rbuf)
+        if n < 0:
+            c.eof = true
+            ret 0 - 1
+        end
+        if n == 0:
+            c.eof = true
+            ret 0
+        end
+    end
+    mut take := max
+    if take > c.rbuf.len:
+        take = c.rbuf.len
+    end
+    mem.Copy(buf, c.rbuf.p, take as u64)
+    transport.Consume(c.rbuf, take)
+    ret take
+end
+
+@en "ReadPacket"
+@fa "خواندن بسته"
+pub func ReadPacket(c &: Conn, out &: transport.Bytes): bool:
+    if not c.ok or c.eof:
+        ret false
+    end
+    if c.resp_pending:
+        if not _read_response(c):
+            ret false
+        end
+    end
+    n := _read_chunk(c.t, c.rc, out)
+    if n <= 0:
+        c.eof = true
+        ret false
+    end
+    ret true
+end
+
+@en "Write"
+@fa "نوشتن"
+pub func Write(c &: Conn, p: void*, n: int): bool:
+    if not c.ok:
+        ret false
+    end
+    if c.req.security == SecZero:
+        ret transport.Write(c.t, p, n)
+    end
+    mut out := transport.NewBytes(n + 64)
+    defer transport.FreeBytes(out)
+    mut off := 0
+    until off < n:
+        mut take := n - off
+        if take > MAX_PLAIN:
+            take = MAX_PLAIN
+        end
+        _seal_chunk(c.wc, ((p as i64) + (off as i64)) as void*, take, out)
+        off += take
+    end
+    ret transport.WriteBytes(c.t, out)
+end
+
+@en "Close"
+@fa "بستن"
+pub func Close(c &: Conn):
+    if c.closed:
+        ret
+    end
+    c.closed = true
+    if c.ok and c.req.security != SecZero:
+        mut out := transport.NewBytes(64)
+        _seal_chunk(c.wc, null, 0, out)
+        transport.WriteBytes(c.t, out)
+        transport.FreeBytes(out)
+    end
+    transport.Close(c.t)
+    _codec_free(c.wc)
+    _codec_free(c.rc)
+    transport.FreeBytes(c.rbuf)
+    transport.FreeBytes(c.resp_key)
+    transport.FreeBytes(c.resp_iv)
+end
+
+@en "EncodeChunks"
+@fa "کدگذاری قطعه ها"
+pub func EncodeChunks(
+    security: int, option: int, key: transport.Bytes, iv: transport.Bytes, parts: Vector<transport.Bytes>, with_end: bool
+): transport.Bytes:
+    mut c := _codec_new(security, option, key, iv)
+    mut out := transport.NewBytes(256)
+    repeat parts.len() in i:
+        p := parts.get(i)
+        _seal_chunk(c, p.p, p.len, out)
+    end
+    if with_end:
+        _seal_chunk(c, null, 0, out)
+    end
+    _codec_free(c)
+    ret out
+end

@@ -1,0 +1,174 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import net.tunnel
+import net.tcp
+import encoding.json
+
+mut failures := 0
+mut echo_server := tcp.Server {}
+
+struct TaggedMaker:
+    pub unused: int = 0
+
+    pub func Protocol(): str:
+        ret "tagged"
+    end
+
+    pub func Make(_cfg: tunnel.OutboundConfig): dyn tunnel.Dialer:
+        ret tunnel.Block()
+    end
+end
+
+struct LoopbackMaker:
+    pub unused: int = 0
+
+    pub func Protocol(): str:
+        ret "loopback"
+    end
+
+    pub func Make(_cfg: tunnel.OutboundConfig): dyn tunnel.Dialer:
+        ret tunnel.Direct()
+    end
+end
+
+struct SilentInbound:
+    pub unused: int = 0
+
+    pub func Protocol(): str:
+        ret "silent"
+    end
+
+    pub func Make(_cfg: tunnel.InboundConfig): dyn tunnel.InboundProtocol:
+        ret tunnel.NullProtocol {}
+    end
+end
+
+func expect(label: str, ok: bool):
+    if not ok:
+        println "FAIL", label
+        failures++
+    end
+end
+
+func echo_once():
+    c := tcp.Accept(echo_server)
+    data := tcp.Read(c, 64)
+    tcp.Write(c, "echo:" + data)
+    tcp.Close(c)
+end
+
+func main:
+    sample := `{
+  "log": {"loglevel": "info"},
+  "inbounds": [
+    {"tag": "mixed-in", "listen": "127.0.0.1", "port": 10808, "protocol": "mixed", "settings": {"udp": true}},
+    {"tag": "http-in", "port": "10809", "protocol": "http"}
+  ],
+  "outbounds": [
+    {"tag": "proxy", "protocol": "vless", "settings": {"vnext": [{"address": "v.example.com", "port": 443, "users": [{"id": "b831381d-6324-4d53-ad4f-8cda48b30811", "encryption": "none", "flow": "xtls-rprx-vision"}]}]}, "streamSettings": {"network": "tcp", "security": "reality", "realitySettings": {"serverName": "www.microsoft.com", "fingerprint": "chrome", "publicKey": "AbCdEf-xyz_123", "shortId": "6ba85179e30d4fc2", "spiderX": "/"}}},
+    {"tag": "direct", "protocol": "freedom"},
+    {"tag": "block", "protocol": "blackhole"}
+  ],
+  "routing": {
+    "domainStrategy": "IPIfNonMatch",
+    "rules": [
+      {"type": "field", "domain": ["domain:ir", "full:exact.example.com", "keyword:bank"], "outboundTag": "direct"},
+      {"type": "field", "ip": ["geoip:private", "203.0.113.0/24"], "outboundTag": "direct"},
+      {"type": "field", "port": "25,465", "outboundTag": "block"}
+    ]
+  }
+}`
+    c := tunnel.ParseConfig(sample)
+    println c.errors.len(), c.log_level, c.inbounds.len(), c.outbounds.len(), c.rules.len(), c.default_outbound
+    println c.inbounds[0].tag, c.inbounds[0].port, c.inbounds[0].settings, c.inbounds[1].port, c.inbounds[1].listen
+    println c.outbounds[1].protocol, c.rules[0].domain.len(), c.rules[1].ip[1], c.rules[2].port, c.rules[2].outbound_tag
+    errs := tunnel.ValidateConfig(c)
+    println "validate", errs.len()
+
+    text := tunnel.ConfigToJson(c)
+    println json.Valid(text)
+    c2 := tunnel.ParseConfig(text)
+    println "round trip", tunnel.ConfigToJson(c2) == text, tunnel.ValidateConfig(c2).len()
+
+    rt := tunnel.BuildRouter(c)
+    println rt.MatchHost("divar.ir", 443), rt.MatchHost("my-bank.example.com", 443), rt.MatchHost("exact.example.com", 443), rt.MatchHost("sub.exact.example.com", 443), rt.MatchHost("10.1.1.1", 80), rt.MatchHost("203.0.113.5", 80), rt.MatchHost("mail.example.com", 25), rt.MatchHost("mail.example.com", 587)
+
+    n := tunnel.NodeFromOutbound(c.outbounds[0])
+    println n.valid, n.protocol, n.host, n.port, n.uuid, n.flow, n.security, n.sni, n.public_key, n.short_id, n.spider_x, n.network
+    println tunnel.NodeToLink(n)
+    back := tunnel.OutboundFromNode(n, "proxy")
+    println json.Minify(back.settings) == json.Minify(c.outbounds[0].settings), json.Minify(back.stream_settings) == json.Minify(c.outbounds[0].stream_settings)
+
+    links := ["vmess://" + "eyJ2IjoiMiIsInBzIjoidm0iLCJhZGQiOiJ2bS5leGFtcGxlLmNvbSIsInBvcnQiOiI0NDMiLCJpZCI6IjExMTExMTExLTIyMjItMzMzMy00NDQ0LTU1NTU1NTU1NTU1NSIsImFpZCI6IjAiLCJzY3kiOiJhdXRvIiwibmV0Ijoid3MiLCJob3N0IjoiYS5jb20iLCJwYXRoIjoiL3AiLCJ0bHMiOiJ0bHMiLCJzbmkiOiJhLmNvbSJ9", "trojan://pw%21@t.example.com:443?security=tls&sni=t.example.com&type=grpc&serviceName=svc#t", "ss://YWVzLTI1Ni1nY206cGFzcw@s.example.com:8388#s", "vless://11111111-2222-3333-4444-555555555555@w.example.com:443?security=tls&type=ws&host=w.example.com&path=%2Fw&sni=w.example.com&allowInsecure=1&alpn=h2#w"]
+    each l in links:
+        a := tunnel.ParseLink(l)
+        o := tunnel.OutboundFromNode(a, a.remark)
+        b := tunnel.NodeFromOutbound(o)
+        same := tunnel.NodeToLink(a) == tunnel.NodeToLink(b)
+        println a.protocol, same, json.Valid(o.settings), json.Valid(o.stream_settings)
+        if not same:
+            println tunnel.NodeToLink(a)
+            println tunnel.NodeToLink(b)
+            failures++
+        end
+    end
+
+    mut nodes := Vector {} as Vector<tunnel.Node>
+    nodes.push(tunnel.ParseLink(links[1]))
+    nodes.push(tunnel.ParseLink(links[2]))
+    gen := tunnel.ConfigFromNodes(nodes, 7890)
+    println gen.outbounds.len(), gen.outbounds[0].tag, gen.default_outbound, gen.inbounds[0].port, tunnel.ValidateConfig(gen).len()
+    gen2 := tunnel.ParseConfig(tunnel.ConfigToJson(gen))
+    println tunnel.ConfigToJson(gen2) == tunnel.ConfigToJson(gen)
+    println tunnel.ConfigFromNodes(Vector {} as Vector<tunnel.Node>, 1).default_outbound
+
+    bad := tunnel.ParseConfig(`{"inbounds":[{"protocol":"socks","port":0},{"tag":"x","protocol":"","port":70000},{"tag":"x","protocol":"http","port":80}],"outbounds":[{"tag":"a","protocol":"freedom"},{"tag":"a","protocol":"x"},{"protocol":"y"}],"routing":{"defaultOutbound":"nope","rules":[{"outboundTag":"zzz","port":"99999"},{"domain":["regexp:("],"ip":["1.2.3.4/40"],"port":"x","outboundTag":"a"},{"outboundTag":"a"}]}}`)
+    each e in tunnel.ValidateConfig(bad):
+        println e
+    end
+    println tunnel.ValidateConfig(tunnel.ParseConfig("not json")).len(), tunnel.ValidateConfig(tunnel.ParseConfig("{}")).len()
+    println tunnel.LoadConfig("/nonexistent/path.json").errors.len()
+
+    println tunnel.HasOutbound("tagged"), tunnel.HasOutbound("freedom"), tunnel.HasOutbound("blackhole"), tunnel.HasInbound("silent")
+    tunnel.RegisterOutbound(TaggedMaker {})
+    tunnel.RegisterOutbound(LoopbackMaker {})
+    tunnel.RegisterOutbound(TaggedMaker {})
+    tunnel.RegisterInbound(SilentInbound {})
+    println tunnel.HasOutbound("tagged"), tunnel.HasOutbound("loopback"), tunnel.HasInbound("silent"), tunnel.HasInbound("tagged")
+    println tunnel.CreateOutbound(tunnel.OutboundConfig { protocol = "tagged" }).Name(), tunnel.CreateOutbound(tunnel.OutboundConfig { protocol = "loopback" }).Name(), tunnel.CreateOutbound(tunnel.OutboundConfig { protocol = "freedom" }).Name(), tunnel.CreateOutbound(tunnel.OutboundConfig { protocol = "unknown" }).Name()
+    println tunnel.CreateInbound(tunnel.InboundConfig { protocol = "silent" }).Name(), tunnel.CreateInbound(tunnel.InboundConfig { protocol = "zzz" }).Name()
+
+    routed := tunnel.ParseConfig(`{"outbounds":[{"tag":"lo","protocol":"loopback"},{"tag":"deny","protocol":"blackhole"},{"tag":"fail","protocol":"tagged"}],"routing":{"defaultOutbound":"lo","rules":[{"domain":["full:blocked.test"],"outboundTag":"deny"},{"domain":["full:broken.test"],"outboundTag":"fail"}]}}`)
+    println tunnel.ValidateConfig(routed).len()
+    rd := tunnel.BuildDialer(routed)
+    echo_server = tcp.Bind(0)
+    port := tcp.Port(echo_server)
+    t := spawn(echo_once)
+    s := rd.Dial(tunnel.NewAddr("127.0.0.1", port))
+    println rd.last_tag, s.Ok()
+    s.Write("ping")
+    println s.Read(64)
+    s.Close()
+    join(t)
+    tcp.CloseServer(echo_server)
+    println rd.Dial(tunnel.NewAddr("blocked.test", 80)).Ok(), rd.last_tag
+    println rd.Dial(tunnel.NewAddr("broken.test", 80)).Ok(), rd.last_tag
+    expect("pick unknown", rd.Pick("nope").Name() == "block")
+    expect("pick direct", rd.Pick("direct").Name() == "direct")
+    println "failures", failures
+    ret failures
+end

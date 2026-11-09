@@ -140,6 +140,27 @@ pub struct ConnState:
     @en "rd2"
     @fa "خواندن خام"
     pub rd2: void* = null
+    @en "v2022"
+    @fa "نسخه ۲۰۲۲"
+    pub v2022: bool = false
+    @en "is_server"
+    @fa "سمت سرور"
+    pub is_server: bool = false
+    @en "wphase"
+    @fa "مرحله نوشتن"
+    pub wphase: int = 0
+    @en "rphase"
+    @fa "مرحله خواندن"
+    pub rphase: int = 0
+    @en "first_len"
+    @fa "طول نخستین"
+    pub first_len: int = 0
+    @en "target_ok"
+    @fa "مقصد دریافت شد"
+    pub target_ok: bool = false
+    @en "vtmp"
+    @fa "موقت متغیر"
+    pub vtmp: Buf = Buf {}
     @en "live"
     @fa "زنده"
     pub live: bool = false
@@ -249,6 +270,9 @@ func _new_state(m: Method, key: Buf, obfs_mode: int, server: bool, host: str): C
     st.pending = NewBuf(300)
     st.rd = mem.Allocate(RD_SIZE as u64)
     st.obfs = ObfsInit(obfs_mode, server, host)
+    st.v2022 = m.v2022
+    st.is_server = server
+    st.vtmp = NewBuf(1024)
     if obfs_mode != OBFS_NONE:
         st.obuf = NewBuf(4096)
         st.oin = NewBuf(4096)
@@ -269,6 +293,7 @@ func _free_state(st: ConnState*):
     BufFree(st.plain)
     BufFree(st.out)
     BufFree(st.pending)
+    BufFree(st.vtmp)
     ObfsFree(st.obfs)
     BufFree(st.obuf)
     BufFree(st.oin)
@@ -281,25 +306,190 @@ func _free_state(st: ConnState*):
     mem.Free(st as void*)
 end
 
+func _put64be(b &: Buf, v: i64):
+    repeat 8 in i:
+        BufAppendByte(b, ((v >> (((7 - i) * 8) as i64)) & (255 as i64)) as int)
+    end
+end
+
+func _get64be(p: void*): i64:
+    mut v := 0 as i64
+    repeat 8 in i:
+        v = (v << (8 as i64)) | (_getb(p, i) as i64)
+    end
+    ret v
+end
+
+func _first_write_2022(st: ConnState*, data: void*, n: int): bool:
+    mut fixed := NewBuf(64)
+    now := time.Now()
+    if st.is_server:
+        mut take := n
+        if take > 0xffff:
+            take = 0xffff
+        end
+        EmitSalt(st.enc, st.out)
+        BufAppendByte(fixed, 1)
+        _put64be(fixed, now)
+        BufAppend(fixed, st.dec.salt.p, st.dec.salt.len)
+        BufAppendByte(fixed, take >> 8)
+        BufAppendByte(fixed, take)
+        SealFrame(st.enc, fixed.p, fixed.len, st.out)
+        SealFrame(st.enc, data, take, st.out)
+        st.wphase = 1
+        BufWipe(fixed)
+        BufFree(fixed)
+        if n > take:
+            EncodeStream(st.enc, _at(data, take), n - take, st.out)
+        end
+        ret true
+    end
+    mut padlen := 0
+    if n == 0:
+        padlen = 1 + _rand_int(900)
+    end
+    mut take := n
+    room := 0xffff - st.pending.len - 2 - padlen
+    if take > room:
+        take = room
+    end
+    mut v := NewBuf(st.pending.len + 2 + padlen + take + 16)
+    BufAppend(v, st.pending.p, st.pending.len)
+    BufAppendByte(v, padlen >> 8)
+    BufAppendByte(v, padlen)
+    _put_random(v, padlen)
+    BufAppend(v, data, take)
+    BufAppendByte(fixed, 0)
+    _put64be(fixed, now)
+    BufAppendByte(fixed, v.len >> 8)
+    BufAppendByte(fixed, v.len)
+    EmitSalt(st.enc, st.out)
+    SealFrame(st.enc, fixed.p, fixed.len, st.out)
+    SealFrame(st.enc, v.p, v.len, st.out)
+    BufFree(v)
+    BufFree(fixed)
+    st.pending.len = 0
+    st.wphase = 1
+    if n > take:
+        EncodeStream(st.enc, _at(data, take), n - take, st.out)
+    end
+    ret true
+end
+
 func _send_plain(st: ConnState*, data: void*, n: int): bool:
     st.out.len = 0
-    if st.pending.len > 0:
-        mut pt := NewBuf(st.pending.len + n)
-        BufAppend(pt, st.pending.p, st.pending.len)
-        BufAppend(pt, data, n)
-        EncodeStream(st.enc, pt.p, pt.len, st.out)
-        BufFree(pt)
-        st.pending.len = 0
-    else:
-        if n <= 0:
+    if st.v2022 and st.wphase == 0:
+        if st.is_server and n <= 0:
             ret true
         end
-        EncodeStream(st.enc, data, n, st.out)
+        _first_write_2022(st, data, n)
+    else:
+        if st.pending.len > 0:
+            mut pt := NewBuf(st.pending.len + n)
+            BufAppend(pt, st.pending.p, st.pending.len)
+            BufAppend(pt, data, n)
+            EncodeStream(st.enc, pt.p, pt.len, st.out)
+            BufFree(pt)
+            st.pending.len = 0
+        else:
+            if n <= 0:
+                ret true
+            end
+            EncodeStream(st.enc, data, n, st.out)
+        end
     end
     if st.out.bad:
         ret false
     end
     ret _tx(st, st.out.p, st.out.len)
+end
+
+func _hdr_fixed_ok(st: ConnState*): bool:
+    v := st.vtmp.p
+    t := _getb(v, 0)
+    mut want := 1
+    if st.is_server:
+        want = 0
+    end
+    if t != want:
+        ret false
+    end
+    skew := time.Now() - _get64be(_at(v, 1))
+    if skew > (30 as i64) or skew < (0 - 30) as i64:
+        ret false
+    end
+    mut off := 9
+    if not st.is_server:
+        sl := st.method.salt_len
+        mut i := 0
+        mut same := true
+        until i < sl:
+            if _getb(_at(v, 9), i) != _getb(st.enc.salt.p, i):
+                same = false
+            end
+            i += 1
+        end
+        if not same:
+            ret false
+        end
+        off += sl
+    end
+    st.first_len = _getb(v, off) * 256 + _getb(v, off + 1)
+    ret true
+end
+
+func _server_var(st: ConnState*): bool:
+    v := st.vtmp.p
+    n := st.vtmp.len
+    pn := ParseTarget(v, n, st.target)
+    if pn <= 0 or pn + 2 > n:
+        ret false
+    end
+    off := pn + 2 + _getb(v, pn) * 256 + _getb(v, pn + 1)
+    if off > n:
+        ret false
+    end
+    BufAppend(st.plain, _at(v, off), n - off)
+    ret true
+end
+
+func _next(st: ConnState*): int:
+    if not st.v2022 or st.rphase == 2:
+        ret NextChunk(st.dec, st.plain)
+    end
+    st.vtmp.len = 0
+    if st.rphase == 0:
+        mut flen := 11
+        if not st.is_server:
+            flen += st.method.salt_len
+        end
+        r := TakeFrame(st.dec, flen, st.vtmp)
+        if r <= 0:
+            ret r
+        end
+        if not _hdr_fixed_ok(st):
+            ret 0 - 1
+        end
+        st.rphase = 1
+        ret 1
+    end
+    if not st.is_server:
+        r2 := TakeFrame(st.dec, st.first_len, st.plain)
+        if r2 == 1:
+            st.rphase = 2
+        end
+        ret r2
+    end
+    r3 := TakeFrame(st.dec, st.first_len, st.vtmp)
+    if r3 <= 0:
+        ret r3
+    end
+    if not _server_var(st):
+        ret 0 - 1
+    end
+    st.target_ok = true
+    st.rphase = 2
+    ret 1
 end
 
 func _fill(st: ConnState*): int:
@@ -310,7 +500,7 @@ func _fill(st: ConnState*): int:
         else:
             st.plain.len = 0
             st.plain_pos = 0
-            r := NextChunk(st.dec, st.plain)
+            r := _next(st)
             if r < 0:
                 res = 0 - 1
             else r == 0:
@@ -330,7 +520,7 @@ end
 
 func _client_state(cfg: Config, target_host: str, target_port: int): ConnState*:
     m := LookupMethod(cfg.method)
-    if not m.ok or m.v2022:
+    if not m.ok:
         ret null
     end
     key := MakeKey(m, cfg.password)

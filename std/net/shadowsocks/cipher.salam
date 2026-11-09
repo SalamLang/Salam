@@ -35,6 +35,9 @@ pub struct Encoder:
     @en "salt_sent"
     @fa "نمک فرستاده شد"
     pub salt_sent: bool = false
+    @en "max_chunk"
+    @fa "بیشینه تکه"
+    pub max_chunk: int = 0x3fff
 end
 
 @en "Decoder"
@@ -73,6 +76,9 @@ pub struct Decoder:
     @en "bad"
     @fa "خراب"
     pub bad: bool = false
+    @en "max_chunk"
+    @fa "بیشینه تکه"
+    pub max_chunk: int = 0x3fff
 end
 
 func _nonce_inc(n: void*):
@@ -108,6 +114,9 @@ end
 @fa "رمزگذار جدید"
 pub func NewEncoder(m: Method, master: void*, salt: void*): Encoder:
     mut e := Encoder { method = m }
+    if m.v2022:
+        e.max_chunk = 0xffff
+    end
     e.salt = NewBuf(m.salt_len)
     BufAppend(e.salt, salt, m.salt_len)
     e.ctx = _open_ctx(m, master, salt)
@@ -167,8 +176,8 @@ pub func EncodeStream(e &: Encoder, data: void*, n: int, out &: Buf):
     mut off := 0
     until off < n:
         mut take := n - off
-        if take > MAX_CHUNK:
-            take = MAX_CHUNK
+        if take > e.max_chunk:
+            take = e.max_chunk
         end
         _setb(hdr, 0, take >> 8)
         _setb(hdr, 1, take)
@@ -183,6 +192,9 @@ end
 @fa "رمزگشا جدید"
 pub func NewDecoder(m: Method, master: void*): Decoder:
     mut d := Decoder { method = m }
+    if m.v2022:
+        d.max_chunk = 0xffff
+    end
     d.master = mem.AllocateZeroed(32 as u64)
     mem.Copy(d.master, master, m.key_len as u64)
     d.salt = NewBuf(m.salt_len)
@@ -278,7 +290,7 @@ pub func NextChunk(d &: Decoder, out &: Buf): int:
             ret r
         end
         ln := (_getb(d.tmp.p, 0) << 8) | _getb(d.tmp.p, 1)
-        if ln > MAX_CHUNK:
+        if ln > d.max_chunk:
             d.bad = true
             ret 0 - 1
         end

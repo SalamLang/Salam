@@ -21,6 +21,27 @@ pub struct Config:
     @en "aes_only"
     @fa "فقط ای‌ای‌اس"
     pub aes_only: bool = false
+    @en "frag_tls"
+    @fa "تکه تکه کردن رکورد"
+    pub frag_tls: bool = false
+    @en "frag_tcp"
+    @fa "تکه تکه کردن بسته"
+    pub frag_tcp: bool = false
+    @en "frag_sni"
+    @fa "برش نام سرور"
+    pub frag_sni: bool = false
+    @en "frag_min"
+    @fa "کمینه اندازه تکه"
+    pub frag_min: int = 5
+    @en "frag_max"
+    @fa "بیشینه اندازه تکه"
+    pub frag_max: int = 20
+    @en "frag_delay_ms"
+    @fa "تاخیر بین تکه ها"
+    pub frag_delay_ms: int = 0
+    @en "frag_writes"
+    @fa "شمار نوشتن های تکه شده"
+    pub frag_writes: int = 1
 end
 
 @en "Conn"
@@ -44,6 +65,12 @@ pub struct Conn:
     @en "err"
     @fa "خطا"
     pub err: str = ""
+    @en "rdone"
+    @fa "پایان خواندن"
+    pub rdone: bool = false
+    @en "wdone"
+    @fa "پایان نوشتن"
+    pub wdone: bool = false
 end
 
 func _conn_fail(c &: Conn, msg: str): bool:
@@ -116,6 +143,9 @@ func _fill_pending(c &: Conn): bool:
             c.pending = frag
         else if typ == REC_ALERT:
             c.open = false
+            if _bufat(frag, 1) == ALERT_CLOSE_NOTIFY:
+                c.rdone = true
+            end
             if _bufat(frag, 1) != ALERT_CLOSE_NOTIFY:
                 c.err = _alert_text(frag)
             end
@@ -182,6 +212,7 @@ pub func Dial(host: str, port: int, cfg: Config): Conn:
     c.h.srand = _newbuf(32)
     c.h.ecpriv = _newbuf(32)
     c.h.ecpub = _newbuf(65)
+    _rec_set_fragment(c.h.rec, conf)
     c.h.rec.read_deadline_ms = HANDSHAKE_READ_TIMEOUT_MS
     _do_handshake(c, conf)
     c.h.rec.read_deadline_ms = 0
@@ -217,6 +248,7 @@ pub func WrapClient(fd: i64, cfg: Config): Conn:
     c.h.srand = _newbuf(32)
     c.h.ecpriv = _newbuf(32)
     c.h.ecpub = _newbuf(65)
+    _rec_set_fragment(c.h.rec, conf)
     c.h.rec.read_deadline_ms = HANDSHAKE_READ_TIMEOUT_MS
     _do_handshake(c, conf)
     c.h.rec.read_deadline_ms = 0
@@ -292,7 +324,7 @@ end
 @en "WriteBytes"
 @fa "نوشتن بایت"
 pub func WriteBytes(c &: Conn, ptr: void*, n: int): int:
-    if not c.open:
+    if c.wdone or (not c.open and not c.rdone):
         ret 0 - 1
     end
     if not _rec_write(c.h.rec, REC_APPLICATION_DATA, ptr, n):
@@ -385,10 +417,23 @@ pub func Fd(c: Conn): i64:
     ret c.h.rec.fd
 end
 
+@en "CloseWrite"
+@fa "بستن نوشتن"
+pub func CloseWrite(c &: Conn):
+    if c.wdone or (not c.open and not c.rdone):
+        ret
+    end
+    c.wdone = true
+    _rec_send_alert(c.h.rec, 1, ALERT_CLOSE_NOTIFY)
+    if c.h.rec.fd >= 0:
+        rawsock.ShutdownWrite(rawsock.FromFd(c.h.rec.fd))
+    end
+end
+
 @en "Detach"
 @fa "جداسازی اتصال"
 pub func Detach(c &: Conn):
-    if c.open:
+    if c.open and not c.wdone:
         _rec_send_alert(c.h.rec, 1, ALERT_CLOSE_NOTIFY)
     end
     c.open = false

@@ -1,0 +1,260 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import os
+import str
+import encoding.json
+
+const NEED := ["description", "viewport", "robots", "theme-color", "color-scheme", "og:type", "og:site_name", "og:title", "og:description", "og:url", "og:image", "og:image:width", "og:image:height", "og:image:alt", "og:image:type", "og:locale", "twitter:card", "twitter:title", "twitter:description", "twitter:image", "twitter:image:alt"]
+
+struct Page:
+    pub meta: HashMap<str, Vector<str>>
+    pub links: Vector<str>
+    pub title: str = ""
+    pub ld: Vector<str>
+end
+
+func flat(s: str): str:
+    ret str.Replace(str.Replace(s, "\n", " "), "\t", " ")
+end
+
+func attr(tag: str, key: str): str:
+    needle := " " + key + "=\""
+    at := str.IndexOf(tag, needle)
+    if at < 0:
+        ret ""
+    end
+    from := at + needle.len()
+    rest := tag.substr(from, tag.len() - from)
+    stop := str.IndexOf(rest, "\"")
+    if stop < 0:
+        ret ""
+    end
+    ret rest.substr(0, stop)
+end
+
+func tags_of(html: str, open: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    parts := str.Split(html, open)
+    repeat parts.len() - 1 in i:
+        part := parts.get(i + 1)
+        end_at := str.IndexOf(part, ">")
+        if end_at >= 0:
+            out.push(" " + flat(part.substr(0, end_at)))
+        end
+    end
+    ret out
+end
+
+func between(html: str, a: str, b: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    parts := str.Split(html, a)
+    repeat parts.len() - 1 in i:
+        part := parts.get(i + 1)
+        stop := str.IndexOf(part, b)
+        if stop >= 0:
+            out.push(part.substr(0, stop))
+        end
+    end
+    ret out
+end
+
+func parse(html: str): Page:
+    mut p := Page { meta = HashMap {} as HashMap<str, Vector<str>>, links = Vector {} as Vector<str>, ld = Vector {} as Vector<str> }
+    each tag in tags_of(html, "<meta"):
+        mut key := attr(tag, "name")
+        if key.len() == 0:
+            key = attr(tag, "property")
+        end
+        if key.len() > 0:
+            if not p.meta.has(key):
+                p.meta.put(key, Vector {} as Vector<str>)
+            end
+            mut list := p.meta.get(key)
+            list.push(attr(tag, "content"))
+            p.meta.put(key, list)
+        end
+    end
+    p.links = tags_of(html, "<link")
+    each t in between(html, "<title>", "</title>"):
+        p.title = t
+    end
+    p.ld = between(html, "<script type=\"application/ld+json\">", "</script>")
+    ret p
+end
+
+func first(p: Page, key: str): str:
+    if not p.meta.has(key):
+        ret ""
+    end
+    list := p.meta.get(key)
+    if list.len() == 0:
+        ret ""
+    end
+    ret list.get(0)
+end
+
+func valid_json(text: str): bool:
+    try:
+        json.Decode(text)
+        ret true
+    catch _e:
+        ret false
+    end
+end
+
+func exists_in(root: str, base: str, url: str): bool:
+    if str.StartsWith(url, "http") and not str.StartsWith(url, base):
+        ret true
+    end
+    mut rel := url
+    if str.StartsWith(rel, base):
+        rel = rel.substr(base.len(), rel.len() - base.len())
+    end
+    q := str.IndexOf(rel, "?")
+    if q >= 0:
+        rel = rel.substr(0, q)
+    end
+    rel = str.TrimPrefix(rel, "/")
+    if rel.len() == 0:
+        ret true
+    end
+    ret os.Exists(root + "/" + rel) and not os.IsDir(root + "/" + rel)
+end
+
+func has_dash(s: str): bool:
+    ret str.IndexOf(s, "\xe2\x80\x93") >= 0 or str.IndexOf(s, "\xe2\x80\x94") >= 0
+end
+
+func check(page_path: str, root: str, base: str): Vector<str>:
+    mut bad := Vector {} as Vector<str>
+    p := parse(os.ReadFile(page_path))
+    each k in NEED:
+        if not p.meta.has(k):
+            bad.push("missing meta " + k)
+        else:
+            each v in p.meta.get(k):
+                if str.Trim(v).len() == 0:
+                    bad.push("empty meta " + k)
+                end
+            end
+        end
+    end
+    if str.Trim(p.title).len() == 0:
+        bad.push("missing title")
+    end
+    mut urls := Vector {} as Vector<str>
+    mut manifest := ""
+    each rel in ["canonical", "icon", "apple-touch-icon", "manifest"]:
+        mut found := false
+        each l in p.links:
+            if attr(l, "rel") == rel:
+                found = true
+            end
+        end
+        if not found:
+            bad.push("missing link " + rel)
+        end
+    end
+    each l in p.links:
+        href := attr(l, "href")
+        if href.len() > 0:
+            urls.push(href)
+        end
+        if attr(l, "rel") == "manifest":
+            manifest = href
+        end
+    end
+    if first(p, "twitter:card") != "summary_large_image":
+        bad.push("twitter:card is not summary_large_image")
+    end
+    each k in ["description", "og:title"]:
+        if has_dash(first(p, k)):
+            bad.push("dash in " + k)
+        end
+    end
+    if has_dash(p.title):
+        bad.push("dash in title")
+    end
+    if p.ld.len() == 0:
+        bad.push("no JSON-LD")
+    end
+    each j in p.ld:
+        if not valid_json(j):
+            bad.push("bad JSON-LD")
+        end
+    end
+    urls.push(first(p, "og:image"))
+    urls.push(first(p, "twitter:image"))
+    urls.push(first(p, "og:url"))
+    if manifest.len() > 0 and os.Exists(root + "/" + str.TrimPrefix(manifest, "/")):
+        text := os.ReadFile(root + "/" + str.TrimPrefix(manifest, "/"))
+        if not valid_json(text):
+            bad.push("manifest is not valid JSON")
+        end
+        each k in ["name", "short_name", "theme_color", "background_color", "icons", "screenshots"]:
+            if not json.Has(text, k):
+                bad.push("manifest lacks " + k)
+            end
+        end
+        each key in ["icons", "screenshots"]:
+            each item in json.Items(json.Get(text, key)):
+                urls.push(json.Get(item, "src"))
+            end
+        end
+    else:
+        bad.push("manifest file missing")
+    end
+    each u in urls:
+        if not exists_in(root, base, u):
+            bad.push("not in build output: " + u)
+        end
+    end
+    img := first(p, "og:image")
+    f := root + "/" + str.TrimPrefix(str.TrimPrefix(img, base), "/")
+    if os.Exists(f):
+        size := str.Trim(os.Output("identify -format '%w %h' " + f))
+        want := first(p, "og:image:width") + " " + first(p, "og:image:height")
+        if size != want:
+            bad.push("og:image is " + size + " but the tags say " + want)
+        end
+        if os.FileSize(f) > 300000:
+            bad.push("og:image over 300KB")
+        end
+    end
+    ret bad
+end
+
+func main:
+    args := os.Args()
+    defer args.free()
+    if args.len() < 4:
+        println "usage: salam run tools/seo/check_meta.salam <page.html> <site-root> <base-url>"
+        ret 1
+    end
+    if not os.Exists(args.get(1)):
+        println "FAIL page not found:", args.get(1)
+        ret 1
+    end
+    bad := check(args.get(1), args.get(2), str.TrimSuffix(args.get(3), "/"))
+    each b in bad:
+        println "FAIL", b
+    end
+    if bad.len() == 0:
+        println "ok"
+        ret 0
+    end
+    println bad.len(), "problems"
+    ret 1
+end

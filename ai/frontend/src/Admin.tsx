@@ -3,7 +3,7 @@ import { api, ApiError, PAGE_SIZE, type AdminApp, type AdminChatRow, type AdminP
 import { EventList } from "./Events";
 import { fmtCompact, fmtCost, fmtDate, fmtDateTime, fmtDay, fmtMonth, fmtNum, fmtRelative, tokenSplit } from "./format";
 import { Select } from "./Select";
-import { IconActivity, IconBadgeCheck, IconChart, IconChat, IconClose, IconKey, IconSearch, IconShield, IconUsers } from "./icons";
+import { IconActivity, IconBadgeCheck, IconChart, IconChat, IconClose, IconDownload, IconKey, IconSearch, IconShield, IconUsers } from "./icons";
 import { fmtSize } from "./Attach";
 import { Markdown } from "./Markdown";
 import { RequestList } from "./Requests";
@@ -12,6 +12,7 @@ import { t } from "./i18n";
 import { autoDir } from "./dir";
 import { planName, registerPlans } from "./Plans";
 import { Checkbox } from "./Checkbox";
+import { SearchField } from "./SearchField";
 
 export type Picked = { id: number; name: string } | null;
 type UsageMode = "all" | "chat" | "api";
@@ -1341,7 +1342,7 @@ function LatestChats() {
             setApplied(query.trim());
           }}
         >
-          <input className="input" type="search" dir="auto" value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t("جست‌وجوی کاربر یا عنوان", "Search user or title")} aria-label={t("جست‌وجوی گفت‌وگوها", "Search chats")} />
+          <SearchField value={query} onChange={setQuery} onSubmit={setApplied} placeholder={t("جست‌وجوی کاربر یا عنوان", "Search user or title")} ariaLabel={t("جست‌وجوی گفت‌وگوها", "Search chats")} />
         </form>
       </div>
       {error && (
@@ -1952,6 +1953,49 @@ export function TelegramSessions({ picked, onPick }: { picked: Picked; onPick: (
   );
 }
 
+const OS_BADGE: Record<string, string> = {
+  Windows: "Win",
+  macOS: "mac",
+  Linux: "Lin",
+  Android: "And",
+  iOS: "iOS",
+  iPadOS: "iPad",
+  ChromeOS: "Chr",
+  Tizen: "TV",
+  webOS: "TV",
+};
+
+function kindName(kind: string): string {
+  switch (kind) {
+    case "desktop":
+      return t("رایانه", "Desktop");
+    case "mobile":
+      return t("موبایل", "Mobile");
+    case "tablet":
+      return t("تبلت", "Tablet");
+    case "tv":
+      return t("تلویزیون", "TV");
+    case "bot":
+      return t("ربات", "Bot");
+    case "cli":
+      return t("ابزار خط فرمان", "Command-line tool");
+    default:
+      return t("نامشخص", "Unknown");
+  }
+}
+
+function deviceKey(s: AdminSession): string {
+  const d = s.device;
+  if (!d || (!d.os && !d.browser)) return "";
+  return [s.user.id, s.client, d.os_label, d.model, d.browser, d.arch, s.ip].join("|");
+}
+
+function osTitle(s: AdminSession): string {
+  const d = s.device;
+  const parts = [s.os_version, d?.build ? `build ${d.build}` : "", d?.arch || s.arch].filter(Boolean);
+  return Array.from(new Set(parts)).join(", ");
+}
+
 function shortAgent(ua: string): string {
   const browser = /Edg\/[\d.]+|OPR\/[\d.]+|Firefox\/[\d.]+|Chrome\/[\d.]+|Version\/[\d.]+ Safari|Safari\/[\d.]+/.exec(ua)?.[0] ?? "";
   const os = /Windows NT [\d.]+|Mac OS X [\d_]+|Android [\d.]+|iPhone OS [\d_]+|Linux/.exec(ua)?.[0]?.replace(/_/g, ".") ?? "";
@@ -2282,6 +2326,11 @@ export function Sessions({ picked, notify }: { picked: Picked; notify: (msg: str
     }
   };
 
+  const sameCount = new Map<string, number>();
+  for (const s of rows ?? []) {
+    const key = deviceKey(s);
+    if (key) sameCount.set(key, (sameCount.get(key) ?? 0) + 1);
+  }
   return (
     <>
     {!picked && <PlatformsPanel />}
@@ -2325,7 +2374,7 @@ export function Sessions({ picked, notify }: { picked: Picked; notify: (msg: str
                   <th scope="col">{t("از", "Client")}</th>
                   <th scope="col">{t("نسخه", "Version")}</th>
                   <th scope="col">{t("سیستم‌عامل", "System")}</th>
-                  <th scope="col">{t("مرورگر یا سیستم", "Browser or system")}</th>
+                  <th scope="col">{t("مرورگر یا ابزار", "Browser or tool")}</th>
                   <th scope="col">IP</th>
                   <th scope="col">{t("ورود", "Signed in")}</th>
                   <th scope="col">{t("آخرین استفاده", "Last used")}</th>
@@ -2337,24 +2386,60 @@ export function Sessions({ picked, notify }: { picked: Picked; notify: (msg: str
               <tbody>
                 {rows.map((s) => (
                   <tr key={s.id}>
-                    <td title={s.user.email}>
+                    <td title={s.user.email} data-label={t("کاربر", "User")}>
                       <bdi>{s.user.name}</bdi>
+                      {(sameCount.get(deviceKey(s)) ?? 0) > 1 && (
+                        <span className="sess-tag" title={t("این کاربر با همین دستگاه و IP چند نشست دارد.", "This user has several sessions from the same device and IP.")}>
+                          {t("همان دستگاه", "Same device")} {fmtNum(sameCount.get(deviceKey(s)) ?? 0)}
+                        </span>
+                      )}
                     </td>
-                    <td>{s.client === "agent" ? t("ایجنت", "Agent") : t("وب", "Web")}</td>
-                    <td dir="ltr" className="cell-ltr">
+                    <td data-label={t("از", "Client")}>{s.client === "agent" ? t("ایجنت", "Agent") : t("وب", "Web")}</td>
+                    <td dir="ltr" className="cell-ltr" data-label={t("نسخه", "Version")}>
                       {s.client_version || "-"}
                     </td>
-                    <td dir="ltr" className="cell-ltr" title={s.arch}>
-                      {s.os ? s.os_version || platformName(s.os) : "-"}
+                    <td dir="ltr" className="cell-ltr" data-label={t("سیستم‌عامل", "System")} title={osTitle(s)}>
+                      <span className="cell-stack">
+                      {s.device?.os_label ? (
+                        <>
+                          <span className="os-line">
+                            <span className="os-badge" data-os={s.device.os} aria-hidden="true">
+                              {OS_BADGE[s.device.os] ?? "OS"}
+                            </span>
+                            <span>{s.device.os_label}</span>
+                          </span>
+                          <span className="cell-sub" dir="auto">
+                            {[kindName(s.device.kind), s.device.model, s.device.arch].filter(Boolean).join(" · ")}
+                          </span>
+                        </>
+                      ) : s.device && s.device.kind !== "unknown" ? (
+                        <span className="cell-sub" dir="auto">
+                          {kindName(s.device.kind)}
+                        </span>
+                      ) : (
+                        "-"
+                      )}
+                      </span>
                     </td>
-                    <td dir="ltr" className="cell-ltr cell-clip" title={s.agent}>
-                      {shortAgent(s.agent)}
+                    <td dir="ltr" className="cell-ltr cell-clip" data-label={t("مرورگر یا ابزار", "Browser or tool")} title={s.agent || t("بدون user agent", "No user agent")}>
+                      <span className="cell-stack">
+                        <span>
+                          {s.device?.browser_label || (s.agent ? shortAgent(s.agent) : "-")}
+                          {s.device?.tool && <span className="sess-tag warn">{s.device.kind === "bot" ? t("ربات", "Bot") : t("ابزار", "Tool")}</span>}
+                          {s.device?.webview && <span className="sess-tag">{t("وب‌ویو", "WebView")}</span>}
+                        </span>
+                        {s.device?.engine && !s.device.tool && <span className="cell-sub">{s.device.engine}</span>}
+                      </span>
                     </td>
-                    <td dir="ltr" className="cell-ltr">
+                    <td dir="ltr" className="cell-ltr" data-label="IP">
                       {s.ip || "-"}
                     </td>
-                    <td title={fmtDateTime(s.created)}>{fmtRelative(s.created)}</td>
-                    <td title={s.last_used ? fmtDateTime(s.last_used) : undefined}>{s.last_used ? fmtRelative(s.last_used) : "-"}</td>
+                    <td title={fmtDateTime(s.created)} data-label={t("ورود", "Signed in")}>
+                      {fmtRelative(s.created)}
+                    </td>
+                    <td title={s.last_used ? fmtDateTime(s.last_used) : undefined} data-label={t("آخرین استفاده", "Last used")}>
+                      {s.last_used ? fmtRelative(s.last_used) : "-"}
+                    </td>
                     <td className="cell-actions">
                       {s.current ? (
                         <span className="muted">{t("نشست فعلی شما", "Your current session")}</span>
@@ -2522,11 +2607,11 @@ export function Uploads({ picked, notify }: { picked: Picked; notify?: (msg: str
                       </td>
                       <td className="cell-actions">
                         <div className="row-actions">
-                          <button type="button" className="button ghost small" onClick={() => saveUpload(f, tell)}>
-                            {t("دریافت", "Download")}
+                          <button type="button" className="button ghost small icon-only" onClick={() => saveUpload(f, tell)} title={t("دریافت", "Download")} aria-label={t("دریافت", "Download")}>
+                            <IconDownload width={16} height={16} />
                           </button>
-                          <a className="button ghost small" href={`/admin/chats/${f.chat_id}`} target="_blank" rel="noopener">
-                            {t("گفت‌وگو", "Chat")}
+                          <a className="button ghost small icon-only" href={`/admin/chats/${f.chat_id}`} target="_blank" rel="noopener" title={t("گفت‌وگو", "Chat")} aria-label={t("گفت‌وگو", "Chat")}>
+                            <IconChat width={16} height={16} />
                           </a>
                         </div>
                       </td>

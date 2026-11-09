@@ -1,0 +1,290 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package vless
+
+import mem
+import crypto
+import rand
+import net.transport
+
+@en "FlowVision"
+@fa "جریان ویژن"
+pub const FlowVision := "xtls-rprx-vision"
+
+@en "VisionContinue"
+@fa "فرمان ادامه ویژن"
+pub const VisionContinue := 0
+
+@en "VisionEnd"
+@fa "فرمان خاتمه ویژن"
+pub const VisionEnd := 1
+
+@en "VisionDirect"
+@fa "فرمان مستقیم ویژن"
+pub const VisionDirect := 2
+
+@en "VisionPaddedPackets"
+@fa "بسته های لایه گذاری شده ویژن"
+pub const VisionPaddedPackets := 8
+
+const VISION_FRAME := 8192
+
+@en "Vision"
+@fa "ویژن"
+pub struct Vision:
+    @en "uuid"
+    @fa "شناسه"
+    pub uuid: transport.Bytes = transport.Bytes {}
+    @en "writes"
+    @fa "نوشتن ها"
+    pub writes: int = 0
+    @en "write_done"
+    @fa "نوشتن تمام"
+    pub write_done: bool = false
+    @en "uuid_sent"
+    @fa "شناسه فرستاده شد"
+    pub uuid_sent: bool = false
+    @en "read_done"
+    @fa "خواندن تمام"
+    pub read_done: bool = false
+    @en "read_raw"
+    @fa "خواندن خام"
+    pub read_raw: bool = false
+    @en "read_init"
+    @fa "آغاز خواندن"
+    pub read_init: bool = true
+    @en "head_left"
+    @fa "باقی سرآیند"
+    pub head_left: int = 0
+    @en "content_left"
+    @fa "باقی محتوا"
+    pub content_left: int = 0
+    @en "pad_left"
+    @fa "باقی لایه"
+    pub pad_left: int = 0
+    @en "command"
+    @fa "فرمان"
+    pub command: int = 0
+    @en "pending"
+    @fa "معلق"
+    pub pending: transport.Bytes = transport.Bytes {}
+    @en "ready"
+    @fa "آماده"
+    pub ready: transport.Bytes = transport.Bytes {}
+end
+
+@en "NewVision"
+@fa "ویژن جدید"
+pub func NewVision(uuid: transport.Bytes): Vision:
+    mut v := Vision {}
+    v.uuid = transport.NewBytes(16)
+    transport.PutBytes(v.uuid, uuid)
+    v.pending = transport.NewBytes(256)
+    v.ready = transport.NewBytes(256)
+    ret v
+end
+
+@en "FreeVision"
+@fa "آزادسازی ویژن"
+pub func FreeVision(v &: Vision):
+    transport.FreeBytes(v.uuid)
+    transport.FreeBytes(v.pending)
+    transport.FreeBytes(v.ready)
+end
+
+@en "VisionPad"
+@fa "لایه گذاری ویژن"
+pub func VisionPad(v &: Vision, p: void*, n: int, command: int, long_padding: bool): transport.Bytes:
+    mut pad := 0
+    if n < 900 and long_padding:
+        pad = rand.IntRange(0 as i64, 499 as i64) as int + 900 - n
+    else:
+        pad = rand.IntRange(0 as i64, 255 as i64) as int
+    end
+    room := VISION_FRAME - 21 - n
+    if pad > room:
+        pad = room
+    end
+    if pad < 0:
+        pad = 0
+    end
+    mut b := transport.NewBytes(n + pad + 32)
+    if not v.uuid_sent:
+        transport.PutBytes(b, v.uuid)
+        v.uuid_sent = true
+    end
+    transport.Put8(b, command)
+    transport.Put16(b, n)
+    transport.Put16(b, pad)
+    transport.PutRaw(b, p, n)
+    if pad > 0:
+        transport.Reserve(b, pad)
+        crypto.RandomBytes(transport.BytesPtr(b, b.len), pad)
+        b.len += pad
+    end
+    ret b
+end
+
+@en "VisionUnpad"
+@fa "برداشتن لایه ویژن"
+pub func VisionUnpad(v &: Vision, p: void*, n: int, out &: transport.Bytes): bool:
+    if v.read_raw or v.read_done:
+        transport.PutRaw(out, p, n)
+        ret true
+    end
+    transport.PutRaw(v.pending, p, n)
+    until true:
+        if v.read_raw or v.read_done:
+            transport.PutBytes(out, v.pending)
+            transport.ResetBytes(v.pending)
+            break
+        end
+        if v.read_init:
+            if v.pending.len < 21:
+                break
+            end
+            mut head := transport.NewBytes(16)
+            transport.PutRaw(head, v.pending.p, 16)
+            same := transport.Equal(head, v.uuid)
+            transport.FreeBytes(head)
+            v.read_init = false
+            if not same:
+                v.read_raw = true
+                continue
+            end
+            transport.Consume(v.pending, 16)
+            v.head_left = 5
+            v.content_left = 0
+            v.pad_left = 0
+            v.command = 0
+            continue
+        end
+        if v.pending.len == 0:
+            break
+        end
+        if v.head_left > 0:
+            pos := 5 - v.head_left
+            b := transport.At(v.pending, 0)
+            transport.Consume(v.pending, 1)
+            if pos == 0:
+                v.command = b
+                v.content_left = 0
+                v.pad_left = 0
+            else pos == 1:
+                v.content_left = b << 8
+            else pos == 2:
+                v.content_left |= b
+            else pos == 3:
+                v.pad_left = b << 8
+            else:
+                v.pad_left |= b
+            end
+            v.head_left--
+            continue
+        end
+        if v.content_left > 0:
+            mut take := v.content_left
+            if take > v.pending.len:
+                take = v.pending.len
+            end
+            transport.PutRaw(out, v.pending.p, take)
+            transport.Consume(v.pending, take)
+            v.content_left -= take
+            continue
+        end
+        if v.pad_left > 0:
+            mut skip := v.pad_left
+            if skip > v.pending.len:
+                skip = v.pending.len
+            end
+            transport.Consume(v.pending, skip)
+            v.pad_left -= skip
+            continue
+        end
+        if v.command == VisionContinue:
+            v.head_left = 5
+        else:
+            v.read_done = true
+        end
+    end
+    ret not out.bad
+end
+
+@en "VisionWrite"
+@fa "نوشتن ویژن"
+pub func VisionWrite(t &: transport.Conn, v &: Vision, p: void*, n: int): bool:
+    if n <= 0:
+        ret true
+    end
+    if v.write_done:
+        ret transport.Write(t, p, n)
+    end
+    mut off := 0
+    until off < n:
+        mut take := n - off
+        if take > VISION_FRAME - 21:
+            take = VISION_FRAME - 21
+        end
+        if v.write_done:
+            if not transport.Write(t, ((p as i64) + (off as i64)) as void*, n - off):
+                ret false
+            end
+            ret true
+        end
+        v.writes++
+        mut cmd := VisionContinue
+        if v.writes >= VisionPaddedPackets:
+            cmd = VisionEnd
+        end
+        mut f := VisionPad(v, ((p as i64) + (off as i64)) as void*, take, cmd, v.writes <= 1)
+        ok := transport.WriteBytes(t, f)
+        transport.FreeBytes(f)
+        if not ok:
+            ret false
+        end
+        if cmd != VisionContinue:
+            v.write_done = true
+        end
+        off += take
+    end
+    ret true
+end
+
+@en "VisionRead"
+@fa "خواندن ویژن"
+pub func VisionRead(t &: transport.Conn, v &: Vision, buf: void*, max: int): int:
+    until true:
+        if v.ready.len > 0:
+            mut take := max
+            if take > v.ready.len:
+                take = v.ready.len
+            end
+            mem.Copy(buf, v.ready.p, take as u64)
+            transport.Consume(v.ready, take)
+            ret take
+        end
+        scratch := mem.Allocate(16384 as u64)
+        r := transport.Read(t, scratch, 16384)
+        if r <= 0:
+            mem.Free(scratch)
+            ret r
+        end
+        ok := VisionUnpad(v, scratch, r, v.ready)
+        mem.Free(scratch)
+        if not ok:
+            ret 0 - 1
+        end
+    end
+end

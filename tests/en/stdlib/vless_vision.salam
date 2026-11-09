@@ -1,0 +1,177 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import mem
+import sync
+import net.transport
+import net.vless
+
+const UUID1 := "b831381d-6324-4d53-ad4f-8cda48b30811"
+
+mut ready := sync.NewWaitGroup()
+mut port := 0
+
+func pattern(n: int, seed: int): transport.Bytes:
+    mut b := transport.NewBytes(n + 1)
+    repeat n in i:
+        transport.Put8(b, (i * 7 + seed) & 255)
+    end
+    ret b
+end
+
+func same(a: transport.Bytes, b: transport.Bytes): bool:
+    ret transport.Equal(a, b)
+end
+
+func unit():
+    id := transport.ParseUUID(UUID1)
+    mut tx := vless.NewVision(id)
+    mut rx := vless.NewVision(id)
+    mut sent := transport.NewBytes(64)
+    mut all := transport.NewBytes(64)
+    mut wire := transport.NewBytes(64)
+    mut first_len := 0
+    repeat 10 in i:
+        mut part := pattern(10 + i * 37, i)
+        cmd := vless.VisionContinue
+        mut f := vless.VisionPad(tx, part.p, part.len, cmd, i == 0)
+        if i == 0:
+            first_len = f.len
+        end
+        transport.PutBytes(wire, f)
+        transport.PutBytes(sent, part)
+        transport.FreeBytes(f)
+        transport.FreeBytes(part)
+    end
+    mut end_part := pattern(5, 99)
+    mut endf := vless.VisionPad(tx, end_part.p, end_part.len, vless.VisionEnd, false)
+    transport.PutBytes(wire, endf)
+    transport.PutBytes(sent, end_part)
+    transport.FreeBytes(endf)
+    transport.FreeBytes(end_part)
+    transport.PutStr(wire, "raw tail")
+    transport.PutStr(sent, "raw tail")
+    println "first frame is padded to the long size:", first_len >= 16 + 5 + 10 + 900 - 10
+    println "first frame starts with the uuid:", transport.At(wire, 0) == 0xb8 and transport.At(wire, 15) == 0x11
+    mut off := 0
+    mut ok := true
+    until off < wire.len:
+        mut step := 3
+        if off + step > wire.len:
+            step = wire.len - off
+        end
+        ok = vless.VisionUnpad(rx, transport.BytesPtr(wire, off), step, all) and ok
+        off += step
+    end
+    println "unpadded in 3 byte pieces equals the input:", ok, same(all, sent), all.len == sent.len
+    println "padding ended:", rx.read_done, "continue is 0:", vless.VisionContinue, "end is 1:", vless.VisionEnd, "direct is 2:", vless.VisionDirect
+    mut other := vless.NewVision(transport.ParseUUID("5783a3e7-e373-51cd-8642-c83782b807c5"))
+    mut got := transport.NewBytes(64)
+    vless.VisionUnpad(other, wire.p, wire.len, got)
+    println "a different user id turns the stream raw:", other.read_raw, got.len == wire.len
+    vless.FreeVision(tx)
+    vless.FreeVision(rx)
+    vless.FreeVision(other)
+    transport.FreeBytes(sent)
+    transport.FreeBytes(all)
+    transport.FreeBytes(wire)
+    transport.FreeBytes(got)
+end
+
+func server():
+    l := transport.Listen(0, transport.Settings {})
+    port = transport.ListenerPort(l)
+    sync.Done(ready)
+    t := transport.Accept(l)
+    mut users := Vector {} as Vector<vless.User>
+    users.push(vless.NewUser(UUID1, vless.FlowVision))
+    mut c := vless.Accept(t, users)
+    buf := mem.Allocate(65536 as u64)
+    until true:
+        n := vless.Read(c, buf, 65536)
+        if n <= 0:
+            break
+        end
+        if not vless.Write(c, buf, n):
+            break
+        end
+    end
+    mem.Free(buf)
+    vless.Close(c)
+    transport.CloseListener(l)
+end
+
+func echo_check():
+    sync.Add(ready, 1 as i64)
+    t := spawn(server)
+    sync.Wait(ready)
+    tc := transport.Dial("127.0.0.1", port, transport.Settings {})
+    mut c := vless.Client(tc, UUID1, vless.FlowVision, vless.CmdTCP, transport.NewAddr("example.com", 443))
+    mut good := c.ok
+    mut total := 0
+    mut sizes := Vector {} as Vector<int>
+    repeat 12 in i:
+        sizes.push(1 + i * 211)
+    end
+    sizes.push(20000)
+    sizes.push(65000)
+    sizes.push(1)
+    repeat sizes.len() in i:
+        n := sizes.get(i)
+        mut out := pattern(n, i)
+        back := mem.AllocateZeroed((n + 1) as u64)
+        if not vless.Write(c, out.p, n):
+            good = false
+        end
+        mut got := 0
+        until got < n:
+            r := vless.Read(c, ((back as i64) + (got as i64)) as void*, n - got)
+            if r <= 0:
+                good = false
+                break
+            end
+            got += r
+        end
+        bp := back as u8*
+        repeat got in k:
+            if (bp[k] as int) != ((k * 7 + i) & 255):
+                good = false
+                break
+            end
+        end
+        total += n
+        mem.Free(back)
+        transport.FreeBytes(out)
+    end
+    vless.Close(c)
+    join(t)
+    println "vision echo over a real connection:", good, total
+end
+
+func link_check():
+    l := vless.ParseLink("vless://b831381d-6324-4d53-ad4f-8cda48b30811@h.example.com:443?encryption=none&security=tls&type=grpc&serviceName=my%2Fsvc&mode=multi&sni=h.example.com&flow=xtls-rprx-vision#node")
+    println "grpc link:", l.ok, l.err, l.network, l.service_name, l.grpc_mode, l.flow
+    s := vless.LinkSettings(l)
+    println "grpc settings:", s.network, s.service_name, s.grpc_mode, s.tls
+    again := vless.ParseLink(vless.FormatLink(l))
+    println "grpc round trip:", again.ok, again.service_name == l.service_name, again.grpc_mode, again.network
+    g := vless.ParseLink("vless://b831381d-6324-4d53-ad4f-8cda48b30811@h.example.com:443?type=grpc&serviceName=gun")
+    println "gun is the default mode:", g.ok, g.grpc_mode
+end
+
+func main:
+    unit()
+    echo_check()
+    link_check()
+end

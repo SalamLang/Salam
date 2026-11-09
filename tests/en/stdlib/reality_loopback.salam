@@ -1,0 +1,130 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import net.reality
+import net.tcp
+import tls
+
+const PUB := "IH8tyHx_SyHSCyaQgNTOvHYefAehmhpbMgkwFeAPnXY"
+
+mut g_tls := tls.ServerConfig {}
+mut g_ss := reality.ServerSettings {}
+
+func dest_one(arg: void*):
+    srv := tcp.Server { fd = arg as i64 }
+    c := tcp.Accept(srv)
+    if not tcp.ConnOk(c):
+        ret
+    end
+    mut t := tls.WrapServer(c.fd, g_tls)
+    if tls.ConnOk(t):
+        tls.Write(t, "this is the real site")
+        tls.Close(t)
+    else:
+        tcp.Close(c)
+    end
+end
+
+func reality_one(arg: void*):
+    srv := tcp.Server { fd = arg as i64 }
+    c := tcp.Accept(srv)
+    if not tcp.ConnOk(c):
+        ret
+    end
+    r := reality.Accept(c.fd, g_ss)
+    if r.ok:
+        mut t := r.conn
+        d := tls.Read(t, 4096)
+        tls.Write(t, "echo:" + r.short_id + ":" + d)
+        tls.Close(t)
+    end
+end
+
+func run_client(good_key: bool, short_id: str): str:
+    dest := tcp.Bind(0)
+    dth := spawn(dest_one, dest.fd as void*)
+    g_ss.dest = "127.0.0.1:" + tcp.Port(dest)
+    srv := tcp.Bind(0)
+    sth := spawn(reality_one, srv.fd as void*)
+    c := tcp.Dial("127.0.0.1", tcp.Port(srv))
+    mut s := reality.Settings {}
+    s.server_name = "localhost"
+    s.public_key = good_key ? PUB : reality.GenerateKey().public_key
+    s.short_id = short_id
+    mut t := reality.DialOver(c.fd, s)
+    mut out := ""
+    if tls.ConnOk(t):
+        tls.Write(t, "ping")
+        out = tls.Read(t, 4096)
+        tls.Close(t)
+    else:
+        out = "error: " + tls.ConnError(t)
+        tcp.Close(c)
+    end
+    join(sth)
+    tcp.Close(tcp.Dial("127.0.0.1", tcp.Port(dest)))
+    join(dth)
+    tcp.CloseServer(srv)
+    tcp.CloseServer(dest)
+    ret out
+end
+
+func probe(): str:
+    dest := tcp.Bind(0)
+    dth := spawn(dest_one, dest.fd as void*)
+    g_ss.dest = "127.0.0.1:" + tcp.Port(dest)
+    srv := tcp.Bind(0)
+    sth := spawn(reality_one, srv.fd as void*)
+    c := tcp.Dial("127.0.0.1", tcp.Port(srv))
+    mut cfg := tls.NewConfig("localhost")
+    cfg.insecure_skip_verify = true
+    mut t := tls.WrapClient(c.fd, cfg)
+    mut out := ""
+    if tls.ConnOk(t):
+        out = tls.Read(t, 4096)
+        tls.Close(t)
+    else:
+        out = "error: " + tls.ConnError(t)
+        tcp.Close(c)
+    end
+    join(sth)
+    tcp.Close(tcp.Dial("127.0.0.1", tcp.Port(dest)))
+    join(dth)
+    tcp.CloseServer(srv)
+    tcp.CloseServer(dest)
+    ret out
+end
+
+func main:
+    g_tls = tls.NewServerConfig("tests/fixtures/ssl/server.crt", "tests/fixtures/ssl/server.key")
+    g_ss.private_key = "QI3DpbA326sqI7QAAz13iSj6Jk9Q8UUvgkjlKZu2u2I"
+    g_ss.server_names = "localhost"
+    g_ss.short_ids = "abcd1234,0a"
+
+    println "authenticated:", run_client(true, "abcd1234")
+    println "short empty rejected:", run_client(true, "")
+    println "second short id:", run_client(true, "0a")
+    println "unknown short id:", run_client(true, "ffff")
+    println "wrong server key:", run_client(false, "abcd1234")
+    println "probe sees the real site:", probe()
+
+    println "public key of private:", reality.PublicKeyOf(g_ss.private_key) == PUB
+    kp := reality.GenerateKey()
+    println "generated key:", kp.private_key.len(), kp.public_key.len(), reality.PublicKeyOf(kp.private_key) == kp.public_key
+    println "short id:", reality.NewShortId(8).len(), reality.ValidShortId("abcd1234"), reality.ValidShortId("xyz"), reality.ValidShortId("abc")
+    println "public key valid:", reality.ValidPublicKey(PUB), reality.ValidPublicKey("short")
+    p := reality.ParseParams("security=reality&pbk=" + PUB + "&sid=ab12&spx=/x&sni=example.com&fp=firefox&flow=xtls-rprx-vision")
+    println p.public_key == PUB, p.short_id, p.spider_x, p.server_name, p.fingerprint, p.flow
+    println reality.FormatParams(p)
+end

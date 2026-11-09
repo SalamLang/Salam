@@ -19,6 +19,7 @@ package tunnel
 import str
 import io
 import regex
+import sync
 
 @en "M_DOMAIN"
 @fa "تطبیق دامنه"
@@ -44,6 +45,67 @@ pub const M_CIDR := 5
 @fa "تطبیق درگاه"
 pub const M_PORT := 6
 
+@en "M_GEOSITE"
+@fa "تطبیق جی‌او‌سایت"
+pub const M_GEOSITE := 7
+
+@en "M_GEOIP"
+@fa "تطبیق جی‌او‌آی‌پی"
+pub const M_GEOIP := 8
+
+@en "LookupResult"
+@fa "نتیجه جستجو"
+pub struct LookupResult:
+    @en "ips"
+    @fa "آی‌پی‌ها"
+    pub ips: Vector<str> = Vector {}
+end
+
+@en "HostResolver"
+@fa "حل‌کننده میزبان"
+pub interface HostResolver:
+    @en "Lookup"
+    @fa "جستجو"
+    func Lookup(host: str): LookupResult
+end
+
+@en "NullResolver"
+@fa "حل‌کننده خالی"
+pub struct NullResolver:
+    @en "unused"
+    @fa "بی‌کاربرد"
+    pub unused: int = 0
+
+    @en "Lookup"
+    @fa "جستجو"
+    pub func Lookup(_host: str): LookupResult:
+        ret LookupResult {}
+    end
+end
+
+@en "ResolveCache"
+@fa "حافظه نهان حل نام"
+pub struct ResolveCache:
+    @en "mu"
+    @fa "قفل"
+    pub mu: sync.Mutex = sync.Mutex {}
+    @en "ips"
+    @fa "آی‌پی‌ها"
+    pub ips: HashMap<str, Vector<str>> = HashMap {}
+    @en "expires"
+    @fa "انقضا"
+    pub expires: HashMap<str, i64> = HashMap {}
+    @en "ttl_ms"
+    @fa "ماندگاری"
+    pub ttl_ms: i64 = 300000
+    @en "max"
+    @fa "بیشینه"
+    pub max: int = 4096
+    @en "lookups"
+    @fa "جستجوها"
+    pub lookups: int = 0
+end
+
 @en "Matcher"
 @fa "تطبیق‌دهنده"
 pub struct Matcher:
@@ -65,6 +127,12 @@ pub struct Matcher:
     @en "hi"
     @fa "بیشینه"
     pub hi: int = 0
+    @en "dset"
+    @fa "مجموعه دامنه"
+    pub dset: DomainSet = DomainSet {}
+    @en "iset"
+    @fa "مجموعه آی‌پی"
+    pub iset: IpSet = IpSet {}
 end
 
 @en "Rule"
@@ -90,13 +158,67 @@ pub struct Router:
     @en "default_tag"
     @fa "برچسب پیش‌فرض"
     pub default_tag: str = "direct"
+    @en "resolver"
+    @fa "حل‌کننده"
+    pub resolver: dyn HostResolver = NullResolver {}
+    @en "has_resolver"
+    @fa "حل‌کننده دارد"
+    pub has_resolver: bool = false
+    @en "cache"
+    @fa "حافظه نهان"
+    pub cache: ResolveCache = ResolveCache {}
+
+    @en "Resolve"
+    @fa "حل نام"
+    pub func Resolve(host: str): Vector<Vector<int>>:
+        mut out := Vector {} as Vector<Vector<int>>
+        if not this.has_resolver: ret out end
+        now := sync.NowMs()
+        mut names := Vector {} as Vector<str>
+        mut hit := false
+        sync.Lock(this.cache.mu)
+        if this.cache.ips.has(host) and this.cache.expires.get(host) > now:
+            names = this.cache.ips.get(host)
+            hit = true
+        end
+        sync.Unlock(this.cache.mu)
+        if not hit:
+            names = this.resolver.Lookup(host).ips
+            sync.Lock(this.cache.mu)
+            if this.cache.ips.size() >= this.cache.max:
+                this.cache.ips.free()
+                this.cache.expires.free()
+                this.cache.ips = HashMap {} as HashMap<str, Vector<str>>
+                this.cache.expires = HashMap {} as HashMap<str, i64>
+            end
+            mut keep := Vector {} as Vector<str>
+            repeat names.len() in k:
+                keep.push(names[k])
+            end
+            this.cache.ips.put(host, keep)
+            this.cache.expires.put(host, now + this.cache.ttl_ms)
+            this.cache.lookups++
+            sync.Unlock(this.cache.mu)
+        end
+        repeat names.len() in i:
+            ip := ParseIP(names[i])
+            if ip.len() > 0: out.push(ip) end
+        end
+        ret out
+    end
 
     @en "Match"
     @fa "تطبیق"
     pub func Match(target: Addr): str:
         n := this.rules.len()
+        mut ips := Vector {} as Vector<Vector<int>>
+        mut resolved := false
         repeat n in i:
-            if RuleMatches(this.rules[i], target):
+            if not resolved and this.has_resolver and target.kind == ADDR_DOMAIN and _rule_has_ip(this.rules[i]):
+                ips = this.Resolve(_strip_dot(target.host))
+                resolved = true
+            end
+            if RuleMatchesResolved(this.rules[i], target, ips):
                 ret this.rules[i].tag
             end
         end
@@ -141,8 +263,17 @@ func _strip_dot(s: str): str:
     ret str.Lower(h)
 end
 
+func _rule_has_ip(r: Rule): bool:
+    repeat r.dest.len() in i:
+        if r.dest[i].kind == M_CIDR or r.dest[i].kind == M_GEOIP: ret true end
+    end
+    ret false
+end
+
 func _domain_match(m: Matcher, host: str): bool:
-    if m.kind == M_DOMAIN:
+    if m.kind == M_GEOSITE:
+        ret DomainSetContains(m.dset, host)
+    else m.kind == M_DOMAIN:
         ret host == m.value
     else m.kind == M_SUFFIX:
         if host == m.value: ret true end
@@ -207,6 +338,12 @@ func _line_rule(line: str, set &: RuleSet, num: int):
         ret
     end
     set.router.rules.push(r)
+end
+
+func _ip_hit(m: Matcher, ip: Vector<int>): bool:
+    if m.kind == M_CIDR: ret _ip_in(m.net, m.prefix, ip) end
+    if m.kind == M_GEOIP: ret IpSetContains(m.iset, ip) end
+    ret false
 end
 
 @en "NewRule"
@@ -341,6 +478,7 @@ pub func RuleDomainSpec(r &: Rule, spec: str): bool:
     else spec.starts_with("keyword:"): RuleKeyword(r, spec.substr(8, spec.len() - 8))
     else spec.starts_with("regexp:"): ret RuleRegex(r, spec.substr(7, spec.len() - 7))
     else spec.starts_with("regex:"): ret RuleRegex(r, spec.substr(6, spec.len() - 6))
+    else spec.starts_with("geosite:"): ret RuleGeoSite(r, spec.substr(8, spec.len() - 8))
     else: RuleKeyword(r, spec)
 end
 ret true
@@ -353,29 +491,40 @@ pub func RuleIpSpec(r &: Rule, spec: str): bool:
         RulePrivate(r)
         ret true
     end
+    if spec.starts_with("geoip:"): ret RuleGeoIp(r, spec.substr(6, spec.len() - 6)) end
     ret RuleCidr(r, spec)
 end
 
 @en "RuleMatches"
 @fa "قاعده مطابقت دارد"
 pub func RuleMatches(r: Rule, target: Addr): bool:
+    ret RuleMatchesResolved(r, target, Vector {} as Vector<Vector<int>>)
+end
+
+@en "RuleMatchesResolved"
+@fa "قاعده با آی‌پی‌های حل‌شده مطابقت دارد"
+pub func RuleMatchesResolved(r: Rule, target: Addr, ips: Vector<Vector<int>>): bool:
     if r.dest.len() == 0 and r.ports.len() == 0: ret false end
     if r.dest.len() > 0:
         mut hit := false
         if target.kind == ADDR_DOMAIN:
             host := _strip_dot(target.host)
             repeat r.dest.len() in i:
-                if _domain_match(r.dest[i], host):
+                m := r.dest[i]
+                if m.kind == M_CIDR or m.kind == M_GEOIP:
+                    repeat ips.len() in k:
+                        if _ip_hit(m, ips[k]): hit = true end
+                    end
+                else _domain_match(m, host):
                     hit = true
-                    break
                 end
+                if hit: break end
             end
         else:
             ip := ParseIP(target.host)
             defer ip.free()
             repeat r.dest.len() in i:
-                m := r.dest[i]
-                if m.kind == M_CIDR and _ip_in(m.net, m.prefix, ip):
+                if _ip_hit(r.dest[i], ip):
                     hit = true
                     break
                 end
@@ -393,6 +542,32 @@ pub func RuleMatches(r: Rule, target: Addr): bool:
         end
         if not hit: ret false end
     end
+    ret true
+end
+
+@en "SetResolver"
+@fa "تنظیم حل‌کننده"
+pub func SetResolver(rt &: Router, r: dyn HostResolver, ttl_ms: i64):
+    rt.resolver = r
+    rt.has_resolver = true
+    rt.cache = ResolveCache { mu = sync.NewMutex(), ttl_ms = ttl_ms }
+end
+
+@en "RuleGeoSite"
+@fa "قاعده جی‌او‌سایت"
+pub func RuleGeoSite(r &: Rule, name: str): bool:
+    set := LookupGeoSite(name)
+    if set.count == 0: ret false end
+    r.dest.push(Matcher { kind = M_GEOSITE, value = name, dset = set })
+    ret true
+end
+
+@en "RuleGeoIp"
+@fa "قاعده جی‌او‌آی‌پی"
+pub func RuleGeoIp(r &: Rule, name: str): bool:
+    set := LookupGeoIp(name)
+    if set.count == 0: ret false end
+    r.dest.push(Matcher { kind = M_GEOIP, value = name, iset = set })
     ret true
 end
 

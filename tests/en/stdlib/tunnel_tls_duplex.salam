@@ -1,0 +1,142 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import net.tunnel
+import net.tcp
+import tls
+import pool
+import mem
+
+const TOTAL := 600000
+
+mut failures := 0
+mut echo_srv := tcp.Server {}
+mut tls_srv := tcp.Server {}
+mut srv_cfg := tls.ServerConfig {}
+mut sent_sum := 0 as i64
+mut relayed_up := 0 as i64
+mut relayed_down := 0 as i64
+
+func expect(label: str, ok: bool):
+    if not ok:
+        println "FAIL", label
+        failures++
+    end
+end
+
+func echo_once():
+    c := tcp.Accept(echo_srv)
+    s := tunnel.WrapTcp(c)
+    buf := mem.Allocate(8192 as u64)
+    until true:
+        n := s.ReadBytes(buf, 8192)
+        if n <= 0: break end
+        if s.WriteBytes(buf, n) != n: break end
+    end
+    mem.Free(buf)
+    s.CloseWrite()
+    s.Close()
+end
+
+func run_relay(a: dyn tunnel.Stream, b: dyn tunnel.Stream, up: bool):
+    r := tunnel.Relay(a, b)
+    if up:
+        relayed_up = r.up + r.down
+    else:
+        relayed_down = r.up + r.down
+    end
+end
+
+func tls_server_side():
+    c := tcp.Accept(tls_srv)
+    conn := tls.WrapServer(c.fd, srv_cfg)
+    if not tls.ConnOk(conn):
+        println "server handshake failed", tls.ConnError(conn)
+        failures++
+        tcp.Close(c)
+        ret
+    end
+    front := tunnel.WrapTls(conn)
+    back := tunnel.DialTcp("127.0.0.1", tcp.Port(echo_srv), 3000)
+    run_relay(front, back, false)
+end
+
+func pump_pattern(s: dyn tunnel.Stream):
+    chunk := 4096
+    buf := mem.Allocate(chunk as u64)
+    mut sent := 0
+    mut sum := 0 as i64
+    until sent < TOTAL:
+        mut n := TOTAL - sent
+        if n > chunk: n = chunk end
+        repeat n in i:
+            b := ((sent + i) * 31 + 7) % 251
+            (buf as u8*)[i] = b as u8
+            sum += b as i64
+        end
+        if not tunnel.WriteAllBytes(s, buf, n): break end
+        sent += n
+    end
+    sent_sum = sum
+    s.CloseWrite()
+    mem.Free(buf)
+end
+
+func main:
+    echo_srv = tcp.Bind(0)
+    tls_srv = tcp.Bind(0)
+    srv_cfg = tls.NewServerConfig("tests/fixtures/ssl/server.crt", "tests/fixtures/ssl/server.key")
+    println "server config ok:", srv_cfg.ok
+    wp := pool.NewElastic(2 as i64, 8 as i64, 8 as i64)
+    pool.Submit(wp, (): echo_once() end)
+    pool.Submit(wp, (): tls_server_side() end)
+
+    mut cfg := tls.NewConfig("localhost")
+    cfg.insecure_skip_verify = true
+    conn := tls.Dial("127.0.0.1", tcp.Port(tls_srv), cfg)
+    println "client handshake:", tls.ConnOk(conn)
+    expect("handshake", tls.ConnOk(conn))
+    p := tunnel.NewPipe()
+    uplink := tunnel.WrapTls(conn)
+    pool.Submit(wp, (): run_relay(tunnel.PipeB(p), uplink, true) end)
+    app := tunnel.PipeA(p)
+    pool.Submit(wp, (): pump_pattern(app) end)
+
+    buf := mem.Allocate(8192 as u64)
+    mut got := 0
+    mut sum := 0 as i64
+    until true:
+        n := app.ReadBytes(buf, 8192)
+        if n <= 0: break end
+        repeat n in i:
+            sum += (buf as u8*)[i] as i64
+        end
+        got += n
+    end
+    mem.Free(buf)
+    println "echoed bytes:", got
+    pool.Wait(wp)
+    pool.Stop(wp)
+    println "all bytes back:", got == TOTAL
+    println "checksum equal:", sum == sent_sum
+    println "relay counts:", relayed_up == (2 * TOTAL) as i64, relayed_down == (2 * TOTAL) as i64
+    expect("all bytes", got == TOTAL)
+    expect("checksum", sum == sent_sum)
+    app.Close()
+    tcp.CloseServer(echo_srv)
+    tcp.CloseServer(tls_srv)
+    println "failures:", failures
+end

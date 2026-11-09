@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { api, ApiError, type UserProfile } from "./api";
 import { AppsTable, Conversations, Events, KeyPolicies, NoAccess, Payments, RequestsFeed, Sessions, Subscriptions, TelegramSessions, Tile, Uploads, openLink, type Picked } from "./Admin";
 import { fmtCompact, fmtDate, fmtDateTime, fmtNum, fmtRelative } from "./format";
@@ -216,8 +216,10 @@ export function AdminUser({ id, notify, onNavigate }: { id: number; notify: (msg
     };
   }, [id]);
 
+  const pickedId = p ? p.id : 0;
+  const pickedName = p ? p.name : "";
+  const picked: Picked = useMemo(() => (pickedId ? { id: pickedId, name: pickedName } : null), [pickedId, pickedName]);
   if (forbidden) return <NoAccess />;
-  const picked: Picked = p ? { id: p.id, name: p.name } : null;
   const go = (next: Tab) => onNavigate(userPath(id, next));
 
   return (

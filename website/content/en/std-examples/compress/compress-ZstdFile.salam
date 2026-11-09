@@ -1,0 +1,38 @@
+import archive
+import compress
+import mem
+import os
+import str
+
+func collect(p: void*, n: int, c: void*): bool:
+    compress.BufPushBytes((c as compress.ByteBuf*)[0], p, n)
+    ret true
+end
+
+func main:
+    mut text := compress.NewByteBuf()
+    repeat 5000 in i:
+        line := "line " + str.FromInt((i * 7) as i64) + "\n"
+        compress.BufPushBytes(text, line as void*, line.len())
+    end
+    mut packed := compress.ZstdCompress(text.data, text.len)
+    archive.WriteBinaryFileBuf("zst.tmp", packed)
+
+    fp := compress.FileOpenRead("zst.tmp")
+    got := mem.AllocateZeroed(sizeof(compress.ByteBuf)) as compress.ByteBuf*
+    got[0] = compress.NewByteBuf()
+    mut sink := compress.SinkCallback(0 as i64, (p: void*, n: int, c: void*): ret collect(p, n, c) end, got as void*)
+    st := compress.ZstdFileToSink(fp, 0 as i64, compress.FileSize(fp), sink, 0 as i64)
+    println st == compress.ZstdOk, sink.written == (text.len as i64), compress.BufEquals(got[0], text)
+    compress.FileClose(fp)
+
+    fp2 := compress.FileOpenRead("zst.tmp")
+    mut small := compress.SinkCallback(100 as i64, (p: void*, n: int, c: void*): ret collect(p, n, c) end, got as void*)
+    println compress.ZstdFileToSink(fp2, 0 as i64, compress.FileSize(fp2), small, 0 as i64) == compress.ZstdErrTooBig
+    compress.FileClose(fp2)
+    compress.BufFree(got[0])
+    mem.Free(got as void*)
+    compress.BufFree(text)
+    compress.BufFree(packed)
+    os.Remove("zst.tmp")
+end

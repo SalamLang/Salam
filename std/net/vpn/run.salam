@@ -1,0 +1,254 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "net/vpn"
+@fa "وی‌پی‌ان"
+package vpn
+
+import atomic
+import sync
+import term
+import tls
+import encoding.json
+import net.tcp
+import net.trojan
+import net.transport
+import net.tunnel
+import net.internal.rawsock
+
+extern:
+    func signal(sig: int, handler: void*): void*
+end
+
+mut _stop := atomic.NewFlag(false)
+
+@en "TransportPending"
+@fa "اتصال انتقال در انتظار"
+pub struct TransportPending:
+    @en "raw"
+    @fa "خام"
+    pub raw: transport.Conn = transport.Conn {}
+    @en "settings"
+    @fa "تنظیمات"
+    pub settings: transport.Settings = transport.Settings {}
+    @en "upgraded"
+    @fa "ارتقا یافته"
+    pub upgraded: bool = false
+
+    @en "Valid"
+    @fa "معتبر"
+    pub func Valid(): bool:
+        ret this.raw.open
+    end
+
+    @en "Open"
+    @fa "گشودن"
+    pub func Open(): dyn tunnel.Stream:
+        mut c := this.raw
+        if not this.upgraded and not transport.Upgrade(c, this.settings):
+            transport.Close(c)
+            ret tunnel.ClosedStream {}
+        end
+        ret transport.AsStream(c)
+    end
+
+    @en "Abort"
+    @fa "رها کردن"
+    pub func Abort():
+        mut c := this.raw
+        transport.Close(c)
+    end
+end
+
+@en "TransportAcceptor"
+@fa "پذیرنده انتقال"
+pub struct TransportAcceptor:
+    @en "listener"
+    @fa "شنونده"
+    pub listener: transport.Listener = transport.Listener {}
+    @en "settings"
+    @fa "تنظیمات"
+    pub settings: transport.Settings = transport.Settings {}
+
+    @en "Accept"
+    @fa "پذیرش"
+    pub func Accept(): dyn tunnel.Pending:
+        if this.settings.network == "grpc" or this.settings.security == "reality":
+            c := transport.Accept(this.listener)
+            ret TransportPending { raw = c, settings = this.settings, upgraded = true }
+        end
+        raw := transport.AcceptRaw(this.listener)
+        ret TransportPending { raw = raw, settings = this.settings }
+    end
+
+    @en "Port"
+    @fa "درگاه"
+    pub func Port(): int:
+        ret transport.ListenerPort(this.listener)
+    end
+
+    @en "Ok"
+    @fa "معتبر"
+    pub func Ok(): bool:
+        ret transport.ListenerOk(this.listener)
+    end
+
+    @en "Close"
+    @fa "بستن"
+    pub func Close():
+        transport.CloseListener(this.listener)
+    end
+end
+
+@en "Listener"
+@fa "شنونده"
+pub struct Listener:
+    @en "server"
+    @fa "کارساز"
+    pub server: tunnel.AcceptServer = tunnel.AcceptServer {}
+    @en "has_server"
+    @fa "کارساز دارد"
+    pub has_server: bool = false
+    @en "trojan"
+    @fa "تروجان"
+    pub trojan: trojan.Server = trojan.Server {}
+    @en "port"
+    @fa "درگاه"
+    pub port: int = 0
+    @en "tag"
+    @fa "برچسب"
+    pub tag: str = ""
+end
+
+export:
+    func _on_signal(_sig: int):
+        atomic.Set(_stop, true)
+    end
+end
+
+func _trojan_listen(cfg: trojan.ServerConfig, port: int, s: transport.Settings): trojan.Server:
+    if s.tls: ret trojan.Serve(cfg, port) end
+    if s.network == "ws": ret trojan.ServeWS(cfg, port) end
+    ret trojan.ServePlain(cfg, port)
+end
+
+func _trojan_server(ib: tunnel.InboundConfig, s: transport.Settings): Listener:
+    mut cfg := trojan.NewServerConfig(s.cert_file, s.key_file)
+    clients := json.Items(json.Get(ib.settings, "clients"))
+    defer clients.free()
+    repeat clients.len() in i:
+        trojan.AddPassword(cfg, json.Get(clients[i], "password"))
+    end
+    fb := json.Items(json.Get(ib.settings, "fallbacks"))
+    defer fb.free()
+    if fb.len() > 0:
+        dest := tunnel.ParseAddr(json.Get(fb[0], "dest"))
+        trojan.SetFallback(cfg, dest.host, dest.port)
+    end
+    srv := _trojan_listen(cfg, ib.port, s)
+    ret Listener { trojan = srv, port = trojan.ServerPort(srv), tag = ib.tag }
+end
+
+@en "Start"
+@fa "شروع"
+pub func Start(ib: tunnel.InboundConfig, dialer: dyn tunnel.Dialer, stats: tunnel.Stats): Listener:
+    s := StreamSettings(ib.stream_settings)
+    if ib.protocol == "trojan": ret _trojan_server(ib, s) end
+    proto := tunnel.CreateInbound(ib)
+    mut h := tunnel.NewForwarder(dialer, proto)
+    h.stats = stats
+    mut host := ib.listen
+    if host.len() == 0: host = "127.0.0.1" end
+    sock := rawsock.ListenOn(host, ib.port, rawsock.SOCK_STREAM)
+    mut bound := tcp.Server { fd = sock.fd }
+    if sock.fd >= 0: bound.port = rawsock.LocalPort(sock) end
+    tl := transport.ListenerFrom(bound, s)
+    acc := TransportAcceptor { listener = tl, settings = s }
+    srv := tunnel.NewAcceptServer(acc, host)
+    l := Listener { server = srv, has_server = true, port = acc.Port(), tag = ib.tag }
+    if acc.Ok(): tunnel.StartAccepting(srv, proto, h) end
+    ret l
+end
+
+@en "StartAll"
+@fa "شروع همه"
+pub func StartAll(c: tunnel.Config, stats: tunnel.Stats): Vector<Listener>:
+    dialer := BuildDialer(c)
+    mut out := Vector {} as Vector<Listener>
+    repeat c.inbounds.len() in i:
+        out.push(Start(c.inbounds[i], dialer, stats))
+    end
+    ret out
+end
+
+@en "Ok"
+@fa "معتبر"
+pub func Ok(l: Listener): bool:
+    if l.trojan.ok: ret true end
+    ret l.has_server and l.server.Ok()
+end
+
+@en "Stop"
+@fa "توقف"
+pub func Stop(l: Listener):
+    if l.trojan.ok:
+        trojan.Stop(l.trojan)
+        ret
+    end
+    if l.has_server: l.server.Stop() end
+end
+
+@en "Summary"
+@fa "خلاصه"
+pub func Summary(st: tunnel.Stats): str:
+    ret "up " + term.FormatBytes(st.Up()) + "  down " + term.FormatBytes(st.Down()) + "  conns " + st.Total() + "  active " + st.Active() + "  failed " + st.Failed()
+end
+
+@en "Wait"
+@fa "انتظار"
+pub func Wait(st: tunnel.Stats, every: int, limit: int):
+    _p1 := signal(2, &_on_signal)
+    _p2 := signal(15, &_on_signal)
+    mut t := 0
+    until not atomic.Get(_stop) and (limit <= 0 or t < limit):
+        sync.SleepMs(1000)
+        t++
+        if every > 0 and t % every == 0: println "[" + t + "s] " + Summary(st) end
+    end
+end
+
+@en "RunConfig"
+@fa "اجرای پیکربندی"
+pub func RunConfig(path: str, every: int, limit: int): int:
+    cfg := tunnel.LoadConfig(path)
+    errs := tunnel.ValidateConfig(cfg)
+    each e in errs: printerrln "config:", e end
+    if errs.len() > 0: ret 1 end
+    stats := tunnel.NewStats()
+    listeners := StartAll(cfg, stats)
+    mut failed := false
+    each l in listeners:
+        if Ok(l):
+            println l.tag, "listening on port", l.port
+        else:
+            printerrln l.tag, "could not listen (port in use or bad certificate?)"
+            failed = true
+        end
+    end
+    if failed: ret 1 end
+    Wait(stats, every, limit)
+    each l in listeners: Stop(l) end
+    println "bye,", Summary(stats)
+    ret 0
+end

@@ -1,0 +1,224 @@
+package tls
+
+import mem
+import sync
+import rand
+import net.internal.rawsock
+
+func _rec_set_fragment(r &: RecordLayer, cfg: Config):
+    r.frag_tls = cfg.frag_tls
+    r.frag_tcp = cfg.frag_tcp
+    r.frag_sni = cfg.frag_sni
+    r.frag_min = cfg.frag_min
+    r.frag_max = cfg.frag_max
+    r.frag_delay_ms = cfg.frag_delay_ms
+    r.frag_left = 0
+    if cfg.frag_tls or cfg.frag_tcp:
+        r.frag_left = cfg.frag_writes
+        if r.frag_left < 1:
+            r.frag_left = 1
+        end
+    end
+end
+
+func _frag_u8(p: void*, i: int): int:
+    bp := p as u8*
+    ret bp[i] as int
+end
+
+func _frag_sni(p: void*, n: int, host_len &: int): int:
+    host_len = 0
+    if n < 44 or _frag_u8(p, 0) != HS_CLIENT_HELLO:
+        ret 0 - 1
+    end
+    mut off := 38
+    off += 1 + _frag_u8(p, off)
+    if off + 2 > n:
+        ret 0 - 1
+    end
+    off += 2 + ((_frag_u8(p, off) << 8) | _frag_u8(p, off + 1))
+    if off + 1 > n:
+        ret 0 - 1
+    end
+    off += 1 + _frag_u8(p, off)
+    if off + 2 > n:
+        ret 0 - 1
+    end
+    mut ext_end := off + 2 + ((_frag_u8(p, off) << 8) | _frag_u8(p, off + 1))
+    off += 2
+    if ext_end > n:
+        ext_end = n
+    end
+    until off + 4 <= ext_end:
+        et := (_frag_u8(p, off) << 8) | _frag_u8(p, off + 1)
+        el := (_frag_u8(p, off + 2) << 8) | _frag_u8(p, off + 3)
+        if et == EXT_SERVER_NAME and el >= 5 and off + 4 + el <= ext_end:
+            nl := (_frag_u8(p, off + 7) << 8) | _frag_u8(p, off + 8)
+            if off + 9 + nl <= ext_end:
+                host_len = nl
+                ret off + 9
+            end
+            ret 0 - 1
+        end
+        off += 4 + el
+    end
+    ret 0 - 1
+end
+
+func _frag_cuts(total: int, lo0: int, hi0: int, sni_cut: int): Vector<int>:
+    mut cuts := Vector {} as Vector<int>
+    mut lo := lo0
+    mut hi := hi0
+    if hi > 0:
+        if lo < 1:
+            lo = 1
+        end
+        if hi < lo:
+            hi = lo
+        end
+        mut at := 0
+        until at + lo < total:
+            mut step := rand.IntRange(lo as i64, hi as i64) as int
+            if step < lo:
+                step = lo
+            end
+            at += step
+            if at < total:
+                cuts.push(at)
+            end
+        end
+    end
+    if sni_cut > 0 and sni_cut < total:
+        mut placed := false
+        mut out := Vector {} as Vector<int>
+        repeat cuts.len() in i:
+            c := cuts.get(i)
+            if not placed and c >= sni_cut:
+                if c != sni_cut:
+                    out.push(sni_cut)
+                end
+                placed = true
+            end
+            out.push(c)
+        end
+        if not placed:
+            out.push(sni_cut)
+        end
+        cuts.free()
+        ret out
+    end
+    ret cuts
+end
+
+func _frag_send(r: RecordLayer, p: void*, n: int, cuts: Vector<int>): bool:
+    sock := rawsock.FromFd(r.fd)
+    mut off := 0
+    mut idx := 0
+    until off < n:
+        mut stop := n
+        if idx < cuts.len():
+            stop = cuts.get(idx)
+        end
+        idx++
+        if stop > n:
+            stop = n
+        end
+        if stop > off:
+            sent := rawsock.SendBytes(sock, ((p as i64) + (off as i64)) as void*, stop - off)
+            if sent != stop - off:
+                ret false
+            end
+            off = stop
+            if off < n and r.frag_delay_ms > 0:
+                sync.SleepMs(r.frag_delay_ms)
+            end
+        end
+    end
+    ret true
+end
+
+func _rec_flush_fragmented(r &: RecordLayer): bool:
+    n := r.tx.len
+    mut sni_len := 0
+    mut sni_at := 0 - 1
+    mut rec_split := false
+    if r.frag_tls and n > REC_HEADER and _bget(r.tx.p, 0) == REC_HANDSHAKE:
+        rec_len := (_bget(r.tx.p, 3) << 8) | _bget(r.tx.p, 4)
+        if rec_len + REC_HEADER <= n and rec_len > 1:
+            rec_split = true
+            sni_at = _frag_sni(_bufptr(r.tx, REC_HEADER), rec_len, sni_len)
+        end
+    else if r.frag_sni and n > REC_HEADER and _bget(r.tx.p, 0) == REC_HANDSHAKE:
+        sni_at = _frag_sni(_bufptr(r.tx, REC_HEADER), n - REC_HEADER, sni_len)
+    end
+    mut sni_cut := 0 - 1
+    if r.frag_sni and sni_at >= 0:
+        sni_cut = sni_at + sni_len / 2
+    end
+    if rec_split:
+        rec_len := (_bget(r.tx.p, 3) << 8) | _bget(r.tx.p, 4)
+        mut pcuts := _frag_cuts(rec_len, r.frag_min, r.frag_max, sni_cut)
+        mut out := _newbuf(n + REC_HEADER * (pcuts.len() + 2))
+        defer _buf_free(out)
+        mut tcp_sni := 0 - 1
+        mut off := 0
+        repeat pcuts.len() + 1 in k:
+            mut stop := rec_len
+            if k < pcuts.len():
+                stop = pcuts.get(k)
+            end
+            _put8(out, REC_HANDSHAKE)
+            _put8(out, _bget(r.tx.p, 1))
+            _put8(out, _bget(r.tx.p, 2))
+            _put16(out, stop - off)
+            if sni_cut >= off and sni_cut < stop and tcp_sni < 0:
+                tcp_sni = out.len + (sni_cut - off)
+            end
+            _putraw(out, _bufptr(r.tx, REC_HEADER + off), stop - off)
+            off = stop
+        end
+        pcuts.free()
+        if rec_len + REC_HEADER < n:
+            _putraw(out, _bufptr(r.tx, REC_HEADER + rec_len), n - REC_HEADER - rec_len)
+        end
+        if out.bad:
+            _rec_fail(r, "out of memory")
+            ret false
+        end
+        mut tcuts := Vector {} as Vector<int>
+        if r.frag_tcp:
+            tcuts = _frag_cuts(out.len, r.frag_min, r.frag_max, tcp_sni)
+        else:
+            mut at := 0
+            mut left := out.len
+            until left > 0:
+                rl := REC_HEADER + ((_bget(out.p, at + 3) << 8) | _bget(out.p, at + 4))
+                at += rl
+                left -= rl
+                if left > 0:
+                    tcuts.push(at)
+                end
+            end
+        end
+        ok := _frag_send(r, out.p, out.len, tcuts)
+        tcuts.free()
+        if not ok:
+            _rec_fail(r, "short write")
+        end
+        ret ok
+    end
+    mut tcp_cut := 0 - 1
+    if sni_cut >= 0:
+        tcp_cut = REC_HEADER + sni_cut
+    end
+    mut tc := Vector {} as Vector<int>
+    if r.frag_tcp:
+        tc = _frag_cuts(n, r.frag_min, r.frag_max, tcp_cut)
+    end
+    ok := _frag_send(r, r.tx.p, n, tc)
+    tc.free()
+    if not ok:
+        _rec_fail(r, "short write")
+    end
+    ret ok
+end

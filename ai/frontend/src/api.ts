@@ -196,6 +196,22 @@ export type GuestMessage = {
   status: string;
   created: number;
 };
+export type SessionDevice = {
+  os: string;
+  os_ver: string;
+  os_label: string;
+  distro: string;
+  build: string;
+  kind: string;
+  model: string;
+  browser: string;
+  browser_ver: string;
+  browser_label: string;
+  engine: string;
+  arch: string;
+  tool: boolean;
+  webview: boolean;
+};
 export type AdminSession = {
   id: number;
   created: number;
@@ -208,6 +224,7 @@ export type AdminSession = {
   os: string;
   os_version: string;
   arch: string;
+  device: SessionDevice;
   current: boolean;
   user: { id: number; name: string; email: string };
 };
@@ -794,7 +811,7 @@ export async function awaitProviderLogin(
   while (Date.now() < until) {
     await pause(2000);
     if (!alive()) throw new ApiError(0, "canceled", "");
-    let r;
+    let r: Awaited<ReturnType<typeof api.pollProvider>>;
     try {
       r = await api.pollProvider(poll);
     } catch (e) {
@@ -844,22 +861,109 @@ export function setClientVersion(v: string) {
   clientVersion = /^[0-9A-Za-z.+-]{1,32}$/.test(v) ? v : "";
 }
 
-let clientPlatform = { os: "", version: "", arch: "" };
-export function setClientPlatform(os: string, version: string, arch: string) {
+let clientPlatform = { os: "", version: "", arch: "", id: "", build: "" };
+export function setClientPlatform(
+  os: string,
+  version: string,
+  arch: string,
+  id = "",
+  build = "",
+) {
   const plain = (v: string, max: number) =>
     /^[0-9A-Za-z.+_() -]+$/.test(v) && v.length <= max ? v : "";
   clientPlatform = {
     os: ["windows", "macos", "linux", "other"].includes(os) ? os : "",
     version: plain(version, 64),
     arch: plain(arch, 16),
+    id: plain(id, 24),
+    build: plain(build, 12),
   };
 }
+
+type UserAgentData = {
+  platform?: string;
+  mobile?: boolean;
+  brands?: { brand: string; version: string }[];
+  getHighEntropyValues?: (hints: string[]) => Promise<Record<string, unknown>>;
+};
+
+const hintValue = (v: unknown, max: number) =>
+  String(v ?? "")
+    .replace(/[^\x20-\x7e]/g, "")
+    .trim()
+    .slice(0, max);
+
+const quoted = (v: unknown, max: number) => {
+  const text = hintValue(v, max).replace(/["\\]/g, "");
+  return text ? `"${text}"` : "";
+};
+
+function brandList(list: unknown): string {
+  if (!Array.isArray(list)) return "";
+  return list
+    .map(
+      (b) =>
+        `"${hintValue(b?.brand, 40).replace(/["\\]/g, "")}";v="${hintValue(b?.version, 24).replace(/["\\]/g, "")}"`,
+    )
+    .join(", ")
+    .slice(0, 400);
+}
+
+let deviceHints: Record<string, string> = {};
+
+function collectDeviceHints(): Promise<void> {
+  const nav = navigator as Navigator & { userAgentData?: UserAgentData };
+  const data = nav.userAgentData;
+  const hints: Record<string, string> = {};
+  if (/Macintosh/.test(nav.userAgent) && nav.maxTouchPoints > 1)
+    hints["X-Salam-CH-Touch"] = "1";
+  if (!data) {
+    deviceHints = hints;
+    return Promise.resolve();
+  }
+  if (data.platform) hints["X-Salam-CH-Platform"] = quoted(data.platform, 30);
+  hints["X-Salam-CH-Mobile"] = data.mobile ? "?1" : "?0";
+  const brands = brandList(data.brands);
+  if (brands) hints["X-Salam-CH-Brands"] = brands;
+  deviceHints = { ...hints };
+  if (!data.getHighEntropyValues) return Promise.resolve();
+  return data
+    .getHighEntropyValues([
+      "platformVersion",
+      "model",
+      "architecture",
+      "bitness",
+      "fullVersionList",
+    ])
+    .then((v) => {
+      const next = { ...hints };
+      const set = (key: string, value: string) => {
+        if (value) next[key] = value;
+      };
+      set("X-Salam-CH-Platform-Version", quoted(v.platformVersion, 24));
+      set("X-Salam-CH-Model", quoted(v.model, 40));
+      set("X-Salam-CH-Arch", quoted(v.architecture, 8));
+      set("X-Salam-CH-Bitness", quoted(v.bitness, 4));
+      set("X-Salam-CH-Brands", brandList(v.fullVersionList) || brands);
+      deviceHints = next;
+    })
+    .catch(() => {});
+}
+
+const hintsReady = collectDeviceHints();
 
 export function handleUnauthorized(fn: () => void) {
   onUnauthorized = fn;
 }
 
-function clientHeaders(anonymous = false): Record<string, string> {
+function carriesHints(path: string): boolean {
+  return path === "/me" || path.startsWith("/auth/");
+}
+
+function clientHeaders(
+  anonymous = false,
+  hints = false,
+): Record<string, string> {
   const headers: Record<string, string> = {
     "X-Salam-Client": isDesktop ? "agent" : "web",
     "X-Salam-Lang": lang,
@@ -869,6 +973,9 @@ function clientHeaders(anonymous = false): Record<string, string> {
   if (clientPlatform.version)
     headers["X-Salam-OS-Version"] = clientPlatform.version;
   if (clientPlatform.arch) headers["X-Salam-Arch"] = clientPlatform.arch;
+  if (clientPlatform.id) headers["X-Salam-OS-Id"] = clientPlatform.id;
+  if (clientPlatform.build) headers["X-Salam-OS-Build"] = clientPlatform.build;
+  if (hints) Object.assign(headers, deviceHints);
   const token = anonymous ? "" : getToken();
   if (token) headers.Authorization = `Bearer ${token}`;
   return headers;
@@ -889,8 +996,10 @@ async function call<T>(
   const started = Date.now();
   let wait = 1000;
   const again = () => Date.now() - started + wait < RETRY_WINDOW_MS;
+  const hints = carriesHints(path);
+  if (hints) await hintsReady;
   for (;;) {
-    const headers = clientHeaders(anonymous);
+    const headers = clientHeaders(anonymous, hints);
     if (body !== undefined) headers["Content-Type"] = "application/json";
     let res: Response;
     try {

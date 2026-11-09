@@ -1,0 +1,928 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package transport
+
+import mem
+import sync
+import chan
+import compress
+import net.http2
+import net.tunnel
+
+const H2_DATA := 0
+const H2_HEADERS := 1
+const H2_RST := 3
+const H2_SETTINGS := 4
+const H2_PING := 6
+const H2_GOAWAY := 7
+const H2_WINDOW := 8
+const H2_CONT := 9
+const H2_PREFACE := "PRI * HTTP/2.0\r\n\r\nSM\r\n\r\n"
+const H2_BIG_WINDOW := 16777216
+const H2_SLOTS := 64
+
+struct _GCore:
+    pub up: dyn tunnel.Stream = tunnel.TcpStream {}
+    pub wmu: sync.Mutex = sync.Mutex {}
+    pub fmu: sync.Mutex = sync.Mutex {}
+    pub fcv: sync.CondVar = sync.CondVar {}
+    pub st: i64* = null
+    pub table: i64* = null
+    pub ready: chan.Chan<Conn> = chan.Chan {} as chan.Chan<Conn>
+    pub server: bool = false
+    pub service: str = ""
+    pub multi: bool = false
+    pub host: str = ""
+    pub idle_ms: int = 0
+    pub hs_ms: int = 0
+end
+
+struct _GSess:
+    pub id: int = 0
+    pub rx: chan.Chan<Bytes> = chan.Chan {} as chan.Chan<Bytes>
+    pub st: i64* = null
+    pub core: _GCore* = null
+    pub multi: bool = false
+end
+
+struct _GStream:
+    pub s: _GSess = _GSess {}
+
+    pub func Read(max: int): str:
+        buf := mem.Allocate((max + 1) as u64)
+        n := _g_read(this.s, buf, max)
+        if n <= 0:
+            mem.Free(buf)
+            ret ""
+        end
+        bp := buf as u8*
+        bp[n] = 0 as u8
+        ret buf as str
+    end
+
+    pub func ReadBytes(buf: void*, max: int): int:
+        ret _g_read(this.s, buf, max)
+    end
+
+    pub func Write(data: str): int:
+        if not _g_write(this.s, data as void*, data.len()):
+            ret 0 - 1
+        end
+        ret data.len()
+    end
+
+    pub func WriteBytes(ptr: void*, n: int): int:
+        if not _g_write(this.s, ptr, n):
+            ret 0 - 1
+        end
+        ret n
+    end
+
+    pub func SetDeadline(millis: int):
+        this.s.st[5] = millis as i64
+    end
+
+    pub func Shutdown():
+        _g_close(this.s)
+    end
+
+    pub func CloseWrite():
+        _g_close_write(this.s)
+    end
+
+    pub func Close():
+        _g_close(this.s)
+    end
+
+    pub func Ok(): bool:
+        ret this.s.st[1] == 0 as i64 and this.s.core[0].st[0] == 0 as i64
+    end
+end
+
+func _g_frame(core: _GCore, kind: int, flags: int, sid: int, p: void*, n: int): bool:
+    sync.Lock(core.wmu)
+    mut ok := core.st[0] == 0 as i64
+    if ok:
+        need := n + 9
+        if core.st[13] < need as i64:
+            if core.st[12] != 0 as i64:
+                mem.Free(core.st[12] as void*)
+            end
+            core.st[12] = mem.Allocate(need as u64) as i64
+            core.st[13] = need as i64
+        end
+        b := core.st[12] as u8*
+        b[0] = ((n >> 16) & 255) as u8
+        b[1] = ((n >> 8) & 255) as u8
+        b[2] = (n & 255) as u8
+        b[3] = kind as u8
+        b[4] = flags as u8
+        b[5] = ((sid >> 24) & 127) as u8
+        b[6] = ((sid >> 16) & 255) as u8
+        b[7] = ((sid >> 8) & 255) as u8
+        b[8] = (sid & 255) as u8
+        if n > 0:
+            mem.Copy(((b as i64) + (9 as i64)) as void*, p, n as u64)
+        end
+        ok = core.up.WriteBytes(b as void*, need) == need
+    end
+    sync.Unlock(core.wmu)
+    ret ok
+end
+
+func _g_rst(core: _GCore, sid: int, code: int):
+    b := mem.AllocateZeroed(4 as u64) as u8*
+    b[3] = code as u8
+    _g_frame(core, H2_RST, 0, sid, b as void*, 4)
+    mem.Free(b as void*)
+end
+
+func _g_window_update(core: _GCore, sid: int, inc: int) : bool:
+    b := mem.Allocate(4 as u64) as u8*
+    b[0] = ((inc >> 24) & 127) as u8
+    b[1] = ((inc >> 16) & 255) as u8
+    b[2] = ((inc >> 8) & 255) as u8
+    b[3] = (inc & 255) as u8
+    ok := _g_frame(core, H2_WINDOW, 0, sid, b as void*, 4)
+    mem.Free(b as void*)
+    ret ok
+end
+
+func _hp_int(b &: Bytes, prefix_bits: int, first: int, v: int):
+    limit := (1 << prefix_bits) - 1
+    if v < limit:
+        Put8(b, first | v)
+        ret
+    end
+    Put8(b, first | limit)
+    mut rest := v - limit
+    until rest >= 128:
+        Put8(b, (rest & 127) | 128)
+        rest >>= 7
+    end
+    Put8(b, rest)
+end
+
+func _pb_varint(b &: Bytes, v0: int):
+    mut v := v0
+    until v >= 128:
+        Put8(b, (v & 127) | 128)
+        v >>= 7
+    end
+    Put8(b, v)
+end
+
+func _hp_lit(b &: Bytes, name: str, value: str):
+    Put8(b, 0)
+    _hp_int(b, 7, 0, name.len())
+    PutStr(b, name)
+    _hp_int(b, 7, 0, value.len())
+    PutStr(b, value)
+end
+
+func _g_find(core: _GCore, id: int, out &: _GSess): bool:
+    mut found := false
+    sync.Lock(core.fmu)
+    repeat H2_SLOTS in i:
+        pv := core.table[i]
+        if pv != 0 as i64:
+            sp := pv as _GSess*
+            if sp[0].id == id:
+                out = sp[0]
+                found = true
+                break
+            end
+        end
+    end
+    sync.Unlock(core.fmu)
+    ret found
+end
+
+func _g_register(core: _GCore, s: _GSess): bool:
+    mut done := false
+    sync.Lock(core.fmu)
+    repeat H2_SLOTS in i:
+        if core.table[i] == 0 as i64:
+            sp := mem.AllocateZeroed(sizeof(_GSess) as u64) as _GSess*
+            sp[0] = s
+            core.table[i] = sp as i64
+            done = true
+            break
+        end
+    end
+    sync.Unlock(core.fmu)
+    ret done
+end
+
+func _g_unregister(core: _GCore, id: int):
+    sync.Lock(core.fmu)
+    repeat H2_SLOTS in i:
+        pv := core.table[i]
+        if pv != 0 as i64:
+            sp := pv as _GSess*
+            if sp[0].id == id:
+                core.table[i] = 0 as i64
+                mem.Free(sp as void*)
+                break
+            end
+        end
+    end
+    sync.Unlock(core.fmu)
+end
+
+func _g_new_sess(core: _GCore*, id: int, multi: bool): _GSess:
+    mut s := _GSess {}
+    s.id = id
+    s.rx.init(64)
+    s.st = mem.AllocateZeroed(128 as u64) as i64*
+    s.st[6] = core[0].st[3]
+    s.core = core
+    s.multi = multi
+    ret s
+end
+
+func _g_end_remote(s: _GSess):
+    if s.st[0] == 0 as i64:
+        s.st[0] = 1 as i64
+        chan.Close(s.rx)
+    end
+end
+
+func _g_close_write(s: _GSess):
+    if s.st[1] != 0 as i64 or s.st[11] != 0 as i64:
+        ret
+    end
+    s.st[11] = 1 as i64
+    core := s.core[0]
+    if core.st[0] == 0 as i64:
+        if core.server:
+            mut hb := NewBytes(32)
+            _hp_lit(hb, "grpc-status", "0")
+            _g_frame(core, H2_HEADERS, 5, s.id, hb.p, hb.len)
+            FreeBytes(hb)
+        else:
+            _g_frame(core, H2_DATA, 1, s.id, null, 0)
+        end
+    end
+end
+
+func _g_close(s: _GSess):
+    if s.st[1] != 0 as i64:
+        ret
+    end
+    s.st[1] = 1 as i64
+    core := s.core[0]
+    if core.st[0] == 0 as i64 and s.st[11] == 0 as i64:
+        if core.server:
+            mut hb := NewBytes(32)
+            _hp_lit(hb, "grpc-status", "0")
+            _g_frame(core, H2_HEADERS, 5, s.id, hb.p, hb.len)
+            FreeBytes(hb)
+        else:
+            _g_frame(core, H2_DATA, 1, s.id, null, 0)
+        end
+    end
+    _g_end_remote(s)
+    sync.Lock(core.fmu)
+    sync.Broadcast(core.fcv)
+    sync.Unlock(core.fmu)
+    _g_unregister(core, s.id)
+    if not core.server:
+        core.up.Shutdown()
+    end
+end
+
+func _g_send_data(s: _GSess, p: void*, n: int): bool:
+    core := s.core[0]
+    mut off := 0
+    until off < n:
+        sync.Lock(core.fmu)
+        mut avail := 0
+        until core.st[0] == 0 as i64 and s.st[1] == 0 as i64:
+            avail = n - off
+            if core.st[1] < avail as i64:
+                avail = core.st[1] as int
+            end
+            if s.st[6] < avail as i64:
+                avail = s.st[6] as int
+            end
+            if core.st[2] < avail as i64:
+                avail = core.st[2] as int
+            end
+            if avail > 0:
+                break
+            end
+            sync.WaitCondTimeout(core.fcv, core.fmu, 200 as i64)
+        end
+        alive := core.st[0] == 0 as i64 and s.st[1] == 0 as i64
+        if alive and avail > 0:
+            core.st[1] -= avail as i64
+            s.st[6] -= avail as i64
+        end
+        sync.Unlock(core.fmu)
+        if not alive or avail <= 0:
+            ret false
+        end
+        if not _g_frame(core, H2_DATA, 0, s.id, ((p as i64) + (off as i64)) as void*, avail):
+            ret false
+        end
+        off += avail
+    end
+    ret true
+end
+
+func _g_write(s: _GSess, p: void*, n: int): bool:
+    if s.st[1] != 0 as i64 or s.st[11] != 0 as i64 or s.core[0].st[0] != 0 as i64:
+        ret false
+    end
+    mut off := 0
+    until off < n:
+        mut take := n - off
+        if take > 16000:
+            take = 16000
+        end
+        mut m := NewBytes(take + 16)
+        Put8(m, 0)
+        mut inner := NewBytes(8)
+        Put8(inner, 10)
+        _pb_varint(inner, take)
+        Put32(m, (inner.len + take) as i64)
+        PutBytes(m, inner)
+        PutRaw(m, ((p as i64) + (off as i64)) as void*, take)
+        ok := _g_send_data(s, m.p, m.len)
+        FreeBytes(inner)
+        FreeBytes(m)
+        if not ok:
+            ret false
+        end
+        off += take
+    end
+    ret true
+end
+
+func _g_read(s: _GSess, buf: void*, max: int): int:
+    if s.st[2] != 0 as i64 and s.st[4] < s.st[3]:
+        mut take := (s.st[3] - s.st[4]) as int
+        if take > max:
+            take = max
+        end
+        mem.Copy(buf, (s.st[2] + s.st[4]) as void*, take as u64)
+        s.st[4] += take as i64
+        if s.st[4] >= s.st[3]:
+            mem.Free(s.st[2] as void*)
+            s.st[2] = 0 as i64
+        end
+        ret take
+    end
+    if s.st[0] != 0 as i64 and chan.Len(s.rx) == 0 as i64:
+        ret 0
+    end
+    mut ok := false
+    mut b := Bytes {}
+    if s.st[5] > 0 as i64:
+        b = chan.RecvTimeout(s.rx, ok, s.st[5])
+    else:
+        b = chan.Recv(s.rx, ok)
+    end
+    if not ok or b.len == 0:
+        FreeBytes(b)
+        ret 0
+    end
+    mut take := b.len
+    if take > max:
+        take = max
+    end
+    mem.Copy(buf, b.p, take as u64)
+    if take < b.len:
+        keep := mem.Allocate((b.len - take) as u64)
+        mem.Copy(keep, BytesPtr(b, take), (b.len - take) as u64)
+        s.st[2] = keep as i64
+        s.st[3] = (b.len - take) as i64
+        s.st[4] = 0 as i64
+    end
+    FreeBytes(b)
+    ret take
+end
+
+func _g_varint(p: u8*, off: int, n: int, out &: int): int:
+    mut v := 0
+    mut shift := 0
+    mut i := off
+    until i < n:
+        b := p[i] as int
+        v |= (b & 127) << shift
+        i++
+        if (b & 128) == 0:
+            out = v
+            ret i
+        end
+        shift += 7
+        if shift > 28:
+            ret 0 - 1
+        end
+    end
+    ret 0 - 1
+end
+
+func _g_deliver(s: _GSess, msg: u8*, n: int): bool:
+    mut i := 0
+    until i < n:
+        tag := msg[i] as int
+        i++
+        if tag == 10:
+            mut ln := 0
+            i = _g_varint(msg, i, n, ln)
+            if i < 0 or i + ln > n:
+                ret false
+            end
+            if ln > 0:
+                mut b := NewBytes(ln + 1)
+                PutRaw(b, ((msg as i64) + (i as i64)) as void*, ln)
+                if not chan.Send(s.rx, b):
+                    FreeBytes(b)
+                    ret false
+                end
+            end
+            i += ln
+        else (tag & 7) == 2:
+            mut ln := 0
+            i = _g_varint(msg, i, n, ln)
+            if i < 0 or i + ln > n:
+                ret false
+            end
+            i += ln
+        else (tag & 7) == 0:
+            mut skip := 0
+            i = _g_varint(msg, i, n, skip)
+            if i < 0:
+                ret false
+            end
+        else:
+            ret false
+        end
+    end
+    ret true
+end
+
+func _g_data(s: _GSess, p: u8*, n: int): bool:
+    if n > 0:
+        need := s.st[8] + (n as i64)
+        if need > 33554432 as i64:
+            ret false
+        end
+        if need > s.st[9]:
+            mut cap := s.st[9]
+            if cap < 4096 as i64:
+                cap = 4096 as i64
+            end
+            until cap < need:
+                cap *= 2 as i64
+            end
+            np := mem.Reallocate(s.st[7] as void*, cap as u64)
+            if np == null:
+                ret false
+            end
+            s.st[7] = np as i64
+            s.st[9] = cap
+        end
+        mem.Copy((s.st[7] + s.st[8]) as void*, p as void*, n as u64)
+        s.st[8] += n as i64
+    end
+    mut off := 0
+    acc := s.st[7] as u8*
+    until s.st[8] - (off as i64) >= 5 as i64:
+        if (acc[off] as int) != 0:
+            ret false
+        end
+        ml := ((acc[off + 1] as int) << 24) | ((acc[off + 2] as int) << 16) | ((acc[off + 3] as int) << 8) | (acc[off + 4] as int)
+        if ml < 0 or ml > 33554432:
+            ret false
+        end
+        if s.st[8] - (off as i64) < (5 + ml) as i64:
+            break
+        end
+        if not _g_deliver(s, ((acc as i64) + (off as i64) + (5 as i64)) as u8*, ml):
+            ret false
+        end
+        off += 5 + ml
+    end
+    if off > 0:
+        left := s.st[8] - (off as i64)
+        if left > 0 as i64:
+            mem.MemMove(acc as void*, ((acc as i64) + (off as i64)) as void*, left as u64)
+        end
+        s.st[8] = left
+    end
+    ret true
+end
+
+func _g_settings_frame(core: _GCore, ack: bool): bool:
+    if ack:
+        ret _g_frame(core, H2_SETTINGS, 1, 0, null, 0)
+    end
+    b := mem.AllocateZeroed(24 as u64) as u8*
+    b[1] = 2 as u8
+    b[7] = 4 as u8
+    b[9] = 16 as u8
+    b[13] = 5 as u8
+    b[16] = 64 as u8
+    ok := _g_frame(core, H2_SETTINGS, 0, 0, b as void*, 18)
+    mem.Free(b as void*)
+    ret ok
+end
+
+func _g_reply_headers(core: _GCore, sid: int, status: str, grpc_status: str, end_stream: bool): bool:
+    mut hb := NewBytes(64)
+    if status == "200":
+        Put8(hb, 0x88)
+    else:
+        _hp_lit(hb, ":status", status)
+    end
+    if grpc_status.len() == 0:
+        _hp_lit(hb, "content-type", "application/grpc")
+    else:
+        _hp_lit(hb, "content-type", "application/grpc")
+        _hp_lit(hb, "grpc-status", grpc_status)
+    end
+    mut flags := 4
+    if end_stream:
+        flags = 5
+    end
+    ok := _g_frame(core, H2_HEADERS, flags, sid, hb.p, hb.len)
+    FreeBytes(hb)
+    ret ok
+end
+
+func _g_headers_done(a: _GCore*, dt &: http2.DynTable, sid: int, block: Bytes, ends: bool): bool:
+    core := a[0]
+    mut buf := compress.NewByteBuf()
+    compress.BufPushBytes(buf, block.p, block.len)
+    mut hok := true
+    hl := http2.DecodeHeaderList(dt, buf, hok)
+    compress.BufFree(buf)
+    if not hok:
+        ret false
+    end
+    mut s := _GSess {}
+    known := _g_find(core, sid, s)
+    if core.server:
+        if known:
+            if ends:
+                _g_end_remote(s)
+            end
+            ret true
+        end
+        path := http2.HeadersGet(hl, ":path")
+        mut multi := false
+        base := "/" + core.service
+        if path == base + "/Tun":
+            multi = false
+        else path == base + "/TunMulti":
+            multi = true
+        else:
+            _g_reply_headers(core, sid, "200", "12", true)
+            ret true
+        end
+        if http2.HeadersGet(hl, ":method") != "POST":
+            _g_reply_headers(core, sid, "405", "", true)
+            ret true
+        end
+        ns := _g_new_sess(a, sid, multi)
+        if not _g_register(core, ns):
+            _g_reply_headers(core, sid, "200", "8", true)
+            ret true
+        end
+        _g_reply_headers(core, sid, "200", "", false)
+        mut c := Conn {}
+        c.kind = KindStream
+        c.up = _GStream { s = ns }
+        c.client = false
+        c.open = true
+        c.request_path = path
+        c.request_host = http2.HeadersGet(hl, ":authority")
+        if not chan.TrySend(core.ready, c):
+            _g_close(ns)
+        end
+        if ends:
+            _g_end_remote(ns)
+        end
+        ret true
+    end
+    if known:
+        st := http2.HeadersGet(hl, ":status")
+        if st.len() > 0 and st != "200":
+            s.st[10] = 1 as i64
+            _g_end_remote(s)
+        end
+        gs := http2.HeadersGet(hl, "grpc-status")
+        if ends or (gs.len() > 0 and gs != "0"):
+            _g_end_remote(s)
+        end
+    end
+    ret true
+end
+
+func _g_read_full(up: dyn tunnel.Stream, buf: void*, n: int): bool:
+    mut got := 0
+    until got < n:
+        r := up.ReadBytes(((buf as i64) + (got as i64)) as void*, n - got)
+        if r <= 0:
+            ret false
+        end
+        got += r
+    end
+    ret true
+end
+
+func _g_reader(a: _GCore*):
+    core := a[0]
+    mut dt := http2.NewDynTable(4096)
+    hdr := mem.Allocate(9 as u64) as u8*
+    mut pl := NewBytes(16384)
+    mut hblock := NewBytes(1024)
+    mut hsid := 0
+    mut hends := false
+    mut hopen := false
+    mut good := true
+    if core.server:
+        core.up.SetDeadline(core.hs_ms)
+        pre := mem.Allocate(24 as u64)
+        if not _g_read_full(core.up, pre, 24):
+            good = false
+        else:
+            pa := pre as u8*
+            pb := H2_PREFACE as u8*
+            repeat 24 in k:
+                if pa[k] != pb[k]:
+                    good = false
+                end
+            end
+        end
+        mem.Free(pre)
+        core.up.SetDeadline(core.idle_ms)
+        if good:
+            _g_settings_frame(core, false)
+            _g_window_update(core, 0, H2_BIG_WINDOW - 65535)
+        end
+    end
+    until good:
+        if not _g_read_full(core.up, hdr as void*, 9):
+            break
+        end
+        n := ((hdr[0] as int) << 16) | ((hdr[1] as int) << 8) | (hdr[2] as int)
+        kind := hdr[3] as int
+        flags := hdr[4] as int
+        sid := (((hdr[5] as int) & 127) << 24) | ((hdr[6] as int) << 16) | ((hdr[7] as int) << 8) | (hdr[8] as int)
+        if n > 1048576:
+            break
+        end
+        ResetBytes(pl)
+        Reserve(pl, n + 1)
+        if pl.bad:
+            break
+        end
+        if n > 0 and not _g_read_full(core.up, pl.p, n):
+            break
+        end
+        pl.len = n
+        pp := pl.p as u8*
+        if hopen and kind != H2_CONT:
+            break
+        end
+        if kind == H2_SETTINGS:
+            if (flags & 1) == 0:
+                mut i := 0
+                until i + 6 <= n:
+                    sid2 := ((pp[i] as int) << 8) | (pp[i + 1] as int)
+                    val := ((pp[i + 2] as int) << 24) | ((pp[i + 3] as int) << 16) | ((pp[i + 4] as int) << 8) | (pp[i + 5] as int)
+                    if sid2 == 4:
+                        sync.Lock(core.fmu)
+                        delta := (val as i64) - core.st[3]
+                        core.st[3] = val as i64
+                        repeat H2_SLOTS in k:
+                            pv := core.table[k]
+                            if pv != 0 as i64:
+                                sp := pv as _GSess*
+                                sp[0].st[6] += delta
+                            end
+                        end
+                        sync.Broadcast(core.fcv)
+                        sync.Unlock(core.fmu)
+                    else sid2 == 5:
+                        if val >= 16384 and val <= 16777215:
+                            sync.Lock(core.fmu)
+                            core.st[2] = val as i64
+                            sync.Unlock(core.fmu)
+                        end
+                    end
+                    i += 6
+                end
+                _g_settings_frame(core, true)
+            end
+        else kind == H2_WINDOW:
+            if n == 4:
+                inc := (((pp[0] as int) & 127) << 24) | ((pp[1] as int) << 16) | ((pp[2] as int) << 8) | (pp[3] as int)
+                sync.Lock(core.fmu)
+                if sid == 0:
+                    core.st[1] += inc as i64
+                else:
+                    repeat H2_SLOTS in k:
+                        pv := core.table[k]
+                        if pv != 0 as i64:
+                            sp := pv as _GSess*
+                            if sp[0].id == sid:
+                                sp[0].st[6] += inc as i64
+                            end
+                        end
+                    end
+                end
+                sync.Broadcast(core.fcv)
+                sync.Unlock(core.fmu)
+            end
+        else kind == H2_PING:
+            if (flags & 1) == 0 and n == 8:
+                _g_frame(core, H2_PING, 1, 0, pl.p, 8)
+            end
+        else kind == H2_GOAWAY:
+            break
+        else kind == H2_RST:
+            mut s := _GSess {}
+            if _g_find(core, sid, s):
+                _g_end_remote(s)
+                s.st[10] = 1 as i64
+                sync.Lock(core.fmu)
+                sync.Broadcast(core.fcv)
+                sync.Unlock(core.fmu)
+            end
+        else kind == H2_HEADERS or kind == H2_CONT:
+            mut off := 0
+            mut len2 := n
+            if kind == H2_HEADERS:
+                if (flags & 8) != 0:
+                    if n < 1:
+                        break
+                    end
+                    padn := pp[0] as int
+                    off = 1
+                    len2 = n - 1 - padn
+                end
+                if (flags & 32) != 0:
+                    off += 5
+                    len2 -= 5
+                end
+                if len2 < 0:
+                    break
+                end
+                ResetBytes(hblock)
+                hsid = sid
+                hends = (flags & 1) != 0
+            end
+            PutRaw(hblock, BytesPtr(pl, off), len2)
+            if (flags & 4) != 0:
+                hopen = false
+                if not _g_headers_done(a, dt, hsid, hblock, hends):
+                    break
+                end
+            else:
+                hopen = true
+            end
+        else kind == H2_DATA:
+            mut off := 0
+            mut len2 := n
+            if (flags & 8) != 0:
+                if n < 1:
+                    break
+                end
+                padn := pp[0] as int
+                off = 1
+                len2 = n - 1 - padn
+            end
+            if len2 < 0:
+                break
+            end
+            if n > 0:
+                _g_window_update(core, 0, n)
+            end
+            mut s := _GSess {}
+            if _g_find(core, sid, s):
+                if n > 0 and (flags & 1) == 0:
+                    _g_window_update(core, sid, n)
+                end
+                if not _g_data(s, ((pl.p as i64) + (off as i64)) as u8*, len2):
+                    _g_end_remote(s)
+                    _g_rst(core, sid, 2)
+                else (flags & 1) != 0:
+                    _g_end_remote(s)
+                end
+            end
+        end
+    end
+    core.st[0] = 1 as i64
+    sync.Lock(core.fmu)
+    repeat H2_SLOTS in k:
+        pv := core.table[k]
+        if pv != 0 as i64:
+            sp := pv as _GSess*
+            _g_end_remote(sp[0])
+        end
+    end
+    sync.Broadcast(core.fcv)
+    sync.Unlock(core.fmu)
+    core.up.Close()
+    FreeBytes(pl)
+    FreeBytes(hblock)
+    mem.Free(hdr as void*)
+end
+
+func _g_new_core(t: Conn, s: Settings, server: bool, host: str): _GCore*:
+    a := mem.AllocateZeroed(sizeof(_GCore) as u64) as _GCore*
+    mut c := _GCore {}
+    c.up = AsStream(t)
+    c.wmu = sync.NewMutex()
+    c.fmu = sync.NewMutex()
+    c.fcv = sync.NewCondVar()
+    c.st = mem.AllocateZeroed(128 as u64) as i64*
+    c.st[1] = 65535 as i64
+    c.st[2] = 16384 as i64
+    c.st[3] = 65535 as i64
+    c.table = mem.AllocateZeroed((H2_SLOTS * 8) as u64) as i64*
+    c.server = server
+    c.service = s.service_name
+    c.multi = s.grpc_mode == "multi"
+    c.host = host
+    c.idle_ms = s.read_timeout_ms
+    c.hs_ms = s.handshake_timeout_ms
+    if c.hs_ms <= 0:
+        c.hs_ms = 10000
+    end
+    a[0] = c
+    ret a
+end
+
+func _grpc_dial(host: str, s: Settings, t: Conn): Conn:
+    mut c := Conn {}
+    c.client = true
+    a := _g_new_core(t, s, false, host)
+    core := a[0]
+    sent := core.up.WriteBytes(H2_PREFACE as void*, 24)
+    if sent != 24:
+        c.err = "could not send the http2 preface"
+        ret c
+    end
+    _g_settings_frame(core, false)
+    _g_window_update(core, 0, H2_BIG_WINDOW - 65535)
+    _r := spawn(_g_reader, a)
+    mut name := s.service_name
+    if name.len() == 0:
+        name = "GunService"
+    end
+    mut leaf := "Tun"
+    if s.grpc_mode == "multi":
+        leaf = "TunMulti"
+    end
+    mut authority := host
+    if s.host.len() > 0:
+        authority = s.host
+    end
+    mut hb := NewBytes(256)
+    Put8(hb, 0x83)
+    Put8(hb, 0x87)
+    _hp_lit(hb, ":path", "/" + name + "/" + leaf)
+    _hp_lit(hb, ":authority", authority)
+    _hp_lit(hb, "content-type", "application/grpc")
+    _hp_lit(hb, "te", "trailers")
+    _hp_lit(hb, "user-agent", "grpc-go/1.58.3")
+    ok := _g_frame(core, H2_HEADERS, 4, 1, hb.p, hb.len)
+    FreeBytes(hb)
+    if not ok:
+        c.err = "could not open the grpc stream"
+        ret c
+    end
+    sess := _g_new_sess(a, 1, s.grpc_mode == "multi")
+    if not _g_register(core, sess):
+        c.err = "no stream slot"
+        ret c
+    end
+    c.kind = KindStream
+    c.up = _GStream { s = sess }
+    c.open = true
+    ret c
+end
+
+func _grpc_serve(t: Conn, l: Listener):
+    a := _g_new_core(t, l.settings, true, "")
+    a[0].ready = l.ready
+    _r := spawn(_g_reader, a)
+end

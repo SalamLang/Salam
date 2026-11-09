@@ -861,7 +861,21 @@ func _r3_vm_ppm(d &: _R3, b &: _RarBits, produced: i64): bool:
 end
 
 func _r3_decode(d &: _R3, p: u8*, n: int, unp: i64, limit: i64, out &: compress.ByteBuf, sink &: compress.FileSink, stream: bool): int:
-    mut b := _RarBits { p = p, n = n, pos = 0 }
+    mut s := _rsrc_mem(p, n)
+    st := _r3_decode_src(d, s, unp, limit, out, sink, stream)
+    _rsrc_free(s)
+    ret st
+end
+
+func _r3_decode_src(d &: _R3, s &: _RarSrc, unp: i64, limit: i64, out &: compress.ByteBuf, sink &: compress.FileSink, stream: bool): int:
+    mut sm := _RarStrm { base = 0 as i64, soff = 0 as i64, stream = false, cap = 0 }
+    mut b := _rb_open(s, sm)
+    st := _r3_run(d, b, sm, s, unp, limit, out, sink, stream)
+    _rb_close(b, sm)
+    ret st
+end
+
+func _r3_run(d &: _R3, b &: _RarBits, sm &: _RarStrm, s &: _RarSrc, unp: i64, limit: i64, out &: compress.ByteBuf, sink &: compress.FileSink, stream: bool): int:
     mut drained := 0 as i64
     mut shrink := 0 as i64
     base := out.len
@@ -875,14 +889,15 @@ func _r3_decode(d &: _R3, p: u8*, n: int, unp: i64, limit: i64, out &: compress.
             ret 4
         end
     end
-    mut gpos := -1
+    mut gpos := -1 as i64
     mut gtot := d.total - (1 as i64)
     mut stall := 0
     until true:
-        if b.pos >= n * 8:
+        _rb_fill(b, sm, s)
+        if _rb_done(b, sm, s):
             break
         end
-        if b.pos == gpos and d.total == gtot:
+        if _rb_apos(b, sm) == gpos and d.total == gtot:
             stall++
             if stall > 1000:
                 ret 4
@@ -890,14 +905,17 @@ func _r3_decode(d &: _R3, p: u8*, n: int, unp: i64, limit: i64, out &: compress.
         else:
             stall = 0
         end
-        gpos = b.pos
+        gpos = _rb_apos(b, sm)
         gtot = d.total
         done := d.total - start_total
         if done > limit:
             ret 7
         end
-        if unp >= 0 and done > unp:
+        if unp >= 0 and done > unp and not d.upc:
             ret 4
+        end
+        if unp >= 0 and done == unp and not d.upc:
+            break
         end
         if ((d.wp - d.fl) & d.wmask) >= (d.wsize >> 1):
             _r3_flush(d, out)

@@ -1,0 +1,208 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import mem
+import sync
+import net.tcp
+import net.transport
+
+mut ready := sync.NewWaitGroup()
+mut sink_port := 0
+mut got := transport.NewBytes(4096)
+mut chunks := Vector {} as Vector<int>
+mut srv_ok := false
+mut srv_settings := transport.Settings {}
+mut echo_port := 0
+
+func sink():
+    srv := tcp.Bind(0)
+    sink_port = tcp.Port(srv)
+    sync.Done(ready)
+    c := tcp.Accept(srv)
+    buf := mem.AllocateZeroed(4096 as u64)
+    tcp.SetReadDeadline(c, 700)
+    transport.ResetBytes(got)
+    chunks = Vector {} as Vector<int>
+    until true:
+        n := tcp.ReadBytes(c, buf, 4096)
+        if n <= 0:
+            break
+        end
+        chunks.push(n)
+        transport.PutRaw(got, buf, n)
+    end
+    mem.Free(buf)
+    tcp.Close(c)
+    tcp.CloseServer(srv)
+end
+
+func contains(b: transport.Bytes, lo: int, hi: int, needle: str): bool:
+    nb := needle as u8*
+    mut i := lo
+    until i + needle.len() <= hi:
+        mut same := true
+        repeat needle.len() in k:
+            if transport.At(b, i + k) != (nb[k] as int):
+                same = false
+                break
+            end
+        end
+        if same:
+            ret true
+        end
+        i++
+    end
+    ret false
+end
+
+func run_case(label: str, s: transport.Settings, sni_case: bool):
+    sync.Add(ready, 1 as i64)
+    t := spawn(sink)
+    sync.Wait(ready)
+    mut c := transport.Dial("127.0.0.1", sink_port, s)
+    join(t)
+    mut records := 0
+    mut payload := 0
+    mut whole := true
+    mut off := 0
+    mut hs_len := 0
+    mut first_rec_has_name := false
+    mut ws := transport.Bytes {}
+    ws = transport.NewBytes(got.len + 1)
+    until off + 5 <= got.len:
+        rl := transport.Peek16(got, off + 3)
+        if off + 5 + rl > got.len:
+            whole = false
+            break
+        end
+        if transport.At(got, off) != 22:
+            whole = false
+        end
+        transport.PutRaw(ws, transport.BytesPtr(got, off + 5), rl)
+        if records == 0:
+            first_rec_has_name = contains(got, off + 5, off + 5 + rl, "www.example.org")
+        end
+        records++
+        payload += rl
+        off += 5 + rl
+    end
+    if ws.len >= 4:
+        hs_len = (transport.At(ws, 1) << 16) | (transport.At(ws, 2) << 8) | transport.At(ws, 3)
+    end
+    mut name_in_one_read := false
+    mut pos := 0
+    repeat chunks.len() in i:
+        n := chunks.get(i)
+        if contains(got, pos, pos + n, "www.example.org"):
+            name_in_one_read = true
+        end
+        pos += n
+    end
+    println label, "records split:", records > 1, "complete:", whole and off == got.len
+    if s.fragment_delay_ms > 0:
+        println label, "reads split:", chunks.len() > 1
+    end
+    println label, "handshake length matches:", hs_len + 4 == payload, "name present after reassembly:", contains(ws, 0, ws.len, "www.example.org")
+    if sni_case:
+        println label, "name cut by a record boundary:", not first_rec_has_name and records > 1, "name cut by a read boundary:", not name_in_one_read
+    end
+    transport.FreeBytes(ws)
+    if transport.Ok(c):
+        transport.Close(c)
+    end
+end
+
+func echo_server():
+    l := transport.Listen(0, srv_settings)
+    echo_port = transport.ListenerPort(l)
+    sync.Done(ready)
+    mut c := transport.Accept(l)
+    if transport.Ok(c):
+        buf := mem.Allocate(4096 as u64)
+        n := transport.Read(c, buf, 4096)
+        transport.Write(c, buf, n)
+        srv_ok = true
+        transport.Close(c)
+        mem.Free(buf)
+    end
+    transport.CloseListener(l)
+end
+
+func real_server(label: str, cs: transport.Settings):
+    srv_ok = false
+    sync.Add(ready, 1 as i64)
+    t := spawn(echo_server)
+    sync.Wait(ready)
+    mut c := transport.Dial("127.0.0.1", echo_port, cs)
+    mut good := transport.Ok(c)
+    if good:
+        transport.Write(c, "abcdefgh" as void*, 8)
+        back := mem.AllocateZeroed(16 as u64)
+        good = transport.ReadFull(c, back, 8)
+        mem.Free(back)
+        transport.Close(c)
+    end
+    join(t)
+    println label, "handshake and echo with a fragmented hello:", good, srv_ok
+end
+
+func base(): transport.Settings:
+    mut s := transport.Settings {}
+    s.tls = true
+    s.allow_insecure = true
+    s.sni = "www.example.org"
+    s.fragment = true
+    s.fragment_delay_ms = 20
+    ret s
+end
+
+func main:
+    mut a := base()
+    a.fragment_mode = "tls"
+    a.fragment_min = 5
+    a.fragment_max = 20
+    a.fragment_delay_ms = 0
+    run_case("tls records", a, false)
+
+    mut b := base()
+    b.fragment_mode = "both"
+    b.fragment_min = 10
+    b.fragment_max = 30
+    b.fragment_delay_ms = 5
+    run_case("both", b, false)
+
+    mut c := base()
+    c.fragment_mode = "tcp"
+    c.fragment_min = 0
+    c.fragment_max = 0
+    c.fragment_sni = true
+    run_case("tcp at sni", c, true)
+
+    mut d := base()
+    d.fragment_mode = "tls"
+    d.fragment_min = 0
+    d.fragment_max = 0
+    d.fragment_sni = true
+    d.fragment_delay_ms = 20
+    run_case("tls at sni", d, true)
+
+    srv_settings.tls = true
+    srv_settings.cert_file = "tests/fixtures/ssl/server.crt"
+    srv_settings.key_file = "tests/fixtures/ssl/server.key"
+    real_server("tls records", a)
+    real_server("both", b)
+    mut e := b
+    e.fragment_writes = 3
+    real_server("three writes", e)
+end

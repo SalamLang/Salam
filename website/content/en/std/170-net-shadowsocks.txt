@@ -24,17 +24,17 @@ pkg.intro <<
 <tr><td><code dir="ltr">aes-128-gcm</code></td><td>16 bytes</td><td>16 bytes</td><td>any text</td><td>Classic AEAD. Slow here, see below.</td></tr>
 <tr><td><code dir="ltr">aes-256-gcm</code></td><td>32 bytes</td><td>32 bytes</td><td>any text</td><td>Classic AEAD. The default of <code>Config</code>. Slow here, see below.</td></tr>
 <tr><td><code dir="ltr">chacha20-ietf-poly1305</code></td><td>32 bytes</td><td>32 bytes</td><td>any text</td><td>Classic AEAD. The one to prefer.</td></tr>
-<tr><td><code dir="ltr">2022-blake3-aes-128-gcm</code></td><td>16 bytes</td><td>16 bytes</td><td>base64 of exactly 16 bytes</td><td>Shadowsocks 2022, TCP only.</td></tr>
-<tr><td><code dir="ltr">2022-blake3-aes-256-gcm</code></td><td>32 bytes</td><td>32 bytes</td><td>base64 of exactly 32 bytes</td><td>Shadowsocks 2022, TCP only.</td></tr>
-<tr><td><code dir="ltr">2022-blake3-chacha20-poly1305</code></td><td>32 bytes</td><td>32 bytes</td><td>base64 of exactly 32 bytes</td><td>Shadowsocks 2022, TCP only.</td></tr>
+<tr><td><code dir="ltr">2022-blake3-aes-128-gcm</code></td><td>16 bytes</td><td>16 bytes</td><td>base64 of exactly 16 bytes</td><td>Shadowsocks 2022, TCP and UDP.</td></tr>
+<tr><td><code dir="ltr">2022-blake3-aes-256-gcm</code></td><td>32 bytes</td><td>32 bytes</td><td>base64 of exactly 32 bytes</td><td>Shadowsocks 2022, TCP and UDP.</td></tr>
+<tr><td><code dir="ltr">2022-blake3-chacha20-poly1305</code></td><td>32 bytes</td><td>32 bytes</td><td>base64 of exactly 32 bytes</td><td>Shadowsocks 2022, TCP and UDP.</td></tr>
 </tbody></table></div>
 {{example.net-shadowsocks-guide-methods}}
 <p>For the first three, the password is any text and the key is derived from it the classic way (<code>BytesToKey</code>, MD5 based), so use a long random password. For the 2022 ciphers the password <em>is</em> the key: it must be the base64 of exactly the key length, for example the output of <code>openssl rand -base64 32</code>. A password of the wrong length makes <code>MakeKey</code> return a <code>Buf</code> with <code>bad</code> set, and <code>Listen</code> or <code>Dial</code> then fail. The 2022 ciphers add replay protection with a timestamp (a request more than 30 seconds off is refused) and a salt cache, and the connection header is authenticated.</p>
 
 <h3 id="limits">What is not there</h3>
 <ul>
-<li>Shadowsocks 2022 is implemented for TCP only. <code>UdpListen</code>, <code>UdpDial</code>, <code>PackUdp</code> and <code>UnpackUdp</code> refuse the three 2022 methods.</li>
-<li>No multi user support: the 2022 extensible identity headers (EIH, a key per user behind one port) are not implemented. A server has one password.</li>
+<li>Shadowsocks 2022 UDP has its own functions. <code>PackUdp</code> and <code>UnpackUdp</code> are for the classic methods and refuse the three 2022 methods; use <code>PackUdp2022</code> and <code>UnpackUdp2022</code>, or <code>UdpListen</code> and <code>UdpDial</code>, which pick the right one.</li>
+<li>Several users on one port (the 2022 extensible identity headers) work only with the two AES 2022 methods. The ChaCha 2022 method takes a single key.</li>
 <li>No real server was used to test the interoperability of <code>simple-obfs</code> and of the 2022 TCP stream. They are tested against this package itself and against separate Python reimplementations written from the specifications, not against <code>ssserver</code>, <code>shadowsocks-rust</code> or the real <code>obfs-server</code>. The classic AEAD ciphers are checked against published test vectors. Treat the 2022 methods and the obfuscation as young and test against your own server before relying on them.</li>
 <li>AES is done in software (bitsliced, to avoid timing leaks) and is slow: in the tests here about four to five times slower than ChaCha20. Prefer <code>chacha20-ietf-poly1305</code>.</li>
 <li>The relay has no half close: when one side closes, the whole connection is shut down. A protocol that depends on a client finishing its request with a close and still reading the answer will break.</li>
@@ -58,8 +58,11 @@ pkg.intro <<
 {{example.net-shadowsocks-guide-obfs}}
 
 <h2 id="guide-udp">The UDP relay</h2>
-<p>Shadowsocks carries UDP too, for DNS and for games, one encrypted datagram at a time: the packet holds a random salt, the target address and the payload, sealed as a whole. <code>UdpListen</code> starts a relay on a UDP port; <code>UdpServe</code> loops until <code>UdpStop</code> is called, and <code>UdpStep</code> handles one packet and returns 1 when it did, so you can drive it yourself. The relay keeps one outgoing socket per client and forgets a client after 60 seconds of silence. On the client, <code>UdpDial</code> makes a <code>UdpClient</code>, <code>UdpSend</code> sends a payload to a target through the relay and <code>UdpRecv</code> returns the next reply and who it came from; <code>UdpSetTimeout</code> bounds the wait. UDP works only with the three classic methods and only for IPv4 targets.</p>
+<p>Shadowsocks carries UDP too, for DNS and for games, one encrypted datagram at a time: the packet holds a random salt, the target address and the payload, sealed as a whole. <code>UdpListen</code> starts a relay on a UDP port; <code>UdpServe</code> loops until <code>UdpStop</code> is called, and <code>UdpStep</code> handles one packet and returns 1 when it did, so you can drive it yourself. The relay keeps one outgoing socket per client and forgets a client after 60 seconds of silence. On the client, <code>UdpDial</code> makes a <code>UdpClient</code>, <code>UdpSend</code> sends a payload to a target through the relay and <code>UdpRecv</code> returns the next reply and who it came from; <code>UdpSetTimeout</code> bounds the wait. UDP also works with the three 2022 ciphers (SIP022): the client picks a random session ID, numbers its packets, and the first 16 bytes of each datagram are that header encrypted on its own (AES-ECB for the AES methods, an XChaCha20-Poly1305 nonce for the ChaCha one). Packets carry a timestamp that must be within 30 seconds, and the relay drops any packet ID it has already seen in a 64 packet window. The classic methods get a salt filter on the relay, so a recorded datagram is answered once. UDP targets must be IPv4 or domain names.</p>
 {{example.net-shadowsocks-guide-udp}}
+
+<h2 id="guide-users">Several users on one 2022 server</h2>
+<p>An AES 2022 server can serve many users, each with their own key. Give the server its own key as the password, then call <code>AddUser</code> (<code>UdpAddUser</code> for UDP) once per user key. A client connects with the password <code>serverkey:userkey</code>: it sends an identity header that names its user without revealing the key, and the server picks that user's key for the session. <code>ChainOf</code>, <code>EihSeal</code> and <code>EihOpen</code> are the pieces underneath. The ChaCha 2022 method has no identity headers, so it takes a single key. <code>ListenOn</code> and <code>UdpListenOn</code> bind to one address instead of every interface, for example <code>127.0.0.1</code>. When a handshake fails the server keeps the socket open for a random 1.5 to 4.5 seconds and reads what is sent before closing, so a probe cannot tell a refusal from a slow server. <code>Relay</code> passes a half close in both directions: when one side stops sending, the other side is told and can still answer.</p>
 
 <h2 id="guide-over-stream">Running over a tunnel.Stream</h2>
 <p>The client normally dials its server with TCP, but <code>DialOver</code> takes any <code>tunnel.Stream</code> instead: a WebSocket, a TLS connection, the output of another proxy hop, or a stream you made. The server side has <code>AcceptOver</code>. In both cases the Shadowsocks layer treats the stream as the wire, so you can put Shadowsocks inside a transport from <a href="/std/net/transport/">net.transport</a>, or behind a proxy chain from <a href="/std/net/tunnel/">net.tunnel</a>. <code>AsStream</code> does the opposite: it wraps a <code>Conn</code> as a <code>tunnel.Stream</code>, so a Shadowsocks connection can be handed to anything that takes a stream, such as a router outbound or another protocol layer.</p>
@@ -222,12 +225,12 @@ doc.UdpServer.stopc = The flag that stops <code>UdpServe</code>.
 doc.UdpServer.ok = True when the relay started.
 doc.PackUdp = Builds one UDP datagram: a random salt, then the target and the payload sealed together. Appends it to the buffer. Returns false for a 2022 method or a bad target.
 doc.UnpackUdp = Opens a datagram, fills the target and appends the payload to the buffer. Returns false when authentication fails, the packet is short or the method is a 2022 method.
-doc.UdpDial = Makes a UDP client for the server and the method in the <code>Config</code>. <code>ok</code> is false for a 2022 method or a bad password.
+doc.UdpDial = Makes a UDP client for the server and the method in the <code>Config</code>. For a 2022 method the password may be <code>serverkey:userkey</code>. <code>ok</code> is false for an unknown method or a bad password.
 doc.UdpSend = Sends a payload to a target through the relay. Returns true when the datagram was sent.
 doc.UdpRecv = Waits for one reply, opens it and copies the payload to the buffer (up to <code>max</code> bytes), filling <code>from</code> with the sender. Returns the length, or a negative number on timeout or on a packet that does not authenticate.
 doc.UdpSetTimeout = How many milliseconds <code>UdpRecv</code> waits at most.
 doc.UdpClose = Closes the client and frees its buffers.
-doc.UdpListen = Starts a UDP relay on a port with a classic method and a password. <code>ok</code> is false for a 2022 method, a bad password or a port that is taken.
+doc.UdpListen = Starts a UDP relay on a port with a method and a password. For a 2022 method the password is the base64 key. <code>ok</code> is false for an unknown method, a bad password or a port that is taken.
 doc.UdpServerPort = The port the relay listens on.
 doc.UdpStep = Handles at most one waiting datagram, forwards it, hands pending replies back to their clients and drops idle clients. Returns 1 when a datagram was handled, else 0. It waits about 20 ms for a packet.
 doc.UdpServe = Calls <code>UdpStep</code> in a loop until <code>UdpStop</code>. Run it on its own thread.
@@ -302,6 +305,60 @@ group.ATYP_.title = Address types
 group.ATYP_ = The first byte of the address header: what kind of address follows.
 group.OBFS_.title = Obfuscation modes
 group.OBFS_ = Which disguise <code>simple-obfs</code> uses.
+doc.UdpSession = The state of one Shadowsocks 2022 UDP session: the session ID, the packet counter and the replay window of the packets received.
+doc.UdpSession.sid = The random 64 bit session ID of this side.
+doc.UdpSession.pid = The number of the next packet this side sends.
+doc.UdpSession.peer = The session ID of the other side, learned from its first valid packet; 0 until then.
+doc.UdpSession.top = The highest packet number accepted so far.
+doc.UdpSession.bits = The replay window: bit k is set when the packet numbered <code>top</code> minus k was seen, over the last 64 packets.
+doc.UdpSession.any = True once a packet was accepted, so that <code>top</code> and <code>bits</code> mean something.
+doc.UdpSession.last = The packet number of the datagram opened last.
+doc.ServerState.users = The keys of the users added with <code>AddUser</code>, by the hex of the hash that names them in an identity header.
+doc.ServerState.user_names = The names of those users, by the same hex.
+doc.ServerState.user_n = How many users were added.
+doc.Obfs.seen_hello = True once the fake TLS hello record was read, so that a later handshake record is taken as the start of the data.
+doc.UdpClient.sess = The 2022 session of this client; null for a classic method.
+doc.UdpClient.eih = The identity keys of a <code>serverkey:userkey</code> password, all keys except the last one, one after another.
+doc.UdpClient.eih_n = How many identity keys <code>eih</code> holds.
+doc.UdpServer.sess = The 2022 session of each client, keyed by the client address.
+doc.UdpServer.skeys = The user key each client signed in with, keyed by the client address.
+doc.UdpServer.users = The keys of the users added with <code>UdpAddUser</code>, by the hex of the hash that names them in an identity header.
+doc.UdpServer.user_n = How many users were added.
+doc.UdpServer.filter = The salt cache that rejects a replayed datagram.
+doc.ConnState.eih = The identity keys of a <code>serverkey:userkey</code> password, all keys except the last one, one after another.
+doc.ConnState.eih_n = How many identity keys <code>eih</code> holds.
+doc.ConnState.eih_done = On a server, true once the identity header of the client was opened and its user key is in use.
+doc.ConnState.user = On a server, the name of the user the identity header named; empty otherwise.
+doc.KeyChain = The keys of a 2022 password written as <code>serverkey:userkey</code>, split and decoded into one buffer of equal sized keys.
+doc.KeyChain.keys = All keys one after another, <code>key_len</code> bytes each.
+doc.KeyChain.count = How many keys there are.
+doc.KeyChain.key_len = The length of one key in bytes.
+doc.KeyChain.ok = False when the method has no identity headers or a part of the password is not a valid key.
+doc.IDENTITY_CONTEXT = The BLAKE3 key derivation context for the key of an identity header.
+doc.EIH_LEN = The length of one identity header block in bytes: 16.
+doc.NewUdpSession = Makes a session with a random 64 bit session ID.
+doc.SessionAccept = Checks the packet number of a received datagram against the replay window of the session. Returns true and records the number when it is new and not more than 63 behind the highest; false for a repeat or a number that is too old.
+doc.PackUdp2022 = Builds one Shadowsocks 2022 datagram and appends it to the buffer: the encrypted header with the session ID and the packet number, the identity header blocks for a multi user password, then the sealed body with the time, the target and the payload. <code>ukey</code> is the user key and <code>hdr_key</code> the key of the header block; for one key both are that key, and with identity keys it is the first of them. <code>client</code> says which side is sending. Returns false for a classic method or a bad target.
+doc.Udp2022Peek = Reads the session ID out of the header of a datagram without opening the body, so that a relay can find the session first. Works for the AES 2022 methods only; false for ChaCha or a packet that is too short.
+doc.UnpackUdp2022 = Opens a 2022 datagram: checks the header and the tag, the time (within 30 seconds) and the side, fills the target and appends the payload to the buffer. <code>skip</code> is the number of identity header bytes between the header and the body. On the client side it also rejects replayed packets with the session. Returns false when anything is wrong.
+doc.Udp2022Identity = Opens the identity header block of a datagram with the identity key of the server and writes the 16 byte hash of the user key it names. Works for the AES 2022 methods only; false for ChaCha or a packet that is too short.
+doc.ListenOn = Like <code>ListenObfs</code>, but listens only on the given address, such as <code>127.0.0.1</code>, instead of every interface. The last argument is the obfuscation, <code>http</code>, <code>tls</code> or empty for none.
+doc.AddUser = Adds a user to a 2022 AES server: a name that shows up in logs and the base64 user key. Clients then connect with the password <code>serverkey:userkey</code>. Returns false for a classic method, for ChaCha 2022 or for a bad key.
+doc.UdpListenOn = Like <code>UdpListen</code>, but listens only on the given address, such as <code>127.0.0.1</code>.
+doc.UdpAddUser = Adds a user key to a 2022 AES UDP relay. Returns false for a classic method, for ChaCha 2022 or for a bad key.
+doc.ChainOf = Splits a 2022 password written as <code>serverkey:userkey</code> (up to 8 base64 keys) into a <code>KeyChain</code>. <code>ok</code> is false for a classic method, more than 8 parts or a part that is not a key of the right length.
+doc.ChainKey = A pointer to key number <code>i</code> of the chain, counting from 0. The last key is the one of the user.
+doc.ChainFree = Wipes and frees the keys of a chain.
+doc.IdentityHash = Writes the 16 byte BLAKE3 hash of a key, which names a user in an identity header.
+doc.IdentityKey = Derives the key that seals an identity header: a BLAKE3 key derivation with <code>IDENTITY_CONTEXT</code> over the identity key followed by the salt. Writes <code>klen</code> bytes.
+doc.EihSeal = Builds one identity header block: the hash of the next key down the chain, encrypted with AES under the key from <code>IdentityKey</code>. Writes 16 bytes. Returns false for a bad key length.
+doc.EihOpen = The reverse of <code>EihSeal</code>: decrypts a block and writes the 16 byte hash of the next key. Returns false for a bad key length.
+doc.ATYP_IPV4 = Address type 1: a four byte IPv4 address follows.
+doc.ATYP_DOMAIN = Address type 3: a length byte and a host name follow.
+doc.ATYP_IPV6 = Address type 4: a sixteen byte IPv6 address follows.
+doc.OBFS_NONE = Obfuscation mode 0: no disguise.
+doc.OBFS_HTTP = Obfuscation mode 1: a fake HTTP upgrade request and response, then the data.
+doc.OBFS_TLS = Obfuscation mode 2: a fake TLS hello, then the data inside TLS records.
 ex.ServerState = -
 ex.Server = -
 ex.Listen = -
@@ -412,3 +469,57 @@ ex.RandomSalt = -
 ex.PasswordKey = -
 ex.group.ATYP_ = net-shadowsocks-Codec
 ex.group.OBFS_ = -
+ex.UdpSession = net-shadowsocks-Udp2022
+ex.UdpSession.sid = net-shadowsocks-Udp2022
+ex.UdpSession.pid = -
+ex.UdpSession.peer = net-shadowsocks-Udp2022
+ex.UdpSession.top = net-shadowsocks-Udp2022
+ex.UdpSession.bits = -
+ex.UdpSession.any = net-shadowsocks-Udp2022
+ex.UdpSession.last = net-shadowsocks-Udp2022
+ex.ServerState.users = net-shadowsocks-MultiUser
+ex.ServerState.user_names = net-shadowsocks-MultiUser
+ex.ServerState.user_n = net-shadowsocks-MultiUser
+ex.Obfs.seen_hello = -
+ex.UdpClient.sess = -
+ex.UdpClient.eih = -
+ex.UdpClient.eih_n = -
+ex.UdpServer.sess = net-shadowsocks-MultiUser
+ex.UdpServer.skeys = -
+ex.UdpServer.users = net-shadowsocks-MultiUser
+ex.UdpServer.user_n = net-shadowsocks-MultiUser
+ex.UdpServer.filter = -
+ex.ConnState.eih = -
+ex.ConnState.eih_n = -
+ex.ConnState.eih_done = -
+ex.ConnState.user = -
+ex.KeyChain = net-shadowsocks-Identity
+ex.KeyChain.keys = net-shadowsocks-Identity
+ex.KeyChain.count = net-shadowsocks-Identity
+ex.KeyChain.key_len = net-shadowsocks-Identity
+ex.KeyChain.ok = net-shadowsocks-Identity
+ex.IDENTITY_CONTEXT = net-shadowsocks-Identity
+ex.EIH_LEN = net-shadowsocks-Identity
+ex.NewUdpSession = net-shadowsocks-Udp2022
+ex.SessionAccept = net-shadowsocks-Udp2022
+ex.PackUdp2022 = net-shadowsocks-Udp2022
+ex.Udp2022Peek = net-shadowsocks-Udp2022
+ex.UnpackUdp2022 = net-shadowsocks-Udp2022
+ex.Udp2022Identity = net-shadowsocks-Udp2022
+ex.ListenOn = net-shadowsocks-MultiUser
+ex.AddUser = net-shadowsocks-MultiUser
+ex.UdpListenOn = net-shadowsocks-MultiUser
+ex.UdpAddUser = net-shadowsocks-MultiUser
+ex.ChainOf = net-shadowsocks-Identity
+ex.ChainKey = net-shadowsocks-Identity
+ex.ChainFree = net-shadowsocks-Identity
+ex.IdentityHash = net-shadowsocks-Identity
+ex.IdentityKey = net-shadowsocks-Identity
+ex.EihSeal = net-shadowsocks-Identity
+ex.EihOpen = net-shadowsocks-Identity
+ex.ATYP_IPV4 = net-shadowsocks-Codec
+ex.ATYP_DOMAIN = net-shadowsocks-Codec
+ex.ATYP_IPV6 = net-shadowsocks-Codec
+ex.OBFS_NONE = net-shadowsocks-Codec
+ex.OBFS_HTTP = net-shadowsocks-Codec
+ex.OBFS_TLS = net-shadowsocks-Codec

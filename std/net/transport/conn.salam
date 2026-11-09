@@ -21,10 +21,12 @@ import crypto
 import rand
 import encoding
 import tls
+import chan
 import net.tcp
 import net.internal.rawsock
 import net.websocket
 import net.tunnel
+import net.reality
 
 @en "KindTCP"
 @fa "نوع تی سی پی"
@@ -37,6 +39,78 @@ pub const KindTLS := 1
 @en "KindStream"
 @fa "نوع جریان"
 pub const KindStream := 2
+
+struct _Hs:
+    pub fd: i64 = 0 - 1
+    pub l: Listener = Listener {}
+    pub st: i64* = null
+    pub mu: sync.Mutex = sync.Mutex {}
+    pub cv: sync.CondVar = sync.CondVar {}
+end
+
+struct _StreamAdapter:
+    pub c: Conn = Conn {}
+
+    pub func Read(max: int): str:
+        buf := mem.Allocate((max + 1) as u64)
+        n := _stream_read(this.c, buf, max)
+        if n <= 0:
+            mem.Free(buf)
+            ret ""
+        end
+        bp := buf as u8*
+        bp[n] = 0 as u8
+        ret buf as str
+    end
+
+    pub func ReadBytes(buf: void*, max: int): int:
+        ret _stream_read(this.c, buf, max)
+    end
+
+    pub func Write(data: str): int:
+        if not _stream_write(this.c, data as void*, data.len()):
+            ret 0 - 1
+        end
+        ret data.len()
+    end
+
+    pub func WriteBytes(ptr: void*, n: int): int:
+        if not _stream_write(this.c, ptr, n):
+            ret 0 - 1
+        end
+        ret n
+    end
+
+    pub func SetDeadline(millis: int):
+        _stream_timeout(this.c, millis)
+    end
+
+    pub func Shutdown():
+        if this.c.kind == KindTLS:
+            rawsock.Shutdown(rawsock.FromFd(tls.Fd(this.c.tls)))
+        else this.c.kind == KindTCP:
+            rawsock.Shutdown(rawsock.FromFd(this.c.tcp.fd))
+        end
+    end
+
+    pub func CloseWrite():
+        if this.c.kind == KindTLS:
+            tls.CloseWrite(this.c.tls)
+        else this.c.kind == KindTCP:
+            rawsock.ShutdownWrite(rawsock.FromFd(this.c.tcp.fd))
+        else this.c.kind == KindStream:
+            this.c.up.CloseWrite()
+        end
+    end
+
+    pub func Close():
+        _stream_close(this.c)
+    end
+
+    pub func Ok(): bool:
+        ret this.c.open
+    end
+end
 
 @en "Settings"
 @fa "تنظیمات"
@@ -95,6 +169,45 @@ pub struct Settings:
     @en "timeout_ms"
     @fa "مهلت میلی ثانیه"
     pub timeout_ms: int = 0
+    @en "read_timeout_ms"
+    @fa "مهلت بی کاری خواندن"
+    pub read_timeout_ms: int = 0
+    @en "write_timeout_ms"
+    @fa "مهلت بی کاری نوشتن"
+    pub write_timeout_ms: int = 0
+    @en "fragment_mode"
+    @fa "حالت تکه تکه کردن"
+    pub fragment_mode: str = "tcp"
+    @en "fragment_sni"
+    @fa "برش نام سرور"
+    pub fragment_sni: bool = false
+    @en "fragment_writes"
+    @fa "شمار نوشتن های تکه شده"
+    pub fragment_writes: int = 1
+    @en "bind"
+    @fa "نشانی شنود"
+    pub bind: str = "127.0.0.1"
+    @en "handshake_timeout_ms"
+    @fa "مهلت دست دادن"
+    pub handshake_timeout_ms: int = 10000
+    @en "max_handshakes"
+    @fa "بیشینه دست دادن همزمان"
+    pub max_handshakes: int = 128
+    @en "security"
+    @fa "امنیت"
+    pub security: str = ""
+    @en "reality"
+    @fa "ریلیتی"
+    pub reality: reality.Settings = reality.Settings {}
+    @en "reality_server"
+    @fa "ریلیتی کارساز"
+    pub reality_server: reality.ServerSettings = reality.ServerSettings {}
+    @en "service_name"
+    @fa "نام سرویس"
+    pub service_name: str = ""
+    @en "grpc_mode"
+    @fa "حالت جی آر پی سی"
+    pub grpc_mode: str = "gun"
 end
 
 @en "Conn"
@@ -145,6 +258,9 @@ pub struct Conn:
     @en "request_host"
     @fa "میزبان درخواست"
     pub request_host: str = ""
+    @en "wbuf"
+    @fa "بافر نوشتن"
+    pub wbuf: Bytes = Bytes {}
 end
 
 @en "Listener"
@@ -159,72 +275,16 @@ pub struct Listener:
     @en "tls_cfg"
     @fa "پیکربندی تی ال اس"
     pub tls_cfg: tls.ServerConfig = tls.ServerConfig {}
+    @en "ready"
+    @fa "آماده"
+    pub ready: chan.Chan<Conn> = chan.Chan {} as chan.Chan<Conn>
+    @en "flags"
+    @fa "پرچم ها"
+    pub flags: i64* = null
+    @en "slots"
+    @fa "جایگاه ها"
+    pub slots: sync.Semaphore = sync.Semaphore {}
 end
-
-struct _Pump:
-    pub src: i64 = 0 - 1
-    pub dst: i64 = 0 - 1
-    pub fragment: bool = false
-    pub fmin: int = 0
-    pub fmax: int = 0
-    pub delay: int = 0
-    pub alive: i64* = null
-end
-
-struct _StreamAdapter:
-    pub c: Conn = Conn {}
-
-    pub func Read(max: int): str:
-        buf := mem.Allocate((max + 1) as u64)
-        n := _stream_read(this.c, buf, max)
-        if n <= 0:
-            mem.Free(buf)
-            ret ""
-        end
-        bp := buf as u8*
-        bp[n] = 0 as u8
-        ret buf as str
-    end
-
-    pub func ReadBytes(buf: void*, max: int): int:
-        ret _stream_read(this.c, buf, max)
-    end
-
-    pub func Write(data: str): int:
-        if not _stream_write(this.c, data as void*, data.len()):
-            ret 0 - 1
-        end
-        ret data.len()
-    end
-
-    pub func WriteBytes(ptr: void*, n: int): int:
-        if not _stream_write(this.c, ptr, n):
-            ret 0 - 1
-        end
-        ret n
-    end
-
-    pub func SetDeadline(millis: int):
-        _stream_timeout(this.c, millis)
-    end
-
-    pub func Shutdown():
-        if this.c.kind == KindTLS:
-            rawsock.Shutdown(rawsock.FromFd(tls.Fd(this.c.tls)))
-        else this.c.kind == KindTCP:
-            rawsock.Shutdown(rawsock.FromFd(this.c.tcp.fd))
-        end
-    end
-
-    pub func Close():
-        _stream_close(this.c)
-    end
-
-    pub func Ok(): bool:
-        ret this.c.open
-    end
-end
-
 
 func _ub(p: u8*, i: int): int:
     ret p[i] as int
@@ -378,49 +438,99 @@ func _tls_config(host: str, s: Settings): tls.Config:
     end
     cfg.insecure_skip_verify = s.allow_insecure
     cfg.alpn = s.alpn
+    if s.network == "grpc" and s.alpn.len() == 0:
+        cfg.alpn = "h2"
+    end
     cfg.ca_file = s.ca_file
+    if s.fragment:
+        cfg.frag_tcp = s.fragment_mode != "tls"
+        cfg.frag_tls = s.fragment_mode == "tls" or s.fragment_mode == "both"
+        cfg.frag_sni = s.fragment_sni
+        cfg.frag_min = s.fragment_min
+        cfg.frag_max = s.fragment_max
+        cfg.frag_delay_ms = s.fragment_delay_ms
+        cfg.frag_writes = s.fragment_writes
+    end
     ret cfg
 end
 
-func _ws_frame(c: Conn, op: int, p: void*, n: int): Bytes:
-    mut f := NewBytes(n + 16)
-    Put8(f, 0x80 | op)
+func _ws_fill(client: bool, buf &: Bytes, op: int, p: void*, n: int): bool:
+    ResetBytes(buf)
+    Reserve(buf, n + 16)
+    if buf.bad:
+        ret false
+    end
+    Put8(buf, 0x80 | op)
     mut mb := 0
-    if c.client:
+    if client:
         mb = 0x80
     end
     if n < 126:
-        Put8(f, mb | n)
+        Put8(buf, mb | n)
     else n < 65536:
-        Put8(f, mb | 126)
-        Put16(f, n)
+        Put8(buf, mb | 126)
+        Put16(buf, n)
     else:
-        Put8(f, mb | 127)
-        Put64(f, n as u64)
+        Put8(buf, mb | 127)
+        Put64(buf, n as u64)
     end
-    if c.client:
-        mut key := NewBytes(4)
-        defer FreeBytes(key)
-        crypto.RandomBytes(key.p, 4)
-        key.len = 4
-        PutBytes(f, key)
-        Reserve(f, n)
-        dst := ((f.p as i64) + (f.len as i64)) as u8*
+    if client:
+        crypto.RandomBytes(((buf.p as i64) + (buf.len as i64)) as void*, 4)
+        kp := ((buf.p as i64) + (buf.len as i64)) as u8*
+        k0 := kp[0] as int
+        k1 := kp[1] as int
+        k2 := kp[2] as int
+        k3 := kp[3] as int
+        buf.len += 4
+        dst := ((buf.p as i64) + (buf.len as i64)) as u8*
         src := p as u8*
-        repeat n in i:
-            dst[i] = (src[i] as int ^ At(key, i & 3)) as u8
+        mut i := 0
+        until i + 4 <= n:
+            dst[i] = (src[i] as int ^ k0) as u8
+            dst[i + 1] = (src[i + 1] as int ^ k1) as u8
+            dst[i + 2] = (src[i + 2] as int ^ k2) as u8
+            dst[i + 3] = (src[i + 3] as int ^ k3) as u8
+            i += 4
         end
-        f.len += n
+        until i < n:
+            mut k := k0
+            if (i & 3) == 1:
+                k = k1
+            else (i & 3) == 2:
+                k = k2
+            else (i & 3) == 3:
+                k = k3
+            end
+            dst[i] = (src[i] as int ^ k) as u8
+            i++
+        end
+        buf.len += n
     else:
-        PutRaw(f, p, n)
+        PutRaw(buf, p, n)
     end
-    ret f
+    ret not buf.bad
 end
 
 func _ws_send(c &: Conn, op: int, p: void*, n: int): bool:
-    mut f := _ws_frame(c, op, p, n)
-    defer FreeBytes(f)
-    ret _raw_write(c, f.p, f.len)
+    if op >= 8:
+        mut ctl := NewBytes(n + 16)
+        defer FreeBytes(ctl)
+        if not _ws_fill(c.client, ctl, op, p, n):
+            ret false
+        end
+        ret _raw_write(c, ctl.p, ctl.len)
+    end
+    if c.wbuf.p == null:
+        c.wbuf = NewBytes(n + 16)
+    end
+    if not _ws_fill(c.client, c.wbuf, op, p, n):
+        ret false
+    end
+    ok := _raw_write(c, c.wbuf.p, c.wbuf.len)
+    if c.wbuf.cap > 262144:
+        FreeBytes(c.wbuf)
+    end
+    ret ok
 end
 
 func _ws_next_frame(c &: Conn): int:
@@ -490,72 +600,45 @@ func _ws_unmask(c &: Conn, p: u8*, n: int):
     if not c.fr_masked:
         ret
     end
-    repeat n in i:
-        sh := ((3 - ((c.fr_pos + i) & 3)) * 8) as i64
-        p[i] = (p[i] as int ^ ((c.fr_mask >> sh) & (255 as i64)) as int) as u8
+    m0 := ((c.fr_mask >> (24 as i64)) & (255 as i64)) as int
+    m1 := ((c.fr_mask >> (16 as i64)) & (255 as i64)) as int
+    m2 := ((c.fr_mask >> (8 as i64)) & (255 as i64)) as int
+    m3 := (c.fr_mask & (255 as i64)) as int
+    mut i := 0
+    until ((c.fr_pos + i) & 3) != 0 and i < n:
+        mut k := m0
+        q := (c.fr_pos + i) & 3
+        if q == 1:
+            k = m1
+        else q == 2:
+            k = m2
+        else q == 3:
+            k = m3
+        end
+        p[i] = (p[i] as int ^ k) as u8
+        i++
+    end
+    until i + 4 <= n:
+        p[i] = (p[i] as int ^ m0) as u8
+        p[i + 1] = (p[i + 1] as int ^ m1) as u8
+        p[i + 2] = (p[i + 2] as int ^ m2) as u8
+        p[i + 3] = (p[i + 3] as int ^ m3) as u8
+        i += 4
+    end
+    until i < n:
+        mut k := m0
+        q := (c.fr_pos + i) & 3
+        if q == 1:
+            k = m1
+        else q == 2:
+            k = m2
+        else q == 3:
+            k = m3
+        end
+        p[i] = (p[i] as int ^ k) as u8
+        i++
     end
     c.fr_pos += n
-end
-
-func _pump(a: _Pump*):
-    me := a[0]
-    src := tcp.ConnFromFd(me.src)
-    dst := tcp.ConnFromFd(me.dst)
-    buf := mem.Allocate(16384 as u64)
-    mut first := me.fragment
-    until true:
-        n := tcp.ReadBytes(src, buf, 16384)
-        if n <= 0:
-            break
-        end
-        if first:
-            first = false
-            if not _write_fragmented_tcp(dst, buf, n, me.fmin, me.fmax, me.delay):
-                break
-            end
-        else:
-            mut done := 0
-            mut bad := false
-            until done < n:
-                w := tcp.WriteBytes(dst, ((buf as i64) + (done as i64)) as void*, n - done)
-                if w <= 0:
-                    bad = true
-                    break
-                end
-                done += w
-            end
-            if bad:
-                break
-            end
-        end
-    end
-    mem.Free(buf)
-    rawsock.Shutdown(rawsock.FromFd(me.src))
-    rawsock.Shutdown(rawsock.FromFd(me.dst))
-    if atomic_add(me.alive, (0 - 1) as i64) == 0 as i64:
-        rawsock.Close(rawsock.FromFd(me.src))
-        rawsock.Close(rawsock.FromFd(me.dst))
-    end
-    mem.Free(a as void*)
-end
-
-func _write_fragmented_tcp(c: tcp.Conn, p: void*, n: int, fmin: int, fmax: int, delay: int): bool:
-    sizes := FragmentSizes(n, fmin, fmax)
-    defer sizes.free()
-    mut off := 0
-    mut idx := 0
-    until idx < sizes.len():
-        part := sizes.get(idx)
-        if tcp.WriteBytes(c, ((p as i64) + (off as i64)) as void*, part) != part:
-            ret false
-        end
-        off += part
-        idx++
-        if idx < sizes.len() and delay > 0:
-            sync.SleepMs(delay)
-        end
-    end
-    ret true
 end
 
 func _norm_headers(h: str): str:
@@ -636,6 +719,145 @@ end
 
 func _stream_close(c &: Conn):
     Close(c)
+end
+
+func _apply_idle(c &: Conn, s: Settings):
+    if s.read_timeout_ms > 0:
+        tcp.SetReadDeadline(c.tcp, s.read_timeout_ms)
+    end
+    if s.write_timeout_ms > 0:
+        tcp.SetWriteDeadline(c.tcp, s.write_timeout_ms)
+    end
+end
+
+func _finish_accept(l: Listener, tc: tcp.Conn): Conn:
+    mut c := Conn {}
+    tcp.SetNoDelay(tc, true)
+    c.tcp = tc
+    if l.settings.security == "reality":
+        acc := reality.Accept(tc.fd, l.settings.reality_server)
+        if not acc.ok:
+            c.err = "reality: " + acc.err
+            ret c
+        end
+        c.kind = KindTLS
+        c.tls = acc.conn
+    else l.settings.tls:
+        c.kind = KindTLS
+        c.tls = tls.WrapServer(tc.fd, l.tls_cfg)
+        if not tls.ConnOk(c.tls):
+            c.err = "tls: " + tls.ConnError(c.tls)
+            tcp.Close(tc)
+            ret c
+        end
+    end
+    c.open = true
+    ret c
+end
+
+func _hs_release(a: _Hs*):
+    me := a[0]
+    sync.Lock(me.mu)
+    me.st[1]--
+    left := me.st[1]
+    sync.Unlock(me.mu)
+    if left <= (0 as i64):
+        sync.Destroy(me.mu)
+        sync.DestroyCondVar(me.cv)
+        mem.Free(me.st as void*)
+        mem.Free(a as void*)
+    end
+end
+
+func _hs_work(a: _Hs*):
+    me := a[0]
+    mut c := _finish_accept(me.l, tcp.ConnFromFd(me.fd))
+    if c.open:
+        if not Upgrade(c, me.l.settings):
+            c.open = false
+        end
+    end
+    sync.Lock(me.mu)
+    mut mine := false
+    if me.st[0] == 0 as i64:
+        me.st[0] = 1 as i64
+        mine = true
+    end
+    sync.Signal(me.cv)
+    sync.Unlock(me.mu)
+    if not mine:
+        if c.open:
+            Close(c)
+        end
+        c.open = false
+        c.err = "handshake timeout"
+    end
+    if c.open and me.l.settings.network == "grpc":
+        _grpc_serve(c, me.l)
+    else:
+        if c.open:
+            _apply_idle(c, me.l.settings)
+        end
+        if not chan.TrySend(me.l.ready, c) and c.open:
+            Close(c)
+        end
+    end
+    sync.Release(me.l.slots)
+    _hs_release(a)
+end
+
+func _hs_watch(a: _Hs*):
+    me := a[0]
+    mut limit := me.l.settings.handshake_timeout_ms
+    if limit <= 0:
+        limit = 10000
+    end
+    deadline := sync.NowMs() + (limit as i64)
+    sync.Lock(me.mu)
+    until me.st[0] == 0 as i64:
+        left := deadline - sync.NowMs()
+        if left <= (0 as i64):
+            break
+        end
+        sync.WaitCondTimeout(me.cv, me.mu, left)
+    end
+    mut late := false
+    if me.st[0] == 0 as i64:
+        me.st[0] = 2 as i64
+        late = true
+    end
+    sync.Unlock(me.mu)
+    if late:
+        rawsock.Shutdown(rawsock.FromFd(me.fd))
+    end
+    _hs_release(a)
+end
+
+func _acceptor(a: _Hs*):
+    me := a[0]
+    l := me.l
+    until l.flags[1] == 0 as i64:
+        tc := tcp.Accept(l.server)
+        if not tcp.ConnOk(tc):
+            if l.flags[1] != 0 as i64:
+                break
+            end
+            sync.SleepMs(5)
+            continue
+        end
+        if not sync.TryAcquire(l.slots):
+            tcp.Close(tc)
+            continue
+        end
+        h := mem.AllocateZeroed(sizeof(_Hs) as u64) as _Hs*
+        st := mem.AllocateZeroed(16 as u64) as i64*
+        st[1] = 2 as i64
+        h[0] = _Hs { fd = tc.fd, l = l, st = st, mu = sync.NewMutex(), cv = sync.NewCondVar() }
+        _w := spawn(_hs_work, h)
+        _t := spawn(_hs_watch, h)
+    end
+    chan.Close(l.ready)
+    mem.Free(a as void*)
 end
 
 @en "FragmentSizes"
@@ -755,6 +977,7 @@ pub func Close(c &: Conn):
         _ws_send(c, 8, null, 0)
     end
     c.open = false
+    FreeBytes(c.wbuf)
     if c.kind == KindStream:
         c.up.Close()
     else c.kind == KindTLS:
@@ -780,36 +1003,39 @@ pub func DialEarly(host: str, port: int, s: Settings, early: Bytes): Conn:
     end
     tcp.SetNoDelay(tc, true)
     c.tcp = tc
-    if s.tls:
-        mut fd := tc.fd
-        if s.fragment:
-            lsrv := tcp.Bind(0)
-            lport := tcp.Port(lsrv)
-            lc := tcp.Dial("127.0.0.1", lport)
-            ls := tcp.Accept(lsrv)
-            tcp.CloseServer(lsrv)
-            if not tcp.ConnOk(lc) or not tcp.ConnOk(ls):
-                c.err = "fragment relay failed"
-                tcp.Close(tc)
-                ret c
-            end
-            alive := mem.AllocateZeroed(8 as u64) as i64*
-            alive[0] = 1 as i64
-            up := mem.AllocateZeroed(sizeof(_Pump) as u64) as _Pump*
-            up[0] = _Pump { src = ls.fd, dst = tc.fd, fragment = true, fmin = s.fragment_min, fmax = s.fragment_max, delay = s.fragment_delay_ms, alive = alive }
-            down := mem.AllocateZeroed(sizeof(_Pump) as u64) as _Pump*
-            down[0] = _Pump { src = tc.fd, dst = ls.fd, fragment = false, alive = alive }
-            _t1 := spawn(_pump, up)
-            _t2 := spawn(_pump, down)
-            fd = lc.fd
-            c.tcp = lc
+    if s.security == "reality":
+        mut rs := s.reality
+        if rs.server_name.len() == 0:
+            rs.server_name = s.sni
+        end
+        if rs.server_name.len() == 0:
+            rs.server_name = host
+        end
+        if s.fingerprint.len() > 0 and rs.fingerprint.len() == 0:
+            rs.fingerprint = s.fingerprint
         end
         c.kind = KindTLS
-        c.tls = tls.WrapClient(fd, _tls_config(host, s))
+        c.tls = reality.DialOver(tc.fd, rs)
         if not tls.ConnOk(c.tls):
-            c.err = "tls: " + tls.ConnError(c.tls)
+            c.err = "reality: " + tls.ConnError(c.tls)
+            tcp.Close(tc)
             ret c
         end
+    else s.tls:
+        c.kind = KindTLS
+        c.tls = tls.WrapClient(tc.fd, _tls_config(host, s))
+        if not tls.ConnOk(c.tls):
+            c.err = "tls: " + tls.ConnError(c.tls)
+            tcp.Close(tc)
+            ret c
+        end
+    end
+    if s.network == "grpc":
+        gc := _grpc_dial(host, s, c)
+        if not gc.open:
+            Close(c)
+        end
+        ret gc
     end
     if s.network == "ws" or s.network == "httpupgrade":
         if not _client_upgrade(c, host, s, early):
@@ -817,6 +1043,7 @@ pub func DialEarly(host: str, port: int, s: Settings, early: Bytes): Conn:
             ret c
         end
     end
+    _apply_idle(c, s)
     c.open = true
     ret c
 end
@@ -827,16 +1054,62 @@ pub func Dial(host: str, port: int, s: Settings): Conn:
     ret DialEarly(host, port, s, Bytes {})
 end
 
-@en "Listen"
-@fa "شنود"
-pub func Listen(port: int, s: Settings): Listener:
+@en "ListenAt"
+@fa "شنود در نشانی"
+pub func ListenAt(host: str, port: int, s: Settings): Listener:
     mut l := Listener {}
     l.settings = s
-    l.server = tcp.Bind(port)
-    if s.tls:
+    mut h := host
+    if h.len() == 0:
+        h = "127.0.0.1"
+    end
+    if h == "all":
+        h = "0.0.0.0"
+    end
+    sock := rawsock.ListenOn(h, port, 1)
+    l.server = tcp.Server { fd = sock.fd, port = port }
+    l.ready.init(64)
+    l.flags = mem.AllocateZeroed(16 as u64) as i64*
+    mut cap := s.max_handshakes
+    if cap <= 0:
+        cap = 128
+    end
+    l.slots = sync.NewSemaphore(cap as i64)
+    if s.tls and s.security != "reality":
         l.tls_cfg = tls.NewServerConfig(s.cert_file, s.key_file)
     end
     ret l
+end
+
+@en "ListenerFrom"
+@fa "شنونده از سرور"
+pub func ListenerFrom(server: tcp.Server, s: Settings): Listener:
+    mut l := Listener {}
+    l.settings = s
+    l.server = server
+    l.ready.init(64)
+    l.flags = mem.AllocateZeroed(16 as u64) as i64*
+    mut cap := s.max_handshakes
+    if cap <= 0:
+        cap = 128
+    end
+    l.slots = sync.NewSemaphore(cap as i64)
+    if s.tls and s.security != "reality":
+        l.tls_cfg = tls.NewServerConfig(s.cert_file, s.key_file)
+    end
+    ret l
+end
+
+@en "Listen"
+@fa "شنود"
+pub func Listen(port: int, s: Settings): Listener:
+    ret ListenAt(s.bind, port, s)
+end
+
+@en "ListenAll"
+@fa "شنود همه"
+pub func ListenAll(port: int, s: Settings): Listener:
+    ret ListenAt("0.0.0.0", port, s)
 end
 
 @en "ListenerOk"
@@ -844,6 +1117,9 @@ end
 pub func ListenerOk(l: Listener): bool:
     if not tcp.Ok(l.server):
         ret false
+    end
+    if l.settings.security == "reality":
+        ret l.settings.reality_server.private_key.len() > 0
     end
     if l.settings.tls:
         ret l.tls_cfg.ok
@@ -860,30 +1136,26 @@ end
 @en "CloseListener"
 @fa "بستن شنونده"
 pub func CloseListener(l: Listener):
+    if l.flags != null:
+        l.flags[1] = 1 as i64
+    end
+    rawsock.Shutdown(rawsock.FromFd(l.server.fd))
     tcp.CloseServer(l.server)
 end
 
 @en "AcceptRaw"
 @fa "پذیرش خام"
 pub func AcceptRaw(l: Listener): Conn:
-    mut c := Conn {}
     tc := tcp.Accept(l.server)
     if not tcp.ConnOk(tc):
+        mut c := Conn {}
         c.err = "accept failed"
         ret c
     end
-    tcp.SetNoDelay(tc, true)
-    c.tcp = tc
-    if l.settings.tls:
-        c.kind = KindTLS
-        c.tls = tls.WrapServer(tc.fd, l.tls_cfg)
-        if not tls.ConnOk(c.tls):
-            c.err = "tls: " + tls.ConnError(c.tls)
-            tcp.Close(tc)
-            ret c
-        end
+    mut c := _finish_accept(l, tc)
+    if c.open:
+        _apply_idle(c, l.settings)
     end
-    c.open = true
     ret c
 end
 
@@ -962,12 +1234,22 @@ end
 @en "Accept"
 @fa "پذیرش"
 pub func Accept(l: Listener): Conn:
-    mut c := AcceptRaw(l)
-    if not c.open:
-        ret c
+    if l.flags == null:
+        mut e := Conn {}
+        e.err = "listener not open"
+        ret e
     end
-    if not Upgrade(c, l.settings):
-        c.open = false
+    if atomic_cas(l.flags, 0 as i64, 1 as i64):
+        h := mem.AllocateZeroed(sizeof(_Hs) as u64) as _Hs*
+        h[0] = _Hs { l = l }
+        _a := spawn(_acceptor, h)
+    end
+    mut ok := false
+    c := chan.Recv(l.ready, ok)
+    if not ok:
+        mut e := Conn {}
+        e.err = "listener closed"
+        ret e
     end
     ret c
 end

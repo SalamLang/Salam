@@ -1,0 +1,203 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import mem
+import sync
+import net.transport
+import net.vless
+import net.vmess
+
+const UUID1 := "b831381d-6324-4d53-ad4f-8cda48b30811"
+
+mut ready := sync.NewWaitGroup()
+mut port := 0
+mut mode := 0
+mut seen := ""
+
+func handler():
+    mut ss := transport.Settings {}
+    if mode == 1:
+        ss.network = "ws"
+        ss.path = "/raw"
+    end
+    l := transport.Listen(0, ss)
+    port = transport.ListenerPort(l)
+    sync.Done(ready)
+    if mode == 1:
+        mut c := transport.AcceptRaw(l)
+        if transport.Upgrade(c, ss):
+            buf := mem.Allocate(64 as u64)
+            n := transport.Read(c, buf, 64)
+            transport.Write(c, buf, n)
+            mem.Free(buf)
+            transport.Close(c)
+        end
+    else mode == 2:
+        mut t := transport.Accept(l)
+        mut r := vless.Request {}
+        if vless.ReadRequest(t, r):
+            seen = r.addr.host + ":" + r.addr.port
+        end
+        mut v := vless.NewVision(r.uuid)
+        buf := mem.Allocate(64 as u64)
+        n := vless.VisionRead(t, v, buf, 64)
+        vless.VisionWrite(t, v, buf, n)
+        mem.Free(buf)
+        vless.FreeVision(v)
+        transport.Close(t)
+    else mode == 3:
+        t := transport.Accept(l)
+        mut users := Vector {} as Vector<vmess.User>
+        users.push(vmess.NewUser(UUID1))
+        mut rf := vmess.NewReplayFilter()
+        mut c := vmess.Accept(t, users, rf)
+        buf := mem.Allocate(64 as u64)
+        n := vmess.Read(c, buf, 64)
+        vmess.Write(c, buf, n)
+        vmess.Write(c, "packet" as void*, 6)
+        mem.Free(buf)
+        vmess.Close(c)
+    else:
+        t := transport.Accept(l)
+        s := transport.AsStream(t)
+        m := transport.NewMuxServer(s)
+        seen = "mux server " + transport.MuxOk(m)
+        sync.SleepMs(200)
+        transport.MuxClose(m)
+    end
+    transport.CloseListener(l)
+end
+
+func start(m: int):
+    mode = m
+    sync.Add(ready, 1 as i64)
+    _t := spawn(handler)
+    sync.Wait(ready)
+    ret
+end
+
+func bytes_checks():
+    mut b := transport.NewBytes(4)
+    transport.Reserve(b, 100)
+    transport.Put16(b, 0x1234)
+    transport.Put32(b, 0xdeadbeef as i64)
+    transport.Put64(b, 0x0102030405060708 as u64)
+    transport.PutZeros(b, 3)
+    println "bytes:", b.len, b.cap >= 100, transport.Peek32(b, 2) == (0xdeadbeef as i64), transport.ToHex(b)
+    transport.Consume(b, 2)
+    println "consumed:", b.len, transport.At(b, 0)
+    transport.FreeBytes(b)
+    println "kinds:", transport.DetectKind("1.2.3.4"), transport.DetectKind("::1"), transport.DetectKind("a.example.com")
+    mut a := transport.NewBytes(8)
+    transport.PutAddr(a, transport.NewAddr("2001:db8::7", 53))
+    mut back := transport.Addr {}
+    stop := transport.ReadAddr(a, 0, back)
+    println "addr roundtrip:", stop == a.len, back.host, back.port
+    println "ipv6 text:", transport.FormatIPv6(transport.BytesPtr(a, 3) as u8*)
+    transport.FreeBytes(a)
+end
+
+func raw_ws():
+    start(1)
+    mut cs := transport.Settings {}
+    cs.network = "ws"
+    cs.path = "/raw"
+    mut c := transport.Dial("127.0.0.1", port, cs)
+    transport.Write(c, "hello" as void*, 5)
+    back := mem.AllocateZeroed(16 as u64)
+    ok := transport.ReadFull(c, back, 5)
+    transport.SetReadTimeout(c, 150)
+    n := transport.Read(c, back, 16)
+    println "accept raw then upgrade:", ok, "read timeout:", n <= 0
+    transport.Close(c)
+    mem.Free(back)
+end
+
+func vless_checks():
+    start(2)
+    tc := transport.Dial("127.0.0.1", port, transport.Settings {})
+    c := vless.Client(tc, UUID1, "", vless.CmdTCP, transport.NewAddr("example.com", 443))
+    mut v := vless.NewVision(c.req.uuid)
+    mut t := c.t
+    vless.VisionWrite(t, v, "vision payload" as void*, 14)
+    back := mem.AllocateZeroed(32 as u64)
+    n := vless.VisionRead(t, v, back, 32)
+    println "read request and vision:", seen, n
+    mem.Free(back)
+    vless.FreeVision(v)
+    transport.Close(t)
+end
+
+func vmess_checks():
+    start(3)
+    l := vmess.ParseLink("vmess://" + "eyJhZGQiOiIxMjcuMC4wLjEiLCJwb3J0Ijo5LCJpZCI6ImI4MzEzODFkLTYzMjQtNGQ1My1hZDRmLThjZGE0OGIzMDgxMSIsIm5ldCI6InRjcCJ9")
+    mut l2 := l
+    l2.port = port
+    mut c := vmess.DialLink(l2, vmess.CmdTCP, transport.NewAddr("example.com", 80))
+    vmess.Write(c, "dial link" as void*, 9)
+    back := mem.AllocateZeroed(32 as u64)
+    mut got := 0
+    until got < 9:
+        r := vmess.Read(c, ((back as i64) + (got as i64)) as void*, 9 - got)
+        if r <= 0:
+            break
+        end
+        got += r
+    end
+    mut pk := transport.NewBytes(16)
+    ok := vmess.ReadPacket(c, pk)
+    println "dial link echo:", got, "packet:", ok, pk.len
+    transport.FreeBytes(pk)
+    mem.Free(back)
+    vmess.Close(c)
+    empty := transport.Bytes {}
+    key := transport.FromHex("000102030405060708090a0b0c0d0e0f")
+    iv := transport.FromHex("101112131415161718191a1b1c1d1e1f")
+    k16 := vmess.KDF16(key, "label", empty, empty)
+    k12 := vmess.KDF12(key, "label", empty, empty)
+    println "kdf lengths:", k16.len, k12.len
+    h := transport.FromStr("abcd")
+    sealed := vmess.SealResponseHeader(key, iv, h)
+    mut lenpart := transport.NewBytes(18)
+    transport.PutRaw(lenpart, sealed.p, 18)
+    mut bodypart := transport.NewBytes(sealed.len)
+    transport.PutRaw(bodypart, transport.BytesPtr(sealed, 18), sealed.len - 18)
+    n := vmess.OpenResponseLength(key, iv, lenpart)
+    opened := vmess.OpenResponseHeader(key, iv, bodypart)
+    println "response header:", n, transport.Equal(opened, h)
+    println "sha256:", transport.ToHex(vmess.Sha256(transport.FromStr("abc")))
+    ck := vmess.CmdKey(transport.ParseUUID(UUID1))
+    sh := vmess.SealHeaderNow(ck, h)
+    println "sealed header now:", sh.len > 40
+end
+
+func mux_checks():
+    start(4)
+    tc := transport.Dial("127.0.0.1", port, transport.Settings {})
+    s := transport.AsStream(tc)
+    wrapped := transport.FromStream(s, true)
+    m := transport.NewMuxClient(transport.AsStream(wrapped))
+    println "mux client:", transport.MuxOk(m), wrapped.open
+    sync.SleepMs(300)
+    transport.MuxClose(m)
+    println "mux server:", seen
+end
+
+func main:
+    bytes_checks()
+    raw_ws()
+    vless_checks()
+    vmess_checks()
+    mux_checks()
+end

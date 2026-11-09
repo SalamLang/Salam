@@ -1,0 +1,476 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package transport
+
+import mem
+import sync
+import chan
+import net.tunnel
+
+@en "MuxIncoming"
+@fa "نشست پذیرفته"
+pub struct MuxIncoming:
+    @en "stream"
+    @fa "جریان"
+    pub stream: dyn tunnel.Stream = tunnel.TcpStream {}
+    @en "addr"
+    @fa "نشانی"
+    pub addr: Addr = Addr {}
+    @en "udp"
+    @fa "یو دی پی"
+    pub udp: bool = false
+end
+
+struct _MuxCore:
+    pub up: dyn tunnel.Stream = tunnel.TcpStream {}
+    pub wmu: sync.Mutex = sync.Mutex {}
+    pub tmu: sync.Mutex = sync.Mutex {}
+    pub table: i64* = null
+    pub st: i64* = null
+    pub incoming: chan.Chan<MuxIncoming> = chan.Chan {} as chan.Chan<MuxIncoming>
+    pub server: bool = false
+end
+
+@en "Mux"
+@fa "چندگانه ساز"
+pub struct Mux:
+    @en "core"
+    @fa "هسته"
+    pub core: void* = null
+    @en "ok"
+    @fa "معتبر"
+    pub ok: bool = false
+end
+
+struct _MuxSess:
+    pub id: int = 0
+    pub rx: chan.Chan<Bytes> = chan.Chan {} as chan.Chan<Bytes>
+    pub st: i64* = null
+    pub core: _MuxCore* = null
+end
+
+struct _MuxStream:
+    pub s: _MuxSess = _MuxSess {}
+
+    pub func Read(max: int): str:
+        buf := mem.Allocate((max + 1) as u64)
+        n := _mux_read(this.s, buf, max)
+        if n <= 0:
+            mem.Free(buf)
+            ret ""
+        end
+        bp := buf as u8*
+        bp[n] = 0 as u8
+        ret buf as str
+    end
+
+    pub func ReadBytes(buf: void*, max: int): int:
+        ret _mux_read(this.s, buf, max)
+    end
+
+    pub func Write(data: str): int:
+        ret _mux_write(this.s, data as void*, data.len())
+    end
+
+    pub func WriteBytes(ptr: void*, n: int): int:
+        ret _mux_write(this.s, ptr, n)
+    end
+
+    pub func SetDeadline(millis: int):
+        this.s.st[5] = millis as i64
+    end
+
+    pub func Shutdown():
+        _mux_end(this.s)
+    end
+
+    pub func CloseWrite():
+        _mux_end(this.s)
+    end
+
+    pub func Close():
+        _mux_end(this.s)
+    end
+
+    pub func Ok(): bool:
+        ret this.s.st[1] == 0 as i64 and this.s.core[0].st[1] == 0 as i64
+    end
+end
+
+func _up_read_full(up: dyn tunnel.Stream, buf: void*, n: int): bool:
+    mut got := 0
+    until got < n:
+        r := up.ReadBytes(((buf as i64) + (got as i64)) as void*, n - got)
+        if r <= 0:
+            ret false
+        end
+        got += r
+    end
+    ret true
+end
+
+func _mux_send(core: _MuxCore, b: Bytes): bool:
+    sync.Lock(core.wmu)
+    mut ok := core.st[1] == 0 as i64
+    if ok:
+        ok = core.up.WriteBytes(b.p, b.len) == b.len
+    end
+    sync.Unlock(core.wmu)
+    ret ok
+end
+
+func _mux_find(core: _MuxCore, id: int, out &: _MuxSess): bool:
+    mut found := false
+    sync.Lock(core.tmu)
+    repeat 256 in i:
+        pv := core.table[i]
+        if pv != 0 as i64:
+            sp := pv as _MuxSess*
+            if sp[0].id == id:
+                out = sp[0]
+                found = true
+                break
+            end
+        end
+    end
+    sync.Unlock(core.tmu)
+    ret found
+end
+
+func _mux_register(core: _MuxCore, s: _MuxSess): bool:
+    mut done := false
+    sync.Lock(core.tmu)
+    repeat 256 in i:
+        if core.table[i] == 0 as i64:
+            sp := mem.AllocateZeroed(sizeof(_MuxSess) as u64) as _MuxSess*
+            sp[0] = s
+            core.table[i] = sp as i64
+            done = true
+            break
+        end
+    end
+    sync.Unlock(core.tmu)
+    ret done
+end
+
+func _mux_unregister(core: _MuxCore, id: int):
+    sync.Lock(core.tmu)
+    repeat 256 in i:
+        pv := core.table[i]
+        if pv != 0 as i64:
+            sp := pv as _MuxSess*
+            if sp[0].id == id:
+                core.table[i] = 0 as i64
+                mem.Free(sp as void*)
+                break
+            end
+        end
+    end
+    sync.Unlock(core.tmu)
+end
+
+func _mux_new_sess(core: _MuxCore*, id: int): _MuxSess:
+    mut s := _MuxSess {}
+    s.id = id
+    s.rx.init(64)
+    s.st = mem.AllocateZeroed(64 as u64) as i64*
+    s.core = core
+    ret s
+end
+
+func _mux_frame(id: int, status: int, opt: int, extra: Bytes, data: void*, dn: int): Bytes:
+    mut b := NewBytes(dn + extra.len + 16)
+    Put16(b, 4 + extra.len)
+    Put16(b, id)
+    Put8(b, status)
+    Put8(b, opt)
+    PutBytes(b, extra)
+    if dn >= 0 and opt == 1:
+        Put16(b, dn)
+        PutRaw(b, data, dn)
+    end
+    ret b
+end
+
+func _mux_end(s: _MuxSess):
+    if s.st[1] != 0 as i64:
+        ret
+    end
+    s.st[1] = 1 as i64
+    core := s.core[0]
+    if core.st[1] == 0 as i64:
+        mut f := _mux_frame(s.id, 3, 0, Bytes {}, null, 0 - 1)
+        _mux_send(core, f)
+        FreeBytes(f)
+    end
+    chan.Close(s.rx)
+    _mux_unregister(core, s.id)
+end
+
+func _mux_write(s: _MuxSess, p: void*, n: int): int:
+    if s.st[1] != 0 as i64 or s.core[0].st[1] != 0 as i64:
+        ret 0 - 1
+    end
+    mut off := 0
+    until off < n:
+        mut take := n - off
+        if take > 16384:
+            take = 16384
+        end
+        mut f := _mux_frame(s.id, 2, 1, Bytes {}, ((p as i64) + (off as i64)) as void*, take)
+        ok := _mux_send(s.core[0], f)
+        FreeBytes(f)
+        if not ok:
+            ret 0 - 1
+        end
+        off += take
+    end
+    ret n
+end
+
+func _mux_read(s: _MuxSess, buf: void*, max: int): int:
+    if s.st[2] != 0 as i64 and s.st[4] < s.st[3]:
+        mut take := (s.st[3] - s.st[4]) as int
+        if take > max:
+            take = max
+        end
+        mem.Copy(buf, (s.st[2] + s.st[4]) as void*, take as u64)
+        s.st[4] += take as i64
+        if s.st[4] >= s.st[3]:
+            mem.Free(s.st[2] as void*)
+            s.st[2] = 0 as i64
+        end
+        ret take
+    end
+    if s.st[0] != 0 as i64:
+        ret 0
+    end
+    mut ok := false
+    mut b := Bytes {}
+    if s.st[5] > 0 as i64:
+        b = chan.RecvTimeout(s.rx, ok, s.st[5])
+    else:
+        b = chan.Recv(s.rx, ok)
+    end
+    if not ok:
+        if chan.IsClosed(s.rx):
+            s.st[0] = 1 as i64
+        end
+        ret 0
+    end
+    if b.len == 0:
+        FreeBytes(b)
+        ret 0
+    end
+    mut take := b.len
+    if take > max:
+        take = max
+    end
+    mem.Copy(buf, b.p, take as u64)
+    if take < b.len:
+        keep := mem.Allocate((b.len - take) as u64)
+        mem.Copy(keep, BytesPtr(b, take), (b.len - take) as u64)
+        s.st[2] = keep as i64
+        s.st[3] = (b.len - take) as i64
+        s.st[4] = 0 as i64
+    end
+    FreeBytes(b)
+    ret take
+end
+
+func _mux_eof_all(core: _MuxCore):
+    sync.Lock(core.tmu)
+    repeat 256 in i:
+        pv := core.table[i]
+        if pv != 0 as i64:
+            sp := pv as _MuxSess*
+            chan.Close(sp[0].rx)
+        end
+    end
+    sync.Unlock(core.tmu)
+end
+
+func _mux_reader(a: _MuxCore*):
+    core := a[0]
+    lenb := mem.Allocate(2 as u64) as u8*
+    meta := mem.Allocate(600 as u64) as u8*
+    until true:
+        if not _up_read_full(core.up, lenb as void*, 2):
+            break
+        end
+        n := (lenb[0] as int) * 256 + (lenb[1] as int)
+        if n < 4 or n > 512:
+            break
+        end
+        if not _up_read_full(core.up, meta as void*, n):
+            break
+        end
+        id := (meta[0] as int) * 256 + (meta[1] as int)
+        status := meta[2] as int
+        opt := meta[3] as int
+        mut data := Bytes {}
+        if (opt & 1) != 0:
+            if not _up_read_full(core.up, lenb as void*, 2):
+                break
+            end
+            dl := (lenb[0] as int) * 256 + (lenb[1] as int)
+            data = NewBytes(dl + 1)
+            if dl > 0 and not _up_read_full(core.up, data.p, dl):
+                FreeBytes(data)
+                break
+            end
+            data.len = dl
+        end
+        mut sess := _MuxSess {}
+        if status == 1:
+            if core.server and n >= 9:
+                view := Bytes { p = meta as void*, len = n, cap = n }
+                mut ad := Addr {}
+                e := ReadAddr(view, 5, ad)
+                if e > 0:
+                    s := _mux_new_sess(a, id)
+                    if _mux_register(core, s):
+                        inc := MuxIncoming { stream = _MuxStream { s = s }, addr = ad, udp = (meta[4] as int) == 2 }
+                        s.st[6] = 1 as i64
+                        if not chan.TrySend(core.incoming, inc):
+                            _mux_end(s)
+                        else data.len > 0:
+                            chan.Send(s.rx, data)
+                            data = Bytes {}
+                        end
+                    end
+                end
+            end
+        else status == 2:
+            if (opt & 1) != 0 and _mux_find(core, id, sess):
+                if data.len > 0:
+                    chan.Send(sess.rx, data)
+                    data = Bytes {}
+                end
+            end
+        else status == 3:
+            if _mux_find(core, id, sess):
+                chan.Close(sess.rx)
+                sess.st[1] = 1 as i64
+                _mux_unregister(core, id)
+            end
+        end
+        FreeBytes(data)
+    end
+    core.st[1] = 1 as i64
+    _mux_eof_all(core)
+    chan.Close(core.incoming)
+    mem.Free(lenb as void*)
+    mem.Free(meta as void*)
+end
+
+func _mux_new(up: dyn tunnel.Stream, server: bool): Mux:
+    a := mem.AllocateZeroed(sizeof(_MuxCore) as u64) as _MuxCore*
+    mut c := _MuxCore {}
+    c.up = up
+    c.wmu = sync.NewMutex()
+    c.tmu = sync.NewMutex()
+    c.table = mem.AllocateZeroed(2048 as u64) as i64*
+    c.st = mem.AllocateZeroed(64 as u64) as i64*
+    c.st[0] = 1 as i64
+    c.server = server
+    c.incoming.init(32)
+    a[0] = c
+    _t := spawn(_mux_reader, a)
+    ret Mux { core = a as void*, ok = true }
+end
+
+@en "NewMuxClient"
+@fa "چندگانه ساز کارخواه جدید"
+pub func NewMuxClient(up: dyn tunnel.Stream): Mux:
+    ret _mux_new(up, false)
+end
+
+@en "NewMuxServer"
+@fa "چندگانه ساز کارساز جدید"
+pub func NewMuxServer(up: dyn tunnel.Stream): Mux:
+    ret _mux_new(up, true)
+end
+
+@en "MuxOpen"
+@fa "باز کردن نشست"
+pub func MuxOpen(m: Mux, addr: Addr, udp: bool): dyn tunnel.Stream:
+    a := m.core as _MuxCore*
+    core := a[0]
+    mut s := _mux_new_sess(a, 0)
+    sync.Lock(core.tmu)
+    id := core.st[0] as int
+    core.st[0]++
+    if core.st[0] > 65535 as i64:
+        core.st[0] = 1 as i64
+    end
+    sync.Unlock(core.tmu)
+    s.id = id
+    if core.st[1] != 0 as i64 or not _mux_register(core, s):
+        s.st[1] = 1 as i64
+        ret _MuxStream { s = s }
+    end
+    mut extra := NewBytes(32)
+    if udp:
+        Put8(extra, 2)
+    else:
+        Put8(extra, 1)
+    end
+    if not PutAddr(extra, addr):
+        s.st[1] = 1 as i64
+        FreeBytes(extra)
+        ret _MuxStream { s = s }
+    end
+    mut f := _mux_frame(id, 1, 0, extra, null, 0 - 1)
+    ok := _mux_send(core, f)
+    FreeBytes(f)
+    FreeBytes(extra)
+    if not ok:
+        s.st[1] = 1 as i64
+    end
+    ret _MuxStream { s = s }
+end
+
+@en "MuxAccept"
+@fa "پذیرش نشست"
+pub func MuxAccept(m: Mux, out &: MuxIncoming): bool:
+    a := m.core as _MuxCore*
+    mut ok := false
+    inc := chan.Recv(a[0].incoming, ok)
+    if ok:
+        out = inc
+    end
+    ret ok
+end
+
+@en "MuxOk"
+@fa "چندگانه ساز معتبر"
+pub func MuxOk(m: Mux): bool:
+    if not m.ok:
+        ret false
+    end
+    a := m.core as _MuxCore*
+    ret a[0].st[1] == 0 as i64
+end
+
+@en "MuxClose"
+@fa "بستن چندگانه ساز"
+pub func MuxClose(m: Mux):
+    if not m.ok:
+        ret
+    end
+    a := m.core as _MuxCore*
+    a[0].up.Shutdown()
+end

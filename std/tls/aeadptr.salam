@@ -1,0 +1,112 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package tls
+
+import mem
+
+@en "AEAD_AES_128_GCM"
+@fa "ای ای دی ای ای اس ۱۲۸ جی سی ام"
+pub const AEAD_AES_128_GCM := 0
+
+@en "AEAD_AES_256_GCM"
+@fa "ای ای دی ای ای اس ۲۵۶ جی سی ام"
+pub const AEAD_AES_256_GCM := 1
+
+@en "AEAD_CHACHA20_POLY1305"
+@fa "ای ای دی چاچا۲۰ پلی۱۳۰۵"
+pub const AEAD_CHACHA20_POLY1305 := 2
+
+@en "AEAD_TAG_LEN"
+@fa "طول برچسب ای ای دی"
+pub const AEAD_TAG_LEN := 16
+
+@en "AEAD_NONCE_LEN"
+@fa "طول نانس ای ای دی"
+pub const AEAD_NONCE_LEN := 12
+
+struct AeadPtr:
+    pub kind: int = 0
+    pub key: void* = null
+    pub gcm: GcmCtx* = null
+end
+
+@en "AeadKeyLen"
+@fa "طول کلید ای ای دی"
+pub func AeadKeyLen(kind: int): int:
+    if kind == AEAD_AES_128_GCM:
+        ret 16
+    end
+    ret 32
+end
+
+@en "AeadNew"
+@fa "ای ای دی جدید"
+pub func AeadNew(kind: int, key: void*): void*:
+    if kind < 0 or kind > 2:
+        ret null
+    end
+    c := mem.AllocateZeroed(sizeof(AeadPtr) as u64) as AeadPtr*
+    if c == null:
+        ret null
+    end
+    c.kind = kind
+    klen := AeadKeyLen(kind)
+    c.key = mem.Allocate(32 as u64)
+    mem.Set(c.key, 0, 32 as u64)
+    mem.Copy(c.key, key, klen as u64)
+    if kind != AEAD_CHACHA20_POLY1305:
+        c.gcm = _gcm_new(key, klen)
+    end
+    ret c as void*
+end
+
+@en "AeadFree"
+@fa "آزادسازی ای ای دی"
+pub func AeadFree(ctx: void*):
+    if ctx == null:
+        ret
+    end
+    c := ctx as AeadPtr*
+    _gcm_free(c.gcm)
+    if c.key != null:
+        _wipe(c.key, 32)
+        mem.Free(c.key)
+    end
+    _wipe(ctx, sizeof(AeadPtr) as int)
+    mem.Free(ctx)
+end
+
+@en "AeadSeal"
+@fa "مهر ای ای دی"
+pub func AeadSeal(ctx: void*, nonce: void*, aad: void*, aadlen: int, pt: void*, n: int, out: void*):
+    c := ctx as AeadPtr*
+    tag := ((out as i64) + (n as i64)) as void*
+    if c.kind == AEAD_CHACHA20_POLY1305:
+        _cha20poly_seal(c.key, nonce, aad, aadlen, pt, out, n, tag)
+    else:
+        _gcm_seal_with(c.gcm.aes, c.gcm.g, nonce, aad, aadlen, pt, out, n, tag)
+    end
+end
+
+@en "AeadOpen"
+@fa "گشودن ای ای دی"
+pub func AeadOpen(ctx: void*, nonce: void*, aad: void*, aadlen: int, ct: void*, n: int, out: void*): bool:
+    c := ctx as AeadPtr*
+    tag := ((ct as i64) + (n as i64)) as void*
+    if c.kind == AEAD_CHACHA20_POLY1305:
+        ret _cha20poly_open(c.key, nonce, aad, aadlen, ct, n, tag, out)
+    end
+    ret _gcm_open_with(c.gcm.aes, c.gcm.g, nonce, aad, aadlen, ct, n, tag, out)
+end

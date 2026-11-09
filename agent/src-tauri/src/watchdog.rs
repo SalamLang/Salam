@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, WebviewWindow};
@@ -7,12 +7,14 @@ const CHECK: Duration = Duration::from_secs(3);
 const SILENCE: Duration = Duration::from_secs(45);
 const PROBE: Duration = Duration::from_secs(15);
 const RECOVER_GAP: Duration = Duration::from_secs(120);
+const LOAD_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Default)]
 pub struct Watchdog {
     last: Mutex<Option<Instant>>,
     recovered: Mutex<Option<Instant>>,
     armed: AtomicBool,
+    nav_gen: AtomicU64,
 }
 
 impl Watchdog {
@@ -41,6 +43,14 @@ impl Watchdog {
     fn silence(&self) -> Option<Duration> {
         self.last.lock().unwrap().map(|last| last.elapsed())
     }
+
+    fn start_navigation(&self) -> u64 {
+        self.nav_gen.fetch_add(1, Ordering::SeqCst) + 1
+    }
+
+    fn still_pending(&self, token: u64) -> bool {
+        !self.armed.load(Ordering::Relaxed) && self.nav_gen.load(Ordering::SeqCst) == token
+    }
 }
 
 pub fn arm(app: &AppHandle) {
@@ -53,6 +63,31 @@ pub fn beat(app: &AppHandle) {
 
 pub fn disarm(app: &AppHandle) {
     app.state::<Watchdog>().disarm();
+}
+
+/// Marks the start of a navigation to the remote app and returns a token for it.
+pub fn start_navigation(app: &AppHandle) -> u64 {
+    app.state::<Watchdog>().start_navigation()
+}
+
+/// Waits for a navigation started with `start_navigation` to either finish (which arms the
+/// watchdog) or be superseded by a newer one. If neither happens within `LOAD_TIMEOUT`, the
+/// WebView accepted the navigation but silently never finished loading it (seen on some older
+/// macOS/WebKit + Intel GPU combinations) -- fall back to a local error page instead of leaving
+/// the window stuck on whatever it last painted.
+pub async fn await_navigation(app: AppHandle, token: u64) {
+    tokio::time::sleep(LOAD_TIMEOUT).await;
+    let watchdog = app.state::<Watchdog>();
+    if !watchdog.still_pending(token) {
+        return;
+    }
+    let Some(window) = app.get_webview_window("main") else { return };
+    let reason = match reach().await {
+        Reach::Ok => "crash",
+        Reach::Server => "server",
+        Reach::Offline => "offline",
+    };
+    let _ = window.navigate(crate::config::local_url(&format!("error.html#{reason}")));
 }
 
 enum Reach {

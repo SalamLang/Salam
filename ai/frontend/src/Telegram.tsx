@@ -197,6 +197,7 @@ const PROVIDERS = {
     help: "https://github.com/settings/tokens/new?scopes=repo,workflow,admin:org,admin:repo_hook,admin:public_key,gist,notifications,user,project,write:discussion,read:packages,write:packages,codespace&description=Salam%20AI",
     helpText: t("ساخت توکن شخصی (دسترسی‌ها از قبل انتخاب شده)", "Create a personal access token (permissions preselected)"),
     placeholder: "ghp_... / github_pat_...",
+    paste: true,
     access: t("دسترسی خواسته‌شده: مخزن‌ها (عمومی و خصوصی)، سازمان‌ها (مدیریت کامل، از جمله تیم‌ها و عضویت‌ها)، workflowها، gist، اعلان‌ها، پروژه‌ها و بسته‌ها. حذف مخزن هرگز.", "Access asked for: repositories (public and private), organizations (full management, including teams and memberships), workflows, gists, notifications, projects and packages. Never repository deletion."),
   },
   figma: {
@@ -206,7 +207,18 @@ const PROVIDERS = {
     help: "https://www.figma.com/settings",
     helpText: t("ساخت توکن شخصی (Settings، Security)", "Create a personal access token (Settings, Security)"),
     placeholder: "figd_...",
+    paste: true,
     access: t("دسترسی پیش‌فرض OAuth: خواندن فایل‌ها، نسخه‌ها، کتابخانه‌ها و پوشه‌ها، کامنت‌ها و منابع توسعه‌دهنده (خواندن و نوشتن) و وب‌هوک‌ها.", "Default OAuth access: files, versions, libraries and folders (read), comments and dev resources (read and write) and webhooks."),
+  },
+  "figma-mcp": {
+    name: "Figma MCP",
+    icon: <IconFigma width={22} height={22} />,
+    about: t("سرور MCP خود Figma: زمینه‌ی طراحی (get_design_context)، اسکرین‌شات و ساختار گره‌ها را مستقیم به دستیار می‌دهد و در صورت لزوم طراحی را هم تغییر می‌دهد. جدا از اتصال بالای Figma است و فقط وقتی وصلش کنید کار می‌کند.", "Figma's own MCP server: gives the assistant design context (get_design_context), screenshots and node structure straight from Figma, and can change designs when you ask. It is separate from the Figma connection above and only works once you connect it."),
+    help: "https://developers.figma.com/docs/figma-mcp-server/",
+    helpText: t("درباره‌ی سرور MCP فیگما", "About the Figma MCP server"),
+    placeholder: "",
+    paste: false,
+    access: t("دسترسی خواسته‌شده: mcp:connect، یعنی همان ابزارهای MCP فیگما با دسترسی حساب شما. هر وقت خواستید جدایش کنید.", "Access asked for: mcp:connect, which is Figma's MCP tools with your account's access. Disconnect any time."),
   },
 } as const;
 
@@ -347,20 +359,22 @@ function IntegrationCard({ item, storage, highlight, notify, onChange }: { item:
     <>
       {item.oauth && (
         <button type="button" className="button primary conn-wide" disabled={busy !== ""} onClick={oauth}>
-          {busy === "oauth" ? <span className="spinner" /> : t(`اتصال با ${info.name}`, `Connect with ${info.name}`)}
+          {busy === "oauth" ? <span className="spinner" /> : info.paste ? t(`اتصال با ${info.name}`, `Connect with ${info.name}`) : t(`اتصال ${info.name}`, `Connect ${info.name}`)}
         </button>
       )}
       {item.oauth && <p className="conn-note">{info.access}</p>}
-      <form className="conn-form" onSubmit={save}>
-        <label className="field">
-          <span>{item.oauth ? t("یا با توکن شخصی", "Or with a personal access token") : t("توکن شخصی", "Personal access token")}</span>
-          <input type="password" value={token} onChange={(e) => setToken(e.target.value)} dir="ltr" placeholder={info.placeholder} autoComplete="off" spellCheck={false} />
-        </label>
-        <button type="submit" className="button primary" disabled={busy !== "" || token.trim().length < 20}>
-          {busy === "save" ? <span className="spinner" /> : <IconKey width={18} height={18} />}
-          {t("وصل کن", "Connect")}
-        </button>
-      </form>
+      {info.paste && (
+        <form className="conn-form" onSubmit={save}>
+          <label className="field">
+            <span>{item.oauth ? t("یا با توکن شخصی", "Or with a personal access token") : t("توکن شخصی", "Personal access token")}</span>
+            <input type="password" value={token} onChange={(e) => setToken(e.target.value)} dir="ltr" placeholder={info.placeholder} autoComplete="off" spellCheck={false} />
+          </label>
+          <button type="submit" className="button primary" disabled={busy !== "" || token.trim().length < 20}>
+            {busy === "save" ? <span className="spinner" /> : <IconKey width={18} height={18} />}
+            {t("وصل کن", "Connect")}
+          </button>
+        </form>
+      )}
       <a className="conn-help" href={info.help} target="_blank" rel="noreferrer">
         {info.helpText}
       </a>
@@ -391,7 +405,7 @@ function IntegrationCard({ item, storage, highlight, notify, onChange }: { item:
       )}
       {item.connected && !replacing && storage && (
         <button type="button" className="link small-link conn-link" onClick={() => setReplacing(true)}>
-          {t("استفاده از حساب یا توکن دیگر", "Use a different account or token")}
+          {info.paste ? t("استفاده از حساب یا توکن دیگر", "Use a different account or token") : t("وصل کردن دوباره", "Connect again")}
         </button>
       )}
       {(!item.connected || replacing) && (storage ? connectForm : <p className="muted small">{t("ذخیره‌ی امن توکن‌ها روی این سرور فعال نیست.", "Secure token storage is not available on this server.")}</p>)}

@@ -26,6 +26,7 @@ import sync
 import time
 import chan
 import conv
+import mem
 
 include aistore "store.salam"
 include aiweb "web.salam"
@@ -39,6 +40,8 @@ const GITHUB_MCP_READ := ",get_me,get_file_contents,search_repositories,search_c
 const GITHUB_MCP_WRITE := ",issue_write,create_issue,update_issue,add_issue_comment,create_pull_request,create_branch,"
 const WORKERS := 24
 const STATE_SECONDS := 900
+const MCP := "figma-mcp"
+const MCP_SCOPE := "mcp:connect"
 const REVOKED_NOTE := "The provider rejected the saved login: the token was revoked or has expired. Tell the user to reconnect it (send /github or /figma in Telegram, or open Connections on the Salam AI site) and stop using it until then."
 const DEFAULT_FIGMA_SCOPES := "current_user:read file_comments:read file_comments:write file_content:read file_dev_resources:read file_dev_resources:write file_metadata:read file_versions:read folder_metadata:read folders:read library_assets:read library_content:read selections:read team_library_content:read webhooks:read webhooks:write"
 const DEFAULT_GITHUB_SCOPES := "repo workflow admin:org admin:public_key admin:repo_hook admin:org_hook admin:gpg_key admin:ssh_signing_key admin:enterprise read:audit_log codespace copilot gist notifications project read:packages write:packages user write:discussion write:network_configurations"
@@ -51,6 +54,7 @@ mut GITHUB_MCP := "https://api.githubcopilot.com/mcp/"
 mut GITHUB_MCP_ON := true
 mut FIGMA_API := "https://api.figma.com"
 mut FIGMA_WEB := "https://www.figma.com"
+mut FIGMA_MCP := "https://mcp.figma.com/mcp"
 mut SANDBOX_HOST := ""
 mut SANDBOX_PORT := 0
 mut SANDBOX_SECRET := ""
@@ -547,6 +551,12 @@ func integration_row(uid: str, provider: str, token &: str, login &: str, scope 
             token = fresh
         end
     end
+    if provider == MCP and refresh.len() > 0 and expires > 0 and expires - 300 < aistore.Now():
+        fresh := mcp_refresh(uid)
+        if fresh.len() > 0:
+            token = fresh
+        end
+    end
     if provider == "github" and refresh.len() > 0 and expires > 0 and expires - 300 < aistore.Now():
         fresh := github_refresh(uid, token)
         if fresh.len() > 0:
@@ -725,10 +735,13 @@ func token_chars(t: str): bool:
 end
 
 func provider_ok(p: str): bool:
-    ret p == "github" or p == "figma"
+    ret p == "github" or p == "figma" or p == MCP
 end
 
 func oauth_ready(provider: str): bool:
+    if provider == MCP:
+        ret enabled_secret()
+    end
     if provider == "github":
         ret gh_ready(false)
     end
@@ -759,7 +772,7 @@ func store_token(uid: str, provider: str, token: str, login &: str): int:
     if not enabled_secret():
         ret 3
     end
-    if not token_chars(token):
+    if not token_chars(token) or provider == MCP:
         ret 1
     end
     mut scope := ""
@@ -862,6 +875,9 @@ end
 func probe_status(provider: str, token: str): int:
     if provider == "github":
         ret fetch("GET", GITHUB_API + "/user", github_headers(token), "", CALL_MS).status
+    end
+    if provider == MCP:
+        ret mcp_post(token, "", mcp_initialize()).status
     end
     ret fetch("GET", FIGMA_API + "/v1/me", figma_headers(token, is_oauth_token(token)), "", CALL_MS).status
 end
@@ -1154,34 +1170,6 @@ func tool_figma_api(uid: str, args: str): Outcome:
     o.ok = r.status >= 200 and r.status < 400
     o.text = "HTTP " + r.status + "\n" + clip(r.body, MAX_API)
     ret o
-end
-
-func header_of(head: str, name: str): str:
-    each line in head.split("\r\n"):
-        at := line.find(":")
-        if at > 0 and str.Lower(line.substr(0, at)) == name:
-            ret str.Trim(line.substr(at + 1, line.len() - at - 1))
-        end
-    end
-    ret ""
-end
-
-func mcp_payload(body: str): str:
-    t := str.Trim(body)
-    if str.StartsWith(t, "{"):
-        ret t
-    end
-    mut found := ""
-    each line in t.split("\n"):
-        l := str.Trim(line)
-        if str.StartsWith(l, "data:"):
-            d := str.Trim(l.substr(5, l.len() - 5))
-            if str.StartsWith(d, "{") and (d.find("\"result\"") >= 0 or d.find("\"error\"") >= 0):
-                found = d
-            end
-        end
-    end
-    ret found
 end
 
 func mcp_text(result: str): str:
@@ -1733,6 +1721,9 @@ func run_tool(session: str, uid: str, tool: str, args: str): Outcome:
         "github_mcp":
             ret tool_github_mcp(uid, args)
         end
+        "figma_mcp":
+            ret tool_figma_mcp(uid, args)
+        end
     end
     if not sandbox_on():
         o.ok = false
@@ -1836,8 +1827,388 @@ func worker():
     end
 end
 
+func tool_name_ok(n: str): bool:
+    mut i := 0
+    until i < n.len():
+        c := n[i] as int
+        alnum := (c >= 48 and c <= 57) or (c >= 65 and c <= 90) or (c >= 97 and c <= 122)
+        if not alnum and c != 95 and c != 45:
+            ret false
+        end
+        i++
+    end
+    ret n.len() > 0
+end
+
+func mcp_initialize(): str:
+    ret `{"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "` + MCP_VERSION + `", "capabilities": {}, "clientInfo": {"name": "salam-ai", "version": "1"}}}`
+end
+
+func mcp_post(token: str, sid: str, body: str): Reply:
+    ret mcp_post_to(FIGMA_MCP, token, sid, body)
+end
+
+func header_of(head: str, name: str): str:
+    each line in head.split("\r\n"):
+        at := line.find(":")
+        if at > 0 and str.Lower(line.substr(0, at)) == name:
+            ret str.Trim(line.substr(at + 1, line.len() - at - 1))
+        end
+    end
+    ret ""
+end
+
+func mcp_payload(body: str): str:
+    t := str.Trim(body)
+    if str.StartsWith(t, "{"):
+        ret t
+    end
+    mut found := ""
+    each line in t.split("\n"):
+        l := str.Trim(line)
+        if str.StartsWith(l, "data:"):
+            d := str.Trim(l.substr(5, l.len() - 5))
+            if str.StartsWith(d, "{") and (d.find("\"result\"") >= 0 or d.find("\"error\"") >= 0):
+                found = d
+            end
+        end
+    end
+    ret found
+end
+
+func mcp_open(token: str, sid &: str, why &: str): bool:
+    r := mcp_post(token, "", mcp_initialize())
+    if r.status == 401 or r.status == 403:
+        why = REVOKED_NOTE
+        ret false
+    end
+    if r.status == 0:
+        why = "Figma MCP did not answer."
+        ret false
+    end
+    payload := mcp_payload(r.body)
+    if r.status < 200 or r.status >= 300 or json.Get(payload, "result").len() == 0:
+        why = "Figma MCP answered HTTP " + r.status + "."
+        ret false
+    end
+    sid = header_of(r.head, "mcp-session-id")
+    _n := mcp_post(token, sid, `{"jsonrpc": "2.0", "method": "notifications/initialized"}`)
+    ret true
+end
+
+func mcp_rpc(token: str, sid: str, method: str, params: str, why &: str): str:
+    r := mcp_post(token, sid, `{"jsonrpc": "2.0", "id": 2, "method": ` + json.Str(method) + `, "params": ` + params + "}")
+    if r.status == 0:
+        why = "Figma MCP did not answer."
+        ret ""
+    end
+    payload := mcp_payload(r.body)
+    err := json.Get(payload, "error")
+    if err.len() > 0:
+        why = clip(json.Get(err, "message"), 300)
+        if why.len() == 0:
+            why = "Figma MCP returned an error."
+        end
+        ret ""
+    end
+    result := json.Get(payload, "result")
+    if result.len() == 0:
+        why = r.status == 429 ? "Figma MCP rate limit reached. Try again later." : "Figma MCP answered HTTP " + r.status + "."
+    end
+    ret result
+end
+
+func mcp_render(result: str, image &: str, mime &: str): str:
+    mut out := ""
+    each item in json.Items(json.Get(result, "content")):
+        kind := json.Get(item, "type")
+        if kind == "text":
+            out = out + json.Get(item, "text") + "\n"
+        else if kind == "image":
+            data := json.Get(item, "data")
+            if image.len() == 0 and data.len() > 0:
+                image = data
+                mime = json.Get(item, "mimeType")
+                out = out + "[image attached]\n"
+            else:
+                out = out + "[image omitted]\n"
+            end
+        else:
+            out = out + "[" + kind + " content omitted]\n"
+        end
+    end
+    if out.len() == 0:
+        out = json.Get(result, "structuredContent")
+    end
+    ret out
+end
+
+func tool_figma_mcp(uid: str, args: str): Outcome:
+    mut o := Outcome {}
+    o.kind = "read"
+    name := json.Get(args, "tool")
+    mut action := json.Get(args, "action")
+    if action.len() == 0:
+        action = name.len() > 0 ? "call" : "tools"
+    end
+    o.summary = action == "call" ? "Figma MCP " + clip(name, 80) : "Figma MCP tools"
+    o.detail = o.summary
+    if action != "call" and action != "tools":
+        o.ok = false
+        o.text = "action must be tools (list the Figma tools) or call (run one with tool and arguments)."
+        ret o
+    end
+    mut token := ""
+    mut login := ""
+    mut scope := ""
+    if not integration_row(uid, MCP, token, login, scope):
+        o.ok = false
+        o.text = "The user has not connected Figma MCP. Tell them to open Connections on the Salam AI site and press Connect Figma MCP."
+        ret o
+    end
+    if not token_ok(uid, MCP, token):
+        o.ok = false
+        o.text = REVOKED_NOTE
+        ret o
+    end
+    mut params := "{}"
+    if action == "call":
+        mut arguments := json.Get(args, "arguments")
+        if arguments.len() == 0:
+            arguments = "{}"
+        end
+        if name.len() == 0 or name.len() > 80 or not tool_name_ok(name) or not json.Valid(arguments) or not str.StartsWith(arguments, "{"):
+            o.ok = false
+            o.text = "tool must be a Figma tool name and arguments a JSON object, for example {\"tool\": \"get_design_context\", \"arguments\": {\"fileKey\": \"KEY\", \"nodeId\": \"1:2\"}}."
+            ret o
+        end
+        params = `{"name": ` + json.Str(name) + `, "arguments": ` + arguments + "}"
+    end
+    mut why := ""
+    mut sid := ""
+    if not mcp_open(token, sid, why):
+        if why == REVOKED_NOTE:
+            forget_check(uid, MCP)
+        end
+        o.ok = false
+        o.text = why
+        ret o
+    end
+    result := mcp_rpc(token, sid, action == "call" ? "tools/call" : "tools/list", params, why)
+    if result.len() == 0:
+        o.ok = false
+        o.text = why
+        ret o
+    end
+    if action == "tools":
+        mut lines := ""
+        each t in json.Items(json.Get(result, "tools")):
+            lines = lines + "- " + json.Get(t, "name") + ": " + clip(json.Get(t, "description"), 300) + "\n  input: " + clip(json.Get(t, "inputSchema"), 700) + "\n"
+        end
+        o.text = lines.len() > 0 ? clip(lines, MAX_API) : "(no tools)"
+        ret o
+    end
+    mut image := ""
+    mut mime := ""
+    o.text = clip(mcp_render(result, image, mime), MAX_API)
+    if image.len() > 0:
+        o.image = image
+        o.image_mime = mime
+    end
+    o.ok = json.Get(result, "isError") != "true"
+    if o.text.len() == 0:
+        o.text = "(no output)"
+    end
+    ret o
+end
+
+func pkce_challenge(verifier: str): str:
+    buf := mem.Allocate(32 as u64)
+    defer mem.Free(buf)
+    crypto.Sha256Bytes(verifier as void*, verifier.len(), buf)
+    b64 := encoding.Base64EncodeBytes(buf, 32)
+    ret str.Replace(str.Replace(str.Replace(b64, "+", "-"), "/", "_"), "=", "")
+end
+
+func mcp_verifier(state: str): str:
+    ret crypto.HmacSha256Hex(MASTER, "figma-mcp|" + state)
+end
+
+func mcp_client_saved(id &: str, secret &: str): bool:
+    aistore.Lock()
+    mut q := aistore.Stmt("SELECT client_id, secret_enc FROM integration_clients WHERE name = ?1 AND redirect = ?2", two(MCP, redirect_uri(MCP)))
+    if aistore.Next(q):
+        id = aistore.Text(q, 0)
+        secret = unseal(aistore.Text(q, 1))
+    end
+    aistore.Finish(q)
+    aistore.Unlock()
+    ret id.len() > 0
+end
+
+func mcp_client(id &: str, secret &: str): bool:
+    _l := sync.Lock(REFRESH_LOCK)
+    if mcp_client_saved(id, secret):
+        _u := sync.Unlock(REFRESH_LOCK)
+        ret true
+    end
+    mut h := Vector {} as Vector<str>
+    h.push("Content-Type: application/json")
+    h.push("Accept: application/json")
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("client_name", "Salam AI"))
+    m.push(json.MemberRaw("redirect_uris", "[" + json.Str(redirect_uri(MCP)) + "]"))
+    m.push(json.MemberRaw("grant_types", `["authorization_code", "refresh_token"]`))
+    m.push(json.MemberRaw("response_types", `["code"]`))
+    m.push(json.Member("token_endpoint_auth_method", "client_secret_basic"))
+    m.push(json.Member("scope", MCP_SCOPE))
+    m.push(json.Member("client_uri", APP_URL))
+    r := fetch("POST", FIGMA_API + "/v1/oauth/mcp/register", h, json.Object(m), CALL_MS)
+    id = json.Get(r.body, "client_id")
+    secret = json.Get(r.body, "client_secret")
+    if id.len() == 0 or secret.len() == 0:
+        id = ""
+        secret = ""
+        _u := sync.Unlock(REFRESH_LOCK)
+        ret false
+    end
+    mut a := four(MCP, redirect_uri(MCP), id, seal(secret))
+    a.push(i64s(aistore.Now()))
+    aistore.Lock()
+    _s := aistore.Run("REPLACE INTO integration_clients (name, redirect, client_id, secret_enc, created) VALUES (?1, ?2, ?3, ?4, ?5)", a)
+    aistore.Unlock()
+    _v := sync.Unlock(REFRESH_LOCK)
+    ret true
+end
+
+func mcp_token(pairs: Vector<str>, id: str, secret: str, token &: str, refresh &: str, expires &: i64, why &: str):
+    mut h := Vector {} as Vector<str>
+    h.push("Authorization: Basic " + encoding.Base64Encode(id + ":" + secret))
+    h.push("Content-Type: application/x-www-form-urlencoded")
+    h.push("Accept: application/json")
+    r := fetch("POST", FIGMA_API + "/v1/oauth/token", h, form_encode(pairs), CALL_MS)
+    token = json.Get(r.body, "access_token")
+    refresh = json.Get(r.body, "refresh_token")
+    secs := json.Get(r.body, "expires_in").to_int()
+    expires = secs > 0 ? aistore.Now() + (secs as i64) : 0
+    if token.len() == 0:
+        why = exchange_failure(r)
+    end
+end
+
+func mcp_refresh(uid: str): str:
+    _l := sync.Lock(REFRESH_LOCK)
+    aistore.Lock()
+    mut q := aistore.Stmt("SELECT token_enc, refresh_enc, expires FROM integrations WHERE user_id = ?1 AND provider = ?2", two(uid, MCP))
+    mut current := ""
+    mut refresh := ""
+    mut expires := 0 as i64
+    if aistore.Next(q):
+        current = unseal(aistore.Text(q, 0))
+        refresh = unseal(aistore.Text(q, 1))
+        expires = aistore.Int64(q, 2)
+    end
+    aistore.Finish(q)
+    aistore.Unlock()
+    if current.len() > 0 and expires - 300 >= aistore.Now():
+        _a := sync.Unlock(REFRESH_LOCK)
+        ret current
+    end
+    mut id := ""
+    mut secret := ""
+    if refresh.len() == 0 or not mcp_client_saved(id, secret):
+        _b := sync.Unlock(REFRESH_LOCK)
+        ret ""
+    end
+    mut pairs := Vector {} as Vector<str>
+    pairs.push("grant_type")
+    pairs.push("refresh_token")
+    pairs.push("refresh_token")
+    pairs.push(refresh)
+    mut token := ""
+    mut fresh := ""
+    mut until_at := 0 as i64
+    mut why := ""
+    mcp_token(pairs, id, secret, token, fresh, until_at, why)
+    if token.len() == 0:
+        _c := sync.Unlock(REFRESH_LOCK)
+        ret ""
+    end
+    mut a := three(seal(token), fresh.len() > 0 ? seal(fresh) : seal(refresh), i64s(until_at))
+    a.push(uid)
+    aistore.Lock()
+    _u := aistore.Run("UPDATE integrations SET token_enc = ?1, refresh_enc = ?2, expires = ?3 WHERE user_id = ?4 AND provider = 'figma-mcp'", a)
+    aistore.Unlock()
+    _d := sync.Unlock(REFRESH_LOCK)
+    ret token
+end
+
+func finish_mcp(uid: str, state: str, code: str, why &: str): bool:
+    mut cid := ""
+    mut csecret := ""
+    if not mcp_client_saved(cid, csecret):
+        why = "the Figma MCP app is not registered"
+        ret false
+    end
+    mut pairs := Vector {} as Vector<str>
+    pairs.push("grant_type")
+    pairs.push("authorization_code")
+    pairs.push("code")
+    pairs.push(code)
+    pairs.push("redirect_uri")
+    pairs.push(redirect_uri(MCP))
+    pairs.push("code_verifier")
+    pairs.push(mcp_verifier(state))
+    pairs.push("resource")
+    pairs.push(FIGMA_MCP)
+    mut token := ""
+    mut refresh := ""
+    mut expires := 0 as i64
+    mcp_token(pairs, cid, csecret, token, refresh, expires, why)
+    if token.len() == 0:
+        ret false
+    end
+    if not token_chars(token):
+        why = "the provider returned an unusable token"
+        ret false
+    end
+    mut sid := ""
+    if not mcp_open(token, sid, why):
+        ret false
+    end
+    if not save_integration(uid, MCP, token, refresh, expires, "Figma MCP", MCP_SCOPE):
+        why = "the token could not be saved"
+        ret false
+    end
+    ret true
+end
+
 func authorize_url(provider: str, state: str, sign_in: bool): str:
     mut q := Vector {} as Vector<str>
+    if provider == MCP:
+        mut cid := ""
+        mut csecret := ""
+        if not mcp_client(cid, csecret):
+            ret ""
+        end
+        q.push("client_id")
+        q.push(cid)
+        q.push("redirect_uri")
+        q.push(redirect_uri(MCP))
+        q.push("scope")
+        q.push(MCP_SCOPE)
+        q.push("state")
+        q.push(state)
+        q.push("response_type")
+        q.push("code")
+        q.push("code_challenge")
+        q.push(pkce_challenge(mcp_verifier(state)))
+        q.push("code_challenge_method")
+        q.push("S256")
+        q.push("resource")
+        q.push(FIGMA_MCP)
+        ret FIGMA_WEB + "/oauth/mcp?" + form_encode(q)
+    end
     if provider == "github":
         q.push("client_id")
         q.push(gh_client(sign_in))
@@ -1948,6 +2319,11 @@ func oauth_start(ctx: i64):
         ret
     end
     state := crypto.RandomHex(24)
+    url := authorize_url(provider, state, false)
+    if url.len() == 0:
+        aiweb.Fail(ctx, 503, "oauth", "ثبت برنامه نزد فیگما ناموفق بود. کمی بعد دوباره تلاش کنید.")
+        ret
+    end
     now := aistore.Now()
     aistore.Lock()
     _d := aistore.Run("DELETE FROM integration_states WHERE expires < ?1", one(i64s(now - 3600)))
@@ -1957,7 +2333,7 @@ func oauth_start(ctx: i64):
         aiweb.Fail(ctx, 500, "server", "ساخت اتصال ناموفق بود. دوباره تلاش کنید.")
         ret
     end
-    aiweb.Reply(ctx, 200, `{"url": ` + json.Str(authorize_url(provider, state, false)) + `, "state": ` + json.Str(state) + "}")
+    aiweb.Reply(ctx, 200, `{"url": ` + json.Str(url) + `, "state": ` + json.Str(state) + "}")
 end
 
 func github_profile(token: str, subject &: str, login &: str, name &: str, email &: str, verified &: bool): bool:
@@ -2008,6 +2384,7 @@ func list_integrations(ctx: i64):
     mut items := Vector {} as Vector<str>
     items.push(provider_json(i64s(uid), "github"))
     items.push(provider_json(i64s(uid), "figma"))
+    items.push(provider_json(i64s(uid), MCP))
     m.push(json.MemberRaw("integrations", json.Array(items)))
     aiweb.Reply(ctx, 200, json.Object(m))
 end
@@ -2108,6 +2485,12 @@ end
 pub func SetGithubScopes(scopes: str):
     if str.Trim(scopes).len() > 0:
         GH_SCOPES = str.Trim(scopes)
+    end
+end
+
+pub func SetFigmaMcp(url: str):
+    if url.len() > 0:
+        FIGMA_MCP = str.TrimSuffix(url, "/")
     end
 end
 
@@ -2252,7 +2635,8 @@ end
 pub func Prelude(session: str, uid: str): str:
     gh := login_state(uid, "github")
     fg := login_state(uid, "figma")
-    text := "<cloud_session>\nsession: " + session + "\nsandbox: a private Linux container for this conversation with bash, git, curl, ripgrep, python3, node, a headless Chromium and the Salam compiler; the working folder is /work and files last while the conversation is active. It has no access to the user's own computer.\ngithub: " + (gh.len() > 0 ? "connected as " + gh : "not connected") + "\nfigma: " + (fg.len() > 0 ? "connected as " + fg : "not connected") + "\nUse the desktop tools (shell, read_file, write_file, edit_file, list_dir, glob, grep, run_tests, browser) and pass the session value above in every call. Paths are relative to /work. To check a web page or a site you built (start its server in the background first), open it with browser, look at the screenshot and the console errors, and fix what is wrong before you say it is done. " + (mcp_note(uid)) + "For GitHub use github_api for the REST API and github_git for clone, fetch, pull and push in the sandbox. The sandbox shell is also already signed in as the user: plain git clone, pull and push to github.com work with their login, and GH_TOKEN, GITHUB_TOKEN, FIGMA_TOKEN and FIGMA_AUTH_HEADER (for curl -H) are set when connected. Never print or repeat those values. For Figma use figma_api to read files and nodes and figma_export to save images into the sandbox. If a service is not connected, tell the user to send /github or /figma in Telegram, or to open Connections on the Salam AI site. Look before you change things, keep edits small, run the tests after changing code, and tell the user what you did.\n</cloud_session>\n\n"
+    fm := login_state(uid, MCP)
+    text := "<cloud_session>\nsession: " + session + "\nsandbox: a private Linux container for this conversation with bash, git, curl, ripgrep, python3, node, a headless Chromium and the Salam compiler; the working folder is /work and files last while the conversation is active. It has no access to the user's own computer.\ngithub: " + (gh.len() > 0 ? "connected as " + gh : "not connected") + "\nfigma: " + (fg.len() > 0 ? "connected as " + fg : "not connected") + "\nfigma_mcp: " + fm + "\nUse the desktop tools (shell, read_file, write_file, edit_file, list_dir, glob, grep, run_tests, browser) and pass the session value above in every call. Paths are relative to /work. To check a web page or a site you built (start its server in the background first), open it with browser, look at the screenshot and the console errors, and fix what is wrong before you say it is done. " + (mcp_note(uid)) + "For GitHub use github_api for the REST API and github_git for clone, fetch, pull and push in the sandbox. The sandbox shell is also already signed in as the user: plain git clone, pull and push to github.com work with their login, and GH_TOKEN, GITHUB_TOKEN, FIGMA_TOKEN and FIGMA_AUTH_HEADER (for curl -H) are set when connected. Never print or repeat those values. For Figma's own tools (design context, screenshots, metadata) use figma_mcp once it is connected. For Figma use figma_api to read files and nodes and figma_export to save images into the sandbox. If a service is not connected, tell the user to send /github or /figma in Telegram, or to open Connections on the Salam AI site. Look before you change things, keep edits small, run the tests after changing code, and tell the user what you did.\n</cloud_session>\n\n"
     ret text
 end
 
@@ -2260,10 +2644,13 @@ pub func AuthorizeUrl(provider: str, state: str, sign_in: bool): str:
     ret authorize_url(provider, state, sign_in)
 end
 
-pub func FinishConnect(uid: str, provider: str, code: str, why &: str): bool:
+pub func FinishConnect(uid: str, provider: str, state: str, code: str, why &: str): bool:
     if not provider_ok(provider):
         why = "unknown service"
         ret false
+    end
+    if provider == MCP:
+        ret finish_mcp(uid, state, code, why)
     end
     mut token := ""
     mut refresh := ""
@@ -2297,7 +2684,7 @@ pub func FinishConnect(uid: str, provider: str, code: str, why &: str): bool:
 end
 
 pub func Identity(provider: str, code: str, subject &: str, login &: str, name &: str, email &: str, verified &: bool): bool:
-    if not provider_ok(provider):
+    if not provider_ok(provider) or provider == MCP:
         ret false
     end
     mut token := ""

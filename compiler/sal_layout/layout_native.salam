@@ -17,9 +17,13 @@ package layout
 import str
 
 include co "../sal_core.salam"
+include tok "../token.salam"
 include lg "../logger.salam"
 include at "../ast.salam"
 include lp "../langpack.salam"
+include src "../source.salam"
+include lx "../lexer/lexer.salam"
+include ps "../parser/parser.salam"
 
 pub const NATIVE_PAGE_VIEW := "__salam_page"
 
@@ -67,6 +71,51 @@ func ln_quote(s: str): str:
     ret out + "\""
 end
 
+func ln_parse(log: lg.Logger, a &: at.Ast, text: str, path: str, pack: lp.Langpack): int:
+    mut sf := src.New()
+    sf.path = path
+    sf.text = text
+    sf.len = text.len()
+    quiet := lg.New(lg.LOG_OFF, false)
+    mut toks := tok.StreamNew(path)
+    ok := lx.Run(quiet, pack, sf, toks)
+    mut prog := 0
+    if ok:
+        _ps := ps.Run(quiet, toks, a, prog)
+    end
+    tok.StreamFree(toks)
+    if prog == 0:
+        lg.Log(log, lg.PH_DRIVER, lg.LOG_ERROR, "internal: could not build the native page entry")
+    end
+    ret prog
+end
+
+func ln_main_source_fa(handlers: Vector<str>): str:
+    ui := "رابط کاربری"
+    mut body := ""
+    mut seen := Vector {} as Vector<str>
+    defer seen.free()
+    each call in handlers:
+        name := ln_handler_name(call)
+        if str.Len(name) == 0 or str.IndexOf(name, " ") >= 0:
+            continue
+        end
+        mut dup := false
+        each s in seen:
+            if str.Equals(s, name):
+                dup = true
+            end
+        end
+        if dup:
+            continue
+        end
+        seen.push(name)
+        body += "    " + ui + ".ثبت رسیدگی(" + ln_quote(name) + "، (): " + name + "() پایان)\n"
+    end
+    body += "    " + ui + ".اجرا((): برگشت " + NATIVE_PAGE_VIEW + "() پایان)\n"
+    ret "واردسازی رابط گرافیکی.رابط کاربری\n\nتابع ریشه:\n" + body + "پایان\n"
+end
+
 func ln_main_source(ui: str, handlers: Vector<str>): str:
     mut body := ""
     mut seen := Vector {} as Vector<str>
@@ -107,7 +156,12 @@ pub func PrepareNativePage(log: lg.Logger, pack: lp.Langpack, a &: at.Ast, prog:
         ret true
     end
     base := at.Count(a)
-    sp := lo_parse_text(log, a, ln_main_source("ui", handlers), file)
+    mut sp := 0
+    if str.Equals(lp.Code(pack), "fa"):
+        sp = ln_parse(log, a, ln_main_source_fa(handlers), file, pack)
+    else:
+        sp = lo_parse_text(log, a, ln_main_source("ui", handlers), file)
+    end
     if sp == 0:
         ret false
     end

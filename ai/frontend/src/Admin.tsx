@@ -2587,34 +2587,91 @@ export function NoAccess() {
 
 type Section = "overview" | "users" | "chats" | "billing" | "api" | "events";
 
-const SECTIONS: { id: Section; icon: typeof IconActivity; label: () => string; hint: () => string }[] = [
-  { id: "overview", icon: IconChart, label: () => t("نمای کلی", "Overview"), hint: () => t("آمار، مصرف و روند", "Stats, usage and trends") },
-  { id: "users", icon: IconUsers, label: () => t("کاربران", "Users"), hint: () => t("حساب‌ها، تلگرام و نشست‌ها", "Accounts, Telegram and sessions") },
-  { id: "chats", icon: IconChat, label: () => t("گفت‌وگوها", "Chats"), hint: () => t("گفت‌وگوها، مهمان‌ها و فایل‌ها", "Chats, guests and files") },
-  { id: "billing", icon: IconBadgeCheck, label: () => t("پلن‌ها و پرداخت", "Plans and billing"), hint: () => t("پلن‌ها، اشتراک‌ها و پرداخت‌ها", "Plans, subscriptions and payments") },
-  { id: "api", icon: IconKey, label: () => t("API و برنامه‌ها", "API and apps"), hint: () => t("درخواست‌ها، کلیدها و برنامه‌های متصل", "Requests, keys and connected apps") },
-  { id: "events", icon: IconActivity, label: () => t("رویدادها", "Events"), hint: () => t("گزارش رویدادهای سرویس", "Service event log") },
+type Sub = { id: string; label: () => string; hint: () => string };
+
+const SECTIONS: { id: Section; icon: typeof IconActivity; label: () => string; hint: () => string; subs: Sub[] }[] = [
+  { id: "overview", icon: IconChart, label: () => t("نمای کلی", "Overview"), hint: () => t("آمار، مصرف و روند", "Stats, usage and trends"), subs: [] },
+  {
+    id: "users",
+    icon: IconUsers,
+    label: () => t("کاربران", "People"),
+    hint: () => t("حساب‌ها، تلگرام و نشست‌ها", "Accounts, Telegram and sessions"),
+    subs: [
+      { id: "accounts", label: () => t("حساب‌ها", "Accounts"), hint: () => t("همه‌ی کاربران ثبت‌نام‌شده", "Every registered user") },
+      { id: "telegram", label: () => t("تلگرام", "Telegram"), hint: () => t("کاربران و مهمان‌های ربات تلگرام", "Telegram bot users and guests") },
+      { id: "sessions", label: () => t("نشست‌ها", "Sessions"), hint: () => t("نشست‌های ورود و سیستم‌عامل‌ها", "Sign-in sessions and platforms") },
+    ],
+  },
+  {
+    id: "chats",
+    icon: IconChat,
+    label: () => t("گفت‌وگوها", "Chats"),
+    hint: () => t("گفت‌وگوها، مهمان‌ها و فایل‌ها", "Chats, guests and files"),
+    subs: [
+      { id: "latest", label: () => t("گفت‌وگوها", "Chats"), hint: () => t("آخرین گفت‌وگوها", "Latest chats") },
+      { id: "guests", label: () => t("مهمان‌های سایت", "Website guests"), hint: () => t("گفت‌وگوهای مهمان‌ها روی سایت", "Guest chats on the website") },
+      { id: "files", label: () => t("فایل‌ها", "Files"), hint: () => t("فایل‌های بارگذاری‌شده", "Uploaded files") },
+    ],
+  },
+  {
+    id: "billing",
+    icon: IconBadgeCheck,
+    label: () => t("فروش", "Billing"),
+    hint: () => t("پلن‌ها، اشتراک‌ها و پرداخت‌ها", "Plans, subscriptions and payments"),
+    subs: [
+      { id: "plans", label: () => t("پلن‌ها", "Plans"), hint: () => t("ساخت و ویرایش پلن‌ها", "Create and edit plans") },
+      { id: "subscriptions", label: () => t("اشتراک‌ها", "Subscriptions"), hint: () => t("اشتراک‌های فعال و اعطای پلن", "Active subscriptions and grants") },
+      { id: "payments", label: () => t("پرداخت‌ها", "Payments"), hint: () => t("تراکنش‌های پرداخت", "Payment transactions") },
+    ],
+  },
+  {
+    id: "api",
+    icon: IconKey,
+    label: () => t("API", "API"),
+    hint: () => t("درخواست‌ها، کلیدها و برنامه‌های متصل", "Requests, keys and connected apps"),
+    subs: [
+      { id: "requests", label: () => t("درخواست‌ها", "Requests"), hint: () => t("درخواست‌های API", "API requests") },
+      { id: "keys", label: () => t("کلیدها", "Keys"), hint: () => t("سیاست و محدودیت کلیدها", "Key policies and limits") },
+      { id: "apps", label: () => t("برنامه‌های متصل", "Connected apps"), hint: () => t("برنامه‌های OAuth و MCP", "OAuth and MCP apps") },
+    ],
+  },
+  { id: "events", icon: IconActivity, label: () => t("رویدادها", "Events"), hint: () => t("گزارش رویدادهای سرویس", "Service event log"), subs: [] },
 ];
 
-function sectionFromPath(): Section {
-  const part = location.pathname.replace(/\/+$/, "").split("/")[2] ?? "";
-  return SECTIONS.find((x) => x.id === part)?.id ?? "overview";
+function placeFromPath(): { section: (typeof SECTIONS)[number]; sub: Sub | null } {
+  const parts = location.pathname.replace(/\/+$/, "").split("/");
+  const section = SECTIONS.find((x) => x.id === parts[2]) ?? SECTIONS[0];
+  const sub = section.subs.find((x) => x.id === parts[3]) ?? section.subs[0] ?? null;
+  return { section, sub };
 }
 
-function sectionPath(id: Section): string {
-  return id === "overview" ? "/admin" : `/admin/${id}`;
+function adminPath(section: Section, sub?: string): string {
+  if (section === "overview") return "/admin";
+  return sub ? `/admin/${section}/${sub}` : `/admin/${section}`;
+}
+
+function arrowMove(e: React.KeyboardEvent, i: number, count: number, go: (next: number) => void) {
+  const step = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
+  if (step === 0) return;
+  const rtl = getComputedStyle(e.currentTarget).direction === "rtl";
+  e.preventDefault();
+  go((i + (rtl ? -step : step) + count) % count);
+}
+
+function openLink(e: React.MouseEvent, path: string, go: (path: string) => void) {
+  if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+  e.preventDefault();
+  go(path);
+}
+
+function useShowActive(key: string) {
+  useEffect(() => {
+    document.querySelector<HTMLElement>(".admin-tab.active, .admin-subtab.active")?.scrollIntoView({ block: "nearest", inline: "center" });
+  }, [key]);
 }
 
 function TabBar({ active, onNavigate }: { active: Section; onNavigate: (path: string) => void }) {
-  const move = (e: React.KeyboardEvent, i: number) => {
-    const step = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
-    if (step === 0) return;
-    const rtl = getComputedStyle(e.currentTarget).direction === "rtl";
-    const next = SECTIONS[(i + (rtl ? -step : step) + SECTIONS.length) % SECTIONS.length];
-    e.preventDefault();
-    onNavigate(sectionPath(next.id));
-    requestAnimationFrame(() => document.getElementById(`admin-tab-${next.id}`)?.focus());
-  };
+  useShowActive(active);
   return (
     <nav className="admin-tabs" role="tablist" aria-label={t("بخش‌های مدیریت", "Admin sections")}>
       {SECTIONS.map((x, i) => {
@@ -2628,18 +2685,52 @@ function TabBar({ active, onNavigate }: { active: Section; onNavigate: (path: st
             aria-selected={on}
             aria-controls="admin-panel"
             tabIndex={on ? 0 : -1}
-            href={sectionPath(x.id)}
+            href={adminPath(x.id)}
             className={`admin-tab${on ? " active" : ""}`}
             title={x.hint()}
-            onKeyDown={(e) => move(e, i)}
-            onClick={(e) => {
-              if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
-              e.preventDefault();
-              onNavigate(sectionPath(x.id));
-            }}
+            onKeyDown={(e) =>
+              arrowMove(e, i, SECTIONS.length, (n) => {
+                onNavigate(adminPath(SECTIONS[n].id));
+                requestAnimationFrame(() => document.getElementById(`admin-tab-${SECTIONS[n].id}`)?.focus());
+              })
+            }
+            onClick={(e) => openLink(e, adminPath(x.id), onNavigate)}
           >
             <Icon width={16} height={16} />
             <span>{x.label()}</span>
+          </a>
+        );
+      })}
+    </nav>
+  );
+}
+
+function SubBar({ section, active, onNavigate }: { section: Section; active: string; onNavigate: (path: string) => void }) {
+  const subs = SECTIONS.find((x) => x.id === section)?.subs ?? [];
+  if (subs.length === 0) return null;
+  return (
+    <nav className="admin-subtabs" role="tablist" aria-label={t("صفحه‌های این بخش", "Pages in this section")}>
+      {subs.map((x, i) => {
+        const on = x.id === active;
+        return (
+          <a
+            key={x.id}
+            id={`admin-sub-${x.id}`}
+            role="tab"
+            aria-selected={on}
+            tabIndex={on ? 0 : -1}
+            href={adminPath(section, x.id)}
+            className={`admin-subtab${on ? " active" : ""}`}
+            title={x.hint()}
+            onKeyDown={(e) =>
+              arrowMove(e, i, subs.length, (n) => {
+                onNavigate(adminPath(section, subs[n].id));
+                requestAnimationFrame(() => document.getElementById(`admin-sub-${subs[n].id}`)?.focus());
+              })
+            }
+            onClick={(e) => openLink(e, adminPath(section, x.id), onNavigate)}
+          >
+            {x.label()}
           </a>
         );
       })}
@@ -2697,7 +2788,8 @@ export function Admin({ notify, onNavigate }: { notify: (msg: string, ok?: boole
   const [error, setError] = useState("");
   const [forbidden, setForbidden] = useState(false);
   const [picked, setPicked] = useState<Picked>(null);
-  const section = sectionFromPath();
+  const { section: current, sub } = placeFromPath();
+  const section = current.id;
 
   const load = useCallback(() => {
     setError("");
@@ -2716,15 +2808,14 @@ export function Admin({ notify, onNavigate }: { notify: (msg: string, ok?: boole
 
   if (forbidden) return <NoAccess />;
 
-  const current = SECTIONS.find((x) => x.id === section) ?? SECTIONS[0];
-
   return (
     <div className="page admin-page">
       <header className="page-head">
         <h2>{t("مدیریت", "Admin")}</h2>
-        <p className="muted">{current.hint()}</p>
+        <p className="muted">{sub ? sub.hint() : current.hint()}</p>
       </header>
       <TabBar active={section} onNavigate={onNavigate} />
+      {sub && <SubBar section={section} active={sub.id} onNavigate={onNavigate} />}
       {picked && section !== "overview" && (
         <div className="picked-bar" role="status">
           {t("نمایش داده‌های", "Showing data for")} <bdi className="strong">{picked.name}</bdi>
@@ -2753,34 +2844,29 @@ export function Admin({ notify, onNavigate }: { notify: (msg: string, ok?: boole
             {summary && <Overview s={summary} />}
           </>
         )}
-        {section === "users" && (
-          <>
-            <Users picked={picked} onPick={setPicked} notify={notify} />
-            <TelegramSessions picked={picked} onPick={setPicked} />
-            <Sessions picked={picked} notify={notify} />
-          </>
+        {section === "users" && sub?.id === "accounts" && <Users picked={picked} onPick={setPicked} notify={notify} />}
+        {section === "users" && sub?.id === "telegram" && <TelegramSessions picked={picked} onPick={setPicked} />}
+        {section === "users" && sub?.id === "sessions" && <Sessions picked={picked} notify={notify} />}
+        {section === "chats" && sub?.id === "latest" && (picked ? <Conversations picked={picked} /> : <LatestChats />)}
+        {section === "chats" && sub?.id === "guests" && (
+          picked ? (
+            <section className="card panel">
+              <p className="muted">{t("گفت‌وگوهای مهمان به حساب کاربری وصل نیستند. برای دیدنشان فیلتر کاربر را بردارید.", "Guest chats are not tied to accounts. Clear the user filter to see them.")}</p>
+              <button type="button" className="button ghost" onClick={() => setPicked(null)}>
+                {t("نمایش همه", "Show all")}
+              </button>
+            </section>
+          ) : (
+            <Guests />
+          )
         )}
-        {section === "chats" && (
-          <>
-            {picked ? <Conversations picked={picked} /> : <LatestChats />}
-            {!picked && <Guests />}
-            <Uploads picked={picked} notify={notify} />
-          </>
-        )}
-        {section === "billing" && (
-          <>
-            <PlansAdmin notify={notify} />
-            <Subscriptions picked={picked} notify={notify} />
-            <Payments picked={picked} />
-          </>
-        )}
-        {section === "api" && (
-          <>
-            <RequestsFeed picked={picked} onPick={setPicked} />
-            <KeyPolicies picked={picked} notify={notify} />
-            <AppsTable picked={picked} notify={notify} />
-          </>
-        )}
+        {section === "chats" && sub?.id === "files" && <Uploads picked={picked} notify={notify} />}
+        {section === "billing" && sub?.id === "plans" && <PlansAdmin notify={notify} />}
+        {section === "billing" && sub?.id === "subscriptions" && <Subscriptions picked={picked} notify={notify} />}
+        {section === "billing" && sub?.id === "payments" && <Payments picked={picked} />}
+        {section === "api" && sub?.id === "requests" && <RequestsFeed picked={picked} onPick={setPicked} />}
+        {section === "api" && sub?.id === "keys" && <KeyPolicies picked={picked} notify={notify} />}
+        {section === "api" && sub?.id === "apps" && <AppsTable picked={picked} notify={notify} />}
         {section === "events" && <Events picked={picked} onPick={setPicked} />}
       </div>
     </div>

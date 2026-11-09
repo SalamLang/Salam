@@ -1,0 +1,96 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import archive
+import compress
+import filepath
+import mem
+import os
+
+func has(a: str, b: str): bool:
+    p := filepath.Join(a, b)
+    r := os.Exists(p)
+    mem.Free(p as void*)
+    ret r
+end
+
+func main:
+    dir := filepath.Join(os.TempDir(), "salam_tgzs_demo")
+    os.RemoveAll(dir)
+    os.MkdirAll(dir)
+    path := filepath.Join(dir, "big.tgz")
+    size := 40000000
+    zeros := mem.AllocateZeroed(size as u64)
+    mut fs := Vector {} as Vector<archive.FileInput>
+    fs.push(archive.MakeFileInput("first.txt", "first entry" as void*, 11, false))
+    fs.push(archive.MakeFileInput("zeros.bin", zeros, size, false))
+    fs.push(archive.MakeFileInput("last.txt", "last entry" as void*, 10, false))
+    println "create", archive.Create(path, fs)
+    fs.free()
+    mem.Free(zeros)
+
+    mut arc := archive.OpenFile(path, "")
+    println "open", archive.FormatName(arc.format), arc.status, arc.disk != 0, arc.tmp.len()
+    mut es := archive.List(arc)
+    println "list", es.len(), arc.status
+    each e in es:
+        println e.name, e.size
+    end
+    archive.FreeEntries(es)
+    mut first := archive.Read(arc, "last.txt")
+    println "read", compress.BufToStrUnsafe(first), arc.status
+    compress.BufFree(first)
+    mut none := archive.Read(arc, "missing")
+    println "missing", none.len, arc.status
+    compress.BufFree(none)
+    one := filepath.Join(dir, "one")
+    println "extract", archive.Extract(arc, "zeros.bin", one), has(one, "zeros.bin")
+    all := filepath.Join(dir, "all")
+    println "all", archive.ExtractAll(arc, all), arc.status, has(all, "first.txt"), has(all, "last.txt")
+
+    mut lim := archive.DefaultLimits()
+    lim.max_total = 1000000 as i64
+    archive.SetLimits(arc, lim)
+    mut capped := archive.List(arc)
+    println "total cap", capped.len(), arc.status
+    archive.FreeEntries(capped)
+    lim.max_total = 4294967296 as i64
+    lim.max_entry = 1000000 as i64
+    archive.SetLimits(arc, lim)
+    println "entry cap", archive.Extract(arc, "zeros.bin", filepath.Join(dir, "capped")), arc.status
+    archive.Close(arc)
+
+    mut rok := false
+    mut packed := archive.ReadBinaryFile(path, rok)
+    println "bytes", rok, packed.len > 100
+    mut raw := packed.data as u8*
+    at := packed.len - 12
+    raw[at] = ((raw[at] as int) ^ 255) as u8
+    println "rewrite", archive.WriteBinaryFileBuf(path, packed)
+    compress.BufFree(packed)
+    mut bad := archive.OpenFile(path, "")
+    println "bad open", bad.status, bad.disk != 0
+    mut head := archive.Read(bad, "first.txt")
+    println "early", compress.BufToStrUnsafe(head), bad.status
+    compress.BufFree(head)
+    mut tail := archive.Read(bad, "last.txt")
+    println "late", tail.len, bad.status
+    compress.BufFree(tail)
+    archive.Close(bad)
+    os.RemoveAll(dir)
+    mem.Free(path as void*)
+    mem.Free(dir as void*)
+end

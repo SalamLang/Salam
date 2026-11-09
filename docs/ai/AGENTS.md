@@ -578,7 +578,7 @@ frees, like any other Vector or HashMap.
 ```salam
 import str                          // std package
 import encoding.json                // nested std package: dotted, unquoted
-import fs.file
+import fs
 include mine "my_helpers.salam"     // your own file: include, quoted, aliased
 include "@/shared/util.salam"       // from the project root
 ```
@@ -753,8 +753,8 @@ files`; give every source file a name unique across the whole project.
 
 - **`input` is a reserved built-in.** Do not name anything after it.
 
-- **`open`, `listdir` and `strcmp` are not built-ins.** `open` is `file.Open`
-  (`import fs.file`), `listdir` is `os.ListDir` or `fs.dir.List`, and `strcmp`
+- **`open`, `listdir` and `strcmp` are not built-ins.** `open` is `fs.Open`
+  (`import fs`), `listdir` is `os.ListDir` or `fs.dir.List`, and `strcmp`
   is `str.Equals` or a string comparison. `env` and `args` remain built-ins;
   `os.Env` and `os.Args` are the documented wrappers around them.
 

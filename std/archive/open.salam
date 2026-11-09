@@ -17,7 +17,9 @@ package archive
 import compress
 import filepath
 import mem
+import os
 import str
+import time
 
 @en "ARCHIVE_OK"
 @fa "بایگانی موفق"
@@ -155,6 +157,24 @@ pub struct Archive:
     @en "file"
     @fa "پرونده"
     pub file: compress.ByteBuf = compress.NewByteBuf()
+    @en "disk"
+    @fa "روی دیسک"
+    pub disk: int = 0
+    @en "tmp"
+    @fa "پرونده موقت"
+    pub tmp: str = ""
+    @en "zf"
+    @fa "پرونده زیپ"
+    pub zf: ZipFile = ZipFile {}
+    @en "sz"
+    @fa "پرونده هفت زد"
+    pub sz: SevenZipFile = SevenZipFile {}
+    @en "tf"
+    @fa "پرونده تار"
+    pub tf: TarFile = TarFile {}
+    @en "rf"
+    @fa "پرونده آر ای آر"
+    pub rf: RarFile = RarFile {}
 end
 
 @en "FileInput"
@@ -387,6 +407,169 @@ func _auto_dir_name(name: str): str:
     ret name + "/"
 end
 
+func _auto_map_disk(st: int): int:
+    if st == 7:
+        ret ARCHIVE_IO_ERROR
+    end
+    if st == 8:
+        ret ARCHIVE_UNSAFE_PATH
+    end
+    ret st
+end
+
+func _auto_cap(arc: Archive): i64:
+    if arc.limits.max_entry > (0 as i64):
+        ret arc.limits.max_entry
+    end
+    ret 0
+end
+
+func _auto_tmp_name(): str:
+    pid := str.FromInt(os.Pid() as i64)
+    stamp := str.FromInt(os.Pid() as i64 + (time.NowNanos() % (1000000007 as i64)))
+    name := "salam_open_" + pid + "_" + stamp
+    full := filepath.Join(os.TempDir(), name)
+    mem.Free(pid as void*)
+    mem.Free(stamp as void*)
+    mem.Free(name as void*)
+    ret full
+end
+
+func _auto_disk_close(arc &: Archive):
+    if arc.disk == 1:
+        ZipFileClose(arc.zf)
+    else arc.disk == 2:
+        SevenZipFileClose(arc.sz)
+    else arc.disk == 3:
+        TarFileClose(arc.tf)
+    else arc.disk == 4:
+        RarFileClose(arc.rf)
+    end
+    if arc.tmp.len() > 0:
+        os.Remove(arc.tmp)
+        mem.Free(arc.tmp as void*)
+        arc.tmp = ""
+    end
+    arc.disk = 0
+end
+
+func _auto_disk_list(arc &: Archive): Vector<Entry>:
+    mut out := Vector {} as Vector<Entry>
+    arc.status = ARCHIVE_OK
+    if arc.disk == 1:
+        out = ZipFileEntries(arc.zf)
+        arc.status = _auto_map_disk(arc.zf.status)
+    else arc.disk == 2:
+        out = SevenZipFileEntries(arc.sz)
+        arc.status = arc.sz.status
+    else arc.disk == 3:
+        out = TarFileEntries(arc.tf)
+        arc.status = _auto_map_disk(arc.tf.status)
+    else arc.disk == 4:
+        out = RarFileEntries(arc.rf)
+        arc.status = _auto_map_rar(arc.rf.status)
+    end
+    ret out
+end
+
+func _auto_disk_to(arc &: Archive, name: str, dest: str, cap: i64): int:
+    if arc.disk == 1:
+        ret _auto_map_disk(ZipFileExtractTo(arc.zf, name, dest, cap))
+    end
+    if arc.disk == 2:
+        ret SevenZipFileExtractTo(arc.sz, name, dest, cap, 0 as i64)
+    end
+    if arc.disk == 4:
+        ret _auto_map_rar(RarFileExtractTo(arc.rf, name, dest, cap, 0 as i64))
+    end
+    TarFileRewind(arc.tf)
+    mut st := ARCHIVE_NOT_FOUND
+    mut e := Entry {}
+    until TarFileNext(arc.tf, e):
+        if e.name == name:
+            st = _auto_map_disk(TarFileExtractTo(arc.tf, e, dest, cap))
+            FreeEntry(e)
+            break
+        end
+        FreeEntry(e)
+    end
+    TarFileRewind(arc.tf)
+    ret st
+end
+
+func _auto_disk_all(arc &: Archive, destdir: str): int:
+    cap := _auto_cap(arc)
+    if arc.disk == 1:
+        ret _auto_map_disk(ZipFileExtractAll(arc.zf, destdir, cap))
+    end
+    if arc.disk == 2:
+        ret SevenZipFileExtractAll(arc.sz, destdir, cap, 0 as i64)
+    end
+    if arc.disk == 4:
+        ret _auto_map_rar(RarFileExtractAll(arc.rf, destdir, cap, 0 as i64))
+    end
+    ret _auto_map_disk(TarFileExtractAll(arc.tf.path, destdir, cap))
+end
+
+func _auto_open_disk(path: str, password: str, f: int, arc &: Archive): bool:
+    if f == FormatZip:
+        arc.zf = ZipOpenFile(path)
+        arc.disk = 1
+        arc.fail = _auto_map_disk(arc.zf.status)
+        ret true
+    end
+    if f == FormatSevenZip:
+        arc.sz = SevenZipOpenFile(path, password)
+        arc.disk = 2
+        arc.fail = arc.sz.status
+        ret true
+    end
+    if f == FormatRar and password.len() == 0:
+        arc.rf = RarFileOpen(path)
+        arc.disk = 4
+        arc.fail = _auto_map_rar(arc.rf.status)
+        ret true
+    end
+    if f == FormatTar:
+        arc.tf = TarFileOpen(path)
+        arc.disk = 3
+        arc.fail = _auto_map_disk(arc.tf.status)
+        ret true
+    end
+    if f == FormatGzip:
+        tmp := _auto_tmp_name()
+        gz := GzipDecompressFileCap(path, tmp, arc.limits.max_total)
+        mut tar := false
+        if gz == ARCHIVE_OK:
+            fp := compress.FileOpenRead(tmp)
+            if fp != null:
+                head := mem.AllocateZeroed(1024 as u64)
+                got := compress.FileReadAt(fp, 0 as i64, head, 1024)
+                tar = _auto_is_tar(head, got)
+                mem.Free(head)
+                compress.FileClose(fp)
+            end
+        end
+        if not tar:
+            os.Remove(tmp)
+            mem.Free(tmp as void*)
+            if gz == ARCHIVE_TOO_BIG or gz == ARCHIVE_IO_ERROR:
+                arc.fail = gz
+                arc.format = FormatGzip
+                ret true
+            end
+            ret false
+        end
+        arc.tmp = tmp
+        arc.tf = TarFileOpen(tmp)
+        arc.disk = 3
+        arc.format = FormatTarGz
+        arc.fail = _auto_map_disk(arc.tf.status)
+        ret true
+    end
+    ret false
+end
+
 @en "MakeFileInput"
 @fa "ساخت ورودی پرونده"
 pub func MakeFileInput(name: str, data_ptr: void*, data_len: int, is_dir: bool): FileInput:
@@ -508,6 +691,22 @@ end
 @en "OpenFile"
 @fa "بازکردن پرونده بایگانی"
 pub func OpenFile(path: str, password: str): Archive:
+    fp := compress.FileOpenRead(path)
+    if fp != null:
+        size := compress.FileSize(fp)
+        head := mem.AllocateZeroed(1024 as u64)
+        got := compress.FileReadAt(fp, 0 as i64, head, 1024)
+        compress.FileClose(fp)
+        f := Detect(head, got)
+        mem.Free(head)
+        mut disk := Archive { password = password }
+        disk.format = f
+        if size >= (0 as i64) and _auto_open_disk(path, password, f, disk):
+            disk.len = _auto_clamp(size)
+            disk.status = disk.fail
+            ret disk
+        end
+    end
     mut ok := false
     mut file := ReadBinaryFile(path, ok)
     if not ok:
@@ -538,6 +737,7 @@ end
 @en "Close"
 @fa "بستن بایگانی"
 pub func Close(arc &: Archive):
+    _auto_disk_close(arc)
     compress.BufFree(arc.inner)
     compress.BufFree(arc.file)
     arc.data = null
@@ -551,6 +751,9 @@ pub func List(arc &: Archive): Vector<Entry>:
     if arc.fail != 0:
         arc.status = arc.fail
         ret out
+    end
+    if arc.disk != 0:
+        ret _auto_disk_list(arc)
     end
     arc.status = ARCHIVE_OK
     f := arc.format
@@ -587,7 +790,24 @@ pub func Read(arc &: Archive, name: str): compress.ByteBuf:
     max := _auto_clamp(arc.limits.max_entry)
     mut st := ARCHIVE_OK
     f := arc.format
-    if f == FormatZip:
+    if arc.disk != 0:
+        mut cap := _auto_cap(arc)
+        if cap <= (0 as i64) or cap > (_AUTO_INT_MAX as i64):
+            cap = _AUTO_INT_MAX as i64
+        end
+        tmp := _auto_tmp_name()
+        st = _auto_disk_to(arc, name, tmp, cap)
+        if st == ARCHIVE_OK:
+            compress.BufFree(out)
+            mut rok := false
+            out = ReadBinaryFile(tmp, rok)
+            if not rok:
+                st = ARCHIVE_IO_ERROR
+            end
+        end
+        os.Remove(tmp)
+        mem.Free(tmp as void*)
+    else f == FormatZip:
         compress.BufFree(out)
         out = ZipExtractVerified(arc.data, arc.len, name, max, st)
     else _auto_is_tarish(f):
@@ -643,7 +863,10 @@ pub func ExtractAll(arc &: Archive, destdir: str): int:
     f := arc.format
     mut st := ARCHIVE_OK
     mut done := count
-    if f == FormatZip:
+    if arc.disk != 0:
+        st = _auto_disk_all(arc, destdir)
+        done = 0
+    else f == FormatZip:
         if not ZipExtractAll(arc.data, arc.len, destdir):
             mut checked := 0
             vr := ZipVerify(arc.data, arc.len, checked)
@@ -705,19 +928,27 @@ pub func Extract(arc &: Archive, name: str, destdir: str): bool:
     if isdir:
         EnsureDir(outpath)
     else:
-        mut data := Read(arc, name)
-        if arc.status == ARCHIVE_OK:
+        if arc.disk != 0:
             parent := filepath.Dir(outpath)
             EnsureDir(parent)
             mem.Free(parent as void*)
-            if not WriteBinaryFileBuf(outpath, data):
-                arc.status = ARCHIVE_IO_ERROR
+            arc.status = _auto_disk_to(arc, name, outpath, _auto_cap(arc))
+            ok = arc.status == ARCHIVE_OK
+        else:
+            mut data := Read(arc, name)
+            if arc.status == ARCHIVE_OK:
+                parent := filepath.Dir(outpath)
+                EnsureDir(parent)
+                mem.Free(parent as void*)
+                if not WriteBinaryFileBuf(outpath, data):
+                    arc.status = ARCHIVE_IO_ERROR
+                    ok = false
+                end
+            else:
                 ok = false
             end
-        else:
-            ok = false
+            compress.BufFree(data)
         end
-        compress.BufFree(data)
     end
     mem.Free(outpath as void*)
     ret ok

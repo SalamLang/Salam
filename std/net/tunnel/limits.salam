@@ -1,0 +1,112 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+@en "net/tunnel"
+@fa "تونل"
+package tunnel
+
+import mem
+import net.internal.rawsock
+
+@en "ConnLimits"
+@fa "سقف اتصال‌ها"
+pub struct ConnLimits:
+    @en "active"
+    @fa "فعال"
+    pub active: i64* = null
+    @en "max_connections"
+    @fa "بیشینه اتصال همزمان"
+    pub max_connections: int = 1024
+    @en "max_per_source"
+    @fa "بیشینه دست دادن مبدا"
+    pub max_per_source: int = 32
+    @en "deadline_ms"
+    @fa "مهلت کل دست‌دهی"
+    pub deadline_ms: int = 10000
+    @en "sources"
+    @fa "مبداها"
+    pub sources: SourceTable = SourceTable {}
+end
+
+@en "Admit"
+@fa "پذیرش"
+pub struct Admit:
+    @en "ok"
+    @fa "موفق"
+    pub ok: bool = false
+    @en "host"
+    @fa "مبدا"
+    pub host: str = ""
+    @en "ticket"
+    @fa "برگه پایش"
+    pub ticket: i64 = 0
+    @en "counted"
+    @fa "شمرده شده"
+    pub counted: bool = false
+    @en "held"
+    @fa "نگه داشته"
+    pub held: bool = false
+    @en "done"
+    @fa "تمام شده"
+    pub done: bool = false
+end
+
+@en "NewConnLimits"
+@fa "سقف اتصال‌های جدید"
+pub func NewConnLimits(max_connections: int, max_per_source: int, deadline_ms: int): ConnLimits:
+    active := mem.AllocateZeroed(8 as u64) as i64*
+    ret ConnLimits { active = active, max_connections = max_connections, max_per_source = max_per_source, deadline_ms = deadline_ms, sources = NewSourceTable() }
+end
+
+@en "LimitsEnter"
+@fa "ورود به سقف‌ها"
+pub func LimitsEnter(l: ConnLimits, fd: i64): Admit:
+    mut a := Admit { done = true }
+    if l.active == null: ret a end
+    if l.max_connections > 0 and atomic_load(l.active) >= (l.max_connections as i64): ret a end
+    a.host = rawsock.PeerHost(rawsock.FromFd(fd))
+    if not SourceEnter(l.sources, a.host, l.max_per_source): ret a end
+    a.counted = l.max_per_source > 0 and a.host.len() > 0
+    _n := atomic_add(l.active, 1 as i64)
+    a.held = true
+    a.ok = true
+    a.done = false
+    a.ticket = WatchHandshake(fd, l.deadline_ms)
+    ret a
+end
+
+@en "LimitsHandshakeDone"
+@fa "پایان دست‌دهی در سقف‌ها"
+pub func LimitsHandshakeDone(l: ConnLimits, a &: Admit):
+    if a.done: ret end
+    a.done = true
+    _in_time := WatchDone(a.ticket)
+    if a.counted: SourceLeave(l.sources, a.host) end
+end
+
+@en "LimitsRelease"
+@fa "رها کردن سقف‌ها"
+pub func LimitsRelease(l: ConnLimits, a &: Admit):
+    LimitsHandshakeDone(l, a)
+    if a.held:
+        a.held = false
+        _n := atomic_add(l.active, 0 - 1 as i64)
+    end
+end
+
+@en "LimitsActive"
+@fa "اتصال‌های فعال"
+pub func LimitsActive(l: ConnLimits): i64:
+    if l.active == null: ret 0 end
+    ret atomic_load(l.active)
+end

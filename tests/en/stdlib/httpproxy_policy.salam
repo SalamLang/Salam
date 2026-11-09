@@ -1,0 +1,93 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import net.httpproxy
+import net.socks
+import net.tcp
+import net.tunnel
+
+func origin_conn(arg: i64):
+    c := tcp.ConnFromFd(arg)
+    d := tcp.Read(c, 4096)
+    if d.len() > 0:
+        tcp.Write(c, "HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\norigin")
+    end
+    tcp.Close(c)
+end
+
+func origin_accept(arg: i64):
+    srv := tcp.Server { fd = arg }
+    until true:
+        c := tcp.Accept(srv)
+        if not tcp.ConnOk(c): break end
+        socks.Go(origin_conn, c.fd as void*)
+    end
+end
+
+func show(label: str, r: httpproxy.Response):
+    println label + ": ok=" + r.ok + " status=" + r.status + " body=[" + r.body + "]"
+end
+
+func connect_status(label: str, cl: httpproxy.Client, host: str, port: int):
+    r := httpproxy.Connect(cl, host, port)
+    println label + ": " + r.status
+    if r.ok:
+        r.stream.Close()
+    end
+end
+
+func main:
+    osock := tcp.Bind(0)
+    oport := tcp.Port(osock)
+    socks.Go(origin_accept, osock.fd as void*)
+    ob := "http://127.0.0.1:" + oport + "/"
+
+    dsv := httpproxy.Start(httpproxy.NewServerConfig(0))
+    dcl := httpproxy.NewClient("127.0.0.1", dsv.port)
+    show("default, plain request to loopback", httpproxy.Get(dcl, ob))
+    show("default, plain request to a loopback name", httpproxy.Get(dcl, "http://localhost:" + oport + "/"))
+    show("default, plain request to the metadata address", httpproxy.Get(dcl, "http://169.254.169.254/latest/meta-data/"))
+    show("default, plain request to a private address", httpproxy.Get(dcl, "http://192.168.0.1/"))
+    connect_status("default, connect to loopback", dcl, "127.0.0.1", oport)
+    connect_status("default, connect to a private address", dcl, "10.0.0.1", 443)
+    connect_status("default, connect to a mapped address", dcl, "::ffff:a00:1", 443)
+    httpproxy.Stop(dsv)
+
+    mut apcfg := httpproxy.NewServerConfig(0)
+    httpproxy.AllowPrivate(apcfg, true)
+    asv := httpproxy.Start(apcfg)
+    acl_c := httpproxy.NewClient("127.0.0.1", asv.port)
+    show("allow_private on loopback, plain request", httpproxy.Get(acl_c, ob))
+    connect_status("allow_private on loopback, connect", acl_c, "127.0.0.1", oport)
+    httpproxy.Stop(asv)
+
+    mut widecfg := httpproxy.NewServerConfig(0)
+    widecfg.bind_host = "0.0.0.0"
+    httpproxy.AllowPrivate(widecfg, true)
+    wsv := httpproxy.Start(widecfg)
+    wcl := httpproxy.NewClient("127.0.0.1", wsv.port)
+    show("allow_private on a public bind is ignored", httpproxy.Get(wcl, ob))
+    httpproxy.Stop(wsv)
+
+    mut aclcfg := httpproxy.NewServerConfig(0)
+    httpproxy.AllowPrivate(aclcfg, true)
+    tunnel.PolicyDenySuffix(aclcfg.policy, "blocked.example")
+    tunnel.PolicyDenyCidr(aclcfg.policy, "10.0.0.0/8")
+    ssv := httpproxy.Start(aclcfg)
+    scl := httpproxy.NewClient("127.0.0.1", ssv.port)
+    show("deny domain suffix", httpproxy.Get(scl, "http://www.blocked.example/"))
+    connect_status("deny cidr", scl, "10.1.2.3", 443)
+    show("everything else on loopback still works", httpproxy.Get(scl, ob))
+    httpproxy.Stop(ssv)
+end

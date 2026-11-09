@@ -1,0 +1,256 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+
+package typeset
+
+import str
+
+@en "FontMetrics"
+@fa "متریک قلم"
+pub struct FontMetrics:
+    @en "units_per_em"
+    @fa "واحد ام"
+    pub units_per_em: int = 0
+    @en "ascent"
+    @fa "صعود"
+    pub ascent: int = 0
+    @en "descent"
+    @fa "نزول"
+    pub descent: int = 0
+    @en "line_gap"
+    @fa "فاصله سطرها"
+    pub line_gap: int = 0
+    @en "x_height"
+    @fa "ارتفاع ایکس"
+    pub x_height: int = 0
+    @en "cap_height"
+    @fa "ارتفاع حرف بزرگ"
+    pub cap_height: int = 0
+    @en "underline_position"
+    @fa "جای زیرخط"
+    pub underline_position: int = 0
+    @en "underline_thickness"
+    @fa "ضخامت زیرخط"
+    pub underline_thickness: int = 0
+end
+
+func _name_score(plat: int, enc: int, lang: int): int:
+    if plat == 3 and (enc == 1 or enc == 10) and lang == 0x409: ret 5 end
+    if plat == 3 and (enc == 1 or enc == 10): ret 4 end
+    if plat == 0: ret 3 end
+    if plat == 1 and enc == 0 and lang == 0: ret 2 end
+    if plat == 1 and enc == 0: ret 1 end
+    ret 0
+end
+
+func _name_decode(f: Font, at: int, len: int, utf16: bool): str:
+    mut sb := str.NewBuilder()
+    defer str.BufFree(sb)
+    if utf16:
+        mut i := 0
+        until i + 1 < len:
+            mut cp := _ttf_u16(f.data, f.size, at + i)
+            i += 2
+            if cp >= 0xD800 and cp < 0xDC00 and i + 1 < len:
+                lo := _ttf_u16(f.data, f.size, at + i)
+                if lo >= 0xDC00 and lo < 0xE000:
+                    cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00)
+                    i += 2
+                end
+            end
+            if cp != 0:
+                str.BufAppendCp(sb, cp)
+            end
+        end
+    else:
+        mut i := 0
+        until i < len:
+            b := _ttf_u8(f.data, f.size, at + i)
+            if b != 0:
+                str.BufAppendCp(sb, b < 128 ? b : 0xFFFD)
+            end
+            i++
+        end
+    end
+    ret str.BufStr(sb)
+end
+
+func _os2_u16(f: Font, off: int): int:
+    if f.os2 == 0:
+        ret 0
+    end
+    ret _ttf_u16(f.data, f.size, f.os2 + off)
+end
+
+func _os2_i16(f: Font, off: int): int:
+    if f.os2 == 0:
+        ret 0
+    end
+    ret _ttf_i16(f.data, f.size, f.os2 + off)
+end
+
+func _glyph_top(f: Font, cp: int): int:
+    mut x0 := 0
+    mut y0 := 0
+    mut x1 := 0
+    mut y1 := 0
+    if GlyphBox(f, GlyphIndex(f, cp), x0, y0, x1, y1):
+        ret y1
+    end
+    ret 0
+end
+
+@en "NameString"
+@fa "متن نام"
+pub func NameString(f: Font, name_id: int): str:
+    if not FontValid(f) or f.name == 0:
+        ret ""
+    end
+    count := _ttf_u16(f.data, f.size, f.name + 2)
+    strings := f.name + _ttf_u16(f.data, f.size, f.name + 4)
+    mut best := -1
+    mut best_score := 0
+    mut i := 0
+    until i < count:
+        rec := f.name + 6 + i * 12
+        if _ttf_u16(f.data, f.size, rec + 6) == name_id:
+            sc := _name_score(_ttf_u16(f.data, f.size, rec), _ttf_u16(f.data, f.size, rec + 2), _ttf_u16(f.data, f.size, rec + 4))
+            if sc > best_score:
+                best_score = sc
+                best = rec
+            end
+        end
+        i++
+    end
+    if best < 0:
+        ret ""
+    end
+    plat := _ttf_u16(f.data, f.size, best)
+    ln := _ttf_u16(f.data, f.size, best + 8)
+    at := strings + _ttf_u16(f.data, f.size, best + 10)
+    ret _name_decode(f, at, ln, plat != 1)
+end
+
+@en "FamilyName"
+@fa "نام خانواده"
+pub func FamilyName(f: Font): str:
+    typo := NameString(f, 16)
+    if str.Len(typo) > 0:
+        ret typo
+    end
+    ret NameString(f, 1)
+end
+
+@en "StyleName"
+@fa "نام سبک قلم"
+pub func StyleName(f: Font): str:
+    typo := NameString(f, 17)
+    if str.Len(typo) > 0:
+        ret typo
+    end
+    ret NameString(f, 2)
+end
+
+@en "FullName"
+@fa "نام کامل قلم"
+pub func FullName(f: Font): str:
+    ret NameString(f, 4)
+end
+
+@en "Weight"
+@fa "وزن قلم"
+pub func Weight(f: Font): int:
+    w := _os2_u16(f, 4)
+    if w >= 1 and w <= 1000:
+        ret w
+    end
+    if f.head != 0 and (_ttf_u16(f.data, f.size, f.head + 44) & 1) != 0:
+        ret 700
+    end
+    ret 400
+end
+
+@en "IsItalic"
+@fa "مورب است"
+pub func IsItalic(f: Font): bool:
+    if f.os2 != 0:
+        ret (_os2_u16(f, 62) & 0x201) != 0
+    end
+    if f.head != 0:
+        ret (_ttf_u16(f.data, f.size, f.head + 44) & 2) != 0
+    end
+    ret false
+end
+
+@en "Metrics"
+@fa "متریک‌ها"
+pub func Metrics(f: Font): FontMetrics:
+    mut m := FontMetrics {}
+    if not FontValid(f):
+        ret m
+    end
+    m.units_per_em = f.units_per_em
+    m.ascent = f.ascent
+    m.descent = 0 - f.descent
+    m.line_gap = f.line_gap
+    if f.os2 != 0:
+        use_typo := (_os2_u16(f, 62) & 0x80) != 0
+        hhea_zero := f.hhea == 0 or (_ttf_i16(f.data, f.size, f.hhea + 4) == 0 and _ttf_i16(f.data, f.size, f.hhea + 6) == 0)
+        if use_typo or hhea_zero:
+            ta := _os2_i16(f, 68)
+            td := _os2_i16(f, 70)
+            if ta != 0 or td != 0:
+                m.ascent = ta
+                m.descent = 0 - td
+                m.line_gap = _os2_i16(f, 72)
+            else:
+                m.ascent = _os2_u16(f, 74)
+                m.descent = _os2_u16(f, 76)
+                m.line_gap = 0
+            end
+        end
+        if _os2_u16(f, 0) >= 2:
+            m.x_height = _os2_i16(f, 86)
+            m.cap_height = _os2_i16(f, 88)
+        end
+    end
+    if m.x_height <= 0:
+        m.x_height = _glyph_top(f, 0x78)
+    end
+    if m.cap_height <= 0:
+        m.cap_height = _glyph_top(f, 0x48)
+    end
+    if f.post != 0:
+        m.underline_position = _ttf_i16(f.data, f.size, f.post + 8)
+        m.underline_thickness = _ttf_i16(f.data, f.size, f.post + 10)
+    end
+    if m.underline_thickness <= 0:
+        m.underline_thickness = f.units_per_em / 14
+        m.underline_position = 0 - f.units_per_em / 10
+    end
+    ret m
+end
+
+@en "FaceCount"
+@fa "شمار چهره‌ها"
+pub func FaceCount(p: void*, n: int): int:
+    if p == null or n < 12:
+        ret 0
+    end
+    if _ttf_u32(p, n, 0) == _TTF_SFNT_TTCF:
+        ret _ttf_u32(p, n, 8)
+    end
+    ret 1
+end

@@ -1,0 +1,569 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+
+package typeset
+
+import mem
+import str
+import os
+import filepath
+import unicode
+
+extern:
+    func fopen(path: str, mode: str): void*
+    func fclose(fp: void*): int
+    func fread(ptr: void*, size: u64, nmemb: u64, stream: void*): u64
+    func fseek(fp: void*, off: int, whence: int): int
+end
+
+@en "FontFace"
+@fa "چهره قلم"
+pub struct FontFace:
+    @en "path"
+    @fa "مسیر"
+    pub path: str = ""
+    @en "index"
+    @fa "اندیس چهره"
+    pub index: int = 0
+    @en "family"
+    @fa "خانواده"
+    pub family: str = ""
+    @en "style"
+    @fa "سبک"
+    pub style: str = ""
+    @en "weight"
+    @fa "وزن"
+    pub weight: int = 400
+    @en "italic"
+    @fa "مورب"
+    pub italic: bool = false
+    @en "loaded"
+    @fa "بارشده"
+    pub loaded: bool = false
+    @en "failed"
+    @fa "ناموفق"
+    pub failed: bool = false
+    @en "font"
+    @fa "قلم بارشده"
+    pub font: Font = Font {}
+end
+
+@en "FontCollection"
+@fa "مجموعه قلم"
+pub struct FontCollection:
+    @en "faces"
+    @fa "چهره‌ها"
+    pub faces: Vector<FontFace> = Vector {}
+    @en "fallback"
+    @fa "جایگزین‌ها"
+    pub fallback: HashMap<int, int> = HashMap {}
+end
+
+func _fc_read(fp: void*, off: int, n: int): void*:
+    if n <= 0 or n > 64 * 1024 * 1024 or off < 0:
+        ret null
+    end
+    if fseek(fp, off, 0) != 0:
+        ret null
+    end
+    buf := mem.AllocateZeroed(n as u64)
+    got := fread(buf, 1 as u64, n as u64, fp)
+    if (got as int) != n:
+        mem.Free(buf)
+        ret null
+    end
+    ret buf
+end
+
+func _fc_be32(p: void*, off: int): int:
+    ret _ttf_u32(p, off + 4, off)
+end
+
+func _fc_meta(fp: void*, dir_off: int, face &: FontFace): bool:
+    hdr := _fc_read(fp, dir_off, 12)
+    if hdr == null:
+        ret false
+    end
+    ver := _ttf_u32(hdr, 12, 0)
+    nt := _ttf_u16(hdr, 12, 4)
+    mem.Free(hdr)
+    if ver != _TTF_SFNT_10 and ver != _TTF_SFNT_TRUE:
+        ret false
+    end
+    dir := _fc_read(fp, dir_off + 12, nt * 16)
+    if dir == null:
+        ret false
+    end
+    dn := nt * 16
+    mut name_off := 0
+    mut name_len := 0
+    mut os2_off := 0
+    mut os2_len := 0
+    mut head_off := 0
+    mut head_len := 0
+    mut glyf := false
+    mut i := 0
+    until i < nt:
+        tag := _ttf_u32(dir, dn, i * 16)
+        o := _ttf_u32(dir, dn, i * 16 + 8)
+        l := _ttf_u32(dir, dn, i * 16 + 12)
+        if tag == _TTF_TAG_NAME:
+            name_off = o
+            name_len = l
+        end
+        if tag == _TTF_TAG_OS2:
+            os2_off = o
+            os2_len = l
+        end
+        if tag == _TTF_TAG_HEAD:
+            head_off = o
+            head_len = l
+        end
+        if tag == _TTF_TAG_GLYF:
+            glyf = true
+        end
+        i++
+    end
+    mem.Free(dir)
+    if not glyf or name_len <= 0:
+        ret false
+    end
+    total := 4 + name_len + os2_len + head_len
+    buf := mem.AllocateZeroed(total as u64)
+    mut f := Font {}
+    f.data = buf
+    f.size = total
+    f.ok = true
+    f.units_per_em = 1
+    mut good := true
+    nb := _fc_read(fp, name_off, name_len)
+    if nb == null:
+        good = false
+    else:
+        mem.Copy(((buf as i64) + (4 as i64)) as void*, nb, name_len as u64)
+        mem.Free(nb)
+        f.name = 4
+    end
+    if good and os2_len > 0:
+        ob := _fc_read(fp, os2_off, os2_len)
+        if ob != null:
+            mem.Copy(((buf as i64) + ((4 + name_len) as i64)) as void*, ob, os2_len as u64)
+            mem.Free(ob)
+            f.os2 = 4 + name_len
+        end
+    end
+    if good and head_len > 0:
+        hb := _fc_read(fp, head_off, head_len)
+        if hb != null:
+            mem.Copy(((buf as i64) + ((4 + name_len + os2_len) as i64)) as void*, hb, head_len as u64)
+            mem.Free(hb)
+            f.head = 4 + name_len + os2_len
+        end
+    end
+    if good:
+        face.family = FamilyName(f)
+        face.style = StyleName(f)
+        face.weight = Weight(f)
+        face.italic = IsItalic(f)
+    end
+    mem.Free(buf)
+    ret good and str.Len(face.family) > 0
+end
+
+func _fc_scan_file(fc &: FontCollection, path: str): int:
+    fp := fopen(path, "rb")
+    if fp == null:
+        ret 0
+    end
+    head := _fc_read(fp, 0, 12)
+    if head == null:
+        fclose(fp)
+        ret 0
+    end
+    mut offsets := Vector {} as Vector<int>
+    defer offsets.free()
+    if _ttf_u32(head, 12, 0) == _TTF_SFNT_TTCF:
+        n := _ttf_u32(head, 12, 8)
+        if n > 0 and n < 256:
+            tab := _fc_read(fp, 12, n * 4)
+            if tab != null:
+                mut k := 0
+                until k < n:
+                    offsets.push(_ttf_u32(tab, n * 4, k * 4))
+                    k++
+                end
+                mem.Free(tab)
+            end
+        end
+    else:
+        offsets.push(0)
+    end
+    mem.Free(head)
+    mut added := 0
+    mut k := 0
+    until k < offsets.len():
+        mut face := FontFace {}
+        face.path = path
+        face.index = k
+        if _fc_meta(fp, offsets.get(k), face):
+            fc.faces.push(face)
+            added++
+        end
+        k++
+    end
+    fclose(fp)
+    ret added
+end
+
+func _fc_is_font_name(p: str): bool:
+    l := str.Lower(p)
+    ok := str.EndsWith(l, ".ttf") or str.EndsWith(l, ".ttc") or str.EndsWith(l, ".otf") or str.EndsWith(l, ".otc")
+    mem.Free(l as void*)
+    ret ok
+end
+
+func _fc_sort(v &: Vector<str>):
+    mut i := 1
+    until i < v.len():
+        x := v.get(i)
+        mut j := i
+        until j > 0 and str.Compare(v.get(j - 1), x) > 0:
+            v.set(j, v.get(j - 1))
+            j--
+        end
+        v.set(j, x)
+        i++
+    end
+end
+
+func _fc_family_list(families: str, out &: Vector<str>):
+    parts := str.Split(families, ",")
+    each p in parts:
+        mut t := str.Trim(p)
+        if str.StartsWith(t, "\"") or str.StartsWith(t, "'"):
+            t = str.Substr(t, 1, str.Len(t) - 2)
+        end
+        if str.Len(t) > 0:
+            out.push(t)
+        end
+    end
+    parts.free()
+end
+
+func _fc_generic(name: str, out &: Vector<str>): bool:
+    l := str.Lower(name)
+    defer mem.Free(l as void*)
+    if str.Equals(l, "sans-serif") or str.Equals(l, "system-ui") or str.Equals(l, "ui-sans-serif"):
+        _fc_family_list("Vazirmatn, Segoe UI, Arial, Helvetica, Noto Sans, DejaVu Sans, Liberation Sans, Tahoma", out)
+        ret true
+    end
+    if str.Equals(l, "serif") or str.Equals(l, "ui-serif"):
+        _fc_family_list("Noto Serif, Times New Roman, Times, DejaVu Serif, Liberation Serif, Noto Naskh Arabic", out)
+        ret true
+    end
+    if str.Equals(l, "monospace") or str.Equals(l, "ui-monospace"):
+        _fc_family_list("DejaVu Sans Mono, Consolas, Menlo, Liberation Mono, Noto Sans Mono, Courier New", out)
+        ret true
+    end
+    ret false
+end
+
+func _fc_script_fallback(sc: int, out &: Vector<str>):
+    if sc == unicode.ScriptArabic:
+        _fc_family_list("Vazirmatn, Noto Naskh Arabic, Noto Sans Arabic, Segoe UI, Tahoma, Geeza Pro, Arial, DejaVu Sans", out)
+        ret
+    end
+    if sc == unicode.ScriptHebrew:
+        _fc_family_list("Noto Sans Hebrew, Arial, Segoe UI, DejaVu Sans", out)
+        ret
+    end
+    if sc == unicode.ScriptHan or sc == unicode.ScriptHiragana or sc == unicode.ScriptKatakana or sc == unicode.ScriptBopomofo:
+        _fc_family_list("Noto Sans CJK SC, Noto Sans CJK JP, Source Han Sans, Microsoft YaHei, PingFang SC, Hiragino Sans, WenQuanYi Micro Hei, MS Gothic", out)
+        ret
+    end
+    if sc == unicode.ScriptHangul:
+        _fc_family_list("Noto Sans CJK KR, Malgun Gothic, Apple SD Gothic Neo, NanumGothic", out)
+        ret
+    end
+    _fc_family_list("DejaVu Sans, Segoe UI, Arial, Helvetica, Noto Sans, Liberation Sans, Segoe UI Symbol", out)
+end
+
+func _fc_reset(fc &: FontCollection):
+    fc.fallback.free()
+    fc.fallback = HashMap {} as HashMap<int, int>
+end
+
+func _fc_load(fc &: FontCollection, i: int): bool:
+    mut face := fc.faces.get(i)
+    if face.loaded:
+        ret true
+    end
+    if face.failed:
+        ret false
+    end
+    mut ok := false
+    f := LoadFontIndex(face.path, face.index, ok)
+    if ok:
+        face.font = f
+        face.loaded = true
+    else:
+        face.failed = true
+    end
+    fc.faces.set(i, face)
+    ret ok
+end
+
+func _fc_covers(fc &: FontCollection, i: int, cp: int): bool:
+    if not _fc_load(fc, i):
+        ret false
+    end
+    ret GlyphIndex(fc.faces.get(i).font, cp) != 0
+end
+
+func _fc_match(fc &: FontCollection, family: str, weight: int, italic: bool, cp: int): int:
+    mut best := -1
+    mut best_score := 0
+    mut i := 0
+    until i < fc.faces.len():
+        face := fc.faces.get(i)
+        if str.EqualFold(face.family, family) and not face.failed:
+            mut score := 100000
+            if face.italic != italic:
+                score -= 10000
+            end
+            mut d := face.weight - weight
+            if d < 0:
+                d = 0 - d
+                if weight > 500:
+                    d += 50
+                end
+            else weight <= 500:
+                d += 50
+            end
+            score -= d
+            if score > best_score and (cp < 0 or _fc_covers(fc, i, cp)):
+                best = i
+                best_score = score
+            end
+        end
+        i++
+    end
+    ret best
+end
+
+@en "NewFontCollection"
+@fa "مجموعه قلم تازه"
+pub func NewFontCollection(): FontCollection:
+    ret FontCollection {}
+end
+
+@en "AddFont"
+@fa "افزودن قلم"
+pub func AddFont(fc &: FontCollection, f: Font): int:
+    if not FontValid(f):
+        ret -1
+    end
+    mut face := FontFace {}
+    face.family = FamilyName(f)
+    face.style = StyleName(f)
+    face.weight = Weight(f)
+    face.italic = IsItalic(f)
+    face.index = f.index
+    face.font = f
+    face.loaded = true
+    fc.faces.push(face)
+    _fc_reset(fc)
+    ret fc.faces.len() - 1
+end
+
+@en "AddFontBytes"
+@fa "افزودن قلم از بایت‌ها"
+pub func AddFontBytes(fc &: FontCollection, p: void*, n: int): int:
+    count := FaceCount(p, n)
+    mut added := 0
+    mut k := 0
+    until k < count:
+        mut ok := false
+        f := ParseFontIndex(p, n, k, ok)
+        if ok:
+            AddFont(fc, f)
+            added++
+        end
+        k++
+    end
+    ret added
+end
+
+@en "AddFontFile"
+@fa "افزودن پرونده قلم"
+pub func AddFontFile(fc &: FontCollection, path: str): int:
+    added := _fc_scan_file(fc, path)
+    if added > 0:
+        _fc_reset(fc)
+    end
+    ret added
+end
+
+@en "SystemFontDirs"
+@fa "پوشه‌های قلم سیستم"
+pub func SystemFontDirs(): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    if SALAM_OS_WINDOWS:
+        win := os.Env("WINDIR")
+        if str.Len(win) > 0:
+            out.push(filepath.Join(win, "Fonts"))
+        else:
+            out.push("C:\\Windows\\Fonts")
+        end
+        local := os.Env("LOCALAPPDATA")
+        if str.Len(local) > 0:
+            out.push(filepath.Join(local, "Microsoft\\Windows\\Fonts"))
+        end
+    else SALAM_OS_MAC:
+        out.push("/System/Library/Fonts")
+        out.push("/Library/Fonts")
+        home := os.Env("HOME")
+        if str.Len(home) > 0:
+            out.push(filepath.Join(home, "Library/Fonts"))
+        end
+    else:
+        out.push("/usr/share/fonts")
+        out.push("/usr/local/share/fonts")
+        home := os.Env("HOME")
+        if str.Len(home) > 0:
+            out.push(filepath.Join(home, ".local/share/fonts"))
+            out.push(filepath.Join(home, ".fonts"))
+        end
+        xdg := os.Env("XDG_DATA_HOME")
+        if str.Len(xdg) > 0:
+            out.push(filepath.Join(xdg, "fonts"))
+        end
+    end
+    ret out
+end
+
+@en "AddFontDir"
+@fa "افزودن پوشه قلم"
+pub func AddFontDir(fc &: FontCollection, dir: str): int:
+    if not os.IsDir(dir):
+        ret 0
+    end
+    mut files := os.Walk(dir)
+    defer files.free()
+    _fc_sort(files)
+    mut added := 0
+    each p in files:
+        if _fc_is_font_name(p):
+            added += _fc_scan_file(fc, p)
+        end
+    end
+    if added > 0:
+        _fc_reset(fc)
+    end
+    ret added
+end
+
+@en "AddSystemFonts"
+@fa "افزودن قلم‌های سیستم"
+pub func AddSystemFonts(fc &: FontCollection): int:
+    mut dirs := SystemFontDirs()
+    defer dirs.free()
+    mut added := 0
+    each d in dirs:
+        added += AddFontDir(fc, d)
+    end
+    ret added
+end
+
+@en "FaceCountIn"
+@fa "شمار چهره‌های مجموعه"
+pub func FaceCountIn(fc: FontCollection): int:
+    ret fc.faces.len()
+end
+
+@en "FaceFont"
+@fa "قلم چهره"
+pub func FaceFont(fc &: FontCollection, face: int): Font:
+    if face < 0 or face >= fc.faces.len() or not _fc_load(fc, face):
+        ret Font {}
+    end
+    ret fc.faces.get(face).font
+end
+
+@en "FindFace"
+@fa "یافتن چهره"
+pub func FindFace(fc &: FontCollection, family: str, weight: int, italic: bool): int:
+    ret _fc_match(fc, family, weight, italic, -1)
+end
+
+@en "FaceForCodepoint"
+@fa "چهره برای نویسه"
+pub func FaceForCodepoint(fc &: FontCollection, families: str, weight: int, italic: bool, cp: int): int:
+    mut names := Vector {} as Vector<str>
+    defer names.free()
+    _fc_family_list(families, names)
+    mut expanded := Vector {} as Vector<str>
+    defer expanded.free()
+    each n in names:
+        if not _fc_generic(n, expanded):
+            expanded.push(n)
+        end
+    end
+    each n in expanded:
+        r := _fc_match(fc, n, weight, italic, cp)
+        if r >= 0:
+            ret r
+        end
+    end
+    key := (cp << 1) | (italic ? 1 : 0)
+    if fc.fallback.has(key):
+        ret fc.fallback.get(key)
+    end
+    mut chain := Vector {} as Vector<str>
+    defer chain.free()
+    _fc_script_fallback(unicode.Script(cp), chain)
+    mut found := -1
+    each n in chain:
+        if found < 0:
+            found = _fc_match(fc, n, weight, italic, cp)
+        end
+    end
+    mut i := 0
+    until found < 0 and i < fc.faces.len():
+        if _fc_covers(fc, i, cp):
+            found = i
+        end
+        i++
+    end
+    fc.fallback.put(key, found)
+    ret found
+end
+
+@en "FreeFontCollection"
+@fa "آزادسازی مجموعه قلم"
+pub func FreeFontCollection(fc &: FontCollection):
+    mut i := 0
+    until i < fc.faces.len():
+        mut face := fc.faces.get(i)
+        if face.loaded:
+            FreeFont(face.font)
+        end
+        i++
+    end
+    fc.faces.free()
+    fc.fallback.free()
+    fc.faces = Vector {} as Vector<FontFace>
+    fc.fallback = HashMap {} as HashMap<int, int>
+end

@@ -12,7 +12,7 @@
  *
  */
 
-package image
+package typeset
 
 import math
 
@@ -29,6 +29,26 @@ end
 struct _Cross:
     pub x: f64 = 0.0
     pub dir: int = 0
+end
+
+@en "CoverageRows"
+@fa "سطرهای پوشش"
+pub struct CoverageRows:
+    @en "x"
+    @fa "ایکس"
+    pub x: int = 0
+    @en "y"
+    @fa "ایگرگ"
+    pub y: int = 0
+    @en "width"
+    @fa "پهنا"
+    pub width: int = 0
+    @en "height"
+    @fa "بلندی"
+    pub height: int = 0
+    @en "values"
+    @fa "مقدارها"
+    pub values: Vector<f64> = Vector {}
 end
 
 func _ttf_clampi(v: int, lo: int, hi: int): int:
@@ -79,7 +99,7 @@ func _quad_to(edges &: Vector<_Edge>, x0: f64, y0: f64, cx: f64, cy: f64, x1: f6
     end
 end
 
-func _contour_edges(pts &: Vector<_GlyphPoint>, s: int, e: int, edges &: Vector<_Edge>):
+func _contour_edges(pts &: Vector<OutlinePoint>, s: int, e: int, edges &: Vector<_Edge>):
     if e - s < 2:
         ret
     end
@@ -139,7 +159,7 @@ func _contour_edges(pts &: Vector<_GlyphPoint>, s: int, e: int, edges &: Vector<
     end
 end
 
-func _build_edges(pts &: Vector<_GlyphPoint>, ends &: Vector<int>, edges &: Vector<_Edge>):
+func _build_edges(pts &: Vector<OutlinePoint>, ends &: Vector<int>, edges &: Vector<_Edge>):
     mut s := 0
     mut k := 0
     until k < ends.len():
@@ -202,24 +222,6 @@ func _accumulate_spans(xs &: Vector<_Cross>, acc &: Vector<f64>, xoff: int, w: i
     end
 end
 
-func _blit_coverage(img &: Image, acc &: Vector<f64>, xoff: int, w: int, py: int, c: Color):
-    ca := c.a as int
-    mut i := 0
-    until i < w:
-        mut cov := acc.get(i)
-        if cov > 0.002:
-            if cov > 1.0:
-                cov = 1.0
-            end
-            alpha := ((ca as f64) * cov + 0.5) as int
-            if alpha > 0:
-                BlendPixel(img, xoff + i, py, RGBA(c.r as int, c.g as int, c.b as int, alpha))
-            end
-        end
-        i++
-    end
-end
-
 func _gr_msort(idx &: Vector<int>, keys &: Vector<f64>, tmp &: Vector<int>, lo: int, hi: int):
     if hi - lo < 2:
         ret
@@ -254,9 +256,9 @@ func _gr_sort(idx &: Vector<int>, keys &: Vector<f64>, tmp &: Vector<int>):
     _gr_msort(idx, keys, tmp, 0, idx.len())
 end
 
-func _fill_edges(img &: Image, edges &: Vector<_Edge>, c: Color):
+func _fill_edges(out &: CoverageRows, clip_w: int, clip_h: int, edges &: Vector<_Edge>):
     n := edges.len()
-    if n == 0 or img.pixels == null:
+    if n == 0 or clip_w <= 0 or clip_h <= 0:
         ret
     end
     mut minx := 1.0e30
@@ -278,10 +280,10 @@ func _fill_edges(img &: Image, edges &: Vector<_Edge>, c: Color):
         order.push(i)
         i++
     end
-    x0 := _ttf_clampi(math.Floor(minx) as int, 0, img.width)
-    x1 := _ttf_clampi((math.Floor(maxx) as int) + 1, 0, img.width)
-    y0 := _ttf_clampi(math.Floor(miny) as int, 0, img.height)
-    y1 := _ttf_clampi((math.Floor(maxy) as int) + 1, 0, img.height)
+    x0 := _ttf_clampi(math.Floor(minx) as int, 0, clip_w)
+    x1 := _ttf_clampi((math.Floor(maxx) as int) + 1, 0, clip_w)
+    y0 := _ttf_clampi(math.Floor(miny) as int, 0, clip_h)
+    y1 := _ttf_clampi((math.Floor(maxy) as int) + 1, 0, clip_h)
     if x1 <= x0 or y1 <= y0:
         ykeys.free()
         order.free()
@@ -290,6 +292,11 @@ func _fill_edges(img &: Image, edges &: Vector<_Edge>, c: Color):
     mut tmp := Vector {} as Vector<int>
     _gr_sort(order, ykeys, tmp)
     w := x1 - x0
+    out.x = x0
+    out.y = y0
+    out.width = w
+    out.height = y1 - y0
+    out.values.zeros(w * (y1 - y0))
     step := 1.0 / (_TTF_SUBSAMPLES as f64)
     mut acc := Vector {} as Vector<f64>
     acc.zeros(w)
@@ -348,7 +355,12 @@ func _fill_edges(img &: Image, edges &: Vector<_Edge>, c: Color):
             _accumulate_spans(sorted, acc, x0, w, step)
             s++
         end
-        _blit_coverage(img, acc, x0, w, py, c)
+        row := (py - y0) * w
+        mut q2 := 0
+        until q2 < w:
+            out.values.set(row + q2, acc.get(q2))
+            q2++
+        end
         py++
     end
     acc.free()
@@ -362,20 +374,26 @@ func _fill_edges(img &: Image, edges &: Vector<_Edge>, c: Color):
     order.free()
 end
 
-func _draw_glyph_xform(img &: Image, f: Font, glyph: int, a: f64, b: f64, c: f64, d: f64, dx: f64, dy: f64, col: Color):
-    if not FontValid(f) or img.pixels == null:
-        ret
-    end
-    mut pts := Vector {} as Vector<_GlyphPoint>
-    mut ends := Vector {} as Vector<int>
+@en "OutlineCoverage"
+@fa "پوشش طرح"
+pub func OutlineCoverage(o: GlyphOutline, clip_width: int, clip_height: int): CoverageRows:
+    mut out := CoverageRows {}
     mut edges := Vector {} as Vector<_Edge>
-    mut work := 0
-    _ttf_append_glyph(f, glyph, a, b, c, d, dx, dy, pts, ends, 0, work)
+    mut pts := o.points
+    mut ends := o.ends
     _build_edges(pts, ends, edges)
     if edges.len() <= 65536:
-        _fill_edges(img, edges, col)
+        _fill_edges(out, clip_width, clip_height, edges)
     end
-    pts.free()
-    ends.free()
     edges.free()
+    ret out
+end
+
+@en "FreeCoverageRows"
+@fa "آزادسازی سطرهای پوشش"
+pub func FreeCoverageRows(c &: CoverageRows):
+    c.values.free()
+    c.values = Vector {} as Vector<f64>
+    c.width = 0
+    c.height = 0
 end

@@ -1,0 +1,399 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+
+package typeset
+
+import unicode
+
+const _OTL_MAX_DEPTH := 6
+const _LF_IGNORE_BASE := 2
+const _LF_IGNORE_LIGS := 4
+const _LF_IGNORE_MARKS := 8
+const _LF_FILTER_SET := 0x10
+
+struct _Buf:
+    pub g: Vector<int> = Vector {}
+    pub cl: Vector<int> = Vector {}
+    pub cp: Vector<int> = Vector {}
+    pub mask: Vector<int> = Vector {}
+    pub cls: Vector<int> = Vector {}
+    pub lig_id: Vector<int> = Vector {}
+    pub lig_comp: Vector<int> = Vector {}
+    pub xa: Vector<int> = Vector {}
+    pub xo: Vector<int> = Vector {}
+    pub yo: Vector<int> = Vector {}
+    pub att: Vector<int> = Vector {}
+    pub next_lig: int = 1
+end
+
+struct _Ctx:
+    pub table: int = 0
+    pub gsub: bool = true
+    pub flag: int = 0
+    pub mark_set: int = -1
+    pub depth: int = 0
+end
+
+func _r16(f: Font, off: int): int:
+    ret _ttf_u16(f.data, f.size, off)
+end
+
+func _rs16(f: Font, off: int): int:
+    ret _ttf_i16(f.data, f.size, off)
+end
+
+func _r32(f: Font, off: int): int:
+    ret _ttf_u32(f.data, f.size, off)
+end
+
+func _tag(s: str): int:
+    bp := s as u8*
+    mut t := 0
+    mut i := 0
+    mut ended := false
+    until i < 4:
+        mut c := 32
+        if not ended:
+            c = bp[i] as int
+            if c == 0:
+                ended = true
+                c = 32
+            end
+        end
+        t = (t << 8) | c
+        i++
+    end
+    ret t
+end
+
+func _buf_free(b &: _Buf):
+    b.g.free()
+    b.cl.free()
+    b.cp.free()
+    b.mask.free()
+    b.cls.free()
+    b.lig_id.free()
+    b.lig_comp.free()
+    b.xa.free()
+    b.xo.free()
+    b.yo.free()
+    b.att.free()
+end
+
+func _buf_push(b &: _Buf, gid: int, cl: int, cp: int, mask: int, cls: int):
+    b.g.push(gid)
+    b.cl.push(cl)
+    b.cp.push(cp)
+    b.mask.push(mask)
+    b.cls.push(cls)
+    b.lig_id.push(0)
+    b.lig_comp.push(0)
+    b.xa.push(0)
+    b.xo.push(0)
+    b.yo.push(0)
+    b.att.push(-1)
+end
+
+func _buf_insert_copy(b &: _Buf, i: int, gid: int):
+    b.g.insert(i + 1, gid)
+    b.cl.insert(i + 1, b.cl.get(i))
+    b.cp.insert(i + 1, b.cp.get(i))
+    b.mask.insert(i + 1, b.mask.get(i))
+    b.cls.insert(i + 1, b.cls.get(i))
+    b.lig_id.insert(i + 1, b.lig_id.get(i))
+    b.lig_comp.insert(i + 1, b.lig_comp.get(i))
+    b.xa.insert(i + 1, 0)
+    b.xo.insert(i + 1, 0)
+    b.yo.insert(i + 1, 0)
+    b.att.insert(i + 1, -1)
+end
+
+func _buf_insert_at(b &: _Buf, at: int, gid: int, cl: int, cp: int, mask: int, cls: int):
+    b.g.insert(at, gid)
+    b.cl.insert(at, cl)
+    b.cp.insert(at, cp)
+    b.mask.insert(at, mask)
+    b.cls.insert(at, cls)
+    b.lig_id.insert(at, 0)
+    b.lig_comp.insert(at, 0)
+    b.xa.insert(at, 0)
+    b.xo.insert(at, 0)
+    b.yo.insert(at, 0)
+    b.att.insert(at, -1)
+end
+
+func _buf_remove(b &: _Buf, i: int):
+    b.g.remove_at(i)
+    b.cl.remove_at(i)
+    b.cp.remove_at(i)
+    b.mask.remove_at(i)
+    b.cls.remove_at(i)
+    b.lig_id.remove_at(i)
+    b.lig_comp.remove_at(i)
+    b.xa.remove_at(i)
+    b.xo.remove_at(i)
+    b.yo.remove_at(i)
+    b.att.remove_at(i)
+end
+
+func _coverage(f: Font, cov: int, g: int): int:
+    if cov == 0:
+        ret -1
+    end
+    fmt := _r16(f, cov)
+    n := _r16(f, cov + 2)
+    mut lo := 0
+    mut hi := n
+    if fmt == 1:
+        until lo < hi:
+            mid := (lo + hi) / 2
+            v := _r16(f, cov + 4 + mid * 2)
+            if g < v:
+                hi = mid
+            else g > v:
+                lo = mid + 1
+            else:
+                ret mid
+            end
+        end
+        ret -1
+    end
+    if fmt == 2:
+        until lo < hi:
+            mid := (lo + hi) / 2
+            rec := cov + 4 + mid * 6
+            if g < _r16(f, rec):
+                hi = mid
+            else g > _r16(f, rec + 2):
+                lo = mid + 1
+            else:
+                ret _r16(f, rec + 4) + g - _r16(f, rec)
+            end
+        end
+    end
+    ret -1
+end
+
+func _classdef(f: Font, cd: int, g: int): int:
+    if cd == 0:
+        ret 0
+    end
+    fmt := _r16(f, cd)
+    if fmt == 1:
+        start := _r16(f, cd + 2)
+        count := _r16(f, cd + 4)
+        if g >= start and g < start + count:
+            ret _r16(f, cd + 6 + (g - start) * 2)
+        end
+        ret 0
+    end
+    if fmt == 2:
+        n := _r16(f, cd + 2)
+        mut lo := 0
+        mut hi := n
+        until lo < hi:
+            mid := (lo + hi) / 2
+            rec := cd + 4 + mid * 6
+            if g < _r16(f, rec):
+                hi = mid
+            else g > _r16(f, rec + 2):
+                lo = mid + 1
+            else:
+                ret _r16(f, rec + 4)
+            end
+        end
+    end
+    ret 0
+end
+
+func _gdef_off(f: Font, field: int): int:
+    if f.gdef == 0:
+        ret 0
+    end
+    o := _r16(f, f.gdef + field)
+    if o == 0:
+        ret 0
+    end
+    ret f.gdef + o
+end
+
+func _glyph_class(f: Font, g: int, cp: int): int:
+    cd := _gdef_off(f, 4)
+    if cd != 0:
+        ret _classdef(f, cd, g)
+    end
+    if cp >= 0 and unicode.IsMark(cp):
+        ret 3
+    end
+    ret 1
+end
+
+func _mark_attach_class(f: Font, g: int): int:
+    cd := _gdef_off(f, 10)
+    if cd == 0:
+        ret 0
+    end
+    ret _classdef(f, cd, g)
+end
+
+func _in_mark_set(f: Font, set_index: int, g: int): bool:
+    if f.gdef == 0 or _r16(f, f.gdef + 2) < 2:
+        ret false
+    end
+    msd := _gdef_off(f, 12)
+    if msd == 0 or set_index >= _r16(f, msd + 2):
+        ret false
+    end
+    ret _coverage(f, msd + _r32(f, msd + 4 + set_index * 4), g) >= 0
+end
+
+func _skippable(f: Font, c: _Ctx, b &: _Buf, i: int): bool:
+    if b.cp.get(i) == 0x200D:
+        ret true
+    end
+    k := b.cls.get(i)
+    if k == 1 and (c.flag & _LF_IGNORE_BASE) != 0: ret true end
+    if k == 2 and (c.flag & _LF_IGNORE_LIGS) != 0: ret true end
+    if k == 3:
+        if (c.flag & _LF_IGNORE_MARKS) != 0: ret true end
+        if (c.flag & _LF_FILTER_SET) != 0 and c.mark_set >= 0:
+            ret not _in_mark_set(f, c.mark_set, b.g.get(i))
+        end
+        mat := (c.flag >> 8) & 0xFF
+        if mat != 0 and _mark_attach_class(f, b.g.get(i)) != mat:
+            ret true
+        end
+    end
+    ret false
+end
+
+func _next_idx(f: Font, c: _Ctx, b &: _Buf, i: int): int:
+    mut j := i + 1
+    until j < b.g.len():
+        if not _skippable(f, c, b, j):
+            ret j
+        end
+        j++
+    end
+    ret -1
+end
+
+func _prev_idx(f: Font, c: _Ctx, b &: _Buf, i: int): int:
+    mut j := i - 1
+    until j >= 0:
+        if not _skippable(f, c, b, j):
+            ret j
+        end
+        j--
+    end
+    ret -1
+end
+
+func _lookup_off(f: Font, table: int, index: int): int:
+    ll := table + _r16(f, table + 8)
+    if index < 0 or index >= _r16(f, ll):
+        ret 0
+    end
+    ret ll + _r16(f, ll + 2 + index * 2)
+end
+
+func _script_off(f: Font, table: int, tag: int): int:
+    sl := table + _r16(f, table + 4)
+    n := _r16(f, sl)
+    mut i := 0
+    until i < n:
+        rec := sl + 2 + i * 6
+        if _r32(f, rec) == tag:
+            ret sl + _r16(f, rec + 4)
+        end
+        i++
+    end
+    ret 0
+end
+
+func _langsys_off(f: Font, table: int, script_tag: int, lang_tag: int): int:
+    mut sc := _script_off(f, table, script_tag)
+    if sc == 0: sc = _script_off(f, table, _tag("DFLT")) end
+    if sc == 0: sc = _script_off(f, table, _tag("dflt")) end
+    if sc == 0: sc = _script_off(f, table, _tag("latn")) end
+    if sc == 0:
+        ret 0
+    end
+    if lang_tag != 0:
+        n := _r16(f, sc + 2)
+        mut i := 0
+        until i < n:
+            rec := sc + 4 + i * 6
+            if _r32(f, rec) == lang_tag:
+                ret sc + _r16(f, rec + 4)
+            end
+            i++
+        end
+    end
+    d := _r16(f, sc)
+    if d == 0:
+        ret 0
+    end
+    ret sc + d
+end
+
+func _has_script(f: Font, table: int, script_tag: int): bool:
+    if table == 0:
+        ret false
+    end
+    ret _script_off(f, table, script_tag) != 0
+end
+
+func _feature_lookups(f: Font, table: int, langsys: int, ftag: int, out &: Vector<int>): bool:
+    if langsys == 0:
+        ret false
+    end
+    fl := table + _r16(f, table + 6)
+    nfeat := _r16(f, fl)
+    req := _r16(f, langsys + 2)
+    cnt := _r16(f, langsys + 4)
+    mut found := false
+    mut k := -1
+    until k < cnt:
+        mut fi := 0
+        if k < 0:
+            fi = req
+        else:
+            fi = _r16(f, langsys + 6 + k * 2)
+        end
+        k++
+        if fi == 0xFFFF or fi >= nfeat:
+            continue
+        end
+        rec := fl + 2 + fi * 6
+        if _r32(f, rec) != ftag:
+            continue
+        end
+        feat := fl + _r16(f, rec + 4)
+        lc := _r16(f, feat + 2)
+        mut j := 0
+        until j < lc:
+            out.push(_r16(f, feat + 4 + j * 2))
+            j++
+        end
+        found = true
+    end
+    ret found
+end
+
+func _anchor(f: Font, a: int, x &: int, y &: int):
+    x = _rs16(f, a + 2)
+    y = _rs16(f, a + 4)
+end

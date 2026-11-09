@@ -93,6 +93,9 @@ pub struct Server:
     @en "port"
     @fa "درگاه"
     pub port: int = 0
+    @en "host"
+    @fa "میزبان"
+    pub host: str = ""
     @en "listener"
     @fa "شنونده"
     pub listener: tcp.Server = tcp.Server {}
@@ -138,6 +141,20 @@ func _reply(s: dyn tunnel.Stream, ver: int, code: int, a: Address): bool:
     v := Encode4Reply(c, host, a.port)
     defer v.free()
     ret _send(s, v)
+end
+
+func _bind_host(cfg: ServerConfig): str:
+    if cfg.bind_host.len() == 0:
+        ret "127.0.0.1"
+    end
+    ret cfg.bind_host
+end
+
+func _wake_host(host: str): str:
+    if host.len() == 0 or host == "0.0.0.0":
+        ret "127.0.0.1"
+    end
+    ret host
 end
 
 func _wild(): Address:
@@ -186,14 +203,14 @@ func _do_bind(cfg: ServerConfig, s: dyn tunnel.Stream, ver: int, a: Address):
         s.Close()
         ret
     end
-    ls := tcp.Bind(0)
+    ls := tcp.BindOn(_bind_host(cfg), 0)
     if not tcp.Ok(ls):
         _reply(s, ver, RepGeneralFailure, _wild())
         s.Close()
         ret
     end
     port := tcp.Port(ls)
-    if not _reply(s, ver, RepSucceeded, NewAddress(cfg.bind_host, port)):
+    if not _reply(s, ver, RepSucceeded, NewAddress(_bind_host(cfg), port)):
         tcp.CloseServer(ls)
         s.Close()
         ret
@@ -309,7 +326,7 @@ func _do_udp(cfg: ServerConfig, s: dyn tunnel.Stream, a: Address):
         s.Close()
         ret
     end
-    us := udp.Bind(0)
+    us := udp.BindOn(_bind_host(cfg), 0)
     if not udp.Ok(us):
         _reply(s, 5, RepGeneralFailure, _wild())
         s.Close()
@@ -319,7 +336,7 @@ func _do_udp(cfg: ServerConfig, s: dyn tunnel.Stream, a: Address):
     atomic_store(stop, 1 as i64)
     jb := mem.AllocateZeroed(sizeof(_UDPJob) as u64) as _UDPJob*
     jb[0] = _UDPJob { cfg = cfg, sock = us, chost = a.host, cport = a.port, stop = stop }
-    if not _reply(s, 5, RepSucceeded, NewAddress(cfg.bind_host, udp.Port(us))):
+    if not _reply(s, 5, RepSucceeded, NewAddress(_bind_host(cfg), udp.Port(us))):
         udp.Close(us)
         mem.Free(stop as void*)
         mem.Free(jb as void*)
@@ -573,7 +590,7 @@ end
 @fa "شروع"
 pub func Start(cfg: ServerConfig): Server:
     mut sv := Server {}
-    ls := tcp.Bind(cfg.port)
+    ls := tcp.BindOn(_bind_host(cfg), cfg.port)
     if not tcp.Ok(ls): ret sv end
     stop := mem.AllocateZeroed(8 as u64) as i64*
     atomic_store(stop, 1 as i64)
@@ -581,6 +598,7 @@ pub func Start(cfg: ServerConfig): Server:
     jb[0] = _AcceptJob { cfg = cfg, listener = ls, stop = stop }
     sv.ok = true
     sv.port = tcp.Port(ls)
+    sv.host = _bind_host(cfg)
     sv.listener = ls
     sv.stop_cell = stop
     Go(_accept_thread, jb as void*)
@@ -593,7 +611,7 @@ pub func Stop(sv: Server):
     if not sv.ok: ret end
     atomic_store(sv.stop_cell, 0 as i64)
     rawsock.Shutdown(rawsock.FromFd(sv.listener.fd))
-    wake := tcp.DialTimeout("127.0.0.1", sv.port, 500)
+    wake := tcp.DialTimeout(_wake_host(sv.host), sv.port, 500)
     if tcp.ConnOk(wake): tcp.Close(wake) end
 end
 

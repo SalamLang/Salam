@@ -14,7 +14,8 @@ import { QueuePanel } from "./Queue";
 import { Connect } from "./Connect";
 import { Connections, TelegramLink, integrationsLoader } from "./Telegram";
 import { OAuthCallback, providerFromPath } from "./OAuthCallback";
-import { agent, isDesktop, saveMode, savedMode, savedWorkspace, saveWorkspace, mention, type AgentMode } from "./desktop";
+import { agent, isDesktop, saveMode, savedMode, savedWorkspace, saveWorkspace, mention, type AgentMode, type PathStatus } from "./desktop";
+import { extraPathProblem, pathErrorText, projectPathProblem, projectPathUnset } from "./paths";
 import { Keys } from "./Keys";
 import { announce, announceGuest } from "./Notify";
 import { Plans } from "./Plans";
@@ -179,6 +180,7 @@ export function App() {
   const [loadingChat, setLoadingChat] = useState(false);
   const [sidebar, setSidebar] = useState(false);
   const [workspace, setWorkspace] = useState(isDesktop ? savedWorkspace() : "");
+  const [newExtra, setNewExtra] = useState("");
   const [mode, setMode] = useState<AgentMode>("ask");
   const [queue, setQueue] = useState<QueueItem[]>([]);
   const [cloudOk, setCloudOk] = useState(false);
@@ -601,9 +603,14 @@ export function App() {
 
   const busy = messages.some((m) => m.status === "pending");
   const activeChat = chats.find((c) => c.id === activeId);
-  const agentChat = isDesktop && (activeChat ? activeChat.agent === true : workspace !== "");
+  const scopedProject = projects.find((p) => p.id === (activeChat ? activeChat.project_id : projectScope));
+  const projectChat = isDesktop && scopedProject !== undefined && (activeChat ? activeChat.agent === true : true);
+  const projectFolder = scopedProject?.path ?? "";
+  const effWorkspace = projectChat ? projectFolder : activeChat ? activeChat.workspace || "" : workspace;
+  const extraNow = activeChat ? activeChat.extra_path || "" : newExtra;
+  const agentChat = isDesktop && (activeChat ? activeChat.agent === true : projectChat ? projectFolder !== "" : workspace !== "");
   const chatElsewhere = activeChat?.agent === true && tools.info?.device !== null && tools.info?.device !== undefined && String(activeChat.device_id) !== tools.info.device.id;
-  const mentionRoot = agentChat && !chatElsewhere ? (activeChat ? activeChat.workspace || "" : workspace) : "";
+  const mentionRoot = agentChat && !chatElsewhere ? effWorkspace : "";
   const lastAssistant = [...messages].reverse().find((m) => m.role === "assistant")?.id;
   const callsFor = (mid: number) => tools.calls.filter((c) => c.chat === activeId && (c.mid === mid || (c.mid === undefined && mid === lastAssistant)));
   const agentVersion = tools.info?.version ?? "";
@@ -679,6 +686,47 @@ export function App() {
     }
   };
 
+  const pickExtra = async () => {
+    try {
+      const path = await agent.pickFolder();
+      if (!path) return;
+      if (!activeChat) {
+        setNewExtra(path);
+        return;
+      }
+      await api.setChatExtra(activeChat.id, path);
+      setChats((cs) => cs.map((c) => (c.id === activeChat.id ? { ...c, extra_path: path } : c)));
+    } catch (e) {
+      notify(pathErrorText(e) ?? (e instanceof ApiError ? e.message : t("انتخاب پوشه ناموفق بود.", "Could not choose the folder.")));
+    }
+  };
+
+  const clearExtra = async () => {
+    if (!activeChat) {
+      setNewExtra("");
+      return;
+    }
+    try {
+      await api.setChatExtra(activeChat.id, "");
+      setChats((cs) => cs.map((c) => (c.id === activeChat.id ? { ...c, extra_path: undefined } : c)));
+    } catch (e) {
+      notify(pathErrorText(e) ?? (e instanceof ApiError ? e.message : t("برداشتن پوشه ناموفق بود.", "Could not remove the folder.")));
+    }
+  };
+
+  const folderProblem = async (folder: string, extra: string): Promise<string> => {
+    if (!folder) return projectPathUnset();
+    const status = await agent.pathStatus(folder).catch((): PathStatus => "ok");
+    if (status !== "ok") return projectPathProblem(status);
+    if (extra) {
+      const more = await agent.pathStatus(extra).catch((): PathStatus => "ok");
+      if (more !== "ok") return extraPathProblem();
+    }
+    return "";
+  };
+
+  const chatFolder = (chat: Chat): string => (chat.agent ? projects.find((p) => p.id === chat.project_id)?.path || chat.workspace || "" : "");
+
   const changeMode = async (m: AgentMode) => {
     if (m === mode) return;
     if (m === "everything") {
@@ -704,17 +752,25 @@ export function App() {
 
   const send = async (text: string, files: OutgoingFile[] = [], previews: Pending[] = []): Promise<boolean> => {
     let id = activeId;
+    if (projectChat) {
+      const problem = await folderProblem(projectFolder, extraNow);
+      if (problem) {
+        notify(problem);
+        return false;
+      }
+    }
     try {
       if (!id) {
         const device = tools.info?.device;
-        if (isDesktop && workspace && !device) {
+        if (isDesktop && effWorkspace && !device) {
           notify(t("این رایانه هنوز به دستیار وصل نشده است. چند لحظه بعد دوباره تلاش کنید.", "This computer is not connected to the assistant yet. Please try again in a moment."));
           return false;
         }
         const start: ChatStart = {};
-        if (isDesktop && workspace && device) {
+        if (isDesktop && effWorkspace && device) {
           start.device_id = device.id;
-          start.workspace = workspace;
+          start.workspace = effWorkspace;
+          if (extraNow) start.extra_path = extraNow;
         } else if (!isDesktop && cloudOk && cloud) {
           start.cloud = true;
         }
@@ -726,6 +782,7 @@ export function App() {
           await agent.setMode(id, mode).catch(() => {});
         }
         setChats((cs) => [r.chat, ...cs]);
+        setNewExtra("");
         setActiveId(id);
         activeRef.current = id;
         goChat(id, projectScope ?? null);
@@ -737,7 +794,7 @@ export function App() {
       setMessages((ms) => [...ms, tempUser]);
       stick.current = true;
       const chat = chats.find((c) => c.id === id);
-      const folder = chat ? (chat.agent ? chat.workspace || "" : "") : isDesktop ? workspace : "";
+      const folder = chat ? chatFolder(chat) : isDesktop ? effWorkspace : "";
       const project = isDesktop && folder ? await agent.projectContext(folder).catch(() => undefined) : undefined;
       const r = await api.send(id, text, files, project, effort);
       const user = r.user.files ? { ...r.user, files: r.user.files.map((f, i) => ({ ...f, url: local[i]?.url })) } : r.user;
@@ -751,14 +808,14 @@ export function App() {
       return true;
     } catch (e) {
       setMessages((ms) => ms.filter((m) => m.id > 0));
-      notify(e instanceof ApiError ? e.message : t("فرستادن پیام ناموفق بود.", "Could not send the message."));
+      notify(pathErrorText(e) ?? (e instanceof ApiError ? e.message : t("فرستادن پیام ناموفق بود.", "Could not send the message.")));
       return false;
     }
   };
 
   const folderFor = (id: string) => {
     const chat = chats.find((c) => c.id === id);
-    return chat ? (chat.agent ? chat.workspace || "" : "") : isDesktop ? workspace : "";
+    return chat ? chatFolder(chat) : isDesktop ? effWorkspace : "";
   };
 
   const enqueue = async (text: string, files: OutgoingFile[] = []): Promise<boolean> => {
@@ -873,6 +930,10 @@ export function App() {
       if (projectDialog?.mode === "edit") {
         const r = await api.updateProject(projectDialog.project.id, input);
         setProjects((ps) => ps.map((p) => (p.id === r.project.id ? { ...p, ...r.project, created: p.created, chats: p.chats, live: p.live, last: p.last } : p)));
+        if (r.project.path !== undefined) {
+          const moved = r.project.path;
+          setChats((cs) => cs.map((c) => (c.project_id === r.project.id && c.agent ? { ...c, workspace: moved } : c)));
+        }
         setProjectDialog(null);
         refreshProjects();
       } else {
@@ -883,7 +944,7 @@ export function App() {
         refreshProjects();
       }
     } catch (e) {
-      notify(e instanceof ApiError ? e.message : t("ذخیره‌ی پروژه ناموفق بود.", "Could not save the project."));
+      notify(pathErrorText(e) ?? (e instanceof ApiError ? e.message : t("ذخیره‌ی پروژه ناموفق بود.", "Could not save the project.")));
     } finally {
       setProjectBusy(false);
     }
@@ -1171,8 +1232,12 @@ export function App() {
                 isDesktop && (!activeChat || activeChat.agent) ? (
                   <AgentBar
                     info={tools.info}
-                    workspace={activeChat ? activeChat.workspace || "" : workspace}
+                    workspace={effWorkspace}
                     locked={activeChat !== undefined}
+                    inProject={projectChat}
+                    extra={extraNow}
+                    onExtraPick={pickExtra}
+                    onExtraClear={clearExtra}
                     elsewhere={activeChat?.agent === true && tools.info?.device !== null && tools.info?.device !== undefined && String(activeChat.device_id) !== tools.info.device.id}
                     mode={mode}
                     onPick={pickWorkspace}
@@ -1193,6 +1258,7 @@ export function App() {
         <ProjectDialog
           project={projectDialog.mode === "edit" ? projectDialog.project : null}
           busy={projectBusy}
+          running={projectDialog.mode === "edit" && (projects.find((p) => p.id === projectDialog.project.id)?.live ?? 0) > 0}
           onSave={saveProject}
           onClose={() => setProjectDialog(null)}
         />

@@ -60,8 +60,8 @@ export function AccountMaster({ notify }: { notify: (msg: string, ok?: boolean) 
         setValue(r.master_prompt);
         setReady(true);
       })
-      .catch(() => {
-        if (live) setReady(true);
+      .catch((e) => {
+        if (live) notify(e instanceof ApiError ? e.message : t("بارگذاری ناموفق بود.", "Could not load."));
       });
     return () => {
       live = false;

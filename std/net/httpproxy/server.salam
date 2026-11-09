@@ -48,6 +48,9 @@ pub struct ServerConfig:
     @en "port"
     @fa "درگاه"
     pub port: int = 0
+    @en "bind_host"
+    @fa "میزبان پیوند"
+    pub bind_host: str = "127.0.0.1"
     @en "require_auth"
     @fa "نیاز به احراز هویت"
     pub require_auth: bool = false
@@ -101,6 +104,9 @@ pub struct Server:
     @en "port"
     @fa "درگاه"
     pub port: int = 0
+    @en "host"
+    @fa "میزبان"
+    pub host: str = ""
     @en "listener"
     @fa "شنونده"
     pub listener: tcp.Server = tcp.Server {}
@@ -441,6 +447,20 @@ func _conn_thread(arg: i64):
     end
 end
 
+func _bind_host(cfg: ServerConfig): str:
+    if cfg.bind_host.len() == 0:
+        ret "127.0.0.1"
+    end
+    ret cfg.bind_host
+end
+
+func _wake_host(host: str): str:
+    if host.len() == 0 or host == "0.0.0.0":
+        ret "127.0.0.1"
+    end
+    ret host
+end
+
 func _accept_thread(arg: i64):
     jp := (arg as void*) as _AcceptJob*
     cfg := jp[0].cfg
@@ -552,7 +572,7 @@ end
 pub func Start(cfg: ServerConfig): Server:
     mut sv := Server {}
     if cfg.use_tls and not cfg.tls_config.ok: ret sv end
-    ls := tcp.Bind(cfg.port)
+    ls := tcp.BindOn(_bind_host(cfg), cfg.port)
     if not tcp.Ok(ls): ret sv end
     stop := mem.AllocateZeroed(8 as u64) as i64*
     atomic_store(stop, 1 as i64)
@@ -560,6 +580,7 @@ pub func Start(cfg: ServerConfig): Server:
     jb[0] = _AcceptJob { cfg = cfg, listener = ls, stop = stop }
     sv.ok = true
     sv.port = tcp.Port(ls)
+    sv.host = _bind_host(cfg)
     sv.listener = ls
     sv.stop_cell = stop
     socks.Go(_accept_thread, jb as void*)
@@ -572,7 +593,7 @@ pub func Stop(sv: Server):
     if not sv.ok: ret end
     atomic_store(sv.stop_cell, 0 as i64)
     rawsock.Shutdown(rawsock.FromFd(sv.listener.fd))
-    wake := tcp.DialTimeout("127.0.0.1", sv.port, 500)
+    wake := tcp.DialTimeout(_wake_host(sv.host), sv.port, 500)
     if tcp.ConnOk(wake): tcp.Close(wake) end
 end
 

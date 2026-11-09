@@ -139,16 +139,15 @@ func _sz_aes_key(password: str, salt: u8*, saltlen: int, cycles: int, key: u8*):
     compress.BufFree(pw)
 end
 
-func _sz_decrypt(c: _SzCoder, inp: _SzIn, out_size: int, password: str, status &: int): compress.ByteBuf:
-    mut out := compress.NewByteBuf()
+func _sz_aes_setup(c: _SzCoder, password: str, key: u8*, iv: u8*, status &: int): bool:
     pr := c.props
     if pr.len < 1:
         status = SEVENZIP_CORRUPT
-        ret out
+        ret false
     end
     if password.len() == 0:
         status = SEVENZIP_ENCRYPTED
-        ret out
+        ret false
     end
     pp := pr.data as u8*
     b0 := pp[0] as int
@@ -160,22 +159,34 @@ func _sz_decrypt(c: _SzCoder, inp: _SzIn, out_size: int, password: str, status &
     saltsize := ((b0 >> 7) & 1) + (b1 >> 4)
     if 2 + saltsize + ivsize > pr.len or ivsize > 16:
         status = SEVENZIP_CORRUPT
-        ret out
+        ret false
     end
     if (b0 & 63) > 24 and (b0 & 63) != 63:
         status = SEVENZIP_UNSUPPORTED
-        ret out
+        ret false
     end
-    key := mem.AllocateZeroed(32 as u64) as u8*
-    iv := mem.AllocateZeroed(16 as u64) as u8*
     repeat ivsize in i:
         iv[i] = pp[2 + saltsize + i]
     end
     salt := ((pr.data as i64) + 2) as u8*
     _sz_aes_key(password, salt, saltsize, b0 & 63, key)
+    ret true
+end
+
+func _sz_decrypt(c: _SzCoder, inp: _SzIn, out_size: int, password: str, status &: int): compress.ByteBuf:
+    mut out := compress.NewByteBuf()
+    key := mem.AllocateZeroed(32 as u64) as u8*
+    iv := mem.AllocateZeroed(16 as u64) as u8*
+    if not _sz_aes_setup(c, password, key, iv, status):
+        mem.Free(key as void*)
+        mem.Free(iv as void*)
+        ret out
+    end
     n16 := inp.n & (-16)
     if n16 < out_size or out_size < 0:
         status = SEVENZIP_CORRUPT
+        mem.Free(key as void*)
+        mem.Free(iv as void*)
         ret out
     end
     mut aes := _aes_new(key, 32)
@@ -230,6 +241,34 @@ func _sz_ppmd(c: _SzCoder, inp: _SzIn, out_size: int, status &: int): compress.B
     end
     _pp_free(m)
     ret out
+end
+
+func _sz_bcj_kind(id: i64): int:
+    if id == (4 as i64) or id == (0x03030103 as i64):
+        ret compress.BcjX86
+    end
+    if id == (5 as i64) or id == (0x03030205 as i64):
+        ret compress.BcjPowerPC
+    end
+    if id == (6 as i64) or id == (0x03030401 as i64):
+        ret compress.BcjIA64
+    end
+    if id == (7 as i64) or id == (0x03030501 as i64):
+        ret compress.BcjARM
+    end
+    if id == (8 as i64) or id == (0x03030701 as i64):
+        ret compress.BcjARMThumb
+    end
+    if id == (9 as i64) or id == (0x03030805 as i64):
+        ret compress.BcjSPARC
+    end
+    if id == (10 as i64):
+        ret compress.BcjARM64
+    end
+    if id == (11 as i64):
+        ret compress.BcjRISCV
+    end
+    ret 0
 end
 
 func _sz_coder_run(c: _SzCoder, inp: _SzIn, out_size: int, password: str, status &: int): compress.ByteBuf:
@@ -302,24 +341,7 @@ func _sz_coder_run(c: _SzCoder, inp: _SzIn, out_size: int, password: str, status
         compress.DeltaDecode(out.data, out.len, (pp[0] as int) + 1)
         ok = true
     else:
-        mut kind := 0
-        if id == (4 as i64) or id == (0x03030103 as i64):
-            kind = compress.BcjX86
-        else id == (5 as i64) or id == (0x03030205 as i64):
-            kind = compress.BcjPowerPC
-        else id == (6 as i64) or id == (0x03030401 as i64):
-            kind = compress.BcjIA64
-        else id == (7 as i64) or id == (0x03030501 as i64):
-            kind = compress.BcjARM
-        else id == (8 as i64) or id == (0x03030701 as i64):
-            kind = compress.BcjARMThumb
-        else id == (9 as i64) or id == (0x03030805 as i64):
-            kind = compress.BcjSPARC
-        else id == (10 as i64):
-            kind = compress.BcjARM64
-        else id == (11 as i64):
-            kind = compress.BcjRISCV
-        end
+        kind := _sz_bcj_kind(id)
         if kind == 0:
             status = SEVENZIP_UNSUPPORTED
             ret out

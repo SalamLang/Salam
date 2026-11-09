@@ -29,6 +29,25 @@ if not SALAM_OS_WINDOWS:
     end
 end
 
+@en "TAR_OK"
+@fa "تار موفق"
+pub const TAR_OK := 0
+@en "TAR_NOT_FOUND"
+@fa "تار یافت نشد"
+pub const TAR_NOT_FOUND := 1
+@en "TAR_CORRUPT"
+@fa "تار خراب"
+pub const TAR_CORRUPT := 4
+@en "TAR_TOO_BIG"
+@fa "تار بیش از حد بزرگ"
+pub const TAR_TOO_BIG := 6
+@en "TAR_IO"
+@fa "تار خطای ورودی خروجی"
+pub const TAR_IO := 7
+@en "TAR_UNSAFE_PATH"
+@fa "تار مسیر ناامن"
+pub const TAR_UNSAFE_PATH := 8
+
 const _TAR_GZ_DEFAULT_MAX := 1073741824
 const _TAR_OCTAL_LIMIT := 8589934592
 
@@ -438,7 +457,7 @@ func _tar_pax_read(p: void*, off: int, size: int, px &: _TarPax):
     end
 end
 
-func _tar_next(p: void*, n: int, pos &: int, e &: Entry, data &: int, g &: _TarPax): bool:
+func _tar_next(p: void*, n: int, pos &: int, e &: Entry, data &: int, g &: _TarPax, limit: i64): bool:
     mut px := _TarPax {}
     mut lname := ""
     mut llink := ""
@@ -527,7 +546,7 @@ func _tar_next(p: void*, n: int, pos &: int, e &: Entry, data &: int, g &: _TarP
             size = 0 as i64
         end
         span := (((size as int) + 511) / 512) * 512
-        if kind == 0 and (size < (0 as i64) or (dstart as i64) + size > (n as i64)):
+        if kind == 0 and (size < (0 as i64) or (dstart as i64) + size > limit):
             _tar_free_str(nm)
             _tar_free_str(target)
             break
@@ -703,6 +722,110 @@ func _tar_copy_file(src: str, dst: str): bool:
     ret r
 end
 
+func _tar_finish_dirs(dirs &: Vector<str>, dir_times &: Vector<i64>):
+    mut k := dirs.len() - 1
+    until k >= 0:
+        dp := dirs.get(k)
+        _tar_set_mtime(dp, dir_times.get(k))
+        mem.Free(dp as void*)
+        k--
+    end
+    dirs.free()
+    dir_times.free()
+end
+
+func _tar_write_stream(fp: void*, foff: i64, e: Entry, outpath: str, cap: i64, st &: int): bool:
+    parent := filepath.Dir(outpath)
+    EnsureDir(parent)
+    mem.Free(parent as void*)
+    os.Remove(outpath)
+    mut sink := compress.SinkOpen(outpath, cap)
+    if sink.failed:
+        st = TAR_IO
+        ret false
+    end
+    good := compress.SinkCopyFrom(sink, fp, foff, e.size)
+    closed := compress.SinkClose(sink)
+    if not good or not closed:
+        os.Remove(outpath)
+        if sink.over:
+            st = TAR_TOO_BIG
+        else sink.failed:
+            st = TAR_IO
+        else:
+            st = TAR_CORRUPT
+        end
+        ret false
+    end
+    _tar_set_mode(outpath, e.mode, false)
+    if e.mtime > (0 as i64): _tar_set_mtime(outpath, e.mtime) end
+    ret true
+end
+
+func _tar_place(e: Entry, destdir: str, dirs &: Vector<str>, dir_times &: Vector<i64>, p: void*, data: int, fp: void*, foff: i64, cap: i64, st &: int): bool:
+    mut ok := true
+    if not _safe_entry_name(e.name) or _tar_through_link(destdir, e.name):
+        st = TAR_UNSAFE_PATH
+        _tar_free_str(e.name)
+        _tar_free_str(e.link)
+        ret false
+    end
+    outpath := filepath.Join(destdir, e.name)
+    if e.kind == 1:
+        EnsureDir(outpath)
+        _tar_set_mode(outpath, e.mode, true)
+        if e.mtime > (0 as i64):
+            dirs.push(outpath)
+            dir_times.push(e.mtime)
+            _tar_free_str(e.name)
+            _tar_free_str(e.link)
+            ret true
+        end
+    else e.kind == 2:
+        if _tar_link_ok(e.name, e.link):
+            parent := filepath.Dir(outpath)
+            EnsureDir(parent)
+            mem.Free(parent as void*)
+            os.Remove(outpath)
+            if not _tar_symlink(e.link, outpath): ok = false end
+        else:
+            st = TAR_UNSAFE_PATH
+            ok = false
+        end
+    else e.kind == 3:
+        if _safe_entry_name(e.link) and not _tar_through_link(destdir, e.link):
+            src := filepath.Join(destdir, e.link)
+            parent := filepath.Dir(outpath)
+            EnsureDir(parent)
+            mem.Free(parent as void*)
+            os.Remove(outpath)
+            if not _tar_hardlink(src, outpath):
+                if not _tar_copy_file(src, outpath): ok = false end
+            end
+            mem.Free(src as void*)
+        else:
+            st = TAR_UNSAFE_PATH
+            ok = false
+        end
+    else e.kind == 4:
+        ok = false
+    else:
+        if fp == null:
+            if not _tar_write_entry_file(p, data, e, outpath):
+                ok = false
+            end
+        else:
+            if not _tar_write_stream(fp, foff, e, outpath, cap, st):
+                ok = false
+            end
+        end
+    end
+    mem.Free(outpath as void*)
+    _tar_free_str(e.name)
+    _tar_free_str(e.link)
+    ret ok
+end
+
 @en "MakeTarFileInput"
 @fa "ساخت ورودی پرونده تار"
 pub func MakeTarFileInput(name: str, data_ptr: void*, data_len: int, is_dir: bool): TarFileInput:
@@ -756,7 +879,7 @@ pub func TarList(p: void*, n: int): Vector<Entry>:
     mut e := Entry {}
     mut data := 0
     mut g := _TarPax {}
-    until _tar_next(p, n, pos, e, data, g):
+    until _tar_next(p, n, pos, e, data, g, n as i64):
         out.push(e)
     end
     ret out
@@ -771,7 +894,7 @@ pub func TarExtractByName(p: void*, n: int, name: str, ok &: bool): compress.Byt
     mut e := Entry {}
     mut data := 0
     mut g := _TarPax {}
-    until _tar_next(p, n, pos, e, data, g):
+    until _tar_next(p, n, pos, e, data, g, n as i64):
         hit := e.kind == 0 and e.name == name
         _tar_free_str(e.name)
         _tar_free_str(e.link)
@@ -795,68 +918,13 @@ pub func TarExtractAll(p: void*, n: int, destdir: str): bool:
     mut g := _TarPax {}
     mut dirs := Vector {} as Vector<str>
     mut dir_times := Vector {} as Vector<i64>
-    until _tar_next(p, n, pos, e, data, g):
-        if not _safe_entry_name(e.name) or _tar_through_link(destdir, e.name):
+    mut st := 0
+    until _tar_next(p, n, pos, e, data, g, n as i64):
+        if not _tar_place(e, destdir, dirs, dir_times, p, data, null, 0 as i64, 0 as i64, st):
             all_ok = false
-            _tar_free_str(e.name)
-            _tar_free_str(e.link)
-            continue
         end
-        outpath := filepath.Join(destdir, e.name)
-        if e.kind == 1:
-            EnsureDir(outpath)
-            _tar_set_mode(outpath, e.mode, true)
-            if e.mtime > (0 as i64):
-                dirs.push(outpath)
-                dir_times.push(e.mtime)
-                _tar_free_str(e.name)
-                _tar_free_str(e.link)
-                continue
-            end
-        else e.kind == 2:
-            if _tar_link_ok(e.name, e.link):
-                parent := filepath.Dir(outpath)
-                EnsureDir(parent)
-                mem.Free(parent as void*)
-                os.Remove(outpath)
-                if not _tar_symlink(e.link, outpath): all_ok = false end
-            else:
-                all_ok = false
-            end
-        else e.kind == 3:
-            if _safe_entry_name(e.link) and not _tar_through_link(destdir, e.link):
-                src := filepath.Join(destdir, e.link)
-                parent := filepath.Dir(outpath)
-                EnsureDir(parent)
-                mem.Free(parent as void*)
-                os.Remove(outpath)
-                if not _tar_hardlink(src, outpath):
-                    if not _tar_copy_file(src, outpath): all_ok = false end
-                end
-                mem.Free(src as void*)
-            else:
-                all_ok = false
-            end
-        else e.kind == 4:
-            all_ok = false
-        else:
-            if not _tar_write_entry_file(p, data, e, outpath):
-                all_ok = false
-            end
-        end
-        mem.Free(outpath as void*)
-        _tar_free_str(e.name)
-        _tar_free_str(e.link)
     end
-    mut k := dirs.len() - 1
-    until k >= 0:
-        dp := dirs.get(k)
-        _tar_set_mtime(dp, dir_times.get(k))
-        mem.Free(dp as void*)
-        k--
-    end
-    dirs.free()
-    dir_times.free()
+    _tar_finish_dirs(dirs, dir_times)
     ret all_ok
 end
 

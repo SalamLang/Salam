@@ -206,6 +206,8 @@ check(
 );
 const blank = await api("PATCH", `/projects/${rid}`, owner, { name: "Rooted 2", path: "" });
 check("a set path cannot be cleared", blank.res.status === 400, blank);
+const quoted = await api("PATCH", `/projects/${rid}`, owner, { name: "Rooted 2", description: 'say "path" here' });
+check("a quoted word path in a value is not a path field", quoted.res.status === 200 && quoted.json?.project?.path === "/home/ali/app", quoted);
 const repathed = await api("PATCH", `/projects/${rid}`, owner, { name: "Rooted 2", path: "/home/ali/other" });
 check("an idle project can change its path", repathed.res.status === 200 && repathed.json?.project?.path === "/home/ali/other", repathed);
 const theirsPath = await api("PATCH", `/projects/${rid}`, stranger, { name: "x", path: "/tmp" });
@@ -230,6 +232,21 @@ check(
   "an update without the field keeps the master prompt",
   keptMaster.json?.project?.master_prompt.startsWith("Test after each task."),
   keptMaster.json,
+);
+const clearedMaster = await api("PATCH", `/projects/${project.id}`, owner, {
+  name: "Website redesign",
+  master_prompt: "",
+});
+check(
+  "an empty master prompt clears it",
+  clearedMaster.res.status === 200 && clearedMaster.json?.project?.master_prompt === "",
+  clearedMaster.json,
+);
+const afterClear = await api("GET", "/projects", owner);
+check(
+  "the cleared master prompt stays cleared",
+  (afterClear.json?.projects ?? []).find((p) => p.id === project.id)?.master_prompt === "",
+  afterClear.json,
 );
 const bigMaster = await api("PATCH", `/projects/${project.id}`, owner, {
   name: "Website redesign",

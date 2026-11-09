@@ -67,6 +67,11 @@ struct _RarFile:
     pub encrypted: bool
     pub split: bool
     pub redirect: bool
+    pub rkind: int
+    pub rflags: int
+    pub rtarget: str
+    pub attr: i64
+    pub host: int
     pub dc: int
     pub crypt: int
     pub kdf: int
@@ -208,13 +213,13 @@ func _rar_merge_volumes(a &: _RarArc):
     until i < n:
         f := a.files.get(i)
         i++
-        if f.split_after and not f.split_before and not f.encrypted:
+        if f.split_after and not f.split_before:
             mut j := i
             mut total := f.pack_size
             mut complete := false
             until j < n:
                 g := a.files.get(j)
-                if g.name != f.name or not g.split_before or g.encrypted:
+                if g.name != f.name or not g.split_before:
                     break
                 end
                 total += g.pack_size
@@ -246,10 +251,12 @@ func _rar_merge_volumes(a &: _RarArc):
                 merged.split_after = false
                 merged.crc = last.crc
                 merged.has_crc = last.has_crc
+                merged.cflags = last.cflags
                 out.push(merged)
                 mut d := i
                 until d < j:
                     _rar_free_name(a.files.get(d).name)
+                    _rar_free_name(a.files.get(d).rtarget)
                     d++
                 end
                 i = j
@@ -259,6 +266,7 @@ func _rar_merge_volumes(a &: _RarArc):
             mut d2 := i
             until d2 < j:
                 _rar_free_name(a.files.get(d2).name)
+                _rar_free_name(a.files.get(d2).rtarget)
                 d2++
             end
             i = j
@@ -470,7 +478,7 @@ func _rar_core(a: _RarArc, r5 &: _R5, r3 &: _R3, ro &: _ROld, nx &: int, rd &: i
         end
         if c != f.crc:
             out.len = base
-            if f.crypt == 3:
+            if f.crypt >= 1 and f.crypt <= 3:
                 ret RAR_BAD_PASSWORD
             end
             ret RAR_BAD_CRC
@@ -494,7 +502,7 @@ func _rar_run(a: _RarArc, r5 &: _R5, r3 &: _R3, ro &: _ROld, nx &: int, rd &: in
     if f.pack_size < 0 or (f.data_off as i64) + f.pack_size > (f.vlen as i64):
         ret RAR_CORRUPT
     end
-    n16 := (f.pack_size as int) & (~15)
+    n16 := f.crypt == 1 ? (f.pack_size as int) : ((f.pack_size as int) & (~15))
     mut st := 0
     hk := mem.AllocateZeroed(64 as u64) as u8*
     src := ((f.base as i64) + (f.data_off as i64)) as u8*
@@ -506,7 +514,7 @@ func _rar_run(a: _RarArc, r5 &: _R5, r3 &: _R3, ro &: _ROld, nx &: int, rd &: in
     mut res := _rar_core(a, r5, r3, ro, nx, rd, idx, limit, out, dec, n16, hk)
     mem.Free(dec as void*)
     mem.Free(hk as void*)
-    if f.crypt == 3 and (res == RAR_CORRUPT or res == RAR_BAD_CRC):
+    if f.crypt >= 1 and f.crypt <= 3 and (res == RAR_CORRUPT or res == RAR_BAD_CRC):
         res = RAR_BAD_PASSWORD
     end
     ret res
@@ -604,6 +612,71 @@ func _rar_read_from(a: _RarArc, name: str, max: int, status &: int): compress.By
     ret out
 end
 
+func _rar_unix_mode(f: _RarFile): int:
+    if f.host != 1:
+        ret -1
+    end
+    ret (f.attr & 0x1ff) as int
+end
+
+func _rar_apply_meta(f: _RarFile, path: str):
+    m := _rar_unix_mode(f)
+    if m >= 0:
+        _rar_set_mode(path, f.is_dir ? (m | 0x1c0) : (m | 0x180))
+    end
+    if f.mtime > 0:
+        _rar_set_mtime(path, f.mtime)
+    end
+end
+
+func _rar_make_link(f: _RarFile, target: str, outpath: str, made &: Vector<str>, status &: int): bool:
+    if f.rkind != 1:
+        ret false
+    end
+    if not _rar_link_target_ok(f.name, target, made):
+        status = RAR_UNSAFE_PATH
+        ret false
+    end
+    if not _rar_symlink(target, outpath):
+        if status == RAR_OK:
+            status = RAR_UNSUPPORTED
+        end
+        ret false
+    end
+    made.push(_rar_dup(f.name))
+    ret true
+end
+
+func _rar_copy_link(f: _RarFile, destdir: str, outpath: str, made &: Vector<str>, status &: int): bool:
+    if not _safe_entry_name(f.rtarget) or _rar_under_link(f.rtarget, made):
+        status = RAR_UNSAFE_PATH
+        ret false
+    end
+    src := filepath.Join(destdir, f.rtarget)
+    mut ok := false
+    mut data := ReadBinaryFile(src, ok)
+    mem.Free(src as void*)
+    if not ok:
+        if status == RAR_OK:
+            status = RAR_NOT_FOUND
+        end
+        ret false
+    end
+    if os.Exists(outpath):
+        _rar_set_mode(outpath, 0x1a4)
+    end
+    res := WriteBinaryFileBuf(outpath, data)
+    compress.BufFree(data)
+    if res:
+        _rar_apply_meta(f, outpath)
+    else:
+        if status == RAR_OK:
+            status = RAR_CORRUPT
+        end
+    end
+    ret res
+end
+
 func _rar_extract_all_of(a: _RarArc, destdir: str, status &: int): int:
     status = RAR_OK
     mut extracted := 0
@@ -613,19 +686,34 @@ func _rar_extract_all_of(a: _RarArc, destdir: str, status &: int): int:
     mut nx := -1
     mut rd := 0
     mut broken := false
+    mut made := Vector {} as Vector<str>
     mut i := 0
     until i < a.files.len():
         f := a.files.get(i)
         i++
-        if f.redirect:
-            continue
-        end
-        if not _safe_entry_name(f.name):
+        if not _safe_entry_name(f.name) or _rar_under_link(f.name, made):
             status = RAR_UNSAFE_PATH
             continue
         end
         outpath := filepath.Join(destdir, f.name)
-        if f.is_dir:
+        if f.redirect:
+            parent := filepath.Dir(outpath)
+            EnsureDir(parent)
+            mem.Free(parent as void*)
+            if f.rkind == 1:
+                if _rar_make_link(f, f.rtarget, outpath, made, status):
+                    extracted++
+                end
+            else f.rkind == 4 or f.rkind == 5:
+                if _rar_copy_link(f, destdir, outpath, made, status):
+                    extracted++
+                end
+            else:
+                if status == RAR_OK:
+                    status = RAR_UNSUPPORTED
+                end
+            end
+        else f.is_dir:
             EnsureDir(outpath)
             extracted++
         else:
@@ -640,10 +728,22 @@ func _rar_extract_all_of(a: _RarArc, destdir: str, status &: int): int:
                 mut data := compress.NewByteBuf()
                 st := _rar_run(a, r5, r3, ro, nx, rd, i - 1, 0 as i64, data)
                 if st == RAR_OK:
-                    if WriteBinaryFileBuf(outpath, data):
-                        extracted++
+                    if f.rkind == 1:
+                        tgt := compress.BufToStrUnsafe(data)
+                        if _rar_make_link(f, tgt, outpath, made, status):
+                            extracted++
+                        end
+                        _rar_free_name(tgt)
                     else:
-                        status = RAR_CORRUPT
+                        if os.Exists(outpath):
+                            _rar_set_mode(outpath, 0x1a4)
+                        end
+                        if WriteBinaryFileBuf(outpath, data):
+                            _rar_apply_meta(f, outpath)
+                            extracted++
+                        else:
+                            status = RAR_CORRUPT
+                        end
                     end
                 else:
                     broken = true
@@ -656,6 +756,22 @@ func _rar_extract_all_of(a: _RarArc, destdir: str, status &: int): int:
         end
         mem.Free(outpath as void*)
     end
+    mut j := a.files.len() - 1
+    until j >= 0:
+        f := a.files.get(j)
+        j--
+        if f.is_dir and _safe_entry_name(f.name) and not _rar_under_link(f.name, made):
+            dpath := filepath.Join(destdir, f.name)
+            if os.IsDir(dpath):
+                _rar_apply_meta(f, dpath)
+            end
+            mem.Free(dpath as void*)
+        end
+    end
+    repeat made.len() in k:
+        mem.Free(made.get(k) as void*)
+    end
+    made.free()
     if status == RAR_OK:
         status = _rar_arc_status(a)
     end

@@ -68,6 +68,7 @@ func _rar_free_files(files &: Vector<_RarFile>):
     _rar_free_blobs(files)
     repeat files.len() in i:
         _rar_free_name(files.get(i).name)
+        _rar_free_name(files.get(i).rtarget)
     end
     files.free()
 end
@@ -338,7 +339,7 @@ func _rar5_one(a &: _RarArc, hp: u8*, hn: int, hoff: int, pos: int, disk0: int, 
         cur += l
         mut unp := _rar_vint(hp, cur, hn, l)
         cur += l
-        _rar_vint(hp, cur, hn, l)
+        attr5 := _rar_vint(hp, cur, hn, l)
         cur += l
         mut mtime := 0 as i64
         if (ff & 2) != 0:
@@ -354,7 +355,7 @@ func _rar5_one(a &: _RarArc, hp: u8*, hn: int, hoff: int, pos: int, disk0: int, 
         end
         ci := _rar_vint(hp, cur, hn, l) as int
         cur += l
-        _rar_vint(hp, cur, hn, l)
+        host5 := _rar_vint(hp, cur, hn, l) as int
         cur += l
         nl := _rar_vint(hp, cur, hn, l) as int
         cur += l
@@ -367,6 +368,9 @@ func _rar5_one(a &: _RarArc, hp: u8*, hn: int, hoff: int, pos: int, disk0: int, 
         end
         mut enc := false
         mut redirect := false
+        mut rkind := 0
+        mut rflags := 0
+        mut rtarget := ""
         mut kdf := 0
         mut cflags := 0
         mut salt := null as u8*
@@ -404,6 +408,15 @@ func _rar5_one(a &: _RarArc, hp: u8*, hn: int, hoff: int, pos: int, disk0: int, 
                     end
                 else rtype == 5:
                     redirect = true
+                    rkind = _rar_vint(hp, rc, hn, rl) as int
+                    rc += rl
+                    rflags = _rar_vint(hp, rc, hn, rl) as int
+                    rc += rl
+                    rnl := _rar_vint(hp, rc, hn, rl) as int
+                    rc += rl
+                    if rnl > 0 and rc + rnl <= rend:
+                        rtarget = _rar_str(hp, rc, rnl)
+                    end
                 else rtype == 3:
                     tf := _rar_vint(hp, rc, hn, rl) as int
                     rc += rl
@@ -419,12 +432,18 @@ func _rar5_one(a &: _RarArc, hp: u8*, hn: int, hoff: int, pos: int, disk0: int, 
             end
         end
         ver := ci & 0x3f
-        dlog := (ci >> 10) & 0x1f
+        dlog := (ci >> 10) & (ver == 0 ? 0xf : 0x1f)
         base := (131072 as i64) << dlog
-        dict := base + (base >> 5) * (((ci >> 15) & 31) as i64)
+        mut dict := base
         mut dc := 64
+        mut pver := ver
         if ver == 1:
+            dict = base + (base >> 5) * (((ci >> 15) & 31) as i64)
             dc = 80
+            if (ci & 0x100000) != 0:
+                dc = 64
+                pver = 0
+            end
         end
         a.files.push(_RarFile {
             name = name
@@ -437,13 +456,18 @@ func _rar5_one(a &: _RarArc, hp: u8*, hn: int, hoff: int, pos: int, disk0: int, 
             is_dir = (ff & 1) != 0
             solid = ((ci >> 6) & 1) != 0
             method = (ci >> 7) & 7
-            ver = ver
+            ver = pver
             dict = dict
             encrypted = enc
             split = (hflags & 0x18) != 0
             split_before = (hflags & 0x08) != 0
             split_after = (hflags & 0x10) != 0
             redirect = redirect
+            rkind = rkind
+            rflags = rflags
+            rtarget = rtarget
+            attr = attr5
+            host = host5
             dc = dc
             crypt = enc ? 5 : 0
             kdf = kdf
@@ -590,9 +614,14 @@ func _rar4_one(a &: _RarArc, hp: u8*, hn: int, hoff: int, pos: int, disk0: int, 
             split = (hflags & 0x03) != 0
             split_before = (hflags & 0x01) != 0
             split_after = (hflags & 0x02) != 0
-            redirect = host == 3 and (attr & 0xF000) == 0xA000
+            redirect = false
+            rkind = (host == 3 and (attr & 0xF000) == 0xA000) ? 1 : 0
+            rflags = 0
+            rtarget = ""
+            attr = attr
+            host = host == 3 ? 1 : 0
             dc = 0
-            crypt = enc4 ? 3 : 0
+            crypt = enc4 ? (ver == 15 ? 1 : ((ver == 20 or ver == 26) ? 2 : 3)) : 0
             kdf = 0
             cflags = 0
             salt = salt

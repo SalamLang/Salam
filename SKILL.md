@@ -1574,9 +1574,10 @@ end
   non-ASCII names get the UTF-8 flag, `ZipFileInput.mtime` sets the date, tar reads ustar, PAX and GNU
   long names and links (`Entry.kind`, `Entry.link`), `TarGz*Max` cap the inflated size. RAR 1.5 to 5 are read fully (CRC checked, `RarExtract` reports a
   `RAR_*` status); passwords through `RarOpen(p, n, password)` with
-  `RarEntries`/`RarRead`/`RarReadAll` (RAR 3 to 5, encrypted names too); multi-volume
-  sets through `RarReadVolumes`/`RarOpenVolumes`; `RarCreate`
-  writes stored RAR 5.
+  `RarEntries`/`RarRead`/`RarReadAll` (RAR 1.5 to 5, encrypted names too); multi-volume
+  sets through `RarReadVolumes`/`RarOpenVolumes`, encrypted and split too;
+  `RarReadAll` restores modes and times and makes safe symlinks; entries must be
+  under 2 GB (`RAR_TOO_BIG`); `RarCreate` writes stored RAR 5.
 - **`excel`**: xlsx, ods and csv workbooks: `Open Save New NewWorkbook NewSheet` with sheet methods `set_string set_number get_cell get_string row_count ...`, `CellRef ParseCellRef SheetToJSON SheetToCSV`. No `.xls`
   (`IsXLS` detects it); the format comes from the file extension; formulas
   are not evaluated; rows and columns count from 0.

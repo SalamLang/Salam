@@ -12,22 +12,24 @@ pkg.intro <<
 <div class="table-wrap"><table>
 <thead><tr><th>Format</th><th>Make</th><th>List</th><th>Read one file</th><th>Extract all</th><th>Is the data checked?</th></tr></thead>
 <tbody>
-<tr><td><code>.zip</code></td><td><code>ZipCreate</code>, <code>ZipCreateFile</code></td><td><code>ZipList</code></td><td><code>ZipExtractByName</code>, <code>ZipExtractByNameMax</code></td><td><code>ZipExtractAll</code></td><td>Not while extracting. Compare <code>Entry.crc32</code> with <code>compress.CRC32Buf</code> (see "Check an archive").</td></tr>
+<tr><td><code>.zip</code></td><td><code>ZipCreate</code>, <code>ZipCreate64</code>, <code>ZipCreateFile</code></td><td><code>ZipList</code></td><td><code>ZipExtractByName</code>, <code>ZipExtractByNameMax</code>, <code>ZipExtractVerified</code></td><td><code>ZipExtractAll</code></td><td>Yes with <code>ZipExtractVerified</code>, <code>ZipVerify</code> and <code>ZipExtractAll</code>. <code>ZipExtractByName</code> does not check (see "Check an archive").</td></tr>
 <tr><td><code>.tar</code></td><td><code>TarCreate</code>, <code>TarCreateFile</code></td><td><code>TarList</code></td><td><code>TarExtractByName</code></td><td><code>TarExtractAll</code></td><td>No. Tar keeps no checksum of the contents.</td></tr>
-<tr><td><code>.tar.gz</code></td><td><code>TarCreate</code>, then <code>compress.GzipCompressBuf</code></td><td>gunzip, then <code>TarList</code></td><td>gunzip, then <code>TarExtractByName</code></td><td>gunzip, then <code>TarExtractAll</code></td><td>Yes, by the gzip step: its CRC-32 and length are verified.</td></tr>
+<tr><td><code>.tar.gz</code></td><td><code>TarGzCreate</code>, <code>TarGzCreateFile</code></td><td><code>TarGzList</code>, <code>TarGzListMax</code></td><td><code>TarGzExtractByName</code>, <code>TarGzExtractByNameMax</code></td><td><code>TarGzExtractAll</code>, <code>TarGzExtractAllMax</code></td><td>Yes, by the gzip step: its CRC-32 and length are verified. The <code>Max</code> forms stop a small file from expanding without bound.</td></tr>
+<tr><td><code>.bz2</code> (one file)</td><td><code>Bzip2CompressFile</code>, <code>compress.Bzip2CompressBuf</code></td><td>not applicable</td><td><code>Bzip2DecompressFile</code>, <code>compress.Bzip2DecompressBuf</code></td><td>the same</td><td>Yes: every block CRC and the stream CRC are verified, <code>ok</code> is false on a mismatch.</td></tr>
 <tr><td><code>.gz</code> (one file)</td><td><code>GzipCompressFile</code>, <code>compress.GzipCompressBuf</code></td><td>not applicable</td><td><code>GzipDecompressFile</code>, <code>compress.GzipDecompressBuf</code></td><td>the same</td><td>Yes: CRC-32 and length are verified, <code>ok</code> is false on a mismatch.</td></tr>
 <tr><td><code>.rar</code></td><td><code>RarCreate</code>, <code>RarCreateFile</code> (stored, RAR 5)</td><td><code>RarList</code>, <code>RarEntries</code></td><td><code>RarExtract</code>, <code>RarRead</code></td><td><code>RarExtractAll</code>, <code>RarReadAll</code></td><td>Yes, every entry; the result is a status code.</td></tr>
 </tbody>
 </table></div>
 <p>Passwords and multi-volume sets work for RAR only, through <code>RarOpen</code> and <code>RarOpenVolumes</code>. Zip passwords are not supported.</p>
 
-<p>The compression itself comes from <a href="/std/compress/">compress</a>; use that package directly to gzip a single file or stream. For reading and writing the files on disk around an archive, see <a href="/std/fs/file/">fs.file</a>.</p>
+<p>The compression itself comes from <a href="/std/compress/">compress</a>; use that package directly to gzip a single file or stream. For reading and writing the files on disk around an archive, see <a href="/std/fs/">fs</a>.</p>
 <h3 id="limits">Limits to know about</h3>
 <ul>
-<li><strong>Zip:</strong> no zip64, so archives and entries must stay under 2 GB; only methods 0 (stored) and 8 (DEFLATE) are read, so entries packed with bzip2, LZMA or zstd fail to extract; encrypted entries are refused; the CRC-32 is not checked on extract.</li>
-<li><strong>Zip names and dates:</strong> new zips do not set the UTF-8 flag, so tools that assume the old DOS code page, such as Windows Explorer, may show Persian file names garbled, and every entry is dated 1 January 1980. <code>Entry.mtime</code> is always 0 for zip entries.</li>
-<li><strong>Tar:</strong> names longer than 100 bytes are cut, both when writing and reading, and the ustar prefix field and GNU or PAX long names are not used. Links and other special entries are listed as ordinary files of size 0. New entries get a time of 0, and the mode you set, or 644 for files and 755 for folders when you leave it at 0.</li>
-<li><strong>RAR:</strong> RAR 5 archives are read completely: every compression level, solid archives and the built-in filters, with each entry's CRC-32 checked. Older archives (RAR 1.5 to 4.x) are read the same way, including PPMd text compression and the standard filters. Password-protected archives open with <code>RarOpen</code> and a password, including ones whose file names are encrypted; without it they report <code>RAR_ENCRYPTED</code>, and a wrong password reports <code>RAR_BAD_PASSWORD</code>. Multi-volume archives open from the list of volumes (<code>RarOpenVolumes</code>, or <code>RarReadVolumes</code> to load a set from disk); a set with a missing volume reports <code>RAR_MULTIVOLUME</code> for the files that cross it. A file that is both encrypted and split across volumes is not supported. New archives are RAR 5 with the files stored, because only WinRAR itself can compress to RAR; any RAR tool opens them.</li>
+<li><strong>Zip:</strong> zip64 is read and written (64-bit sizes and offsets, the zip64 end record, more than 65535 entries), but the package counts bytes in an <code>int</code>, so in practice an archive and each entry must stay under 2 GB. A bigger entry is listed with its true size, and extracting it reports <code>ZIP_TOO_BIG</code>; <code>ZipCreate</code> returns an empty buffer (and <code>ZipCreateFile</code> false) for input it cannot hold: a negative length, a null address with a length, a name over 65535 bytes, or about 1.9 GB in total. <code>ZipCreate</code> switches to zip64 on its own only for 65535 entries or more; <code>ZipCreate64</code> always writes the zip64 form, which <code>unzip</code> and <code>7z</code> read. Only methods 0 (stored) and 8 (DEFLATE) are read, so entries packed with bzip2, LZMA or zstd fail to extract; encrypted entries are refused. <code>ZipExtractByName</code> and <code>ZipExtractByNameMax</code> do not check the CRC-32; <code>ZipExtractVerified</code>, <code>ZipVerify</code> and <code>ZipExtractAll</code> do, and <code>ZipExtractAll</code> skips an entry that fails the check and returns false.</li>
+<li><strong>Zip names and dates:</strong> a name with non-ASCII bytes is written with the UTF-8 flag (general purpose bit 11), so Windows Explorer, <code>unzip</code> and 7-Zip show Persian names correctly. When reading, a name is taken as it is (UTF-8) unless the Info-ZIP "Unicode path" field is present, which then wins. Names from other code pages are not converted. Dates are DOS dates: two second steps, between 1980 and 2107, with no time zone, read here as UTC. Set <code>ZipFileInput.mtime</code> (seconds since 1970) to date an entry; 0, or any time before 1980, writes 1 January 1980. The extra timestamp field is not written. <code>ZipExtractAll</code> sets the modification time of the files it writes from that date, except on Windows and 32 bit systems, and does not touch folders.</li>
+<li><strong>Tar:</strong> names of any length round-trip: a long name is stored in the ustar prefix field when it splits at a slash, otherwise in a PAX <code>path</code> record, and reading understands ustar prefixes, PAX (<code>x</code> and <code>g</code>) and GNU long names and links. Symbolic and hard links are real entries (<code>Entry.kind</code> and <code>Entry.link</code>); devices, pipes and other special entries are listed with <code>kind</code> 4 and skipped by <code>TarExtractAll</code>. Times and modes you set are written (a time past the ustar range goes into a PAX record), and extraction applies the mode and the modification time of files and folders, but not their owner. On Windows symbolic links are not created (the call returns false), hard links become copies and times are not set; times are not set on 32 bit systems either. Entries that are not given a time get 0, and the mode you leave at 0 becomes 644 for files, 755 for folders and 777 for symbolic links.</li>
+<li><strong>Tar extraction:</strong> <code>TarExtractAll</code> skips, and returns false for, a name that is absolute or climbs out with <code>..</code>, a name that passes through a symbolic link it created, a symbolic link whose target is absolute or leaves the target folder (a <code>..</code> after a name is refused too), and a hard link to a name outside the folder. Set-user-id and similar mode bits are never applied.</li>
+<li><strong>RAR:</strong> RAR 5 archives are read completely: every compression level, solid archives and the built-in filters, with each entry's CRC-32 checked. Older archives (RAR 1.5 to 4.x) are read the same way, including PPMd text compression and the standard filters. Password-protected archives open with <code>RarOpen</code> and a password, including ones whose file names are encrypted; without it they report <code>RAR_ENCRYPTED</code>, and a wrong password reports <code>RAR_BAD_PASSWORD</code>. Multi-volume archives open from the list of volumes (<code>RarOpenVolumes</code>, or <code>RarReadVolumes</code> to load a set from disk); a set with a missing volume reports <code>RAR_MULTIVOLUME</code> for the files that cross it. A file that is both encrypted and split across volumes is read too (checked on RAR 5; RAR 3 and 4 use the same code but have no sample to test with). The old RAR 1.5 and 2.x passwords work as well. Archives and entries must stay under 2 GB; a bigger entry reports <code>RAR_TOO_BIG</code>. Extraction restores the Unix permissions and the modification time (on 64-bit systems other than Windows), recreates symbolic links whose target stays inside the destination, and writes hard links and file copies as plain copies; a link that points outside is skipped and reported as <code>RAR_UNSAFE_PATH</code>. New archives are RAR 5 with the files stored, because only WinRAR itself can compress to RAR; any RAR tool opens them.</li>
 </ul>
 
 <p>The guide below shows the usual jobs: zipping a set of files, making and reading a <code>.tar.gz</code>, telling formats apart by their first bytes, and extracting without letting an archive write outside the target folder.</p>
@@ -38,9 +40,9 @@ pkg.intro <<
 <p>Text shrinks well. The logo is already compressed, so it uses method 0: running DEFLATE on it again would only cost time and could even make it bigger. The same rule holds for JPEG, PNG, MP4 and other zips.</p>
 
 <h2 id="guide-targz">Make and read a .tar.gz</h2>
-<p>Tar does not compress. It puts each file after a 512 byte header and pads its contents to a multiple of 512 bytes, so three small files already take 3.5 KB. The usual answer is to gzip the whole tar, and all that padding then nearly disappears. In memory that is <code>TarCreate</code> followed by <code>compress.GzipCompressBuf</code>; for a tar that is already on disk, <code>GzipCompressFile</code> and <code>GzipDecompressFile</code> do it file to file.</p>
+<p>Tar does not compress. It puts each file after a 512 byte header and pads its contents to a multiple of 512 bytes, so three small files already take 3.5 KB. The usual answer is to gzip the whole tar, and all that padding then nearly disappears. In memory that is <code>TarCreate</code> followed by <code>compress.GzipCompressBuf</code>; for a tar that is already on disk, <code>GzipCompressFile</code> and <code>GzipDecompressFile</code> do it file to file. <code>TarGzCreate</code> and <code>TarGzCreateFile</code> do both steps at once.</p>
 {{example.archive-guide-targz}}
-<p>Reading goes the other way: gunzip with <code>compress.GzipDecompressBuf</code>, check <code>ok</code>, then <code>TarList</code> and <code>TarExtractByName</code> on the plain tar. Directory entries in a tar have size 0 and <code>is_dir</code> set.</p>
+<p>Reading goes the other way: <code>TarGzList</code>, <code>TarGzExtractByName</code> and <code>TarGzExtractAll</code> gunzip and read in one call, and set <code>ok</code> to false when the data is not a valid gzip. They refuse to inflate past 1 GiB; give the <code>Max</code> forms a smaller limit for input you do not trust. Directory entries in a tar have size 0 and <code>is_dir</code> set.</p>
 
 <h2 id="guide-detect">Tell the format from the first bytes</h2>
 <p>A file name can lie, the bytes cannot. Every format starts with a fixed signature, so a program that accepts uploads should look at the bytes before it picks a reader:</p>
@@ -70,11 +72,15 @@ pkg.intro <<
 <p>"Check" means two different things. To see what is inside without unpacking, list it: <code>ZipList</code>, <code>TarList</code> and <code>RarList</code> (or <code>RarEntries</code>) give every name, size, folder flag and, for zip and RAR, the stored CRC-32; free the list with <code>FreeEntries</code>. To know the data is intact, you need a checksum, and formats differ:</p>
 <ul>
 <li><strong>gzip and RAR</strong> verify themselves. A gzip call returns <code>ok = false</code>; a RAR call sets the status to <code>RAR_BAD_CRC</code>, or <code>RAR_BAD_PASSWORD</code> when a password was wrong.</li>
-<li><strong>zip</strong> stores a CRC-32 for each entry but does not compare it while extracting. Extract the entry and compare <code>compress.CRC32Buf(data)</code> with <code>Entry.crc32</code>, as the example does.</li>
+<li><strong>zip</strong> stores a CRC-32 for each entry. <code>ZipExtractVerified</code> compares it with the data and sets <code>status</code> to <code>ZIP_OK</code>, <code>ZIP_BAD_CRC</code> and so on; <code>ZipVerify</code> checks every entry and returns how many failed; <code>ZipBadEntries</code> lists them. <code>ZipExtractByName</code> stays unchecked, for speed and for old code: compare <code>compress.CRC32Buf(data)</code> with <code>Entry.crc32</code> yourself, as the example below does.</li>
 <li><strong>tar</strong> has no checksum for the contents. All you can check is that the listing is sane (names, sizes); for integrity gzip the tar and rely on the gzip trailer, or keep a hash next to the file.</li>
 </ul>
 {{example.archive-guide-check}}
 <p>In the example one byte of the first zip entry was changed. Extraction still reports success for it, but its checksum no longer matches, while the second entry is fine. The RAR entry with the same damage is refused by the extractor itself.</p>
+<p>The verified calls do that comparison for you. <code>ZipVerify</code> sets <code>checked</code> to the number of files it inflated and returns how many were bad, or -1 when the data is not a zip; <code>ZipStatusText</code> turns a status into a sentence.</p>
+{{example.archive-guide-zipverify}}
+<p>The next example covers dates and zip64: <code>ZipFileInput.mtime</code> sets an entry's date, <code>Entry.mtime</code> reads it back, and <code>ZipCreate64</code> writes the zip64 form.</p>
+{{example.archive-guide-ziptime}}
 
 <h2 id="guide-rar">Read and write a RAR</h2>
 <p>Reading goes through <code>RarList</code> and <code>RarExtract</code>, the same way as zip. The sample below is a small solid RAR 5 made by WinRAR: the second file is packed against the first, so <code>RarExtract</code> unpacks both to reach it. Every entry is checked against its CRC-32, and the <code>status</code> says what went wrong instead of returning silent garbage.</p>
@@ -93,13 +99,14 @@ pkg.intro <<
 <thead><tr><th>Job</th><th>Use</th></tr></thead>
 <tbody>
 <tr><td>Files for Windows users or a browser download</td><td><code>ZipCreate</code>, <code>ZipCreateFile</code></td></tr>
-<tr><td>A backup or a release bundle on Unix</td><td><code>TarCreate</code>, then <code>compress.GzipCompressBuf</code></td></tr>
+<tr><td>A backup or a release bundle on Unix</td><td><code>TarGzCreate</code> or <code>TarGzCreateFile</code></td></tr>
 <tr><td>See what is inside</td><td><code>ZipList</code>, <code>TarList</code>, <code>RarList</code>, then <code>FreeEntries</code></td></tr>
 <tr><td>One file out of an archive</td><td><code>ZipExtractByName</code>, <code>TarExtractByName</code></td></tr>
 <tr><td>Everything into a folder</td><td><code>ZipExtractAll</code>, <code>TarExtractAll</code></td></tr>
 <tr><td>A RAR file</td><td><code>RarList</code>, <code>RarExtract</code> (or <code>RarExtractByName</code>), <code>RarExtractAll</code>; <code>RarCreate</code> to make one</td></tr>
 <tr><td>A single compressed file (<code>.gz</code>)</td><td><code>GzipCompressFile</code>, <code>GzipDecompressFile</code></td></tr>
-<tr><td>Check that an archive is intact</td><td>zip: compare <code>CRC32Buf</code> with <code>Entry.crc32</code>; gzip and RAR check themselves; see "Check an archive"</td></tr>
+<tr><td>A single file, smaller than gzip (<code>.bz2</code>)</td><td><code>Bzip2CompressFile</code>, <code>Bzip2DecompressFile</code></td></tr>
+<tr><td>Check that an archive is intact</td><td>zip: <code>ZipVerify</code>, <code>ZipExtractVerified</code>; gzip and RAR check themselves; see "Check an archive"</td></tr>
 <tr><td>A password-protected or multi-volume RAR</td><td><code>RarOpen</code>, <code>RarOpenVolumes</code>, then <code>RarEntries</code>, <code>RarRead</code>, <code>RarReadAll</code></td></tr>
 <tr><td>Bytes from and to disk</td><td><code>ReadBinaryFile</code>, <code>WriteBinaryFileBuf</code></td></tr>
 </tbody>
@@ -113,7 +120,10 @@ doc.Entry.compressed_size = The compressed size.
 doc.Entry.is_dir = The entry is a directory.
 doc.Entry.method = The compression method: zero for plain storage, 8 for DEFLATE.
 doc.Entry.crc32 = The checksum of the contents.
-doc.Entry.mtime = The modification time in seconds since the Unix epoch, as stored in a tar header; always 0 for zip entries.
+doc.Entry.mtime = The modification time in seconds since the Unix epoch: from a tar header, a RAR header, or for zip the DOS date and time read as UTC (0 when the entry has none).
+doc.Entry.link = The target of a tar symbolic or hard link, otherwise empty.
+doc.Entry.kind = What a tar entry is: 0 file, 1 folder, 2 symbolic link, 3 hard link, 4 other (device, pipe). Zip and RAR entries are 0 or 1.
+doc.Entry.mode = The permission bits of a tar entry, such as <code>0o644</code>; 0 for zip and RAR entries.
 doc.FreeEntries = Frees the memory of the entry list.
 doc.ZipFileInput = One file to put in a zip.
 doc.ZipFileInput.name = The name inside the archive; a directory name ends with <code>/</code>. Use <code>/</code> between folders, never <code>\</code>.
@@ -121,24 +131,50 @@ doc.ZipFileInput.data_ptr = The address of the contents.
 doc.ZipFileInput.data_len = The length of the contents.
 doc.ZipFileInput.method = Zero for plain storage, 8 for DEFLATE.
 doc.MakeZipFileInput = Makes one zip input.
-doc.ZipCreate = Builds a zip archive in memory.
+doc.ZipFileInput.mtime = The modification time in seconds since the Unix epoch. Zero, or a time before 1980, writes 1 January 1980; the DOS format cannot go past 2107 and keeps two second steps.
+doc.ZipCreate = Builds a zip archive in memory. Names with non-ASCII bytes get the UTF-8 flag. Any method other than 8 stores the file. The result is empty when an input is invalid (negative length, null address with a length, name over 65535 bytes) or the total is over about 1.9 GB.
+doc.ZipCreate64 = Like <code>ZipCreate</code>, but always writes the zip64 form: 64-bit sizes and offsets in extra fields, the zip64 end record and its locator. <code>unzip</code> and 7-Zip read it; use it to test zip64 readers. Empty on invalid input.
 doc.ZipCreateFile = Writes a zip archive to a file.
 doc.ZipList = The entries of a zip in memory.
 doc.ZipExtractByName = Pulls out the contents of one entry; <code>ok</code> becomes false when the name is not found, the entry is encrypted, or its method is not 0 or 8. The CRC is not checked.
 doc.ZipExtractByNameMax = Same as <code>ZipExtractByName</code>, but <code>ok</code> becomes false when the entry would be larger than <code>max</code> bytes, checked while it is inflated. Use it on archives from other people, where a few kilobytes can claim to hold gigabytes.
-doc.ZipExtractAll = Writes every entry into the target directory. When the data is not a zip it has no entries and nothing is written.
+doc.ZipExtractAll = Writes every entry into the target directory, after checking its CRC-32. An entry with an unsafe name or a failed check is not written and the result is false. When the data is not a zip it has no entries and nothing is written.
+doc.ZipExtractVerified = Pulls out one entry and checks its size and CRC-32. <code>status</code> is set to one of the <code>ZIP_</code> codes, <code>ZIP_OK</code> on success, otherwise the reason, and the buffer is empty. <code>max</code> caps the unpacked size, or 0 for no cap.
+doc.ZipVerify = Inflates every file entry and checks its size and CRC-32. Sets <code>checked</code> to how many it looked at and returns how many failed (encrypted, unsupported or too big count as failed), 0 when all are good, or -1 when the data is not a zip.
+doc.ZipBadEntries = The entries that fail <code>ZipVerify</code>; free the list with <code>FreeEntries</code>.
+doc.ZipStatusText = A short English description of a <code>ZIP_</code> status code.
+doc.ZIP_OK = Status: the entry was unpacked and its checksum matched.
+doc.ZIP_NOT_FOUND = Status: no entry has that name.
+doc.ZIP_UNSUPPORTED = Status: a compression method other than 0 and 8.
+doc.ZIP_ENCRYPTED = Status: the entry is encrypted.
+doc.ZIP_CORRUPT = Status: the data is damaged, cut short, or not a zip, or its size does not match.
+doc.ZIP_BAD_CRC = Status: the entry unpacked but its CRC-32 does not match the one in the archive.
+doc.ZIP_TOO_BIG = Status: the entry is larger than the <code>max</code> given, or larger than 2 GB.
 doc.TarFileInput = One file to put in a tar.
-doc.TarFileInput.name = The name inside the archive, at most 100 bytes; a longer name is cut.
+doc.TarFileInput.name = The name inside the archive. A name over 100 bytes goes into the ustar prefix or a PAX record, so any length is kept.
 doc.TarFileInput.data_ptr = The address of the contents.
 doc.TarFileInput.data_len = The length of the contents.
 doc.TarFileInput.is_dir = The input is a directory.
 doc.TarFileInput.mode = File permissions, such as <code>0o755</code>. Zero means the usual ones.
+doc.TarFileInput.mtime = The modification time in seconds since the Unix epoch; zero by default.
+doc.TarFileInput.link = The target of a symbolic or hard link entry; ignored for other kinds.
+doc.TarFileInput.kind = 0 for a file or folder (see <code>is_dir</code>), 2 for a symbolic link, 3 for a hard link.
 doc.MakeTarFileInput = Makes one tar input.
-doc.TarCreate = Builds a tar archive in memory, in the ustar format; tar does not compress, so gzip the result for that.
+doc.MakeTarSymlink = Makes a symbolic link entry that points to <code>target</code>.
+doc.MakeTarHardlink = Makes a hard link entry to another entry of the same archive, named by <code>target</code>.
+doc.TarCreate = Builds a tar archive in memory, in the ustar format with PAX records for what ustar cannot hold; tar does not compress, so gzip the result for that.
 doc.TarCreateFile = Writes a tar archive to a file.
-doc.TarList = The entries of a tar in memory.
-doc.TarExtractByName = The contents of one tar entry.
-doc.TarExtractAll = Writes every tar entry into the target directory.
+doc.TarList = The entries of a tar in memory, with their long names, links, times and modes. Free the list with <code>FreeEntries</code>.
+doc.TarExtractByName = The contents of one tar file entry; <code>ok</code> is false when the name is not there or is not a file.
+doc.TarExtractAll = Writes every tar entry into the target directory, with links, modes and times. Returns false when it had to skip an unsafe name or link, or an entry it cannot make.
+doc.TarGzCreate = Builds a tar in memory and gzips it.
+doc.TarGzCreateFile = Writes a <code>.tar.gz</code> file.
+doc.TarGzList = The entries of a <code>.tar.gz</code> in memory; <code>ok</code> is false when the gzip is invalid or inflates past 1 GiB.
+doc.TarGzListMax = Same as <code>TarGzList</code>, with your own limit <code>max</code> on the inflated size in bytes.
+doc.TarGzExtractByName = The contents of one file of a <code>.tar.gz</code>.
+doc.TarGzExtractByNameMax = Same as <code>TarGzExtractByName</code>, with your own limit <code>max</code> on the inflated size in bytes.
+doc.TarGzExtractAll = Gunzips a <code>.tar.gz</code> and writes it into the target directory like <code>TarExtractAll</code>; false when the gzip is invalid or too big.
+doc.TarGzExtractAllMax = Same as <code>TarGzExtractAll</code>, with your own limit <code>max</code> on the inflated size in bytes.
 doc.IsRar = True when the data starts with the RAR signature.
 doc.RarList = The entries of a RAR archive.
 doc.RarExtractByName = The contents of one RAR entry, found by its exact name. <code>ok</code> is false when it is missing, unsupported, encrypted or damaged; use <code>RarExtract</code> to learn which.
@@ -154,7 +190,7 @@ doc.RarCreate = Builds a RAR 5 archive in memory. The files are stored without c
 doc.RarCreateFile = Writes the RAR 5 archive to disk and returns false when it cannot.
 doc.RarExtract = The contents of one RAR entry, found by its exact name. <code>status</code> is set to one of the <code>RAR_</code> codes: <code>RAR_OK</code> on success, otherwise the reason, and the buffer is empty. <code>max</code> caps the unpacked size, or 0 for no cap.
 doc.RarExtractByNameMax = Same as <code>RarExtractByName</code>, but <code>ok</code> becomes false when the entry is larger than <code>max</code> bytes, which is checked before anything is unpacked.
-doc.RarExtractAllStatus = Same as <code>RarExtractAll</code>, but returns how many entries were written and sets <code>status</code> to the first problem it met. An entry whose name would leave the target directory is skipped and reported as <code>RAR_UNSAFE_PATH</code>.
+doc.RarExtractAllStatus = Same as <code>RarExtractAll</code>, but returns how many entries were written and sets <code>status</code> to the first problem it met. An entry whose name would leave the target directory, or a symbolic link whose target would, is skipped and reported as <code>RAR_UNSAFE_PATH</code>.
 doc.RarStatusText = A short English description of a <code>RAR_</code> status code.
 doc.RAR_OK = Status: the entry was unpacked and its checksum matched.
 doc.RAR_NOT_FOUND = Status: no entry has that name.
@@ -162,7 +198,7 @@ doc.RAR_UNSUPPORTED = Status: a RAR version or method this package cannot unpack
 doc.RAR_ENCRYPTED = Status: the entry or the headers are encrypted and no password was given.
 doc.RAR_CORRUPT = Status: the data is damaged or cut short.
 doc.RAR_BAD_CRC = Status: the entry unpacked but its CRC-32 does not match the one in the archive.
-doc.RAR_MULTIVOLUME = Status: the entry continues in a volume that was not given (or is encrypted and split, which is not supported).
+doc.RAR_MULTIVOLUME = Status: the entry continues in a volume that was not given.
 doc.RAR_TOO_BIG = Status: the entry is larger than the <code>max</code> given, or needs more memory than the package will allocate.
 doc.RAR_UNSAFE_PATH = Status: the entry name would write outside the target directory, so it was skipped.
 doc.RAR_BAD_PASSWORD = Status: the password is wrong (or, for RAR 3 and 4, the data is damaged).
@@ -180,6 +216,8 @@ doc.RarReadVolumes = Reads the first volume and every following one it can find 
 doc.RarFreeVolumes = Frees the volumes read by <code>RarReadVolumes</code>.
 doc.RarOpenVolumes = Like <code>RarOpen</code>, for a list of volumes in order. The buffers must stay alive while the archive is used.
 doc.RarClose = Releases what a <code>RarArchive</code> holds; the volumes themselves are freed with <code>RarFreeVolumes</code>.
+doc.Bzip2CompressFile = Compresses a file into a bzip2 (<code>.bz2</code>) file; false when it cannot read or write.
+doc.Bzip2DecompressFile = Decompresses a bzip2 file; false when it cannot read or write or the data is not valid bzip2.
 doc.GzipCompressFile = Gzips a file.
 doc.GzipDecompressFile = Decompresses a gzip file.
 doc.ReadBinaryFile = Reads every byte of a file into a buffer.
@@ -201,6 +239,19 @@ ex.ZipList = archive-Zip
 ex.ZipExtractByName = archive-Zip
 ex.ZipExtractByNameMax = archive-Zip
 ex.ZipExtractAll = archive-Zip
+ex.ZipFileInput.mtime = archive-ZipTime
+ex.ZipCreate64 = archive-ZipTime
+ex.ZipExtractVerified = archive-ZipVerify
+ex.ZipVerify = archive-ZipVerify
+ex.ZipBadEntries = archive-ZipVerify
+ex.ZipStatusText = archive-ZipVerify
+ex.ZIP_OK = archive-ZipVerify
+ex.ZIP_NOT_FOUND = archive-ZipVerify
+ex.ZIP_UNSUPPORTED = archive-ZipVerify
+ex.ZIP_ENCRYPTED = archive-ZipVerify
+ex.ZIP_CORRUPT = archive-ZipVerify
+ex.ZIP_BAD_CRC = archive-ZipVerify
+ex.ZIP_TOO_BIG = archive-ZipVerify
 ex.IsRar = archive-Zip
 ex.RarList = archive-Zip
 ex.RarExtractByName = archive-Zip
@@ -246,11 +297,29 @@ ex.ReadBinaryFile = archive-Zip
 ex.TarFileInput = archive-Tar
 ex.TarFileInput.mode = archive-Tar
 ex.MakeTarFileInput = archive-Tar
+ex.TarFileInput.mtime = archive-TarLinks
+ex.TarFileInput.link = archive-TarLinks
+ex.TarFileInput.kind = archive-TarLinks
+ex.MakeTarSymlink = archive-TarLinks
+ex.MakeTarHardlink = archive-TarLinks
+ex.Entry.link = archive-TarLinks
+ex.Entry.kind = archive-TarLinks
+ex.Entry.mode = archive-TarLinks
+ex.TarGzCreate = archive-TarGz
+ex.TarGzCreateFile = archive-TarGz
+ex.TarGzList = archive-TarGz
+ex.TarGzListMax = archive-TarGz
+ex.TarGzExtractByName = archive-TarGz
+ex.TarGzExtractByNameMax = archive-TarGz
+ex.TarGzExtractAll = archive-TarGz
+ex.TarGzExtractAllMax = archive-TarGz
 ex.TarCreate = archive-Tar
 ex.TarCreateFile = archive-Tar
 ex.TarList = archive-Tar
 ex.TarExtractByName = archive-Tar
 ex.TarExtractAll = archive-Tar
+ex.Bzip2CompressFile = archive-Bzip2
+ex.Bzip2DecompressFile = archive-Bzip2
 ex.GzipCompressFile = archive-Tar
 ex.GzipDecompressFile = archive-Tar
 ex.WriteBinaryFile = archive-Tar

@@ -20,6 +20,7 @@ import str
 
 mut _clock := -1
 mut _running := 0
+mut _pending_anims := 0
 mut _anims := Vector {} as Vector<AnimState>
 mut _anim_free := Vector {} as Vector<int>
 
@@ -246,6 +247,7 @@ func _rx_anim_touch(n: int, src: int):
         ret
     end
     st.pending = true
+    _pending_anims++
     st.pending_at = 0 as i64
     if _clock >= 0 and _rx_live(_clock):
         st.pending_at = _n_val.get(_clock)
@@ -268,6 +270,9 @@ func _rx_anim_release(r: int):
     if st.running:
         _running--
     end
+    if st.pending:
+        _pending_anims--
+    end
     _anims.set(r, AnimState {})
     _anim_free.push(r)
     _rx_node_free(st.target)
@@ -280,6 +285,7 @@ func _rx_anim_free_all():
     _anim_free = Vector {} as Vector<int>
     _clock = -1
     _running = 0
+    _pending_anims = 0
 end
 
 func _rx_num(n: int): f64:
@@ -360,6 +366,7 @@ func _rx_eval_anim(n: int, r: int):
     if st.pending:
         begin = st.pending_at
         st.pending = false
+        _pending_anims--
     end
     if changed:
         mut cur := _rx_num(n)
@@ -434,17 +441,20 @@ func _rx_animate(n: int, spec: Animation):
     _p2 := _rx_bind_new(n, _B_ANIM, -1, r)
     _n_flags.set(n, _n_flags.get(n) | _F_ANIM)
     _rx_mark_self(n)
+    _rx_eval(n)
 end
 
 func _rx_settle():
-    if _running <= 0:
+    if _running <= 0 and _pending_anims <= 0:
         ret
     end
     c := _rx_clock_node()
     now := _n_val.get(c)
     repeat _anims.len() in i:
         st := _anims.get(i)
-        if st.live and st.running and now - st.start - (st.spec.delay as i64) >= (st.spec.duration as i64):
+        if st.live and st.pending:
+            _rx_update(st.node)
+        else st.live and st.running and now - st.start - (st.spec.delay as i64) >= (st.spec.duration as i64):
             _rx_update(st.node)
         end
     end
@@ -625,11 +635,11 @@ end
 @en "AnimationsRunning"
 @fa "پویانمایی جاری"
 pub func AnimationsRunning(): bool:
-    ret _running > 0
+    ret _running > 0 or _pending_anims > 0
 end
 
 @en "RunningAnimations"
 @fa "شمار پویانمایی ها"
 pub func RunningAnimations(): int:
-    ret _running
+    ret _running + _pending_anims
 end

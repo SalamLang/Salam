@@ -1,0 +1,378 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package archive
+
+import compress
+
+
+@en "SevenZipFileInput"
+@fa "ورودی پرونده هفت زد"
+pub struct SevenZipFileInput:
+    @en "name"
+    @fa "نام"
+    pub name: str = ""
+    @en "data_ptr"
+    @fa "نشانی داده"
+    pub data_ptr: void* = null
+    @en "data_len"
+    @fa "طول داده"
+    pub data_len: int = 0
+    @en "is_dir"
+    @fa "پوشه"
+    pub is_dir: bool = false
+    @en "mtime"
+    @fa "زمان تغییر"
+    pub mtime: i64 = 0 as i64
+    @en "mode"
+    @fa "دسترسی"
+    pub mode: int = 0
+    @en "link"
+    @fa "پیوند"
+    pub link: str = ""
+end
+
+func _szw_num(b &: compress.ByteBuf, v: i64):
+    if v >= (0 as i64) and v < (128 as i64):
+        compress.BufPush(b, v as int)
+        ret
+    end
+    compress.BufPush(b, 255)
+    repeat 8 in i:
+        compress.BufPush(b, ((v >> (8 * i)) & 255) as int)
+    end
+end
+
+func _szw_u32(b &: compress.ByteBuf, v: i64):
+    repeat 4 in i:
+        compress.BufPush(b, ((v >> (8 * i)) & 255) as int)
+    end
+end
+
+func _szw_bits(b &: compress.ByteBuf, bits: Vector<bool>):
+    mut cur := 0
+    mut n := 0
+    repeat bits.len() in i:
+        cur <<= 1
+        if bits.get(i):
+            cur |= 1
+        end
+        n++
+        if n == 8:
+            compress.BufPush(b, cur)
+            cur = 0
+            n = 0
+        end
+    end
+    if n > 0:
+        compress.BufPush(b, cur << (8 - n))
+    end
+end
+
+func _szw_name(b &: compress.ByteBuf, name: str):
+    p := name as u8*
+    mut n := name.len()
+    until n > 1 and ((p[n - 1] as int) == 47 or (p[n - 1] as int) == 92):
+        n--
+    end
+    mut i := 0
+    until i < n:
+        c := p[i] as int
+        mut cp := c
+        mut extra := 0
+        if c >= 240:
+            cp = c & 7
+            extra = 3
+        else c >= 224:
+            cp = c & 15
+            extra = 2
+        else c >= 192:
+            cp = c & 31
+            extra = 1
+        end
+        i++
+        repeat extra:
+            if i < n:
+                cp = (cp << 6) | ((p[i] as int) & 63)
+                i++
+            end
+        end
+        if cp == 92:
+            cp = 47
+        end
+        if cp >= 65536:
+            v := cp - 65536
+            u1 := 55296 + (v >> 10)
+            u2 := 56320 + (v & 1023)
+            compress.BufPush(b, u1 & 255)
+            compress.BufPush(b, u1 >> 8)
+            compress.BufPush(b, u2 & 255)
+            compress.BufPush(b, u2 >> 8)
+        else:
+            compress.BufPush(b, cp & 255)
+            compress.BufPush(b, cp >> 8)
+        end
+    end
+    compress.BufPush(b, 0)
+    compress.BufPush(b, 0)
+end
+
+func _szw_wrap(h: compress.ByteBuf, id: int): compress.ByteBuf:
+    mut out := compress.NewByteBuf()
+    compress.BufPush(out, id)
+    _szw_num(out, h.len as i64)
+    compress.BufPushBuf(out, h)
+    ret out
+end
+
+@en "MakeSevenZipFileInput"
+@fa "ساخت ورودی پرونده هفت زد"
+pub func MakeSevenZipFileInput(name: str, data_ptr: void*, data_len: int, is_dir: bool): SevenZipFileInput:
+    ret SevenZipFileInput { name = name, data_ptr = data_ptr, data_len = data_len, is_dir = is_dir }
+end
+
+@en "SevenZipCreate"
+@fa "ساخت هفت زد"
+pub func SevenZipCreate(files: Vector<SevenZipFileInput>): compress.ByteBuf:
+    mut out := compress.NewByteBuf()
+    n := files.len()
+    mut total := 0 as i64
+    mut nstream := 0
+    mut empty := Vector {} as Vector<bool>
+    mut empty_file := Vector {} as Vector<bool>
+    mut any_mtime := false
+    mut any_attr := false
+    repeat n in i:
+        f := files.get(i)
+        if f.data_len < 0 or f.name.len() == 0 or f.name.len() > 65535 or (f.data_len > 0 and f.data_ptr == null):
+            empty.free()
+            empty_file.free()
+            ret out
+        end
+        mut size := f.data_len
+        if f.link.len() > 0:
+            size = f.link.len()
+        end
+        is_empty := f.is_dir or size == 0
+        empty.push(is_empty)
+        if is_empty:
+            empty_file.push(not f.is_dir)
+        else:
+            nstream++
+            total += size as i64
+        end
+        if f.mtime > (0 as i64):
+            any_mtime = true
+        end
+        if f.mode > 0:
+            any_attr = true
+        end
+    end
+    if total > (1900000000 as i64):
+        empty.free()
+        empty_file.free()
+        ret out
+    end
+    repeat 32:
+        compress.BufPush(out, 0)
+    end
+    mut h := compress.NewByteBuf()
+    compress.BufPush(h, 1)
+    if nstream > 0:
+        mut crcs := Vector {} as Vector<i64>
+        mut sizes := Vector {} as Vector<i64>
+        repeat n in i:
+            f := files.get(i)
+            if empty.get(i):
+                continue
+            end
+            if f.link.len() > 0:
+                compress.BufPushBytes(out, f.link as void*, f.link.len())
+                sizes.push(f.link.len() as i64)
+                crcs.push(compress.CRC32(f.link as void*, f.link.len()) as i64)
+            else:
+                compress.BufPushBytes(out, f.data_ptr, f.data_len)
+                sizes.push(f.data_len as i64)
+                crcs.push(compress.CRC32(f.data_ptr, f.data_len) as i64)
+            end
+        end
+        compress.BufPush(h, 4)
+        compress.BufPush(h, 6)
+        _szw_num(h, 0 as i64)
+        _szw_num(h, 1 as i64)
+        compress.BufPush(h, 9)
+        _szw_num(h, total)
+        compress.BufPush(h, 0)
+        compress.BufPush(h, 7)
+        compress.BufPush(h, 11)
+        _szw_num(h, 1 as i64)
+        compress.BufPush(h, 0)
+        _szw_num(h, 1 as i64)
+        compress.BufPush(h, 1)
+        compress.BufPush(h, 0)
+        compress.BufPush(h, 12)
+        _szw_num(h, total)
+        compress.BufPush(h, 0)
+        compress.BufPush(h, 8)
+        compress.BufPush(h, 13)
+        _szw_num(h, nstream as i64)
+        if nstream > 1:
+            compress.BufPush(h, 9)
+            repeat nstream - 1 in i:
+                _szw_num(h, sizes.get(i))
+            end
+        end
+        compress.BufPush(h, 10)
+        compress.BufPush(h, 1)
+        repeat nstream in i:
+            _szw_u32(h, crcs.get(i))
+        end
+        compress.BufPush(h, 0)
+        compress.BufPush(h, 0)
+        crcs.free()
+        sizes.free()
+    end
+    if n > 0:
+        compress.BufPush(h, 5)
+        _szw_num(h, n as i64)
+        if n > nstream:
+            mut t := compress.NewByteBuf()
+            _szw_bits(t, empty)
+            mut w := _szw_wrap(t, 14)
+            compress.BufPushBuf(h, w)
+            compress.BufFree(w)
+            compress.BufFree(t)
+            mut any_ef := false
+            repeat empty_file.len() in i:
+                if empty_file.get(i):
+                    any_ef = true
+                end
+            end
+            if any_ef:
+                mut t2 := compress.NewByteBuf()
+                _szw_bits(t2, empty_file)
+                mut w2 := _szw_wrap(t2, 15)
+                compress.BufPushBuf(h, w2)
+                compress.BufFree(w2)
+                compress.BufFree(t2)
+            end
+        end
+        mut nm := compress.NewByteBuf()
+        compress.BufPush(nm, 0)
+        repeat n in i:
+            _szw_name(nm, files.get(i).name)
+        end
+        mut wn := _szw_wrap(nm, 17)
+        compress.BufPushBuf(h, wn)
+        compress.BufFree(wn)
+        compress.BufFree(nm)
+        if any_mtime:
+            mut mt := compress.NewByteBuf()
+            mut defined := Vector {} as Vector<bool>
+            mut all_def := true
+            repeat n in i:
+                has := files.get(i).mtime > (0 as i64)
+                defined.push(has)
+                if not has:
+                    all_def = false
+                end
+            end
+            if all_def:
+                compress.BufPush(mt, 1)
+            else:
+                compress.BufPush(mt, 0)
+                _szw_bits(mt, defined)
+            end
+            compress.BufPush(mt, 0)
+            repeat n in i:
+                if defined.get(i):
+                    ft := (files.get(i).mtime + (11644473600 as i64)) * (10000000 as i64)
+                    repeat 8 in q:
+                        compress.BufPush(mt, ((ft >> (8 * q)) & 255) as int)
+                    end
+                end
+            end
+            defined.free()
+            mut wm := _szw_wrap(mt, 20)
+            compress.BufPushBuf(h, wm)
+            compress.BufFree(wm)
+            compress.BufFree(mt)
+        end
+        mut at := compress.NewByteBuf()
+        compress.BufPush(at, 1)
+        compress.BufPush(at, 0)
+        repeat n in i:
+            f := files.get(i)
+            mut attr := f.is_dir ? (16 as i64) : (32 as i64)
+            if f.mode > 0 or f.link.len() > 0:
+                mut m := f.mode & 4095
+                if f.link.len() > 0:
+                    m = 0xA000 | (f.mode > 0 ? (f.mode & 4095) : 511)
+                else:
+                    m |= f.is_dir ? 0x4000 : 0x8000
+                end
+                attr |= (32768 as i64) | ((m as i64) << 16)
+            end
+            _szw_u32(at, attr)
+        end
+        mut wa := _szw_wrap(at, 21)
+        compress.BufPushBuf(h, wa)
+        compress.BufFree(wa)
+        compress.BufFree(at)
+        compress.BufPush(h, 0)
+    end
+    compress.BufPush(h, 0)
+    hdr_off := (out.len - 32) as i64
+    hlen := h.len as i64
+    compress.BufPushBuf(out, h)
+    hcrc := compress.CRC32(h.data, h.len)
+    compress.BufFree(h)
+    mut sh := compress.NewByteBuf()
+    repeat 8 in i:
+        compress.BufPush(sh, ((hdr_off >> (8 * i)) & 255) as int)
+    end
+    repeat 8 in i:
+        compress.BufPush(sh, ((hlen >> (8 * i)) & 255) as int)
+    end
+    _szw_u32(sh, hcrc as i64)
+    scrc := compress.CRC32(sh.data, sh.len) as i64
+    b := out.data as u8*
+    sp := sh.data as u8*
+    sig := [55, 122, 188, 175, 39, 28, 0, 4]
+    repeat 8 in i:
+        b[i] = sig[i] as u8
+    end
+    repeat 4 in i:
+        b[8 + i] = ((scrc >> (8 * i)) & 255) as u8
+    end
+    repeat 20 in i:
+        b[12 + i] = sp[i]
+    end
+    compress.BufFree(sh)
+    empty.free()
+    empty_file.free()
+    ret out
+end
+
+@en "SevenZipCreateFile"
+@fa "ساخت پرونده هفت زد"
+pub func SevenZipCreateFile(files: Vector<SevenZipFileInput>, path: str): bool:
+    mut packed := SevenZipCreate(files)
+    if packed.len == 0:
+        ret false
+    end
+    ok := WriteBinaryFileBuf(path, packed)
+    compress.BufFree(packed)
+    ret ok
+end

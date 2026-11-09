@@ -1,0 +1,83 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import mem
+import sync
+import net.tcp
+import net.tunnel
+
+mut watch_ticket := 0 as i64
+
+func hold(p: tcp.Server*):
+    srv := p[0]
+    until true:
+        c := tcp.Accept(srv)
+        if not tcp.ConnOk(c): break end
+        ticket := tunnel.WatchHandshake(c.fd, 900)
+        tcp.SetReadDeadline(c, 2000)
+        buf := mem.Allocate(16 as u64)
+        mut got := 0
+        until true:
+            n := tcp.ReadBytes(c, buf, 16)
+            if n <= 0: break end
+            got += n
+        end
+        mem.Free(buf)
+        println "server read at most four bytes:", got <= 4, "watch had fired:", not tunnel.WatchDone(ticket)
+        tcp.Close(c)
+    end
+end
+
+func main:
+    srv := tcp.Bind(0)
+    keep := mem.AllocateZeroed(sizeof(tcp.Server) as u64) as tcp.Server*
+    keep[0] = srv
+    _t := spawn(hold, keep)
+    port := tcp.Port(srv)
+
+    mut started := sync.NowMs()
+    quiet := tcp.Dial("127.0.0.1", port)
+    tcp.SetReadDeadline(quiet, 5000)
+    b := tcp.Read(quiet, 4)
+    mut waited := sync.NowMs() - started
+    println "quiet client: closed by the server", b.len() == 0, "in under 2 s", waited < 2000, "not before the deadline", waited >= 800
+    tcp.Close(quiet)
+    sync.SleepMs(200)
+
+    started = sync.NowMs()
+    slow := tcp.Dial("127.0.0.1", port)
+    mut sent := 0
+    mut alive := true
+    until sent < 20 and alive:
+        if tcp.Write(slow, "x") > 0:
+            sent++
+        else:
+            alive = false
+        end
+        sync.SleepMs(300)
+    end
+    waited = sync.NowMs() - started
+    println "one byte every 300 ms: cut off before 20 bytes", sent < 20, "within 3 s", waited < 3000
+    tcp.Close(slow)
+    sync.SleepMs(200)
+    println "expired so far:", tunnel.WatchExpired()
+
+    fine := tcp.Dial("127.0.0.1", port)
+    tcp.Write(fine, "hi")
+    sync.SleepMs(100)
+    tcp.Close(fine)
+    sync.SleepMs(300)
+    println "a bad descriptor gets no ticket:", tunnel.WatchHandshake(0 - 1, 500) == 0, "and a zero deadline none either:", tunnel.WatchHandshake(5, 0) == 0
+    println "an unknown ticket is reported as not found:", tunnel.WatchDone(987654321 as i64)
+end

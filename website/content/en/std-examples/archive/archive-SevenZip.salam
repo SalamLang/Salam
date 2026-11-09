@@ -1,0 +1,75 @@
+import archive
+import compress
+
+const ENCRYPTED := """
+377abcaf271c000492b1434900010000000000003e0000000000000075a266e9cc0ca30fca42d412a3e1dd1194db4dd8fc
+e2cf1a1d4df4ce0ca88687e1ab395abaa1bbe78d42aa044be8e9373779efdfd2ddd634772d8f0c62fa54d113cc6b3ac143
+47c180a90a35752ec2feffd2b46d3a9a3c870cb0fe3a0a301165c3ad2ab69243d4c4aa154bf810ebf8b3e5988d6a3a9e4e
+59bd2f4e7ad24baf35ba6aaad91e0b0a82e28a8c70941e255f48219088e4a3df6ae61451a7a0ad953c0d9e191005562c55
+a4351cc71942b1bc90035da6a20467642f8d730da31f7a96c473e6f1986d738ecaaf865bbc4984c08559da1d3ace6c445a
+6c34f94739a978d845b0f96290becff7b72085916669b917dbc847e2c2f359083aad6a78ac2674231153cb170650010980
+b000070b0100022406f1070112530fd1de53f747a979d2abd82144f9abe78423030101055d0010000001000c80ad80de0a
+0178dd34010000
+"""
+
+func nib(c: int): int:
+    if c >= 48 and c <= 57:
+        ret c - 48
+    end
+    if c >= 97 and c <= 102:
+        ret c - 87
+    end
+    ret -1
+end
+
+func unhex(s: str): compress.ByteBuf:
+    mut b := compress.NewByteBuf()
+    bp := s as u8*
+    mut hi := -1
+    repeat s.len() in i:
+        v := nib(bp[i] as int)
+        if v < 0:
+            continue
+        end
+        if hi < 0:
+            hi = v
+        else:
+            compress.BufPush(b, hi * 16 + v)
+            hi = -1
+        end
+    end
+    ret b
+end
+
+func main:
+    packed := unhex(ENCRYPTED)
+    mut arc := archive.SevenZipOpen(packed.data, packed.len, "")
+    mut names := archive.SevenZipEntries(arc)
+    println "no password:", names.len(), arc.status, archive.SevenZipStatusText(arc.status)
+
+    arc = archive.SevenZipOpen(packed.data, packed.len, "wrong")
+    names = archive.SevenZipEntries(arc)
+    println "wrong password:", names.len(), arc.status == archive.SEVENZIP_BAD_PASSWORD
+
+    arc = archive.SevenZipOpen(packed.data, packed.len, "secret")
+    names = archive.SevenZipEntries(arc)
+    println "right password:", names.len(), arc.status == archive.SEVENZIP_OK
+    repeat names.len() in i:
+        e := names.get(i)
+        println " ", e.name, e.size, e.mode, e.mtime
+    end
+
+    data := archive.SevenZipRead(arc, "src/main.salam", 0)
+    println compress.BufToStrUnsafe(data)
+    missing := archive.SevenZipRead(arc, "nothing.txt", 0)
+    println "missing:", arc.status == archive.SEVENZIP_NOT_FOUND, missing.len
+    big := archive.SevenZipRead(arc, "readme.txt", 10)
+    println "too big:", arc.status == archive.SEVENZIP_TOO_BIG, big.len
+
+    println "unsupported:", archive.SevenZipStatusText(archive.SEVENZIP_UNSUPPORTED)
+    println "corrupt:", archive.SevenZipStatusText(archive.SEVENZIP_CORRUPT)
+    println "bad crc:", archive.SevenZipStatusText(archive.SEVENZIP_BAD_CRC)
+    println "unsafe:", archive.SevenZipStatusText(archive.SEVENZIP_UNSAFE_PATH)
+    println "list:", archive.SevenZipList(packed.data, packed.len).len()
+    println "extract:", archive.SevenZipExtract(packed.data, packed.len, "readme.txt", 0, arc.status).len, arc.status
+end

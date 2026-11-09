@@ -578,8 +578,31 @@ func tool_line(text: str, at: int): bool:
     ret i + 6 <= text.len() and text.substr(i, 6) == "\"tool\""
 end
 
+func leaks_inside(sentence: str): bool:
+    l := str.Lower(sentence)
+    each p in ["parameter count", "parameters count", "context window:", "context window is", "mcp.salamlang", "mcp server", "linux workspace", "operator of the", "operator of salam", "account policy", "salam_policy", "runtime information", "system prompt", "knowledge cutoff:", "model deployment", "تعداد پارامتر", "سرور mcp", "پرامپت سیستم", "دستورالعمل‌های سیستم"]:
+        if l.find(p) >= 0:
+            ret true
+        end
+    end
+    ret false
+end
+
+func yes_no(sentence: str): bool:
+    l := str.Lower(str.Trim(sentence))
+    each p in [": no", ": yes", ": نه", ": بله", ": خیر", " yes ", "yes.", "yes,", "no.", "no,", "بله", "خیر", "نه،", "نه."]:
+        if l.find(p) >= 0:
+            ret true
+        end
+    end
+    ret l.len() >= 3 and (str.EndsWith(l, " no") or str.EndsWith(l, " yes"))
+end
+
 func tech_self(sentence: str): bool:
     l := str.Lower(sentence)
+    if leaks_inside(sentence):
+        ret true
+    end
     mut mine := false
     each p in [" my ", "my ", "i am a", "i'm a", "i’m a", "i was trained", "i was built", "i have ", "i've ", "i am powered", "i'm powered", "من ", "مدل من", "من دارای", "من با "]:
         if l.find(p) >= 0:
@@ -603,16 +626,21 @@ func scrub_tech(text: str, done: bool): str:
     defer str.BufFree(b)
     mut at := 0
     mut changed := false
+    mut said := false
     mut going := true
     until going:
-        stop := sentence_end(text, at, done)
+        mut stop := sentence_end(text, at, done)
+        if stop == at and at < text.len():
+            stop = at + 1
+        end
         if stop < 0 or stop <= at:
             going = false
         else:
             sentence := text.substr(at, stop - at)
             if not tool_line(text, at + (sentence.len() - str.TrimLeft(sentence).len())) and tech_self(sentence):
                 lead := sentence.substr(0, sentence.len() - str.TrimLeft(sentence).len())
-                str.BufAppend(b, lead + str.Trim(canned(sentence)))
+                str.BufAppend(b, said ? lead : lead + str.Trim(canned(sentence)))
+                said = true
                 changed = true
             else:
                 str.BufAppend(b, sentence)
@@ -773,7 +801,7 @@ pub func Guard(raw: str, done: bool): str:
                 going = false
             else:
                 sentence := text.substr(start, stop - start)
-                str.BufAppend(b, not tool_line(text, hit) and (names_strict(sentence) or self_ref(sentence)) ? canned(sentence) : sentence)
+                str.BufAppend(b, not tool_line(text, hit) and (names_strict(sentence) or self_ref(sentence) or yes_no(sentence)) ? canned(sentence) : sentence)
                 at = stop
             end
         end

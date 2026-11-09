@@ -1,0 +1,183 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package compress
+
+import mem
+
+extern:
+    func fopen(path: str, mode: str): void*
+    func fclose(fp: void*): int
+    func fread(ptr: void*, size: u64, nmemb: u64, stream: void*): u64
+    func fwrite(ptr: void*, size: u64, nmemb: u64, stream: void*): u64
+end
+
+if SALAM_OS_WINDOWS:
+    extern:
+        func _fseeki64(fp: void*, off: i64, whence: int): int
+        func _ftelli64(fp: void*): i64
+    end
+else:
+    extern:
+        func fseeko(fp: void*, off: i64, whence: int): int
+        func ftello(fp: void*): i64
+    end
+end
+
+const _STREAM_CHUNK := 65536
+
+@en "FileSink"
+@fa "مقصد پرونده"
+pub struct FileSink:
+    @en "fp"
+    @fa "پرونده"
+    pub fp: void* = null
+    @en "written"
+    @fa "نوشته شده"
+    pub written: i64 = 0 as i64
+    @en "crc"
+    @fa "چک جمع"
+    pub crc: u32 = 0 as u32
+    @en "cap"
+    @fa "سقف"
+    pub cap: i64 = 0 as i64
+    @en "over"
+    @fa "فراتر از سقف"
+    pub over: bool = false
+    @en "failed"
+    @fa "ناموفق"
+    pub failed: bool = false
+end
+
+if SALAM_OS_WINDOWS:
+    func _seek64(fp: void*, off: i64, whence: int): int: ret _fseeki64(fp, off, whence) end
+    func _tell64(fp: void*): i64: ret _ftelli64(fp) end
+else:
+    func _seek64(fp: void*, off: i64, whence: int): int: ret fseeko(fp, off, whence) end
+    func _tell64(fp: void*): i64: ret ftello(fp) end
+end
+
+@en "FileOpenRead"
+@fa "بازکردن پرونده برای خواندن"
+pub func FileOpenRead(path: str): void*:
+    ret fopen(path, "rb")
+end
+
+@en "FileOpenWrite"
+@fa "بازکردن پرونده برای نوشتن"
+pub func FileOpenWrite(path: str): void*:
+    ret fopen(path, "wb")
+end
+
+@en "FileClose"
+@fa "بستن پرونده"
+pub func FileClose(fp: void*):
+    if fp != null:
+        fclose(fp)
+    end
+end
+
+@en "FileSeek"
+@fa "جابجایی در پرونده"
+pub func FileSeek(fp: void*, off: i64): bool:
+    ret _seek64(fp, off, 0) == 0
+end
+
+@en "FileSize"
+@fa "اندازه پرونده"
+pub func FileSize(fp: void*): i64:
+    if _seek64(fp, 0 as i64, 2) != 0:
+        ret -1
+    end
+    n := _tell64(fp)
+    _ := _seek64(fp, 0 as i64, 0)
+    ret n
+end
+
+@en "FileReadAt"
+@fa "خواندن از جایگاه پرونده"
+pub func FileReadAt(fp: void*, off: i64, dst: void*, n: int): int:
+    if n <= 0 or not FileSeek(fp, off):
+        ret 0
+    end
+    ret fread(dst, 1 as u64, n as u64, fp) as int
+end
+
+@en "SinkOpen"
+@fa "بازکردن مقصد"
+pub func SinkOpen(path: str, cap: i64): FileSink:
+    fp := fopen(path, "wb")
+    ret FileSink { fp = fp, cap = cap, failed = fp == null }
+end
+
+@en "SinkWrite"
+@fa "نوشتن در مقصد"
+pub func SinkWrite(s &: FileSink, p: void*, n: int): bool:
+    if s.failed or s.over:
+        ret false
+    end
+    if n <= 0:
+        ret true
+    end
+    if s.cap > (0 as i64) and s.written + (n as i64) > s.cap:
+        s.over = true
+        ret false
+    end
+    if s.fp != null:
+        w := fwrite(p, 1 as u64, n as u64, s.fp)
+        if (w as int) != n:
+            s.failed = true
+            ret false
+        end
+    end
+    s.crc = CRC32Update(s.crc, p, n)
+    s.written += n as i64
+    ret true
+end
+
+@en "SinkClose"
+@fa "بستن مقصد"
+pub func SinkClose(s &: FileSink): bool:
+    mut ok := not s.failed
+    if s.fp != null:
+        if fclose(s.fp) != 0:
+            ok = false
+        end
+        s.fp = null
+    end
+    ret ok
+end
+
+@en "SinkCopyFrom"
+@fa "رونوشت از پرونده به مقصد"
+pub func SinkCopyFrom(s &: FileSink, fp: void*, off: i64, len: i64): bool:
+    if not FileSeek(fp, off):
+        ret false
+    end
+    buf := mem.Allocate(_STREAM_CHUNK as u64)
+    mut left := len
+    mut ok := true
+    until left > (0 as i64) and ok:
+        want := left > (_STREAM_CHUNK as i64) ? _STREAM_CHUNK : (left as int)
+        got := fread(buf, 1 as u64, want as u64, fp) as int
+        if got != want:
+            ok = false
+        else:
+            ok = SinkWrite(s, buf, got)
+            left -= got as i64
+        end
+    end
+    mem.Free(buf)
+    ret ok
+end

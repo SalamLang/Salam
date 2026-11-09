@@ -308,6 +308,22 @@ func _r5_filter_delta(p: u8*, len: int, ch: int): bool:
     ret true
 end
 
+func _r5_apply_one(f: _R5Filter, p: u8*): bool:
+    n := f.len as int
+    if f.kind == 0:
+        if not _r5_filter_delta(p, n, f.ch):
+            ret false
+        end
+    else f.kind == 1:
+        _r5_filter_e8(p, n, f.start, false)
+    else f.kind == 2:
+        _r5_filter_e8(p, n, f.start, true)
+    else f.kind == 3:
+        _r5_filter_arm(p, n, f.start)
+    end
+    ret true
+end
+
 func _r5_apply_filters(d &: _R5, out &: compress.ByteBuf, base: int, produced: i64): bool:
     mut i := 0
     until i < d.filters.len():
@@ -317,24 +333,56 @@ func _r5_apply_filters(d &: _R5, out &: compress.ByteBuf, base: int, produced: i
             continue
         end
         p := ((out.data as i64) + (base as i64) + f.start) as u8*
-        n := f.len as int
-        if f.kind == 0:
-            if not _r5_filter_delta(p, n, f.ch):
-                ret false
-            end
-        else f.kind == 1:
-            _r5_filter_e8(p, n, f.start, false)
-        else f.kind == 2:
-            _r5_filter_e8(p, n, f.start, true)
-        else f.kind == 3:
-            _r5_filter_arm(p, n, f.start)
+        if not _r5_apply_one(f, p):
+            ret false
         end
     end
     ret true
 end
 
-func _r5_decode(d &: _R5, p: u8*, n: int, unp: i64, limit: i64, out &: compress.ByteBuf): int:
+func _r5_drain(d &: _R5, out &: compress.ByteBuf, sink &: compress.FileSink, drained &: i64, final: bool): bool:
+    flushed := drained + (out.len as i64)
+    mut i := 0
+    until i < d.filters.len():
+        f := d.filters.get(i)
+        if f.start < drained or f.len <= 0:
+            d.filters.remove_at(i)
+        else f.start + f.len <= flushed:
+            p := ((out.data as i64) + (f.start - drained)) as u8*
+            if not _r5_apply_one(f, p):
+                ret false
+            end
+            d.filters.remove_at(i)
+        else:
+            i++
+        end
+    end
+    mut safe := flushed
+    if not final:
+        repeat d.filters.len() in k:
+            fs := d.filters.get(k).start
+            if fs < safe:
+                safe = fs
+            end
+        end
+    end
+    n := safe - drained
+    if n > (0 as i64):
+        if not compress.SinkWrite(sink, out.data, n as int):
+            ret false
+        end
+        rest := out.len - (n as int)
+        tail := ((out.data as i64) + n) as void*
+        mem.MemMove(out.data, tail, rest as u64)
+        out.len = rest
+        drained += n
+    end
+    ret true
+end
+
+func _r5_decode(d &: _R5, p: u8*, n: int, unp: i64, limit: i64, out &: compress.ByteBuf, sink &: compress.FileSink, stream: bool): int:
     mut b := _RarBits { p = p, n = n, pos = 0 }
+    mut drained := 0 as i64
     base := out.len
     start_total := d.total
     d.filters.clear()
@@ -479,6 +527,9 @@ func _r5_decode(d &: _R5, p: u8*, n: int, unp: i64, limit: i64, out &: compress.
             end
             if ((d.wp - d.fl) & d.wmask) >= (d.wsize >> 1):
                 _r5_flush(d, out)
+                if stream and not _r5_drain(d, out, sink, drained, false):
+                    ret 7
+                end
             end
         end
     end
@@ -486,6 +537,12 @@ func _r5_decode(d &: _R5, p: u8*, n: int, unp: i64, limit: i64, out &: compress.
     produced := d.total - start_total
     if unp >= 0 and produced != unp:
         ret 4
+    end
+    if stream:
+        if not _r5_drain(d, out, sink, drained, true):
+            ret sink.over ? 7 : 4
+        end
+        ret 0
     end
     if not _r5_apply_filters(d, out, base, produced):
         ret 4

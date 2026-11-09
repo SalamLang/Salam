@@ -1,0 +1,364 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package archive
+
+import compress
+import filepath
+import mem
+import os
+import str
+
+const _RARF_HEADER_MAX := 2097152
+const _RARF_MEM_MAX := 1073741824
+
+@en "RarFile"
+@fa "پرونده آر ای آر"
+pub struct RarFile:
+    @en "path"
+    @fa "مسیر"
+    pub path: str = ""
+    @en "size"
+    @fa "اندازه"
+    pub size: i64 = 0 as i64
+    @en "status"
+    @fa "وضعیت"
+    pub status: int = 0
+    @en "streaming"
+    @fa "جریانی"
+    pub streaming: bool = false
+    @en "arc"
+    @fa "بایگانی"
+    pub arc: _RarArc = _rarf_blank()
+    @en "offs"
+    @fa "جابه جایی ها"
+    pub offs: Vector<i64> = Vector {} as Vector<i64>
+    @en "whole"
+    @fa "کل داده"
+    pub whole: compress.ByteBuf = compress.ByteBuf { data = null, len = 0, cap = 0 }
+end
+
+func _rarf_blank(): _RarArc:
+    ret _RarArc {
+        p = null
+        n = 0
+        valid = false
+        v5 = false
+        files = Vector {} as Vector<_RarFile> enc_headers = false
+        multi = false
+        password = ""
+        hkey = null
+        h4 = false
+        bad_password = false
+        kcache = null
+    }
+end
+
+func _rarf_scan(fp: void*, rf &: RarFile):
+    mut pos := 8 as i64
+    mut stop := false
+    until not stop and pos + (7 as i64) <= rf.size:
+        mut want := 16
+        if pos + (want as i64) > rf.size: want = (rf.size - pos) as int end
+        small := mem.AllocateZeroed(32 as u64) as u8*
+        got := compress.FileReadAt(fp, pos, small as void*, want)
+        mut l := 0
+        hs := _rar_vint(small, 4, got, l)
+        mem.Free(small as void*)
+        if got < want or l == 0 or hs < 2 or hs > (_RARF_HEADER_MAX as i64):
+            rf.status = RAR_CORRUPT
+            break
+        end
+        total := 4 + l + (hs as int)
+        if pos + (total as i64) > rf.size:
+            rf.status = RAR_CORRUPT
+            break
+        end
+        buf := mem.AllocateZeroed((total + 16) as u64) as u8*
+        if compress.FileReadAt(fp, pos, buf as void*, total) != total:
+            mem.Free(buf as void*)
+            rf.status = RAR_CORRUPT
+            break
+        end
+        htype := _rar_vint(buf, 4 + l, total, l) as int
+        before := rf.arc.files.len()
+        mut next := 0
+        ok := _rar5_one(rf.arc, buf, total, 0, 0, 0, next)
+        mem.Free(buf as void*)
+        if htype == 2 and rf.arc.files.len() > before:
+            f := rf.arc.files.get(before)
+            rf.offs.push(pos + (total as i64))
+            pos = pos + (total as i64) + f.pack_size
+        else ok:
+            pos = pos + (next as i64)
+        else:
+            stop = true
+        end
+    end
+    if rf.arc.enc_headers:
+        rf.status = RAR_ENCRYPTED
+    end
+end
+
+func _rarf_entry(rf: RarFile, fp: void*, r5 &: _R5, nx &: int, rd &: int, idx: int, sink &: compress.FileSink, memcap: i64): int:
+    f := rf.arc.files.get(idx)
+    if f.split:
+        ret RAR_MULTIVOLUME
+    end
+    if f.is_dir or f.redirect:
+        if nx == idx: nx = idx + 1 end
+        ret RAR_OK
+    end
+    if f.encrypted:
+        ret RAR_ENCRYPTED
+    end
+    if sink.cap > (0 as i64) and f.unp_size > sink.cap:
+        ret RAR_TOO_BIG
+    end
+    off := rf.offs.get(idx)
+    if f.pack_size < (0 as i64) or off + f.pack_size > rf.size:
+        ret RAR_CORRUPT
+    end
+    mut pcap := _RARF_MEM_MAX as i64
+    if memcap > (0 as i64) and memcap < pcap: pcap = memcap end
+    if f.unp_size == 0 and f.pack_size == 0:
+        if nx == idx: nx = idx + 1 end
+    else f.method == 0:
+        if f.unp_size >= (0 as i64) and f.unp_size != f.pack_size:
+            ret RAR_CORRUPT
+        end
+        if not compress.SinkCopyFrom(sink, fp, off, f.pack_size):
+            ret sink.over ? RAR_TOO_BIG : RAR_CORRUPT
+        end
+        if nx == idx: nx = idx + 1 end
+    else:
+        if f.ver > 1 or f.method > 5:
+            ret RAR_UNSUPPORTED
+        end
+        if f.solid and nx != idx:
+            s := _rar_chain_start(rf.arc, idx)
+            nx = s
+            rd = 0
+            mut k := s
+            until k < idx:
+                mut scratch := compress.FileSink {}
+                st := _rarf_entry(rf, fp, r5, nx, rd, k, scratch, memcap)
+                if st != RAR_OK:
+                    nx = -1
+                    rd = 0
+                    ret st
+                end
+                k++
+            end
+            nx = idx
+        end
+        if not f.solid or rd == 0:
+            w := _rar_win_size(rf.arc, idx)
+            if w > pcap or not _r5_setwin(r5, w as int):
+                ret RAR_TOO_BIG
+            end
+            r5.dcsize = f.dc
+            _r5_reset(r5)
+        end
+        if f.pack_size > pcap or f.pack_size > (2000000000 as i64):
+            ret RAR_TOO_BIG
+        end
+        src := mem.AllocateZeroed(((f.pack_size as int) + 16) as u64) as u8*
+        if compress.FileReadAt(fp, off, src as void*, f.pack_size as int) != (f.pack_size as int):
+            mem.Free(src as void*)
+            ret RAR_CORRUPT
+        end
+        mut out := compress.NewByteBufCap(4194304)
+        lim := sink.cap > (0 as i64) ? sink.cap : (4611686018427387904 as i64)
+        st := _r5_decode(r5, src, f.pack_size as int, f.unp_size, lim, out, sink, true)
+        compress.BufFree(out)
+        mem.Free(src as void*)
+        if st != 0:
+            nx = -1
+            rd = 0
+            ret sink.over ? RAR_TOO_BIG : st
+        end
+        rd = 1
+        nx = idx + 1
+    end
+    if sink.fp != null and f.has_crc and sink.crc != f.crc:
+        ret RAR_BAD_CRC
+    end
+    ret RAR_OK
+end
+
+func _rarf_write(rf: RarFile, fp: void*, r5 &: _R5, nx &: int, rd &: int, idx: int, outpath: str, cap: i64, memcap: i64): int:
+    mut sink := compress.SinkOpen(outpath, cap)
+    if sink.failed:
+        ret RAR_NOT_FOUND
+    end
+    st := _rarf_entry(rf, fp, r5, nx, rd, idx, sink, memcap)
+    closed := compress.SinkClose(sink)
+    if st == RAR_OK and not closed:
+        os.Remove(outpath)
+        ret RAR_CORRUPT
+    end
+    if st != RAR_OK:
+        os.Remove(outpath)
+    end
+    ret st
+end
+
+func _rarf_whole_to(rf: RarFile, idx: int, outpath: str, cap: i64): int:
+    f := rf.arc.files.get(idx)
+    mut st := 0
+    mut out := _rar_read_from(rf.arc, f.name, 0, st)
+    if st == RAR_OK and cap > (0 as i64) and (out.len as i64) > cap:
+        st = RAR_TOO_BIG
+    end
+    if st == RAR_OK and not WriteBinaryFileBuf(outpath, out):
+        st = RAR_CORRUPT
+    end
+    compress.BufFree(out)
+    ret st
+end
+
+@en "RarFileOpen"
+@fa "بازکردن پرونده آر ای آر"
+pub func RarFileOpen(path: str): RarFile:
+    mut rf := RarFile { path = str.Clone(path), status = RAR_CORRUPT }
+    fp := compress.FileOpenRead(path)
+    if fp == null:
+        rf.status = RAR_NOT_FOUND
+        ret rf
+    end
+    rf.size = compress.FileSize(fp)
+    head := mem.AllocateZeroed(16 as u64)
+    got := compress.FileReadAt(fp, 0 as i64, head, 8)
+    if got == 8 and _rar5_sig_match(head, 8):
+        rf.streaming = true
+        rf.arc.valid = true
+        rf.arc.v5 = true
+        rf.status = RAR_OK
+        _rarf_scan(fp, rf)
+    else:
+        if rf.size > (2000000000 as i64):
+            rf.status = RAR_TOO_BIG
+        else:
+            mut ok := false
+            rf.whole = ReadBinaryFile(path, ok)
+            if ok and IsRar(rf.whole.data, rf.whole.len):
+                rf.arc.files.free()
+                rf.arc = _rar_open(rf.whole.data, rf.whole.len, "")
+                rf.status = _rar_arc_status(rf.arc)
+            end
+        end
+    end
+    mem.Free(head)
+    compress.FileClose(fp)
+    ret rf
+end
+
+@en "RarFileClose"
+@fa "بستن پرونده آر ای آر"
+pub func RarFileClose(rf &: RarFile):
+    _rar_free_files(rf.arc.files)
+    _rar_close_arc(rf.arc)
+    rf.offs.free()
+    compress.BufFree(rf.whole)
+    if rf.path.len() > 0:
+        mem.Free(rf.path as void*)
+    end
+    rf.path = ""
+end
+
+@en "RarFileEntries"
+@fa "مدخل های پرونده آر ای آر"
+pub func RarFileEntries(rf &: RarFile): Vector<Entry>:
+    ret _rar_entries_of(rf.arc)
+end
+
+@en "RarFileExtractTo"
+@fa "استخراج از پرونده آر ای آر به پرونده"
+pub func RarFileExtractTo(rf &: RarFile, name: str, destpath: str, cap: i64, memcap: i64): int:
+    if rf.status != RAR_OK:
+        ret rf.status
+    end
+    idx := _rar_find(rf.arc, name)
+    if idx < 0:
+        ret RAR_NOT_FOUND
+    end
+    if not rf.streaming:
+        ret _rarf_whole_to(rf, idx, destpath, cap)
+    end
+    fp := compress.FileOpenRead(rf.path)
+    if fp == null:
+        ret RAR_NOT_FOUND
+    end
+    mut r5 := _r5_new(131072, 64)
+    mut nx := -1
+    mut rd := 0
+    st := _rarf_write(rf, fp, r5, nx, rd, idx, destpath, cap, memcap)
+    _r5_free(r5)
+    compress.FileClose(fp)
+    ret st
+end
+
+@en "RarFileExtractAll"
+@fa "استخراج همه از پرونده آر ای آر"
+pub func RarFileExtractAll(rf &: RarFile, destdir: str, cap: i64, memcap: i64): int:
+    if rf.status != RAR_OK:
+        ret rf.status
+    end
+    mut fp := null as void*
+    mut r5 := _r5_new(131072, 64)
+    if rf.streaming:
+        fp = compress.FileOpenRead(rf.path)
+        if fp == null:
+            _r5_free(r5)
+            ret RAR_NOT_FOUND
+        end
+    end
+    mut first := RAR_OK
+    mut nx := -1
+    mut rd := 0
+    repeat rf.arc.files.len() in i:
+        f := rf.arc.files.get(i)
+        mut st := RAR_OK
+        if not _safe_entry_name(f.name):
+            st = RAR_UNSAFE_PATH
+        else:
+            outpath := filepath.Join(destdir, f.name)
+            if f.is_dir:
+                EnsureDir(outpath)
+            else f.redirect:
+                nx = -1
+            else:
+                parent := filepath.Dir(outpath)
+                EnsureDir(parent)
+                mem.Free(parent as void*)
+                if rf.streaming:
+                    st = _rarf_write(rf, fp, r5, nx, rd, i, outpath, cap, memcap)
+                else:
+                    st = _rarf_whole_to(rf, i, outpath, cap)
+                end
+                if st == RAR_OK:
+                    _rar_apply_meta(f, outpath)
+                end
+            end
+            mem.Free(outpath as void*)
+        end
+        if st != RAR_OK and first == RAR_OK:
+            first = st
+        end
+    end
+    _r5_free(r5)
+    compress.FileClose(fp)
+    ret first
+end

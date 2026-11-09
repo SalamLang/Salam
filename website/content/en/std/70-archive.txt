@@ -34,7 +34,7 @@ pkg.intro <<
 <li><strong>Zip names and dates:</strong> a name with non-ASCII bytes is written with the UTF-8 flag (general purpose bit 11), so Windows Explorer, <code>unzip</code> and 7-Zip show Persian names correctly. When reading, a name is taken as it is (UTF-8) unless the Info-ZIP "Unicode path" field is present, which then wins. Names from other code pages are not converted. Dates are DOS dates: two second steps, between 1980 and 2107, with no time zone, read here as UTC. Set <code>ZipFileInput.mtime</code> (seconds since 1970) to date an entry; 0, or any time before 1980, writes 1 January 1980. The extra timestamp field is not written. <code>ZipExtractAll</code> sets the modification time of the files it writes from that date, except on Windows and 32 bit systems, and does not touch folders.</li>
 <li><strong>Tar:</strong> names of any length round-trip: a long name is stored in the ustar prefix field when it splits at a slash, otherwise in a PAX <code>path</code> record, and reading understands ustar prefixes, PAX (<code>x</code> and <code>g</code>) and GNU long names and links. Symbolic and hard links are real entries (<code>Entry.kind</code> and <code>Entry.link</code>); devices, pipes and other special entries are listed with <code>kind</code> 4 and skipped by <code>TarExtractAll</code>. Times and modes you set are written (a time past the ustar range goes into a PAX record), and extraction applies the mode and the modification time of files and folders, but not their owner. On Windows symbolic links are not created (the call returns false), hard links become copies and times are not set; times are not set on 32 bit systems either. Entries that are not given a time get 0, and the mode you leave at 0 becomes 644 for files, 755 for folders and 777 for symbolic links.</li>
 <li><strong>Tar extraction:</strong> <code>TarExtractAll</code> skips, and returns false for, a name that is absolute or climbs out with <code>..</code>, a name that passes through a symbolic link it created, a symbolic link whose target is absolute or leaves the target folder (a <code>..</code> after a name is refused too), and a hard link to a name outside the folder. Set-user-id and similar mode bits are never applied.</li>
-<li><strong>RAR:</strong> RAR 5 archives are read completely: every compression level, solid archives and the built-in filters, with each entry's CRC-32 checked. Older archives (RAR 1.5 to 4.x) are read the same way, including PPMd text compression and the standard filters. Password-protected archives open with <code>RarOpen</code> and a password, including ones whose file names are encrypted; without it they report <code>RAR_ENCRYPTED</code>, and a wrong password reports <code>RAR_BAD_PASSWORD</code>. Multi-volume archives open from the list of volumes (<code>RarOpenVolumes</code>, or <code>RarReadVolumes</code> to load a set from disk); a set with a missing volume reports <code>RAR_MULTIVOLUME</code> for the files that cross it. A file that is both encrypted and split across volumes is read too (checked on RAR 5; RAR 3 and 4 use the same code but have no sample to test with). The old RAR 1.5 and 2.x passwords work as well. Archives and entries must stay under 2 GB; a bigger entry reports <code>RAR_TOO_BIG</code>. Extraction restores the Unix permissions and the modification time (on 64-bit systems other than Windows), recreates symbolic links whose target stays inside the destination, and writes hard links and file copies as plain copies; a link that points outside is skipped and reported as <code>RAR_UNSAFE_PATH</code>. New archives are RAR 5 with the files stored, because only WinRAR itself can compress to RAR; any RAR tool opens them.</li>
+<li><strong>RAR:</strong> RAR 5 archives are read completely: every compression level, solid archives and the built-in filters, with each entry's CRC-32 checked. Older archives (RAR 1.5 to 4.x) are read the same way, including PPMd text compression and the standard filters. Password-protected archives open with <code>RarOpen</code> and a password, including ones whose file names are encrypted; without it they report <code>RAR_ENCRYPTED</code>, and a wrong password reports <code>RAR_BAD_PASSWORD</code>. Multi-volume archives open from the list of volumes (<code>RarOpenVolumes</code>, or <code>RarReadVolumes</code> to load a set from disk); a set with a missing volume reports <code>RAR_MULTIVOLUME</code> for the files that cross it. A file that is both encrypted and split across volumes is read too (checked on RAR 5; RAR 3 and 4 use the same code but have no sample to test with). The old RAR 1.5 and 2.x passwords work as well. The in-memory functions need the archive and each entry under 2 GB (a bigger entry reports <code>RAR_TOO_BIG</code>); for bigger RAR 5 files use <code>RarFileOpen</code>, which reads from disk and unpacks in pieces. Extraction restores the Unix permissions and the modification time (on 64-bit systems other than Windows), recreates symbolic links whose target stays inside the destination, and writes hard links and file copies as plain copies; a link that points outside is skipped and reported as <code>RAR_UNSAFE_PATH</code>. New archives are RAR 5 with the files stored, because only WinRAR itself can compress to RAR; any RAR tool opens them.</li>
 <li><strong>7z:</strong> read, and written with stored data only. LZMA, LZMA2, PPMd, BZip2, Deflate, Deflate64, copy, BCJ2, the branch filters (x86, ARM, ARM64, RISC-V and others), byte swap and delta are supported, with AES-256 passwords (headers too); Multi-volume sets (<code>.7z.001</code>) and self-extracting archives (an executable stub before the archive) are read. Unix modes, times and symbolic links are restored on extraction, and a link that would point outside the target folder is refused. Everything unpacked is held in memory, a solid block is capped at about 1 GiB, and the dictionary of an LZMA stream may not pass 1 GiB. Names are UTF-8; the time is the last change.</li>
 </ul>
 
@@ -139,6 +139,10 @@ pkg.intro <<
 <p><code>TarFileOpen</code> reads a tar from disk one entry at a time: <code>TarFileNext</code> fills an <code>Entry</code> (sizes and offsets are 64 bit, so a 5 GB entry is just an entry), <code>TarFileExtractTo</code> copies its data to a file in 64 KiB pieces, and <code>TarFileExtractAll</code> unpacks the whole archive with the same safety rules as <code>TarExtractAll</code>. Nothing but one entry's header is ever in memory. <code>cap</code> is the only size limit and it is yours (0 for none): <code>TAR_TOO_BIG</code> means an entry is over it. <code>TarGzFileExtractAll</code> and <code>GzipDecompressFileCap</code> do the same for gzip, which is read as a stream.</p>
 {{example.archive-guide-tarfile}}
 
+<h2 id="guide-rarfile">Big RAR files on disk</h2>
+<p><code>RarFileOpen</code> reads a RAR 5 file's headers only (offsets and sizes are 64 bit); <code>RarFileExtractTo</code> and <code>RarFileExtractAll</code> then unpack to disk, writing the result in pieces and checking the CRC-32 as they go. Compressed entries, solid archives and the built-in filters work. What is held in memory is the packed data of one entry and the decoder window, so the unpacked size can be anything: an entry of several gigabytes is unpacked from a file of a few megabytes in constant memory. The size limits are yours: <code>cap</code> for the unpacked bytes and <code>memcap</code> for that memory, and <code>RAR_TOO_BIG</code> means one of them was passed. Older RAR formats (1.5 to 4.x) are loaded whole, up to 2 GB.</p>
+{{example.archive-guide-rarfile}}
+
 <h2 id="guide-which">Which function for which job</h2>
 <div class="table-wrap"><table>
 <thead><tr><th>Job</th><th>Use</th></tr></thead>
@@ -225,6 +229,19 @@ doc.TarFileExtractAll = Unpacks a tar on disk under a folder with the same safet
 doc.TarStatusText = A short sentence for a <code>TAR_...</code> status.
 doc.TarGzFileExtractAll = Unpacks a <code>.tar.gz</code> on disk: it is gunzipped to a temporary file in the temp folder (which needs room for the whole tar), then read as above, and the temporary file is removed.
 doc.GzipDecompressFileCap = Gunzips a file to another file in 64 KiB pieces, checking the CRC-32 and the size at the end, and returns an <code>ARCHIVE_...</code> status. <code>cap</code> limits the output in bytes (0 for none); a partly written output is removed on failure.
+doc.RarFile = A RAR file on disk opened with <code>RarFileOpen</code>. For RAR 5 only the headers are read; the data stays in the file and is unpacked straight to disk. Older RAR formats (1.5 to 4.x) are loaded whole, up to 2 GB.
+doc.RarFile.path = The path the archive was opened from.
+doc.RarFile.size = The size of the file in bytes.
+doc.RarFile.status = <code>RAR_OK</code> when the archive opened, otherwise the reason.
+doc.RarFile.streaming = True for RAR 5, which is read from disk without loading it; false for the older formats.
+doc.RarFile.arc = The parsed entry table. Treat it as private.
+doc.RarFile.offs = The 64 bit offset of each entry's data in the file. Treat it as private.
+doc.RarFile.whole = The file contents of an older RAR, which is loaded whole. Empty for RAR 5.
+doc.RarFileOpen = Opens a RAR file by reading only its headers when it is RAR 5. Offsets and sizes are 64 bit. Encrypted archives and multi-volume sets are not handled here (use <code>RarOpen</code> and <code>RarOpenVolumes</code>); they report <code>RAR_ENCRYPTED</code> or <code>RAR_MULTIVOLUME</code>.
+doc.RarFileClose = Releases the memory held by an opened RAR file.
+doc.RarFileEntries = Lists the entries. Free the result with <code>FreeEntries</code>.
+doc.RarFileExtractTo = Unpacks one entry to a file. The unpacked data is written in pieces and checked against the CRC-32 on the way, so it never has to fit in memory; only the packed data of that one entry and the decoder window are held. <code>cap</code> is a limit in bytes for the unpacked data (0 for none), <code>RAR_TOO_BIG</code> is returned for an entry over it. <code>memcap</code> limits that memory (0 for the 1 GiB default, which is also the most the decoder window can be): an entry that needs more returns <code>RAR_TOO_BIG</code>.
+doc.RarFileExtractAll = Unpacks every entry under a folder, solid archives included, with the same limits. The result is <code>RAR_OK</code> or the status of the first entry that failed. Unsafe names are skipped and reported as <code>RAR_UNSAFE_PATH</code>; links are not created.
 doc.ZipExtractVerified = Pulls out one entry and checks its size and CRC-32. <code>status</code> is set to one of the <code>ZIP_</code> codes, <code>ZIP_OK</code> on success, otherwise the reason, and the buffer is empty. <code>max</code> caps the unpacked size, or 0 for no cap.
 doc.ZipVerify = Inflates every file entry and checks its size and CRC-32. Sets <code>checked</code> to how many it looked at and returns how many failed (encrypted, unsupported or too big count as failed), 0 when all are good, or -1 when the data is not a zip.
 doc.ZipBadEntries = The entries that fail <code>ZipVerify</code>; free the list with <code>FreeEntries</code>.
@@ -421,6 +438,19 @@ ex.TarFileExtractAll = archive-TarFile
 ex.TarStatusText = archive-TarFile
 ex.TarGzFileExtractAll = archive-TarFile
 ex.GzipDecompressFileCap = archive-TarFile
+ex.RarFile = archive-RarFile
+ex.RarFile.path = archive-RarFile
+ex.RarFile.size = archive-RarFile
+ex.RarFile.status = archive-RarFile
+ex.RarFile.streaming = archive-RarFile
+ex.RarFile.arc = archive-RarFile
+ex.RarFile.offs = archive-RarFile
+ex.RarFile.whole = archive-RarFile
+ex.RarFileOpen = archive-RarFile
+ex.RarFileClose = archive-RarFile
+ex.RarFileEntries = archive-RarFile
+ex.RarFileExtractTo = archive-RarFile
+ex.RarFileExtractAll = archive-RarFile
 ex.ZipFileInput.mtime = archive-ZipTime
 ex.ZipCreate64 = archive-ZipTime
 ex.ZipExtractVerified = archive-ZipVerify

@@ -1,0 +1,378 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package paint
+
+func _side_setup(sh: int*, s: int, style: int, w: int, ua: int, ub: int, cl: int):
+    o := 32 + s * 8
+    sh[o] = w > 0 ? style : 0
+    sh[o + 1] = w
+    sh[o + 2] = ua
+    sh[o + 3] = ub
+    sh[o + 4] = 0
+    sh[o + 5] = 0
+    sh[o + 6] = 1
+    sh[o + 7] = cl
+    lm := ub - ua
+    if w <= 0 or style <= 1 or lm <= 0:
+        if sh[o] > 1:
+            sh[o] = 1
+        end
+        ret
+    end
+    if style == 2:
+        d := 3 * w
+        g := 3 * w
+        if lm <= d:
+            sh[o] = 1
+            ret
+        end
+        n := (lm + g + (d + g) / 2) / (d + g)
+        if n < 2:
+            sh[o] = 1
+            ret
+        end
+        sh[o + 4] = d
+        sh[o + 5] = (lm - d) / (n - 1)
+        sh[o + 6] = n
+        ret
+    end
+    if lm <= w:
+        sh[o + 5] = 0
+        sh[o + 6] = 1
+        ret
+    end
+    mut n := (lm - w + w) / (2 * w) + 1
+    if n < 2:
+        n = 2
+    end
+    sh[o + 5] = (lm - w) / (n - 1)
+    sh[o + 6] = n
+end
+
+func _overlap(a0: int, a1: int, b0: int, b1: int): int:
+    lo := a0 > b0 ? a0 : b0
+    hi := a1 < b1 ? a1 : b1
+    ret hi > lo ? hi - lo : 0
+end
+
+func _side_pattern(sh: int*, s: int, u: int, v: int): int:
+    o := 32 + s * 8
+    style := sh[o]
+    if style <= 1:
+        ret 256
+    end
+    ua := sh[o + 2]
+    ub := sh[o + 3]
+    if u < ua or u > ub:
+        ret 256
+    end
+    w := sh[o + 1]
+    n := sh[o + 6]
+    if style == 2:
+        d := sh[o + 4]
+        p := sh[o + 5]
+        t := u - ua
+        mut k := t / p
+        if t < 0:
+            k = 0
+        end
+        mut c := 0
+        repeat 3 in j:
+            kk := k - 1 + j
+            if kk >= 0 and kk < n:
+                c += _overlap(t - 128, t + 128, kk * p, kk * p + d)
+            end
+        end
+        ret c > 256 ? 256 : c
+    end
+    mut center := (ua + ub) / 2
+    if n > 1:
+        sp := sh[o + 5]
+        tc := u - ua - w / 2
+        mut k := (tc + sp / 2) / sp
+        if tc < 0:
+            k = 0
+        end
+        if k > n - 1:
+            k = n - 1
+        end
+        center = ua + w / 2 + k * sp
+    end
+    du := (u - center) as i64
+    dv := (v - sh[o + 7]) as i64
+    dist := _isqrt(du * du + dv * dv) as int
+    ret _clampi(128 + w / 2 - dist, 0, 256)
+end
+
+func _side_color(sh: int*, cols: u32[4], s: int, px: int, py: int): u32:
+    c := cols[s]
+    if c == (0 as u32) or sh[32 + s * 8] <= 1:
+        ret c
+    end
+    mut pc := 256
+    if s == 0 or s == 2:
+        pc = _side_pattern(sh, s, px, py)
+    else:
+        pc = _side_pattern(sh, s, py, px)
+    end
+    if pc >= 256:
+        ret c
+    end
+    ret _mul8(c, ((pc * 255 + 128) >> 8) as u32)
+end
+
+func _join_frac(d: i64, len: int): int:
+    if len <= 0:
+        ret d >= (0 as i64) ? 256 : 0
+    end
+    lim := (len as i64) * (128 as i64)
+    if d >= lim:
+        ret 256
+    end
+    if d <= (0 as i64) - lim:
+        ret 0
+    end
+    ret 128 + (d / (len as i64)) as int
+end
+
+func _border_px(sh: int*, cols: u32[4], px: int, py: int): u32:
+    x0 := sh[0]
+    y0 := sh[1]
+    x1 := sh[2]
+    y1 := sh[3]
+    wt := sh[33] as i64
+    wr := sh[41] as i64
+    wb := sh[49] as i64
+    wl := sh[57] as i64
+    left := px * 2 < x0 + x1
+    top := py * 2 < y0 + y1
+    mut s1 := 0
+    mut s2 := 0
+    mut f := 256
+    if top and left:
+        s1 = 0
+        s2 = 3
+        f = _join_frac(((px - x0) as i64) * wt - ((py - y0) as i64) * wl, sh[24])
+    else top:
+        s1 = 0
+        s2 = 1
+        f = _join_frac(((x1 - px) as i64) * wt - ((py - y0) as i64) * wr, sh[25])
+    else left:
+        s1 = 2
+        s2 = 3
+        f = _join_frac(((px - x0) as i64) * wb - ((y1 - py) as i64) * wl, sh[27])
+    else:
+        s1 = 2
+        s2 = 1
+        f = _join_frac(((x1 - px) as i64) * wb - ((y1 - py) as i64) * wr, sh[26])
+    end
+    if f >= 256:
+        ret _side_color(sh, cols, s1, px, py)
+    end
+    if f <= 0:
+        ret _side_color(sh, cols, s2, px, py)
+    end
+    a := _side_color(sh, cols, s1, px, py)
+    b := _side_color(sh, cols, s2, px, py)
+    if a == b:
+        ret a
+    end
+    ret _lerp_px(b, a, (f * 255 + 128) >> 8)
+end
+
+func _style_code(s: BorderStyle): int:
+    ret match s:
+        BorderStyle.None: 0 end
+        BorderStyle.Solid: 1 end
+        BorderStyle.Dashed: 2 end
+        BorderStyle.Dotted: 3 end
+    end
+end
+
+func _border_path(cv &: Canvas, r: Rect, radii: Radii, b: Border):
+    mut c := b.top_color
+    if b.top_width <= 0.0 or b.top_style == BorderStyle.None:
+        c = b.left_color
+    end
+    mut p := Path {}
+    fr := FitRadii(r, radii)
+    p.AddRoundedRect(r, fr)
+    inner := Rect { x = r.x + b.left_width, y = r.y + b.top_width, width = r.width - b.left_width - b.right_width, height = r.height - b.top_width - b.bottom_width }
+    if inner.width > 0.0 and inner.height > 0.0:
+        ir := Radii {
+            top_left_x = _posf(fr.top_left_x - b.left_width), top_left_y = _posf(fr.top_left_y - b.top_width),
+            top_right_x = _posf(fr.top_right_x - b.right_width), top_right_y = _posf(fr.top_right_y - b.top_width),
+            bottom_right_x = _posf(fr.bottom_right_x - b.right_width), bottom_right_y = _posf(fr.bottom_right_y - b.bottom_width),
+            bottom_left_x = _posf(fr.bottom_left_x - b.left_width), bottom_left_y = _posf(fr.bottom_left_y - b.bottom_width)
+        }
+        p.AddRoundedRect(inner, ir)
+    end
+    _cv_fill_path(cv, p, FillRule.EvenOdd, c)
+    p.Free()
+end
+
+func _cv_border(cv &: Canvas, r: Rect, radii: Radii, b: Border):
+    _cv_ready(cv)
+    if cv.pixels == null:
+        ret
+    end
+    if not _xf_axis(cv):
+        _border_path(cv, r, radii, b)
+        ret
+    end
+    sh := cv.state.sh
+    if not _shape_from(cv, r, radii, sh, 0):
+        ret
+    end
+    mut st := [_style_code(b.top_style), _style_code(b.right_style), _style_code(b.bottom_style), _style_code(b.left_style)]
+    mut w := [
+        _scale_abs(_fx(_posf(b.top_width)), cv.state.xd), _scale_abs(_fx(_posf(b.right_width)), cv.state.xa),
+        _scale_abs(_fx(_posf(b.bottom_width)), cv.state.xd), _scale_abs(_fx(_posf(b.left_width)), cv.state.xa)
+    ]
+    mut cols := [_premul(b.top_color), _premul(b.right_color), _premul(b.bottom_color), _premul(b.left_color)]
+    repeat 4 in s:
+        if st[s] == 0:
+            w[s] = 0
+            cols[s] = 0 as u32
+        end
+    end
+    if cv.state.xa < 0:
+        t1 := w[1]
+        w[1] = w[3]
+        w[3] = t1
+        t2 := cols[1]
+        cols[1] = cols[3]
+        cols[3] = t2
+        t3 := st[1]
+        st[1] = st[3]
+        st[3] = t3
+    end
+    if cv.state.xd < 0:
+        t1 := w[0]
+        w[0] = w[2]
+        w[2] = t1
+        t2 := cols[0]
+        cols[0] = cols[2]
+        cols[2] = t2
+        t3 := st[0]
+        st[0] = st[2]
+        st[2] = t3
+    end
+    if w[0] + w[1] + w[2] + w[3] <= 0:
+        ret
+    end
+    x0 := sh[0]
+    y0 := sh[1]
+    x1 := sh[2]
+    y1 := sh[3]
+    sh[12] = x0 + w[3]
+    sh[13] = y0 + w[0]
+    sh[14] = x1 - w[1]
+    sh[15] = y1 - w[2]
+    sh[16] = _maxi(0, sh[4] - w[3])
+    sh[17] = _maxi(0, sh[5] - w[0])
+    sh[18] = _maxi(0, sh[6] - w[1])
+    sh[19] = _maxi(0, sh[7] - w[0])
+    sh[20] = _maxi(0, sh[8] - w[1])
+    sh[21] = _maxi(0, sh[9] - w[2])
+    sh[22] = _maxi(0, sh[10] - w[3])
+    sh[23] = _maxi(0, sh[11] - w[2])
+    has_inner := sh[14] > sh[12] and sh[15] > sh[13]
+    if has_inner:
+        _fit_shape_radii(sh, 12)
+    end
+    sh[24] = _isqrt((w[0] as i64) * (w[0] as i64) + (w[3] as i64) * (w[3] as i64)) as int
+    sh[25] = _isqrt((w[0] as i64) * (w[0] as i64) + (w[1] as i64) * (w[1] as i64)) as int
+    sh[26] = _isqrt((w[2] as i64) * (w[2] as i64) + (w[1] as i64) * (w[1] as i64)) as int
+    sh[27] = _isqrt((w[2] as i64) * (w[2] as i64) + (w[3] as i64) * (w[3] as i64)) as int
+    _side_setup(sh, 0, st[0], w[0], x0 + (sh[4] > 0 ? _maxi(w[3], sh[4]) : 0), x1 - (sh[6] > 0 ? _maxi(w[1], sh[6]) : 0), y0 + w[0] / 2)
+    _side_setup(sh, 1, st[1], w[1], y0 + (sh[7] > 0 ? _maxi(w[0], sh[7]) : 0), y1 - (sh[9] > 0 ? _maxi(w[2], sh[9]) : 0), x1 - w[1] / 2)
+    _side_setup(sh, 2, st[2], w[2], x0 + (sh[10] > 0 ? _maxi(w[3], sh[10]) : 0), x1 - (sh[8] > 0 ? _maxi(w[1], sh[8]) : 0), y1 - w[2] / 2)
+    _side_setup(sh, 3, st[3], w[3], y0 + (sh[5] > 0 ? _maxi(w[0], sh[5]) : 0), y1 - (sh[11] > 0 ? _maxi(w[2], sh[11]) : 0), x0 + w[3] / 2)
+    mut rows := [0, 0]
+    if not _clip_rows(cv, y0, y1, rows):
+        ret
+    end
+    col := cv.state.col
+    out := cv.state.ra
+    lim0 := cv.state.cx0
+    lim1 := cv.state.cx1
+    mut eo := [0, 0, 0, 0]
+    mut ei := [0, 0, 0, 0]
+    repeat rows[1] - rows[0] in k:
+        y := rows[0] + k
+        vho := _row_edges(sh, 0, y, eo)
+        if vho <= 0:
+            continue
+        end
+        mut vhi := 0
+        if has_inner:
+            vhi = _row_edges(sh, 12, y, ei)
+        end
+        Y0 := y << 8
+        py := ((Y0 > y0 ? Y0 : y0) + (Y0 + 256 < y1 ? Y0 + 256 : y1)) >> 1
+        lo := _maxi((eo[0] - eo[1] / 2) >> 8, lim0)
+        hi := _mini((eo[2] + eo[3] / 2 + 255) >> 8, lim1)
+        mut sa := 0
+        mut sb := 0
+        if vhi > 0 and vhi == vho:
+            sa = (ei[0] + ei[1] / 2 + 255) >> 8
+            sb = (ei[2] - ei[3] / 2) >> 8
+        end
+        mut n := 0
+        mut x := lo
+        until x < hi:
+            if sa < sb and x >= sa and x < sb:
+                x = sb
+                continue
+            end
+            co := (_cov_lr(x, eo[0], eo[1], eo[2], eo[3]) * vho) >> 8
+            mut ci := 0
+            if vhi > 0:
+                ci = (_cov_lr(x, ei[0], ei[1], ei[2], ei[3]) * vhi) >> 8
+            end
+            c := co - ci
+            if c > 0:
+                col[x] = _border_px(sh, cols, (x << 8) + 128, py)
+                n = _rpush(out, n, x, x + 1, c)
+            end
+            x++
+        end
+        _emit(cv, y, n, _K_COL, 0 as u32)
+    end
+end
+
+func _cv_outline(cv &: Canvas, r: Rect, radii: Radii, width: f64, offset: f64, c: Color):
+    if not (width > 0.0):
+        ret
+    end
+    g := offset + width
+    fr := FitRadii(r, radii)
+    outer := Rect { x = r.x - g, y = r.y - g, width = r.width + 2.0 * g, height = r.height + 2.0 * g }
+    grown := Radii {
+        top_left_x = _grow_radius(fr.top_left_x, g), top_left_y = _grow_radius(fr.top_left_y, g),
+        top_right_x = _grow_radius(fr.top_right_x, g), top_right_y = _grow_radius(fr.top_right_y, g),
+        bottom_right_x = _grow_radius(fr.bottom_right_x, g), bottom_right_y = _grow_radius(fr.bottom_right_y, g),
+        bottom_left_x = _grow_radius(fr.bottom_left_x, g), bottom_left_y = _grow_radius(fr.bottom_left_y, g)
+    }
+    _cv_border(cv, outer, grown, SolidBorder(width, c))
+end
+
+func _grow_radius(v: f64, g: f64): f64:
+    if v <= 0.0:
+        ret 0.0
+    end
+    ret _posf(v + g)
+end

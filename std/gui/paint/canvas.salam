@@ -1,0 +1,718 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed byy Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package paint
+
+import mem
+
+const _K_SOLID := 0
+const _K_COL := 1
+const _K_GRAD := 2
+const _K_SHADOW := 3
+const _K_IMAGE := 4
+
+func _cv_ready(cv &: Canvas):
+    if cv.state.ready:
+        ret
+    end
+    cv.state.ready = true
+    cv.state.cx0 = 0
+    cv.state.cy0 = 0
+    cv.state.cx1 = cv.width
+    cv.state.cy1 = cv.height
+    cv.state.tpix = cv.pixels as u32*
+    cv.state.tox = 0
+    cv.state.toy = 0
+    cv.state.tw = cv.width
+    cv.state.th = cv.height
+    cv.state.tspx = cv.stride / 4
+    if cv.state.sh == null:
+        cv.state.sh = mem.AllocateZeroed((128 * 4) as u64) as int*
+    end
+    _cv_runs(cv, cv.width + 64)
+    _cv_cols(cv, cv.width + 8)
+end
+
+func _cv_runs(cv &: Canvas, n: int):
+    if n <= cv.state.run_cap:
+        ret
+    end
+    bytes := ((n * 3 + 16) * 4) as u64
+    if cv.state.ra != null:
+        mem.Free(cv.state.ra as void*)
+        mem.Free(cv.state.rb as void*)
+        mem.Free(cv.state.rc as void*)
+    end
+    cv.state.ra = mem.Allocate(bytes) as int*
+    cv.state.rb = mem.Allocate(bytes) as int*
+    cv.state.rc = mem.Allocate(bytes) as int*
+    cv.state.run_cap = n
+end
+
+func _cv_cols(cv &: Canvas, n: int):
+    if n <= cv.state.col_cap:
+        ret
+    end
+    if cv.state.col != null:
+        mem.Free(cv.state.col as void*)
+    end
+    cv.state.col = mem.AllocateZeroed((n * 4) as u64) as u32*
+    cv.state.col_cap = n
+end
+
+func _cv_tmp(cv &: Canvas, n: int): int*:
+    if n > cv.state.tmp_cap:
+        if cv.state.tmp != null:
+            mem.Free(cv.state.tmp as void*)
+        end
+        cv.state.tmp = mem.AllocateZeroed((n * 4) as u64) as int*
+        cv.state.tmp_cap = n
+    end
+    ret cv.state.tmp
+end
+
+func _cv_prof(cv &: Canvas, n: int): int*:
+    if n > cv.state.prof_cap:
+        if cv.state.prof != null:
+            mem.Free(cv.state.prof as void*)
+        end
+        cv.state.prof = mem.AllocateZeroed((n * 4) as u64) as int*
+        cv.state.prof_cap = n
+    end
+    ret cv.state.prof
+end
+
+func _cv_bands(cv &: Canvas, n: int): int*:
+    if n > cv.state.band_cap:
+        if cv.state.bands != null:
+            mem.Free(cv.state.bands as void*)
+        end
+        cv.state.bands = mem.AllocateZeroed((n * 4) as u64) as int*
+        cv.state.band_cap = n
+    end
+    ret cv.state.bands
+end
+
+func _free_ptr(p: void*):
+    if p != null:
+        mem.Free(p)
+    end
+end
+
+func _cv_free(cv &: Canvas):
+    until cv.state.layers.len() > 0:
+        _cv_end_layer(cv, 0.0)
+    end
+    _free_ptr(cv.state.ra as void*)
+    _free_ptr(cv.state.rb as void*)
+    _free_ptr(cv.state.rc as void*)
+    _free_ptr(cv.state.col as void*)
+    _free_ptr(cv.state.sh as void*)
+    _free_ptr(cv.state.lut as void*)
+    _free_ptr(cv.state.prof as void*)
+    _free_ptr(cv.state.bands as void*)
+    _free_ptr(cv.state.cells as void*)
+    _free_ptr(cv.state.heads as void*)
+    _free_ptr(cv.state.edges as void*)
+    _free_ptr(cv.state.tmp as void*)
+    cv.state.clips.free()
+    cv.state.rclips.free()
+    cv.state.xforms.free()
+    cv.state.layers.free()
+    cv.state.i_m.free()
+    if cv.owned and cv.pixels != null:
+        mem.Free(cv.pixels)
+    end
+    cv.pixels = null
+    cv.width = 0
+    cv.height = 0
+    cv.stride = 0
+    cv.owned = false
+    cv.state = _State {}
+end
+
+func _hex64(v: u64): str:
+    digits := "0123456789abcdef"
+    mut out := ""
+    repeat 16 in i:
+        sh := ((15 - i) * 4) as u64
+        d := ((v >> sh) & (15 as u64)) as int
+        out += _hex_digit(digits, d)
+    end
+    ret out
+end
+
+func _hex_digit(s: str, i: int): str:
+    ret s.substr(i, 1)
+end
+
+func _cv_hash(cv &: Canvas): str:
+    mut h := 14695981039346656037 as u64
+    if cv.pixels == null:
+        ret _hex64(h)
+    end
+    p := cv.pixels as u32*
+    spx := cv.stride / 4
+    repeat cv.height in y:
+        base := y * spx
+        repeat cv.width in x:
+            v := p[base + x]
+            h = (h ^ ((v & (65535 as u32)) as u64)) * (1099511628211 as u64)
+            h = (h ^ ((v >> 16) as u64)) * (1099511628211 as u64)
+        end
+    end
+    ret _hex64(h)
+end
+
+func _cv_sub(cv &: Canvas, r: IntRect): Canvas:
+    x0 := _clampi(r.x, 0, cv.width)
+    y0 := _clampi(r.y, 0, cv.height)
+    x1 := _clampi(r.x + r.width, x0, cv.width)
+    y1 := _clampi(r.y + r.height, y0, cv.height)
+    if cv.pixels == null or x1 <= x0 or y1 <= y0:
+        ret Canvas {}
+    end
+    off := (y0 * cv.stride + x0 * 4) as usize
+    ret Canvas { pixels = ((cv.pixels as usize) + off) as void*, width = x1 - x0, height = y1 - y0, stride = cv.stride, owned = false }
+end
+
+func _cv_clear(cv &: Canvas, c: Color):
+    _cv_ready(cv)
+    if cv.pixels == null:
+        ret
+    end
+    v := _premul(c)
+    mut rg := [0, 0, 0, 0, 0, 0]
+    y := cv.state.cy0
+    repeat cv.state.cy1 - cv.state.cy0 in k:
+        yy := y + k
+        nr := _row_ranges(cv, yy, rg)
+        base := (yy - cv.state.toy) * cv.state.tspx - cv.state.tox
+        p := cv.state.tpix
+        repeat nr in j:
+            a := rg[j * 2]
+            b := rg[j * 2 + 1]
+            repeat b - a in i:
+                p[base + a + i] = v
+            end
+        end
+    end
+end
+
+func _row_ranges(cv &: Canvas, y: int, rg: int[]): int:
+    x0 := cv.state.cx0
+    x1 := cv.state.cx1
+    if x1 <= x0:
+        ret 0
+    end
+    if not cv.state.has_region:
+        rg[0] = x0
+        rg[1] = x1
+        ret 1
+    end
+    mut n := 0
+    mut tmp := [0, 0, 0, 0, 0, 0]
+    reg := cv.state.region
+    repeat reg.Count() in i:
+        r := reg.At(i)
+        if y >= r.y and y < r.y + r.height:
+            tmp[n * 2] = r.x
+            tmp[n * 2 + 1] = r.x + r.width
+            n++
+        end
+    end
+    if n == 0:
+        ret 0
+    end
+    repeat n in i:
+        repeat n - 1 - i in j:
+            if tmp[j * 2] > tmp[j * 2 + 2]:
+                t0 := tmp[j * 2]
+                t1 := tmp[j * 2 + 1]
+                tmp[j * 2] = tmp[j * 2 + 2]
+                tmp[j * 2 + 1] = tmp[j * 2 + 3]
+                tmp[j * 2 + 2] = t0
+                tmp[j * 2 + 3] = t1
+            end
+        end
+    end
+    mut m := 0
+    mut ca := tmp[0]
+    mut cb := tmp[1]
+    repeat n - 1 in i:
+        na := tmp[(i + 1) * 2]
+        nb := tmp[(i + 1) * 2 + 1]
+        if na <= cb:
+            if nb > cb:
+                cb = nb
+            end
+        else:
+            m = _range_push(rg, m, ca, cb, x0, x1)
+            ca = na
+            cb = nb
+        end
+    end
+    m = _range_push(rg, m, ca, cb, x0, x1)
+    ret m
+end
+
+func _range_push(rg: int[], m: int, a: int, b: int, x0: int, x1: int): int:
+    aa := a > x0 ? a : x0
+    bb := b < x1 ? b : x1
+    if aa >= bb:
+        ret m
+    end
+    rg[m * 2] = aa
+    rg[m * 2 + 1] = bb
+    ret m + 1
+end
+
+inline func _rpush(out: int*, n: int, x0: int, x1: int, c: int): int:
+    if c <= 0 or x1 <= x0:
+        ret n
+    end
+    if n > 0:
+        k := (n - 1) * 3
+        if out[k + 1] == x0 and out[k + 2] == c:
+            out[k + 1] = x1
+            ret n
+        end
+    end
+    k := n * 3
+    out[k] = x0
+    out[k + 1] = x1
+    out[k + 2] = c
+    ret n + 1
+end
+
+func _runs_mul(a: int*, na: int, b: int*, nb: int, out: int*): int:
+    mut i := 0
+    mut j := 0
+    mut n := 0
+    until i < na and j < nb:
+        ax0 := a[i * 3]
+        ax1 := a[i * 3 + 1]
+        bx0 := b[j * 3]
+        bx1 := b[j * 3 + 1]
+        lo := ax0 > bx0 ? ax0 : bx0
+        hi := ax1 < bx1 ? ax1 : bx1
+        if lo < hi:
+            n = _rpush(out, n, lo, hi, (a[i * 3 + 2] * b[j * 3 + 2]) >> 8)
+        end
+        if ax1 < bx1:
+            i++
+        else:
+            j++
+        end
+    end
+    ret n
+end
+
+func _runs_invert(a: int*, na: int, lo: int, hi: int, out: int*): int:
+    mut n := 0
+    mut x := lo
+    repeat na in i:
+        r0 := a[i * 3]
+        r1 := a[i * 3 + 1]
+        c := a[i * 3 + 2]
+        if r1 <= lo or r0 >= hi:
+            continue
+        end
+        s0 := r0 > lo ? r0 : lo
+        s1 := r1 < hi ? r1 : hi
+        if s0 > x:
+            n = _rpush(out, n, x, s0, 256)
+        end
+        n = _rpush(out, n, s0, s1, 256 - c)
+        x = s1
+    end
+    if x < hi:
+        n = _rpush(out, n, x, hi, 256)
+    end
+    ret n
+end
+
+func _blend_solid(p: u32*, base: int, x0: int, x1: int, c: u32, cov: int):
+    f := (cov * 255 + 128) >> 8
+    if f <= 0:
+        ret
+    end
+    s := f >= 255 ? c : _mul8(c, f as u32)
+    sa := s >> 24
+    if sa == (255 as u32):
+        repeat x1 - x0 in i:
+            p[base + x0 + i] = s
+        end
+        ret
+    end
+    if s == (0 as u32):
+        ret
+    end
+    ia := (255 as u32) - sa
+    repeat x1 - x0 in i:
+        k := base + x0 + i
+        p[k] = s + _mul8(p[k], ia)
+    end
+end
+
+func _blend_cols(p: u32*, base: int, col: u32*, x0: int, x1: int, cov: int):
+    f := (cov * 255 + 128) >> 8
+    if f <= 0:
+        ret
+    end
+    if f >= 255:
+        repeat x1 - x0 in i:
+            x := x0 + i
+            s := col[x]
+            sa := s >> 24
+            if sa == (255 as u32):
+                p[base + x] = s
+            else sa != (0 as u32):
+                k := base + x
+                p[k] = s + _mul8(p[k], (255 as u32) - sa)
+            end
+        end
+        ret
+    end
+    fu := f as u32
+    repeat x1 - x0 in i:
+        x := x0 + i
+        s := _mul8(col[x], fu)
+        if s != (0 as u32):
+            k := base + x
+            p[k] = s + _mul8(p[k], (255 as u32) - (s >> 24))
+        end
+    end
+end
+
+func _rclip_row(cv &: Canvas, k: int, y: int, out: int*): int:
+    base := k * 14
+    if y >= cv.state.rclips.get(base + 12) and y < cv.state.rclips.get(base + 13):
+        ret -1
+    end
+    sh := cv.state.sh
+    repeat 12 in i:
+        sh[64 + i] = cv.state.rclips.get(base + i)
+    end
+    ret _shape_row(sh, 64, y, cv.state.cx0, cv.state.cx1, out)
+end
+
+func _emit(cv &: Canvas, y: int, n0: int, kind: int, color: u32):
+    if n0 <= 0:
+        ret
+    end
+    mut buf := cv.state.ra
+    mut alt := cv.state.rb
+    mut n := n0
+    nrc := cv.state.rclips.len() / 14
+    repeat nrc in k:
+        cn := _rclip_row(cv, k, y, cv.state.rc)
+        if cn >= 0:
+            n = _runs_mul(buf, n, cv.state.rc, cn, alt)
+            t := buf
+            buf = alt
+            alt = t
+            if n == 0:
+                ret
+            end
+        end
+    end
+    mut rg := [0, 0, 0, 0, 0, 0]
+    nr := _row_ranges(cv, y, rg)
+    p := cv.state.tpix
+    base := (y - cv.state.toy) * cv.state.tspx - cv.state.tox
+    col := cv.state.col
+    repeat nr in j:
+        ga := rg[j * 2]
+        gb := rg[j * 2 + 1]
+        repeat n in i:
+            r0 := buf[i * 3]
+            r1 := buf[i * 3 + 1]
+            if r1 <= ga or r0 >= gb:
+                continue
+            end
+            a := r0 > ga ? r0 : ga
+            b := r1 < gb ? r1 : gb
+            c := buf[i * 3 + 2]
+            switch kind:
+                _K_SOLID:
+                    _blend_solid(p, base, a, b, color, c)
+                    break
+                end
+                _K_COL:
+                    _blend_cols(p, base, col, a, b, c)
+                    break
+                end
+                _K_GRAD:
+                    _grad_shade(cv, y, a, b)
+                    _blend_cols(p, base, col, a, b, c)
+                    break
+                end
+                _K_SHADOW:
+                    _shadow_shade(cv, y, a, b)
+                    _blend_cols(p, base, col, a, b, c)
+                    break
+                end
+                else:
+                    _image_shade(cv, y, a, b)
+                    _blend_cols(p, base, col, a, b, c)
+                end
+            end
+        end
+    end
+end
+
+func _cv_push_clip(cv &: Canvas, r: Rect, radii: Radii, rounded: bool):
+    _cv_ready(cv)
+    cv.state.clips.push(cv.state.cx0)
+    cv.state.clips.push(cv.state.cy0)
+    cv.state.clips.push(cv.state.cx1)
+    cv.state.clips.push(cv.state.cy1)
+    sh := cv.state.sh
+    ok := _shape_from(cv, r, radii, sh, 96)
+    if not ok:
+        cv.state.clips.push(0)
+        cv.state.cx1 = cv.state.cx0
+        cv.state.cy1 = cv.state.cy0
+        ret
+    end
+    x0 := (sh[96] + 128) >> 8
+    y0 := (sh[97] + 128) >> 8
+    x1 := (sh[98] + 128) >> 8
+    y1 := (sh[99] + 128) >> 8
+    cv.state.cx0 = _maxi(cv.state.cx0, x0)
+    cv.state.cy0 = _maxi(cv.state.cy0, y0)
+    cv.state.cx1 = _maxi(cv.state.cx0, _mini(cv.state.cx1, x1))
+    cv.state.cy1 = _maxi(cv.state.cy0, _mini(cv.state.cy1, y1))
+    mut any := false
+    repeat 8 in i:
+        if sh[100 + i] > 0:
+            any = true
+        end
+    end
+    if not rounded or not any:
+        cv.state.clips.push(0)
+        ret
+    end
+    cv.state.clips.push(1)
+    sh[96] = x0 << 8
+    sh[97] = y0 << 8
+    sh[98] = x1 << 8
+    sh[99] = y1 << 8
+    _fit_shape_radii(sh, 96)
+    repeat 12 in i:
+        cv.state.rclips.push(sh[96 + i])
+    end
+    top_end := (sh[97] + _maxi(sh[101], sh[103]) + 255) >> 8
+    bottom_start := (sh[99] - _maxi(sh[105], sh[107])) >> 8
+    cv.state.rclips.push(top_end)
+    cv.state.rclips.push(bottom_start)
+end
+
+func _cv_pop_clip(cv &: Canvas):
+    _cv_ready(cv)
+    if cv.state.clips.len() < 5:
+        ret
+    end
+    kind := cv.state.clips.pop()
+    cv.state.cy1 = cv.state.clips.pop()
+    cv.state.cx1 = cv.state.clips.pop()
+    cv.state.cy0 = cv.state.clips.pop()
+    cv.state.cx0 = cv.state.clips.pop()
+    if kind == 1:
+        repeat 14:
+            _ := cv.state.rclips.pop()
+        end
+    end
+end
+
+func _cv_push_transform(cv &: Canvas, t: Transform):
+    _cv_ready(cv)
+    s := cv.state
+    cv.state.xforms.push(s.xa)
+    cv.state.xforms.push(s.xb)
+    cv.state.xforms.push(s.xc)
+    cv.state.xforms.push(s.xd)
+    cv.state.xforms.push(s.xe)
+    cv.state.xforms.push(s.xf)
+    ta := _fx16(t.a)
+    tb := _fx16(t.b)
+    tc := _fx16(t.c)
+    td := _fx16(t.d)
+    te := _fx(t.e) as i64
+    tf := _fx(t.f) as i64
+    ca := s.xa as i64
+    cb := s.xb as i64
+    cc := s.xc as i64
+    cd := s.xd as i64
+    cv.state.xa = ((ca * ta + cc * tb) >> 16) as int
+    cv.state.xb = ((cb * ta + cd * tb) >> 16) as int
+    cv.state.xc = ((ca * tc + cc * td) >> 16) as int
+    cv.state.xd = ((cb * tc + cd * td) >> 16) as int
+    cv.state.xe = (((ca * te + cc * tf) >> 16) as int) + s.xe
+    cv.state.xf = (((cb * te + cd * tf) >> 16) as int) + s.xf
+end
+
+func _cv_pop_transform(cv &: Canvas):
+    _cv_ready(cv)
+    if cv.state.xforms.len() < 6:
+        ret
+    end
+    cv.state.xf = cv.state.xforms.pop()
+    cv.state.xe = cv.state.xforms.pop()
+    cv.state.xd = cv.state.xforms.pop()
+    cv.state.xc = cv.state.xforms.pop()
+    cv.state.xb = cv.state.xforms.pop()
+    cv.state.xa = cv.state.xforms.pop()
+end
+
+func _xf_axis(cv &: Canvas): bool:
+    ret cv.state.xb == 0 and cv.state.xc == 0
+end
+
+func _xf_x(cv &: Canvas, x: int, y: int): int:
+    ret ((((cv.state.xa as i64) * (x as i64) + (cv.state.xc as i64) * (y as i64)) >> 16) as int) + cv.state.xe
+end
+
+func _xf_y(cv &: Canvas, x: int, y: int): int:
+    ret ((((cv.state.xb as i64) * (x as i64) + (cv.state.xd as i64) * (y as i64)) >> 16) as int) + cv.state.xf
+end
+
+func _scale_abs(v: int, s: int): int:
+    m := s < 0 ? 0 - s : s
+    ret (((v as i64) * (m as i64)) >> 16) as int
+end
+
+func _fit_shape_radii(sh: int*, o: int):
+    w := sh[o + 2] - sh[o]
+    h := sh[o + 3] - sh[o + 1]
+    if sh[o + 4] + sh[o + 6] > w:
+        sh[o + 6] = _maxi(0, w - sh[o + 4])
+    end
+    if sh[o + 10] + sh[o + 8] > w:
+        sh[o + 8] = _maxi(0, w - sh[o + 10])
+    end
+    if sh[o + 5] + sh[o + 11] > h:
+        sh[o + 11] = _maxi(0, h - sh[o + 5])
+    end
+    if sh[o + 7] + sh[o + 9] > h:
+        sh[o + 9] = _maxi(0, h - sh[o + 7])
+    end
+    repeat 4 in c:
+        if sh[o + 4 + c * 2] <= 0 or sh[o + 5 + c * 2] <= 0:
+            sh[o + 4 + c * 2] = 0
+            sh[o + 5 + c * 2] = 0
+        end
+    end
+end
+
+func _shape_from(cv &: Canvas, r: Rect, radii: Radii, sh: int*, o: int): bool:
+    if not (r.width > 0.0) or not (r.height > 0.0):
+        ret false
+    end
+    fr := FitRadii(r, radii)
+    X0 := _fx(r.x)
+    Y0 := _fx(r.y)
+    X1 := _fx(r.x + r.width)
+    Y1 := _fx(r.y + r.height)
+    mut ax := 2147483647
+    mut ay := 2147483647
+    mut bx := -2147483647
+    mut byy := -2147483647
+    repeat 4 in i:
+        px := (i & 1) == 0 ? X0 : X1
+        py := (i & 2) == 0 ? Y0 : Y1
+        tx := _xf_x(cv, px, py)
+        ty := _xf_y(cv, px, py)
+        ax = _mini(ax, tx)
+        ay = _mini(ay, ty)
+        bx = _maxi(bx, tx)
+        byy = _maxi(byy, ty)
+    end
+    flipx := cv.state.xa < 0
+    flipy := cv.state.xd < 0
+    sh[o] = ax
+    sh[o + 1] = ay
+    sh[o + 2] = bx
+    sh[o + 3] = byy
+    if sh[o + 2] <= sh[o] or sh[o + 3] <= sh[o + 1]:
+        ret false
+    end
+    sx := cv.state.xa
+    sy := cv.state.xd
+    mut tlx := _scale_abs(_fx(fr.top_left_x), sx)
+    mut tly := _scale_abs(_fx(fr.top_left_y), sy)
+    mut trx := _scale_abs(_fx(fr.top_right_x), sx)
+    mut tr_y := _scale_abs(_fx(fr.top_right_y), sy)
+    mut brx := _scale_abs(_fx(fr.bottom_right_x), sx)
+    mut bry := _scale_abs(_fx(fr.bottom_right_y), sy)
+    mut blx := _scale_abs(_fx(fr.bottom_left_x), sx)
+    mut bly := _scale_abs(_fx(fr.bottom_left_y), sy)
+    if not _xf_axis(cv):
+        tlx = 0
+        tly = 0
+        trx = 0
+        tr_y = 0
+        brx = 0
+        bry = 0
+        blx = 0
+        bly = 0
+    end
+    if flipx:
+        t1 := tlx
+        tlx = trx
+        trx = t1
+        t2 := blx
+        blx = brx
+        brx = t2
+        t3 := tly
+        tly = tr_y
+        tr_y = t3
+        t4 := bly
+        bly = bry
+        bry = t4
+    end
+    if flipy:
+        t1 := tlx
+        tlx = blx
+        blx = t1
+        t2 := trx
+        trx = brx
+        brx = t2
+        t3 := tly
+        tly = bly
+        bly = t3
+        t4 := tr_y
+        tr_y = bry
+        bry = t4
+    end
+    sh[o + 4] = tlx
+    sh[o + 5] = tly
+    sh[o + 6] = trx
+    sh[o + 7] = tr_y
+    sh[o + 8] = brx
+    sh[o + 9] = bry
+    sh[o + 10] = blx
+    sh[o + 11] = bly
+    _fit_shape_radii(sh, o)
+    ret true
+end
+
+func _clip_rows(cv &: Canvas, y0q: int, y1q: int, out: int[]): bool:
+    a := _maxi(y0q >> 8, cv.state.cy0)
+    b := _mini((y1q + 255) >> 8, cv.state.cy1)
+    out[0] = a
+    out[1] = b
+    ret a < b and cv.state.cx0 < cv.state.cx1
+end

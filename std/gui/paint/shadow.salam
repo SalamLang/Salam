@@ -1,0 +1,275 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package paint
+
+func _spread_radius(rv: f64, s: f64): f64:
+    if rv <= 0.0:
+        ret 0.0
+    end
+    if s < 0.0:
+        ret _posf(rv + s)
+    end
+    if rv >= s:
+        ret rv + s
+    end
+    q := rv / s - 1.0
+    ret rv + s * (1.0 + q * q * q)
+end
+
+func _spread_radii(fr: Radii, s: f64): Radii:
+    ret Radii {
+        top_left_x = _spread_radius(fr.top_left_x, s), top_left_y = _spread_radius(fr.top_left_y, s),
+        top_right_x = _spread_radius(fr.top_right_x, s), top_right_y = _spread_radius(fr.top_right_y, s),
+        bottom_right_x = _spread_radius(fr.bottom_right_x, s), bottom_right_y = _spread_radius(fr.bottom_right_y, s),
+        bottom_left_x = _spread_radius(fr.bottom_left_x, s), bottom_left_y = _spread_radius(fr.bottom_left_y, s)
+    }
+end
+
+func _band_push(bd: int*, n: int, ya: int, yb: int, xa: int, xb: int): int:
+    if n > 0:
+        k := (n - 1) * 4
+        if bd[k + 2] == xa and bd[k + 3] == xb and bd[k + 1] == ya:
+            bd[k + 1] = yb
+            ret n
+        end
+    end
+    k := n * 4
+    bd[k] = ya
+    bd[k + 1] = yb
+    bd[k + 2] = xa
+    bd[k + 3] = xb
+    ret n + 1
+end
+
+func _band_slices(sh: int*, o: int, bd: int*, n0: int, ya: int, yb: int, bh: int): int:
+    mut n := n0
+    mut y := ya
+    mut e := [0, 0, 0, 0]
+    until y < yb:
+        y2 := y + bh < yb ? y + bh : yb
+        mid := (y + y2) >> 1
+        _edge(sh, o, mid, 256, false, e)
+        _edge(sh, o, mid, 256, true, e)
+        n = _band_push(bd, n, y, y2, e[0], e[2])
+        y = y2
+    end
+    ret n
+end
+
+func _shadow_bands(cv &: Canvas, o: int, sig: int): int:
+    sh := cv.state.sh
+    y0 := sh[o + 1]
+    y1 := sh[o + 3]
+    bh := sig / 2 > 256 ? sig / 2 : 256
+    top_end := y0 + _maxi(sh[o + 5], sh[o + 7])
+    bot_start := y1 - _maxi(sh[o + 9], sh[o + 11])
+    mut slices := (y1 - y0) / bh + 4
+    if top_end <= bot_start:
+        slices = (top_end - y0) / bh + (y1 - bot_start) / bh + 6
+    end
+    bd := _cv_bands(cv, slices * 4 + 8)
+    mut n := 0
+    if top_end <= bot_start:
+        n = _band_slices(sh, o, bd, n, y0, top_end, bh)
+        if bot_start > top_end:
+            n = _band_push(bd, n, top_end, bot_start, sh[o], sh[o + 2])
+        end
+        n = _band_slices(sh, o, bd, n, bot_start, y1, bh)
+    else:
+        n = _band_slices(sh, o, bd, n, y0, y1, bh)
+    end
+    ret n
+end
+
+inline func _phi_d(d: i64, sig: int): int:
+    ret _phi((d << 16) / (sig as i64))
+end
+
+func _shadow_profiles(cv &: Canvas, nb: int, sig: int, px0: int, pw: int):
+    bd := cv.state.bands
+    prof := _cv_prof(cv, nb * pw + 4)
+    repeat nb in b:
+        xa := bd[b * 4 + 2] as i64
+        xb := bd[b * 4 + 3] as i64
+        base := b * pw
+        repeat pw in i:
+            xc := (((px0 + i) as i64) << 8) + (128 as i64)
+            prof[base + i] = _phi_d(xb - xc, sig) - _phi_d(xa - xc, sig)
+        end
+    end
+end
+
+func _shadow_shade(cv &: Canvas, y: int, a: int, b: int):
+    sig := cv.state.s_sig
+    tmp := cv.state.tmp
+    if cv.state.s_lasty != y:
+        cv.state.s_lasty = y
+        bd := cv.state.bands
+        yc := ((y as i64) << 8) + (128 as i64)
+        mut m := 0
+        repeat cv.state.s_n in k:
+            v := _phi_d((bd[k * 4 + 1] as i64) - yc, sig) - _phi_d((bd[k * 4] as i64) - yc, sig)
+            if v > 0:
+                tmp[m * 2] = k
+                tmp[m * 2 + 1] = v
+                m++
+            end
+        end
+        cv.state.s_act = m
+    end
+    col := cv.state.col
+    prof := cv.state.prof
+    pw := cv.state.s_pw
+    px0 := cv.state.s_px0
+    m := cv.state.s_act
+    c := cv.state.s_col
+    inset := cv.state.s_inset
+    repeat b - a in i:
+        x := a + i
+        mut acc := 0 as i64
+        if x >= px0 and x < px0 + pw:
+            repeat m in k:
+                acc += (tmp[k * 2 + 1] as i64) * (prof[tmp[k * 2] * pw + x - px0] as i64)
+            end
+        end
+        mut al := (acc >> 16) as int
+        if al > 65536:
+            al = 65536
+        end
+        if al < 0:
+            al = 0
+        end
+        if inset:
+            al = 65536 - al
+        end
+        f := (al * 255 + 32768) >> 16
+        col[x] = f >= 255 ? c : _mul8(c, f as u32)
+    end
+end
+
+func _cv_shadow(cv &: Canvas, r: Rect, radii: Radii, s: Shadow):
+    _cv_ready(cv)
+    if cv.pixels == null:
+        ret
+    end
+    col := _premul(s.color)
+    if col == (0 as u32):
+        ret
+    end
+    sh := cv.state.sh
+    if not _shape_from(cv, r, radii, sh, 36):
+        ret
+    end
+    fr := FitRadii(r, radii)
+    sp := s.spread
+    mut sr := Rect { x = r.x + s.offset_x - sp, y = r.y + s.offset_y - sp, width = r.width + 2.0 * sp, height = r.height + 2.0 * sp }
+    mut srad := _spread_radii(fr, sp)
+    if s.inset:
+        sr = Rect { x = r.x + s.offset_x + sp, y = r.y + s.offset_y + sp, width = r.width - 2.0 * sp, height = r.height - 2.0 * sp }
+        srad = _spread_radii(fr, 0.0 - sp)
+    end
+    has_s := _shape_from(cv, sr, srad, sh, 24)
+    scale := cv.state.xa < 0 ? 0 - cv.state.xa : cv.state.xa
+    mut sig := _scale_abs(_fx(_posf(s.blur) / 2.0), scale)
+    if sig < 16:
+        sig = 0
+    end
+    lim0 := cv.state.cx0
+    lim1 := cv.state.cx1
+    if not s.inset:
+        if not has_s:
+            ret
+        end
+        ext := sig * 3
+        mut rows := [0, 0]
+        if not _clip_rows(cv, sh[25] - ext, sh[27] + ext, rows):
+            ret
+        end
+        lo := _maxi((sh[24] - ext) >> 8, lim0)
+        hi := _mini((sh[26] + ext + 255) >> 8, lim1)
+        if lo >= hi:
+            ret
+        end
+        if sig > 0:
+            nb := _shadow_bands(cv, 24, sig)
+            _shadow_profiles(cv, nb, sig, lo, hi - lo)
+            _cv_tmp(cv, nb * 2 + 4)
+            cv.state.s_n = nb
+            cv.state.s_px0 = lo
+            cv.state.s_pw = hi - lo
+            cv.state.s_sig = sig
+            cv.state.s_inset = false
+            cv.state.s_col = col
+            cv.state.s_lasty = -2147483647
+        end
+        repeat rows[1] - rows[0] in k:
+            y := rows[0] + k
+            nbx := _shape_row(sh, 36, y, lim0, lim1, cv.state.rb)
+            if sig > 0:
+                n := _runs_invert(cv.state.rb, nbx, lo, hi, cv.state.ra)
+                _emit(cv, y, n, _K_SHADOW, 0 as u32)
+            else:
+                ns := _shape_row(sh, 24, y, lim0, lim1, cv.state.rc)
+                ni := _runs_invert(cv.state.rb, nbx, lo, hi, cv.state.ra)
+                n := _runs_mul(cv.state.rc, ns, cv.state.ra, ni, cv.state.rb)
+                _copy_runs(cv.state.rb, cv.state.ra, n)
+                _emit(cv, y, n, _K_SOLID, col)
+            end
+        end
+        ret
+    end
+    mut rows := [0, 0]
+    if not _clip_rows(cv, sh[37], sh[39], rows):
+        ret
+    end
+    lo := _maxi(sh[36] >> 8, lim0)
+    hi := _mini((sh[38] + 255) >> 8, lim1)
+    if lo >= hi:
+        ret
+    end
+    if has_s and sig > 0:
+        nb := _shadow_bands(cv, 24, sig)
+        _shadow_profiles(cv, nb, sig, lo, hi - lo)
+        _cv_tmp(cv, nb * 2 + 4)
+        cv.state.s_n = nb
+        cv.state.s_px0 = lo
+        cv.state.s_pw = hi - lo
+        cv.state.s_sig = sig
+        cv.state.s_inset = true
+        cv.state.s_col = col
+        cv.state.s_lasty = -2147483647
+    end
+    repeat rows[1] - rows[0] in k:
+        y := rows[0] + k
+        nbx := _shape_row(sh, 36, y, lim0, lim1, cv.state.ra)
+        if not has_s:
+            _emit(cv, y, nbx, _K_SOLID, col)
+        else sig > 0:
+            _emit(cv, y, nbx, _K_SHADOW, 0 as u32)
+        else:
+            ns := _shape_row(sh, 24, y, lim0, lim1, cv.state.rc)
+            ni := _runs_invert(cv.state.rc, ns, lo, hi, cv.state.rb)
+            n := _runs_mul(cv.state.ra, nbx, cv.state.rb, ni, cv.state.rc)
+            _copy_runs(cv.state.rc, cv.state.ra, n)
+            _emit(cv, y, n, _K_SOLID, col)
+        end
+    end
+end
+
+func _copy_runs(src: int*, dst: int*, n: int):
+    repeat n * 3 in i:
+        dst[i] = src[i]
+    end
+end

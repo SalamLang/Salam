@@ -1,0 +1,765 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package paint
+
+import mem
+
+func _path_arc(p &: Path, cx: f64, cy: f64, rx: f64, ry: f64, start: f64, sweep: f64):
+    a0 := _angle_units(start)
+    total := _fx16(sweep / 360.0)
+    mut segs := ((total < (0 as i64) ? (0 as i64) - total : total) + (16383 as i64)) / (16384 as i64)
+    if segs < (1 as i64):
+        segs = 1
+    end
+    sx := cx + rx * (_cos_au(a0) as f64) / 65536.0
+    sy := cy + ry * (_sin_au(a0) as f64) / 65536.0
+    if p.verbs.len() == 0 or p.verbs.get(p.verbs.len() - 1) == 4:
+        p.MoveTo(sx, sy)
+    else:
+        p.LineTo(sx, sy)
+    end
+    if total == (0 as i64) or (rx == 0.0 and ry == 0.0):
+        ret
+    end
+    repeat segs as int in k:
+        b0 := a0 + ((total * (k as i64)) / segs) as int
+        b1 := a0 + ((total * ((k + 1) as i64)) / segs) as int
+        q := (b1 - b0) / 4
+        t := ((_sin_au(q) as f64) / (_cos_au(q) as f64)) * 4.0 / 3.0
+        c0 := (_cos_au(b0) as f64) / 65536.0
+        s0 := (_sin_au(b0) as f64) / 65536.0
+        c1 := (_cos_au(b1) as f64) / 65536.0
+        s1 := (_sin_au(b1) as f64) / 65536.0
+        p.CubicTo(
+            cx + rx * (c0 - t * s0), cy + ry * (s0 + t * c0),
+            cx + rx * (c1 + t * s1), cy + ry * (s1 - t * c1),
+            cx + rx * c1, cy + ry * s1
+        )
+    end
+end
+
+func _corner_arc(p &: Path, cx: f64, cy: f64, rx: f64, ry: f64, start: f64, x: f64, y: f64):
+    if rx > 0.0 and ry > 0.0:
+        _path_arc(p, cx, cy, rx, ry, start, 90.0)
+    else:
+        p.LineTo(x, y)
+    end
+end
+
+func _path_rounded_rect(p &: Path, r: Rect, rr: Radii):
+    x0 := r.x
+    y0 := r.y
+    x1 := r.x + r.width
+    y1 := r.y + r.height
+    p.MoveTo(x0 + rr.top_left_x, y0)
+    p.LineTo(x1 - rr.top_right_x, y0)
+    _corner_arc(p, x1 - rr.top_right_x, y0 + rr.top_right_y, rr.top_right_x, rr.top_right_y, 270.0, x1, y0)
+    p.LineTo(x1, y1 - rr.bottom_right_y)
+    _corner_arc(p, x1 - rr.bottom_right_x, y1 - rr.bottom_right_y, rr.bottom_right_x, rr.bottom_right_y, 0.0, x1, y1)
+    p.LineTo(x0 + rr.bottom_left_x, y1)
+    _corner_arc(p, x0 + rr.bottom_left_x, y1 - rr.bottom_left_y, rr.bottom_left_x, rr.bottom_left_y, 90.0, x0, y1)
+    p.LineTo(x0, y0 + rr.top_left_y)
+    _corner_arc(p, x0 + rr.top_left_x, y0 + rr.top_left_y, rr.top_left_x, rr.top_left_y, 180.0, x0, y0)
+    p.Close()
+end
+
+func _fl_push(cv &: Canvas, v: int):
+    if cv.state.f_n >= cv.state.edge_cap:
+        nc := cv.state.edge_cap < 256 ? 1024 : cv.state.edge_cap * 2
+        if cv.state.edges == null:
+            cv.state.edges = mem.Allocate((nc * 4) as u64) as int*
+        else:
+            cv.state.edges = mem.Reallocate(cv.state.edges as void*, (nc * 4) as u64) as int*
+        end
+        cv.state.edge_cap = nc
+    end
+    cv.state.edges[cv.state.f_n] = v
+    cv.state.f_n++
+end
+
+func _fl_point(cv &: Canvas, hdr &: int, x: int, y: int):
+    if hdr < 0:
+        hdr = cv.state.f_n
+        _fl_push(cv, 0)
+        _fl_push(cv, 0)
+    end
+    _fl_push(cv, x)
+    _fl_push(cv, y)
+    cv.state.edges[hdr]++
+end
+
+func _lerp_q16(a: i64, b: i64, t: i64): i64:
+    ret a + (((b - a) * t) >> 16)
+end
+
+func _absi(v: int): int:
+    ret v < 0 ? 0 - v : v
+end
+
+func _flatten(cv &: Canvas, p: Path, tol: int):
+    cv.state.f_n = 0
+    mut hdr := -1
+    mut cx := 0
+    mut cy := 0
+    mut sx := 0
+    mut sy := 0
+    mut pi := 0
+    mut closed := false
+    pts := p.points
+    repeat p.verbs.len() in vi:
+        v := p.verbs.get(vi)
+        if v == 4:
+            if hdr >= 0:
+                cv.state.edges[hdr + 1] = 1
+            end
+            hdr = -1
+            cx = sx
+            cy = sy
+            closed = true
+            continue
+        end
+        if v == 0:
+            hdr = -1
+            cx = _fx(pts.get(pi))
+            cy = _fx(pts.get(pi + 1))
+            pi += 2
+            sx = cx
+            sy = cy
+            _fl_point(cv, hdr, cx, cy)
+            closed = false
+            continue
+        end
+        if closed:
+            _fl_point(cv, hdr, cx, cy)
+            closed = false
+        end
+        if v == 1:
+            cx = _fx(pts.get(pi))
+            cy = _fx(pts.get(pi + 1))
+            pi += 2
+            _fl_point(cv, hdr, cx, cy)
+        else v == 2:
+            x1 := _fx(pts.get(pi))
+            y1 := _fx(pts.get(pi + 1))
+            x2 := _fx(pts.get(pi + 2))
+            y2 := _fx(pts.get(pi + 3))
+            pi += 4
+            l := _maxi(_absi(cx - 2 * x1 + x2), _absi(cy - 2 * y1 + y2))
+            mut n := (_isqrt((l as i64) / ((4 * tol) as i64)) as int) + 1
+            n = _mini(n, 500)
+            repeat n in k:
+                t := ((((k + 1) as i64) << 16) / (n as i64))
+                ax := _lerp_q16(cx as i64, x1 as i64, t)
+                ay := _lerp_q16(cy as i64, y1 as i64, t)
+                bx := _lerp_q16(x1 as i64, x2 as i64, t)
+                byy := _lerp_q16(y1 as i64, y2 as i64, t)
+                _fl_point(cv, hdr, _lerp_q16(ax, bx, t) as int, _lerp_q16(ay, byy, t) as int)
+            end
+            cx = x2
+            cy = y2
+        else v == 3:
+            x1 := _fx(pts.get(pi))
+            y1 := _fx(pts.get(pi + 1))
+            x2 := _fx(pts.get(pi + 2))
+            y2 := _fx(pts.get(pi + 3))
+            x3 := _fx(pts.get(pi + 4))
+            y3 := _fx(pts.get(pi + 5))
+            pi += 6
+            l := _maxi(_maxi(_absi(cx - 2 * x1 + x2), _absi(cy - 2 * y1 + y2)), _maxi(_absi(x1 - 2 * x2 + x3), _absi(y1 - 2 * y2 + y3)))
+            mut n := (_isqrt(((3 * l) as i64) / ((4 * tol) as i64)) as int) + 1
+            n = _mini(n, 500)
+            repeat n in k:
+                t := ((((k + 1) as i64) << 16) / (n as i64))
+                ax := _lerp_q16(cx as i64, x1 as i64, t)
+                ay := _lerp_q16(cy as i64, y1 as i64, t)
+                bx := _lerp_q16(x1 as i64, x2 as i64, t)
+                byy := _lerp_q16(y1 as i64, y2 as i64, t)
+                qx := _lerp_q16(x2 as i64, x3 as i64, t)
+                qy := _lerp_q16(y2 as i64, y3 as i64, t)
+                abx := _lerp_q16(ax, bx, t)
+                aby := _lerp_q16(ay, byy, t)
+                bqx := _lerp_q16(bx, qx, t)
+                bqy := _lerp_q16(byy, qy, t)
+                _fl_point(cv, hdr, _lerp_q16(abx, bqx, t) as int, _lerp_q16(aby, bqy, t) as int)
+            end
+            cx = x3
+            cy = y3
+        end
+    end
+end
+
+func _ras_begin(cv &: Canvas):
+    _cv_ready(cv)
+    rows := _maxi(cv.state.cy1 - cv.state.cy0, 1)
+    if rows > cv.state.head_cap:
+        if cv.state.heads != null:
+            mem.Free(cv.state.heads as void*)
+        end
+        cv.state.heads = mem.Allocate((rows * 4) as u64) as int*
+        cv.state.head_cap = rows
+    end
+    repeat rows in i:
+        cv.state.heads[i] = -1
+    end
+    cv.state.r_n = 0
+    cv.state.r_cur = -1
+    cv.state.r_ymin = 2147483647
+    cv.state.r_ymax = -2147483647
+end
+
+func _ras_cell(cv &: Canvas, x: int, y: int, cover: int, area: int):
+    if y < cv.state.cy0 or y >= cv.state.cy1:
+        ret
+    end
+    mut xx := x
+    if xx < cv.state.cx0:
+        xx = cv.state.cx0 - 1
+    end
+    if xx >= cv.state.cx1:
+        ret
+    end
+    cells := cv.state.cells
+    if cv.state.r_cur >= 0 and cv.state.r_curx == xx and cv.state.r_cury == y:
+        k := cv.state.r_cur * 4
+        cells[k + 1] += cover
+        cells[k + 2] += area
+        ret
+    end
+    row := y - cv.state.cy0
+    mut i := cv.state.heads[row]
+    until i >= 0:
+        if cells[i * 4] == xx:
+            break
+        end
+        i = cells[i * 4 + 3]
+    end
+    if i < 0:
+        if cv.state.r_n >= cv.state.cell_cap:
+            nc := cv.state.cell_cap < 256 ? 1024 : cv.state.cell_cap * 2
+            if cv.state.cells == null:
+                cv.state.cells = mem.Allocate((nc * 16) as u64) as int*
+            else:
+                cv.state.cells = mem.Reallocate(cv.state.cells as void*, (nc * 16) as u64) as int*
+            end
+            cv.state.cell_cap = nc
+        end
+        i = cv.state.r_n
+        cv.state.r_n++
+        k := i * 4
+        cv.state.cells[k] = xx
+        cv.state.cells[k + 1] = 0
+        cv.state.cells[k + 2] = 0
+        cv.state.cells[k + 3] = cv.state.heads[row]
+        cv.state.heads[row] = i
+        if y < cv.state.r_ymin:
+            cv.state.r_ymin = y
+        end
+        if y > cv.state.r_ymax:
+            cv.state.r_ymax = y
+        end
+    end
+    cv.state.r_cur = i
+    cv.state.r_curx = xx
+    cv.state.r_cury = y
+    k := i * 4
+    cv.state.cells[k + 1] += cover
+    cv.state.cells[k + 2] += area
+end
+
+func _ras_scan(cv &: Canvas, ey: int, x1: int, fy1: int, x2: int, fy2: int):
+    if fy1 == fy2 or ey < cv.state.cy0 or ey >= cv.state.cy1:
+        ret
+    end
+    ex1 := x1 >> 8
+    ex2 := x2 >> 8
+    if ex1 == ex2:
+        b := ex1 << 8
+        _ras_cell(cv, ex1, ey, fy2 - fy1, (fy2 - fy1) * ((x1 - b) + (x2 - b)))
+        ret
+    end
+    dx := (x2 - x1) as i64
+    dy := (fy2 - fy1) as i64
+    mut xa := x1
+    mut ya := fy1
+    mut c := ex1
+    if dx > (0 as i64):
+        until c < ex2:
+            bx := (c + 1) << 8
+            yb := fy1 + ((dy * ((bx - x1) as i64)) / dx) as int
+            _ras_cell(cv, c, ey, yb - ya, (yb - ya) * ((xa - (c << 8)) + 256))
+            c++
+            xa = bx
+            ya = yb
+        end
+    else:
+        until c > ex2:
+            bx := c << 8
+            yb := fy1 + ((dy * ((bx - x1) as i64)) / dx) as int
+            _ras_cell(cv, c, ey, yb - ya, (yb - ya) * (xa - (c << 8)))
+            c--
+            xa = bx
+            ya = yb
+        end
+    end
+    b := ex2 << 8
+    _ras_cell(cv, ex2, ey, fy2 - ya, (fy2 - ya) * ((xa - b) + (x2 - b)))
+end
+
+func _ras_line(cv &: Canvas, x0: int, y0: int, x1: int, y1: int):
+    if y0 == y1:
+        ret
+    end
+    ey0 := y0 >> 8
+    ey1 := y1 >> 8
+    if ey0 == ey1:
+        _ras_scan(cv, ey0, x0, y0 - (ey0 << 8), x1, y1 - (ey0 << 8))
+        ret
+    end
+    dx := (x1 - x0) as i64
+    dy := (y1 - y0) as i64
+    mut yt := y0
+    mut xt := x0
+    if dy > (0 as i64):
+        mut ey := ey0
+        until ey <= ey1:
+            if ey >= cv.state.cy1:
+                ret
+            end
+            yb := _mini((ey + 1) << 8, y1)
+            xb := x0 + ((dx * ((yb - y0) as i64)) / dy) as int
+            if ey >= cv.state.cy0:
+                _ras_scan(cv, ey, xt, yt - (ey << 8), xb, yb - (ey << 8))
+            end
+            yt = yb
+            xt = xb
+            ey++
+        end
+    else:
+        mut ey := ey0
+        until ey >= ey1:
+            if ey < cv.state.cy0:
+                ret
+            end
+            yb := _maxi(ey << 8, y1)
+            xb := x0 + ((dx * ((yb - y0) as i64)) / dy) as int
+            if ey < cv.state.cy1:
+                _ras_scan(cv, ey, xt, yt - (ey << 8), xb, yb - (ey << 8))
+            end
+            yt = yb
+            xt = xb
+            ey--
+        end
+    end
+end
+
+func _uline(cv &: Canvas, ax: int, ay: int, bx: int, byy: int):
+    _ras_line(cv, _xf_x(cv, ax, ay), _xf_y(cv, ax, ay), _xf_x(cv, bx, byy), _xf_y(cv, bx, byy))
+end
+
+inline func _wind(v: i64, evenodd: bool): int:
+    mut c := ((v < (0 as i64) ? (0 as i64) - v : v) >> 9) as int
+    if evenodd:
+        c &= 511
+        if c > 256:
+            c = 512 - c
+        end
+        ret c
+    end
+    ret c > 256 ? 256 : c
+end
+
+func _ras_sweep(cv &: Canvas, evenodd: bool, kind: int, color: u32):
+    y0 := _maxi(cv.state.r_ymin, cv.state.cy0)
+    y1 := _mini(cv.state.r_ymax + 1, cv.state.cy1)
+    if y1 <= y0:
+        ret
+    end
+    cells := cv.state.cells
+    lim0 := cv.state.cx0
+    lim1 := cv.state.cx1
+    repeat y1 - y0 in k:
+        y := y0 + k
+        mut m := 0
+        mut i := cv.state.heads[y - cv.state.cy0]
+        until i >= 0:
+            m++
+            i = cells[i * 4 + 3]
+        end
+        if m == 0:
+            continue
+        end
+        idx := _cv_tmp(cv, m + 4)
+        i = cv.state.heads[y - cv.state.cy0]
+        mut j := 0
+        until i >= 0:
+            mut q := j
+            xi := cells[i * 4]
+            until q > 0 and cells[idx[q - 1] * 4] > xi:
+                idx[q] = idx[q - 1]
+                q--
+            end
+            idx[q] = i
+            j++
+            i = cells[i * 4 + 3]
+        end
+        out := cv.state.ra
+        mut n := 0
+        mut acc := 0 as i64
+        mut prev := lim0 - 2
+        repeat m in t:
+            c := idx[t] * 4
+            x := cells[c]
+            if acc != (0 as i64) and x > prev + 1:
+                a := _maxi(prev + 1, lim0)
+                b := _mini(x, lim1)
+                if a < b:
+                    n = _rpush(out, n, a, b, _wind(acc * (512 as i64), evenodd))
+                end
+            end
+            cover := cells[c + 1] as i64
+            v := (acc + cover) * (512 as i64) - (cells[c + 2] as i64)
+            if x >= lim0:
+                n = _rpush(out, n, x, x + 1, _wind(v, evenodd))
+            end
+            acc += cover
+            prev = x
+        end
+        _emit(cv, y, n, kind, color)
+    end
+end
+
+func _poly_lines(cv &: Canvas, pts: int*, n: int):
+    mut area := 0 as i64
+    repeat n in i:
+        j := (i + 1) % n
+        area += (pts[i * 2] as i64) * (pts[j * 2 + 1] as i64) - (pts[j * 2] as i64) * (pts[i * 2 + 1] as i64)
+    end
+    repeat n in i:
+        j := (i + 1) % n
+        if area >= (0 as i64):
+            _uline(cv, pts[i * 2], pts[i * 2 + 1], pts[j * 2], pts[j * 2 + 1])
+        else:
+            _uline(cv, pts[j * 2], pts[j * 2 + 1], pts[i * 2], pts[i * 2 + 1])
+        end
+    end
+end
+
+func _fill_path_kind(cv &: Canvas, p: Path, rule: FillRule, kind: int, color: u32):
+    _cv_ready(cv)
+    if cv.pixels == null or p.verbs.len() == 0:
+        ret
+    end
+    _flatten(cv, p, _flat_tol(cv))
+    _ras_begin(cv)
+    e := cv.state.edges
+    mut h := 0
+    until h < cv.state.f_n:
+        np := e[h]
+        if np >= 2:
+            repeat np in i:
+                j := (i + 1) % np
+                a := h + 2 + i * 2
+                b := h + 2 + j * 2
+                _uline(cv, e[a], e[a + 1], e[b], e[b + 1])
+            end
+        end
+        h += 2 + np * 2
+    end
+    _ras_sweep(cv, rule == FillRule.EvenOdd, kind, color)
+end
+
+func _flat_tol(cv &: Canvas): int:
+    mut m := _maxi(_maxi(_absi(cv.state.xa), _absi(cv.state.xb)), _maxi(_absi(cv.state.xc), _absi(cv.state.xd)))
+    if m < 1:
+        m = 1
+    end
+    t := ((51 as i64) * (65536 as i64) / (m as i64)) as int
+    ret _clampi(t, 4, 4096)
+end
+
+func _cv_fill_path(cv &: Canvas, p: Path, rule: FillRule, c: Color):
+    col := _premul(c)
+    if col == (0 as u32):
+        ret
+    end
+    _fill_path_kind(cv, p, rule, _K_SOLID, col)
+end
+
+func _circle_poly(cv &: Canvas, cx: int, cy: int, r: int, buf: int*):
+    mut n := 8 + (7 * (_isqrt(r as i64) as int)) / 16
+    n = _mini(n, 128)
+    repeat n in k:
+        au := (k * 65536) / n
+        buf[k * 2] = cx + ((((r as i64) * (_cos_au(au) as i64)) >> 16) as int)
+        buf[k * 2 + 1] = cy + ((((r as i64) * (_sin_au(au) as i64)) >> 16) as int)
+    end
+    _poly_lines(cv, buf, n)
+end
+
+func _quad_poly(cv &: Canvas, buf: int*, x0: int, y0: int, x1: int, y1: int, x2: int, y2: int, x3: int, y3: int):
+    buf[0] = x0
+    buf[1] = y0
+    buf[2] = x1
+    buf[3] = y1
+    buf[4] = x2
+    buf[5] = y2
+    buf[6] = x3
+    buf[7] = y3
+    _poly_lines(cv, buf, 4)
+end
+
+func _seg_normal(ax: int, ay: int, bx: int, byy: int, hw: int, out: int[]): bool:
+    dx := (bx - ax) as i64
+    dy := (byy - ay) as i64
+    len := _isqrt(dx * dx + dy * dy)
+    if len <= (0 as i64):
+        ret false
+    end
+    out[0] = (((0 as i64) - dy) * (hw as i64) / len) as int
+    out[1] = (dx * (hw as i64) / len) as int
+    ret true
+end
+
+func _cap(cv &: Canvas, buf: int*, x: int, y: int, nx: int, ny: int, start: bool, cap: LineCap, hw: int):
+    switch cap:
+        LineCap.Butt:
+            break
+        end
+        LineCap.Round:
+            _circle_poly(cv, x, y, hw, buf)
+            break
+        end
+        LineCap.Square:
+            tx := start ? ny : 0 - ny
+            ty := start ? 0 - nx : nx
+            _quad_poly(cv, buf, x + nx, y + ny, x + nx + tx, y + ny + ty, x - nx + tx, y - ny + ty, x - nx, y - ny)
+            break
+        end
+    end
+end
+
+func _join(cv &: Canvas, buf: int*, x: int, y: int, n1: int[2], n2: int[2], d1x: int, d1y: int, d2x: int, d2y: int, s: Stroke, hw: int):
+    cross := (d1x as i64) * (d2y as i64) - (d1y as i64) * (d2x as i64)
+    dot := (d1x as i64) * (d2x as i64) + (d1y as i64) * (d2y as i64)
+    if cross == (0 as i64) and dot >= (0 as i64):
+        ret
+    end
+    if s.join == LineJoin.Round:
+        _circle_poly(cv, x, y, hw, buf)
+        ret
+    end
+    sg := cross > (0 as i64) ? -1 : 1
+    o1x := n1[0] * sg
+    o1y := n1[1] * sg
+    o2x := n2[0] * sg
+    o2y := n2[1] * sg
+    buf[0] = x
+    buf[1] = y
+    buf[2] = x + o1x
+    buf[3] = y + o1y
+    buf[4] = x + o2x
+    buf[5] = y + o2y
+    if s.join == LineJoin.Miter:
+        h2 := (hw as i64) * (hw as i64)
+        den := h2 + (o1x as i64) * (o2x as i64) + (o1y as i64) * (o2y as i64)
+        if den > (0 as i64):
+            mx := (((o1x + o2x) as i64) * h2) / den
+            my := (((o1y + o2y) as i64) * h2) / den
+            lim := ((_fx(s.miter_limit) as i64) * (hw as i64)) >> 8
+            if mx * mx + my * my <= lim * lim:
+                _quad_poly(cv, buf, x, y, x + o1x, y + o1y, x + (mx as int), y + (my as int), x + o2x, y + o2y)
+                ret
+            end
+        end
+    end
+    _poly_lines(cv, buf, 3)
+end
+
+func _stroke_poly(cv &: Canvas, pts: int*, m: int, closed: bool, s: Stroke, hw: int, buf: int*):
+    if m <= 0:
+        ret
+    end
+    if m == 1:
+        if s.cap == LineCap.Round:
+            _circle_poly(cv, pts[0], pts[1], hw, buf)
+        else s.cap == LineCap.Square:
+            _quad_poly(cv, buf, pts[0] - hw, pts[1] - hw, pts[0] + hw, pts[1] - hw, pts[0] + hw, pts[1] + hw, pts[0] - hw, pts[1] + hw)
+        end
+        ret
+    end
+    segs := closed ? m : m - 1
+    mut n1 := [0, 0]
+    mut n0 := [0, 0]
+    mut first := [0, 0]
+    mut fdx := 0
+    mut fdy := 0
+    mut pdx := 0
+    mut pdy := 0
+    mut have := false
+    repeat segs in i:
+        j := (i + 1) % m
+        ax := pts[i * 2]
+        ay := pts[i * 2 + 1]
+        bx := pts[j * 2]
+        byy := pts[j * 2 + 1]
+        if not _seg_normal(ax, ay, bx, byy, hw, n1):
+            continue
+        end
+        _quad_poly(cv, buf, ax + n1[0], ay + n1[1], bx + n1[0], byy + n1[1], bx - n1[0], byy - n1[1], ax - n1[0], ay - n1[1])
+        if have:
+            _join(cv, buf, ax, ay, n0, n1, pdx, pdy, bx - ax, byy - ay, s, hw)
+        else:
+            first[0] = n1[0]
+            first[1] = n1[1]
+            fdx = bx - ax
+            fdy = byy - ay
+            if not closed:
+                _cap(cv, buf, ax, ay, n1[0], n1[1], true, s.cap, hw)
+            end
+        end
+        have = true
+        n0[0] = n1[0]
+        n0[1] = n1[1]
+        pdx = bx - ax
+        pdy = byy - ay
+    end
+    if not have:
+        _stroke_poly(cv, pts, 1, false, s, hw, buf)
+        ret
+    end
+    if closed:
+        _join(cv, buf, pts[0], pts[1], n0, first, pdx, pdy, fdx, fdy, s, hw)
+    else:
+        _cap(cv, buf, pts[(m - 1) * 2], pts[(m - 1) * 2 + 1], n0[0], n0[1], false, s.cap, hw)
+    end
+end
+
+func _dash_flush(cv &: Canvas, piece: int*, pn: int, s: Stroke, hw: int, buf: int*):
+    if pn >= 2:
+        _stroke_poly(cv, piece, pn, false, s, hw, buf)
+    end
+end
+
+func _stroke_dashed(cv &: Canvas, pts: int*, m: int, closed: bool, s: Stroke, hw: int, buf: int*, piece: int*):
+    dash := _fx(s.dash)
+    gap := _fx(_posf(s.gap))
+    period := dash + gap
+    if dash <= 0 or period <= 0:
+        _stroke_poly(cv, pts, m, closed, s, hw, buf)
+        ret
+    end
+    mut ph := _fx(s.dash_offset) % period
+    if ph < 0:
+        ph += period
+    end
+    mut dash_on := ph < dash
+    mut left := dash_on ? dash - ph : period - ph
+    mut pn := 0
+    if dash_on:
+        piece[0] = pts[0]
+        piece[1] = pts[1]
+        pn = 1
+    end
+    segs := closed ? m : m - 1
+    repeat segs in i:
+        j := (i + 1) % m
+        ax := pts[i * 2]
+        ay := pts[i * 2 + 1]
+        bx := pts[j * 2]
+        byy := pts[j * 2 + 1]
+        dx := (bx - ax) as i64
+        dy := (byy - ay) as i64
+        len := _isqrt(dx * dx + dy * dy) as int
+        mut pos := 0
+        until len - pos > left:
+            pos += left
+            px := ax + ((dx * (pos as i64)) / (len as i64)) as int
+            py := ay + ((dy * (pos as i64)) / (len as i64)) as int
+            if dash_on:
+                piece[pn * 2] = px
+                piece[pn * 2 + 1] = py
+                pn++
+                _dash_flush(cv, piece, pn, s, hw, buf)
+                pn = 0
+                dash_on = false
+                left = gap
+            else:
+                piece[0] = px
+                piece[1] = py
+                pn = 1
+                dash_on = true
+                left = dash
+            end
+        end
+        left -= len - pos
+        if dash_on:
+            piece[pn * 2] = bx
+            piece[pn * 2 + 1] = byy
+            pn++
+        end
+    end
+    if dash_on:
+        _dash_flush(cv, piece, pn, s, hw, buf)
+    end
+end
+
+func _cv_stroke_path(cv &: Canvas, p: Path, s: Stroke, c: Color):
+    _cv_ready(cv)
+    col := _premul(c)
+    if cv.pixels == null or col == (0 as u32) or p.verbs.len() == 0 or not (s.width > 0.0):
+        ret
+    end
+    hw := _maxi(_fx(s.width / 2.0), 1)
+    _flatten(cv, p, _flat_tol(cv))
+    _ras_begin(cv)
+    total := cv.state.f_n
+    flat := mem.Allocate((total * 4 + 16) as u64) as int*
+    repeat total in i:
+        flat[i] = cv.state.edges[i]
+    end
+    pts := mem.Allocate((total * 4 + 16) as u64) as int*
+    piece := mem.Allocate((total * 4 + 16) as u64) as int*
+    buf := mem.Allocate((300 * 4) as u64) as int*
+    mut h := 0
+    until h < total:
+        np := flat[h]
+        closed := flat[h + 1] == 1
+        mut m := 0
+        repeat np in i:
+            x := flat[h + 2 + i * 2]
+            y := flat[h + 3 + i * 2]
+            if m == 0 or pts[(m - 1) * 2] != x or pts[(m - 1) * 2 + 1] != y:
+                pts[m * 2] = x
+                pts[m * 2 + 1] = y
+                m++
+            end
+        end
+        mut mm := m
+        if closed and m > 1 and pts[0] == pts[(m - 1) * 2] and pts[1] == pts[(m - 1) * 2 + 1]:
+            mm = m - 1
+        end
+        if s.dash > 0.0:
+            _stroke_dashed(cv, pts, mm, closed, s, hw, buf, piece)
+        else:
+            _stroke_poly(cv, pts, mm, closed, s, hw, buf)
+        end
+        h += 2 + np * 2
+    end
+    mem.Free(flat as void*)
+    mem.Free(pts as void*)
+    mem.Free(piece as void*)
+    mem.Free(buf as void*)
+    _ras_sweep(cv, false, _K_SOLID, col)
+end

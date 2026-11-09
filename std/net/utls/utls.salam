@@ -1,0 +1,872 @@
+@en "net/utls"
+@fa "اثر انگشت تی ال اس"
+package utls
+
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import mem
+import crypto
+import tls
+import str
+
+const _SID_OFFSET := 39
+const _GREASE_BASE := 0x10000
+const _PAD_TOKEN := 0x20000
+const _EXT_ECH := 0xFE0D
+
+struct _Ctx:
+    pub g0: int = 0
+    pub g1: int = 0
+    pub g2: int = 0
+    pub g3: int = 0
+    pub g4: int = 0
+end
+
+@en "Bytes"
+@fa "بایت‌ها"
+pub struct Bytes:
+    @en "p"
+    @fa "نشانگر"
+    pub p: void* = null
+    @en "len"
+    @fa "طول"
+    pub len: int = 0
+    @en "cap"
+    @fa "ظرفیت"
+    pub cap: int = 0
+end
+
+@en "Spec"
+@fa "مشخصات"
+pub struct Spec:
+    @en "name"
+    @fa "نام"
+    pub name: str = ""
+    @en "ciphers"
+    @fa "رمزها"
+    pub ciphers: str = ""
+    @en "extensions"
+    @fa "افزونه‌ها"
+    pub extensions: str = ""
+    @en "groups"
+    @fa "گروه‌ها"
+    pub groups: str = ""
+    @en "key_shares"
+    @fa "سهم کلیدها"
+    pub key_shares: str = ""
+    @en "sigalgs"
+    @fa "الگوریتم‌های امضا"
+    pub sigalgs: str = ""
+    @en "versions"
+    @fa "نسخه‌ها"
+    pub versions: str = ""
+    @en "alpn"
+    @fa "پروتکل برنامه"
+    pub alpn: str = ""
+    @en "cert_compress"
+    @fa "فشرده‌سازی گواهی"
+    pub cert_compress: str = ""
+    @en "delegated"
+    @fa "اعتبارنامه تفویضی"
+    pub delegated: str = ""
+    @en "record_size_limit"
+    @fa "حد اندازه رکورد"
+    pub record_size_limit: int = 0
+    @en "pad_to"
+    @fa "پر کردن تا"
+    pub pad_to: int = 0
+    @en "randomize"
+    @fa "تصادفی سازی"
+    pub randomize: bool = false
+    @en "ok"
+    @fa "معتبر"
+    pub ok: bool = false
+end
+
+@en "Options"
+@fa "گزینه‌ها"
+pub struct Options:
+    @en "server_name"
+    @fa "نام کارساز"
+    pub server_name: str = ""
+    @en "alpn"
+    @fa "پروتکل برنامه"
+    pub alpn: str = ""
+    @en "shuffle"
+    @fa "بر زدن افزونه‌ها"
+    pub shuffle: bool = false
+    @en "pq"
+    @fa "کلید پسا کوانتومی"
+    pub pq: bool = true
+    @en "ech"
+    @fa "گریس اکو"
+    pub ech: bool = true
+    @en "padding"
+    @fa "پرکننده"
+    pub padding: bool = true
+end
+
+@en "Hello"
+@fa "سلام کارخواه"
+pub struct Hello:
+    @en "raw"
+    @fa "خام"
+    pub raw: Bytes = Bytes {}
+    @en "priv"
+    @fa "کلید خصوصی"
+    pub priv: Bytes = Bytes {}
+    @en "pub_key"
+    @fa "کلید عمومی"
+    pub pub_key: Bytes = Bytes {}
+    @en "ok"
+    @fa "معتبر"
+    pub ok: bool = false
+    @en "err"
+    @fa "خطا"
+    pub err: str = ""
+end
+
+func _nb(cap0: int): Bytes:
+    mut c := cap0
+    if c < 64:
+        c = 64
+    end
+    ret Bytes { p = mem.AllocateZeroed(c as u64), len = 0, cap = c }
+end
+
+func _grow(b &: Bytes, need: int):
+    if b.len + need <= b.cap:
+        ret
+    end
+    mut c := b.cap * 2
+    if c < b.len + need:
+        c = b.len + need
+    end
+    b.p = mem.Reallocate(b.p, c as u64)
+    b.cap = c
+end
+
+func _p8(b &: Bytes, v: int):
+    _grow(b, 1)
+    bp := b.p as u8*
+    bp[b.len] = (v & 0xFF) as u8
+    b.len += 1
+end
+
+func _p16(b &: Bytes, v: int):
+    _p8(b, v >> 8)
+    _p8(b, v)
+end
+
+func _p24(b &: Bytes, v: int):
+    _p8(b, v >> 16)
+    _p16(b, v)
+end
+
+func _praw(b &: Bytes, src: void*, n: int):
+    _grow(b, n)
+    mem.Copy(((b.p as i64) + (b.len as i64)) as void*, src, n as u64)
+    b.len += n
+end
+
+func _prand(b &: Bytes, n: int):
+    _grow(b, n)
+    crypto.RandomBytes(((b.p as i64) + (b.len as i64)) as void*, n)
+    b.len += n
+end
+
+func _patch16(b &: Bytes, off: int, v: int):
+    bp := b.p as u8*
+    bp[off] = ((v >> 8) & 0xFF) as u8
+    bp[off + 1] = (v & 0xFF) as u8
+end
+
+func _patch24(b &: Bytes, off: int, v: int):
+    bp := b.p as u8*
+    bp[off] = ((v >> 16) & 0xFF) as u8
+    bp[off + 1] = ((v >> 8) & 0xFF) as u8
+    bp[off + 2] = (v & 0xFF) as u8
+end
+
+func _at(b: Bytes, i: int): int:
+    bp := b.p as u8*
+    ret bp[i] as int
+end
+
+func _randbyte(): int:
+    p := mem.Allocate(8 as u64)
+    crypto.RandomBytes(p, 1)
+    bp := p as u8*
+    v := bp[0] as int
+    mem.Free(p)
+    ret v
+end
+
+func _grease_val(): int:
+    b := (_randbyte() & 0xF0) | 0x0A
+    ret (b << 8) | b
+end
+
+func _ctx_new(): _Ctx:
+    mut c := _Ctx {}
+    c.g0 = _grease_val()
+    c.g1 = _grease_val()
+    c.g2 = _grease_val()
+    c.g3 = _grease_val()
+    c.g4 = _grease_val()
+    if c.g4 == c.g1:
+        c.g4 = c.g4 ^ 0x1010
+    end
+    ret c
+end
+
+func _grease(c: _Ctx, slot: int): int:
+    if slot == 0:
+        ret c.g0
+    end
+    if slot == 1:
+        ret c.g1
+    end
+    if slot == 2:
+        ret c.g2
+    end
+    if slot == 3:
+        ret c.g3
+    end
+    ret c.g4
+end
+
+func _hexval(ch: int): int:
+    if ch >= 48 and ch <= 57:
+        ret ch - 48
+    end
+    if ch >= 97 and ch <= 102:
+        ret ch - 87
+    end
+    if ch >= 65 and ch <= 70:
+        ret ch - 55
+    end
+    ret 0 - 1
+end
+
+func _tokens(s: str): Vector<int>:
+    mut out := Vector {} as Vector<int>
+    n := s.len()
+    bp := s as u8*
+    mut i := 0
+    until i < n:
+        ch := bp[i] as int
+        if ch == 32 or ch == 44:
+            i++
+            continue
+        end
+        mut j := i
+        until j < n and bp[j] as int != 32 and bp[j] as int != 44:
+            j++
+        end
+        first := bp[i] as int
+        if first == 103 and j - i == 2:
+            out.push(_GREASE_BASE + ((bp[i + 1] as int) - 48))
+        else if first == 112 and j - i == 3:
+            out.push(_PAD_TOKEN)
+        else:
+            mut v := 0
+            mut k := i
+            until k < j:
+                v = (v << 4) | _hexval(bp[k] as int)
+                k++
+            end
+            out.push(v)
+        end
+        i = j
+    end
+    ret out
+end
+
+func _resolve(c: _Ctx, t: int): int:
+    if t >= _PAD_TOKEN:
+        ret t
+    end
+    if t >= _GREASE_BASE:
+        ret _grease(c, t - _GREASE_BASE)
+    end
+    ret t
+end
+
+func _put_list16(out &: Bytes, c: _Ctx, s: str, grease_on: bool):
+    mut v := _tokens(s)
+    defer v.free()
+    mark := out.len
+    _p16(out, 0)
+    repeat v.len() in i:
+        t := v.get(i)
+        if t >= _GREASE_BASE and not grease_on:
+            continue
+        end
+        _p16(out, _resolve(c, t))
+    end
+    _patch16(out, mark, out.len - mark - 2)
+end
+
+func _ext_head(out &: Bytes, id: int): int:
+    _p16(out, id)
+    _p16(out, 0)
+    ret out.len
+end
+
+func _ext_done(out &: Bytes, mark: int):
+    _patch16(out, mark - 2, out.len - mark)
+end
+
+func _put_alpn(out &: Bytes, list: str):
+    mut start := 0
+    n := list.len()
+    bp := list as u8*
+    mark := out.len
+    _p16(out, 0)
+    mut i := 0
+    until i <= n:
+        if i == n or (bp[i] as int) == 44:
+            if i > start:
+                _p8(out, i - start)
+                _praw(out, (((list as void*) as i64) + (start as i64)) as void*, i - start)
+            end
+            start = i + 1
+        end
+        i++
+    end
+    _patch16(out, mark, out.len - mark - 2)
+end
+
+func _put_ext(out &: Bytes, id: int, c: _Ctx, sp: Spec, o: Options, pub_key: Bytes, grease_on: bool): bool:
+    if id == 0:
+        if o.server_name.len() == 0:
+            ret false
+        end
+        m := _ext_head(out, 0)
+        _p16(out, o.server_name.len() + 3)
+        _p8(out, 0)
+        _p16(out, o.server_name.len())
+        _praw(out, o.server_name as void*, o.server_name.len())
+        _ext_done(out, m)
+        ret true
+    end
+    if id == 5:
+        m := _ext_head(out, 5)
+        _p8(out, 1)
+        _p16(out, 0)
+        _p16(out, 0)
+        _ext_done(out, m)
+        ret true
+    end
+    if id == 10:
+        m := _ext_head(out, 10)
+        _put_list16(out, c, sp.groups, grease_on)
+        _ext_done(out, m)
+        ret true
+    end
+    if id == 11:
+        m := _ext_head(out, 11)
+        _p8(out, 1)
+        _p8(out, 0)
+        _ext_done(out, m)
+        ret true
+    end
+    if id == 13:
+        m := _ext_head(out, 13)
+        _put_list16(out, c, sp.sigalgs, grease_on)
+        _ext_done(out, m)
+        ret true
+    end
+    if id == 16:
+        mut list := sp.alpn
+        if o.alpn.len() > 0:
+            list = o.alpn
+        end
+        if list == "none" or list.len() == 0:
+            ret false
+        end
+        m := _ext_head(out, 16)
+        _put_alpn(out, list)
+        _ext_done(out, m)
+        ret true
+    end
+    if id == 18 or id == 35 or id == 23 or id == 49:
+        m := _ext_head(out, id)
+        _ext_done(out, m)
+        ret true
+    end
+    if id == 27:
+        mut v := _tokens(sp.cert_compress)
+        defer v.free()
+        m := _ext_head(out, 27)
+        _p8(out, v.len() * 2)
+        repeat v.len() in i:
+            _p16(out, v.get(i))
+        end
+        _ext_done(out, m)
+        ret true
+    end
+    if id == 28:
+        m := _ext_head(out, 28)
+        _p16(out, sp.record_size_limit)
+        _ext_done(out, m)
+        ret true
+    end
+    if id == 34:
+        m := _ext_head(out, 34)
+        _put_list16(out, c, sp.delegated, false)
+        _ext_done(out, m)
+        ret true
+    end
+    if id == 43:
+        mut v := _tokens(sp.versions)
+        defer v.free()
+        m := _ext_head(out, 43)
+        mark := out.len
+        _p8(out, 0)
+        repeat v.len() in i:
+            t := v.get(i)
+            if t >= _GREASE_BASE and not grease_on:
+                continue
+            end
+            _p16(out, _resolve(c, t))
+        end
+        bp := out.p as u8*
+        bp[mark] = (out.len - mark - 1) as u8
+        _ext_done(out, m)
+        ret true
+    end
+    if id == 45:
+        m := _ext_head(out, 45)
+        _p8(out, 1)
+        _p8(out, 1)
+        _ext_done(out, m)
+        ret true
+    end
+    if id == 51:
+        mut v := _tokens(sp.key_shares)
+        defer v.free()
+        m := _ext_head(out, 51)
+        mark := out.len
+        _p16(out, 0)
+        repeat v.len() in i:
+            t := v.get(i)
+            if t >= _GREASE_BASE:
+                if grease_on:
+                    _p16(out, _resolve(c, t))
+                    _p16(out, 1)
+                    _p8(out, 0)
+                end
+            else if t == 0x001D:
+                _p16(out, 0x001D)
+                _p16(out, 32)
+                _praw(out, pub_key.p, 32)
+            else if t == 0x11EC:
+                if o.pq:
+                    _p16(out, 0x11EC)
+                    _p16(out, 1184 + 32)
+                    _prand(out, 1184)
+                    _praw(out, pub_key.p, 32)
+                end
+            else if t == 0x6399:
+                if o.pq:
+                    _p16(out, 0x6399)
+                    _p16(out, 32 + 1184)
+                    _praw(out, pub_key.p, 32)
+                    _prand(out, 1184)
+                end
+            else if t == 0x0017:
+                _p16(out, 0x0017)
+                _p16(out, 65)
+                _p8(out, 4)
+                _prand(out, 64)
+            end
+        end
+        _patch16(out, mark, out.len - mark - 2)
+        _ext_done(out, m)
+        ret true
+    end
+    if id == 17513 or id == 17613:
+        m := _ext_head(out, id)
+        _p16(out, 3)
+        _p8(out, 2)
+        _p8(out, 104)
+        _p8(out, 50)
+        _ext_done(out, m)
+        ret true
+    end
+    if id == 65281:
+        m := _ext_head(out, 65281)
+        _p8(out, 0)
+        _ext_done(out, m)
+        ret true
+    end
+    if id == _EXT_ECH:
+        if not o.ech:
+            ret false
+        end
+        m := _ext_head(out, _EXT_ECH)
+        _p8(out, 0)
+        _p16(out, 1)
+        _p16(out, 1)
+        _p8(out, _randbyte())
+        _p16(out, 32)
+        _prand(out, 32)
+        plen := 144 + 32 * (_randbyte() % 4)
+        _p16(out, plen)
+        _prand(out, plen)
+        _ext_done(out, m)
+        ret true
+    end
+    ret false
+end
+
+func _shuffle(v &: Vector<int>, lo: int, hi: int):
+    mut i := hi
+    until i > lo:
+        r := (_randbyte() << 16) | (_randbyte() << 8) | _randbyte()
+        j := lo + (r % (i - lo + 1))
+        a := v.get(i)
+        v.set(i, v.get(j))
+        v.set(j, a)
+        i--
+    end
+end
+
+func _is_grease(v: int): bool:
+    ret (v & 0x0F0F) == 0x0A0A and ((v >> 8) == (v & 0xFF))
+end
+
+func _u16(b: Bytes, i: int): int:
+    ret (_at(b, i) << 8) | _at(b, i + 1)
+end
+
+func _join_dec(v: Vector<int>): str:
+    mut parts := Vector {} as Vector<str>
+    defer parts.free()
+    repeat v.len() in i:
+        parts.push(str.FromInt(v.get(i) as i64))
+    end
+    ret str.Join(parts, "-")
+end
+
+@en "JA3"
+@fa "جی ای ۳"
+pub func JA3(b: Bytes): str:
+    if b.len < 43 or _at(b, 0) != 1:
+        ret ""
+    end
+    mut o := 4
+    ver := _u16(b, o)
+    o += 2 + 32
+    o += 1 + _at(b, o)
+    nc := _u16(b, o)
+    o += 2
+    mut ciphers := Vector {} as Vector<int>
+    defer ciphers.free()
+    mut i := 0
+    until i < nc:
+        v := _u16(b, o + i)
+        if not _is_grease(v):
+            ciphers.push(v)
+        end
+        i += 2
+    end
+    o += nc
+    o += 1 + _at(b, o)
+    mut el := _u16(b, o)
+    o += 2
+    end_at := o + el
+    mut exts := Vector {} as Vector<int>
+    mut groups := Vector {} as Vector<int>
+    mut points := Vector {} as Vector<int>
+    defer exts.free()
+    defer groups.free()
+    defer points.free()
+    until o + 4 <= end_at:
+        id := _u16(b, o)
+        l := _u16(b, o + 2)
+        body := o + 4
+        if not _is_grease(id):
+            exts.push(id)
+            if id == 10:
+                n := _u16(b, body)
+                mut j := 0
+                until j < n:
+                    g := _u16(b, body + 2 + j)
+                    if not _is_grease(g):
+                        groups.push(g)
+                    end
+                    j += 2
+                end
+            else if id == 11:
+                n := _at(b, body)
+                repeat n in j:
+                    points.push(_at(b, body + 1 + j))
+                end
+            end
+        end
+        o = body + l
+    end
+    el = 0
+    ret str.FromInt(ver as i64) + "," + _join_dec(ciphers) + "," + _join_dec(exts) + "," + _join_dec(groups) + "," + _join_dec(points)
+end
+
+@en "FreeBytes"
+@fa "آزادسازی بایت‌ها"
+pub func FreeBytes(b &: Bytes):
+    if b.p != null:
+        mem.Free(b.p)
+    end
+    b.p = null
+    b.len = 0
+    b.cap = 0
+end
+
+@en "FreeHello"
+@fa "آزادسازی سلام"
+pub func FreeHello(h &: Hello):
+    FreeBytes(h.raw)
+    FreeBytes(h.priv)
+    FreeBytes(h.pub_key)
+end
+
+@en "ToHex"
+@fa "به شانزدهی"
+pub func ToHex(b: Bytes): str:
+    digits := "0123456789abcdef"
+    mut sb := Vector {} as Vector<str>
+    defer sb.free()
+    bp := b.p as u8*
+    repeat b.len in i:
+        v := bp[i] as int
+        sb.push(str.Substr(digits, v >> 4, 1) + str.Substr(digits, v & 15, 1))
+    end
+    ret str.Join(sb, "")
+end
+
+@en "SessionIdOffset"
+@fa "جایگاه شناسه نشست"
+pub func SessionIdOffset(): int:
+    ret _SID_OFFSET
+end
+
+@en "SetSessionId"
+@fa "تنظیم شناسه نشست"
+pub func SetSessionId(h &: Hello, sid: void*):
+    mem.Copy(((h.raw.p as i64) + (_SID_OFFSET as i64)) as void*, sid, 32 as u64)
+end
+
+@en "Build"
+@fa "ساخت"
+pub func Build(sp: Spec, o: Options): Hello:
+    mut h := Hello {}
+    if not sp.ok:
+        h.err = "unknown fingerprint profile"
+        ret h
+    end
+    c := _ctx_new()
+    grease_on := sp.randomize or sp.ciphers.len() > 0
+    h.priv = _nb(32)
+    _prand(h.priv, 32)
+    h.pub_key = _nb(32)
+    _p16(h.pub_key, 0)
+    h.pub_key.len = 0
+    h.pub_key.len = 32
+    tls.X25519Public(h.priv.p, h.pub_key.p)
+
+    mut out := _nb(2048)
+    _p8(out, 1)
+    _p24(out, 0)
+    _p16(out, 0x0303)
+    _prand(out, 32)
+    _p8(out, 32)
+    _prand(out, 32)
+
+    mut cs := _tokens(sp.ciphers)
+    defer cs.free()
+    if sp.randomize and cs.len() > 2:
+        first := cs.get(0)
+        if first >= _GREASE_BASE:
+            _shuffle(cs, 1, cs.len() - 1)
+        else:
+            _shuffle(cs, 0, cs.len() - 1)
+        end
+    end
+    cmark := out.len
+    _p16(out, 0)
+    repeat cs.len() in i:
+        _p16(out, _resolve(c, cs.get(i)))
+    end
+    _patch16(out, cmark, out.len - cmark - 2)
+    _p8(out, 1)
+    _p8(out, 0)
+
+    mut ids := _tokens(sp.extensions)
+    defer ids.free()
+    if o.shuffle or sp.randomize:
+        mut lo := 0
+        mut hi := ids.len() - 1
+        if ids.len() > 0 and ids.get(0) >= _GREASE_BASE:
+            lo = 1
+        end
+        if hi >= 0 and ids.get(hi) == _PAD_TOKEN:
+            hi--
+        end
+        if hi >= 0 and ids.get(hi) >= _GREASE_BASE:
+            hi--
+        end
+        if hi > lo:
+            _shuffle(ids, lo, hi)
+        end
+    end
+
+    emark := out.len
+    _p16(out, 0)
+    mut pad_at := 0 - 1
+    repeat ids.len() in i:
+        t := ids.get(i)
+        if t == _PAD_TOKEN:
+            pad_at = out.len
+            continue
+        end
+        if t >= _GREASE_BASE:
+            if grease_on:
+                m := _ext_head(out, _grease(c, t - _GREASE_BASE))
+                if t - _GREASE_BASE == 4:
+                    _p8(out, 0)
+                end
+                _ext_done(out, m)
+            end
+            continue
+        end
+        _put_ext(out, t, c, sp, o, h.pub_key, grease_on)
+    end
+    if pad_at >= 0 and o.padding and sp.pad_to > 0:
+        total := out.len
+        if total > 255 and total < sp.pad_to:
+            mut padlen := sp.pad_to - total
+            if padlen >= 5:
+                padlen -= 4
+            else:
+                padlen = 1
+            end
+            _p16(out, 21)
+            _p16(out, padlen)
+            repeat padlen:
+                _p8(out, 0)
+            end
+        end
+    end
+    _patch16(out, emark, out.len - emark - 2)
+    _patch24(out, 1, out.len - 4)
+    h.raw = out
+    h.ok = true
+    ret h
+end
+
+@en "Profile"
+@fa "نمایه"
+pub func Profile(name: str): Spec:
+    mut s := Spec {}
+    s.name = name
+    if name == "chrome" or name == "edge" or name == "chrome_auto" or name == "randomized":
+        s.ciphers = "g0 1301 1302 1303 c02b c02f c02c c030 cca9 cca8 c013 c014 009c 009d 002f 0035"
+        s.extensions = "g1 0000 0017 ff01 000a 000b 0023 0010 0005 000d 0012 0033 002d 002b 001b 4469 fe0d g4 pad"
+        s.groups = "g2 11ec 001d 0017 0018"
+        s.key_shares = "g2 11ec 001d"
+        s.sigalgs = "0403 0804 0401 0503 0805 0501 0806 0601"
+        s.versions = "g3 0304 0303"
+        s.alpn = "h2,http/1.1"
+        s.cert_compress = "0002"
+        s.pad_to = 512
+        s.randomize = name == "randomized"
+        s.ok = true
+        ret s
+    end
+    if name == "chrome_120":
+        s.ciphers = "g0 1301 1302 1303 c02b c02f c02c c030 cca9 cca8 c013 c014 009c 009d 002f 0035"
+        s.extensions = "g1 0000 0017 ff01 000a 000b 0023 0010 0005 000d 0012 0033 002d 002b 001b 4469 g4 pad"
+        s.groups = "g2 001d 0017 0018"
+        s.key_shares = "g2 001d"
+        s.sigalgs = "0403 0804 0401 0503 0805 0501 0806 0601"
+        s.versions = "g3 0304 0303"
+        s.alpn = "h2,http/1.1"
+        s.cert_compress = "0002"
+        s.pad_to = 512
+        s.ok = true
+        ret s
+    end
+    if name == "firefox":
+        s.ciphers = "1301 1303 1302 c02b c02f cca9 cca8 c02c c030 c00a c009 c013 c014 009c 009d 002f 0035"
+        s.extensions = "0000 0017 ff01 000a 000b 0023 0010 0005 0022 0033 002b 000d 002d 001c fe0d pad"
+        s.groups = "001d 0017 0018 0019 0100 0101"
+        s.key_shares = "001d 0017"
+        s.sigalgs = "0403 0503 0603 0804 0805 0806 0401 0501 0601 0203 0201"
+        s.delegated = "0403 0503 0603 0203"
+        s.versions = "0304 0303"
+        s.alpn = "h2,http/1.1"
+        s.record_size_limit = 0x4001
+        s.pad_to = 512
+        s.ok = true
+        ret s
+    end
+    if name == "safari" or name == "ios":
+        s.ciphers = "g0 1301 1302 1303 c02c c02b cca9 c030 c02f cca8 c00a c009 c014 c013 009d 009c 003d 003c 0035 002f c008 c012 000a"
+        s.extensions = "g1 0000 0017 ff01 000a 000b 0010 0005 000d 0012 0033 002d 002b 001b g4 pad"
+        s.groups = "g2 001d 0017 0018 0019"
+        s.key_shares = "g2 001d"
+        s.sigalgs = "0403 0804 0401 0503 0203 0805 0805 0501 0806 0601 0201"
+        s.versions = "g3 0304 0303 0302 0301"
+        s.alpn = "h2,http/1.1"
+        s.cert_compress = "0001"
+        s.pad_to = 512
+        s.ok = true
+        ret s
+    end
+    ret s
+end
+
+@en "ProfileNames"
+@fa "نام نمایه‌ها"
+pub func ProfileNames(): str:
+    ret "chrome,chrome_120,edge,firefox,safari,ios,randomized"
+end
+
+@en "Record"
+@fa "رکورد"
+pub func Record(h: Hello): Bytes:
+    mut r := _nb(h.raw.len + 5)
+    _p8(r, 22)
+    _p16(r, 0x0301)
+    _p16(r, h.raw.len)
+    _praw(r, h.raw.p, h.raw.len)
+    ret r
+end
+
+@en "WrapClient"
+@fa "پوشش کارخواه"
+pub func WrapClient(fd: i64, sp: Spec, o: Options, cfg: tls.Config): tls.Conn:
+    mut h := Build(sp, o)
+    if not h.ok:
+        mut c := tls.Conn {}
+        c.err = h.err
+        ret c
+    end
+    conn := tls.WrapClientRaw(fd, h.raw.p, h.raw.len, h.priv.p, null, 0, cfg)
+    FreeHello(h)
+    ret conn
+end

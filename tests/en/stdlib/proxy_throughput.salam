@@ -1,0 +1,106 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import mem
+import net.tcp
+import net.socks
+import net.httpproxy
+import net.trojan
+import sync
+
+mut sink_port := 0
+mut ready := sync.NewWaitGroup()
+
+func sink():
+    srv := tcp.Bind(0)
+    sink_port = tcp.Port(srv)
+    sync.Done(ready)
+    buf := mem.Allocate(262144 as u64)
+    until true:
+        c := tcp.Accept(srv)
+        mut total := 0
+        mut bad := 0
+        mut tag := 0 - 1
+        until true:
+            n := tcp.ReadBytes(c, buf, 262144)
+            if n <= 0:
+                break
+            end
+            total += n
+            if tag < 0:
+                tag = (buf as u8*)[0] as int
+            end
+            if (buf as u8*)[0] as int != tag or (buf as u8*)[n - 1] as int != tag:
+                bad++
+            end
+            if total >= 16777216:
+                _k := tcp.Write(c, "got " + total + " bad " + bad)
+                break
+            end
+        end
+        tcp.Close(c)
+    end
+end
+
+func fill(chunk: void*, tag: int):
+    mem.Set(chunk, tag, 65536 as u64)
+end
+
+func send_tcp(c: tcp.Conn, tag: int): str:
+    chunk := mem.Allocate(65536 as u64)
+    fill(chunk, tag)
+    repeat 256:
+        _w := tcp.WriteBytes(c, chunk, 65536)
+    end
+    mem.Free(chunk)
+    got := tcp.Read(c, 64)
+    tcp.Close(c)
+    ret got
+end
+
+func main:
+    sync.Add(ready, 1 as i64)
+    _t := spawn(sink)
+    sync.Wait(ready)
+
+    sv := socks.Start(socks.NewServerConfig(0))
+    cl := socks.NewClient("127.0.0.1", sv.port)
+    println "socks", send_tcp(socks.DialConn(cl, "127.0.0.1", sink_port), 97)
+    socks.Stop(sv)
+
+    hs := httpproxy.Start(httpproxy.NewServerConfig(0))
+    hc := tcp.Dial("127.0.0.1", hs.port)
+    _h := tcp.Write(hc, "CONNECT 127.0.0.1:" + sink_port + " HTTP/1.1\r\nHost: x\r\n\r\n")
+    println tcp.Read(hc, 200).starts_with("HTTP/1.1 200")
+    println "httpproxy", send_tcp(hc, 98)
+    httpproxy.Stop(hs)
+
+    mut cfg := trojan.NewServerConfig("", "")
+    trojan.AddPassword(cfg, "p")
+    srv := trojan.ServePlain(cfg, 0)
+    mut cc := trojan.NewClientConfig("127.0.0.1", srv.port, "p")
+    cc.use_tls = false
+    mut link := trojan.Dial(cc, "127.0.0.1", sink_port)
+    chunk := mem.Allocate(65536 as u64)
+    fill(chunk, 99)
+    repeat 256:
+        _w := trojan.LinkWrite(link, chunk, 65536)
+    end
+    ab := mem.Allocate(64 as u64)
+    n := trojan.LinkRead(link, ab, 64)
+    (ab as u8*)[n] = 0 as u8
+    println "trojan", ab as str
+    trojan.LinkClose(link)
+    trojan.Stop(srv)
+end

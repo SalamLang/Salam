@@ -3,7 +3,7 @@ pkg.name = compress
 pkg.group = Encoding and data
 pkg.summary = Byte buffers, compression methods from RLE through DEFLATE, gzip, bzip2, zstd and checksums.
 pkg.title = The compress package in Salam | gzip and deflate
-pkg.description = The compress package in Salam: byte buffers, RLE, Huffman, LZ77, LZW, Burrows Wheeler and DEFLATE compression, gzip, bzip2, zstd, XXH64, CRC-32 and Adler-32, and reading and writing bits, with examples.
+pkg.description = The compress package in Salam: byte buffers, RLE, Huffman, LZ77, LZW, Burrows Wheeler and DEFLATE compression, gzip, bzip2, xz, lzma, zstd, XXH64, CRC-32 and Adler-32, and reading and writing bits, with examples.
 group.Method.title = Method numbers
 group.Method = The same <code>Method</code> enum cases as plain numbers, for <code>Compress</code> and <code>Decompress</code>.
 pkg.intro <<
@@ -14,7 +14,7 @@ pkg.intro <<
 <h3 id="pitfalls">What trips people up</h3>
 <ul>
 <li><strong>Gzip verifies its checksum.</strong> <code>GzipDecompress</code> checks the header, inflates the data, then compares both the CRC-32 and the uncompressed length in the trailer; a mismatch sets <code>ok</code> false and returns an empty buffer.</li>
-<li><strong>Xz and LZMA are decode only.</strong> There are no compressors for them here. The result of a decoder is kept whole in memory, so use the <code>...Max</code> functions on data you did not make yourself.</li>
+<li><strong>Xz and LZMA writing is a fast match finder, not a tuned one.</strong> The packed size is within a few percent of <code>xz</code> at the same level, never smaller. The whole input and the whole result are held in memory, and level 9 asks for a 64 MiB window. The result of a decoder is kept whole in memory too, so use the <code>...Max</code> functions on data you did not make yourself.</li>
 <li><strong>Zstandard output is valid, not the smallest.</strong> The writer is simple, so <code>ZstdCompressLevel</code> makes frames usually a quarter to a half larger than the <code>zstd</code> tool at the same level; every reader still accepts them. Reading is complete, but only <code>ZstdDecompressDict</code> and <code>ZstdDecompressEx</code> take a dictionary, and the decoder holds the whole result in memory, so use <code>ZstdDecompressMax</code> on data from outside.</li>
 <li><strong>Bzip2 checks every checksum and can be capped.</strong> <code>Bzip2Decompress</code> verifies each block CRC and the whole stream CRC and rejects broken tables and indexes, and it accepts several streams one after another and nothing else after them. A tiny file can expand to a huge one, so use <code>Bzip2DecompressMax</code> on data from outside.</li>
 <li><strong>The method is not stored.</strong> <code>Compress</code> output does not say which method made it; keep the method number next to the data.</li>
@@ -50,8 +50,11 @@ pkg.intro <<
 <p>RLE wins on long runs of one byte and makes ordinary text bigger. LZ77 does well on repeated phrases. <code>MethodDeflate</code> is left out of the list because it is this package's own container, which stores its Huffman tables in full and so starts at almost 300 bytes; gzip uses real DEFLATE with compact tables and is the better choice whenever the data leaves your program. Two rules follow: the output of <code>Compress</code> does not say which method made it, so store the method number next to the data (the value <code>CompressBest</code> wrote into its last argument), and very short inputs are best stored as they are (method 0, which <code>CompressBest</code> reports as none for the short line above).</p>
 
 <h2 id="guide-xz">Read .xz and .lzma files</h2>
-<p><code>XzDecompress</code> opens the <code>.xz</code> files that <code>xz</code>, <code>tar -J</code> and <code>7z a -txz</code> write, and <code>LzmaDecompress</code> the older <code>.lzma</code> format. Both only decode: this package cannot make these formats. An xz file is checked as it is read: the headers, the index and the CRC-32, CRC-64 or SHA-256 of every block, and any mismatch gives <code>ok</code> false with an empty result. The decoders hold the whole result in memory, so on data you did not make yourself call <code>XzDecompressMax</code> or <code>LzmaDecompressMax</code> with the biggest size you accept; a few hundred bytes of LZMA can describe gigabytes.</p>
+<p><code>XzDecompress</code> opens the <code>.xz</code> files that <code>xz</code>, <code>tar -J</code> and <code>7z a -txz</code> write, and <code>LzmaDecompress</code> the older <code>.lzma</code> format. An xz file is checked as it is read: the headers, the index and the CRC-32, CRC-64 or SHA-256 of every block, and any mismatch gives <code>ok</code> false with an empty result. The decoders hold the whole result in memory, so on data you did not make yourself call <code>XzDecompressMax</code> or <code>LzmaDecompressMax</code> with the biggest size you accept; a few hundred bytes of LZMA can describe gigabytes.</p>
 {{example.compress-guide-xz}}
+<h3 id="guide-xz-write">Write .xz and .lzma files</h3>
+<p><code>XzCompressStr</code>, <code>XzCompress</code> and <code>XzCompressBuf</code> write a standard <code>.xz</code> file that <code>xz</code>, <code>unxz</code>, <code>tar -J</code> and 7-Zip open: one LZMA2 block, a CRC-64 check, and an index. <code>XzCompressLevel</code> takes a level from 0 (fastest, 256 KiB window) to 9 (64 MiB window, longest search), and <code>XzCompressCheck</code> also picks the check: <code>XzCheckNone</code>, <code>XzCheckCrc32</code>, <code>XzCheckCrc64</code> or <code>XzCheckSha256</code>. Data that does not shrink is stored in uncompressed chunks, so the result is only the container overhead over the input. <code>LzmaCompressStr</code>, <code>LzmaCompress</code>, <code>LzmaCompressBuf</code> and <code>LzmaCompressLevel</code> write the older <code>.lzma</code> format, which has no check; <code>archive.XzCompressFile</code> and <code>archive.LzmaCompressFile</code> do it for a file.</p>
+{{example.compress-XzWrite}}
 <p>Inside 7z archives and xz blocks the compressed data comes without a container. <code>LzmaRawDecompress</code> and <code>Lzma2RawDecompress</code> read that form when you know the properties and the unpacked size, and <code>BcjDecode</code> and <code>DeltaDecode</code> undo the filters that sit in front of it. Dictionaries above 1 GiB (<code>LzmaMaxDictSize</code>) are refused.</p>
 
 <h2 id="guide-zstd">Read and write .zst files</h2>
@@ -63,7 +66,8 @@ pkg.intro <<
 <thead><tr><th>Job</th><th>Use</th></tr></thead>
 <tbody>
 <tr><td>Data that other programs will read</td><td><code>GzipCompressStr</code>, <code>GzipCompressBuf</code>, <code>GzipDecompressBuf</code></td></tr>
-<tr><td>Read a <code>.xz</code> or <code>.lzma</code> file (decode only)</td><td><code>XzDecompressBuf</code>, <code>LzmaDecompressBuf</code>; the <code>...Max</code> variants for data from outside</td></tr>
+<tr><td>Write a <code>.xz</code> or <code>.lzma</code> file</td><td><code>XzCompressStr</code>, <code>XzCompressLevel</code>, <code>XzCompressCheck</code>, <code>LzmaCompressStr</code>, <code>LzmaCompressLevel</code></td></tr>
+<tr><td>Read a <code>.xz</code> or <code>.lzma</code> file</td><td><code>XzDecompressBuf</code>, <code>LzmaDecompressBuf</code>; the <code>...Max</code> variants for data from outside</td></tr>
 <tr><td>Read or write a <code>.zst</code> file</td><td><code>ZstdCompressBuf</code>, <code>ZstdCompressLevel</code>, <code>ZstdDecompressBuf</code>, and <code>ZstdDecompressMax</code> for data from outside</td></tr>
 <tr><td>Smaller data than gzip, or a <code>.bz2</code> stream</td><td><code>Bzip2CompressStr</code>, <code>Bzip2CompressLevel</code>, <code>Bzip2DecompressBuf</code>, and <code>Bzip2DecompressMax</code> for untrusted input</td></tr>
 <tr><td>Standard DEFLATE with no header, as zip entries and zlib streams hold it</td><td><code>RawDeflate</code>, and <code>RawInflate</code> with the original size</td></tr>
@@ -143,6 +147,7 @@ doc.DeflateDecompress = Decompresses the output of <code>DeflateCompress</code>.
 doc.RawDeflate = Standard DEFLATE (RFC 1951) with no header; what sits inside ZIP and gzip.
 doc.RawInflate = Decompresses raw DEFLATE; <code>expected_size</code> is the rough size of the output.
 doc.RawInflateMax = Same as <code>RawInflate</code>, but stops with <code>ok</code> false once the output would pass <code>max</code> bytes, so a small hostile stream cannot expand without bound. <code>max</code> of 0 means no limit.
+doc.RawInflate64Max = Same as <code>RawInflateMax</code> for Deflate64, the DEFLATE variant of 7-Zip and Zip with a 64 KiB window, 16 bit long matches and two more distance codes.
 doc.GzipCompress = Compresses the data into the gzip format, the one in <code>.gz</code> files.
 doc.GzipDecompress = Decompresses gzip data; <code>ok</code> becomes false when the data is not gzip. The checksum inside the file is not checked.
 doc.GzipCompressBuf = Gzips a buffer.
@@ -157,9 +162,23 @@ doc.LzmaDecompressMax = Like <code>LzmaDecompress</code>, but stops with <code>o
 doc.LzmaDecompressBuf = Decompresses an lzma buffer.
 doc.LzmaRawDecompress = Decompresses a bare LZMA stream with no header, the way 7z stores it. <code>props</code> is the 5 byte coder property (one byte for lc, lp and pb, then the dictionary size, little-endian), and <code>out_size</code> the exact unpacked size, which the stream must produce. <code>max</code> of 0 means no limit.
 doc.Lzma2RawDecompress = Decompresses a bare LZMA2 stream, as xz blocks and 7z hold it. <code>dict_prop</code> is the one byte dictionary property (0 to 40). <code>out_size</code> is the exact unpacked size, or -1 when it is not known; <code>max</code> of 0 means no limit.
+doc.XzCompress = Compresses the data into a standard <code>.xz</code> file at level 6 with a CRC-64 check, the way <code>xz</code> does by default. Empty input gives a valid stream with no block.
+doc.XzCompressLevel = Like <code>XzCompress</code> with a level from 0 (fastest) to 9 (smallest); a number outside that range is moved to the nearest end. The level sets the window (256 KiB at 0, 8 MiB at 6, 64 MiB at 9, never bigger than the data) and how hard the match finder searches.
+doc.XzCompressCheck = Like <code>XzCompressLevel</code>, and <code>check</code> is the integrity check stored with the block: <code>XzCheckNone</code>, <code>XzCheckCrc32</code>, <code>XzCheckCrc64</code> or <code>XzCheckSha256</code>. Any other number gives CRC-64.
+doc.XzCompressBuf = Compresses a buffer into an xz file.
+doc.XzCompressStr = Compresses a string into an xz file.
+doc.XzCheckNone = No integrity check in the xz file (the smallest header and footer).
+doc.XzCheckCrc32 = A CRC-32 of the unpacked data.
+doc.XzCheckCrc64 = A CRC-64 of the unpacked data, the default of <code>xz</code>.
+doc.XzCheckSha256 = A SHA-256 of the unpacked data.
+doc.LzmaCompress = Compresses the data into the old <code>.lzma</code> format at level 6: a 13 byte header with the properties, the dictionary size and the exact unpacked size, then the LZMA stream. The format has no checksum.
+doc.LzmaCompressLevel = Like <code>LzmaCompress</code> with a level from 0 to 9, as for <code>XzCompressLevel</code>.
+doc.LzmaCompressBuf = Compresses a buffer into the <code>.lzma</code> format.
+doc.LzmaCompressStr = Compresses a string into the <code>.lzma</code> format.
 doc.LzmaMaxDictSize = The largest dictionary size the decoders accept, 1 GiB (1073741824). A file that asks for more is refused with <code>ok</code> false.
 doc.BcjDecode = Undoes a branch filter in place on <code>n</code> bytes. <code>kind</code> is one of the <code>Bcj...</code> numbers, and <code>start</code> the address the first byte had (0 for xz and 7z). Returns false for an unknown kind.
 doc.DeltaDecode = Undoes the delta filter in place; <code>dist</code> is the distance, 1 to 256. Returns false for any other distance.
+doc.SwapDecode = Undoes the byte swap filter in place: <code>width</code> 2 or 4 reverses every group of that many bytes; a trailing partial group stays as it is. Returns false for any other width.
 doc.BcjX86 = The branch filter for x86 code (CALL and JMP).
 doc.BcjPowerPC = The branch filter for big-endian PowerPC code.
 doc.BcjIA64 = The branch filter for Itanium (IA-64) code.
@@ -167,6 +186,7 @@ doc.BcjARM = The branch filter for 32 bit ARM code.
 doc.BcjARMThumb = The branch filter for ARM Thumb code.
 doc.BcjSPARC = The branch filter for SPARC code.
 doc.BcjARM64 = The branch filter for 64 bit ARM code.
+doc.BcjRISCV = The branch filter for RISC-V code.
 doc.Bzip2Compress = Compresses the data into a standard bzip2 stream (<code>.bz2</code>) with the biggest block size, level 9.
 doc.Bzip2CompressLevel = Like <code>Bzip2Compress</code> with a level from 1 to 9, the block size in units of 100000 bytes; a number outside that range is moved to the nearest end. A lower level uses less memory.
 doc.Bzip2CompressBuf = Compresses a buffer with bzip2.
@@ -279,6 +299,19 @@ ex.GzipCompressBuf = compress-Gzip
 ex.GzipCompressStr = compress-Gzip
 ex.GzipDecompressMax = compress-Gzip
 ex.GzipDecompressBuf = compress-Gzip
+ex.XzCompress = compress-XzWrite
+ex.XzCompressLevel = compress-XzWrite
+ex.XzCompressCheck = compress-XzWrite
+ex.XzCompressBuf = compress-XzWrite
+ex.XzCompressStr = compress-XzWrite
+ex.XzCheckNone = compress-XzWrite
+ex.XzCheckCrc32 = compress-XzWrite
+ex.XzCheckCrc64 = compress-XzWrite
+ex.XzCheckSha256 = compress-XzWrite
+ex.LzmaCompress = compress-XzWrite
+ex.LzmaCompressLevel = compress-XzWrite
+ex.LzmaCompressBuf = compress-XzWrite
+ex.LzmaCompressStr = compress-XzWrite
 ex.XzDecompress = compress-Xz
 ex.XzDecompressMax = compress-Xz
 ex.XzDecompressBuf = compress-Xz
@@ -290,6 +323,7 @@ ex.Lzma2RawDecompress = compress-XzRaw
 ex.LzmaMaxDictSize = compress-XzRaw
 ex.BcjDecode = compress-XzRaw
 ex.DeltaDecode = compress-XzRaw
+ex.SwapDecode = compress-XzRaw
 ex.BcjX86 = compress-XzRaw
 ex.BcjPowerPC = compress-XzRaw
 ex.BcjIA64 = compress-XzRaw
@@ -297,11 +331,13 @@ ex.BcjARM = compress-XzRaw
 ex.BcjARMThumb = compress-XzRaw
 ex.BcjSPARC = compress-XzRaw
 ex.BcjARM64 = compress-XzRaw
+ex.BcjRISCV = compress-XzRaw
 ex.DeflateCompress = compress-Gzip
 ex.DeflateDecompress = compress-Gzip
 ex.RawDeflate = compress-Gzip
 ex.RawInflate = compress-Gzip
 ex.RawInflateMax = compress-Gzip
+ex.RawInflate64Max = compress-Gzip
 ex.Bzip2Compress = compress-Bzip2
 ex.Bzip2CompressLevel = compress-Bzip2
 ex.Bzip2CompressBuf = compress-Bzip2

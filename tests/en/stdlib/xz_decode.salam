@@ -17,6 +17,7 @@ package main
 import archive
 import compress
 import filepath
+import mem
 import os
 
 const XZ_CRC64 := """
@@ -220,6 +221,38 @@ b1187dc8977ffe779171
 
 const WORDS := ["salam", "compress", "xz", "lzma", "archive", "the", "quick", "brown", "fox", "jumps", "over", "lazy", "dog", "stream", "block", "index"]
 
+mut pool_s := Vector {} as Vector<str>
+mut pool_b := Vector {} as Vector<compress.ByteBuf>
+
+func ks(s: str): str:
+    pool_s.push(s)
+    ret s
+end
+
+func kb(b: compress.ByteBuf): compress.ByteBuf:
+    pool_b.push(b)
+    ret b
+end
+
+func release():
+    repeat pool_s.len() in i:
+        s := pool_s.get(i)
+        if s.len() > 0:
+            mem.Free(s as void*)
+        end
+    end
+    pool_s.free()
+    repeat pool_b.len() in i:
+        mut b := pool_b.get(i)
+        compress.BufFree(b)
+    end
+    pool_b.free()
+end
+
+func j(a: str, b: str): str:
+    ret ks(filepath.Join(a, b))
+end
+
 func nib(c: int): int:
     if c >= 48 and c <= 57:
         ret c - 48
@@ -230,7 +263,7 @@ func nib(c: int): int:
     ret -1
 end
 
-func unhex(s: str): compress.ByteBuf:
+func unhex_raw(s: str): compress.ByteBuf:
     mut b := compress.NewByteBuf()
     bp := s as u8*
     mut hi := -1
@@ -249,11 +282,19 @@ func unhex(s: str): compress.ByteBuf:
     ret b
 end
 
+func unhex(s: str): compress.ByteBuf:
+    ret kb(unhex_raw(s))
+end
+
+func gen_text(n: int, seed: i64): compress.ByteBuf:
+    ret kb(gen_text_raw(n, seed))
+end
+
 func lcg(x: i64): i64:
     ret (x * 1103515245 + 12345) & 0x7fffffff
 end
 
-func gen_text(n: int, seed: i64): compress.ByteBuf:
+func gen_text_raw(n: int, seed: i64): compress.ByteBuf:
     mut out := compress.NewByteBuf()
     mut x := seed
     repeat n:
@@ -276,7 +317,7 @@ func push32(b &: compress.ByteBuf, v: i64):
     compress.BufPush(b, ((v >> 24) & 255) as int)
 end
 
-func gen_x86(n: int, seed: i64): compress.ByteBuf:
+func gen_x86_raw(n: int, seed: i64): compress.ByteBuf:
     mut out := compress.NewByteBuf()
     mut x := seed
     repeat n:
@@ -301,7 +342,7 @@ func gen_x86(n: int, seed: i64): compress.ByteBuf:
     ret out
 end
 
-func gen_delta(n: int): compress.ByteBuf:
+func gen_delta_raw(n: int): compress.ByteBuf:
     mut out := compress.NewByteBuf()
     repeat n in i:
         push32(out, ((i * 5 + (i % 3)) as i64) & 0xffffffff)
@@ -309,8 +350,8 @@ func gen_delta(n: int): compress.ByteBuf:
     ret out
 end
 
-func gen_big(): compress.ByteBuf:
-    mut out := gen_text(800, 7)
+func gen_big_raw(): compress.ByteBuf:
+    mut out := gen_text_raw(800, 7)
     repeat 5000:
         compress.BufPushBytes(out, "abcdefgh12345678" as void*, 16)
     end
@@ -320,6 +361,18 @@ func gen_big(): compress.ByteBuf:
     ret out
 end
 
+func gen_x86(n: int, seed: i64): compress.ByteBuf:
+    ret kb(gen_x86_raw(n, seed))
+end
+
+func gen_delta(n: int): compress.ByteBuf:
+    ret kb(gen_delta_raw(n))
+end
+
+func gen_big(): compress.ByteBuf:
+    ret kb(gen_big_raw())
+end
+
 func same(label: str, ok: bool, got: compress.ByteBuf, want: compress.ByteBuf):
     println label, ok and compress.BufEquals(got, want), got.len
 end
@@ -327,26 +380,26 @@ end
 func xz_case(label: str, hex: str, want: compress.ByteBuf):
     packed := unhex(hex)
     mut ok := false
-    got := compress.XzDecompress(packed.data, packed.len, ok)
+    got := kb(compress.XzDecompress(packed.data, packed.len, ok))
     same(label, ok, got, want)
 end
 
 func lzma_case(label: str, hex: str, want: compress.ByteBuf):
     packed := unhex(hex)
     mut ok := false
-    got := compress.LzmaDecompress(packed.data, packed.len, ok)
+    got := kb(compress.LzmaDecompress(packed.data, packed.len, ok))
     same(label, ok, got, want)
 end
 
 func xz_bad(label: str, packed: compress.ByteBuf):
     mut ok := true
-    got := compress.XzDecompressBuf(packed, ok)
+    got := kb(compress.XzDecompressBuf(packed, ok))
     println label, ok, got.len
 end
 
 func read_same(path: str, want: compress.ByteBuf): bool:
     mut ok := false
-    got := archive.ReadBinaryFile(path, ok)
+    got := kb(archive.ReadBinaryFile(path, ok))
     ret ok and compress.BufEquals(got, want)
 end
 
@@ -374,81 +427,81 @@ func main:
     println "== lzma =="
     mut ok := false
     packed := unhex(LZMA_XZ)
-    got := compress.LzmaDecompressBuf(packed, ok)
+    got := kb(compress.LzmaDecompressBuf(packed, ok))
     same("xz --format=lzma", ok, got, text)
     lzma_case("python alone", LZMA_PY, text)
     lzma_case("python alone lc0 lp3 pb1", LZMA_PY_LC, text)
 
-    mut known := compress.BufClone(packed)
+    mut known := kb(compress.BufClone(packed))
     repeat 8 in i:
         compress.BufSet(known, 5 + i, 0)
     end
     compress.BufSet(known, 5, text.len & 255)
     compress.BufSet(known, 6, (text.len >> 8) & 255)
-    got2 := compress.LzmaDecompressBuf(known, ok)
+    got2 := kb(compress.LzmaDecompressBuf(known, ok))
     same("known size in header", ok, got2, text)
     compress.BufSet(known, 5, (text.len + 1) & 255)
-    got3 := compress.LzmaDecompressBuf(known, ok)
+    got3 := kb(compress.LzmaDecompressBuf(known, ok))
     println "size larger than the data", ok, got3.len
 
     println "== raw =="
     raw1 := unhex(RAW_LZMA)
     props := unhex("5d00000100")
-    got4 := compress.LzmaRawDecompress(props.data, 5, raw1.data, raw1.len, text.len, 0, ok)
+    got4 := kb(compress.LzmaRawDecompress(props.data, 5, raw1.data, raw1.len, text.len, 0, ok))
     same("raw lzma", ok, got4, text)
     raw2 := unhex(RAW_LZMA2)
-    got5 := compress.Lzma2RawDecompress(16, raw2.data, raw2.len, text.len, 0, ok)
+    got5 := kb(compress.Lzma2RawDecompress(16, raw2.data, raw2.len, text.len, 0, ok))
     same("raw lzma2", ok, got5, text)
-    got6 := compress.Lzma2RawDecompress(16, raw2.data, raw2.len, -1, 0, ok)
+    got6 := kb(compress.Lzma2RawDecompress(16, raw2.data, raw2.len, -1, 0, ok))
     same("raw lzma2 unknown size", ok, got6, text)
-    got7 := compress.Lzma2RawDecompress(16, raw2.data, raw2.len, text.len + 5, 0, ok)
+    got7 := kb(compress.Lzma2RawDecompress(16, raw2.data, raw2.len, text.len + 5, 0, ok))
     println "raw lzma2 wrong size", ok, got7.len
-    got8 := compress.Lzma2RawDecompress(41, raw2.data, raw2.len, -1, 0, ok)
+    got8 := kb(compress.Lzma2RawDecompress(41, raw2.data, raw2.len, -1, 0, ok))
     println "raw lzma2 bad dictionary", ok, got8.len
 
     println "== bigger =="
     xz_case("xz 70 KB", XZ_BIG, big)
     bpk := unhex(LZMA_BIG)
-    got9 := compress.LzmaDecompressBuf(bpk, ok)
+    got9 := kb(compress.LzmaDecompressBuf(bpk, ok))
     same("lzma 70 KB", ok, got9, big)
     println "packed", unhex(XZ_BIG).len, "to", big.len
 
     println "== limits =="
     bx := unhex(XZ_BIG)
-    lim1 := compress.XzDecompressMax(bx.data, bx.len, big.len, ok)
+    lim1 := kb(compress.XzDecompressMax(bx.data, bx.len, big.len, ok))
     println "xz max exact", ok, lim1.len
-    lim2 := compress.XzDecompressMax(bx.data, bx.len, big.len - 1, ok)
+    lim2 := kb(compress.XzDecompressMax(bx.data, bx.len, big.len - 1, ok))
     println "xz max one less", ok, lim2.len
-    lim3 := compress.XzDecompressMax(bx.data, bx.len, 100, ok)
+    lim3 := kb(compress.XzDecompressMax(bx.data, bx.len, 100, ok))
     println "xz max 100", ok, lim3.len
-    lim4 := compress.LzmaDecompressMax(bpk.data, bpk.len, big.len, ok)
+    lim4 := kb(compress.LzmaDecompressMax(bpk.data, bpk.len, big.len, ok))
     println "lzma max exact", ok, lim4.len
-    lim5 := compress.LzmaDecompressMax(bpk.data, bpk.len, 100, ok)
+    lim5 := kb(compress.LzmaDecompressMax(bpk.data, bpk.len, 100, ok))
     println "lzma max 100", ok, lim5.len
 
     println "== streams =="
-    mut two := unhex(XZ_CRC32)
+    mut two := unhex_raw(XZ_CRC32)
     compress.BufPushBuf(two, unhex(XZ_SHA256))
     mut twice := compress.NewByteBuf()
     compress.BufPushBuf(twice, text)
     compress.BufPushBuf(twice, text)
-    got10 := compress.XzDecompressBuf(two, ok)
+    got10 := kb(compress.XzDecompressBuf(two, ok))
     same("two streams", ok, got10, twice)
-    mut padded := unhex(XZ_CRC32)
+    mut padded := unhex_raw(XZ_CRC32)
     repeat 8:
         compress.BufPush(padded, 0)
     end
     compress.BufPushBuf(padded, unhex(XZ_NONE))
-    got11 := compress.XzDecompressBuf(padded, ok)
+    got11 := kb(compress.XzDecompressBuf(padded, ok))
     same("stream padding", ok, got11, twice)
-    mut tail := unhex(XZ_CRC32)
+    mut tail := unhex_raw(XZ_CRC32)
     repeat 3:
         compress.BufPush(tail, 0)
     end
     xz_bad("padding not a multiple of 4", tail)
 
     println "== damaged =="
-    xz_bad("empty", compress.NewByteBuf())
+    xz_bad("empty", kb(compress.NewByteBuf()))
     mut cut := unhex(XZ_SHA256)
     cut.len--
     xz_bad("truncated", cut)
@@ -477,27 +530,27 @@ func main:
     xz_bad("bad footer magic", foot)
     mut alone := unhex(LZMA_XZ)
     alone.len -= 5
-    got12 := compress.LzmaDecompressBuf(alone, ok)
+    got12 := kb(compress.LzmaDecompressBuf(alone, ok))
     println "truncated lzma", ok, got12.len
     mut hbad := unhex(LZMA_XZ)
     compress.BufSet(hbad, 0, 225)
-    got13 := compress.LzmaDecompressBuf(hbad, ok)
+    got13 := kb(compress.LzmaDecompressBuf(hbad, ok))
     println "bad lzma properties", ok, got13.len
     compress.BufSet(hbad, 0, 93)
     compress.BufSet(hbad, 4, 255)
-    got14 := compress.LzmaDecompressBuf(hbad, ok)
+    got14 := kb(compress.LzmaDecompressBuf(hbad, ok))
     println "lzma dictionary over the limit", ok, got14.len
 
     println "== files =="
-    xz_path := filepath.Join(os.TempDir(), "salam_xz_decode.xz")
-    lzma_path := filepath.Join(os.TempDir(), "salam_xz_decode.lzma")
-    out_path := filepath.Join(os.TempDir(), "salam_xz_decode.out")
+    xz_path := j(os.TempDir(), "salam_xz_decode.xz")
+    lzma_path := j(os.TempDir(), "salam_xz_decode.lzma")
+    out_path := j(os.TempDir(), "salam_xz_decode.out")
     archive.WriteBinaryFileBuf(xz_path, unhex(XZ_BLOCKS))
     archive.WriteBinaryFileBuf(lzma_path, unhex(LZMA_XZ))
     println "xz file", archive.XzDecompressFile(xz_path, out_path), read_same(out_path, text)
     println "lzma file", archive.LzmaDecompressFile(lzma_path, out_path), read_same(out_path, text)
     println "xz file read as lzma", archive.LzmaDecompressFile(xz_path, out_path)
-    println "missing file", archive.XzDecompressFile(out_path + ".missing", out_path)
+    println "missing file", archive.XzDecompressFile(j(os.TempDir(), "salam_xz_decode.out.missing"), out_path)
     os.Remove(xz_path)
     os.Remove(lzma_path)
     os.Remove(out_path)
@@ -506,4 +559,9 @@ func main:
     d := unhex("01010101")
     println compress.DeltaDecode(d.data, d.len, 1), compress.BufGet(d, 0), compress.BufGet(d, 1), compress.BufGet(d, 2), compress.BufGet(d, 3)
     println compress.DeltaDecode(d.data, d.len, 0), compress.BcjDecode(99, d.data, d.len, 0), compress.BcjDecode(compress.BcjARM, d.data, d.len, 0)
+    compress.BufFree(two)
+    compress.BufFree(twice)
+    compress.BufFree(padded)
+    compress.BufFree(tail)
+    release()
 end

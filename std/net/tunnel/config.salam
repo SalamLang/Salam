@@ -1,0 +1,617 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "net/tunnel"
+@fa "تونل"
+package tunnel
+
+import str
+import io
+import encoding.json
+
+mut _out_registry := Vector {} as Vector<dyn OutboundMaker>
+mut _in_registry := Vector {} as Vector<dyn InboundMaker>
+
+@en "InboundConfig"
+@fa "پیکربندی ورودی"
+pub struct InboundConfig:
+    @en "tag"
+    @fa "برچسب"
+    pub tag: str = ""
+    @en "protocol"
+    @fa "پروتکل"
+    pub protocol: str = ""
+    @en "listen"
+    @fa "نشانی شنود"
+    pub listen: str = "127.0.0.1"
+    @en "port"
+    @fa "درگاه"
+    pub port: int = 0
+    @en "settings"
+    @fa "تنظیمات"
+    pub settings: str = ""
+end
+
+@en "OutboundConfig"
+@fa "پیکربندی خروجی"
+pub struct OutboundConfig:
+    @en "tag"
+    @fa "برچسب"
+    pub tag: str = ""
+    @en "protocol"
+    @fa "پروتکل"
+    pub protocol: str = ""
+    @en "settings"
+    @fa "تنظیمات"
+    pub settings: str = ""
+    @en "stream_settings"
+    @fa "تنظیمات جریان"
+    pub stream_settings: str = ""
+end
+
+@en "RuleConfig"
+@fa "پیکربندی قاعده"
+pub struct RuleConfig:
+    @en "domain"
+    @fa "دامنه‌ها"
+    pub domain: Vector<str> = Vector {}
+    @en "ip"
+    @fa "آی‌پی‌ها"
+    pub ip: Vector<str> = Vector {}
+    @en "port"
+    @fa "درگاه"
+    pub port: str = ""
+    @en "outbound_tag"
+    @fa "برچسب خروجی"
+    pub outbound_tag: str = ""
+end
+
+@en "Config"
+@fa "پیکربندی"
+pub struct Config:
+    @en "log_level"
+    @fa "سطح گزارش"
+    pub log_level: str = "warning"
+    @en "inbounds"
+    @fa "ورودی‌ها"
+    pub inbounds: Vector<InboundConfig> = Vector {}
+    @en "outbounds"
+    @fa "خروجی‌ها"
+    pub outbounds: Vector<OutboundConfig> = Vector {}
+    @en "rules"
+    @fa "قاعده‌ها"
+    pub rules: Vector<RuleConfig> = Vector {}
+    @en "default_outbound"
+    @fa "خروجی پیش‌فرض"
+    pub default_outbound: str = ""
+    @en "errors"
+    @fa "خطاها"
+    pub errors: Vector<str> = Vector {}
+end
+
+@en "OutboundMaker"
+@fa "سازنده خروجی"
+pub interface OutboundMaker:
+    @en "Protocol"
+    @fa "پروتکل"
+    func Protocol(): str
+    @en "Make"
+    @fa "ساخت"
+    func Make(cfg: OutboundConfig): dyn Dialer
+end
+
+@en "InboundMaker"
+@fa "سازنده ورودی"
+pub interface InboundMaker:
+    @en "Protocol"
+    @fa "پروتکل"
+    func Protocol(): str
+    @en "Make"
+    @fa "ساخت"
+    func Make(cfg: InboundConfig): dyn InboundProtocol
+end
+
+func _items(raw: str): Vector<str>:
+    ret json.Items(raw)
+end
+
+func _strs(raw: str): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    items := json.Items(raw)
+    defer items.free()
+    repeat items.len() in i:
+        out.push(json.Unquote(items[i]))
+    end
+    ret out
+end
+
+func _arr(items: Vector<str>): str:
+    mut q := Vector {} as Vector<str>
+    defer q.free()
+    repeat items.len() in i:
+        q.push(json.Str(items[i]))
+    end
+    ret json.Array(q)
+end
+
+func _member_str(m &: Vector<str>, key: str, value: str):
+    if value.len() > 0: m.push(json.Member(key, value)) end
+end
+
+func _is_port(p: int): bool:
+    ret p >= 1 and p <= 65535
+end
+
+func _tag_exists(c: Config, tag: str): bool:
+    repeat c.outbounds.len() in i:
+        if c.outbounds[i].tag == tag: ret true end
+    end
+    ret false
+end
+
+func _csv_to_array(csv: str): str:
+    mut items := Vector {} as Vector<str>
+    defer items.free()
+    parts := csv.split(",")
+    defer parts.free()
+    repeat parts.len() in i:
+        p := str.Trim(parts[i])
+        if p.len() > 0: items.push(p) end
+    end
+    ret _arr(items)
+end
+
+func _array_to_csv(raw: str): str:
+    v := _strs(raw)
+    defer v.free()
+    mut out := ""
+    repeat v.len() in i:
+        if i > 0: out += "," end
+        out += v[i]
+    end
+    ret out
+end
+
+@en "RegisterOutbound"
+@fa "ثبت خروجی"
+pub func RegisterOutbound(m: dyn OutboundMaker):
+    name := m.Protocol()
+    repeat _out_registry.len() in i:
+        if _out_registry[i].Protocol() == name:
+            _out_registry[i] = m
+            ret
+        end
+    end
+    _out_registry.push(m)
+end
+
+@en "RegisterInbound"
+@fa "ثبت ورودی"
+pub func RegisterInbound(m: dyn InboundMaker):
+    name := m.Protocol()
+    repeat _in_registry.len() in i:
+        if _in_registry[i].Protocol() == name:
+            _in_registry[i] = m
+            ret
+        end
+    end
+    _in_registry.push(m)
+end
+
+@en "HasOutbound"
+@fa "خروجی ثبت شده"
+pub func HasOutbound(name: str): bool:
+    if name == "freedom" or name == "direct" or name == "blackhole" or name == "block": ret true end
+    repeat _out_registry.len() in i:
+        if _out_registry[i].Protocol() == name: ret true end
+    end
+    ret false
+end
+
+@en "HasInbound"
+@fa "ورودی ثبت شده"
+pub func HasInbound(name: str): bool:
+    repeat _in_registry.len() in i:
+        if _in_registry[i].Protocol() == name: ret true end
+    end
+    ret false
+end
+
+@en "CreateOutbound"
+@fa "ساخت خروجی"
+pub func CreateOutbound(cfg: OutboundConfig): dyn Dialer:
+    if cfg.protocol == "freedom" or cfg.protocol == "direct": ret DirectDialer {} end
+    repeat _out_registry.len() in i:
+        if _out_registry[i].Protocol() == cfg.protocol:
+            ret _out_registry[i].Make(cfg)
+        end
+    end
+    ret BlockDialer {}
+end
+
+@en "CreateInbound"
+@fa "ساخت ورودی"
+pub func CreateInbound(cfg: InboundConfig): dyn InboundProtocol:
+    repeat _in_registry.len() in i:
+        if _in_registry[i].Protocol() == cfg.protocol:
+            ret _in_registry[i].Make(cfg)
+        end
+    end
+    ret NullProtocol {}
+end
+
+@en "ParseConfig"
+@fa "تجزیه پیکربندی"
+pub func ParseConfig(text: str): Config:
+    mut c := Config {}
+    if not json.Valid(text):
+        c.errors.push("invalid JSON")
+        ret c
+    end
+    ll := json.Get(json.Get(text, "log"), "loglevel")
+    if ll.len() > 0: c.log_level = ll end
+    ins := _items(json.Get(text, "inbounds"))
+    defer ins.free()
+    repeat ins.len() in i:
+        raw := ins[i]
+        mut ib := InboundConfig { tag = json.Get(raw, "tag"), protocol = json.Get(raw, "protocol"), settings = json.Get(raw, "settings") }
+        l := json.Get(raw, "listen")
+        if l.len() > 0: ib.listen = l end
+        ib.port = json.Get(raw, "port").to_int()
+        c.inbounds.push(ib)
+    end
+    outs := _items(json.Get(text, "outbounds"))
+    defer outs.free()
+    repeat outs.len() in i:
+        raw := outs[i]
+        c.outbounds.push(OutboundConfig { tag = json.Get(raw, "tag"), protocol = json.Get(raw, "protocol"), settings = json.Get(raw, "settings"), stream_settings = json.Get(raw, "streamSettings") })
+    end
+    routing := json.Get(text, "routing")
+    c.default_outbound = json.Get(routing, "defaultOutbound")
+    rules := _items(json.Get(routing, "rules"))
+    defer rules.free()
+    repeat rules.len() in i:
+        raw := rules[i]
+        c.rules.push(RuleConfig { domain = _strs(json.Get(raw, "domain")), ip = _strs(json.Get(raw, "ip")), port = json.Get(raw, "port"), outbound_tag = json.Get(raw, "outboundTag") })
+    end
+    if c.default_outbound.len() == 0 and c.outbounds.len() > 0:
+        c.default_outbound = c.outbounds[0].tag
+    end
+    ret c
+end
+
+@en "LoadConfig"
+@fa "بارگذاری پیکربندی"
+pub func LoadConfig(path: str): Config:
+    text := io.ReadFile(path)
+    if text.len() == 0:
+        mut c := Config {}
+        c.errors.push("cannot read " + path)
+        ret c
+    end
+    ret ParseConfig(text)
+end
+
+@en "ValidateConfig"
+@fa "اعتبارسنجی پیکربندی"
+pub func ValidateConfig(c: Config): Vector<str>:
+    mut errs := Vector {} as Vector<str>
+    repeat c.errors.len() in i:
+        errs.push(c.errors[i])
+    end
+    if c.outbounds.len() == 0: errs.push("no outbounds") end
+    repeat c.inbounds.len() in i:
+        ib := c.inbounds[i]
+        if ib.protocol.len() == 0: errs.push("inbound " + i + " has no protocol") end
+        if not _is_port(ib.port): errs.push("inbound " + i + " has a bad port " + ib.port) end
+        repeat i in j:
+            if c.inbounds[j].tag.len() > 0 and c.inbounds[j].tag == ib.tag:
+                errs.push("duplicate inbound tag " + ib.tag)
+            end
+        end
+    end
+    repeat c.outbounds.len() in i:
+        ob := c.outbounds[i]
+        if ob.tag.len() == 0: errs.push("outbound " + i + " has no tag") end
+        if ob.protocol.len() == 0: errs.push("outbound " + i + " has no protocol") end
+        repeat i in j:
+            if c.outbounds[j].tag == ob.tag and ob.tag.len() > 0:
+                errs.push("duplicate outbound tag " + ob.tag)
+            end
+        end
+    end
+    repeat c.rules.len() in i:
+        r := c.rules[i]
+        if not _tag_exists(c, r.outbound_tag):
+            errs.push("rule " + i + " points to unknown outbound '" + r.outbound_tag + "'")
+        end
+        if r.domain.len() == 0 and r.ip.len() == 0 and r.port.len() == 0:
+            errs.push("rule " + i + " has no conditions")
+        end
+        if r.port.len() > 0:
+            mut probe := NewRule("x")
+            if not RulePort(probe, r.port): errs.push("rule " + i + " has a bad port '" + r.port + "'") end
+        end
+        repeat r.ip.len() in k:
+            mut probe := NewRule("x")
+            if not RuleIpSpec(probe, r.ip[k]): errs.push("rule " + i + " has a bad ip '" + r.ip[k] + "'") end
+        end
+        repeat r.domain.len() in k:
+            mut probe := NewRule("x")
+            if not RuleDomainSpec(probe, r.domain[k]): errs.push("rule " + i + " has a bad domain '" + r.domain[k] + "'") end
+        end
+    end
+    if c.default_outbound.len() > 0 and not _tag_exists(c, c.default_outbound):
+        errs.push("default outbound '" + c.default_outbound + "' does not exist")
+    end
+    ret errs
+end
+
+@en "ConfigToJson"
+@fa "پیکربندی به جیسون"
+pub func ConfigToJson(c: Config): str:
+    mut top := Vector {} as Vector<str>
+    defer top.free()
+    mut log := Vector {} as Vector<str>
+    defer log.free()
+    log.push(json.Member("loglevel", c.log_level))
+    top.push(json.MemberRaw("log", json.Object(log)))
+    mut ins := Vector {} as Vector<str>
+    defer ins.free()
+    repeat c.inbounds.len() in i:
+        ib := c.inbounds[i]
+        mut m := Vector {} as Vector<str>
+        _member_str(m, "tag", ib.tag)
+        m.push(json.Member("listen", ib.listen))
+        m.push(json.MemberInt("port", ib.port as i64))
+        m.push(json.Member("protocol", ib.protocol))
+        if ib.settings.len() > 0: m.push(json.MemberRaw("settings", ib.settings)) end
+        ins.push(json.Object(m))
+        m.free()
+    end
+    top.push(json.MemberRaw("inbounds", json.Array(ins)))
+    mut outs := Vector {} as Vector<str>
+    defer outs.free()
+    repeat c.outbounds.len() in i:
+        ob := c.outbounds[i]
+        mut m := Vector {} as Vector<str>
+        m.push(json.Member("tag", ob.tag))
+        m.push(json.Member("protocol", ob.protocol))
+        if ob.settings.len() > 0: m.push(json.MemberRaw("settings", ob.settings)) end
+        if ob.stream_settings.len() > 0: m.push(json.MemberRaw("streamSettings", ob.stream_settings)) end
+        outs.push(json.Object(m))
+        m.free()
+    end
+    top.push(json.MemberRaw("outbounds", json.Array(outs)))
+    mut rules := Vector {} as Vector<str>
+    defer rules.free()
+    repeat c.rules.len() in i:
+        r := c.rules[i]
+        mut m := Vector {} as Vector<str>
+        m.push(json.Member("type", "field"))
+        if r.domain.len() > 0: m.push(json.MemberRaw("domain", _arr(r.domain))) end
+        if r.ip.len() > 0: m.push(json.MemberRaw("ip", _arr(r.ip))) end
+        _member_str(m, "port", r.port)
+        m.push(json.Member("outboundTag", r.outbound_tag))
+        rules.push(json.Object(m))
+        m.free()
+    end
+    mut routing := Vector {} as Vector<str>
+    defer routing.free()
+    _member_str(routing, "defaultOutbound", c.default_outbound)
+    routing.push(json.MemberRaw("rules", json.Array(rules)))
+    top.push(json.MemberRaw("routing", json.Object(routing)))
+    ret json.Object(top)
+end
+
+@en "BuildRouter"
+@fa "ساخت مسیریاب"
+pub func BuildRouter(c: Config): Router:
+    mut rt := NewRouter(c.default_outbound)
+    repeat c.rules.len() in i:
+        r := c.rules[i]
+        mut rule := NewRule(r.outbound_tag)
+        repeat r.domain.len() in k:
+            RuleDomainSpec(rule, r.domain[k])
+        end
+        repeat r.ip.len() in k:
+            RuleIpSpec(rule, r.ip[k])
+        end
+        if r.port.len() > 0: RulePort(rule, r.port) end
+        RouterAdd(rt, rule)
+    end
+    ret rt
+end
+
+@en "OutboundFromNode"
+@fa "خروجی از گره"
+pub func OutboundFromNode(n: Node, tag: str): OutboundConfig:
+    mut o := OutboundConfig { tag = tag, protocol = n.protocol }
+    mut ep := Vector {} as Vector<str>
+    defer ep.free()
+    ep.push(json.Member("address", n.host))
+    ep.push(json.MemberInt("port", n.port as i64))
+    if n.protocol == "vmess" or n.protocol == "vless":
+        mut u := Vector {} as Vector<str>
+        defer u.free()
+        u.push(json.Member("id", n.uuid))
+        if n.protocol == "vmess":
+            u.push(json.MemberInt("alterId", n.alter_id as i64))
+            mut sec := n.method
+            if sec.len() == 0: sec = "auto" end
+            u.push(json.Member("security", sec))
+        else:
+            mut enc := n.encryption
+            if enc.len() == 0: enc = "none" end
+            u.push(json.Member("encryption", enc))
+            _member_str(u, "flow", n.flow)
+        end
+        mut ul := Vector {} as Vector<str>
+        defer ul.free()
+        ul.push(json.Object(u))
+        ep.push(json.MemberRaw("users", json.Array(ul)))
+        mut vn := Vector {} as Vector<str>
+        defer vn.free()
+        vn.push(json.Object(ep))
+        mut s := Vector {} as Vector<str>
+        defer s.free()
+        s.push(json.MemberRaw("vnext", json.Array(vn)))
+        o.settings = json.Object(s)
+    else:
+        if n.protocol == "trojan":
+            ep.push(json.Member("password", n.password))
+        else:
+            ep.push(json.Member("method", n.method))
+            ep.push(json.Member("password", n.password))
+            _member_str(ep, "plugin", n.plugin)
+        end
+        mut sv := Vector {} as Vector<str>
+        defer sv.free()
+        sv.push(json.Object(ep))
+        mut s := Vector {} as Vector<str>
+        defer s.free()
+        s.push(json.MemberRaw("servers", json.Array(sv)))
+        o.settings = json.Object(s)
+    end
+    mut st := Vector {} as Vector<str>
+    defer st.free()
+    st.push(json.Member("network", n.network))
+    mut sec := n.security
+    if sec.len() == 0 and n.tls: sec = "tls" end
+    if sec.len() > 0 and sec != "none": st.push(json.Member("security", sec)) end
+    if sec == "tls":
+        mut t := Vector {} as Vector<str>
+        defer t.free()
+        _member_str(t, "serverName", n.sni)
+        _member_str(t, "fingerprint", n.fingerprint)
+        if n.alpn.len() > 0: t.push(json.MemberRaw("alpn", _csv_to_array(n.alpn))) end
+        if n.allow_insecure: t.push(json.MemberRaw("allowInsecure", "true")) end
+        st.push(json.MemberRaw("tlsSettings", json.Object(t)))
+    else sec == "reality":
+        mut t := Vector {} as Vector<str>
+        defer t.free()
+        _member_str(t, "serverName", n.sni)
+        _member_str(t, "fingerprint", n.fingerprint)
+        _member_str(t, "publicKey", n.public_key)
+        _member_str(t, "shortId", n.short_id)
+        _member_str(t, "spiderX", n.spider_x)
+        st.push(json.MemberRaw("realitySettings", json.Object(t)))
+    end
+    if n.network == "ws" or n.network == "httpupgrade":
+        mut w := Vector {} as Vector<str>
+        defer w.free()
+        _member_str(w, "path", n.path)
+        if n.host_header.len() > 0:
+            mut h := Vector {} as Vector<str>
+            defer h.free()
+            h.push(json.Member("Host", n.host_header))
+            w.push(json.MemberRaw("headers", json.Object(h)))
+        end
+        st.push(json.MemberRaw(n.network == "ws" ? "wsSettings" : "httpupgradeSettings", json.Object(w)))
+    else n.network == "grpc":
+        mut g := Vector {} as Vector<str>
+        defer g.free()
+        _member_str(g, "serviceName", n.service_name)
+        st.push(json.MemberRaw("grpcSettings", json.Object(g)))
+    end
+    o.stream_settings = json.Object(st)
+    ret o
+end
+
+@en "NodeFromOutbound"
+@fa "گره از خروجی"
+pub func NodeFromOutbound(o: OutboundConfig): Node:
+    mut n := Node { protocol = o.protocol, remark = o.tag }
+    mut ep := ""
+    if o.protocol == "vmess" or o.protocol == "vless":
+        vn := _items(json.Get(o.settings, "vnext"))
+        defer vn.free()
+        if vn.len() == 0:
+            n.error = "no vnext"
+            ret n
+        end
+        ep = vn[0]
+        us := _items(json.Get(ep, "users"))
+        defer us.free()
+        if us.len() == 0:
+            n.error = "no users"
+            ret n
+        end
+        n.uuid = json.Get(us[0], "id")
+        n.alter_id = json.Get(us[0], "alterId").to_int()
+        if o.protocol == "vmess":
+            n.method = json.Get(us[0], "security")
+        else:
+            n.encryption = json.Get(us[0], "encryption")
+            n.flow = json.Get(us[0], "flow")
+        end
+    else:
+        sv := _items(json.Get(o.settings, "servers"))
+        defer sv.free()
+        if sv.len() == 0:
+            n.error = "no servers"
+            ret n
+        end
+        ep = sv[0]
+        n.password = json.Get(ep, "password")
+        n.method = json.Get(ep, "method")
+        n.plugin = json.Get(ep, "plugin")
+    end
+    n.host = json.Get(ep, "address")
+    n.port = json.Get(ep, "port").to_int()
+    ss := o.stream_settings
+    n.network = json.Get(ss, "network")
+    if n.network.len() == 0: n.network = "tcp" end
+    n.security = json.Get(ss, "security")
+    n.tls = n.security == "tls" or n.security == "reality"
+    mut ts := json.Get(ss, "tlsSettings")
+    if n.security == "reality": ts = json.Get(ss, "realitySettings") end
+    n.sni = json.Get(ts, "serverName")
+    n.fingerprint = json.Get(ts, "fingerprint")
+    n.alpn = _array_to_csv(json.Get(ts, "alpn"))
+    n.allow_insecure = json.Get(ts, "allowInsecure") == "true"
+    n.public_key = json.Get(ts, "publicKey")
+    n.short_id = json.Get(ts, "shortId")
+    n.spider_x = json.Get(ts, "spiderX")
+    mut ws := json.Get(ss, "wsSettings")
+    if n.network == "httpupgrade": ws = json.Get(ss, "httpupgradeSettings") end
+    n.path = json.Get(ws, "path")
+    n.host_header = json.Get(json.Get(ws, "headers"), "Host")
+    n.service_name = json.Get(json.Get(ss, "grpcSettings"), "serviceName")
+    n.valid = n.host.len() > 0 and _is_port(n.port)
+    if not n.valid: n.error = "bad address" end
+    ret n
+end
+
+@en "ConfigFromNodes"
+@fa "پیکربندی از گره‌ها"
+pub func ConfigFromNodes(nodes: Vector<Node>, listen_port: int): Config:
+    mut c := Config {}
+    c.inbounds.push(InboundConfig { tag = "mixed-in", protocol = "mixed", port = listen_port })
+    repeat nodes.len() in i:
+        c.outbounds.push(OutboundFromNode(nodes[i], "proxy-" + (i + 1)))
+    end
+    c.outbounds.push(OutboundConfig { tag = "direct", protocol = "freedom" })
+    c.outbounds.push(OutboundConfig { tag = "block", protocol = "blackhole" })
+    if nodes.len() > 0:
+        c.default_outbound = "proxy-1"
+    else:
+        c.default_outbound = "direct"
+    end
+    mut r := RuleConfig { outbound_tag = "direct" }
+    r.domain.push("suffix:ir")
+    r.ip.push("geoip:private")
+    c.rules.push(r)
+    ret c
+end

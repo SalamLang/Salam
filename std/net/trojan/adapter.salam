@@ -1,0 +1,136 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package trojan
+
+import mem
+import compress
+import crypto
+import net.tunnel
+
+@en "Connector"
+@fa "اتصال‌دهنده"
+pub struct Connector:
+    @en "server"
+    @fa "نشانی کارساز"
+    pub server: tunnel.Addr = tunnel.Addr {}
+    @en "password"
+    @fa "گذرواژه"
+    pub password: str = ""
+
+    @en "Server"
+    @fa "کارساز"
+    pub func Server(): tunnel.Addr:
+        ret this.server
+    end
+
+    @en "Handshake"
+    @fa "دست‌دهی"
+    pub func Handshake(s: dyn tunnel.Stream, target: tunnel.Addr): bool:
+        mut hdr := EncodeRequest(this.password, CmdConnect, target.host, target.port)
+        ok := tunnel.WriteAllBytes(s, hdr.data, hdr.len)
+        compress.BufFree(hdr)
+        ret ok
+    end
+
+    @en "Name"
+    @fa "نام"
+    pub func Name(): str:
+        ret "trojan"
+    end
+end
+
+@en "Inbound"
+@fa "پذیرنده تروجان"
+pub struct Inbound:
+    @en "hashes"
+    @fa "درهم گذرواژه‌ها"
+    pub hashes: Vector<str> = Vector {}
+    @en "replies"
+    @fa "شمار پاسخ‌ها"
+    pub replies: int = 0
+
+    @en "Name"
+    @fa "نام"
+    pub func Name(): str:
+        ret "trojan"
+    end
+
+    @en "Handshake"
+    @fa "دست‌دهی"
+    pub func Handshake(s: dyn tunnel.Stream): tunnel.Session:
+        mut seen := compress.NewByteBuf()
+        defer compress.BufFree(seen)
+        cap := 2048
+        tmp := mem.Allocate(cap as u64)
+        defer mem.Free(tmp)
+        until true:
+            n := s.ReadBytes(tmp, cap)
+            if n <= 0:
+                break
+            end
+            compress.BufPushBytes(seen, tmp, n)
+            r := ParseRequest(seen.data, seen.len)
+            if r.status == ParseInvalid:
+                break
+            end
+            if r.status == ParseOK:
+                mut known := false
+                repeat this.hashes.len() in i:
+                    if crypto.SecretEquals(this.hashes.get(i), r.hash):
+                        known = true
+                    end
+                end
+                if not known:
+                    break
+                end
+                rest := seen.len - r.consumed
+                mut initial := ""
+                if rest > 0:
+                    initial = _mkstr(seen.data, r.consumed, rest)
+                end
+                ret tunnel.Session { ok = true, target = tunnel.NewAddr(r.host, r.port), protocol = "trojan", user = r.hash, command = r.cmd, initial = initial }
+            end
+        end
+        mut seen_text := ""
+        if seen.len > 0:
+            seen_text = _mkstr(seen.data, 0, seen.len)
+        end
+        ret tunnel.Session { error = "trojan authentication failed", initial = seen_text }
+    end
+
+    @en "Reply"
+    @fa "پاسخ"
+    pub func Reply(_s: dyn tunnel.Stream, _sess: tunnel.Session, _ok: bool):
+        this.replies += 1
+    end
+end
+
+@en "NewConnector"
+@fa "اتصال‌دهنده جدید"
+pub func NewConnector(server_host: str, server_port: int, password: str): Connector:
+    ret Connector { server = tunnel.NewAddr(server_host, server_port), password = password }
+end
+
+@en "NewInbound"
+@fa "پذیرنده جدید"
+pub func NewInbound(): Inbound:
+    ret Inbound {}
+end
+
+@en "InboundAddPassword"
+@fa "افزودن گذرواژه به پذیرنده"
+pub func InboundAddPassword(inb &: Inbound, password: str):
+    inb.hashes.push(PasswordHash(password))
+end

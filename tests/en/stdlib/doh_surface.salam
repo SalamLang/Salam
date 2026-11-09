@@ -1,0 +1,88 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import mem
+import compress
+import net.dns
+import net.doh
+import net.udp
+import sync
+
+mut udp_port := 0
+mut ready := sync.NewWaitGroup()
+
+func udp_server():
+    s := udp.Bind(0)
+    udp_port = udp.Port(s)
+    sync.Done(ready)
+    buf := mem.Allocate(2048 as u64)
+    mut fh := ""
+    mut fp := 0
+    until true:
+        n := udp.ReceiveBytes(s, buf, 2048, fh, fp)
+        if n >= 12:
+            q := dns.Decode(buf, n)
+            qn := q.questions.items.get(0)
+            mut recs := Vector {} as Vector<dns.Record>
+            recs.push(dns.Record { name = qn.name, rtype = dns.TypeA, rclass = 1, ttl = 100, data = "10.4.4.4" })
+            mut out := doh.EncodeResponse(q.id, qn.name, qn.qtype, 0, recs)
+            recs.free()
+            _x := udp.SendBytes(s, fh, fp, out.data, out.len)
+            compress.BufFree(out)
+        end
+    end
+end
+
+func main:
+    sync.Add(ready, 1 as i64)
+    _t := spawn(udp_server)
+    sync.Wait(ready)
+
+    mut ip4 := compress.NewByteBuf()
+    println doh.ParseIPv4("1.2.3.4", ip4), ip4.len
+    mut ip6 := compress.NewByteBuf()
+    println doh.ParseIPv6("2001:db8::1", ip6), ip6.len
+
+    mut s := doh.Cloudflare()
+    s = doh.WithBootstrap(s, "9.9.9.10")
+    println s.addrs.len()
+    println doh.GoogleDoT().host, doh.Quad9DoT().host
+    mut sh := doh.Shecan()
+    mut s4 := doh.Server403()
+    mut el := doh.Electro()
+    mut rd := doh.Radar()
+    println sh.len(), s4.len(), el.len(), rd.len()
+    println sh.get(0).addrs.get(0), s4.get(0).addrs.get(0), el.get(0).addrs.get(0), rd.get(0).addrs.get(0)
+    doh.FreeServers(sh)
+    doh.FreeServers(s4)
+    doh.FreeServers(el)
+    doh.FreeServers(rd)
+
+    mut plain := doh.NewPlain("local", "127.0.0.1")
+    plain.port = udp_port
+    mut r := doh.QueryAddr(plain, "127.0.0.1", "q.test", dns.TypeA, 2000)
+    println r.ok, r.msg.answers.items.get(0).data
+    doh.FreeResponse(r)
+
+    mut one := Vector {} as Vector<doh.Server>
+    one.push(plain)
+    rs := doh.NewResolver(one)
+    mut boot := Vector {} as Vector<doh.Server>
+    boot.push(plain)
+    doh.SetBootstrap(rs, boot)
+    doh.SetTTLLimits(rs, 20, 3600, 5)
+    mut a := doh.Resolve(rs, "r.test", dns.TypeA)
+    println a.ok, a.cached
+    doh.FreeAnswer(a)
+end

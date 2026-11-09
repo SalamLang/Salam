@@ -1,0 +1,190 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import mem
+import net.tcp
+import net.trojan
+import net.tunnel
+import net.websocket
+import compress
+import sync
+
+mut echo_port := 0
+mut ready := sync.NewWaitGroup()
+mut held := null as trojan.Link*
+
+struct Job:
+    pub lp: trojan.Link* = null
+    pub cfg: trojan.ServerConfig = trojan.ServerConfig {}
+    pub result: int = 0
+end
+
+struct RelayJob:
+    pub a: trojan.Link* = null
+    pub b: trojan.Link* = null
+end
+
+func text_of(p: void*, n: int): str:
+    buf := mem.Allocate((n + 1) as u64)
+    mem.Copy(buf, p, n as u64)
+    (buf as u8*)[n] = 0 as u8
+    ret buf as str
+end
+
+func echo_server():
+    srv := tcp.Bind(0)
+    echo_port = tcp.Port(srv)
+    sync.Done(ready)
+    until true:
+        c := tcp.Accept(srv)
+        until true:
+            s := tcp.Read(c, 4096)
+            if s.len() == 0:
+                break
+            end
+            _n := tcp.Write(c, s)
+        end
+        tcp.Close(c)
+    end
+end
+
+func serve_one(j: Job*):
+    j[0].result = trojan.ServeLink(j[0].lp, j[0].cfg)
+end
+
+func relay_one(j: RelayJob*):
+    _n := trojan.Relay(j[0].a, j[0].b)
+end
+
+func pair(): trojan.Link:
+    ls := tcp.Bind(0)
+    c := tcp.Dial("127.0.0.1", tcp.Port(ls))
+    s := tcp.Accept(ls)
+    tcp.CloseServer(ls)
+    sl := mem.AllocateZeroed(sizeof(trojan.Link) as u64) as trojan.Link*
+    sl[0] = trojan.NewTCPLink(s)
+    held = sl
+    ret trojan.NewTCPLink(c)
+end
+
+func read_text(l &: trojan.Link, want: int): str:
+    buf := mem.Allocate(4096 as u64)
+    defer mem.Free(buf)
+    mut out := ""
+    until out.len() < want:
+        n := trojan.LinkRead(l, buf, 4096)
+        if n <= 0:
+            break
+        end
+        out = out + text_of(buf, n)
+    end
+    ret out
+end
+
+func main:
+    sync.Add(ready, 1 as i64)
+    _t := spawn(echo_server)
+    sync.Wait(ready)
+
+    mut cl := pair()
+    sl := held
+    println trojan.LinkFd(cl) >= 0, trojan.LinkFd(sl[0]) >= 0
+    trojan.LinkSetTimeout(cl, 2000)
+    mut wb := compress.NewByteBuf()
+    compress.BufPushBytes(wb, "buffered" as void*, 8)
+    println trojan.LinkWriteBuf(cl, wb)
+    compress.BufFree(wb)
+    println read_text(sl[0], 8)
+    trojan.LinkShutdown(cl)
+    println trojan.LinkRead(sl[0], mem.Allocate(16 as u64), 16)
+    trojan.LinkClose(cl)
+    trojan.LinkClose(sl[0])
+
+    mut ua := pair()
+    ua_peer := held
+    println trojan.WriteUDPPacket(ua, "10.1.2.3", 5353, "dgram" as void*, 5)
+    mut pkt := trojan.NewUDPPacket()
+    mut payload := compress.NewByteBuf()
+    println trojan.ReadUDPPacket(ua_peer[0], pkt, payload), pkt.host, pkt.port, text_of(payload.data, payload.len)
+    trojan.LinkClose(ua)
+    trojan.LinkClose(ua_peer[0])
+
+    mut ra := pair()
+    ra_in := held
+    mut rb := pair()
+    rb_in := held
+    rj := mem.AllocateZeroed(sizeof(RelayJob) as u64) as RelayJob*
+    rj[0] = RelayJob { a = ra_in, b = rb_in }
+    th := spawn(relay_one, rj)
+    println trojan.LinkWriteStr(ra, "through relay")
+    println read_text(rb, 13)
+    trojan.LinkClose(ra)
+    trojan.LinkClose(rb)
+    join(th)
+    mem.Free(rj as void*)
+
+    mut cfg := trojan.NewServerConfig("", "")
+    trojan.AddPasswordHash(cfg, trojan.PasswordHash("pw"))
+    trojan.SetDialer(cfg, tunnel.Direct())
+    mut scl := pair()
+    sv := held
+    jb := mem.AllocateZeroed(sizeof(Job) as u64) as Job*
+    jb[0] = Job { lp = sv, cfg = cfg }
+    th2 := spawn(serve_one, jb)
+    req := trojan.EncodeRequestHash(trojan.PasswordHash("pw"), trojan.CmdConnect, "127.0.0.1", echo_port)
+    println trojan.LinkWrite(scl, req.data, req.len)
+    println trojan.LinkWriteStr(scl, "via serve link")
+    println read_text(scl, 14)
+    trojan.LinkClose(scl)
+    join(th2)
+    println "serve result", jb[0].result
+    mem.Free(jb as void*)
+    trojan.LinkClose(sv[0])
+
+    st := trojan.AsStream(sv)
+    println "stream ok", st.Ok()
+
+    mut fl := pair()
+    fp := held
+    mut seen := compress.NewByteBuf()
+    println trojan.Fallback(fp, cfg, seen)
+    compress.BufFree(seen)
+    cfg.handshake_timeout_ms = 200
+    mut hs := trojan.Handshake(fl, cfg)
+    println hs.ok
+    trojan.FreeSession(hs)
+    trojan.LinkClose(fl)
+    trojan.LinkClose(fp[0])
+
+    wl := trojan.NewWSLink(websocket.Conn {})
+    println trojan.LinkOk(wl)
+
+    srv := trojan.ServePlain(trojan.NewServerConfig("", ""), 0)
+    println trojan.ServerPort(srv) == srv.port, srv.port > 0
+    trojan.Stop(srv)
+
+    mut d := trojan.Sha224("abc" as void*, 3)
+    println trojan.HexOf(d)
+    compress.BufFree(d)
+    mut ip4 := compress.NewByteBuf()
+    println trojan.ParseIPv4("10.20.30.40", ip4), trojan.FormatIPv4(ip4.data, 0)
+    mut ip6 := compress.NewByteBuf()
+    println trojan.ParseIPv6("2001:db8::7", ip6), trojan.FormatIPv6(ip6.data, 0)
+    ea := trojan.EncodeAddr("example.com", 443)
+    mut atyp := 0
+    mut host := ""
+    mut port := 0
+    n := trojan.ParseAddr(ea.data, ea.len, 0, atyp, host, port)
+    println n == ea.len, atyp, host, port
+end

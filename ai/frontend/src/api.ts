@@ -14,6 +14,7 @@ export type Chat = {
   cloud?: boolean;
   device_id?: number;
   workspace?: string;
+  extra_path?: string;
   project_id?: string;
   shared?: ShareKind[];
   state?: "working" | "queued" | "waiting" | "idle" | "offline";
@@ -34,18 +35,21 @@ export type Project = {
   chats: number;
   live: number;
   last: number;
+  path?: string;
 };
 export type ProjectInput = {
   name: string;
   description?: string;
   color?: string;
   emoji?: string;
+  path?: string;
 };
 export type ChatStart = {
   device_id?: string;
   workspace?: string;
   cloud?: boolean;
   project_id?: string;
+  extra_path?: string;
 };
 export type ShareKind = "view" | "collab";
 export type ShareState =
@@ -1181,6 +1185,8 @@ export const api = {
       { text, name },
       true,
     ),
+  setChatExtra: (id: string, extraPath: string) =>
+    call<{ ok: boolean; extra_path: string }>("PATCH", `/chats/${id}`, { extra_path: extraPath }),
   renameChat: (id: string, title: string) =>
     call<{ title: string }>("PATCH", `/chats/${id}`, { title }),
   deleteChat: (id: string) => call<{ ok: boolean }>("DELETE", `/chats/${id}`),

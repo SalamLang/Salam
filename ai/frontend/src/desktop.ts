@@ -62,12 +62,16 @@ export type NotifyPrefs = {
   lang: "fa" | "en";
 };
 
+export type PathStatus = "ok" | "missing" | "not_folder" | "invalid";
+
 export const agent = {
   info: () => call<AgentInfo>("agent_info"),
   openUrl: (url: string) => call<void>("agent_open_url", { url }),
   link: (token: string) => call<AgentInfo>("agent_link", { token }),
   unlink: (token: string) => call<AgentInfo>("agent_unlink", { token }),
   pickFolder: () => call<string | null>("agent_pick_folder"),
+  pathStatus: (path: string) =>
+    call<PathStatus>("agent_path_status", { path }),
   setMode: (chat: string, mode: AgentMode) =>
     call<void>("agent_set_mode", { chat, mode }),
   decide: (callId: string, answer: AgentAnswer) =>

@@ -1,0 +1,1093 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package window
+
+if SALAM_OS_MAC:
+    link framework "Cocoa"
+    link framework "CoreGraphics"
+    link dynamic "objc"
+
+    extern:
+        func objc_getClass(name: str): void*
+        func sel_registerName(name: str): void*
+        func objc_msgSend(receiver: void*, selector: void*): void*
+        func objc_allocateClassPair(superclass: void*, name: str, extra: usize): void*
+        func objc_registerClassPair(cls: void*)
+        func objc_getProtocol(name: str): void*
+        func class_addMethod(cls: void*, selector: void*, imp: void*, types: str): i8
+        func class_addProtocol(cls: void*, protocol: void*): i8
+        func objc_autoreleasePoolPush(): void*
+        func objc_autoreleasePoolPop(pool: void*)
+        func dlsym(handle: void*, name: str): void*
+        func sel_getName(selector: void*): str
+        func CGColorSpaceCreateDeviceRGB(): void*
+        func CGColorSpaceRelease(space: void*)
+        func CGBitmapContextCreate(
+            data: void*, width: usize, height: usize, bits: usize, row_bytes: usize, space: void*, info: u32
+        ): void*
+        func CGBitmapContextCreateImage(context: void*): void*
+        func CGContextRelease(context: void*)
+        func CGImageRelease(image: void*)
+    end
+
+    mut _ns_app := null as void*
+    mut _ns_view_cls := null as void*
+    mut _ns_delegate_cls := null as void*
+    mut _ns_delegate := null as void*
+    mut _ns_space := null as void*
+    mut _ns_wins := Vector {} as Vector<_NsWin>
+    mut _ns_marked := ""
+    mut _ns_marked_on := false
+    mut _ns_dark := false
+    mut _ns_scheme_at := 0 as i64
+    mut _ns_hidden := false
+    mut _ns_last_command := null as void*
+
+    struct NSPoint:
+        pub x: f64 = 0.0
+        pub y: f64 = 0.0
+    end
+
+    struct NSSize:
+        pub w: f64 = 0.0
+        pub h: f64 = 0.0
+    end
+
+    struct NSRect:
+        pub x: f64 = 0.0
+        pub y: f64 = 0.0
+        pub w: f64 = 0.0
+        pub h: f64 = 0.0
+    end
+
+    struct NSRange:
+        pub location: u64 = 0 as u64
+        pub length: u64 = 0 as u64
+    end
+
+    struct _NsWin:
+        pub window: void* = null
+        pub view: void* = null
+        pub context: void* = null
+        pub buf: void* = null
+        pub open: bool = false
+    end
+
+    export:
+        func salam_window_mac_yes(_this: void*, _cmd: void*): i8:
+            ret 1
+        end
+
+        func salam_window_mac_yes1(_this: void*, _cmd: void*, _arg: void*): i8:
+            ret 1
+        end
+
+        func salam_window_mac_key_down(this_: void*, _cmd: void*, event: void*):
+            id := _ns_view_id(this_)
+            if id < 0:
+                ret
+            end
+            mods := _ns_mods(event)
+            _ns_key(id, event, true)
+            if (mods & ModSuper) == 0:
+                list := _ns1(_ns_cls("NSArray"), "arrayWithObject:", event)
+                _ns1(this_, "interpretKeyEvents:", list)
+            end
+        end
+
+        func salam_window_mac_key_up(this_: void*, _cmd: void*, event: void*):
+            id := _ns_view_id(this_)
+            if id >= 0:
+                _ns_key(id, event, false)
+            end
+        end
+
+        func salam_window_mac_flags(this_: void*, _cmd: void*, event: void*):
+            id := _ns_view_id(this_)
+            if id < 0:
+                ret
+            end
+            code := _ns_long0(event, "keyCode") as int
+            flags := _ns_long0(event, "modifierFlags")
+            bit := match code:
+                0x38, 0x3C: 1 << 17 end
+                0x3B, 0x3E: 1 << 18 end
+                0x3A, 0x3D: 1 << 19 end
+                0x37, 0x36: 1 << 20 end
+                0x39: 1 << 16 end
+                else: 0 end
+            end
+            if bit == 0:
+                ret
+            end
+            down := (flags & (bit as i64)) != (0 as i64)
+            _push(Event {
+                kind = down ? EventKind.KeyDown : EventKind.KeyUp, window = id, key = _ns_keymap(code),
+                code = code, modifiers = _ns_mods(event)
+            })
+        end
+
+        func salam_window_mac_mouse(this_: void*, cmd: void*, event: void*):
+            id := _ns_view_id(this_)
+            if id < 0:
+                ret
+            end
+            name := _ns_sel_name(cmd)
+            mut kind := EventKind.PointerMove
+            mut button := MouseButton.None
+            if str.EndsWith(name, "Down:"):
+                kind = EventKind.PointerDown
+            else str.EndsWith(name, "Up:"):
+                kind = EventKind.PointerUp
+            else name == "mouseEntered:":
+                kind = EventKind.PointerEnter
+            else name == "mouseExited:":
+                kind = EventKind.PointerLeave
+            end
+            if kind == EventKind.PointerDown or kind == EventKind.PointerUp:
+                if str.StartsWith(name, "right"):
+                    button = MouseButton.Right
+                else str.StartsWith(name, "other"):
+                    number := _ns_long0(event, "buttonNumber")
+                    button = number == (2 as i64) ? MouseButton.Middle : number == (3 as i64) ? MouseButton.Back : MouseButton.Forward
+                else:
+                    button = MouseButton.Left
+                end
+            end
+            p := _ns_event_point(this_, event)
+            mut clicks := 0
+            if kind == EventKind.PointerDown or kind == EventKind.PointerUp:
+                clicks = _ns_long0(event, "clickCount") as int
+            end
+            _push(Event { kind = kind, window = id, x = p.x, y = p.y, button = button, clicks = clicks, modifiers = _ns_mods(event) })
+            if kind == EventKind.PointerEnter or kind == EventKind.PointerMove:
+                _ns_apply_cursor(id)
+            else kind == EventKind.PointerLeave and _ns_hidden:
+                _ns0(_ns_cls("NSCursor"), "unhide")
+                _ns_hidden = false
+            end
+        end
+
+        func salam_window_mac_scroll(this_: void*, _cmd: void*, event: void*):
+            id := _ns_view_id(this_)
+            if id < 0:
+                ret
+            end
+            p := _ns_event_point(this_, event)
+            precise := _ns_bool0(event, "hasPreciseScrollingDeltas")
+            dx := _ns_f64_0(event, "scrollingDeltaX")
+            dy := _ns_f64_0(event, "scrollingDeltaY")
+            _push(Event {
+                kind = EventKind.Wheel, window = id, x = p.x, y = p.y, delta_x = 0.0 - dx, delta_y = 0.0 - dy,
+                delta_mode = precise ? WheelMode.Pixel : WheelMode.Line, modifiers = _ns_mods(event)
+            })
+        end
+
+        func salam_window_mac_has_marked(_this: void*, _cmd: void*): i8:
+            ret _ns_marked_on and _ns_marked.len() > 0 ? 1 as i8 : 0 as i8
+        end
+
+        func salam_window_mac_marked_range(_this: void*, _cmd: void*): NSRange:
+            if _ns_marked_on and _ns_marked.len() > 0:
+                ret NSRange { location = 0 as u64, length = _ns_utf16_len(_ns_marked) }
+            end
+            ret NSRange { location = 0x7FFFFFFFFFFFFFFF as u64, length = 0 as u64 }
+        end
+
+        func salam_window_mac_selected_range(_this: void*, _cmd: void*): NSRange:
+            ret NSRange {}
+        end
+
+        func salam_window_mac_set_marked(this_: void*, _cmd: void*, text: void*, at: u64, _length: u64):
+            id := _ns_view_id(this_)
+            plain := _ns_plain(text)
+            value := _ns_text(plain)
+            mut cursor := value.len()
+            count := _ns_long0(plain, "length")
+            if (at as i64) <= count:
+                head := _ns_text(_ns_i(plain, "substringToIndex:", at as i64))
+                cursor = head.len()
+                mem.Free(head as void*)
+            end
+            if _ns_marked_on:
+                mem.Free(_ns_marked as void*)
+            end
+            _ns_marked = value
+            _ns_marked_on = true
+            if id >= 0:
+                _push(Event { kind = EventKind.ImePreedit, window = id, text = value, cursor = cursor })
+            end
+        end
+
+        func salam_window_mac_unmark(this_: void*, _cmd: void*):
+            id := _ns_view_id(this_)
+            had := _ns_marked_on and _ns_marked.len() > 0
+            _ns_clear_marked()
+            if had and id >= 0:
+                _push(Event { kind = EventKind.ImePreedit, window = id })
+            end
+        end
+
+        func salam_window_mac_valid_attributes(_this: void*, _cmd: void*): void*:
+            ret _ns0(_ns_cls("NSArray"), "array")
+        end
+
+        func salam_window_mac_attributed(_this: void*, _cmd: void*, _at: u64, _length: u64, _actual: void*): void*:
+            ret null
+        end
+
+        func salam_window_mac_insert(this_: void*, _cmd: void*, text: void*, _at: u64, _length: u64):
+            id := _ns_view_id(this_)
+            if id < 0:
+                ret
+            end
+            value := _ns_text(_ns_plain(text))
+            defer mem.Free(value as void*)
+            composing := _ns_marked_on and _ns_marked.len() > 0
+            _ns_clear_marked()
+            if composing:
+                _push(Event { kind = EventKind.ImeCommit, window = id, text = value })
+                ret
+            end
+            if value.len() == 0:
+                ret
+            end
+            first := (value as u8*)[0] as int
+            if first < 32 or first == 127:
+                ret
+            end
+            _push(Event { kind = EventKind.TextInput, window = id, text = value })
+        end
+
+        func salam_window_mac_char_index(_this: void*, _cmd: void*, _x: f64, _y: f64): u64:
+            ret 0x7FFFFFFFFFFFFFFF
+        end
+
+        func salam_window_mac_first_rect(this_: void*, _cmd: void*, _at: u64, _length: u64, _actual: void*): NSRect:
+            id := _ns_view_id(this_)
+            if id < 0:
+                ret NSRect {}
+            end
+            w := _wins[id]
+            local := NSRect { x = w.ime_x, y = w.ime_y, w = w.ime_w, h = w.ime_h }
+            in_window := _ns_rect_call(this_, "convertRect:toView:", local)
+            ret _ns_rect_call(_ns_wins[id].window, "convertRectToScreen:", in_window)
+        end
+
+        func salam_window_mac_command(_this: void*, _cmd: void*, selector: void*):
+            _ns_last_command = selector
+        end
+
+        func salam_window_mac_should_close(this_: void*, _cmd: void*, _sender: void*): i8:
+            id := _ns_window_id(this_)
+            if id >= 0:
+                _push(Event { kind = EventKind.CloseRequested, window = id })
+            end
+            ret 0
+        end
+
+        func salam_window_mac_resized(this_: void*, _cmd: void*, _note: void*):
+            id := _ns_window_id(this_)
+            if id >= 0:
+                _ns_report_size(id, false)
+            end
+        end
+
+        func salam_window_mac_backing(this_: void*, _cmd: void*, _note: void*):
+            id := _ns_window_id(this_)
+            if id >= 0:
+                _ns_report_size(id, true)
+            end
+        end
+
+        func salam_window_mac_key_window(this_: void*, cmd: void*, _note: void*):
+            id := _ns_window_id(this_)
+            if id < 0:
+                ret
+            end
+            gained := _ns_sel_name(cmd) == "windowDidBecomeKey:"
+            if gained != _wins[id].focused:
+                _push(Event { kind = gained ? EventKind.FocusIn : EventKind.FocusOut, window = id })
+            end
+        end
+
+        func salam_window_mac_quit(_this: void*, _cmd: void*, _sender: void*):
+            repeat _ns_wins.len() in i:
+                if _ns_wins[i].open:
+                    _push(Event { kind = EventKind.CloseRequested, window = i })
+                end
+            end
+        end
+    end
+
+    func _ns_cls(name: str): void*:
+        ret objc_getClass(name)
+    end
+
+    func _ns0(recv: void*, name: str): void*:
+        f := (&objc_msgSend) as extern func (void*, void*) void*
+        ret f(recv, sel_registerName(name))
+    end
+
+    func _ns1(recv: void*, name: str, a: void*): void*:
+        f := (&objc_msgSend) as extern func (void*, void*, void*) void*
+        ret f(recv, sel_registerName(name), a)
+    end
+
+    func _ns2(recv: void*, name: str, a: void*, b: void*): void*:
+        f := (&objc_msgSend) as extern func (void*, void*, void*, void*) void*
+        ret f(recv, sel_registerName(name), a, b)
+    end
+
+    func _ns_i(recv: void*, name: str, a: i64): void*:
+        f := (&objc_msgSend) as extern func (void*, void*, i64) void*
+        ret f(recv, sel_registerName(name), a)
+    end
+
+    func _ns_b(recv: void*, name: str, a: bool):
+        f := (&objc_msgSend) as extern func (void*, void*, i8) void*
+        _r := f(recv, sel_registerName(name), a ? 1 as i8 : 0 as i8)
+    end
+
+    func _ns_f(recv: void*, name: str, a: f64): void*:
+        f := (&objc_msgSend) as extern func (void*, void*, f64) void*
+        ret f(recv, sel_registerName(name), a)
+    end
+
+    func _ns_size(recv: void*, name: str, value: NSSize):
+        f := (&objc_msgSend) as extern func (void*, void*, NSSize) void*
+        _r := f(recv, sel_registerName(name), value)
+    end
+
+    func _ns_bool0(recv: void*, name: str): bool:
+        f := (&objc_msgSend) as extern func (void*, void*) i8
+        ret f(recv, sel_registerName(name)) != (0 as i8)
+    end
+
+    func _ns_long0(recv: void*, name: str): i64:
+        f := (&objc_msgSend) as extern func (void*, void*) i64
+        ret f(recv, sel_registerName(name))
+    end
+
+    func _ns_f64_0(recv: void*, name: str): f64:
+        f := (&objc_msgSend) as extern func (void*, void*) f64
+        ret f(recv, sel_registerName(name))
+    end
+
+    func _ns_point0(recv: void*, name: str): NSPoint:
+        f := (&objc_msgSend) as extern func (void*, void*) NSPoint
+        ret f(recv, sel_registerName(name))
+    end
+
+    func _ns_rect0(recv: void*, name: str): NSRect:
+        if SALAM_ARCH_ARM64:
+            f := (&objc_msgSend) as extern func (void*, void*) NSRect
+            ret f(recv, sel_registerName(name))
+        else:
+            stret := dlsym(((0 - 2) as size) as void*, "objc_msgSend_stret")
+            g := stret as extern func (void*, void*) NSRect
+            ret g(recv, sel_registerName(name))
+        end
+    end
+
+    func _ns_rect_call(recv: void*, name: str, r: NSRect): NSRect:
+        if SALAM_ARCH_ARM64:
+            f := (&objc_msgSend) as extern func (void*, void*, NSRect, void*) NSRect
+            ret f(recv, sel_registerName(name), r, null)
+        else:
+            stret := dlsym(((0 - 2) as size) as void*, "objc_msgSend_stret")
+            g := stret as extern func (void*, void*, NSRect, void*) NSRect
+            ret g(recv, sel_registerName(name), r, null)
+        end
+    end
+
+    func _ns_string(s: str): void*:
+        f := (&objc_msgSend) as extern func (void*, void*, str) void*
+        ret f(_ns_cls("NSString"), sel_registerName("stringWithUTF8String:"), s)
+    end
+
+    func _ns_text(ns: void*): str:
+        if ns == null:
+            ret str.Clone("")
+        end
+        raw := _ns0(ns, "UTF8String")
+        if raw == null:
+            ret str.Clone("")
+        end
+        ret str.Clone(raw as str)
+    end
+
+    func _ns_is(object: void*, cls: str): bool:
+        f := (&objc_msgSend) as extern func (void*, void*, void*) i8
+        ret f(object, sel_registerName("isKindOfClass:"), _ns_cls(cls)) != (0 as i8)
+    end
+
+    func _ns_plain(text: void*): void*:
+        if text != null and _ns_is(text, "NSAttributedString"):
+            ret _ns0(text, "string")
+        end
+        ret text
+    end
+
+    func _ns_utf16_len(s: str): u64:
+        ret _ns_long0(_ns_string(s), "length") as u64
+    end
+
+    func _ns_sel_name(selector: void*): str:
+        ret sel_getName(selector)
+    end
+
+    func _ns_clear_marked():
+        if _ns_marked_on:
+            mem.Free(_ns_marked as void*)
+        end
+        _ns_marked = ""
+        _ns_marked_on = false
+    end
+
+    func _ns_view_id(view: void*): int:
+        repeat _ns_wins.len() in i:
+            if _ns_wins[i].open and _ns_wins[i].view == view:
+                ret i
+            end
+        end
+        ret -1
+    end
+
+    func _ns_window_id(delegate: void*): int:
+        repeat _ns_wins.len() in i:
+            if _ns_wins[i].open and _ns0(_ns_wins[i].window, "delegate") == delegate:
+                ret i
+            end
+        end
+        ret -1
+    end
+
+    func _ns_mods(event: void*): int:
+        flags := _ns_long0(event, "modifierFlags")
+        mut m := 0
+        if (flags & ((1 << 17) as i64)) != (0 as i64):
+            m |= ModShift
+        end
+        if (flags & ((1 << 18) as i64)) != (0 as i64):
+            m |= ModControl
+        end
+        if (flags & ((1 << 19) as i64)) != (0 as i64):
+            m |= ModAlt
+        end
+        if (flags & ((1 << 20) as i64)) != (0 as i64):
+            m |= ModSuper
+        end
+        ret m
+    end
+
+    func _ns_event_point(view: void*, event: void*): NSPoint:
+        p := _ns_point0(event, "locationInWindow")
+        f := (&objc_msgSend) as extern func (void*, void*, NSPoint, void*) NSPoint
+        ret f(view, sel_registerName("convertPoint:fromView:"), p, null)
+    end
+
+    func _ns_keymap(code: int): Key:
+        ret match code:
+            0x00: Key.A end
+            0x01: Key.S end
+            0x02: Key.D end
+            0x03: Key.F end
+            0x04: Key.H end
+            0x05: Key.G end
+            0x06: Key.Z end
+            0x07: Key.X end
+            0x08: Key.C end
+            0x09: Key.V end
+            0x0A: Key.IntlBackslash end
+            0x0B: Key.B end
+            0x0C: Key.Q end
+            0x0D: Key.W end
+            0x0E: Key.E end
+            0x0F: Key.R end
+            0x10: Key.Y end
+            0x11: Key.T end
+            0x12: Key.Digit1 end
+            0x13: Key.Digit2 end
+            0x14: Key.Digit3 end
+            0x15: Key.Digit4 end
+            0x16: Key.Digit6 end
+            0x17: Key.Digit5 end
+            0x18: Key.Equal end
+            0x19: Key.Digit9 end
+            0x1A: Key.Digit7 end
+            0x1B: Key.Minus end
+            0x1C: Key.Digit8 end
+            0x1D: Key.Digit0 end
+            0x1E: Key.BracketRight end
+            0x1F: Key.O end
+            0x20: Key.U end
+            0x21: Key.BracketLeft end
+            0x22: Key.I end
+            0x23: Key.P end
+            0x24: Key.Enter end
+            0x25: Key.L end
+            0x26: Key.J end
+            0x27: Key.Quote end
+            0x28: Key.K end
+            0x29: Key.Semicolon end
+            0x2A: Key.Backslash end
+            0x2B: Key.Comma end
+            0x2C: Key.Slash end
+            0x2D: Key.N end
+            0x2E: Key.M end
+            0x2F: Key.Period end
+            0x30: Key.Tab end
+            0x31: Key.Space end
+            0x32: Key.Backquote end
+            0x33: Key.Backspace end
+            0x35: Key.Escape end
+            0x36: Key.SuperRight end
+            0x37: Key.SuperLeft end
+            0x38: Key.ShiftLeft end
+            0x39: Key.CapsLock end
+            0x3A: Key.AltLeft end
+            0x3B: Key.ControlLeft end
+            0x3C: Key.ShiftRight end
+            0x3D: Key.AltRight end
+            0x3E: Key.ControlRight end
+            0x41: Key.NumpadDecimal end
+            0x43: Key.NumpadMultiply end
+            0x45: Key.NumpadAdd end
+            0x47: Key.NumLock end
+            0x4B: Key.NumpadDivide end
+            0x4C: Key.NumpadEnter end
+            0x4E: Key.NumpadSubtract end
+            0x52: Key.Numpad0 end
+            0x53: Key.Numpad1 end
+            0x54: Key.Numpad2 end
+            0x55: Key.Numpad3 end
+            0x56: Key.Numpad4 end
+            0x57: Key.Numpad5 end
+            0x58: Key.Numpad6 end
+            0x59: Key.Numpad7 end
+            0x5B: Key.Numpad8 end
+            0x5C: Key.Numpad9 end
+            0x60: Key.F5 end
+            0x61: Key.F6 end
+            0x62: Key.F7 end
+            0x63: Key.F3 end
+            0x64: Key.F8 end
+            0x65: Key.F9 end
+            0x67: Key.F11 end
+            0x6D: Key.F10 end
+            0x6E: Key.ContextMenu end
+            0x6F: Key.F12 end
+            0x72: Key.Insert end
+            0x73: Key.Home end
+            0x74: Key.PageUp end
+            0x75: Key.Delete end
+            0x76: Key.F4 end
+            0x77: Key.End end
+            0x78: Key.F2 end
+            0x79: Key.PageDown end
+            0x7A: Key.F1 end
+            0x7B: Key.Left end
+            0x7C: Key.Right end
+            0x7D: Key.Down end
+            0x7E: Key.Up end
+            else: Key.Unknown end
+        end
+    end
+
+    func _ns_key(id: int, event: void*, down: bool):
+        code := _ns_long0(event, "keyCode") as int
+        repeated := down and _ns_bool0(event, "isARepeat")
+        _push(Event {
+            kind = down ? EventKind.KeyDown : EventKind.KeyUp, window = id, key = _ns_keymap(code), code = code,
+            modifiers = _ns_mods(event), repeated = repeated
+        })
+    end
+
+    func _ns_cursor_object(cursor: Cursor): void*:
+        name := match cursor:
+            Cursor.Pointer: "pointingHandCursor" end
+            Cursor.Text: "IBeamCursor" end
+            Cursor.Crosshair: "crosshairCursor" end
+            Cursor.Move: "openHandCursor" end
+            Cursor.ResizeHorizontal: "resizeLeftRightCursor" end
+            Cursor.ResizeVertical: "resizeUpDownCursor" end
+            Cursor.ResizeDiagonalUp: "_windowResizeNorthEastSouthWestCursor" end
+            Cursor.ResizeDiagonalDown: "_windowResizeNorthWestSouthEastCursor" end
+            Cursor.NotAllowed: "operationNotAllowedCursor" end
+            else: "arrowCursor" end
+        end
+        cls := _ns_cls("NSCursor")
+        f := (&objc_msgSend) as extern func (void*, void*, void*) i8
+        if f(cls, sel_registerName("respondsToSelector:"), sel_registerName(name)) == (0 as i8):
+            ret _ns0(cls, "arrowCursor")
+        end
+        ret _ns0(cls, name)
+    end
+
+    func _ns_apply_cursor(id: int):
+        c := _wins[id].cursor
+        if c == Cursor.Hidden:
+            if not _ns_hidden:
+                _ns0(_ns_cls("NSCursor"), "hide")
+                _ns_hidden = true
+            end
+            ret
+        end
+        if _ns_hidden:
+            _ns0(_ns_cls("NSCursor"), "unhide")
+            _ns_hidden = false
+        end
+        _ns0(_ns_cursor_object(c), "set")
+    end
+
+    func _ns_add(cls: void*, name: str, imp: void*, types: str):
+        _added := class_addMethod(cls, sel_registerName(name), imp, types)
+    end
+
+    func _ns_make_classes():
+        view := objc_allocateClassPair(_ns_cls("NSView"), "SalamPixelView", 0 as usize)
+        protocol := objc_getProtocol("NSTextInputClient")
+        if protocol != null:
+            _p := class_addProtocol(view, protocol)
+        end
+        _ns_add(view, "acceptsFirstResponder", &salam_window_mac_yes, "c@:")
+        _ns_add(view, "isFlipped", &salam_window_mac_yes, "c@:")
+        _ns_add(view, "acceptsFirstMouse:", &salam_window_mac_yes1, "c@:@")
+        _ns_add(view, "keyDown:", &salam_window_mac_key_down, "v@:@")
+        _ns_add(view, "keyUp:", &salam_window_mac_key_up, "v@:@")
+        _ns_add(view, "flagsChanged:", &salam_window_mac_flags, "v@:@")
+        each name in [
+            "mouseDown:", "mouseUp:", "rightMouseDown:", "rightMouseUp:", "otherMouseDown:", "otherMouseUp:",
+            "mouseMoved:", "mouseDragged:", "rightMouseDragged:", "otherMouseDragged:", "mouseEntered:",
+            "mouseExited:"
+        ]:
+            _ns_add(view, name, &salam_window_mac_mouse, "v@:@")
+        end
+        _ns_add(view, "scrollWheel:", &salam_window_mac_scroll, "v@:@")
+        _ns_add(view, "hasMarkedText", &salam_window_mac_has_marked, "c@:")
+        _ns_add(view, "markedRange", &salam_window_mac_marked_range, "{_NSRange=QQ}@:")
+        _ns_add(view, "selectedRange", &salam_window_mac_selected_range, "{_NSRange=QQ}@:")
+        _ns_add(view, "setMarkedText:selectedRange:replacementRange:", &salam_window_mac_set_marked, "v@:@{_NSRange=QQ}{_NSRange=QQ}")
+        _ns_add(view, "unmarkText", &salam_window_mac_unmark, "v@:")
+        _ns_add(view, "validAttributesForMarkedText", &salam_window_mac_valid_attributes, "@@:")
+        _ns_add(view, "attributedSubstringForProposedRange:actualRange:", &salam_window_mac_attributed, "@@:{_NSRange=QQ}^{_NSRange=QQ}")
+        _ns_add(view, "insertText:replacementRange:", &salam_window_mac_insert, "v@:@{_NSRange=QQ}")
+        _ns_add(view, "characterIndexForPoint:", &salam_window_mac_char_index, "Q@:{CGPoint=dd}")
+        _ns_add(view, "firstRectForCharacterRange:actualRange:", &salam_window_mac_first_rect, "{CGRect={CGPoint=dd}{CGSize=dd}}@:{_NSRange=QQ}^{_NSRange=QQ}")
+        _ns_add(view, "doCommandBySelector:", &salam_window_mac_command, "v@::")
+        objc_registerClassPair(view)
+        _ns_view_cls = view
+        delegate := objc_allocateClassPair(_ns_cls("NSObject"), "SalamPixelWindowDelegate", 0 as usize)
+        window_protocol := objc_getProtocol("NSWindowDelegate")
+        if window_protocol != null:
+            _q := class_addProtocol(delegate, window_protocol)
+        end
+        _ns_add(delegate, "windowShouldClose:", &salam_window_mac_should_close, "c@:@")
+        _ns_add(delegate, "windowDidResize:", &salam_window_mac_resized, "v@:@")
+        _ns_add(delegate, "windowDidChangeBackingProperties:", &salam_window_mac_backing, "v@:@")
+        _ns_add(delegate, "windowDidBecomeKey:", &salam_window_mac_key_window, "v@:@")
+        _ns_add(delegate, "windowDidResignKey:", &salam_window_mac_key_window, "v@:@")
+        _ns_add(delegate, "salamQuit:", &salam_window_mac_quit, "v@:@")
+        objc_registerClassPair(delegate)
+        _ns_delegate_cls = delegate
+    end
+
+    func _ns_make_menu():
+        bar := _ns0(_ns0(_ns_cls("NSMenu"), "alloc"), "init")
+        holder := _ns0(_ns0(_ns_cls("NSMenuItem"), "alloc"), "init")
+        menu := _ns0(_ns0(_ns_cls("NSMenu"), "alloc"), "init")
+        make := (&objc_msgSend) as extern func (void*, void*, void*, void*, void*) void*
+        item := make(
+            _ns0(_ns_cls("NSMenuItem"), "alloc"), sel_registerName("initWithTitle:action:keyEquivalent:"),
+            _ns_string("Quit"), sel_registerName("salamQuit:"), _ns_string("q")
+        )
+        _ns1(item, "setTarget:", _ns_delegate)
+        _ns1(menu, "addItem:", item)
+        _ns1(holder, "setSubmenu:", menu)
+        _ns1(bar, "addItem:", holder)
+        _ns1(_ns_app, "setMainMenu:", bar)
+    end
+
+    func _ns_scheme_now(): bool:
+        f := (&objc_msgSend) as extern func (void*, void*, void*) i8
+        if f(_ns_app, sel_registerName("respondsToSelector:"), sel_registerName("effectiveAppearance")) == (0 as i8):
+            ret false
+        end
+        appearance := _ns0(_ns_app, "effectiveAppearance")
+        if appearance == null:
+            ret false
+        end
+        name := _ns_text(_ns0(appearance, "name"))
+        dark := str.Contains(name, "Dark")
+        mem.Free(name as void*)
+        ret dark
+    end
+
+    func _nat_init(): bool:
+        pool := objc_autoreleasePoolPush()
+        _ns_app = _ns0(_ns_cls("NSApplication"), "sharedApplication")
+        if _ns_app == null:
+            objc_autoreleasePoolPop(pool)
+            _set_error("could not start NSApplication")
+            ret false
+        end
+        _ns_i(_ns_app, "setActivationPolicy:", 0 as i64)
+        _ns_make_classes()
+        _ns_delegate = _ns0(_ns0(_ns_delegate_cls, "alloc"), "init")
+        _ns_make_menu()
+        _ns0(_ns_app, "finishLaunching")
+        _ns_space = CGColorSpaceCreateDeviceRGB()
+        _ns_dark = _ns_scheme_now()
+        _ns_scheme_at = time.MonoMillis()
+        objc_autoreleasePoolPop(pool)
+        ret true
+    end
+
+    func _ns_report_size(id: int, scale_changed: bool):
+        v := _ns_wins[id]
+        bounds := _ns_rect0(v.view, "bounds")
+        scale := _ns_f64_0(v.window, "backingScaleFactor")
+        if scale_changed and scale > 0.0 and scale != _wins[id].scale:
+            _push(Event { kind = EventKind.ScaleChanged, window = id, scale = scale })
+            _ns_f(_ns0(v.view, "layer"), "setContentsScale:", scale)
+        end
+        s := _wins[id].scale
+        pw := _phys(bounds.w, s)
+        ph := _phys(bounds.h, s)
+        if pw != _wins[id].pw or ph != _wins[id].ph:
+            _push(Event { kind = EventKind.Resized, window = id, physical_width = pw, physical_height = ph })
+        end
+    end
+
+    func _nat_open(id: int, o: Options): bool:
+        until _ns_wins.len() <= id:
+            _ns_wins.push(_NsWin {})
+        end
+        pool := objc_autoreleasePoolPush()
+        defer objc_autoreleasePoolPop(pool)
+        mut style := 0 as u64
+        if o.decorated:
+            style = (1 | 2 | 4) as u64
+            if o.resizable:
+                style |= 8 as u64
+            end
+        end
+        frame := NSRect { x = o.x, y = 0.0, w = o.width, h = o.height }
+        make := (&objc_msgSend) as extern func (void*, void*, NSRect, u64, u64, i8) void*
+        window := make(
+            _ns0(_ns_cls("NSWindow"), "alloc"), sel_registerName("initWithContentRect:styleMask:backing:defer:"),
+            frame, style, 2 as u64, 0 as i8
+        )
+        if window == null:
+            _set_error("macOS could not create the window")
+            ret false
+        end
+        _ns_b(window, "setReleasedWhenClosed:", false)
+        view_make := (&objc_msgSend) as extern func (void*, void*, NSRect) void*
+        view := view_make(_ns0(_ns_view_cls, "alloc"), sel_registerName("initWithFrame:"), NSRect { w = o.width, h = o.height })
+        _ns_b(view, "setWantsLayer:", true)
+        _ns1(window, "setContentView:", view)
+        _ns1(window, "setDelegate:", _ns0(_ns0(_ns_delegate_cls, "alloc"), "init"))
+        _ns_b(window, "setAcceptsMouseMovedEvents:", true)
+        _ns1(window, "makeFirstResponder:", view)
+        _ns1(window, "setTitle:", _ns_string(o.title))
+        bg := o.background
+        color_make := (&objc_msgSend) as extern func (void*, void*, f64, f64, f64, f64) void*
+        color := color_make(
+            _ns_cls("NSColor"), sel_registerName("colorWithSRGBRed:green:blue:alpha:"),
+            (((bg >> 24) & (255 as u32)) as f64) / 255.0, (((bg >> 16) & (255 as u32)) as f64) / 255.0,
+            (((bg >> 8) & (255 as u32)) as f64) / 255.0, 1.0
+        )
+        _ns1(window, "setBackgroundColor:", color)
+        track_make := (&objc_msgSend) as extern func (void*, void*, NSRect, u64, void*, void*) void*
+        area := track_make(
+            _ns0(_ns_cls("NSTrackingArea"), "alloc"), sel_registerName("initWithRect:options:owner:userInfo:"),
+            NSRect {}, (0x01 | 0x02 | 0x80 | 0x200) as u64, view, null
+        )
+        _ns1(view, "addTrackingArea:", area)
+        if o.min_width > 0.0 or o.min_height > 0.0:
+            _ns_size(window, "setContentMinSize:", NSSize { w = o.min_width, h = o.min_height })
+        end
+        if o.max_width > 0.0 or o.max_height > 0.0:
+            _ns_size(window, "setContentMaxSize:", NSSize { w = o.max_width > 0.0 ? o.max_width : 100000.0, h = o.max_height > 0.0 ? o.max_height : 100000.0 })
+        end
+        if o.centered:
+            _ns0(window, "center")
+        else:
+            screen := _ns0(_ns_cls("NSScreen"), "mainScreen")
+            top := screen == null ? 800.0 : _ns_rect0(screen, "frame").h
+            point_make := (&objc_msgSend) as extern func (void*, void*, NSPoint) void*
+            _r := point_make(window, sel_registerName("setFrameTopLeftPoint:"), NSPoint { x = o.x, y = top - o.y })
+        end
+        mut scale := o.scale
+        if scale <= 0.0:
+            scale = _env_scale()
+        end
+        if scale <= 0.0:
+            scale = _ns_f64_0(window, "backingScaleFactor")
+        end
+        if scale <= 0.0:
+            scale = 1.0
+        end
+        _ns_f(_ns0(view, "layer"), "setContentsScale:", scale)
+        _set_geometry(id, _phys(o.width, scale), _phys(o.height, scale), scale)
+        _ns_wins[id] = _NsWin { window = window, view = view, open = true }
+        if o.visible:
+            _ns_b(_ns_app, "activateIgnoringOtherApps:", true)
+            _ns1(window, "makeKeyAndOrderFront:", null)
+        end
+        ret true
+    end
+
+    func _ns_free_context(id: int):
+        mut v := _ns_wins[id]
+        if v.context != null:
+            CGContextRelease(v.context)
+            v.context = null
+        end
+        if v.buf != null:
+            mem.Free(v.buf)
+            v.buf = null
+        end
+        _ns_wins[id] = v
+    end
+
+    func _nat_close(id: int):
+        _ns_free_context(id)
+        mut v := _ns_wins[id]
+        v.open = false
+        _ns_wins[id] = v
+        _ns1(v.window, "setDelegate:", null)
+        _ns0(v.window, "close")
+    end
+
+    func _nat_title(id: int, title: str):
+        pool := objc_autoreleasePoolPush()
+        _ns1(_ns_wins[id].window, "setTitle:", _ns_string(title))
+        objc_autoreleasePoolPop(pool)
+    end
+
+    func _nat_resize(id: int, pw: int, ph: int):
+        s := _wins[id].scale
+        _ns_size(_ns_wins[id].window, "setContentSize:", NSSize { w = _logical(pw, s), h = _logical(ph, s) })
+        _ns_report_size(id, false)
+    end
+
+    func _nat_limits(id: int):
+        w := _wins[id]
+        window := _ns_wins[id].window
+        _ns_size(window, "setContentMinSize:", NSSize { w = w.min_w, h = w.min_h })
+        _ns_size(window, "setContentMaxSize:", NSSize { w = w.max_w > 0.0 ? w.max_w : 100000.0, h = w.max_h > 0.0 ? w.max_h : 100000.0 })
+    end
+
+    func _nat_state(id: int, what: int):
+        window := _ns_wins[id].window
+        switch what:
+            0:
+                _ns1(window, "miniaturize:", null)
+                break
+            end
+            1:
+                if not _ns_bool0(window, "isZoomed"):
+                    _ns1(window, "zoom:", null)
+                end
+                break
+            end
+            2:
+                if _ns_bool0(window, "isMiniaturized"):
+                    _ns1(window, "deminiaturize:", null)
+                end
+                if _ns_bool0(window, "isZoomed"):
+                    _ns1(window, "zoom:", null)
+                end
+                break
+            end
+            3, 4:
+                full := (_ns_long0(window, "styleMask") & ((1 << 14) as i64)) != (0 as i64)
+                if full != (what == 3):
+                    _ns1(window, "toggleFullScreen:", null)
+                end
+                break
+            end
+            else:
+                _ns_b(_ns_app, "activateIgnoringOtherApps:", true)
+                _ns1(window, "makeKeyAndOrderFront:", null)
+                break
+            end
+        end
+    end
+
+    func _nat_cursor(id: int, _cursor: Cursor):
+        if _wins[id].inside:
+            _ns_apply_cursor(id)
+        end
+    end
+
+    func _nat_ime(id: int, _x: int, _y: int, _w: int, _h: int):
+        context := _ns0(_ns_wins[id].view, "inputContext")
+        if context != null:
+            _ns0(context, "invalidateCharacterCoordinates")
+        end
+    end
+
+    func _ns_image(pixels: void*, width: int, height: int, stride: int): void*:
+        context := CGBitmapContextCreate(
+            pixels, width as usize, height as usize, 8 as usize, stride as usize, _ns_space, 8194 as u32
+        )
+        if context == null:
+            ret null
+        end
+        image := CGBitmapContextCreateImage(context)
+        CGContextRelease(context)
+        ret image
+    end
+
+    func _nat_icon(_id: int, pixels: void*, width: int, height: int, stride: int): bool:
+        pool := objc_autoreleasePoolPush()
+        defer objc_autoreleasePoolPop(pool)
+        image := _ns_image(pixels, width, height, stride)
+        if image == null:
+            ret false
+        end
+        make := (&objc_msgSend) as extern func (void*, void*, void*, NSSize) void*
+        icon := make(
+            _ns0(_ns_cls("NSImage"), "alloc"), sel_registerName("initWithCGImage:size:"), image,
+            NSSize { w = width as f64, h = height as f64 }
+        )
+        CGImageRelease(image)
+        if icon == null:
+            ret false
+        end
+        _ns1(_ns_app, "setApplicationIconImage:", icon)
+        ret true
+    end
+
+    func _nat_alloc(id: int, width: int, height: int): void*:
+        _ns_free_context(id)
+        buf := mem.AllocateZeroed(((width as u64) * (height as u64)) * (4 as u64))
+        context := CGBitmapContextCreate(
+            buf, width as usize, height as usize, 8 as usize, (width * 4) as usize, _ns_space, 8194 as u32
+        )
+        if context == null:
+            mem.Free(buf)
+            ret null
+        end
+        mut v := _ns_wins[id]
+        v.buf = buf
+        v.context = context
+        _ns_wins[id] = v
+        ret buf
+    end
+
+    func _nat_blit(id: int, _rects: Vector<Rect>):
+        v := _ns_wins[id]
+        if v.context == null:
+            ret
+        end
+        image := CGBitmapContextCreateImage(v.context)
+        if image == null:
+            ret
+        end
+        layer := _ns0(v.view, "layer")
+        if layer != null:
+            _ns1(layer, "setContents:", image)
+        end
+        CGImageRelease(image)
+    end
+
+    func _ns_check_scheme():
+        now := time.MonoMillis()
+        if now - _ns_scheme_at < (500 as i64):
+            ret
+        end
+        _ns_scheme_at = now
+        dark := _ns_scheme_now()
+        if dark != _ns_dark:
+            _ns_dark = dark
+            _push(Event { kind = EventKind.ColorSchemeChanged, scheme = dark ? ColorScheme.Dark : ColorScheme.Light })
+        end
+    end
+
+    func _nat_pump(timeout: int):
+        pool := objc_autoreleasePoolPush()
+        mut until_date := _ns0(_ns_cls("NSDate"), "distantPast")
+        if timeout < 0:
+            until_date = _ns0(_ns_cls("NSDate"), "distantFuture")
+        else timeout > 0:
+            until_date = _ns_f(_ns_cls("NSDate"), "dateWithTimeIntervalSinceNow:", (timeout as f64) / 1000.0)
+        end
+        mode := _ns_string("kCFRunLoopDefaultMode")
+        next := (&objc_msgSend) as extern func (void*, void*, u64, void*, void*, i8) void*
+        until true:
+            event := next(
+                _ns_app, sel_registerName("nextEventMatchingMask:untilDate:inMode:dequeue:"),
+                0xFFFFFFFFFFFFFFFF as u64, until_date, mode, 1 as i8
+            )
+            if event == null:
+                break
+            end
+            if _ns_long0(event, "type") != (15 as i64):
+                _ns1(_ns_app, "sendEvent:", event)
+            end
+            until_date = _ns0(_ns_cls("NSDate"), "distantPast")
+        end
+        _ns0(_ns_app, "updateWindows")
+        _ns_check_scheme()
+        objc_autoreleasePoolPop(pool)
+    end
+
+    func _nat_wake():
+        pool := objc_autoreleasePoolPush()
+        make := (&objc_msgSend) as extern func (void*, void*, u64, NSPoint, u64, f64, i64, void*, i16, i64, i64) void*
+        event := make(
+            _ns_cls("NSEvent"), sel_registerName("otherEventWithType:location:modifierFlags:timestamp:windowNumber:context:subtype:data1:data2:"),
+            15 as u64, NSPoint {}, 0 as u64, 0.0, 0 as i64, null, 0 as i16, 0 as i64, 0 as i64
+        )
+        post := (&objc_msgSend) as extern func (void*, void*, void*, i8) void*
+        _r := post(_ns_app, sel_registerName("postEvent:atStart:"), event, 0 as i8)
+        objc_autoreleasePoolPop(pool)
+    end
+
+    func _nat_clip_get(): str:
+        pool := objc_autoreleasePoolPush()
+        board := _ns0(_ns_cls("NSPasteboard"), "generalPasteboard")
+        text := _ns_text(_ns1(board, "stringForType:", _ns_string("public.utf8-plain-text")))
+        objc_autoreleasePoolPop(pool)
+        ret text
+    end
+
+    func _nat_clip_set(text: str): bool:
+        pool := objc_autoreleasePoolPush()
+        board := _ns0(_ns_cls("NSPasteboard"), "generalPasteboard")
+        _count := _ns_long0(board, "clearContents")
+        f := (&objc_msgSend) as extern func (void*, void*, void*, void*) i8
+        done := f(board, sel_registerName("setString:forType:"), _ns_string(text), _ns_string("public.utf8-plain-text")) != (0 as i8)
+        objc_autoreleasePoolPop(pool)
+        ret done
+    end
+
+    func _nat_scheme(): ColorScheme:
+        ret _ns_scheme_now() ? ColorScheme.Dark : ColorScheme.Light
+    end
+
+    func _nat_shown(id: int, x: int, y: int): u32:
+        ret _w_pixel(id, x, y) | (0xFF000000 as u32)
+    end
+
+    func _nat_handle(id: int): void*:
+        ret _ns_wins[id].window
+    end
+end

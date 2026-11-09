@@ -1,0 +1,217 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "net/tunnel"
+@fa "تونل"
+package tunnel
+
+import mem
+import sync
+import atomic
+
+struct _Job:
+    pub src: dyn Stream = ClosedStream {}
+    pub dst: dyn Stream = ClosedStream {}
+    pub count: atomic.I64 = atomic.I64 {}
+    pub st: Stats = Stats {}
+    pub upward: bool = false
+    pub idle: IdleTimer = IdleTimer {}
+end
+
+@en "Stats"
+@fa "آمار"
+pub struct Stats:
+    @en "up"
+    @fa "بارگذاری"
+    pub up: atomic.I64 = atomic.I64 {}
+    @en "down"
+    @fa "دریافت"
+    pub down: atomic.I64 = atomic.I64 {}
+    @en "total"
+    @fa "کل اتصال‌ها"
+    pub total: atomic.I64 = atomic.I64 {}
+    @en "active"
+    @fa "اتصال‌های فعال"
+    pub active: atomic.I64 = atomic.I64 {}
+    @en "failed"
+    @fa "اتصال‌های ناموفق"
+    pub failed: atomic.I64 = atomic.I64 {}
+
+    @en "Up"
+    @fa "بایت بارگذاری"
+    pub func Up(): i64:
+        ret atomic.Load(this.up)
+    end
+
+    @en "Down"
+    @fa "بایت دریافت"
+    pub func Down(): i64:
+        ret atomic.Load(this.down)
+    end
+
+    @en "Total"
+    @fa "شمار کل"
+    pub func Total(): i64:
+        ret atomic.Load(this.total)
+    end
+
+    @en "Active"
+    @fa "شمار فعال"
+    pub func Active(): i64:
+        ret atomic.Load(this.active)
+    end
+
+    @en "Failed"
+    @fa "شمار ناموفق"
+    pub func Failed(): i64:
+        ret atomic.Load(this.failed)
+    end
+
+    @en "Summary"
+    @fa "خلاصه"
+    pub func Summary(): str:
+        ret "up=" + this.Up() + " down=" + this.Down() + " total=" + this.Total() + " active=" + this.Active() + " failed=" + this.Failed()
+    end
+end
+
+@en "RelayResult"
+@fa "نتیجه رله"
+pub struct RelayResult:
+    @en "up"
+    @fa "بایت بارگذاری"
+    pub up: i64 = 0
+    @en "down"
+    @fa "بایت دریافت"
+    pub down: i64 = 0
+end
+
+@en "IdleTimer"
+@fa "زمان‌سنج بیکاری"
+pub struct IdleTimer:
+    @en "last"
+    @fa "آخرین فعالیت"
+    pub last: atomic.I64 = atomic.I64 {}
+    @en "limit"
+    @fa "حد بیکاری"
+    pub limit: i64 = 0
+
+    @en "Touch"
+    @fa "ثبت فعالیت"
+    pub func Touch():
+        atomic.Store(this.last, sync.NowMs())
+    end
+
+    @en "IdleMs"
+    @fa "میلی‌ثانیه بیکاری"
+    pub func IdleMs(): i64:
+        ret sync.NowMs() - atomic.Load(this.last)
+    end
+
+    @en "Expired"
+    @fa "منقضی شده"
+    pub func Expired(): bool:
+        if this.limit <= 0: ret false end
+        ret this.IdleMs() > this.limit
+    end
+
+    @en "Free"
+    @fa "آزادسازی"
+    pub func Free():
+        atomic.DestroyI64(this.last)
+    end
+end
+
+func _pump(j: _Job):
+    buf := mem.Allocate(16384 as u64)
+    until true:
+        n := j.src.ReadBytes(buf, 16384)
+        if n <= 0: break end
+        w := j.dst.WriteBytes(buf, n)
+        if w != n: break end
+        j.idle.Touch()
+        atomic.Add(j.count, n as i64)
+        if j.upward:
+            atomic.Add(j.st.up, n as i64)
+        else:
+            atomic.Add(j.st.down, n as i64)
+        end
+    end
+    mem.Free(buf)
+    j.src.Shutdown()
+    j.dst.Shutdown()
+end
+
+func _pump_thread(jp: _Job*):
+    j := jp[0]
+    mem.Free(jp as void*)
+    _pump(j)
+end
+
+@en "NewStats"
+@fa "آمار جدید"
+pub func NewStats(): Stats:
+    ret Stats { up = atomic.NewI64(0 as i64), down = atomic.NewI64(0 as i64), total = atomic.NewI64(0 as i64), active = atomic.NewI64(0 as i64), failed = atomic.NewI64(0 as i64) }
+end
+
+@en "FreeStats"
+@fa "آزادسازی آمار"
+pub func FreeStats(s: Stats):
+    atomic.DestroyI64(s.up)
+    atomic.DestroyI64(s.down)
+    atomic.DestroyI64(s.total)
+    atomic.DestroyI64(s.active)
+    atomic.DestroyI64(s.failed)
+end
+
+@en "NewIdleTimer"
+@fa "زمان‌سنج بیکاری جدید"
+pub func NewIdleTimer(limit_ms: i64): IdleTimer:
+    t := IdleTimer { last = atomic.NewI64(sync.NowMs()), limit = limit_ms }
+    ret t
+end
+
+@en "RelayWith"
+@fa "رله با آمار"
+pub func RelayWith(a: dyn Stream, b: dyn Stream, st: Stats, idle_ms: int): RelayResult:
+    if idle_ms > 0:
+        a.SetDeadline(idle_ms)
+        b.SetDeadline(idle_ms)
+    end
+    c1 := atomic.NewI64(0 as i64)
+    c2 := atomic.NewI64(0 as i64)
+    idle := NewIdleTimer(idle_ms as i64)
+    j1 := _Job { src = a, dst = b, count = c1, st = st, upward = true, idle = idle }
+    j2 := _Job { src = b, dst = a, count = c2, st = st, upward = false, idle = idle }
+    jp := mem.AllocateZeroed(sizeof(_Job) as u64) as _Job*
+    jp[0] = j2
+    h := spawn(_pump_thread, jp)
+    _pump(j1)
+    join(h)
+    a.Close()
+    b.Close()
+    r := RelayResult { up = atomic.Load(c1), down = atomic.Load(c2) }
+    atomic.DestroyI64(c1)
+    atomic.DestroyI64(c2)
+    idle.Free()
+    ret r
+end
+
+@en "Relay"
+@fa "رله"
+pub func Relay(a: dyn Stream, b: dyn Stream): RelayResult:
+    st := NewStats()
+    r := RelayWith(a, b, st, 0)
+    FreeStats(st)
+    ret r
+end

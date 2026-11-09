@@ -1,0 +1,456 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package paint
+
+import mem
+import math
+
+func _taps(src_n: int, dst_n: int, v0: int, vn: int, st: int*, cnt: int*, wts: int*, maxt: int):
+    s := src_n as i64
+    d := dst_n as i64
+    repeat vn in j:
+        i := (v0 + j) as i64
+        base := j * maxt
+        if dst_n >= src_n:
+            sx := (((2 as i64) * i + (1 as i64)) * s * (65536 as i64)) / ((2 as i64) * d) - (32768 as i64)
+            mut x0 := (sx >> 16) as int
+            mut f := (sx & (65535 as i64)) as int
+            if sx < (0 as i64):
+                x0 = 0
+                f = 0
+            end
+            if x0 >= src_n - 1:
+                x0 = src_n - 1
+                f = 0
+            end
+            st[j] = x0
+            if f > 0:
+                cnt[j] = 2
+                wts[base] = 65536 - f
+                wts[base + 1] = f
+            else:
+                cnt[j] = 1
+                wts[base] = 65536
+            end
+        else:
+            a := (i * s * (65536 as i64)) / d
+            b := ((i + (1 as i64)) * s * (65536 as i64)) / d
+            k0 := (a >> 16) as int
+            mut k1 := ((b + (65535 as i64)) >> 16) as int
+            if k1 > src_n:
+                k1 = src_n
+            end
+            if k1 - k0 > maxt:
+                k1 = k0 + maxt
+            end
+            total := b - a
+            st[j] = k0
+            cnt[j] = k1 - k0
+            mut sum := 0
+            mut big := 0
+            repeat k1 - k0 in t:
+                ka := ((k0 + t) as i64) << 16
+                kb := ka + (65536 as i64)
+                lo := ka > a ? ka : a
+                hi := kb < b ? kb : b
+                w := (((hi - lo) * (65536 as i64)) / total) as int
+                wts[base + t] = w
+                sum += w
+                if w > wts[base + big]:
+                    big = t
+                end
+            end
+            wts[base + big] += 65536 - sum
+        end
+    end
+end
+
+inline func _acc_px(p: u32, w: int, acc: int[]):
+    acc[0] += (((p >> 24) & (255 as u32)) as int) * w
+    acc[1] += (((p >> 16) & (255 as u32)) as int) * w
+    acc[2] += (((p >> 8) & (255 as u32)) as int) * w
+    acc[3] += ((p & (255 as u32)) as int) * w
+end
+
+inline func _pack_acc(acc: int[4]): u32:
+    a := _clamp255((acc[0] + 32768) >> 16)
+    r := _mini((acc[1] + 32768) >> 16, a)
+    g := _mini((acc[2] + 32768) >> 16, a)
+    b := _mini((acc[3] + 32768) >> 16, a)
+    ret ((a as u32) << 24) | ((r as u32) << 16) | ((g as u32) << 8) | (b as u32)
+end
+
+func _resample(src: u32*, sspx: int, sw: int, sh_: int, dw: int, dh: int, vx0: int, vy0: int, vw: int, vh: int, out: u32*, ospx: int):
+    mxt := (sw + dw - 1) / dw + 2
+    myt := (sh_ + dh - 1) / dh + 2
+    xs := mem.AllocateZeroed((vw * 4) as u64) as int*
+    xc := mem.AllocateZeroed((vw * 4) as u64) as int*
+    xw := mem.AllocateZeroed((vw * mxt * 4) as u64) as int*
+    ys := mem.AllocateZeroed((vh * 4) as u64) as int*
+    yc := mem.AllocateZeroed((vh * 4) as u64) as int*
+    yw := mem.AllocateZeroed((vh * myt * 4) as u64) as int*
+    _taps(sw, dw, vx0, vw, xs, xc, xw, mxt)
+    _taps(sh_, dh, vy0, vh, ys, yc, yw, myt)
+    mut r0 := ys[0]
+    mut r1 := ys[0] + yc[0]
+    repeat vh in j:
+        r0 = _mini(r0, ys[j])
+        r1 = _maxi(r1, ys[j] + yc[j])
+    end
+    nr := r1 - r0
+    hb := mem.AllocateZeroed((nr * vw * 4) as u64) as u32*
+    mut acc := [0, 0, 0, 0]
+    repeat nr in rr:
+        srow := (r0 + rr) * sspx
+        hrow := rr * vw
+        repeat vw in i:
+            acc[0] = 0
+            acc[1] = 0
+            acc[2] = 0
+            acc[3] = 0
+            s0 := xs[i]
+            repeat xc[i] in t:
+                _acc_px(src[srow + s0 + t], xw[i * mxt + t], acc)
+            end
+            hb[hrow + i] = _pack_acc(acc)
+        end
+    end
+    repeat vh in j:
+        orow := j * ospx
+        s0 := ys[j] - r0
+        repeat vw in i:
+            acc[0] = 0
+            acc[1] = 0
+            acc[2] = 0
+            acc[3] = 0
+            repeat yc[j] in t:
+                _acc_px(hb[(s0 + t) * vw + i], yw[j * myt + t], acc)
+            end
+            out[orow + i] = _pack_acc(acc)
+        end
+    end
+    mem.Free(hb as void*)
+    mem.Free(xs as void*)
+    mem.Free(xc as void*)
+    mem.Free(xw as void*)
+    mem.Free(ys as void*)
+    mem.Free(yc as void*)
+    mem.Free(yw as void*)
+end
+
+func _snap(cv &: Canvas, r: Rect, out: int[]): bool:
+    if not (r.width > 0.0) or not (r.height > 0.0):
+        ret false
+    end
+    X0 := _fx(r.x)
+    Y0 := _fx(r.y)
+    X1 := _fx(r.x + r.width)
+    Y1 := _fx(r.y + r.height)
+    ax := _xf_x(cv, X0, Y0)
+    ay := _xf_y(cv, X0, Y0)
+    bx := _xf_x(cv, X1, Y1)
+    byy := _xf_y(cv, X1, Y1)
+    out[0] = (_mini(ax, bx) + 128) >> 8
+    out[1] = (_mini(ay, byy) + 128) >> 8
+    out[2] = (_maxi(ax, bx) + 128) >> 8
+    out[3] = (_maxi(ay, byy) + 128) >> 8
+    ret out[2] > out[0] and out[3] > out[1]
+end
+
+func _image_shade(cv &: Canvas, y: int, a: int, b: int):
+    col := cv.state.col
+    pix := cv.state.i_pix
+    op := cv.state.i_op as u32
+    if cv.state.i_affine:
+        _image_shade_affine(cv, y, a, b)
+        ret
+    end
+    mut sy := y - cv.state.i_oy
+    if cv.state.i_tile:
+        sy %= cv.state.i_h
+        if sy < 0:
+            sy += cv.state.i_h
+        end
+    end
+    row := sy * cv.state.i_spx
+    ox := cv.state.i_ox
+    if cv.state.i_tile:
+        w := cv.state.i_w
+        repeat b - a in i:
+            mut sx := (a + i - ox) % w
+            if sx < 0:
+                sx += w
+            end
+            v := pix[row + sx]
+            col[a + i] = op >= (255 as u32) ? v : _mul8(v, op)
+        end
+        ret
+    end
+    repeat b - a in i:
+        v := pix[row + a + i - ox]
+        col[a + i] = op >= (255 as u32) ? v : _mul8(v, op)
+    end
+end
+
+func _sample_bilinear(pix: u32*, spx: int, x0: int, y0: int, w: int, h: int, sx: i64, sy: i64): u32:
+    fx := sx - (32768 as i64)
+    fy := sy - (32768 as i64)
+    ix := (fx >> 16) as int
+    src_row := (fy >> 16) as int
+    tx := ((fx & (65535 as i64)) >> 8) as int
+    ty := ((fy & (65535 as i64)) >> 8) as int
+    ax := _clampi(ix, 0, w - 1)
+    bx := _clampi(ix + 1, 0, w - 1)
+    ay := _clampi(src_row, 0, h - 1)
+    byy := _clampi(src_row + 1, 0, h - 1)
+    p00 := pix[(y0 + ay) * spx + x0 + ax]
+    p10 := pix[(y0 + ay) * spx + x0 + bx]
+    p01 := pix[(y0 + byy) * spx + x0 + ax]
+    p11 := pix[(y0 + byy) * spx + x0 + bx]
+    top := _lerp_px(p00, p10, tx)
+    bot := _lerp_px(p01, p11, tx)
+    ret _lerp_px(top, bot, ty)
+end
+
+func _image_shade_affine(cv &: Canvas, y: int, a: int, b: int):
+    col := cv.state.col
+    m := cv.state.i_m
+    op := cv.state.i_op as u32
+    cy := ((y as i64) << 16) + (32768 as i64)
+    repeat b - a in i:
+        cx := (((a + i) as i64) << 16) + (32768 as i64)
+        sx := ((m.get(0) * cx + m.get(1) * cy) >> 16) + m.get(2)
+        sy := ((m.get(3) * cx + m.get(4) * cy) >> 16) + m.get(5)
+        v := _sample_bilinear(cv.state.i_pix, cv.state.i_spx, cv.state.i_ox, cv.state.i_oy, cv.state.i_w, cv.state.i_h, sx, sy)
+        col[a + i] = op >= (255 as u32) ? v : _mul8(v, op)
+    end
+end
+
+func _image_affine(cv &: Canvas, src: Canvas, px: int, py: int, pw: int, ph: int, dst: Rect, op: int):
+    fa := (cv.state.xa as f64) / 65536.0
+    fb := (cv.state.xb as f64) / 65536.0
+    fc := (cv.state.xc as f64) / 65536.0
+    fd := (cv.state.xd as f64) / 65536.0
+    fe := (cv.state.xe as f64) / 256.0
+    ff := (cv.state.xf as f64) / 256.0
+    det := fa * fd - fb * fc
+    if math.Abs(det) < 0.000001:
+        ret
+    end
+    ia := fd / det
+    ib := 0.0 - fb / det
+    ic := 0.0 - fc / det
+    id := fa / det
+    ie := 0.0 - (ia * fe + ic * ff)
+    iff := 0.0 - (ib * fe + id * ff)
+    kx := (pw as f64) / dst.width
+    ky := (ph as f64) / dst.height
+    cv.state.i_m.clear()
+    cv.state.i_m.push(_fx16(ia * kx))
+    cv.state.i_m.push(_fx16(ic * kx))
+    cv.state.i_m.push(_fx16((ie - dst.x) * kx))
+    cv.state.i_m.push(_fx16(ib * ky))
+    cv.state.i_m.push(_fx16(id * ky))
+    cv.state.i_m.push(_fx16((iff - dst.y) * ky))
+    cv.state.i_affine = true
+    cv.state.i_pix = src.pixels as u32*
+    cv.state.i_spx = src.stride / 4
+    cv.state.i_ox = px
+    cv.state.i_oy = py
+    cv.state.i_w = pw
+    cv.state.i_h = ph
+    cv.state.i_op = op
+    cv.state.i_tile = false
+    mut p := Path {}
+    p.AddRect(dst)
+    _fill_path_kind(cv, p, FillRule.NonZero, _K_IMAGE, 0 as u32)
+    p.Free()
+    cv.state.i_affine = false
+end
+
+func _cv_image(cv &: Canvas, src: Canvas, part: IntRect, dst: Rect, tile: Rect, opacity: f64, tiled: bool):
+    _cv_ready(cv)
+    if cv.pixels == null or src.pixels == null:
+        ret
+    end
+    op := _clamp255(math.Floor(opacity * 255.0 + 0.5) as int)
+    if op <= 0:
+        ret
+    end
+    px := _clampi(part.x, 0, src.width)
+    py := _clampi(part.y, 0, src.height)
+    pw := _clampi(part.x + part.width, px, src.width) - px
+    ph := _clampi(part.y + part.height, py, src.height) - py
+    if pw <= 0 or ph <= 0:
+        ret
+    end
+    if not _xf_axis(cv):
+        if not tiled:
+            _image_affine(cv, src, px, py, pw, ph, dst, op)
+        end
+        ret
+    end
+    sspx := src.stride / 4
+    spix := src.pixels as u32*
+    mut d := [0, 0, 0, 0]
+    if not _snap(cv, dst, d):
+        ret
+    end
+    vx0 := _maxi(d[0], cv.state.cx0)
+    vy0 := _maxi(d[1], cv.state.cy0)
+    vx1 := _mini(d[2], cv.state.cx1)
+    vy1 := _mini(d[3], cv.state.cy1)
+    if vx1 <= vx0 or vy1 <= vy0:
+        ret
+    end
+    mut tmp := null as u32*
+    cv.state.i_affine = false
+    cv.state.i_op = op
+    if tiled:
+        mut t := [0, 0, 0, 0]
+        if not _snap(cv, tile, t):
+            ret
+        end
+        tw := t[2] - t[0]
+        th := t[3] - t[1]
+        cv.state.i_tile = true
+        cv.state.i_ox = t[0]
+        cv.state.i_oy = t[1]
+        cv.state.i_w = tw
+        cv.state.i_h = th
+        if tw == pw and th == ph:
+            cv.state.i_pix = spix
+            cv.state.i_spx = sspx
+            cv.state.i_pix = ((spix as usize) + ((py * src.stride + px * 4) as usize)) as u32*
+        else:
+            tmp = mem.AllocateZeroed(((tw as i64) * (th as i64) * (4 as i64)) as u64) as u32*
+            sp := ((spix as usize) + ((py * src.stride + px * 4) as usize)) as u32*
+            _resample(sp, sspx, pw, ph, tw, th, 0, 0, tw, th, tmp, tw)
+            cv.state.i_pix = tmp
+            cv.state.i_spx = tw
+        end
+    else:
+        dw := d[2] - d[0]
+        dh := d[3] - d[1]
+        cv.state.i_tile = false
+        sp := ((spix as usize) + ((py * src.stride + px * 4) as usize)) as u32*
+        if dw == pw and dh == ph:
+            cv.state.i_pix = sp
+            cv.state.i_spx = sspx
+            cv.state.i_ox = d[0]
+            cv.state.i_oy = d[1]
+        else:
+            vw := vx1 - vx0
+            vh := vy1 - vy0
+            tmp = mem.AllocateZeroed(((vw as i64) * (vh as i64) * (4 as i64)) as u64) as u32*
+            _resample(sp, sspx, pw, ph, dw, dh, vx0 - d[0], vy0 - d[1], vw, vh, tmp, vw)
+            cv.state.i_pix = tmp
+            cv.state.i_spx = vw
+            cv.state.i_ox = vx0
+            cv.state.i_oy = vy0
+        end
+    end
+    repeat vy1 - vy0 in k:
+        y := vy0 + k
+        n := _rpush(cv.state.ra, 0, vx0, vx1, 256)
+        _emit(cv, y, n, _K_IMAGE, 0 as u32)
+    end
+    if tmp != null:
+        mem.Free(tmp as void*)
+    end
+end
+
+func _cv_mask(cv &: Canvas, m: Mask, x: int, y: int, c: Color):
+    _cv_ready(cv)
+    if cv.pixels == null or m.data == null or m.width <= 0 or m.height <= 0:
+        ret
+    end
+    col := _premul(c)
+    if col == (0 as u32):
+        ret
+    end
+    ox := x + ((cv.state.xe + 128) >> 8)
+    oy := y + ((cv.state.xf + 128) >> 8)
+    y0 := _maxi(oy, cv.state.cy0)
+    y1 := _mini(oy + m.height, cv.state.cy1)
+    x0 := _maxi(ox, cv.state.cx0)
+    x1 := _mini(ox + m.width, cv.state.cx1)
+    if y1 <= y0 or x1 <= x0:
+        ret
+    end
+    data := m.data as u8*
+    out := cv.state.ra
+    repeat y1 - y0 in k:
+        yy := y0 + k
+        row := (yy - oy) * m.stride - ox
+        mut n := 0
+        repeat x1 - x0 in i:
+            xx := x0 + i
+            v := data[row + xx] as int
+            n = _rpush(out, n, xx, xx + 1, (v * 257 + 128) >> 8)
+        end
+        _emit(cv, yy, n, _K_SOLID, col)
+    end
+end
+
+@en "FitImage"
+@fa "برازش تصویر"
+pub func FitImage(fit: ObjectFit, image_width: int, image_height: int, box: Rect, pos_x: f64, pos_y: f64): Rect:
+    iw := image_width as f64
+    ih := image_height as f64
+    if iw <= 0.0 or ih <= 0.0:
+        ret Rect { x = box.x, y = box.y, width = 0.0, height = 0.0 }
+    end
+    contain := _minf(box.width / iw, box.height / ih)
+    mut s := 1.0
+    switch fit:
+        ObjectFit.Fill:
+            ret box
+        end
+        ObjectFit.Contain:
+            s = contain
+            break
+        end
+        ObjectFit.Cover:
+            s = _maxf(box.width / iw, box.height / ih)
+            break
+        end
+        ObjectFit.None:
+            s = 1.0
+            break
+        end
+        ObjectFit.ScaleDown:
+            s = _minf(1.0, contain)
+            break
+        end
+    end
+    w := iw * s
+    h := ih * s
+    ret Rect { x = box.x + (box.width - w) * pos_x, y = box.y + (box.height - h) * pos_y, width = w, height = h }
+end
+
+@en "ScaleImage"
+@fa "مقیاس تصویر"
+pub func ScaleImage(src: Canvas, width: int, height: int): Canvas:
+    if src.pixels == null or src.width <= 0 or src.height <= 0:
+        ret Canvas {}
+    end
+    out := NewCanvas(width, height)
+    if out.pixels == null:
+        ret out
+    end
+    _resample(src.pixels as u32*, src.stride / 4, src.width, src.height, width, height, 0, 0, width, height, out.pixels as u32*, out.stride / 4)
+    ret out
+end

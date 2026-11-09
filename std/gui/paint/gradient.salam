@@ -1,0 +1,345 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package paint
+
+import mem
+import math
+
+const _LUT_N := 1024
+
+func _grad_lut(cv &: Canvas, g: Gradient): bool:
+    n := g.stops.len()
+    if n == 0:
+        ret false
+    end
+    if cv.state.lut == null:
+        cv.state.lut = mem.AllocateZeroed(((_LUT_N + 1) * 4) as u64) as u32*
+    end
+    pos := _cv_tmp(cv, n * 3 + 4)
+    repeat n in i:
+        p := g.stops.get(i).pos
+        if p >= 0.0:
+            pos[i] = _fx16(p) as int
+            pos[n + i] = 1
+        else:
+            pos[i] = 0
+            pos[n + i] = 0
+        end
+    end
+    if pos[n] == 0:
+        pos[0] = 0
+        pos[n] = 1
+    end
+    if pos[n + n - 1] == 0:
+        pos[n - 1] = 65536
+        pos[n + n - 1] = 1
+    end
+    mut mx := pos[0]
+    repeat n in i:
+        if pos[n + i] == 1:
+            if pos[i] < mx:
+                pos[i] = mx
+            end
+            mx = pos[i]
+        end
+    end
+    mut i := 0
+    until i < n:
+        if pos[n + i] == 0:
+            mut j := i
+            until j < n and pos[n + j] == 0:
+                j++
+            end
+            a := pos[i - 1]
+            b := pos[j]
+            cnt := j - i + 1
+            repeat j - i in k:
+                pos[i + k] = a + (((b - a) as i64) * ((k + 1) as i64) / (cnt as i64)) as int
+                pos[n + i + k] = 1
+            end
+            i = j
+        end
+        i++
+    end
+    first := pos[0]
+    last := pos[n - 1]
+    mut lo := first < 0 ? first : 0
+    mut hi := last > 65536 ? last : 65536
+    cv.state.g_rep = false
+    if g.repeating and last > first:
+        lo = first
+        hi = last
+        cv.state.g_rep = true
+    end
+    cv.state.g_lo = lo as i64
+    cv.state.g_span = (hi - lo) as i64
+    lut := cv.state.lut
+    mut seg := 0
+    repeat _LUT_N in e:
+        t := lo + ((((hi - lo) as i64) * ((2 * e + 1) as i64)) / ((2 * _LUT_N) as i64)) as int
+        until seg < n - 1 and pos[seg + 1] <= t:
+            seg++
+        end
+        if t < pos[0]:
+            lut[e] = _premul(g.stops.get(0).color)
+        else seg >= n - 1:
+            lut[e] = _premul(g.stops.get(n - 1).color)
+        else:
+            a := pos[seg]
+            b := pos[seg + 1]
+            ca := _premul(g.stops.get(seg).color)
+            cb := _premul(g.stops.get(seg + 1).color)
+            if b <= a:
+                lut[e] = cb
+            else:
+                f := ((((t - a) as i64) * (255 as i64)) / ((b - a) as i64)) as int
+                lut[e] = _lerp_px(ca, cb, f)
+            end
+        end
+    end
+    lut[_LUT_N] = lut[_LUT_N - 1]
+    ret true
+end
+
+inline func _lut_at(cv &: Canvas, t: i64): u32:
+    mut v := t - cv.state.g_lo
+    span := cv.state.g_span
+    if cv.state.g_rep:
+        v %= span
+        if v < (0 as i64):
+            v += span
+        end
+    else:
+        if v < (0 as i64):
+            v = 0
+        end
+        if v >= span:
+            v = span - (1 as i64)
+        end
+    end
+    ret cv.state.lut[((v * (_LUT_N as i64)) / span) as int]
+end
+
+func _grad_shade(cv &: Canvas, y: int, a: int, b: int):
+    col := cv.state.col
+    py := ((y as i64) << 8) + (128 as i64) - cv.state.g_oy
+    px0 := ((a as i64) << 8) + (128 as i64) - cv.state.g_ox
+    switch cv.state.g_kind:
+        0:
+            mut t := ((px0 * cv.state.g_vx - py * cv.state.g_vy) << 16) / cv.state.g_dy + (2147483648 as i64)
+            dt := cv.state.g_dx
+            if cv.state.g_rep:
+                repeat b - a in i:
+                    col[a + i] = _lut_at(cv, t >> 16)
+                    t += dt
+                end
+                break
+            end
+            lut := cv.state.lut
+            lo := cv.state.g_lo
+            span := cv.state.g_span
+            mul := ((_LUT_N as i64) << 32) / span
+            top := span - (1 as i64)
+            repeat b - a in i:
+                mut v := (t >> 16) - lo
+                if v < (0 as i64):
+                    v = 0
+                end
+                if v > top:
+                    v = top
+                end
+                col[a + i] = lut[((v * mul) >> 32) as int]
+                t += dt
+            end
+            break
+        end
+        1:
+            mut v := (py << 16) / cv.state.g_vy
+            if v > (2147483647 as i64):
+                v = 2147483647
+            end
+            if v < (-2147483647 as i64):
+                v = -2147483647
+            end
+            v2 := v * v
+            mut u := (px0 << 16) / cv.state.g_vx
+            du := (65536 as i64) * (256 as i64) / cv.state.g_vx
+            lim := 1073741824 as i64
+            repeat b - a in i:
+                if u > lim or u < (0 as i64) - lim or v2 > lim * lim:
+                    col[a + i] = _lut_at(cv, lim)
+                else:
+                    col[a + i] = _lut_at(cv, _isqrt(u * u + v2))
+                end
+                u += du
+            end
+            break
+        end
+        else:
+            repeat b - a in i:
+                dx := px0 + (((i as i64)) << 8)
+                au := (_atan2_au(dx, (0 as i64) - py) - cv.state.g_a0) & 65535
+                col[a + i] = _lut_at(cv, au as i64)
+            end
+        end
+    end
+end
+
+func _cv_gradient(cv &: Canvas, r: Rect, radii: Radii, g: Gradient):
+    _cv_ready(cv)
+    if cv.pixels == null:
+        ret
+    end
+    sh := cv.state.sh
+    if not _shape_from(cv, r, radii, sh, 0):
+        ret
+    end
+    if not _grad_lut(cv, g):
+        ret
+    end
+    x0 := sh[0]
+    y0 := sh[1]
+    w := (sh[2] - sh[0]) as i64
+    h := (sh[3] - sh[1]) as i64
+    sx := cv.state.xa < 0 ? 0 - cv.state.xa : cv.state.xa
+    sy := cv.state.xd < 0 ? 0 - cv.state.xd : cv.state.xd
+    switch g.kind:
+        GradientKind.Linear:
+            au := _angle_units(g.angle)
+            s := _sin_au(au) as i64
+            c := _cos_au(au) as i64
+            sa := s < (0 as i64) ? (0 as i64) - s : s
+            ca := c < (0 as i64) ? (0 as i64) - c : c
+            mut len := (w * sa + h * ca) >> 16
+            if len < (1 as i64):
+                len = 1
+            end
+            cv.state.g_kind = 0
+            cv.state.g_ox = (x0 as i64) + w / (2 as i64)
+            cv.state.g_oy = (y0 as i64) + h / (2 as i64)
+            cv.state.g_vx = s
+            cv.state.g_vy = c
+            cv.state.g_dy = len
+            cv.state.g_dx = (s << 24) / len
+            break
+        end
+        GradientKind.Radial:
+            cv.state.g_kind = 1
+            cv.state.g_ox = (x0 as i64) + (_scale_abs(_fx(g.cx), sx) as i64)
+            cv.state.g_oy = (y0 as i64) + (_scale_abs(_fx(g.cy), sy) as i64)
+            mut rx := _scale_abs(_fx(g.rx), sx) as i64
+            mut ry := _scale_abs(_fx(g.ry), sy) as i64
+            if rx < (64 as i64):
+                rx = 64
+            end
+            if ry < (64 as i64):
+                ry = 64
+            end
+            cv.state.g_vx = rx
+            cv.state.g_vy = ry
+            break
+        end
+        GradientKind.Conic:
+            cv.state.g_kind = 2
+            cv.state.g_ox = (x0 as i64) + (_scale_abs(_fx(g.cx), sx) as i64)
+            cv.state.g_oy = (y0 as i64) + (_scale_abs(_fx(g.cy), sy) as i64)
+            cv.state.g_a0 = _angle_units(g.angle)
+            break
+        end
+    end
+    mut rows := [0, 0]
+    if not _clip_rows(cv, sh[1], sh[3], rows):
+        ret
+    end
+    repeat rows[1] - rows[0] in k:
+        y := rows[0] + k
+        n := _shape_row(sh, 0, y, cv.state.cx0, cv.state.cx1, cv.state.ra)
+        _emit(cv, y, n, _K_GRAD, 0 as u32)
+    end
+end
+
+@en "LinearGradient"
+@fa "گرادیان خطی"
+pub func LinearGradient(angle: f64): Gradient:
+    ret Gradient { kind = GradientKind.Linear, angle = angle }
+end
+
+@en "RadialGradient"
+@fa "گرادیان شعاعی"
+pub func RadialGradient(cx: f64, cy: f64, rx: f64, ry: f64): Gradient:
+    ret Gradient { kind = GradientKind.Radial, cx = cx, cy = cy, rx = rx, ry = ry }
+end
+
+@en "ConicGradient"
+@fa "گرادیان مخروطی"
+pub func ConicGradient(cx: f64, cy: f64, angle: f64): Gradient:
+    ret Gradient { kind = GradientKind.Conic, cx = cx, cy = cy, angle = angle }
+end
+
+@en "RadialSize"
+@fa "شعاع گرادیان شعاعی"
+pub func RadialSize(width: f64, height: f64, cx: f64, cy: f64, circle: bool, extent: RadialExtent): Point:
+    dl := math.Abs(cx)
+    dr := math.Abs(width - cx)
+    dt := math.Abs(cy)
+    db := math.Abs(height - cy)
+    near_x := _minf(dl, dr)
+    far_x := _maxf(dl, dr)
+    near_y := _minf(dt, db)
+    far_y := _maxf(dt, db)
+    mut rx := 0.0
+    mut ry := 0.0
+    switch extent:
+        RadialExtent.ClosestSide:
+            rx = near_x
+            ry = near_y
+            if circle:
+                rx = _minf(near_x, near_y)
+                ry = rx
+            end
+            break
+        end
+        RadialExtent.FarthestSide:
+            rx = far_x
+            ry = far_y
+            if circle:
+                rx = _maxf(far_x, far_y)
+                ry = rx
+            end
+            break
+        end
+        RadialExtent.ClosestCorner:
+            if circle:
+                rx = math.Sqrt(near_x * near_x + near_y * near_y)
+                ry = rx
+            else:
+                rx = near_x * math.Sqrt(2.0)
+                ry = near_y * math.Sqrt(2.0)
+            end
+            break
+        end
+        RadialExtent.FarthestCorner:
+            if circle:
+                rx = math.Sqrt(far_x * far_x + far_y * far_y)
+                ry = rx
+            else:
+                rx = far_x * math.Sqrt(2.0)
+                ry = far_y * math.Sqrt(2.0)
+            end
+            break
+        end
+    end
+    ret Point { x = rx, y = ry }
+end

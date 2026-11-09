@@ -6,7 +6,7 @@ import type { Theme } from "./theme";
 import { t } from "./i18n";
 
 export function providerFromPath(): string {
-  return /^\/auth\/callback\/(github|figma)\/?$/.exec(location.pathname)?.[1] ?? "";
+  return /^\/auth\/callback\/(github|figma-mcp|figma)\/?$/.exec(location.pathname)?.[1] ?? "";
 }
 
 function safe(next: string | undefined): string {
@@ -35,6 +35,16 @@ export function OAuthCallback({ theme, toggleTheme }: { theme: Theme; toggleThem
     const state = q.get("state") ?? "";
     const next = pending?.next ?? "";
     const fail = (c: string, detail: string, handoff: boolean) => setProblem({ code: c, text: explain(c, detail), handoff, next });
+    if (provider && code && !state && q.get("installation_id")) {
+      api
+        .startProvider(provider, "/")
+        .then((r) => {
+          rememberOAuth({ provider, state: r.state, purpose: "login", next: "/" });
+          location.replace(r.url);
+        })
+        .catch(() => fail("missing", "", false));
+      return;
+    }
     if (!provider || !state) {
       fail(q.get("error") ? "denied" : "missing", q.get("error_description") ?? q.get("error") ?? "", false);
       return;

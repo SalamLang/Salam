@@ -1,0 +1,83 @@
+---
+name: 🗜️ Archive - Cross targets
+
+on:
+  pull_request:
+    branches:
+      - main
+    paths:
+      - 'std/archive/**'
+      - 'std/os/**'
+      - 'std/compress/**'
+      - 'tests/*/stdlib/archive_*'
+      - 'tests/*/stdlib/rar*'
+      - 'tests/*/stdlib/sevenzip*'
+      - 'tests/*/stdlib/zip_*'
+      - 'tests/*/stdlib/xz_*'
+      - 'tests/*/stdlib/tar_*'
+      - '.github/workflows/archive-targets.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: archive-targets-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  targets:
+    name: Archive builds for ${{ matrix.target }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-linux-musl
+          - i686-linux-musl
+          - aarch64-linux-musl
+          - arm-linux-musleabihf
+          - wasm32-wasi
+          - x86_64-w64-windows-gnu
+          - x86_64-apple-darwin
+    env:
+      SALAM_STD: ${{ github.workspace }}/std
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the released Salam compiler
+        uses: ./.github/actions/setup-salam # zizmor: ignore[self-repository]
+        with:
+          version: latest
+
+      - name: Check the archive programs for this target
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -eu
+          for f in archive_open archive_fuzz rar_file_demo archive_demo zip_file_demo; do
+            salam check "tests/en/stdlib/$f.salam" --target="$TARGET" --no-color
+          done
+
+      - name: Cross-compile and link the archive programs
+        if: matrix.target != 'x86_64-apple-darwin'
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          set -eu
+          mkdir -p "$RUNNER_TEMP/out"
+          for f in archive_open archive_fuzz rar_file_demo archive_demo zip_file_demo; do
+            salam build "tests/en/stdlib/$f.salam" --target="$TARGET" --no-color --log-level=warn -o "$RUNNER_TEMP/out/$f"
+          done
+
+      - name: Emit LLVM IR for macOS
+        if: matrix.target == 'x86_64-apple-darwin'
+        run: |
+          set -eu
+          for f in archive_open archive_fuzz rar_file_demo archive_demo zip_file_demo; do
+            salam llvm "tests/en/stdlib/$f.salam" --target=x86_64-apple-darwin --output="$RUNNER_TEMP/$f.ll" --no-color --log-level=warn
+          done

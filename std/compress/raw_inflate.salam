@@ -42,86 +42,84 @@ const _STREAM_KEEP := 131072
 const _STREAM_FLUSH := 4194304
 
 struct _RawHuffTable:
-    pub tleft: Vector<int>
-    pub tright: Vector<int>
-    pub tsym: Vector<int>
-    pub tleaf: Vector<bool>
+    pub fast: u32*
+    pub count: int*
+    pub syms: int*
+    pub ok: bool
 end
 
 func _new_raw_huff_table(): _RawHuffTable:
-    mut t := _RawHuffTable {
-        tleft = Vector {} as Vector<int> tright = Vector {} as Vector<int> tsym = Vector {} as Vector<int> tleaf = Vector {} as Vector<bool>
+    ret _RawHuffTable {
+        fast = mem.Allocate(4096 as u64) as u32*, count = mem.Allocate(256 as u64) as int*, syms = mem.Allocate(4096 as u64) as int*, ok = true
     }
-    t.tleft.push(-1)
-    t.tright.push(-1)
-    t.tsym.push(-1)
-    t.tleaf.push(false)
-    ret t
 end
 
 func _raw_huff_table_free(t &: _RawHuffTable):
-    t.tleft.free()
-    t.tright.free()
-    t.tsym.free()
-    t.tleaf.free()
+    mem.Free(t.fast as void*)
+    mem.Free(t.count as void*)
+    mem.Free(t.syms as void*)
 end
 
 func _build_raw_huff_table(lengths: Vector<int>): _RawHuffTable:
+    mut t := _new_raw_huff_table()
+    fast := t.fast
+    cnt := t.count
+    syms := t.syms
     n := lengths.len()
-    mut blcount: int[16]
-    repeat 16 in i: blcount[i] = 0 end
-    mut maxlen := 0
+    repeat 16 in i: cnt[i] = 0 end
+    repeat 1024 in i: fast[i] = 0 as u32 end
     mut s := 0
     until s < n:
-        l := lengths.get(s)
-        if l > maxlen: maxlen = l end
-        if l > 0: blcount[l]++ end
+        cnt[lengths.get(s)]++
         s++
     end
-    mut nextcode: int[16]
-    repeat 16 in i: nextcode[i] = 0 end
-    mut code := 0
-    mut len := 1
-    until len <= maxlen:
-        code = (code + blcount[len - 1]) * 2
-        nextcode[len] = code
-        len++
+    cnt[0] = 0
+    mut left := 1
+    mut l := 1
+    until l <= 15:
+        left = (left << 1) - cnt[l]
+        if left < 0:
+            t.ok = false
+            ret t
+        end
+        l++
     end
-
-    mut t := _new_raw_huff_table()
+    mut nextcode: int[16]
+    mut offs: int[16]
+    mut code := 0
+    mut off := 0
+    nextcode[0] = 0
+    offs[0] = 0
+    l = 1
+    until l <= 15:
+        code = (code + cnt[l - 1]) << 1
+        nextcode[l] = code
+        offs[l] = off
+        off += cnt[l]
+        l++
+    end
     s = 0
     until s < n:
-        l := lengths.get(s)
-        if l > 0:
-            code2 := nextcode[l]
-            nextcode[l]++
-            mut cur := 0
-            mut bit := l - 1
-            until bit >= 0:
-                b := (code2 >> bit) & 1
-                if b == 0:
-                    if t.tleft.get(cur) < 0:
-                        t.tleft.set(cur, t.tleft.len())
-                        t.tleft.push(-1)
-                        t.tright.push(-1)
-                        t.tsym.push(-1)
-                        t.tleaf.push(false)
-                    end
-                    cur = t.tleft.get(cur)
-                else:
-                    if t.tright.get(cur) < 0:
-                        t.tright.set(cur, t.tleft.len())
-                        t.tleft.push(-1)
-                        t.tright.push(-1)
-                        t.tsym.push(-1)
-                        t.tleaf.push(false)
-                    end
-                    cur = t.tright.get(cur)
+        len := lengths.get(s)
+        if len > 0:
+            c := nextcode[len]
+            nextcode[len] = c + 1
+            syms[offs[len]] = s
+            offs[len]++
+            if len <= 10:
+                mut rev := 0
+                mut k := 0
+                until k < len:
+                    rev = (rev << 1) | ((c >> k) & 1)
+                    k++
                 end
-                bit--
+                step := 1 << len
+                mut j := rev
+                until j < 1024:
+                    fast[j] = ((s << 4) | len) as u32
+                    j += step
+                end
             end
-            t.tleaf.set(cur, true)
-            t.tsym.set(cur, s)
         end
         s++
     end
@@ -129,22 +127,56 @@ func _build_raw_huff_table(lengths: Vector<int>): _RawHuffTable:
 end
 
 func _decode_raw_symbol(r &: BitReader, t: _RawHuffTable): int:
-    mut cur := 0
-    until not t.tleaf.get(cur):
-        if r.bad:
-            ret -1
-        end
-        bit := BitReadBit(r)
-        if bit == 0:
-            cur = t.tleft.get(cur)
+    if r.bad:
+        ret -1
+    end
+    mut more := true
+    until more and r.nbits < 15:
+        if r.pos >= r.len and not _br_refill(r):
+            more = false
         else:
-            cur = t.tright.get(cur)
-        end
-        if cur < 0:
-            ret -1
+            r.acc |= _bget(r.data, r.pos) << r.nbits
+            r.pos++
+            r.nbits += 8
         end
     end
-    ret t.tsym.get(cur)
+    fast := t.fast
+    e := fast[r.acc & 1023] as int
+    if e != 0:
+        l := e & 15
+        if l > r.nbits:
+            r.bad = true
+            ret -1
+        end
+        r.acc >>= l
+        r.nbits -= l
+        ret e >> 4
+    end
+    cnt := t.count
+    mut code := 0
+    mut first := 0
+    mut index := 0
+    mut l := 1
+    until l <= 15:
+        if l > r.nbits:
+            r.bad = true
+            ret -1
+        end
+        code |= (r.acc >> (l - 1)) & 1
+        c := cnt[l]
+        if code - c < first:
+            r.acc >>= l
+            r.nbits -= l
+            syms := t.syms
+            ret syms[index + (code - first)]
+        end
+        index += c
+        first += c
+        first <<= 1
+        code <<= 1
+        l++
+    end
+    ret -1
 end
 
 func _fixed_raw_lit_lengths(): Vector<int>:
@@ -199,7 +231,15 @@ func _raw_inflate_block(r &: BitReader, out &: ByteBuf, littable: _RawHuffTable,
             ret false
         end
         if sym < 256:
-            BufPush(out, sym)
+            if out.len >= out.cap:
+                _buf_grow(out, 1)
+                if out.len >= out.cap:
+                    ret false
+                end
+            end
+            op := out.data as u8*
+            op[out.len] = sym as u8
+            out.len++
         else:
             if sym == 256:
                 ret true
@@ -226,11 +266,18 @@ func _raw_inflate_block(r &: BitReader, out &: ByteBuf, littable: _RawHuffTable,
             if start < 0:
                 ret false
             end
+            _buf_grow(out, length)
+            if (out.len as i64) + (length as i64) > (out.cap as i64):
+                ret false
+            end
+            mp := out.data as u8*
+            dst := out.len
             mut k := 0
             until k < length:
-                BufPush(out, BufGet(out, start + k))
+                mp[dst + k] = mp[start + k]
                 k++
             end
+            out.len = dst + length
         end
     end
 end
@@ -254,6 +301,10 @@ func _raw_inflate_dynamic_block(r &: BitReader, out &: ByteBuf, max: int, d64: b
     repeat 19 in k: clvec.push(cl[k]) end
     mut cltable := _build_raw_huff_table(clvec)
     defer clvec.free()
+    if not cltable.ok:
+        _raw_huff_table_free(cltable)
+        ret false
+    end
 
     mut lengths := Vector {} as Vector<int>
     total := hlit + hdist
@@ -319,6 +370,11 @@ func _raw_inflate_dynamic_block(r &: BitReader, out &: ByteBuf, max: int, d64: b
     mut disttable := _build_raw_huff_table(distlengths)
     defer litlengths.free()
     defer distlengths.free()
+    if not littable.ok or not disttable.ok:
+        _raw_huff_table_free(littable)
+        _raw_huff_table_free(disttable)
+        ret false
+    end
 
     ok := _raw_inflate_block(r, out, littable, disttable, max, d64, sink, stream)
     _raw_huff_table_free(littable)
@@ -334,14 +390,29 @@ func _inflate_core(r &: BitReader, out &: ByteBuf, max: int, d64: bool, sink &: 
         bfinal = BitReadBit(r)
         btype := BitReadBits(r, 2)
         if btype == 0:
-            r.nbits = 0
+            drop := r.nbits & 7
+            r.acc >>= drop
+            r.nbits -= drop
             len_val := BitReadBits(r, 16)
             _nlen := BitReadBits(r, 16)
             mut k := 0
             until k < len_val and not r.bad:
-                b := BitReadBits(r, 8)
-                BufPush(out, b)
-                k++
+                if r.nbits >= 8:
+                    BufPush(out, BitReadBits(r, 8))
+                    k++
+                else:
+                    if r.pos >= r.len and not _br_refill(r):
+                        r.bad = true
+                    else:
+                        mut chunk := r.len - r.pos
+                        if chunk > len_val - k:
+                            chunk = len_val - k
+                        end
+                        BufPushBytes(out, ((r.data as i64) + (r.pos as i64)) as void*, chunk)
+                        r.pos += chunk
+                        k += chunk
+                    end
+                end
                 if max > 0 and BufLen(out) > max:
                     r.bad = true
                 end

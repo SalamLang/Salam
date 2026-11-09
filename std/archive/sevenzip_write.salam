@@ -15,7 +15,16 @@
 package archive
 
 import compress
+import mem
+import os
 
+struct _SzOut:
+    pub fp: void*
+    pub buf: compress.ByteBuf
+    pub to_file: bool
+    pub pos: i64
+    pub failed: bool
+end
 
 @en "SevenZipFileInput"
 @fa "ورودی پرونده هفت زد"
@@ -41,6 +50,9 @@ pub struct SevenZipFileInput:
     @en "link"
     @fa "پیوند"
     pub link: str = ""
+    @en "path"
+    @fa "مسیر منبع"
+    pub path: str = ""
 end
 
 func _szw_num(b &: compress.ByteBuf, v: i64):
@@ -136,112 +148,220 @@ func _szw_wrap(h: compress.ByteBuf, id: int): compress.ByteBuf:
     ret out
 end
 
-@en "MakeSevenZipFileInput"
-@fa "ساخت ورودی پرونده هفت زد"
-pub func MakeSevenZipFileInput(name: str, data_ptr: void*, data_len: int, is_dir: bool): SevenZipFileInput:
-    ret SevenZipFileInput { name = name, data_ptr = data_ptr, data_len = data_len, is_dir = is_dir }
+func _szo_write(o &: _SzOut, p: void*, n: int):
+    if o.failed or n <= 0:
+        ret
+    end
+    if o.to_file:
+        if (fwrite(p, 1 as u64, n as u64, o.fp) as int) != n:
+            o.failed = true
+            ret
+        end
+    else:
+        compress.BufPushBytes(o.buf, p, n)
+    end
+    o.pos += n as i64
 end
 
-@en "SevenZipCreate"
-@fa "ساخت هفت زد"
-pub func SevenZipCreate(files: Vector<SevenZipFileInput>): compress.ByteBuf:
-    mut out := compress.NewByteBuf()
-    n := files.len()
-    mut total := 0 as i64
-    mut nstream := 0
-    mut empty := Vector {} as Vector<bool>
-    mut empty_file := Vector {} as Vector<bool>
-    mut any_mtime := false
-    mut any_attr := false
-    repeat n in i:
+func _szw_entry_size(f: SevenZipFileInput): i64:
+    if f.link.len() > 0:
+        ret f.link.len()
+    end
+    if f.path.len() > 0:
+        fp := compress.FileOpenRead(f.path)
+        if fp == null:
+            ret -1
+        end
+        n := compress.FileSize(fp)
+        compress.FileClose(fp)
+        ret n
+    end
+    ret f.data_len
+end
+
+func _szw_plan(files: Vector<SevenZipFileInput>, empty &: Vector<bool>, empty_file &: Vector<bool>, nstream &: int, total &: i64, any_mtime &: bool): bool:
+    repeat files.len() in i:
         f := files.get(i)
-        if f.data_len < 0 or f.name.len() == 0 or f.name.len() > 65535 or (f.data_len > 0 and f.data_ptr == null):
-            empty.free()
-            empty_file.free()
-            ret out
+        if f.data_len < 0 or f.name.len() == 0 or f.name.len() > 65535 or (f.path.len() == 0 and f.data_len > 0 and f.data_ptr == null):
+            ret false
         end
-        mut size := f.data_len
-        if f.link.len() > 0:
-            size = f.link.len()
+        size := f.is_dir ? (0 as i64) : _szw_entry_size(f)
+        if size < (0 as i64):
+            ret false
         end
-        is_empty := f.is_dir or size == 0
+        is_empty := f.is_dir or size == (0 as i64)
         empty.push(is_empty)
         if is_empty:
             empty_file.push(not f.is_dir)
         else:
             nstream++
-            total += size as i64
+            total += size
         end
         if f.mtime > (0 as i64):
             any_mtime = true
         end
-        if f.mode > 0:
-            any_attr = true
+    end
+    ret true
+end
+
+func _szw_pack_copy(files: Vector<SevenZipFileInput>, empty: Vector<bool>, o &: _SzOut, sizes &: Vector<i64>, crcs &: Vector<i64>, scratch: void*): bool:
+    mut ok := true
+    mut i := 0
+    until i < files.len() and ok:
+        f := files.get(i)
+        if empty.get(i):
+            i++
+            continue
         end
+        if f.link.len() > 0:
+            _szo_write(o, f.link as void*, f.link.len())
+            sizes.push(f.link.len() as i64)
+            crcs.push(compress.CRC32(f.link as void*, f.link.len()) as i64)
+        else f.path.len() > 0:
+            src := compress.FileOpenRead(f.path)
+            if src == null:
+                ok = false
+            else:
+                size := compress.FileSize(src)
+                mut crc := 0 as u32
+                mut at := 0 as i64
+                until at < size and ok:
+                    mut want := 262144
+                    if size - at < (want as i64):
+                        want = (size - at) as int
+                    end
+                    got := compress.FileReadAt(src, at, scratch, want)
+                    if got != want:
+                        ok = false
+                    else:
+                        crc = compress.CRC32Update(crc, scratch, got)
+                        _szo_write(o, scratch, got)
+                        at += got as i64
+                    end
+                end
+                compress.FileClose(src)
+                sizes.push(size)
+                crcs.push(crc as i64)
+            end
+        else:
+            _szo_write(o, f.data_ptr, f.data_len)
+            sizes.push(f.data_len as i64)
+            crcs.push(compress.CRC32(f.data_ptr, f.data_len) as i64)
+        end
+        i++
     end
-    if total > (1900000000 as i64):
-        empty.free()
-        empty_file.free()
-        ret out
+    ret ok and not o.failed
+end
+
+func _szw_pack_lzma(files: Vector<SevenZipFileInput>, empty: Vector<bool>, level: int, o &: _SzOut, sizes &: Vector<i64>, crcs &: Vector<i64>, packed &: Vector<i64>, props &: compress.ByteBuf): bool:
+    mut ok := true
+    mut i := 0
+    until i < files.len() and ok:
+        f := files.get(i)
+        if empty.get(i):
+            i++
+            continue
+        end
+        mut data := compress.NewByteBuf()
+        mut ptr := f.data_ptr
+        mut len := f.data_len
+        if f.link.len() > 0:
+            ptr = f.link as void*
+            len = f.link.len()
+        else f.path.len() > 0:
+            mut rok := false
+            data = ReadBinaryFile(f.path, rok)
+            if not rok:
+                ok = false
+            end
+            ptr = data.data
+            len = data.len
+        end
+        if ok:
+            mut comp := compress.LzmaCompressLevel(ptr, len, level)
+            compress.BufPushBytes(props, comp.data, 5)
+            body := ((comp.data as i64) + (13 as i64)) as void*
+            _szo_write(o, body, comp.len - 13)
+            packed.push((comp.len - 13) as i64)
+            sizes.push(len as i64)
+            crcs.push(compress.CRC32(ptr, len) as i64)
+            compress.BufFree(comp)
+        end
+        compress.BufFree(data)
+        i++
     end
-    repeat 32:
-        compress.BufPush(out, 0)
-    end
+    ret ok and not o.failed
+end
+
+func _szw_header(files: Vector<SevenZipFileInput>, empty: Vector<bool>, empty_file: Vector<bool>, nstream: int, total: i64, any_mtime: bool, lzma: bool, sizes: Vector<i64>, crcs: Vector<i64>, packed: Vector<i64>, props: compress.ByteBuf): compress.ByteBuf:
+    n := files.len()
     mut h := compress.NewByteBuf()
     compress.BufPush(h, 1)
     if nstream > 0:
-        mut crcs := Vector {} as Vector<i64>
-        mut sizes := Vector {} as Vector<i64>
-        repeat n in i:
-            f := files.get(i)
-            if empty.get(i):
-                continue
-            end
-            if f.link.len() > 0:
-                compress.BufPushBytes(out, f.link as void*, f.link.len())
-                sizes.push(f.link.len() as i64)
-                crcs.push(compress.CRC32(f.link as void*, f.link.len()) as i64)
-            else:
-                compress.BufPushBytes(out, f.data_ptr, f.data_len)
-                sizes.push(f.data_len as i64)
-                crcs.push(compress.CRC32(f.data_ptr, f.data_len) as i64)
-            end
-        end
         compress.BufPush(h, 4)
         compress.BufPush(h, 6)
         _szw_num(h, 0 as i64)
-        _szw_num(h, 1 as i64)
+        mut nfold := 1
+        if lzma:
+            nfold = nstream
+        end
+        _szw_num(h, nfold as i64)
         compress.BufPush(h, 9)
-        _szw_num(h, total)
+        if lzma:
+            repeat nfold in k:
+                _szw_num(h, packed.get(k))
+            end
+        else:
+            _szw_num(h, total)
+        end
         compress.BufPush(h, 0)
         compress.BufPush(h, 7)
         compress.BufPush(h, 11)
-        _szw_num(h, 1 as i64)
+        _szw_num(h, nfold as i64)
         compress.BufPush(h, 0)
-        _szw_num(h, 1 as i64)
-        compress.BufPush(h, 1)
-        compress.BufPush(h, 0)
+        repeat nfold in k:
+            _szw_num(h, 1 as i64)
+            if lzma:
+                compress.BufPush(h, 0x23)
+                compress.BufPush(h, 3)
+                compress.BufPush(h, 1)
+                compress.BufPush(h, 1)
+                _szw_num(h, 5 as i64)
+                repeat 5 in q:
+                    compress.BufPush(h, compress.BufGet(props, k * 5 + q))
+                end
+            else:
+                compress.BufPush(h, 1)
+                compress.BufPush(h, 0)
+            end
+        end
         compress.BufPush(h, 12)
-        _szw_num(h, total)
+        if lzma:
+            repeat nfold in k:
+                _szw_num(h, sizes.get(k))
+            end
+        else:
+            _szw_num(h, total)
+        end
         compress.BufPush(h, 0)
         compress.BufPush(h, 8)
-        compress.BufPush(h, 13)
-        _szw_num(h, nstream as i64)
-        if nstream > 1:
-            compress.BufPush(h, 9)
-            repeat nstream - 1 in i:
-                _szw_num(h, sizes.get(i))
+        if not lzma:
+            compress.BufPush(h, 13)
+            _szw_num(h, nstream as i64)
+            if nstream > 1:
+                compress.BufPush(h, 9)
+                repeat nstream - 1 in k:
+                    _szw_num(h, sizes.get(k))
+                end
             end
         end
         compress.BufPush(h, 10)
         compress.BufPush(h, 1)
-        repeat nstream in i:
-            _szw_u32(h, crcs.get(i))
+        repeat nstream in k:
+            _szw_u32(h, crcs.get(k))
         end
         compress.BufPush(h, 0)
         compress.BufPush(h, 0)
-        crcs.free()
-        sizes.free()
     end
     if n > 0:
         compress.BufPush(h, 5)
@@ -333,46 +453,139 @@ pub func SevenZipCreate(files: Vector<SevenZipFileInput>): compress.ByteBuf:
         compress.BufPush(h, 0)
     end
     compress.BufPush(h, 0)
-    hdr_off := (out.len - 32) as i64
-    hlen := h.len as i64
-    compress.BufPushBuf(out, h)
-    hcrc := compress.CRC32(h.data, h.len)
-    compress.BufFree(h)
-    mut sh := compress.NewByteBuf()
-    repeat 8 in i:
-        compress.BufPush(sh, ((hdr_off >> (8 * i)) & 255) as int)
+    ret h
+end
+
+func _szw_run(files: Vector<SevenZipFileInput>, level: int, o &: _SzOut): bool:
+    mut empty := Vector {} as Vector<bool>
+    mut empty_file := Vector {} as Vector<bool>
+    mut nstream := 0
+    mut total := 0 as i64
+    mut any_mtime := false
+    if not _szw_plan(files, empty, empty_file, nstream, total, any_mtime):
+        empty.free()
+        empty_file.free()
+        ret false
     end
-    repeat 8 in i:
-        compress.BufPush(sh, ((hlen >> (8 * i)) & 255) as int)
+    if not o.to_file and total > (1900000000 as i64):
+        empty.free()
+        empty_file.free()
+        ret false
     end
-    _szw_u32(sh, hcrc as i64)
-    scrc := compress.CRC32(sh.data, sh.len) as i64
-    b := out.data as u8*
-    sp := sh.data as u8*
-    sig := [55, 122, 188, 175, 39, 28, 0, 4]
-    repeat 8 in i:
-        b[i] = sig[i] as u8
+    mut zeros := compress.NewByteBuf()
+    repeat 32:
+        compress.BufPush(zeros, 0)
     end
-    repeat 4 in i:
-        b[8 + i] = ((scrc >> (8 * i)) & 255) as u8
+    _szo_write(o, zeros.data, 32)
+    compress.BufFree(zeros)
+    mut sizes := Vector {} as Vector<i64>
+    mut crcs := Vector {} as Vector<i64>
+    mut packed := Vector {} as Vector<i64>
+    mut props := compress.NewByteBuf()
+    lzma := level > 0
+    mut ok := true
+    if nstream > 0:
+        if lzma:
+            ok = _szw_pack_lzma(files, empty, level > 9 ? 9 : level, o, sizes, crcs, packed, props)
+        else:
+            scratch := mem.Allocate(262144 as u64)
+            ok = _szw_pack_copy(files, empty, o, sizes, crcs, scratch)
+            mem.Free(scratch)
+        end
     end
-    repeat 20 in i:
-        b[12 + i] = sp[i]
+    if ok:
+        mut h := _szw_header(files, empty, empty_file, nstream, total, any_mtime, lzma, sizes, crcs, packed, props)
+        hdr_off := o.pos - (32 as i64)
+        hlen := h.len as i64
+        _szo_write(o, h.data, h.len)
+        hcrc := compress.CRC32(h.data, h.len)
+        compress.BufFree(h)
+        mut sh := compress.NewByteBuf()
+        repeat 8 in i:
+            compress.BufPush(sh, ((hdr_off >> (8 * i)) & 255) as int)
+        end
+        repeat 8 in i:
+            compress.BufPush(sh, ((hlen >> (8 * i)) & 255) as int)
+        end
+        _szw_u32(sh, hcrc as i64)
+        scrc := compress.CRC32(sh.data, sh.len) as i64
+        mut start := compress.NewByteBuf()
+        sig := [55, 122, 188, 175, 39, 28, 0, 4]
+        repeat 8 in i:
+            compress.BufPush(start, sig[i])
+        end
+        _szw_u32(start, scrc)
+        compress.BufPushBuf(start, sh)
+        compress.BufFree(sh)
+        if o.to_file:
+            if o.failed or fseek(o.fp, 0, 0) != 0:
+                ok = false
+            else:
+                ok = (fwrite(start.data, 1 as u64, 32 as u64, o.fp) as int) == 32
+            end
+        else:
+            mem.Copy(o.buf.data, start.data, 32 as u64)
+        end
+        compress.BufFree(start)
     end
-    compress.BufFree(sh)
+    sizes.free()
+    crcs.free()
+    packed.free()
+    compress.BufFree(props)
     empty.free()
     empty_file.free()
-    ret out
+    ret ok and not o.failed
+end
+
+@en "MakeSevenZipFileInput"
+@fa "ساخت ورودی پرونده هفت زد"
+pub func MakeSevenZipFileInput(name: str, data_ptr: void*, data_len: int, is_dir: bool): SevenZipFileInput:
+    ret SevenZipFileInput { name = name, data_ptr = data_ptr, data_len = data_len, is_dir = is_dir }
+end
+
+@en "MakeSevenZipFilePath"
+@fa "ساخت ورودی پرونده هفت زد از مسیر"
+pub func MakeSevenZipFilePath(name: str, path: str): SevenZipFileInput:
+    ret SevenZipFileInput { name = name, path = path }
+end
+
+@en "SevenZipCreateLevel"
+@fa "ساخت هفت زد با سطح"
+pub func SevenZipCreateLevel(files: Vector<SevenZipFileInput>, level: int): compress.ByteBuf:
+    mut o := _SzOut { fp = null, buf = compress.NewByteBuf(), to_file = false, pos = 0 as i64, failed = false }
+    if not _szw_run(files, level, o):
+        compress.BufFree(o.buf)
+        ret compress.NewByteBuf()
+    end
+    ret o.buf
+end
+
+@en "SevenZipCreate"
+@fa "ساخت هفت زد"
+pub func SevenZipCreate(files: Vector<SevenZipFileInput>): compress.ByteBuf:
+    ret SevenZipCreateLevel(files, 0)
+end
+
+@en "SevenZipCreateFileLevel"
+@fa "ساخت پرونده هفت زد با سطح"
+pub func SevenZipCreateFileLevel(files: Vector<SevenZipFileInput>, path: str, level: int): bool:
+    fp := compress.FileOpenWrite(path)
+    if fp == null:
+        ret false
+    end
+    mut o := _SzOut { fp = fp, buf = compress.NewByteBuf(), to_file = true, pos = 0 as i64, failed = false }
+    ok := _szw_run(files, level, o)
+    compress.BufFree(o.buf)
+    closed := fclose(fp) == 0
+    if not (ok and closed):
+        os.Remove(path)
+        ret false
+    end
+    ret true
 end
 
 @en "SevenZipCreateFile"
 @fa "ساخت پرونده هفت زد"
 pub func SevenZipCreateFile(files: Vector<SevenZipFileInput>, path: str): bool:
-    mut packed := SevenZipCreate(files)
-    if packed.len == 0:
-        ret false
-    end
-    ok := WriteBinaryFileBuf(path, packed)
-    compress.BufFree(packed)
-    ret ok
+    ret SevenZipCreateFileLevel(files, path, 0)
 end

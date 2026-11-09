@@ -262,6 +262,14 @@ func _ro_reset(o &: _ROld):
     _ro_init_huff(o)
 end
 
+func _ro_drain(out &: compress.ByteBuf, sink &: compress.FileSink): bool:
+    if out.len > 0 and not compress.SinkWrite(sink, out.data, out.len):
+        ret false
+    end
+    out.len = 0
+    ret true
+end
+
 func _ro_flush(o &: _ROld, out &: compress.ByteBuf):
     if o.wp > o.fl:
         compress.BufPushBytes(out, ((o.win as i64) + (o.fl as i64)) as void*, o.wp - o.fl)
@@ -486,7 +494,7 @@ func _ro20_audio(o &: _ROld, delta: int): int:
     ret ch
 end
 
-func _ro20_decode(o &: _ROld, p: u8*, n: int, unp: i64, limit: i64, solid: bool, out &: compress.ByteBuf): int:
+func _ro20_decode(o &: _ROld, p: u8*, n: int, unp: i64, limit: i64, solid: bool, out &: compress.ByteBuf, sink &: compress.FileSink, stream: bool): int:
     if unp < 0:
         ret 2
     end
@@ -523,6 +531,9 @@ func _ro20_decode(o &: _ROld, p: u8*, n: int, unp: i64, limit: i64, solid: bool,
         end
         if ((o.wp - o.fl) & o.wmask) >= (o.wsize >> 1):
             _ro_flush(o, out)
+            if stream and not _ro_drain(out, sink):
+                ret 7
+            end
         end
         if o.audio:
             an := _ro_md(o, b, o.cur_channel)
@@ -647,7 +658,17 @@ func _ro20_decode(o &: _ROld, p: u8*, n: int, unp: i64, limit: i64, solid: bool,
         ret 4
     end
     if produced > unp:
-        out.len = base + (unp as int)
+        if stream:
+            if produced - unp > (out.len as i64):
+                ret 4
+            end
+            out.len -= ((produced - unp) as int)
+        else:
+            out.len = base + (unp as int)
+        end
+    end
+    if stream and not _ro_drain(out, sink):
+        ret 7
     end
     ret 0
 end
@@ -948,7 +969,7 @@ func _r1_long(o &: _ROld, b &: _RarBits): bool:
     ret _ro_copy(o, length, dist)
 end
 
-func _ro15_decode(o &: _ROld, p: u8*, n: int, unp: i64, limit: i64, solid: bool, out &: compress.ByteBuf): int:
+func _ro15_decode(o &: _ROld, p: u8*, n: int, unp: i64, limit: i64, solid: bool, out &: compress.ByteBuf, sink &: compress.FileSink, stream: bool): int:
     if unp < 0:
         ret 2
     end
@@ -1000,6 +1021,9 @@ func _ro15_decode(o &: _ROld, p: u8*, n: int, unp: i64, limit: i64, solid: bool,
         end
         if ((o.wp - o.fl) & o.wmask) >= (o.wsize >> 1):
             _ro_flush(o, out)
+            if stream and not _ro_drain(out, sink):
+                ret 7
+            end
         end
         mut ok := true
         if o.st_mode != 0:
@@ -1047,7 +1071,17 @@ func _ro15_decode(o &: _ROld, p: u8*, n: int, unp: i64, limit: i64, solid: bool,
         ret 4
     end
     if produced > unp:
-        out.len = base + (unp as int)
+        if stream:
+            if produced - unp > (out.len as i64):
+                ret 4
+            end
+            out.len -= ((produced - unp) as int)
+        else:
+            out.len = base + (unp as int)
+        end
+    end
+    if stream and not _ro_drain(out, sink):
+        ret 7
     end
     ret 0
 end

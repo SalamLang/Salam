@@ -1,0 +1,331 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package archive
+
+import compress
+import crypto
+import mem
+
+const _CW_RAW := 0
+const _CW_GZIP := 1
+const _CW_BZIP2 := 2
+const _CW_XZ := 3
+const _CW_ZSTD := 4
+const _CW_DEFLATE := 5
+const _CW_DEFAULT_CHUNK := 4194304
+
+mut _cw_chunk := _CW_DEFAULT_CHUNK
+
+struct _ZipEnc:
+    pub kind: int
+    pub k: _ZcKeys
+    pub a: _Aes
+    pub ctr: u8*
+    pub ks: u8*
+    pub blk: int
+    pub inner: _Sha1
+    pub outer: _Sha1
+end
+
+struct _ChunkWriter:
+    pub enc: _ZipEnc*
+    pub fp: void*
+    pub kind: int
+    pub level: int
+    pub buf: void*
+    pub fill: int
+    pub cap: int
+    pub w: compress.BitWriter
+    pub in_crc: u32
+    pub in_size: i64
+    pub out_size: i64
+    pub members: int
+    pub failed: bool
+end
+
+func _cw_open(fp: void*, kind: int, level: int): _ChunkWriter:
+    mut cw := _ChunkWriter { enc = null, fp = fp, kind = kind, level = level, buf = null, fill = 0, cap = _cw_chunk, w = compress.NewBitWriter(), in_crc = 0 as u32, in_size = 0 as i64, out_size = 0 as i64, members = 0, failed = fp == null }
+    if kind != _CW_RAW:
+        cw.buf = mem.Allocate(cw.cap as u64)
+    end
+    if kind == _CW_GZIP and not cw.failed:
+        mut h := compress.NewByteBuf()
+        compress.BufPush(h, 0x1f)
+        compress.BufPush(h, 0x8b)
+        compress.BufPush(h, 8)
+        compress.BufPush(h, 0)
+        LEPut32(h, 0)
+        compress.BufPush(h, 0)
+        compress.BufPush(h, 255)
+        _cw_out(cw, h.data, h.len)
+        compress.BufFree(h)
+    end
+    ret cw
+end
+
+func _cw_out_raw(cw &: _ChunkWriter, p: void*, n: int):
+    if cw.failed or n <= 0:
+        ret
+    end
+    if (fwrite(p, 1 as u64, n as u64, cw.fp) as int) != n:
+        cw.failed = true
+        ret
+    end
+    cw.out_size += n as i64
+end
+
+func _ze_aes_bytes(e: _ZipEnc*, buf: u8*, n: int):
+    mut i := 0
+    until i < n:
+        if e[0].blk == 0:
+            mut c := 0
+            until c < 16:
+                v := (e[0].ctr[c] as int) + 1
+                e[0].ctr[c] = (v & 255) as u8
+                if v < 256:
+                    break
+                end
+                c++
+            end
+            _zc_aes_enc(e[0].a, e[0].ctr, e[0].ks)
+        end
+        buf[i] = ((buf[i] as int) ^ (e[0].ks[e[0].blk] as int)) as u8
+        e[0].blk = (e[0].blk + 1) & 15
+        i++
+    end
+end
+
+func _cw_out(cw &: _ChunkWriter, p: void*, n: int):
+    if cw.failed or n <= 0:
+        ret
+    end
+    if cw.enc != null:
+        tmp := mem.Allocate(n as u64) as u8*
+        mem.Copy(tmp as void*, p, n as u64)
+        e := cw.enc
+        if e[0].kind == 1:
+            repeat n in i:
+                plain := tmp[i] as int
+                tmp[i] = (plain ^ _zc_next(e[0].k)) as u8
+                _zc_update(e[0].k, plain)
+            end
+        else:
+            _ze_aes_bytes(e, tmp, n)
+            _sha1_update(e[0].inner, tmp, n)
+        end
+        _cw_out_raw(cw, tmp as void*, n)
+        mem.Free(tmp as void*)
+        ret
+    end
+    _cw_out_raw(cw, p, n)
+end
+
+func _ze_begin(cw &: _ChunkWriter, kind: int, password: str, check: int): bool:
+    e := mem.AllocateZeroed(sizeof(_ZipEnc)) as _ZipEnc*
+    e[0].kind = kind == 1 ? 1 : 2
+    cw.enc = e
+    if kind == 1:
+        e[0].k = _zc_init(password)
+        mut h := mem.AllocateZeroed(12 as u64) as u8*
+        crypto.RandomBytes(h as void*, 11)
+        h[11] = check as u8
+        _cw_out(cw, h as void*, 12)
+        mem.Free(h as void*)
+        ret not cw.failed
+    end
+    klen := kind == 2 ? 16 : (kind == 3 ? 24 : 32)
+    slen := klen / 2
+    hdr := mem.AllocateZeroed((slen + 2) as u64) as u8*
+    crypto.RandomBytes(hdr as void*, slen)
+    dk := mem.AllocateZeroed((2 * klen + 2) as u64) as u8*
+    _zc_pbkdf2(password, hdr, slen, 1000, dk, 2 * klen + 2)
+    hdr[slen] = dk[2 * klen]
+    hdr[slen + 1] = dk[2 * klen + 1]
+    e[0].a = _aes_new(dk, klen)
+    e[0].ctr = mem.AllocateZeroed(16 as u64) as u8*
+    e[0].ks = mem.AllocateZeroed(16 as u64) as u8*
+    _zc_hmac_begin(((dk as i64) + (klen as i64)) as u8*, klen, e[0].inner, e[0].outer)
+    _cw_out_raw(cw, hdr as void*, slen + 2)
+    mem.Free(hdr as void*)
+    mem.Free(dk as void*)
+    ret not cw.failed
+end
+
+func _ze_end(cw &: _ChunkWriter):
+    e := cw.enc
+    if e == null:
+        ret
+    end
+    if e[0].kind == 1:
+        mem.Free(e[0].k.table as void*)
+    else:
+        mac := mem.AllocateZeroed(20 as u64) as u8*
+        _zc_hmac_end(e[0].inner, e[0].outer, mac)
+        _cw_out_raw(cw, mac as void*, 10)
+        mem.Free(mac as void*)
+        _aes_free(e[0].a)
+        mem.Free(e[0].ctr as void*)
+        mem.Free(e[0].ks as void*)
+    end
+    mem.Free(e as void*)
+    cw.enc = null
+end
+
+func _cw_drain_bits(cw &: _ChunkWriter):
+    _cw_out(cw, cw.w.buf.data, cw.w.buf.len)
+    compress.BufReset(cw.w.buf)
+end
+
+func _cw_member(cw &: _ChunkWriter):
+    mut out := compress.NewByteBuf()
+    if cw.kind == _CW_BZIP2:
+        out = compress.Bzip2CompressLevel(cw.buf, cw.fill, cw.level)
+    else cw.kind == _CW_XZ:
+        out = compress.XzCompressLevel(cw.buf, cw.fill, cw.level)
+    else:
+        out = compress.ZstdCompressLevel(cw.buf, cw.fill, cw.level)
+    end
+    _cw_out(cw, out.data, out.len)
+    compress.BufFree(out)
+    cw.members++
+end
+
+func _cw_flush(cw &: _ChunkWriter, last: bool):
+    if cw.kind == _CW_GZIP or cw.kind == _CW_DEFLATE:
+        if cw.fill > 0 or last:
+            compress.RawDeflateTo(cw.w, cw.buf, cw.fill, last)
+            if last:
+                compress.BitFlush(cw.w)
+            end
+            _cw_drain_bits(cw)
+        end
+    else cw.kind != _CW_RAW:
+        if cw.fill > 0 or (last and cw.members == 0):
+            _cw_member(cw)
+        end
+    end
+    cw.fill = 0
+end
+
+func _cw_write(cw &: _ChunkWriter, p: void*, n: int): bool:
+    if cw.failed or n < 0:
+        ret false
+    end
+    if n == 0:
+        ret true
+    end
+    cw.in_crc = compress.CRC32Update(cw.in_crc, p, n)
+    cw.in_size += n as i64
+    if cw.kind == _CW_RAW:
+        _cw_out(cw, p, n)
+        ret not cw.failed
+    end
+    mut done := 0
+    until done < n:
+        room := cw.cap - cw.fill
+        mut take := n - done
+        if take > room:
+            take = room
+        end
+        mem.Copy(((cw.buf as i64) + (cw.fill as i64)) as void*, ((p as i64) + (done as i64)) as void*, take as u64)
+        cw.fill += take
+        done += take
+        if cw.fill >= cw.cap:
+            _cw_flush(cw, false)
+        end
+    end
+    ret not cw.failed
+end
+
+func _cw_finish(cw &: _ChunkWriter): bool:
+    if cw.kind != _CW_RAW:
+        _cw_flush(cw, true)
+    end
+    if cw.kind == _CW_GZIP:
+        mut t := compress.NewByteBuf()
+        LEPut32(t, cw.in_crc as int)
+        LEPut32(t, (cw.in_size & (0xFFFFFFFF as i64)) as int)
+        _cw_out(cw, t.data, t.len)
+        compress.BufFree(t)
+    end
+    if cw.buf != null:
+        mem.Free(cw.buf)
+        cw.buf = null
+    end
+    compress.BitWriterFree(cw.w)
+    ret not cw.failed
+end
+
+func _cw_abort(cw &: _ChunkWriter):
+    if cw.buf != null:
+        mem.Free(cw.buf)
+        cw.buf = null
+    end
+    compress.BitWriterFree(cw.w)
+end
+
+func _cw_compress_path(inpath: str, outpath: str, kind: int, level: int): bool:
+    src := compress.FileOpenRead(inpath)
+    if src == null:
+        ret false
+    end
+    dst := compress.FileOpenWrite(outpath)
+    if dst == null:
+        compress.FileClose(src)
+        ret false
+    end
+    mut cw := _cw_open(dst, kind, level)
+    size := compress.FileSize(src)
+    scratch := mem.Allocate(262144 as u64)
+    mut at := 0 as i64
+    mut ok := size >= (0 as i64)
+    until at < size and ok:
+        mut want := 262144
+        if size - at < (want as i64):
+            want = (size - at) as int
+        end
+        got := compress.FileReadAt(src, at, scratch, want)
+        if got != want:
+            ok = false
+        else:
+            ok = _cw_write(cw, scratch, got)
+            at += got as i64
+        end
+    end
+    mem.Free(scratch)
+    compress.FileClose(src)
+    if ok:
+        ok = _cw_finish(cw)
+    else:
+        _cw_abort(cw)
+    end
+    if fclose(dst) != 0:
+        ok = false
+    end
+    if not ok:
+        os.Remove(outpath)
+    end
+    ret ok
+end
+
+@en "SetWriteChunk"
+@fa "تنظیم اندازه قطعه نوشتن"
+pub func SetWriteChunk(n: int):
+    if n < 4096:
+        _cw_chunk = _CW_DEFAULT_CHUNK
+    else:
+        _cw_chunk = n
+    end
+end

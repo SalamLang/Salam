@@ -12,6 +12,7 @@ import { t } from "./i18n";
 import { autoDir } from "./dir";
 import { planName, registerPlans } from "./Plans";
 import { Checkbox } from "./Checkbox";
+import { SearchField } from "./SearchField";
 
 export type Picked = { id: number; name: string } | null;
 type UsageMode = "all" | "chat" | "api";
@@ -1341,7 +1342,7 @@ function LatestChats() {
             setApplied(query.trim());
           }}
         >
-          <input className="input" type="search" dir="auto" value={query} onChange={(e) => setQuery(e.target.value)} placeholder={t("جست‌وجوی کاربر یا عنوان", "Search user or title")} aria-label={t("جست‌وجوی گفت‌وگوها", "Search chats")} />
+          <SearchField value={query} onChange={setQuery} onSubmit={setApplied} placeholder={t("جست‌وجوی کاربر یا عنوان", "Search user or title")} ariaLabel={t("جست‌وجوی گفت‌وگوها", "Search chats")} />
         </form>
       </div>
       {error && (

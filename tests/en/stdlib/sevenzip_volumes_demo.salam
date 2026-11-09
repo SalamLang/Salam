@@ -266,20 +266,46 @@ func noise(n: int): compress.ByteBuf:
     ret b
 end
 
+func drop(p: str):
+    mem.Free(p as void*)
+end
+
+func same(dir: str, name: str, want: compress.ByteBuf): bool:
+    mut want2 := want
+    path := filepath.Join(dir, name)
+    mut ok := false
+    mut got := archive.ReadBinaryFile(path, ok)
+    r := ok and compress.BufEquals(got, want2)
+    compress.BufFree(got)
+    compress.BufFree(want2)
+    drop(path)
+    ret r
+end
+
+func vname(label: str, n: int): str:
+    suffix := ".7z.00" + str.FromInt(n as i64)
+    full := label + suffix
+    ret full
+end
+
 func split(label: str, hex: str, dir: str, chunk: int): int:
-    packed := unhex(hex)
+    mut packed := unhex(hex)
     mut parts := 0
     mut off := 0
     until off < packed.len:
         take := packed.len - off < chunk ? packed.len - off : chunk
         parts++
-        name := filepath.Join(dir, label + ".7z.00" + str.FromInt(parts as i64))
+        fname := vname(label, parts)
+        name := filepath.Join(dir, fname)
         mut piece := compress.NewByteBufCap(take)
         compress.BufPushBytes(piece, ((packed.data as i64) + (off as i64)) as void*, take)
         archive.WriteBinaryFileBuf(name, piece)
         compress.BufFree(piece)
+        drop(fname)
+        drop(name)
         off += take
     end
+    compress.BufFree(packed)
     ret parts
 end
 
@@ -298,34 +324,51 @@ func main:
     repeat names.len() in n:
         label := names.get(n)
         parts := split(label, hexes.get(n), dir, 700)
-        mut sf := archive.SevenZipOpenFile(filepath.Join(dir, label + ".7z.001"), "")
+        fname := vname(label, 1)
+        first_path := filepath.Join(dir, fname)
+        mut sf := archive.SevenZipOpenFile(first_path, "")
         println label, "volumes", parts, sf.volumes.len(), "status", sf.status
-        out := filepath.Join(dir, "out_" + label)
+        oname := "out_" + label
+        out := filepath.Join(dir, oname)
         println "  extract", archive.SevenZipFileExtractAll(sf, out, 0 as i64, 0 as i64)
-        mut ok := false
-        got := archive.ReadBinaryFile(filepath.Join(out, "sub/deep/r.bin"), ok)
-        println "  noise", ok and compress.BufEquals(got, noise(2000))
-        mut ok2 := false
-        got2 := archive.ReadBinaryFile(filepath.Join(out, "sub/b.txt"), ok2)
-        println "  text", ok2 and compress.BufEquals(got2, text(700))
-        one := filepath.Join(dir, label + "_b.txt")
+        println "  noise", same(out, "sub/deep/r.bin", noise(2000))
+        println "  text", same(out, "sub/b.txt", text(700))
+        bname := label + "_b.txt"
+        one := filepath.Join(dir, bname)
         println "  one", archive.SevenZipFileExtractTo(sf, "sub/deep/r.bin", one, 0 as i64, 0 as i64)
         archive.SevenZipFileClose(sf)
+        drop(fname)
+        drop(first_path)
+        drop(oname)
+        drop(out)
+        drop(bname)
+        drop(one)
     end
+    names.free()
+    hexes.free()
     mut vols := Vector {} as Vector<str>
     repeat 5 in v:
-        vols.push(filepath.Join(dir, "lz2.7z.00" + str.FromInt((v + 1) as i64)))
+        vn := "lz2.7z.00" + str.FromInt((v + 1) as i64)
+        vols.push(filepath.Join(dir, vn))
+        drop(vn)
     end
-    whole := unhex(F_LZ2)
+    mut whole := unhex(F_LZ2)
     mp := compress.MultiOpenRead(vols)
     window := mem.AllocateZeroed(40 as u64)
     got := compress.FileReadAt(mp, 680 as i64, window, 40)
     println "joined", compress.FileSize(mp) == (whole.len as i64), got, compress.CRC32(window, 40) == compress.CRC32(((whole.data as i64) + (680 as i64)) as void*, 40)
     mem.Free(window)
     compress.FileClose(mp)
+    compress.BufFree(whole)
+    repeat vols.len() in v:
+        drop(vols.get(v))
+    end
     vols.free()
-    mut first := archive.SevenZipOpenFile(filepath.Join(dir, "lz2.7z.002"), "")
+    second := filepath.Join(dir, "lz2.7z.002")
+    mut first := archive.SevenZipOpenFile(second, "")
     println "second volume only", first.status
     archive.SevenZipFileClose(first)
     os.RemoveAll(dir)
+    drop(second)
+    drop(dir)
 end

@@ -1,0 +1,670 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+
+package typeset
+
+func _match_one(f: Font, g: int, v: int, kind: int, cd: int, base: int): bool:
+    if kind == 0: ret g == v end
+    if kind == 1: ret _classdef(f, cd, g) == v end
+    ret _coverage(f, base + v, g) >= 0
+end
+
+func _match_input(f: Font, c: _Ctx, b &: _Buf, i: int, count: int, arr: int, kind: int, cd: int, base: int, pos &: Vector<int>): bool:
+    pos.clear()
+    pos.push(i)
+    mut j := i
+    mut k := 1
+    until k < count:
+        j = _next_idx(f, c, b, j)
+        if j < 0:
+            ret false
+        end
+        if not _match_one(f, b.g.get(j), _r16(f, arr + (k - 1) * 2), kind, cd, base):
+            ret false
+        end
+        pos.push(j)
+        k++
+    end
+    ret true
+end
+
+func _match_back(f: Font, c: _Ctx, b &: _Buf, i: int, count: int, arr: int, kind: int, cd: int, base: int): bool:
+    mut j := i
+    mut k := 0
+    until k < count:
+        j = _prev_idx(f, c, b, j)
+        if j < 0:
+            ret false
+        end
+        if not _match_one(f, b.g.get(j), _r16(f, arr + k * 2), kind, cd, base):
+            ret false
+        end
+        k++
+    end
+    ret true
+end
+
+func _match_ahead(f: Font, c: _Ctx, b &: _Buf, last: int, count: int, arr: int, kind: int, cd: int, base: int): bool:
+    mut j := last
+    mut k := 0
+    until k < count:
+        j = _next_idx(f, c, b, j)
+        if j < 0:
+            ret false
+        end
+        if not _match_one(f, b.g.get(j), _r16(f, arr + k * 2), kind, cd, base):
+            ret false
+        end
+        k++
+    end
+    ret true
+end
+
+func _apply_records(f: Font, c: _Ctx, b &: _Buf, pos &: Vector<int>, nrec: int, recs: int): int:
+    mut r := 0
+    until r < nrec:
+        seq := _r16(f, recs + r * 4)
+        lidx := _r16(f, recs + r * 4 + 2)
+        r++
+        if seq >= pos.len():
+            continue
+        end
+        p := pos.get(seq)
+        if p < 0 or p >= b.g.len():
+            continue
+        end
+        before := b.g.len()
+        _apply_lookup_at(f, c.table, c.gsub, lidx, b, p, c.depth + 1)
+        d := b.g.len() - before
+        if d != 0:
+            mut q := seq + 1
+            until q < pos.len():
+                pos.set(q, pos.get(q) + d)
+                q++
+            end
+        end
+    end
+    mut nxt := pos.get(pos.len() - 1) + 1
+    if nxt <= pos.get(0):
+        nxt = pos.get(0) + 1
+    end
+    if nxt > b.g.len():
+        nxt = b.g.len()
+    end
+    ret nxt
+end
+
+func _context_rules(f: Font, c: _Ctx, b &: _Buf, i: int, rs: int, kind: int, cd: int, chain: bool, bcd: int, lcd: int): int:
+    if rs == 0:
+        ret -1
+    end
+    nrules := _r16(f, rs)
+    mut pos := Vector {} as Vector<int>
+    defer pos.free()
+    mut k := 0
+    until k < nrules:
+        rule := rs + _r16(f, rs + 2 + k * 2)
+        k++
+        if not chain:
+            gc := _r16(f, rule)
+            sc := _r16(f, rule + 2)
+            if gc == 0:
+                continue
+            end
+            if _match_input(f, c, b, i, gc, rule + 4, kind, cd, 0, pos):
+                ret _apply_records(f, c, b, pos, sc, rule + 4 + (gc - 1) * 2)
+            end
+            continue
+        end
+        bc := _r16(f, rule)
+        barr := rule + 2
+        ic_at := barr + bc * 2
+        ic := _r16(f, ic_at)
+        iarr := ic_at + 2
+        lc_at := iarr + (ic - 1) * 2
+        lc := _r16(f, lc_at)
+        larr := lc_at + 2
+        sc_at := larr + lc * 2
+        sc := _r16(f, sc_at)
+        if ic == 0:
+            continue
+        end
+        if not _match_input(f, c, b, i, ic, iarr, kind, cd, 0, pos):
+            continue
+        end
+        mut bkind := kind
+        mut lkind := kind
+        if kind == 1:
+            bkind = 1
+            lkind = 1
+        end
+        if not _match_back(f, c, b, i, bc, barr, bkind, bcd, 0):
+            continue
+        end
+        if not _match_ahead(f, c, b, pos.get(pos.len() - 1), lc, larr, lkind, lcd, 0):
+            continue
+        end
+        ret _apply_records(f, c, b, pos, sc, sc_at + 2)
+    end
+    ret -1
+end
+
+func _apply_context(f: Font, c: _Ctx, b &: _Buf, i: int, sub: int, chain: bool): int:
+    fmt := _r16(f, sub)
+    g := b.g.get(i)
+    if fmt == 1:
+        ci := _coverage(f, sub + _r16(f, sub + 2), g)
+        if ci < 0 or ci >= _r16(f, sub + 4):
+            ret -1
+        end
+        off := _r16(f, sub + 6 + ci * 2)
+        if off == 0:
+            ret -1
+        end
+        ret _context_rules(f, c, b, i, sub + off, 0, 0, chain, 0, 0)
+    end
+    if fmt == 2:
+        if _coverage(f, sub + _r16(f, sub + 2), g) < 0:
+            ret -1
+        end
+        if not chain:
+            cd := sub + _r16(f, sub + 4)
+            cls := _classdef(f, cd, g)
+            if cls >= _r16(f, sub + 6):
+                ret -1
+            end
+            off := _r16(f, sub + 8 + cls * 2)
+            if off == 0:
+                ret -1
+            end
+            ret _context_rules(f, c, b, i, sub + off, 1, cd, false, 0, 0)
+        end
+        bo := _r16(f, sub + 4)
+        lo := _r16(f, sub + 8)
+        bcd := bo == 0 ? 0 : sub + bo
+        icd := sub + _r16(f, sub + 6)
+        lcd := lo == 0 ? 0 : sub + lo
+        cls := _classdef(f, icd, g)
+        if cls >= _r16(f, sub + 10):
+            ret -1
+        end
+        off := _r16(f, sub + 12 + cls * 2)
+        if off == 0:
+            ret -1
+        end
+        ret _context_rules(f, c, b, i, sub + off, 1, icd, true, bcd, lcd)
+    end
+    if fmt == 3:
+        mut pos := Vector {} as Vector<int>
+        defer pos.free()
+        if not chain:
+            gc := _r16(f, sub + 2)
+            sc := _r16(f, sub + 4)
+            if gc == 0 or _coverage(f, sub + _r16(f, sub + 6), g) < 0:
+                ret -1
+            end
+            if not _match_input(f, c, b, i, gc, sub + 8, 2, 0, sub, pos):
+                ret -1
+            end
+            ret _apply_records(f, c, b, pos, sc, sub + 6 + gc * 2)
+        end
+        bc := _r16(f, sub + 2)
+        barr := sub + 4
+        ic_at := barr + bc * 2
+        ic := _r16(f, ic_at)
+        iarr := ic_at + 2
+        lc_at := iarr + ic * 2
+        lc := _r16(f, lc_at)
+        larr := lc_at + 2
+        sc_at := larr + lc * 2
+        sc := _r16(f, sc_at)
+        if ic == 0 or _coverage(f, sub + _r16(f, iarr), g) < 0:
+            ret -1
+        end
+        if not _match_input(f, c, b, i, ic, iarr + 2, 2, 0, sub, pos):
+            ret -1
+        end
+        if not _match_back(f, c, b, i, bc, barr, 2, 0, sub):
+            ret -1
+        end
+        if not _match_ahead(f, c, b, pos.get(pos.len() - 1), lc, larr, 2, 0, sub):
+            ret -1
+        end
+        ret _apply_records(f, c, b, pos, sc, sc_at + 2)
+    end
+    ret -1
+end
+
+func _set_glyph(f: Font, b &: _Buf, i: int, g: int):
+    b.g.set(i, g)
+    if _gdef_off(f, 4) != 0:
+        b.cls.set(i, _classdef(f, _gdef_off(f, 4), g))
+    end
+end
+
+func _gsub_single(f: Font, b &: _Buf, i: int, sub: int): int:
+    fmt := _r16(f, sub)
+    ci := _coverage(f, sub + _r16(f, sub + 2), b.g.get(i))
+    if ci < 0:
+        ret -1
+    end
+    if fmt == 1:
+        _set_glyph(f, b, i, (b.g.get(i) + _rs16(f, sub + 4)) & 0xFFFF)
+        ret i + 1
+    end
+    if fmt == 2 and ci < _r16(f, sub + 4):
+        _set_glyph(f, b, i, _r16(f, sub + 6 + ci * 2))
+        ret i + 1
+    end
+    ret -1
+end
+
+func _gsub_multiple(f: Font, b &: _Buf, i: int, sub: int): int:
+    ci := _coverage(f, sub + _r16(f, sub + 2), b.g.get(i))
+    if ci < 0 or ci >= _r16(f, sub + 4):
+        ret -1
+    end
+    seq := sub + _r16(f, sub + 6 + ci * 2)
+    n := _r16(f, seq)
+    if n == 0:
+        _buf_remove(b, i)
+        ret i
+    end
+    _set_glyph(f, b, i, _r16(f, seq + 2))
+    mut k := 1
+    until k < n:
+        _buf_insert_copy(b, i + k - 1, _r16(f, seq + 2 + k * 2))
+        _set_glyph(f, b, i + k, _r16(f, seq + 2 + k * 2))
+        k++
+    end
+    ret i + n
+end
+
+func _gsub_alternate(f: Font, b &: _Buf, i: int, sub: int): int:
+    ci := _coverage(f, sub + _r16(f, sub + 2), b.g.get(i))
+    if ci < 0 or ci >= _r16(f, sub + 4):
+        ret -1
+    end
+    alt := sub + _r16(f, sub + 6 + ci * 2)
+    if _r16(f, alt) == 0:
+        ret -1
+    end
+    _set_glyph(f, b, i, _r16(f, alt + 2))
+    ret i + 1
+end
+
+func _gsub_ligature(f: Font, c: _Ctx, b &: _Buf, i: int, sub: int): int:
+    ci := _coverage(f, sub + _r16(f, sub + 2), b.g.get(i))
+    if ci < 0 or ci >= _r16(f, sub + 4):
+        ret -1
+    end
+    ls := sub + _r16(f, sub + 6 + ci * 2)
+    nlig := _r16(f, ls)
+    mut pos := Vector {} as Vector<int>
+    defer pos.free()
+    mut k := 0
+    until k < nlig:
+        lig := ls + _r16(f, ls + 2 + k * 2)
+        k++
+        comp := _r16(f, lig + 2)
+        if comp == 0:
+            continue
+        end
+        if not _match_input(f, c, b, i, comp, lig + 4, 0, 0, 0, pos):
+            continue
+        end
+        id := b.next_lig
+        b.next_lig++
+        mut m := 0
+        until m + 1 < comp:
+            mut q := pos.get(m) + 1
+            until q < pos.get(m + 1):
+                if b.cls.get(q) == 3:
+                    b.lig_id.set(q, id)
+                    b.lig_comp.set(q, m + 1)
+                end
+                q++
+            end
+            m++
+        end
+        _set_glyph(f, b, i, _r16(f, lig))
+        if _gdef_off(f, 4) == 0 and comp > 1:
+            b.cls.set(i, 2)
+        end
+        b.lig_id.set(i, comp > 1 ? id : 0)
+        b.lig_comp.set(i, 0)
+        mut r := comp - 1
+        until r >= 1:
+            _buf_remove(b, pos.get(r))
+            r--
+        end
+        ret i + 1
+    end
+    ret -1
+end
+
+func _gsub_reverse(f: Font, c: _Ctx, b &: _Buf, i: int, sub: int): int:
+    ci := _coverage(f, sub + _r16(f, sub + 2), b.g.get(i))
+    if ci < 0:
+        ret -1
+    end
+    bc := _r16(f, sub + 4)
+    lc_at := sub + 6 + bc * 2
+    lc := _r16(f, lc_at)
+    gc_at := lc_at + 2 + lc * 2
+    if ci >= _r16(f, gc_at):
+        ret -1
+    end
+    if not _match_back(f, c, b, i, bc, sub + 6, 2, 0, sub):
+        ret -1
+    end
+    if not _match_ahead(f, c, b, i, lc, lc_at + 2, 2, 0, sub):
+        ret -1
+    end
+    _set_glyph(f, b, i, _r16(f, gc_at + 2 + ci * 2))
+    ret i + 1
+end
+
+func _value_size(fmt: int): int:
+    mut n := 0
+    mut v := fmt & 0xFF
+    until v != 0:
+        n += v & 1
+        v >>= 1
+    end
+    ret n * 2
+end
+
+func _apply_value(f: Font, fmt: int, at: int, b &: _Buf, i: int):
+    mut p := at
+    if (fmt & 1) != 0:
+        b.xo.set(i, b.xo.get(i) + _rs16(f, p))
+        p += 2
+    end
+    if (fmt & 2) != 0:
+        b.yo.set(i, b.yo.get(i) + _rs16(f, p))
+        p += 2
+    end
+    if (fmt & 4) != 0:
+        b.xa.set(i, b.xa.get(i) + _rs16(f, p))
+    end
+end
+
+func _gpos_single(f: Font, b &: _Buf, i: int, sub: int): int:
+    fmt := _r16(f, sub)
+    ci := _coverage(f, sub + _r16(f, sub + 2), b.g.get(i))
+    if ci < 0:
+        ret -1
+    end
+    vf := _r16(f, sub + 4)
+    if fmt == 1:
+        _apply_value(f, vf, sub + 6, b, i)
+        ret i + 1
+    end
+    if fmt == 2 and ci < _r16(f, sub + 6):
+        _apply_value(f, vf, sub + 8 + ci * _value_size(vf), b, i)
+        ret i + 1
+    end
+    ret -1
+end
+
+func _gpos_pair(f: Font, c: _Ctx, b &: _Buf, i: int, sub: int): int:
+    fmt := _r16(f, sub)
+    ci := _coverage(f, sub + _r16(f, sub + 2), b.g.get(i))
+    if ci < 0:
+        ret -1
+    end
+    j := _next_idx(f, c, b, i)
+    if j < 0:
+        ret -1
+    end
+    vf1 := _r16(f, sub + 4)
+    vf2 := _r16(f, sub + 6)
+    s1 := _value_size(vf1)
+    s2 := _value_size(vf2)
+    g2 := b.g.get(j)
+    if fmt == 1:
+        if ci >= _r16(f, sub + 8):
+            ret -1
+        end
+        ps := sub + _r16(f, sub + 10 + ci * 2)
+        n := _r16(f, ps)
+        rec_size := 2 + s1 + s2
+        mut lo := 0
+        mut hi := n
+        until lo < hi:
+            mid := (lo + hi) / 2
+            rec := ps + 2 + mid * rec_size
+            sg := _r16(f, rec)
+            if g2 < sg:
+                hi = mid
+            else g2 > sg:
+                lo = mid + 1
+            else:
+                _apply_value(f, vf1, rec + 2, b, i)
+                _apply_value(f, vf2, rec + 2 + s1, b, j)
+                if vf2 != 0:
+                    ret j + 1
+                end
+                ret j
+            end
+        end
+        ret -1
+    end
+    if fmt == 2:
+        c1 := _classdef(f, sub + _r16(f, sub + 8), b.g.get(i))
+        c2 := _classdef(f, sub + _r16(f, sub + 10), g2)
+        n1 := _r16(f, sub + 12)
+        n2 := _r16(f, sub + 14)
+        if c1 >= n1 or c2 >= n2:
+            ret -1
+        end
+        rec := sub + 16 + (c1 * n2 + c2) * (s1 + s2)
+        _apply_value(f, vf1, rec, b, i)
+        _apply_value(f, vf2, rec + s1, b, j)
+        if vf2 != 0:
+            ret j + 1
+        end
+        ret j
+    end
+    ret -1
+end
+
+func _attach_mark(f: Font, b &: _Buf, i: int, j: int, mark_anchor: int, base_anchor: int):
+    mut mx := 0
+    mut my := 0
+    mut bx := 0
+    mut ay := 0
+    _anchor(f, mark_anchor, mx, my)
+    _anchor(f, base_anchor, bx, ay)
+    b.xo.set(i, bx - mx)
+    b.yo.set(i, ay - my)
+    b.att.set(i, j)
+end
+
+func _gpos_mark_base(f: Font, b &: _Buf, i: int, sub: int, kind: int): int:
+    mi := _coverage(f, sub + _r16(f, sub + 2), b.g.get(i))
+    if mi < 0:
+        ret -1
+    end
+    mut j := i - 1
+    if kind == 6:
+        until j >= 0 and b.cp.get(j) == 0x200D:
+            j--
+        end
+        if j < 0 or b.cls.get(j) != 3:
+            ret -1
+        end
+    else:
+        until j >= 0 and b.cls.get(j) == 3:
+            j--
+        end
+        if j < 0:
+            ret -1
+        end
+    end
+    bi := _coverage(f, sub + _r16(f, sub + 4), b.g.get(j))
+    if bi < 0:
+        ret -1
+    end
+    ncls := _r16(f, sub + 6)
+    ma := sub + _r16(f, sub + 8)
+    if mi >= _r16(f, ma):
+        ret -1
+    end
+    mcls := _r16(f, ma + 2 + mi * 4)
+    manc := ma + _r16(f, ma + 2 + mi * 4 + 2)
+    if mcls >= ncls:
+        ret -1
+    end
+    arr := sub + _r16(f, sub + 10)
+    if kind == 5:
+        if bi >= _r16(f, arr):
+            ret -1
+        end
+        att := arr + _r16(f, arr + 2 + bi * 2)
+        ncomp := _r16(f, att)
+        if ncomp == 0:
+            ret -1
+        end
+        mut comp := ncomp - 1
+        if b.lig_id.get(j) != 0 and b.lig_id.get(j) == b.lig_id.get(i) and b.lig_comp.get(i) > 0:
+            comp = b.lig_comp.get(i) - 1
+            if comp >= ncomp:
+                comp = ncomp - 1
+            end
+        end
+        aoff := _r16(f, att + 2 + (comp * ncls + mcls) * 2)
+        if aoff == 0:
+            ret -1
+        end
+        _attach_mark(f, b, i, j, manc, att + aoff)
+        ret i + 1
+    end
+    if bi >= _r16(f, arr):
+        ret -1
+    end
+    aoff := _r16(f, arr + 2 + (bi * ncls + mcls) * 2)
+    if aoff == 0:
+        ret -1
+    end
+    _attach_mark(f, b, i, j, manc, arr + aoff)
+    ret i + 1
+end
+
+func _apply_sub(f: Font, c: _Ctx, b &: _Buf, i: int, ltype: int, sub: int): int:
+    mut t := ltype
+    mut s := sub
+    if (c.gsub and t == 7) or (not c.gsub and t == 9):
+        t = _r16(f, s + 2)
+        s = s + _r32(f, s + 4)
+    end
+    if c.gsub:
+        switch t:
+            1: ret _gsub_single(f, b, i, s) end
+            2: ret _gsub_multiple(f, b, i, s) end
+            3: ret _gsub_alternate(f, b, i, s) end
+            4: ret _gsub_ligature(f, c, b, i, s) end
+            5: ret _apply_context(f, c, b, i, s, false) end
+            6: ret _apply_context(f, c, b, i, s, true) end
+            8: ret _gsub_reverse(f, c, b, i, s) end
+            else: ret -1 end
+        end
+    end
+    switch t:
+        1: ret _gpos_single(f, b, i, s) end
+        2: ret _gpos_pair(f, c, b, i, s) end
+        4, 5, 6: ret _gpos_mark_base(f, b, i, s, t) end
+        7: ret _apply_context(f, c, b, i, s, false) end
+        8: ret _apply_context(f, c, b, i, s, true) end
+        else: ret -1 end
+    end
+    ret -1
+end
+
+func _lookup_ctx(f: Font, table: int, gsub: bool, lk: int, depth: int): _Ctx:
+    mut c := _Ctx {}
+    c.table = table
+    c.gsub = gsub
+    c.flag = _r16(f, lk + 2)
+    c.depth = depth
+    if (c.flag & _LF_FILTER_SET) != 0:
+        c.mark_set = _r16(f, lk + 6 + _r16(f, lk + 4) * 2)
+    end
+    ret c
+end
+
+func _apply_lookup_at(f: Font, table: int, gsub: bool, lidx: int, b &: _Buf, i: int, depth: int): int:
+    if depth > _OTL_MAX_DEPTH:
+        ret -1
+    end
+    lk := _lookup_off(f, table, lidx)
+    if lk == 0:
+        ret -1
+    end
+    c := _lookup_ctx(f, table, gsub, lk, depth)
+    if _skippable(f, c, b, i):
+        ret -1
+    end
+    ltype := _r16(f, lk)
+    n := _r16(f, lk + 4)
+    mut k := 0
+    until k < n:
+        r := _apply_sub(f, c, b, i, ltype, lk + _r16(f, lk + 6 + k * 2))
+        if r >= 0:
+            ret r
+        end
+        k++
+    end
+    ret -1
+end
+
+func _apply_lookup_pass(f: Font, table: int, gsub: bool, lidx: int, mask: int, b &: _Buf):
+    lk := _lookup_off(f, table, lidx)
+    if lk == 0:
+        ret
+    end
+    mut ltype := _r16(f, lk)
+    if gsub and ltype == 7 and _r16(f, lk + 4) > 0:
+        s := lk + _r16(f, lk + 6)
+        ltype = _r16(f, s + 2)
+    end
+    if gsub and ltype == 8:
+        mut i := b.g.len() - 1
+        until i >= 0:
+            if (b.mask.get(i) & mask) != 0:
+                _apply_lookup_at(f, table, gsub, lidx, b, i, 0)
+            end
+            i--
+        end
+        ret
+    end
+    mut i := 0
+    mut guard := 0
+    until i < b.g.len() and guard < 100000:
+        guard++
+        if (b.mask.get(i) & mask) != 0:
+            r := _apply_lookup_at(f, table, gsub, lidx, b, i, 0)
+            if r > i:
+                i = r
+                continue
+            end
+            if r == i and r >= 0:
+                continue
+            end
+        end
+        i++
+    end
+end

@@ -216,6 +216,17 @@ export type AdminPlatforms = {
   platforms: { id: PlatformId; count: number }[];
   systems: { os: string; version: string; arch: string; count: number }[];
 };
+export type UserProfile = {
+  id: number;
+  name: string;
+  email: string;
+  created: number;
+  plan: { id: string; name: string; source: string; started: number; expires: number };
+  counts: Record<string, number>;
+  identities: { provider: string; login: string; email: string; created: number }[];
+  integrations: { provider: string; login: string }[];
+  telegram: { tg_id: string; name: string; username: string; lang: string; created: number; last_seen: number }[];
+};
 export type AdminChatOwner = { id: number; name: string; email: string };
 export type Device = {
   id: number;
@@ -1343,6 +1354,7 @@ export const api = {
     ),
   adminUpdateKey: (id: number, policy: KeyPolicy) =>
     call<{ key: AdminKey }>("PATCH", `/admin/keys/${id}`, policy),
+  adminUserProfile: (id: number) => call<UserProfile>("GET", `/admin/users/${id}/profile`),
   adminUserChats: (id: number) =>
     call<{ chats: Chat[] }>("GET", `/admin/users/${id}/chats`),
   adminLatestChats: (offset: number, q: string) =>
@@ -1370,14 +1382,14 @@ export const api = {
     ),
   payments: () => call<{ payments: Payment[] }>("GET", "/billing/payments"),
   usage: () => call<UsageReport>("GET", "/usage"),
-  adminSubscriptions: (latest?: boolean, user?: number) =>
+  adminSubscriptions: (latest?: boolean, user?: number, all?: boolean) =>
     call<{
       subscriptions: AdminSubscription[];
       active: number;
       income: number;
     }>(
       "GET",
-      `/admin/subscriptions${query({ latest: latest ? 1 : undefined, user })}`,
+      `/admin/subscriptions${query({ latest: latest ? 1 : undefined, user, all: all ? 1 : undefined })}`,
     ),
   adminPlans: () => call<{ plans: AdminPlan[] }>("GET", "/admin/plans"),
   adminPlanSave: (id: string, body: Partial<Plan>) =>

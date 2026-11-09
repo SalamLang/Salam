@@ -1,0 +1,229 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import archive
+import compress
+import filepath
+import os
+
+const SEVENZ := """
+377abcaf271c00049404d554a9020000000000002300000000000000aa27adf5e0028f01f95d00311b0a4221b041e107a0b7c8b0e69bb8543ef7258142f3c896656b80be108f43b471310779f93497e9d66cee7a2a984c159889d8ded59855cb93f2e2fada2a0e2611c298176abc6753c43139c9d0f68b853e018f4d9f1a81423e06f420213ee4abdb7352b86243c518d723c86f58d99fa12fa8e181a9d9d0ccb42b97b77b83af2bbbfe9c9895436dc4e9a2f5683ab3d53fee48ad8400834573458ebe7ef98f5bf2ade6678d4bc407660e4c1b435f675f025804cc3080a8c33a550dea2ec0f6268304a2eecfbbdade7a1fab471c8e4fc48d4b5143146bd736332e4d421fdbb0eb22d30b6b72610802c49026c778a7fb453dd59e1d08fa35ae57c08a829821e6ed4ff3b8282f481f286427c2e3c3ff38fe9a1d1a4d62e77743691494e66f3e52d84f06f7dd189a8322b2089d6a8a0fe56e2915d9f4754713eefea898ef53a612e72c792d621bc7a5daedf706ed056eac831cb9c90b0b435fdfb6f79b01e741a0c6b966bdaf1b0515980c7137b0b160626de92350d4bb4db4cb17ad37d326efa3a30c8830d6c6a355a305abfc449cff2e519052a09cb44776294a69c02a28667e58e73939b176aa7ac19985981a303799be89c1f6bf80bb76f002043c001b456c78312420538519859d35348a13d31616ee775690252dfc2fdb984e3ecd3438bedb11dc4e53bd9172e28c27f2437b8e45b2b17262f057b4eb8ce0000000813307ae0fd542d7fd79ca18a87ab40deaff3bad6accd62cf6adc93e88d72b47cda8c270630e0997c53579420de9964729412b3865b1825112fc530ad1d1a3c8f1a9a6752d1b6d9377202b472f105b5baaa215c753451f407cc93ac6741c18aebdf73354dcfbd6c59af7b792795f1a55a1d7562c794edaa8596b8756350442b8fa95934f9468a3da9e78d2c005c32b0757964ebdb309e57789f7b35a690f18f911dd7ef6000017068201010980a800070b01000123030101055d001000000c81320a011db4d6ce0000
+"""
+
+func hex_val(c: int): int:
+    if c >= 97: ret c - 87 end
+    ret c - 48
+end
+
+func unhex(h: str): compress.ByteBuf:
+    mut b := compress.NewByteBuf()
+    bp := h as u8*
+    mut i := 0
+    until i < h.len():
+        c := bp[i] as int
+        if (c >= 48 and c <= 57) or (c >= 97 and c <= 102):
+            if i + 1 < h.len():
+                compress.BufPush(b, hex_val(c) * 16 + hex_val(bp[i + 1] as int))
+            end
+            i += 2
+        else:
+            i++
+        end
+    end
+    ret b
+end
+
+func make_files(): Vector<archive.FileInput>:
+    mut v := Vector {} as Vector<archive.FileInput>
+    v.push(archive.MakeFileInput("docs/", null, 0, true))
+    v.push(archive.MakeFileInput("docs/a.txt", "hello hello hello hello" as void*, 23, false))
+    v.push(archive.MakeFileInput("b.txt", "bee" as void*, 3, false))
+    ret v
+end
+
+func roundtrip(label: str, format: int):
+    mut files := make_files()
+    mut st := 0
+    mut buf := archive.CreateBuf(format, files, st)
+    mut arc := archive.Open(buf.data, buf.len, "")
+    println label, st, archive.FormatName(arc.format), arc.status
+    mut es := archive.List(arc)
+    println es.len()
+    mut data := archive.Read(arc, "docs/a.txt")
+    println arc.status, data.len
+    compress.BufFree(data)
+    mut miss := archive.Read(arc, "nope")
+    println arc.status, archive.ArchiveStatusText(arc.status)
+    compress.BufFree(miss)
+    archive.FreeEntries(es)
+    dest := filepath.Join(os.TempDir(), "salam_open_demo")
+    os.RemoveAll(dest)
+    n := archive.ExtractAll(arc, dest)
+    println n, arc.status, os.Exists(filepath.Join(dest, "docs/a.txt")), os.Exists(filepath.Join(dest, "b.txt"))
+    os.RemoveAll(dest)
+    archive.Close(arc)
+    compress.BufFree(buf)
+    files.free()
+end
+
+func single(label: str, format: int):
+    mut files := Vector {} as Vector<archive.FileInput>
+    files.push(archive.MakeFileInput("x.txt", "single stream" as void*, 13, false))
+    mut st := 0
+    mut buf := archive.CreateBuf(format, files, st)
+    mut arc := archive.Open(buf.data, buf.len, "")
+    mut es := archive.List(arc)
+    mut data := archive.Read(arc, "")
+    println label, st, archive.FormatName(arc.format), es.len(), data.len, arc.status
+    compress.BufFree(data)
+    archive.FreeEntries(es)
+    archive.Close(arc)
+    compress.BufFree(buf)
+    files.free()
+end
+
+
+func unsafe_cases():
+    dest := filepath.Join(os.TempDir(), "salam_open_unsafe")
+    os.RemoveAll(dest)
+    mut zs := Vector {} as Vector<archive.ZipFileInput>
+    zs.push(archive.MakeZipFileInput("ok.txt", "fine" as void*, 4, 0))
+    zs.push(archive.MakeZipFileInput("../evil.txt", "bad" as void*, 3, 0))
+    mut zb := archive.ZipCreate(zs)
+    mut za := archive.Open(zb.data, zb.len, "")
+    println archive.ExtractAll(za, dest), za.status, os.Exists(filepath.Join(dest, "ok.txt"))
+    archive.Close(za)
+    compress.BufFree(zb)
+    mut ts := Vector {} as Vector<archive.TarFileInput>
+    ts.push(archive.MakeTarSymlink("link", "../../etc"))
+    mut tb := archive.TarCreate(ts)
+    mut ta := archive.Open(tb.data, tb.len, "")
+    println archive.ExtractAll(ta, dest), ta.status
+    archive.Close(ta)
+    compress.BufFree(tb)
+    mut hs := Vector {} as Vector<archive.TarFileInput>
+    hs.push(archive.MakeTarSymlink("d", "sub"))
+    hs.push(archive.MakeTarFileInput("d/x.txt", "x" as void*, 1, false))
+    mut hb := archive.TarCreate(hs)
+    mut ha := archive.Open(hb.data, hb.len, "")
+    println archive.ExtractAll(ha, dest), ha.status
+    archive.Close(ha)
+    compress.BufFree(hb)
+    files := make_files()
+    mut st := 0
+    mut buf := archive.CreateBuf(archive.FormatZip, files, st)
+    mut lim := archive.DefaultLimits()
+    lim.max_entries = 2
+    mut a1 := archive.OpenWith(buf.data, buf.len, "", lim)
+    println archive.ExtractAll(a1, dest), a1.status
+    archive.Close(a1)
+    lim = archive.DefaultLimits()
+    lim.max_entry = 10 as i64
+    mut a2 := archive.OpenWith(buf.data, buf.len, "", lim)
+    println archive.ExtractAll(a2, dest), a2.status
+    mut d2 := archive.Read(a2, "docs/a.txt")
+    println d2.len, a2.status
+    compress.BufFree(d2)
+    archive.Close(a2)
+    mut big := compress.NewByteBuf()
+    mut zero := compress.NewByteBuf()
+    repeat 4096:
+        compress.BufPush(zero, 0)
+    end
+    repeat 300:
+        compress.BufPushBuf(big, zero)
+    end
+    compress.BufFree(zero)
+    mut bf := Vector {} as Vector<archive.FileInput>
+    bf.push(archive.MakeFileInput("z.bin", big.data, big.len, false))
+    mut zbuf := archive.CreateBuf(archive.FormatTar, bf, st)
+    mut gz := compress.GzipCompressBuf(zbuf)
+    lim = archive.DefaultLimits()
+    lim.max_ratio = 1
+    mut a3 := archive.OpenWith(gz.data, gz.len, "", lim)
+    println archive.ExtractAll(a3, dest), a3.status
+    archive.Close(a3)
+    lim = archive.DefaultLimits()
+    lim.max_total = 1000000 as i64
+    mut a4 := archive.OpenWith(gz.data, gz.len, "", lim)
+    println a4.status, archive.ArchiveStatusText(a4.status)
+    archive.Close(a4)
+    made := filepath.Join(os.TempDir(), "salam_open_made.zip")
+    println archive.Create(made, files), os.Exists(made)
+    os.Remove(made)
+    compress.BufFree(buf)
+    compress.BufFree(big)
+    compress.BufFree(zbuf)
+    compress.BufFree(gz)
+    bf.free()
+    os.RemoveAll(dest)
+end
+
+func file_cases():
+    dir := filepath.Join(os.TempDir(), "salam_open_files")
+    os.RemoveAll(dir)
+    os.MkdirAll(dir)
+    mut files := make_files()
+    path := filepath.Join(dir, "pack.tgz")
+    println archive.Create(path, files)
+    mut st := 0
+    mut es := archive.ListFile(path, "", st)
+    println es.len(), st
+    archive.FreeEntries(es)
+    out := filepath.Join(dir, "out")
+    println archive.ExtractFile(path, out, "", st), st, os.Exists(filepath.Join(out, "b.txt"))
+    mut arc := archive.OpenFile(path, "")
+    println archive.Detect(arc.data, arc.len) == archive.FormatGzip, archive.FormatName(arc.format)
+    println archive.Extract(arc, "docs/a.txt", filepath.Join(dir, "one")), os.Exists(filepath.Join(dir, "one/docs/a.txt"))
+    println archive.Extract(arc, "missing", filepath.Join(dir, "one")), arc.status
+    mut lim := archive.DefaultLimits()
+    lim.max_entry = 5 as i64
+    archive.SetLimits(arc, lim)
+    println archive.Extract(arc, "docs/a.txt", filepath.Join(dir, "two")), arc.status
+    archive.Close(arc)
+    os.RemoveAll(dir)
+    files.free()
+end
+
+func main:
+    unsafe_cases()
+    file_cases()
+    roundtrip("zip", archive.FormatZip)
+    roundtrip("tar", archive.FormatTar)
+    roundtrip("tgz", archive.FormatTarGz)
+    roundtrip("tbz2", archive.FormatTarBz2)
+    roundtrip("rar", archive.FormatRar)
+    roundtrip("7z", archive.FormatSevenZip)
+    single("gz", archive.FormatGzip)
+    single("bz2", archive.FormatBzip2)
+    mut z := unhex(SEVENZ)
+    mut arc := archive.Open(z.data, z.len, "")
+    mut es := archive.List(arc)
+    println archive.FormatName(arc.format), arc.status, es.len()
+    archive.FreeEntries(es)
+    archive.Close(arc)
+    compress.BufFree(z)
+    println archive.DetectName("a.TAR.GZ"), archive.DetectName("x.tgz"), archive.DetectName("x.7z"), archive.DetectName("x.bin")
+    junk := archive.Open("plain text here" as void*, 15, "")
+    println archive.FormatName(junk.format), junk.status, archive.ArchiveStatusText(junk.status)
+    zst := archive.Open("\x28\xb5\x2f\xfdabcd" as void*, 8, "")
+    println archive.FormatName(zst.format), archive.ArchiveStatusText(zst.status)
+    bad := archive.OpenFile("/nonexistent/file.zip", "")
+    println archive.ArchiveStatusText(bad.status)
+    mut files := make_files()
+    println archive.Create("/tmp/x.zst", files), archive.Create("/tmp/x.xyz", files)
+    files.free()
+end

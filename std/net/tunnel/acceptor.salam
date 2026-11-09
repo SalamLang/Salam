@@ -48,7 +48,8 @@ end
 
 struct _SourceCore:
     pub mu: sync.Mutex = sync.Mutex {}
-    pub counts: HashMap<str, int> = HashMap {}
+    pub keys: Vector<str> = Vector {}
+    pub counts: Vector<int> = Vector {}
 end
 
 @en "SourceTable"
@@ -234,6 +235,15 @@ func _accept_loop(srv: AcceptServer, proto: dyn InboundProtocol, h: dyn Handler)
     end
 end
 
+func _source_find(c: _SourceCore*, host: str): int:
+    repeat c[0].keys.len() in i:
+        if c[0].keys.get(i) == host:
+            ret i
+        end
+    end
+    ret 0 - 1
+end
+
 func _accept_thread(jp: _AcceptJob*):
     j := jp[0]
     mem.Free(jp as void*)
@@ -253,7 +263,9 @@ end
 pub func SourceKey(remote: str): str:
     h := rawsock.CanonIP(remote)
     if rawsock.IsIPv6(h):
-        ret rawsock.V6Prefix(h, 64)
+        k := rawsock.V6Prefix(h, 64)
+        mem.Free(h as void*)
+        ret k
     end
     ret h
 end
@@ -267,10 +279,17 @@ pub func SourceEnter(t: SourceTable, remote: str, limit: int): bool:
     host := SourceKey(remote)
     c := t.core as _SourceCore*
     sync.Lock(c[0].mu)
-    n := c[0].counts.get_or(host, 0)
-    ok := n < limit
-    if ok:
-        c[0].counts.put(host, n + 1)
+    at := _source_find(c, host)
+    mut ok := true
+    if at < 0:
+        c[0].keys.push(host)
+        c[0].counts.push(1)
+    else:
+        ok = c[0].counts.get(at) < limit
+        if ok:
+            c[0].counts.set(at, c[0].counts.get(at) + 1)
+        end
+        mem.Free(host as void*)
     end
     sync.Unlock(c[0].mu)
     ret ok
@@ -285,13 +304,19 @@ pub func SourceLeave(t: SourceTable, remote: str):
     host := SourceKey(remote)
     c := t.core as _SourceCore*
     sync.Lock(c[0].mu)
-    n := c[0].counts.get_or(host, 0)
-    if n <= 1:
-        c[0].counts.remove(host)
-    else:
-        c[0].counts.put(host, n - 1)
+    at := _source_find(c, host)
+    if at >= 0:
+        n := c[0].counts.get(at)
+        if n <= 1:
+            old := c[0].keys.remove_at(at)
+            c[0].counts.remove_at(at)
+            mem.Free(old as void*)
+        else:
+            c[0].counts.set(at, n - 1)
+        end
     end
     sync.Unlock(c[0].mu)
+    mem.Free(host as void*)
 end
 
 @en "NewAcceptServer"

@@ -485,7 +485,7 @@ function Users({ picked, onPick, notify }: { picked: Picked; onPick: (p: Picked)
           {error}
         </div>
       )}
-      <div className={`table-wrap scroll-y ${loading ? "busy" : ""}`}>
+      <div className={`table-wrap ${loading ? "busy" : ""}`}>
         <table className="data-table">
           <thead>
             <tr>
@@ -1133,7 +1133,7 @@ function Subscriptions({ picked, notify }: { picked: Picked; notify: (msg: strin
           <span className="sr-only">{t("در حال بارگذاری", "Loading")}</span>
         </div>
       ) : (
-        <div className="table-wrap scroll-y">
+        <div className="table-wrap">
           <table className="data-table">
             <thead>
               <tr>
@@ -1246,7 +1246,7 @@ function Payments({ picked }: { picked: Picked }) {
           <span className="sr-only">{t("در حال بارگذاری", "Loading")}</span>
         </div>
       ) : (
-        <div className="table-wrap scroll-y">
+        <div className="table-wrap">
           <table className="data-table">
             <thead>
               <tr>
@@ -1424,7 +1424,7 @@ function Conversations({ picked }: { picked: Picked }) {
           <span className="sr-only">{t("در حال بارگذاری", "Loading")}</span>
         </div>
       ) : (
-        <div className="table-wrap scroll-y">
+        <div className="table-wrap">
           <table className="data-table">
             <thead>
               <tr>
@@ -1601,7 +1601,7 @@ function KeyPolicies({ picked, notify }: { picked: Picked; notify: (msg: string,
           <span className="sr-only">{t("در حال بارگذاری", "Loading")}</span>
         </div>
       ) : (
-        <div className="table-wrap scroll-y">
+        <div className="table-wrap">
           <table className="data-table">
             <thead>
               <tr>
@@ -1760,7 +1760,7 @@ function AppsTable({ picked, notify }: { picked: Picked; notify: (msg: string, o
           <span className="sr-only">{t("در حال بارگذاری", "Loading")}</span>
         </div>
       ) : (
-        <div className="table-wrap scroll-y">
+        <div className="table-wrap">
           <table className="data-table">
             <thead>
               <tr>
@@ -1884,7 +1884,7 @@ function TelegramSessions({ picked, onPick }: { picked: Picked; onPick: (p: Pick
           {error}
         </div>
       )}
-      <div className="table-wrap scroll-y">
+      <div className="table-wrap">
         <table className="data-table">
           <thead>
             <tr>
@@ -2032,7 +2032,7 @@ function Guests() {
         </div>
       ) : (
         <>
-          <div className="table-wrap scroll-y">
+          <div className="table-wrap">
             <table className="data-table">
               <thead>
                 <tr>
@@ -2315,7 +2315,7 @@ function Sessions({ picked, notify }: { picked: Picked; notify: (msg: string, ok
         </div>
       ) : (
         <>
-          <div className="table-wrap scroll-y">
+          <div className="table-wrap">
             <table className="data-table">
               <thead>
                 <tr>
@@ -2483,7 +2483,7 @@ function Uploads({ picked, notify }: { picked: Picked; notify?: (msg: string, ok
         </div>
       ) : (
         <>
-          <div className="table-wrap scroll-y">
+          <div className="table-wrap">
             <table className="data-table">
               <thead>
                 <tr>

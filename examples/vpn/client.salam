@@ -1,0 +1,100 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import flag
+import io
+import os
+import net.doh
+import net.tunnel
+
+include "registry.salam"
+include "core.salam"
+
+func pick_node(fs &: flag.FlagSet): tunnel.Node:
+    mut nodes := Vector {} as Vector<tunnel.Node>
+    if flag.GetStr(fs, "link").len() > 0:
+        nodes.push(tunnel.ParseLink(flag.GetStr(fs, "link")))
+    end
+    if flag.GetStr(fs, "sub").len() > 0:
+        nodes = tunnel.ParseSubscription(io.ReadFile(flag.GetStr(fs, "sub"))).nodes
+    end
+    index := flag.GetInt(fs, "node") as int
+    if index < 1 or index > nodes.len(): ret tunnel.Node { error = "no node " + index + " (found " + nodes.len() + ")" } end
+    ret nodes[index - 1]
+end
+
+func rest_args(): Vector<str>:
+    mut out := Vector {} as Vector<str>
+    all := os.Args()
+    each i, a in all:
+        if i > 0: out.push(a) end
+    end
+    ret out
+end
+
+func resolver(name: str): doh.Resolver:
+    mut servers := Vector {} as Vector<doh.Server>
+    servers.push(name == "google" ? doh.Google() : doh.Cloudflare())
+    ret doh.NewResolver(servers)
+end
+
+func main:
+    mut fs := flag.New("client", "local mixed proxy (SOCKS4/5 + HTTP) in front of a vless/vmess/trojan/ss server")
+    flag.AddInt(fs, "listen", "l", 1080, "local port")
+    flag.AddStr(fs, "link", "", "", "share link (vless://, vmess://, trojan://, ss://)")
+    flag.AddStr(fs, "sub", "s", "", "subscription file (base64 or plain links)")
+    flag.AddInt(fs, "node", "n", 1, "which node of the subscription to use")
+    flag.AddStr(fs, "config", "c", "", "v2ray style JSON config (replaces link/sub)")
+    flag.AddBool(fs, "global", "g", false, "send everything through the proxy (no Iran preset)")
+    flag.AddStr(fs, "doh", "", "", "resolve names over DoH: cloudflare or google")
+    flag.AddBool(fs, "fragment", "f", false, "split the TLS ClientHello into small pieces")
+    flag.AddInt(fs, "stats", "", 10, "print traffic stats every N seconds")
+    flag.AddInt(fs, "duration", "", 0, "exit after N seconds (0 = until Ctrl-C)")
+    if not flag.Parse(fs, rest_args()) or flag.HelpWanted(fs):
+        println flag.Error(fs)
+        println flag.Usage(fs)
+        ret 2
+    end
+    mut opts := registry.Options { fragment = flag.GetBool(fs, "fragment") }
+    if flag.GetStr(fs, "doh").len() > 0:
+        opts.use_doh = true
+        opts.resolver = resolver(flag.GetStr(fs, "doh"))
+    end
+    registry.Install(opts)
+
+    if flag.GetStr(fs, "config").len() > 0:
+        ret core.RunConfig(flag.GetStr(fs, "config"), flag.GetInt(fs, "stats") as int, flag.GetInt(fs, "duration") as int)
+    end
+    node := pick_node(fs)
+    if not node.valid:
+        printerrln "client:", node.error
+        ret 1
+    end
+    println "using", tunnel.NodeLabel(node)
+    mut router := tunnel.IranRouter("direct", "proxy")
+    if flag.GetBool(fs, "global"): router = tunnel.NewRouter("proxy") end
+    mut dialer := tunnel.NewRouterDialer(router)
+    tunnel.RouterDialerAdd(dialer, "direct", tunnel.Direct())
+    tunnel.RouterDialerAdd(dialer, "proxy", registry.DialerFromNode(node))
+    stats := tunnel.NewStats()
+    mixed := tunnel.InboundConfig { tag = "mixed-in", protocol = "mixed", port = flag.GetInt(fs, "listen") as int }
+    l := core.Start(mixed, dialer, stats)
+    println "listening on port", l.port
+    core.Wait(stats, flag.GetInt(fs, "stats") as int, flag.GetInt(fs, "duration") as int)
+    core.Stop(l)
+    println "bye,", core.Summary(stats)
+    ret 0
+end

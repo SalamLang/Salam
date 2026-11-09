@@ -17,7 +17,9 @@ package main
 import archive
 import compress
 import filepath
+import mem
 import os
+import str
 
 const LZMA2 := """
 377abcaf271c00049404d554a9020000000000002300000000000000aa27adf5e0028f01f95d00311b0a4221b041e107a0
@@ -276,6 +278,53 @@ const EMPTY := """
 const WORDS := ["salam", "compress", "xz", "lzma", "archive", "the", "quick", "brown", "fox", "jumps", "over", "lazy", "dog", "stream", "block", "index"]
 const NAMES := ["a.txt", "docs/b.bin", "docs/note.txt", "empty.txt", "فارسی.txt"]
 
+mut pool_s := Vector {} as Vector<str>
+mut pool_l := Vector {} as Vector<Vector<archive.Entry>>
+mut pool_b := Vector {} as Vector<compress.ByteBuf>
+
+func ks(s: str): str:
+    pool_s.push(s)
+    ret s
+end
+
+func kb(b: compress.ByteBuf): compress.ByteBuf:
+    pool_b.push(b)
+    ret b
+end
+
+func txt(b: compress.ByteBuf): str:
+    ret ks(compress.BufToStrUnsafe(b))
+end
+
+func kl(v: Vector<archive.Entry>): Vector<archive.Entry>:
+    pool_l.push(v)
+    ret v
+end
+
+func release():
+    repeat pool_l.len() in i:
+        mut v := pool_l.get(i)
+        archive.FreeEntries(v)
+    end
+    pool_l.free()
+    repeat pool_s.len() in i:
+        s := pool_s.get(i)
+        if s.len() > 0:
+            mem.Free(s as void*)
+        end
+    end
+    pool_s.free()
+    repeat pool_b.len() in i:
+        mut b := pool_b.get(i)
+        compress.BufFree(b)
+    end
+    pool_b.free()
+end
+
+func j(a: str, b: str): str:
+    ret ks(filepath.Join(a, b))
+end
+
 func nib(c: int): int:
     if c >= 48 and c <= 57:
         ret c - 48
@@ -378,16 +427,16 @@ func expected(name: str): compress.ByteBuf:
 end
 
 func check(label: str, hex: str, password: str):
-    packed := unhex(hex)
+    packed := kb(unhex(hex))
     mut arc := archive.SevenZipOpen(packed.data, packed.len, password)
-    entries := archive.SevenZipEntries(arc)
+    entries := kl(archive.SevenZipEntries(arc))
     listed := arc.status
     mut same := 0
     mut method := -1
     repeat NAMES.len() in i:
         name := NAMES[i]
-        data := archive.SevenZipRead(arc, name, 0)
-        if arc.status == archive.SEVENZIP_OK and compress.BufEquals(data, expected(name)):
+        data := kb(archive.SevenZipRead(arc, name, 0))
+        if arc.status == archive.SEVENZIP_OK and compress.BufEquals(data, kb(expected(name))):
             same++
         end
         repeat entries.len() in k:
@@ -400,9 +449,9 @@ func check(label: str, hex: str, password: str):
 end
 
 func status_of(hex: str, password: str, name: str): int:
-    packed := unhex(hex)
+    packed := kb(unhex(hex))
     mut arc := archive.SevenZipOpen(packed.data, packed.len, password)
-    data := archive.SevenZipRead(arc, name, 0)
+    data := kb(archive.SevenZipRead(arc, name, 0))
     if data.len < 0:
         ret -1
     end
@@ -411,7 +460,7 @@ end
 
 func status_of_buf(b: compress.ByteBuf, name: str): int:
     mut arc := archive.SevenZipOpen(b.data, b.len, "")
-    data := archive.SevenZipRead(arc, name, 0)
+    data := kb(archive.SevenZipRead(arc, name, 0))
     if data.len < 0:
         ret -1
     end
@@ -420,11 +469,11 @@ end
 
 func read_text(path: str): str:
     mut ok := false
-    buf := archive.ReadBinaryFile(path, ok)
+    buf := kb(archive.ReadBinaryFile(path, ok))
     if not ok:
-        ret "missing"
+        ret ks(str.Clone("missing"))
     end
-    ret compress.BufToStrUnsafe(buf)
+    ret txt(buf)
 end
 
 func main:
@@ -441,17 +490,16 @@ func main:
     check("plain header", PLAINHDR, "")
 
     println "== listing =="
-    lz := unhex(LZMA2)
+    lz := kb(unhex(LZMA2))
     println archive.IsSevenZip(lz.data, lz.len), archive.IsSevenZip(lz.data, 3), archive.IsSevenZip("Rar!" as void*, 4)
     mut st := 0
-    mut list := archive.SevenZipListStatus(lz.data, lz.len, st)
+    mut list := kl(archive.SevenZipListStatus(lz.data, lz.len, st))
     println "status", st, "entries", list.len()
     repeat list.len() in i:
         e := list.get(i)
         println e.name, e.size, e.is_dir, e.kind, e.method, e.crc32, e.mtime, e.mode
     end
-    archive.FreeEntries(list)
-    list2 := archive.SevenZipList(lz.data, lz.len)
+    list2 := kl(archive.SevenZipList(lz.data, lz.len))
     println list2.len()
 
     println "== passwords =="
@@ -459,76 +507,76 @@ func main:
     check("encrypted data", ENCDATA, "secret")
     println "no password", status_of(ENC, "", "a.txt"), "wrong password", status_of(ENC, "nope", "a.txt")
     println "data only: no password", status_of(ENCDATA, "", "a.txt"), "wrong password", status_of(ENCDATA, "nope", "a.txt")
-    enc := unhex(ENCDATA)
+    enc := kb(unhex(ENCDATA))
     mut arc_enc := archive.SevenZipOpen(enc.data, enc.len, "")
-    println "names without password", archive.SevenZipEntries(arc_enc).len(), arc_enc.status
+    println "names without password", kl(archive.SevenZipEntries(arc_enc)).len(), arc_enc.status
 
     println "== extract one =="
     mut ok := false
-    one := archive.SevenZipExtractByName(lz.data, lz.len, "docs/note.txt", ok)
-    println ok, compress.BufToStrUnsafe(one)
-    big := archive.SevenZipExtractByNameMax(lz.data, lz.len, "a.txt", 10, ok)
+    one := kb(archive.SevenZipExtractByName(lz.data, lz.len, "docs/note.txt", ok))
+    println ok, txt(one)
+    big := kb(archive.SevenZipExtractByNameMax(lz.data, lz.len, "a.txt", 10, ok))
     println "max 10", ok, big.len
-    fit := archive.SevenZipExtractByNameMax(lz.data, lz.len, "a.txt", 176, ok)
+    fit := kb(archive.SevenZipExtractByNameMax(lz.data, lz.len, "a.txt", 176, ok))
     println "max 176", ok, fit.len
     mut code := 0
-    nope := archive.SevenZipExtract(lz.data, lz.len, "missing.txt", 0, code)
+    nope := kb(archive.SevenZipExtract(lz.data, lz.len, "missing.txt", 0, code))
     println "missing", nope.len, code, archive.SevenZipStatusText(code)
-    dirent := archive.SevenZipExtract(lz.data, lz.len, "docs", 0, code)
+    dirent := kb(archive.SevenZipExtract(lz.data, lz.len, "docs", 0, code))
     println "folder", code, dirent.len
-    zero := archive.SevenZipExtract(lz.data, lz.len, "empty.txt", 0, code)
+    zero := kb(archive.SevenZipExtract(lz.data, lz.len, "empty.txt", 0, code))
     println "empty file", code, zero.len
 
     println "== extract all =="
-    dir := filepath.Join(os.TempDir(), "salam_sevenzip_read")
+    dir := j(os.TempDir(), "salam_sevenzip_read")
     os.RemoveAll(dir)
     println archive.SevenZipExtractAll(lz.data, lz.len, dir)
-    println read_text(filepath.Join(dir, "docs/note.txt")) == compress.BufToStrUnsafe(expected("docs/note.txt")), os.Exists(filepath.Join(dir, "empty_dir")), os.Exists(filepath.Join(dir, "empty.txt"))
-    println read_text(filepath.Join(dir, "فارسی.txt"))
+    println read_text(j(dir, "docs/note.txt")) == txt(kb(expected("docs/note.txt"))), os.Exists(j(dir, "empty_dir")), os.Exists(j(dir, "empty.txt"))
+    println read_text(j(dir, "فارسی.txt"))
     os.RemoveAll(dir)
-    enc_all := unhex(ENC)
+    enc_all := kb(unhex(ENC))
     mut arc_all := archive.SevenZipOpen(enc_all.data, enc_all.len, "secret")
     println "encrypted", archive.SevenZipReadAll(arc_all, dir), arc_all.status
-    println read_text(filepath.Join(dir, "docs/note.txt")) == compress.BufToStrUnsafe(expected("docs/note.txt"))
+    println read_text(j(dir, "docs/note.txt")) == txt(kb(expected("docs/note.txt")))
     os.RemoveAll(dir)
-    ppm := unhex(PPMD)
+    ppm := kb(unhex(PPMD))
     println archive.SevenZipExtractAllStatus(ppm.data, ppm.len, dir, code), code
     os.RemoveAll(dir)
 
     println "== crafted archive =="
-    cr := unhex(CRAFT)
-    clist := archive.SevenZipListStatus(cr.data, cr.len, st)
+    cr := kb(unhex(CRAFT))
+    clist := kl(archive.SevenZipListStatus(cr.data, cr.len, st))
     println "status", st, "entries", clist.len()
     repeat clist.len() in i:
         e := clist.get(i)
         println e.name, e.size, e.compressed_size, e.is_dir, e.crc32, e.mtime, e.mode
     end
-    craft_dir := filepath.Join(os.TempDir(), "salam_sevenzip_craft")
-    escape := filepath.Join(os.TempDir(), "escape.txt")
+    craft_dir := j(os.TempDir(), "salam_sevenzip_craft")
+    escape := j(os.TempDir(), "escape.txt")
     os.Remove(escape)
     println archive.SevenZipExtractAllStatus(cr.data, cr.len, craft_dir, code), archive.SevenZipStatusText(code), os.Exists(escape)
-    println read_text(filepath.Join(craft_dir, "folder/second.txt")), os.Exists(filepath.Join(craft_dir, "deleted.txt"))
+    println read_text(j(craft_dir, "folder/second.txt")), os.Exists(j(craft_dir, "deleted.txt"))
     os.RemoveAll(craft_dir)
-    empty := unhex(EMPTY)
-    elist := archive.SevenZipListStatus(empty.data, empty.len, st)
+    empty := kb(unhex(EMPTY))
+    elist := kl(archive.SevenZipListStatus(empty.data, empty.len, st))
     println "empty archive", st, elist.len(), archive.SevenZipExtractAll(empty.data, empty.len, craft_dir)
     os.RemoveAll(craft_dir)
 
     println "== damaged =="
-    mut sig := unhex(LZMA2)
+    mut sig := kb(unhex(LZMA2))
     compress.BufSet(sig, 0, 56)
-    println "bad signature", archive.SevenZipListStatus(sig.data, sig.len, st).len(), st
-    mut crc := unhex(LZMA2)
+    println "bad signature", kl(archive.SevenZipListStatus(sig.data, sig.len, st)).len(), st
+    mut crc := kb(unhex(LZMA2))
     compress.BufSet(crc, 9, compress.BufGet(crc, 9) ^ 1)
-    println "start header crc", archive.SevenZipListStatus(crc.data, crc.len, st).len(), st
-    mut hdr := unhex(LZMA2)
+    println "start header crc", kl(archive.SevenZipListStatus(crc.data, crc.len, st)).len(), st
+    mut hdr := kb(unhex(LZMA2))
     compress.BufSet(hdr, hdr.len - 3, compress.BufGet(hdr, hdr.len - 3) ^ 16)
-    println "header crc", archive.SevenZipListStatus(hdr.data, hdr.len, st).len(), st
-    cut := unhex(LZMA2)
+    println "header crc", kl(archive.SevenZipListStatus(hdr.data, hdr.len, st)).len(), st
+    cut := kb(unhex(LZMA2))
     cut.len /= 2
-    println "truncated", archive.SevenZipListStatus(cut.data, cut.len, st).len(), st
-    println "tiny", archive.SevenZipListStatus(cut.data, 10, st).len(), st
-    mut copy := unhex(COPY)
+    println "truncated", kl(archive.SevenZipListStatus(cut.data, cut.len, st)).len(), st
+    println "tiny", kl(archive.SevenZipListStatus(cut.data, 10, st)).len(), st
+    mut copy := kb(unhex(COPY))
     compress.BufSet(copy, 36, compress.BufGet(copy, 36) ^ 1)
     mut bad_crc := 0
     repeat NAMES.len() in i:
@@ -537,8 +585,9 @@ func main:
         end
     end
     println "flipped data bit: files with a bad checksum", bad_crc
-    mut lzd := unhex(LZMA2)
+    mut lzd := kb(unhex(LZMA2))
     compress.BufSet(lzd, 40, compress.BufGet(lzd, 40) ^ 64)
     println "flipped compressed bit", status_of_buf(lzd, "a.txt") != archive.SEVENZIP_OK
     println archive.SevenZipStatusText(0), "|", archive.SevenZipStatusText(2), "|", archive.SevenZipStatusText(99)
+    release()
 end

@@ -20,6 +20,61 @@ import filepath
 import os
 import str
 import fs
+import mem
+
+mut pool_s := Vector {} as Vector<str>
+mut pool_b := Vector {} as Vector<compress.ByteBuf>
+
+func ks(s: str): str:
+    pool_s.push(s)
+    ret s
+end
+
+func kb(b: compress.ByteBuf): compress.ByteBuf:
+    pool_b.push(b)
+    ret b
+end
+
+func txt(b: compress.ByteBuf): str:
+    ret ks(compress.BufToStrUnsafe(b))
+end
+
+func release():
+    repeat pool_s.len() in i:
+        s := pool_s.get(i)
+        if s.len() > 0:
+            mem.Free(s as void*)
+        end
+    end
+    pool_s.free()
+    repeat pool_b.len() in i:
+        mut b := pool_b.get(i)
+        compress.BufFree(b)
+    end
+    pool_b.free()
+end
+
+func j(a: str, b: str): str:
+    ret ks(filepath.Join(a, b))
+end
+
+func fname(i: int): str:
+    n := str.FromInt(i as i64)
+    mut sb := str.NewBuilder()
+    str.BufAppend(sb, "f/")
+    str.BufAppend(sb, n)
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    mem.Free(n as void*)
+    ret ks(out)
+end
+
+func count_list(p: void*, n: int): int:
+    mut l := archive.ZipList(p, n)
+    c := l.len()
+    archive.FreeEntries(l)
+    ret c
+end
 
 func hexval(c: int): int:
     ret c <= 57 ? c - 48 : c - 87
@@ -59,11 +114,11 @@ func fixture(name: str): compress.ByteBuf:
 end
 
 func text_of(b: compress.ByteBuf): str:
-    ret compress.BufToStrUnsafe(b)
+    ret txt(b)
 end
 
 func show(label: str):
-    d := fixture(label)
+    d := kb(fixture(label))
     mut entries := archive.ZipList(d.data, d.len)
     mut checked := 0
     bad := archive.ZipVerify(d.data, d.len, checked)
@@ -73,8 +128,8 @@ func show(label: str):
     end
     archive.FreeEntries(entries)
     mut status := 0
-    a := archive.ZipExtractVerified(d.data, d.len, "docs/a.txt", 0, status)
-    println " a.txt", status, a.len, text_of(a).substr(0, 9)
+    a := kb(archive.ZipExtractVerified(d.data, d.len, "docs/a.txt", 0, status))
+    println " a.txt", status, a.len, ks(text_of(a).substr(0, 9))
 end
 
 func patch_byte(b: compress.ByteBuf, at: int, v: int):
@@ -101,28 +156,28 @@ func main:
     show("py_stored")
     show("py_z64_stored")
 
-    fz := fixture("info_fz")
+    fz := kb(fixture("info_fz"))
     println "zip64 eocd", find_sig(fz, 0x06064b50, 0) > 0, find_sig(fz, 0x07064b50, 0) > 0
 
     mut status := 0
-    st := fixture("py_stored")
+    st := kb(fixture("py_stored"))
     mut ok := false
     fa_name := "سلام/نام.txt"
-    fa := archive.ZipExtractVerified(st.data, st.len, fa_name, 0, status)
+    fa := kb(archive.ZipExtractVerified(st.data, st.len, fa_name, 0, status))
     println status, text_of(fa).len()
-    miss := archive.ZipExtractVerified(st.data, st.len, "none", 0, status)
+    miss := kb(archive.ZipExtractVerified(st.data, st.len, "none", 0, status))
     println status, miss.len, archive.ZipStatusText(status)
-    capped := archive.ZipExtractVerified(st.data, st.len, "docs/a.txt", 10, status)
+    capped := kb(archive.ZipExtractVerified(st.data, st.len, "docs/a.txt", 10, status))
     println status, capped.len, archive.ZipStatusText(status)
 
     at := find_sig(st, 0x04034b50, 0)
     println "first local", at
     data_at := find_sig(st, 0x04034b50, at + 4)
     patch_byte(st, data_at + 30 + 10 + 3, 0x5a)
-    bad := archive.ZipExtractVerified(st.data, st.len, "docs/a.txt", 0, status)
+    bad := kb(archive.ZipExtractVerified(st.data, st.len, "docs/a.txt", 0, status))
     println status, bad.len, archive.ZipStatusText(status)
-    plain := archive.ZipExtractByName(st.data, st.len, "docs/a.txt", ok)
-    println ok, plain.len, text_of(plain).substr(3, 1)
+    plain := kb(archive.ZipExtractByName(st.data, st.len, "docs/a.txt", ok))
+    println ok, plain.len, ks(text_of(plain).substr(3, 1))
     mut checked := 0
     println archive.ZipVerify(st.data, st.len, checked), checked
     mut broken := archive.ZipBadEntries(st.data, st.len)
@@ -130,25 +185,25 @@ func main:
         println "bad entry", e.name
     end
     archive.FreeEntries(broken)
-    dir := filepath.Join(os.TempDir(), "salam_zip_upgrade")
+    dir := j(os.TempDir(), "salam_zip_upgrade")
     os.RemoveAll(dir)
     println archive.ZipExtractAll(st.data, st.len, dir)
-    println os.Exists(filepath.Join(dir, "docs/a.txt")), os.Exists(filepath.Join(dir, "empty.txt")), os.Exists(filepath.Join(dir, "سلام/نام.txt"))
+    println os.Exists(j(dir, "docs/a.txt")), os.Exists(j(dir, "empty.txt")), os.Exists(j(dir, "سلام/نام.txt"))
     os.RemoveAll(dir)
 
-    pyz := fixture("py_deflate")
+    pyz := kb(fixture("py_deflate"))
     println archive.ZipExtractAll(pyz.data, pyz.len, dir)
-    println SALAM_OS_WINDOWS or sizeof(void*) != 8 or fs.ModTime(filepath.Join(dir, "docs/a.txt")) == (1621247444 as i64)
-    println os.Exists(filepath.Join(dir, "سلام/نام.txt"))
+    println SALAM_OS_WINDOWS or sizeof(void*) != 8 or fs.ModTime(j(dir, "docs/a.txt")) == (1621247444 as i64)
+    println os.Exists(j(dir, "سلام/نام.txt"))
     os.RemoveAll(dir)
 
-    junk := compress.BufFromStr("this is not a zip file at all, just text")
-    println archive.ZipVerify(junk.data, junk.len, checked), checked, archive.ZipList(junk.data, junk.len).len()
-    _ := archive.ZipExtractVerified(junk.data, junk.len, "x", 0, status)
+    junk := kb(compress.BufFromStr("this is not a zip file at all, just text"))
+    println archive.ZipVerify(junk.data, junk.len, checked), checked, count_list(junk.data, junk.len)
+    _ := kb(archive.ZipExtractVerified(junk.data, junk.len, "x", 0, status))
     println archive.ZipStatusText(status)
 
     body := "persian name, dated file, persian name, dated file"
-    b := compress.BufFromStr(body)
+    b := kb(compress.BufFromStr(body))
     mut files := Vector {} as Vector<archive.ZipFileInput>
     mut f1 := archive.MakeZipFileInput("سلام.txt", b.data, b.len, 8)
     f1.mtime = 1700000000 as i64
@@ -163,7 +218,7 @@ func main:
     files.push(f3)
     files.push(f4)
     files.push(archive.MakeZipFileInput("dir/", null, 0, 0))
-    z := archive.ZipCreate(files)
+    z := kb(archive.ZipCreate(files))
     mut listed := archive.ZipList(z.data, z.len)
     each e in listed:
         println e.name, e.size, e.mtime
@@ -176,18 +231,18 @@ func main:
     println "central flag", archive.LEGet16(z.data, central + 8), archive.LEGet16(z.data, central + 12), archive.LEGet16(z.data, central + 14)
     println archive.ZipVerify(z.data, z.len, checked), checked
 
-    z64 := archive.ZipCreate64(files)
+    z64 := kb(archive.ZipCreate64(files))
     println "zip64", find_sig(z64, 0x06064b50, 0) > 0, find_sig(z64, 0x07064b50, 0) > 0, z64.len > z.len
     mut listed64 := archive.ZipList(z64.data, z64.len)
     println listed64.len(), listed64.get(0).name, listed64.get(0).size, listed64.get(0).mtime
     archive.FreeEntries(listed64)
     println archive.ZipVerify(z64.data, z64.len, checked), checked
-    back := archive.ZipExtractVerified(z64.data, z64.len, "plain.txt", 0, status)
+    back := kb(archive.ZipExtractVerified(z64.data, z64.len, "plain.txt", 0, status))
     println status, text_of(back) == body
     eocd := z64.len - 22
     println "eocd", archive.LEGet16(z64.data, eocd + 10), archive.LEGet32(z64.data, eocd + 16)
 
-    huge := archive.ZipCreate64(files)
+    huge := kb(archive.ZipCreate64(files))
     c1 := find_sig(huge, 0x02014b50, 0)
     extra_at := c1 + 46 + 12 + 4
     patch_byte(huge, extra_at + 4, 1)
@@ -195,46 +250,56 @@ func main:
     mut hl := archive.ZipList(huge.data, huge.len)
     println hl.get(0).name, hl.get(0).size, hl.get(0).compressed_size
     archive.FreeEntries(hl)
-    big2 := archive.ZipExtractVerified(huge.data, huge.len, "سلام.txt", 0, status)
+    big2 := kb(archive.ZipExtractVerified(huge.data, huge.len, "سلام.txt", 0, status))
     println status, big2.len, archive.ZipStatusText(status)
-    _ := archive.ZipExtractByName(huge.data, huge.len, "سلام.txt", ok)
+    _ := kb(archive.ZipExtractByName(huge.data, huge.len, "سلام.txt", ok))
     println ok
     println archive.ZipVerify(huge.data, huge.len, checked), checked
 
     mut cut := compress.NewByteBuf()
     compress.BufPushBytes(cut, z64.data, z64.len - 30)
-    println archive.ZipList(cut.data, cut.len).len(), archive.ZipVerify(cut.data, cut.len, checked)
+    println count_list(cut.data, cut.len), archive.ZipVerify(cut.data, cut.len, checked)
     mut chopped := compress.NewByteBuf()
     compress.BufPushBytes(chopped, z64.data, z64.len)
     patch_byte(chopped, z64.len - 22 - 20 - 56 + 48, 0xff)
     patch_byte(chopped, z64.len - 22 - 20 - 56 + 49, 0xff)
-    println archive.ZipList(chopped.data, chopped.len).len()
+    println count_list(chopped.data, chopped.len)
 
     mut wide := Vector {} as Vector<archive.ZipFileInput>
     mut i := 0
     until i < 66000:
-        wide.push(archive.MakeZipFileInput("f/" + str.FromInt(i as i64), null, 0, 0))
+        wide.push(archive.MakeZipFileInput(fname(i), null, 0, 0))
         i++
     end
-    wz := archive.ZipCreate(wide)
-    wl := archive.ZipList(wz.data, wz.len)
+    wz := kb(archive.ZipCreate(wide))
+    mut wl := archive.ZipList(wz.data, wz.len)
     println wl.len(), wl.get(65999).name, find_sig(wz, 0x06064b50, wz.len - 200) > 0
     println archive.ZipVerify(wz.data, wz.len, checked), checked
 
     println "limits"
     mut bad_in := Vector {} as Vector<archive.ZipFileInput>
     bad_in.push(archive.MakeZipFileInput("neg", b.data, -5, 0))
-    println archive.ZipCreate(bad_in).len
+    println kb(archive.ZipCreate(bad_in)).len
     mut nul_in := Vector {} as Vector<archive.ZipFileInput>
     nul_in.push(archive.MakeZipFileInput("nul", null, 10, 0))
-    println archive.ZipCreate(nul_in).len
+    println kb(archive.ZipCreate(nul_in)).len
     mut big_in := Vector {} as Vector<archive.ZipFileInput>
     big_in.push(archive.MakeZipFileInput("big", b.data, 2000000000, 0))
-    println archive.ZipCreate(big_in).len, archive.ZipCreate64(big_in).len
-    println archive.ZipCreateFile(big_in, filepath.Join(os.TempDir(), "salam_zip_never.zip"))
+    println kb(archive.ZipCreate(big_in)).len, kb(archive.ZipCreate64(big_in)).len
+    println archive.ZipCreateFile(big_in, j(os.TempDir(), "salam_zip_never.zip"))
     mut long_in := Vector {} as Vector<archive.ZipFileInput>
-    long_in.push(archive.MakeZipFileInput(repeat_str("n", 70000), b.data, 5, 0))
-    println archive.ZipCreate(long_in).len
+    long_in.push(archive.MakeZipFileInput(ks(repeat_str("n", 70000)), b.data, 5, 0))
+    println kb(archive.ZipCreate(long_in)).len
+    compress.BufFree(cut)
+    compress.BufFree(chopped)
+    files.free()
+    wide.free()
+    bad_in.free()
+    nul_in.free()
+    big_in.free()
+    long_in.free()
+    archive.FreeEntries(wl)
+    release()
 end
 
 func repeat_str(s: str, count: int): str:

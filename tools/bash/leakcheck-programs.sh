@@ -69,7 +69,8 @@ run_case() {
     fi
     (cd "$d" && ASAN_OPTIONS="$LEAK_ASAN_OPTIONS" "$d/prog" \
         >"$d/run.out" 2>"$d/run.err")
-    if ! grep -q '0 failed' "$d/run.out" 2>/dev/null; then
+    exp="$ROOT/tests/en/stdlib/$name.out"
+    if ! grep -q '0 failed' "$d/run.out" 2>/dev/null && ! { [ -f "$exp" ] && cmp -s "$exp" "$d/run.out"; }; then
         printf '  %-24s TEST FAILED (see %s)\n' "$name" "$d/run.out"
         BROKE=$((BROKE + 1))
         return

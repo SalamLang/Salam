@@ -15,17 +15,30 @@
 package main
 
 import compress
+import mem
+import str
 import testing
 
-func roundtrip_check(name: str, orig: compress.ByteBuf, decoded: compress.ByteBuf):
-    testing.AssertMsg(compress.BufEquals(orig, decoded), name + " round-trip mismatch")
+func named(ok: bool, a: str, b: str, c: str):
+    mut sb := str.NewBuilder()
+    str.BufAppend(sb, a)
+    str.BufAppend(sb, b)
+    str.BufAppend(sb, c)
+    m := str.BufStr(sb)
+    str.BufFree(sb)
+    testing.AssertMsg(ok, m)
+    mem.Free(m as void*)
+end
+
+func roundtrip_check(tag: str, s: str, orig: compress.ByteBuf, decoded: compress.ByteBuf):
+    named(compress.BufEquals(orig, decoded), tag, s, " round-trip mismatch")
 end
 
 func check_rle(s: str):
     mut orig := compress.BufFromStr(s)
     mut comp := compress.RLECompress(orig.data, orig.len)
     mut decomp := compress.RLEDecompress(comp.data, comp.len)
-    roundtrip_check("rle:" + s, orig, decomp)
+    roundtrip_check("rle:", s, orig, decomp)
     compress.BufFree(orig)
     compress.BufFree(comp)
     compress.BufFree(decomp)
@@ -35,7 +48,7 @@ func check_huffman(s: str):
     mut orig := compress.BufFromStr(s)
     mut comp := compress.HuffmanCompress(orig.data, orig.len)
     mut decomp := compress.HuffmanDecompress(comp.data, comp.len)
-    roundtrip_check("huffman:" + s, orig, decomp)
+    roundtrip_check("huffman:", s, orig, decomp)
     compress.BufFree(orig)
     compress.BufFree(comp)
     compress.BufFree(decomp)
@@ -45,7 +58,7 @@ func check_lz77(s: str):
     mut orig := compress.BufFromStr(s)
     mut comp := compress.LZ77Compress(orig.data, orig.len)
     mut decomp := compress.LZ77Decompress(comp.data, comp.len)
-    roundtrip_check("lz77:" + s, orig, decomp)
+    roundtrip_check("lz77:", s, orig, decomp)
     compress.BufFree(orig)
     compress.BufFree(comp)
     compress.BufFree(decomp)
@@ -55,7 +68,7 @@ func check_lzw(s: str):
     mut orig := compress.BufFromStr(s)
     mut comp := compress.LZWCompress(orig.data, orig.len)
     mut decomp := compress.LZWDecompress(comp.data, comp.len)
-    roundtrip_check("lzw:" + s, orig, decomp)
+    roundtrip_check("lzw:", s, orig, decomp)
     compress.BufFree(orig)
     compress.BufFree(comp)
     compress.BufFree(decomp)
@@ -65,7 +78,7 @@ func check_deflate(s: str):
     mut orig := compress.BufFromStr(s)
     mut comp := compress.DeflateCompress(orig.data, orig.len)
     mut decomp := compress.DeflateDecompress(comp.data, comp.len)
-    roundtrip_check("deflate:" + s, orig, decomp)
+    roundtrip_check("deflate:", s, orig, decomp)
     compress.BufFree(orig)
     compress.BufFree(comp)
     compress.BufFree(decomp)
@@ -75,7 +88,7 @@ func check_bwt(s: str):
     mut orig := compress.BufFromStr(s)
     mut comp := compress.BWTCompress(orig.data, orig.len)
     mut decomp := compress.BWTDecompress(comp.data, comp.len)
-    roundtrip_check("bwt:" + s, orig, decomp)
+    roundtrip_check("bwt:", s, orig, decomp)
     compress.BufFree(orig)
     compress.BufFree(comp)
     compress.BufFree(decomp)
@@ -86,8 +99,8 @@ func check_raw_deflate(s: str):
     mut comp := compress.RawDeflate(orig.data, orig.len)
     mut ok := false
     mut decomp := compress.RawInflate(comp.data, comp.len, orig.len, ok)
-    testing.AssertMsg(ok, "raw_deflate:" + s + " reported not ok")
-    roundtrip_check("raw_deflate:" + s, orig, decomp)
+    named(ok, "raw_deflate:", s, " reported not ok")
+    roundtrip_check("raw_deflate:", s, orig, decomp)
     compress.BufFree(orig)
     compress.BufFree(comp)
     compress.BufFree(decomp)
@@ -98,33 +111,37 @@ func check_gzip(s: str):
     mut comp := compress.GzipCompress(orig.data, orig.len)
     mut ok := false
     mut decomp := compress.GzipDecompress(comp.data, comp.len, ok)
-    testing.AssertMsg(ok, "gzip:" + s + " reported not ok")
-    roundtrip_check("gzip:" + s, orig, decomp)
+    named(ok, "gzip:", s, " reported not ok")
+    roundtrip_check("gzip:", s, orig, decomp)
     compress.BufFree(orig)
     compress.BufFree(comp)
     compress.BufFree(decomp)
 end
 
 func repeat_str(s: str, count: int): str:
-    mut sb := ""
+    mut sb := str.NewBuilder()
     mut i := 0
     until i < count:
-        sb += s
+        str.BufAppend(sb, s)
         i++
     end
-    ret sb
+    out := str.BufStr(sb)
+    str.BufFree(sb)
+    ret out
 end
 
 func check_corrupt_inflate(bytes: str):
     mut buf := compress.NewByteBuf()
     parts := bytes.split(" ")
     repeat parts.len() in i:
-        compress.BufPush(buf, parts.get(i).to_int())
+        part := parts.get(i)
+        compress.BufPush(buf, part.to_int())
+        mem.Free(part as void*)
     end
     parts.free()
     mut ok := true
     mut out := compress.RawInflate(buf.data, buf.len, 0, ok)
-    testing.AssertMsg(not ok, "corrupt inflate:" + bytes + " reported ok")
+    named(not ok, "corrupt inflate:", bytes, " reported ok")
     compress.BufFree(out)
     compress.BufFree(buf)
 end
@@ -165,7 +182,9 @@ func main:
     check_corrupt_inflate("133 51 167 86 13")
     check_corrupt_inflate("77 202 24 37 48 187 29 109")
 
-    check_lzw(repeat_str("The quick brown fox jumps over the lazy dog. ", 200))
+    long_text := repeat_str("The quick brown fox jumps over the lazy dog. ", 200)
+    check_lzw(long_text)
+    mem.Free(long_text as void*)
 
     mut bin := compress.NewByteBuf()
     compress.BufPush(bin, 0)
@@ -179,37 +198,37 @@ func main:
 
     mut bc := compress.HuffmanCompress(bin.data, bin.len)
     mut bd := compress.HuffmanDecompress(bc.data, bc.len)
-    roundtrip_check("binary:huffman", bin, bd)
+    roundtrip_check("binary:huffman", "", bin, bd)
     compress.BufFree(bc)
     compress.BufFree(bd)
 
     bc = compress.RLECompress(bin.data, bin.len)
     bd = compress.RLEDecompress(bc.data, bc.len)
-    roundtrip_check("binary:rle", bin, bd)
+    roundtrip_check("binary:rle", "", bin, bd)
     compress.BufFree(bc)
     compress.BufFree(bd)
 
     bc = compress.LZ77Compress(bin.data, bin.len)
     bd = compress.LZ77Decompress(bc.data, bc.len)
-    roundtrip_check("binary:lz77", bin, bd)
+    roundtrip_check("binary:lz77", "", bin, bd)
     compress.BufFree(bc)
     compress.BufFree(bd)
 
     bc = compress.LZWCompress(bin.data, bin.len)
     bd = compress.LZWDecompress(bc.data, bc.len)
-    roundtrip_check("binary:lzw", bin, bd)
+    roundtrip_check("binary:lzw", "", bin, bd)
     compress.BufFree(bc)
     compress.BufFree(bd)
 
     bc = compress.DeflateCompress(bin.data, bin.len)
     bd = compress.DeflateDecompress(bc.data, bc.len)
-    roundtrip_check("binary:deflate", bin, bd)
+    roundtrip_check("binary:deflate", "", bin, bd)
     compress.BufFree(bc)
     compress.BufFree(bd)
 
     bc = compress.BWTCompress(bin.data, bin.len)
     bd = compress.BWTDecompress(bc.data, bc.len)
-    roundtrip_check("binary:bwt", bin, bd)
+    roundtrip_check("binary:bwt", "", bin, bd)
     compress.BufFree(bc)
     compress.BufFree(bd)
 
@@ -217,7 +236,7 @@ func main:
     mut raw_ok := false
     bd = compress.RawInflate(bc.data, bc.len, bin.len, raw_ok)
     testing.AssertMsg(raw_ok, "binary:raw_deflate reported not ok")
-    roundtrip_check("binary:raw_deflate", bin, bd)
+    roundtrip_check("binary:raw_deflate", "", bin, bd)
     compress.BufFree(bc)
     compress.BufFree(bd)
 
@@ -225,7 +244,7 @@ func main:
     mut gz_ok := false
     bd = compress.GzipDecompress(bc.data, bc.len, gz_ok)
     testing.AssertMsg(gz_ok, "binary:gzip reported not ok")
-    roundtrip_check("binary:gzip", bin, bd)
+    roundtrip_check("binary:gzip", "", bin, bd)
     compress.BufFree(bc)
     compress.BufFree(bd)
 
@@ -241,7 +260,9 @@ func main:
         method := methods[m]
         mut mc := compress.CompressBuf(method, text)
         mut md := compress.DecompressBuf(method, mc)
-        testing.AssertMsg(compress.BufEquals(text, md), "dispatch method " + method + " round-trip mismatch")
+        method_name := str.FromInt(method as i64)
+        named(compress.BufEquals(text, md), "dispatch method ", method_name, " round-trip mismatch")
+        mem.Free(method_name as void*)
         compress.BufFree(mc)
         compress.BufFree(md)
         m++

@@ -19,6 +19,7 @@ import compress
 import os
 import filepath
 import mem
+import str
 
 func rar_block(b &: compress.ByteBuf, name: str, data: str):
     name_len := name.len()
@@ -67,11 +68,20 @@ end
 
 func read_text(path: str): str:
     mut ok := false
-    buf := archive.ReadBinaryFile(path, ok)
+    mut buf := archive.ReadBinaryFile(path, ok)
+    defer compress.BufFree(buf)
     if not ok:
-        ret "missing"
+        ret str.Clone("missing")
     end
     ret compress.BufToStrUnsafe(buf)
+end
+
+func print_text(dir: str, name: str):
+    path := filepath.Join(dir, name)
+    t := read_text(path)
+    println t
+    mem.Free(t as void*)
+    mem.Free(path as void*)
 end
 
 func main:
@@ -87,32 +97,44 @@ func main:
     archive.LEPut32(round, 305419896)
     archive.LEPut16(round, 513)
     println archive.LEGet32(round.data, 0), archive.LEGet16(round.data, 4)
+    compress.BufFree(le)
+    compress.BufFree(round)
 
     body := "a payload that is longer than ten bytes"
     mut files := Vector {} as Vector<archive.ZipFileInput>
     files.push(archive.MakeZipFileInput("p.txt", body as void*, body.len(), 8))
-    z := archive.ZipCreate(files)
+    mut z := archive.ZipCreate(files)
+    files.free()
     mut ok := false
-    small := archive.ZipExtractByNameMax(z.data, z.len, "p.txt", 10, ok)
+    mut small := archive.ZipExtractByNameMax(z.data, z.len, "p.txt", 10, ok)
     println ok, small.len
-    exact := archive.ZipExtractByNameMax(z.data, z.len, "p.txt", body.len(), ok)
-    println ok, compress.BufToStrUnsafe(exact) == body
-    open := archive.ZipExtractByNameMax(z.data, z.len, "p.txt", 0, ok)
+    mut exact := archive.ZipExtractByNameMax(z.data, z.len, "p.txt", body.len(), ok)
+    exact_text := compress.BufToStrUnsafe(exact)
+    println ok, exact_text == body
+    mut open := archive.ZipExtractByNameMax(z.data, z.len, "p.txt", 0, ok)
     println ok, open.len
-    _ := archive.ZipExtractByNameMax(z.data, z.len, "none", 100, ok)
+    mut none := archive.ZipExtractByNameMax(z.data, z.len, "none", 100, ok)
     println ok
+    mem.Free(exact_text as void*)
+    compress.BufFree(small)
+    compress.BufFree(exact)
+    compress.BufFree(open)
+    compress.BufFree(none)
+    compress.BufFree(z)
 
     dir := filepath.Join(os.TempDir(), "salam_archive_extra")
     os.RemoveAll(dir)
-    rar := build_rar()
-    println archive.IsRar(rar.data, rar.len), archive.RarList(rar.data, rar.len).len()
+    mut rar := build_rar()
+    mut listed := archive.RarList(rar.data, rar.len)
+    println archive.IsRar(rar.data, rar.len), listed.len()
+    archive.FreeEntries(listed)
     println archive.RarExtractAll(rar.data, rar.len, dir)
-    top := filepath.Join(dir, "top.txt")
-    inner := filepath.Join(dir, "sub/inner.txt")
+    print_text(dir, "top.txt")
+    print_text(dir, "sub/inner.txt")
     escape := filepath.Join(dir, "../escape.txt")
-    println read_text(top)
-    println read_text(inner)
     println os.Exists(escape)
+    mem.Free(escape as void*)
     os.RemoveAll(dir)
     mem.Free(dir as void*)
+    compress.BufFree(rar)
 end

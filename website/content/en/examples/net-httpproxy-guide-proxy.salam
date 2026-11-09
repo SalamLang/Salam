@@ -1,0 +1,54 @@
+import net.httpproxy
+import net.tcp
+import sync
+
+mut origin_port := 0
+mut echo_port := 0
+mut ready := sync.NewWaitGroup()
+
+func origin():
+    srv := tcp.Bind(0)
+    origin_port = tcp.Port(srv)
+    sync.Done(ready)
+    until true:
+        c := tcp.Accept(srv)
+        request := tcp.Read(c, 4096)
+        first := request.substr(0, request.find("\r\n"))
+        body := "origin saw: " + first
+        tcp.Write(c, "HTTP/1.1 200 OK\r\nContent-Length: " + body.len() + "\r\nConnection: close\r\n\r\n" + body)
+        tcp.Close(c)
+    end
+end
+
+func echo():
+    srv := tcp.Bind(0)
+    echo_port = tcp.Port(srv)
+    sync.Done(ready)
+    until true:
+        c := tcp.Accept(srv)
+        tcp.Write(c, "echo:" + tcp.Read(c, 100))
+        tcp.Close(c)
+    end
+end
+
+func start_backends():
+    sync.Add(ready, 2 as i64)
+    _a := spawn(origin)
+    _b := spawn(echo)
+    sync.Wait(ready)
+end
+
+func main:
+    start_backends()
+    server := httpproxy.Start(httpproxy.NewServerConfig(0))
+    client := httpproxy.NewClient("127.0.0.1", server.port)
+
+    plain := httpproxy.Get(client, "http://127.0.0.1:" + origin_port + "/news")
+    println "plain http:", plain.status, plain.body
+
+    tunnel := httpproxy.Connect(client, "127.0.0.1", echo_port)
+    tunnel.stream.Write("anything, even TLS")
+    println "tunnel:", tunnel.status, tunnel.stream.Read(100)
+    tunnel.stream.Close()
+    httpproxy.Stop(server)
+end

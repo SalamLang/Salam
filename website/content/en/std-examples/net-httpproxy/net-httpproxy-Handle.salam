@@ -1,0 +1,59 @@
+import net.httpproxy
+import net.tcp
+import net.tunnel
+import sync
+
+mut proxy_port := 0
+
+mut origin_port := 0
+mut echo_port := 0
+mut ready := sync.NewWaitGroup()
+
+func origin():
+    srv := tcp.Bind(0)
+    origin_port = tcp.Port(srv)
+    sync.Done(ready)
+    until true:
+        c := tcp.Accept(srv)
+        request := tcp.Read(c, 4096)
+        first := request.substr(0, request.find("\r\n"))
+        body := "origin saw: " + first
+        tcp.Write(c, "HTTP/1.1 200 OK\r\nContent-Length: " + body.len() + "\r\nConnection: close\r\n\r\n" + body)
+        tcp.Close(c)
+    end
+end
+
+func echo():
+    srv := tcp.Bind(0)
+    echo_port = tcp.Port(srv)
+    sync.Done(ready)
+    until true:
+        c := tcp.Accept(srv)
+        tcp.Write(c, "echo:" + tcp.Read(c, 100))
+        tcp.Close(c)
+    end
+end
+
+func start_backends():
+    sync.Add(ready, 2 as i64)
+    _a := spawn(origin)
+    _b := spawn(echo)
+    sync.Wait(ready)
+end
+
+func serve_one():
+    listener := tcp.Bind(0)
+    proxy_port = tcp.Port(listener)
+    sync.Done(ready)
+    c := tcp.Accept(listener)
+    httpproxy.Handle(httpproxy.NewServerConfig(0), tunnel.WrapTcp(c))
+end
+
+func main:
+    start_backends()
+    sync.Add(ready, 1 as i64)
+    _t := spawn(serve_one)
+    sync.Wait(ready)
+    client := httpproxy.NewClient("127.0.0.1", proxy_port)
+    println httpproxy.Get(client, "http://127.0.0.1:" + origin_port + "/by-hand").body
+end

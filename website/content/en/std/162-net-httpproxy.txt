@@ -1,0 +1,280 @@
+pkg.en = net/httpproxy
+pkg.name = net.httpproxy
+pkg.group = Network
+pkg.summary = An HTTP and HTTPS proxy: a client with Basic login and CONNECT tunnels, a server that forwards plain requests and opens tunnels, with access rules, TLS and a connector for proxy chains.
+pkg.title = The net.httpproxy package in Salam | HTTP and HTTPS proxy
+pkg.description = The net.httpproxy package in Salam: an HTTP proxy client and server, CONNECT tunnels for HTTPS, Basic proxy login, access rules, an HTTPS proxy with TLS, keep-alive and strict request parsing, and a connector for proxy chains, with examples.
+pkg.import = net.httpproxy
+pkg.intro <<
+<p>An HTTP proxy handles two kinds of traffic. A <em>plain</em> request (<code>GET http://example.com/ HTTP/1.1</code>) is forwarded by the proxy, which opens the connection to the website itself. A <code>CONNECT host:port</code> request asks the proxy to open a raw tunnel, and then bytes pass untouched in both directions, which is how HTTPS and any other TCP protocol cross a proxy. This package has both sides: <code>Get</code>, <code>Post</code>, <code>Request</code> and <code>Connect</code> are the client, <code>Start</code> runs a server. It also plugs into <a href="/std/net/tunnel/">net.tunnel</a> as an <code>HttpInbound</code> that can share one port with SOCKS, and as an <code>HttpConnector</code> that is one hop of a proxy chain.</p>
+<p>Core ideas:</p>
+<ul>
+<li><code>Get</code>, <code>Post</code> and <code>Request</code> fetch a plain <code>http://</code> URL through the proxy and return a <code>Response</code>. For <code>https://</code> use <code>Connect</code>, which returns a stream, and run TLS over it yourself.</li>
+<li>Failure is a value. <code>ok</code> and <code>ok</code> are false, with <code>err</code> or <code>status</code> saying why. A 404 or a 407 is a successful round trip with that status.</li>
+<li>A server is a <code>ServerConfig</code> given to <code>Start</code>. <code>SetConnector</code> or <code>SetDialer</code> decide how targets are reached, so it can be joined to routing rules and proxy chains; <code>allow</code> refuses methods, hosts or ports.</li>
+<li>The parser is strict on purpose: a request with both <code>Content-Length</code> and <code>Transfer-Encoding</code>, two different lengths, folded or malformed headers, a bad method or a head over <code>MaxHeadBytes</code> is refused instead of guessed at. That is how request smuggling is kept out.</li>
+</ul>
+<p>Things that catch people out:</p>
+<ul>
+<li><strong>A server listens on all IPv4 addresses.</strong> <code>Start</code> binds every interface. Without a login, an open HTTP proxy reachable from outside will be used by strangers. Use <code>AddUser</code>, a firewall, or both.</li>
+<li><strong>A CONNECT proxy can reach internal addresses.</strong> A client that may open tunnels to any host and port can reach services on your own network (a database on <code>10.0.0.5</code>, a metadata address) or send mail on port 25. Restrict it with <code>allow</code>, for example to port 443 and to public hosts.</li>
+<li><strong>Basic login is not encrypted.</strong> The user name and password are Base64, which is only an encoding. Use <code>SetTLS</code> to make the proxy itself speak TLS, or keep it on a trusted link.</li>
+<li><strong>Bodies are text.</strong> <code>body</code> stops at the first NUL byte, and through a <code>HttpInbound</code> a plain request body is limited to 1 MiB of text. Tunnels have no such limit.</li>
+<li><strong>Only absolute <code>http://</code> URLs.</strong> <code>Request</code> refuses <code>https://</code> and relative URLs. <code>ParseURL</code> reads both schemes, but only <code>http</code> can go the plain way.</li>
+<li><strong>HTTP/1.1 only.</strong> There is no HTTP/2 and no compressed transfer encoding (a <code>gzip</code> transfer encoding is answered with 501).</li>
+<li><strong>Close streams</strong> returned in <code>stream</code>.</li>
+</ul>
+
+<h2 id="guide-proxy">Using an HTTP proxy from a program</h2>
+<p>For a plain website, <code>Get</code> sends the request through the proxy. For anything that is not plain HTTP, and for HTTPS, <code>Connect</code> opens a tunnel and gives you the stream; run TLS or any other protocol over it. The example uses a local proxy and two local servers so that it runs anywhere.</p>
+{{example.net-httpproxy-guide-proxy}}
+<p>If the proxy needs a login use <code>NewClientAuth</code>; a 407 status means the login was missing or wrong. To use the proxy as one hop of several, see <code>HttpConnector</code> and <code>tunnel.Chain</code>.</p>
+
+<h2 id="guide-server">Running an HTTP proxy</h2>
+<p><code>NewServerConfig</code> gives a config for a port, <code>AddUser</code> turns the login on and <code>Start</code> serves in the background. The server keeps connections alive, handles pipelined requests, chunked request bodies, <code>Expect: 100-continue</code> and <code>Upgrade</code>, and strips the headers that belong to one hop (<code>IsHopByHop</code>) before it forwards a request. Slow or silent clients are cut by <code>handshake_timeout_ms</code> and <code>idle_timeout_ms</code>.</p>
+<p>Decide what the proxy may do before you open it to anyone: <code>allow_connect</code> and <code>allow_plain</code> switch the two kinds of traffic, and <code>allow</code> sees every method, host and port. A proxy for a site should usually allow <code>CONNECT</code> only to port 443 and refuse private addresses.</p>
+<pre class="code"><code>mut config := httpproxy.NewServerConfig(3128)
+httpproxy.AddUser(config, "alice", "a long random password")
+config.allow = (method: str, _host: str, port: int): ret port == 443 or method != "CONNECT" end
+httpproxy.SetTLS(config, "proxy.crt", "proxy.key")
+server := httpproxy.Start(config)</code></pre>
+<p><code>SetTLS</code> turns the proxy into an HTTPS proxy: clients connect to it over TLS (set <code>tls</code>) and only then send their requests, so the login and the targets are no longer visible on the wire. Use a certificate for the name clients connect to.</p>
+
+<h2 id="guide-limits">What to know</h2>
+<ul>
+<li>The server listens on every IPv4 interface. Use a login or a firewall, and restrict <code>CONNECT</code> targets.</li>
+<li>Basic login is Base64 only. Use <code>SetTLS</code> or a trusted link.</li>
+<li>Through <code>HttpInbound</code> (the tunnel adapter) each plain request gets its own connection and a body of up to 1 MiB of text; the standalone <code>Start</code> server keeps connections alive.</li>
+<li>Head limits are <code>MaxHeadBytes</code> bytes and <code>MaxHeaders</code> header lines. Bigger heads get 431.</li>
+<li>HTTP/1.1 only, no HTTP/2, no compressed transfer encoding.</li>
+<li>No logging happens by itself.</li>
+</ul>
+>>
+
+doc.HttpInbound = An HTTP proxy server for <code>tunnel.InboundProtocol</code>: it reads a <code>CONNECT</code> or an absolute URL request from a stream and turns it into a <code>tunnel.Session</code>, so it can share a port in a <code>tunnel.MixedProtocol</code>. Make one with <code>NewInbound</code>.
+doc.HttpInbound.config = The server settings: login, which methods are allowed and the limits.
+doc.HttpInbound.Name = Returns <code>http</code>.
+doc.HttpInbound.Handshake = Reads and checks the request head, checks the proxy login and the access rule, and returns the target. A plain request is rewritten to the path form with <code>Connection: close</code> and passed on as <code>tunnel.initial</code>, so through this inbound each connection carries one request, with a body of up to 1 MiB of text; chunked bodies get 501. A refused request is answered here (407, 403, 400, 431, 501).
+doc.HttpInbound.Reply = For a <code>CONNECT</code> request, sends <code>200 Connection established</code> or <code>502 Bad Gateway</code>. For a plain request only the failure is answered (502): on success the target's own response is what the client gets.
+doc.HttpConnector = One HTTP proxy hop of a <code>tunnel.Chain</code>: it connects to a proxy and asks it for a <code>CONNECT</code> tunnel to the next place. Make one with <code>NewConnector</code>.
+doc.HttpConnector.client = The client settings: proxy address, login and TLS.
+doc.HttpConnector.Server = The address of the HTTP proxy.
+doc.HttpConnector.Handshake = Sends <code>CONNECT</code> for a target over the open stream and checks for a 2xx answer. True when the proxy agreed.
+doc.HttpConnector.Name = Returns <code>http</code>.
+doc.NewInbound = Makes an HTTP proxy inbound from a server config.
+doc.NewConnector = Makes an <code>HttpConnector</code> from a client. Use it with <code>tunnel.Via</code> or <code>tunnel.ChainAdd</code>.
+doc.SetDialer = Makes the server reach targets through a <code>tunnel.Dialer</code>, so it can use rules, chains or a block list. It replaces the connect callback.
+doc.Client = An HTTP proxy client: which proxy to use, the login and the TLS options. Make it with <code>NewClient</code> or <code>NewClientAuth</code>.
+doc.Client.host = The proxy's host name or IP.
+doc.Client.port = The proxy's port.
+doc.Client.username = The user name for <code>Proxy-Authorization: Basic</code>. Empty means no login.
+doc.Client.password = The password that goes with the user name.
+doc.Client.tls = True to reach the proxy itself over TLS (an HTTPS proxy). The default is false.
+doc.Client.server_name = The name to send and check in the proxy's certificate when <code>tls</code> is on. Empty means the host.
+doc.Client.insecure = True to skip the certificate check. For tests only.
+doc.Client.timeout_ms = How long connecting and each answer may take, in milliseconds. The default is 15000.
+doc.Client.max_body = The largest response body <code>Request</code> will read, in bytes. The default is 16777216 (16 MiB); a bigger body makes the response fail.
+doc.HandshakeResult = The outcome of a <code>CONNECT</code> on an open stream.
+doc.HandshakeResult.ok = True when the proxy answered with a 2xx status.
+doc.HandshakeResult.status = The HTTP status the proxy answered with, 0 when there was no answer.
+doc.HandshakeResult.err = A readable reason when it failed.
+doc.ConnectResult = The outcome of <code>Connect</code>: the tunnel stream when it worked, and the status and reason when it did not.
+doc.ConnectResult.ok = True when the tunnel is open.
+doc.ConnectResult.status = The proxy's HTTP status, such as 200, 407 (login needed), 403 or 502.
+doc.ConnectResult.err = A readable reason when it failed.
+doc.ConnectResult.stream = The open stream to the target, valid when <code>ok</code> is true. Bytes in both directions pass through untouched, so TLS can run inside it.
+doc.Response = A whole HTTP response fetched through the proxy by <code>Get</code>, <code>Post</code> or <code>Request</code>.
+doc.Response.ok = True when a complete response arrived. A 404 is still ok; a cut off body is not.
+doc.Response.err = A readable reason when <code>ok</code> is false.
+doc.Response.status = The HTTP status code.
+doc.Response.head = The parsed status line and headers. Read them with <code>HeaderGet</code>.
+doc.Response.body = The body as text. It stops at the first NUL byte.
+doc.Response.length = The body length in bytes.
+doc.NewClient = Makes a client for a proxy with no login.
+doc.NewClientAuth = Makes a client that logs in to the proxy with Basic authentication.
+doc.ClientHandshake = Sends <code>CONNECT host:port</code> on a stream that is already open to a proxy and reads the answer. This is how a second hop is added on top of the first.
+doc.Connect = Connects to the proxy and opens a <code>CONNECT</code> tunnel to a host and port. Use it for HTTPS and any other TCP protocol.
+doc.DialConn = Like <code>Connect</code> but returns a plain TCP connection for the <code>net.tcp</code> functions. An empty connection when it failed.
+doc.Request = Sends one plain HTTP request through the proxy: a method, an absolute <code>http://</code> URL, extra header lines (each ending in a line break) and a body. For <code>https://</code> use <code>Connect</code> and run TLS over the tunnel.
+doc.Get = Fetches an <code>http://</code> URL through the proxy with GET.
+doc.Post = Sends a POST with a content type and a body through the proxy.
+doc.MaxHeadBytes = The largest request or response head, in bytes: 65536. A bigger one is refused (431 on the server).
+doc.MaxHeaders = The largest number of header lines: 200.
+doc.Head = A parsed request or response head: the first line and the headers. <code>ParseRequestHead</code> and <code>ParseResponseHead</code> make it.
+doc.Head.ok = True when the head was valid.
+doc.Head.err = Why it was not valid.
+doc.Head.method = The request method, such as <code>GET</code> or <code>CONNECT</code>.
+doc.Head.target = The request target: an absolute URL for a proxied request, <code>host:port</code> for <code>CONNECT</code>.
+doc.Head.version = The HTTP version text, such as <code>HTTP/1.1</code>.
+doc.Head.status = The status code of a response head.
+doc.Head.reason = The reason phrase of a response head. Empty is allowed.
+doc.Head.names = The header names in order, as they were written.
+doc.Head.values = The header values, one for each name.
+doc.HostPort = A host and a port taken from text such as <code>example.com:443</code>.
+doc.HostPort.ok = True when the text was a valid host and port.
+doc.HostPort.host = The host, without brackets for IPv6.
+doc.HostPort.port = The port, or the default when the text had none.
+doc.HostPort.has_port = True when the text named the port itself.
+doc.URL = A parsed <code>http://</code> or <code>https://</code> URL. <code>ParseURL</code> makes it.
+doc.URL.ok = True when the URL was valid.
+doc.URL.scheme = <code>http</code> or <code>https</code>, in lower case.
+doc.URL.host = The host, as written.
+doc.URL.port = The port, or 80 or 443 when the URL had none.
+doc.URL.path = The path with the query, at least <code>/</code>. A fragment is dropped.
+doc.ParseRequestHead = Parses a request head: the request line and header lines. It is strict: a bad method, a missing version, folded or malformed headers, more than <code>MaxHeaders</code> headers or a head over <code>MaxHeadBytes</code> all fail with a reason in <code>err</code>.
+doc.ParseResponseHead = Parses a response head: the status line and headers. The reason phrase may be empty.
+doc.HeaderGet = Returns the first value of a header, or an empty text. The name is compared without regard to case.
+doc.HeaderHas = True when the header exists.
+doc.HeaderCount = How many lines carry this header name.
+doc.HeaderHasToken = True when a comma separated header value contains a token, such as <code>keep-alive</code> in <code>Connection</code>. Case is ignored.
+doc.IsHopByHop = True for headers that belong to one connection and must not be forwarded: <code>Connection</code>, <code>Keep-Alive</code>, <code>Proxy-Authenticate</code>, <code>Proxy-Authorization</code>, <code>Proxy-Connection</code>, <code>TE</code>, <code>Trailer</code>, <code>Transfer-Encoding</code>, <code>Upgrade</code>.
+doc.SplitHostPort = Splits <code>host:port</code> or <code>[v6]:port</code> and gives a default port when none is written. Invalid text (a bad port, extra colons, spaces, <code>/</code> or <code>@</code>) gives <code>ok</code> false.
+doc.ParseURL = Parses an <code>http://</code> or <code>https://</code> URL into scheme, host, port and path. Other schemes and relative URLs are invalid.
+doc.BasicHeader = Returns the <code>Basic ...</code> value for a <code>Proxy-Authorization</code> header: the user name and password joined by a colon, in Base64.
+doc.BasicCredentials = Reads a <code>Basic</code> header value back into a user name and a password (the password may contain colons). False when it is not a valid Basic value.
+doc.StatusReason = Returns the standard reason phrase for a status code, or <code>Status</code> for one it does not know.
+doc.ResponseText = Builds a whole small response: the status line, any extra header lines, <code>Content-Length</code>, optional <code>Connection: close</code> and the body.
+doc.ServerConfig = The settings of an HTTP proxy server: port, login, what is allowed, TLS, time limits and how targets are reached. Start from <code>NewServerConfig</code>.
+doc.ServerConfig.port = The port to listen on; 0 picks a free one.
+doc.ServerConfig.require_auth = True when clients must send <code>Proxy-Authorization</code>. <code>AddUser</code> and <code>SetAuth</code> turn it on.
+doc.ServerConfig.realm = The realm named in the 407 challenge. The default is <code>Salam proxy</code>.
+doc.ServerConfig.users = The accepted user names and passwords.
+doc.ServerConfig.auth = A custom check <code>(user, password) -&gt; bool</code> used instead of <code>users</code>. Set it with <code>SetAuth</code>.
+doc.ServerConfig.has_auth = True when <code>auth</code> is in use.
+doc.ServerConfig.allow_connect = True to allow <code>CONNECT</code> tunnels. The default is true. False answers 403.
+doc.ServerConfig.allow_plain = True to forward plain <code>http://</code> requests. The default is true. False answers 403.
+doc.ServerConfig.handshake_timeout_ms = How long a client has to send its request head, in milliseconds. The default is 15000.
+doc.ServerConfig.idle_timeout_ms = How long a keep-alive connection may wait for the next request, in milliseconds. The default is 60000.
+doc.ServerConfig.relay_idle_ms = Cut a <code>CONNECT</code> tunnel after this many silent milliseconds. 0, the default, means never.
+doc.ServerConfig.use_tls = True when the proxy itself speaks TLS, which <code>SetTLS</code> turns on.
+doc.ServerConfig.tls_config = The TLS settings used when <code>use_tls</code> is true.
+doc.ServerConfig.connect = The callback that reaches a target: <code>(host, port) -&gt; <code>socks.Outbound</code></code>. The default dials directly. Set it with <code>SetConnector</code> or <code>SetDialer</code>.
+doc.ServerConfig.allow = An access rule <code>(method, host, port) -&gt; bool</code> asked before each request; false answers 403. The default allows everything.
+doc.Server = A running HTTP proxy. <code>Start</code> returns it and <code>Stop</code> ends it.
+doc.Server.ok = True when the port was bound and the server is running.
+doc.Server.port = The port it listens on, useful when you asked for 0.
+doc.Server.listener = The underlying TCP listener.
+doc.Server.stop_cell = The flag that <code>Stop</code> clears to end the accept loop.
+doc.NewServerConfig = Returns a config for a port with the defaults above.
+doc.AddUser = Adds a user and password and turns the login on.
+doc.SetAuth = Sets a custom login check and turns the login on.
+doc.SetConnector = Sets the callback that reaches targets. Use it to route by name or to refuse hosts.
+doc.SetTLS = Loads a certificate and key and makes the proxy itself speak TLS (an HTTPS proxy). False when the files cannot be used.
+doc.Handle = Serves one client on an open stream: reads requests, forwards them or opens tunnels, until the connection ends.
+doc.Start = Binds the port and serves clients on background threads. Check <code>ok</code>.
+doc.Stop = Stops accepting new clients. Connections already running finish on their own.
+doc.Serve = Starts a server and then never returns, for a program whose only job is to be the proxy. False when the port could not be bound.
+
+ex.HttpInbound = net-httpproxy-Inbound
+ex.HttpInbound.config = -
+ex.HttpInbound.Name = net-httpproxy-Inbound
+ex.HttpInbound.Handshake = net-httpproxy-Inbound
+ex.HttpInbound.Reply = net-httpproxy-Inbound
+ex.HttpConnector = net-httpproxy-Inbound
+ex.HttpConnector.client = -
+ex.HttpConnector.Server = net-httpproxy-Inbound
+ex.HttpConnector.Handshake = net-httpproxy-Inbound
+ex.HttpConnector.Name = net-httpproxy-Inbound
+ex.NewInbound = net-httpproxy-Inbound
+ex.NewConnector = net-httpproxy-Inbound
+ex.SetDialer = net-httpproxy-Policy
+ex.Client = net-httpproxy-Get
+ex.Client.host = -
+ex.Client.port = -
+ex.Client.username = -
+ex.Client.password = -
+ex.Client.tls = -
+ex.Client.server_name = -
+ex.Client.insecure = -
+ex.Client.timeout_ms = -
+ex.Client.max_body = -
+ex.HandshakeResult = net-httpproxy-Connect
+ex.HandshakeResult.ok = -
+ex.HandshakeResult.status = -
+ex.HandshakeResult.err = -
+ex.ConnectResult = net-httpproxy-Connect
+ex.ConnectResult.ok = -
+ex.ConnectResult.status = -
+ex.ConnectResult.err = -
+ex.ConnectResult.stream = -
+ex.Response = net-httpproxy-Get
+ex.Response.ok = -
+ex.Response.err = -
+ex.Response.status = -
+ex.Response.head = -
+ex.Response.body = -
+ex.Response.length = -
+ex.NewClient = net-httpproxy-Get
+ex.NewClientAuth = net-httpproxy-Auth
+ex.ClientHandshake = net-httpproxy-Connect
+ex.Connect = net-httpproxy-Connect
+ex.DialConn = net-httpproxy-Connect
+ex.Request = net-httpproxy-Get
+ex.Get = net-httpproxy-Get
+ex.Post = net-httpproxy-Get
+ex.MaxHeadBytes = net-httpproxy-Parse
+ex.MaxHeaders = net-httpproxy-Parse
+ex.Head = net-httpproxy-Parse
+ex.Head.ok = -
+ex.Head.err = -
+ex.Head.method = -
+ex.Head.target = -
+ex.Head.version = -
+ex.Head.status = -
+ex.Head.reason = -
+ex.Head.names = -
+ex.Head.values = -
+ex.HostPort = net-httpproxy-Parse
+ex.HostPort.ok = -
+ex.HostPort.host = -
+ex.HostPort.port = -
+ex.HostPort.has_port = -
+ex.URL = net-httpproxy-Parse
+ex.URL.ok = -
+ex.URL.scheme = -
+ex.URL.host = -
+ex.URL.port = -
+ex.URL.path = -
+ex.ParseRequestHead = net-httpproxy-Parse
+ex.ParseResponseHead = net-httpproxy-Parse
+ex.HeaderGet = net-httpproxy-Parse
+ex.HeaderHas = net-httpproxy-Parse
+ex.HeaderCount = net-httpproxy-Parse
+ex.HeaderHasToken = net-httpproxy-Parse
+ex.IsHopByHop = net-httpproxy-Parse
+ex.SplitHostPort = net-httpproxy-Parse
+ex.ParseURL = net-httpproxy-Parse
+ex.BasicHeader = net-httpproxy-Parse
+ex.BasicCredentials = net-httpproxy-Parse
+ex.StatusReason = net-httpproxy-Parse
+ex.ResponseText = net-httpproxy-Parse
+ex.ServerConfig = net-httpproxy-Policy
+ex.ServerConfig.port = -
+ex.ServerConfig.require_auth = -
+ex.ServerConfig.realm = -
+ex.ServerConfig.users = -
+ex.ServerConfig.auth = -
+ex.ServerConfig.has_auth = -
+ex.ServerConfig.allow_connect = -
+ex.ServerConfig.allow_plain = -
+ex.ServerConfig.handshake_timeout_ms = -
+ex.ServerConfig.idle_timeout_ms = -
+ex.ServerConfig.relay_idle_ms = -
+ex.ServerConfig.use_tls = -
+ex.ServerConfig.tls_config = -
+ex.ServerConfig.connect = -
+ex.ServerConfig.allow = -
+ex.Server = net-httpproxy-Get
+ex.Server.ok = -
+ex.Server.port = -
+ex.Server.listener = -
+ex.Server.stop_cell = -
+ex.NewServerConfig = net-httpproxy-Get
+ex.AddUser = net-httpproxy-Auth
+ex.SetAuth = net-httpproxy-Auth
+ex.SetConnector = net-httpproxy-Policy
+ex.SetTLS = net-httpproxy-Tls
+ex.Handle = net-httpproxy-Handle
+ex.Start = net-httpproxy-Get
+ex.Stop = net-httpproxy-Get
+ex.Serve = -

@@ -28,6 +28,11 @@ struct _ZipW:
     pub failed: bool
 end
 
+struct _ZwMem:
+    pub p: u8*
+    pub n: i64
+end
+
 func _zw_raw(w &: _ZipW, p: void*, n: int):
     if w.failed or n <= 0:
         ret
@@ -81,6 +86,70 @@ func _zw_crc_of_file(src: void*, size: i64, scratch: void*): i64:
     ret crc as i64
 end
 
+func _zw_mem_read(o: i64, d: void*, n: int, c: void*): int:
+    m := c as _ZwMem*
+    if o < (0 as i64) or o >= m[0].n:
+        ret 0
+    end
+    mut k := n
+    if (k as i64) > m[0].n - o:
+        k = (m[0].n - o) as int
+    end
+    mem.Copy(d, ((m[0].p as i64) + o) as void*, k as u64)
+    ret k
+end
+
+func _zw_patch_comp(w &: _ZipW, hdr: i64, name_len: int, big: bool, comp: i64): bool:
+    mut b := compress.NewByteBuf()
+    mut at := hdr + (18 as i64)
+    if big:
+        at = hdr + (30 as i64) + (name_len as i64) + (12 as i64)
+        _zip_put64(b, comp)
+    else:
+        LEPut32(b, comp as int)
+    end
+    mut ok := compress.FileSeek(w.fp, at)
+    if ok:
+        ok = (fwrite(b.data, 1 as u64, b.len as u64, w.fp) as int) == b.len
+    end
+    if ok:
+        ok = compress.FileSeek(w.fp, w.pos)
+    end
+    compress.BufFree(b)
+    ret ok
+end
+
+func _zw_emit(p: void*, n: int, c: void*): bool:
+    cw := c as _ChunkWriter*
+    ret _cw_write(cw[0], p, n)
+end
+
+func _zw_pack(cw &: _ChunkWriter, method: int, level: int, src: void*, size: i64): bool:
+    holder := mem.AllocateZeroed(sizeof(_ChunkWriter)) as _ChunkWriter*
+    holder[0] = cw
+    emit := (p: void*, n: int, c: void*): ret _zw_emit(p, n, c) end
+    mut sink := compress.SinkCallback(0 as i64, emit, holder as void*)
+    mut ok := true
+    if method == ZipMethodBzip2:
+        ok = compress.Bzip2CompressFileToSink(src, 0 as i64, size, level >= 1 and level <= 9 ? level : 9, sink)
+    else method == ZipMethodZstd:
+        ok = compress.ZstdCompressFileToSink(src, 0 as i64, size, level >= 1 ? level : 3, sink)
+    else:
+        mut head := compress.NewByteBuf()
+        compress.BufPush(head, 9)
+        compress.BufPush(head, 4)
+        LEPut16(head, 5)
+        ok = _cw_write(holder[0], head.data, head.len)
+        compress.BufFree(head)
+        if ok:
+            ok = compress.LzmaCompressFileToSink(src, 0 as i64, size, level >= 1 and level <= 9 ? level : 6, true, sink)
+        end
+    end
+    cw = holder[0]
+    mem.Free(holder as void*)
+    ret ok and not cw.failed
+end
+
 func _zw_feed(cw &: _ChunkWriter, src: void*, size: i64, scratch: void*): bool:
     mut at := 0 as i64
     mut ok := true
@@ -107,39 +176,34 @@ func _zw_entry(w &: _ZipW, f: ZipFileInput, force64: bool, scratch: void*): bool
     end
     enc := _zw_enc_kind(f)
     mut method := _zip_known_method(f.method) ? f.method : 0
-    mut ptr := f.data_ptr
+    ptr := f.data_ptr
     mut size := f.data_len as i64
     mut src := null as void*
-    mut loaded := compress.NewByteBuf()
     if f.path.len() > 0:
-        if method != ZipMethodStore and method != ZipMethodDeflate:
-            mut rok := false
-            loaded = ReadBinaryFile(f.path, rok)
-            if not rok:
-                compress.BufFree(loaded)
-                ret false
-            end
-            ptr = loaded.data
-            size = loaded.len as i64
-        else:
-            src = compress.FileOpenRead(f.path)
-            if src == null:
-                ret false
-            end
-            size = compress.FileSize(src)
-            if size < (0 as i64):
-                compress.FileClose(src)
-                ret false
-            end
+        src = compress.FileOpenRead(f.path)
+        if src == null:
+            ret false
+        end
+        size = compress.FileSize(src)
+        if size < (0 as i64):
+            compress.FileClose(src)
+            ret false
         end
     end
     if method != ZipMethodDeflate and size == (0 as i64):
         method = ZipMethodStore
     end
+    streamed := method == ZipMethodBzip2 or method == ZipMethodZstd or method == ZipMethodLzma
+    mut memctx := null as void*
+    if streamed and src == null:
+        mc := mem.AllocateZeroed(sizeof(_ZwMem)) as _ZwMem*
+        mc[0].p = ptr as u8*
+        mc[0].n = size
+        memctx = mc as void*
+        rd := (o: i64, d: void*, n: int, c: void*): ret _zw_mem_read(o, d, n, c) end
+        src = compress.CallbackOpenRead(size, rd, memctx)
+    end
 
-    mut owned := compress.NewByteBuf()
-    mut body_ptr := ptr
-    mut body_len := size
     mut crc := 0 as u32
     mut dd := false
     mut ok := true
@@ -156,29 +220,12 @@ func _zw_entry(w &: _ZipW, f: ZipFileInput, force64: bool, scratch: void*): bool
         else:
             crc = compress.CRC32(ptr, size as int)
         end
-        if method == ZipMethodBzip2:
-            owned = compress.Bzip2CompressLevel(ptr, size as int, f.level >= 1 and f.level <= 9 ? f.level : 9)
-        else method == ZipMethodZstd:
-            owned = compress.ZstdCompressLevel(ptr, size as int, f.level >= 1 ? f.level : 3)
-        else method == ZipMethodLzma:
-            mut packed := compress.LzmaCompressLevel(ptr, size as int, f.level >= 1 and f.level <= 9 ? f.level : 6)
-            compress.BufPush(owned, 9)
-            compress.BufPush(owned, 4)
-            LEPut16(owned, 5)
-            compress.BufPushBytes(owned, packed.data, 5)
-            compress.BufPushBytes(owned, ((packed.data as i64) + (13 as i64)) as void*, packed.len - 13)
-            compress.BufFree(packed)
-        end
-        if method == ZipMethodBzip2 or method == ZipMethodZstd or method == ZipMethodLzma:
-            body_ptr = owned.data
-            body_len = owned.len as i64
-        end
     end
 
     mut dd_date := 0
     mut dd_time := 0
     _zip_unix_to_dos(f.mtime, dd_date, dd_time)
-    big := force64 or size >= (0xF0000000 as i64) or body_len >= (0xF0000000 as i64)
+    big := force64 or size >= (0xF0000000 as i64) or size >= (0xF0000000 as i64)
     offset := w.pos
     flags := (_zip_has_high(f.name) ? 0x800 : 0) | (dd ? 8 : 0) | (enc != 0 ? 1 : 0)
     mut version := big ? 45 : 20
@@ -193,7 +240,7 @@ func _zw_entry(w &: _ZipW, f: ZipFileInput, force64: bool, scratch: void*): bool
     method_field := enc >= 2 ? 99 : method
     aes_strength := enc == ZipEncAes128 ? 1 : (enc == ZipEncAes192 ? 2 : 3)
     store_crc := enc >= 2 ? (0 as u32) : crc
-    comp_known := body_len + _zw_overhead(enc)
+    comp_known := streamed ? (0 as i64) : size + _zw_overhead(enc)
 
     mut lh := compress.NewByteBuf()
     LEPut32(lh, 0x04034b50)
@@ -257,11 +304,13 @@ func _zw_entry(w &: _ZipW, f: ZipFileInput, force64: bool, scratch: void*): bool
             if ok:
                 crc = cw.in_crc
             end
+        else streamed:
+            ok = _zw_pack(cw, method, f.level, src, size)
         else:
             if src != null:
                 ok = _zw_feed(cw, src, size, scratch)
             else:
-                ok = _cw_write(cw, body_ptr, body_len as int)
+                ok = _cw_write(cw, ptr, size as int)
             end
         end
     end
@@ -278,6 +327,9 @@ func _zw_entry(w &: _ZipW, f: ZipFileInput, force64: bool, scratch: void*): bool
         uncomp_total = size
     end
     w.pos += comp_total
+    if streamed and ok:
+        ok = _zw_patch_comp(w, offset, name_len, big, comp_total)
+    end
     if not ok:
         w.failed = true
     end
@@ -289,8 +341,9 @@ func _zw_entry(w &: _ZipW, f: ZipFileInput, force64: bool, scratch: void*): bool
     if src != null:
         compress.FileClose(src)
     end
-    compress.BufFree(owned)
-    compress.BufFree(loaded)
+    if memctx != null:
+        mem.Free(memctx)
+    end
     if not ok:
         compress.BufFree(extra)
         compress.BufFree(aes_extra)

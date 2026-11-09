@@ -1,0 +1,138 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package censor
+
+import mem
+import crypto
+import compress
+
+@en "RandomInt"
+@fa "عدد تصادفی"
+pub func RandomInt(lo: int, hi: int): int:
+    if hi <= lo:
+        ret lo
+    end
+    buf := mem.Allocate(4 as u64)
+    defer mem.Free(buf)
+    crypto.RandomBytes(buf, 4)
+    mut v := 0
+    repeat 3 in i:
+        v = v * 256 + (((buf as u8*)[i]) as int)
+    end
+    ret lo + v % (hi - lo + 1)
+end
+
+@en "RandomBytes"
+@fa "بایت‌های تصادفی"
+pub func RandomBytes(n: int): compress.ByteBuf:
+    mut b := compress.NewByteBufCap(n)
+    if n > 0:
+        tmp := mem.Allocate(n as u64)
+        crypto.RandomBytes(tmp, n)
+        compress.BufPushBytes(b, tmp, n)
+        mem.Free(tmp)
+    end
+    ret b
+end
+
+@en "PadLength"
+@fa "طول لایه"
+pub func PadLength(payload_len: int, min_pad: int, max_pad: int, block: int): int:
+    mut pad := RandomInt(min_pad, max_pad)
+    if block > 1:
+        rem := (payload_len + pad) % block
+        if rem != 0:
+            pad += block - rem
+        end
+    end
+    ret pad
+end
+
+@en "WrapRecord"
+@fa "پوشاندن رکورد"
+pub func WrapRecord(p: void*, n: int, pad: int): compress.ByteBuf:
+    mut out := compress.NewByteBuf()
+    body := n + pad + 4
+    if n < 0 or pad < 0 or body > 16384:
+        ret out
+    end
+    compress.BufPush(out, 23)
+    compress.BufPush(out, 3)
+    compress.BufPush(out, 3)
+    compress.BufPush(out, (body >> 8) & 255)
+    compress.BufPush(out, body & 255)
+    compress.BufPush(out, (n >> 8) & 255)
+    compress.BufPush(out, n & 255)
+    compress.BufPush(out, (pad >> 8) & 255)
+    compress.BufPush(out, pad & 255)
+    compress.BufPushBytes(out, p, n)
+    mut junk := RandomBytes(pad)
+    compress.BufPushBuf(out, junk)
+    compress.BufFree(junk)
+    ret out
+end
+
+@en "UnwrapRecord"
+@fa "گشودن رکورد"
+pub func UnwrapRecord(p: void*, n: int, payload &: compress.ByteBuf): int:
+    if n < 1:
+        ret 0
+    end
+    if _ub(p, 0) != 23:
+        ret 0 - 1
+    end
+    if n >= 2 and _ub(p, 1) != 3:
+        ret 0 - 1
+    end
+    if n >= 3 and _ub(p, 2) != 3:
+        ret 0 - 1
+    end
+    if n < 5:
+        ret 0
+    end
+    body := _u16(p, 3)
+    if body < 4 or body > 16384:
+        ret 0 - 1
+    end
+    if n < 5 + body:
+        ret 0
+    end
+    plen := _u16(p, 5)
+    pad := _u16(p, 7)
+    if plen + pad + 4 != body:
+        ret 0 - 1
+    end
+    compress.BufPushBytes(payload, ((p as i64) + 9) as void*, plen)
+    ret 5 + body
+end
+
+@en "WrapStream"
+@fa "پوشاندن جریان"
+pub func WrapStream(p: void*, n: int, min_pad: int, max_pad: int): compress.ByteBuf:
+    mut out := compress.NewByteBuf()
+    mut off := 0
+    until off < n:
+        mut take := n - off
+        if take > MaxRecordPayload:
+            take = MaxRecordPayload
+        end
+        pad := PadLength(take, min_pad, max_pad, 0)
+        mut rec := WrapRecord(((p as i64) + (off as i64)) as void*, take, pad)
+        compress.BufPushBuf(out, rec)
+        compress.BufFree(rec)
+        off += take
+    end
+    ret out
+end

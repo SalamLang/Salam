@@ -1,0 +1,245 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package censor
+
+import mem
+import crypto
+import compress
+
+@en "SplitEven"
+@fa "تقسیم مساوی"
+pub const SplitEven := 0
+
+@en "SplitRandom"
+@fa "تقسیم تصادفی"
+pub const SplitRandom := 1
+
+@en "SplitFirst"
+@fa "تقسیم پس از نخستین تکه"
+pub const SplitFirst := 2
+
+@en "MaxRecordPayload"
+@fa "بیشینه داده رکورد"
+pub const MaxRecordPayload := 16000
+
+func _next(state &: u64): u64:
+    mut x := state
+    x = x ^ (x << (13 as u64))
+    x = x ^ (x >> (7 as u64))
+    x = x ^ (x << (17 as u64))
+    state = x
+    ret x
+end
+
+func _seed_of(seed: i64): u64:
+    if seed != 0:
+        ret seed as u64
+    end
+    buf := mem.Allocate(8 as u64)
+    defer mem.Free(buf)
+    crypto.RandomBytes(buf, 8)
+    mut v := 0 as u64
+    repeat 8 in i:
+        v = (v << (8 as u64)) | (((buf as u8*)[i]) as u64)
+    end
+    if v == (0 as u64):
+        v = 88172645463325252 as u64
+    end
+    ret v
+end
+
+@en "SplitSizes"
+@fa "اندازه تکه‌ها"
+pub func SplitSizes(total: int, policy: int, pieces: int, param: int, seed: i64): Vector<int>:
+    mut out := Vector {} as Vector<int>
+    if total <= 0:
+        ret out
+    end
+    mut k := pieces
+    if k < 1:
+        k = 1
+    end
+    if k > total:
+        k = total
+    end
+    if policy == SplitFirst:
+        mut f := param
+        if f < 1:
+            f = 1
+        end
+        if f >= total:
+            out.push(total)
+            ret out
+        end
+        out.push(f)
+        out.push(total - f)
+        ret out
+    end
+    if policy == SplitRandom:
+        mut st := _seed_of(seed)
+        mut cuts := Vector {} as Vector<int>
+        defer cuts.free()
+        until cuts.len() < k - 1:
+            c := 1 + ((_next(st) % ((total - 1) as u64)) as int)
+            mut dup := false
+            repeat cuts.len() in i:
+                if cuts.get(i) == c:
+                    dup = true
+                end
+            end
+            if not dup:
+                cuts.push(c)
+            end
+        end
+        mut sorted := Vector {} as Vector<int>
+        defer sorted.free()
+        mut prev := 0
+        repeat k - 1:
+            mut best := 0 - 1
+            repeat cuts.len() in i:
+                v := cuts.get(i)
+                if v > prev and (best < 0 or v < best):
+                    best = v
+                end
+            end
+            sorted.push(best)
+            prev = best
+        end
+        mut last := 0
+        repeat sorted.len() in i:
+            out.push(sorted.get(i) - last)
+            last = sorted.get(i)
+        end
+        out.push(total - last)
+        ret out
+    end
+    base := total / k
+    extra := total % k
+    repeat k in i:
+        mut s := base
+        if i < extra:
+            s += 1
+        end
+        out.push(s)
+    end
+    ret out
+end
+
+@en "SNISplitSizes"
+@fa "اندازه تکه‌ها از روی نام سرور"
+pub func SNISplitSizes(p: void*, n: int, head_first: bool): Vector<int>:
+    mut out := Vector {} as Vector<int>
+    ch := ParseClientHello(p, n)
+    if not ch.ok or ch.sni_offset < 0 or ch.sni_len < 2:
+        ret SplitSizes(n, SplitEven, 2, 0, 1 as i64)
+    end
+    cut := ch.sni_offset + ch.sni_len / 2
+    if head_first and cut > 1:
+        out.push(1)
+        out.push(cut - 1)
+    else:
+        out.push(cut)
+    end
+    if n - cut > 0:
+        out.push(n - cut)
+    end
+    ret out
+end
+
+@en "Slice"
+@fa "برش"
+pub func Slice(p: void*, n: int, sizes: Vector<int>): Vector<compress.ByteBuf>:
+    mut out := Vector {} as Vector<compress.ByteBuf>
+    mut off := 0
+    repeat sizes.len() in i:
+        mut s := sizes.get(i)
+        if i == sizes.len() - 1:
+            s = n - off
+        end
+        if s <= 0 or off + s > n:
+            break
+        end
+        mut b := compress.NewByteBufCap(s)
+        compress.BufPushBytes(b, ((p as i64) + (off as i64)) as void*, s)
+        out.push(b)
+        off += s
+    end
+    ret out
+end
+
+@en "FragmentRecords"
+@fa "تکه‌تکه کردن رکوردها"
+pub func FragmentRecords(p: void*, n: int, sizes: Vector<int>): Vector<compress.ByteBuf>:
+    mut out := Vector {} as Vector<compress.ByteBuf>
+    if n < 6:
+        ret out
+    end
+    ctype := _ub(p, 0)
+    v1 := _ub(p, 1)
+    v2 := _ub(p, 2)
+    payload_len := n - 5
+    body := ((p as i64) + 5) as void*
+    mut off := 0
+    repeat sizes.len() in i:
+        mut s := sizes.get(i)
+        if i == sizes.len() - 1:
+            s = payload_len - off
+        end
+        if s <= 0 or off + s > payload_len:
+            break
+        end
+        mut b := compress.NewByteBufCap(s + 5)
+        compress.BufPush(b, ctype)
+        compress.BufPush(b, v1)
+        compress.BufPush(b, v2)
+        compress.BufPush(b, (s >> 8) & 255)
+        compress.BufPush(b, s & 255)
+        compress.BufPushBytes(b, ((body as i64) + (off as i64)) as void*, s)
+        out.push(b)
+        off += s
+    end
+    ret out
+end
+
+@en "FragmentClientHello"
+@fa "تکه‌تکه کردن پیام آغازین"
+pub func FragmentClientHello(p: void*, n: int, pieces: int, policy: int, seed: i64): Vector<compress.ByteBuf>:
+    if n < 6 or _ub(p, 0) != 22:
+        ret Vector {}
+    end
+    sizes := SplitSizes(n - 5, policy, pieces, 1, seed)
+    defer sizes.free()
+    ret FragmentRecords(p, n, sizes)
+end
+
+@en "Concat"
+@fa "پیوست"
+pub func Concat(pieces: Vector<compress.ByteBuf>): compress.ByteBuf:
+    mut b := compress.NewByteBuf()
+    repeat pieces.len() in i:
+        compress.BufPushBuf(b, pieces.get(i))
+    end
+    ret b
+end
+
+@en "FreePieces"
+@fa "آزاد کردن تکه‌ها"
+pub func FreePieces(pieces &: Vector<compress.ByteBuf>):
+    repeat pieces.len() in i:
+        mut b := pieces.get(i)
+        compress.BufFree(b)
+    end
+    pieces.free()
+end

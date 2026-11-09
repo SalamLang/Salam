@@ -1,0 +1,379 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+@en "net/censor"
+@fa "سانسورشکن"
+package censor
+
+import mem
+import compress
+
+@en "KindUnknown"
+@fa "نوع ناشناخته"
+pub const KindUnknown := 0
+
+@en "KindTLS"
+@fa "نوع تی ال اس"
+pub const KindTLS := 1
+
+@en "KindHTTP"
+@fa "نوع اچ تی تی پی"
+pub const KindHTTP := 2
+
+@en "KindSSH"
+@fa "نوع اس اس اچ"
+pub const KindSSH := 3
+
+@en "KindSOCKS5"
+@fa "نوع ساکس۵"
+pub const KindSOCKS5 := 4
+
+@en "KindSOCKS4"
+@fa "نوع ساکس۴"
+pub const KindSOCKS4 := 5
+
+@en "KindTooShort"
+@fa "نوع داده ناکافی"
+pub const KindTooShort := 6
+
+@en "ClientHello"
+@fa "پیام آغازین کارخواه"
+pub struct ClientHello:
+    @en "ok"
+    @fa "معتبر"
+    pub ok: bool = false
+    @en "truncated"
+    @fa "ناقص"
+    pub truncated: bool = false
+    @en "record_version"
+    @fa "نسخه رکورد"
+    pub record_version: int = 0
+    @en "hello_version"
+    @fa "نسخه پیام"
+    pub hello_version: int = 0
+    @en "record_len"
+    @fa "طول رکورد"
+    pub record_len: int = 0
+    @en "sni"
+    @fa "نام سرور"
+    pub sni: str = ""
+    @en "sni_offset"
+    @fa "جایگاه نام سرور"
+    pub sni_offset: int = 0 - 1
+    @en "sni_len"
+    @fa "طول نام سرور"
+    pub sni_len: int = 0
+    @en "alpn"
+    @fa "پروتکل‌های برنامه"
+    pub alpn: Vector<str> = Vector {}
+    @en "cipher_count"
+    @fa "شمار رمزها"
+    pub cipher_count: int = 0
+    @en "ext_count"
+    @fa "شمار افزونه‌ها"
+    pub ext_count: int = 0
+    @en "has_tls13"
+    @fa "دارای تی ال اس سیزده"
+    pub has_tls13: bool = false
+    @en "has_ech"
+    @fa "دارای ای سی اچ"
+    pub has_ech: bool = false
+    @en "session_id_len"
+    @fa "طول شناسه نشست"
+    pub session_id_len: int = 0
+end
+
+inline func _ub(p: void*, i: int): int:
+    ret ((p as u8*)[i]) as int
+end
+
+func _u16(p: void*, i: int): int:
+    ret _ub(p, i) * 256 + _ub(p, i + 1)
+end
+
+func _mkstr(p: void*, off: int, n: int): str:
+    buf := mem.Allocate((n + 1) as u64)
+    if n > 0:
+        mem.Copy(buf, ((p as i64) + (off as i64)) as void*, n as u64)
+    end
+    (buf as u8*)[n] = 0 as u8
+    ret buf as str
+end
+
+func _starts(p: void*, n: int, prefix: str): bool:
+    pl := prefix.len()
+    if n < pl:
+        ret false
+    end
+    repeat pl in i:
+        if _ub(p, i) != (prefix as u8*)[i] as int:
+            ret false
+        end
+    end
+    ret true
+end
+
+func _parse_sni_ext(p: void*, off: int, elen: int, out &: ClientHello):
+    if elen < 5:
+        ret
+    end
+    list_len := _u16(p, off)
+    mut i := off + 2
+    mut stop := off + 2 + list_len
+    if stop > off + elen:
+        stop = off + elen
+    end
+    until i + 3 <= stop:
+        t := _ub(p, i)
+        nl := _u16(p, i + 1)
+        if i + 3 + nl > stop:
+            break
+        end
+        if t == 0:
+            out.sni = _mkstr(p, i + 3, nl)
+            out.sni_offset = i + 3
+            out.sni_len = nl
+            break
+        end
+        i += 3 + nl
+    end
+end
+
+func _parse_alpn_ext(p: void*, off: int, elen: int, out &: ClientHello):
+    if elen < 3:
+        ret
+    end
+    list_len := _u16(p, off)
+    mut i := off + 2
+    mut stop := off + 2 + list_len
+    if stop > off + elen:
+        stop = off + elen
+    end
+    until i < stop:
+        l := _ub(p, i)
+        if l == 0 or i + 1 + l > stop:
+            break
+        end
+        out.alpn.push(_mkstr(p, i + 1, l))
+        i += 1 + l
+    end
+end
+
+func _hexval(c: int): int:
+    if c >= 48 and c <= 57:
+        ret c - 48
+    end
+    if c >= 97 and c <= 102:
+        ret c - 87
+    end
+    if c >= 65 and c <= 70:
+        ret c - 55
+    end
+    ret 0 - 1
+end
+
+@en "Sniff"
+@fa "تشخیص پروتکل"
+pub func Sniff(p: void*, n: int): int:
+    if n <= 0:
+        ret KindTooShort
+    end
+    b0 := _ub(p, 0)
+    if b0 == 22:
+        if n < 3:
+            ret KindTooShort
+        end
+        if _ub(p, 1) == 3 and _ub(p, 2) <= 4:
+            ret KindTLS
+        end
+        ret KindUnknown
+    end
+    if b0 == 5:
+        if n >= 2 and _ub(p, 1) >= 1 and _ub(p, 1) <= 16:
+            ret KindSOCKS5
+        end
+        ret KindUnknown
+    end
+    if b0 == 4:
+        if n >= 2 and (_ub(p, 1) == 1 or _ub(p, 1) == 2):
+            ret KindSOCKS4
+        end
+        ret KindUnknown
+    end
+    if b0 == 83:
+        if n < 4:
+            ret KindTooShort
+        end
+        if _starts(p, n, "SSH-"):
+            ret KindSSH
+        end
+        ret KindUnknown
+    end
+    methods := ["GET ", "POST ", "HEAD ", "PUT ", "DELETE ", "OPTIONS ", "PATCH ", "CONNECT ", "TRACE "]
+    mut short := false
+    repeat 9 in i:
+        m := methods[i]
+        if _starts(p, n, m):
+            ret KindHTTP
+        end
+        if n < m.len():
+            mut part := true
+            repeat n in j:
+                if _ub(p, j) != (m as u8*)[j] as int:
+                    part = false
+                end
+            end
+            if part:
+                short = true
+            end
+        end
+    end
+    if short:
+        ret KindTooShort
+    end
+    ret KindUnknown
+end
+
+@en "KindName"
+@fa "نام نوع"
+pub func KindName(k: int): str:
+    if k == KindTLS:
+        ret "tls"
+    else k == KindHTTP:
+        ret "http"
+    else k == KindSSH:
+        ret "ssh"
+    else k == KindSOCKS5:
+        ret "socks5"
+    else k == KindSOCKS4:
+        ret "socks4"
+    else k == KindTooShort:
+        ret "short"
+    end
+    ret "unknown"
+end
+
+@en "ParseClientHello"
+@fa "تجزیه پیام آغازین"
+pub func ParseClientHello(p: void*, n: int): ClientHello:
+    mut r := ClientHello {}
+    if n < 9 or _ub(p, 0) != 22 or _ub(p, 1) != 3:
+        ret r
+    end
+    r.record_version = _u16(p, 1)
+    rl := _u16(p, 3)
+    r.record_len = rl + 5
+    mut lim := n
+    if r.record_len < lim:
+        lim = r.record_len
+    else r.record_len > n:
+        r.truncated = true
+    end
+    if _ub(p, 5) != 1:
+        ret r
+    end
+    if lim < 43 + 1:
+        ret r
+    end
+    r.hello_version = _u16(p, 9)
+    mut i := 43
+    sl := _ub(p, i)
+    r.session_id_len = sl
+    i += 1 + sl
+    if i + 2 > lim:
+        ret r
+    end
+    cl := _u16(p, i)
+    r.cipher_count = cl / 2
+    i += 2 + cl
+    if i + 1 > lim:
+        ret r
+    end
+    i += 1 + _ub(p, i)
+    if i + 2 > lim:
+        ret r
+    end
+    el := _u16(p, i)
+    i += 2
+    mut stop := i + el
+    if stop > lim:
+        stop = lim
+        r.truncated = true
+    end
+    until i + 4 <= stop:
+        et := _u16(p, i)
+        elen := _u16(p, i + 2)
+        body := i + 4
+        if body + elen > stop:
+            r.truncated = true
+            break
+        end
+        r.ext_count++
+        if et == 0:
+            _parse_sni_ext(p, body, elen, r)
+        else et == 16:
+            _parse_alpn_ext(p, body, elen, r)
+        else et == 43:
+            mut k := body + 1
+            until k + 2 <= body + elen:
+                if _u16(p, k) == 772:
+                    r.has_tls13 = true
+                end
+                k += 2
+            end
+        else et == 65037:
+            r.has_ech = true
+        end
+        i = body + elen
+    end
+    r.ok = true
+    ret r
+end
+
+@en "ExtractSNI"
+@fa "استخراج نام سرور"
+pub func ExtractSNI(p: void*, n: int): str:
+    ch := ParseClientHello(p, n)
+    ret ch.sni
+end
+
+@en "FromHex"
+@fa "از هگز"
+pub func FromHex(text: str): compress.ByteBuf:
+    mut b := compress.NewByteBufCap(text.len() / 2 + 1)
+    mut i := 0
+    until i + 1 < text.len():
+        hi := _hexval((text as u8*)[i] as int)
+        lo := _hexval((text as u8*)[i + 1] as int)
+        if hi >= 0 and lo >= 0:
+            compress.BufPush(b, hi * 16 + lo)
+            i += 2
+        else:
+            i += 1
+        end
+    end
+    ret b
+end
+
+@en "ToHex"
+@fa "به هگز"
+pub func ToHex(b: compress.ByteBuf): str:
+    digits := "0123456789abcdef"
+    mut s := ""
+    repeat b.len in i:
+        v := compress.BufGet(b, i)
+        s = s + digits.substr(v >> 4, 1) + digits.substr(v & 15, 1)
+    end
+    ret s
+end

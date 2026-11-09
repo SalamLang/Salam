@@ -1,0 +1,276 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package censor
+
+import str
+
+@en "DecisionProxy"
+@fa "تصمیم پراکسی"
+pub const DecisionProxy := 0
+
+@en "DecisionDirect"
+@fa "تصمیم مستقیم"
+pub const DecisionDirect := 1
+
+@en "DecisionBlock"
+@fa "تصمیم مسدود"
+pub const DecisionBlock := 2
+
+@en "DomainSet"
+@fa "مجموعه دامنه"
+pub struct DomainSet:
+    @en "suffixes"
+    @fa "پسوندها"
+    pub suffixes: HashMap<str, bool> = HashMap {}
+    @en "fulls"
+    @fa "دامنه‌های کامل"
+    pub fulls: HashMap<str, bool> = HashMap {}
+    @en "keywords"
+    @fa "کلیدواژه‌ها"
+    pub keywords: Vector<str> = Vector {}
+    @en "count"
+    @fa "شمار"
+    pub count: int = 0
+end
+
+@en "Classifier"
+@fa "دسته‌بند"
+pub struct Classifier:
+    @en "block"
+    @fa "مسدود"
+    pub block: DomainSet = DomainSet {}
+    @en "direct"
+    @fa "مستقیم"
+    pub direct: DomainSet = DomainSet {}
+    @en "proxy"
+    @fa "پراکسی"
+    pub proxy: DomainSet = DomainSet {}
+    @en "default_decision"
+    @fa "تصمیم پیش‌فرض"
+    pub default_decision: int = 0
+end
+
+func _norm(host: str): str:
+    mut h := str.Trim(host).lower()
+    until h.len() > 0 and h.substr(h.len() - 1, 1) == ".":
+        h = h.substr(0, h.len() - 1)
+    end
+    ret h
+end
+
+func _norm_rule(rule: str): str:
+    mut h := _norm(rule)
+    if h.len() > 2 and h.substr(0, 2) == "*.":
+        h = h.substr(2, h.len() - 2)
+    end
+    if h.len() > 0 and h.substr(0, 1) == ".":
+        h = h.substr(1, h.len() - 1)
+    end
+    ret h
+end
+
+func _has_prefix(s: str, prefix: str): bool:
+    ret s.len() >= prefix.len() and s.substr(0, prefix.len()) == prefix
+end
+
+func _is_ipv4(h: str): bool:
+    parts := str.Split(h, ".")
+    defer parts.free()
+    if parts.len() != 4:
+        ret false
+    end
+    repeat 4 in i:
+        s := parts.get(i)
+        if s.len() == 0 or s.len() > 3:
+            ret false
+        end
+        repeat s.len() in j:
+            c := (s as u8*)[j] as int
+            if c < 48 or c > 57:
+                ret false
+            end
+        end
+    end
+    ret true
+end
+
+@en "NewDomainSet"
+@fa "مجموعه دامنه جدید"
+pub func NewDomainSet(): DomainSet:
+    ret DomainSet {}
+end
+
+@en "AddRule"
+@fa "افزودن قاعده"
+pub func AddRule(s &: DomainSet, rule: str): bool:
+    r := str.Trim(rule)
+    if r.len() == 0:
+        ret false
+    end
+    if _has_prefix(r, "full:"):
+        h := _norm_rule(r.substr(5, r.len() - 5))
+        if h.len() == 0:
+            ret false
+        end
+        s.fulls.put(h, true)
+    else _has_prefix(r, "keyword:"):
+        k := str.Trim(r.substr(8, r.len() - 8)).lower()
+        if k.len() == 0:
+            ret false
+        end
+        s.keywords.push(k)
+    else _has_prefix(r, "regexp:"):
+        ret false
+    else:
+        mut body := r
+        if _has_prefix(r, "domain:"):
+            body = r.substr(7, r.len() - 7)
+        else _has_prefix(r, "suffix:"):
+            body = r.substr(7, r.len() - 7)
+        end
+        h := _norm_rule(body)
+        if h.len() == 0:
+            ret false
+        end
+        s.suffixes.put(h, true)
+    end
+    s.count++
+    ret true
+end
+
+@en "AddRules"
+@fa "افزودن قاعده‌ها"
+pub func AddRules(s &: DomainSet, text: str): int:
+    lines := str.Split(text, "\n")
+    defer lines.free()
+    mut added := 0
+    repeat lines.len() in i:
+        mut line := str.Trim(lines.get(i))
+        hash := line.find("#")
+        if hash >= 0:
+            line = str.Trim(line.substr(0, hash))
+        end
+        if line.len() > 0 and AddRule(s, line):
+            added++
+        end
+    end
+    ret added
+end
+
+@en "MatchDomain"
+@fa "تطبیق دامنه"
+pub func MatchDomain(s: DomainSet, host: str): bool:
+    h := _norm(host)
+    if h.len() == 0:
+        ret false
+    end
+    if s.fulls.has(h):
+        ret true
+    end
+    mut cur := h
+    until true:
+        if s.suffixes.has(cur):
+            ret true
+        end
+        dot := cur.find(".")
+        if dot < 0:
+            break
+        end
+        cur = cur.substr(dot + 1, cur.len() - dot - 1)
+    end
+    repeat s.keywords.len() in i:
+        if h.find(s.keywords.get(i)) >= 0:
+            ret true
+        end
+    end
+    ret false
+end
+
+@en "FreeDomainSet"
+@fa "آزاد کردن مجموعه دامنه"
+pub func FreeDomainSet(s &: DomainSet):
+    s.suffixes.free()
+    s.fulls.free()
+    s.keywords.free()
+    s.count = 0
+end
+
+@en "IsPrivateHost"
+@fa "میزبان خصوصی"
+pub func IsPrivateHost(host: str): bool:
+    h := _norm(host)
+    if h == "localhost" or _has_prefix(h, "127.") or _has_prefix(h, "10.") or _has_prefix(h, "192.168.") or _has_prefix(h, "169.254."):
+        ret true
+    end
+    if _has_prefix(h, "172.") and _is_ipv4(h):
+        parts := str.Split(h, ".")
+        defer parts.free()
+        second := parts.get(1).to_int()
+        ret second >= 16 and second <= 31
+    end
+    if h == "::1" or _has_prefix(h, "fe80:") or _has_prefix(h, "fc") or _has_prefix(h, "fd"):
+        ret h.find(":") >= 0
+    end
+    ret false
+end
+
+@en "NewClassifier"
+@fa "دسته‌بند جدید"
+pub func NewClassifier(default_decision: int): Classifier:
+    ret Classifier { default_decision = default_decision }
+end
+
+@en "Classify"
+@fa "دسته‌بندی"
+pub func Classify(c: Classifier, host: str): int:
+    if MatchDomain(c.block, host):
+        ret DecisionBlock
+    end
+    if MatchDomain(c.proxy, host):
+        ret DecisionProxy
+    end
+    if IsPrivateHost(host) or MatchDomain(c.direct, host):
+        ret DecisionDirect
+    end
+    ret c.default_decision
+end
+
+@en "IranDirectList"
+@fa "فهرست مستقیم ایران"
+pub func IranDirectList(): str:
+    ret "# domestic sites that should not go through the tunnel\nir\nshaparak.ir\ndigikala.com\naparat.com\nfilimo.com\nnamava.ir\ntorob.com\ntapsi.cab\nsnapp.ir\ndivar.ir\nbamilo.com\nvarzesh3.com\nbalad.ir\nneshan.org\n"
+end
+
+@en "FilteredList"
+@fa "فهرست فیلترشده"
+pub func FilteredList(): str:
+    ret "# sites commonly filtered in Iran, a starting point only, check before relying on it\ntwitter.com\nx.com\ntwimg.com\nt.co\nfacebook.com\nfbcdn.net\ninstagram.com\ncdninstagram.com\nyoutube.com\nytimg.com\ngooglevideo.com\ntelegram.org\ntelegram.me\nt.me\ntiktok.com\nreddit.com\nmedium.com\nsoundcloud.com\nnetflix.com\ndiscord.com\ntwitch.tv\nsignal.org\n"
+end
+
+@en "IranDirectSet"
+@fa "مجموعه مستقیم ایران"
+pub func IranDirectSet(): DomainSet:
+    mut s := NewDomainSet()
+    _n := AddRules(s, IranDirectList())
+    ret s
+end
+
+@en "FilteredSet"
+@fa "مجموعه فیلترشده"
+pub func FilteredSet(): DomainSet:
+    mut s := NewDomainSet()
+    _n := AddRules(s, FilteredList())
+    ret s
+end

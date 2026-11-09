@@ -1,0 +1,187 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package archive
+
+import mem
+
+const _RAR20_SUBST := [
+    215, 19, 149, 35, 73, 197, 192, 205, 249, 28, 16, 119, 48, 221, 2, 42,
+    232, 1, 177, 233, 14, 88, 219, 25, 223, 195, 244, 90, 87, 239, 153, 137,
+    255, 199, 147, 70, 92, 66, 246, 13, 216, 40, 62, 29, 217, 230, 86, 6,
+    71, 24, 171, 196, 101, 113, 218, 123, 93, 91, 163, 178, 202, 67, 44, 235,
+    107, 250, 75, 234, 49, 167, 125, 211, 83, 114, 157, 144, 32, 193, 143, 36,
+    158, 124, 247, 187, 89, 214, 141, 47, 121, 228, 61, 130, 213, 194, 174, 251,
+    97, 110, 54, 229, 115, 57, 152, 94, 105, 243, 212, 55, 209, 245, 63, 11,
+    164, 200, 31, 156, 81, 176, 227, 21, 76, 99, 139, 188, 127, 17, 248, 51,
+    207, 120, 189, 210, 8, 226, 41, 72, 183, 203, 135, 165, 166, 60, 98, 7,
+    122, 38, 155, 170, 69, 172, 252, 238, 39, 134, 59, 128, 236, 27, 240, 80,
+    131, 3, 85, 206, 145, 79, 154, 142, 159, 220, 201, 133, 74, 64, 20, 129,
+    224, 185, 138, 103, 173, 182, 43, 34, 254, 82, 198, 151, 231, 180, 58, 10,
+    118, 26, 102, 12, 50, 132, 22, 191, 136, 111, 162, 179, 45, 4, 148, 108,
+    161, 56, 78, 126, 242, 222, 15, 175, 146, 23, 33, 241, 181, 190, 77, 225,
+    0, 46, 169, 186, 68, 95, 237, 65, 53, 208, 253, 168, 9, 18, 100, 52,
+    116, 184, 160, 96, 109, 37, 30, 106, 140, 104, 150, 5, 204, 117, 112, 84
+]
+
+func _rar15_rotr16(v: int): int:
+    ret ((v >> 1) | ((v & 1) << 15)) & 0xffff
+end
+
+func _rar15_decrypt(password: str, buf: u8*, n: int):
+    tab := _rar_crc_table()
+    pw := password as u8*
+    mut pl := password.len()
+    if pl > 127:
+        pl = 127
+    end
+    mut pcrc := 0xFFFFFFFF as u32
+    repeat pl in i:
+        pcrc = tab[((pcrc ^ (pw[i] as u32)) & (255 as u32)) as int] ^ (pcrc >> 8)
+    end
+    mut k0 := (pcrc as int) & 0xffff
+    mut k1 := ((pcrc as int) >> 16) & 0xffff
+    mut k2 := 0
+    mut k3 := 0
+    repeat pl in i:
+        p := pw[i] as int
+        t := tab[p] as int
+        k2 = (k2 ^ (p ^ t)) & 0xffff
+        k3 = (k3 + (p + (t >> 16))) & 0xffff
+    end
+    repeat n in i:
+        k0 = (k0 + 0x1234) & 0xffff
+        t := tab[(k0 & 0x1fe) >> 1] as int
+        k1 = (k1 ^ t) & 0xffff
+        k2 = (k2 - ((t >> 16) & 0xffff)) & 0xffff
+        k0 = k0 ^ k2
+        k3 = _rar15_rotr16(k3) ^ k1
+        k3 = _rar15_rotr16(k3)
+        k0 = k0 ^ k3
+        buf[i] = ((buf[i] as int) ^ (k0 >> 8)) as u8
+    end
+    mem.Free(tab as void*)
+end
+
+func _rar20_rotl(v: i64, n: int): i64:
+    ret ((v << n) | (v >> (32 - n))) & 0xffffffff
+end
+
+func _rar20_subst(s: u8*, t: i64): i64:
+    ret (s[(t & 255) as int] as i64) | ((s[((t >> 8) & 255) as int] as i64) << 8) | ((s[((t >> 16) & 255) as int] as i64) << 16) | ((s[((t >> 24) & 255) as int] as i64) << 24)
+end
+
+func _rar20_get4(p: u8*, off: int): i64:
+    ret (p[off] as i64) | ((p[off + 1] as i64) << 8) | ((p[off + 2] as i64) << 16) | ((p[off + 3] as i64) << 24)
+end
+
+func _rar20_put4(p: u8*, off: int, v: i64):
+    p[off] = (v & 255) as u8
+    p[off + 1] = ((v >> 8) & 255) as u8
+    p[off + 2] = ((v >> 16) & 255) as u8
+    p[off + 3] = ((v >> 24) & 255) as u8
+end
+
+func _rar20_block(k: i64*, s: u8*, tab: u32*, src: u8*, dst: u8*, enc: bool):
+    mut a := _rar20_get4(src, 0) ^ k[0]
+    mut b := _rar20_get4(src, 4) ^ k[1]
+    mut c := _rar20_get4(src, 8) ^ k[2]
+    mut d := _rar20_get4(src, 12) ^ k[3]
+    mut upd := mem.AllocateZeroed(16 as u64) as u8*
+    repeat 16 in i:
+        upd[i] = src[i]
+    end
+    mut r := enc ? 0 : 31
+    repeat 32:
+        mut t := ((c + _rar20_rotl(d, 11)) & 0xffffffff) ^ k[r & 3]
+        ta := a ^ _rar20_subst(s, t)
+        t = (((d ^ _rar20_rotl(c, 17)) + k[r & 3]) & 0xffffffff)
+        tb := b ^ _rar20_subst(s, t)
+        a = c
+        b = d
+        c = ta
+        d = tb
+        if enc:
+            r++
+        else:
+            r--
+        end
+    end
+    _rar20_put4(dst, 0, c ^ k[0])
+    _rar20_put4(dst, 4, d ^ k[1])
+    _rar20_put4(dst, 8, a ^ k[2])
+    _rar20_put4(dst, 12, b ^ k[3])
+    u := enc ? dst : upd
+    repeat 4 in q:
+        k[0] = k[0] ^ (tab[u[q * 4] as int] as i64)
+        k[1] = k[1] ^ (tab[u[q * 4 + 1] as int] as i64)
+        k[2] = k[2] ^ (tab[u[q * 4 + 2] as int] as i64)
+        k[3] = k[3] ^ (tab[u[q * 4 + 3] as int] as i64)
+    end
+    mem.Free(upd as void*)
+end
+
+func _rar20_decrypt(password: str, buf: u8*, n: int):
+    tab := _rar_crc_table()
+    k := mem.AllocateZeroed(40 as u64) as i64*
+    k[0] = 0xD3A3B879
+    k[1] = 0x3F6D12F7
+    k[2] = 0x7515A235
+    k[3] = 0xA4E7F123
+    s := mem.AllocateZeroed(256 as u64) as u8*
+    repeat 256 in i:
+        s[i] = _RAR20_SUBST[i] as u8
+    end
+    mut pl := password.len()
+    if pl > 127:
+        pl = 127
+    end
+    pw := mem.AllocateZeroed((pl + 48) as u64) as u8*
+    repeat pl in i:
+        pw[i] = (password as u8*)[i]
+    end
+    mut j := 0
+    until j < 256:
+        mut i := 0
+        until i < pl:
+            mut n1 := (tab[((pw[i] as int) - j) & 255] as int) & 255
+            n2 := (tab[((pw[i + 1] as int) + j) & 255] as int) & 255
+            mut kk := 1
+            until n1 != n2:
+                x := (n1 + i + kk) & 255
+                tmp := s[n1]
+                s[n1] = s[x]
+                s[x] = tmp
+                n1 = (n1 + 1) & 255
+                kk++
+            end
+            i += 2
+        end
+        j++
+    end
+    mut at := 0
+    until at < pl:
+        _rar20_block(k, s, tab, _poff(pw, at), _poff(pw, at), true)
+        at += 16
+    end
+    mut pos := 0
+    until pos + 16 <= n:
+        _rar20_block(k, s, tab, _poff(buf, pos), _poff(buf, pos), false)
+        pos += 16
+    end
+    mem.Free(pw as void*)
+    mem.Free(s as void*)
+    mem.Free(k as void*)
+    mem.Free(tab as void*)
+end

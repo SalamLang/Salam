@@ -1,0 +1,1115 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package aiua
+
+import str
+import encoding.json
+
+pub const VERSION := 1
+
+const MAX_UA := 255
+
+const CHROMEBOOK_TOKEN := "cr" + "os "
+
+pub struct Hints:
+    pub client: str = ""
+    pub os: str = ""
+    pub os_version: str = ""
+    pub arch: str = ""
+    pub os_id: str = ""
+    pub os_build: str = ""
+    pub platform: str = ""
+    pub platform_version: str = ""
+    pub model: str = ""
+    pub cpu: str = ""
+    pub bitness: str = ""
+    pub mobile: str = ""
+    pub touch: str = ""
+    pub brands: str = ""
+end
+
+pub struct Info:
+    pub os: str = ""
+    pub os_ver: str = ""
+    pub distro: str = ""
+    pub build: str = ""
+    pub kind: str = ""
+    pub model: str = ""
+    pub browser: str = ""
+    pub browser_ver: str = ""
+    pub engine: str = ""
+    pub arch: str = ""
+    pub tool: bool = false
+    pub webview: bool = false
+end
+
+func lower(s: str): str:
+    mut b := str.NewBuilder()
+    mut i := 0
+    until i < s.len():
+        c := s[i] as int
+        if c >= 65 and c <= 90:
+            str.BufAppendChar(b, c + 32)
+        else:
+            str.BufAppendChar(b, c)
+        end
+        i++
+    end
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
+
+func has(l: str, k: str): bool:
+    ret l.find(k) >= 0
+end
+
+func sub(s: str, start: int, n: int): str:
+    if start < 0 or start >= s.len() or n <= 0:
+        ret ""
+    end
+    mut m := n
+    if start + m > s.len():
+        m = s.len() - start
+    end
+    ret s.substr(start, m)
+end
+
+func digit(c: int): bool:
+    ret c >= 48 and c <= 57
+end
+
+func letter(c: int): bool:
+    ret (c >= 97 and c <= 122) or (c >= 65 and c <= 90)
+end
+
+func num_prefix(v: str): str:
+    mut i := 0
+    until i < v.len() and (digit(v[i] as int) or v[i] as int == 46 or v[i] as int == 95):
+        i++
+    end
+    mut r := str.Replace(v.substr(0, i), "_", ".")
+    until r.len() > 0 and r[r.len() - 1] as int == 46:
+        r = r.substr(0, r.len() - 1)
+    end
+    ret r
+end
+
+func ver_after(l: str, ua: str, key: str): str:
+    at := l.find(key)
+    if at < 0:
+        ret ""
+    end
+    ret num_prefix(sub(ua, at + key.len(), 40))
+end
+
+func parts(v: str, n: int): str:
+    if v.len() == 0:
+        ret ""
+    end
+    p := v.split(".")
+    mut out := ""
+    mut i := 0
+    until i < p.len() and i < n:
+        if i > 0:
+            out += "."
+        end
+        out += p[i]
+        i++
+    end
+    ret out
+end
+
+func trim_zero(v: str): str:
+    mut r := v
+    until r.len() > 2 and r.substr(r.len() - 2, 2) == ".0":
+        r = r.substr(0, r.len() - 2)
+    end
+    ret r
+end
+
+func major(v: str): int:
+    if v.len() == 0 or not digit(v[0] as int):
+        ret -1
+    end
+    p := v.split(".")
+    ret p[0].to_int()
+end
+
+func clean(s: str, max: int): str:
+    t := str.Trim(s)
+    mut b := str.NewBuilder()
+    mut i := 0
+    until i < t.len() and i < max:
+        c := t[i] as int
+        if c >= 32 and c != 127 and c < 128:
+            str.BufAppendChar(b, c)
+        end
+        i++
+    end
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
+end
+
+func tokens(l: str): Vector<str>:
+    mut t := l
+    each c in ["(", ")", ";", ",", "\t"]:
+        t = str.Replace(t, c, " ")
+    end
+    mut out := Vector {} as Vector<str>
+    p := t.split(" ")
+    each x in p:
+        if x.len() > 0:
+            out.push(x)
+        end
+    end
+    ret out
+end
+
+func arch_word(a: str): str:
+    x := lower(a)
+    if x == "x86_64" or x == "x64" or x == "amd64" or x == "x86-64":
+        ret "x64"
+    end
+    if x == "aarch64" or x == "arm64" or x == "arm64e":
+        ret "arm64"
+    end
+    if x == "x86" or x == "i386" or x == "i686" or x == "i586" or x == "ia32":
+        ret "x86"
+    end
+    if x == "arm" or x == "armv7" or x == "armv7l" or x == "armv8l" or x == "armhf":
+        ret "arm"
+    end
+    if x == "riscv64":
+        ret "riscv64"
+    end
+    ret ""
+end
+
+func arch_from_ua(l: str): str:
+    if has(l, "arm64") or has(l, "aarch64"):
+        ret "arm64"
+    end
+    if has(l, "x86_64") or has(l, "x64") or has(l, "win64") or has(l, "amd64") or has(l, "wow64"):
+        ret "x64"
+    end
+    if has(l, "i686") or has(l, "i386") or has(l, "i586"):
+        ret "x86"
+    end
+    if has(l, "armv7") or has(l, "armv8l") or has(l, "; arm;") or has(l, "; arm "):
+        ret "arm"
+    end
+    ret ""
+end
+
+func windows_nt(v: str): str:
+    if v == "10.0":
+        ret "10/11"
+    end
+    if v == "6.3":
+        ret "8.1"
+    end
+    if v == "6.2":
+        ret "8"
+    end
+    if v == "6.1":
+        ret "7"
+    end
+    if v == "6.0":
+        ret "Vista"
+    end
+    if v == "5.1" or v == "5.2":
+        ret "XP"
+    end
+    if v == "5.0":
+        ret "2000"
+    end
+    ret ""
+end
+
+func first_number(s: str): str:
+    mut i := 0
+    until i < s.len() and not digit(s[i] as int):
+        i++
+    end
+    ret num_prefix(sub(s, i, 40))
+end
+
+func set_os(i &: Info, name: str):
+    if i.os != name:
+        i.os = name
+        i.os_ver = ""
+        i.distro = ""
+        i.build = ""
+        i.kind = ""
+        i.model = ""
+    end
+end
+
+func browser(i &: Info, name: str, ver: str, engine: str):
+    i.browser = name
+    i.browser_ver = ver
+    i.engine = engine
+end
+
+func skip_model(m: str): bool:
+    x := lower(m)
+    if x.len() < 2 or x == "mobile" or x == "tablet" or x == "wv" or x == "linux" or x == "u" or x == "k":
+        ret true
+    end
+    if x.len() >= 3 and x.substr(0, 3) == "rv:":
+        ret true
+    end
+    if (x.len() == 5 and x[2] as int == 45) or (x.len() == 2):
+        ret true
+    end
+    ret false
+end
+
+func model_name(m: str): str:
+    x := clean(m, 40)
+    if x.len() > 3 and (x.substr(0, 3) == "SM-" or x.substr(0, 3) == "GT-"):
+        ret "Samsung " + x
+    end
+    if x.len() > 5 and x.substr(0, 5) == "Pixel":
+        ret "Google " + x
+    end
+    ret x
+end
+
+func android_model(l: str, ua: str): str:
+    at := l.find("android ")
+    if at < 0:
+        ret ""
+    end
+    mut rest := sub(ua, at, 120)
+    close := rest.find(")")
+    if close >= 0:
+        rest = rest.substr(0, close)
+    end
+    segs := rest.split(";")
+    mut n := 1
+    until n < segs.len() and n < 5:
+        s := str.Trim(segs[n])
+        b := lower(s).find(" build/")
+        name := b > 0 ? s.substr(0, b) : s
+        if not skip_model(name):
+            ret model_name(name)
+        end
+        n++
+    end
+    ret ""
+end
+
+func distro_from_ua(l: str): str:
+    names := ["ubuntu", "Ubuntu", "fedora", "Fedora", "debian", "Debian", "linux mint", "Linux Mint", "centos", "CentOS", "red hat", "Red Hat", "redhat", "Red Hat", "opensuse", "openSUSE", "suse", "SUSE", "gentoo", "Gentoo", "manjaro", "Manjaro", "kubuntu", "Ubuntu", "xubuntu", "Ubuntu", "arch linux", "Arch Linux"]
+    mut n := 0
+    until n < names.len():
+        if has(l, names[n]):
+            ret names[n + 1]
+        end
+        n += 2
+    end
+    ret ""
+end
+
+func os_from_ua(l: str, ua: str, i &: Info):
+    i.arch = arch_from_ua(l)
+    if has(l, "windows phone"):
+        i.os = "Windows Phone"
+        i.os_ver = ver_after(l, ua, "windows phone ")
+        i.kind = "mobile"
+        ret
+    end
+    if has(l, "windows nt "):
+        i.os = "Windows"
+        i.os_ver = windows_nt(ver_after(l, ua, "windows nt "))
+        ret
+    end
+    if has(l, "tizen") or has(l, "smart-tv") or has(l, "smarttv"):
+        i.os = has(l, "tizen") ? "Tizen" : "Linux"
+        i.kind = "tv"
+        ret
+    end
+    if has(l, "web0s") or has(l, "webos"):
+        i.os = "webOS"
+        i.kind = "tv"
+        ret
+    end
+    if has(l, "kaios"):
+        i.os = "KaiOS"
+        i.kind = "mobile"
+        ret
+    end
+    if has(l, "android"):
+        i.os = "Android"
+        i.os_ver = trim_zero(ver_after(l, ua, "android "))
+        i.model = android_model(l, ua)
+        if has(l, "android 10; k)") or has(l, "android 10; k "):
+            i.os_ver = ""
+        end
+        if has(l, "android tv") or has(l, "bravia") or has(l, "googletv"):
+            i.kind = "tv"
+        else has(l, "mobi") or has(l, "opera mini"):
+            i.kind = "mobile"
+        else:
+            i.kind = "tablet"
+        end
+        ret
+    end
+    if has(l, "iphone") or has(l, "ipod"):
+        i.os = "iOS"
+        i.os_ver = ver_after(l, ua, "iphone os ")
+        i.kind = "mobile"
+        i.model = has(l, "ipod") ? "iPod touch" : "iPhone"
+        ret
+    end
+    if has(l, "ipad"):
+        i.os = "iPadOS"
+        i.os_ver = ver_after(l, ua, "cpu os ")
+        i.kind = "tablet"
+        i.model = "iPad"
+        ret
+    end
+    if has(l, CHROMEBOOK_TOKEN):
+        i.os = "ChromeOS"
+        ret
+    end
+    if has(l, "macintosh") or has(l, "mac os x"):
+        i.os = "macOS"
+        v := ver_after(l, ua, "mac os x ")
+        if parts(v, 2) != "10.15":
+            i.os_ver = MacosVersion(v)
+        end
+        ret
+    end
+    bsd := ["freebsd", "FreeBSD", "openbsd", "OpenBSD", "netbsd", "NetBSD", "sunos", "SunOS", "haiku", "Haiku"]
+    mut n := 0
+    until n < bsd.len():
+        if has(l, bsd[n]):
+            i.os = bsd[n + 1]
+            ret
+        end
+        n += 2
+    end
+    if has(l, "linux") or has(l, "x11") or has(l, "ubuntu"):
+        i.os = "Linux"
+        i.distro = distro_from_ua(l)
+    end
+end
+
+func token_ver(t: str): str:
+    at := t.find("/")
+    if at < 0:
+        ret ""
+    end
+    ret num_prefix(t.substr(at + 1, t.len() - at - 1))
+end
+
+func token_name(t: str): str:
+    at := t.find("/")
+    if at < 0:
+        ret t
+    end
+    ret t.substr(0, at)
+end
+
+func bot_token(l: str): str:
+    each t in tokens(l):
+        if t[0] as int != 43 and (has(t, "bot") or has(t, "crawler") or has(t, "spider")):
+            ret t
+        end
+    end
+    ret ""
+end
+
+func os_like(s: str): bool:
+    each k in ["windows", "linux", "android", "mac", "iphone", "ipad", CHROMEBOOK_TOKEN, "x11", "ubuntu", "ios", "tizen"]:
+        if has(s, k):
+            ret true
+        end
+    end
+    ret false
+end
+
+func make_tool(i &: Info, name: str, ver: str, kind: str):
+    i.browser = clean(name, 32)
+    i.browser_ver = clean(ver, 24)
+    i.kind = kind
+    i.tool = true
+end
+
+func pretty_bot(t: str): str:
+    n := token_name(t)
+    if n.len() > 0:
+        ret str.Title(n)
+    end
+    ret t
+end
+
+func tool_from_ua(l: str, ua: str, i &: Info): int:
+    t := str.Trim(ua)
+    if t.len() == 0:
+        ret 0
+    end
+    if has(l, "headlesschrome/"):
+        make_tool(i, "HeadlessChrome", parts(ver_after(l, ua, "headlesschrome/"), 1), "bot")
+        ret 2
+    end
+    bt := bot_token(l)
+    if bt.len() > 0:
+        make_tool(i, pretty_bot(bt), token_ver(bt), "bot")
+        ret 1
+    end
+    known := ["curl/", "curl", "wget/", "Wget", "python-requests/", "Python requests", "python-urllib", "Python urllib", "python-httpx/", "HTTPX", "aiohttp/", "aiohttp", "go-http-client/", "Go http client", "okhttp/", "OkHttp", "axios/", "Axios", "node-fetch", "node-fetch", "undici", "undici", "postmanruntime/", "Postman", "insomnia/", "Insomnia", "httpie/", "HTTPie", "libwww-perl/", "libwww-perl", "java/", "Java", "apache-httpclient/", "Apache HttpClient", "powershell/", "PowerShell", "guzzlehttp/", "Guzzle", "scrapy/", "Scrapy", "facebookexternalhit", "Facebook preview", "lighthouse", "Lighthouse", "pingdom", "Pingdom", "uptimerobot", "UptimeRobot", "statuscake", "StatusCake", "k6/", "k6"]
+    mut n := 0
+    until n < known.len():
+        at := l.find(known[n])
+        if at == 0 or (at > 0 and (l[at - 1] as int == 32 or l[at - 1] as int == 40 or l[at - 1] as int == 59)):
+            key := known[n]
+            ver := key[key.len() - 1] as int == 47 ? num_prefix(sub(ua, at + key.len(), 24)) : ""
+            kind := (known[n + 1] == "Lighthouse" or known[n + 1] == "Facebook preview" or known[n + 1] == "Pingdom" or known[n + 1] == "UptimeRobot" or known[n + 1] == "StatusCake") ? "bot" : "cli"
+            make_tool(i, known[n + 1], ver, kind)
+            ret 1
+        end
+        n += 2
+    end
+    if l.len() >= 8 and l.substr(0, 8) == "mozilla/":
+        if has(l, "applewebkit") or has(l, "gecko") or has(l, "trident") or has(l, "msie") or has(l, "khtml") or has(l, "presto") or has(l, "opera") or has(l, "edge/"):
+            ret 0
+        end
+        open := ua.find("(")
+        if open < 0:
+            ret 0
+        end
+        mut inner := sub(ua, open + 1, 80)
+        close := inner.find(")")
+        if close >= 0:
+            inner = inner.substr(0, close)
+        end
+        seg := str.Trim(inner.split(";")[0])
+        if seg.len() == 0 or lower(seg) == "compatible" or os_like(lower(seg)):
+            ret 0
+        end
+        make_tool(i, seg, "", "cli")
+        ret 1
+    end
+    first := t.split(" ")[0]
+    if first.find("/") > 0 and letter(first[0] as int):
+        name := token_name(first)
+        if name.len() <= 32 and not has(lower(name), "mozilla") and not has(lower(name), "opera"):
+            make_tool(i, name, token_ver(first), "cli")
+            ret 1
+        end
+    end
+    ret 0
+end
+
+func in_app(l: str, i &: Info): bool:
+    apps := ["fban", "Facebook", "fbav", "Facebook", "instagram", "Instagram", "micromessenger", "WeChat", "telegram", "Telegram", "snapchat", "Snapchat", "musical_ly", "TikTok", "bytedancewebview", "TikTok", "whatsapp", "WhatsApp", " line/", "LINE"]
+    mut n := 0
+    until n < apps.len():
+        if has(l, apps[n]):
+            engine := i.os == "iOS" or i.os == "iPadOS" ? "WebKit" : (has(l, "chrome/") ? "Blink" : "WebKit")
+            browser(i, apps[n + 1], "", engine)
+            i.webview = true
+            ret true
+        end
+        n += 2
+    end
+    ret false
+end
+
+func browser_from_ua(l: str, ua: str, i &: Info):
+    apple := i.os == "iOS" or i.os == "iPadOS" or i.os == "macOS"
+    if has(l, "msie ") or has(l, "trident/"):
+        mut v := ver_after(l, ua, "msie ")
+        if v.len() == 0:
+            v = ver_after(l, ua, "rv:")
+        end
+        browser(i, "Internet Explorer", parts(v, 1), "Trident")
+        ret
+    end
+    if has(l, "edgios/"):
+        browser(i, "Edge", parts(ver_after(l, ua, "edgios/"), 1), "WebKit")
+        ret
+    end
+    if has(l, "edga/"):
+        browser(i, "Edge", parts(ver_after(l, ua, "edga/"), 1), "Blink")
+        ret
+    end
+    if has(l, "edg/"):
+        browser(i, "Edge", parts(ver_after(l, ua, "edg/"), 1), "Blink")
+        ret
+    end
+    if has(l, "edge/"):
+        browser(i, "Edge", parts(ver_after(l, ua, "edge/"), 1), "EdgeHTML")
+        ret
+    end
+    if has(l, "opr/"):
+        browser(i, "Opera", parts(ver_after(l, ua, "opr/"), 1), "Blink")
+        ret
+    end
+    if has(l, "opios/"):
+        browser(i, "Opera", parts(ver_after(l, ua, "opios/"), 1), "WebKit")
+        ret
+    end
+    if has(l, "opera mini"):
+        browser(i, "Opera Mini", parts(ver_after(l, ua, "opera mini/"), 1), "Presto")
+        ret
+    end
+    if has(l, "opera/") or has(l, "opera "):
+        mut v := ver_after(l, ua, "version/")
+        if v.len() == 0:
+            v = ver_after(l, ua, "opera/")
+        end
+        browser(i, "Opera", parts(v, 1), "Presto")
+        ret
+    end
+    others := ["samsungbrowser/", "Samsung Internet", "ucbrowser/", "UC Browser", "miuibrowser/", "MIUI Browser", "yabrowser/", "Yandex", "vivaldi/", "Vivaldi", "duckduckgo/", "DuckDuckGo", "huaweibrowser/", "Huawei Browser", "whale/", "Whale"]
+    mut n := 0
+    until n < others.len():
+        if has(l, others[n]):
+            v := ver_after(l, ua, others[n])
+            browser(i, others[n + 1], others[n] == "samsungbrowser/" ? trim_zero(parts(v, 2)) : parts(v, 1), "Blink")
+            ret
+        end
+        n += 2
+    end
+    if has(l, "electron/"):
+        browser(i, "Electron", parts(ver_after(l, ua, "electron/"), 1), "Blink")
+        i.webview = true
+        ret
+    end
+    if in_app(l, i):
+        ret
+    end
+    if has(l, "firefox/") or has(l, "fxios/"):
+        ios := has(l, "fxios/")
+        browser(i, "Firefox", parts(ver_after(l, ua, ios ? "fxios/" : "firefox/"), 1), ios ? "WebKit" : "Gecko")
+        ret
+    end
+    if has(l, "crios/"):
+        browser(i, "Chrome", parts(ver_after(l, ua, "crios/"), 1), "WebKit")
+        ret
+    end
+    if has(l, "chromium/"):
+        browser(i, "Chromium", parts(ver_after(l, ua, "chromium/"), 1), "Blink")
+        ret
+    end
+    if has(l, "chrome/"):
+        if has(l, "; wv)") or has(l, " wv)"):
+            browser(i, "Android WebView", parts(ver_after(l, ua, "chrome/"), 1), "Blink")
+            i.webview = true
+        else:
+            browser(i, "Chrome", parts(ver_after(l, ua, "chrome/"), 1), "Blink")
+        end
+        ret
+    end
+    if has(l, "epiphany/"):
+        browser(i, "Epiphany", parts(ver_after(l, ua, "epiphany/"), 1), "WebKit")
+        ret
+    end
+    if has(l, "version/") and has(l, "safari/"):
+        v := trim_zero(parts(ver_after(l, ua, "version/"), 2))
+        if i.os == "Android":
+            browser(i, "Android Browser", v, "WebKit")
+        else apple:
+            browser(i, "Safari", v, "WebKit")
+        else:
+            browser(i, "WebKitGTK", v, "WebKit")
+            i.webview = true
+        end
+        ret
+    end
+    if has(l, "applewebkit/"):
+        if apple and has(l, "safari/"):
+            browser(i, "Safari", "", "WebKit")
+        else apple:
+            browser(i, "WebView", "", "WebKit")
+            i.webview = true
+        else i.os == "Linux" or i.os == "":
+            browser(i, "WebKitGTK", "", "WebKit")
+            i.webview = true
+        else:
+            browser(i, "WebKit", "", "WebKit")
+        end
+    end
+end
+
+func grease(lb: str): bool:
+    ret has(lb, "not") and has(lb, "brand")
+end
+
+func brand_name(lb: str): str:
+    if lb == "microsoft edge":
+        ret "Edge"
+    end
+    if lb == "google chrome":
+        ret "Chrome"
+    end
+    if lb == "opera" or lb == "opera gx":
+        ret "Opera"
+    end
+    if lb == "brave":
+        ret "Brave"
+    end
+    if lb == "vivaldi":
+        ret "Vivaldi"
+    end
+    if lb == "samsung internet":
+        ret "Samsung Internet"
+    end
+    if lb == "yandex":
+        ret "Yandex"
+    end
+    if lb == "chromium":
+        ret "Chromium"
+    end
+    if lb == "android webview":
+        ret "Android WebView"
+    end
+    ret ""
+end
+
+func brand_rank(name: str): int:
+    if name == "Chromium":
+        ret 1
+    end
+    if name == "Chrome":
+        ret 2
+    end
+    if name == "Android WebView":
+        ret 3
+    end
+    ret 5
+end
+
+func apply_brands(brands: str, i &: Info):
+    mut best := 0
+    mut name := ""
+    mut ver := ""
+    each item in brands.split(","):
+        q1 := item.find("\"")
+        if q1 >= 0:
+            rest := item.substr(q1 + 1, item.len() - q1 - 1)
+            q2 := rest.find("\"")
+            if q2 > 0:
+                lb := lower(rest.substr(0, q2))
+                n := grease(lb) ? "" : brand_name(lb)
+                if n.len() > 0 and brand_rank(n) > best:
+                    best = brand_rank(n)
+                    name = n
+                    vat := rest.find("v=\"")
+                    ver = vat >= 0 ? parts(num_prefix(sub(rest, vat + 3, 30)), 1) : ""
+                end
+            end
+        end
+    end
+    if best == 0:
+        ret
+    end
+    if i.engine == "Blink" or i.browser.len() == 0:
+        if not i.webview or name == "Android WebView":
+            i.browser = name
+            if ver.len() > 0:
+                i.browser_ver = ver
+            end
+            i.engine = "Blink"
+        end
+    end
+end
+
+func hint_arch(cpu: str, bits: str): str:
+    c := lower(cpu)
+    if c == "x86" and bits == "64":
+        ret "x64"
+    end
+    if c == "arm" and bits == "64":
+        ret "arm64"
+    end
+    if c == "x86":
+        ret "x86"
+    end
+    if c == "arm":
+        ret "arm"
+    end
+    ret arch_word(c)
+end
+
+func apply_hints(h: Hints, mode: int, i &: Info):
+    if mode == 1:
+        ret
+    end
+    tool := mode != 0
+    p := lower(Unquote(h.platform))
+    pv := num_prefix(Unquote(h.platform_version))
+    if p == "windows":
+        set_os(i, "Windows")
+        m := major(pv)
+        if m >= 13:
+            i.os_ver = "11"
+        else m >= 0 and pv.len() > 0 and m >= 1:
+            i.os_ver = "10"
+        end
+    else p == "macos":
+        set_os(i, "macOS")
+        if pv.len() > 0:
+            i.os_ver = trim_zero(MacosVersion(pv))
+        end
+    else p == "android":
+        set_os(i, "Android")
+        if pv.len() > 0:
+            i.os_ver = trim_zero(pv)
+        end
+    else p == "linux":
+        set_os(i, "Linux")
+    else p == "chrome os" or p == "chromeos" or p == "chromium os":
+        set_os(i, "ChromeOS")
+    end
+    mo := Unquote(h.mobile)
+    if (mo == "?1" or mo == "1") and i.kind != "tablet" and not tool:
+        i.kind = "mobile"
+    end
+    if (mo == "?0" or mo == "0") and i.kind == "mobile" and (i.os == "Windows" or i.os == "macOS" or i.os == "Linux" or i.os == "ChromeOS"):
+        i.kind = ""
+    end
+    model := Unquote(h.model)
+    if model.len() > 0 and not skip_model(model):
+        i.model = model_name(model)
+    end
+    a := hint_arch(Unquote(h.cpu), Unquote(h.bitness))
+    if a.len() > 0:
+        i.arch = a
+    end
+    if Unquote(h.touch) == "1" and i.os == "macOS" and not tool:
+        i.os = "iPadOS"
+        i.os_ver = i.browser == "Safari" ? i.browser_ver : ""
+        i.kind = "tablet"
+        i.model = "iPad"
+    end
+    if not tool and h.brands.len() > 0:
+        apply_brands(h.brands, i)
+    end
+end
+
+func windows_text(s: str, i &: Info):
+    l := lower(s)
+    mut build := ""
+    at := l.find("build ")
+    if at >= 0:
+        build = parts(num_prefix(sub(l, at + 6, 12)), 1)
+    else:
+        at2 := l.find("10.0.")
+        if at2 >= 0:
+            build = parts(num_prefix(sub(l, at2 + 5, 12)), 1)
+        end
+    end
+    if build.len() > 0:
+        i.build = build
+        i.os_ver = build.to_int() >= 22000 ? "11" : "10"
+        ret
+    end
+    if has(l, "windows 11"):
+        i.os_ver = "11"
+    else has(l, "windows 10"):
+        i.os_ver = "10"
+    else has(l, "windows 8.1"):
+        i.os_ver = "8.1"
+    else has(l, "windows 8"):
+        i.os_ver = "8"
+    else has(l, "windows 7"):
+        i.os_ver = "7"
+    end
+end
+
+func distro_text(s: str, id: str, i &: Info):
+    mut t := clean(s, 64)
+    t = str.Trim(str.Replace(t, "GNU/Linux", ""))
+    t = str.Replace(t, "  ", " ")
+    mut ver := ""
+    p := t.split(" ")
+    if p.len() > 1:
+        last := p[p.len() - 1]
+        if last.len() > 0 and digit(last[0] as int) and num_prefix(last) == last:
+            ver = last
+            t = str.Trim(t.substr(0, t.len() - last.len()))
+        end
+    end
+    if t.len() > 6 and lower(t.substr(t.len() - 6, 6)) == " linux":
+        t = t.substr(0, t.len() - 6)
+    end
+    if t.len() == 0:
+        t = clean(id, 24)
+        if t.len() > 0:
+            t = str.Title(t)
+        end
+    end
+    if lower(t) == "arch":
+        t = "Arch Linux"
+    end
+    if lower(t) == "linux" or lower(t) == "other":
+        t = ""
+    end
+    i.distro = t
+    i.os_ver = t.len() > 0 ? ver : ""
+end
+
+func apply_agent(h: Hints, i &: Info):
+    if h.client != "agent" and h.os.len() == 0:
+        ret
+    end
+    if h.client == "agent":
+        i.webview = true
+        i.kind = "desktop"
+    end
+    a := arch_word(h.arch)
+    if a.len() > 0:
+        i.arch = a
+    end
+    if h.os == "windows":
+        set_os(i, "Windows")
+        windows_text(h.os_version, i)
+        if h.os_build.len() > 0 and i.build.len() == 0:
+            b := first_number(h.os_build)
+            if b.len() > 0:
+                i.build = parts(b, 1)
+                i.os_ver = i.build.to_int() >= 22000 ? "11" : "10"
+            end
+        end
+    else h.os == "macos":
+        set_os(i, "macOS")
+        t := lower(h.os_version)
+        v := first_number(t)
+        if has(t, "darwin"):
+            i.os_ver = DarwinToMacos(v)
+        else v.len() > 0:
+            i.os_ver = MacosVersion(v)
+        end
+    else h.os == "linux":
+        set_os(i, "Linux")
+        distro_text(h.os_version, h.os_id, i)
+    end
+    if h.client == "agent" and i.browser.len() > 0:
+        if i.os == "Windows" and i.browser == "Edge":
+            i.browser = "WebView2"
+        else i.os == "macOS" and (i.browser == "WebView" or i.browser == "Safari"):
+            i.browser = "WKWebView"
+        end
+    end
+end
+
+func finish(i &: Info):
+    if i.kind.len() == 0:
+        if i.os == "Windows" or i.os == "macOS" or i.os == "Linux" or i.os == "ChromeOS":
+            i.kind = "desktop"
+        else i.os == "iOS" or i.os == "Windows Phone" or i.os == "KaiOS":
+            i.kind = "mobile"
+        else i.os == "iPadOS":
+            i.kind = "tablet"
+        else i.os == "Tizen" or i.os == "webOS":
+            i.kind = "tv"
+        else i.os.len() > 0 and i.browser.len() > 0:
+            i.kind = "desktop"
+        else:
+            i.kind = "unknown"
+        end
+    end
+    if (i.os == "iOS" or i.os == "iPadOS") and i.browser == "Safari" and major(i.browser_ver) >= 26 and major(i.os_ver) < 26:
+        i.os_ver = i.browser_ver
+    end
+    if i.os == "iOS" or i.os == "iPadOS":
+        i.os_ver = trim_zero(i.os_ver)
+    end
+    i.os = clean(i.os, 24)
+    i.os_ver = clean(i.os_ver, 24)
+    i.distro = clean(i.distro, 32)
+    i.build = clean(i.build, 12)
+    i.model = clean(i.model, 40)
+    i.browser = clean(i.browser, 32)
+    i.browser_ver = clean(i.browser_ver, 24)
+    i.engine = clean(i.engine, 12)
+end
+
+pub func Unquote(s: str): str:
+    mut t := str.Trim(s)
+    if t.len() >= 2 and t[0] as int == 34 and t[t.len() - 1] as int == 34:
+        t = t.substr(1, t.len() - 2)
+    end
+    ret clean(t, 160)
+end
+
+pub func MacosVersion(raw: str): str:
+    v := num_prefix(str.Trim(raw))
+    m := major(v)
+    if m < 10 or m > 40:
+        ret ""
+    end
+    if m <= 15:
+        ret parts(v, 2)
+    end
+    if m <= 19:
+        ret "10." + str.FromInt((m - 4) as i64)
+    end
+    if m <= 24:
+        ret str.FromInt((m - 9) as i64)
+    end
+    if m == 25:
+        ret "26"
+    end
+    ret parts(v, 2)
+end
+
+pub func DarwinToMacos(raw: str): str:
+    v := num_prefix(str.Trim(raw))
+    m := major(v)
+    if m < 16 or m > 40:
+        ret ""
+    end
+    if m <= 19:
+        ret "10." + str.FromInt((m - 4) as i64)
+    end
+    if m <= 24:
+        ret str.FromInt((m - 9) as i64)
+    end
+    ret str.FromInt((m + 1) as i64)
+end
+
+pub func Parse(ua: str, h: Hints): Info:
+    mut i := Info {}
+    s := clean(ua, MAX_UA)
+    l := lower(s)
+    mode := tool_from_ua(l, s, i)
+    if mode != 1:
+        os_from_ua(l, s, i)
+    end
+    if mode == 0:
+        browser_from_ua(l, s, i)
+    end
+    apply_hints(h, mode, i)
+    apply_agent(h, i)
+    finish(i)
+    ret i
+end
+
+pub func OsLabel(i: Info): str:
+    if i.os.len() == 0:
+        ret ""
+    end
+    if i.os == "Linux":
+        if i.distro.len() == 0:
+            ret "Linux"
+        end
+        ret i.os_ver.len() > 0 ? i.distro + " " + i.os_ver : i.distro
+    end
+    mut v := i.os_ver
+    if i.os == "macOS" and major(v) >= 11:
+        v = parts(v, 1)
+    end
+    ret v.len() > 0 ? i.os + " " + v : i.os
+end
+
+pub func BrowserLabel(i: Info): str:
+    if i.browser.len() == 0:
+        ret ""
+    end
+    ret i.browser_ver.len() > 0 ? i.browser + " " + i.browser_ver : i.browser
+end
+
+pub func Summary(i: Info): str:
+    ret OsLabel(i) + "|" + i.kind + "|" + BrowserLabel(i) + "|" + i.engine + "|" + i.model + "|" + i.arch + "|" + (i.tool ? "tool" : "") + (i.webview ? "wv" : "")
+end
+
+pub func InfoJson(i: Info): str:
+    mut m := Vector {} as Vector<str>
+    m.push(json.MemberInt("v", VERSION as i64))
+    m.push(json.Member("os", i.os))
+    m.push(json.Member("os_ver", i.os_ver))
+    m.push(json.Member("distro", i.distro))
+    m.push(json.Member("build", i.build))
+    m.push(json.Member("kind", i.kind))
+    m.push(json.Member("model", i.model))
+    m.push(json.Member("browser", i.browser))
+    m.push(json.Member("browser_ver", i.browser_ver))
+    m.push(json.Member("engine", i.engine))
+    m.push(json.Member("arch", i.arch))
+    m.push(json.MemberBool("tool", i.tool))
+    m.push(json.MemberBool("webview", i.webview))
+    ret json.Object(m)
+end
+
+pub func Stored(text: str, i &: Info): bool:
+    if text.len() == 0 or json.GetInt(text, "v") != VERSION:
+        ret false
+    end
+    i.os = json.Get(text, "os")
+    i.os_ver = json.Get(text, "os_ver")
+    i.distro = json.Get(text, "distro")
+    i.build = json.Get(text, "build")
+    i.kind = json.Get(text, "kind")
+    i.model = json.Get(text, "model")
+    i.browser = json.Get(text, "browser")
+    i.browser_ver = json.Get(text, "browser_ver")
+    i.engine = json.Get(text, "engine")
+    i.arch = json.Get(text, "arch")
+    i.tool = json.Get(text, "tool") == "true"
+    i.webview = json.Get(text, "webview") == "true"
+    ret true
+end
+
+pub func HintsJson(h: Hints): str:
+    if h.platform.len() == 0 and h.platform_version.len() == 0 and h.model.len() == 0 and h.cpu.len() == 0 and h.mobile.len() == 0 and h.touch.len() == 0 and h.brands.len() == 0 and h.os_id.len() == 0 and h.os_build.len() == 0:
+        ret ""
+    end
+    mut m := Vector {} as Vector<str>
+    m.push(json.Member("p", clean(Unquote(h.platform), 24)))
+    m.push(json.Member("pv", clean(Unquote(h.platform_version), 24)))
+    m.push(json.Member("m", clean(Unquote(h.model), 40)))
+    m.push(json.Member("c", clean(Unquote(h.cpu), 8)))
+    m.push(json.Member("b", clean(Unquote(h.bitness), 4)))
+    m.push(json.Member("mo", clean(Unquote(h.mobile), 3)))
+    m.push(json.Member("t", clean(Unquote(h.touch), 2)))
+    m.push(json.Member("br", clean(h.brands, 180)))
+    m.push(json.Member("id", clean(h.os_id, 24)))
+    m.push(json.Member("bd", clean(h.os_build, 12)))
+    ret json.Object(m)
+end
+
+pub func HintsFrom(text: str): Hints:
+    mut h := Hints {}
+    if text.len() == 0:
+        ret h
+    end
+    h.platform = json.Get(text, "p")
+    h.platform_version = json.Get(text, "pv")
+    h.model = json.Get(text, "m")
+    h.cpu = json.Get(text, "c")
+    h.bitness = json.Get(text, "b")
+    h.mobile = json.Get(text, "mo")
+    h.touch = json.Get(text, "t")
+    h.brands = json.Get(text, "br")
+    h.os_id = json.Get(text, "id")
+    h.os_build = json.Get(text, "bd")
+    ret h
+end
+
+pub func Resolve(stored: str, ua: str, h: Hints): Info:
+    mut i := Info {}
+    if Stored(stored, i):
+        ret i
+    end
+    ret Parse(ua, h)
+end

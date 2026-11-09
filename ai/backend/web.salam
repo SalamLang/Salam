@@ -23,6 +23,9 @@ import conv
 import str
 
 include aistore "store.salam"
+include aiua "ua.salam"
+
+const CLIENT_HINTS := "Sec-CH-UA-Platform-Version, Sec-CH-UA-Model, Sec-CH-UA-Full-Version-List, Sec-CH-UA-Arch, Sec-CH-UA-Bitness"
 
 mut ORIGINS := ","
 mut ADMINS := ","
@@ -163,6 +166,50 @@ func label_header(ctx: i64, name: str, max: int): str:
     ret v
 end
 
+func first_header(ctx: i64, own: str, standard: str, max: int): str:
+    mut v := str.Trim(http.Header(ctx, own))
+    if v.len() == 0:
+        v = str.Trim(http.Header(ctx, standard))
+    end
+    if v.len() > max:
+        ret ""
+    end
+    ret v
+end
+
+func client_hints(ctx: i64): aiua.Hints:
+    mut h := aiua.Hints {}
+    h.client = ClientKind(ctx)
+    h.os = ClientOs(ctx)
+    h.os_version = ClientOsVersion(ctx)
+    h.arch = ClientArch(ctx)
+    h.os_id = label_header(ctx, "X-Salam-OS-Id", 24)
+    h.os_build = label_header(ctx, "X-Salam-OS-Build", 12)
+    h.platform = first_header(ctx, "X-Salam-CH-Platform", "Sec-CH-UA-Platform", 40)
+    h.platform_version = first_header(ctx, "X-Salam-CH-Platform-Version", "Sec-CH-UA-Platform-Version", 40)
+    h.model = first_header(ctx, "X-Salam-CH-Model", "Sec-CH-UA-Model", 60)
+    h.cpu = first_header(ctx, "X-Salam-CH-Arch", "Sec-CH-UA-Arch", 20)
+    h.bitness = first_header(ctx, "X-Salam-CH-Bitness", "Sec-CH-UA-Bitness", 10)
+    h.mobile = first_header(ctx, "X-Salam-CH-Mobile", "Sec-CH-UA-Mobile", 6)
+    h.touch = first_header(ctx, "X-Salam-CH-Touch", "X-Salam-CH-Touch", 3)
+    h.brands = first_header(ctx, "X-Salam-CH-Brands", "Sec-CH-UA-Full-Version-List", 400)
+    if h.brands.len() == 0:
+        h.brands = first_header(ctx, "X-Salam-CH-Brands", "Sec-CH-UA", 400)
+    end
+    ret h
+end
+
+func has_client_hints(ctx: i64): bool:
+    ret http.Header(ctx, "X-Salam-CH-Platform").len() > 0 or http.Header(ctx, "X-Salam-CH-Brands").len() > 0 or http.Header(ctx, "X-Salam-CH-Touch").len() > 0
+end
+
+func session_is_due(hash: str, before: i64): bool:
+    aistore.Lock()
+    v := aistore.OneText("SELECT COUNT(*) FROM sessions WHERE token = ?1 AND last_used < ?2", two(hash, I64s(before)))
+    aistore.Unlock()
+    ret v == "1"
+end
+
 func touch(ctx: i64, hash: str):
     now := aistore.Now()
     mut a := Vector {} as Vector<str>
@@ -175,8 +222,22 @@ func touch(ctx: i64, hash: str):
     a.push(ClientOs(ctx))
     a.push(ClientOsVersion(ctx))
     a.push(ClientArch(ctx))
+    mut refresh := "0"
+    if has_client_hints(ctx) and session_is_due(hash, now - 60):
+        refresh = "1"
+        ua := str.Trim(http.Header(ctx, "User-Agent"))
+        a.push(ua.len() > 255 ? ua.substr(0, 255) : ua)
+        dev := ClientDevice(ctx, ua)
+        a.push(dev[0])
+        a.push(dev[1])
+    else:
+        a.push("")
+        a.push("")
+        a.push("")
+    end
+    a.push(refresh)
     aistore.Lock()
-    _r := aistore.Run("UPDATE sessions SET last_used = ?1, ip = LEFT(?2, 64), client = IF(?3 = '', client, ?3), client_version = IF(?4 = '', client_version, ?4), os = IF(?7 = '', os, ?7), os_version = IF(?8 = '', os_version, ?8), arch = IF(?9 = '', arch, ?9) WHERE token = ?5 AND last_used < ?6", a)
+    _r := aistore.Run("UPDATE sessions SET last_used = ?1, ip = LEFT(?2, 64), client = IF(?3 = '', client, ?3), client_version = IF(?4 = '', client_version, ?4), os = IF(?7 = '', os, ?7), os_version = IF(?8 = '', os_version, ?8), arch = IF(?9 = '', arch, ?9), agent = IF(?13 = '1' AND ?10 != '', ?10, agent), hints = IF(?13 = '1', ?11, hints), device = IF(?13 = '1', ?12, device) WHERE token = ?5 AND last_used < ?6", a)
     aistore.Unlock()
 end
 
@@ -185,6 +246,14 @@ func general_user(uid: str): bool:
     v := aistore.OneText("SELECT COUNT(*) FROM subscriptions s WHERE s.user_id = ?1 AND s.status = 'active' AND s.plan <> 'free' AND (s.expires = 0 OR s.expires > ?2) AND NOT EXISTS (SELECT 1 FROM plans p WHERE p.id = s.plan AND p.salam_only = 1)", two(uid, I64s(aistore.Now())))
     aistore.Unlock()
     ret v.len() > 0 and v != "0"
+end
+
+pub func ClientDevice(ctx: i64, ua: str): Vector<str>:
+    h := client_hints(ctx)
+    mut out := Vector {} as Vector<str>
+    out.push(aiua.HintsJson(h))
+    out.push(aiua.InfoJson(aiua.Parse(ua, h)))
+    ret out
 end
 
 pub func Enter():
@@ -236,11 +305,12 @@ pub func Cors(ctx: i64):
     origin := http.Header(ctx, "Origin")
     if AllowedOrigin(origin):
         http.SetHeader(ctx, "Access-Control-Allow-Origin", origin)
-        http.SetHeader(ctx, "Access-Control-Allow-Headers", "Authorization, Content-Type, X-Salam-Client, X-Salam-Version, X-Salam-OS, X-Salam-OS-Version, X-Salam-Arch, X-Salam-Lang")
+        http.SetHeader(ctx, "Access-Control-Allow-Headers", "Authorization, Content-Type, X-Salam-Client, X-Salam-Version, X-Salam-OS, X-Salam-OS-Version, X-Salam-OS-Id, X-Salam-OS-Build, X-Salam-Arch, X-Salam-Lang, X-Salam-CH-Platform, X-Salam-CH-Platform-Version, X-Salam-CH-Model, X-Salam-CH-Arch, X-Salam-CH-Bitness, X-Salam-CH-Mobile, X-Salam-CH-Touch, X-Salam-CH-Brands")
         http.SetHeader(ctx, "Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
         http.SetHeader(ctx, "Access-Control-Max-Age", "86400")
         http.SetHeader(ctx, "Access-Control-Expose-Headers", "Server-Timing")
     end
+    http.SetHeader(ctx, "Accept-CH", CLIENT_HINTS)
     http.SetHeader(ctx, "Vary", "Origin")
     http.SetHeader(ctx, "Cache-Control", "no-store")
     http.SetHeader(ctx, "X-Content-Type-Options", "nosniff")

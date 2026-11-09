@@ -74,6 +74,16 @@ pub fn os_version() -> &'static str {
     VERSION.get_or_init(|| header_safe(&detect_os_version()))
 }
 
+pub fn os_id() -> &'static str {
+    static ID: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    ID.get_or_init(|| header_safe(&detect_os_id()).to_lowercase())
+}
+
+pub fn os_build() -> &'static str {
+    static BUILD: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    BUILD.get_or_init(|| header_safe(&detect_os_build()).chars().take(12).collect())
+}
+
 fn header_safe(text: &str) -> String {
     text.chars()
         .filter(|c| c.is_ascii_alphanumeric() || " .-+_()".contains(*c))
@@ -93,8 +103,59 @@ fn detect_os_version() -> String {
 
 #[cfg(target_os = "macos")]
 fn detect_os_version() -> String {
-    match std::process::Command::new("sw_vers").arg("-productVersion").output() {
-        Ok(out) if out.status.success() => format!("macOS {}", String::from_utf8_lossy(&out.stdout).trim()),
+    let product = std::process::Command::new("sw_vers")
+        .arg("-productVersion")
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .map(|out| String::from_utf8_lossy(&out.stdout).trim().to_string())
+        .filter(|v| !v.is_empty());
+    let version = match product {
+        Some(v) => normalise_macos(&v),
+        None => std::process::Command::new("uname")
+            .arg("-r")
+            .output()
+            .ok()
+            .filter(|out| out.status.success())
+            .map(|out| darwin_to_macos(String::from_utf8_lossy(&out.stdout).trim()))
+            .unwrap_or_default(),
+    };
+    if version.is_empty() {
+        String::new()
+    } else {
+        format!("macOS {version}")
+    }
+}
+
+// Darwin kernel major -> macOS: 16..19 are 10.12..10.15, 20..24 are 11..15,
+// then macOS jumped to 26 on Darwin 25, so 25 and up are major + 1.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn darwin_to_macos(kernel: &str) -> String {
+    let major: u32 = kernel.split('.').next().and_then(|m| m.parse().ok()).unwrap_or(0);
+    match major {
+        16..=19 => format!("10.{}", major - 4),
+        20..=24 => (major - 9).to_string(),
+        25..=40 => (major + 1).to_string(),
+        _ => String::new(),
+    }
+}
+
+// sw_vers prints real macOS versions: 10.x, 11 to 15, 26 and up. 16 to 24
+// never shipped as macOS, so such a value is a Darwin kernel number.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+fn normalise_macos(version: &str) -> String {
+    let major: u32 = version.split('.').next().and_then(|m| m.parse().ok()).unwrap_or(0);
+    match major {
+        16..=24 => darwin_to_macos(version),
+        10..=15 | 26..=40 => version.to_string(),
+        _ => String::new(),
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn detect_os_build() -> String {
+    match std::process::Command::new("sw_vers").arg("-buildVersion").output() {
+        Ok(out) if out.status.success() => String::from_utf8_lossy(&out.stdout).trim().to_string(),
         _ => String::new(),
     }
 }
@@ -116,6 +177,54 @@ fn detect_os_version() -> String {
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
 fn detect_os_version() -> String {
     String::new()
+}
+
+#[cfg(target_os = "windows")]
+fn detect_os_build() -> String {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    match std::process::Command::new("cmd")
+        .args(["/C", "ver"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+    {
+        Ok(out) if out.status.success() => windows_build(&String::from_utf8_lossy(&out.stdout)),
+        _ => String::new(),
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
+fn detect_os_build() -> String {
+    String::new()
+}
+
+#[cfg(target_os = "linux")]
+fn detect_os_id() -> String {
+    std::fs::read_to_string("/etc/os-release")
+        .or_else(|_| std::fs::read_to_string("/usr/lib/os-release"))
+        .map(|t| parse_os_release_id(&t))
+        .unwrap_or_default()
+}
+
+#[cfg(not(target_os = "linux"))]
+fn detect_os_id() -> String {
+    String::new()
+}
+
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+fn parse_os_release_id(text: &str) -> String {
+    text.lines()
+        .find_map(|l| l.strip_prefix("ID=").map(|v| v.trim().trim_matches('"').to_string()))
+        .unwrap_or_default()
+}
+
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
+fn windows_build(text: &str) -> String {
+    let Some(start) = text.find("Version ") else {
+        return String::new();
+    };
+    let ver: String = text[start + 8..].chars().take_while(|c| c.is_ascii_digit() || *c == '.').collect();
+    ver.split('.').nth(2).unwrap_or_default().to_string()
 }
 
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -183,6 +292,35 @@ mod tests {
         );
         assert_eq!(parse_os_release("PRETTY_NAME=x\nNAME=Arch Linux\n"), "Arch Linux");
         assert_eq!(parse_os_release(""), "");
+    }
+
+    #[test]
+    fn darwin_kernels_map_to_macos() {
+        assert_eq!(darwin_to_macos("19.6.0"), "10.15");
+        assert_eq!(darwin_to_macos("20.6.0"), "11");
+        assert_eq!(darwin_to_macos("24.1.0"), "15");
+        assert_eq!(darwin_to_macos("25.0.0"), "26");
+        assert_eq!(darwin_to_macos("26.0.1"), "27");
+        assert_eq!(darwin_to_macos("12.1"), "");
+        assert_eq!(darwin_to_macos(""), "");
+    }
+
+    #[test]
+    fn sw_vers_values_are_sanity_checked() {
+        assert_eq!(normalise_macos("15.1"), "15.1");
+        assert_eq!(normalise_macos("10.13.6"), "10.13.6");
+        assert_eq!(normalise_macos("26.0.1"), "26.0.1");
+        assert_eq!(normalise_macos("27.0.1"), "27.0.1");
+        assert_eq!(normalise_macos("24.1.0"), "15");
+        assert_eq!(normalise_macos("99"), "");
+    }
+
+    #[test]
+    fn os_release_id_and_windows_build() {
+        assert_eq!(parse_os_release_id("NAME=\"Manjaro Linux\"\nID=manjaro\n"), "manjaro");
+        assert_eq!(parse_os_release_id("NAME=x\n"), "");
+        assert_eq!(windows_build("Microsoft Windows [Version 10.0.22631.4602]"), "22631");
+        assert_eq!(windows_build("nothing"), "");
     }
 
     #[test]

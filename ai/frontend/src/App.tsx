@@ -620,9 +620,11 @@ export function App() {
   const agentOs = tools.info?.os ?? "";
   const agentOsVersion = tools.info?.os_version ?? "";
   const agentArch = tools.info?.arch ?? "";
+  const agentOsId = tools.info?.os_id ?? "";
+  const agentOsBuild = tools.info?.os_build ?? "";
   useEffect(() => {
-    if (agentOs) setClientPlatform(agentOs, agentOsVersion, agentArch);
-  }, [agentOs, agentOsVersion, agentArch]);
+    if (agentOs) setClientPlatform(agentOs, agentOsVersion, agentArch, agentOsId, agentOsBuild);
+  }, [agentOs, agentOsVersion, agentArch, agentOsId, agentOsBuild]);
 
   useEffect(() => {
     if (!signedIn) return;

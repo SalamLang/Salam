@@ -86,8 +86,9 @@ looks impossible, the answer is usually already in `tests/`, `std/` or `docs/`.
   redirects and FastCGI PHP backends, `net.http2`, `net.websocket`, `grpc`,
   `graphql`, `net.proxy`, `db.sqlite`, `db.mysql`, `db.postgres`, `db.redis`
   and the other `db.*` drivers.
-- **Data and ML**: `ml`, `tensor`, `nn`, `autograd`, `onnx`, `gguf`,
-  `opencv`, `image`, `matrix`, `excel`, `stats`.
+- **AI**: `ai.ml`, `ai.tensor`, `ai.nn`, `ai.autograd`, `ai.optim`, `ai.llm`,
+  `ai.onnx`, `ai.gguf`, `ai.opencv`, `ai.image`.
+- **Data**: `matrix`, `excel`, `stats`.
 - **Tooling**: `salam doc` (API HTML), `salam format`, `salam sql check` and
   `sql generate` against a schema, `salam memcheck` (ASan), `salam debug`
   (GDB/LLDB), `salam inspect`, the package manager, `salam install`, the LSP

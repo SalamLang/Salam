@@ -312,9 +312,9 @@ range support, and `net/httpd` (see the std page) lists every setting.
 
 The whole library is installed with the compiler: the database clients
 (`db.sqlite`, `db.postgres`, `db.mysql`, `db.redis`, `db.opensearch`, ...),
-machine learning (`tensor`, `nn`, `llm`, ...), audio, the network services
+machine learning (`ai.tensor`, `ai.nn`, `ai.llm`, ...), audio, the network services
 (`grpc`, `ftp`, `ssh`, `net.websocket`, `net.http.swagger`, ...), `gui.webview`,
-`opencv` and `excel`. [`std/`](../std/) holds them all and `salam search`
+`ai.opencv` and `excel`. [`std/`](../std/) holds them all and `salam search`
 finds them. Import them like any other library; there is nothing to add or
 download first:
 

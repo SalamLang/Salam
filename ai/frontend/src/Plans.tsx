@@ -87,7 +87,7 @@ function features(p: Plan): string[] {
     ...(p.api_weekly > 0 ? [t(`کلید API در هفته: ${fmtNum(p.api_weekly)} درخواست`, `API key per week: ${fmtNum(p.api_weekly)} requests`)] : []),
     ...(p.api_5h > 0 ? [t(`کلید API در ۵ ساعت: ${fmtNum(p.api_5h)} درخواست`, `API key per 5 hours: ${fmtNum(p.api_5h)} requests`)] : []),
     t(`درخواست هم‌زمان: ${limit(p.parallel, "درخواست")}`, `Parallel requests: ${limit(p.parallel, "at a time")}`),
-    p.days === 0 ? t("بدون انقضا", "No expiry") : t(`${fmtNum(p.days)} روزه`, `${fmtNum(p.days)} days`),
+    p.hours > 0 ? t(`${fmtNum(p.hours)} ساعته`, `${fmtNum(p.hours)} hours`) : p.days === 0 ? t("بدون انقضا", "No expiry") : t(`${fmtNum(p.days)} روزه`, `${fmtNum(p.days)} days`),
   ];
 }
 
@@ -223,7 +223,7 @@ export function Plans({ notify }: { notify: (msg: string, ok?: boolean) => void 
             const featured = p.price > 0 && p.chat_daily === 0 && p.api_daily === 0 && plans.find((q) => q.price > 0 && q.chat_daily === 0 && q.api_daily === 0)?.id === p.id;
             const price = p.price === 0 ? t("رایگان", "Free") : isFa ? (p.price % 1000000 === 0 ? fmtNum(p.price / 1000000) : fmtNum(p.price)) : `$${fmtNum(p.usd)}`;
             const unit = p.price === 0 ? "" : isFa ? (p.price % 1000000 === 0 ? "میلیون تومان" : "تومان") : t("", "per month");
-            const period = p.price === 0 ? t("برای همیشه", "forever") : p.days === 0 ? t("یک‌بار پرداخت، بدون انقضا", "one payment, no expiry") : t(`برای ${fmtNum(p.days)} روز (حدود ${fmtNum(p.usd)} دلار)`, `${fmtNum(p.days)} days, charged in toman at checkout`);
+            const period = p.price === 0 ? t("برای همیشه", "forever") : p.hours > 0 ? t(`فقط ${fmtNum(p.hours)} ساعت از لحظه‌ی خرید`, `${fmtNum(p.hours)} hours from the moment you buy`) : p.days === 0 ? t("یک‌بار پرداخت، بدون انقضا", "one payment, no expiry") : t(`برای ${fmtNum(p.days)} روز (حدود ${fmtNum(p.usd)} دلار)`, `${fmtNum(p.days)} days, charged in toman at checkout`);
             return (
               <section key={p.id} className={`plan-card ${featured ? "featured" : ""} ${mine ? "mine" : ""}`}>
                 {featured && <span className="plan-ribbon">{t("بیشترین امکانات", "Most capable")}</span>}

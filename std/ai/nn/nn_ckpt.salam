@@ -1,0 +1,164 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package nn
+
+import archive
+import compress
+import encoding.binary
+import mem
+import str
+import ai.tensor
+
+const _CKPT_VERSION := 1
+
+func _find_param(ps &: ParamStore, name: str): int:
+    repeat ps.count() in i:
+        p := ps.items.get(i)
+        if str.Equals(p.name, name): ret i end
+    end
+    ret 0 - 1
+end
+
+func _ck_err(kind: ErrorKind, msg: str, at: int, code: str): Error:
+    ret Error.At(kind, msg, at).with_code(code)
+end
+
+func _ck_header(rd &: compress.ByteReader, ps &: ParamStore) throws:
+    magic := try binary.ReadU32BE(rd)
+    if magic != 0x534C4D54:
+        throw _ck_err(ErrorKind.Syntax, "not a Salam checkpoint (bad magic bytes)", 0, "nn.bad_magic")
+    end
+    version := try binary.ReadU32LE(rd)
+    if version != _CKPT_VERSION:
+        throw _ck_err(ErrorKind.Unsupported, "unsupported checkpoint version " + version, 4, "nn.version")
+    end
+    try binary.ReadU32LE(rd)
+    count := try binary.ReadU32LE(rd)
+    if count != ps.count():
+        throw _ck_err(ErrorKind.InvalidArgument, "the checkpoint has " + count + " parameters, the model has " + ps.count(), 12, "nn.param_count")
+    end
+end
+
+func _ck_one(rd &: compress.ByteReader, ps &: ParamStore, seen &: Vector<bool>, apply: bool) throws:
+    at := rd.pos
+    mut name := ""
+    mut t := tensor.Empty()
+    defer t.free()
+    try tensor.ReadTensor(rd, name, t)
+    defer mem.Free(name as void*)
+    idx := _find_param(ps, name)
+    if idx < 0:
+        throw _ck_err(ErrorKind.NotFound, "the model has no parameter '" + name + "'", at, "nn.unknown_param")
+    end
+    if seen.get(idx):
+        throw _ck_err(ErrorKind.AlreadyExists, "parameter '" + name + "' appears twice", at, "nn.duplicate_param")
+    end
+    mut p := ps.items.get(idx)
+    if p.value.same_shape(t) == false:
+        throw _ck_err(ErrorKind.TypeMismatch, "parameter '" + name + "' has a different shape", at, "nn.shape")
+    end
+    if apply: tensor.CopyInto(p.value, t) end
+    seen.set(idx, true)
+end
+
+func _ck_pass(buf: compress.ByteBuf, n: int, ps &: ParamStore, apply: bool) throws:
+    mut rd := compress.NewByteReader(buf.data, n)
+    try _ck_header(rd, ps)
+    mut seen := Vector {} as Vector<bool>
+    defer seen.free()
+    seen.zeros(ps.count())
+    repeat ps.count():
+        try _ck_one(rd, ps, seen, apply)
+    end
+end
+
+@en "SaveCheckpointBuf"
+@fa "ذخیره نقطه بازرسی در بافر"
+pub func SaveCheckpointBuf(ps &: ParamStore): compress.ByteBuf:
+    mut buf := compress.NewByteBuf()
+    compress.BufPushBytes(buf, "SLMT" as void*, 4)
+    binary.WriteU32LE(buf, _CKPT_VERSION)
+    binary.WriteU32LE(buf, 0)
+    binary.WriteU32LE(buf, ps.count())
+    repeat ps.count() in i:
+        mut p := ps.items.get(i)
+        tensor.WriteTensor(buf, p.name, p.value)
+    end
+    crc := compress.CRC32Buf(buf)
+    binary.WriteU32LE(buf, crc as int)
+    ret buf
+end
+
+@en "LoadCheckpointBuf"
+@fa "بارگذاری نقطه بازرسی از بافر"
+pub func LoadCheckpointBuf(buf: compress.ByteBuf, ps &: ParamStore) throws:
+    n := compress.BufLen(buf)
+    if n < 20:
+        throw _ck_err(ErrorKind.UnexpectedEnd, "a checkpoint is at least 20 bytes, got " + n, 0, "nn.truncated").wrap("checkpoint")
+    end
+    stored := compress.BufGet(buf, n - 4) | (compress.BufGet(buf, n - 3) << 8) | (compress.BufGet(buf, n - 2) << 16) | (compress.BufGet(buf, n - 1) << 24)
+    computed := compress.CRC32(buf.data, n - 4)
+    if (stored as u32) != computed:
+        throw _ck_err(ErrorKind.Syntax, "the CRC32 check failed: the file is damaged or cut short", n - 4, "nn.crc").wrap("checkpoint")
+    end
+    try:
+        _ck_pass(buf, n - 4, ps, false)
+        _ck_pass(buf, n - 4, ps, true)
+    catch e:
+        throw e.wrap("checkpoint")
+    end
+end
+
+@en "SaveCheckpoint"
+@fa "ذخیره نقطه بازرسی"
+pub func SaveCheckpoint(path: str, ps &: ParamStore): bool:
+    mut buf := SaveCheckpointBuf(ps)
+    mut ok := false
+    if str.EndsWith(path, ".gz"):
+        mut z := compress.GzipCompressBuf(buf)
+        ok = archive.WriteBinaryFileBuf(path, z)
+        compress.BufFree(z)
+    else:
+        ok = archive.WriteBinaryFileBuf(path, buf)
+    end
+    compress.BufFree(buf)
+    ret ok
+end
+
+@en "LoadCheckpoint"
+@fa "بارگذاری نقطه بازرسی"
+pub func LoadCheckpoint(path: str, ps &: ParamStore) throws:
+    mut fok := false
+    mut raw := archive.ReadBinaryFile(path, fok)
+    defer compress.BufFree(raw)
+    if fok == false:
+        throw Error.New(ErrorKind.NotFound, "cannot open file").with_path(path).wrap("checkpoint")
+    end
+    try:
+        if str.EndsWith(path, ".gz"):
+            mut zok := false
+            mut plain := compress.GzipDecompressBuf(raw, zok)
+            defer compress.BufFree(plain)
+            if zok == false:
+                throw Error.New(ErrorKind.Syntax, "the gzip stream is damaged").with_code("nn.gzip").wrap("checkpoint")
+            end
+            LoadCheckpointBuf(plain, ps)
+        else:
+            LoadCheckpointBuf(raw, ps)
+        end
+    catch e:
+        throw e.with_path(path)
+    end
+end

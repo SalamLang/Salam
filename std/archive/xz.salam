@@ -15,6 +15,7 @@
 package archive
 
 import compress
+import os
 
 @en "XzCompressFile"
 @fa "فشرده سازی پرونده ایکس زد"
@@ -75,21 +76,30 @@ end
 @en "XzDecompressFileCap"
 @fa "کدگشایی پرونده ایکس زد با سقف"
 pub func XzDecompressFileCap(inpath: str, outpath: str, cap: i64): int:
-    mut rok := false
-    mut inbuf := ReadBinaryFile(inpath, rok)
-    if not rok:
+    fp := compress.FileOpenRead(inpath)
+    if fp == null:
         ret ARCHIVE_IO_ERROR
     end
-    mut why := 0
-    mut out := compress.XzDecompressWhy(inbuf.data, inbuf.len, _decap(cap), why)
-    compress.BufFree(inbuf)
-    if why != compress.DecodeOk:
-        compress.BufFree(out)
-        ret why == compress.DecodeTooBig ? ARCHIVE_TOO_BIG : ARCHIVE_CORRUPT
+    mut sink := compress.SinkOpen(outpath, cap)
+    if sink.failed:
+        compress.FileClose(fp)
+        ret ARCHIVE_IO_ERROR
     end
-    wok := WriteBinaryFileBuf(outpath, out)
-    compress.BufFree(out)
-    ret wok ? ARCHIVE_OK : ARCHIVE_IO_ERROR
+    code := compress.XzFileToSink(fp, 0 as i64, compress.FileSize(fp), sink, 0 as i64)
+    closed := compress.SinkClose(sink)
+    compress.FileClose(fp)
+    mut st := ARCHIVE_OK
+    if code == compress.DecodeTooBig:
+        st = ARCHIVE_TOO_BIG
+    else code == compress.DecodeIo or (code == compress.DecodeOk and not closed):
+        st = ARCHIVE_IO_ERROR
+    else code != compress.DecodeOk:
+        st = ARCHIVE_CORRUPT
+    end
+    if st != ARCHIVE_OK:
+        os.Remove(outpath)
+    end
+    ret st
 end
 
 @en "LzmaDecompressFileCap"

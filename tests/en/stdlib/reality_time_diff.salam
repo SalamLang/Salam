@@ -1,0 +1,98 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import net.reality
+import net.tcp
+import tls
+
+mut g_tls := tls.ServerConfig {}
+mut g_ss := reality.ServerSettings {}
+
+func dest_one(arg: void*):
+    srv := tcp.Server { fd = arg as i64 }
+    c := tcp.Accept(srv)
+    if not tcp.ConnOk(c):
+        ret
+    end
+    mut t := tls.WrapServer(c.fd, g_tls)
+    if tls.ConnOk(t):
+        tls.Write(t, "this is the real site")
+        tls.Close(t)
+    else:
+        tcp.Close(c)
+    end
+end
+
+func reality_one(arg: void*):
+    srv := tcp.Server { fd = arg as i64 }
+    c := tcp.Accept(srv)
+    if not tcp.ConnOk(c):
+        ret
+    end
+    r := reality.Accept(c.fd, g_ss)
+    if r.ok:
+        mut t := r.conn
+        d := tls.Read(t, 4096)
+        tls.Write(t, "echo:" + d)
+        tls.Close(t)
+    end
+end
+
+func run_client(skew_seconds: int): str:
+    dest := tcp.Bind(0)
+    dth := spawn(dest_one, dest.fd as void*)
+    g_ss.dest = "127.0.0.1:" + tcp.Port(dest)
+    srv := tcp.Bind(0)
+    sth := spawn(reality_one, srv.fd as void*)
+    c := tcp.Dial("127.0.0.1", tcp.Port(srv))
+    mut s := reality.Settings {}
+    s.server_name = "localhost"
+    s.public_key = reality.PublicKeyOf(g_ss.private_key)
+    s.short_id = "abcd1234"
+    s.clock_offset = skew_seconds
+    mut t := reality.DialOver(c.fd, s)
+    mut out := ""
+    if tls.ConnOk(t):
+        tls.Write(t, "ping")
+        out = tls.Read(t, 4096)
+        tls.Close(t)
+    else:
+        out = "error: " + tls.ConnError(t)
+        tcp.Close(c)
+    end
+    join(sth)
+    tcp.Close(tcp.Dial("127.0.0.1", tcp.Port(dest)))
+    join(dth)
+    tcp.CloseServer(srv)
+    tcp.CloseServer(dest)
+    ret out
+end
+
+func main:
+    g_tls = tls.NewServerConfig("tests/fixtures/ssl/server.crt", "tests/fixtures/ssl/server.key")
+    g_ss.private_key = "QI3DpbA326sqI7QAAz13iSj6Jk9Q8UUvgkjlKZu2u2I"
+    g_ss.server_names = "localhost"
+    g_ss.short_ids = "abcd1234"
+
+    println "default max_time_diff:", g_ss.max_time_diff
+    println "clock right:", run_client(0)
+    println "clock 30 s fast:", run_client(30)
+    println "clock 30 s slow:", run_client(0 - 30)
+    println "clock 5 minutes fast:", run_client(300)
+    println "clock 5 minutes slow:", run_client(0 - 300)
+    g_ss.max_time_diff = 0
+    println "check switched off, 5 minutes fast:", run_client(300)
+    g_ss.max_time_diff = 400000
+    println "wider window, 5 minutes slow:", run_client(0 - 300)
+end

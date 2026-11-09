@@ -1,0 +1,102 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+@en "net/tunnel"
+@fa "تونل"
+package tunnel
+
+import sync
+import net.internal.rawsock
+
+mut _wd_mu := sync.NewMutex()
+mut _wd_fds := Vector {} as Vector<i64>
+mut _wd_at := Vector {} as Vector<i64>
+mut _wd_ids := Vector {} as Vector<i64>
+mut _wd_next := 1 as i64
+mut _wd_started := false
+mut _wd_expired := 0 as i64
+
+func _wd_reaper():
+    until true:
+        sync.SleepMs(100)
+        now := sync.NowMs()
+        sync.Lock(_wd_mu)
+        mut i := 0
+        until i < _wd_fds.len():
+            if _wd_at[i] <= now:
+                rawsock.Shutdown(rawsock.FromFd(_wd_fds[i]))
+                _wd_expired++
+                last := _wd_fds.len() - 1
+                _wd_fds.set(i, _wd_fds[last])
+                _wd_at.set(i, _wd_at[last])
+                _wd_ids.set(i, _wd_ids[last])
+                _wd_fds.pop()
+                _wd_at.pop()
+                _wd_ids.pop()
+            else:
+                i++
+            end
+        end
+        sync.Unlock(_wd_mu)
+    end
+end
+
+@en "WatchHandshake"
+@fa "پایش دست‌دهی"
+pub func WatchHandshake(fd: i64, total_ms: int): i64:
+    if total_ms <= 0 or fd < 0: ret 0 end
+    sync.Lock(_wd_mu)
+    id := _wd_next
+    _wd_next++
+    _wd_fds.push(fd)
+    _wd_at.push(sync.NowMs() + (total_ms as i64))
+    _wd_ids.push(id)
+    start := not _wd_started
+    _wd_started = true
+    sync.Unlock(_wd_mu)
+    if start:
+        _t := spawn(_wd_reaper)
+    end
+    ret id
+end
+
+@en "WatchDone"
+@fa "پایان پایش دست‌دهی"
+pub func WatchDone(ticket: i64): bool:
+    if ticket <= 0: ret true end
+    mut found := false
+    sync.Lock(_wd_mu)
+    repeat _wd_ids.len() in i:
+        if not found and _wd_ids[i] == ticket:
+            found = true
+            last := _wd_fds.len() - 1
+            _wd_fds.set(i, _wd_fds[last])
+            _wd_at.set(i, _wd_at[last])
+            _wd_ids.set(i, _wd_ids[last])
+            _wd_fds.pop()
+            _wd_at.pop()
+            _wd_ids.pop()
+        end
+    end
+    sync.Unlock(_wd_mu)
+    ret found
+end
+
+@en "WatchExpired"
+@fa "تعداد پایش‌های منقضی"
+pub func WatchExpired(): i64:
+    sync.Lock(_wd_mu)
+    n := _wd_expired
+    sync.Unlock(_wd_mu)
+    ret n
+end

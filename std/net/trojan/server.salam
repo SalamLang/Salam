@@ -47,12 +47,12 @@ struct ServerState:
     pub port: int = 0
     pub stop: i64* = null
     pub counters: i64* = null
-    pub sources: tunnel.SourceTable = tunnel.SourceTable {}
+    pub limits: tunnel.ConnLimits = tunnel.ConnLimits {}
 end
 
 struct ConnArg:
     pub st: ServerState* = null
-    pub host: str = ""
+    pub adm: tunnel.Admit = tunnel.Admit {}
     pub fd: i64 = 0 - 1
 end
 
@@ -158,7 +158,7 @@ pub struct ServerConfig:
     pub fallback_port: int = 0
     @en "max_per_source"
     @fa "بیشینه دست دادن مبدا"
-    pub max_per_source: int = 0
+    pub max_per_source: int = 32
     @en "handshake_timeout_ms"
     @fa "مهلت دست‌دهی"
     pub handshake_timeout_ms: int = 5000
@@ -189,6 +189,21 @@ pub struct ServerConfig:
     @en "allow_udp"
     @fa "اجازه یو دی پی"
     pub allow_udp: bool = true
+    @en "policy"
+    @fa "سیاست مقصد"
+    pub policy: tunnel.DestPolicy = tunnel.DestPolicy {}
+    @en "router"
+    @fa "مسیریاب"
+    pub router: tunnel.RouterDialer = tunnel.RouterDialer {}
+    @en "has_router"
+    @fa "دارای مسیریاب"
+    pub has_router: bool = false
+    @en "max_connections"
+    @fa "بیشینه اتصال همزمان"
+    pub max_connections: int = 1024
+    @en "handshake_deadline_ms"
+    @fa "مهلت کل دست‌دهی"
+    pub handshake_deadline_ms: int = 10000
 end
 
 @en "Session"
@@ -249,6 +264,33 @@ func _hash_known(cfg: ServerConfig, h: str): bool:
     ret found
 end
 
+func _policy_of(cfg: ServerConfig): tunnel.DestPolicy:
+    mut h := cfg.bind_host
+    if h.len() == 0:
+        if cfg.mode == ModeTLS:
+            h = "0.0.0.0"
+        else:
+            h = "127.0.0.1"
+        end
+    end
+    ret tunnel.PolicyForBind(cfg.policy, h)
+end
+
+func _udp_target(cfg: ServerConfig, host: str, port: int, ip &: str): bool:
+    a := tunnel.NewAddr(host, port)
+    pl := tunnel.PolicyPlan(_policy_of(cfg), a, true)
+    mut ok := pl.allowed and pl.ips.len() > 0
+    if ok: ip = pl.ips[0] end
+    pl.ips.free()
+    if ok and cfg.has_router:
+        d := cfg.router.Pick(cfg.router.router.Match(a))
+        if d.Name() == "block": ok = false end
+    else ok and cfg.has_dialer and cfg.dialer.Name() == "block":
+        ok = false
+    end
+    ret ok
+end
+
 func _connect_target(cfg: ServerConfig, host: str, port: int): Link:
     ret NewTCPLink(tcp.DialTimeout(host, port, cfg.connect_timeout_ms))
 end
@@ -270,7 +312,7 @@ func _udp_reply_pump(us: UdpState*):
     mem.Free(buf)
 end
 
-func _serve_udp(lp: Link*, extra: compress.ByteBuf, stats: tunnel.Stats):
+func _serve_udp(lp: Link*, extra: compress.ByteBuf, stats: tunnel.Stats, cfg: ServerConfig):
     _seed_udp(lp[0], extra.data, extra.len)
     sock := udp.OpenAny()
     if not udp.Ok(sock):
@@ -285,9 +327,14 @@ func _serve_udp(lp: Link*, extra: compress.ByteBuf, stats: tunnel.Stats):
     mut pkt := UDPPacket {}
     mut payload := compress.NewByteBuf()
     until ReadUDPPacket(lp[0], pkt, payload):
-        sent := udp.SendBytes(sock, pkt.host, pkt.port, payload.data, payload.len)
-        if sent > 0:
-            atomic.Add(stats.up, sent as i64)
+        mut dest_ip := ""
+        if _udp_target(cfg, pkt.host, pkt.port, dest_ip):
+            sent := udp.SendBytes(sock, dest_ip, pkt.port, payload.data, payload.len)
+            if sent > 0:
+                atomic.Add(stats.up, sent as i64)
+            end
+        else:
+            atomic.Add(stats.failed, 1 as i64)
         end
     end
     atomic_store(stop, 0 as i64)
@@ -308,9 +355,9 @@ func _count(st: ServerState*, idx: int):
     _added := atomic_add(((st[0].counters as i64) + (idx * 8) as i64) as i64*, 1 as i64)
 end
 
-func _serve_link(lp: Link*, cfg: ServerConfig, sources: tunnel.SourceTable, host: str): int:
+func _serve_link(lp: Link*, cfg: ServerConfig, lim: tunnel.ConnLimits, adm &: tunnel.Admit): int:
     mut s := Handshake(lp[0], cfg)
-    tunnel.SourceLeave(sources, host)
+    tunnel.LimitsHandshakeDone(lim, adm)
     defer FreeSession(s)
     if not s.ok:
         if lp[0].kind != LinkWS:
@@ -330,7 +377,7 @@ func _serve_link(lp: Link*, cfg: ServerConfig, sources: tunnel.SourceTable, host
             ret 3
         end
         atomic.Add(stats.active, 1 as i64)
-        _serve_udp(lp, s.extra, stats)
+        _serve_udp(lp, s.extra, stats, cfg)
         atomic.Add(stats.active, 0 - 1 as i64)
         ret 1
     end
@@ -338,7 +385,11 @@ func _serve_link(lp: Link*, cfg: ServerConfig, sources: tunnel.SourceTable, host
     if not cfg.has_dialer:
         dialer = tunnel.DirectDialer { timeout_ms = cfg.connect_timeout_ms }
     end
-    out := dialer.Dial(tunnel.NewAddr(s.req.host, s.req.port))
+    mut guard := tunnel.Guard(dialer, _policy_of(cfg))
+    if cfg.has_router:
+        guard = tunnel.GuardRouter(cfg.router, _policy_of(cfg))
+    end
+    out := guard.Dial(tunnel.NewAddr(s.req.host, s.req.port))
     if not out.Ok():
         atomic.Add(stats.failed, 1 as i64)
         ret 3
@@ -360,8 +411,9 @@ end
 func _conn_main(a: ConnArg*):
     st := a[0].st
     fd := a[0].fd
-    host := a[0].host
-    table := st[0].sources
+    lim := st[0].limits
+    mut adm := a[0].adm
+    defer tunnel.LimitsRelease(lim, adm)
     mut link := Link {}
     if st[0].ws:
         if st[0].cfg.handshake_timeout_ms > 0:
@@ -376,14 +428,14 @@ func _conn_main(a: ConnArg*):
     end
     mem.Free(a as void*)
     if not LinkOk(link):
-        tunnel.SourceLeave(table, host)
+        tunnel.LimitsHandshakeDone(lim, adm)
         LinkClose(link)
         ret
     end
     lp := mem.AllocateZeroed(sizeof(Link) as u64) as Link*
     lp[0] = link
     _count(st, 0)
-    r := _serve_link(lp, st[0].cfg, table, host)
+    r := _serve_link(lp, st[0].cfg, lim, adm)
     if r == 1:
         _count(st, 1)
     else r == 2:
@@ -406,14 +458,18 @@ func _accept_loop(st: ServerState*):
             mem.Free(a as void*)
             continue
         end
-        a[0] = ConnArg { st = st, fd = c.fd }
-        a[0].host = rawsock.PeerHost(rawsock.FromFd(c.fd))
-        if not tunnel.SourceEnter(st[0].sources, a[0].host, st[0].cfg.max_per_source):
+        mut adm := tunnel.LimitsEnter(st[0].limits, c.fd)
+        if not adm.ok:
             tcp.Close(c)
             mem.Free(a as void*)
             continue
         end
-        tunnel.Go(_conn_main, a as void*)
+        a[0] = ConnArg { st = st, fd = c.fd, adm = adm }
+        if not tunnel.Go(_conn_main, a as void*):
+            tunnel.LimitsRelease(st[0].limits, adm)
+            tcp.Close(c)
+            mem.Free(a as void*)
+        end
     end
 end
 
@@ -450,7 +506,7 @@ func _start(cfg: ServerConfig, host: str, port: int, ws: bool, use_tls: bool): S
     stop := mem.AllocateZeroed(8 as u64) as i64*
     atomic_store(stop, 1 as i64)
     counters := mem.AllocateZeroed(24 as u64) as i64*
-    st[0] = ServerState { cfg = cfg, tlscfg = tcfg, use_tls = use_tls, ws = ws, listen_fd = lfd, port = lport, stop = stop, counters = counters, sources = tunnel.NewSourceTable() }
+    st[0] = ServerState { cfg = cfg, tlscfg = tcfg, use_tls = use_tls, ws = ws, listen_fd = lfd, port = lport, stop = stop, counters = counters, limits = tunnel.NewConnLimits(cfg.max_connections, cfg.max_per_source, cfg.handshake_deadline_ms) }
     _t := spawn(_accept_loop, st)
     srv.ok = true
     srv.port = lport
@@ -565,7 +621,8 @@ end
 @en "ServeLink"
 @fa "پاسخ به پیوند"
 pub func ServeLink(lp: Link*, cfg: ServerConfig): int:
-    ret _serve_link(lp, cfg, tunnel.SourceTable {}, "")
+    mut adm := tunnel.Admit { done = true }
+    ret _serve_link(lp, cfg, tunnel.ConnLimits {}, adm)
 end
 
 
@@ -599,6 +656,20 @@ end
 pub func SetRouter(cfg &: ServerConfig, rd: tunnel.RouterDialer):
     cfg.dialer = rd
     cfg.has_dialer = true
+    cfg.router = rd
+    cfg.has_router = true
+end
+
+@en "SetPolicy"
+@fa "تعیین سیاست مقصد"
+pub func SetPolicy(cfg &: ServerConfig, p: tunnel.DestPolicy):
+    cfg.policy = p
+end
+
+@en "AllowPrivate"
+@fa "اجازه آدرس‌های خصوصی"
+pub func AllowPrivate(cfg &: ServerConfig, enabled: bool):
+    cfg.policy.allow_private = enabled
 end
 
 @en "SetStats"

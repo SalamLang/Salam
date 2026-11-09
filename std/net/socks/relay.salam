@@ -70,19 +70,26 @@ end
 
 if SALAM_OS_WINDOWS:
     export:
-        func salam_vpn_go(fn: i64, arg: i64):
-            _h := _beginthread(fn as void *, 0 as u32, arg as void *)
+        func salam_vpn_go(fn: i64, arg: i64): i64:
+            h := _beginthread(fn as void *, 0 as u32, arg as void *)
+            if h == (0 as usize) or h == (0 - 1 as usize):
+                ret 0
+            end
+            ret 1
         end
     end
 else:
     export:
-        func salam_vpn_go(fn: i64, arg: i64):
+        func salam_vpn_go(fn: i64, arg: i64): i64:
             t := mem.Allocate(8 as u64)
-            if pthread_create(t, null, fn as void *, arg as void *) == 0:
-                tp := t as i64 *
-                pthread_detach(tp[0] as u64)
+            if pthread_create(t, null, fn as void *, arg as void *) != 0:
+                mem.Free(t)
+                ret 0
             end
+            tp := t as i64 *
+            pthread_detach(tp[0] as u64)
             mem.Free(t)
+            ret 1
         end
     end
 end
@@ -114,8 +121,8 @@ end
 
 @en "Go"
 @fa "برو"
-pub func Go(fn: i64, arg: void*):
-    salam_vpn_go(fn, arg as i64)
+pub func Go(fn: i64, arg: void*): bool:
+    ret salam_vpn_go(fn, arg as i64) != 0
 end
 
 @en "Relay"
@@ -166,5 +173,31 @@ pub func DirectConnect(host: str, port: int, timeout_ms: int): Outbound:
     o.ok = true
     o.code = RepSucceeded
     o.stream = tunnel.TcpStream { conn = c }
+    ret o
+end
+
+@en "PolicyConnect"
+@fa "اتصال با سیاست"
+pub func PolicyConnect(p: tunnel.DestPolicy, host: str, port: int, timeout_ms: int): Outbound:
+    mut o := Outbound {}
+    pl := tunnel.PolicyPlan(p, tunnel.NewAddr(host, port), true)
+    defer pl.ips.free()
+    if not pl.allowed:
+        o.code = RepNotAllowed
+        o.err = pl.reason
+        ret o
+    end
+    if pl.ips.len() == 0:
+        o.code = RepHostUnreachable
+        o.err = "cannot resolve " + host
+        ret o
+    end
+    mut tries := 0
+    repeat pl.ips.len() in i:
+        if tries < 4 and not o.ok:
+            tries++
+            o = DirectConnect(pl.ips[i], port, timeout_ms)
+        end
+    end
     ret o
 end

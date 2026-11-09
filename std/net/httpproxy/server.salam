@@ -27,11 +27,14 @@ struct _AcceptJob:
     pub cfg: ServerConfig = ServerConfig {}
     pub listener: tcp.Server = tcp.Server {}
     pub stop: i64* = null
+    pub limits: tunnel.ConnLimits = tunnel.ConnLimits {}
 end
 
 struct _ConnJob:
     pub cfg: ServerConfig = ServerConfig {}
     pub conn: tcp.Conn = tcp.Conn {}
+    pub limits: tunnel.ConnLimits = tunnel.ConnLimits {}
+    pub adm: tunnel.Admit = tunnel.Admit {}
 end
 
 struct _Up:
@@ -93,6 +96,21 @@ pub struct ServerConfig:
     @en "allow"
     @fa "اجازه"
     pub allow: func (str, str, int) bool = (_m: str, _h: str, _p: int): ret true end
+    @en "policy"
+    @fa "سیاست مقصد"
+    pub policy: tunnel.DestPolicy = tunnel.DestPolicy {}
+    @en "has_connect"
+    @fa "اتصال سفارشی دارد"
+    pub has_connect: bool = false
+    @en "max_connections"
+    @fa "بیشینه اتصال همزمان"
+    pub max_connections: int = 1024
+    @en "max_per_source"
+    @fa "بیشینه دست دادن مبدا"
+    pub max_per_source: int = 32
+    @en "handshake_deadline_ms"
+    @fa "مهلت کل دست‌دهی"
+    pub handshake_deadline_ms: int = 10000
 end
 
 @en "Server"
@@ -243,9 +261,21 @@ func _up_close(up &: _Up):
     up.ok = false
 end
 
+func _outbound(cfg: ServerConfig, host: str, port: int): socks.Outbound:
+    pol := tunnel.PolicyForBind(cfg.policy, _bind_host(cfg))
+    if cfg.has_connect:
+        pl := tunnel.PolicyPlan(pol, tunnel.NewAddr(host, port), false)
+        if not pl.allowed:
+            ret socks.Outbound { ok = false, code = socks.RepNotAllowed, err = pl.reason }
+        end
+        ret cfg.connect(host, port)
+    end
+    ret socks.PolicyConnect(pol, host, port, 10000)
+end
+
 func _up_open(cfg: ServerConfig, up &: _Up, host: str, port: int): int:
     _up_close(up)
-    out := cfg.connect(host, port)
+    out := _outbound(cfg, host, port)
     if not out.ok: ret out.code end
     up.ok = true
     up.host = host
@@ -302,7 +332,10 @@ func _forward(cfg: ServerConfig, s: dyn tunnel.Stream, rd &: _Rd, h: Head, up &:
     until true:
         if not reused:
             code := _up_open(cfg, up, u.host, u.port)
-            if code != 0:
+            if code == socks.RepNotAllowed:
+                _respond(s, 403, "", "forbidden\n", true)
+                ret false
+            else code != 0:
                 _respond(s, 502, "", "cannot reach " + u.host + "\n", true)
                 ret false
             end
@@ -415,7 +448,11 @@ func _do_connect(cfg: ServerConfig, s: dyn tunnel.Stream, rd &: _Rd, h: Head): b
         _respond(s, 403, "", "forbidden\n", true)
         ret false
     end
-    out := cfg.connect(hp.host, hp.port)
+    out := _outbound(cfg, hp.host, hp.port)
+    if not out.ok and out.code == socks.RepNotAllowed:
+        _respond(s, 403, "", "forbidden\n", true)
+        ret false
+    end
     if not out.ok:
         _respond(s, 502, "", "cannot reach " + hp.host + ":" + str.FromInt(hp.port as i64) + "\n", true)
         ret false
@@ -433,18 +470,22 @@ func _conn_thread(arg: i64):
     jp := (arg as void*) as _ConnJob*
     cfg := jp[0].cfg
     c := jp[0].conn
+    lim := jp[0].limits
+    mut adm := jp[0].adm
     mem.Free(jp as void*)
     if cfg.use_tls:
         t := tls.WrapServer(c.fd, cfg.tls_config)
         if not tls.ConnOk(t):
+            tunnel.LimitsRelease(lim, adm)
             tcp.Close(c)
             ret
         end
-        Handle(cfg, tunnel.TlsStream { conn = t })
+        _handle(cfg, tunnel.TlsStream { conn = t }, lim, adm)
     else:
         tcp.SetNoDelay(c, true)
-        Handle(cfg, tunnel.TcpStream { conn = c })
+        _handle(cfg, tunnel.TcpStream { conn = c }, lim, adm)
     end
+    tunnel.LimitsRelease(lim, adm)
 end
 
 func _bind_host(cfg: ServerConfig): str:
@@ -454,11 +495,17 @@ func _bind_host(cfg: ServerConfig): str:
     ret cfg.bind_host
 end
 
+func _busy(c: tcp.Conn):
+    tcp.Write(c, "HTTP/1.1 503 Service Unavailable\r\nRetry-After: 1\r\nConnection: close\r\nContent-Length: 0\r\n\r\n")
+    tcp.Close(c)
+end
+
 func _accept_thread(arg: i64):
     jp := (arg as void*) as _AcceptJob*
     cfg := jp[0].cfg
     lst := jp[0].listener
     stop := jp[0].stop
+    limits := jp[0].limits
     mem.Free(jp as void*)
     until atomic_load(stop) != 0:
         c := tcp.Accept(lst)
@@ -467,53 +514,26 @@ func _accept_thread(arg: i64):
         else not tcp.ConnOk(c):
             sync.SleepMs(5)
         else:
-            cj := mem.AllocateZeroed(sizeof(_ConnJob) as u64) as _ConnJob*
-            cj[0] = _ConnJob { cfg = cfg, conn = c }
-            socks.Go(_conn_thread, cj as void*)
+            adm := tunnel.LimitsEnter(limits, c.fd)
+            if not adm.ok:
+                _busy(c)
+            else:
+                cj := mem.AllocateZeroed(sizeof(_ConnJob) as u64) as _ConnJob*
+                cj[0] = _ConnJob { cfg = cfg, conn = c, limits = limits, adm = adm }
+                if not socks.Go(_conn_thread, cj as void*):
+                    mut failed := adm
+                    tunnel.LimitsRelease(limits, failed)
+                    tcp.Close(c)
+                    mem.Free(cj as void*)
+                end
+            end
         end
     end
     tcp.CloseServer(lst)
     mem.Free(stop as void*)
 end
 
-@en "NewServerConfig"
-@fa "پیکربندی سرور جدید"
-pub func NewServerConfig(port: int): ServerConfig:
-    ret ServerConfig { port = port }
-end
-
-@en "AddUser"
-@fa "افزودن کاربر"
-pub func AddUser(cfg &: ServerConfig, user: str, pass: str):
-    cfg.users.put(user, pass)
-    cfg.require_auth = true
-end
-
-@en "SetAuth"
-@fa "تعیین احراز هویت"
-pub func SetAuth(cfg &: ServerConfig, check: func (str, str) bool):
-    cfg.auth = check
-    cfg.has_auth = true
-    cfg.require_auth = true
-end
-
-@en "SetConnector"
-@fa "تعیین اتصال به مقصد"
-pub func SetConnector(cfg &: ServerConfig, connect: func (str, int) socks.Outbound):
-    cfg.connect = connect
-end
-
-@en "SetTLS"
-@fa "تعیین تی ال اس"
-pub func SetTLS(cfg &: ServerConfig, cert_file: str, key_file: str): bool:
-    cfg.tls_config = tls.NewServerConfig(cert_file, key_file)
-    cfg.use_tls = true
-    ret cfg.tls_config.ok
-end
-
-@en "Handle"
-@fa "رسیدگی"
-pub func Handle(cfg: ServerConfig, s: dyn tunnel.Stream):
+func _handle(cfg: ServerConfig, s: dyn tunnel.Stream, lim: tunnel.ConnLimits, adm &: tunnel.Admit):
     mut rd := _rd_new(s, MaxHeadBytes)
     mut up := _Up {}
     mut first := true
@@ -527,6 +547,7 @@ pub func Handle(cfg: ServerConfig, s: dyn tunnel.Stream):
         first = false
         mut st := 0
         text := _rd_head(rd, MaxHeadBytes, st)
+        tunnel.LimitsHandshakeDone(lim, adm)
         if st != 0:
             if st == 2:
                 _respond(s, 431, "", "request head too large\n", true)
@@ -560,6 +581,61 @@ pub func Handle(cfg: ServerConfig, s: dyn tunnel.Stream):
     if not closed: s.Close() end
 end
 
+@en "NewServerConfig"
+@fa "پیکربندی سرور جدید"
+pub func NewServerConfig(port: int): ServerConfig:
+    ret ServerConfig { port = port }
+end
+
+@en "AddUser"
+@fa "افزودن کاربر"
+pub func AddUser(cfg &: ServerConfig, user: str, pass: str):
+    cfg.users.put(user, pass)
+    cfg.require_auth = true
+end
+
+@en "SetAuth"
+@fa "تعیین احراز هویت"
+pub func SetAuth(cfg &: ServerConfig, check: func (str, str) bool):
+    cfg.auth = check
+    cfg.has_auth = true
+    cfg.require_auth = true
+end
+
+@en "SetConnector"
+@fa "تعیین اتصال به مقصد"
+pub func SetConnector(cfg &: ServerConfig, connect: func (str, int) socks.Outbound):
+    cfg.connect = connect
+    cfg.has_connect = true
+end
+
+@en "SetPolicy"
+@fa "تعیین سیاست مقصد"
+pub func SetPolicy(cfg &: ServerConfig, p: tunnel.DestPolicy):
+    cfg.policy = p
+end
+
+@en "AllowPrivate"
+@fa "اجازه آدرس‌های خصوصی"
+pub func AllowPrivate(cfg &: ServerConfig, enabled: bool):
+    cfg.policy.allow_private = enabled
+end
+
+@en "SetTLS"
+@fa "تعیین تی ال اس"
+pub func SetTLS(cfg &: ServerConfig, cert_file: str, key_file: str): bool:
+    cfg.tls_config = tls.NewServerConfig(cert_file, key_file)
+    cfg.use_tls = true
+    ret cfg.tls_config.ok
+end
+
+@en "Handle"
+@fa "رسیدگی"
+pub func Handle(cfg: ServerConfig, s: dyn tunnel.Stream):
+    mut adm := tunnel.Admit { done = true }
+    _handle(cfg, s, tunnel.ConnLimits {}, adm)
+end
+
 @en "Start"
 @fa "شروع"
 pub func Start(cfg: ServerConfig): Server:
@@ -570,7 +646,7 @@ pub func Start(cfg: ServerConfig): Server:
     stop := mem.AllocateZeroed(8 as u64) as i64*
     atomic_store(stop, 1 as i64)
     jb := mem.AllocateZeroed(sizeof(_AcceptJob) as u64) as _AcceptJob*
-    jb[0] = _AcceptJob { cfg = cfg, listener = ls, stop = stop }
+    jb[0] = _AcceptJob { cfg = cfg, listener = ls, stop = stop, limits = tunnel.NewConnLimits(cfg.max_connections, cfg.max_per_source, cfg.handshake_deadline_ms) }
     sv.ok = true
     sv.port = tcp.Port(ls)
     sv.host = _bind_host(cfg)

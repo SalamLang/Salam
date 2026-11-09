@@ -1,0 +1,101 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import mem
+import sync
+import net.transport
+import net.vmess
+
+const UUID1 := "b831381d-6324-4d53-ad4f-8cda48b30811"
+
+mut port := 0
+mut ready := sync.NewWaitGroup()
+mut finished := sync.NewWaitGroup()
+mut srv_count := 1
+
+func server():
+    l := transport.Listen(0, transport.Settings {})
+    port = transport.ListenerPort(l)
+    sync.Done(ready)
+    mut rf := vmess.NewReplayFilter()
+    mut users := Vector {} as Vector<vmess.User>
+    users.push(vmess.NewUser(UUID1))
+    buf := mem.Allocate(65536 as u64)
+    repeat srv_count:
+        t := transport.Accept(l)
+        if not transport.Ok(t): continue end
+        mut c := vmess.Accept(t, users, rf)
+        if c.ok:
+            until true:
+                n := vmess.Read(c, buf, 65536)
+                if n <= 0: break end
+                vmess.Write(c, buf, n)
+            end
+            vmess.Close(c)
+        end
+    end
+    mem.Free(buf)
+    transport.CloseListener(l)
+    sync.Done(finished)
+end
+
+func stream(label: str, sec: int, messages: int):
+    t := transport.Dial("127.0.0.1", port, transport.Settings {})
+    mut c := vmess.Client(t, UUID1, sec, vmess.DefaultOption(sec), vmess.CmdTCP, transport.NewAddr("example.com", 80))
+    out := mem.Allocate(16 as u64)
+    back := mem.Allocate(16 as u64)
+    mut good := c.ok
+    mut done := 0
+    until done < messages and good:
+        batch := 64
+        repeat batch in b:
+            ob := out as u8*
+            repeat 16 in k:
+                ob[k] = ((done + b + k) & 255) as u8
+            end
+            if not vmess.Write(c, out, 16): good = false end
+        end
+        repeat batch in b:
+            mut got := 0
+            until got < 16 and good:
+                r := vmess.Read(c, ((back as i64) + (got as i64)) as void*, 16 - got)
+                if r <= 0:
+                    good = false
+                else:
+                    got += r
+                end
+            end
+            bp := back as u8*
+            repeat 16 in k:
+                if (bp[k] as int) != ((done + b + k) & 255): good = false end
+            end
+        end
+        done += batch
+    end
+    vmess.Close(c)
+    mem.Free(out)
+    mem.Free(back)
+    println label, "echoed", done, "chunks each way past the 16 bit counter:", good
+end
+
+func main:
+    srv_count = 2
+    sync.Add(ready, 1 as i64)
+    sync.Add(finished, 1 as i64)
+    _t := spawn(server)
+    sync.Wait(ready)
+    stream("aes-128-gcm", vmess.SecAES128GCM, 70016)
+    stream("chacha20-poly1305", vmess.SecChaCha20Poly1305, 70016)
+    sync.Wait(finished)
+end

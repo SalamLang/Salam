@@ -1,0 +1,133 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import mem
+import net.tcp
+import net.tunnel
+
+struct Rebind:
+    pub calls: int* = null
+
+    pub func Lookup(_host: str): tunnel.LookupResult:
+        mut r := tunnel.LookupResult {}
+        this.calls[0]++
+        if this.calls[0] == 1:
+            r.ips.push("127.0.0.1")
+        else:
+            r.ips.push("8.8.8.8")
+        end
+        ret r
+    end
+end
+
+struct Mixed:
+    pub unused: int = 0
+
+    pub func Lookup(_host: str): tunnel.LookupResult:
+        mut r := tunnel.LookupResult {}
+        r.ips.push("93.184.216.34")
+        r.ips.push("10.1.2.3")
+        ret r
+    end
+end
+
+func echo_once(p: tcp.Server*):
+    c := tcp.Accept(p[0])
+    s := tcp.Read(c, 100)
+    _n := tcp.Write(c, "echo:" + s)
+    tcp.Close(c)
+end
+
+func keep(s: tcp.Server): tcp.Server*:
+    p := mem.AllocateZeroed(sizeof(tcp.Server) as u64) as tcp.Server*
+    p[0] = s
+    ret p
+end
+
+func show(label: str, ip: str):
+    println label, ip, tunnel.IsPrivateAddress(ip)
+end
+
+func main:
+    each ip in ["127.0.0.1", "127.255.255.254", "10.0.0.1", "172.16.0.1", "172.31.255.255", "172.32.0.1", "192.168.1.1", "100.64.0.1", "100.127.255.255", "100.128.0.1", "169.254.169.254", "0.0.0.0", "0.1.2.3", "224.0.0.1", "239.255.255.250", "255.255.255.255", "8.8.8.8", "93.184.216.34", "1.1.1.1"]:
+        show("v4", ip)
+    end
+    each ip in ["::1", "::", "fe80::1", "fc00::1", "fd12:3456::1", "ff02::1", "::ffff:127.0.0.1", "::ffff:10.0.0.1", "::ffff:8.8.8.8", "::ffff:169.254.169.254", "64:ff9b::7f00:1", "2002:7f00:1::1", "2001:db8::1", "2606:4700:4700::1111", "2001:4860:4860::8888"]:
+        show("v6", ip)
+    end
+
+    mut p := tunnel.NewDestPolicy()
+    println "default 127.0.0.1:", tunnel.PolicyCheckIP(p, "127.0.0.1")
+    println "default public:", tunnel.PolicyCheckIP(p, "8.8.8.8")
+    println "localhost name:", tunnel.PolicyCheckName(p, "localhost"), tunnel.PolicyCheckName(p, "a.localhost"), tunnel.PolicyCheckName(p, "example.com")
+    tunnel.PolicyAllowPrivate(p, true)
+    println "allow_private on a public bind:", tunnel.PolicyCheckIP(tunnel.PolicyForBind(p, "0.0.0.0"), "127.0.0.1")
+    println "allow_private on loopback bind:", tunnel.PolicyCheckIP(tunnel.PolicyForBind(p, "127.0.0.1"), "127.0.0.1")
+    println "allow_private on ::1 bind:", tunnel.PolicyCheckIP(tunnel.PolicyForBind(p, "::1"), "10.0.0.1")
+    println "loopback hosts:", tunnel.IsLoopbackHost("127.0.0.1"), tunnel.IsLoopbackHost("::1"), tunnel.IsLoopbackHost("0.0.0.0"), tunnel.IsLoopbackHost("::"), tunnel.IsLoopbackHost("192.168.0.2")
+
+    mut q := tunnel.NewDestPolicy()
+    println "bad cidr:", tunnel.PolicyAllowCidr(q, "10.0.0.0/33"), tunnel.PolicyDenyCidr(q, "nonsense")
+    println "allow cidr:", tunnel.PolicyAllowCidr(q, "10.9.0.0/16")
+    println "inside the exception:", tunnel.PolicyCheckIP(q, "10.9.4.4"), "outside:", tunnel.PolicyCheckIP(q, "10.8.4.4")
+    println "mapped form of the exception:", tunnel.PolicyCheckIP(q, "::ffff:10.9.4.4")
+    println "deny cidr:", tunnel.PolicyDenyCidr(q, "8.8.8.0/24")
+    println "denied public:", tunnel.PolicyCheckIP(q, "8.8.8.8"), "other public:", tunnel.PolicyCheckIP(q, "8.8.4.4")
+    println "deny wins over allow:", tunnel.PolicyDenyCidr(q, "10.9.4.0/24"), tunnel.PolicyCheckIP(q, "10.9.4.4"), tunnel.PolicyCheckIP(q, "10.9.5.4")
+    tunnel.PolicyDenySuffix(q, "*.Blocked.Example.")
+    tunnel.PolicyAllowSuffix(q, ".internal.example")
+    println "suffix:", tunnel.PolicyCheckName(q, "blocked.example"), tunnel.PolicyCheckName(q, "a.b.BLOCKED.example."), tunnel.PolicyCheckName(q, "notblocked.example"), tunnel.PolicyCheckName(q, "x.internal.example")
+
+    mut r := tunnel.NewDestPolicy()
+    println "literal plan:", tunnel.PolicyPlan(r, tunnel.NewAddr("10.0.0.1", 80), true).allowed, tunnel.PolicyPlan(r, tunnel.NewAddr("8.8.8.8", 80), true).allowed
+    println "localhost resolves to a forbidden address:", tunnel.PolicyPlan(r, tunnel.NewAddr("localhost", 80), true).allowed
+    println "short loopback name 127.1:", tunnel.PolicyPlan(r, tunnel.NewAddr("127.1", 80), true).allowed
+    println "decimal loopback name:", tunnel.PolicyPlan(r, tunnel.NewAddr("2130706433", 80), true).allowed
+    println "name without local resolution:", tunnel.PolicyPlan(r, tunnel.NewAddr("example.com", 80), false).allowed
+    tunnel.PolicySetResolver(r, Mixed {})
+    pm := tunnel.PolicyPlan(r, tunnel.NewAddr("mixed.test", 80), true)
+    println "one forbidden answer rejects the name:", pm.allowed, pm.ips.len()
+
+    srv := tcp.Bind(0)
+    port := tcp.Port(srv)
+    t1 := spawn(echo_once, keep(srv))
+    mut open := tunnel.NewDestPolicy()
+    println "guard refuses loopback:", tunnel.Guard(tunnel.Direct(), open).DialChecked(tunnel.NewAddr("127.0.0.1", port)).denied
+    tunnel.PolicyAllowPrivate(open, true)
+    println "guard refuses with allow_private but no loopback bind:", tunnel.Guard(tunnel.Direct(), open).DialChecked(tunnel.NewAddr("127.0.0.1", port)).denied
+    ok := tunnel.Guard(tunnel.Direct(), tunnel.PolicyForBind(open, "127.0.0.1"))
+    s := ok.Dial(tunnel.NewAddr("127.0.0.1", port))
+    println "guard allows it on a loopback bind:", s.Ok()
+    _w := s.Write("ping")
+    println s.Read(100)
+    s.Close()
+    join(t1)
+
+    calls := mem.AllocateZeroed(8 as u64) as int*
+    srv2 := tcp.Bind(0)
+    port2 := tcp.Port(srv2)
+    t2 := spawn(echo_once, keep(srv2))
+    mut rb := tunnel.NewDestPolicy()
+    tunnel.PolicyAllowCidr(rb, "127.0.0.0/8")
+    tunnel.PolicySetResolver(rb, Rebind { calls = calls })
+    g := tunnel.Guard(tunnel.Direct(), rb)
+    s2 := g.Dial(tunnel.NewAddr("rebind.test", port2))
+    println "dialed the address that was checked:", s2.Ok(), "lookups", calls[0]
+    _w2 := s2.Write("again")
+    println s2.Read(100)
+    s2.Close()
+    join(t2)
+    denied := g.DialChecked(tunnel.NewAddr("deny.test", port2))
+    println "a later lookup is a separate resolution:", denied.denied, calls[0]
+end

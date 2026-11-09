@@ -1,0 +1,193 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package reactive
+
+@en "Tracker"
+@fa "ردیاب"
+pub struct Tracker:
+    @en "node"
+    @fa "گره"
+    pub node: int = -1
+
+    @en "IsDirty"
+    @fa "کهنه است"
+    pub func IsDirty(): bool:
+        ret _rx_is_dirty(this.node)
+    end
+
+    @en "Refresh"
+    @fa "تازه کن"
+    pub func Refresh(): bool:
+        if not _rx_is_dirty(this.node):
+            ret false
+        end
+        _rx_eval(this.node)
+        ret true
+    end
+
+    @en "Name"
+    @fa "نام بده"
+    pub func Name(name: str): Tracker:
+        _rx_set_name(this.node, name)
+        ret this[0]
+    end
+
+    @en "Free"
+    @fa "آزاد کن"
+    pub func Free():
+        _rx_node_free(this.node)
+    end
+end
+
+@en "Handler"
+@fa "کنترل‌کننده"
+pub struct Handler:
+    @en "node"
+    @fa "گره"
+    pub node: int = -1
+
+    @en "Free"
+    @fa "آزاد کن"
+    pub func Free():
+        _rx_node_free(this.node)
+    end
+end
+
+func _rx_track(body: func (), cb: int): Tracker:
+    n := _rx_node_new(_K_TRACKER)
+    _p := _rx_bind_new(n, _B_TRACK, _rx_slot_void(body), cb)
+    _rx_eval(n)
+    ret Tracker { node = n }
+end
+
+func _rx_on_change(w: int, body: func ()): Handler:
+    if w < 0 or not _rx_live(w):
+        ret Handler {}
+    end
+    n := _rx_node_new(_K_HANDLER)
+    _p := _rx_bind_new(n, _B_HANDLER, _rx_slot_void(body), w)
+    _rx_eval(n)
+    _n_val.set(n, _n_ver.get(w) as i64)
+    ret Handler { node = n }
+end
+
+func _rx_run_handler(h: int): bool:
+    if not _rx_live(h) or _rx_kind(h) != _K_HANDLER:
+        ret false
+    end
+    if (_n_flags.get(h) & _F_DIRTY) == 0:
+        ret false
+    end
+    b := _n_bind.get(h)
+    w := _b_aux.get(b)
+    _rx_eval(h)
+    if not _rx_live(w):
+        ret false
+    end
+    v := _n_ver.get(w) as i64
+    if v == _n_val.get(h):
+        ret false
+    end
+    _n_val.set(h, v)
+    f := _f_void.get(_b_fn.get(b))
+    f()
+    ret true
+end
+
+@en "Track"
+@fa "ردیابی"
+pub func Track(body: func ()): Tracker:
+    ret _rx_track(body, -1)
+end
+
+@en "Track"
+@fa "ردیابی"
+pub func Track(body: func (), on_dirty: func ()): Tracker:
+    ret _rx_track(body, _rx_slot_void(on_dirty))
+end
+
+@en "OnChange"
+@fa "هنگام تغییر"
+pub func OnChange(p: IntProp, body: func ()): Handler:
+    ret _rx_on_change(p.node, body)
+end
+
+@en "OnChange"
+@fa "هنگام تغییر"
+pub func OnChange(p: I64Prop, body: func ()): Handler:
+    ret _rx_on_change(p.node, body)
+end
+
+@en "OnChange"
+@fa "هنگام تغییر"
+pub func OnChange(p: F64Prop, body: func ()): Handler:
+    ret _rx_on_change(p.node, body)
+end
+
+@en "OnChange"
+@fa "هنگام تغییر"
+pub func OnChange(p: BoolProp, body: func ()): Handler:
+    ret _rx_on_change(p.node, body)
+end
+
+@en "OnChange"
+@fa "هنگام تغییر"
+pub func OnChange(p: StrProp, body: func ()): Handler:
+    ret _rx_on_change(p.node, body)
+end
+
+@en "PendingHandlers"
+@fa "کنترل‌کننده های منتظر"
+pub func PendingHandlers(): int:
+    mut n := 0
+    each h in _hq:
+        if _rx_live(h) and _rx_kind(h) == _K_HANDLER and (_n_flags.get(h) & _F_DIRTY) != 0:
+            n++
+        end
+    end
+    ret n
+end
+
+@en "RunPendingHandlers"
+@fa "اجرای کنترل‌کننده ها"
+pub func RunPendingHandlers(): int:
+    mut calls := 0
+    mut rounds := 0
+    until _hq.len() > 0:
+        rounds++
+        if rounds > _HANDLER_ROUNDS:
+            _rx_error("change handlers did not settle after " + _HANDLER_ROUNDS + " rounds")
+            each h in _hq:
+                if _rx_live(h) and _rx_kind(h) == _K_HANDLER:
+                    _n_flags.set(h, _n_flags.get(h) & ~_F_DIRTY)
+                end
+            end
+            _hq.clear()
+            break
+        end
+        mut q := Vector {} as Vector<int>
+        each h2 in _hq:
+            q.push(h2)
+        end
+        _hq.clear()
+        each h3 in q:
+            if _rx_run_handler(h3):
+                calls++
+            end
+        end
+        q.free()
+    end
+    ret calls
+end

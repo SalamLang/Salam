@@ -17,11 +17,10 @@ package archive
 import compress
 import mem
 import os
-import str
-import time
 
 struct _ZipW:
     pub fp: void*
+    pub out: compress.ByteBuf*
     pub pos: i64
     pub central: compress.ByteBuf
     pub count: int
@@ -35,6 +34,16 @@ end
 
 func _zw_raw(w &: _ZipW, p: void*, n: int):
     if w.failed or n <= 0:
+        ret
+    end
+    if w.out != null:
+        before := w.out[0].len
+        compress.BufPushBytes(w.out[0], p, n)
+        if w.out[0].len != before + n:
+            w.failed = true
+            ret
+        end
+        w.pos += n as i64
         ret
     end
     if (fwrite(p, 1 as u64, n as u64, w.fp) as int) != n:
@@ -107,6 +116,15 @@ func _zw_patch_comp(w &: _ZipW, hdr: i64, name_len: int, big: bool, comp: i64): 
         _zip_put64(b, comp)
     else:
         LEPut32(b, comp as int)
+    end
+    if w.out != null:
+        if at + (b.len as i64) > (w.out[0].len as i64):
+            compress.BufFree(b)
+            ret false
+        end
+        mem.Copy(((w.out[0].data as i64) + at) as void*, b.data, b.len as u64)
+        compress.BufFree(b)
+        ret true
     end
     mut ok := compress.FileSeek(w.fp, at)
     if ok:
@@ -207,7 +225,7 @@ func _zw_entry(w &: _ZipW, f: ZipFileInput, force64: bool, scratch: void*): bool
     mut crc := 0 as u32
     mut dd := false
     mut ok := true
-    if method == ZipMethodDeflate:
+    if method == ZipMethodDeflate and (w.out == null or src != null or enc != 0):
         dd = true
     else:
         if src != null:
@@ -240,7 +258,8 @@ func _zw_entry(w &: _ZipW, f: ZipFileInput, force64: bool, scratch: void*): bool
     method_field := enc >= 2 ? 99 : method
     aes_strength := enc == ZipEncAes128 ? 1 : (enc == ZipEncAes192 ? 2 : 3)
     store_crc := enc >= 2 ? (0 as u32) : crc
-    comp_known := streamed ? (0 as i64) : size + _zw_overhead(enc)
+    late := streamed or (method == ZipMethodDeflate and not dd)
+    comp_known := late ? (0 as i64) : size + _zw_overhead(enc)
 
     mut lh := compress.NewByteBuf()
     LEPut32(lh, 0x04034b50)
@@ -286,6 +305,10 @@ func _zw_entry(w &: _ZipW, f: ZipFileInput, force64: bool, scratch: void*): bool
     compress.BufFree(lh)
 
     mut cw := _cw_open(w.fp, method == ZipMethodDeflate ? _CW_DEFLATE : _CW_RAW, 0)
+    if w.out != null:
+        cw.mem = w.out
+        cw.failed = false
+    end
     cw.failed = cw.failed or w.failed or not ok
     if enc != 0 and not cw.failed:
         check := dd ? ((dd_time >> 8) & 255) : (((crc as int) >> 24) & 255)
@@ -327,7 +350,7 @@ func _zw_entry(w &: _ZipW, f: ZipFileInput, force64: bool, scratch: void*): bool
         uncomp_total = size
     end
     w.pos += comp_total
-    if streamed and ok:
+    if late and ok:
         ok = _zw_patch_comp(w, offset, name_len, big, comp_total)
     end
     if not ok:
@@ -415,7 +438,7 @@ func _zw_entry(w &: _ZipW, f: ZipFileInput, force64: bool, scratch: void*): bool
     ret true
 end
 
-func _zip_stream(files: Vector<ZipFileInput>, outpath: str, force64: bool): bool:
+func _zip_check_mem(files: Vector<ZipFileInput>): bool:
     mut mem_total := 0 as i64
     mut v := 0
     until v < files.len():
@@ -428,11 +451,11 @@ func _zip_stream(files: Vector<ZipFileInput>, outpath: str, force64: bool): bool
     if mem_total > (1900000000 as i64):
         ret false
     end
-    fp := compress.FileOpenWrite(outpath)
-    if fp == null:
-        ret false
-    end
-    mut w := _ZipW { fp = fp, pos = 0 as i64, central = compress.NewByteBuf(), count = 0, failed = false }
+    ret true
+end
+
+func _zip_write_fp(files: Vector<ZipFileInput>, fp: void*, out: compress.ByteBuf*, force64: bool): bool:
+    mut w := _ZipW { fp = fp, out = out, pos = 0 as i64, central = compress.NewByteBuf(), count = 0, failed = false }
     scratch := mem.Allocate(262144 as u64)
     mut ok := true
     mut i := 0
@@ -476,6 +499,18 @@ func _zip_stream(files: Vector<ZipFileInput>, outpath: str, force64: bool): bool
         ok = not w.failed
     end
     compress.BufFree(w.central)
+    ret ok
+end
+
+func _zip_stream(files: Vector<ZipFileInput>, outpath: str, force64: bool): bool:
+    if not _zip_check_mem(files):
+        ret false
+    end
+    fp := compress.FileOpenWrite(outpath)
+    if fp == null:
+        ret false
+    end
+    mut ok := _zip_write_fp(files, fp, null as compress.ByteBuf*, force64)
     if fclose(fp) != 0:
         ok = false
     end
@@ -485,30 +520,18 @@ func _zip_stream(files: Vector<ZipFileInput>, outpath: str, force64: bool): bool
     ret ok
 end
 
-func _zip_has_secret(files: Vector<ZipFileInput>): bool:
-    mut i := 0
-    until i < files.len():
-        if files.get(i).password.len() > 0:
-            ret true
-        end
-        i++
-    end
-    ret false
-end
-
 func _zip_stream_mem(files: Vector<ZipFileInput>, force64: bool): compress.ByteBuf:
-    pid := str.FromInt(os.Pid() as i64)
-    stamp := str.FromInt(time.NowNanos())
-    tmp := os.TempDir() + "/salam_zipenc_" + pid + "_" + stamp
-    mem.Free(pid as void*)
-    mem.Free(stamp as void*)
-    mut out := compress.NewByteBuf()
-    if _zip_stream(files, tmp, force64):
-        mut rok := false
-        compress.BufFree(out)
-        out = ReadBinaryFile(tmp, rok)
-        os.Remove(tmp)
+    if not _zip_check_mem(files):
+        ret compress.NewByteBuf()
     end
-    mem.Free(tmp as void*)
+    holder := mem.AllocateZeroed(sizeof(compress.ByteBuf)) as compress.ByteBuf*
+    holder[0] = compress.NewByteBuf()
+    ok := _zip_write_fp(files, null, holder, force64)
+    mut out := holder[0]
+    mem.Free(holder as void*)
+    if not ok:
+        compress.BufFree(out)
+        ret compress.NewByteBuf()
+    end
     ret out
 end

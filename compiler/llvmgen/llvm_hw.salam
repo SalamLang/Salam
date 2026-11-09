@@ -1,0 +1,260 @@
+package llvmgen
+
+import str
+
+include co "../sal_core.salam"
+include at "../ast.salam"
+include sm "../semantic/semantic.salam"
+include tok "../token.salam"
+
+const HW_NONE := 0
+const HW_X86 := 1
+const HW_A64 := 2
+
+const HW_D_AUX := 1
+const HW_D_ENC := 4
+const HW_D_ENCLAST := 8
+const HW_D_CLMUL := 16
+const HW_D_AESE := 32
+const HW_D_AESMC := 64
+const HW_D_PMULL := 128
+
+func hw_arch(v &: Lv): int:
+    if not v.hw_on or v.ptr_bits != 64:
+        ret HW_NONE
+    end
+    ea := ex_arch(v)
+    if ea == EXA_SYSV or ea == EXA_WIN64:
+        ret HW_X86
+    end
+    if ea == EXA_AARCH64:
+        ret HW_A64
+    end
+    ret HW_NONE
+end
+
+func hw_is_linux(v &: Lv): bool:
+    if str.Len(v.triple) == 0:
+        ret SALAM_OS_LINUX
+    end
+    ret str.Contains(v.triple, "linux")
+end
+
+func hw_is_apple(v &: Lv): bool:
+    if str.Len(v.triple) == 0:
+        ret SALAM_OS_MAC
+    end
+    ret str.Contains(v.triple, "apple") or str.Contains(v.triple, "darwin")
+end
+
+func hw_declare(v &: Lv, bit: int, text: str):
+    if (v.hw_decl & bit) != 0:
+        ret
+    end
+    v.hw_decl |= bit
+    out_g(v, text)
+end
+
+func hw_vec(v &: Lv, x: str): str:
+    t := new_tmp(v)
+    emit(v, t + " = bitcast i128 " + x + " to <2 x i64>")
+    ret t
+end
+
+func hw_unvec(v &: Lv, x: str): str:
+    t := new_tmp(v)
+    emit(v, t + " = bitcast <2 x i64> " + x + " to i128")
+    ret t
+end
+
+func hw_arg128(v &: Lv, s &: sm.Sema, a &: at.Ast, arg: int): str:
+    val := lv_expr(v, s, a, arg)
+    ret conv(v, s, a, val, "u128")
+end
+
+func hw_features(v &: Lv, arch: int): Llv:
+    r := new_tmp(v)
+    if arch == HW_X86:
+        e := new_tmp(v)
+        emit(
+            v, e + " = call { i32, i32, i32, i32 } asm sideeffect \"cpuid\", \"={ax},={bx},={cx},={dx},{ax},{cx},~{dirflag},~{fpsr},~{flags}\"(i32 1, i32 0)"
+        )
+        c := new_tmp(v)
+        emit(v, c + " = extractvalue { i32, i32, i32, i32 } " + e + ", 2")
+        m := new_tmp(v)
+        emit(v, m + " = and i32 " + c + ", 34079234")
+        q := new_tmp(v)
+        emit(v, q + " = icmp eq i32 " + m + ", 34079234")
+        emit(v, r + " = select i1 " + q + ", i32 3, i32 0")
+        ret make_llv(r, "i32")
+    end
+    if hw_is_apple(v):
+        ret make_llv("5", "i32")
+    end
+    if hw_is_linux(v):
+        hw_declare(v, HW_D_AUX, "declare i64 @getauxval(i64) nounwind\n")
+        h := new_tmp(v)
+        emit(v, h + " = call i64 @getauxval(i64 16)")
+        m2 := new_tmp(v)
+        emit(v, m2 + " = and i64 " + h + ", 24")
+        q2 := new_tmp(v)
+        emit(v, q2 + " = icmp eq i64 " + m2 + ", 24")
+        emit(v, r + " = select i1 " + q2 + ", i32 5, i32 0")
+        ret make_llv(r, "i32")
+    end
+    ret make_llv("0", "i32")
+end
+
+func hw_aesenc(v &: Lv, arch: int, st: str, key: str, last: bool): str:
+    if arch == HW_X86:
+        nm := last ? "llvm.x86.aesni.aesenclast" : "llvm.x86.aesni.aesenc"
+        hw_declare(
+            v, last ? HW_D_ENCLAST : HW_D_ENC, "declare <2 x i64> @" + nm + "(<2 x i64>, <2 x i64>) nounwind\n"
+        )
+        a1 := hw_vec(v, st)
+        k1 := hw_vec(v, key)
+        r := new_tmp(v)
+        emit(v, r + " = call <2 x i64> @" + nm + "(<2 x i64> " + a1 + ", <2 x i64> " + k1 + ")")
+        ret hw_unvec(v, r)
+    end
+    hw_declare(v, HW_D_AESE, "declare <16 x i8> @llvm.aarch64.crypto.aese(<16 x i8>, <16 x i8>) nounwind\n")
+    hw_declare(v, HW_D_AESMC, "declare <16 x i8> @llvm.aarch64.crypto.aesmc(<16 x i8>) nounwind\n")
+    sv := new_tmp(v)
+    emit(v, sv + " = bitcast i128 " + st + " to <16 x i8>")
+    e := new_tmp(v)
+    emit(v, e + " = call <16 x i8> @llvm.aarch64.crypto.aese(<16 x i8> " + sv + ", <16 x i8> zeroinitializer)")
+    mut f := e
+    if not last:
+        f = new_tmp(v)
+        emit(v, f + " = call <16 x i8> @llvm.aarch64.crypto.aesmc(<16 x i8> " + e + ")")
+    end
+    fi := new_tmp(v)
+    emit(v, fi + " = bitcast <16 x i8> " + f + " to i128")
+    r2 := new_tmp(v)
+    emit(v, r2 + " = xor i128 " + fi + ", " + key)
+    ret r2
+end
+
+func hw_clmul(v &: Lv, arch: int, x: str, y: str, imm: int): str:
+    if arch == HW_X86:
+        hw_declare(v, HW_D_CLMUL, "declare <2 x i64> @llvm.x86.pclmulqdq(<2 x i64>, <2 x i64>, i8 immarg) nounwind\n")
+        a1 := hw_vec(v, x)
+        b1 := hw_vec(v, y)
+        r := new_tmp(v)
+        emit(
+            v, r + " = call <2 x i64> @llvm.x86.pclmulqdq(<2 x i64> " + a1 + ", <2 x i64> " + b1 + ", i8 " + co.I64Toa(imm as i64) + ")"
+        )
+        ret hw_unvec(v, r)
+    end
+    hw_declare(v, HW_D_PMULL, "declare <16 x i8> @llvm.aarch64.neon.pmull64(i64, i64) nounwind\n")
+    a2 := hw_vec(v, x)
+    b2 := hw_vec(v, y)
+    la := new_tmp(v)
+    emit(v, la + " = extractelement <2 x i64> " + a2 + ", i32 " + ((imm & 1) != 0 ? "1" : "0"))
+    lb := new_tmp(v)
+    emit(v, lb + " = extractelement <2 x i64> " + b2 + ", i32 " + ((imm & 16) != 0 ? "1" : "0"))
+    p := new_tmp(v)
+    emit(v, p + " = call <16 x i8> @llvm.aarch64.neon.pmull64(i64 " + la + ", i64 " + lb + ")")
+    r2 := new_tmp(v)
+    emit(v, r2 + " = bitcast <16 x i8> " + p + " to i128")
+    ret r2
+end
+
+func hw_call(v &: Lv, s &: sm.Sema, a &: at.Ast, n: int, fname: str, out &: Llv): bool:
+    arch := hw_arch(v)
+    if arch == HW_NONE:
+        ret false
+    end
+    nn := at.Get(a, n)
+    if str.Equals(fname, "Features") and nn.list.len() == 0:
+        out = hw_features(v, arch)
+        ret true
+    end
+    if (str.Equals(fname, "HwAesEnc") or str.Equals(fname, "HwAesEncLast")) and nn.list.len() == 2:
+        st := hw_arg128(v, s, a, nn.list.get(0))
+        key := hw_arg128(v, s, a, nn.list.get(1))
+        v.hw_used = true
+        out = make_llv(hw_aesenc(v, arch, st, key, str.Equals(fname, "HwAesEncLast")), "u128")
+        ret true
+    end
+    if str.Equals(fname, "HwClmul") and nn.list.len() == 3:
+        im := at.Get(a, nn.list.get(2))
+        if im.kind != at.AST_LITERAL or im.op != tok.TK_INT:
+            lv_error(v, a, n, "the third argument of cpu.HwClmul must be an integer literal")
+            out = poison("u128")
+            ret true
+        end
+        x := hw_arg128(v, s, a, nn.list.get(0))
+        y := hw_arg128(v, s, a, nn.list.get(1))
+        v.hw_used = true
+        out = make_llv(hw_clmul(v, arch, x, y, im.value_int as int), "u128")
+        ret true
+    end
+    if str.Equals(fname, "HwSwap64") and nn.list.len() == 1:
+        x := hw_arg128(v, s, a, nn.list.get(0))
+        a1 := hw_vec(v, x)
+        sh := new_tmp(v)
+        emit(v, sh + " = shufflevector <2 x i64> " + a1 + ", <2 x i64> poison, <2 x i32> <i32 1, i32 0>")
+        out = make_llv(hw_unvec(v, sh), "u128")
+        ret true
+    end
+    if str.Equals(fname, "HwBswap") and nn.list.len() == 1:
+        x := hw_arg128(v, s, a, nn.list.get(0))
+        bv := new_tmp(v)
+        emit(v, bv + " = bitcast i128 " + x + " to <16 x i8>")
+        rv := new_tmp(v)
+        emit(
+            v, rv + " = shufflevector <16 x i8> " + bv + ", <16 x i8> poison, <16 x i32> <i32 15, i32 14, i32 13, i32 12, i32 11, i32 10, i32 9, i32 8, i32 7, i32 6, i32 5, i32 4, i32 3, i32 2, i32 1, i32 0>"
+        )
+        r := new_tmp(v)
+        emit(v, r + " = bitcast <16 x i8> " + rv + " to i128")
+        out = make_llv(r, "u128")
+        ret true
+    end
+    if str.Equals(fname, "HwLoad") and nn.list.len() == 1:
+        pv := lv_expr(v, s, a, nn.list.get(0))
+        r := new_tmp(v)
+        emit(v, r + " = load i128, ptr " + pv.ref + ", align 1")
+        out = make_llv(r, "u128")
+        ret true
+    end
+    if str.Equals(fname, "HwStore") and nn.list.len() == 2:
+        pv := lv_expr(v, s, a, nn.list.get(0))
+        x := hw_arg128(v, s, a, nn.list.get(1))
+        emit(v, "store i128 " + x + ", ptr " + pv.ref + ", align 1")
+        out = make_llv("0", "void")
+        ret true
+    end
+    ret false
+end
+
+func hw_features_attr(v &: Lv): str:
+    arch := hw_arch(v)
+    if arch == HW_X86:
+        ret " \"target-features\"=\"+aes,+pclmul,+ssse3,+sse4.1\""
+    end
+    if arch == HW_A64:
+        ret " \"target-features\"=\"+aes,+neon\""
+    end
+    ret ""
+end
+
+func hw_calls_marked(v &: Lv, body: str): bool:
+    repeat v.hw_names.len() in i:
+        if str.Contains(body, " " + v.hw_names.get(i)):
+            ret true
+        end
+    end
+    ret false
+end
+
+func hw_in_cpu(s &: sm.Sema, scope: int): bool:
+    repeat sm.PackageCount(s) in i:
+        pk := sm.PackageAt(s, i)
+        if pk != 0 and sm.SymAt(s, pk).members == scope:
+            py := sm.SymAt(s, pk)
+            ret str.Equals(py.pkgname, "cpu") or (str.Len(py.pkgname) == 0 and str.Equals(py.name, "cpu"))
+        end
+    end
+    ret false
+end

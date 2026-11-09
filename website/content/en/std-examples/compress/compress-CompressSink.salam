@@ -1,0 +1,59 @@
+import archive
+import compress
+import mem
+import os
+import str
+
+func collect(p: void*, n: int, c: void*): bool:
+    compress.BufPushBytes((c as compress.ByteBuf*)[0], p, n)
+    ret true
+end
+
+func main:
+    mut text := compress.NewByteBuf()
+    repeat 20000 in i:
+        line := "record " + str.FromInt((i * 13) as i64) + " ok\n"
+        compress.BufPushBytes(text, line as void*, line.len())
+    end
+    archive.WriteBinaryFileBuf("sink.tmp", text)
+    fp := compress.FileOpenRead("sink.tmp")
+    size := compress.FileSize(fp)
+    out := mem.AllocateZeroed(sizeof(compress.ByteBuf)) as compress.ByteBuf*
+    emit := (p: void*, n: int, c: void*): ret collect(p, n, c) end
+
+    out[0] = compress.NewByteBuf()
+    mut bz := compress.SinkCallback(0 as i64, emit, out as void*)
+    println compress.Bzip2CompressFileToSink(fp, 0 as i64, size, 9, bz)
+    mut one := compress.Bzip2CompressLevel(text.data, text.len, 9)
+    println "bzip2 same bytes", compress.BufEquals(out[0], one)
+    mut ok := false
+    mut back := compress.Bzip2Decompress(out[0].data, out[0].len, ok)
+    println "bzip2 round trip", ok, compress.BufEquals(back, text)
+    compress.BufFree(back)
+    compress.BufFree(one)
+    compress.BufFree(out[0])
+
+    out[0] = compress.NewByteBuf()
+    mut zs := compress.SinkCallback(0 as i64, emit, out as void*)
+    println compress.ZstdCompressFileToSink(fp, 0 as i64, size, 3, zs)
+    one = compress.ZstdCompressLevel(text.data, text.len, 3)
+    println "zstd same bytes", compress.BufEquals(out[0], one)
+    back = compress.ZstdDecompress(out[0].data, out[0].len, ok)
+    println "zstd round trip", ok, compress.BufEquals(back, text)
+    compress.BufFree(back)
+    compress.BufFree(one)
+    compress.BufFree(out[0])
+
+    out[0] = compress.NewByteBuf()
+    mut lz := compress.SinkCallback(0 as i64, emit, out as void*)
+    println compress.LzmaCompressFileToSink(fp, 0 as i64, size, 6, true, lz)
+    back = compress.LzmaRawDecompress(out[0].data, 5, ((out[0].data as i64) + (5 as i64)) as void*, out[0].len - 5, text.len, 0, ok)
+    println "lzma round trip", ok, compress.BufEquals(back, text)
+    compress.BufFree(back)
+    compress.BufFree(out[0])
+
+    compress.FileClose(fp)
+    mem.Free(out as void*)
+    compress.BufFree(text)
+    os.Remove("sink.tmp")
+end

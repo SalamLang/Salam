@@ -1,0 +1,445 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package shadowsocks
+
+import mem
+import str
+import crypto
+import encoding
+
+@en "OBFS_NONE"
+@fa "بدون پوشش"
+pub const OBFS_NONE := 0
+
+@en "OBFS_HTTP"
+@fa "پوشش اچ تی تی پی"
+pub const OBFS_HTTP := 1
+
+@en "OBFS_TLS"
+@fa "پوشش تی ال اس"
+pub const OBFS_TLS := 2
+
+const TLS_RECORD_MAX := 16384
+
+@en "Obfs"
+@fa "پوشش"
+pub struct Obfs:
+    @en "mode"
+    @fa "حالت"
+    pub mode: int = 0
+    @en "server"
+    @fa "سمت سرور"
+    pub server: bool = false
+    @en "host"
+    @fa "میزبان"
+    pub host: str = ""
+    @en "sent_first"
+    @fa "ارسال نخست انجام شد"
+    pub sent_first: bool = false
+    @en "got_first"
+    @fa "دریافت نخست انجام شد"
+    pub got_first: bool = false
+    @en "rx"
+    @fa "دریافتی"
+    pub rx: Buf = Buf {}
+    @en "frame_left"
+    @fa "باقیمانده قاب"
+    pub frame_left: int = 0
+    @en "ws_key"
+    @fa "کلید وب سوکت"
+    pub ws_key: str = ""
+end
+
+func _find(p: void*, n: int, pat: str): int:
+    pl := pat.len()
+    if pl == 0 or n < pl:
+        ret 0 - 1
+    end
+    mut i := 0
+    until i + pl <= n:
+        mut hit := true
+        mut j := 0
+        until j < pl and hit:
+            if _getb(p, i + j) != _getb(pat as void*, j):
+                hit = false
+            end
+            j += 1
+        end
+        if hit:
+            ret i
+        end
+        i += 1
+    end
+    ret 0 - 1
+end
+
+func _rand_b64(n: int): str:
+    r := mem.AllocateZeroed(n as u64)
+    crypto.RandomBytes(r, n)
+    out := encoding.Base64EncodeBytes(r, n)
+    mem.Free(r)
+    ret out
+end
+
+func _rand_int(max: int): int:
+    r := mem.AllocateZeroed(2 as u64)
+    crypto.RandomBytes(r, 2)
+    v := _getb(r, 0) * 256 + _getb(r, 1)
+    mem.Free(r)
+    ret v % max
+end
+
+func _put16(b &: Buf, v: int):
+    BufAppendByte(b, v >> 8)
+    BufAppendByte(b, v)
+end
+
+func _put_random(b &: Buf, n: int):
+    BufReserve(b, n)
+    crypto.RandomBytes(_at(b.p, b.len), n)
+    b.len += n
+end
+
+func _tls_ext_hello(host: str, data: void*, n: int, out &: Buf):
+    sni := host
+    mut ext := NewBuf(256 + n)
+    _put16(ext, 0x0023)
+    _put16(ext, n)
+    BufAppend(ext, data, n)
+    _put16(ext, 0x0000)
+    _put16(ext, sni.len() + 5)
+    _put16(ext, sni.len() + 3)
+    BufAppendByte(ext, 0)
+    _put16(ext, sni.len())
+    BufAppendStr(ext, sni)
+    _put16(ext, 0x000b)
+    _put16(ext, 4)
+    BufAppendByte(ext, 3)
+    BufAppendByte(ext, 1)
+    BufAppendByte(ext, 0)
+    BufAppendByte(ext, 2)
+    _put16(ext, 0x000a)
+    _put16(ext, 10)
+    _put16(ext, 8)
+    _put16(ext, 0x001d)
+    _put16(ext, 0x0017)
+    _put16(ext, 0x0019)
+    _put16(ext, 0x0018)
+    _put16(ext, 0x000d)
+    _put16(ext, 30)
+    _put16(ext, 28)
+    sigs := "\x06\x01\x06\x02\x06\x03\x05\x01\x05\x02\x05\x03\x04\x01\x04\x02\x04\x03\x03\x01\x03\x02\x03\x03\x02\x01\x02\x02\x02\x03"
+    BufAppend(ext, sigs as void*, 28)
+    _put16(ext, 0x0016)
+    _put16(ext, 0)
+    _put16(ext, 0x0017)
+    _put16(ext, 0)
+    suites := "\xc0\x2c\xc0\x30\x00\x9f\xcc\xa9\xcc\xa8\xcc\xaa\xc0\x2b\xc0\x2f\x00\x9e\xc0\x24\xc0\x28\x00\x6b\xc0\x23\xc0\x27\x00\x67\xc0\x0a\xc0\x14\x00\x39\xc0\x09\xc0\x13\x00\x33\x00\x9d\x00\x9c\x00\x3d\x00\x3c\x00\x35\x00\x2f\x00\xff"
+    mut body := NewBuf(512 + n)
+    _put16(body, 0x0303)
+    _put_random(body, 32)
+    BufAppendByte(body, 32)
+    _put_random(body, 32)
+    _put16(body, 56)
+    BufAppend(body, suites as void*, 56)
+    BufAppendByte(body, 1)
+    BufAppendByte(body, 0)
+    _put16(body, ext.len)
+    BufAppend(body, ext.p, ext.len)
+    BufAppendByte(out, 0x16)
+    _put16(out, 0x0301)
+    _put16(out, body.len + 4)
+    BufAppendByte(out, 1)
+    BufAppendByte(out, 0)
+    _put16(out, body.len)
+    BufAppend(out, body.p, body.len)
+    BufFree(ext)
+    BufFree(body)
+end
+
+func _tls_server_hello(out &: Buf):
+    BufAppendByte(out, 0x16)
+    _put16(out, 0x0303)
+    _put16(out, 91)
+    BufAppendByte(out, 2)
+    BufAppendByte(out, 0)
+    _put16(out, 87)
+    _put16(out, 0x0303)
+    _put_random(out, 32)
+    BufAppendByte(out, 32)
+    _put_random(out, 32)
+    _put16(out, 0xcca8)
+    BufAppendByte(out, 0)
+    _put16(out, 15)
+    _put16(out, 0x0017)
+    _put16(out, 0)
+    _put16(out, 0xff01)
+    _put16(out, 1)
+    BufAppendByte(out, 0)
+    _put16(out, 0x000b)
+    _put16(out, 2)
+    BufAppendByte(out, 1)
+    BufAppendByte(out, 0)
+    BufAppendByte(out, 0x14)
+    _put16(out, 0x0303)
+    _put16(out, 1)
+    BufAppendByte(out, 1)
+    BufAppendByte(out, 0x16)
+    _put16(out, 0x0303)
+    _put16(out, 32)
+    _put_random(out, 32)
+end
+
+func _tls_records(p: void*, n: int, out &: Buf):
+    mut off := 0
+    until off < n:
+        mut take := n - off
+        if take > TLS_RECORD_MAX:
+            take = TLS_RECORD_MAX
+        end
+        BufAppendByte(out, 0x17)
+        _put16(out, 0x0303)
+        _put16(out, take)
+        BufAppend(out, _at(p, off), take)
+        off += take
+    end
+end
+
+func _http_unwrap(o &: Obfs, out &: Buf): int:
+    if o.got_first:
+        BufAppend(out, o.rx.p, o.rx.len)
+        o.rx.len = 0
+        ret 1
+    end
+    e := _find(o.rx.p, o.rx.len, "\r\n\r\n")
+    if e < 0:
+        if o.rx.len > 8192:
+            ret 0 - 1
+        end
+        ret 1
+    end
+    if o.server:
+        k := _find(o.rx.p, e, "Sec-WebSocket-Key:")
+        if k >= 0:
+            mut j := k + 18
+            until j < e and _getb(o.rx.p, j) == 32:
+                j += 1
+            end
+            mut z := j
+            until z < e and _getb(o.rx.p, z) != 13:
+                z += 1
+            end
+            o.ws_key = _cstr(_at(o.rx.p, j), z - j)
+        end
+    end
+    o.got_first = true
+    BufConsume(o.rx, e + 4)
+    BufAppend(out, o.rx.p, o.rx.len)
+    o.rx.len = 0
+    ret 1
+end
+
+func _tls_find_ticket(p: void*, n: int, out &: Buf): int:
+    if n < 5:
+        ret 1
+    end
+    if _getb(p, 0) != 0x16:
+        ret 0 - 1
+    end
+    rl := _getb(p, 3) * 256 + _getb(p, 4)
+    if n < 5 + rl:
+        ret 1
+    end
+    mut o := 5 + 4 + 2 + 32
+    if o + 1 > 5 + rl:
+        ret 0 - 1
+    end
+    o += 1 + _getb(p, o)
+    if o + 2 > 5 + rl:
+        ret 0 - 1
+    end
+    o += 2 + _getb(p, o) * 256 + _getb(p, o + 1)
+    if o + 1 > 5 + rl:
+        ret 0 - 1
+    end
+    o += 1 + _getb(p, o)
+    if o + 2 > 5 + rl:
+        ret 0 - 1
+    end
+    elen := _getb(p, o) * 256 + _getb(p, o + 1)
+    o += 2
+    end0 := o + elen
+    if end0 > 5 + rl:
+        ret 0 - 1
+    end
+    until o + 4 <= end0:
+        et := _getb(p, o) * 256 + _getb(p, o + 1)
+        el := _getb(p, o + 2) * 256 + _getb(p, o + 3)
+        if o + 4 + el > end0:
+            ret 0 - 1
+        end
+        if et == 0x0023:
+            BufAppend(out, _at(p, o + 4), el)
+        end
+        o += 4 + el
+    end
+    ret 5 + rl
+end
+
+func _tls_step(o &: Obfs, out &: Buf): int:
+    if o.rx.len == 0:
+        ret 1
+    end
+    if o.frame_left > 0:
+        mut take := o.frame_left
+        if take > o.rx.len:
+            take = o.rx.len
+        end
+        BufAppend(out, o.rx.p, take)
+        BufConsume(o.rx, take)
+        o.frame_left -= take
+        ret 2
+    end
+    if not o.got_first:
+        if o.server:
+            c := _tls_find_ticket(o.rx.p, o.rx.len, out)
+            if c < 0:
+                ret 0 - 1
+            end
+            if c == 1:
+                ret 1
+            end
+            BufConsume(o.rx, c)
+            o.got_first = true
+            ret 2
+        end
+        if o.rx.len < 5:
+            ret 1
+        end
+        t := _getb(o.rx.p, 0)
+        rl := _getb(o.rx.p, 3) * 256 + _getb(o.rx.p, 4)
+        if t == 0x14 or t == 0x16:
+            if o.rx.len < 5 + rl:
+                ret 1
+            end
+            BufConsume(o.rx, 5 + rl)
+            ret 2
+        end
+        if t == 0x17:
+            o.got_first = true
+            ret 2
+        end
+        ret 0 - 1
+    end
+    if o.rx.len < 5:
+        ret 1
+    end
+    if _getb(o.rx.p, 0) != 0x17:
+        ret 0 - 1
+    end
+    o.frame_left = _getb(o.rx.p, 3) * 256 + _getb(o.rx.p, 4)
+    BufConsume(o.rx, 5)
+    ret 2
+end
+
+func _tls_unwrap(o &: Obfs, out &: Buf): int:
+    mut r := 2
+    until r == 2:
+        r = _tls_step(o, out)
+    end
+    ret r
+end
+
+@en "ObfsWrap"
+@fa "پوشاندن داده"
+pub func ObfsWrap(o &: Obfs, p: void*, n: int, out &: Buf):
+    if o.mode == OBFS_NONE:
+        BufAppend(out, p, n)
+        ret
+    end
+    if o.mode == OBFS_HTTP:
+        if o.sent_first:
+            BufAppend(out, p, n)
+            ret
+        end
+        o.sent_first = true
+        if o.server:
+            accept := crypto.Sha1Base64(o.ws_key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11")
+            hdr := "HTTP/1.1 101 Switching Protocols\r\nServer: nginx/1." + str.FromInt((10 + _rand_int(10)) as i64) + "." + str.FromInt(_rand_int(10) as i64) + "\r\nDate: Mon, 09 Nov 2026 10:00:00 GMT\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: " + accept + "\r\n\r\n"
+            BufAppendStr(out, hdr)
+        else:
+            hdr := "GET / HTTP/1.1\r\nHost: " + o.host + "\r\nUser-Agent: curl/7." + str.FromInt((50 + _rand_int(30)) as i64) + "." + str.FromInt(_rand_int(10) as i64) + "\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: " + _rand_b64(16) + "\r\nContent-Length: " + str.FromInt(n as i64) + "\r\n\r\n"
+            BufAppendStr(out, hdr)
+        end
+        BufAppend(out, p, n)
+        ret
+    end
+    if not o.sent_first:
+        o.sent_first = true
+        if o.server:
+            _tls_server_hello(out)
+            _tls_records(p, n, out)
+        else:
+            if n > 8000:
+                _tls_ext_hello(o.host, p, 8000, out)
+                _tls_records(_at(p, 8000), n - 8000, out)
+            else:
+                _tls_ext_hello(o.host, p, n, out)
+            end
+        end
+        ret
+    end
+    _tls_records(p, n, out)
+end
+
+@en "ObfsUnwrap"
+@fa "برداشتن پوشش"
+pub func ObfsUnwrap(o &: Obfs, p: void*, n: int, out &: Buf): int:
+    if o.mode == OBFS_NONE:
+        BufAppend(out, p, n)
+        ret 1
+    end
+    BufAppend(o.rx, p, n)
+    if o.mode == OBFS_HTTP:
+        ret _http_unwrap(o, out)
+    end
+    ret _tls_unwrap(o, out)
+end
+
+@en "ObfsInit"
+@fa "آماده سازی پوشش"
+pub func ObfsInit(mode: int, server: bool, host: str): Obfs:
+    mut o := Obfs { mode = mode, server = server, host = host }
+    o.rx = NewBuf(1024)
+    ret o
+end
+
+@en "ObfsFree"
+@fa "آزادسازی پوشش"
+pub func ObfsFree(o &: Obfs):
+    BufFree(o.rx)
+end
+
+@en "ObfsMode"
+@fa "حالت پوشش"
+pub func ObfsMode(name: str): int:
+    if name == "http":
+        ret OBFS_HTTP
+    end
+    if name == "tls":
+        ret OBFS_TLS
+    end
+    ret OBFS_NONE
+end

@@ -20,9 +20,48 @@ import net.tcp
 import net.internal.rawsock
 import sync
 import pool
+import net.tunnel
 
 const RD_SIZE := 32768
 const WR_SLICE := 65536
+
+struct SsStream:
+    pub c: Conn = Conn {}
+
+    pub func Read(max: int): str:
+        ret _cread_str(this.c, max)
+    end
+
+    pub func ReadBytes(buf: void*, max: int): int:
+        ret _cread(this.c, buf, max)
+    end
+
+    pub func Write(data: str): int:
+        ret _cwrite_str(this.c, data)
+    end
+
+    pub func WriteBytes(ptr: void*, n: int): int:
+        ret _cwrite(this.c, ptr, n)
+    end
+
+    pub func SetDeadline(millis: int):
+        if this.c.st != null and not this.c.st.use_up:
+            tcp.SetDeadline(this.c.st.sock, millis)
+        end
+    end
+
+    pub func Shutdown():
+        _cshut(this.c)
+    end
+
+    pub func Close():
+        _cclose(this.c)
+    end
+
+    pub func Ok(): bool:
+        ret this.c.st != null
+    end
+end
 
 @en "Config"
 @fa "پیکربندی"
@@ -86,6 +125,21 @@ pub struct ConnState:
     @en "obfs"
     @fa "پوشش"
     pub obfs: Obfs = Obfs {}
+    @en "up"
+    @fa "جریان زیرین"
+    pub up: dyn tunnel.Stream = tunnel.TcpStream {}
+    @en "use_up"
+    @fa "استفاده از جریان زیرین"
+    pub use_up: bool = false
+    @en "obuf"
+    @fa "خروجی پوشش"
+    pub obuf: Buf = Buf {}
+    @en "oin"
+    @fa "ورودی پوشش"
+    pub oin: Buf = Buf {}
+    @en "rd2"
+    @fa "خواندن خام"
+    pub rd2: void* = null
     @en "live"
     @fa "زنده"
     pub live: bool = false
@@ -99,10 +153,39 @@ pub struct Conn:
     pub st: ConnState* = null
 end
 
-func _tx(st: ConnState*, p: void*, n: int): bool:
+func _cread(c: Conn, buf: void*, max: int): int:
+    ret Read(c, buf, max)
+end
+
+func _cread_str(c: Conn, max: int): str:
+    ret ReadStr(c, max)
+end
+
+func _cwrite(c: Conn, p: void*, n: int): int:
+    ret Write(c, p, n)
+end
+
+func _cwrite_str(c: Conn, d: str): int:
+    ret WriteStr(c, d)
+end
+
+func _cshut(c: Conn):
+    Shutdown(c)
+end
+
+func _cclose(c: Conn):
+    Close(c)
+end
+
+func _rawtx(st: ConnState*, p: void*, n: int): bool:
     mut off := 0
     until off < n:
-        w := tcp.WriteBytes(st.sock, _at(p, off), n - off)
+        mut w := 0
+        if st.use_up:
+            w = st.up.WriteBytes(_at(p, off), n - off)
+        else:
+            w = tcp.WriteBytes(st.sock, _at(p, off), n - off)
+        end
         if w <= 0:
             ret false
         end
@@ -111,19 +194,66 @@ func _tx(st: ConnState*, p: void*, n: int): bool:
     ret true
 end
 
-func _rx(st: ConnState*, buf: void*, max: int): int:
+func _rawrx(st: ConnState*, buf: void*, max: int): int:
+    if st.use_up:
+        ret st.up.ReadBytes(buf, max)
+    end
     ret tcp.ReadBytes(st.sock, buf, max)
 end
 
-func _new_state(sock: tcp.Conn, m: Method, key: Buf): ConnState*:
+func _tx(st: ConnState*, p: void*, n: int): bool:
+    if st.obfs.mode == OBFS_NONE:
+        ret _rawtx(st, p, n)
+    end
+    st.obuf.len = 0
+    ObfsWrap(st.obfs, p, n, st.obuf)
+    ret _rawtx(st, st.obuf.p, st.obuf.len)
+end
+
+func _rx(st: ConnState*, buf: void*, max: int): int:
+    if st.obfs.mode == OBFS_NONE:
+        ret _rawrx(st, buf, max)
+    end
+    until st.oin.len == 0:
+        n := _rawrx(st, st.rd2, RD_SIZE)
+        if n <= 0:
+            ret n
+        end
+        if ObfsUnwrap(st.obfs, st.rd2, n, st.oin) < 0:
+            ret 0 - 1
+        end
+    end
+    mut take := st.oin.len
+    if take > max:
+        take = max
+    end
+    mem.Copy(buf, st.oin.p, take as u64)
+    BufConsume(st.oin, take)
+    ret take
+end
+
+func _raw_shutdown(st: ConnState*):
+    if st.use_up:
+        st.up.Shutdown()
+    else:
+        rawsock.Shutdown(rawsock.Socket { fd = st.sock.fd })
+    end
+end
+
+func _new_state(m: Method, key: Buf, obfs_mode: int, server: bool, host: str): ConnState*:
     st := mem.AllocateZeroed(sizeof(ConnState) as u64) as ConnState*
-    st.sock = sock
     st.method = m
     st.key = key
     st.plain = NewBuf(RD_SIZE)
     st.out = NewBuf(4096)
     st.pending = NewBuf(300)
     st.rd = mem.Allocate(RD_SIZE as u64)
+    st.obfs = ObfsInit(obfs_mode, server, host)
+    if obfs_mode != OBFS_NONE:
+        st.obuf = NewBuf(4096)
+        st.oin = NewBuf(4096)
+        st.rd2 = mem.Allocate(RD_SIZE as u64)
+    end
     st.live = true
     ret st
 end
@@ -139,6 +269,12 @@ func _free_state(st: ConnState*):
     BufFree(st.plain)
     BufFree(st.out)
     BufFree(st.pending)
+    ObfsFree(st.obfs)
+    BufFree(st.obuf)
+    BufFree(st.oin)
+    if st.rd2 != null:
+        mem.Free(st.rd2)
+    end
     if st.rd != null:
         mem.Free(st.rd)
     end
@@ -190,6 +326,29 @@ func _fill(st: ConnState*): int:
         end
     end
     ret res
+end
+
+func _client_state(cfg: Config, target_host: str, target_port: int): ConnState*:
+    m := LookupMethod(cfg.method)
+    if not m.ok or m.v2022:
+        ret null
+    end
+    key := MakeKey(m, cfg.password)
+    if key.bad:
+        ret null
+    end
+    st := _new_state(m, key, ObfsMode(cfg.obfs), false, cfg.obfs_host)
+    mut hdr := NewBuf(300)
+    if not EncodeTarget(target_host, target_port, hdr):
+        BufFree(hdr)
+        _free_state(st)
+        ret null
+    end
+    BufAppend(st.pending, hdr.p, hdr.len)
+    BufFree(hdr)
+    st.enc = NewEncoderRandom(m, key.p)
+    st.dec = NewDecoder(m, key.p)
+    ret st
 end
 
 @en "Ok"
@@ -281,8 +440,12 @@ pub func Close(c: Conn):
     if st == null:
         ret
     end
-    rawsock.Shutdown(rawsock.Socket { fd = st.sock.fd })
-    tcp.Close(st.sock)
+    _raw_shutdown(st)
+    if st.use_up:
+        st.up.Close()
+    else:
+        tcp.Close(st.sock)
+    end
     _free_state(st)
 end
 
@@ -292,42 +455,39 @@ pub func Shutdown(c: Conn):
     if c.st == null:
         ret
     end
-    rawsock.Shutdown(rawsock.Socket { fd = c.st.sock.fd })
-end
-
-@en "Wrap"
-@fa "پوشاندن"
-pub func Wrap(sock: tcp.Conn, m: Method, key: Buf, target_host: str, target_port: int): Conn:
-    st := _new_state(sock, m, key)
-    mut hdr := NewBuf(300)
-    if not EncodeTarget(target_host, target_port, hdr):
-        BufFree(hdr)
-        _free_state(st)
-        ret Conn {}
-    end
-    BufAppend(st.pending, hdr.p, hdr.len)
-    BufFree(hdr)
-    st.enc = NewEncoderRandom(m, key.p)
-    st.dec = NewDecoder(m, key.p)
-    ret Conn { st = st }
+    _raw_shutdown(c.st)
 end
 
 @en "Dial"
 @fa "اتصال"
 pub func Dial(cfg: Config, target_host: str, target_port: int): Conn:
-    m := LookupMethod(cfg.method)
-    if not m.ok or m.v2022:
-        ret Conn {}
-    end
-    key := MakeKey(m, cfg.password)
-    if key.bad:
+    st := _client_state(cfg, target_host, target_port)
+    if st == null:
         ret Conn {}
     end
     sock := tcp.Dial(cfg.host, cfg.port)
     if not tcp.ConnOk(sock):
-        mut k := key
-        BufFree(k)
+        _free_state(st)
         ret Conn {}
     end
-    ret Wrap(sock, m, key, target_host, target_port)
+    st.sock = sock
+    ret Conn { st = st }
+end
+
+@en "DialOver"
+@fa "اتصال روی جریان"
+pub func DialOver(s: dyn tunnel.Stream, cfg: Config, target_host: str, target_port: int): Conn:
+    st := _client_state(cfg, target_host, target_port)
+    if st == null:
+        ret Conn {}
+    end
+    st.up = s
+    st.use_up = true
+    ret Conn { st = st }
+end
+
+@en "AsStream"
+@fa "به عنوان جریان"
+pub func AsStream(c: Conn): dyn tunnel.Stream:
+    ret SsStream { c = c }
 end

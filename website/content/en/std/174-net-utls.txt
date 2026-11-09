@@ -1,0 +1,112 @@
+pkg.en = net/utls
+pkg.name = net.utls
+pkg.group = Network
+pkg.summary = TLS ClientHello fingerprints: build the first message of a TLS 1.3 handshake in the byte layout of Chrome, Firefox or Safari, compute JA3 strings, and run a handshake from it.
+pkg.title = The net.utls package in Salam | TLS ClientHello fingerprints
+pkg.description = The net.utls package in Salam: browser-like TLS ClientHello builders with GREASE, extension order, key shares and padding, a randomized order, JA3 strings, a TLS 1.3 handshake from a custom hello, and honest limits, with examples.
+pkg.import = net.utls
+pkg.intro <<
+<p>A firewall that cannot read your traffic can still read your first message. The ClientHello of a TLS connection lists the cipher suites, the extensions and their order, the curves and the signature algorithms the client supports, and every TLS library lists them in its own way. That list is a fingerprint (JA3 is the best known way to write it down), and a proxy client that uses the default list of its TLS library has a fingerprint no browser has. This package builds the ClientHello itself, from a description that you can read and change, so that it has the layout of a browser.</p>
+<p><code>Profile</code> returns a <code>Spec</code> for a client family. <code>Build</code> turns a spec and some <code>Options</code> (the server name, the ALPN list, whether to shuffle the extensions) into a <code>Hello</code>: the message bytes, with a fresh random, a fresh x25519 key pair and a random session id. <code>WrapClient</code> then runs a TLS 1.3 handshake on a connected socket with that hello and returns an ordinary <code>tls.Conn</code>. <code>JA3</code> writes down the fingerprint of any hello, and <code>Record</code> wraps it into a TLS record, for example to hand it to the fragmenting helpers of <a href="/std/net/censor/">net.censor</a>. <a href="/std/net/reality/">net.reality</a> uses this package for the hello it seals its proof into.</p>
+
+<h3 id="profiles">The profiles</h3>
+<div class="table-wrap"><table>
+<thead><tr><th>Name</th><th>Meant to look like</th></tr></thead>
+<tbody>
+<tr><td><code>chrome</code>, <code>edge</code></td><td>A recent Chromium: GREASE values, the hybrid post-quantum key share, ECH GREASE, the ALPS extension, certificate compression, padding to 512 bytes when needed.</td></tr>
+<tr><td><code>chrome_120</code></td><td>A Chromium from before the hybrid key share: no post-quantum group.</td></tr>
+<tr><td><code>firefox</code></td><td>Firefox: no GREASE, the suites in its own order, a secp256r1 key share next to x25519, delegated credentials, record size limit.</td></tr>
+<tr><td><code>safari</code>, <code>ios</code></td><td>Safari and iOS: GREASE, the longer list of older suites, no ECH.</td></tr>
+<tr><td><code>randomized</code></td><td>The Chrome layout with the extensions and the suites shuffled, so that no two hellos have the same JA3.</td></tr>
+</tbody></table></div>
+<p>These are <strong>approximations written from memory of what these clients send</strong>, not captures. A comparison with a capture of the real browser was not possible here. The structure was checked in two ways: the hellos parse with <code>net.censor.ParseClientHello</code>, and they complete a real TLS 1.3 handshake with the <a href="/std/tls/">tls</a> server. Browsers change their hello with each release, so treat a profile as a starting point and edit the <code>Spec</code> (it is plain text lists) to match the browser you want to look like.</p>
+
+<h3 id="spec">How a spec is written</h3>
+<p>The lists in a <code>Spec</code> are text of hexadecimal numbers separated by spaces. <code>g0</code> to <code>g4</code> are GREASE slots that become a random reserved value (<code>0a0a</code>, <code>1a1a</code> and so on); <code>pad</code> marks where the padding extension goes. <code>extensions</code> is the order on the wire; <code>0000</code> is the server name, <code>0010</code> ALPN, <code>0033</code> the key share, <code>fe0d</code> ECH GREASE and so on. <code>key_shares</code> says which shares to send: <code>001d</code> is x25519 with the key pair of the hello, <code>0017</code> is a secp256r1 share with random bytes, <code>11ec</code> is X25519MLKEM768.</p>
+
+<h3 id="pitfalls">What trips people up</h3>
+<ul>
+<li><strong>The key shares other than x25519 have no key behind them.</strong> The secp256r1 share is random bytes, and the ML-KEM part of the hybrid share is a well formed random encapsulation key. A server that picks one of those groups cannot finish the handshake with you; it can for x25519. Pass <code>pq = false</code> to leave the hybrid group out of the hello completely.</li>
+<li><strong>The hello offers ALPN <code>h2</code> by default.</strong> If the server picks it you are talking to something that expects HTTP/2. For a proxy transport set <code>alpn = "http/1.1"</code>, or <code>"none"</code> to leave the extension out.</li>
+<li><strong>Some bytes are random on purpose.</strong> GREASE values, the ECH length, the random, the session id and the key shares change with every <code>Build</code>. JA3 ignores GREASE and key bytes, so the JA3 of a profile is stable.</li>
+<li><strong>Only TLS 1.3, and no HelloRetryRequest.</strong> The handshake from a custom hello fails with a clear message if the server wants a different group or only speaks TLS 1.2.</li>
+<li><strong>Free the hello.</strong> A <code>Hello</code> owns its buffers: call <code>FreeHello</code> when you are done.</li>
+</ul>
+
+<h2 id="guide-profiles">Building a hello and reading its JA3</h2>
+<p>The example builds one hello for each of three profiles with the hybrid share left out, and prints the JA3 strings. A JA3 string is the version, the cipher suites, the extension ids, the curves and the point formats, each as decimal numbers, with GREASE removed. The order of the extension ids is the clearest difference between the profiles.</p>
+{{example.net-utls-guide-profiles}}
+
+<h2 id="guide-handshake">A handshake from a profile</h2>
+<p><code>WrapClient</code> takes a connected socket, a spec, the options and a <code>tls.Config</code>. The certificate is checked the normal way. The result is a <code>tls.Conn</code>, so every <code>tls</code> function and the TLS support of <a href="/std/net/transport/">net.transport</a> work with it.</p>
+{{example.net-utls-guide-handshake}}
+
+<h2 id="guide-limits">Limits</h2>
+<ul>
+<li><strong>The profiles are approximations, not captures.</strong> They were not compared with a live browser, and the real clients change from release to release.</li>
+<li><strong>There is no ML-KEM.</strong> The hybrid share is a placeholder (see above), and a server that selects it breaks the handshake.</li>
+<li><strong>No session resumption and no pre-shared key extension.</strong> The hello is always a first connection.</li>
+<li><strong>The ECH extension is GREASE.</strong> It has the shape of a real one and nothing is encrypted in it.</li>
+<li><strong>The record layer and the handshake are the library's.</strong> The first record has the legacy version <code>0x0301</code> as browsers do, but the lengths and timing of what comes after the hello are those of the <a href="/std/tls/">tls</a> package, not of a browser.</li>
+<li><strong>TLS 1.3 only.</strong> A server that answers with TLS 1.2 fails the handshake.</li>
+</ul>
+>>
+
+doc.Bytes = A byte buffer that this package allocates.
+doc.Bytes.p = The start of the bytes.
+doc.Bytes.len = How many bytes are used.
+doc.Bytes.cap = How many bytes are allocated.
+doc.Spec = The description of a client family's ClientHello.
+doc.Spec.name = The profile name.
+doc.Spec.ciphers = The cipher suites in order, as hex numbers. <code>g0</code> is a GREASE value.
+doc.Spec.extensions = The extension ids in wire order. <code>g1</code> and <code>g4</code> are GREASE extensions and <code>pad</code> is where padding goes.
+doc.Spec.groups = The supported groups in order.
+doc.Spec.key_shares = The key shares to send: <code>001d</code> x25519, <code>0017</code> secp256r1, <code>11ec</code> X25519MLKEM768, <code>g2</code> GREASE.
+doc.Spec.sigalgs = The signature algorithms in order.
+doc.Spec.versions = The supported versions in order, <code>g3</code> for a GREASE value.
+doc.Spec.alpn = The ALPN protocol names, comma separated.
+doc.Spec.cert_compress = The certificate compression algorithms, as hex numbers.
+doc.Spec.delegated = The delegated credential signature algorithms, as hex numbers.
+doc.Spec.record_size_limit = The value of the record size limit extension, 0 when the profile has none.
+doc.Spec.pad_to = Pad the hello to this size when it is between 256 bytes and this size. 0 disables padding.
+doc.Spec.randomize = Shuffle the extensions and the suites on every build.
+doc.Spec.ok = False for an unknown profile name.
+doc.Options = What changes between two hellos of the same profile.
+doc.Options.server_name = The server name, empty for none.
+doc.Options.alpn = Replaces the ALPN list, comma separated. <code>none</code> removes the extension. Empty keeps the profile's list.
+doc.Options.shuffle = Shuffle the extension order, keeping the GREASE extensions at both ends and the padding last.
+doc.Options.pq = Include the hybrid post-quantum group and its key share. False leaves them out.
+doc.Options.ech = Include the ECH GREASE extension if the profile has it.
+doc.Options.padding = Add the padding extension if the profile has one.
+doc.Hello = A built ClientHello and the key pair that goes with it.
+doc.Hello.raw = The handshake message, from the type byte on, without the record header.
+doc.Hello.priv = The x25519 private key of the key share.
+doc.Hello.pub_key = The x25519 public key of the key share.
+doc.Hello.ok = The hello was built.
+doc.Hello.err = Why it was not built.
+doc.Profile = The spec of a named profile. Check <code>ok</code>.
+doc.ProfileNames = The profile names, comma separated.
+doc.Build = Builds a hello from a spec and options, with a fresh random, key pair and session id.
+doc.Record = The hello wrapped in a TLS record (type 22, version 0x0301).
+doc.JA3 = The JA3 text of a hello: version, suites, extensions, groups and point formats, GREASE removed.
+doc.SessionIdOffset = Where the 32 byte session id starts inside <code>raw</code>.
+doc.SetSessionId = Overwrites the 32 byte session id of a built hello.
+doc.WrapClient = Builds a hello and runs a TLS 1.3 client handshake with it on a connected socket.
+doc.ToHex = The bytes as lowercase hex.
+doc.FreeBytes = Releases a buffer.
+doc.FreeHello = Releases the buffers of a hello.
+ex.Bytes = -
+ex.Spec = -
+ex.Options = -
+ex.Hello = -
+ex.Profile = -
+ex.ProfileNames = -
+ex.Build = -
+ex.Record = -
+ex.JA3 = net-utls-guide-profiles
+ex.SessionIdOffset = -
+ex.SetSessionId = -
+ex.WrapClient = -
+ex.ToHex = -
+ex.FreeBytes = -
+ex.FreeHello = -

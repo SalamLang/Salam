@@ -1,0 +1,338 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package shadowsocks
+
+import str
+import encoding
+
+@en "Plugin"
+@fa "افزونه"
+pub struct Plugin:
+    @en "name"
+    @fa "نام"
+    pub name: str = ""
+    @en "keys"
+    @fa "کلیدها"
+    pub keys: Vector<str> = Vector {} as Vector<str>
+    @en "values"
+    @fa "مقدارها"
+    pub values: Vector<str> = Vector {} as Vector<str>
+end
+
+@en "Uri"
+@fa "نشانی"
+pub struct Uri:
+    @en "method"
+    @fa "روش"
+    pub method: str = ""
+    @en "password"
+    @fa "گذرواژه"
+    pub password: str = ""
+    @en "host"
+    @fa "میزبان"
+    pub host: str = ""
+    @en "port"
+    @fa "درگاه"
+    pub port: int = 0
+    @en "plugin"
+    @fa "افزونه"
+    pub plugin: str = ""
+    @en "tag"
+    @fa "برچسب"
+    pub tag: str = ""
+    @en "ok"
+    @fa "معتبر"
+    pub ok: bool = false
+end
+
+func _b64_decode(s0: str): str:
+    mut s := str.Replace(str.Replace(s0, "-", "+"), "_", "/")
+    mut pad := (4 - s.len() % 4) % 4
+    until pad > 0:
+        s = s + "="
+        pad -= 1
+    end
+    mut out := ""
+    try:
+        out = encoding.Base64Decode(s)
+    catch:
+        out = ""
+    end
+    ret out
+end
+
+func _b64url_encode(s: str): str:
+    mut e := encoding.Base64Encode(s)
+    e = str.Replace(str.Replace(e, "+", "-"), "/", "_")
+    ret str.TrimSuffix(str.TrimSuffix(e, "="), "=")
+end
+
+func _pct_decode(s: str): str:
+    mut out := s
+    try:
+        out = encoding.URLDecode(s)
+    catch:
+        out = s
+    end
+    ret out
+end
+
+func _split_hostport(hp: str, host &: str, port &: int): bool:
+    n := hp.len()
+    if n < 3:
+        ret false
+    end
+    mut cut := 0 - 1
+    mut i := n - 1
+    until i >= 0 and cut < 0:
+        if _getb(hp as void*, i) == 58:
+            cut = i
+        end
+        i -= 1
+    end
+    if cut <= 0 or cut >= n - 1:
+        ret false
+    end
+    mut h := str.Substr(hp, 0, cut)
+    if h.len() >= 2 and _getb(h as void*, 0) == 91 and _getb(h as void*, h.len() - 1) == 93:
+        h = str.Substr(h, 1, h.len() - 2)
+    end
+    ps := str.Substr(hp, cut + 1, n - cut - 1)
+    pv := str.ToInt(ps)
+    if pv <= 0 or pv > 65535 or h == "":
+        ret false
+    end
+    host = h
+    port = pv
+    ret true
+end
+
+func _split_creds(c: str, method &: str, password &: str): bool:
+    k := str.IndexOf(c, ":")
+    if k <= 0:
+        ret false
+    end
+    method = str.Substr(c, 0, k)
+    password = str.Substr(c, k + 1, c.len() - k - 1)
+    ret true
+end
+
+func _find_char(s: str, ch: int, from: int): int:
+    n := s.len()
+    mut i := from
+    until i < n:
+        if _getb(s as void*, i) == ch:
+            ret i
+        end
+        i += 1
+    end
+    ret 0 - 1
+end
+
+func _query_param(q: str, name: str): str:
+    mut start := 0
+    n := q.len()
+    until start < n:
+        mut e := _find_char(q, 38, start)
+        if e < 0:
+            e = n
+        end
+        part := str.Substr(q, start, e - start)
+        eqi := _find_char(part, 61, 0)
+        if eqi > 0 and str.Substr(part, 0, eqi) == name:
+            ret _pct_decode(str.Substr(part, eqi + 1, part.len() - eqi -1))
+        end
+        start = e + 1
+    end
+    ret ""
+end
+
+@en "ParseUri"
+@fa "تجزیه نشانی"
+pub func ParseUri(text: str): Uri:
+    mut u := Uri {}
+    if not str.StartsWith(text, "ss://"):
+        ret u
+    end
+    mut s := str.Substr(text, 5, text.len() - 5)
+    h := _find_char(s, 35, 0)
+    if h >= 0:
+        u.tag = _pct_decode(str.Substr(s, h + 1, s.len() - h - 1))
+        s = str.Substr(s, 0, h)
+    end
+    mut query := ""
+    q := _find_char(s, 63, 0)
+    if q >= 0:
+        query = str.Substr(s, q + 1, s.len() - q - 1)
+        s = str.Substr(s, 0, q)
+    end
+    s = str.TrimSuffix(s, "/")
+    u.plugin = _query_param(query, "plugin")
+    mut at := 0 - 1
+    mut i := s.len() - 1
+    until i >= 0 and at < 0:
+        if _getb(s as void*, i) == 64:
+            at = i
+        end
+        i -= 1
+    end
+    mut creds := ""
+    mut hp := ""
+    if at >= 0:
+        ui := str.Substr(s, 0, at)
+        hp = str.Substr(s, at + 1, s.len() - at - 1)
+        if _find_char(ui, 58, 0) >= 0 or _find_char(ui, 37, 0) >= 0:
+            creds = _pct_decode(ui)
+        else:
+            creds = _b64_decode(ui)
+        end
+    else:
+        dec := _b64_decode(s)
+        k := _find_char(dec, 64, 0)
+        if k < 0:
+            ret u
+        end
+        creds = str.Substr(dec, 0, k)
+        hp = str.Substr(dec, k + 1, dec.len() - k - 1)
+    end
+    if not _split_creds(creds, u.method, u.password):
+        ret u
+    end
+    if not _split_hostport(hp, u.host, u.port):
+        ret u
+    end
+    u.ok = LookupMethod(u.method).ok
+    ret u
+end
+
+@en "FormatUri"
+@fa "قالب بندی نشانی"
+pub func FormatUri(u: Uri): str:
+    mut host := u.host
+    if _find_char(host, 58, 0) >= 0:
+        host = "[" + host + "]"
+    end
+    m := LookupMethod(u.method)
+    mut out := "ss://"
+    if m.v2022:
+        out = out + encoding.URLEncode(u.method) + ":" + encoding.URLEncode(u.password)
+    else:
+        out = out + _b64url_encode(u.method + ":" + u.password)
+    end
+    out = out + "@" + host + ":" + str.FromInt(u.port as i64)
+    if u.plugin != "":
+        out = out + "/?plugin=" + encoding.URLEncode(u.plugin)
+    end
+    if u.tag != "":
+        out = out + "#" + encoding.URLEncode(u.tag)
+    end
+    ret out
+end
+
+@en "ParsePlugin"
+@fa "تجزیه افزونه"
+pub func ParsePlugin(text: str): Plugin:
+    mut p := Plugin {}
+    mut cur := ""
+    mut tokens := Vector {} as Vector<str>
+    defer tokens.free()
+    n := text.len()
+    mut i := 0
+    until i < n:
+        c := _getb(text as void*, i)
+        if c == 92 and i + 1 < n:
+            cur = cur + str.Substr(text, i + 1, 1)
+            i += 2
+        else c == 59:
+            tokens.push(cur)
+            cur = ""
+            i += 1
+        else:
+            cur = cur + str.Substr(text, i, 1)
+            i += 1
+        end
+    end
+    tokens.push(cur)
+    p.name = tokens.get(0)
+    mut t := 1
+    until t < tokens.len():
+        tok := tokens.get(t)
+        mut k := 0 - 1
+        mut j := 0
+        until j < tok.len() and k < 0:
+            if _getb(tok as void*, j) == 61:
+                k = j
+            end
+            j += 1
+        end
+        if k < 0:
+            p.keys.push(tok)
+            p.values.push("")
+        else:
+            p.keys.push(str.Substr(tok, 0, k))
+            p.values.push(str.Substr(tok, k + 1, tok.len() - k - 1))
+        end
+        t += 1
+    end
+    ret p
+end
+
+@en "PluginGet"
+@fa "گرفتن گزینه افزونه"
+pub func PluginGet(p: Plugin, key: str, fallback: str): str:
+    mut i := 0
+    until i < p.keys.len():
+        if p.keys.get(i) == key:
+            ret p.values.get(i)
+        end
+        i += 1
+    end
+    ret fallback
+end
+
+@en "PluginHas"
+@fa "گزینه افزونه موجود است"
+pub func PluginHas(p: Plugin, key: str): bool:
+    mut i := 0
+    until i < p.keys.len():
+        if p.keys.get(i) == key:
+            ret true
+        end
+        i += 1
+    end
+    ret false
+end
+
+@en "PluginFree"
+@fa "آزادسازی افزونه"
+pub func PluginFree(p: Plugin):
+    p.keys.free()
+    p.values.free()
+end
+
+@en "ToConfig"
+@fa "تبدیل به پیکربندی"
+pub func ToConfig(u: Uri): Config:
+    mut cfg := Config { host = u.host, port = u.port, method = u.method, password = u.password }
+    if u.plugin != "":
+        p := ParsePlugin(u.plugin)
+        if p.name == "obfs-local" or p.name == "simple-obfs":
+            cfg.obfs = PluginGet(p, "obfs", "")
+            cfg.obfs_host = PluginGet(p, "obfs-host", "www.bing.com")
+        end
+        PluginFree(p)
+    end
+    ret cfg
+end

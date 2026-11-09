@@ -49,6 +49,9 @@ pub struct ServerState:
     @en "stop"
     @fa "توقف"
     pub stop: i64* = null
+    @en "jobs"
+    @fa "صف اتصال ها"
+    pub jobs: chan.Chan<i64> = chan.Chan {} as chan.Chan<i64>
     @en "obfs_mode"
     @fa "حالت پوشش"
     pub obfs_mode: str = ""
@@ -192,6 +195,8 @@ pub func ListenObfs(port: int, method: str, password: str, obfs: str): Server:
     ss.key = key
     ss.filter = NewSaltFilter(100000)
     ss.workers = pool.NewElastic(2 as i64, 512 as i64, 64 as i64)
+    ss.jobs = chan.Chan {} as chan.Chan<i64>
+    ss.jobs.init(1024 as i64)
     ss.stop = mem.AllocateZeroed(8 as u64) as i64*
     ss.obfs_mode = obfs
     ret Server { st = ss }
@@ -286,8 +291,7 @@ end
 @fa "خدمت"
 pub func Serve(s: Server, handler: func (Conn)):
     ss := s.st
-    mut jobs := chan.Chan {} as chan.Chan<i64>
-    jobs.init(1024 as i64)
+    jobs := ss.jobs
     task := (): _serve_next(ss, handler, jobs) end
     until atomic_load(ss.stop) == 0 as i64:
         raw := tcp.Accept(ss.ls)
@@ -298,8 +302,6 @@ pub func Serve(s: Server, handler: func (Conn)):
             tcp.Close(raw)
         end
     end
-    jobs.close()
-    jobs.free()
 end
 
 @en "ServeRelay"
@@ -332,6 +334,8 @@ pub func Destroy(s: Server):
     end
     tcp.CloseServer(ss.ls)
     pool.Stop(ss.workers)
+    ss.jobs.close()
+    ss.jobs.free()
     FilterFree(ss.filter)
     BufWipe(ss.key)
     BufFree(ss.key)

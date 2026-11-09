@@ -1,0 +1,52 @@
+import net.shadowsocks
+
+func main:
+    m := shadowsocks.LookupMethod("2022-blake3-aes-128-gcm")
+    println m.ok, m.v2022, m.key_len
+    mut key := shadowsocks.MakeKey(m, "AAECAwQFBgcICQoLDA0ODw==")
+    println key.len
+
+    mut client := shadowsocks.NewUdpSession()
+    mut server := shadowsocks.UdpSession {}
+    println client.sid != 0, server.any
+
+    mut packet := shadowsocks.NewBuf(256)
+    println shadowsocks.PackUdp2022(m, key.p, key.p, shadowsocks.Buf {}, 0, client, true, "10.0.0.7", 53, "query" as void*, 5, packet), packet.len > 60
+
+    mut sid := 0 as i64
+    println shadowsocks.Udp2022Peek(m, key.p, packet.p, packet.len, sid), sid == client.sid
+
+    mut target := shadowsocks.Target {}
+    mut body := shadowsocks.NewBuf(64)
+    println shadowsocks.UnpackUdp2022(m, key.p, key.p, 0, false, packet.p, packet.len, server, target, body), target.host, target.port, shadowsocks.BufToStr(body)
+    println server.peer == client.sid, server.last
+
+    println shadowsocks.SessionAccept(server, 5), shadowsocks.SessionAccept(server, 5), shadowsocks.SessionAccept(server, 3), server.top, server.any
+
+    mut chain := shadowsocks.ChainOf(m, "AAECAwQFBgcICQoLDA0ODw==:EBESExQVFhcYGRobHB0eHw==")
+    ipsk := shadowsocks.ChainKey(chain, 0)
+    upsk := shadowsocks.ChainKey(chain, 1)
+    mut multi := shadowsocks.UdpSession { sid = 7 as i64 }
+    mut wire := shadowsocks.NewBuf(256)
+    println shadowsocks.PackUdp2022(m, upsk, ipsk, chain.keys, 1, multi, true, "10.0.0.8", 443, "hello" as void*, 5, wire)
+    mut who := shadowsocks.NewBuf(16)
+    who.len = 16
+    println shadowsocks.Udp2022Identity(m, ipsk, wire.p, wire.len, who.p)
+    mut expected := shadowsocks.NewBuf(16)
+    expected.len = 16
+    shadowsocks.IdentityHash(upsk, m.key_len, expected.p)
+    println shadowsocks.BufToHex(who) == shadowsocks.BufToHex(expected)
+    mut seen := shadowsocks.UdpSession {}
+    mut inner := shadowsocks.NewBuf(64)
+    println shadowsocks.UnpackUdp2022(m, upsk, ipsk, shadowsocks.EIH_LEN, false, wire.p, wire.len, seen, target, inner), shadowsocks.BufToStr(inner)
+    shadowsocks.BufFree(wire)
+    shadowsocks.BufFree(who)
+    shadowsocks.BufFree(expected)
+    shadowsocks.BufFree(inner)
+    shadowsocks.ChainFree(chain)
+
+    shadowsocks.BufFree(packet)
+    shadowsocks.BufFree(body)
+    shadowsocks.BufWipe(key)
+    shadowsocks.BufFree(key)
+end

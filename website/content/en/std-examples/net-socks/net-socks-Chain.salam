@@ -1,0 +1,60 @@
+import net.socks
+import net.tcp
+import net.tunnel
+
+func echo_conn(arg: i64):
+    c := tcp.ConnFromFd(arg)
+    until true:
+        data := tcp.Read(c, 4096)
+        if data.len() == 0:
+            break
+        end
+        tcp.Write(c, data)
+    end
+    tcp.Close(c)
+end
+
+func echo_accept(arg: i64):
+    srv := tcp.Server { fd = arg }
+    until true:
+        c := tcp.Accept(srv)
+        if not tcp.ConnOk(c):
+            break
+        end
+        socks.Go(echo_conn, c.fd as void*)
+    end
+end
+
+func start_echo(): int:
+    listener := tcp.Bind(0)
+    socks.Go(echo_accept, listener.fd as void*)
+    ret tcp.Port(listener)
+end
+
+func main:
+    echo := start_echo()
+    first := socks.Start(socks.NewServerConfig(0))
+    second := socks.Start(socks.NewServerConfig(0))
+
+    hop := socks.Connect(socks.NewClient("127.0.0.1", first.port), "127.0.0.1", second.port)
+    println "first hop:", hop.ok
+    onward := socks.ClientHandshake(hop.stream, socks.NewClient("", 0), socks.CmdConnect, "127.0.0.1", echo)
+    println "second hop:", onward.ok
+    hop.stream.Write("through two proxies")
+    println hop.stream.Read(100)
+    hop.stream.Close()
+
+    mut chain := tunnel.NewChain(tunnel.Direct())
+    tunnel.ChainAdd(chain, socks.NewConnector(socks.NewClient("127.0.0.1", first.port)))
+    tunnel.ChainAdd(chain, socks.NewConnector(socks.NewClient("127.0.0.1", second.port)))
+    println chain.Name()
+    s := chain.Dial(tunnel.NewAddr("127.0.0.1", echo))
+    s.Write("same thing with a chain")
+    println s.Read(100)
+    s.Close()
+
+    connector := socks.NewConnector(socks.NewClient("127.0.0.1", first.port))
+    println connector.Name(), connector.Server().String() == "127.0.0.1:" + first.port
+    socks.Stop(first)
+    socks.Stop(second)
+end

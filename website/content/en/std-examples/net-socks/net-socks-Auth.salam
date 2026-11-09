@@ -1,0 +1,57 @@
+import net.socks
+import net.tcp
+
+func echo_conn(arg: i64):
+    c := tcp.ConnFromFd(arg)
+    until true:
+        data := tcp.Read(c, 4096)
+        if data.len() == 0:
+            break
+        end
+        tcp.Write(c, data)
+    end
+    tcp.Close(c)
+end
+
+func echo_accept(arg: i64):
+    srv := tcp.Server { fd = arg }
+    until true:
+        c := tcp.Accept(srv)
+        if not tcp.ConnOk(c):
+            break
+        end
+        socks.Go(echo_conn, c.fd as void*)
+    end
+end
+
+func start_echo(): int:
+    listener := tcp.Bind(0)
+    socks.Go(echo_accept, listener.fd as void*)
+    ret tcp.Port(listener)
+end
+
+func say(label: str, r: socks.ConnectResult):
+    println label + ": ok=" + r.ok + " code=" + r.code + " " + r.err
+end
+
+func main:
+    echo := start_echo()
+
+    mut config := socks.NewServerConfig(0)
+    socks.AddUser(config, "alice", "s3cret")
+    println config.require_auth
+    server := socks.Start(config)
+
+    say("right password", socks.Connect(socks.NewClientAuth("127.0.0.1", server.port, "alice", "s3cret"), "127.0.0.1", echo))
+    say("wrong password", socks.Connect(socks.NewClientAuth("127.0.0.1", server.port, "alice", "nope"), "127.0.0.1", echo))
+    say("no credentials", socks.Connect(socks.NewClient("127.0.0.1", server.port), "127.0.0.1", echo))
+    socks.Stop(server)
+
+    mut custom := socks.NewServerConfig(0)
+    socks.SetAuth(custom, (user: str, password: str): ret user == "bob" and password == "pw" end)
+    println custom.has_auth
+    second := socks.Start(custom)
+    say("callback accepts", socks.Connect(socks.NewClientAuth("127.0.0.1", second.port, "bob", "pw"), "127.0.0.1", echo))
+    say("callback refuses", socks.Connect(socks.NewClientAuth("127.0.0.1", second.port, "bob", "xx"), "127.0.0.1", echo))
+    socks.Stop(second)
+end

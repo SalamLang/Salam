@@ -1,0 +1,410 @@
+pkg.en = net/socks
+pkg.name = net.socks
+pkg.group = Network
+pkg.summary = SOCKS4, SOCKS4a and SOCKS5: a client with login, BIND and UDP associate, a server with users, access rules and a pluggable way to reach targets, and a connector for proxy chains.
+pkg.title = The net.socks package in Salam | SOCKS4 and SOCKS5 proxy
+pkg.description = The net.socks package in Salam: a SOCKS4, SOCKS4a and SOCKS5 client and server, user and password login, CONNECT, BIND and UDP associate, access rules, proxy chains and the wire codec, with examples.
+pkg.import = net.socks
+pkg.intro <<
+<p>SOCKS is the plain, widely supported proxy protocol: a program asks a proxy to connect somewhere on its behalf and then talks through the connection as if it were direct. This package has both sides. <code>Connect</code> is the client; <code>Start</code> runs a server. It also plugs into <a href="/std/net/tunnel/">net.tunnel</a>, as a <code>Socks5Inbound</code> or <code>Socks4Inbound</code> that can share one port with an HTTP proxy, and as a <code>SocksConnector</code> that is one hop of a proxy chain.</p>
+<p>Core ideas:</p>
+<ul>
+<li>A client is a value: <code>NewClient</code> or <code>NewClientAuth</code> fills a <code>Client</code>, and <code>Connect</code> returns a <code>ConnectResult</code> with a stream. Failure is a value too: <code>ok</code> is false and <code>code</code> and <code>err</code> say why.</li>
+<li>SOCKS5 is the default. Set <code>version</code> to <code>Socks4</code> or <code>Socks4a</code> for older servers. SOCKS4 sends an IPv4 address; SOCKS4a lets the server resolve a name.</li>
+<li>A name sent to a SOCKS5 or SOCKS4a proxy is resolved <em>by the proxy</em>, so the lookup does not happen on your machine.</li>
+<li>A server is a <code>ServerConfig</code> given to <code>Start</code>. How it reaches targets is a callback (<code>SetConnector</code>) or a <code>tunnel.Dialer</code> (<code>SetDialer</code>), which is how it is joined to routing rules and proxy chains.</li>
+<li><code>Associate</code> opens a UDP relay and <code>Bind</code> waits for an incoming connection. Both are SOCKS5 features the server can switch off.</li>
+</ul>
+<p>Things that catch people out:</p>
+<ul>
+<li><strong>A server listens on all IPv4 addresses.</strong> <code>Start</code> binds the port on every interface, not only loopback. A SOCKS server without a login that is reachable from outside is an open proxy anyone can abuse. Require a user (<code>AddUser</code>), restrict it with a firewall, or put it behind a tunnel.</li>
+<li><strong>The login is not encrypted.</strong> SOCKS5 user name and password travel in clear text. Use it on a local port or through an encrypted tunnel, or set <code>tls</code> when the proxy is reachable over TLS. The server side of this package speaks plain TCP only.</li>
+<li><strong>SOCKS4 has no passwords.</strong> A server that requires logins refuses SOCKS4 clients, and <code>allow_v4</code> can switch SOCKS4 off.</li>
+<li><strong><code>allow_bind</code> is off by default</strong> because BIND makes the proxy open a listening port for the client, and a UDP relay does the same with a UDP port. Those sockets listen on every interface; <code>bind_host</code> is only the address the client is told to use.</li>
+<li><strong>UDP has no fragments.</strong> Only fragment 0 is supported, and there is no UDP over SOCKS4.</li>
+<li><strong>IPv4 first.</strong> IPv6 addresses are encoded and decoded, but the tests run over IPv4 loopback.</li>
+<li><strong>Close streams.</strong> A <code>stream</code> is an open connection. Close it when you are done.</li>
+</ul>
+
+<h2 id="guide-client">Using a SOCKS proxy from a program</h2>
+<p>Make a client for the proxy, connect to a target, and use the stream. The proxy here is a local server so the example runs anywhere; in real use it is the address of the proxy you trust.</p>
+{{example.net-socks-guide-client}}
+<p><code>DialConn</code> does the same but returns a plain TCP connection for code that already uses <code>net.tcp</code>. Through a proxy that needs a login use <code>NewClientAuth</code>. To go through two proxies in a row, see <code>tunnel.Chain</code> and the chain example below.</p>
+
+<h2 id="guide-server">Running a SOCKS server</h2>
+<p><code>NewServerConfig</code> gives a config for a port; <code>AddUser</code> turns the login on; <code>Start</code> binds and returns at once, and <code>Stop</code> ends it. How the server reaches a target is the part you usually change: leave <code>DirectConnect</code> for a plain proxy, set a callback with <code>SetConnector</code> to route by name, or give it a <code>tunnel.Dialer</code> with <code>SetDialer</code> to use rules, chains and block lists from <a href="/std/net/tunnel/">net.tunnel</a>. <code>allow</code> can refuse commands, hosts or ports before any connection is made.</p>
+<p>To put SOCKS on the same port as an HTTP proxy, give a <code>Socks5Inbound</code> to a <code>tunnel.MixedProtocol</code> instead of calling <code>Start</code>. <code>Handle</code> serves a single stream you accepted yourself.</p>
+<pre class="code"><code>mut config := socks.NewServerConfig(1080)
+socks.AddUser(config, "alice", "a long random password")
+server := socks.Start(config)
+if not server.ok:
+    println "port 1080 is busy"
+end</code></pre>
+
+<h2 id="guide-limits">What to know</h2>
+<ul>
+<li>The server listens on every IPv4 interface. Use a login or a firewall, never an open proxy.</li>
+<li>The login is plain text. SOCKS4 has no login at all.</li>
+<li>Names are resolved by the proxy for SOCKS5 and SOCKS4a, and by the client for SOCKS4.</li>
+<li><code>Start</code> runs the accept loop on its own thread; connections run on further threads. <code>Stop</code> stops new clients only.</li>
+<li>The decoders (<code>DecodeRequest</code>, <code>DecodeReply</code>, <code>Decode4Request</code>, <code>DecodeAddress</code>) return the bytes used, 0 for "need more data" and -1 for invalid, so they work on a growing buffer.</li>
+<li>No logging happens by itself.</li>
+</ul>
+>>
+
+group.Socks.title = Client versions
+group.Socks = The values of <code>version</code>.
+group.Ver.title = Version bytes
+group.Ver = The first byte of a request or reply on the wire.
+group.Auth.title = Authentication methods
+group.Auth = The methods offered in the SOCKS5 greeting.
+group.Cmd.title = Commands
+group.Cmd = The commands of <code>cmd</code>.
+group.Atyp.title = Address types
+group.Atyp = The values of <code>kind</code>.
+group.Rep4.title = SOCKS4 reply codes
+group.Rep4 = The codes of a SOCKS4 reply.
+group.Rep.title = SOCKS5 reply codes
+group.Rep = The codes of a SOCKS5 reply, as <code>code</code> returns them.
+doc.Socks5Inbound = A SOCKS5 server for <code>tunnel.InboundProtocol</code>: it reads the greeting, authenticates and reads the request from a stream, so it can sit in a <code>tunnel.MixedProtocol</code> or behind <code>tunnel.ListenTcp</code>. Make one with <code>NewInbound</code>.
+doc.Socks5Inbound.config = The server settings: users, allowed commands and limits.
+doc.Socks5Inbound.Name = Returns <code>socks5</code>.
+doc.Socks5Inbound.Handshake = Runs the SOCKS5 greeting, the optional user and password step and the request. Returns a <code>tunnel.Session</code> with the target, or a failed session after sending the right error reply.
+doc.Socks5Inbound.Reply = Sends the final SOCKS5 reply: succeeded, or host unreachable.
+doc.Socks4Inbound = A SOCKS4 and SOCKS4a server for <code>tunnel.InboundProtocol</code>. Make one with <code>NewInbound4</code>.
+doc.Socks4Inbound.config = The server settings.
+doc.Socks4Inbound.Name = Returns <code>socks4</code>.
+doc.Socks4Inbound.Handshake = Reads a SOCKS4 or SOCKS4a request. SOCKS4 has no passwords, so a server that requires them refuses it.
+doc.Socks4Inbound.Reply = Sends the SOCKS4 reply: granted (90) or rejected (91).
+doc.SocksConnector = One SOCKS hop of a <code>tunnel.Chain</code>: it connects to a SOCKS server and asks it to connect onward. Make one with <code>NewConnector</code>.
+doc.SocksConnector.client = The client settings: server address, version and credentials.
+doc.SocksConnector.Server = The address of the SOCKS server.
+doc.SocksConnector.Handshake = Runs the SOCKS handshake over the open stream for a target. True when the server agreed.
+doc.SocksConnector.Name = Returns <code>socks5</code> or <code>socks4</code>.
+doc.NewConnector = Makes a <code>SocksConnector</code> from a client. Use it with <code>tunnel.Via</code> or <code>tunnel.ChainAdd</code>.
+doc.NewInbound = Makes a SOCKS5 inbound from a server config.
+doc.NewInbound4 = Makes a SOCKS4 inbound from a server config.
+doc.SetDialer = Makes the server reach targets through a <code>tunnel.Dialer</code>, so it can use rules, chains or a block list. It replaces the connect callback.
+doc.Socks5 = <code>version</code> for SOCKS5.
+doc.Socks4 = <code>version</code> for SOCKS4: the client resolves the name itself and sends an IPv4 address.
+doc.Socks4a = <code>version</code> for SOCKS4a: a host name is sent to the server, which resolves it.
+doc.Client = A SOCKS client: which proxy to use, which version, and the credentials. Make it with <code>NewClient</code> or <code>NewClientAuth</code>.
+doc.Client.version = <code>Socks5</code>, <code>Socks4</code> or <code>Socks4a</code>. The default is SOCKS5.
+doc.Client.host = The proxy server's host name or IP.
+doc.Client.port = The proxy server's port.
+doc.Client.username = The user name for SOCKS5 (or the user id field of SOCKS4).
+doc.Client.password = The password for SOCKS5. Sent only when a user name is set.
+doc.Client.timeout_ms = How long connecting and the handshake may take, in milliseconds. The default is 10000.
+doc.Client.tls = True to wrap the connection to the proxy in TLS first (SOCKS over TLS). The default is false.
+doc.Client.server_name = The name to send and check in the proxy's certificate when <code>tls</code> is on. Empty means the host.
+doc.Client.insecure = True to skip the certificate check. For tests only.
+doc.HandshakeResult = The outcome of a SOCKS command on an open stream.
+doc.HandshakeResult.ok = True when the server accepted the request.
+doc.HandshakeResult.code = The reply code, see <code>RepSucceeded</code> and the <code>Rep4Granted</code> family.
+doc.HandshakeResult.err = A readable reason when it failed.
+doc.HandshakeResult.bound = The address the server reports: the one it bound (for BIND) or the one it connected from.
+doc.ConnectResult = The outcome of <code>Connect</code> or <code>Bind</code>: the stream when it worked, and the reason when it did not.
+doc.ConnectResult.ok = True when the proxy connected you to the target.
+doc.ConnectResult.code = The reply code.
+doc.ConnectResult.err = A readable reason when it failed.
+doc.ConnectResult.stream = The open stream to the target (through the proxy). Valid when <code>ok</code> is true.
+doc.ConnectResult.bound = The address the proxy reports.
+doc.UDPSession = A SOCKS5 UDP association: a TCP control connection plus a UDP socket aimed at the proxy's relay. Make it with <code>Associate</code>.
+doc.UDPSession.ok = True when the association was made.
+doc.UDPSession.err = A readable reason when it was not.
+doc.UDPSession.control = The TCP connection that keeps the association alive. Closing it ends the association.
+doc.UDPSession.sock = The UDP socket used to send and receive datagrams.
+doc.UDPSession.relay_host = The relay address the proxy gave.
+doc.UDPSession.relay_port = The relay port the proxy gave.
+doc.NewClient = Makes a SOCKS5 client for a proxy, with no credentials.
+doc.NewClientAuth = Makes a SOCKS5 client that logs in with a user name and password.
+doc.ClientHandshake = Runs one SOCKS command (connect, bind or UDP associate) on a stream that is already open to a proxy. This is how a second proxy hop is added on top of the first.
+doc.Connect = Connects to the proxy, runs the handshake for a target and returns the stream. The host may be a name (the proxy resolves it) or an IP.
+doc.DialConn = Like <code>Connect</code> but returns a plain TCP connection for the <code>net.tcp</code> functions. An empty connection when it failed.
+doc.Bind = Asks the proxy to wait for one incoming connection (SOCKS BIND), as FTP active mode needs. The first reply tells where it listens; call <code>BindAccept</code> for the second.
+doc.BindAccept = Waits for the second BIND reply, which arrives when a peer connects to the bound port.
+doc.Associate = Opens a SOCKS5 UDP association. SOCKS4 has no UDP, so it fails for that version.
+doc.UDPSendBytes = Sends a datagram from memory to a target through the relay. Returns the number of payload bytes sent.
+doc.UDPSend = Sends a text datagram to a target through the relay.
+doc.UDPReceiveBytes = Receives one datagram into a buffer and fills in who it came from. Returns the payload size, or 0 or less on timeout or error.
+doc.UDPSetTimeout = Sets how long a receive waits, in milliseconds.
+doc.CloseUDP = Closes the UDP socket and the control connection.
+doc.Outbound = What a connect callback returns: whether the target was reached, the reply code to send back and the stream.
+doc.Outbound.ok = True when the target was reached.
+doc.Outbound.code = The SOCKS reply code to give the client. The default is 1, general failure.
+doc.Outbound.err = A readable reason, for logs.
+doc.Outbound.stream = The stream to the target when <code>ok</code> is true.
+doc.Outbound.bound = The local address of the outgoing connection, reported back to the client.
+doc.RelayStats = How many bytes <code>Relay</code> moved in each direction.
+doc.RelayStats.a_to_b = Bytes from the first stream to the second.
+doc.RelayStats.b_to_a = Bytes from the second stream to the first.
+doc.Go = Starts a function on a new thread. The function takes one integer argument, usually a pointer or a file descriptor.
+doc.Relay = Copies data both ways between two streams until one ends. With an idle time in milliseconds, a silent connection is cut; 0 means no limit. Both streams are shut down at the end.
+doc.DirectConnect = The default connect callback: opens a TCP connection to a host and port with a timeout and wraps it as an <code>Outbound</code>. An unresolvable name gives host unreachable, a refusal gives connection refused.
+doc.ServerConfig = The settings of a SOCKS server: port, authentication, which commands are allowed, how targets are reached and the time limits. Start from <code>NewServerConfig</code>.
+doc.ServerConfig.port = The port to listen on; 0 picks a free one.
+doc.ServerConfig.require_auth = True when clients must log in. <code>AddUser</code> and <code>SetAuth</code> turn it on.
+doc.ServerConfig.users = The accepted user names and passwords.
+doc.ServerConfig.auth = A custom check <code>(user, password) -&gt; bool</code> used instead of <code>users</code>. Set it with <code>SetAuth</code>.
+doc.ServerConfig.has_auth = True when <code>auth</code> is in use.
+doc.ServerConfig.allow_v4 = True to accept SOCKS4 and SOCKS4a. The default is true. A server that requires passwords refuses SOCKS4 anyway.
+doc.ServerConfig.allow_bind = True to allow the BIND command. The default is false, because BIND opens a listening port for the client.
+doc.ServerConfig.allow_udp = True to allow UDP associate. The default is true.
+doc.ServerConfig.bind_host = The address the server tells the client to use for a UDP relay or a BIND port. The default is <code>127.0.0.1</code>; set it to the server's public address when remote clients need UDP or BIND. The sockets themselves listen on every interface.
+doc.ServerConfig.handshake_timeout_ms = How long a client has to finish the handshake, in milliseconds. The default is 10000.
+doc.ServerConfig.idle_timeout_ms = Cut a relayed connection after this many silent milliseconds. 0, the default, means never.
+doc.ServerConfig.connect = The callback that reaches a target: <code>(host, port) -&gt; <code>Outbound</code></code>. The default is <code>DirectConnect</code>. Set it with <code>SetConnector</code> or <code>SetDialer</code>.
+doc.ServerConfig.allow = An access rule <code>(command, host, port) -&gt; bool</code> asked before each request; false answers with "not allowed". The default allows everything.
+doc.Server = A running SOCKS server. <code>Start</code> returns it and <code>Stop</code> ends it.
+doc.Server.ok = True when the port was bound and the server is running.
+doc.Server.port = The port it listens on, useful when you asked for 0.
+doc.Server.listener = The underlying TCP listener.
+doc.Server.stop_cell = The flag that <code>Stop</code> clears to end the accept loop.
+doc.NewServerConfig = Returns a config for a port with the defaults above.
+doc.AddUser = Adds a user and password and turns authentication on.
+doc.SetAuth = Sets a custom login check and turns authentication on.
+doc.SetConnector = Sets the callback that reaches targets. Use it to route by name, as the example does.
+doc.Handle = Serves one client on an open stream: reads the version byte, then runs SOCKS5 or SOCKS4. Use it to put a SOCKS server on a stream you accepted yourself.
+doc.Start = Binds the port and serves clients on background threads. Check <code>ok</code>.
+doc.Stop = Stops accepting new clients. Connections already running finish on their own.
+doc.Serve = Starts a server and then never returns, for a program whose only job is to be the proxy. False when the port could not be bound.
+doc.VerSocks5 = The version byte of SOCKS5 on the wire.
+doc.VerSocks4 = The version byte of SOCKS4 on the wire.
+doc.AuthNone = Authentication method 0: no authentication.
+doc.AuthUserPass = Authentication method 2: user name and password.
+doc.AuthNoAcceptable = Method 255: the server says none of the offered methods is acceptable.
+doc.CmdConnect = Command 1: open a TCP connection.
+doc.CmdBind = Command 2: wait for an incoming TCP connection.
+doc.CmdUDPAssociate = Command 3: open a UDP relay.
+doc.AtypIPv4 = Address type 1: a four byte IPv4 address.
+doc.AtypDomain = Address type 3: a length byte and a host name.
+doc.AtypIPv6 = Address type 4: a sixteen byte IPv6 address.
+doc.RepSucceeded = Reply 0: succeeded.
+doc.RepGeneralFailure = Reply 1: general SOCKS server failure.
+doc.RepNotAllowed = Reply 2: connection not allowed by the ruleset, or login failed.
+doc.RepNetUnreachable = Reply 3: network unreachable.
+doc.RepHostUnreachable = Reply 4: host unreachable, which includes a name that does not resolve.
+doc.RepConnRefused = Reply 5: connection refused.
+doc.RepTTLExpired = Reply 6: TTL expired.
+doc.RepCmdNotSupported = Reply 7: command not supported.
+doc.RepAtypNotSupported = Reply 8: address type not supported.
+doc.Rep4Granted = SOCKS4 reply 90: request granted.
+doc.Rep4Rejected = SOCKS4 reply 91: request rejected or failed.
+doc.Rep4NoIdentd = SOCKS4 reply 92: rejected because the server cannot reach identd.
+doc.Rep4BadUser = SOCKS4 reply 93: rejected because the user ids differ.
+doc.Address = A host and port as SOCKS sees them: the address type, the text of the host and the port.
+doc.Address.kind = <code>AtypIPv4</code>, <code>AtypDomain</code> or <code>AtypIPv6</code>.
+doc.Address.host = The host name or IP text.
+doc.Address.port = The port.
+doc.Request = A decoded client request: version, command and target.
+doc.Request.version = <code>VerSocks5</code> or <code>VerSocks4</code>.
+doc.Request.cmd = <code>CmdConnect</code>, <code>CmdBind</code> or <code>CmdUDPAssociate</code>.
+doc.Request.addr = The target.
+doc.Request.user = The user id of a SOCKS4 request.
+doc.Reply = A decoded server reply: version, code and the address it reports.
+doc.Reply.version = The version of the reply.
+doc.Reply.code = The reply code.
+doc.Reply.addr = The address in the reply.
+doc.UDPHeader = The header in front of every datagram that goes through a SOCKS5 UDP relay.
+doc.UDPHeader.frag = The fragment number. Only 0 (no fragmentation) is supported.
+doc.UDPHeader.addr = The target or source of the datagram.
+doc.UDPHeader.length = How many bytes the header took.
+doc.ParseIPv4 = Parses IPv4 text into four bytes appended to a vector. False when it is not an address.
+doc.ParseIPv6 = Parses IPv6 text into sixteen bytes appended to a vector. False when it is not an address.
+doc.FormatIPv4 = Formats four bytes starting at an offset as dotted text.
+doc.FormatIPv6 = Formats sixteen bytes starting at an offset as IPv6 text.
+doc.ClassifyHost = Returns <code>AtypIPv4</code> for an IPv4 text, <code>AtypIPv6</code> for an IPv6 text and <code>AtypDomain</code> for anything else.
+doc.NewAddress = Makes an <code>Address</code>, choosing the type from the host text.
+doc.EncodeAddress = Writes an address in SOCKS5 form: type, host, port. Empty when the address is bad.
+doc.DecodeAddress = Reads an address from a vector at an offset. Returns how many bytes it took, 0 when more data is needed and -1 when it is invalid.
+doc.EncodeGreeting = Writes the client's first message: the version and the list of authentication methods it offers.
+doc.EncodeMethodChoice = Writes the server's answer to the greeting: the method it picked.
+doc.EncodeAuthRequest = Writes the user name and password message of SOCKS5 login.
+doc.EncodeAuthReply = Writes the server's login answer: success or failure.
+doc.EncodeRequest = Writes a SOCKS5 request for a command and an address.
+doc.EncodeReply = Writes a SOCKS5 reply with a code and an address.
+doc.DecodeRequest = Reads a SOCKS5 request. Returns the bytes used, 0 for incomplete and -1 for invalid.
+doc.DecodeReply = Reads a SOCKS5 reply. Returns the bytes used, 0 for incomplete and -1 for invalid.
+doc.EncodeUDPHeader = Writes the UDP relay header for an address and a fragment number.
+doc.DecodeUDPHeader = Reads a UDP relay header. False when it is short or malformed.
+doc.Encode4Request = Writes a SOCKS4 or SOCKS4a request. A host name makes it SOCKS4a. Empty when the arguments are out of range.
+doc.Decode4Request = Reads a SOCKS4 or SOCKS4a request. Returns the bytes used, 0 for incomplete and -1 for invalid.
+doc.Encode4Reply = Writes the eight byte SOCKS4 reply.
+doc.Decode4Reply = Reads the eight byte SOCKS4 reply. False when it is short or its version byte is not 0.
+doc.ReplyText = Returns a readable text for a reply code, such as <code>connection refused</code>.
+doc.ToHex = Returns the bytes of a vector as lowercase hex, handy for tests and logs.
+
+ex.Socks5Inbound = net-socks-Inbound
+ex.Socks5Inbound.config = -
+ex.Socks5Inbound.Name = net-socks-Inbound
+ex.Socks5Inbound.Handshake = net-socks-Inbound
+ex.Socks5Inbound.Reply = net-socks-Inbound
+ex.Socks4Inbound = net-socks-Inbound
+ex.Socks4Inbound.config = -
+ex.Socks4Inbound.Name = net-socks-Inbound
+ex.Socks4Inbound.Handshake = net-socks-Inbound
+ex.Socks4Inbound.Reply = net-socks-Inbound
+ex.SocksConnector = net-socks-Chain
+ex.SocksConnector.client = -
+ex.SocksConnector.Server = net-socks-Chain
+ex.SocksConnector.Handshake = net-socks-Chain
+ex.SocksConnector.Name = net-socks-Chain
+ex.NewConnector = net-socks-Chain
+ex.NewInbound = net-socks-Inbound
+ex.NewInbound4 = net-socks-Inbound
+ex.SetDialer = net-socks-Policy
+ex.Socks5 = net-socks-Socks4
+ex.Socks4 = net-socks-Socks4
+ex.Socks4a = net-socks-Socks4
+ex.Client = net-socks-Connect
+ex.Client.version = -
+ex.Client.host = -
+ex.Client.port = -
+ex.Client.username = -
+ex.Client.password = -
+ex.Client.timeout_ms = -
+ex.Client.tls = -
+ex.Client.server_name = -
+ex.Client.insecure = -
+ex.HandshakeResult = net-socks-Chain
+ex.HandshakeResult.ok = -
+ex.HandshakeResult.code = -
+ex.HandshakeResult.err = -
+ex.HandshakeResult.bound = -
+ex.ConnectResult = net-socks-Connect
+ex.ConnectResult.ok = -
+ex.ConnectResult.code = -
+ex.ConnectResult.err = -
+ex.ConnectResult.stream = -
+ex.ConnectResult.bound = -
+ex.UDPSession = net-socks-Udp
+ex.UDPSession.ok = -
+ex.UDPSession.err = -
+ex.UDPSession.control = -
+ex.UDPSession.sock = -
+ex.UDPSession.relay_host = -
+ex.UDPSession.relay_port = -
+ex.NewClient = net-socks-Connect
+ex.NewClientAuth = net-socks-Auth
+ex.ClientHandshake = net-socks-Chain
+ex.Connect = net-socks-Connect
+ex.DialConn = net-socks-Connect
+ex.Bind = net-socks-Bind
+ex.BindAccept = net-socks-Bind
+ex.Associate = net-socks-Udp
+ex.UDPSendBytes = net-socks-Udp
+ex.UDPSend = net-socks-Udp
+ex.UDPReceiveBytes = net-socks-Udp
+ex.UDPSetTimeout = net-socks-Udp
+ex.CloseUDP = net-socks-Udp
+ex.Outbound = net-socks-Policy
+ex.Outbound.ok = -
+ex.Outbound.code = -
+ex.Outbound.err = -
+ex.Outbound.stream = -
+ex.Outbound.bound = -
+ex.RelayStats = net-socks-Relay
+ex.RelayStats.a_to_b = -
+ex.RelayStats.b_to_a = -
+ex.Go = net-socks-Udp
+ex.Relay = net-socks-Relay
+ex.DirectConnect = net-socks-Policy
+ex.ServerConfig = net-socks-Auth
+ex.ServerConfig.port = -
+ex.ServerConfig.require_auth = -
+ex.ServerConfig.users = -
+ex.ServerConfig.auth = -
+ex.ServerConfig.has_auth = -
+ex.ServerConfig.allow_v4 = -
+ex.ServerConfig.allow_bind = -
+ex.ServerConfig.allow_udp = -
+ex.ServerConfig.bind_host = -
+ex.ServerConfig.handshake_timeout_ms = -
+ex.ServerConfig.idle_timeout_ms = -
+ex.ServerConfig.connect = -
+ex.ServerConfig.allow = -
+ex.Server = net-socks-Connect
+ex.Server.ok = -
+ex.Server.port = -
+ex.Server.listener = -
+ex.Server.stop_cell = -
+ex.NewServerConfig = net-socks-Connect
+ex.AddUser = net-socks-Auth
+ex.SetAuth = net-socks-Auth
+ex.SetConnector = net-socks-Policy
+ex.Handle = net-socks-Inbound
+ex.Start = net-socks-Connect
+ex.Stop = net-socks-Connect
+ex.Serve = -
+ex.VerSocks5 = net-socks-Codec
+ex.VerSocks4 = net-socks-Codec
+ex.AuthNone = net-socks-Codec
+ex.AuthUserPass = net-socks-Codec
+ex.AuthNoAcceptable = net-socks-Codec
+ex.CmdConnect = net-socks-Codec
+ex.CmdBind = net-socks-Bind
+ex.CmdUDPAssociate = net-socks-Codec
+ex.AtypIPv4 = net-socks-Codec
+ex.AtypDomain = net-socks-Codec
+ex.AtypIPv6 = net-socks-Codec
+ex.RepSucceeded = net-socks-Codec
+ex.RepGeneralFailure = net-socks-Codec
+ex.RepNotAllowed = net-socks-Codec
+ex.RepNetUnreachable = net-socks-Codec
+ex.RepHostUnreachable = net-socks-Codec
+ex.RepConnRefused = net-socks-Codec
+ex.RepTTLExpired = net-socks-Codec
+ex.RepCmdNotSupported = net-socks-Codec
+ex.RepAtypNotSupported = net-socks-Codec
+ex.Rep4Granted = net-socks-Codec
+ex.Rep4Rejected = net-socks-Codec
+ex.Rep4NoIdentd = net-socks-Codec
+ex.Rep4BadUser = net-socks-Codec
+ex.Address = net-socks-Codec
+ex.Address.kind = -
+ex.Address.host = -
+ex.Address.port = -
+ex.Request = net-socks-Codec
+ex.Request.version = -
+ex.Request.cmd = -
+ex.Request.addr = -
+ex.Request.user = -
+ex.Reply = net-socks-Codec
+ex.Reply.version = -
+ex.Reply.code = -
+ex.Reply.addr = -
+ex.UDPHeader = net-socks-Codec
+ex.UDPHeader.frag = -
+ex.UDPHeader.addr = -
+ex.UDPHeader.length = -
+ex.ParseIPv4 = net-socks-Codec
+ex.ParseIPv6 = net-socks-Codec
+ex.FormatIPv4 = net-socks-Codec
+ex.FormatIPv6 = net-socks-Codec
+ex.ClassifyHost = net-socks-Codec
+ex.NewAddress = net-socks-Codec
+ex.EncodeAddress = net-socks-Codec
+ex.DecodeAddress = net-socks-Codec
+ex.EncodeGreeting = net-socks-Codec
+ex.EncodeMethodChoice = net-socks-Codec
+ex.EncodeAuthRequest = net-socks-Codec
+ex.EncodeAuthReply = net-socks-Codec
+ex.EncodeRequest = net-socks-Codec
+ex.EncodeReply = net-socks-Codec
+ex.DecodeRequest = net-socks-Codec
+ex.DecodeReply = net-socks-Codec
+ex.EncodeUDPHeader = net-socks-Codec
+ex.DecodeUDPHeader = net-socks-Codec
+ex.Encode4Request = net-socks-Codec
+ex.Decode4Request = net-socks-Codec
+ex.Encode4Reply = net-socks-Codec
+ex.Decode4Reply = net-socks-Codec
+ex.ReplyText = net-socks-Codec
+ex.ToHex = net-socks-Codec
+ex.group.Socks = net-socks-Socks4
+ex.group.Ver = -
+ex.group.Auth = -
+ex.group.Cmd = -
+ex.group.Atyp = -
+ex.group.Rep4 = -
+ex.group.Rep = -

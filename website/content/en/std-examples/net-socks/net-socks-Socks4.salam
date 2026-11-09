@@ -1,0 +1,64 @@
+import net.socks
+import net.tcp
+
+func echo_conn(arg: i64):
+    c := tcp.ConnFromFd(arg)
+    until true:
+        data := tcp.Read(c, 4096)
+        if data.len() == 0:
+            break
+        end
+        tcp.Write(c, data)
+    end
+    tcp.Close(c)
+end
+
+func echo_accept(arg: i64):
+    srv := tcp.Server { fd = arg }
+    until true:
+        c := tcp.Accept(srv)
+        if not tcp.ConnOk(c):
+            break
+        end
+        socks.Go(echo_conn, c.fd as void*)
+    end
+end
+
+func start_echo(): int:
+    listener := tcp.Bind(0)
+    socks.Go(echo_accept, listener.fd as void*)
+    ret tcp.Port(listener)
+end
+
+func say(label: str, r: socks.ConnectResult):
+    println label + ": ok=" + r.ok + " code=" + r.code + " " + r.err
+end
+
+func main:
+    echo := start_echo()
+    server := socks.Start(socks.NewServerConfig(0))
+
+    mut client := socks.NewClient("127.0.0.1", server.port)
+    client.version = socks.Socks4
+    r := socks.Connect(client, "127.0.0.1", echo)
+    say("socks4 by address", r)
+    r.stream.Write("four")
+    println r.stream.Read(100)
+    r.stream.Close()
+
+    client.version = socks.Socks4a
+    client.username = "tester"
+    named := socks.Connect(client, "localhost", echo)
+    say("socks4a by name", named)
+    named.stream.Close()
+    say("socks4 refused", socks.Connect(client, "127.0.0.1", tcp.FreePort()))
+    socks.Stop(server)
+
+    mut config := socks.NewServerConfig(0)
+    config.allow_v4 = false
+    off := socks.Start(config)
+    mut four := socks.NewClient("127.0.0.1", off.port)
+    four.version = socks.Socks4
+    println "socks4 switched off:", socks.Connect(four, "127.0.0.1", echo).ok
+    socks.Stop(off)
+end

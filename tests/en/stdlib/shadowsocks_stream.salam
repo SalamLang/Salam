@@ -1,0 +1,229 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import net.shadowsocks
+import net.tcp
+import mem
+
+mut failures := 0
+mut echo_srv := tcp.Server {}
+
+func check(name: str, ok: bool):
+    if ok:
+        println "PASS", name
+    else:
+        println "FAIL", name
+        failures += 1
+    end
+end
+
+func echo_conn(c: tcp.Conn):
+    buf := mem.Allocate(8192 as u64)
+    mut go := true
+    until go:
+        n := tcp.ReadBytes(c, buf, 8192)
+        if n <= 0:
+            go = false
+        else:
+            _w := tcp.WriteBytes(c, buf, n)
+        end
+    end
+    mem.Free(buf)
+    tcp.Close(c)
+end
+
+func echo_main():
+    mut go := true
+    until go:
+        c := tcp.Accept(echo_srv)
+        if not tcp.ConnOk(c):
+            go = false
+        else:
+            echo_conn(c)
+        end
+    end
+end
+
+func serve_thread(ss: shadowsocks.ServerState*):
+    shadowsocks.ServeRelay(shadowsocks.Server { st = ss })
+end
+
+func pattern(n: int): void*:
+    d := mem.AllocateZeroed((n + 1) as u64)
+    bp := d as u8*
+    repeat n in i:
+        bp[i] = ((i * 7 + 3) % 251) as u8
+    end
+    ret d
+end
+
+func echo_through(port: int, cfg: shadowsocks.Config, total: int): int:
+    c := shadowsocks.Dial(shadowsocks.Config { host = "127.0.0.1", port = port, method = cfg.method, password = cfg.password, obfs = cfg.obfs, obfs_host = cfg.obfs_host }, "127.0.0.1", tcp.Port(echo_srv))
+    if not shadowsocks.Ok(c):
+        ret 0 - 1
+    end
+    tcp.SetDeadline(c.st.sock, 5000)
+    data := pattern(total)
+    got := mem.AllocateZeroed((total + 1) as u64)
+    _w := shadowsocks.Write(c, data, total)
+    mut have := 0
+    until have < total:
+        n := shadowsocks.Read(c, shadowsocks.PtrAt(got, have), total - have)
+        if n <= 0:
+            break
+        end
+        have += n
+    end
+    mut same := true
+    repeat have in i:
+        bp := data as u8*
+        gp := got as u8*
+        if bp[i] != gp[i]:
+            same = false
+        end
+    end
+    mem.Free(data)
+    mem.Free(got)
+    shadowsocks.Close(c)
+    if not same:
+        ret 0 - 2
+    end
+    ret have
+end
+
+func run_case(label: str, method: str, password: str, obfs: str, total: int):
+    srv := shadowsocks.ListenObfs(tcp.FreePort(), method, password, obfs)
+    if not shadowsocks.ServerOk(srv):
+        check(label + " listen", false)
+        ret
+    end
+    th := spawn(serve_thread, srv.st)
+    cfg := shadowsocks.Config { method = method, password = password, obfs = obfs, obfs_host = "cdn.example.com" }
+    check(label + " small", echo_through(shadowsocks.ServerPort(srv), cfg, 11) == 11)
+    check(label + " large", echo_through(shadowsocks.ServerPort(srv), cfg, total) == total)
+    shadowsocks.Stop(srv)
+    join(th)
+    shadowsocks.Destroy(srv)
+end
+
+func bad_password_case(label: str, method: str, good: str, bad: str):
+    srv := shadowsocks.Listen(tcp.FreePort(), method, good)
+    th := spawn(serve_thread, srv.st)
+    cfg := shadowsocks.Config { method = method, password = bad }
+    check(label + " wrong password gets nothing", echo_through(shadowsocks.ServerPort(srv), cfg, 11) == 0)
+    cfg2 := shadowsocks.Config { method = method, password = good }
+    check(label + " server survives bad client", echo_through(shadowsocks.ServerPort(srv), cfg2, 11) == 11)
+    shadowsocks.Stop(srv)
+    join(th)
+    shadowsocks.Destroy(srv)
+end
+
+func replay_case():
+    method := "aes-256-gcm"
+    m := shadowsocks.LookupMethod(method)
+    srv := shadowsocks.Listen(tcp.FreePort(), method, "replay-pw")
+    th := spawn(serve_thread, srv.st)
+    key := shadowsocks.PasswordKey(m, "replay-pw")
+    salt := mem.AllocateZeroed(32 as u64)
+    sp := salt as u8*
+    repeat 32 in i:
+        sp[i] = (200 - i) as u8
+    end
+    mut e := shadowsocks.NewEncoder(m, key.p, salt)
+    mut plain := shadowsocks.NewBuf(64)
+    shadowsocks.EncodeTarget("127.0.0.1", tcp.Port(echo_srv), plain)
+    shadowsocks.BufAppendStr(plain, "replay!")
+    mut wire := shadowsocks.NewBuf(64)
+    shadowsocks.EncodeStream(e, plain.p, plain.len, wire)
+    port := shadowsocks.ServerPort(srv)
+    mut answers := 0
+    repeat 2 in attempt:
+        raw := tcp.Dial("127.0.0.1", port)
+        tcp.SetDeadline(raw, 3000)
+        _w := tcp.WriteBytes(raw, wire.p, wire.len)
+        mut d := shadowsocks.NewDecoder(m, key.p)
+        mut out := shadowsocks.NewBuf(64)
+        buf := mem.Allocate(4096 as u64)
+        mut go := true
+        until go:
+            n := tcp.ReadBytes(raw, buf, 4096)
+            if n <= 0:
+                go = false
+            else:
+                _ok := shadowsocks.DecodeAll(d, buf, n, out)
+                if out.len >= 7:
+                    go = false
+                end
+            end
+        end
+        if shadowsocks.BufToStr(out) == "replay!":
+            answers += 1
+        end
+        mem.Free(buf)
+        tcp.Close(raw)
+        if attempt == 0:
+            check("replay first flight answered", answers == 1)
+        end
+    end
+    check("replayed salt is dropped", answers == 1)
+    shadowsocks.Stop(srv)
+    join(th)
+    shadowsocks.Destroy(srv)
+end
+
+func relay_through_stream_interface():
+    srv := shadowsocks.Listen(tcp.FreePort(), "chacha20-ietf-poly1305", "iface")
+    th := spawn(serve_thread, srv.st)
+    c := shadowsocks.Dial(shadowsocks.Config { host = "127.0.0.1", port = shadowsocks.ServerPort(srv), method = "chacha20-ietf-poly1305", password = "iface" }, "127.0.0.1", tcp.Port(echo_srv))
+    s := shadowsocks.AsStream(c)
+    check("stream ok", s.Ok())
+    _w := s.WriteBytes("via stream interface" as void*, 20)
+    buf := mem.AllocateZeroed(64 as u64)
+    mut have := 0
+    until have < 20:
+        n := s.ReadBytes(shadowsocks.PtrAt(buf, have), 20 - have)
+        if n <= 0:
+            break
+        end
+        have += n
+    end
+    check("stream interface echo", have == 20 and (buf as str) == "via stream interface")
+    mem.Free(buf)
+    s.Close()
+    shadowsocks.Stop(srv)
+    join(th)
+    shadowsocks.Destroy(srv)
+end
+
+func main:
+    echo_srv = tcp.Bind(tcp.FreePort())
+    _th := spawn(echo_main)
+    run_case("aes-128-gcm", "aes-128-gcm", "pw-one", "", 100000)
+    run_case("aes-256-gcm", "aes-256-gcm", "pw-two", "", 100000)
+    run_case("chacha20", "chacha20-ietf-poly1305", "pw-three", "", 100000)
+    run_case("http obfs", "aes-256-gcm", "pw-four", "http", 70000)
+    run_case("tls obfs", "chacha20-ietf-poly1305", "pw-five", "tls", 70000)
+    run_case("2022 aes-128", "2022-blake3-aes-128-gcm", "AAECAwQFBgcICQoLDA0ODw==", "", 200000)
+    run_case("2022 aes-256", "2022-blake3-aes-256-gcm", "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=", "", 200000)
+    run_case("2022 chacha20", "2022-blake3-chacha20-poly1305", "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=", "", 70000)
+    bad_password_case("legacy", "aes-256-gcm", "good-pw", "bad-pw")
+    bad_password_case("2022", "2022-blake3-aes-128-gcm", "AAECAwQFBgcICQoLDA0ODw==", "AAECAwQFBgcICQoLDA0ODg==")
+    replay_case()
+    relay_through_stream_interface()
+    tcp.CloseServer(echo_srv)
+    println "failures", failures
+    ret failures
+end

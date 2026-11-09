@@ -46,6 +46,9 @@ pub const ZIP_IO := 7
 @en "ZIP_UNSAFE_PATH"
 @fa "زیپ مسیر ناامن"
 pub const ZIP_UNSAFE_PATH := 8
+@en "ZIP_BAD_PASSWORD"
+@fa "زیپ گذرواژه اشتباه"
+pub const ZIP_BAD_PASSWORD := 11
 
 @en "ZipMethodStore"
 @fa "روش زیپ ذخیره"
@@ -53,6 +56,9 @@ pub const ZipMethodStore := 0
 @en "ZipMethodDeflate"
 @fa "روش زیپ دیفلیت"
 pub const ZipMethodDeflate := 8
+@en "ZipMethodDeflate64"
+@fa "روش زیپ دیفلیت۶۴"
+pub const ZipMethodDeflate64 := 9
 @en "ZipMethodBzip2"
 @fa "روش زیپ بی زیپ دو"
 pub const ZipMethodBzip2 := 12
@@ -97,6 +103,9 @@ struct _ZipRec:
     pub dos_time: int = 0
     pub dos_date: int = 0
     pub next: int = 0
+    pub aes: int = 0
+    pub aes_ver: int = 0
+    pub aes_method: int = 0
 end
 
 func _zip_find_eocd(p: void*, n: int, eocd_pos_out &: int): bool:
@@ -230,6 +239,11 @@ func _zip_rec(p: void*, n: int, pos: int, r &: _ZipRec): bool:
                 q += 8
             end
         end
+        if tag == 0x9901 and sz >= 7:
+            r.aes_ver = LEGet16(p, body)
+            r.aes = (p as u8*)[body + 4] as int
+            r.aes_method = LEGet16(p, body + 5)
+        end
         if tag == 0x7075 and sz >= 5 and LEGet16(p, body) % 256 == 1:
             up_off = body + 5
             up_len = sz - 5
@@ -309,7 +323,10 @@ func _zip_unpack_ext(method: int, dptr: void*, comp_size: int, uncomp_size: int,
     if cap < 1:
         cap = 1
     end
-    if method == ZipMethodBzip2:
+    if method == ZipMethodDeflate64:
+        compress.BufFree(res)
+        res = compress.RawInflate64Max(dptr, comp_size, uncomp_size, cap, ok)
+    else method == ZipMethodBzip2:
         compress.BufFree(res)
         res = compress.Bzip2DecompressMax(dptr, comp_size, cap, ok)
     else method == ZipMethodZstd:
@@ -333,6 +350,10 @@ func _zip_unpack_ext(method: int, dptr: void*, comp_size: int, uncomp_size: int,
     ret ZIP_OK
 end
 
+func _zip_readable_method(m: int): bool:
+    ret m == ZipMethodDeflate64 or _zip_known_method(m)
+end
+
 func _zip_known_method(m: int): bool:
     ret m == ZipMethodStore or m == ZipMethodDeflate or m == ZipMethodBzip2 or m == ZipMethodLzma or m == ZipMethodZstd
 end
@@ -341,7 +362,7 @@ func _zip_read_data(p: void*, n: int, r: _ZipRec, max: int, verify: bool, out &:
     if (r.flags & 1) != 0:
         ret ZIP_ENCRYPTED
     end
-    if not _zip_known_method(r.method):
+    if not _zip_readable_method(r.method):
         ret ZIP_UNSUPPORTED
     end
     lim := 2147483647 as i64
@@ -779,6 +800,7 @@ pub func ZipStatusText(status: int): str:
     if status == ZIP_BAD_CRC: ret ArchiveStatusText(ARCHIVE_BAD_CRC) end
     if status == ZIP_TOO_BIG: ret ArchiveStatusText(ARCHIVE_TOO_BIG) end
     if status == ZIP_UNSAFE_PATH: ret ArchiveStatusText(ARCHIVE_UNSAFE_PATH) end
+    if status == ZIP_BAD_PASSWORD: ret ArchiveStatusText(ARCHIVE_BAD_PASSWORD) end
     if status == ZIP_IO: ret ArchiveStatusText(ARCHIVE_IO_ERROR) end
     ret ArchiveStatusText(-1)
 end

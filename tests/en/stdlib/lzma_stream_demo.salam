@@ -1,0 +1,82 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import archive
+import compress
+import filepath
+import mem
+import os
+import str
+
+func text(n: int): compress.ByteBuf:
+    mut b := compress.NewByteBuf()
+    repeat n in i:
+        line := "row " + str.FromInt((i * i) as i64) + " streams through a window\n"
+        compress.BufPushBytes(b, line as void*, line.len())
+    end
+    ret b
+end
+
+func collect(p: void*, n: int, c: void*): bool:
+    compress.BufPushBytes((c as compress.ByteBuf*)[0], p, n)
+    ret true
+end
+
+func run(label: str, kind: int, file: str, off: i64, len: i64, head: compress.ByteBuf, want: compress.ByteBuf, memcap: i64):
+    fp := compress.FileOpenRead(file)
+    acc := mem.AllocateZeroed(sizeof(compress.ByteBuf)) as compress.ByteBuf*
+    acc[0] = compress.NewByteBuf()
+    mut sink := compress.SinkCallback(0 as i64, (p: void*, n: int, c: void*): ret collect(p, n, c) end, acc as void*)
+    mut st := 0
+    if kind == 1:
+        st = compress.LzmaFileToSink(head.data, 5, fp, off, len, want.len as i64, sink, memcap)
+    else:
+        st = compress.Lzma2FileToSink(compress.BufGet(head, 0), fp, off, len, want.len as i64, sink, memcap)
+    end
+    compress.FileClose(fp)
+    same := compress.BufEquals(acc[0], want)
+    println label, "status", st, "written", sink.written, "same", same
+    compress.BufFree(acc[0])
+    mem.Free(acc as void*)
+end
+
+func main:
+    dir := filepath.Join(os.TempDir(), "salam_lzma_stream_demo")
+    os.RemoveAll(dir)
+    os.MkdirAll(dir)
+    want := text(4000)
+    lz := compress.LzmaCompress(want.data, want.len)
+    lzpath := filepath.Join(dir, "a.lzma")
+    println archive.WriteBinaryFileBuf(lzpath, lz)
+    mut props := compress.NewByteBuf()
+    compress.BufPushBytes(props, lz.data, 5)
+    run("lzma", 1, lzpath, 13 as i64, (lz.len - 13) as i64, props, want, 0 as i64)
+    run("lzma memcap", 1, lzpath, 13 as i64, (lz.len - 13) as i64, props, want, 100 as i64)
+    run("lzma cut", 1, lzpath, 13 as i64, ((lz.len - 13) / 2) as i64, props, want, 0 as i64)
+    xz := compress.XzCompress(want.data, want.len)
+    xzpath := filepath.Join(dir, "a.xz")
+    println archive.WriteBinaryFileBuf(xzpath, xz)
+    bh := (compress.BufGet(xz, 12) + 1) * 4
+    flags := compress.BufGet(xz, 13)
+    dictb := compress.BufGet(xz, 16)
+    println "xz block", flags & 192, compress.BufGet(xz, 14), dictb >= 0
+    mut dp := compress.NewByteBuf()
+    compress.BufPush(dp, dictb)
+    run("lzma2", 2, xzpath, (12 + bh) as i64, (xz.len - 12 - bh) as i64, dp, want, 0 as i64)
+    run("lzma2 memcap", 2, xzpath, (12 + bh) as i64, (xz.len - 12 - bh) as i64, dp, want, 100 as i64)
+    run("lzma2 cut", 2, xzpath, (12 + bh) as i64, ((xz.len - 12 - bh) / 2) as i64, dp, want, 0 as i64)
+    os.RemoveAll(dir)
+end

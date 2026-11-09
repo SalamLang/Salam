@@ -2,7 +2,8 @@ import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, ty
 import { api, ApiError, PAGE_SIZE, type AdminApp, type AdminChatRow, type AdminPlan, type AdminTelegram, type AdminKey, type AdminPlatforms, type AdminSubscription, type AdminGuest, type AdminSession, type AdminSummary, type GuestMessage, type AdminUpload, type AdminUser, type ApiRequest, type AppEvent, type Chat, type EventFilters, type Payment, type PlanId, type RequestFilters, type UsagePeriod, type UsagePeriodKey, type UsageTotals } from "./api";
 import { EventList } from "./Events";
 import { fmtCompact, fmtCost, fmtDate, fmtDateTime, fmtDay, fmtMonth, fmtNum, fmtRelative, tokenSplit } from "./format";
-import { IconBadgeCheck, IconChevronDown, IconClose, IconSearch, IconShield } from "./icons";
+import { Select } from "./Select";
+import { IconBadgeCheck, IconClose, IconSearch, IconShield } from "./icons";
 import { fmtSize } from "./Attach";
 import { Markdown } from "./Markdown";
 import { RequestList } from "./Requests";
@@ -1085,19 +1086,15 @@ function Subscriptions({ picked, notify }: { picked: Picked; notify: (msg: strin
             <span>{t("ایمیل کاربر", "User email")}</span>
             <input type="email" dir="ltr" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="user@example.com" required />
           </label>
-          <label className="grant-field">
+          <div className="grant-field">
             <span>{t("پلن", "Plan")}</span>
-            <div className="select">
-              <select value={plan} onChange={(e) => setPlan(e.target.value as PlanId)}>
-                {PLAN_LABELS.map((o) => (
-                  <option key={o.id} value={o.id}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
-              <IconChevronDown width={16} height={16} />
-            </div>
-          </label>
+            <Select<PlanId>
+              value={plan}
+              options={PLAN_LABELS.map((o) => ({ value: o.id, label: o.label }))}
+              ariaLabel={t("پلن", "Plan")}
+              onChange={setPlan}
+            />
+          </div>
           <label className="grant-field">
             <span>
               {t("تعداد روز", "Days")} <span className="opt">{t("اختیاری", "optional")}</span>

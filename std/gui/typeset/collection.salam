@@ -69,6 +69,9 @@ pub struct FontCollection:
     @en "fallback"
     @fa "جایگزین‌ها"
     pub fallback: HashMap<int, int> = HashMap {}
+    @en "memo"
+    @fa "یادداشت چهره"
+    pub memo: HashMap<str, int> = HashMap {}
 end
 
 func _fc_read(fp: void*, off: int, n: int): void*:
@@ -303,6 +306,23 @@ end
 func _fc_reset(fc &: FontCollection):
     fc.fallback.free()
     fc.fallback = HashMap {} as HashMap<int, int>
+    each k, _ in fc.memo:
+        mem.Free(k as void*)
+    end
+    fc.memo.free()
+    fc.memo = HashMap {} as HashMap<str, int>
+end
+
+func _fc_memo_key(families: str, weight: int, italic: bool, cp: int): str:
+    mut b := str.NewBuilder()
+    str.BufAppend(b, families)
+    str.BufAppendChar(b, 1)
+    str.BufAppendInt(b, weight as i64)
+    str.BufAppendChar(b, italic ? 105 : 110)
+    str.BufAppendInt(b, cp as i64)
+    r := str.BufStr(b)
+    str.BufFree(b)
+    ret r
 end
 
 func _fc_load(fc &: FontCollection, i: int): bool:
@@ -361,6 +381,47 @@ func _fc_match(fc &: FontCollection, family: str, weight: int, italic: bool, cp:
         i++
     end
     ret best
+end
+
+func _fc_face_for_cp(fc &: FontCollection, families: str, weight: int, italic: bool, cp: int): int:
+    mut names := Vector {} as Vector<str>
+    defer names.free()
+    _fc_family_list(families, names)
+    mut expanded := Vector {} as Vector<str>
+    defer expanded.free()
+    each n in names:
+        if not _fc_generic(n, expanded):
+            expanded.push(n)
+        end
+    end
+    each n in expanded:
+        r := _fc_match(fc, n, weight, italic, cp)
+        if r >= 0:
+            ret r
+        end
+    end
+    key := (cp << 1) | (italic ? 1 : 0)
+    if fc.fallback.has(key):
+        ret fc.fallback.get(key)
+    end
+    mut chain := Vector {} as Vector<str>
+    defer chain.free()
+    _fc_script_fallback(unicode.Script(cp), chain)
+    mut found := -1
+    each n in chain:
+        if found < 0:
+            found = _fc_match(fc, n, weight, italic, cp)
+        end
+    end
+    mut i := 0
+    until found < 0 and i < fc.faces.len():
+        if _fc_covers(fc, i, cp):
+            found = i
+        end
+        i++
+    end
+    fc.fallback.put(key, found)
+    ret found
 end
 
 @en "NewFontCollection"
@@ -511,44 +572,15 @@ end
 @en "FaceForCodepoint"
 @fa "چهره برای نویسه"
 pub func FaceForCodepoint(fc &: FontCollection, families: str, weight: int, italic: bool, cp: int): int:
-    mut names := Vector {} as Vector<str>
-    defer names.free()
-    _fc_family_list(families, names)
-    mut expanded := Vector {} as Vector<str>
-    defer expanded.free()
-    each n in names:
-        if not _fc_generic(n, expanded):
-            expanded.push(n)
-        end
+    key := _fc_memo_key(families, weight, italic, cp)
+    if fc.memo.has(key):
+        r := fc.memo.get(key)
+        mem.Free(key as void*)
+        ret r
     end
-    each n in expanded:
-        r := _fc_match(fc, n, weight, italic, cp)
-        if r >= 0:
-            ret r
-        end
-    end
-    key := (cp << 1) | (italic ? 1 : 0)
-    if fc.fallback.has(key):
-        ret fc.fallback.get(key)
-    end
-    mut chain := Vector {} as Vector<str>
-    defer chain.free()
-    _fc_script_fallback(unicode.Script(cp), chain)
-    mut found := -1
-    each n in chain:
-        if found < 0:
-            found = _fc_match(fc, n, weight, italic, cp)
-        end
-    end
-    mut i := 0
-    until found < 0 and i < fc.faces.len():
-        if _fc_covers(fc, i, cp):
-            found = i
-        end
-        i++
-    end
-    fc.fallback.put(key, found)
-    ret found
+    r := _fc_face_for_cp(fc, families, weight, italic, cp)
+    fc.memo.put(key, r)
+    ret r
 end
 
 @en "FreeFontCollection"
@@ -563,7 +595,10 @@ pub func FreeFontCollection(fc &: FontCollection):
         i++
     end
     fc.faces.free()
+    _fc_reset(fc)
     fc.fallback.free()
+    fc.memo.free()
     fc.faces = Vector {} as Vector<FontFace>
     fc.fallback = HashMap {} as HashMap<int, int>
+    fc.memo = HashMap {} as HashMap<str, int>
 end

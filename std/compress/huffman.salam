@@ -186,20 +186,28 @@ pub func HuffmanCompress(p: void*, n: int): ByteBuf:
     ret out
 end
 
-@en "HuffmanDecompress"
-@fa "کدگشایی هافمن"
-pub func HuffmanDecompress(p: void*, n: int): ByteBuf:
+@en "HuffmanDecompressMax"
+@fa "کدگشایی هافمن با سقف"
+pub func HuffmanDecompressMax(p: void*, n: int, max: int, ok &: bool): ByteBuf:
+    ok = false
     mut r := NewByteReader(p, n)
     origLen := RdU32(r)
     mode := RdByte(r)
-    mut out := NewByteBufCap(origLen)
+    if r.bad or not _dec_size_ok(origLen, n, max): ret NewByteBuf() end
+    mut out := NewByteBufCap(_dec_cap(origLen))
     if mode == 0:
+        ok = origLen == 0
         ret out
     end
 
     mut lengths: int[256]
     repeat 256 in s:
         lengths[s] = RdByte(r)
+        if lengths[s] > 60 or lengths[s] < 0: r.bad = true end
+    end
+    if r.bad:
+        BufFree(out)
+        ret NewByteBuf()
     end
     mut codes: int[256]
     repeat 256 in i: codes[i] = 0 end
@@ -216,16 +224,19 @@ pub func HuffmanDecompress(p: void*, n: int): ByteBuf:
         tleaf[k] = false
     end
     mut nodecount := 1
+    mut good := true
 
     repeat 256 in s:
         len := lengths[s]
-        if len > 0:
+        if len > 0 and good:
             code := codes[s]
             mut cur := 0
             mut bit := len - 1
-            until bit >= 0:
+            until bit >= 0 and good:
                 b := (code >> bit) & 1
-                if b == 0:
+                if nodecount >= _HUFF_MAX_NODES - 1:
+                    good = false
+                else b == 0:
                     if tleft[cur] < 0:
                         tleft[cur] = nodecount
                         nodecount++
@@ -240,24 +251,48 @@ pub func HuffmanDecompress(p: void*, n: int): ByteBuf:
                 end
                 bit--
             end
-            tleaf[cur] = true
-            tsym[cur] = s
+            if good:
+                tleaf[cur] = true
+                tsym[cur] = s
+            end
         end
+    end
+    if not good:
+        BufFree(out)
+        ret NewByteBuf()
     end
 
     remaining := RdLeft(r)
     mut br := NewBitReader(((r.data as i64) + (r.pos as i64)) as void*, remaining)
-    until BufLen(out) < origLen:
+    until BufLen(out) < origLen and good:
         mut cur := 0
-        until not tleaf[cur]:
+        until not tleaf[cur] and good:
             bit := BitReadBit(br)
-            if bit == 0:
+            if br.bad:
+                good = false
+            else bit == 0:
                 cur = tleft[cur]
             else:
                 cur = tright[cur]
             end
+            if cur < 0:
+                good = false
+                cur = 0
+            end
         end
-        BufPush(out, tsym[cur])
+        if good: BufPush(out, tsym[cur]) end
     end
+    if not good:
+        BufFree(out)
+        ret NewByteBuf()
+    end
+    ok = true
     ret out
+end
+
+@en "HuffmanDecompress"
+@fa "کدگشایی هافمن"
+pub func HuffmanDecompress(p: void*, n: int): ByteBuf:
+    mut ok := false
+    ret HuffmanDecompressMax(p, n, 0, ok)
 end

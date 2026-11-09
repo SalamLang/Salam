@@ -25,7 +25,7 @@ if not SALAM_OS_WINDOWS:
         func symlink(target: str, path: str): int
         func link(existing: str, path: str): int
         func utimes(path: str, tv: void*): int
-        func readlink(path: str, buf: void*, sz: u64): int
+        func readlink(path: str, buf: void*, sz: usize): int
     end
 end
 
@@ -78,6 +78,9 @@ pub struct TarFileInput:
     @en "kind"
     @fa "نوع"
     pub kind: int = 0
+    @en "path"
+    @fa "مسیر منبع"
+    pub path: str = ""
 end
 
 struct _TarPax:
@@ -325,7 +328,7 @@ func _tar_input_kind(f: TarFileInput): int:
     ret f.kind
 end
 
-func _tar_write_header(out &: compress.ByteBuf, f: TarFileInput):
+func _tar_write_header(out &: compress.ByteBuf, f: TarFileInput, fsize: i64):
     kind := _tar_input_kind(f)
     mut pax := compress.NewByteBuf()
     mut name_part := f.name
@@ -371,6 +374,28 @@ func _tar_write_header(out &: compress.ByteBuf, f: TarFileInput):
         _tar_free_str(ms)
         mtime = 0 as i64
     end
+    mut hdr_size := fsize
+    if kind == 0 and fsize >= _TAR_OCTAL_LIMIT:
+        mut sd := compress.NewByteBuf()
+        mut sv := fsize
+        mut stmp: int[24]
+        mut sn := 0
+        until sv == (0 as i64):
+            stmp[sn] = (sv % (10 as i64)) as int
+            sv /= (10 as i64)
+            sn++
+        end
+        mut si := sn - 1
+        until si >= 0:
+            compress.BufPush(sd, 48 + stmp[si])
+            si--
+        end
+        sstr := compress.BufToStrUnsafe(sd)
+        compress.BufFree(sd)
+        _tar_pax_rec(pax, "size", sstr)
+        _tar_free_str(sstr)
+        hdr_size = 0 as i64
+    end
     if pax.len > 0:
         _tar_raw_header(out, "PaxHeaders/entry", "", 0o644 as i64, pax.len as i64, 0 as i64, 120, "")
         compress.BufPushBuf(out, pax)
@@ -388,10 +413,10 @@ func _tar_write_header(out &: compress.ByteBuf, f: TarFileInput):
             file_mode = 0o644 as i64
         end
     end
-    mut sz := 0
+    mut sz := 0 as i64
     mut typeflag := 48
     if kind == 0:
-        sz = f.data_len
+        sz = hdr_size
     else kind == 1:
         typeflag = 53
     else kind == 2:
@@ -399,7 +424,7 @@ func _tar_write_header(out &: compress.ByteBuf, f: TarFileInput):
     else kind == 3:
         typeflag = 49
     end
-    _tar_raw_header(out, name_part, prefix, file_mode, sz as i64, mtime, typeflag, target)
+    _tar_raw_header(out, name_part, prefix, file_mode, sz, mtime, typeflag, target)
     if split:
         _tar_free_str(prefix)
         _tar_free_str(name_part)
@@ -636,7 +661,7 @@ func _tar_is_link(path: str): bool:
         ret false
     else:
         buf := mem.Allocate(8 as u64)
-        r := readlink(path, buf, 8 as u64)
+        r := readlink(path, buf, 8 as usize)
         mem.Free(buf)
         ret r >= 0
     end
@@ -826,10 +851,100 @@ func _tar_place(e: Entry, destdir: str, dirs &: Vector<str>, dir_times &: Vector
     ret ok
 end
 
+func _tar_stream(files: Vector<TarFileInput>, outpath: str, kind: int, level: int): bool:
+    dst := compress.FileOpenWrite(outpath)
+    if dst == null:
+        ret false
+    end
+    mut cw := _cw_open(dst, kind, level)
+    scratch := mem.Allocate(262144 as u64)
+    mut ok := true
+    mut i := 0
+    until i < files.len() and ok:
+        f := files.get(i)
+        mut size := f.data_len as i64
+        mut src := null as void*
+        if f.path.len() > 0 and _tar_input_kind(f) == 0:
+            src = compress.FileOpenRead(f.path)
+            if src == null:
+                ok = false
+            else:
+                size = compress.FileSize(src)
+                if size < (0 as i64):
+                    ok = false
+                end
+            end
+        else _tar_input_kind(f) == 0 and (f.data_len < 0 or (f.data_ptr == null and f.data_len > 0)):
+            ok = false
+        end
+        if ok:
+            mut h := compress.NewByteBuf()
+            _tar_write_header(h, f, size)
+            ok = _cw_write(cw, h.data, h.len)
+            compress.BufFree(h)
+        end
+        if ok and _tar_input_kind(f) == 0:
+            if src != null:
+                mut at := 0 as i64
+                until at < size and ok:
+                    mut want := 262144
+                    if size - at < (want as i64):
+                        want = (size - at) as int
+                    end
+                    got := compress.FileReadAt(src, at, scratch, want)
+                    if got != want:
+                        ok = false
+                    else:
+                        ok = _cw_write(cw, scratch, got)
+                        at += got as i64
+                    end
+                end
+            else:
+                ok = _cw_write(cw, f.data_ptr, f.data_len)
+            end
+            if ok and size % (512 as i64) > (0 as i64):
+                mut pad := compress.NewByteBuf()
+                _tar_pad(pad, (size % (512 as i64)) as int)
+                ok = _cw_write(cw, pad.data, pad.len)
+                compress.BufFree(pad)
+            end
+        end
+        if src != null:
+            compress.FileClose(src)
+        end
+        i++
+    end
+    mem.Free(scratch)
+    if ok:
+        mut z := compress.NewByteBuf()
+        repeat 1024: compress.BufPush(z, 0) end
+        ok = _cw_write(cw, z.data, z.len)
+        compress.BufFree(z)
+    end
+    if ok:
+        ok = _cw_finish(cw)
+    else:
+        _cw_abort(cw)
+    end
+    if fclose(dst) != 0:
+        ok = false
+    end
+    if not ok:
+        os.Remove(outpath)
+    end
+    ret ok
+end
+
 @en "MakeTarFileInput"
 @fa "ساخت ورودی پرونده تار"
 pub func MakeTarFileInput(name: str, data_ptr: void*, data_len: int, is_dir: bool): TarFileInput:
     ret TarFileInput { name = name, data_ptr = data_ptr, data_len = data_len, is_dir = is_dir, mode = 0, mtime = 0 as i64, link = "", kind = 0 }
+end
+
+@en "MakeTarFilePath"
+@fa "ساخت ورودی پرونده تار از مسیر"
+pub func MakeTarFilePath(name: str, path: str): TarFileInput:
+    ret TarFileInput { name = name, path = path, kind = 0 }
 end
 
 @en "MakeTarSymlink"
@@ -851,11 +966,26 @@ pub func TarCreate(files: Vector<TarFileInput>): compress.ByteBuf:
     mut i := 0
     until i < files.len():
         f := files.get(i)
-        _tar_write_header(out, f)
-        if _tar_input_kind(f) == 0:
-            compress.BufPushBytes(out, f.data_ptr, f.data_len)
-            _tar_pad(out, f.data_len)
+        mut data := compress.NewByteBuf()
+        mut dp := f.data_ptr
+        mut dn := f.data_len
+        if f.path.len() > 0 and _tar_input_kind(f) == 0:
+            mut rok := false
+            data = ReadBinaryFile(f.path, rok)
+            if not rok:
+                compress.BufFree(out)
+                compress.BufFree(data)
+                ret compress.NewByteBuf()
+            end
+            dp = data.data
+            dn = data.len
         end
+        _tar_write_header(out, f, dn as i64)
+        if _tar_input_kind(f) == 0:
+            compress.BufPushBytes(out, dp, dn)
+            _tar_pad(out, dn)
+        end
+        compress.BufFree(data)
         i++
     end
     repeat 1024: compress.BufPush(out, 0) end
@@ -865,10 +995,7 @@ end
 @en "TarCreateFile"
 @fa "ساخت پرونده تار"
 pub func TarCreateFile(files: Vector<TarFileInput>, outpath: str): bool:
-    mut out := TarCreate(files)
-    ok := WriteBinaryFileBuf(outpath, out)
-    compress.BufFree(out)
-    ret ok
+    ret _tar_stream(files, outpath, _CW_RAW, 0)
 end
 
 @en "TarList"
@@ -940,10 +1067,7 @@ end
 @en "TarGzCreateFile"
 @fa "ساخت پرونده تار جی زیپ"
 pub func TarGzCreateFile(files: Vector<TarFileInput>, outpath: str): bool:
-    mut out := TarGzCreate(files)
-    ok := WriteBinaryFileBuf(outpath, out)
-    compress.BufFree(out)
-    ret ok
+    ret _tar_stream(files, outpath, _CW_GZIP, 0)
 end
 
 @en "TarGzListMax"
@@ -1018,10 +1142,13 @@ end
 @en "TarZstdCreateFile"
 @fa "ساخت پرونده تار زستد"
 pub func TarZstdCreateFile(files: Vector<TarFileInput>, outpath: str): bool:
-    mut out := TarZstdCreate(files)
-    ok := WriteBinaryFileBuf(outpath, out)
-    compress.BufFree(out)
-    ret ok
+    ret _tar_stream(files, outpath, _CW_ZSTD, 3)
+end
+
+@en "TarZstdCreateFileLevel"
+@fa "ساخت پرونده تار زستد با سطح"
+pub func TarZstdCreateFileLevel(files: Vector<TarFileInput>, outpath: str, level: int): bool:
+    ret _tar_stream(files, outpath, _CW_ZSTD, level < 1 ? 1 : level)
 end
 
 @en "TarZstdListMax"

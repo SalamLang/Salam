@@ -561,10 +561,29 @@ func _rar_put_header(out &: compress.ByteBuf, body: compress.ByteBuf):
     compress.BufFree(head)
 end
 
-func _rar_entries_of(a: _RarArc): Vector<Entry>:
+func _rar_entries_of(a: _RarArc, probe: bool): Vector<Entry>:
     mut out := Vector {} as Vector<Entry>
     repeat a.files.len() in i:
         f := a.files.get(i)
+        mut kind := f.is_dir ? 1 : 0
+        mut lk := ""
+        if f.redirect and f.rkind == 1:
+            kind = 2
+            lk = _rar_dup(f.rtarget)
+        else f.redirect and (f.rkind == 4 or f.rkind == 5):
+            kind = 3
+            lk = _rar_dup(f.rtarget)
+        else probe and f.rkind == 1 and not f.is_dir and f.unp_size > (0 as i64) and f.unp_size <= (4096 as i64):
+            mut st := 0
+            mut data := _rar_read_from(a, f.name, 4096, st)
+            if st == RAR_OK and data.len > 0:
+                kind = 2
+                tgt := compress.BufToStrUnsafe(data)
+                lk = _rar_dup(tgt)
+                _rar_free_name(tgt)
+            end
+            compress.BufFree(data)
+        end
         out.push(Entry {
             name = _rar_dup(f.name)
             size = f.unp_size < 0 ? 0 as i64 : f.unp_size
@@ -573,6 +592,8 @@ func _rar_entries_of(a: _RarArc): Vector<Entry>:
             method = f.method
             crc32 = f.crc
             mtime = f.mtime
+            link = lk
+            kind = kind
         })
     end
     ret out
@@ -886,7 +907,7 @@ end
 @fa "فهرست آر ای آر"
 pub func RarList(p: void*, n: int): Vector<Entry>:
     mut a := _rar_open(p, n, "")
-    out := _rar_entries_of(a)
+    out := _rar_entries_of(a, true)
     _rar_free_files(a.files)
     _rar_close_arc(a)
     ret out
@@ -946,7 +967,7 @@ end
 pub func RarEntries(arc &: RarArchive): Vector<Entry>:
     mut a := _rar_open_vols(arc.data, arc.len, arc.more, arc.password)
     arc.status = _rar_arc_status(a)
-    out := _rar_entries_of(a)
+    out := _rar_entries_of(a, true)
     _rar_free_files(a.files)
     _rar_close_arc(a)
     ret out

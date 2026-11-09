@@ -1,0 +1,123 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package trojan
+
+import net.tcp
+import net.websocket
+import compress
+import tls
+
+@en "ClientConfig"
+@fa "پیکربندی کارخواه"
+pub struct ClientConfig:
+    @en "server_host"
+    @fa "میزبان کارساز"
+    pub server_host: str = ""
+    @en "server_port"
+    @fa "درگاه کارساز"
+    pub server_port: int = 443
+    @en "password"
+    @fa "گذرواژه"
+    pub password: str = ""
+    @en "sni"
+    @fa "نام سرور"
+    pub sni: str = ""
+    @en "alpn"
+    @fa "پروتکل برنامه"
+    pub alpn: str = ""
+    @en "insecure"
+    @fa "ناامن"
+    pub insecure: bool = false
+    @en "use_tls"
+    @fa "با تی ال اس"
+    pub use_tls: bool = true
+    @en "use_ws"
+    @fa "با وب‌سوکت"
+    pub use_ws: bool = false
+    @en "ws_path"
+    @fa "مسیر وب‌سوکت"
+    pub ws_path: str = "/"
+    @en "lazy_header"
+    @fa "سرآیند همراه نخستین داده"
+    pub lazy_header: bool = false
+    @en "timeout_ms"
+    @fa "مهلت اتصال"
+    pub timeout_ms: int = 10000
+end
+
+func _open_transport(cfg: ClientConfig): Link:
+    if cfg.use_ws:
+        if cfg.use_tls:
+            if cfg.insecure:
+                ret NewWSLink(websocket.DialWSSUnverified(cfg.server_host, cfg.server_port, cfg.ws_path, ""))
+            end
+            ret NewWSLink(websocket.DialWSS(cfg.server_host, cfg.server_port, cfg.ws_path))
+        end
+        ret NewWSLink(websocket.Dial(cfg.server_host, cfg.server_port, cfg.ws_path))
+    end
+    if not cfg.use_tls:
+        ret NewTCPLink(tcp.DialTimeout(cfg.server_host, cfg.server_port, cfg.timeout_ms))
+    end
+    mut name := cfg.sni
+    if name.len() == 0:
+        name = cfg.server_host
+    end
+    mut tc := tls.NewConfig(name)
+    tc.insecure_skip_verify = cfg.insecure
+    tc.alpn = cfg.alpn
+    ret NewTLSLink(tls.Dial(cfg.server_host, cfg.server_port, tc))
+end
+
+func _open_with(cfg: ClientConfig, cmd: int, host: str, port: int): Link:
+    mut l := _open_transport(cfg)
+    if not LinkOk(l):
+        ret l
+    end
+    mut hdr := EncodeRequest(cfg.password, cmd, host, port)
+    if cfg.lazy_header:
+        l.pending = hdr
+        ret l
+    end
+    ok := LinkWriteBuf(l, hdr)
+    compress.BufFree(hdr)
+    if not ok:
+        LinkClose(l)
+    end
+    ret l
+end
+
+@en "NewClientConfig"
+@fa "پیکربندی کارخواه جدید"
+pub func NewClientConfig(server_host: str, server_port: int, password: str): ClientConfig:
+    ret ClientConfig { server_host = server_host, server_port = server_port, password = password }
+end
+
+@en "Dial"
+@fa "شماره گیری"
+pub func Dial(cfg: ClientConfig, host: str, port: int): Link:
+    ret _open_with(cfg, CmdConnect, host, port)
+end
+
+@en "DialUDP"
+@fa "شماره گیری یو دی پی"
+pub func DialUDP(cfg: ClientConfig): Link:
+    ret _open_with(cfg, CmdUDP, "0.0.0.0", 0)
+end
+
+@en "SendUDP"
+@fa "ارسال یو دی پی"
+pub func SendUDP(l &: Link, host: str, port: int, p: void*, n: int): bool:
+    ret WriteUDPPacket(l, host, port, p, n)
+end

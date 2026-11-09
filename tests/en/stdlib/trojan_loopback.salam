@@ -1,0 +1,202 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+import mem
+import net.tcp
+import net.udp
+import net.trojan
+import compress
+import sync
+import tls
+
+mut echo_port := 0
+mut web_port := 0
+mut udp_port := 0
+mut web_seen := ""
+mut ready := sync.NewWaitGroup()
+
+func text_of(p: void*, n: int): str:
+    buf := mem.Allocate((n + 1) as u64)
+    mem.Copy(buf, p, n as u64)
+    (buf as u8*)[n] = 0 as u8
+    ret buf as str
+end
+
+func echo_server():
+    srv := tcp.Bind(0)
+    echo_port = tcp.Port(srv)
+    sync.Done(ready)
+    until true:
+        c := tcp.Accept(srv)
+        until true:
+            s := tcp.Read(c, 4096)
+            if s.len() == 0:
+                break
+            end
+            _n := tcp.Write(c, s)
+        end
+        tcp.Close(c)
+    end
+end
+
+func web_server():
+    srv := tcp.Bind(0)
+    web_port = tcp.Port(srv)
+    sync.Done(ready)
+    until true:
+        c := tcp.Accept(srv)
+        web_seen = tcp.Read(c, 4096)
+        _n := tcp.Write(c, "HTTP/1.1 200 OK\r\nContent-Length: 12\r\nConnection: close\r\n\r\nhello probes")
+        tcp.Close(c)
+    end
+end
+
+func udp_server():
+    s := udp.Bind(0)
+    udp_port = udp.Port(s)
+    sync.Done(ready)
+    until true:
+        p := udp.Receive(s, 2048)
+        if p.data.len() > 0:
+            _n := udp.Send(s, p.from_host, p.from_port, "echo:" + p.data)
+        end
+    end
+end
+
+func read_all_text(l &: trojan.Link, want: int): str:
+    buf := mem.Allocate(8192 as u64)
+    defer mem.Free(buf)
+    mut out := ""
+    until out.len() < want:
+        n := trojan.LinkRead(l, buf, 8192)
+        if n <= 0:
+            break
+        end
+        out = out + text_of(buf, n)
+    end
+    ret out
+end
+
+func main:
+    println trojan.Sha224Hex("")
+    println trojan.Sha224Hex("abc")
+    println trojan.Sha224Hex("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq")
+    println trojan.PasswordHash("password")
+
+    req := trojan.EncodeRequest("password", trojan.CmdConnect, "example.com", 443)
+    println trojan.HexOf(req)
+    pr := trojan.ParseRequest(req.data, req.len)
+    println pr.status, pr.cmd, pr.atyp, pr.host, pr.port, pr.consumed
+    short := trojan.ParseRequest(req.data, req.len - 3)
+    println "short", short.status
+    req6 := trojan.EncodeRequest("password", trojan.CmdUDP, "2001:db8::1", 53)
+    p6 := trojan.ParseRequest(req6.data, req6.len)
+    println p6.status, p6.cmd, p6.atyp, p6.host, p6.port
+    junk := trojan.ParseRequest("GET / HTTP/1.1\r\nHost: a\r\n\r\n" as void*, 28)
+    println "junk", junk.status
+    pk := trojan.EncodeUDPPacket("8.8.8.8", 53, "hi" as void*, 2)
+    println trojan.HexOf(pk)
+    up := trojan.ParseUDPPacket(pk.data, pk.len)
+    println up.status, up.host, up.port, up.payload_off, up.payload_len, up.consumed
+
+    sync.Add(ready, 3 as i64)
+    _t1 := spawn(echo_server)
+    _t2 := spawn(web_server)
+    _t3 := spawn(udp_server)
+    sync.Wait(ready)
+
+    mut scfg := trojan.NewServerConfig("tests/fixtures/ssl/server.crt", "tests/fixtures/ssl/server.key")
+    trojan.SetFallback(scfg, "127.0.0.1", web_port)
+    trojan.AddPassword(scfg, "secret")
+    trojan.AddPassword(scfg, "second")
+    srv := trojan.Serve(scfg, 0)
+    println "server ok", srv.ok
+
+    mut ccfg := trojan.NewClientConfig("127.0.0.1", srv.port, "secret")
+    ccfg.sni = "example.com"
+    ccfg.insecure = true
+    mut link := trojan.Dial(ccfg, "127.0.0.1", echo_port)
+    println "dial ok", trojan.LinkOk(link)
+    println trojan.LinkWriteStr(link, "hello trojan")
+    println read_all_text(link, 12)
+    big := mem.Allocate(50000 as u64)
+    mem.Set(big, 97, 50000 as u64)
+    println trojan.LinkWrite(link, big, 50000)
+    mut total := 0
+    until total < 50000:
+        rb := mem.Allocate(8192 as u64)
+        n := trojan.LinkRead(link, rb, 8192)
+        mem.Free(rb)
+        if n <= 0:
+            break
+        end
+        total += n
+    end
+    println "echoed", total
+    trojan.LinkClose(link)
+
+    ccfg2 := trojan.NewClientConfig("127.0.0.1", srv.port, "second")
+    mut c2 := ccfg2
+    c2.insecure = true
+    c2.lazy_header = true
+    mut link2 := trojan.Dial(c2, "127.0.0.1", echo_port)
+    println trojan.LinkWriteStr(link2, "lazy header")
+    println read_all_text(link2, 11)
+    trojan.LinkClose(link2)
+
+    mut bad := trojan.NewClientConfig("127.0.0.1", srv.port, "wrong")
+    bad.insecure = true
+    mut link3 := trojan.Dial(bad, "127.0.0.1", echo_port)
+    println read_all_text(link3, 1).len() > 40
+    badreq := trojan.EncodeRequest("wrong", trojan.CmdConnect, "127.0.0.1", echo_port)
+    println "forwarded exact", web_seen == text_of(badreq.data, badreq.len)
+    trojan.LinkClose(link3)
+
+    mut tc := tls.NewConfig("example.com")
+    tc.insecure_skip_verify = true
+    mut probe := trojan.NewTLSLink(tls.Dial("127.0.0.1", srv.port, tc))
+    println trojan.LinkWriteStr(probe, "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n")
+    answer := read_all_text(probe, 60)
+    println answer.find("200 OK") >= 0, answer.find("hello probes") >= 0
+    println web_seen.substr(0, 14)
+    trojan.LinkClose(probe)
+
+    mut ulink := trojan.DialUDP(c2)
+    println trojan.SendUDP(ulink, "127.0.0.1", udp_port, "ping" as void*, 4)
+    mut pkt := trojan.NewUDPPacket()
+    mut payload := compress.NewByteBuf()
+    println trojan.ReadUDPPacket(ulink, pkt, payload)
+    println pkt.host, pkt.port == udp_port, text_of(payload.data, payload.len)
+    trojan.LinkClose(ulink)
+
+    sync.SleepMs(400)
+    st := trojan.Stats(srv)
+    println "stats", st.accepted, st.authed, st.fallbacks
+    trojan.Stop(srv)
+
+    mut wcfg := trojan.NewServerConfig("", "")
+    trojan.AddPassword(wcfg, "wspass")
+    wsrv := trojan.ServeWS(wcfg, 0)
+    println "ws server ok", wsrv.ok
+    mut wc := trojan.NewClientConfig("127.0.0.1", wsrv.port, "wspass")
+    wc.use_tls = false
+    wc.use_ws = true
+    wc.ws_path = "/trojan"
+    mut wlink := trojan.Dial(wc, "127.0.0.1", echo_port)
+    println "ws dial ok", trojan.LinkOk(wlink)
+    println trojan.LinkWriteStr(wlink, "over websocket")
+    println read_all_text(wlink, 14)
+    trojan.LinkClose(wlink)
+    trojan.Stop(wsrv)
+end

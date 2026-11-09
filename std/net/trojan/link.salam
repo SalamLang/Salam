@@ -1,0 +1,340 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package trojan
+
+import mem
+import net.tcp
+import net.websocket
+import net.internal.rawsock
+import compress
+import tls
+
+@en "LinkTCP"
+@fa "پیوند تی سی پی"
+pub const LinkTCP := 0
+
+@en "LinkTLS"
+@fa "پیوند تی ال اس"
+pub const LinkTLS := 1
+
+@en "LinkWS"
+@fa "پیوند وب‌سوکت"
+pub const LinkWS := 2
+
+struct Pipe:
+    pub src: Link* = null
+    pub dst: Link* = null
+    pub bytes: i64 = 0
+end
+
+@en "Link"
+@fa "پیوند"
+pub struct Link:
+    @en "kind"
+    @fa "نوع"
+    pub kind: int = 0
+    @en "tc"
+    @fa "اتصال تی سی پی"
+    pub tc: tcp.Conn = tcp.Conn {}
+    @en "sc"
+    @fa "اتصال امن"
+    pub sc: tls.Conn = tls.Conn {}
+    @en "ws"
+    @fa "اتصال وب‌سوکت"
+    pub ws: websocket.Conn = websocket.Conn {}
+    @en "rbuf"
+    @fa "بافر خواندن"
+    pub rbuf: compress.ByteBuf = compress.ByteBuf {}
+    @en "roff"
+    @fa "جایگاه خواندن"
+    pub roff: int = 0
+    @en "ubuf"
+    @fa "بافر یو دی پی"
+    pub ubuf: compress.ByteBuf = compress.ByteBuf {}
+    @en "pending"
+    @fa "سرآیند معلق"
+    pub pending: compress.ByteBuf = compress.ByteBuf {}
+end
+
+func _fd_of(l: Link): i64:
+    if l.kind == LinkTCP:
+        ret l.tc.fd
+    else l.kind == LinkTLS:
+        ret tls.Fd(l.sc)
+    end
+    ret l.ws.fd
+end
+
+func _flush_pending(l &: Link): bool:
+    if l.pending.len == 0:
+        ret true
+    end
+    mut hdr := l.pending
+    l.pending = compress.ByteBuf {}
+    ok := _write_raw(l, hdr.data, hdr.len)
+    compress.BufFree(hdr)
+    ret ok
+end
+
+func _write_raw(l &: Link, p: void*, n: int): bool:
+    mut off := 0
+    until off < n:
+        src := ((p as i64) + (off as i64)) as void*
+        mut w := 0
+        if l.kind == LinkTCP:
+            w = tcp.WriteBytes(l.tc, src, n - off)
+        else l.kind == LinkTLS:
+            w = tls.WriteBytes(l.sc, src, n - off)
+        else:
+            if not l.ws.open:
+                ret false
+            end
+            r := websocket.SendBinaryBytes(l.ws, src, n - off)
+            if r < 0:
+                ret false
+            end
+            w = n - off
+        end
+        if w <= 0:
+            ret false
+        end
+        off += w
+    end
+    ret true
+end
+
+func _pump(pp: Pipe*):
+    src := pp[0].src
+    dst := pp[0].dst
+    cap := 16384
+    buf := mem.Allocate(cap as u64)
+    until true:
+        n := LinkRead(src[0], buf, cap)
+        if n <= 0:
+            break
+        end
+        if not LinkWrite(dst[0], buf, n):
+            break
+        end
+        pp[0].bytes += n as i64
+    end
+    mem.Free(buf)
+    LinkShutdown(src[0])
+    LinkShutdown(dst[0])
+end
+
+@en "NewTCPLink"
+@fa "پیوند تی سی پی جدید"
+pub func NewTCPLink(c: tcp.Conn): Link:
+    ret Link { kind = LinkTCP, tc = c }
+end
+
+@en "NewTLSLink"
+@fa "پیوند تی ال اس جدید"
+pub func NewTLSLink(c: tls.Conn): Link:
+    ret Link { kind = LinkTLS, sc = c }
+end
+
+@en "NewWSLink"
+@fa "پیوند وب‌سوکت جدید"
+pub func NewWSLink(c: websocket.Conn): Link:
+    ret Link { kind = LinkWS, ws = c }
+end
+
+@en "LinkOk"
+@fa "پیوند معتبر"
+pub func LinkOk(l: Link): bool:
+    if l.kind == LinkTCP:
+        ret tcp.ConnOk(l.tc)
+    else l.kind == LinkTLS:
+        ret tls.ConnOk(l.sc)
+    end
+    ret l.ws.open
+end
+
+@en "LinkFd"
+@fa "توصیفگر پیوند"
+pub func LinkFd(l: Link): i64:
+    ret _fd_of(l)
+end
+
+@en "LinkRead"
+@fa "خواندن پیوند"
+pub func LinkRead(l &: Link, buf: void*, max: int): int:
+    if l.roff < l.rbuf.len:
+        mut take := l.rbuf.len - l.roff
+        if take > max:
+            take = max
+        end
+        mem.Copy(buf, ((l.rbuf.data as i64) + (l.roff as i64)) as void*, take as u64)
+        l.roff += take
+        if l.roff >= l.rbuf.len:
+            compress.BufReset(l.rbuf)
+            l.roff = 0
+        end
+        ret take
+    end
+    if l.kind == LinkTCP:
+        n := tcp.ReadBytes(l.tc, buf, max)
+        if n < 0:
+            ret 0
+        end
+        ret n
+    else l.kind == LinkTLS:
+        ret tls.ReadBytes(l.sc, buf, max)
+    end
+    until true:
+        if not l.ws.open:
+            ret 0
+        end
+        m := websocket.Receive(l.ws)
+        if m.kind == websocket.BINARY or m.kind == websocket.TEXT:
+            if m.kind == websocket.BINARY:
+                compress.BufPushBytes(l.rbuf, m.data, m.len)
+            else:
+                compress.BufPushBytes(l.rbuf, m.text as void*, m.text.len())
+            end
+            if l.rbuf.len > 0:
+                ret LinkRead(l, buf, max)
+            end
+        else m.kind == websocket.CLOSE or m.kind == websocket.NONE:
+            ret 0
+        end
+    end
+end
+
+@en "LinkWrite"
+@fa "نوشتن پیوند"
+pub func LinkWrite(l &: Link, p: void*, n: int): bool:
+    if n <= 0:
+        ret true
+    end
+    if l.pending.len > 0:
+        if not _flush_pending(l):
+            ret false
+        end
+    end
+    ret _write_raw(l, p, n)
+end
+
+@en "LinkWriteBuf"
+@fa "نوشتن بافر پیوند"
+pub func LinkWriteBuf(l &: Link, b: compress.ByteBuf): bool:
+    ret LinkWrite(l, b.data, b.len)
+end
+
+@en "LinkWriteStr"
+@fa "نوشتن متن پیوند"
+pub func LinkWriteStr(l &: Link, s: str): bool:
+    ret LinkWrite(l, s as void*, s.len())
+end
+
+@en "LinkSetTimeout"
+@fa "تنظیم مهلت پیوند"
+pub func LinkSetTimeout(l: Link, millis: int):
+    fd := _fd_of(l)
+    if fd >= 0:
+        rawsock.SetTimeout(rawsock.FromFd(fd), millis)
+    end
+end
+
+@en "LinkShutdown"
+@fa "خاموش کردن پیوند"
+pub func LinkShutdown(l: Link):
+    fd := _fd_of(l)
+    if fd >= 0:
+        rawsock.Shutdown(rawsock.FromFd(fd))
+    end
+end
+
+@en "LinkClose"
+@fa "بستن پیوند"
+pub func LinkClose(l &: Link):
+    if l.kind == LinkTCP:
+        tcp.Close(l.tc)
+    else l.kind == LinkTLS:
+        tls.Close(l.sc)
+    else:
+        websocket.Close(l.ws)
+    end
+    compress.BufFree(l.rbuf)
+    compress.BufFree(l.ubuf)
+    compress.BufFree(l.pending)
+    l.roff = 0
+end
+
+@en "Relay"
+@fa "رله"
+pub func Relay(a: Link*, b: Link*): i64:
+    pa := mem.AllocateZeroed(sizeof(Pipe) as u64) as Pipe*
+    pb := mem.AllocateZeroed(sizeof(Pipe) as u64) as Pipe*
+    pa[0] = Pipe { src = a, dst = b, bytes = 0 }
+    pb[0] = Pipe { src = b, dst = a, bytes = 0 }
+    t := spawn(_pump, pa)
+    _pump(pb)
+    join(t)
+    total := pa[0].bytes + pb[0].bytes
+    mem.Free(pa as void*)
+    mem.Free(pb as void*)
+    ret total
+end
+
+@en "NewUDPPacket"
+@fa "بسته یو دی پی جدید"
+pub func NewUDPPacket(): UDPPacket:
+    ret UDPPacket {}
+end
+
+@en "ReadUDPPacket"
+@fa "خواندن بسته یو دی پی"
+pub func ReadUDPPacket(l &: Link, pkt &: UDPPacket, payload &: compress.ByteBuf): bool:
+    cap := 4096
+    tmp := mem.Allocate(cap as u64)
+    defer mem.Free(tmp)
+    until true:
+        if l.ubuf.len > 0:
+            r := ParseUDPPacket(l.ubuf.data, l.ubuf.len)
+            if r.status == ParseInvalid:
+                ret false
+            end
+            if r.status == ParseOK:
+                compress.BufReset(payload)
+                src := ((l.ubuf.data as i64) + (r.payload_off as i64)) as void*
+                compress.BufPushBytes(payload, src, r.payload_len)
+                rest := l.ubuf.len - r.consumed
+                if rest > 0:
+                    mem.MemMove(l.ubuf.data, ((l.ubuf.data as i64) + (r.consumed as i64)) as void*, rest as u64)
+                end
+                l.ubuf.len = rest
+                pkt = r
+                ret true
+            end
+        end
+        n := LinkRead(l, tmp, cap)
+        if n <= 0:
+            ret false
+        end
+        compress.BufPushBytes(l.ubuf, tmp, n)
+    end
+end
+
+@en "WriteUDPPacket"
+@fa "نوشتن بسته یو دی پی"
+pub func WriteUDPPacket(l &: Link, host: str, port: int, p: void*, n: int): bool:
+    mut b := EncodeUDPPacket(host, port, p, n)
+    ok := LinkWrite(l, b.data, b.len)
+    compress.BufFree(b)
+    ret ok
+end

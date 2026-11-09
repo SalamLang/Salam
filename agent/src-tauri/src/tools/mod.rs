@@ -26,6 +26,10 @@ pub struct Call {
     pub chat: String,
     #[serde(default)]
     pub workspace: String,
+    #[serde(default)]
+    pub extra: String,
+    #[serde(default)]
+    pub project: bool,
 }
 
 #[derive(Clone, Copy, Debug, Serialize, PartialEq, Eq)]
@@ -561,6 +565,8 @@ mod tests {
             args,
             chat: "chat".into(),
             workspace: String::new(),
+            extra: String::new(),
+            project: false,
         }
     }
 

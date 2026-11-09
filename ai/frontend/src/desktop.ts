@@ -1,6 +1,6 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
-import { useEffect } from "react";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
+import { useEffect } from "react";
 
 type SalamBridge = {
   invoke<T>(command: string, args?: Record<string, unknown>): Promise<T>;
@@ -62,12 +62,15 @@ export type NotifyPrefs = {
   lang: "fa" | "en";
 };
 
+export type PathStatus = "ok" | "missing" | "not_folder" | "invalid";
+
 export const agent = {
   info: () => call<AgentInfo>("agent_info"),
   openUrl: (url: string) => call<void>("agent_open_url", { url }),
   link: (token: string) => call<AgentInfo>("agent_link", { token }),
   unlink: (token: string) => call<AgentInfo>("agent_unlink", { token }),
   pickFolder: () => call<string | null>("agent_pick_folder"),
+  pathStatus: (path: string) => call<PathStatus>("agent_path_status", { path }),
   setMode: (chat: string, mode: AgentMode) =>
     call<void>("agent_set_mode", { chat, mode }),
   decide: (callId: string, answer: AgentAnswer) =>
@@ -238,7 +241,11 @@ export function folderName(path: string): string {
   return parts[parts.length - 1] || path;
 }
 
-export function useReturnReset(active: boolean, reset: () => void, timeoutMs = 120000): void {
+export function useReturnReset(
+  active: boolean,
+  reset: () => void,
+  timeoutMs = 120000,
+): void {
   useEffect(() => {
     if (!active) return;
     const armed = Date.now() + 1500;

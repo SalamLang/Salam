@@ -61,7 +61,7 @@ func _zipf_to_sink(fp: void*, size: i64, r: _ZipRec, sink &: compress.FileSink):
     if (r.flags & 1) != 0:
         ret ZIP_ENCRYPTED
     end
-    if r.method != 0 and r.method != 8:
+    if not _zip_known_method(r.method):
         ret ZIP_UNSUPPORTED
     end
     if r.uncomp < (0 as i64) or r.comp < (0 as i64) or r.local < (0 as i64) or r.local + (30 as i64) > size:
@@ -85,6 +85,22 @@ func _zipf_to_sink(fp: void*, size: i64, r: _ZipRec, sink &: compress.FileSink):
     mut ok := true
     if r.method == 0:
         ok = r.comp == r.uncomp and compress.SinkCopyFrom(sink, fp, data_start, r.comp)
+    else r.method != ZipMethodDeflate:
+        lim := 2147483647 as i64
+        if r.comp > lim or r.uncomp > lim:
+            ret ZIP_TOO_BIG
+        end
+        packed := mem.Allocate((r.comp + (1 as i64)) as u64)
+        ok = compress.FileReadAt(fp, data_start, packed, r.comp as int) == (r.comp as int)
+        mut res := compress.NewByteBuf()
+        if ok:
+            ok = _zip_unpack_ext(r.method, packed, r.comp as int, r.uncomp as int, res) == ZIP_OK
+        end
+        mem.Free(packed)
+        if ok:
+            ok = compress.SinkWrite(sink, res.data, res.len)
+        end
+        compress.BufFree(res)
     else:
         mut br := compress.NewFileBitReader(fp, data_start, r.comp)
         ok = not br.bad and compress.RawInflateToSink(br, sink, false)

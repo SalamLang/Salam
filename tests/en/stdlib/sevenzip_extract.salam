@@ -1,0 +1,193 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import archive
+import compress
+import filepath
+import fs
+import os
+
+const LINKS := """
+377abcaf271c0004e43f8bff2a010000000000002200000000000000702da3eae0003700325d00341949db855b96b8fec904
+dbd50b7c00555dfe8d780423696b1598e75e9ff297f334326a83ab38d718c3eb2bfc8791969f13000000813307ae0fd1982d
+18a090a0775ec540188f57d5793ba77dec370e7aa4abfce02b7c86b22bccce27b5d74d7d7cc0b89eb6da4833f9ab1ca0f44c
+b4e29f4d808f5310cfe0959043cb11f95fc6f91038be87889eabf435717c41e11f5c9c880d5a7803bd89e1410d256dc62f1e
+a49c8aa8910e21d1fbd2f518f7d2c958740f9f9cca63beef02d8426668d2f3583fff7c634e3b69ab0b3f115f97624ae2b8c3
+282674254c1a232b53ae055ff370e9c4d42353884834dfc7b8d1eb07ea1dc6a35129d3fb96c5a974428065b5eeb3dfa0726e
+ed0a2a219da3d37fbd0c0f2a014ef43ccc1a5036ad2967b51a98bc80000017063a010980f000070b01000123030101055d00
+1000000c81e20a013ecd13460000
+"""
+
+const PWCOPY := """
+377abcaf271c000401467c3510000000000000007200000000000000a6f93b5bc29c474dedcb2b2c7baee5ce2acac2540104
+060001091000070b0100022406f1070112530fa62ba4bdb05f4b87bc975a8ad8812e89010001000c060600080a0120303a36
+00000501190300000011170074007200650065002f0061002e007400780074000000190400000000140a010080c96715b410
+d701150601002080a0810000
+"""
+
+const PWLZMA := """
+377abcaf271c000487a7e05810000000000000007200000000000000122de153e901950d91eb9712cc2a670f90aa2cae0104
+060001091000070b0100022406f1070112530fffedbf30eca786d0b6d08d80a9e776c42121010001000c0a0600080a012030
+3a360000050119010011170074007200650065002f0061002e007400780074000000190400000000140a010080c96715b410
+d701150601002080a0810000
+"""
+
+func nib(c: int): int:
+    if c >= 48 and c <= 57:
+        ret c - 48
+    end
+    if c >= 97 and c <= 102:
+        ret c - 87
+    end
+    ret -1
+end
+
+func unhex(s: str): compress.ByteBuf:
+    mut b := compress.NewByteBuf()
+    bp := s as u8*
+    mut hi := -1
+    repeat s.len() in i:
+        v := nib(bp[i] as int)
+        if v < 0:
+            continue
+        end
+        if hi < 0:
+            hi = v
+        else:
+            compress.BufPush(b, hi * 16 + v)
+            hi = -1
+        end
+    end
+    ret b
+end
+
+func size_of(path: str): int:
+    mut ok := false
+    mut b := archive.ReadBinaryFile(path, ok)
+    if not ok:
+        ret -1
+    end
+    n := b.len
+    compress.BufFree(b)
+    ret n
+end
+
+func at(d: str, rel: str): str:
+    ret filepath.Join(d, rel)
+end
+
+func extract_links():
+    mut a := unhex(LINKS)
+    dir := filepath.Join(os.TempDir(), "salam_sz_links")
+    os.RemoveAll(dir)
+    os.MkdirAll(dir)
+    mut arc := archive.SevenZipOpen(a.data, a.len, "")
+    n := archive.SevenZipReadAll(arc, dir)
+    println "extracted", n, archive.SevenZipStatusText(arc.status)
+    println "link_a size", size_of(at(dir, "tree/link_a"))
+    println "dirlink to sub", size_of(at(dir, "tree/dirlink/d.txt"))
+    println "a.txt mode", fs.Permissions(at(dir, "tree/a.txt")), "mtime", fs.ModTime(at(dir, "tree/a.txt"))
+    println "run.sh mode", fs.Permissions(at(dir, "tree/run.sh")), "d.txt mtime", fs.ModTime(at(dir, "tree/sub/d.txt"))
+    println "empty file", size_of(at(dir, "tree/empty.txt")), "empty dir", os.IsDir(at(dir, "tree/emptydir"))
+    println "escaping links made", os.Exists(at(dir, "tree/evil1")), os.Exists(at(dir, "tree/evil2"))
+    os.RemoveAll(dir)
+    compress.BufFree(a)
+end
+
+func list_links():
+    mut a := unhex(LINKS)
+    es := archive.SevenZipList(a.data, a.len)
+    each e in es:
+        if e.kind != 0:
+            println e.name, "kind", e.kind, "link", e.link, "mode", e.mode
+        end
+    end
+    compress.BufFree(a)
+end
+
+func sfx():
+    mut a := unhex(LINKS)
+    mut stub := compress.NewByteBuf()
+    repeat 300 in i:
+        compress.BufPush(stub, 77 + (i % 5))
+    end
+    decoy := unhex("377abcaf271c0004deadbeef00000000000000000000000000000000")
+    compress.BufPushBytes(stub, decoy.data, decoy.len)
+    repeat 100:
+        compress.BufPush(stub, 0)
+    end
+    compress.BufPushBytes(stub, a.data, a.len)
+    es := archive.SevenZipList(stub.data, stub.len)
+    mut ok := false
+    got := archive.SevenZipExtractByName(stub.data, stub.len, "tree/sub/d.txt", ok)
+    println "sfx entries", es.len(), "read", ok, got.len, "is 7z at start", archive.IsSevenZip(stub.data, stub.len)
+    compress.BufFree(stub)
+    compress.BufFree(a)
+end
+
+func volumes():
+    mut a := unhex(LINKS)
+    mut vols := Vector {} as Vector<compress.ByteBuf>
+    cuts := [0, 100, 250, a.len]
+    dir := filepath.Join(os.TempDir(), "salam_sz_vols")
+    os.RemoveAll(dir)
+    os.MkdirAll(dir)
+    repeat 3 in k:
+        mut part := compress.NewByteBuf()
+        compress.BufPushBytes(part, ((a.data as i64) + (cuts[k] as i64)) as void*, cuts[k + 1] - cuts[k])
+        vols.push(part)
+        _w := archive.WriteBinaryFileBuf(at(dir, "pack.7z.00" + (k + 1)), part)
+    end
+    mut arc := archive.SevenZipOpenVolumes(vols, "")
+    es := archive.SevenZipEntries(arc)
+    println "volumes", vols.len(), "entries", es.len(), "status", arc.status
+    archive.SevenZipClose(arc)
+    archive.SevenZipFreeVolumes(vols)
+    mut ok := false
+    mut found := archive.SevenZipReadVolumes(at(dir, "pack.7z.001"), ok)
+    mut arc2 := archive.SevenZipOpenVolumes(found, "")
+    got := archive.SevenZipRead(arc2, "tree/a.txt", 0)
+    println "from files", ok, found.len(), "read", got.len, arc2.status
+    archive.SevenZipClose(arc2)
+    archive.SevenZipFreeVolumes(found)
+    os.RemoveAll(dir)
+    compress.BufFree(a)
+end
+
+func pw(label: str, hex: str):
+    mut a := unhex(hex)
+    mut line := label
+    each p in ["secret", "wrong", ""]:
+        mut arc := archive.SevenZipOpen(a.data, a.len, p)
+        got := archive.SevenZipRead(arc, "tree/a.txt", 0)
+        line = line + " " + str_of(arc.status) + "/" + str_of(got.len)
+    end
+    println line
+    compress.BufFree(a)
+end
+
+func str_of(n: int): str:
+    ret "" + n
+end
+
+func main:
+    extract_links()
+    list_links()
+    sfx()
+    volumes()
+    pw("copy+aes", PWCOPY)
+    pw("lzma+aes", PWLZMA)
+end

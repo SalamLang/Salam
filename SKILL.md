@@ -1579,7 +1579,7 @@ end
   sets through `RarReadVolumes`/`RarOpenVolumes`, encrypted and split too;
   `RarReadAll` restores modes and times and makes safe symlinks; entries must be
   under 2 GB (`RAR_TOO_BIG`); `RarCreate` writes stored RAR 5.
-  7z is read only: `IsSevenZip`, `SevenZipList`, `SevenZipExtractByName`, `SevenZipExtractAll`, and `SevenZipOpen(p, n, password)` with `SevenZipEntries`/`SevenZipRead`/`SevenZipReadAll` (LZMA, LZMA2, PPMd, BZip2, Deflate, Deflate64, BCJ2, branch/swap/delta filters, AES; `SEVENZIP_*` status, CRC checked).
+  7z is read only: `IsSevenZip`, `SevenZipList`, `SevenZipExtractByName`, `SevenZipExtractAll`, and `SevenZipOpen(p, n, password)` (also finds a self-extracting prefix) or `SevenZipOpenVolumes(vols, password)` for `.7z.001` sets (`SevenZipReadVolumes`, `SevenZipClose`) with `SevenZipEntries`/`SevenZipRead`/`SevenZipReadAll` (restores modes, mtimes, symlinks) (LZMA, LZMA2, PPMd, BZip2, Deflate, Deflate64, BCJ2, branch/swap/delta filters, AES; `SEVENZIP_*` status, CRC checked).
 - **`excel`**: xlsx, ods and csv workbooks: `Open Save New NewWorkbook NewSheet` with sheet methods `set_string set_number get_cell get_string row_count ...`, `CellRef ParseCellRef SheetToJSON SheetToCSV`. No `.xls`
   (`IsXLS` detects it); the format comes from the file extension; formulas
   are not evaluated; rows and columns count from 0.

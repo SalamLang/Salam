@@ -2654,7 +2654,7 @@ function Overview({ s }: { s: AdminSummary }) {
     <>
       <section className="admin-group" aria-label={t("کاربران و محتوا", "People and content")}>
         <h3 className="admin-group-title">{t("کاربران و محتوا", "People and content")}</h3>
-        <div className="tiles">
+        <div className="tiles tiles-4">
           <Tile label={t("کاربران", "Users")} value={s.users} sub={t(`${fmtNum(s.users_7d)} در ۷ روز اخیر`, `${fmtNum(s.users_7d)} in the last 7 days`)} />
           <Tile label={t("گفت‌وگوها", "Chats")} value={s.chats} sub={t(`${fmtNum(s.messages)} پیام`, `${fmtNum(s.messages)} messages`)} />
           <Tile label={t("مهمان‌های سایت", "Website guests")} value={s.guests ?? 0} sub={t(`${fmtNum(s.guest_messages ?? 0)} پیام، ${fmtNum(s.guests_at_limit ?? 0)} به سقف رسیدند`, `${fmtNum(s.guest_messages ?? 0)} messages, ${fmtNum(s.guests_at_limit ?? 0)} hit the limit`)} />
@@ -2663,7 +2663,7 @@ function Overview({ s }: { s: AdminSummary }) {
       </section>
       <section className="admin-group" aria-label={t("API و MCP", "API and MCP")}>
         <h3 className="admin-group-title">{t("API و MCP", "API and MCP")}</h3>
-        <div className="tiles">
+        <div className="tiles tiles-3">
           <Tile label={t("برنامه‌های متصل", "Connected apps")} value={s.apps} />
           <Tile label={t("فراخوانی‌های MCP", "MCP calls")} value={s.mcp_calls} sub={t(`${fmtNum(s.mcp_calls_24h)} در ۲۴ ساعت اخیر`, `${fmtNum(s.mcp_calls_24h)} in the last 24 hours`)} />
           <Tile label={t("خطاهای MCP در ۲۴ ساعت", "MCP errors in 24 hours")} value={s.mcp_errors_24h} sub={t(`${fmtNum(errRate)}٪ از فراخوانی‌ها`, `${fmtNum(errRate)}% of calls`)} tone={s.mcp_errors_24h > 0 ? "danger" : undefined} />

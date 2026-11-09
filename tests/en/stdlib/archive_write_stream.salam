@@ -1,0 +1,138 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package main
+
+import archive
+import compress
+import testing
+import os
+import filepath
+import mem
+import conv
+
+func make_data(n: int, seed: int): compress.ByteBuf:
+    mut b := compress.NewByteBuf()
+    mut x := seed
+    repeat n in i:
+        x = (x * 1103515245 + 12345) & 0x7fffffff
+        if (i / 700) % 3 == 0:
+            compress.BufPush(b, 97 + (x >> 16) % 6)
+        else:
+            compress.BufPush(b, 32 + (x >> 16) % 90)
+        end
+    end
+    ret b
+end
+
+func p(dir: str, name: str): str:
+    ret filepath.Join(dir, name)
+end
+
+func same(path: str, want: compress.ByteBuf): bool:
+    mut ok := false
+    mut got := archive.ReadBinaryFile(path, ok)
+    r := ok and compress.BufEquals(got, want)
+    compress.BufFree(got)
+    ret r
+end
+
+func roundtrip(dir: str, data: compress.ByteBuf, tag: str):
+    src := p(dir, "src_" + tag)
+    testing.AssertTrue(archive.WriteBinaryFile(src, data.data, data.len))
+
+    gz := p(dir, tag + ".gz")
+    mut back := p(dir, tag + ".gz.out")
+    testing.AssertTrue(archive.GzipCompressFile(src, gz))
+    testing.AssertTrue(archive.GzipDecompressFile(gz, back))
+    testing.AssertTrue(same(back, data))
+    mut rok := false
+    mut packed := archive.ReadBinaryFile(gz, rok)
+    mut gok := false
+    mut mem_out := compress.GzipDecompress(packed.data, packed.len, gok)
+    testing.AssertTrue(gok and compress.BufEquals(mem_out, data))
+    compress.BufFree(mem_out)
+    compress.BufFree(packed)
+
+    bz := p(dir, tag + ".bz2")
+    back = p(dir, tag + ".bz2.out")
+    testing.AssertTrue(archive.Bzip2CompressFile(src, bz))
+    testing.AssertTrue(archive.Bzip2DecompressFile(bz, back))
+    testing.AssertTrue(same(back, data))
+
+    xz := p(dir, tag + ".xz")
+    back = p(dir, tag + ".xz.out")
+    testing.AssertTrue(archive.XzCompressFile(src, xz))
+    testing.AssertTrue(archive.XzDecompressFile(xz, back))
+    testing.AssertTrue(same(back, data))
+
+    zs := p(dir, tag + ".zst")
+    back = p(dir, tag + ".zst.out")
+    testing.AssertTrue(archive.ZstdCompressFile(src, zs))
+    testing.AssertTrue(archive.ZstdDecompressFile(zs, back))
+    testing.AssertTrue(same(back, data))
+end
+
+func levels(dir: str, data: compress.ByteBuf):
+    src := p(dir, "lv_src")
+    back := p(dir, "lv_back")
+    out := p(dir, "lv_out")
+    testing.AssertTrue(archive.WriteBinaryFile(src, data.data, data.len))
+    each lv in [0, 1, 5, 9, 99]:
+        testing.AssertTrue(archive.Bzip2CompressFileLevel(src, out, lv))
+        testing.AssertTrue(archive.Bzip2DecompressFile(out, back))
+        testing.AssertTrue(same(back, data))
+        testing.AssertTrue(archive.XzCompressFileLevel(src, out, lv))
+        testing.AssertTrue(archive.XzDecompressFile(out, back))
+        testing.AssertTrue(same(back, data))
+        testing.AssertTrue(archive.LzmaCompressFileLevel(src, out, lv))
+        testing.AssertTrue(archive.LzmaDecompressFile(out, back))
+        testing.AssertTrue(same(back, data))
+    end
+    each lv in [0, 1, 3, 7]:
+        testing.AssertTrue(archive.ZstdCompressFileLevel(src, out, lv))
+        testing.AssertTrue(archive.ZstdDecompressFile(out, back))
+        testing.AssertTrue(same(back, data))
+    end
+end
+
+func main(): int:
+    dir := filepath.Join(os.TempDir(), "salam_write_stream_test")
+    defer mem.Free(dir as void*)
+    os.RemoveAll(dir)
+    os.MkdirAll(dir)
+    archive.SetWriteChunk(4096)
+
+    sizes := [0, 1, 4095, 4096, 4097, 8192, 30001]
+    each n in sizes:
+        mut data := make_data(n, n + 7)
+        roundtrip(dir, data, "n" + conv.FormatInt(n as i64))
+        compress.BufFree(data)
+    end
+
+    mut big := make_data(20000, 3)
+    levels(dir, big)
+    compress.BufFree(big)
+
+    missing := p(dir, "no_such_input")
+    out := p(dir, "never_written")
+    testing.AssertFalse(archive.GzipCompressFile(missing, out))
+    testing.AssertFalse(archive.Bzip2CompressFile(missing, out))
+    testing.AssertFalse(archive.XzCompressFile(missing, out))
+    testing.AssertFalse(archive.ZstdCompressFile(missing, out))
+    testing.AssertFalse(os.Exists(out))
+
+    os.RemoveAll(dir)
+    ret testing.Summary()
+end

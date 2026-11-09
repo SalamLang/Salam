@@ -1,0 +1,194 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+package main
+
+import mem
+import os
+import sync
+import net.transport
+import net.tunnel
+import net.vless
+import net.vmess
+
+mut lock := sync.NewMutex()
+mut passed := 0
+mut done := sync.NewWaitGroup()
+mut replay := vmess.NewReplayFilter()
+
+struct Job:
+    pub s: dyn tunnel.Stream = tunnel.TcpStream {}
+    pub seed: int = 0
+    pub size: int = 0
+end
+
+struct Conn:
+    pub t: transport.Conn = transport.Conn {}
+    pub proto: str = ""
+    pub uuid: str = ""
+end
+
+func writer(jp: Job*):
+    j := jp[0]
+    mem.Free(jp as void*)
+    buf := mem.Allocate(16384 as u64)
+    bp := buf as u8*
+    mut sent := 0
+    until sent < j.size:
+        mut take := j.size - sent
+        if take > 16384: take = 16384 end
+        repeat take in i:
+            bp[i] = (((sent + i) * 7 + j.seed) & 255) as u8
+        end
+        if j.s.WriteBytes(buf, take) != take: break end
+        sent += take
+    end
+    mem.Free(buf)
+end
+
+func session(jp: Job*):
+    j := jp[0]
+    mem.Free(jp as void*)
+    wp := mem.AllocateZeroed(sizeof(Job) as u64) as Job*
+    wp[0] = j
+    _w := spawn(writer, wp)
+    buf := mem.Allocate(65536 as u64)
+    bp := buf as u8*
+    mut got := 0
+    mut bad := false
+    until got < j.size:
+        n := j.s.ReadBytes(buf, 65536)
+        if n <= 0: break end
+        repeat n in i:
+            if (bp[i] as int) != (((got + i) * 7 + j.seed) & 255):
+                bad = true
+                break
+            end
+        end
+        got += n
+        if bad: break end
+    end
+    mem.Free(buf)
+    if got == j.size and not bad:
+        sync.Lock(lock)
+        passed++
+        sync.Unlock(lock)
+    end
+    j.s.Close()
+    sync.Done(done)
+end
+
+func open_mux(proto: str, port: int, uuid: str): transport.Mux:
+    t := transport.Dial("127.0.0.1", port, transport.Settings {})
+    if not transport.Ok(t): ret transport.Mux {} end
+    if proto == "vless":
+        c := vless.Client(t, uuid, "", vless.CmdMux, transport.Addr {})
+        if not c.ok: ret transport.Mux {} end
+        ret vless.MuxClient(c)
+    end
+    sec := vmess.SecAES128GCM
+    c := vmess.Client(t, uuid, sec, vmess.DefaultOption(sec), vmess.CmdMux, transport.Addr {})
+    if not c.ok: ret transport.Mux {} end
+    ret vmess.MuxClient(c)
+end
+
+func run_client(a: Vector<str>): int:
+    m := open_mux(a[2], a[3].to_int(), a[4])
+    if not transport.MuxOk(m):
+        println "FAIL mux open"
+        ret 1
+    end
+    count := a[7].to_int()
+    size := a[8].to_int()
+    sync.Add(done, count as i64)
+    repeat count in k:
+        s := transport.MuxOpen(m, transport.NewAddr(a[5], a[6].to_int()), false)
+        jp := mem.AllocateZeroed(sizeof(Job) as u64) as Job*
+        jp[0] = Job { s = s, seed = k + 1, size = size }
+        _t := spawn(session, jp)
+    end
+    sync.Wait(done)
+    transport.MuxClose(m)
+    if passed == count:
+        println "OK", passed
+        ret 0
+    end
+    println "FAIL", passed, "of", count
+    ret 1
+end
+
+func relay_session(p: transport.MuxIncoming*):
+    inc := p[0]
+    mem.Free(p as void*)
+    t := transport.Dial(inc.addr.host, inc.addr.port, transport.Settings {})
+    if not transport.Ok(t):
+        inc.stream.Close()
+        ret
+    end
+    out := transport.AsStream(t)
+    tunnel.Relay(inc.stream, out)
+end
+
+func serve_conn(cp: Conn*):
+    cc := cp[0]
+    mem.Free(cp as void*)
+    mut m := transport.Mux {}
+    if cc.proto == "vless":
+        mut users := Vector {} as Vector<vless.User>
+        users.push(vless.NewUser(cc.uuid, ""))
+        c := vless.Accept(cc.t, users)
+        if not c.ok or c.req.command != vless.CmdMux: ret end
+        m = vless.MuxServer(c)
+    else:
+        mut users := Vector {} as Vector<vmess.User>
+        users.push(vmess.NewUser(cc.uuid))
+        c := vmess.Accept(cc.t, users, replay)
+        if not c.ok or c.req.command != vmess.CmdMux: ret end
+        m = vmess.MuxServer(c)
+    end
+    mut inc := transport.MuxIncoming {}
+    until transport.MuxAccept(m, inc):
+        p := mem.AllocateZeroed(sizeof(transport.MuxIncoming) as u64) as transport.MuxIncoming*
+        p[0] = inc
+        _h := spawn(relay_session, p)
+    end
+end
+
+func run_server(a: Vector<str>): int:
+    l := transport.Listen(a[3].to_int(), transport.Settings {})
+    if not transport.ListenerOk(l):
+        println "FAIL listen"
+        ret 1
+    end
+    until true:
+        t := transport.Accept(l)
+        if not transport.Ok(t): continue end
+        cp := mem.AllocateZeroed(sizeof(Conn) as u64) as Conn*
+        cp[0] = Conn { t = t, proto = a[2], uuid = a[4] }
+        _s := spawn(serve_conn, cp)
+    end
+end
+
+func main:
+    a := os.Args()
+    if a.len() < 5:
+        println "usage: mux_peer server|client vless|vmess PORT UUID [TARGET_HOST TARGET_PORT STREAMS BYTES]"
+        ret 2
+    end
+    if a[1] == "server": ret run_server(a) end
+    if a.len() < 9:
+        println "usage: mux_peer client vless|vmess PORT UUID TARGET_HOST TARGET_PORT STREAMS BYTES"
+        ret 2
+    end
+    ret run_client(a)
+end

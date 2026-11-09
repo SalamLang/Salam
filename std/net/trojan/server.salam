@@ -47,12 +47,13 @@ struct ServerState:
     pub port: int = 0
     pub stop: i64* = null
     pub counters: i64* = null
+    pub sources: tunnel.SourceTable = tunnel.SourceTable {}
 end
 
 struct ConnArg:
     pub st: ServerState* = null
+    pub host: str = ""
     pub fd: i64 = 0 - 1
-    pub wsc: websocket.Conn = websocket.Conn {}
 end
 
 struct UdpState:
@@ -155,6 +156,9 @@ pub struct ServerConfig:
     @en "fallback_port"
     @fa "درگاه جایگزین"
     pub fallback_port: int = 0
+    @en "max_per_source"
+    @fa "بیشینه دست دادن مبدا"
+    pub max_per_source: int = 0
     @en "handshake_timeout_ms"
     @fa "مهلت دست‌دهی"
     pub handshake_timeout_ms: int = 5000
@@ -304,12 +308,66 @@ func _count(st: ServerState*, idx: int):
     _added := atomic_add(((st[0].counters as i64) + (idx * 8) as i64) as i64*, 1 as i64)
 end
 
+func _serve_link(lp: Link*, cfg: ServerConfig, sources: tunnel.SourceTable, host: str): int:
+    mut s := Handshake(lp[0], cfg)
+    tunnel.SourceLeave(sources, host)
+    defer FreeSession(s)
+    if not s.ok:
+        if lp[0].kind != LinkWS:
+            _fb := Fallback(lp, cfg, s.seen)
+        end
+        ret 2
+    end
+    mut stats := cfg.stats
+    if not cfg.has_stats:
+        stats = tunnel.NewStats()
+    end
+    defer _free_stats(cfg, stats)
+    atomic.Add(stats.total, 1 as i64)
+    if s.req.cmd == CmdUDP:
+        if not cfg.allow_udp:
+            atomic.Add(stats.failed, 1 as i64)
+            ret 3
+        end
+        atomic.Add(stats.active, 1 as i64)
+        _serve_udp(lp, s.extra, stats)
+        atomic.Add(stats.active, 0 - 1 as i64)
+        ret 1
+    end
+    mut dialer := cfg.dialer
+    if not cfg.has_dialer:
+        dialer = tunnel.DirectDialer { timeout_ms = cfg.connect_timeout_ms }
+    end
+    out := dialer.Dial(tunnel.NewAddr(s.req.host, s.req.port))
+    if not out.Ok():
+        atomic.Add(stats.failed, 1 as i64)
+        ret 3
+    end
+    if s.extra.len > 0:
+        if out.WriteBytes(s.extra.data, s.extra.len) != s.extra.len:
+            out.Close()
+            atomic.Add(stats.failed, 1 as i64)
+            ret 3
+        end
+        atomic.Add(stats.up, s.extra.len as i64)
+    end
+    atomic.Add(stats.active, 1 as i64)
+    _r := tunnel.RelayWith(AsStream(lp), out, stats, cfg.idle_timeout_ms)
+    atomic.Add(stats.active, 0 - 1 as i64)
+    ret 1
+end
+
 func _conn_main(a: ConnArg*):
     st := a[0].st
     fd := a[0].fd
+    host := a[0].host
+    table := st[0].sources
     mut link := Link {}
     if st[0].ws:
-        link = NewWSLink(a[0].wsc)
+        if st[0].cfg.handshake_timeout_ms > 0:
+            tcp.SetReadDeadline(tcp.ConnFromFd(fd), st[0].cfg.handshake_timeout_ms)
+        end
+        link = NewWSLink(websocket.AcceptConn(fd))
     else st[0].use_tls:
         c := tls.WrapServer(fd, st[0].tlscfg)
         link = NewTLSLink(c)
@@ -318,13 +376,14 @@ func _conn_main(a: ConnArg*):
     end
     mem.Free(a as void*)
     if not LinkOk(link):
+        tunnel.SourceLeave(table, host)
         LinkClose(link)
         ret
     end
     lp := mem.AllocateZeroed(sizeof(Link) as u64) as Link*
     lp[0] = link
     _count(st, 0)
-    r := ServeLink(lp, st[0].cfg)
+    r := _serve_link(lp, st[0].cfg, table, host)
     if r == 1:
         _count(st, 1)
     else r == 2:
@@ -337,31 +396,24 @@ end
 func _accept_loop(st: ServerState*):
     until atomic_load(st[0].stop) != 0:
         mut a := mem.AllocateZeroed(sizeof(ConnArg) as u64) as ConnArg*
-        if st[0].ws:
-            wc := websocket.Accept(websocket.Server { fd = st[0].listen_fd, port = st[0].port })
-            if atomic_load(st[0].stop) == 0:
-                mem.Free(a as void*)
-                break
-            end
-            if not wc.open:
-                mem.Free(a as void*)
-                continue
-            end
-            a[0] = ConnArg { st = st, fd = wc.fd, wsc = wc }
-        else:
-            c := tcp.Accept(tcp.Server { fd = st[0].listen_fd, port = st[0].port })
-            if atomic_load(st[0].stop) == 0:
-                tcp.Close(c)
-                mem.Free(a as void*)
-                break
-            end
-            if not tcp.ConnOk(c):
-                mem.Free(a as void*)
-                continue
-            end
-            a[0] = ConnArg { st = st, fd = c.fd }
+        c := tcp.Accept(tcp.Server { fd = st[0].listen_fd, port = st[0].port })
+        if atomic_load(st[0].stop) == 0:
+            tcp.Close(c)
+            mem.Free(a as void*)
+            break
         end
-        _t := spawn(_conn_main, a)
+        if not tcp.ConnOk(c):
+            mem.Free(a as void*)
+            continue
+        end
+        a[0] = ConnArg { st = st, fd = c.fd }
+        a[0].host = rawsock.PeerHost(rawsock.FromFd(c.fd))
+        if not tunnel.SourceEnter(st[0].sources, a[0].host, st[0].cfg.max_per_source):
+            tcp.Close(c)
+            mem.Free(a as void*)
+            continue
+        end
+        tunnel.Go(_conn_main, a as void*)
     end
 end
 
@@ -398,7 +450,7 @@ func _start(cfg: ServerConfig, host: str, port: int, ws: bool, use_tls: bool): S
     stop := mem.AllocateZeroed(8 as u64) as i64*
     atomic_store(stop, 1 as i64)
     counters := mem.AllocateZeroed(24 as u64) as i64*
-    st[0] = ServerState { cfg = cfg, tlscfg = tcfg, use_tls = use_tls, ws = ws, listen_fd = lfd, port = lport, stop = stop, counters = counters }
+    st[0] = ServerState { cfg = cfg, tlscfg = tcfg, use_tls = use_tls, ws = ws, listen_fd = lfd, port = lport, stop = stop, counters = counters, sources = tunnel.NewSourceTable() }
     _t := spawn(_accept_loop, st)
     srv.ok = true
     srv.port = lport
@@ -513,52 +565,9 @@ end
 @en "ServeLink"
 @fa "پاسخ به پیوند"
 pub func ServeLink(lp: Link*, cfg: ServerConfig): int:
-    mut s := Handshake(lp[0], cfg)
-    defer FreeSession(s)
-    if not s.ok:
-        if lp[0].kind != LinkWS:
-            _fb := Fallback(lp, cfg, s.seen)
-        end
-        ret 2
-    end
-    mut stats := cfg.stats
-    if not cfg.has_stats:
-        stats = tunnel.NewStats()
-    end
-    defer _free_stats(cfg, stats)
-    atomic.Add(stats.total, 1 as i64)
-    if s.req.cmd == CmdUDP:
-        if not cfg.allow_udp:
-            atomic.Add(stats.failed, 1 as i64)
-            ret 3
-        end
-        atomic.Add(stats.active, 1 as i64)
-        _serve_udp(lp, s.extra, stats)
-        atomic.Add(stats.active, 0 - 1 as i64)
-        ret 1
-    end
-    mut dialer := cfg.dialer
-    if not cfg.has_dialer:
-        dialer = tunnel.DirectDialer { timeout_ms = cfg.connect_timeout_ms }
-    end
-    out := dialer.Dial(tunnel.NewAddr(s.req.host, s.req.port))
-    if not out.Ok():
-        atomic.Add(stats.failed, 1 as i64)
-        ret 3
-    end
-    if s.extra.len > 0:
-        if out.WriteBytes(s.extra.data, s.extra.len) != s.extra.len:
-            out.Close()
-            atomic.Add(stats.failed, 1 as i64)
-            ret 3
-        end
-        atomic.Add(stats.up, s.extra.len as i64)
-    end
-    atomic.Add(stats.active, 1 as i64)
-    _r := tunnel.RelayWith(AsStream(lp), out, stats, cfg.idle_timeout_ms)
-    atomic.Add(stats.active, 0 - 1 as i64)
-    ret 1
+    ret _serve_link(lp, cfg, tunnel.SourceTable {}, "")
 end
+
 
 @en "AsStream"
 @fa "به صورت جریان"

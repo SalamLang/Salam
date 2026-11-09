@@ -3,6 +3,7 @@ import json
 import os
 import signal
 import socket
+import ssl
 import struct
 import subprocess
 import sys
@@ -21,7 +22,22 @@ def free_port():
 
 
 class Echo:
-    def __init__(self):
+    def __init__(self, cert=None, key=None, curve=None):
+        self.tls_port = 0
+        self.tls = None
+        if cert:
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+            ctx.minimum_version = ssl.TLSVersion.TLSv1_3
+            ctx.load_cert_chain(cert, key)
+            ctx.set_alpn_protocols(["h2", "http/1.1"])
+            if curve:
+                ctx.set_ecdh_curve(curve)
+            self.tls = socket.socket()
+            self.tls.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self.tls.bind(("127.0.0.1", 0))
+            self.tls.listen(64)
+            self.tls_port = self.tls.getsockname()[1]
+            self.ctx = ctx
         self.tcp = socket.socket()
         self.tcp.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.tcp.bind(("127.0.0.1", 0))
@@ -33,6 +49,8 @@ class Echo:
         self.conns = 0
         threading.Thread(target=self._accept, daemon=True).start()
         threading.Thread(target=self._udp, daemon=True).start()
+        if self.tls:
+            threading.Thread(target=self._accept_tls, daemon=True).start()
 
     def _accept(self):
         while self.alive:
@@ -42,6 +60,22 @@ class Echo:
                 return
             self.conns += 1
             threading.Thread(target=self._serve, args=(c,), daemon=True).start()
+
+    def _accept_tls(self):
+        while self.alive:
+            try:
+                c, _ = self.tls.accept()
+            except OSError:
+                return
+            threading.Thread(target=self._serve_tls, args=(c,), daemon=True).start()
+
+    def _serve_tls(self, c):
+        try:
+            c.settimeout(20)
+            c = self.ctx.wrap_socket(c, server_side=True)
+        except (OSError, ssl.SSLError):
+            return
+        self._serve(c)
 
     def _serve(self, c):
         try:
@@ -68,6 +102,8 @@ class Echo:
         self.alive = False
         self.tcp.close()
         self.udp.close()
+        if self.tls:
+            self.tls.close()
 
 
 def socks5_connect(proxy_port, host, port, timeout=20):
@@ -97,7 +133,28 @@ def socks5_connect(proxy_port, host, port, timeout=20):
     return s
 
 
+def roundtrip_alternating(sock, size, chunk):
+    data = os.urandom(size)
+    want = hashlib.sha256(data).hexdigest()
+    h = hashlib.sha256()
+    got = 0
+    for i in range(0, size, chunk):
+        part = data[i : i + chunk]
+        sock.sendall(part)
+        need = len(part)
+        while need > 0:
+            d = sock.recv(need)
+            if not d:
+                return False, got
+            h.update(d)
+            got += len(d)
+            need -= len(d)
+    return got == size and h.hexdigest() == want, got
+
+
 def roundtrip(sock, size=PAYLOAD, chunk=16384):
+    if isinstance(sock, ssl.SSLSocket):
+        return roundtrip_alternating(sock, size, chunk)
     data = os.urandom(size)
     want = hashlib.sha256(data).hexdigest()
     err = []
@@ -123,10 +180,16 @@ def roundtrip(sock, size=PAYLOAD, chunk=16384):
     return got == size and h.hexdigest() == want, got
 
 
-def check_tcp_via_socks(proxy_port, echo_port, size=PAYLOAD):
+def check_tcp_via_socks(proxy_port, echo_port, size=PAYLOAD, inner_tls=False):
     try:
         s = socks5_connect(proxy_port, "127.0.0.1", echo_port)
         s.settimeout(30)
+        if inner_tls:
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            ctx.minimum_version = ssl.TLSVersion.TLSv1_3
+            s = ctx.wrap_socket(s, server_hostname="localhost")
         ok, got = roundtrip(s, size)
         s.close()
         return ok, "%d/%d bytes" % (got, size)

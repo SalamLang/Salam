@@ -21,6 +21,7 @@ import sync
 import atomic
 import pool
 import net.tcp
+import net.internal.rawsock
 
 @en "CMD_CONNECT"
 @fa "فرمان اتصال"
@@ -252,7 +253,13 @@ pub struct TcpInbound:
     pub workers: pool.Pool = pool.Pool {}
     @en "handshake_ms"
     @fa "مهلت دست‌دهی"
-    pub handshake_ms: int = 15000
+    pub handshake_ms: int = 8000
+    @en "per_source"
+    @fa "سقف مبدا"
+    pub per_source: int = 0
+    @en "sources"
+    @fa "مبداها"
+    pub sources: SourceTable = SourceTable {}
 
     @en "Ok"
     @fa "معتبر"
@@ -271,7 +278,13 @@ pub struct TcpInbound:
                 break
             end
             hs := this.handshake_ms
-            pool.Submit(this.workers, (): _serve_conn(c, proto, h, hs) end)
+            host := rawsock.PeerHost(rawsock.FromFd(c.fd))
+            table := this.sources
+            if not SourceEnter(table, host, this.per_source):
+                tcp.Close(c)
+                continue
+            end
+            pool.Submit(this.workers, (): _serve_conn(c, proto, h, hs, table, host) end)
         end
     end
 
@@ -285,11 +298,12 @@ pub struct TcpInbound:
     end
 end
 
-func _serve_conn(c: tcp.Conn, proto: dyn InboundProtocol, h: dyn Handler, handshake_ms: int):
+func _serve_conn(c: tcp.Conn, proto: dyn InboundProtocol, h: dyn Handler, handshake_ms: int, sources: SourceTable, host: str):
     s := WrapTcp(c)
     tcp.SetNoDelay(c, true)
     s.SetDeadline(handshake_ms)
     sess := proto.Handshake(s)
+    SourceLeave(sources, host)
     if not sess.ok:
         s.Close()
         ret
@@ -354,7 +368,7 @@ pub func ListenTcp(port: int): TcpInbound:
     srv := tcp.Bind(port)
     mut p := 0
     if tcp.Ok(srv): p = tcp.Port(srv) end
-    ret TcpInbound { port = p, listener = srv, running = atomic.NewFlag(false), workers = pool.NewElastic(2 as i64, 512 as i64, 1024 as i64) }
+    ret TcpInbound { port = p, listener = srv, running = atomic.NewFlag(false), workers = pool.NewElastic(2 as i64, 512 as i64, 1024 as i64), sources = NewSourceTable() }
 end
 
 @en "ServeBackground"

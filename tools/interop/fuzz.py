@@ -18,6 +18,13 @@ def fds(pid):
     return len(os.listdir("/proc/%d/fd" % pid))
 
 
+def vmsize(pid):
+    for line in open("/proc/%d/status" % pid):
+        if line.startswith("VmSize"):
+            return int(line.split()[1])
+    return 0
+
+
 def rss(pid):
     for line in open("/proc/%d/status" % pid):
         if line.startswith("VmRSS"):
@@ -161,6 +168,21 @@ def main():
             if not ok:
                 problems.append("service broken")
             print("rss now %dkB (baseline %dkB), threads %d (baseline %d)" % (rss(p.pid), base_rss, threads(p.pid), base_threads))
+            vm0 = vmsize(p.pid)
+            for _ in range(300):
+                try:
+                    c = socket.create_connection(("127.0.0.1", ports["mixed"]), timeout=5)
+                    c.sendall(b"\x05\x01\x00")
+                    c.recv(2)
+                    c.close()
+                except OSError:
+                    break
+            time.sleep(1)
+            grown = vmsize(p.pid) - vm0
+            ok = grown < 200000
+            print(("PASS " if ok else "FAIL ") + "address space after 300 more connections grew by %dkB" % grown)
+            if not ok:
+                problems.append("address space grows per connection")
 
         socks = []
         for i in range(100):

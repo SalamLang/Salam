@@ -25,8 +25,10 @@ import net.internal.rawsock
 import sync
 import time
 import tls
+import net.http2
 
 mut _pool_mu := sync.NewMutex()
+mut _h2_only := HashMap {} as HashMap<str, bool>
 mut _pool_items := Vector {} as Vector<PoolItem>
 mut _pool_reused := 0 as i64
 
@@ -370,8 +372,78 @@ func _doh_exchange(io &: Io, full: compress.ByteBuf, out &: compress.ByteBuf, ke
     ret _read_http_body(io, out, keep)
 end
 
+func _h2_required(key: str): bool:
+    sync.Lock(_pool_mu)
+    r := _h2_only.has(key)
+    sync.Unlock(_pool_mu)
+    ret r
+end
+
+func _query_doh_h2(srv: Server, addr: str, wire: compress.ByteBuf, timeout_ms: int, out &: compress.ByteBuf): str:
+    mut cfg := tls.NewConfig(srv.host)
+    cfg.insecure_skip_verify = srv.insecure
+    cfg.alpn = "h2"
+    sec := tls.Dial(addr, srv.port, cfg)
+    if not tls.ConnOk(sec):
+        ret "connect failed"
+    end
+    if timeout_ms > 0:
+        tcp.SetReadDeadline(tcp.ConnFromFd(tls.Fd(sec)), timeout_ms)
+    end
+    mut c := http2.NewConn(http2.TLSTransport(sec), false)
+    defer http2.CloseConn(c)
+    if not http2.ClientHandshake(c):
+        ret "h2 handshake failed"
+    end
+    if http2.Poll(c) == http2.H2_POLL_ERROR:
+        ret "no h2 settings"
+    end
+    sid := http2.NextStreamId(c)
+    mut hl := http2.HeaderList {}
+    get := srv.kind == KindDoHGet
+    mut path := srv.path
+    if get:
+        mut sep := "?"
+        if path.find("?") >= 0:
+            sep = "&"
+        end
+        path = path + sep + "dns=" + _b64url(wire)
+        http2.HeadersAdd(hl, ":method", "GET")
+    else:
+        http2.HeadersAdd(hl, ":method", "POST")
+    end
+    http2.HeadersAdd(hl, ":scheme", "https")
+    http2.HeadersAdd(hl, ":authority", srv.host)
+    http2.HeadersAdd(hl, ":path", path)
+    http2.HeadersAdd(hl, "accept", "application/dns-message")
+    http2.HeadersAdd(hl, "user-agent", "salam-doh")
+    if not get:
+        http2.HeadersAdd(hl, "content-type", "application/dns-message")
+        http2.HeadersAdd(hl, "content-length", str.FromInt(wire.len as i64))
+    end
+    if not http2.SendHeaders(c, sid, hl, get):
+        ret "h2 write failed"
+    end
+    if not get and not http2.SendData(c, sid, wire, true):
+        ret "h2 write failed"
+    end
+    if not http2.AwaitStreamEnd(c, sid, 400):
+        ret "h2 read failed"
+    end
+    st := http2.StreamAt(c, sid)
+    status := http2.HeadersGet(st.headers, ":status")
+    if status != "200":
+        ret "http " + status
+    end
+    compress.BufPushBuf(out, st.data)
+    ret ""
+end
+
 func _query_doh(srv: Server, addr: str, wire: compress.ByteBuf, timeout_ms: int, out &: compress.ByteBuf): str:
     key := _pool_key(srv, addr)
+    if srv.use_tls and _h2_required(key):
+        ret _query_doh_h2(srv, addr, wire, timeout_ms, out)
+    end
     mut full := _doh_request(srv, wire)
     defer compress.BufFree(full)
     mut io := _pool_take(key)
@@ -399,6 +471,13 @@ func _query_doh(srv: Server, addr: str, wire: compress.ByteBuf, timeout_ms: int,
         _pool_put(key, io)
     else:
         _io_close(io)
+    end
+    if err == "http 505" and srv.use_tls:
+        compress.BufReset(out)
+        sync.Lock(_pool_mu)
+        _h2_only.put(key, true)
+        sync.Unlock(_pool_mu)
+        ret _query_doh_h2(srv, addr, wire, timeout_ms, out)
     end
     ret err
 end

@@ -41,6 +41,7 @@ pub const KindTLS := 1
 pub const KindStream := 2
 
 struct _Hs:
+    pub host: str = ""
     pub fd: i64 = 0 - 1
     pub l: Listener = Listener {}
     pub st: i64* = null
@@ -82,6 +83,10 @@ struct _StreamAdapter:
     end
 
     pub func SetDeadline(millis: int):
+        if millis == tunnel.DeadlineDirect:
+            SwitchDirect(this.c)
+            ret
+        end
         _stream_timeout(this.c, millis)
     end
 
@@ -193,6 +198,9 @@ pub struct Settings:
     @en "max_handshakes"
     @fa "بیشینه دست دادن همزمان"
     pub max_handshakes: int = 128
+    @en "max_per_source"
+    @fa "بیشینه دست دادن مبدا"
+    pub max_per_source: int = 0
     @en "security"
     @fa "امنیت"
     pub security: str = ""
@@ -261,6 +269,12 @@ pub struct Conn:
     @en "wbuf"
     @fa "بافر نوشتن"
     pub wbuf: Bytes = Bytes {}
+    @en "remote"
+    @fa "مبدا"
+    pub remote: str = ""
+    @en "closed"
+    @fa "بسته شده"
+    pub closed: bool = false
 end
 
 @en "Listener"
@@ -284,6 +298,9 @@ pub struct Listener:
     @en "slots"
     @fa "جایگاه ها"
     pub slots: sync.Semaphore = sync.Semaphore {}
+    @en "sources"
+    @fa "مبداها"
+    pub sources: tunnel.SourceTable = tunnel.SourceTable {}
 end
 
 func _ub(p: u8*, i: int): int:
@@ -772,6 +789,7 @@ end
 func _hs_work(a: _Hs*):
     me := a[0]
     mut c := _finish_accept(me.l, tcp.ConnFromFd(me.fd))
+    c.remote = me.host
     if c.open:
         if not Upgrade(c, me.l.settings):
             c.open = false
@@ -792,6 +810,7 @@ func _hs_work(a: _Hs*):
         c.open = false
         c.err = "handshake timeout"
     end
+    tunnel.SourceLeave(me.l.sources, me.host)
     if c.open and me.l.settings.network == "grpc":
         _grpc_serve(c, me.l)
     else:
@@ -845,16 +864,22 @@ func _acceptor(a: _Hs*):
             sync.SleepMs(5)
             continue
         end
+        host := rawsock.PeerHost(rawsock.FromFd(tc.fd))
+        if not tunnel.SourceEnter(l.sources, host, l.settings.max_per_source):
+            tcp.Close(tc)
+            continue
+        end
         if not sync.TryAcquire(l.slots):
+            tunnel.SourceLeave(l.sources, host)
             tcp.Close(tc)
             continue
         end
         h := mem.AllocateZeroed(sizeof(_Hs) as u64) as _Hs*
         st := mem.AllocateZeroed(16 as u64) as i64*
         st[1] = 2 as i64
-        h[0] = _Hs { fd = tc.fd, l = l, st = st, mu = sync.NewMutex(), cv = sync.NewCondVar() }
-        _w := spawn(_hs_work, h)
-        _t := spawn(_hs_watch, h)
+        h[0] = _Hs { fd = tc.fd, l = l, st = st, mu = sync.NewMutex(), cv = sync.NewCondVar(), host = host }
+        tunnel.Go(_hs_work, h as void*)
+        tunnel.Go(_hs_watch, h as void*)
     end
     chan.Close(l.ready)
     mem.Free(a as void*)
@@ -958,6 +983,23 @@ pub func WriteBytes(c &: Conn, b: Bytes): bool:
     ret Write(c, b.p, b.len)
 end
 
+@en "SwitchDirect"
+@fa "تغییر به خواندن مستقیم"
+pub func SwitchDirect(c &: Conn): bool:
+    if c.ws:
+        ret false
+    end
+    if c.kind == KindStream:
+        c.up.SetDeadline(tunnel.DeadlineDirect)
+        ret true
+    end
+    if c.kind != KindTLS:
+        ret false
+    end
+    tls.SwitchDirect(c.tls)
+    ret true
+end
+
 @en "SetReadTimeout"
 @fa "مهلت خواندن"
 pub func SetReadTimeout(c &: Conn, ms: int):
@@ -973,6 +1015,10 @@ end
 @en "Close"
 @fa "بستن"
 pub func Close(c &: Conn):
+    if c.closed:
+        ret
+    end
+    c.closed = true
     if c.ws and c.open:
         _ws_send(c, 8, null, 0)
     end
@@ -1075,6 +1121,7 @@ pub func ListenAt(host: str, port: int, s: Settings): Listener:
         cap = 128
     end
     l.slots = sync.NewSemaphore(cap as i64)
+    l.sources = tunnel.NewSourceTable()
     if s.tls and s.security != "reality":
         l.tls_cfg = tls.NewServerConfig(s.cert_file, s.key_file)
     end
@@ -1094,6 +1141,7 @@ pub func ListenerFrom(server: tcp.Server, s: Settings): Listener:
         cap = 128
     end
     l.slots = sync.NewSemaphore(cap as i64)
+    l.sources = tunnel.NewSourceTable()
     if s.tls and s.security != "reality":
         l.tls_cfg = tls.NewServerConfig(s.cert_file, s.key_file)
     end
@@ -1153,6 +1201,7 @@ pub func AcceptRaw(l: Listener): Conn:
         ret c
     end
     mut c := _finish_accept(l, tc)
+    c.remote = rawsock.PeerHost(rawsock.FromFd(tc.fd))
     if c.open:
         _apply_idle(c, l.settings)
     end

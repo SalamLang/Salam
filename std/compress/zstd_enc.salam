@@ -1,0 +1,787 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package compress
+
+import mem
+
+struct _ZCt:
+    pub st: int*
+    pub dnb: int*
+    pub dfs: int*
+    pub log: int
+end
+
+struct _Zw:
+    pub buf: ByteBuf = ByteBuf { data = null, len = 0, cap = 0 }
+    pub acc: i64 = 0
+    pub nb: int = 0
+end
+
+struct _Ze:
+    pub src: u8*
+    pub n: int
+    pub head: int*
+    pub prev: int*
+    pub hlog: int
+    pub wmask: int
+    pub wsize: int
+    pub depth: int
+    pub nice: int
+    pub lazy: bool
+    pub r1: int
+    pub r2: int
+    pub r3: int
+    pub sl: int*
+    pub sm: int*
+    pub so: int*
+    pub nseq: int
+    pub litbuf: u8*
+    pub nlit: int
+    pub ctl: _ZCt
+    pub cto: _ZCt
+    pub ctm: _ZCt
+    pub tsym: int*
+    pub cum: int*
+end
+
+inline func _ze_rd32(bp: u8*, i: int): int:
+    ret ((bp[i] as i64) | ((bp[i + 1] as i64) << 8) | ((bp[i + 2] as i64) << 16) | ((bp[i + 3] as i64) << 24)) as int
+end
+
+inline func _ze_hash(bp: u8*, i: int, hlog: int): int:
+    v := ((bp[i] as u64) | ((bp[i + 1] as u64) << 8) | ((bp[i + 2] as u64) << 16) | ((bp[i + 3] as u64) << 24)) * (2654435761 as u64)
+    ret ((v >> 32) & (((1 as u64) << hlog) - (1 as u64))) as int
+end
+
+func _zw_add(w &: _Zw, v: int, n: int):
+    w.acc |= ((v as i64) & (((1 as i64) << n) - 1)) << w.nb
+    w.nb += n
+    until w.nb >= 8:
+        BufPush(w.buf, (w.acc & 255) as int)
+        w.acc >>= 8
+        w.nb -= 8
+    end
+end
+
+func _zw_close(w &: _Zw):
+    _zw_add(w, 1, 1)
+    if w.nb > 0:
+        BufPush(w.buf, (w.acc & 255) as int)
+        w.acc = 0 as i64
+        w.nb = 0
+    end
+end
+
+func _zct_build(c &: _ZCt, norm: int*, nsym: int, log: int, tsym: int*, cum: int*):
+    size := 1 << log
+    mask := size - 1
+    c.log = log
+    c.st = mem.Allocate((size * 4) as u64) as int*
+    c.dnb = mem.Allocate((nsym * 4) as u64) as int*
+    c.dfs = mem.Allocate((nsym * 4) as u64) as int*
+    mut high := size - 1
+    cum[0] = 0
+    repeat nsym in u:
+        if norm[u] == 0 - 1:
+            cum[u + 1] = cum[u] + 1
+            tsym[high] = u
+            high--
+        else:
+            cum[u + 1] = cum[u] + norm[u]
+        end
+    end
+    step := (size >> 1) + (size >> 3) + 3
+    mut pos := 0
+    repeat nsym in s:
+        if norm[s] > 0:
+            repeat norm[s]:
+                tsym[pos] = s
+                pos = (pos + step) & mask
+                until pos > high:
+                    pos = (pos + step) & mask
+                end
+            end
+        end
+    end
+    repeat size in u:
+        s := tsym[u]
+        c.st[cum[s]] = size + u
+        cum[s]++
+    end
+    mut total := 0
+    repeat nsym in s:
+        nz := norm[s]
+        if nz == 0:
+            c.dnb[s] = ((log + 1) << 16) - size
+            c.dfs[s] = 0
+        else nz == 1 or nz == 0 - 1:
+            c.dnb[s] = (log << 16) - size
+            c.dfs[s] = total - 1
+            total++
+        else:
+            mb := log - _zs_hb(nz - 1)
+            c.dnb[s] = (mb << 16) - (nz << mb)
+            c.dfs[s] = total - nz
+            total += nz
+        end
+    end
+end
+
+func _zct_free(c &: _ZCt):
+    mem.Free(c.st as void*)
+    mem.Free(c.dnb as void*)
+    mem.Free(c.dfs as void*)
+end
+
+inline func _zct_init(c: _ZCt, s: int): int:
+    nbo := (c.dnb[s] + 32768) >> 16
+    v := (nbo << 16) - c.dnb[s]
+    ret c.st[(v >> nbo) + c.dfs[s]]
+end
+
+inline func _zct_enc(c: _ZCt, w &: _Zw, state &: int, s: int):
+    nbo := (state + c.dnb[s]) >> 16
+    _zw_add(w, state, nbo)
+    state = c.st[(state >> nbo) + c.dfs[s]]
+end
+
+func _ze_new(p: void*, n: int, level: int): _Ze:
+    mut wlog := 20
+    if level >= 10:
+        wlog = 22
+    end
+    if level >= 20:
+        wlog = 23
+    end
+    mut need := 10
+    until (1 << need) < n and need < wlog:
+        need++
+    end
+    wlog = need
+    mut depth := 1 << (level / 2)
+    if depth > 512:
+        depth = 512
+    end
+    mut nice := 16 + level * 16
+    if nice > 512:
+        nice = 512
+    end
+    hlog := 17
+    mut e := _Ze {
+        src = p as u8*, n = n
+        head = mem.Allocate(((1 << hlog) * 4) as u64) as int*
+        prev = mem.Allocate(((1 << wlog) * 4) as u64) as int*
+        hlog = hlog, wmask = (1 << wlog) - 1, wsize = 1 << wlog
+        depth = depth, nice = nice, lazy = level >= 4
+        r1 = 1, r2 = 4, r3 = 8
+        sl = mem.Allocate(262144 as u64) as int*
+        sm = mem.Allocate(262144 as u64) as int*
+        so = mem.Allocate(262144 as u64) as int*
+        nseq = 0
+        litbuf = mem.Allocate((_ZS_MAXBLOCK + 64) as u64) as u8*
+        nlit = 0
+        ctl = _ZCt { st = null as int*, dnb = null as int*, dfs = null as int*, log = 0 }
+        cto = _ZCt { st = null as int*, dnb = null as int*, dfs = null as int*, log = 0 }
+        ctm = _ZCt { st = null as int*, dnb = null as int*, dfs = null as int*, log = 0 }
+        tsym = mem.Allocate(2048 as u64) as int*
+        cum = mem.Allocate(512 as u64) as int*
+    }
+    mut i := 0
+    until i < (1 << hlog):
+        e.head[i] = 0 - 1
+        i++
+    end
+    mut norm := mem.Allocate(512 as u64) as int*
+    repeat 36 in k:
+        norm[k] = _ZS_LL_DEF[k]
+    end
+    _zct_build(e.ctl, norm, 36, 6, e.tsym, e.cum)
+    repeat 29 in k:
+        norm[k] = _ZS_OF_DEF[k]
+    end
+    _zct_build(e.cto, norm, 29, 5, e.tsym, e.cum)
+    repeat 53 in k:
+        norm[k] = _ZS_ML_DEF[k]
+    end
+    _zct_build(e.ctm, norm, 53, 6, e.tsym, e.cum)
+    mem.Free(norm as void*)
+    ret e
+end
+
+func _ze_free(e &: _Ze):
+    mem.Free(e.head as void*)
+    mem.Free(e.prev as void*)
+    mem.Free(e.sl as void*)
+    mem.Free(e.sm as void*)
+    mem.Free(e.so as void*)
+    mem.Free(e.litbuf as void*)
+    mem.Free(e.tsym as void*)
+    mem.Free(e.cum as void*)
+    _zct_free(e.ctl)
+    _zct_free(e.cto)
+    _zct_free(e.ctm)
+end
+
+inline func _ze_insert(e &: _Ze, i: int):
+    if i + 4 <= e.n:
+        h := _ze_hash(e.src, i, e.hlog)
+        e.prev[i & e.wmask] = e.head[h]
+        e.head[h] = i
+    end
+end
+
+func _ze_len(e &: _Ze, a: int, b: int, limit: int): int:
+    bp := e.src
+    mut l := 0
+    until b + l < limit and bp[a + l] == bp[b + l]:
+        l++
+    end
+    ret l
+end
+
+func _ze_find(e &: _Ze, i: int, be: int, ll: int, mlen &: int, moff &: int):
+    mlen = 0
+    moff = 0
+    if i + 4 > be:
+        ret
+    end
+    bp := e.src
+    mut cand := e.head[_ze_hash(bp, i, e.hlog)]
+    mut chain := e.depth
+    until cand >= 0 and chain > 0 and i - cand <= e.wsize:
+        if (bp[cand + mlen] as int) == (bp[i + mlen] as int) or mlen == 0:
+            l := _ze_len(e, cand, i, be)
+            if l > mlen:
+                mlen = l
+                moff = i - cand
+                if l >= e.nice or i + l >= be:
+                    break
+                end
+            end
+        end
+        nx := e.prev[cand & e.wmask]
+        if nx >= cand:
+            break
+        end
+        cand = nx
+        chain--
+    end
+    mut k := 0
+    until k < 4:
+        mut ro := 0
+        if k == 0:
+            ro = e.r1
+        else k == 1:
+            ro = e.r2
+        else k == 2:
+            ro = e.r3
+        else:
+            ro = e.r1 - 1
+        end
+        if (k == 0 and ll == 0) or (k == 3 and (ll > 0 or ro < 1)):
+            k++
+            continue
+        end
+        if ro >= 1 and ro <= i and ro <= e.wsize:
+            l := _ze_len(e, i - ro, i, be)
+            if l >= 4 and (l > mlen or (l == mlen and ro != moff) or (l + 2 >= mlen and moff > 65536)):
+                mlen = l
+                moff = ro
+            end
+        end
+        k++
+    end
+end
+
+func _ze_offcode(e &: _Ze, off: int, ll: int): int:
+    mut ofv := off + 3
+    if ll > 0:
+        if off == e.r1:
+            ofv = 1
+        else off == e.r2:
+            ofv = 2
+        else off == e.r3:
+            ofv = 3
+        end
+    else:
+        if off == e.r2:
+            ofv = 1
+        else off == e.r3:
+            ofv = 2
+        else e.r1 > 1 and off == e.r1 - 1:
+            ofv = 3
+        end
+    end
+    if ofv > 3:
+        e.r3 = e.r2
+        e.r2 = e.r1
+        e.r1 = off
+    else:
+        mut idx := ofv
+        if ll == 0:
+            idx++
+        end
+        if idx == 2:
+            e.r2 = e.r1
+            e.r1 = off
+        else idx == 3:
+            e.r3 = e.r2
+            e.r2 = e.r1
+            e.r1 = off
+        else idx == 4:
+            e.r3 = e.r2
+            e.r2 = e.r1
+            e.r1 = off
+        end
+    end
+    ret ofv
+end
+
+func _ze_emit(e &: _Ze, anchor: int, i: int, mlen: int, moff: int):
+    ll := i - anchor
+    mem.Copy(_zs_at(e.litbuf, e.nlit) as void*, _zs_at(e.src, anchor) as void*, ll as u64)
+    e.nlit += ll
+    e.sl[e.nseq] = ll
+    e.sm[e.nseq] = mlen
+    e.so[e.nseq] = _ze_offcode(e, moff, ll)
+    e.nseq++
+end
+
+func _ze_parse(e &: _Ze, bs: int, be: int):
+    e.nseq = 0
+    e.nlit = 0
+    mut i := bs
+    mut anchor := bs
+    until i + 4 <= be:
+        mut ml := 0
+        mut mo := 0
+        _ze_find(e, i, be, i - anchor, ml, mo)
+        if ml < 4:
+            _ze_insert(e, i)
+            i++
+            continue
+        end
+        _ze_insert(e, i)
+        if e.lazy and ml < e.nice and i + 5 <= be:
+            mut tries := 0
+            until tries < 2:
+                mut m2 := 0
+                mut o2 := 0
+                _ze_find(e, i + 1, be, i + 1 - anchor, m2, o2)
+                if m2 > ml + 1 or (m2 == ml + 1 and o2 < mo):
+                    i++
+                    ml = m2
+                    mo = o2
+                    _ze_insert(e, i)
+                    if i + 5 > be or ml >= e.nice:
+                        break
+                    end
+                else:
+                    break
+                end
+                tries++
+            end
+        end
+        _ze_emit(e, anchor, i, ml, mo)
+        mut k := 1
+        until k < ml:
+            _ze_insert(e, i + k)
+            k++
+        end
+        i += ml
+        anchor = i
+    end
+    ll := be - anchor
+    mem.Copy(_zs_at(e.litbuf, e.nlit) as void*, _zs_at(e.src, anchor) as void*, ll as u64)
+    e.nlit += ll
+end
+
+func _ze_llcode(v: int): int:
+    if v < 16:
+        ret v
+    end
+    mut c := 35
+    until _ZS_LL_BASE[c] > v:
+        c--
+    end
+    ret c
+end
+
+func _ze_mlcode(v: int): int:
+    t := v - 3
+    if t < 32:
+        ret t
+    end
+    mut c := 52
+    until _ZS_ML_BASE[c] > v:
+        c--
+    end
+    ret c
+end
+
+func _ze_seqs(e &: _Ze, out &: ByteBuf):
+    n := e.nseq
+    if n < 128:
+        BufPush(out, n)
+    else n < 0x7F00:
+        BufPush(out, (n >> 8) + 128)
+        BufPush(out, n & 255)
+    else:
+        BufPush(out, 255)
+        BufPush(out, (n - 0x7F00) & 255)
+        BufPush(out, (n - 0x7F00) >> 8)
+    end
+    if n == 0:
+        ret
+    end
+    BufPush(out, 0)
+    mut w := _Zw {}
+    l := n - 1
+    mut llc := _ze_llcode(e.sl[l])
+    mut mlc := _ze_mlcode(e.sm[l])
+    mut ofc := _zs_hb(e.so[l])
+    mut sll := _zct_init(e.ctl, llc)
+    mut sof := _zct_init(e.cto, ofc)
+    mut sml := _zct_init(e.ctm, mlc)
+    _zw_add(w, e.sl[l] - _ZS_LL_BASE[llc], _ZS_LL_BITS[llc])
+    _zw_add(w, e.sm[l] - _ZS_ML_BASE[mlc], _ZS_ML_BITS[mlc])
+    _zw_add(w, e.so[l] - (1 << ofc), ofc)
+    mut k := n - 2
+    until k >= 0:
+        llc = _ze_llcode(e.sl[k])
+        mlc = _ze_mlcode(e.sm[k])
+        ofc = _zs_hb(e.so[k])
+        _zct_enc(e.cto, w, sof, ofc)
+        _zct_enc(e.ctm, w, sml, mlc)
+        _zct_enc(e.ctl, w, sll, llc)
+        _zw_add(w, e.sl[k] - _ZS_LL_BASE[llc], _ZS_LL_BITS[llc])
+        _zw_add(w, e.sm[k] - _ZS_ML_BASE[mlc], _ZS_ML_BITS[mlc])
+        _zw_add(w, e.so[k] - (1 << ofc), ofc)
+        k--
+    end
+    _zw_add(w, sml, e.ctm.log)
+    _zw_add(w, sof, e.cto.log)
+    _zw_add(w, sll, e.ctl.log)
+    _zw_close(w)
+    BufPushBuf(out, w.buf)
+    BufFree(w.buf)
+end
+
+func _ze_hufstream(w &: _Zw, litbuf: u8*, a: int, b: int, code: int*, nbs: int*):
+    mut k := b - 1
+    until k >= a:
+        s := litbuf[k] as int
+        _zw_add(w, code[s], nbs[s])
+        k--
+    end
+    _zw_close(w)
+end
+
+func _ze_lit_header(out &: ByteBuf, typ: int, rsz: int, csz: int, streams4: bool):
+    if typ < 2:
+        if rsz < 32:
+            BufPush(out, typ | (rsz << 3))
+        else rsz < 4096:
+            BufPush(out, typ | 4 | ((rsz & 15) << 4))
+            BufPush(out, rsz >> 4)
+        else:
+            BufPush(out, typ | 12 | ((rsz & 15) << 4))
+            BufPush(out, (rsz >> 4) & 255)
+            BufPush(out, rsz >> 12)
+        end
+        ret
+    end
+    if not streams4:
+        v := typ | (rsz << 4) | (csz << 14)
+        BufPush(out, v & 255)
+        BufPush(out, (v >> 8) & 255)
+        BufPush(out, (v >> 16) & 255)
+    else rsz < 16384 and csz < 16384:
+        v := (typ | 8 | (rsz << 4) | (csz << 18)) as i64
+        BufPush(out, (v & 255) as int)
+        BufPush(out, ((v >> 8) & 255) as int)
+        BufPush(out, ((v >> 16) & 255) as int)
+        BufPush(out, ((v >> 24) & 255) as int)
+    else:
+        v := ((typ | 12) as i64) | ((rsz as i64) << 4) | ((csz as i64) << 22)
+        BufPush(out, (v & 255) as int)
+        BufPush(out, ((v >> 8) & 255) as int)
+        BufPush(out, ((v >> 16) & 255) as int)
+        BufPush(out, ((v >> 24) & 255) as int)
+        BufPush(out, ((v >> 32) & 255) as int)
+    end
+end
+
+func _ze_lits(e &: _Ze, out &: ByteBuf):
+    nl := e.nlit
+    litbuf := e.litbuf
+    mut freq := Vector {} as Vector<int>
+    freq.zeros(256)
+    repeat nl in i:
+        freq.set(litbuf[i] as int, freq.get(litbuf[i] as int) + 1)
+    end
+    mut distinct := 0
+    mut lastsym := 0
+    repeat 256 in s:
+        if freq.get(s) > 0:
+            distinct++
+            lastsym = s
+        end
+    end
+    mut done := false
+    if nl >= 2 and distinct == 1:
+        _ze_lit_header(out, 1, nl, 0, false)
+        BufPush(out, litbuf[0] as int)
+        done = true
+    end
+    if not done and nl >= 64 and distinct >= 2 and lastsym <= 128:
+        lens := _dfl_lengths(freq, 11)
+        mut maxbits := 0
+        repeat 256 in s:
+            if lens.get(s) > maxbits:
+                maxbits = lens.get(s)
+            end
+        end
+        mut code := mem.Allocate(1024 as u64) as int*
+        mut nbs := mem.Allocate(1024 as u64) as int*
+        mut idx := 0
+        repeat 256 in s:
+            code[s] = 0
+            nbs[s] = 0
+        end
+        repeat 1 to maxbits in w:
+            nb := maxbits + 1 - w
+            repeat 256 in s:
+                if lens.get(s) == nb:
+                    code[s] = idx >> (maxbits - nb)
+                    nbs[s] = nb
+                    idx += 1 << (maxbits - nb)
+                end
+            end
+        end
+        mut tree := NewByteBuf()
+        BufPush(tree, 127 + lastsym)
+        mut ti := 0
+        until ti < lastsym:
+            mut wa := 0
+            mut wb := 0
+            if lens.get(ti) > 0:
+                wa = maxbits + 1 - lens.get(ti)
+            end
+            if ti + 1 < lastsym and lens.get(ti + 1) > 0:
+                wb = maxbits + 1 - lens.get(ti + 1)
+            end
+            BufPush(tree, (wa << 4) | wb)
+            ti += 2
+        end
+        mut body := NewByteBuf()
+        mut four := nl > 1023
+        if not four:
+            mut w1 := _Zw {}
+            _ze_hufstream(w1, litbuf, 0, nl, code, nbs)
+            BufPushBuf(body, w1.buf)
+            BufFree(w1.buf)
+            if tree.len + body.len > 1023:
+                four = true
+                BufReset(body)
+            end
+        end
+        if four:
+            seg := (nl + 3) >> 2
+            mut sizes := Vector {} as Vector<int>
+            mut streams := NewByteBuf()
+            repeat 4 in q:
+                a := q * seg
+                mut b := a + seg
+                if q == 3:
+                    b = nl
+                end
+                mut wq := _Zw {}
+                _ze_hufstream(wq, litbuf, a, b, code, nbs)
+                sizes.push(wq.buf.len)
+                BufPushBuf(streams, wq.buf)
+                BufFree(wq.buf)
+            end
+            repeat 3 in q:
+                BufPush(body, sizes.get(q) & 255)
+                BufPush(body, sizes.get(q) >> 8)
+            end
+            BufPushBuf(body, streams)
+            BufFree(streams)
+            sizes.free()
+        end
+        csz := tree.len + body.len
+        if csz + 5 < nl and csz < 262144:
+            _ze_lit_header(out, 2, nl, csz, four)
+            BufPushBuf(out, tree)
+            BufPushBuf(out, body)
+            done = true
+        end
+        BufFree(tree)
+        BufFree(body)
+        mem.Free(code as void*)
+        mem.Free(nbs as void*)
+        lens.free()
+    end
+    if not done:
+        _ze_lit_header(out, 0, nl, 0, false)
+        BufPushBytes(out, litbuf as void*, nl)
+    end
+    freq.free()
+end
+
+func _ze_block(e &: _Ze, out &: ByteBuf, bs: int, be: int, last: bool):
+    n := be - bs
+    mut lastbit := 0
+    if last:
+        lastbit = 1
+    end
+    bp := e.src
+    mut same := n >= 2
+    mut k := bs + 1
+    until k < be and same:
+        if bp[k] != bp[bs]:
+            same = false
+        end
+        k++
+    end
+    if same:
+        hdr := lastbit | (1 << 1) | (n << 3)
+        BufPush(out, hdr & 255)
+        BufPush(out, (hdr >> 8) & 255)
+        BufPush(out, (hdr >> 16) & 255)
+        BufPush(out, bp[bs] as int)
+        _ze_skip(e, bs, be)
+        ret
+    end
+    r1 := e.r1
+    r2 := e.r2
+    r3 := e.r3
+    _ze_parse(e, bs, be)
+    mut body := NewByteBuf()
+    _ze_lits(e, body)
+    _ze_seqs(e, body)
+    if body.len < n:
+        hdr := lastbit | (2 << 1) | (body.len << 3)
+        BufPush(out, hdr & 255)
+        BufPush(out, (hdr >> 8) & 255)
+        BufPush(out, (hdr >> 16) & 255)
+        BufPushBuf(out, body)
+    else:
+        e.r1 = r1
+        e.r2 = r2
+        e.r3 = r3
+        hdr := lastbit | (n << 3)
+        BufPush(out, hdr & 255)
+        BufPush(out, (hdr >> 8) & 255)
+        BufPush(out, (hdr >> 16) & 255)
+        BufPushBytes(out, _zs_at(bp, bs) as void*, n)
+    end
+    BufFree(body)
+end
+
+func _ze_skip(e &: _Ze, bs: int, be: int):
+    mut i := bs
+    until i < be:
+        _ze_insert(e, i)
+        i++
+    end
+end
+
+func _ze_raw(e &: _Ze, out &: ByteBuf, bs: int, be: int, last: bool):
+    n := be - bs
+    mut hdr := n << 3
+    if last:
+        hdr |= 1
+    end
+    BufPush(out, hdr & 255)
+    BufPush(out, (hdr >> 8) & 255)
+    BufPush(out, (hdr >> 16) & 255)
+    BufPushBytes(out, _zs_at(e.src, bs) as void*, n)
+end
+
+func _zs_encode(p: void*, n: int, level: int, checksum: bool): ByteBuf:
+    mut out := NewByteBuf()
+    BufPush(out, 0x28)
+    BufPush(out, 0xB5)
+    BufPush(out, 0x2F)
+    BufPush(out, 0xFD)
+    mut e := _ze_new(p, n, level < 1 ? 1 : level)
+    wlog := _zs_hb(e.wsize)
+    single := n <= e.wsize
+    mut fcsf := 0
+    if single:
+        if n > 255:
+            fcsf = 1
+        end
+        if n > 65791:
+            fcsf = 2
+        end
+    else:
+        fcsf = 2
+    end
+    mut fhd := fcsf << 6
+    if single:
+        fhd |= 32
+    end
+    if checksum:
+        fhd |= 4
+    end
+    BufPush(out, fhd)
+    if not single:
+        BufPush(out, (wlog - 10) << 3)
+    end
+    mut fsz := 1
+    if fcsf == 1:
+        fsz = 2
+    else fcsf == 2:
+        fsz = 4
+    else fcsf == 3:
+        fsz = 8
+    end
+    mut fv := n as i64
+    if fcsf == 1:
+        fv -= 256
+    end
+    repeat fsz in i:
+        BufPush(out, ((fv >> (8 * i)) & 255) as int)
+    end
+    if n == 0:
+        BufPush(out, 1)
+        BufPush(out, 0)
+        BufPush(out, 0)
+    end
+    mut bs := 0
+    until bs < n:
+        mut be := bs + _ZS_MAXBLOCK
+        if be > n:
+            be = n
+        end
+        if level < 1:
+            _ze_raw(e, out, bs, be, be == n)
+        else:
+            _ze_block(e, out, bs, be, be == n)
+        end
+        bs = be
+    end
+    if checksum:
+        h := XXH64(p, n, 0 as u64)
+        repeat 4 in i:
+            BufPush(out, ((h >> (8 * i)) & (255 as u64)) as int)
+        end
+    end
+    _ze_free(e)
+    ret out
+end

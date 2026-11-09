@@ -1331,14 +1331,14 @@ process.Child` runs a program on a pseudo terminal (POSIX only; type
   on failure; `File` always returns a path), **`os.user`** `Username HomeDir ConfigDir CacheDir` (env based; never for permissions), **`os.platform`**
   `IsLinux IsWindows IsMac IsWasm OS Arch IsX64 IsArm64`, **`os.error`**
   `Last LastCode LastMessage HasError Clear` (the last file/process error).
-- **`fs.file`**: `Open Close ReadText ReadAll ReadBytes ReadLines WriteText WriteBytes Append AtomicWrite Size ModTime Stat Copy Move Rename Delete Exists Extension MimeType Md5Hex Sha256Hex`. **Not binary-safe**: every
+- **`fs`** (one `import fs` is enough for files): `Open Close ReadText ReadAll ReadBytes ReadLines WriteText WriteBytes Append AtomicWrite Size ModTime AccessedTime CreatedTime Chmod Permissions Stat Copy Move Rename Delete Exists Extension MimeType Md5Hex Sha1Hex Sha256Hex Sha512Hex` (`CreatedTime` is 0 on most Linux file systems). `import fs.file` still works but is deprecated: it forwards every function to `fs`. **Not binary-safe**: every
   read, write and digest goes through `str` and stops at the first NUL
   (`ReadBytes` too); use `archive.ReadBinaryFile`/`WriteBinaryFile` and
   `crypto.Sha256Bytes`. `Exists` is true for directories too; `AtomicWrite`
   resets permissions to the default.
 - **`fs.dir`**: `Mkdir MkdirAll Remove RemoveAll List ListDirs ListFiles Walk Copy Move Exists IsDir Size`. `Exists` is true only for a directory;
   `Copy`/`Move` merge into an existing target; `RemoveAll Walk Size Copy`
-  follow symlinks. **`fs`** itself: `ModTime AccessedTime CreatedTime Chmod Permissions` (`CreatedTime` is 0 on most Linux file systems).
+  follow symlinks.
 - **`fs.path`** (`Join Split Clean Normalize IsAbs Abs Rel Parent Dirname Filename Basename Ext Stem IsSafe Validate`) and **`filepath`** (the same
   work, never touching the disk: `Join Dir Base Ext Stem Clean Normalize IsAbs Abs Rel IsSafe Validate Separator`). `Join` does not clean
   (`Join("a/b", "../c")` is `a/b/../c`) and an absolute second part is
@@ -3019,8 +3019,8 @@ them** - the English spelling is an error (`E001`):
 
 The free functions `listdir` and `strcmp` were removed from the language:
 use `os.ListDir` (or `fs.dir.List`) and `str.Equals` / the string comparison
-operators instead. `open` is gone as well: file IO is `import fs.file`, then
-`file.Open`. `env` and `args` stay built-ins because the JavaScript target and
+operators instead. `open` is gone as well: file IO is `import fs`, then
+`fs.Open`. `env` and `args` stay built-ins because the JavaScript target and
 the interpreter implement them in their own runtimes; prefer `os.Env` and
 `os.Args` in new code.
 
@@ -3111,7 +3111,7 @@ Common packages: `str` `رشته`, `math` `ریاضی`, `os` `سیستم عام�
 `io` `ورودی خروجی`, `fmt` `قالب بندی`, `conv` `تبدیل`, `time` `زمان`,
 `rand` `تصادفی`, `sort` `مرتب سازی`, `json` `جیسون`, `regex`
 `عبارت باقاعده`, `collections` `مجموعه ها`, `mem` `حافظه`, `path` `مسیر`,
-`fs` `سیستم پرونده`, `file` `پرونده`, `dir` `پوشه`, `sync` `همگام سازی`,
+`fs` `سیستم پرونده`, `dir` `پوشه`, `sync` `همگام سازی`,
 `thread` `نخ`, `chan` `کانال`, `testing` `آزمایش`, `template` `قالب`,
 `log` `گزارش`, `result` `نتیجه`, `option` `اختیاری`, `crypto` `رمزنگاری`,
 `bigint` `عدد بزرگ`, `net` `شبکه`, `net/http` `اچ تی تی پی`

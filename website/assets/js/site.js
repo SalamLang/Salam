@@ -275,10 +275,54 @@
 
     const escapeHtml = (text) =>
       text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const escapeAttr = (text) => escapeHtml(text).replace(/"/g, "&quot;");
+    const bold = (text) =>
+      escapeHtml(text).replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+    const safeHref = (url) => /^(https?:\/\/|mailto:)[^\s<>"]+$/i.test(url);
+    const anchor = (href, label) =>
+      `<a href="${escapeAttr(href)}" target="_blank" rel="noopener noreferrer">${label}</a>`;
+    const linkRe =
+      /\[([^\]\n]+)\]\(\s*([^)\s]+)\s*\)|(?:https?:\/\/|mailto:)[A-Za-z0-9\-._~:/?#[\]@!$&'()*+,;=%]+/gi;
+    const trimUrl = (url) => {
+      let u = url;
+      for (;;) {
+        if (/[.,;:!?'\]]$/.test(u)) {
+          u = u.slice(0, -1);
+        } else if (
+          u.endsWith(")") &&
+          u.split("(").length < u.split(")").length
+        ) {
+          u = u.slice(0, -1);
+        } else {
+          return u;
+        }
+      }
+    };
+    const linkify = (text) => {
+      let out = "";
+      let at = 0;
+      for (const m of text.matchAll(linkRe)) {
+        out += bold(text.slice(at, m.index));
+        if (m[1] !== undefined) {
+          out += safeHref(m[2]) ? anchor(m[2], bold(m[1])) : bold(m[0]);
+          at = m.index + m[0].length;
+        } else {
+          const url = trimUrl(m[0]);
+          out += anchor(url, escapeHtml(url));
+          at = m.index + url.length;
+        }
+      }
+      return out + bold(text.slice(at));
+    };
     const inline = (text) =>
-      escapeHtml(text)
-        .replace(/`([^`\n]+)`/g, '<code dir="ltr">$1</code>')
-        .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>");
+      text
+        .split(/(`[^`\n]+`)/)
+        .map((part, i) =>
+          i % 2
+            ? `<code dir="ltr">${escapeHtml(part.slice(1, -1))}</code>`
+            : linkify(part),
+        )
+        .join("");
     const words = new Map();
     for (const [attr, cls] of [
       ["data-kw", "k"],

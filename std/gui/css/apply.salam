@@ -1,0 +1,2317 @@
+/*
+ * Salam Programming Language (2024-2026)
+ *
+ *   +-------------------+
+ *   |     S A L A M     |
+ *   +-------------------+
+ *
+ * Designed by Seyyed Ali Mohammadiyeh and the Salam Team
+ * Born from a decade of language design experience (since 2018)
+ *
+ * Repository: https://github.com/SalamLang/Salam
+ *
+ */
+
+package css
+
+import str
+import math
+import gui.cssbox
+
+func pct_len(p: f64): Len:
+    ret Len { pct = p, has_pct = true }
+end
+
+func p_auto_len(t: Vector<Tok>, s: int, e: int, cx: Cx, neg: bool, out &: Len): bool:
+    k := kw_at(t, s, e)
+    if k == "auto":
+        out = Len { kind = LenKind.Auto }
+        ret true
+    end
+    ret single(t, s, e) and p_len(t, s, e, cx, true, neg, out)
+end
+
+func p_size_len(t: Vector<Tok>, s: int, e: int, cx: Cx, none_kw: str, out &: Len): bool:
+    k := kw_at(t, s, e)
+    switch k:
+        "min-content", "-webkit-min-content":
+            out = Len { kind = LenKind.MinContent }
+            ret true
+        end
+        "max-content", "-webkit-max-content":
+            out = Len { kind = LenKind.MaxContent }
+            ret true
+        end
+        "fit-content", "-webkit-fit-content", "-moz-fit-content":
+            out = Len { kind = LenKind.FitContent }
+            ret true
+        end
+        "stretch", "-webkit-fill-available":
+            out = Len { kind = LenKind.Auto }
+            ret true
+        end
+        else:
+        end
+    end
+    if k.len() > 0 and k == none_kw:
+        out = Len { kind = none_kw == "none" ? LenKind.None : LenKind.Auto }
+        ret true
+    end
+    if single(t, s, e) and t[s].k == TK_FUNC and t[s].s == "fit-content":
+        out = Len { kind = LenKind.FitContent }
+        ret true
+    end
+    ret single(t, s, e) and p_len(t, s, e, cx, true, false, out)
+end
+
+func border_width_of(t: Vector<Tok>, s: int, e: int, cx: Cx, out &: f64): bool:
+    k := kw_at(t, s, e)
+    switch k:
+        "thin": out = 1.0 break end
+        "medium": out = 3.0 break end
+        "thick": out = 5.0 break end
+        else:
+            mut l := Len {}
+            if not single(t, s, e) or not p_len(t, s, e, cx, false, false, l):
+                ret false
+            end
+            if l.calc.len() > 0 or l.has_pct:
+                ret false
+            end
+            out = l.px
+        end
+    end
+    ret true
+end
+
+func snap_border(w: f64): f64:
+    if w <= 0.0:
+        ret 0.0
+    end
+    if w < 1.0:
+        ret 1.0
+    end
+    ret math.Floor(w)
+end
+
+func border_style_of(k: str, outline: bool, out &: BorderStyle): bool:
+    switch k:
+        "none": out = BorderStyle.None break end
+        "hidden":
+            if outline:
+                ret false
+            end
+            out = BorderStyle.Hidden
+            break
+        end
+        "solid": out = BorderStyle.Solid break end
+        "dashed": out = BorderStyle.Dashed break end
+        "dotted": out = BorderStyle.Dotted break end
+        "double": out = BorderStyle.Double break end
+        "groove": out = BorderStyle.Groove break end
+        "ridge": out = BorderStyle.Ridge break end
+        "inset": out = BorderStyle.Inset break end
+        "outset": out = BorderStyle.Outset break end
+        "auto":
+            if not outline:
+                ret false
+            end
+            out = BorderStyle.Auto
+            break
+        end
+        else: ret false end
+    end
+    ret true
+end
+
+func align_of(t: Vector<Tok>, s: int, e: int, self_kw: bool, out &: cssbox.Align): bool:
+    mut i := s
+    if is_kw(t, i, e, "safe") or is_kw(t, i, e, "unsafe") or is_kw(t, i, e, "first") or is_kw(t, i, e, "legacy"):
+        i++
+    end
+    if i >= e or t[i].k != TK_IDENT:
+        ret false
+    end
+    k := t[i].s
+    if i + 1 != e:
+        if not (is_kw(t, i + 1, e, "legacy") and i + 2 == e) and not (k == "last" and is_kw(t, i + 1, e, "baseline") and i + 2 == e):
+            ret false
+        end
+        if k == "last":
+            out = cssbox.Align.Baseline
+            ret true
+        end
+    end
+    switch k:
+        "normal": out = cssbox.Align.Normal break end
+        "start", "self-start", "left": out = cssbox.Align.Start break end
+        "end", "self-end", "right": out = cssbox.Align.End break end
+        "flex-start": out = cssbox.Align.FlexStart break end
+        "flex-end": out = cssbox.Align.FlexEnd break end
+        "center": out = cssbox.Align.Center break end
+        "baseline": out = cssbox.Align.Baseline break end
+        "stretch": out = cssbox.Align.Stretch break end
+        "space-between": out = cssbox.Align.SpaceBetween break end
+        "space-around": out = cssbox.Align.SpaceAround break end
+        "space-evenly": out = cssbox.Align.SpaceEvenly break end
+        "auto":
+            if not self_kw:
+                ret false
+            end
+            out = cssbox.Align.Auto
+            break
+        end
+        else: ret false end
+    end
+    ret true
+end
+
+func display_of(t: Vector<Tok>, s: int, e: int, out &: Display): bool:
+    n := count_items(t, s, e)
+    if n == 2 and t[s].k == TK_IDENT and t[s + 1].k == TK_IDENT:
+        a := t[s].s
+        b := t[s + 1].s
+        mut outer := a
+        mut inner := b
+        if a != "inline" and a != "block" and a != "run-in":
+            outer = b
+            inner = a
+        end
+        inl := outer == "inline"
+        switch inner:
+            "flow": out = inl ? Display.Inline : Display.Block break end
+            "flow-root": out = inl ? Display.InlineBlock : Display.FlowRoot break end
+            "flex": out = inl ? Display.InlineFlex : Display.Flex break end
+            "grid": out = inl ? Display.InlineGrid : Display.Grid break end
+            "table": out = inl ? Display.InlineTable : Display.Table break end
+            "list-item": out = inl ? Display.Inline : Display.ListItem break end
+            else: ret false end
+        end
+        ret true
+    end
+    k := kw_at(t, s, e)
+    switch k:
+        "block": out = Display.Block break end
+        "inline", "ruby", "ruby-text", "ruby-base": out = Display.Inline break end
+        "inline-block": out = Display.InlineBlock break end
+        "flow-root": out = Display.FlowRoot break end
+        "flex", "-webkit-box", "-webkit-flex": out = Display.Flex break end
+        "inline-flex", "-webkit-inline-box": out = Display.InlineFlex break end
+        "grid": out = Display.Grid break end
+        "inline-grid": out = Display.InlineGrid break end
+        "list-item": out = Display.ListItem break end
+        "table": out = Display.Table break end
+        "inline-table": out = Display.InlineTable break end
+        "table-row-group": out = Display.TableRowGroup break end
+        "table-header-group": out = Display.TableHeaderGroup break end
+        "table-footer-group": out = Display.TableFooterGroup break end
+        "table-row": out = Display.TableRow break end
+        "table-cell": out = Display.TableCell break end
+        "table-column": out = Display.TableColumn break end
+        "table-column-group": out = Display.TableColumnGroup break end
+        "table-caption": out = Display.TableCaption break end
+        "contents": out = Display.Contents break end
+        "none": out = Display.None break end
+        else: ret false end
+    end
+    ret true
+end
+
+func overflow_of(k: str, out &: cssbox.Overflow): bool:
+    switch k:
+        "visible": out = cssbox.Overflow.Visible break end
+        "hidden": out = cssbox.Overflow.Hidden break end
+        "clip": out = cssbox.Overflow.Clip break end
+        "scroll": out = cssbox.Overflow.Scroll break end
+        "auto", "overlay": out = cssbox.Overflow.Auto break end
+        else: ret false end
+    end
+    ret true
+end
+
+func pos_kw(k: str, horizontal: bool, out &: f64): bool:
+    switch k:
+        "center": out = 50.0 break end
+        "left":
+            if not horizontal:
+                ret false
+            end
+            out = 0.0
+            break
+        end
+        "right":
+            if not horizontal:
+                ret false
+            end
+            out = 100.0
+            break
+        end
+        "top":
+            if horizontal:
+                ret false
+            end
+            out = 0.0
+            break
+        end
+        "bottom":
+            if horizontal:
+                ret false
+            end
+            out = 100.0
+            break
+        end
+        else: ret false end
+    end
+    ret true
+end
+
+func is_hkw(k: str): bool:
+    ret k == "left" or k == "right"
+end
+
+func is_vkw(k: str): bool:
+    ret k == "top" or k == "bottom"
+end
+
+func axis_value(t: Vector<Tok>, i: int, e: int, cx: Cx, horizontal: bool, out &: Len): bool:
+    if t[i].k == TK_IDENT:
+        mut p := 0.0
+        if not pos_kw(t[i].s, horizontal, p):
+            ret false
+        end
+        out = pct_len(p)
+        ret true
+    end
+    ret p_len(t, i, e, cx, true, true, out)
+end
+
+func edge_offset(edge: str, off: Len): Len:
+    if edge == "right" or edge == "bottom":
+        if off.calc.len() > 0:
+            ret Len { has_pct = true, calc = intern_own("calc(100% - " + off.calc + ")") }
+        end
+        ret Len { px = 0.0 - off.px, pct = 100.0 - off.pct, has_pct = true }
+    end
+    ret off
+end
+
+func parse_position(t: Vector<Tok>, s: int, e: int, cx: Cx, ox &: Len, oy &: Len): bool:
+    mut idx := Vector {} as Vector<int>
+    defer idx.free()
+    mut i := s
+    until i < e:
+        idx.push(i)
+        i = nxt(t, i)
+    end
+    n := idx.len()
+    if n == 1:
+        a := idx[0]
+        if t[a].k == TK_IDENT and is_vkw(t[a].s):
+            ox = pct_len(50.0)
+            ret axis_value(t, a, e, cx, false, oy)
+        end
+        oy = pct_len(50.0)
+        ret axis_value(t, a, e, cx, true, ox)
+    end
+    if n == 2:
+        a := idx[0]
+        b := idx[1]
+        ka := t[a].k == TK_IDENT ? t[a].s : ""
+        kb := t[b].k == TK_IDENT ? t[b].s : ""
+        if is_vkw(ka) or is_hkw(kb):
+            if t[a].k != TK_IDENT or t[b].k != TK_IDENT:
+                ret false
+            end
+            ret axis_value(t, b, e, cx, true, ox) and axis_value(t, a, e, cx, false, oy)
+        end
+        ret axis_value(t, a, e, cx, true, ox) and axis_value(t, b, e, cx, false, oy)
+    end
+    if n == 3 or n == 4:
+        mut have_x := false
+        mut have_y := false
+        mut k := 0
+        until k < n:
+            a := idx[k]
+            if t[a].k != TK_IDENT:
+                ret false
+            end
+            kw := t[a].s
+            mut off := Len {}
+            mut has_off := false
+            if k + 1 < n and t[idx[k + 1]].k != TK_IDENT:
+                if not p_len(t, idx[k + 1], e, cx, true, true, off):
+                    ret false
+                end
+                has_off = true
+            end
+            mut horizontal := is_hkw(kw)
+            if kw == "center":
+                horizontal = not have_x
+                if has_off:
+                    ret false
+                end
+            else not is_hkw(kw) and not is_vkw(kw):
+                ret false
+            end
+            mut v := Len {}
+            if has_off:
+                v = edge_offset(kw, off)
+            else:
+                mut p := 0.0
+                _ok := pos_kw(kw, horizontal, p)
+                v = pct_len(p)
+            end
+            if horizontal:
+                if have_x:
+                    ret false
+                end
+                have_x = true
+                ox = v
+            else:
+                if have_y:
+                    ret false
+                end
+                have_y = true
+                oy = v
+            end
+            k += has_off ? 2 : 1
+        end
+        if not have_x:
+            ox = pct_len(50.0)
+        end
+        if not have_y:
+            oy = pct_len(50.0)
+        end
+        ret true
+    end
+    ret false
+end
+
+func parse_pos_axis(t: Vector<Tok>, s: int, e: int, cx: Cx, horizontal: bool, out &: Len): bool:
+    n := count_items(t, s, e)
+    if n == 1:
+        ret axis_value(t, s, e, cx, horizontal, out)
+    end
+    if n == 2 and t[s].k == TK_IDENT:
+        kw := t[s].s
+        if (horizontal and not is_hkw(kw)) or (not horizontal and not is_vkw(kw)):
+            ret false
+        end
+        mut off := Len {}
+        if not p_len(t, s + 1, e, cx, true, true, off):
+            ret false
+        end
+        out = edge_offset(kw, off)
+        ret true
+    end
+    ret false
+end
+
+func parse_stops(t: Vector<Tok>, parts: Vector<int>, from: int, cx: Cx, conic: bool, out &: Vector<ColorStop>): bool:
+    mut k := from
+    until k + 1 < parts.len():
+        s := parts[k]
+        e := parts[k + 1]
+        if s >= e:
+            ret false
+        end
+        mut c := Color {}
+        cs0 := nxt(t, s)
+        if parse_color_at(t, s, cs0, cx.dark, cx.color, c):
+            mut i := cs0
+            mut n := 0
+            until i < e:
+                mut l := Len {}
+                if conic:
+                    mut ang := 0.0
+                    if t[i].k == TK_PCT:
+                        l = pct_len(t[i].n)
+                    else p_angle(t, i, e, cx, true, ang):
+                        l = Len { px = ang }
+                    else:
+                        ret false
+                    end
+                else not p_len(t, i, e, cx, true, true, l):
+                    ret false
+                end
+                out.push(ColorStop { color = c, pos = l, has_pos = true })
+                n++
+                if n > 2:
+                    ret false
+                end
+                i = nxt(t, i)
+            end
+            if n == 0:
+                out.push(ColorStop { color = c })
+            end
+        else:
+            if not single(t, s, e):
+                ret false
+            end
+            mut l := Len {}
+            if conic:
+                mut ang := 0.0
+                if t[s].k == TK_PCT:
+                    l = pct_len(t[s].n)
+                else p_angle(t, s, e, cx, true, ang):
+                    l = Len { px = ang }
+                else:
+                    ret false
+                end
+            else not p_len(t, s, e, cx, true, true, l):
+                ret false
+            end
+            out.push(ColorStop { pos = l, has_pos = true, hint = true })
+        end
+        k += 2
+    end
+    mut colors := 0
+    repeat out.len() in j:
+        if not out[j].hint:
+            colors++
+        end
+    end
+    ret colors >= 2
+end
+
+func gradient_base(name: str, skip: int): str:
+    rest := name.substr(skip, name.len() - skip)
+    r := intern(rest)
+    sfree(rest)
+    ret r
+end
+
+func parse_gradient(t: Vector<Tok>, i: int, cx: Cx, out &: BgLayer): bool:
+    f := t[i]
+    s := i + 1
+    e := f.close
+    if e < 0:
+        ret false
+    end
+    mut base := f.s
+    if str.StartsWith(base, "-webkit-"):
+        base = gradient_base(base, 8)
+    end
+    out.repeating = str.StartsWith(base, "repeating-")
+    if out.repeating:
+        base = gradient_base(base, 10)
+    end
+    mut parts := Vector {} as Vector<int>
+    defer parts.free()
+    split_commas(t, s, e, parts)
+    mut first := 0
+    gs := parts[0]
+    ge := parts[1]
+    mut c := Color {}
+    starts_color := gs < ge and parse_color_at(t, gs, nxt(t, gs), cx.dark, cx.color, c)
+    switch base:
+        "linear-gradient":
+            out.image = ImageKind.Linear
+            if not starts_color and gs < ge:
+                first = 2
+                if is_kw(t, gs, ge, "to"):
+                    mut j := gs + 1
+                    mut x := 0
+                    mut y := 0
+                    until j < ge:
+                        if t[j].k != TK_IDENT:
+                            ret false
+                        end
+                        switch t[j].s:
+                            "left": x = -1 break end
+                            "right": x = 1 break end
+                            "top": y = -1 break end
+                            "bottom": y = 1 break end
+                            else: ret false end
+                        end
+                        j++
+                    end
+                    if x == 0 and y == 0:
+                        ret false
+                    end
+                    if x != 0 and y != 0:
+                        out.to_x = x
+                        out.to_y = y
+                    else x != 0:
+                        out.angle = x > 0 ? 90.0 : 270.0
+                    else:
+                        out.angle = y > 0 ? 180.0 : 0.0
+                    end
+                else:
+                    mut a := 0.0
+                    if not single(t, gs, ge) or not p_angle(t, gs, ge, cx, true, a):
+                        ret false
+                    end
+                    out.angle = a
+                end
+            end
+            break
+        end
+        "radial-gradient":
+            out.image = ImageKind.Radial
+            if not starts_color and gs < ge:
+                first = 2
+                mut j := gs
+                mut sizes := 0
+                until j < ge:
+                    if is_kw(t, j, ge, "at"):
+                        mut cxl := Len {}
+                        mut cyl := Len {}
+                        if not parse_position(t, j + 1, ge, cx, cxl, cyl):
+                            ret false
+                        end
+                        out.center_x = cxl
+                        out.center_y = cyl
+                        break
+                    end
+                    if t[j].k == TK_IDENT:
+                        switch t[j].s:
+                            "circle": out.shape = RadialShape.Circle break end
+                            "ellipse": out.shape = RadialShape.Ellipse break end
+                            "closest-side": out.extent = RadialExtent.ClosestSide break end
+                            "closest-corner": out.extent = RadialExtent.ClosestCorner break end
+                            "farthest-side": out.extent = RadialExtent.FarthestSide break end
+                            "farthest-corner": out.extent = RadialExtent.FarthestCorner break end
+                            else: ret false end
+                        end
+                    else:
+                        mut l := Len {}
+                        if not p_len(t, j, ge, cx, true, false, l):
+                            ret false
+                        end
+                        if sizes == 0:
+                            out.radius_x = l
+                            out.radius_y = l
+                        else:
+                            out.radius_y = l
+                            out.shape = RadialShape.Ellipse
+                        end
+                        sizes++
+                        out.extent = RadialExtent.Explicit
+                    end
+                    j = nxt(t, j)
+                end
+                if sizes == 1 and out.radius_x.has_pct:
+                    ret false
+                end
+                if sizes == 1:
+                    out.shape = RadialShape.Circle
+                end
+            end
+            break
+        end
+        "conic-gradient":
+            out.image = ImageKind.Conic
+            out.angle = 0.0
+            if not starts_color and gs < ge:
+                first = 2
+                mut j := gs
+                until j < ge:
+                    if is_kw(t, j, ge, "from"):
+                        mut a := 0.0
+                        if not p_angle(t, j + 1, ge, cx, true, a):
+                            ret false
+                        end
+                        out.angle = a
+                        j = nxt(t, j + 1)
+                        continue
+                    end
+                    if is_kw(t, j, ge, "at"):
+                        mut cxl := Len {}
+                        mut cyl := Len {}
+                        if not parse_position(t, j + 1, ge, cx, cxl, cyl):
+                            ret false
+                        end
+                        out.center_x = cxl
+                        out.center_y = cyl
+                        break
+                    end
+                    if is_kw(t, j, ge, "in"):
+                        j += 2
+                        continue
+                    end
+                    ret false
+                end
+            end
+            break
+        end
+        else:
+            ret false
+        end
+    end
+    out.stops.free()
+    out.stops = Vector {} as Vector<ColorStop>
+    ret parse_stops(t, parts, first, cx, out.image == ImageKind.Conic, out.stops)
+end
+
+func parse_image(t: Vector<Tok>, s: int, e: int, cx: Cx, out &: BgLayer): bool:
+    if not single(t, s, e):
+        ret false
+    end
+    tk := t[s]
+    if tk.k == TK_IDENT and tk.s == "none":
+        out.image = ImageKind.None
+        ret true
+    end
+    if tk.k == TK_URL:
+        out.image = ImageKind.Url
+        out.url = intern(tk.s)
+        ret true
+    end
+    if tk.k == TK_FUNC and tk.s == "url":
+        if s + 1 < tk.close and t[s + 1].k == TK_STR:
+            out.image = ImageKind.Url
+            out.url = intern(t[s + 1].s)
+            ret true
+        end
+        ret false
+    end
+    if tk.k == TK_FUNC and str.EndsWith(tk.s, "gradient"):
+        ret parse_gradient(t, s, cx, out)
+    end
+    ret false
+end
+
+func parse_shadow(t: Vector<Tok>, s: int, e: int, cx: Cx, text: bool, out &: Shadow): bool:
+    mut lens := 0
+    mut have_color := false
+    mut i := s
+    mut sh := Shadow { color = cx.color }
+    until i < e:
+        if is_kw(t, i, e, "inset") and not text:
+            if sh.inset:
+                ret false
+            end
+            sh.inset = true
+            i++
+            continue
+        end
+        mut c := Color {}
+        if not have_color and parse_color_at(t, i, nxt(t, i), cx.dark, cx.color, c):
+            sh.color = c
+            have_color = true
+            i = nxt(t, i)
+            continue
+        end
+        mut l := Len {}
+        if lens >= 4 or (text and lens >= 3) or not p_len(t, i, e, cx, false, true, l) or l.calc.len() > 0:
+            ret false
+        end
+        switch lens:
+            0: sh.x = l.px break end
+            1: sh.y = l.px break end
+            2:
+                if l.px < 0.0:
+                    ret false
+                end
+                sh.blur = l.px
+                break
+            end
+            else: sh.spread = l.px end
+        end
+        lens++
+        i = nxt(t, i)
+    end
+    if lens < 2:
+        ret false
+    end
+    out = sh
+    ret true
+end
+
+func parse_shadow_list(t: Vector<Tok>, s: int, e: int, cx: Cx, text: bool, out &: Vector<Shadow>): bool:
+    if kw_at(t, s, e) == "none":
+        ret true
+    end
+    mut parts := Vector {} as Vector<int>
+    defer parts.free()
+    split_commas(t, s, e, parts)
+    mut k := 0
+    until k + 1 < parts.len():
+        mut sh := Shadow {}
+        if not parse_shadow(t, parts[k], parts[k + 1], cx, text, sh):
+            ret false
+        end
+        out.push(sh)
+        k += 2
+    end
+    ret true
+end
+
+func fn_args(t: Vector<Tok>, i: int, out &: Vector<int>):
+    s := i + 1
+    e := t[i].close
+    mut j := s
+    until j < e:
+        if t[j].k != TK_COMMA:
+            out.push(j)
+        end
+        j = nxt(t, j)
+    end
+end
+
+func parse_transform_fn(t: Vector<Tok>, i: int, cx: Cx, out &: TransformFn): bool:
+    f := t[i]
+    e := f.close
+    mut a := Vector {} as Vector<int>
+    defer a.free()
+    fn_args(t, i, a)
+    n := a.len()
+    switch f.s:
+        "translate", "translate3d", "translatex", "translatey", "translatez":
+            out.kind = TransformKind.Translate
+            if f.s == "translatez":
+                ret n == 1
+            end
+            if n < 1 or n > 3:
+                ret false
+            end
+            mut x := Len {}
+            mut y := Len {}
+            if not p_len(t, a[0], e, cx, true, true, x):
+                ret false
+            end
+            if n >= 2 and not p_len(t, a[1], e, cx, true, true, y):
+                ret false
+            end
+            if f.s == "translatey":
+                if n != 1:
+                    ret false
+                end
+                out.y = x
+                ret true
+            end
+            out.x = x
+            out.y = y
+            ret true
+        end
+        "scale", "scale3d", "scalex", "scaley", "scalez":
+            out.kind = TransformKind.Scale
+            if n < 1 or n > 3:
+                ret false
+            end
+            mut sx := 1.0
+            mut sy := 1.0
+            if not p_num_or_pct(t, a[0], e, cx, sx):
+                ret false
+            end
+            sy = sx
+            if n >= 2 and not p_num_or_pct(t, a[1], e, cx, sy):
+                ret false
+            end
+            switch f.s:
+                "scalex":
+                    out.a = sx
+                    break
+                end
+                "scaley":
+                    out.d = sx
+                    break
+                end
+                "scalez":
+                    out.a = 1.0
+                    break
+                end
+                else:
+                    out.a = sx
+                    out.d = sy
+                end
+            end
+            ret true
+        end
+        "rotate", "rotatez":
+            out.kind = TransformKind.Rotate
+            mut ang := 0.0
+            if n != 1 or not p_angle(t, a[0], e, cx, true, ang):
+                ret false
+            end
+            out.a = ang
+            ret true
+        end
+        "rotatex", "rotatey", "rotate3d", "perspective":
+            out.kind = TransformKind.Scale
+            out.a = 1.0
+            out.d = 1.0
+            ret n >= 1
+        end
+        "skew", "skewx", "skewy":
+            out.kind = TransformKind.Skew
+            mut ax := 0.0
+            mut ay := 0.0
+            if n < 1 or n > 2 or not p_angle(t, a[0], e, cx, true, ax):
+                ret false
+            end
+            if n == 2 and not p_angle(t, a[1], e, cx, true, ay):
+                ret false
+            end
+            if f.s == "skewy":
+                out.a = 0.0
+                out.b = ax
+            else:
+                out.a = ax
+                out.b = ay
+            end
+            ret true
+        end
+        "matrix", "matrix3d":
+            out.kind = TransformKind.Matrix
+            want := f.s == "matrix" ? 6 : 16
+            if n != want:
+                ret false
+            end
+            mut m := Vector {} as Vector<f64>
+            defer m.free()
+            repeat n in k:
+                mut v := 0.0
+                if not p_num(t, a[k], e, cx, v):
+                    ret false
+                end
+                m.push(v)
+            end
+            if want == 6:
+                out.a = m[0]
+                out.b = m[1]
+                out.c = m[2]
+                out.d = m[3]
+                out.e = m[4]
+                out.f = m[5]
+            else:
+                out.a = m[0]
+                out.b = m[1]
+                out.c = m[4]
+                out.d = m[5]
+                out.e = m[12]
+                out.f = m[13]
+            end
+            ret true
+        end
+        else:
+            ret false
+        end
+    end
+    ret false
+end
+
+func timing_of(t: Vector<Tok>, i: int, cx: Cx, out &: Timing): bool:
+    tk := t[i]
+    if tk.k == TK_IDENT:
+        switch tk.s:
+            "ease": out = Timing {} break end
+            "linear": out = Timing { kind = TimingKind.Linear, x1 = 0.0, y1 = 0.0, x2 = 1.0, y2 = 1.0 } break end
+            "ease-in": out = Timing { x1 = 0.42, y1 = 0.0, x2 = 1.0, y2 = 1.0 } break end
+            "ease-out": out = Timing { x1 = 0.0, y1 = 0.0, x2 = 0.58, y2 = 1.0 } break end
+            "ease-in-out": out = Timing { x1 = 0.42, y1 = 0.0, x2 = 0.58, y2 = 1.0 } break end
+            "step-start": out = Timing { kind = TimingKind.Steps, steps = 1, step_position = StepPosition.JumpStart } break end
+            "step-end": out = Timing { kind = TimingKind.Steps, steps = 1, step_position = StepPosition.JumpEnd } break end
+            else: ret false end
+        end
+        ret true
+    end
+    if tk.k != TK_FUNC:
+        ret false
+    end
+    mut a := Vector {} as Vector<int>
+    defer a.free()
+    fn_args(t, i, a)
+    switch tk.s:
+        "cubic-bezier":
+            if a.len() != 4:
+                ret false
+            end
+            mut v := [0.0, 0.0, 0.0, 0.0]
+            repeat 4 in k:
+                if not p_num(t, a[k], tk.close, cx, v[k]):
+                    ret false
+                end
+            end
+            if v[0] < 0.0 or v[0] > 1.0 or v[2] < 0.0 or v[2] > 1.0:
+                ret false
+            end
+            out = Timing { x1 = v[0], y1 = v[1], x2 = v[2], y2 = v[3] }
+            ret true
+        end
+        "steps":
+            if a.len() < 1 or a.len() > 2:
+                ret false
+            end
+            mut n := 0
+            if not p_int(t, a[0], tk.close, cx, n) or n < 1:
+                ret false
+            end
+            mut pos := StepPosition.JumpEnd
+            if a.len() == 2:
+                if t[a[1]].k != TK_IDENT:
+                    ret false
+                end
+                switch t[a[1]].s:
+                    "jump-start", "start": pos = StepPosition.JumpStart break end
+                    "jump-end", "end": pos = StepPosition.JumpEnd break end
+                    "jump-none":
+                        if n < 2:
+                            ret false
+                        end
+                        pos = StepPosition.JumpNone
+                        break
+                    end
+                    "jump-both": pos = StepPosition.JumpBoth break end
+                    else: ret false end
+                end
+            end
+            out = Timing { kind = TimingKind.Steps, steps = n, step_position = pos }
+            ret true
+        end
+        "linear":
+            out = Timing { kind = TimingKind.Linear, x1 = 0.0, y1 = 0.0, x2 = 1.0, y2 = 1.0 }
+            ret a.len() >= 1
+        end
+        else:
+            ret false
+        end
+    end
+    ret false
+end
+
+func is_generic_family(k: str): bool:
+    switch k:
+        "serif", "sans-serif", "monospace", "cursive", "fantasy", "system-ui", "ui-serif", "ui-sans-serif", "ui-monospace", "ui-rounded", "emoji", "math", "fangsong", "-webkit-body":
+            ret true
+        end
+        else:
+            ret false
+        end
+    end
+    ret false
+end
+
+func family_list(t: Vector<Tok>, s: int, e: int, out &: str): bool:
+    mut parts := Vector {} as Vector<int>
+    defer parts.free()
+    split_commas(t, s, e, parts)
+    mut b := str.NewBuilder()
+    mut k := 0
+    mut ok := true
+    until k + 1 < parts.len():
+        ps := parts[k]
+        pe := parts[k + 1]
+        if ps >= pe:
+            ok = false
+            break
+        end
+        if k > 0:
+            str.BufAppend(b, ", ")
+        end
+        if single(t, ps, pe) and t[ps].k == TK_STR:
+            str.BufAppend(b, t[ps].s)
+        else:
+            mut j := ps
+            until j < pe:
+                if t[j].k != TK_IDENT:
+                    ok = false
+                    break
+                end
+                if j > ps:
+                    str.BufAppend(b, " ")
+                end
+                if single(t, ps, pe) and is_generic_family(t[j].s):
+                    str.BufAppend(b, t[j].s)
+                else:
+                    str.BufAppend(b, t[j].raw)
+                end
+                j++
+            end
+        end
+        k += 2
+    end
+    r := str.BufStr(b)
+    str.BufFree(b)
+    if not ok:
+        sfree(r)
+        ret false
+    end
+    out = intern_own(r)
+    ret true
+end
+
+func font_size_kw(k: str, pfs: f64, out &: f64): bool:
+    switch k:
+        "xx-small": out = 9.0 break end
+        "x-small": out = 10.0 break end
+        "small": out = 13.0 break end
+        "medium": out = 16.0 break end
+        "large": out = 18.0 break end
+        "x-large": out = 24.0 break end
+        "xx-large": out = 32.0 break end
+        "xxx-large": out = 48.0 break end
+        "smaller": out = pfs / 1.2 break end
+        "larger": out = pfs * 1.2 break end
+        "math": out = pfs break end
+        else: ret false end
+    end
+    ret true
+end
+
+func font_weight_of(t: Vector<Tok>, s: int, e: int, cx: Cx, pw: int, out &: int): bool:
+    k := kw_at(t, s, e)
+    switch k:
+        "normal":
+            out = 400
+            ret true
+        end
+        "bold":
+            out = 700
+            ret true
+        end
+        "bolder":
+            out = pw < 350 ? 400 : (pw < 550 ? 700 : 900)
+            ret true
+        end
+        "lighter":
+            out = pw < 550 ? 100 : (pw < 750 ? 400 : 700)
+            ret true
+        end
+        else:
+        end
+    end
+    mut v := 0.0
+    if not single(t, s, e) or not p_num(t, s, e, cx, v) or v < 1.0 or v > 1000.0:
+        ret false
+    end
+    out = math.Floor(v + 0.5) as int
+    ret true
+end
+
+func font_stretch_of(t: Vector<Tok>, s: int, e: int, out &: f64): bool:
+    k := kw_at(t, s, e)
+    switch k:
+        "normal": out = 100.0 break end
+        "ultra-condensed": out = 50.0 break end
+        "extra-condensed": out = 62.5 break end
+        "condensed": out = 75.0 break end
+        "semi-condensed": out = 87.5 break end
+        "semi-expanded": out = 112.5 break end
+        "expanded": out = 125.0 break end
+        "extra-expanded": out = 150.0 break end
+        "ultra-expanded": out = 200.0 break end
+        else:
+            if single(t, s, e) and t[s].k == TK_PCT and t[s].n >= 0.0:
+                out = t[s].n
+                ret true
+            end
+            ret false
+        end
+    end
+    ret true
+end
+
+func line_height_of(t: Vector<Tok>, s: int, e: int, cx: Cx, cs &: ComputedStyle): bool:
+    if kw_at(t, s, e) == "normal":
+        cs.line_height_normal = true
+        cs.line_height_factor = 0.0
+        cs.line_height = cx.fs * 1.2
+        ret true
+    end
+    if not single(t, s, e):
+        ret false
+    end
+    mut f := 0.0
+    if p_num(t, s, e, cx, f):
+        if f < 0.0:
+            ret false
+        end
+        cs.line_height_normal = false
+        cs.line_height_factor = f
+        cs.line_height = f * cx.fs
+        ret true
+    end
+    mut c2 := cx
+    c2.basis = cx.fs
+    mut l := Len {}
+    if not p_len(t, s, e, c2, true, false, l):
+        ret false
+    end
+    cs.line_height_normal = false
+    cs.line_height_factor = 0.0
+    cs.line_height = l.px
+    ret true
+end
+
+func repeat_kw(k: str, out &: Repeat): bool:
+    switch k:
+        "repeat": out = Repeat.Repeat break end
+        "no-repeat": out = Repeat.NoRepeat break end
+        "space": out = Repeat.Space break end
+        "round": out = Repeat.Round break end
+        else: ret false end
+    end
+    ret true
+end
+
+func area_kw(k: str, allow_text: bool, out &: BoxArea): bool:
+    switch k:
+        "border-box": out = BoxArea.BorderBox break end
+        "padding-box": out = BoxArea.PaddingBox break end
+        "content-box": out = BoxArea.ContentBox break end
+        "text":
+            if not allow_text:
+                ret false
+            end
+            out = BoxArea.Text
+            break
+        end
+        else: ret false end
+    end
+    ret true
+end
+
+func apply_bg_list(cs &: ComputedStyle, p: int, t: Vector<Tok>, s: int, e: int, cx: Cx): bool:
+    mut parts := Vector {} as Vector<int>
+    defer parts.free()
+    split_commas(t, s, e, parts)
+    n := parts.len() / 2
+    if p == P_BG_IMAGE:
+        mut layers := Vector {} as Vector<BgLayer>
+        mut k := 0
+        until k + 1 < parts.len():
+            mut l := BgLayer {}
+            if not parse_image(t, parts[k], parts[k + 1], cx, l):
+                l.stops.free()
+                free_layers(layers)
+                ret false
+            end
+            layers.push(l)
+            k += 2
+        end
+        free_layers(cs.backgrounds)
+        cs.backgrounds = layers
+        ret true
+    end
+    mut vals := Vector {} as Vector<BgLayer>
+    defer vals.free()
+    mut k := 0
+    until k + 1 < parts.len():
+        ps := parts[k]
+        pe := parts[k + 1]
+        mut l := BgLayer {}
+        switch p:
+            P_BG_POS_X:
+                if not parse_pos_axis(t, ps, pe, cx, true, l.position_x):
+                    ret false
+                end
+                break
+            end
+            P_BG_POS_Y:
+                if not parse_pos_axis(t, ps, pe, cx, false, l.position_y):
+                    ret false
+                end
+                break
+            end
+            P_BG_SIZE:
+                kk := kw_at(t, ps, pe)
+                if kk == "cover":
+                    l.size_kind = SizeKind.Cover
+                else kk == "contain":
+                    l.size_kind = SizeKind.Contain
+                else:
+                    c := count_items(t, ps, pe)
+                    if c < 1 or c > 2:
+                        ret false
+                    end
+                    mut w := Len {}
+                    mut h := Len { kind = LenKind.Auto }
+                    if not p_auto_len(t, ps, nxt(t, ps), cx, false, w):
+                        ret false
+                    end
+                    if c == 2 and not p_auto_len(t, nxt(t, ps), pe, cx, false, h):
+                        ret false
+                    end
+                    l.size_w = w
+                    l.size_h = h
+                end
+                break
+            end
+            P_BG_REPEAT:
+                c := count_items(t, ps, pe)
+                kk := kw_at(t, ps, pe)
+                if kk == "repeat-x":
+                    l.repeat_x = Repeat.Repeat
+                    l.repeat_y = Repeat.NoRepeat
+                else kk == "repeat-y":
+                    l.repeat_x = Repeat.NoRepeat
+                    l.repeat_y = Repeat.Repeat
+                else c == 1 and t[ps].k == TK_IDENT:
+                    if not repeat_kw(t[ps].s, l.repeat_x):
+                        ret false
+                    end
+                    l.repeat_y = l.repeat_x
+                else c == 2 and t[ps].k == TK_IDENT and t[ps + 1].k == TK_IDENT:
+                    if not repeat_kw(t[ps].s, l.repeat_x) or not repeat_kw(t[ps + 1].s, l.repeat_y):
+                        ret false
+                    end
+                else:
+                    ret false
+                end
+                break
+            end
+            P_BG_CLIP:
+                if not area_kw(kw_at(t, ps, pe), true, l.clip):
+                    ret false
+                end
+                break
+            end
+            P_BG_ORIGIN:
+                if not area_kw(kw_at(t, ps, pe), false, l.origin):
+                    ret false
+                end
+                break
+            end
+            else:
+                kk := kw_at(t, ps, pe)
+                if kk == "fixed":
+                    l.fixed = true
+                else kk != "scroll" and kk != "local":
+                    ret false
+                end
+            end
+        end
+        vals.push(l)
+        k += 2
+    end
+    if n == 0:
+        ret false
+    end
+    repeat cs.backgrounds.len() in i:
+        o := vals[i % n]
+        mut l := cs.backgrounds.ref(i)
+        switch p:
+            P_BG_POS_X: l.position_x = o.position_x break end
+            P_BG_POS_Y: l.position_y = o.position_y break end
+            P_BG_SIZE:
+                l.size_kind = o.size_kind
+                l.size_w = o.size_w
+                l.size_h = o.size_h
+                break
+            end
+            P_BG_REPEAT:
+                l.repeat_x = o.repeat_x
+                l.repeat_y = o.repeat_y
+                break
+            end
+            P_BG_CLIP: l.clip = o.clip break end
+            P_BG_ORIGIN: l.origin = o.origin break end
+            else: l.fixed = o.fixed end
+        end
+    end
+    ret true
+end
+
+func apply_tr_list(cs &: ComputedStyle, p: int, t: Vector<Tok>, s: int, e: int, cx: Cx): bool:
+    mut parts := Vector {} as Vector<int>
+    defer parts.free()
+    split_commas(t, s, e, parts)
+    n := parts.len() / 2
+    if n == 0:
+        ret false
+    end
+    mut vals := Vector {} as Vector<Transition>
+    defer vals.free()
+    mut k := 0
+    until k + 1 < parts.len():
+        ps := parts[k]
+        pe := parts[k + 1]
+        mut tr := Transition {}
+        switch p:
+            P_TR_PROPERTY:
+                kk := kw_at(t, ps, pe)
+                if kk.len() == 0:
+                    ret false
+                end
+                if kk == "none" and n > 1:
+                    ret false
+                end
+                tr.property = intern(kk)
+                break
+            end
+            P_TR_DURATION, P_TR_DELAY:
+                mut v := 0.0
+                if not single(t, ps, pe) or not p_time(t, ps, pe, cx, v):
+                    ret false
+                end
+                if p == P_TR_DURATION:
+                    if v < 0.0:
+                        ret false
+                    end
+                    tr.duration = v
+                else:
+                    tr.delay = v
+                end
+                break
+            end
+            else:
+                if not single(t, ps, pe) or not timing_of(t, ps, cx, tr.timing):
+                    ret false
+                end
+            end
+        end
+        vals.push(tr)
+        k += 2
+    end
+    if p == P_TR_PROPERTY:
+        mut old := cs.transitions
+        mut fresh := Vector {} as Vector<Transition>
+        repeat n in i:
+            mut tr := Transition { property = vals[i].property }
+            if old.len() > 0:
+                o := old[i % old.len()]
+                tr.duration = o.duration
+                tr.delay = o.delay
+                tr.timing = o.timing
+            end
+            fresh.push(tr)
+        end
+        old.free()
+        cs.transitions = fresh
+        ret true
+    end
+    repeat cs.transitions.len() in i:
+        o := vals[i % n]
+        mut tr := cs.transitions.ref(i)
+        switch p:
+            P_TR_DURATION: tr.duration = o.duration break end
+            P_TR_DELAY: tr.delay = o.delay break end
+            else: tr.timing = o.timing end
+        end
+    end
+    ret true
+end
+
+func set_len_prop(cs &: ComputedStyle, p: int, l: Len):
+    switch p:
+        P_TOP: cs.top = l break end
+        P_RIGHT: cs.right = l break end
+        P_BOTTOM: cs.bottom = l break end
+        P_LEFT: cs.left = l break end
+        P_WIDTH: cs.width = l break end
+        P_HEIGHT: cs.height = l break end
+        P_MIN_WIDTH: cs.min_width = l break end
+        P_MIN_HEIGHT: cs.min_height = l break end
+        P_MAX_WIDTH: cs.max_width = l break end
+        P_MAX_HEIGHT: cs.max_height = l break end
+        P_MARGIN_TOP: cs.margin_top = l break end
+        P_MARGIN_TOP + 1: cs.margin_right = l break end
+        P_MARGIN_TOP + 2: cs.margin_bottom = l break end
+        P_MARGIN_TOP + 3: cs.margin_left = l break end
+        P_PADDING_TOP: cs.padding_top = l break end
+        P_PADDING_TOP + 1: cs.padding_right = l break end
+        P_PADDING_TOP + 2: cs.padding_bottom = l break end
+        P_PADDING_TOP + 3: cs.padding_left = l break end
+        P_FLEX_BASIS: cs.flex_basis = l break end
+        P_ROW_GAP: cs.row_gap = l break end
+        P_COLUMN_GAP: cs.column_gap = l break end
+        P_TEXT_INDENT: cs.text_indent = l break end
+        P_TD_THICKNESS: cs.decoration_thickness = l break end
+        else:
+        end
+    end
+end
+
+func set_corner(cs &: ComputedStyle, k: int, c: Corner):
+    switch k:
+        0: cs.radius_top_left = c break end
+        1: cs.radius_top_right = c break end
+        2: cs.radius_bottom_right = c break end
+        else: cs.radius_bottom_left = c end
+    end
+end
+
+func apply_prop(cs &: ComputedStyle, p: int, t: Vector<Tok>, s: int, e: int, cx: Cx): bool:
+    if s >= e:
+        ret false
+    end
+    k := kw_at(t, s, e)
+    if p >= P_TOP and p <= P_LEFT:
+        mut l := Len {}
+        if not p_auto_len(t, s, e, cx, true, l):
+            ret false
+        end
+        set_len_prop(cs, p, l)
+        ret true
+    end
+    if p >= P_MARGIN_TOP and p < P_MARGIN_TOP + 4:
+        mut l := Len {}
+        if not p_auto_len(t, s, e, cx, true, l):
+            ret false
+        end
+        set_len_prop(cs, p, l)
+        ret true
+    end
+    if p >= P_PADDING_TOP and p < P_PADDING_TOP + 4:
+        mut l := Len {}
+        if not single(t, s, e) or not p_len(t, s, e, cx, true, false, l):
+            ret false
+        end
+        set_len_prop(cs, p, l)
+        ret true
+    end
+    if p >= P_BORDER_TOP_WIDTH and p < P_BORDER_TOP_WIDTH + 4:
+        mut w := 0.0
+        if not border_width_of(t, s, e, cx, w):
+            ret false
+        end
+        mut sd := side_of(cs, p - P_BORDER_TOP_WIDTH)
+        sd.width = snap_border(w)
+        set_side(cs, p - P_BORDER_TOP_WIDTH, sd)
+        ret true
+    end
+    if p >= P_BORDER_TOP_STYLE and p < P_BORDER_TOP_STYLE + 4:
+        mut sd := side_of(cs, p - P_BORDER_TOP_STYLE)
+        if not border_style_of(k, false, sd.style):
+            ret false
+        end
+        set_side(cs, p - P_BORDER_TOP_STYLE, sd)
+        ret true
+    end
+    if p >= P_BORDER_TOP_COLOR and p < P_BORDER_TOP_COLOR + 4:
+        mut sd := side_of(cs, p - P_BORDER_TOP_COLOR)
+        if not parse_color_at(t, s, e, cx.dark, cx.color, sd.color):
+            ret false
+        end
+        set_side(cs, p - P_BORDER_TOP_COLOR, sd)
+        ret true
+    end
+    if p >= P_RADIUS_TL and p < P_RADIUS_TL + 4:
+        c := count_items(t, s, e)
+        if c < 1 or c > 2:
+            ret false
+        end
+        mut h := Len {}
+        if not p_len(t, s, e, cx, true, false, h):
+            ret false
+        end
+        mut v := h
+        if c == 2 and not p_len(t, nxt(t, s), e, cx, true, false, v):
+            ret false
+        end
+        set_corner(cs, p - P_RADIUS_TL, Corner { h = h, v = v })
+        ret true
+    end
+    if p >= P_BG_IMAGE and p <= P_BG_ATTACH:
+        ret apply_bg_list(cs, p, t, s, e, cx)
+    end
+    if p >= P_TR_PROPERTY and p <= P_TR_DELAY:
+        ret apply_tr_list(cs, p, t, s, e, cx)
+    end
+    switch p:
+        P_DISPLAY:
+            ret display_of(t, s, e, cs.display)
+        end
+        P_POSITION:
+            switch k:
+                "static": cs.position = cssbox.Position.Static break end
+                "relative": cs.position = cssbox.Position.Relative break end
+                "absolute": cs.position = cssbox.Position.Absolute break end
+                "fixed": cs.position = cssbox.Position.Fixed break end
+                "sticky", "-webkit-sticky": cs.position = cssbox.Position.Sticky break end
+                else: ret false end
+            end
+            break
+        end
+        P_BOX_SIZING:
+            switch k:
+                "content-box": cs.box_sizing = cssbox.BoxSizing.ContentBox break end
+                "border-box": cs.box_sizing = cssbox.BoxSizing.BorderBox break end
+                else: ret false end
+            end
+            break
+        end
+        P_WIDTH, P_HEIGHT, P_MIN_WIDTH, P_MIN_HEIGHT, P_FLEX_BASIS:
+            mut l := Len {}
+            if k == "content" and p == P_FLEX_BASIS:
+                l = Len { kind = LenKind.Content }
+            else not p_size_len(t, s, e, cx, "auto", l):
+                ret false
+            end
+            set_len_prop(cs, p, l)
+            break
+        end
+        P_MAX_WIDTH, P_MAX_HEIGHT:
+            mut l := Len {}
+            if not p_size_len(t, s, e, cx, "none", l):
+                ret false
+            end
+            set_len_prop(cs, p, l)
+            break
+        end
+        P_ASPECT_RATIO:
+            mut i := s
+            mut ratio := 0.0
+            mut seen := false
+            until i < e:
+                if is_kw(t, i, e, "auto"):
+                    i++
+                    continue
+                end
+                if seen:
+                    ret false
+                end
+                mut a := 0.0
+                if not p_num(t, i, e, cx, a) or a < 0.0:
+                    ret false
+                end
+                i = nxt(t, i)
+                mut b := 1.0
+                if is_delim(t, i, e, 47):
+                    if not p_num(t, i + 1, e, cx, b) or b < 0.0:
+                        ret false
+                    end
+                    i = nxt(t, i + 1)
+                end
+                ratio = b > 0.0 ? a / b : 0.0
+                seen = true
+            end
+            cs.aspect_ratio = ratio
+            break
+        end
+        P_OVERFLOW_X:
+            ret overflow_of(k, cs.overflow_x)
+        end
+        P_OVERFLOW_Y:
+            ret overflow_of(k, cs.overflow_y)
+        end
+        P_DIRECTION:
+            switch k:
+                "ltr": cs.direction = cssbox.Direction.Ltr break end
+                "rtl": cs.direction = cssbox.Direction.Rtl break end
+                else: ret false end
+            end
+            break
+        end
+        P_FLEX_DIRECTION:
+            switch k:
+                "row": cs.flex_direction = cssbox.FlexDirection.Row break end
+                "row-reverse": cs.flex_direction = cssbox.FlexDirection.RowReverse break end
+                "column": cs.flex_direction = cssbox.FlexDirection.Column break end
+                "column-reverse": cs.flex_direction = cssbox.FlexDirection.ColumnReverse break end
+                else: ret false end
+            end
+            break
+        end
+        P_FLEX_WRAP:
+            switch k:
+                "nowrap": cs.flex_wrap = cssbox.FlexWrap.NoWrap break end
+                "wrap": cs.flex_wrap = cssbox.FlexWrap.Wrap break end
+                "wrap-reverse": cs.flex_wrap = cssbox.FlexWrap.WrapReverse break end
+                else: ret false end
+            end
+            break
+        end
+        P_FLEX_GROW, P_FLEX_SHRINK:
+            mut v := 0.0
+            if not single(t, s, e) or not p_num(t, s, e, cx, v) or v < 0.0:
+                ret false
+            end
+            if p == P_FLEX_GROW:
+                cs.flex_grow = v
+            else:
+                cs.flex_shrink = v
+            end
+            break
+        end
+        P_JUSTIFY_CONTENT:
+            ret align_of(t, s, e, false, cs.justify_content)
+        end
+        P_ALIGN_ITEMS:
+            ret align_of(t, s, e, false, cs.align_items)
+        end
+        P_ALIGN_SELF:
+            ret align_of(t, s, e, true, cs.align_self)
+        end
+        P_ALIGN_CONTENT:
+            ret align_of(t, s, e, false, cs.align_content)
+        end
+        P_JUSTIFY_ITEMS:
+            ret align_of(t, s, e, false, cs.justify_items)
+        end
+        P_JUSTIFY_SELF:
+            ret align_of(t, s, e, true, cs.justify_self)
+        end
+        P_ROW_GAP, P_COLUMN_GAP:
+            mut l := Len {}
+            if k == "normal":
+                l = Len { kind = LenKind.Normal }
+            else not single(t, s, e) or not p_len(t, s, e, cx, true, false, l):
+                ret false
+            end
+            set_len_prop(cs, p, l)
+            break
+        end
+        P_ORDER:
+            mut v := 0
+            if not single(t, s, e) or not p_int(t, s, e, cx, v):
+                ret false
+            end
+            cs.order = v
+            break
+        end
+        P_Z_INDEX:
+            if k == "auto":
+                cs.z_auto = true
+                cs.z_index = 0
+            else:
+                mut v := 0
+                if not single(t, s, e) or not p_int(t, s, e, cx, v):
+                    ret false
+                end
+                cs.z_auto = false
+                cs.z_index = v
+            end
+            break
+        end
+        P_FLOAT:
+            switch k:
+                "none": cs.float_mode = Float.None break end
+                "left": cs.float_mode = Float.Left break end
+                "right": cs.float_mode = Float.Right break end
+                "inline-start": cs.float_mode = cx.rtl ? Float.Right : Float.Left break end
+                "inline-end": cs.float_mode = cx.rtl ? Float.Left : Float.Right break end
+                else: ret false end
+            end
+            break
+        end
+        P_CLEAR:
+            switch k:
+                "none": cs.clear = Clear.None break end
+                "left": cs.clear = Clear.Left break end
+                "right": cs.clear = Clear.Right break end
+                "both": cs.clear = Clear.Both break end
+                "inline-start": cs.clear = cx.rtl ? Clear.Right : Clear.Left break end
+                "inline-end": cs.clear = cx.rtl ? Clear.Left : Clear.Right break end
+                else: ret false end
+            end
+            break
+        end
+        P_VERTICAL_ALIGN:
+            switch k:
+                "baseline": cs.vertical_align = VerticalAlign.Baseline break end
+                "sub": cs.vertical_align = VerticalAlign.Sub break end
+                "super": cs.vertical_align = VerticalAlign.Super break end
+                "top": cs.vertical_align = VerticalAlign.Top break end
+                "text-top": cs.vertical_align = VerticalAlign.TextTop break end
+                "middle": cs.vertical_align = VerticalAlign.Middle break end
+                "bottom": cs.vertical_align = VerticalAlign.Bottom break end
+                "text-bottom": cs.vertical_align = VerticalAlign.TextBottom break end
+                else:
+                    mut c2 := cx
+                    c2.basis = cs.line_height
+                    mut l := Len {}
+                    if not single(t, s, e) or not p_len(t, s, e, c2, true, true, l):
+                        ret false
+                    end
+                    cs.vertical_align = VerticalAlign.Length
+                    cs.vertical_align_len = l
+                end
+            end
+            break
+        end
+        P_COLOR:
+            ret parse_color_at(t, s, e, cx.dark, cx.pcolor, cs.color)
+        end
+        P_BG_COLOR:
+            ret parse_color_at(t, s, e, cx.dark, cx.color, cs.background_color)
+        end
+        P_BOX_SHADOW, P_TEXT_SHADOW:
+            mut list := Vector {} as Vector<Shadow>
+            if not parse_shadow_list(t, s, e, cx, p == P_TEXT_SHADOW, list):
+                list.free()
+                ret false
+            end
+            if p == P_BOX_SHADOW:
+                cs.box_shadows.free()
+                cs.box_shadows = list
+            else:
+                cs.text_shadows.free()
+                cs.text_shadows = list
+            end
+            break
+        end
+        P_OUTLINE_WIDTH:
+            mut w := 0.0
+            if not border_width_of(t, s, e, cx, w):
+                ret false
+            end
+            cs.outline.width = snap_border(w)
+            break
+        end
+        P_OUTLINE_STYLE:
+            ret border_style_of(k, true, cs.outline.style)
+        end
+        P_OUTLINE_COLOR:
+            if k == "invert" or k == "auto":
+                cs.outline.color = cx.color
+                ret true
+            end
+            ret parse_color_at(t, s, e, cx.dark, cx.color, cs.outline.color)
+        end
+        P_OUTLINE_OFFSET:
+            mut l := Len {}
+            if not single(t, s, e) or not p_len(t, s, e, cx, false, true, l) or l.calc.len() > 0:
+                ret false
+            end
+            cs.outline_offset = l.px
+            break
+        end
+        P_OPACITY:
+            mut v := 0.0
+            if not single(t, s, e) or not p_num_or_pct(t, s, e, cx, v):
+                ret false
+            end
+            cs.opacity = clamp01(v)
+            break
+        end
+        P_TRANSFORM:
+            mut list := Vector {} as Vector<TransformFn>
+            if k != "none":
+                mut i := s
+                until i < e:
+                    mut fnv := TransformFn {}
+                    if t[i].k != TK_FUNC or not parse_transform_fn(t, i, cx, fnv):
+                        list.free()
+                        ret false
+                    end
+                    list.push(fnv)
+                    i = nxt(t, i)
+                end
+            end
+            cs.transforms.free()
+            cs.transforms = list
+            break
+        end
+        P_TRANSFORM_ORIGIN, P_OBJECT_POSITION:
+            mut ox := Len {}
+            mut oy := Len {}
+            mut e2 := e
+            if p == P_TRANSFORM_ORIGIN and count_items(t, s, e) == 3:
+                mut last := s
+                mut i := s
+                until i < e:
+                    last = i
+                    i = nxt(t, i)
+                end
+                if t[last].k != TK_DIM and t[last].k != TK_NUM:
+                    ret false
+                end
+                e2 = last
+            end
+            if not parse_position(t, s, e2, cx, ox, oy):
+                ret false
+            end
+            if p == P_TRANSFORM_ORIGIN:
+                cs.transform_origin_x = ox
+                cs.transform_origin_y = oy
+            else:
+                cs.object_position_x = ox
+                cs.object_position_y = oy
+            end
+            break
+        end
+        P_TRANSLATE:
+            if k == "none":
+                cs.translate_x = Len {}
+                cs.translate_y = Len {}
+                ret true
+            end
+            c := count_items(t, s, e)
+            if c < 1 or c > 3:
+                ret false
+            end
+            mut x := Len {}
+            mut y := Len {}
+            if not p_len(t, s, e, cx, true, true, x):
+                ret false
+            end
+            if c >= 2 and not p_len(t, nxt(t, s), e, cx, true, true, y):
+                ret false
+            end
+            cs.translate_x = x
+            cs.translate_y = y
+            break
+        end
+        P_ROTATE:
+            if k == "none":
+                cs.rotate = 0.0
+                ret true
+            end
+            mut i := s
+            mut found := false
+            until i < e:
+                mut a := 0.0
+                if p_angle(t, i, e, cx, false, a):
+                    cs.rotate = a
+                    found = true
+                end
+                i = nxt(t, i)
+            end
+            ret found
+        end
+        P_SCALE:
+            if k == "none":
+                cs.scale_x = 1.0
+                cs.scale_y = 1.0
+                ret true
+            end
+            c := count_items(t, s, e)
+            if c < 1 or c > 3:
+                ret false
+            end
+            mut sx := 1.0
+            if not p_num_or_pct(t, s, e, cx, sx):
+                ret false
+            end
+            mut sy := sx
+            if c >= 2 and not p_num_or_pct(t, nxt(t, s), e, cx, sy):
+                ret false
+            end
+            cs.scale_x = sx
+            cs.scale_y = sy
+            break
+        end
+        P_VISIBILITY:
+            switch k:
+                "visible": cs.visibility = Visibility.Visible break end
+                "hidden": cs.visibility = Visibility.Hidden break end
+                "collapse": cs.visibility = Visibility.Collapse break end
+                else: ret false end
+            end
+            break
+        end
+        P_CURSOR:
+            mut i := s
+            mut last := ""
+            until i < e:
+                if t[i].k == TK_IDENT:
+                    last = t[i].s
+                end
+                i = nxt(t, i)
+            end
+            if last.len() == 0:
+                ret false
+            end
+            cs.cursor = intern(last)
+            break
+        end
+        P_POINTER_EVENTS:
+            if k.len() == 0:
+                ret false
+            end
+            cs.pointer_events = k != "none"
+            break
+        end
+        P_USER_SELECT:
+            switch k:
+                "auto", "contain": cs.user_select = UserSelect.Auto break end
+                "none": cs.user_select = UserSelect.None break end
+                "text": cs.user_select = UserSelect.Text break end
+                "all": cs.user_select = UserSelect.All break end
+                else: ret false end
+            end
+            break
+        end
+        P_FONT_FAMILY:
+            ret family_list(t, s, e, cs.font_family)
+        end
+        P_FONT_SIZE:
+            base := cx.mono ? 13.0 : 16.0
+            mut v := 0.0
+            mut kwf := 0.0
+            if k.len() > 0:
+                if not font_size_kw(k, cx.pfs, v):
+                    ret false
+                end
+                if k == "larger" or k == "smaller":
+                    if cx.pkw > 0.0:
+                        kwf = k == "larger" ? cx.pkw * 1.2 : cx.pkw / 1.2
+                    end
+                else k != "math":
+                    kwf = v / 16.0
+                else:
+                    kwf = cx.pkw
+                end
+            else:
+                mut c2 := cx
+                c2.fs = cx.pfs
+                c2.basis = cx.pfs
+                mut l := Len {}
+                if not single(t, s, e) or not p_len(t, s, e, c2, true, false, l):
+                    ret false
+                end
+                v = l.px
+                tk := t[s]
+                relative := tk.k == TK_PCT or (tk.k == TK_DIM and (tk.s == "em" or tk.s == "ex" or tk.s == "ch"))
+                if relative and cx.pkw > 0.0 and cx.pfs > 0.0:
+                    kwf = cx.pkw * v / cx.pfs
+                end
+            end
+            if kwf > 0.0:
+                v = kwf * base
+            end
+            cs.font_size = v
+            cs.font_size_keyword = kwf
+            break
+        end
+        P_FONT_WEIGHT:
+            ret font_weight_of(t, s, e, cx, cs.font_weight, cs.font_weight)
+        end
+        P_FONT_STYLE:
+            switch k:
+                "normal": cs.font_style = FontStyle.Normal break end
+                "italic": cs.font_style = FontStyle.Italic break end
+                "oblique": cs.font_style = FontStyle.Oblique break end
+                else:
+                    if is_kw(t, s, e, "oblique") and count_items(t, s, e) == 2:
+                        mut a := 0.0
+                        if not p_angle(t, s + 1, e, cx, true, a):
+                            ret false
+                        end
+                        cs.font_style = FontStyle.Oblique
+                        ret true
+                    end
+                    ret false
+                end
+            end
+            break
+        end
+        P_FONT_VARIANT_CAPS:
+            switch k:
+                "normal", "unicase", "titling-caps": cs.small_caps = false break end
+                "small-caps", "all-small-caps", "petite-caps", "all-petite-caps": cs.small_caps = true break end
+                else: ret false end
+            end
+            break
+        end
+        P_FONT_STRETCH:
+            ret font_stretch_of(t, s, e, cs.font_stretch)
+        end
+        P_LINE_HEIGHT:
+            ret line_height_of(t, s, e, cx, cs)
+        end
+        P_LETTER_SPACING, P_WORD_SPACING:
+            mut v := 0.0
+            if k != "normal":
+                mut c2 := cx
+                c2.basis = cx.fs
+                mut l := Len {}
+                if not single(t, s, e) or not p_len(t, s, e, c2, true, true, l):
+                    ret false
+                end
+                v = l.px
+            end
+            if p == P_LETTER_SPACING:
+                cs.letter_spacing = v
+            else:
+                cs.word_spacing = v
+            end
+            break
+        end
+        P_TEXT_ALIGN:
+            switch k:
+                "start": cs.text_align = TextAlign.Start break end
+                "end": cs.text_align = TextAlign.End break end
+                "left", "-webkit-left": cs.text_align = TextAlign.Left break end
+                "right", "-webkit-right": cs.text_align = TextAlign.Right break end
+                "center", "-webkit-center": cs.text_align = TextAlign.Center break end
+                "justify": cs.text_align = TextAlign.Justify break end
+                "match-parent": cs.text_align = TextAlign.MatchParent break end
+                else: ret false end
+            end
+            break
+        end
+        P_TEXT_INDENT:
+            mut l := Len {}
+            mut found := false
+            mut i := s
+            until i < e:
+                if t[i].k == TK_IDENT:
+                    if t[i].s != "hanging" and t[i].s != "each-line":
+                        ret false
+                    end
+                else:
+                    if found or not p_len(t, i, e, cx, true, true, l):
+                        ret false
+                    end
+                    found = true
+                end
+                i = nxt(t, i)
+            end
+            if not found:
+                ret false
+            end
+            cs.text_indent = l
+            break
+        end
+        P_TEXT_TRANSFORM:
+            switch k:
+                "none": cs.text_transform = TextTransform.None break end
+                "capitalize": cs.text_transform = TextTransform.Capitalize break end
+                "uppercase": cs.text_transform = TextTransform.Uppercase break end
+                "lowercase": cs.text_transform = TextTransform.Lowercase break end
+                "full-width": cs.text_transform = TextTransform.FullWidth break end
+                else: ret false end
+            end
+            break
+        end
+        P_WHITE_SPACE:
+            switch k:
+                "normal": cs.white_space = WhiteSpace.Normal break end
+                "pre": cs.white_space = WhiteSpace.Pre break end
+                "nowrap": cs.white_space = WhiteSpace.NoWrap break end
+                "pre-wrap": cs.white_space = WhiteSpace.PreWrap break end
+                "pre-line": cs.white_space = WhiteSpace.PreLine break end
+                "break-spaces": cs.white_space = WhiteSpace.BreakSpaces break end
+                else: ret false end
+            end
+            break
+        end
+        P_TD_LINE:
+            mut u := false
+            mut o := false
+            mut strike := false
+            if k != "none":
+                mut i := s
+                until i < e:
+                    if t[i].k != TK_IDENT:
+                        ret false
+                    end
+                    switch t[i].s:
+                        "underline": u = true break end
+                        "overline": o = true break end
+                        "line-through": strike = true break end
+                        "blink", "spelling-error", "grammar-error": break end
+                        else: ret false end
+                    end
+                    i++
+                end
+            end
+            cs.underline = u
+            cs.overline = o
+            cs.line_through = strike
+            break
+        end
+        P_TD_STYLE:
+            switch k:
+                "solid": cs.decoration_style = DecorationStyle.Solid break end
+                "double": cs.decoration_style = DecorationStyle.Double break end
+                "dotted": cs.decoration_style = DecorationStyle.Dotted break end
+                "dashed": cs.decoration_style = DecorationStyle.Dashed break end
+                "wavy": cs.decoration_style = DecorationStyle.Wavy break end
+                else: ret false end
+            end
+            break
+        end
+        P_TD_COLOR:
+            ret parse_color_at(t, s, e, cx.dark, cx.color, cs.decoration_color)
+        end
+        P_TD_THICKNESS:
+            if k == "auto" or k == "from-font":
+                cs.decoration_thickness = Len { kind = LenKind.Auto }
+                ret true
+            end
+            mut c2 := cx
+            c2.basis = cx.fs
+            mut l := Len {}
+            if not single(t, s, e) or not p_len(t, s, e, c2, true, false, l):
+                ret false
+            end
+            cs.decoration_thickness = l
+            break
+        end
+        P_TEXT_OVERFLOW:
+            switch k:
+                "clip": cs.text_overflow = TextOverflow.Clip break end
+                "ellipsis": cs.text_overflow = TextOverflow.Ellipsis break end
+                else:
+                    if single(t, s, e) and t[s].k == TK_STR:
+                        cs.text_overflow = TextOverflow.Clip
+                        ret true
+                    end
+                    ret false
+                end
+            end
+            break
+        end
+        P_WORD_BREAK:
+            switch k:
+                "normal", "auto-phrase": cs.word_break = WordBreak.Normal break end
+                "break-all": cs.word_break = WordBreak.BreakAll break end
+                "keep-all": cs.word_break = WordBreak.KeepAll break end
+                "break-word": cs.word_break = WordBreak.BreakWord break end
+                else: ret false end
+            end
+            break
+        end
+        P_OVERFLOW_WRAP:
+            switch k:
+                "normal": cs.overflow_wrap = OverflowWrap.Normal break end
+                "anywhere": cs.overflow_wrap = OverflowWrap.Anywhere break end
+                "break-word": cs.overflow_wrap = OverflowWrap.BreakWord break end
+                else: ret false end
+            end
+            break
+        end
+        P_TAB_SIZE:
+            mut v := 0.0
+            if single(t, s, e) and p_num(t, s, e, cx, v):
+                if v < 0.0:
+                    ret false
+                end
+                cs.tab_size = v
+                cs.tab_size_px = 0.0
+                ret true
+            end
+            mut l := Len {}
+            if not single(t, s, e) or not p_len(t, s, e, cx, false, false, l):
+                ret false
+            end
+            cs.tab_size = 0.0
+            cs.tab_size_px = l.px
+            break
+        end
+        P_LIST_TYPE:
+            if single(t, s, e) and t[s].k == TK_STR:
+                cs.list_style_type = intern("\"" + t[s].s + "\"")
+                ret true
+            end
+            if k.len() == 0:
+                ret false
+            end
+            cs.list_style_type = intern(k)
+            break
+        end
+        P_LIST_POSITION:
+            switch k:
+                "outside": cs.list_style_position = ListPosition.Outside break end
+                "inside": cs.list_style_position = ListPosition.Inside break end
+                else: ret false end
+            end
+            break
+        end
+        P_LIST_IMAGE:
+            if k == "none":
+                cs.list_style_image = ""
+                ret true
+            end
+            mut l := BgLayer {}
+            ok := parse_image(t, s, e, cx, l)
+            l.stops.free()
+            if not ok or l.image != ImageKind.Url:
+                ret false
+            end
+            cs.list_style_image = l.url
+            break
+        end
+        P_BORDER_COLLAPSE:
+            switch k:
+                "separate": cs.border_collapse = BorderCollapse.Separate break end
+                "collapse": cs.border_collapse = BorderCollapse.Collapse break end
+                else: ret false end
+            end
+            break
+        end
+        P_BORDER_SPACING:
+            c := count_items(t, s, e)
+            if c < 1 or c > 2:
+                ret false
+            end
+            mut h := Len {}
+            if not p_len(t, s, e, cx, false, false, h) or h.calc.len() > 0:
+                ret false
+            end
+            mut v := h
+            if c == 2 and (not p_len(t, nxt(t, s), e, cx, false, false, v) or v.calc.len() > 0):
+                ret false
+            end
+            cs.border_spacing_x = h.px
+            cs.border_spacing_y = v.px
+            break
+        end
+        P_TABLE_LAYOUT:
+            switch k:
+                "auto": cs.table_layout = TableLayout.Auto break end
+                "fixed": cs.table_layout = TableLayout.Fixed break end
+                else: ret false end
+            end
+            break
+        end
+        P_CARET_COLOR:
+            if k == "auto":
+                cs.caret_color = cx.color
+                ret true
+            end
+            ret parse_color_at(t, s, e, cx.dark, cx.color, cs.caret_color)
+        end
+        P_ACCENT_COLOR:
+            if k == "auto":
+                cs.accent_auto = true
+                mut ac := Color {}
+                _ok := system_color("accentcolor", cx.dark, ac)
+                cs.accent_color = ac
+                ret true
+            end
+            if not parse_color_at(t, s, e, cx.dark, cx.color, cs.accent_color):
+                ret false
+            end
+            cs.accent_auto = false
+            break
+        end
+        P_APPEARANCE:
+            if k.len() == 0:
+                ret false
+            end
+            cs.appearance = intern(k)
+            break
+        end
+        P_COLOR_SCHEME:
+            if k == "normal":
+                cs.color_scheme = ColorScheme.Normal
+                ret true
+            end
+            mut light := false
+            mut dark := false
+            mut i := s
+            until i < e:
+                if t[i].k != TK_IDENT:
+                    ret false
+                end
+                if t[i].s == "light":
+                    light = true
+                else t[i].s == "dark":
+                    dark = true
+                end
+                i++
+            end
+            if light and dark:
+                cs.color_scheme = ColorScheme.LightDark
+            else dark:
+                cs.color_scheme = ColorScheme.Dark
+            else light:
+                cs.color_scheme = ColorScheme.Light
+            else:
+                cs.color_scheme = ColorScheme.Normal
+            end
+            break
+        end
+        P_OBJECT_FIT:
+            switch k:
+                "fill": cs.object_fit = ObjectFit.Fill break end
+                "contain": cs.object_fit = ObjectFit.Contain break end
+                "cover": cs.object_fit = ObjectFit.Cover break end
+                "none": cs.object_fit = ObjectFit.None break end
+                "scale-down": cs.object_fit = ObjectFit.ScaleDown break end
+                else: ret false end
+            end
+            break
+        end
+        else:
+            ret false
+        end
+    end
+    ret true
+end

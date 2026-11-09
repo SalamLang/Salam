@@ -25,12 +25,15 @@ struct _AcceptJob:
     pub cfg: ServerConfig = ServerConfig {}
     pub listener: tcp.Server = tcp.Server {}
     pub stop: i64* = null
+    pub limits: tunnel.ConnLimits = tunnel.ConnLimits {}
 end
 
 struct _ConnJob:
     pub cfg: ServerConfig = ServerConfig {}
     pub st: dyn tunnel.Stream = tunnel.TcpStream {}
     pub peer: str = ""
+    pub limits: tunnel.ConnLimits = tunnel.ConnLimits {}
+    pub adm: tunnel.Admit = tunnel.Admit {}
 end
 
 struct _UState:
@@ -90,6 +93,21 @@ pub struct ServerConfig:
     @en "allow"
     @fa "اجازه"
     pub allow: func (int, str, int) bool = (_c: int, _h: str, _p: int): ret true end
+    @en "policy"
+    @fa "سیاست مقصد"
+    pub policy: tunnel.DestPolicy = tunnel.DestPolicy {}
+    @en "has_connect"
+    @fa "اتصال سفارشی دارد"
+    pub has_connect: bool = false
+    @en "max_connections"
+    @fa "بیشینه اتصال همزمان"
+    pub max_connections: int = 1024
+    @en "max_per_source"
+    @fa "بیشینه دست دادن مبدا"
+    pub max_per_source: int = 32
+    @en "handshake_deadline_ms"
+    @fa "مهلت کل دست‌دهی"
+    pub handshake_deadline_ms: int = 10000
 end
 
 @en "Server"
@@ -174,13 +192,29 @@ func _read_cstr(s: dyn tunnel.Stream, v &: Vector<u8>, max: int): bool:
     ret false
 end
 
+func _policy(cfg: ServerConfig): tunnel.DestPolicy:
+    ret tunnel.PolicyForBind(cfg.policy, _bind_host(cfg))
+end
+
+func _outbound(cfg: ServerConfig, a: Address): Outbound:
+    pol := _policy(cfg)
+    if cfg.has_connect:
+        pl := tunnel.PolicyPlan(pol, tunnel.NewAddr(a.host, a.port), false)
+        if not pl.allowed:
+            ret Outbound { ok = false, code = RepNotAllowed, err = pl.reason }
+        end
+        ret cfg.connect(a.host, a.port)
+    end
+    ret PolicyConnect(pol, a.host, a.port, 10000)
+end
+
 func _do_connect(cfg: ServerConfig, s: dyn tunnel.Stream, ver: int, a: Address):
     if not cfg.allow(CmdConnect, a.host, a.port):
         _reply(s, ver, RepNotAllowed, _wild())
         s.Close()
         ret
     end
-    out := cfg.connect(a.host, a.port)
+    out := _outbound(cfg, a)
     if not out.ok:
         mut code := out.code
         if code == RepSucceeded: code = RepGeneralFailure end
@@ -199,8 +233,13 @@ func _do_connect(cfg: ServerConfig, s: dyn tunnel.Stream, ver: int, a: Address):
 end
 
 func _do_bind(cfg: ServerConfig, s: dyn tunnel.Stream, ver: int, a: Address):
-    if not cfg.allow_bind or not cfg.allow(CmdBind, a.host, a.port):
+    if not cfg.allow_bind:
         _reply(s, ver, RepCmdNotSupported, _wild())
+        s.Close()
+        ret
+    end
+    if not cfg.allow(CmdBind, a.host, a.port) or not tunnel.PolicyPlan(_policy(cfg), tunnel.NewAddr(a.host, a.port), false).allowed:
+        _reply(s, ver, RepNotAllowed, _wild())
         s.Close()
         ret
     end
@@ -241,6 +280,12 @@ func _do_bind(cfg: ServerConfig, s: dyn tunnel.Stream, ver: int, a: Address):
     peer := tunnel.TcpStream { conn = conn }
     mut pport := 0
     phost := rawsock.PeerAddr(rawsock.FromFd(conn.fd), pport)
+    if not tunnel.PolicyCheckIP(_policy(cfg), phost):
+        peer.Close()
+        _reply(s, ver, RepNotAllowed, _wild())
+        s.Close()
+        ret
+    end
     mut paddr := _wild()
     if phost.len() > 0: paddr = NewAddress(phost, pport) end
     if not _reply(s, ver, RepSucceeded, paddr):
@@ -266,8 +311,12 @@ end
 
 func _udp_forward(cfg: ServerConfig, osock: udp.Socket, ibuf: void*, n: int, hd: UDPHeader):
     if hd.frag == 0 and cfg.allow(CmdUDPAssociate, hd.addr.host, hd.addr.port):
-        plen := n - hd.length
-        udp.SendBytes(osock, hd.addr.host, hd.addr.port, ((ibuf as i64) + (hd.length as i64)) as void*, plen)
+        pl := tunnel.PolicyPlan(_policy(cfg), tunnel.NewAddr(hd.addr.host, hd.addr.port), true)
+        if pl.allowed and pl.ips.len() > 0:
+            plen := n - hd.length
+            udp.SendBytes(osock, pl.ips[0], hd.addr.port, ((ibuf as i64) + (hd.length as i64)) as void*, plen)
+        end
+        pl.ips.free()
     end
 end
 
@@ -482,10 +531,12 @@ func _hs5(cfg: ServerConfig, s: dyn tunnel.Stream, req &: Request, user &: str):
     ret true
 end
 
-func _serve5(cfg: ServerConfig, s: dyn tunnel.Stream, peer: str):
+func _serve5(cfg: ServerConfig, s: dyn tunnel.Stream, peer: str, lim: tunnel.ConnLimits, adm &: tunnel.Admit):
     mut req := Request {}
     mut user := ""
-    if not _hs5(cfg, s, req, user):
+    okh := _hs5(cfg, s, req, user)
+    tunnel.LimitsHandshakeDone(lim, adm)
+    if not okh:
         s.Close()
         ret
     end
@@ -537,9 +588,11 @@ func _hs4(cfg: ServerConfig, s: dyn tunnel.Stream, req &: Request): bool:
     ret true
 end
 
-func _serve4(cfg: ServerConfig, s: dyn tunnel.Stream):
+func _serve4(cfg: ServerConfig, s: dyn tunnel.Stream, lim: tunnel.ConnLimits, adm &: tunnel.Admit):
     mut req := Request {}
-    if not _hs4(cfg, s, req):
+    okh := _hs4(cfg, s, req)
+    tunnel.LimitsHandshakeDone(lim, adm)
+    if not okh:
         s.Close()
         ret
     end
@@ -559,14 +612,15 @@ func _serve4(cfg: ServerConfig, s: dyn tunnel.Stream):
     end
 end
 
-func _handle(cfg: ServerConfig, s: dyn tunnel.Stream, peer: str):
+func _handle(cfg: ServerConfig, s: dyn tunnel.Stream, peer: str, lim: tunnel.ConnLimits, adm &: tunnel.Admit):
     s.SetDeadline(cfg.handshake_timeout_ms)
     v := tunnel.ReadByte(s)
     if v == 5:
-        _serve5(cfg, s, peer)
+        _serve5(cfg, s, peer, lim, adm)
     else v == 4 and cfg.allow_v4:
-        _serve4(cfg, s)
+        _serve4(cfg, s, lim, adm)
     else:
+        tunnel.LimitsHandshakeDone(lim, adm)
         s.Close()
     end
 end
@@ -576,8 +630,11 @@ func _conn_thread(arg: i64):
     cfg := jp[0].cfg
     st := jp[0].st
     peer := jp[0].peer
+    lim := jp[0].limits
+    mut adm := jp[0].adm
     mem.Free(jp as void*)
-    _handle(cfg, st, peer)
+    _handle(cfg, st, peer, lim, adm)
+    tunnel.LimitsRelease(lim, adm)
 end
 
 func _accept_thread(arg: i64):
@@ -585,6 +642,7 @@ func _accept_thread(arg: i64):
     cfg := jp[0].cfg
     lst := jp[0].listener
     stop := jp[0].stop
+    limits := jp[0].limits
     mem.Free(jp as void*)
     until atomic_load(stop) != 0:
         c := tcp.Accept(lst)
@@ -593,11 +651,18 @@ func _accept_thread(arg: i64):
         else not tcp.ConnOk(c):
             sync.SleepMs(5)
         else:
-            cj := mem.AllocateZeroed(sizeof(_ConnJob) as u64) as _ConnJob*
-            cj[0] = _ConnJob { cfg = cfg, st = tunnel.TcpStream { conn = c }, peer = rawsock.PeerHost(rawsock.FromFd(c.fd)) }
-            if not Go(_conn_thread, cj as void*):
+            adm := tunnel.LimitsEnter(limits, c.fd)
+            if not adm.ok:
                 tcp.Close(c)
-                mem.Free(cj as void*)
+            else:
+                cj := mem.AllocateZeroed(sizeof(_ConnJob) as u64) as _ConnJob*
+                cj[0] = _ConnJob { cfg = cfg, st = tunnel.TcpStream { conn = c }, peer = adm.host, limits = limits, adm = adm }
+                if not Go(_conn_thread, cj as void*):
+                    mut failed := adm
+                    tunnel.LimitsRelease(limits, failed)
+                    tcp.Close(c)
+                    mem.Free(cj as void*)
+                end
             end
         end
     end
@@ -630,12 +695,26 @@ end
 @fa "تعیین اتصال به مقصد"
 pub func SetConnector(cfg &: ServerConfig, connect: func (str, int) Outbound):
     cfg.connect = connect
+    cfg.has_connect = true
+end
+
+@en "SetPolicy"
+@fa "تعیین سیاست مقصد"
+pub func SetPolicy(cfg &: ServerConfig, p: tunnel.DestPolicy):
+    cfg.policy = p
+end
+
+@en "AllowPrivate"
+@fa "اجازه آدرس‌های خصوصی"
+pub func AllowPrivate(cfg &: ServerConfig, enabled: bool):
+    cfg.policy.allow_private = enabled
 end
 
 @en "Handle"
 @fa "رسیدگی"
 pub func Handle(cfg: ServerConfig, s: dyn tunnel.Stream):
-    _handle(cfg, s, "")
+    mut adm := tunnel.Admit { done = true }
+    _handle(cfg, s, "", tunnel.ConnLimits {}, adm)
 end
 
 
@@ -648,7 +727,7 @@ pub func Start(cfg: ServerConfig): Server:
     stop := mem.AllocateZeroed(8 as u64) as i64*
     atomic_store(stop, 1 as i64)
     jb := mem.AllocateZeroed(sizeof(_AcceptJob) as u64) as _AcceptJob*
-    jb[0] = _AcceptJob { cfg = cfg, listener = ls, stop = stop }
+    jb[0] = _AcceptJob { cfg = cfg, listener = ls, stop = stop, limits = tunnel.NewConnLimits(cfg.max_connections, cfg.max_per_source, cfg.handshake_deadline_ms) }
     sv.ok = true
     sv.port = tcp.Port(ls)
     sv.host = _bind_host(cfg)

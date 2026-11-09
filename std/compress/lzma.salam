@@ -54,6 +54,17 @@ struct _Lz:
     pub rep3: int
     pub dsize: i64
     pub dstart: int
+    pub ffp: void*
+    pub foff: i64
+    pub fleft: i64
+    pub refill: bool
+    pub ibuf: u8*
+    pub win: u8*
+    pub wsize: int
+    pub wpos: int
+    pub wfl: int
+    pub total: i64
+    pub dstart_t: i64
 end
 
 func _lz_new(dsize: i64): _Lz:
@@ -61,6 +72,8 @@ func _lz_new(dsize: i64): _Lz:
         ip = null as u8*, ipos = 0, iend = 0, rng = 0xFFFFFFFF as i64, code = 0 as i64, bad = false
         probs = null as u16*, nprobs = 0, lc = 0, lp = 0, pb = 0, state = 0
         rep0 = 0, rep1 = 0, rep2 = 0, rep3 = 0, dsize = dsize, dstart = 0
+        ffp = null, foff = 0 as i64, fleft = 0 as i64, refill = false, ibuf = null as u8*
+        win = null as u8*, wsize = 0, wpos = 0, wfl = 0, total = 0 as i64, dstart_t = 0 as i64
     }
 end
 
@@ -132,6 +145,23 @@ func _lz_rc_init(d &: _Lz, p: void*, start: int, endp: int): bool:
     ret true
 end
 
+func _lz_refill(d &: _Lz): bool:
+    if d.fleft <= (0 as i64) or d.ibuf == null:
+        ret false
+    end
+    want := d.fleft > (65536 as i64) ? 65536 : (d.fleft as int)
+    got := FileReadAt(d.ffp, d.foff, d.ibuf as void*, want)
+    if got <= 0:
+        ret false
+    end
+    d.foff += got as i64
+    d.fleft -= got as i64
+    d.ip = d.ibuf
+    d.ipos = 0
+    d.iend = got
+    ret true
+end
+
 inline func _lz_norm(d &: _Lz):
     if d.rng < 16777216:
         d.rng = (d.rng << 8) & 0xFFFFFFFF
@@ -139,6 +169,9 @@ inline func _lz_norm(d &: _Lz):
         if d.ipos < d.iend:
             b = d.ip[d.ipos] as i64
             d.ipos++
+        else d.refill and _lz_refill(d):
+            b = d.ip[0] as i64
+            d.ipos = 1
         else:
             d.bad = true
         end
@@ -503,6 +536,276 @@ func _lzma2_decode(dict_prop: int, p: void*, n: int, out_size: int, max: int, co
     ret out
 end
 
+func _lzw_flush(d &: _Lz, sink &: FileSink): bool:
+    n := d.wpos - d.wfl
+    if n > 0:
+        if not SinkWrite(sink, ((d.win as i64) + (d.wfl as i64)) as void*, n):
+            ret false
+        end
+    end
+    d.wfl = d.wpos
+    ret true
+end
+
+func _lzw_put(d &: _Lz, sink &: FileSink, p: u8*, n: int): bool:
+    mut i := 0
+    until i < n:
+        d.win[d.wpos] = p[i]
+        d.wpos++
+        i++
+        if d.wpos == d.wsize:
+            if not _lzw_flush(d, sink):
+                ret false
+            end
+            d.wpos = 0
+            d.wfl = 0
+        end
+    end
+    d.total += n as i64
+    ret true
+end
+
+func _lz_run_win(d &: _Lz, sink &: FileSink, limit: i64): int:
+    mut pos := d.wpos
+    mut total := d.total
+    wsize := d.wsize
+    buf := d.win
+    pb_mask := (1 << d.pb) - 1
+    lp_mask := (1 << d.lp) - 1
+    lc := d.lc
+    until total < limit:
+        if d.bad:
+            d.wpos = pos
+            d.total = total
+            ret -1
+        end
+        rel := total - d.dstart_t
+        rel_i := rel as int
+        pos_state := rel_i & pb_mask
+        st := d.state
+        if _lz_bit(d, _LZ_ISMATCH + st * 16 + pos_state) == 0:
+            mut prev := 0
+            if rel > (0 as i64):
+                if pos > 0:
+                    prev = buf[pos - 1] as int
+                else:
+                    prev = buf[wsize - 1] as int
+                end
+            end
+            lit_state := ((rel_i & lp_mask) << lc) + (prev >> (8 - lc))
+            base := _LZ_LITERAL + 768 * lit_state
+            mut sym := 1
+            if st >= 7:
+                mut mi := pos - d.rep0 - 1
+                if mi < 0:
+                    mi += wsize
+                end
+                mut mb := buf[mi] as int
+                mut offs := 256
+                until sym < 256:
+                    mb <<= 1
+                    mbit := mb & offs
+                    bit := _lz_bit(d, base + offs + mbit + sym)
+                    sym = (sym << 1) | bit
+                    if bit == 0:
+                        offs &= (mbit ^ 0xFFFF)
+                    else:
+                        offs &= mbit
+                    end
+                end
+            else:
+                until sym < 256:
+                    sym = (sym << 1) | _lz_bit(d, base + sym)
+                end
+            end
+            buf[pos] = (sym & 255) as u8
+            pos++
+            total++
+            if pos == wsize:
+                d.wpos = pos
+                if not _lzw_flush(d, sink):
+                    d.total = total
+                    ret -2
+                end
+                pos = 0
+                d.wpos = 0
+                d.wfl = 0
+            end
+            if st < 4:
+                d.state = 0
+            else st < 10:
+                d.state = st - 3
+            else:
+                d.state = st - 6
+            end
+        else:
+            mut mlen := 0
+            if _lz_bit(d, _LZ_ISREP + st) == 0:
+                d.rep3 = d.rep2
+                d.rep2 = d.rep1
+                d.rep1 = d.rep0
+                mlen = _lz_len(d, _LZ_LENMATCH, pos_state)
+                if st < 7:
+                    d.state = 7
+                else:
+                    d.state = 10
+                end
+                dist := _lz_dist(d, mlen)
+                if dist >= (0x7fffffff as i64):
+                    d.wpos = pos
+                    d.total = total
+                    ret -1
+                end
+                d.rep0 = dist as int
+            else:
+                if rel == (0 as i64):
+                    d.wpos = pos
+                    d.total = total
+                    ret -1
+                end
+                if _lz_bit(d, _LZ_ISREPG0 + st) == 0:
+                    if _lz_bit(d, _LZ_ISREP0LONG + st * 16 + pos_state) == 0:
+                        if (d.rep0 as i64) >= rel or (d.rep0 as i64) >= d.dsize or d.rep0 >= wsize:
+                            d.wpos = pos
+                            d.total = total
+                            ret -1
+                        end
+                        if st < 7:
+                            d.state = 9
+                        else:
+                            d.state = 11
+                        end
+                        mut s1 := pos - d.rep0 - 1
+                        if s1 < 0:
+                            s1 += wsize
+                        end
+                        buf[pos] = buf[s1]
+                        pos++
+                        total++
+                        if pos == wsize:
+                            d.wpos = pos
+                            if not _lzw_flush(d, sink):
+                                d.total = total
+                                ret -2
+                            end
+                            pos = 0
+                            d.wpos = 0
+                            d.wfl = 0
+                        end
+                        continue
+                    end
+                else:
+                    mut dd := 0
+                    if _lz_bit(d, _LZ_ISREPG1 + st) == 0:
+                        dd = d.rep1
+                    else:
+                        if _lz_bit(d, _LZ_ISREPG2 + st) == 0:
+                            dd = d.rep2
+                        else:
+                            dd = d.rep3
+                            d.rep3 = d.rep2
+                        end
+                        d.rep2 = d.rep1
+                    end
+                    d.rep1 = d.rep0
+                    d.rep0 = dd
+                end
+                mlen = _lz_len(d, _LZ_LENREP, pos_state)
+                if st < 7:
+                    d.state = 8
+                else:
+                    d.state = 11
+                end
+            end
+            mlen += 2
+            if (d.rep0 as i64) >= rel or (d.rep0 as i64) >= d.dsize or d.rep0 >= wsize or (mlen as i64) > limit - total:
+                d.wpos = pos
+                d.total = total
+                ret -1
+            end
+            mut src := pos - d.rep0 - 1
+            if src < 0:
+                src += wsize
+            end
+            mut k := 0
+            until k < mlen:
+                buf[pos] = buf[src]
+                pos++
+                src++
+                if src == wsize:
+                    src = 0
+                end
+                if pos == wsize:
+                    d.wpos = pos
+                    if not _lzw_flush(d, sink):
+                        d.total = total + (k as i64) + (1 as i64)
+                        ret -2
+                    end
+                    pos = 0
+                    d.wpos = 0
+                    d.wfl = 0
+                end
+                k++
+            end
+            total += mlen as i64
+        end
+    end
+    d.wpos = pos
+    d.total = total
+    if d.bad:
+        ret -1
+    end
+    ret 0
+end
+
+func _lz_fread(d &: _Lz, dst: u8*, n: int): bool:
+    if n < 0 or d.fleft < (n as i64):
+        ret false
+    end
+    if n == 0:
+        ret true
+    end
+    got := FileReadAt(d.ffp, d.foff, dst as void*, n)
+    if got != n:
+        ret false
+    end
+    d.foff += n as i64
+    d.fleft -= n as i64
+    ret true
+end
+
+func _lzw_setup(d &: _Lz, want: i64, out_size: i64, memcap: i64): int:
+    mut w := want
+    if out_size < w:
+        w = out_size
+    end
+    if w < (1 as i64):
+        w = 1 as i64
+    end
+    if w > (2147483000 as i64) or (memcap > (0 as i64) and w > memcap):
+        ret 2
+    end
+    d.wsize = w as int
+    d.win = mem.Allocate(w as u64) as u8*
+    d.wpos = 0
+    d.wfl = 0
+    d.total = 0 as i64
+    d.dstart_t = 0 as i64
+    ret 0
+end
+
+func _lzw_free(d &: _Lz):
+    if d.win != null:
+        mem.Free(d.win as void*)
+        d.win = null as u8*
+    end
+    if d.ibuf != null:
+        mem.Free(d.ibuf as void*)
+        d.ibuf = null as u8*
+    end
+    _lz_free(d)
+end
+
 @en "Lzma2RawDecompress"
 @fa "کدگشایی الزد ام ای۲ خام"
 pub func Lzma2RawDecompress(dict_prop: int, p: void*, n: int, out_size: int, max: int, ok &: bool): ByteBuf:
@@ -627,4 +930,154 @@ end
 @fa "کدگشایی الزد ام ای بافر"
 pub func LzmaDecompressBuf(b: ByteBuf, ok &: bool): ByteBuf:
     ret LzmaDecompress(b.data, b.len, ok)
+end
+
+@en "LzmaFileToSink"
+@fa "کدگشایی الزد ام ای از پرونده به مقصد"
+pub func LzmaFileToSink(props: void*, plen: int, fp: void*, off: i64, len: i64, out_size: i64, sink &: FileSink, memcap: i64): int:
+    if plen < 5 or out_size < (0 as i64) or len < (5 as i64):
+        ret 1
+    end
+    pp := props as u8*
+    dsize := (pp[1] as i64) | ((pp[2] as i64) << 8) | ((pp[3] as i64) << 16) | ((pp[4] as i64) << 24)
+    mut d := _lz_new(dsize)
+    if dsize < (4096 as i64):
+        d.dsize = 4096 as i64
+    end
+    if not _lz_set_props(d, pp[0] as int, 12):
+        ret 1
+    end
+    _lz_alloc(d, d.lc + d.lp)
+    _lz_reset_state(d)
+    st := _lzw_setup(d, d.dsize, out_size, memcap)
+    if st != 0:
+        _lzw_free(d)
+        ret st
+    end
+    d.ibuf = mem.Allocate(65536 as u64) as u8*
+    d.ffp = fp
+    d.foff = off
+    d.fleft = len
+    d.refill = true
+    if not _lz_refill(d) or not _lz_rc_init(d, d.ibuf as void*, 0, d.iend):
+        _lzw_free(d)
+        ret 1
+    end
+    mut r := _lz_run_win(d, sink, out_size)
+    if r == 0:
+        if not _lzw_flush(d, sink):
+            r = -2
+        end
+    end
+    _lzw_free(d)
+    if r == 0:
+        ret 0
+    end
+    if r == -2:
+        ret 3
+    end
+    ret 1
+end
+
+@en "Lzma2FileToSink"
+@fa "کدگشایی الزد ام ای۲ از پرونده به مقصد"
+pub func Lzma2FileToSink(dict_prop: int, fp: void*, off: i64, len: i64, out_size: i64, sink &: FileSink, memcap: i64): int:
+    dsize := _lzma2_dict_size(dict_prop)
+    if dsize < (0 as i64) or out_size < (0 as i64) or len <= (0 as i64):
+        ret 1
+    end
+    mut d := _lz_new(dsize)
+    st := _lzw_setup(d, dsize, out_size, memcap)
+    if st != 0:
+        _lzw_free(d)
+        ret st
+    end
+    _lz_alloc(d, _LZ_MAXLCP)
+    d.ffp = fp
+    d.foff = off
+    d.fleft = len
+    cbuf := mem.Allocate(65600 as u64) as u8*
+    hdr := mem.Allocate(8 as u64) as u8*
+    mut need_dict := true
+    mut need_props := true
+    mut res := 1
+    until true:
+        if not _lz_fread(d, hdr, 1):
+            break
+        end
+        c := hdr[0] as int
+        if c == 0:
+            if d.total == out_size:
+                res = 0
+            end
+            break
+        end
+        if c == 1 or c >= 224:
+            d.dstart_t = d.total
+            need_dict = false
+            need_props = true
+        else need_dict:
+            break
+        end
+        if c >= 128:
+            if not _lz_fread(d, hdr, 4):
+                break
+            end
+            usize := (((c & 31) << 16) | ((hdr[0] as int) << 8) | (hdr[1] as int)) + 1
+            csize := (((hdr[2] as int) << 8) | (hdr[3] as int)) + 1
+            if c >= 192:
+                if not _lz_fread(d, hdr, 1):
+                    break
+                end
+                if not _lz_set_props(d, hdr[0] as int, _LZ_MAXLCP):
+                    break
+                end
+                need_props = false
+                _lz_reset_state(d)
+            else need_props:
+                break
+            else c >= 160:
+                _lz_reset_state(d)
+            end
+            if d.total + (usize as i64) > out_size or not _lz_fread(d, cbuf, csize):
+                break
+            end
+            if not _lz_rc_init(d, cbuf as void*, 0, csize):
+                break
+            end
+            r := _lz_run_win(d, sink, d.total + (usize as i64))
+            if r == -2:
+                res = 3
+                break
+            end
+            if r != 0:
+                break
+            end
+            _lz_norm(d)
+            if d.bad or d.ipos != csize or d.code != (0 as i64):
+                break
+            end
+        else c <= 2:
+            if not _lz_fread(d, hdr, 2):
+                break
+            end
+            usize := (((hdr[0] as int) << 8) | (hdr[1] as int)) + 1
+            if d.total + (usize as i64) > out_size or not _lz_fread(d, cbuf, usize):
+                break
+            end
+            if not _lzw_put(d, sink, cbuf, usize):
+                res = 3
+                break
+            end
+        else:
+            break
+        end
+    end
+    if res == 0 and not _lzw_flush(d, sink):
+        res = 3
+    end
+    mem.Free(cbuf as void*)
+    mem.Free(hdr as void*)
+    _lzw_free(d)
+    ret res
 end

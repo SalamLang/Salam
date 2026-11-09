@@ -381,6 +381,23 @@ func file_paths(b: compress.ByteBuf, dest: str):
     _ := archive.XzDecompressFileCap(p, out, 4194304 as i64)
     _ := archive.Bzip2DecompressFileCap(p, out, 4194304 as i64)
     _ := archive.LzmaDecompressFileCap(p, out, 4194304 as i64)
+    mut lim := archive.DefaultLimits()
+    lim.max_total = 4194304 as i64
+    lim.max_entry = 2097152 as i64
+    lim.max_entries = 2000
+    mut da := archive.OpenFile(p, "pw")
+    archive.SetLimits(da, lim)
+    mut des := archive.List(da)
+    mut dk := 0
+    until dk < des.len() and dk < 4:
+        mut dg := archive.Read(da, des.get(dk).name)
+        compress.BufFree(dg)
+        dk++
+    end
+    archive.FreeEntries(des)
+    _ := archive.ExtractAll(da, dest)
+    archive.Close(da)
+    os.RemoveAll(dest)
     os.Remove(p)
     os.Remove(out)
 end
@@ -438,6 +455,24 @@ func seeds(): Vector<compress.ByteBuf>:
     repeat 7 in method:
         out.push(compress.Compress(method, "fuzz fuzz fuzz fuzz fuzz fuzz fuzz" as void*, 34))
     end
+    mut tar := archive.CreateBuf(archive.FormatTar, files, st)
+    out.push(compress.XzCompressBuf(tar))
+    out.push(compress.ZstdCompressBuf(tar))
+    compress.BufFree(tar)
+    out.push(compress.XzCompress("fuzz fuzz fuzz fuzz fuzz" as void*, 23))
+    out.push(compress.ZstdCompress("fuzz fuzz fuzz fuzz fuzz" as void*, 23))
+    mut hostile := Vector {} as Vector<archive.TarFileInput>
+    hostile.push(archive.MakeTarFileInput("../evil.txt", "bad" as void*, 3, false))
+    hostile.push(archive.MakeTarSymlink("l", "../../etc"))
+    hostile.push(archive.MakeTarHardlink("h", "/etc/passwd"))
+    hostile.push(archive.MakeTarFileInput("l/x.txt", "x" as void*, 1, false))
+    out.push(archive.TarCreate(hostile))
+    hostile.free()
+    mut zhost := Vector {} as Vector<archive.ZipFileInput>
+    zhost.push(archive.MakeZipFileInput("../evil.txt", "bad" as void*, 3, 8))
+    zhost.push(archive.MakeZipFileInput("C:\\win.txt", "bad" as void*, 3, 0))
+    out.push(archive.ZipCreate(zhost))
+    zhost.free()
     out.push(compress.GzipCompress("fuzz fuzz fuzz fuzz fuzz" as void*, 23))
     out.push(compress.Bzip2Compress("fuzz fuzz fuzz fuzz fuzz" as void*, 23))
     files.free()

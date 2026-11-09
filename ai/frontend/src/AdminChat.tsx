@@ -83,7 +83,7 @@ export function AdminChat({ id }: { id: string }) {
             <div>
               <dt>{t("کاربر", "User")}</dt>
               <dd>
-                <bdi>{data.user.name}</bdi> <span dir="ltr" className="muted">{data.user.email}</span>
+                <a className="link" href={`/admin/users/${data.user.id}`} title={t("پروفایل این کاربر", "Open this user's profile")}><bdi>{data.user.name}</bdi></a> <span dir="ltr" className="muted">{data.user.email}</span>
               </dd>
             </div>
           )}

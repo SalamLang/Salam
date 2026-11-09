@@ -1,0 +1,115 @@
+import mem
+import net.tcp
+import net.trojan
+import sync
+
+mut echo_port := 0
+mut web_port := 0
+mut web_seen := ""
+mut ready := sync.NewWaitGroup()
+
+func echo_server():
+    srv := tcp.Bind(0)
+    echo_port = tcp.Port(srv)
+    sync.Done(ready)
+    until true:
+        c := tcp.Accept(srv)
+        until true:
+            data := tcp.Read(c, 4096)
+            if data.len() == 0:
+                break
+            end
+            tcp.Write(c, "echo:" + data)
+        end
+        tcp.Close(c)
+    end
+end
+
+func web_server():
+    srv := tcp.Bind(0)
+    web_port = tcp.Port(srv)
+    sync.Done(ready)
+    until true:
+        c := tcp.Accept(srv)
+        web_seen = tcp.Read(c, 4096)
+        tcp.Write(c, "HTTP/1.1 200 OK\r\nContent-Length: 12\r\nConnection: close\r\n\r\nhello probes")
+        tcp.Close(c)
+    end
+end
+
+func start_servers():
+    sync.Add(ready, 2 as i64)
+    _a := spawn(echo_server)
+    _b := spawn(web_server)
+    sync.Wait(ready)
+end
+
+func text_of(p: void*, n: int): str:
+    buf := mem.Allocate((n + 1) as u64)
+    mem.Copy(buf, p, n as u64)
+    (buf as u8*)[n] = 0 as u8
+    ret buf as str
+end
+
+func read_text(l &: trojan.Link, want: int): str:
+    buf := mem.Allocate(8192 as u64)
+    defer mem.Free(buf)
+    mut out := ""
+    until out.len() < want:
+        n := trojan.LinkRead(l, buf, 8192)
+        if n <= 0:
+            break
+        end
+        out = out + text_of(buf, n)
+    end
+    ret out
+end
+
+func main:
+    start_servers()
+
+    mut config := trojan.NewServerConfig("", "")
+    trojan.AddPassword(config, "secret")
+    trojan.AddPasswordHash(config, trojan.PasswordHash("second"))
+    println config.hashes.len(), config.handshake_timeout_ms
+    server := trojan.ServePlain(config, 0)
+    println "server up:", server.ok, trojan.ServerPort(server) == server.port
+
+    mut client := trojan.NewClientConfig("127.0.0.1", server.port, "secret")
+    client.use_tls = false
+    println client.server_port != 443, client.use_ws, client.lazy_header, client.timeout_ms
+    mut link := trojan.Dial(client, "127.0.0.1", echo_port)
+    println "dial ok:", trojan.LinkOk(link), link.kind == trojan.LinkTCP
+    println trojan.LinkWriteStr(link, "hello trojan")
+    println read_text(link, 17)
+    big := mem.Allocate(30000 as u64)
+    mem.Set(big, 97, 30000 as u64)
+    println trojan.LinkWrite(link, big, 30000)
+    mut total := 0
+    until total < 30005:
+        buf := mem.Allocate(8192 as u64)
+        n := trojan.LinkRead(link, buf, 8192)
+        mem.Free(buf)
+        if n <= 0:
+            break
+        end
+        total += n
+    end
+    println "echoed", total
+    mem.Free(big)
+    trojan.LinkSetTimeout(link, 1000)
+    trojan.LinkClose(link)
+
+    mut second := trojan.NewClientConfig("127.0.0.1", server.port, "second")
+    second.use_tls = false
+    second.lazy_header = true
+    mut lazy := trojan.Dial(second, "127.0.0.1", echo_port)
+    println trojan.LinkWriteStr(lazy, "lazy header")
+    println read_text(lazy, 16)
+    trojan.LinkClose(lazy)
+
+    sync.SleepMs(300)
+    stats := trojan.Stats(server)
+    println "stats:", stats.accepted, stats.authed, stats.fallbacks
+    trojan.Stop(server)
+end

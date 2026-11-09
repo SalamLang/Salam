@@ -1,0 +1,50 @@
+import mem
+import net.trojan
+import net.tunnel
+import compress
+
+func text_of(p: void*, n: int): str:
+    buf := mem.Allocate((n + 1) as u64)
+    mem.Copy(buf, p, n as u64)
+    (buf as u8*)[n] = 0 as u8
+    ret buf as str
+end
+
+func main:
+    hop := trojan.NewConnector("vpn.example.com", 443, "password")
+    println hop.Name(), hop.Server().host, hop.Server().port
+
+    pair := tunnel.NewPipe()
+    println hop.Handshake(tunnel.PipeA(pair), tunnel.NewAddr("example.com", 443))
+    mut expected := trojan.EncodeRequest("password", trojan.CmdConnect, "example.com", 443)
+    buf := mem.Allocate(256 as u64)
+    n := tunnel.PipeB(pair).ReadBytes(buf, 256)
+    println n, n == expected.len, text_of(buf, n) == text_of(expected.data, expected.len)
+
+    mut inbound := trojan.NewInbound()
+    trojan.InboundAddPassword(inbound, "password")
+    trojan.InboundAddPassword(inbound, "other")
+    println inbound.Name(), inbound.hashes.len(), inbound.replies
+
+    good := tunnel.NewPipe()
+    tunnel.PipeB(good).Write(text_of(expected.data, expected.len) + "payload")
+    session := inbound.Handshake(tunnel.PipeA(good))
+    println session.ok, session.target.host, session.target.port, session.protocol, session.command, session.initial
+
+    web := tunnel.NewPipe()
+    tunnel.PipeB(web).Write("GET / HTTP/1.1\r\nHost: x\r\n\r\n")
+    stranger := inbound.Handshake(tunnel.PipeA(web))
+    println stranger.ok, stranger.error, stranger.initial.len()
+
+    wrong := trojan.EncodeRequest("nope", trojan.CmdConnect, "example.com", 443)
+    bad := tunnel.NewPipe()
+    tunnel.PipeB(bad).Write(text_of(wrong.data, wrong.len))
+    rejected := inbound.Handshake(tunnel.PipeA(bad))
+    println rejected.ok, rejected.initial.len() == wrong.len
+    inbound.Reply(tunnel.PipeA(bad), rejected, false)
+
+    mut chain := tunnel.NewChain(tunnel.Direct())
+    tunnel.ChainAdd(chain, hop)
+    println chain.Name()
+    compress.BufFree(expected)
+end

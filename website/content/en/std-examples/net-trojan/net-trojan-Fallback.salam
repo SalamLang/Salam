@@ -1,0 +1,102 @@
+import mem
+import net.tcp
+import net.trojan
+import sync
+
+mut echo_port := 0
+mut web_port := 0
+mut web_seen := ""
+mut ready := sync.NewWaitGroup()
+
+func echo_server():
+    srv := tcp.Bind(0)
+    echo_port = tcp.Port(srv)
+    sync.Done(ready)
+    until true:
+        c := tcp.Accept(srv)
+        until true:
+            data := tcp.Read(c, 4096)
+            if data.len() == 0:
+                break
+            end
+            tcp.Write(c, "echo:" + data)
+        end
+        tcp.Close(c)
+    end
+end
+
+func web_server():
+    srv := tcp.Bind(0)
+    web_port = tcp.Port(srv)
+    sync.Done(ready)
+    until true:
+        c := tcp.Accept(srv)
+        web_seen = tcp.Read(c, 4096)
+        tcp.Write(c, "HTTP/1.1 200 OK\r\nContent-Length: 12\r\nConnection: close\r\n\r\nhello probes")
+        tcp.Close(c)
+    end
+end
+
+func start_servers():
+    sync.Add(ready, 2 as i64)
+    _a := spawn(echo_server)
+    _b := spawn(web_server)
+    sync.Wait(ready)
+end
+
+func text_of(p: void*, n: int): str:
+    buf := mem.Allocate((n + 1) as u64)
+    mem.Copy(buf, p, n as u64)
+    (buf as u8*)[n] = 0 as u8
+    ret buf as str
+end
+
+func read_text(l &: trojan.Link, want: int): str:
+    buf := mem.Allocate(8192 as u64)
+    defer mem.Free(buf)
+    mut out := ""
+    until out.len() < want:
+        n := trojan.LinkRead(l, buf, 8192)
+        if n <= 0:
+            break
+        end
+        out = out + text_of(buf, n)
+    end
+    ret out
+end
+
+func main:
+    start_servers()
+
+    mut config := trojan.NewServerConfig("", "")
+    trojan.AddPassword(config, "secret")
+    trojan.SetFallback(config, "127.0.0.1", web_port)
+    println config.fallback_host, config.fallback_port == web_port
+    server := trojan.ServePlain(config, 0)
+
+    mut wrong := trojan.NewClientConfig("127.0.0.1", server.port, "not the password")
+    wrong.use_tls = false
+    mut stranger := trojan.Dial(wrong, "127.0.0.1", echo_port)
+    answer := read_text(stranger, 40)
+    println "wrong password gets a web page:", answer.starts_with("HTTP/1.1 200 OK"), answer.includes("hello probes")
+    trojan.LinkClose(stranger)
+
+    probe := tcp.Dial("127.0.0.1", server.port)
+    tcp.Write(probe, "GET / HTTP/1.1\r\nHost: example.com\r\n\r\n")
+    page := tcp.Read(probe, 4096)
+    println "plain web request gets the page too:", page.includes("hello probes")
+    tcp.Close(probe)
+    println "the site saw:", web_seen.substr(0, 14)
+
+    mut right := trojan.NewClientConfig("127.0.0.1", server.port, "secret")
+    right.use_tls = false
+    mut member := trojan.Dial(right, "127.0.0.1", echo_port)
+    trojan.LinkWriteStr(member, "real client")
+    println read_text(member, 16)
+    trojan.LinkClose(member)
+
+    sync.SleepMs(300)
+    stats := trojan.Stats(server)
+    println "accepted", stats.accepted, "authed", stats.authed, "fallbacks", stats.fallbacks
+    trojan.Stop(server)
+end

@@ -1,0 +1,336 @@
+pkg.en = net/trojan
+pkg.name = net.trojan
+pkg.group = Network
+pkg.summary = The Trojan protocol: a TLS client and server that look like an ordinary HTTPS site, a fallback website for everyone who is not a client, WebSocket mode, UDP and a connector for proxy chains.
+pkg.title = The net.trojan package in Salam | Trojan client and server
+pkg.description = The net.trojan package in Salam: a Trojan client and server over TLS or WebSocket, password hashing, a fallback website for probe resistance, UDP sessions, the wire codec and a connector for proxy chains, with examples.
+pkg.import = net.trojan
+pkg.intro <<
+<p>Trojan is a proxy protocol built to look like nothing. A client opens a normal TLS connection to a server and sends one line that holds a password hash and the target it wants; if the hash is right the server connects there and relays bytes. If the first bytes are <em>not</em> a valid Trojan request, the server does not complain. It hands the connection, bytes and all, to an ordinary website, so a visitor or a probe gets a real page from a real site. This package has both sides: <code>Dial</code> is the client and <code>Serve</code> runs the server. It also plugs into <a href="/std/net/tunnel/">net.tunnel</a> as an <code>Inbound</code> and a <code>Connector</code> for routing and proxy chains.</p>
+<p>Core ideas:</p>
+<ul>
+<li>A password is never sent. What goes on the wire is its SHA-224 hash (<code>PasswordHash</code>), as 56 hex characters. The server keeps hashes (<code>AddPassword</code>, <code>AddPasswordHash</code>).</li>
+<li>TLS does the hiding. The Trojan request is inside the TLS stream, and a server with a valid certificate and a real <code>fallback_port</code> website looks like any HTTPS site.</li>
+<li>Failure is silent. A wrong password, a browser, a scanner: all get the fallback site. <code>fallbacks</code> counts them.</li>
+<li>A <code>Link</code> is a connection over TCP, TLS or WebSocket. <code>Dial</code> returns one; read and write it with <code>LinkRead</code> and <code>LinkWriteStr</code>, and close it with <code>LinkClose</code>. <code>use_ws</code> carries Trojan inside a WebSocket so that a CDN or reverse proxy can sit in front.</li>
+<li><code>DialUDP</code> opens a UDP session where every packet names its own target (<code>SendUDP</code>, <code>ReadUDPPacket</code>).</li>
+</ul>
+<p>Things that catch people out:</p>
+<ul>
+<li><strong>Use TLS, with a real certificate.</strong> <code>Serve</code> is the real server. <code>ServePlain</code> and <code>ServeWS</code> have no TLS: the password hash and all traffic are readable by anyone on the path, and the hash can be replayed. Use them on loopback, in tests, or behind a reverse proxy that ends TLS. <code>insecure</code> switches certificate checking off; never use it outside a test.</li>
+<li><strong>The fallback site must be real.</strong> A fallback that is missing, empty or obviously fake makes the server easy to recognise. Without <code>fallback_port</code>, a failed client is just disconnected, which is itself a sign. Serve real content, on the same machine, with the same certificate name.</li>
+<li><strong>WebSocket mode has no fallback.</strong> A failed client of <code>ServeWS</code> is simply closed. Let the reverse proxy in front decide what the outside world sees.</li>
+<li><strong>No replay protection.</strong> The request holds no nonce, so anyone who can read it (a plain connection, a broken certificate check) can replay it. <a href="/std/net/censor/">net.censor</a> has a <code>censor.ReplayCache</code> and a <code>censor.ProbeGuard</code>, but this package does not use them for you.</li>
+<li><strong>A server listens on all IPv4 addresses.</strong> The port is bound on every interface. Anyone who can reach it can try passwords, so use long random ones.</li>
+<li><strong>The password and its hash are equivalent.</strong> Whoever has the hash can authenticate. Protect the config like a password file.</li>
+<li><strong>A <code>Link</code> is not a <code>tunnel.Stream</code>.</strong> <code>Link</code> is the package's own connection type. For <code>tunnel.Chain</code> and routing use the <code>Connector</code> and <code>Inbound</code> adapters, which work on streams.</li>
+</ul>
+
+<h2 id="guide-loopback">A server, a client and a fallback</h2>
+<p>This runs the whole idea on loopback with no certificate: a Trojan server in front of an echo server, with a web server as the fallback. The real client gets the echo; anyone else sends ordinary web traffic to the same port and gets the web page. In production <code>Serve</code> adds TLS in front of exactly this behaviour.</p>
+{{example.net-trojan-guide-loopback}}
+<p>With TLS, give the config the certificate and the key and start it with <code>Serve</code>. Point <code>SetFallback</code> at a real web server on the same machine, and use the domain of the certificate as the name clients connect to.</p>
+<pre class="code"><code>mut config := trojan.NewServerConfig("fullchain.pem", "privkey.pem")
+trojan.AddPassword(config, "a long random password")
+trojan.SetFallback(config, "127.0.0.1", 8080)
+server := trojan.Serve(config, 443)</code></pre>
+
+<h2 id="guide-chain">Using Trojan in a proxy chain</h2>
+<p>For routing and chains, a <code>Connector</code> writes the Trojan request over any stream that already reaches the server, and an <code>Inbound</code> reads it on the server side. The stream underneath decides what is private: over a plain TCP stream the hop is readable, so put TLS under it. With a <code>tunnel.Dialer</code> that provides TLS as the upstream, <code>tunnel.Via</code> makes a complete outbound:</p>
+<pre class="code"><code>hop := trojan.NewConnector("proxy.example.com", 443, "a long random password")
+outbound := tunnel.Via(your_tls_dialer, hop)</code></pre>
+<p>The guide of <a href="/std/net/tunnel/">net.tunnel</a> shows the whole pipeline with this connector in it. For a client that does not need routing, <code>Dial</code> does the TLS itself and is simpler.</p>
+
+<h2 id="guide-limits">What to know</h2>
+<ul>
+<li>Use <code>Serve</code>, with a real certificate and a real fallback website. <code>ServePlain</code> and <code>ServeWS</code> are for loopback, tests and use behind something that ends TLS.</li>
+<li>No replay protection and no brute force limit of its own. Use long random passwords.</li>
+<li>The server listens on every IPv4 interface.</li>
+<li>Only IPv4 loopback is tested. Names are resolved by the server for the target.</li>
+<li>UDP runs inside the same connection. <code>ReadUDPPacket</code> gives one packet at a time.</li>
+<li>Free what you allocate: <code>LinkClose</code> for a <code>Link</code>, <code>FreeSession</code> for a <code>Session</code>.</li>
+<li>No logging happens by itself.</li>
+</ul>
+>>
+
+group.Link.title = Link kinds
+group.Link = The values of <code>kind</code>.
+group.Cmd.title = Commands
+group.Cmd = The commands of <code>cmd</code>.
+group.Atyp.title = Address types
+group.Atyp = The address types of <code>atyp</code>.
+group.Parse.title = Parse results
+group.Parse = The values of <code>status</code> and <code>status</code>.
+doc.Connector = One Trojan hop of a <code>tunnel.Chain</code>: over a stream that already reaches the Trojan server it writes the Trojan request for a target. Make one with <code>NewConnector</code>. The stream underneath must already be encrypted (TLS) for the hop to be private.
+doc.Connector.server = The address of the Trojan server.
+doc.Connector.password = The password. It is sent as a SHA-224 hash.
+doc.Connector.Server = The address of the Trojan server.
+doc.Connector.Handshake = Writes the Trojan request (hash, connect command, target) on the open stream. It does not wait for an answer, because Trojan has none: data can follow at once.
+doc.Connector.Name = Returns <code>trojan</code>.
+doc.Inbound = The server side of Trojan for <code>tunnel.InboundProtocol</code>: it reads the request from a stream, checks the password hash and returns the target. A request that fails the check is not answered, and the bytes read so far are kept in <code>tunnel.initial</code>, so a caller can pass them to a decoy site. Make one with <code>NewInbound</code>.
+doc.Inbound.hashes = The accepted password hashes, as 56 character hex text.
+doc.Inbound.replies = A counter kept by the adapter. Trojan sends no reply, so it stays 0.
+doc.Inbound.Name = Returns <code>trojan</code>.
+doc.Inbound.Handshake = Reads until a whole request has arrived, then checks its hash against the known ones. Returns the target, command and any payload that followed the request, or a failed session that still carries what was read.
+doc.Inbound.Reply = Does nothing: Trojan has no reply.
+doc.NewConnector = Makes a <code>Connector</code> for a Trojan server address and a password.
+doc.NewInbound = Returns an <code>Inbound</code> with no passwords. Add them with <code>InboundAddPassword</code>.
+doc.InboundAddPassword = Adds a password (stored as its hash) that the inbound accepts.
+doc.ClientConfig = How to reach a Trojan server: its address and password, the TLS options and the transport. Make it with <code>NewClientConfig</code>.
+doc.ClientConfig.server_host = The server's host name or IP.
+doc.ClientConfig.server_port = The server's port. The default is 443.
+doc.ClientConfig.password = The password. It is sent as its SHA-224 hash.
+doc.ClientConfig.sni = The server name sent in the TLS handshake and checked in the certificate. Empty means the host.
+doc.ClientConfig.alpn = The ALPN protocol to offer, for example <code>h2</code> or <code>http/1.1</code>. Empty offers none.
+doc.ClientConfig.insecure = True to skip the certificate check. For tests only: it removes the protection TLS gives.
+doc.ClientConfig.use_tls = True to run over TLS, the normal and safe setting. The default is true. With <code>use_ws</code> it controls <code>wss</code> versus <code>ws</code>.
+doc.ClientConfig.use_ws = True to carry Trojan inside a WebSocket (so a CDN or a reverse proxy can sit in front). The default is false.
+doc.ClientConfig.ws_path = The WebSocket path. The default is <code>/</code>.
+doc.ClientConfig.lazy_header = True to hold the Trojan request back and send it together with the first data you write, so the first packet is not a fixed size request. The default is false.
+doc.ClientConfig.timeout_ms = How long connecting may take, in milliseconds. The default is 10000.
+doc.NewClientConfig = Makes a config for a server host, port and password with TLS on and the other options at their defaults.
+doc.Dial = Connects to the Trojan server and sends the request for a target host and port. Returns a <code>Link</code> to read and write; check <code>LinkOk</code>. With <code>lazy_header</code> the request waits for your first write.
+doc.DialUDP = Connects and starts a UDP session: every packet then carries its own target. Use <code>SendUDP</code> and <code>ReadUDPPacket</code>.
+doc.SendUDP = Sends one datagram to a host and port through a UDP session.
+doc.LinkTCP = <code>kind</code>: a plain TCP connection.
+doc.LinkTLS = <code>kind</code>: a TLS connection.
+doc.LinkWS = <code>kind</code>: a WebSocket connection.
+doc.Link = One connection to or from a Trojan peer, over TCP, TLS or WebSocket, with the buffers Trojan needs. <code>Dial</code> returns one; the server makes one for each client. Pass it by reference to the read and write functions.
+doc.Link.kind = <code>LinkTCP</code>, <code>LinkTLS</code> or <code>LinkWS</code>.
+doc.Link.tc = The TCP connection, when <code>kind</code> is <code>LinkTCP</code>.
+doc.Link.sc = The TLS connection, when <code>kind</code> is <code>LinkTLS</code>.
+doc.Link.ws = The WebSocket connection, when <code>kind</code> is <code>LinkWS</code>.
+doc.Link.rbuf = Bytes that were read from the peer but not handed out yet.
+doc.Link.roff = How much of <code>rbuf</code> has been handed out.
+doc.Link.ubuf = Bytes of a UDP packet that is still being assembled.
+doc.Link.pending = The Trojan request held back by <code>lazy_header</code> until the first write.
+doc.NewTCPLink = Wraps an accepted or dialed TCP connection as a <code>Link</code>.
+doc.NewTLSLink = Wraps a TLS connection as a <code>Link</code>.
+doc.NewWSLink = Wraps a WebSocket connection as a <code>Link</code>.
+doc.LinkOk = True when the link is usable.
+doc.LinkFd = Returns the file descriptor under the link.
+doc.LinkRead = Reads up to a number of bytes into a buffer, first from what was already buffered. Returns how many, or 0 or less at the end or on error.
+doc.LinkWrite = Writes bytes from memory. If a Trojan request is being held back it goes out first. False on failure.
+doc.LinkWriteBuf = Writes a whole byte buffer.
+doc.LinkWriteStr = Writes a text.
+doc.LinkSetTimeout = Sets the read and write timeout in milliseconds. 0 removes it.
+doc.LinkShutdown = Stops both directions so that a thread blocked in a read wakes up, without freeing the link.
+doc.LinkClose = Closes the link.
+doc.Relay = Copies data both ways between two links until one ends and returns how many bytes moved in total.
+doc.NewUDPPacket = Returns an empty <code>UDPPacket</code> to be filled by <code>ReadUDPPacket</code>.
+doc.ReadUDPPacket = Reads one UDP packet from a link: fills in the packet's target and puts the payload bytes in a buffer. False at the end of the link or on a malformed packet.
+doc.WriteUDPPacket = Writes one UDP packet for a host and port to a link.
+doc.ServerConfig = The settings of a Trojan server: certificate and key, the accepted passwords, the website to show to everyone else and the time limits. Start from <code>NewServerConfig</code>.
+doc.ServerConfig.cert_file = The PEM certificate file for TLS. Use a certificate for a real domain.
+doc.ServerConfig.key_file = The PEM private key file.
+doc.ServerConfig.hashes = The accepted password hashes. <code>AddPassword</code> and <code>AddPasswordHash</code> add to it.
+doc.ServerConfig.fallback_host = The host of the website that gets every connection that is not a valid Trojan client. Empty means <code>127.0.0.1</code>.
+doc.ServerConfig.fallback_port = The port of that website. 0, the default, means there is none and such connections are simply closed.
+doc.ServerConfig.handshake_timeout_ms = How long a client has to send a complete request, in milliseconds. The default is 5000.
+doc.ServerConfig.connect_timeout_ms = How long connecting to the target (or the fallback site) may take. The default is 10000.
+doc.ServerConfig.idle_timeout_ms = Cut a connection after this many silent milliseconds once it is running. 0, the default, means never.
+doc.Session = The result of <code>Handshake</code>: whether a valid client spoke, what it asked for and the bytes involved.
+doc.Session.ok = True when the request was valid and its password hash is known.
+doc.Session.req = The parsed request: command and target.
+doc.Session.seen = Every byte read during the handshake. When <code>ok</code> is false these are what <code>Fallback</code> replays to the website.
+doc.Session.extra = Payload that arrived in the same read as the request and must go to the target first.
+doc.ServerStats = Counters of a running server. <code>Stats</code> returns them.
+doc.ServerStats.accepted = Connections accepted.
+doc.ServerStats.authed = Connections that were valid Trojan clients.
+doc.ServerStats.fallbacks = Connections handed to the fallback website.
+doc.Server = A running Trojan server. <code>Serve</code>, <code>ServePlain</code> and <code>ServeWS</code> return it and <code>Stop</code> ends it.
+doc.Server.ok = True when the port was bound and the server is running.
+doc.Server.port = The port it listens on, useful when you asked for 0.
+doc.Server.st = Internal state: the stop flag and the counters.
+doc.NewServerConfig = Makes a config from a certificate file and a key file. Empty names are fine for <code>ServePlain</code> and <code>ServeWS</code>, which use no TLS.
+doc.SetFallback = Sets the website that receives every connection that is not a valid client. Point it at a real site (your own, on the same machine) so that a probe sees an ordinary web server.
+doc.AddPassword = Adds a password the server accepts. Only its SHA-224 hash is kept.
+doc.AddPasswordHash = Adds an already hashed password (56 hex characters), so the plain password never has to be in the config.
+doc.Handshake = Reads the client's first bytes until a whole request has arrived, checks the password hash and returns a <code>Session</code>. It never answers the client.
+doc.FreeSession = Frees the buffers of a session.
+doc.Fallback = Connects to the fallback website, replays the bytes the client already sent and then relays both ways, so the client talks to the real site. False when there is no fallback or it cannot be reached.
+doc.ServeLink = Serves one client on a link: handshake, then relay to the target, a UDP session, or the fallback. Returns 1 when a valid client was served, 2 when the handshake failed and 3 when the target could not be reached. A WebSocket link is not sent to the fallback.
+doc.Serve = Starts a Trojan server on a port (0 picks a free one) with TLS, using the certificate and key of the config. This is the normal way to run one. Check <code>ok</code>.
+doc.ServePlain = Starts a server without TLS. Anyone on the path can read the traffic, so use it only on loopback, in tests, or behind something else that provides TLS.
+doc.ServeWS = Starts a server that speaks Trojan inside WebSocket without TLS, meant to sit behind a reverse proxy or CDN that ends TLS. There is no fallback site in this mode.
+doc.ServerPort = Returns the port of a server.
+doc.Stats = Returns the counters of a server: accepted, authenticated and handed to the fallback.
+doc.Stop = Stops accepting new clients. Connections already running finish on their own.
+doc.Sha224 = Returns the SHA-224 hash (28 bytes) of some memory.
+doc.HexOf = Returns the bytes of a buffer as lowercase hex.
+doc.Sha224Hex = Returns the SHA-224 hash of a text as 56 hex characters.
+doc.PasswordHash = Returns the hash Trojan puts on the wire for a password: its SHA-224 as 56 hex characters.
+doc.CmdConnect = Command 1: connect to a TCP target.
+doc.CmdUDP = Command 3: start a UDP session.
+doc.AtypIPv4 = Address type 1: a four byte IPv4 address.
+doc.AtypDomain = Address type 3: a length byte and a host name.
+doc.AtypIPv6 = Address type 4: a sixteen byte IPv6 address.
+doc.ParseOK = The <code>status</code> of a complete, valid parse.
+doc.ParseNeedMore = The status when the bytes so far are a valid start but not yet complete.
+doc.ParseInvalid = The status when the bytes cannot be a Trojan request or packet.
+doc.Request = A parsed Trojan request: password hash, command and target.
+doc.Request.status = <code>ParseOK</code>, <code>ParseNeedMore</code> or <code>ParseInvalid</code>. Check it first.
+doc.Request.hash = The 56 character password hash from the request.
+doc.Request.cmd = <code>CmdConnect</code> or <code>CmdUDP</code>.
+doc.Request.atyp = The address type of the target.
+doc.Request.host = The target host name or IP.
+doc.Request.port = The target port.
+doc.Request.consumed = How many bytes the request took. Anything after that is payload.
+doc.UDPPacket = A parsed Trojan UDP packet: its target and where the payload sits.
+doc.UDPPacket.status = <code>ParseOK</code>, <code>ParseNeedMore</code> or <code>ParseInvalid</code>.
+doc.UDPPacket.atyp = The address type.
+doc.UDPPacket.host = The host the datagram is for or came from.
+doc.UDPPacket.port = The port.
+doc.UDPPacket.payload_off = The offset of the payload in the parsed bytes.
+doc.UDPPacket.payload_len = The payload length.
+doc.UDPPacket.consumed = How many bytes the packet took in total.
+doc.ParseIPv4 = Parses IPv4 text into four bytes appended to a buffer. False when it is not an address.
+doc.ParseIPv6 = Parses IPv6 text into sixteen bytes appended to a buffer. False when it is not an address.
+doc.FormatIPv4 = Formats four bytes at an offset as dotted text.
+doc.FormatIPv6 = Formats sixteen bytes at an offset as IPv6 text.
+doc.EncodeAddr = Writes a host and port in the Trojan (SOCKS5 style) address form. An IP gets its numeric type, anything else is a name.
+doc.ParseAddr = Reads an address from memory at an offset: fills in its type, host and port and returns how many bytes it took, 0 when more is needed and -1 when it is invalid.
+doc.EncodeRequestHash = Writes a Trojan request from an already computed hash: the 56 hex characters, a line break, the command, the address and a line break.
+doc.EncodeRequest = Writes a Trojan request for a password, a command and a target.
+doc.ParseRequest = Parses a Trojan request from memory. Check <code>status</code>; on success <code>consumed</code> says where the payload starts.
+doc.EncodeUDPPacket = Writes one UDP packet: the target address, the payload length, a line break and the payload.
+doc.ParseUDPPacket = Parses one UDP packet from memory. Check <code>status</code>.
+
+ex.Connector = net-trojan-Adapter
+ex.Connector.server = -
+ex.Connector.password = -
+ex.Connector.Server = net-trojan-Adapter
+ex.Connector.Handshake = net-trojan-Adapter
+ex.Connector.Name = net-trojan-Adapter
+ex.Inbound = net-trojan-Adapter
+ex.Inbound.hashes = -
+ex.Inbound.replies = -
+ex.Inbound.Name = net-trojan-Adapter
+ex.Inbound.Handshake = net-trojan-Adapter
+ex.Inbound.Reply = net-trojan-Adapter
+ex.NewConnector = net-trojan-Adapter
+ex.NewInbound = net-trojan-Adapter
+ex.InboundAddPassword = net-trojan-Adapter
+ex.ClientConfig = net-trojan-Client
+ex.ClientConfig.server_host = -
+ex.ClientConfig.server_port = -
+ex.ClientConfig.password = -
+ex.ClientConfig.sni = -
+ex.ClientConfig.alpn = -
+ex.ClientConfig.insecure = -
+ex.ClientConfig.use_tls = -
+ex.ClientConfig.use_ws = -
+ex.ClientConfig.ws_path = -
+ex.ClientConfig.lazy_header = -
+ex.ClientConfig.timeout_ms = -
+ex.NewClientConfig = net-trojan-Client
+ex.Dial = net-trojan-Client
+ex.DialUDP = net-trojan-Udp
+ex.SendUDP = net-trojan-Udp
+ex.LinkTCP = net-trojan-Client
+ex.LinkTLS = net-trojan-Tls
+ex.LinkWS = net-trojan-WebSocket
+ex.Link = net-trojan-Client
+ex.Link.kind = -
+ex.Link.tc = -
+ex.Link.sc = -
+ex.Link.ws = -
+ex.Link.rbuf = -
+ex.Link.roff = -
+ex.Link.ubuf = -
+ex.Link.pending = -
+ex.NewTCPLink = net-trojan-Handshake
+ex.NewTLSLink = net-trojan-Tls
+ex.NewWSLink = -
+ex.LinkOk = net-trojan-Client
+ex.LinkFd = net-trojan-Handshake
+ex.LinkRead = net-trojan-Client
+ex.LinkWrite = net-trojan-Client
+ex.LinkWriteBuf = net-trojan-Handshake
+ex.LinkWriteStr = net-trojan-Client
+ex.LinkSetTimeout = net-trojan-Client
+ex.LinkShutdown = net-trojan-WebSocket
+ex.LinkClose = net-trojan-Client
+ex.Relay = -
+ex.NewUDPPacket = net-trojan-Udp
+ex.ReadUDPPacket = net-trojan-Udp
+ex.WriteUDPPacket = net-trojan-Udp
+ex.ServerConfig = net-trojan-Client
+ex.ServerConfig.cert_file = -
+ex.ServerConfig.key_file = -
+ex.ServerConfig.hashes = -
+ex.ServerConfig.fallback_host = -
+ex.ServerConfig.fallback_port = -
+ex.ServerConfig.handshake_timeout_ms = -
+ex.ServerConfig.connect_timeout_ms = -
+ex.ServerConfig.idle_timeout_ms = -
+ex.Session = net-trojan-Handshake
+ex.Session.ok = -
+ex.Session.req = -
+ex.Session.seen = -
+ex.Session.extra = -
+ex.ServerStats = net-trojan-Client
+ex.ServerStats.accepted = -
+ex.ServerStats.authed = -
+ex.ServerStats.fallbacks = -
+ex.Server = net-trojan-Client
+ex.Server.ok = -
+ex.Server.port = -
+ex.Server.st = -
+ex.NewServerConfig = net-trojan-Client
+ex.SetFallback = net-trojan-Fallback
+ex.AddPassword = net-trojan-Client
+ex.AddPasswordHash = net-trojan-Client
+ex.Handshake = net-trojan-Handshake
+ex.FreeSession = net-trojan-Handshake
+ex.Fallback = -
+ex.ServeLink = -
+ex.Serve = net-trojan-Tls
+ex.ServePlain = net-trojan-Client
+ex.ServeWS = net-trojan-WebSocket
+ex.ServerPort = net-trojan-Client
+ex.Stats = net-trojan-Client
+ex.Stop = net-trojan-Client
+ex.Sha224 = net-trojan-Wire
+ex.HexOf = net-trojan-Wire
+ex.Sha224Hex = net-trojan-Wire
+ex.PasswordHash = net-trojan-Wire
+ex.CmdConnect = net-trojan-Wire
+ex.CmdUDP = net-trojan-Wire
+ex.AtypIPv4 = net-trojan-Wire
+ex.AtypDomain = net-trojan-Wire
+ex.AtypIPv6 = net-trojan-Wire
+ex.ParseOK = net-trojan-Wire
+ex.ParseNeedMore = net-trojan-Wire
+ex.ParseInvalid = net-trojan-Wire
+ex.Request = net-trojan-Wire
+ex.Request.status = -
+ex.Request.hash = -
+ex.Request.cmd = -
+ex.Request.atyp = -
+ex.Request.host = -
+ex.Request.port = -
+ex.Request.consumed = -
+ex.UDPPacket = net-trojan-Wire
+ex.UDPPacket.status = -
+ex.UDPPacket.atyp = -
+ex.UDPPacket.host = -
+ex.UDPPacket.port = -
+ex.UDPPacket.payload_off = -
+ex.UDPPacket.payload_len = -
+ex.UDPPacket.consumed = -
+ex.ParseIPv4 = net-trojan-Wire
+ex.ParseIPv6 = net-trojan-Wire
+ex.FormatIPv4 = net-trojan-Wire
+ex.FormatIPv6 = net-trojan-Wire
+ex.EncodeAddr = net-trojan-Wire
+ex.ParseAddr = net-trojan-Wire
+ex.EncodeRequestHash = net-trojan-Wire
+ex.EncodeRequest = net-trojan-Wire
+ex.ParseRequest = net-trojan-Wire
+ex.EncodeUDPPacket = net-trojan-Wire
+ex.ParseUDPPacket = net-trojan-Wire
+ex.group.Link = -
+ex.group.Cmd = -
+ex.group.Atyp = -
+ex.group.Parse = -

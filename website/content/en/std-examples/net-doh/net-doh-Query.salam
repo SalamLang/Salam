@@ -1,0 +1,89 @@
+import compress
+import mem
+import net.dns
+import net.doh
+import net.udp
+import sync
+
+mut udp_port := 0
+mut queries := 0
+mut ready := sync.NewWaitGroup()
+
+func record(name: str, rtype: int, ttl: int, data: str): dns.Record:
+    ret dns.Record { name = name, rtype = rtype, rclass = 1, ttl = ttl, data = data }
+end
+
+func answer_for(p: void*, n: int): compress.ByteBuf:
+    queries++
+    question := dns.Decode(p, n)
+    asked := question.questions.items.get(0)
+    mut records := Vector {} as Vector<dns.Record>
+    mut rcode := 0
+    if asked.name == "a.test" and asked.qtype == dns.TypeA:
+        records.push(record("a.test", dns.TypeA, 120, "10.0.0.1"))
+        records.push(record("a.test", dns.TypeA, 300, "10.0.0.2"))
+    else asked.name == "v6.test" and asked.qtype == dns.TypeAAAA:
+        records.push(record("v6.test", dns.TypeAAAA, 300, "2001:db8::5"))
+    else asked.name == "txt.test" and asked.qtype == dns.TypeTXT:
+        records.push(record("txt.test", dns.TypeTXT, 60, "hello world"))
+    else asked.name == "alias.test":
+        records.push(record("alias.test", dns.TypeCNAME, 60, "target.test"))
+        if asked.qtype == dns.TypeA:
+            records.push(record("target.test", dns.TypeA, 60, "10.9.9.9"))
+        end
+    else:
+        rcode = 3
+    end
+    ret doh.EncodeResponse(question.id, asked.name, asked.qtype, rcode, records)
+end
+
+func udp_server():
+    s := udp.Bind(0)
+    udp_port = udp.Port(s)
+    sync.Done(ready)
+    buf := mem.Allocate(2048 as u64)
+    mut from_host := ""
+    mut from_port := 0
+    until true:
+        n := udp.ReceiveBytes(s, buf, 2048, from_host, from_port)
+        if n > 0:
+            answer := answer_for(buf, n)
+            udp.SendBytes(s, from_host, from_port, answer.data, answer.len)
+        end
+    end
+end
+
+func start_mock():
+    sync.Add(ready, 1 as i64)
+    _t := spawn(udp_server)
+    sync.Wait(ready)
+end
+
+func mock_server(name: str): doh.Server:
+    mut server := doh.NewPlain(name, "127.0.0.1")
+    server.port = udp_port
+    ret server
+end
+
+func main:
+    start_mock()
+    server := mock_server("mock")
+    println server.kind == doh.KindUDP, server.port == udp_port, server.use_tls, server.addrs.get(0)
+
+    mut r := doh.Query(server, "a.test", dns.TypeA, 2000)
+    println r.ok, r.server, r.msg.rcode, r.msg.answers.items.len(), r.msg.answers.items.get(0).data
+    println r.raw.len > 12, r.err.len()
+    doh.FreeResponse(r)
+
+    mut direct := doh.QueryAddr(server, "127.0.0.1", "v6.test", dns.TypeAAAA, 2000)
+    println direct.ok, direct.msg.answers.items.get(0).data
+    doh.FreeResponse(direct)
+
+    mut missing := doh.Query(server, "nothing.test", dns.TypeA, 2000)
+    println "missing name:", missing.ok, missing.msg.rcode, missing.msg.answers.items.len()
+    doh.FreeResponse(missing)
+
+    dead := doh.NewServer("dead", doh.KindDoH, "http://127.0.0.1:1/dns-query")
+    failed := doh.Query(dead, "a.test", dns.TypeA, 500)
+    println "dead server:", failed.ok, failed.err.len() > 0
+end

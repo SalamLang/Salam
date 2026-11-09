@@ -1,0 +1,123 @@
+import compress
+import mem
+import net.dns
+import net.doh
+import net.udp
+import sync
+
+mut udp_port := 0
+mut queries := 0
+mut ready := sync.NewWaitGroup()
+
+func record(name: str, rtype: int, ttl: int, data: str): dns.Record:
+    ret dns.Record { name = name, rtype = rtype, rclass = 1, ttl = ttl, data = data }
+end
+
+func answer_for(p: void*, n: int): compress.ByteBuf:
+    queries++
+    question := dns.Decode(p, n)
+    asked := question.questions.items.get(0)
+    mut records := Vector {} as Vector<dns.Record>
+    mut rcode := 0
+    if asked.name == "a.test" and asked.qtype == dns.TypeA:
+        records.push(record("a.test", dns.TypeA, 120, "10.0.0.1"))
+        records.push(record("a.test", dns.TypeA, 300, "10.0.0.2"))
+    else asked.name == "v6.test" and asked.qtype == dns.TypeAAAA:
+        records.push(record("v6.test", dns.TypeAAAA, 300, "2001:db8::5"))
+    else asked.name == "txt.test" and asked.qtype == dns.TypeTXT:
+        records.push(record("txt.test", dns.TypeTXT, 60, "hello world"))
+    else asked.name == "alias.test":
+        records.push(record("alias.test", dns.TypeCNAME, 60, "target.test"))
+        if asked.qtype == dns.TypeA:
+            records.push(record("target.test", dns.TypeA, 60, "10.9.9.9"))
+        end
+    else:
+        rcode = 3
+    end
+    ret doh.EncodeResponse(question.id, asked.name, asked.qtype, rcode, records)
+end
+
+func udp_server():
+    s := udp.Bind(0)
+    udp_port = udp.Port(s)
+    sync.Done(ready)
+    buf := mem.Allocate(2048 as u64)
+    mut from_host := ""
+    mut from_port := 0
+    until true:
+        n := udp.ReceiveBytes(s, buf, 2048, from_host, from_port)
+        if n > 0:
+            answer := answer_for(buf, n)
+            udp.SendBytes(s, from_host, from_port, answer.data, answer.len)
+        end
+    end
+end
+
+func start_mock():
+    sync.Add(ready, 1 as i64)
+    _t := spawn(udp_server)
+    sync.Wait(ready)
+end
+
+func mock_server(name: str): doh.Server:
+    mut server := doh.NewPlain(name, "127.0.0.1")
+    server.port = udp_port
+    ret server
+end
+
+func first(v: Vector<str>): str:
+    if v.len() == 0:
+        ret "none"
+    end
+    ret v.get(0)
+end
+
+func main:
+    start_mock()
+    mut servers := Vector {} as Vector<doh.Server>
+    servers.push(mock_server("mock"))
+    resolver := doh.NewResolver(servers)
+    doh.SetTimeout(resolver, 2000)
+    doh.SetTTLLimits(resolver, 30, 3600, 15)
+
+    mut a := doh.ResolveAt(resolver, "a.test", dns.TypeA, 1000 as i64)
+    println a.ok, a.cached, a.ttl, a.negative, a.rcode, a.msg.answers.items.len(), queries
+    mut again := doh.ResolveAt(resolver, "a.test", dns.TypeA, 61000 as i64)
+    println again.cached, again.ttl, queries
+    mut later := doh.ResolveAt(resolver, "a.test", dns.TypeA, 200000 as i64)
+    println later.cached, later.ttl, queries
+    doh.FreeAnswer(a)
+    doh.FreeAnswer(again)
+    doh.FreeAnswer(later)
+
+    n1 := doh.ResolveAt(resolver, "nothing.test", dns.TypeA, 500000 as i64)
+    println n1.ok, n1.negative, n1.rcode, n1.ttl, n1.cached
+    n2 := doh.ResolveAt(resolver, "nothing.test", dns.TypeA, 505000 as i64)
+    println n2.cached, n2.negative, queries
+    mut live := doh.Resolve(resolver, "a.test", dns.TypeA)
+    println live.ok, live.cached
+    doh.FreeAnswer(live)
+
+    println first(doh.LookupA(resolver, "a.test")), doh.LookupA(resolver, "a.test").len()
+    println first(doh.LookupAAAA(resolver, "v6.test")), first(doh.LookupTXT(resolver, "txt.test"))
+    println doh.LookupCNAME(resolver, "alias.test"), first(doh.LookupHost(resolver, "alias.test")), first(doh.LookupHost(resolver, "5.6.7.8"))
+
+    stats := doh.Stats(resolver)
+    println stats.hits > 0, stats.misses > 0, stats.upstream > 0, stats.failures
+    println doh.CacheSize(resolver) > 0
+    doh.ClearCache(resolver)
+    println doh.CacheSize(resolver)
+
+    mut dead := Vector {} as Vector<doh.Server>
+    dead.push(doh.NewServer("dead", doh.KindDoH, "http://127.0.0.1:1/dns-query"))
+    broken := doh.NewResolver(dead)
+    doh.SetTimeout(broken, 300)
+    failed := doh.Resolve(broken, "a.test", dns.TypeA)
+    println failed.ok, failed.err.len() > 0, doh.Stats(broken).failures
+    println first(doh.LookupA(broken, "a.test"))
+
+    mut helper := Vector {} as Vector<doh.Server>
+    helper.push(mock_server("bootstrap"))
+    doh.SetBootstrap(broken, helper)
+    println "bootstrap set"
+end
